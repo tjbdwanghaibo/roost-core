@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/servicemetrics"
 )
 
 // Redis returns the Redis capability, or an error naming what is missing.
@@ -139,3 +140,30 @@ func RequiredDuration(cfg *viper.Viper, key string) (time.Duration, error) {
 	}
 	return value, nil
 }
+
+// ServiceMetrics applies service_metrics.enabled to the reporter a service
+// Mod will hand its service (decision C6): false replaces *reporter with nil,
+// so the service reports nothing; unset or true leaves it as the collaborator
+// supplied it.
+//
+// Generated collaborators return servicemetrics.NewMetricsReporter by
+// default, so this is how a deployment turns every service's metrics off in
+// config without editing code (returning nil from Metrics() still works too).
+// The key is read strictly (app.ConfigBool), like every framework switch.
+func ServiceMetrics(cfg *viper.Viper, reporter *servicemetrics.Reporter) error {
+	if cfg == nil || !cfg.IsSet(ServiceMetricsEnabledKey) {
+		return nil
+	}
+	enabled, err := app.ConfigBool(cfg, ServiceMetricsEnabledKey)
+	if err != nil {
+		return fmt.Errorf("servicemods: %w", err)
+	}
+	if !enabled {
+		*reporter = nil
+	}
+	return nil
+}
+
+// ServiceMetricsEnabledKey turns the service metrics of every kit service Mod
+// in the process on or off (default on).
+const ServiceMetricsEnabledKey = "service_metrics.enabled"

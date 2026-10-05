@@ -774,8 +774,12 @@ func TestQueueDepthDropsAndReplaysAreReported(t *testing.T) {
 	if got := sink.Count("accepted:enqueue"); got != 2 {
 		t.Fatalf("two enqueues reported %d accepts; %s", got, sink.Events())
 	}
-	if got := sink.Count("depth:queue." + ranked().Key()); got != 2 {
-		t.Fatalf("queue depth reported %d, want 2; %s", got, sink.Events())
+	// C6：队列深度是固定名 queue 加 key 标签，队列标识不进指标名（N12 O1）。
+	if got := sink.Count("depth:queue{" + ranked().Key() + "}"); got != 2 {
+		t.Fatalf("queue depth reported %d under the fixed name queue keyed by the queue, want 2; %s", got, sink.Events())
+	}
+	if got := sink.Count("depth:queue." + ranked().Key()); got != 0 {
+		t.Fatalf("the queue key is in a depth name (queue.%s); %s", ranked().Key(), sink.Events())
 	}
 
 	// A retry is not a third player.

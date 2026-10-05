@@ -825,7 +825,10 @@ func (s *Service) Sweep(ctx context.Context, ownerIDs []int64, limit int) ([]Run
 		}
 		resolved = append(resolved, swept)
 	}
-	s.report.Depth("session.swept", int64(len(resolved)))
+	// How many runs this pass resolved is a count, not a reading (C6, N12 O1):
+	// as a gauge it said only "the last sweep handled n", and two sweeps of
+	// three looked like one.
+	s.report.Dropped("run.swept", len(resolved))
 	return resolved, failures
 }
 

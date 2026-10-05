@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 )
 
 // The key prefix is required and has no default. A default would be the same
@@ -87,5 +88,19 @@ func TestModDeclaresItsRedisDependency(t *testing.T) {
 func TestModName(t *testing.T) {
 	if got := NewMod(nil).Name(); got != mods.ModRank {
 		t.Fatalf("the mod is named %q, want %q", got, mods.ModRank)
+	}
+}
+
+// C6：service_metrics.enabled: false 让 Mod 不把 collaborator 的 Reporter 交给服务。
+func TestModHonoursTheServiceMetricsSwitch(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("rank.key_prefix", "roost:rank")
+	cfg.Set("service_metrics.enabled", false)
+	mod := NewMod(servicemetrics.NewRecorder())
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if mod.metrics != nil {
+		t.Fatal("service_metrics.enabled: false left the service reporting")
 	}
 }

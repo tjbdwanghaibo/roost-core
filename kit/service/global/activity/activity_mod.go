@@ -74,6 +74,10 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 // The prefix may still point at the same root — each service owning its own
 // keyspace setting is the point, not that the keyspaces have to differ.
 func (m *Mod) Init(cfg *viper.Viper) error {
+	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
+	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+		return err
+	}
 	prefix, err := mods.KeyPrefix(cfg, "activity")
 	if err != nil {
 		return err

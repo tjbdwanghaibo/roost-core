@@ -109,6 +109,21 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | `robot.runner.target` / `robot.runner.online{profile,run,scenario}` | Gauge | 目标并发 vs 实际在线机器人（Stages 升降是否按预期跟随） |
 | `robot.loadtest.active{profile}` | Gauge | 该 profile 是否有活跃 run（单活跃约束的可视化） |
 
+### 服务事件（kit/service 与 core/service，维护者决定 C6）
+
+生成工程的每个托管服务默认用 `servicemetrics.NewMetricsReporter("<服务名>")`（`internal/service/<svc>/collaborators.go` 的 `Metrics()`），事件写进进程的 metrics 注册表、经 ops `/metrics` 导出。关闭：配置 `service_metrics.enabled: false`（所有 kit 服务 Mod 在 Init 时不再把 Reporter 交给服务），或在 collaborators 里返回 nil。[方案](docs/feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md)
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `service.accepted.total{service,op}` | Counter | 完成并改了状态的操作 |
+| `service.refused.total{service,op,reason}` | Counter | 业务原因拒绝（限额、权限、过期令牌），不是基础设施故障 |
+| `service.replayed.total{service,op}` | Counter | 由幂等记录直接回答、没有再执行的请求；上升说明传输在重投 |
+| `service.dropped.total{service,op}` | Counter | 按保留期 / 上限丢弃、清扫掉的条数（按条数累加）。session 的 `op="run.swept"` 是每次清扫处理的 run 数（以前是 gauge `session.swept`，只剩最后一次的读数） |
+| `service.conflict.total{service,op}` | Counter | CAS 重试耗尽；同一逻辑键争用的信号 |
+| `service.depth{service,name[,key]}` | Gauge | 当前大小。match 的队列长度是 `name="queue",key="<Mode:GroupSize:Partition>"`，rank 的看板大小是 `name="board",key="<Board.ID>"`（以前队列 key、看板 ID 拼在名字里） |
+
+基数：`service` / `op` / `reason` / `name` 都是代码里的常量或枚举。`key` 是调用方给的对象标识：**队列的 Partition 与看板 ID 必须是有限枚举**（区服、模式、看板种类），不能把玩家 / 公会 / 场次 ID 拼进去——注册表删不掉序列，`service.depth` 到每指标 2048 条后新组合被丢弃并计 `obs.series.dropped{metric="service.depth"}`。看板的 scope / season 不进 key，同一种看板的不同 scope 共用一条序列（读到的是最近一次 Page 的那个）。默认 Reporter 不加按运行、按请求、按实体变化的标签。项目自写的 Reporter 不实现 `servicemetrics.KeyedReporter` 时，深度事件仍以旧形状 `Depth("queue.<key>")` 到达，由它自己决定怎么拆。
+
 ### 持久化与 fence（kit/dataengine）
 
 | 指标 | 类型 | 说明 |

@@ -34,6 +34,20 @@ type Reporter interface {
 	Depth(name string, value int64)
 }
 
+// KeyedReporter is implemented by a Reporter that keeps one depth per object
+// under a fixed name — the queue length of each match queue, the size of each
+// rank board — instead of a name per object (decision C6, N12 O1). It is a
+// separate interface so a project's own Reporter keeps compiling; one that does
+// not implement it receives Depth(name+"."+key) exactly as before.
+//
+// key is the caller's object identity and becomes a label: it must come from a
+// bounded set (configured queues, board ids), never a player, guild or run id.
+// The metrics registry cannot delete a series, so an unbounded key grows until
+// the per-metric series cap drops new ones.
+type KeyedReporter interface {
+	DepthOf(name, key string, value int64)
+}
+
 // Wrap returns a nil-safe reporter. A service stores the result of Wrap so
 // every call site can be unconditional: guarding each call with a nil check is
 // how a report gets forgotten.
@@ -76,6 +90,19 @@ func (s Sink) Depth(name string, value int64) {
 	if s.reporter != nil {
 		s.reporter.Depth(name, value)
 	}
+}
+
+// DepthOf reports a current size of one object under a fixed name: the
+// reporter's DepthOf when it has one, otherwise Depth(name+"."+key).
+func (s Sink) DepthOf(name, key string, value int64) {
+	if s.reporter == nil {
+		return
+	}
+	if keyed, ok := s.reporter.(KeyedReporter); ok {
+		keyed.DepthOf(name, key, value)
+		return
+	}
+	s.reporter.Depth(name+"."+key, value)
 }
 
 // Enabled reports whether anything is listening. Use it only to skip work

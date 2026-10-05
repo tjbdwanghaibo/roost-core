@@ -54,6 +54,10 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	  run_ttl: 30m                # optional, defaults to DefaultTTL
 //	  request_ttl: 1h             # required; see below
 func (m *Mod) Init(cfg *viper.Viper) error {
+	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
+	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+		return err
+	}
 	if m.release == nil {
 		return fmt.Errorf("session mod: a releaser is required; a run that allocates external " +
 			"resources and cannot release them is the leak this package prevents, and a default " +

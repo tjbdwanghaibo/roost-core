@@ -47,6 +47,10 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	  key_prefix: roost:directory   # required, no default
 //	  reservation_ttl: 60s          # required, must be positive
 func (m *Mod) Init(cfg *viper.Viper) error {
+	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
+	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+		return err
+	}
 	if m.normalize == nil {
 		// Checked here rather than at Provide so a misconfigured process
 		// fails as early as it can.

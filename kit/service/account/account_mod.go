@@ -62,6 +62,10 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	  session_ttl: 30m            # optional
 //	  claim_ttl: 30s              # optional
 func (m *Mod) Init(cfg *viper.Viper) error {
+	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
+	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+		return err
+	}
 	missing := []string{}
 	if m.verifier == nil {
 		missing = append(missing, "identity verifier")

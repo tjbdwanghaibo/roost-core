@@ -258,6 +258,7 @@ var (
 		"nats.ignore_discovered_servers", "nats.reliable.enabled",
 		"dataengine.enabled", "nest.pipelined.async", "stats_log.enabled",
 		"player_access.tcp.enabled",
+		"service_metrics.enabled", // kit/mods.ServiceMetricsEnabledKey（C6）
 	}
 	frameworkDurationKeys = []string{
 		"time.logic_offset", "log.rotate_interval", "shutdown.total_timeout",

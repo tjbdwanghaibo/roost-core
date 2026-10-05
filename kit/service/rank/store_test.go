@@ -531,8 +531,12 @@ func TestSubmitAndPageReportWhatTheyDid(t *testing.T) {
 	if _, err := store.Page(ctx, arena(), 0, 10); err != nil {
 		t.Fatal(err)
 	}
-	if got := sink.Count("depth:board.arena"); got != 1 {
-		t.Fatalf("board depth reported %d, want 1; %s", got, sink.Events())
+	// C6：看板大小是固定名 board 加 key 标签，看板 ID 不进指标名（N12 O1）。
+	if got := sink.Count("depth:board{arena}"); got != 1 {
+		t.Fatalf("board depth reported %d under the fixed name board keyed by the board, want 1; %s", got, sink.Events())
+	}
+	if got := sink.Count("depth:board.arena"); got != 0 {
+		t.Fatalf("the board id is in a depth name (board.arena); %s", sink.Events())
 	}
 
 	// Contention is reported rather than left as an opaque internal error.

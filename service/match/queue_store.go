@@ -251,7 +251,9 @@ func (s *queueStore) Enqueue(ctx context.Context, queue Queue, subject Subject, 
 	// emit: its tickets lived in per-subject records with no aggregate, so
 	// "how many players are waiting" had no answer.
 	if length, err := s.QueueLength(ctx, queue); err == nil {
-		s.report.Depth("queue."+queue.Key(), int64(length))
+		// The queue is a label, not part of the name (C6): one gauge, one
+		// series per configured queue.
+		s.report.DepthOf("queue", queue.Key(), int64(length))
 	}
 	return result.clone(), nil
 }

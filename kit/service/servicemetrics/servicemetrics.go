@@ -23,5 +23,16 @@ type Recorder = core.Recorder
 // reports nothing and never fails an operation.
 func Wrap(reporter Reporter) Sink { return core.Wrap(reporter) }
 
+// KeyedReporter is a Reporter that keeps a depth per object under a fixed
+// name (decision C6).
+type KeyedReporter = core.KeyedReporter
+
+// MetricsReporter is the production Reporter: events go into the process's
+// metrics registry, which kit ops serves on /metrics.
+type MetricsReporter = core.MetricsReporter
+
+// NewMetricsReporter returns the production Reporter for one service.
+func NewMetricsReporter(service string) *MetricsReporter { return core.NewMetricsReporter(service) }
+
 // NewRecorder returns an empty Recorder.
 func NewRecorder() *Recorder { return core.NewRecorder() }

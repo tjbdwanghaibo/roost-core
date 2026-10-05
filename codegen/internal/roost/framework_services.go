@@ -395,7 +395,13 @@ func renderFrameworkCollaborators(m Manifest, name string) string {
 	}
 	b.WriteString(")\n\n")
 	b.WriteString(body)
-	b.WriteString("\n// Metrics receives the service's counters. nil means no reporting and never\n// fails an operation; wire the project's servicemetrics.Reporter here.\nfunc Metrics() servicemetrics.Reporter { return nil }\n")
+	// C6：默认把服务事件写进进程的 metrics 注册表（ops /metrics 导出）；以前返回 nil，事件无处落地。
+	fmt.Fprintf(&b, "\n// Metrics receives the service's counters. The default writes them into the\n"+
+		"// process's metrics registry, served as service_* series on the ops /metrics\n"+
+		"// endpoint (labels service, op, reason, name, key). Turn them off with\n"+
+		"// service_metrics.enabled: false in config, or by returning nil here; nil\n"+
+		"// never fails an operation.\n"+
+		"func Metrics() servicemetrics.Reporter { return servicemetrics.NewMetricsReporter(%q) }\n", name)
 	return b.String()
 }
 

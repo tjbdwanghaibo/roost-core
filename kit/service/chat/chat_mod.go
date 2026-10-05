@@ -74,6 +74,10 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	  key_prefix: roost:chat   # required, no default
 //	  retention_age: 168h      # optional; zero means retain by count only
 func (m *Mod) Init(cfg *viper.Viper) error {
+	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
+	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+		return err
+	}
 	missing := []string{}
 	if m.policy == nil {
 		missing = append(missing, "channel policy")

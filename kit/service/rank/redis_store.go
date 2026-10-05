@@ -288,7 +288,10 @@ func (s *RedisStore) Page(ctx context.Context, board Board, offset, limit int) (
 	if err != nil {
 		return Page{}, err
 	}
-	s.report.Depth("board."+board.ID, total)
+	// The board is a label, not part of the name (C6). Board.ID is the kind
+	// of board ("arena"); scope and season are not in it, so the series stay
+	// one per board kind.
+	s.report.DepthOf("board", board.ID, total)
 	entries := make([]Entry, 0, len(members))
 	for index, member := range members {
 		score, err := decodeEntry(member)

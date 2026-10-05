@@ -54,6 +54,10 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	rank:
 //	  key_prefix: roost:rank   # required, no default
 func (m *Mod) Init(cfg *viper.Viper) error {
+	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
+	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+		return err
+	}
 	prefix, err := mods.KeyPrefix(cfg, "rank")
 	if err != nil {
 		return err

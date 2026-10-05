@@ -502,6 +502,14 @@ func TestSweepResolvesExpiredRunsAndFreesTheirClaims(t *testing.T) {
 	if len(swept) != len(owners) {
 		t.Fatalf("the sweep resolved %d runs, want %d", len(swept), len(owners))
 	}
+	// C6（N12 O1）：一次清扫处理了几条是计数，不是“最近一次扫了几条”的 gauge——两次清扫各扫 3 条
+	// 应当累计 6，gauge 只剩最后一次的读数。
+	if got := h.metrics.Count("dropped:run.swept"); got != len(owners) {
+		t.Fatalf("the sweep counted %d swept runs, want %d; %s", got, len(owners), h.metrics.Events())
+	}
+	if got := h.metrics.Count("depth:session.swept"); got != 0 {
+		t.Fatalf("the sweep still reports its size as a gauge (depth:session.swept=%d); %s", got, h.metrics.Events())
+	}
 	for _, ownerID := range owners {
 		if got := h.releaser.count("scene", fmt.Sprintf("scene-%d", ownerID)); got != 1 {
 			t.Fatalf("owner %d's scene was released %d times, want 1", ownerID, got)

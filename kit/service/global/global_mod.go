@@ -51,6 +51,10 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 // grace_window, dispatch_attempts, dispatch_backoff — moved with the service,
 // to activity.Mod's own section.
 func (m *Mod) Init(cfg *viper.Viper) error {
+	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
+	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+		return err
+	}
 	prefix, err := mods.KeyPrefix(cfg, "global")
 	if err != nil {
 		return err

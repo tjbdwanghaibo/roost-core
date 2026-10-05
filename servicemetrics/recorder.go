@@ -33,6 +33,10 @@ func (r *Recorder) Dropped(op string, n int)   { r.add("dropped:"+op, n) }
 func (r *Recorder) Conflict(op string)         { r.add("conflict:"+op, 1) }
 func (r *Recorder) Depth(name string, v int64) { r.set("depth:"+name, v) }
 
+// DepthOf records a keyed depth as depth:<name>{<key>}, so a test can tell it
+// from a name that carries the key.
+func (r *Recorder) DepthOf(name, key string, v int64) { r.set("depth:"+name+"{"+key+"}", v) }
+
 // set replaces rather than accumulates: a depth is a gauge, and summing
 // successive readings of a gauge produces a number that means nothing.
 func (r *Recorder) set(event string, value int64) {
@@ -90,4 +94,7 @@ func (r *Recorder) Events() string {
 	return out.String()
 }
 
-var _ Reporter = (*Recorder)(nil)
+var (
+	_ Reporter      = (*Recorder)(nil)
+	_ KeyedReporter = (*Recorder)(nil)
+)

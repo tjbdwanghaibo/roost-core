@@ -78,6 +78,10 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	  key_prefix: roost:match   # required, no default
 //	  ticket_ttl: 2m            # optional, defaults to DefaultTicketTTL
 func (m *Mod) Init(cfg *viper.Viper) error {
+	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
+	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+		return err
+	}
 	prefix, err := mods.KeyPrefix(cfg, "match")
 	if err != nil {
 		return err

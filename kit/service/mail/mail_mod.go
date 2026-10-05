@@ -51,6 +51,10 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	  send_ttl: 24h            # required; see below
 //	  claim_lease: 30s         # optional, defaults to DefaultClaimLease
 func (m *Mod) Init(cfg *viper.Viper) error {
+	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
+	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+		return err
+	}
 	prefix, err := mods.KeyPrefix(cfg, "mail")
 	if err != nil {
 		return err

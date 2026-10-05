@@ -82,6 +82,9 @@ func System() chat.SystemAuthenticator {
 // / group shared, private pair-scoped, system privileged), unchanged.
 func Rules() []chat.ChannelRule { return chat.DefaultChannelRules() }
 
-// Metrics receives the service's counters. nil means no reporting and never
-// fails an operation; wire the project's servicemetrics.Reporter here.
-func Metrics() servicemetrics.Reporter { return nil }
+// Metrics receives the service's counters. The default writes them into the
+// process's metrics registry, served as service_* series on the ops /metrics
+// endpoint (labels service, op, reason, name, key). Turn them off with
+// service_metrics.enabled: false in config, or by returning nil here; nil
+// never fails an operation.
+func Metrics() servicemetrics.Reporter { return servicemetrics.NewMetricsReporter("chat") }
