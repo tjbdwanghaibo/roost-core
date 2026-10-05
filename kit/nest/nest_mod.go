@@ -35,8 +35,11 @@ type Mod struct {
 	// dataEngine 是 Provide 时查到的 DataEngine 能力；Start 时用它把 Sync 接上重新加载的实体。
 	dataEngine   any
 	unhookLoaded func()
-	// stopResync 停止卸载后重载（ManagerAccess.ConfigureUnloadResync，RR-20260926-59）；未接线时为 nil。
+	// stopResync 停止卸载后重载（ManagerAccess.ConfigureUnloadResync，RR-20260926-59）；未接线或已排空时为 nil。
+	// 等 worker 退出超时时保留，重试再等（RR-20261005-NC-171）。
 	stopResync func(context.Context) error
+	// stopped 在 Nest 与 entitysync 都已停完并释放后置位，之后的 Stop 直接返回 nil。
+	stopped bool
 }
 
 // entityLoadNotifier 是 DataEngine 的可选能力（kit/dataengine Mod.OnEntityLoaded）。
@@ -247,9 +250,13 @@ func (m *Mod) stopUnloadResync(ctx context.Context) error {
 	if m.stopResync == nil {
 		return nil
 	}
-	err := m.stopResync(ctx)
+	// 句柄只在 worker 确实退出后清除：超时清掉它，重试就不再等 worker，而它的目标 entitysync 随后被关闭
+	// （RR-20261005-NC-171）。
+	if err := m.stopResync(ctx); err != nil {
+		return err
+	}
 	m.stopResync = nil
-	return err
+	return nil
 }
 
 func (m *Mod) unhookEntitySync() {
@@ -278,26 +285,35 @@ func (m *Mod) Stop() {
 }
 
 func (m *Mod) StopWithContext(ctx context.Context) error {
-	if m == nil || m.engine == nil {
+	if m == nil || m.engine == nil || m.stopped {
 		return nil
 	}
-	// 先停卸载后重载：停机期间不再为订阅者重载（取消在途重载，不发 remove），也不让重载撞上正在停止的 Nest。
-	// 等 worker 退出超时也继续停 Nest，错误一并返回。
+	// 三步停机（RR-20261005-NC-171）：
+	//  1. 发起：停卸载后重载（停机期间不再为订阅者重载，取消在途重载，不发 remove），发起 Nest 停机——
+	//     两者都幂等，等 worker 退出超时也照样发起 Nest 停机。
+	//  2. 等待：在 ctx 内等重载 worker 与 Nest 排空；超时返回 ctx 错误，句柄与 entitysync 都保留，重试再等。
+	//  3. 释放：两者都排空后才停止、排空并关闭 entitysync——它是重载 worker 的 Rebind / Retract 目标。
 	resyncErr := m.stopUnloadResync(ctx)
 	if err := m.engine.Shutdown(ctx); err != nil {
 		return errors.Join(resyncErr, err)
 	}
+	if resyncErr != nil {
+		return resyncErr
+	}
 	m.unhookEntitySync()
 	if m.entitySync != nil {
 		if err := m.entitySync.Stop(ctx); err != nil {
-			return errors.Join(resyncErr, err)
+			return err
 		}
 		if err := m.entitySync.Drain(ctx); err != nil {
-			return errors.Join(resyncErr, err)
+			return err
 		}
-		return errors.Join(resyncErr, m.entitySync.Close(ctx))
+		if err := m.entitySync.Close(ctx); err != nil {
+			return err
+		}
 	}
-	return resyncErr
+	m.stopped = true
+	return nil
 }
 
 func (m *Mod) Engine() *corenest.NestMgr {

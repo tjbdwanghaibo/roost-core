@@ -68,8 +68,11 @@ func (a *Assembly) Start(ctx context.Context, info *fetcd.ServiceInfo) error {
 	return a.Discovery.Register(ctx, info)
 }
 
-// Close deregisters (revoking the lease and its keys) and closes the
-// connection. Both errors are reported.
+// Close deregisters (revoking the lease and its keys) and then closes the
+// connection. A Deregister that fails — its budget ran out, or etcd refused the
+// revoke — keeps the connection open and returns the error, so a later Close
+// with a fresh ctx retries the revoke on a live client (RR-20261005-NC-173);
+// closing it first made every retry fail with "client connection is closing".
 func (a *Assembly) Close(ctx context.Context) error {
 	if a == nil {
 		return nil
@@ -77,12 +80,13 @@ func (a *Assembly) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var err error
 	if a.Discovery != nil {
-		err = errors.Join(err, a.Discovery.Deregister(ctx))
+		if err := a.Discovery.Deregister(ctx); err != nil {
+			return err
+		}
 	}
 	if a.Client != nil {
-		err = errors.Join(err, a.Client.Close())
+		return a.Client.Close()
 	}
-	return err
+	return nil
 }

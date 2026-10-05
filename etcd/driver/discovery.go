@@ -34,8 +34,10 @@ type Discovery struct {
 	leaseID clientv3.LeaseID
 	key     string // registered key
 
-	mu               sync.Mutex
-	lifecycleMu      sync.Mutex
+	mu sync.Mutex
+	// lifecycle 是 Register / Deregister 的执行权（容量 1）。用通道而不是 Mutex：后到的调用方按自己的
+	// ctx 等待，不被前一个调用方的预算拖住（RR-20261005-NC-173）。
+	lifecycle        chan struct{}
 	stopping         bool
 	keepaliveCancel  context.CancelFunc
 	loopCancel       context.CancelFunc
@@ -74,6 +76,7 @@ func NewDiscovery(cli *clientv3.Client, prefix string, ttl int64) *Discovery {
 		ttl:              ttl,
 		retryMinInterval: defaultDiscoveryRetryMinInterval,
 		retryMaxInterval: defaultDiscoveryRetryMaxInterval,
+		lifecycle:        make(chan struct{}, 1),
 	}
 	d.registerOnce = d.registerOnceWithEtcd
 	d.revokeLease = d.revokeLeaseWithEtcd
@@ -81,15 +84,17 @@ func NewDiscovery(cli *clientv3.Client, prefix string, ttl int64) *Discovery {
 }
 
 func (d *Discovery) Register(ctx context.Context, info *fetcd.ServiceInfo) error {
-	d.lifecycleMu.Lock()
-	defer d.lifecycleMu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := d.acquireLifecycle(ctx); err != nil {
+		return err
+	}
+	defer d.releaseLifecycle()
 	if d.hasRegistration() {
 		return fmt.Errorf("etcd Discovery: service is already registered")
 	}
 	d.markActive()
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	reg, err := d.registerOnce(ctx, info)
 	if err != nil {
 		return err
@@ -192,17 +197,24 @@ func (d *Discovery) logRegistered(reg discoveryRegistration) {
 	slog.Info("etcd Discovery: registered", "key", reg.key, "lease", reg.leaseID)
 }
 
+// Deregister 按三步停机（RR-20261005-NC-173）：①标记停止、取消注册循环与 keepalive（幂等）；②在 ctx 内
+// 等循环退出、撤销当前租约，超时或撤销失败返回错误并保留登记（循环句柄、租约），重试再等再撤销；
+// ③撤销成功才清除登记，调用方此后才能关闭 client（Assembly.Close）。
 func (d *Discovery) Deregister(ctx context.Context) error {
-	d.lifecycleMu.Lock()
-	defer d.lifecycleMu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := d.acquireLifecycle(ctx); err != nil {
+		return err
+	}
+	defer d.releaseLifecycle()
 
 	d.markStopping()
 	d.cancelLoop()
 	d.cancelKeepalive()
-	d.waitLoopDone()
+	if err := d.waitLoopDone(ctx); err != nil {
+		return fmt.Errorf("etcd Discovery: registration loop still running: %w", err)
+	}
 	// lease lost 之后的重注册可能在上面取消 keepalive 之后才完成、装上新的登记（registrationLoop
 	// 先 setCurrentRegistration 再看 ctx）。循环已退出，这里再取消一次，确保停的是当前登记的 keepalive。
 	d.cancelKeepalive()
@@ -351,15 +363,44 @@ func (d *Discovery) cancelKeepalive() {
 	}
 }
 
-func (d *Discovery) waitLoopDone() {
+// waitLoopDone 在 ctx 内等注册循环退出；只有确实退出后才清掉 loopDone，超时的调用方把等待留给重试。
+// 循环里的重注册可能卡在不受 loop ctx 约束的步骤上（setup 失败后的 revokeSetupLease 自带 5s 截止）。
+func (d *Discovery) waitLoopDone(ctx context.Context) error {
 	d.mu.Lock()
 	done := d.loopDone
-	d.loopDone = nil
 	d.mu.Unlock()
-	if done != nil {
-		<-done
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	d.mu.Lock()
+	if d.loopDone == done {
+		d.loopDone = nil
+	}
+	d.mu.Unlock()
+	return nil
+}
+
+// acquireLifecycle 取得执行权：空闲时立即取得（预算已用尽的停机也照样发起取消），被占用时按 ctx 等待。
+func (d *Discovery) acquireLifecycle(ctx context.Context) error {
+	select {
+	case d.lifecycle <- struct{}{}:
+		return nil
+	default:
+	}
+	select {
+	case d.lifecycle <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
+
+func (d *Discovery) releaseLifecycle() { <-d.lifecycle }
 
 func (d *Discovery) waitRetry(ctx context.Context, delay time.Duration) bool {
 	if delay <= 0 {

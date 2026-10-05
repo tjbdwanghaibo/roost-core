@@ -53,6 +53,9 @@ type Engine struct {
 	// list nobody would ever start or stop (RR-20260916-07).
 	starting bool
 	stopping bool
+	// stopTurn 是停止 manager 的执行权（容量 1）：同一时刻只有一个调用方在停，其余调用方按自己的
+	// ctx 等待，不会绕过正在停的那个报告成功（RR-20261005-NC-170）。
+	stopTurn chan struct{}
 }
 
 // NewEngine builds an engine for the given managers, in registration order.
@@ -197,8 +200,12 @@ func (e *Engine) Start() error {
 
 // Stop stops the managers that actually started, newest first, preferring
 // app.IManagerStopperWithContext when a manager implements it. A nil ctx
-// means the process base context. Every manager gets its chance to stop and
-// every failure is reported (errors.Join). Stop is idempotent.
+// means the process base context. A manager whose stop fails with an ordinary
+// error counts as stopped and the rest still get their chance; every failure is
+// reported (errors.Join). A stop cut short by ctx (Canceled / DeadlineExceeded)
+// ends the call at once and keeps that manager and the older ones — its
+// dependencies — registered, so a later Stop with a fresh ctx continues from it
+// (RR-20261005-NC-170). Once everything has stopped, Stop returns nil.
 func (e *Engine) Stop(ctx context.Context) error {
 	if ctx == nil {
 		ctx = fctx.BaseContext()
@@ -206,25 +213,68 @@ func (e *Engine) Stop(ctx context.Context) error {
 	return e.stopStarted(ctx)
 }
 
-// stopStarted stops the managers that actually started, newest first, and is
-// idempotent: the started list is taken under the lock so a second Stop (or a
-// Stop racing the rollback inside Start) finds nothing left to do rather than
-// stopping a manager twice.
+// stopStarted 按三步停机（RR-20261005-NC-170，roost-coding 生命周期复审要点）：
+//
+//  1. 发起：置 stopping（幂等），Start 据此中止、不再把 manager 交给 started。
+//  2. 等待：取得停止执行权后逆序在 ctx 内停止仍登记的 manager；某个 manager 停完（含普通错误）
+//     才从 started 移除。它因 ctx 取消 / 超时没有停完时立即返回 ctx 错误。
+//  3. 释放：没有停完的 manager 与更早启动的（它的依赖）都留在 started 里，不在过期的 ctx 下继续
+//     停依赖；用新 ctx 重试从它继续。
+//
+// 修前先把 started 换成空切片再逐个停：第一次超时后，第二次 Stop 看到空列表返回 nil，manager 实际
+// 仍在运行；同一次调用还会继续停它的依赖。
 func (e *Engine) stopStarted(ctx context.Context) error {
 	e.mu.Lock()
-	started := e.started
+	e.stopping = true
 	// A non-nil empty slice, not nil: it marks the lifecycle as over, so a
 	// later Register is still refused even when nothing had started yet.
-	e.started = []app.IManager{}
-	e.stopping = true
+	if e.started == nil {
+		e.started = []app.IManager{}
+	}
+	if e.stopTurn == nil {
+		e.stopTurn = make(chan struct{}, 1)
+	}
+	turn := e.stopTurn
 	e.mu.Unlock()
 
-	var joined error
-	for i := len(started) - 1; i >= 0; i-- {
-		joined = errors.Join(joined, stopOne(ctx, started[i]))
+	select {
+	case turn <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	metrics.SetGauge("manager.started", nil, 0)
+	defer func() { <-turn }()
+
+	var joined error
+	for {
+		e.mu.Lock()
+		n := len(e.started)
+		if n == 0 {
+			e.mu.Unlock()
+			break
+		}
+		manager := e.started[n-1]
+		e.mu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return errors.Join(joined, err)
+		}
+		err := stopOne(ctx, manager)
+		if stopIncomplete(err) {
+			return errors.Join(joined, err)
+		}
+		joined = errors.Join(joined, err)
+		e.mu.Lock()
+		// stopping 已置位，Start 不会再追加；持有执行权时只有这里缩短 started。
+		e.started = e.started[:n-1]
+		count := len(e.started)
+		e.mu.Unlock()
+		metrics.SetGauge("manager.started", nil, int64(count))
+	}
 	return joined
+}
+
+// stopIncomplete 与 app 的 Mod 停机同一判定：ctx 取消 / 超时表示没有停完，其他错误算已停完。
+func stopIncomplete(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // stopOne stops a single manager, preferring the bounded hook. It is shared
