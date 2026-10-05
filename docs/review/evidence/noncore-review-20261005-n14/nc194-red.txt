@@ -1,0 +1,6 @@
+# 基线 f6245613，修复前；GOWORK=off go test -count=1 -run TestPerStepOverrideAppliesToMixedCaseNamesWithoutDefinitions ./kit/saga
+--- FAIL: TestPerStepOverrideAppliesToMixedCaseNamesWithoutDefinitions (0.00s)
+    step_override_case_promises_test.go:29: withDefinitions=false: GiftItem/Debit max_attempts = 5, want the configured 15 (overrides map[{giftitem debit}:{0s 15 0s 0s}])
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/kit/saga	0.545s
+FAIL

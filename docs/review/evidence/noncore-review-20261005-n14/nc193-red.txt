@@ -1,0 +1,25 @@
+# 基线 f6245613，修复前；GOWORK=off go test -count=1 -run 'TestServiceInitFailureStopsWhatInitStartedBeforeTheMods|TestStartupCleanupThatDoesNotFinishKeepsTheModsAndTheLock' -v ./app
+time=2026-10-05T20:53:57.69711+08:00 level=INFO goId=22 frame=0 server_time_ms=1791204837697 msg="mod stop" mod=probe_shared budget=5s
+time=2026-10-05T20:53:57.697133+08:00 level=INFO goId=22 frame=0 server_time_ms=1791204837697 msg="mod stopped" mod=probe_shared duration=22.917µs
+time=2026-10-05T20:53:57.697144+08:00 level=INFO goId=22 frame=0 server_time_ms=1791204837697 msg="singleton: released" key=roost:test:singleton:game:1000
+Error: service game init: phase consumer: subscribe failed
+    startup_cleanup_promises_test.go:71: Service.Shutdown called 0 times after a failed Init, want 1: what Init started keeps running
+--- FAIL: TestServiceInitFailureStopsWhatInitStartedBeforeTheMods (0.00s)
+time=2026-10-05T20:54:02.700394+08:00 level=INFO goId=28 frame=0 server_time_ms=1791204842700 msg="mod stop" mod=probe_shared budget=5s
+time=2026-10-05T20:54:02.700423+08:00 level=INFO goId=28 frame=0 server_time_ms=1791204842700 msg="mod stopped" mod=probe_shared duration=32.167µs
+time=2026-10-05T20:54:02.700433+08:00 level=INFO goId=28 frame=0 server_time_ms=1791204842700 msg="singleton: released" key=roost:test:singleton:game:1000
+Error: app: runtime failure during startup: dataengine fatal right after init
+service game cleanup after startup failure: context deadline exceeded
+    startup_cleanup_promises_test.go:126: mods stopped 1 times while Service.Shutdown had not finished; the service may still be using them
+    startup_cleanup_promises_test.go:117: run did not return 15s after a startup failure whose Service.Shutdown never finished
+    singleton_test.go:461: run did not exit during cleanup
+time=2026-10-05T20:54:22.704688+08:00 level=INFO goId=37 frame=0 server_time_ms=1791204862704 msg="mod stop" mod=probe_shared budget=5s
+time=2026-10-05T20:54:22.704749+08:00 level=INFO goId=37 frame=0 server_time_ms=1791204862704 msg="mod stopped" mod=probe_shared duration=63.958µs
+time=2026-10-05T20:54:22.704778+08:00 level=INFO goId=37 frame=0 server_time_ms=1791204862704 msg="singleton: released" key=roost:test:singleton:game:1000
+Error: app: runtime failure during startup: dataengine fatal right after init
+--- FAIL: TestStartupCleanupThatDoesNotFinishKeepsTheModsAndTheLock (25.01s)
+    --- FAIL: TestStartupCleanupThatDoesNotFinishKeepsTheModsAndTheLock/cooperative_timeout (5.00s)
+    --- FAIL: TestStartupCleanupThatDoesNotFinishKeepsTheModsAndTheLock/uncooperative (20.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/app	25.872s
+FAIL

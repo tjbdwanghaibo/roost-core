@@ -197,6 +197,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-05 N14 revn14：[NC-190](bug/RR-20261005-NC-190.md) / [NC-191](bug/RR-20261005-NC-191.md) / [NC-192](bug/RR-20261005-NC-192.md) 三个 P2 与 [NC-193](bug/RR-20261005-NC-193.md) / [NC-194](bug/RR-20261005-NC-194.md) 两个 P3 **已登记，未修复**；NC-192（生产校验要求的开关无读取方）待维护者选方案。[本轮](review/REVIEW-2026-10-05-n14.md)（含配置 schema 方向判断）。
+
 10-05 N12 revn12：[NC-160](bug/RR-20261005-NC-160.md) / [NC-161](bug/RR-20261005-NC-161.md)（P2）与 [NC-162～165](review/REVIEW-2026-10-05-n12-revn12.md)（P3）**已修复、声明场景验证，未发版**（审查 `b248a199`，修复 `f750ce43` / `5fea59ce` / `efeede0f` / `92547035` / `2a9e0c2c` / `e798a759`）；[修复](bugfix/README.md)。
 
 10-05 N05 revn05：[NC-130](bug/RR-20261005-NC-130.md) / [NC-131](bug/RR-20261005-NC-131.md) 两个 P3 与 [RR-20260913-01 残余](bugfix/RR-20260913-01.md) **已修复、声明场景验证（含真实 Redis），未发版**（`6f06f0da` / `c3475150` / `366058a7`，审查 `be2713ad`）；[本轮](review/REVIEW-2026-10-05-n05-revn05.md)（含方向判断）。T-246/247，T-81 追加。行为收紧：`remoteSnapshotL2Store.Set` 对被拒旧写返回 `cache.ErrStaleWrite`；L2 删除留墓碑。
