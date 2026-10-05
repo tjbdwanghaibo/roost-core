@@ -1,5 +1,17 @@
 # Bugfix 记录
 
+**10-05 N09 skill 第四批（revn09d）：NC-210～216 已修复、声明场景验证，未发版。** memory 效果名字在类型检查统一检查、add_memory 要求 int；移交后 area 回调 finish 只结束本 area 进程；catalog key 非空唯一；chain 间隔 / 重复与 modifier 叠层只接受默认值（方向 B）；effect / filter / cost 里的 status / attribute / resource 名字查 catalog；Host 都拒绝的取值编译期拒绝；NegotiateSchema 拒绝空区间。新增编译 ⇒ 可执行的变异性质测试。[本轮](../review/REVIEW-2026-10-05-n09-batch4.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-216](RR-20261005-NC-216.md) | 任一边 Min 为 0 或 Min > Max 时协商失败 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-215](RR-20261005-NC-215.md) | modifier operation / 时长、status 时长 0、resource operation、负 cost 字面量、compare op 编译期拒绝 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-214](RR-20261005-NC-214.md) | `validateCatalogReferences` 与 filter 校验补 status / attribute / resource 名字 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-213](RR-20261005-NC-213.md) | `allow_repeat` / `hop_interval_ticks` / `stack_policy` / `max_stacks` 只接受默认值（方向 B） | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-212](RR-20261005-NC-212.md) | `checkKeys`：九类 catalog key 非空唯一 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-211](RR-20261005-NC-211.md) | 移交后 / 拥有者终态时 finish 只停止本 area 进程 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-210](RR-20261005-NC-210.md) | `declaredMemory`：三种 memory 效果查名字，add_memory 要求 int | 已修复、声明场景验证，未发版 |
+
 **10-05 N14 Kit 跨域装配（revn14）：NC-190、NC-191（P2）与 NC-193、NC-194（P3）已修复、声明场景验证，未发版；NC-192 未修（待维护者选方案，见文末）。** 布尔开关与时长严格读取（`app.ConfigBool` / `ConfigDuration`，`singleton.enabled: on` 与不带单位的时长启动即报错）、`cluster_addrs` 接受 YAML 列表；Mongo 连接日志去口令；启动失败先收回 Service 已启动的部分、收不回就保留 Mod 与锁；saga 步骤覆盖按小写回退。[本轮](../review/REVIEW-2026-10-05-n14.md) · [证据](evidence/noncore-bugfix-20261005-n14/README.md)
 
 | 编号 | 修复 | 状态 |

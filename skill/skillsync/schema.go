@@ -27,7 +27,14 @@ func (value SchemaRange) Contains(version uint32) bool {
 	return value.Min != 0 && version >= value.Min && version <= value.Max
 }
 
+// NegotiateSchema 返回两边区间交集里的最高版本。任一边是空区间（Min 为 0，或
+// Min > Max）时协商失败：Contains 与 NewApplier 都把 Min 0 当作“没有可用版本”，
+// 此前这里只在合并后的 minimum 为 0 时失败，一边 Min 0、另一边 Min 非 0 时会返回
+// 一个那一边并不支持的版本（RR-20261005-NC-216）。
 func NegotiateSchema(server, client SchemaRange) (uint32, error) {
+	if server.Min == 0 || client.Min == 0 || server.Min > server.Max || client.Min > client.Max {
+		return 0, ErrSchemaNegotiationFailed
+	}
 	minimum := server.Min
 	if client.Min > minimum {
 		minimum = client.Min

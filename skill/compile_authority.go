@@ -122,6 +122,31 @@ func validateCatalogHandles(environment CompileEnvironment, diagnostics *[]Diagn
 	checkHandles("$.gameplay.shared_states", len(environment.Gameplay.SharedStates.Entries), func(i int) uint16 { return uint16(environment.Gameplay.SharedStates.Entries[i].Handle) }, diagnostics)
 	checkHandles("$.gameplay.temporal", len(environment.Gameplay.Temporal.Entries), func(i int) uint16 { return uint16(environment.Gameplay.Temporal.Entries[i].Handle) }, diagnostics)
 	checkHandles("$.process_properties", len(environment.ProcessProperties.Properties), func(i int) uint16 { return uint16(environment.ProcessProperties.Properties[i].Handle) }, diagnostics)
+	// key 也必须非空且唯一（RR-20261005-NC-212）。编译器按 key 查 catalog 的写法不止一种：
+	// authority 表与 owned entity 的模板表后出现的条目覆盖前面的，unitTemplateEntry /
+	// typecheck 的属性表取第一个。只查 handle 唯一时，同一个 key 在一次编译里会被解析成
+	// 两个条目，typecheck 与 lower 用的策略不同。temporal 与 process property 在各自的
+	// 校验里已经查了 key。
+	checkKeys("$.gameplay.attributes", len(environment.Gameplay.Attributes.Entries), func(i int) string { return environment.Gameplay.Attributes.Entries[i].Key }, diagnostics)
+	checkKeys("$.gameplay.resources", len(environment.Gameplay.Resources.Entries), func(i int) string { return environment.Gameplay.Resources.Entries[i].Key }, diagnostics)
+	checkKeys("$.gameplay.statuses", len(environment.Gameplay.Statuses.Entries), func(i int) string { return environment.Gameplay.Statuses.Entries[i].Key }, diagnostics)
+	checkKeys("$.gameplay.unit_templates", len(environment.Gameplay.UnitTemplates.Entries), func(i int) string { return environment.Gameplay.UnitTemplates.Entries[i].Key }, diagnostics)
+	checkKeys("$.gameplay.collision", len(environment.Gameplay.Collision.Entries), func(i int) string { return environment.Gameplay.Collision.Entries[i].Key }, diagnostics)
+	checkKeys("$.gameplay.damage_types", len(environment.Gameplay.DamageTypes.Entries), func(i int) string { return environment.Gameplay.DamageTypes.Entries[i].Key }, diagnostics)
+	checkKeys("$.gameplay.elements", len(environment.Gameplay.Elements.Entries), func(i int) string { return environment.Gameplay.Elements.Entries[i].Key }, diagnostics)
+	checkKeys("$.gameplay.tags", len(environment.Gameplay.Tags.Entries), func(i int) string { return environment.Gameplay.Tags.Entries[i].Key }, diagnostics)
+	checkKeys("$.gameplay.shared_states", len(environment.Gameplay.SharedStates.Entries), func(i int) string { return environment.Gameplay.SharedStates.Entries[i].Key }, diagnostics)
+}
+
+func checkKeys(path string, length int, key func(int) string, diagnostics *[]Diagnostic) {
+	seen := make(map[string]bool, length)
+	for i := 0; i < length; i++ {
+		value := key(i)
+		if value == "" || seen[value] {
+			appendDiagnostic(diagnostics, DiagnosticCatalogDuplicateHandle, fmt.Sprintf("%s[%d].key", path, i), "key must be non-empty and unique")
+		}
+		seen[value] = true
+	}
 }
 
 func validateProcessPropertyCatalog(catalog ProcessPropertyCatalog, diagnostics *[]Diagnostic) {

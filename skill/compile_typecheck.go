@@ -420,12 +420,16 @@ func (c *typeChecker) effect(effect effectIR, scope typeScope) {
 		c.expect(typed.target, scope, entity)
 		c.expect(typed.amount, scope, quantityType(quantityResourceAmount))
 	case *setMemoryEffectIR:
-		if memoryType, found := c.memory[typed.name]; found {
+		if memoryType, found := c.declaredMemory(typed.name, typed.source.Path); found {
 			c.expect(typed.value, scope, withoutOptional(memoryType))
 		}
 	case *addMemoryEffectIR:
-		if memoryType, found := c.memory[typed.name]; found {
-			c.expect(typed.value, scope, withoutOptional(memoryType))
+		if memoryType, found := c.declaredMemory(typed.name, typed.source.Path); found {
+			if memoryType.Base != valueKindInt {
+				c.context.addDiagnostic(DiagnosticTypeMismatch, typed.source.Path+".name", "add_memory requires an int memory")
+			} else {
+				c.expect(typed.value, scope, withoutOptional(memoryType))
+			}
 		}
 	case *teleportEffectIR:
 		c.expect(typed.target, scope, entity)
@@ -504,8 +508,20 @@ func (c *typeChecker) effect(effect effectIR, scope typeScope) {
 			c.expect(typed.targetEntity, scope, entity)
 		}
 	case *clearMemoryEffectIR:
-		return
+		c.declaredMemory(typed.name, typed.source.Path)
 	}
+}
+
+// declaredMemory 是 set / add / clear_memory 共用的名字检查（RR-20261005-NC-210）。
+// lower 按名字取槽位时用的是 map 零值：此前未声明的名字在这里被直接跳过，lower 把它
+// 落到槽位 0——有别的 memory 时静默改写那个槽位（值的类型也没查过），没有 memory 时
+// executeMemory 返回 ErrProgramInvariant。
+func (c *typeChecker) declaredMemory(name, effectPath string) (valueType, bool) {
+	memoryType, found := c.memory[name]
+	if !found {
+		c.context.addDiagnostic(DiagnosticReferenceUnknown, effectPath+".name", "memory is not declared")
+	}
+	return memoryType, found
 }
 
 func lookupProcessPropertyPolicy(catalog ProcessPropertyCatalog, key string) (ProcessPropertyPolicy, bool) {

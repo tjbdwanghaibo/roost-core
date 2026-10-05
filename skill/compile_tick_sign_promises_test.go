@@ -37,10 +37,12 @@ func TestCompileRejectsNegativeTicksAtTheirField(t *testing.T) {
 	}
 }
 
-// 控制：同样形状、tick 为 0 时照常编译。
+// 控制：同样形状、tick 为 0 时照常编译。add_status 的时长要求为正
+// （RR-20261005-NC-215：两个参考 Host 都拒绝 0），这里用 1，0 的拒绝由
+// TestCompileRejectsValuesEveryHostRejects 钉住。
 func TestCompileAcceptsZeroTicks(t *testing.T) {
 	finish := `{"flow":"finish","reason":"done"}`
-	input := strings.Replace(strings.Replace(minimalSkillJSON, finish, `{"flow":"sequence","steps":[{"flow":"wait","ticks":0,"then":{"flow":"effect","effect":{"type":"add_status","target":"$input.target","status":"slow","duration_ticks":0,"stacks":1,"max_stacks":1}}},{"flow":"repeat","times":2,"interval_ticks":0,"index_as":"i","do":{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"}}},`+finish+`]}`, 1), `"input_schema":{"type":"none"}`, `"input_schema":{"type":"entity"}`, 1)
+	input := strings.Replace(strings.Replace(minimalSkillJSON, finish, `{"flow":"sequence","steps":[{"flow":"wait","ticks":0,"then":{"flow":"effect","effect":{"type":"add_status","target":"$input.target","status":"slow","duration_ticks":1,"stacks":1,"max_stacks":1}}},{"flow":"repeat","times":2,"interval_ticks":0,"index_as":"i","do":{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"}}},`+finish+`]}`, 1), `"input_schema":{"type":"none"}`, `"input_schema":{"type":"entity"}`, 1)
 	if _, diagnostics := Compile(mustParseJSON(t, input), DefaultCompileEnvironment()); diagnosticsHaveErrors(diagnostics) {
 		t.Fatalf("zero ticks rejected: %#v", diagnostics)
 	}

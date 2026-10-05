@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N09 skill 第四批（编译器其余 pass 对照 Runtime、lower / digest、presentation、skillsync schema；变异性质测试）
+
+基线 `c10cc9ac`（skill 与 `bfd353c0` 相同），分支 `revn09d`，NC 段 210～219（用 210～216）；图谱 generation 2026-09-30，三处 metadata_changed 以当前源码补证。[本轮/矩阵](REVIEW-2026-10-05-n09-batch4.md) · [修复](../bugfix/README.md)。审查 `caf9837e`；NC-210 / 211 / 214（P2）、NC-212 / 213 / 215 / 216（P3）已修复、声明场景验证，未发版。
+
+| 方向 | 本批 | 状态 / 下一入口 |
+| --- | --- | --- |
+| 数据/属性：编译器其余 pass | C1～C8：authority、environment、owned_entity、status、visual、motion 后半、程序字段对照、lower 名字查找 | NC-210、211、212、213、214、215；O21 Visual digest、O22 summon 时长、O24 relation、O25 shield 时长 |
+| 数据/属性：digest | C9：program_digest 覆盖 | 无缺陷；性质测试第二部分守住 |
+| 同步/接入：表现与 schema | C10～C12：presentation / assets、observability、schema 迁移图 | NC-216；O23 |
+| 护栏 | C13：编译 ⇒ 可执行的变异性质测试 | 已落地 `skill/compile_mutation_property_test.go`（42 种子、单点 23566 变异；`SKILL_MUTATION_FULL=1` 加子树移植 47188；race 下 1/40 抽样），修前红在 NC-210 / 211 |
+
+4 个新正式用例文件（另有 race 抽样开关 1 个）29 个修前红（子）用例 → 修后绿，3 条控制与 2 个默认值子用例修前修后都绿；3 个既有测试的输入随规则收紧调整（未声明 memory 填充、status 时长 0 控制）。skill 5 包 race×3、examples / sync-e2e、build / vet、根包、codegen Skill 用例通过。N09 部分完成，不计 completed/15。方向判断：编译器接受集合与 Runtime / Host 可执行集合各自维护第四次出现，本批换成“名字查找零值兜底 / 字段不传 Host / Host 都拒绝的取值”，建议 lower 查找 fail-fast、Host 取值约束做成随环境下发的能力表（见本轮 §6）。
+
 ## 2026-10-05 N14 Kit 跨域装配（revn14）
 
 基线 `f6245613`，分支 `revn14`，NC 段 190～199（用 190～194）；图谱 generation 2026-09-30，引用的 20 个路径中 17 个 metadata_changed / not_tracked，以当前源码补证；开工时 `remote-acceptance.lock` 存在，未跑 integration。[本轮](REVIEW-2026-10-05-n14.md) · [审查证据](evidence/noncore-review-20261005-n14/README.md) · [修复证据](../bugfix/evidence/noncore-bugfix-20261005-n14/README.md)。审查 `efe219c1`，修复 `f9367785` / `e1a6b01d` / `d6550a16` / `48b3311a`。

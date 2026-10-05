@@ -11,6 +11,7 @@ func runShapePass(context *compileContext) {
 		context.addDiagnostic(DiagnosticShapeInvalid, "$.global_cooldown_ticks", "global cooldown ticks must be non-negative")
 	}
 	requireNonNegativeAuthoredTicks(context)
+	rejectValuesTheRuntimeDoesNotExecute(context)
 	activation := context.artifacts.ir.activation
 	if activation.kind == "active" {
 		window := activation.castWindow
@@ -136,4 +137,67 @@ func requireNonNegativeAuthoredTicks(context *compileContext) {
 			}
 		}
 	})
+}
+
+// rejectValuesTheRuntimeDoesNotExecute 拒绝能解码、却不会按作者意思执行的取值。
+//
+//   - 只编译不传 Host 的字段（RR-20261005-NC-213）：chain 的 allow_repeat /
+//     hop_interval_ticks 不在 ChainSelectShape 里，Runtime 也不按间隔排 hop；
+//     attribute_modifier 的 stack_policy / max_stacks 不在 AttributeModifierCommand
+//     里。只接受 Runtime 实际执行的默认值，与 NC-151 的方向 B 一致；实现它们需要
+//     维护者先定语义。
+//   - 两个参考 Host（MemoryHost、combatcomponent）与 Runtime 都拒绝的取值
+//     （RR-20261005-NC-215）：attribute_modifier 时长 <= 0、add_status 时长为 0
+//     （负值由 requireNonNegativeAuthoredTicks 报）、resource 的 operation 不是
+//     set / add / spend / sub、cost 字面量为负（runtime_turn.go 的 payCostList 拒绝）。
+//     这些定义此前编译通过，施法时每次失败。attribute_modifier 的 operation 要对照
+//     属性 catalog，在 authority pass 里检查。
+func rejectValuesTheRuntimeDoesNotExecute(context *compileContext) {
+	ir := context.artifacts.ir
+	rejectNegativeCostLiterals(context, ir.costs)
+	rejectNegativeCostLiterals(context, ir.activation.policy.sustainCosts)
+	ir.walkFlows(func(flow flowIR) {
+		switch typed := flow.(type) {
+		case *selectFlowIR:
+			if chain, ok := typed.selectPlan.shape.(*chainShapeIR); ok {
+				if chain.allowRepeat {
+					context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".select.shape.allow_repeat", "chain allow_repeat is not executed by the Runtime; only false is accepted")
+				}
+				if chain.hopIntervalTicks > 0 {
+					context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".select.shape.hop_interval_ticks", "chain hop_interval_ticks is not executed by the Runtime; only 0 is accepted")
+				}
+			}
+		case *effectFlowIR:
+			switch effect := typed.effect.(type) {
+			case *attributeModifierEffectIR:
+				if effect.stackPolicy != "" {
+					context.addDiagnostic(DiagnosticShapeInvalid, effect.source.Path+".stack_policy", "attribute_modifier stack_policy is not passed to the Host; modifiers always stack independently")
+				}
+				if effect.maxStacks != 0 {
+					context.addDiagnostic(DiagnosticShapeInvalid, effect.source.Path+".max_stacks", "attribute_modifier max_stacks is not passed to the Host; modifiers always stack independently")
+				}
+				if effect.durationTicks <= 0 {
+					context.addDiagnostic(DiagnosticShapeInvalid, effect.source.Path+".duration_ticks", "attribute_modifier duration_ticks must be positive")
+				}
+			case *addStatusEffectIR:
+				if effect.durationTicks == 0 {
+					context.addDiagnostic(DiagnosticShapeInvalid, effect.source.Path+".duration_ticks", "status duration_ticks must be positive")
+				}
+			case *resourceEffectIR:
+				switch effect.operation {
+				case "set", "add", "spend", "sub":
+				default:
+					context.addDiagnostic(DiagnosticShapeInvalid, effect.source.Path+".operation", "resource operation must be set, add, spend, or sub")
+				}
+			}
+		}
+	})
+}
+
+func rejectNegativeCostLiterals(context *compileContext, costs []costIR) {
+	for _, cost := range costs {
+		if literal, ok := cost.amount.(*intValueIR); ok && literal.value < 0 {
+			context.addDiagnostic(DiagnosticShapeInvalid, cost.source.Path+".amount", "cost amount must be non-negative")
+		}
+	}
 }

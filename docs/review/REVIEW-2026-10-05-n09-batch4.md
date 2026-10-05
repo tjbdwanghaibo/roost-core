@@ -90,3 +90,22 @@
 1. 第 5 节列出的 pass 逐分支审（random / snapshot / temporal / graph / effect_result / proc / quantity）；
 2. 维护者决定：NC-151 / NC-213 方向 A、方向判断第 2 / 3 条、O21～O25，以及前三批的 O1～O20；
 3. 性质测试的种子随新效果补充；宽口径（Host 错误）是否纳入正式性质，取决于方向判断第 3 条。
+
+## 8. 修复与验证（审查提交之后追加）
+
+审查提交 `caf9837e`（`docs(review)`）之后按授权修复，单独一笔 `fix(skill,skillsync)`。每条一个修复单元：[NC-210](../bugfix/RR-20261005-NC-210.md)、[NC-211](../bugfix/RR-20261005-NC-211.md)、[NC-212](../bugfix/RR-20261005-NC-212.md)、[NC-213](../bugfix/RR-20261005-NC-213.md)、[NC-214](../bugfix/RR-20261005-NC-214.md)、[NC-215](../bugfix/RR-20261005-NC-215.md)、[NC-216](../bugfix/RR-20261005-NC-216.md)。NC-213 采用方向 B（只接受默认值），方向 A 留给维护者；NC-211 采用方向 A（Runtime 处理移交后的 finish）。
+
+| 命令（`GOWORK=off`，模块根） | 结果 |
+| --- | --- |
+| 新增正式用例修前：`compile_runtime_agreement_promises_test.go`（NC-210 5、NC-212 1、NC-213 4、NC-214 8、NC-215 7）、`area_handoff_finish_promises_test.go`（NC-211 2）、`skillsync/schema_negotiation_promises_test.go`（NC-216 1）、`compile_mutation_property_test.go`（性质 1） | 全部 FAIL，原文见各修复记录 |
+| 同一组修前控制：`TestDeclaredMemoryEffectsWriteTheirOwnSlot`、`TestCatalogConsistentEffectsStillCompileAndRun`、`TestLiveAreaFinishStillFinishesTheCast`、NC-213 的两个默认值子用例、`TestCompiledMutationsChangeDigestWhenProgramChanges` | 修前修后都 ok |
+| 修后全部；性质测试单点模式 23566 变异 / 7294 编译并施法，`SKILL_MUTATION_FULL=1` 47188 / 18652 | ok |
+| `gofmt -l skill` | 空 |
+| `go vet ./skill/... && go test -race -count=3 ./skill/...` | skill / combat / combatcomponent / skillcompose / skillsync 全部 ok（race 下性质测试 1/40 抽样；首次未抽样时 skill 包 race×3 超过 10 分钟默认超时，已改） |
+| `skill/examples`：`go build ./...`、`go run ./fireball`；`skill/integration/sync-e2e`：`go test -count=1 ./...` | 通过 |
+| `go build ./... && go vet ./...`；`go test -count=1 .`；`go test -count=1 ./codegen/internal/roost -run Skill` | 通过 |
+
+既有测试的输入随规则收紧调整（断言不变）：`compile_lifetime_test.go` 的 parallel finish 与 `compile_budget_test.go` 的 repeat 超限原来用未声明的 `clear_memory x` 当填充，现在声明 `x`；NC-152 的控制 `TestCompileAcceptsZeroTicks` 里 add_status 时长从 0 改为 1（0 现在由 NC-215 拒绝，wait 0 / repeat 间隔 0 的控制不变）。
+
+组合契约复核：新诊断只经 `Compile` 返回——game-demo 的 `CompileAll`（`service.go.tmpl:61`、`skill_catalog.go.tmpl:46`）把 error 诊断当启动失败，本来就处理；它们用的 `DefaultCompileEnvironment` 没有重复 key、生成的骨架与 fireball 零诊断（`TestGeneratedSkillDefinitionsCompileWithoutDiagnostics` 修后 ok）。NC-211 只改 Runtime 对“移交后 finish”的处理：施法存活时的路径（`ownerLive`）与此前完全相同，既有 area 用例全部通过；移交后的进程在同一次 `advanceOwnedProcesses` 内停止并从 `ownedProcesses` 删除，checkpoint 不会看到中间标记。NC-216 只影响 `NegotiateSchema`，`NewApplier` / `admit` 不调用它。没有改生成形状（模板、生成器未动），未生成 game-demo 工程；外部依赖（Mongo / Redis / NATS）本批没有用到。T-258。
+

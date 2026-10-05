@@ -319,6 +319,14 @@ func (runtime *Runtime) advanceOwnedProcesses() error {
 		if err := runtime.dispatchOwnedProcessSignals(process, signals); err != nil {
 			return runtime.failOwnedProcess(process, err)
 		}
+		if process.areaCallbackFinishedCast {
+			// 移交后的 area 回调 finish：与施法存活时 startEntityProcess 的处理一致，
+			// 停止本 area 进程，不再跑 end / cancel 回调（RR-20261005-NC-211）。
+			if err := runtime.terminateOwnedProcess(nil, id, StopCauseCancel, ""); err != nil {
+				return err
+			}
+			continue
+		}
 		interval := Tick(1)
 		if template.area != nil {
 			interval = template.intervalTicks
@@ -448,14 +456,19 @@ func (runtime *Runtime) runOwnedProcessCallback(process *ProcessInstance, event 
 			return err
 		}
 		if control.kind != flowContinue {
-			if control.kind != flowFinish || template.area == nil || process.handedOff {
+			if control.kind != flowFinish || template.area == nil {
 				return ErrProgramInvariant
 			}
+			// area 回调的 finish = 结束拥有它的施法 + 停止本 area 余下的信号。编译器
+			// （compile_owned_entity.go 的 allowAreaFinish）不知道施法会不会先结束：
+			// 施法先结束时 entity 进程已经移交（handedOff），拥有者施法是终态或已回收，
+			// 这时 finish 没有施法可结束，只停止本 area。此前这里返回
+			// ErrProgramInvariant，Advance 在 tick 中途失败（RR-20261005-NC-211）。
 			ownerCast := runtime.casts[process.CastID]
-			if ownerCast == nil || ownerCast.status == CastFinished || ownerCast.status == CastFailed || ownerCast.logicalFinished {
-				return ErrProgramInvariant
+			ownerLive := !process.handedOff && ownerCast != nil && ownerCast.status != CastFinished && ownerCast.status != CastFailed && !ownerCast.logicalFinished
+			if ownerLive {
+				ownerCast.areaCallbackFinish = true
 			}
-			ownerCast.areaCallbackFinish = true
 			process.areaCallbackFinishedCast = true
 		}
 		runtime.appendRuntimeEvent(RuntimeEvent{Tick: runtime.currentTick, Kind: "owned_process_callback_" + event, Entity: process.LifecycleEntity, Context: callbackCast.detachedEvent})
