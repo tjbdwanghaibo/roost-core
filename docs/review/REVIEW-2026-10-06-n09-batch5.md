@@ -94,7 +94,7 @@ snapshot 与 NC-220～224 的承诺用例在 `skill/compile_capture_context_prom
 
 ## 9. 修复与验证（审查之后追加）
 
-审查记录与修复同批提交（见交付报告的提交号）。每条一个修复单元：[NC-220](../bugfix/RR-20261005-NC-220.md)、[NC-221](../bugfix/RR-20261005-NC-221.md)、[NC-222](../bugfix/RR-20261005-NC-222.md)、[NC-223](../bugfix/RR-20261005-NC-223.md)、[NC-224](../bugfix/RR-20261005-NC-224.md)。
+审查记录与修复同批提交：`5c04726f`（`fix(skill)`，NC-220～224 与本记录）；B4 文档 `62cec54e`（`docs(skill)`）。每条一个修复单元：[NC-220](../bugfix/RR-20261005-NC-220.md)、[NC-221](../bugfix/RR-20261005-NC-221.md)、[NC-222](../bugfix/RR-20261005-NC-222.md)、[NC-223](../bugfix/RR-20261005-NC-223.md)、[NC-224](../bugfix/RR-20261005-NC-224.md)。
 
 | 命令（`GOWORK=off`，模块根） | 结果 |
 | --- | --- |
