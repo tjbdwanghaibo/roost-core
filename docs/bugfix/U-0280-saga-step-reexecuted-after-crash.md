@@ -344,11 +344,11 @@ Redis db 9 / 10 / 11 里 58 个 `u0280[abc]*` 键（删前核对没有其他前�
 两处在当前实现上能写出红用例的缺口，均落在 C'（“已生效、未计入的成功必须可见”）上，各一笔提交，用例在
 `saga/step_operation_review_test.go`：
 
-1. **以失败关闭的 operation 被记为“带结果关闭”**（`fbc3da77`）：协调器在等最后一次尝试时接收较早尝试晚到的可重试失败、
+1. **以失败关闭的 operation 被记为“带结果关闭”**（`23b97942`）：协调器在等最后一次尝试时接收较早尝试晚到的可重试失败、
    重试用尽；`MongoStore.Apply` 只要带 Receipt 就记 `closure=result`，最后一次尝试照常执行并生效，它的成功按重复静默确认。
    改为只有接收成功才记 `result`，以失败关闭（可重试失败用尽、拒绝）记 `abandoned`。
    红：`attempt gift-1:1:0:2 took effect after the coordinator closed the operation on a stale retryable failure; saga.completion.late_after_abandon_total grew by 0, want 1`。
-2. **过期投递 ack 时不回放同一操作已生效的成功**（`fe39c095`）：情形 (b) 的成功在退避期间被丢弃后，最后一次尝试的投递
+2. **过期投递 ack 时不回放同一操作已生效的成功**（`877bb66c`）：情形 (b) 的成功在退避期间被丢弃后，最后一次尝试的投递
    过了自己截止（U-0281 过期分支或 Reserve 的 `ErrCommandExpired`），只查自己的回执就 ack，成功再无人送达、协调器放弃且不告警。
    改为两条不执行的分支在 ack 前只读查找同一操作已生效的成功并经 saga 结果流重发。
    红：`... the expired delivery of gift-N:1:0:2 was acknowledged without replaying it: the saga ended failed with CompletedSteps=0 and no late_after_abandon alarm`。
