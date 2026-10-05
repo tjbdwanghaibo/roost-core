@@ -526,6 +526,16 @@ func (steps giftSteps) debit(ctx context.Context, command saga.Command) (saga.Co
 // operator sees it in gm.saga.list and decides. A refund usually lands on an
 // offline, cold sender; Nest loads declared cold targets on its slow pool, so
 // "offline" is not a reason for the compensation to fail.
+//
+// 重试预算：退款只能在发送方绑定的 sid 上执行（admitOwned），那个 sid 的进程崩溃重启期间，别的进程
+// 只拒绝、不回答，每一次尝试都等到 Timeout；补偿的重试用尽就是 manual_required，要人工处理。一次
+// 崩溃重启最长约为 singleton.startup_wait（30s，新进程等旧锁的上限）+ singleton.ttl（15s，旧进程最后
+// 一次续期之后键还活着的时间）+ 被拉起与 Init 的余量（按 45s 留），合计 90s。所以 debit 这一步（它的
+// 补偿就是退款）在 saga/gift_item/definition.go 里是 MaxAttempts 15、Timeout 5s、退避 100ms..5s：至少
+// 15 × 5s + 23.15s（14 次退避各取抖动下界）≈ 98s，至多约 121s，在重启结束之后至少还有一次完整的尝试。
+// 用的是 saga.Step 现有的次数与退避，没有新机制；Step 的预算正反两个方向共用，所以 debit 的正向尝试
+// 也是 15 次——扣款一直失败时什么都没扣，只是更晚才判赠礼失败（仍受 gift.Deadline 约束）。
+// gift_saga_budget_test.go 按生成的 singleton 配置钉住这个关系；改 ttl / startup_wait 时一起改这里。
 func (steps giftSteps) refund(ctx context.Context, command saga.Command) (saga.Completion, error) {
 	state, entityID, err := giftTarget(command, func(state gift.State) int64 { return state.From })
 	if err != nil {

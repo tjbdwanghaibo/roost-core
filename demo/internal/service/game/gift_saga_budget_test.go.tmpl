@@ -1,0 +1,76 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"testing"
+	"time"
+
+	giftitem "{{MODULE}}/saga/gift_item"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/saga"
+)
+
+// senderRestartAllowance 是补偿预算里留给“崩溃的发送方进程被重新拉起、跑完 Init、步骤消费者重新
+// 订阅”的余量，不含等单实例锁的时间（那部分是 singleton.startup_wait + singleton.ttl）。
+// 与 gift_saga.go 里退款预算的说明一致。
+const senderRestartAllowance = 45 * time.Second
+
+// stepRetryWindow 是协调器把一个步骤判为用尽之前至少会给它的时间：MaxAttempts 次尝试各等满
+// Timeout（发送方的 sid 不在时，别的进程只拒绝、不回答，每次尝试都是等到超时），相邻两次之间
+// 按 saga 引擎的退避取下界——saga/engine.go 的 backoff 从 BackoffMin 起翻倍、封顶 BackoffMax，
+// 再在 [d/2, d] 里抖动，这里取 d/2。
+func stepRetryWindow(step saga.Step) time.Duration {
+	window := time.Duration(step.MaxAttempts) * step.Timeout
+	delay := step.BackoffMin
+	for attempt := uint32(1); attempt < step.MaxAttempts; attempt++ {
+		window += delay / 2
+		delay = min(2*delay, step.BackoffMax)
+	}
+	return window
+}
+
+// 退款（debit 的补偿）只能在发送方绑定的 sid 上执行。那个 sid 崩溃重启时，新进程要等旧进程的单实例
+// 锁过期（最多 singleton.ttl）、受 singleton.startup_wait 约束，再加上被拉起和 Init 的时间；这段时间里
+// 每一次尝试都只会超时。补偿的重试用尽就是 manual_required，所以退款的重试窗口必须覆盖一次崩溃重启：
+// startup_wait + ttl + senderRestartAllowance（生成的配置里是 30s + 15s + 45s = 90s）。
+func TestARefundOutlastsACrashRestartOfTheSendersSid(t *testing.T) {
+	var debit saga.Step
+	found := false
+	for _, step := range giftitem.Definition().Steps {
+		if step.Name == "debit" {
+			debit, found = step, true
+		}
+	}
+	if !found {
+		t.Fatal("the gift saga has no debit step")
+	}
+	if debit.CompensateTopic != giftitem.TopicDebitCompensation {
+		t.Fatalf("debit compensates on %q, but the refund consumer listens on %q", debit.CompensateTopic, giftitem.TopicDebitCompensation)
+	}
+	window := stepRetryWindow(debit)
+	for _, file := range []string{
+		"../../../configs/service/config.{{GAME_SERVICE}}.yaml",
+		"../../../configs/service/config.{{GAME_SERVICE}}.prod.example.yaml",
+	} {
+		t.Run(file, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.SetConfigFile(file)
+			if err := cfg.ReadInConfig(); err != nil {
+				t.Fatal(err)
+			}
+			// 未写的键取 App 的缺省值（app/singleton.go：ttl 15s，startup_wait 2 × ttl）。
+			ttl := 15 * time.Second
+			if cfg.IsSet("singleton.ttl") {
+				ttl = cfg.GetDuration("singleton.ttl")
+			}
+			startupWait := 2 * ttl
+			if cfg.IsSet("singleton.startup_wait") {
+				startupWait = cfg.GetDuration("singleton.startup_wait")
+			}
+			required := startupWait + ttl + senderRestartAllowance
+			if window < required {
+				t.Errorf("a refund gets at least %s of retries (MaxAttempts %d x Timeout %s, backoff %s..%s), but a crash restart of the sender's sid can take startup_wait %s + ttl %s + restart allowance %s = %s; past that the refund is marked manual_required",
+					window, debit.MaxAttempts, debit.Timeout, debit.BackoffMin, debit.BackoffMax, startupWait, ttl, senderRestartAllowance, required)
+			}
+		})
+	}
+}

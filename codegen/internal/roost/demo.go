@@ -189,6 +189,37 @@ func enableDemoPlayerTCP(root, gameService string) error {
 	return err
 }
 
+// demoGiftRefundBudget gives the gift saga's debit step — whose compensation
+// is the refund — a retry budget that outlasts a crash restart of the
+// sender's sid.
+//
+// `add saga` writes every step with the same budget (5 attempts of 5s, backoff
+// 100ms..5s: at least ~26s before the step counts as exhausted). The refund
+// only runs on the sid the sender is bound to; while that process restarts
+// every attempt just times out, and an exhausted compensation is
+// manual_required. A restart can take singleton.startup_wait (30s) +
+// singleton.ttl (15s) + the time to be started and run Init (45s allowed):
+// 90s. saga.Step has one budget for both directions, so the debit's forward
+// attempts get the same 15 — harmless, a debit that never ran took nothing.
+// The relation is pinned by internal/service/game/gift_saga_budget_test.go
+// against the generated singleton settings.
+func demoGiftRefundBudget(root, _ string) error {
+	path := filepath.Join(root, "saga", "gift_item", "definition.go")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	const before = "\t\t{Name: \"debit\", ForwardTopic: TopicDebit, CompensateTopic: TopicDebitCompensation, Timeout: 5 * time.Second, MaxAttempts: 5, BackoffMin: 100 * time.Millisecond, BackoffMax: 5 * time.Second},\n"
+	const after = "\t\t// debit 的补偿是退款，只能在发送方绑定的 sid 上执行。MaxAttempts 15 让退款至少重试约 98s\n" +
+		"\t\t// （15 × 5s 超时 + 退避下界），覆盖那个 sid 的一次崩溃重启（startup_wait + ttl + 拉起余量 = 90s），\n" +
+		"\t\t// 不在重启期间用尽、转为 manual_required。理由见 internal/service/<game>/gift_saga.go。\n" +
+		"\t\t{Name: \"debit\", ForwardTopic: TopicDebit, CompensateTopic: TopicDebitCompensation, Timeout: 5 * time.Second, MaxAttempts: 15, BackoffMin: 100 * time.Millisecond, BackoffMax: 5 * time.Second},\n"
+	if !strings.Contains(string(raw), before) {
+		return fmt.Errorf("%s: expected the generated debit step to replace", path)
+	}
+	return writeAtomic(path, []byte(strings.Replace(string(raw), before, after, 1)), 0o644)
+}
+
 // demoPaymentSecrets gives the platform service its two secrets in the DEV
 // configs and tells the game process the same payment secret.
 //
@@ -394,6 +425,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/dungeon/dungeon_test.go", why: "the claim window as a table test, shipped with the project"},
 		{write: "game/battle/battle.go", why: "the lockstep contract: tick rate, frame budget, input encoding, seats and the deterministic simulation both clients run"},
 		{add: &AddOptions{Kind: "saga", Name: "GiftItem", Service: gameService, Steps: []string{"debit", "deliver"}}, why: "the gift saga's definition and step subscriptions; the saga mod joins the game service"},
+		{run: demoGiftRefundBudget, why: "debit's retry budget covers a crash restart of the sender's sid, so a refund waits it out instead of going to manual_required"},
 		{write: "game/gift/gift.go", why: "the game's side of the gift: state, id, mail text"},
 		{add: &AddOptions{Kind: "handler", Name: "AddItem", Entity: "Player", Component: "Bag"}, why: "the write transaction"},
 		{write: "game/handler/add_item.go", why: "handler parameters and result; the Sender and endpoint are generated from them"},
@@ -585,6 +617,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/flags.go", why: "the table is the source and the store is rebuilt from it on every reload; also the one place that says what may be hot-patched"},
 		{write: "internal/service/game/playerowner.go", why: "static binding: serve only the players bound to this sid (server_id from account), a local resident table behind the write gate, and idle unload as plain memory management"},
 		{write: "internal/service/game/playerowner_test.go", why: "Serve 的三种结果、只有通过绑定校验才有驻留记录、卸载进行中不准入、登录等卸载结束、闲置卸载与使用的界定"},
+		{write: "internal/service/game/gift_saga_budget_test.go", why: "退款（debit 的补偿）的重试窗口覆盖发送方 sid 的一次崩溃重启：startup_wait + ttl + 拉起余量，按生成的 singleton 配置核对"},
 		{write: "internal/service/game/gift_handoff_test.go", why: "赠礼步骤按发送方绑定的 sid（FromSID）准入与转交：本服的离线发送方照常执行，别的服的转交给其 sid、不在本进程接入，FromSID=0 拒绝，接收端非本服静默丢弃"},
 		{write: "internal/service/game/activity_test.go", why: "贡献必须说出它落进了哪个窗口：同窗口看得见自己那一点，跨过 300 秒边界是另一个窗口且分数为 0，而那一点仍在原窗口里；expected 集合等于 App 单实例锁 Live 返回的活 sid、为空时只有自己、查询失败不开窗，取不到 Live 能力时 activity 拒绝启动"},
 		{write: "internal/service/game/gift_recipient_test.go", why: "RR-20260930-22：收件人检查读 Player DAO 自己的库和集合，与 dataengine.database 无关；从未进过游戏的收件人仍是业务拒绝"},
