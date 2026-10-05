@@ -2,7 +2,7 @@
 
 - 范围：core `app`（`app/app.go` 的 `run`、`app/runtime_failure.go`、`app/config_validation.go`），kit 的 Redis 后端（`kit/redis`）与 Nest Mod（`kit/nest/nest_mod.go`），codegen 的 bootstrap / 配置 / 停机预算 / 部署清单，game-demo 的所有权改写（[静态绑定方案](PLAYEROWNER-STATIC-BINDING-2026-10-05.md)）。
 - 基线：main `c3aa0edd`。行号按这个提交。codebase-memory 索引代际为 2026-09-30，本文引用的 dataengine / nestwal / kit / redis 文件 coverage 为 `metadata_match`；`app/app.go` 为 `metadata_changed`，`docs/` 与 codegen 模板不在索引内，这些都按当前源码直接读取。
-- 性质：方案。**状态（2026-10-05）：第 1、2、2b 笔已实施**（提交 `d4ac9853`、`6863dbc3`、`71c6fb6b`）；第 3～5 笔（含 3b）未实施。
+- 性质：方案。**状态（2026-10-05）：第 1、2、2b、3 笔已实施**（提交 `d4ac9853`、`6863dbc3`、`71c6fb6b`、`f051e24a`）；第 3b、4、5 笔未实施。
 - 维护者 2026-10-05 的决定（本文的前提）：
   1. 只考虑**同一 sid 崩溃重启时短暂出现两个进程**这一个场景。
   2. 这个保证**由 App 本身提供**，DataEngine、activity、PlayerOwners 等模块不感知锁、不各自检查。
@@ -69,6 +69,8 @@ App 锁在这个场景里提供的东西：
 // app/singleton.go
 // SingletonStore 是单实例锁的后端：两个原子操作，语义与 redis.CompareAndSet / CompareAndDelete 相同。
 // expected 为 nil 表示“键必须不存在”；Applied=false 时 current 是键里现在的值（不存在为 nil）。
+// 实现必须遵守 ctx 截止时间（§3.3 的“Lost 不晚于 validUntil”依赖它）；内部重试只能在同一个 ctx 内，
+// CAS(v,v)、认领自己的值、按值删除重复执行都安全；续期不能被并发的 Get 拖住（审查收尾，§13）。
 type SingletonStore interface {
 	CompareAndSet(ctx context.Context, key string, expected, next []byte, ttl time.Duration) (applied bool, current []byte, err error)
 	CompareAndDelete(ctx context.Context, key string, expected []byte) (applied bool, err error)
@@ -87,14 +89,14 @@ func (a *App) Singleton(open SingletonOpener) *App
 
 - `singleton.enabled=true` 但 bootstrap 没有安装 opener：启动失败（fail-closed），错误写明要在 bootstrap 里调用 `Singleton`。
 - 装了 opener 但 `enabled=false`：不建连接，行为与现在完全相同。
-- `kit/redis` 提供 `kitredis.SingletonStore`（一个 `SingletonOpener`）：把 `RedisMod.Init` 的配置解析抽成包内函数复用，`PoolSize=2`、`MinIdleConns=0`，打开后先 Ping；两个 CAS 方法直接转调 `fredis.CompareAndSet` / `fredis.CompareAndDelete`（客户端 `ContextTimeoutEnabled`，单次调用的 ctx 截止时间生效，`redis/driver/client.go:53-75`）。CAS 只涉及单键，不需要 hash tag。opener 在任何 Mod 之前只依赖已读完的 viper 配置，不依赖 Redis Mod，自洽。缺 `redis.addr` 与 `redis.cluster_addrs` 时由 opener 报错（不要沿用 `RedisMod.Init` 的 `localhost:6379` 兜底），这样 core 的 `ValidateServiceConfig` 不需要知道 `redis.*` 键名。
+- `kit/redis` 提供 `kitredis.SingletonStore`（一个 `SingletonOpener`）：把 `RedisMod.Init` 的配置解析抽成包内函数复用，建两个独立客户端——CAS 一个、`Get`（Live）一个，各 `PoolSize=2`、`MinIdleConns=0`，并发的 Live 占满连接时续期不用等连接（审查收尾，§13）——打开后先 Ping；两个 CAS 方法直接转调 `fredis.CompareAndSet` / `fredis.CompareAndDelete`（客户端 `ContextTimeoutEnabled`，单次调用的 ctx 截止时间生效，`redis/driver/client.go:53-75`）。CAS 只涉及单键，不需要 hash tag。opener 在任何 Mod 之前只依赖已读完的 viper 配置，不依赖 Redis Mod，自洽。缺 `redis.addr` 与 `redis.cluster_addrs` 时由 opener 报错（不要沿用 `RedisMod.Init` 的 `localhost:6379` 兜底），这样 core 的 `ValidateServiceConfig` 不需要知道 `redis.*` 键名。
 - `run` 在 `NewRegistry` 之后把 Live 查询登记成 Registry 能力（`app.ModSingleton`，值为 `app.SingletonLiveness`，§3.6）。`enabled=false` 时不登记，用到它的模块在 Init 里报明确的错误（fail-closed）。
 
 ### 3.2 键、值与操作
 
 - 键：`<singleton.key_prefix>:<server_type>:<sid>`。`server_type` 和 `sid` 是 `run` 已经写进配置的值（`app/app.go:98-124`）。`key_prefix` 在启用时必填，沿用 `<service>.key_prefix` 的约定（`kit/mods/service_servicemods.go:34`：没有默认值，不能含空白），生成值 `roost:<project>:singleton`。
 - 值：`<token>|<hostname>|<pid>|<started_unix_ms>`。`token` 是本次进程启动时 `crypto/rand` 生成的 16 位十六进制串，所以同 sid 重启一定是另一个持有者。后三段只给运维看；CAS 比较整个值，不影响语义。
-- 操作（每个都是一次原子往返）：
+- 操作（每个都是一次原子操作；单机下是一次往返，Redis Cluster 下 go-redis 按 `MaxRedirects` 处理 MOVED / ASK 与网络错误重试，都在同一个 ctx 内，重复执行安全）：
 
 | 操作 | 调用 | 结论 |
 | --- | --- | --- |
@@ -109,14 +111,14 @@ Applied=false 一律是 NotHeld，结构上不存在“没生效却回答是我�
 | 配置 | 默认 | 关系 |
 | --- | --- | --- |
 | `singleton.ttl` | 15s | 崩溃重启最长要等的时间 |
-| `singleton.renew_interval` | 3s | 单次续期的超时也取这个值 |
+| `singleton.renew_interval` | 3s | 续期节拍；单次续期的超时取这个值，持有期间不越过 `validUntil` |
 | `singleton.guard` | 5s | 窗口提前于键过期结束的量 |
 | `singleton.startup_wait` | 30s（= 2×ttl） | 启动时等锁的上限 |
 
 - **窗口**：每次 CAS 之前记下 `asked := now()`（单调时钟），Applied 之后 `validUntil = asked + ttl`。Redis 的 TTL 从它处理请求的时刻起算，不早于 `asked`，所以本地窗口不会晚于键过期（RR-20261004-14 的教训）。前提是本机单调时钟不停走：Go 在 Linux 上用 `CLOCK_MONOTONIC`，主机挂起期间不计时，那属于 §1.2 不处理的情形。
-- **调度**：续期按**固定节拍**发起，节拍点是上一次 Applied 的 `asked + k × renew_interval`；单次超时等于 `renew_interval`，超时或报错就在下一个节拍点重试，不在失败后再额外睡一个间隔。这样相邻两次结论之间最多隔一个 `renew_interval`。
+- **调度**：续期按**固定节拍**发起，节拍点是上一次 Applied 的 `asked + k × renew_interval`；单次超时取 `renew_interval`、持有期间截到 `validUntil`（`min(renew_interval, validUntil − asked)`，`asked` 已过 `validUntil` 时不截），超时或报错就在下一个节拍点重试，不在失败后再额外睡一个间隔。这样相邻两次结论之间最多隔一个 `renew_interval`。
 - **由 `ValidateServiceConfig` 钉住的关系**（启用时，四个值都为正）：
-  1. `renew_interval ≤ guard`：进程没有卡住、只是续期一直 Unknown 时，进入 `[validUntil − guard, validUntil)` 之后一个节拍内一定有一次结论落在键过期之前，Lost 先于别人能拿到锁判定。原稿只有第 2 条，它说的是“容忍一次续期失败”（活性），不保证这一点；若按“失败后再睡一个间隔”调度，结论间隔可达 `2 × renew_interval = 6s > guard`。
+  1. `renew_interval ≤ guard`：进程没有卡住、只是续期一直 Unknown 时，键过期之前一定**发起**一次落在 `[validUntil − guard, validUntil)` 里的续期：最后一个早于 `validUntil − guard` 的结论之后，下一拍不晚于 `validUntil − guard + renew_interval ≤ validUntil` 发起。不等式只管发起时刻、不管结论时刻：这一拍若给满 `renew_interval` 的单次超时，超时结论最晚落在 `validUntil − guard + 2 × renew_interval`，可能晚于键过期（默认 5s / 3s 时是 `validUntil + 1s`）。保证“Lost 不晚于 `validUntil` 判定”的是单次超时截断到 `validUntil`（见上一条“调度”，`e3810ef1`）；不等式的作用是让这样一拍一定存在。（更正：本条原写“进入窗口之后一个节拍内一定有一次结论落在键过期之前”，把截断的作用算到了不等式上，按 `e3810ef1` 的审查推导改正。）原稿只有第 2 条，它说的是“容忍一次续期失败”（活性），不保证这一点；若按“失败后再睡一个间隔”调度，结论间隔可达 `2 × renew_interval = 6s > guard`。
   2. `2 × renew_interval ≤ ttl − guard`：一次续期超时之后，下一次仍在窗口内发起，一次抖动不会判 Lost。
   3. `startup_wait ≥ ttl + 2 × renew_interval`：卡住的旧持有者最后一次续期可能在 P2 启动前后才被 Redis 处理（在途请求），键最晚在 P2 启动后约 `ttl` 过期，P2 的重试间隔又是一个 `renew_interval`；原稿的 `ttl + renew_interval` 在等号处没有余量。
   默认 15 / 3 / 5 / 30s 三条都满足。违反就启动失败。
@@ -158,7 +160,7 @@ run:
   Mod Init → Provide → Start（共享，再服务专属）→ PhaseModsStarted
   Service.Init → Serve …（等待信号 / RuntimeFailure / Serve 结束）
   Service.Shutdown → 服务专属 Mod 逆序停 → 共享 Mod 逆序停
-  ▶ 单实例锁：停止续期 → Release（仅当所有 Mod 都停完）→ Close
+  ▶ 单实例锁：停止续期 → Release（仅当所有 Mod 都停完且未 Lost）→ Close（全部 Mod 停完或没启动任何 Mod 时；停机不完整留到进程退出）
 ```
 
 | 退出路径 | 是否 Release |
@@ -171,7 +173,7 @@ run:
 
 - `run` 有十几个返回点（`app/app.go:174-379`）。实现用一个 `defer` 统一收尾：先停续期，再按一个只在“全部 Mod 都停完”的路径上置位的标志决定是否 Release，避免逐个返回点漏掉。
 - Release 的 ctx：停机路径用 `min(shutdownCtx 剩余, 3s)`，剩余为零就跳过、等键过期；启动失败路径没有 `shutdownCtx`，固定 3s。
-- 预算：`stopModsReverseBefore` 会把 `shutdownCtx` 的剩余时间全部分给 Mod（`app/app.go:420-450`），只在 codegen 里给 `total_timeout` 加 3s 并不能保证 Release 有时间。启用时 App 给 Mod 停机用的 ctx 截止时间提前 3s（`deadline − releaseBudget`），留给 Release。
+- 预算：`stopModsReverseBefore` 会把 `shutdownCtx` 的剩余时间全部分给 Mod（`app/app.go:420-450`），只在 codegen 里给 `total_timeout` 加 3s 并不能保证 Release 有时间。启用时 App 给 Mod 停机用的 ctx 截止时间提前 3s（`deadline − releaseBudget`），留给 Release；进入停机时已 Lost 不会 Release，不预留（审查收尾，§13）。
 - 释放之后不会有旧进程的 goroutine 继续写：Release 只在所有 Mod 停完之后发生，随后 `run` 返回、`main` 以非零或零退出；超时与 Lost 路径不 Release，进程退出后键自然过期。唯一的先后差是 DataEngine 在停机中途关闭 WAL（释放 `flock`）时，排在它后面的 Mod（game 服务里是 RemoteEntity、syncbus、NATS、Redis、Mongo，见 §4）还在停，此时 App 锁仍由本进程持有（非 Lost）或已被 P2 持有（Lost），后一种情况 P2 可能先于这几个 Mod 停完打开 WAL；它们在停机阶段只做排空，RemoteEntity 的写由 Mongo 权威校验，列为接受的边界。
 
 ### 3.6 只读的活性查询 `Live`（维护者追加决定）
@@ -468,3 +470,38 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
 - 使用者核对：`git grep` 两个常量与 `redis.lock` / `etcd.election`，仓库内（core、kit、codegen、demo 模板）除发布点与文档外无引用；`redis/driver`、`etcd/driver` 的 `Assembly.Locks` / `Election` 保留（driver 自身测试在用）。仓外调用无法核对，按破坏性变更登记。
 - 验证：`GOWORK=off go vet` 与 `go test -race -count=1 ./kit/etcd/... ./kit/redis/... ./kit/mods/...` 通过。
 - 两笔合并后在干净 worktree：`gofmt -l` 空、`go build ./...`、`go generate ./...` 后 porcelain 为空、根包 `go test -count=1 .`（含 `TestCoreDependencyBoundary`）与 `go test -count=1 ./codegen/...` 全绿；rebase 到 `b291edb9` 之后复跑 build、根包、`kit/redis` / `kit/mods` 与 codegen 的 singleton / 停机 / demo 用例通过。未验证：生成工程的真实进程启动（拿锁、Release 预留实测，属第 5 笔演练）、kubeconform / `docker compose config` 对新模板的渲染（本机未跑）。
+
+### 第 1 笔审查收尾（2026-10-05，提交 `4959a0dd`、`86f687cf`、`cd8c1ad3`、`cbccacdb`、`ad35bbcc` 与本笔文档）
+
+第 1 笔审查修复 `e3810ef1`（续期单次超时截到 `validUntil`）、`b291edb9`（接手用例只推进启动等待的定时器）之后的遗留项，逐条处理：
+
+1. **Live 与续期共用 PoolSize=2 的连接池**（`ad35bbcc`）：Redis 变慢时两条并发 Live 就能占满连接，续期等不到连接、单次超时内报错（Unknown），持续到窗口末尾误判 Lost。`kitredis.SingletonStore` 改为两个独立客户端（CAS 一个、Live 一个，各 `PoolSize=2`）。没有选“续期独占一条连接”：go-redis 的连接池没有“预留一条给某类调用”的接口，独立客户端是最简单可靠的隔离；CAS 客户端留 2 条给 Cluster 拓扑刷新与超时后重拨。回归 `TestSingletonStoreRenewalDoesNotWaitBehindStalledLiveQueries`（integration，真实 Redis + 只扣住 GET 的 TCP 代理，等代理确认 Live 的连接全部卡住后再以 1s 超时续期）；修前：`renew while every Live connection is stalled = false "" context deadline exceeded, want applied`。
+2. **接口契约与 Cluster 重试**（本笔文档）：`app.SingletonStore` 注释写明实现必须遵守 ctx 截止时间（Lost 的时间界依赖它）、内部重试只能在同一个 ctx 内、重复执行安全、续期不能被 Live 拖住；`kitredis` 注释把“每次 CAS 一次往返”改为准确表述：单机一次往返，Cluster 下 go-redis 按 `MaxRedirects`（缺省 3）处理 MOVED / ASK 与网络错误重试（`osscluster.go` 的 `process`），重试与退避受 ctx 限定，CAS(v,v)、获取重试读到自己的值后认领、按值删除重复执行都安全。纯注释，无红测试。
+3. **已 Lost 仍给 Release 预留 3s**（`4959a0dd`）：进入停机时已 Lost 则 `releaseReserve = 0`，整段 `shutdown.total_timeout` 给 Mod 停机。回归 `TestSingletonLostLockLeavesTheReleaseBudgetToModStop`（held 仍预留 3s、lost 不预留，比较 `Service.Shutdown` 与 Mod `StopWithContext` 收到的截止时间）；修前 lost 例：`mod stop deadline is 3s before the shutdown deadline, want 0s`。
+4. **测试覆盖缺口**（`cd8c1ad3`）：新增 `TestSingletonLostDuringStartupStopsTheModsWithoutReleasing`（Mod Start 期间续期 NotHeld → 停在下一阶段边界、不启动后面的 Mod、停掉已启动的 Mod、不 Release、关闭 store）；`TestRunStopsStartingModsAfterARuntimeFailure` 改为单实例锁关 / 开各一遍（开启时非失锁的 fail-stop 照常 Release）。现有代码已满足，首跑即绿，没有修前红。
+5. **`kitredis.SingletonStore.Close` 不幂等**（`cbccacdb`）：改为 `sync.Once`，之后返回第一次的结果。回归 `TestSingletonStoreCloseIsIdempotent`（不需要 Redis）；修前：`Close #2 = redis: client is closed, want nil`。
+6. **不 Release 路径上 finish 关闭 store，仍在跑的组件 Live 报 client closed**（`86f687cf`）：评估为简单且与 `run` 的既有取舍一致——停机不完整时 `run` 本来就不等仍在跑的组件、保留它们的依赖到进程退出，store 承载 Live 能力，同理保留。改为只在没拿到锁（还没启动任何 Mod）或全部 Mod 已停完时关闭；停机不完整（含 Lost 且停机不完整）时不关闭，生产上进程随即退出；同一进程里再次 `Run`（测试）时这份 store 与那些组件一起泄漏，接受。回归：`TestSingletonIsNotReleasedWhenShutdownIsIncomplete` 三个子例补“store 未关闭、Live 仍可用”（假 store 关闭后 `Get` 报错，与真实客户端一致）；修前三例：`store closed while a component that may still call Live is running`。
+7. **文档**（本笔）：USER_GUIDE 的 `renew_interval` 注释改为“单次续期的超时取这个值，持有期间不越过 validUntil”，后端 / 释放两条补两个客户端、Lost 不预留、停机不完整时连接留到进程退出；本文 §3.3 关系 1 的理由按审查推导改正（保证“Lost 不晚于 validUntil”的是单次超时截断，不等式只保证这一拍一定发起），§3.1 / §3.2 / §3.5 同步；CHANGELOG `[Unreleased]` 第 1 笔条目补一句。
+
+只记录、不改的审查观察：
+- 观察 6：启动获取丢回复后下次多等一个 ttl——启动等待以报错结束（最后一次 Acquire 已落地、回复丢失，`ErrSingletonStoreUnavailable`）时状态仍是 Waiting，不 Release，键是本次进程的值，下一次启动要等它过期。启动等待以报错结束本就意味着后端不可用，Release 大概率也发不出去，维持现状。
+- 观察 7：`PhaseServiceStopped` 生命周期钩子在 `run` 返回前、`finish` 的 Release 之前执行，用的是同一个 `shutdownCtx`，钩子慢会吃掉 Release 的预算（剩余为零即跳过 Release、键等 ttl 过期）。方向安全，维持现状。
+
+验证（`GOWORK=off`）：`gofmt -l` 空；`go vet ./app/ ./kit/redis/ ./kit/nest/`（含 `-tags integration`）通过；`go test -race -count=3 ./app/ ./kit/nest/ ./kit/redis/` 通过；app 单实例锁用例 `-race -count=50` 稳定；`kit/redis` integration 在隔离 Redis（`~/.roost-it` 环境）上 `-race -count=3` 通过，测试键前缀随机、用例结束删除，事后 SCAN 无残留；根包 `go test -count=1 .` 通过；干净 worktree `go build ./... && go vet ./...` 通过。未验证：两客户端在真实 Redis Cluster 上的 integration（本机未起 Cluster，`ROOST_REVIEW_CLUSTER` 用例跳过）。
+
+### 第 3 笔（2026-10-05，提交 `f051e24a`）
+
+- 范围：`demo/internal/service/game/playerowner.go.tmpl` 重写为本地驻留表 + 闲置卸载（`Serve` / `AdmitBound` / `Resident` / `SID` / `Admit` / `AdmitMessage` / `CloseServedSessions`）；`enter_game.go.tmpl` 用 `Serve`，`controller.go.tmpl` 的 `playerOwners` 只剩 `Serve`；`auth.go.tmpl` 把 `role.ServerID` 写进 `Principal.Claims["server_id"]`；`player_elsewhere.go.tmpl` 含义收窄；`service.go.tmpl` 去掉 Redis / DataEngine 投影装配，`Shutdown` 第一步断开服务中的玩家；`activity.go.tmpl` 删除全局租约、改用 `app.SingletonLiveness.Live`（§7.2）；`gift_saga.go.tmpl` / `matchmaker.go.tmpl` 的过渡改动；删除 `demo/game/playerroute/` 与 `activity_lease_test.go.tmpl`；codegen `demo.go`（清单增删、不再写 `game_route` 段、`activity.game_sids` 注释）、`demo_prod_config_promises_test.go`（检查 `singleton`、断言没有 `game_route`）、`render_dev_run.go`（注释与 second-game.sh 说明机器人要在该 sid 上建角色）；CHANGELOG `[Unreleased]` Changed 三条；GAME_DEMO_TEMPLATE §9.11.2 / §9.11.4 / activity 段加“已被取代”指向（完整新节在第 5 笔）。
+- 先红后绿：新 API 先落骨架（`Serve` / `Admit` 返回 nil、`AdmitBound` 返回 false、`Resident` false、`CloseServedSessions` 0、`unloadIdle` 空、`expectedGameSIDs` 恒为自己、`startActivity` 不查 Live、`boundServerID` 恒为 `(0, true)`），新用例全部在断言上失败，例：`Serve(bound=2000) = <nil>, want player_elsewhere`、`a served player is not resident`、`background work for a player bound elsewhere left a resident record here`、`a write was admitted for a player this process does not serve: <nil>`、`closed 0 connections, want 2`、`Shutdown left served players connected: closed [], want 42 and 43`、`expected [1300], want exactly the live sids [1300 1302]`、`a Live query that failed produced an expected set`、`startActivity error "activity: game: capability \"service.global.activity\" not found; ..." does not name the missing capability`、`a login with no server_id reached the ownership table with [0]`、`the ownership table was asked about [0], want the session's bound sid 2000`。实现后 `go test -race -count=3` 通过，新用例 `-race -count=30` 稳定。
+- 回归去向（逐条理由见提交说明）：静态绑定方案 §4.4 的“转写到闲置卸载 / 原样保留”各条全部转写（RR-20260920-10 / 11 / 12、RR-20260921-03 四个子测试合成一条加“等待受调用方 ctx 约束”、RR-20261004-11 两个子测试）；§7.3 的 9 条“转写到 sid 锁”由 app 包 singleton 回归承担（`TestSingletonNotHeldFailsOnceAndFencesBeforeShutdown`、`TestSingletonUnknownRenewals…`、`TestSingletonWaitsForTheHolderBeforeAnyModInit`、`TestSingletonWindowStartsWhenTheRenewalWasAsked`、`TestSingletonClaimsItsOwnValueAfterALostAcquireReply` / `…KeepsWaitingWhenALostReplyHidesAnotherHolder`、`TestValidateServiceConfigPinsSingletonTimeRelations`），RR-20260920-12 的“忙实体不拖续期”删除（续期在 App 的 goroutine 上）；RR-20260930-23 转写为 `service_shutdown_test` 的 `TestShutdownClosesTheConnectionsOfEveryServedPlayer`；§4.4 “删除（前提消失）”的 13 条删除；playerroute_test 十条随包删除（单键 CAS 语义由 `kit/redis` singleton integration 与 app 回归承担）；`activity_lease_test` 三条（RR-20260930-24）换成 activity 的 Live 三条 + 缺能力启动失败；`gift_handoff_test` 的 `TestAdmitRefusesWhenOwnershipCannotBeRead` 删除（准入不再读 Redis），`TestAHandoffDoesNotClaimAnUnownedPlayer` 在过渡期改为“不在本进程服务的发送方的步骤拒绝、不接入”。新增：Serve 三种结果、AdmitBound 只服务本服、`CloseServedSessions`、enter_game 缺 `server_id`（无会话 / 无 claim / 不可读 / 0）与绑定在别的服。
+- 与方案的差异：
+  1. WriteGate 的拒绝错误由 `ErrLeaseNotHeld` 改名 `ErrNotServedHere`（静态绑定方案 §4.2 写“保留名字、改文案”）：租约已不存在，名字会误导。仓库内无其他引用。
+  2. `Serve` 自己返回 `errcode.Wrap(ErrPlayerElsewhere, …, "owner_sid", boundSID)`（服务包本来就引用 `internal/errors`），控制器只在 `server_id` 缺失时自己拒绝，`playerOwners` 接口只有 `Serve`（`SID` 留给第 4 笔的 `send_gift`）。卸载超出等待时返回包着 `context.DeadlineExceeded` 的错误，沿用 enter_game 现有的 `loginCutShort` 回 `login_timeout`，不新增错误码。
+  3. `Service.Shutdown` 断开的是有驻留记录的玩家（只有经过 `Serve` 的玩家能在本进程做事）；其余连接仍随传输层 Mod 停止关闭。graceful 与 fail-stop 走同一路径。§5 原写“game-demo 在 `Service.Shutdown` 关闭全部连接”在本笔之前并不成立，本笔才实现。
+  4. 闲置卸载逐个标记（先在锁外问连接数，再在锁内复核闲置后标记），不一次标记整批，也没有每轮人数上限：每人等待受 `evictWait` 约束，`Stop` 在人与人之间生效。`Fence` 设置器名字保留（现在只用于连接数与停机断开）。
+  5. `startActivity` 第一步查 `app.ModSingleton`（先于其他能力），并要求 `server_type` 非空。
+  6. 赠礼过渡用本地 `Admit`（发送方在本进程驻留才放行），没有用 `AdmitBound(From, SID())`：后者在多 sid 部署里会为绑定在别的服的玩家建记录、在本进程装载，形成两个写者。生产装配暂不装发送半边路由（`handoff=nil`，只拒绝、靠共享 durable 重投），`Router` 的路由类型换成 `sidRoute`，接收半边照常注册。代价：发送方不在任何进程驻留（离线且已卸载、或进程重启后）时，debit / refund 步骤要等他重新登录或到 saga 截止。
+  7. second-game.sh 头部注明“玩家只在角色绑定的 sid 上服务，机器人用 `cmd/loadtest -server-id` 在该 sid 上建角色”（行为变化的直接后果，原脚本未提）。
+- 验证（`GOWORK=off`）：`gofmt -l` 空；`go vet ./codegen/...`；`go test -count=1 ./codegen/...` 全绿（`codegen/internal/roost` 89s，未遇 `go_command_tree` 超时）；根包 `go test -count=1 .` 通过；干净 worktree（`f051e24a`）`go build ./...`、`go generate ./...` 后 porcelain 为空、根包与 codegen 复跑全绿；从该 worktree 生成 game-demo（`project new sdemo -template game-demo` + `go mod edit -replace`）`go build ./... && go vet ./...`、`go test -race -count=3 ./internal/service/game/ ./game/controllers/player/`、`go test ./...` 全绿；生成物无 `game/playerroute`、无 `activity_lease_test.go`、配置无 `game_route`。`git grep 'playerroute\|game_route\|LiveGames\|AcquireLease' demo codegen` 只剩 codegen 历史 CHANGELOG 与 prod 配置承诺测试里“不能再有 game_route”的断言及注释。
+- 留给第 4 笔：`gift.State.FromSID` + `start_gift` 参数（重新生成 sender）、`admitPhase` / `runHandoff` 改 `AdmitBound(From, FromSID)`、`Router` 改按 sid 的静态解析器并在生产装配里装上发送半边、`gift_handoff_test` 迁移（恢复离线发送方在其绑定 sid 上执行）、控制器 `playerOwners` 加 `SID`。matchmaker 改用 `Resident` 已在本笔完成。第 3b 笔：kit `service/global` 租约 API 删除。第 5 笔：GAME_DEMO_TEMPLATE 新节、`render_access.go` 里 WriteGate 注释的“ownership lease”措辞、USER_GUIDE 补 game-demo activity 对 `Live` 的使用。
+- 未验证：§8.2 真实进程演练（第 5 笔），包括两个 sid 各自机器人、崩溃重启后 activity 不再因租约冲突启动失败；多 sid 部署下赠礼过渡期的实际表现（只在单测与生成工程单测层面验证）。

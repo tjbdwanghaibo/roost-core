@@ -30,7 +30,15 @@ import (
 
 // SingletonStore 是单实例锁的后端：两个原子操作，语义与 redis.CompareAndSet / CompareAndDelete 相同。
 // expected 为 nil 表示“键必须不存在”；applied=false 时 current 是键里现在的值（不存在为 nil）。
-// 实现必须并发安全：续期 goroutine 与 Live 查询可能同时调用。
+//
+// 实现必须遵守：
+//   - 每个方法都遵守 ctx 的截止时间：到期即返回错误，不能继续阻塞。App 给每次 CAS 一个截到 validUntil
+//     的单次超时，“续期失败时 Lost 不晚于 validUntil 判定”这一时间界依赖它。
+//   - 内部重试（例如 Redis Cluster 下驱动按 MaxRedirects 处理 MOVED / ASK 与网络错误）可以有，但必须受
+//     同一个 ctx 限定。重复执行是安全的：续期 CAS(v, v) 幂等；获取 CAS(nil, v) 第一次已落地时重试得到
+//     applied=false、current=v，App 据此认领；按值 CompareAndDelete 只删自己的值。
+//   - 并发安全，而且续期不被 Live 查询拖住：二者可能同时调用，Live 并发占满连接等资源时，CAS 仍要能在
+//     自己的超时内发出（kitredis 为此用两个独立客户端）。
 type SingletonStore interface {
 	CompareAndSet(ctx context.Context, key string, expected, next []byte, ttl time.Duration) (applied bool, current []byte, err error)
 	CompareAndDelete(ctx context.Context, key string, expected []byte) (applied bool, err error)
@@ -256,8 +264,9 @@ func (l *singletonLock) snapshot() singletonStatus {
 	return l.status
 }
 
-// casReply 是一次 CAS 往返的结果与时间点。asked 在发出请求之前读取：Redis 的 TTL 从它处理请求
-// 的时刻起算，不早于 asked，所以以 asked 起算的本地窗口不会晚于键过期（RR-20261004-14 的教训）。
+// casReply 是一次 CAS 调用的结果与时间点。asked 在发出请求之前读取：Redis 的 TTL 从它处理请求
+// 的时刻起算（驱动内部重试时是最后落地那次），不早于 asked，所以以 asked 起算的本地窗口不会晚于
+// 键过期（RR-20261004-14 的教训）。
 type casReply struct {
 	applied bool
 	current []byte

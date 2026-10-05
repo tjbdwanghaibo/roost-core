@@ -35,9 +35,12 @@ const (
 // 误判 Lost、进程 fail-stop。缺 redis.addr 与 redis.cluster_addrs 时报错——不沿用 RedisMod 的
 // localhost:6379 兜底，否则一个忘了配 Redis 的服务会对着本机的 Redis 加锁。
 //
-// CAS 只涉及单键，不需要 hash tag。驱动的自动重试关闭（MaxRetries -1）：每次 CAS 是一次往返，
-// 重试与“丢回复”的判定由 App 的状态机按节拍负责；单次调用的超时由调用方的 ctx 截止时间决定
-// （客户端开启 ContextTimeoutEnabled）。
+// CAS 只涉及单键，不需要 hash tag。单次调用的超时由调用方的 ctx 截止时间决定（客户端开启
+// ContextTimeoutEnabled），满足 app.SingletonStore 的契约。驱动的自动重试关闭（MaxRetries -1），
+// 跨节拍的重试与“丢回复”的判定由 App 的状态机负责：单机下每次调用是一次往返；Redis Cluster 下
+// go-redis 仍按 MaxRedirects（缺省 3）处理 MOVED / ASK、对网络错误换节点重试（osscluster.go 的
+// process），这些重试与其间的退避都受同一个 ctx 限定，重复执行也安全（CAS(v, v) 幂等、获取重试时
+// 读到自己的值由 App 认领、按值删除只删自己的值）。
 func SingletonStore(cfg *viper.Viper) (app.SingletonStore, error) {
 	if cfg == nil {
 		return nil, errors.New("kitredis: singleton store: nil config")

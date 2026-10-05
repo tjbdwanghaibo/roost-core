@@ -120,18 +120,18 @@ singleton:
   enabled: true                       # 默认 false：不建连接，行为与不装完全相同
   key_prefix: roost:<project>:singleton  # 启用时必填，不能含空白
   ttl: 15s
-  renew_interval: 3s                  # 单次续期的超时也取这个值
+  renew_interval: 3s                  # 续期节拍；单次续期的超时取这个值，持有期间不越过 validUntil
   guard: 5s                           # 本地窗口提前于键过期结束的量
   startup_wait: 30s                   # 缺省 2 × ttl
 redis:
   addr: 127.0.0.1:6379                # 或 cluster_addrs；启用 singleton 时必须显式配置
 ```
 
-- **后端**：`kitredis.SingletonStore` 从同一份 `redis.*` 建一条独立的小连接（不依赖 Redis Mod），CAS 复用 `redis.CompareAndSet` / `CompareAndDelete`；缺 `redis.addr` 与 `redis.cluster_addrs` 时启动失败（不沿用 Redis Mod 的 `localhost:6379` 兜底）。`enabled=true` 而 bootstrap 没调 `Singleton` 时启动失败，错误是 `app.ErrSingletonOpenerMissing`。
+- **后端**：`kitredis.SingletonStore` 从同一份 `redis.*` 建两个独立的小客户端（不依赖 Redis Mod）：一个只做 CAS（获取 / 续期 / 释放），一个只做 `Live` 的读，Redis 变慢时并发的 `Live` 占满自己的连接也不会让续期等连接、误判失锁。CAS 复用 `redis.CompareAndSet` / `CompareAndDelete`；缺 `redis.addr` 与 `redis.cluster_addrs` 时启动失败（不沿用 Redis Mod 的 `localhost:6379` 兜底）。`enabled=true` 而 bootstrap 没调 `Singleton` 时启动失败，错误是 `app.ErrSingletonOpenerMissing`。
 - **时间关系**（`ValidateServiceConfig` 校验，违反即启动失败）：`renew_interval ≤ guard`、`2 × renew_interval ≤ ttl − guard`、`startup_wait ≥ ttl + 2 × renew_interval`。默认 15 / 3 / 5 / 30s 全部满足。
 - **启动**：键被别人持有时等待，每 `renew_interval` 重试，持有者变化时打一条 `singleton: waiting for the current holder to release or expire`（带对方的值，含 hostname / pid）；等待期间什么 Mod 都不 Init。对方正常停机会释放键，新进程立即拿到；对方崩溃或卡住时最多等 `ttl + renew_interval`。到 `startup_wait` 仍被持有返回 `app.ErrSingletonHeld`——对方一直在续期，说明两个健康进程配了同一个服务类型 + sid，是部署错误，App 不会抢锁；最后一次是报错 / 超时则返回 `app.ErrSingletonStoreUnavailable`。等待期间 SIGTERM 按默认处置直接终止进程（还没持有锁）。
 - **持有**：一个 goroutine 按固定节拍续期（上一次成功的请求发出时刻 + k × `renew_interval`），窗口 `validUntil` 从请求发出时刻起算；回复迟到（晚于 `asked + ttl − guard`）不作数、立即再续一次。续期答“键已不是我的”，或续期失败且已到 `validUntil − guard`，即 `RuntimeFailure.Fail(app.ErrSingletonLost …)`：Nest 立即围栏、`Service.Shutdown`、Mod 逆序停、非零退出。代价是 Redis 连续不可用约 `ttl − guard`（默认 10s）以上时进程会退出重启；需要更宽容时调大 `ttl`。
-- **释放**：只在全部 Mod 停完之后 `CompareAndDelete` 自己的值（停机路径用 `min(shutdown 剩余, 3s)`；启用时 App 把 Mod 停机的截止时间提前至多 3s 留给它，部署的 `shutdown.total_timeout` 应相应加 3s）。`Service.Shutdown` 超时、服务专属或共享 Mod 停机不完整、失锁三种情况不释放，键在 `ttl` 内自然过期；启动失败（Mod Init / Provide / Start、`Service.Init` 失败）在已启动的 Mod 停完后释放。
+- **释放**：只在全部 Mod 停完之后 `CompareAndDelete` 自己的值（停机路径用 `min(shutdown 剩余, 3s)`；启用时 App 把 Mod 停机的截止时间提前至多 3s 留给它，部署的 `shutdown.total_timeout` 应相应加 3s；进入停机时已失锁则不会释放，这 3s 留给 Mod 停机）。`Service.Shutdown` 超时、服务专属或共享 Mod 停机不完整、失锁三种情况不释放，键在 `ttl` 内自然过期；启动失败（Mod Init / Provide / Start、`Service.Init` 失败）在已启动的 Mod 停完后释放，启动期间失锁则同样停 Mod、不释放。后端连接在全部 Mod 停完（或还没启动任何 Mod）时关闭；停机不完整时 `run` 不等仍在跑的组件、保留它们的依赖，后端连接也一样留到进程退出，这些组件调用 `Live` 不会读到 client closed。
 - **约定**：拿锁之后、DataEngine 打开 WAL（`flock`）之前启动的 Mod 不应有按 sid 的外部写——旧进程卡住超过 `ttl` 时，新进程会拿到锁、启动这些 Mod，然后在 `nestwal: directory is already locked` 处退出（T-213）。
 - **fail-stop 统一围栏**：`RuntimeFailure.OnFail(hook)` 登记首次失败时的回调（恰好一次、按登记顺序、在调用 `Fail` 的 goroutine 上同步执行，执行完才唤醒 `run`）。kit Nest Mod 登记了 `NestMgr.Fence`，所以失锁、DataEngine fatal、Remote Entity fatal 都会立即拒绝新的和排队中的派发（`nest.ErrNestFenced`）。回调必须快速、不阻塞、不做 I/O。启动期间发生的 fail-stop 让 `run` 停在下一个阶段边界，不再启动后面的 Mod。
 - **活性查询**：`app.Lookup[app.SingletonLiveness](registry, app.ModSingleton)`，`Live(ctx, serverType, sids)` 返回其中持有锁的 sid（按入参顺序，一次最多 200 个）。“活”= 进程持有锁：从任何 Mod Init 之前到全部 Mod 停完，崩溃的进程最多再算 `ttl`。只能看见开了 `singleton.enabled` 的服务类型，且要求查询方与被查方共用同一个 Redis 与 `key_prefix`；`serverType` 传自己的 `server_type`（`registry.Config().GetString("server_type")`），不要写死。`enabled=false` 时不登记，依赖它的模块应在 Init 报错。
