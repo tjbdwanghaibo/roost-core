@@ -2,7 +2,7 @@
 
 - 范围：core `app`（`app/app.go` 的 `run`、`app/runtime_failure.go`、`app/config_validation.go`），kit 的 Redis 后端（`kit/redis`）与 Nest Mod（`kit/nest/nest_mod.go`），codegen 的 bootstrap / 配置 / 停机预算 / 部署清单，game-demo 的所有权改写（[静态绑定方案](PLAYEROWNER-STATIC-BINDING-2026-10-05.md)）。
 - 基线：main `c3aa0edd`。行号按这个提交。codebase-memory 索引代际为 2026-09-30，本文引用的 dataengine / nestwal / kit / redis 文件 coverage 为 `metadata_match`；`app/app.go` 为 `metadata_changed`，`docs/` 与 codegen 模板不在索引内，这些都按当前源码直接读取。
-- 性质：方案。**状态（2026-10-05）：第 1 笔已实施**（`feat(app)：同一服务类型 + sid 的单实例锁`，提交号见 §13）；第 2～5 笔（含 2b / 3b）未实施。
+- 性质：方案。**状态（2026-10-05）：第 1 笔已实施**（提交 `d4ac9853`）；第 2～5 笔（含 2b / 3b）未实施。
 - 维护者 2026-10-05 的决定（本文的前提）：
   1. 只考虑**同一 sid 崩溃重启时短暂出现两个进程**这一个场景。
   2. 这个保证**由 App 本身提供**，DataEngine、activity、PlayerOwners 等模块不感知锁、不各自检查。
@@ -435,7 +435,7 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
 
 ## 13. 实施记录
 
-### 第 1 笔（2026-10-05）
+### 第 1 笔（2026-10-05，提交 `d4ac9853`）
 
 - 范围：`app/singleton.go`（`SingletonStore` / `SingletonOpener` / `SingletonLiveness`、`App.Singleton`、`app.ModSingleton`、状态机、健康检查 `singleton`）、`app/app.go` 的 `run` 挂点与统一 `defer` 收尾、`app/runtime_failure.go` 的 `OnFail`、`app/config_validation.go` 的 `singleton.*` 校验；`kit/redis/singleton.go`（`kitredis.SingletonStore`，`redisConfig` 与 `RedisMod.Init` 共用）；`kit/nest/nest_mod.go` 登记 `OnFail(mgr.Fence)`；`kit/mods.ModSingleton` 别名；ci.yml Redis job 与 `redis-cluster-suites.sh` 加 `./kit/redis`；CHANGELOG / USER_GUIDE / TROUBLESHOOTING T-212、T-213。§7.2 末条“kit service README 写明 global 租约 API 保留”按 §12 作废，未写。
 - 先红后绿：骨架（接口、`App.Singleton` 只存 opener、`OnFail` 只存回调、`run` 不拿锁）下 §8.1 的 #1～#14 与“启动期间 RuntimeFailure 停在阶段边界”全部在断言上失败（例：#1 `service started serving while the singleton key belonged to another process`，#13 `hooks ran [], want [first second] once`，#12 `ValidateServiceConfig = <nil>`）；`kit/nest` 的 `TestRuntimeFailureFencesNestDispatch` 在原代码上 `FenceError after RuntimeFailure = <nil>`。实现后 `go test -race -count=3 ./app/ ./kit/nest/ ./kit/redis/` 通过，singleton 用例 `-count=30 -race` 稳定。
