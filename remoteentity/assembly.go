@@ -1,6 +1,8 @@
 package remoteentity
 
 import (
+	"time"
+
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
 	"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror"
@@ -32,6 +34,12 @@ func (m *Manager) Stats() Stats {
 	stats.WriteLimit = cap(m.remote.writeSlots)
 	stats.WriteRejected = m.remote.writeRejected.Load()
 	m.remote.localInterestMu.Lock()
+	// RR-20261005-NC-131：过期条目只在新建兴趣且表满、或每 1024 次续租时清理，空闲进程里会一直留着。
+	// 健康检查拿这个数和上限比，所以表满时先清掉过期的再数——否则一阵读取把表读满之后，即使全部
+	// 兴趣早已过期，健康也一直报 capacity exhausted。只在表满时清理，平时不做全表扫描。
+	if capacity := m.remote.localInterestCapacity; capacity > 0 && len(m.remote.localInterests) >= capacity {
+		m.pruneLocalInterestsLocked(time.Now().UnixNano())
+	}
 	stats.LocalInterests = len(m.remote.localInterests)
 	m.remote.localInterestMu.Unlock()
 	m.remote.txMu.Lock()
