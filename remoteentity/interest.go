@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"hash/fnv"
 	"sync"
 	"time"
@@ -171,6 +172,14 @@ func (s InterestReplicaStore) ApplyReplica(_ context.Context, env mirror.Envelop
 	var wire remoteInterestWire
 	if err := json.Unmarshal(env.Payload, &wire); err != nil {
 		return err
+	}
+	// RR-20261005-NC-34：renew/release 都是携带完整身份的 Upsert 消息。
+	// 在改注册表前绑定 payload，不能用一个订阅的信封操作另一个订阅。
+	if env.Op != mirror.OpUpsert || !wire.Interest.Key.Valid() || wire.Interest.ConsumerSID == 0 {
+		return fmt.Errorf("remote_entity: interest message has invalid operation or identity")
+	}
+	if env.Key != remoteInterestReplicaKey(wire.Interest) || env.Version != wire.Interest.ExpiresAt {
+		return fmt.Errorf("remote_entity: interest message identity does not match its payload")
 	}
 	if wire.Release {
 		s.mgr.remote.interests.release(wire.Interest.Key, wire.Interest.ConsumerSID, wire.Interest.Generation)

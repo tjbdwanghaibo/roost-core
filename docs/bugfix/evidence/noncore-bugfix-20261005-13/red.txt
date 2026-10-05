@@ -1,0 +1,38 @@
+--- FAIL: TestReplicaPayloadIdentityBeforeStoreMutation (0.00s)
+    --- FAIL: TestReplicaPayloadIdentityBeforeStoreMutation/key (0.00s)
+        replica_payload_identity_promises_test.go:43: refused message changed key 8: {ID:8 Version:3 Data:bad} ok=true err=<nil>
+        replica_payload_identity_promises_test.go:47: payload identity mismatch returned success
+    --- FAIL: TestReplicaPayloadIdentityBeforeStoreMutation/version (0.00s)
+        replica_payload_identity_promises_test.go:43: refused message changed key 7: {ID:7 Version:4 Data:bad} ok=true err=<nil>
+        replica_payload_identity_promises_test.go:47: payload identity mismatch returned success
+        replica_payload_identity_promises_test.go:50: cache: write refused as stale
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/cache	0.231s
+--- FAIL: TestInterestPayloadIdentityBeforeRegistryMutation (0.00s)
+    --- FAIL: TestInterestPayloadIdentityBeforeRegistryMutation/renew/scope (0.00s)
+        interest_payload_identity_promises_test.go:56: refused message changed lease: {expiresAt:1791165941066399000 generation:11} exists=true total=1
+        interest_payload_identity_promises_test.go:59: interest identity mismatch returned success
+    --- FAIL: TestInterestPayloadIdentityBeforeRegistryMutation/renew/sid (0.00s)
+        interest_payload_identity_promises_test.go:56: refused message changed lease: {expiresAt:1791165941066399000 generation:11} exists=true total=1
+        interest_payload_identity_promises_test.go:59: interest identity mismatch returned success
+    --- FAIL: TestInterestPayloadIdentityBeforeRegistryMutation/renew/expires (0.00s)
+        interest_payload_identity_promises_test.go:56: refused message changed lease: {expiresAt:1791165941066399001 generation:11} exists=true total=1
+        interest_payload_identity_promises_test.go:59: interest identity mismatch returned success
+    --- FAIL: TestInterestPayloadIdentityBeforeRegistryMutation/renew/operation (0.00s)
+        interest_payload_identity_promises_test.go:56: refused message changed lease: {expiresAt:1791165941066399000 generation:11} exists=true total=1
+        interest_payload_identity_promises_test.go:59: interest identity mismatch returned success
+    --- FAIL: TestInterestPayloadIdentityBeforeRegistryMutation/release/scope (0.00s)
+        interest_payload_identity_promises_test.go:56: refused message changed lease: {expiresAt:0 generation:0} exists=false total=0
+        interest_payload_identity_promises_test.go:59: interest identity mismatch returned success
+    --- FAIL: TestInterestPayloadIdentityBeforeRegistryMutation/release/sid (0.00s)
+        interest_payload_identity_promises_test.go:56: refused message changed lease: {expiresAt:0 generation:0} exists=false total=0
+        interest_payload_identity_promises_test.go:59: interest identity mismatch returned success
+    --- FAIL: TestInterestPayloadIdentityBeforeRegistryMutation/release/expires (0.00s)
+        interest_payload_identity_promises_test.go:56: refused message changed lease: {expiresAt:0 generation:0} exists=false total=0
+        interest_payload_identity_promises_test.go:59: interest identity mismatch returned success
+    --- FAIL: TestInterestPayloadIdentityBeforeRegistryMutation/release/operation (0.00s)
+        interest_payload_identity_promises_test.go:56: refused message changed lease: {expiresAt:0 generation:0} exists=false total=0
+        interest_payload_identity_promises_test.go:59: interest identity mismatch returned success
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/remoteentity	0.737s
+FAIL

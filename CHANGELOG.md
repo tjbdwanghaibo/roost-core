@@ -18,6 +18,10 @@
 
 ### Fixed
 
+- **缓存副本写入前绑定业务key/version**（RR-20261005-NC-33，P2）：配置的提取器与信封不一致时明确拒绝、Store不变；含身份null更新在回调前拒绝。无VersionOf与普通Delete兼容保持，不增加版本墓碑。[记录](docs/bugfix/RR-20261005-NC-33.md)
+
+- **Remote interest写注册表前绑定完整消息身份**（RR-20261005-NC-34，P2）：校验完整snapshot key/SID哈希、ExpiresAt及Upsert操作，避免信封A操作订阅B。合法Generation=0和旧release代际保护保持；不增加发布权限认证。[记录](docs/bugfix/RR-20261005-NC-34.md)
+
 - **生成 DAO 恢复后深层嵌套修改进入持久提交**（RR-20261005-NC-32，P2）：wire 转换先恢复未绑定数据，父对象到最终位置后再递归接线，避免子通知指向按值返回前的临时副本。唯一父归属保护和BSON/版本格式保持；应用须重生成关联DAO/nested代码，历史漏写不自动补回。[记录](docs/bugfix/RR-20261005-NC-32.md)
 
 - **迁移输出在WAL准入前验证目标装载与身份**（RR-20261004-NC-31，P2）：复用 Mongo BSON/ID 和目标 RestorePersisted；坏 BSON、字段类型或身份不再先持久提交。手写候选须提供 loader / Id，预校验使用目标 schema、旧 version；正常 CAS/投影等待/整聚合重读与 int32 ID 兼容保持。已有坏 WAL 不自动跳过或删除。[记录](docs/bugfix/RR-20261004-NC-31.md)

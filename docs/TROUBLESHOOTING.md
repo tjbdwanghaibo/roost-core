@@ -2,6 +2,8 @@
 
 | 编号 | 现象 | 原因 | 看哪里 | 处置 |
 | --- | --- | --- | --- | --- |
+| T-215 | interest消息返回identity不匹配，或旧版本发生另一scope/SID被续租/撤销 | RR-20261005-NC-34：旧接收只解码，未绑定payload到信封 | payload完整key/SID、信封哈希key、ExpiresAt/version及Upsert；Generation另作代际比较 | 使用写前校验修复，统一发送端格式；错误消息不盲重试，不删其他订阅；校验不替代内部topic发布权限 |
+| T-214 | cache副本信封是key7/version3但键8被写，或返回replica payload mismatch/null | RR-20261005-NC-33：旧适配器未将实际业务对象绑定到信封 | 发送与接收ReplicaConfig.KeyOf/VersionOf、payload和Store实际值 | 使用写前校验修复，统一提取器，修正发布源；无提取器不保证相应维度，普通Delete不防历史复活，不用忽略错误当修复 |
 | T-211 | DAO加载后深层子字段内存已改，Nest没有该DAO提交记录，重载仍为旧值 | RR-20261005-NC-32：旧wire转换先绑定子通知再复制父对象，回调指向临时副本 | 在正式Nest事务内验加载后setter、提交mutation与fresh Manager重载；不能只验BSON值roundtrip | 升级生成工具并重生成关联DAO/nested代码，再验证；仅升级runtime无效，历史漏写按业务来源恢复，不删除WAL或放宽唯一父保护 |
 | T-210 | 旧schema冷加载出现坏BSON/目标字段错误、迁移返回unsupported，或旧版升级后投影backlog/重载失败 | RR-20261004-NC-31：旧版目标校验晚于持久提交；新版提前拒绝缺loader/身份或错误结果 | 迁移错误的resource/id/schema、CommitSystem次数、原文档schema/version、WAL未确认和投影错误 | 使用预提交验证修复；手写候选补RestorePersisted和Id，不能传在线对象。已有坏WAL/污染文档先备份定位，再制定具名恢复，不自动跳过日志/删生产数据 |
 

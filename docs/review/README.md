@@ -1,5 +1,9 @@
 # Roost 持续 Review 与学习记录
 
+[10-05 N05镜像/路由接入](REVIEW-2026-10-05-noncore-23.md)：NC-33/34两个P2已修，10副作用反例红→绿，13新正式叶子；最终扩大race709叶子/8skip、根包14及build/vet/glsvet通过。11生产文件当前补证，N05仍部分完成，Mirror DTO未实施。[机制](IMPLEMENTATION-MIRROR-PAYLOAD-IDENTITY-AND-ROUTING.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-13/README.md)。
+
+[10-05 NC-32与N04本机缺口收口](REVIEW-2026-10-05-noncore-22.md)：深层wire恢复绑定修复，正式9/消费6红→绿；53金样、28消费通过，其中11新消费补嵌套迁移/持续CAS预算恢复。N04仍部分完成，下一转N05；应用须重生成关联代码。[修复](../bugfix/RR-20261005-NC-32.md)。
+
 [10-05 NC-31修复与N04接续](REVIEW-2026-10-05-noncore-21.md)：12新正式、17生成消费通过；多DAO、两种CAS淘汰与真实子进程强杀后WAL恢复六项无新增确认缺陷。五包race421pass/1helper skip、根包14、build/vet/glsvet通过，真实Mongo/HA不冒认；N04仍部分完成。[修复](../bugfix/RR-20261004-NC-31.md) · [证据/复跑](evidence/noncore-review-20261004-21/README.md) · [机制](IMPLEMENTATION-DAO-MIGRATION-HYDRATION-AND-REFHMAP-SCHEMA.md#2026-10-05-迁移准入多dao与cas恢复)。
 
 [10-04 N04正式迁移消费](REVIEW-2026-10-04-noncore-20.md)：新增[NC-31 P2未修](../bug/RR-20261004-NC-31.md)，输出未在提交前校验，3反例/8控制；真实文件WAL和正式MongoStore接生成DAO，后端mongotest。全仓本地编译、34定向race、根包14及vet通过；中文注释与skill更新，后续以本地验收收尾，不等待GitHub CI。N04仍场景部分完成。[证据](evidence/noncore-review-20261004-20/README.md) · [学习](IMPLEMENTATION-DAO-MIGRATION-HYDRATION-AND-REFHMAP-SCHEMA.md)。

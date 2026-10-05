@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N05接入与NC-33/34修复
+
+基线b2232db5，fetch/ff-only已最新，无新增修复/Wanted待验收。[本轮](REVIEW-2026-10-05-noncore-23.md) · [机制](IMPLEMENTATION-MIRROR-PAYLOAD-IDENTITY-AND-ROUTING.md) · [证据](../bugfix/evidence/noncore-bugfix-20261005-13/README.md)。两个P2已修、声明场景已验证，未发版。
+
+| 入口 | 本轮增量 | 状态 / 下一入口 |
+| --- | --- | --- |
+| cache mirror | key/version两项副作用红→绿，无VersionOf与null指针控制 | NC-33闭合；普通Delete不声明版本墓碑 |
+| interest mirror | renew/release各scope/SID/expiry/op四项红→绿 | NC-34闭合；generation0/迟到release/空Delete控制保持 |
+| 范围 | 11生产文件当前补证，13新正式叶子；592相关race叶子/8skip、根包14、build/vet/glsvet通过 | 复用既有路由/Replicator/Snapshot回归不重复计新增；非全仓覆盖率 |
+| 下一轮 | BindSync/Assembly失败重订阅、停止/回调交错、snapshot gap/epoch/schema回填组合 | N05仍场景部分完成；真实broker/HA/水位/容量另列 |
+
+N04本机迁移链沿用上轮，不重验未变化来源。N05不以11/历史24文件计算完成率、不计completed/15。Mirror DTO与静态PlayerOwner未在本轮实施；最后整合另一线App singleton第1笔d4ac9853/c9b934ae及e3810ef1续期预算修正，原22路径哈希不变，最终扩大race709叶子/8skip及根包/build/vet/glsvet通过；第2～5阶段与真实进程/Cluster未独立验收。[同步边界](REVIEW-2026-10-05-noncore-23.md#最后同步app单实例锁第1阶段)。无新的全部review完成日期承诺。不查询/等待GitHub CI。
+
 ## 2026-10-05 NC-32修复与N04嵌套迁移 / 持续CAS收口
 
 起点/最新 main c3aa0edd，无新代码增量；新增[NC-32](../bug/RR-20261005-NC-32.md)已修复、声明场景验证，未发版。[运行](REVIEW-2026-10-05-noncore-22.md) · [修复](../bugfix/RR-20261005-NC-32.md) · [证据](evidence/noncore-review-20261005-22/README.md)。

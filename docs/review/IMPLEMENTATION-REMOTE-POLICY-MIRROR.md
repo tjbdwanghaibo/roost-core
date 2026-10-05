@@ -12,19 +12,19 @@
 
 建议 Mirror 用于公会摘要、世界状态、跨服榜单等允许显式陈旧度的只读投影。发奖、扣款、竞争资格等权威判断仍由 owner 执行；客户端缓存命中不代表权威读。读完 Mirror 后向 owner 发命令，应携带观察到的版本，由 owner 校验。
 
-## 当前代码实际做了什么
+## 09-12 源码基线实际做了什么（历史行号）
 
 | 层 | 已有行为及源码 | 尚不能承担的职责 |
 | --- | --- | --- |
 | Entity policy | [policy.go](../../entity/policy.go):17–84：Mirror 为 remote-capable、非 managed；默认 `MirrorCache`；校验 lifetime 配对 | 不订阅、不加载、不强制只读；lifetime 注释本身声明其为元数据 |
-| 构造/生成 | [entity_factory.go](../../entity/entity_factory.go):341、[gen.go](../../../cube-codegen/internal/entity/gen.go):34、50、400：特殊接口/RemoteBase 分支只针对 Managed | Mirror 仍走普通 EntityBase 分支；`noPersist` 独立设置，不能假定 Mirror 自动禁用 DAO/持久化 |
+| 构造/生成 | [entity_factory.go](../../entity/entity_factory.go):341、[gen.go](../../codegen/internal/entity/gen.go):34、50、400：特殊接口/RemoteBase 分支只针对 Managed | Mirror 仍走普通 EntityBase 分支；`noPersist` 独立设置，不能假定 Mirror 自动禁用 DAO/持久化 |
 | Nest | [nest.go](../../nest/nest.go):477：只为 Managed prepare；[rollback.go](../../nest/rollback.go):822：非 Managed 仍可注册普通提交参与者 | 跳过 Remote 写批次不是本地写拒绝，也不是安全的 Mirror 读 API |
-| 通用传输 | [mirror/envelope.go](../../mirror/envelope.go):48、129：校验内外层 topic/key/version/op、发布独立 MessageID、可传 context | 没有全量首次加载、重连补洞、权限校验、版本墓碑；Apply 错误怎样重试由实际 bus 决定 |
+| 通用传输 | [mirror/envelope.go](../../sync/syncbus/mirror/envelope.go):48、129：校验内外层 topic/key/version/op、发布独立 MessageID、可传 context | 没有全量首次加载、重连补洞、权限校验、版本墓碑；Apply 错误怎样重试由实际 bus 决定 |
 | 通用缓存适配 | [cache/mirror.go](../../cache/mirror.go):94：Upsert 解码后 Set，Delete 直接 Delete | 不通用地比较 Envelope.Version；Delete 不携带版本给 Store。`VersionStale` 是策略，不是复制协议 |
 | 实体快照缓存 | [remote_snapshot.go](../../entity/remote_snapshot.go):160、244、308、350：完整 scope key、冻结字节、版本/epoch、delta gap、同版本内容冲突、加载限额 | 删除/淘汰后没有永久版本底线；不是端到端一致性与授权证明 |
 | Remote 同步链 | [assembly.go](../../remoteentity/assembly.go):54 → [syncer.go](../../remoteentity/syncer.go):31、92：兴趣过滤发布、接收更新、gap/epoch/schema 异常后权威回填；[transaction_manager.go](../../remoteentity/transaction_manager.go):483：读时续租兴趣 | reader 与写 Manager 耦合，内部 wire/interest 实现未导出；不能直接把完整 Assembly 当轻量 Mirror 客户端 |
 | 现有 Assembly | [assemble.go](../../remoteentity/assemble.go):49：要求 Redis、SID、原子事务 backend | 只读服务不应为启动镜像被迫接入写锁、事务存储、finalizer |
-| 订阅协调 | [entitysync/subscription.go](../../entitysync/subscription.go):89、112、173：成员、profile、首快照准入、subject 串行、可靠 sink 契约 | 不等同 RemoteSnapshot wire，也不自行提供网络/历史重放；接入需明确协议适配 |
+| 订阅协调 | `entitysync/subscription.go`（历史文件；合仓订阅入口sync/entitysync需重新核对）:89、112、173：成员、profile、首快照准入、subject 串行、可靠 sink 契约 | 不等同 RemoteSnapshot wire，也不自行提供网络/历史重放；接入需明确协议适配 |
 
 源码中的 `RemoteSnapshotKey.Policy` 是快照视图维度的 `uint32`，不能与实体 `RemotePolicy` 枚举混为一谈。Tenant/Kind/Scope/Policy 全部进入身份域；只按 EntityID 建缓存会串视图。
 
@@ -97,3 +97,11 @@ Owner 可以是已有 Managed 路径，也可以是普通本地权威 Entity。�
 | P3 实际部署验证 | Linux 两服务 + 真实 broker/存储 | 重投、强杀恢复、outbox 补发、重启水位；报告 payload/扇出/热点参数下的吞吐、p95/p99、RSS 与回填放大 |
 
 本轮没有生产吞吐数据，不给出未经测量的性能倍数。可先以公会摘要这一种完整快照接入做纵向样例，证明 P0/P1 后再推广为所有实体的通用能力。
+
+## 2026-10-05 接入增量
+
+N05最新适配器审查修复了[缓存payload身份](../bugfix/RR-20261005-NC-33.md)与[兴趣payload身份](../bugfix/RR-20261005-NC-34.md)。当前通用传输路径为sync/syncbus/mirror、entitysync为sync/entitysync；上述源码链接按合仓目录更新，历史行号不当成当前定位。缓存Upsert现在按已配置提取器交叉校验，interest检查完整key/SID、expiry/version及Upsert；普通Delete仍无版本Store协议。
+
+[本轮机制与边界](IMPLEMENTATION-MIRROR-PAYLOAD-IDENTITY-AND-ROUTING.md)和[审查证据](REVIEW-2026-10-05-noncore-23.md)仅闭合现有适配器缺陷。独立DTO reader/MirrorClient、首次加载水位、跨节点删除屏障与重连补洞仍按本方案交接，未在本轮实施或验收，不能把13新增回归计为完整Mirror功能完成。
+
+方案中的SubscriptionCoordinator为历史引用，实施前须按当前entitysync公开接入契约重新核对，不能作为现有API直接调用；本轮没有复审entitysync完整实现。

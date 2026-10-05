@@ -103,3 +103,7 @@ Shutdown 停止准入，取消续租和加载，解绑订阅，等待已准入�
 配置至少包括 key/字节上限、单次 payload、加载并发/等待者、缓冲深度、加载超时、最大陈旧时间、兴趣租期/续租间隔与 Shutdown 超时；非法组合启动即拒绝。具体数值按样例测量确定，本文不编造吞吐目标。
 
 完成标准是第 1–5 项有代码与对应验收，第 6 项给出可复跑环境和限制。L2、delta、entitysync/syncstream 桥接另列扩展，不阻塞 L1 full-snapshot 样例；上线前仍须解决所用 owner/持久化路径的未关闭正确性问题。
+
+## 2026-10-05 现有接入校验补修
+
+[NC-33缓存](../bugfix/RR-20261005-NC-33.md)与[NC-34兴趣](../bugfix/RR-20261005-NC-34.md)已修，10正式副作用反例红转绿，13新叶子含兼容/恢复通过；[机制](IMPLEMENTATION-MIRROR-PAYLOAD-IDENTITY-AND-ROUTING.md)。本轮没有实施本交接的独立DTO reader、重连或全局水位；历史墓碑限制与外部验证继续保留。[范围与下一入口](REVIEW-2026-10-05-noncore-23.md)。

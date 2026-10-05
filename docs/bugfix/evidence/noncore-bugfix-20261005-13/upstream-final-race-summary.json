@@ -1,0 +1,18 @@
+{
+  "check": "race",
+  "command": "go test -race -count=1 -json ./cache ./remoteentity ./sync/syncbus/... ./ownerroute ./kit/remoteentity ./entity ./app ./kit/nest ./kit/redis",
+  "exit": 0,
+  "passedTestEvents": 770,
+  "passedLeaves": 709,
+  "skipped": [
+    "github.com/tjbdwanghaibo/roost-core/cache::TestLayeredExpiredLocalCopyDoesNotVetoAuthorityRealRedis",
+    "github.com/tjbdwanghaibo/roost-core/cache::TestRefHMapBoundaryContractsRealRedis",
+    "github.com/tjbdwanghaibo/roost-core/cache::TestRefHMapContractsRealRedis",
+    "github.com/tjbdwanghaibo/roost-core/cache::TestRefHMapPatchKeepsTheWholeRecordAliveRealRedis",
+    "github.com/tjbdwanghaibo/roost-core/cache::TestRefHMapRegistryGuardAcceptsSameLayoutConcurrencyRealRedis",
+    "github.com/tjbdwanghaibo/roost-core/cache::TestRefHMapSchemaRegistryPromises",
+    "github.com/tjbdwanghaibo/roost-core/cache::TestRefHMapUnknownWrite",
+    "github.com/tjbdwanghaibo/roost-core/remoteentity::TestRemoteAsyncFinalizerProjectionLoad"
+  ],
+  "failed": []
+}

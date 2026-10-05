@@ -1,0 +1,9 @@
+{
+  "check": "root",
+  "command": "go test -count=1 -json .",
+  "exit": 0,
+  "passedTestEvents": 14,
+  "passedLeaves": 14,
+  "skipped": [],
+  "failed": []
+}

@@ -1,7 +1,9 @@
 package cache
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"time"
 
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
@@ -90,9 +92,21 @@ func (s replicaStore[K, V]) ApplyReplica(ctx context.Context, env mirror.Envelop
 		}
 		return s.cfg.Store.Delete(ctx, s.cfg.DeleteKeyOf(env.Key))
 	}
+	// 含身份的更新不能是 null；先拒绝，避免把 nil 指针交给身份提取器。
+	if (s.cfg.KeyOf != nil || s.cfg.VersionOf != nil) && bytes.Equal(bytes.TrimSpace(env.Payload), []byte("null")) {
+		return fmt.Errorf("cache: replica payload is null")
+	}
 	value, err := mirror.UnmarshalPayload[V](env)
 	if err != nil {
 		return err
+	}
+	// RR-20261005-NC-33：两层信封一致不代表业务对象一致，写入前绑定
+	// 配置声明的身份；未配置版本提取器仍保留不带版本的接入方式。
+	if s.cfg.KeyOf != nil && s.cfg.KeyOf(value) != env.Key {
+		return fmt.Errorf("cache: replica payload key does not match envelope key %d", env.Key)
+	}
+	if s.cfg.VersionOf != nil && s.cfg.VersionOf(value) != env.Version {
+		return fmt.Errorf("cache: replica payload version does not match envelope version %d", env.Version)
 	}
 	return s.cfg.Store.Set(ctx, value)
 }

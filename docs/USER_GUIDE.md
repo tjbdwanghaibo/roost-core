@@ -1,5 +1,7 @@
 # Roost 开发者完整使用说明
 
+Mirror现有适配器新增payload身份校验（NC-33/34，main未发版）：cache接收端配置的KeyOf/VersionOf必须与发送端规则一致，不一致更新在Store写入前返回错误；未配置提取器不承诺该维度校验。带身份的null更新拒绝。Remote interest正式格式仍为Upsert，信封key包含完整snapshot key与SID，version仍是ExpiresAt，Generation独立负责代际。不要把错误消息盲目重发、校验成功当成发布认证，或普通Delete当成版本墓碑。完整只读DTO Mirror仍按既有方案待实施。[接入机制](review/IMPLEMENTATION-MIRROR-PAYLOAD-IDENTITY-AND-ROUTING.md)。
+
 嵌套DAO的wire恢复已修复“加载值正确但下一次深层修改未提交”（RR-20261005-NC-32，未发版）。升级生成工具后重新生成关联DAO/nested代码，再编译并执行加载后setter的业务提交回归；仅升级runtime不会修改已有生成代码。唯一父归属仍受保护，含已绑定指针子对象的nested结构不能浅复制为独立树；需要独立状态应从数据重新构造。历史漏写数据不自动恢复。[机制与验证](bugfix/RR-20261005-NC-32.md)。
 
 RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登记之后、它又登记了本次清理清单之外的 hash（另一布局发布了新键）、此次Lua明确未写；同布局的并发首次创建、并发删除、记录到期不会返回它（RR-20261004-09，未发版）。先读回当前schema/业务意图再决定重试，不自动以旧全量值覆盖新布局。网络/Eval错误仍可能已应用，不能按明确拒绝处理。Delete也要求adapter支持现有Eval；存储格式保持，历史孤儿不自动清理。[用法和限制](bugfix/RR-20261004-NC-30.md)。

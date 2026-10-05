@@ -1,5 +1,12 @@
 # Bugfix 记录
 
+**10-05 第十三批：NC-33/34均已修复、声明场景验证，未发版。** 写Store/interest注册表前绑定payload身份；10正式反例红→绿，含恢复/兼容共13新增叶子。最终扩大race709叶子/8skip、根包14、全仓build与vet/glsvet通过。[运行](../review/REVIEW-2026-10-05-noncore-23.md) · [证据](evidence/noncore-bugfix-20261005-13/README.md)。T-214/215；不新增发布认证、版本化Delete或Mirror DTO。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-34](RR-20261005-NC-34.md) | interest key/SID/expiry/op写前准入 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-33](RR-20261005-NC-33.md) | 缓存已配置key/version提取器交叉校验 | 已修复、声明场景验证，未发版 |
+
 **10-05 第十二批：[NC-32](RR-20261005-NC-32.md) 已修复、声明场景验证，未发版。** wire 转换只恢复未绑定数据，最终父对象就位后递归绑定；保留唯一父保护。9正式/6消费红转绿，完整金样53与消费28叶子通过。[证据](evidence/noncore-bugfix-20261005-12/README.md) · [接续review](../review/REVIEW-2026-10-05-noncore-22.md)。T-211；应用须重生成嵌套关联代码，无生产数据修补。
 
 **10-05 第十一批：[NC-31](RR-20261004-NC-31.md) 已修复、声明场景验证，未发版。** 目标BSON/装载/身份在CommitSystem前检查；12新正式、原生成消费11全绿，接续含多DAO/CAS/进程恢复17消费通过。五包race421pass/1helper skip、根包14及build/vet/glsvet通过；Kit integration仅编译，真实Mongo/HA待验。[证据](evidence/noncore-bugfix-20261004-11/README.md) · [review](../review/REVIEW-2026-10-05-noncore-21.md)。T-210；未运行生产数据迁移。
