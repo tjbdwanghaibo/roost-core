@@ -87,6 +87,13 @@ echo "pretag: checking go.mod / go.sum are tidy"
 GOWORK=off go mod tidy
 git diff --quiet -- go.mod go.sum || fail "go.mod / go.sum are not tidy; commit the result of go mod tidy first (the CI unit job diffs them)"
 echo "pretag: testing with GOWORK=off"
-GOWORK=off go test ./... >/dev/null
+# 成功时不刷屏；失败时把失败的包与用例打出来——此前整段输出都丢进 /dev/null，
+# 一次偶发失败之后无从判断是哪条（v1.20.0 发版时遇到）。
+test_log="$(mktemp)"
+if ! GOWORK=off go test ./... >"$test_log" 2>&1; then
+  grep -E '^(--- FAIL|FAIL|panic:)' "$test_log" >&2 || tail -50 "$test_log" >&2
+  fail "go test ./... failed (full output: $test_log)"
+fi
+rm -f "$test_log"
 
 echo "pretag: $module@$version is ready to tag"
