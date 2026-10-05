@@ -193,31 +193,54 @@ func enableDemoPlayerTCP(root, gameService string) error {
 // is the refund — a retry budget that outlasts a crash restart of the
 // sender's sid.
 //
-// `add saga` writes every step with the same budget (5 attempts of 5s, backoff
-// 100ms..5s: at least ~26s before the step counts as exhausted). The refund
-// only runs on the sid the sender is bound to; while that process restarts
-// every attempt just times out, and an exhausted compensation is
-// manual_required. A restart can take singleton.startup_wait (30s) +
-// singleton.ttl (15s) + the time to be started and run Init (45s allowed):
-// 90s. saga.Step has one budget for both directions, so the debit's forward
-// attempts get the same 15 — harmless, a debit that never ran took nothing.
-// The relation is pinned by internal/service/game/gift_saga_budget_test.go
-// against the generated singleton settings.
-func demoGiftRefundBudget(root, _ string) error {
-	path := filepath.Join(root, "saga", "gift_item", "definition.go")
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return err
+// Step budgets are configuration (saga.step_defaults, overridden per step
+// under saga.steps.<type>.<step>; U-0280), so this edits the game service's
+// configs rather than the generated definition. The default budget is 5
+// attempts of 5s, backoff 100ms..5s: at least ~26s before the step counts as
+// exhausted. The refund only runs on the sid the sender is bound to; while
+// that process restarts every attempt just times out, and an exhausted
+// compensation is manual_required. A restart can take singleton.startup_wait
+// (30s) + singleton.ttl (15s) + the time to be started and run Init (45s
+// allowed): 90s, hence max_attempts 15. A step's budget is shared by both
+// directions, so the debit's forward attempts get the same 15 — harmless: at
+// most one attempt of one operation takes effect, and a debit that never ran
+// took nothing. The relation is pinned by
+// internal/service/<game>/gift_saga_budget_test.go, which reads these configs.
+func demoGiftRefundBudget(root, gameService string) error {
+	for _, rel := range []string{
+		"configs/service/config." + gameService + ".yaml",
+		"configs/service/config." + gameService + ".prod.example.yaml",
+		"deploy/k8s/base/secret." + gameService + ".example.yaml",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		raw, err := os.ReadFile(path)
+		if os.IsNotExist(err) && strings.HasPrefix(rel, "deploy/") {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		const marker = "# steps.<saga type>.<step name>.<timeout|max_attempts|backoff_min|backoff_max>.\n"
+		at := strings.Index(string(raw), marker)
+		if at < 0 {
+			return fmt.Errorf("%s: expected the saga step override block", path)
+		}
+		lineStart := strings.LastIndexByte(string(raw[:at]), '\n') + 1
+		indent := string(raw[lineStart:at])
+		before := marker + indent + "steps: {}\n"
+		after := marker +
+			indent + "# debit's compensation is the refund, which only runs on the sender's sid: 15\n" +
+			indent + "# attempts (>= 98s with backoff) outlast a crash restart of that sid\n" +
+			indent + "# (startup_wait + ttl + 45s = 90s); see internal/service/" + gameService + "/gift_saga.go.\n" +
+			indent + "steps:\n" + indent + "  gift_item:\n" + indent + "    debit:\n" + indent + "      max_attempts: 15\n"
+		if !strings.Contains(string(raw), before) {
+			return fmt.Errorf("%s: expected an empty saga.steps block to replace", path)
+		}
+		if err := writeAtomic(path, []byte(strings.Replace(string(raw), before, after, 1)), 0o644); err != nil {
+			return err
+		}
 	}
-	const before = "\t\t{Name: \"debit\", ForwardTopic: TopicDebit, CompensateTopic: TopicDebitCompensation, Timeout: 5 * time.Second, MaxAttempts: 5, BackoffMin: 100 * time.Millisecond, BackoffMax: 5 * time.Second},\n"
-	const after = "\t\t// debit 的补偿是退款，只能在发送方绑定的 sid 上执行。MaxAttempts 15 让退款至少重试约 98s\n" +
-		"\t\t// （15 × 5s 超时 + 退避下界），覆盖那个 sid 的一次崩溃重启（startup_wait + ttl + 拉起余量 = 90s），\n" +
-		"\t\t// 不在重启期间用尽、转为 manual_required。理由见 internal/service/<game>/gift_saga.go。\n" +
-		"\t\t{Name: \"debit\", ForwardTopic: TopicDebit, CompensateTopic: TopicDebitCompensation, Timeout: 5 * time.Second, MaxAttempts: 15, BackoffMin: 100 * time.Millisecond, BackoffMax: 5 * time.Second},\n"
-	if !strings.Contains(string(raw), before) {
-		return fmt.Errorf("%s: expected the generated debit step to replace", path)
-	}
-	return writeAtomic(path, []byte(strings.Replace(string(raw), before, after, 1)), 0o644)
+	return nil
 }
 
 // demoPaymentSecrets gives the platform service its two secrets in the DEV
@@ -426,7 +449,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/dungeon/dungeon_test.go", why: "the claim window as a table test, shipped with the project"},
 		{write: "game/battle/battle.go", why: "the lockstep contract: tick rate, frame budget, input encoding, seats and the deterministic simulation both clients run"},
 		{add: &AddOptions{Kind: "saga", Name: "GiftItem", Service: gameService, Steps: []string{"debit", "deliver"}}, why: "the gift saga's definition and step subscriptions; the saga mod joins the game service"},
-		{run: demoGiftRefundBudget, why: "debit's retry budget covers a crash restart of the sender's sid, so a refund waits it out instead of going to manual_required"},
+		{run: demoGiftRefundBudget, why: "debit's retry budget (saga.steps.gift_item.debit in the game configs) covers a crash restart of the sender's sid, so a refund waits it out instead of going to manual_required"},
 		{write: "game/gift/gift.go", why: "the game's side of the gift: state, id, mail text"},
 		{add: &AddOptions{Kind: "handler", Name: "AddItem", Entity: "Player", Component: "Bag"}, why: "the write transaction"},
 		{write: "game/handler/add_item.go", why: "handler parameters and result; the Sender and endpoint are generated from them"},

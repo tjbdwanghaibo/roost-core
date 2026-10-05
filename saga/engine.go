@@ -10,10 +10,13 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 type Options struct {
@@ -29,6 +32,8 @@ type Options struct {
 	PublishBackoffMin  time.Duration
 	PublishBackoffMax  time.Duration
 	MaxPayloadBytes    int
+	// StepBudgets 在 Register 时补齐步骤的超时与重试预算（配置默认值 + 按步骤覆盖，见 StepBudgets）。
+	StepBudgets StepBudgets
 }
 
 func DefaultOptions() Options {
@@ -36,7 +41,7 @@ func DefaultOptions() Options {
 		Owner: "saga-" + NewID(), CoordinatorWorkers: 4, PublisherWorkers: 4,
 		CoordinatorBatch: 3, PublisherBatch: 1, LeaseDuration: 15 * time.Second, StoreTimeout: 3 * time.Second, PollInterval: 100 * time.Millisecond,
 		PublishTimeout: 3 * time.Second, PublishBackoffMin: 50 * time.Millisecond, PublishBackoffMax: 5 * time.Second,
-		MaxPayloadBytes: 64 << 10,
+		MaxPayloadBytes: 64 << 10, StepBudgets: StepBudgets{Defaults: DefaultStepBudget()},
 	}
 }
 
@@ -60,6 +65,9 @@ type ResumeRequest struct {
 type Stats struct {
 	Started, Dispatched, Completed, Compensated, Failed, ManualRequired   uint64
 	Conflicts, Duplicates, PublishFailures, StoreFailures, WorkerFailures uint64
+	// LateAfterAbandon 计协调器放弃一个步骤之后才到达的成功 completion（U-0280）：那一步已经生效，
+	// 却不在 CompletedSteps 里、不会被补偿。每一次都记 ERROR，需要运维核对（见 TROUBLESHOOTING T-226）。
+	LateAfterAbandon uint64
 }
 
 type Engine struct {
@@ -78,7 +86,7 @@ type Engine struct {
 
 	started, dispatched, completed, compensated, failed, manualRequired atomic.Uint64
 	conflicts, duplicates, publishFailures                              atomic.Uint64
-	storeFailures, workerFailures                                       atomic.Uint64
+	storeFailures, workerFailures, lateAfterAbandon                     atomic.Uint64
 }
 
 func NewEngine(store Store, publisher Publisher, options Options) (*Engine, error) {
@@ -144,6 +152,9 @@ func NewEngine(store Store, publisher Publisher, options Options) (*Engine, erro
 	if options.PublisherBatch > 4096 {
 		return nil, fmt.Errorf("saga: PublisherBatch %d exceeds 4096", options.PublisherBatch)
 	}
+	if err := options.StepBudgets.Validate(); err != nil {
+		return nil, fmt.Errorf("saga: StepBudgets: %w", err)
+	}
 	if options.MaxPayloadBytes > 4<<20 {
 		return nil, fmt.Errorf("saga: MaxPayloadBytes %d exceeds %d", options.MaxPayloadBytes, 4<<20)
 	}
@@ -170,7 +181,10 @@ type definitionKey struct {
 	version  uint32
 }
 
+// Register 先按 Options.StepBudgets 补齐步骤预算（定义里没写的字段取配置默认值，配置的按步骤覆盖优先），
+// 再校验。补齐后的定义是协调器实际使用的定义。
 func (e *Engine) Register(definition Definition) error {
+	definition = e.opts.StepBudgets.Resolve(definition)
 	if err := definition.Validate(); err != nil {
 		return err
 	}
@@ -360,7 +374,12 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 			return Record{}, fmt.Errorf("saga: no completed steps to compensate")
 		}
 		after := e.beginCompensation(record, reason, now)
-		_, err = e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, After: after})
+		var abandoned string
+		if record.Attempt > 0 {
+			// 当前步骤正在重试退避：人工补偿同样放弃了它，写放弃关闭的 tombstone（见 processClaimed 的截止分支）。
+			abandoned = operationKey(record.ID, record.Phase, record.Step)
+		}
+		_, err = e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, After: after, CloseOperation: abandoned})
 		if errors.Is(err, ErrConflict) {
 			e.conflicts.Add(1)
 			continue
@@ -390,15 +409,19 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 			return Record{}, err
 		}
 		if record.Status != StatusWaiting || record.OperationKey != completion.IdempotencyKey {
-			recorded, receiptErr := e.store.CompletionRecorded(ctx, completion)
+			history, receiptErr := e.completionHistory(ctx, completion)
 			if receiptErr != nil {
 				return Record{}, receiptErr
 			}
-			if recorded {
-				e.duplicates.Add(1)
+			if !history.Recorded {
+				return Record{}, ErrNotWaiting
+			}
+			if completion.Success && !history.Receipt && history.Closure == OperationAbandoned {
+				e.reportLateAfterAbandon(record, completion)
 				return record, nil
 			}
-			return Record{}, ErrNotWaiting
+			e.duplicates.Add(1)
+			return record, nil
 		}
 		definition, ok := e.definition(record.Type, record.DefinitionVersion)
 		if !ok {
@@ -422,6 +445,46 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 		return after.Clone(), nil
 	}
 	return Record{}, ErrConflict
+}
+
+// completionHistory 用 Store 的可选扩展区分重复结果与放弃后到达的成功；没有扩展时退回
+// CompletionRecorded，一律按重复处理。
+func (e *Engine) completionHistory(ctx context.Context, completion Completion) (CompletionHistory, error) {
+	if history, ok := e.store.(CompletionHistoryStore); ok {
+		return history.CompletionHistory(ctx, completion)
+	}
+	recorded, err := e.store.CompletionRecorded(ctx, completion)
+	return CompletionHistory{Recorded: recorded}, err
+}
+
+// reportLateAfterAbandon 处理“协调器放弃之后才到的成功”（U-0280 C'）：步骤已经生效，但协调器在超时用尽
+// 或 saga 截止时已经关闭了它，CompletedSteps 不含它、补偿也不会撤销它。这里只告警，不重开终态、不自动
+// 补偿；运维按 TROUBLESHOOTING T-226 核对业务数据，Failed / ManualRequired 的 saga 可以 Resume——新一生
+// 的同一步骤会回放这次成功而不是再执行一次。标签只有 saga 类型与方向，保持低基数。
+func (e *Engine) reportLateAfterAbandon(record Record, completion Completion) {
+	e.lateAfterAbandon.Add(1)
+	phase, step := operationPosition(completion.IdempotencyKey)
+	metrics.IncCounter("saga.completion.late_after_abandon_total", metrics.Labels{"saga_type": record.Type, "phase": phase}, 1)
+	slog.Error("saga: step succeeded after the coordinator abandoned it; the effect is not compensated",
+		"saga_id", completion.SagaID, "saga_type", record.Type, "status", record.Status.String(), "phase", phase, "step", step,
+		"command_id", completion.CommandID, "operation", completion.IdempotencyKey)
+}
+
+// operationPosition 从 operationKey（sagaID:phase:step，见 operationKey）取出方向与步骤号，用于告警标签与日志。
+func operationPosition(operation string) (phase, step string) {
+	cut := strings.LastIndexByte(operation, ':')
+	if cut <= 0 {
+		return "unknown", ""
+	}
+	rest, step := operation[:cut], operation[cut+1:]
+	switch rest[strings.LastIndexByte(rest, ':')+1:] {
+	case strconv.Itoa(int(PhaseForward)):
+		return PhaseForward.String(), step
+	case strconv.Itoa(int(PhaseCompensate)):
+		return PhaseCompensate.String(), step
+	default:
+		return "unknown", step
+	}
 }
 
 func (e *Engine) Run(ctx context.Context) error {
@@ -473,7 +536,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 }
 
 func (e *Engine) Stats() Stats {
-	return Stats{Started: e.started.Load(), Dispatched: e.dispatched.Load(), Completed: e.completed.Load(), Compensated: e.compensated.Load(), Failed: e.failed.Load(), ManualRequired: e.manualRequired.Load(), Conflicts: e.conflicts.Load(), Duplicates: e.duplicates.Load(), PublishFailures: e.publishFailures.Load(), StoreFailures: e.storeFailures.Load(), WorkerFailures: e.workerFailures.Load()}
+	return Stats{Started: e.started.Load(), Dispatched: e.dispatched.Load(), Completed: e.completed.Load(), Compensated: e.compensated.Load(), Failed: e.failed.Load(), ManualRequired: e.manualRequired.Load(), Conflicts: e.conflicts.Load(), Duplicates: e.duplicates.Load(), PublishFailures: e.publishFailures.Load(), StoreFailures: e.storeFailures.Load(), WorkerFailures: e.workerFailures.Load(), LateAfterAbandon: e.lateAfterAbandon.Load()}
 }
 
 func (e *Engine) coordinatorLoop(ctx context.Context) {
@@ -585,7 +648,13 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 	}
 	if !record.DeadlineAt.IsZero() && !now.Before(record.DeadlineAt) && record.Phase == PhaseForward {
 		after := e.beginCompensation(record, "saga deadline exceeded", now)
-		_, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, ExpectedLease: record.Lease, After: after, CloseOperation: closedOperation(record, after)})
+		closed := closedOperation(record, after)
+		if closed == "" && record.Attempt > 0 {
+			// 截止时步骤正在重试退避（已派发过、还没有结果）：这个 operation 同样被放弃。写下放弃关闭的
+			// tombstone，之后到达的成功才能被识别为“放弃后生效”并告警，而不是以 ErrNotWaiting 静默丢弃（U-0280）。
+			closed = operationKey(record.ID, record.Phase, record.Step)
+		}
+		_, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, ExpectedLease: record.Lease, After: after, CloseOperation: closed})
 		if err == nil {
 			e.countTerminal(after.Status)
 			e.signal(e.dueKick)

@@ -66,6 +66,9 @@ func (p Phase) String() string {
 	return "invalid"
 }
 
+// Step 的 Timeout / MaxAttempts / BackoffMin / BackoffMax 是它的超时与重试预算：一次操作（同一步骤
+// 同一方向）最多派发 MaxAttempts 次尝试，每次等 Timeout，相邻两次之间按 BackoffMin..BackoffMax 退避。
+// 零值字段在 Engine.Register 时由 Options.StepBudgets 补齐（配置提供的默认值与按步骤覆盖，见 StepBudgets）。
 type Step struct {
 	Name            string
 	ForwardTopic    string
@@ -74,6 +77,96 @@ type Step struct {
 	MaxAttempts     uint32
 	BackoffMin      time.Duration
 	BackoffMax      time.Duration
+}
+
+// StepBudget 是一个步骤的超时与重试预算；零值字段表示“未指定”。
+type StepBudget struct {
+	Timeout     time.Duration
+	MaxAttempts uint32
+	BackoffMin  time.Duration
+	BackoffMax  time.Duration
+}
+
+// DefaultStepBudget 是框架内置的步骤预算：5 次尝试、每次 5s、退避 100ms..5s。
+func DefaultStepBudget() StepBudget {
+	return StepBudget{Timeout: 5 * time.Second, MaxAttempts: 5, BackoffMin: 100 * time.Millisecond, BackoffMax: 5 * time.Second}
+}
+
+// StepKey 指定一个步骤：saga 类型（Definition.Type）与步骤名（Step.Name）。
+type StepKey struct {
+	Type string
+	Step string
+}
+
+// StepBudgets 把配置里的步骤预算应用到定义上（kit 的 saga Mod 从 saga.step_defaults 与
+// saga.steps.<type>.<step> 读取）。每个字段的取值顺序：
+//
+//  1. Overrides[{Type, Step}] 里该字段非零 → 用它（运维按步骤覆盖，优先于代码）；
+//  2. 定义里该字段非零 → 用它；
+//  3. Defaults 里该字段非零 → 用它；
+//  4. DefaultStepBudget()。
+//
+// 覆盖整个 Definition 的所有版本：同一类型同一步骤名在新旧版本里用同一份覆盖。
+type StepBudgets struct {
+	Defaults  StepBudget
+	Overrides map[StepKey]StepBudget
+}
+
+// Resolve 返回补齐预算后的定义副本，不校验结果（Engine.Register 会校验）。
+func (budgets StepBudgets) Resolve(definition Definition) Definition {
+	builtin := DefaultStepBudget()
+	steps := make([]Step, len(definition.Steps))
+	for i, step := range definition.Steps {
+		override := budgets.Overrides[StepKey{Type: definition.Type, Step: step.Name}]
+		step.Timeout = firstDuration(override.Timeout, step.Timeout, budgets.Defaults.Timeout, builtin.Timeout)
+		step.MaxAttempts = firstAttempts(override.MaxAttempts, step.MaxAttempts, budgets.Defaults.MaxAttempts, builtin.MaxAttempts)
+		step.BackoffMin = firstDuration(override.BackoffMin, step.BackoffMin, budgets.Defaults.BackoffMin, builtin.BackoffMin)
+		step.BackoffMax = firstDuration(override.BackoffMax, step.BackoffMax, budgets.Defaults.BackoffMax, builtin.BackoffMax)
+		steps[i] = step
+	}
+	definition.Steps = steps
+	return definition
+}
+
+// Validate 拒绝不可能成立的默认值与覆盖（负数、超过 1000 次、退避上限小于下限）。零值字段合法，表示“未指定”。
+func (budgets StepBudgets) Validate() error {
+	check := func(name string, budget StepBudget) error {
+		if budget.Timeout < 0 || budget.BackoffMin < 0 || budget.BackoffMax < 0 || budget.MaxAttempts > 1000 ||
+			(budget.BackoffMin > 0 && budget.BackoffMax > 0 && budget.BackoffMax < budget.BackoffMin) {
+			return fmt.Errorf("%w: step budget %s %+v", ErrInvalidDefinition, name, budget)
+		}
+		return nil
+	}
+	if err := check("defaults", budgets.Defaults); err != nil {
+		return err
+	}
+	for key, budget := range budgets.Overrides {
+		if strings.TrimSpace(key.Type) == "" || strings.TrimSpace(key.Step) == "" {
+			return fmt.Errorf("%w: step budget override without saga type or step name", ErrInvalidDefinition)
+		}
+		if err := check(key.Type+"/"+key.Step, budget); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func firstDuration(values ...time.Duration) time.Duration {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstAttempts(values ...uint32) uint32 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 type Definition struct {

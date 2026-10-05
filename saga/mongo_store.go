@@ -152,8 +152,14 @@ func (s *MongoStore) List(ctx context.Context, query Query) ([]Record, error) {
 }
 
 func (s *MongoStore) CompletionRecorded(ctx context.Context, completion Completion) (bool, error) {
+	history, err := s.CompletionHistory(ctx, completion)
+	return history.Recorded, err
+}
+
+// CompletionHistory 先查这个 CommandID 的 completion receipt，再查 operation tombstone 与它的关闭方式。
+func (s *MongoStore) CompletionHistory(ctx context.Context, completion Completion) (CompletionHistory, error) {
 	if err := completion.Validate(); err != nil {
-		return false, ErrInvalidRecord
+		return CompletionHistory{}, ErrInvalidRecord
 	}
 	var existing completionDoc
 	err := s.completions().FindOne(ctx, bson.M{"_id": completion.CommandID}, &existing)
@@ -161,27 +167,27 @@ func (s *MongoStore) CompletionRecorded(ctx context.Context, completion Completi
 		var operation operationDoc
 		opErr := s.operations().FindOne(ctx, bson.M{"_id": completion.IdempotencyKey}, &operation)
 		if errors.Is(opErr, fmongo.ErrNotFound) {
-			return false, nil
+			return CompletionHistory{}, nil
 		}
 		if opErr != nil {
-			return false, opErr
+			return CompletionHistory{}, opErr
 		}
 		if operation.SagaID != completion.SagaID {
-			return false, ErrIdentityConflict
+			return CompletionHistory{}, ErrIdentityConflict
 		}
-		return true, nil
+		return CompletionHistory{Recorded: true, Closure: operation.closure()}, nil
 	}
 	if err != nil {
-		return false, err
+		return CompletionHistory{}, err
 	}
 	digest, err := completionDigest(completion)
 	if err != nil {
-		return false, err
+		return CompletionHistory{}, err
 	}
 	if !bytes.Equal(existing.Digest, digest) {
-		return false, ErrIdentityConflict
+		return CompletionHistory{}, ErrIdentityConflict
 	}
-	return true, nil
+	return CompletionHistory{Recorded: true, Receipt: true}, nil
 }
 
 func (s *MongoStore) ClaimDue(ctx context.Context, request ClaimRequest) ([]Record, error) {
@@ -297,9 +303,19 @@ func (s *MongoStore) Apply(ctx context.Context, request ApplyRequest) (ApplyOutc
 		if request.CloseOperation != "" {
 			var existing operationDoc
 			findErr := s.operations().FindOne(txCtx, bson.M{"_id": request.CloseOperation}, &existing)
-			if errors.Is(findErr, fmongo.ErrNotFound) {
-				if _, insertErr := s.operations().InsertOne(txCtx, operationDoc{ID: request.CloseOperation, SagaID: request.After.ID, CreatedAt: request.After.UpdatedAt}); insertErr != nil {
+			closure := operationClosureAbandoned
+			if request.Receipt != nil {
+				closure = operationClosureResult
+			}
+			switch {
+			case errors.Is(findErr, fmongo.ErrNotFound):
+				if _, insertErr := s.operations().InsertOne(txCtx, operationDoc{ID: request.CloseOperation, SagaID: request.After.ID, Closure: closure, CreatedAt: request.After.UpdatedAt}); insertErr != nil {
 					return insertErr
+				}
+			case findErr == nil && closure == operationClosureResult && existing.Closure != operationClosureResult:
+				// 放弃过的 operation 在 Resume 后的新一生里带结果关闭：以结果为准，之后到达的旧尝试结果按重复处理。
+				if _, updateErr := s.operations().UpdateOne(txCtx, bson.M{"_id": request.CloseOperation}, bson.M{"$set": bson.M{"closure": closure}}); updateErr != nil {
+					return updateErr
 				}
 			}
 			if _, deleteErr := s.outbox().DeleteMany(txCtx, bson.M{"command.idempotency_key": request.CloseOperation}); deleteErr != nil {
@@ -479,10 +495,30 @@ type completionDoc struct {
 	Digest    []byte    `bson:"digest"`
 	CreatedAt time.Time `bson:"created_at"`
 }
+
+// operationDoc 是 operation tombstone。Closure 是 U-0280 增加的字段（"result" / "abandoned"），
+// 之前写的 tombstone 没有它，按 OperationClosureUnknown 处理（不告警）。
 type operationDoc struct {
 	ID        string    `bson:"_id"`
 	SagaID    string    `bson:"saga_id"`
+	Closure   string    `bson:"closure,omitempty"`
 	CreatedAt time.Time `bson:"created_at"`
+}
+
+const (
+	operationClosureResult    = "result"
+	operationClosureAbandoned = "abandoned"
+)
+
+func (d operationDoc) closure() OperationClosure {
+	switch d.Closure {
+	case operationClosureResult:
+		return OperationClosedWithResult
+	case operationClosureAbandoned:
+		return OperationAbandoned
+	default:
+		return OperationClosureUnknown
+	}
 }
 
 func applyFilter(r ApplyRequest) bson.M {
@@ -524,3 +560,4 @@ func completionDigest(c Completion) ([]byte, error) {
 }
 
 var _ Store = (*MongoStore)(nil)
+var _ CompletionHistoryStore = (*MongoStore)(nil)

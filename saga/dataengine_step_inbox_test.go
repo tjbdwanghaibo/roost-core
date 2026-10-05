@@ -98,11 +98,25 @@ func TestDataEngineStepInboxReservesCommandIdentityAndAllowsNewAttempt(t *testin
 	if _, err := inbox.Reserve(context.Background(), conflict); !errors.Is(err, ErrIdentityConflict) {
 		t.Fatalf("conflict err=%v", err)
 	}
+	// U-0280：同一操作实例（IdempotencyKey）的另一次尝试，在第一次尝试的租约有效时不能开始，
+	// 只能等它有结论；租约过期（封顶在第一次尝试的截止时间）后接替它，第一次尝试从此不会再执行。
 	newAttempt := command
 	newAttempt.ID = "command-2"
 	newAttempt.Attempt = 2
+	newAttempt.DeadlineAt = command.DeadlineAt.Add(time.Minute)
+	if reservation, err := inbox.Reserve(context.Background(), newAttempt); !errors.Is(err, errOperationAttemptInFlight) {
+		t.Fatalf("new attempt during the first attempt's lease=%+v err=%v, want errOperationAttemptInFlight", reservation, err)
+	}
+	inbox.now = func() time.Time { return command.DeadlineAt }
 	if reservation, err := inbox.Reserve(context.Background(), newAttempt); err != nil || reservation.Duplicate {
-		t.Fatalf("new attempt=%+v err=%v", reservation, err)
+		t.Fatalf("new attempt after the first attempt's deadline=%+v err=%v", reservation, err)
+	}
+	var firstClaim dataEngineClaim
+	if err := inboxClaims(client).FindOne(context.Background(), bson.M{"_id": dataEngineStepNamespace + "/" + command.ID}, &firstClaim); err != nil {
+		t.Fatal(err)
+	}
+	if firstClaim.Status != claimStatusSuperseded || firstClaim.LeaseToken != 2 || firstClaim.SupersededBy != newAttempt.ID {
+		t.Fatalf("first attempt after being superseded=%+v", firstClaim)
 	}
 }
 
@@ -140,12 +154,12 @@ func TestDataEngineStepInboxUsesAbsoluteClaimExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	claims := inboxClaims(client)
-	if len(claims.Indexes) != 3 {
-		t.Fatalf("claim indexes=%d, want 3", len(claims.Indexes))
+	if len(claims.Indexes) != 4 {
+		t.Fatalf("claim indexes=%d, want 4", len(claims.Indexes))
 	}
 	// The claim path and the command-identity uniqueness both depend on their
 	// index existing, so assert them by shape rather than by position alone.
-	if !claims.HasIndex("status", "lease_until") || !claims.HasIndex("namespace", "command_id") {
+	if !claims.HasIndex("status", "lease_until") || !claims.HasIndex("namespace", "command_id") || !claims.HasIndex("namespace", "operation_key") {
 		t.Fatalf("claim indexes=%+v", claims.Indexes)
 	}
 	expiry := claims.Indexes[2]

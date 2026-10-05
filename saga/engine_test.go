@@ -18,10 +18,12 @@ type memoryStore struct {
 	outbox   map[string]OutboxRecord
 	receipts map[string]Completion
 	closed   map[string]string
+	// closures 记 tombstone 的关闭方式（U-0280），与 MongoStore 的 operationDoc.Closure 对应。
+	closures map[string]OperationClosure
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{records: map[string]Record{}, keys: map[string]string{}, outbox: map[string]OutboxRecord{}, receipts: map[string]Completion{}, closed: map[string]string{}}
+	return &memoryStore{records: map[string]Record{}, keys: map[string]string{}, outbox: map[string]OutboxRecord{}, receipts: map[string]Completion{}, closed: map[string]string{}, closures: map[string]OperationClosure{}}
 }
 func (s *memoryStore) Create(_ context.Context, r Record) error {
 	s.mu.Lock()
@@ -82,23 +84,27 @@ func (s *memoryStore) List(_ context.Context, q Query) ([]Record, error) {
 	}
 	return out, nil
 }
-func (s *memoryStore) CompletionRecorded(_ context.Context, completion Completion) (bool, error) {
+func (s *memoryStore) CompletionRecorded(ctx context.Context, completion Completion) (bool, error) {
+	history, err := s.CompletionHistory(ctx, completion)
+	return history.Recorded, err
+}
+func (s *memoryStore) CompletionHistory(_ context.Context, completion Completion) (CompletionHistory, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	prior, ok := s.receipts[completion.CommandID]
 	if !ok {
 		if sagaID, closed := s.closed[completion.IdempotencyKey]; closed {
 			if sagaID != completion.SagaID {
-				return false, ErrIdentityConflict
+				return CompletionHistory{}, ErrIdentityConflict
 			}
-			return true, nil
+			return CompletionHistory{Recorded: true, Closure: s.closures[completion.IdempotencyKey]}, nil
 		}
-		return false, nil
+		return CompletionHistory{}, nil
 	}
 	if prior.Success != completion.Success || prior.Retryable != completion.Retryable || prior.Error != completion.Error || string(prior.Data) != string(completion.Data) {
-		return false, ErrIdentityConflict
+		return CompletionHistory{}, ErrIdentityConflict
 	}
-	return true, nil
+	return CompletionHistory{Recorded: true, Receipt: true}, nil
 }
 func (s *memoryStore) ClaimDue(_ context.Context, q ClaimRequest) ([]Record, error) {
 	s.mu.Lock()
@@ -151,6 +157,11 @@ func (s *memoryStore) Apply(_ context.Context, q ApplyRequest) (ApplyOutcome, er
 		s.receipts[q.Receipt.CommandID] = *q.Receipt
 	}
 	if q.CloseOperation != "" {
+		if q.Receipt != nil {
+			s.closures[q.CloseOperation] = OperationClosedWithResult
+		} else if _, already := s.closed[q.CloseOperation]; !already {
+			s.closures[q.CloseOperation] = OperationAbandoned
+		}
 		s.closed[q.CloseOperation] = q.After.ID
 		for id, item := range s.outbox {
 			if item.Command.IdempotencyKey == q.CloseOperation {

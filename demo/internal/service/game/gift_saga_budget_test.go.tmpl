@@ -6,6 +6,7 @@ import (
 
 	giftitem "{{MODULE}}/saga/gift_item"
 	"github.com/spf13/viper"
+	kitsaga "github.com/tjbdwanghaibo/roost-core/kit/saga"
 	"github.com/tjbdwanghaibo/roost-core/saga"
 )
 
@@ -32,21 +33,10 @@ func stepRetryWindow(step saga.Step) time.Duration {
 // 锁过期（最多 singleton.ttl）、受 singleton.startup_wait 约束，再加上被拉起和 Init 的时间；这段时间里
 // 每一次尝试都只会超时。补偿的重试用尽就是 manual_required，所以退款的重试窗口必须覆盖一次崩溃重启：
 // startup_wait + ttl + senderRestartAllowance（生成的配置里是 30s + 15s + 45s = 90s）。
+//
+// 步骤预算是配置（saga.step_defaults，按步骤覆盖 saga.steps.gift_item.debit）：这里用 saga Mod 读配置的
+// 同一个函数得到运行时实际使用的预算，再核对窗口，所以改配置或改默认值都会在这里被检查。
 func TestARefundOutlastsACrashRestartOfTheSendersSid(t *testing.T) {
-	var debit saga.Step
-	found := false
-	for _, step := range giftitem.Definition().Steps {
-		if step.Name == "debit" {
-			debit, found = step, true
-		}
-	}
-	if !found {
-		t.Fatal("the gift saga has no debit step")
-	}
-	if debit.CompensateTopic != giftitem.TopicDebitCompensation {
-		t.Fatalf("debit compensates on %q, but the refund consumer listens on %q", debit.CompensateTopic, giftitem.TopicDebitCompensation)
-	}
-	window := stepRetryWindow(debit)
 	for _, file := range []string{
 		"../../../configs/service/config.{{GAME_SERVICE}}.yaml",
 		"../../../configs/service/config.{{GAME_SERVICE}}.prod.example.yaml",
@@ -57,6 +47,24 @@ func TestARefundOutlastsACrashRestartOfTheSendersSid(t *testing.T) {
 			if err := cfg.ReadInConfig(); err != nil {
 				t.Fatal(err)
 			}
+			budgets, err := kitsaga.StepBudgetsFromConfig(cfg, giftitem.Definitions()...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var debit saga.Step
+			found := false
+			for _, step := range budgets.Resolve(giftitem.Definition()).Steps {
+				if step.Name == "debit" {
+					debit, found = step, true
+				}
+			}
+			if !found {
+				t.Fatal("the gift saga has no debit step")
+			}
+			if debit.CompensateTopic != giftitem.TopicDebitCompensation {
+				t.Fatalf("debit compensates on %q, but the refund consumer listens on %q", debit.CompensateTopic, giftitem.TopicDebitCompensation)
+			}
+			window := stepRetryWindow(debit)
 			// 未写的键取 App 的缺省值（app/singleton.go：ttl 15s，startup_wait 2 × ttl）。
 			ttl := 15 * time.Second
 			if cfg.IsSet("singleton.ttl") {
@@ -68,7 +76,7 @@ func TestARefundOutlastsACrashRestartOfTheSendersSid(t *testing.T) {
 			}
 			required := startupWait + ttl + senderRestartAllowance
 			if window < required {
-				t.Errorf("a refund gets at least %s of retries (MaxAttempts %d x Timeout %s, backoff %s..%s), but a crash restart of the sender's sid can take startup_wait %s + ttl %s + restart allowance %s = %s; past that the refund is marked manual_required",
+				t.Errorf("a refund gets at least %s of retries (max_attempts %d x timeout %s, backoff %s..%s from saga.step_defaults / saga.steps.gift_item.debit), but a crash restart of the sender's sid can take startup_wait %s + ttl %s + restart allowance %s = %s; past that the refund is marked manual_required",
 					window, debit.MaxAttempts, debit.Timeout, debit.BackoffMin, debit.BackoffMax, startupWait, ttl, senderRestartAllowance, required)
 			}
 		})

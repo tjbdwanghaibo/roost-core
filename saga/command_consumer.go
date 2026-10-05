@@ -371,16 +371,33 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 		processCtx, cancel := context.WithDeadline(messageCtx, command.DeadlineAt)
 		defer cancel()
 		reservation, err := inbox.Reserve(processCtx, command)
-		if err != nil {
+		switch {
+		case errors.Is(err, errAttemptSuperseded), errors.Is(err, ErrCommandExpired):
+			// 这次尝试已被同一操作实例的较新尝试接替，或在认领前过了截止时间：它永远不会执行，ack。
+			metrics.IncCounter("saga.step.expired_unexecuted_total", nil, 1)
+			slog.Info("saga: step attempt will not run; acknowledged without executing",
+				"command_id", command.ID, "saga_id", command.SagaID, "reason", err)
+			return nil
+		case err != nil:
+			// 包括 errOperationAttemptInFlight：同一操作实例的另一次尝试还持有有效租约，nak 后重投时再判断。
 			return err
 		}
 		if reservation.Duplicate && reservation.Completion.CommandID != "" {
+			if reservation.Completion.CommandID != command.ID {
+				// 同一操作实例较早的一次尝试已经有结果（U-0280）：这次尝试不执行，把那次的 completion 经 saga
+				// 结果流重发给协调器。那次尝试自己的 completion effect 可能在协调器退避期间到达、已被丢弃；
+				// 协调器正在等这个操作实例，会按 IdempotencyKey 接收它，已接收过则按回执去重。
+				metrics.IncCounter("saga.step.attempt_replayed_total", nil, 1)
+				return transport.PublishCompletion(processCtx, reservation.Completion)
+			}
 			return nil
 		}
 		if !reservation.Duplicate {
 			processCtx = withReservation(processCtx, reservation)
-			completion, err := handler(processCtx, command)
-			if err != nil {
+			// 原生 handler 的结果是它在 Nest 事务里 EmitCompletion 的那一份，随回执与 effect 一起提交；
+			// 返回值不使用，也不校验（生成模板返回零值 Completion）。旧实现校验它，零值让每次成功执行后
+			// 都多一次 nak 与重投，重投时才读到回执 ack。
+			if _, err := handler(processCtx, command); err != nil {
 				if errors.Is(err, coredata.ErrFencedEntityPending) {
 					// 实体上还有一笔未确定结果的原生步骤（常见是本命令上一次投递的记录）：本次事务已整体
 					// 回滚，交还租约，让屏障解除后的重投能立刻重新 Reserve（RR-20260926-30）。
@@ -388,10 +405,6 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 						err = errors.Join(err, fmt.Errorf("saga: release unused step lease: %w", releaseErr))
 					}
 				}
-				return err
-			}
-			completion.CommandID, completion.IdempotencyKey, completion.SagaID = command.ID, command.IdempotencyKey, command.SagaID
-			if err := completion.Validate(); err != nil {
 				return err
 			}
 		}

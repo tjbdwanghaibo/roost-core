@@ -469,7 +469,10 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 			if !validName(stepSnake) {
 				return nil, fmt.Errorf("invalid saga step %q", stepName)
 			}
-			fmt.Fprintf(&steps, "\t\t{Name: %q, ForwardTopic: Topic%s, CompensateTopic: Topic%sCompensation, Timeout: 5 * time.Second, MaxAttempts: 5, BackoffMin: 100 * time.Millisecond, BackoffMax: 5 * time.Second},\n", stepSnake, stepPascal, stepPascal)
+			// No budget here: Timeout / MaxAttempts / Backoff come from the saga
+			// Mod's config (saga.step_defaults, overridden per step under
+			// saga.steps.<type>.<step>), filled in by Engine.Register.
+			fmt.Fprintf(&steps, "\t\t{Name: %q, ForwardTopic: Topic%s, CompensateTopic: Topic%sCompensation},\n", stepSnake, stepPascal, stepPascal)
 			// The topics as constants, so a project can address them without
 			// repeating the strings: the Subscribe* helpers below take a
 			// Mongo inbox, and a step whose business is a Nest transaction
@@ -503,6 +506,12 @@ const (
 const (
 %s)
 
+// Definition lists the steps. Their timeout and retry budget is configuration,
+// not code: saga.step_defaults gives every step its Timeout, MaxAttempts and
+// backoff, and saga.steps.%s.<step>.<field> overrides one step (see the
+// roost-core USER_GUIDE, "Saga 步骤预算"). One operation of a step may take up
+// to MaxAttempts attempts; the framework makes sure at most one of them takes
+// effect (roost-core SAGA.md, 原生步骤执行契约).
 func Definition() saga.Definition {
 	return saga.Definition{Type: Type, Version: Version, Steps: []saga.Step{
 %s	}}
@@ -533,7 +542,7 @@ func EmitStart(businessKey string, state []byte, deadline time.Time) error {
 func Start(ctx context.Context, engine *saga.Engine, businessKey string, state []byte, deadline time.Time) (saga.Record, error) {
 	return engine.StartSaga(ctx, saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline})
 }
-%s`, snake, snake, topics.String(), steps.String(), subscribers.String())
+%s`, snake, snake, topics.String(), snake, steps.String(), subscribers.String())
 	default:
 		return nil, fmt.Errorf("unsupported artifact kind %q", o.Kind)
 	}

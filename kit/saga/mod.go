@@ -116,6 +116,11 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 			NakBackoffMax:  durationDefault(cfg.GetDuration("saga.start_effect_nak_backoff_max"), 30*time.Second),
 		},
 	}
+	budgets, err := StepBudgetsFromConfig(cfg, m.definitions...)
+	if err != nil {
+		return fmt.Errorf("saga: %w", err)
+	}
+	m.config.Engine.StepBudgets = budgets
 	if m.config.Store.CompletionReceiptTTL <= m.config.Stream.MaxAge {
 		return fmt.Errorf("saga: completion receipt ttl must exceed stream max age")
 	}
@@ -200,7 +205,7 @@ func (m *Mod) checkHealth(ctx context.Context) health.Result {
 		return health.Result{Status: health.StatusFail, Message: "MongoDB unavailable", Err: err}
 	}
 	stats := m.asm.Engine.Stats()
-	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("running conflicts=%d duplicates=%d publish_failures=%d store_failures=%d worker_failures=%d manual_required=%d", stats.Conflicts, stats.Duplicates, stats.PublishFailures, stats.StoreFailures, stats.WorkerFailures, stats.ManualRequired)}
+	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("running conflicts=%d duplicates=%d publish_failures=%d store_failures=%d worker_failures=%d manual_required=%d late_after_abandon=%d", stats.Conflicts, stats.Duplicates, stats.PublishFailures, stats.StoreFailures, stats.WorkerFailures, stats.ManualRequired, stats.LateAfterAbandon)}
 }
 
 func durationDefault(value, fallback time.Duration) time.Duration {
