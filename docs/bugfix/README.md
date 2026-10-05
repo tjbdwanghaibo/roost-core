@@ -1,5 +1,16 @@
 # Bugfix 记录
 
+**10-05 N12 metrics / log / failurelog / robot（revn12）：NC-160～165 已修复、声明场景验证（含真实 Redis / 真实网关），未发版。** failurelog 的 Eval 错误原样返回、降级只给没有 Lua 的适配器；loadtest 阈值没有样本判违反（`no_samples`），metrics 新增 `HistogramCount`；robot capture 标记绑定会话；websocket 拨号走 `DialContext`；statslog 缺席的 kind / category 写 0；`log.Close` 重建默认 logger 写控制台 / stderr。[运行记录](../review/REVIEW-2026-10-05-n12-revn12.md) · [绿证据](evidence/noncore-bugfix-20261005-n12/)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-165](RR-20261005-NC-165.md) | Close 后重建默认 logger，只配文件时写 stderr | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-164](RR-20261005-NC-164.md) | 发布过、本次缺席的 kind / category gauge 写 0 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-163](RR-20261005-NC-163.md) | websocket 拨号 `DialContext` + DialTimeout 覆盖握手 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-162](RR-20261005-NC-162.md) | capture 标记记住注册时的会话 | 已修复、声明场景验证（含真实网关），未发版 |
+| [RR-20261005-NC-161](RR-20261005-NC-161.md) | 阈值样本数为 0 判违反并写 reason | 已修复、声明场景验证（含真实网关），未发版 |
+| [RR-20261005-NC-160](RR-20261005-NC-160.md) | Eval 错误不降级；故障矩阵加入 `./failurelog` | 已修复、声明场景验证（含真实 Redis），未发版 |
+
 **10-05 N09 skill 第三批（revn09c）：NC-150～154 已修复、声明场景验证，未发版。** wire 层字段名逐字匹配；编译期拒绝 Runtime 不派发的 phase 事件、`timeout_ticks` 不再豁免 fallthrough（非零给 warning）；作者 tick 非负集中在 shape pass；VisualPlanCache 等待者不继承创建者的取消；skillcompose 每个拒绝带诊断。[本轮](../review/REVIEW-2026-10-05-n09-batch3.md)。
 
 | 编号 | 修复 | 状态 |

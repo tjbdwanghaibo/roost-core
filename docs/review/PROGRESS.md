@@ -1,5 +1,18 @@
 # Roost Review 跨轮进度
 
+## 2026-10-05 N12 metrics / log / failurelog / robot（revn12）
+
+基线 `45d4bc1c`，分支 `revn12`，NC 段 160～169（用 160～165）；图谱 generation 2026-09-30，按当前源码补证。[运行记录/矩阵](REVIEW-2026-10-05-n12-revn12.md) · [修复](../bugfix/README.md)。审查 `b248a199`；NC-160 / 161（P2）、NC-162～165（P3）已修复、声明场景验证，未发版。
+
+| 方向 | 本批 | 状态 / 下一入口 |
+| --- | --- | --- |
+| failurelog | F1～F4：追加 / 删除 / 清空的“脚本已执行、回复丢失”，N04 观察 3 | NC-160（真实 Redis 红绿）；RPush 重复的实际入口即本条，MaxRetries 默认值仍归 N04 |
+| metrics | M1～M5：序列上限、gauge 生命周期与并发、servicemetrics 落点、Prometheus 导出 | NC-161（与 robot 共用）、NC-164；O1 默认 Reporter、O2 / O3 序列删除入口、O4 文本格式 |
+| log | L1～L3：关闭之后、轮转 / 磁盘失败、并发写 | NC-165；O6 磁盘失败预算、O7 app.run 最终错误（交 N01） |
+| robot | R1～R5：连接 / 认证、重连推送恢复、会话、取消统计、批量 | NC-162 / 163；生成 game-demo 真实网关：重连红（0 帧）→ 绿（×1、×8），demo ×2 通过，`-duration 1s` 基线假绿 → 修后 no_samples；O8～O11 |
+
+6 个新正式用例文件（含 1 个 integration）修前红 → 修后绿；改动 8 包 race×3、bus / kit/nats / kit/ops / app 相邻包、根包、全仓 build / vet、生成 game-demo 编译与运行通过。N12 部分完成，不计 completed/15。方向判断：“结果未知当成没执行”第三次出现在 Redis 脚本降级上（NC-21 → NC-100 → NC-160），建议按 N04 ①在驱动层统一判定。
+
 ## 2026-10-05 N09 skill 第三批（Parse + Compile 拒绝路径、skillcompose、process、VisualPlanCache）
 
 基线 `45d4bc1c`（origin/main），分支 `revn09c`，NC 段 150～159（用 150～154）；图谱 generation 2026-09-30，本批文件之后无提交，runtime / scheduler 按当前源码补证。[本轮/矩阵](REVIEW-2026-10-05-n09-batch3.md) · [修复](../bugfix/RR-20261005-NC-150.md)。审查 `7a874663`；NC-150 / 151（P2）、NC-152～154（P3）已修复、声明场景验证，未发版。

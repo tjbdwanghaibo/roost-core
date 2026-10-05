@@ -6,6 +6,12 @@
 
 ### Fixed
 
+- **failurelog 在脚本结果未知时不再走非原子降级**（RR-20261005-NC-160，行为收紧）：`AppendRaw` / `DeleteRaw` / `Purge` 的 Lua 脚本报错（连接断开、读超时、ctx 到期）时原样返回错误，不再补做 RPUSH / LREM / LLEN+DEL——那会让同一条死信写两份、多删一条同值记录、把清空之后新到的死信删掉。降级只留给 Eval 返回 `(nil, nil)` 的无 Lua 适配器。bus 侧表现为 `bus: write dead letter failed`。[记录](docs/bugfix/RR-20261005-NC-160.md)
+- **robot loadtest 阈值没有样本时判失败**（RR-20261005-NC-161，行为收紧）：没有完成的场景时 `error_rate`、没有成功场景或耗时直方图序列缺失时分位数阈值判违反，`ThresholdResult.reason` 写 `no_samples`；此前按 0 通过（`-duration` 短于场景耗时的运行退出码 0）。新增 `metrics.HistogramCount` 与可选 `loadtest.Config.SampleCount`。[记录](docs/bugfix/RR-20261005-NC-161.md)
+- **robot 重连后再次 `EnsurePushCapture` 在新会话上注册**（RR-20261005-NC-162）：之前标记残留让安装变成空操作，重连后的推送被丢弃。[记录](docs/bugfix/RR-20261005-NC-162.md)
+- **robot websocket 拨号服从 ctx 与 `DialTimeout`**（RR-20261005-NC-163）：超时覆盖建连与升级握手，之前握手不回时永久阻塞。[记录](docs/bugfix/RR-20261005-NC-163.md)
+- **statslog 的 `entity.count_by_kind` / `entity.count_by_category` 在实体清空后归零**（RR-20261005-NC-164）。[记录](docs/bugfix/RR-20261005-NC-164.md)
+- **`log.Close` 之后的日志不再丢失**（RR-20261005-NC-165）：关闭文件 sink 后默认 logger 改写控制台输出，只配文件时写 stderr；进程退出原因（main 的 `server exit`）在 `log.stdout: false` 时也有去处。[记录](docs/bugfix/RR-20261005-NC-165.md)
 - **skill 的编译器只接受 Runtime 真正会执行的形状**（RR-20261005-NC-150 / NC-151 / NC-152，行为收紧）：`Parse` 要求字段名逐字匹配（此前 `encoding/json` 的大小写不敏感匹配让 `"id"` 与 `"ID"` 同时被接受、后者生效，`"Cooldown_Ticks"` 被当作 `cooldown_ticks`）；phase 的 `on.recast` / `on.timeout` 编译期拒绝（Runtime 从不派发它们），enter 落空不再以 `timeout_ticks` 豁免（Runtime 没有 phase 计时，此前这类 tap 技能每次施法 `ErrProgramInvariant`），非零 `timeout_ticks` 给 warning；`cooldown_ticks`、phase `timeout_ticks`、wait、repeat `interval_ticks`、chain `hop_interval_ticks`、add_status `duration_ticks` 为负时按字段报错。带这些形状的定义在游戏服启动期 CompileAll 失败（错误带 JSON 路径）；删除了从未执行 recast 分支的 `recast_combo.json` fixture。[记录](docs/bugfix/RR-20261005-NC-150.md) · [NC-151](docs/bugfix/RR-20261005-NC-151.md) · [NC-152](docs/bugfix/RR-20261005-NC-152.md)
 - **VisualPlanCache 的共享加载不再把第一个调用者的取消传给其他等待者**（RR-20261005-NC-153）：创建者取消后，ctx 仍有效的等待者重新加载（plan 层与资产层），之前它们也拿到 `context.Canceled`。[记录](docs/bugfix/RR-20261005-NC-153.md)
 - **skillcompose.ValidateCandidate 对空 / 重复 source 给出 `PROVENANCE_MISMATCH` 诊断**（RR-20261005-NC-154）：之前报告 `Valid=false` 却没有诊断。[记录](docs/bugfix/RR-20261005-NC-154.md)

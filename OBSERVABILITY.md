@@ -75,7 +75,7 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | `bus_dead_letter_total` / `_requeue_total` / `_purge_total` | Counter | 死信生命周期 |
 | `bus_duplicate_total`、`bus_rpc_*` | Counter/Gauge | 去重与 RPC 水位 |
 | `failurelog_*_total` | Counter | 失败日志生命周期（append/delete/purge/trim 均带 namespace label） |
-| `failurelog_degraded_total{namespace,op}` | Counter | 原子 Lua 脚本失败降级为非原子回退（增长需关注：优先确认 Redis 允许 EVAL） |
+| `failurelog_degraded_total{namespace,op}` | Counter | 适配器没有 Lua（Eval 返回空结果）时走了非原子回退；生产驱动不应出现，非零说明接了不支持脚本的 IRedis。脚本报错（结果未知）不降级，计入 `failurelog_append_total{result="error"}` 等并返回错误（RR-20261005-NC-160） |
 | `obs.series.dropped{metric}` | Counter | 指标基数打满后被丢弃的写入数（**非零即告警**：该 metric 的新 label 组合已静默失效） |
 
 ### 跨服实体（kit/remote_entity）
