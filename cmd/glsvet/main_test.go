@@ -215,3 +215,26 @@ func (d *PlayerDao) SetLevel(v int32) {
 		}
 	}
 }
+
+// B4（维护者 2026-10-06）：skill.Runtime 的状态按决定不进事务，是 A1 的明确例外。A1 的提示只看
+// 组件方法里的 undo 登记，skill 各包（含手写 CombatDao 自己登记逆操作的 combatcomponent）都不应
+// 命中；命中说明提示的判定变了，需要先确认是否误报再决定豁免。
+func TestSkillPackagesGetNoComponentUndoHint(t *testing.T) {
+	for _, directory := range []string{"../../skill", "../../skill/combatcomponent", "../../skill/combat", "../../skill/skillsync"} {
+		fileSet := token.NewFileSet()
+		packages, err := parser.ParseDir(fileSet, directory, func(info os.FileInfo) bool {
+			return !strings.HasSuffix(info.Name(), "_test.go")
+		}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(packages) == 0 {
+			t.Fatalf("%s: no package parsed", directory)
+		}
+		for _, pkg := range packages {
+			if hints := componentUndoHints(fileSet, pkg); len(hints) != 0 {
+				t.Fatalf("%s: unexpected A1 hints %q", directory, hints)
+			}
+		}
+	}
+}

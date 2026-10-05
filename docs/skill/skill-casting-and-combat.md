@@ -100,6 +100,25 @@ attributes.Observe(func(id combat.AttributeID) {
 
 **一处有意的语义差异**：`mul_bp` 修饰在桥/AttributeSet 中按 **基点增量加性叠加**（两个 ×1.2 = +40%，顺序无关、事务回滚可精确逆转），而 MemoryHost 是乘性链（= +44%）。一个游戏只选一种宿主语义并保持一致。
 
+## Runtime 不在事务里（B4）
+
+维护者 2026-10-06 决定（B4）：`skill.Runtime` 的状态**不进** Nest 事务，保持现状。这是“事务内会改的状态一律进 DAO”（[A1](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）的明确例外：Runtime 是自带锁、调度器和投递缓冲的独立执行引擎，逐笔事务做 checkpoint 或把它拆成 DAO 字段的代价都远大于收益。
+
+**约束**：在 nest handler 里推进 Runtime（`Start` / `Activate` / `Advance` / `Cancel` / `Release` / `ActivatePassive` …）之后，handler 失败或提交被拒，DAO 回滚，Runtime 不回退：
+
+| 回退 | 不回退 |
+| --- | --- |
+| 经 `HostAdapter` / `StatusBridge` 改的战斗 DAO：法力等资源（`PayCosts`）、血量、护盾、属性修饰、buff | 冷却与全局冷却（commit 时写入）、ammo 库存与充能排程、cast 状态与排程任务、owned 进程、ability 状态覆盖、proc 账本与同根事件计数、state mutation 流与 presentation 缓冲、Runtime 观察到的 revision；业务 `RevisionSource.CommitEffect` 推进的 revision 与追加的事件 |
+
+典型后果是“法力已回滚、技能已进冷却”。框架不做补偿，业务按这个前提设计：
+
+1. **先校验、后推进**。会让 handler 返回 error 的业务检查（目标归属、背包、等级、业务冷却等）全部放在调用 Runtime 之前；Runtime 调用之后 handler 不再因业务原因失败。
+2. **扣费交给 Runtime 的提交路径**。技能的 costs 由 Runtime 在 commit 时经 `Host.PayCosts` 原子支付，顺序是“支付 → ammo 扣减 → 冷却”（`runtime_cast_window.go` `commitCast`）。支付失败时 cast 不提交、冷却与 ammo 不动（启动阶段失败的 cast 直接删除，NC-110）。不要在 Runtime 之外先手工扣法力再施法。
+3. **失败用 Runtime 自己的终态表达**。Host 命令的“预期失败”（目标无效、被免疫等）返回带失败结果的 `EffectResult`，走定义里的 `result.failure` 分支；Host 返回 error 时 Runtime 把 cast 记为 `CastFailed`（`failCastLocked`），冷却按已提交处理。两种情况 DAO 与 Runtime 对“这次施法发生过、结果如何”的看法一致，不需要 handler 失败来表达。
+4. **提交被拒 / 结果未知**（WAL 或 Remote 拒绝）只能由业务处理：必须严格一致的玩法，可以在提交确认后再推进 Runtime（handler 外的 `HostAdapter` 每条命令走 `RunDetachedTransaction`，彼此不原子，见 N09 O4），或在失败时用 `Checkpoint` / `RestoreRuntime` 恢复（全量序列化，成本高，投递缓冲不进 checkpoint）。业务的 `RevisionSource` 若把事件写进需要与 DAO 一致的流，应在提交确认后再发布。
+
+glsvet 的 A1 提示只看组件方法里的 undo 登记，不会命中 Runtime，无需豁免。
+
 ## 确定性掷点（暴击/闪避概率 → 事实）
 
 伤害管线只接受预掷事实（`Dodge`/`ForceCritical`…）。`combat.ChanceRoll` / `combat.RollValue` 是产生这些事实的标准方式：
@@ -118,5 +137,5 @@ crit := combat.ChanceRoll(matchSeed, "crit", critChanceBP,
 
 - `CombatDao`：持有全部战斗状态，实现 `entity.DaoInterface` + `dataengine.Tracker` 契约 + `entity.PersistedDaoLoader`（BSON + schema 版本）与 nest 状态回滚接口；undo 策略下由 DAO 自己按字段掩码（vitals / attributes / buffs）登记逆操作并标脏，与生成 DAO 的 setter 同形。
 - `CombatComponent`：只持有 DAO，全部 mutator 经 DAO 改状态，自己不登记 undo（回滚统一走 DAO，[A1](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）——handler 失败或提交被拒后，两种回滚策略下实体字节一致。
-- **Runtime 不在事务里**（N09 O1，A1 §4.4 列为后续）：`skill.Runtime` 的冷却、ammo、cast、proc 账本、state mutation 流与 revision 是 Runtime 自己的内存，不是 DAO，Nest 回滚不会撤回它们。在 handler 里推进 Runtime 时，handler 失败或提交被拒会出现“法力已回滚、技能已进冷却”。接入前需自行保证：只在提交确认后推进 Runtime，或在失败时用 `Checkpoint` / `RestoreRuntime` 恢复；DAO 化的接入形态待维护者定。
+- **Runtime 不在事务里**（维护者决定 B4，见上文“Runtime 不在事务里（B4）”）：Nest 回滚只撤回 DAO；`skill.Runtime` 自己的状态不回退。
 - `HostAdapter`：实现 `skill.Host` 的战斗面（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepProcess`/空间查询/生成物仍由业务 Host 实现。

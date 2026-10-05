@@ -679,6 +679,11 @@ var componentUndoCalls = map[string]bool{
 // no state of its own that needs one. A component is a type in this package
 // that embeds ComponentBase or whose name ends in "Component". A DAO's own
 // methods may record undo; that is how a generated setter works.
+//
+// skill.Runtime 是 A1 的明确例外（维护者决定 B4，2026-10-06）：它的冷却、ammo、cast、proc
+// 账本与 revision 不进事务，handler 回滚后不回退，业务按此设计（docs/skill/
+// skill-casting-and-combat.md）。Runtime 不是组件、也不登记 undo，这条提示本来就不会命中它，
+// 所以不需要豁免；TestSkillPackagesGetNoComponentUndoHint 钉住 skill 各包零提示。
 func componentUndoHints(fileSet *token.FileSet, pkg *ast.Package) []string {
 	components := make(map[string]bool)
 	for _, file := range pkg.Files {
