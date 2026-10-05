@@ -35,6 +35,11 @@ go 1.27.0
 
 require github.com/tjbdwanghaibo/roost-core $core_pin
 EOF
+# ROOST_CORE_DIR=<checkout> replaces the pin with a local roost-core checkout,
+# for a configdata change that lands with the generator before the pin moves.
+if [ -n "${ROOST_CORE_DIR:-}" ]; then
+	echo "replace github.com/tjbdwanghaibo/roost-core => $ROOST_CORE_DIR" >> "$work/go.mod"
+fi
 
 cd "$work"
 GOWORK=off GOFLAGS=-mod=mod go mod tidy >/dev/null

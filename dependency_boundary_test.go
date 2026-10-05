@@ -167,7 +167,9 @@ func moduleLayer(rel string) string {
 //	core     纯运行时，不知道装配层与工具的存在
 //	kit      装配层，可以用 core；不碰生成器
 //	codegen  生成器，独立于它生成的那个运行时（这也是 demo 用 .tmpl 的原因之一）；
-//	         可以读 demo 的模板
+//	         可以读 demo 的模板；唯一例外是 configdata/rules（配置规则的声明与
+//	         检查只有一份，加载层与 tablegen 共用，B10），它必须保持只依赖标准库
+//	         （TestSharedConfigRulesStayALeaf）
 //	demo     模板目录，除 embed 声明外没有可编译代码
 func layerViolation(layer, name string) string {
 	if name != modulePath && !strings.HasPrefix(name, modulePath+"/") {
@@ -186,7 +188,7 @@ func layerViolation(layer, name string) string {
 		}
 		return "装配层不得 import " + target + " 层"
 	case "codegen":
-		if target == "demo" {
+		if target == "demo" || name == sharedConfigRules {
 			return ""
 		}
 		return "生成器保持独立于它生成的运行时，不得 import " + target + " 层"
@@ -194,6 +196,38 @@ func layerViolation(layer, name string) string {
 		return ""
 	}
 	return ""
+}
+
+// sharedConfigRules is the one core package the generators may import: the
+// config rule declaration and check that configdata enforces on every load
+// and tablegen runs early (B10). The exception holds only while it is a leaf.
+const sharedConfigRules = modulePath + "/configdata/rules"
+
+// TestSharedConfigRulesStayALeaf keeps the codegen exception honest: the
+// shared rules package imports the standard library only, so letting the
+// generator import it does not pull the runtime in.
+func TestSharedConfigRulesStayALeaf(t *testing.T) {
+	dir := strings.TrimPrefix(sharedConfigRules, modulePath+"/")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) != ".go" {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, spec := range file.Imports {
+			name, _ := strconv.Unquote(spec.Path.Value)
+			if first, _, _ := strings.Cut(name, "/"); strings.Contains(first, ".") {
+				t.Errorf("%s imports %s; configdata/rules must stay standard-library only (the codegen layer imports it)", path, name)
+			}
+		}
+	}
 }
 
 func forbiddenCoreImport(name string) bool {
@@ -220,6 +254,7 @@ func TestLayerViolation(t *testing.T) {
 		// 生成器不依赖它生成的那个运行时。
 		{"codegen", core + "/entity"},
 		{"codegen", core + "/kit/mods"},
+		{"codegen", core + "/configdata"}, // only configdata/rules is shared
 	}
 	for _, item := range refused {
 		if layerViolation(item.layer, item.imported) == "" {
@@ -235,6 +270,7 @@ func TestLayerViolation(t *testing.T) {
 		{"kit", core + "/kit/service/mail"},
 		{"codegen", core + "/demo"},
 		{"codegen", core + "/codegen/internal/roost"},
+		{"codegen", core + "/configdata/rules"},
 		{"codegen", "gopkg.in/yaml.v3"},
 		{"demo", core + "/entity"},
 	}

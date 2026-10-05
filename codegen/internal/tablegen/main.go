@@ -12,7 +12,6 @@ import (
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
@@ -31,6 +30,7 @@ import (
 	"text/template"
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/project"
+	"github.com/tjbdwanghaibo/roost-core/configdata/rules"
 )
 
 const ()
@@ -65,7 +65,9 @@ type Field struct {
 	Unique   bool
 	Min      string
 	Ref      string
-	Parser   string
+	// Enum lists the allowed values (tag enum:"a|b|c").
+	Enum   []string
+	Parser string
 }
 
 // DefaultMetaDir is where a business project keeps its table meta files;
@@ -283,6 +285,7 @@ func parseMetaFile(root string, module string, path string) ([]Meta, error) {
 					Unique:   tag.Get("unique") == "true",
 					Min:      tag.Get("min"),
 					Ref:      tag.Get("ref"),
+					Enum:     splitEnum(tag.Get("enum")),
 					Parser:   tag.Get("parser"),
 				})
 			}
@@ -480,12 +483,12 @@ func safeTableJSONName(name string) bool {
 }
 
 // checkJSONFiles is `-json <dir> -check`: the JSON a server will load is held
-// to the rules the schema declares, the same ones readCSVRecords enforces on
-// the sheet — a required column present and not null, unique / key values not
-// repeated, min respected. RR-20261005-NC-75: it used to stop at "is valid
-// JSON", so an operator who edited configs/data directly (the documented hot
-// reload path) had nothing that checked the schema before reload; configdata
-// itself only sees typed rows and cannot tell a missing column from zero.
+// to the rules the schema declares — the same []rules.Rule the generated
+// loader hands configdata (metaRules), checked by the same rules.Check the
+// loader runs on every load and reload (B10). It is early feedback only: the
+// loader enforces the rules whether or not anybody ran -check. ref needs the
+// typed tables and is left to the loader. RR-20261005-NC-75: -check used to
+// stop at "is valid JSON".
 func checkJSONFiles(metas []Meta, jsonDir string) error {
 	for _, meta := range metas {
 		path := filepath.Join(jsonDir, meta.JSON)
@@ -493,58 +496,79 @@ func checkJSONFiles(metas []Meta, jsonDir string) error {
 		if err != nil {
 			return err
 		}
-		rows, err := jsonRows(raw, meta.Kind)
-		if err != nil {
+		if err := checkDocument(meta, raw); err != nil {
 			return fmt.Errorf("check %s: %w", path, err)
-		}
-		file := filepath.Base(path)
-		for index, row := range rows {
-			for _, field := range meta.Fields {
-				if !field.Required {
-					continue
-				}
-				if value, ok := row[field.JSON]; !ok || value == nil {
-					return fmt.Errorf("check %s: data row %d: required field %s is missing or null", file, index+1, field.JSON)
-				}
-			}
-		}
-		if err := validateRows(file, meta, rows); err != nil {
-			return fmt.Errorf("check %w", err)
 		}
 	}
 	return nil
 }
 
-// jsonRows reads a table file the way configdata does — a list of rows, or
-// one object holding the list under rows / records / data — and an object
-// file as its single row.
-func jsonRows(raw []byte, kind TableKind) ([]map[string]any, error) {
-	if kind != KindTable {
-		var object map[string]any
-		if err := json.Unmarshal(raw, &object); err != nil {
-			return nil, err
+// checkDocument reads one data file the way configdata does (rules.Document:
+// the rows, or the value of a single rows / records / data wrapper) and runs
+// the meta's rules on it.
+func checkDocument(meta Meta, raw []byte) error {
+	payload, err := rules.Document(raw)
+	if err != nil {
+		return err
+	}
+	rows, err := rules.Rows(payload, meta.Kind != KindTable)
+	if err != nil {
+		if meta.Kind == KindTable {
+			return fmt.Errorf("a table file must be a list of rows, or one object holding it under rows / records / data: %w", err)
 		}
-		return []map[string]any{object}, nil
+		return err
 	}
-	var rows []map[string]any
-	if err := json.Unmarshal(raw, &rows); err == nil {
-		return rows, nil
+	if meta.Kind != KindTable {
+		return rules.CheckObject(meta.Name, rows[0], metaRules(meta))
 	}
-	var wrapper map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &wrapper); err != nil {
-		return nil, err
-	}
-	if len(wrapper) == 1 {
-		for _, key := range []string{"rows", "records", "data"} {
-			if inner, ok := wrapper[key]; ok {
-				if err := json.Unmarshal(inner, &rows); err != nil {
-					return nil, err
-				}
-				return rows, nil
+	return checkRows(meta, rows)
+}
+
+// checkRows runs the meta's rules on table rows, naming a row by its key.
+func checkRows(meta Meta, rows []map[string]json.RawMessage) error {
+	var keyOf func(int) string
+	if meta.Kind == KindTable {
+		keyJSON := keyFieldInfo(meta).JSON
+		keyOf = func(i int) string {
+			if value, ok := rules.Lookup(rows[i], keyJSON); ok {
+				return rules.Canonical(value)
 			}
+			return ""
 		}
 	}
-	return nil, errors.New("a table file must be a list of rows, or one object holding it under rows / records / data")
+	return rules.Check(meta.Name, rows, metaRules(meta), keyOf)
+}
+
+// metaRules is the one translation of a meta's tags into rules. It feeds the
+// CSV conversion, -check and the Rules literal of the generated loader, so a
+// tag edited in the schema changes all three on the next generate (B10). The
+// key of a table is unique even without the tag (configdata rejects a
+// duplicate key anyway; saying so here reports it as a rule violation).
+func metaRules(meta Meta) []rules.Rule {
+	var out []rules.Rule
+	for _, field := range meta.Fields {
+		rule := rules.Rule{
+			Field:    field.JSON,
+			Required: field.Required,
+			Min:      field.Min,
+			Enum:     field.Enum,
+		}
+		if meta.Kind == KindTable {
+			rule.Unique = field.Unique || field.Name == keyFieldInfo(meta).Name
+			rule.Ref = field.Ref
+		}
+		if rule.Required || rule.Unique || rule.Min != "" || rule.Ref != "" || len(rule.Enum) > 0 {
+			out = append(out, rule)
+		}
+	}
+	return out
+}
+
+func splitEnum(tag string) []string {
+	if tag == "" {
+		return nil
+	}
+	return strings.Split(tag, "|")
 }
 
 func readCSVRecords(path string, meta Meta) ([]map[string]any, error) {
@@ -592,69 +616,20 @@ func readCSVRecords(path string, meta Meta) ([]map[string]any, error) {
 		}
 		out = append(out, row)
 	}
-	if err := validateRows(filepath.Base(path), meta, out); err != nil {
+	// The rows are checked as the JSON they are about to become, by the same
+	// rules and checker the loader uses (an empty required cell is null).
+	raw, err := json.Marshal(out)
+	if err != nil {
 		return nil, err
 	}
-	return out, nil
-}
-
-// validateRows enforces the constraints a table declares in its tags at
-// generation time, where the CSV author can still fix them. Until it existed,
-// `unique="true"` and `min=` were read from the tags and printed into the rule
-// row of the CSV — and enforced by nothing: a duplicate id was written into
-// the JSON and the generated loader silently kept the last row (U-0033).
-// `ref=` names another table and is not checked here; that needs every
-// table loaded and is the generated loader's job (its ValidateTable, see
-// resolveRefs, RR-20261005-NC-75).
-func validateRows(file string, meta Meta, rows []map[string]any) error {
-	for _, field := range meta.Fields {
-		unique := field.Unique || (meta.Kind == KindTable && field.Name == meta.Key)
-		if unique {
-			seen := make(map[string]int, len(rows))
-			for index, row := range rows {
-				value, ok := row[field.JSON]
-				if !ok {
-					continue
-				}
-				key := fmt.Sprint(value)
-				if first, dup := seen[key]; dup {
-					what := "unique"
-					if field.Name == meta.Key {
-						what = "key"
-					}
-					return fmt.Errorf("%s %s field %s repeats value %q in data rows %d and %d", file, what, field.Name, key, first, index+1)
-				}
-				seen[key] = index + 1
-			}
-		}
-		if field.Min != "" {
-			minimum, err := strconv.ParseFloat(field.Min, 64)
-			if err != nil {
-				return fmt.Errorf("%s field %s has non-numeric min=%q", file, field.Name, field.Min)
-			}
-			for index, row := range rows {
-				value, ok := row[field.JSON]
-				if !ok {
-					continue
-				}
-				var number float64
-				switch v := value.(type) {
-				case int64:
-					number = float64(v)
-				case uint64:
-					number = float64(v)
-				case float64:
-					number = v
-				default:
-					continue
-				}
-				if number < minimum {
-					return fmt.Errorf("%s field %s value %v in data row %d is below min=%s", file, field.Name, value, index+1, field.Min)
-				}
-			}
-		}
+	rows, err := rules.Rows(raw, false)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	if err := checkRows(meta, rows); err != nil {
+		return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+	}
+	return out, nil
 }
 
 func csvDataStart(records [][]string, meta Meta) int {
@@ -674,7 +649,9 @@ func csvDataStart(records [][]string, meta Meta) int {
 func parseCell(value string, field Field) (any, error) {
 	if value == "" {
 		if field.Required {
-			return nil, fmt.Errorf("required field is empty")
+			// null, so the shared rule check reports the required column
+			// exactly as it would for an edited JSON file.
+			return nil, nil
 		}
 		return zeroValue(field.Type), nil
 	}
@@ -722,13 +699,19 @@ func generateGo(metas []Meta, outDir string, pkg string, force bool, stdout io.W
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}
-	refs, err := resolveRefs(metas)
-	if err != nil {
+	if err := resolveRefs(metas); err != nil {
 		return err
+	}
+	for _, meta := range metas {
+		for _, rule := range metaRules(meta) {
+			if err := rule.Validate(); err != nil {
+				return fmt.Errorf("%s %s: %w", meta.Kind, meta.Name, err)
+			}
+		}
 	}
 	var buf bytes.Buffer
 	tmpl := template.Must(template.New("go").Funcs(template.FuncMap{
-		"refs":       func(meta Meta) []refSpec { return refs[meta.Name] },
+		"rules":      func(meta Meta) []string { return ruleLiterals(metaRules(meta)) },
 		"upper":      firstUpper,
 		"quote":      strconv.Quote,
 		"keyType":    keyType,
@@ -785,39 +768,17 @@ var (
 func RegisterGeneratedConfigData(r *configdata.Registry) error {
 {{- range .Metas}}
 {{- if eq .Kind "table"}}
-{{- $meta := .}}
 	if err := configdata.RegisterTable(r, configdata.TableDef[{{keyType .}}, {{.Alias}}.{{.TypeName}}]{
 		Name: configdata.Name({{quote .Name}}),
 		File: {{quote .JSON}},
 		Key: func(v {{.Alias}}.{{.TypeName}}) {{keyType .}} { return v.{{keyField .}} },
-{{- with refs .}}
-		// ref= checks (RR-20261005-NC-75): every non-zero value must be a key
-		// of the target table, on every load and reload.
-		ValidateTable: func(ctx *configdata.BuildContext, table *configdata.Table[{{keyType $meta}}, {{$meta.Alias}}.{{$meta.TypeName}}]) error {
-{{- range $i, $ref := .}}
-			target{{$i}}, ok := configdata.TableFrom[{{$ref.TargetKeyType}}, {{$ref.TargetAlias}}.{{$ref.TargetType}}](ctx.Snapshot, configdata.Name({{quote $ref.Target}}))
-			if !ok {
-				return fmt.Errorf("field {{$ref.JSON}} references table {{$ref.Target}}, which is not loaded")
-			}
+{{- with rules .}}
+		// The schema tags' rules: configdata enforces them on every load and
+		// reload (an edited JSON file included); generate checks the same ones.
+		Rules: []configdata.FieldRule{
+{{- range .}}
+			{{.}},
 {{- end}}
-			for _, row := range table.Rows() {
-{{- range $i, $ref := .}}
-{{- if $ref.Pointer}}
-				if row.{{$ref.Field}} != nil {
-					if _, ok := target{{$i}}.Get(*row.{{$ref.Field}}); !ok {
-						return fmt.Errorf("row {{keyField $meta}}=%v: field {{$ref.JSON}} references missing {{$ref.Target}} key %v", row.{{keyField $meta}}, *row.{{$ref.Field}})
-					}
-				}
-{{- else}}
-				if row.{{$ref.Field}} != *new({{$ref.TargetKeyType}}) {
-					if _, ok := target{{$i}}.Get(row.{{$ref.Field}}); !ok {
-						return fmt.Errorf("row {{keyField $meta}}=%v: field {{$ref.JSON}} references missing {{$ref.Target}} key %v", row.{{keyField $meta}}, row.{{$ref.Field}})
-					}
-				}
-{{- end}}
-{{- end}}
-			}
-			return nil
 		},
 {{- end}}
 	}); err != nil {
@@ -827,6 +788,13 @@ func RegisterGeneratedConfigData(r *configdata.Registry) error {
 	if err := configdata.RegisterObject(r, configdata.ObjectDef[{{.Alias}}.{{.TypeName}}]{
 		Name: configdata.Name({{quote .Name}}),
 		File: {{quote .JSON}},
+{{- with rules .}}
+		Rules: []configdata.FieldRule{
+{{- range .}}
+			{{.}},
+{{- end}}
+		},
+{{- end}}
 	}); err != nil {
 		return err
 	}
@@ -853,13 +821,16 @@ func {{.TypeName}}TableFrom(snap *configdata.Snapshot) (*configdata.Table[{{keyT
 	return configdata.TableFrom[{{keyType .}}, {{.Alias}}.{{.TypeName}}](snap, configdata.Name({{quote .Name}}))
 }
 
+// {{.TypeName}}Table is the {{.Name}} table of the config snapshot pinned to the
+// current request (configdata.ActiveSnapshot). A table that is not loaded is
+// nil, and reading it is safe: Get reports false, Rows is empty.
+func {{.TypeName}}Table() *configdata.Table[{{keyType .}}, {{.Alias}}.{{.TypeName}}] {
+	table, _ := {{.TypeName}}TableFrom(configdata.ActiveSnapshot())
+	return table
+}
+
 func {{.TypeName}}By{{keyField .}}(id {{keyType .}}) ({{.Alias}}.{{.TypeName}}, bool) {
-	table, ok := {{.TypeName}}TableFrom(configdata.ActiveSnapshot())
-	if !ok {
-		var zero {{.Alias}}.{{.TypeName}}
-		return zero, false
-	}
-	return table.Get(id)
+	return {{.TypeName}}Table().Get(id)
 }
 {{else}}
 func {{.TypeName}}ConfigFrom(snap *configdata.Snapshot) ({{.Alias}}.{{.TypeName}}, bool) {
@@ -1009,53 +980,66 @@ func parseExpr(field Field, raw string) string {
 	}
 }
 
-// refSpec is one `ref:"<table>"` field resolved against the tables of this
-// run, for the generated loader's ValidateTable.
-type refSpec struct {
-	Field, JSON   string
-	Pointer       bool
-	Target        string
-	TargetAlias   string
-	TargetType    string
-	TargetKeyType string
-}
-
-// resolveRefs checks every ref= declaration and returns them per table name.
-// RR-20261005-NC-75: ref= was printed into the CSV rule row and enforced by
-// nothing — validateRows left it to "the generated loader", which never
-// checked it. A target must be a table of this run and the field's type its
-// key type; anything else is a schema error at generation time.
-func resolveRefs(metas []Meta) (map[string][]refSpec, error) {
+// resolveRefs checks every ref= declaration against the schema: the target
+// must be a table of this run and the field's type (pointer or not) its key
+// type. RR-20261005-NC-75: ref= used to be printed into the CSV rule row and
+// enforced by nothing. The data itself is checked by configdata on every load
+// (the Ref of the generated Rules).
+func resolveRefs(metas []Meta) error {
 	tables := make(map[string]Meta, len(metas))
 	for _, meta := range metas {
 		if meta.Kind == KindTable {
 			tables[meta.Name] = meta
 		}
 	}
-	out := make(map[string][]refSpec)
 	for _, meta := range metas {
 		for _, field := range meta.Fields {
 			if field.Ref == "" {
 				continue
 			}
 			if meta.Kind != KindTable {
-				return nil, fmt.Errorf("object %s field %s: ref is only checked on table rows", meta.Name, field.Name)
+				return fmt.Errorf("object %s field %s: ref is only checked on table rows", meta.Name, field.Name)
 			}
 			target, ok := tables[field.Ref]
 			if !ok {
-				return nil, fmt.Errorf("table %s field %s: ref target %q is not a table in this schema", meta.Name, field.Name, field.Ref)
+				return fmt.Errorf("table %s field %s: ref target %q is not a table in this schema", meta.Name, field.Name, field.Ref)
 			}
-			fieldType := strings.TrimPrefix(field.Type, "*")
-			if fieldType != keyType(target) {
-				return nil, fmt.Errorf("table %s field %s: ref type %s does not match %s key type %s", meta.Name, field.Name, field.Type, target.Name, keyType(target))
+			if fieldType := strings.TrimPrefix(field.Type, "*"); fieldType != keyType(target) {
+				return fmt.Errorf("table %s field %s: ref type %s does not match %s key type %s", meta.Name, field.Name, field.Type, target.Name, keyType(target))
 			}
-			out[meta.Name] = append(out[meta.Name], refSpec{
-				Field: field.Name, JSON: field.JSON, Pointer: strings.HasPrefix(field.Type, "*"),
-				Target: target.Name, TargetAlias: target.Alias, TargetType: target.TypeName, TargetKeyType: keyType(target),
-			})
 		}
 	}
-	return out, nil
+	return nil
+}
+
+// ruleLiterals renders rules as FieldRule composite-literal elements for the
+// generated loader, one per line: {Field: "level", Required: true, Min: "1"}.
+func ruleLiterals(declared []rules.Rule) []string {
+	out := make([]string, 0, len(declared))
+	for _, rule := range declared {
+		parts := []string{"Field: " + strconv.Quote(rule.Field)}
+		if rule.Required {
+			parts = append(parts, "Required: true")
+		}
+		if rule.Unique {
+			parts = append(parts, "Unique: true")
+		}
+		if rule.Min != "" {
+			parts = append(parts, "Min: "+strconv.Quote(rule.Min))
+		}
+		if rule.Ref != "" {
+			parts = append(parts, "Ref: "+strconv.Quote(rule.Ref))
+		}
+		if len(rule.Enum) > 0 {
+			quoted := make([]string, len(rule.Enum))
+			for i, value := range rule.Enum {
+				quoted[i] = strconv.Quote(value)
+			}
+			parts = append(parts, "Enum: []string{"+strings.Join(quoted, ", ")+"}")
+		}
+		out = append(out, "{"+strings.Join(parts, ", ")+"}")
+	}
+	return out
 }
 
 func keyType(meta Meta) string {
@@ -1113,23 +1097,26 @@ func fieldValues(fields []Field, value func(Field) string) []string {
 }
 
 func fieldRule(field Field) string {
-	var rules []string
+	var parts []string
 	if field.Required {
-		rules = append(rules, "required")
+		parts = append(parts, "required")
 	}
 	if field.Unique {
-		rules = append(rules, "unique")
+		parts = append(parts, "unique")
 	}
 	if field.Min != "" {
-		rules = append(rules, "min="+field.Min)
+		parts = append(parts, "min="+field.Min)
 	}
 	if field.Ref != "" {
-		rules = append(rules, "ref="+field.Ref)
+		parts = append(parts, "ref="+field.Ref)
+	}
+	if len(field.Enum) > 0 {
+		parts = append(parts, "enum="+strings.Join(field.Enum, "|"))
 	}
 	if field.Parser != "" {
-		rules = append(rules, "parser="+field.Parser)
+		parts = append(parts, "parser="+field.Parser)
 	}
-	return strings.Join(rules, ";")
+	return strings.Join(parts, ";")
 }
 
 func sameRow(a []string, b []string) bool {

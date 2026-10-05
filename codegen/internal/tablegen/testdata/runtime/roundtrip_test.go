@@ -86,3 +86,39 @@ func TestDanglingRefIsRejectedOnLoadAndReload(t *testing.T) {
 		})
 	}
 }
+
+// B10 (RR-20261005-NC-75 follow-up): the rules a schema declares in its tags
+// are enforced by the runtime on every load and reload, not only when the CSV
+// is converted. An operator who edits configs/data directly and reloads used
+// to get every one of these accepted: configdata only saw typed rows, so a
+// deleted required column read as zero (N07 H2e: spawn without template
+// reloaded fine and spawned template 0).
+func TestDeclaredRulesAreEnforcedOnReload(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		file, body string
+		want       []string
+	}{
+		"a required column is deleted": {"monster.json", `[{"id":10,"scene_id":1}]`, []string{"monster", "level", "required"}},
+		"a required value is null":     {"scene.json", `[{"id":1,"name":null},{"id":2,"name":"cave"}]`, []string{"scene", "name", "required"}},
+		"a value is below min":         {"monster.json", `[{"id":10,"scene_id":1,"level":0}]`, []string{"monster", "level", "min"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, snapshot, dir := load(t)
+			if err := os.WriteFile(filepath.Join(dir, testCase.file), []byte(testCase.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := store.Reload(context.Background())
+			if err == nil {
+				t.Fatalf("reload accepted %s", name)
+			}
+			for _, want := range testCase.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("reload error %q does not name %q", err, want)
+				}
+			}
+			if store.Current().Version != snapshot.Version {
+				t.Fatal("a refused reload moved the live snapshot")
+			}
+		})
+	}
+}

@@ -257,7 +257,7 @@ type GameProtocol interface {
 		Name: "cfggen", Aliases: []string{"configgen", "config-data"},
 		Summary:       "从 YAML schema 生成强类型配置表、对象、bean、索引和引用校验",
 		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/cfggen@latest -meta ./configs/schema/cfg.yaml -out ./configs/cfg -pkg cfg`,
-		Configuration: `schema 支持 package、beans、tables、globals；字段支持 type、key、index、ref、required、skipempty。运行时通过 RegisterGeneratedConfigData 注册到 roost-core/configdata。`,
+		Configuration: `schema 支持 package、beans、tables、globals；表字段支持 type、key、index、skipempty 与规则 required（键必须出现且不为 null）、unique、min、enum、ref。规则生成为 cfg 标签，由 roost-core/configdata 在每次加载 / reload 时检查（与 tablegen 同一个检查器），违反即整次拒绝并点名表 / 行 / 字段 / 规则。运行时通过 RegisterGeneratedConfigData 注册到 roost-core/configdata。`,
 		Example: `package: cfg
 tables:
   - name: monster
@@ -270,7 +270,7 @@ tables:
 		Name: "tablegen", Aliases: []string{"table", "csv"},
 		Summary:       "从 Go metadata 生成配置类型、CSV 模板并转换/校验 JSON",
 		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/tablegen@latest -meta ./configs/schema [-out dir] [-csv-template dir] [-csv dir -json dir] [-check] [-force]`,
-		Configuration: `类型使用 //roost:table name=<name> file=<csv> json=<json> key=<field> 或 //roost:object。字段通过 csv/json/title/required/unique/min/ref tag 描述：required/unique/min 在 CSV 转 JSON 时检查，ref 由生成的 loader 在每次加载 / reload 时检查（非零值必须是目标表的主键）。直接改 configs/data 下的 JSON 后，reload 前先跑 -json ./configs/data -check，它按同一套规则校验 JSON。`,
+		Configuration: `类型使用 //roost:table name=<name> file=<csv> json=<json> key=<field> 或 //roost:object。字段通过 csv/json/title 与规则 tag required/unique/min/enum（enum:"a|b"）/ref 描述。规则只有一份：生成的 loader 把它们交给 roost-core/configdata，在每次加载 / reload 时对 JSON 检查（required 能分清缺列与零值；ref 的非零值必须是目标表的主键），违反即整次拒绝、旧快照保持，错误点名表 / 行 / 字段 / 规则；CSV 转 JSON 与 -json ./configs/data -check 用同一个检查器提前反馈。生成的代码需要包含 configdata 规则的 roost-core。`,
 		Example: `//roost:table name=monster file=monster.csv json=monster.json key=ID
 type Monster struct {
     ID   int32  ` + "`csv:\"id\" json:\"id\" required:\"true\" unique:\"true\"`" + `

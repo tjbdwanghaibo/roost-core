@@ -8,6 +8,10 @@ Mirror现有适配器新增payload身份校验（NC-33/34，main未发版）：c
 
 RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登记之后、它又登记了本次清理清单之外的 hash（另一布局发布了新键）、此次Lua明确未写；同布局的并发首次创建、并发删除、记录到期不会返回它（RR-20261004-09，未发版）。先读回当前schema/业务意图再决定重试，不自动以旧全量值覆盖新布局。网络/Eval错误仍可能已应用，不能按明确拒绝处理。Delete也要求adapter支持现有Eval；存储格式保持，历史孤儿不自动清理。[用法和限制](bugfix/RR-20261004-NC-30.md)。
 
+## 2026-10-06 配置数据规则在加载层强制、热更失败可见（B10 / C2，main，未发版）
+
+tablegen 标签（`required` / `unique` / `min` / `enum` / `ref`）与 cfggen 的同名选项变成一组 `configdata.FieldRule`，由 configdata 在每次加载与 reload 时对原始 JSON 检查——直接改 `configs/data` 再 `gm.config.reload` 也绕不过，删掉一个 required 列会被点名拒绝（表 / 行 / 字段 / 规则），旧快照保持；`roost generate` 与 `tablegen -check` 用同一个检查器提前反馈。热更失败（含 build 阶段）与撤回都留 Warn 日志并计入 `configdata.reload.total{result=failed}` / `configdata.rollback.total{trigger}`，`reason` 不再作指标标签。新生成的代码需要下一个版本的 core。详见 [§10 配置数据](#配置数据规则热更与可见性)。[方案](feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md)
+
 ## 2026-10-05 配置严格读取与生产校验范围（A4 / C1，main，未发版）
 
 框架读取的布尔、时长、整数配置一律严格：`on` / `yes`、不带单位的时长（`ttl: 15`）、`8k` / `1.5` / `10s` 这样的整数，App 启动时（`ValidateServiceConfig`，任何 Mod Init 之前）点名报错，不再静默读成 false / 纳秒 / 0（取默认）。自己写 Mod 读配置时用 `app.ConfigBool` / `ConfigDuration` / `ConfigInt`，一次读多个键用 `app.NewConfigReader(cfg)` 读完再看 `Err()`。`env: production` 只校验有读取方的设置，原先要求的 `player.login_auth_required`、`player_protocol.rate_limit.enabled`、`save_load.wal.*` 等开关已删除——它们从来不控制任何行为，生成的游戏服接入层既没有按请求限流也只有演示凭据，上线前要自己接入。详见 [§10 配置写法与启动校验](#配置写法与启动校验)。[A4 方案](feature/REFACTOR-2026-10-05-strict-config-reads.md) · [NC-192](bugfix/RR-20261005-NC-192.md)
@@ -430,6 +434,14 @@ kit 的 Mod 在 Init 里也严格读取，直接装配 Mod、不经 App 启动�
 - admin_gateway：`admin_gateway.tokens` 非空且不是 dev 令牌；`local_ops` 目标没有自己的 `ops_token` 时 `default_ops_admin_token` 必须是非 dev 值。
 
 它**不**检查、也不代表已经开启：按请求限流、登录鉴权、WAL 持久级别（持久化由 `dataengine.*` 决定）、实例状态存储。RR-20261005-NC-192 之前这里要求的 `player.login_auth_required`、`player.login_secret`、`player_protocol.rate_limit.enabled`、`save_load.wal.*`、`instance.client_mode` / `state_store_required`、`account.ops_token`、`account.redis_required`、`global` / `match_group.redis_required` 没有任何代码读取，已删除；配置里留着也没有影响。生成的游戏服接入层只有演示凭据（`auth.go`），上线前换成真实校验；需要按请求限流时自己装配 `gateway.RateLimit` 或在接入层限流。
+
+### 配置数据：规则、热更与可见性
+
+业务配置表（`configs/data/*.json`）由 `configdata.Store` 加载成不可变快照；请求钉住准入时的那一代（`configdata.ActiveSnapshot` / 生成的 `XxxByID`、`XxxTable()`），同一请求内两次读不会跨代。
+
+- **规则只写一次，在加载层强制**（B10）：tablegen 的字段标签 `required:"true"`（JSON 键必须出现且不为 null）、`unique:"true"`、`min:"<n>"`、`enum:"a|b"`、`ref:"<table>"`，或 cfggen 的同名选项，生成为 `TableDef.Rules` / `cfg` 标签，configdata 在每次 Load / Reload 检查：required / unique / min / enum 查原始 JSON（缺列与零值分得清），ref 在全部表加载后查目标主键。违反任何一条整次拒绝、旧快照保持，错误是 `*configdata.RuleError`：`configdata: table spawn row 1 (key 1) field template: required: missing or null`。规则声明写错（字段不存在、min 用在字符串上）在注册时就失败。业务不需要再为“缺列 / 零值 / 悬空引用”写校验或防御代码；跨行、跨表的业务约束仍写 `TableDef.ValidateTable` / `Validate`（在规则之后运行，可假定引用完整）。
+- **热更顺序与可见性**（C2）：build（文件、规则、表校验）→ 监听者 `ValidateReload` → `BeforeApplyReload` → **发布** → lifecycle 事件 → `AfterApplyReload`。新的一代在 AfterApply 之前已发布；AfterApply 失败时整次撤回，发布到撤回之间准入的请求整个生命周期读被撤回的那一代。`Store.Rollback` 回到上一代，回滚前准入的请求读被回滚的那一代。不能接受的检查放进 Validate / BeforeApply。
+- **失败看得见**：每次 Load / Reload / Rollback 恰好报告一次 `ReloadOutcome`（`Store.OnReloadOutcome` 订阅），Store 写日志：成功 Info `config reload applied`，失败 Warn `config reload failed`（带 `stage` = build / validate / before_apply）、撤回 Warn `config reload reverted`（`stage=apply`）。kit 的 configdata Mod 据此计 `configdata.reload.total{result=ok|failed}`、`configdata.rollback.total{trigger=apply_failed|operator}` 与 gauge `configdata.version`；运维填的 reason 只进日志。版本号来自单调计数器，失败、撤回、DryRun 也占号，成功后版本变大但不一定 +1。
 
 协议定义保持单一来源，由 codegen 生成 pb、msgid、绑定和 manifest。变更遵循向后兼容：字段只新增、不复用编号；先发布兼容 reader，再发布 writer，最后清理旧字段。错误码 ID 空间由 `roost id` 检查，不在多个服务手工分配。
 

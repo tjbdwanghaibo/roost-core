@@ -6,7 +6,6 @@ import (
 
 	generated "{{MODULE}}/configs/generated"
 	"{{MODULE}}/game/scene"
-	"github.com/tjbdwanghaibo/roost-core/configdata"
 	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/spatial"
 )
@@ -21,7 +20,10 @@ import (
 //
 // The table is read on every Due rather than cached, so a hot reload of the
 // spawn data takes effect on the next tick. Reading config is a snapshot
-// lookup; caching it would buy nothing and cost the reload.
+// lookup; caching it would buy nothing and cost the reload. Nothing here
+// re-checks the rows: the schema's rules (template, count, ... required) are
+// enforced by configdata on every load and reload, so a row that reaches the
+// spawner is a row that passed them.
 type RefreshSystem struct {
 	mu       sync.Mutex
 	pathFind *PathFindSystem
@@ -57,10 +59,8 @@ func (s *RefreshSystem) Stop(coreentity.EntityDestroyReason) {
 // Due is the whole policy: for each row of the table, how many members are
 // missing, and of those how many have waited out the respawn delay.
 func (s *RefreshSystem) Due(now time.Time) []scene.SpawnRequest {
-	table, ok := generated.SpawnTableFrom(configdata.ActiveSnapshot())
-	if !ok {
-		return nil
-	}
+	// Not loaded reads as an empty table: nothing to spawn.
+	rows := generated.SpawnTable().Rows()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopped {
@@ -71,7 +71,7 @@ func (s *RefreshSystem) Due(now time.Time) []scene.SpawnRequest {
 		counts[group]++
 	}
 	var requests []scene.SpawnRequest
-	for _, row := range table.Rows() {
+	for _, row := range rows {
 		missing := row.Count - counts[row.ID]
 		for index := int32(0); index < missing; index++ {
 			// A slot that is missing because somebody died waits; a slot that
@@ -141,7 +141,7 @@ func (s *RefreshSystem) Died(id int64, now time.Time) {
 		return
 	}
 	delete(s.alive, id)
-	row, found := spawnRow(group)
+	row, found := generated.SpawnByID(group)
 	if !found {
 		return
 	}
@@ -156,15 +156,6 @@ func (s *RefreshSystem) Alive() []int64 {
 		ids = append(ids, id)
 	}
 	return ids
-}
-
-func spawnRow(group int32) (generated.SpawnCfg, bool) {
-	table, ok := generated.SpawnTableFrom(configdata.ActiveSnapshot())
-	if !ok {
-		var zero generated.SpawnCfg
-		return zero, false
-	}
-	return table.Get(group)
 }
 
 var _ scene.Refresh = (*RefreshSystem)(nil)

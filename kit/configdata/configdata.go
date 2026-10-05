@@ -54,21 +54,32 @@ func (m *Mod) Provide(r *app.Registry) error {
 		return fmt.Errorf("configdata mod: capability %q not found", mods.ModLifecycle)
 	}
 	m.store.SetLifecycleRegistry(m.lifecycle)
-	m.unregisters = append(m.unregisters, m.store.AddReloadListener(fconfigdata.ReloadHook{
-		HookName: "configdata.metrics",
-		AfterApply: func(_ context.Context, event fconfigdata.ReloadEvent) error {
-			m.metrics.IncCounter("configdata.reload.total", metrics.Labels{"result": "ok", "reason": event.Reason}, 1)
-			m.metrics.SetGauge("configdata.version", nil, int64(event.New.Version))
-			return nil
-		},
-		Rollback: func(_ context.Context, event fconfigdata.ReloadEvent, _ error) {
-			m.metrics.IncCounter("configdata.reload.total", metrics.Labels{"result": "rollback", "reason": event.Reason}, 1)
-			// The gauge was set to New.Version in AfterApply (or the apply
-			// was aborted before ours ran); the store is back on Old — the
-			// gauge must not keep advertising a rolled-back generation.
-			// Old is never nil here: nil-Old reloads skip rollback callbacks.
-			m.metrics.SetGauge("configdata.version", nil, int64(event.Old.Version))
-		},
+	// Metrics come from the store's outcome report, not from a ReloadHook: a
+	// reload that fails while building or validating never reaches a
+	// listener (N07 C-O5), and a listener's AfterApply counted "ok" for a
+	// reload a later listener then reverted. Each Load / Reload / Rollback is
+	// reported exactly once. Labels are low-cardinality only; the operator's
+	// free-text reason goes to the store's log line (C-O6).
+	m.unregisters = append(m.unregisters, m.store.OnReloadOutcome(func(outcome fconfigdata.ReloadOutcome) {
+		switch {
+		case outcome.Rollback && outcome.Err == nil:
+			m.metrics.IncCounter("configdata.rollback.total", metrics.Labels{"trigger": "operator"}, 1)
+		case outcome.Rollback:
+			// A failed operator rollback leaves the live generation alone;
+			// the store logs it.
+		case outcome.Err == nil:
+			m.metrics.IncCounter("configdata.reload.total", metrics.Labels{"result": "ok"}, 1)
+		default:
+			m.metrics.IncCounter("configdata.reload.total", metrics.Labels{"result": "failed"}, 1)
+			if outcome.Reverted() {
+				m.metrics.IncCounter("configdata.rollback.total", metrics.Labels{"trigger": "apply_failed"}, 1)
+			}
+		}
+		// The generation actually serving: after a reverted reload it is the
+		// old one again, after a failed one it never moved.
+		if outcome.Live != 0 {
+			m.metrics.SetGauge("configdata.version", nil, int64(outcome.Live))
+		}
 	}))
 	return r.Register(mods.ModConfigData, m.store)
 }

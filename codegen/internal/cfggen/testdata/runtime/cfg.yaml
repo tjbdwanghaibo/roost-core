@@ -31,12 +31,12 @@ tables:
     comment: monsters
     fields:
       - { name: id,       type: int32 }
-      - { name: name,     type: string }
+      - { name: name,     type: string, required: true }
       - { name: scene_id, type: int32, index: true }
       - { name: drop_id,  type: int32, ref: drop, required: true }
       # "range" is a Go keyword: the generated accessor parameters and struct
       # field must still compile.
-      - { name: range,    type: int32 }
+      - { name: range,    type: int32, min: 1 }
   - name: item
     key: code
     fields:

@@ -212,10 +212,29 @@ func TestCfggenRequiredAndSkipEmptyOptions(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", want, source)
 		}
 	}
-	// Prerequisites enforced.
-	if _, err := runCfggen(t, "tables:\n  - name: t\n    key: id\n    fields:\n      - { name: id, type: int32 }\n      - { name: x, type: int32, required: true }\n"); err == nil {
-		t.Fatal("required without ref accepted")
+	// B10: required stands on its own (presence), and unique / min / enum
+	// become cfg directives for configdata's shared rule check.
+	rules, err := runCfggen(t, "tables:\n  - name: t\n    key: id\n    fields:\n      - { name: id, type: int32 }\n      - { name: x, type: int32, required: true, unique: true, min: 1 }\n      - { name: kind, type: string, enum: [melee, ranged] }\n")
+	if err != nil {
+		t.Fatal(err)
 	}
+	for _, want := range []string{`cfg:"required,unique,min=1"`, `cfg:"enum=melee|ranged"`} {
+		if !strings.Contains(rules, want) {
+			t.Fatalf("missing %q in:\n%s", want, rules)
+		}
+	}
+	for label, field := range map[string]string{
+		"min on a string":   "{ name: x, type: string, min: 1 }",
+		"min not a number":  "{ name: x, type: int32, min: one }",
+		"enum on a float":   "{ name: x, type: float64, enum: [a] }",
+		"enum with a comma": `{ name: x, type: string, enum: ["a,b"] }`,
+		"unique on a slice": `{ name: x, type: "[]int32", unique: true }`,
+	} {
+		if _, err := runCfggen(t, "tables:\n  - name: t\n    key: id\n    fields:\n      - { name: id, type: int32 }\n      - "+field+"\n"); err == nil {
+			t.Errorf("%s accepted", label)
+		}
+	}
+	// Prerequisites enforced.
 	if _, err := runCfggen(t, "tables:\n  - name: t\n    key: id\n    fields:\n      - { name: id, type: int32 }\n      - { name: x, type: int32, skipempty: true }\n"); err == nil {
 		t.Fatal("skipempty without index accepted")
 	}

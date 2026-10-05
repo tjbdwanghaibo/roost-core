@@ -440,7 +440,7 @@ sameScene := generated.MonsterBySceneID(snap, 7)
 world, _ := generated.WorldFrom(snap)
 ```
 
-完整类型系统、bean、ref/index/required/skipempty 和校验规则见 [CFGGEN_META.zh-CN.md](CFGGEN_META.zh-CN.md)。
+完整类型系统、bean、index/skipempty 与规则（required / unique / min / enum / ref）见 [CFGGEN_META.zh-CN.md](CFGGEN_META.zh-CN.md)。规则由 configdata 在每次加载 / reload 时检查，与 tablegen 的标签走同一个检查器（§9）。
 
 ## 9. tablegen：Go metadata + CSV
 
@@ -469,9 +469,9 @@ go run .../cmd/tablegen@latest \
   -meta ./configs/schema -json ./configs/data -check
 ```
 
-`-check` 按 schema 规则校验 JSON：required 列必须出现且不为 null，unique / 主键不重复，min 不越界（与 CSV 转换同一套规则）；直接改 `configs/data` 后、reload 之前跑它（RR-20261005-NC-75）。`ref:"<table>"` 由生成的 loader 在每次加载 / reload 时检查：非零值必须是目标表的主键，目标必须是同一 schema 里的表、字段类型等于它的主键类型，否则生成失败。运行时不检查 required 是否出现（configdata 分不清缺列与零值）。
+**规则只有一份，由运行时加载层强制**（B10，[方案](../../docs/feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md)）。字段标签 `required:"true"`（键必须出现且不为 null）、`unique:"true"`（主键隐含）、`min:"<n>"`、`enum:"a|b|c"`、`ref:"<table>"`（非零值必须是目标表的主键；同时写 required 时零值也要是）被翻译成一组 `configdata.FieldRule`，写进生成的 loader（`TableDef.Rules` / `ObjectDef.Rules`），configdata 在每次加载与 reload 时对 JSON 原样检查——直接改 `configs/data` 再 reload 也绕不过；违反即整次拒绝、旧快照保持，错误形如 `configdata: table spawn row 1 (key 1) field template: required: missing or null`。CSV 转 JSON 与 `-check` 用同一组规则、同一个检查器（`configdata/rules`）提前反馈：改一个标签，`roost generate` 后两处一起变。ref 的目标必须是同一 schema 里的表、字段类型等于它的主键类型，否则生成失败；ref 的数据只在加载时查（要全部表）。生成的代码需要包含 `configdata.FieldRule` 的 roost-core（v1.20.2 之后的版本）。
 
-CSV 前四行依次为字段名、标题、类型和规则；转换会校验 required、数字格式等并生成 `_manifest.json`。`cfggen` 适合 YAML schema 单一来源，`tablegen` 适合已有 Go 类型和策划 CSV 流程，两者通常二选一。
+CSV 前四行依次为字段名、标题、类型和规则；转换会校验规则、数字格式等并生成 `_manifest.json`（空的 required 单元格按 null 报 required）。每张表另生成 `<Type>Table()`（当前请求钉住的快照里的表，未加载时为 nil、读它安全）与 `<Type>By<Key>(id)`。`cfggen` 适合 YAML schema 单一来源，`tablegen` 适合已有 Go 类型和策划 CSV 流程，两者通常二选一。
 
 ### 9.1 `_manifest.json` 与 JSON 退役
 

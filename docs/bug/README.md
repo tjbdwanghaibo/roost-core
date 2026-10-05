@@ -134,7 +134,7 @@
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261005-NC-75](RR-20261005-NC-75.md) | P2 tablegen `ref=` 哪里都不查；`-check` 不按 schema 校验 JSON | ref / -check 已修复、声明场景验证，未发版；运行时 required 待决定 |
+| [RR-20261005-NC-75](RR-20261005-NC-75.md) | P2 tablegen `ref=` 哪里都不查；`-check` 不按 schema 校验 JSON | ref / -check 已修复、声明场景验证，未发版；运行时 required 已由 [B10](../feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md) 实施（方案 A，未发版） |
 | [RR-20261005-NC-74](RR-20261005-NC-74.md) | P3 dev-run 的 `.dev/` 与 `data/wal` 被当成应用输入，generate / sync 报 inputs changed | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-73](RR-20261005-NC-73.md) | P3 `roost id` / `add errcode` 漏别名导入定义、把注释算成占用 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-72](RR-20261005-NC-72.md) | P3 `roost help cfggen` 输出到 `configs/generated`，与 tablegen 同包重复声明 | 已修复、声明场景验证，未发版 |

@@ -20,6 +20,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/configdata"
@@ -131,6 +132,27 @@ func TestRequiredFieldIsEnforcedByTheRuntime(t *testing.T) {
 	}
 	if _, err := store.Reload(context.Background()); err == nil {
 		t.Fatal("reload accepted a monster with no drop_id although the field is required")
+	}
+}
+
+// B10: required no longer needs a ref (the key must be present and not
+// null), and min is enforced on reload — by the same configdata rule check
+// tablegen's tags get.
+func TestFieldRulesAreEnforcedOnReload(t *testing.T) {
+	for body, want := range map[string]string{
+		`[{"id":1,"scene_id":7,"drop_id":100,"range":5}]`:               "field name: required",
+		`[{"id":1,"name":"wolf","scene_id":7,"drop_id":100,"range":0}]`: "field range: min",
+	} {
+		store, snapshot, dir := load(t)
+		if err := os.WriteFile(filepath.Join(dir, "monster.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Reload(context.Background()); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("reload of %s: err = %v, want %q", body, err, want)
+		}
+		if store.Current() != snapshot {
+			t.Fatal("a rejected reload moved the live snapshot")
+		}
 	}
 }
 

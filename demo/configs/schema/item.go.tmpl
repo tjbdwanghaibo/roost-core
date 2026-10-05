@@ -7,8 +7,11 @@ package schema
 // generated.ItemByID(id) off the snapshot pinned to the current request.
 //
 // The csv tag is the column, title is the human header row, and the rules
-// (required / unique) are enforced when the CSV is converted, so bad data
-// fails `make generate`, not a player's request.
+// (required / unique / min / enum / ref) are enforced twice from this one
+// declaration: when the CSV is converted, so bad data fails `make generate`;
+// and by configdata on every load and reload, so a hand-edited
+// configs/data/item.json is refused by name instead of reaching a player's
+// request.
 //
 //roost:table name=item key=ID
 type Item struct {

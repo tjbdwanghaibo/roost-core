@@ -420,7 +420,9 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 			Description: "reload config data in THIS process: {reason?}. Rebuilds every table from the JSON under configs/data " +
 				"(config_data.dir), which is also how a kill switch takes effect: edit configs/data/feature_flag.json, " +
 				"or in a checkout edit configs/table/feature_flag.csv and run `roost generate` first — the reload never reads the CSV. " +
-				"A table that fails to load or validate leaves the previous snapshot in place.",
+				"The schema's rules (required / unique / min / enum / ref) are checked on the JSON as it is: a violation is refused, " +
+				"names table / row / field / rule, and leaves the previous snapshot in place — as does any table that fails to load. " +
+				"Failed and reverted reloads are logged and counted (configdata.reload.total{result=failed}).",
 			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
 				payload, err := admin.DecodePayload[gmConfigReloadPayload](command)
 				if err != nil {

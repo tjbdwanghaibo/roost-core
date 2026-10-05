@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/configdata/rules"
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 	"github.com/tjbdwanghaibo/roost-core/lifecycle"
 )
@@ -364,6 +366,10 @@ func MustCustomFrom[V any](snap *Snapshot, name Name) V {
 type tableDef interface {
 	name() Name
 	file() string
+	// declare checks the definition itself at registration (rule fields that
+	// do not exist, min on a string, ...), so a mistyped rule fails at
+	// startup instead of silently never running.
+	declare() error
 	load(*BuildContext) (any, error)
 	validate(*BuildContext, any) error
 }
@@ -371,6 +377,7 @@ type tableDef interface {
 type objectDef interface {
 	name() Name
 	file() string
+	declare() error
 	load(*BuildContext) (any, error)
 	validate(*BuildContext, any) error
 }
@@ -398,13 +405,28 @@ type TableDef[K comparable, V any] struct {
 	// Validate runs once per row after every table and object is loaded.
 	Validate func(*BuildContext, V) error
 	// ValidateTable runs once per table before the row loop — the place for
-	// whole-table invariants (reference target existence, row-count bounds)
+	// whole-table invariants (row-count bounds, cross-row business checks)
 	// that must fire even when the table is empty.
 	ValidateTable func(*BuildContext, *Table[K, V]) error
+	// Rules are the declared column rules (required / unique / min / enum /
+	// ref), enforced on every Load and Reload — the one place they are
+	// enforced; generators only check the same rules early (B10). required /
+	// unique / min / enum are checked on the raw JSON rows, so a deleted
+	// column is told apart from a zero; ref is checked after every table is
+	// loaded, against the target's keys. A violation rejects the whole load
+	// and names table, row, field and rule (*RuleError).
+	Rules []FieldRule
 }
 
 func (d TableDef[K, V]) name() Name   { return d.Name }
 func (d TableDef[K, V]) file() string { return d.File }
+
+func (d TableDef[K, V]) declare() error {
+	if _, err := resolveRules[V](d.Rules, false); err != nil {
+		return fmt.Errorf("configdata: table %s: %w", d.Name, err)
+	}
+	return nil
+}
 
 func (d TableDef[K, V]) load(ctx *BuildContext) (any, error) {
 	if d.Name == "" {
@@ -417,19 +439,33 @@ func (d TableDef[K, V]) load(ctx *BuildContext) (any, error) {
 		return nil, fmt.Errorf("configdata: table %s key func is nil", d.Name)
 	}
 	var rows []V
-	if err := readJSON(filepath.Join(ctx.Dir, d.File), &rows, ctx.StrictJSON); err != nil {
+	payload, err := readJSON(filepath.Join(ctx.Dir, d.File), &rows, ctx.StrictJSON)
+	if err != nil {
 		return nil, fmt.Errorf("configdata: load table %s: %w", d.Name, err)
+	}
+	if len(d.Rules) > 0 {
+		rawRows, err := rules.Rows(payload, false)
+		if err != nil {
+			return nil, fmt.Errorf("configdata: load table %s: %w", d.Name, err)
+		}
+		keyOf := func(i int) string { return fmt.Sprint(d.Key(rows[i])) }
+		if err := rules.Check(string(d.Name), rawRows, d.Rules, keyOf); err != nil {
+			return nil, fmt.Errorf("configdata: %w", err)
+		}
 	}
 	return newTable(d, rows)
 }
 
 func (d TableDef[K, V]) validate(ctx *BuildContext, raw any) error {
-	if d.Validate == nil && d.ValidateTable == nil {
+	if d.Validate == nil && d.ValidateTable == nil && !hasRef(d.Rules) {
 		return nil
 	}
 	table, ok := raw.(*Table[K, V])
 	if !ok {
 		return fmt.Errorf("configdata: table %s type mismatch", d.Name)
+	}
+	if err := checkRefs(ctx, table, d.Key, d.Rules); err != nil {
+		return fmt.Errorf("configdata: %w", err)
 	}
 	if d.ValidateTable != nil {
 		if err := d.ValidateTable(ctx, table); err != nil {
@@ -452,10 +488,21 @@ type ObjectDef[V any] struct {
 	Name     Name
 	File     string
 	Validate func(*BuildContext, V) error
+	// Rules are the declared field rules (required / min / enum), checked on
+	// the raw JSON object on every Load and Reload, like TableDef.Rules.
+	// unique and ref do not apply to a single object.
+	Rules []FieldRule
 }
 
 func (d ObjectDef[V]) name() Name   { return d.Name }
 func (d ObjectDef[V]) file() string { return d.File }
+
+func (d ObjectDef[V]) declare() error {
+	if _, err := resolveRules[V](d.Rules, true); err != nil {
+		return fmt.Errorf("configdata: object %s: %w", d.Name, err)
+	}
+	return nil
+}
 
 func (d ObjectDef[V]) load(ctx *BuildContext) (any, error) {
 	if d.Name == "" {
@@ -465,8 +512,18 @@ func (d ObjectDef[V]) load(ctx *BuildContext) (any, error) {
 		return nil, fmt.Errorf("configdata: object %s file is empty", d.Name)
 	}
 	var obj V
-	if err := readJSON(filepath.Join(ctx.Dir, d.File), &obj, ctx.StrictJSON); err != nil {
+	payload, err := readJSON(filepath.Join(ctx.Dir, d.File), &obj, ctx.StrictJSON)
+	if err != nil {
 		return nil, fmt.Errorf("configdata: load object %s: %w", d.Name, err)
+	}
+	if len(d.Rules) > 0 {
+		rawRows, err := rules.Rows(payload, true)
+		if err != nil {
+			return nil, fmt.Errorf("configdata: load object %s: %w", d.Name, err)
+		}
+		if err := rules.CheckObject(string(d.Name), rawRows[0], d.Rules); err != nil {
+			return nil, fmt.Errorf("configdata: %w", err)
+		}
 	}
 	return obj, nil
 }
@@ -540,6 +597,9 @@ func (r *Registry) RegisterTable(def tableDef) error {
 	if def == nil {
 		return errors.New("configdata: nil table def")
 	}
+	if err := def.declare(); err != nil {
+		return err
+	}
 	return r.register(def.name(), "table", func() {
 		r.tables = append(r.tables, def)
 	})
@@ -548,6 +608,9 @@ func (r *Registry) RegisterTable(def tableDef) error {
 func (r *Registry) RegisterObject(def objectDef) error {
 	if def == nil {
 		return errors.New("configdata: nil object def")
+	}
+	if err := def.declare(); err != nil {
+		return err
 	}
 	return r.register(def.name(), "object", func() {
 		r.objects = append(r.objects, def)
@@ -705,6 +768,12 @@ type Store struct {
 	listMu   sync.RWMutex
 	listener []reloadListenerEntry
 	nextID   uint64
+	observer []reloadObserverEntry
+}
+
+type reloadObserverEntry struct {
+	id       uint64
+	observer func(ReloadOutcome)
 }
 
 type reloadListenerEntry struct {
@@ -790,17 +859,139 @@ func (s *Store) ReloadWithReason(ctx context.Context, reason string) (*Snapshot,
 	// reverted: a failed or rolled-back generation burns its number, so a
 	// number handed to listeners (or to the metrics gauge) is never reused
 	// for different content.
-	snap, err := s.build(ctx, s.version.Add(1))
+	outcome := ReloadOutcome{Reason: reason, Version: s.version.Add(1)}
+	snap, err := s.build(ctx, outcome.Version)
+	if err != nil {
+		outcome.Stage = ReloadStageBuild
+	} else {
+		outcome.Stage, err = s.commit(ctx, commitRequest{
+			reason: reason, emitName: "configdata",
+			old: old, target: snap, started: started,
+		})
+	}
+	s.report(outcome, err, started)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.commit(ctx, commitRequest{
-		reason: reason, emitName: "configdata",
-		old: old, target: snap, started: started,
-	}); err != nil {
-		return nil, err
-	}
 	return snap, nil
+}
+
+// ReloadStage names where a Load / Reload / Rollback stopped.
+type ReloadStage string
+
+const (
+	// ReloadStageBuild: reading the files, the declared rules, a table /
+	// object / custom validation or build (for a Rollback: there was no
+	// previous generation). Nothing was published.
+	ReloadStageBuild ReloadStage = "build"
+	// ReloadStageValidate: a listener's ValidateReload refused. Nothing was
+	// published.
+	ReloadStageValidate ReloadStage = "validate"
+	// ReloadStageBeforeApply: a listener's BeforeApplyReload failed. Nothing
+	// was published; the prepared listeners were rolled back.
+	ReloadStageBeforeApply ReloadStage = "before_apply"
+	// ReloadStageApply: the generation WAS published, then the lifecycle emit
+	// or an AfterApplyReload failed and it was taken back. Requests admitted
+	// in between keep reading it for their whole lifetime (see the package
+	// contract).
+	ReloadStageApply ReloadStage = "apply"
+)
+
+// ReloadOutcome is how one Load / Reload / Rollback ended. The Store reports
+// it exactly once per attempt — including the attempts that fail before any
+// ReloadListener runs, which listeners never see (N07 C-O5). DryRun is not
+// reported: it publishes nothing.
+type ReloadOutcome struct {
+	// Rollback is true for Store.Rollback, false for Load / Reload.
+	Rollback bool
+	// Reason is the caller's reason (free text: log it, never use it as a
+	// metric label).
+	Reason string
+	// Version is the candidate generation; for a Rollback, the generation it
+	// went back to (0 when there was none).
+	Version uint64
+	// Live is the generation serving after the attempt (0 before the first
+	// successful load).
+	Live uint64
+	// Err is nil on success.
+	Err error
+	// Stage is where it failed; "" on success.
+	Stage ReloadStage
+	// Elapsed is the time from start to settled.
+	Elapsed time.Duration
+}
+
+// Reverted reports whether the candidate had been published and was then
+// taken back: requests admitted in between read the reverted generation.
+func (o ReloadOutcome) Reverted() bool { return o.Err != nil && o.Stage == ReloadStageApply }
+
+// OnReloadOutcome subscribes fn to every Load / Reload / Rollback outcome and
+// returns the unsubscribe. fn runs while the store is still held, in commit
+// order (so a gauge set from it never goes backwards); it must be quick and
+// must not call Load / Reload / Rollback on this store. A panic in fn is
+// contained.
+func (s *Store) OnReloadOutcome(fn func(ReloadOutcome)) func() {
+	if s == nil || fn == nil {
+		return func() {}
+	}
+	s.listMu.Lock()
+	s.nextID++
+	id := s.nextID
+	s.observer = append(s.observer, reloadObserverEntry{id: id, observer: fn})
+	s.listMu.Unlock()
+	return func() {
+		s.listMu.Lock()
+		defer s.listMu.Unlock()
+		for i, item := range s.observer {
+			if item.id == id {
+				s.observer = append(s.observer[:i], s.observer[i+1:]...)
+				return
+			}
+		}
+	}
+}
+
+// report logs one outcome and hands it to the observers. Called with s.mu
+// held, once per Load / Reload / Rollback (C2: a failed or reverted reload
+// used to leave no trace outside the caller's error).
+func (s *Store) report(outcome ReloadOutcome, err error, started time.Time) {
+	if err == nil {
+		outcome.Stage = ""
+	}
+	outcome.Err = err
+	outcome.Elapsed = time.Since(started)
+	if live := s.current.Load(); live != nil {
+		outcome.Live = live.Version
+	}
+	op := "reload"
+	if outcome.Rollback {
+		op = "rollback"
+	}
+	attrs := []any{"op", op, "reason", outcome.Reason, "version", outcome.Version, "live", outcome.Live, "elapsed", outcome.Elapsed}
+	switch {
+	case err == nil && outcome.Rollback:
+		slog.Info("config rolled back", attrs...)
+	case err == nil:
+		slog.Info("config reload applied", attrs...)
+	case outcome.Reverted():
+		slog.Warn("config reload reverted: the generation was published and taken back; requests admitted in between read it",
+			append(attrs, "stage", string(outcome.Stage), "error", err)...)
+	default:
+		slog.Warn("config reload failed: the live generation is unchanged",
+			append(attrs, "stage", string(outcome.Stage), "error", err)...)
+	}
+	s.listMu.RLock()
+	observers := make([]func(ReloadOutcome), 0, len(s.observer))
+	for _, item := range s.observer {
+		observers = append(observers, item.observer)
+	}
+	s.listMu.RUnlock()
+	for _, observe := range observers {
+		_ = safeReloadCall("outcome", "observer", func() error {
+			observe(outcome)
+			return nil
+		})
+	}
 }
 
 // commitRequest carries one snapshot publication (reload or rollback).
@@ -835,19 +1026,19 @@ var publishMu sync.Mutex
 //   - The store state (current/version/defaultStore/fctx) is applied and
 //     reverted as one unit under s.mu; no listener runs between the
 //     individual stores.
-func (s *Store) commit(ctx context.Context, req commitRequest) error {
+func (s *Store) commit(ctx context.Context, req commitRequest) (ReloadStage, error) {
 	event := ReloadEvent{Reason: req.reason, Old: req.old, New: req.target, StartedAt: req.started}
 	listeners := s.reloadListeners()
 	s.valMu.Lock()
 	err := runReloadValidate(ctx, listeners, event)
 	s.valMu.Unlock()
 	if err != nil {
-		return err
+		return ReloadStageValidate, err
 	}
 	prepared, err := runReloadBeforeApply(ctx, listeners, event)
 	if err != nil {
 		runReloadRollback(ctx, listeners[:prepared], event, err)
-		return err
+		return ReloadStageBeforeApply, err
 	}
 	event.AppliedAt = time.Now()
 	publishMu.Lock()
@@ -884,19 +1075,19 @@ func (s *Store) commit(ctx context.Context, req commitRequest) error {
 	}); err != nil {
 		revert()
 		runReloadRollback(ctx, listeners[:prepared], event, err)
-		return err
+		return ReloadStageApply, err
 	}
 	if err := runReloadAfterApply(ctx, listeners, event); err != nil {
 		revert()
 		runReloadRollback(ctx, listeners[:prepared], event, err)
-		return err
+		return ReloadStageApply, err
 	}
 	if req.clearPrevious {
 		s.previous.Store(nil)
 	} else if req.old != nil {
 		s.previous.Store(req.old)
 	}
-	return nil
+	return "", nil
 }
 
 // DryRun builds and validates a candidate snapshot without publishing it.
@@ -928,20 +1119,29 @@ func (s *Store) Rollback(ctx context.Context, reason string) (*Snapshot, error) 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	started := time.Now()
+	outcome := ReloadOutcome{Rollback: true, Reason: reason}
 	prev := s.previous.Load()
 	if prev == nil {
-		return nil, errors.New("configdata: previous snapshot not found")
+		err := errors.New("configdata: previous snapshot not found")
+		outcome.Stage = ReloadStageBuild
+		s.report(outcome, err, started)
+		return nil, err
 	}
+	outcome.Version = prev.Version
 	old := s.current.Load()
 	extra := map[string]any{}
 	if old != nil {
 		extra["from_version"] = old.Version
 	}
-	if err := s.commit(ctx, commitRequest{
+	stage, err := s.commit(ctx, commitRequest{
 		reason: reason, emitName: "configdata.rollback",
-		old: old, target: prev, started: time.Now(), extra: extra,
+		old: old, target: prev, started: started, extra: extra,
 		clearPrevious: true,
-	}); err != nil {
+	})
+	outcome.Stage = stage
+	s.report(outcome, err, started)
+	if err != nil {
 		return nil, err
 	}
 	return prev, nil
@@ -1248,72 +1448,42 @@ func ActiveSnapshot() *Snapshot {
 	return Current()
 }
 
-func readJSON(path string, out any, strict bool) error {
+// readJSON decodes one data file into out and returns the payload it decoded
+// (the file, or the value of its single rows / records / data wrapper key —
+// rules.Document is the one definition of that shape, shared with the
+// generators). Rules are checked on the same payload, so the typed rows and
+// the raw rows they are checked against can never come from two reads.
+func readJSON(path string, out any, strict bool) ([]byte, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
+		return nil, err
+	}
+	// A file truncated to "null" (or emptied) decodes into a zero table with
+	// no error — a whole dataset silently vanishing. Document refuses it, a
+	// null wrapper key and an ambiguous multi-wrapper document.
+	payload, err := rules.Document(raw)
+	if err != nil {
+		return nil, fmt.Errorf("configdata: %s: %w", path, err)
+	}
+	if err := decodeJSON(payload, out, strict); err != nil {
+		return nil, fmt.Errorf("configdata: %s: %w", path, err)
+	}
+	return payload, nil
+}
+
+func decodeJSON(data []byte, out any, strict bool) error {
+	if !strict {
+		return json.Unmarshal(data, out)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
 		return err
 	}
-	trimmed := bytes.TrimSpace(raw)
-	// A file truncated to "null" (or emptied) decodes into a zero table with
-	// no error — a whole dataset silently vanishing. Refuse it.
-	if len(trimmed) == 0 || string(trimmed) == "null" {
-		return fmt.Errorf("configdata: %s: empty or null document", path)
-	}
-	decode := func(data []byte) error {
-		if !strict {
-			return json.Unmarshal(data, out)
-		}
-		decoder := json.NewDecoder(bytes.NewReader(data))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(out); err != nil {
-			return err
-		}
-		// json.Unmarshal rejects trailing content; strict mode must not be
-		// more lenient than lenient mode.
-		if decoder.More() {
-			return fmt.Errorf("trailing content after top-level JSON value")
-		}
-		return nil
-	}
-	// Wrapper detection is explicit, not "first decode failed": with an
-	// object target the lenient decode of {"data":{...}} would silently
-	// succeed as an all-zero value and the wrapper branch would never run.
-	if trimmed[0] == '{' {
-		var probe map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &probe); err == nil {
-			wrapperKeys := 0
-			var candidate json.RawMessage
-			for _, key := range []string{"rows", "records", "data"} {
-				value, ok := probe[key]
-				if !ok {
-					continue
-				}
-				if string(bytes.TrimSpace(value)) == "null" {
-					// An explicit null wrapper must not sneak past the
-					// null-document guard above.
-					return fmt.Errorf("configdata: %s: wrapper key %q is null", path, key)
-				}
-				wrapperKeys++
-				if candidate == nil {
-					candidate = value
-				}
-			}
-			if wrapperKeys > 1 {
-				return fmt.Errorf("configdata: %s: multiple wrapper keys (rows/records/data) present — ambiguous document", path)
-			}
-			// Treat as a wrapper only when the document is exactly one
-			// wrapper key and nothing else; any other shape is the real
-			// document.
-			if wrapperKeys == 1 && len(probe) == 1 {
-				if err := decode(candidate); err != nil {
-					return fmt.Errorf("configdata: %s: %w", path, err)
-				}
-				return nil
-			}
-		}
-	}
-	if err := decode(raw); err != nil {
-		return fmt.Errorf("configdata: %s: %w", path, err)
+	// json.Unmarshal rejects trailing content; strict mode must not be
+	// more lenient than lenient mode.
+	if decoder.More() {
+		return fmt.Errorf("trailing content after top-level JSON value")
 	}
 	return nil
 }

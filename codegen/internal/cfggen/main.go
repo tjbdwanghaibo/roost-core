@@ -28,8 +28,10 @@
 //	      - { name: width, type: int32 }
 //
 // Field options: index: true (index named after the field) or index: <name>;
-// ref: <table> (non-zero values must exist as keys of <table>, enforced at
-// load time by configdata's auto-table reference check). Scalar types:
+// ref: <table> (non-zero values must exist as keys of <table>); required (the
+// JSON key must be present and not null in every row); unique; min: <n>;
+// enum: [a, b]. The rules are emitted as cfg tags and enforced by configdata
+// on every load and reload — the same check tablegen's tags get (B10). Scalar types:
 // int32/int64/uint32/uint64/float32/float64/string/bool; []scalar, bean and
 // []bean compose from those.
 package cfggen
@@ -41,6 +43,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -124,9 +127,16 @@ type FieldMeta struct {
 	Type  string `yaml:"type"`
 	Index any    `yaml:"index"` // true or an explicit index name
 	Ref   string `yaml:"ref"`
-	// Required (with ref): the zero value is an error too — catches a whole
-	// column silently zeroing after a data-side field rename.
+	// Required: the JSON key must be present and not null in every row — a
+	// deleted or renamed column fails the load instead of reading as zero.
+	// With ref, zero must be a key of the target too.
 	Required bool `yaml:"required"`
+	// Unique: no two rows share a value.
+	Unique bool `yaml:"unique"`
+	// Min: numeric lower bound (inclusive).
+	Min string `yaml:"min"`
+	// Enum: the allowed values.
+	Enum []string `yaml:"enum"`
 	// SkipEmpty (with index): zero values stay out of the index.
 	SkipEmpty bool   `yaml:"skipempty"`
 	Comment   string `yaml:"comment"`
@@ -442,6 +452,9 @@ func validateMeta(meta *Meta) error {
 			if field.Ref != "" {
 				return fmt.Errorf("global %s field %s: singleton configs do not support ref", global.Name, field.Name)
 			}
+			if hasFieldRules(field) {
+				return fmt.Errorf("global %s field %s: singleton configs do not support required / unique / min / enum yet", global.Name, field.Name)
+			}
 		}
 		source := "global " + global.Name
 		if err := claim(typeName(global.Name), source); err != nil {
@@ -471,6 +484,9 @@ func validateMeta(meta *Meta) error {
 			}
 			if field.Ref != "" || field.Index != nil {
 				return fmt.Errorf("bean %s field %s: ref/index only apply to table fields", bean.Name, field.Name)
+			}
+			if hasFieldRules(field) {
+				return fmt.Errorf("bean %s field %s: required / unique / min / enum only apply to table fields", bean.Name, field.Name)
 			}
 		}
 	}
@@ -587,14 +603,49 @@ func validateEntry(kind string, entry TableMeta, beans map[string]bool, seen map
 		if field.Ref != "" && !scalarTypes[field.Type] {
 			return fmt.Errorf("%s %s field %s: ref requires a scalar field", kind, entry.Name, field.Name)
 		}
-		if field.Required && field.Ref == "" {
-			return fmt.Errorf("%s %s field %s: required requires ref", kind, entry.Name, field.Name)
+		if err := validateFieldRules(field); err != nil {
+			return fmt.Errorf("%s %s: %w", kind, entry.Name, err)
 		}
 		if field.SkipEmpty && !enabled {
 			return fmt.Errorf("%s %s field %s: skipempty requires index", kind, entry.Name, field.Name)
 		}
 	}
 	return nil
+}
+
+func hasFieldRules(field FieldMeta) bool {
+	return field.Required || field.Unique || field.Min != "" || len(field.Enum) > 0
+}
+
+// validateFieldRules checks what the generated cfg tag can carry; configdata
+// checks the same rules again when the table registers.
+func validateFieldRules(field FieldMeta) error {
+	if field.Min != "" {
+		if !numericTypes[field.Type] {
+			return fmt.Errorf("field %s: min needs a numeric field, got %s", field.Name, field.Type)
+		}
+		if _, err := strconv.ParseFloat(field.Min, 64); err != nil {
+			return fmt.Errorf("field %s: min %q is not a number", field.Name, field.Min)
+		}
+	}
+	if len(field.Enum) > 0 {
+		if !scalarTypes[field.Type] || field.Type == "float32" || field.Type == "float64" {
+			return fmt.Errorf("field %s: enum needs a string, integer or bool field, got %s", field.Name, field.Type)
+		}
+		for _, value := range field.Enum {
+			if value == "" || strings.ContainsAny(value, ",|\"`") {
+				return fmt.Errorf("field %s: enum value %q must be non-empty and free of , | \" `", field.Name, value)
+			}
+		}
+	}
+	if field.Unique && !scalarTypes[field.Type] {
+		return fmt.Errorf("field %s: unique needs a scalar field, got %s", field.Name, field.Type)
+	}
+	return nil
+}
+
+var numericTypes = map[string]bool{
+	"int32": true, "int64": true, "uint32": true, "uint64": true, "float32": true, "float64": true,
 }
 
 func validateFieldType(field FieldMeta, beans map[string]bool) error {
@@ -740,9 +791,18 @@ func writeStruct(b *strings.Builder, name, comment string, fields []FieldMeta, k
 		}
 		if field.Ref != "" {
 			cfgDirectives = append(cfgDirectives, "ref="+field.Ref)
-			if field.Required {
-				cfgDirectives = append(cfgDirectives, "required")
-			}
+		}
+		if field.Required {
+			cfgDirectives = append(cfgDirectives, "required")
+		}
+		if field.Unique {
+			cfgDirectives = append(cfgDirectives, "unique")
+		}
+		if field.Min != "" {
+			cfgDirectives = append(cfgDirectives, "min="+field.Min)
+		}
+		if len(field.Enum) > 0 {
+			cfgDirectives = append(cfgDirectives, "enum="+strings.Join(field.Enum, "|"))
 		}
 		tag := fmt.Sprintf("`json:%q", field.Name)
 		if len(cfgDirectives) > 0 {

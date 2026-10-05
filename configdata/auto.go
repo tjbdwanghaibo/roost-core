@@ -32,8 +32,16 @@ import (
 //	            compatibility are checked once per table (even when the
 //	            table is empty), so a misspelled target fails immediately
 //	            instead of hiding behind an all-zero column.
-//	required    with ref: the zero value is an error too (a zeroed column —
-//	            e.g. after a silent field rename — fails loudly)
+//	required    the JSON key must be present and not null in every row (a
+//	            deleted or renamed column fails loudly instead of reading as
+//	            zero); with ref, zero is checked against the target too
+//	unique      no two rows share a value
+//	min=<n>     numeric field: every value is >= n
+//	enum=a|b    the value (string form) is one of the listed ones
+//
+// key / index / skipempty shape the table; required / unique / min / enum /
+// ref become TableDef.Rules — the same FieldRule the generators emit — and
+// are enforced on every load and reload by the shared rule check (B10).
 //
 // Fields promoted from embedded (non-pointer) structs participate exactly
 // like encoding/json promotes them; a cfg tag on the embedded field itself
@@ -134,28 +142,15 @@ func RegisterAutoTable[K comparable, V any](r *Registry, opts ...AutoOption) err
 		}
 		userValidateTable = typed
 	}
-	// Reference checks run in ValidateTable: targets are resolved once per
-	// build (not once per row × ref) and the target check fires even for
-	// empty tables. Validate stays nil unless the caller supplied one — no
-	// per-row closure cost for tables without refs.
-	var validateTable func(*BuildContext, *Table[K, V]) error
-	if len(spec.refs) > 0 || userValidateTable != nil {
-		validateTable = func(ctx *BuildContext, table *Table[K, V]) error {
-			if err := spec.validateRefs(ctx, table); err != nil {
-				return err
-			}
-			if userValidateTable != nil {
-				return userValidateTable(ctx, table)
-			}
-			return nil
-		}
-	}
+	// The tag rules (ref included) run before the business callbacks, so
+	// those may assume referential integrity.
 	return RegisterTable(r, TableDef[K, V]{
 		Name:          Name(name),
 		File:          file,
 		Key:           spec.key,
 		Indexes:       spec.indexes,
-		ValidateTable: validateTable,
+		Rules:         spec.rules,
+		ValidateTable: userValidateTable,
 		Validate:      userValidate,
 	})
 }
@@ -167,19 +162,11 @@ func MustRegisterAutoTable[K comparable, V any](r *Registry, opts ...AutoOption)
 	}
 }
 
-type autoRef struct {
-	fieldIndex []int
-	fieldName  string
-	fieldType  reflect.Type
-	table      Name
-	required   bool
-}
-
 type autoSpec[K comparable, V any] struct {
 	defaultName string
 	key         func(V) K
 	indexes     []IndexDef[V]
-	refs        []autoRef
+	rules       []FieldRule
 }
 
 // autoField is one struct field with its promotion path and depth (embedded
@@ -364,8 +351,12 @@ func parseAutoSpec[K comparable, V any]() (*autoSpec[K, V], error) {
 		if !field.IsExported() {
 			return nil, fmt.Errorf("configdata: auto table %s: cfg tag on unexported field %s", valueType.String(), field.Name)
 		}
-		var indexName, refTarget string
-		hasIndex, hasRef, hasRequired, skipEmpty := false, false, false, false
+		var indexName string
+		hasIndex, skipEmpty := false, false
+		rule := FieldRule{}
+		if name, ok := decodedJSONName(field); ok {
+			rule.Field = name
+		}
 		for _, directive := range strings.Split(tag, ",") {
 			directive = strings.TrimSpace(directive)
 			switch {
@@ -392,19 +383,27 @@ func parseAutoSpec[K comparable, V any]() (*autoSpec[K, V], error) {
 			case directive == "skipempty":
 				skipEmpty = true
 			case directive == "required":
-				hasRequired = true
+				rule.Required = true
+			case directive == "unique":
+				rule.Unique = true
+			case strings.HasPrefix(directive, "min="):
+				rule.Min = strings.TrimPrefix(directive, "min=")
+				if rule.Min == "" {
+					return nil, fmt.Errorf("configdata: auto table %s: field %s: empty min", valueType.String(), field.Name)
+				}
+			case strings.HasPrefix(directive, "enum="):
+				rule.Enum = strings.Split(strings.TrimPrefix(directive, "enum="), "|")
 			case strings.HasPrefix(directive, "ref="):
-				if hasRef {
+				if rule.Ref != "" {
 					return nil, fmt.Errorf("configdata: auto table %s: field %s: multiple ref directives", valueType.String(), field.Name)
 				}
-				refTarget = strings.TrimPrefix(directive, "ref=")
-				if refTarget == "" {
+				rule.Ref = strings.TrimPrefix(directive, "ref=")
+				if rule.Ref == "" {
 					return nil, fmt.Errorf("configdata: auto table %s: field %s: empty ref target", valueType.String(), field.Name)
 				}
 				if !autoScalarKind(field.Type.Kind()) {
 					return nil, fmt.Errorf("configdata: auto table %s: ref field %s must be an integer or string, got %s", valueType.String(), field.Name, field.Type)
 				}
-				hasRef = true
 			default:
 				return nil, fmt.Errorf("configdata: auto table %s: field %s: unknown cfg directive %q", valueType.String(), field.Name, directive)
 			}
@@ -412,17 +411,11 @@ func parseAutoSpec[K comparable, V any]() (*autoSpec[K, V], error) {
 		if skipEmpty && !hasIndex {
 			return nil, fmt.Errorf("configdata: auto table %s: field %s: skipempty requires index", valueType.String(), field.Name)
 		}
-		if hasRequired && !hasRef {
-			return nil, fmt.Errorf("configdata: auto table %s: field %s: required requires ref", valueType.String(), field.Name)
-		}
-		if hasRef {
-			spec.refs = append(spec.refs, autoRef{
-				fieldIndex: entry.index,
-				fieldName:  field.Name,
-				fieldType:  field.Type,
-				table:      Name(refTarget),
-				required:   hasRequired,
-			})
+		if rule.Required || rule.Unique || rule.Min != "" || len(rule.Enum) > 0 || rule.Ref != "" {
+			if rule.Field == "" {
+				return nil, fmt.Errorf("configdata: auto table %s: field %s: rules on a json:\"-\" field never see data", valueType.String(), field.Name)
+			}
+			spec.rules = append(spec.rules, rule)
 		}
 		if hasIndex {
 			if prev, dup := indexNames[indexName]; dup {
@@ -455,54 +448,6 @@ func parseAutoSpec[K comparable, V any]() (*autoSpec[K, V], error) {
 		return reflect.ValueOf(v).FieldByIndex(keyPath).Interface().(K)
 	}
 	return spec, nil
-}
-
-// validateRefs runs once per table build: every ref target must exist as a
-// registered table with a compatible key type (this fires even for empty
-// tables and all-zero columns, so a misspelled target cannot hide until the
-// first non-zero value ships), then row membership is checked with the
-// lookups resolved exactly once — not once per row × ref.
-func (s *autoSpec[K, V]) validateRefs(ctx *BuildContext, table *Table[K, V]) error {
-	lookups := make([]refKeyLookup, len(s.refs))
-	for i, ref := range s.refs {
-		lookup, err := refTargetLookup(ctx, ref.table, ref.fieldName)
-		if err != nil {
-			return err
-		}
-		targetKey := lookup.refKeyType()
-		if !refTypeCompatible(ref.fieldType, targetKey) {
-			return fmt.Errorf("field %s: ref type %s is not compatible with %s key type %s", ref.fieldName, ref.fieldType, ref.table, targetKey)
-		}
-		lookups[i] = lookup
-	}
-	for _, row := range table.rows {
-		value := reflect.ValueOf(row)
-		for i, ref := range s.refs {
-			field := value.FieldByIndex(ref.fieldIndex)
-			if field.IsZero() {
-				if ref.required {
-					return fmt.Errorf("field %s: required reference to %s is zero (row key %v)", ref.fieldName, ref.table, s.key(row))
-				}
-				continue
-			}
-			if !lookups[i].containsKeyValue(field) {
-				return fmt.Errorf("field %s references missing %s key %v", ref.fieldName, ref.table, field.Interface())
-			}
-		}
-	}
-	return nil
-}
-
-func refTargetLookup(ctx *BuildContext, table Name, fieldName string) (refKeyLookup, error) {
-	raw, ok := ctx.Snapshot.table(table)
-	if !ok {
-		return nil, fmt.Errorf("field %s references unknown table %s", fieldName, table)
-	}
-	lookup, ok := raw.(refKeyLookup)
-	if !ok {
-		return nil, fmt.Errorf("field %s: table %s does not support reference lookup", fieldName, table)
-	}
-	return lookup, nil
 }
 
 // refTypeCompatible allows only identical types or named/unnamed pairs of

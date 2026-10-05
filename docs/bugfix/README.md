@@ -144,7 +144,7 @@
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261005-NC-75](RR-20261005-NC-75.md) | 生成 loader 查 ref；-check 按 schema 规则校验 JSON；tablegen 运行期门 | ref / -check 已修复，未发版；运行时 required 待决定 |
+| [RR-20261005-NC-75](RR-20261005-NC-75.md) | 生成 loader 查 ref；-check 按 schema 规则校验 JSON；tablegen 运行期门 | ref / -check 已修复，未发版；运行时 required 已由 [B10](../feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md) 实施（未发版） |
 | [RR-20261005-NC-74](RR-20261005-NC-74.md) | 复制 / 快照 / 提交计划共用工程边界，跳过 .dev 与 data/wal | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-73](RR-20261005-NC-73.md) | roost id 错误码改用生成器的 AST 扫描 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-72](RR-20261005-NC-72.md) | cfggen 帮助改用独立 `configs/cfg` | 已修复、声明场景验证，未发版 |

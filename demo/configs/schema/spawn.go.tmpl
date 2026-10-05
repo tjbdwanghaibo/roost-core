@@ -9,19 +9,25 @@ package schema
 // spawner reads the active snapshot, so a reload takes effect on the next
 // tick without restarting the scene.
 //
+// The tags are the rules, and they hold for a hot reload too: configdata
+// checks them on every load and reload, so deleting a row's template from
+// configs/data/spawn.json and reloading is refused by name (table, row,
+// field, rule) instead of spawning template 0. `roost generate` runs the same
+// check on the CSV first.
+//
 //roost:table name=spawn key=ID
 type Spawn struct {
 	ID       int32 `csv:"id" json:"id" title:"ID" required:"true" unique:"true"`
 	Template int32 `csv:"template" json:"template" title:"Template" required:"true"`
 	// Count is how many of this row should be alive at once.
-	Count int32 `csv:"count" json:"count" title:"Count" required:"true"`
+	Count int32 `csv:"count" json:"count" title:"Count" required:"true" min:"0"`
 	// HP is what one of them starts with.
-	HP int64 `csv:"hp" json:"hp" title:"HP" required:"true"`
+	HP int64 `csv:"hp" json:"hp" title:"HP" required:"true" min:"1"`
 	// CenterX / CenterY / Radius is where they appear: a point and how far
 	// around it the spawner may look for somewhere to stand.
 	CenterX int64 `csv:"center_x" json:"center_x" title:"CenterX" required:"true"`
 	CenterY int64 `csv:"center_y" json:"center_y" title:"CenterY" required:"true"`
-	Radius  int64 `csv:"radius" json:"radius" title:"Radius" required:"true"`
+	Radius  int64 `csv:"radius" json:"radius" title:"Radius" required:"true" min:"0"`
 	// RespawnSeconds is how long after a death before that slot is refilled.
-	RespawnSeconds int64 `csv:"respawn_seconds" json:"respawn_seconds" title:"RespawnSeconds" required:"true"`
+	RespawnSeconds int64 `csv:"respawn_seconds" json:"respawn_seconds" title:"RespawnSeconds" required:"true" min:"0"`
 }

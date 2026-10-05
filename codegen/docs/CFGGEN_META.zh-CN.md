@@ -83,11 +83,14 @@ world, _ := cfg.WorldFrom(snap)              // 全局单例
 | `index` | `true` 建以字段名命名的二级索引；写字符串则用该名字（须是合法标识符）。**`false`/省略 = 不建索引**；其他类型报错 |
 | `skipempty` | 配合 `index`：零值行不进索引（`scene_id=0` 表示"不限场景"这类语义时避免零值桶爆炸） |
 | `ref` | 引用另一张表的主键：字段类型必须与目标表 key 类型**完全一致**；目标表必须在本 meta 中声明。运行时每次 load/reload 校验非零值存在于目标表（零值 = 无引用） |
-| `required` | 配合 `ref`：零值也报错——专门抓"数据侧字段改名导致整列静默归零"的事故 |
+| `required` | JSON 键必须出现且不为 null——抓"数据侧删列 / 改名导致整列静默归零"的事故（B10 起不再要求配 `ref`）；配 `ref` 时零值也必须是目标表的主键 |
+| `unique` | 任两行的值不相同（缺省 / null 的行不参与） |
+| `min` | 数值字段的下限（含） |
+| `enum` | 允许的取值列表（`enum: [melee, ranged]`；字符串 / 整数 / bool 字段，值不含 `,` `|` `"` 反引号） |
 | `comment` | 生成到字段行注释；多行折叠 |
 | `group` | 字段只属于这些组（`group: c` 或 `group: [c, s]`）；不在目标组里的字段从 struct 中去掉（连带它的索引访问器）。省略 = 所有组 |
 
-`index`/`ref`（及其修饰）**只允许在 tables 上**；globals 写了直接报错（对象注册路径不会执行这些校验，静默忽略比报错危险得多）。
+`index`/`ref`/`required`/`unique`/`min`/`enum`（及其修饰）**只允许在 tables 上**；globals 与 bean 写了直接报错（globals 的规则留作后续，静默忽略比报错危险得多）。规则生成为 `cfg` 标签，由 configdata 解析成与 tablegen 相同的 `configdata.FieldRule`，用同一个检查器在加载期执行（B10）。
 
 ## 导出分组（前后端分开的配置）
 
@@ -146,7 +149,7 @@ bean 内部只能用标量/数组/其他 bean，**不能带 `index`/`ref`**；be
 
 `cfg_gen.go` 包含三部分（`// Code generated ... DO NOT EDIT.`）：
 
-1. **行/bean/全局 struct**：带 `json` tag 与 `cfg` tag（`key` / `index[=名][,skipempty]` / `ref=表[,required]`），运行时校验全部由 tag 驱动；
+1. **行/bean/全局 struct**：带 `json` tag 与 `cfg` tag（`key` / `index[=名][,skipempty]` / `ref=表` / `required` / `unique` / `min=n` / `enum=a|b`），运行时校验全部由 tag 驱动；
 2. **`RegisterGeneratedConfigData(r *configdata.Registry) error`** 与 Must 变体：逐表 `RegisterAutoTable`、逐全局 `RegisterObject`；
 3. **类型化访问器**：`XxxTableFrom(snap)`、`XxxFrom(snap)`、每个索引一个 `XxxByYyy(snap, 值)`（字符串化规则与运行时索引严格一致）。
 
@@ -154,7 +157,7 @@ bean 内部只能用标量/数组/其他 bean，**不能带 `index`/`ref`**；be
 
 **生成期（cfggen，schema 错误当场拒绝）**：未知 YAML 键（拼写错误）、名字字符集/重名/PascalCase 碰撞、key 未声明或类型非法、ref 目标表不存在或类型与其 key 不一致、index/ref 打在非法类型上、globals 带 key/index/ref、bean 非切片递归、file 路径逃逸。
 
-**加载期（configdata，每次 load/reload 对真实数据执行）**：ref 目标表存在性与类型兼容（表级前置，空表也拦）、每行非零 ref 值的成员校验、`required` 的零值拒绝、JSON 为 `null`/空文档拒绝、`rows`/`records`/`data` 多包装键并存拒绝。可选 `store.SetStrictJSON(true)` 拒绝数据里的未知字段（防字段改名静默归零）。校验失败 = 整次 reload 被拒，**旧快照保持生效**。
+**加载期（configdata，每次 load/reload 对真实数据执行）**：`required` 的键缺失 / null（在原始 JSON 上查，缺列与零值分得清）、`unique` / `min` / `enum`、ref 目标表存在性与类型兼容（表级前置，空表也拦）、每行非零 ref 值的成员校验（`required` 时零值也查）、JSON 为 `null`/空文档拒绝、`rows`/`records`/`data` 多包装键并存拒绝。错误点名表 / 行 / 字段 / 规则（`*configdata.RuleError`）。可选 `store.SetStrictJSON(true)` 拒绝数据里的未知字段（防字段改名静默归零）。校验失败 = 整次 reload 被拒，**旧快照保持生效**。
 
 ## 数据文件格式
 
@@ -175,7 +178,7 @@ cfggen 覆盖"JSON 数据 + 轻量 schema"的场景。`groups` / `group` 对应 
 ## 易错点速查
 
 - `index: false` 就是不建索引（写 `false` 不会被当成开启）。
-- 引用可选时用 `ref`（零值 = 无引用）；引用必填时加 `required`。
+- 引用可选时用 `ref`（零值 = 无引用）；引用必填时加 `required`（键缺失、null、零值且目标里没有主键 0 都会被拒）。
 - 零值有业务含义的索引字段（如 `scene_id=0` = 不限）配 `skipempty`，否则零值全挤进 `"0"` 桶。
 - 表名/全局名各自派生类型与访问器，起名时避开 `xxx_table`/`xxx_from` 这类会与派生名撞车的形态（撞了会在生成期报错，不会静默）。
 - handler 内取快照一次（`snap := configdata.ActiveSnapshot()`）后传参使用；fan-out 的子 goroutine 不继承请求快照，必须显式传 `snap`。

@@ -118,8 +118,10 @@ func TestAutoTableRegistrationRejectsBadRefAndIndexShapes(t *testing.T) {
 	if err := RegisterAutoTable[int32, emptyIndexName](reg); err == nil {
 		t.Fatal("empty index name accepted")
 	}
-	if err := RegisterAutoTable[int32, orphanRequired](reg); err == nil {
-		t.Fatal("required without ref accepted")
+	// B10: required stands on its own now (the JSON key must be present and
+	// not null); it used to be accepted only next to ref.
+	if err := RegisterAutoTable[int32, orphanRequired](reg); err != nil {
+		t.Fatalf("required without ref rejected: %v", err)
 	}
 	if err := RegisterAutoTable[string, autoDropCfg](reg); err == nil {
 		t.Fatal("key type mismatch accepted") // K=string vs ID int32
@@ -139,7 +141,13 @@ func TestAutoTableRequiredRefRejectsZero(t *testing.T) {
 	MustRegisterAutoTable[int32, autoDropCfg](reg, WithAutoName("drop"))
 	MustRegisterAutoTable[int32, strictRef](reg, WithAutoName("monster"), WithAutoFile("monster.json"))
 	store := NewStore(reg, dir)
-	if _, err := store.Load(context.Background()); err == nil || !strings.Contains(err.Error(), "required reference") {
+	// B10: the renamed column is now seen as missing on the raw row.
+	if _, err := store.Load(context.Background()); err == nil || !strings.Contains(err.Error(), "field drop_id: required: missing or null") {
+		t.Fatalf("renamed required ref column accepted: %v", err)
+	}
+	// Present but zero: a required reference must still point at a key.
+	writeFile(t, filepath.Join(dir, "monster.json"), `[{"id":1,"drop_id":0}]`)
+	if _, err := store.Load(context.Background()); err == nil || !strings.Contains(err.Error(), "references missing drop key 0") {
 		t.Fatalf("zeroed required ref accepted: %v", err)
 	}
 }

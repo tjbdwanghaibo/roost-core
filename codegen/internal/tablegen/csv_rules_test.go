@@ -30,11 +30,11 @@ func monsterMeta() Meta {
 // one rule; the error names the file, the field and the row.
 func TestReadCSVRecordsEnforcesDeclaredRules(t *testing.T) {
 	cases := []struct{ label, csv, want string }{
-		{"required cell empty", "id,name,level,code\n1,,3,a\n", "required field is empty"},
+		{"required cell empty", "id,name,level,code\n1,,3,a\n", "monster.csv: table monster row 1 (key 1) field name: required: missing or null"},
 		{"unparsable int", "id,name,level,code\n1,slime,abc,a\n", "row=2 col=level field=Level"},
-		{"key repeated", "id,name,level,code\n1,slime,3,a\n1,orc,4,b\n", "key field ID repeats value \"1\" in data rows 1 and 2"},
-		{"unique column repeated", "id,name,level,code\n1,slime,3,a\n2,orc,4,a\n", "unique field Code repeats value \"a\""},
-		{"below min", "id,name,level,code\n1,slime,0,a\n", "below min=1"},
+		{"key repeated", "id,name,level,code\n1,slime,3,a\n1,orc,4,b\n", "row 2 (key 1) field id: unique: value 1 repeats row 1"},
+		{"unique column repeated", "id,name,level,code\n1,slime,3,a\n2,orc,4,a\n", "field code: unique: value a repeats row 1"},
+		{"below min", "id,name,level,code\n1,slime,0,a\n", "field level: min: value 0 is below min=1"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.label, func(t *testing.T) {

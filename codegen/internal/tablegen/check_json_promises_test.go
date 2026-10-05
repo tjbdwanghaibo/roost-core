@@ -27,11 +27,11 @@ func TestCheckJSONEnforcesTheDeclaredRules(t *testing.T) {
 	meta := monsterMeta()
 	meta.JSON = "monster.json"
 	cases := []struct{ label, body, want string }{
-		{"required key missing", `[{"id":1,"level":3,"code":"a"}]`, "required field name is missing"},
-		{"required key null", `[{"id":1,"name":null,"level":3,"code":"a"}]`, "required field name is missing"},
-		{"key repeated", `[{"id":1,"name":"slime","level":3,"code":"a"},{"id":1,"name":"orc","level":4,"code":"b"}]`, "key field ID repeats value"},
-		{"unique column repeated", `[{"id":1,"name":"slime","level":3,"code":"a"},{"id":2,"name":"orc","level":4,"code":"a"}]`, "unique field Code repeats value"},
-		{"below min", `[{"id":1,"name":"slime","level":0,"code":"a"}]`, "below min=1"},
+		{"required key missing", `[{"id":1,"level":3,"code":"a"}]`, "table monster row 1 (key 1) field name: required: missing or null"},
+		{"required key null", `[{"id":1,"name":null,"level":3,"code":"a"}]`, "field name: required: missing or null"},
+		{"key repeated", `[{"id":1,"name":"slime","level":3,"code":"a"},{"id":1,"name":"orc","level":4,"code":"b"}]`, "row 2 (key 1) field id: unique: value 1 repeats row 1"},
+		{"unique column repeated", `[{"id":1,"name":"slime","level":3,"code":"a"},{"id":2,"name":"orc","level":4,"code":"a"}]`, "field code: unique: value a repeats row 1"},
+		{"below min", `[{"id":1,"name":"slime","level":0,"code":"a"}]`, "field level: min: value 0 is below min=1"},
 		{"not a list of rows", `{"id":1}`, "monster.json"},
 	}
 	for _, testCase := range cases {
@@ -62,17 +62,17 @@ func TestRefDeclarationsAreResolvedAtGeneration(t *testing.T) {
 			{Name: "SceneID", Type: typ, JSON: "scene_id", Ref: ref},
 		}}
 	}
-	if refs, err := resolveRefs([]Meta{scene, monster("scene", "int32")}); err != nil || len(refs["monster"]) != 1 || refs["monster"][0].TargetKeyType != "int32" {
-		t.Fatalf("valid ref = %+v, %v", refs, err)
+	if err := resolveRefs([]Meta{scene, monster("scene", "int32")}); err != nil {
+		t.Fatalf("valid ref: %v", err)
 	}
-	if refs, err := resolveRefs([]Meta{scene, monster("scene", "*int32")}); err != nil || !refs["monster"][0].Pointer {
-		t.Fatalf("pointer ref = %+v, %v", refs, err)
+	if err := resolveRefs([]Meta{scene, monster("scene", "*int32")}); err != nil {
+		t.Fatalf("pointer ref: %v", err)
 	}
 	for label, metas := range map[string][]Meta{
 		"unknown target": {scene, monster("zone", "int32")},
 		"type mismatch":  {scene, monster("scene", "int64")},
 	} {
-		if _, err := resolveRefs(metas); err == nil {
+		if err := resolveRefs(metas); err == nil {
 			t.Errorf("%s: resolveRefs accepted it", label)
 		}
 	}

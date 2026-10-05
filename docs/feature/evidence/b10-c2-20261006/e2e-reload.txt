@@ -1,0 +1,36 @@
+## S0 baseline
+{"name":"gm.scene.population","ok":true,"data":{"alive":3,"ids":[2323435195258110993,2323435195258112017,2323435195258113041]}}
+
+configdata_reload_total{result="ok"} 1
+configdata_version 1
+## S1 success: spawn count 3 -> 4, gm.config.reload
+{"name":"gm.config.reload","ok":true,"data":{"flags":2,"reason":"b10 s1 success","version":2}}
+
+{"name":"gm.scene.population","ok":true,"data":{"alive":4,"ids":[...]}}
+
+## S2 the N07 H2e case: delete template from spawn row 1 (required in schema), reload
+{"name":"gm.config.reload","ok":false,"message":"configdata: table spawn row 1 (key 1) field template: required: missing or null"}
+
+## S3 below min: hp 0 (min=1), template restored
+{"name":"gm.config.reload","ok":false,"message":"configdata: table spawn row 1 (key 1) field hp: min: value 0 is below min=1"}
+
+## S4 template null
+{"name":"gm.config.reload","ok":false,"message":"configdata: table spawn row 1 (key 1) field template: required: missing or null"}
+
+## after the failures: population, metrics, log lines
+{"name":"gm.scene.population","ok":true,"data":{"alive":4,"ids":[...]}}
+
+configdata_reload_total{result="failed"} 3
+configdata_reload_total{result="ok"} 2
+configdata_version 2
+{"level":"INFO","msg":"config reload applied","frame":0,"op":"reload","reason":"manual","version":1,"live":1,"elapsed":393417}
+{"level":"INFO","msg":"config reload applied","frame":0,"op":"reload","reason":"b10 s1 success","version":2,"live":2,"elapsed":218291}
+{"level":"WARN","msg":"config reload failed: the live generation is unchanged","frame":0,"op":"reload","reason":"b10 s2 operator free text","version":3,"live":2,"stage":"build","error":"configdata: table spawn row 1 (key 1) field template: required: missing or null"}
+{"level":"WARN","msg":"config reload failed: the live generation is unchanged","frame":0,"op":"reload","reason":"b10 s3","version":4,"live":2,"stage":"build","error":"configdata: table spawn row 1 (key 1) field hp: min: value 0 is below min=1"}
+{"level":"WARN","msg":"config reload failed: the live generation is unchanged","frame":0,"op":"reload","reason":"b10 s4","version":5,"live":2,"stage":"build","error":"configdata: table spawn row 1 (key 1) field template: required: missing or null"}
+## S5 restore and reload
+{"name":"gm.config.reload","ok":true,"data":{"flags":3,"reason":"b10 s5 restore","version":6}}
+
+configdata_reload_total{result="failed"} 3
+configdata_reload_total{result="ok"} 3
+configdata_version 6
