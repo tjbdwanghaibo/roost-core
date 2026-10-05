@@ -90,7 +90,11 @@ func (t *TopologicalSortCache[T]) GetTopologicalSortedComponents() []T {
 		}
 	}
 
-	if len(sorted) != len(allComponents) {
+	// 与参与排序的全部节点比较，而不是只与注册过的键比较（RR-20261005-NC-184）：
+	// 只作为依赖出现、自己没注册的节点也在 inDegree 里、也会进 sorted。之前
+	// A→B（B 未注册）被误报成环；A↔B 成环再加 C→X,Y 时两边长度恰好相等，
+	// 环被藏起来、A 与 B 被静默丢掉。
+	if len(sorted) != len(inDegree) {
 		slog.Error("circular dependency detected in topological sort")
 		return nil
 	}
