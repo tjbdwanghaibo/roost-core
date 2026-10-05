@@ -22,6 +22,10 @@ type Action interface {
 	Cancel(ctx *ActionContext, reason string)
 }
 
+// ActionList 是业务对 ActionRunner / MissionRunner 的接线。动作回调与 runner 钩子里调用
+// CreateAction / EnqueueAction / EndCurAction / EndAllAction / ClearNextActions 时，ActionRunner
+// 把变更延后到回调返回后按序执行：返回的动作 ID 已分配、可以立即记下，结束照样以这个 ID
+// 送达（见 ActionRunner 的说明）。
 type ActionList interface {
 	Entity() entity.IThreadSafeEntity
 	CreateAction(kind ActionKind, param any) (int64, error)

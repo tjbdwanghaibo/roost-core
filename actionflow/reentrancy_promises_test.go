@@ -71,24 +71,33 @@ func newReentrancyRunner(t *testing.T, hooks ...ActionRunnerHooks) *ActionRunner
 	return runner
 }
 
-// U-0100 (C2): reentrancy from Start, Tick and Cancel each surface as
-// ErrReentrantMutation on the outer call, while the inner Start's replacement
-// stands as the current action — never both, never a stale one.
-func TestActionRunnerReportsReentrantMutationFromEachCallback(t *testing.T) {
+// U-0100 (C2) 原承诺：Start / Tick / Cancel / transition 回调里重入 Start，内层装上的动作
+// 是唯一的当前动作、只启动一次——不会两者并存，也不会留下过期的当前动作。
+//
+// B7（延后语义）改写：回调里的 Start 进延后队列，外层调用做完自己那一步后才执行，所以：
+//   - 外层调用不再返回 ErrReentrantMutation（没有冲突可报），返回 nil；
+//   - transition 情形下外层动作先完整启动（starts==1）再被延后的 Start 替换——之前它在
+//     切换钩子里就被换下、从未 Start；
+//   - 原承诺照样成立并加强：内层动作是当前动作、只启动一次；外层动作恰好 Cancel 一次、
+//     OnEnded 一次（之前 cancel 情形会被嵌套 finish 再取消一次，O-A3）。
+func TestActionRunnerCallbackStartReplacesTheOuterActionExactlyOnce(t *testing.T) {
 	for _, from := range []string{"start", "tick", "cancel", "transition"} {
 		t.Run(from, func(t *testing.T) {
 			next := &runnerTestAction{label: "next"}
 			var runner *ActionRunner
 			var outer *reentrantAction
-			runner = newReentrancyRunner(t, ActionRunnerHooks{OnTransition: func(snapshot ActionSnapshot, entering bool) {
-				// The transition hook fires before the action's own Start; a hook
-				// that starts something else from there is reentrancy too.
-				if from == "transition" && entering && snapshot.Action == outer && !outer.reentered {
-					outer.reentered = true
-					_, outer.innerErr = runner.Start(1, next, 0, time.Now())
-				}
-			}})
+			ended := map[Action]int{}
+			runner = newReentrancyRunner(t, ActionRunnerHooks{
+				OnTransition: func(snapshot ActionSnapshot, entering bool) {
+					if from == "transition" && entering && snapshot.Action == outer && !outer.reentered {
+						outer.reentered = true
+						_, outer.innerErr = runner.Start(1, next, 0, time.Now())
+					}
+				},
+				OnEnded: func(snapshot ActionSnapshot, _ ActionReason) { ended[snapshot.Action]++ },
+			})
 			outer = &reentrantAction{runnerTestAction: runnerTestAction{label: "outer"}, runner: runner, from: from, next: next}
+			replacement := &runnerTestAction{label: "replacement"}
 			var err error
 			switch from {
 			case "start", "transition":
@@ -102,10 +111,10 @@ func TestActionRunnerReportsReentrantMutationFromEachCallback(t *testing.T) {
 				if _, err = runner.Start(1, outer, 0, time.Now()); err != nil {
 					t.Fatal(err)
 				}
-				_, err = runner.Start(1, &runnerTestAction{label: "replacement"}, 0, time.Now())
+				_, err = runner.Start(1, replacement, 0, time.Now())
 			}
-			if !errors.Is(err, ErrReentrantMutation) {
-				t.Fatalf("outer call from %s = %v, want ErrReentrantMutation", from, err)
+			if err != nil {
+				t.Fatalf("outer call from %s = %v, want nil (the callback Start is deferred)", from, err)
 			}
 			if !outer.reentered || outer.innerErr != nil {
 				t.Fatalf("inner Start reentered=%v err=%v", outer.reentered, outer.innerErr)
@@ -113,11 +122,15 @@ func TestActionRunnerReportsReentrantMutationFromEachCallback(t *testing.T) {
 			if got := runner.Current(1); got != next {
 				t.Fatalf("current after reentrancy = %v, want the action the inner Start installed", got)
 			}
-			if next.starts != 1 {
-				t.Fatalf("inner action started %d times", next.starts)
+			if next.starts != 1 || next.cancels != 0 {
+				t.Fatalf("inner action started %d / canceled %d time(s)", next.starts, next.cancels)
 			}
-			if from == "transition" && outer.starts != 0 {
-				t.Fatalf("an action replaced during its transition hook still had Start called %d time(s)", outer.starts)
+			if outer.starts != 1 || outer.cancels != 1 || ended[outer] != 1 {
+				t.Fatalf("outer action starts=%d cancels=%d ended=%d, want 1/1/1", outer.starts, outer.cancels, ended[outer])
+			}
+			if from == "cancel" && (replacement.starts != 1 || replacement.cancels != 1 || ended[replacement] != 1) {
+				// 外层 Start(replacement) 先于 Cancel 回调里发起的 Start(next)，按发起顺序执行。
+				t.Fatalf("replacement starts=%d cancels=%d ended=%d, want 1/1/1", replacement.starts, replacement.cancels, ended[replacement])
 			}
 		})
 	}

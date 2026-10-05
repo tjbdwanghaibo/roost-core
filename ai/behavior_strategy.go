@@ -135,6 +135,10 @@ func (s *BehaviorStrategy[C]) Stop(*Context, string) {
 // 不返回 ID，任务结束走 OnMissionEnd，BehaviorStrategy 不把它交给叶子，而且任务 ID 与动作
 // ID 是两套计数、会撞号；等任务请用读 MissionManager.InMission 的 Condition。
 //
+// Launch 可以在 actionflow.ActionRunner 的回调里被调用（例如业务在 OnEnded 里立刻再
+// Tick 一次 AI）：runner 把回调里的变更延后到回调返回后执行（B7），Start / Enqueue 返回的
+// 已分配 ID 与 nil 照常可用，延后执行时无法启动也会以该 ID 发 OnEnded，叶子不会挂住。
+//
 // An interrupted branch (Reset while running) does NOT cancel the underlying
 // action by itself — Reset carries no context. Supply OnInterrupt (a closure
 // over the entity's ActionList) when interruption must end the action.
