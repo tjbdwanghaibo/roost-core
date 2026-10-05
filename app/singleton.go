@@ -103,22 +103,32 @@ type singletonSettings struct {
 	renewInterval time.Duration
 	guard         time.Duration
 	startupWait   time.Duration
+	// readErrs 是读取时发现的类型错误（RR-20261005-NC-190）：`enabled: on` 不是布尔值、时长没写
+	// 单位。validate 先报它们，不管 enabled 读成了什么——宽松读取会把 `on` 读成 false，锁静默关闭。
+	readErrs []error
 }
 
 func readSingletonSettings(cfg *viper.Viper) singletonSettings {
+	var s singletonSettings
 	duration := func(key string, fallback time.Duration) time.Duration {
 		if !cfg.IsSet(key) {
 			return fallback
 		}
-		return cfg.GetDuration(key)
+		value, err := ConfigDuration(cfg, key)
+		if err != nil {
+			s.readErrs = append(s.readErrs, err)
+		}
+		return value
 	}
-	s := singletonSettings{
-		enabled:       cfg.GetBool("singleton.enabled"),
-		keyPrefix:     cfg.GetString("singleton.key_prefix"),
-		ttl:           duration("singleton.ttl", defaultSingletonTTL),
-		renewInterval: duration("singleton.renew_interval", defaultSingletonRenewInterval),
-		guard:         duration("singleton.guard", defaultSingletonGuard),
+	enabled, err := ConfigBool(cfg, "singleton.enabled")
+	if err != nil {
+		s.readErrs = append(s.readErrs, err)
 	}
+	s.enabled = enabled
+	s.keyPrefix = cfg.GetString("singleton.key_prefix")
+	s.ttl = duration("singleton.ttl", defaultSingletonTTL)
+	s.renewInterval = duration("singleton.renew_interval", defaultSingletonRenewInterval)
+	s.guard = duration("singleton.guard", defaultSingletonGuard)
 	s.startupWait = duration("singleton.startup_wait", 2*s.ttl)
 	return s
 }
@@ -130,6 +140,9 @@ func readSingletonSettings(cfg *viper.Viper) singletonSettings {
 //  3. startup_wait ≥ ttl + 2 × renew_interval：卡住的旧持有者最后一次续期可能在新进程启动前后才被
 //     处理，键最晚约 ttl 后过期，新进程的重试间隔又是一个 renew_interval。
 func (s singletonSettings) validate() []error {
+	if len(s.readErrs) > 0 {
+		return s.readErrs
+	}
 	if !s.enabled {
 		return nil
 	}

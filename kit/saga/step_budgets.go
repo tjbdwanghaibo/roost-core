@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/app"
 	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
 )
 
@@ -108,7 +109,11 @@ func readStepBudget(cfg *viper.Viper, prefix string) (coresaga.StepBudget, error
 		if !cfg.IsSet(key) {
 			continue
 		}
-		value := cfg.GetDuration(key)
+		// 不带单位的数字以前读成纳秒、照样为正（RR-20261005-NC-190）。
+		value, err := app.ConfigDuration(cfg, key)
+		if err != nil {
+			return coresaga.StepBudget{}, err
+		}
 		if value <= 0 {
 			return coresaga.StepBudget{}, fmt.Errorf("%s: want a positive duration, got %q", key, cfg.GetString(key))
 		}

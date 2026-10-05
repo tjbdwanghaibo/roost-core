@@ -59,6 +59,11 @@ func ValidateServiceConfig(cfg *viper.Viper) error {
 	validatePositiveDurationIfSet(&errs, cfg, "remote_entity.lock_ttl")
 	validatePositiveDurationIfSet(&errs, cfg, "remote_entity.op_timeout")
 	errs = append(errs, readSingletonSettings(cfg).validate()...)
+	for _, key := range frameworkBoolKeys {
+		if _, err := ConfigBool(cfg, key); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	validateProductionServiceConfig(&errs, cfg, serverType)
 	return errors.Join(errs...)
 }
@@ -261,11 +266,28 @@ func isJetStreamTransport(value string) bool {
 	return value == "jetstream" || value == "js"
 }
 
+// frameworkBoolKeys 是框架各 Mod 用 GetBool 读取的开关（singleton.enabled 由 singletonSettings 校验）。
+// 宽松读取会把 `on` / `yes` 读成 false：可靠总线、副本集检查这类保护就会静默关闭，所以启动时
+// 严格检查一遍（RR-20261005-NC-190）。新增 GetBool 读取的开关要加到这里。
+var frameworkBoolKeys = []string{
+	"log.json", "log.stdout", "log.file", "log.caller",
+	"ops.enabled", "ops.admin_enabled", "ops.allow_dev_token", "ops.allow_public_addr",
+	"mongo.require_replica_set", "mongo.index.allow_recreate",
+	"nats.ignore_discovered_servers", "nats.reliable.enabled",
+	"dataengine.enabled", "nest.pipelined.async", "stats_log.enabled",
+}
+
+// validateDurationIfSet 要求设置了的时长带单位且为正：不带单位的数字不再当作纳秒（RR-20261005-NC-190）。
 func validateDurationIfSet(errs *[]error, cfg *viper.Viper, key string) {
 	if !cfg.IsSet(key) {
 		return
 	}
-	if cfg.GetDuration(key) <= 0 {
+	value, err := ConfigDuration(cfg, key)
+	if err != nil {
+		*errs = append(*errs, err)
+		return
+	}
+	if value <= 0 {
 		*errs = append(*errs, fmt.Errorf("config: %s must be positive", key))
 	}
 }

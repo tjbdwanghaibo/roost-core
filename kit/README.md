@@ -313,7 +313,7 @@ Stop()      停后台任务、flush、关连接（保证停服收敛）
 
 ### 3.2 配置命名空间与跨键不变量
 
-各 Mod 的配置命名空间（键的完整清单以各 `Init` 为准）：`redis.*`（含 `cluster_addrs`，逗号分隔即切 Cluster）、`mongo.*`（含 `require_replica_set`、`mongo.index.allow_recreate`）、`nats.*` + `nats.rpc.*`（JetStream RPC）+ `nats.reliable.*`（可靠 bus）、`etcd.*`（含 `advertise_addr` 的 server_type 感知回退）、`dataengine.*`（WAL、projection、outbox、effect stream）、`saga.*`、`nest.*` + `nest.pipelined.*`（`allowlist`/`async`/`async_workers`/`async_queue_capacity`）、`sync.*`、`remote_entity.*`、`ops.*`、`stats_log.*`、`config_data.dir`。
+各 Mod 的配置命名空间（键的完整清单以各 `Init` 为准）：`redis.*`（含 `cluster_addrs`，逗号分隔串或 YAML 列表即切 Cluster，RR-20261005-NC-190）、`mongo.*`（含 `require_replica_set`、`mongo.index.allow_recreate`）、`nats.*` + `nats.rpc.*`（JetStream RPC）+ `nats.reliable.*`（可靠 bus）、`etcd.*`（含 `advertise_addr` 的 server_type 感知回退）、`dataengine.*`（WAL、projection、outbox、effect stream）、`saga.*`、`nest.*` + `nest.pipelined.*`（`allowlist`/`async`/`async_workers`/`async_queue_capacity`）、`sync.*`、`remote_entity.*`、`ops.*`、`stats_log.*`、`config_data.dir`。
 
 **跨键不变量（违反即启动失败或语义破坏）**：
 

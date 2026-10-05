@@ -9,7 +9,6 @@ import (
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	redisdriver "github.com/tjbdwanghaibo/roost-core/redis/driver"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -49,10 +48,8 @@ func redisConfig(cfg *viper.Viper) *fredis.Config {
 	if minIdle := cfg.GetInt("redis.min_idle_conns"); minIdle > 0 {
 		out.MinIdleConns = minIdle
 	}
-	// Cluster mode
-	if clusterAddrs := cfg.GetString("redis.cluster_addrs"); clusterAddrs != "" {
-		out.ClusterAddrs = strings.Split(clusterAddrs, ",")
-	}
+	// Cluster mode：逗号分隔或 YAML 列表（mods.RedisClusterAddrs，RR-20261005-NC-190）。
+	out.ClusterAddrs = mods.RedisClusterAddrs(cfg)
 	return out
 }
 

@@ -76,7 +76,7 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	}
 	// 锁状态与 fence 在一个 Lua 中更新；Cluster 必须显式选择同槽前缀。
 	// 不自动改 key，否则滚动发布时新旧节点会锁住不同身份。
-	if strings.TrimSpace(cfg.GetString("redis.cluster_addrs")) != "" {
+	if len(mods.RedisClusterAddrs(cfg)) > 0 {
 		start := strings.IndexByte(m.cfg.LockKey, '{')
 		if start < 0 || strings.IndexByte(m.cfg.LockKey[start+1:], '}') <= 0 {
 			return fmt.Errorf("remote_entity: Redis Cluster requires a non-empty hash tag in remote_entity.lock_key (for example {roost:remote}); got %q", m.cfg.LockKey)
