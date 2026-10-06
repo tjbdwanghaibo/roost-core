@@ -124,10 +124,16 @@ func resolveRemoteSnapshot(access RemoteAccess, resolver RemoteSnapshotResolver,
 	if manager == nil {
 		return entity.RemoteSnapshot{}, fmt.Errorf("nest: Remote Entity snapshot reader is not configured")
 	}
+	minVersion := access.MinVersion
+	if access.AllowStale && consistency == entity.RemoteReadCached {
+		// AllowStale 接受低于 MinVersion 的快照（调用方的 RemoteSnapshot.Accepts 判定）。Cached 读出口对不满足
+		// 最低版本的 L1 返回 ErrRemoteSnapshotStale（Mirror 第 2 步），不能把下限交给它，否则 allow_stale 失效。
+		minVersion = 0
+	}
 	envelope, found, err := manager.ReadRemoteSnapshot(baseCtx, entity.RemoteSnapshotKey{
 		Tenant: access.Tenant, EntityID: access.Ref.EntityID, Kind: access.Ref.Kind,
 		Scope: uint32(access.Scope), Policy: access.Policy,
-	}, consistency, access.MinVersion)
+	}, consistency, minVersion)
 	if err != nil {
 		return entity.RemoteSnapshot{}, err
 	}

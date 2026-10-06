@@ -117,6 +117,7 @@ N8 带 epoch 的 token 也把版本下推给 loader
 - **行为变化（收紧）**：
   - Monotonic 未命中 / 权威低于最低版本只回源一次（之前两次，第二次不合并、不受等待名额约束），也不再等 2ms 再重读。
   - `Cached` + 最低版本：L1 有更低版本时返回 `ErrRemoteSnapshotStale`（之前交出低于要求的值）。nest `RemoteAcquireCache` + `MinVersion` 受影响。
+    （发版前复审更正：nest 带 `AllowStale`（生成器标签 `allow_stale`）的 Cached 访问明确接受低于 `MinVersion` 的快照，收紧之后错误在 `Accepts` 之前返回、`allow_stale` 失效；nest 现在对这种访问不把下限交给读出口，由 `Accepts` 判定，行为回到 Mirror 之前。不带 `AllowStale` 的访问照旧被拒绝，只是错误文本变成 `remote snapshot stale`。回归 `nest/remote_cached_allow_stale_promises_test.go`。）
   - `Assembly.Stop` 返回 nil 之后，Manager 的快照读返回 `ErrSnapshotClientStopped`，不再访问 L2 / 权威 / 总线；owner 的提交后发布照旧（L2 写入按 B2 降级为未确认，总线发布不经客户端准入——提交路径的停机顺序属 K3，未改）。
 - wire、L2 键格式、Lua 脚本、生成形状、配置键不变。
 - 性能：读命中路径只多一次原子读（停止标志），兴趣续租与指标本来就有；每次 L2 调用多一次 `Lifetime` Begin / End（短临界区，相对一次 Redis RTT 可忽略），每次权威加载多一次 `WithCancel` + `AfterFunc`。本批没有做压测（维护者要求节省额度）；B2 的缓存层基准不经客户端，不受影响。
