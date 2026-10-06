@@ -38,6 +38,20 @@ cfggen 的 schema 字段级参考见 [CFGGEN_META](docs/CFGGEN_META.zh-CN.md)；
 
 所有生成器都可以独立运行（`cmd/<name>`），也可以由 `roost generate` 按依赖顺序统一编排：DAO → Event → Errcode → Protocol → Entity → Nest → Attribute → Config → WebRoute。
 
+### 配置管线：该用哪条
+
+配置有 tablegen 与 cfggen 两条生成管线，维护者 2026-10-06 选择保持两条、不合成一套（理由见 [B10 §2.4](../docs/feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md#24-tablegen-与-cfggen-能否合成一套)）。两条管线的规则底层是同一套（`configdata/rules`），configdata 在每次加载与 reload 时用同一个检查器执行。
+
+| | tablegen | cfggen |
+| --- | --- | --- |
+| 手写什么 | `configs/schema` 下的 Go 结构体，`//roost:table` / `//roost:object` 标记，字段带 `csv` / `json` / `title` 与规则标签 | 一个 YAML 描述 `configs/schema/cfg.yaml`（tables / globals / beans，写法类似简化版 Luban），不写 Go 结构体 |
+| 数据 | 策划编辑的 CSV（`configs/table`，可在 Excel 里编辑后存 CSV），转换成 `configs/data/*.json`；同时生成 CSV 模板 | 直接维护 JSON |
+| 单例配置 | `//roost:object` | `globals` |
+| 怎么跑 | `roost generate` 默认执行（Config 步骤，Go 访问代码写到 `configs/generated`） | 可选，不在 `roost generate` 里，单独执行 `cmd/cfggen -meta configs/schema/cfg.yaml -out configs/cfg`；输出不能和 tablegen 共用 `configs/generated`（RR-20261005-NC-72） |
+| 适合 | 策划用表格填数、以 CSV 为交付物的流程 | 程序维护的配置、需要 bean（嵌套结构）或二级索引、不想手写 Go 结构体 |
+
+用法细节：tablegen 见 [全功能手册 §9](docs/CODEGEN_REFERENCE.zh-CN.md#9-tablegengo-metadata--csv)，cfggen 见 [§8](docs/CODEGEN_REFERENCE.zh-CN.md#8-cfggenyaml-schema-先行配置) 与 [CFGGEN_META](docs/CFGGEN_META.zh-CN.md)。
+
 ### servicerpc 速览（接口先行，不另立 def 文件）
 
 ```go

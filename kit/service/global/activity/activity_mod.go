@@ -37,6 +37,12 @@ type Mod struct {
 	service *Service
 }
 
+// generatedGroupsFile is where `roost project new` puts the activity groups
+// file and what it writes under activity.groups_file
+// (codegen/internal/roost activityGroupsFile). Init names it when the key is
+// missing, so the fix is one line to copy.
+const generatedGroupsFile = "configs/activity_groups.yaml"
+
 // NewMod returns an activity Mod.
 func NewMod(reporter servicemetrics.Reporter) *Mod {
 	return &Mod{metrics: reporter}
@@ -56,20 +62,24 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	  grace_window: 60s            # optional
 //	  dispatch_attempts: 5         # optional
 //	  dispatch_backoff: 5s         # optional
-//	  groups_file: configs/activity_groups.yaml  # optional; see below
+//	  groups_file: configs/activity_groups.yaml  # required; see below
 //	  sweep_groups: [alliance-a]   # groups whose grace windows THIS process back-stops
 //
 // groups_file is the activity groups file the game servers read too
-// (LoadGroupsFile, decision C4). When it is set it is validated here, so a
-// coordinator never starts beside a group definition no window could open
-// with, and an empty sweep_groups means "every group in the file" — the group
-// ids are then written once, in that file, instead of again in this config.
-// An explicit sweep_groups still decides, for a deployment that splits the
-// back-stop across replicas. With the file set, OpenActivity also checks every
-// window against it: the group must be in the file and every expected game a
-// member of that group (RR-20261006-17). Without it, nothing about groups is
-// checked, as before C4 — the setting is optional so projects generated before
-// the file existed keep working unchanged; projects generated since write it.
+// (LoadGroupsFile, decision C4). It is required: a coordinator without it has
+// nothing to check a window's expected set against, so Init refuses to start
+// and names the key and the path the generator writes (generatedGroupsFile).
+// It was optional until 2026-10-06 so projects generated before C4 kept
+// starting; the maintainer dropped that compatibility (nothing is deployed
+// yet, and one way to configure the coordinator is simpler than two).
+//
+// The file is validated here, so a coordinator never starts beside a group
+// definition no window could open with, and an empty sweep_groups means
+// "every group in the file" — the group ids are then written once, in that
+// file, instead of again in this config. An explicit sweep_groups still
+// decides, for a deployment that splits the back-stop across replicas.
+// OpenActivity checks every window against the file: the group must be in it
+// and every expected game a member of that group (RR-20261006-17).
 //
 // Redis Cluster requires a common non-empty hash tag in key_prefix, for
 // example {roost:activity}; dispatch records and their owed index share a CAS.
@@ -116,24 +126,26 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 			return fmt.Errorf("activity mod: activity.dispatch_attempts must be positive, got %d", dispatchAttempts)
 		}
 	}
+	path := strings.TrimSpace(cfg.GetString("activity.groups_file"))
+	if path == "" {
+		return fmt.Errorf("activity mod: activity.groups_file is required: set it to the activity groups file "+
+			"the game servers read (generated projects use %s)", generatedGroupsFile)
+	}
+	groups, err := LoadGroupsFile(path)
+	if err != nil {
+		return fmt.Errorf("activity mod: activity.groups_file: %w", err)
+	}
 	m.prefix, m.reservationTTL = prefix, reservationTTL
 	m.graceWindow, m.dispatchAttempts, m.dispatchBackoff = graceWindow, dispatchAttempts, dispatchBackoff
+	m.groups = &groups
 	m.sweepGroups = nil
 	for _, group := range cfg.GetStringSlice("activity.sweep_groups") {
 		if group = strings.TrimSpace(group); group != "" {
 			m.sweepGroups = append(m.sweepGroups, group)
 		}
 	}
-	m.groups = nil
-	if path := strings.TrimSpace(cfg.GetString("activity.groups_file")); path != "" {
-		groups, err := LoadGroupsFile(path)
-		if err != nil {
-			return fmt.Errorf("activity mod: activity.groups_file: %w", err)
-		}
-		m.groups = &groups
-		if len(m.sweepGroups) == 0 {
-			m.sweepGroups = groups.IDs()
-		}
+	if len(m.sweepGroups) == 0 {
+		m.sweepGroups = groups.IDs()
 	}
 	return nil
 }

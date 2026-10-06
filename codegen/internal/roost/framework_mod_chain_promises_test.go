@@ -69,11 +69,15 @@ func TestAServiceNestedUnderAnotherIsHostable(t *testing.T) {
 }
 
 // The activity Mod refuses an unset reservation_ttl at Init (it must exceed
-// the caller's retry horizon, which the service cannot pick), so a starter
-// config that omits it is a process that cannot start.
+// the caller's retry horizon, which the service cannot pick), and since
+// 2026-10-06 an unset groups_file (nothing to check a window's expected set
+// against), so a starter config that omits either is a process that cannot
+// start.
 func TestActivityConfigCarriesTheTTLItsModRequires(t *testing.T) {
 	block := frameworkCatalog["activity"].ConfigFunc("demo")
-	if !strings.Contains(block, "reservation_ttl:") {
-		t.Errorf("activity config block omits reservation_ttl:\n%s", block)
+	for _, want := range []string{"reservation_ttl:", "groups_file: " + activityGroupsFile + "\n"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("activity config block omits %q:\n%s", want, block)
+		}
 	}
 }

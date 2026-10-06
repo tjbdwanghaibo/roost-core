@@ -26,7 +26,7 @@
   - 错误点名文件、组和 sid。
 - game（game-demo 模板）：读 `activity.groups_file`，按本进程 sid 找到所属组，组 id 就是协调器 Key 的 GroupID，组成员就是 `Live` 查询的候选集。
   本进程 sid 不在任何组里、文件不合格，都在启动时报错（在任何远端调用之前）。
-- 协调器：`activity.groups_file`（可选）。设置后启动时按同一规则校验文件；`activity.sweep_groups` 为空时，后台 sweep 扫文件里的全部组
+- 协调器：`activity.groups_file`（可选；2026-10-06 后续改为必填，缺失时 Init 拒绝启动，见 [RR-20261006-17 修复记录“后续”](../bugfix/RR-20261006-17.md#后续groups_file-改为必填)）。设置后启动时按同一规则校验文件；`activity.sweep_groups` 为空时，后台 sweep 扫文件里的全部组
   （显式写了 `sweep_groups` 仍以它为准，用于多副本分担）。这是 kit activity 包里唯一的行为改动，`Service` 逻辑不变。
 
 ## 3. 改动面
@@ -49,7 +49,7 @@
 ## 4. 兼容
 
 - 维护者决定**不迁移已生成的工程**：旧工程的 game 代码仍读 `activity.game_sids`，不受影响；新生成的 game-demo 不再有这个键。
-- kit：`activity.groups_file` 是可选新键，未设置时协调器行为与之前完全相同。
+- kit：`activity.groups_file` 是可选新键，未设置时协调器行为与之前完全相同。（2026-10-06 后续：改为必填，未设置时协调器拒绝启动，不再兼容未迁移的旧工程，见 [RR-20261006-17 修复记录“后续”](../bugfix/RR-20261006-17.md#后续groups_file-改为必填)。）
 - 已生成工程执行 `roost sync` / `upgrade` 时，Dockerfile（生成器所有）会多一行 COPY，同时 `configs/activity_groups.yaml` 不存在就会被创建，所以镜像构建不会缺文件。
 
 ## 5. 验证

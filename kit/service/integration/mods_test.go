@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -45,9 +47,17 @@ import (
 
 // modConfig is one configuration for all nine services, shaped the way a
 // deployment's roost.yaml would be — including the required values that have
-// no defaults, since a config missing any of them is supposed to fail.
-func modConfig(root string) *viper.Viper {
+// no defaults, since a config missing any of them is supposed to fail. The
+// activity groups file (required since 2026-10-06) puts game 7, the one the
+// activity subtests open windows for, in group-a.
+func modConfig(t *testing.T, root string) *viper.Viper {
+	t.Helper()
+	groups := filepath.Join(t.TempDir(), "activity_groups.yaml")
+	if err := os.WriteFile(groups, []byte("groups:\n  - id: group-a\n    game_sids: [7]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cfg := viper.New()
+	cfg.Set("activity.groups_file", groups)
 	for service, prefix := range map[string]string{
 		"account": ":account", "activity": ":activity", "chat": ":chat",
 		"directory": ":directory", "global": ":global", "mail": ":mail",
@@ -118,7 +128,7 @@ func serviceMods(t *testing.T) []app.Mod {
 func bootstrap(t *testing.T) (*app.Registry, *viper.Viper) {
 	t.Helper()
 	c := client(t)
-	cfg := modConfig(prefix(t, "mods"))
+	cfg := modConfig(t, prefix(t, "mods"))
 	registry := app.NewRegistry(cfg)
 	// Stand in for roost-kit's RedisMod, which is what publishes this
 	// capability in a real process.
@@ -327,7 +337,7 @@ func TestEveryPublishedCapabilityIsUsable(t *testing.T) {
 func TestEveryModWritesUnderItsConfiguredPrefix(t *testing.T) {
 	c := client(t)
 	root := prefix(t, "confined")
-	cfg := modConfig(root)
+	cfg := modConfig(t, root)
 	registry := app.NewRegistry(cfg)
 	if err := registry.Register(mods.ModRedis, c); err != nil {
 		t.Fatal(err)
@@ -515,7 +525,7 @@ func driveThroughRegistry(t *testing.T, registry *app.Registry, root string) {
 // whose dynamic type is still *Service and the assertion succeeds anyway.
 func TestTheOwningModPublishesMailAsTheInterfaceOnly(t *testing.T) {
 	c := client(t)
-	cfg := modConfig(prefix(t, "shape"))
+	cfg := modConfig(t, prefix(t, "shape"))
 	registry := app.NewRegistry(cfg)
 	if err := registry.Register(mods.ModRedis, c); err != nil {
 		t.Fatal(err)
@@ -616,7 +626,7 @@ func has[T any](registry *app.Registry, name app.ModName) bool {
 // got would depend on registration order.
 func TestTheTwoMailModsCannotShareAProcess(t *testing.T) {
 	c := client(t)
-	cfg := modConfig(prefix(t, "exclusive"))
+	cfg := modConfig(t, prefix(t, "exclusive"))
 	registry := app.NewRegistry(cfg)
 	if err := registry.Register(mods.ModRedis, c); err != nil {
 		t.Fatal(err)
@@ -677,7 +687,7 @@ func TestTheTwoMailModsCannotShareAProcess(t *testing.T) {
 // and being the owner is what registering handlers means.
 func TestOnlyTheMailServerRegistersHandlers(t *testing.T) {
 	c := client(t)
-	cfg := modConfig(prefix(t, "handlers"))
+	cfg := modConfig(t, prefix(t, "handlers"))
 	registry := app.NewRegistry(cfg)
 	if err := registry.Register(mods.ModRedis, c); err != nil {
 		t.Fatal(err)
@@ -715,7 +725,7 @@ func TestOnlyTheMailServerRegistersHandlers(t *testing.T) {
 // them is a duplicate; the client Mod registering them is a second, wrong
 // owner.
 func TestTheMailClientModRegistersNoHandlers(t *testing.T) {
-	cfg := modConfig(prefix(t, "clienthandlers"))
+	cfg := modConfig(t, prefix(t, "clienthandlers"))
 	registry := app.NewRegistry(cfg)
 	counting := &countingBus{}
 	if err := registry.Register(mods.ModBus, counting); err != nil {

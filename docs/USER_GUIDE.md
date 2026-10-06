@@ -177,7 +177,7 @@ redis:
     - id: mygame              # 协调器 Key.GroupID；非空、不含 /、不重复
       game_sids: [1000, 1001] # 每个 game 的 --sid；每组至多 64 个，一个 sid 只属于一个组，正的 int32
   ```
-  协调器读 `activity.groups_file`（可选；设置后启动时校验，`activity.sweep_groups` 为空时后台 sweep 扫文件里的全部组，显式写了 `sweep_groups` 仍以它为准；每次 `OpenActivity` 都按文件核对：Key 的组必须在文件里、expected 里每个 sid 都必须是该组成员，否则 `ErrInvalid` 点名文件 / 组 / sid，RR-20261006-17）；game-demo 的 game 读同名键，按本服 sid 找组，组 id 就是开窗 / 贡献 / 结算用的组，组成员就是 `Live` 的候选。校验只有一份（`kit/service/global/activity.LoadGroupsFile`）：每组成员数上限就是协调器单个窗口 expected 集合的上限 `activity.MaxExpectedGames`（64）；组内重复、一个 sid 在两个组、非正数或超出 int32、未知字段、game 的 sid 不在任何组里，都在启动时点名文件报错。列出没在跑的 sid 无害（`Live` 只算活着的）。文件按相对路径解析：开发时在工程根目录，镜像里由 Dockerfile 拷到 `/app/configs/activity_groups.yaml`，shell 部署由 `install.sh` 装进 release；某个环境要不同分组时把文件挂到这个路径，或把两边的 `groups_file` 指到挂载位置。旧的 game 配置键 `activity.game_sids` 已删除，已生成的工程不迁移（见 CHANGELOG）。
+  协调器读 `activity.groups_file`（**必填**，2026-10-06 起：缺失或为空时 activity Mod 的 `Init` 拒绝启动，错误点名键名与生成器的默认路径 `configs/activity_groups.yaml`；生成的协调器配置已写好这个键；启动时校验文件，`activity.sweep_groups` 为空时后台 sweep 扫文件里的全部组，显式写了 `sweep_groups` 仍以它为准；每次 `OpenActivity` 都按文件核对：Key 的组必须在文件里、expected 里每个 sid 都必须是该组成员，否则 `ErrInvalid` 点名文件 / 组 / sid，RR-20261006-17）；game-demo 的 game 读同名键，按本服 sid 找组，组 id 就是开窗 / 贡献 / 结算用的组，组成员就是 `Live` 的候选。校验只有一份（`kit/service/global/activity.LoadGroupsFile`）：每组成员数上限就是协调器单个窗口 expected 集合的上限 `activity.MaxExpectedGames`（64）；组内重复、一个 sid 在两个组、非正数或超出 int32、未知字段、game 的 sid 不在任何组里，都在启动时点名文件报错。列出没在跑的 sid 无害（`Live` 只算活着的）。文件按相对路径解析：开发时在工程根目录，镜像里由 Dockerfile 拷到 `/app/configs/activity_groups.yaml`，shell 部署由 `install.sh` 装进 release；某个环境要不同分组时把文件挂到这个路径，或把两边的 `groups_file` 指到挂载位置。旧的 game 配置键 `activity.game_sids` 已删除，已生成的工程不迁移（见 CHANGELOG）。
 - **与 etcd Discovery 的分工**：kit etcd Mod 的 Discovery（`<etcd.service_prefix><server_type>/<sid>`，`etcd.lease_ttl` 秒的 etcd 租约）只做**地址 / 元数据发现**，不承担存活语义；“这个 sid 有没有进程在跑”以 `App.Live` 为准。Discovery 的 Mod Start 在拿锁之后，所以同一 sid 同一时刻只有一个进程注册；崩溃的进程的注册最多残留 `lease_ttl` 秒，卡住的进程恢复后会看到 `etcd Discovery: lease lost`（并在停机时报 `revoke: requested lease not found`），这只是旧租约过期的伴随现象。`service_prefix` 要以 `/` 结尾（Discovery 不补分隔符；codegen 2026-10-05 起生成 `/roost/services/`）。
 - **观测**：`/readyz` 多一项 `singleton`：持有为 ok，窗口内续期结果未知为 degraded，失锁或未持有为 fail（`/healthz` 不受影响）。degraded 算就绪（维护者决定 D1）：续期结果未知的窗口里 `/readyz` 仍返回 200，响应体 `degraded: true`、`degraded_dependencies` 里列出 `singleton` 与原因；只有 fail 让它 503。
 - **不要自建进程级单例**：kit 不再以 capability 发布 `redis.lock`（`mods.ModRedisLock`）与 `etcd.election`（`mods.ModEtcdElection`），两个常量已删除（破坏性变更，方案 §12 / 第 2b 笔）。core 的 `redis.IDistLock`、`etcd.IFencedElection` 仍在，只用于 cron 去重、按键选主这类键级用途，需要时用 `redis/driver.Assemble(cfg).Locks`、`etcd/driver.Assemble(cfg).Election` 自行装配。
@@ -514,6 +514,18 @@ kit 的 Mod 在 Init 里也严格读取，直接装配 Mod、不经 App 启动�
 ### 配置数据：规则、热更与可见性
 
 业务配置表（`configs/data/*.json`）由 `configdata.Store` 加载成不可变快照；请求钉住准入时的那一代（`configdata.ActiveSnapshot` / 生成的 `XxxByID`、`XxxTable()`），同一请求内两次读不会跨代。
+
+**两条生成管线，该用哪条**（维护者 2026-10-06 选 A：保持两条，不合成一套，理由见 [B10 §2.4](feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md#24-tablegen-与-cfggen-能否合成一套)）：
+
+| | tablegen | cfggen |
+| --- | --- | --- |
+| 手写什么 | `configs/schema` 下的 Go 结构体，`//roost:table` / `//roost:object` 标记，字段带 `csv` / `json` / `title` 与规则标签 | 一个 YAML 描述 `configs/schema/cfg.yaml`（tables / globals / beans，写法类似简化版 Luban），不写 Go 结构体 |
+| 数据 | 策划编辑的 CSV（`configs/table`，可在 Excel 里编辑后存 CSV），转换成 `configs/data/*.json`；生成器同时给出 CSV 模板 | 直接维护 JSON |
+| 单例配置 | `//roost:object` | `globals` |
+| 怎么跑 | `roost generate` 默认执行（config 步骤：Go 访问代码写到 `configs/generated`，CSV 转 JSON） | 可选，不在 `roost generate` 里，单独执行 `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/cfggen -meta configs/schema/cfg.yaml -out configs/cfg`；输出不能和 tablegen 共用 `configs/generated`（RR-20261005-NC-72） |
+| 适合 | 策划用表格填数、以 CSV 为交付物的流程 | 程序维护的配置、需要 bean（嵌套结构）或二级索引、不想手写 Go 结构体 |
+| 规则 | 同一套：`configdata/rules`，configdata 在每次加载与 reload 时用同一个检查器执行（见下条） | 同左 |
+
 
 - **规则只写一次，在加载层强制**（B10）：tablegen 的字段标签 `required:"true"`（JSON 键必须出现且不为 null）、`unique:"true"`、`min:"<n>"`、`enum:"a|b"`、`ref:"<table>"`，或 cfggen 的同名选项，生成为 `TableDef.Rules` / `cfg` 标签，configdata 在每次 Load / Reload 检查：required / unique / min / enum 查原始 JSON（缺列与零值分得清），ref 在全部表加载后查目标主键。**键大小写敏感**（2026-10-06，[方案](feature/CONFIGDATA-CASE-SENSITIVE-KEYS-2026-10-06.md)）：数据文件里的键必须与字段的 json 名逐字一致，嵌套对象同样；只差大小写的键（`Level` 对 `level`）或一行里同一字段的几种拼写，在 Load / Reload / DryRun 都被拒绝，错误形如 `configdata: table monster row 1 (key 1) field level: case: key "Level" must be spelled "level" (keys are case-sensitive)`。未声明的键维持原样（宽松忽略、严格模式拒绝）；`FieldRule.Field` 也必须逐字是 json 名。违反任何一条整次拒绝、旧快照保持，错误是 `*configdata.RuleError`：`configdata: table spawn row 1 (key 1) field template: required: missing or null`。规则声明写错（字段不存在、min 用在字符串上）在注册时就失败。业务不需要再为“缺列 / 零值 / 悬空引用”写校验或防御代码；跨行、跨表的业务约束仍写 `TableDef.ValidateTable` / `Validate`（在规则之后运行，可假定引用完整）。
 - **热更顺序与可见性**（C2）：build（文件、规则、表校验）→ 监听者 `ValidateReload` → `BeforeApplyReload` → **发布** → lifecycle 事件 → `AfterApplyReload`。新的一代在 AfterApply 之前已发布；AfterApply 失败时整次撤回，发布到撤回之间准入的请求整个生命周期读被撤回的那一代。`Store.Rollback` 回到上一代，回滚前准入的请求读被回滚的那一代。不能接受的检查放进 Validate / BeforeApply。

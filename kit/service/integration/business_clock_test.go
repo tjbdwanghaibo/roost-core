@@ -21,7 +21,7 @@ import (
 func TestOffsetMovesMatchChatAndAccountBusinessTimesButNotRetentionOrSessions(t *testing.T) {
 	const offset = 24 * time.Hour
 	c := client(t)
-	cfg := modConfig(prefix(t, "dl3b"))
+	cfg := modConfig(t, prefix(t, "dl3b"))
 	cfg.Set("time.logic_offset", "24h")
 	cfg.Set("chat.retention_age", "1h")
 	registry := app.NewRegistry(cfg)

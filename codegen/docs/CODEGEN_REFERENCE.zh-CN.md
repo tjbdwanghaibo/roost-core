@@ -473,7 +473,7 @@ go run .../cmd/tablegen@latest \
 
 **键与表头大小写敏感**（2026-10-06，[方案](../../docs/feature/CONFIGDATA-CASE-SENSITIVE-KEYS-2026-10-06.md)）：JSON 的键必须逐字是字段的 json 名、CSV 表头必须逐字是 csv 名。只差大小写的键由 configdata 在每次加载 / reload 拒绝（`field level: case: key "Level" must be spelled "level"`），`-check` 用同一条规则（`configdata/rules.MisspelledKey`）提前报；只差大小写的表头在 CSV 转换和生成的 `Convert<Type>CSV` 里报 `header "Level" must be spelled "level"`——以前它被当成未知列跳过、值静默丢成零值。未声明的键 / 列维持原样。
 
-CSV 前四行依次为字段名、标题、类型和规则；转换会校验规则、数字格式等并生成 `_manifest.json`（空的 required 单元格按 null 报 required）。每张表另生成 `<Type>Table()`（当前请求钉住的快照里的表，未加载时为 nil、读它安全）与 `<Type>By<Key>(id)`。`cfggen` 适合 YAML schema 单一来源，`tablegen` 适合已有 Go 类型和策划 CSV 流程，两者通常二选一。
+CSV 前四行依次为字段名、标题、类型和规则；转换会校验规则、数字格式等并生成 `_manifest.json`（空的 required 单元格按 null 报 required）。每张表另生成 `<Type>Table()`（当前请求钉住的快照里的表，未加载时为 nil、读它安全）与 `<Type>By<Key>(id)`。`cfggen` 适合 YAML schema 单一来源，`tablegen` 适合已有 Go 类型和策划 CSV 流程，两者通常二选一；两条管线保持并存（维护者 2026-10-06 选 A），对照表见 [codegen README“配置管线：该用哪条”](../README.md#配置管线该用哪条)。
 
 ### 9.1 `_manifest.json` 与 JSON 退役
 

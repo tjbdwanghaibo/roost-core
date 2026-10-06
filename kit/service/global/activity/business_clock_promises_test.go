@@ -14,7 +14,7 @@ import (
 // 协调器一端必须用同一个钟判断截止、宽限与过期，否则偏移非 0 时两端错开一个偏移量。
 // 修前 Mod 不给 Config.Now，协调器退回 time.Now，配了 +24h 偏移也照真实时间走。
 func TestTheModWiresTheCoordinatorToTheBusinessClock(t *testing.T) {
-	cfg := modConfig()
+	cfg := modConfig(t)
 	cfg.Set("time.logic_offset", "24h")
 	registry := app.NewRegistry(cfg)
 	// 真实的 kit 客户端，指向没人监听的地址：go-redis 惰性连接，Provide 只建存储，不发命令。

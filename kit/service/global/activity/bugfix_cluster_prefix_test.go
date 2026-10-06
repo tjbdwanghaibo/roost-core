@@ -27,6 +27,7 @@ func bugfix7Activity(t *testing.T, prefix string) (*Mod, error) {
 	cfg.Set("redis.cluster_addrs", addr)
 	cfg.Set("activity.key_prefix", prefix)
 	cfg.Set("activity.reservation_ttl", time.Hour)
+	cfg.Set("activity.groups_file", writeGroups(t, groupYAML("group-a", []int64{1, 2, 3})))
 	m := NewMod(nil)
 	if err := m.Init(cfg); err != nil {
 		return m, err
@@ -117,7 +118,7 @@ func TestBugfix7ActivityClusterRecoversPartialCompletion(t *testing.T) {
 func TestBugfix7ActivityClusterRejectsInvalidPrefix(t *testing.T) {
 	for _, prefix := range []string{"activity", "{}:activity", "{activity", "{}:{valid}:activity"} {
 		t.Run(prefix, func(t *testing.T) {
-			cfg := modConfig()
+			cfg := modConfig(t)
 			cfg.Set("redis.cluster_addrs", "127.0.0.1:1")
 			cfg.Set("activity.key_prefix", prefix)
 			if err := NewMod(nil).Init(cfg); err == nil || !strings.Contains(err.Error(), "activity.key_prefix") {
@@ -127,7 +128,7 @@ func TestBugfix7ActivityClusterRejectsInvalidPrefix(t *testing.T) {
 	}
 }
 func TestBugfix7ActivityStandaloneKeepsPlainPrefix(t *testing.T) {
-	if err := NewMod(nil).Init(modConfig()); err != nil {
+	if err := NewMod(nil).Init(modConfig(t)); err != nil {
 		t.Fatal(err)
 	}
 }

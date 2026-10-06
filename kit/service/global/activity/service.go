@@ -112,11 +112,13 @@ type Config struct {
 	// start. Until U-0119 there was no way to supply them at all, so the grace
 	// window was never enforced by any process.
 	SweepGroups []string
-	// Groups is the activity groups file (activity.groups_file, C4) when the
-	// deployment has one. OpenActivity then refuses a window whose group the
-	// file does not define, or whose expected set names a game outside that
-	// group (RR-20261006-17). Nil means no file: the expected set is checked
-	// only for shape, as before the file existed.
+	// Groups is the activity groups file (activity.groups_file, C4).
+	// OpenActivity refuses a window whose group the file does not define, or
+	// whose expected set names a game outside that group (RR-20261006-17).
+	// The Mod always sets it — the key is required and Init refuses to start
+	// without it. Nil is only for a Service built directly with New (in-memory
+	// coordinators in tests, the generated game's tests), whose expected sets
+	// are then checked for shape alone.
 	Groups *Groups
 
 	// Metrics receives reports. A nil reporter means no reporting and never

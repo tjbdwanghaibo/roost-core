@@ -71,7 +71,17 @@ func Canonical(value json.RawMessage) string                                    
 
 ### 2.4 tablegen 与 cfggen 能否合成一套
 
-评估结论：**规则表示与检查已合成一套**（`rules.Rule` + `rules.Check` + configdata 的 ref），两种标签方言只是两个入口。把 tablegen 的 schema 也改成 `cfg` 标签、生成器只留一个，代价是所有已有工程的 schema 标签都要改写（CSV 流程、`csv` / `title` 标签 cfggen 没有对应物），收益只是少一个解析函数；**列为后续**，不在本轮做。cfggen 的 globals 也暂不支持规则（cfggen 现在对 globals 拒绝 index / ref，规则同理先拒绝），列为后续。
+评估结论：**规则表示与检查已合成一套**（`rules.Rule` + `rules.Check` + configdata 的 ref），两种标签方言只是两个入口。把 tablegen 的 schema 也改成 `cfg` 标签、生成器只留一个，代价是所有已有工程的 schema 标签都要改写（CSV 流程、`csv` / `title` 标签 cfggen 没有对应物），收益只是少一个解析函数。
+
+**维护者 2026-10-06 选 A：保持两条管线**（第十三轮，[DECISIONS-PENDING](../review/DECISIONS-PENDING-2026-10-05.md)），不合成一套。理由：
+
+- 两条管线服务的是两种工作方式，不是同一件事的两个实现。tablegen 面向策划填表：手写 `configs/schema` 下带 `csv` / `title` / 规则标签的 Go 结构体，数据是策划编辑的 CSV（可在 Excel 里编辑后存 CSV），转成 JSON，`roost generate` 默认就跑；cfggen 面向程序维护的配置：手写一个 YAML 描述 `configs/schema/cfg.yaml`（写法类似简化版 Luban），数据直接是 JSON，支持普通表和全局单例 globals（以及 bean、二级索引），可选，需要单独执行。
+- 真正需要“一套”的是规则，这一层已经统一：两条管线的规则都落到 `configdata/rules`，由 configdata 在每次加载与 reload 时用同一个检查器执行，CSV 转换和 `-check` 也用它。
+- 合成一套的代价全落在已有工程上（schema 标签改写、CSV 流程失去 `csv` / `title` 的对应物），收益只是少一个解析函数；配置要简单，指的是每条管线自己简单、分工写清楚，而不是强行合并。
+
+分工写进了使用文档的对照表：[USER_GUIDE“配置数据”](../USER_GUIDE.md#配置数据规则热更与可见性)、[codegen README](../../codegen/README.md#配置管线该用哪条)。
+
+cfggen 的 globals 规则（当时列为后续）已在第十二轮实施（`229a5aa0`：required / min / enum 走 `ObjectDef.Rules`，unique / ref / index 对单个对象仍拒绝）。
 
 ### 2.5 C2：契约与可见性
 
@@ -149,5 +159,5 @@ game-demo 的其余配置读取（`ItemByID`、flags 的 `FeatureFlagTableFrom(s
 ### 未完成 / 后续
 
 - 发版时上调生成器 Core 下限（`minimumVersions.Core`、framework-compat minimum 行）；在此之前 CI 按 pin 跑的两个 runtime 门与 framework-compat 最低版本格会失败（预期）。
-- cfggen globals 的规则（required / min / enum 走 `ObjectDef.Rules`）；tablegen 生成期的 ref 数据检查（现在只在加载时查）；tablegen 与 cfggen 两种标签方言合一（见 2.4）。
+- tablegen 生成期的 ref 数据检查（现在只在加载时查）。cfggen globals 的规则已实施（`229a5aa0`）；两种标签方言合一不做（维护者 2026-10-06 选 A：保持两条管线，见 2.4）。
 - 生成的 game-demo 没有运维 Rollback 入口，也没有会失败的 AfterApply 监听者：`stage=apply` 撤回与运维 Rollback 的日志 / 指标由单测覆盖（`TestEveryReloadReportsOneOutcome`、`TestFailedReloadAndRollbackAreCountedAndLogged`），未在真实进程里触发。

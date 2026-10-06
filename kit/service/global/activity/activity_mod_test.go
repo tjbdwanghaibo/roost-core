@@ -10,10 +10,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
-func modConfig() *viper.Viper {
+// modConfig is the smallest configuration Init accepts: the two keys with no
+// default and the required groups file, here one group "group-a" (the group
+// activityKey uses) of games 1, 2 and 3.
+func modConfig(t testing.TB) *viper.Viper {
+	t.Helper()
 	cfg := viper.New()
 	cfg.Set("activity.key_prefix", "roost:activity")
 	cfg.Set("activity.reservation_ttl", 30*time.Minute)
+	cfg.Set("activity.groups_file", writeGroups(t, groupYAML("group-a", []int64{1, 2, 3})))
 	return cfg
 }
 
@@ -55,7 +60,7 @@ func TestModRequiresAKeyPrefix(t *testing.T) {
 }
 
 func TestModRefusesANonPositiveDispatchBudget(t *testing.T) {
-	cfg := modConfig()
+	cfg := modConfig(t)
 	cfg.Set("activity.dispatch_attempts", 0)
 	if err := NewMod(nil).Init(cfg); err == nil {
 		t.Fatal("Init accepted a zero dispatch budget; an unbounded retry queue never drains")
@@ -64,7 +69,7 @@ func TestModRefusesANonPositiveDispatchBudget(t *testing.T) {
 
 func TestModInitAndProvideContract(t *testing.T) {
 	mod := NewMod(nil)
-	if err := mod.Init(modConfig()); err != nil {
+	if err := mod.Init(modConfig(t)); err != nil {
 		t.Fatal(err)
 	}
 	// This service now has a Mod of its own, so "what the Mod is called" and
@@ -97,9 +102,10 @@ func TestModInitAndProvideContract(t *testing.T) {
 }
 
 // U-0119: the groups a process back-stops come from configuration; blank
-// entries are dropped and a missing key means none.
+// entries are dropped. A missing key means every group in the groups file
+// (C4; the file is required, so it is never "none").
 func TestModReadsSweepGroups(t *testing.T) {
-	cfg := modConfig()
+	cfg := modConfig(t)
 	cfg.Set("activity.sweep_groups", []string{"alliance-a", " ", "alliance-b"})
 	mod := NewMod(nil)
 	if err := mod.Init(cfg); err != nil {
@@ -109,7 +115,7 @@ func TestModReadsSweepGroups(t *testing.T) {
 		t.Fatalf("sweep groups = %v", mod.sweepGroups)
 	}
 	bare := NewMod(nil)
-	if err := bare.Init(modConfig()); err != nil || bare.sweepGroups != nil {
-		t.Fatalf("no key: groups=%v err=%v", bare.sweepGroups, err)
+	if err := bare.Init(modConfig(t)); err != nil || len(bare.sweepGroups) != 1 || bare.sweepGroups[0] != "group-a" {
+		t.Fatalf("no key: groups=%v err=%v, want the groups file's [group-a]", bare.sweepGroups, err)
 	}
 }

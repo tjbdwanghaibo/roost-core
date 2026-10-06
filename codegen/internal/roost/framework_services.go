@@ -208,7 +208,8 @@ func Pending() platform.PendingOrders { return nil }
 			// game servers open windows in, validated here at start, swept by
 			// this process (so their ids are not written a second time under
 			// sweep_groups) and checked against every window opened
-			// (RR-20261006-17).
+			// (RR-20261006-17). The Mod requires it (Init refuses to start
+			// without it, 2026-10-06), like reservation_ttl.
 			return "activity:\n  key_prefix: roost:" + project + ":activity\n  reservation_ttl: 30m\n  grace_window: 60s\n  dispatch_attempts: 5\n  dispatch_backoff: 5s\n  groups_file: " + activityGroupsFile + "\n"
 		},
 	},

@@ -130,7 +130,7 @@ func TestGroupsAnswerWhichGroupASIDIsIn(t *testing.T) {
 	}
 }
 
-func writeGroups(t *testing.T, body string) string {
+func writeGroups(t testing.TB, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "activity_groups.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -142,7 +142,7 @@ func writeGroups(t *testing.T, body string) string {
 func TestModSweepsTheGroupsInTheGroupsFile(t *testing.T) {
 	path := writeGroups(t, groupYAML("a", []int64{1, 2})+"  - id: b\n    game_sids: [3]\n")
 	t.Run("file-groups-when-sweep-groups-is-empty", func(t *testing.T) {
-		cfg := modConfig()
+		cfg := modConfig(t)
 		cfg.Set("activity.groups_file", path)
 		mod := NewMod(nil)
 		if err := mod.Init(cfg); err != nil {
@@ -153,7 +153,7 @@ func TestModSweepsTheGroupsInTheGroupsFile(t *testing.T) {
 		}
 	})
 	t.Run("explicit-sweep-groups-decide", func(t *testing.T) {
-		cfg := modConfig()
+		cfg := modConfig(t)
 		cfg.Set("activity.groups_file", path)
 		cfg.Set("activity.sweep_groups", []string{"b"})
 		mod := NewMod(nil)
@@ -165,7 +165,7 @@ func TestModSweepsTheGroupsInTheGroupsFile(t *testing.T) {
 		}
 	})
 	t.Run("an-unusable-file-stops-init", func(t *testing.T) {
-		cfg := modConfig()
+		cfg := modConfig(t)
 		cfg.Set("activity.groups_file", writeGroups(t, groupYAML("a", sidRange(1, MaxExpectedGames+1))))
 		err := NewMod(nil).Init(cfg)
 		if err == nil || !strings.Contains(err.Error(), "activity.groups_file") {
@@ -173,7 +173,7 @@ func TestModSweepsTheGroupsInTheGroupsFile(t *testing.T) {
 		}
 	})
 	t.Run("a-missing-file-stops-init", func(t *testing.T) {
-		cfg := modConfig()
+		cfg := modConfig(t)
 		cfg.Set("activity.groups_file", filepath.Join(t.TempDir(), "absent.yaml"))
 		if err := NewMod(nil).Init(cfg); err == nil || !strings.Contains(err.Error(), "absent.yaml") {
 			t.Fatalf("Init with a missing groups file: %v", err)
