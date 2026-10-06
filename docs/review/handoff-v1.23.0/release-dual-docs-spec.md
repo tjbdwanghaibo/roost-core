@@ -97,3 +97,6 @@ TOOL（pretag、source-head-check、冲突标记门禁、mirror-local.sh、示�
 - 跟进：`activity.New` 在 `Config.Groups == nil` 时仍不核对（只剩直接构造的测试路径）→ 改为必填，消除不核对分支（`wt-grpnew`）。
 - grpnew 已合（`061cb538`、`068bf5d4`）：`activity.New` 要求 Groups。**发版必做**：生成的 game 测试用了 `activity.Config.Groups`（v1.22.0 没有）→ `codegen/internal/roost/manifest.go` `minimumVersions.Core` 与 `.github/workflows/framework-compat.yml` minimum 行提到 v1.23.0（打 tag 时一起改）。OWN-5 补“New 也要求组”。
 - sktest 已合（`5c1f4176`）：RR-20261006-21/22/23（skill 进程记录生命周期）。分册 3 的 SKILL-1、SKILL-3、SKILL-5 按 `5c1f4176` 更新。待维护者：宿主停进程失败时 Runtime 不重试（A 保持+文档 / B 重试）。
+- drill 已合（`0db819b0`）：RR-24（nats 关闭后错误不可 errors.Is）、-25（hook 超时点名）、-26（Close 后 Connected 仍 true）；演练四项实测。影响 APP-1/7/8/9/12、OWN-2/3、DRV-5（补 RR-24/26，“未在真实依赖上测”已闭环）。
+- drill3 已合（`3b06c66c`）：RR-27（直方图分位数夹到观测范围、阈值失败点明实际值）、-28（生产校验认 cluster_addrs、accountctl -redis-cluster、run.sh）、-29（Contribute 自开窗）；单机 Cluster 演练通过。影响 OWN-3（guide ~426）、APP-1（~146、E08 ~854）、APP-5、CFG-5、NONCORE-43、E08/E09 summary 行。
+- 进行中：nats/driver 自持“已关闭”状态（维护者方向决定 A，`wt-natsstate`）→ DRV-5。待维护者：skill 宿主撤除失败 A/B；生成配置的 key_prefix 默认带 hash tag（便于切 Cluster）是否要做。
