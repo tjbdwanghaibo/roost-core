@@ -1,7 +1,7 @@
 # 发版前审查观察收尾（2026-10-06）
 
 来源：发版前审查的两份报告（随提交 `207163f9` nest allow_stale、`42419890` saga 守卫提交，报告本身没有入库）里列为“观察”、不在那两笔里修的五条。
-维护者授权：确认是缺陷的按先红后绿修；纯语义取舍的写文档。分支 `auditfu`，基线 `c99b59f6`，未发版。
+维护者授权：确认是缺陷的按先红后绿修；纯语义取舍的写文档。分支 `auditfu`，基线 `c99b59f6`，提交 `5a3c4a60`，未发版。
 
 源码核对以当前源码为准：codebase-memory 共享 generation 停在 09-30，本轮用 `rg` 与直接阅读逐行核对（`kit/service/global/activity`、`saga`、`configdata/rules`、`service/mail`）。
 
