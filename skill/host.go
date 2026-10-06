@@ -20,12 +20,17 @@ package skill
 //   - StopSpawn must be idempotent: stopping a spawn that is already
 //     stopped, or that the Host does not know, succeeds without a second side
 //     effect (MemoryHost returns the current revision and emits no event).
-//     When StopSpawn fails, the Runtime marks the spawn stop_pending and
-//     retries the same stop on later ticks with backoff
-//     (RuntimeOptions.SpawnStopRetryBackoff / SpawnStopRetryLimit), and
-//     Shutdown / RemoveProgram may stop it again; a stop the Host actually
-//     performed but reported as failed is therefore re-issued. Return an
-//     error only when the spawn is still running in the world.
+//     Every stop entry (cast failure and in-cast stops, failed spawn
+//     starts, tick-driven reaping, RemoveProgram, Shutdown) goes through one
+//     stop function: when StopSpawn fails, the Runtime marks the spawn
+//     stop_pending and retries the same stop on later ticks with backoff
+//     (RuntimeOptions.SpawnStopRetryBackoff / SpawnStopRetryLimit), also
+//     after Shutdown when the Runtime keeps advancing or is restored from a
+//     checkpoint, and Shutdown / RemoveProgram stop it again on request; a
+//     stop the Host actually performed but reported as failed is therefore
+//     re-issued. Callbacks run only on the first request; retries call
+//     StopSpawn alone. Return an error only when the spawn is still running
+//     in the world.
 type Host interface {
 	AuthorityProvider
 	StateStore

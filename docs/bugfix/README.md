@@ -6,6 +6,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 停止入口统一（RR-20261006-21 后续二，`skstop`），未发版。** 唯一的停止函数 `requestSpawnStop`（`skill/runtime_spawn_stop.go`）：停止中 → 已停止 / 待停止 → 回收，全部入口只请求停止，宿主拒绝后的处理只在这里；删掉 `deferUnstoppedSpawnsLocked`、`deferRefusedStopLocked`、`stopOwnedSpawn` 与各入口的失败分支。`Shutdown` / `RemoveProgram` 停不下的衍生物留成 `stop_pending`、进 checkpoint，由 Runtime 在 tick 上重试（不同步重试）。登记表 + 源码守卫：新增入口不登记即红。[记录](RR-20261006-21.md#后续二停止入口统一维护者-2026-10-07) / [方案](../feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-32](RR-20261006-32.md) | 被拒的停止在第一次请求时就转入 `stop_pending`，`failCastLocked` / reap 不再重停，回调不再重跑 | 已修复、声明场景验证，未发版 |
+
 **10-06 RR-20261006-21 后续：Runtime 负责重试停止（`skretry`），未发版。** 维护者决定技能自己启动的东西由技能自己收尾：`failCastLocked` 停不下的进程标成 `stop_pending`，`advanceHost` 按退避重试（默认 4 tick 起翻倍、10 次上限），到上限计 `skill.process.stop_retry_exhausted.total` 并写日志、记录保留，条目数受 `MaxStopPendingProcesses` 约束，状态进 checkpoint（版本 3）；`Host.StopProcess` 契约写明必须幂等。[记录](RR-20261006-21.md#后续runtime-负责重试停止维护者-2026-10-06)。
 
 | 编号 | 修复 | 状态 |
@@ -35,7 +41,7 @@
 | --- | --- | --- |
 | [RR-20261006-23](RR-20261006-23.md) | `castEvictableLocked` 只看运行中的进程；`pruneCompletedCastsLocked` 回收 cast 前删它的进程记录 | 已修复、声明场景验证，未发版 |
 | [RR-20261006-22](RR-20261006-22.md) | `PresentationSnapshot` 按增量来源填 PrimaryTarget（未移交进程取施法目标），`activePresentationEvent` 用它 | 已修复、声明场景验证，未发版 |
-| [RR-20261006-21](RR-20261006-21.md) | `startLocked` 未提交失败：无运行中进程时删记录、删 cast、还 ID；否则保留 failed cast 并返回其 ID；后续：停不下的进程由 Runtime 退避重试 | 已修复、声明场景验证，未发版 |
+| [RR-20261006-21](RR-20261006-21.md) | `startLocked` 未提交失败：无运行中进程时删记录、删 cast、还 ID；否则保留 failed cast 并返回其 ID；后续：停不下的进程由 Runtime 退避重试；后续二：停止入口统一 | 已修复、声明场景验证，未发版 |
 
 **10-06 NONCORE-46 维护者选 A（tpstat），未发版。** RR-20261006-20：`TaskPool.Submit` 先计提交再入队（被拒撤回），`GetStats` 先读结束数再读 total，保证 `completed + failed ≤ total`；不加锁，热路径只多一次拒绝时的原子减。
 

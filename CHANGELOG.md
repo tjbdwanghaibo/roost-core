@@ -6,6 +6,7 @@
 
 ### Changed
 
+- **skill：衍生物的全部停止入口统一走一套“停止 / 待停止”状态机；`Shutdown` / `RemoveProgram` 停不下的衍生物由 Runtime 继续重试**（维护者 2026-10-07“停止入口统一”，RR-20261006-21 后续二；RR-20261006-32）：施法失败与施法里的停止、衍生物启动失败清理、移交、tick 回收、`RemoveProgram`、`Shutdown` 只调一个停止函数，宿主拒绝 `StopSpawn` 后统一转 `stop_pending`（不在 `OwnedSpawns` 里、Runtime 不再推进），之后按 `SpawnStopRetryBackoff` 退避重试，上限、告警、内存上限、checkpoint 不变。以前 `Shutdown` / `RemoveProgram` 停不下时衍生物留成 running、等调用方重试，Runtime 不再处理；现在照样进 checkpoint，继续 `Advance` 或恢复后都会接着停，调用方仍收到第一个错误，再调一次会立即再请求一次。施法里的停止被拒时 cancel 回调不再跑第二遍，启动失败清理不再跑 cancel 回调。新增停止入口须登记进 `skill/spawn_stop_entries_promises_test.go` 的登记表。[方案](docs/feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md) / [问题](docs/bug/RR-20261006-32.md) / [修复](docs/bugfix/RR-20261006-32.md)
 - **skill：破坏性改名，“进程”（process）全部改叫衍生物（Spawn），不保留旧名、不做兼容别名**（维护者第十三轮决定，2026-10-06；线上未部署）：飞行物、法术场 / 光环、召唤物、光束、位移这些施放时生成、之后每个 tick 由技能驱动的东西统一叫 Spawn。技能 JSON、Go API、同步协议、checkpoint、指标一起改，行为不变；checkpoint 版本 3 → 4（旧版本得到 `ErrCheckpointUnsupported`，排空后再升级）。digest 的输入里有这些字段名，所以**全部定义的 gameplay / presentation digest 都会变**：skillcompose 契约按新 digest 重签，旧回放记录不再适用。`proc`（被动触发、`ProcLedger`、`proc_policy`）不是 process，不改。升级时按下表改写技能 JSON、编译环境、Host 实现、客户端对 mutation / 表现的解析和告警规则：
 
   | 旧名 | 新名 |

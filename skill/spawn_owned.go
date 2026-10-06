@@ -53,10 +53,10 @@ func (runtime *Runtime) startEntitySpawn(cast *castInstance, template SpawnTempl
 	}
 	runtime.emitSpawnPresentation(cast, spawn, PresentationSpawnStart, "", "", cast.visibleRevision)
 	if cast.areaCallbackFinish {
-		return runtime.terminateSpawn(cast, spawn, StopCauseCancel, "")
+		return runtime.requestSpawnStop(cast, spawn, StopCauseCancel, "")
 	}
 	if err := runtime.captureOwnedSpawnSnapshots(spawn); err != nil {
-		stopErr := runtime.terminateSpawn(cast, spawn, StopCauseFailure, "")
+		stopErr := runtime.requestSpawnStop(cast, spawn, StopCauseFailure, "")
 		if stopErr == nil {
 			delete(runtime.spawns, spawn.ID)
 		}
@@ -68,7 +68,7 @@ func (runtime *Runtime) startEntitySpawn(cast *castInstance, template SpawnTempl
 		areaSignals, areaErr := runtime.stepAreaMembership(cast, spawn)
 		cast.switchEvalContext(previous)
 		if areaErr != nil {
-			stopErr := runtime.terminateSpawn(cast, spawn, StopCauseFailure, "")
+			stopErr := runtime.requestSpawnStop(cast, spawn, StopCauseFailure, "")
 			if stopErr == nil {
 				delete(runtime.spawns, spawn.ID)
 			}
@@ -83,14 +83,14 @@ func (runtime *Runtime) startEntitySpawn(cast *castInstance, template SpawnTempl
 	}
 	runtime.emitSpawnSignals(cast, spawn, startSignals, cast.visibleRevision)
 	if err := runtime.dispatchOwnedSpawnSignals(spawn, startSignals); err != nil {
-		stopErr := runtime.terminateSpawn(cast, spawn, StopCauseFailure, "")
+		stopErr := runtime.requestSpawnStop(cast, spawn, StopCauseFailure, "")
 		if stopErr == nil {
 			delete(runtime.spawns, spawn.ID)
 		}
 		return errors.Join(err, stopErr)
 	}
 	if spawn.areaCallbackFinishedCast {
-		return runtime.terminateSpawn(cast, spawn, StopCauseCancel, "")
+		return runtime.requestSpawnStop(cast, spawn, StopCauseCancel, "")
 	}
 	return nil
 }
@@ -198,7 +198,7 @@ func (runtime *Runtime) previewOwnedSpawnCapacity(host OwnedEntityRuntimeHost, c
 
 func (runtime *Runtime) failOwnedSpawn(spawn *SpawnInstance, cause error) error {
 	if spawn != nil {
-		return errors.Join(cause, runtime.stopOwnedSpawn(spawn.ID, StopCauseFailure))
+		return errors.Join(cause, runtime.terminateOwnedSpawn(spawn.ID, StopCauseFailure, ""))
 	}
 	return cause
 }
@@ -231,12 +231,12 @@ func (runtime *Runtime) handoffEntitySpawns(cast *castInstance) error {
 	var cleanupErr error
 	for _, id := range invalid {
 		spawn := runtime.spawns[id]
-		cleanupErr = errors.Join(cleanupErr, runtime.terminateSpawn(cast, spawn, StopCauseCancel, "cancel"))
+		cleanupErr = errors.Join(cleanupErr, runtime.requestSpawnStop(cast, spawn, StopCauseCancel, "cancel"))
 	}
 	if cleanupErr != nil {
 		for _, id := range valid {
 			spawn := runtime.spawns[id]
-			cleanupErr = errors.Join(cleanupErr, runtime.terminateSpawn(cast, spawn, StopCauseCancel, "cancel"))
+			cleanupErr = errors.Join(cleanupErr, runtime.requestSpawnStop(cast, spawn, StopCauseCancel, "cancel"))
 		}
 		return cleanupErr
 	}
@@ -285,11 +285,8 @@ func (runtime *Runtime) reapUnhandedEntitySpawns() error {
 	for _, id := range ids {
 		spawn := runtime.spawns[id]
 		cast := runtime.casts[spawn.CastID]
-		if err := runtime.terminateSpawn(cast, spawn, StopCauseCancel, "cancel"); err != nil {
-			runtime.deferRefusedStopLocked(cast, spawn, StopCauseCancel)
-			if firstErr == nil {
-				firstErr = err
-			}
+		if err := runtime.requestSpawnStop(cast, spawn, StopCauseCancel, "cancel"); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
 	return firstErr
@@ -337,7 +334,7 @@ func (runtime *Runtime) advanceOwnedSpawns() error {
 		if spawn.areaCallbackFinishedCast {
 			// 移交后的 area 回调 finish：与施法存活时 startEntitySpawn 的处理一致，
 			// 停止本 area 衍生物，不再跑 end / cancel 回调（RR-20261005-NC-211）。
-			if err := runtime.terminateOwnedSpawn(nil, id, StopCauseCancel, ""); err != nil {
+			if err := runtime.terminateOwnedSpawn(id, StopCauseCancel, ""); err != nil {
 				return err
 			}
 			continue
@@ -385,7 +382,7 @@ func (runtime *Runtime) reapInvalidOwnedSpawns() error {
 	sort.Slice(items, func(i, j int) bool { return items[i].id < items[j].id })
 	var firstErr error
 	for _, item := range items {
-		if err := runtime.terminateOwnedSpawn(nil, item.id, item.cause, item.event); err != nil && firstErr == nil {
+		if err := runtime.terminateOwnedSpawn(item.id, item.cause, item.event); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -436,7 +433,7 @@ func (runtime *Runtime) reapOwnedSpawns() error {
 	sort.Slice(expired, func(i, j int) bool { return expired[i].id < expired[j].id })
 	var firstErr error
 	for _, item := range expired {
-		if err := runtime.terminateOwnedSpawn(nil, item.id, item.cause, item.event); err != nil && firstErr == nil {
+		if err := runtime.terminateOwnedSpawn(item.id, item.cause, item.event); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -491,24 +488,20 @@ func (runtime *Runtime) runOwnedSpawnCallback(spawn *SpawnInstance, event string
 	return nil
 }
 
-func (runtime *Runtime) stopOwnedSpawn(id SpawnID, cause StopCause) error {
-	return runtime.terminateOwnedSpawn(nil, id, cause, "")
-}
-
-func (runtime *Runtime) terminateOwnedSpawn(cast *castInstance, id SpawnID, cause StopCause, callbackEvent string) error {
+// terminateOwnedSpawn 请求停止一个移交后的衍生物（tick 驱动：到期、失效、步进失败、area 回调 finish）。
+// 宿主拒绝时 requestSpawnStop 把它转入待停止、摘出 owned 表，下一次 Advance 不会再卡在它上面（RR-20261006-31）。
+func (runtime *Runtime) terminateOwnedSpawn(id SpawnID, cause StopCause, callbackEvent string) error {
 	spawn := runtime.ownedSpawns[id]
 	if spawn == nil {
 		return nil
 	}
-	if err := runtime.terminateSpawn(cast, spawn, cause, callbackEvent); err != nil {
-		// 宿主拒绝停止：交给退避重试，不让下一次 Advance 卡在同一个衍生物上（RR-20261006-31）。
-		runtime.deferRefusedStopLocked(cast, spawn, cause)
-		return err
-	}
-	delete(runtime.ownedSpawns, id)
-	return nil
+	return runtime.requestSpawnStop(nil, spawn, cause, callbackEvent)
 }
 
+// RemoveProgram 请求停止该程序的全部衍生物（已移交的跑 cancel 回调），再让宿主删除它的 owned 实体。
+// 宿主拒绝停止时返回第一个错误（errors.Is 宿主的错误），停不下的衍生物留成 stop_pending：程序移除之后仍由 Runtime
+// 在之后的 tick 按退避重试（重试只重发宿主 StopSpawn，不执行程序代码），再调用一次 RemoveProgram 会立即再请求一次。
+// 之前它们留成 running、列在 OwnedSpawns 里等调用方重试（停止入口统一，维护者 2026-10-07）。
 func (runtime *Runtime) RemoveProgram(programID string) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -530,13 +523,8 @@ func (runtime *Runtime) RemoveProgram(programID string) error {
 			cast = nil
 			callbackEvent = "cancel"
 		}
-		stopErr := runtime.terminateSpawn(cast, spawn, StopCauseCancel, callbackEvent)
-		if stopErr != nil {
-			if firstErr == nil {
-				firstErr = stopErr
-			}
-		} else {
-			delete(runtime.ownedSpawns, id)
+		if err := runtime.requestSpawnStop(cast, spawn, StopCauseCancel, callbackEvent); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
 	if lifecycleHost, ok := runtime.host.(OwnedEntityRuntimeHost); ok {
@@ -547,6 +535,10 @@ func (runtime *Runtime) RemoveProgram(programID string) error {
 	return firstErr
 }
 
+// Shutdown 请求停止全部仍在宿主侧的衍生物（含 stop_pending，已移交的跑 cancel 回调），再让宿主清理比赛的 owned 实体。
+// 宿主拒绝停止时返回第一个错误（errors.Is 宿主的错误），停不下的衍生物留成 stop_pending 并写进 checkpoint：
+// 继续 Advance、或 Checkpoint 后在新进程 RestoreRuntime 再 Advance，Runtime 都会按原来的重试时刻接着停；再调用一次
+// Shutdown 会立即再请求一次。Shutdown 不在原地同步重试，理由见 runtime_spawn_stop.go。
 func (runtime *Runtime) Shutdown() error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -554,7 +546,7 @@ func (runtime *Runtime) Shutdown() error {
 	defer runtime.commitStateMutationsLocked()
 	ids := make([]SpawnID, 0, len(runtime.spawns))
 	for id, spawn := range runtime.spawns {
-		// 待停止的衍生物（含重试已到上限的）在这里再停一次；宿主 StopSpawn 幂等。
+		// 待停止的衍生物（含重试已到上限的）在这里再请求一次；宿主 StopSpawn 幂等。
 		if spawn.liveOnHost() {
 			ids = append(ids, id)
 		}
@@ -567,13 +559,8 @@ func (runtime *Runtime) Shutdown() error {
 		if spawn.handedOff {
 			callbackEvent = "cancel"
 		}
-		stopErr := runtime.terminateSpawn(nil, spawn, StopCauseCancel, callbackEvent)
-		if stopErr != nil {
-			if firstErr == nil {
-				firstErr = stopErr
-			}
-		} else {
-			delete(runtime.ownedSpawns, id)
+		if err := runtime.requestSpawnStop(nil, spawn, StopCauseCancel, callbackEvent); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
 	if lifecycleHost, ok := runtime.host.(OwnedEntityRuntimeHost); ok {

@@ -175,13 +175,17 @@ World revision 是关键防线：Runtime 的 query/command 会携带期望 revis
 
 **`StopSpawn` 必须幂等**（Host 契约，2026-10-06）：停一个已经停掉或 Host 不认识的衍生物要成功返回、不产生第二次
 副作用（`MemoryHost` 返回当前 revision、不发事件）。只有衍生物在世界里确实还在运行时才返回错误。原因：宿主停止
-失败时 Runtime 把衍生物标成 `stop_pending`，之后的 tick 按退避重试同一个停止（`RuntimeOptions.SpawnStopRetryBackoff`
-默认 4 tick、每次失败翻倍到最多 64 倍，`SpawnStopRetryLimit` 默认 10 次）；`Shutdown` / `RemoveProgram` 也会再停
-一次。宿主实际停掉了却报失败的，会再收到一次停止。到上限后 Runtime 不再自动重试，计
+失败时——不论来自哪个停止入口：施法失败或施法里的停止、衍生物启动失败的清理、tick 驱动的回收、`RemoveProgram`、
+`Shutdown`（停止入口统一，2026-10-07）——Runtime 把衍生物标成 `stop_pending`，之后的 tick 按退避重试同一个停止
+（`RuntimeOptions.SpawnStopRetryBackoff` 默认 4 tick、每次失败翻倍到最多 64 倍，`SpawnStopRetryLimit` 默认 10 次）；
+`Shutdown` / `RemoveProgram` 对待停止的衍生物也会立即再停一次。宿主实际停掉了却报失败的，会再收到一次停止。
+`Shutdown` 停不下的衍生物同样留成 `stop_pending` 并写进 checkpoint，宿主侧要准备好在 `Shutdown` 之后（继续推进或
+恢复之后）再收到这些停止；回调与区域离开信号只在第一次停止请求时执行，重试只调 `StopSpawn`。到上限后 Runtime 不再自动重试，计
 `skill.spawn.stop_retry_exhausted.total` 并写一条 Warn 日志，记录保留；待停止条目最多
 `MaxStopPendingSpawns`（默认 256）条，超限丢最早的已告警条目（没有就丢最早仍在重试的），计
 `skill.spawn.stop_pending_dropped.total` 并写 Error 日志。细节见
-[施法语义](skill-casting-and-combat.md) 的“失败终态”与 `skill/runtime_spawn_stop_retry.go`。
+[施法语义](skill-casting-and-combat.md) 的“失败终态”、`skill/runtime_spawn_stop.go`（状态迁移表与停止入口清单）与
+[停止入口统一方案](../feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md)。
 
 ## 5. 过程与高级能力的阅读地图
 

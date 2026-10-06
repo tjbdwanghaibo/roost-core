@@ -12,9 +12,9 @@ const (
 	SpawnEnded     SpawnStatus = "ended"
 	SpawnCancelled SpawnStatus = "cancelled"
 	SpawnFailed    SpawnStatus = "failed"
-	// SpawnStopPending 表示 Runtime 已决定停掉这个衍生物（施法失败走 failCastLocked），但宿主 StopSpawn
-	// 失败，衍生物仍在宿主侧运行。Runtime 不再推进它（不步进、不派发信号、不跑回调），只在之后的 tick 按退避
-	// 重试 StopSpawn，成功后改成停止状态；见 runtime_spawn_stop_retry.go（RR-20261006-21 后续）。
+	// SpawnStopPending 表示 Runtime 已请求停掉这个衍生物（任何停止入口），但宿主 StopSpawn 失败，衍生物仍在
+	// 宿主侧运行。Runtime 不再推进它（不步进、不派发信号、不跑回调），只在之后的 tick 按退避重试 StopSpawn，
+	// 成功后改成停止状态；状态机见 runtime_spawn_stop.go（停止入口统一，维护者 2026-10-07）。
 	SpawnStopPending SpawnStatus = "stop_pending"
 )
 
@@ -100,7 +100,7 @@ type SpawnInstance struct {
 	handedOff                bool
 	areaCallbackFinishedCast bool
 
-	// 以下三项只在 Status == SpawnStopPending 时有意义（runtime_spawn_stop_retry.go）：
+	// 以下三项只在 Status == SpawnStopPending 时有意义（runtime_spawn_stop.go）：
 	// stopRetryAttempts 是进入待停止之后失败的重试次数，stopRetryTick 是下一次重试的 tick，
 	// stopRetryExhausted 表示已到 SpawnStopRetryLimit、已告警、不再自动重试（记录保留）。
 	stopRetryAttempts  int
@@ -203,9 +203,8 @@ func spawnStatusForStop(cause StopCause) SpawnStatus {
 	}
 }
 
-// stopSpawn 让宿主停掉衍生物。宿主出错时衍生物状态不变（运行中或待停止），由调用方决定后续：
-// failCastLocked 把仍在运行的标成待停止、交给重试（runtime_spawn_stop_retry.go）。待停止的衍生物也走这里重试，
-// 它的回调与区域离开信号在第一次停止时已经处理过，terminateSpawn 不会再跑。
+// stopSpawn 让宿主停掉衍生物，只由 terminateSpawn 调用（停止入口一律经 requestSpawnStop）。宿主出错时衍生物
+// 状态不变（运行中或待停止），由 requestSpawnStop 转入 / 留在待停止。
 func (runtime *Runtime) stopSpawn(cast *castInstance, spawn *SpawnInstance, cause StopCause) error {
 	if !spawn.liveOnHost() {
 		return nil
@@ -276,9 +275,9 @@ func (runtime *Runtime) detachMotionCarry(cast *castInstance, spawn *SpawnInstan
 	return nil
 }
 
-// terminateSpawn keeps carry cleanup ahead of any lifecycle callback. The
-// attachment is spawn-owned, so clearing it first makes retrying or nested
-// callbacks harmless even when the Host reports a detach failure.
+// terminateSpawn 是 requestSpawnStop 的“停止中”一步，不直接调用。carry 解除排在任何回调之前：
+// 挂载归衍生物所有，先清掉它，宿主报解除失败时重试或嵌套回调也无害。区域离开信号与回调只对 running 的衍生物
+// 跑一次；待停止的衍生物再进来时只剩宿主 StopSpawn。
 func (runtime *Runtime) terminateSpawn(cast *castInstance, spawn *SpawnInstance, cause StopCause, callbackEvent string) error {
 	detachErr := runtime.detachMotionCarry(cast, spawn)
 	var areaErr error
@@ -326,7 +325,7 @@ func (runtime *Runtime) stopScopedSpawns(cast *castInstance, includeCastScope, i
 		if spawn.Scope == SpawnScopeEntity {
 			callbackEvent = "cancel"
 		}
-		if err := runtime.terminateSpawn(cast, spawn, StopCauseCancel, callbackEvent); err != nil {
+		if err := runtime.requestSpawnStop(cast, spawn, StopCauseCancel, callbackEvent); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}

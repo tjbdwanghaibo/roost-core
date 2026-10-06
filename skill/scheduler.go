@@ -468,7 +468,7 @@ func (runtime *Runtime) failScheduledCast(cast *castInstance, err error) error {
 }
 
 // failCastLocked 是施法失败的唯一终态入口：记 failed（保留第一次的失败原因）、撤掉本 cast 名下的全部排程
-// 任务与帧、停衍生物（停不下的标成待停止、由 Runtime 重试）、释放 policy 槽位、结束 ability 计数。
+// 任务与帧、请求停止衍生物（停不下的由 requestSpawnStop 转入待停止、Runtime 重试）、释放 policy 槽位、结束 ability 计数。
 // 可重复调用（排程路径里 releaseCast 已失败收尾后，failScheduledCast 还会再进来一次）。
 //
 // 之前每条终止路径各自手写这些步骤、各漏一步：启动失败不撤任务而 ID 被复用（NC-110）、Cancel / Interrupt /
@@ -480,8 +480,6 @@ func (runtime *Runtime) failCastLocked(cast *castInstance, err error) error {
 	}
 	runtime.cancelCastTasks(cast)
 	_ = runtime.stopSpawns(cast, true)
-	// 宿主停不下的衍生物不就此放手：标成待停止，之后的 tick 按退避重试（RR-20261006-21 后续）。
-	runtime.deferUnstoppedSpawnsLocked(cast)
 	runtime.releasePolicySlot(cast)
 	runtime.markAbilityCastFinished(cast)
 	return err

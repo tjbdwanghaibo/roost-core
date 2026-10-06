@@ -36,14 +36,22 @@ guardrails, not capacity targets: tune them from room-level load tests.
   nothing was deployed, drain before upgrading. Every format change, extension
   or rename, bumps the version. `CheckpointMaxBytes` and
   `CheckpointMaxRecords` are checked before recovery publishes a runtime.
-- A spawn the Host fails to stop stays owned by the Runtime: it is marked
-  `stop_pending` and retried with backoff (`SpawnStopRetryBackoff`, default
+- A spawn the Host fails to stop stays owned by the Runtime, whichever stop
+  entry asked for it (cast failure or any in-cast stop, failed spawn start,
+  tick-driven reaping, `RemoveProgram`, `Shutdown` — one stop function since
+  2026-10-07): it is marked `stop_pending`, leaves `OwnedSpawns`, and is
+  retried with backoff (`SpawnStopRetryBackoff`, default
   4 ticks, doubling up to 64x) up to `SpawnStopRetryLimit` (default 10)
   failed retries, then `skill.spawn.stop_retry_exhausted.total` is counted,
   a warning is logged and the record is kept. At most
   `MaxStopPendingSpawns` (default 256) such records are kept; past it the
   oldest exhausted one is dropped (`skill.spawn.stop_pending_dropped.total`
-  plus an error log). Host `StopSpawn` must be idempotent. A restored
+  plus an error log). `Shutdown` / `RemoveProgram` return the first refusal
+  and leave the spawn `stop_pending` in the checkpoint; keep advancing, or
+  restore and advance, and the Runtime keeps retrying (calling them again
+  re-requests immediately). New stop entries must be registered in
+  `skill/spawn_stop_entries_promises_test.go`. Host `StopSpawn` must be
+  idempotent. A restored
   checkpoint may hold more terminal casts than `CompletedCastLimit` when the
   excess are still referenced (RR-20261006-30).
 - The same Runtime state always checkpoints to the same bytes and checksum:

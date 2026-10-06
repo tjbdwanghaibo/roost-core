@@ -497,6 +497,9 @@ func TestOwnedEntityRuntimeFailsClosedWithoutOwnedHostContract(t *testing.T) {
 	}
 }
 
+// RemoveProgram 停不下移交后的衍生物：记录留成 stop_pending（停止入口统一，维护者 2026-10-07；之前留成 running、
+// 列在 OwnedSpawns 里等调用方重试），不再被推进；调用方再请求一次（同一个 RemoveProgram）会立即停掉它，
+// 不请求则由 Runtime 在 tick 上重试（TestEveryStopEntryDefersARefusedStopTheSameWay）。
 func TestOwnedSpawnStopFailureRemainsTrackedForRetry(t *testing.T) {
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
 	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"cancel":` + callback + `}},{"flow":"finish"}]}`
@@ -511,14 +514,17 @@ func TestOwnedSpawnStopFailureRemainsTrackedForRetry(t *testing.T) {
 	if err := runtime.RemoveProgram(program.id); err == nil {
 		t.Fatal("expected stop failure")
 	}
-	if spawns := runtime.OwnedSpawns(1); len(spawns) != 1 || spawns[0].ID != spawnID || !host.spawns[spawnID].active {
-		t.Fatalf("spawns=%#v host=%#v", spawns, host.spawns[spawnID])
+	if spawns := runtime.OwnedSpawns(1); len(spawns) != 0 || runtime.spawns[spawnID].Status != SpawnStopPending || !host.spawns[spawnID].active {
+		t.Fatalf("spawns=%#v record=%q host=%#v, want the record kept as stop_pending and the host spawn still running", spawns, runtime.spawns[spawnID].Status, host.spawns[spawnID])
 	}
 	if err := runtime.RemoveProgram(program.id); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.OwnedSpawns(1)) != 0 || host.spawns[spawnID].active {
+	if runtime.spawns[spawnID].liveOnHost() || host.spawns[spawnID].active {
 		t.Fatal("retry did not stop tracked spawn")
+	}
+	if callbacks := countRuntimeEventKind(runtime.RuntimeEvents(), "owned_spawn_callback_cancel"); callbacks != 1 {
+		t.Fatalf("cancel callbacks = %d, want one: the second request only re-issues the host stop", callbacks)
 	}
 }
 
