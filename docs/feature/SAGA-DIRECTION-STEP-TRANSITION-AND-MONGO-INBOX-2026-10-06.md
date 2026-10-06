@@ -57,6 +57,7 @@ U-0280（`054fdd66`）→ 复核两处（`23b97942`、`877bb66c`）→ B1（`3fa
 守卫测试 `saga/step_transition_guard_test.go`：解析 `saga` 包全部非测试源码，断言 `ApplyRequest{...}` 复合字面量只出现在 `stepTransition` 里、
 `Engine` 方法里对 `Incarnation` 的赋值 / 自增只出现在 `stepTransition` 里、`store.Apply(` 的参数都是 `stepTransition(...)` 的调用或其结果变量。
 新增出口若手拼请求，测试报出文件与行号。选测试而不是 glsvet：规则只针对一个包、一个函数，放在包内最近处；glsvet 是跨包的执行契约检查。
+（发版前复审补强：原守卫看不到不写字面量的两种绕过——改 `stepTransition` 返回的请求字段（如 `request.CloseOperation = ""`）、`var request ApplyRequest` 逐字段拼请求再经 `store := e.store` 的别名写入。现在这两种以及 `new(ApplyRequest)`、对结果取地址都报出，负对照固定在 `saga/testdata/stepguard`，由 `TestStepTransitionGuardSeesBypassesWithoutALiteral` 每次运行。）
 
 ## ② Mongo 步骤纳入操作实例收件箱
 
