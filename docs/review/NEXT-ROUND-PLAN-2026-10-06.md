@@ -37,7 +37,7 @@
 - **故障**：用本 agent 私有起的依赖进程（不碰共享环境）——3 节点 NATS JetStream（强杀 / SIGSTOP 静默断线 / 自建 toxiproxy 分区与延迟）、Redis 单机 + 3 主 3 从 Cluster（切主）、Mongo 3 节点副本集（stepDown 触发选举）；两进程（owner + 只读服务）跑 remoteflow 样例，覆盖强杀重启、重投、静默断线、owner 切换与 outbox 补发。
 - **性能**：同机前后对照（基准 + 两进程样例的读延迟、推送延迟、回源次数、订阅扇出），给出相对数字；macOS 与 Linux 绝对值不可比，只作趋势与回归门。
 - **不可替代、仍需外部**：Linux 内核网络行为、跨主机真实分区、长时间容量。列入外部验证清单。
-- **状态**：**本机替代已实施（分支 `mirror6`，提交号见 DECISIONS-PENDING 的 Mirror 行）**。`scripts/mirror-local.sh` 自起私有进程（NATS 三节点、Mongo 副本集、Redis 单机 + 副本与 3 主 3 从 Cluster、toxiproxy），生成工程两进程跑 7 类故障，`-race` 全部通过、0 违例；同机对照 v1.20.2 的读延迟 / 回源次数 / 推送扇出无显著差别（L1 命中 p50 +41ns）。发现并修复 RR-20261006-01（删除 Remote 实体时确认报身份不符、删除不发布，只读方读到已删除实体）；观察 O-M6-1（owner 重启后推送最长停 15s）、O-M6-3（Redis 未复制切主时新读者在陈旧上限内读回已删实体）待维护者判断。外部验证清单（Linux 内核网络、跨主机分区、长时间容量）见[记录](../feature/MIRROR-STEP-6-LOCAL-2026-10-06.md) §5。
+- **状态**：**本机替代已实施（`4ca757aa` 修复、`b15e70c8` 用例与记录，分支 `mirror6`）**。`scripts/mirror-local.sh` 自起私有进程（NATS 三节点、Mongo 副本集、Redis 单机 + 副本与 3 主 3 从 Cluster、toxiproxy），生成工程两进程跑 7 类故障，`-race` 全部通过、0 违例；同机对照 v1.20.2 的读延迟 / 回源次数 / 推送扇出无显著差别（L1 命中 p50 +41ns）。发现并修复 RR-20261006-01（删除 Remote 实体时确认报身份不符、删除不发布，只读方读到已删除实体）；观察 O-M6-1（owner 重启后推送最长停 15s）、O-M6-3（Redis 未复制切主时新读者在陈旧上限内读回已删实体）待维护者判断。外部验证清单（Linux 内核网络、跨主机分区、长时间容量）见[记录](../feature/MIRROR-STEP-6-LOCAL-2026-10-06.md) §5。
 
 ## 4. 与已发布 v1.21.0 的关系
 

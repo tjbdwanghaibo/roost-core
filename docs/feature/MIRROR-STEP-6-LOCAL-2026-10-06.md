@@ -36,7 +36,7 @@
 | --- | --- | --- | --- |
 | S1 | owner 第二笔写在投影前被拖住（WAL 已持久、Mongo 未提交、未发布），owner SIGKILL；同一 WAL 目录、同一 sid 重启 | 停机期间只读方仍读已确认的 v1；重启后重放补发 v2；重启后的 owner 冷加载公会、下一笔是 v3 | 重启就绪 574ms；v2 在就绪后 1.9s 读到；v3 3.0s 读到（都是陈旧上限 3s 回源，见 O-M6-1）；0 违例 |
 | S2a | 只读方连着的 nats-2 SIGKILL（开着发现，自动连别的节点） | 推送恢复、durable 续投 | 本次流 leader 不在 nats-2：owner 无感，提交 → 读到 31ms。开发期一次运行 leader 恰在 nats-2：owner 4 次尝试 6.1s 才写成（首错 `nats: no response from stream`，回复为结果未知，见 O-M6-2），只读方随即读到 |
-| S2b | 另一只读方连 nats-3，nats-3 SIGSTOP 8s（静默断线，ping 20s × 2 才能发现）后 SIGCONT | 推送停住期间按 `cached_max_staleness`（3s）回源 | 2.98s 读到（L2 重新确认）；SIGCONT 后推送 34ms；开发期一次 leader 在 nats-3：owner 6 次尝试 10.6s |
+| S2b | 另一只读方连 nats-3，nats-3 SIGSTOP 8s（静默断线，ping 20s × 2 才能发现）后 SIGCONT | 推送停住期间按 `cached_max_staleness`（3s）回源 | 2.98s 读到（L2 重新确认）；SIGCONT 后推送 34ms。第二次完整运行流 leader 恰在 nats-3：owner 6 次尝试 10.6s 才写成（首错 `nest: sync canceled context deadline exceeded`），写成后 1.4s 只读方读到（陈旧上限回源），SIGCONT 后 55ms |
 | S3 | 只读方只经 3 个 toxiproxy 代理（不用发现的地址），陈旧上限 60s（读到新版本只能来自推送） | 延迟、分区、丢数据后推送续投 | 基线 30ms；latency 200ms → 239ms；全部代理断开 5s 期间提交 → 恢复后 269ms 读到（共 5.3s，DeliverNew durable 续投）；timeout 毒丢数据 3s → 共 4.1s；之后 33ms |
 | S4a | Redis 单机 graceful 切主；提交；删除；再切主；新起一个只读方（L1 空）读 | L2 水位与墓碑不回退、不复活 | 切主后提交 40ms 读到；删除 24ms 读到“不存在”；第二次切主后新读者读到“不存在”；0 违例（**修复 RR-20261006-01 之前删除不发布，本场景红**） |
 | S4a′ | 单机**未复制**即切主（副本暂停并断开复制，墓碑只写在旧主） | 边界记录，不作通过条件 | 新读者约 2.9s（145 次读）读到已删除的 v1，之后回源 Mongo 得“不存在”；原读者（L1 有墓碑）0 次读到（O-M6-3） |
@@ -73,7 +73,7 @@
 ### 3.5 观察（不是确定缺陷）
 
 - **O-M6-1 owner 重启后兴趣表为空**：兴趣是广播软状态；同 sid 重启的 owner 从 durable 游标续读兴趣主题，之前已确认的兴趣消息不重放，表是空的；只读方的续租在剩余不足一半时才发（缺省 TTL 30s → 最长 15s），这段时间 owner 不推送，只读方只靠陈旧上限回源（S1：v2 1.9s、v3 3.0s，都卡在 3s 陈旧上限）。正确性不受影响，新鲜度退化到陈旧上限。新 sid 的 owner（S6）反而从头重放、立刻知道兴趣。可选方向：owner 启动时广播一次“请求续租”，或兴趣主题按 subject 取最新（DeliverLastPerSubject）；属于协议调整，交维护者判断。
-- **O-M6-2 推送与写回复耦合**：JetStream 流 leader 所在节点被杀 / 暂停时，owner 的 Remote 提交已落 Mongo，发布失败让回复变成“结果未知”（6～10s，开发期两次），本用例的朴素重试每次都是新的一笔写。这是既有契约（结果未知不得当作未提交），业务侧应按结果未知处理（查询或等 finalizer 的持久结论），而不是盲目重试；只读方经 L2 在陈旧上限内收敛。记录在案，不改。
+- **O-M6-2 推送与写回复耦合**：JetStream 流 leader 所在节点被杀 / 暂停时，owner 的写在 leader 重新选出之前一直失败（6～10.6s，三次里出现；首错为 `nats: no response from stream` 带结果未知，或 Request 截止），其中 Remote 提交可能已落 Mongo、只是发布失败，回复是“结果未知”，本用例的朴素重试每次都是新的一笔写。这是既有契约（结果未知不得当作未提交），业务侧应按结果未知处理（查询或等 finalizer 的持久结论），而不是盲目重试；只读方经 L2 在陈旧上限内收敛。记录在案，不改。
 - **O-M6-3 Redis 未复制即切主**：墓碑只在旧主上，副本被提升后 L2 回到删除前的版本；L1 里有墓碑的读者不受影响，L1 空的新读者在陈旧上限（3s）内把已删除的实体读成存在，之后回源 Mongo 得“不存在”。这是 B2“L2 为水位权威”的前提（Redis 异步复制会丢已确认写，`TestRealRemoteRedisClusterUnreplicatedFence` 同一类）。可选缓解：L2 写后 `WAIT` 副本、`min-replicas-to-write`，或陈旧上限内也带权威校验——都是设计 / 部署取舍，交维护者。
 - **O-M6-4 静默断线靠 ping 发现**：SIGSTOP 节点后客户端要 ping 20s × 2 才断开重连；期间推送停住，读取在陈旧上限后回源（S2b 2.98s）。缩短 `PingInterval` 是部署参数，不改。
 - **O-M6-5 owner 启动撞上 Mongo 选举即失败**：开发期一次，S5 之后 mongo-1 选回期间起 owner，`EnsureInfrastructure` 返回 `InterruptedDueToReplStateChange`，子进程启动失败（fail-fast，由进程管理重启）。只读方不受影响。用例在 S5 结束时等选举稳定（`mongo-settle`）。
@@ -113,7 +113,7 @@
 - 先红后绿（RR-20261006-01）：`go test -count=1 -run TestRemoteDeleteCommitPublishesItsTombstoneAfterTheInstanceIsCleared ./remoteentity` 修前红（`Guild: remote acknowledgement identity mismatch`，与真实链路逐字一致）、修后绿；真实链路 S4a / S4b 修前红（探针：删除 8s 后只读方仍读到 v3，L2 无墓碑）、修后绿。
 - `gofmt -l` 空；`go build ./... && go vet ./...`；`go vet -tags integration ./remoteentity`；生成工程（正式 DAO / Entity 生成器生成）`go vet` 与编译通过。
 - `go test -race -count=3 ./remoteentity` 通过；根包 `go test -count=1 .` 通过（`TestGlobalEnvironmentOperationsHoldTheAcceptanceLock` 起初因脚本注释提到隔离环境脚本名而误报，注释改写，脚本本身不调用共享环境的入口）；`go test -count=1 ./codegen/...` 通过；`go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync` 无违例（只改了 remoteentity，按要求可不跑，顺带跑了）。
-- 真实依赖（全部私有进程）：`scripts/mirror-local.sh test` 一次完整运行 PASS（`-race`，107.5s），`scripts/mirror-local.sh bench`（基线 v1.20.2 交替 6 轮）完成；三次运行结束都核对“无残留进程”并删除根目录。
+- 真实依赖（全部私有进程）：`scripts/mirror-local.sh test` 完整运行两次 PASS（`-race`；rebase 前 107.5s，rebase 到 `a26c9454`（含业务时间只许前进与 configdata 大小写敏感）之后 111.7s），`scripts/mirror-local.sh bench`（基线 v1.20.2 交替 6 轮）完成；每次运行结束都核对“无残留进程”并删除根目录。
 - 未改生成形状（模板、生成器、catalog 配置模板都没动）：没有跑 `go generate` porcelain 与 game-demo。
 
 ## 7. 复跑
