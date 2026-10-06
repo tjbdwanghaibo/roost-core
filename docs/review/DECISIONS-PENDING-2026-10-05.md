@@ -141,9 +141,9 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 
 | # | 决定 | 实施状态 |
 | --- | --- | --- |
-| O33 | 漂移格子改为编译期拒绝：进程字段 / 状态默认值里使用会漂移的施法引用（`$primary_target`、`$cast.*`、`$ability.self`、进程字段里的 cast_start / phase_start 读取等）直接报错，提示改用进程自己的引用 | 待实施 |
-| O34～O36 | 按推荐：保持现状并写进作者文档 | 待实施（文档） |
-| O37 | 按推荐：account 判定表 `unadmitted other` 行的 free 格也释放名额并用新名字建角 | 待实施 |
+| O33 | 漂移格子改为编译期拒绝：进程字段 / 状态默认值里使用会漂移的施法引用（`$primary_target`、`$cast.*`、`$ability.self`、进程字段里的 cast_start / phase_start 读取等）直接报错，提示改用进程自己的引用 | **已实施（`f6043e44`，分支 `o33`）**：21 个 ~ 格子改为不可用（含 memory 默认值的 phase_start：只是 Activate 时的值、与 cast_start 相同，拒绝），诊断点名上下文、表项并给替代写法；快照点表补逐格守卫。[表方案 §8](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md) |
+| O34～O36 | 按推荐：保持现状并写进作者文档 | **已实施（`f6043e44`，文档）**：[施法语义 · 引用在哪里能读](../skill/skill-casting-and-combat.md#引用在哪里能读求值上下文)、AI prompt、表 semantics |
+| O37 | 按推荐：account 判定表 `unadmitted other` 行的 free 格也释放名额并用新名字建角 | **已实施（`f6043e44`）**：free 格 limit → retry，[B9 方案 §6.1](../feature/B9-C5-WINDOW-ENTRIES-ROLE-TABLE-2026-10-06.md) |
 
 ## 维护者决定（2026-10-06，第八轮：D-L3 留项）
 
