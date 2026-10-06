@@ -1002,6 +1002,14 @@ func (m *Manager) acknowledgeRemoteCommit(commit entity.RemoteCommit) error {
 	if live == nil || remoteReceiptObsolete(live, commit) {
 		return nil
 	}
+	// RR-20261006-01：登记里挂着的实例已经不是这个实体——同一事务的删除在准入后就把它从内存删掉，实体管理器
+	// ClearBase 把 ID 归零（strict / pipelined 的确认在投影器里稍后才到），或实例已被回收。没有内存状态可推进：
+	// 摘掉它，确认视为完成，调用方照常发布（删除提交即 L2 墓碑与推送）。回执已由调用方核对（validateRemoteReceipt）。
+	// 之前把删除提交交给被清空的实例，生成代码按身份拒绝，发布被整段跳过：Mongo 已删除，L2 仍是删除前的快照。
+	if live.ID() != commit.EntityID {
+		wrapper.detachEntity(live)
+		return nil
+	}
 	if remote, ok := live.(entity.IThreadSafeRemoteEntity); ok {
 		vector := entity.RemoteVersionVector{StateVersion: commit.NextVersion, MarkerEpoch: commit.MarkerEpoch, LockFence: commit.LockFence, RouteEpoch: commit.RouteEpoch}
 		if err := remote.SetRemoteVersionVector(vector); err != nil {

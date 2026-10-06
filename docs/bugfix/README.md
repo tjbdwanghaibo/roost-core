@@ -4,6 +4,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 Mirror 第 6 步本机替代（mirror6）：RR-20261006-01 已修复、声明场景验证，未发版。** `acknowledgeRemoteCommit` 在登记实例的身份已不是该实体（被同一事务删除后清空、或被回收）时摘掉它并视为确认完成，照常发布删除。[修复](RR-20261006-01.md) · [记录](../feature/MIRROR-STEP-6-LOCAL-2026-10-06.md)
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-01](RR-20261006-01.md) | 删除提交确认时实例已被清空：确认视为完成、照常发布墓碑与推送 | 已修复、声明场景验证，未发版 |
+
 **10-06 发版前审查观察收尾（auditfu）：三条修复、一条文档、一条观察，未发版。** activity 协调器的派发重试排期与进度凭证有效期改读系统时钟（`Config.SystemNow`，D-L3 更正）；saga `ErrDefinitionMissing` 移出结果流终态、nak 退避；configdata 规则对同一列的几种大小写拼写按文档顺序取最后一个（与 encoding/json 一致）；mail 信封存储宽限的回拨上限写进文档；saga `ErrDuplicateKey` 回放不交还 claim 无可观察后果，列为观察（`5a3c4a60`）。[记录](PRERELEASE-AUDIT-FOLLOWUP-2026-10-06.md)
 
 **10-06 N09 skill 第六批（revn09f）：NC-280～283 已修复、声明场景验证，未发版。** 修法统一落在求值上下文表（`skill/eval_contexts.go`）：memory 默认值、状态默认值、采样点各自是表里的一列，投射按表的行拆成根 + field。[本轮](../review/REVIEW-2026-10-06-n09-batch6.md) · [表方案](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)

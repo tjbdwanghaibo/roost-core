@@ -4,6 +4,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 Mirror 第 6 步本机替代（mirror6）：RR-20261006-01（P2）已修复、声明场景验证，未发版。** 删除 Managed Remote 实体（strict）已提交到 Mongo，确认却交给被同一事务清空的实例、生成代码按身份拒绝，删除的发布（L2 墓碑 + 推送）整段被跳过，调用方得到“结果未知”，只读方在 L2 TTL 内读到已删除实体。[记录](../feature/MIRROR-STEP-6-LOCAL-2026-10-06.md)
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-01](RR-20261006-01.md) | P2 Remote 实体删除已提交，确认报“身份不符”，删除不发布（L2 无墓碑、无推送），只读方在 L2 TTL 内读到已删除实体 | 已修复、声明场景验证，未发版 |
+
 **10-06 N09 skill 第六批（revn09f，维护者第五轮决定“求值上下文表”）：NC-280～283（均 P2）已修复、声明场景验证，未发版。** memory 默认值读另一个 memory 时编译结果随 map 顺序变化、通过时每次 Activate 类型不匹配；持久状态默认值按施法作用域检查、在进程回调里读写即 ErrProgramInvariant；cast_start / phase_start 读取可缺省实体时读取处的 exists 守卫在采样点不生效；投射引用（`$primary_target.position`、`$event.*.position`、`$input.target.position`）编译通过却求不出。均为做“求值上下文 → 可用引用”表时逐格对照 Runtime 求值点发现。[本轮](../review/REVIEW-2026-10-06-n09-batch6.md) · [表方案](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)
 
 | 编号 | 问题 | 状态 |
