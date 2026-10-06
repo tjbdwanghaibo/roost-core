@@ -100,3 +100,4 @@ TOOL（pretag、source-head-check、冲突标记门禁、mirror-local.sh、示�
 - drill 已合（`0db819b0`）：RR-24（nats 关闭后错误不可 errors.Is）、-25（hook 超时点名）、-26（Close 后 Connected 仍 true）；演练四项实测。影响 APP-1/7/8/9/12、OWN-2/3、DRV-5（补 RR-24/26，“未在真实依赖上测”已闭环）。
 - drill3 已合（`3b06c66c`）：RR-27（直方图分位数夹到观测范围、阈值失败点明实际值）、-28（生产校验认 cluster_addrs、accountctl -redis-cluster、run.sh）、-29（Contribute 自开窗）；单机 Cluster 演练通过。影响 OWN-3（guide ~426）、APP-1（~146、E08 ~854）、APP-5、CFG-5、NONCORE-43、E08/E09 summary 行。
 - 进行中：nats/driver 自持“已关闭”状态（维护者方向决定 A，`wt-natsstate`）→ DRV-5。待维护者：skill 宿主撤除失败 A/B；生成配置的 key_prefix 默认带 hash tag（便于切 Cluster）是否要做。
+- 维护者：skill 撤除失败由 Runtime 重试（`wt-skretry` 实施中）；skill “进程”全量改名为 Spawn（衍生物），撤除重试合入后实施。分册 3 的 SKILL 全部条目与作者文档要随改名同步。

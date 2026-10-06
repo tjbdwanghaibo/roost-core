@@ -241,3 +241,5 @@
 | B10 两条配置管线 | 维护者选 A：保持 tablegen（策划 Excel / CSV 表，`roost generate` 默认）与 cfggen（YAML 描述、JSON 数据、含全局单例 globals，可选）两条管线，规则已统一（`configdata/rules`），写明分工；不合成一套 | 已实施（`2c01e06d`，分支 `tail`，未发版）：[B10 §2.4](../feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md#24-tablegen-与-cfggen-能否合成一套) 写明选 A 与理由；[USER_GUIDE 配置数据一节](../USER_GUIDE.md#配置数据规则热更与可见性)、[codegen README](../../codegen/README.md#配置管线该用哪条) 各加“该用哪条”对照表 |
 
 > 2026-10-06 额度用尽暂停：未完成工作与恢复步骤见 [handoff-v1.23.0](handoff-v1.23.0/README.md)。
+| skill 宿主撤除失败 | 维护者：“如果是技能本身的问题是不是技能自己处理比较好” → Runtime 记录待撤除并按退避重试，有上限与告警，写入 checkpoint | 实施中（`wt-skretry`） |
+| skill “进程”改名 | 维护者：“skill的一个流程叫做进程很奇怪，用更专业的词语” → 选 **Spawn（衍生物）**：`process` 全量改名为 `spawn`（`$spawn`、`spawn_step`、`modify_spawn`、`spawn_start`、`SpawnStepCommand`、`StepSpawn`、`spawn_remove` 等），不保留旧名（线上未部署） | 待实施（撤除重试合入后） |
