@@ -15,7 +15,8 @@
 #   scripts/mirror-local.sh fault <动作> [参数]   用例经 ROOST_MIRROR_LOCAL_SCRIPT 调用，动作见 fault_action
 #   scripts/mirror-local.sh test                  up → 生成工程里的 TestGeneratedRemoteMirrorLocal（两进程故障场景）→ clean
 #   scripts/mirror-local.sh test-core             up → remoteentity 的私有环境集成用例（缺省 ^TestMirrorLocal，
-#                                                 ROOST_MIRROR_LOCAL_CORE_RUN 覆盖；O-M6-3 墓碑 WAIT 的切主红绿）→ clean
+#                                                 ROOST_MIRROR_LOCAL_CORE_RUN 覆盖；O-M6-3 墓碑 WAIT 的切主红绿、
+#                                                 O-M6-6 同 sid 重启接管旧代锁）→ clean
 #   scripts/mirror-local.sh bench <输出目录>       up → remoteentity 的 BenchmarkMirrorLocal*（当前源码）→ clean
 #     基线对照：ROOST_MIRROR_LOCAL_BASELINE=<基线源码目录>（例如 v1.20.2 的 detached worktree）时同一份基准文件
 #     复制到基线上，与当前源码交替各跑 ROOST_MIRROR_LOCAL_COUNT（缺省 6）次，benchstat 出对照（见文档 §4）。
@@ -440,5 +441,5 @@ case "${1:-}" in
 		environment_up
 		bench_all "$2"
 		;;
-	*) sed -n '2,22p' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
+	*) sed -n '2,23p' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
 esac

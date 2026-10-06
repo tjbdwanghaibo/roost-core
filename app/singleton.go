@@ -73,6 +73,22 @@ type SingletonLiveness interface {
 // ModSingleton 是 SingletonLiveness 在 Registry 里的能力名；singleton.enabled=false 时不登记。
 const ModSingleton ModName = "singleton"
 
+// SingletonIncarnation 是本进程持有的单实例锁的身份（O-M6-6，docs/feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md §7）。
+// 能拿到它就说明本进程已持有 Key 这把锁：同一 Key 的上一代进程已经死了，或者卡住超过 ttl、恢复后会失锁
+// fail-stop。框架模块据此接管上一代进程留下的按 sid 的协调状态（例如 Remote 实体共享锁），不必等它们各自的 TTL。
+// 只在 singleton.enabled=true 时登记（能力名 ModSingletonIncarnation）；未启用时没有这个保证，模块不得接管。
+type SingletonIncarnation struct {
+	// Key 是单实例锁的键 <key_prefix>:<server_type>:<sid>。
+	Key string
+	// Sid 是 Key 里的 sid（run 写进配置的 sid）。
+	Sid int32
+	// Token 是本次启动的随机令牌（锁值 token|hostname|pid|started_unix_ms 的第一段），同 Key 的每次启动都不同。
+	Token string
+}
+
+// ModSingletonIncarnation 是 SingletonIncarnation 在 Registry 里的能力名；singleton.enabled=false 时不登记。
+const ModSingletonIncarnation ModName = "singleton_incarnation"
+
 // SingletonLiveMaxSIDs 是一次 Live 查询最多的 sid 数。
 const SingletonLiveMaxSIDs = 200
 
@@ -654,6 +670,13 @@ func (a *App) openSingleton(serverType ServiceName) (*singletonLock, error) {
 		failure:  failure,
 	}
 	if err := a.registry.Register(ModSingleton, SingletonLiveness(singletonLiveness{store: store, prefix: settings.keyPrefix})); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	// 本次启动的身份（O-M6-6）：Mod 在锁拿到之后才 Init / Provide，读到它时锁已持有。
+	token, _, _ := bytes.Cut(value, []byte("|"))
+	incarnation := SingletonIncarnation{Key: lock.key, Sid: a.cfg.GetInt32("sid"), Token: string(token)}
+	if err := a.registry.Register(ModSingletonIncarnation, incarnation); err != nil {
 		_ = store.Close()
 		return nil, err
 	}

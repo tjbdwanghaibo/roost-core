@@ -3,6 +3,7 @@ package remoteentity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -22,6 +23,9 @@ type AssemblyDeps struct {
 	Loader  entity.IRemoteEntityLoader
 	Backend entity.IRemoteEntityBackend
 	OnFatal func(error)
+	// Incarnation 是本进程持有的 App 单实例锁的身份（O-M6-6）：非 nil 时，第一次取某个实体的共享锁就接管同 sid
+	// 上一代进程留下的锁，不等 lock_ttl。只有持有单实例锁的进程才能传；nil（singleton.enabled=false）时按 TTL 等待。
+	Incarnation *ProcessIncarnation
 }
 
 // MongoBackendConfig configures the Mongo committer built from Loader.
@@ -106,6 +110,13 @@ func Assemble(deps AssemblyDeps, cfg *Config, localSid int32, mongoCfg MongoBack
 		return nil, err
 	}
 	lockFactory := NewVersionedLockFactory(deps.Redis, authority)
+	if deps.Incarnation != nil {
+		incarnation, err := newLockIncarnation(localSid, *deps.Incarnation)
+		if err != nil {
+			return nil, fmt.Errorf("remote_entity: process incarnation: %w", err)
+		}
+		lockFactory.incarnation = incarnation
+	}
 	manager := NewManager(lockFactory, cfg, localSid, snapshotL2)
 	if err := manager.LockFactoryError(); err != nil {
 		return nil, err

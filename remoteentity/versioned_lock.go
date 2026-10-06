@@ -3,13 +3,17 @@ package remoteentity
 import (
 	"context"
 	crand "crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
@@ -46,6 +50,10 @@ type versionedLock struct {
 	// 不在本地记"哪几个 token 结果未知"：连续多次没有答复时每一个都可能是 owner，只记一个会取不回真正的 owner，全记又无界。
 	tokenPrefix string
 	tokenSeq    uint64
+
+	// incarnation 非 nil 时 tokenPrefix 以它的 self 开头，取锁时可以接管同一单实例锁持有者上一代进程留下的
+	// owner（O-M6-6，见 lockIncarnation）；nil 时不接管，旧格式 token，行为与之前相同。
+	incarnation *lockIncarnation
 
 	// 异步续期按锁代际绑定（RR-20260926-43）。touchGeneration 是当前登记的续期 goroutine
 	// 所服务的 token，空表示没有登记。旧代际 goroutine 只续期、只判失效自己的 token，退出时
@@ -126,7 +134,9 @@ func (l *versionedLock) TryLock(ctx context.Context) error {
 	token := l.tokenPrefix + strconv.FormatUint(seq, 10)
 	// 本锁对象更早一代留在 Redis 上的租约交给 Lua 以 Redis 为准取回（RR-20261004-01 / RR-20260930-21）。
 	// Eval 出错时脚本可能已经执行（owner 已是 token）：本地不记录，下一次 TryLock 的序号更大，同一条判定会把它取回。
-	result, err := l.redis.Eval(ctx, versionedTryLockLua, []string{l.key, l.key + ":fence"}, token, ttlMs, l.tokenPrefix, seq)
+	// 同一单实例锁持有者上一代进程留下的 owner 也交给 Lua 当场接管（O-M6-6）；没有代际时两项为空，不做这项判定。
+	scope, self := l.incarnation.prefixes()
+	result, err := l.redis.Eval(ctx, versionedTryLockLua, []string{l.key, l.key + ":fence"}, token, ttlMs, l.tokenPrefix, seq, scope, self)
 	if err != nil {
 		return fmt.Errorf("versioned lock redis error: %w", err)
 	}
@@ -137,6 +147,9 @@ func (l *versionedLock) TryLock(ctx context.Context) error {
 	}
 	if len(vals) < 3 || vals[0] == 0 {
 		return ErrVersionedLockNotAcquired
+	}
+	if len(vals) > 3 && vals[3] == 1 {
+		l.incarnation.noteTakeover(l.id)
 	}
 
 	if l.authority != nil {
@@ -524,11 +537,80 @@ func (l *versionedLock) runAsyncTouch(ctx context.Context, cancel context.Cancel
 	}
 }
 
+// --- 进程代际（O-M6-6） ---
+
+// ProcessIncarnation 是“同一个 sid 同一时刻只有本进程在跑”的证明，来自 App 单实例锁
+// （docs/feature/APP-SINGLETON-LOCK-2026-10-05.md）：Holder 是单实例锁的键（<key_prefix>:<server_type>:<sid>），
+// Token 是本次启动的持锁令牌（锁值第一段，每次启动都不同）。
+//
+// 传给 Assemble 之后，Remote 实体共享锁的 token 带上 sid、Holder 摘要与 Token；新进程第一次取某个实体的锁时，
+// owner 若是同一 Holder、不同 Token 留下的（上一代进程），在取锁脚本里当场接管，不再等 lock_ttl
+// （docs/feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md §7）。只有持有单实例锁的进程才能传：没有“旧进程已死
+// 或已失锁 fail-stop”的保证时接管会打断仍在服务的进程，所以 singleton.enabled=false 时不传，照旧按 TTL 等待。
+type ProcessIncarnation struct {
+	Holder string
+	Token  string
+}
+
+// lockIncarnation 是取锁 token 里的进程代际前缀。新格式 token：
+//
+//	~<sid>~<Holder 的 SHA-256 前 16 位十六进制>~<Token>~<锁对象随机串>.<序号>
+//
+// scope = "~<sid>~<摘要>~" 是同一个单实例锁持有者（同 sid、同服务类型、同项目前缀）的全部进程；self = scope +
+// "<Token>~" 是本进程这一代。旧格式 token 以 crand.Text 的 base32 大写字母开头，不会以 "~" 开头，永远不在
+// 任何 scope 内。Token 只允许字母、数字、'-'、'_'，不会含分隔符，前缀判定没有歧义。
+type lockIncarnation struct {
+	scope, self string
+	logOnce     sync.Once
+}
+
+// newLockIncarnation 校验并构造 sid 的进程代际。
+func newLockIncarnation(sid int32, incarnation ProcessIncarnation) (*lockIncarnation, error) {
+	if sid == 0 {
+		return nil, fmt.Errorf("%w: incarnation needs a non-zero sid", ErrVersionedLockConfig)
+	}
+	if incarnation.Holder == "" {
+		return nil, fmt.Errorf("%w: incarnation holder is empty", ErrVersionedLockConfig)
+	}
+	if len(incarnation.Token) == 0 || len(incarnation.Token) > 64 {
+		return nil, fmt.Errorf("%w: incarnation token must be 1..64 characters", ErrVersionedLockConfig)
+	}
+	for _, c := range incarnation.Token {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '-' || c == '_') {
+			return nil, fmt.Errorf("%w: incarnation token %q may only contain letters, digits, '-' and '_'", ErrVersionedLockConfig, incarnation.Token)
+		}
+	}
+	digest := sha256.Sum256([]byte(incarnation.Holder))
+	scope := "~" + strconv.FormatInt(int64(sid), 10) + "~" + hex.EncodeToString(digest[:8]) + "~"
+	return &lockIncarnation{scope: scope, self: scope + incarnation.Token + "~"}, nil
+}
+
+// prefixes 返回交给取锁脚本的范围前缀与本代前缀；nil 时都为空（不接管）。
+func (i *lockIncarnation) prefixes() (scope, self string) {
+	if i == nil {
+		return "", ""
+	}
+	return i.scope, i.self
+}
+
+// noteTakeover 记录一次接管：计数每次都加，日志每个 Assembly 只在第一次记（重启后每个被写的实体各接管一次）。
+func (i *lockIncarnation) noteTakeover(id int64) {
+	metrics.IncCounter("remote_entity.lock_takeover_total", nil, 1)
+	if i == nil {
+		return
+	}
+	i.logOnce.Do(func() {
+		slog.Info("remote_entity: took over a shared lock left by the previous process of this sid (singleton lock held); later takeovers are counted in remote_entity.lock_takeover_total",
+			"entity", id, "scope", i.scope)
+	})
+}
+
 // --- Versioned Lock Factory ---
 
 type versionedLockFactory struct {
-	redis     fredis.IRedis
-	authority WriteAuthority
+	redis       fredis.IRedis
+	authority   WriteAuthority
+	incarnation *lockIncarnation
 }
 
 var _ fredis.IVersionedLockFactory = (*versionedLockFactory)(nil)
@@ -548,6 +630,11 @@ func (f *versionedLockFactory) NewVersionedLock(id int64, opts fredis.VersionedL
 	}
 	lock := newVersionedLock(f.redis, id, opts)
 	lock.authority = f.authority
+	if f.incarnation != nil {
+		// 代际前缀放在锁对象前缀之前：RR-20261004-01 的“本锁对象更早序号”判定照旧以完整 tokenPrefix 为准。
+		lock.incarnation = f.incarnation
+		lock.tokenPrefix = f.incarnation.self + lock.tokenPrefix
+	}
 	return lock
 }
 

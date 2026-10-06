@@ -12,6 +12,8 @@ const (
 	ModLifecycle      app.ModName = app.ModLifecycle
 	ModRuntimeFailure app.ModName = app.ModRuntimeFailure
 	ModSingleton      app.ModName = app.ModSingleton
+	// ModSingletonIncarnation 是本进程持有的单实例锁身份（app.SingletonIncarnation）；singleton.enabled=false 时不登记。
+	ModSingletonIncarnation app.ModName = app.ModSingletonIncarnation
 
 	// redis.lock（IDistLockFactory）与 etcd.election（IElectionFactory）不再作为 capability 发布：
 	// 进程 / sid 级单例由 App 单实例锁（app.Singleton）提供；键级用途直接用 core 的

@@ -176,6 +176,12 @@ func (m *RemoteEntityMod) Provide(r *app.Registry) error {
 	if failure, ok := app.Lookup[*app.RuntimeFailure](r, app.ModRuntimeFailure); ok && failure != nil {
 		deps.OnFatal = func(err error) { failure.Fail(fmt.Errorf("remote_entity fatal release failure: %w", err)) }
 	}
+	// O-M6-6：持有 App 单实例锁时，把它的身份交给 Remote，同 sid 重启后第一次取锁即接管上一代进程留下的
+	// 共享锁。只在 Remote 的 sid 就是单实例锁的 sid 时传（NewRemoteEntityMod 显式给了别的 sid 时没有这个保证）；
+	// singleton.enabled=false 时没有这个能力，不接管，照旧按 lock_ttl 等待。
+	if incarnation, ok := app.Lookup[app.SingletonIncarnation](r, mods.ModSingletonIncarnation); ok && incarnation.Sid == m.localSid {
+		deps.Incarnation = &coreremote.ProcessIncarnation{Holder: incarnation.Key, Token: incarnation.Token}
+	}
 	asm, err := coreremote.Assemble(deps, m.cfg, m.localSid, m.mongoConfig)
 	if err != nil {
 		return err

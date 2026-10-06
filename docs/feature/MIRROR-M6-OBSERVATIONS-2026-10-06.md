@@ -81,7 +81,7 @@
 
 - O-M6-1：`remoteentity/interest_refresh.go`（新）——请求主题与消息、`InterestRefreshStore`、单飞遍历（`acceptInterestRefresh` / `runInterestRefresh`，持 `work` 准入，`Stop` 取消间隔等待并等它退出）；`SnapshotClient.renewInterest(ctx, key, refresh)` 成为续租的唯一入口，`RenewInterest` 委托它；`Start` 在推送开着时第三个订阅（`mirror.NewLive`），失败逐步回收；`Assembly.Start` 在 `SnapshotClient.Start` 之后、存储初始化与 outbox 恢复之前调 `requestInterestRefresh`，失败只 Warn。
 - O-M6-3：`redis.ReplicatedEvaler` / `ReplicatedEvalResult`（`redis/client.go`），`redis/driver/replicated.go` 的 `EvalReplicated`（EVAL + ROLE 一条流水线，副本数 > 0 才同连接 WAIT；Cluster 用 `MasterForKey`；MOVED / ASK 改普通发送）；`remoteSnapshotL2Store.DeleteAtVersion` 在配置了副本数且客户端支持时走它，`recordTombstoneWait` 计数 / 限频 Warn / 首次 Info；`NewSnapshotL2StoreFromConfig` + `ValidateSnapshotL2TombstoneWait`（超时上限 `MaxSnapshotL2TombstoneWaitTimeout` = 1s：调用方最多多等这么久，也要低于 Redis 客户端读超时 3s，否则客户端先超时、计为 error）；`Config.SnapshotL2TombstoneWaitReplicas / Timeout`（`DefaultConfig` 1 / 50ms，零值关闭）；kit `readSnapshotConfig` 严格读取两项新键，`app/config_validation.go` 登记。
-- 测试设施：`scripts/mirror-local.sh test-core`、`fault redis-cluster-stop-replica` / `redis-cluster-cont`、env 导出 `ROOST_MIRROR_LOCAL_REDIS_REPLICA`；生成工程用例 `ROOST_MIRROR_LOCAL_ONLY` 支持逗号列表，S1 的 v3 先等被强杀 owner 的锁过期再写（见 6.5 O-M6-6），并报 `commit_ms` / `visible_after_confirm_ms`。
+- 测试设施：`scripts/mirror-local.sh test-core`、`fault redis-cluster-stop-replica` / `redis-cluster-cont`、env 导出 `ROOST_MIRROR_LOCAL_REDIS_REPLICA`；生成工程用例 `ROOST_MIRROR_LOCAL_ONLY` 支持逗号列表，S1 的 v3 先等被强杀 owner 的锁过期再写（见 6.5 O-M6-6；§7 实施后改回立即写），并报 `commit_ms` / `visible_after_confirm_ms`。
 
 ### 6.2 先红后绿
 
@@ -136,9 +136,117 @@ S1 的恢复从“陈旧上限（3s）回源”变成推送，在一次请求往
 - wire：只新增 `remote_entity_interest_refresh` 主题；快照 / 兴趣主题、L2 键与 Lua 不变。混跑语义见 §2。JetStream 上每个节点多一个 DeliverNew durable（推送开着时）。
 - 行为：删除 Remote 实体（以及只读方 apply 删除消息时写墓碑）最多多等 `snapshot_l2_tombstone_wait_timeout`（缺省 50ms，上限 1s），通常是一次副本往返；没有副本时不等。core `Config{}` 零值不等；`DefaultConfig` 与 kit 缺省等 1 个副本。旧构造 `NewSnapshotL2Store` / `NewSnapshotL2StoreWithKeyPrefix` 不等（行为与修前相同）。
 - 公开 API 只增：`redis.ReplicatedEvaler`、`driver.Client.EvalReplicated`、`remoteentity.NewSnapshotL2StoreFromConfig`、`ValidateSnapshotL2TombstoneWait`、`MaxSnapshotL2TombstoneWaitTimeout`、`SnapshotL2TombstoneWaitStats`、`InterestRefreshStore`、`SyncTopicInterestRefresh`。
-- **观察 O-M6-6（不是本轮引入，交维护者）**：owner 被 SIGKILL 后同 sid 重启，第一笔写要等旧进程持有的共享锁过 TTL（本用例 `LockTTL` 3s）：锁的重试预算用完报 `versioned lock not acquired`，Request 截止则是结果未知，朴素重试会多写一笔。以前 S1 的 v3 在 v2 读到之后才写，而 v2 要等陈旧上限约 1.9s，写开始时锁差不多已过期，于是被掩盖；O-M6-1 之后 v2 立即读到，用例改为先等旧锁过期再写。这与 O-M6-2 同属“故障后的写要按结果未知处理”，是既有契约；是否让同 sid 新进程更早接管锁（需要能证明旧进程已死，如进程级单实例锁的代际）属于设计取舍。
+- **观察 O-M6-6（不是本轮引入，交维护者）**：owner 被 SIGKILL 后同 sid 重启，第一笔写要等旧进程持有的共享锁过 TTL（本用例 `LockTTL` 3s）：锁的重试预算用完报 `versioned lock not acquired`，Request 截止则是结果未知，朴素重试会多写一笔。以前 S1 的 v3 在 v2 读到之后才写，而 v2 要等陈旧上限约 1.9s，写开始时锁差不多已过期，于是被掩盖；O-M6-1 之后 v2 立即读到，用例改为先等旧锁过期再写。这与 O-M6-2 同属“故障后的写要按结果未知处理”，是既有契约；是否让同 sid 新进程更早接管锁（需要能证明旧进程已死，如进程级单实例锁的代际）属于设计取舍。**更正（2026-10-06）**：维护者第十一轮按推荐决定接管，已实施，见 §7。
 - O-M6-3 的边界不变：副本在确认之前断开（S4a′ 的“未复制即切主”）时 WAIT 挡不住，结果计为 `no_replicas` / `short`。
 
 ### 6.6 未完成
 
 无。发版不在本轮（v1.22.0 正在发，本分支不进这一版）。
+
+## 7. O-M6-6：同 sid 重启立即接管上一代进程留下的 Remote 实体锁（2026-10-06，第十一轮决定）
+
+依据：[维护者决定第十一轮](../review/DECISIONS-PENDING-2026-10-05.md)（按推荐）；观察原文见 §6.5。基线：`e65f1cb6`；分支 `m6lock`。
+代码阅读：codebase-memory 项目 `Users-whb-roost-roost-core` 的图谱是主检出的共享 generation（停在 09-30 之后的旧代际），本节以 worktree 当前源码为准。
+
+### 7.1 现状
+
+- Remote 实体的共享锁是 Redis hash `lock:<lock_key>:<id>`，字段 `owner` 是取锁 token。token = 锁对象前缀（`crand.Text()` + `.`）+ 序号（RR-20261004-01）：Lua 只认“本锁对象更早序号”的 owner 可以取回，其余 owner 一律等 TTL。锁值里**没有 sid，也没有进程代际**，所以同 sid 重启的新进程分不清 owner 是自己上一代留下的还是别的进程正在用的，只能等 TTL（`remote_entity.lock_ttl`）。
+- App 单实例锁的值是 `<token>|<hostname>|<pid>|<started_unix_ms>`，`token` 是每次启动 `crypto/rand` 的 16 位十六进制（[APP-SINGLETON-LOCK](APP-SINGLETON-LOCK-2026-10-05.md) §3.2）；它在任何 Mod Init 之前拿到。拿到即说明同一 `<key_prefix>:<server_type>:<sid>` 的上一代进程已经死了，或者卡住超过 TTL、恢复后会失锁 fail-stop。
+
+### 7.2 设计
+
+1. **代际令牌复用 App 单实例锁的 token**（不另造身份）。App 在 `singleton.enabled=true` 时多登记一个只读能力 `app.ModSingletonIncarnation`（值 `app.SingletonIncarnation{Key, Sid, Token}`：锁键、sid、本次启动的 token）；未启用时不登记。
+2. **锁值只增字段**：`AssemblyDeps.Incarnation`（`*remoteentity.ProcessIncarnation{Holder, Token}`）非空时，取锁 token 变为 `~<sid>~<holder 摘要>~<incarnation>~<锁对象随机串>.<序号>`（`holder 摘要` 是单实例锁键 SHA-256 的前 16 位十六进制，区分同 sid 不同服务类型 / 不同项目前缀）。前缀 `~<sid>~<摘要>~` 是“同一个单实例锁持有者”的范围，再加 `<incarnation>~` 是“本进程这一代”。旧格式 token 以 base32 大写字母开头，不会以 `~` 开头；没有 Incarnation 的进程照旧用旧格式。
+3. **接管时机：第一次取锁时在 Lua 里当场接管**（不在启动时扫描）。取锁脚本多收两个参数（范围前缀、本代前缀）：owner 带同一范围前缀、但不是本代前缀 → 视同 owner 不存在，在同一条脚本里换成新 token、分配新 fence（与 TTL 过期后的取锁是同一分支），并回报“接管了上一代”。选它的理由：
+   - 原子：判定与换 owner 在一条 Lua 里，是对 Redis 的 CAS；不需要先读后写。
+   - 简单可靠：锁键按实体分布、不按 sid 索引，启动时扫描要 `SCAN` 全部锁键（Cluster 下逐节点），代价与实体数成正比，扫描期间新锁还会出现；而懒接管只发生在真的要写的实体上，零额外往返。
+   - 时机天然在“持有单实例锁之后”：Remote 在 Mod Provide/Start 才构造锁，App 在任何 Mod Init 之前已经拿到单实例锁。
+4. **不接管的情况**：owner 是别的 sid / 别的服务类型 / 别的项目前缀（范围前缀不同）、本代自己留下的（同一进程里被回收的 wrapper 留下的结果未知 token，照旧等 TTL 或按 RR-20261004-01 由同一锁对象取回）、旧格式 token（升级前的进程）。`singleton.enabled=false` 时 kit 不传 Incarnation：没有“旧进程已死”的证明，**不接管**，维持按 TTL 等待。kit 只在 Remote 的 `localSid` 等于单实例锁的 sid 时传（`NewRemoteEntityMod(sid)` 显式给了别的 sid 时不传）。
+5. **可观察**：接管计数 `remote_entity.lock_takeover_total`；首次接管记一条 Info（之后不逐条记）。
+
+### 7.3 owner / grant / fence 语义（K3）逐项论证
+
+接管在语义上等价于“上一代的租约在此刻过期”：TTL 过期发生的时刻相对于进程事件本来就是任意的（旧进程可能在任何一步之后卡住超过 TTL），所以协议对“任意时刻过期”必须已经正确；接管只是把这个时刻提前到新进程第一次取锁时，并且只在单实例锁证明旧进程已死 / 将 fail-stop 时才这样做。逐项：
+
+- **owner（Mongo `_owner_sid` / `_owner_shared` / `_owner_epoch` / `_owner_route`）**：不动。接管只改 Redis 锁 hash 的 `owner` 字段；所有权的转移、进出共享模式仍只经 `changeOwnership` 的 CAS。取锁之后的 `GrantWrite` 照旧按 `_owner_shared` 过滤，写入路径照旧核对 `grant.Ownership.Shared`。
+- **grant（Mongo `_grant_fence` / `_grant_token`）**：接管后新进程照常 `GrantWrite(新 token)`，一次 FindAndModify 递增 `_grant_fence` 并写入新 token，上一代的许可随之作废；上一代若还有在途提交（只可能是卡住后恢复、即将 fail-stop 的进程），`CommitRemote` 的过滤条件要求 `_grant_fence` 等于它的 fence，会被拒绝。没有新增“跳过许可”的路径。
+- **fence（Redis `lock:...:fence` 计数器）**：接管与 TTL 过期后的取锁走同一分支：先 `INCR` 再写 owner，fence 单调递增；`grant.Fence != lockFence` 的核对不变。
+- **version**：锁 hash 的 `version` 不动（与过期后取锁相同）；有权威时版本取自 `GrantWrite` 的返回值。
+- **上一代的续期 / 释放**：Touch / Refresh / Unlock 的 Lua 都要求 owner 等于自己的 token，被接管后分别得到过期 / 未持有，不会改动新一代。
+- **旧进程卡住后恢复的残余边界**（与 APP-SINGLETON-LOCK §4 同类）：恢复后到续期拿到“不是我的”之间（一次 Redis 往返）若它恰好取锁，会按同一规则反向接管新进程的锁；新进程那一笔被 Mongo fence 拒绝（确定的拒绝，不是结果未知），它下一次取锁再接管回来，至多持续到旧进程 fail-stop。带 DataEngine 的服务里旧进程卡住期间持有 WAL `flock`，新进程在打开 WAL 处退出，不会进入服务阶段，这个交错不会出现。
+
+### 7.4 改动面与兼容
+
+- `app/singleton.go`：`SingletonIncarnation`、`ModSingletonIncarnation`，`openSingleton` 登记；token 从锁值第一段取得（不改锁值格式）。
+- `remoteentity`：`ProcessIncarnation`、`AssemblyDeps.Incarnation`（校验）、锁工厂带代际、`versionedTryLockLua` 多两个参数与一个回报字段、接管计数。
+- `kit/remoteentity`：`Provide` 查 `app.ModSingletonIncarnation` 并在 sid 一致时传入。
+- 生成工程 S1（`codegen/internal/entity/testdata/remoteflow/mirror_local_test.go`）：owner 子进程按 S1 的前提（只在 SIGKILL 之后重启）给 Assemble 传本次启动的代际，代替 App 单实例锁；去掉“先等旧锁过期再写”的绕行。
+- 兼容：锁 token 是不透明字符串，wire / Mongo 字段不变（`_grant_token` 变长）；混跑时旧进程看不懂新格式，只按 TTL；新进程不接管旧格式。公开 API 只增。
+
+### 7.5 实施记录（基线 `e65f1cb6`，分支 `m6lock`）
+
+**实际实现**（与 §7.2 一致，没有偏离）：
+- `app/singleton.go`：`SingletonIncarnation{Key, Sid, Token}`、`ModSingletonIncarnation`；`openSingleton` 在登记 `ModSingleton` 之后登记它（token 取锁值第一段，锁值格式不变）。`kit/mods` 同名常量。
+- `remoteentity/versioned_lock.go`：`ProcessIncarnation`、`lockIncarnation`（`newLockIncarnation` 校验 sid 非 0、Holder 非空、Token 1～64 位且只含字母数字 `-` `_`；`prefixes`、`noteTakeover`：计数 `remote_entity.lock_takeover_total` + 每个 Assembly 第一次 Info）；工厂带 `incarnation`，`NewVersionedLock` 把代际前缀放在锁对象前缀之前；`TryLock` 把范围前缀 / 本代前缀作为 ARGV[5] / ARGV[6] 交给取锁脚本，第 4 项回报为 1 时计数。
+- `remoteentity/versioned_lock_lua.go`：`versionedTryLockLua` 增加接管判定（与 owner 不存在 / 本锁对象更早序号同一分支），返回值多一项（旧调用方只读前三项）。
+- `remoteentity/assemble.go`：`AssemblyDeps.Incarnation`，非 nil 时校验并装到锁工厂，格式错误 `Assemble` 失败（`ErrVersionedLockConfig`）。
+- `kit/remoteentity/remote_entity_mod.go`：`Provide` 查 `ModSingletonIncarnation`，`Sid == localSid` 时传入。
+- 生成工程 S1 夹具：owner 子进程传 `ProcessIncarnation{Holder: mirror-local:<prefix>:owner:<sid>, Token: <pid>-<启动纳秒>}`（编排只在 SIGKILL 之后同 sid 重启，代替单实例锁的保证）；去掉“先等旧锁过期再写”，加断言：重启后第一笔写耗时 < lock_ttl/2、只读方最终停在 v3（无多写）。
+
+**先红后绿**：
+
+1. 单元（`remoteentity/lock_takeover_promises_test.go`，内存 Redis 替身按取锁脚本逐行模拟，共用一份 Mongo 权威替身）。修前红：同一场景只用旧 API（两次 `Assemble` 同 sid、旧进程取锁后不释放不续期，新进程 `Lock` 带 3 次重试）在基线上：
+
+```
+--- FAIL: TestRedSameSidRestartFirstLockWaitsForTheOldProcesssLease (0.01s)
+    lock_takeover_red_test.go:98: the restarted same-sid process's first lock = versioned lock not acquired after 7ms, want it acquired right away (the old process is dead; its lease runs for lock_ttl 3s)
+```
+
+   修后绿：`TestSameSidRestartTakesOverThePreviousIncarnationsSharedLock`（第一次取锁就成、Redis fence 与 Mongo 许可都更新、上一代许可提交被拒、上一代 Touch 过期 / Unlock 未持有、新一代提交与释放成功）；对照 `TestLockTakeoverOnlyAppliesToThePreviousIncarnationOfTheSameSingletonHolder`（别的 sid、同 sid 别的服务类型、新进程未启用单实例锁、旧格式 token、同一代另一个锁对象：全部 NotAcquired 且持有者续期不受影响）；`TestAssembleRejectsAMalformedIncarnation`。app：`TestSingletonIncarnationIsTheHeldLocksIdentity`（启用时 Key / Sid / Token 与 Init 时锁值一致；未启用不登记）。kit：`TestRemoteEntityModPassesTheSingletonIncarnationToTheLocks`（启用且 sid 一致 → token 以 `~1101~` 开头并含本次 token；未启用 / sid 不一致 → 旧格式）。
+
+2. 真实 Redis Lua + 真实 Mongo（`remoteentity/lock_takeover_integration_test.go`，`scripts/mirror-local.sh test-core`，私有根目录、端口偏移 26000）。修前：基线 detached worktree 上同一场景（旧 API，新进程第一次 `TryLock`、不重试）：
+
+```
+    lock_takeover_red_integration_test.go:69: the restarted same-sid process's first TryLock = versioned lock not acquired, want it to take over the dead process's lease (lock_ttl 3s)
+--- FAIL: TestMirrorLocalSameSidRestartTakesOverTheOldIncarnationsLock (0.20s)
+```
+
+   修后（同时跑 `^TestMirrorLocal` 全部用例）：
+
+```
+MIRROR O-M6-6: restarted same-sid TryLock took 9ms (lock_ttl 3s); fence 1 -> 2; old grant commit: remote entity: state version conflict
+--- PASS: TestMirrorLocalSameSidRestartTakesOverTheOldIncarnationsLock (0.29s)
+--- PASS: TestMirrorLocalTombstoneSurvivesAFailoverOnlyWithWait (10.24s)
+--- PASS: TestMirrorLocalTombstoneWaitOnClusterGoesToTheKeysPrimary (0.81s)
+```
+
+   同一用例里别的 sid、同 sid 未启用单实例锁的 `TryLock` 都是 NotAcquired。
+
+3. 生成工程 S1（`ROOST_MIRROR_LOCAL_ONLY=S1 scripts/mirror-local.sh test`，去掉绕行、立即写）。修前（基线，夹具去掉 Incarnation）：
+
+```
+    mirror_local_test.go:418: the first write after the restart took 2408ms (lock_ttl 3s): it waited for the killed owner's lease instead of taking it over (O-M6-6)
+--- FAIL: TestGeneratedRemoteMirrorLocal/S1_owner_kill_restart_wal_replay (4.71s)
+```
+
+   修后：
+
+```
+MIRROR6 .../S1_owner_kill_restart_wal_replay owner_restart_ready_ms=566 replayed_v2_converge_ms=-19
+MIRROR6 .../S1_owner_kill_restart_wal_replay first_write_started_after_kill_ms=566 (lock_ttl 3s)
+MIRROR6 .../S1_owner_kill_restart_wal_replay after_restart_commit_v3 commit_ms=33 converge_ms=25 visible_after_confirm_ms=-8
+MIRROR6 .../S1_owner_kill_restart_wal_replay reader_stats loads=0 errors=0 reads=182
+--- PASS: TestGeneratedRemoteMirrorLocal/S1_owner_kill_restart_wal_replay (4.38s)
+```
+
+   写在强杀后 566ms 开始（旧租约还有约 2.4s），33ms 写成，版本是 v3，只读方最终停在 v3，没有多写的 v4。
+
+每次私有环境运行结束都由脚本 `clean`，输出 `no residual processes`；共享环境 `~/.roost-it` 没有碰。
+
+**验证**（`GOWORK=off`）：`gofmt -l` 空；`go build ./... && go vet ./...`；`go vet -tags integration ./remoteentity`；`go test -race -count=3 ./remoteentity ./kit/remoteentity ./app` 通过；`go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync ./remoteentity` 无违例；`go test -count=1 . ./kit/mods ./kit ./codegen/internal/entity` 通过；私有环境 `test-core` 与 S1 见上。没改生成形状（模板、生成器、catalog 配置模板），没跑 `go generate` porcelain 与 game-demo。
+
+**组合契约复核**：错误分类不变（接管成功即普通取锁成功；不接管时仍是 NotAcquired）；TTL 只对“同一单实例锁持有者的上一代”提前到期，其余照旧；接管后的 GrantWrite 失败照旧按 `versionedAbandonLua` 只清本 token（上一代 owner 已被替换，不恢复，与过期后取锁失败相同）；取锁回复丢失时 owner 是本锁对象的 token，下一次 `TryLock` 按 RR-20261004-01 取回。
+
+**兼容**：锁 token 只是变长的不透明字符串（Redis `owner`、Mongo `_grant_token`），wire、键与 Mongo 字段不变；混跑时旧进程不认新格式、新进程不接管旧格式，都退回 TTL。公开 API 只增：`app.SingletonIncarnation`、`app.ModSingletonIncarnation`、`mods.ModSingletonIncarnation`、`remoteentity.ProcessIncarnation`、`AssemblyDeps.Incarnation`。core `DefaultConfig` 的 `LockTTL` 是 24h（生成配置 15s）：直接用 core 默认值又没开单实例锁的装配，强杀后同 sid 重启仍可能等很久，这一点没有改变。
+
+**未完成**：无。不发版（等收尾统一发）。

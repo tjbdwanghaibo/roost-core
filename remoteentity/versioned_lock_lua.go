@@ -6,16 +6,25 @@ package remoteentity
 // ARGV[3] 是锁对象的 token 前缀，ARGV[4] 是本次取锁的序号（ARGV[1] = ARGV[3] .. ARGV[4]）。owner 带同一前缀且序号
 // 小于本次时，它是这个锁对象更早一代"结果未知"留下的租约（取锁回复丢失或迟到 RR-20261004-01、释放无答复 RR-20260930-21）：
 // 同样视为可取得，在同一条脚本里换成新 token 并分配新 fence——是新的一代，不是延续旧代。序号不小于本次（迟到落地的旧代脚本
-// 遇到新代际）或 owner 是别人时照旧返回 {0,0,0}。ARGV[3] 为空时不做这项判定。
+// 遇到新代际）或 owner 是别人时照旧返回 {0,0,0,0}。ARGV[3] 为空时不做这项判定。
 // version 字段不动：失败的那次释放没有写进版本缓存，这里也不替它补写。
+//
+// ARGV[5] / ARGV[6] 是进程代际的范围前缀与本代前缀（O-M6-6，lockIncarnation）：owner 带 ARGV[5] 但不带 ARGV[6]，
+// 是同一单实例锁持有者上一代进程留下的——本进程持有单实例锁，说明那一代已死或已失锁 fail-stop——同样视为可取得，
+// 与 owner 不存在（TTL 过期）走同一分支：先 INCR fence、换新 token。返回的第 4 项为 1 表示这次是接管。
+// ARGV[5] 为空（没有代际，或单实例锁未启用）时不做这项判定；别的 sid / 服务类型 / 项目前缀、本代自己的、旧格式的 owner 都不接管。
 const versionedTryLockLua = `
 local owner = redis.call("HGET", KEYS[1], "owner")
 local earlier = false
+local takeover = false
 if owner ~= false and ARGV[3] ~= "" and string.sub(owner, 1, #ARGV[3]) == ARGV[3] then
     local seq = tonumber(string.sub(owner, #ARGV[3] + 1))
     earlier = seq ~= nil and seq < tonumber(ARGV[4])
 end
-if owner == false or earlier then
+if owner ~= false and not earlier and ARGV[5] ~= nil and ARGV[5] ~= "" and string.sub(owner, 1, #ARGV[5]) == ARGV[5] and string.sub(owner, 1, #ARGV[6]) ~= ARGV[6] then
+    takeover = true
+end
+if owner == false or earlier or takeover then
     -- Lua 报错不会回滚前面的写入。先分配 fence，失败时不能留下没有 TTL 的 owner。
     redis.call("INCR", KEYS[2])
     -- Lua number 不能精确表达完整 int64；INCR 的返回值也不能直接传回 Go。
@@ -24,11 +33,14 @@ if owner == false or earlier then
     redis.call("HSET", KEYS[1], "owner", ARGV[1])
     redis.call("PEXPIRE", KEYS[1], ARGV[2])
     if ver == false then
-        return {1, "0", fence}
+        ver = "0"
     end
-    return {1, ver, fence}
+    if takeover then
+        return {1, ver, fence, 1}
+    end
+    return {1, ver, fence, 0}
 end
-return {0, 0, 0}
+return {0, 0, 0, 0}
 `
 
 // versionedUnlockLua: verify owner → store version and operation receipt →

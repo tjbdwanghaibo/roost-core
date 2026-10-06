@@ -149,7 +149,8 @@ func TestGeneratedRemoteMirrorLocal(t *testing.T) {
 	}
 }
 
-// localOwnerLockTTL 是 owner 子进程的共享锁 TTL：被强杀的 owner 持有的锁要这么久才过期（S1）。
+// localOwnerLockTTL 是 owner 子进程的共享锁 TTL：被强杀的 owner 持有的锁要这么久才过期；同 sid 重启的 owner
+// 带进程代际，第一次取锁就接管，不等它（S1，O-M6-6）。
 const localOwnerLockTTL = 3 * time.Second
 
 // localScenarioSelected：ROOST_MIRROR_LOCAL_ONLY 为空时全跑；否则是逗号分隔的子串列表（例如 S1,S7），场景名含其一即跑。
@@ -403,12 +404,9 @@ func localOwnerKillRestart(t *testing.T, env *localEnv) {
 	// 重放补发的那笔不经 Request 返回，没有确认时刻；从重启就绪起计时。
 	replayed := s.waitVersion(reader, v1+1, readyAt.UnixNano(), 60*time.Second)
 	env.results.add(t, "owner_restart_ready_ms=%d replayed_v%d_converge_ms=%d", readyAt.Sub(killedAt).Milliseconds(), v1+1, replayed)
-	// 被强杀的旧进程还持有共享锁，重启后的第一笔写要等它过期（O-M6-6，不是本轮改动引入的：以前 v2 要等陈旧上限
-	// 约 1.9s 才读到，这笔写开始时锁差不多已过期；O-M6-1 之后 v2 立即读到，这笔写就撞上旧锁，锁的重试预算用完时
-	// 报 versioned lock not acquired，Request 截止时则是结果未知）。这里先等旧锁过期，只量推送恢复。
-	if wait := time.Until(killedAt.Add(localOwnerLockTTL + 200*time.Millisecond)); wait > 0 {
-		time.Sleep(wait)
-	}
+	// 被强杀的旧进程还持有共享锁。O-M6-6 之前重启后的第一笔写要等它过期（锁的重试预算用完报 versioned lock not
+	// acquired，Request 截止则是结果未知，朴素重试会多写一笔 v4），上一轮这里先等旧锁过期再写；现在同 sid 的新进程
+	// （owner 子进程带进程代际，代替 App 单实例锁）第一次取锁就接管上一代的锁，立即写。
 	v3, at3 := s.commit(restarted, "c")
 	if v3 != v1+2 {
 		t.Fatalf("commit after the restart got version %d, want %d (the replayed write is v%d)", v3, v1+2, v1+1)
@@ -416,10 +414,20 @@ func localOwnerKillRestart(t *testing.T, env *localEnv) {
 	// commit_ms 是这笔写本身的耗时；converge_ms 从开始写计时、含它在内；visible_after_confirm_ms 是确认之后只读方
 	// 还要等多久（负数：推送先于回复到达）——O-M6-1 前后对照看它。
 	commitMs := (at3 - s.started[v3]) / int64(time.Millisecond)
+	if commitMs >= localOwnerLockTTL.Milliseconds()/2 {
+		t.Fatalf("the first write after the restart took %dms (lock_ttl %v): it waited for the killed owner's lease instead of taking it over (O-M6-6)", commitMs, localOwnerLockTTL)
+	}
+	// 这笔写开始时距强杀多久：小于 lock_ttl（旧进程的异步续期还可能把租约延到 2×lock_ttl）才说明它撞上了旧租约、靠接管写成。
+	env.results.add(t, "first_write_started_after_kill_ms=%d (lock_ttl %v)", (s.started[v3]-killedAt.UnixNano())/int64(time.Millisecond), localOwnerLockTTL)
 	converge := s.waitVersion(reader, v3, at3, 30*time.Second)
 	env.results.add(t, "after_restart_commit_v%d commit_ms=%d converge_ms=%d visible_after_confirm_ms=%d", v3, commitMs, converge, converge-commitMs)
 	stats := s.stats(reader)
 	env.results.add(t, "reader_stats loads=%s errors=%s reads=%s", stats["loads"], stats["errors"], stats["reads"])
+	// 没有多写的 v4：重启后只写了一笔，只读方停在 v3。
+	reader.send("PEEK")
+	if got := reader.expect("PEEK", 10*time.Second); got[0] != strconv.FormatUint(v3, 10) {
+		t.Fatalf("after the restart the reader reads %v, want v%d (no duplicate write)", got, v3)
+	}
 	s.stopChild(reader)
 	s.stopChild(restarted)
 }
@@ -975,7 +983,10 @@ func runLocalOwner(t *testing.T) {
 	rcfg := remoteentity.DefaultConfig()
 	rcfg.LockTTL = localOwnerLockTTL
 	rcfg.LockKey = "{m6}"
-	assembly, err := remoteentity.Assemble(remoteentity.AssemblyDeps{Redis: scoped, Backend: backend}, rcfg, cfg.sid, remoteentity.MongoBackendConfig{})
+	// 进程代际代替 App 单实例锁（O-M6-6）：编排只在 SIGKILL 之后用同一 sid 重启 owner，旧进程一定已死——正是单实例锁
+	// 给出的保证——每次启动一个新 token，重启后的第一次取锁接管上一代留下的共享锁。
+	incarnation := &remoteentity.ProcessIncarnation{Holder: fmt.Sprintf("mirror-local:%s:owner:%d", cfg.prefix, cfg.sid), Token: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())}
+	assembly, err := remoteentity.Assemble(remoteentity.AssemblyDeps{Redis: scoped, Backend: backend, Incarnation: incarnation}, rcfg, cfg.sid, remoteentity.MongoBackendConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
