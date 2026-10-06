@@ -6,6 +6,8 @@
 
 ### Changed
 
+- **平台支持写明：Windows 不保证正确。** 正确性只在 Linux（生产）与 macOS（开发）上保证和验证；Windows 保留编译、CLI 制品与 CI 兼容性 job，但信号 / 进程树、`project sync` 暂存目录、autocrlf、hotcode 插件等未在真实 Windows 上验证，已知问题（W-2026-10-04-05、外部验证 E25 / E27 的 Windows 部分）暂存不修。见 README“平台支持”与 DEPLOYMENT 开头（维护者 2026-10-06）。
+
 - **Ops：`Authorization` 必须带 `Bearer ` 才算 admin token**（维护者第十二轮决定，N01b 观察 O-P1）：以前 `Authorization: <token>`（不带 scheme）也能通过 `/admin/*`。现在 Authorization 只认 `Bearer <token>`（scheme 大小写不敏感，RFC 7235），不带 scheme 或别的 scheme 一律 401；`X-Admin-Token: <token>` 不变。**行为收紧**：用裸 token 调 admin 的脚本改成 `Authorization: Bearer <token>` 或 `X-Admin-Token`（T-279）。[记录](docs/feature/DECISIONS-R12-KIT-2026-10-06.md#4-ops-必须带-bearer)
 - **`/readyz` 每个 checker 有短期限，卡住的报 Fail**（维护者第十二轮决定，N01b 观察 O-H1）：`health.Registry.Snapshot` 改为并发调用全部 checker，每个最多等 `health.DefaultCheckTimeout`（1.5s，`SetCheckTimeout` 可改），到期未返回记 Fail，`error` 写明期限与已跑时长。以前串行用请求 ctx，一个不返回的 checker 让 `/readyz` 一直挂着、每次探针多留一个卡住的 handler。同一个 checker 同一时刻只有一次调用，后来的探针等同一次调用。Redis / Mongo / etcd checker 自带的 2s ping 超时被截到 1.5s（T-280）。[记录](docs/feature/DECISIONS-R12-KIT-2026-10-06.md#3-readyz-每个-checker-的期限)
 - **saga Mod 启动时校验效果流保留期与完成回执 TTL**（O-S5-2，维护者第十二轮决定）：结果效果流就是 DataEngine 的效果流（同名，缺省 `ROOST_EFFECTS`）时要求 `saga.completion_receipt_ttl > dataengine.effects.max_age`，否则 Init 报错并点名两个键与取值。缺省 720h > 168h 不受影响；回执比流里的结果先过期时，迟到的重投只能 Term（T-281）。[记录](docs/feature/DECISIONS-R12-KIT-2026-10-06.md#1-o-s5-2-效果流保留期与回执-ttl)

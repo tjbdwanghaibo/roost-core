@@ -537,7 +537,10 @@ go test -race ./...
 core → kit → skill → codegen 发布闭包，发布门禁保持红色是预期行为，不能用 workspace
 绿灯代替。
 
-CI 在 Linux 与 Windows 上运行完整测试矩阵，核心包开启 `-race`。修改公开接口时检查：生命周期是否可停止、是否需要 health/metrics、是否泄漏业务语义（core 不得出现 `player`、`alliance` 等玩法词汇）、能否在无具体中间件的测试环境中替换。修复并发/一致性缺陷必须附带能复现原缺陷的回归测试。
+CI 在 Linux 上运行完整测试矩阵，核心包开启 `-race`；Windows 只跑一个 `go test ./...` 兼容性 job。
+
+> **平台支持**：正确性只在 Linux（生产）与 macOS（开发）上保证和验证。**Windows 不保证正确**：可以编译、CLI 有 Windows 制品、CI 有兼容性 job，但信号与进程树处理、`project sync` 暂存目录清理、行尾（autocrlf）、hotcode 插件（Go `plugin` 不支持 Windows）等都没有在真实 Windows 上验证，已知问题暂存不修（维护者 2026-10-06：“windows的问题可以暂存，加一个说明 window问题不保证正确”）。生产请部署在 Linux。
+修改公开接口时检查：生命周期是否可停止、是否需要 health/metrics、是否泄漏业务语义（core 不得出现 `player`、`alliance` 等玩法词汇）、能否在无具体中间件的测试环境中替换。修复并发/一致性缺陷必须附带能复现原缺陷的回归测试。
 
 ## 深入文档索引
 

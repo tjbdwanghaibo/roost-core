@@ -224,3 +224,10 @@
 | Mongo 步骤延迟 | 维护者要求分析（9.0→17.4 ms/op） | 已分析（`ff08c941`，[分析](../feature/SAGA-MONGO-STEP-LATENCY-2026-10-06.md)）：代价是多一次落盘提交，吞吐同样约减半；不放松契约就没有安全优化，未改代码。**维护者选 A（接受现状）**：“目前真正走 saga 的实际业务场景不多，55tps 足够了”。契约与实现不变 |
 
 另按维护者第十二轮实施要求，game-demo 仪表盘补 `configdata_rollback_total{trigger}` 面板（A17 顺带观察），同一提交 `7b73aabc`。
+
+## 维护者决定（2026-10-06，第十三轮：发版前收口）
+
+| # | 决定 | 实施状态 |
+| --- | --- | --- |
+| 不留 WANTED | “这次不能有wanted，需要都解决后再给review, review是查问题”：交给 review 前所有疑点本轮闭环（RR 修复 / 结构性守卫 / 不可达证明），roost-bugfix §7 已改（`87d8d91e`） | 进行中（W-2026-10-06-01、glsvet A1 间接调用、stepTransition 盲区、maxOperationAttempts、L1 单一写入口、interest 表满撤销水位） |
+| Windows | “windows的问题可以暂存，加一个说明 window问题不保证正确”：README / DEPLOYMENT 写明 Windows 不保证正确；W-2026-10-04-05、E25、E27 的 Windows 部分暂存 | 已实施（本提交） |

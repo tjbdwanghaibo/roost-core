@@ -41,7 +41,7 @@
 | E22 | 部署 | k8s 滚动停机与部署物 | k8s 集群 | 未做 |
 | E23 | 部署 | distroless 镜像与多阶段构建 | 可拉镜像的环境 | 未做 |
 | E24 | 部署 | 仓库外生产配置的 doctor 检查 | 部署方 | 未做 |
-| E25 | Windows | CLI 信号与进程树、暂存树、autocrlf、偶发项 | Windows | 未做 |
+| E25 | Windows | CLI 信号与进程树、暂存树、autocrlf、偶发项 | Windows | **暂存**：Windows 不保证正确（维护者 2026-10-06） |
 | E26 | 部署 | Linux 上 CLI 信号、强杀 / 磁盘故障、离线代理 | Linux | 未做 |
 | E27 | 部署 / Windows | hotcode 真实插件加载 | Linux / Windows | 未做 |
 | E28 | 容量 | 生产流量下竞态窗口的实际频率 | 准生产流量 | 未做 |
@@ -225,6 +225,8 @@
 
 ### E25 Windows
 
+> **暂存**（维护者 2026-10-06：“windows的问题可以暂存，加一个说明 window问题不保证正确”）。Windows 正确性不在保证范围内，README / DEPLOYMENT 已写明；本项不阻塞发版，有需要时再做。
+
 - **来源**：清单 N08 行（taskkill 进程树与暂存树清理）；[B6](../feature/B6-CLI-SIGNAL-OWNERSHIP-2026-10-06.md)（Windows 不接管信号，只做了 `GOOS=windows go vet`）；清单外部验证表（未编入 Windows 的 Unix 用例另验）；REMAINING-2026-09-28 §2 N14（真实 `core.autocrlf=true` 检出）；核心优化交接 §7 RR-20261004-13（Windows 未实跑）；ARCHIVE-2026-09-30 §5 P3（windows-compatibility 上 `TestPipelinedCommitIsProjectedOnceDurableWithoutWaitingForIdlePoll` 偶发）。
 - **验证什么**：Ctrl-C 与 taskkill 进程树、暂存树清理不遗留进程；真实 autocrlf 检出上 `add transport tcp` / `add mod` / `project sync` 编辑 Secret 示例且行尾保持 CRLF；上述偶发项再现时改成确定性屏障或按平台放宽预算。
 - **怎么做**：Windows 机器（或 CI 的 windows job 加一步）；`codegen/scripts/install-windows.ps1`（在 `codegen/` 目录下运行）、`roost project ...` 命令组。
@@ -242,7 +244,7 @@
 - **来源**：清单 N10 行（Linux / Windows 真实插件加载）。
 - **验证什么**：hotcode 注册 / 替换的真实 `.so` 加载（macOS 已跑 H9～H13）在 Linux 上的并发可见性、旧请求生命周期、回滚。Go 的 `plugin` 包不支持 Windows，Windows 上要确认的是报错方式。
 - **怎么做**：Linux 与 Windows 机器，复用 [N10 第二批](REVIEW-2026-10-06-noncore-n10b.md) 的 H9～H13 用例。
-- **通过标准**：（建议）Linux 与 macOS 行为一致；Windows 给出明确的不支持错误，不 panic。
+- **通过标准**：（建议）Linux 与 macOS 行为一致；Windows 部分**暂存**（Windows 不保证正确，维护者 2026-10-06）。
 
 ### E28 生产流量下竞态窗口的实际频率
 
