@@ -198,10 +198,7 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	if prefix == "" {
 		prefix = "roost.effect"
 	}
-	stream := strings.TrimSpace(cfg.GetString("dataengine.effects.stream"))
-	if stream == "" {
-		stream = "ROOST_EFFECTS"
-	}
+	stream := effectStreamName(cfg)
 	mod.cfg = modConfig{
 		mongo: engine.MongoStoreConfig{DefaultDatabase: database, ServerID: sid,
 			TransactionReceiptTTL: duration(read.Duration("dataengine.transaction_receipt_ttl"), 30*24*time.Hour),
@@ -209,7 +206,7 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 		wal: wal, projector: projector, outbox: outbox, effectPrefix: prefix,
 		effectStream: fnats.JetStreamConfig{
 			Name: stream, Subjects: []string{prefix + ".>"}, Storage: fnats.JetStreamStorageFile,
-			MaxAge:     duration(read.Duration("dataengine.effects.max_age"), 7*24*time.Hour),
+			MaxAge:     duration(read.Duration("dataengine.effects.max_age"), DefaultEffectMaxAge),
 			Duplicates: duration(read.Duration("dataengine.effects.duplicate_window"), 10*time.Minute),
 			Replicas:   positive(read.Int("dataengine.effects.replicas"), 1),
 			MaxBytes:   positiveInt64(read.Int64("dataengine.effects.max_bytes"), 8<<30),
@@ -475,6 +472,34 @@ func (mod *Mod) checkHealth(ctx context.Context) health.Result {
 var _ corenest.PipelinedTransactionCommitter = (*Mod)(nil)
 var _ corenest.TransactionReleaseNotifier = (*Mod)(nil)
 var _ corenest.LocalExecutorBinder = (*Mod)(nil)
+
+// 效果流（ROOST_EFFECTS）的缺省名字与保留期。saga Mod 用 EffectStreamRetention 读同一份，
+// 校验完成回执比流里的结果活得久（O-S5-2，维护者第十二轮决定）。
+const (
+	DefaultEffectStream = "ROOST_EFFECTS"
+	DefaultEffectMaxAge = 7 * 24 * time.Hour
+)
+
+func effectStreamName(cfg *viper.Viper) string {
+	if stream := strings.TrimSpace(cfg.GetString("dataengine.effects.stream")); stream != "" {
+		return stream
+	}
+	return DefaultEffectStream
+}
+
+// EffectStreamRetention 按 DataEngine Mod 的读法返回效果流的名字与保留期
+// （dataengine.effects.stream / dataengine.effects.max_age，未配置取缺省）。
+func EffectStreamRetention(cfg *viper.Viper) (stream string, maxAge time.Duration, err error) {
+	if cfg == nil {
+		return DefaultEffectStream, DefaultEffectMaxAge, nil
+	}
+	read := app.NewConfigReader(cfg)
+	maxAge = duration(read.Duration("dataengine.effects.max_age"), DefaultEffectMaxAge)
+	if err := read.Err(); err != nil {
+		return "", 0, err
+	}
+	return effectStreamName(cfg), maxAge, nil
+}
 
 func duration(value, fallback time.Duration) time.Duration {
 	if value > 0 {

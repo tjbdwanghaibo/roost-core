@@ -3,11 +3,13 @@ package saga
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/health"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/kit/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
@@ -128,6 +130,28 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	m.config.Engine.StepBudgets = budgets
 	if m.config.Store.CompletionReceiptTTL <= m.config.Stream.MaxAge {
 		return fmt.Errorf("saga: completion receipt ttl must exceed stream max age")
+	}
+	return m.checkEffectRetention(cfg)
+}
+
+// checkEffectRetention 是 O-S5-2 的跨 Mod 校验（维护者第十二轮决定）：原生 Nest 步骤的完成结果在
+// DataEngine 的效果流上，回执必须比流里的结果活得久，否则回执过期后再投递的结果协调器分不清是
+// 已计入的重复还是放弃后生效的成功，只能 Term。saga 流的同一前提上面已经校验；这里只在结果效果流
+// 就是 DataEngine 效果流（按 DataEngine Mod 的读法解析的流名）时比较，别的流的保留期不归这份配置管。
+func (m *Mod) checkEffectRetention(cfg *viper.Viper) error {
+	effectStream, effectMaxAge, err := kitdataengine.EffectStreamRetention(cfg)
+	if err != nil {
+		return fmt.Errorf("saga: %w", err)
+	}
+	if strings.TrimSpace(m.config.NestResults.Stream) != effectStream {
+		return nil
+	}
+	if ttl := m.config.Store.CompletionReceiptTTL; ttl <= effectMaxAge {
+		return fmt.Errorf("saga: saga.completion_receipt_ttl (%s) must exceed dataengine.effects.max_age (%s): "+
+			"native step results are kept on the effect stream %s that long, and a result redelivered after its "+
+			"completion receipt expired can no longer be told from a late success and is terminated; "+
+			"raise saga.completion_receipt_ttl or lower dataengine.effects.max_age",
+			ttl, effectMaxAge, effectStream)
 	}
 	return nil
 }

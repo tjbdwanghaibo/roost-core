@@ -197,6 +197,11 @@ func Snapshot() []Metric {
 	return DefaultRegistry().Snapshot()
 }
 
+// DeleteSeries 在默认注册表上删除序列，见 Registry.DeleteSeries。
+func DeleteSeries(name string, match Labels) int {
+	return DefaultRegistry().DeleteSeries(name, match)
+}
+
 type RegistryOption func(*Registry)
 
 func WithMaxSeriesPerMetric(limit int) RegistryOption {
@@ -451,6 +456,65 @@ func (r *Registry) Reset() {
 	r.series = make(map[string]int)
 	r.droppedByName = make(map[string]int64)
 	r.droppedSeries.Store(0)
+}
+
+// DeleteSeries 删除名字为 name、标签包含 match 全部键值对的序列（计数器、gauge、计时器、直方图都算），
+// 返回删掉的条数；name 为空表示任何名字。match 为空时什么也不删——“删全部”只能用 Reset，不能因为
+// 漏传标签把整张表清掉。
+//
+// 用途是对象的生命周期（维护者第十二轮决定）：带动态标签（一次压测运行、一个看板、一个派发器）的序列
+// 在对象消失后不再更新，留着就停在最后值、占着每指标的序列名额，长期运行的进程里只增不减。由对象的
+// 拥有者在销毁时调用，删除后序列不再出现在 Snapshot / `/metrics` 里，并把名额还给该指标；之后同样的
+// 名字与标签再被写入，就是一条从零开始的新序列。
+func (r *Registry) DeleteSeries(name string, match Labels) int {
+	if r == nil || len(match) == 0 {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	deleted := 0
+	for key, labels := range r.labels {
+		seriesName := r.names[key]
+		if name != "" && seriesName != name {
+			continue
+		}
+		if !labelsContain(labels, match) {
+			continue
+		}
+		delete(r.counters, key)
+		delete(r.gauges, key)
+		delete(r.timers, key)
+		delete(r.histograms, key)
+		delete(r.labels, key)
+		delete(r.names, key)
+		if r.series[seriesName] > 0 {
+			r.series[seriesName]--
+		}
+		if r.series[seriesName] == 0 {
+			delete(r.series, seriesName)
+		}
+		deleted++
+	}
+	return deleted
+}
+
+// SeriesCount 返回当前登记的序列条数（不含 obs.series.dropped）。用于确认基数没有无界增长。
+func (r *Registry) SeriesCount() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.names)
+}
+
+func labelsContain(labels, match Labels) bool {
+	for key, value := range match {
+		if got, ok := labels[key]; !ok || got != value {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Registry) DroppedSeries() int64 {

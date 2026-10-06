@@ -576,11 +576,36 @@ func (m *Manager) historyLocked(limit int) []RunSnapshot {
 	return out
 }
 
+// appendHistoryLocked 记下一次结束的运行；被挤出历史的运行，连同它带 run 标签的指标序列一起删除。
+//
+// 序列的拥有者是运行记录（维护者第十二轮决定“metrics 按标签删除”，N12 观察 O2）：默认 RunnerFactory
+// 给 robot.runner.* 加 run 标签，每次运行一组新序列。不删的话长期运行的控制面只增不减，约一千次运行后
+// 触到每指标序列上限，新运行的耗时直方图被丢弃、分位数阈值无从判定。运行结束时不立即删：还在历史里的
+// 运行保持可抓取，最后一个抓取周期内的增量不丢；挤出历史时删，基数上界是 HistoryLimit 次运行的序列。
 func (m *Manager) appendHistoryLocked(snapshot RunSnapshot) {
 	m.history = append(m.history, snapshot)
 	if len(m.history) > m.cfg.HistoryLimit {
+		evicted := m.history[:len(m.history)-m.cfg.HistoryLimit]
 		m.history = append([]RunSnapshot(nil), m.history[len(m.history)-m.cfg.HistoryLimit:]...)
+		for _, run := range evicted {
+			// StartRequest 可以指定 RunID：同名的运行还在历史里或正在跑时，序列归它，不删。
+			if !m.runIDInUseLocked(run.RunID) {
+				metrics.DeleteSeries("", metrics.Labels{"run": run.RunID})
+			}
+		}
 	}
+}
+
+func (m *Manager) runIDInUseLocked(runID string) bool {
+	if m.active != nil && m.active.RunID == runID {
+		return true
+	}
+	for _, run := range m.history {
+		if run.RunID == runID {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) profileNamesLocked() []string {

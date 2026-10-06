@@ -551,6 +551,27 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if scene := read("internal/service/game/scene.go"); !strings.Contains(scene, `sceneReopenFailedMetric = "scene_session_reopen_failed_total"`) {
 		t.Errorf("scene.go no longer counts on scene_session_reopen_failed_total; update the dashboard panel with it")
 	}
+	// Round 12 (A17 follow-up): the observability README lists
+	// configdata_rollback_total{trigger}; the dashboard must chart it by
+	// trigger, and kit/configdata must still count under that name and label
+	// (configdata.rollback.total exports as configdata_rollback_total).
+	rollbackPanel := false
+	for _, panel := range dashboard.Panels {
+		for _, target := range panel.Targets {
+			rollbackPanel = rollbackPanel || (strings.Contains(target.Expr, "configdata_rollback_total{") && strings.Contains(target.Expr, "by (trigger)"))
+		}
+	}
+	if !rollbackPanel {
+		t.Errorf("the dashboard has no panel querying configdata_rollback_total by trigger")
+	}
+	if readme := read("deploy/dev/observability/README.md"); !strings.Contains(readme, "configdata_rollback_total{trigger") {
+		t.Errorf("the observability README no longer lists configdata_rollback_total{trigger}; keep the panel and the README together")
+	}
+	if source, err := os.ReadFile(filepath.Join("..", "..", "..", "kit", "configdata", "configdata.go")); err != nil {
+		t.Errorf("read kit/configdata: %v", err)
+	} else if !strings.Contains(string(source), `IncCounter("configdata.rollback.total", metrics.Labels{"trigger": `) {
+		t.Errorf("kit/configdata no longer counts configdata.rollback.total{trigger}; update the dashboard panel with it")
+	}
 	if scrape := read("deploy/dev/observability/prometheus.yml"); !strings.Contains(scrape, "job_name: game") || !strings.Contains(scrape, ":9300") {
 		t.Errorf("prometheus.yml does not scrape the game process and the load test:\n%s", scrape)
 	}

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 // 业务时间只许前进（docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md）。
@@ -43,6 +45,10 @@ const (
 	// businessTimeKeySuffix 接在 singleton.key_prefix 后面。单实例锁的键是 <prefix>:<type>:<sid>，
 	// 段数不同，不会撞上。
 	businessTimeKeySuffix = ":business_time"
+	// businessTimeAdvanceFailedMetric 是运行中推进高水位失败的次数（维护者第十二轮决定）。推进失败不
+	// fail-stop，只靠这个计数和 Warn 日志发现；一直在涨说明协调存储不可用，下一次启动的检查会失败。
+	// 导出名 app_business_time_advance_failed_total。
+	businessTimeAdvanceFailedMetric = "app.business_time.advance_failed.total"
 )
 
 // businessTimeMark 是高水位键里的值：<unix 毫秒>|<写入者的偏移>|<server_type>:<sid>。只比较第一段，
@@ -77,6 +83,7 @@ type businessTimeGuard struct {
 	writer   string // 写进值里的 "<偏移>|<server_type>:<sid>"
 	now      func() time.Time
 	interval time.Duration
+	metrics  *metrics.Registry // 本 App 的指标注册表，记推进失败；nil 安全
 
 	last businessTimeMark // 最近一次读到或写入的值
 
@@ -98,6 +105,7 @@ func (a *App) startBusinessTimeGuard(serverType ServiceName, lock *singletonLock
 		now:      BusinessClock(a.registry).Now,
 		interval: a.businessTimeInterval,
 	}
+	guard.metrics, _ = Lookup[*metrics.Registry](a.registry, ModMetrics)
 	if guard.interval <= 0 {
 		guard.interval = businessTimeAdvanceInterval
 	}
@@ -195,8 +203,8 @@ func (g *businessTimeGuard) advance(ctx context.Context, at time.Time, inspect f
 	return fmt.Errorf("high-water mark still changing after %d attempts", businessTimeCASAttempts)
 }
 
-// advanceLoop 运行中按固定间隔推进高水位。失败只记日志、下一拍再试：高水位只守下一次启动，
-// 运行中的业务不依赖它，不为它 fail-stop。
+// advanceLoop 运行中按固定间隔推进高水位。失败只记日志与 app.business_time.advance_failed.total、
+// 下一拍再试：高水位只守下一次启动，运行中的业务不依赖它，不为它 fail-stop。
 func (g *businessTimeGuard) advanceLoop(ctx context.Context) {
 	defer close(g.done)
 	ticker := time.NewTicker(g.interval)
@@ -208,6 +216,7 @@ func (g *businessTimeGuard) advanceLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 		if err := g.advance(ctx, g.now(), nil); err != nil && ctx.Err() == nil {
+			g.metrics.IncCounter(businessTimeAdvanceFailedMetric, nil, 1)
 			slog.Warn("business time: advancing the high-water mark failed; retrying on the next beat",
 				"key", g.key, "err", err)
 		}

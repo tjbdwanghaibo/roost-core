@@ -397,12 +397,17 @@ func (m *OpsMod) authorized(r *http.Request) bool {
 // bearerToken extracts the credential from an Authorization header. The scheme
 // is case-insensitive per RFC 7235, so `bearer x` must work as well as
 // `Bearer x`.
+//
+// 没有 `Bearer ` 前缀的 Authorization 不交出任何凭据（维护者第十二轮决定，N01b 观察 O-P1）：
+// 之前原样返回整个头，`Authorization: <token>` 也能通过。不构成绕过（仍要知道 token），但
+// Authorization 头按 RFC 7235 必须带 scheme，别的 scheme（Basic 等）更不能被当成 admin token。
+// 不带 scheme 的客户端改用 `Authorization: Bearer <token>` 或 `X-Admin-Token: <token>`。
 func bearerToken(header string) string {
 	header = strings.TrimSpace(header)
 	if len(header) >= 7 && strings.EqualFold(header[:7], "bearer ") {
 		return strings.TrimSpace(header[7:])
 	}
-	return header
+	return ""
 }
 
 // secretEqual reports whether presented equals want without leaking where

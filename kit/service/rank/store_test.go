@@ -8,8 +8,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/versionstore"
 )
 
 func newStore(t *testing.T) (*RedisStore, *fakeRedis) {
@@ -539,13 +542,35 @@ func TestSubmitAndPageReportWhatTheyDid(t *testing.T) {
 		t.Fatalf("the board id is in a depth name (board.arena); %s", sink.Events())
 	}
 
-	// Contention is reported rather than left as an opaque internal error.
+	// Contention is counted rather than left as an opaque internal error — on
+	// versionstore's compare-and-set counters, the one measure every CAS loop
+	// in the repository reports to (maintainers' round-12 decision); rank no
+	// longer reports a servicemetrics Conflict of its own for it.
+	oldRegistry := metrics.DefaultRegistry()
+	registry := metrics.NewRegistry()
+	metrics.SetDefaultRegistry(registry)
+	t.Cleanup(func() { metrics.SetDefaultRegistry(oldRegistry) })
 	fake.swapAlwaysLoses = true
 	if _, err := store.Submit(ctx, arena(), Score{OwnerID: 2, Value: 1}, UpdateSet, ""); err == nil {
 		t.Fatal("the submit succeeded despite never winning the swap")
 	}
-	if got := sink.Count("conflict:submit"); got != 1 {
-		t.Fatalf("compare-and-swap exhaustion reported %d conflicts, want 1; %s", got, sink.Events())
+	if got := sink.Count("conflict:submit"); got != 0 {
+		t.Fatalf("rank still reports its own conflict measure (%d); versionstore counts it; %s", got, sink.Events())
+	}
+	var lost, exhausted int64
+	for _, metric := range registry.Snapshot() {
+		if metric.Labels["store"] != "test:rank:o:" {
+			continue
+		}
+		switch {
+		case metric.Name == versionstore.MetricCompareAndSet && metric.Labels["result"] == "lost":
+			lost = metric.Value
+		case metric.Name == versionstore.MetricConflict:
+			exhausted = metric.Value
+		}
+	}
+	if lost != maxSubmitAttempts || exhausted != 1 {
+		t.Fatalf("compare-and-swap counters: lost=%d exhausted=%d, want %d and 1", lost, exhausted, maxSubmitAttempts)
 	}
 }
 

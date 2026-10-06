@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -246,11 +249,73 @@ func (c *collection) EnsureIndexes(ctx context.Context, indexes []fmongo.IndexMo
 		return nil
 	}
 	for _, idx := range indexes {
-		if err := c.ensureIndex(ctx, idx); err != nil {
+		if err := retryDuringElection(ctx, startupElectionRetry, func() error { return c.ensureIndex(ctx, idx) }); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// electionRetry 是启动期索引创建遇到副本集选举时的有界重试（O-M6-5，维护者第十二轮决定）。
+//
+// EnsureIndexes 只在启动时调用（DataEngine、Remote owner、saga、效果收件箱建索引），createIndexes /
+// dropIndexes 不在驱动的可重试读写之列：主节点让位时在途的命令得到 InterruptedDueToReplStateChange，
+// 新主选出之前打到旧主的得到 NotWritablePrimary，进程直接启动失败（Mirror 第 6 步本机替代里 owner
+// 在 S5 之后撞上过一次）。普通读写由驱动的可重试读写吸收，这里只补 DDL。索引创建是幂等的，重做安全。
+//
+// 次数与间隔都有上限：attempts 次、每次之间 interval，用完返回最后一次的错误并写明是选举没有结束；
+// ctx 先到期则以 ctx 为准，同样点名。只认选举相关的服务端错误码，其他错误原样立即返回。
+type electionRetry struct {
+	attempts int
+	interval time.Duration
+}
+
+// startupElectionRetry：10 次、间隔 1s，覆盖一次正常选举（让位到新主通常几秒）；
+// 调用方的启动期限（DataEngine startup_timeout、remote_entity.op_timeout 缺省都是 30s）在它之上。
+var startupElectionRetry = electionRetry{attempts: 10, interval: time.Second}
+
+// electionErrorCodes 是副本集换主期间服务端返回的错误码：InterruptedDueToReplStateChange (11602)、
+// NotWritablePrimary (10107)、NotPrimaryNoSecondaryOk (13435)、NotPrimaryOrSecondary (13436)、
+// PrimarySteppedDown (189)、ShutdownInProgress (91)、InterruptedAtShutdown (11600)。
+// electionRetryMetric 计每一次因换主错误而失败的索引创建尝试（含最后一次放弃的）。启动时非零说明
+// 撞上了选举；放弃时启动失败，错误点名选举。导出名 mongo_ensure_index_election_retries_total。
+const electionRetryMetric = "mongo.ensure_index.election_retries.total"
+
+var electionErrorCodes = []int{11602, 10107, 13435, 13436, 189, 91, 11600}
+
+func isElectionError(err error) bool {
+	var server mongo.ServerError
+	if !errors.As(err, &server) {
+		return false
+	}
+	for _, code := range electionErrorCodes {
+		if server.HasErrorCode(code) {
+			return true
+		}
+	}
+	return false
+}
+
+func retryDuringElection(ctx context.Context, policy electionRetry, op func() error) error {
+	for attempt := 1; ; attempt++ {
+		err := op()
+		if err == nil || !isElectionError(err) {
+			return err
+		}
+		metrics.IncCounter(electionRetryMetric, nil, 1)
+		if attempt >= policy.attempts {
+			return fmt.Errorf("mongo: replica set primary election did not settle after %d attempts %s apart: %w",
+				policy.attempts, policy.interval, err)
+		}
+		timer := time.NewTimer(policy.interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("mongo: replica set primary election did not settle before the deadline (attempt %d of %d): %w; last error: %w",
+				attempt, policy.attempts, ctx.Err(), err)
+		case <-timer.C:
+		}
+	}
 }
 
 func (c *collection) ensureIndex(ctx context.Context, idx fmongo.IndexModel) error {

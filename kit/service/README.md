@@ -33,6 +33,11 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
    无条件的，不存在"某个分支忘了报"。
    这一条本身也验证过：每个包都有一条测试断言上报点**真的被走到**，并经"去掉上报即
    变红"确认。约束不能只写在 README 里——本仓存在的理由就是"靠人记住的约束会失效"。
+   **CAS 冲突率不在服务里报**（维护者第十二轮决定）：`versionstore` 统一计
+   `versionstore.cas.total{store,result=applied|lost}` 与 `versionstore.conflict.total{store}`
+   （store 是存储的键前缀），自己写 compare-and-set 循环的存储（如 rank）调用
+   `versionstore.CountCompareAndSet` / `CountConflict`。服务对 `versionstore.ErrConflict`
+   不再另报 `Conflict`；`Conflict` 只留给业务冲突（insert-only 撞号、已绑定到别处等）。
 7. **任何列表接口都有上界**，且上界不能被 `0` 绕过。
 8. **测试用求值型替身**（`roost-kit/mongo/mongotest`），并发不变量必须有并发测试。
 9. **每个修掉的缺陷都有一条经"回退修复即变红"验证过的回归测试。**

@@ -177,6 +177,7 @@ func (s *RedisStore) Submit(ctx context.Context, board Board, score Score, mode 
 				if err != nil {
 					return Entry{}, err
 				}
+				versionstore.CountCompareAndSet(s.casStoreLabel(), applied)
 				if !applied {
 					versionstore.RetryBackoff(attempt, s.cfg.RetryBackoff, s.cfg.Sleep)
 					continue
@@ -188,6 +189,7 @@ func (s *RedisStore) Submit(ctx context.Context, board Board, score Score, mode 
 		if err != nil {
 			return Entry{}, err
 		}
+		versionstore.CountCompareAndSet(s.casStoreLabel(), applied)
 		if applied {
 			s.report.Accepted("submit")
 			return s.entryFor(ctx, zkey, encodeEntry(next))
@@ -202,10 +204,17 @@ func (s *RedisStore) Submit(ctx context.Context, board Board, score Score, mode 
 	}
 	// Contention on one owner is the expected failure mode here, so it is
 	// reported rather than left as an opaque internal error the caller cannot
-	// distinguish from a Redis outage.
-	s.report.Conflict("submit")
+	// distinguish from a Redis outage. It is counted where every
+	// compare-and-set loop is counted — versionstore's CAS counters, one
+	// measure for the whole repository (maintainers' round-12 decision) —
+	// instead of a rank-only servicemetrics Conflict.
+	versionstore.CountConflict(s.casStoreLabel())
 	return Entry{}, fmt.Errorf("%w: submit lost %d compare-and-swaps for owner %d", ErrConflict, maxSubmitAttempts, score.OwnerID)
 }
+
+// casStoreLabel is this store's label on versionstore's compare-and-set
+// counters: the configured prefix plus the owner-hash segment the swap guards.
+func (s *RedisStore) casStoreLabel() string { return s.cfg.Prefix + ":o:" }
 
 // ErrConflictSentinel is the previous name of ErrConflict, kept so existing
 // errors.Is call sites keep matching. It used to be a plain errors.New, which

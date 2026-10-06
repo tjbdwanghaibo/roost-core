@@ -492,9 +492,8 @@ func (s *channelStore) store(ctx context.Context, ref ChannelRef, rule ChannelRu
 		return next, true, nil
 	})
 	if err != nil {
-		if errors.Is(err, versionstore.ErrConflict) {
-			s.metrics.Conflict("append")
-		}
+		// versionstore.ErrConflict 不在这里计数：compare-and-set 冲突由 versionstore 统一计
+		// （versionstore.cas.total / versionstore.conflict.total，维护者第十二轮决定）。
 		if keyReused {
 			s.metrics.Refused(publishOp(ref.Kind), "key_reused")
 		}
@@ -708,9 +707,9 @@ func (s *channelStore) Prune(ctx context.Context, ref ChannelRef, limit int) (in
 		return next, true, nil
 	})
 	if err != nil {
-		if errors.Is(err, versionstore.ErrConflict) {
-			s.metrics.Conflict("prune")
-		} else {
+		// A compare-and-set conflict is counted once, by versionstore
+		// (maintainers' round-12 decision); anything else is a failed prune.
+		if !errors.Is(err, versionstore.ErrConflict) {
 			// Counted as well as returned: the retention loop only logs this,
 			// and a prune that fails on every tick must be distinguishable, in
 			// the metrics, from a channel with nothing to evict (U-0122).

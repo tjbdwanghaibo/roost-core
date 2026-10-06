@@ -109,7 +109,9 @@ func TestOpsModStopWithContextUsesCallerContext(t *testing.T) {
 
 // The admin endpoint executes every registered admin command, so its token is
 // a credential — compared in constant time, accepted from either header form,
-// and never satisfied by an empty configured token.
+// and never satisfied by an empty configured token. Authorization must name the
+// Bearer scheme (case-insensitive, RFC 7235): a bare token there used to pass
+// and is refused since the maintainers' round-12 decision (N01b O-P1).
 func TestOpsAdminAuthorizationAcceptsOnlyTheExactToken(t *testing.T) {
 	mod := &OpsMod{adminToken: "s3cret-token"}
 	for name, header := range map[string]map[string]string{
@@ -117,20 +119,21 @@ func TestOpsAdminAuthorizationAcceptsOnlyTheExactToken(t *testing.T) {
 		"bearer":              {"Authorization": "Bearer s3cret-token"},
 		"lowercase bearer":    {"Authorization": "bearer s3cret-token"},
 		"bearer with padding": {"Authorization": "  Bearer   s3cret-token  "},
-		"bare authorization":  {"Authorization": "s3cret-token"},
 	} {
 		if !mod.authorized(requestWithHeaders(header)) {
 			t.Fatalf("%s: valid token rejected", name)
 		}
 	}
 	for name, header := range map[string]map[string]string{
-		"no header":         {},
-		"empty header":      {"X-Admin-Token": ""},
-		"wrong token":       {"X-Admin-Token": "s3cret-tokeN"},
-		"prefix of token":   {"X-Admin-Token": "s3cret"},
-		"token plus suffix": {"X-Admin-Token": "s3cret-token-extra"},
-		"wrong scheme":      {"Authorization": "Basic s3cret-token"},
-		"bearer no token":   {"Authorization": "Bearer "},
+		"no header":          {},
+		"empty header":       {"X-Admin-Token": ""},
+		"wrong token":        {"X-Admin-Token": "s3cret-tokeN"},
+		"prefix of token":    {"X-Admin-Token": "s3cret"},
+		"token plus suffix":  {"X-Admin-Token": "s3cret-token-extra"},
+		"wrong scheme":       {"Authorization": "Basic s3cret-token"},
+		"bearer no token":    {"Authorization": "Bearer "},
+		"bare authorization": {"Authorization": "s3cret-token"},
+		"padded bare token":  {"Authorization": "  s3cret-token "},
 	} {
 		if mod.authorized(requestWithHeaders(header)) {
 			t.Fatalf("%s: authorized when it must not be", name)

@@ -6,6 +6,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 维护者第十二轮 kit / core 批（bkit）：RR-20261006-09 已修复、声明场景验证；另八项决定已实施，未发版。** robot Stage 序号只增不回收（[09](RR-20261006-09.md)）；O-S5-2 回执 TTL 与效果流保留期跨 Mod 校验、metrics 按标签删除（loadtest 运行序列随运行记录删除）、`/readyz` checker 期限、Ops 必须带 `Bearer `、CAS 冲突率在 versionstore 统一计数、O-M6-5 启动期建索引遇选举有界重试、业务时间高水位推进失败计数、game-demo `configdata_rollback_total` 面板见 [第十二轮 kit 批](../feature/DECISIONS-R12-KIT-2026-10-06.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-09](RR-20261006-09.md) | robot Stage 先缩后扩：序号只增不回收，新机器人不再复用刚停掉的序号与 PlayerID | 已修复、声明场景验证，未发版 |
+
 **10-06 收尾第 2 批（cb2）：生成形状相关的小项 A8 / A9 / A11 / A15 / A17，未发版。** 生成配置补齐 `remote_entity` 新键（生产化不再改墓碑 WAIT 副本数）、生成 TCP 越界报错逐条点名、full 场景 add 序列收拢到 `codegen/scripts/full-scenario-adds.sh` 且不吞失败、生成 TCP 加“handler 不配合 ctx”用例、game-demo 仪表盘加 `scene_session_reopen_failed_total` 面板。[记录](CLOSING-BATCH-2-2026-10-06.md)
 
 **10-06 收尾第 4 批 kit / core 小修与测试设施（cb4）：RR-20261006-05～08 已修复、声明场景验证，未发版；A2 / A3 修用例。** global `Bind` 同参数重试按幂等成功（[05](RR-20261006-05.md)）；saga 步骤预算遇只差大小写的名字报歧义错误（[06](RR-20261006-06.md)）；`app.run` 关闭文件日志前写出最终错误（[07](RR-20261006-07.md)）；mongotest `$in` 用 reflect 展开具名切片，saga 用例改走 `ClaimDue`（[08](RR-20261006-08.md)）；nest `group_lock_test` 在无 Guard 作用域的 goroutine 里取锁、把同一个 Guard 两次放回池，污染 `-shuffle` 下后续用例，改为建作用域，目标用例失败时快速报出（[记录](CLOSING-BATCH-4-2026-10-06.md)）。

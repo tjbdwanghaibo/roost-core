@@ -115,5 +115,5 @@ $ GOWORK=off go test -count=1 -run 'TestBusinessTimeMovingBackRefusesToStart|Tes
 ### 未完成 / 风险
 
 - 没开单实例锁、偏移为 0 的进程不检查（方案 §3）：同一套部署从 +24h 改回 0 时由开了锁的服务拒绝启动；只有这类进程、没有任何开锁服务的部署检查不到。
-- 运行中推进失败只记 Warn，没有指标；进程崩溃时高水位最多落后 10s（容差吸收）。
+- 运行中推进失败只记 Warn，没有指标（**后续**：第十二轮加 `app.business_time.advance_failed.total`，见 [kit 批](DECISIONS-R12-KIT-2026-10-06.md#8-业务时间高水位推进失败计数)）；进程崩溃时高水位最多落后 10s（容差吸收）。
 - 只在单机 Redis 上验证；Redis Cluster 下高水位是单键，不涉及跨槽。

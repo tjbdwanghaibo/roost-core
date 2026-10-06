@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/clock"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 // 业务时间只许前进（docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md）：同一套部署的业务时间
@@ -241,5 +242,59 @@ func TestProductionDoesNotRunTheBusinessTimeGuard(t *testing.T) {
 	guard, err := a.startBusinessTimeGuard("game", nil)
 	if guard != nil || err != nil || opened != 0 {
 		t.Fatalf("production: guard = %v, err = %v, opened = %d; want no guard and no store", guard, err, opened)
+	}
+}
+
+// 维护者第十二轮决定（低优先“业务时间高水位推进失败加计数”）：运行中推进失败只记 Warn、下一拍再试，
+// 之前没有任何指标，一直推不上去在面板上看不出来（方案文档“未验证 / 余项”）。现在每次失败计
+// app.business_time.advance_failed.total，存储恢复后不再增长。
+func TestAFailedHighWaterMarkAdvanceIsCounted(t *testing.T) {
+	h := newSingletonHarness(t, nil, nil)
+	withLogicOffset(t, h, "1h")
+	h.app.businessTimeInterval = 5 * time.Millisecond
+	result := h.start()
+	h.awaitServed(t, result)
+	registry, ok := Lookup[*metrics.Registry](h.app.registry, ModMetrics)
+	if !ok {
+		t.Fatal("no metrics registry")
+	}
+	failures := func() int64 {
+		for _, metric := range registry.Snapshot() {
+			if metric.Name == businessTimeAdvanceFailedMetric {
+				return metric.Value
+			}
+		}
+		return 0
+	}
+	if got := failures(); got != 0 {
+		t.Fatalf("%d advance failures counted while the store worked", got)
+	}
+	h.store.mu.Lock()
+	h.store.markErr = errors.New("redis: connection refused")
+	h.store.mu.Unlock()
+	deadline := time.Now().Add(testWaitLimit)
+	for failures() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("advance failures counted %d while every write of the high-water mark failed, want them counted", failures())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h.store.mu.Lock()
+	h.store.markErr = nil
+	h.store.mu.Unlock()
+	before := businessTimeMarkOf(t, h)
+	for !businessTimeMarkOf(t, h).After(before) {
+		if time.Now().After(deadline) {
+			t.Fatal("high-water mark did not advance after the store recovered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	settled := failures()
+	time.Sleep(30 * time.Millisecond)
+	if got := failures(); got != settled {
+		t.Fatalf("advance failures kept growing (%d -> %d) after the store recovered", settled, got)
+	}
+	if err := h.stop(t, result); err != nil {
+		t.Fatalf("run: %v", err)
 	}
 }

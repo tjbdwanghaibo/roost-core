@@ -24,7 +24,9 @@ type RedisClient interface {
 
 // RedisConfig configures a RedisStore.
 type RedisConfig[K comparable, T any] struct {
-	// Prefix is prepended to every rendered key.
+	// Prefix is prepended to every rendered key. It is also the store label of
+	// the compare-and-set counters (MetricCompareAndSet / MetricConflict), so it
+	// must be a fixed name per store, never something that varies per key.
 	Prefix string
 	// KeyOf renders a key; required.
 	KeyOf KeyFunc[K]
@@ -364,6 +366,7 @@ func (s *RedisStore[K, T]) Update(ctx context.Context, key K, mutate Mutate[T]) 
 		if err != nil {
 			return Versioned[T]{}, false, err
 		}
+		CountCompareAndSet(s.cfg.Prefix, result.Applied)
 		if result.Applied {
 			return Versioned[T]{Value: next, Version: current.Version + 1}, true, nil
 		}
@@ -380,6 +383,7 @@ func (s *RedisStore[K, T]) Update(ctx context.Context, key K, mutate Mutate[T]) 
 			return Versioned[T]{}, false, err
 		}
 	}
+	CountConflict(s.cfg.Prefix)
 	return Versioned[T]{}, false, fmt.Errorf("%w: %s after %d attempts", ErrConflict, redisKey, s.cfg.MaxAttempts)
 }
 

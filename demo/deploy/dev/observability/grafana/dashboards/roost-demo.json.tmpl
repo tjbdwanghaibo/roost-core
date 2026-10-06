@@ -635,7 +635,7 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 12,
+        "w": 8,
         "x": 0,
         "y": 32
       },
@@ -677,8 +677,8 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 8,
         "y": 32
       },
       "fieldConfig": {
@@ -714,6 +714,48 @@
           "expr": "sum(rate(configdata_reload_total{job=\"{{GAME_SERVICE}}\"}[5m]))",
           "legendFormat": "reloads/s",
           "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "配置撤回（按触发方式，5 分钟内次数）",
+      "id": 27,
+      "description": "apply_failed：新配置发布后 AfterApply 失败，自动撤回到上一代；operator：运维执行了 Rollback。撤回回到上一代的版本号（左边版本面板会回落）。apply_failed 非零要查服务日志里 config reload 的失败原因。计数器在第一次递增前不存在，No data 是好消息。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (trigger)(increase(configdata_rollback_total{job=\"{{GAME_SERVICE}}\"}[5m]))",
+          "legendFormat": "{{trigger}}",
+          "refId": "A"
         }
       ]
     },

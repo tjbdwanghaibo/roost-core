@@ -57,6 +57,12 @@ type Stage struct {
 // IdentityProvider maps a robot ordinal (1-based) to its business identity.
 // Games inject their entity-id scheme here; the default is the ordinal
 // itself.
+//
+// Ordinals are never reused within one run: a staged run that shrinks and
+// grows again hands the new robots fresh ordinals past every one issued so
+// far, because a robot just stopped may still be closing its session under
+// its identity (RR-20261006-09). Such a run therefore uses ordinals beyond
+// Count — up to Count plus every regrowth — and the provider must cover them.
 type IdentityProvider func(index int) (int64, error)
 
 // Config shapes one run.
@@ -266,7 +272,10 @@ func (r *Runner) Run(ctx context.Context) error {
 // steer the population up and down over time.
 func (r *Runner) runPopulation(ctx context.Context, scn scenario.Scenario, looping bool) error {
 	stop := make([]chan struct{}, 0, r.cfg.Count)
-	launched := 0
+	// launched 是当前在线目标数（缩容会减回去）；lastOrdinal 是已经发出去的最大序号，只增不回收
+	// （RR-20261006-09）：缩容停掉的机器人可能还在收尾（关会话、登出），扩容若从 launched+1 起编号，
+	// 新机器人会拿到它的序号与 PlayerID，两个机器人同时用一个身份。
+	launched, lastOrdinal := 0, 0
 	launchUpTo := func(target int) error {
 		for launched < target {
 			if err := ctx.Err(); err != nil {
@@ -277,7 +286,8 @@ func (r *Runner) runPopulation(ctx context.Context, scn scenario.Scenario, loopi
 				step = remaining
 			}
 			for i := 0; i < step; i++ {
-				index := launched + i + 1
+				lastOrdinal++
+				index := lastOrdinal
 				stopCh := make(chan struct{})
 				stop = append(stop, stopCh)
 				if err := r.launch(ctx, index, scn, looping, stopCh); err != nil {

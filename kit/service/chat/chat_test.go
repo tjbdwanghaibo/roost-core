@@ -1407,9 +1407,10 @@ func TestBackendFailuresAreReportedAsStoreFailuresAndConflictsAreCounted(t *test
 		t.Fatalf("history error = %v, want the backend failure", err)
 	}
 
-	// Compare-and-set exhaustion is distinguishable from a dead backend, and it
-	// is counted: one channel is one entry, so contention is the expected
-	// failure mode under load.
+	// Compare-and-set exhaustion is distinguishable from a dead backend. It is
+	// counted once, by versionstore (versionstore.cas.total /
+	// versionstore.conflict.total, maintainers' round-12 decision), so chat no
+	// longer reports a Conflict of its own for it.
 	contended := newHarness(t, withState(brokenState{inner: inner, updateErr: versionstore.ErrConflict}))
 	_, err = contended.service.Publish(ctx, role(1), text("hello", "k1", world()))
 	if !errors.Is(err, versionstore.ErrConflict) {
@@ -1418,8 +1419,8 @@ func TestBackendFailuresAreReportedAsStoreFailuresAndConflictsAreCounted(t *test
 	if got := Code(err); got != CodeConflict {
 		t.Fatalf("a conflict mapped to %d, want %d", got, CodeConflict)
 	}
-	if got := contended.metrics.snapshot().conflicts["append"]; got != 1 {
-		t.Fatalf("the conflict metric counted %d for append, want 1", got)
+	if got := contended.metrics.snapshot().conflicts["append"]; got != 0 {
+		t.Fatalf("chat counted %d conflicts for append; versionstore counts compare-and-set conflicts", got)
 	}
 	ref, err := contended.store.Resolve(world(), 1)
 	if err != nil {
@@ -1428,8 +1429,8 @@ func TestBackendFailuresAreReportedAsStoreFailuresAndConflictsAreCounted(t *test
 	if _, err := contended.service.Prune(ctx, ref, 10); !errors.Is(err, versionstore.ErrConflict) {
 		t.Fatalf("prune error = %v, want a conflict", err)
 	}
-	if got := contended.metrics.snapshot().conflicts["prune"]; got != 1 {
-		t.Fatalf("the conflict metric counted %d for prune, want 1", got)
+	if got := contended.metrics.snapshot().conflicts["prune"]; got != 0 {
+		t.Fatalf("chat counted %d conflicts for prune; versionstore counts compare-and-set conflicts", got)
 	}
 }
 

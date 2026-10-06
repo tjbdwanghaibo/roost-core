@@ -27,6 +27,8 @@ import (
 	"errors"
 	"math/rand"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 var (
@@ -136,6 +138,42 @@ const (
 	// budget together.
 	DefaultRetryBackoff = 2 * time.Millisecond
 )
+
+// compare-and-set 的统一计数（维护者第十二轮决定“CAS 冲突率口径”，N06 观察 2）。
+//
+// 冲突率只在这一层数：RedisStore.Update 的每次尝试与预算用尽各计一次，不在 versionstore 里的
+// compare-and-set 循环（例如 kit/service/rank 的有序集合 + 哈希脚本）调用同样的两个函数。服务不再
+// 各自对 ErrConflict 报 servicemetrics.Conflict——那是同一个事件的第二份口径；servicemetrics 的
+// Conflict 留给业务冲突（insert-only 撞号、已绑定到别处等），它们不是存储竞争。
+const (
+	// MetricCompareAndSet 是 compare-and-set 尝试次数，标签 store（键前缀）与 result=applied|lost。
+	// 冲突率 = lost / (applied + lost)。导出名 versionstore_cas_total。
+	MetricCompareAndSet = "versionstore.cas.total"
+	// MetricConflict 是重试预算用尽、返回 ErrConflict 的次数，标签 store。导出名 versionstore_conflict_total。
+	MetricConflict = "versionstore.conflict.total"
+)
+
+// CountCompareAndSet 记一次 compare-and-set 尝试。store 是存储的固定名字（键前缀），不能带每个键
+// 不同的部分。
+func CountCompareAndSet(store string, applied bool) {
+	result := "lost"
+	if applied {
+		result = "applied"
+	}
+	metrics.IncCounter(MetricCompareAndSet, metrics.Labels{"store": storeLabel(store), "result": result}, 1)
+}
+
+// CountConflict 记一次预算用尽（调用方拿到 ErrConflict）。
+func CountConflict(store string) {
+	metrics.IncCounter(MetricConflict, metrics.Labels{"store": storeLabel(store)}, 1)
+}
+
+func storeLabel(store string) string {
+	if store == "" {
+		return "unnamed"
+	}
+	return store
+}
 
 // RetryBackoff waits before the next attempt of a compare-and-set loop,
 // growing exponentially with full jitter so concurrent losers do not retry in

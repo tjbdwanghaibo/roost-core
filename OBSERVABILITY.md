@@ -131,7 +131,7 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | `service.conflict.total{service,op}` | Counter | CAS 重试耗尽；同一逻辑键争用的信号 |
 | `service.depth{service,name[,key]}` | Gauge | 当前大小。match 的队列长度是 `name="queue",key="<Mode:GroupSize:Partition>"`，rank 的看板大小是 `name="board",key="<Board.ID>"`（以前队列 key、看板 ID 拼在名字里） |
 
-基数：`service` / `op` / `reason` / `name` 都是代码里的常量或枚举。`key` 是调用方给的对象标识：**队列的 Partition 与看板 ID 必须是有限枚举**（区服、模式、看板种类），不能把玩家 / 公会 / 场次 ID 拼进去——注册表删不掉序列，`service.depth` 到每指标 2048 条后新组合被丢弃并计 `obs.series.dropped{metric="service.depth"}`。看板的 scope / season 不进 key，同一种看板的不同 scope 共用一条序列（读到的是最近一次 Page 的那个）。默认 Reporter 不加按运行、按请求、按实体变化的标签。项目自写的 Reporter 不实现 `servicemetrics.KeyedReporter` 时，深度事件仍以旧形状 `Depth("queue.<key>")` 到达，由它自己决定怎么拆。
+基数：`service` / `op` / `reason` / `name` 都是代码里的常量或枚举。`key` 是调用方给的对象标识：**队列的 Partition 与看板 ID 必须是有限枚举**（区服、模式、看板种类），不能把玩家 / 公会 / 场次 ID 拼进去——默认 Reporter 不会替你删序列（注册表从第十二轮起有 `metrics.DeleteSeries(name, labels)`，由对象的拥有者在销毁时调用，loadtest 的 `run` 序列就是这样随运行记录删除的），`service.depth` 到每指标 2048 条后新组合被丢弃并计 `obs.series.dropped{metric="service.depth"}`。看板的 scope / season 不进 key，同一种看板的不同 scope 共用一条序列（读到的是最近一次 Page 的那个）。默认 Reporter 不加按运行、按请求、按实体变化的标签。项目自写的 Reporter 不实现 `servicemetrics.KeyedReporter` 时，深度事件仍以旧形状 `Depth("queue.<key>")` 到达，由它自己决定怎么拆。
 
 ### 持久化与 fence（kit/dataengine）
 
@@ -148,6 +148,8 @@ kit `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册（
 | --- | --- | --- | --- |
 | `/healthz` | 进程的 HTTP 在答就 200 | — | startup / liveness |
 | `/readyz` | 就绪位为真（`service.started` 之后、`service.stopping` 之前），且没有 checker 为 `fail` | 就绪位为假，或任一 checker 为 `fail`（未知状态按 `fail` 算） | readiness、compose healthcheck、shell `healthcheck.sh`、`make dev-run` |
+
+**每个 checker 有期限**（维护者第十二轮决定）：checker 并发调用，各自最多等 1.5s（`health.DefaultCheckTimeout`），到期未返回记 `fail`（`message: check timed out`，`error` 写明期限与已跑时长），不再拖住整个 `/readyz`；同一个 checker 同一时刻只有一次调用，卡住的不会每次探针多一个。
 
 **Degraded 算就绪**（维护者决定 D1，2026-10-06）：有 `degraded` 时 `/readyz` 仍返回 200、`ok: true`，响应体 `degraded: true`，`degraded_dependencies` 列出每个降级项的 `name` / `status` / `message` / `error`；`dependencies` 照样列出全部 checker。之前 Degraded 与 Fail 一样返回 503。现有的 Degraded 来源都是“还能服务、需要关注”：单实例锁续期结果未知（`singleton`，≤ `singleton.renew_interval` 的窗口）、entitysync 主体 / 会话 ≥ 80% 容量、remoteentity 写许可用满、DataEngine 投影积压告警。`fail` 是“不能再安全工作”：fenced、Projector / Outbox 不健康、容量用尽、已关闭、失锁或未持有单实例锁。
 
