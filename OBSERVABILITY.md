@@ -112,6 +112,12 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | `robot.runner.target` / `robot.runner.online{profile,run,scenario}` | Gauge | 目标并发 vs 实际在线机器人（Stages 升降是否按预期跟随） |
 | `robot.loadtest.active{profile}` | Gauge | 该 profile 是否有活跃 run（单活跃约束的可视化） |
 
+### 实体定时器（core/timer）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `timer.unhandled_dropped_total{kind}` | Counter | 到期时因类型（`kind` = 类型号）没有注册 handler 而被删除的定时器节点（维护者决定 D-L2）。**基线应为零**；非零说明存储里还有某种已下线 / 漏注册类型的节点，它们在到期时被丢弃。每次删除另有 Warn `timer: dropped a due timer with no handler registered for its type`；宿主加载时对这类存量类型每种告警一次（`timer: stored timers have no handler registered for their type`）。宿主事务回滚后重试同一次 Tick 会再计一次 |
+
 ### 服务事件（kit/service 与 core/service，维护者决定 C6）
 
 生成工程的每个托管服务默认用 `servicemetrics.NewMetricsReporter("<服务名>")`（`internal/service/<svc>/collaborators.go` 的 `Metrics()`），事件写进进程的 metrics 注册表、经 ops `/metrics` 导出。关闭：配置 `service_metrics.enabled: false`（所有 kit 服务 Mod 在 Init 时不再把 Reporter 交给服务），或在 collaborators 里返回 nil。[方案](docs/feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md)

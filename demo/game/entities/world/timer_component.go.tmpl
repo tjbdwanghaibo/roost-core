@@ -63,6 +63,18 @@ const overdueDeadlineDelay = time.Millisecond
 // there is no undo to register here. Before this the heap lived in the
 // component and every path had to copy it into the transaction by hand
 // (RR-20261005-NC-140).
+//
+// Order: deadlines due at the same moment fire by priority (lower first,
+// default 0), then in the order they were armed — the node id, which the
+// scheduler compares, not the map order the nodes are rebuilt in (D-L1). A
+// timer type that must fire before or after others at the same moment arms
+// with scheduler.NewTimerWithPriority; the activity phase has no such need
+// and arms at 0.
+//
+// A stored node whose type has no handler in this build (a type that was
+// removed) is reported once per type when the World loads, and dropped with
+// a warning and timer.unhandled_dropped_total{kind} when it comes due (D-L2):
+// keeping it would leave it at the top of the heap forever.
 type TimerComponent struct {
 	entity.ComponentBase
 	owner *World
@@ -92,20 +104,16 @@ func (component *TimerComponent) Owner() *World { return component.owner }
 // OnInitFinish derives timer_next_due from the stored nodes: it is nopersist,
 // so the stored document does not bring it back. It runs after the DAO is
 // attached and before anything can call Tick, which is the only order in
-// which a restored deadline is not briefly invisible.
+// which a restored deadline is not briefly invisible. It also warns, once per
+// type, about stored nodes no handler in this build can fire (D-L2).
 //
-// Writing a nopersist field marks nothing for storage, so a load does not
-// produce a save of state that did not change.
+// Nothing is armed or fired here, so the scheduler's clock is never read.
+// Building it writes nothing, and writing a nopersist field marks nothing for
+// storage, so a load does not produce a save of state that did not change.
 func (component *TimerComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
-	dao := component.owner.Dao()
-	earliest := int64(0)
-	dao.RangeTimers(func(_ int64, stored *db.TimerNode) bool {
-		if stored != nil && stored.GetEndUnixMilli() > 0 && (earliest == 0 || stored.GetEndUnixMilli() < earliest) {
-			earliest = stored.GetEndUnixMilli()
-		}
-		return true
-	})
-	dao.SetTimerNextDue(earliest)
+	scheduler := component.scheduler(time.Time{})
+	scheduler.ReportUnhandledTypes()
+	component.settle(scheduler)
 	return nil
 }
 
@@ -127,7 +135,8 @@ func (component *TimerComponent) scheduler(now time.Time) *timer.Scheduler {
 			return true
 		}
 		saved = append(saved, timer.Node{
-			ID: id, Type: stored.GetType(), Param1: stored.GetParam1(), Param2: stored.GetParam2(),
+			ID: id, Type: stored.GetType(), Priority: stored.GetPriority(),
+			Param1: stored.GetParam1(), Param2: stored.GetParam2(),
 			Payload: []byte(stored.GetPayload()),
 			End:     time.UnixMilli(stored.GetEndUnixMilli()),
 			Delay:   time.Duration(stored.GetDelayMillis()) * time.Millisecond,
@@ -161,6 +170,7 @@ func (component *TimerComponent) persist(change timer.ChangeType, node timer.Nod
 	}
 	stored := &db.TimerNode{}
 	stored.SetType(node.Type)
+	stored.SetPriority(node.Priority)
 	stored.SetParam1(node.Param1)
 	stored.SetParam2(node.Param2)
 	stored.SetPayload(string(node.Payload))

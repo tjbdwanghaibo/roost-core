@@ -1,14 +1,20 @@
 package world
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	db "{{MODULE}}/db"
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -485,4 +491,198 @@ func runWorldHandler(t *testing.T, subject *World, meta nest.HandlerMeta, commit
 	defer func() { _ = engine.Shutdown(context.Background()) }()
 	_, err := engine.Request(context.Background(), name, subject.ID(), nil)
 	return err
+}
+
+// D-L1（维护者决定，2026-10-06）：同一期限的截止按 (期限, priority, 登记顺序) 触发。World 每次调用都从 DAO
+// 的 map 重建调度器，map 的遍历顺序是随机的；修前同期限的顺序由 map 顺序与堆的形状决定，修后按登记顺序（节点 ID）。
+// 触发顺序就是 effect 在提交记录里的顺序。
+func TestDeadlinesDueAtTheSameMomentFireInArmOrder(t *testing.T) {
+	subject := newWorld(t)
+	now := time.Unix(1_800_000_000, 0)
+	var armed []string
+	for i := range 8 {
+		activityID := "race-" + string(rune('a'+i))
+		if _, err := nest.RunIsolatedTransaction(context.Background(), &worldCommitter{}, "arm", func() (any, error) {
+			subject.TimerComp().ScheduleActivityPhase(activityID, now.Add(time.Minute), now)
+			return nil, nil
+		}); err != nil {
+			t.Fatalf("arm %s: %v", activityID, err)
+		}
+		armed = append(armed, activityID)
+	}
+	committer := &worldCommitter{}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "tick", func() (any, error) {
+		subject.TimerComp().Tick(now.Add(time.Minute))
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(committer.records) != 1 {
+		t.Fatalf("%d records, want 1", len(committer.records))
+	}
+	var fired []string
+	for _, effect := range committer.records[0].Effects {
+		fired = append(fired, effect.Key)
+	}
+	if !slices.Equal(fired, armed) {
+		t.Fatalf("deadlines due at the same moment fired in order %v, want the order they were armed in %v", fired, armed)
+	}
+}
+
+// D-L2（维护者决定，2026-10-06）：存储里有一种这个版本没有 handler 的定时器（例如下线了一种类型）。
+// 加载时每种类型告警一次；到期时节点照旧删除，但每个被删的节点打一条 Warn 并计
+// timer.unhandled_dropped_total{kind=<类型号>}。修前加载与删除都没有日志、没有计数。
+func TestAStoredTimerOfATypeWithNoHandlerIsReportedAndCountedWhenDropped(t *testing.T) {
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	registry := metrics.NewRegistry()
+	previousRegistry := metrics.DefaultRegistry()
+	metrics.SetDefaultRegistry(registry)
+	t.Cleanup(func() { metrics.SetDefaultRegistry(previousRegistry) })
+
+	now := time.Unix(1_800_000_000, 0)
+	first := newWorld(t)
+	if _, err := nest.RunIsolatedTransaction(context.Background(), &worldCommitter{}, "store_unknown_types", func() (any, error) {
+		for id, timerType := range map[int64]int32{1: 99, 2: 99, 3: 98} {
+			stored := &db.TimerNode{}
+			stored.SetType(timerType)
+			stored.SetEndUnixMilli(now.Add(time.Minute).UnixMilli())
+			stored.SetDelayMillis(time.Minute.Milliseconds())
+			first.Dao().SetTimers(id, stored)
+		}
+		first.Dao().SetTimerSeed(3)
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	restarted := restartWorld(t, first)
+	loaded := logs.String()
+	if n := strings.Count(loaded, "level=WARN"); n != 2 {
+		t.Errorf("loading stored timers of two unhandled types logged %d warnings, want one per type:\n%s", n, loaded)
+	}
+	if !strings.Contains(loaded, "type=99") || !strings.Contains(loaded, "type=98") {
+		t.Errorf("the load warnings do not name the types:\n%s", loaded)
+	}
+
+	logs.Reset()
+	committer := &worldCommitter{}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "tick", func() (any, error) {
+		if remaining := restarted.TimerComp().Tick(now.Add(time.Minute)); remaining != 0 {
+			t.Errorf("%d nodes remain; a due node with no handler is still removed", remaining)
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if n := strings.Count(logs.String(), "level=WARN"); n != 3 {
+		t.Errorf("dropping three unhandled nodes logged %d warnings, want 3:\n%s", n, logs.String())
+	}
+	for kind, want := range map[string]int64{"99": 2, "98": 1} {
+		got := int64(0)
+		for _, metric := range registry.Snapshot() {
+			if metric.Name == "timer.unhandled_dropped_total" && metric.Labels["kind"] == kind {
+				got = metric.Value
+			}
+		}
+		if got != want {
+			t.Errorf("timer.unhandled_dropped_total{kind=%q} = %d, want %d", kind, got, want)
+		}
+	}
+}
+
+// D-L1：priority 随节点存储，重启后照样决定同期限的顺序；加字段之前存下的节点没有 priority 键，按 0 读回。
+func TestTimerPriorityIsStoredAndOrdersAfterARestart(t *testing.T) {
+	first := newWorld(t)
+	now := time.Unix(1_800_000_000, 0)
+	var late, plain, early int64
+	if _, err := nest.RunIsolatedTransaction(context.Background(), &worldCommitter{}, "arm", func() (any, error) {
+		scheduler := first.TimerComp().scheduler(now)
+		late = scheduler.NewTimerWithPriority(time.Minute, TimerTypeActivityPhase, 5, 0, 0, []byte("race-late"))
+		plain = scheduler.NewTimer(time.Minute, TimerTypeActivityPhase, 0, 0, []byte("race-plain"))
+		early = scheduler.NewTimerWithPriority(time.Minute, TimerTypeActivityPhase, -1, 0, 0, []byte("race-early"))
+		first.TimerComp().settle(scheduler)
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	if stored, ok := first.Dao().GetTimers(late); !ok || stored.GetPriority() != 5 {
+		t.Fatalf("stored node %d = %+v, want priority 5", late, stored)
+	}
+
+	// The stored document, as bson.D all the way down (the v2 driver's default
+	// for nested documents), so it can be edited and stored back.
+	var doc bson.D
+	if err := bson.Unmarshal(first.Dao().Marshal(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	var timers bson.D
+	for _, field := range doc {
+		if field.Key == "timers" {
+			timers, _ = field.Value.(bson.D)
+		}
+	}
+	storedPriority := map[string]any{}
+	for _, node := range timers {
+		fields, _ := node.Value.(bson.D)
+		for _, field := range fields {
+			if field.Key == "priority" {
+				storedPriority[node.Key] = field.Value
+			}
+		}
+	}
+	if got := storedPriority[strconv.FormatInt(early, 10)]; got != int32(-1) {
+		t.Errorf("the stored priority of node %d is %v, want -1 (stored: %v)", early, got, storedPriority)
+	}
+
+	restarted := restartWorld(t, first)
+	committer := &worldCommitter{}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "tick", func() (any, error) {
+		restarted.TimerComp().Tick(now.Add(time.Minute))
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	var fired []string
+	for _, record := range committer.records {
+		for _, effect := range record.Effects {
+			fired = append(fired, effect.Key)
+		}
+	}
+	if want := []string{"race-early", "race-plain", "race-late"}; !slices.Equal(fired, want) {
+		t.Fatalf("after a restart the same-deadline nodes fired in order %v, want %v", fired, want)
+	}
+
+	// A document stored before the field existed: strip every priority key and
+	// load it. The nodes come back at priority 0 and fire in the order armed.
+	for i, node := range timers {
+		fields, _ := node.Value.(bson.D)
+		kept := bson.D{}
+		for _, field := range fields {
+			if field.Key != "priority" {
+				kept = append(kept, field)
+			}
+		}
+		timers[i].Value = kept
+	}
+	for i := range doc {
+		if doc[i].Key == "timers" {
+			doc[i].Value = timers
+		}
+	}
+	legacy, err := bson.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := db.NewWorldDao()
+	if err := restored.RestorePersisted(legacy, db.WorldDaoSchemaVersion, 1); err != nil {
+		t.Fatalf("restore a document without priority: %v", err)
+	}
+	for _, id := range []int64{late, plain, early} {
+		if stored, ok := restored.GetTimers(id); !ok || stored.GetPriority() != 0 {
+			t.Fatalf("legacy node %d = %+v, want it loaded with priority 0", id, stored)
+		}
+	}
 }

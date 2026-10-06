@@ -1,11 +1,33 @@
+// Package timer 是实体自己的定时器调度：一个不加锁的最小堆，由宿主在自己的锁 / 事务里调用 Tick 驱动。
+//
+// 触发顺序（维护者决定 D-L1，2026-10-06）：先比期限 End，期限相同再比 Node.Priority（数值小的先触发，缺省 0），
+// priority 也相同时按登记顺序，也就是节点 ID（同一个 Scheduler 的 ID 单调递增；ChangeTimer 改期、handler
+// 按返回值重排都保留原 ID，所以“登记顺序”指最初登记的顺序）。宿主从存储重建时同样按这三个键排序，与存储
+// 的遍历顺序无关。需要在同一时刻先于 / 后于别的定时器触发的类型用 NewTimerWithPriority 指定；不指定的保持 0。
+//
+// 没有 handler 的类型（维护者决定 D-L2）：到期节点的类型没有注册 handler 时，节点照旧删除（并发持久化删除），
+// 同时打一条 Warn 并计 timer.unhandled_dropped_total{kind=<类型号>}——下线一种定时器类型时运维能看见丢了什么。
+// 宿主在加载后、注册完 handler 时调用 ReportUnhandledTypes，对没有 handler 的存量类型每种告警一次。类型号是
+// 代码里的常量，标签基数等于定义过的类型数。
+//
+// 持久化：typed 定时器的每次增、删、改经 ChangeFunc 交给宿主写存储；闭包定时器纯内存，不持久化、不进快照。
 package timer
 
 import (
 	"container/heap"
+	"log/slog"
+	"slices"
+	"strconv"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 const TypeClosure int32 = 0
+
+// UnhandledDroppedMetric 计数到期时因类型没有注册 handler 而被删除的节点，标签 kind 为类型号。
+// 宿主的事务回滚后重试同一次 Tick 会再计一次。
+const UnhandledDroppedMetric = "timer.unhandled_dropped_total"
 
 type ChangeType uint8
 
@@ -15,13 +37,16 @@ const (
 )
 
 type Node struct {
-	ID      int64
-	Type    int32
-	Param1  int64
-	Param2  int64
-	Payload []byte
-	End     time.Time
-	Delay   time.Duration
+	ID   int64
+	Type int32
+	// Priority 只在期限相同时起作用：数值小的先触发，相同时按登记顺序（ID）。缺省 0；
+	// 存储里没有这个字段的旧节点按 0 处理。
+	Priority int32
+	Param1   int64
+	Param2   int64
+	Payload  []byte
+	End      time.Time
+	Delay    time.Duration
 
 	index   int
 	handler Handler
@@ -110,18 +135,54 @@ func (s *Scheduler) RegisterHandler(timerType int32, h Handler) {
 	s.handlers[timerType] = h
 }
 
+// NewTimer 登记一个 now+delay 到期的 typed 定时器，priority 为 0。
 func (s *Scheduler) NewTimer(delay time.Duration, timerType int32, param1 int64, param2 int64, payload []byte) int64 {
+	return s.NewTimerWithPriority(delay, timerType, 0, param1, param2, payload)
+}
+
+// NewTimerWithPriority 与 NewTimer 相同，另外指定同一期限内的触发优先级：数值小的先触发，
+// priority 相同按登记顺序。priority 随节点持久化，改期与重排都保留。
+func (s *Scheduler) NewTimerWithPriority(delay time.Duration, timerType int32, priority int32, param1 int64, param2 int64, payload []byte) int64 {
 	if s == nil || delay <= 0 || timerType == TypeClosure {
 		return 0
 	}
-	return s.add(delay, timerType, param1, param2, payload, nil)
+	return s.add(delay, timerType, priority, param1, param2, payload, nil)
 }
 
 func (s *Scheduler) NewClosureTimer(delay time.Duration, h Handler) int64 {
 	if s == nil || delay <= 0 || h == nil {
 		return 0
 	}
-	return s.add(delay, TypeClosure, 0, 0, nil, h)
+	return s.add(delay, TypeClosure, 0, 0, 0, nil, h)
+}
+
+// ReportUnhandledTypes 对堆里没有注册 handler 的 typed 节点类型每种打一条 Warn（带节点数），按类型号升序
+// 返回这些类型。只报告：不删除、不计数，节点到期时才按 Tick 的规则删除并计数。宿主在加载存量节点、
+// 注册完全部 handler 之后调用一次。
+func (s *Scheduler) ReportUnhandledTypes() []int32 {
+	if s == nil {
+		return nil
+	}
+	counts := make(map[int32]int)
+	for _, node := range s.nodes {
+		if node.Type == TypeClosure || s.handlers[node.Type] != nil {
+			continue
+		}
+		counts[node.Type]++
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	types := make([]int32, 0, len(counts))
+	for timerType := range counts {
+		types = append(types, timerType)
+	}
+	slices.Sort(types)
+	for _, timerType := range types {
+		slog.Warn("timer: stored timers have no handler registered for their type; they will be dropped when due",
+			"owner_id", s.ownerID, "type", timerType, "nodes", counts[timerType])
+	}
+	return types
 }
 
 // RemoveTimer 取消一个定时器；返回 true 之后它不再触发。
@@ -233,6 +294,12 @@ func (s *Scheduler) Tick(now time.Time) {
 			}
 		} else if h := s.handlers[node.Type]; h != nil {
 			next = h(Context{OwnerID: s.ownerID, Node: node.clone(), Now: now})
+		} else {
+			// 没有 handler：节点已经删除（上面的 ChangeDelete），这里只让它被看见（D-L2）。
+			// 不保留节点：留在堆顶会挡住之后的所有节点，Tick 就要多一种“越过”状态。
+			slog.Warn("timer: dropped a due timer with no handler registered for its type",
+				"owner_id", s.ownerID, "timer_id", node.ID, "type", node.Type, "end", node.End)
+			metrics.IncCounter(UnhandledDroppedMetric, metrics.Labels{"kind": strconv.FormatInt(int64(node.Type), 10)}, 1)
 		}
 		if next <= 0 {
 			continue
@@ -270,29 +337,30 @@ func (s *Scheduler) Nodes() []Node {
 	return out
 }
 
-func (s *Scheduler) add(delay time.Duration, timerType int32, param1 int64, param2 int64, payload []byte, h Handler) int64 {
+func (s *Scheduler) add(delay time.Duration, timerType int32, priority int32, param1 int64, param2 int64, payload []byte, h Handler) int64 {
 	s.seed++
 	id := s.seed
 	if s.running {
 		s.deferred = append(s.deferred, func() {
-			s.addNode(id, delay, timerType, param1, param2, payload, h)
+			s.addNode(id, delay, timerType, priority, param1, param2, payload, h)
 		})
 		return id
 	}
-	s.addNode(id, delay, timerType, param1, param2, payload, h)
+	s.addNode(id, delay, timerType, priority, param1, param2, payload, h)
 	return id
 }
 
-func (s *Scheduler) addNode(id int64, delay time.Duration, timerType int32, param1 int64, param2 int64, payload []byte, h Handler) {
+func (s *Scheduler) addNode(id int64, delay time.Duration, timerType int32, priority int32, param1 int64, param2 int64, payload []byte, h Handler) {
 	node := &Node{
-		ID:      id,
-		Type:    timerType,
-		Param1:  param1,
-		Param2:  param2,
-		Payload: append([]byte(nil), payload...),
-		End:     s.now().Add(delay),
-		Delay:   delay,
-		handler: h,
+		ID:       id,
+		Type:     timerType,
+		Priority: priority,
+		Param1:   param1,
+		Param2:   param2,
+		Payload:  append([]byte(nil), payload...),
+		End:      s.now().Add(delay),
+		Delay:    delay,
+		handler:  h,
 	}
 	s.push(node)
 	if timerType != TypeClosure {
@@ -327,11 +395,19 @@ func (n Node) clone() Node {
 	return n
 }
 
+// timerHeap 按 (End, Priority, ID) 排序，见包注释。ID 唯一，所以顺序是全序，不取决于堆的形状或入堆顺序。
 type timerHeap []*Node
 
 func (h timerHeap) Len() int { return len(h) }
 func (h timerHeap) Less(i, j int) bool {
-	return h[i].End.Before(h[j].End)
+	a, b := h[i], h[j]
+	if !a.End.Equal(b.End) {
+		return a.End.Before(b.End)
+	}
+	if a.Priority != b.Priority {
+		return a.Priority < b.Priority
+	}
+	return a.ID < b.ID
 }
 func (h timerHeap) Swap(i, j int) {
 	h[i], h[j] = h[j], h[i]

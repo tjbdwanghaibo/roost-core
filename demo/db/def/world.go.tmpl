@@ -42,8 +42,15 @@ type WorldDao struct {
 // TimerNode is one stored timer. It is core/timer's Node minus the parts that
 // only exist in memory (the heap index and the handler): a stored handler
 // would be a function pointer, and the type is what finds it again.
+//
+// The format only grows. Priority was added after nodes were already stored
+// (D-L1, 2026-10-06): a node stored before it has no "priority" key and
+// decodes as 0, the default, so no migration and no schema bump.
 type TimerNode struct {
-	Type         int32  `bson:"type"`
+	Type int32 `bson:"type"`
+	// Priority orders nodes due at the same moment: lower fires first, equal
+	// priorities fire in the order they were armed (node id).
+	Priority     int32  `bson:"priority"`
 	Param1       int64  `bson:"param1"`
 	Param2       int64  `bson:"param2"`
 	Payload      string `bson:"payload,omitempty"`

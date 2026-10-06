@@ -187,6 +187,7 @@ DAO 字段由 codegen 改为私有存储，读取和修改都走生成方法。�
 - 不把 Entity、DAO、可变 map/slice 指针带出锁作用域。
 - 异步 goroutine 只接收不可变值或 snapshot，不能闭包捕获 Entity。
 - ID 默认不复用；删除使用高版本 tombstone，旧 save/ACK 不能复活对象。
+- **实体定时器（core `timer`）的触发顺序与类型**（维护者决定 D-L1 / D-L2）：同一期限的定时器先比 `Node.Priority`（**数值小的先触发**，缺省 0，用 `NewTimerWithPriority` 指定），再按登记顺序（节点 ID；改期、按返回值重排保留 ID）。宿主从存储重建调度器时顺序同样由这三个键决定，与存储遍历顺序无关；持久化节点时要把 priority 一起存下（game-demo 的 `TimerNode.priority`，旧节点缺字段按 0）。到期节点的类型没有注册 handler 时节点照旧删除，打 Warn 并计 `timer.unhandled_dropped_total{kind=<类型号>}`；宿主在加载、注册完 handler 后调 `ReportUnhandledTypes()`，对没有 handler 的存量类型每种告警一次。下线一种定时器类型前先确认存量节点已触发完，或接受它们到期即被丢弃（[方案](feature/D-L1-L2-TIMER-ORDER-AND-UNHANDLED-2026-10-06.md)）。
 - **实体实现必须是指针**（RR-20260930-15）：Guard 按实例比较接口值，值类型实现（尤其含 func / map / slice 字段、不可比较的）会在同 ID 两个实例相遇时 panic。注册的 builder 构建出值类型实体时 `BuildEntity` 拒绝，手工构造的值类型实体在 `EntityManager.Add` / `TryAdd` 处拒绝（`errors.Is(err, entity.ErrEntityNotPointer)`，错误里点名类型）；生成实体都是指针，不受影响。
 
 ## 4. Nest 请求与事务

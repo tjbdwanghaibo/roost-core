@@ -500,6 +500,11 @@ kit 的 `global` + `global/activity`（路由 / 租约〔租约 2026-10-05 已�
 - **时钟被钉住**：`Tick(now)` 与 `ScheduleActivityPhase(..., now)` 都带着自己的时刻，进来先
   `SetClock`。否则一个截止时刻的 `End` 取决于**锁是什么时候拿到的**，而不是取决于安排它的那一 tick。
   这条是写测试时发现的：第一版测试用假时钟安排、真时钟计算 End，于是"还没到期"的 tick 把它烧了。
+- **同一时刻的顺序与下线的类型**（维护者决定 D-L1 / D-L2，2026-10-06）：同一期限的节点按 `priority`（小的先，
+  缺省 0）再按武装顺序（节点 ID）触发，与 DAO map 的遍历顺序无关；`TimerNode` 多一个 `priority` 键，旧节点缺它按 0。
+  活动 phase 不需要优先级，`ScheduleActivityPhase` 不变。存储里有这个版本没有 handler 的类型时，`OnInitFinish`
+  每种告警一次，到期时照旧删除并打 Warn、计 `timer.unhandled_dropped_total{kind}`。
+  [方案](D-L1-L2-TIMER-ORDER-AND-UNHANDLED-2026-10-06.md)
 - 测试三条，核心那条是**重启**：第一个 World 安排截止时刻 → 取它会存下的文档 → 新 DAO `RestorePersisted`
   → 用 `EntityCreateParam.Dao` 建第二个 World → 未到期的 tick 什么都不写、到期的 tick 烧掉它并带出 effect。
   安排它的那个进程恰恰是不在了的那个，所以这一半只有测试能演。

@@ -27,8 +27,8 @@
 | 项 | 核对（调用 / 数据 / 资源所有权链） | 结论 |
 | --- | --- | --- |
 | O4 场景系统入口 | `rg` 穷举 `PathFind()` / `Terrain()` / `Refresh()` / `.Place(` / `.Path(`（含 `.tmpl`）：enter_scene、move_player 两个 Nest handler（Scene 为声明目标，持 Scene 锁）；spawner 定时器经 `RefreshSystem.Due` → `place` → `pathFind.Place`（不持 Scene 锁）。停止链：`EntityManager.Destroy` 取实体互斥锁、`SetRemoved` 后解锁再 `OnDestroy`（`entity/entity_manager.go:214-286`）→ `Runtime.Stop` 逆序（refresh → pathFind → terrain）。refresh 先停且 `Due` 与 `Stop` 同锁，所以现有入口都与 PathFind.Stop 有先后 | **不是所有入口都在 Scene 锁内**（spawner 不在），但现有入口不触发；Scene 注释承诺系统访问器“可从任何地方调用”，PathFind 的无锁置 nil 违背它 → NC-270（潜伏），按契约修 |
-| O6 同期限触发顺序 | `timer/scheduler.go` 堆按期限比较，同期限顺序由堆决定；World 同一 Tick 武装的节点期限相同（`pin`），目前只有一种定时器、彼此无依赖 | 需求选择，§5 D-L1 |
-| O7 未注册类型静默删除 | 到期节点类型无 handler → 发 ChangeDelete、删除、无日志 | 需求选择，§5 D-L2 |
+| O6 同期限触发顺序 | `timer/scheduler.go` 堆按期限比较，同期限顺序由堆决定；World 同一 Tick 武装的节点期限相同（`pin`），目前只有一种定时器、彼此无依赖 | 需求选择，§5 D-L1——**已实施**：(期限, priority, 登记顺序)（[方案](../feature/D-L1-L2-TIMER-ORDER-AND-UNHANDLED-2026-10-06.md)） |
+| O7 未注册类型静默删除 | 到期节点类型无 handler → 发 ChangeDelete、删除、无日志 | 需求选择，§5 D-L2——**已实施**：删除 + Warn + `timer.unhandled_dropped_total{kind}`，加载时每种告警一次（同上方案） |
 | O8 activity stop | NC-193（`d6550a16`）之后 App 在 Init 失败时也调 `Service.Shutdown`；game-demo `Init` 在 `startActivity` 返回后立刻 `s.stopActivity = stop`（`service.go.tmpl:198-202`），后续任何一步失败 Shutdown 都会停两条循环；Shutdown 调用后置 nil | **Init 后段失败不停循环：已由 NC-193 收口，无残余**。stop 闭包本身不幂等（第二次永久阻塞在 `<-done`），唯一调用方 Shutdown 保证只调一次，Service 不承诺并发 Shutdown；不配合 ctx（两条循环收到 cancel 后在一次 Nest 调用内返回）。未改，记观察 |
 | O9 logic_offset | `app.go:137` `clock.SetOffset(time.logic_offset)`；game-demo `tickWorld` / `openCurrentWindow` / 结算用 `time.Now()`，贡献用 `runner.clock()`（生产为 `time.Now`）；协调器 `kit/service/global/activity` 的 `Config.Now` 生产为 `time.Now`（`service.go:214`） | game 与协调器两端都用墙钟，窗口 ID / 截止时间 / 宽限期自洽。只让 game 跟逻辑时钟会与协调器错开 → 需求选择，§5 D-L3 |
 
