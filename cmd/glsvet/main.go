@@ -15,8 +15,10 @@
 // on that ctx get a review hint (-stophints, on by default), and business
 // packages (a directory named game under the module root, -businessdirs) that
 // read time.Now / Since / Until directly get a business-clock hint
-// (-clockhints, D-L3); hints are printed but never counted as findings. Exit
-// status is 1
+// (-clockhints, D-L3), and component methods that register their own undo or
+// write a component field that is not a DAO handle, a func-typed field or
+// marked //roost:cache get an A1 hint (componentfields.go); hints are printed
+// but never counted as findings. Exit status is 1
 // when any finding is reported and 2 when an argument could not be vetted (a
 // missing directory or a file that does not parse).
 package main
@@ -151,9 +153,11 @@ func expandArgument(argument string) ([]string, error) {
 // could not be read or a file did not parse, and the caller must not count
 // that as clean. Packages that did parse are still vetted.
 func vetDirectory(fileSet *token.FileSet, directory string) (int, error) {
+	// 带注释解析：A1 字段写提示要读字段上的 //roost:cache，isNestHandler 要读函数文档里的 roost:nest
+	// （之前按 0 解析，文档注释为 nil，只认 handler 前缀；2026-10-06 改为带注释后全仓结果不变）。
 	packages, parseErr := parser.ParseDir(fileSet, directory, func(info os.FileInfo) bool {
 		return *includeTests || !strings.HasSuffix(info.Name(), "_test.go")
-	}, 0)
+	}, parser.ParseComments)
 	findings := 0
 	hintCount += vetClockHints(fileSet, directory) // D-L3：只提示，不计入 findings
 	for _, pkg := range packages {
@@ -161,6 +165,11 @@ func vetDirectory(fileSet *token.FileSet, directory string) (int, error) {
 		// the exit status (A1, like the A3 review prompts).
 		for _, hint := range componentUndoHints(fileSet, pkg) {
 			fmt.Println(hint)
+			hintCount++
+		}
+		for _, hint := range componentFieldHints(fileSet, pkg) { // A1 盲区：组件字段写（componentfields.go）
+			fmt.Println(hint)
+			hintCount++
 		}
 		voidAdmissionMethods := collectVoidAdmissionMethods(pkg)
 		returningAdmissionMethods := collectReturningAdmissionMethods(pkg)
@@ -692,27 +701,7 @@ var componentUndoCalls = map[string]bool{
 // skill-casting-and-combat.md）。Runtime 不是组件、也不登记 undo，这条提示本来就不会命中它，
 // 所以不需要豁免；TestSkillPackagesGetNoComponentUndoHint 钉住 skill 各包零提示。
 func componentUndoHints(fileSet *token.FileSet, pkg *ast.Package) []string {
-	components := make(map[string]bool)
-	for _, file := range pkg.Files {
-		ast.Inspect(file, func(node ast.Node) bool {
-			spec, ok := node.(*ast.TypeSpec)
-			if !ok {
-				return true
-			}
-			if strings.HasSuffix(spec.Name.Name, "Component") {
-				components[spec.Name.Name] = true
-				return true
-			}
-			if structType, ok := spec.Type.(*ast.StructType); ok {
-				for _, field := range structType.Fields.List {
-					if len(field.Names) == 0 && embedsComponentBase(field.Type) {
-						components[spec.Name.Name] = true
-					}
-				}
-			}
-			return true
-		})
-	}
+	components := componentTypes(pkg)
 	undoHelpers := packageUndoHelpers(pkg)
 	var hints []string
 	for _, file := range pkg.Files {
@@ -722,7 +711,7 @@ func componentUndoHints(fileSet *token.FileSet, pkg *ast.Package) []string {
 				continue
 			}
 			receiver := receiverTypeName(function.Recv.List[0].Type)
-			if !components[receiver] {
+			if _, isComponent := components[receiver]; !isComponent {
 				continue
 			}
 			ast.Inspect(function.Body, func(node ast.Node) bool {

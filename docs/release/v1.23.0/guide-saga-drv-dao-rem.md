@@ -1554,9 +1554,9 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 - saga 方向 ③④（第六轮“暂不做”），见 [SAGA-8](#saga-8)。
 - Mongo 步骤延迟的选项 B / C（第十二轮选 A，不实施），见 [SAGA-11](#saga-11)。
 
-实现文档各条“review 检查点”里列出的推断风险（例如 stepTransition 守卫看不到经包级 helper 改写的 `ApplyRequest`、兴趣表满时 release 不留撤销水位、glsvet A1 提示只认直接调用）是给 review 判断的，不是待决定项；确认是缺陷的按 roost-review 登记 RR。
+实现文档各条“review 检查点”里列出的推断风险（例如 stepTransition 守卫看不到经包级 helper 改写的 `ApplyRequest`、兴趣表满时 release 不留撤销水位、glsvet A1 提示只认直接调用）是给 review 判断的，不是待决定项；确认是缺陷的按 roost-review 登记 RR。（之后的更新：后两条已转 RR-20261006-11 / -13 并修复；glsvet A1 另按第十三轮“A1 盲区”决定新增组件字段写提示，[记录](../../feature/A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md)。）
 
 ## WANTED 未判项
 
 - **W-2026-10-06-02**（驱动重复 Close 口径不一致）：已转 [RR-20261006-10](../../bug/RR-20261006-10.md)，随本版修复，见 [DRV-5](#drv-5)。`docs/review/DECISIONS-PENDING-2026-10-05.md` 文首仍把它列为“待 review 判断”，以 WANTED 与源码为准。
-- W-2026-10-06-01（nest 无 Guard 作用域分支）：不属于本部分。
+- W-2026-10-06-01（nest 无 Guard 作用域分支）：不属于本部分。发版文档之后已转 [RR-20261006-12](../../bug/RR-20261006-12.md) 并修复（`b7471ae4`，未发版）；它在 NONCORE 分册 [NONCORE-54](guide-cfg-skill-noncore.md#noncore-54) 登记。

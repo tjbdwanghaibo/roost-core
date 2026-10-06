@@ -2181,14 +2181,14 @@ skill/combatcomponent/component.go:296:2: hint: component CombatComponent.undoBu
 **8. 未验证项与已知风险**
 
 - 未在真实三进程（WAL + Mongo 投影）链路上跑被拒提交（用真实 Nest + 拒绝的 committer 与真实文件 WAL 覆盖，同一 `rejectCommit` 路径）。
-- glsvet A1 提示的盲区（源码观察）：只认接收者类型名以 `Component` 结尾或匿名嵌入 `ComponentBase` 的方法，只看方法体里**直接**出现的 `RecordUndo` / `RecordUndoToken` / `DeferRollback` 调用；组件调用包级辅助函数间接登记、或组件字段持有可变状态但不登记 undo（直接漏回滚）都不会提示。“组件上不再有可回滚字段”没有自动检查。
+- glsvet A1 提示的盲区（源码观察）：只认接收者类型名以 `Component` 结尾或匿名嵌入 `ComponentBase` 的方法，只看方法体里**直接**出现的 `RecordUndo` / `RecordUndoToken` / `DeferRollback` 调用；组件调用包级辅助函数间接登记、或组件字段持有可变状态但不登记 undo（直接漏回滚）都不会提示。“组件上不再有可回滚字段”没有自动检查。**（发版文档之后的更新，未发版）**：前者由 [RR-20261006-13](../../bug/RR-20261006-13.md) 补上（跟进一层同包 helper，`b7471ae4`）；后者按维护者第十三轮“A1 盲区”决定新增字段写提示——组件方法（`OnInitFinish` / `OnDestroy` 除外，同样跟进一层 helper）写非 DAO 句柄、非函数类型、未标 `//roost:cache` 的组件字段时打印 `hint:`，全仓 / 示例 / game-demo 0 条（[记录](../../feature/A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md)）。
 - 已生成工程不迁移，旧 `captureRollback` 仍在用户工程里；glsvet 在 CI（`go run ./cmd/glsvet ./...`）里会打提示但不失败。
 - 定时器节点数到数千时需换写法（方案 §8）。
 
 **9. review 检查点**
 
 - [ ] 确认组件上不再有可回滚字段：读 `demo/game/entities/**/*_component.go.tmpl` 与 `skill/combatcomponent/component.go:222-225` 的组件结构体，字段只应是 `owner` / `dao` / 投影函数这类非事务状态。
-- [ ] 确认 glsvet A1 提示覆盖的范围：`cmd/glsvet/main.go:691` `componentUndoHints` 只识别组件方法里的直接调用；`TestComponentRecordingItsOwnUndoIsHinted`（`cmd/glsvet/main_test.go:166`）覆盖了哪些形状（嵌入 `ComponentBase` / 名字后缀 / 三种调用名）；CI 的 `go run ./cmd/glsvet ./...` 输出里当前应为 0 条 A1 hint。
+- [ ] 确认 glsvet A1 提示覆盖的范围：`cmd/glsvet/main.go:691` `componentUndoHints` 只识别组件方法里的直接调用（之后 RR-20261006-13 跟进一层同包 helper，第十三轮“A1 盲区”新增 `cmd/glsvet/componentfields.go` 字段写提示与 `//roost:cache` 豁免，见上条“未验证项”的更新）；`TestComponentRecordingItsOwnUndoIsHinted`（`cmd/glsvet/main_test.go:166`）覆盖了哪些形状（嵌入 `ComponentBase` / 名字后缀 / 三种调用名）；CI 的 `go run ./cmd/glsvet ./...` 输出里当前应为 0 条 A1 hint。
 - [ ] 确认全仓生产代码里登记 undo 的只有 DAO：`grep -rln 'RecordUndo\|DeferRollback' --include='*.go' . | grep -v _test.go` 只应是 `nest/`、`cmd/glsvet/main.go`（字符串）、`codegen/internal/dao/template_*.go`、`skill/combatcomponent/component.go`（且只在 `CombatDao.beginChange` 里，`:340-354`）。
 - [ ] 确认 `nopersist,nosync` 字段不进提交记录 / WAL / 同步：看 `template_dao.go` 里 `persistFields` / `syncFields` 的使用点与 daoruntime `TestATransientFieldNeverReachesTheCommitRecordOrSync`。
 - [ ] 确认 `CombatDao.beginChange`（`skill/combatcomponent/component.go:334`）在事务外 panic、在 state 策略下 `nest.RecordUndo` 返回 false 由快照兜底，且同一字段一笔事务只记第一条逆操作（`nest/rollback.go:187-191` 的 `undoKeys`）。

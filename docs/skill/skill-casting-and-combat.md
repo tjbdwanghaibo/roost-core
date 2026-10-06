@@ -159,7 +159,7 @@ Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value
 3. **失败用 Runtime 自己的终态表达**。Host 命令的“预期失败”（目标无效、被免疫等）返回带失败结果的 `EffectResult`，走定义里的 `result.failure` 分支；Host 返回 error 时 Runtime 把 cast 记为 `CastFailed`（`failCastLocked`），冷却按已提交处理。两种情况 DAO 与 Runtime 对“这次施法发生过、结果如何”的看法一致，不需要 handler 失败来表达。
 4. **提交被拒 / 结果未知**（WAL 或 Remote 拒绝）只能由业务处理：必须严格一致的玩法，可以在提交确认后再推进 Runtime（handler 外的 `HostAdapter` 每条命令走 `RunDetachedTransaction`，彼此不原子，见 N09 O4），或在失败时用 `Checkpoint` / `RestoreRuntime` 恢复（全量序列化，成本高，投递缓冲不进 checkpoint）。业务的 `RevisionSource` 若把事件写进需要与 DAO 一致的流，应在提交确认后再发布。
 
-glsvet 的 A1 提示只看组件方法里的 undo 登记，不会命中 Runtime，无需豁免。
+glsvet 的 A1 提示只看组件方法里的 undo 登记与组件自身字段的写，Runtime 不是组件，不会命中，无需豁免。`CombatComponent` 的字段只有 DAO 句柄与投影函数（`ProjectAttributes` 装上的行为），两者都不提示；自己写组件时，事务会改的状态放进 DAO，确属缓存的字段标 `//roost:cache`（见 [A1 字段写提示](../feature/A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md)）。
 
 ## 确定性掷点（暴击/闪避概率 → 事实）
 

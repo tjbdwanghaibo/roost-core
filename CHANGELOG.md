@@ -6,6 +6,7 @@
 
 ### Changed
 
+- **glsvet：组件字段写提示（A1 盲区）**（维护者第十三轮决定 A）：组件把事务会改的状态放在普通字段里、也不登记 undo 时，handler 失败或提交被拒后这些字段静默不回滚，以前 glsvet 只看 undo 登记、对此不报。现在组件方法（`OnInitFinish` / `OnDestroy` 除外，跟进一层同包 helper）给组件自身字段赋值或改字段里的 map / slice 元素时打印 `hint:`；DAO 句柄（类型名以 `Dao` / `DAO` 结尾）与函数类型字段不提示，确属缓存的字段在声明上一行或行尾写 `//roost:cache` 豁免。只提示、不计入失败、退出码不变；全仓、示例与生成的 game-demo 均 0 条。glsvet 改为带注释解析，`//roost:nest` 文档标注从此对名字不以 `handler` 开头的函数也生效（本仓与 game-demo 无新违例）。[记录](docs/feature/A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md)
 - **平台支持写明：Windows 不保证正确。** 正确性只在 Linux（生产）与 macOS（开发）上保证和验证；Windows 保留编译、CLI 制品与 CI 兼容性 job，但信号 / 进程树、`project sync` 暂存目录、autocrlf、hotcode 插件等未在真实 Windows 上验证，已知问题（W-2026-10-04-05、外部验证 E25 / E27 的 Windows 部分）暂存不修。见 README“平台支持”与 DEPLOYMENT 开头（维护者 2026-10-06）。
 
 - **Ops：`Authorization` 必须带 `Bearer ` 才算 admin token**（维护者第十二轮决定，N01b 观察 O-P1）：以前 `Authorization: <token>`（不带 scheme）也能通过 `/admin/*`。现在 Authorization 只认 `Bearer <token>`（scheme 大小写不敏感，RFC 7235），不带 scheme 或别的 scheme 一律 401；`X-Admin-Token: <token>` 不变。**行为收紧**：用裸 token 调 admin 的脚本改成 `Authorization: Bearer <token>` 或 `X-Admin-Token`（T-279）。[记录](docs/feature/DECISIONS-R12-KIT-2026-10-06.md#4-ops-必须带-bearer)

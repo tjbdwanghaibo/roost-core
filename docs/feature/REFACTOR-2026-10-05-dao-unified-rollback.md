@@ -83,6 +83,7 @@ Runtime 是自带锁、调度器、进程表、trace / presentation / state muta
 - `docs/agent-skills/roost-coding/SKILL.md` 执行契约（Nest 与 Entity）加一条：事务内会改的状态一律放在 DAO（必要时用 `nopersist` 字段），组件不得自行维护需要回滚的内存状态，不在组件里登记 undo。
 - 生成器文档：`codegen/README.md` 的 tag 表与 undo 小节；生成工程文档（`render_docs.go`）的 DAO 说明；`add entity` 组件骨架注释；demo 两个 DAO 定义的字段注释。
 - `cmd/glsvet` 加提示（不计入失败、不改退出码，与 A3“只做提示”一致）：在组件方法（接收者类型嵌入 `ComponentBase` 或名字以 `Component` 结尾）里直接调用 `RecordUndo` / `RecordUndoToken` / `DeferRollback` 时打印 `hint:`。（2026-10-06 [RR-20261006-13](../bugfix/RR-20261006-13.md) 起也跟进一层同包包级 helper 函数：组件方法调用直接登记 undo 的包级函数时，在调用处提示。）
+- 2026-10-06 第十三轮“A1 盲区”（维护者选 A，[记录](A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md)）：组件把可变状态放在普通字段里、也不登记 undo 时同样漏回滚，glsvet 加字段写提示——组件方法（`OnInitFinish` / `OnDestroy` 除外，同样跟进一层同包 helper）给组件自身字段赋值或改字段里的 map / slice 元素，而字段不是 DAO 句柄（类型名以 `Dao` / `DAO` 结尾）、不是函数类型、也没有 `//roost:cache` 标注（缓存类字段，写在字段上一行或行尾）时打印 `hint:`，同样不计入失败。
 
 ## 6. 兼容、Nest 衔接与性能
 

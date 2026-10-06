@@ -316,7 +316,7 @@ func (d *HeroDao) SetLevel(v int32) {
 
 **业务时钟与系统时钟**（维护者决定 D-L3，2026-10-06，[方案](../docs/feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md)）：game-demo 里的业务时间（活动窗口、World 定时器每一拍、GM 关窗、怪物重生、handler 的 `nowUnix`）读 `app.BusinessClock(registry)`，带 `time.logic_offset`；匹配的等待放宽（`matchmaking.Pools`）从第八轮起也读它，与 match 服务的票据时间同钟；租约、saga 截止、支付时间仍是 `time` 包，并标了 `//glsvet:system-clock`。`roost project doctor` 的 `time:logic_offset` 一行检查 dev / prod example / k8s secret example 三套配置里各服务的偏移是否一致。`cmd/glsvet` 对 `game` 目录下直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，不计入失败。
 
-**回滚统一走 DAO**（维护者决定 A1，2026-10-05，[方案](../docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）：生成 DAO 的 undo（`rollback=undo`）与快照（`rollback=state`）是唯一的回滚机制。事务内会改的状态一律放进 DAO——不该落库的用 `nopersist`（只同步 `nopersist,sync`、只参与事务 `nopersist,nosync`），派生值也一样；组件不持有这类内存状态，不自己调 `RecordUndo` / `DeferRollback`（`cmd/glsvet` 对组件方法里的这类调用打印 `hint:`，不计入失败）。同理，`MarshalPersist` / `MarshalSync` 内部 `bson.Marshal` 失败也会 panic——接口没有错误位，返回 nil 等于把数据静默丢掉。
+**回滚统一走 DAO**（维护者决定 A1，2026-10-05，[方案](../docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）：生成 DAO 的 undo（`rollback=undo`）与快照（`rollback=state`）是唯一的回滚机制。事务内会改的状态一律放进 DAO——不该落库的用 `nopersist`（只同步 `nopersist,sync`、只参与事务 `nopersist,nosync`），派生值也一样；组件不持有这类内存状态，不自己调 `RecordUndo` / `DeferRollback`（`cmd/glsvet` 对组件方法里的这类调用打印 `hint:`，不计入失败）。组件方法（`OnInitFinish` / `OnDestroy` 除外）给组件自己的普通字段赋值、或改字段里的 map / slice 元素，glsvet 同样提示：事务失败时这些字段不回滚。DAO 句柄与函数类型字段（装配时装上的回调）不提示；确属缓存、允许与 DAO 暂时不一致的字段在声明上一行或行尾写 `//roost:cache`（[记录](../docs/feature/A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md)）。同理，`MarshalPersist` / `MarshalSync` 内部 `bson.Marshal` 失败也会 panic——接口没有错误位，返回 nil 等于把数据静默丢掉。
 
 **③ patch——map 的键级修改记录在当前事务的 `PersistChange` 中，投影为 MongoDB 路径级 `$set`/`$unset`**，而不是整字段重写：
 

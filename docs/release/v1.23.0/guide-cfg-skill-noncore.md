@@ -1407,7 +1407,7 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 
 **结论**：用例隔离问题，不是产品缺陷：`group_lock_test` 在没有 Guard 作用域的 goroutine 里取锁，组迁移重试把同一个 `EntityGuard` 两次放回池，之后两个快 worker 共用一个 Guard、互相解锁。用例改为先建作用域；目标用例失败时放行闸门、停机有上限。首发 v1.23.0（本版，只改测试）。[实现](impl-cfg-skill-noncore.md#noncore-54)
 
-**留给 review 判断**：WANTED W-2026-10-06-01——`releaseDispatchLocks` 的无 Guard 作用域分支会把调用方仍在用的 Guard 放回池。生产调用方（`dispatchLoadedEntities`、`groupTransitionDispatch`）都在 `runNestLogic` 的作用域里，按当前源码不可达；但任何将来的无作用域调用方只要碰上组迁移重试就会污染全进程的 Guard 池。候选修法：只释放 `acquired`、不归还 Guard，或无作用域时直接拒绝。截至 `02c8a10d` **未判**；之后维护者第十三轮要求交给 review 前闭环（DECISIONS-PENDING 末表，状态“进行中”）。
+**留给 review 判断**：WANTED W-2026-10-06-01——`releaseDispatchLocks` 的无 Guard 作用域分支会把调用方仍在用的 Guard 放回池。生产调用方（`dispatchLoadedEntities`、`groupTransitionDispatch`）都在 `runNestLogic` 的作用域里，按当前源码不可达；但任何将来的无作用域调用方只要碰上组迁移重试就会污染全进程的 Guard 池。候选修法：只释放 `acquired`、不归还 Guard，或无作用域时直接拒绝。截至 `02c8a10d` **未判**；之后维护者第十三轮要求交给 review 前闭环（DECISIONS-PENDING 末表，状态“进行中”）。**更新**：已转 [RR-20261006-12](../../bug/RR-20261006-12.md) 并修复（`b7471ae4`，未发版）：派发取锁只用 Guard 作用域里的 Guard，没有作用域时取锁前返回错误。
 
 **链接**：[收尾第 4 批](../../bugfix/CLOSING-BATCH-4-2026-10-06.md) · [WANTED](../../bug/WANTED.md)
 
@@ -1454,7 +1454,7 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 - **明确留到下个大版本**（维护者决定，不在本版）：A4 ① 每个 Mod 声明配置 schema（CFG-2 的后续形态）；B3 ③ Host 取值约束做成随环境下发的能力表（SKILL-13）。
 - **保持方向 B、不实现的语义**：NC-151 / NC-213 方向 A（phase 计时、recast、chain 间隔 / 重复、modifier 叠层），B3 ④“保持 B”，第十二轮“NC-151 timeout_ticks：保持 warning”；NC-224 方向 B（冻结施法输入）第五轮“不做”。
 - **列为后续、未排期**：tablegen 与 cfggen 两种标签方言合一、tablegen 生成期的 ref 数据检查（B10 方案 §2.4 与“未完成 / 后续”）。
-- **WANTED 未判**：W-2026-10-06-01（nest `releaseDispatchLocks` 无 Guard 作用域分支，见 NONCORE-54），由核心线 review 判断。
+- **WANTED 未判**：W-2026-10-06-01（nest `releaseDispatchLocks` 无 Guard 作用域分支，见 NONCORE-54），由核心线 review 判断。**更新**：已转 RR-20261006-12 并修复（`b7471ae4`，未发版）。
 - **`02c8a10d` 之后的变化（不在本分册范围，供读者知悉）**：维护者第十三轮决定（DECISIONS-PENDING 末表）——“这次不能有wanted，需要都解决后再给review, review是查问题”，W-2026-10-06-01 等疑点要在交给 review 前闭环（状态“进行中”）；“windows的问题可以暂存，加一个说明 window问题不保证正确”，外部验证 E25 与 E27 的 Windows 部分暂存（`7fec136e`）。本分册里提到 Windows 未验证的条目（NONCORE-27、28、31、33、36）按此理解。
 
 ## 文档与源码不一致（以源码为准）
