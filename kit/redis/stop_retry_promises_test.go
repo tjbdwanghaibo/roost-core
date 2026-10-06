@@ -21,7 +21,7 @@ func TestRedisModStopConvergesAfterACloseError(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := &RedisMod{asm: asm, cfg: fredis.DefaultConfig("127.0.0.1:1")}
-	_ = asm.Client.Close() // 连接池已关闭；Mod 的 Close 将返回错误
+	_ = asm.Client.Raw().Close() // 连接池已在底层关闭；Mod 的 Close 将返回错误（驱动 Close 幂等后要绕过它，RR-20261006-10）
 
 	if err := m.StopWithContext(context.Background()); err == nil {
 		t.Fatal("first Stop = nil, want the Close error reported once")

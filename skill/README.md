@@ -7,9 +7,9 @@
 - 当前 wire/语义线：JSON schema **`roost.skill/v2`**；编译器语义修订 **`skillv2-compiler-2`**，两者与 Go import 独立演进
 - 依赖基线：`roost-core v1.12.0`；对具体游戏服务器、渲染器、传输层零依赖
 
-第一次接入请先读[稳定 Skill API](docs/skill.md)；完整文档按角色整理在
-[文档导航](docs/README.md)，从旧包升级见
-[稳定包迁移手册](docs/breaking-upgrade-skill-package.md)。
+第一次接入请先读[稳定 Skill API](../docs/skill/skill.md)；完整文档按角色整理在
+[文档导航](../docs/skill/README.md)，从旧包升级见
+[稳定包迁移手册](../docs/skill/breaking-upgrade-skill-package.md)。
 
 ## Scope：明确的非目标（deliberate non-goals）
 
@@ -25,7 +25,7 @@
 
 | 包 | 一句话 |
 | --- | --- |
-| [`skill`](skill) | 核心：严格 wire 解析 → 编译器（静态证明）→ 不可变 Program → 确定性 Runtime → `Host` 世界边界；含参考宿主 `MemoryHost`、checkpoint/replay、表现计划与表现事件 |
+| [`skill`](.) | 核心：严格 wire 解析 → 编译器（静态证明）→ 不可变 Program → 确定性 Runtime → `Host` 世界边界；含参考宿主 `MemoryHost`、checkpoint/replay、表现计划与表现事件 |
 | [`combat`](combat) | 零依赖战斗内容电池：`AttributeSet`（属性聚合）、`BuffContainer`（叠层/驱散/免疫/韧性）、`ResolveDamage`（twelve_stage_v1 十二段定点伤害管线）、`ChanceRoll`（HMAC 确定性掷点：暴击/闪避概率 → 事实）。`MemoryHost` 直接运行这份代码 |
 | [`combatcomponent`](combatcomponent) | `combat` 接入 roost-core 实体模型：`CombatDao`（脏跟踪 + 持久化）、`CombatComponent`（只经 DAO 改状态的 mutator；逆操作由 `CombatDao` 自己登记；`ProjectAttributes` 装业务的属性 → 伤害字段投影）、`HostAdapter`（实现 `skill.Host` 的战斗面：damage/heal/shield/resource 命令与读取/PayCosts）、`StatusBridge`（status/attribute-modifier 命令落到 buff 容器） |
 | [`skillcompose`](skillcompose) | 技能组合契约与策略：只经由 Program Inspector 消费编译产物，验证候选技能不超出授予的能力、预算与因果连通性 |
@@ -227,9 +227,9 @@ event tick=5 kind=tick_advanced entity=0
 
 ## 技能定义 JSON：权威参考的入口
 
-完整语法以代码为准：wire 层是封闭的（未知字段即解析错误），所以 [`skill/wire_*.go`](skill) 就是语法的穷举定义；[`skill/testdata/`](skill/testdata) 的 36 个 fixture 每个都是可独立编译运行的样例（弹道、光环、引导、蓄力、召唤物、被动 proc、时间回溯……），并被 `acceptance_test.go` 全量执行。施法语义详见 [docs/skill-casting-and-combat.md](docs/skill-casting-and-combat.md)。
+完整语法以代码为准：wire 层是封闭的（未知字段即解析错误），所以 [`skill/wire_*.go`](.) 就是语法的穷举定义；[`skill/testdata/`](testdata) 的 36 个 fixture 每个都是可独立编译运行的样例（弹道、光环、引导、蓄力、召唤物、被动 proc、时间回溯……），并被 `acceptance_test.go` 全量执行。施法语义详见 [docs/skill-casting-and-combat.md](../docs/skill/skill-casting-and-combat.md)。
 
-### 顶层字段（[wire_definition.go](skill/wire_definition.go) / [parse.go](skill/parse.go)）
+### 顶层字段（[wire_definition.go](wire_definition.go) / [parse.go](parse.go)）
 
 | 字段 | 说明 |
 | --- | --- |
@@ -246,7 +246,7 @@ event tick=5 kind=tick_advanced entity=0
 | `persistent_state` | 跨施法持久状态声明 |
 | `initial_phase` / `phases` | 相位机；每个 phase 的 `on` 支持 `enter`/`cancel`/`direction_changed`/`target_changed`/`release`/`pulse` 事件挂 flow（`recast`、`timeout` 能解析但 Runtime 没有派发点，编译期拒绝；`timeout_ticks` 不被执行，非零时给 warning，phase 只能以 finish / goto 结束，见 RR-20261005-NC-151） |
 
-### cast_window 字段（[wire_cast_window.go](skill/wire_cast_window.go)）
+### cast_window 字段（[wire_cast_window.go](wire_cast_window.go)）
 
 | 字段 | 说明 |
 | --- | --- |
@@ -260,10 +260,10 @@ event tick=5 kind=tick_advanced entity=0
 
 ### 表达式与量纲要点
 
-- 表达式是封闭算子集：`add`/`sub`/`mul`/`div`/`min`/`max`/`clamp`/`scale_bp`、比较 `eq`/`ne`/`lt`/`lte`/`gt`/`gte`、布尔 `and`/`or`/`not`、可选值守卫 `exists`（见 [compile_typecheck.go](skill/compile_typecheck.go)）。
-- **每个数值都有量纲**（ticks、world distance、basis points、combat amount、资源量……见 [quantity.go](skill/quantity.go)）。量纲不匹配是编译错误：windup 表达式必须产出 ticks，`scale_bp` 的第二个参数必须是 basis_points。
+- 表达式是封闭算子集：`add`/`sub`/`mul`/`div`/`min`/`max`/`clamp`/`scale_bp`、比较 `eq`/`ne`/`lt`/`lte`/`gt`/`gte`、布尔 `and`/`or`/`not`、可选值守卫 `exists`（见 [compile_typecheck.go](compile_typecheck.go)）。
+- **每个数值都有量纲**（ticks、world distance、basis points、combat amount、资源量……见 [quantity.go](quantity.go)）。量纲不匹配是编译错误：windup 表达式必须产出 ticks，`scale_bp` 的第二个参数必须是 basis_points。
 - 引用词表：`$caster`、`$input.target`、`$memory.<name>`、`$local.<result>.<field>` 等；`read_attribute` 读宿主属性目录中的条目（可指定 `snapshot` 采样点）。
-- 扩展属性/资源目录（例如加一个 `attack_haste_bp` 供攻速缩放前摇用）的做法见 [docs/skill-casting-and-combat.md](docs/skill-casting-and-combat.md) —— 记得 `environment.Digest = skill.AuthorityDigest(environment)` 重封摘要。
+- 扩展属性/资源目录（例如加一个 `attack_haste_bp` 供攻速缩放前摇用）的做法见 [docs/skill-casting-and-combat.md](../docs/skill/skill-casting-and-combat.md) —— 记得 `environment.Digest = skill.AuthorityDigest(environment)` 重封摘要。
 
 ---
 
@@ -280,7 +280,7 @@ Runtime 从不回头解析 JSON，Host 之外没有任何世界写入路径，UI
 
 ### 编译管线：每个 pass 证明一件事
 
-[compile.go](skill/compile.go) 按固定顺序运行 18 个静态 pass，随后公开的 `Compile` 完成 lowering。后面的 pass 假定前面的 pass 已收窄名称、类型与作用域——它们不是可乱序的 lint 集合：
+[compile.go](compile.go) 按固定顺序运行 18 个静态 pass，随后公开的 `Compile` 完成 lowering。后面的 pass 假定前面的 pass 已收窄名称、类型与作用域——它们不是可乱序的 lint 集合：
 
 | Pass | 静态证明 |
 | --- | --- |
@@ -305,7 +305,7 @@ Runtime 从不回头解析 JSON，Host 之外没有任何世界写入路径，UI
 
 Runtime 拥有：cast 生命周期（windup/commit/recovery、打断、退款）、互斥与 GCD、冷却/弹药/蓄力/引导/光环策略、调度器、memory/persistent state、随机、proc 账本、checkpoint。Host 拥有：实体、属性、位置、空间查询、伤害/治疗/状态落地、过程步进的世界事实。
 
-**Host 并发契约四条**（[host.go](skill/host.go) 的接口文档是全文）：
+**Host 并发契约四条**（[host.go](host.go) 的接口文档是全文）：
 
 1. 所有 Host 方法都在 Runtime 持锁时调用——严格串行，Host 无需自己做并发防护；
 2. **不得重入 Runtime**（`Activate`/`Advance`/`Cancel`/`StateDeltas`……锁不可重入，重入即死锁）；世界对技能效果的反应走 `Events`，由 Runtime 在确定性时点轮询；
@@ -316,10 +316,10 @@ World revision 是防线：查询/命令携带期望 revision，Host 拒绝失�
 
 ### 确定性为什么能位一致回放
 
-- **全 int64 定点数学**：无 float。热路径用 128-bit 中间积的无分配定点算术（[fixed_math.go](skill/fixed_math.go)），与 big.Int 参考实现 fuzz 验证位一致；三角函数是定点 CORDIC（[process_motion.go](skill/process_motion.go) 的 `motionSinCos`，毫度角 → 百万分度向量）。
-- **随机是 HMAC 派生的纯函数**：`HMAC(matchSeed, digest, caster, castSequence)` 派生施法密钥，再按编译期编号的 random site + 调用序号求值（[runtime_random.go](skill/runtime_random.go)）——没有全局 RNG 状态可漂移。
+- **全 int64 定点数学**：无 float。热路径用 128-bit 中间积的无分配定点算术（[fixed_math.go](fixed_math.go)），与 big.Int 参考实现 fuzz 验证位一致；三角函数是定点 CORDIC（[process_motion.go](process_motion.go) 的 `motionSinCos`，毫度角 → 百万分度向量）。
+- **随机是 HMAC 派生的纯函数**：`HMAC(matchSeed, digest, caster, castSequence)` 派生施法密钥，再按编译期编号的 random site + 调用序号求值（[runtime_random.go](runtime_random.go)）——没有全局 RNG 状态可漂移。
 - **调度稳定排序**：`Advance` 按 (dueTick, 稳定序) 消费任务；并行 flow 分支按声明顺序提交。
-- **checkpoint**：`Runtime.Checkpoint()` 产出带版本 + SHA-256 的权威镜像；`RestoreRuntime` 严格校验 Host revision/authority、Program digest，全部匹配才恢复（[runtime_checkpoint.go](skill/runtime_checkpoint.go)）。仓库每个验收 fixture 都做 checkpoint 往返并比对快照字节。
+- **checkpoint**：`Runtime.Checkpoint()` 产出带版本 + SHA-256 的权威镜像；`RestoreRuntime` 严格校验 Host revision/authority、Program digest，全部匹配才恢复（[runtime_checkpoint.go](runtime_checkpoint.go)）。仓库每个验收 fixture 都做 checkpoint 往返并比对快照字节。
 
 ### 状态同步三流（[skillsync](skillsync)）
 
@@ -329,7 +329,7 @@ World revision 是防线：查询/命令携带期望 revision，Host 拒绝失�
 | `roost.skill.state` | `RuntimeStateSnapshot` 全量 / `StateMutation` 增量 | 必须可靠 | 历史连续则 replay，否则 Full |
 | `roost.skill.presentation` | cast/effect 播放指令 | 可丢弃、需有序 | 短历史 replay；过期后以 state 为准 |
 
-玩法修改先由 Host 成功提交，才产生 effect 表现事件；cast 表现只在 commit 后产生——**客户端永远不会看到一个被权威层拒绝的效果**。服务端 `Coordinator` 做可见性过滤（封闭字段集、default-deny 可选）与 durable outbox，客户端 `Applier` 做 epoch/schema/sequence/manifest 校验后事务应用。完整发布/恢复流程见 [docs/architecture-and-migration.md](docs/architecture-and-migration.md) 与 [docs/visual-sync-production-guide.md](docs/visual-sync-production-guide.md)。
+玩法修改先由 Host 成功提交，才产生 effect 表现事件；cast 表现只在 commit 后产生——**客户端永远不会看到一个被权威层拒绝的效果**。服务端 `Coordinator` 做可见性过滤（封闭字段集、default-deny 可选）与 durable outbox，客户端 `Applier` 做 epoch/schema/sequence/manifest 校验后事务应用。完整发布/恢复流程见 [docs/architecture-and-migration.md](../docs/skill/architecture-and-migration.md) 与 [docs/visual-sync-production-guide.md](../docs/skill/visual-sync-production-guide.md)。
 
 ---
 
@@ -337,23 +337,23 @@ World revision 是防线：查询/命令携带期望 revision，Host 拒绝失�
 
 给想读源码的人五个切口，每条都标了主文件：
 
-1. **写点增量突变 + 影子校验**（[runtime_mutation.go](skill/runtime_mutation.go)）。每个公开写入口都包在 `beginStateMutationLocked` / `commitStateMutationsLocked` 临界区里：写路径直接在"写点"登记脏对象，提交时只对脏集合生成 canonical `StateMutation`——不再全量 diff 快照，单次提交约百余纳秒（[runtime_mutation_benchmark_test.go](skill/runtime_mutation_benchmark_test.go)）。快路径的正确性由影子校验守住：测试开启 `stateMutationVerifyIncremental` 后，每次增量提交都与参考实现（全量快照 diff）比对，发散即 panic。把 mutation 序列折叠到旧快照上必须精确复原新快照——这是同步协议增量流的根基。
-2. **HMAC 位点随机与 Host 返回顺序无关**（[runtime_random.go](skill/runtime_random.go)、[runtime_select.go](skill/runtime_select.go)）。随机选择不是"从 Host 给的列表里 roll 一个下标"，而是给**每个候选**算 `HMAC(castKey, randomSite, invocation, stableID)` 分数后按分数排序取样。stableID 来自候选自身（实体 ID 等），所以 Host 用什么顺序返回候选、宿主内部用不用 map，都不影响选中谁——确定性不依赖宿主实现细节。
-3. **`"$gcd"` 哨兵**（[runtime_cast_window.go](skill/runtime_cast_window.go)，`globalCooldownProgramID`）。全局冷却不是一套并行机制，而是以保留程序 id `"$gcd"` 存在的一条**普通冷却条目**：`StateSnapshot().Cooldowns`、增量 mutation、checkpoint、同步协议全部免费复用现有冷却通道，客户端按普通冷却渲染即可。从 commit tick 起算、多次提交取最晚到期。
-4. **表达式钳制保住最坏情形预算**（[wire_cast_window.go](skill/wire_cast_window.go)、[runtime_cast_window.go](skill/runtime_cast_window.go)）。窗口表达式必须声明 `min`/`max`，运行时结果无条件钳入边界。于是编译期以边界做的所有证明在运行时恒成立：budget pass 用 `max` 算最坏时长，`commit_tick <= windup_ticks_min` 保证"先提交后执行"的不变量——表达式再怎么算也破坏不了静态结论。这是"动态数值"与"静态证明"共存的通用手法。
-5. **combat 是单一数学源，MemoryHost 收敛于它**（[combat/damage.go](combat/damage.go)、[skill/memory_host_combat.go](skill/memory_host_combat.go)、[combatcomponent/adapter.go](combatcomponent/adapter.go)）。twelve_stage_v1 十二段管线（`target_validity → immunity → avoidance → damage_type → penetration → element → modifiers → critical → caps → shield → health → aftermath`）只实现一次：参考宿主 `MemoryHost` 与生产集成 `combatcomponent.HostAdapter` 跑的是同一份代码、发同一套事件词表（`damage_resolved`、`combat_hook_*`、`shield_absorbed`……），proc 过滤器在两种宿主上行为一致。status 域命令（Status/Remove/Dispel/AttributeModifier）由 `combatcomponent.StatusBridge` 按 status catalog 落到 buff 容器（唯一的有意差异：mul_bp 修饰加性叠加而非 MemoryHost 的乘性链，见 [docs/skill-casting-and-combat.md](docs/skill-casting-and-combat.md)）。用 MemoryHost 验证过的数值结论直接适用于生产。
+1. **写点增量突变 + 影子校验**（[runtime_mutation.go](runtime_mutation.go)）。每个公开写入口都包在 `beginStateMutationLocked` / `commitStateMutationsLocked` 临界区里：写路径直接在"写点"登记脏对象，提交时只对脏集合生成 canonical `StateMutation`——不再全量 diff 快照，单次提交约百余纳秒（[runtime_mutation_benchmark_test.go](runtime_mutation_benchmark_test.go)）。快路径的正确性由影子校验守住：测试开启 `stateMutationVerifyIncremental` 后，每次增量提交都与参考实现（全量快照 diff）比对，发散即 panic。把 mutation 序列折叠到旧快照上必须精确复原新快照——这是同步协议增量流的根基。
+2. **HMAC 位点随机与 Host 返回顺序无关**（[runtime_random.go](runtime_random.go)、[runtime_select.go](runtime_select.go)）。随机选择不是"从 Host 给的列表里 roll 一个下标"，而是给**每个候选**算 `HMAC(castKey, randomSite, invocation, stableID)` 分数后按分数排序取样。stableID 来自候选自身（实体 ID 等），所以 Host 用什么顺序返回候选、宿主内部用不用 map，都不影响选中谁——确定性不依赖宿主实现细节。
+3. **`"$gcd"` 哨兵**（[runtime_cast_window.go](runtime_cast_window.go)，`globalCooldownProgramID`）。全局冷却不是一套并行机制，而是以保留程序 id `"$gcd"` 存在的一条**普通冷却条目**：`StateSnapshot().Cooldowns`、增量 mutation、checkpoint、同步协议全部免费复用现有冷却通道，客户端按普通冷却渲染即可。从 commit tick 起算、多次提交取最晚到期。
+4. **表达式钳制保住最坏情形预算**（[wire_cast_window.go](wire_cast_window.go)、[runtime_cast_window.go](runtime_cast_window.go)）。窗口表达式必须声明 `min`/`max`，运行时结果无条件钳入边界。于是编译期以边界做的所有证明在运行时恒成立：budget pass 用 `max` 算最坏时长，`commit_tick <= windup_ticks_min` 保证"先提交后执行"的不变量——表达式再怎么算也破坏不了静态结论。这是"动态数值"与"静态证明"共存的通用手法。
+5. **combat 是单一数学源，MemoryHost 收敛于它**（[combat/damage.go](combat/damage.go)、[skill/memory_host_combat.go](memory_host_combat.go)、[combatcomponent/adapter.go](combatcomponent/adapter.go)）。twelve_stage_v1 十二段管线（`target_validity → immunity → avoidance → damage_type → penetration → element → modifiers → critical → caps → shield → health → aftermath`）只实现一次：参考宿主 `MemoryHost` 与生产集成 `combatcomponent.HostAdapter` 跑的是同一份代码、发同一套事件词表（`damage_resolved`、`combat_hook_*`、`shield_absorbed`……），proc 过滤器在两种宿主上行为一致。status 域命令（Status/Remove/Dispel/AttributeModifier）由 `combatcomponent.StatusBridge` 按 status catalog 落到 buff 容器（唯一的有意差异：mul_bp 修饰加性叠加而非 MemoryHost 的乘性链，见 [docs/skill-casting-and-combat.md](../docs/skill/skill-casting-and-combat.md)）。用 MemoryHost 验证过的数值结论直接适用于生产。
 
 ---
 
 ## 学习路径
 
-**第一轮（30 分钟）——一次最小施放**：[testdata/simple_damage.json](skill/testdata/simple_damage.json) → [parse.go](skill/parse.go) 的 `Parse` → [lower.go](skill/lower.go) 的 `Compile` → [runtime.go](skill/runtime.go) 的 `Activate` → [executor.go](skill/executor.go) → [memory_host_effect.go](skill/memory_host_effect.go) → [acceptance_test.go](skill/acceptance_test.go)。
+**第一轮（30 分钟）——一次最小施放**：[testdata/simple_damage.json](testdata/simple_damage.json) → [parse.go](parse.go) 的 `Parse` → [lower.go](lower.go) 的 `Compile` → [runtime.go](runtime.go) 的 `Activate` → [executor.go](executor.go) → [memory_host_effect.go](memory_host_effect.go) → [acceptance_test.go](acceptance_test.go)。
 
-**第二轮（1 小时）——编译器如何拒绝不安全定义**：[compile.go](skill/compile.go) 的 pass 目录 + 各 `compile_*_test.go` 的拒绝用例 + [compile_environment.go](skill/compile_environment.go) 的默认目录。练习：把 fixture 的 `damage_type` 改成不存在的键，观察诊断落在 authority 边界而非运行时。
+**第二轮（1 小时）——编译器如何拒绝不安全定义**：[compile.go](compile.go) 的 pass 目录 + 各 `compile_*_test.go` 的拒绝用例 + [compile_environment.go](compile_environment.go) 的默认目录。练习：把 fixture 的 `damage_type` 改成不存在的键，观察诊断落在 authority 边界而非运行时。
 
-**第三轮（40 分钟）——IR 到 Program**：`wire_*.go` → `ir_*.go` / [compile_normalize.go](skill/compile_normalize.go) → [lower.go](skill/lower.go) → `program_*.go` → [inspect.go](skill/inspect.go)。
+**第三轮（40 分钟）——IR 到 Program**：`wire_*.go` → `ir_*.go` / [compile_normalize.go](compile_normalize.go) → [lower.go](lower.go) → `program_*.go` → [inspect.go](inspect.go)。
 
-**之后按能力选切口**（fixture 即可运行示例）：施法窗口/策略看 `toggle_aura`/`hold_beam`/`charge_projectile`/`ammo_burst`/`cast_window_interrupt` 配 [runtime_cast_policy.go](skill/runtime_cast_policy.go)、[runtime_cast_window.go](skill/runtime_cast_window.go)；弹道/运动看 `tracking_boomerang`/`path_projectile`/`carry_dash` 配 [process_motion.go](skill/process_motion.go)；召唤物看 `owned_trap`/`owned_pet_command`；被动 proc 看 `passive_counter`/`passive_proc_guard` 配 [runtime_proc.go](skill/runtime_proc.go)。完整对照表在 [docs/skill-implementation-guide.md](docs/skill-implementation-guide.md)（含 Visual/Sync 深入路线与实验清单），日常测试清单在 [docs/skill-testing-guide.md](docs/skill-testing-guide.md)。
+**之后按能力选切口**（fixture 即可运行示例）：施法窗口/策略看 `toggle_aura`/`hold_beam`/`charge_projectile`/`ammo_burst`/`cast_window_interrupt` 配 [runtime_cast_policy.go](runtime_cast_policy.go)、[runtime_cast_window.go](runtime_cast_window.go)；弹道/运动看 `tracking_boomerang`/`path_projectile`/`carry_dash` 配 [process_motion.go](process_motion.go)；召唤物看 `owned_trap`/`owned_pet_command`；被动 proc 看 `passive_counter`/`passive_proc_guard` 配 [runtime_proc.go](runtime_proc.go)。完整对照表在 [docs/skill-implementation-guide.md](../docs/skill/skill-implementation-guide.md)（含 Visual/Sync 深入路线与实验清单），日常测试清单在 [docs/skill-testing-guide.md](../docs/skill/skill-testing-guide.md)。
 
 验证一切正常的最短命令：
 
@@ -364,9 +364,9 @@ go test ./... -count=1
 
 ### 迁移与版本
 
-- **compiler-2 语义修订（v1.4 → v1.5）**：`concurrent`、`global_cooldown_ticks`、窗口表达式进入 gameplay digest，旧 checkpoint/回放记录/skillcompose 契约在新版本下会得到明确解析错误。迁移动作（全量重编译、排空旧 checkpoint、重签契约）见 [docs/skill-casting-and-combat.md](docs/skill-casting-and-combat.md) 的迁移说明。
-- **旧 `/skillv2` → 稳定 `/skill` 的源码升级**：[docs/breaking-upgrade-skill-package.md](docs/breaking-upgrade-skill-package.md)。wire v2 与 compiler semantics 保持不变。
-- **生产部署与发布门槛**：[docs/production-readiness.md](docs/production-readiness.md)。
+- **compiler-2 语义修订（v1.4 → v1.5）**：`concurrent`、`global_cooldown_ticks`、窗口表达式进入 gameplay digest，旧 checkpoint/回放记录/skillcompose 契约在新版本下会得到明确解析错误。迁移动作（全量重编译、排空旧 checkpoint、重签契约）见 [docs/skill-casting-and-combat.md](../docs/skill/skill-casting-and-combat.md) 的迁移说明。
+- **旧 `/skillv2` → 稳定 `/skill` 的源码升级**：[docs/breaking-upgrade-skill-package.md](../docs/skill/breaking-upgrade-skill-package.md)。wire v2 与 compiler semantics 保持不变。
+- **生产部署与发布门槛**：[docs/production-readiness.md](../docs/skill/production-readiness.md)。
 
 ### 与 roost-core / roost-kit 的关系
 
@@ -391,4 +391,4 @@ roost-skill/skill  ←  roost-skill/combat（零依赖，可单独使用）
 
 ## License
 
-见 [LICENSE](LICENSE)。
+见 [LICENSE](../LICENSE)。

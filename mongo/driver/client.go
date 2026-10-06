@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	"time"
 
@@ -21,6 +22,12 @@ type Client struct {
 	policy            IndexMigrationPolicy
 	txnTimeout        time.Duration
 	requireReplicaSet bool
+
+	// closeSerial 串行化 Close：并发的后到者等第一次断开做完，再按 closed 判断（RR-20261006-10）。
+	closeSerial operation.Serial
+	closed      bool
+	// disconnect 为 nil 时用 cli.Disconnect；只有测试替换它，用来控制断开的耗时与结果。
+	disconnect func(context.Context) error
 }
 
 func NewClient(cfg *fmongo.Config, policy IndexMigrationPolicy) (*Client, error) {
@@ -101,15 +108,37 @@ func (c *Client) Ping(ctx context.Context) error {
 	return c.cli.Ping(ctx, nil)
 }
 
-// Close 断开客户端，幂等：mongo-driver 的 Disconnect 对已经断开的客户端返回 ErrClientDisconnected，
-// 这时连接已经释放，重试也做不了任何事，按已关闭返回 nil（RR-20261005-NC-260，与 etcd Client.Close 的
-// NC-173 残余同类）。旧实现原样返回，Mongo Mod 只在成功时交出 client，之后每次 Stop 都失败。
-// Disconnect 断开各 server 时的 ctx 错误由驱动自己忽略，其余错误（FLE 客户端断开失败）照常返回。
+// Close 断开客户端，幂等：断开成功之后再调用返回 nil；Close 之后的命令返回 mongo.ErrClientDisconnected。
+// mongo-driver 的 Disconnect 对已经断开的客户端返回 ErrClientDisconnected，这时连接已经释放，按已关闭
+// 返回 nil（RR-20261005-NC-260）。Disconnect 断开各 server 时的 ctx 错误由驱动自己忽略，其余错误
+// （FLE 客户端断开失败，拓扑没断开）照常返回，下一次 Close 重做断开。
+//
+// 并发调用串行执行：后到者在自己的 ctx 内等第一次断开做完，ctx 先结束返回 ctx 错误（客户端状态不变，
+// 可以再调用）。旧实现不串行，后到者从驱动拿到 ErrClientDisconnected 立刻返回 nil，第一个调用者可能
+// 还在等在途连接归还、关连接池（RR-20261006-10）。
 func (c *Client) Close(ctx context.Context) error {
-	if err := c.cli.Disconnect(ctx); err != nil && !errors.Is(err, mongo.ErrClientDisconnected) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := c.closeSerial.Lock(ctx); err != nil {
 		return err
 	}
+	defer c.closeSerial.Unlock()
+	if c.closed {
+		return nil
+	}
+	if err := c.disconnectClient(ctx); err != nil && !errors.Is(err, mongo.ErrClientDisconnected) {
+		return err
+	}
+	c.closed = true
 	return nil
+}
+
+func (c *Client) disconnectClient(ctx context.Context) error {
+	if c.disconnect != nil {
+		return c.disconnect(ctx)
+	}
+	return c.cli.Disconnect(ctx)
 }
 
 var _ fmongo.IMongo = (*Client)(nil)

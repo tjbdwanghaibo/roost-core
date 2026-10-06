@@ -6,6 +6,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 驱动 Close 口径统一（wclose）：RR-20261006-10（P3）已修复、声明场景验证，未发版。** 重复 Close 有三种口径（返回 nil / 粘滞返回第一次结果 / 每次报错，redis 单机与 Cluster 不同），并发 Close 的后到者不等第一个做完，kit Redis / Mongo / Nats Mod 并发停止有数据竞争，etcd Client 关闭后的调用阻塞到截止时间（来源 W-2026-10-06-02）。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-10](RR-20261006-10.md) | P3 驱动与 Mod 的 Close 口径不一致：redis 单机重复 Close 返回 ErrClosed 而 Cluster 返回 nil，etcd / 单实例锁 store 粘滞返回第一次错误，nats Assembly 每次返回 ErrClosedUndrained；并发 Close 不串行、kit Mod 停止有数据竞争；etcd 关闭后的调用不快速失败 | 已修复、声明场景验证，未发版 |
+
 **10-06 维护者第十二轮 kit / core 批（bkit）：RR-20261006-09（P3）已修复、声明场景验证，未发版。** robot Stage 先缩后扩，扩回的机器人从 `launched+1` 编号，复用刚停掉的机器人的序号与 PlayerID（N12 O9）。同批其余八项是决定实施，见 [第十二轮 kit 批](../feature/DECISIONS-R12-KIT-2026-10-06.md)。
 
 | 编号 | 问题 | 状态 |

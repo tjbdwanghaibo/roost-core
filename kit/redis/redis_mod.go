@@ -9,6 +9,7 @@ import (
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	redisdriver "github.com/tjbdwanghaibo/roost-core/redis/driver"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/spf13/viper"
@@ -18,8 +19,17 @@ import (
 // asks core to assemble the client and lock factory, publishes them as
 // capabilities and forwards lifecycle calls; it holds no driver handles (P3b).
 type RedisMod struct {
+	// mu 保护 asm：停止入口可能并发调用，健康检查也可能与停止并发（RR-20261006-10）。
+	mu  sync.Mutex
 	asm *redisdriver.Assembly
 	cfg *fredis.Config
+}
+
+// assembly 返回当前持有的 Assembly；停止之后为 nil。
+func (m *RedisMod) assembly() *redisdriver.Assembly {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.asm
 }
 
 func NewRedisMod() *RedisMod {
@@ -69,18 +79,21 @@ func (m *RedisMod) Provide(r *app.Registry) error {
 	if err != nil {
 		return err
 	}
+	m.mu.Lock()
 	m.asm = asm
+	m.mu.Unlock()
 	healthReg, ok := app.Lookup[*health.Registry](r, mods.ModHealth)
 	if !ok || healthReg == nil {
 		return fmt.Errorf("redis mod: capability %q not found", mods.ModHealth)
 	}
 	healthReg.Register("redis", health.CheckerFunc(func(ctx context.Context) health.Result {
-		if m.asm == nil {
+		asm := m.assembly()
+		if asm == nil {
 			return health.Result{Status: health.StatusFail, Message: "client not initialized"}
 		}
 		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		if err := m.asm.Ping(checkCtx); err != nil {
+		if err := asm.Ping(checkCtx); err != nil {
 			return health.Result{Status: health.StatusFail, Message: "ping failed", Err: err}
 		}
 		return health.Result{Status: health.StatusOK, Message: "connected"}
@@ -112,8 +125,16 @@ func (m *RedisMod) Stop() {
 // 清空连接，再返回逐个关连接时遇到的第一个错误：返回错误时资源同样已经释放，再调 Close 只会得到
 // “client is closed”。所以第一次 Close 之后不论结果都交出 asm，错误只报告这一次，之后的 Stop 返回 nil
 // （停机契约“再调用返回 nil”，RR-20261005-NC-233；旧实现只在成功时置空，出错后的每次重试都失败）。
+//
+// 并发调用串行执行，后到者等第一个关完再返回 nil；go-redis 的 Close 不等在途命令，持锁时间很短
+// （RR-20261006-10；旧实现读写 m.asm 不加锁，并发调用有数据竞争）。
 func (m *RedisMod) StopWithContext(_ context.Context) error {
-	if m == nil || m.asm == nil {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.asm == nil {
 		return nil
 	}
 	asm := m.asm

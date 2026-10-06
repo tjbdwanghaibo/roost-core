@@ -93,7 +93,6 @@ type singletonStore struct {
 	live fredis.IRedis // Get
 
 	closeOnce sync.Once
-	closeErr  error
 }
 
 func (s *singletonStore) CompareAndSet(ctx context.Context, key string, expected, next []byte, ttl time.Duration) (bool, []byte, error) {
@@ -140,10 +139,13 @@ func (s *singletonStore) Get(ctx context.Context, keys []string) ([][]byte, erro
 	return out, nil
 }
 
-// Close 幂等：只有第一次真正关闭两个客户端，之后的调用返回第一次的结果。
+// Close 幂等：只有第一次真正关闭两个客户端，第一次的错误只报给那一次调用，之后（含并发的后到者，
+// 它们等第一次做完）都返回 nil（RR-20261006-10；旧实现粘滞返回第一次的结果）。两个客户端不论成败
+// 都已关闭（go-redis 遇错继续关完连接池），没有可以重试的资源。
 func (s *singletonStore) Close() error {
-	s.closeOnce.Do(func() { s.closeErr = errors.Join(s.lock.Close(), s.live.Close()) })
-	return s.closeErr
+	var err error
+	s.closeOnce.Do(func() { err = errors.Join(s.lock.Close(), s.live.Close()) })
+	return err
 }
 
 var _ app.SingletonStore = (*singletonStore)(nil)

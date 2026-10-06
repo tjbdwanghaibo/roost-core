@@ -60,6 +60,11 @@ func (c *Client) Publish(subject string, data []byte) error {
 		if err == nil {
 			return nil
 		}
+		if errors.Is(err, gonats.ErrConnectionClosed) || errors.Is(err, gonats.ErrConnectionDraining) {
+			// 连接已关闭 / 正在排空，重试不会成功：立即返回、可 errors.Is 到 fnats.ErrClosed，与 Request
+			// 一致（RR-20261006-10；旧实现空等 3 × 20ms 再返回，错误只能 Is 到 gonats 的错误）。
+			return fmt.Errorf("nats: publish to %s: %w: %w", subject, fnats.ErrClosed, err)
+		}
 		time.Sleep(publishRetryWait)
 	}
 	return fmt.Errorf("nats: publish to %s failed after %d retries: %w", subject, publishRetries, err)

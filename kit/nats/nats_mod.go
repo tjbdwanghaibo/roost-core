@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/admin"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 	"github.com/tjbdwanghaibo/roost-core/health"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	natsdriver "github.com/tjbdwanghaibo/roost-core/nats/driver"
@@ -25,11 +27,15 @@ import (
 // the bus from registry configuration on top of them, publishes the
 // capabilities and forwards lifecycle calls (P3b).
 type NatsMod struct {
-	asm   *natsdriver.Assembly
-	bus   *bus.Bus
-	codec bus.Codec
-	cfg   *fnats.Config
-	extra natsdriver.ClientOptions
+	// stopSerial 串行化 StopWithContext（后到者在自己的 ctx 内等第一个做完）；mu 保护健康检查读的 asm，
+	// 健康检查可能与停止并发。bus 只在 Provide / Start / Stop 里读写，由 App 串行调用（RR-20261006-10）。
+	stopSerial operation.Serial
+	mu         sync.Mutex
+	asm        *natsdriver.Assembly
+	bus        *bus.Bus
+	codec      bus.Codec
+	cfg        *fnats.Config
+	extra      natsdriver.ClientOptions
 }
 
 // NewNatsMod creates a NatsMod with an optional codec.
@@ -65,7 +71,9 @@ func (m *NatsMod) Provide(r *app.Registry) error {
 	if err != nil {
 		return err
 	}
+	m.mu.Lock()
 	m.asm = asm
+	m.mu.Unlock()
 	healthReg, ok := app.Lookup[*health.Registry](r, mods.ModHealth)
 	if !ok || healthReg == nil {
 		return errors.New("nats mod: health registry not found")
@@ -75,10 +83,13 @@ func (m *NatsMod) Provide(r *app.Registry) error {
 		return errors.New("nats mod: admin registry not found")
 	}
 	healthReg.Register("nats", health.CheckerFunc(func(context.Context) health.Result {
-		if m.asm == nil {
+		m.mu.Lock()
+		asm := m.asm
+		m.mu.Unlock()
+		if asm == nil {
 			return health.Result{Status: health.StatusFail, Message: "client not initialized"}
 		}
-		if !m.asm.Connected() {
+		if !asm.Connected() {
 			return health.Result{Status: health.StatusFail, Message: "not connected"}
 		}
 		return health.Result{Status: health.StatusOK, Message: "connected"}
@@ -159,10 +170,17 @@ func (m *NatsMod) Stop() {
 	}
 }
 
+// StopWithContext 先停 Bus、再关 Assembly；排空超出预算时保留对象供再次停止，见下方注释。
+// 并发调用串行执行，后到者在自己的 ctx 内等第一个做完（RR-20261006-10；旧实现读写 m.bus / m.asm
+// 不加锁，并发调用有数据竞争）。
 func (m *NatsMod) StopWithContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = fctx.BaseContext()
 	}
+	if err := m.stopSerial.Lock(ctx); err != nil {
+		return err
+	}
+	defer m.stopSerial.Unlock()
 	var err error
 	if m.bus != nil {
 		if stopper, ok := any(m.bus).(interface{ StopWithContext(context.Context) error }); ok {
@@ -194,7 +212,9 @@ func (m *NatsMod) StopWithContext(ctx context.Context) error {
 			// ErrConnectionClosed，永远失败、引用永不置空（RR-20261004-08）。
 			slog.Warn("nats mod: connection closed before drain finished", "err", closeErr)
 		}
+		m.mu.Lock()
 		m.asm = nil
+		m.mu.Unlock()
 	}
 	slog.Info("nats mod: stopped")
 	return err

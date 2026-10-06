@@ -124,7 +124,7 @@ GOWORK=off go test -race -count=1 ./kit/redis/ ./versionstore/ ./failurelog/ ./s
 - **L2 快照 DEL**：见上表。如果要在结果未知时也保证删除，应该给 Delete 一个带版本的脚本（`DeleteAtVersion` 已经有），并让 `entity/remote_snapshot.go` 不再吞掉它的错误。这两处属于 Remote 本体，本次没有改。（2026-10-06 追加：[B2](B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) 已处理——带版本删除结果未知时 L1 留未确认的删除标记，下一次读取重发（幂等）；收到复制删除的每个节点也会重发。）
 - **Redis Cluster**：本机没有 Cluster 环境。`noReplay` 在 `ClusterClient.process` 里的 MOVED / ASK 跟随与换节点行为只按源码核对过，没有实测；连同 NC-100 一起留在外部验证清单。
 - **versionstore 一次性写令牌（③）**：维护者决定暂不做。
-- **Close 契约**（2026-10-06 追加，维护者第十二轮决定写进契约表）：按当前源码实测写进 [redis/driver README §5](../../redis/driver/README.md#5-close重复调用与出错后再调用) 与 [mongo/driver README §5](../../mongo/driver/README.md#5-close重复调用与出错后再调用)。要点：第一次 Close 不论成败资源都已释放（mongo 的 ctx 过期也照样释放）；重复 Close 时 mongo 与 Redis Cluster 返回 nil，Redis 单机返回 `goredis.ErrClosed`；Close 之后的命令一律返回可 `errors.Is` 的已关闭错误（`goredis.ErrClosed` / `mongo.ErrClientDisconnected`），写命令不重发。单机与 Cluster 不一致等几处登记为 [WANTED W-2026-10-06-02](../bug/WANTED.md)，代码未改。
+- **Close 契约**（2026-10-06 追加，维护者第十二轮决定写进契约表）：按当前源码实测写进 [redis/driver README §5](../../redis/driver/README.md#5-close重复调用与出错后再调用) 与 [mongo/driver README §5](../../mongo/driver/README.md#5-close重复调用与出错后再调用)。要点：第一次 Close 不论成败资源都已释放（mongo 的 ctx 过期也照样释放）；重复 Close 时 mongo 与 Redis Cluster 返回 nil，Redis 单机返回 `goredis.ErrClosed`；Close 之后的命令一律返回可 `errors.Is` 的已关闭错误（`goredis.ErrClosed` / `mongo.ErrClientDisconnected`），写命令不重发。单机与 Cluster 不一致等几处登记为 [WANTED W-2026-10-06-02](../bug/WANTED.md)，代码未改。**更正（2026-10-06，RR-20261006-10）**：随后统一口径并修复——重复 Close 幂等返回 nil（第一次的错误只报一次），并发 Close 的后到者等第一个做完，Close 之后的调用返回已关闭错误；两份 README §5 已改成统一后的表，[修复记录](../bugfix/RR-20261006-10.md)。
 - Redis 连接握手阶段的失败（例如新建连接时在 HELLO 上遇到 EOF）在错误值上无法和写出之后的失败区分，保守归为结果未知，不重发。
 
 ## 实施状态

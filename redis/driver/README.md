@@ -62,18 +62,17 @@ pipeline 只有在每条命令的错误都满足本函数时，才算整条没�
 
 ## 5. Close：重复调用与出错后再调用
 
-维护者第十二轮决定把 Close 的行为写进契约表。下表是 2026-10-06 按当前源码（go-redis v9.22.0）用临时探针实测的结果（不可达地址，`-race`），不是理想契约；不一致的地方登记在 [WANTED W-2026-10-06-02](../../docs/bug/WANTED.md)，代码没有改。
+维护者第十二轮决定把 Close 的行为写进契约表。2026-10-06 先按当时源码实测登记（[WANTED W-2026-10-06-02](../../docs/bug/WANTED.md)，单机与 Cluster 不一致等），随后转为 [RR-20261006-10](../../docs/bug/RR-20261006-10.md) 统一口径：**重复 Close 幂等返回 nil，第一次的错误只报一次；并发 Close 的后到者等第一个做完；Close 之后的其他调用返回已关闭错误**。下表是统一后的行为（go-redis v9.22.0，不可达地址与私有 Redis 实测）。全仓各驱动与 Mod 的同一口径见 [RR-20261006-10 修复记录](../../docs/bugfix/RR-20261006-10.md)。
 
 | 对象 | 第二次 Close | 第一次 Close 出错后再调用 | Close 之后的操作 | 并发 Close |
 | --- | --- | --- | --- | --- |
-| 单机 `Client.Close` / `Assembly.Close` | 返回 `redis: client is closed`（`goredis.ErrClosed`，可 `errors.Is`；`IsDefinitelyNotExecuted` 为真），不阻塞 | 第一次不论成败都已关完全部连接池（go-redis 遇错继续关），再调返回 `ErrClosed`，不泄漏 | 一律 `ErrClosed`；写命令不重发 | 一个拿到第一次的结果，其余立刻返回 `ErrClosed`，**不等**第一个释放完 |
-| Cluster `Client.Close` / `Assembly.Close` | 返回 nil | 同上，再调返回 nil | 一律 `ErrClosed` | 后到者等第一个做完，都返回 nil |
-| `IPubSub.Close` | nil（`sync.Once`） | 只在第一次释放；之后都是 nil，拿不到第一次的错误 | 消息 channel 已关闭 | 后到者等第一个做完，返回 nil |
-| `DistLock` / `AutoExtendLock` | 没有 Close，只有 Release：第二次 Release 返回 `ErrLockNotHeld` | — | 客户端关闭后 Acquire / Release 返回 `ErrClosed`，锁记为结果未知，之后 Acquire 一直返回 `ErrDistLockStateUncertain` | — |
-| kit `RedisMod.StopWithContext` | nil（第一次就交出连接，NC-233） | 第一次报错（错误里写明连接池照样已关），之后 nil | — | 不支持并发调用（App 每次停机对每个 Mod 只串行调一次） |
-| kit 单实例锁 `singletonStore.Close` | 返回第一次的结果（`sync.Once`，粘滞） | 两个客户端都已关；再调返回同一个错误 | `ErrClosed` | 安全 |
+| `Client.Close` / `Assembly.Close`（单机与 Cluster 相同） | nil（`sync.Once`，只关一次） | 第一次不论成败都已关完全部连接池（go-redis 遇错继续关），错误只报给那一次，再调返回 nil | 一律 `goredis.ErrClosed`（可 `errors.Is`；`IsDefinitelyNotExecuted` 为真）；写命令不重发 | 后到者等第一个做完，返回 nil；第一次的错误只报给第一个 |
+| `IPubSub.Close` | nil（`sync.Once`） | 只在第一次释放，错误只报给那一次；之后 nil | 消息 channel 已关闭 | 后到者等第一个做完，返回 nil |
+| `DistLock` / `AutoExtendLock` | 没有 Close，只有 Release：第二次 Release 返回 `ErrLockNotHeld` | — | 客户端关闭后 Acquire / Release / Extend 每次都返回 `goredis.ErrClosed`，锁状态不变（命令确定没发出去，不记成结果未知） | — |
+| kit `RedisMod.StopWithContext` | nil（第一次就交出连接，NC-233） | 第一次报错（错误里写明连接池照样已关），之后 nil | — | 串行：后到者等第一个关完，返回 nil |
+| kit 单实例锁 `singletonStore.Close` | nil | 两个客户端都已关；错误只报给第一次，再调返回 nil | `goredis.ErrClosed` | 后到者等第一个做完，返回 nil |
 
-调用方据此：判断“已经关了”用 `errors.Is(err, goredis.ErrClosed)`，不要假设重复 Close 一定返回 nil；需要“再调用返回 nil”的停机路径（Mod Stop）在第一次 Close 之后就交出连接，像 `RedisMod` 那样。
+调用方据此：重复 Close 不需要特判；判断“已经关了”用 `errors.Is(err, goredis.ErrClosed)`。**行为变化（RR-20261006-10，v1.23.0 起）**：单机部署重复 Close 不再返回 `ErrClosed`；客户端关闭后的锁操作不再把锁记成未知（之前第二次 Acquire 起返回 `ErrDistLockStateUncertain`）。
 
 ## 6. 新增调用点核对清单
 

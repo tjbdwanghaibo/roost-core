@@ -861,7 +861,9 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **候选修法（可选）**：`releaseDispatchLocks` 只释放 `acquired`，不归还 Guard（Guard 由取得它的一方负责）；或无作用域时直接拒绝（返回错误 / panic），把“必须在作用域里取锁”变成显式前置条件。
 - **来源**：收尾第 4 批 A2。
 
-### W-2026-10-06-02：驱动重复 Close 的返回口径不一致（Redis 单机 vs Cluster 等）
+### W-2026-10-06-02：驱动重复 Close 的返回口径不一致（Redis 单机 vs Cluster 等）（已转 RR：[RR-20261006-10](RR-20261006-10.md)，已修复未发版）
+
+已转 RR，不再属于待审候选；第 1～5 条全部按统一口径处理（第 5 条 etcd 的 Watch 关闭后本来就立即结束，未改），见[修复记录](../bugfix/RR-20261006-10.md)。下面保留来源。
 
 - **位置**：`redis/driver/client.go:473` `Client.Close`、`redis/driver/assembly.go:44` `Assembly.Close`（直接透传 go-redis）；对照 `mongo/driver/client.go:108` `Client.Close`（NC-260 后幂等 nil）、`kit/redis/singleton.go:144` 与 `etcd/driver/client.go:177`（粘滞返回第一次的结果）、`nats/driver/assembly.go:66`（每次返回 `ErrClosedUndrained`，RR-20261004-08 有意的终态错误）。基线 `d6a677e0`。
 - **现象**（2026-10-06 临时探针实测，不可达地址、`-race`，契约表见 [redis/driver README §5](../../redis/driver/README.md#5-close重复调用与出错后再调用) 与 [mongo/driver README §5](../../mongo/driver/README.md#5-close重复调用与出错后再调用)）：

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 )
 
@@ -28,6 +29,11 @@ type Assembly struct {
 	Client    *Client
 	JetStream *JetStreamClient
 	RPC       *RPCClient
+
+	// closeSerial 串行化 Close；closed 在连接已经关闭（排空完成或被硬关）后置位，之后的 Close 返回 nil
+	// （RR-20261006-10）。
+	closeSerial operation.Serial
+	closed      bool
 }
 
 // Assemble connects and builds JetStream and RPC on the connection. When
@@ -63,6 +69,12 @@ func (a *Assembly) Connected() bool {
 // ErrClosedUndrained; that result is terminal, the assembly then owns nothing
 // a later Close could still release. The bus must already be stopped by the
 // caller — it owns subscriptions on Client.
+//
+// Close 幂等：连接一旦关闭（排空完成，或排空失败被硬关），之后的 Close 返回 nil，ErrClosedUndrained
+// 只报给那一次调用。并发调用串行执行，后到者在自己的 ctx 内等第一个做完，ctx 先结束返回 ctx 错误、
+// 保留所有权（与等 RPC 回调超时同样处理，可以再调用）。
+// 旧实现之后每次都去排空已关闭的连接、每次都返回 ErrClosedUndrained；并发的后到者在第一个排空的
+// 同时再排空一次，失败就硬关连接（RR-20261006-10）。
 func (a *Assembly) Close(ctx context.Context) error {
 	if a == nil {
 		return nil
@@ -70,8 +82,16 @@ func (a *Assembly) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := a.closeSerial.Lock(ctx); err != nil {
+		return err
+	}
+	defer a.closeSerial.Unlock()
+	if a.closed {
+		return nil
+	}
 	if a.RPC != nil {
 		if err := a.RPC.StopWithContext(ctx); err != nil {
+			// RPC 回调仍在运行、连接仍在使用：不置 closed，再次 Close 继续等同一次排空。
 			return err
 		}
 	}
@@ -81,8 +101,10 @@ func (a *Assembly) Close(ctx context.Context) error {
 			// error made callers keep the assembly for a retry whose drain can
 			// only fail with nats.go's ErrConnectionClosed (RR-20261004-08).
 			a.Client.Close()
+			a.closed = true
 			return fmt.Errorf("%w: %w", ErrClosedUndrained, err)
 		}
 	}
+	a.closed = true
 	return nil
 }

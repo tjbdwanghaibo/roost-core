@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/health"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/mongo/driver"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/viper"
@@ -18,9 +20,13 @@ import (
 // MongoMod implements app.Mod for MongoDB connectivity.
 // It creates an IMongo instance and registers it in the Registry.
 type MongoMod struct {
-	client fmongo.IMongo
-	cfg    *fmongo.Config
-	policy mongodriver.IndexMigrationPolicy
+	// stopSerial 串行化 StopWithContext（后到者在自己的 ctx 内等第一个做完）；mu 保护 client 字段，
+	// 健康检查与 Client() 可能与停止并发（RR-20261006-10）。
+	stopSerial operation.Serial
+	mu         sync.Mutex
+	client     fmongo.IMongo
+	cfg        *fmongo.Config
+	policy     mongodriver.IndexMigrationPolicy
 }
 
 func NewMongoMod() *MongoMod {
@@ -70,18 +76,21 @@ func (m *MongoMod) Provide(r *app.Registry) error {
 	if err != nil {
 		return err
 	}
+	m.mu.Lock()
 	m.client = cli
+	m.mu.Unlock()
 	healthReg, ok := app.Lookup[*health.Registry](r, mods.ModHealth)
 	if !ok || healthReg == nil {
 		return fmt.Errorf("mongo mod: capability %q not found", mods.ModHealth)
 	}
 	healthReg.Register("mongo", health.CheckerFunc(func(ctx context.Context) health.Result {
-		if m.client == nil {
+		client := m.Client()
+		if client == nil {
 			return health.Result{Status: health.StatusFail, Message: "client not initialized"}
 		}
 		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		if err := m.client.Ping(checkCtx); err != nil {
+		if err := client.Ping(checkCtx); err != nil {
 			return health.Result{Status: health.StatusFail, Message: "ping failed", Err: err}
 		}
 		return health.Result{Status: health.StatusOK, Message: "connected"}
@@ -113,22 +122,35 @@ func (m *MongoMod) Stop() {
 	}
 }
 
+// StopWithContext 断开客户端：成功后交出 client，之后再调用返回 nil；Close 失败或 ctx 已过期时保留
+// client，下次 Stop 重试。并发调用串行执行，后到者在自己的 ctx 内等第一个做完（RR-20261006-10；旧实现
+// 读写 m.client 不加锁，并发调用有数据竞争）。
 func (m *MongoMod) StopWithContext(ctx context.Context) error {
-	if m == nil || m.client == nil {
+	if m == nil {
 		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := m.stopSerial.Lock(ctx); err != nil {
+		return err
+	}
+	defer m.stopSerial.Unlock()
+	client := m.Client()
+	if client == nil {
+		return nil
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	err := m.client.Close(ctx)
-	if err == nil {
-		slog.Info("mongo mod: closed")
-		m.client = nil
+	if err := client.Close(ctx); err != nil {
+		return err
 	}
-	return err
+	slog.Info("mongo mod: closed")
+	m.mu.Lock()
+	m.client = nil
+	m.mu.Unlock()
+	return nil
 }
 
 // redactedURI 把 URI userinfo 里的口令换成 ***，保留用户名、主机与选项，供日志使用
@@ -157,6 +179,8 @@ func redactedURI(uri string) string {
 
 // Client returns the IMongo instance. Must be called after Start().
 func (m *MongoMod) Client() fmongo.IMongo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.client
 }
 

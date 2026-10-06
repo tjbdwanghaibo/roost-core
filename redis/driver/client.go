@@ -6,6 +6,7 @@ import (
 	"fmt"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	"strconv"
+	"sync"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -19,6 +20,9 @@ type Client struct {
 	rdb goredis.UniversalClient
 	// resends 是写命令在“确定未执行”错误上的重发次数，由 Config.MaxRetries 换算（resendsFor）。
 	resends int
+
+	// closeOnce 让 Close 只关一次连接池，见 Close。
+	closeOnce sync.Once
 }
 
 // Raw exposes the underlying go-redis client for assembly code (lock
@@ -470,8 +474,16 @@ func (c *Client) Ping(ctx context.Context) error {
 	return c.rdb.Ping(ctx).Err()
 }
 
+// Close 关闭连接池，幂等：只有第一次真正关闭，第一次的错误只报给那一次调用，之后（含并发的后到者，
+// 它们等第一次做完）都返回 nil。Close 之后的命令返回 goredis.ErrClosed（RR-20261006-10）。
+//
+// go-redis 单机的 Close 不幂等（第二次返回 ErrClosed），Cluster 的幂等（返回 nil）；旧实现直接透传，
+// 重复 Close 的结果随部署形态变化，并发时单机的后到者不等第一个关完就返回。go-redis 遇到错误也会
+// 关完全部连接，所以第一次出错之后同样没有可以重试的资源。
 func (c *Client) Close() error {
-	return c.rdb.Close()
+	var err error
+	c.closeOnce.Do(func() { err = c.rdb.Close() })
+	return err
 }
 
 // --- helpers ---

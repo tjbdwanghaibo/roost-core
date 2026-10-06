@@ -97,7 +97,7 @@ saga 方向 ②（`9669d181`，[方案与实施](SAGA-DIRECTION-STEP-TRANSITION-
 
 ## 必要性：在途可见和接替为什么需要两次提交
 
-② 的契约（[SAGA.md](../SAGA.md)「原生步骤执行契约」）与回归 `in-flight attempt past its deadline is taken over and cannot commit` 同时要求：
+② 的契约（[SAGA.md](../../SAGA.md)「原生步骤执行契约」）与回归 `in-flight attempt past its deadline is taken over and cannot commit` 同时要求：
 
 - (i) 尝试 k 的业务事务还开着、租约有效时，k+1 能看出 k 在途，因此不执行（返回在途错误并 nak）；
 - (ii) 过了 k 的截止，即使 k 的事务还开着（handler 卡住，或者进程被杀、事务留在服务端），k+1 也能接替并执行，k 之后提交时被 fence 掉。

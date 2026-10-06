@@ -110,6 +110,11 @@ func (l *distLock) Acquire(ctx context.Context) (bool, error) {
 	setNX := buildWrite(l.rdb, func(p goredis.Pipeliner) *goredis.BoolCmd { return p.SetNX(ctx, l.key, value, l.ttl) })
 	_ = sendOnce(ctx, l.rdb, l.resends, setNX)
 	ok, err := setNX.Result()
+	if errors.Is(err, goredis.ErrClosed) {
+		// 客户端已关闭：命令确定没发出去（IsDefinitelyNotExecuted），锁状态没变，不记成未知
+		// （RR-20261006-10；旧实现记成未知，之后 Acquire 一直返回 ErrDistLockStateUncertain）。
+		return false, err
+	}
 	if err != nil {
 		// SetNX may have reached Redis even when the reply is lost. Preserve the
 		// token so Release can reconcile with a value-guarded delete.
@@ -138,6 +143,9 @@ func (l *distLock) Release(ctx context.Context) error {
 		return fredis.ErrLockNotHeld
 	}
 	result, err := runScript(ctx, l.rdb, l.resends, "eval", releaseLockScript, []string{l.key}, l.value).Int64()
+	if errors.Is(err, goredis.ErrClosed) {
+		return err // 脚本确定没发出去，状态不变（同 Acquire）
+	}
 	if err != nil {
 		l.state = distLockUncertain
 		return err
@@ -163,6 +171,9 @@ func (l *distLock) Extend(ctx context.Context, ttl time.Duration) (bool, error) 
 		return false, fredis.ErrLockNotHeld
 	}
 	result, err := runScript(ctx, l.rdb, l.resends, "eval", extendLockScript, []string{l.key}, l.value, ttl.Milliseconds()).Int64()
+	if errors.Is(err, goredis.ErrClosed) {
+		return false, err // 脚本确定没发出去，状态不变（同 Acquire）
+	}
 	if err != nil {
 		l.state = distLockUncertain
 		return false, err

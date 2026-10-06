@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- **驱动与 Mod 的 Close 统一口径：重复 Close 幂等返回 nil，Close 之后的调用返回已关闭错误**（RR-20261006-10，来源 W-2026-10-06-02）：**行为变化：单机 redis 重复 Close 不再返回 `ErrClosed`**（与 Cluster 一致返回 nil），第一次的错误只报给第一次调用；etcd Client 与 kit 单实例锁 store 第一次 Close 出错后再调返回 nil（原来粘滞返回同一个错误）；nats `Assembly.Close` 的终态 `ErrClosedUndrained` 只报一次、之后 nil。并发 Close 的后到者等第一个做完（mongo / nats / Mod 在自己的 ctx 内等）；kit Redis / Mongo / Nats Mod 的停止入口串行化，修掉并发调用的数据竞争。Close 之后：etcd Client 的调用立即返回 `fetcd.ErrClosed`（原来阻塞到截止时间）；nats `Publish` 立即返回、可 `errors.Is` 到 `fnats.ErrClosed`；redis 锁遇 `ErrClosed` 不再记成结果未知（原来第二次 Acquire 起返回 `ErrDistLockStateUncertain`）。契约表见 [redis/driver README §5](redis/driver/README.md#5-close重复调用与出错后再调用)，[记录](docs/bugfix/RR-20261006-10.md)。
 - **示例可运行性与发版前验证跟进**（2026-10-06 v1.23.0 发版前验证）：`examples/` 模块 go.sum 补上 robot / nettransport 新依赖的条目（之前 `GOWORK=off` 下 `go run ./robotdemo` 编译不过）；saga `TestAssemblyConsumesNativeNestCompletionEffects` 的偶发失败是用例假设“收下结果后记录不再 waiting”，而协调器会立即派发下一步（`-cpu 1` 加压 8/480），断言改为第 0 步已收下、回执已写；`scripts/mirror-local.sh` 的 Cluster 就绪判定加上“每个主节点有 online 副本”，之前副本还在全量同步时墓碑 WAIT 被跳过。[记录](docs/bugfix/PRERELEASE-VERIFICATION-2026-10-06.md)
 - **robot：Stage 先缩后扩不再复用刚停掉的机器人的序号与 PlayerID**（RR-20261006-09，N12 O9，维护者第十二轮决定）：序号只增不回收；有过缩扩的 staged 运行会用到超过 `Count` 的序号，自定义 `IdentityProvider` 要覆盖到。[记录](docs/bugfix/RR-20261006-09.md)
 - **global：`Bind` 结果未知后用同样参数重试按幂等成功**（RR-20261006-05，收尾 A7）：以前 `Create` 没建成就报 `ErrConflict "already bound"`，写已落库、回复丢失后重试同一个 `Bind` 会被告知“已绑定”。现在读回已存绑定，group 与 globalSID 都一致时返回它（计 `replayed:bind`），不一致才报冲突，错误里带上已存的 group / sid。[记录](docs/bugfix/RR-20261006-05.md)
@@ -37,6 +38,7 @@
 
 ### Added
 
+- **根包文档相对链接门禁 `TestTrackedMarkdownRelativeLinksResolve`**（RR-20261006-10 同批）：扫全部跟踪的 `*.md`，相对链接必须指向跟踪的文件或目录；显式豁免 `artifacts/` 目标与 `docs/history/`。起因是合仓后 `skill/README.md` 52 个链接仍按旧仓布局写、全部落空，已改对，另修 6 处旧路径。
 - **示例实跑门禁 `TestExamplesRun`**（根包）：穷尽发现所有 `examples/` 下的 `main` 包，`GOWORK=off` 在各自模块里编译并运行，要求退出码 0、带超时；新示例须登记，只有需要外部依赖的才允许写明理由跳过。起因是 A1 之后 `skill/examples/statusbridge` 一运行就 panic 而 build / vet / 测试全绿。另补三条真实依赖用例：global `Bind` 同参数重试（RR-20261006-05）在真实 Redis 上、saga 结果消费者在真实 NATS 上的 nak 退避与 MaxDeliver、Redis Cluster 槽位迁移（ASK / MOVED）中的 Remote 快照 L2 读写与墓碑 WAIT。[记录](docs/bugfix/PRERELEASE-VERIFICATION-2026-10-06.md)
 - 文档（收尾第 1 批）：`docs/DEPLOYMENT.md` §7.1 写明从 v1.20.0 之前升级后手工删除旧 `<global.key_prefix>:lease:*` 键（无 TTL，不再读写）；`redis/driver`、`mongo/driver` README §5 写明 Close 的重复调用 / 出错后再调用行为（实测，单机与 Cluster 不一致登记 WANTED W-2026-10-06-02，代码未改）；`bus.ReliableStore` 注释写明 inbox 去重契约；USER_GUIDE 写明 L2 落后于权威时读者看到旧值的上界（缺省约 5m30s）。新增[外部验证清单](docs/review/EXTERNAL-VERIFICATION-2026-10-06.md)。
 - `app.business_time.advance_failed.total`：运行中推进业务时间高水位失败的次数（维护者第十二轮决定），之前只有 Warn 日志（T-284）。[记录](docs/feature/DECISIONS-R12-KIT-2026-10-06.md#8-业务时间高水位推进失败计数)
