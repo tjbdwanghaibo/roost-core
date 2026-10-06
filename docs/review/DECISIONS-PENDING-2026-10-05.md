@@ -103,3 +103,12 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | # | 事项 | 来由 | 选项 | 推荐 |
 | --- | --- | --- | --- | --- |
 | D1 | `/readyz` 对 Degraded 的处理：现在 Degraded 与 Fail 一样回 503（README 写明“degraded 在聚合层等同失败”），k8s readiness 摘掉该 Pod 的 Service endpoint；生成的服务都是单副本 | N01/S4 O2；[revn01b §3](REVIEW-2026-10-06-n01b.md) | (a) 保持现状（Degraded = 摘流量）(b) Degraded 算就绪：`/readyz` 回 200、`ok` 仍为 true，`dependencies` 照样列出 degraded，只有 Fail 让它 503 (c) 每个 checker 自己声明 Degraded 是否影响就绪 | (b)：四个 Degraded 来源（续期结果未知 ≤ renew_interval、entitysync ≥ 80% 容量、remoteentity 写许可用满、DataEngine 积压告警）都是“还能服务、需要关注”；单副本摘 endpoint 没有可切的副本，entitysync 在 80% 边界上无滞回会来回翻转。代价：靠 readiness 做 80% 容量卸载的部署会失去这个效果（目前仓内没有依赖它的配置） |
+
+## 维护者决定（2026-10-06，第五轮）
+
+| # | 决定 | 实施状态 |
+| --- | --- | --- |
+| skill 求值上下文表 | 做：一张表写明每种求值上下文（施法流程 / cast_start / phase_start / 进程启动 / 移交后每步）可用的引用，编译期与 Runtime 都查这一张（N09 第五批方向判断） | 待实施（随 N09 第六批） |
+| NC-224 方向 B | 不做：维持编译期拒绝（进程启动时不冻结施法输入） | — |
+| account 换名释放 | 做：未 admitted 计划、名字仅被他人 reserved 时，换名请求也释放 slot（判定表 `unadmitted other` 行） | 待实施 |
+| D1 / MissionRunner / EndAll 清场 | 维护者询问含义，已解释，待决定 | 待决定 |
