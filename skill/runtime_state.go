@@ -5,7 +5,7 @@ func (runtime *Runtime) evalStateRead(cast *castInstance, read stateReadProgramV
 	if err != nil {
 		return RuntimeValue{}, err
 	}
-	defaultValue, err := runtime.evalValue(cast, read.state.defaultValue)
+	defaultValue, err := runtime.evalStateDefault(cast, read.state.defaultValue)
 	if err != nil {
 		return RuntimeValue{}, err
 	}
@@ -22,7 +22,7 @@ func (runtime *Runtime) executeStateMutation(cast *castInstance, operation state
 	if err != nil {
 		return StateMutationResult{}, err
 	}
-	defaultValue, err := runtime.evalValue(cast, operation.state.defaultValue)
+	defaultValue, err := runtime.evalStateDefault(cast, operation.state.defaultValue)
 	if err != nil {
 		return StateMutationResult{}, err
 	}
@@ -83,4 +83,12 @@ func (runtime *Runtime) evalStateBinding(cast *castInstance, binding stateBindin
 		result.Team = uint64(value)
 	}
 	return result, nil
+}
+
+// evalStateDefault 在 state_default 上下文里求状态默认值：读 / 写处可能是施法流程、进程字段
+// 或进程回调，默认值只能用表里在所有这些位置都求得出的引用（RR-20261005-NC-281）。
+func (runtime *Runtime) evalStateDefault(cast *castInstance, value programValue) (RuntimeValue, error) {
+	previous := cast.switchEvalContext(evalStateDefault)
+	defer cast.switchEvalContext(previous)
+	return runtime.evalValue(cast, value)
 }

@@ -2,6 +2,14 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 N09 skill 第六批（revn09f，维护者第五轮决定“求值上下文表”）：NC-280～283（均 P2）已修复、声明场景验证，未发版。** memory 默认值读另一个 memory 时编译结果随 map 顺序变化、通过时每次 Activate 类型不匹配；持久状态默认值按施法作用域检查、在进程回调里读写即 ErrProgramInvariant；cast_start / phase_start 读取可缺省实体时读取处的 exists 守卫在采样点不生效；投射引用（`$primary_target.position`、`$event.*.position`、`$input.target.position`）编译通过却求不出。均为做“求值上下文 → 可用引用”表时逐格对照 Runtime 求值点发现。[本轮](../review/REVIEW-2026-10-06-n09-batch6.md) · [表方案](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-283](RR-20261005-NC-283.md) | P2 skill 投射引用（`$primary_target.position`、`$event.*.position`、`$lifecycle_entity.position`）编译通过、每次求值 ErrProgramInvariant；`$input.target.position` 自 B3 起 LOWER_UNRESOLVED | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-282](RR-20261005-NC-282.md) | P2 skill cast_start / phase_start 读取的实体是可缺省引用时 exists 守卫在采样点不生效，缺省即施法失败 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-281](RR-20261005-NC-281.md) | P2 skill 持久状态默认值按施法作用域检查，在进程回调里读写时 ErrProgramInvariant | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-280](RR-20261005-NC-280.md) | P2 skill memory 默认值读另一个 memory：编译结果随 map 顺序变化，通过时每次 Activate 类型不匹配 | 已修复、声明场景验证，未发版 |
 **10-06 N11～N13 留项与小防护（revleft）：NC-260～270（P3，NC-270 潜伏）已修复、声明场景验证，未发版。** Mongo 客户端已断开时 Mod 的 Stop 永远失败（第三方 Close 不幂等第三例）；robot Call 发送不受 ctx 约束、迟到应答被当推送；日志轮转失败丢行 / 控制台出错连带文件丢行；Prometheus 标签转义；Coalescer.Close 不等 flush；Duration 截断记 completed；ObjectPool 重复 Put、拓扑排序切片别名、TaskPool 重启生命周期；game-demo 寻路系统停止时无锁清空 terrain。N11 O6 / O7 / O9 与 N13 O10 是需求选择，见 DECISIONS-PENDING。另加根包冲突标记门禁。[本轮](../review/REVIEW-2026-10-06-revleft.md)
 
 **10-06 N06 S5 Saga 剩余项（revn06s5）：NC-250（P3）已修复、声明场景验证，未发版。** 定义缺失 fence 时重试退避中的步骤没有关闭为“放弃”，之后生效的成功以 `ErrNotWaiting` 静默丢弃。租约接管后的晚到 Apply、outbox supersede / Ack 未知、真实 NATS + Mongo 两进程强杀恢复均无缺陷；TTL 之后的重投不加协调器计数（方向判断），观察 O-S5-1～7 与方向建议待维护者。[本轮](../review/REVIEW-2026-10-06-n06s5.md)

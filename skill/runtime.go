@@ -158,6 +158,9 @@ type castInstance struct {
 	abilityFinished    bool
 	detachedProcess    *ProcessInstance
 	detachedEvent      EventContext
+	// evalContext 是当前求值所在的上下文（eval_contexts.go）。零值是施法流程；采样、memory
+	// 默认值、进程字段、状态默认值在求值期间临时切换（switchEvalContext），不进 checkpoint。
+	evalContext evalContext
 }
 
 type cooldownKey struct {
@@ -415,6 +418,8 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 		cast.eventContext.ProcDepth = parentEvent.ProcDepth + 1
 	}
 	cast.eventContext.Source, cast.eventContext.Owner, cast.eventContext.Target, cast.eventContext.SkillID, cast.eventContext.CastID = input.Caster, input.Caster, input.Target, program.id, tentativeID
+	// memory 默认值在 memory_default 上下文里求值：读不到别的 memory（RR-20261005-NC-280）。
+	cast.switchEvalContext(evalMemoryDefault)
 	for index, slot := range program.memory {
 		value, evalErr := runtime.evalValue(cast, slot.defaultValue)
 		if evalErr != nil {
@@ -422,6 +427,7 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 		}
 		cast.memory[index] = value
 	}
+	cast.switchEvalContext(evalCastFlow)
 	if err := runtime.captureSnapshots(cast, snapshotCastStart); err != nil {
 		return 0, err
 	}

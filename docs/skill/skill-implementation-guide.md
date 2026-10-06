@@ -76,6 +76,13 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
 类型和作用域收窄，例如 `motion` 依赖已解析的能力和类型信息，`budget` 依赖图与过程
 调用边界。
 
+引用在哪里能读，不在各个 Pass 里各写一份：[eval_contexts.go](../../skill/eval_contexts.go) 的求值上下文表
+（施法流程、memory 默认值、cast_start / phase_start / process_start 采样、进程每一步、进程回调、状态默认值 ×
+`$input.*` / `$memory.*` / `$local.*` / `$caster` / `$cast.*` / `$owner` / `$event.*` …）是唯一来源：`type_snapshot`
+按表生成每个位点的作用域，Runtime 求值时查同一张表，表外引用报 `ErrReferenceOutOfContext`。给定义加新的值位点或新的
+求值上下文时先改表，`eval_contexts_table_test.go` 会要求每个格子补正例 / 反例。
+[方案](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。
+
 建议配合阅读：
 
 - `compile_*_test.go`：静态拒绝用例；

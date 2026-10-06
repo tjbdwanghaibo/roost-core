@@ -37,7 +37,12 @@ func (runtime *Runtime) startEntityProcess(cast *castInstance, template ProcessT
 		phaseToken: cast.phaseToken, locals: detachedProcessLocals(cast.program), snapshots: make(map[int]RuntimeValue), randomKey: cast.randomKey, randomInvocations: make(map[RandomSiteIndex]uint64), visibleRevision: cast.visibleRevision,
 		eventContext: EventContext{Tick: runtime.currentTick, Source: cast.caster, Owner: cast.caster, Target: lifecycle, SkillID: cast.program.id, CastID: cast.id, ProcessID: runtime.nextProcessID},
 	}
+	// 启动那一步用施法本身求进程字段，但按 process_step 列查表：之后每一步在移交后的进程里
+	// 求同样的字段，两边都要求得出（RR-20261005-NC-224）。numeric track 初值在
+	// initializeProcessNumeric 里切回施法流程。
+	previous := cast.switchEvalContext(evalProcessStep)
 	signals, err := runtime.stepProcessMotion(cast, process)
+	cast.switchEvalContext(previous)
 	if err != nil {
 		return errors.Join(err, runtime.detachMotionCarry(cast, process))
 	}
@@ -59,7 +64,9 @@ func (runtime *Runtime) startEntityProcess(cast *castInstance, template ProcessT
 	}
 	if processTemplate.area != nil {
 		signals = areaProcessSignals(signals)
+		previous := cast.switchEvalContext(evalProcessStep)
 		areaSignals, areaErr := runtime.stepAreaMembership(cast, process)
+		cast.switchEvalContext(previous)
 		if areaErr != nil {
 			stopErr := runtime.terminateProcess(cast, process, StopCauseFailure, "")
 			if stopErr == nil {
@@ -96,14 +103,17 @@ func detachedProcessLocals(program *Program) []RuntimeValue {
 	return locals
 }
 
-func (runtime *Runtime) detachedProcessCast(process *ProcessInstance) *castInstance {
+// detachedProcessCast 构造移交后（或脱离施法）的进程求值用的 cast：没有施法的输入、memory、
+// 施法状态，caster 是进程的 owner、primaryTarget 是 lifecycle 实体。evalContext 说明它用于
+// 进程每一步（evalProcessStep）还是回调（evalProcessCallback），Runtime 按求值上下文表查引用。
+func (runtime *Runtime) detachedProcessCast(process *ProcessInstance, evalContext evalContext) *castInstance {
 	context := process.eventContext
 	context.Tick, context.WorldRevision, context.ProcessID = runtime.currentTick, runtime.host.CurrentRevision(), process.ID
 	return &castInstance{
 		id: process.CastID, program: process.Program, caster: process.Owner, primaryTarget: process.LifecycleEntity,
 		locals: cloneLocalFrame(process.locals), snapshots: cloneProcessSnapshots(process.snapshots), status: CastRunning,
 		visibleRevision: runtime.host.CurrentRevision(), randomKey: process.randomKey, randomInvocations: cloneRandomInvocations(process.randomInvocations),
-		eventContext: context, detachedProcess: process, detachedEvent: context,
+		eventContext: context, detachedProcess: process, detachedEvent: context, evalContext: evalContext,
 	}
 }
 
@@ -135,7 +145,7 @@ func cloneRandomInvocations(values map[RandomSiteIndex]uint64) map[RandomSiteInd
 }
 
 func (runtime *Runtime) captureOwnedProcessSnapshots(process *ProcessInstance) error {
-	callbackCast := runtime.detachedProcessCast(process)
+	callbackCast := runtime.detachedProcessCast(process, evalProcessCallback)
 	if err := runtime.captureSnapshots(callbackCast, snapshotProcessStart); err != nil {
 		return err
 	}
@@ -297,7 +307,7 @@ func (runtime *Runtime) advanceOwnedProcesses() error {
 		if process == nil || process.Status != ProcessRunning || process.NextTick > runtime.currentTick {
 			continue
 		}
-		stepCast := runtime.detachedProcessCast(process)
+		stepCast := runtime.detachedProcessCast(process, evalProcessStep)
 		signals, err := runtime.stepProcessMotion(stepCast, process)
 		if err != nil {
 			return runtime.failOwnedProcess(process, err)
@@ -443,7 +453,7 @@ func (runtime *Runtime) runOwnedProcessCallback(process *ProcessInstance, event 
 		if callback.event != event {
 			continue
 		}
-		callbackCast := runtime.detachedProcessCast(process)
+		callbackCast := runtime.detachedProcessCast(process, evalProcessCallback)
 		control, err := runtime.executeOperation(callbackCast, callback.operation)
 		process.locals = cloneLocalFrame(callbackCast.locals)
 		process.snapshots = cloneProcessSnapshots(callbackCast.snapshots)

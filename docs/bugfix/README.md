@@ -2,6 +2,14 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 N09 skill 第六批（revn09f）：NC-280～283 已修复、声明场景验证，未发版。** 修法统一落在求值上下文表（`skill/eval_contexts.go`）：memory 默认值、状态默认值、采样点各自是表里的一列，投射按表的行拆成根 + field。[本轮](../review/REVIEW-2026-10-06-n09-batch6.md) · [表方案](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-283](RR-20261005-NC-283.md) | lower 按表把 builtin / 输入槽位的投射拆成根 + field，由 evalReference 的 field 分支求值 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-282](RR-20261005-NC-282.md) | `checkCachedRead`：缓存型读取的实体按采样上下文取类型，可缺省即 ATTRIBUTE_SNAPSHOT_INVALID | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-281](RR-20261005-NC-281.md) | 状态默认值按 state_default 列检查与求值（不能读 `$input` / `$memory`） | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-280](RR-20261005-NC-280.md) | memory 默认值按 memory_default 列检查（不能读 `$memory`），检查顺序确定 | 已修复、声明场景验证，未发版 |
 **10-06 N11～N13 留项与小防护（revleft）：NC-260～270 已修复、声明场景验证，未发版。** Mongo driver `Client.Close` 对已断开客户端返回 nil；robot Call 发送用 `sendWithContext`、迟到应答丢弃并计数；日志轮转失败续写当前分片并限频重试、sink 逐个写并计 `log.write_errors`；Prometheus 标签只做格式定义的三种转义；Coalescer.Close 等最后一次 flush；loadtest run ctx 带 Duration；ObjectPool 忽略重复 Put、拓扑排序复制切片、TaskPool 一次性生命周期；game-demo PathFindSystem 停止只置标志。根包新增冲突标记门禁。[本轮](../review/REVIEW-2026-10-06-revleft.md) · [证据](evidence/noncore-bugfix-20261006-revleft/README.md)
 
 **10-06 N06 S5 Saga 剩余项（revn06s5）：NC-250 已修复、声明场景验证，未发版。** 截止、人工 Compensate、定义缺失三个“放弃当前步骤”的出口共用 `abandonedOperation`：定义缺失 fence 时退避中的操作写放弃关闭的 tombstone、删排队命令，之后的成功告警一次。[本轮](../review/REVIEW-2026-10-06-n06s5.md)

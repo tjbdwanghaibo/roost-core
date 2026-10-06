@@ -225,6 +225,10 @@ func (runtime *Runtime) initializeProcessNumeric(cast *castInstance, process *Pr
 	if cast == nil || process.Program == nil || int(process.TemplateIndex) >= len(process.Program.processTemplates) {
 		return ErrProgramInvariant
 	}
+	// numeric track 初值与绑定到数值属性的字段在启动时用施法求一次：施法流程上下文
+	// （求值上下文表 cast_flow 列），即使调用方正在按 process_step 求其余进程字段。
+	previous := cast.switchEvalContext(evalCastFlow)
+	defer cast.switchEvalContext(previous)
 	template := process.Program.processTemplates[process.TemplateIndex]
 	properties := make([]numericPropertyState, 0, len(process.Program.processProperties))
 	for _, policy := range process.Program.processProperties {

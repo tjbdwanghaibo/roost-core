@@ -2,10 +2,16 @@ package skill
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
-type typeScope map[string]valueType
+// typeScope 是一个值位点可见的名字与类型，连同位点所在的求值上下文（eval_contexts.go）。
+// 名字集合由 scopeFor 按求值上下文表生成，流程再往里加局部变量。
+type typeScope struct {
+	context evalContext
+	values  map[string]valueType
+}
 
 type typeChecker struct {
 	context    *compileContext
@@ -38,10 +44,19 @@ func runTypeCheckPass(context *compileContext) {
 		}
 		if _, nullable := declaration.defaultValue.(*nullValueIR); nullable {
 			typ.Optional = true
-		} else {
-			checker.expect(declaration.defaultValue, checker.baseScope(), typ)
 		}
 		checker.memory[name] = typ
+	}
+	// memory 默认值在 Activate 里按槽位顺序求值，读不到别的 memory（表的 memory_default 列）。
+	// 此前在填 checker.memory 的同一个 map 循环里按施法作用域检查，能不能看见另一个 memory
+	// 取决于 map 遍历顺序；看见了就编译通过，槽位排在后面时每次 Activate 类型不匹配
+	// （RR-20261005-NC-280）。
+	memoryDefaultScope := checker.scopeFor(evalMemoryDefault, "")
+	for _, name := range sortedMemoryNames(context.artifacts.ir.memory) {
+		declaration := context.artifacts.ir.memory[name]
+		if _, nullable := declaration.defaultValue.(*nullValueIR); !nullable {
+			checker.expect(declaration.defaultValue, memoryDefaultScope, checker.memory[name])
+		}
 	}
 	for _, name := range sortedStateNames(context.artifacts.ir.persistentState) {
 		declaration := context.artifacts.ir.persistentState[name]
@@ -51,12 +66,14 @@ func runTypeCheckPass(context *compileContext) {
 				context.addDiagnostic(DiagnosticTypeMismatch, declaration.source.Path+".default", "state type does not allow null default")
 			}
 		} else {
-			checker.expect(declaration.defaultValue, checker.baseScope(), typ)
+			// 状态默认值在读 / 写处求值，那里可能是进程回调或进程字段（表的 state_default 列，
+			// RR-20261005-NC-281）。
+			checker.expect(declaration.defaultValue, checker.scopeFor(evalStateDefault, ""), typ)
 		}
 		checker.state[name] = typ
 	}
 
-	root := checker.baseScope()
+	root := checker.scopeFor(evalCastFlow, "")
 	window := context.artifacts.ir.activation.castWindow
 	if window.hasWindupExpression {
 		checker.expect(window.windupExpression, root, quantityType(quantityTicks))
@@ -98,39 +115,37 @@ func declaredMemoryType(name string) valueType {
 	}
 }
 
-func (c *typeChecker) baseScope() typeScope {
-	scope := typeScope{
-		"$caster":          {Base: valueKindEntity},
-		"$caster.position": {Base: valueKindPosition},
-		"$primary_target":  {Base: valueKindEntity, Optional: true},
-		"$ability.self":    {Base: valueKindAbility},
-	}
-	for name, typ := range c.context.artifacts.input.Slots {
-		scope[name] = typ
-	}
-	for name, typ := range c.memory {
-		scope["$memory."+name] = typ
-	}
-	policy := c.context.artifacts.ir.activation.policy
-	scope["$cast.mode"] = valueType{Base: valueKindString}
-	scope["$cast.elapsed_ticks"] = quantityType(quantityTicks)
-	switch policy.mode {
-	case castModeCharge:
-		scope["$cast.charge_bp"] = quantityType(quantityBasisPoints)
-		scope["$cast.release_reason"] = valueType{Base: valueKindString}
-	case castModeHold, castModeToggle:
-		scope["$cast.pulse_index"] = quantityType(quantityCount)
-	case castModeAmmo:
-		scope["$cast.stock"] = quantityType(quantityCount)
-		scope["$cast.max_stock"] = quantityType(quantityCount)
+// scopeFor 按求值上下文表生成一个上下文的作用域：表里在该上下文可用（含“漂移”格子）、
+// 且在这个 Program 形状里存在（施法模式、area 进程）的行。输入槽位来自输入布局，memory
+// 来自声明；局部变量由流程加入。processKind 只对进程回调有意义（area 专有的事件字段）。
+func (c *typeChecker) scopeFor(context evalContext, processKind string) typeScope {
+	scope := typeScope{context: context, values: make(map[string]valueType)}
+	mode := c.context.artifacts.ir.activation.policy.mode
+	for index, row := range evalReferenceTable {
+		if row.name == "" || !row.cells[context].usable() || !row.presentIn(mode, processKind) {
+			continue
+		}
+		switch evalReferenceRowIndex(index) {
+		case evalRowInput:
+			for name, typ := range c.context.artifacts.input.Slots {
+				scope.values[name] = typ
+			}
+		case evalRowMemory:
+			for name, typ := range c.memory {
+				scope.values["$memory."+name] = typ
+			}
+		case evalRowLocal:
+		default:
+			scope.values[row.name] = row.typ
+		}
 	}
 	return scope
 }
 
 func cloneTypeScope(scope typeScope) typeScope {
-	copy := make(typeScope, len(scope)+1)
-	for name, typ := range scope {
-		copy[name] = typ
+	copy := typeScope{context: scope.context, values: make(map[string]valueType, len(scope.values)+1)}
+	for name, typ := range scope.values {
+		copy.values[name] = typ
 	}
 	return copy
 }
@@ -152,8 +167,8 @@ func (c *typeChecker) flow(flow flowIR, scope typeScope) {
 		c.expect(typed.condition, scope, valueType{Base: valueKindBool})
 		thenScope := cloneTypeScope(scope)
 		if reference, ok := directlyGuardedReference(typed.condition); ok {
-			if current, found := thenScope[reference]; found {
-				thenScope[reference] = withoutOptional(current)
+			if current, found := thenScope.values[reference]; found {
+				thenScope.values[reference] = withoutOptional(current)
 			}
 		}
 		c.flow(typed.thenFlow, thenScope)
@@ -161,7 +176,7 @@ func (c *typeChecker) flow(flow flowIR, scope typeScope) {
 	case *repeatFlowIR:
 		c.expect(typed.times, scope, quantityType(quantityCount))
 		child := cloneTypeScope(scope)
-		child["$local."+typed.index.Name] = quantityType(quantityCount)
+		child.values["$local."+typed.index.Name] = quantityType(quantityCount)
 		c.flow(typed.body, child)
 	case *waitFlowIR:
 		c.flow(typed.then, cloneTypeScope(scope))
@@ -171,11 +186,11 @@ func (c *typeChecker) flow(flow flowIR, scope typeScope) {
 		switch consume := typed.consume.(type) {
 		case *selectOneConsumeIR:
 			child := cloneTypeScope(scope)
-			child["$local."+consume.local.Name] = element
+			child.values["$local."+consume.local.Name] = element
 			c.flow(consume.then, child)
 		case *selectEachConsumeIR:
 			child := cloneTypeScope(scope)
-			child["$local."+consume.local.Name] = element
+			child.values["$local."+consume.local.Name] = element
 			c.flow(consume.body, child)
 		}
 		c.flow(typed.onEmpty, cloneTypeScope(scope))
@@ -185,26 +200,24 @@ func (c *typeChecker) flow(flow flowIR, scope typeScope) {
 		if typed.result != nil {
 			successScope, failureScope := cloneTypeScope(scope), cloneTypeScope(scope)
 			if typed.result.local != nil {
-				successScope["$local."+typed.result.local.Name] = effectResultReferenceType(typed.result.layout, resultOutcomeSuccess)
-				failureScope["$local."+typed.result.local.Name] = effectResultReferenceType(typed.result.layout, resultOutcomeFailure)
+				successScope.values["$local."+typed.result.local.Name] = effectResultReferenceType(typed.result.layout, resultOutcomeSuccess)
+				failureScope.values["$local."+typed.result.local.Name] = effectResultReferenceType(typed.result.layout, resultOutcomeFailure)
 			}
 			c.flow(typed.result.success, successScope)
 			c.flow(typed.result.failure, failureScope)
 		}
 		if typed.callbacks != nil {
-			callbackScope := typeScope{
-				"$owner": {Base: valueKindEntity}, "$owner.position": {Base: valueKindPosition},
-				"$lifecycle_entity": {Base: valueKindEntity}, "$process": {Base: valueKindProcess},
-				"$event.source": {Base: valueKindEntity}, "$event.owner": {Base: valueKindEntity}, "$event.target": {Base: valueKindEntity}, "$event.tick": quantityType(quantityTicks),
-			}
+			processKind := ""
 			if typed.process != nil {
-				if typed.process.kind == "area" {
-					callbackScope["$event.membership_ticks"] = quantityType(quantityTicks)
-					callbackScope["$event.enter_count"] = quantityType(quantityCount)
-				}
+				processKind = typed.process.kind
+			}
+			// 回调的作用域只来自表的 process_callback 列：施法的输入、memory、局部变量与
+			// `$caster` / `$cast.*` 都不在里面（此前 owned entity pass 另写一份 detachedReferenceAllowed）。
+			callbackScope := c.scopeFor(evalProcessCallback, processKind)
+			if typed.process != nil {
 				for _, policy := range c.context.environment.ProcessProperties.Properties {
 					if containsString(policy.ProcessKinds, typed.process.kind) && processPropertyBindingCount(typed.process.motion, policy) == 1 {
-						callbackScope["#process_property:"+policy.Key] = valueType{Base: valueKindInt}
+						callbackScope.values["#process_property:"+policy.Key] = valueType{Base: valueKindInt}
 					}
 				}
 			}
@@ -216,10 +229,22 @@ func (c *typeChecker) flow(flow flowIR, scope typeScope) {
 	}
 }
 
-func (c *typeChecker) process(process *processIR, scope typeScope) {
+// process 检查 spawn 进程的字段。每一步重新求值的字段（area 选择、motion 的目标 / 点 / 锚点 /
+// 目的地、未绑定到进程数值属性的数值字段）用表的 process_step 列；numeric track 的值与绑定到
+// 数值属性的字段只在启动时用施法求一次（initializeProcessNumeric），用施法作用域 castScope。
+// 此前全部按施法作用域检查，再由 owned entity pass 另写一份前缀黑名单（RR-20261005-NC-224）。
+func (c *typeChecker) process(process *processIR, castScope typeScope) {
 	if process == nil {
 		return
 	}
+	stepScope := c.scopeFor(evalProcessStep, "")
+	numeric := func(stage, variant, field string) typeScope {
+		if processNumericFieldBound(c.context.environment, process.kind, stage, variant, field) {
+			return castScope
+		}
+		return stepScope
+	}
+	scope := stepScope
 	if process.area != nil {
 		c.selectPlan(process.area, scope)
 	}
@@ -244,7 +269,7 @@ func (c *typeChecker) process(process *processIR, scope typeScope) {
 		if track.overTicks < 0 {
 			c.context.addDiagnostic(DiagnosticShapeInvalid, path+".over_ticks", "over_ticks must be non-negative")
 		}
-		c.expect(track.value, scope, valueType{Base: valueKindInt})
+		c.expect(track.value, castScope, valueType{Base: valueKindInt})
 	}
 	if process.motion == nil {
 		return
@@ -265,25 +290,25 @@ func (c *typeChecker) process(process *processIR, scope typeScope) {
 	}
 	switch trajectory := motion.trajectory.(type) {
 	case linearTrajectoryIR:
-		c.expect(trajectory.speed, scope, distance)
+		c.expect(trajectory.speed, numeric("trajectory", "linear", "speed"), distance)
 	case pathTrajectoryIR:
 		c.expect(trajectory.points, scope, valueType{Base: valueKindPath})
-		c.expect(trajectory.speed, scope, distance)
+		c.expect(trajectory.speed, numeric("trajectory", "path", "speed"), distance)
 	case orbitTrajectoryIR:
 		c.expect(trajectory.anchor, scope, entity)
-		c.expect(trajectory.radius, scope, distance)
-		c.expect(trajectory.angularSpeed, scope, angle)
+		c.expect(trajectory.radius, numeric("trajectory", "orbit", "radius"), distance)
+		c.expect(trajectory.angularSpeed, numeric("trajectory", "orbit", "angular_speed"), angle)
 	case parabolaTrajectoryIR:
 		c.expect(trajectory.destination, scope, position)
-		c.expect(trajectory.height, scope, distance)
+		c.expect(trajectory.height, numeric("trajectory", "parabola", "height"), distance)
 	}
 	for _, offset := range motion.offsets {
 		switch typed := offset.(type) {
 		case zigzagOffsetIR:
-			c.expect(typed.amplitude, scope, distance)
+			c.expect(typed.amplitude, numeric("offset", "zigzag", "amplitude"), distance)
 		case circularOffsetIR:
-			c.expect(typed.radius, scope, distance)
-			c.expect(typed.angularSpeed, scope, angle)
+			c.expect(typed.radius, numeric("offset", "circular", "radius"), distance)
+			c.expect(typed.angularSpeed, numeric("offset", "circular", "angular_speed"), angle)
 		}
 	}
 	if motion.carry != nil {
@@ -476,7 +501,7 @@ func (c *typeChecker) effect(effect effectIR, scope typeScope) {
 			c.context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".process", "modify_process requires the current callback $process")
 		}
 		policy, found := lookupProcessPropertyPolicy(c.context.environment.ProcessProperties, typed.property)
-		if !found || scope["#process_property:"+typed.property].Base == valueKindInvalid {
+		if !found || scope.values["#process_property:"+typed.property].Base == valueKindInvalid {
 			c.context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".property", "property is not bound to the current process Motion")
 		} else if !containsString(policy.Operations, typed.operation) {
 			c.context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".operation", "operation is not allowed by the process property policy")
@@ -642,6 +667,7 @@ func (c *typeChecker) infer(value valueIR, scope typeScope, expected *valueType)
 		typed.resolvedType = result
 	case *attributeReadValueIR:
 		c.expect(typed.entity, scope, valueType{Base: valueKindEntity})
+		c.checkCachedRead(typed, scope)
 		if attribute, found := c.attributes[typed.attribute]; found {
 			result = valueType{Base: attribute.ValueType, Quantity: attribute.Quantity}
 		} else {
@@ -679,12 +705,19 @@ func (c *typeChecker) expectStateBinding(owner, subject, teamOf valueIR, scope t
 }
 
 func (c *typeChecker) referenceType(reference *referenceValueIR, scope typeScope) valueType {
-	if typ, found := scope[reference.reference]; found {
+	if typ, found := scope.values[reference.reference]; found {
 		return typ
 	}
 	if typ, field, found := projectedReferenceType(reference.reference, scope); found {
 		reference.resultField = field
 		return typ
+	}
+	// 表里有这一行、但在这个求值上下文不可用：诊断指向表项，说明那里为什么没有。
+	if row, _, known := evalReferenceRowFor(reference.reference); known {
+		if entry := evalReferenceTable[row]; !entry.cells[scope.context].usable() {
+			c.context.addDiagnostic(DiagnosticInputUnavailable, reference.source.Path, fmt.Sprintf("reference %q is not available in evaluation context %s: %s (evaluation context table row %s)", reference.reference, scope.context, entry.cells[scope.context].semantics, entry.name))
+			return valueType{Base: valueKindInvalid}
+		}
 	}
 	code := DiagnosticReferenceUnknown
 	if strings.HasPrefix(reference.reference, "$input.") {
@@ -697,7 +730,7 @@ func (c *typeChecker) referenceType(reference *referenceValueIR, scope typeScope
 func projectedReferenceType(reference string, scope typeScope) (valueType, ResultFieldHandle, bool) {
 	rootName := ""
 	rootType := valueType{}
-	for name, root := range scope {
+	for name, root := range scope.values {
 		if strings.HasPrefix(reference, name+".") && len(name) > len(rootName) {
 			rootName = name
 			rootType = root
@@ -825,7 +858,7 @@ func (c *typeChecker) validateExpectedFailureLiteral(referenceValue, literalValu
 		return
 	}
 	root := strings.TrimSuffix(reference.reference, ".failure_reason")
-	rootType, found := scope[root]
+	rootType, found := scope.values[root]
 	if !found || rootType.Base != valueKindEffectResult {
 		return
 	}
@@ -835,4 +868,58 @@ func (c *typeChecker) validateExpectedFailureLiteral(referenceValue, literalValu
 	if reason != ExpectedFailureNone && !layout.allows(reason) {
 		c.context.addDiagnostic(DiagnosticShapeInvalid, literal.source.Path, fmt.Sprintf("failure reason %q is not valid for %s", literal.value, layout.typ))
 	}
+}
+
+// checkCachedRead 按求值上下文表检查缓存型快照读取（cast_start / phase_start / process_start）：
+// 这些读取的整个求值（包括实体）发生在采样点，之后读缓存（runtime_eval.go captureSnapshots）。
+//   - 快照点在读取所在的上下文里要可用（evalSnapshotTable）：process_start 只在进程回调里，
+//     cast_start / phase_start 不在进程回调里（RR-20261005-NC-220）；
+//   - 实体里的每个引用在采样上下文里要可用（引用表的采样列：采样点上没有局部变量，
+//     process_start 采样在进程上下文里），且不能是可缺省的——采样时没有读取处的 exists
+//     守卫，缺省即 Activate / 进 phase 失败（RR-20261005-NC-282）。
+//
+// current / each_tick / on_hit / on_event 在读取处求值，不受这两条限制。
+func (c *typeChecker) checkCachedRead(read *attributeReadValueIR, scope typeScope) {
+	point := snapshotPoint(read.snapshot)
+	captureContext, cached := snapshotCaptureContext(point)
+	if !cached {
+		return
+	}
+	if cell := evalSnapshotTable[point][scope.context]; !cell.usable() {
+		c.context.addDiagnostic(DiagnosticAttributeSnapshotInvalid, read.source.Path+".read_attribute.snapshot", fmt.Sprintf("a %s snapshot is not available in evaluation context %s: %s (evaluation context snapshot table)", point, scope.context, cell.semantics))
+		return
+	}
+	captureScope := c.scopeFor(captureContext, "")
+	reported := false
+	walkValue(read.entity, func(value valueIR) {
+		reference, ok := value.(*referenceValueIR)
+		if !ok || reported {
+			return
+		}
+		typ, found := captureScope.values[reference.reference]
+		if !found {
+			typ, _, found = projectedReferenceType(reference.reference, captureScope)
+		}
+		switch {
+		case !found:
+			reason := "it is not visible there"
+			if row, _, known := evalReferenceRowFor(reference.reference); known {
+				reason = fmt.Sprintf("%s (evaluation context table row %s)", evalReferenceTable[row].cells[captureContext].semantics, evalReferenceTable[row].name)
+			}
+			c.context.addDiagnostic(DiagnosticAttributeSnapshotInvalid, read.source.Path+".read_attribute.entity", fmt.Sprintf("a %s snapshot evaluates its entity in evaluation context %s; %s is not available there: %s; read it with snapshot current", point, captureContext, reference.reference, reason))
+			reported = true
+		case typ.Optional:
+			c.context.addDiagnostic(DiagnosticAttributeSnapshotInvalid, read.source.Path+".read_attribute.entity", fmt.Sprintf("a %s snapshot evaluates its entity in evaluation context %s, where %s may be missing and no exists guard applies; read it with snapshot current", point, captureContext, reference.reference))
+			reported = true
+		}
+	})
+}
+
+func sortedMemoryNames(values map[string]memoryDeclarationIR) []string {
+	result := make([]string, 0, len(values))
+	for name := range values {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
 }

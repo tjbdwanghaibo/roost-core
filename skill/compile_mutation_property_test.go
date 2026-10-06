@@ -76,8 +76,31 @@ func mutationSeeds(t *testing.T) []mutationSeed {
 		mutationSeed{name: "seed.local_attribute_read", data: withEnter("none", "{}", `{"flow":"sequence","steps":[{"flow":"select","select":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2},"consume":{"mode":"each","as":"t","do":{"flow":"effect","effect":{"type":"damage","target":"$local.t","amount":{"read_attribute":{"entity":"$local.t","attribute":"ability_power","snapshot":"current"}},"damage_type":"physical"}}}},{"flow":"finish"}]}`), fixture: none},
 		mutationSeed{name: "seed.process_start_read", data: withEnter("entity", "{}", `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":{"read_attribute":{"entity":"$caster","attribute":"ability_power","snapshot":"cast_start"}},"damage_type":"physical"}},{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":3},"process":{"kind":"area","duration_ticks":3,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":{"flow":"effect","effect":{"type":"damage","target":"$event.target","amount":{"read_attribute":{"entity":"$owner","attribute":"ability_power","snapshot":"process_start"}},"damage_type":"physical"}}}},{"flow":"finish"}]}`), fixture: entity},
 		mutationSeed{name: "seed.passive_entity_input", data: []byte(strings.Replace(passiveSkillJSON(1, `[]`, `[]`), `"input_schema":{"type":"none"}`, `"input_schema":{"type":"entity"}`, 1)), fixture: fixtureCase{passive: true, expectedCast: CastFinished}},
+		// N09 第六批：按求值上下文表补的种子——memory 默认值（NC-280）、在施法流程与进程回调里都
+		// 被读的状态默认值（NC-281）、投射引用（NC-283）。变异会把这些位点上的引用换成表里每一行
+		// 的引用（见 mutateDefinition 的引用候选），逐格覆盖“这个上下文能不能求这一行”。
+		mutationSeed{name: "seed.memory_default_context", data: withEnter("entity", `{"who":{"type":"entity","default":"$input.target"},"flag":{"type":"bool","default":{"op":"eq","args":["$caster","$caster"]}}}`, `{"flow":"sequence","steps":[{"flow":"if","condition":"$memory.flag","then":{"flow":"effect","effect":{"type":"damage","target":"$memory.who","amount":1,"damage_type":"physical"}}},{"flow":"finish"}]}`), fixture: entity},
+		mutationSeed{name: "seed.state_default_context", data: []byte(strings.Replace(string(withEnter("entity", "{}", `{"flow":"sequence","steps":[{"flow":"if","condition":{"op":"exists","args":[{"read_state":{"state":"who","owner":"$caster"}}]},"then":{"flow":"effect","effect":{"type":"heal","target":"$caster","amount":1}}},`+strings.Replace(area, `"leave":{"flow":"finish"}`, `"leave":{"flow":"if","condition":{"op":"exists","args":[{"read_state":{"state":"who","owner":"$owner"}}]},"then":{"flow":"effect","effect":{"type":"heal","target":"$event.target","amount":1}}}`, 1)+`,{"flow":"finish"}]}`)), `"initial_phase"`, `"persistent_state":{"who":{"type":"entity","scope":"owner","default":"$caster","lifetime":{"duration_ticks":20,"maximum_duration_ticks":40,"on_write":"refresh","clear_on":[]}}},"initial_phase"`, 1)), fixture: entity},
+		mutationSeed{name: "seed.projected_reference", data: withEnter("entity", "{}", `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"knockback","target":"$input.target","from":"$input.target.position","distance":1}},`+strings.Replace(area, `{"type":"heal","target":"$event.target","amount":1}`, `{"type":"knockback","target":"$event.target","from":"$lifecycle_entity.position","distance":1}`, 1)+`,{"flow":"finish"}]}`), fixture: entity},
 	)
 }
+
+// evalTableReferenceCandidates 是求值上下文表每一行的一个具体引用，外加实体行的位置投射，
+// 以及种子里声明过的 memory 名字（$memory.who / $memory.flag）。
+var evalTableReferenceCandidates = func() []any {
+	var result []any
+	for index, row := range evalReferenceTable {
+		fixture, found := evalRowFixtures[evalReferenceRowIndex(index)]
+		if row.name == "" || !found {
+			continue
+		}
+		result = append(result, fixture.reference)
+		if row.entity && fixture.reference != "$memory.who" {
+			result = append(result, fixture.reference+".position")
+		}
+	}
+	return append(result, "$memory.flag", "$memory.who.position")
+}()
 
 type mutationLibrary struct {
 	leaves     map[string][]any    // 键名 → 种子里出现过的叶子值
@@ -216,6 +239,10 @@ func mutateDefinition(t *testing.T, data []byte, library mutationLibrary, transp
 			set(typed)
 		case string:
 			candidates := append(append([]any(nil), library.leaves[key]...), "zz_unknown", typed+"_zz", "$memory.zz", "$local.zz", "$input.zz")
+			if strings.HasPrefix(typed, "$") {
+				// 引用位点再换成求值上下文表每一行的引用（及实体行的 .position 投射）。
+				candidates = append(candidates, evalTableReferenceCandidates...)
+			}
 			for _, value := range candidates {
 				if text, ok := value.(string); ok && text == typed {
 					continue
@@ -258,8 +285,9 @@ func runMutation(program *Program, fixture fixtureCase, environment CompileEnvir
 			err = fmt.Errorf("runtime panicked: %v", recovered)
 		}
 	}()
+	// 表外引用（ErrReferenceOutOfContext）同样说明编译器漏了位点（求值上下文表）。
 	invariant := func(stage string, candidate error) error {
-		if candidate != nil && errors.Is(candidate, ErrProgramInvariant) {
+		if candidate != nil && (errors.Is(candidate, ErrProgramInvariant) || errors.Is(candidate, ErrReferenceOutOfContext)) {
 			return fmt.Errorf("%s: %w", stage, candidate)
 		}
 		return nil

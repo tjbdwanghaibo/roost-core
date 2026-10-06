@@ -72,7 +72,12 @@ func (runtime *Runtime) evalValue(cast *castInstance, value programValue) (Runti
 	}
 }
 
+// captureSnapshots 在采样点求全部该点的快照计划：实体在采样上下文里求值（表的采样列）。
 func (runtime *Runtime) captureSnapshots(cast *castInstance, point snapshotPoint) error {
+	if context, cached := snapshotCaptureContext(point); cached {
+		previous := cast.switchEvalContext(context)
+		defer cast.switchEvalContext(previous)
+	}
 	for _, plan := range cast.program.snapshots {
 		if plan.point != point {
 			continue
@@ -100,6 +105,11 @@ func shouldCacheSnapshot(point snapshotPoint) bool {
 }
 
 func (runtime *Runtime) evalReference(cast *castInstance, reference referenceProgramValue) (RuntimeValue, error) {
+	// 先查求值上下文表（eval_contexts.go）：编译期按同一张表拒绝了表外引用，这里遇到说明
+	// 编译器漏了位点，报错点名上下文与表项，而不是落到下面的 ErrProgramInvariant 兜底。
+	if row := evalReferenceRowOf(reference); !evalContextAllows(cast.evalContext, row) {
+		return RuntimeValue{}, referenceOutOfContextError(cast.evalContext, row, referenceText(reference))
+	}
 	var value RuntimeValue
 	switch reference.kind {
 	case referenceInput:
@@ -215,6 +225,43 @@ func (runtime *Runtime) evalReference(cast *castInstance, reference referencePro
 	default:
 		return RuntimeValue{}, fmt.Errorf("%w: reference field %q", ErrProgramInvariant, reference.field)
 	}
+}
+
+// evalReferenceRowOf 返回引用在求值上下文表里的行。lower 产出的值带着行号；手写的 Program
+// 值（测试）没有，按 kind / builtin 名字现查。
+func evalReferenceRowOf(reference referenceProgramValue) evalReferenceRowIndex {
+	if reference.row != evalRowUnset {
+		return reference.row
+	}
+	switch reference.kind {
+	case referenceInput:
+		return evalRowInput
+	case referenceMemory:
+		return evalRowMemory
+	case referenceLocal:
+		return evalRowLocal
+	}
+	row, _, known := evalReferenceRowFor(reference.builtin)
+	if !known {
+		return evalRowUnknown
+	}
+	return row
+}
+
+func referenceText(reference referenceProgramValue) string {
+	text := reference.builtin
+	switch reference.kind {
+	case referenceInput:
+		text = fmt.Sprintf("$input[%d]", reference.index)
+	case referenceMemory:
+		text = fmt.Sprintf("$memory[%d]", reference.index)
+	case referenceLocal:
+		text = fmt.Sprintf("$local[%d]", reference.index)
+	}
+	if reference.field != "" {
+		text += "." + reference.field
+	}
+	return text
 }
 
 func (runtime *Runtime) readEntityPosition(cast *castInstance, entity EntityID) (RuntimeValue, error) {

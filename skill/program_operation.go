@@ -36,6 +36,9 @@ type referenceProgramValue struct {
 	field       string
 	resultField ResultFieldHandle
 	typ         valueType
+	// row 是求值上下文表的行（eval_contexts.go），lower 时由引用文本算出，Runtime 按它查表。
+	// 由 kind / builtin 决定，不单独进 gameplay digest。
+	row evalReferenceRowIndex
 }
 
 type expressionProgramValue struct {

@@ -1,5 +1,16 @@
 # Roost Review 跨轮进度
 
+## 2026-10-06 N09 skill 第六批（维护者第五轮决定：求值上下文表；ability / input / state / tags / optional 逐分支；account 换名释放）
+
+基线 `0aeb5ab6`，分支 `revn09f`，NC 段 280～289（用 280～283）；图谱 generation 2026-09-30 落后，全部以当前源码与探针补证。[本轮/矩阵](REVIEW-2026-10-06-n09-batch6.md) · [表方案](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。NC-280～283（P2）已修复、声明场景验证，未发版。
+
+| 方向 | 本批 | 状态 / 下一入口 |
+| --- | --- | --- |
+| 决定 1：求值上下文表 | `eval_contexts.go`（8 上下文 × 24 行 + 缓存型快照表）；类型检查作用域由表生成、Runtime 查表；收拢 NC-220 / NC-224 / owned entity 的引用检查；守卫 192 格；性质测试按表补 3 种子与引用候选 | 已实施；~ 格子（O33）是否收紧待维护者 |
+| 决定 2：编译器剩余 pass | D1～D7：input、state、memory 声明、ability、tags、optional、typecheck 投射对照 Runtime | NC-280、281、282、283；O34～O37 |
+| 决定 3：account 换名释放 | 判定表 `unadmitted other` 行 res-else 格 limit → retry | 已实施（单独提交）；free 格待维护者（O37） |
+
+4 个缺陷 14 个修前红子用例 → 修后绿，3 条控制修前修后都绿；45 个既有种子 digest 修前修后相同；skill 5 包 race×3、`SKILL_MUTATION_FULL=1`（63900 / 23123）、根包、全仓 build / vet 通过。
 ## 2026-10-06 N11～N13 留项与两个小防护（revleft）
 
 基线 `dc877c04`，分支 `revleft`，NC 段 260～279（用 260～270）；图谱 generation 2026-09-30，多数引用文件 metadata_changed、`.tmpl` 不在图里，全部按当前源码与 `rg` 补证。[本轮](REVIEW-2026-10-06-revleft.md) · [证据](../bugfix/evidence/noncore-bugfix-20261006-revleft/README.md)。NC-260～270（P3，NC-270 潜伏）已修复、声明场景验证，未发版。

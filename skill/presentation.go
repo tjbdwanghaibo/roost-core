@@ -176,7 +176,7 @@ func (runtime *Runtime) emitProcessPresentation(cast *castInstance, process *Pro
 		return
 	}
 	if cast == nil {
-		cast = runtime.detachedProcessCast(process)
+		cast = runtime.detachedProcessCast(process, evalProcessCallback)
 	}
 	position, direction := process.Motion.Position, process.Motion.Direction
 	runtime.appendPresentation(cast, PresentationEvent{

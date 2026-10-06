@@ -813,23 +813,33 @@ func (c *loweringContext) lowerStateBinding(owner, subject, teamOf valueIR, scop
 
 func (c *loweringContext) lowerReference(reference *referenceValueIR, scope lowerScope) programValue {
 	if name, field, found := resolveIndexedReference(reference.reference, "$memory.", memoryIndexMap(c.memory)); found {
-		return referenceProgramValue{kind: referenceMemory, index: name, field: field, typ: reference.resolvedType}
+		return referenceProgramValue{kind: referenceMemory, index: name, field: field, typ: reference.resolvedType, row: evalRowMemory}
 	}
 	if name, field, found := resolveIndexedReference(reference.reference, "$local.", localIndexMap(scope)); found {
-		return referenceProgramValue{kind: referenceLocal, index: name, field: field, resultField: reference.resultField, typ: reference.resolvedType}
+		return referenceProgramValue{kind: referenceLocal, index: name, field: field, resultField: reference.resultField, typ: reference.resolvedType, row: evalRowLocal}
 	}
-	if index, found := c.input[reference.reference]; found {
-		return referenceProgramValue{kind: referenceInput, index: index, typ: reference.resolvedType}
+	// 输入槽位可带投射（`$input.target.position`）：类型检查按根投射，此前 lower 只按全名查，
+	// B3 之后报 LOWER_UNRESOLVED（RR-20261005-NC-283）。
+	if index, field, found := resolveIndexedReference(reference.reference, "$input.", inputIndexMap(c.input)); found {
+		return referenceProgramValue{kind: referenceInput, index: index, field: field, typ: reference.resolvedType, row: evalRowInput}
 	}
 	// $memory / $local / $input 前缀的引用查不到不是 builtin：之前退成同名 builtin，运行期才以
 	// ErrProgramInvariant 失败（B3 ①）。
 	for _, prefix := range []string{"$memory.", "$local.", "$input."} {
 		if strings.HasPrefix(reference.reference, prefix) {
 			c.unresolved("reference", reference.reference)
-			return referenceProgramValue{kind: referenceBuiltin, builtin: reference.reference, typ: reference.resolvedType}
+			return referenceProgramValue{kind: referenceBuiltin, builtin: reference.reference, typ: reference.resolvedType, row: evalRowUnknown}
 		}
 	}
-	return referenceProgramValue{kind: referenceBuiltin, builtin: reference.reference, typ: reference.resolvedType}
+	// builtin 按求值上下文表的行 lower：精确名字照旧；投射（`$primary_target.position`、
+	// `$event.target.position`、`$lifecycle_entity.position`）拆成根 + field，由 evalReference
+	// 的 field 分支取位置。此前整串当 builtin 名字，Runtime 没有这个分支，每次求值
+	// ErrProgramInvariant（RR-20261005-NC-283）。
+	row, field, known := evalReferenceRowFor(reference.reference)
+	if !known {
+		return referenceProgramValue{kind: referenceBuiltin, builtin: reference.reference, typ: reference.resolvedType, row: evalRowUnknown}
+	}
+	return referenceProgramValue{kind: referenceBuiltin, builtin: evalReferenceTable[row].name, field: field, typ: reference.resolvedType, row: row}
 }
 
 func resolveIndexedReference(reference, prefix string, indexes map[string]uint16) (uint16, string, bool) {
@@ -857,6 +867,14 @@ func memoryIndexMap(values map[string]MemoryIndex) map[string]uint16 {
 	result := make(map[string]uint16, len(values))
 	for name, index := range values {
 		result[name] = uint16(index)
+	}
+	return result
+}
+
+func inputIndexMap(values map[string]uint16) map[string]uint16 {
+	result := make(map[string]uint16, len(values))
+	for name, index := range values {
+		result[strings.TrimPrefix(name, "$input.")] = index
 	}
 	return result
 }

@@ -141,7 +141,7 @@ func TestModifyProcessIsCallbackScopedAndDoesNotEmitWorldEffect(t *testing.T) {
 			Owner: 1, LifecycleEntity: 2, HostState: ProcessHostState{ProcessID: 7, Active: true},
 			Motion: MotionState{Direction: Direction{X: normalizedDirectionScale}}, locals: detachedProcessLocals(program), snapshots: make(map[int]RuntimeValue), randomInvocations: make(map[RandomSiteIndex]uint64),
 		}
-		if _, err := runtime.stepProcessMotion(runtime.detachedProcessCast(process), process); err != nil {
+		if _, err := runtime.stepProcessMotion(runtime.detachedProcessCast(process, evalProcessStep), process); err != nil {
 			t.Fatal(err)
 		}
 		return runtime, host, program, process, modifyIndex
@@ -150,7 +150,7 @@ func TestModifyProcessIsCallbackScopedAndDoesNotEmitWorldEffect(t *testing.T) {
 		operation := program.operations[index].(modifyProcessOperation)
 		operation.process = value
 		program.operations[index] = operation
-		callbackCast := runtime.detachedProcessCast(process)
+		callbackCast := runtime.detachedProcessCast(process, evalProcessCallback)
 		callbackCast.id = castID
 		_, err := runtime.executeOperation(callbackCast, index)
 		return err
@@ -173,7 +173,7 @@ func TestModifyProcessIsCallbackScopedAndDoesNotEmitWorldEffect(t *testing.T) {
 			t.Fatalf("replacement track = %#v, want 10 -> 20 over 2 ticks", state)
 		}
 		runtime.currentTick = 1
-		if _, err := runtime.stepProcessMotion(runtime.detachedProcessCast(process), process); err != nil {
+		if _, err := runtime.stepProcessMotion(runtime.detachedProcessCast(process, evalProcessStep), process); err != nil {
 			t.Fatal(err)
 		}
 		if got := host.snapshots[len(host.snapshots)-1].Speed; got != 15 {
