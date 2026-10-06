@@ -230,3 +230,7 @@ GOWORK=off go test -tags integration -run '^$' -bench 'BenchmarkRealMongoCommitW
 - 没有改 nest / entity / dataengine / sync，所以没有跑 glsvet；没有改生成形状，所以没有跑 codegen 和 game-demo。
 
 **未完成**：64 个以上协程的吞吐没有测；选项 C 只做了推断，没有实测；生产形态（Linux、跨主机副本集）下的提交耗时没有测，文中的 1～5 ms 是推断。
+
+## 维护者决定（2026-10-06）
+
+选 **A：接受现状**。原话：“按照A，目前真正走saga的实际业务场景不多，55tps足够了”。每次尝试两次落盘提交、契约不放松；B / C 不实施。影响面只在 saga 的 Mongo 步骤（`MongoCommandInbox`），原生步骤、普通 DAO / Entity 写入与 remote entity 不经过这条路径。对延迟敏感的流程可改用原生步骤或不走 saga。
