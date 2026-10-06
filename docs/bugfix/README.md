@@ -6,6 +6,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 B3 ③ Host 取值能力表（`b3cap`），未发版。** 编译器按环境的 Host 能力表拒绝、Runtime 按 Host 声明的表准入、Host 对表外取值报错，[方案](../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-37](RR-20261006-37.md) | `EnabledSlots` / `HostFeatures` 并入能力表的 `motion_step` 列，运动衍生物固定需要 frame / steering / offsets / completion（与 Runtime 发出的步骤一一对应） | 已修复、声明场景验证，未发版 |
+
 **10-07 A3 ② 排空下沉到传输层（`a3d`），未发版。** 订阅方停止只等传输层的 `Subscription.Unsubscribe(ctx)`，[方案](../feature/A3-2-SYNCBUS-DRAINING-UNSUBSCRIBE-2026-10-07.md)。
 
 | 编号 | 修复 | 状态 |
