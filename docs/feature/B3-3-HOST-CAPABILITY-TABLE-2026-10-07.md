@@ -186,8 +186,8 @@ HostAdapter：
 - fuzz：`FuzzParseGeneratedNeverPanics`、`FuzzRestoreRuntimeCheckpointNeverPanics` 各 25s 通过。
 - `skill/examples` 三个示例 `go run` 退出 0；`skill/integration/sync-e2e` `go test` 通过。
 - 根包 `go test -count=1 .`（含 `TestExamplesRun`）通过；`go build ./... && go vet ./...` 通过；`go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync` rc=0。
-- `go test -count=1 ./codegen/...` 与 game-demo 生成 + build / vet / test：见提交说明与交接报告。
+- `go test -count=1 ./codegen/...` 通过（15 个包）；`roost project new ... -template game-demo` 生成工程（replace 到本 worktree，`go mod tidy`）`go build ./... && go vet ./... && go test ./...` 通过。生成形状未变，未跑 `go generate` porcelain 检查。
 
 ## 11. 实施状态
 
-已实施（提交号见 DECISIONS-PENDING 第十三轮“原下个大版本项”行与 B3 行）。未做：Host 数值字段（`spawn_numeric_field`）只能核对 `StepSpawn` 接受该字段，Host 是否真的使用它无法从接口上观察，声明即承诺；非 minion 的衍生物 kind 同理（`StepSpawn` 不带 kind），只核对基本步骤。
+已实施（`cd8ed341`，未发版；登记 `13f032a3`）。未做：Host 数值字段（`spawn_numeric_field`）只能核对 `StepSpawn` 接受该字段，Host 是否真的使用它无法从接口上观察，声明即承诺；非 minion 的衍生物 kind 同理（`StepSpawn` 不带 kind），只核对基本步骤。
