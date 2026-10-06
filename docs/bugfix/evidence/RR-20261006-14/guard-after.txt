@@ -1,0 +1,26 @@
+# 修后：同一份 helper 绕过与另外六种写法临时放进 saga 包（随后删除），GOWORK=off go test -count=1 -run TestEveryCoordinatorWriteGoesThroughStepTransition ./saga/
+# A. 修前的 helper 绕过原样放进修后的代码
+# github.com/tjbdwanghaibo/roost-core/saga [github.com/tjbdwanghaibo/roost-core/saga.test]
+saga/zz_helper_bypass.go:13:49: undefined: stepTransition
+FAIL	github.com/tjbdwanghaibo/roost-core/saga [build failed]
+FAIL
+
+# B. 修后仍能编译的绕过：helper 改写参数、零值变量 + store 别名、泛型零值、方法值、类型转换、指针 helper
+--- FAIL: TestEveryCoordinatorWriteGoesThroughStepTransition (0.23s)
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:7:2: ApplyRequest modified in applyKeepingOperationOpen
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:8:12: Store.Apply used outside stepTransition in applyKeepingOperationOpen
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:13:49: ApplyRequest value produced outside stepTransition in helperBypassExit
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:17:6: ApplyRequest variable declared outside stepTransition in aliasedStoreExit
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:18:2: ApplyRequest modified in aliasedStoreExit
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:18:2: ApplyRequest value produced outside stepTransition in aliasedStoreExit
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:19:2: ApplyRequest modified in aliasedStoreExit
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:19:2: ApplyRequest value produced outside stepTransition in aliasedStoreExit
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:21:12: Store.Apply used outside stepTransition in aliasedStoreExit
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:21:29: ApplyRequest value produced outside stepTransition in aliasedStoreExit
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:27:42: ApplyRequest modified in clearClose
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:39:11: Store.Apply used outside stepTransition in launderedExit
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:40:23: ApplyRequest value produced outside stepTransition in launderedExit
+    step_transition_guard_test.go:41: saga/zz_helper_bypass.go:44:22: ApplyRequest value produced outside stepTransition in launderedExit
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/saga	0.750s
+FAIL

@@ -3,6 +3,14 @@
 **来由**：维护者第十二轮决定，原话是“mongo 的延迟可以分析下”（[DECISIONS-PENDING](../review/DECISIONS-PENDING-2026-10-05.md) 末表“Mongo 步骤延迟”）。
 saga 方向 ②（`9669d181`，[方案与实施](SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)）把 Mongo 步骤纳入操作实例收件箱后，
 `MongoCommandInbox.Handle` 从一个事务变成两个：Reserve 事务和执行事务。实施时在真实副本集上测过单协程延迟，从 9.0 ms/op 涨到 17.4 ms/op。
+**两组数字来自两轮测量，不要混用**（2026-10-06 补注）：
+
+| 数字 | 哪一轮 | 基准与口径 | 对照的提交 | 证据 |
+| --- | --- | --- | --- | --- |
+| 9.0 → 17.4 ms/op | ② 实施时（[方案](SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)“性能”） | `BenchmarkRealMongoCommandInboxHandle`，`-benchtime 500x`，base / after 交替各 6 轮，6 轮的算术平均 | base `a5e7b070`（未改 Mongo 收件箱），after = sagadir 分支 | [sagadir/bench.txt](evidence/sagadir/bench.txt) |
+| 8.965 → 18.321 ms/op（下文约作 9.0 → 18.3） | 本文的分析 | `BenchmarkRealMongoStepLatencyBreakdown`，`-benchtime 1000x`，同机交替 6 轮、每轮一个进程，benchstat 中位数（±3% / ±12%） | base `9669d181^`（`a95cf4dc`），after `78e26853` | [mongolat/throughput-benchstat.txt](evidence/mongolat/throughput-benchstat.txt) |
+
+两轮的基准函数（后者多一层计时装饰器）、迭代次数、统计量与 after 提交都不同，机器负载也不同（本轮 load average 3.6～6.7），修后差 0.9 ms 在两轮各自的离散范围内（17.4 的 6 轮在 16.1～18.7，18.321 为 ±12%）。结论“延迟约翻倍”两轮一致。
 **基线**：分支 `mongolat`，起点 `origin/main` `78e26853`；修前 = `9669d181^`（`a95cf4dc`）。代码图谱共享 generation 停在 09-30，`saga/command_consumer.go`、
 `saga/dataengine_step_inbox.go` 为 `metadata_changed`，`saga/step_operation_inbox.go` 未入索引，本文以当前源码为准。
 
@@ -10,7 +18,7 @@ saga 方向 ②（`9669d181`，[方案与实施](SAGA-DIRECTION-STEP-TRANSITION-
 
 1. **延迟几乎全花在多出的那一次持久提交上。** 修后每次尝试有 2 个事务，各有 1 次 `w:majority, j:true` 提交。数据命令从 4 条增加到 8 条，每条在客户端只要 0.1～0.3 ms，在服务端不到 0.6 ms。
    提交在服务端约 8.4 ms，其中约 8 ms 花在等写关注（`waitForWriteConcernDurationMillis`），而这段等待主要是日志刷盘：在本机上，`w:1, j:false` 提交只要 0.11 ms，`w:1, j:true` 就要 7～8 ms。
-   修前每次 9.0 ms，其中提交 8.1 ms；修后 18.3 ms，其中提交 15.9 ms、数据命令 2.2 ms。
+   修前每次 9.0 ms，其中提交 8.1 ms；修后 18.3 ms，其中提交 15.9 ms、数据命令 2.2 ms（本轮测量，benchstat 中位数 8.965 / 18.321 ms，见开头的口径表）。
 2. **吞吐同样减半，因为瓶颈是每秒能做多少次提交。** 1、8、32 个协程时，修后的 ops/s 分别是修前的 49%、50%、57%。
    折算成每秒提交数，修前和修后在 8 协程时都是约 600 次/s，32 协程时是 1.8k 对 2.0k 次/s。副本集每秒能做的提交数没有变，修后每次尝试要用两次。
 3. **在不放松契约、不改回归断言的前提下，没有找到能减少提交次数的做法。** 契约要求同时满足两条：在途尝试租约有效时别人要等（第 2 条）；截止过后，即使旧尝试的事务还开着，下一次尝试也能接替它执行（第 3 条）。

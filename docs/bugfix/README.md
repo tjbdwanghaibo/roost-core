@@ -6,6 +6,13 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 saga / 驱动疑点闭环（fixs），未发版。** RR-20261006-14：`stepTransition` 改为 Engine 方法、自己调 `Store.Apply`，守卫改为 `go/types` 全包检查（产生 / 改写请求、调用 Apply 都只能在 stepTransition 里）；RR-20261006-15：claim 记 `outcome`，按操作只取有影响的 claim，上限与尝试次数、Resume 次数脱钩。同批 `TestOnlyScriptCommandsOptOutOfTheDriverRetry` 改名 `TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`；Mongo 步骤延迟的 9.0→17.4 与 8.965→18.321 两组数字标明各自的测量轮次。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-15](RR-20261006-15.md) | 步骤收件箱 claim 写 `outcome`；Reserve / operationSuccess 只取 pending、成功、本生拒绝与旧 claim，结果集有界 | 已修复、声明场景验证，未发版 |
+| [RR-20261006-14](RR-20261006-14.md) | stepTransition 自己调 Store.Apply、重写代际；守卫改为全包类型检查，负对照不留仓库 | 已修复、声明场景验证，未发版 |
+
 **10-06 W-2026-10-06-01 转 RR 与 glsvet A1 跟进（fixn）：RR-20261006-12、-13 已修复、声明场景验证，未发版。** 派发取锁只用 Guard 作用域里的 Guard、没有作用域时取锁前报错，删掉归还 Guard 的分支；glsvet A1 提示跟进一层同包 helper。
 
 | 编号 | 修复 | 状态 |

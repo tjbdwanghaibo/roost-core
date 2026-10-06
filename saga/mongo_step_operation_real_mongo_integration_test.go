@@ -45,3 +45,14 @@ func realSagadirMongo(t *testing.T) (*driver.Client, string) {
 func TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce(t *testing.T) {
 	runMongoStepOperationCases(t, func(t *testing.T) (fmongo.IMongo, string) { return realSagadirMongo(t) })
 }
+
+// RR-20261006-15：跨 Resume 累积的尝试不挡新一生；有影响的 claim 的查询在真实服务端上的匹配（第 0 代 incarnation 的两种写法）。
+func TestRealMongoOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife(t *testing.T) {
+	client, database := realSagadirMongo(t)
+	runAccumulatedAttemptsCase(t, client, database)
+}
+
+func TestRealMongoOperationClaimsFilterSelectsOnlyDecisiveClaims(t *testing.T) {
+	client, database := realSagadirMongo(t)
+	runOperationClaimsFilterCase(t, client.Database(database).Collection("claims"))
+}

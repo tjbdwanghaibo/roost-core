@@ -1,0 +1,14 @@
+# 修前（基线 b549e4df，saga/step_operation_inbox.go 未改）。
+
+## 1. 全量真实路径（初版用例：五生 × 820 次可重试失败全部经 MongoCommandInbox.Handle，mongotest，用时约 54s，未提交）
+--- FAIL: TestOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife (54.38s)
+    step_operation_attempt_cap_promises_test.go:48: life 4 attempt 818: {CommandID: IdempotencyKey: SagaID: Success:false Retryable:false Data:[] Error: CompletedAt:0001-01-01 00:00:00 +0000 UTC} duplicate=false err=saga: optimistic concurrency conflict: operation gift-1:1:0 has more than 4096 attempts, want a retryable failure of its own
+
+## 2. 提交的用例（每生 3 次真实 Handle + 复制真实写下的 claim 到 820 份），mongotest 与私有三节点副本集
+--- FAIL: TestRealMongoOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife (0.80s)
+    step_operation_attempt_cap_promises_test.go:97: after 4100 attempts over 5 lives, the first attempt of the next life gift-1:1:0:r5:1: {CommandID: IdempotencyKey: SagaID: Success:false Retryable:false Data:[] Error: CompletedAt:0001-01-01 00:00:00 +0000 UTC} duplicate=false err=saga: optimistic concurrency conflict: operation gift-1:1:0 has more than 4096 attempts, want it to execute: earlier lives' failures must not make the step unexecutable
+--- FAIL: TestOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife (1.14s)
+    step_operation_attempt_cap_promises_test.go:97: after 4100 attempts over 5 lives, the first attempt of the next life gift-1:1:0:r5:1: {CommandID: IdempotencyKey: SagaID: Success:false Retryable:false Data:[] Error: CompletedAt:0001-01-01 00:00:00 +0000 UTC} duplicate=false err=saga: optimistic concurrency conflict: operation gift-1:1:0 has more than 4096 attempts, want it to execute: earlier lives' failures must not make the step unexecutable
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/saga	2.546s
+FAIL

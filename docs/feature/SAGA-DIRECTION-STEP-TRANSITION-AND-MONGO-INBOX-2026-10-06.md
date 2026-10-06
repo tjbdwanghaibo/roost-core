@@ -61,6 +61,12 @@ U-0280（`054fdd66`）→ 复核两处（`23b97942`、`877bb66c`）→ B1（`3fa
 新增出口若手拼请求，测试报出文件与行号。选测试而不是 glsvet：规则只针对一个包、一个函数，放在包内最近处；glsvet 是跨包的执行契约检查。
 （发版前复审补强：原守卫看不到不写字面量的两种绕过——改 `stepTransition` 返回的请求字段（如 `request.CloseOperation = ""`）、`var request ApplyRequest` 逐字段拼请求再经 `store := e.store` 的别名写入。现在这两种以及 `new(ApplyRequest)`、对结果取地址都报出，负对照固定在 `saga/testdata/stepguard`，由 `TestStepTransitionGuardSeesBypassesWithoutALiteral` 每次运行。）
 
+（RR-20261006-14 改成结构性约束，上面两段描述的语法守卫与 `saga/testdata/stepguard` 已删除：语法守卫只看 `Engine` 方法，包级 helper 收到
+`stepTransition` 的结果、清空 `CloseOperation` 后自己调 `Store.Apply`，守卫照样通过。现在 `stepTransition` 是 `Engine` 方法，自己调 `e.store.Apply`、
+只返回写入的记录，出口手里没有可改写的请求；`after.Incarnation` 由它按 before 与原因重写，出口写的值不起作用。守卫改用 `go/types` 检查全包非测试代码：
+ApplyRequest 的值只能在 `stepTransition` 里产生，别处只能读收到的参数（Store 实现）；任何地方都不能改写请求；Store 的 `Apply` 只在 `stepTransition` 里出现。
+按维护者要求负对照不留在仓库，验证方法与输出见 [RR-20261006-14 修复记录](../bugfix/RR-20261006-14.md)。）
+
 ## ② Mongo 步骤纳入操作实例收件箱
 
 ### 现状与问题
@@ -194,7 +200,7 @@ handler 事务失败（handler 错误、取消、fence）后交还租约（`leas
 | 环境 | 修前 | 修后 | 说明 |
 | --- | --- | --- | --- |
 | mongotest（2000 次 × 5） | 0.44 ms/op，8.2k allocs | 3.6 ms/op，63k allocs | 替身按集合快照、按操作查询是扫描，集合越大越慢，只作同口径对照 |
-| 真实三节点副本集（500 次 × 6，交替） | 9.0 ms/op（8.8～9.2） | 17.4 ms/op（16.1～18.7） | 每次多一次事务提交（Reserve 事务），延迟约翻倍；吞吐随并发步骤扩展，未做并发压测 |
+| 真实三节点副本集（500 次 × 6，交替） | 9.0 ms/op（8.8～9.2） | 17.4 ms/op（16.1～18.7） | 每次多一次事务提交（Reserve 事务），延迟约翻倍；吞吐随并发步骤扩展，未做并发压测。本行是本次实施那一轮：`BenchmarkRealMongoCommandInboxHandle`，6 轮算术平均，base `a5e7b070`；后来的延迟分析另测一轮（`BenchmarkRealMongoStepLatencyBreakdown`，1000x × 6，benchstat 中位数，base `a95cf4dc` / after `78e26853`）得到 8.965 → 18.321 ms/op，两轮口径对照见[延迟分析](SAGA-MONGO-STEP-LATENCY-2026-10-06.md)开头 |
 
 延迟代价来自多出的一次事务提交（多数派写），而不是守卫 upsert 与查询本身。（后续分析：时间分解、1 / 8 / 32 协程吞吐对照（吞吐同样约减半，受每秒提交数限制）与各优化候选见 [SAGA-MONGO-STEP-LATENCY-2026-10-06.md](SAGA-MONGO-STEP-LATENCY-2026-10-06.md)。）没有把 Reserve 与执行合成一个事务：那样“在途尝试”在别人看来不可见，
 只能靠写冲突重试等待，无法接替，被杀进程遗留的事务还会连守卫一起锁住（见“实现”一节）。

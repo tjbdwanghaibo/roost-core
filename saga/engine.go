@@ -340,8 +340,7 @@ func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, err
 			after.Status = StatusPending
 		}
 		// 新一生（Incarnation+1）由 stepTransition 开：之后的 CommandID 与 Resume 之前的所有回执不相交。
-		request := stepTransition(record, after, transition{cause: causeResume})
-		_, err = e.store.Apply(ctx, request)
+		written, _, err := e.stepTransition(ctx, record, after, transition{cause: causeResume})
 		if errors.Is(err, ErrConflict) {
 			e.conflicts.Add(1)
 			continue
@@ -350,7 +349,7 @@ func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, err
 			return Record{}, err
 		}
 		e.signal(e.dueKick)
-		return request.After, nil
+		return written, nil
 	}
 	return Record{}, ErrConflict
 }
@@ -378,8 +377,7 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 			return Record{}, fmt.Errorf("saga: no completed steps to compensate")
 		}
 		// 当前步骤正在重试退避时人工补偿放弃了它；补偿方向停下的记录进入新一生（B1）。两者都由 stepTransition 决定。
-		request := stepTransition(record, e.beginCompensation(record, reason, now), transition{cause: causeManualCompensate})
-		_, err = e.store.Apply(ctx, request)
+		written, _, err := e.stepTransition(ctx, record, e.beginCompensation(record, reason, now), transition{cause: causeManualCompensate})
 		if errors.Is(err, ErrConflict) {
 			e.conflicts.Add(1)
 			continue
@@ -388,7 +386,7 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 			return Record{}, err
 		}
 		e.signal(e.dueKick)
-		return request.After, nil
+		return written, nil
 	}
 	return Record{}, ErrConflict
 }
@@ -437,7 +435,7 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 			return Record{}, fmt.Errorf("%w: %s", ErrDefinitionMissing, record.Type)
 		}
 		after := e.applyCompletion(record, definition, completion)
-		outcome, err := e.store.Apply(ctx, stepTransition(record, after, transition{cause: causeResult, receipt: &completion}))
+		_, outcome, err := e.stepTransition(ctx, record, after, transition{cause: causeResult, receipt: &completion})
 		if errors.Is(err, ErrConflict) {
 			e.conflicts.Add(1)
 			continue
@@ -707,7 +705,7 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 		after.OperationKey = ""
 		clearLease(&after)
 		// RR-20261005-NC-250：在等结果或正在重试退避的操作都被放弃（stepTransition 关闭它）。
-		_, err := e.store.Apply(ctx, stepTransition(record, after, transition{cause: causeDefinitionMissing, fenced: true}))
+		_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeDefinitionMissing, fenced: true})
 		if err == nil {
 			e.countTerminal(after.Status)
 		}
@@ -715,7 +713,7 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 	}
 	if !record.DeadlineAt.IsZero() && !now.Before(record.DeadlineAt) && record.Phase == PhaseForward {
 		after := e.beginCompensation(record, "saga deadline exceeded", now)
-		_, err := e.store.Apply(ctx, stepTransition(record, after, transition{cause: causeDeadline, fenced: true}))
+		_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeDeadline, fenced: true})
 		if err == nil {
 			e.countTerminal(after.Status)
 			e.signal(e.dueKick)
@@ -724,7 +722,7 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 	}
 	if record.Status == StatusWaiting {
 		after := e.retryOrCompensate(record, definition, "step result timeout", now)
-		_, err := e.store.Apply(ctx, stepTransition(record, after, transition{cause: causeTimeout, fenced: true}))
+		_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeTimeout, fenced: true})
 		if err == nil {
 			e.countTerminal(after.Status)
 			e.signal(e.dueKick)
@@ -739,7 +737,7 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 		after.Version++
 		after.UpdatedAt = now
 		clearLease(&after)
-		_, err := e.store.Apply(ctx, stepTransition(record, after, transition{cause: causeInvalidStep, fenced: true}))
+		_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeInvalidStep, fenced: true})
 		if err == nil {
 			e.failed.Add(1)
 			e.manualRequired.Add(1)
@@ -764,7 +762,7 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 	}
 	command := Command{ID: after.CommandID, IdempotencyKey: after.OperationKey, SagaID: record.ID, SagaType: record.Type, DefinitionVersion: record.DefinitionVersion, BusinessKey: record.BusinessKey, Step: record.Step, StepName: step.Name, Phase: record.Phase, Attempt: after.Attempt, Topic: topic, Payload: append([]byte(nil), record.Data...), DeadlineAt: after.NextRunAt, CreatedAt: now}
 	outbox := &OutboxRecord{Command: command, NextAttemptAt: now, CreatedAt: now}
-	_, err := e.store.Apply(ctx, stepTransition(record, after, transition{cause: causeDispatch, fenced: true, outbox: outbox}))
+	_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeDispatch, fenced: true, outbox: outbox})
 	if err == nil {
 		e.dispatched.Add(1)
 		e.signal(e.outboxKick)

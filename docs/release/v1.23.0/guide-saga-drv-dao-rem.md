@@ -553,7 +553,7 @@ definition_fence_abandon_promises_test.go:102: a step that took effect after the
 
 **结论**：Mongo 步骤纳入收件箱后单次尝试延迟约翻倍、吞吐约减半，代价几乎全部来自多出的一次 `w:majority, j:true` 落盘提交；不放松契约就没有安全的优化。维护者选 A：接受现状。
 
-**背景**：[SAGA-9](#saga-9) 实施时在真实副本集上测得单协程 9.0 → 17.4 ms/op，维护者第十二轮要求分析（[DECISIONS-PENDING](../../review/DECISIONS-PENDING-2026-10-05.md) 第十二轮开头，原样）：
+**背景**：[SAGA-9](#saga-9) 实施时在真实副本集上测得单协程 9.0 → 17.4 ms/op（那一轮 6 次均值；下表 8.965 → 18.321 是延迟分析另测的一轮，benchstat 中位数，口径见[分析](../../feature/SAGA-MONGO-STEP-LATENCY-2026-10-06.md)开头），维护者第十二轮要求分析（[DECISIONS-PENDING](../../review/DECISIONS-PENDING-2026-10-05.md) 第十二轮开头，原样）：
 
 > B 类的都按照推荐即可，mongo 的延迟可以分析下
 

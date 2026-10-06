@@ -217,7 +217,11 @@ fence 到 `ManualRequired`（放弃关闭，第 4 条），之后的重投按迟
 - `LeaseDuration` 现在只是上限，实际租约不超过命令截止；`LeaseDuration > AckWait` 的校验保留。
 - 依赖协调器、步骤进程与投影进程的时钟偏差远小于 `Timeout`。
 - 每次新建 / 接管 claim 多一次守卫 upsert 与一次按 `operation_key` 的索引查询（新索引 `by_operation`）。
-- **持久格式增量**：claim 多 `operation_key`、`incarnation`、`superseded_by` 字段与 `superseded` 状态，claims 集合多守卫文档（`namespace=saga-step-op`）；
+- **按操作查询只取有影响的 claim**（RR-20261006-15）：pending、任何一生的成功、本生的拒绝，以及没有 `outcome` 的旧 claim；可重试失败、被接替的尝试、
+  旧一生的拒绝不取。它们随尝试与 Resume 累积（每生最多 1000 次尝试、Resume 不限次数、claim 保留 `receiptTTL`），此前全部计数、超过 4096 就让这一步每次
+  Reserve 都报 `ErrConflict`，几次 Resume 之后修好原因也执行不了。现在有影响的 claim 是与尝试次数、Resume 次数无关的小常数，4096 只在数据异常时触发。
+  claim 标记 completed 时多写 `outcome`（`success` / `refused` / `retryable`）；升级前与混跑中旧进程写的 claim 没有它，按“可能有影响”读取，混跑期间行为与升级前相同。
+- **持久格式增量**：claim 多 `operation_key`、`incarnation`、`superseded_by`、`outcome`（RR-20261006-15）字段与 `superseded` 状态，claims 集合多守卫文档（`namespace=saga-step-op`）；
   tombstone（`_saga_operations`）多 `closure` 字段，B1 再多 `late_alarms` 子文档（`r<代际>: 首次告警时间`）。旧数据缺字段：旧 claim 不参与跨尝试判断，
   没有 `closure` 的 tombstone 不告警，没有 `late_alarms` 的 tombstone 第一次迟到成功照常告警并补上标记。
 - **混跑**：契约只在所有步骤进程与协调器都升级后成立。旧进程写的 claim 没有 `operation_key`、租约不封顶；旧协调器不写 `closure`；

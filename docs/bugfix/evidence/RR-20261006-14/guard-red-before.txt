@@ -1,0 +1,9 @@
+# 修前（基线 b549e4df）：在 saga 包里临时加 zz_helper_bypass.go（包级 helper 清空 stepTransition 结果的 CloseOperation 后自己调 store.Apply，
+# Engine 方法把 stepTransition(...) 传给它），跑原守卫：两个用例都通过，即守卫看不到这种绕过。文件随后删除，不在仓库里。
+# GOWORK=off go test -count=1 -run 'TestEveryCoordinatorWriteGoesThroughStepTransition|TestStepTransitionGuardSeesBypassesWithoutALiteral' -v ./saga/
+=== RUN   TestEveryCoordinatorWriteGoesThroughStepTransition
+--- PASS: TestEveryCoordinatorWriteGoesThroughStepTransition (0.00s)
+=== RUN   TestStepTransitionGuardSeesBypassesWithoutALiteral
+--- PASS: TestStepTransitionGuardSeesBypassesWithoutALiteral (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/saga	1.295s

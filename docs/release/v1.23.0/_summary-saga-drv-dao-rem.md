@@ -124,7 +124,7 @@
 | `TestDefinitionFenceDuringBackoffAbandonsTheOperation` | `saga/definition_fence_abandon_promises_test.go` | 定义缺失出口放弃关闭 | SAGA-7 |
 | `TestCoordinatorLeaseTakeoverFencesTheLateApply`、`TestOutboxSupersedeAndUnknownAckOnMongoStore` | `saga/coordinator_takeover_review_test.go` | N06 S5 审查用例（租约接管晚 Apply、outbox 替换与未知 ack） | SAGA-7 |
 | `TestEveryCoordinatorWriteGoesThroughStepTransition` | `saga/step_transition_guard_test.go` | 协调器写记录只经 `stepTransition`（源码 AST 守卫） | SAGA-8 |
-| `TestStepTransitionGuardSeesBypassesWithoutALiteral` | `saga/step_transition_guard_test.go` + `saga/testdata/stepguard/bypass.go` | 守卫自己的负对照（两种不写字面量的绕过） | SAGA-8 |
+| ~~`TestStepTransitionGuardSeesBypassesWithoutALiteral`~~ | 已删除（RR-20261006-14）；守卫改为类型检查，另加 `TestStepTransitionAloneDecidesTheIncarnation` | 原为守卫自己的负对照 | SAGA-8 |
 | `TestMongoStepAttemptsOfOneOperationTakeEffectOnce` / `TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce` | `saga/mongo_step_operation_promises_test.go` / `saga/mongo_step_operation_real_mongo_integration_test.go` | Mongo 步骤操作实例最多一次（mongotest 与真实副本集同一份用例） | SAGA-9 |
 | `TestMongoStepConsumerFollowsTheOperationInbox` | `saga/mongo_step_consumer_promises_test.go` | Mongo 步骤消费者分支 | SAGA-9 |
 | `TestCompletionConsumersTermTheSameTerminalErrors` | `saga/completion_consumer_terminal_promises_test.go` | 两条结果流同一终态分类（O-S5-1） | SAGA-9 |
@@ -134,7 +134,7 @@
 | `TestModRefusesAnEffectStreamThatOutlivesTheCompletionReceipts`、`TestModChecksEffectRetentionOnlyAgainstTheStreamItReadsResultsFrom` | `kit/saga/effect_retention_promises_test.go` | O-S5-2 跨 Mod 校验 | SAGA-12 |
 | `TestRealNatsCompletionNakBackoffAndMaxDeliver` | `saga/consumer_nak_maxdeliver_real_integration_test.go`（integration） | 真实 JetStream 上 nak 退避与 `MaxDeliver` | SAGA-13 |
 | `TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver` | `redis/driver/script_no_retry_promises_test.go` | eval / evalsha 回复丢失只执行一次 | DRV-1 |
-| `TestOnlyScriptCommandsOptOutOfTheDriverRetry` | 同上 | `noReplay` 克隆保留标记；普通命令可重试 | DRV-1 |
+| `TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`（原名 `TestOnlyScriptCommandsOptOutOfTheDriverRetry`） | 同上 | `noReplay` 克隆保留标记；普通命令可重试 | DRV-1 |
 | `TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice` | `versionstore/lost_reply_integration_test.go` | 真实 Redis：Update 至多写一次（integration） | DRV-1 |
 | `TestRealMongoCommitIsBoundedByTransactionTimeout` | `mongo/driver/transaction_deadline_integration_test.go` | 提交受窗口约束；提交被截断时带 `ErrCommitResultUnknown`（integration） | DRV-2 / DRV-3 |
 | `TestRealMongoEndSessionAfterCommitTimeoutIsBounded` | 同上 | EndSession 补发 abort 有上限（integration） | DRV-2 |
@@ -276,14 +276,14 @@
 - `docs/bugfix/RR-20261005-NC-250.md`“修法 / 文件与行为”：记录写新增 `abandonedOperation` 并由三个出口调用；源码（02c8a10d）已无此函数，`a95cf4dc` 用 `saga/step_transition.go:73` `openOperation` + `stepTransition` 取代（记录描述的是当时实现）。
 - `docs/bugfix/U-0280-saga-step-reexecuted-after-crash.md`“根因”与 `docs/feature/B1-SAGA-COMPLETION-INCARNATION-2026-10-06.md` 第 6 节：记录写 `reserveInTransaction` / `readReceipt` / `commandIncarnation` 在 `saga/dataengine_step_inbox.go`（含旧行号 `:282`、`:190`）；源码中 `reserveInTransaction`、`commandIncarnation` 已移到 `saga/step_operation_inbox.go:162`、`:413`（`9669d181`），`readReceipt` 在 `saga/dataengine_step_inbox.go:156`。
 - 维护者原话转录差异：`docs/feature/SAGA-MONGO-STEP-LATENCY-2026-10-06.md` 写“按照A，目前真正走saga的实际业务场景不多，55tps足够了”，`docs/review/DECISIONS-PENDING-2026-10-05.md` 第十二轮写“目前真正走 saga 的实际业务场景不多，55tps 足够了”（少“按照A，”、多空格）。不涉及源码。
-- 性能口径差异（不是错误，提醒拼装时别混用）：saga 方向 ② 方案与 `CHANGELOG.md` `[v1.21.0]` 用 `bench.txt`（500 次 × 6）的 9.0 → 17.4 ms/op；延迟分析用 benchstat n=6 × 1000x 的 8.965 → 18.321 ms/op。两者是不同轮次的测量。
+- 性能口径差异（不是错误，提醒拼装时别混用）：saga 方向 ② 方案与 `CHANGELOG.md` `[v1.21.0]` 用 `bench.txt`（500 次 × 6）的 9.0 → 17.4 ms/op；延迟分析用 benchstat n=6 × 1000x 的 8.965 → 18.321 ms/op。两者是不同轮次的测量。**已在两份 feature 文档里标明出处（fixs）**：前者 `BenchmarkRealMongoCommandInboxHandle` 6 轮均值、base `a5e7b070`；后者 `BenchmarkRealMongoStepLatencyBreakdown` benchstat 中位数、base `a95cf4dc` / after `78e26853`。
 - `docs/feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md` §3 结果表：记录写未执行 WAIT 的结果为 `redirected` / `unsupported`；源码（02c8a10d）`remoteentity/snapshot_l2.go:373-375` 指标标签统一为 `skipped`（含 disabled）。TROUBLESHOOTING T-277 与 `docs/bugfix/PRERELEASE-VERIFICATION-2026-10-06.md` 写的是 `skipped`，与源码一致。
 - `docs/review/DECISIONS-PENDING-2026-10-05.md` 文首“当前总状态”（第 13 行）：仍把 W-2026-10-06-02 列为“两条 WANTED 待 review 判断”之一；第十二轮表“驱动 Close 契约”行（第 210 行）仍写“单机与 Cluster 重复 Close 不一致等登记 WANTED，代码未改”。源码（02c8a10d）已由 `d05a04a1`（RR-20261006-10）统一，`docs/bug/WANTED.md` 也已标“已转 RR，已修复”。
 - `docs/TROUBLESHOOTING.md` T-259：写“A2（main，未发版）起”；A2（`cf5721c9`）已随 v1.20.2 发布。
 - 提交 `81659082` 的提交说明写 “T-231/232”；`docs/TROUBLESHOOTING.md` 里 NC-100 是 T-238、NC-101 是 T-239，T-231 / T-232 分别是 NC-64 / NC-70。
 - 维护者 A1 原话两处文字不同：`docs/review/DECISIONS-PENDING-2026-10-05.md` 第二轮 A1 行为“回滚都使用 DAO 的实现方式，这样回滚都可以统一”；`docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md` 文首为“回滚都使用 dao 的实现方式，这样回滚都可以统一了”。按 BRIEF 以 DECISIONS-PENDING 为准引用。
 - `docs/feature/DECISIONS-R12-KIT-2026-10-06.md` §7 与 DECISIONS-PENDING 第十二轮写 `EnsureIndexes` “遇换主 10 次 × 1s”，CHANGELOG 写“最多 10 次、间隔 1s”：源码 `mongo/driver/collection.go:251-252` 是**每个索引**单独 10 次预算，一次含 N 个索引的 `EnsureIndexes` 最坏约 N × 10s（由调用方启动 ctx 兜底）。表述不精确，非行为错误。
-- 测试名 `TestOnlyScriptCommandsOptOutOfTheDriverRetry`（`redis/driver/script_no_retry_promises_test.go:166`）在 A2 之后名字已不准确（写命令同样带 `NoRetry`），注释已改、名字未改。
+- 测试名 `TestOnlyScriptCommandsOptOutOfTheDriverRetry`（`redis/driver/script_no_retry_promises_test.go:166`）在 A2 之后名字已不准确（写命令同样带 `NoRetry`），注释已改、名字未改。**已改名（fixs）**：`TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`。
 - 覆盖观察（非文档冲突）：`redis/driver/write_no_replay_promises_test.go` 的 `writeCalls` 名为 `set` 的条目实际调用 `SetNX`，`Client.Set` 与 pipeline 的 Set / Del / HSet / Expire / ZAdd / LPop 没有逐个进“回复丢失只执行一次”的表；A2 方案“先红后绿”列表里的 `set` 指的是 SetNX。`TestSkillPackagesGetNoComponentUndoHint` 只扫 4 个 skill 目录，不含 `skill/skillcompose` 与 `skill/examples/*`。
 - `docs/feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md` §2 第 1 条、`entity/remote_snapshot.go:131`～`:133` 类型注释、`remoteentity/snapshot_client.go:35` 注释、DECISIONS-PENDING 第九轮“所有缓存写入仍只经 `admitLocked`”：记录写一个 key 的全部 L1 写入（含 L2 回填、修复）都经 `admitLocked`。源码（02c8a10d）为：经 `admitLocked` 的是 `publishLocked`（`:924`）、`DeleteAtVersion`（`:1110`）与 `refresh` 的“L1 比 L2 新”修复分支（`:765`）；`refresh` 的 L2 回填 / 同值确认 / 删除标记确认直接 `setL1Locked`（`:744`、`:756`、`:779`、`:795`），`adoptSharedLocked` 直接 `setL1Locked`（`:1001`）与 `l1.Delete`（`:997`），`loadForRefresh`（`:820`）与无版本 `Delete`（`:1088`）直接 `l1.Delete`。全部在 `publishMu` 下、写入值来自 L2 或权威“不存在”，语义上不破坏“L1 只缓存 L2 确认过的版本”，但字面说法不成立。以源码为准。
 - `entity/remote_mirror.go:78`（`RemoteSnapshotRead.After` 注释）：记录写“Cached 读不因它回源：不满足就是未找到”；源码 `RemoteSnapshotCache.Read` 对 Cached 不满足 After 返回 `ErrRemoteSnapshotStale`（`entity/remote_snapshot.go:673`～`:674`），与 MIRROR-STEPS-1-3 §2、CHANGELOG v1.21.0 一致。注释过时。

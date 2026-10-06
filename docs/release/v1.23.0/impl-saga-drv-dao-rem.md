@@ -318,7 +318,8 @@ success receipts: debit=164 refund=164; sagas with debit>1=0 refund>1=0 failed_w
 - [ ] `saga/step_operation_inbox.go:209-215`：确认守卫写（`guardOperation`）发生在 `resolveOtherAttempts` 读同一操作 claim **之前**、且在同一事务里；看 `TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce` 的负对照证据是否仍能复现（守卫被跳过时 6 个并发尝试都拿到租约）。
 - [ ] `:180-183` 与 `:229-233`：接管自己过期 claim 时 `$set lease_until` 用的也是封顶后的 `leaseUntil`；过滤条件 `lease_until $lte now` + `lease_token` 保证只接管一次。
 - [ ] `:115` 唯一索引 `uniq_command` 是 `(namespace, command_id)`；守卫文档的 `command_id` 写的是 `operationKey`、`namespace` 是 `saga-step-op`（`:251`），确认它与 claim（`namespace=saga-step`）不会互撞。
-- [ ] `:45` `maxOperationAttempts = 4096`、`:311-316` 超过即 `ErrConflict`：每一生最多 1000 次尝试，多次 Resume 之后同一操作的 claim 数在 30 天 TTL 内是否可能超过 4096 导致这一步永远 Reserve 失败？
+- [x] `:45` `maxOperationAttempts = 4096`、`:311-316` 超过即 `ErrConflict`：每一生最多 1000 次尝试，多次 Resume 之后同一操作的 claim 数在 30 天 TTL 内是否可能超过 4096 导致这一步永远 Reserve 失败？
+  **已闭环（fixs，RR-20261006-15）**：会，五生约 4100 次尝试后新一生 Reserve 每次报 `ErrConflict`（越界是拒绝、不溢出、claim 停在 4097），修好原因再 Resume 也执行不了，直到旧 claim 过 TTL。已修：claim 写 `outcome`，按操作只取 pending / 成功 / 本生拒绝 / 旧 claim，结果集有界（证明见 `operationClaimsFilter` 注释），上限改名 `maxDecisiveOperationClaims`；`operationSuccess` 同一查询、超限报错。[问题](../../bug/RR-20261006-15.md)、[修复](../../bugfix/RR-20261006-15.md)。
 - [ ] `:164-174` 与 `:359-361`：Reserve 第 1 步 `markCompleted` 失败只告警，`attemptResult` 里 `markCompleted` 失败却让整个 Reserve 失败——确认这种不对称是有意的（后者在事务里，失败会中止重跑）。
 - [ ] `saga/command_consumer.go:470-475`（原生 `errAttemptSuperseded`）不重发同一操作的成功，而 Mongo 路径 `:331`（含 `errAttemptSuperseded`）会重发：确认原生侧“接替者负责回放或执行”足以覆盖被接替投递恰好是最后一次的情形。
 - [ ] `saga/mongo_store.go:328-341`：只有 `Receipt.Success` 记 `result`；已存在 `abandoned` 的 tombstone 在新一生带结果关闭时升级为 `result`；确认反方向（`result` 不会被降级为 `abandoned`）。
@@ -773,10 +774,11 @@ FAIL
 
 **9. review 检查点**
 
-- [ ] 确认所有步骤状态转移只经 `stepTransition`：看守卫是否覆盖不写字面量的两种绕过——`saga/testdata/stepguard/bypass.go` 的 `mutatedTransitionExit`（改 `request.CloseOperation`）与 `aliasedStoreExit`（`var request ApplyRequest` + `store := e.store`），对应 `TestStepTransitionGuardSeesBypassesWithoutALiteral`。
-- [ ] 盲区 1（按源码推断）：`engineMethod` 只看接收者为 `Engine` 的方法（`saga/step_transition_guard_test.go:65`、`:103-105`）；包级函数（例如 `func apply(s Store, r ApplyRequest)`）里的 `s.Apply(ctx, r)` 不被检查。
-- [ ] 盲区 2（按源码推断）：`ApplyRequest` 作为**函数参数**传入时既不是 `ValueSpec` 也不是复合字面量，`transitionResultNames` 也不认它，参数上的字段赋值不会报出；配合盲区 1 可构造“经 helper 改写 `CloseOperation` 再写入”的绕过。
-- [ ] `isRequestFromTransition`（`:213-235`）按标识符**名字**而不是 `ast.Object` 统计赋值；同一函数里不同作用域的同名变量会被合并计数——确认不会产生漏报（只会更严格还是可能放过？）。
+- [x] 确认所有步骤状态转移只经 `stepTransition`：看守卫是否覆盖不写字面量的两种绕过——`saga/testdata/stepguard/bypass.go` 的 `mutatedTransitionExit`（改 `request.CloseOperation`）与 `aliasedStoreExit`（`var request ApplyRequest` + `store := e.store`），对应 `TestStepTransitionGuardSeesBypassesWithoutALiteral`。
+- [x] 盲区 1（按源码推断）：`engineMethod` 只看接收者为 `Engine` 的方法（`saga/step_transition_guard_test.go:65`、`:103-105`）；包级函数（例如 `func apply(s Store, r ApplyRequest)`）里的 `s.Apply(ctx, r)` 不被检查。
+- [x] 盲区 2（按源码推断）：`ApplyRequest` 作为**函数参数**传入时既不是 `ValueSpec` 也不是复合字面量，`transitionResultNames` 也不认它，参数上的字段赋值不会报出；配合盲区 1 可构造“经 helper 改写 `CloseOperation` 再写入”的绕过。
+- [x] `isRequestFromTransition`（`:213-235`）按标识符**名字**而不是 `ast.Object` 统计赋值；同一函数里不同作用域的同名变量会被合并计数——确认不会产生漏报（只会更严格还是可能放过？）。
+  **以上四条已闭环（fixs，RR-20261006-14）**：盲区 1 + 2 组合的 helper 绕过已在修前复现（原守卫两个用例都通过）。现在 `stepTransition` 是 Engine 方法、自己调 `Store.Apply` 并重写代际，出口拿不到请求；守卫改为 `go/types` 全包检查（请求只能在 stepTransition 里产生、不能改写、`Store.Apply` 只在那里调用），语法守卫、`isRequestFromTransition` 与 `saga/testdata/stepguard` 一并删除，负对照按维护者要求不留仓库，验证输出见[修复记录](../../bugfix/RR-20261006-14.md)。本节第 2、3、6 小节的符号与用例名是 v1.21.0 时的样子。
 - [ ] `saga/step_transition.go:61-66`：成功回执覆盖 `CloseOperation` 为 `receipt.IdempotencyKey`；确认可重试失败 / 拒绝的回执不会走这一分支，以失败关闭时仍按第 3 步关闭 `before` 开着的操作、由 Store 记为 `abandoned`。
 - [ ] `fenced` 只在协调循环出口为 true（`saga/engine.go:710-767`），`Complete` / `Compensate` / `Resume` 只按版本 fence；确认这与 `ClaimDue` 的租约语义一致（方案第 4 条）。
 
@@ -1033,7 +1035,7 @@ in-flight_attempt_past_its_deadline_is_taken_over_and_cannot_commit:
 
 | 基准 | 样本 | 修前 | 修后 | 结论 |
 | --- | --- | --- | --- | --- |
-| `RealMongoStepLatencyBreakdown` sec/op | n=6（每轮 1000x，交替） | 8.965m ±3% | 18.321m ±12% | +104.35%（p=0.002） |
+| `RealMongoStepLatencyBreakdown` sec/op | n=6（每轮 1000x，交替） | 8.965m ±3% | 18.321m ±12% | +104.35%（p=0.002）；延迟分析那一轮（benchstat 中位数）。② 实施那一轮的 9.0 → 17.4 ms/op 是 `BenchmarkRealMongoCommandInboxHandle` 500x × 6 的均值，两轮口径见 [SAGA-MONGO-STEP-LATENCY](../../feature/SAGA-MONGO-STEP-LATENCY-2026-10-06.md) 开头 |
 | `RealMongoStepThroughput/g=1` ops/s | n=6 | 111.05 ±5% | 54.45 ±3% | −50.96% |
 | `RealMongoStepThroughput/g=8` ops/s | n=6 | 597.0 ±3% | 296.1 ±2% | −50.40% |
 | `RealMongoStepThroughput/g=32` ops/s | n=6 | 1.792k ±24% | 1.022k ±7% | −43.01% |
@@ -1198,7 +1200,7 @@ go test -tags integration -count=1 -race -v -run '^TestRealNatsCompletionNakBack
 
 - 不变量：一次脚本调用在服务端至多执行一次；回复丢失返回错误。
 - 强制点：所有脚本经 `runScript` → `sendOnce`（`redis/driver/replay.go:110`），后者把命令包成 `noReplay` 再交给 `rdb.Process`；go-redis 的 `processWithRetry` / `generalProcessPipeline` / Cluster `process` 看到 `NoRetry` 都跳过。MOVED / ASK 重定向分支在 NoRetry 检查之前，照常跟随（脚本在错误节点上没有执行）。
-- 守卫测试：`TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver`（`redis/driver/script_no_retry_promises_test.go:127`，RESP 替身：eval / evalsha 各执行恰好 1 次且返回错误）；`TestOnlyScriptCommandsOptOutOfTheDriverRetry`（`:166`，标记克隆后仍在、普通 GET 不带标记）；`TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice`（`versionstore/lost_reply_integration_test.go:103`，`-tags integration`，真实 Redis + 自建随机端口 toxiproxy 代理）。
+- 守卫测试：`TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver`（`redis/driver/script_no_retry_promises_test.go:127`，RESP 替身：eval / evalsha 各执行恰好 1 次且返回错误）；`TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`（原名 `TestOnlyScriptCommandsOptOutOfTheDriverRetry`，`:166`，标记克隆后仍在、普通 GET 不带标记）；`TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice`（`versionstore/lost_reply_integration_test.go:103`，`-tags integration`，真实 Redis + 自建随机端口 toxiproxy 代理）。
 
 **4. 控制流**
 
@@ -1221,7 +1223,7 @@ go test -tags integration -count=1 -race -v -run '^TestRealNatsCompletionNakBack
 | 用例 | 文件 | 覆盖 |
 | --- | --- | --- |
 | `TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver` | `redis/driver/script_no_retry_promises_test.go` | eval / evalsha 回复丢失只执行一次、返回错误 |
-| `TestOnlyScriptCommandsOptOutOfTheDriverRetry` | 同上 | `noReplay` 标记与克隆；普通命令仍可重试 |
+| `TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`（原名 `TestOnlyScriptCommandsOptOutOfTheDriverRetry`） | 同上 | `noReplay` 标记与克隆；普通命令仍可重试 |
 | `TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice` | `versionstore/lost_reply_integration_test.go` | 真实 Redis：一次 Update 在 Redis 中至多一次写入、调用方拿到错误 |
 
 修前红文本（原样，出处 `docs/bugfix/evidence/noncore-bugfix-20261005-revn04/nc100-driver-red.txt`）：
@@ -1275,7 +1277,7 @@ GOWORK=off go test -tags integration -count=1 -run 'TestMGet|TestIntegrationPipe
 - Redis Cluster 下脚本的 MOVED / ASK 与节点故障（本机无 Cluster），外部验证 E08。
 - `redis/driver/lock_toxic_integration_test.go` 会 `/reset` 共享 toxiproxy，本轮没在共享环境上跑。
 - remoteentity marker / snapshot L2 在回复丢失时现在看到错误而不是驱动重放，只经既有单元与真实锁用例验证，未上故障矩阵。
-- 测试名 `TestOnlyScriptCommandsOptOutOfTheDriverRetry` 在 A2 之后已不准确（写命令也带 `NoRetry`），注释已改，名字未改。
+- 测试名 `TestOnlyScriptCommandsOptOutOfTheDriverRetry` 在 A2 之后已不准确（写命令也带 `NoRetry`），注释已改，名字未改。**已改名（fixs）**：`TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`。
 
 **9. review 检查点**
 
@@ -3764,7 +3766,7 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 | `TestDefinitionFenceDuringBackoffAbandonsTheOperation` | `saga/definition_fence_abandon_promises_test.go` | 定义缺失出口放弃关闭 | SAGA-7 |
 | `TestCoordinatorLeaseTakeoverFencesTheLateApply`、`TestOutboxSupersedeAndUnknownAckOnMongoStore` | `saga/coordinator_takeover_review_test.go` | N06 S5 审查用例（租约接管晚 Apply、outbox 替换与未知 ack） | SAGA-7 |
 | `TestEveryCoordinatorWriteGoesThroughStepTransition` | `saga/step_transition_guard_test.go` | 协调器写记录只经 `stepTransition`（源码 AST 守卫） | SAGA-8 |
-| `TestStepTransitionGuardSeesBypassesWithoutALiteral` | `saga/step_transition_guard_test.go` + `saga/testdata/stepguard/bypass.go` | 守卫自己的负对照（两种不写字面量的绕过） | SAGA-8 |
+| ~~`TestStepTransitionGuardSeesBypassesWithoutALiteral`~~ | 已删除（RR-20261006-14）；守卫改为类型检查，另加 `TestStepTransitionAloneDecidesTheIncarnation` | 原为守卫自己的负对照 | SAGA-8 |
 | `TestMongoStepAttemptsOfOneOperationTakeEffectOnce` / `TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce` | `saga/mongo_step_operation_promises_test.go` / `saga/mongo_step_operation_real_mongo_integration_test.go` | Mongo 步骤操作实例最多一次（mongotest 与真实副本集同一份用例） | SAGA-9 |
 | `TestMongoStepConsumerFollowsTheOperationInbox` | `saga/mongo_step_consumer_promises_test.go` | Mongo 步骤消费者分支 | SAGA-9 |
 | `TestCompletionConsumersTermTheSameTerminalErrors` | `saga/completion_consumer_terminal_promises_test.go` | 两条结果流同一终态分类（O-S5-1） | SAGA-9 |
@@ -3774,7 +3776,7 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 | `TestModRefusesAnEffectStreamThatOutlivesTheCompletionReceipts`、`TestModChecksEffectRetentionOnlyAgainstTheStreamItReadsResultsFrom` | `kit/saga/effect_retention_promises_test.go` | O-S5-2 跨 Mod 校验 | SAGA-12 |
 | `TestRealNatsCompletionNakBackoffAndMaxDeliver` | `saga/consumer_nak_maxdeliver_real_integration_test.go`（integration） | 真实 JetStream 上 nak 退避与 `MaxDeliver` | SAGA-13 |
 | `TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver` | `redis/driver/script_no_retry_promises_test.go` | eval / evalsha 回复丢失只执行一次 | DRV-1 |
-| `TestOnlyScriptCommandsOptOutOfTheDriverRetry` | 同上 | `noReplay` 克隆保留标记；普通命令可重试 | DRV-1 |
+| `TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`（原名 `TestOnlyScriptCommandsOptOutOfTheDriverRetry`） | 同上 | `noReplay` 克隆保留标记；普通命令可重试 | DRV-1 |
 | `TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice` | `versionstore/lost_reply_integration_test.go` | 真实 Redis：Update 至多写一次（integration） | DRV-1 |
 | `TestRealMongoCommitIsBoundedByTransactionTimeout` | `mongo/driver/transaction_deadline_integration_test.go` | 提交受窗口约束；提交被截断时带 `ErrCommitResultUnknown`（integration） | DRV-2 / DRV-3 |
 | `TestRealMongoEndSessionAfterCommitTimeoutIsBounded` | 同上 | EndSession 补发 abort 有上限（integration） | DRV-2 |

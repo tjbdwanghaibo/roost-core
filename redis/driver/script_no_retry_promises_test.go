@@ -162,8 +162,9 @@ func TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver(t *testing.T) {
 	}
 }
 
-// 不可重放标记克隆后仍在，没加标记的命令保留驱动的自动重试（A2 之后写命令同样加标记，见 write_no_replay_promises_test.go）。
-func TestOnlyScriptCommandsOptOutOfTheDriverRetry(t *testing.T) {
+// 不可重放标记（noReplay）克隆后仍在，没加标记的命令保留驱动的自动重试。原名 TestOnlyScriptCommandsOptOutOfTheDriverRetry：
+// A2 之后写命令同样加标记（见 write_no_replay_promises_test.go），“只有脚本”不再成立，按实际断言改名。
+func TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry(t *testing.T) {
 	server := newDropFirstScriptReply(t)
 	cfg := fredis.DefaultConfig(server.listener.Addr().String())
 	cfg.MinIdleConns = 0
@@ -174,7 +175,7 @@ func TestOnlyScriptCommandsOptOutOfTheDriverRetry(t *testing.T) {
 	}
 	cmd := noReplay{newScriptCmd(context.Background(), "eval", "return 1", []string{"k"})}
 	if !cmd.NoRetry() || !cmd.Clone().NoRetry() {
-		t.Fatal("script command (or its clone) is retryable")
+		t.Fatal("a noReplay-marked command (or its clone) is retryable")
 	}
 	if goredis.NewCmd(context.Background(), "get", "k").NoRetry() {
 		t.Fatal("ordinary commands lost their retry")
