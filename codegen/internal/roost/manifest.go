@@ -66,13 +66,21 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // (C4 activity groups file), servicemetrics.NewMetricsReporter (C6 default
 // service metrics) and app.ConfigReader / app.ConfigDuration (A4 strict reads
 // in the player TCP access layer and the RPC client Mod), none of which
-// v1.20.1 has.
+// v1.20.1 has,
+// and to v1.21.0 because the generated config loader declares its schema rules
+// as []configdata.FieldRule (B10, enforced by configdata on every load and
+// reload), the code generated for a `//roost:mirror` DTO builds an
+// entity.RemoteMirrorSpec and returns an entity.RemoteMirrorReader over an
+// entity.RemoteSnapshotReadOnly source (Mirror step 5; projects bind it with
+// kit/remoteentity.MirrorSource under NewRemoteMirrorMod), and the game-demo
+// reads business time from app.BusinessClock (D-L3) and calls
+// timer.Scheduler.ReportUnhandledTypes (D-L2), none of which v1.20.2 has.
 // Kit and Codegen stay as fields
 // because a project's roost.yaml still carries versions.kit / versions.codegen
 // and must keep validating; they no longer name modules of their own, so they
 // stay at the last values that meant something (三仓合一仓 P5).
 var minimumVersions = VersionSpec{
-	Core:    "v1.20.2",
+	Core:    "v1.21.0",
 	Kit:     "v1.14.8",
 	Codegen: "v1.15.0",
 }
