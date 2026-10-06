@@ -26,7 +26,7 @@
 - **规则**：配置 JSON 的键必须与声明的字段名逐字一致（大小写敏感）；出现只差大小写的键（如 `Level` 对 `level`）或大小写变体，加载 / 热更直接拒绝并点名表、行、键。不再依赖 encoding/json 的大小写不敏感匹配。
 - **做法**：参照 skill NC-150 的 `requireExactFieldNames`，在 configdata 解码后按字段的精确 json 名核对原始键；`configdata/rules.Lookup` 改为精确匹配，删除 `5a3c4a60` 第 5 项为大小写变体做的“按原文最后一个”选择逻辑。tablegen / cfggen 生成期检查用同一规则。
 - **验收**：`{"Level":1}`、`{"level":1,"Level":2}` 在加载与 reload 时被拒（红→绿）；精确键照常；业务手写代码不增加。
-- **状态**：待实施。
+- **状态**：已实施（`c474a6ef`，未发版）。[方案与验证](../feature/CONFIGDATA-CASE-SENSITIVE-KEYS-2026-10-06.md)。
 
 ## 3. Mirror 第 6 步的本机替代
 
