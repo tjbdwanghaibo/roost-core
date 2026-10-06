@@ -173,6 +173,22 @@ owner、source、target（以及需要时的 `Result: "kill"`），主动 fixtur
 World revision 是关键防线：Runtime 的 query/command 会携带期望 revision，Host 负责
 拒绝已失效读取或提交。因而不要缓存 Host 返回的可变对象，再在后续 tick 假设其仍然有效。
 
+**Host 能力表**（B3 ③，2026-10-07，[方案](../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)）：Host 用
+`HostCapabilityProvider` 声明能读 / 支持的取值（属性、资源、衍生物 kind、motion 步骤、只交给 Host 的数值字段、资源与
+修正 operation、召唤物），环境的 `Host` 段与它对齐。三处各管一件事：
+
+- 编译器（`compile_host_capability.go`）从 IR 收集需求，只经 `HostCapabilityTableOf` 读表，表外报
+  `HOST_CAPABILITY_MISSING`；需求排序去重后写进 `Program.hostRequirements`。新增会向 Host 要新取值的 DSL 构造时，
+  在这里加收集、在 `hostCapabilityColumns` 加列（封闭集合只登记在那里）。
+- Runtime（`runtime_host_capability.go`）在 Program 第一次使用时核对需求在 Host 的表里。
+- Host 对表外的属性 / 资源报错；`CheckHostCapabilities` 按声明逐项调用 Host。`MemoryHost` 声明全部能力（属性 /
+  资源两列取配置的 catalog）；`combatcomponent.HostAdapter` 声明战斗那部分（可读属性、有映射的资源、资源
+  operation，接了 `StatusBridge` 再加修正），运动 / 衍生物 / 召唤物由业务声明后 `MergeHostCapabilities`。
+
+守卫：`TestRuntimeAsksHostOnlyForCompiledRequirements`（Runtime 发给 Host 的取值都在需求里——改 Runtime 向 Host
+发的东西时它会先红）、`TestCompilerConsultsTheTableForEveryRequirement`、`TestCompilerReadsHostCapabilitiesOnlyThroughTheTable`、
+`TestHostOnlySpawnNumericFieldsMatchRuntime`。
+
 **`StopSpawn` 必须幂等**（Host 契约，2026-10-06）：停一个已经停掉或 Host 不认识的衍生物要成功返回、不产生第二次
 副作用（`MemoryHost` 返回当前 revision、不发事件）。只有衍生物在世界里确实还在运行时才返回错误。原因：宿主停止
 失败时——不论来自哪个停止入口：施法失败或施法里的停止、衍生物启动失败的清理、tick 驱动的回收、`RemoveProgram`、

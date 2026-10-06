@@ -26,7 +26,8 @@ func authorityDigest(environment CompileEnvironment) string {
 		Gameplay         GameplayCatalog
 		Motion           MotionCapabilityCatalog
 		SpawnProperties  SpawnPropertyCatalog
-	}{Domain: "roost.skill/v2/gameplay-authority", Revision: environment.Revision, Limits: environment.Limits, Numeric: environment.Numeric, Gameplay: environment.Gameplay, Motion: environment.Motion, SpawnProperties: environment.SpawnProperties}
+		Host             HostCapabilityCatalog
+	}{Domain: "roost.skill/v2/gameplay-authority", Revision: environment.Revision, Limits: environment.Limits, Numeric: environment.Numeric, Gameplay: environment.Gameplay, Motion: environment.Motion, SpawnProperties: environment.SpawnProperties, Host: environment.Host}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		panic(err)
@@ -71,6 +72,7 @@ func validateCompileEnvironment(environment CompileEnvironment) []Diagnostic {
 	validatePolicies(environment, &diagnostics)
 	validateMotionCatalog(environment, &diagnostics)
 	validateSpawnPropertyCatalog(environment.SpawnProperties, &diagnostics)
+	validateHostCapabilityCatalog(environment.Host, &diagnostics)
 	sort.SliceStable(diagnostics, func(i, j int) bool { return diagnosticLess(diagnostics[i], diagnostics[j]) })
 	return diagnostics
 }
@@ -344,7 +346,7 @@ func validatePolicies(environment CompileEnvironment, diagnostics *[]Diagnostic)
 
 func validateMotionCatalog(environment CompileEnvironment, diagnostics *[]Diagnostic) {
 	catalog := environment.Motion
-	if catalog.Revision == "" || catalog.MaximumSpeed <= 0 || catalog.MaximumDistance <= 0 || catalog.MaximumAngularSpeed <= 0 || catalog.MaximumTrackingTicks <= 0 || len(catalog.SpawnTrajectoryPairs) == 0 || len(catalog.VariantCapabilities) == 0 || !uniqueNonEmptyStrings(catalog.EnabledSlots) || !uniqueNonEmptyStrings(catalog.HostFeatures) {
+	if catalog.Revision == "" || catalog.MaximumSpeed <= 0 || catalog.MaximumDistance <= 0 || catalog.MaximumAngularSpeed <= 0 || catalog.MaximumTrackingTicks <= 0 || len(catalog.SpawnTrajectoryPairs) == 0 || len(catalog.VariantCapabilities) == 0 {
 		appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, "$.motion", "motion catalog requires revision, closed capabilities, and positive bounds")
 	}
 	pairs := make(map[string]bool, len(catalog.SpawnTrajectoryPairs))
@@ -367,16 +369,6 @@ func validateMotionCatalog(environment CompileEnvironment, diagnostics *[]Diagno
 		if !variants[key] {
 			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, "$.motion.variant_capabilities", "every spawn/trajectory capability requires a closed stage-variant policy")
 			break
-		}
-	}
-	for index, slot := range catalog.EnabledSlots {
-		if !validMotionSlot(slot) {
-			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, fmt.Sprintf("$.motion.enabled_slots[%d]", index), "motion slot is not closed")
-		}
-	}
-	for index, feature := range catalog.HostFeatures {
-		if feature != "carry" {
-			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, fmt.Sprintf("$.motion.host_features[%d]", index), "motion host feature is not closed")
 		}
 	}
 	if environment.Limits.MaxMotionOffsets <= 0 || environment.Limits.MaxReflects <= 0 || environment.Limits.MaxPierces <= 0 || environment.Limits.MaxCarryTargets <= 0 || catalog.MaximumTrackingTicks > environment.Limits.MaxLifetimeTicks {
@@ -412,14 +404,6 @@ func validMotionCompletionVariant(value string) bool {
 func validMotionTrajectoryKind(kind string) bool {
 	switch kind {
 	case "stationary", "linear", "path", "orbit", "parabola":
-		return true
-	default:
-		return false
-	}
-}
-func validMotionSlot(slot string) bool {
-	switch slot {
-	case "frame", "steering", "offsets", "collision", "carry", "completion":
 		return true
 	default:
 		return false

@@ -65,6 +65,26 @@ Runtime 持锁调用 Host，因此 Host 必须：
 完整接口约束见 `skill/host.go` 和
 [架构、迁移与同步流程](architecture-and-migration.md)。
 
+## Host 能力表（B3 ③，2026-10-07，未发版）
+
+编译器、Runtime、Host 共用一张“Host 能读什么、支持什么”的表，随 `CompileEnvironment` 下发、算进 authority digest。
+八列：可读属性（catalog 里 `Readable` 的属性）、资源（catalog 全部资源）、衍生物 kind、motion 步骤、只交给 Host 的
+衍生物数值字段（`turn_rate_mdeg_per_tick` / `return_speed_bp` / `collision_force`）、资源 operation、属性修正
+operation、召唤物（`OwnedEntityRuntimeHost`）。后六列写在 `environment.Host`（`skill.HostCapabilityCatalog`），
+`skill.HostCapabilityTableOf(environment)` 拼出完整的表。
+
+- **技能作者**：定义用到表外的取值时编译报 `HOST_CAPABILITY_MISSING`，消息点名缺的那一项（如
+  `environment host capability table lacks motion_step "collision"`、`... lacks summon`）。这不是定义写错，而是
+  这个项目的 Host 不支持它：换写法，或让 Host 实现后在环境里声明。默认环境声明全部能力。运动衍生物固定需要
+  frame / steering / offsets / completion 四个步骤（Runtime 每步都发），collision / carry 写了才需要。
+- **Host 实现**：实现 `skill.HostCapabilityProvider`（`HostCapabilities() skill.HostCapabilityTable`）声明自己的表；
+  环境的 Host 段取自它（`environment.Host = host.HostCapabilities().HostCapabilityCatalog`，再
+  `skill.AuthorityDigest` 重签），或手写后在启动时用 `skill.HostSupportsEnvironment(host, environment)` 核对。
+  Runtime 在 Program 第一次启动 / 注册 / 入队被动 / 从 checkpoint 恢复时核对它的需求都在 Host 的表里，缺了返回
+  `skill.ErrHostCapabilityMissing`（也是 `ErrHostContractViolation`），不会到施法中途、扣费之后才失败。对表外的属性
+  handle、资源名要返回错误，不能当成 0。测试里用 `skill.CheckHostCapabilities(host, environment.Gameplay, probe)`
+  按声明逐项调用 Host 核对。细节与业务最少要写的代码见[方案](../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md) §6。
+
 ## 数据与升级边界
 
 - 技能 JSON 在进入目录前必须 `Parse` + `Compile`，禁止运行时解释未经验证的 JSON。

@@ -1,6 +1,9 @@
 package skill
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 type selectCandidate struct {
 	entity   MemoryEntity
@@ -17,6 +20,14 @@ func (host *MemoryHost) Select(request SelectRequest) (SelectResult, error) {
 	}
 	if shape, ok := request.Shape.(StatusSetSelectShape); ok {
 		return host.selectStatusInstancesLocked(request, shape)
+	}
+	// attribute_compare 读的属性同样要在能力表里（B3 ③），不在时报错而不是按 0 比较。
+	for _, filter := range request.Filters {
+		if typed, ok := filter.(AttributeSelectFilter); ok {
+			if _, readable := host.readableAttributeLocked(typed.Attribute); !readable {
+				return SelectResult{}, fmt.Errorf("%w: attribute handle %d", ErrHostCapabilityMissing, typed.Attribute)
+			}
+		}
 	}
 	candidates := make([]selectCandidate, 0, len(host.entities))
 	ownedShape, selectingOwned := request.Shape.(OwnedEntitiesSelectShape)

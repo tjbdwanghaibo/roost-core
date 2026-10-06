@@ -435,7 +435,8 @@ func RestoreRuntime(host Host, options RuntimeOptions, checkpoint RuntimeCheckpo
 	// replay. HostEventCompactor implementations must therefore retain all
 	// events since the last successful checkpoint.
 	runtime := newRuntimeCore(host, options)
-	if err := runtime.restoreCheckpointPayload(payload, resolver); err != nil {
+	// 恢复出来的每个 Program 同样要在 Host 声明的能力表里（B3 ③）。
+	if err := runtime.restoreCheckpointPayload(payload, hostCheckedResolver{resolver: resolver, host: host}); err != nil {
 		return nil, err
 	}
 	if host.CurrentRevision() != payload.WorldRevision || !authorityMatches(payload.Authority, host.AuthorityIdentity()) {

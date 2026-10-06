@@ -88,6 +88,7 @@ func lowerProgram(artifacts *compileArtifacts) (*Program, []Diagnostic) {
 		cooldownTicks:             artifacts.ir.cooldownTicks,
 		globalCooldownTicks:       artifacts.ir.globalCooldownTicks,
 		limits:                    artifacts.limits,
+		hostRequirements:          append([]HostCapability(nil), artifacts.hostRequirements...),
 	}
 	context := loweringContext{artifacts: artifacts, program: program, memory: make(map[string]MemoryIndex), input: make(map[string]uint16), readEntities: make(map[string]programValue)}
 	context.lowerInput()

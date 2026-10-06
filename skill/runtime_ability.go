@@ -90,6 +90,9 @@ func (runtime *Runtime) RegisterAbility(registration AbilityRegistration) error 
 	if registration.Owner == 0 || registration.Handle == 0 || registration.Slot < 0 || registration.Program == nil || runtime.host == nil || registration.Program.compilerSemanticsRevision != runtime.options.SupportedCompilerSemanticsRevision || !authorityMatches(registration.Program.authority, runtime.host.AuthorityIdentity()) {
 		return ErrCastInputInvalid
 	}
+	if err := runtime.admitHostCapabilitiesLocked(registration.Program); err != nil {
+		return err
+	}
 	programKey := skillStateKey{Caster: registration.Owner, Skill: registration.Program.id}
 	if runtime.abilityByProgram[programKey] != 0 {
 		return ErrCastInputInvalid

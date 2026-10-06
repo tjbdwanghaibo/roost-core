@@ -40,6 +40,7 @@ func runAuthorityCapabilityPass(context *compileContext) {
 		context.artifacts.spawnProperties = append([]SpawnPropertyPolicy(nil), context.environment.SpawnProperties.Properties...)
 		runOwnedEntityPass(context)
 		runStatusInstancePass(context)
+		runHostCapabilityCheck(context)
 	}
 }
 

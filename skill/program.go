@@ -37,6 +37,9 @@ type Program struct {
 	eventPlans                []eventPlanProgram
 	snapshots                 []attributeSnapshotProgram
 	limits                    ComputedLimits
+	// hostRequirements：编译期按环境 Host 能力表核对过的能力需求（B3 ③）。Runtime 在 Program
+	// 第一次使用时核对它们都在 Host 声明的表里。由定义与环境推出，不进 gameplay digest。
+	hostRequirements []HostCapability
 }
 
 func (program *Program) AuthorityIdentity() AuthorityIdentity {

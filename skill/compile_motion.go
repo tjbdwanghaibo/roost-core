@@ -152,12 +152,8 @@ func validateSpawnMotion(context *compileContext, spawn *spawnIR) {
 		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion", "canonical motion definition is required")
 		return
 	}
-	if !motionSlotEnabled(context.environment.Motion, "frame") {
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion.frame", "frame is disabled by the motion catalog")
-	}
-	if !motionSlotEnabled(context.environment.Motion, "completion") {
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion.completion", "completion is disabled by the motion catalog")
-	}
+	// Host 是否接受各 motion 步骤（frame / steering / offsets / collision / carry / completion）
+	// 由 Host 能力表检查（compile_host_capability.go，B3 ③），这里只查运动本身的策略。
 	if !motionPairAllowed(context.environment.Motion, spawn.kind, motion.trajectory.name()) {
 		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion.trajectory", "spawn and trajectory pair is not allowed by the motion catalog")
 	}
@@ -165,22 +161,11 @@ func validateSpawnMotion(context *compileContext, spawn *spawnIR) {
 	if spawn.kind == "beam" && motion.trajectory.name() != "stationary" && !motionPairAllowed(context.environment.Motion, "beam", motion.trajectory.name()) {
 		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion.trajectory", "beam requires stationary motion unless explicitly cataloged")
 	}
-	if motion.steering != nil && !motionSlotEnabled(context.environment.Motion, "steering") {
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion.steering", "steering is disabled by the motion catalog")
-	}
 	if len(motion.offsets) > context.environment.Limits.MaxMotionOffsets {
 		context.addDiagnostic(DiagnosticBudgetExceeded, path+".motion.offsets", "motion offsets exceed the environment maximum")
 	}
-	if len(motion.offsets) > 0 && !motionSlotEnabled(context.environment.Motion, "offsets") {
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion.offsets", "offsets are disabled by the motion catalog")
-	}
 	if motion.collision != nil {
 		validateMotionCollision(context, motion.collision, path+".motion.collision")
-	}
-	if motion.carry != nil {
-		if !motionSlotEnabled(context.environment.Motion, "carry") || !motionHostFeatureEnabled(context.environment.Motion, "carry") {
-			context.addDiagnostic(DiagnosticMotionInvalid, path+".motion.carry", "carry requires enabled motion slot and host feature")
-		}
 	}
 	validateMotionLiterals(context, motion, path+".motion")
 }
@@ -274,9 +259,6 @@ func motionCompletionVariant(value motionCompletionIR) string {
 }
 
 func validateMotionCollision(context *compileContext, collision *motionCollisionIR, path string) {
-	if !motionSlotEnabled(context.environment.Motion, "collision") {
-		context.addDiagnostic(DiagnosticMotionInvalid, path, "collision is disabled by the motion catalog")
-	}
 	if len(collision.layers) == 0 || !uniqueNonEmptyStrings(collision.layers) {
 		context.addDiagnostic(DiagnosticMotionInvalid, path+".layers", "collision layers must be a non-empty unique list")
 	}
@@ -384,22 +366,6 @@ func motionVariantAllowed(catalog MotionCapabilityCatalog, spawn, trajectory, st
 			return capability.Carry && variant == "carry"
 		case "completion":
 			return containsString(capability.Completions, variant)
-		}
-	}
-	return false
-}
-func motionSlotEnabled(catalog MotionCapabilityCatalog, slot string) bool {
-	for _, value := range catalog.EnabledSlots {
-		if value == slot {
-			return true
-		}
-	}
-	return false
-}
-func motionHostFeatureEnabled(catalog MotionCapabilityCatalog, feature string) bool {
-	for _, value := range catalog.HostFeatures {
-		if value == feature {
-			return true
 		}
 	}
 	return false

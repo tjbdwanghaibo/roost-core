@@ -257,6 +257,8 @@ type Runtime struct {
 	dirtyResources          map[skillStateKey]struct{}
 	dirtyAbilities          map[abilityKey]struct{}
 	dirtyPolicies           map[skillStateKey]struct{}
+	// hostAdmitted：能力需求已核对过、在 Host 声明的表里的 Program（B3 ③，runtime_host_capability.go）。
+	hostAdmitted map[*Program]struct{}
 }
 
 func NewRuntime(host Host, options RuntimeOptions) *Runtime {
@@ -403,6 +405,9 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 	}
 	if !authorityMatches(program.authority, runtime.host.AuthorityIdentity()) {
 		return 0, ErrAuthorityMismatch
+	}
+	if err := runtime.admitHostCapabilitiesLocked(program); err != nil {
+		return 0, err
 	}
 	inputs, err := freezeCastInput(program, input, runtime.host)
 	if err != nil {

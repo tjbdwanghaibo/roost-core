@@ -29,6 +29,7 @@ const (
 	DiagnosticCatalogUnitPolicy        DiagnosticCode = "CATALOG_UNIT_POLICY_INVALID"
 	DiagnosticCatalogTemporalPolicy    DiagnosticCode = "CATALOG_TEMPORAL_POLICY_INVALID"
 	DiagnosticCatalogMotionPolicy      DiagnosticCode = "CATALOG_MOTION_POLICY_INVALID"
+	DiagnosticCatalogHostPolicy        DiagnosticCode = "CATALOG_HOST_POLICY_INVALID"
 	DiagnosticShapeInvalid             DiagnosticCode = "SHAPE_INVALID"
 	DiagnosticCapabilityUnknown        DiagnosticCode = "CAPABILITY_UNKNOWN"
 	DiagnosticGameplayTagPermission    DiagnosticCode = "GAMEPLAY_TAG_PERMISSION"
@@ -56,4 +57,7 @@ const (
 	// DiagnosticLowerUnresolved：lower 查某个名字的槽位 / handle 查不到（B3 ①）。出现它说明
 	// 前面某个 pass 接受了一个它没有解析的名字，是编译器缺陷；Program 不会被交出。
 	DiagnosticLowerUnresolved DiagnosticCode = "LOWER_UNRESOLVED"
+	// DiagnosticHostCapabilityMissing：定义用到的取值不在环境的 Host 能力表里（B3 ③），消息点名
+	// 缺的那一项（如 `motion_step "collision"`、`summon`）。
+	DiagnosticHostCapabilityMissing DiagnosticCode = "HOST_CAPABILITY_MISSING"
 )

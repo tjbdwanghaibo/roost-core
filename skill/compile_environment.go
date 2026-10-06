@@ -211,8 +211,6 @@ type MotionCapabilityCatalog struct {
 	Revision             string
 	SpawnTrajectoryPairs []MotionSpawnTrajectoryPair
 	VariantCapabilities  []MotionVariantCapability
-	EnabledSlots         []string
-	HostFeatures         []string
 	MaximumSpeed         int64
 	MaximumDistance      int64
 	MaximumAngularSpeed  int64
@@ -299,14 +297,17 @@ type CompileEnvironment struct {
 	Gameplay                  GameplayCatalog
 	Motion                    MotionCapabilityCatalog
 	SpawnProperties           SpawnPropertyCatalog
-	Visual                    VisualCatalog
+	// Host 是 Host 取值能力表里业务声明的部分（B3 ③），随环境下发、算进 authority digest；
+	// 完整的表用 HostCapabilityTableOf 取。
+	Host   HostCapabilityCatalog
+	Visual VisualCatalog
 }
 
 func DefaultCompileEnvironment() CompileEnvironment {
 	environment := CompileEnvironment{
 		CompilerSemanticsRevision: "skillv2-compiler-2", Revision: "gameplay-default-1",
 		Limits: defaultCompileLimits(), Numeric: NumericAuthority{WorldDistanceScale: 1000, MillidegreesPerDegree: 1000, BasisPointsScale: 10000, SignedIntegerBits: 64, TickUnit: "logical_tick", DefaultRounding: "half_away_from_zero"},
-		Gameplay: defaultGameplayCatalog(), Motion: defaultMotionCapabilityCatalog(), SpawnProperties: defaultSpawnPropertyCatalog(), Visual: defaultVisualCatalog(),
+		Gameplay: defaultGameplayCatalog(), Motion: defaultMotionCapabilityCatalog(), SpawnProperties: defaultSpawnPropertyCatalog(), Host: FullHostCapabilityCatalog(), Visual: defaultVisualCatalog(),
 	}
 	environment.Visual.Digest = digestStrings("visual", environment.Visual.Revision, environment.Visual.Themes)
 	environment.Digest = authorityDigest(environment)
@@ -386,7 +387,7 @@ func defaultMotionCapabilityCatalog() MotionCapabilityCatalog {
 			{Spawn: "area", Trajectory: "linear", Frames: []string{"world", "follow"}, Steering: []string{"fixed"}, CollisionResponses: []string{"stop"}, Completions: []string{"end", "pause_then_end"}},
 			{Spawn: "beam", Trajectory: "stationary", Frames: []string{"world", "follow"}, Completions: []string{"end"}},
 		},
-		EnabledSlots: []string{"frame", "steering", "offsets", "collision", "carry", "completion"}, HostFeatures: []string{"carry"}, MaximumSpeed: 100000, MaximumDistance: 100000, MaximumAngularSpeed: 100000, MaximumTrackingTicks: 36000,
+		MaximumSpeed: 100000, MaximumDistance: 100000, MaximumAngularSpeed: 100000, MaximumTrackingTicks: 36000,
 	}
 }
 

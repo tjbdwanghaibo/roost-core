@@ -265,6 +265,45 @@ func (adapter *HostAdapter) applyShield(command skill.ShieldCommand) (skill.Effe
 	return skill.EffectResult{Commit: receipt, Payload: skill.ShieldEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.ShieldResult{Added: added}}}, nil
 }
 
+// HostCapabilities declares the part of the skill host capability table
+// (B3 ③) this adapter implements: the readable attributes of Catalog, the
+// Catalog resources that ResourceAttribute maps, the four resource
+// operations, and — with a StatusBridge — the add / mul_bp attribute
+// modifiers. Spawns, motion, and summons belong to the business host, which
+// declares its own part and merges both with skill.MergeHostCapabilities.
+func (adapter *HostAdapter) HostCapabilities() skill.HostCapabilityTable {
+	table := skill.CatalogHostCapabilities(adapter.Catalog)
+	mapped := make([]string, 0, len(table.Resources))
+	for _, entry := range adapter.Catalog.Resources.Entries {
+		if adapter.ResourceAttribute == nil {
+			break
+		}
+		if _, ok := adapter.ResourceAttribute(entry.Key, entry.Handle); ok {
+			mapped = append(mapped, entry.Key)
+		}
+	}
+	table.Resources = mapped
+	if adapter.ResourceAttribute != nil {
+		table.ResourceOperations = []string{"set", "add", "spend", "sub"}
+	}
+	if adapter.Status != nil {
+		table.ModifierOperations = []string{"add", "mul_bp"}
+	}
+	return table
+}
+
+// readableAttribute reports whether Catalog declares the handle readable.
+// Reads outside the capability table fail instead of returning the zero an
+// unknown combat attribute channel holds.
+func (adapter *HostAdapter) readableAttribute(handle skill.AttributeHandle) bool {
+	for _, entry := range adapter.Catalog.Attributes.Entries {
+		if entry.Handle == handle {
+			return entry.Readable
+		}
+	}
+	return false
+}
+
 // Read answers attribute and resource reads from component state.
 // handled=false means the payload is not a combat read.
 func (adapter *HostAdapter) Read(request skill.ReadRequest) (skill.ReadResult, bool, error) {
@@ -273,6 +312,9 @@ func (adapter *HostAdapter) Read(request skill.ReadRequest) (skill.ReadResult, b
 		component, ok := adapter.Resolver.CombatComponent(payload.Entity)
 		if !ok {
 			return skill.ReadResult{}, true, fmt.Errorf("combatcomponent: entity %d has no combat component", payload.Entity)
+		}
+		if !adapter.readableAttribute(payload.Attribute) {
+			return skill.ReadResult{}, true, fmt.Errorf("%w: combatcomponent: attribute handle %d is not readable in the catalog", skill.ErrHostCapabilityMissing, payload.Attribute)
 		}
 		value := component.AttributeCurrent(combat.AttributeID(payload.Attribute))
 		return skill.ReadResult{Meta: skill.QueryResultMeta{Revision: adapter.Revision.CurrentRevision()}, Value: skill.AttributeRuntimeValue(adapter.Catalog, payload.Attribute, value)}, true, nil

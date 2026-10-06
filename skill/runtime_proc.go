@@ -43,6 +43,9 @@ func (runtime *Runtime) enqueuePassive(program *Program, event EventContext, own
 	if program == nil || program.activationKind == "active" || owner == 0 {
 		return 0, ErrCastInputInvalid
 	}
+	if err := runtime.admitHostCapabilitiesLocked(program); err != nil {
+		return 0, err
+	}
 	runtime.nextPassiveActivationID++
 	id := runtime.nextPassiveActivationID
 	due := runtime.currentTick

@@ -182,7 +182,7 @@ crit := combat.ChanceRoll(matchSeed, "crit", critChanceBP,
 - `CombatDao`：持有全部战斗状态，实现 `entity.DaoInterface` + `dataengine.Tracker` 契约 + `entity.PersistedDaoLoader`（BSON + schema 版本）与 nest 状态回滚接口；undo 策略下由 DAO 自己按字段掩码（vitals / attributes / buffs）登记逆操作并标脏，与生成 DAO 的 setter 同形。
 - `CombatComponent`：只持有 DAO，全部 mutator 经 DAO 改状态，自己不登记 undo（回滚统一走 DAO，[A1](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）——handler 失败或提交被拒后，两种回滚策略下实体字节一致。
 - **Runtime 不在事务里**（维护者决定 B4，见上文“Runtime 不在事务里（B4）”）：Nest 回滚只撤回 DAO；`skill.Runtime` 自己的状态不回退。
-- `HostAdapter`：实现 `skill.Host` 的战斗面（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepSpawn`/空间查询/召唤物仍由业务 Host 实现。
+- `HostAdapter`：实现 `skill.Host` 的战斗面（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepSpawn`/空间查询/召唤物仍由业务 Host 实现。`HostAdapter.HostCapabilities()` 声明它负责的那部分 Host 能力表（Catalog 里可读的属性、`ResourceAttribute` 映射到的资源、四种资源 operation，接了 `Status` 再加 add / mul_bp 修正）；业务把自己负责的部分（衍生物 kind、motion 步骤、召唤物）用 `skill.MergeHostCapabilities` 合进来声明。Catalog 外或不可读的属性读取返回 `skill.ErrHostCapabilityMissing`（以前读出 0）。见 [B3 ③ 方案](../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)。
 
 ### 属性投影（O2，未发版）
 

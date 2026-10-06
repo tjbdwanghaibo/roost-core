@@ -94,6 +94,7 @@ type MemoryHost struct {
 	nextCursor            EventCursor
 	nextEntity            EntityID
 	gameplay              GameplayCatalog
+	gameplayConfigured    bool
 	criticalTag, spellTag GameplayTagHandle
 	statuses              []statusInstance
 	modifiers             []attributeModifierInstance
@@ -139,12 +140,51 @@ func (host *MemoryHost) ConfigureGameplayCatalog(catalog GameplayCatalog) {
 	host.mutex.Lock()
 	defer host.mutex.Unlock()
 	host.gameplay = cloneHostGameplayCatalog(catalog)
+	host.gameplayConfigured = true
 	if handle, ok := lookupTag(catalog.Tags, "critical"); ok {
 		host.criticalTag = handle
 	}
 	if handle, ok := lookupTag(catalog.Tags, "spell"); ok {
 		host.spellTag = handle
 	}
+}
+
+// HostCapabilities 声明 MemoryHost 的能力表（B3 ③）：可读属性与资源取配置的 Gameplay catalog
+// （未配置时按默认环境的 catalog），其余各列 MemoryHost 全部实现。配置了 catalog 之后，表外的
+// 属性读取、资源读取与付费返回 ErrHostCapabilityMissing，不再静默当成 0；未配置的 MemoryHost
+// 保持按实体数据作答（测试便利），只用于默认环境。
+func (host *MemoryHost) HostCapabilities() HostCapabilityTable {
+	host.mutex.RLock()
+	defer host.mutex.RUnlock()
+	catalog := host.gameplay
+	if !host.gameplayConfigured {
+		catalog = defaultGameplayCatalog()
+	}
+	attributes, resources := catalogHostCapabilities(catalog)
+	return HostCapabilityTable{Attributes: attributes, Resources: resources, HostCapabilityCatalog: FullHostCapabilityCatalog()}
+}
+
+// readableAttributeLocked 报告属性能否读取：未配置 catalog 时一律可读（按实体数据作答）。
+func (host *MemoryHost) readableAttributeLocked(handle AttributeHandle) (AttributeCatalogEntry, bool) {
+	for _, entry := range host.gameplay.Attributes.Entries {
+		if entry.Handle == handle {
+			return entry, entry.Readable || !host.gameplayConfigured
+		}
+	}
+	return AttributeCatalogEntry{}, !host.gameplayConfigured
+}
+
+// knownResourceLocked 报告资源 key 在不在能力表里：未配置 catalog 时一律接受。
+func (host *MemoryHost) knownResourceLocked(resource string) bool {
+	if !host.gameplayConfigured {
+		return true
+	}
+	for _, entry := range host.gameplay.Resources.Entries {
+		if entry.Key == resource {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneHostGameplayCatalog(catalog GameplayCatalog) GameplayCatalog {
@@ -257,6 +297,9 @@ func (host *MemoryHost) Read(request ReadRequest) (ReadResult, error) {
 		if !ok {
 			return ReadResult{}, ErrEntityNotFound
 		}
+		if !host.knownResourceLocked(payload.Resource) {
+			return ReadResult{}, fmt.Errorf("%w: resource %q", ErrHostCapabilityMissing, payload.Resource)
+		}
 		result.Value = IntRuntimeValue(entity.Resources[payload.Resource], quantityResourceAmount)
 	case PositionRead:
 		entity, ok := host.entities[payload.Entity]
@@ -268,12 +311,13 @@ func (host *MemoryHost) Read(request ReadRequest) (ReadResult, error) {
 		if _, ok := host.entities[payload.Entity]; !ok {
 			return ReadResult{}, ErrEntityNotFound
 		}
+		entry, readable := host.readableAttributeLocked(payload.Attribute)
+		if !readable {
+			return ReadResult{}, fmt.Errorf("%w: attribute handle %d", ErrHostCapabilityMissing, payload.Attribute)
+		}
 		quantity := quantityDimensionless
-		for _, entry := range host.gameplay.Attributes.Entries {
-			if entry.Handle == payload.Attribute {
-				quantity = entry.Quantity
-				break
-			}
+		if entry.Handle != 0 {
+			quantity = entry.Quantity
 		}
 		result.Value = IntRuntimeValue(host.effectiveAttributeLocked(payload.Entity, payload.Attribute), quantity)
 	default:
@@ -303,6 +347,9 @@ func (host *MemoryHost) PayCosts(payment CostPayment) (CommitReceipt, error) {
 		}
 		if resource == "" {
 			return CommitReceipt{}, ErrCombatHandleInvalid
+		}
+		if !host.knownResourceLocked(resource) {
+			return CommitReceipt{}, fmt.Errorf("%w: resource %q", ErrHostCapabilityMissing, resource)
 		}
 		totals[resource] = saturatingInt64Add(totals[resource], entry.Amount)
 	}

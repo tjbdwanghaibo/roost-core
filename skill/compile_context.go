@@ -37,12 +37,14 @@ type compileArtifacts struct {
 	ability         abilityArtifact
 	temporal        temporalArtifact
 	spawnProperties []SpawnPropertyPolicy
-	lifetimes       map[string]lifecycleFact
-	identity        identityArtifact
-	limits          ComputedLimits
-	visual          visualArtifact
-	metadata        compileMetadata
-	lowerReady      bool
+	// hostRequirements：Program 运行期会向 Host 要的能力（B3 ③），排序去重。
+	hostRequirements []HostCapability
+	lifetimes        map[string]lifecycleFact
+	identity         identityArtifact
+	limits           ComputedLimits
+	visual           visualArtifact
+	metadata         compileMetadata
+	lowerReady       bool
 }
 
 type visualArtifact struct {
