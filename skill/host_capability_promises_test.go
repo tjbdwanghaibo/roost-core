@@ -90,13 +90,6 @@ func (host *noSteeringHost) HostCapabilities() HostCapabilityTable {
 	return withoutHostCapabilities(host.MemoryHost.HostCapabilities(), HostCapability{HostCapabilityMotionStep, "steering"})
 }
 
-// noSummonHost 不实现 OwnedEntityRuntimeHost，声明里也没有召唤物与 minion。
-type noSummonHost struct{ hostWithoutOwnedContract }
-
-func (host *noSummonHost) HostCapabilities() HostCapabilityTable {
-	return withoutHostCapabilities(host.inner.HostCapabilities(), HostCapability{Kind: HostCapabilitySummon}, HostCapability{HostCapabilitySpawnKind, "minion"})
-}
-
 // noModifierHost 不支持属性修正，声明与行为一致。
 type noModifierHost struct{ *MemoryHost }
 
@@ -129,7 +122,7 @@ func hostCapabilityCases() []hostCapabilityCase {
 			flow:  `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10}},{"flow":"finish"}]}`,
 			host: func(environment CompileEnvironment) (Host, *MemoryHost) {
 				inner := runtimeTestHost(environment)
-				return &noSummonHost{hostWithoutOwnedContract{inner: inner}}, inner
+				return &hostWithoutOwnedContract{inner: inner}, inner
 			},
 		},
 		{
@@ -229,7 +222,7 @@ func TestRestoreRefusesProgramsOutsideTheHostTable(t *testing.T) {
 	if _, err := RestoreRuntime(inner, RuntimeOptions{}, checkpoint, resolver); err != nil {
 		t.Fatalf("restore onto the full host: %v", err)
 	}
-	_, err = RestoreRuntime(&noSummonHost{hostWithoutOwnedContract{inner: inner}}, RuntimeOptions{}, checkpoint, resolver)
+	_, err = RestoreRuntime(&hostWithoutOwnedContract{inner: inner}, RuntimeOptions{}, checkpoint, resolver)
 	if !errors.Is(err, ErrCheckpointProgram) || !strings.Contains(err.Error(), "summon") {
 		t.Fatalf("restore onto a host without summons: err = %v, want ErrCheckpointProgram naming summon", err)
 	}

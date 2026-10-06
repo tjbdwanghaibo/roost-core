@@ -46,6 +46,14 @@ func (host *RecordingHost) AuthorityIdentity() AuthorityIdentity {
 	host.append("authority", nil, value, nil, host.host.CurrentRevision())
 	return value
 }
+
+// HostCapabilities 转发被包装 Host 的能力表并记录这次调用：包装型 Host 不另声明能力，
+// Runtime 的准入核对看到的就是底层 Host 的表（B3 ③）。
+func (host *RecordingHost) HostCapabilities() HostCapabilityTable {
+	value := host.host.HostCapabilities()
+	host.append("host_capabilities", nil, value, nil, host.host.CurrentRevision())
+	return value
+}
 func (host *RecordingHost) CurrentRevision() WorldRevision {
 	value := host.host.CurrentRevision()
 	host.append("current_revision", nil, value, nil, value)
@@ -130,6 +138,11 @@ func NewReplayHost(authority AuthorityIdentity, records []HostRecord) *ReplayHos
 }
 func (host *ReplayHost) AuthorityIdentity() AuthorityIdentity {
 	return host.next("authority", nil).(AuthorityIdentity)
+}
+
+// HostCapabilities 回放录制时底层 Host 的能力表：准入核对与录制时同序发生，表也相同。
+func (host *ReplayHost) HostCapabilities() HostCapabilityTable {
+	return host.next("host_capabilities", nil).(HostCapabilityTable)
 }
 func (host *ReplayHost) CurrentRevision() WorldRevision {
 	return host.next("current_revision", nil).(WorldRevision)

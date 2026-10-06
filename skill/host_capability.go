@@ -55,9 +55,10 @@ type HostCapabilityTable struct {
 	HostCapabilityCatalog
 }
 
-// HostCapabilityProvider 是 Host 声明能力表的接口。Runtime 在 Program 第一次使用时用它核对
-// Program 的能力需求；没实现它的 Host 不做这项核对（调试用的 RecordingHost / ReplayHost 等），
-// 正式 Host 应当实现。能力表在 Host 生命周期内不应变化。
+// HostCapabilityProvider 是 Host 声明能力表的接口，并入了 Host 接口：每个 Host 都必须声明
+// （没有“未实现则跳过”的分支）。Runtime 在 Program 第一次使用时用它核对 Program 的能力需求；
+// 包装型 Host 转发被包装 Host 的表（RecordingHost 转发并记录，ReplayHost 按记录回放）。
+// 能力表在 Host 生命周期内不应变化。
 type HostCapabilityProvider interface {
 	HostCapabilities() HostCapabilityTable
 }

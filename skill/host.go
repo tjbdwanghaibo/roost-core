@@ -31,8 +31,15 @@ package skill
 //     re-issued. Callbacks run only on the first request; retries call
 //     StopSpawn alone. Return an error only when the spawn is still running
 //     in the world.
+//   - HostCapabilities declares what the Host supports (B3 ③). Every Host
+//     must declare it: the Runtime admits a Program on its first use only when
+//     its compiled host requirements are all in the table, and refuses it
+//     otherwise (ErrHostCapabilityMissing) before anything is paid. Wrappers
+//     forward the wrapped Host's table (RecordingHost / ReplayHost). A zero
+//     table declares nothing, so every Program with requirements is refused.
 type Host interface {
 	AuthorityProvider
+	HostCapabilityProvider
 	StateStore
 	Advance(tick Tick) (WorldRevision, error)
 	CurrentRevision() WorldRevision

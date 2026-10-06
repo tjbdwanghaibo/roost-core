@@ -93,7 +93,7 @@ Host：MemoryHost / HostAdapter 声明表；表外的属性 / 资源报 ErrHostC
 ```
 
 - **编译器**（`skill/compile_host_capability.go`，在 `authority_capability` pass 末尾运行，不新增 pass 名）：遍历 IR 收集需求（带第一次用到的源路径），对照 `HostCapabilityTableOf(environment)`；原来写在 `compile_motion.go` 的槽位 / Host 特性检查删掉。资源 / 修正 operation 的语言封闭集合检查（`SHAPE_INVALID`）保留——那是 DSL 本身的取值范围，Host 表是它的子集。
-- **Runtime**（`skill/runtime_host_capability.go`）：Program 第一次在这个 Runtime 上用时核对，通过的记在 `hostAdmitted`，之后不重复核对；`ErrHostCapabilityMissing` 同时 `errors.Is(ErrHostContractViolation)`。checkpoint 恢复经 `hostCheckedResolver` 同样核对（失败为 `ErrCheckpointProgram`，消息点名缺的项）。Host 没实现 `HostCapabilityProvider` 时不做核对（`RecordingHost` / `ReplayHost` 等调试替身；既有用例 `TestOwnedEntityRuntimeFailsClosedWithoutOwnedHostContract` 依赖这一点原样通过）。
+- **Runtime**（`skill/runtime_host_capability.go`）：Program 第一次在这个 Runtime 上用时核对，通过的记在 `hostAdmitted`，之后不重复核对；`ErrHostCapabilityMissing` 同时 `errors.Is(ErrHostContractViolation)`。checkpoint 恢复经 `hostCheckedResolver` 同样核对（失败为 `ErrCheckpointProgram`，消息点名缺的项）。Host 没实现 `HostCapabilityProvider` 时不做核对（`RecordingHost` / `ReplayHost` 等调试替身；既有用例 `TestOwnedEntityRuntimeFailsClosedWithoutOwnedHostContract` 依赖这一点原样通过）。**（已由 §12 改为“每个 Host 必须声明”，这一条跳过分支删除。）**
 - **Host**：
   - `MemoryHost.HostCapabilities()`：配置的 catalog（未配置时按默认 catalog）推出属性 / 资源两列，其余列全部实现。配置了 catalog 之后，`Read(AttributeRead)` / `Select` 的属性过滤对不可读或 catalog 外的 handle、`Read(ResourceRead)` / `PayCosts` 对 catalog 外的资源名返回 `ErrHostCapabilityMissing`（原来静默当 0）。未配置 catalog 的 MemoryHost 维持按实体数据作答（测试便利，`CheckHostCapabilities` 会指出它答了表外的属性）。
   - `combatcomponent.HostAdapter.HostCapabilities()`：Catalog 里可读的属性、有 `ResourceAttribute` 映射的资源、四种资源 operation；接了 `StatusBridge` 时再加 add / mul_bp。运动、衍生物、召唤物归业务 Host。`Read(AttributeRead)` 对 Catalog 里不可读或不存在的 handle 返回 `ErrHostCapabilityMissing`（原来读出 0）。
@@ -191,3 +191,76 @@ HostAdapter：
 ## 11. 实施状态
 
 已实施（`cd8ed341`，未发版；登记 `13f032a3`）。未做：Host 数值字段（`spawn_numeric_field`）只能核对 `StepSpawn` 接受该字段，Host 是否真的使用它无法从接口上观察，声明即承诺；非 minion 的衍生物 kind 同理（`StepSpawn` 不带 kind），只核对基本步骤。
+
+## 12. 收尾：能力表必须实现（v1.23.0 发版前，2026-10-07）
+
+维护者要求交给 review 前不留能绕过检查的分支。§5 的 Runtime 核对有一个：Host 没实现 `HostCapabilityProvider` 时直接跳过。
+包装型调试 Host（`RecordingHost` / `ReplayHost`）没实现它，于是被它们包着的 Host 即使如实声明了“没有召唤物”，Program 也绕过准入一路执行，
+到施法中途才被类型断言拒绝、已经扣费。登记为 [RR-20261006-39](../bug/RR-20261006-39.md)。
+
+### 12.1 选择
+
+两种做法：①把 `HostCapabilityProvider` 并进 `Host` 接口；②接口不变，Runtime 入口处没实现就拒绝。选 ①：
+
+- 改动更小：仓内全部 Host 实现里，嵌入 `*MemoryHost` 的测试替身自动得到它，非测试代码只有 `RecordingHost` / `ReplayHost` 要补；①之后
+  Runtime 不需要任何“没实现怎么办”的分支（②要在 Start / RegisterAbility / 入队被动 / 恢复四个入口各返回一种新错误）。
+- 对业务更友好：业务 Host 漏写能力表在编译期就报（`does not implement skill.Host (missing method HostCapabilities)`），而不是部署后第一次施法才失败。
+- 空表（零值 `HostCapabilityTable{}`）是合法声明：什么都不支持，带能力需求的 Program 一律在准入处被拒，并点名缺的每一项。
+
+### 12.2 实施
+
+| 位置 | 改动 |
+| --- | --- |
+| `skill/host.go` | `Host` 嵌入 `HostCapabilityProvider`；契约注释补一条“每个 Host 都声明能力表，包装型 Host 转发” |
+| `skill/runtime_host_capability.go` | `hostCoversProgram` 删掉 `host.(HostCapabilityProvider)` 断言与“没实现就返回 nil”的分支，直接 `host.HostCapabilities()`（没有 Host 的 Runtime 在 Start / RegisterAbility / RestoreRuntime 入口已先被拒） |
+| `skill/host_capability_check.go` | `CheckHostCapabilities` 同样直接取表（原来对没实现的 Host 报错） |
+| `skill/replay.go` | `RecordingHost.HostCapabilities` 转发被包装 Host 的表并记录这次调用（`host_capabilities`）；`ReplayHost.HostCapabilities` 按记录回放 |
+| `skill/host_capability.go` | `HostCapabilityProvider` 注释改为“并入 Host、每个 Host 都必须声明” |
+
+### 12.3 改写的既有用例
+
+`TestOwnedEntityRuntimeFailsClosedWithoutOwnedHostContract`（`skill/owned_entity_test.go`）原来用一个不声明能力表的 Host，**依赖的正是被删掉的跳过分支**：
+准入被跳过，summon 执行到施法中途才由类型断言返回 `ErrHostContractViolation`。按新语义改成两层：
+
+- 如实声明（表里没有 summon / minion）的 `hostWithoutOwnedContract`：`Activate` 在准入处返回 `ErrHostCapabilityMissing`（同时 `errors.Is` `ErrHostContractViolation`），召唤物没有到达 Host；
+- 谎报 summon 的 `declaredSummonWithoutContract`：准入放行，施法中途的类型断言仍然兜底拒绝，原用例的断言（`err == ErrHostContractViolation`、Host 上没有召唤物）原样保留。这种 Host 由 `CheckHostCapabilities` 在业务测试里点名。
+
+`hostWithoutOwnedContract` 现在自己如实声明（原来由 `noSummonHost` 包一层声明，`noSummonHost` 删除、用到它的两处改用 `hostWithoutOwnedContract`）。
+
+### 12.4 先红后绿
+
+修前（基线 `82dfe672`，临时用例 `zz_red_undeclared_test.go`，未提交）：summon 技能（cost 10 mana）交给两个 Host：
+
+```text
+--- FAIL: TestRedUndeclaredHostBypassesAdmission (0.00s)
+    zz_red_undeclared_test.go:20: host without HostCapabilities: Activate err = skill: host contract violation, mana = 90; want ErrHostCapabilityMissing before paying (mana 100)
+    zz_red_undeclared_test.go:20: RecordingHost over a no-summon host: Activate err = skill: host contract violation, mana = 90; want ErrHostCapabilityMissing before paying (mana 100)
+```
+
+修后（`skill/host_capability_required_promises_test.go`）：
+
+- `TestHostInterfaceRequiresTheCapabilityTable`：`skill.Host` 包含 `HostCapabilities()`（不声明的 Host 编译不过，第一种 Host 已不可能存在）；
+- `TestWrappingHostsForwardTheWrappedCapabilities`：`RecordingHost` 包着如实声明没有召唤物的 Host，`Activate` 返回点名 `summon` 的 `ErrHostCapabilityMissing`、mana 仍是 100；
+  `ReplayHost` 回放这段记录得到同样的拒绝且记录恰好用完；包着能力齐全的 Host 时转发的表与底层相同；
+- `TestEmptyTableRefusesEveryRequirement`：声明空表的 Host 在准入处被拒，错误点名 `summon` 与 `resource "mana"`，没扣费；
+- `TestNoHostCapabilitySkipBranch`：skill 非测试源码里不再有对 `HostCapabilityProvider` 的类型断言（跳过分支的形状）。
+
+变异（跑后还原）：
+
+| 变异 | 结果 |
+| --- | --- |
+| Runtime 恢复 `provider, ok := Host(host).(HostCapabilityProvider); if !ok { return nil }` | `TestNoHostCapabilitySkipBranch`：`runtime_host_capability.go:37 asserts HostCapabilityProvider; every Host declares its table, read host.HostCapabilities() directly` |
+| `Host` 去掉 `HostCapabilityProvider`（并把三处取表改回类型断言） | 先是 `replay.go:52:21: host.host.HostCapabilities undefined`（编译失败）；改成断言后 `TestHostInterfaceRequiresTheCapabilityTable`：`skill.Host does not include HostCapabilities(): a Host may omit its capability table and skip admission`，`TestNoHostCapabilitySkipBranch` 点名三处断言 |
+| `RecordingHost` 不转发、自己声明默认环境的全表 | `TestWrappingHostsForwardTheWrappedCapabilities`：`RecordingHost over a host without summons: err = skill: host contract violation, want ErrHostCapabilityMissing naming summon` |
+
+### 12.5 兼容
+
+- 破坏性（线上未部署，不做兼容）：业务自己的 `skill.Host` 实现必须有 `HostCapabilities() skill.HostCapabilityTable`，否则编译不过。
+  多数业务 Host 嵌入 `*skill.MemoryHost` 或组合 `combatcomponent.HostAdapter`，按 §6 的写法合并即可；包装别的 Host 的类型转发被包装者的表。
+- 录制下来的 `HostRecord` 多一条 `host_capabilities`（Program 第一次准入时），用旧记录回放会在这一步报 `ErrReplayMismatch`，重录即可。
+- 编译期行为、默认环境、gameplay / presentation / authority digest 都不变。
+
+### 12.6 验证（`GOWORK=off`）
+
+见 [RR-20261006-39 修复记录](../bugfix/RR-20261006-39.md)：`gofmt -l` 空；`go vet ./skill/...`；`go test -race -count=3 ./skill/...`；
+`skill/examples` 三个示例实跑、`skill/integration/sync-e2e`；根包；`go build ./... && go vet ./...`。

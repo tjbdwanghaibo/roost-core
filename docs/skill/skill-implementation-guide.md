@@ -180,12 +180,12 @@ World revision 是关键防线：Runtime 的 query/command 会携带期望 revis
 - 编译器（`compile_host_capability.go`）从 IR 收集需求，只经 `HostCapabilityTableOf` 读表，表外报
   `HOST_CAPABILITY_MISSING`；需求排序去重后写进 `Program.hostRequirements`。新增会向 Host 要新取值的 DSL 构造时，
   在这里加收集、在 `hostCapabilityColumns` 加列（封闭集合只登记在那里）。
-- Runtime（`runtime_host_capability.go`）在 Program 第一次使用时核对需求在 Host 的表里。
+- Runtime（`runtime_host_capability.go`）在 Program 第一次使用时核对需求在 Host 的表里。能力表是 `skill.Host` 接口的一部分（`HostCapabilities()`，收尾时并入，[RR-20261006-39](../bugfix/RR-20261006-39.md)）：每个 Host 都必须声明，没有“没实现就跳过”的分支；包装别的 Host 的类型（`RecordingHost` / `ReplayHost` 的做法）转发被包装者的表，不要自己另写一份。空表表示什么都不支持。
 - Host 对表外的属性 / 资源报错；`CheckHostCapabilities` 按声明逐项调用 Host。`MemoryHost` 声明全部能力（属性 /
   资源两列取配置的 catalog）；`combatcomponent.HostAdapter` 声明战斗那部分（可读属性、有映射的资源、资源
   operation，接了 `StatusBridge` 再加修正），运动 / 衍生物 / 召唤物由业务声明后 `MergeHostCapabilities`。
 
-守卫：`TestRuntimeAsksHostOnlyForCompiledRequirements`（Runtime 发给 Host 的取值都在需求里——改 Runtime 向 Host
+守卫：`TestNoHostCapabilitySkipBranch`（skill 源码里不许再对 `HostCapabilityProvider` 做类型断言）、`TestRuntimeAsksHostOnlyForCompiledRequirements`（Runtime 发给 Host 的取值都在需求里——改 Runtime 向 Host
 发的东西时它会先红）、`TestCompilerConsultsTheTableForEveryRequirement`、`TestCompilerReadsHostCapabilitiesOnlyThroughTheTable`、
 `TestHostOnlySpawnNumericFieldsMatchRuntime`。
 

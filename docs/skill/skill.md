@@ -77,7 +77,7 @@ operation、召唤物（`OwnedEntityRuntimeHost`）。后六列写在 `environme
   `environment host capability table lacks motion_step "collision"`、`... lacks summon`）。这不是定义写错，而是
   这个项目的 Host 不支持它：换写法，或让 Host 实现后在环境里声明。默认环境声明全部能力。运动衍生物固定需要
   frame / steering / offsets / completion 四个步骤（Runtime 每步都发），collision / carry 写了才需要。
-- **Host 实现**：实现 `skill.HostCapabilityProvider`（`HostCapabilities() skill.HostCapabilityTable`）声明自己的表；
+- **Host 实现**：`skill.Host` 接口包含 `HostCapabilities() skill.HostCapabilityTable`（`HostCapabilityProvider` 已并入，漏写编译不过），每个 Host 都声明自己的表，包装别的 Host 的类型转发被包装者的表；
   环境的 Host 段取自它（`environment.Host = host.HostCapabilities().HostCapabilityCatalog`，再
   `skill.AuthorityDigest` 重签），或手写后在启动时用 `skill.HostSupportsEnvironment(host, environment)` 核对。
   Runtime 在 Program 第一次启动 / 注册 / 入队被动 / 从 checkpoint 恢复时核对它的需求都在 Host 的表里，缺了返回

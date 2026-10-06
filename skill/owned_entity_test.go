@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -484,15 +485,33 @@ func TestOwnedSpawnSignalsUseCanonicalOrderAndTargetContext(t *testing.T) {
 	}
 }
 
+// 没有召唤物契约（不实现 OwnedEntityRuntimeHost）的 Host 上，summon 必须 fail closed，召唤物不能到达 Host。
+//
+// B3 ③ 收尾改写：原用例的 Host 不声明能力表，Runtime 的准入核对因此被跳过，Program 一路执行到
+// summon 才由施法中途的类型断言拒绝（ErrHostContractViolation，已扣费）。能力表并入 Host 接口后
+// 每个 Host 都要声明，这条承诺分成两层：
+//   - 如实声明（表里没有 summon）的 Host：在 Activate 准入处就被拒绝（ErrHostCapabilityMissing，
+//     同时 errors.Is ErrHostContractViolation），什么都没执行；
+//   - 谎报 summon 的 Host：准入放行，施法中途的类型断言仍然兜底拒绝（原用例的断言原样保留）。
+//     这种 Host 由 CheckHostCapabilities 在业务测试里点名（TestCheckHostCapabilitiesCatchesMisdeclaredHosts）。
 func TestOwnedEntityRuntimeFailsClosedWithoutOwnedHostContract(t *testing.T) {
 	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "host-contract", flow)
-	inner := runtimeTestHost(environment)
-	runtime := NewRuntime(&hostWithoutOwnedContract{inner: inner}, RuntimeOptions{})
-	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != ErrHostContractViolation {
-		t.Fatalf("err=%v", err)
+
+	honest := runtimeTestHost(environment)
+	_, err := NewRuntime(&hostWithoutOwnedContract{inner: honest}, RuntimeOptions{}).Activate(program, CastInput{Caster: 1})
+	if !errors.Is(err, ErrHostCapabilityMissing) || !errors.Is(err, ErrHostContractViolation) {
+		t.Fatalf("honest host without summons: err=%v, want ErrHostCapabilityMissing at admission", err)
 	}
-	if len(inner.OwnedEntities(1)) != 0 {
+	if len(honest.OwnedEntities(1)) != 0 {
+		t.Fatal("owned summon reached a host without the required contract")
+	}
+
+	lying := runtimeTestHost(environment)
+	if _, err := NewRuntime(&declaredSummonWithoutContract{hostWithoutOwnedContract{inner: lying}}, RuntimeOptions{}).Activate(program, CastInput{Caster: 1}); err != ErrHostContractViolation {
+		t.Fatalf("host declaring summon without the contract: err=%v, want ErrHostContractViolation from the in-cast check", err)
+	}
+	if len(lying.OwnedEntities(1)) != 0 {
 		t.Fatal("owned summon reached a host without the required contract")
 	}
 }
@@ -714,7 +733,12 @@ func (host *ownedSpawnTestHost) StepSpawn(command SpawnStepCommand, state SpawnH
 	return result, nil
 }
 
+// hostWithoutOwnedContract 不实现 OwnedEntityRuntimeHost，能力表如实不含召唤物与 minion。
 type hostWithoutOwnedContract struct{ inner *MemoryHost }
+
+func (host *hostWithoutOwnedContract) HostCapabilities() HostCapabilityTable {
+	return withoutHostCapabilities(host.inner.HostCapabilities(), HostCapability{Kind: HostCapabilitySummon}, HostCapability{HostCapabilitySpawnKind, "minion"})
+}
 
 func (host *hostWithoutOwnedContract) AuthorityIdentity() AuthorityIdentity {
 	return host.inner.AuthorityIdentity()
