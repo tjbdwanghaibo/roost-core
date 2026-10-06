@@ -46,7 +46,7 @@ NC-110～112 是同一类：施法的终止路径各自手写收尾步骤（撤�
 ## 4. 观察与设计建议（不登记 RR）
 
 - **O1 Runtime 状态不在 Nest 事务里（NC-61 同形，但没有被违反的承诺）**。`HostAdapter` 的注释写 Host 方法“在 nest handler 内、Runtime 锁下运行”。在 handler 里驱动 `Runtime.Start / Advance` 时，combat DAO（法力、血量、buff）随 handler 失败或提交被拒回滚，但 Runtime 自己的冷却、ammo 库存、cast 状态、proc 账本、state mutation 流，以及业务提供的 `RevisionSource.CommitEffect` 推进的 revision 和事件都不回滚——回滚后玩家法力还在，技能却已进入冷却。仓内没有正式调用方，文档也没承诺 Runtime 参与事务，所以记为契约缺口：要么在 `docs/skill` 写明“Runtime 只能在提交确认后推进 / 失败时用 checkpoint 恢复”，要么提供 Runtime 的回滚参与（每笔事务 checkpoint 成本高，需要先定接入形态）。
-- **O2 属性修饰到不了伤害管线**。`ResolveDamage` 读 `Combatant` 的平铺字段（Armor 等），`combat` 文档要求宿主用 `AttributeSet.Observe` 把属性投影进 Combatant；但 `CombatDao.attributes` 不导出，`CombatComponent` 也没有安装投影的入口，且 `applyState`（持久恢复 / state 回滚）会换掉 AttributeSet 实例。经 StatusBridge 施加的 Armor 等修饰只对 `HostAdapter.Read` 可见，不影响伤害。需要维护者决定投影映射放在组件还是业务。
+- **O2 属性修饰到不了伤害管线**。`ResolveDamage` 读 `Combatant` 的平铺字段（Armor 等），`combat` 文档要求宿主用 `AttributeSet.Observe` 把属性投影进 Combatant；但 `CombatDao.attributes` 不导出，`CombatComponent` 也没有安装投影的入口，且 `applyState`（持久恢复 / state 回滚）会换掉 AttributeSet 实例。经 StatusBridge 施加的 Armor 等修饰只对 `HostAdapter.Read` 可见，不影响伤害。需要维护者决定投影映射放在组件还是业务。（10-06 第十二轮决定“组件给投影入口，投影交业务”：已实施 `CombatComponent.ProjectAttributes`，[记录](../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md)）
 - **O3 生成工程不接执行**。game-demo 只在 `Init` 与 `HandleSkillCatalog` 编译 catalog，执行、combatcomponent、skillsync 的 Nest / DataEngine / Sync 正式链路都不存在；本批的事务 / 持久化结论来自包内真实 `nest.Engine` 与 DAO，不是生成工程三进程链路。
 - **O4 事务外的 HostAdapter 每条命令一笔 strict 事务**。`Runtime.Advance` 在 handler 外被调用时，PayCosts 与每个效果各自经 `RunDetachedTransaction(context.Background(), …)` 提交，彼此不原子、不可取消；注释写明是“lower-isolation”，记录供接入者参考。
 

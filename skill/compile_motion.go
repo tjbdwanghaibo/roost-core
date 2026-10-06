@@ -116,8 +116,19 @@ func validateProcessMotion(context *compileContext, process *processIR) {
 		return
 	}
 	if process.kind == "summon" {
+		// summon 进程的寿命是 spawn 效果的 duration_ticks（编译期要求为正）；运行期只在带
+		// motion / area 的进程上读模板时长（process_owned.go startEntityProcess），所以
+		// summon 自己的 duration_ticks 与 area 成员字段从来不生效。以前这里直接返回、
+		// 负数也照样编译，写了 area 运行期反而拿 0 时长报 ErrProgramInvariant；现在写了
+		// 就拒绝（O22，维护者第十二轮决定）。
 		if process.motion != nil {
 			context.addDiagnostic(DiagnosticMotionInvalid, path+".motion", "summon processes do not support motion")
+		}
+		if process.durationTicks != 0 {
+			context.addDiagnostic(DiagnosticMotionInvalid, path+".duration_ticks", "summon processes live for the spawn effect's duration_ticks; remove the process duration_ticks")
+		}
+		if process.area != nil || process.intervalTicks != 0 || process.emitLeaveOnStop {
+			context.addDiagnostic(DiagnosticMotionInvalid, path+".area", "area membership fields require an area process")
 		}
 		return
 	}

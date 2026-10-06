@@ -39,7 +39,7 @@
 ## 3. 观察与设计建议（不登记 RR，不改行为）
 
 - **O21 Visual catalog 的 digest 不覆盖内容**。`presentation_assets.go:23-25` 写“digest 保护 revision 标签被误复用的部署”，但默认环境与 `WithTestRevision` 的 digest 是 `digestStrings("visual", revision, Themes)`（`compile_environment.go:311`），不含 categories / elements / AllowedEffects / ClientPackageKey；`authorityDigest` 也不含 Visual；编译期不校验 `Visual.Digest`。业务自己填 digest 时保护是否成立取决于业务怎么算，仓内没有内容摘要函数。建议提供 `VisualCatalog` 的内容摘要并在编译期校验，或改注释说明 digest 由业务负责。
-- **O22 summon 进程的 `duration_ticks` 不校验也不使用**。`compile_motion.go:118-123` 对 summon 提前返回，负数、0 都编译通过；运行期实体进程用 spawn 的 `duration_ticks`（`process_owned.go:24-27` 只在 spawn 时长 ≤0 时才用模板值，而 spawn 时长编译期要求为正），所以无运行后果。建议拒绝或在文档写明无效。
+- **O22 summon 进程的 `duration_ticks` 不校验也不使用**。`compile_motion.go:118-123` 对 summon 提前返回，负数、0 都编译通过；运行期实体进程用 spawn 的 `duration_ticks`（`process_owned.go:24-27` 只在 spawn 时长 ≤0 时才用模板值，而 spawn 时长编译期要求为正），所以无运行后果。建议拒绝或在文档写明无效。（10-06 第十二轮决定：编译期拒绝，area 成员字段一并拒绝，[记录](../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md)）
 - **O23 skillsync Health 与 ExportMetrics 取两次快照**。`Coordinator.Metrics()` 与 `outbox.Metrics()` 分两次加锁读取，Health 的原因判断可能基于略有先后的两份数据；只影响监控读数，不登记。
 - **O24 `relation` filter 的取值不是封闭集合**。`relation` 的 `value` 原样传给 Host（MemoryHost 比较 `MemoryEntity.Relation` 字符串），编译期不查；ability 的 owner_relations 是 self / ally / enemy 封闭集合，而 select 的 relation 没有对应的 catalog。写错时 filter 静默全部不匹配。是否定为封闭集合需要维护者决定。
 - **O25 shield 的 `duration_ticks` 两个参考 Host 口径不同**。MemoryHost 要求正数（否则 `ErrHostContractViolation`），combatcomponent 的 `applyShield` 忽略时长；编译期不查。需要先定 shield 是否有时长语义，未纳入 NC-215。

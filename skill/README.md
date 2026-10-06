@@ -27,7 +27,7 @@
 | --- | --- |
 | [`skill`](skill) | 核心：严格 wire 解析 → 编译器（静态证明）→ 不可变 Program → 确定性 Runtime → `Host` 世界边界；含参考宿主 `MemoryHost`、checkpoint/replay、表现计划与表现事件 |
 | [`combat`](combat) | 零依赖战斗内容电池：`AttributeSet`（属性聚合）、`BuffContainer`（叠层/驱散/免疫/韧性）、`ResolveDamage`（twelve_stage_v1 十二段定点伤害管线）、`ChanceRoll`（HMAC 确定性掷点：暴击/闪避概率 → 事实）。`MemoryHost` 直接运行这份代码 |
-| [`combatcomponent`](combatcomponent) | `combat` 接入 roost-core 实体模型：`CombatDao`（脏跟踪 + 持久化）、`CombatComponent`（只经 DAO 改状态的 mutator；逆操作由 `CombatDao` 自己登记）、`HostAdapter`（实现 `skill.Host` 的战斗面：damage/heal/shield/resource 命令与读取/PayCosts）、`StatusBridge`（status/attribute-modifier 命令落到 buff 容器） |
+| [`combatcomponent`](combatcomponent) | `combat` 接入 roost-core 实体模型：`CombatDao`（脏跟踪 + 持久化）、`CombatComponent`（只经 DAO 改状态的 mutator；逆操作由 `CombatDao` 自己登记；`ProjectAttributes` 装业务的属性 → 伤害字段投影）、`HostAdapter`（实现 `skill.Host` 的战斗面：damage/heal/shield/resource 命令与读取/PayCosts）、`StatusBridge`（status/attribute-modifier 命令落到 buff 容器） |
 | [`skillcompose`](skillcompose) | 技能组合契约与策略：只经由 Program Inspector 消费编译产物，验证候选技能不超出授予的能力、预算与因果连通性 |
 | [`skillsync`](skillsync) | 客户端同步协议：manifest/state/presentation 三类强类型记录、服务端 Coordinator（可见性过滤、durable outbox）、客户端 Applier，构建于 `roost-core/syncstream` 之上 |
 

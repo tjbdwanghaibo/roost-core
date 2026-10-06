@@ -27,6 +27,12 @@ guardrails, not capacity targets: tune them from room-level load tests.
   scheduled task references the root, preserving once-per-root semantics.
 - Checkpoints use version 2. `CheckpointMaxBytes` and
   `CheckpointMaxRecords` are checked before recovery publishes a runtime.
+- The same Runtime state always checkpoints to the same bytes and checksum:
+  every list built from a map is written sorted by key (O7, maintainer round
+  12; before that four lists followed map iteration order). The format did not
+  change and restore ignores list order, so checkpoints written by earlier
+  versions still restore; checkpointing again after the restore yields the
+  sorted bytes.
 - A Host may implement `HostEventCompactor` only when Runtime is the exclusive
   event consumer. `MemoryHost` enables this explicitly through
   `NewMemoryHostWithOptions`; the default preserves event history.

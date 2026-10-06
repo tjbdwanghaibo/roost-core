@@ -627,15 +627,27 @@ func (runtime *Runtime) checkpointPayloadLocked() (runtimeCheckpointPayload, err
 		}
 		return p.SkillStates[i].Skill < p.SkillStates[j].Skill
 	})
+	// 下面四个列表来自 map，按键排序写出，同一状态的 checkpoint 字节确定（O7，维护者第十二轮
+	// 决定）。以前按 map 迭代顺序写出；恢复与顺序无关，所以旧的乱序 checkpoint 照常可读。
 	for key, id := range runtime.activePolicies {
 		p.ActivePolicies = append(p.ActivePolicies, checkpointActivePolicy{Caster: key.Caster, Skill: key.Skill, CastID: id})
 	}
+	sort.Slice(p.ActivePolicies, func(i, j int) bool {
+		return skillStateKeyLess(p.ActivePolicies[i].Caster, p.ActivePolicies[i].Skill, p.ActivePolicies[j].Caster, p.ActivePolicies[j].Skill)
+	})
 	for key := range runtime.procLedger {
 		p.ProcLedger = append(p.ProcLedger, checkpointProcLedger{Root: key.Root, Caster: key.Caster, Digest: key.Digest})
 	}
+	sort.Slice(p.ProcLedger, func(i, j int) bool {
+		if p.ProcLedger[i].Root != p.ProcLedger[j].Root {
+			return p.ProcLedger[i].Root < p.ProcLedger[j].Root
+		}
+		return skillStateKeyLess(p.ProcLedger[i].Caster, p.ProcLedger[i].Digest, p.ProcLedger[j].Caster, p.ProcLedger[j].Digest)
+	})
 	for id, count := range runtime.rootEventCounts {
 		p.RootEventCounts = append(p.RootEventCounts, checkpointRootEvent{ID: id, Count: count})
 	}
+	sort.Slice(p.RootEventCounts, func(i, j int) bool { return p.RootEventCounts[i].ID < p.RootEventCounts[j].ID })
 	for _, state := range runtime.abilities {
 		a := checkpointAbility{Owner: state.owner, Handle: state.handle, Slot: state.slot, Tags: append([]GameplayTagHandle(nil), state.tags...), Program: programCheckpointRef(state.program), CooldownTotal: state.cooldownTotal, AmmoStock: state.ammoStock, AmmoMax: state.ammoMax, CastActive: state.castActive, LastCommitTick: state.lastCommitTick, LastFinishTick: state.lastFinishTick}
 		for id, due := range state.overlays {
@@ -653,7 +665,18 @@ func (runtime *Runtime) checkpointPayloadLocked() (runtimeCheckpointPayload, err
 	for key, handle := range runtime.abilityByProgram {
 		p.AbilityByProgram = append(p.AbilityByProgram, checkpointAbilityLookup{Caster: key.Caster, Skill: key.Skill, Handle: handle})
 	}
+	sort.Slice(p.AbilityByProgram, func(i, j int) bool {
+		return skillStateKeyLess(p.AbilityByProgram[i].Caster, p.AbilityByProgram[i].Skill, p.AbilityByProgram[j].Caster, p.AbilityByProgram[j].Skill)
+	})
 	return p, nil
+}
+
+// skillStateKeyLess 是 (caster, name) 键的写出顺序：先 caster，再名字。
+func skillStateKeyLess(leftCaster EntityID, leftName string, rightCaster EntityID, rightName string) bool {
+	if leftCaster != rightCaster {
+		return leftCaster < rightCaster
+	}
+	return leftName < rightName
 }
 
 func checkpointProcessMap(values map[ProcessID]*ProcessInstance, programFor func(*ProcessInstance) *Program) ([]checkpointProcess, error) {

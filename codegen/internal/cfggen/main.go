@@ -30,8 +30,11 @@
 // Field options: index: true (index named after the field) or index: <name>;
 // ref: <table> (non-zero values must exist as keys of <table>); required (the
 // JSON key must be present and not null in every row); unique; min: <n>;
-// enum: [a, b]. The rules are emitted as cfg tags and enforced by configdata
-// on every load and reload — the same check tablegen's tags get (B10). Scalar types:
+// enum: [a, b]. On tables the rules are emitted as cfg tags and enforced by
+// configdata on every load and reload — the same check tablegen's tags get
+// (B10). Globals take required / min / enum too, emitted as ObjectDef.Rules
+// and checked by the same configdata/rules code (unique / ref / index mean
+// nothing for a single object and are rejected). Scalar types:
 // int32/int64/uint32/uint64/float32/float64/string/bool; []scalar, bean and
 // []bean compose from those.
 package cfggen
@@ -47,6 +50,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/tjbdwanghaibo/roost-core/configdata/rules"
 )
 
 const generatedFileName = "cfg_gen.go"
@@ -452,8 +457,10 @@ func validateMeta(meta *Meta) error {
 			if field.Ref != "" {
 				return fmt.Errorf("global %s field %s: singleton configs do not support ref", global.Name, field.Name)
 			}
-			if hasFieldRules(field) {
-				return fmt.Errorf("global %s field %s: singleton configs do not support required / unique / min / enum yet", global.Name, field.Name)
+			// required / min / enum 走 ObjectDef.Rules（维护者第十二轮决定）；unique 比较的是
+			// 行与行，单个对象没有可比的。
+			if field.Unique {
+				return fmt.Errorf("global %s field %s: singleton configs do not support unique (a single object has no rows to compare)", global.Name, field.Name)
 			}
 		}
 		source := "global " + global.Name
@@ -617,9 +624,22 @@ func hasFieldRules(field FieldMeta) bool {
 	return field.Required || field.Unique || field.Min != "" || len(field.Enum) > 0
 }
 
+// fieldRule is the one translation of a field's options into the shared
+// configdata/rules.Rule: generation validates it with Rule.Validate and a
+// global's Rules literal is written from it, so the generator and the runtime
+// check the very same rule (round 12, the B10 unification for globals).
+func fieldRule(field FieldMeta) rules.Rule {
+	return rules.Rule{Field: field.Name, Required: field.Required, Unique: field.Unique, Min: field.Min, Ref: field.Ref, Enum: field.Enum}
+}
+
 // validateFieldRules checks what the generated cfg tag can carry; configdata
 // checks the same rules again when the table registers.
 func validateFieldRules(field FieldMeta) error {
+	if hasFieldRules(field) {
+		if err := fieldRule(field).Validate(); err != nil {
+			return err
+		}
+	}
 	if field.Min != "" {
 		if !numericTypes[field.Type] {
 			return fmt.Errorf("field %s: min needs a numeric field, got %s", field.Name, field.Type)
@@ -711,8 +731,8 @@ func generate(meta *Meta, pkg string) ([]byte, error) {
 			keyField.Type, typeName(table.Name), table.Name, fileName(table))
 	}
 	for _, global := range meta.globalEntries() {
-		fmt.Fprintf(&b, "\tif err := configdata.RegisterObject(r, configdata.ObjectDef[%s]{Name: %q, File: %q}); err != nil {\n\t\treturn err\n\t}\n",
-			typeName(global.Name), global.Name, fileName(global))
+		fmt.Fprintf(&b, "\tif err := configdata.RegisterObject(r, configdata.ObjectDef[%s]{Name: %q, File: %q%s}); err != nil {\n\t\treturn err\n\t}\n",
+			typeName(global.Name), global.Name, fileName(global), globalRulesLiteral(global))
 	}
 	b.WriteString("\treturn nil\n}\n\n")
 	b.WriteString("// MustRegisterGeneratedConfigData is RegisterGeneratedConfigData panicking on error.\n")
@@ -769,6 +789,39 @@ func generate(meta *Meta, pkg string) ([]byte, error) {
 	return source, nil
 }
 
+// globalRulesLiteral is the ", Rules: ..." part of a global's ObjectDef, empty
+// when no field has a rule (the registration then stays exactly as before).
+// The object registration path does not read cfg tags, so the rules live here
+// and nowhere else.
+func globalRulesLiteral(global TableMeta) string {
+	var literals []string
+	for _, field := range global.Fields {
+		if !hasFieldRules(field) {
+			continue
+		}
+		rule := fieldRule(field)
+		parts := []string{"Field: " + strconv.Quote(rule.Field)}
+		if rule.Required {
+			parts = append(parts, "Required: true")
+		}
+		if rule.Min != "" {
+			parts = append(parts, "Min: "+strconv.Quote(rule.Min))
+		}
+		if len(rule.Enum) > 0 {
+			quoted := make([]string, len(rule.Enum))
+			for i, value := range rule.Enum {
+				quoted[i] = strconv.Quote(value)
+			}
+			parts = append(parts, "Enum: []string{"+strings.Join(quoted, ", ")+"}")
+		}
+		literals = append(literals, "{"+strings.Join(parts, ", ")+"}")
+	}
+	if len(literals) == 0 {
+		return ""
+	}
+	return ", Rules: []configdata.FieldRule{" + strings.Join(literals, ", ") + "}"
+}
+
 func writeStruct(b *strings.Builder, name, comment string, fields []FieldMeta, keyField string, table *TableMeta) {
 	if comment = sanitizeComment(comment); comment != "" {
 		fmt.Fprintf(b, "// %s is %s.\n", name, comment)
@@ -792,16 +845,18 @@ func writeStruct(b *strings.Builder, name, comment string, fields []FieldMeta, k
 		if field.Ref != "" {
 			cfgDirectives = append(cfgDirectives, "ref="+field.Ref)
 		}
-		if field.Required {
+		// Rule tags are read by RegisterAutoTable only; a global's rules are its
+		// ObjectDef.Rules literal (globalRulesLiteral), beans carry none.
+		if table != nil && field.Required {
 			cfgDirectives = append(cfgDirectives, "required")
 		}
-		if field.Unique {
+		if table != nil && field.Unique {
 			cfgDirectives = append(cfgDirectives, "unique")
 		}
-		if field.Min != "" {
+		if table != nil && field.Min != "" {
 			cfgDirectives = append(cfgDirectives, "min="+field.Min)
 		}
-		if len(field.Enum) > 0 {
+		if table != nil && len(field.Enum) > 0 {
 			cfgDirectives = append(cfgDirectives, "enum="+strings.Join(field.Enum, "|"))
 		}
 		tag := fmt.Sprintf("`json:%q", field.Name)

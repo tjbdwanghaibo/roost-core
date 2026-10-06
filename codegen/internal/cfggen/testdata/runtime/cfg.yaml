@@ -1,7 +1,7 @@
 # The meta file the runtime gate generates from. It is deliberately the
 # awkward shapes, not the pretty ones: a bean inside a slice, a secondary
 # index, a cross-table ref, a required field, a keyword-named field, and a
-# global. Everything here must survive the real configdata runtime, not just
+# global with rules. Everything here must survive the real configdata runtime, not just
 # gofmt. spawn / item add the index options (skipempty, an explicit index
 # name, uint64 / bool / string / negative int64 values) and a string-keyed
 # ref that points forward to a table declared after it.
@@ -44,7 +44,10 @@ tables:
       - { name: rare,  type: bool,  index: rarity }
       - { name: level, type: int64, index: true }
 globals:
+  # Globals carry required / min / enum too (round 12): the generator writes
+  # them as ObjectDef.Rules and configdata checks them on Load and Reload.
   - name: world
     fields:
-      - { name: width,  type: int32 }
-      - { name: height, type: int32 }
+      - { name: width,  type: int32, required: true, min: 1 }
+      - { name: height, type: int32, min: 1 }
+      - { name: mode,   type: string, enum: [pve, pvp] }

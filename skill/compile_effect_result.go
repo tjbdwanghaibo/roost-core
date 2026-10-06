@@ -34,7 +34,7 @@ func runEffectResultScopePass(context *compileContext) {
 		}
 		for _, branch := range []flowIR{effectFlow.result.success, effectFlow.result.failure} {
 			if effectResultBranchMaySuspend(branch) {
-				context.addDiagnostic(DiagnosticShapeInvalid, branch.sourceRef().Path, "effect result branches cannot suspend or start a process")
+				context.addDiagnostic(DiagnosticShapeInvalid, branch.sourceRef().Path, "effect result branches cannot suspend (wait, repeat with interval_ticks) or start a process with on callbacks")
 			}
 		}
 	})
@@ -43,6 +43,9 @@ func runEffectResultScopePass(context *compileContext) {
 	}
 }
 
+// effectResultBranchMaySuspend 是 result 分支与 status 实例消费流程的限制：不能有 wait、
+// 带间隔的 repeat，也不能启动带 on 回调的进程。spawn 加不带回调的进程不在其列，照常
+// 编译、执行时照常启动进程（O29：诊断文案按这条规则写，不再笼统说不能启动进程）。
 func effectResultBranchMaySuspend(flow flowIR) bool {
 	if flow == nil {
 		return false

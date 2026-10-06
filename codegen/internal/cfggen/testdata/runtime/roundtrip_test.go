@@ -89,7 +89,7 @@ func TestGeneratedAccessorsReadTheDataOnDisk(t *testing.T) {
 		t.Fatalf("scene 42 = %+v, want none", missing)
 	}
 	world, ok := WorldFrom(snapshot)
-	if !ok || world.Width != 1024 || world.Height != 768 {
+	if !ok || world.Width != 1024 || world.Height != 768 || world.Mode != "pve" {
 		t.Fatalf("world = %+v (ok=%v)", world, ok)
 	}
 	if snapshot.Hash == "" || snapshot.Version == 0 {
@@ -152,6 +152,54 @@ func TestFieldRulesAreEnforcedOnReload(t *testing.T) {
 		}
 		if store.Current() != snapshot {
 			t.Fatal("a rejected reload moved the live snapshot")
+		}
+	}
+}
+
+// Round 12: a global's required / min / enum are enforced like a table's — a
+// server refuses to start on them and a reload refuses them without moving
+// the live snapshot. Before, cfggen rejected rules on globals and a world of
+// width 0 loaded fine.
+func TestGlobalRulesAreEnforcedOnLoadAndReload(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"height":768,"mode":"pve"}`:              "field width: required",
+		`{"width":0,"height":768,"mode":"pve"}`:    "field width: min",
+		`{"width":1024,"height":0,"mode":"pve"}`:   "field height: min",
+		`{"width":1024,"height":768,"mode":"pvz"}`: "field mode: enum",
+	} {
+		// Startup: Load fails on the bad file.
+		dir := t.TempDir()
+		for _, name := range []string{"drop.json", "monster.json", "spawn.json", "item.json"} {
+			raw, err := os.ReadFile(filepath.Join("data", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, name), raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(dir, "world.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		registry := configdata.NewRegistry()
+		MustRegisterGeneratedConfigData(registry)
+		if _, err := configdata.NewStore(registry, dir).Load(context.Background()); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("load of world %s: err = %v, want %q", body, err, want)
+		}
+
+		// Reload: refused, the live snapshot stays.
+		store, snapshot, liveDir := load(t)
+		if err := os.WriteFile(filepath.Join(liveDir, "world.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Reload(context.Background()); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("reload of world %s: err = %v, want %q", body, err, want)
+		}
+		if store.Current() != snapshot {
+			t.Fatal("a rejected reload moved the live snapshot")
+		}
+		if world, ok := WorldFrom(store.Current()); !ok || world.Width != 1024 || world.Mode != "pve" {
+			t.Fatalf("live world = %+v (ok=%v)", world, ok)
 		}
 	}
 }

@@ -32,9 +32,9 @@
 
 ## 3. 观察与设计建议（不登记 RR，不改行为）
 
-- **O27 restore 的 `on_blocked` 与 profile 策略不同时必然失败**。`memory_host_temporal.go:58-63`：空值取 profile 的策略，非空且不同则 `policy_rejected` 预期失败。编译期只查取值合法，token 可经 persistent state 跨施法传递，profile 在编译期不一定可知。`on_blocked` 实际只能当“与 profile 一致”的断言用；建议文档写明，或允许它覆盖 profile（语义变化，需维护者定）。已由 `TestTemporalPassBranches` 钉住当前行为。
-- **O28 process_start 的实体在启动事件上下文里求值**。回调里 `entity: "$event.target"` 取的是启动事件的 target（lifecycle 实体），不是每次回调的目标。与 cast_start “整个读取在采样点求值”的口径一致，NC-220 不改；建议文档写明，作者要按回调目标读时用 current。
-- **O29 effect result 分支里的 spawn + 无回调进程能编译并执行**。`effectResultBranchMaySuspend` 只把带 `on` 的效果当作“启动进程”，诊断文案写 “cannot suspend or start a process”。分支执行时进程照常启动，没有失败；文案与规则不一致，按设计取舍二选一。
+- **O27 restore 的 `on_blocked` 与 profile 策略不同时必然失败**。`memory_host_temporal.go:58-63`：空值取 profile 的策略，非空且不同则 `policy_rejected` 预期失败。编译期只查取值合法，token 可经 persistent state 跨施法传递，profile 在编译期不一定可知。`on_blocked` 实际只能当“与 profile 一致”的断言用；建议文档写明，或允许它覆盖 profile（语义变化，需维护者定）。已由 `TestTemporalPassBranches` 钉住当前行为。（10-06 第十二轮决定：保持，写进作者文档，[记录](../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md)）
+- **O28 process_start 的实体在启动事件上下文里求值**。回调里 `entity: "$event.target"` 取的是启动事件的 target（lifecycle 实体），不是每次回调的目标。与 cast_start “整个读取在采样点求值”的口径一致，NC-220 不改；建议文档写明，作者要按回调目标读时用 current。（10-06 第十二轮决定：保持，写进作者文档，[记录](../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md)）
+- **O29 effect result 分支里的 spawn + 无回调进程能编译并执行**。`effectResultBranchMaySuspend` 只把带 `on` 的效果当作“启动进程”，诊断文案写 “cannot suspend or start a process”。分支执行时进程照常启动，没有失败；文案与规则不一致，按设计取舍二选一。（10-06 第十二轮决定：只改文案，[记录](../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md)）
 - **O30 同一施法的多个 owned 进程随机顺序相同**。进程复用施法的 randomKey，invocation 从 0 计（`process_owned.go:37`），打分不含进程 ID：一次 spawn count 2 的两个陷阱在同一步对同一候选集得到同一顺序。确定性成立；是否算“随机”取决于设计意图。`RandomSite.InvocationBound` 也不乘进程的步数（只作 Inspect / digest 元数据）。
 - **O31 量纲“证明”是全 int64 区间**。`lowerQuantities` 对每个 int 路径写 `minimum=MinInt64, maximum=MaxInt64, proved=true`，Inspect 与 digest 都带着它；numeric track / modify_process 的值不检查量纲（期望类型的量纲是未知）。建议改名或删字段，或做真正的区间推导。
 - **O32 proc 的 `event_filter.results` 不是封闭集合**。与 O24（relation）同形：字符串原样比较 `EventContext.Result`，写错时 filter 静默全部不匹配。

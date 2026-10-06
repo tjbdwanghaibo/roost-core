@@ -99,6 +99,23 @@ Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value
 - **进程回调里的 `self_ability` / `not_self_ability` 过滤（O35）**：移交后的进程没有技能句柄，回调里的技能选择拿 handle 0 比较——`self_ability` 永远不匹配、`not_self_ability` 匹配全部技能。要按“本技能”筛选，请在施法流程里做。
 - **进程回调里的 `$caster`（O36）**：Runtime 其实求得出（= 进程的 owner，即同一个施法者），但编译期按表拒绝，统一写 `$owner`（`$caster.position` 同理写 `$owner.position`）。
 
+### 进程、运动与 temporal 的既定语义（O15～O17、O27、O28）
+
+维护者第十二轮决定（2026-10-06）保持行为不变、写明：
+
+- **area 的 `$event.enter_count` 恒为 1（O15）**：成员离开区域时它的成员状态随即删除（为了让轮换进出的成员不无限占内存），再次进入从 1 重新计数。所以 `enter_count` 不是“累计进入次数”，在 enter / tick / leave 回调里读到的都是 1。要累计某个实体的进入次数，在回调里用持久状态自己记。
+- **`max_reflects: N` 实际反弹 N−1 次（O16）**：N 是**碰撞预算**，不是反弹次数。每次碰撞消耗 1；预算没用完时翻转方向、发 transition 并继续飞；第 N 次碰撞同样翻转方向、发 transition，然后在同一 tick 结束运动。所以 `max_reflects: 1` 是“碰到就结束”，想要弹 k 次再结束写 `k+1`。`max_pierces: N` 同理：穿过前 N−1 个，第 N 次碰撞时结束。
+- **Host 拿到的 numeric 快照与运动实际取值不同源（O17）**：`ProcessStepCommand.Numeric` 里，被 numeric track 绑定到进程数值属性的字段是进程当前值；**没有绑定**的字段报告的是进程启动时求一次的值，而运动每一步按 `process_step` 列重新求值表达式（见上文求值上下文表）。速度等字段写成随时间变化的表达式时，Host 在快照里看到的速度与实际位移用的速度可能不同。parabola 的 speed、tracking 的转向速率、boomerang 的回程速度、碰撞力在快照里的基值恒为 0（由 Host 自己管理）。Host 需要“这一步实际用的值”时，让技能用 numeric track 绑定该字段，或从运动步骤命令本身取位置 / 位移，不要依赖未绑定字段的快照。
+- **restore 的 `on_blocked` 与 profile 策略冲突时必然失败（O27）**：参考宿主 `MemoryHost` 的 temporal restore 里，`on_blocked` 为空时用快照 profile 的 `BlockedPositionPolicy`；写了且与 profile 不同，恢复返回预期失败 `policy_rejected`（走 `result.failure`），不会按 `on_blocked` 覆盖 profile。编译期只检查取值合法——token 可以经持久状态跨施法传递，profile 在编译期不一定可知。所以 `on_blocked` 实际只是“与 profile 一致”的断言：一般不写，写就写成与 profile 相同的值。自己实现 temporal 的 Host 应保持同一口径（`TestTemporalPassBranches` 钉住）。
+- **process_start 读取的实体按启动时的事件求值（O28）**：spawn 回调里 `read_attribute` 写 `snapshot: "process_start"` 时，整个读取（包括 `entity`）在进程启动那一刻求值，那时的 `$event` 是启动事件（`$event.target` 是 lifecycle 实体），不是每次回调的事件。所以 `{"entity":"$event.target","snapshot":"process_start"}` 读到的是 lifecycle 实体启动时的值，不是本次回调目标的值。这与 `cast_start` “整个读取在采样点求值”的口径一致。要按回调目标读，用 `snapshot: "current"`。
+
+### 编译期收紧与诊断文案（O22、O29，未发版）
+
+维护者第十二轮决定（2026-10-06）：
+
+- **summon 进程不写 `duration_ticks`（O22）**：summon 进程的寿命就是 spawn 效果的 `duration_ticks`（编译期要求为正），进程自己的 `duration_ticks` 从来不被读取，以前负数也能编译。现在 summon 上写 `duration_ticks`（非 0）报 `MOTION_INVALID`；`area`、`interval_ticks`、`emit_leave_on_stop` 同样拒绝（summon 不做成员检测，以前写了 `area` 编译通过、运行期启动即 `ErrProgramInvariant`）。**升级**：删掉 summon 进程上的这几个字段，行为不变。
+- **result 分支里可以启动不带回调的进程（O29，只改文案）**：effect result 分支与 status 实例选择的消费流程不能挂起（`wait`、带 `interval_ticks` 的 `repeat`），也不能启动带 `on` 回调的进程；spawn 加不带 `on` 的进程一直可以编译，执行时照常启动进程。诊断文案改为 “cannot suspend (wait, repeat with interval_ticks) or start a process with on callbacks”，以前写的 “cannot suspend or start a process” 与规则不符。
+
 ## combat：零依赖战斗内容电池
 
 `combat` 包是可复用的确定性战斗数学，零外部依赖：
@@ -110,18 +127,7 @@ Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value
 
 **buff 与 skill status 的分工**：skill 的 status 是技能程序可见的世界目录语义（选择器过滤、combat hook 的载体），由 Host 拥有；`combat.BuffContainer` 是宿主实体侧的属性/时效容器。典型宿主用 status 承载技能系统语义，用 BuffContainer 承载数值聚合，两者在 Host 的 `Apply(StatusCommand)` 实现里桥接。
 
-**AttributeSet → Combatant 投影**：伤害管线读取的是 `Combatant` 平铺字段。宿主用 `Observe` 回调把属性变化投影到 Combatant：
-
-```go
-attributes.Observe(func(id combat.AttributeID) {
-    switch id {
-    case attrArmor:
-        combatant.Armor = attributes.Current(attrArmor)
-    case attrDamageTakenBP:
-        combatant.DamageTakenBP = attributes.Current(attrDamageTakenBP)
-    }
-})
-```
+**AttributeSet → Combatant 投影**：伤害管线读取的是 `Combatant` 平铺字段，buff 与属性修饰只改 `AttributeSet`，两者之间要有一个投影。自己持有 `AttributeSet` 与 `Combatant` 的宿主可以用 `Observe` 回调投影；用 `combatcomponent` 的宿主用组件的投影入口，见下文“属性投影（O2）”。
 
 ## StatusBridge：status 命令落到 combat 容器
 
@@ -175,3 +181,33 @@ crit := combat.ChanceRoll(matchSeed, "crit", critChanceBP,
 - `CombatComponent`：只持有 DAO，全部 mutator 经 DAO 改状态，自己不登记 undo（回滚统一走 DAO，[A1](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）——handler 失败或提交被拒后，两种回滚策略下实体字节一致。
 - **Runtime 不在事务里**（维护者决定 B4，见上文“Runtime 不在事务里（B4）”）：Nest 回滚只撤回 DAO；`skill.Runtime` 自己的状态不回退。
 - `HostAdapter`：实现 `skill.Host` 的战斗面（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepProcess`/空间查询/生成物仍由业务 Host 实现。
+
+### 属性投影（O2，未发版）
+
+维护者第十二轮决定（2026-10-06）：组件给投影入口，投影逻辑交给业务。以前经 `StatusBridge` / `ApplyBuff` 加的护甲等修饰只对 `HostAdapter.Read`（属性读取）可见，伤害管线读的 `Combatant.Armor` 不变，buff 对伤害没有任何效果。
+
+业务写一个函数说明“哪个属性写到哪个伤害字段”，构造组件后装一次：
+
+```go
+const (
+    attrArmor      combat.AttributeID = 1
+    attrMagicResist combat.AttributeID = 2
+    attrDamageTaken combat.AttributeID = 3 // 基点，10000 = 100%
+)
+
+func projectCombat(attribute func(combat.AttributeID) int64, c *combat.Combatant) {
+    c.Armor = attribute(attrArmor)
+    c.MagicResistance = attribute(attrMagicResist)
+    c.DamageTakenBP = attribute(attrDamageTaken)
+}
+
+// 实体工厂里：
+component := combatcomponent.NewCombatComponent(dao)
+component.ProjectAttributes(projectCombat)
+```
+
+- **什么时候投影**：装上时一次；实体建好（新建或从存储加载，`OnInitFinish`）一次；之后每个改属性来源的 mutator（`InitCombatant`、`SetAttributeBase` / `SetAttributeBounds`、`ApplyBuff`、`RemoveBuff`、`SetBuffStacks`、`AdoptBuff`、`DispelBuffs`、`TickBuffs`，以及经它们落地的 `StatusBridge` 命令和资源命令）末尾、在同一事务里再投影一次。伤害读到的字段总是当前属性的结果。
+- **回滚**：投影写的是 DAO 的 vitals（`FieldVitals`），与源字段同一笔逆操作 / 快照（[A1](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md) 的派生值规则）；handler 失败或提交被拒时随 DAO 回到事务开始时的值，不需要业务写任何回滚代码。加载与构造时不在事务里，直接写内存、不产生持久写；投影结果与现值相同时什么都不做。
+- **投影函数的约束**：纯函数，只读传入的属性、只写由属性决定的字段（Armor、MagicResistance、Penetration、各 `*BP`、`MaxHealth` 等），不要改 `Health` / `Shield` / `Alive` 这类战斗过程状态；被投影的字段以投影为准，`InitCombatant` 里给的值会被覆盖。
+- 完整可运行示例：`skill/examples/statusbridge`（破甲 status 让护甲 40 → 20，伤害随之变化，驱散后恢复）。
+

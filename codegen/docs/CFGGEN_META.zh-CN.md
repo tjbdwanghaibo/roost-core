@@ -90,7 +90,19 @@ world, _ := cfg.WorldFrom(snap)              // 全局单例
 | `comment` | 生成到字段行注释；多行折叠 |
 | `group` | 字段只属于这些组（`group: c` 或 `group: [c, s]`）；不在目标组里的字段从 struct 中去掉（连带它的索引访问器）。省略 = 所有组 |
 
-`index`/`ref`/`required`/`unique`/`min`/`enum`（及其修饰）**只允许在 tables 上**；globals 与 bean 写了直接报错（globals 的规则留作后续，静默忽略比报错危险得多）。规则生成为 `cfg` 标签，由 configdata 解析成与 tablegen 相同的 `configdata.FieldRule`，用同一个检查器在加载期执行（B10）。
+tables 上的规则生成为 `cfg` 标签，由 configdata 解析成与 tablegen 相同的 `configdata.FieldRule`，用同一个检查器在加载期执行（B10）。
+
+**globals 支持 `required` / `min` / `enum`**（维护者第十二轮决定，未发版）：生成为 `RegisterObject` 的 `ObjectDef.Rules` 字面量（对象注册路径不读 `cfg` 标签，所以 globals 的 struct 不带规则标签），configdata 每次 load / reload 用同一个检查器（`configdata/rules`）查；生成期用同一个 `rules.Rule.Validate` 查规则声明本身（`min` 是数字、`enum` 不空不重复）。违反时启动失败、reload 被拒且旧快照保持，错误点名配置名 / 字段 / 规则（如 `table world field width: min: value 0 is below min=1`）：
+
+```yaml
+globals:
+  - name: world
+    fields:
+      - { name: width, type: int32, required: true, min: 1 }
+      - { name: mode,  type: string, enum: [pve, pvp] }
+```
+
+`unique`（单个对象没有可比的行）、`ref`、`index` 在 globals 上直接报错；bean 字段上的规则与 index / ref 同样报错（静默忽略比报错危险得多）。
 
 ## 导出分组（前后端分开的配置）
 
@@ -149,13 +161,13 @@ bean 内部只能用标量/数组/其他 bean，**不能带 `index`/`ref`**；be
 
 `cfg_gen.go` 包含三部分（`// Code generated ... DO NOT EDIT.`）：
 
-1. **行/bean/全局 struct**：带 `json` tag 与 `cfg` tag（`key` / `index[=名][,skipempty]` / `ref=表` / `required` / `unique` / `min=n` / `enum=a|b`），运行时校验全部由 tag 驱动；
-2. **`RegisterGeneratedConfigData(r *configdata.Registry) error`** 与 Must 变体：逐表 `RegisterAutoTable`、逐全局 `RegisterObject`；
+1. **行/bean/全局 struct**：带 `json` tag；表的 struct 另带 `cfg` tag（`key` / `index[=名][,skipempty]` / `ref=表` / `required` / `unique` / `min=n` / `enum=a|b`），表的运行时校验由 tag 驱动；
+2. **`RegisterGeneratedConfigData(r *configdata.Registry) error`** 与 Must 变体：逐表 `RegisterAutoTable`、逐全局 `RegisterObject`（有规则的全局带 `Rules: []configdata.FieldRule{...}`）；
 3. **类型化访问器**：`XxxTableFrom(snap)`、`XxxFrom(snap)`、每个索引一个 `XxxByYyy(snap, 值)`（字符串化规则与运行时索引严格一致）。
 
 ## 两层校验：什么时候拦住什么
 
-**生成期（cfggen，schema 错误当场拒绝）**：未知 YAML 键（拼写错误）、名字字符集/重名/PascalCase 碰撞、key 未声明或类型非法、ref 目标表不存在或类型与其 key 不一致、index/ref 打在非法类型上、globals 带 key/index/ref、bean 非切片递归、file 路径逃逸。
+**生成期（cfggen，schema 错误当场拒绝）**：未知 YAML 键（拼写错误）、名字字符集/重名/PascalCase 碰撞、key 未声明或类型非法、ref 目标表不存在或类型与其 key 不一致、index/ref 打在非法类型上、globals 带 key/index/ref/unique、规则声明本身不合法（与运行时同一个 `rules.Rule.Validate`）、bean 非切片递归、file 路径逃逸。
 
 **加载期（configdata，每次 load/reload 对真实数据执行）**：`required` 的键缺失 / null（在原始 JSON 上查，缺列与零值分得清）、`unique` / `min` / `enum`、ref 目标表存在性与类型兼容（表级前置，空表也拦）、每行非零 ref 值的成员校验（`required` 时零值也查）、JSON 为 `null`/空文档拒绝、`rows`/`records`/`data` 多包装键并存拒绝。错误点名表 / 行 / 字段 / 规则（`*configdata.RuleError`）。可选 `store.SetStrictJSON(true)` 拒绝数据里的未知字段（防字段改名静默归零）。校验失败 = 整次 reload 被拒，**旧快照保持生效**。
 
