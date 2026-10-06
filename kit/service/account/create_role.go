@@ -70,10 +70,13 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 		case actReleaseAndRetry:
 			plan := slot.Value.Creation
 			// 与同名重试同一个证明：名字已 committed 给别的 owner，这个计划再也不能提交名字、
-			// 发布角色；只被 reserved（会过期）或仍归本计划时表答 ErrRoleLimit，slot 保留。
+			// 发布角色；或计划还没 admitted、名字被别人 reserved——admitted 之后的事都没发生，
+			// 释放不会留下角色（维护者第五轮决定，与同名重试对齐）。只被 reserved 的已 admitted
+			// 计划或名字仍归本计划时表答 ErrRoleLimit，slot 保留。DeleteIf 对未 admitted 的计划
+			// 只在删除时它仍未 admitted 才删（releaseCreationSlot），与并发的 admission 互斥。
 			done, err := s.releaseCreationSlot(ctx, key, slot, planDead(nameAt))
 			if err := s.compensated(err); err != nil {
-				return Role{}, fmt.Errorf("account: release the pending plan whose name %q was committed elsewhere: %w", plan.Name, err)
+				return Role{}, fmt.Errorf("account: release the pending plan for name %q: %w", plan.Name, err)
 			}
 			if done {
 				s.report.Dropped("create_role.plan_released", 1)

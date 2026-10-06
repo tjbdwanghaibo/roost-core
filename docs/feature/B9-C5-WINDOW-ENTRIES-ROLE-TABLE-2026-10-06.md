@@ -105,3 +105,16 @@ activity 侧：统一入口之后，新增读者只要从 `loadWindowEntries` �
 根包 `go test -count=1 .`；`go build ./... && go vet ./...`。未改 nest / entity / dataengine / sync，不跑 glsvet；未改生成形状，不重生成 game-demo。
 account 的 RR-06 / NC-50 / 新并发用例另在隔离 Redis（`~/.roost-it/roost-dataengine-it`，`ROOST_REVIEW3_BACKEND=redis`，前缀 `revn06:account:<纳秒>` 用例自清）上 5/5 通过。
 activity 的真实 Redis / 两者的 Cluster 未跑：改动是窗口与判定逻辑，存储调用序列不变（account 的 `creationSlot` 拆成先 Get 再 `makeCreationPlan`，调用次数与顺序同前）。
+
+## 6. 维护者第五轮决定：换名也释放（2026-10-06，分支 `revn09f`）
+
+决定：**计划未 admitted、名字只被他人 reserved（还没 committed）时，换名请求也释放 slot**，与同名重试对齐（§5“留给维护者”那处不对称）。
+
+- 改动：`decideCreation` 的 `entryOtherName` 分支多一条 `slot == slotPendingUnadmitted && name == nameReservedElsewhere → actReleaseAndRetry`；规格表 `unadmitted other` 行的 res-else 格由 `limit` 改为 `retry`。
+  只改这一格：同行 free 列（未 admitted、名字已无人持有）维持 `limit`——决定只覆盖“他人 reserved”，free 列是否放开没有定，仍列给维护者。
+  已 admitted 的计划在同一名字事实上仍答 `ErrRoleLimit`（预约会过期，计划可能还会完成）。
+- 执行沿用 `actReleaseAndRetry`：`releaseCreationSlot` 的 `DeleteIf` 只在删除那一刻计划仍未 admitted 时删（`planDead || !Admitted`），与并发的 admission 互斥；删掉后按新名字建计划，`plan_released` 计一次。
+- 回归：`kit/service/account/pending_creation_unadmitted_rename_promises_test.go`（预约回执丢失留下未 admitted 的计划 → 预约过期 → 他人预约 Hero → 换名 Knight）。
+  修前：`role limit reached for this server: another name is pending on server 1`，slot 仍是 Hero 的计划；修后建出 Knight、他人的预约不变、`plan_released` = 1。
+  `TestCreationTableEveryCell` 随规格表更新；`TestADifferentNameKeepsAPlanThatCanStillComplete/foreign_reservation_only`（已 admitted）不变、仍通过。
+- 验证：`GOWORK=off go vet ./kit/service/account && go test -race -count=3 ./kit/service/account` 通过（Memory 后端）；真实 Redis 后端未跑（`DeleteIf` 调用与既有 RR-06 换名释放同一路径，存储调用序列不变）。

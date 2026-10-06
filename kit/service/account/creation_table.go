@@ -89,8 +89,9 @@ const (
 	actResume
 	// actReadName: the decision depends on the name; read it and decide again.
 	actReadName
-	// actReleaseAndRetry: the plan is dead; release the slot and decide again
-	// for the same request (at most once per call).
+	// actReleaseAndRetry: the plan is dead (or never admitted and its name is
+	// reserved elsewhere); release the slot and decide again for the same
+	// request (at most once per call).
 	actReleaseAndRetry
 	// actReleaseRefuseNameTaken: answer ErrNameTaken and release the slot —
 	// the plan is dead, or it was never admitted, so the refusal is definite.
@@ -149,9 +150,13 @@ func decideCreation(slot slotState, entry creationEntry, name nameState) creatio
 		}
 		return actRefuseNameTaken
 	case entryOtherName:
-		// Only a plan that can never complete gives way to another name; one
-		// that may still complete keeps the slot (ErrRoleLimit).
-		if name == nameCommittedElsewhere {
+		// A plan that can never complete gives way to another name; one that
+		// may still complete keeps the slot (ErrRoleLimit). A never-admitted
+		// plan whose name someone else has reserved also gives way: nothing
+		// after admission has happened, so the release strands nothing — the
+		// same fact on which a same-name retry already releases it
+		// (maintainer decision, 2026-10-06, round 5).
+		if name == nameCommittedElsewhere || slot == slotPendingUnadmitted && name == nameReservedElsewhere {
 			return actReleaseAndRetry
 		}
 		return actRefuseRoleLimit
