@@ -1,0 +1,49 @@
+# BenchmarkRealMongoStepLatencyBreakdown -benchtime 300x -v，私有三节点副本集（mongod 8.0.28，本机 Apple M5，macOS），2026-10-06 14:03:19
+
+## base=9669d181^
+breakdown over 300 operations:
+label                                          per-op    mean-us      us/op
+tx1 callback-run                                 1.00        0.0        0.0
+tx1 commit(total-callback)                       1.00    12792.1    12792.1
+tx1 findOne steps                                1.00      172.6      172.6
+tx1 insert business                              1.00       60.9       60.9
+tx1 insert steps                                 1.00       98.8       98.8
+tx1 total                                        1.00    13211.8    13211.8
+tx1 update steps                                 1.00       76.5       76.5
+BenchmarkRealMongoStepLatencyBreakdown-10    	     300	  13240458 ns/op	         0.4088 cmd-ms/op	         4.000 cmd/op	        12.79 commit-ms/op	         1.000 tx/op	   54538 B/op	     598 allocs/op
+
+## after=78e26853
+breakdown over 300 operations:
+label                                          per-op    mean-us      us/op
+tx1 callback-run                                 1.00        0.0        0.0
+tx1 commit(total-callback)                       1.00    14053.9    14053.9
+tx1 find steps_claims                            1.00      104.3      104.3
+tx1 findAndModify steps_claims                   1.00      129.4      129.4
+tx1 findOne steps                                1.00      186.0      186.0
+tx1 findOne steps_claims                         1.00       84.0       84.0
+tx1 insert steps_claims                          1.00       79.6       79.6
+tx1 total                                        1.00    14650.2    14650.2
+tx2 callback-run                                 1.00        0.0        0.0
+tx2 commit(total-callback)                       1.00    13900.2    13900.2
+tx2 insert business                              1.00      201.4      201.4
+tx2 insert steps                                 1.00       75.3       75.3
+tx2 total                                        1.00    14384.0    14384.0
+tx2 update steps_claims                          1.00      189.5      189.5
+BenchmarkRealMongoStepLatencyBreakdown-10    	     300	  29082659 ns/op	         1.050 cmd-ms/op	         8.000 cmd/op	        27.95 commit-ms/op	         2.000 tx/op	  116109 B/op	    1331 allocs/op
+
+## spike=合并单事务（未提交）
+breakdown over 300 operations:
+label                                          per-op    mean-us      us/op
+tx1 callback-run                                 1.00        0.0        0.0
+tx1 commit(total-callback)                       1.00    11349.0    11349.0
+tx1 find steps_claims                            1.00       97.9       97.9
+tx1 findAndModify steps_claims                   1.00      108.9      108.9
+tx1 findOne steps                                1.00      197.6      197.6
+tx1 findOne steps_claims                         1.00       88.3       88.3
+tx1 insert business                              1.00       63.3       63.3
+tx1 insert steps                                 1.00       60.6       60.6
+tx1 insert steps_claims                          1.00       71.7       71.7
+tx1 total                                        1.00    12171.4    12171.4
+tx1 update steps_claims                          1.00      114.9      114.9
+BenchmarkRealMongoStepLatencyBreakdown-10    	     300	  12199978 ns/op	         0.8031 cmd-ms/op	         8.000 cmd/op	        11.35 commit-ms/op	         1.000 tx/op	  107643 B/op	    1220 allocs/op
+# load at capture: 14:03  up 2 days, 22:14, 5 users, load averages: 6.65 5.48 4.62

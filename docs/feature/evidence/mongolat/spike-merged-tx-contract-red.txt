@@ -1,0 +1,119 @@
+# 合并单事务 spike（未提交）跑 saga ② 的契约用例：负对照，契约测试能抓到“接替”丢失
+# spike 补丁：git diff -- saga/command_consumer.go（基于 origin/main 53fd9e9c）
+
+diff --git a/saga/command_consumer.go b/saga/command_consumer.go
+index deb368aa..05fb6054 100644
+--- a/saga/command_consumer.go
++++ b/saga/command_consumer.go
+@@ -17,6 +17,7 @@ import (
+ 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+ 	kitnats "github.com/tjbdwanghaibo/roost-core/nats"
+ 	"go.mongodb.org/mongo-driver/v2/bson"
++	drivermongo "go.mongodb.org/mongo-driver/v2/mongo"
+ )
+ 
+ // StepHandler runs inside a retryable MongoDB transaction. It may only mutate
+@@ -111,41 +112,63 @@ func (i *MongoCommandInbox) Handle(ctx context.Context, command Command, handler
+ 	if err != nil {
+ 		return Completion{}, false, err
+ 	}
+-	reservation, err := i.reserve(ctx, command, digest)
++	// SPIKE（不提交）：Reserve 合进执行事务，守卫写在最前。守卫写冲突 = 同一操作实例另一次尝试的事务还开着 → 在途。
++	session, err := i.client.StartSession(ctx)
+ 	if err != nil {
+ 		return Completion{}, false, err
+ 	}
+-	if reservation.Duplicate {
+-		if reservation.Completion.CommandID != "" {
+-			return reservation.Completion, true, nil
++	defer session.EndSession(ctx)
++	var completion Completion
++	duplicate := false
++	err = session.WithTransaction(ctx, func(txCtx context.Context) error {
++		duplicate = false
++		reservation, reserveErr := i.reserveInTransaction(txCtx, command, digest)
++		if reserveErr != nil {
++			var server driverServerError
++			if errors.As(reserveErr, &server) && server.HasErrorCode(112) {
++				return errOperationAttemptInFlight
++			}
++			return reserveErr
+ 		}
+-		// 同一命令的另一次投递持有有效租约：它会自己发布结果；这次投递 nak，重投时读回执。
+-		return Completion{}, false, errOperationAttemptInFlight
+-	}
+-	completion, err := i.execute(ctx, command, digest, reservation, handler)
+-	if errors.Is(err, fmongo.ErrDuplicateKey) {
+-		// 同一 CommandID 的回执已被别人先提交（升级前的进程不写 claim，只靠回执的唯一 _id 排他）：
+-		// 本次事务已中止，回放那份回执。
+-		//
+-		// 这里不交还、也不标记自己的 claim（发版前审查观察，列为观察不改）：它仍是 pending、租约有效，但读 claim 的
+-		// 每条路径都先看回执——同一命令重投在 reserveInTransaction 第 1 步读到回执回放并顺手标记 completed；同一操作
+-		// 实例的其他尝试经 attemptResult 读到这份回执，标记后回放，不会因为这份租约等待（resolveOtherAttempts 只对
+-		// 没有结论的尝试看租约）。交还租约没有可观察的差别，所以不加这一步。
+-		if replayed, readErr := i.readReceipt(ctx, command.ID, digest); readErr == nil {
+-			return replayed, true, nil
++		if reservation.Duplicate {
++			if reservation.Completion.CommandID == "" {
++				return errOperationAttemptInFlight
++			}
++			completion, duplicate = reservation.Completion, true
++			return nil
+ 		}
+-	}
+-	if err != nil {
+-		// 事务没有提交（handler 失败、取消、fence）：交还租约，重投不必等它自然过期。提交结果未知时 claim 若已
+-		// completed，交还的条件不匹配，不改动；重投读到回执回放。
+-		if releaseErr := i.releaseLease(context.WithoutCancel(ctx), reservation); releaseErr != nil {
+-			err = errors.Join(err, fmt.Errorf("saga inbox: release unused step lease: %w", releaseErr))
++		var handlerErr error
++		completion, handlerErr = handler(txCtx, command)
++		if handlerErr != nil {
++			return handlerErr
++		}
++		completion.CommandID = command.ID
++		completion.IdempotencyKey = command.IdempotencyKey
++		completion.SagaID = command.SagaID
++		if completion.CompletedAt.IsZero() {
++			completion.CompletedAt = time.Now().UTC()
++		}
++		if err := completion.Validate(); err != nil {
++			return err
++		}
++		raw, marshalErr := json.Marshal(completion)
++		if marshalErr != nil {
++			return marshalErr
+ 		}
++		if err := i.settleOwnClaim(txCtx, reservation, completion); err != nil {
++			return err
++		}
++		_, insertErr := i.collectionRef().InsertOne(txCtx, commandReceiptDoc{ID: command.ID, Digest: digest, Completion: raw, CreatedAt: time.Now().UTC()})
++		return insertErr
++	})
++	if err != nil {
+ 		return Completion{}, false, err
+ 	}
+-	return completion, false, nil
++	return completion, duplicate, nil
+ }
+ 
++type driverServerError = drivermongo.ServerError
++
+ // execute 是 Mongo 步骤的生效点：handler 的业务写、对自己 claim 的条件写与回执在同一个 Mongo 事务里提交。
+ func (i *MongoCommandInbox) execute(ctx context.Context, command Command, digest []byte, reservation Reservation, handler StepHandler) (Completion, error) {
+ 	session, err := i.client.StartSession(ctx)
+
+## 真实副本集：go test -tags integration -count=1 -run 'TestRealMongoStepAttempts' ./saga/
+--- FAIL: TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce (3.22s)
+    --- FAIL: TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce/in-flight_attempt_past_its_deadline_is_taken_over_and_cannot_commit (2.34s)
+        mongo_step_operation_promises_test.go:131: attempt gift-1:1:1:2 after gift-1:1:1:1's deadline: {CommandID: IdempotencyKey: SagaID: Success:false Retryable:false Data:[] Error: CompletedAt:0001-01-01 00:00:00 +0000 UTC} duplicate=false err=saga: another attempt of this step operation holds a live lease, want it to take over and execute
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/saga	3.601s
+FAIL
+
+## mongotest：go test -count=1 -run 'TestMongoStepAttemptsOfOneOperationTakeEffectOnce' ./saga/（mongotest 不模拟与未提交事务的写冲突，失败在“租约有效时不执行”那一步）
+    --- FAIL: TestMongoStepAttemptsOfOneOperationTakeEffectOnce/in-flight_attempt_past_its_deadline_is_taken_over_and_cannot_commit (1.50s)
+        mongo_step_operation_promises_test.go:120: attempt gift-1:1:1:2 ran while attempt gift-1:1:1:1 was still in flight with a live lease
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/saga	1.825s
+FAIL

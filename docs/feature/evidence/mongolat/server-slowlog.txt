@@ -1,0 +1,19 @@
+# 服务端诊断日志（主节点 slowms=0，profile level 0），BenchmarkRealMongoStepLatencyBreakdown -benchtime 100x（含 b.N=1 预跑与各 20 次预热，共 141 次 Handle）
+# 只统计本次库与 admin 上带 lsid 的命令；avg_ms=durationMillis 均值，wc_wait=waitForWriteConcernDurationMillis 均值；命令次数 / 141 = 每次 Handle 的次数
+
+## base
+commitTransaction admin.$cmd             n= 141 avg_ms= 8.34 avg_wc_wait_ms= 7.67
+find <db>.steps                          n= 141 avg_ms= 0.06 avg_wc_wait_ms= 0.00
+insert <db>.business                     n= 141 avg_ms= 0.55 avg_wc_wait_ms= 0.00
+insert <db>.steps                        n= 141 avg_ms= 0.00 avg_wc_wait_ms= 0.00
+update <db>.$cmd                         n= 141 avg_ms= 0.06 avg_wc_wait_ms= 0.00
+
+## after
+commitTransaction admin.$cmd             n= 282 avg_ms= 8.44 avg_wc_wait_ms= 8.04
+find <db>.steps                          n= 141 avg_ms= 0.03 avg_wc_wait_ms= 0.00
+find <db>.steps_claims                   n= 282 avg_ms= 0.00 avg_wc_wait_ms= 0.00
+findAndModify <db>.steps_claims          n= 141 avg_ms= 0.00 avg_wc_wait_ms= 0.00
+insert <db>.business                     n= 141 avg_ms= 0.23 avg_wc_wait_ms= 0.00
+insert <db>.steps                        n= 141 avg_ms= 0.00 avg_wc_wait_ms= 0.00
+insert <db>.steps_claims                 n= 141 avg_ms= 0.00 avg_wc_wait_ms= 0.00
+update <db>.$cmd                         n= 141 avg_ms= 0.21 avg_wc_wait_ms= 0.00

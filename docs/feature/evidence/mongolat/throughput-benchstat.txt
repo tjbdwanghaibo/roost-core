@@ -1,0 +1,128 @@
+# base=9669d181^（a95cf4dc） vs after=78e26853，私有三节点副本集，同机交替 6 轮，每轮一个进程，-benchtime 1000x；每轮前 uptime 见末尾
+# GOWORK=off go test -tags integration -c ./saga/ && saga.test -test.run '^$' -test.bench 'BenchmarkRealMongoStep(Throughput|LatencyBreakdown)$' -test.benchtime 1000x -test.count 1 -test.benchmem
+
+                              │   base.txt   │               after.txt               │
+                              │    sec/op    │    sec/op      vs base                │
+RealMongoStepLatencyBreakdown   8.965m ±  3%   18.321m ± 12%  +104.35% (p=0.002 n=6)
+RealMongoStepThroughput/g=1     9.005m ±  5%   18.366m ±  3%  +103.95% (p=0.002 n=6)
+RealMongoStepThroughput/g=8     1.675m ±  3%    3.378m ±  2%  +101.61% (p=0.002 n=6)
+RealMongoStepThroughput/g=32    558.4µ ± 31%    978.8µ ±  8%   +75.31% (p=0.002 n=6)
+geomean                         2.948m          5.775m         +95.91%
+
+                              │   base.txt   │               after.txt               │
+                              │  cmd-ms/op   │   cmd-ms/op    vs base                │
+RealMongoStepLatencyBreakdown   913.5m ± 15%   2223.5m ± 13%  +143.39% (p=0.002 n=6)
+
+                              │  base.txt  │             after.txt              │
+                              │   cmd/op   │   cmd/op    vs base                │
+RealMongoStepLatencyBreakdown   4.000 ± 0%   8.000 ± 0%  +100.00% (p=0.002 n=6)
+
+                              │   base.txt   │              after.txt              │
+                              │ commit-ms/op │ commit-ms/op  vs base               │
+RealMongoStepLatencyBreakdown     8.061 ± 5%   15.900 ± 14%  +97.25% (p=0.002 n=6)
+
+                              │  base.txt  │             after.txt              │
+                              │   tx/op    │   tx/op     vs base                │
+RealMongoStepLatencyBreakdown   1.000 ± 0%   2.000 ± 0%  +100.00% (p=0.002 n=6)
+
+                              │   base.txt   │               after.txt               │
+                              │     B/op     │     B/op       vs base                │
+RealMongoStepLatencyBreakdown   53.29Ki ± 0%   113.50Ki ± 0%  +113.00% (p=0.002 n=6)
+RealMongoStepThroughput/g=1     52.72Ki ± 0%   112.28Ki ± 0%  +112.98% (p=0.002 n=6)
+RealMongoStepThroughput/g=8     54.10Ki ± 0%   115.65Ki ± 0%  +113.76% (p=0.002 n=6)
+RealMongoStepThroughput/g=32    54.01Ki ± 1%   114.30Ki ± 1%  +111.65% (p=0.002 n=6)
+geomean                         53.52Ki         113.9Ki       +112.84%
+
+                              │  base.txt  │              after.txt              │
+                              │ allocs/op  │  allocs/op   vs base                │
+RealMongoStepLatencyBreakdown   598.0 ± 0%   1336.5 ± 0%  +123.49% (p=0.002 n=6)
+RealMongoStepThroughput/g=1     574.0 ± 0%   1286.0 ± 0%  +124.04% (p=0.002 n=6)
+RealMongoStepThroughput/g=8     579.0 ± 0%   1295.5 ± 0%  +123.75% (p=0.002 n=6)
+RealMongoStepThroughput/g=32    582.0 ± 0%   1293.0 ± 0%  +122.16% (p=0.002 n=6)
+geomean                         583.2        1.303k       +123.36%
+
+                             │   base.txt   │             after.txt              │
+                             │    ops/s     │    ops/s     vs base               │
+RealMongoStepThroughput/g=1    111.05 ±  5%    54.45 ± 3%  -50.96% (p=0.002 n=6)
+RealMongoStepThroughput/g=8     597.0 ±  3%    296.1 ± 2%  -50.40% (p=0.002 n=6)
+RealMongoStepThroughput/g=32   1.792k ± 24%   1.022k ± 7%  -43.01% (p=0.002 n=6)
+geomean                         491.6          254.4       -48.25%
+
+                             │  base.txt   │              after.txt              │
+                             │   p50-ms    │   p50-ms     vs base                │
+RealMongoStepThroughput/g=1    9.002 ±  1%   18.110 ± 5%  +101.19% (p=0.002 n=6)
+RealMongoStepThroughput/g=8    12.93 ±  4%    26.17 ± 3%  +102.48% (p=0.002 n=6)
+RealMongoStepThroughput/g=32   15.73 ± 24%    29.00 ± 9%   +84.42% (p=0.002 n=6)
+geomean                        12.23          23.95        +95.85%
+
+                             │  base.txt   │             after.txt              │
+                             │   p99-ms    │   p99-ms     vs base               │
+RealMongoStepThroughput/g=1    14.06 ±  7%   28.11 ± 11%  +99.89% (p=0.002 n=6)
+RealMongoStepThroughput/g=8    22.67 ± 25%   39.12 ± 21%  +72.56% (p=0.002 n=6)
+RealMongoStepThroughput/g=32   46.27 ± 20%   65.08 ±  6%  +40.65% (p=0.002 n=6)
+geomean                        24.52         41.52        +69.29%
+
+## raw base
+BenchmarkRealMongoStepLatencyBreakdown    	    1000	   9090174 ns/op	         0.7735 cmd-ms/op	         4.000 cmd/op	         8.273 commit-ms/op	         1.000 tx/op	   54530 B/op	     598 allocs/op
+BenchmarkRealMongoStepThroughput/g=1      	    1000	   9438748 ns/op	       105.9 ops/s	         9.063 p50-ms	        15.01 p99-ms	   53988 B/op	     574 allocs/op
+BenchmarkRealMongoStepThroughput/g=8      	    1000	   1653006 ns/op	       605.0 ops/s	        12.66 p50-ms	        20.95 p99-ms	   55437 B/op	     579 allocs/op
+BenchmarkRealMongoStepThroughput/g=32     	    1000	    621714 ns/op	      1608 ops/s	        16.46 p50-ms	        45.60 p99-ms	   55092 B/op	     581 allocs/op
+BenchmarkRealMongoStepLatencyBreakdown    	    1000	   9157913 ns/op	         1.010 cmd-ms/op	         4.000 cmd/op	         8.090 commit-ms/op	         1.000 tx/op	   54550 B/op	     598 allocs/op
+BenchmarkRealMongoStepThroughput/g=1      	    1000	   8899226 ns/op	       112.4 ops/s	         8.994 p50-ms	        13.15 p99-ms	   54008 B/op	     574 allocs/op
+BenchmarkRealMongoStepThroughput/g=8      	    1000	   1695542 ns/op	       589.8 ops/s	        13.02 p50-ms	        21.11 p99-ms	   55304 B/op	     579 allocs/op
+BenchmarkRealMongoStepThroughput/g=32     	    1000	    572564 ns/op	      1747 ops/s	        16.85 p50-ms	        36.82 p99-ms	   55311 B/op	     582 allocs/op
+BenchmarkRealMongoStepLatencyBreakdown    	    1000	   8972972 ns/op	         0.8823 cmd-ms/op	         4.000 cmd/op	         8.037 commit-ms/op	         1.000 tx/op	   54570 B/op	     598 allocs/op
+BenchmarkRealMongoStepThroughput/g=1      	    1000	   9082582 ns/op	       110.1 ops/s	         8.954 p50-ms	        13.82 p99-ms	   53976 B/op	     574 allocs/op
+BenchmarkRealMongoStepThroughput/g=8      	    1000	   1655271 ns/op	       604.1 ops/s	        12.40 p50-ms	        24.02 p99-ms	   55434 B/op	     580 allocs/op
+BenchmarkRealMongoStepThroughput/g=32     	    1000	    544148 ns/op	      1838 ops/s	        14.99 p50-ms	        46.94 p99-ms	   55607 B/op	     583 allocs/op
+BenchmarkRealMongoStepLatencyBreakdown    	    1000	   8938683 ns/op	         1.007 cmd-ms/op	         4.000 cmd/op	         7.871 commit-ms/op	         1.000 tx/op	   54641 B/op	     599 allocs/op
+BenchmarkRealMongoStepThroughput/g=1      	    1000	   8959885 ns/op	       111.6 ops/s	         9.048 p50-ms	        13.95 p99-ms	   54001 B/op	     574 allocs/op
+BenchmarkRealMongoStepThroughput/g=8      	    1000	   1712212 ns/op	       584.0 ops/s	        13.01 p50-ms	        24.68 p99-ms	   55411 B/op	     579 allocs/op
+BenchmarkRealMongoStepThroughput/g=32     	    1000	    520701 ns/op	      1920 ops/s	        14.90 p50-ms	        47.45 p99-ms	   55292 B/op	     582 allocs/op
+BenchmarkRealMongoStepLatencyBreakdown    	    1000	   8957930 ns/op	         0.8238 cmd-ms/op	         4.000 cmd/op	         8.085 commit-ms/op	         1.000 tx/op	   54646 B/op	     599 allocs/op
+BenchmarkRealMongoStepThroughput/g=1      	    1000	   8798601 ns/op	       113.7 ops/s	         8.966 p50-ms	        14.17 p99-ms	   53963 B/op	     574 allocs/op
+BenchmarkRealMongoStepThroughput/g=8      	    1000	   1641602 ns/op	       609.2 ops/s	        12.84 p50-ms	        21.32 p99-ms	   55367 B/op	     579 allocs/op
+BenchmarkRealMongoStepThroughput/g=32     	    1000	    515659 ns/op	      1939 ops/s	        14.81 p50-ms	        38.97 p99-ms	   55255 B/op	     582 allocs/op
+BenchmarkRealMongoStepLatencyBreakdown    	    1000	   8690104 ns/op	         0.9448 cmd-ms/op	         4.000 cmd/op	         7.691 commit-ms/op	         1.000 tx/op	   54561 B/op	     598 allocs/op
+BenchmarkRealMongoStepThroughput/g=1      	    1000	   9050620 ns/op	       110.5 ops/s	         9.009 p50-ms	        14.81 p99-ms	   53963 B/op	     574 allocs/op
+BenchmarkRealMongoStepThroughput/g=8      	    1000	   1727371 ns/op	       578.9 ops/s	        13.03 p50-ms	        28.31 p99-ms	   55391 B/op	     579 allocs/op
+BenchmarkRealMongoStepThroughput/g=32     	    1000	    733032 ns/op	      1364 ops/s	        19.47 p50-ms	        55.13 p99-ms	   55356 B/op	     582 allocs/op
+## raw after
+BenchmarkRealMongoStepLatencyBreakdown    	    1000	  17752701 ns/op	         2.263 cmd-ms/op	         8.000 cmd/op	        15.38 commit-ms/op	         2.000 tx/op	  116172 B/op	    1336 allocs/op
+BenchmarkRealMongoStepThroughput/g=1      	    1000	  17998131 ns/op	        55.56 ops/s	        18.06 p50-ms	        25.04 p99-ms	  114879 B/op	    1286 allocs/op
+BenchmarkRealMongoStepThroughput/g=8      	    1000	   3347896 ns/op	       298.7 ops/s	        26.09 p50-ms	        38.18 p99-ms	  118670 B/op	    1296 allocs/op
+BenchmarkRealMongoStepThroughput/g=32     	    1000	    924155 ns/op	      1082 ops/s	        27.39 p50-ms	        65.96 p99-ms	  117048 B/op	    1293 allocs/op
+BenchmarkRealMongoStepLatencyBreakdown    	    1000	  18944380 ns/op	         2.060 cmd-ms/op	         8.000 cmd/op	        16.78 commit-ms/op	         2.000 tx/op	  116133 B/op	    1336 allocs/op
+BenchmarkRealMongoStepThroughput/g=1      	    1000	  18937766 ns/op	        52.80 ops/s	        18.96 p50-ms	        30.97 p99-ms	  114912 B/op	    1286 allocs/op
+BenchmarkRealMongoStepThroughput/g=8      	    1000	   3418042 ns/op	       292.6 ops/s	        26.07 p50-ms	        39.75 p99-ms	  118235 B/op	    1295 allocs/op
+BenchmarkRealMongoStepThroughput/g=32     	    1000	   1053615 ns/op	       949.1 ops/s	        31.54 p50-ms	        67.61 p99-ms	  117812 B/op	    1296 allocs/op
+BenchmarkRealMongoStepLatencyBreakdown    	    1000	  18569363 ns/op	         2.503 cmd-ms/op	         8.000 cmd/op	        15.95 commit-ms/op	         2.000 tx/op	  116207 B/op	    1337 allocs/op
+BenchmarkRealMongoStepThroughput/g=1      	    1000	  18125973 ns/op	        55.17 ops/s	        18.06 p50-ms	        28.09 p99-ms	  115044 B/op	    1286 allocs/op
+BenchmarkRealMongoStepThroughput/g=8      	    1000	   3413032 ns/op	       293.0 ops/s	        26.61 p50-ms	        47.38 p99-ms	  118205 B/op	    1294 allocs/op
+BenchmarkRealMongoStepThroughput/g=32     	    1000	    985753 ns/op	      1014 ops/s	        29.24 p50-ms	        61.48 p99-ms	  117039 B/op	    1293 allocs/op
+BenchmarkRealMongoStepLatencyBreakdown    	    1000	  17849047 ns/op	         2.273 cmd-ms/op	         8.000 cmd/op	        15.47 commit-ms/op	         2.000 tx/op	  116310 B/op	    1336 allocs/op
+BenchmarkRealMongoStepThroughput/g=1      	    1000	  18159895 ns/op	        55.07 ops/s	        18.08 p50-ms	        28.00 p99-ms	  115031 B/op	    1286 allocs/op
+BenchmarkRealMongoStepThroughput/g=8      	    1000	   3309725 ns/op	       302.1 ops/s	        26.13 p50-ms	        38.63 p99-ms	  118069 B/op	    1294 allocs/op
+BenchmarkRealMongoStepThroughput/g=32     	    1000	    971931 ns/op	      1029 ops/s	        28.31 p50-ms	        67.17 p99-ms	  117177 B/op	    1293 allocs/op
+BenchmarkRealMongoStepLatencyBreakdown    	    1000	  18072962 ns/op	         2.119 cmd-ms/op	         8.000 cmd/op	        15.85 commit-ms/op	         2.000 tx/op	  116302 B/op	    1337 allocs/op
+BenchmarkRealMongoStepThroughput/g=1      	    1000	  18572882 ns/op	        53.84 ops/s	        18.14 p50-ms	        30.96 p99-ms	  115120 B/op	    1287 allocs/op
+BenchmarkRealMongoStepThroughput/g=8      	    1000	   3407616 ns/op	       293.5 ops/s	        26.92 p50-ms	        39.61 p99-ms	  118614 B/op	    1296 allocs/op
+BenchmarkRealMongoStepThroughput/g=32     	    1000	    998955 ns/op	      1001 ops/s	        30.14 p50-ms	        64.20 p99-ms	  116954 B/op	    1292 allocs/op
+BenchmarkRealMongoStepLatencyBreakdown    	    1000	  20451617 ns/op	         2.184 cmd-ms/op	         8.000 cmd/op	        18.17 commit-ms/op	         2.000 tx/op	  116240 B/op	    1337 allocs/op
+BenchmarkRealMongoStepThroughput/g=1      	    1000	  18969867 ns/op	        52.72 ops/s	        18.97 p50-ms	        28.12 p99-ms	  114903 B/op	    1286 allocs/op
+BenchmarkRealMongoStepThroughput/g=8      	    1000	   3340011 ns/op	       299.4 ops/s	        26.21 p50-ms	        36.88 p99-ms	  118731 B/op	    1296 allocs/op
+BenchmarkRealMongoStepThroughput/g=32     	    1000	    948226 ns/op	      1055 ops/s	        28.76 p50-ms	        62.74 p99-ms	  116849 B/op	    1292 allocs/op
+## load
+13:53  up 2 days, 22:04, 5 users, load averages: 4.24 4.63 4.05
+13:53  up 2 days, 22:04, 5 users, load averages: 4.20 4.60 4.05
+13:54  up 2 days, 22:05, 5 users, load averages: 4.79 4.66 4.10
+13:55  up 2 days, 22:05, 5 users, load averages: 4.64 4.62 4.10
+13:55  up 2 days, 22:06, 5 users, load averages: 3.77 4.40 4.05
+13:56  up 2 days, 22:07, 5 users, load averages: 4.02 4.41 4.06
+13:57  up 2 days, 22:07, 5 users, load averages: 4.01 4.32 4.04
+13:57  up 2 days, 22:08, 5 users, load averages: 4.21 4.36 4.06
+13:58  up 2 days, 22:08, 5 users, load averages: 3.60 4.22 4.03
+13:58  up 2 days, 22:09, 5 users, load averages: 4.12 4.27 4.05
+13:59  up 2 days, 22:10, 5 users, load averages: 5.09 4.42 4.11
+13:59  up 2 days, 22:10, 5 users, load averages: 4.17 4.25 4.06
+done
