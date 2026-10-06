@@ -27,6 +27,12 @@ type lifecycleRemoteBus struct {
 }
 
 func (*lifecycleRemoteBus) Publish(*fsyncbus.SyncMsg) error { return nil }
+
+// SubscribeLive 让快照推送开着（Mirror 第 4 步），两个订阅都经同一个计数。
+func (b *lifecycleRemoteBus) SubscribeLive(topic string, h fsyncbus.Handler) (func(), error) {
+	return b.Subscribe(topic, h)
+}
+
 func (b *lifecycleRemoteBus) Subscribe(string, fsyncbus.Handler) (func(), error) {
 	b.calls.Add(1)
 	b.active.Add(1)

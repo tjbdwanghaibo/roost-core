@@ -3,6 +3,7 @@ package mirror
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -33,11 +34,17 @@ type Store interface {
 	ApplyReplica(ctx context.Context, env Envelope) error
 }
 
+// ErrLiveSubscribeUnsupported 表示总线不能确认订阅（没有实现 fsyncbus.ILiveSubscriber），NewLive 的
+// 复制器无法启动。调用方据此显式退化，不要改用普通订阅假装有推送一致性。
+var ErrLiveSubscribeUnsupported = errors.New("replica: the sync bus cannot confirm subscriptions (fsyncbus.ILiveSubscriber)")
+
 type Replicator struct {
-	bus     fsyncbus.ISyncBus
-	ids     *fsyncbus.DeliveryIDs
-	store   Store
-	topic   string
+	bus   fsyncbus.ISyncBus
+	ids   *fsyncbus.DeliveryIDs
+	store Store
+	topic string
+	// live 为 true 时经 fsyncbus.ILiveSubscriber 订阅（NewLive）：Start 返回 nil 之后发布的消息不被静默丢掉。
+	live    bool
 	unsub   func()
 	started bool
 	mu      sync.Mutex
@@ -53,6 +60,17 @@ func New(bus fsyncbus.ISyncBus, topic string, store Store) *Replicator {
 	return &Replicator{bus: bus, ids: fsyncbus.NewDeliveryIDs("mirror"), topic: topic, store: store}
 }
 
+// NewLive 建一个用可确认订阅的复制器（Mirror 第 4 步）：Start 经 fsyncbus.ILiveSubscriber 订阅，
+// 返回 nil 即订阅已确认；总线没有这项能力时 Start 返回 ErrLiveSubscribeUnsupported。发布与 New 相同。
+func NewLive(bus fsyncbus.ISyncBus, topic string, store Store) *Replicator {
+	r := New(bus, topic, store)
+	r.live = true
+	return r
+}
+
+// Live 报告这个复制器的订阅是否可确认。
+func (r *Replicator) Live() bool { return r != nil && r.live }
+
 func (r *Replicator) Start() error {
 	if r == nil {
 		return fmt.Errorf("replica: replicator is nil")
@@ -65,8 +83,16 @@ func (r *Replicator) Start() error {
 	if r.started {
 		return nil
 	}
+	subscribe := r.bus.Subscribe
+	if r.live {
+		live, ok := r.bus.(fsyncbus.ILiveSubscriber)
+		if !ok {
+			return ErrLiveSubscribeUnsupported
+		}
+		subscribe = live.SubscribeLive
+	}
 	gate := &operation.Lifetime{}
-	unsub, err := r.bus.Subscribe(r.topic, func(msg *fsyncbus.SyncMsg) error {
+	unsub, err := subscribe(r.topic, func(msg *fsyncbus.SyncMsg) error {
 		if !gate.Begin() {
 			return nil // 这次订阅已停止：等同于退订先一步生效
 		}

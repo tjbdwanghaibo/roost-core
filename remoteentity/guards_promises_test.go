@@ -95,7 +95,7 @@ func TestRemoteInterestRegistryRejectsUnusableInterest(t *testing.T) {
 	}
 	for name, interest := range cases {
 		t.Run(name, func(t *testing.T) {
-			registry := newRemoteInterestRegistry()
+			registry := newRemoteInterestRegistry(remoteInterestLimits{})
 			renew, err := registry.renewIfNeeded(interest, 0)
 			if !errors.Is(err, entity.ErrRemoteRejected) || renew {
 				t.Fatalf("renewIfNeeded = %v, %v; want ErrRemoteRejected", renew, err)

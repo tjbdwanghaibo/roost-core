@@ -2,6 +2,7 @@ package remoteentity
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ func TestRemoteInterestRegistryIsScopedAndExpires(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := newRemoteInterestRegistry()
+	registry := newRemoteInterestRegistry(remoteInterestLimits{})
 	key := entity.RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 3, Policy: 2}
 	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1001, Key: key, ExpiresAt: time.Now().Add(time.Second).UnixNano()}); err != nil {
 		t.Fatal(err)
@@ -94,6 +95,9 @@ func TestLocalInterestCapacityPrunesExpiredAndCoalescesConcurrentRenewal(t *test
 	}
 }
 
+// O4（docs/feature/MIRROR-STEP-4-AND-O4-2026-10-06.md）之后容量按 consumer 计：每个 consumer 的配额
+// 之外，Total 只是每节点的内存上限；两种拒绝都是可识别的错误（包裹 ErrRemoteOverloaded）。之前是全表
+// 合计的 key 数与订阅数上限。
 func TestRemoteInterestRegistryHasHardCapacityLimits(t *testing.T) {
 	const kind entity.EntityKind = 129
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
@@ -101,30 +105,28 @@ func TestRemoteInterestRegistryHasHardCapacityLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := newRemoteInterestRegistry(1, 2)
+	registry := newRemoteInterestRegistry(remoteInterestLimits{PerConsumer: 1, Total: 3})
 	key := entity.RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 1}
-	expires := time.Now().Add(time.Second).UnixNano()
-	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1, Key: key, ExpiresAt: expires}); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 2, Key: key, ExpiresAt: expires}); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 3, Key: key, ExpiresAt: expires}); err != entity.ErrRemoteOverloaded {
-		t.Fatalf("subscription capacity error = %v, want %v", err, entity.ErrRemoteOverloaded)
-	}
 	other := key
 	other.Scope++
-	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1, Key: other, ExpiresAt: expires}); err != entity.ErrRemoteOverloaded {
-		t.Fatalf("key capacity error = %v, want %v", err, entity.ErrRemoteOverloaded)
+	expires := time.Now().Add(time.Second).UnixNano()
+	for _, sid := range []int32{1, 2, 3} {
+		if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: sid, Key: key, ExpiresAt: expires}); err != nil {
+			t.Fatalf("consumer %d within its quota: %v", sid, err)
+		}
 	}
-	registry.release(key, 2, 0)
-	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1, Key: other, ExpiresAt: expires}); err != entity.ErrRemoteOverloaded {
-		t.Fatalf("key limit must remain enforced, got %v", err)
+	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1, Key: other, ExpiresAt: expires}); !errors.Is(err, ErrInterestQuotaExceeded) || !errors.Is(err, entity.ErrRemoteOverloaded) {
+		t.Fatalf("second lease of consumer 1 = %v, want ErrInterestQuotaExceeded (an ErrRemoteOverloaded)", err)
+	}
+	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 4, Key: other, ExpiresAt: expires}); !errors.Is(err, ErrInterestRegistryFull) || !errors.Is(err, entity.ErrRemoteOverloaded) {
+		t.Fatalf("a fourth consumer over the node limit = %v, want ErrInterestRegistryFull", err)
 	}
 	registry.release(key, 1, 0)
 	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1, Key: other, ExpiresAt: expires}); err != nil {
-		t.Fatalf("capacity was not released: %v", err)
+		t.Fatalf("quota was not released: %v", err)
+	}
+	if got := registry.consumerLeases(1); got != 1 {
+		t.Fatalf("consumer 1 holds %d leases, want 1", got)
 	}
 }
 

@@ -38,6 +38,18 @@ type ISubscriber interface {
 	Subscribe(topic string, handler Handler) (unsub func(), err error)
 }
 
+// ILiveSubscriber 是可确认订阅的能力（Mirror 第 4 步，docs/feature/MIRROR-STEP-4-AND-O4-2026-10-06.md）。
+//
+// SubscribeLive 返回 nil 即“订阅已确认”：此后发布到 topic 的每条消息都至少一次交给 handler，不会被静默
+// 丢掉（短暂断线、处理超时由传输补投）。订阅确认之前发布的历史不承诺投递；同一身份重新订阅时可能从上次的
+// 游标续投一段，消费方按版本准入处理。传输自己发出的消息照旧不回送。
+//
+// 普通 NATS 是最多一次，不提供这项能力；JetStream 用 DeliverNew 的 durable 消费者提供。需要推送一致性的
+// 调用方先做类型断言，拿不到时显式退化（例如 remoteentity 的快照推送退化为按需读取并记日志）。
+type ILiveSubscriber interface {
+	SubscribeLive(topic string, handler Handler) (unsub func(), err error)
+}
+
 // ISyncBus combines publish and subscribe capabilities.
 type ISyncBus interface {
 	IPublisher

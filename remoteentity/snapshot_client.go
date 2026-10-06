@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,6 +54,12 @@ type SnapshotClient struct {
 
 	// transport 在装配期设置（BindSync / Start / SetSyncer），之后只读。
 	transport remoteSyncTransport
+
+	// push 报告快照推送是否开着（Mirror 第 4 步）：Start 在能确认订阅的总线（fsyncbus.ILiveSubscriber，
+	// JetStream）上订阅快照主题并置 true；普通 NATS 上不订阅、记 Warn，读取按陈旧上限回源（按需读取）。
+	push atomic.Bool
+	// interestRejected 计本机兴趣续租被拒（配额、表满）的次数（O4）；被拒的 key 没有推送，按需读取。
+	interestRejected atomic.Uint64
 
 	// 生命周期。mu 只保护下面的字段，不在持有它时等待。
 	mu          sync.Mutex
@@ -108,6 +115,8 @@ func validateSnapshotClientConfig(cfg *Config, deps SnapshotClientDeps) error {
 		return errors.New("remote_entity: snapshot cache ttl and cached_max_staleness must not be negative")
 	case deps.L2 != nil && cfg.SnapshotL2TTL <= 0:
 		return errors.New("remote_entity: snapshot_l2_ttl must be positive when a shared L2 is configured")
+	case cfg.SnapshotInterestPerConsumer < 0 || (cfg.SnapshotInterestSubs > 0 && cfg.SnapshotInterestPerConsumer > cfg.SnapshotInterestSubs):
+		return fmt.Errorf("remote_entity: snapshot_interest_per_consumer (%d) must be between 0 and snapshot_interest_subs (%d)", cfg.SnapshotInterestPerConsumer, cfg.SnapshotInterestSubs)
 	}
 	return nil
 }
@@ -117,7 +126,9 @@ func newSnapshotClient(cfg *Config, deps SnapshotClientDeps) *SnapshotClient {
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	c := &SnapshotClient{
 		cfg: cfg, consumerSID: deps.ConsumerSID, linearizable: deps.LinearizableLoader,
-		interests:             newRemoteInterestRegistry(cfg.SnapshotInterestKeys, cfg.SnapshotInterestSubs),
+		interests: newRemoteInterestRegistry(remoteInterestLimits{
+			PerConsumer: cfg.SnapshotInterestPerConsumer, Total: cfg.SnapshotInterestSubs, ReleaseFence: cfg.SnapshotInterestTTL,
+		}),
 		localInterests:        make(map[entity.RemoteSnapshotKey]int64),
 		localInterestCapacity: cfg.SnapshotInterestKeys,
 		stopCtx:               stopCtx, stopCancel: stopCancel,
@@ -134,7 +145,7 @@ func newSnapshotClient(cfg *Config, deps SnapshotClientDeps) *SnapshotClient {
 		Shards: cfg.SnapshotCacheShards, MaxEntries: cfg.SnapshotCacheEntries,
 		MaxBytes: cfg.SnapshotCacheBytes, TTL: cfg.SnapshotCacheTTL,
 		LoadTimeout: cfg.SnapshotLoadTimeout, MaxWaiters: cfg.SnapshotMaxWaiters,
-		MaxStaleness: cfg.CachedMaxStaleness,
+		MaxStaleness: cfg.CachedMaxStaleness, ReplicaBuffer: cfg.SnapshotReplicaBuffer,
 	}, l2, loader)
 	return c
 }
@@ -168,6 +179,8 @@ func (c *SnapshotClient) ReadSnapshot(ctx context.Context, req entity.RemoteSnap
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// 续租失败（O4 配额、表满、总线不可用）不影响这次读：这个 key 没有推送刷新确认时刻，读取在陈旧上限
+	// 之后经 L2 / 权威重新确认——按需读取。被拒在 RenewInterest 里计数。
 	_ = c.RenewInterest(ctx, req.Key)
 	return c.cache.Read(ctx, req)
 }
@@ -192,9 +205,15 @@ func remoteConsistencyLabel(consistency entity.RemoteReadConsistency) string {
 	}
 }
 
-// SnapshotClientStats 是健康检查用的容量。
+// SnapshotClientStats 是健康检查用的容量与模式。
 type SnapshotClientStats struct {
 	LocalInterests int
+	// PushEnabled 报告快照推送是否开着（Start 在能确认订阅的总线上）；false 时全部读取按需回源。
+	PushEnabled bool
+	// InterestRejected 是本机兴趣续租被拒的累计次数（O4：配额或表满；这些 key 按需读取）。
+	InterestRejected uint64
+	// Bootstrap 是首载缓冲的累计计数（Mirror 第 4 步）。
+	Bootstrap entity.RemoteSnapshotBootstrapStats
 }
 
 // Stats 返回本机兴趣数。RR-20261005-NC-131：过期条目只在新建兴趣且表满、或每 1024 次续租时清理，空闲进程
@@ -208,7 +227,10 @@ func (c *SnapshotClient) Stats() SnapshotClientStats {
 	if capacity := c.localInterestCapacity; capacity > 0 && len(c.localInterests) >= capacity {
 		c.pruneLocalInterestsLocked(time.Now().UnixNano())
 	}
-	return SnapshotClientStats{LocalInterests: len(c.localInterests)}
+	return SnapshotClientStats{
+		LocalInterests: len(c.localInterests), PushEnabled: c.push.Load(),
+		InterestRejected: c.interestRejected.Load(), Bootstrap: c.cache.BootstrapStats(),
+	}
 }
 
 // ---- 兴趣 ----
@@ -219,11 +241,14 @@ func (c *SnapshotClient) RenewInterest(ctx context.Context, key entity.RemoteSna
 		return entity.ErrRemoteRejected
 	}
 	ttl := c.cfg.SnapshotInterestTTL
-	now := time.Now().UnixNano()
-	interest := entity.RemoteSnapshotInterest{ConsumerSID: c.consumerSID, Key: key, ExpiresAt: now + ttl.Nanoseconds(), Generation: c.nextInterestGeneration()}
 	stripe := &c.localInterestLocks[uint64(key.EntityID)%uint64(len(c.localInterestLocks))]
 	stripe.Lock()
 	defer stripe.Unlock()
+	// generation 在条带锁内分配（Mirror 第 4 步）：同一 key 的 renew / release 按锁的顺序拿到递增的代际，
+	// 本机表、兴趣表与线上的消息按同一顺序收敛。之前在锁外分配，并发的 renew(g) 与 release(g+1) 可能
+	// 按相反顺序执行：本机表记着租约，兴趣表与 owner 却按 g+1 撤销了。
+	now := time.Now().UnixNano()
+	interest := entity.RemoteSnapshotInterest{ConsumerSID: c.consumerSID, Key: key, ExpiresAt: now + ttl.Nanoseconds(), Generation: c.nextInterestGeneration()}
 	c.localInterestMu.Lock()
 	current, loaded := c.localInterests[key]
 	if loaded && current-now > (ttl/2).Nanoseconds() {
@@ -234,13 +259,18 @@ func (c *SnapshotClient) RenewInterest(ctx context.Context, key entity.RemoteSna
 		c.pruneLocalInterestsLocked(now)
 		if len(c.localInterests) >= c.localInterestCapacity {
 			c.localInterestMu.Unlock()
+			c.noteInterestRejected("local_table_full")
 			return entity.ErrRemoteOverloaded
 		}
 	}
 	c.localInterests[key] = interest.ExpiresAt
 	c.localInterestMu.Unlock()
+	// 本机的兴趣表收到自己的全部续租，与 owner 按同一配额判定（O4）：在这里被拒，owner 也会拒，不再广播。
 	if err := c.interests.renew(interest); err != nil {
 		c.rollbackLocalInterest(key, interest.ExpiresAt)
+		if errors.Is(err, entity.ErrRemoteOverloaded) {
+			c.noteInterestRejected("registry")
+		}
 		return err
 	}
 	if err := c.publishInterest(ctx, interest, false); err != nil {
@@ -260,15 +290,21 @@ func (c *SnapshotClient) ReleaseInterest(ctx context.Context, key entity.RemoteS
 	if c == nil || !key.Valid() {
 		return entity.ErrRemoteRejected
 	}
-	interest := entity.RemoteSnapshotInterest{ConsumerSID: c.consumerSID, Key: key, ExpiresAt: time.Now().UnixNano(), Generation: c.nextInterestGeneration()}
 	stripe := &c.localInterestLocks[uint64(key.EntityID)%uint64(len(c.localInterestLocks))]
 	stripe.Lock()
 	defer stripe.Unlock()
+	interest := entity.RemoteSnapshotInterest{ConsumerSID: c.consumerSID, Key: key, ExpiresAt: time.Now().UnixNano(), Generation: c.nextInterestGeneration()}
 	c.localInterestMu.Lock()
 	delete(c.localInterests, key)
 	c.localInterestMu.Unlock()
 	c.interests.release(key, c.consumerSID, interest.Generation)
 	return c.publishInterest(ctx, interest, true)
+}
+
+// noteInterestRejected 计一次本机续租被拒（O4）。日志由兴趣表限频记录；这里只计数。
+func (c *SnapshotClient) noteInterestRejected(reason string) {
+	c.interestRejected.Add(1)
+	metrics.IncCounter("remote_entity.remote.interest_renew_refused_total", metrics.Labels{"reason": reason}, 1)
 }
 
 // publishInterest 经同步总线广播兴趣；它访问总线，所以受 work 准入约束。
@@ -307,8 +343,9 @@ func (c *SnapshotClient) rollbackLocalInterest(key entity.RemoteSnapshotKey, exp
 	if c.localInterests[key] == expiresAt {
 		delete(c.localInterests, key)
 		// This process withdrawing its own lease locally: no message was
-		// reordered, so the latest generation it issued is the right stamp.
-		c.interests.release(key, c.consumerSID, c.interestGeneration.Load())
+		// reordered, so the latest generation it issued is the right stamp,
+		// and no release watermark is needed.
+		c.interests.drop(key, c.consumerSID, c.interestGeneration.Load())
 	}
 	c.localInterestMu.Unlock()
 }
@@ -317,7 +354,7 @@ func (c *SnapshotClient) pruneLocalInterestsLocked(now int64) {
 	for key, expiresAt := range c.localInterests {
 		if expiresAt <= now {
 			delete(c.localInterests, key)
-			c.interests.release(key, c.consumerSID, c.interestGeneration.Load())
+			c.interests.drop(key, c.consumerSID, c.interestGeneration.Load())
 		}
 	}
 }
@@ -362,9 +399,14 @@ func (c *SnapshotClient) publishCommitted(ctx context.Context, commit entity.Rem
 
 // ---- 生命周期 ----
 
-// bindLocked 在 bus 上建两个复制器并装上发布用的 transport；复制器未启动。调用方持有 mu。
-func (c *SnapshotClient) bindLocked(bus fsyncbus.ISyncBus) (snapshotRep, interestRep *mirror.Replicator) {
-	snapshotRep = mirror.New(bus, SyncTopicSnapshot, SnapshotReplicaStore{client: c})
+// bindLocked 在 bus 上建两个复制器并装上发布用的 transport；复制器未启动。live 为 true 时快照复制器用
+// 可确认订阅（mirror.NewLive）。调用方持有 mu。
+func (c *SnapshotClient) bindLocked(bus fsyncbus.ISyncBus, live bool) (snapshotRep, interestRep *mirror.Replicator) {
+	if live {
+		snapshotRep = mirror.NewLive(bus, SyncTopicSnapshot, SnapshotReplicaStore{client: c})
+	} else {
+		snapshotRep = mirror.New(bus, SyncTopicSnapshot, SnapshotReplicaStore{client: c})
+	}
 	interestRep = mirror.New(bus, SyncTopicInterest, InterestReplicaStore{client: c})
 	c.bus, c.snapshotRep, c.interestRep = bus, snapshotRep, interestRep
 	c.transport = &remoteSyncer{snapshotRep: snapshotRep, interestRep: interestRep, client: c}
@@ -373,6 +415,12 @@ func (c *SnapshotClient) bindLocked(bus fsyncbus.ISyncBus) (snapshotRep, interes
 
 // Start 订阅快照与兴趣两个复制主题（幂等）。第二个订阅失败时退掉第一个再返回：失败不留下订阅，
 // 重试不会重复订阅。失败重试复用首次绑定的 bus；换 bus 要新建客户端。停止之后不能再启动。
+//
+// 快照推送只在总线能确认订阅（fsyncbus.ILiveSubscriber，JetStream 的 DeliverNew）时开启（Mirror 第 4 步）：
+// 订阅确认之后发布的快照不会被静默丢掉，加载在途时到达的进首载缓冲。普通 NATS 是最多一次，推送随时可能
+// 静默丢失，所以不订阅快照主题，记一条 Warn，Stats().PushEnabled 为 false：读取按 cached_max_staleness
+// 经 L2 / 权威回源（按需读取），正确性不依赖推送。兴趣主题照旧订阅（owner 按它决定发布，供 BindSync 的
+// 旧接收方使用）。
 func (c *SnapshotClient) Start(bus fsyncbus.ISyncBus) error {
 	if c == nil {
 		return errors.New("remote_entity: snapshot client is nil")
@@ -389,16 +437,30 @@ func (c *SnapshotClient) Start(bus fsyncbus.ISyncBus) error {
 		return nil
 	}
 	if c.snapshotRep == nil {
-		c.bindLocked(bus)
+		_, live := bus.(fsyncbus.ILiveSubscriber)
+		c.bindLocked(bus, live)
 	}
-	if err := c.snapshotRep.Start(); err != nil {
-		return fmt.Errorf("remote_entity: start snapshot replica: %w", err)
+	push := c.snapshotRep.Live()
+	if push {
+		if err := c.snapshotRep.Start(); err != nil {
+			return fmt.Errorf("remote_entity: start snapshot replica: %w", err)
+		}
 	}
 	if err := c.interestRep.Start(); err != nil {
 		c.snapshotRep.Stop()
 		return fmt.Errorf("remote_entity: start interest replica: %w", err)
 	}
 	c.started = true
+	c.push.Store(push)
+	pushGauge := int64(0)
+	if push {
+		pushGauge = 1
+	}
+	metrics.SetGauge("remote_entity.snapshot_push_enabled", metrics.Labels{"sid": fmt.Sprint(c.consumerSID)}, pushGauge)
+	if !push {
+		slog.Warn("remote_entity: snapshot push disabled: the sync bus cannot confirm subscriptions (JetStream required); Cached and Monotonic reads re-confirm through the shared L2 / authority after cached_max_staleness",
+			"consumer_sid", c.consumerSID, "cached_max_staleness", c.cfg.CachedMaxStaleness, "snapshot_cache_ttl", c.cfg.SnapshotCacheTTL)
+	}
 	return nil
 }
 
@@ -413,6 +475,7 @@ func (c *SnapshotClient) unsubscribe() {
 		}
 	}
 	c.started = false
+	c.push.Store(false)
 }
 
 // Stop 按三步停机（roost-coding；契约骨架 internal/stopcontract）：
@@ -432,6 +495,7 @@ func (c *SnapshotClient) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	c.stopped.Store(true)
 	c.started = false
+	c.push.Store(false)
 	reps := []*mirror.Replicator{c.snapshotRep, c.interestRep}
 	c.mu.Unlock()
 	c.work.Stop()

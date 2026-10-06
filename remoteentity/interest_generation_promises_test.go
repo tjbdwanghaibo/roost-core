@@ -27,7 +27,7 @@ func interestKeyFor(t *testing.T, kind entity.EntityKind, unique int64) entity.R
 // 只释放代际不落后的订阅。
 func TestStaleInterestReleaseDoesNotCancelANewerRenewal(t *testing.T) {
 	key := interestKeyFor(t, 244, 9341)
-	registry := newRemoteInterestRegistry()
+	registry := newRemoteInterestRegistry(remoteInterestLimits{})
 	now := time.Now().UnixNano()
 	const sid int32 = 7
 
@@ -53,9 +53,19 @@ func TestStaleInterestReleaseDoesNotCancelANewerRenewal(t *testing.T) {
 		t.Fatal("a release newer than the renewal must cancel it")
 	}
 
+	// Mirror 第 4 步更正：release(13) 留下撤销水位，在它之前发出的 renewal(12) 迟到后不能复活租约
+	// （之前这里重新建起了租约，用例把它当作前提）。
+	if err := registry.renew(second); err != nil {
+		t.Fatal(err)
+	}
+	if registry.interested(key) {
+		t.Fatal("a renewal issued before the release brought the withdrawn lease back")
+	}
 	// A renewal older than what is recorded is ignored rather than moving
 	// the lease backwards.
-	if err := registry.renew(second); err != nil {
+	current := second
+	current.Generation = 14
+	if err := registry.renew(current); err != nil {
 		t.Fatal(err)
 	}
 	stale := first
@@ -66,7 +76,7 @@ func TestStaleInterestReleaseDoesNotCancelANewerRenewal(t *testing.T) {
 	registry.mu.Lock()
 	lease := registry.entries[key][sid]
 	registry.mu.Unlock()
-	if lease.generation != second.Generation || lease.expiresAt != second.ExpiresAt {
+	if lease.generation != current.Generation || lease.expiresAt != current.ExpiresAt || lease.released {
 		t.Fatalf("a stale renewal overwrote the current lease: %+v", lease)
 	}
 }

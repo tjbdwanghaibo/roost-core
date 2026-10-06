@@ -183,6 +183,22 @@ func (b *jetStreamSyncBus) PublishContext(ctx context.Context, msg *fsyncbus.Syn
 }
 
 func (b *jetStreamSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (func(), error) {
+	return b.subscribe(topic, handler, false)
+}
+
+// SubscribeLive 是可确认订阅（fsyncbus.ILiveSubscriber，Mirror 第 4 步）：这个主题一个 DeliverNew 的
+// durable 消费者。CreateOrUpdateConsumer 返回时消费者的起点已定在流的当前末尾，之后入流的消息都会投递
+// （AckExplicit，处理超时重投），所以返回 nil 就是“订阅已确认”。durable 名与 Subscribe 的 DeliverAll
+// 消费者分开（durableSyncName 的主题加 ".live"）：服务端不允许改已有 durable 的投递策略，共用名字会让
+// 已部署的 DeliverAll durable 建不出来；分开后旧 durable 不再被消费，可由运维删除。同一 sid 重启时
+// durable 仍在，从上次的确认游标续投（不超过流的 MaxAge）。
+func (b *jetStreamSyncBus) SubscribeLive(topic string, handler fsyncbus.Handler) (func(), error) {
+	return b.subscribe(topic, handler, true)
+}
+
+// subscribe 建（或复用）一个主题的 durable 消费者并登记本地 handler。live 选 DeliverNew 的那个消费者；
+// 两种消费者在 topics 里用不同的键，互不共享本地 handler。
+func (b *jetStreamSyncBus) subscribe(topic string, handler fsyncbus.Handler, live bool) (func(), error) {
 	if b == nil || b.js == nil {
 		return nil, fmt.Errorf("jetstream sync: bus is not initialized")
 	}
@@ -199,13 +215,17 @@ func (b *jetStreamSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (fu
 	if b.deliveries.Stopping() {
 		return nil, fmt.Errorf("jetstream sync: bus is stopping or stopped")
 	}
-	fanout := b.topics[topic]
+	fanoutKey, durableTopic, policy := topic, topic, fnats.JetStreamDeliverAll
+	if live {
+		fanoutKey, durableTopic, policy = topic+"\x00live", topic+".live", fnats.JetStreamDeliverNew
+	}
+	fanout := b.topics[fanoutKey]
 	if fanout == nil {
 		// First local subscriber: create the topic's one durable consumer.
 		// Its handler dispatches to whatever handlers are registered at
 		// delivery time, so later subscribers only need to register.
 		fanout = &topicFanout{handlers: make(map[uint64]fsyncbus.Handler)}
-		name := durableSyncName(cfg.Prefix, topic, cfg.LocalSid)
+		name := durableSyncName(cfg.Prefix, durableTopic, cfg.LocalSid)
 		ctx, cancel := context.WithTimeout(fctx.BaseContext(), cfg.SetupTimeout)
 		defer cancel()
 		sub, err := b.js.Subscribe(ctx, fnats.JetStreamConsumerConfig{
@@ -213,7 +233,7 @@ func (b *jetStreamSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (fu
 			Name:          name,
 			Durable:       name,
 			FilterSubject: b.subject(topic),
-			DeliverPolicy: fnats.JetStreamDeliverAll,
+			DeliverPolicy: policy,
 			AckWait:       cfg.AckWait,
 			MaxDeliver:    cfg.MaxDeliver,
 		}, func(_ context.Context, raw *fnats.JetStreamMsg) error {
@@ -248,7 +268,7 @@ func (b *jetStreamSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (fu
 			return nil, err
 		}
 		fanout.sub = sub
-		b.topics[topic] = fanout
+		b.topics[fanoutKey] = fanout
 	}
 	fanout.nextID++
 	id := fanout.nextID
@@ -259,8 +279,8 @@ func (b *jetStreamSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (fu
 			b.mu.Lock()
 			delete(fanout.handlers, id)
 			var stop fnats.IJetStreamSubscription
-			if len(fanout.handlers) == 0 && b.topics[topic] == fanout {
-				delete(b.topics, topic)
+			if len(fanout.handlers) == 0 && b.topics[fanoutKey] == fanout {
+				delete(b.topics, fanoutKey)
 				stop = fanout.sub
 			}
 			b.mu.Unlock()
@@ -449,4 +469,7 @@ func sanitizeSyncName(s string) string {
 	return out
 }
 
-var _ fsyncbus.ISyncBus = (*jetStreamSyncBus)(nil)
+var (
+	_ fsyncbus.ISyncBus        = (*jetStreamSyncBus)(nil)
+	_ fsyncbus.ILiveSubscriber = (*jetStreamSyncBus)(nil)
+)

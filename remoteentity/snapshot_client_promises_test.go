@@ -76,6 +76,11 @@ func (b *loopbackBus) Subscribe(topic string, h fsyncbus.Handler) (func(), error
 	}), nil
 }
 
+// SubscribeLive：同步进程内投递，订阅返回即确认（fsyncbus.ILiveSubscriber，快照推送开着）。
+func (b *loopbackBus) SubscribeLive(topic string, h fsyncbus.Handler) (func(), error) {
+	return b.Subscribe(topic, h)
+}
+
 func (b *loopbackBus) active(topic string) int {
 	b.mu.Lock()
 	defer b.mu.Unlock()

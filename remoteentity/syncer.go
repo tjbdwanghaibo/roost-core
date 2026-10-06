@@ -117,10 +117,11 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 		// first nor lets an older one delivered later resurrect the key
 		// (U-0187, RR-20260913-01). A version-less delete stays a plain
 		// invalidation for compatibility with older publishers.
-		if env.Version <= 0 {
-			return snapshotCache.Delete(ctx, wire.Key)
+		version := uint64(0)
+		if env.Version > 0 {
+			version = uint64(env.Version)
 		}
-		return snapshotCache.DeleteAtVersion(ctx, wire.Key, uint64(env.Version))
+		return snapshotCache.ApplyReplica(ctx, entity.RemoteSnapshotReplica{Key: wire.Key, Delete: true, DeleteVersion: version})
 	}
 	if s.historic(wire.PublishedAt, time.Now()) {
 		// N05 O5：同步总线的 durable 用 DeliverAll，新 sid 或落后的游标会重放保留期内的历史。共享 L2 对
@@ -131,7 +132,9 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 		metrics.IncCounter("remote_entity.snapshot_replica_historic_dropped_total", nil, 1)
 		return nil
 	}
-	err := snapshotCache.ApplyUpdate(ctx, wire.Update)
+	// Mirror 第 4 步：这个 key 的权威加载在途时消息进首载缓冲（ApplyReplica 返回 nil），加载装入后重放；
+	// 只有不在首载时的缺基 / 换代 / schema 不符才在这里回源（这次回源本身也是一次首载）。
+	err := snapshotCache.ApplyReplica(ctx, entity.RemoteSnapshotReplica{Key: wire.Key, Update: wire.Update})
 	if errors.Is(err, entity.ErrRemoteSnapshotGap) || errors.Is(err, entity.ErrRemoteSnapshotEpochMismatch) || errors.Is(err, entity.ErrRemoteSnapshotSchemaMismatch) {
 		_, _, loadErr := snapshotCache.LoadAuthoritative(ctx, wire.Update.Key, entity.RemoteReadMonotonic, wire.Update.StateVersion)
 		return loadErr

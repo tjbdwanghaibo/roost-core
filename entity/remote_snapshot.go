@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/cache"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 var (
@@ -117,6 +119,9 @@ type RemoteSnapshotCacheConfig struct {
 	MaxStaleness time.Duration
 	// Now 是缓存的时钟（确认时刻、陈旧上限、L1 过期都用它）。nil 用 time.Now；只为测试控制时间。
 	Now func() time.Time
+	// ReplicaBuffer 是一个 key 的权威加载在途时能缓冲的复制消息条数（首载缓冲，Mirror 第 4 步）。缺省 64。
+	// 总量受同时在途的加载数（MaxConcurrentLoads）约束。
+	ReplicaBuffer int
 }
 
 // RemoteSnapshotCache 是 Remote 快照的进程内缓存。B2（维护者决定 2026-10-05，方案
@@ -135,6 +140,10 @@ type RemoteSnapshotCacheConfig struct {
 // L1 冷时的 L2 预查都已删除（它们各自补过 RR-20260913-01/05/06/08、NC-130 的一个入口）。
 //
 // 没有共享 L2 的装配（测试、单进程）里 L1 自己就是水位：写入直接算确认。
+//
+// 复制消息经 ApplyReplica 进入（Mirror 第 4 步，docs/feature/MIRROR-STEP-4-AND-O4-2026-10-06.md）：
+// 一个 key 的权威加载在途时，它的复制消息先进有界的首载缓冲，加载结果装入之后按到达顺序重放；重放与
+// 加载结果都经 admitLocked。缓冲溢出时丢弃缓冲，加载装入后再回源一次。
 type RemoteSnapshotCache struct {
 	l2 cache.Store[RemoteSnapshotKey, RemoteSnapshotEnvelope]
 	l1 *cache.AtomicLocalStore[RemoteSnapshotKey, remoteSnapshotEntry]
@@ -161,6 +170,39 @@ type RemoteSnapshotCache struct {
 	coalesced      atomic.Uint64
 	loadErrors     atomic.Uint64
 	remoteErrors   atomic.Uint64
+
+	// 首载缓冲（见类型注释）。bootMu 只保护 bootstraps，不在持有它时调用 L2 或 loader。
+	bootMu        sync.Mutex
+	bootstraps    map[RemoteSnapshotKey]*remoteSnapshotBootstrap
+	replicaBuffer int
+	bootstrap     remoteSnapshotBootstrapCounters
+}
+
+// RemoteSnapshotReplica 是一条复制消息：一份快照更新（全量或增量），或一次删除。DeleteVersion 是删除
+// 所在提交的版本；0 是旧发布者不带版本的失效（无条件删除，不留水位）。
+type RemoteSnapshotReplica struct {
+	Key           RemoteSnapshotKey
+	Delete        bool
+	DeleteVersion uint64
+	Update        RemoteSnapshotRecord
+}
+
+// remoteSnapshotBootstrap 是一个 key 正在进行的权威加载（可能多次并发：合并键不同）与它们期间到达的
+// 复制消息。最后一个加载结束时取走缓冲并重放。
+type remoteSnapshotBootstrap struct {
+	loads      int
+	buffered   []RemoteSnapshotReplica
+	overflowed bool
+}
+
+type remoteSnapshotBootstrapCounters struct {
+	buffered, replayed, replayFailed, overflows, reloads atomic.Uint64
+}
+
+// RemoteSnapshotBootstrapStats 是首载缓冲的累计计数：进缓冲的消息、重放成功 / 失败（如增量的基对不上，
+// 新鲜度交给陈旧上限）、溢出次数与溢出后的整体回源次数。
+type RemoteSnapshotBootstrapStats struct {
+	Buffered, Replayed, ReplayFailed, Overflows, Reloads uint64
 }
 
 // remoteSnapshotEntry 是 L1 里的一个条目：一份快照，或一个删除标记（deleted，snapshot 只有 Key 与
@@ -197,10 +239,11 @@ type remoteSnapshotLoadCall struct {
 }
 
 const (
-	defaultRemoteSnapshotEntries           = 64 << 10
-	defaultRemoteSnapshotBytes       int64 = 256 << 20
-	defaultRemoteSnapshotLoadTimeout       = 3 * time.Second
-	defaultRemoteSnapshotStaleness         = 30 * time.Second
+	defaultRemoteSnapshotEntries             = 64 << 10
+	defaultRemoteSnapshotBytes         int64 = 256 << 20
+	defaultRemoteSnapshotLoadTimeout         = 3 * time.Second
+	defaultRemoteSnapshotStaleness           = 30 * time.Second
+	defaultRemoteSnapshotReplicaBuffer       = 64
 )
 
 func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[RemoteSnapshotKey, RemoteSnapshotEnvelope], loader RemoteSnapshotLoader) *RemoteSnapshotCache {
@@ -234,6 +277,9 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.ReplicaBuffer <= 0 {
+		cfg.ReplicaBuffer = defaultRemoteSnapshotReplicaBuffer
+	}
 	storeCfg := cache.StoreConfig[RemoteSnapshotKey, remoteSnapshotEntry]{
 		KeyOf:       func(entry remoteSnapshotEntry) RemoteSnapshotKey { return entry.snapshot.Key },
 		Stale:       remoteSnapshotEntryStale,
@@ -265,6 +311,7 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 		loader:    loader,
 		loads:     make(map[remoteSnapshotLoadKey]*remoteSnapshotLoadCall),
 		loadSlots: make(chan struct{}, cfg.MaxConcurrentLoads), loadTimeout: cfg.LoadTimeout,
+		bootstraps: make(map[RemoteSnapshotKey]*remoteSnapshotBootstrap), replicaBuffer: cfg.ReplicaBuffer,
 	}
 }
 
@@ -337,6 +384,11 @@ func covers(snapshot RemoteSnapshotEnvelope, after RemoteObservation) error {
 }
 
 // loadAuthoritative 读权威并经 admitLocked 记入缓存（唯一写入口），返回缓存最终持有、满足 after 的值。
+//
+// 加载期间这个 key 处于首载（beginBootstrap）：复制消息进缓冲，不与加载结果交错写入。加载结果装入之后
+// 结束首载、按到达顺序重放缓冲（仍经 admitLocked，版本 / epoch / 删除标记决定取舍）：加载期间的增量
+// 落在加载装入的基上，不再因缺基回源；更旧的 upsert 与删除是过去。缓冲溢出时消息已丢，加载装入后
+// 再回源一次（整体回源），之后到达的消息直接准入。
 func (c *RemoteSnapshotCache) loadAuthoritative(ctx context.Context, key RemoteSnapshotKey, consistency RemoteReadConsistency, after RemoteObservation) (RemoteSnapshotEnvelope, bool, error) {
 	if c.loader == nil {
 		return RemoteSnapshotEnvelope{}, false, ErrRemoteSnapshotStale
@@ -353,41 +405,17 @@ func (c *RemoteSnapshotCache) loadAuthoritative(ctx context.Context, key RemoteS
 	case <-loadCtx.Done():
 		return RemoteSnapshotEnvelope{}, false, loadCtx.Err()
 	}
-	// 权威的答案反映加载开始之后的某个时刻：以开始时刻作确认时刻（保守）。
-	loadStart := c.nowNanos()
-	c.authorityLoads.Add(1)
-	snapshot, ok, err := c.loader(loadCtx, key, consistency, loaderMinVersion(after))
-	if err != nil {
-		c.loadErrors.Add(1)
-		return snapshot, ok, err
+	c.beginBootstrap(key)
+	admitted, err := c.fetchAndAdmit(loadCtx, key, consistency, after)
+	buffered, overflowed := c.endBootstrap(key)
+	if overflowed && err == nil {
+		c.bootstrap.reloads.Add(1)
+		admitted, err = c.fetchAndAdmit(loadCtx, key, consistency, after)
 	}
-	if !ok {
-		return snapshot, ok, nil
-	}
-	// RR-20261005-NC-35：加载回调也属于身份边界，必须在任何缓存写入前
-	// 绑定完整请求键；否则会写入别的视图，再把请求键的旧值误当成功返回。
-	if snapshot.Key != key {
-		return RemoteSnapshotEnvelope{}, false, fmt.Errorf("remote snapshot: authoritative result key does not match requested key")
-	}
-	if err := covers(snapshot, after); err != nil {
+	c.replayReplicas(loadCtx, buffered)
+	if err != nil || !admitted {
 		return RemoteSnapshotEnvelope{}, false, err
 	}
-	// Every outward read shares one post-condition: never a snapshot past
-	// its own deadline. The authority's raw answer and whatever L1 keeps
-	// after the write both have to pass it (RR-20260913-08 复核). An expired
-	// authoritative answer is a miss, and is not cached.
-	if snapshot.Expired(c.now()) {
-		return RemoteSnapshotEnvelope{}, false, nil
-	}
-	snapshot.Checksum = RemoteSnapshotChecksum(snapshot.Payload.data)
-	lock := &c.publishMu[remoteSnapshotPublishShard(key)]
-	lock.Lock()
-	err = c.publishLocked(loadCtx, snapshot, loadStart)
-	lock.Unlock()
-	if err != nil {
-		return RemoteSnapshotEnvelope{}, false, err
-	}
-	c.notify(key, snapshot.StateVersion)
 	stored, found, err := c.l1Snapshot(loadCtx, key)
 	if err != nil || !found {
 		return stored.Clone(), found, err
@@ -402,6 +430,158 @@ func (c *RemoteSnapshotCache) loadAuthoritative(ctx context.Context, key RemoteS
 		return RemoteSnapshotEnvelope{}, false, err
 	}
 	return stored.Clone(), true, nil
+}
+
+// fetchAndAdmit 调一次权威 loader，把满足 after、未过期的结果经 publishLocked → admitLocked 记入缓存。
+// admitted=false 且 err=nil 表示权威没有（或已过期）。
+func (c *RemoteSnapshotCache) fetchAndAdmit(ctx context.Context, key RemoteSnapshotKey, consistency RemoteReadConsistency, after RemoteObservation) (bool, error) {
+	// 权威的答案反映加载开始之后的某个时刻：以开始时刻作确认时刻（保守）。
+	loadStart := c.nowNanos()
+	c.authorityLoads.Add(1)
+	snapshot, ok, err := c.loader(ctx, key, consistency, loaderMinVersion(after))
+	if err != nil {
+		c.loadErrors.Add(1)
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	// RR-20261005-NC-35：加载回调也属于身份边界，必须在任何缓存写入前
+	// 绑定完整请求键；否则会写入别的视图，再把请求键的旧值误当成功返回。
+	if snapshot.Key != key {
+		return false, fmt.Errorf("remote snapshot: authoritative result key does not match requested key")
+	}
+	if err := covers(snapshot, after); err != nil {
+		return false, err
+	}
+	// Every outward read shares one post-condition: never a snapshot past
+	// its own deadline. The authority's raw answer and whatever L1 keeps
+	// after the write both have to pass it (RR-20260913-08 复核). An expired
+	// authoritative answer is a miss, and is not cached.
+	if snapshot.Expired(c.now()) {
+		return false, nil
+	}
+	snapshot.Checksum = RemoteSnapshotChecksum(snapshot.Payload.data)
+	lock := &c.publishMu[remoteSnapshotPublishShard(key)]
+	lock.Lock()
+	err = c.publishLocked(ctx, snapshot, loadStart)
+	lock.Unlock()
+	if err != nil {
+		return false, err
+	}
+	c.notify(key, snapshot.StateVersion)
+	return true, nil
+}
+
+// ApplyReplica 是复制消息进入缓存的入口（Mirror 第 4 步）。这个 key 的权威加载在途时消息进首载缓冲，
+// 由加载结束时重放；否则直接准入：快照更新经 ApplyUpdate（增量缺基返回 ErrRemoteSnapshotGap，由调用方
+// 决定是否回源），带版本删除经 DeleteAtVersion，不带版本的失效经 Delete。全部写入都经 admitLocked。
+func (c *RemoteSnapshotCache) ApplyReplica(ctx context.Context, msg RemoteSnapshotReplica) error {
+	if c == nil || c.l1 == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if c.bufferDuringBootstrap(msg) {
+		return nil
+	}
+	return c.applyReplica(ctx, msg)
+}
+
+func (c *RemoteSnapshotCache) applyReplica(ctx context.Context, msg RemoteSnapshotReplica) error {
+	if !msg.Delete {
+		return c.ApplyUpdate(ctx, msg.Update)
+	}
+	if msg.DeleteVersion == 0 {
+		return c.Delete(ctx, msg.Key)
+	}
+	return c.DeleteAtVersion(ctx, msg.Key, msg.DeleteVersion)
+}
+
+func (m RemoteSnapshotReplica) key() RemoteSnapshotKey {
+	if m.Delete {
+		return m.Key
+	}
+	return m.Update.Key
+}
+
+// beginBootstrap 登记 key 的一次在途权威加载（调用方已取得加载名额，所以登记数受 MaxConcurrentLoads 约束）。
+func (c *RemoteSnapshotCache) beginBootstrap(key RemoteSnapshotKey) {
+	c.bootMu.Lock()
+	defer c.bootMu.Unlock()
+	boot := c.bootstraps[key]
+	if boot == nil {
+		boot = &remoteSnapshotBootstrap{}
+		c.bootstraps[key] = boot
+	}
+	boot.loads++
+}
+
+// endBootstrap 结束一次加载；最后一个加载取走缓冲（溢出时缓冲已清空，overflowed 为 true）。
+func (c *RemoteSnapshotCache) endBootstrap(key RemoteSnapshotKey) (buffered []RemoteSnapshotReplica, overflowed bool) {
+	c.bootMu.Lock()
+	defer c.bootMu.Unlock()
+	boot := c.bootstraps[key]
+	if boot == nil {
+		return nil, false
+	}
+	boot.loads--
+	if boot.loads > 0 {
+		return nil, false
+	}
+	delete(c.bootstraps, key)
+	return boot.buffered, boot.overflowed
+}
+
+// bufferDuringBootstrap 在 key 处于首载时收下消息并返回 true。缓冲满时丢弃全部缓冲并标记溢出（之后到达
+// 的也丢弃）：加载结束时整体回源一次，比部分重放更简单、也不会因缺了中间消息而装上错位的增量。
+func (c *RemoteSnapshotCache) bufferDuringBootstrap(msg RemoteSnapshotReplica) bool {
+	key := msg.key()
+	c.bootMu.Lock()
+	defer c.bootMu.Unlock()
+	boot := c.bootstraps[key]
+	if boot == nil {
+		return false
+	}
+	switch {
+	case boot.overflowed:
+	case len(boot.buffered) >= c.replicaBuffer:
+		boot.overflowed, boot.buffered = true, nil
+		c.bootstrap.overflows.Add(1)
+		metrics.IncCounter("remote_entity.snapshot_bootstrap_overflow_total", nil, 1)
+		slog.Warn("remote snapshot: bootstrap buffer overflowed; dropping the buffered replicas and reloading the key from the authority after the load",
+			"kind", key.Kind, "entity_id", key.EntityID, "scope", key.Scope, "buffer", c.replicaBuffer)
+	default:
+		boot.buffered = append(boot.buffered, msg)
+		c.bootstrap.buffered.Add(1)
+	}
+	return true
+}
+
+// replayReplicas 按到达顺序重放首载缓冲。失败（增量的基对不上、L2 冲突）只计数：消息的新鲜度由陈旧上限
+// 兜底，不能让一条重放失败把读者的加载结果变成错误。
+func (c *RemoteSnapshotCache) replayReplicas(ctx context.Context, msgs []RemoteSnapshotReplica) {
+	for _, msg := range msgs {
+		if err := c.applyReplica(ctx, msg); err != nil {
+			c.bootstrap.replayFailed.Add(1)
+			metrics.IncCounter("remote_entity.snapshot_bootstrap_replay_failed_total", nil, 1)
+			continue
+		}
+		c.bootstrap.replayed.Add(1)
+	}
+}
+
+// BootstrapStats 返回首载缓冲的累计计数。
+func (c *RemoteSnapshotCache) BootstrapStats() RemoteSnapshotBootstrapStats {
+	if c == nil {
+		return RemoteSnapshotBootstrapStats{}
+	}
+	return RemoteSnapshotBootstrapStats{
+		Buffered: c.bootstrap.buffered.Load(), Replayed: c.bootstrap.replayed.Load(),
+		ReplayFailed: c.bootstrap.replayFailed.Load(), Overflows: c.bootstrap.overflows.Load(),
+		Reloads: c.bootstrap.reloads.Load(),
+	}
 }
 
 // remoteSnapshotStale reports that next is older than old and must not

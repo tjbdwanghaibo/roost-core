@@ -158,6 +158,14 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	if limit := read.Int("remote_entity.snapshot_interest_subs"); limit > 0 {
 		m.cfg.SnapshotInterestSubs = limit
 	}
+	// O4：每个 consumer 节点在兴趣表里的配额（0 = snapshot_interest_subs / 16），不能超过每节点上限。
+	if cfg.IsSet("remote_entity.snapshot_interest_per_consumer") {
+		quota := read.Int("remote_entity.snapshot_interest_per_consumer")
+		if quota < 0 || quota > m.cfg.SnapshotInterestSubs {
+			return errors.Join(read.Err(), fmt.Errorf("remote_entity.snapshot_interest_per_consumer must be between 0 and remote_entity.snapshot_interest_subs (%d), got %v", m.cfg.SnapshotInterestSubs, cfg.Get("remote_entity.snapshot_interest_per_consumer")))
+		}
+		m.cfg.SnapshotInterestPerConsumer = quota
+	}
 	if ttl := read.Duration("remote_entity.marker_cache_ttl"); ttl > 0 {
 		m.cfg.MarkerCacheTTL = ttl
 	}
@@ -272,7 +280,9 @@ func (m *RemoteEntityMod) checkHealth(context.Context) health.Result {
 	if stats.WriteLimit > 0 && stats.WritesInFlight >= stats.WriteLimit {
 		return health.Result{Status: health.StatusDegraded, Message: fmt.Sprintf("write capacity exhausted writes_in_flight=%d write_limit=%d write_rejected=%d", stats.WritesInFlight, stats.WriteLimit, stats.WriteRejected)}
 	}
-	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("wrappers=%d capacity=%d local_interests=%d transactions=%d active_transactions=%d writes_in_flight=%d write_limit=%d write_rejected=%d", stats.Wrappers, m.cfg.WrapperCapacity, localInterests, transactions, activeTransactions, stats.WritesInFlight, stats.WriteLimit, stats.WriteRejected)}
+	// snapshot_push=false 是显式退化（总线不能确认订阅，读取按需回源），interest_refused 是 O4 配额 / 表满
+	// 拒绝的累计数（这些 key 按需读取）；两者都不影响健康状态。
+	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("wrappers=%d capacity=%d local_interests=%d transactions=%d active_transactions=%d writes_in_flight=%d write_limit=%d write_rejected=%d snapshot_push=%v interest_refused=%d", stats.Wrappers, m.cfg.WrapperCapacity, localInterests, transactions, activeTransactions, stats.WritesInFlight, stats.WriteLimit, stats.WriteRejected, stats.SnapshotPush, stats.InterestRefused)}
 }
 
 func (m *RemoteEntityMod) Start() error {

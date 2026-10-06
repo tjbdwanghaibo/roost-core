@@ -39,6 +39,12 @@ func (b *handlerBus) Subscribe(topic string, h fsyncbus.Handler) (func(), error)
 		delete(b.handlers, topic)
 	}), nil
 }
+
+// SubscribeLive：测试直接投递，订阅即确认（Mirror 第 4 步的推送模式）。
+func (b *handlerBus) SubscribeLive(topic string, h fsyncbus.Handler) (func(), error) {
+	return b.Subscribe(topic, h)
+}
+
 func (b *handlerBus) handler(topic string) fsyncbus.Handler {
 	b.mu.Lock()
 	defer b.mu.Unlock()

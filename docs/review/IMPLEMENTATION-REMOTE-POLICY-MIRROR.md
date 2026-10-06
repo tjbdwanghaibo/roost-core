@@ -108,4 +108,4 @@ N05最新适配器审查修复了[缓存payload身份](../bugfix/RR-20261005-NC-
 
 ## 2026-10-06 第 1～3 步实施
 
-只读 reader 契约（`entity.RemoteSnapshotReadOnly` / `RemoteMirrorReader[T]` / 观察 token）与共享 `remoteentity.SnapshotClient`（上文“MirrorClient”的落地名）已实施，Manager 组合并委托它；订阅代际、首载缓冲、kit 只读装配与 codegen 只读产物仍未实施。[实施记录](../feature/MIRROR-STEPS-1-3-2026-10-06.md)。
+只读 reader 契约（`entity.RemoteSnapshotReadOnly` / `RemoteMirrorReader[T]` / 观察 token）与共享 `remoteentity.SnapshotClient`（上文“MirrorClient”的落地名）已实施，Manager 组合并委托它；kit 只读装配与 codegen 只读产物仍未实施（订阅代际、首载缓冲与可确认订阅已在第 4 步实施，[记录](../feature/MIRROR-STEP-4-AND-O4-2026-10-06.md)）。[实施记录](../feature/MIRROR-STEPS-1-3-2026-10-06.md)。

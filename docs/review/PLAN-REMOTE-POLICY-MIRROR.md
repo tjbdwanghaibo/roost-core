@@ -125,3 +125,14 @@ Shutdown 停止准入，取消续租和加载，解绑订阅，等待已准入�
 - **第 3 步（共享 snapshot client）**：`remoteentity.SnapshotClient` 拥有读、兴趣、按 key apply、回填、状态与生命周期；Manager 组合并委托，`Assembly` 的复制启停交给它；客户端不要求写 backend；启动失败逐步回收、无重复订阅；`Stop` 套 A3 三步停机骨架。缓存写入仍只经 `admitLocked`。
 - 真实 Redis + 自建 Cluster 的 `TestRealB2WatermarkMatrix*`、真实 JetStream 重放、生成工程 12 条 `TestGeneratedRemote*` 通过。
 - **第 4～6 步未开始**，入口与前置条件见实施记录 §7（核心前置：总线能否证明确认后的发布不被静默丢弃；不满足时第 4 步只交付按需读）。
+
+## 2026-10-06 第 4 步实施
+
+维护者第九轮决定按推荐做第 4 步（推送订阅依赖 JetStream，按主题 DeliverNew；没开 JetStream 显式退化为按需读取），[实施记录](../feature/MIRROR-STEP-4-AND-O4-2026-10-06.md)。方案本身未改；B2 之后与原文的差别见实施记录 §2（L2 水位与陈旧上限已挡住旧删除 / 旧 upsert / 淘汰后的旧消息，不再需要“Ready 门”）。
+
+- 可确认订阅：`fsyncbus.ILiveSubscriber` / JetStream `SubscribeLive`（DeliverNew durable，与 DeliverAll 分开）/ `mirror.NewLive`；`SnapshotClient.Start` 只在它上面开推送，普通 NATS 退化并记 Warn。
+- 首载缓冲：快照缓存 `ApplyReplica`，权威加载在途时缓冲、装入后经 `admitLocked` 重放、溢出丢弃并再回源一次。
+- 兴趣代际：锁内分配；release 撤销水位，renew / release 全交错收敛到最后一次操作。
+- O4 兴趣容量按 consumer 计。
+- 真实 JetStream + Redis：确认订阅、不重放历史、退订后重订续投；推送到达只读方；B2 组合矩阵与生成工程 12 条照样通过。
+- **第 5、6 步未开始**，入口见实施记录 §6.8。

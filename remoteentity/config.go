@@ -13,12 +13,22 @@ type Config struct {
 	// SnapshotL2KeyPrefix 是共享 L2 快照键的可选部署前缀（kit：remote_entity.snapshot_l2_key_prefix）。
 	// 空（默认）时键为 remote_entity:snapshot:…，与旧版本逐字相同、无需迁移；共用一个 Redis db 的多个部署
 	// 应各自配置不同前缀，否则彼此读写同一份 L2 快照（RR-20260927-17）。同一部署的所有节点必须一致。
-	SnapshotL2KeyPrefix  string
-	SnapshotInterestTTL  time.Duration
+	SnapshotL2KeyPrefix string
+	SnapshotInterestTTL time.Duration
+	// SnapshotInterestKeys 是本机（consumer 侧）兴趣表的 key 上限。
 	SnapshotInterestKeys int
+	// SnapshotInterestSubs 是每个节点全集群兴趣表的条目上限（内存上限；兴趣是广播，每个节点存所有
+	// consumer 的租约）。按 consumer 数 × SnapshotInterestPerConsumer 选取。
 	SnapshotInterestSubs int
-	MarkerCacheTTL       time.Duration
-	SnapshotLoadTimeout  time.Duration
+	// SnapshotInterestPerConsumer 是每个 consumer 节点在兴趣表里的租约配额（O4，kit：
+	// remote_entity.snapshot_interest_per_consumer）。零值取 SnapshotInterestSubs / 16；不能大于
+	// SnapshotInterestSubs。超出配额的 key 没有推送，按需读取（docs/feature/MIRROR-STEP-4-AND-O4-2026-10-06.md）。
+	SnapshotInterestPerConsumer int
+	// SnapshotReplicaBuffer 是一个 key 的权威加载在途时缓冲复制消息的条数（首载缓冲，Mirror 第 4 步）。
+	// 零值取 64；溢出时丢弃缓冲、加载装入后再回源一次。
+	SnapshotReplicaBuffer int
+	MarkerCacheTTL        time.Duration
+	SnapshotLoadTimeout   time.Duration
 	// CachedMaxStaleness 是 Cached / Monotonic 读能交出的快照距最近一次被共享 L2 或权威确认的最长时间
 	// （kit：remote_entity.cached_max_staleness，B2）。超过它的 L1 条目先重新确认（读 L2，必要时回源权威），
 	// 确认不了就不交出。零值取 SnapshotCacheTTL。不覆盖 L2 本身落后于权威的情形（owner 写 L2 失败或

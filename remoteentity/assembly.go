@@ -15,6 +15,10 @@ type Stats struct {
 	WritesInFlight     int
 	WriteLimit         int
 	WriteRejected      uint64
+	// SnapshotPush 报告快照推送是否开着（Mirror 第 4 步；false 时读取按需回源）。
+	SnapshotPush bool
+	// InterestRefused 是本机兴趣续租被拒的累计次数（O4 配额 / 表满）。
+	InterestRefused uint64
 }
 
 // Stats snapshots wrapper, interest and transaction counts. Assembly code
@@ -31,7 +35,8 @@ func (m *Manager) Stats() Stats {
 	stats.WritesInFlight = len(m.remote.writeSlots)
 	stats.WriteLimit = cap(m.remote.writeSlots)
 	stats.WriteRejected = m.remote.writeRejected.Load()
-	stats.LocalInterests = m.snapshots.Stats().LocalInterests
+	snapshots := m.snapshots.Stats()
+	stats.LocalInterests, stats.SnapshotPush, stats.InterestRefused = snapshots.LocalInterests, snapshots.PushEnabled, snapshots.InterestRejected
 	m.remote.txMu.Lock()
 	stats.Transactions = len(m.remote.txs)
 	stats.ActiveTransactions = stats.Transactions - m.remote.closedCount
@@ -55,5 +60,5 @@ func (m *Manager) Backend() entity.IRemoteEntityBackend {
 func (m *Manager) BindSync(bus fsyncbus.ISyncBus) (snapshotRep, interestRep *mirror.Replicator) {
 	m.snapshots.mu.Lock()
 	defer m.snapshots.mu.Unlock()
-	return m.snapshots.bindLocked(bus)
+	return m.snapshots.bindLocked(bus, false)
 }

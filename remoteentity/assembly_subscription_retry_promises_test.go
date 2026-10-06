@@ -17,6 +17,12 @@ type retrySubscriptionBus struct {
 }
 
 func (*retrySubscriptionBus) Publish(*fsyncbus.SyncMsg) error { return nil }
+
+// SubscribeLive 让快照推送开着（Mirror 第 4 步），两个订阅都经同一个计数。
+func (b *retrySubscriptionBus) SubscribeLive(topic string, h fsyncbus.Handler) (func(), error) {
+	return b.Subscribe(topic, h)
+}
+
 func (b *retrySubscriptionBus) Subscribe(string, fsyncbus.Handler) (func(), error) {
 	b.calls++
 	if b.calls == 2 {
