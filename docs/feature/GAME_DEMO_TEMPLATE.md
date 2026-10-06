@@ -4,6 +4,12 @@
 > 本文是交接文档：给要继续做、要改、要审查这套 demo 的人（或 agent）。代码在 roost-codegen，
 > 运行时行为在 roost-core / roost-kit；本文不重复代码里的注释，只写代码里看不出来的东西——为什么这样、
 > 怎么验证、踩过什么坑、还剩什么。
+>
+> 路径对照（2026-10-06 补）：本文写于合仓之前。roost-codegen 与 roost-kit 已并入 roost-core（单模块
+> `github.com/tjbdwanghaibo/roost-core`），文中的 `roost-codegen/demo/**` 现在是仓库根的 `demo/**`，
+> `roost-codegen/internal/**` 是 `codegen/internal/**`，`roost-codegen/.github/workflows/**` 是仓库根的
+> `.github/workflows/**`；测试命令在仓库根跑 `GOWORK=off go test ./codegen/...`。“codegen 对 roost-core 零依赖”
+> 等说法只描述当时的独立仓，不再成立。
 
 ## 1. 它是什么，不是什么
 

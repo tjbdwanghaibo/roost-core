@@ -1,5 +1,7 @@
 # D-L3：业务时钟与系统时钟（2026-10-06）
 
+> **状态（2026-10-06 核对）**：§7 第六轮（`b9fc5342`）与 §8 第八轮（`fa472ee7`）已随 v1.21.0 发布；其中 activity / mail 的系统钟拆分（`SystemNow` / `StorageGrace`）已被 v1.22.0 的“业务时间只许前进”（`3e77beb9`，[方案](BUSINESS-TIME-MONOTONIC-2026-10-06.md)）删除。
+
 维护者第六轮决定 D-L3（修订版，[DECISIONS-PENDING 第六轮](../review/DECISIONS-PENDING-2026-10-05.md)，选项来由 [revleft §5](../review/REVIEW-2026-10-06-revleft.md)）：时间分成两个钟，边界写死。本文是方案与实施记录；第八轮决定的留项（match / chat / account 换钟、doctor 偏移一致检查）见 §8；业务时间只许前进（偏移不得回调）与随之删掉的拆分见 §10。基线 `e320578c`；源码盘点以当前源码为准（codebase-memory 共享 generation 停在 09-30，本轮用 `rg` 逐行核对）。
 
 ## 1. 规则

@@ -1,84 +1,164 @@
-# 后续 Review 清单与接手说明
+# 非核心 Review 单元状态与接手说明
 
-更新：2026-10-05，第27轮完成时点。仓库 `D:/whb_s/cube-core`，单模块 `github.com/tjbdwanghaibo/roost-core`；源码基线 `12726715` 加本轮 NC-41/42 与 RR-09 残余修复。最终提交在 Git 历史查 `fix(saga,activity)`，接手先 fetch/pull，按差异更新本表。[本轮](REVIEW-2026-10-05-noncore-27.md) · [跨轮进度](PROGRESS.md) · [原分域计划](NONCORE-REVIEW-PLAN-2026-10-03.md)。
+**刷新：2026-10-06（收尾第 1 批，v1.23.0 发版前），基线 main `d6a677e0`。** 仓库单模块 `github.com/tjbdwanghaibo/roost-core`。本文原是 10-05 第 27 轮写的“后续 Review 清单”，各单元的逐轮停点已经过时；这次按当前源码、review 记录、[维护者决定表](DECISIONS-PENDING-2026-10-05.md)与 git 历史整体重写。旧版逐轮停点在 git 历史里（`git log -p -- docs/review/REMAINING-REVIEW-HANDOFF-2026-10-05.md`）。
 
-这份清单覆盖本线全部15个非核心单元的剩余工作，并单列与另一核心工作线的接口。它是待审场景清单，不是未读文件总数或“全仓无 bug”证明。历史源文已读、修复已验证与真实环境验收分别记录；已完成的反例不要重新登记。当前 main 的 Go 路径目录见[候选清单](evidence/noncore-review-20261005-27/current-candidates.csv)，仅用于定位，不能把每一行当未审或已完成。模板、脚本和部署配置须随对应主链补查。
+**当前结论**：15 个非核心单元（N01～N15）的本机有界场景都已给出结论，确认的缺陷都已先红后绿修复；需要维护者拍板的方向已在第二～十二轮全部决定并实施。剩下的只有两类：
 
-本次重新盘点784个跟踪Go候选：155为核心共享边界、629归入N01～N15，0未分配；排除tests/testdata/demo/examples/docs和隐藏/产物目录，包含生成Go与cmd。不统计非Go资产，不是784个文件逐一审完的证明，也不是629项未完成任务。Kit目录候选属于N14定位，实际场景归主域且只计一次。
+1. **外部环境验证**：Linux 内核网络、跨主机分区、多节点 HA、长时间容量、多机 Redis Cluster、Windows、真实部署与客户端。统一列在 [外部验证清单](EXTERNAL-VERIFICATION-2026-10-06.md)，下文各单元只写编号。
+2. **保持现状的观察**：review 记录判为“不修 / 设计边界 / 需要性能或运维证据再说”的观察。它们没有确认缺陷，维护者也没有要求改；每条的理由在原记录里，下文按单元列出。
 
-## 接手先做什么
+完成总结见 [NONCORE-REVIEW-COMPLETION-2026-10-06](NONCORE-REVIEW-COMPLETION-2026-10-06.md)。
 
-1. 读取仓库 AGENTS、canonical roost-coding/roost-bugfix、交接 §4/§5/§7 和本表；核对完整 skill 包与本机镜像。沿用用户“修复并继续 review”的授权，先红后绿、留 bug/bugfix/学习/进度文档、提交推送，不发版，不等待 GitHub CI。
-2. 先看最新 Wanted 与提交增量。本轮没有新的 Wanted；NC-41/42 和 RR-09 残余已有原红/overlay/绿证据。用户之后明确“没有修复”时跳过旧修复验收，直接推进新内容；明确要求复核时才恢复对应验收。
-3. 图谱项目用 roost-core，默认 Verify。当前共享 generation 仍为2026-09-30，index_status→search_graph/trace/snippet→coverage→当前源码补证。不要信 D-whb_s 汇总项目代表最新 HEAD，不删索引锁/停其他实例。
-4. **下一首选 N06 的 global RPC/Mod 与 App liveness 替代增量**，随后剩余 Saga 跨协调器/消息重投场景；把本机有界矩阵整理好后转 N07→N08。外部环境受限项留独立清单，不因资源缺失无限阻塞新单元，也不把它算通过。
-5. 已整合 `b4152f15` 的 skill 新规则：同模块反复缺陷要报告方向判断。Saga/Activity 本轮修复链和方向建议见[学习文档](IMPLEMENTATION-OUTBOX-CLAIM-AND-OPENING-RECOVERY.md#反复缺陷的方向判断)；接续时先建立剩余身份/期限契约矩阵，避免继续补孤立分支。
+## 读法
 
-## 全部非核心剩余单元
+- **版本**：v1.20.0 = `999dc672`、v1.20.1 = `be7407ab`、v1.20.2 = `c85d4565`、v1.21.0 = `4881f2b7`、v1.22.0 = `9bf690fb`。标“未发版”的提交在 v1.22.0 之后，随 v1.23.0 发布。bug 索引里各行写的“未发版”是修复当时的状态，以这里的版本为准（都用 `git merge-base --is-ancestor` 核过）。
+- **编号**：NC-xx 是 `RR-2026100x-NC-xx` 的简写（10-03 / 10-04 / 10-05 登记），索引见 [docs/bug/README.md](../bug/README.md)。
+- **决定**：“第 N 轮”指 DECISIONS-PENDING 里“维护者决定（第 N 轮）”那张表。
+- 这不是“全仓无 bug”的证明，也不是逐文件审完的计数；它说明的是每个单元在有界场景矩阵内有结论、确认问题已收敛、受限场景已具名交接。
 
-| 单元 | 当前证据状态 | 后续具体入口和问题 | 优先级/环境 |
-| --- | --- | --- | --- |
-| N01 app/lifecycle/manager/health/admin | 既有15文件清单与多轮修复；App singleton 为后续增量，已有另一线实现/演练记录，不能由合并推定本线独立验收 | Group 非协作回调/停止预算；Ops bind/hijack 与权限/关闭；singleton 初始化失败/丢回复/续期迟到/失锁 OnFail 围栏 Nest/停机后释放/Live 能力的完整进程链，先比对最新 App 方案与已做场景。**10-05 n01s4 停点**（[记录](REVIEW-2026-10-05-n01s4.md)）：singleton 部分已按源码（`50e9a4e8`）核完 `run` 全部返回路径与 Release、等锁信号、丢回复 / 迟到 Applied、OnFail 与 DataEngine / Remote fatal 并发、Live 未就绪 / 关闭、健康迁移、双客户端 store、配置边界、生成器装配，补探针三组合（启动失败 + 停机超时、停机期间失锁、三路并发 Fail），无新确认缺陷，观察 O1～O9；隔离 Redis 上 kitredis singleton 与 global integration 实跑通过。剩 Redis Cluster 两客户端 integration / 进程演练（无 Cluster）与 Group 回调、Ops 两项。**10-06 revn01b 停点**（[记录](REVIEW-2026-10-06-n01b.md)）：Group 停止预算（`ManagerGroup` 无 ctx、无生产调用方，注释写明；App 停机 hook → NC-231）、Ops bind（NC-230）/ hijack（不适用）/ 权限 / 关闭（A3 骨架绿）/ 命令期限（N02 O1，`ops.admin_timeout`）、Health 映射（与文档一致，Degraded 是否算就绪 → DECISIONS-PENDING D1）、n01s4 O1（NC-232）/ O7（无残余）/ O8（维持）；NC-230～234 已修复、未发版。**剩余**：D1 待维护者；Redis Cluster 与真实进程演练（外部）；观察 O-P1 / O-P2 / O-H1 | 高；预算/异常本机，真实失锁与进程演练需独占 Redis/多进程 |
-| N02 httpclient/httpserver/security/gateway/webroute | 8文件已读；正式 Webroute CLI、HTTP消费、退役URL与3RR已验证。**10-05续审**（[记录](REVIEW-2026-10-05-noncore-n02.md)）：不配合回调/连接与请求容量/业务鉴权全链/跨模块配置主项已走生成器→装配→真实HTTP/TCP→拒绝/取消/关闭；NC-80/81/82/83已修（NC-82及NC-80/81改进在合并前复核完成）；仍部分完成 | NC-83记录列出的同形停机候选（manager stopStarted、nest stopUnloadResync、syncbus/bus JetStream handler、etcd Deregister、remoteentity replicator）待按三步停机复现；Dispatch handler不配合ctx的单独用例；~~O1 Ops命令期限/写超时配置（与N01同行）~~ 10-06 revn01b 已落实（`ops.admin_timeout`）、O2 TCP派生上限错误点名字段；HTTP/2路径 | 中；外部：真实网关/反向代理、游戏客户端/robot重连、跨进程account RPC握手、卡死回调资源占用 |
-| N03 bus/nats/servicerpc/etcd | 原39文件清单已读；NC-08～12、真实NATS停机若干路径有后续记录 | 真实JS发布/ACK/Term/重投/重连、满队列 fallback/消息在途关闭与再次Stop；ServiceRPC发现+请求剩余期限；etcd选主正常Resign预算、服务端资源清理、watch/lease恢复。先核对 W-2026-10-04-02 后续RR记录，勿重复登记。**10-05 revn03 停点**（[记录](REVIEW-2026-10-05-noncore-n03.md)）：W-2026-10-04-02 已是 RR-20261004-08，未重复登记；真实 JetStream ACK/Term/重投/重连、满队列、在途关闭与再次 Stop、ServiceRPC 发现与剩余期限、etcd Resign/Deregister 预算、服务端清理、lease/watch 恢复均已在真实依赖上跑完，NC-90～93 已修复（`ae742984` / `64179ad5` / `25646001` / `89a102db`），观察 O1～O11。剩多节点 NATS/etcd HA、长时容量（外部），以及方向判断中的两项待维护者定（Bus 回调入口统一准入；选举 API 去留） | 高；替身控制本机，connected NATS/etcd、HA需外部 |
-| N04 redis/mongo/cache/migration | 原41源文与多轮schema/清理/正式迁移消费已读/有界执行；NC-13～32已修 | 真实Mongo唯一索引/事务重试/未知提交与驱动-替身对照；Redis Lua/Cluster跨slot、TTL/多hash、重连/故障/持久恢复；正式Repository迁移→文件WAL→投影→卸载重载。复用第21/22轮已有反例，不重审整个mongotest。**10-05 revn04 停点**（[记录](REVIEW-2026-10-05-n04-revn04.md)）：NC-100 P1（驱动重放脚本→versionstore 双写）/ NC-101 P2（提交不受 transaction_timeout）/ NC-102 P3（mongotest 数组唯一键）已修；NC-52 在 Memory/Redis 间一致、其他 Store 无同形态；RefHMap Patch TTL、私有 AOF Redis 强杀重启、真实副本集未知提交与事务重试、第22轮正式链路28叶子真实副本集通过。剩 Redis Cluster、mongos/主从切换中提交、默认 MaxRetries 对非脚本写的重放（待维护者） | 高；真实Mongo/Cluster/Toxiproxy/HA需独占环境 |
-| N05 remoteentity/ownerroute | 24原候选域，多轮权威键/版本/有效期、消费者/Stop控制已补，Mirror DTO仍未实施 | DTO Mirror 方案与实现是不同状态；审现有mirror/ownerroute正式接入、interest生命周期、L2跨节点最低水位、delete/recreate防复活、真实broker重投/旧callback/Stop、迁移接管/HA与容量。复用主核心线的提交确认，别改其正在处理的代码。**10-05 revn05 停点**（[记录](REVIEW-2026-10-05-n05-revn05.md)）：ownerroute 与赠礼静态 sid 路由（`5bdac773` / `c493a791`）核对无缺陷；interest 续租/撤销/容量、L1/L2 准入、跨节点删除水位、delete/recreate 版本、迁移 epoch、真实 JetStream 重放、Stop 已核；NC-130（L2 CAS 落败后 L1 装旧快照）、NC-131（过期兴趣钉住健康 Fail）与 RR-20260913-01 跨节点 L2 墓碑残余已修复（`6f06f0da` / `c3475150` / `366058a7`，含真实 Redis 与自起 Cluster），观察 O1～O6。Mirror DTO 方案未改、实现未实施。剩：维护者对快照缓存水位方向判断与 O4（兴趣容量全集群合计）/ O5（JetStream 新 sid 重放历史）的决定；多节点 HA、兴趣表满载容量 | 高；本机组合+外部多节点，设计实现须按当前授权区分 |
-| **N06 service/saga/servicemetrics** | 旧Service十域主链已阶段完成；第25～27轮接续Saga/Service增量。最新13新增回归，NC-37～42与RR-09具名修复，不计整域完成 | **详见下表 S1～S6**；当前先global→Saga剩余→指标实际落点；旧Mail/Match/Session/Rank/Platform只查最新差异和已列缺口，别重做十域 | **下一入口**；大部分本机，外部后端/HA另列 |
-| N07 configdata/attribute/event/errcode | 有生成/配置邻接证据；**10-05第一批**矩阵C1～C11/A1～A7/E1～E8/R1～R5，NC-60～63已修复（[记录](REVIEW-2026-10-05-noncore-n07.md)）；**10-05第二批**生成工程真实进程经`gm.config.reload`热更H0～H4、handler快照K1～K7、属性加载A8/A9，NC-64/65已修复（[记录](REVIEW-2026-10-05-noncore-n07b.md)），仍部分完成 | 只剩维护者决定项：event接入/移除、C-O1发布后回调可见性、C-O5失败reload无痕迹、C-O8热更后在线实体重算、C-O9准入早于rollback的请求、属性容器重建/回滚统一入口（方向判断）；五进程全链路热更与客户端复制帧未跑；errcode id扫描AST化归N08 | 维护者决定后再开；否则转N08 |
-| N08 codegen | 多轮生成消费和N02/N04回归已做，仍部分完成；Windows普通测试不能验Unix进程树。**10-05 revn08 停点**（[记录](REVIEW-2026-10-05-n08-codegen.md)，macOS）：cfggen 运行期往返本机完成并入正式门；旧工程显式 upgrade/改名退役/失败回滚/依赖整理实跑；Unix 信号用例 race×3 通过；10 具名 skip 中 9 条实跑通过、1 条为过期常量门；NC-70～74 五个 P3 与 NC-75 P2 已修复、声明场景验证，未发版；N07 第二批两条移交已并入（NC-74/75） | cfggen required/ref/skipempty、真实JSON/索引往返；旧工程显式upgrade、文件改名/退役、失败回滚和依赖整理；doctor/deps/generate/sync取消与stage清理。Unix signal/process-tree用例在Linux/macOS独立跑；shell部署/rollback的10具名环境skip按记录补测。**剩余**：Windows 上实跑 taskkill 进程树与暂存树清理；真实 systemd 主机 shell 部署/rollback、k8s 集群；离线代理/私有模块；强杀/磁盘故障下的提交与回滚；~~生成器/复制/提交窗口被中断的暂存树（O6）、过期常量门（O1）、upgrade 依赖失败提示（O2）~~ 10-06 随 B6 / C9 已实施（[方案](../feature/B6-CLI-SIGNAL-OWNERSHIP-2026-10-06.md)）；文档里的旧 roost-codegen 模块路径（O5）；tablegen 运行时 required 存在性 A/B 待维护者（NC-75） | 本机部分已推进；剩余需 Windows/真实部署环境 |
-| N09 skill（含cmd） | 原182候选（当前179，`cmd/glsvet`已归N15），是最大单元；**10-05第一批**（[记录](REVIEW-2026-10-05-n09-batch1.md)）建立四方向子包清单（执行/状态55、数据/属性107、事务/结算3、同步/接入14），审完执行/状态的施法生命周期主干与事务/结算全部，NC-110～113已修复、声明场景验证，未发版；**10-05第二批**（[记录](REVIEW-2026-10-05-n09-batch2.md)）审完同步/接入全链（Coordinator→outbox→文件outbox unix/windows→Applier→可见性）与执行/状态余项（增量mutation/baseline、checkpoint、NC-110后终止路径与checkpoint一致性、owned进程、回放），NC-114～117已修复、声明场景验证，未发版；**10-05第三批**（[记录](REVIEW-2026-10-05-n09-batch3.md)）审完game-demo启动链的Parse+Compile拒绝路径、`roost add skill`骨架与fireball合法性、skillcompose全部、process motion/area/numeric、VisualPlanCache，NC-150～154已修复、声明场景验证，未发版（编译期拒绝Runtime不派发的recast/timeout事件、字段名逐字匹配、tick非负集中检查）；**10-05第四批**（[记录](REVIEW-2026-10-05-n09-batch4.md)）审完编译器剩余pass（authority/environment/owned_entity/status/visual/motion后半）对照Runtime执行点、lower全部名字查找、program_digest、presentation/presentation_assets、skillsync observability/schema迁移图，NC-210～216已修复、声明场景验证，未发版；编译⇒可执行的变异性质测试已落地（`skill/compile_mutation_property_test.go`）；**10-06第五批**（[记录](REVIEW-2026-10-06-n09-batch5.md)）审完random/snapshot/temporal/graph/effect_result/proc/quantity逐分支对照Runtime/Host，补直接分支用例与3个“求值上下文”性质测试种子，NC-220～224已修复、声明场景验证，未发版（NC-223为B3回归）；B4文档约束已落实；仍部分完成 ；**10-06第六批**（[记录](REVIEW-2026-10-06-n09-batch6.md)，分支`revn09f`）按维护者第五轮决定做了求值上下文表`skill/eval_contexts.go`（编译期作用域与Runtime求值共用、守卫逐格），审ability/input/state/tags/optional与typecheck作用域，NC-280～283已修复、声明场景验证，未发版；account换名释放单独提交 | **下一批入口（第七批）**：①维护者决定表里的~格子（O33：进程字段/状态默认值里的`$primary_target`/`$ability.self`/`$cast.*`漂移）是否收紧，以及O34～O37；②前几批O1～O32、NC-151/NC-213方向A；③性质测试随新效果补种子（表守卫已强制新行/新上下文补用例）。（第六批原入口如下，已完成）①`compile_ability`/`compile_input`/`compile_state`/`compile_tags`/`compile_optional`逐分支，`compile_typecheck`作用域模型对照Runtime求值上下文（若维护者采纳第五批方向判断第2条，先做“求值上下文→可用引用”表）；②维护者决定NC-224方向B（冻结施法输入）、O27～O33，以及前几批的NC-151/NC-213方向A、O1～O26；③性质测试随新效果/新上下文补种子。（第五批原入口如下，已完成）①random/snapshot/temporal/graph/effect_result/proc/quantity逐分支审；②维护者决定NC-151/NC-213方向A、第四批方向判断（lower查找fail-fast、Host取值能力表）、O21～O25；③性质测试随新效果补种子。（第四批原入口如下，已完成）①编译器其余pass逐分支审（`compile_motion.go`后半、`compile_owned_entity.go`、`compile_status.go`、`compile_authority.go`等），每个pass对照Runtime执行点核对“编译接受⇒运行可执行”；②`presentation_assets.go`/`presentation.go`、`observability.go`、`schema.go`迁移图；③待维护者定：NC-151方向A（实现phase计时/recast）、O5/O12（skillsync）、O1/O2、O14（skillcompose因果图）、O20（checkpoint的phase_timeout） | 高业务价值，N07/08之后；先本机正式链 |
-| N10 ai/actionflow/featureflag/hotcode | 有历史/相邻证据；**10-05 revn10 第一批已建有界矩阵**（[记录](REVIEW-2026-10-05-noncore-n10.md)）：A1～A6/M1～M4/T1～T7/F1～F5/H1～H8，NC-120～123 已修复（未发版），观察 O-A1～A4、O-T3/T4/T6、O-F1、O-H1～H4 | 执行图/行为树状态、取消/失败传播/重入；feature flag运行期变更；hotcode注册/替换的并发可见性、旧请求生命周期与回滚。只在真实使用处补抽象，未获授权不纯重构。**10-06 revn10b 第二批完成**（[记录](REVIEW-2026-10-06-noncore-n10b.md)）：ai 逐节点 N1～N13、actionflow 池化 / Update / B7 留项 P1～P9、hotcode 真实 .so H9～H13，NC-240～247 已修复（未发版）。**停点**：剩 Linux / Windows 真实插件加载（外部环境）；待维护者：MissionRunner 延后语义、O-A1 清场（推荐都保持）、O-T3 / O-T4 | 中高；本机 |
-| N11 spatial/timer/clock/index | **10-05 revn11 停点**（[记录](REVIEW-2026-10-05-n11.md)）：建立有界矩阵 S1～S8 / T1～T10 / W1～W4 / C1～C4 / I1～I5 并全部给出结论；NC-140（World 定时器堆不随事务回滚）、NC-141（Tick 期间取消 / 改期失效）P2 与 NC-142～147 P3 已修复、声明场景验证，未发版 | 本机场景收口。剩余：game-demo 场景系统入口是否都在 Scene 锁内（O4）；同期限 FIFO / 未注册类型告警（O6 / O7，需求决定）；组件内存回滚契约（方向判断，维护者）；index 去留（零调用方）；真实 WAL / Mongo 三进程拒绝路径。**10-06 revleft 停点**（[记录](REVIEW-2026-10-06-revleft.md)）：O4 入口穷举完成，NC-270 修复（PathFindSystem.Stop 无锁清空 terrain）；O8 在 NC-193 之后无残余；O6 / O7 / O9 写成选项 D-L1～D-L3 待维护者；组件内存回滚已由 A1、index 去留已由 C3 / C8 定案 | 中；本机已完成，余项待决定 |
-| N12 metrics/log/failurelog/robot | robot/指标有历史实证，本线未全域收口 | 标签基数、Depth/gauge生命周期与并发；日志/失败日志排空、失败/磁盘/关闭预算；robot连接/认证/会话/重连/取消/批量压力与真实网关消息恢复。**10-05 revn12 停点**（[记录](REVIEW-2026-10-05-n12-revn12.md)）：矩阵 F1～F4 / M1～M5 / L1～L3 / R1～R5 完成，NC-160～165 已修复（未发版），N04 观察 3 的 RPush 重复即 NC-160；生成 game-demo 真实网关上重连恢复与阈值假绿红绿已做。剩 O1 默认 Reporter、O2/O3 序列删除入口（维护者定）、O7 交 N01、O8 会话写超时与迟到应答（可下一批先红后绿）、外部：Cluster / 弱网 / 长期容量。**10-06 revleft 停点**（[记录](REVIEW-2026-10-06-revleft.md)）：O8 → NC-261 / 262，O6 → NC-263，O4 → NC-264，O10 → NC-265，O11 → NC-266，均已修复未发版；剩 O9 Stage 复用序号（语义）、序列删除 API、外部项 | 中；本机控制，真实网络/长期容量另验 |
-| N13 container/safemap/goroutine/misc/internal | **10-05 revn13 第一批已建有界矩阵**（[记录](REVIEW-2026-10-05-n13.md)）：C1～C10 / S1～S6 / G1～G6 / M1 / I1 全部有结论；NC-180 P2（潜伏）与 NC-181～185 P3 已修复、声明场景验证（含 EntityManager 与生成 DAO 组合、全新生成 game-demo），未发版；观察 O1～O11 | 从上层实际使用追踪容器可变值所有权、遍历/删除/关闭并发、goroutine退出和异常传播；公开契约与真实调用方组合。无证据的风格/度数问题不立RR。**停点**：本机场景收口；待维护者——①遍历回调契约是否写成仓库级规则（方向判断）；②零调用方 API 去留（TopologicalSortCache / KeyMap / ObjectPool / 游标遍历 / TaskPool / Parallel* / SafeFunc 变体 / safemap 便捷构造器与 Compute·Read·LoadOrStore·Snapshot）；③O1（Get 未命中写锁）/ O8（SafeFunc 不记栈）需性能或运维证据。**10-06 revleft 停点**（[记录](REVIEW-2026-10-06-revleft.md)）：§4 O1～O11 全部有结论，O5 / O4 / O9 → NC-267～269 已修复未发版，其余不修理由见记录；D-L4（Parallel panic）待维护者 | 中；本机已完成，余项待决定 |
-| N14 Kit跨域装配 | kit按主功能域同行；历史业务实现仍有逻辑，不能叫全是转发。**10-05 revn14 停点**（[记录](REVIEW-2026-10-05-n14.md)）：新装配 A1～A19（singleton 装配 / 资源 / 缺配置 / 模板、saga 步骤预算模板与读取、MaxKeysPerOwner 装配方、Nest `OnFail` 登记、生产校验→读取方、启动失败收尾、各 Mod 生命周期增量）全部有结论；三条已知观察（N01/S4 O9、U-0280 两条、N11 O8）核实并登记；NC-190 / 191（P2）与 NC-193 / 194（P3）已修复、声明场景验证，未发版 | options/config→实际能力→依赖顺序→Init/Provide/Start/Stop/Health；新增字段是否经过正式模板、默认值/缺配置、停止超时重试和资源创建者。每条证据计入所属主域一次；核心adapter只核对接口/增量。**剩余**：NC-192 生产校验方案待维护者选（删无效要求 / 先装配限流与鉴权再要求）；配置 schema 方向判断待定（O1：kit 其余约 80 处 `GetDuration` 仍宽松）；O2～O5 观察（O3 / O4 已于 10-06 revn01b 修复：NC-233 / NC-234）；真实 Redis Cluster 下 `cluster_addrs` 列表写法起服未验 | 同行收口，不重复计算；余项待维护者 |
-| N15 scripts/cmd与非Go资产 | **10-05 revn15 停点**（[记录](REVIEW-2026-10-05-n15.md)）：按用途盘点 scripts / kit/scripts / codegen/scripts / perf / gapmap / workflows / cmd/glsvet / 生成 .gitignore，NC-200（P2）与 NC-201～208（P3）已修复、声明场景验证，未发版；生成 deploy / rollback 脚本复用 N08 实跑结论 | 剩：kit/dataengine 三条 TestToxicNATS* 仍 /reset（核心线）；真实隔离环境上修后矩阵 / heal、Linux pid 认领；O1 source-head-check 与 CI lane 收敛；方向判断“隔离环境独占 vs 共享”待维护者定 | 末期收口，随主域提前审高风险脚本 |
+## 单元状态总表
 
-“原文件数”均是10-03清单的历史定位数，不是今日未审分母，也不按文件数扣审查工时。没有依据承诺全部 review 的完成日期；下一 agent 完成每个有界场景单元后更新状态即可，不靠换口径宣称100%。
+| 单元 | 范围 | 本机 review | 修复（编号） | 待做 |
+| --- | --- | --- | --- | --- |
+| N01 | app / lifecycle / manager / health / admin | 完成 | NC-01（10-03）、NC-01～04（10-04）、NC-170、NC-230～234、RR-20261006-07 | 外部 E08 / E13 / E21 / E22 |
+| N02 | httpclient / httpserver / security / gateway / webroute | 完成（HTTP/2 未单跑） | NC-02～04（10-03）、NC-05～07（10-04）、NC-80～83 | 外部 E05 |
+| N03 | bus / nats / servicerpc / etcd | 完成 | NC-08～12、RR-20261004-06～08、NC-90～93、NC-172 / 173 | 外部 E06 / E07 |
+| N04 | redis / mongo / cache / migration | 完成 | NC-13～32、RR-20261004-02～05 / 09、NC-52、NC-100～102、RR-20261006-08 | 外部 E08 / E10 / E11 |
+| N05 | remoteentity / ownerroute（含 Mirror） | 完成 | NC-33～36、NC-130 / 131、RR-20260913-01 残余、NC-174、RR-20261006-01 | 外部 E01 / E02 / E06 / E10 / E13～E16 |
+| N06 | service / saga / servicemetrics（S1～S6） | 完成 | NC-37～42、NC-50～52、U-0280 / 0281、RR-20261005-01、NC-250、RR-20261006-05 / 06 | 外部 E09 / E11～E13 |
+| N07 | configdata / attribute / event / errcode | 完成 | NC-60～65、NC-73 | 外部：五进程热更与客户端帧（E04 附带） |
+| N08 | codegen | 完成（macOS） | RR-20261004-12 / 13、cb11be90、NC-70～75、收尾第 2 批 | 外部 E21～E26 |
+| N09 | skill（含 cmd） | 完成 | NC-110～117、NC-150～154、NC-210～216、NC-220～224、NC-280～283、RR-20261006-02～04 | 外部：skillsync 真实传输端到端（E04 附带） |
+| N10 | ai / actionflow / featureflag / hotcode | 完成 | NC-120～123、NC-240～247 | 外部 E27 |
+| N11 | spatial / timer / clock / index | 完成 | NC-140～147、NC-270 | 外部：三进程拒绝路径（E19 附带） |
+| N12 | metrics / log / failurelog / robot | 完成 | NC-160～165、NC-261～266、RR-20261006-09 | 外部 E05 / E08 |
+| N13 | container / safemap / goroutine / misc / internal | 完成 | NC-180～185、NC-267～269 | 无 |
+| N14 | Kit 跨域装配 | 完成 | NC-190～194、NC-233 / 234 | 外部 E08（`cluster_addrs` 起服） |
+| N15 | scripts / cmd 与非 Go 资产 | 完成 | NC-200～208 | 外部：修后 heal 矩阵实跑、Linux pid 认领（E26 附带） |
 
-## N06 的精确停点
+## 各单元明细
 
-| 项 | 本轮已完成 | 下一步 |
-| --- | --- | --- |
-| S1 account | 读取create_role/admin新增恢复契约；foreign committed/reserved分流、DeleteIf版本/身份、备注先写；相关既有公开用例race复跑 | 不重跑正常链当新审；补最新差异、丢回复/并发admin与建角组合、跨进程持久恢复；真实Redis条件另记；10-05 revn06：RR-20261001-06 残余（换名释放死计划）+ NC-50（补偿失败计数）已修复，Memory/真实 Redis 红→绿；剩跨进程同时换名、Cluster、建角决策表化（见 [revn06](REVIEW-2026-10-05-n06-revn06.md#方向判断)）；10-06 B9：建角判定表 `decideCreation` 已实施、`plan_released` 并发重复计数已修；剩跨进程同时换名、Cluster |
-| S2 chat | 读取最新pageOf/Gap变化，相关容量/游标/洞/指标既有正式用例race复跑 | 补真实Redis/Cluster分页与prune交错、返回对象隔离/客户端恢复组合；新接口变化才重新进入；10-05 revn06：两副本 Prune/翻页/返回隔离组合控制已加，真实 Redis 暴露并修复 NC-52；剩 Cluster 与热点频道容量 |
-| S3 activity | Open畸形计划3形状红绿；sweep非法键/跨组3形状红绿；合法/legacy、日志清理；ReconcileProgress读后新证明保留并最终收敛 | confirmed Keys/存量窗口异常、oversized轮转与故障、请求ID/TTL边界及旧操作对新reservation的身份隔离；真实Redis/Cluster/升级旧writer排空。NC-42不自动修已污染记录；10-05 revn06：NC-51 已确认 Keys 校验已修；剩 Delivering 列表坏条目 / `RetireDelivered` 归属、窗口坏条目运维入口、预约身份余项、Cluster/旧 writer；10-06 B9：读窗口条目统一入口、Delivering 坏条目、`RetireDelivered` 归属、`Admin.RemoveMalformedWindowEntry` 已实施；剩预约身份余项（观察 3）、Cluster / 旧 writer |
-| **S4 global/App替代** | global租约API删除后的Service/类型/Mod主结构已读，现有普通回归跑过；App其他线演练只引用 | **下一优先**读global_rpc/生成routing RPC/server_run/redis_store/integration增量，验证route epoch→RPC affinity→capability注册、缺旧lease入口、game-demo/activity使用App.Live的实际调用。App singleton事故链与核心线协调。**10-05 n01s4 停点**（[记录](REVIEW-2026-10-05-n01s4.md)）：global_rpc / 生成 routing RPC / server_run / redis_store / integration 已读，epoch CAS→无 affinity（`CallChecked(ctx, 0, …)`）→owner/local 双 capability 核对完；旧 lease 入口在代码、配置、生成器、错误码（570105～570109 退役）中已无残留，旧 `:lease:*` 键无 TTL 需手工删（O5）；activity 的 `Live` 调用：server_type / 空集 / 查询失败 / 能力缺失成立，候选集缺陷 [RR-20261005-01](../bug/RR-20261005-01.md) 已修；`Service.Bind` 过时注释已改。S4 可视为本线收口，剩“活着的 game 服 > 64”待维护者定（O4） |
-| S5 Saga | 三订阅health、Resume BSON代际、StartDigest、完成Topic、事务取消/重试与本轮outbox扫描→Nack→再领取已具名验证；U-0280 实施补了与它重叠的交错（deadline / 人工 Compensate / Resume 与晚 receipt、同一操作旧尝试的不同结果、tombstone TTL 后的迟到结果、真实 Mongo 并发 Reserve 与“接替 vs 投影”），见 [U-0280](../bugfix/U-0280-saga-step-reexecuted-after-crash.md#实施2026-10-05维护者决定按推荐处理) | ~~coordinator A租约过期→B接管→A晚Apply、deadline/compensation/Resume与晚receipt；多个completion不同结果/旧attempt、receipt/operation TTL后重投；发布失败/成功但Ack未知/并发supersede、批量时间预算、真实broker和Mongo跨进程恢复~~ **10-06 revn06s5 停点**（[记录](REVIEW-2026-10-06-n06s5.md)）：六项均已核对；NC-250（定义缺失 fence 时退避中的步骤未记放弃）已修复、未发版；租约接管、outbox、真实 NATS + Mongo 两进程 SIGKILL 恢复无缺陷。**剩余**：维护者对方向判断（“离开当前步骤”收成一个转移、Mongo 步骤纳入收件箱契约、只接收正在等的尝试的失败）与 O-S5-1 / O-S5-2 的决定；混跑与原生步骤跨进程强杀未在本轮重跑 |
-| S6 servicemetrics/Mail其余Service | Sink/Recorder seam已有源码与回归；新路径使用已有低基数标签。Mail nil/empty逐字段比较增量已读 | 指标追到每个真实错误/取消/恢复落点；Mail最新比较的真实EnvelopeStore/恢复消费组合；十域旧已完成内容复用10-01独立审计，仅差异/未验证专项重开；10-05 revn06：上报点盘点，默认生成工程无 Reporter 落点（观察 1，待功能决定）；Mail 真实信封恢复 4 组合控制通过；versionstore NC-52 影响所有 Redis 服务，集成 891 pass |
+### N01 app / lifecycle / manager / health / admin
 
-## 三大核心模块与另一线的边界
+- **review**：完成。记录：[noncore-02](REVIEW-2026-10-04-noncore-02.md)、[noncore-03](REVIEW-2026-10-04-noncore-03.md)、[n01s4](REVIEW-2026-10-05-n01s4.md)（singleton 全部返回路径、OnFail、Live、健康迁移）、[n01b](REVIEW-2026-10-06-n01b.md)（Group 停止预算、Ops bind / 权限 / 关闭 / 命令期限、Health 映射）。
+- **修复**：
+  - RR-20261003-NC-01（单 Mod 绕过依赖校验）`3529a569`、RR-20261004-NC-01～04（Manager 停止 panic、重复 Start、Admin schema 泄漏、Ops 取消后遗忘 server）`483350ca`，v1.19.0。
+  - NC-170（Engine 停止超时后重试假成功）`c99a687d`，v1.20.2。
+  - NC-230～234（Ops 同步 bind、停机 hook 受预算、停机期失败进返回值、Redis Mod 重复 Stop、remote_entity 失败不记 stopped）与 `ops.admin_timeout` `2c1c7be7`，v1.21.0。
+  - RR-20261006-07（`app.run` 退出原因进文件日志）`611d5d72`，未发版。
+- **观察与处置**：
+  - n01s4 O1 → NC-232；O2（Degraded 让 `/readyz` 503）→ 第五轮 D1“Degraded 算就绪”，`f6828f17`，v1.21.0；O4（活着的 game 服 > 64）→ 第三轮 C4 活动组文件，`277e1252`，v1.20.2；O5（旧 `:lease:*` 键无 TTL）→ 第十二轮写迁移说明，本批写进 [DEPLOYMENT §7.1](../DEPLOYMENT.md#71-升级后的手工清理)；O7 → NC-193 之后无残余；O8 → 维持；O9 → NC-190。
+  - n01b O-P1（Ops 不带 `Bearer ` 也通过）→ 第十二轮收紧，`7b73aabc`，未发版；O-H1（checker 无期限）→ 第十二轮每个 1.5s，`7b73aabc`，未发版。
+  - 保持现状：O3（`Dispatcher.OnInit` 清围栏，属核心线，记录写不改）、O6（AbortMigration 计 Accepted 的口径）、O-P2（admin 审计身份由客户端自报，设计边界）、O-G1（`ManagerGroup` 无生产调用方，按 C3 / C8“零调用方 API 保留”）。
+- **外部**：E08（Redis Cluster 两客户端与进程演练）、E13、E21、E22。
 
-用户说明 Nest、Sync、DataEngine 已由另一 agent 基本 review。这里只沿集成需要读取，不把“基本跑过”写成全部完成。接手的 agent 先索取该线具名交接或读仓库记录，按以下缺口核对所有权，避免同时改同一生产文件：
+### N02 httpclient / httpserver / security / gateway / webroute
 
-- K1 Nest/Entity/lock/worker/fctx：快池禁止阻塞、冷加载/慢续行、动态声明/组迁移、交叉创建抖动、局部回滚/关闭结算；U-0279生成工程压力有作者记录，本线只作本地集成，不冒认独立千轮验证。
-- K2 DataEngine/nestwal/versionstore：正式DAO→文件WAL→准入/durable/投影→checkpoint→卸载重载；未知结果/强杀、连续成功前缀、schema、并行投影与跨实例恢复。
-- K3 Remote实体权限：owner/grant/fence与Mongo正式写权限、未知结果finalizer、版本/墓碑/删除重建、多实体/多DAO原子提交；本线N05只补mirror/ownerroute接入等范围。
-- K4 Sync/lockstep/entitysync/syncstream：复制/客户端ACK与恢复、水位、epoch/lifetime、remove-before-create、公平预算、两模式生成链、满载和停机；已有独立完成记录优先复用，缺记录标未知。
+- **review**：完成。记录：[noncore-04](REVIEW-2026-10-04-noncore-04.md)、[noncore-05](REVIEW-2026-10-04-noncore-05.md)、[noncore-n02](REVIEW-2026-10-05-noncore-n02.md)。HTTP/2 路径没有单独跑。
+- **修复**：RR-20261003-NC-02～04 `3529a569`、RR-20261004-NC-05～07 `49796514`，v1.19.0；NC-80 / 81 / 83 `c8d72122`、NC-82 `eef7822e`，v1.20.1。NC-83 点名的同形停机候选已逐个处理：NC-170 / 172 / 173 / 174（`c99a687d`，v1.20.2）、bus JetStream RPC（NC-90）、nest（NC-171）。
+- **观察与处置**：O1（Ops 命令期限）→ `ops.admin_timeout`，v1.21.0；O2（TCP 派生上限报错不点名字段）→ 收尾 A9，`fcc78ad0`，未发版；“Dispatch handler 不配合 ctx”的单独用例 → 收尾 A15，`fcc78ad0`。保持现状：O3（票据可重用，归 S1 account 语义）、O4（demo SessionID）、O5（httpclient `ReadAll` 不限大小）、O6（gateway / RateLimiter 仓内无装配方）。
+- **外部**：E05。
 
-以上是核对入口，并非本轮又发现四大核心新bug；其他线已经覆盖的场景不重新安排，真正未覆盖项再纳入其清单。
+### N03 bus / nats / servicerpc / etcd
 
-## 外部验证单独排期
+- **review**：完成，真实 JetStream 与 etcd 上跑过。记录：[noncore-06](REVIEW-2026-10-04-noncore-06.md)～[08](REVIEW-2026-10-04-noncore-08.md)、[noncore-n03](REVIEW-2026-10-05-noncore-n03.md)。
+- **修复**：NC-08～10 `3560a19b`、NC-11 / 12 `1502f973`，v1.19.0；RR-20261004-06 `c57b247b`、-07 `e5aea173`，v1.19.1；RR-20261004-08 `e0591f79`，v1.19.2；etcd 租约已过期时注销视为达成 `b67d5945`，v1.20.0；NC-90 `ae742984`、NC-91 `64179ad5`、NC-92 `25646001`、NC-93 `89a102db`，v1.20.1；NC-172 / 173 `c99a687d`，v1.20.2。
+- **观察与处置**：O5（Close 第二次返回 context canceled）→ NC-173 的 A3 复核补修，`50f2ac2a`，v1.20.2；方向“Bus 回调入口统一准入”→ A3 ①，`50f2ac2a`；“排空下沉到 ISyncBus 退订”→ A3 ② 留下个大版本；“etcd 选举去留”→ 第二轮 B5 保留；**bus SETNX 去重 → 第十二轮保持，本批把契约写进 `bus/reliable.go` 的 `ReliableStore` 注释**。保持现状：O1～O4、O6～O11（AckWait 重投、至少一次、NAK 到 MaxDeliver、发布超时语义、LocalMirror Synced、WatchService 不重建、轻量 RPC 无期限、停止后 CallReliable 等满、durable 累积、Consume 无 ErrHandler），记录判为语义说明，不立 RR。
+- **外部**：E06、E07。
 
-本机可先完成：可控并发/取消/恢复、普通race/vet/build/根包门禁、正式CLI生成消费、HTTP与文件WAL/子进程控制。它们不替代以下验收：
+### N04 redis / mongo / cache / migration
 
-| 环境/专项 | 待做验证 | 结果应证明 |
-| --- | --- | --- |
-| 真实Mongo replica set | transaction callback/commit重试、UnknownTransactionCommitResult、网络丢回复、唯一/稀疏索引与迁移消费 | 最终DAO/版本/receipt/outbox/checkpoint一致，不能取消即假定未提交 |
-| 隔离Redis单点/Cluster/Toxiproxy | Lua实际落地后丢回复、TTL边界、跨slot键布局、断网/重连/部分完成 | 不误放权、不永久残留、合法新ctx/新实例可恢复；本轮两Cluster skip补实跑 |
-| 真实NATS/etcd | JS ACK/Term/重投/drain/关闭、etcdResign/lease/watch恢复与服务端资源 | 成功/失败/结果未知分清，再次Stop或接管收敛 |
-| Linux/macOS + Windows | codegen取消/信号/进程树、暂存目录清理、shell部署/rollback | 构建/生成进程与子孙不遗留；未编入Windows的Unix用例另验 |
-| 多节点HA/强杀 | owner/route/lease迁移、双实例/失锁、旧callback/旧ack、冷恢复和跨服业务 | 不双写/防复活、责任与回执可恢复，已有其他线实测标明来源 |
-| 同配置容量/长稳 | 峰值/持续流量、积压/GC/队列、标签/缓存/历史数据增长、磁盘/WAL水位 | 同机前后对照、真实业务TPS与p99/max、最终数据；不以短测当长期保证 |
+- **review**：完成。记录：[noncore-10](REVIEW-2026-10-04-noncore-10.md)～[20](REVIEW-2026-10-04-noncore-20.md)、[noncore-21](REVIEW-2026-10-05-noncore-21.md) / [22](REVIEW-2026-10-05-noncore-22.md)、[n04-revn04](REVIEW-2026-10-05-n04-revn04.md)。
+- **修复**：NC-13～15 `08d18be9`、NC-16～20 `ce90e90d`、NC-21～25 `3d3b22c9`、NC-26～29 `25ef4c1e`，v1.19.0；RR-20261004-02～05 `3bce736c` / `5c1647c6` / `fa885409` / `e7c566ac` 与 NC-30 `7fbdc735`，v1.19.1；RR-20261004-09 `0bd8a9f3`，v1.19.2；NC-31 `c3aa0edd`、NC-32 `b2232db5`，v1.20.0；NC-52（versionstore 退避后用旧值）`be7bcc18`、NC-100～102 `81659082`（NC-101 复审 `edbe290b`、`f608503b`），v1.20.1；RR-20261006-08（mongotest `$in` 具名切片）`611d5d72`，未发版。
+- **观察与处置**：观察 3（驱动默认重试）→ 第二轮 A2，`cf5721c9`，v1.20.2；观察 4（DistLock 经 Eval）→ A2 后不经驱动重放；观察 6（用例 `/reset` 共享 toxiproxy）→ A5 与 NC-208 补修（`d43aa3ba`，v1.20.2）；**驱动 Close 契约 → 第十二轮写进契约表，本批按实测写进 [redis/driver](../../redis/driver/README.md) 与 [mongo/driver](../../mongo/driver/README.md) README §5，不一致处登记 [WANTED W-2026-10-06-02](../bug/WANTED.md)**。保持现状：观察 1、2、5、7（记录判为语义说明）。
+- **外部**：E08、E10、E11。
 
-不使用另一 agent 的端口/库/目录做破坏性清理，不输出 env.sh/凭据；只关闭自己创建的实例。环境缺失写明条件和入口即可，不编造绿灯。
+### N05 remoteentity / ownerroute（含 Mirror）
 
-## 交付与收口标准
+- **review**：完成，ownerroute 与赠礼静态路由无缺陷。记录：[noncore-23](REVIEW-2026-10-05-noncore-23.md) / [24](REVIEW-2026-10-05-noncore-24.md)、[n05-revn05](REVIEW-2026-10-05-n05-revn05.md)，Mirror 各步记录（[第 1～3 步](../feature/MIRROR-STEPS-1-3-2026-10-06.md)、[第 4 步与 O4](../feature/MIRROR-STEP-4-AND-O4-2026-10-06.md)、[第 5 步](../feature/MIRROR-STEP-5-2026-10-06.md)、[第 6 步本机替代](../feature/MIRROR-STEP-6-LOCAL-2026-10-06.md)、[第 6 步观察](../feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md)）。
+- **修复**：NC-33 / 34 `be4eb0fa`、NC-35 / 36（含 RR-20260913-08 残余）`7949da08`，v1.20.0；NC-130 `6f06f0da`、NC-131 `c3475150`、RR-20260913-01 跨节点 L2 墓碑残余 `366058a7`、NC-174 `c99a687d`，v1.20.2；RR-20261006-01（删除 Remote 实体时确认报身份不符、不发布墓碑）`4ca757aa`，v1.22.0。
+- **观察与处置**：水位方向 → 第三轮 B2（a），`f376bba0` / `7d49e54d`，v1.20.2；O4 兴趣容量 → 第九轮按 consumer 计，`23e17d81`，v1.21.0；O5（JetStream 重放历史）→ B2 发布时刻 + 第 4 步 DeliverNew；O6（无最大陈旧时间）→ `cached_max_staleness`；Mirror 第 1～5 步 `8495c5c4` / `23e17d81` / `a6985cf3`，v1.21.0；第 6 步本机替代 `b15e70c8`，v1.22.0；O-M6-1 / O-M6-3 `db67b8ee`、O-M6-6 `d483238e`、O-M6-5 `7b73aabc`，未发版；O-M6-2、O-M6-4 等其余 Mirror 观察 → 第十二轮保持；**L2 落后于权威 → 第十二轮保持，本批把上界写进 [B2 §7](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) 与 USER_GUIDE**（`snapshot_l2_ttl` + `cached_max_staleness`，缺省约 5m30s）。保持现状：O1（ownerroute 无回执）、O2（赠礼转交先刷新驻留，归 U-0280 线）、O3（兴趣无主动撤销）。
+- **外部**：E01、E02、E06、E10、E13、E14、E15、E16。
 
-每个待审项给出源码SHA、调用/数据/资源所有权链、适用场景和实际结果；确认bug有原红与修复绿，观察/设计/外部未验证单列。更新 PROGRESS、学习文档和本表的停点，提交推送确认远端包含该提交。不要将包测试数、CSV行数或文档引用率作为业务覆盖率。
+### N06 service / saga / servicemetrics
 
-当15个单元都有有界源码/行为记录、确认问题收敛且受限场景已具名交接后，建立固定快照的 NONCORE-REVIEW-COMPLETION；外部未验仍明确留项，再与核心工作线完成表合并。期间新增功能另列增量，避免移动基线覆盖掉历史结论。
+- **review**：S1～S6 本机都有结论。记录：[noncore-25](REVIEW-2026-10-05-noncore-25.md)～[27](REVIEW-2026-10-05-noncore-27.md)、[n01s4](REVIEW-2026-10-05-n01s4.md)（S4 global / App 替代）、[n06-revn06](REVIEW-2026-10-05-n06-revn06.md)、[n06s5](REVIEW-2026-10-06-n06s5.md)（saga 六项）。
+- **修复**：NC-37 / 38 `47fca740`、NC-39 / 40 `12726715`、NC-41 / 42 与 RR-20261001-09 残余 `10c73e0c`、NC-50～52 与 RR-20261001-06 残余 `be7bcc18`、U-0280 / U-0281（`054fdd66` 等）、RR-20261005-01 `46c4dfba`，v1.20.1；B1 completion 代际 `3fabe34d`，v1.20.2；B9 窗口条目入口 / 建角判定表 `bd6df5e5`、换名释放 `b18d5613`、O37 `f6043e44`、saga 方向 ①② `a95cf4dc` / `9669d181`、NC-250 `31b48bc0`、发版前审查补漏 `42419890` / `5a3c4a60`，v1.21.0；RR-20261006-05（global `Bind` 重试误报冲突）、-06（saga 步骤预算大小写）`611d5d72`，未发版。
+- **观察与处置**：revn06 观察 1（默认无指标）→ C6，`491aaf3b`，v1.20.2；观察 2（CAS 冲突率口径）→ 第十二轮，`7b73aabc`，未发版；观察 3（activity 预约身份）→ 第十二轮保持；观察 4 → B9；O-S5-1 / O-S5-4 → `9669d181`；O-S5-2 → 第十二轮启动校验，`7b73aabc`，未发版；O-S5-3 → 写进 SAGA.md 运维要点；O-S5-5 保持；O-S5-6 → RR-20261006-08；O-S5-7 与方向 ③④ → 第六轮暂不做；Mongo 步骤延迟 → 第十二轮维护者选 A（接受现状，`ff08c941` 只有分析）；C5（停机中仍算 Live）→ 写进契约，`bd6df5e5`。保持现状：观察 5（chat 热点频道容量，需要容量证据）。
+- **外部**：E09、E11、E12、E13。
 
-可以直接给另一 agent 的任务：
+### N07 configdata / attribute / event / errcode
 
-> 使用仓库 roost-coding/roost-bugfix 与已安装 roost-review，先 fetch/pull；读取本清单和 PROGRESS，从 N06 S4 global RPC/Mod 与 App.Live 替代增量接续，然后 Saga 具名余项→N07→N08→N09～N15。复用旧Service十域与已闭合RR，不重做全域。确认bug先红后绿修复、留中文关键注释/bugfix/学习/进度，提交推送但不发版、不等CI。外部资源受限项单列；与核心另一线避免重叠修改。用户明确“没有修复”时跳过旧验收，推进新内容。
+- **review**：完成。记录：[noncore-n07](REVIEW-2026-10-05-noncore-n07.md)、[noncore-n07b](REVIEW-2026-10-05-noncore-n07b.md)。
+- **修复**：NC-60～63 `3d4fe9f3`、NC-64 / 65 `197f7bb9`、NC-73（errcode id 扫描 AST 化）`80802200`，v1.20.1；B10 / C2 `b12216ed`，v1.21.0；configdata 键大小写敏感 `c474a6ef`，v1.22.0（功能项）。
+- **观察与处置**：C-O1、C-O9 → 第四轮 C2 写进契约；C-O5～C-O7 → C2 可见性（日志 + 指标），`b12216ed`；E-O1～E-O4（event 零接线）→ 第二轮 C3 保留、不再深审；属性容器回滚 / 重建 → A1 回滚统一走 DAO，`5407f127`，v1.20.2；C-O8（热更不重算在线玩家的 Gear）→ A1 方案明确保持（Gear 由业务事务 `RefreshGear` 重算，下次换装或加载生效，[A1 方案](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)“热更新”条）。保持现状：C-O2、C-O3、A-O1、R-O1、R-O2。
+- **外部**：五进程全链路热更、客户端复制帧、Luban 真实工具链（随 E04 / E20 的真实部署一起做）。
+
+### N08 codegen
+
+- **review**：完成（macOS）。记录：[n08-codegen](REVIEW-2026-10-05-n08-codegen.md)；09-30 的 codegen-01～06 是历史。
+- **修复**：RR-20261004-12 `a646193c`、-13 `7ffa7199`，v1.20.0；cb11be90、NC-70～73 `80802200`、NC-74 / 75 `45d4bc1c`，v1.20.1；B6 信号统一接管与 C9 联网用例门 `f556049c`，v1.21.0；收尾第 2 批 A8 / A9 / A11 / A15 / A17 `fcc78ad0`、cfggen globals 规则 `229a5aa0`，未发版。
+- **观察与处置**：O1 → C9；O2、O3、O6 → B6；NC-75 运行时 required → 第四轮 B10 选 A；O5（文档里旧 `roost-codegen` 模块路径）→ 本批改为 `github.com/tjbdwanghaibo/roost-core/codegen/...`（codegen README 与 `codegen/docs`，历史记录不动）。保持现状：O4（错误信息用 Go 字段名）。
+- **外部**：E21～E26。
+
+### N09 skill（含 cmd）
+
+- **review**：完成。记录：[batch1](REVIEW-2026-10-05-n09-batch1.md)～[batch4](REVIEW-2026-10-05-n09-batch4.md)、[batch5](REVIEW-2026-10-06-n09-batch5.md)、[batch6](REVIEW-2026-10-06-n09-batch6.md)，以及第七轮、第十二轮实施记录（[求值上下文表](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)、[第十二轮 skill 与 cfggen](../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md)）。`runtime_select` / `runtime_input` / `trace` / `inspect` 没有单独逐行记录，只在 batch4 / 5 对照 Runtime 时覆盖。
+- **修复**：NC-110～113 `855c2a38`、NC-114～117 `f37a94e3`，v1.20.1；NC-150～154 `bfd353c0`、NC-210～216 `7cf86f98`、B3 lower fail-fast `023eb276`，v1.20.2；NC-220～224 `5c04726f`、NC-280～283 `4ed038d9`，v1.21.0；RR-20261006-02～04（null 默认值状态 set、checkpoint 拒绝 `phase_timeout`、文件 outbox 遗留 tmp）`b8fbcee0`，未发版。
+- **观察与处置**：O1 → 第四轮 B4，Runtime 不进事务、写文档，`62cec54e`；O2（buff 不进伤害）→ 第十二轮“组件给投影入口”，`CombatComponent.ProjectAttributes`，`229a5aa0`，未发版（本批按源码核对了组件注释）；O6 → RR-20261006-04；O7、O22、O29 → 第十二轮，`229a5aa0`；O15～O17、O27、O28 → 第十二轮保持并写作者文档；O19 → NC-151 的控制用例；O20 → RR-20261006-03；O33 → 第七轮编译期拒绝，O34～O36 保持并写文档，O37 → account 判定表，均 `f6043e44`；NC-151 / NC-213 方向 A → B3 ④ 保持方向 B，NC-151 `timeout_ticks` 第十二轮保持 warning；NC-224 方向 B → 第五轮不做；O3～O5、O8～O14、O18、O21、O23～O26、O30～O32 → 第十二轮“其余保持”。B3 ③（Host 取值能力表）→ 下个大版本。
+- **外部**：skillsync 经真实传输（kit syncstream / NATS）的端到端；Windows 文件 outbox 替换（只读过源码）。
+
+### N10 ai / actionflow / featureflag / hotcode
+
+- **review**：完成。记录：[noncore-n10](REVIEW-2026-10-05-noncore-n10.md)、[noncore-n10b](REVIEW-2026-10-06-noncore-n10b.md)。
+- **修复**：NC-120～123 `556d156d`，v1.20.1；B7 延后队列 `a9b7075b`，v1.20.2；NC-240～247（含 O-A4 → NC-243、O-H1～O-H3 → NC-245～247，NC-244 由真实 .so 发现）`44964553`、MissionRunner 延后队列 `f6828f17`，v1.21.0。
+- **观察与处置**：O-A1（EndAll 不清场）→ 第五轮保持、接线说明写清；O-A2 / O-A3 → B7 后消失；O-T6 → 注释改正；**O-T3（Init 里发起的动作会被 EndActions 结束）/ O-T4（Shutdown 不调 EndActions）→ 第十二轮保持并写文档，本批写进 `ai/strategy.go` 的 `Strategy` / `StoppableStrategy`、`Controller.Shutdown` 注释与 kit/README 的 ai 段**。保持现状：O-F1（`gm.flag.list` 的 version 与 flags 可能不同代，只影响运维展示）、O-H4（实例级 handler 不能热补丁）、O-N1（只改了注释）、O-N2、O-A5、O-A6。
+- **外部**：E27（Linux / Windows 真实插件加载）。
+
+### N11 spatial / timer / clock / index
+
+- **review**：完成。记录：[n11](REVIEW-2026-10-05-n11.md)、[revleft §2](REVIEW-2026-10-06-revleft.md)。
+- **修复**：NC-140～147 `23a10f42`，v1.20.1；NC-270（`PathFindSystem.Stop` 无锁清空 terrain）`36220f34`，v1.21.0。
+- **观察与处置**：O1 → 补注释；O4 → 入口穷举，NC-270；O6 → 第六轮 D-L1（期限、priority、登记顺序），`5abae51e`；O7 → D-L2（未注册类型删除时 Warn + 计数），`5abae51e`；O8 → NC-193 之后无残余；O9 → D-L3 业务 / 系统双时钟（`b9fc5342`、`fa472ee7`，v1.21.0）与“业务时间只许前进”（`3e77beb9`，v1.22.0）；组件内存回滚 → A1；index 去留 → C3 / C8 保留。保持现状：O2、O3、O5、O10。
+- **外部**：真实 WAL / Mongo 三进程链路里 `ArmActivity` / `TickWorldTimers` 的提交被拒（随 E19 的三进程恢复链路一起做）。
+
+### N12 metrics / log / failurelog / robot
+
+- **review**：完成。记录：[n12-revn12](REVIEW-2026-10-05-n12-revn12.md)、[revleft §3](REVIEW-2026-10-06-revleft.md)、[第十二轮 kit 批](../feature/DECISIONS-R12-KIT-2026-10-06.md)。
+- **修复**：NC-160 `f750ce43`、NC-161 `5fea59ce`、NC-162 `efeede0f`、NC-163 `92547035`、NC-164 `2a9e0c2c`、NC-165 `e798a759`，v1.20.2；NC-261～266（O8 / O6 / O4 / O10 / O11）`36220f34`，v1.21.0；RR-20261006-09（robot Stage 序号只增不回收，O9）`7b73aabc`，未发版。
+- **观察与处置**：O1（默认无 Reporter）→ C6，`491aaf3b`；O2 / O3（序列删除）→ 第十二轮 `metrics.DeleteSeries`，loadtest 挤出历史时删 `run` 序列，`7b73aabc`；O5 → A2；O7 → RR-20261006-07。刻意没做：nest 派发器 gauge（核心线）、`bus_rpc_pending{method}` 删除（受 2048 上限约束）。
+- **外部**：E05、E08；磁盘写满 / 只读文件系统上的日志行为（随 E19）。
+
+### N13 container / safemap / goroutine / misc / internal
+
+- **review**：完成。记录：[n13](REVIEW-2026-10-05-n13.md)、[revleft §4](REVIEW-2026-10-06-revleft.md)（O1～O11 全部有结论）。
+- **修复**：NC-180～185（`7e4ed438`、`1d600b9b`、`4c26b4b5`、`20400337`，复审补修 `815c3661`）、C7 遍历回调仓库级契约 `cd43a5ac`，v1.20.2；NC-267～269（O5 / O4 / O9）`36220f34`，v1.21.0。
+- **观察与处置**：O7 → C7；O10 → 第六轮 D-L4 保持；O11 → README 包名已改；零调用方 API → C8 保留。保持现状：O1（Get 未命中走写锁）、O8（SafeFunc 不记栈）——需要性能或运维证据再定；O2、O3、O6，及 O9 里 `totalTasks` 的瞬时不一致（没有确定性红测试）。
+- **外部**：无。
+
+### N14 Kit 跨域装配
+
+- **review**：完成。记录：[n14](REVIEW-2026-10-05-n14.md)（A1～A19）、[n01b](REVIEW-2026-10-06-n01b.md)（O3 / O4）。
+- **修复**：NC-190 `f9367785`、NC-191 `e1a6b01d`、NC-193 `d6550a16`、NC-194 `48b3311a`、NC-192（随第二轮 C1 方案 1）`3e3350d5`，v1.20.2；NC-233 / 234 `2c1c7be7`，v1.21.0。
+- **观察与处置**：O1（宽松配置读取）→ 第二轮 A4 严格读取，`3e3350d5`（kit/redis 三个整数读取 `5df60765`），v1.20.2；A4 的配置 schema（①）留作后续重构；O2 → RR-20261006-06；O3 / O4 → NC-233 / 234；O5 → 死要求随 NC-192 删除。
+- **外部**：E08（真实 Redis Cluster 下 `cluster_addrs` 列表写法起服）。
+
+### N15 scripts / cmd 与非 Go 资产
+
+- **review**：完成。记录：[n15](REVIEW-2026-10-05-n15.md)、[收尾第 2 批](../bugfix/CLOSING-BATCH-2-2026-10-06.md)。
+- **修复**：NC-200～208 `6c1538be`、NC-208 的 kit/dataengine 补修（`TestToxicNATS*` 自建代理）`d43aa3ba`、NC-203 复核补修（A5，全局命令运行期间持锁）`3e3350d5`，v1.20.2。
+- **观察与处置**：O1（source-head-check 吞 add 失败、与 CI 序列漂移）→ 收尾 A11，`fcc78ad0`，未发版；O5 → `d43aa3ba`；方向“隔离环境独占还是共享”→ 第二轮 A5 选共享。保持现状：O2、O3、O4（已写进 C01-RUNBOOK）、O6。
+- **外部**：修后 heal / 矩阵在真实共享隔离环境上实跑（会注入故障）、Linux 上 NC-202 的 pid 认领（随 E26）。
+
+## 与核心工作线的边界
+
+Nest、Sync、DataEngine、Remote 本体由核心工作线 review（[核心优化交接](../CORE-OPTIMIZATION-HANDOFF.md)），本线只沿集成需要读取。接口处的待办：
+
+- K1 Nest / Entity：快池禁阻塞、冷加载 / 慢续行、组迁移等由核心线负责；本线新增的 [WANTED W-2026-10-06-01](../bug/WANTED.md)（`releaseDispatchLocks` 无 Guard 作用域分支）等 review 判断。
+- K2 DataEngine / K3 Remote 权限 / K4 Sync：本线修复只跑受影响回归，不冒认核心线的独立验收。
+
+## 接手
+
+1. 先 `git fetch`，读 AGENTS.md、[roost-coding](../agent-skills/roost-coding/SKILL.md)、核心优化交接与本文。
+2. 新的 review 从 [WANTED](../bug/WANTED.md) 的未分流条目（W-2026-10-06-01、W-2026-10-06-02）和新增功能的增量开始；本文各单元的“保持现状”观察只在出现新证据（真实触发路径、性能或运维数据）时重开，不要重新登记。
+3. 外部环境到位时按 [外部验证清单](EXTERNAL-VERIFICATION-2026-10-06.md) 逐项做，在该清单的状态列回填。

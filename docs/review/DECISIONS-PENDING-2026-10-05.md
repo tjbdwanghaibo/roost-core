@@ -4,6 +4,15 @@
 每项给出：来由（编号）、选项、推荐。**已修的缺陷不在此列**；这里只列需要维护者拍板的方向、契约与语义。
 排序按影响面：A 是跨模块的框架契约（反复出缺陷的根因），B 是单模块方向，C 是业务语义与去留。
 
+## 当前总状态（2026-10-06，v1.23.0 发版前核对）
+
+- **未决事项：零。** 下面每一张“待决定”表里的项都已在后面某一轮“维护者决定”表里定案；每一轮决定表的每一行都已是“已实施（提交号）”或“保持”（维护者决定不改代码）。
+- **版本**：第二、三轮决定随 v1.20.2 发布（tag → `c85d4565`），第四～九轮随 v1.21.0（`4881f2b7`），下一轮规划三项随 v1.22.0（`9bf690fb`）。第十轮起（O-M6-1 / 3 / 6、收尾第 1～4 批、第十二轮）都未发版，随 v1.23.0 发布。各行里写“未发版”的是实施当时的状态。
+- **留到下个大版本、不在本轮做的**：A2 ③（versionstore 一次性写令牌）、A3 ②（排空下沉到 `ISyncBus` 带 ctx 的退订）、A4 ①（配置 schema）、B3 ③（Host 取值能力表）。
+- **只剩外部环境验证**：Linux 内核网络、跨主机分区、多节点 HA、长时间容量与 soak、多机 Redis Cluster、Windows、真实部署与客户端，统一见 [外部验证清单](EXTERNAL-VERIFICATION-2026-10-06.md)（E01～E28）。表里标“外部验证”的行指向它。
+- **两条 WANTED 待 review 判断**（不是维护者决定项）：W-2026-10-06-01（nest 无 Guard 作用域分支）、W-2026-10-06-02（驱动重复 Close 口径不一致，第十二轮“驱动 Close 契约”实测时登记）。
+- 非核心 review 的完成总结见 [NONCORE-REVIEW-COMPLETION](NONCORE-REVIEW-COMPLETION-2026-10-06.md)，各单元状态见 [单元状态](REMAINING-REVIEW-HANDOFF-2026-10-05.md)。
+
 ## A. 框架契约（反复出缺陷的根因）
 
 | # | 事项 | 来由 | 选项 | 推荐 |
@@ -46,39 +55,39 @@
 
 ## 发布状态
 
-v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批、N12、N13（含复审补修）、N14、N15、六处同形停机（NC-170～174）、NC-208 补修等修复，均未发版。
+（2026-10-06 更新）原文“v1.20.1 之后 main 上的 N05、N09 第三 / 四批、N12、N13、N14、N15、NC-170～174、NC-208 补修等修复均未发版”——这些都已随 v1.20.2 发布（tag → `c85d4565`）。之后的版本见文首“当前总状态”。
 
 ## 维护者决定（2026-10-05，第二轮）
 
 | # | 决定 | 实施状态 |
 | --- | --- | --- |
-| A1 | **不采用推荐**：维护者要求“回滚都使用 DAO 的实现方式，这样回滚都可以统一”——组件的可回滚状态一律进 DAO（必要时为非持久字段），由 Nest 的 DAO 回滚统一兜住，不再让组件各自登记 undo / 重建 | 已实施（5407f127，[方案与实施](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）；skill Runtime 状态进 DAO 列为后续（方案 §4.4） |
+| A1 | **不采用推荐**：维护者要求“回滚都使用 DAO 的实现方式，这样回滚都可以统一”——组件的可回滚状态一律进 DAO（必要时为非持久字段），由 Nest 的 DAO 回滚统一兜住，不再让组件各自登记 undo / 重建 | 已实施（5407f127，[方案与实施](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）；skill Runtime 状态进 DAO 原列为后续（方案 §4.4），第四轮 B4 决定不进事务（保持），不再做 |
 | A2～A5 | 按推荐 | A2、A3 见下行；A4、A5 **已实施（`3e3350d5`）**，见下两行 |
-| A4 | 按推荐：先 ②（逐个改严格读取），① schema 作为后续重构 | **已实施（`3e3350d5`）**：新增 `app.ConfigInt` / `ConfigInt64` / `ConfigReader`；kit 各 Mod 与 app 改严格读取；`ValidateServiceConfig` 按 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys`（16 / 95 / 77 个键，含 syncbus 三段与 `<service>.call_timeout`）检查；守卫测试扫描源码。生成工程三份配置在严格校验下全部通过（game-demo 与 CI full 场景）。**未做**：~~kit/redis 三个整数读取（留给 A2 之后，启动校验已兜住）~~ 已改为严格读取并删掉守卫放行（`5df60765`，分支 `c4c6`）；生成的 player TCP / RPC 客户端代码改严格读取（等生成器 Core 下限升到 v1.20.2）；① schema。[方案](../feature/REFACTOR-2026-10-05-strict-config-reads.md) |
+| A4 | 按推荐：先 ②（逐个改严格读取），① schema 作为后续重构 | **已实施（`3e3350d5`）**：新增 `app.ConfigInt` / `ConfigInt64` / `ConfigReader`；kit 各 Mod 与 app 改严格读取；`ValidateServiceConfig` 按 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys`（16 / 95 / 77 个键，含 syncbus 三段与 `<service>.call_timeout`）检查；守卫测试扫描源码。生成工程三份配置在严格校验下全部通过（game-demo 与 CI full 场景）。**未做**：~~kit/redis 三个整数读取（留给 A2 之后，启动校验已兜住）~~ 已改为严格读取并删掉守卫放行（`5df60765`，分支 `c4c6`）；~~生成的 player TCP / RPC 客户端代码改严格读取（等生成器 Core 下限升到 v1.20.2）~~ 已随 v1.20.2 实施（生成代码用 `app.ConfigReader` / `ConfigDuration`，生成器 Core 下限同步上调）；① schema 留到下个大版本。[方案](../feature/REFACTOR-2026-10-05-strict-config-reads.md) |
 | A5 | 按推荐：② 共享，全局运维命令保留锁 | **已实施（`3e3350d5`）**：共享使用规则写进 `kit/scripts/integration/README.md`、roost-coding、roost-bugfix（SKILL 与 lessons）；核对发现 NC-203 之后全局命令只检查锁、不持有，failover 用例与带故障的生成工程验收整段不持锁，按先红后绿补修（NC-203 复核补修）。[记录](../bugfix/RR-20261005-NC-203.md#复核后的补修2026-10-05维护者决定-a5) |
 | C1 | 随 A4 按方案 1 | **已实施（`3e3350d5`）**：生产校验删去九组无读取方的要求，USER_GUIDE §10 写明 `env: production` 校验范围；生成的生产示例 / Secret 示例打开生产模式可以启动。[记录](../bugfix/RR-20261005-NC-192.md) |
-| A2 | 按推荐：① 驱动行为契约表 ② RedisMod 默认不重放写命令；③ 暂不做 | **已实施（`cf5721c9`）**：Redis 写命令、含写的 pipeline、EvalBatchDurable、DistLock 都不经驱动重放，只在 `driver.IsDefinitelyNotExecuted` 判为真时重发（脚本同样，NC-101 复审应改项 1）；Mongo 提交发出之后的失败包 `mongo.ErrCommitResultUnknown`（应改项 2）；cache 的 hash / 有序集合在写结果未知时仍补发 EXPIRE。契约表：[redis/driver](../../redis/driver/README.md)、[mongo/driver](../../mongo/driver/README.md)。调用方核对没有发现双写；bus 的 SETNX 去重、global Bind 的误报、L2 快照 DEL 被吞掉、Redis Cluster 实测，留作观察或交给归属方。[方案](../feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md) |
+| A2 | 按推荐：① 驱动行为契约表 ② RedisMod 默认不重放写命令；③ 暂不做 | **已实施（`cf5721c9`）**：Redis 写命令、含写的 pipeline、EvalBatchDurable、DistLock 都不经驱动重放，只在 `driver.IsDefinitelyNotExecuted` 判为真时重发（脚本同样，NC-101 复审应改项 1）；Mongo 提交发出之后的失败包 `mongo.ErrCommitResultUnknown`（应改项 2）；cache 的 hash / 有序集合在写结果未知时仍补发 EXPIRE。契约表：[redis/driver](../../redis/driver/README.md)、[mongo/driver](../../mongo/driver/README.md)。调用方核对没有发现双写；bus 的 SETNX 去重、global Bind 的误报、L2 快照 DEL 被吞掉、Redis Cluster 实测，留作观察或交给归属方。（后续：SETNX 去重第十二轮保持、契约已写；Bind 误报 → RR-20261006-05，`611d5d72`；L2 DEL → B2 带版本删除重发；Redis Cluster 实测 → 外部验证 E08。）[方案](../feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md) |
 | A3 | 按推荐：① 共用小类型 + 停机契约测试骨架，③ glsvet 只提示 | **已实施（`50f2ac2a`）**：`internal/operation.Lifetime` 补 `Wait(ctx)`，bus / syncbus / mirror 三份迁移；`internal/stopcontract` 骨架套 manager、kit/nest、syncbus、etcd、mirror、remoteentity、bus、生成 TCP；glsvet `-stophints`（Mutex.Lock 误报约 100%，未加）；骨架发现 NC-173 残余并补修。② 排空下沉到 ISyncBus 退订留待下个大版本。[方案](../feature/REFACTOR-2026-10-05-shared-stop-contract.md) |
 | B1 | 协调器接收 completion 时核对代际：做 | **已实施（`3fabe34d`）**：completion 代际从 `CommandID` 解析，旧一生的拒绝 / 失败不接收（`saga.completion.stale_incarnation_total`），旧一生的成功在记录停在该操作上时接收为结果；放弃后迟到的成功按（操作，代际）只告警一次（tombstone `late_alarms`）；补偿方向 `ManualRequired` 上的人工 `Compensate` 进入新一生（正确做法写明为 `Resume`，二者等价）。四个边角先红后绿，真实 Mongo 并发标记通过。Mongo 步骤跨尝试幂等仍待另写方案。[方案与实施](../feature/B1-SAGA-COMPLETION-INCARNATION-2026-10-06.md) |
-| B2 | 维护者问“什么意思”，已解释，待决定 | 待决定 |
+| B2 | 维护者问“什么意思”，已解释，待决定 | 已在第三轮决定并实施，见下表 |
 | B3 | lower 查找失败一律报错：做 | **已实施（`023eb276`）**：① lower 的名字查找经唯一入口 `resolveName`，查不到返回 `LOWER_UNRESOLVED` 编译错误、不交出 Program（回归对全部种子逐表删条目，修前 35 处静默兜底 / 23 处未解析引用 / 4 处 panic）；② phase 事件派发表单一来源 `skill/phase_events.go`（代价小，一并做）。③ 下个大版本，④ 保持 B。[方案](../feature/B3-SKILL-LOWER-FAILFAST-2026-10-06.md) |
-| B5 | etcd 选举：保留（不弃用） | — |
-| B7 | ai / actionflow：保留在 core | 重入方向见第三轮（b），已实施 |
-| C3 / C8 | event、index 与零调用方 API：保留 | — |
+| B5 | etcd 选举：保留（不弃用） | 保持 |
+| B7 | ai / actionflow：保留在 core | 保持；重入方向见第三轮（b），已实施（`a9b7075b`） |
+| C3 / C8 | event、index 与零调用方 API：保留 | 保持 |
 | C4 | 维护者问“什么是活动组 game 服”，已解释，待决定上限 | 已在第三轮决定，见下表 |
-| C6 | 默认 metrics adapter：做 | **已实施（`491aaf3b`，分支 `c4c6`）**：`servicemetrics.NewMetricsReporter` 把服务事件写成 `service.{accepted,refused,replayed,dropped,conflict}.total` 与 `service.depth` 六个固定名，经 ops `/metrics` 导出；队列 key / 看板 ID 改为 `key` 标签（`KeyedReporter` / `Sink.DepthOf`，项目自写 Reporter 不受影响），`session.swept` 改为计数 `run.swept`；生成工程 `Metrics()` 默认返回它，`service_metrics.enabled: false` 或返回 nil 关闭；真实进程 `/metrics` 修前 0 行、修后有 `service_*`。**未做**：注册表按标签删除序列（N12 O2 / O3）。新生成工程需要 core ≥ v1.20.2，发版时升 `minimumVersions.Core` 与 framework-compat `minimum`。[方案](../feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md) |
+| C6 | 默认 metrics adapter：做 | **已实施（`491aaf3b`，分支 `c4c6`）**：`servicemetrics.NewMetricsReporter` 把服务事件写成 `service.{accepted,refused,replayed,dropped,conflict}.total` 与 `service.depth` 六个固定名，经 ops `/metrics` 导出；队列 key / 看板 ID 改为 `key` 标签（`KeyedReporter` / `Sink.DepthOf`，项目自写 Reporter 不受影响），`session.swept` 改为计数 `run.swept`；生成工程 `Metrics()` 默认返回它，`service_metrics.enabled: false` 或返回 nil 关闭；真实进程 `/metrics` 修前 0 行、修后有 `service_*`。**未做**：注册表按标签删除序列（N12 O2 / O3）——后由第十二轮实施（`metrics.DeleteSeries`，`7b73aabc`）。新生成工程需要 core ≥ v1.20.2，发版时升 `minimumVersions.Core` 与 framework-compat `minimum`。[方案](../feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md) |
 | C7 | 遍历回调语义定为仓库级契约：是 | **已实施（`cd43a5ac`）**：契约写进 roost-coding / README §16 / safemap 包注释；共用辅助 `internal/rangecontract` 套 container、safemap、entity、生成 DAO 三种 map 的 `RangeX`；补 NC-181 残余（`RangeWithCursorCnt` 重走同一桶）与 NC-180 残余（`RangeGroupEntities` 交出已清零实体）；index / lock 无遍历回调。[方案](../feature/C7-RANGE-CALLBACK-CONTRACT-2026-10-06.md) |
 | C10 | N10 临时 worktree：已删除（分支已并入 main） | 完成 |
-| 发布 | v1.20.2 暂不发，上述实施完成后统一发版 | — |
+| 发布 | v1.20.2 暂不发，上述实施完成后统一发版 | 已发布 v1.20.2（tag → `c85d4565`） |
 | 额度 | 额度不足时，先把未完成项记进文档并推送，再停止 | 规则 |
 
-未在本轮答复中出现、仍按上表推荐待定的：B4、B6、B8、B9、B10、C2、C5、C9（C1 已随 A4 按方案 1 实施）。
+未在本轮答复中出现、仍按上表推荐待定的：B4、B6、B8、B9、B10、C2、C5、C9（C1 已随 A4 按方案 1 实施）。（2026-10-06 更新：B4、B6、B9、B10、C2、C5、C9 已在第四轮决定并实施；B8 按推荐并入 A3——停机契约骨架覆盖生成 TCP，`50f2ac2a`。）
 
 ## 维护者决定（2026-10-05，第三轮）
 
 | # | 决定 | 实施状态 |
 | --- | --- | --- |
-| B2 | 按推荐：共享 L2 为快照水位权威，L1 只是有界副本；Cached 读最大陈旧时间写成配置与契约 | **已实施（`f376bba0`、`7d49e54d`）**：L1 写入一律先经 L2 版本 CAS / 带版本删除，L1 只缓存 L2 确认过的版本并带确认时刻；`remote_entity.cached_max_staleness`（缺省 = `snapshot_cache_ttl`）；复制消息带发布时刻，DeliverAll 重放的过老快照不再被接受（O5）；O4 容量、L2 落后于权威（写 L2 失败）、生成配置模板留作后续。[方案](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) |
+| B2 | 按推荐：共享 L2 为快照水位权威，L1 只是有界副本；Cached 读最大陈旧时间写成配置与契约 | **已实施（`f376bba0`、`7d49e54d`）**：L1 写入一律先经 L2 版本 CAS / 带版本删除，L1 只缓存 L2 确认过的版本并带确认时刻；`remote_entity.cached_max_staleness`（缺省 = `snapshot_cache_ttl`）；复制消息带发布时刻，DeliverAll 重放的过老快照不再被接受（O5）；O4 容量、L2 落后于权威（写 L2 失败）、生成配置模板留作后续（后续：O4 → 第九轮 `23e17d81`；L2 落后 → 第十二轮保持、上界已写；生成配置模板 → 收尾第 2 批 A8 `fcc78ad0`）。[方案](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) |
 | C4 | 活动组（参与同一全服活动的 game sid 集合）应由一个配置文件定义；每组上限暂定 64，启动 / 加载时校验 | **已实施（`277e1252`，分支 `c4c6`）**：`configs/activity_groups.yaml`（`groups: [{id, game_sids}]`）由生成器为托管 activity 协调器的工程创建，协调器与 game-demo 的 game 经 `activity.groups_file` 读同一文件、用同一个 `kit/service/global/activity.LoadGroupsFile` 校验（每组 ≤ `MaxExpectedGames` = 64、sid 唯一且只属于一个组、正的 int32、本服 sid 必须在组里）；协调器 `sweep_groups` 为空时扫文件里的全部组；game 配置 `activity.game_sids` 删除，已生成工程不迁移。kit activity 除导出上限外还改了 Mod 读取组文件（为了“协调器读同一份定义”，Service 逻辑不变）。新生成的 game-demo 需要 core ≥ v1.20.2。[方案](../feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md) |
 | B7 | actionflow 回调重入：按推荐（b）——回调里对 runner 的变更进延后命令队列，回调返回后按序执行，判定集中一处 | **已实施（`a9b7075b`）**：判定集中在 `ActionRunner.submit`，删掉 U-0100 / NC-122 的六处事后比对；回调里的 Start / Enqueue 返回已分配 ID（`Deferring()`），拿到 ID 必有 OnEnded；`MaxDeferredCommands` / `MaxDeferredSteps` 有界防失控；O-A2 / O-A3 消失并钉住，O-A1 定义为“EndAll 先结束全部、回调变更随后执行”；`MissionRunner` 未改。[方案](../feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md) |
 
@@ -86,7 +95,7 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 
 | # | 决定 | 实施状态 |
 | --- | --- | --- |
-| 留项 | 补齐 15 个非核心单元的单元内留项（见 REMAINING-REVIEW-HANDOFF 各行停点） | 进行中：**N11 / N12 / N13 留项与小防护 A / B 已实施（revleft，NC-260～270，`36220f34`）**，O6 / O7 / O9 / N13 O10 待 D-L1～D-L4；**N01（含 N02 O1、N14 O3 / O4）已实施（`2c1c7be7`）**——NC-230～234、`ops.admin_timeout`，[记录](REVIEW-2026-10-06-n01b.md)；Health Degraded 映射待 D1（见文末）；其余单元待实施 |
+| 留项 | 补齐 15 个非核心单元的单元内留项（见 REMAINING-REVIEW-HANDOFF 各行停点） | **已完成**（2026-10-06 核对：15 个单元本机场景都已收口，见 [单元状态](REMAINING-REVIEW-HANDOFF-2026-10-05.md)；D1 第五轮已定并实施）。过程：**N11 / N12 / N13 留项与小防护 A / B 已实施（revleft，NC-260～270，`36220f34`）**，O6 / O7 / O9 / N13 O10 待 D-L1～D-L4；**N01（含 N02 O1、N14 O3 / O4）已实施（`2c1c7be7`）**——NC-230～234、`ops.admin_timeout`，[记录](REVIEW-2026-10-06-n01b.md)；Health Degraded 映射待 D1（见文末）；其余单元待实施 |
 | 留项 · N10 | N10 第二批（ai 节点、actionflow 池化与 B7 留项、hotcode 真实 .so 与 O-H1 回滚） | **已实施（`44964553`，分支 `revn10b`）**：NC-240～247 修复（含 B7 留项 O-A4 → NC-243、O-H1～O-H3 → NC-245～247，真实 .so 发现 NC-244）；MissionRunner 延后语义、O-A1 清场无确认缺陷，选项与推荐（保持）见 [记录](REVIEW-2026-10-06-noncore-n10b.md#待维护者语义选择无确认缺陷) |
 | 留项 · N09 | N09 第五批（编译器 random / snapshot / temporal / graph / effect_result / proc / quantity 逐分支、直接分支用例、性质测试种子） | **已实施（`5c04726f`，分支 `revn09e`）**：NC-220～224 修复（NC-223 为 B3 回归）；NC-224 方向 B（冻结施法输入）、“求值上下文 → 可用引用”单一表与 O27～O33 待维护者定，见 [记录](REVIEW-2026-10-06-n09-batch5.md) |
 | B4 | skill Runtime 状态**不进**事务：保持现状，文档写明约束（handler 失败回滚后 Runtime 状态不回退，业务按此设计） | **已实施（`62cec54e`，分支 `revn09e`）**：[skill-casting-and-combat.md](../skill/skill-casting-and-combat.md)“Runtime 不在事务里（B4）”一节（回退 / 不回退对照表、先校验后推进、扣费交给 Runtime commit 路径、失败用 Runtime 终态、提交被拒由业务处理）；skill README 补说明；roost-coding A1 条写明例外；glsvet A1 提示不命中 skill，无需豁免（注释 + `TestSkillPackagesGetNoComponentUndoHint`） |
@@ -96,9 +105,11 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | C2 | “需要可见”：按协调者理解——保持新快照即刻可见的语义并写进契约；同时让热更失败 / 回滚可见（日志 + 指标，N07 C-O5） | **已实施（`b12216ed`）**：契约写进 configdata 包注释与 USER_GUIDE §10；`Store.OnReloadOutcome` 每次 Load / Reload / Rollback 恰好报告一次并写 Info / Warn 日志（失败带 stage，撤回为 `stage=apply`）；kit 指标 `configdata.reload.total{result=ok\|failed}`、`configdata.rollback.total{trigger=apply_failed\|operator}`，去掉 `reason` 标签（C-O6），被撤回的 reload 不再同时记 ok；observability README 改正版本号说法（C-O7）。[方案](../feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md) |
 | C5 | 停机中的进程仍算“活着”：保持现状，写进 `Live` 契约 | **已实施（`bd6df5e5`）**：`app/singleton.go` 的 `SingletonLiveness` 注释、USER_GUIDE §2、APP-SINGLETON-LOCK §3.6 / §7.2 写明契约与对 activity 的影响（窗口可能等到宽限期）；用例 `TestSingletonLiveCountsAStoppingProcessUntilRelease` 钉住 |
 | C9 | 过时测试开关要测：打开 `publishedDataEngineGeneratorDependencies` 覆盖的用例，放进需要网络的 CI lane 跑 | **已实施（`f556049c`）**：常量换成 `ROOST_NETWORK_TESTS=1`，framework-compat 新 job `codegen-network` 打开（SKIP 即失败），根包 `TestNetworkCodegenTestsRunInSomeWorkflow` 钉住；两条用例本机联网实跑通过（v1.20.2 刚发布，需 `GOPROXY=direct`）。默认 `go test` 不联网。 |
-| Mirror | 上述全部完成后，补齐 PLAN-REMOTE-POLICY-MIRROR 剩余实现（只读 DTO reader / 契约、共享 snapshot client、订阅代际与首载缓冲、kit 装配与 codegen 只读产物、真实环境故障与性能报告） | 进行中：**第 1～3 步已实施（`8495c5c4`，分支 `mirror13`）**——只读契约 `entity.RemoteSnapshotReadOnly` / 观察 token / DTO reader、快照缓存唯一读出口、共享 `remoteentity.SnapshotClient`（Manager 委托，停机套 A3 骨架）；修前红：Monotonic 未命中回源两次、Cached 交出低于最低版本的值。**第 4 步已实施（`23e17d81`，分支 `mirror4`）**——可确认订阅（JetStream DeliverNew，普通 NATS 显式退化为按需读取）、首载缓冲、兴趣代际与撤销水位，见第九轮表。**第 5 步已实施（`a6985cf3`，分支 `mirror5`）**——kit `RemoteMirrorMod`（只读 `SnapshotClient`，不要求原子 backend，新键 `remote_entity.mirror.shutdown_timeout`）、codegen `//roost:mirror` DTO 与 `remote=mirror` 迁移诊断、公会摘要两进程样例（真实 JetStream 推送 / 普通 NATS 按需），新能力用 6 个负对照（T-274）；**第 6 步本机替代已实施（`4ca757aa` 修复、`b15e70c8` 用例与记录，分支 `mirror6`）**——私有依赖进程上两进程 7 类故障 0 违例、同机 n=6 对照 v1.20.2 无显著差别；修复 RR-20261006-01（删除 Remote 实体时确认报身份不符、删除不发布）；观察 O-M6-1 / O-M6-3 待维护者；Linux 内核网络、跨主机分区、长时间容量列入外部验证清单，见 [第 6 步本机替代记录](../feature/MIRROR-STEP-6-LOCAL-2026-10-06.md) §5 |
+| Mirror | 上述全部完成后，补齐 PLAN-REMOTE-POLICY-MIRROR 剩余实现（只读 DTO reader / 契约、共享 snapshot client、订阅代际与首载缓冲、kit 装配与 codegen 只读产物、真实环境故障与性能报告） | **已实施**（第 1～5 步随 v1.21.0、第 6 步本机替代随 v1.22.0；O-M6-1 / 3 / 5 / 6 见第十～十二轮）；Linux 与多机部分为**外部验证**（E01 / E02 / E15 / E16）。过程：**第 1～3 步已实施（`8495c5c4`，分支 `mirror13`）**——只读契约 `entity.RemoteSnapshotReadOnly` / 观察 token / DTO reader、快照缓存唯一读出口、共享 `remoteentity.SnapshotClient`（Manager 委托，停机套 A3 骨架）；修前红：Monotonic 未命中回源两次、Cached 交出低于最低版本的值。**第 4 步已实施（`23e17d81`，分支 `mirror4`）**——可确认订阅（JetStream DeliverNew，普通 NATS 显式退化为按需读取）、首载缓冲、兴趣代际与撤销水位，见第九轮表。**第 5 步已实施（`a6985cf3`，分支 `mirror5`）**——kit `RemoteMirrorMod`（只读 `SnapshotClient`，不要求原子 backend，新键 `remote_entity.mirror.shutdown_timeout`）、codegen `//roost:mirror` DTO 与 `remote=mirror` 迁移诊断、公会摘要两进程样例（真实 JetStream 推送 / 普通 NATS 按需），新能力用 6 个负对照（T-274）；**第 6 步本机替代已实施（`4ca757aa` 修复、`b15e70c8` 用例与记录，分支 `mirror6`）**——私有依赖进程上两进程 7 类故障 0 违例、同机 n=6 对照 v1.20.2 无显著差别；修复 RR-20261006-01（删除 Remote 实体时确认报身份不符、删除不发布）；观察 O-M6-1 / O-M6-3 已在第十轮决定；Linux 内核网络、跨主机分区、长时间容量列入外部验证清单，见 [第 6 步本机替代记录](../feature/MIRROR-STEP-6-LOCAL-2026-10-06.md) §5 |
 
 ## 新增待决定（2026-10-06，N01 留项 revn01b）
+
+（已在第五轮决定并实施：D1 按推荐 (b)，`f6828f17`。）
 
 | # | 事项 | 来由 | 选项 | 推荐 |
 | --- | --- | --- | --- | --- |
@@ -117,7 +128,7 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 
 ## 新增待决定（2026-10-06，N11～N13 留项 revleft）
 
-[记录 §5](REVIEW-2026-10-06-revleft.md)。编号带 L 前缀，避免与并行轮次的 D 编号相撞。
+[记录 §5](REVIEW-2026-10-06-revleft.md)。编号带 L 前缀，避免与并行轮次的 D 编号相撞。（已在第六轮全部决定，D-L3 归属余项在第八轮定。）
 
 | # | 事项 | 来由 | 选项 | 推荐 |
 | --- | --- | --- | --- | --- |
@@ -133,9 +144,9 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | --- | --- | --- |
 | D-L1 | 同期限定时器缺省按登记顺序（ID 作第二键）；**新增可选 `priority` 字段**用于排序：先比期限，再比 priority，同 priority 按登记顺序 | 已实施（5abae51e，priority 数值小的先触发，[方案](../feature/D-L1-L2-TIMER-ORDER-AND-UNHANDLED-2026-10-06.md)） |
 | D-L2 | 按推荐：未注册类型的到期节点删除时 Warn + 计数，加载时对无 handler 的存量类型告警一次 | 已实施（5abae51e，指标 `timer.unhandled_dropped_total{kind}`，T-268） |
-| D-L3 | **修订（维护者确认推荐边界）**：两个时钟、边界写死。**业务时钟**（带 `logic_offset`，App 统一提供）：活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、skill / 战斗游戏时间等全部业务时间。**系统时钟**（真实时间）：server 帧率、租约 / 锁、超时、重试退避、存储 TTL、消息 Ack、日志 / 指标 / WAL 时间戳。约束：偏移单一配置源、只在启动时生效或只许前拨、生产启动校验强制为 0、业务过期不靠存储 TTL 判定（TTL 只兜底且更长）、glsvet 提示业务包直接 `time.Now()` | 已实施（b9fc5342，`app.BusinessClock` / `clock.Business`；kit activity / mail / rank / session 与 game-demo 业务时间接业务时钟，mail 领取租约改系统钟、信封 TTL 加 24h 宽限；生产非 0 拒启；glsvet `game` 目录提示，T-270。match / chat / account / saga 的归属待定，见[方案](../feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md) §3.3） |
-| D-L4 | 按推荐：`Parallel*` 回调 panic 保持现状 | — |
-| saga 方向 | 按推荐：① “离开当前步骤”收成一个转移（截止 / 人工 Compensate / 定义缺失 / 正常推进共用）② Mongo 步骤纳入与原生步骤同一套“同一操作最多生效一次”的收件箱契约；③④ 暂不做 | 已实施（① `a95cf4dc`，② 与 O-S5-1 / O-S5-3 `9669d181`；[方案](../feature/SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)，未发版） |
+| D-L3 | **修订（维护者确认推荐边界）**：两个时钟、边界写死。**业务时钟**（带 `logic_offset`，App 统一提供）：活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、skill / 战斗游戏时间等全部业务时间。**系统时钟**（真实时间）：server 帧率、租约 / 锁、超时、重试退避、存储 TTL、消息 Ack、日志 / 指标 / WAL 时间戳。约束：偏移单一配置源、只在启动时生效或只许前拨、生产启动校验强制为 0、业务过期不靠存储 TTL 判定（TTL 只兜底且更长）、glsvet 提示业务包直接 `time.Now()` | 已实施（b9fc5342，`app.BusinessClock` / `clock.Business`；kit activity / mail / rank / session 与 game-demo 业务时间接业务时钟，mail 领取租约改系统钟、信封 TTL 加 24h 宽限；生产非 0 拒启；glsvet `game` 目录提示，T-270。match / chat / account / saga 的归属当时待定，已在第八轮决定，见[方案](../feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md) §3.3） |
+| D-L4 | 按推荐：`Parallel*` 回调 panic 保持现状 | 保持 |
+| saga 方向 | 按推荐：① “离开当前步骤”收成一个转移（截止 / 人工 Compensate / 定义缺失 / 正常推进共用）② Mongo 步骤纳入与原生步骤同一套“同一操作最多生效一次”的收件箱契约；③④ 暂不做 | 已实施（① `a95cf4dc`，② 与 O-S5-1 / O-S5-3 `9669d181`；[方案](../feature/SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)，随 v1.21.0 发布）；③④ 保持不做 |
 
 ## 维护者决定（2026-10-06，第七轮）
 
@@ -152,7 +163,7 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | match | 匹配是业务逻辑：票据超时、等待放宽改走业务时钟；match 服务与 game `matchmaking.Pools` 一起换（偏移只在启动生效，等待时长不受影响） | 已实施（fa472ee7） |
 | chat | 展示给玩家的消息时间走业务时钟；保留期清理（空间回收）留系统时钟，拆成两个字段 | 已实施（fa472ee7） |
 | account | 创建时间等业务用途走业务时钟 | 已实施（fa472ee7） |
-| saga 截止 | 保留系统时钟 | — |
+| saga 截止 | 保留系统时钟 | 保持 |
 | 偏移一致 | `roost doctor` 检查所有服务配置的 `time.logic_offset` 一致 | 已实施（fa472ee7） |
 
 ## 维护者决定（2026-10-06，第九轮）
@@ -181,7 +192,8 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | # | 决定 | 实施状态 |
 | --- | --- | --- |
 | O-M6-6 | 按推荐：同 sid 新进程（已持 App 单实例锁）启动时立即接管上一代同 sid 进程留下的 Remote 实体锁（按锁记录的进程代际令牌判定，只接管“同 sid、旧代际”） | 已实施（d483238e） |
-| 收尾 | 盘点全部未完成问题，处理完后统一发一个版本 | 进行中 |
+| 收尾 | 盘点全部未完成问题，处理完后统一发一个版本 | 第 1～4 批与第十二轮决定已实施（见下面各行与第十二轮表），随 v1.23.0 发布 |
+| 收尾 · 第 1 批 | 文档刷新：DECISIONS-PENDING / 单元状态 / 下一轮规划 / 缺陷索引 / feature 状态行；A10 codegen 文档旧模块路径；A16 CombatComponent 注释；A18 核心优化交接四条旧疑点核对；第十二轮文档类决定；外部验证清单；非核心 review 完成总结 | 已实施（`CB1_COMMIT`，未发版） |
 | 收尾 · 第 3 批 | skill 小修 A4～A6：null 默认值实体状态 set 类型不匹配、checkpoint 拒绝 `phase_timeout`（O20）、文件 outbox 清理遗留 tmp（O6） | 已实施（`b8fbcee0`，RR-20261006-02～04，未发版） |
 | 收尾 · 第 2 批 | 生成形状相关小项：A8 生成配置补 `remote_entity` 新键、A9 生成 TCP 越界报错点名、A11 full 场景 add 序列收拢且不吞失败、A15 生成 TCP 不配合 ctx 用例、A17 game-demo 重开放弃面板 | 已实施（`fcc78ad0`，未发版，[记录](../bugfix/CLOSING-BATCH-2-2026-10-06.md)） |
 | 收尾 · 第 4 批 | kit / core 小修与测试设施：A2 nest `-shuffle` 失败（用例隔离）、A3 glsvet `-tests ./nest` 3 条、A7 global `Bind` 重试误报冲突、A12 saga 步骤预算大小写冲突、A13 `app.run` 退出原因进文件日志、A14 mongotest `$in` 具名切片（O-S5-6） | 已实施（`611d5d72`，RR-20261006-05～08，未发版，[记录](../bugfix/CLOSING-BATCH-4-2026-10-06.md)） |
@@ -195,20 +207,20 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | O-S5-2 | saga Mod 启动时校验 `dataengine.effects.max_age` 与 `saga.completion_receipt_ttl` | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)） |
 | metrics 按标签删除 | Registry 加按标签删除，对象拥有者销毁时删 | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：`metrics.DeleteSeries`，loadtest 运行挤出历史时删 `run` 序列 |
 | readyz checker 期限 | 每个 checker 短期限，卡住报 Fail | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：并发、每个 1.5s |
-| 驱动 Close 契约 | 写进 A2 驱动契约表 | 待实施（文档） |
+| 驱动 Close 契约 | 写进 A2 驱动契约表 | 已实施（`CB1_COMMIT`，未发版）：按实测写进 [redis/driver](../../redis/driver/README.md) 与 [mongo/driver](../../mongo/driver/README.md) README §5；单机与 Cluster 重复 Close 不一致等登记 [WANTED W-2026-10-06-02](../bug/WANTED.md)，代码未改 |
 | cfggen globals 规则 | 支持 required / min / enum，与 tablegen 统一 | 已实施（229a5aa0） |
-| bus SETNX 去重 | 保持，写进 bus 契约 | 待实施（文档） |
-| L2 落后权威 | 保持，写明上界 | 待实施（文档） |
+| bus SETNX 去重 | 保持，写进 bus 契约 | 已实施（`CB1_COMMIT`，未发版）：契约写进 `bus/reliable.go` 的 `ReliableStore` 注释（按当前源码：`BeginConsume` 出错进死信、不重投；死信重投用新 MsgID） |
+| L2 落后权威 | 保持，写明上界 | 已实施（`CB1_COMMIT`，未发版）：[B2 §7](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) 与 USER_GUIDE——L2 最长落后 `snapshot_l2_ttl`，读者再加 `cached_max_staleness`，缺省约 5m30s |
 | Ops Bearer | 收紧为必须带 `Bearer ` | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)） |
 | CAS 冲突率口径 | versionstore 层统一计数 | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：chat / rank 自报删除 |
-| activity 预约身份 | 保持 | — |
-| N10 O-T3 / O-T4 | 保持并写文档 | 待实施（文档） |
+| activity 预约身份 | 保持 | 保持 |
+| N10 O-T3 / O-T4 | 保持并写文档 | 已实施（`CB1_COMMIT`，未发版）：`ai/strategy.go`（`Strategy`、`StoppableStrategy`）、`Controller.Shutdown` 注释与 kit/README ai 段 |
 | robot Stage 序号 | 只增不回收 | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：RR-20261006-09 |
 | buff 投影 | 组件给投影入口，投影交业务 | 已实施（229a5aa0） |
 | skill 剩余观察 | O22 编译期拒绝；O7 排序；O29 改文案；O15/O16/O17/O27/O28 保持并写作者文档；其余保持 | 已实施（229a5aa0） |
-| NC-151 timeout_ticks | 保持 warning | — |
-| Mirror 剩余观察 | 保持；O-M6-5 owner 启动遇 Mongo 选举做有界重试 | O-M6-5 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：`EnsureIndexes` 遇换主 10 次 × 1s，私有副本集 stepDown 红绿 |
-| 低优先 | `:lease:*` 旧键写迁移说明；业务时间高水位推进失败加计数；其余保持 | 高水位计数 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）；`:lease:*` 迁移说明待实施（文档） |
+| NC-151 timeout_ticks | 保持 warning | 保持 |
+| Mirror 剩余观察 | 保持；O-M6-5 owner 启动遇 Mongo 选举做有界重试 | 其余保持；O-M6-5 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：`EnsureIndexes` 遇换主 10 次 × 1s，私有副本集 stepDown 红绿 |
+| 低优先 | `:lease:*` 旧键写迁移说明；业务时间高水位推进失败加计数；其余保持 | 高水位计数 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）；`:lease:*` 迁移说明已实施（`CB1_COMMIT`，未发版，[DEPLOYMENT §7.1](../DEPLOYMENT.md#71-升级后的手工清理)）；其余保持 |
 | Mongo 步骤延迟 | 维护者要求分析（9.0→17.4 ms/op） | 已分析（`ff08c941`，[分析](../feature/SAGA-MONGO-STEP-LATENCY-2026-10-06.md)）：代价是多一次落盘提交，吞吐同样约减半；不放松契约就没有安全优化，未改代码。**维护者选 A（接受现状）**：“目前真正走 saga 的实际业务场景不多，55tps 足够了”。契约与实现不变 |
 
 另按维护者第十二轮实施要求，game-demo 仪表盘补 `configdata_rollback_total{trigger}` 面板（A17 顺带观察），同一提交 `7b73aabc`。

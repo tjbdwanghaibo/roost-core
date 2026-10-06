@@ -169,6 +169,11 @@ func (c *Controller) OnMissionEnd(mission coreflow.Mission, reason coreflow.Acti
 		c.report(err)
 	}
 }
+
+// Shutdown 卸下当前策略：调它的 Stop（若实现了 StoppableStrategy）并发布“变为无策略”。
+// 与 SetStrategy 不同，它不调 EndActions，在途动作不会被结束——要结束的话见
+// StoppableStrategy 的说明（N10 O-T4，维护者第十二轮决定保持）。在策略回调里调用时延后到
+// 最外层回调返回后执行。
 func (c *Controller) Shutdown(reason string) {
 	if c == nil {
 		return

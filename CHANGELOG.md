@@ -35,7 +35,7 @@
 - **skillsync：文件 outbox 打开时清理崩溃遗留的临时文件**（RR-20261006-04，O6）：写入中途崩溃留下的 `outbox-<数字>.tmp` 以前永不回收；现在 `NewFileOutboxStore(WithOptions)` 删除名字精确匹配的普通文件（目录、符号链接、其他名字不动）。同一目录不能有两个在写的 store。[记录](docs/bugfix/RR-20261006-04.md)
 
 ### Added
-
+- 文档（收尾第 1 批）：`docs/DEPLOYMENT.md` §7.1 写明从 v1.20.0 之前升级后手工删除旧 `<global.key_prefix>:lease:*` 键（无 TTL，不再读写）；`redis/driver`、`mongo/driver` README §5 写明 Close 的重复调用 / 出错后再调用行为（实测，单机与 Cluster 不一致登记 WANTED W-2026-10-06-02，代码未改）；`bus.ReliableStore` 注释写明 inbox 去重契约；USER_GUIDE 写明 L2 落后于权威时读者看到旧值的上界（缺省约 5m30s）。新增[外部验证清单](docs/review/EXTERNAL-VERIFICATION-2026-10-06.md)。
 - `app.business_time.advance_failed.total`：运行中推进业务时间高水位失败的次数（维护者第十二轮决定），之前只有 Warn 日志（T-284）。[记录](docs/feature/DECISIONS-R12-KIT-2026-10-06.md#8-业务时间高水位推进失败计数)
 - game-demo 仪表盘“事件链与配置”行新增“配置撤回”面板，按 `trigger` 显示 `configdata_rollback_total` 5 分钟内的次数（可观测性 README 已列出该指标，此前没有面板，维护者第十二轮决定）；demo 测试断言面板存在且 kit/configdata 仍以这个名字计数。[记录](docs/feature/DECISIONS-R12-KIT-2026-10-06.md#9-configdata_rollback_total-面板)
 - game-demo 仪表盘新增“场景复制会话”面板，按 `reason` 显示 `scene_session_reopen_failed_total` 5 分钟内的次数（收尾第 2 批 A17，RR-20260927-19 的指标此前只在可观测性 README 里列出）。导出名与面板查询已在生成工程里核对。[记录](docs/bugfix/CLOSING-BATCH-2-2026-10-06.md)

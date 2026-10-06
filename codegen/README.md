@@ -43,7 +43,7 @@ cfggen 的 schema 字段级参考见 [CFGGEN_META](docs/CFGGEN_META.zh-CN.md)；
 ```go
 // mail/mail.go —— 唯一手写的跨进程契约
 //
-//go:generate go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir .
+//go:generate go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir .
 //
 //roost:rpc service_type=mail capability=service.mail
 type Mail interface {
@@ -92,7 +92,7 @@ tables:
 ```
 
 ```bash
-go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen -meta ./configs/schema/cfg.yaml -out ./cfg
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/cfggen -meta ./configs/schema/cfg.yaml -out ./cfg
 ```
 
 业务侧接线只剩一行：`cfg.MustRegisterGeneratedConfigData(reg)`；读取用生成的 `cfg.MonsterTableFrom(snap)`，二级索引生成强类型访问器 `cfg.MonsterBySceneID(snap, 7)`（参数类型来自字段，不传索引名和字符串值）。运行期的悬空引用校验、原子热更、回滚由 roost-core/configdata 承担（`RegisterAutoTable` + `cfg` tag）。接真正 Luban 的方式见 roost-core `examples/lubanreal`（官方 luban CLI 真实生成的端到端示例）。
@@ -103,11 +103,11 @@ go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen -meta ./configs/schema/
 
 推荐直接跟随最新 codegen，不需要把 codegen 加进业务 module：
 
-    go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest help
+    go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest help
 
 或安装本地命令：
 
-    go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest
+    go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest
     roost version
     roost env doctor
     roost help beginner
@@ -156,7 +156,7 @@ roost add dao --help          # 等价于 roost help dao
 make project-upgrade # 使用 @latest codegen 升级工程模板
 make deps-update  # 按 roost.yaml 更新 core、kit、skill
 make roost-up     # GOWORK=off go get -u ./...；然后 go mod tidy
-make codegen-up   # go install roost-codegen/cmd/roost@latest
+make codegen-up   # go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest
 ```
 
 `project-upgrade` 直接通过 `@latest` 运行生成器，更新所有带生成标识的受控工程文件，并把 core、kit、skill、codegen 四个版本策略都设为 `latest`。`roost-up` 会更新项目实际引用的直接和间接依赖，变更 `go.mod/go.sum`；执行后应运行 `make ci` 并提交依赖文件。`codegen-up` 更新的是 Go bin 目录中的 `roost` 可执行文件。
@@ -164,8 +164,8 @@ make codegen-up   # go install roost-codegen/cmd/roost@latest
 旧项目的 Makefile 尚无 `project-upgrade` 时，先预览并执行一次迁移：
 
 ```bash
-go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest project upgrade --root . --dry-run -core latest -kit latest -skill latest -codegen latest
-go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest project upgrade --root . -core latest -kit latest -skill latest -codegen latest
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . --dry-run -core latest -kit latest -skill latest -codegen latest
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . -core latest -kit latest -skill latest -codegen latest
 ```
 
 迁移会把 `roost-up`、`codegen-up` 和其他当前工程指令一起写入 codegen 管理的 Makefile。没有生成标识的自定义 Makefile 会被拒绝，不会被静默覆盖。
@@ -245,7 +245,7 @@ type EquipInfo struct {
 
 或独立运行 dao 生成器：
 
-    go run github.com/tjbdwanghaibo/roost-codegen/cmd/dao@latest -def ./db/def -out ./db
+    go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/dao@latest -def ./db/def -out ./db
 
 输出（输出目录需能推断出包名，即已有至少一个非生成的 `.go` 文件，否则用 `-pkg` 指定）：
 

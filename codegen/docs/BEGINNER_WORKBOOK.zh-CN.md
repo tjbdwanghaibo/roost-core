@@ -6,7 +6,7 @@
 ## 1. 安装与自检
 
 ```bash
-go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest
+go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest
 roost version
 roost env doctor
 roost help

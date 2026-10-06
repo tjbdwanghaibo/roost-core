@@ -1,5 +1,7 @@
 # D-L1 / D-L2：定时器同期限顺序与 priority、未注册类型的节点
 
+> **状态（2026-10-06 核对）**：已实施（`5abae51e`），已随 v1.21.0 发布。下文“未发版”是实施当时的状态。
+
 2026-10-06，分支 `dl12`，基线 `ce79ef18`。来由：[DECISIONS-PENDING 第六轮 D-L1 / D-L2](../review/DECISIONS-PENDING-2026-10-05.md)，[revleft §2 O6 / O7、§5](../review/REVIEW-2026-10-06-revleft.md)（N11 O6 / O7）。同轮 D-L3（时间来源）另行实施，本次**不改**定时器取时间的来源。
 
 图谱限制：codebase-memory 共享 generation 停在 09-30，`timer` 包与 World 模板（`.tmpl` 不在图里）以当前源码与 `rg` 为准。

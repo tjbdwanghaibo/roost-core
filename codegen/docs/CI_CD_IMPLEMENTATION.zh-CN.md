@@ -1,6 +1,6 @@
 # Roost CI/CD P0/P1/P2 实施方案
 
-本文同时约束 roost-codegen 仓库的框架验收流水线，以及由 codegen 生成的业务项目流水线。目标不是简单增加若干 GitHub Actions，而是保证一次提交使用固定依赖图、一次发布只构建一组不可变制品，并能够通过 Shell、Docker 和 Kubernetes 三种方式安全交付。
+本文同时约束 codegen（原 roost-codegen 仓库，现为 roost-core 的 `codegen/` 目录，CI 在仓库根 `.github/workflows/`）的框架验收流水线，以及由 codegen 生成的业务项目流水线。目标不是简单增加若干 GitHub Actions，而是保证一次提交使用固定依赖图、一次发布只构建一组不可变制品，并能够通过 Shell、Docker 和 Kubernetes 三种方式安全交付。
 
 ## 职责边界
 

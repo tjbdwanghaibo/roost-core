@@ -61,7 +61,7 @@ review agent 每轮看一眼，对每条做三选一——登记为 RR（分配�
 - **Review 结论（2026-09-22）**：不是缺陷。不登 RR，转 ARCH-08 B 项；(a)/(b) 的选择与 W-06 绑定，要维护者拍板。
 - **来源**：同 W-04。
 
-## W-2026-09-22-06 分流结论：→ ARCH-10（原 ARCH-09，09-22 并入；M-13 已实施：Manager 不带 room 概念，任何政策都能订；`syncTopic` 文档待改）
+## W-2026-09-22-06 分流结论：→ ARCH-10（原 ARCH-09，09-22 并入；M-13 已实施：Manager 不带 room 概念，任何政策都能订；M-14 把标记改名 `syncNamespace`（旧 `syncTopic` 报“已改名”），文档已同步——2026-10-06 核对 `ENTITY_SYNC.md`、`codegen/docs/CODEGEN_REFERENCE.zh-CN.md`、`codegen/internal/entity/parse.go`）
 
 - **位置**：roost-core `entity/subject_sync.go:132-160`（`EntitySyncCreateParam{Topic}` → `entity_base.go:160` 写成 `Namespace`）、
   `entity/subject_sync.go:106-108,319`（`SubjectSyncDirtyNotifier`，只有 `room.RegisterSubject` 安装）；
@@ -860,3 +860,17 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **复现**：基线上把 `nest/group_lock_test.go` 换回 `8a292a5a` 版本，`go test -c` 后 `-test.run '^(TestLockDispatchEntitiesForHandlerRetriesEpochChangeWhileWaiting|TestSymmetricCrossCreatePairsResolveWithinRequeueBudget)$' -test.shuffle=1`，约 4/5 失败。
 - **候选修法（可选）**：`releaseDispatchLocks` 只释放 `acquired`，不归还 Guard（Guard 由取得它的一方负责）；或无作用域时直接拒绝（返回错误 / panic），把“必须在作用域里取锁”变成显式前置条件。
 - **来源**：收尾第 4 批 A2。
+
+### W-2026-10-06-02：驱动重复 Close 的返回口径不一致（Redis 单机 vs Cluster 等）
+
+- **位置**：`redis/driver/client.go:473` `Client.Close`、`redis/driver/assembly.go:44` `Assembly.Close`（直接透传 go-redis）；对照 `mongo/driver/client.go:108` `Client.Close`（NC-260 后幂等 nil）、`kit/redis/singleton.go:144` 与 `etcd/driver/client.go:177`（粘滞返回第一次的结果）、`nats/driver/assembly.go:66`（每次返回 `ErrClosedUndrained`，RR-20261004-08 有意的终态错误）。基线 `d6a677e0`。
+- **现象**（2026-10-06 临时探针实测，不可达地址、`-race`，契约表见 [redis/driver README §5](../../redis/driver/README.md#5-close重复调用与出错后再调用) 与 [mongo/driver README §5](../../mongo/driver/README.md#5-close重复调用与出错后再调用)）：
+  1. 同一个 `redis/driver.Client`，单机部署第二次 Close 返回 `redis: client is closed`，Cluster 部署返回 nil——调用方拿到的结果取决于部署形态。`RedisMod` 已经靠“第一次 Close 后就交出连接”（NC-233）避开，直接用 `NewClient` / `Assemble` 的工具与集成测试没有。
+  2. 全仓重复 Close 有三种口径：返回 nil（mongo Client、redis Cluster、redis pubsub、两个 kit Mod）、粘滞返回第一次结果（kit 单实例锁 store、etcd Client）、每次报错（redis 单机、nats Assembly）。停机契约写的是“再调用返回 nil”。
+  3. 并发 Close 时，redis 单机与 mongo 的后到者立刻返回，第一个调用者可能还在释放。
+  4. kit `RedisMod.StopWithContext` / `MongoMod.StopWithContext` 并发调用有数据竞争（`kit/redis/redis_mod.go:116/120`、`kit/mongo/mongo_mod.go:129`），可能 Close 两次。App 每次停机对每个 Mod 只串行调一次，现有路径走不到。
+  5. 顺带：nats `Client.Publish` 在连接关闭后空等 3 × 20ms 重试，返回的错误不能 `errors.Is` 到 `fnats.ErrClosed`（`nats/driver/client.go:53-66`），而 `Request` 能（`:198-199`）；redis `DistLock` 遇到 `ErrClosed`（按分类是“确定没执行”）也把锁记为结果未知（`redis/driver/lock.go:111-118`）；etcd Close 之后的操作不快速失败，阻塞到调用方截止时间。
+- **为何可疑**：第 1、2 条让“已经关了”的判断随驱动和部署形态变化，停机重试路径容易在一种部署上绿、另一种上红（NC-233、NC-260、NC-173 残余都是这一族）。其余是低影响的不一致，列出供 review 一并判断。
+- **复现**：探针副本在会话 scratchpad 的 `probes/`（`redis_driver_zz_close_probe_test.go` 等）；复制到对应包、命名 `zz_close_probe_test.go`，`GOWORK=off go test ./<pkg>/ -run TestZZ -count=1 -v -race`，跑完删除。最小复现：对 `127.0.0.1:1` 建单机与 Cluster 两个 `redis/driver.Client`，各 Close 两次，比较第二次的返回。
+- **候选修法（可选）**：`redis/driver.Client.Close` 把 `goredis.ErrClosed` 按已关闭吞成 nil（与 mongo NC-260 同形）；契约统一为“重复 Close 返回 nil、第一次的错误只报一次”，nats `ErrClosedUndrained` 在表里写明是例外；Mod 的 Stop 是否要并发安全由 review 定。
+- **来源**：收尾第 1 批（维护者第十二轮决定“驱动 Close 契约写进 A2 驱动契约表”，以实测为准，不一致记 WANTED、不改代码）。

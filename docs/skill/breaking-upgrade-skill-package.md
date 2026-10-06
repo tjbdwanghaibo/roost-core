@@ -40,7 +40,7 @@ skillv2.SomeType
 => skill.SomeType
 ```
 
-若使用 roost-codegen 管理工程模板，先运行：
+若使用 roost codegen（`github.com/tjbdwanghaibo/roost-core/codegen`）管理工程模板，先运行：
 
 ```powershell
 make project-upgrade

@@ -40,7 +40,16 @@
 | 写关注 / 读关注 | majority 加 journal / majority；事务内用 snapshot | `client.go` |
 | 连接池 | Max 100 / Min 10 / 空闲 5m | `fmongo.DefaultConfig` |
 
-## 5. 新增调用点核对清单
+## 5. Close：重复调用与出错后再调用
+
+维护者第十二轮决定把 Close 的行为写进契约表。下表是 2026-10-06 按当前源码（mongo-driver v2.6.0）用临时探针实测的结果（不可达地址，`-race`）。与 Redis 单机不一致的地方见 [WANTED W-2026-10-06-02](../../docs/bug/WANTED.md)。
+
+| 对象 | 第二次 Close | 第一次 Close 出错后再调用 | Close 之后的操作 | 并发 Close |
+| --- | --- | --- | --- | --- |
+| `Client.Close(ctx)` | nil：驱动返回 `mongo.ErrClientDisconnected`，本包按“已关闭”吞掉（NC-260） | ctx 已过期或超时照样释放（驱动断开各 server 时忽略 ctx 错误），返回 nil；只有 FLE 客户端断开失败会返回错误且拓扑未断开，再调会重做一遍断开（本项目不配 FLE） | 命令返回 `mongo.ErrClientDisconnected`（可 `errors.Is`）；`StartSession` 本身不报错，第一条命令才报 | 都返回 nil；后到者立刻返回，**不等**第一个关完连接池 |
+| kit `MongoMod.StopWithContext` | nil | Close 失败时保留 client，下次 Stop 重试；ctx 已过期时不调 Close，直接返回 `ctx.Err()`、保留 client | — | 不支持并发调用（App 每次停机对每个 Mod 只串行调一次） |
+
+## 6. 新增调用点核对清单
 
 1. `WithTransaction` 返回 `ErrCommitResultUnknown` 时，按持久回执裁决，不要重做业务。
 2. 事务外的多文档写出错后结果未知，与 Redis 写命令一样处理。

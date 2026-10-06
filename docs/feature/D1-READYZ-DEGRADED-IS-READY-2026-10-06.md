@@ -1,5 +1,7 @@
 # D1：Degraded 算就绪（`/readyz` 只在 Fail 时 503）
 
+> **状态（2026-10-06 核对）**：已实施（`f6828f17`），已随 v1.21.0 发布。文中“未做：n01b O-H1（checker 没有单独期限）”已在第十二轮实施（每个 checker 1.5s 期限，`7b73aabc`，[记录](DECISIONS-R12-KIT-2026-10-06.md)，随 v1.23.0 发布）。
+
 2026-10-06，分支 `d1mr`，基线 `31b48bc0`。来由：[DECISIONS-PENDING D1](../review/DECISIONS-PENDING-2026-10-05.md)（第五轮决定：按推荐 (b)），[revn01b §3 Health](../review/REVIEW-2026-10-06-n01b.md)，n01s4 O2。
 
 ## 1. 问题

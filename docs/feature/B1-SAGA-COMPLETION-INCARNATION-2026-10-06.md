@@ -1,5 +1,7 @@
 # B1：saga 协调器接收 completion 时核对代际（2026-10-06）
 
+> **状态（2026-10-06 核对）**：已实施（`3fabe34d`），已随 v1.20.2 发布。下文“未发版”是实施当时的状态。
+
 **来由**：维护者决定 B1（[DECISIONS-PENDING](../review/DECISIONS-PENDING-2026-10-05.md) 第二轮“协调器接收 completion 时核对代际：做”）。
 U-0280 的执行契约见 [SAGA.md「原生步骤执行契约」](../../SAGA.md#原生步骤执行契约u-0280维护者-2026-10-05-决定)，
 实施与复核见 [U-0280](../bugfix/U-0280-saga-step-reexecuted-after-crash.md)。

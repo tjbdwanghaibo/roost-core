@@ -40,7 +40,7 @@ const combatSchemaVersion uint32 = 2
 
 // Field-level dirty-mask bits.
 const (
-	FieldVitals     uint64 = 1 << 0 // health, shield, life state, avoidance facts
+	FieldVitals     uint64 = 1 << 0 // the Combatant block: health, shield, life state, avoidance facts, and the fields ProjectAttributes writes
 	FieldAttributes uint64 = 1 << 1 // attribute base values and bounds
 	FieldBuffs      uint64 = 1 << 2 // buff container (and its attribute grants)
 )
@@ -213,9 +213,12 @@ func (dao *CombatDao) applyState(state persistedCombatState) error {
 
 // CombatComponent is the behavior wrapper generated entity factories attach
 // to an entity. Its only state is its DAO; the optional attribute projection
-// is business code, not state. All mutators must run inside a nest handler
-// (the DAO records their inverse); reads are safe anywhere the entity lock is
-// held.
+// is business code, not state. All mutators must run inside a nest
+// transaction: the DAO joins each changed field to it (its own inverse under
+// rollback=undo, the snapshot under rollback=state), and a mutator called
+// outside one panics before changing anything. ProjectAttributes is the one
+// exception — it may be installed at construction, outside a transaction.
+// Reads are safe anywhere the entity lock is held.
 type CombatComponent struct {
 	dao        *CombatDao
 	projection AttributeProjection
@@ -477,7 +480,10 @@ func (component *CombatComponent) TickBuffs(now int64) []combat.BuffInstance {
 }
 
 // ApplyDamage runs one damage instance against this component. A nil source
-// means world-sourced damage. Both sides' vitals are undo-protected.
+// means world-sourced damage. Both sides' vitals join the transaction before
+// the pipeline runs; the target is marked dirty when the damage resolves, the
+// source only when a vampiric heal changed it. Damage changes no attribute, so
+// nothing is re-projected.
 func (component *CombatComponent) ApplyDamage(source *CombatComponent, input combat.DamageInput, hooks combat.Hooks) (combat.DamageOutcome, bool) {
 	component.dao.beginChange(FieldVitals)
 	var sourceCombatant *combat.Combatant

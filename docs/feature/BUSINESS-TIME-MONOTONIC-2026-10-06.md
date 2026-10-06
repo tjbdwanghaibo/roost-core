@@ -1,5 +1,7 @@
 # 业务时间只许前进（2026-10-06）
 
+> **状态（2026-10-06 核对）**：已实施（`3e77beb9`），已随 v1.22.0 发布。下文“未发版”是实施当时的状态。
+
 维护者 2026-10-06 指示（[下一轮规划 §1](../review/NEXT-ROUND-PLAN-2026-10-06.md)）：业务时钟（真实时间 + `time.logic_offset`）在一套部署的整个生命期内不得往回走；为“偏移往回调”写的特殊逻辑随之清理。
 本文是方案与实施记录。基线 `2a4c835d`，分支 `monotime`。源码核对以当前源码为准：codebase-memory 共享 generation 停在 09-30（早于 D-L3），本轮用 `rg` 与直接阅读逐行核对 `app`、`clock`、`kit/service/{global/activity,mail,chat,account,match}`、`service/mail`。
 

@@ -3,7 +3,7 @@
 `cfggen` 是"meta 文件先行"的配置管线（简化版 Luban）：**一个 YAML 文件是唯一手写的配置定义**，Go 侧的行 struct、注册函数、类型化访问器全部生成；运行时（原子热更、回滚、内容 hash、请求一致性）由 roost-core 的 `configdata` 承担。
 
 ```bash
-go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen \
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/cfggen \
   -meta ./configs/schema/cfg.yaml -out ./cfg [-pkg cfg] [-groups s]
 ```
 

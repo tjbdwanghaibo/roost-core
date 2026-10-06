@@ -51,6 +51,22 @@ func (c ReliableConfig) normalize() ReliableConfig {
 
 // ReliableStore is the durable side channel used by Bus to deduplicate
 // messages and keep failed deliveries inspectable.
+//
+// 去重契约（维护者第十二轮决定：保持现状，写明契约）：
+//
+//   - 只对带 MsgID 的消息、按消费者（ServiceType:Sid）去重；广播给多个消费者时各自独立。
+//   - 处理前 BeginConsume 用 SETNX 写入 "processing"（TTL = InboxTTL，缺省 24h），处理完
+//     FinishConsume 改写为 "done"。键已存在（不论 processing 还是 done）就当重复跳过，计
+//     bus_duplicate_total。所以同一 MsgID 在 InboxTTL 内对同一消费者至多执行一次：handler
+//     执行中进程崩溃留下的 "processing" 会让后来的同 ID 投递一直被跳过，直到 TTL 到期——
+//     这条消息等于丢了，靠死信和运维重投补，不靠自动重试。
+//   - BeginConsume 出错（含 SETNX 回复丢失这种结果未知；A2 之后驱动不重放写命令）时，消息
+//     不执行、直接进死信。键可能已经写进去了，所以原 MsgID 之后的投递可能被当成重复。
+//     从死信重投用新 ID（requeue:<条目摘要>，见 requeueMsgID），不受旧键影响。
+//   - FinishConsume 出错时 handler 已经执行过，消息同样进死信；从死信重投会再执行一次。
+//     会被运维重投的 handler 要自己幂等。
+//   - 没有带 token 的认领，也不区分“自己写的 processing”和“别人写的 processing”。
+//     需要更强保证（至少一次 + 幂等、跨进程认领）的业务用 saga / JetStream 持久 RPC。
 type ReliableStore interface {
 	BeginConsume(ctx context.Context, consumer ReliableConsumer, msg *nats.NatsMsg) (bool, error)
 	FinishConsume(ctx context.Context, consumer ReliableConsumer, msg *nats.NatsMsg) error

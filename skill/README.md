@@ -385,7 +385,7 @@ roost-skill/skill  ←  roost-skill/combat（零依赖，可单独使用）
      game host（实现 skill.Host；combatcomponent 提供 roost-core 实体侧的现成接法）
 ```
 
-`combatcomponent` 依赖 `roost-core`（`entity`/`checkpoint`/`nest`），把 combat 状态做成带脏跟踪、可持久化、handler 回滚后字节一致的实体组件；`skill` 与 `combat` 本身不依赖 roost-core 的运行时设施。
+`combatcomponent` 依赖 `roost-core`（`entity`/`nest`/`dataengine`），把 combat 状态做成带脏跟踪、可持久化、handler 回滚后字节一致的实体组件；`skill` 与 `combat` 本身不依赖 roost-core 的运行时设施。
 
 **Runtime 不在事务里**（维护者决定 B4）：handler 失败或提交被拒回滚的只有 combat DAO；`skill.Runtime` 的冷却、ammo、cast、proc 账本、state mutation 流与 revision 都不回退（这是“事务状态一律进 DAO”的明确例外）。接入时先校验、后推进 Runtime，扣费交给 Runtime 的 commit 路径（`Host.PayCosts`），失败用 Runtime 自己的终态（预期失败结果分支 / `CastFailed`）表达，不要让 handler 在推进 Runtime 之后再失败。细则见 [docs/skill/skill-casting-and-combat.md](../docs/skill/skill-casting-and-combat.md)“Runtime 不在事务里（B4）”。
 

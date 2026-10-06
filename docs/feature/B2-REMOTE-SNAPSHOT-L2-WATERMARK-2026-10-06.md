@@ -1,5 +1,7 @@
 # B2：Remote 快照缓存以共享 L2 为水位权威，L1 只是有界副本（2026-10-06）
 
+> **状态（2026-10-06 核对）**：已实施（`f376bba0`、`7d49e54d`），已随 v1.20.2 发布。§7“未完成 / 后续”里的项后来都有了去向：Mirror 第 1～5 步与 O4 已随 v1.21.0 发布（`8495c5c4`、`23e17d81`、`a6985cf3`，O5 的 DeliverNew 在第 4 步）；生成配置模板的 `cached_max_staleness` 由收尾第 2 批 A8 写出（`fcc78ad0`，随 v1.23.0）；“L2 落后于权威”按第十二轮决定保持，上界见该节。
+
 依据：[DECISIONS-PENDING-2026-10-05](../review/DECISIONS-PENDING-2026-10-05.md) B2 行与“维护者决定（第三轮）”：共享 L2 为快照水位权威，L1 只是有界副本；Cached 读最大陈旧时间写成配置与契约。
 背景：[N05 审查 revn05](../review/REVIEW-2026-10-05-n05-revn05.md)（方向判断、O4～O6）；修复链 [RR-20260913-01](../bugfix/RR-20260913-01.md)（U-0187 及两轮残余）、[RR-20260913-05](../bugfix/RR-20260913-05.md)、[RR-20260913-06](../bugfix/RR-20260913-06.md)、[RR-20260913-08](../bugfix/RR-20260913-08.md)、[NC-35](../bugfix/RR-20261005-NC-35.md) / [NC-36](../bugfix/RR-20261005-NC-36.md)、[NC-130](../bugfix/RR-20261005-NC-130.md)；Mirror 方案 [PLAN-REMOTE-POLICY-MIRROR](../review/PLAN-REMOTE-POLICY-MIRROR.md)；A2 的“未完成”（[A2 方案](A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)：L2 DEL 结果未知时旧快照最多留到 TTL）。
 
@@ -161,7 +163,11 @@ allocs/op: PublishWarm 29 → 29，ReplicaCold 46 → 28，CachedHit 0 → 0，C
 
 ### 未完成 / 后续
 
-- **L2 落后于权威**（owner 写 L2 失败或结果未知）：陈旧上限确认到的是 L2，L2 本身最长落后 `snapshot_l2_ttl`。已有缓解（owner 自己的下一次读补写、每个收到复制删除的节点重发带版本删除），没有后台补写队列。
+- **L2 落后于权威**（owner 写 L2 失败或结果未知）：维护者第十二轮决定**保持**，写明上界（2026-10-06）。陈旧上限确认到的是 L2，所以：
+  - **L2 的上界**：从这个 key 的旧值最后一次写进 L2 算起，最长 `snapshot_l2_ttl`（缺省 5m）。CAS 与带版本删除每次成功都重设 TTL，同一版本重写也会续期；之后 key 过期，读者重新确认时 L2 没有值，回源权威。
+  - **读者看到的上界**：Cached / Monotonic 最长在 `snapshot_l2_ttl` 之后再交出 `cached_max_staleness`（缺省等于 `snapshot_cache_ttl`，30s），即缺省配置下约 5m30s。`Linearizable` 不受影响，每次读权威。
+  - **通常更早修好**：owner 的 L1 条目未确认，自己下一次读这个实体时把新版本 CAS 进 L2；推送开着时，收到复制更新 / 删除的每个节点都会把它写进 L2（CAS 与带版本删除幂等）；这个实体的下一笔提交也会写 L2。
+  - 没有后台补写队列。需要更短上界的部署调小 `snapshot_l2_ttl`（代价是 L2 命中率与墓碑寿命一起变短）。
 - **O4 兴趣容量**：全集群合计、满后续期在 owner 处被拒且消费者不知道。B2 只把它的后果收紧到陈旧上限，容量设计未改。
 - **O5 的滚动升级窗口**：旧发布者的消息不带 `published_at`，新接收方照旧接受；全部升级后才完全覆盖。同步总线按主题选 `DeliverNew` 仍是 Mirror 方案的方向，本轮未改 `sync/syncbus/driver`。
 - **生成配置模板**未加 `cached_max_staleness`（A1 正在改 codegen；缺省值等于今天的 L1 TTL，行为一致）。
