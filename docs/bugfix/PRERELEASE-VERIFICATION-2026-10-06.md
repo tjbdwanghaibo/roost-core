@@ -10,7 +10,7 @@
 | 2 示例实跑门禁 | 门禁已加；先红（两处）后绿。顺带发现并修了 `examples/` 模块 go.sum 过期、GOWORK=off 下编译不过 | `examples_run_test.go`、`examples/go.mod`、`examples/go.sum`、roost-coding / roost-optimize |
 | 3 两条真实依赖用例 | 都通过；global Bind 用例补上 RR-20261006-05 的同参数重试断言，负对照（退回修复）为红 | `kit/service/integration/redis_test.go` |
 | 4 可选本地复验 | saga 真实 NATS nak / MaxDeliver 通过；Redis Cluster ASK / MOVED 上的 L2 读写与墓碑 WAIT 通过。顺带修了 mirror-local 集群就绪判定（副本未 online 时 WAIT 被跳过，既有用例单独跑必红） | 新增两个 integration 用例、`scripts/mirror-local.sh` |
-| 5 故障矩阵预跑 | 见第 5 项 | 无 |
+| 5 故障矩阵预跑 | `d6a677e0` 上 21 格全部 PASS | 无 |
 
 ## 1. saga `TestAssemblyConsumesNativeNestCompletionEffects` 偶发失败
 
@@ -140,7 +140,19 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 
 ## 5. 故障矩阵预跑
 
-MATRIX_PLACEHOLDER
+**21 格全部 PASS**（`exit=0`），独占时段运行（第 1、3、4 项的负载都已结束；脚本自取 `remote-acceptance.lock`，结束已释放）。
+
+- 源码：当时的 `origin/main` = `d6a677e0`，独立的 detached worktree（不含本分支改动；本分支只改测试、示例 go.sum、脚本与文档，
+  与矩阵覆盖的源码无交集）。运行期间 main 前进到 `8059b877`（收尾第 1 批，只改文档与注释）。
+- 命令：`source ~/.roost-it/roost-dataengine-it/env.sh; ROOST_REMOTE_MATRIX_LABEL=matrix-relprep-20261006 bash scripts/test-remote-matrix.sh`
+- 时间：17:22:13 → 17:26:30（约 4.3 分钟；本机 Apple M5，比历史记录的约 40 分钟短得多。每格日志都有真实的 `--- PASS` / `ok`，
+  业务格可见故障注入与 heal，例如 `business-mongo-primary-async`：`fault mongo-primary: stopping mongo-1` → `TestGeneratedRemoteNestFlow/async` PASS）。
+- 结果：业务 12 格（mongo-primary / mongo-majority / nats-node / nats-all × async / strict / pipelined）全部 PASS；lease-process（3 条）、
+  redis-cluster、redis-unreplicated-fence、durable-process、ownership-counters（13 条）、mongo-wal-recovery、broker-failover（3 条）、
+  broker-network（3 条）、final-health 全部 PASS，无 SKIP。
+- 结果目录：主检出 `artifacts/perf/remote/matrix-relprep-20261006/`（`results.tsv`、`env.txt` 含 Go 版本 / HEAD / 源码 sha256、每格日志）。
+
+这是预跑，提前暴露问题；发版仍按惯例在最终 HEAD 再跑一次。
 
 ## 验证
 
