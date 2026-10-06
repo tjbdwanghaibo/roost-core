@@ -1,8 +1,17 @@
 # v1.23.0 实现 · APP / OWN / CLK / OPS / TOOL 部分
 
-> 范围与编号同[说明文档](guide-app-own-clk-ops-tool.md)（39 条：APP 13、OWN 6、CLK 6、OPS 7、TOOL 7）。
-> `path:line` 一律按提交 `02c8a10d`（本版发版前 main）的源码核对；`.tmpl` 行号指模板文件本身。codebase-memory 共享索引停在 2026-09-30，本文全部位置以当前源码直接读取为准，没有引用索引结论。
+> 范围与编号同[说明文档](guide-app-own-clk-ops-tool.md)（41 条：APP 13、OWN 6、CLK 6、OPS 7、TOOL 9）。
+> `path:line` 一律按代码冻结提交 `e6828e4f`（本版发版前 main）的源码核对；`.tmpl` 行号指模板文件本身。初稿按 `02c8a10d` 写，2026-10-06 按冻结提交逐条重核（见下面“重核记录”）。codebase-memory 共享索引停在 2026-09-30，本文全部位置以当前源码直接读取为准，没有引用索引结论。
 > 历史记录与源码冲突时以源码为准，冲突处在条目里写“源码与记录不一致”。修前红文本照记录原样抄录；记录没保存的写“记录未保存修前红文本”。
+
+<a id="recheck"></a>
+## 重核记录（2026-10-06，冻结提交 `e6828e4f`）
+
+- **怎么核的**：脚本抽出本文全部 `path:line` 引用（483 处）与相邻的符号名，在 `e6828e4f` 的源码里逐条比对；对不上的、没有符号可比的逐条人工读源码。另核对了全部测试名（158 个，除明确写“已删除 / 改名”的历史用例与前缀写法外都在）、全部提交号（都在 `e6828e4f` 的历史里；`80902948` 是 rebase 前的旧提交，原文就是这么写的）。
+- **`02c8a10d..e6828e4f` 动过的、本文引用的源码**：`app/app.go`（`b7471ae4` 把 `stopModsReverse` 的文档注释挪回函数上方，`:550-593` 之间行号 −3）、`cmd/glsvet/main.go`（`565f657b` A1 字段提示，`-stophints` 一段下移两行）、`codegen/internal/roost/render_docs.go`（引用的 `:238` 不变）、`remoteentity/snapshot_client.go`（只按文件引用，仍用 `operation.Lifetime`）。
+- **改了的引用（13 处）**：`app/app.go:553-554` → `:550-551`、`:561` → `:558`、`:584` → `:581`、`:550-552`（注释错位，已修）→ `:591-593`；`cmd/glsvet/main.go:37-39` → `:38-41`。以下 8 处与这段改动无关、是初稿行号写偏：`etcd/driver/discovery.go:248` → `:250`；`demo/internal/service/game/activity.go.tmpl:171-184` → `:178-198`；`timer/scheduler.go:143` → `:142`、`:401-411` → `:405-414`；`robot/loadtest/manager.go:598` → `:599`；`kit/ops/ops_mod.go:139-177` → `:139-178`、`:415` → `:417`；`robot/runner/runner.go:275-310` → `:273-341`。没有符号被删除或改名。
+- **新增 / 合并的内容**：TOOL-8（Windows 不保证正确，`7fec136e`）、TOOL-9（交给 review 前不留 WANTED，`87d8d91e`）两个新条目；APP-7 并入 roost-coding 的 `RedisMod` 例外（`b7471ae4`）；APP-9 并入注释挪位（`b7471ae4`）；OWN-4 / OWN-5 并入 RR-20261005-01 回归在 C4 后的去向与新守卫 `TestAGroupFitsOneLiveQuery`（`d5682dc4`）；OWN-6、TOOL-4～6 核对了 `ba13cb05` / `d05a04a1` 的部分（已在初稿里，补了位置）。三处方案文档按源码更正（App 锁方案 §3.6 与 §13 obs34、D-L3 方案 §3.2），见 OWN-3、APP-5、CLK-2。
+- **未验证项的口径**：只列外部环境项，指向 [外部验证清单](../../review/EXTERNAL-VERIFICATION-2026-10-06.md) 的 E 编号；Windows 一律“暂存，不保证正确”（TOOL-8）。本机可做、但记录里写明没做的几项单独标“本机未做”，已报给汇总者，不在这里判定。
 
 ## 怎么用这份文档 review
 
@@ -13,9 +22,9 @@
 3. CLK-1 → CLK-2 → CLK-3 / CLK-4 / CLK-5（时钟边界与高水位，高水位挂在单实例锁之后）→ CLK-6（timer，独立）。
 4. OWN-2 → OWN-3 / OWN-4 / OWN-5（game-demo 模板，依赖 APP-1 / APP-5）→ OWN-6（kit global，独立）。
 5. OPS-1 / OPS-2 / OPS-5（metrics 口径）→ OPS-4 / OPS-6 / OPS-7。
-6. TOOL-*（脚本与根包门禁，独立）。
+6. TOOL-*（脚本与根包门禁，独立；TOOL-8 / TOOL-9 只改文档与规范）。
 
-**先读的规范**（[roost-coding](../../agent-skills/roost-coding/SKILL.md)）：“生命周期与装配的复审要点”里的三步停机与“新的停机对象优先用共用类型”（APP-6～9、OPS-3）；“业务时钟与系统时钟”（CLK-*）；“反复出问题要上报方向判断”（OWN-1 → OWN-2 的先例）；“验证与性能纪律”的“示例要实跑”与共享隔离环境规则（TOOL-4、TOOL-7）。改了错误分类、关闭所有权的条目按 [fix-contract-review](../../agent-skills/roost-coding/references/fix-contract-review.md) 复核。
+**先读的规范**（[roost-coding](../../agent-skills/roost-coding/SKILL.md)）：“生命周期与装配的复审要点”里的三步停机与“新的停机对象优先用共用类型”（APP-6～9、OPS-3）；“业务时钟与系统时钟”（CLK-*）；“反复出问题要上报方向判断”（OWN-1 → OWN-2 的先例）；“验证与性能纪律”的“示例要实跑”与共享隔离环境规则（TOOL-4、TOOL-7）。[roost-bugfix §7](../../agent-skills/roost-bugfix/SKILL.md)“交给 review 之前不留 WANTED”（TOOL-9）：本文各条的 review 检查点都是给 review 去查的问题，不含待判断的风险。改了错误分类、关闭所有权的条目按 [fix-contract-review](../../agent-skills/roost-coding/references/fix-contract-review.md) 复核。
 
 **本地复跑**（全部 `GOWORK=off`）：
 
@@ -43,9 +52,9 @@
 | [APP-4](#app-4) | `OnFail` 与统一 fail-stop | v1.20.0 / v1.21.0 | `d4ac9853` `cd8c1ad3` `2c1c7be7` | `app`、`kit/nest` |
 | [APP-5](#app-5) | `Live` 与 C5 契约 | v1.20.0 / v1.21.0 | `d4ac9853` `bd6df5e5` | `app`、`kit/redis` |
 | [APP-6](#app-6) | `Lifetime`、契约骨架、glsvet stophints | v1.20.2 | `50f2ac2a` | `internal/operation`、`internal/stopcontract`、`cmd/glsvet` |
-| [APP-7](#app-7) | `operation.Serial` 与 kit Mod 停止收敛 | v1.23.0（本版）；NC-233 / 234 v1.21.0 | `d05a04a1` `2c1c7be7` | `internal/operation`、`kit/redis`、`kit/mongo`、`kit/nats`、`kit/remoteentity` |
+| [APP-7](#app-7) | `operation.Serial` 与 kit Mod 停止收敛 | v1.23.0（本版）；NC-233 / 234 v1.21.0 | `d05a04a1` `02c8a10d` `b7471ae4` `2c1c7be7` | `internal/operation`、`kit/redis`、`kit/mongo`、`kit/nats`、`kit/remoteentity` |
 | [APP-8](#app-8) | 停机 hook 受预算 | v1.21.0 | `2c1c7be7` | `app` |
-| [APP-9](#app-9) | 启动失败收尾 | v1.20.2 | `d6550a16` | `app` |
+| [APP-9](#app-9) | 启动失败收尾 | v1.20.2 | `d6550a16`（`b7471ae4` 只挪注释） | `app` |
 | [APP-10](#app-10) | Degraded 算就绪 | v1.21.0 | `f6828f17` | `health`、`kit/ops` |
 | [APP-11](#app-11) | checker 期限 | v1.23.0（本版） | `7b73aabc` | `health`、`kit/ops` |
 | [APP-12](#app-12) | 退出原因进文件日志 | v1.23.0（本版） | `611d5d72` | `app` |
@@ -53,8 +62,8 @@
 | [OWN-1](#own-1) | 租约状态机期三处修复 | v1.20.0 | `18bb86ae` `a28a3152` `890abdda` | `demo/internal/service/game`（已删除的代码） |
 | [OWN-2](#own-2) | 玩家静态绑定 | v1.20.0 | `f051e24a` `021454d5` `c441fbdd` | `demo`、`kit/service/account`、`codegen/internal/roost` |
 | [OWN-3](#own-3) | 赠礼按 `FromSID` 路由 | v1.20.0 | `5bdac773` `c493a791` `ac5acfbe`（`054fdd66` 预算入配置） | `demo`、`codegen/internal/roost` |
-| [OWN-4](#own-4) | activity 用 `Live`；候选校验 | v1.20.0 / v1.20.1 | `f051e24a` `46c4dfba` | `demo` |
-| [OWN-5](#own-5) | 活动组文件 | v1.20.2 | `277e1252` | `kit/service/global/activity`、`demo`、`codegen/internal/roost` |
+| [OWN-4](#own-4) | activity 用 `Live`；候选校验 | v1.20.0 / v1.20.1 | `f051e24a` `46c4dfba` `d5682dc4` | `demo` |
+| [OWN-5](#own-5) | 活动组文件 | v1.20.2 | `277e1252` `d5682dc4` | `kit/service/global/activity`、`demo`、`codegen/internal/roost` |
 | [OWN-6](#own-6) | global `Bind` 幂等 | v1.23.0（本版） | `611d5d72` | `kit/service/global` |
 | [CLK-1](#clk-1) | 双时钟 | v1.21.0 | `b9fc5342` | `clock`、`app`、`kit/service/*`、`timer`、`ai`、`actionflow`、`cmd/glsvet`、`demo` |
 | [CLK-2](#clk-2) | match / chat / account 换钟，doctor | v1.21.0 | `fa472ee7` | `kit/service/{match,chat,account}`、`codegen/internal/roost` |
@@ -76,6 +85,8 @@
 | [TOOL-5](#tool-5) | 文档链接门禁 | v1.23.0（本版） | `d05a04a1` | 根包 |
 | [TOOL-6](#tool-6) | mirror-local.sh | v1.22.0（扩展 v1.23.0） | `b15e70c8` `db67b8ee` `d483238e` `ba13cb05` | `scripts` |
 | [TOOL-7](#tool-7) | 故障矩阵与验收锁 | v1.20.2（预跑 v1.23.0） | `6c1538be` `3e3350d5` `0a6155e5` | `scripts`、`kit/scripts/integration`、根包 |
+| [TOOL-8](#tool-8) | Windows 不保证正确 | v1.23.0（本版） | `7fec136e` | `README.md`、`docs/DEPLOYMENT.md`、`CHANGELOG.md` |
+| [TOOL-9](#tool-9) | 交给 review 前不留 WANTED | v1.23.0（本版） | `87d8d91e` | `docs/agent-skills/roost-bugfix` |
 
 ---
 
@@ -157,7 +168,7 @@
 
 **性能**：锁只在启动、每 3s 续期、停机时各一次 Redis 往返，不在请求路径上；方案 §8.3 判断不需要性能对照，没有基准数据。
 
-**未验证与风险**：两客户端在真实 Redis Cluster 上的 integration（`ROOST_REVIEW_CLUSTER` 用例跳过）；Redis Cluster 下的真实进程演练；跨主机 / 换卷（不在范围）。`c493a791` 与 obs34 之后的代码没有重跑演练（6b 在 `64acd782` 上测）。
+**未验证**：多机 Redis Cluster 切主下的两客户端 store 与真实进程演练（外部验证 E08；同机 3 主 3 从上 `redis-cluster-suites.sh` 已跑过，含 `./kit/redis`）；异步复制丢写与切主（E10）；多主机强杀（E13）。跨主机 / 换卷不在范围（维护者决定）。**本机未做**（不属于外部环境，已报汇总者）：`c493a791` 与 obs34 之后的代码没有重跑 §13 第 5 笔的真实进程演练（6b 在 `64acd782` 上测，App 锁方案 §13 第 5 笔“未验证”）。
 
 **review 检查点**：
 
@@ -183,7 +194,7 @@
 | `codegen/internal/roost/shutdown_budget.go:72` `generatedSingletonRelease`、`:93`、`:236-261` | 停机预算 +3s、摘要行 `+ 3s for the singleton release` 与回读正则 |
 | `codegen/internal/roost/render_deploy.go:248` `startupAllowance`、`:1029` `kubernetesStartupFailureThreshold` | shell `HEALTH_ATTEMPTS` 与 k8s `startupProbe` 按 `startup_wait + 30s` |
 | `codegen/internal/roost/catalog.go:47` | etcd 段 `service_prefix: /roost/services/` |
-| `etcd/driver/discovery.go:203` `Deregister`、`:248` `isLeaseNotFound` | 租约已不存在视为注销达成；注册循环退出后再取消一次 keepalive |
+| `etcd/driver/discovery.go:203` `Deregister`、`:250` `isLeaseNotFound` | 租约已不存在视为注销达成；注册循环退出后再取消一次 keepalive |
 
 **不变量**：opener 安装条件必须覆盖“默认启用 singleton 的服务”（否则启动即 fail-closed）；停机预算的 Release 份额与 App 的 `singletonReleaseBudget` 一致（`shutdown_budget.go:72` 注释写明镜像关系）。守卫：`codegen/internal/roost/singleton_promises_test.go` 六条（bootstrap 安装条件、只给 dataengine 服务打开、add mod 翻转与手改保持 + WARN、停机摘要含 Release 且能读回、doctor 计入 Release、部署启动等待）；`TestGeneratedEtcdServicePrefixSeparatesTheServerType`；etcd `TestDiscoveryDeregisterTreatsLeaseNotFoundAsDeregistered`、`TestAssemblyCloseTreatsLeaseNotFoundAsDeregistered`、`TestDiscoveryDeregisterStopsRegistrationThatCompletedDuringShutdown`、app `TestSingletonIsReleasedWhenAModStopReturnsAnOrdinaryError`；真机 `TestRealEtcdCloseAfterLeaseVanishedIsClean`（`-tags integration`）。
 
@@ -193,7 +204,7 @@
 - etcd 两处：记录写“真机回归修前红文本与演练日志相同”，演练日志原文为 `mod etcd stop: etcd Discovery: revoke: etcdserver: requested lease not found`；`service_prefix` 的修前红记录未保存。
 - 修后：`go test -count=1 ./codegen/...` 全绿；生成 game-demo `go build ./... && go vet ./...`、`go test ./internal/service/game/`；`shellcheck deploy/shell/*.sh deploy/docker/*.sh deploy/k8s/*.sh` 无输出。
 
-**未验证与风险**：kubeconform / `docker compose config` 未跑；真实 systemd / k8s 部署（E21 / E22）。
+**未验证**：真实 systemd 部署（E21）；k8s 部署物与滚动停机（E22，含 `startupProbe` 渲染能被集群接受；E22 记 compose 已在本机实跑）。
 
 **review 检查点**：
 
@@ -212,7 +223,7 @@
 
 **测试**：纯删除，没有先红后绿。用例去向：`global_test.go` 11 条、`promises_test.go` 两条、`guards_promises_test.go` 一条、`rr_20260929_round2_test.go` 整个文件随租约删除；混合用例改为覆盖迁移完成与二次 `Bind` 的 `conflict:bind`。修后 `go test -race -count=1 ./kit/service/global/...`、`go test -tags integration -count=1 -p 1 ./kit/service/global/... ./kit/service/integration/...`（隔离 Redis）、`go test -count=1 ./codegen/...`、`go generate ./...` porcelain 为空。
 
-**未验证与风险**：仓外调用方；旧键不自动清理。
+**兼容说明**（不是未验证项）：仓外调用方无法在仓内核对，按破坏性变更登记；旧 `<global.key_prefix>:lease:*` 键不自动清理，运维按 [DEPLOYMENT §7.1](../../DEPLOYMENT.md#71-升级后的手工清理) 手工删除。
 
 **review 检查点**：
 
@@ -273,7 +284,7 @@
 
 **测试**：C5 用例钉住现有行为，本来就绿，没有修前红（B9 / C5 方案 §5）。
 
-**源码与记录不一致**：App 锁方案 §3.6 写“一次调用最多 `MaxPageSize` 个 sid（与 `LiveGames` 的上限相同）”；`MaxPageSize` 已在第 3b 笔随 global 租约删除，源码是 `app.SingletonLiveMaxSIDs = 200`（`app/singleton.go:93`），CHANGELOG v1.20.0 写的也是 200。以源码为准。
+**源码与记录不一致**：App 锁方案 §3.6 写“一次调用最多 `MaxPageSize` 个 sid（与 `LiveGames` 的上限相同）”；`MaxPageSize` 已在第 3b 笔随 global 租约删除，源码是 `app.SingletonLiveMaxSIDs = 200`（`app/singleton.go:93`），CHANGELOG v1.20.0 写的也是 200。以源码为准；方案 §3.6 已加更正（2026-10-06，本次重核）。
 
 **review 检查点**：
 
@@ -292,7 +303,7 @@
 | `internal/operation/lifetime.go:23` `Lifetime`；`:31` `Begin`、`:42` `End`、`:53` `Stop`、`:67` `Stopping`、`:78` `Wait(ctx)` | 准入 / 在途计数 / 幂等关准入 / 在 ctx 内等排空（已排空时任何 ctx 都返回 nil，超时保留计数可重试） |
 | `bus/jetstream_rpc.go`、`sync/syncbus/driver/jetstream.go`、`sync/syncbus/mirror/envelope.go` | 三份手写门迁移到 `Lifetime`；另有 `nestwal/wal.go`、`nestwal/committer.go`、`dataengine/engine/projector.go`、`remoteentity/snapshot_client.go` 在用 |
 | `internal/stopcontract/stopcontract.go:30` `Hooks`、`:51` `Check`、`:110` `CallerReleases` | 骨架：首次超时返回 ctx 错误且资源保留 → 未放行时重试仍超时 → 放行后新 ctx 重试返回 nil 且资源确实释放 → 再调用返回 nil |
-| `cmd/glsvet/stophints.go`、`cmd/glsvet/main.go:37-39` | `-stophints`（缺省开）：带 ctx 的停止类函数里不受 ctx 约束的通道接收（跟进一层同包 helper）打印 `hint:` |
+| `cmd/glsvet/stophints.go`、`cmd/glsvet/main.go:38-41` | `-stophints`（缺省开）：带 ctx 的停止类函数里不受 ctx 约束的通道接收（跟进一层同包 helper）打印 `hint:` |
 
 **套用骨架的停止入口**：`manager/stop_contract_test.go`、`kit/nest/stop_contract_test.go`（`TestNestModStopContract`）、`sync/syncbus/driver/stop_contract_test.go`、`etcd/driver/stop_contract_test.go`、`sync/syncbus/mirror/stop_contract_test.go`、`remoteentity/stop_contract_test.go`、`bus/stop_contract_test.go`、`kit/ops/stop_contract_test.go`（`TestOpsStopContract`）、`codegen/internal/roost/player_tcp_stop_contract_promises_test.go`（生成 TCP，注入骨架源码运行）、`kit/remoteentity/remote_mirror_mod_promises_test.go`、`remoteentity/snapshot_client_promises_test.go`。
 
@@ -300,7 +311,7 @@
 
 **测试**（[A3 证据](../../bugfix/evidence/a3-stop-contract-20261005/README.md)）：骨架对故意写错的对象红——`retry Stop while the work is still in flight = <nil>`、`Stop returned without releasing the resource`；套到 NC-170 / 171 / 173 / 174 / NC-90 的修前实现、生成 TCP 的 NC-83 修前形状上都红（各自红文本在证据目录的 `*-prefix-red.txt`）；骨架在当时的 main 上发现 etcd `Assembly.Close` 第 4 步红（停完再 Close 返回 `context canceled`），补修为 `driver.Client.Close` 只关一次。迁移后原有 NC-90 / NC-172 / NC-174 回归 `-race -count=3` 通过。glsvet：NC-173 修前 `discovery.go` 命中 `Deregister(ctx) calls waitLoopDone …`，修后全仓非测试文件 0 条。
 
-**未验证与风险**：A3 ②（排空下沉到 `ISyncBus`）未做；`worker.Pool` 未改用 `Lifetime`。
+**范围外**：A3 ②（排空下沉到 `ISyncBus`）按维护者决定留到下个大版本；`worker.Pool` 自带等价的准入与排空，没有改用 `Lifetime`（A3 方案只迁移三份手写门）。
 
 **review 检查点**：
 
@@ -311,7 +322,7 @@
 <a id="app-7"></a>
 ### APP-7 `operation.Serial` 与 kit Mod 停止收敛
 
-**提交与首发**：v1.23.0 `d05a04a1`（RR-20261006-10，`Serial`、kit Mod 串行与数据竞争）、`02c8a10d`（roost-coding 写入口径）；v1.21.0 `2c1c7be7`（NC-233 Redis Mod、NC-234 remote_entity Mod）。驱动层的 Close 口径（redis / mongo / etcd / nats driver）属于 DRV 主题，本条只覆盖 `internal/operation.Serial` 与 kit Mod 一侧。
+**提交与首发**：v1.23.0 `d05a04a1`（RR-20261006-10，`Serial`、kit Mod 串行与数据竞争）、`02c8a10d`（roost-coding 写入口径）、`b7471ae4`（roost-coding 补 `RedisMod` 的 `sync.Mutex` 例外，只改规范）；v1.21.0 `2c1c7be7`（NC-233 Redis Mod、NC-234 remote_entity Mod）。驱动层的 Close 口径（redis / mongo / etcd / nats driver）属于 DRV 主题，本条只覆盖 `internal/operation.Serial` 与 kit Mod 一侧。
 
 **改动文件与关键符号**：
 
@@ -356,11 +367,11 @@
 
 - 修后：`go test -race -count=3 ./internal/operation ./redis/driver ./mongo/driver ./etcd/driver ./nats/driver ./kit/redis ./kit/mongo ./kit/nats` 通过；私有 redis-server 上 `-tags integration -race -count=3 -p 1 ./redis/driver ./kit/redis` 通过。NC-233 用例原来靠“再调一次驱动 Close 得到 ErrClosed”制造 Close 错误，驱动幂等后改为先关底层 `Raw()` 连接池。
 
-**未验证与风险**：三个 toxiproxy 用例与 `TestSingletonStoreGetAcrossClusterSlots` 本批跳过；Close 路径没有用真实 Mongo / etcd / NATS（用不可达地址验证）。
+**未验证**：三个 toxiproxy 用例本批没跑——它们覆盖的“丢回复 → 未知”路径本批没改（RR-20261006-10 修复记录）；`TestSingletonStoreGetAcrossClusterSlots` 需要 Cluster（`Get` 本批未改；多机 Cluster 见 E08）。**本机未做**（已报汇总者）：kit Mongo / Nats Mod 的 Close 路径用不可达地址验证，没有接真实 Mongo / NATS。
 
 **review 检查点**：
 
-1. roost-coding 写“停止入口的并发串行用 `operation.Serial`（不用 `sync.Mutex`）”，而 kit Redis Mod 用的是 `sync.Mutex`（`kit/redis/redis_mod.go:23`）：修复记录的理由是 go-redis Close 不等在途命令、持锁很短。确认 `StopWithContext` 持锁期间没有任何可能阻塞的调用，否则后到者的等待不受自己的 ctx 约束。
+1. roost-coding 的 Serial 一条写明了例外（[规范](../../agent-skills/roost-coding/SKILL.md)“生命周期与装配”，`b7471ae4`）：临界区很短、关闭不等在途工作的可以用 `sync.Mutex`，kit `RedisMod`（`kit/redis/redis_mod.go:23`）是举出的例子。确认 `StopWithContext`（`:131-147`）持 `mu` 期间只有取出 `asm` 与 `asm.Close()`（go-redis 的 Close），没有会等网络或在途工作的调用——否则后到者的等待不受自己的 ctx 约束，例外的前提不成立。
 2. `Serial.Lock` 返回 nil 后调用方必须恰好 `Unlock` 一次：检查 mongo / nats Mod 与 driver 的每条返回路径（`defer` 是否紧跟在成功的 `Lock` 之后）。
 3. Mongo / Nats Mod 在串行器上等到 ctx 结束时“保留 client / asm、下次 Stop 继续”：确认健康检查此时读到的状态与“停机未完成”一致。
 
@@ -385,7 +396,7 @@
 
 修后两个阶段都在预算附近返回 DeadlineExceeded；stopping 卡住时 Shutdown 0 次、Mod 停 0 次、不 Release；stopped 卡住时 Shutdown 1 次、Mod 停 1 次。`go test -race -count=3 ./app/` 通过。
 
-**未验证与风险**：真实进程里业务 hook 卡住时的 SIGTERM → 宽限期时序。
+**未验证**：部署平台的停机宽限期（E21 systemd、E22 k8s `terminationGracePeriodSeconds`）。**本机未做**（已报汇总者）：真实进程里业务 hook 卡住时 SIGTERM → `run` 按预算返回的时序（NC-231 修复记录“未验证”；单测已钉住 `run` 的返回时刻）。
 
 **review 检查点**：
 
@@ -395,9 +406,9 @@
 <a id="app-9"></a>
 ### APP-9 启动失败先收回 Service 已启动的部分（NC-193）
 
-**提交与首发**：v1.20.2 `d6550a16`。
+**提交与首发**：v1.20.2 `d6550a16`。`b7471ae4`（v1.23.0）只把 `stopModsReverse` 的文档注释挪回函数上方。
 
-**改动文件与关键符号**：`app/app.go:360-392`（Init 失败与 Init 之后的启动失败合成一条收尾）、`:553-554` `startupCleanupTimeout = 5s`、`:561` `shutdownAfterStartupFailure`（goroutine 里调 `Shutdown`，recover panic；返回 nil → 已停；ctx 错误 / 超时 / panic → 未停；其他错误 → 已停并并入）、`app/service.go`（`Service` 注释：启动失败时也会调用 `Shutdown`，必须容忍部分初始化）。
+**改动文件与关键符号**：`app/app.go:360-392`（Init 失败与 Init 之后的启动失败合成一条收尾）、`:550-551` `startupCleanupTimeout = 5s`、`:558` `shutdownAfterStartupFailure`（goroutine 里调 `Shutdown`，recover panic；返回 nil → 已停；ctx 错误 / 超时 / panic → 未停；其他错误 → 已停并并入）、`app/service.go`（`Service` 注释：启动失败时也会调用 `Shutdown`，必须容忍部分初始化）。
 
 **不变量**：Service 收不回时不停 Mod、不释放锁（与正常停机“Shutdown 不完整就保留依赖”一致）。守卫：`TestServiceInitFailureStopsWhatInitStartedBeforeTheMods`、`TestStartupCleanupThatDoesNotFinishKeepsTheModsAndTheLock`（`app/startup_cleanup_promises_test.go:38` / `:82`，配合 / 不配合两种）；既有 `TestSingletonIsReleasedAfterAStartupFailureStopsTheMods`（`app/singleton_test.go:1257`）不变。
 
@@ -415,13 +426,13 @@
 
 修后 `app` `-race -count=3` 通过；生成 game-demo build / vet / test 通过。
 
-**源码注释问题（不是文档与源码冲突）**：`app/app.go:550-552` 是 `stopModsReverse` 的文档注释，却紧挨着放在 `startupCleanupTimeout` 常量（`:553-554`）上方，`go doc` 会把它算作常量注释；函数本身在 `:594`，没有文档注释。只影响可读性，行为无关；建议下次动这段时把注释移回函数上方。
+**源码注释位置（已修）**：初稿基准 `02c8a10d` 上，`stopModsReverse` 的文档注释错放在 `startupCleanupTimeout` 常量上方，`go doc` 把它算作常量注释。`b7471ae4` 已把它挪回函数上方（现在注释 `app/app.go:591-593`、函数 `:594`），只改注释，行为无关。
 
 **review 检查点**：
 
 1. `shutdownAfterStartupFailure` 超时返回后 `Shutdown` goroutine 仍在跑：确认 `run` 返回后进程退出是唯一的回收方式（生产路径），测试里再次 `Run` 的泄漏可接受。
 2. 仓外 `app.Service` 实现若在 `Shutdown` 里解引用 Init 才设置的字段会 panic → “收尾不完整” → 不释放锁、键 TTL 过期：确认这是安全方向（不会形成两个写者）。
-3. `stopIncomplete(out.err)` 的分类（`:584`）与正常停机路径对 `Shutdown` 返回 ctx 错误的处理一致。
+3. `stopIncomplete(out.err)` 的分类（`:581`）与正常停机路径对 `Shutdown` 返回 ctx 错误的处理一致。
 
 <a id="app-10"></a>
 ### APP-10 `/readyz`：Degraded 算就绪（D1）
@@ -599,7 +610,9 @@ readyz_checker_deadline_promises_test.go:60: /readyz did not answer within 3.5s:
 
 **测试**：第 3 笔修前红（骨架上跑新用例，方案 §13 第 3 笔原文摘录）：`Serve(bound=2000) = <nil>, want player_elsewhere`、`a served player is not resident`、`background work for a player bound elsewhere left a resident record here`、`a write was admitted for a player this process does not serve: <nil>`、`closed 0 connections, want 2`、`Shutdown left served players connected: closed [], want 42 and 43`、`a login with no server_id reached the ownership table with [0]`、`the ownership table was asked about [0], want the session's bound sid 2000`。`021454d5` 变异红：`a player used between the session check and the mark was unloaded: dropped=[77]`、`the unload deleted the record the login created after it woke`。`c441fbdd` 变异红：`read (0, false) … want the role's server 1300`、`code=1 reason="server error", want login_timeout`。修后生成工程 `go test -race -count=3 ./internal/service/game/ ./game/controllers/player/ ./internal/access/...`，新用例 `-race -count=30`（obs34 为 `-count=50`）稳定。
 
-**未验证与风险**（方案 §13 观察，未改）：冷加载超过 `IdleUnload` 后实体留在内存、没有驻留记录；`Destroy` 永不返回时卸载 goroutine 与 `evictions` 条目泄漏；优雅停机先断会话、listener 仍开。
+**已判定维持现状的观察**（App 锁方案 §13 obs34，理由在记录里）：冷加载超过 `IdleUnload` 后实体留在内存、没有驻留记录（只占内存，WriteGate 照常拒绝）；`Destroy` 永不返回时卸载 goroutine 与 `evictions` 条目泄漏（根因在实体上永不结束的事务）；优雅停机先断会话、listener 仍开（只多一次重登，不形成两个写者）。
+
+**未验证**：多主机强杀与双实例（E13）。**本机未做**（已报汇总者）：`c493a791` 与 obs34 之后的模板没有重跑真实进程演练（同 APP-1）。
 
 **review 检查点**：
 
@@ -637,7 +650,7 @@ TestSendGiftWritesThisProcessSidAsTheSendersSid: StartGift got sender 4242 on si
 
 （记录另列 `TestAHandoffForAPlayerWeDoNotOwnIsDropped`、`TestAHandoffWhoseEnvelopeDisagreesWithItsPayloadIsRefused` 等红文本；`TestAStepDoesNotClaimASenderBoundElsewhere`、`TestAStepForASenderBeingUnloadedIsRefusedWithoutAHandoff` 在骨架上即绿，作守护。）`ac5acfbe` 修前红：`a refund gets at least 25.75s of retries … = 1m30s; past that the refund is marked manual_required`。`c493a791` 记录未保存修前红文本。真实进程演练 6a / 6b：两个 sid 各 10 个机器人 120 个 saga 全部终结；kill -9 时 7 个在途 saga 全部 compensated、没有 `manual_required`。
 
-**源码与记录不一致**：v1.20.0 CHANGELOG 与 App 锁方案 §13 obs34 写“生成的 `saga/gift_item/definition.go` 里 debit `MaxAttempts` 5 → 15”；v1.20.1 起预算由配置提供，当前源码 `demoGiftRefundBudget`（`codegen/internal/roost/demo.go:209`）改写的是配置里的空 `steps: {}` 块。以源码为准。另：v1.23.0 起 `saga.steps` 的类型 / 步骤名只差大小写时报歧义错误（RR-20261006-06，SAGA 主题），生成的 `gift_item` 为小写，不受影响。
+**源码与记录不一致**：v1.20.0 CHANGELOG 与 App 锁方案 §13 obs34 写“生成的 `saga/gift_item/definition.go` 里 debit `MaxAttempts` 5 → 15”；v1.20.1 起预算由配置提供，当前源码 `demoGiftRefundBudget`（`codegen/internal/roost/demo.go:209`）改写的是配置里的空 `steps: {}` 块。以源码为准；App 锁方案 §13 obs34 第 3 条已加更正注（2026-10-06，本次重核），CHANGELOG 历史段不改。另：v1.23.0 起 `saga.steps` 的类型 / 步骤名只差大小写时报歧义错误（RR-20261006-06，SAGA 主题），生成的 `gift_item` 为小写，不受影响。
 
 **review 检查点**：
 
@@ -648,11 +661,21 @@ TestSendGiftWritesThisProcessSidAsTheSendersSid: StartGift got sender 4242 on si
 <a id="own-4"></a>
 ### OWN-4 activity 改用 App 的 `Live`；候选校验
 
-**提交与首发**：v1.20.0 `f051e24a`（activity 部分）；v1.20.1 `46c4dfba`（RR-20261005-01）。v1.20.2 起候选来源换成组文件（OWN-5）。
+**提交与首发**：v1.20.0 `f051e24a`（activity 部分）；v1.20.1 `46c4dfba`（RR-20261005-01）。v1.20.2 起候选来源换成组文件（OWN-5）。v1.23.0 `d5682dc4`：核对 RR-20261005-01 的回归在 C4 后的去向，补守卫 `TestAGroupFitsOneLiveQuery`（只加测试与记录）。
 
 **改动文件与关键符号**：`demo/internal/service/game/activity.go.tmpl:65-67`（`liveness app.SingletonLiveness`）、`:95` `startActivity`（`:98-100` 取 `ModSingleton`）、`:329` `expectedGameSIDs`（`Live` 结果为空只等自己；报错本拍不开窗）。已删除：`incarnation`、`lease` / `leaseStanding`、`bindAndLease` 里的 `AcquireLease`、`renewLease`、`leaseNotOurs`、`activity_lease_test.go.tmpl`。
 
-**不变量**：expected 集合 = `Live` 返回的活 sid（用本进程的 `server_type` 查）。守卫：`TestTheExpectedServersAreTheOnesTheAppLockSeesAlive`（`activity_test.go.tmpl:144`）、`TestActivityRefusesToStartWithoutTheAppLockLiveness`（`:187`）；RR-20261005-01 的 `TestActivityRefusesACandidateListNoWindowCouldOpenWith` 在 C4 后演变为 `TestActivityRefusesAGroupNoWindowCouldOpenWith`（`:235`）。
+**不变量**：expected 集合 = `Live` 返回的活 sid（用本进程的 `server_type` 查）。守卫：`TestTheExpectedServersAreTheOnesTheAppLockSeesAlive`（`activity_test.go.tmpl:144`）、`TestActivityRefusesToStartWithoutTheAppLockLiveness`（`:187`）。
+
+**RR-20261005-01 的回归在 C4 后的去向**（[修复记录末节](../../bugfix/RR-20261005-01.md)，`d5682dc4` 逐项核对）：C4（`277e1252`）删 `activity.game_sids` 时把 `TestActivityRefusesACandidateListNoWindowCouldOpenWith` 一并删掉；承诺“注定开不出窗口的候选集在启动时、任何远端调用之前按键名拒绝”仍然需要，由组文件兑现：
+
+| 旧子用例 | 现在的覆盖 |
+| --- | --- |
+| `a-repeated-sid` | 模板 `TestActivityRefusesAGroupNoWindowCouldOpenWith/a-repeated-sid`（`activity_test.go.tmpl:235`）；kit `TestAGroupsFileThatCannotBeUsedIsRefusedByName/repeated-sid`（`kit/service/global/activity/groups_promises_test.go:79`） |
+| `a-sid-beyond-int32` | 模板 `…/a-sid-beyond-int32`；kit `…/beyond-int32`、`…/non-positive` |
+| `more-candidates-than-one-live-query`（> 200） | 一组至多 `MaxExpectedGames`（64）个成员、加载时拒绝；64 ≤ `app.SingletonLiveMaxSIDs`（200），一组的 `Live` 查询不会因候选过多失败。模板 `…/more-than-the-coordinator-takes`；kit `TestAGroupLargerThanOneWindowIsRefusedWhenLoaded`（`groups_promises_test.go:44`）、`TestModSweepsTheGroupsInTheGroupsFile/an-unusable-file-stops-init`。新守卫 `TestAGroupFitsOneLiveQuery`（`kit/service/global/activity/groups_live_limit_promises_test.go:15`）：两个常量改一个不改另一个时先红 |
+| `own-sid-and-non-positive-entries-are-skipped` | 不再适用：本服必须在某个组里（否则启动拒绝），非正数从“跳过”收紧为“拒绝” |
+| `exactly-one-live-query-is-accepted` | 恰好 64 个成员的组接受且能开窗：模板 `…/a-full-group-is-accepted`、kit `TestAFullGroupOpensAWindowWithTheCoordinator` |
 
 **测试**：第 3 笔修前红：`expected [1300], want exactly the live sids [1300 1302]`、`a Live query that failed produced an expected set`、`startActivity error "activity: game: capability \"service.global.activity\" not found; ..." does not name the missing capability`。RR-20261005-01 修前红（[修复记录](../../bugfix/RR-20261005-01.md)原文）：
 
@@ -668,10 +691,19 @@ $ GOWORK=off go test -race -count=1 -run TestActivityRefusesACandidateListNoWind
 FAIL
 ```
 
+`d5682dc4` 的变异证明（临时改源码，记录原文）：把 `MaxExpectedGames` 改成 201 →
+
+```
+an activity group may hold 201 game servers (MaxExpectedGames) but one App.Live query takes at most 200 (app.SingletonLiveMaxSIDs); ...
+```
+
+模板侧把 `activityGroup` 挪到协调器能力查找之后，`TestActivityRefusesAGroupNoWindowCouldOpenWith` 的六个拒绝子用例全红（与修前同一形状）；恢复后 `go test -count=1 -race ./internal/service/game/` 通过。
+
 **review 检查点**：
 
 1. `expectedGameSIDs` 用 `registry.Config().GetString("server_type")`（`run` 写入）而不是写死 `"game"`。
 2. `Live` 报错时本拍不开窗（不是退化为只等自己）：对照 APP-5 检查点 1。
+3. `TestAGroupFitsOneLiveQuery` 只比较两个常量：确认 game-demo 一次 `Live` 查的确实是“整组成员”，而不是组成员之外再加别的 sid（否则组上限不足以保证不超过 200）。
 
 <a id="own-5"></a>
 ### OWN-5 活动组文件（C4）
@@ -685,10 +717,10 @@ FAIL
 | `kit/service/global/activity/groups.go:58` `LoadGroupsFile`、`:80` `ParseGroups`、`:110-112` 64 上限、`:137` `Of`、`:146` `IDs` | 唯一的解析与校验 |
 | `kit/service/global/activity/types.go:223` `MaxExpectedGames = 64` | 组上限 = 协调器单窗口 expected 上限，同一个常量 |
 | `kit/service/global/activity/activity_mod.go:117-125` | 读 `activity.groups_file`；`sweep_groups` 为空时取文件里的组 |
-| `demo/internal/service/game/activity.go.tmpl:115`、`:171-184` `activityGroup` | game 按本进程 sid 找组；未配文件、不合格都启动报错 |
+| `demo/internal/service/game/activity.go.tmpl:115`、`:178-198` `activityGroup` | game 按本进程 sid 找组；未配文件、不合格都启动报错 |
 | `codegen/internal/roost/activity_groups.go:22` | 生成 `configs/activity_groups.yaml`（只创建一次） |
 
-**不变量**：组文件的规则只有一份；同一文件被协调器与 game 读。守卫：`kit/service/global/activity/groups_promises_test.go` 的 `TestAGroupLargerThanOneWindowIsRefusedWhenLoaded`（`:44`）、`TestAFullGroupOpensAWindowWithTheCoordinator`（`:56`）、`TestAGroupsFileThatCannotBeUsedIsRefusedByName`（`:79`）、`TestGroupsAnswerWhichGroupASIDIsIn`（`:111`）、`TestModSweepsTheGroupsInTheGroupsFile`（`:142`）；生成工程 `TestActivityRefusesAGroupNoWindowCouldOpenWith`、`TestAWindowOpensForTheGroupTheFilePutsThisServerIn`（`activity_test.go.tmpl:235` / `:285`）；codegen `activity_groups_promises_test.go`。
+**不变量**：组文件的规则只有一份；同一文件被协调器与 game 读。守卫：`kit/service/global/activity/groups_promises_test.go` 的 `TestAGroupLargerThanOneWindowIsRefusedWhenLoaded`（`:44`）、`TestAFullGroupOpensAWindowWithTheCoordinator`（`:56`）、`TestAGroupsFileThatCannotBeUsedIsRefusedByName`（`:79`）、`TestGroupsAnswerWhichGroupASIDIsIn`（`:111`）、`TestModSweepsTheGroupsInTheGroupsFile`（`:142`）、`TestAGroupFitsOneLiveQuery`（`groups_live_limit_promises_test.go:15`，v1.23.0 `d5682dc4`：组上限不超过一次 `Live` 的上限）；生成工程 `TestActivityRefusesAGroupNoWindowCouldOpenWith`、`TestAWindowOpensForTheGroupTheFilePutsThisServerIn`（`activity_test.go.tmpl:235` / `:285`）；codegen `activity_groups_promises_test.go`。
 
 **测试**：修前红（[C4 方案 §6](../../feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md)原文）：
 
@@ -699,7 +731,7 @@ FAIL
 
 修后 kit `go test -race -count=3` 通过；生成工程 build / vet / test 全绿；`second-game.sh` 的 `SECOND_SID=1005` 启动前退出并点名文件。
 
-**未验证与风险**：协调器 `OpenActivity` 不核对 expected 集合属于 Key 的组；没有真实依赖进程演练。
+**未做**（[C4 方案](../../feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md)“未做”，已报汇总者）：协调器 `OpenActivity` 不核对 expected 集合是否属于 Key 的组（记录：会改 `Service` 逻辑，留待需要时再做）。没有在真实依赖上起进程演练——记录的理由是启动拒绝发生在任何远端调用之前，单测与生成工程测试已覆盖。
 
 **review 检查点**：
 
@@ -714,7 +746,7 @@ FAIL
 
 **改动文件与关键符号**：`kit/service/global/service.go:55-95` `Bind`：`Create` 返回 `!created` 时 `Get`；`found` 且 group 与 globalSID 一致 → `Replayed("bind")` 返回已存绑定；否则 `Conflict("bind")` 并返回带已存 group / sid 的 `ErrConflict`；`Get` 出错原样返回。
 
-**不变量**：只有“已存的绑定指向别处”才是冲突。守卫：`TestBindRetriedAfterUnknownOutcomeReturnsTheSameBinding`（`kit/service/global/bind_retry_promises_test.go:33`，同时钉住换 group、换 globalSID 两种仍报冲突、`conflict:bind` 计 2、库里绑定不变）；`kit/service/integration` `TestGlobalRunsOnRedis`（真实 Redis）。
+**不变量**：只有“已存的绑定指向别处”才是冲突。守卫：`TestBindRetriedAfterUnknownOutcomeReturnsTheSameBinding`（`kit/service/global/bind_retry_promises_test.go:33`，同时钉住换 group、换 globalSID 两种仍报冲突、`conflict:bind` 计 2、库里绑定不变）；`kit/service/integration` `TestGlobalRunsOnRedis`（`kit/service/integration/redis_test.go:502`，真实 Redis；`ba13cb05` 在 `:517-525` 补同参数重试返回同一绑定、换 group 仍 `ErrConflict` 两条断言）。
 
 **测试**：修前红（[问题记录](../../bug/RR-20261006-05.md)原文）：
 
@@ -818,7 +850,7 @@ $ GOWORK=off go test -count=1 -run TestDoctorNamesTheServicesWhoseLogicOffsetDis
 
 1. `account` 的名字预约 TTL 由名字目录自己的钟管（Mod 不注入，`time.Now`）：确认它与 `Config.Now` 的业务时间没有被拿来比较。
 2. doctor 只在三套配置内部各自比较、不跨套比较：确认 prod example 偏移 0 与 dev 偏移 24h 并存时为 OK。
-3. glsvet 生成工程里剩下的 5 处 `//glsvet:system-clock` 豁免（当前源码：`purchase.go.tmpl:63` 支付时间、`start_gift.go.tmpl:48` 与 `gift_saga.go.tmpl:360` saga 截止、`playerowner.go.tmpl:119` / `:125` 驻留与闲置卸载）理由是否都属于系统用途。D-L3 §3.2 的表把后两处写成“玩家归属租约”，静态绑定后那里已没有按玩家的租约，豁免注释写的是 “residency and idle unload are leases”——用途是闲置判定，读系统钟合理，只是文档措辞过时。
+3. glsvet 生成工程里剩下的 5 处 `//glsvet:system-clock` 豁免（当前源码：`purchase.go.tmpl:63` 支付时间、`start_gift.go.tmpl:48` 与 `gift_saga.go.tmpl:360` saga 截止、`playerowner.go.tmpl:119` / `:125` 驻留与闲置卸载）理由是否都属于系统用途（后两处是闲置判定，豁免注释写 “residency and idle unload are leases”）。D-L3 §3.2 的表原写“玩家归属租约”，已按源码更正为“驻留与闲置卸载”（2026-10-06，本次重核）。
 
 <a id="clk-3"></a>
 ### CLK-3 业务时间只许前进
@@ -863,7 +895,7 @@ $ GOWORK=off go test -count=1 -run 'TestBusinessTimeMovingBackRefusesToStart|Tes
 
 （`TestTheHighWaterMarkAdvancesWhileRunning` 修前：`high-water mark stayed at 0001-01-01 00:00:00 +0000 UTC while the service ran`。）修后 `go test -race -count=3 ./app/ ./clock/ ./service/mail/ ./kit/service/mail/ ./kit/service/global/activity/` 通过；真实 Redis `-tags integration -run TestBusinessTimeHighWaterMarkOnRealRedis ./kit/redis/` 通过。
 
-**未验证与风险**：没开锁、偏移为 0 的进程不检查；只在单机 Redis 上验证（单键，不涉及跨槽）。
+**设计范围**：没开锁、偏移为 0 的进程不检查（方案写明）。**未验证**：只在单机 Redis 上验证（单键，不涉及跨槽）；多机 Cluster 切主见 E08。
 
 **review 检查点**：
 
@@ -919,7 +951,7 @@ $ GOWORK=off go test -count=1 -run 'TestBusinessTimeMovingBackRefusesToStart|Tes
 
 **提交与首发**：v1.21.0 `5abae51e`（`e320578c` 标注）。
 
-**改动文件与关键符号**：`timer/scheduler.go:3-6`（包注释：触发顺序）、`:29-31` `UnhandledDroppedMetric`、`:43-45` `Node.Priority`、`:143` `NewTimer` = priority 0、`:148` `NewTimerWithPriority`、`:165` `ReportUnhandledTypes`、`:305` 删除无 handler 节点时计数、`:401-411` `timerHeap.Less`（End → Priority → ID）；`demo/db/def/world.go.tmpl:46-51`（`TimerNode.Priority`，`bson:"priority"`，旧文档按 0 读回）；`demo/game/entities/world/timer_component.go.tmpl:115`（`OnInitFinish` 调 `ReportUnhandledTypes`，从 DAO 建一次调度器）。
+**改动文件与关键符号**：`timer/scheduler.go:3-6`（包注释：触发顺序）、`:29-31` `UnhandledDroppedMetric`、`:43-45` `Node.Priority`、`:142` `NewTimer` = priority 0、`:148` `NewTimerWithPriority`、`:165` `ReportUnhandledTypes`、`:305` 删除无 handler 节点时计数、`:405-414` `timerHeap.Less`（End → Priority → ID）；`demo/db/def/world.go.tmpl:46-51`（`TimerNode.Priority`，`bson:"priority"`，旧文档按 0 读回）；`demo/game/entities/world/timer_component.go.tmpl:115`（`OnInitFinish` 调 `ReportUnhandledTypes`，从 DAO 建一次调度器）。
 
 **不变量**：顺序是全序（ID 唯一），与入堆顺序、存储遍历顺序无关；`ChangeTimer` 与按返回值重排都保留 ID（“最初登记的顺序”）。守卫：`TestTimersWithTheSameDeadlineFireInRegistrationOrder`、`TestPriorityOrdersTimersWithTheSameDeadline`、`TestPriorityIsKeptThroughStorageAndRescheduling`、`TestADueTimerWithoutAHandlerIsDroppedWithAWarningAndACount`、`TestStoredTypesWithoutAHandlerAreReportedOncePerType`（`timer/order_and_unhandled_promises_test.go:35` / `:86` / `:105` / `:162` / `:202`）；game-demo `TestDeadlinesDueAtTheSameMomentFireInArmOrder`、`TestAStoredTimerOfATypeWithNoHandlerIsReportedAndCountedWhenDropped`、`TestTimerPriorityIsStoredAndOrdersAfterARestart`。NC-140 / 141 / 147 的回归照样通过。
 
@@ -999,7 +1031,7 @@ game-demo：
 
 **提交与首发**：v1.23.0 `7b73aabc`（第十二轮 kit 批 §2）。
 
-**改动文件与关键符号**：`metrics/metrics.go:469` `Registry.DeleteSeries`（空 `match` 不删；`name` 空表示任何名字；四种类型都删；归还 `r.series[name]` 名额）、`:502` `SeriesCount`、`:201` 包级 `DeleteSeries`；`robot/loadtest/manager.go:585` `appendHistoryLocked`（挤出历史时 `metrics.DeleteSeries("", {"run": RunID})`）、`:598` `runIDInUseLocked`（同名 RunID 在跑或在历史里不删）。
+**改动文件与关键符号**：`metrics/metrics.go:469` `Registry.DeleteSeries`（空 `match` 不删；`name` 空表示任何名字；四种类型都删；归还 `r.series[name]` 名额）、`:502` `SeriesCount`、`:201` 包级 `DeleteSeries`；`robot/loadtest/manager.go:585` `appendHistoryLocked`（挤出历史时 `metrics.DeleteSeries("", {"run": RunID})`）、`:599` `runIDInUseLocked`（同名 RunID 在跑或在历史里不删）。
 
 **不变量**：删除后序列不在 Snapshot / `/metrics` 里、名额归还；同名同标签再写入是新序列。守卫：`TestDeleteSeriesRemovesEveryKindByLabelAndReturnsTheQuota`（`metrics/delete_series_promises_test.go:11`）、`TestRunSeriesLeaveTheRegistryWithTheRunRecord`（`robot/loadtest/run_series_lifecycle_promises_test.go:21`，`HistoryLimit=2` 连跑 6 次）。
 
@@ -1010,6 +1042,8 @@ run_series_lifecycle_promises_test.go:66: series count kept growing across runs:
 ```
 
 `metrics` 包的用例是新 API，记录未保存修前红文本。修后 `go test -race -count=3 ./metrics ./robot/loadtest` 通过。
+
+**未做**（[第十二轮 kit 批 §2](../../feature/DECISIONS-R12-KIT-2026-10-06.md#2-metrics-按标签删除)，已报汇总者）：O3 的 `nest.dispatch.*{dispatcher}`（Nest 属核心线，原观察只记录）与 `bus_rpc_pending{method}`（受 2048 上限约束）没有接 `DeleteSeries`；记录写“拥有者需要时直接调用”。
 
 **review 检查点**：
 
@@ -1022,7 +1056,7 @@ run_series_lifecycle_promises_test.go:66: series count kept growing across runs:
 
 **提交与首发**：v1.21.0 `2c1c7be7`（NC-230 与 N02 O1，`897a1dd9` 标注）。
 
-**改动文件与关键符号**：`kit/ops/ops_mod.go:31-37`（`defaultAdminTimeout = 10s`、`adminWriteMargin = 5s`、`defaultWriteTimeout = 15s`）、`:76-80`（读 `ops.admin_timeout`，写了就必须为正）、`:139-177` `Start`（`:156` 写超时 = max(15s, admin_timeout + 5s)；`:163` `net.Listen`；`:167-175` 登记 server 与实际地址、goroutine 里 `server.Serve(listener)`）、`:191` `commandTimeout`、`:351-360`（命令因期限返回 `context.DeadlineExceeded` → 504 + `effects are unknown`）；`app/config_validation.go:266`（登记 `ops.admin_timeout` 为严格时长键）。
+**改动文件与关键符号**：`kit/ops/ops_mod.go:31-37`（`defaultAdminTimeout = 10s`、`adminWriteMargin = 5s`、`defaultWriteTimeout = 15s`）、`:76-80`（读 `ops.admin_timeout`，写了就必须为正）、`:139-178` `Start`（`:156` 写超时 = max(15s, admin_timeout + 5s)；`:163` `net.Listen`；`:167-175` 登记 server 与实际地址、goroutine 里 `server.Serve(listener)`）、`:191` `commandTimeout`、`:351-360`（命令因期限返回 `context.DeadlineExceeded` → 504 + `effects are unknown`）；`app/config_validation.go:266`（登记 `ops.admin_timeout` 为严格时长键）。
 
 **不变量**：`Start` 返回 nil 就表示探针与运维端点已在监听；配合 ctx 的命令到期返回之后回复一定写得出去。守卫：`TestOpsStartFailsWhenTheAddressIsTaken`（`kit/ops/listen_promises_test.go:20`）、`TestOpsStartServesOnTheBoundAddress`（`kit/ops/stop_contract_test.go:19`，断言写超时 ≥ 命令期限 + 5s）、`TestOpsStopContract`（`:45`，A3 骨架套 OpsMod，卡住的工作是不配合 ctx 的 admin 命令，`CallerReleases`）、`TestOpsAdminCommandRunsUnderTheConfiguredDeadline`（`kit/ops/admin_deadline_promises_test.go:23`）。
 
@@ -1042,6 +1076,8 @@ admin 期限修前红（[Ops admin 期限方案](../../feature/OPS-ADMIN-TIMEOUT
 
 修后 `go test -race -count=3 ./kit/ops/ ./app/` 通过。
 
+**未验证**：真实 shell / systemd 部署下端口冲突的完整进程链（E21）。
+
 **review 检查点**：
 
 1. `Start` 持 `serverMu` 做 `net.Listen`（`:143-144` 加锁并 defer 解锁，`:163` bind）：bind 是本地系统调用、不等待网络，确认不会长时间持锁挡住并发的 `StopWithContext`（`TestConcurrentOpsStartStopUsesCapturedServer` 覆盖）。
@@ -1053,7 +1089,7 @@ admin 期限修前红（[Ops admin 期限方案](../../feature/OPS-ADMIN-TIMEOUT
 
 **提交与首发**：v1.23.0 `7b73aabc`（第十二轮 kit 批 §4）。
 
-**改动文件与关键符号**：`kit/ops/ops_mod.go:405` `bearerToken`（没有大小写不敏感的 `bearer ` 前缀返回空串）、`:387` `authorized`（`X-Admin-Token` 或 Bearer，`:415` `secretEqual` 常量时间比较；空串永远不等于 token）。
+**改动文件与关键符号**：`kit/ops/ops_mod.go:405` `bearerToken`（没有大小写不敏感的 `bearer ` 前缀返回空串）、`:387` `authorized`（`X-Admin-Token` 或 Bearer，`:417` `secretEqual` 常量时间比较；空串永远不等于 token）。
 
 **守卫**：`TestOpsAdminAuthorizationAcceptsOnlyTheExactToken`（`kit/ops/ops_mod_test.go:115`，“bare authorization”移到拒绝组，加“padded bare token”）、`TestOpsAdminAuthorizationRejectsEverythingWithoutAConfiguredToken`（`:146`）。
 
@@ -1075,7 +1111,7 @@ admin 期限修前红（[Ops admin 期限方案](../../feature/OPS-ADMIN-TIMEOUT
 **review 检查点**：
 
 1. `store` 标签取键前缀（`RedisConfig.Prefix`）：确认每个存储一个固定值、没有把带业务 ID 的前缀传进来（低基数）。
-2. account / activity 等直接用 `versionstore.RedisStore` 的服务自动获得计数，没有逐服务的用例（记录“未做”）：review 时抽查一个服务的 `Update` 调用确实经过 `redis_store.go:369`。
+2. account / activity 等直接用 `versionstore.RedisStore` 的服务自动获得计数（计数在 versionstore 一处、有用例，第十二轮 kit 批没有逐服务补用例）：抽查一个服务的 `Update` 调用确实经过 `redis_store.go:369`。
 
 <a id="ops-6"></a>
 ### OPS-6 game-demo 仪表盘补两个面板
@@ -1099,7 +1135,7 @@ panel "复制会话重开放弃（按原因，5 分钟内次数）" queries scen
 
 **提交与首发**：v1.23.0 `7b73aabc`（RR-20261006-09）。
 
-**改动文件与关键符号**：`robot/runner/runner.go:275-310` `runPopulation`：`launched`（在线目标数，缩容减回去）与 `lastOrdinal`（已发出的最大序号，只增）分开；扩容时先 `lastOrdinal++` 再 `index := lastOrdinal`（`:289-290`）；`IdentityProvider` 注释写明序号可能超过 `Count`。
+**改动文件与关键符号**：`robot/runner/runner.go:273-341` `runPopulation`：`launched`（在线目标数，缩容减回去）与 `lastOrdinal`（已发出的最大序号，只增）分开；扩容时先 `lastOrdinal++` 再 `index := lastOrdinal`（`:289-290`）；`IdentityProvider` 注释写明序号可能超过 `Count`。
 
 **守卫**：`TestStageRegrowDoesNotReuseOrdinals`（`robot/runner/stage_ordinal_promises_test.go:17`）；原有 `TestStagedRampUpAndDown`（6 → 1 的在线数）不变。
 
@@ -1242,12 +1278,40 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 
 **测试**：NC-207 修前红：替身 go 输出 `no tests to run` 时修前全部 go test 格 PASS、矩阵 exit 0；修后 8 个 go test 格 `FAIL(no tests ran)`、矩阵 exit 1；控制：替身输出真实 `--- PASS:` 时全部 PASS（脚本与输出见 [NC-207 修复](../../bugfix/RR-20261005-NC-207.md)，问题记录没有抄录可复制的红文本）。v1.23.0 预跑：`ROOST_REMOTE_MATRIX_LABEL=matrix-relprep-20261006 bash scripts/test-remote-matrix.sh`，17:22:13 → 17:26:30，业务 12 格与 lease-process（3）、redis-cluster、redis-unreplicated-fence、durable-process、ownership-counters（13）、mongo-wal-recovery、broker-failover（3）、broker-network（3）、final-health 全部 PASS、无 SKIP；源码 `d6a677e0`。
 
-**未验证与风险**：预跑不在最终发版提交上；NC-207 修后的整张矩阵在 v1.20.2 时没有在真实隔离环境上跑（修复记录“未验证”），之后由每次发版前矩阵覆盖。
+**发版步骤**（不是未验证项）：预跑在 `d6a677e0` 上；按惯例在最终发版提交上再跑一次（发版前补充验证 §5“发版仍按惯例在最终 HEAD 再跑一次”，外部验证清单“每版 pretag 重跑”）。NC-207 修复记录写的“修后的整张矩阵没有在真实隔离环境上跑”已由这次预跑闭环：`d6a677e0` 含 NC-207 与 A5，21 格全 PASS、无 SKIP。
 
 **review 检查点**：
 
 1. 新增的矩阵格是否同时登记进 `TestFaultMatrixScriptNamesEveryFullEnvironmentSuite` 的检查范围。
 2. `--- SKIP:` 仍记 FAIL：确认新增用例在共享环境缺依赖时不会以 SKIP 静默通过。
+
+<a id="tool-8"></a>
+### TOOL-8 平台支持：Windows 不保证正确
+
+**提交与首发**：v1.23.0 `7fec136e`（只改文档；维护者 2026-10-06 第十三轮）。
+
+**改动文件**：`README.md`（“平台支持”一段；CI 一句改为“Linux 上跑完整矩阵、Windows 只跑一个 `go test ./...` 兼容性 job”）、`docs/DEPLOYMENT.md` 开头、`CHANGELOG.md`（v1.23.0 一条）、`docs/bug/WANTED.md`（W-2026-10-04-05 标“暂存”）、[外部验证清单](../../review/EXTERNAL-VERIFICATION-2026-10-06.md) E25（状态改“暂存”）与 E27（通过标准里 Windows 部分暂存）、`docs/review/DECISIONS-PENDING-2026-10-05.md` 第十三轮表。
+
+**不变量**：正确性只在 Linux（生产）与 macOS（开发）上保证和验证；Windows 的编译、CLI 制品与 CI 兼容性 job 保留，但任何 Windows 行为都不作为发版条件。代码与 CI 配置没有改。
+
+**测试**：只改文档，没有红绿测试；`TestTrackedMarkdownRelativeLinksResolve`（TOOL-5）覆盖新加的链接。
+
+**未验证**：Windows 一律“暂存，不保证正确”（E25；E27 的 Windows 部分）。
+
+**review 检查点**：本分册与另两份分册里提到 Windows 的地方（未验证项、已知限制）是否都写成“暂存，不保证正确”，没有写成待修或待验证。
+
+<a id="tool-9"></a>
+### TOOL-9 交给 review 之前不留 WANTED
+
+**提交与首发**：v1.23.0 `87d8d91e`（只改规范；维护者 2026-10-06 第十三轮）。
+
+**改动文件**：[roost-bugfix §7](../../agent-skills/roost-bugfix/SKILL.md)：`docs/bug/WANTED.md` 不再是“实现侧写给 review 拍板的候选表”，实现侧看到的疑点（签名承诺了但实现没履行 / 跨包契约对不上 / 读源码推断出的风险）本轮自己闭环——能写出红测试的按 RR 修；写不出红的加结构性守卫或写清不可达的证明并关闭；真正需要产品决定的直接提给维护者。WANTED 只作历史分流记录，新条目同一轮内必须转为 RR / 守卫 / 关闭。
+
+**不变量**：交给 review 时 WANTED 未决数为 0；review 检查点只放“给 review 去查的问题”，不放“已知风险待判断”。本分册的落实：W-2026-10-06-02 → RR-20261006-10（APP-7）；W-2026-10-06-01 → RR-20261006-12（`b7471ae4`，NONCORE 分册）；本分册各条的 review 检查点都是可核对的问题。
+
+**测试**：只改规范，没有红绿测试。
+
+**review 检查点**：`docs/bug/WANTED.md` 里 2026-10-06 之后的条目是否都已标“已转 RR / 关闭 / 暂存”；三份分册的 review 检查点里有没有残留“待判断”“待 review 拍板”的措辞。
 
 ---
 
@@ -1267,7 +1331,8 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 | `TestBusinessTimeMovingBackRefusesToStart` | `app/business_time_promises_test.go:48` | 业务时间只许前进 | CLK-3 |
 | `TestDoctorNamesTheServicesWhoseLogicOffsetDisagrees` | `codegen/internal/roost/logic_offset_doctor_promises_test.go:50` | 同一套配置偏移一致 | CLK-2 |
 | `singleton_promises_test.go` 六条 | `codegen/internal/roost` | 生成的 opener / 配置 / 停机预算 / 启动等待 | APP-2 |
-| `TestNetworkCodegenTestsRunInSomeWorkflow`（C9，不属于本部分） | 根包 `ci_generated_code_test.go:184` | codegen 联网用例在某个 workflow 里跑 | — |
+| `TestAGroupFitsOneLiveQuery` | `kit/service/global/activity/groups_live_limit_promises_test.go:15` | 活动组上限不超过一次 `App.Live` 的上限 | OWN-4、OWN-5 |
+| `TestNetworkCodegenTestsRunInSomeWorkflow`（C9，不属于本部分） | 根包 `ci_generated_code_test.go:184` | codegen 联网用例在某个 workflow 里跑 | NONCORE-31（另一分册） |
 
 ## 按包的改动索引
 
@@ -1294,10 +1359,11 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 | `kit/remoteentity` | APP-7、APP-13 |
 | `kit/etcd` | APP-3 |
 | `kit/service/global` | APP-3、OWN-6 |
-| `kit/service/global/activity` | OWN-5、CLK-1、CLK-4 |
+| `kit/service/global/activity` | OWN-4、OWN-5、CLK-1、CLK-4 |
 | `kit/service/{mail,rank,session}`、`service/mail`、`service/session` | CLK-1、CLK-4、OPS-1 |
 | `kit/service/{match,chat,account}`、`service/match` | CLK-2、OPS-1、OPS-5、OWN-2（`account.ServerIDClaim`） |
 | `codegen/internal/roost` | APP-2、APP-3、OWN-2～5、CLK-2、OPS-1、OPS-6 |
 | `demo/`（game-demo 模板） | OWN-1～5、CLK-1、CLK-6、OPS-6 |
 | `scripts`、`codegen/scripts`、`kit/scripts/integration` | TOOL-1、TOOL-2、TOOL-6、TOOL-7 |
 | 根包（`*_test.go`） | TOOL-2～5、TOOL-7 |
+| 文档与规范（`README.md`、`docs/DEPLOYMENT.md`、`docs/agent-skills/*`） | APP-6、APP-7、TOOL-4、TOOL-8、TOOL-9 |

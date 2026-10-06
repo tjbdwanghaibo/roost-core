@@ -1,14 +1,15 @@
 # v1.23.0 说明 · APP / OWN / CLK / OPS / TOOL 部分
 
-> 范围：`git log v1.19.2..02c8a10d` 里属于 App 生命周期（APP）、玩家所有权与活动组（OWN）、业务时钟（CLK）、运维可观测（OPS）、发版工具与门禁（TOOL）的全部改动。
+> 范围：`git log v1.19.2..e6828e4f` 里属于 App 生命周期（APP）、玩家所有权与活动组（OWN）、业务时钟（CLK）、运维可观测（OPS）、发版工具与门禁（TOOL）的全部改动。
 > 读者：维护者（先读每条的“一句话”和“兼容与迁移”）与 review agent（每条末尾链到[实现文档](impl-app-own-clk-ops-tool.md)的同编号条目）。
-> 源码基准：提交 `02c8a10d`（本版发版前 main）。历史记录与源码不一致处以源码为准，并在条目里注明。
+> 源码基准：代码冻结提交 `e6828e4f`（本版发版前 main）。初稿按 `02c8a10d` 写，2026-10-06 按冻结提交重核全部引用并补上 `02c8a10d..e6828e4f` 的改动（重核记录见[实现文档开头](impl-app-own-clk-ops-tool.md#recheck)）。历史记录与源码不一致处以源码为准，并在条目里注明。
 > 其他主题（SAGA / DRV / DAO / REM / CFG / SKILL / NONCORE）由另外两份分册说明；本分册提到它们时只写主题名，不加链接。
 
 ## 目录
 
 - [条目总表](#条目总表)
 - [本部分的版本时间线](#本部分的版本时间线)
+- [平台支持](#平台支持)
 - [需要业务或运维改动的清单](#需要业务或运维改动的清单)
 - [APP：App 生命周期](#app)
 - [OWN：玩家所有权与活动组](#own)
@@ -63,8 +64,10 @@
 | [TOOL-5](#tool-5) | 根包门禁：跟踪的 Markdown 相对链接必须指向跟踪的文件 | v1.23.0（本版） | 新门禁 | 否 | 否 |
 | [TOOL-6](#tool-6) | `scripts/mirror-local.sh`：本机私有依赖进程上的 Mirror 故障与性能；本版加 `test-core` 等 | v1.22.0（扩展 v1.23.0） | 新工具 | 否 | 否 |
 | [TOOL-7](#tool-7) | 故障矩阵：没跑用例的格记 FAIL，全局运维命令持验收锁；本版预跑 21 格全 PASS | v1.20.2（预跑记录 v1.23.0） | 是 | 否 | 否 |
+| [TOOL-8](#tool-8) | 平台支持写明：正确性只在 Linux / macOS 上保证，Windows 不保证正确，Windows 相关问题暂存 | v1.23.0（本版） | 否（只改文档） | 否 | 视情况（不要在 Windows 上部署生产） |
+| [TOOL-9](#tool-9) | 流程：交给 review 之前不留 WANTED，疑点本轮闭环（RR / 结构性守卫 / 不可达证明） | v1.23.0（本版） | 否（只改规范） | 否 | 否 |
 
-共 39 条：APP 13、OWN 6、CLK 6、OPS 7、TOOL 7。
+共 41 条：APP 13、OWN 6、CLK 6、OPS 7、TOOL 9。
 
 ## 本部分的版本时间线
 
@@ -75,7 +78,11 @@
 | v1.20.2（2026-10-06） | `c85d4565` | APP-6、APP-9、OWN-5、OPS-1、TOOL-1（origin 不可达）、TOOL-7（无用例记 FAIL、持锁） |
 | v1.21.0（2026-10-06） | `4881f2b7` | APP-4（停机期非零退出）、APP-5（C5）、APP-7（NC-233 / 234）、APP-8、APP-10、APP-13（`clock.business`）、CLK-1、CLK-2、CLK-4 的拆分、CLK-6、OPS-3、TOOL-3 |
 | v1.22.0（2026-10-06） | `9bf690fb` | CLK-3、CLK-4（合并回业务钟）、TOOL-6 |
-| v1.23.0（本版） | 待打 | APP-7（`Serial`）、APP-11、APP-12、APP-13（`singleton_incarnation`）、OWN-6、CLK-5、OPS-2、OPS-4～7、TOOL-2、TOOL-4、TOOL-5、TOOL-6 扩展、TOOL-7 预跑 |
+| v1.23.0（本版） | 待打 | APP-7（`Serial` 与 `RedisMod` 例外）、APP-11、APP-12、APP-13（`singleton_incarnation`）、OWN-4 / OWN-5（RR-20261005-01 回归去向与组上限守卫）、OWN-6、CLK-5、OPS-2、OPS-4～7、TOOL-2、TOOL-4、TOOL-5、TOOL-6 扩展、TOOL-7 预跑、TOOL-8、TOOL-9 |
+
+## 平台支持
+
+正确性只在 Linux（生产）与 macOS（开发）上保证和验证。**Windows 不保证正确**：可以编译、CLI 有 Windows 制品、CI 有一个 `go test ./...` 兼容性 job，但信号与进程树、`project sync` 暂存目录清理、行尾（autocrlf）、hotcode 插件（Go `plugin` 不支持 Windows）等没有在真实 Windows 上验证，已知问题暂存不修。维护者原话（2026-10-06，第十三轮）：“windows的问题可以暂存，加一个说明 window问题不保证正确”。生产请部署在 Linux。本分册各条的“已知限制 / 外部验证”不再单列 Windows，一律按“暂存，不保证正确”处理（[TOOL-8](#tool-8)；外部验证 E25、E27 的 Windows 部分）。
 
 ## 需要业务或运维改动的清单
 
@@ -103,6 +110,7 @@
 | 18 | 运维脚本 | `/admin/*` 用 `Authorization: Bearer <token>` 或 `X-Admin-Token`；超过 10s 的配合 ctx 的命令调大 `ops.admin_timeout` | OPS-3、OPS-4 |
 | 19 | 自定义 robot `IdentityProvider` | 按“`Count` + 每次扩回的数量”准备身份，序号不再复用 | OPS-7 |
 | 20 | 新增示例的贡献者 | 登记进根包 `exampleRuns`；示例模块依赖变化时在该模块 `GOWORK=off go mod tidy` | TOOL-4 |
+| 21 | 部署方 | 不要在 Windows 上部署生产服务（Windows 不保证正确，相关问题暂存） | TOOL-8 |
 
 ---
 
@@ -135,7 +143,7 @@
 
 **兼容与迁移**：不开就与以前完全相同。开启后：崩溃重启的新进程最多等约 `ttl`（实测 15.0s）才启动 Mod；Redis 连续不可用约 10s 以上进程会 fail-stop 退出（需要更宽容时调大 `ttl`）；`singleton.enabled=true` 而 bootstrap 没装 opener 启动失败（`app.ErrSingletonOpenerMissing`）。v1.20.2 起 `singleton.enabled: on` 之类的非布尔写法启动校验报错（NC-190，属 CFG 主题）。v1.23.0 起 store 的 `Close` 出错后再调返回 nil（APP-7）。
 
-**已知限制 / 外部验证**：跨主机、换卷、网络分区、Redis failover 丢键不在范围内（维护者决定）。P1 恢复到收到 NotHeld 之间（一次 Redis 往返）可能多发生一次非 DataEngine 副作用，列为接受的边界。真实 Redis Cluster 下两客户端的 integration 与多机切主未验证（外部验证 E08 / E10 / E13）。
+**已知限制 / 外部验证**：跨主机、换卷、网络分区、Redis failover 丢键不在范围内（维护者决定）。P1 恢复到收到 NotHeld 之间（一次 Redis 往返）可能多发生一次非 DataEngine 副作用，列为接受的边界。多机 Redis Cluster 切主下的两客户端与真实进程演练（外部验证 E08；同机 3 主 3 从已跑过 Cluster 套件）、异步复制丢写（E10）、多主机强杀（E13）未验证。本机的真实进程演练在 `64acd782` 上做，`c493a791` 与 obs34 之后的代码没有重跑（App 锁方案 §13 第 5 笔“未验证”；本机可做，已报汇总者）。
 
 **链接**：[实现 APP-1](impl-app-own-clk-ops-tool.md#app-1) · [方案与实施记录](../../feature/APP-SINGLETON-LOCK-2026-10-05.md) · [USER_GUIDE 单实例锁](../../USER_GUIDE.md#单实例锁singleton)
 
@@ -159,7 +167,7 @@
 
 **兼容与迁移**：已生成工程不自动加 `singleton` 段；未改过的 `shutdown:` 段由 `roost project sync` 随新公式刷新。`etcd.service_prefix` 需要手工补 `/`，同一部署的所有进程一起改（注册与查询用同一前缀，混跑期间互相看不见）。
 
-**已知限制 / 外部验证**：kubeconform / `docker compose config` 对新模板的渲染、真实 systemd / k8s 部署（E21 / E22）未在本机执行。
+**外部验证**：真实 systemd 部署（E21）；k8s 部署物与滚动停机（E22，含 `startupProbe` 渲染被集群接受；E22 记 compose 已在本机实跑）。
 
 **链接**：[实现 APP-2](impl-app-own-clk-ops-tool.md#app-2) · [方案 §13 第 2 笔、第 5 笔](../../feature/APP-SINGLETON-LOCK-2026-10-05.md)
 
@@ -251,9 +259,9 @@
 
 **兼容与迁移**：依赖“第二次 Close 报错”判断已关闭的调用方改用命令错误 `errors.Is(err, goredis.ErrClosed)`；App 停机路径每个 Mod 只串行调一次，不受影响。
 
-**已知限制**：kit Redis Mod 用的是普通 `sync.Mutex`（go-redis Close 不等在途命令、持锁很短），没有用 `Serial`；见实现文档检查点。
+**规范里的例外**：kit Redis Mod 的停止入口用普通 `sync.Mutex`，没有用 `Serial`——go-redis 的 Close 不等在途命令、持锁很短，后到者不会被拖过自己的 ctx。roost-coding 已把它写成明确例外（`b7471ae4`）：临界区很短、关闭不等在途工作的可以用 `sync.Mutex`，关闭要等排空的仍用 `Serial`。
 
-**链接**：[实现 APP-7](impl-app-own-clk-ops-tool.md#app-7) · [RR-20261006-10 修复](../../bugfix/RR-20261006-10.md) · [NC-233](../../bugfix/RR-20261005-NC-233.md) · [NC-234](../../bugfix/RR-20261005-NC-234.md)
+**链接**：[实现 APP-7](impl-app-own-clk-ops-tool.md#app-7) · [RR-20261006-10 修复](../../bugfix/RR-20261006-10.md) · [roost-coding 生命周期一节](../../agent-skills/roost-coding/SKILL.md) · [NC-233](../../bugfix/RR-20261005-NC-233.md) · [NC-234](../../bugfix/RR-20261005-NC-234.md)
 
 <a id="app-8"></a>
 ### APP-8 停机阶段的 lifecycle hook 受停机总预算约束
@@ -267,6 +275,8 @@
 **现在的行为**：hook 超时返回 `app: lifecycle <phase> hooks did not return within the shutdown budget: context deadline exceeded`。`stopped` 阶段卡住只让 `run` 按预算返回，剩余时间不够时 Release 跳过（键在 ttl 内过期），释放规则不变。启动阶段的 hook 仍同步派发（启动由 k8s startupProbe 兜底）。
 
 **兼容与迁移**：按时返回的 hook 行为不变。自写停机 hook 应配合 ctx。
+
+**已知限制 / 外部验证**：部署平台的停机宽限期见 E21 / E22。真实进程里业务 hook 卡住时 SIGTERM → `run` 按预算返回的时序没有在真实进程上演练（NC-231 记录“未验证”；本机可做，已报汇总者）。
 
 **链接**：[实现 APP-8](impl-app-own-clk-ops-tool.md#app-8) · [NC-231 修复](../../bugfix/RR-20261005-NC-231.md)
 
@@ -283,7 +293,7 @@
 
 **兼容与迁移**：**契约收紧**：`app.Service.Shutdown` 必须容忍部分初始化（Init 返回错误时也会被调用）。仓内实现都已满足（生成的 servicerpc、game 模板、examples 返回 nil 或逐字段判 nil）；外部 Service 若在 Shutdown 里解引用 Init 才设置的字段会 panic，被 recover 成“收尾不完整”，进程以启动错误退出、不释放锁（安全方向）。
 
-**已知限制**：真实 game-demo 进程里制造 Init 中途失败未验证（需要整套依赖与故障注入）。
+**已知限制**：真实 game-demo 进程里制造 Init 中途失败没有演练（NC-193 记录“未验证”，需要整套依赖与故障注入；本机可做，已报汇总者）。`stopModsReverse` 的文档注释原来错放在 `startupCleanupTimeout` 上方，`b7471ae4` 已挪回（只改注释）。
 
 **链接**：[实现 APP-9](impl-app-own-clk-ops-tool.md#app-9) · [NC-193 修复](../../bugfix/RR-20261005-NC-193.md)
 
@@ -394,7 +404,7 @@
 
 **兼容与迁移**：**破坏性（模板层）**：已生成工程不迁移（维护者决定）。客户端收到 `player_elsewhere` 改连 `owner_sid` 对应服的网关，`owner_sid=0` 时重新 `SelectRole` 并按返回的 `Session.ServerID` 连接。
 
-**已知限制**（方案 §13 观察，未改）：冷加载超过 `IdleUnload` 时实体可能留在内存却没有驻留记录（只占内存）；`EntityManager.Destroy` 永不返回时卸载 goroutine 泄漏；优雅停机先断会话、listener 仍开，立即重连的客户端可能在本进程多登录一次（不形成两个写者）。
+**已知限制**（App 锁方案 §13 obs34 的观察，已判定维持现状，理由在记录里）：冷加载超过 `IdleUnload` 时实体可能留在内存却没有驻留记录（只占内存）；`EntityManager.Destroy` 永不返回时卸载 goroutine 泄漏；优雅停机先断会话、listener 仍开，立即重连的客户端可能在本进程多登录一次（不形成两个写者）。
 
 **链接**：[实现 OWN-2](impl-app-own-clk-ops-tool.md#own-2) · [静态绑定方案](../../feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md) · [App 锁方案 §7、§13 第 3 笔](../../feature/APP-SINGLETON-LOCK-2026-10-05.md) · [GAME_DEMO_TEMPLATE §9.15](../../feature/GAME_DEMO_TEMPLATE.md)
 
@@ -411,7 +421,7 @@
 
 **兼容与迁移**：**破坏性（模板层）**：已生成工程须手工合并 `gift_saga.go`、`gift.go`、`start_gift.go`、`send_gift.go`；进行中的旧赠礼（载荷无 `from_sid`）不会被执行。
 
-**源码与记录不一致（以源码为准）**：v1.20.0 CHANGELOG 与 App 锁方案 §13 obs34 写的是“生成的 `saga/gift_item/definition.go` 里 debit `MaxAttempts` 5 → 15”；v1.20.1 起步骤预算改由配置提供（U-0280，`054fdd66`），现在由 codegen 把 `saga.steps.gift_item.debit.max_attempts: 15` 写进 game 服务的三份配置（`codegen/internal/roost/demo.go` `demoGiftRefundBudget`），`definition.go` 不再写预算。
+**源码与记录不一致（以源码为准）**：v1.20.0 CHANGELOG 与 App 锁方案 §13 obs34 写的是“生成的 `saga/gift_item/definition.go` 里 debit `MaxAttempts` 5 → 15”；v1.20.1 起步骤预算改由配置提供（U-0280，`054fdd66`），现在由 codegen 把 `saga.steps.gift_item.debit.max_attempts: 15` 写进 game 服务的三份配置（`codegen/internal/roost/demo.go:209` `demoGiftRefundBudget`），`definition.go` 不再写预算。App 锁方案 §13 obs34 已加更正注（2026-10-06）；CHANGELOG 历史段不改。
 
 **已知限制**：两个 sid 同时跑时 demo 场景成本 p95 落进 16.384s 的桶（赠礼步骤弹一两次才转交到位），超过 loadtest 缺省 `-max-p95 16`。
 
@@ -426,7 +436,7 @@
 
 **维护者决定**：“走 App 级别，不需要各个模块单独处理”（方案 §7.2）。
 
-**现在的行为**：Live 为空时 expected 只有自己；Live 报错时本拍不开窗；`routing.Bind` 的组绑定保留。RR-20261005-01 修复后 `startActivity` 在任何远端调用之前按键名报错、`Service.Init` 失败。v1.20.2 起候选来源换成组文件（OWN-5），`activity.game_sids` 不再存在。
+**现在的行为**：Live 为空时 expected 只有自己；Live 报错时本拍不开窗；`routing.Bind` 的组绑定保留。RR-20261005-01 修复后 `startActivity` 在任何远端调用之前按键名报错、`Service.Init` 失败。v1.20.2 起候选来源换成组文件（OWN-5），`activity.game_sids` 不再存在；原回归随 C4 改为组文件形态的 `TestActivityRefusesAGroupNoWindowCouldOpenWith`，“候选超过一次 `Live` 上限（200）”这条承诺改由组上限（64）兑现，v1.23.0 加守卫 `TestAGroupFitsOneLiveQuery`（`d5682dc4`，逐项对照见 RR-20261005-01 修复记录末节）。
 
 **兼容与迁移**：game 服务必须 `singleton.enabled: true`（生成默认）。崩溃的进程最多算 15s（原来 30s）。
 
@@ -443,11 +453,11 @@
 
 **维护者决定**：第三轮 C4 原话“game 组应该是一个配置文件，上限暂定是 64 个”（[C4 方案](../../feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md)）；不迁移已生成的工程。
 
-**现在的行为**：组内重复、一个 sid 属于两个组、非正数或超出 int32、未知字段、组 id 空或含 `/`、成员超过 64、game 的 sid 不在任何组里，都在启动时点名文件、组、sid 报错。协调器的 `activity.groups_file` 可选：设置后启动校验，`sweep_groups` 为空时 sweep 扫文件里全部组（显式 `sweep_groups` 仍优先）。game-demo：组 id 来自文件（`gameactivity.Key` 多一个组参数），贡献榜键加组（`<prefix>:board:<组>:<窗口>`）；Dockerfile 与 shell `install.sh` 把文件拷进镜像 / release；`second-game.sh` 启动前检查 sid 在组文件里。文件默认组 id 为工程名（与原常量相同，Redis 里已有的窗口键不变）。
+**现在的行为**：组内重复、一个 sid 属于两个组、非正数或超出 int32、未知字段、组 id 空或含 `/`、成员超过 64、game 的 sid 不在任何组里，都在启动时点名文件、组、sid 报错。协调器的 `activity.groups_file` 可选：设置后启动校验，`sweep_groups` 为空时 sweep 扫文件里全部组（显式 `sweep_groups` 仍优先）。game-demo：组 id 来自文件（`gameactivity.Key` 多一个组参数），贡献榜键加组（`<prefix>:board:<组>:<窗口>`）；Dockerfile 与 shell `install.sh` 把文件拷进镜像 / release；`second-game.sh` 启动前检查 sid 在组文件里。文件默认组 id 为工程名（与原常量相同，Redis 里已有的窗口键不变）。组上限 64 不超过 `app.SingletonLiveMaxSIDs`（200），一组的 `Live` 查询不会因成员过多失败；两个常量由守卫 `TestAGroupFitsOneLiveQuery` 钉住（v1.23.0，`d5682dc4`）。
 
 **兼容与迁移**：**破坏性（模板层）**：game 配置键 `activity.game_sids` 删除；旧工程的 game 代码仍读旧键、不受影响。新生成的 game-demo 需要 core ≥ v1.20.2。某环境要不同分组时挂载覆盖 `/app/configs/activity_groups.yaml` 或改 `activity.groups_file`。
 
-**已知限制**：协调器 `OpenActivity` 不核对 expected 集合是否属于 Key 的组；没有在真实依赖上起进程演练。
+**已知限制**：协调器 `OpenActivity` 不核对 expected 集合是否属于 Key 的组（C4 记录“未做”：会改 `Service` 逻辑，留待需要时再做；已报汇总者）。没有在真实依赖上起进程演练，C4 记录的理由是启动拒绝发生在任何远端调用之前，单测与生成工程测试已覆盖。
 
 **链接**：[实现 OWN-5](impl-app-own-clk-ops-tool.md#own-5) · [C4 方案](../../feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md)
 
@@ -460,7 +470,7 @@
 
 **维护者决定**：第十一轮收尾第 4 批。只比较 group 与 globalSID；没有用“请求 ID 记进值里”（要改持久格式，A2 ③ 已决定暂不做）。
 
-**现在的行为**：同参数重复 `Bind` 由 `ErrConflict` 改为成功；迁移中而 globalSID 仍是请求值时也返回成功（原 `Bind` 确实成功过）；已迁移走（globalSID 变了）的迟到重试仍报冲突；`Get` 出错原样返回（仍是结果未知）。
+**现在的行为**：同参数重复 `Bind` 由 `ErrConflict` 改为成功（真实 Redis 上由 `TestGlobalRunsOnRedis` 断言，`ba13cb05`，退回修复即红）；迁移中而 globalSID 仍是请求值时也返回成功（原 `Bind` 确实成功过）；已迁移走（globalSID 变了）的迟到重试仍报冲突；`Get` 出错原样返回（仍是结果未知）。
 
 **兼容与迁移**：行为放宽，RPC wire 不变。
 
@@ -529,7 +539,7 @@
 
 **兼容与迁移**：**测试环境破坏性**：偏移改小超过“距上次运行的真实时间 + 1 分钟”拒绝启动；要回到过去只能清库重建（连同这个键）。只删键保留数据等于跳过守卫，不要这样做。开了单实例锁的进程多一个不过期的 Redis 键、每 10s 一次 CAS。
 
-**已知限制**：没开单实例锁、偏移为 0 的进程不检查（部署里只有这类进程时检查不到）；进程崩溃时高水位最多落后 10s（容差吸收）；只在单机 Redis 上验证。
+**已知限制**：没开单实例锁、偏移为 0 的进程不检查（部署里只有这类进程时检查不到，方案写明）；进程崩溃时高水位最多落后 10s（容差吸收）；只在单机 Redis 上验证（多机 Cluster 切主见 E08）。
 
 **链接**：[实现 CLK-3](impl-app-own-clk-ops-tool.md#clk-3) · [方案与实施](../../feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md) · [D-L3 方案 §10](../../feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md#10-业务时间只许前进2026-10-06下一轮规划第-1-项)
 
@@ -615,7 +625,7 @@
 
 **兼容与迁移**：新 API。长期运行的控制面序列数不再随运行次数增长。
 
-**已知限制**：O3 的 `nest.dispatch.*{dispatcher}` 与 `bus_rpc_pending{method}` 未改（前者属核心线，后者有 2048 上限）。
+**已知限制**：O3 的 `nest.dispatch.*{dispatcher}` 与 `bus_rpc_pending{method}` 没有接 `DeleteSeries`（第十二轮 kit 批记录“未做”：前者属核心线，后者有 2048 上限，拥有者需要时直接调用；已报汇总者）。
 
 **链接**：[实现 OPS-2](impl-app-own-clk-ops-tool.md#ops-2) · [第十二轮 kit 批 §2](../../feature/DECISIONS-R12-KIT-2026-10-06.md#2-metrics-按标签删除)
 
@@ -632,7 +642,7 @@
 
 **兼容与迁移**：**行为收紧**：同机多实例必须各配 `ops.addr`（k8s 每 Pod 独立网络命名空间不受影响）；原来超过 10s 的配合 ctx 的命令（大批量 DLQ requeue 等）需要调大 `ops.admin_timeout`。APP-1 的 P2 场景里，P1 卡住仍占着 ops 端口时，P2 现在在 ops Start（DataEngine 之前）就失败退出。
 
-**已知限制**：真实 shell / systemd 部署下端口冲突的完整进程链未验证。
+**外部验证**：真实 shell / systemd 部署下端口冲突的完整进程链（E21）。
 
 **链接**：[实现 OPS-3](impl-app-own-clk-ops-tool.md#ops-3) · [NC-230 修复](../../bugfix/RR-20261005-NC-230.md) · [Ops admin 期限方案](../../feature/OPS-ADMIN-TIMEOUT-2026-10-06.md)
 
@@ -758,7 +768,7 @@
 
 **维护者决定**：随 RR-20261006-10 实施；58 处全部修正，没有为它们加豁免。
 
-**兼容与迁移**：写文档时链接到不存在的文件会让根包测试失败。
+**兼容与迁移**：写文档时链接到不存在的文件会让根包测试失败；本版发版文档（含本分册与方案的互链）同样受它约束。门禁不检查锚点。
 
 **链接**：[实现 TOOL-5](impl-app-own-clk-ops-tool.md#tool-5) · [RR-20261006-10 修复末节](../../bugfix/RR-20261006-10.md)
 
@@ -769,7 +779,7 @@
 
 **背景**：维护者原话（[下一轮规划 §3](../../review/NEXT-ROUND-PLAN-2026-10-06.md)）：“mirror 的第 6 项看下能否在本机用别的方式替代。”
 
-**现在的行为**：根目录缺省 `$TMPDIR/roost-mirror-local`，端口偏移缺省 20000；拒绝 `~/.roost-it` 与偏移 0 / 1000（共享环境与历史默认环境）；启动前清掉继承的 `ROOST_DATAENGINE_IT_*`，不读共享 env.sh；私有根不取 A5 验收锁。本版扩展：`test-core`（`ROOST_MIRROR_LOCAL_CORE_RUN` 覆盖缺省 `^TestMirrorLocal`）、`fault redis-cluster-stop-replica` / `redis-cluster-cont`、生成工程用例 `ROOST_MIRROR_LOCAL_ONLY` 支持逗号分隔（如 `S1,S7`）、Cluster 就绪判定加“每个主节点有 online 副本”。
+**现在的行为**：根目录缺省 `$TMPDIR/roost-mirror-local`，端口偏移缺省 20000；拒绝 `~/.roost-it` 与偏移 0 / 1000（共享环境与历史默认环境）；启动前清掉继承的 `ROOST_DATAENGINE_IT_*`，不读共享 env.sh；私有根不取 A5 验收锁。本版扩展：`test-core`（`ROOST_MIRROR_LOCAL_CORE_RUN` 覆盖缺省 `^TestMirrorLocal`）、`fault redis-cluster-stop-replica` / `redis-cluster-cont`、生成工程用例 `ROOST_MIRROR_LOCAL_ONLY` 支持逗号分隔（如 `S1,S7`）、Cluster 就绪判定加“每个主节点有 online 副本”（`ba13cb05`：之前副本还在全量同步时墓碑 WAIT 按 `no_replicas` 跳过，`TestMirrorLocalTombstoneWaitOnClusterGoesToTheKeysPrimary` 单独跑必红；测试环境脚本的就绪判定，不是产品缺陷）。
 
 **已知限制**：替代不了 Linux 内核网络、跨主机真实分区、长时间容量（外部验证 E01 / E02 / E15）。
 
@@ -786,9 +796,41 @@
 
 **现在的行为**：矩阵与 `scripts/perf/remote.sh` 取得锁后导出 `ROOST_REMOTE_ACCEPTANCE_LOCK_HELD`，自己调起的 heal / remote-fault 照常执行；锁被别人持有时 `dataengine-env.sh` 的改环境命令与 `scripts/remote-fault.sh` 以 2 拒绝。预跑结果目录在主检出（被忽略）的 `artifacts/perf/remote/matrix-relprep-20261006/`。
 
-**已知限制**：预跑在 `d6a677e0` 上，不是最终发版提交；“发版仍按惯例在最终 HEAD 再跑一次”（记录原文）。
+**发版步骤**（不是未验证项）：预跑在 `d6a677e0` 上；“发版仍按惯例在最终 HEAD 再跑一次”（记录原文；外部验证清单“每版 pretag 重跑”）。
 
 **链接**：[实现 TOOL-7](impl-app-own-clk-ops-tool.md#tool-7) · [NC-207 修复](../../bugfix/RR-20261005-NC-207.md) · [NC-203 修复与 A5 补修](../../bugfix/RR-20261005-NC-203.md) · [发版前补充验证 §5](../../bugfix/PRERELEASE-VERIFICATION-2026-10-06.md)
+
+<a id="tool-8"></a>
+### TOOL-8 平台支持：Windows 不保证正确
+
+**一句话**：README“平台支持”、DEPLOYMENT 开头与 CHANGELOG 写明：正确性只在 Linux（生产）与 macOS（开发）上保证和验证，Windows 不保证正确，Windows 相关问题暂存不修。
+
+**背景**：W-2026-10-04-05（Windows 上 `project sync` 暂存目录仍被占用、demo 模板测试清理失败两次，RR-20261004-12 已修，是否为全部原因待 Windows 实跑）、外部验证 E25（Windows CLI 信号与进程树、暂存树、autocrlf）与 E27 的 Windows 部分都需要真实 Windows 环境；README 原来写“CI 在 Linux 与 Windows 上运行完整测试矩阵”，与实际（Windows 只跑一个 `go test ./...` 兼容性 job）不符。
+
+**维护者决定**（第十三轮，2026-10-06）：“windows的问题可以暂存，加一个说明 window问题不保证正确”。
+
+**现在的行为**：代码与 CI 不变（Windows 仍可编译、有 CLI 制品与兼容性 job）；文档口径改为“不保证正确”。W-2026-10-04-05 标“暂存”，E25 状态改“暂存”，E27 通过标准里 Windows 部分暂存。
+
+**兼容与迁移**：不要在 Windows 上部署生产服务。
+
+**已知限制 / 外部验证**：Windows 一律“暂存，不保证正确”（E25；E27 的 Windows 部分），不阻塞发版。
+
+**链接**：[实现 TOOL-8](impl-app-own-clk-ops-tool.md#tool-8) · [README 平台支持](../../../README.md) · [DEPLOYMENT](../../DEPLOYMENT.md) · [外部验证 E25](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)
+
+<a id="tool-9"></a>
+### TOOL-9 交给 review 之前不留 WANTED
+
+**一句话**：roost-bugfix §7 改为：实现侧看到的疑点本轮自己闭环（能写出红测试的按 RR 修；写不出红的加结构性守卫或写清不可达证明并关闭；真正的产品决定直接提给维护者），`docs/bug/WANTED.md` 只作历史分流记录，新条目同一轮内必须转为 RR / 守卫 / 关闭。
+
+**背景**：之前 WANTED 是“实现侧写给 review 拍板的候选表”，实现侧看到可疑处不改、写一条等 review 三选一。v1.23.0 发版文档初稿汇总时仍有 W-2026-10-06-01、glsvet A1 间接调用、stepTransition 盲区等待判断的疑点。
+
+**维护者决定**（第十三轮，2026-10-06）：“这次不能有wanted，需要都解决后再给review, review是查问题”。
+
+**现在的行为**：交给 review 时 WANTED 未决数为 0；review 检查点只放给 review 去查的问题，不放“已知风险待判断”。本分册：W-2026-10-06-02 → RR-20261006-10（APP-7）；W-2026-10-06-01 → RR-20261006-12（`b7471ae4`，NONCORE 分册）。其余疑点的闭环属于 SAGA / REM / DAO 分册。
+
+**兼容与迁移**：只改流程规范，不影响代码与业务。
+
+**链接**：[实现 TOOL-9](impl-app-own-clk-ops-tool.md#tool-9) · [roost-bugfix §7](../../agent-skills/roost-bugfix/SKILL.md)
 
 ---
 
@@ -798,18 +840,23 @@
 
 | # | 项 | 涉及条目 |
 | --- | --- | --- |
-| E08 | 驱动、单实例锁、Lua 布局在多机 Redis Cluster 切主下 | APP-1、APP-5、CLK-3 |
+| E08 | 驱动、单实例锁、Lua 布局在多机 Redis Cluster 切主下 | APP-1、APP-5、APP-7、CLK-3 |
 | E10 | 异步复制丢写与切主：锁 | APP-1 |
-| E13 | 多主机强杀：双实例、旧回调 | APP-1、APP-4、OWN-2 |
-| E21 | 真实 systemd 的 shell 部署与回滚（`HEALTH_ATTEMPTS`） | APP-2 |
+| E13 | 多主机强杀：双实例、旧回调、跨服赠礼 | APP-1、APP-4、OWN-2、OWN-3 |
+| E21 | 真实 systemd 的 shell 部署与回滚（`HEALTH_ATTEMPTS`、停机宽限期、ops 端口冲突） | APP-2、APP-8、OPS-3 |
 | E22 | k8s 滚动停机与部署物（`startupProbe`、停机预算） | APP-2、APP-8 |
 | E24 | 仓库外生产配置的 doctor 检查（含 `time:logic_offset`） | CLK-1、CLK-2 |
 | E01 / E02 / E15 | Linux 内核网络、跨主机分区、长时间容量 | TOOL-6 |
+| E25、E27（Windows 部分） | Windows：**暂存，不保证正确** | TOOL-8 |
 
-另外两项本机未做、记录里明确写了的：Redis Cluster 下单实例锁的真实进程演练（App 锁方案 §13 第 5 笔“未验证”）；本版最终 HEAD 上的故障矩阵（TOOL-7）。
+说明：
+
+- Redis Cluster 下单实例锁的真实进程演练（App 锁方案 §13 第 5 笔“未验证”）在 E08 的“怎么做”里（多机 Cluster 上按 §13 的步骤做两个 sid 的演练）。
+- 本版最终发版提交上的故障矩阵是发版步骤（TOOL-7），不是外部项。
+- **本机可做、记录里写明没做的**（不是外部环境项，本分册不判定，已报给汇总者）：game-demo 真实进程演练没有在 `c493a791` 与 obs34 之后的代码上重跑（APP-1、OWN-2、OWN-3）；真实 game-demo 进程里 Init 中途失败的收尾（APP-9）；真实进程里停机 hook 卡住时的 SIGTERM 时序（APP-8）；kit Mongo / Nats Mod 的 Close 只用不可达地址验证（APP-7）。另有两项记录写“未做”的范围项：协调器不核对 expected 属于组（OWN-5）、O3 的两个 gauge 不接 `DeleteSeries`（OPS-2）。
 
 ## 仍待决定的事项与 WANTED
 
-- **维护者决定项**：本部分没有未决项（DECISIONS-PENDING 文首“未决事项：零”）。留到下个大版本的、与本部分相关的只有 A3 ②（排空下沉到 `ISyncBus` 带 ctx 的退订，APP-6）。
-- **WANTED**：W-2026-10-06-02（驱动重复 Close 口径）已转 RR-20261006-10 并修复（APP-7）；W-2026-10-06-01（nest 无 Guard 作用域分支）不属于本部分：发版文档之后已转 RR-20261006-12 并修复（`b7471ae4`，未发版），在 NONCORE 分册 NONCORE-54 登记。
-- **记录里的观察，维持现状**（不是待决项）：单实例锁启动获取丢回复后下次多等一个 ttl（App 锁方案 §13 观察 6）；`PhaseServiceStopped` 钩子慢会吃掉 Release 预算（观察 7）；OWN-2 的三条驻留表观察；OWN-5 协调器不核对 expected 属于组。
+- **维护者决定项**：本部分没有未决项。第十三轮与本部分相关的两项都已落地：Windows（`7fec136e`，TOOL-8）、不留 WANTED（`87d8d91e`，TOOL-9；本部分相关的 W-01 / W-02 已转 RR 并修复）。其余各行的实施状态见 DECISIONS-PENDING 末表。留到下个大版本的、与本部分相关的只有 A3 ②（排空下沉到 `ISyncBus` 带 ctx 的退订，APP-6，维护者决定）。
+- **WANTED 未决数 = 0**（第十三轮“不留 WANTED”，TOOL-9）。与本部分相关的两条都已转 RR 并修复：W-2026-10-06-02（驱动重复 Close 口径）→ RR-20261006-10（`d05a04a1`，APP-7；驱动侧属 DRV）；W-2026-10-06-01（nest 无 Guard 作用域分支，不属于本部分）→ RR-20261006-12（`b7471ae4`，随 v1.23.0 发布，NONCORE 分册）。
+- **记录里的观察，已判定维持现状**（理由在各自记录里，不是待决项）：单实例锁启动获取丢回复后下次多等一个 ttl（App 锁方案 §13 观察 6）；`PhaseServiceStopped` 钩子慢会吃掉 Release 预算（观察 7）；OWN-2 的三条驻留表观察（App 锁方案 §13 obs34）。
