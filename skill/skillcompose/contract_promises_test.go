@@ -41,7 +41,7 @@ func TestBuildContractRefusesEachInvalidInput(t *testing.T) {
 			return profiles[0], authority, CompositionPolicy{ID: "server", Maximum: Metrics{Targets: -1}}, CallerPolicy{}
 		},
 		"negative caller maximum": func() (SkillProfile, skill.AuthorityIdentity, CompositionPolicy, CallerPolicy) {
-			return profiles[0], authority, policy, CallerPolicy{Maximum: Metrics{Processes: -1}}
+			return profiles[0], authority, policy, CallerPolicy{Maximum: Metrics{Spawns: -1}}
 		},
 		"profile without skill id": func() (SkillProfile, skill.AuthorityIdentity, CompositionPolicy, CallerPolicy) {
 			p := profiles[0]

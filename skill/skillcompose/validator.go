@@ -112,7 +112,7 @@ func ValidateCandidate(contract SkillCompositionContract, candidate SkillProfile
 			report.Diagnostics = append(report.Diagnostics, Diagnostic{Code: "FEATURE_ORIGIN_MISSING", Message: string(feature)})
 		}
 	}
-	if candidate.Metrics.Targets < 0 || candidate.Metrics.Processes < 0 || candidate.Metrics.Mutations < 0 || candidate.Metrics.EventsPerRoot < 0 || candidate.Metrics.RandomSites < 0 || candidate.Metrics.LifetimeTicks < 0 || candidate.Metrics.Targets > contract.Budgets.Targets || candidate.Metrics.Processes > contract.Budgets.Processes || candidate.Metrics.Mutations > contract.Budgets.Mutations || candidate.Metrics.EventsPerRoot > contract.Budgets.EventsPerRoot || candidate.Metrics.RandomSites > contract.Budgets.RandomSites || candidate.Metrics.LifetimeTicks > contract.Budgets.LifetimeTicks {
+	if candidate.Metrics.Targets < 0 || candidate.Metrics.Spawns < 0 || candidate.Metrics.Mutations < 0 || candidate.Metrics.EventsPerRoot < 0 || candidate.Metrics.RandomSites < 0 || candidate.Metrics.LifetimeTicks < 0 || candidate.Metrics.Targets > contract.Budgets.Targets || candidate.Metrics.Spawns > contract.Budgets.Spawns || candidate.Metrics.Mutations > contract.Budgets.Mutations || candidate.Metrics.EventsPerRoot > contract.Budgets.EventsPerRoot || candidate.Metrics.RandomSites > contract.Budgets.RandomSites || candidate.Metrics.LifetimeTicks > contract.Budgets.LifetimeTicks {
 		report.Valid = false
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{Code: "BUDGET_EXCEEDED", Message: "candidate exceeds contract budget"})
 	}

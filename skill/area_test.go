@@ -75,9 +75,9 @@ func TestTargetValidity(t *testing.T) {
 }
 
 func TestAreaMembership(t *testing.T) {
-	process := &ProcessInstance{ID: 1, Status: ProcessRunning}
+	spawn := &SpawnInstance{ID: 1, Status: SpawnRunning}
 	type expectedSignal struct {
-		kind                        ProcessSignalKind
+		kind                        SpawnSignalKind
 		target                      EntityID
 		membershipTicks, enterCount int64
 	}
@@ -86,13 +86,13 @@ func TestAreaMembership(t *testing.T) {
 		want    []expectedSignal
 	}{
 		{members: nil},
-		{members: []EntityID{3, 2, 3}, want: []expectedSignal{{ProcessSignalEnter, 2, 1, 1}, {ProcessSignalEnter, 3, 1, 1}, {ProcessSignalTick, 2, 1, 1}, {ProcessSignalTick, 3, 1, 1}}},
-		{members: []EntityID{4, 3}, want: []expectedSignal{{ProcessSignalLeave, 2, 1, 1}, {ProcessSignalEnter, 4, 1, 1}, {ProcessSignalTick, 3, 2, 1}, {ProcessSignalTick, 4, 1, 1}}},
-		{members: []EntityID{4, 3}, want: []expectedSignal{{ProcessSignalTick, 3, 3, 1}, {ProcessSignalTick, 4, 2, 1}}},
-		{members: nil, want: []expectedSignal{{ProcessSignalLeave, 3, 3, 1}, {ProcessSignalLeave, 4, 2, 1}}},
+		{members: []EntityID{3, 2, 3}, want: []expectedSignal{{SpawnSignalEnter, 2, 1, 1}, {SpawnSignalEnter, 3, 1, 1}, {SpawnSignalTick, 2, 1, 1}, {SpawnSignalTick, 3, 1, 1}}},
+		{members: []EntityID{4, 3}, want: []expectedSignal{{SpawnSignalLeave, 2, 1, 1}, {SpawnSignalEnter, 4, 1, 1}, {SpawnSignalTick, 3, 2, 1}, {SpawnSignalTick, 4, 1, 1}}},
+		{members: []EntityID{4, 3}, want: []expectedSignal{{SpawnSignalTick, 3, 3, 1}, {SpawnSignalTick, 4, 2, 1}}},
+		{members: nil, want: []expectedSignal{{SpawnSignalLeave, 3, 3, 1}, {SpawnSignalLeave, 4, 2, 1}}},
 	}
 	for frame, test := range frames {
-		got := advanceAreaMembership(process, test.members)
+		got := advanceAreaMembership(spawn, test.members)
 		if len(got) != len(test.want) {
 			t.Fatalf("frame %d signals = %#v, want %#v", frame, got, test.want)
 		}
@@ -105,17 +105,17 @@ func TestAreaMembership(t *testing.T) {
 
 	for _, emit := range []bool{false, true} {
 		t.Run("stop cleanup emit="+map[bool]string{false: "false", true: "true"}[emit], func(t *testing.T) {
-			process := &ProcessInstance{ID: 2, Status: ProcessRunning}
-			advanceAreaMembership(process, []EntityID{4, 2})
-			leaves := stopAreaMembership(process, emit)
-			if len(process.AreaMembers) != 0 {
-				t.Fatalf("area members leaked after stop: %#v", process.AreaMembers)
+			spawn := &SpawnInstance{ID: 2, Status: SpawnRunning}
+			advanceAreaMembership(spawn, []EntityID{4, 2})
+			leaves := stopAreaMembership(spawn, emit)
+			if len(spawn.AreaMembers) != 0 {
+				t.Fatalf("area members leaked after stop: %#v", spawn.AreaMembers)
 			}
 			if !emit && len(leaves) != 0 {
 				t.Fatalf("silent stop emitted leaves: %#v", leaves)
 			}
 			if emit {
-				if len(leaves) != 2 || leaves[0].Target != 2 || leaves[1].Target != 4 || leaves[0].Kind != ProcessSignalLeave || leaves[1].Kind != ProcessSignalLeave {
+				if len(leaves) != 2 || leaves[0].Target != 2 || leaves[1].Target != 4 || leaves[0].Kind != SpawnSignalLeave || leaves[1].Kind != SpawnSignalLeave {
 					t.Fatalf("final leaves = %#v, want sorted [2,4]", leaves)
 				}
 			}
@@ -123,7 +123,7 @@ func TestAreaMembership(t *testing.T) {
 	}
 
 	t.Run("runtime queries and emits member callbacks", func(t *testing.T) {
-		program, diagnostics := Compile(mustParseJSON(t, areaProcessSkillJSON(3)), DefaultCompileEnvironment())
+		program, diagnostics := Compile(mustParseJSON(t, areaSpawnSkillJSON(3)), DefaultCompileEnvironment())
 		requireNoErrors(t, diagnostics)
 		host := &areaSnapshotHost{MemoryHost: runtimeTestHost(DefaultCompileEnvironment()), snapshots: [][]EntityID{{3, 2}, {4, 3}}}
 		for _, id := range []EntityID{2, 3, 4} {
@@ -133,40 +133,40 @@ func TestAreaMembership(t *testing.T) {
 		if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 			t.Fatal(err)
 		}
-		assertAreaCallbackEvents(t, runtime.RuntimeEvents(), []ProcessSignal{
-			{Kind: ProcessSignalEnter, Target: 2, MembershipTicks: 1, EnterCount: 1},
-			{Kind: ProcessSignalEnter, Target: 3, MembershipTicks: 1, EnterCount: 1},
-			{Kind: ProcessSignalTick, Target: 2, MembershipTicks: 1, EnterCount: 1},
-			{Kind: ProcessSignalTick, Target: 3, MembershipTicks: 1, EnterCount: 1},
+		assertAreaCallbackEvents(t, runtime.RuntimeEvents(), []SpawnSignal{
+			{Kind: SpawnSignalEnter, Target: 2, MembershipTicks: 1, EnterCount: 1},
+			{Kind: SpawnSignalEnter, Target: 3, MembershipTicks: 1, EnterCount: 1},
+			{Kind: SpawnSignalTick, Target: 2, MembershipTicks: 1, EnterCount: 1},
+			{Kind: SpawnSignalTick, Target: 3, MembershipTicks: 1, EnterCount: 1},
 		})
 		if err := runtime.Advance(2); err != nil {
 			t.Fatal(err)
 		}
-		assertAreaCallbackEvents(t, runtime.RuntimeEvents(), []ProcessSignal{
-			{Kind: ProcessSignalEnter, Target: 2, MembershipTicks: 1, EnterCount: 1},
-			{Kind: ProcessSignalEnter, Target: 3, MembershipTicks: 1, EnterCount: 1},
-			{Kind: ProcessSignalTick, Target: 2, MembershipTicks: 1, EnterCount: 1},
-			{Kind: ProcessSignalTick, Target: 3, MembershipTicks: 1, EnterCount: 1},
-			{Kind: ProcessSignalLeave, Target: 2, MembershipTicks: 1, EnterCount: 1},
-			{Kind: ProcessSignalEnter, Target: 4, MembershipTicks: 1, EnterCount: 1},
-			{Kind: ProcessSignalTick, Target: 3, MembershipTicks: 2, EnterCount: 1},
-			{Kind: ProcessSignalTick, Target: 4, MembershipTicks: 1, EnterCount: 1},
+		assertAreaCallbackEvents(t, runtime.RuntimeEvents(), []SpawnSignal{
+			{Kind: SpawnSignalEnter, Target: 2, MembershipTicks: 1, EnterCount: 1},
+			{Kind: SpawnSignalEnter, Target: 3, MembershipTicks: 1, EnterCount: 1},
+			{Kind: SpawnSignalTick, Target: 2, MembershipTicks: 1, EnterCount: 1},
+			{Kind: SpawnSignalTick, Target: 3, MembershipTicks: 1, EnterCount: 1},
+			{Kind: SpawnSignalLeave, Target: 2, MembershipTicks: 1, EnterCount: 1},
+			{Kind: SpawnSignalEnter, Target: 4, MembershipTicks: 1, EnterCount: 1},
+			{Kind: SpawnSignalTick, Target: 3, MembershipTicks: 2, EnterCount: 1},
+			{Kind: SpawnSignalTick, Target: 4, MembershipTicks: 1, EnterCount: 1},
 		})
 		if err := runtime.Advance(4); err != nil {
 			t.Fatal(err)
 		}
 		callbacks := areaCallbackSignals(runtime.RuntimeEvents())
 		last := callbacks[len(callbacks)-2:]
-		if last[0].Kind != ProcessSignalLeave || last[0].Target != 3 || last[1].Kind != ProcessSignalLeave || last[1].Target != 4 {
+		if last[0].Kind != SpawnSignalLeave || last[0].Target != 3 || last[1].Kind != SpawnSignalLeave || last[1].Target != 4 {
 			t.Fatalf("final leave callbacks = %#v, want sorted members 3,4", last)
 		}
-		if len(runtime.OwnedProcesses(1)) != 0 {
-			t.Fatalf("ended area retained process state: %#v", runtime.OwnedProcesses(1))
+		if len(runtime.OwnedSpawns(1)) != 0 {
+			t.Fatalf("ended area retained spawn state: %#v", runtime.OwnedSpawns(1))
 		}
 	})
 
 	t.Run("host error clears membership state", func(t *testing.T) {
-		program, diagnostics := Compile(mustParseJSON(t, areaProcessSkillJSON(2)), DefaultCompileEnvironment())
+		program, diagnostics := Compile(mustParseJSON(t, areaSpawnSkillJSON(2)), DefaultCompileEnvironment())
 		requireNoErrors(t, diagnostics)
 		host := &areaSnapshotHost{MemoryHost: runtimeTestHost(DefaultCompileEnvironment()), snapshots: [][]EntityID{{2}}, failAt: 1}
 		host.UpsertEntity(MemoryEntity{ID: 2, Alive: true, Health: 100, MaxHealth: 100})
@@ -177,33 +177,33 @@ func TestAreaMembership(t *testing.T) {
 		if err := runtime.Advance(2); err == nil {
 			t.Fatal("expected area select host failure")
 		}
-		for _, process := range runtime.processes {
-			if len(process.AreaMembers) != 0 {
-				t.Fatalf("host error leaked area members: %#v", process.AreaMembers)
+		for _, spawn := range runtime.spawns {
+			if len(spawn.AreaMembers) != 0 {
+				t.Fatalf("host error leaked area members: %#v", spawn.AreaMembers)
 			}
 		}
 	})
 }
 
 func TestAreaMembershipRotatingMembersRemainBounded(t *testing.T) {
-	process := &ProcessInstance{ID: 9, Status: ProcessRunning}
+	spawn := &SpawnInstance{ID: 9, Status: SpawnRunning}
 	for member := EntityID(1); member <= 64; member++ {
-		signals := advanceAreaMembership(process, []EntityID{member})
-		if len(process.AreaMembers) != 1 {
-			t.Fatalf("frame %d retained %d member states: %#v", member, len(process.AreaMembers), process.AreaMembers)
+		signals := advanceAreaMembership(spawn, []EntityID{member})
+		if len(spawn.AreaMembers) != 1 {
+			t.Fatalf("frame %d retained %d member states: %#v", member, len(spawn.AreaMembers), spawn.AreaMembers)
 		}
 		if member == 1 {
 			continue
 		}
-		if len(signals) != 3 || signals[0].Kind != ProcessSignalLeave || signals[0].Target != member-1 || signals[0].MembershipTicks != 1 {
+		if len(signals) != 3 || signals[0].Kind != SpawnSignalLeave || signals[0].Target != member-1 || signals[0].MembershipTicks != 1 {
 			t.Fatalf("frame %d signals = %#v, want leave for %d before enter/tick", member, signals, member-1)
 		}
 	}
-	last := advanceAreaMembership(process, nil)
-	if len(process.AreaMembers) != 0 {
-		t.Fatalf("empty frame retained member states: %#v", process.AreaMembers)
+	last := advanceAreaMembership(spawn, nil)
+	if len(spawn.AreaMembers) != 0 {
+		t.Fatalf("empty frame retained member states: %#v", spawn.AreaMembers)
 	}
-	if len(last) != 1 || last[0].Kind != ProcessSignalLeave || last[0].Target != 64 || last[0].MembershipTicks != 1 {
+	if len(last) != 1 || last[0].Kind != SpawnSignalLeave || last[0].Target != 64 || last[0].MembershipTicks != 1 {
 		t.Fatalf("final signals = %#v, want leave for 64", last)
 	}
 }
@@ -211,7 +211,7 @@ func TestAreaMembershipRotatingMembersRemainBounded(t *testing.T) {
 func TestAreaCallbackFinishStopsRemainingSignals(t *testing.T) {
 	finish := `{"flow":"finish","reason":"area_complete"}`
 	command := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$event.target","command":"hold_position"}}`
-	flow := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"process":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"enter":` + finish + `,"tick":` + command + `}}`
+	flow := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"enter":` + finish + `,"tick":` + command + `}}`
 	// enter 以 wait + finish 兜底：phase 没有计时，落空的 enter 不能编译（RR-20261005-NC-151）。
 	flow = `{"flow":"sequence","steps":[` + flow + `,{"flow":"wait","ticks":5,"then":{"flow":"finish"}}]}`
 	input := strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, flow, 1)
@@ -231,26 +231,26 @@ func TestAreaCallbackFinishStopsRemainingSignals(t *testing.T) {
 		t.Fatalf("cast = %#v, found=%v, want finished", snapshot, ok)
 	}
 	callbacks := areaCallbackSignals(runtime.RuntimeEvents())
-	if len(callbacks) != 1 || callbacks[0].Kind != ProcessSignalEnter || callbacks[0].Target != 2 {
+	if len(callbacks) != 1 || callbacks[0].Kind != SpawnSignalEnter || callbacks[0].Target != 2 {
 		t.Fatalf("callbacks = %#v, want only first enter", callbacks)
 	}
 	if host.stops != 1 {
-		t.Fatalf("StopProcess calls = %d, want unified stop exactly once", host.stops)
+		t.Fatalf("StopSpawn calls = %d, want unified stop exactly once", host.stops)
 	}
-	for _, process := range runtime.processes {
-		if process.CastID == castID && (process.Status != ProcessCancelled || len(process.AreaMembers) != 0) {
-			t.Fatalf("area process after finish = status %q members %#v", process.Status, process.AreaMembers)
+	for _, spawn := range runtime.spawns {
+		if spawn.CastID == castID && (spawn.Status != SpawnCancelled || len(spawn.AreaMembers) != 0) {
+			t.Fatalf("area spawn after finish = status %q members %#v", spawn.Status, spawn.AreaMembers)
 		}
 	}
-	if len(runtime.OwnedProcesses(1)) != 0 {
-		t.Fatalf("finished callback handed off area process: %#v", runtime.OwnedProcesses(1))
+	if len(runtime.OwnedSpawns(1)) != 0 {
+		t.Fatalf("finished callback handed off area spawn: %#v", runtime.OwnedSpawns(1))
 	}
 }
 
 func TestAreaFinalLeaveFinishSuppressesTerminalCallback(t *testing.T) {
 	finish := `{"flow":"finish","reason":"area_complete"}`
 	command := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$event.target","command":"hold_position"}}`
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"process":{"kind":"area","duration_ticks":4,"interval_ticks":1,"emit_leave_on_stop":true,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":1}},"on":{"leave":` + finish + `,"cancel":` + command + `}},{"flow":"wait","ticks":5,"then":{"flow":"finish"}}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":1,"emit_leave_on_stop":true,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":1}},"on":{"leave":` + finish + `,"cancel":` + command + `}},{"flow":"wait","ticks":5,"then":{"flow":"finish"}}]}`
 	input := strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, flow, 1)
 	program, diagnostics := Compile(mustParseJSON(t, input), DefaultCompileEnvironment())
 	requireNoErrors(t, diagnostics)
@@ -267,7 +267,7 @@ func TestAreaFinalLeaveFinishSuppressesTerminalCallback(t *testing.T) {
 	}
 
 	callbacks := areaCallbackSignals(runtime.RuntimeEvents())
-	if len(callbacks) != 1 || callbacks[0].Kind != ProcessSignalLeave || callbacks[0].Target != 2 {
+	if len(callbacks) != 1 || callbacks[0].Kind != SpawnSignalLeave || callbacks[0].Target != 2 {
 		t.Fatalf("callbacks = %#v, want only final leave for 2", callbacks)
 	}
 	if cast := runtime.casts[castID]; cast == nil || !cast.areaCallbackFinish || cast.status != CastFinished {
@@ -301,12 +301,12 @@ func (host *areaSnapshotHost) Select(request SelectRequest) (SelectResult, error
 	return SelectResult{Meta: meta, Selection: selection}, nil
 }
 
-func (host *areaSnapshotHost) StopProcess(command ProcessStopCommand, state ProcessHostState) (CommitReceipt, error) {
+func (host *areaSnapshotHost) StopSpawn(command SpawnStopCommand, state SpawnHostState) (CommitReceipt, error) {
 	host.stops++
-	return host.MemoryHost.StopProcess(command, state)
+	return host.MemoryHost.StopSpawn(command, state)
 }
 
-func assertAreaCallbackEvents(t *testing.T, events []RuntimeEvent, want []ProcessSignal) {
+func assertAreaCallbackEvents(t *testing.T, events []RuntimeEvent, want []SpawnSignal) {
 	t.Helper()
 	got := areaCallbackSignals(events)
 	if len(got) != len(want) {
@@ -319,20 +319,20 @@ func assertAreaCallbackEvents(t *testing.T, events []RuntimeEvent, want []Proces
 	}
 }
 
-func areaCallbackSignals(events []RuntimeEvent) []ProcessSignal {
-	got := make([]ProcessSignal, 0)
+func areaCallbackSignals(events []RuntimeEvent) []SpawnSignal {
+	got := make([]SpawnSignal, 0)
 	for _, event := range events {
-		const prefix = "owned_process_callback_"
+		const prefix = "owned_spawn_callback_"
 		if !strings.HasPrefix(event.Kind, prefix) {
 			continue
 		}
-		got = append(got, ProcessSignal{Kind: ProcessSignalKind(strings.TrimPrefix(event.Kind, prefix)), Target: event.Context.Target, MembershipTicks: event.Context.MembershipTicks, EnterCount: event.Context.EnterCount})
+		got = append(got, SpawnSignal{Kind: SpawnSignalKind(strings.TrimPrefix(event.Kind, prefix)), Target: event.Context.Target, MembershipTicks: event.Context.MembershipTicks, EnterCount: event.Context.EnterCount})
 	}
 	return got
 }
 
 func TestAreaBudget(t *testing.T) {
-	input := areaProcessSkillJSON(3)
+	input := areaSpawnSkillJSON(3)
 	environment := DefaultCompileEnvironment()
 	artifacts, diagnostics := compileToArtifacts(mustParseJSON(t, input), environment)
 	requireNoErrors(t, diagnostics)
@@ -352,18 +352,18 @@ func TestAreaBudget(t *testing.T) {
 	requireDiagnostic(t, diagnostics, DiagnosticBudgetExceeded)
 
 	t.Run("spawn count multiplies area work", func(t *testing.T) {
-		input := strings.Replace(areaProcessSkillJSON(3), `"count":1`, `"count":2`, 1)
+		input := strings.Replace(areaSpawnSkillJSON(3), `"count":1`, `"count":2`, 1)
 		artifacts, diagnostics := compileToArtifacts(mustParseJSON(t, input), DefaultCompileEnvironment())
 		requireNoErrors(t, diagnostics)
-		if artifacts.limits.Processes != 2 || artifacts.limits.AreaMembers != 6 || artifacts.limits.Schedules != 4 || artifacts.limits.Mutations != 37 {
-			t.Fatalf("counted area limits = processes %d members %d schedules %d mutations %d, want 2, 6, 4, 37", artifacts.limits.Processes, artifacts.limits.AreaMembers, artifacts.limits.Schedules, artifacts.limits.Mutations)
+		if artifacts.limits.Spawns != 2 || artifacts.limits.AreaMembers != 6 || artifacts.limits.Schedules != 4 || artifacts.limits.Mutations != 37 {
+			t.Fatalf("counted area limits = spawns %d members %d schedules %d mutations %d, want 2, 6, 4, 37", artifacts.limits.Spawns, artifacts.limits.AreaMembers, artifacts.limits.Schedules, artifacts.limits.Mutations)
 		}
 	})
 
 	t.Run("spawn count multiplies moving area numeric tracks", func(t *testing.T) {
-		input := strings.Replace(areaProcessSkillJSON(3), `"count":1`, `"count":2`, 1)
+		input := strings.Replace(areaSpawnSkillJSON(3), `"count":1`, `"count":2`, 1)
 		motionAndTrack := `"motion":{"frame":{"type":"world"},"trajectory":{"type":"linear","speed":10},"completion":{"type":"end"}},"numeric_tracks":[{"property":"speed","operation":"set","value":12,"over_ticks":0}],`
-		input = strings.Replace(input, `"process":{"kind":"area","duration_ticks":4,`, `"process":{"kind":"area","duration_ticks":4,`+motionAndTrack, 1)
+		input = strings.Replace(input, `"spawn":{"kind":"area","duration_ticks":4,`, `"spawn":{"kind":"area","duration_ticks":4,`+motionAndTrack, 1)
 		artifacts, diagnostics := compileToArtifacts(mustParseJSON(t, input), DefaultCompileEnvironment())
 		requireNoErrors(t, diagnostics)
 		if artifacts.limits.Mutations != 39 {
@@ -372,9 +372,9 @@ func TestAreaBudget(t *testing.T) {
 	})
 }
 
-func areaProcessSkillJSON(maxMembers int) string {
+func areaSpawnSkillJSON(maxMembers int) string {
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$event.target","command":"hold_position"}}`
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"process":{"kind":"area","duration_ticks":4,"interval_ticks":2,"emit_leave_on_stop":true,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":` + intToDecimal(maxMembers) + `}},"on":{"enter":` + callback + `,"leave":` + callback + `,"tick":` + callback + `}},{"flow":"finish"}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":2,"emit_leave_on_stop":true,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":` + intToDecimal(maxMembers) + `}},"on":{"enter":` + callback + `,"leave":` + callback + `,"tick":` + callback + `}},{"flow":"finish"}]}`
 	return strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, flow, 1)
 }
 

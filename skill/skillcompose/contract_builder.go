@@ -52,7 +52,7 @@ func BuildContract(profiles []SkillProfile, authority skill.AuthorityIdentity, p
 		if !ok {
 			return SkillCompositionContract{}, ErrContractInvalid
 		}
-		contract.Budgets.Processes, ok = addNonNegative(contract.Budgets.Processes, profile.Metrics.Processes)
+		contract.Budgets.Spawns, ok = addNonNegative(contract.Budgets.Spawns, profile.Metrics.Spawns)
 		if !ok {
 			return SkillCompositionContract{}, ErrContractInvalid
 		}
@@ -92,8 +92,8 @@ func tightenBudgets(value CompositionBudgets, limit Metrics) CompositionBudgets 
 	if limit.Targets > 0 && value.Targets > limit.Targets {
 		value.Targets = limit.Targets
 	}
-	if limit.Processes > 0 && value.Processes > limit.Processes {
-		value.Processes = limit.Processes
+	if limit.Spawns > 0 && value.Spawns > limit.Spawns {
+		value.Spawns = limit.Spawns
 	}
 	if limit.Mutations > 0 && value.Mutations > limit.Mutations {
 		value.Mutations = limit.Mutations
@@ -118,7 +118,7 @@ func addNonNegative(left, right int) (int, bool) {
 }
 
 func metricsNonNegative(value Metrics) bool {
-	return value.Targets >= 0 && value.Processes >= 0 && value.Mutations >= 0 && value.EventsPerRoot >= 0 && value.RandomSites >= 0 && value.LifetimeTicks >= 0
+	return value.Targets >= 0 && value.Spawns >= 0 && value.Mutations >= 0 && value.EventsPerRoot >= 0 && value.RandomSites >= 0 && value.LifetimeTicks >= 0
 }
 func sortedFeatures(profiles []SkillProfile) []FeatureKey {
 	set := map[FeatureKey]struct{}{}

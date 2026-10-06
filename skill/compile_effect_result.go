@@ -30,11 +30,11 @@ func runEffectResultScopePass(context *compileContext) {
 		}
 		resultCount++
 		if effectFlow.callbacks != nil {
-			context.addDiagnostic(DiagnosticShapeInvalid, effectFlow.result.source.Path, "process effects cannot declare instant result branches")
+			context.addDiagnostic(DiagnosticShapeInvalid, effectFlow.result.source.Path, "spawn effects cannot declare instant result branches")
 		}
 		for _, branch := range []flowIR{effectFlow.result.success, effectFlow.result.failure} {
 			if effectResultBranchMaySuspend(branch) {
-				context.addDiagnostic(DiagnosticShapeInvalid, branch.sourceRef().Path, "effect result branches cannot suspend (wait, repeat with interval_ticks) or start a process with on callbacks")
+				context.addDiagnostic(DiagnosticShapeInvalid, branch.sourceRef().Path, "effect result branches cannot suspend (wait, repeat with interval_ticks) or start a spawn with on callbacks")
 			}
 		}
 	})
@@ -44,8 +44,8 @@ func runEffectResultScopePass(context *compileContext) {
 }
 
 // effectResultBranchMaySuspend 是 result 分支与 status 实例消费流程的限制：不能有 wait、
-// 带间隔的 repeat，也不能启动带 on 回调的进程。spawn 加不带回调的进程不在其列，照常
-// 编译、执行时照常启动进程（O29：诊断文案按这条规则写，不再笼统说不能启动进程）。
+// 带间隔的 repeat，也不能启动带 on 回调的衍生物。spawn 加不带回调的衍生物不在其列，照常
+// 编译、执行时照常启动衍生物（O29：诊断文案按这条规则写，不再笼统说不能启动衍生物）。
 func effectResultBranchMaySuspend(flow flowIR) bool {
 	if flow == nil {
 		return false

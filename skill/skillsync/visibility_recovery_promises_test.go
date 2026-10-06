@@ -5,7 +5,7 @@ package skillsync
 // 其目标与坐标都发给了本应看不到它的 observer。
 //
 // RR-20261005-NC-115：同一份状态经快照下发与经增量下发必须得到相同的可见集合。旧实现三处口径不一：
-// ability 快照按空 handle 问 FieldVisible、增量按具体 handle 问；cast / process remove 不带归属实体、
+// ability 快照按空 handle 问 FieldVisible、增量按具体 handle 问；cast / spawn remove 不带归属实体、
 // persistent remove 不检查 Binding，三类 remove 对不可见实体一律放行。
 
 import (

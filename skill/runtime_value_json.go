@@ -23,7 +23,7 @@ type runtimeValueJSON struct {
 	Entities      []EntityID         `json:"entities,omitempty"`
 	Strings       []string           `json:"strings,omitempty"`
 	Snapshot      *uint64            `json:"snapshot,omitempty"`
-	Process       *ProcessID         `json:"process,omitempty"`
+	Spawn         *SpawnID           `json:"spawn,omitempty"`
 	ResultType    string             `json:"result_type,omitempty"`
 	ResultOutcome *ResultOutcome     `json:"result_outcome,omitempty"`
 	ResultFields  []RuntimeValue     `json:"result_fields,omitempty"`
@@ -63,8 +63,8 @@ func (value RuntimeValue) MarshalJSON() ([]byte, error) {
 		case valueKindSnapshotToken:
 			opaque := value.snapshot.OpaqueID()
 			wire.Snapshot = &opaque
-		case valueKindProcess:
-			wire.Process = &value.process
+		case valueKindSpawn:
+			wire.Spawn = &value.spawn
 		case valueKindEffectResult:
 			wire.ResultType = string(value.effectResult.typ)
 			outcome := value.effectResult.outcome
@@ -156,11 +156,11 @@ func (value *RuntimeValue) UnmarshalJSON(data []byte) error {
 			return ErrRuntimeValueMissing
 		}
 		decoded.snapshot = SnapshotToken{opaque: *wire.Snapshot}
-	case valueKindProcess:
-		if wire.Process == nil {
+	case valueKindSpawn:
+		if wire.Spawn == nil {
 			return ErrRuntimeValueMissing
 		}
-		decoded.process = *wire.Process
+		decoded.spawn = *wire.Spawn
 	case valueKindEffectResult:
 		if wire.ResultOutcome == nil {
 			return ErrRuntimeValueMissing

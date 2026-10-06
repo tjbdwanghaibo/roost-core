@@ -37,7 +37,7 @@ func runAuthorityCapabilityPass(context *compileContext) {
 			validateTargetFilters(context)
 			validateCatalogReferences(context, authority)
 		}
-		context.artifacts.processProperties = append([]ProcessPropertyPolicy(nil), context.environment.ProcessProperties.Properties...)
+		context.artifacts.spawnProperties = append([]SpawnPropertyPolicy(nil), context.environment.SpawnProperties.Properties...)
 		runOwnedEntityPass(context)
 		runStatusInstancePass(context)
 	}
@@ -52,8 +52,8 @@ func validateTargetFilters(context *compileContext) {
 		if selected, ok := flow.(*selectFlowIR); ok {
 			validateTargetFilterList(context, tags, selected.selectPlan.filters)
 		}
-		if effect, ok := flow.(*effectFlowIR); ok && effect.process != nil && effect.process.area != nil {
-			validateTargetFilterList(context, tags, effect.process.area.filters)
+		if effect, ok := flow.(*effectFlowIR); ok && effect.spawn != nil && effect.spawn.area != nil {
+			validateTargetFilterList(context, tags, effect.spawn.area.filters)
 		}
 	})
 }

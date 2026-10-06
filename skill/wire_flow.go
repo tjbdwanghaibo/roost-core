@@ -47,10 +47,10 @@ type SelectFlowDefinition struct {
 func (SelectFlowDefinition) flowDefinition() {}
 
 type EffectFlowDefinition struct {
-	Effect  EffectDefinition
-	Result  *EffectResultDefinition
-	On      *ProcessCallbacksDefinition
-	Process *ProcessDefinition
+	Effect EffectDefinition
+	Result *EffectResultDefinition
+	On     *SpawnCallbacksDefinition
+	Spawn  *SpawnDefinition
 }
 
 func (EffectFlowDefinition) flowDefinition() {}
@@ -63,7 +63,7 @@ type FinishFlowDefinition struct{ Reason string }
 
 func (FinishFlowDefinition) flowDefinition() {}
 
-type ProcessCallbacksDefinition struct {
+type SpawnCallbacksDefinition struct {
 	Tick, Hit, Collision, End, Cancel, Transition, TargetLost, Enter, Leave FlowDefinition
 }
 
@@ -183,11 +183,11 @@ func decodeFlow(data []byte) (FlowDefinition, error) {
 		return SelectFlowDefinition{Select: selection, Consume: consume, OnEmpty: onEmpty}, nil
 	case "effect":
 		var raw struct {
-			Flow    string          `json:"flow"`
-			Effect  json.RawMessage `json:"effect"`
-			Result  json.RawMessage `json:"result"`
-			On      json.RawMessage `json:"on"`
-			Process json.RawMessage `json:"process"`
+			Flow   string          `json:"flow"`
+			Effect json.RawMessage `json:"effect"`
+			Result json.RawMessage `json:"result"`
+			On     json.RawMessage `json:"on"`
+			Spawn  json.RawMessage `json:"spawn"`
 		}
 		if err := decodeStrictSingle(data, &raw); err != nil {
 			return nil, err
@@ -200,18 +200,18 @@ func decodeFlow(data []byte) (FlowDefinition, error) {
 		if err != nil {
 			return nil, fmt.Errorf("result: %w", err)
 		}
-		callbacks, err := decodeProcessCallbacks(raw.On)
+		callbacks, err := decodeSpawnCallbacks(raw.On)
 		if err != nil {
 			return nil, fmt.Errorf("on: %w", err)
 		}
-		var process *ProcessDefinition
-		if len(raw.Process) != 0 && string(raw.Process) != "null" {
-			process, err = decodeProcess(raw.Process)
+		var spawn *SpawnDefinition
+		if len(raw.Spawn) != 0 && string(raw.Spawn) != "null" {
+			spawn, err = decodeSpawn(raw.Spawn)
 			if err != nil {
-				return nil, fmt.Errorf("process: %w", err)
+				return nil, fmt.Errorf("spawn: %w", err)
 			}
 		}
-		return EffectFlowDefinition{Effect: effect, Result: result, On: callbacks, Process: process}, nil
+		return EffectFlowDefinition{Effect: effect, Result: result, On: callbacks, Spawn: spawn}, nil
 	case "goto":
 		var raw struct {
 			Flow  string `json:"flow"`
@@ -265,7 +265,7 @@ func decodeOptionalFlow(raw json.RawMessage) (FlowDefinition, error) {
 	return decodeFlow(raw)
 }
 
-func decodeProcessCallbacks(data []byte) (*ProcessCallbacksDefinition, error) {
+func decodeSpawnCallbacks(data []byte) (*SpawnCallbacksDefinition, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
@@ -283,7 +283,7 @@ func decodeProcessCallbacks(data []byte) (*ProcessCallbacksDefinition, error) {
 	if err := decodeStrictSingle(data, &raw); err != nil {
 		return nil, err
 	}
-	result := &ProcessCallbacksDefinition{}
+	result := &SpawnCallbacksDefinition{}
 	items := []struct {
 		raw    json.RawMessage
 		target *FlowDefinition

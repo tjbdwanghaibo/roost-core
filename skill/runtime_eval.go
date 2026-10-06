@@ -101,7 +101,7 @@ func (runtime *Runtime) captureSnapshots(cast *castInstance, point snapshotPoint
 }
 
 func shouldCacheSnapshot(point snapshotPoint) bool {
-	return point == snapshotCastStart || point == snapshotPhaseStart || point == snapshotProcessStart
+	return point == snapshotCastStart || point == snapshotPhaseStart || point == snapshotSpawnStart
 }
 
 func (runtime *Runtime) evalReference(cast *castInstance, reference referenceProgramValue) (RuntimeValue, error) {
@@ -159,25 +159,25 @@ func (runtime *Runtime) evalReference(cast *castInstance, reference referencePro
 		case "$ability.self":
 			value = AbilityRuntimeValue(AbilityRef{Owner: cast.caster, Handle: cast.ability})
 		case "$owner":
-			if cast.detachedProcess == nil {
+			if cast.detachedSpawn == nil {
 				return RuntimeValue{}, ErrProgramInvariant
 			}
-			value = EntityRuntimeValue(cast.detachedProcess.Owner)
+			value = EntityRuntimeValue(cast.detachedSpawn.Owner)
 		case "$owner.position":
-			if cast.detachedProcess == nil {
+			if cast.detachedSpawn == nil {
 				return RuntimeValue{}, ErrProgramInvariant
 			}
-			return runtime.readEntityPosition(cast, cast.detachedProcess.Owner)
+			return runtime.readEntityPosition(cast, cast.detachedSpawn.Owner)
 		case "$lifecycle_entity":
-			if cast.detachedProcess == nil {
+			if cast.detachedSpawn == nil {
 				return RuntimeValue{}, ErrProgramInvariant
 			}
-			value = EntityRuntimeValue(cast.detachedProcess.LifecycleEntity)
-		case "$process":
-			if cast.detachedProcess == nil {
+			value = EntityRuntimeValue(cast.detachedSpawn.LifecycleEntity)
+		case "$spawn":
+			if cast.detachedSpawn == nil {
 				return RuntimeValue{}, ErrProgramInvariant
 			}
-			value = ProcessRuntimeValue(cast.detachedProcess.ID)
+			value = SpawnRuntimeValue(cast.detachedSpawn.ID)
 		case "$event.source":
 			value = EntityRuntimeValue(cast.detachedEvent.Source)
 		case "$event.owner":

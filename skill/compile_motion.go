@@ -2,11 +2,11 @@ package skill
 
 import "fmt"
 
-func (n *normalizer) normalizeProcess(value *ProcessDefinition, path string) *processIR {
+func (n *normalizer) normalizeSpawn(value *SpawnDefinition, path string) *spawnIR {
 	if value == nil {
 		return nil
 	}
-	result := &processIR{source: n.source(path), kind: value.Kind, durationTicks: value.DurationTicks, intervalTicks: value.IntervalTicks, emitLeaveOnStop: value.EmitLeaveOnStop, visual: normalizeVisual(value.Visual), numericTracks: make([]numericTrackIR, len(value.NumericTracks))}
+	result := &spawnIR{source: n.source(path), kind: value.Kind, durationTicks: value.DurationTicks, intervalTicks: value.IntervalTicks, emitLeaveOnStop: value.EmitLeaveOnStop, visual: normalizeVisual(value.Visual), numericTracks: make([]numericTrackIR, len(value.NumericTracks))}
 	if value.Area != nil {
 		area := n.normalizeSelect(*value.Area, path+".area")
 		result.area = &area
@@ -102,52 +102,52 @@ func (n *normalizer) normalizeCompletion(value CompletionDefinition) motionCompl
 func runMotionPass(context *compileContext) {
 	context.artifacts.ir.walkFlows(func(flow flowIR) {
 		effect, ok := flow.(*effectFlowIR)
-		if !ok || effect.process == nil {
+		if !ok || effect.spawn == nil {
 			return
 		}
-		validateProcessMotion(context, effect.process)
+		validateSpawnMotion(context, effect.spawn)
 	})
 }
 
-func validateProcessMotion(context *compileContext, process *processIR) {
-	path := process.source.Path
-	if !validMotionProcessKind(process.kind) {
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".kind", "process kind is not a closed motion kind")
+func validateSpawnMotion(context *compileContext, spawn *spawnIR) {
+	path := spawn.source.Path
+	if !validMotionSpawnKind(spawn.kind) {
+		context.addDiagnostic(DiagnosticMotionInvalid, path+".kind", "spawn kind is not a closed motion kind")
 		return
 	}
-	if process.kind == "summon" {
-		// summon 进程的寿命是 spawn 效果的 duration_ticks（编译期要求为正）；运行期只在带
-		// motion / area 的进程上读模板时长（process_owned.go startEntityProcess），所以
+	if spawn.kind == "summon" {
+		// summon 衍生物的寿命是 spawn 效果的 duration_ticks（编译期要求为正）；运行期只在带
+		// motion / area 的衍生物上读模板时长（spawn_owned.go startEntitySpawn），所以
 		// summon 自己的 duration_ticks 与 area 成员字段从来不生效。以前这里直接返回、
 		// 负数也照样编译，写了 area 运行期反而拿 0 时长报 ErrProgramInvariant；现在写了
 		// 就拒绝（O22，维护者第十二轮决定）。
-		if process.motion != nil {
-			context.addDiagnostic(DiagnosticMotionInvalid, path+".motion", "summon processes do not support motion")
+		if spawn.motion != nil {
+			context.addDiagnostic(DiagnosticMotionInvalid, path+".motion", "summon spawns do not support motion")
 		}
-		if process.durationTicks != 0 {
-			context.addDiagnostic(DiagnosticMotionInvalid, path+".duration_ticks", "summon processes live for the spawn effect's duration_ticks; remove the process duration_ticks")
+		if spawn.durationTicks != 0 {
+			context.addDiagnostic(DiagnosticMotionInvalid, path+".duration_ticks", "summon spawns live for the spawn effect's duration_ticks; remove the spawn's own duration_ticks")
 		}
-		if process.area != nil || process.intervalTicks != 0 || process.emitLeaveOnStop {
-			context.addDiagnostic(DiagnosticMotionInvalid, path+".area", "area membership fields require an area process")
+		if spawn.area != nil || spawn.intervalTicks != 0 || spawn.emitLeaveOnStop {
+			context.addDiagnostic(DiagnosticMotionInvalid, path+".area", "area membership fields require an area spawn")
 		}
 		return
 	}
-	if process.kind == "area" {
-		validateAreaProcess(context, process)
-	} else if process.area != nil || process.intervalTicks != 0 || process.emitLeaveOnStop {
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".area", "area membership fields require an area process")
+	if spawn.kind == "area" {
+		validateAreaSpawn(context, spawn)
+	} else if spawn.area != nil || spawn.intervalTicks != 0 || spawn.emitLeaveOnStop {
+		context.addDiagnostic(DiagnosticMotionInvalid, path+".area", "area membership fields require an area spawn")
 	}
-	if process.durationTicks <= 0 || process.durationTicks > context.environment.Limits.MaxLifetimeTicks {
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".duration_ticks", "moving process duration must be positive and bounded")
+	if spawn.durationTicks <= 0 || spawn.durationTicks > context.environment.Limits.MaxLifetimeTicks {
+		context.addDiagnostic(DiagnosticMotionInvalid, path+".duration_ticks", "moving spawn duration must be positive and bounded")
 	}
-	if process.motion == nil {
-		if process.kind == "area" {
+	if spawn.motion == nil {
+		if spawn.kind == "area" {
 			return
 		}
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion", "moving processes require an explicit typed motion definition")
+		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion", "moving spawns require an explicit typed motion definition")
 		return
 	}
-	motion, ok := process.motion.(*canonicalMotionIR)
+	motion, ok := spawn.motion.(*canonicalMotionIR)
 	if !ok {
 		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion", "canonical motion definition is required")
 		return
@@ -158,11 +158,11 @@ func validateProcessMotion(context *compileContext, process *processIR) {
 	if !motionSlotEnabled(context.environment.Motion, "completion") {
 		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion.completion", "completion is disabled by the motion catalog")
 	}
-	if !motionPairAllowed(context.environment.Motion, process.kind, motion.trajectory.name()) {
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion.trajectory", "process and trajectory pair is not allowed by the motion catalog")
+	if !motionPairAllowed(context.environment.Motion, spawn.kind, motion.trajectory.name()) {
+		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion.trajectory", "spawn and trajectory pair is not allowed by the motion catalog")
 	}
-	validateMotionStageVariants(context, process.kind, motion, path+".motion")
-	if process.kind == "beam" && motion.trajectory.name() != "stationary" && !motionPairAllowed(context.environment.Motion, "beam", motion.trajectory.name()) {
+	validateMotionStageVariants(context, spawn.kind, motion, path+".motion")
+	if spawn.kind == "beam" && motion.trajectory.name() != "stationary" && !motionPairAllowed(context.environment.Motion, "beam", motion.trajectory.name()) {
 		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion.trajectory", "beam requires stationary motion unless explicitly cataloged")
 	}
 	if motion.steering != nil && !motionSlotEnabled(context.environment.Motion, "steering") {
@@ -185,47 +185,47 @@ func validateProcessMotion(context *compileContext, process *processIR) {
 	validateMotionLiterals(context, motion, path+".motion")
 }
 
-func validateAreaProcess(context *compileContext, process *processIR) {
-	path := process.source.Path
-	if process.area == nil {
-		context.addDiagnostic(DiagnosticShapeInvalid, path+".area", "area process requires a select plan")
+func validateAreaSpawn(context *compileContext, spawn *spawnIR) {
+	path := spawn.source.Path
+	if spawn.area == nil {
+		context.addDiagnostic(DiagnosticShapeInvalid, path+".area", "area spawn requires a select plan")
 		return
 	}
-	if process.intervalTicks <= 0 || process.intervalTicks > process.durationTicks {
+	if spawn.intervalTicks <= 0 || spawn.intervalTicks > spawn.durationTicks {
 		context.addDiagnostic(DiagnosticShapeInvalid, path+".interval_ticks", "area interval must be positive and no longer than duration")
 	}
-	if process.area.elementType != selectionEntity || process.area.limit <= 0 {
-		context.addDiagnostic(DiagnosticShapeInvalid, path+".area", "area process requires a bounded entity select")
+	if spawn.area.elementType != selectionEntity || spawn.area.limit <= 0 {
+		context.addDiagnostic(DiagnosticShapeInvalid, path+".area", "area spawn requires a bounded entity select")
 	}
-	if process.area.limit > context.environment.Limits.MaxAreaMembers {
+	if spawn.area.limit > context.environment.Limits.MaxAreaMembers {
 		context.addDiagnostic(DiagnosticBudgetExceeded, path+".area.limit", "area members exceed the environment maximum")
 	}
-	if process.area.order != nil && process.area.order.by == "random" {
+	if spawn.area.order != nil && spawn.area.order.by == "random" {
 		context.addDiagnostic(DiagnosticShapeInvalid, path+".area.order", "area membership order cannot be random")
 	}
 }
 
-func validateMotionStageVariants(context *compileContext, process string, motion *canonicalMotionIR, path string) {
+func validateMotionStageVariants(context *compileContext, spawn string, motion *canonicalMotionIR, path string) {
 	trajectory := motion.trajectory.name()
-	if !motionVariantAllowed(context.environment.Motion, process, trajectory, "frame", motionFrameVariant(motion.frame)) {
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".frame", "frame variant is not allowed by the process/trajectory motion catalog")
+	if !motionVariantAllowed(context.environment.Motion, spawn, trajectory, "frame", motionFrameVariant(motion.frame)) {
+		context.addDiagnostic(DiagnosticMotionInvalid, path+".frame", "frame variant is not allowed by the spawn/trajectory motion catalog")
 	}
-	if motion.steering != nil && !motionVariantAllowed(context.environment.Motion, process, trajectory, "steering", motionSteeringVariant(motion.steering)) {
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".steering", "steering variant is not allowed by the process/trajectory motion catalog")
+	if motion.steering != nil && !motionVariantAllowed(context.environment.Motion, spawn, trajectory, "steering", motionSteeringVariant(motion.steering)) {
+		context.addDiagnostic(DiagnosticMotionInvalid, path+".steering", "steering variant is not allowed by the spawn/trajectory motion catalog")
 	}
 	for index, offset := range motion.offsets {
-		if !motionVariantAllowed(context.environment.Motion, process, trajectory, "offset", motionOffsetVariant(offset)) {
-			context.addDiagnostic(DiagnosticMotionInvalid, fmt.Sprintf("%s.offsets[%d]", path, index), "offset variant is not allowed by the process/trajectory motion catalog")
+		if !motionVariantAllowed(context.environment.Motion, spawn, trajectory, "offset", motionOffsetVariant(offset)) {
+			context.addDiagnostic(DiagnosticMotionInvalid, fmt.Sprintf("%s.offsets[%d]", path, index), "offset variant is not allowed by the spawn/trajectory motion catalog")
 		}
 	}
-	if motion.collision != nil && !motionVariantAllowed(context.environment.Motion, process, trajectory, "collision", motion.collision.response) {
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".collision", "collision response is not allowed by the process/trajectory motion catalog")
+	if motion.collision != nil && !motionVariantAllowed(context.environment.Motion, spawn, trajectory, "collision", motion.collision.response) {
+		context.addDiagnostic(DiagnosticMotionInvalid, path+".collision", "collision response is not allowed by the spawn/trajectory motion catalog")
 	}
-	if motion.carry != nil && !motionVariantAllowed(context.environment.Motion, process, trajectory, "carry", "carry") {
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".carry", "carry is not allowed by the process/trajectory motion catalog")
+	if motion.carry != nil && !motionVariantAllowed(context.environment.Motion, spawn, trajectory, "carry", "carry") {
+		context.addDiagnostic(DiagnosticMotionInvalid, path+".carry", "carry is not allowed by the spawn/trajectory motion catalog")
 	}
-	if !motionVariantAllowed(context.environment.Motion, process, trajectory, "completion", motionCompletionVariant(motion.completion)) {
-		context.addDiagnostic(DiagnosticMotionInvalid, path+".completion", "completion variant is not allowed by the process/trajectory motion catalog")
+	if !motionVariantAllowed(context.environment.Motion, spawn, trajectory, "completion", motionCompletionVariant(motion.completion)) {
+		context.addDiagnostic(DiagnosticMotionInvalid, path+".completion", "completion variant is not allowed by the spawn/trajectory motion catalog")
 	}
 }
 
@@ -349,7 +349,7 @@ func validateMotionLiterals(context *compileContext, motion *canonicalMotionIR, 
 	}
 }
 
-func validMotionProcessKind(kind string) bool {
+func validMotionSpawnKind(kind string) bool {
 	switch kind {
 	case "dash", "orbit", "projectile", "area", "beam", "summon":
 		return true
@@ -357,18 +357,18 @@ func validMotionProcessKind(kind string) bool {
 		return false
 	}
 }
-func motionPairAllowed(catalog MotionCapabilityCatalog, process, trajectory string) bool {
-	for _, pair := range catalog.ProcessTrajectoryPairs {
-		if pair.Process == process && pair.Trajectory == trajectory {
+func motionPairAllowed(catalog MotionCapabilityCatalog, spawn, trajectory string) bool {
+	for _, pair := range catalog.SpawnTrajectoryPairs {
+		if pair.Spawn == spawn && pair.Trajectory == trajectory {
 			return true
 		}
 	}
 	return false
 }
 
-func motionVariantAllowed(catalog MotionCapabilityCatalog, process, trajectory, stage, variant string) bool {
+func motionVariantAllowed(catalog MotionCapabilityCatalog, spawn, trajectory, stage, variant string) bool {
 	for _, capability := range catalog.VariantCapabilities {
-		if capability.Process != process || capability.Trajectory != trajectory {
+		if capability.Spawn != spawn || capability.Trajectory != trajectory {
 			continue
 		}
 		switch stage {

@@ -41,7 +41,7 @@ Visual 可以挂在三个位置：
 
 - `presentation.cast`：施法表现；
 - `effect.visual`：Host 成功提交后的效果表现；
-- `process.visual`：process start/update/signal/stop 生命周期表现。
+- `spawn.visual`：spawn start/update/signal/stop 生命周期表现。
 
 定义中只允许 `category`、`theme`、`elements`，不允许 prefab、bundle、URL 或本地路径。
 编译器用 `CompileEnvironment.Visual` 验证：
@@ -53,7 +53,7 @@ Visual 可以挂在三个位置：
 5. 相同视觉三元组会被 intern，但每个 mount 仍计入引用预算。
 
 `InspectPresentationPlan` 输出不可变 Program 的脱离副本：Manifest 带
-`CatalogRevision`、`CatalogDigest`、自身 Digest；mount 分为 Cast、Effects、Processes。
+`CatalogRevision`、`CatalogDigest`、自身 Digest；mount 分为 Cast、Effects、Spawns。
 
 ### 2.2 客户端资源解析
 
@@ -74,11 +74,11 @@ entry 都解析到非空 asset key，最后验证所有 mount 的 visual index�
 
 - Cast visual：cast commit 后产生；
 - Effect visual：Host command 成功并返回 receipt 后产生，预期失败不产生；
-- Process start：权威 process 创建完成后产生；
-- Process update/signal：每次 Host step 返回后按规范化 signal 顺序产生；
-- Process stop：Host stop receipt 成功后产生。
+- Spawn start：权威 spawn 创建完成后产生；
+- Spawn update/signal：每次 Host step 返回后按规范化 signal 顺序产生；
+- Spawn stop：Host stop receipt 成功后产生。
 
-每个事件包含 Runtime 内部 Sequence、Tick、WorldRevision、Program digest、Cast/Process
+每个事件包含 Runtime 内部 Sequence、Tick、WorldRevision、Program digest、Cast/Spawn
 标识以及真实 Source/Target/Position/Direction/Path anchor。`PollPresentation` 显式返回
 `CursorExpired` 和 `More`；过期后必须用 presentation reset/state snapshot 恢复，不能
 假定漏掉的动画仍可重放。
@@ -90,13 +90,13 @@ entry 都解析到非空 asset key，最后验证所有 mount 的 visual index�
 - casts 与 cast-window 状态；
 - cooldown 和 ammo/recharge；
 - abilities、disable overlays；
-- processes、motion、numeric tracks；
+- spawns、motion、numeric tracks；
 - active cast policies；
 - Host 可选提供的 persistent/shared state；
 - 最新 state-event 和 presentation sequence。
 
 复制协议使用 `Runtime.StateDeltas(after, limit)` 返回的封闭 `StateMutation` union。
-cast、cooldown、resource、ability、process、policy、persistent state 均有明确的
+cast、cooldown、resource、ability、spawn、policy、persistent state 均有明确的
 upsert/remove 变体；`ApplyStateMutation` 折叠后的规范 JSON 必须与新快照完全一致。
 `CursorExpired=true` 时必须发送 full snapshot。原始 `StateEvents` 只用于诊断。
 
@@ -135,7 +135,7 @@ Publisher 随后失败也仍可由 Resync 重放；如果 Append 失败，source
 
 state full、state delta、presentation 增量与 presentation reset 都经过同一 observer 的
 VisibilityPolicy：reset 的每条持续表现按它对应的增量事件交给 `FilterPresentation`；ability
-在快照与增量里都按具体 handle 问 `FieldVisible`；cast / process / persistent 的 remove 按归属
+在快照与增量里都按具体 handle 问 `FieldVisible`；cast / spawn / persistent 的 remove 按归属
 实体（`caster` / `owner` / `binding`）过滤。过滤按下发当时的可见性逐条判断，observer 的可见性
 发生变化（进入 / 离开视野、阵营变化）时，业务应调用 `PublishSnapshot` 重发 state full，
 否则客户端会保留不再可见的旧条目或缺少新可见的条目。
@@ -272,7 +272,7 @@ go test -race ./syncstream -count=1
 6. 交换两个 observer 的 packet，确认服务端和客户端均拒绝；
 7. 修改 schema/catalog digest，确认 full 或整体资源解析失败；
 8. 超大 payload、非法 JSON、内外 envelope 不一致均被拒绝；
-9. process visual 完整出现 start/update/signal/stop；
+9. spawn visual 完整出现 start/update/signal/stop；
 10. race 测试和 30 分钟压力测试中无竞态、goroutine 泄漏和 pending 单调增长。
 
 上线门槛：普通测试、fixture、vet、race 全绿；故障矩阵全绿；指标和告警已接入；History
@@ -302,7 +302,7 @@ go test -race ./syncstream -count=1
    Commit 失败时 Applier 不推进 Epoch、网络 sequence 或 source sequence。
 8. Visual 生产加载使用 `TrustedVisualCatalogs + VisualPlanCache`。目录 revision/digest
    不在信任集合时，在任何资源加载之前拒绝；缓存负责并行 preload、fallback、引用计数、
-   unload、空闲淘汰和 catalog 失效。重连用 `PresentationSnapshot` 恢复仍持续的 cast/process
+   unload、空闲淘汰和 catalog 失效。重连用 `PresentationSnapshot` 恢复仍持续的 cast/spawn
    表现，瞬时 effect 不伪造重放。
 
 ### 11.1 生产构造基线

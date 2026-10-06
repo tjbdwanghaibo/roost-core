@@ -20,7 +20,7 @@ type SourceIdentity struct {
 }
 type CompositionBudgets struct {
 	Targets       int        `json:"targets"`
-	Processes     int        `json:"processes"`
+	Spawns        int        `json:"spawns"`
 	Mutations     int        `json:"mutations"`
 	EventsPerRoot int        `json:"events_per_root"`
 	RandomSites   int        `json:"random_sites"`

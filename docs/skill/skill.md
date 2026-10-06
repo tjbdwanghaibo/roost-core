@@ -50,7 +50,7 @@ _, err = runtime.Activate(program, skill.CastInput{Caster: caster, Target: targe
 - `Definition`：严格解析后的 wire 定义，不是运行时对象。
 - `CompileEnvironment`：属性、资源、状态、伤害、Visual 等权威目录与容量上限。
 - `Program`：经过静态证明和 lowering 的不可变执行计划，可缓存并按 digest 标识。
-- `Runtime`：确定性调度器；持有 cast、cooldown、process、state、checkpoint 与事件游标。
+- `Runtime`：确定性调度器；持有 cast、cooldown、spawn、state、checkpoint 与事件游标。
 
 ## Host 生产契约
 

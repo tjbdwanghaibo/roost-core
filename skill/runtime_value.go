@@ -49,7 +49,7 @@ type RuntimeValue struct {
 	entities     []EntityID
 	strings      []string
 	snapshot     SnapshotToken
-	process      ProcessID
+	spawn        SpawnID
 	effectResult runtimeEffectResultValue
 }
 
@@ -110,8 +110,8 @@ func SnapshotTokenRuntimeValue(value SnapshotToken) RuntimeValue {
 	return RuntimeValue{present: true, typ: valueType{Base: valueKindSnapshotToken}, snapshot: value}
 }
 
-func ProcessRuntimeValue(value ProcessID) RuntimeValue {
-	return RuntimeValue{present: true, typ: valueType{Base: valueKindProcess}, process: value}
+func SpawnRuntimeValue(value SpawnID) RuntimeValue {
+	return RuntimeValue{present: true, typ: valueType{Base: valueKindSpawn}, spawn: value}
 }
 
 func (value RuntimeValue) Present() bool   { return value.present }
@@ -156,8 +156,8 @@ func (value RuntimeValue) SnapshotToken() (SnapshotToken, bool) {
 	return value.snapshot, value.present && value.typ.Base == valueKindSnapshotToken
 }
 
-func (value RuntimeValue) Process() (ProcessID, bool) {
-	return value.process, value.present && value.typ.Base == valueKindProcess
+func (value RuntimeValue) Spawn() (SpawnID, bool) {
+	return value.spawn, value.present && value.typ.Base == valueKindSpawn
 }
 
 func (value RuntimeValue) effectResultField(handle ResultFieldHandle) (RuntimeValue, bool) {

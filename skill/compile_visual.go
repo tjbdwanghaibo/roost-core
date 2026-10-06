@@ -46,13 +46,13 @@ func runVisualPass(context *compileContext) {
 	})
 	context.artifacts.ir.walkFlows(func(flow flowIR) {
 		effectFlow, ok := flow.(*effectFlowIR)
-		if !ok || effectFlow.process == nil || effectFlow.process.visual == nil {
+		if !ok || effectFlow.spawn == nil || effectFlow.spawn.visual == nil {
 			return
 		}
-		process := effectFlow.process
-		index, valid := intern(process.visual, process.kind, process.source.Path+".visual")
+		spawn := effectFlow.spawn
+		index, valid := intern(spawn.visual, spawn.kind, spawn.source.Path+".visual")
 		if valid {
-			artifact.bySourcePath[process.source.Path] = index
+			artifact.bySourcePath[spawn.source.Path] = index
 		}
 	})
 	if referenceCount > context.environment.Visual.Limits.MaxVisualRefs {

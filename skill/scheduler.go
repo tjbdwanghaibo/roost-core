@@ -50,15 +50,15 @@ type chainHopTask struct {
 func (*chainHopTask) isScheduledTaskPayload() {}
 func (task *chainHopTask) frameID() FrameID   { return task.Frame }
 
-type processStepTask struct {
+type spawnStepTask struct {
 	CastID     CastID
 	PhaseToken uint64
 	Frame      FrameID
-	ProcessID  ProcessID
+	SpawnID    SpawnID
 }
 
-func (*processStepTask) isScheduledTaskPayload() {}
-func (task *processStepTask) frameID() FrameID   { return task.Frame }
+func (*spawnStepTask) isScheduledTaskPayload() {}
+func (task *spawnStepTask) frameID() FrameID   { return task.Frame }
 
 type castCommitTask struct {
 	CastID     CastID
@@ -264,7 +264,7 @@ func (runtime *Runtime) Advance(tick Tick) error {
 	}
 	if tick == runtime.currentTick {
 		task, taskFound := runtime.scheduler.Peek()
-		ownedDue, ownedFound := runtime.nextOwnedProcessTick()
+		ownedDue, ownedFound := runtime.nextOwnedSpawnTick()
 		if (!taskFound || task.DueTick > tick) && (!ownedFound || ownedDue > tick) {
 			return nil
 		}
@@ -273,7 +273,7 @@ func (runtime *Runtime) Advance(tick Tick) error {
 	defer runtime.commitStateMutationsLocked()
 	for {
 		task, found := runtime.scheduler.Peek()
-		ownedDue, ownedFound := runtime.nextOwnedProcessTick()
+		ownedDue, ownedFound := runtime.nextOwnedSpawnTick()
 		taskDue := Tick(0)
 		if found {
 			taskDue = task.DueTick
@@ -290,7 +290,7 @@ func (runtime *Runtime) Advance(tick Tick) error {
 				return err
 			}
 		} else if ownedFound && ownedDue <= runtime.currentTick {
-			if err := runtime.advanceOwnedProcesses(); err != nil {
+			if err := runtime.advanceOwnedSpawns(); err != nil {
 				return err
 			}
 		}
@@ -307,15 +307,15 @@ func (runtime *Runtime) Advance(tick Tick) error {
 	return nil
 }
 
-func (runtime *Runtime) nextOwnedProcessTick() (Tick, bool) {
+func (runtime *Runtime) nextOwnedSpawnTick() (Tick, bool) {
 	var due Tick
 	found := false
-	for _, process := range runtime.ownedProcesses {
-		if process.Status != ProcessRunning {
+	for _, spawn := range runtime.ownedSpawns {
+		if spawn.Status != SpawnRunning {
 			continue
 		}
-		if !found || process.NextTick < due {
-			due, found = process.NextTick, true
+		if !found || spawn.NextTick < due {
+			due, found = spawn.NextTick, true
 		}
 	}
 	return due, found
@@ -329,8 +329,8 @@ func (runtime *Runtime) advanceHost(tick Tick) error {
 	if err := runtime.collectHostEvents(); err != nil {
 		return err
 	}
-	runtime.retryProcessStopsLocked()
-	return runtime.advanceOwnedProcesses()
+	runtime.retrySpawnStopsLocked()
+	return runtime.advanceOwnedSpawns()
 }
 
 func (runtime *Runtime) collectHostEvents() error {
@@ -372,7 +372,7 @@ func scheduledTaskIdentity(payload scheduledTaskPayload) (CastID, uint64) {
 		return task.CastID, task.PhaseToken
 	case *chainHopTask:
 		return task.CastID, task.PhaseToken
-	case *processStepTask:
+	case *spawnStepTask:
 		return task.CastID, task.PhaseToken
 	case *castCommitTask:
 		return task.CastID, task.PhaseToken
@@ -427,8 +427,8 @@ func (runtime *Runtime) executeScheduledTask(task scheduledTask) error {
 		control, err = runtime.executeOperations(cast, payload.Operations)
 	case *repeatIterationTask:
 		control, err = runtime.executeRepeatIteration(cast, payload)
-	case *processStepTask:
-		err = runtime.executeProcessStep(cast, payload.ProcessID)
+	case *spawnStepTask:
+		err = runtime.executeSpawnStep(cast, payload.SpawnID)
 		control = flowControl{kind: flowContinue}
 	case *castCommitTask:
 		err = runtime.commitCast(cast)
@@ -468,7 +468,7 @@ func (runtime *Runtime) failScheduledCast(cast *castInstance, err error) error {
 }
 
 // failCastLocked 是施法失败的唯一终态入口：记 failed（保留第一次的失败原因）、撤掉本 cast 名下的全部排程
-// 任务与帧、停进程（停不下的标成待停止、由 Runtime 重试）、释放 policy 槽位、结束 ability 计数。
+// 任务与帧、停衍生物（停不下的标成待停止、由 Runtime 重试）、释放 policy 槽位、结束 ability 计数。
 // 可重复调用（排程路径里 releaseCast 已失败收尾后，failScheduledCast 还会再进来一次）。
 //
 // 之前每条终止路径各自手写这些步骤、各漏一步：启动失败不撤任务而 ID 被复用（NC-110）、Cancel / Interrupt /
@@ -479,9 +479,9 @@ func (runtime *Runtime) failCastLocked(cast *castInstance, err error) error {
 		cast.status, cast.failure = CastFailed, err.Error()
 	}
 	runtime.cancelCastTasks(cast)
-	_ = runtime.stopProcesses(cast, true)
-	// 宿主停不下的进程不就此放手：标成待停止，之后的 tick 按退避重试（RR-20261006-21 后续）。
-	runtime.deferUnstoppedProcessesLocked(cast)
+	_ = runtime.stopSpawns(cast, true)
+	// 宿主停不下的衍生物不就此放手：标成待停止，之后的 tick 按退避重试（RR-20261006-21 后续）。
+	runtime.deferUnstoppedSpawnsLocked(cast)
 	runtime.releasePolicySlot(cast)
 	runtime.markAbilityCastFinished(cast)
 	return err
@@ -505,16 +505,16 @@ func (runtime *Runtime) cancelCastTasks(cast *castInstance) {
 	cast.pendingTasks = 0
 }
 
-func (runtime *Runtime) executeProcessStep(cast *castInstance, processID ProcessID) error {
-	process := runtime.processes[processID]
-	if process == nil || process.Status != ProcessRunning {
+func (runtime *Runtime) executeSpawnStep(cast *castInstance, spawnID SpawnID) error {
+	spawn := runtime.spawns[spawnID]
+	if spawn == nil || spawn.Status != SpawnRunning {
 		return nil
 	}
-	signals, err := runtime.stepProcessMotion(cast, process)
+	signals, err := runtime.stepSpawnMotion(cast, spawn)
 	if err != nil {
 		return err
 	}
-	runtime.emitProcessPresentation(cast, process, PresentationProcessUpdate, "", "", cast.visibleRevision)
-	runtime.emitProcessSignals(cast, process, signals, cast.visibleRevision)
+	runtime.emitSpawnPresentation(cast, spawn, PresentationSpawnUpdate, "", "", cast.visibleRevision)
+	runtime.emitSpawnSignals(cast, spawn, signals, cast.visibleRevision)
 	return nil
 }

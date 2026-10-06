@@ -8,7 +8,7 @@ import (
 
 func TestContractCallerPolicyOnlyTightens(t *testing.T) {
 	authority := skill.AuthorityIdentity{Revision: "r", Digest: "d"}
-	profiles := []SkillProfile{{SkillID: "b", GameplayDigest: "b", Authority: authority, Features: []FeatureKey{"effect.damage"}, Metrics: Metrics{Targets: 4, Processes: 2, Mutations: 9, LifetimeTicks: 8}}, {SkillID: "a", GameplayDigest: "a", Authority: authority, Features: []FeatureKey{"select.chain"}, Metrics: Metrics{Targets: 3, Processes: 1, Mutations: 2, LifetimeTicks: 4}}}
+	profiles := []SkillProfile{{SkillID: "b", GameplayDigest: "b", Authority: authority, Features: []FeatureKey{"effect.damage"}, Metrics: Metrics{Targets: 4, Spawns: 2, Mutations: 9, LifetimeTicks: 8}}, {SkillID: "a", GameplayDigest: "a", Authority: authority, Features: []FeatureKey{"select.chain"}, Metrics: Metrics{Targets: 3, Spawns: 1, Mutations: 2, LifetimeTicks: 4}}}
 	contract, err := BuildContract(profiles, authority, CompositionPolicy{ID: "server", AllowGenericPackages: true, Maximum: Metrics{Targets: 6}}, CallerPolicy{Maximum: Metrics{Targets: 5}, DisableGenericPackages: true})
 	if err != nil {
 		t.Fatal(err)

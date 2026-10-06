@@ -21,8 +21,8 @@ const (
 	StateMutationResourceRemove   StateMutationKind = "resource_remove"
 	StateMutationAbilityUpsert    StateMutationKind = "ability_upsert"
 	StateMutationAbilityRemove    StateMutationKind = "ability_remove"
-	StateMutationProcessUpsert    StateMutationKind = "process_upsert"
-	StateMutationProcessRemove    StateMutationKind = "process_remove"
+	StateMutationSpawnUpsert      StateMutationKind = "spawn_upsert"
+	StateMutationSpawnRemove      StateMutationKind = "spawn_remove"
 	StateMutationPolicyUpsert     StateMutationKind = "policy_upsert"
 	StateMutationPolicyRemove     StateMutationKind = "policy_remove"
 	StateMutationPersistentUpsert StateMutationKind = "persistent_upsert"
@@ -43,14 +43,14 @@ type StateMutation struct {
 	Owner                      EntityID                 `json:"owner,omitempty"`
 	ProgramID                  string                   `json:"program_id,omitempty"`
 	AbilityHandle              AbilityHandle            `json:"ability_handle,omitempty"`
-	ProcessID                  ProcessID                `json:"process_id,omitempty"`
+	SpawnID                    SpawnID                  `json:"spawn_id,omitempty"`
 	StateHandle                StateHandle              `json:"state_handle,omitempty"`
 	Binding                    StateScopeBinding        `json:"binding,omitempty"`
 	Cast                       *CastStateSnapshot       `json:"cast,omitempty"`
 	Cooldown                   *CooldownStateSnapshot   `json:"cooldown,omitempty"`
 	Resource                   *SkillResourceSnapshot   `json:"resource,omitempty"`
 	Ability                    *AbilityStateSnapshot    `json:"ability,omitempty"`
-	Process                    *ProcessStateSnapshot    `json:"process,omitempty"`
+	Spawn                      *SpawnStateSnapshot      `json:"spawn,omitempty"`
 	Policy                     *ActivePolicySnapshot    `json:"policy,omitempty"`
 	Persistent                 *PersistentStateSnapshot `json:"persistent,omitempty"`
 }
@@ -154,7 +154,7 @@ func (runtime *Runtime) appendStateMutationsLocked(mutations []StateMutation, ti
 // write points and advances the baseline in place, keeping it byte-identical
 // with a full stateSnapshotLocked (the checkpoint invariant). Cooldowns,
 // skill resources, abilities and active policies are key-tracked at their
-// write sites; casts, processes and persistent states mutate through too many
+// write sites; casts, spawns and persistent states mutate through too many
 // deep write points to record safely, so those domains are rebuilt wholesale
 // and diffed exactly like the full path.
 func (runtime *Runtime) diffWritePointsLocked(revision WorldRevision) []StateMutation {
@@ -184,9 +184,9 @@ func (runtime *Runtime) diffWritePointsLocked(revision WorldRevision) []StateMut
 	casts := runtime.castsSnapshotLocked()
 	result = diffCastStates(result, baseline.Casts, casts)
 	baseline.Casts = casts
-	processes := runtime.processesSnapshotLocked()
-	result = diffProcessStates(result, baseline.Processes, processes)
-	baseline.Processes = processes
+	spawns := runtime.spawnsSnapshotLocked()
+	result = diffSpawnStates(result, baseline.Spawns, spawns)
+	baseline.Spawns = spawns
 	persistent := runtime.persistentStatesSnapshotLocked()
 	result = diffPersistentStates(result, baseline.PersistentStates, persistent)
 	baseline.PersistentStates = persistent
@@ -399,7 +399,7 @@ func cloneSnapshotDomains(snapshot RuntimeStateSnapshot) RuntimeStateSnapshot {
 	snapshot.Cooldowns = append([]CooldownStateSnapshot(nil), snapshot.Cooldowns...)
 	snapshot.SkillResources = append([]SkillResourceSnapshot(nil), snapshot.SkillResources...)
 	snapshot.Abilities = append([]AbilityStateSnapshot(nil), snapshot.Abilities...)
-	snapshot.Processes = append([]ProcessStateSnapshot(nil), snapshot.Processes...)
+	snapshot.Spawns = append([]SpawnStateSnapshot(nil), snapshot.Spawns...)
 	snapshot.ActivePolicies = append([]ActivePolicySnapshot(nil), snapshot.ActivePolicies...)
 	snapshot.PersistentStates = append([]PersistentStateSnapshot(nil), snapshot.PersistentStates...)
 	return snapshot
@@ -447,7 +447,7 @@ func diffRuntimeState(before, after RuntimeStateSnapshot) []StateMutation {
 	result = diffCooldownStates(result, before.Cooldowns, after.Cooldowns)
 	result = diffSkillResourceStates(result, before.SkillResources, after.SkillResources)
 	result = diffAbilityStates(result, before.Abilities, after.Abilities)
-	result = diffProcessStates(result, before.Processes, after.Processes)
+	result = diffSpawnStates(result, before.Spawns, after.Spawns)
 	result = diffActivePolicyStates(result, before.ActivePolicies, after.ActivePolicies)
 	result = diffPersistentStates(result, before.PersistentStates, after.PersistentStates)
 	if before.Tick != after.Tick || before.WorldRevision != after.WorldRevision || before.LatestStateEventSequence != after.LatestStateEventSequence || before.LatestPresentationSequence != after.LatestPresentationSequence {
@@ -570,23 +570,23 @@ func diffAbilityStates(result []StateMutation, before, after []AbilityStateSnaps
 	return result
 }
 
-func diffProcessStates(result []StateMutation, before, after []ProcessStateSnapshot) []StateMutation {
-	beforeProcesses := make(map[ProcessID]ProcessStateSnapshot, len(before))
+func diffSpawnStates(result []StateMutation, before, after []SpawnStateSnapshot) []StateMutation {
+	beforeSpawns := make(map[SpawnID]SpawnStateSnapshot, len(before))
 	for _, value := range before {
-		beforeProcesses[value.ID] = value
+		beforeSpawns[value.ID] = value
 	}
-	afterProcesses := make(map[ProcessID]ProcessStateSnapshot, len(after))
+	afterSpawns := make(map[SpawnID]SpawnStateSnapshot, len(after))
 	for _, value := range after {
-		afterProcesses[value.ID] = value
-		if previous, ok := beforeProcesses[value.ID]; !ok || !reflect.DeepEqual(previous, value) {
-			copyValue := cloneProcessState(value)
-			result = append(result, StateMutation{Kind: StateMutationProcessUpsert, ProcessID: value.ID, Process: &copyValue})
+		afterSpawns[value.ID] = value
+		if previous, ok := beforeSpawns[value.ID]; !ok || !reflect.DeepEqual(previous, value) {
+			copyValue := cloneSpawnState(value)
+			result = append(result, StateMutation{Kind: StateMutationSpawnUpsert, SpawnID: value.ID, Spawn: &copyValue})
 		}
 	}
-	for id, value := range beforeProcesses {
-		if _, ok := afterProcesses[id]; !ok {
+	for id, value := range beforeSpawns {
+		if _, ok := afterSpawns[id]; !ok {
 			// 同 cast remove：带上 owner 供可见性过滤（NC-115）。
-			result = append(result, StateMutation{Kind: StateMutationProcessRemove, ProcessID: id, Owner: value.Owner})
+			result = append(result, StateMutation{Kind: StateMutationSpawnRemove, SpawnID: id, Owner: value.Owner})
 		}
 	}
 	return result
@@ -675,7 +675,7 @@ func mutationSortKey(value StateMutation) string {
 	// Every identity field a mutation kind can carry must be part of this
 	// key: two distinct mutations with equal keys would leave their relative
 	// order to map iteration, breaking cross-run sequence determinism.
-	return string(value.Kind) + ":" + value.ProgramID + ":" + value.StateHandle.GameplayDigest + ":" + formatMutationID(uint64(value.CastID), uint64(value.Caster), uint64(value.Owner), uint64(value.AbilityHandle), uint64(value.ProcessID), uint64(value.StateHandle.Slot), uint64(value.StateHandle.Shared), uint64(value.Binding.Owner), uint64(value.Binding.Subject), value.Binding.Team)
+	return string(value.Kind) + ":" + value.ProgramID + ":" + value.StateHandle.GameplayDigest + ":" + formatMutationID(uint64(value.CastID), uint64(value.Caster), uint64(value.Owner), uint64(value.AbilityHandle), uint64(value.SpawnID), uint64(value.StateHandle.Slot), uint64(value.StateHandle.Shared), uint64(value.Binding.Owner), uint64(value.Binding.Subject), value.Binding.Team)
 }
 
 func formatMutationID(values ...uint64) string {
@@ -715,9 +715,9 @@ func cloneStateMutation(value StateMutation) StateMutation {
 		copyValue := cloneAbilityState(*value.Ability)
 		value.Ability = &copyValue
 	}
-	if value.Process != nil {
-		copyValue := cloneProcessState(*value.Process)
-		value.Process = &copyValue
+	if value.Spawn != nil {
+		copyValue := cloneSpawnState(*value.Spawn)
+		value.Spawn = &copyValue
 	}
 	if value.Policy != nil {
 		copyValue := *value.Policy
@@ -736,7 +736,7 @@ func cloneAbilityState(value AbilityStateSnapshot) AbilityStateSnapshot {
 	return value
 }
 
-func cloneProcessState(value ProcessStateSnapshot) ProcessStateSnapshot {
+func cloneSpawnState(value SpawnStateSnapshot) SpawnStateSnapshot {
 	value.Numeric = append([]NumericPropertySnapshot(nil), value.Numeric...)
 	return value
 }
@@ -791,14 +791,14 @@ func ApplyStateMutation(snapshot *RuntimeStateSnapshot, mutation StateMutation) 
 		snapshot.Abilities = upsertAbility(snapshot.Abilities, value)
 	case StateMutationAbilityRemove:
 		snapshot.Abilities = removeAbility(snapshot.Abilities, mutation.Owner, mutation.AbilityHandle)
-	case StateMutationProcessUpsert:
-		if mutation.Process == nil {
+	case StateMutationSpawnUpsert:
+		if mutation.Spawn == nil {
 			return ErrStateMutationInvalid
 		}
-		value := cloneProcessState(*mutation.Process)
-		snapshot.Processes = upsertBy(snapshot.Processes, value, func(v ProcessStateSnapshot) ProcessID { return v.ID })
-	case StateMutationProcessRemove:
-		snapshot.Processes = removeBy(snapshot.Processes, mutation.ProcessID, func(v ProcessStateSnapshot) ProcessID { return v.ID })
+		value := cloneSpawnState(*mutation.Spawn)
+		snapshot.Spawns = upsertBy(snapshot.Spawns, value, func(v SpawnStateSnapshot) SpawnID { return v.ID })
+	case StateMutationSpawnRemove:
+		snapshot.Spawns = removeBy(snapshot.Spawns, mutation.SpawnID, func(v SpawnStateSnapshot) SpawnID { return v.ID })
 	case StateMutationPolicyUpsert:
 		if mutation.Policy == nil {
 			return ErrStateMutationInvalid
@@ -954,7 +954,7 @@ func sortRuntimeStateSnapshot(snapshot *RuntimeStateSnapshot) {
 		}
 		return snapshot.Abilities[i].Handle < snapshot.Abilities[j].Handle
 	})
-	sort.Slice(snapshot.Processes, func(i, j int) bool { return snapshot.Processes[i].ID < snapshot.Processes[j].ID })
+	sort.Slice(snapshot.Spawns, func(i, j int) bool { return snapshot.Spawns[i].ID < snapshot.Spawns[j].ID })
 	sort.Slice(snapshot.ActivePolicies, func(i, j int) bool {
 		if snapshot.ActivePolicies[i].Caster != snapshot.ActivePolicies[j].Caster {
 			return snapshot.ActivePolicies[i].Caster < snapshot.ActivePolicies[j].Caster

@@ -9,7 +9,7 @@ func ValidateContract(contract SkillCompositionContract) error {
 	if contract.Version != "skillcompose/v2" || contract.Authority.Revision == "" || contract.Authority.Digest == "" || contract.Policy.ID == "" || len(contract.Sources) == 0 || contract.Digest == "" {
 		return ErrContractInvalid
 	}
-	if contract.Budgets.Targets < 0 || contract.Budgets.Processes < 0 || contract.Budgets.Mutations < 0 || contract.Budgets.EventsPerRoot < 0 || contract.Budgets.RandomSites < 0 || contract.Budgets.LifetimeTicks < 0 {
+	if contract.Budgets.Targets < 0 || contract.Budgets.Spawns < 0 || contract.Budgets.Mutations < 0 || contract.Budgets.EventsPerRoot < 0 || contract.Budgets.RandomSites < 0 || contract.Budgets.LifetimeTicks < 0 {
 		return ErrContractInvalid
 	}
 	sources := make(map[string]string, len(contract.Sources))

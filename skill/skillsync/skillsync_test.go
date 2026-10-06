@@ -351,7 +351,7 @@ func TestEntityVisibilityPolicyDefaultDenyAndRecursiveValueRedaction(t *testing.
 		RedactSpatial:     true,
 		FieldVisible: func(_ syncstream.Observer, field VisibilityField, _ string) (bool, error) {
 			switch field {
-			case VisibilityPersistentState, VisibilityPersistentValue, VisibilityProcesses, VisibilityPresentation:
+			case VisibilityPersistentState, VisibilityPersistentValue, VisibilitySpawns, VisibilityPresentation:
 				return true, nil
 			default:
 				return false, nil
@@ -360,15 +360,15 @@ func TestEntityVisibilityPolicyDefaultDenyAndRecursiveValueRedaction(t *testing.
 	}
 	snapshot := skill.RuntimeStateSnapshot{
 		Casts:            []skill.CastStateSnapshot{{ID: 1, Caster: 1}},
-		Processes:        []skill.ProcessStateSnapshot{{ID: 1, Owner: 1, Motion: skill.MotionState{Position: skill.Position{X: 10}, CarryTarget: 99}}},
+		Spawns:           []skill.SpawnStateSnapshot{{ID: 1, Owner: 1, Motion: skill.MotionState{Position: skill.Position{X: 10}, CarryTarget: 99}}},
 		PersistentStates: []skill.PersistentStateSnapshot{{Handle: skill.StateHandle{GameplayDigest: "g", Slot: 1}, Binding: skill.StateScopeBinding{Owner: 1}, Value: skill.EntityListRuntimeValue([]skill.EntityID{1, 99})}},
 	}
 	filtered, err := policy.FilterStateSnapshot(syncstream.Observer{}, snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(filtered.Casts) != 0 || len(filtered.Processes) != 1 || filtered.Processes[0].Motion.Position != (skill.Position{}) || filtered.Processes[0].Motion.CarryTarget != 0 {
-		t.Fatalf("filtered process = %#v", filtered)
+	if len(filtered.Casts) != 0 || len(filtered.Spawns) != 1 || filtered.Spawns[0].Motion.Position != (skill.Position{}) || filtered.Spawns[0].Motion.CarryTarget != 0 {
+		t.Fatalf("filtered spawn = %#v", filtered)
 	}
 	entities, ok := filtered.PersistentStates[0].Value.Entities()
 	if !ok || len(entities) != 1 || entities[0] != 1 {

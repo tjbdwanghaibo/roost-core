@@ -48,25 +48,25 @@ func analyzeLifecycle(context *compileContext, flow flowIR) lifecycleFact {
 		fact = lifecycleFact{MustTerminate: true}
 	case *effectFlowIR:
 		fact = lifecycleFact{CanFallthrough: true}
-		if typed.process != nil && typed.process.kind == "area" {
-			processes := 1
+		if typed.spawn != nil && typed.spawn.kind == "area" {
+			spawns := 1
 			if spawn, ok := typed.effect.(*spawnEffectIR); ok {
-				processes = spawn.count
+				spawns = spawn.count
 			}
-			fact.MaxLifetime = typed.process.durationTicks
-			fact.MaxSchedules = saturatingMul(processes, areaStepBound(typed.process.durationTicks, typed.process.intervalTicks))
-			fact.MaxProcesses = processes
+			fact.MaxLifetime = typed.spawn.durationTicks
+			fact.MaxSchedules = saturatingMul(spawns, areaStepBound(typed.spawn.durationTicks, typed.spawn.intervalTicks))
+			fact.MaxSpawns = spawns
 		}
 		if typed.result != nil {
 			resultFact := mergeAlternativeLifetimes(analyzeLifecycle(context, typed.result.success), analyzeLifecycle(context, typed.result.failure))
 			resultFact.MaxLifetime = maxTick(resultFact.MaxLifetime, fact.MaxLifetime)
 			resultFact.MaxSchedules = saturatingAdd(resultFact.MaxSchedules, fact.MaxSchedules)
-			resultFact.MaxProcesses = saturatingAdd(resultFact.MaxProcesses, fact.MaxProcesses)
+			resultFact.MaxSpawns = saturatingAdd(resultFact.MaxSpawns, fact.MaxSpawns)
 			fact = resultFact
 		}
 		if typed.callbacks != nil {
-			if typed.process == nil || typed.process.kind != "area" {
-				fact.MaxProcesses = saturatingAdd(fact.MaxProcesses, 1)
+			if typed.spawn == nil || typed.spawn.kind != "area" {
+				fact.MaxSpawns = saturatingAdd(fact.MaxSpawns, 1)
 			}
 		}
 	case *sequenceFlowIR:
@@ -78,7 +78,7 @@ func analyzeLifecycle(context *compileContext, flow flowIR) lifecycleFact {
 			childFact := analyzeLifecycle(context, child)
 			fact.MaxLifetime = saturatingTickAdd(fact.MaxLifetime, childFact.MaxLifetime)
 			fact.MaxSchedules = saturatingAdd(fact.MaxSchedules, childFact.MaxSchedules)
-			fact.MaxProcesses = saturatingAdd(fact.MaxProcesses, childFact.MaxProcesses)
+			fact.MaxSpawns = saturatingAdd(fact.MaxSpawns, childFact.MaxSpawns)
 			fact.MaySuspend = fact.MaySuspend || childFact.MaySuspend
 			fact.CanFallthrough = childFact.CanFallthrough
 			fact.MustTerminate = childFact.MustTerminate
@@ -95,7 +95,7 @@ func analyzeLifecycle(context *compileContext, flow flowIR) lifecycleFact {
 			fact.MaySuspend = fact.MaySuspend || branchFact.MaySuspend
 			fact.MaxLifetime = maxTick(fact.MaxLifetime, branchFact.MaxLifetime)
 			fact.MaxSchedules = saturatingAdd(fact.MaxSchedules, branchFact.MaxSchedules)
-			fact.MaxProcesses = saturatingAdd(fact.MaxProcesses, branchFact.MaxProcesses)
+			fact.MaxSpawns = saturatingAdd(fact.MaxSpawns, branchFact.MaxSpawns)
 		}
 	case *ifFlowIR:
 		fact = mergeAlternativeLifetimes(analyzeLifecycle(context, typed.thenFlow), analyzeLifecycle(context, typed.elseFlow))
@@ -107,7 +107,7 @@ func analyzeLifecycle(context *compileContext, flow flowIR) lifecycleFact {
 		fact.MustTerminate = false
 		fact.MaxLifetime = Tick(saturatingMul(int(body.MaxLifetime), times))
 		fact.MaxSchedules = saturatingMul(body.MaxSchedules, times)
-		fact.MaxProcesses = saturatingMul(body.MaxProcesses, times)
+		fact.MaxSpawns = saturatingMul(body.MaxSpawns, times)
 		if typed.intervalTicks > 0 && times > 1 {
 			fact.MaySuspend = true
 			fact.MaxSchedules = saturatingAdd(fact.MaxSchedules, times-1)
@@ -126,7 +126,7 @@ func analyzeLifecycle(context *compileContext, flow flowIR) lifecycleFact {
 		case *selectEachConsumeIR:
 			consumed = analyzeLifecycle(context, consume.body)
 			consumed.MaxSchedules = saturatingMul(consumed.MaxSchedules, typed.selectPlan.limit)
-			consumed.MaxProcesses = saturatingMul(consumed.MaxProcesses, typed.selectPlan.limit)
+			consumed.MaxSpawns = saturatingMul(consumed.MaxSpawns, typed.selectPlan.limit)
 		}
 		fact = mergeAlternativeLifetimes(consumed, analyzeLifecycle(context, typed.onEmpty))
 	default:
@@ -143,7 +143,7 @@ func mergeAlternativeLifetimes(left, right lifecycleFact) lifecycleFact {
 		MaySuspend:     left.MaySuspend || right.MaySuspend,
 		MaxLifetime:    maxTick(left.MaxLifetime, right.MaxLifetime),
 		MaxSchedules:   maxInt(left.MaxSchedules, right.MaxSchedules),
-		MaxProcesses:   maxInt(left.MaxProcesses, right.MaxProcesses),
+		MaxSpawns:      maxInt(left.MaxSpawns, right.MaxSpawns),
 	}
 }
 

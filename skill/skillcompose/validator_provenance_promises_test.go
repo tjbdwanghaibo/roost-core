@@ -11,11 +11,11 @@ import (
 // 报告既 invalid 又没有任何诊断，生成器拿不到失败原因。
 func TestValidateCandidateExplainsBlankOrDuplicateSources(t *testing.T) {
 	authority := skill.AuthorityIdentity{Revision: "r", Digest: "d"}
-	contract, err := BuildContract([]SkillProfile{{SkillID: "a", GameplayDigest: "source", Authority: authority, Features: []FeatureKey{"effect.damage"}, Metrics: Metrics{Targets: 1, Processes: 1, Mutations: 1, LifetimeTicks: 1}}}, authority, CompositionPolicy{ID: "p"}, CallerPolicy{})
+	contract, err := BuildContract([]SkillProfile{{SkillID: "a", GameplayDigest: "source", Authority: authority, Features: []FeatureKey{"effect.damage"}, Metrics: Metrics{Targets: 1, Spawns: 1, Mutations: 1, LifetimeTicks: 1}}}, authority, CompositionPolicy{ID: "p"}, CallerPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	valid := SkillProfile{SkillID: "candidate", GameplayDigest: "candidate-digest", Authority: authority, Sources: []SourceIdentity{{SkillID: "a", GameplayDigest: "source"}}, Features: []FeatureKey{"effect.damage"}, FeatureOrigins: []FeatureOrigin{{Feature: "effect.damage", SourceID: "a", Transform: TransformIdentity}}, Operations: []string{"damage"}, Metrics: Metrics{Targets: 1, Processes: 1, Mutations: 1, LifetimeTicks: 1}}
+	valid := SkillProfile{SkillID: "candidate", GameplayDigest: "candidate-digest", Authority: authority, Sources: []SourceIdentity{{SkillID: "a", GameplayDigest: "source"}}, Features: []FeatureKey{"effect.damage"}, FeatureOrigins: []FeatureOrigin{{Feature: "effect.damage", SourceID: "a", Transform: TransformIdentity}}, Operations: []string{"damage"}, Metrics: Metrics{Targets: 1, Spawns: 1, Mutations: 1, LifetimeTicks: 1}}
 	if report := ValidateCandidate(contract, valid); !report.Valid || len(report.Diagnostics) != 0 {
 		t.Fatalf("valid candidate = %#v", report)
 	}

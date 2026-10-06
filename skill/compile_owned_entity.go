@@ -25,7 +25,7 @@ func runOwnedEntityPass(context *compileContext) {
 					context.addDiagnostic(DiagnosticBudgetExceeded, effect.source.Path+".duration_ticks", "spawn lifetime exceeds the unit template or environment maximum")
 				}
 				if typed.callbacks != nil {
-					allowAreaFinish := typed.process != nil && typed.process.kind == "area"
+					allowAreaFinish := typed.spawn != nil && typed.spawn.kind == "area"
 					validateDetachedCallbacks(context, typed.callbacks, allowAreaFinish)
 				}
 				validateSpawnBindings(context, effect, template)
@@ -101,7 +101,7 @@ func unitTemplateParameterType(template UnitTemplateCatalogEntry, name string) (
 	return valueType{}, false
 }
 
-func validateDetachedCallbacks(context *compileContext, callbacks *processCallbacksIR, allowAreaFinish bool) {
+func validateDetachedCallbacks(context *compileContext, callbacks *spawnCallbacksIR, allowAreaFinish bool) {
 	roots := []struct {
 		event string
 		flow  flowIR
@@ -115,7 +115,7 @@ func validateDetachedCallbacks(context *compileContext, callbacks *processCallba
 		if root == nil {
 			continue
 		}
-		// 回调里能读哪些引用、哪些快照点，由类型检查按求值上下文表的 process_callback 列检查
+		// 回调里能读哪些引用、哪些快照点，由类型检查按求值上下文表的 spawn_callback 列检查
 		// （eval_contexts.go）；这里只管回调不能做的控制流。
 		walkFlowTree(root, func(flow flowIR) {
 			switch typed := flow.(type) {
@@ -123,25 +123,25 @@ func validateDetachedCallbacks(context *compileContext, callbacks *processCallba
 				if allowAreaFinish && event != "cancel" {
 					break
 				}
-				context.addDiagnostic(DiagnosticLifecycleControlConflict, flow.sourceRef().Path, "entity-scoped process callback cannot control its finished cast")
+				context.addDiagnostic(DiagnosticLifecycleControlConflict, flow.sourceRef().Path, "entity-scoped spawn callback cannot control its finished cast")
 			case *gotoFlowIR:
-				context.addDiagnostic(DiagnosticLifecycleControlConflict, flow.sourceRef().Path, "entity-scoped process callback cannot control its finished cast")
+				context.addDiagnostic(DiagnosticLifecycleControlConflict, flow.sourceRef().Path, "entity-scoped spawn callback cannot control its finished cast")
 			case *waitFlowIR:
-				context.addDiagnostic(DiagnosticLifecycleControlConflict, typed.source.Path, "entity-scoped process callback cannot suspend")
+				context.addDiagnostic(DiagnosticLifecycleControlConflict, typed.source.Path, "entity-scoped spawn callback cannot suspend")
 			case *repeatFlowIR:
 				if typed.intervalTicks > 0 {
-					context.addDiagnostic(DiagnosticLifecycleControlConflict, typed.source.Path, "entity-scoped process callback cannot schedule asynchronous repetition")
+					context.addDiagnostic(DiagnosticLifecycleControlConflict, typed.source.Path, "entity-scoped spawn callback cannot schedule asynchronous repetition")
 				}
 			case *effectFlowIR:
 				if typed.callbacks != nil {
-					context.addDiagnostic(DiagnosticBudgetExceeded, typed.source.Path, "entity-scoped process callback cannot recursively create a process")
+					context.addDiagnostic(DiagnosticBudgetExceeded, typed.source.Path, "entity-scoped spawn callback cannot recursively create a spawn")
 				}
 				switch effect := typed.effect.(type) {
 				case *setMemoryEffectIR, *addMemoryEffectIR, *clearMemoryEffectIR:
-					context.addDiagnostic(DiagnosticInputUnavailable, typed.source.Path, "entity-scoped process callback cannot mutate cast memory")
+					context.addDiagnostic(DiagnosticInputUnavailable, typed.source.Path, "entity-scoped spawn callback cannot mutate cast memory")
 				case *modifyStateEffectIR:
-					if valueReferencesProcess(effect.value) {
-						context.addDiagnostic(DiagnosticReferenceUnknown, effect.source.Path, "process references cannot be stored in persistent state")
+					if valueReferencesSpawn(effect.value) {
+						context.addDiagnostic(DiagnosticReferenceUnknown, effect.source.Path, "spawn references cannot be stored in persistent state")
 					}
 				}
 			}
@@ -149,11 +149,11 @@ func validateDetachedCallbacks(context *compileContext, callbacks *processCallba
 	}
 }
 
-// processNumericFieldBound 报告环境里是否有适用于该进程种类的数值属性绑定到这个 motion 槽位；
-// 绑定的槽位由进程数值状态在启动时取值（resolveProcessNumeric 先查绑定）。
-func processNumericFieldBound(environment CompileEnvironment, kind, stage, variant, field string) bool {
-	for _, policy := range environment.ProcessProperties.Properties {
-		if !containsString(policy.ProcessKinds, kind) {
+// spawnNumericFieldBound 报告环境里是否有适用于该衍生物种类的数值属性绑定到这个 motion 槽位；
+// 绑定的槽位由衍生物数值状态在启动时取值（resolveSpawnNumeric 先查绑定）。
+func spawnNumericFieldBound(environment CompileEnvironment, kind, stage, variant, field string) bool {
+	for _, policy := range environment.SpawnProperties.Properties {
+		if !containsString(policy.SpawnKinds, kind) {
 			continue
 		}
 		for _, binding := range policy.SlotBindings {
@@ -165,10 +165,10 @@ func processNumericFieldBound(environment CompileEnvironment, kind, stage, varia
 	return false
 }
 
-func valueReferencesProcess(value valueIR) bool {
+func valueReferencesSpawn(value valueIR) bool {
 	found := false
 	walkValue(value, func(candidate valueIR) {
-		if reference, ok := candidate.(*referenceValueIR); ok && reference.reference == "$process" {
+		if reference, ok := candidate.(*referenceValueIR); ok && reference.reference == "$spawn" {
 			found = true
 		}
 	})

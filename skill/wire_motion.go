@@ -5,9 +5,9 @@ import (
 	"fmt"
 )
 
-// ProcessDefinition owns its motion plan. Motion is deliberately not a flow or
+// SpawnDefinition owns its motion plan. Motion is deliberately not a flow or
 // effect variant, so callers cannot reorder its stages.
-type ProcessDefinition struct {
+type SpawnDefinition struct {
 	Kind            string
 	DurationTicks   Tick
 	IntervalTicks   Tick
@@ -101,7 +101,7 @@ type BoomerangCompletionDefinition struct{ MaxReturnTicks Tick }
 
 func (BoomerangCompletionDefinition) completionDefinition() {}
 
-func decodeProcess(data []byte) (*ProcessDefinition, error) {
+func decodeSpawn(data []byte) (*SpawnDefinition, error) {
 	var raw struct {
 		Kind            string          `json:"kind"`
 		DurationTicks   Tick            `json:"duration_ticks"`
@@ -140,7 +140,7 @@ func decodeProcess(data []byte) (*ProcessDefinition, error) {
 		}
 		tracks[index] = NumericTrackDefinition{Property: track.Property, Operation: track.Operation, Value: value, OverTicks: track.OverTicks}
 	}
-	return &ProcessDefinition{Kind: raw.Kind, DurationTicks: raw.DurationTicks, IntervalTicks: raw.IntervalTicks, EmitLeaveOnStop: raw.EmitLeaveOnStop, Visual: raw.Visual, Area: area, Motion: motion, NumericTracks: tracks}, nil
+	return &SpawnDefinition{Kind: raw.Kind, DurationTicks: raw.DurationTicks, IntervalTicks: raw.IntervalTicks, EmitLeaveOnStop: raw.EmitLeaveOnStop, Visual: raw.Visual, Area: area, Motion: motion, NumericTracks: tracks}, nil
 }
 
 func decodeOptionalMotion(data json.RawMessage) (*MotionDefinition, error) {

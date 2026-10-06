@@ -9,23 +9,23 @@ type RuntimeRetentionStats struct {
 	ProcLedgerEntries    int
 	RuntimeEvents        int
 	RuntimeEventsDropped uint64
-	// StopPendingProcesses counts processes the Host failed to stop that the
-	// Runtime still owns (bounded by MaxStopPendingProcesses);
-	// StopRetryExhaustedProcesses is the subset whose retries hit
-	// ProcessStopRetryLimit and are no longer retried automatically.
-	StopPendingProcesses        int
-	StopRetryExhaustedProcesses int
+	// StopPendingSpawns counts spawns the Host failed to stop that the
+	// Runtime still owns (bounded by MaxStopPendingSpawns);
+	// StopRetryExhaustedSpawns is the subset whose retries hit
+	// SpawnStopRetryLimit and are no longer retried automatically.
+	StopPendingSpawns        int
+	StopRetryExhaustedSpawns int
 }
 
 func (runtime *Runtime) RetentionStats() RuntimeRetentionStats {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
 	stats := RuntimeRetentionStats{Casts: len(runtime.casts), CompletedCasts: len(runtime.completedCastOrder), RootEvents: len(runtime.rootEventCounts), ProcLedgerEntries: len(runtime.procLedger), RuntimeEvents: len(runtime.runtimeEvents), RuntimeEventsDropped: runtime.runtimeEventDropped}
-	for _, process := range runtime.processes {
-		if process.Status == ProcessStopPending {
-			stats.StopPendingProcesses++
-			if process.stopRetryExhausted {
-				stats.StopRetryExhaustedProcesses++
+	for _, spawn := range runtime.spawns {
+		if spawn.Status == SpawnStopPending {
+			stats.StopPendingSpawns++
+			if spawn.stopRetryExhausted {
+				stats.StopRetryExhaustedSpawns++
 			}
 		}
 	}
@@ -62,12 +62,12 @@ func (runtime *Runtime) forgetCompletedCastLocked(id CastID) {
 	}
 }
 
-// castHasRunningProcessLocked 报告 cast 名下是否还有在宿主侧运行的进程（含已移交的，以及停止失败、等 Runtime
-// 重试停止的 stop_pending）。已停的进程记录不算：它们只是历史，随 cast 一起回收（forgetCastProcessesLocked）。
-func (runtime *Runtime) castHasRunningProcessLocked(id CastID) bool {
-	for _, records := range []map[ProcessID]*ProcessInstance{runtime.processes, runtime.ownedProcesses} {
-		for _, process := range records {
-			if process != nil && process.CastID == id && process.liveOnHost() {
+// castHasRunningSpawnLocked 报告 cast 名下是否还有在宿主侧运行的衍生物（含已移交的，以及停止失败、等 Runtime
+// 重试停止的 stop_pending）。已停的衍生物记录不算：它们只是历史，随 cast 一起回收（forgetCastSpawnsLocked）。
+func (runtime *Runtime) castHasRunningSpawnLocked(id CastID) bool {
+	for _, records := range []map[SpawnID]*SpawnInstance{runtime.spawns, runtime.ownedSpawns} {
+		for _, spawn := range records {
+			if spawn != nil && spawn.CastID == id && spawn.liveOnHost() {
 				return true
 			}
 		}
@@ -75,17 +75,17 @@ func (runtime *Runtime) castHasRunningProcessLocked(id CastID) bool {
 	return false
 }
 
-// forgetCastProcessesLocked 在 cast 被删除之前删掉它名下的进程记录（调用方已确认没有运行中的进程）。
-// 进程停止后记录一直留在 runtime.processes 里；之前没有任何路径删它们：
-//   - 未提交的失败启动删 cast、还 ID 后，旧记录挂到下一个 cast 名下，entity 进程停止时又清掉了 Program，
+// forgetCastSpawnsLocked 在 cast 被删除之前删掉它名下的衍生物记录（调用方已确认没有运行中的衍生物）。
+// 衍生物停止后记录一直留在 runtime.spawns 里；之前没有任何路径删它们：
+//   - 未提交的失败启动删 cast、还 ID 后，旧记录挂到下一个 cast 名下，entity 衍生物停止时又清掉了 Program，
 //     Checkpoint 找不到它的程序直接报 corrupt（RR-20261006-21）；
-//   - castEvictableLocked 把已停的记录也当作引用，起过进程的 cast 永不回收：live Runtime 的 cast 与进程记录无界增长，
+//   - castEvictableLocked 把已停的记录也当作引用，起过衍生物的 cast 永不回收：live Runtime 的 cast 与衍生物记录无界增长，
 //     完成队列超过 CompletedCastLimit 后 checkpoint 恢复判 corrupt（RR-20261006-23）。
-func (runtime *Runtime) forgetCastProcessesLocked(id CastID) {
-	for _, records := range []map[ProcessID]*ProcessInstance{runtime.processes, runtime.ownedProcesses} {
-		for processID, process := range records {
-			if process != nil && process.CastID == id {
-				delete(records, processID)
+func (runtime *Runtime) forgetCastSpawnsLocked(id CastID) {
+	for _, records := range []map[SpawnID]*SpawnInstance{runtime.spawns, runtime.ownedSpawns} {
+		for spawnID, spawn := range records {
+			if spawn != nil && spawn.CastID == id {
+				delete(records, spawnID)
 			}
 		}
 	}
@@ -105,7 +105,7 @@ func (runtime *Runtime) pruneCompletedCastsLocked() {
 			if !runtime.castEvictableLocked(cast) {
 				continue
 			}
-			runtime.forgetCastProcessesLocked(id)
+			runtime.forgetCastSpawnsLocked(id)
 			delete(runtime.casts, id)
 			runtime.completedCastOrder = append(runtime.completedCastOrder[:index], runtime.completedCastOrder[index+1:]...)
 			evicted = true
@@ -121,8 +121,8 @@ func (runtime *Runtime) castEvictableLocked(cast *castInstance) bool {
 	if cast == nil || cast.pendingTasks != 0 || cast.policyActive || (cast.status != CastFinished && cast.status != CastFailed) {
 		return false
 	}
-	// 运行中的进程（包括移交后仍在运行的）仍引用这个 cast；已停的记录随 cast 一起删（RR-20261006-23）。
-	return !runtime.castHasRunningProcessLocked(cast.id)
+	// 运行中的衍生物（包括移交后仍在运行的）仍引用这个 cast；已停的记录随 cast 一起删（RR-20261006-23）。
+	return !runtime.castHasRunningSpawnLocked(cast.id)
 }
 
 func (runtime *Runtime) trackRootEventLocked(root EventID) error {
@@ -163,13 +163,13 @@ func (runtime *Runtime) rootEventReferencedLocked(root EventID) bool {
 			return true
 		}
 	}
-	for _, process := range runtime.processes {
-		if process != nil && process.eventContext.RootEventID == root {
+	for _, spawn := range runtime.spawns {
+		if spawn != nil && spawn.eventContext.RootEventID == root {
 			return true
 		}
 	}
-	for _, process := range runtime.ownedProcesses {
-		if process != nil && process.eventContext.RootEventID == root {
+	for _, spawn := range runtime.ownedSpawns {
+		if spawn != nil && spawn.eventContext.RootEventID == root {
 			return true
 		}
 	}

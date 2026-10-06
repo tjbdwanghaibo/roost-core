@@ -16,7 +16,7 @@
    消费的不可变执行计划。
 5. 阅读 `runtime*.go`、`executor.go`、`scheduler.go`：理解 Cast Window、
    Flow Turn、事件队列和确定性调度。
-6. 阅读 `process*.go` 与 `memory_host*.go`：最后查看 Process、Motion、
+6. 阅读 `spawn*.go` 与 `memory_host*.go`：最后查看 Spawn、Motion、
    Numeric、Area、State、Owned Entity 与 Temporal Snapshot 的世界交互。
 7. 阅读 `skillcompose/`：它只使用 Program Inspector，绝不进入 Runtime。
 

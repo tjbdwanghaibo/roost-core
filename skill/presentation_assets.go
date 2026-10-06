@@ -76,7 +76,7 @@ func ResolvePresentationPlan(plan PresentationPlan, resolver VisualAssetResolver
 			return ResolvedPresentationPlan{}, err
 		}
 	}
-	for _, mount := range append(append([]PresentationMount(nil), result.Plan.Effects...), result.Plan.Processes...) {
+	for _, mount := range append(append([]PresentationMount(nil), result.Plan.Effects...), result.Plan.Spawns...) {
 		if err := validateMount(mount); err != nil {
 			return ResolvedPresentationPlan{}, err
 		}
@@ -94,7 +94,7 @@ func clonePresentationPlan(plan PresentationPlan) PresentationPlan {
 		plan.Cast = &mount
 	}
 	plan.Effects = append([]PresentationMount(nil), plan.Effects...)
-	plan.Processes = append([]PresentationMount(nil), plan.Processes...)
+	plan.Spawns = append([]PresentationMount(nil), plan.Spawns...)
 	return plan
 }
 

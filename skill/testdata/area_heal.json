@@ -14,7 +14,7 @@
     "timeout_ticks": 5,
     "on": {"enter": {"flow": "sequence", "steps": [
       {"flow": "effect", "effect": {"type": "spawn", "template": "deployable.trap", "position": "$caster.position", "count": 1, "duration_ticks": 3},
-       "process": {"kind": "area", "duration_ticks": 3, "interval_ticks": 1,
+       "spawn": {"kind": "area", "duration_ticks": 3, "interval_ticks": 1,
          "area": {"from": "$caster", "kind": "entity", "shape": {"type": "circle", "radius": 8}, "filters": [{"type": "targetable"}], "order": {"by": "stable_id", "direction": "asc"}, "limit": 2}},
        "on": {"tick": {"flow": "effect", "effect": {"type": "heal", "target": "$event.target", "amount": 1}}}},
       {"flow": "wait", "ticks": 3, "then": {"flow": "finish", "reason": "area_expired"}}

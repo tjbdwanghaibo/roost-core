@@ -20,13 +20,13 @@ func authorityMatches(expected, actual AuthorityIdentity) bool {
 
 func authorityDigest(environment CompileEnvironment) string {
 	payload := struct {
-		Domain, Revision  string
-		Limits            CompileLimits
-		Numeric           NumericAuthority
-		Gameplay          GameplayCatalog
-		Motion            MotionCapabilityCatalog
-		ProcessProperties ProcessPropertyCatalog
-	}{Domain: "roost.skill/v2/gameplay-authority", Revision: environment.Revision, Limits: environment.Limits, Numeric: environment.Numeric, Gameplay: environment.Gameplay, Motion: environment.Motion, ProcessProperties: environment.ProcessProperties}
+		Domain, Revision string
+		Limits           CompileLimits
+		Numeric          NumericAuthority
+		Gameplay         GameplayCatalog
+		Motion           MotionCapabilityCatalog
+		SpawnProperties  SpawnPropertyCatalog
+	}{Domain: "roost.skill/v2/gameplay-authority", Revision: environment.Revision, Limits: environment.Limits, Numeric: environment.Numeric, Gameplay: environment.Gameplay, Motion: environment.Motion, SpawnProperties: environment.SpawnProperties}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		panic(err)
@@ -70,7 +70,7 @@ func validateCompileEnvironment(environment CompileEnvironment) []Diagnostic {
 	validateReferences(environment.Gameplay, &diagnostics)
 	validatePolicies(environment, &diagnostics)
 	validateMotionCatalog(environment, &diagnostics)
-	validateProcessPropertyCatalog(environment.ProcessProperties, &diagnostics)
+	validateSpawnPropertyCatalog(environment.SpawnProperties, &diagnostics)
 	sort.SliceStable(diagnostics, func(i, j int) bool { return diagnosticLess(diagnostics[i], diagnostics[j]) })
 	return diagnostics
 }
@@ -121,11 +121,11 @@ func validateCatalogHandles(environment CompileEnvironment, diagnostics *[]Diagn
 	checkHandles("$.gameplay.tags", len(environment.Gameplay.Tags.Entries), func(i int) uint16 { return uint16(environment.Gameplay.Tags.Entries[i].Handle) }, diagnostics)
 	checkHandles("$.gameplay.shared_states", len(environment.Gameplay.SharedStates.Entries), func(i int) uint16 { return uint16(environment.Gameplay.SharedStates.Entries[i].Handle) }, diagnostics)
 	checkHandles("$.gameplay.temporal", len(environment.Gameplay.Temporal.Entries), func(i int) uint16 { return uint16(environment.Gameplay.Temporal.Entries[i].Handle) }, diagnostics)
-	checkHandles("$.process_properties", len(environment.ProcessProperties.Properties), func(i int) uint16 { return uint16(environment.ProcessProperties.Properties[i].Handle) }, diagnostics)
+	checkHandles("$.spawn_properties", len(environment.SpawnProperties.Properties), func(i int) uint16 { return uint16(environment.SpawnProperties.Properties[i].Handle) }, diagnostics)
 	// key 也必须非空且唯一（RR-20261005-NC-212）。编译器按 key 查 catalog 的写法不止一种：
 	// authority 表与 owned entity 的模板表后出现的条目覆盖前面的，unitTemplateEntry /
 	// typecheck 的属性表取第一个。只查 handle 唯一时，同一个 key 在一次编译里会被解析成
-	// 两个条目，typecheck 与 lower 用的策略不同。temporal 与 process property 在各自的
+	// 两个条目，typecheck 与 lower 用的策略不同。temporal 与 spawn property 在各自的
 	// 校验里已经查了 key。
 	checkKeys("$.gameplay.attributes", len(environment.Gameplay.Attributes.Entries), func(i int) string { return environment.Gameplay.Attributes.Entries[i].Key }, diagnostics)
 	checkKeys("$.gameplay.resources", len(environment.Gameplay.Resources.Entries), func(i int) string { return environment.Gameplay.Resources.Entries[i].Key }, diagnostics)
@@ -149,49 +149,49 @@ func checkKeys(path string, length int, key func(int) string, diagnostics *[]Dia
 	}
 }
 
-func validateProcessPropertyCatalog(catalog ProcessPropertyCatalog, diagnostics *[]Diagnostic) {
+func validateSpawnPropertyCatalog(catalog SpawnPropertyCatalog, diagnostics *[]Diagnostic) {
 	allowedKeys := map[string]bool{
 		"speed": true, "radius": true, "arc_height": true, "turn_rate_mdeg_per_tick": true,
 		"angular_speed_mdeg_per_tick": true, "offset_amplitude": true, "offset_radius": true,
 		"return_speed_bp": true, "collision_force": true,
 	}
-	canonical := make(map[string]ProcessPropertyPolicy)
-	for _, policy := range defaultProcessPropertyCatalog().Properties {
+	canonical := make(map[string]SpawnPropertyPolicy)
+	for _, policy := range defaultSpawnPropertyCatalog().Properties {
 		canonical[policy.Key] = policy
 	}
 	seenKeys := make(map[string]bool)
 	if catalog.Revision == "" {
-		appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, "$.process_properties.revision", "process property catalog revision is required")
+		appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, "$.spawn_properties.revision", "spawn property catalog revision is required")
 	}
 	for index, policy := range catalog.Properties {
-		path := fmt.Sprintf("$.process_properties.properties[%d]", index)
-		valid := allowedKeys[policy.Key] && !seenKeys[policy.Key] && policy.Minimum <= policy.Maximum && len(policy.ProcessKinds) > 0 && uniqueNonEmptyStrings(policy.ProcessKinds) && len(policy.Operations) > 0 && uniqueNonEmptyStrings(policy.Operations) && policy.Interpolation == "linear_integer" && policy.Rounding == "truncate_toward_zero" && len(policy.SlotBindings) > 0
+		path := fmt.Sprintf("$.spawn_properties.properties[%d]", index)
+		valid := allowedKeys[policy.Key] && !seenKeys[policy.Key] && policy.Minimum <= policy.Maximum && len(policy.SpawnKinds) > 0 && uniqueNonEmptyStrings(policy.SpawnKinds) && len(policy.Operations) > 0 && uniqueNonEmptyStrings(policy.Operations) && policy.Interpolation == "linear_integer" && policy.Rounding == "truncate_toward_zero" && len(policy.SlotBindings) > 0
 		for _, operation := range policy.Operations {
 			valid = valid && (operation == "set" || operation == "add" || operation == "mul_bp")
 		}
-		for _, processKind := range policy.ProcessKinds {
-			valid = valid && validMotionProcessKind(processKind)
+		for _, spawnKind := range policy.SpawnKinds {
+			valid = valid && validMotionSpawnKind(spawnKind)
 		}
 		for _, binding := range policy.SlotBindings {
 			valid = valid && binding.Stage != "" && binding.Variant != "" && binding.Field != ""
 		}
 		expected, canonicalPolicy := canonical[policy.Key]
-		valid = valid && canonicalPolicy && equalProcessPropertyPolicy(policy, expected)
+		valid = valid && canonicalPolicy && equalSpawnPropertyPolicy(policy, expected)
 		if !valid {
-			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, path, "process property must exactly match its canonical handle, range, process kinds, operations, interpolation, rounding, and slot bindings")
+			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, path, "spawn property must exactly match its canonical handle, range, spawn kinds, operations, interpolation, rounding, and slot bindings")
 		}
 		seenKeys[policy.Key] = true
 	}
 	for key := range canonical {
 		if !seenKeys[key] {
-			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, "$.process_properties.properties", "process property catalog must contain every canonical numeric property")
+			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, "$.spawn_properties.properties", "spawn property catalog must contain every canonical numeric property")
 			break
 		}
 	}
 }
 
-func equalProcessPropertyPolicy(left, right ProcessPropertyPolicy) bool {
-	if left.Handle != right.Handle || left.Key != right.Key || left.Minimum != right.Minimum || left.Maximum != right.Maximum || left.Interpolation != right.Interpolation || left.Rounding != right.Rounding || !equalStrings(left.ProcessKinds, right.ProcessKinds) || !equalStrings(left.Operations, right.Operations) || len(left.SlotBindings) != len(right.SlotBindings) {
+func equalSpawnPropertyPolicy(left, right SpawnPropertyPolicy) bool {
+	if left.Handle != right.Handle || left.Key != right.Key || left.Minimum != right.Minimum || left.Maximum != right.Maximum || left.Interpolation != right.Interpolation || left.Rounding != right.Rounding || !equalStrings(left.SpawnKinds, right.SpawnKinds) || !equalStrings(left.Operations, right.Operations) || len(left.SlotBindings) != len(right.SlotBindings) {
 		return false
 	}
 	for index := range left.SlotBindings {
@@ -344,28 +344,28 @@ func validatePolicies(environment CompileEnvironment, diagnostics *[]Diagnostic)
 
 func validateMotionCatalog(environment CompileEnvironment, diagnostics *[]Diagnostic) {
 	catalog := environment.Motion
-	if catalog.Revision == "" || catalog.MaximumSpeed <= 0 || catalog.MaximumDistance <= 0 || catalog.MaximumAngularSpeed <= 0 || catalog.MaximumTrackingTicks <= 0 || len(catalog.ProcessTrajectoryPairs) == 0 || len(catalog.VariantCapabilities) == 0 || !uniqueNonEmptyStrings(catalog.EnabledSlots) || !uniqueNonEmptyStrings(catalog.HostFeatures) {
+	if catalog.Revision == "" || catalog.MaximumSpeed <= 0 || catalog.MaximumDistance <= 0 || catalog.MaximumAngularSpeed <= 0 || catalog.MaximumTrackingTicks <= 0 || len(catalog.SpawnTrajectoryPairs) == 0 || len(catalog.VariantCapabilities) == 0 || !uniqueNonEmptyStrings(catalog.EnabledSlots) || !uniqueNonEmptyStrings(catalog.HostFeatures) {
 		appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, "$.motion", "motion catalog requires revision, closed capabilities, and positive bounds")
 	}
-	pairs := make(map[string]bool, len(catalog.ProcessTrajectoryPairs))
-	for index, pair := range catalog.ProcessTrajectoryPairs {
-		key := pair.Process + ":" + pair.Trajectory
-		if !validMotionProcessKind(pair.Process) || !validMotionTrajectoryKind(pair.Trajectory) || pair.Process == "summon" || pairs[key] {
-			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, fmt.Sprintf("$.motion.process_trajectory_pairs[%d]", index), "process/trajectory capability must be a unique supported closed pair")
+	pairs := make(map[string]bool, len(catalog.SpawnTrajectoryPairs))
+	for index, pair := range catalog.SpawnTrajectoryPairs {
+		key := pair.Spawn + ":" + pair.Trajectory
+		if !validMotionSpawnKind(pair.Spawn) || !validMotionTrajectoryKind(pair.Trajectory) || pair.Spawn == "summon" || pairs[key] {
+			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, fmt.Sprintf("$.motion.spawn_trajectory_pairs[%d]", index), "spawn/trajectory capability must be a unique supported closed pair")
 		}
 		pairs[key] = true
 	}
 	variants := make(map[string]bool, len(catalog.VariantCapabilities))
 	for index, capability := range catalog.VariantCapabilities {
-		key := capability.Process + ":" + capability.Trajectory
+		key := capability.Spawn + ":" + capability.Trajectory
 		if !pairs[key] || variants[key] || !validMotionVariantList(capability.Frames, validMotionFrameVariant) || !validMotionVariantList(capability.Steering, validMotionSteeringVariant) || !validMotionVariantList(capability.Offsets, validMotionOffsetVariant) || !validMotionVariantList(capability.CollisionResponses, validMotionCollisionVariant) || !validMotionVariantList(capability.Completions, validMotionCompletionVariant) {
-			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, fmt.Sprintf("$.motion.variant_capabilities[%d]", index), "motion variant capability must be a unique closed process/trajectory policy")
+			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, fmt.Sprintf("$.motion.variant_capabilities[%d]", index), "motion variant capability must be a unique closed spawn/trajectory policy")
 		}
 		variants[key] = true
 	}
 	for key := range pairs {
 		if !variants[key] {
-			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, "$.motion.variant_capabilities", "every process/trajectory capability requires a closed stage-variant policy")
+			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, "$.motion.variant_capabilities", "every spawn/trajectory capability requires a closed stage-variant policy")
 			break
 		}
 	}

@@ -92,7 +92,7 @@ func lowerProgram(artifacts *compileArtifacts) (*Program, []Diagnostic) {
 	context := loweringContext{artifacts: artifacts, program: program, memory: make(map[string]MemoryIndex), input: make(map[string]uint16), readEntities: make(map[string]programValue)}
 	context.lowerInput()
 	context.lowerAbilityProperties()
-	context.lowerProcessProperties()
+	context.lowerSpawnProperties()
 	context.lowerState()
 	context.lowerMemory()
 	context.lowerCastAndCosts()
@@ -123,71 +123,71 @@ func lowerProgram(artifacts *compileArtifacts) (*Program, []Diagnostic) {
 	return program, nil
 }
 
-func (c *loweringContext) lowerProcessProperties() {
-	defer c.at("$environment.process_properties")()
-	policies := append([]ProcessPropertyPolicy(nil), c.artifacts.environmentProcessProperties()...)
+func (c *loweringContext) lowerSpawnProperties() {
+	defer c.at("$environment.spawn_properties")()
+	policies := append([]SpawnPropertyPolicy(nil), c.artifacts.environmentSpawnProperties()...)
 	sort.Slice(policies, func(left, right int) bool { return policies[left].Handle < policies[right].Handle })
 	for _, policy := range policies {
 		var operations uint8
 		for _, operation := range policy.Operations {
-			operations |= uint8(1 << c.lowerProcessNumericOperation(operation))
+			operations |= uint8(1 << c.lowerSpawnNumericOperation(operation))
 		}
-		processKinds := make([]processPropertyProcessKind, len(policy.ProcessKinds))
-		for index, processKind := range policy.ProcessKinds {
-			processKinds[index] = resolveName(c, processPropertyProcessKinds, "process property process kind", processKind)
+		spawnKinds := make([]spawnPropertySpawnKind, len(policy.SpawnKinds))
+		for index, spawnKind := range policy.SpawnKinds {
+			spawnKinds[index] = resolveName(c, spawnPropertySpawnKinds, "spawn property spawn kind", spawnKind)
 		}
-		slotBindings := make([]processPropertySlotBindingProgram, len(policy.SlotBindings))
+		slotBindings := make([]spawnPropertySlotBindingProgram, len(policy.SlotBindings))
 		for index, binding := range policy.SlotBindings {
-			slotBindings[index] = processPropertySlotBindingProgram{
-				stage:   resolveName(c, processPropertySlotStages, "process property slot stage", binding.Stage),
-				variant: resolveName(c, processPropertySlotVariants, "process property slot variant", binding.Variant),
-				field:   resolveName(c, processPropertySlotFields, "process property slot field", binding.Field),
+			slotBindings[index] = spawnPropertySlotBindingProgram{
+				stage:   resolveName(c, spawnPropertySlotStages, "spawn property slot stage", binding.Stage),
+				variant: resolveName(c, spawnPropertySlotVariants, "spawn property slot variant", binding.Variant),
+				field:   resolveName(c, spawnPropertySlotFields, "spawn property slot field", binding.Field),
 			}
 		}
-		key := resolveName(c, processPropertyKeys, "process property key", policy.Key)
-		c.program.processProperties = append(c.program.processProperties, processPropertyProgram{handle: policy.Handle, key: key, minimum: policy.Minimum, maximum: policy.Maximum, interpolation: processNumericLinearInteger, rounding: processNumericTruncateTowardZero, allowedOperationsMask: operations, processKinds: processKinds, slotBindings: slotBindings})
+		key := resolveName(c, spawnPropertyKeys, "spawn property key", policy.Key)
+		c.program.spawnProperties = append(c.program.spawnProperties, spawnPropertyProgram{handle: policy.Handle, key: key, minimum: policy.Minimum, maximum: policy.Maximum, interpolation: spawnNumericLinearInteger, rounding: spawnNumericTruncateTowardZero, allowedOperationsMask: operations, spawnKinds: spawnKinds, slotBindings: slotBindings})
 	}
 }
 
-// 环境里 process property 名字到 Program 枚举的对照。lower 经 resolveName 查，查不到报编译错误。
+// 环境里 spawn property 名字到 Program 枚举的对照。lower 经 resolveName 查，查不到报编译错误。
 var (
-	processNumericOperations = map[string]processNumericOperation{"set": processNumericSet, "add": processNumericAdd, "mul_bp": processNumericMulBP}
-	processPropertyKeys      = map[string]processPropertyKey{
-		"speed": processPropertySpeed, "radius": processPropertyRadius, "arc_height": processPropertyArcHeight,
-		"turn_rate_mdeg_per_tick": processPropertyTurnRateMDegPerTick, "angular_speed_mdeg_per_tick": processPropertyAngularSpeedMDegPerTick,
-		"offset_amplitude": processPropertyOffsetAmplitude, "offset_radius": processPropertyOffsetRadius,
-		"return_speed_bp": processPropertyReturnSpeedBP, "collision_force": processPropertyCollisionForce,
+	spawnNumericOperations = map[string]spawnNumericOperation{"set": spawnNumericSet, "add": spawnNumericAdd, "mul_bp": spawnNumericMulBP}
+	spawnPropertyKeys      = map[string]spawnPropertyKey{
+		"speed": spawnPropertySpeed, "radius": spawnPropertyRadius, "arc_height": spawnPropertyArcHeight,
+		"turn_rate_mdeg_per_tick": spawnPropertyTurnRateMDegPerTick, "angular_speed_mdeg_per_tick": spawnPropertyAngularSpeedMDegPerTick,
+		"offset_amplitude": spawnPropertyOffsetAmplitude, "offset_radius": spawnPropertyOffsetRadius,
+		"return_speed_bp": spawnPropertyReturnSpeedBP, "collision_force": spawnPropertyCollisionForce,
 	}
-	processPropertyProcessKinds = map[string]processPropertyProcessKind{"dash": processPropertyProcessDash, "orbit": processPropertyProcessOrbit, "projectile": processPropertyProcessProjectile, "area": processPropertyProcessArea}
-	processPropertySlotStages   = map[string]processPropertySlotStage{"trajectory": processPropertySlotTrajectory, "steering": processPropertySlotSteering, "offset": processPropertySlotOffset, "completion": processPropertySlotCompletion, "collision": processPropertySlotCollision}
-	processPropertySlotVariants = map[string]processPropertySlotVariant{"linear": processPropertyVariantLinear, "path": processPropertyVariantPath, "parabola": processPropertyVariantParabola, "orbit": processPropertyVariantOrbit, "tracking": processPropertyVariantTracking, "zigzag": processPropertyVariantZigzag, "circular": processPropertyVariantCircular, "boomerang": processPropertyVariantBoomerang, "present": processPropertyVariantPresent}
-	processPropertySlotFields   = map[string]processPropertySlotField{"speed": processPropertyFieldSpeed, "radius": processPropertyFieldRadius, "height": processPropertyFieldHeight, "turn_rate_mdeg_per_tick": processPropertyFieldTurnRateMDegPerTick, "angular_speed": processPropertyFieldAngularSpeed, "amplitude": processPropertyFieldAmplitude, "return_speed_bp": processPropertyFieldReturnSpeedBP, "force": processPropertyFieldForce}
+	spawnPropertySpawnKinds   = map[string]spawnPropertySpawnKind{"dash": spawnPropertySpawnDash, "orbit": spawnPropertySpawnOrbit, "projectile": spawnPropertySpawnProjectile, "area": spawnPropertySpawnArea}
+	spawnPropertySlotStages   = map[string]spawnPropertySlotStage{"trajectory": spawnPropertySlotTrajectory, "steering": spawnPropertySlotSteering, "offset": spawnPropertySlotOffset, "completion": spawnPropertySlotCompletion, "collision": spawnPropertySlotCollision}
+	spawnPropertySlotVariants = map[string]spawnPropertySlotVariant{"linear": spawnPropertyVariantLinear, "path": spawnPropertyVariantPath, "parabola": spawnPropertyVariantParabola, "orbit": spawnPropertyVariantOrbit, "tracking": spawnPropertyVariantTracking, "zigzag": spawnPropertyVariantZigzag, "circular": spawnPropertyVariantCircular, "boomerang": spawnPropertyVariantBoomerang, "present": spawnPropertyVariantPresent}
+	spawnPropertySlotFields   = map[string]spawnPropertySlotField{"speed": spawnPropertyFieldSpeed, "radius": spawnPropertyFieldRadius, "height": spawnPropertyFieldHeight, "turn_rate_mdeg_per_tick": spawnPropertyFieldTurnRateMDegPerTick, "angular_speed": spawnPropertyFieldAngularSpeed, "amplitude": spawnPropertyFieldAmplitude, "return_speed_bp": spawnPropertyFieldReturnSpeedBP, "force": spawnPropertyFieldForce}
 )
 
-func (c *loweringContext) lowerProcessNumericOperation(operation string) processNumericOperation {
-	return resolveName(c, processNumericOperations, "process numeric operation", operation)
+func (c *loweringContext) lowerSpawnNumericOperation(operation string) spawnNumericOperation {
+	return resolveName(c, spawnNumericOperations, "spawn numeric operation", operation)
 }
 
-// lookupProcessProperty 按名字找环境里的 process property 策略。
-func (c *loweringContext) lookupProcessProperty(key string) ProcessPropertyPolicy {
-	if policy, found := lookupProcessPropertyPolicyByArtifacts(c.artifacts, key); found {
+// lookupSpawnProperty 按名字找环境里的 spawn property 策略。
+func (c *loweringContext) lookupSpawnProperty(key string) SpawnPropertyPolicy {
+	if policy, found := lookupSpawnPropertyPolicyByArtifacts(c.artifacts, key); found {
 		return policy
 	}
-	c.unresolved("process property", key)
-	return ProcessPropertyPolicy{}
+	c.unresolved("spawn property", key)
+	return SpawnPropertyPolicy{}
 }
 
-func (artifacts *compileArtifacts) environmentProcessProperties() []ProcessPropertyPolicy {
-	return artifacts.processProperties
+func (artifacts *compileArtifacts) environmentSpawnProperties() []SpawnPropertyPolicy {
+	return artifacts.spawnProperties
 }
 
-func lookupProcessPropertyPolicyByArtifacts(artifacts *compileArtifacts, key string) (ProcessPropertyPolicy, bool) {
-	for _, policy := range artifacts.processProperties {
+func lookupSpawnPropertyPolicyByArtifacts(artifacts *compileArtifacts, key string) (SpawnPropertyPolicy, bool) {
+	for _, policy := range artifacts.spawnProperties {
 		if policy.Key == key {
 			return policy, true
 		}
 	}
-	return ProcessPropertyPolicy{}, false
+	return SpawnPropertyPolicy{}, false
 }
 
 func (c *loweringContext) lowerAbilityProperties() {
@@ -268,7 +268,7 @@ func (c *loweringContext) lowerSnapshots() {
 	sort.Strings(paths)
 	for _, path := range paths {
 		plan := c.artifacts.snapshots.reads[path]
-		// 计划的实体取读取处 lower 出的值。cast_start / phase_start / process_start 在采样点
+		// 计划的实体取读取处 lower 出的值。cast_start / phase_start / spawn_start 在采样点
 		// 求值，snapshot pass 已拒绝其中的 `$local.` 引用（NC-220），读取处与空作用域 lower
 		// 出的值相同；current 等运行期不采样的计划只是随 Program 记录（进 gameplay digest），
 		// 它们的实体可以是读取处的局部变量。此前一律用空作用域 lower，B3 之后局部变量查不到
@@ -544,26 +544,26 @@ func (c *loweringContext) lowerEffect(header operationHeader, flow *effectFlowIR
 		continuations.success, continuations.hasSuccess = c.lowerFlow(flow.result.success, cloneLowerScope(resultScope))
 		continuations.failure, continuations.hasFailure = c.lowerFlow(flow.result.failure, cloneLowerScope(resultScope))
 	}
-	if flow.callbacks != nil || flow.process != nil {
-		continuations.processTemplate = ProcessTemplateIndex(len(c.program.processTemplates))
-		continuations.hasProcess = true
-		template := processTemplateProgram{index: continuations.processTemplate}
-		if flow.process != nil {
-			template.durationTicks = flow.process.durationTicks
-			template.intervalTicks = flow.process.intervalTicks
-			template.emitLeaveOnStop = flow.process.emitLeaveOnStop
-			if visual, found := c.artifacts.visual.bySourcePath[flow.process.source.Path]; found {
+	if flow.callbacks != nil || flow.spawn != nil {
+		continuations.spawnTemplate = SpawnTemplateIndex(len(c.program.spawnTemplates))
+		continuations.hasSpawn = true
+		template := spawnTemplateProgram{index: continuations.spawnTemplate}
+		if flow.spawn != nil {
+			template.durationTicks = flow.spawn.durationTicks
+			template.intervalTicks = flow.spawn.intervalTicks
+			template.emitLeaveOnStop = flow.spawn.emitLeaveOnStop
+			if visual, found := c.artifacts.visual.bySourcePath[flow.spawn.source.Path]; found {
 				template.visual, template.hasVisual = visual, true
 			}
-			if flow.process.area != nil {
-				area := c.lowerSelectorPlan(*flow.process.area, scope)
+			if flow.spawn.area != nil {
+				area := c.lowerSelectorPlan(*flow.spawn.area, scope)
 				template.area = &area
 			}
-			template.motion = c.lowerMotionProgram(flow.process.motion, scope)
-			template.numericTracks = make([]numericTrackProgram, len(flow.process.numericTracks))
-			for index, track := range flow.process.numericTracks {
-				policy := c.lookupProcessProperty(track.property)
-				template.numericTracks[index] = numericTrackProgram{property: policy.Handle, operation: c.lowerProcessNumericOperation(track.operation), value: c.lowerValue(track.value, scope), overTicks: track.overTicks}
+			template.motion = c.lowerMotionProgram(flow.spawn.motion, scope)
+			template.numericTracks = make([]numericTrackProgram, len(flow.spawn.numericTracks))
+			for index, track := range flow.spawn.numericTracks {
+				policy := c.lookupSpawnProperty(track.property)
+				template.numericTracks[index] = numericTrackProgram{property: policy.Handle, operation: c.lowerSpawnNumericOperation(track.operation), value: c.lowerValue(track.value, scope), overTicks: track.overTicks}
 			}
 		}
 		if flow.callbacks != nil {
@@ -580,11 +580,11 @@ func (c *loweringContext) lowerEffect(header operationHeader, flow *effectFlowIR
 			}
 			for _, callback := range callbackEvents {
 				if operationIndex, present := c.lowerFlow(callback.flow, cloneLowerScope(scope)); present {
-					template.callbacks = append(template.callbacks, processCallbackProgram{event: callback.name, operation: operationIndex})
+					template.callbacks = append(template.callbacks, spawnCallbackProgram{event: callback.name, operation: operationIndex})
 				}
 			}
 		}
-		c.program.processTemplates = append(c.program.processTemplates, template)
+		c.program.spawnTemplates = append(c.program.spawnTemplates, template)
 	}
 	switch effect := flow.effect.(type) {
 	case *captureSnapshotEffectIR:
@@ -632,9 +632,9 @@ func (c *loweringContext) lowerEffect(header operationHeader, flow *effectFlowIR
 	case *modifyAbilityStateEffectIR:
 		property := resolveName(c, c.artifacts.ability.properties, "ability property", effect.property)
 		return abilityStateOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, owner: c.lowerValue(effect.owner, scope), ability: c.lowerValue(effect.ability, scope), property: property.handle, propertyName: effect.property, operation: effect.operation, value: c.lowerValue(effect.value, scope), durationTicks: effect.durationTicks}
-	case *modifyProcessEffectIR:
-		policy := c.lookupProcessProperty(effect.property)
-		return modifyProcessOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, process: c.lowerValue(effect.process, scope), property: policy.Handle, operation: c.lowerProcessNumericOperation(effect.operation), value: c.lowerValue(effect.value, scope), overTicks: effect.overTicks}
+	case *modifySpawnEffectIR:
+		policy := c.lookupSpawnProperty(effect.property)
+		return modifySpawnOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, spawn: c.lowerValue(effect.spawn, scope), property: policy.Handle, operation: c.lowerSpawnNumericOperation(effect.operation), value: c.lowerValue(effect.value, scope), overTicks: effect.overTicks}
 	case *spawnEffectIR:
 		overrides := make([]spawnAttributeOverrideProgram, len(effect.attributeOverrides))
 		for index, override := range effect.attributeOverrides {

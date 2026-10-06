@@ -6,12 +6,12 @@ package skill
 type PresentationEventKind string
 
 const (
-	PresentationCast          PresentationEventKind = "cast"
-	PresentationEffect        PresentationEventKind = "effect"
-	PresentationProcessStart  PresentationEventKind = "process_start"
-	PresentationProcessUpdate PresentationEventKind = "process_update"
-	PresentationProcessSignal PresentationEventKind = "process_signal"
-	PresentationProcessStop   PresentationEventKind = "process_stop"
+	PresentationCast        PresentationEventKind = "cast"
+	PresentationEffect      PresentationEventKind = "effect"
+	PresentationSpawnStart  PresentationEventKind = "spawn_start"
+	PresentationSpawnUpdate PresentationEventKind = "spawn_update"
+	PresentationSpawnSignal PresentationEventKind = "spawn_signal"
+	PresentationSpawnStop   PresentationEventKind = "spawn_stop"
 )
 
 type PresentationAnchor struct {
@@ -25,21 +25,21 @@ type PresentationAnchor struct {
 // PresentationMount connects an immutable visual manifest entry to a compiled
 // gameplay mount point.
 type PresentationMount struct {
-	VisualIndex     VisualIndex
-	EffectIndex     EffectIndex
-	HasEffect       bool
-	ProcessTemplate ProcessTemplateIndex
-	HasProcess      bool
+	VisualIndex   VisualIndex
+	EffectIndex   EffectIndex
+	HasEffect     bool
+	SpawnTemplate SpawnTemplateIndex
+	HasSpawn      bool
 }
 
 // PresentationPlan is the stable, cacheable renderer contract for a Program.
 // A client should key it by Identity.PresentationDigest.
 type PresentationPlan struct {
-	Identity  ProgramIdentityView
-	Manifest  SkillVisualManifest
-	Cast      *PresentationMount
-	Effects   []PresentationMount
-	Processes []PresentationMount
+	Identity ProgramIdentityView
+	Manifest SkillVisualManifest
+	Cast     *PresentationMount
+	Effects  []PresentationMount
+	Spawns   []PresentationMount
 }
 
 // InspectPresentationPlan returns a detached projection of the immutable
@@ -59,14 +59,14 @@ func InspectPresentationPlan(program *Program) PresentationPlan {
 		}
 		plan.Effects = append(plan.Effects, PresentationMount{
 			VisualIndex: continuations.visual, EffectIndex: effectIndex, HasEffect: true,
-			ProcessTemplate: continuations.processTemplate, HasProcess: continuations.hasProcess,
+			SpawnTemplate: continuations.spawnTemplate, HasSpawn: continuations.hasSpawn,
 		})
 	}
-	for _, template := range program.processTemplates {
+	for _, template := range program.spawnTemplates {
 		if !template.hasVisual {
 			continue
 		}
-		plan.Processes = append(plan.Processes, PresentationMount{VisualIndex: template.visual, ProcessTemplate: template.index, HasProcess: true})
+		plan.Spawns = append(plan.Spawns, PresentationMount{VisualIndex: template.visual, SpawnTemplate: template.index, HasSpawn: true})
 	}
 	return plan
 }
@@ -89,11 +89,11 @@ type PresentationEvent struct {
 	Source             EntityID
 	PrimaryTarget      EntityID
 	Anchor             PresentationAnchor
-	ProcessID          ProcessID
-	ProcessTemplate    ProcessTemplateIndex
-	HasProcess         bool
-	ProcessStatus      ProcessStatus
-	ProcessSignal      ProcessSignalKind
+	SpawnID            SpawnID
+	SpawnTemplate      SpawnTemplateIndex
+	HasSpawn           bool
+	SpawnStatus        SpawnStatus
+	SpawnSignal        SpawnSignalKind
 	StopCause          StopCause
 }
 
@@ -163,37 +163,37 @@ func (runtime *Runtime) emitEffectPresentation(cast *castInstance, continuations
 	runtime.appendPresentation(cast, PresentationEvent{
 		WorldRevision: revision, Kind: PresentationEffect,
 		EffectIndex: effectIndex, HasEffect: true, VisualIndex: continuations.visual,
-		ProcessTemplate: continuations.processTemplate, HasProcess: continuations.hasProcess, Anchor: clonePresentationAnchor(anchor),
+		SpawnTemplate: continuations.spawnTemplate, HasSpawn: continuations.hasSpawn, Anchor: clonePresentationAnchor(anchor),
 	})
 }
 
-func (runtime *Runtime) emitProcessPresentation(cast *castInstance, process *ProcessInstance, kind PresentationEventKind, signal ProcessSignalKind, cause StopCause, revision WorldRevision) {
-	if process == nil || process.Program == nil || int(process.TemplateIndex) >= len(process.Program.processTemplates) {
+func (runtime *Runtime) emitSpawnPresentation(cast *castInstance, spawn *SpawnInstance, kind PresentationEventKind, signal SpawnSignalKind, cause StopCause, revision WorldRevision) {
+	if spawn == nil || spawn.Program == nil || int(spawn.TemplateIndex) >= len(spawn.Program.spawnTemplates) {
 		return
 	}
-	template := process.Program.processTemplates[process.TemplateIndex]
+	template := spawn.Program.spawnTemplates[spawn.TemplateIndex]
 	if !template.hasVisual {
 		return
 	}
 	if cast == nil {
-		cast = runtime.detachedProcessCast(process, evalProcessCallback)
+		cast = runtime.detachedSpawnCast(spawn, evalSpawnCallback)
 	}
-	position, direction := process.Motion.Position, process.Motion.Direction
+	position, direction := spawn.Motion.Position, spawn.Motion.Direction
 	runtime.appendPresentation(cast, PresentationEvent{
 		WorldRevision: revision, Kind: kind, VisualIndex: template.visual,
-		ProcessID: process.ID, ProcessTemplate: process.TemplateIndex, HasProcess: true,
-		ProcessStatus: process.Status, ProcessSignal: signal, StopCause: cause,
-		Anchor: PresentationAnchor{Source: process.Owner, Target: process.LifecycleEntity, Position: &position, Direction: &direction},
+		SpawnID: spawn.ID, SpawnTemplate: spawn.TemplateIndex, HasSpawn: true,
+		SpawnStatus: spawn.Status, SpawnSignal: signal, StopCause: cause,
+		Anchor: PresentationAnchor{Source: spawn.Owner, Target: spawn.LifecycleEntity, Position: &position, Direction: &direction},
 	})
 }
 
-func (runtime *Runtime) emitProcessSignals(cast *castInstance, process *ProcessInstance, signals []ProcessSignal, revision WorldRevision) {
-	for _, signal := range normalizeProcessSignals(signals) {
-		view := *process
+func (runtime *Runtime) emitSpawnSignals(cast *castInstance, spawn *SpawnInstance, signals []SpawnSignal, revision WorldRevision) {
+	for _, signal := range normalizeSpawnSignals(signals) {
+		view := *spawn
 		if signal.Target != 0 {
 			view.LifecycleEntity = signal.Target
 		}
-		runtime.emitProcessPresentation(cast, &view, PresentationProcessSignal, signal.Kind, "", revision)
+		runtime.emitSpawnPresentation(cast, &view, PresentationSpawnSignal, signal.Kind, "", revision)
 	}
 }
 

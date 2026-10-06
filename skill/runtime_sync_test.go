@@ -16,7 +16,7 @@ func TestRuntimeValueJSONRoundTrip(t *testing.T) {
 		{present: true, typ: valueType{Base: valueKindPath}, path: []Position{{X: 1}, {X: 2}}},
 		{present: true, typ: valueType{Base: valueKindEntityList}, entities: []EntityID{2, 3}},
 		{present: true, typ: valueType{Base: valueKindStringList}, strings: []string{"a", "b"}},
-		{present: true, typ: valueType{Base: valueKindProcess}, process: 9},
+		{present: true, typ: valueType{Base: valueKindSpawn}, spawn: 9},
 		{present: false, typ: valueType{Base: valueKindEntity, Optional: true}},
 	}
 	for _, value := range values {

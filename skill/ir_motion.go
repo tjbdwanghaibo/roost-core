@@ -5,7 +5,7 @@ type motionIR interface {
 	walkValues(valueVisitor)
 }
 
-type processIR struct {
+type spawnIR struct {
 	source          sourceRef
 	kind            string
 	durationTicks   Tick
@@ -17,7 +17,7 @@ type processIR struct {
 	numericTracks   []numericTrackIR
 }
 
-func (p *processIR) walkValues(visitor valueVisitor) {
+func (p *spawnIR) walkValues(visitor valueVisitor) {
 	if p.area != nil {
 		p.area.walkValues(visitor)
 	}

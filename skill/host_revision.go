@@ -4,7 +4,7 @@ import "errors"
 
 type WorldRevision uint64
 type EventCursor uint64
-type ProcessID uint64
+type SpawnID uint64
 
 var (
 	ErrRevisionUnavailable       = errors.New("skill: required world revision is unavailable")
@@ -38,14 +38,14 @@ type CommitReceipt struct {
 }
 
 type RuntimeEvent struct {
-	Cursor    EventCursor
-	Revision  WorldRevision
-	Tick      Tick
-	Kind      string
-	Entity    EntityID
-	ProcessID ProcessID
-	Context   EventContext
-	State     *StateChangeEvent
-	Ability   *AbilityChangeEvent
-	Result    *EffectResultEvent
+	Cursor   EventCursor
+	Revision WorldRevision
+	Tick     Tick
+	Kind     string
+	Entity   EntityID
+	SpawnID  SpawnID
+	Context  EventContext
+	State    *StateChangeEvent
+	Ability  *AbilityChangeEvent
+	Result   *EffectResultEvent
 }

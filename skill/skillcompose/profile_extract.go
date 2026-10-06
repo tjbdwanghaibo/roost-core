@@ -15,7 +15,7 @@ func ExtractProfile(program *skill.Program) (SkillProfile, error) {
 	}
 	view := skill.Inspect(program)
 	profile := SkillProfile{SkillID: view.ID, GameplayDigest: view.Identity.GameplayDigest, Authority: view.Authority, Sources: []SourceIdentity{{SkillID: view.ID, GameplayDigest: view.Identity.GameplayDigest}}, PresentationDigest: view.Identity.PresentationDigest, ActivationMode: view.Cast.Mode, InputKind: view.Input.Kind,
-		Metrics: Metrics{Targets: view.Limits.Targets, Processes: view.Limits.Processes, Mutations: view.Limits.Mutations, EventsPerRoot: view.Limits.EventsPerRoot, RandomSites: view.Limits.RandomSites, LifetimeTicks: view.Limits.LifetimeTicks}}
+		Metrics: Metrics{Targets: view.Limits.Targets, Spawns: view.Limits.Spawns, Mutations: view.Limits.Mutations, EventsPerRoot: view.Limits.EventsPerRoot, RandomSites: view.Limits.RandomSites, LifetimeTicks: view.Limits.LifetimeTicks}}
 	featureSet := map[FeatureKey]struct{}{}
 	for _, operation := range view.Operations {
 		profile.Operations = append(profile.Operations, operation.Kind)

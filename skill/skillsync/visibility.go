@@ -20,8 +20,8 @@ const (
 	VisibilityCooldowns           VisibilityField = "cooldowns"
 	VisibilityResources           VisibilityField = "resources"
 	VisibilityAbilities           VisibilityField = "abilities"
-	VisibilityProcesses           VisibilityField = "processes"
-	VisibilityProcessSpatial      VisibilityField = "process_spatial"
+	VisibilitySpawns              VisibilityField = "spawns"
+	VisibilitySpawnSpatial        VisibilityField = "spawn_spatial"
 	VisibilityPolicies            VisibilityField = "policies"
 	VisibilityPersistentState     VisibilityField = "persistent_state"
 	VisibilityPersistentValue     VisibilityField = "persistent_value"
@@ -137,16 +137,16 @@ func (policy EntityVisibilityPolicy) FilterStateSnapshot(observer syncstream.Obs
 			result.Abilities = append(result.Abilities, value)
 		}
 	}
-	processes, err := policy.fieldVisible(observer, VisibilityProcesses, "")
+	spawns, err := policy.fieldVisible(observer, VisibilitySpawns, "")
 	if err != nil {
 		return result, err
 	}
-	processSpatial, err := policy.fieldVisible(observer, VisibilityProcessSpatial, "")
+	spawnSpatial, err := policy.fieldVisible(observer, VisibilitySpawnSpatial, "")
 	if err != nil {
 		return result, err
 	}
-	if processes {
-		for _, value := range snapshot.Processes {
+	if spawns {
+		for _, value := range snapshot.Spawns {
 			allowed, err := policy.visible(observer, value.Owner)
 			if err != nil {
 				return result, err
@@ -166,11 +166,11 @@ func (policy EntityVisibilityPolicy) FilterStateSnapshot(observer syncstream.Obs
 				if !carry {
 					value.Motion.CarryTarget = 0
 				}
-				if policy.RedactSpatial || !processSpatial {
+				if policy.RedactSpatial || !spawnSpatial {
 					value.Motion.Position, value.Motion.TrajectoryPosition, value.Motion.Origin = skill.Position{}, skill.Position{}, skill.Position{}
 					value.Motion.Direction, value.Motion.FrameAnchor = skill.Direction{}, skill.Position{}
 				}
-				result.Processes = append(result.Processes, value)
+				result.Spawns = append(result.Spawns, value)
 			}
 		}
 	}
@@ -236,8 +236,8 @@ func (policy EntityVisibilityPolicy) FilterStateMutation(observer syncstream.Obs
 	if entity == 0 && mutation.Cast != nil {
 		entity = mutation.Cast.Caster
 	}
-	if entity == 0 && mutation.Process != nil {
-		entity = mutation.Process.Owner
+	if entity == 0 && mutation.Spawn != nil {
+		entity = mutation.Spawn.Owner
 	}
 	if entity == 0 && mutation.Persistent != nil {
 		entity = mutation.Persistent.Binding.Owner
@@ -268,17 +268,17 @@ func (policy EntityVisibilityPolicy) FilterStateMutation(observer syncstream.Obs
 			mutation.Cast = &copyValue
 		}
 	}
-	if mutation.Process != nil {
-		target, err := policy.visible(observer, mutation.Process.LifecycleEntity)
+	if mutation.Spawn != nil {
+		target, err := policy.visible(observer, mutation.Spawn.LifecycleEntity)
 		if err != nil {
 			return mutation, false, err
 		}
 		if !target {
-			copyValue := *mutation.Process
+			copyValue := *mutation.Spawn
 			copyValue.LifecycleEntity = 0
-			mutation.Process = &copyValue
+			mutation.Spawn = &copyValue
 		}
-		copyValue := *mutation.Process
+		copyValue := *mutation.Spawn
 		carry, err := policy.visible(observer, copyValue.Motion.CarryTarget)
 		if err != nil {
 			return mutation, false, err
@@ -286,7 +286,7 @@ func (policy EntityVisibilityPolicy) FilterStateMutation(observer syncstream.Obs
 		if !carry {
 			copyValue.Motion.CarryTarget = 0
 		}
-		spatial, err := policy.fieldVisible(observer, VisibilityProcessSpatial, "")
+		spatial, err := policy.fieldVisible(observer, VisibilitySpawnSpatial, "")
 		if err != nil {
 			return mutation, false, err
 		}
@@ -294,7 +294,7 @@ func (policy EntityVisibilityPolicy) FilterStateMutation(observer syncstream.Obs
 			copyValue.Motion.Position, copyValue.Motion.TrajectoryPosition, copyValue.Motion.Origin = skill.Position{}, skill.Position{}, skill.Position{}
 			copyValue.Motion.Direction, copyValue.Motion.FrameAnchor = skill.Direction{}, skill.Position{}
 		}
-		mutation.Process = &copyValue
+		mutation.Spawn = &copyValue
 	}
 	if mutation.Persistent != nil {
 		subject, err := policy.visible(observer, mutation.Persistent.Binding.Subject)
@@ -364,8 +364,8 @@ func mutationVisibilityField(mutation skill.StateMutation) (VisibilityField, str
 		return VisibilityResources, ""
 	case skill.StateMutationAbilityUpsert, skill.StateMutationAbilityRemove:
 		return VisibilityAbilities, abilityHandleReference(mutation.AbilityHandle)
-	case skill.StateMutationProcessUpsert, skill.StateMutationProcessRemove:
-		return VisibilityProcesses, ""
+	case skill.StateMutationSpawnUpsert, skill.StateMutationSpawnRemove:
+		return VisibilitySpawns, ""
 	case skill.StateMutationPolicyUpsert, skill.StateMutationPolicyRemove:
 		return VisibilityPolicies, ""
 	case skill.StateMutationPersistentUpsert, skill.StateMutationPersistentRemove:

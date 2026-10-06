@@ -19,29 +19,31 @@ guardrails, not capacity targets: tune them from room-level load tests.
   `EventsDropped`. Monitor dropped
   counters and force a snapshot when a state cursor expires.
 - `CompletedCastLimit` retains recent terminal casts for inspection. Active or
-  still referenced casts (pending tasks, an active policy, or a process that is
+  still referenced casts (pending tasks, an active policy, or a spawn that is
   still running, including one handed off to its owner) are never evicted; when
-  a cast is evicted, the records of its stopped processes go with it
+  a cast is evicted, the records of its stopped spawns go with it
   (RR-20261006-23).
-- `MaxActiveCasts`, `MaxAbilities`, `MaxOwnedProcesses*`, `RootEventLimit`, and
+- `MaxActiveCasts`, `MaxAbilities`, `MaxOwnedSpawns*`, `RootEventLimit`, and
   `MaxProcLedgerEntries`
   provide deterministic backpressure through `ErrRuntimeCapacityExceeded`.
-- Root event accounting is reclaimed only after no active cast, process, or
+- Root event accounting is reclaimed only after no active cast, spawn, or
   scheduled task references the root, preserving once-per-root semantics.
-- Checkpoints use version 3 (2026-10-06: process records gained the
-  stop_pending retry state, the payload the three stop-retry options; version
-  2 checkpoints are rejected with `ErrCheckpointUnsupported` — nothing was
-  deployed, drain before upgrading). The format is only ever extended, and
-  every extension bumps the version. `CheckpointMaxBytes` and
+- Checkpoints use version 4 (2026-10-06: every `process` name in the
+  payload became `spawn` — `spawns`, `next_spawn_id`, `owned_spawns`, … —
+  see the [rename table](../feature/REFACTOR-2026-10-06-skill-process-to-spawn.md);
+  version 3 added the stop_pending retry state and the three stop-retry
+  options). Older checkpoints are rejected with `ErrCheckpointUnsupported` —
+  nothing was deployed, drain before upgrading. Every format change, extension
+  or rename, bumps the version. `CheckpointMaxBytes` and
   `CheckpointMaxRecords` are checked before recovery publishes a runtime.
-- A process the Host fails to stop stays owned by the Runtime: it is marked
-  `stop_pending` and retried with backoff (`ProcessStopRetryBackoff`, default
-  4 ticks, doubling up to 64x) up to `ProcessStopRetryLimit` (default 10)
-  failed retries, then `skill.process.stop_retry_exhausted.total` is counted,
+- A spawn the Host fails to stop stays owned by the Runtime: it is marked
+  `stop_pending` and retried with backoff (`SpawnStopRetryBackoff`, default
+  4 ticks, doubling up to 64x) up to `SpawnStopRetryLimit` (default 10)
+  failed retries, then `skill.spawn.stop_retry_exhausted.total` is counted,
   a warning is logged and the record is kept. At most
-  `MaxStopPendingProcesses` (default 256) such records are kept; past it the
-  oldest exhausted one is dropped (`skill.process.stop_pending_dropped.total`
-  plus an error log). Host `StopProcess` must be idempotent. A restored
+  `MaxStopPendingSpawns` (default 256) such records are kept; past it the
+  oldest exhausted one is dropped (`skill.spawn.stop_pending_dropped.total`
+  plus an error log). Host `StopSpawn` must be idempotent. A restored
   checkpoint may hold more terminal casts than `CompletedCastLimit` when the
   excess are still referenced (RR-20261006-30).
 - The same Runtime state always checkpoints to the same bytes and checksum:

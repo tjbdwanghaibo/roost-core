@@ -285,7 +285,7 @@ Runtime 从不回头解析 JSON，Host 之外没有任何世界写入路径，UI
 | Pass | 静态证明 |
 | --- | --- |
 | `normalize` | Wire → 封闭 IR，记录源路径（诊断可定位到 `$.phases[0]...`） |
-| `shape` | Flow/Effect/Select/Process 结构合法；只接受 Runtime / Host 实际执行的取值（不传给 Host 的字段、两个参考 Host 都拒绝的操作与时长在这里拒绝） |
+| `shape` | Flow/Effect/Select/Spawn 结构合法；只接受 Runtime / Host 实际执行的取值（不传给 Host 的字段、两个参考 Host 都拒绝的操作与时长在这里拒绝） |
 | `authority_capability` | 环境 catalog 的 handle 与 key 各自唯一；属性、资源、状态、伤害类型、元素等字符串（含 effect、filter、cost 里的引用）解析到 `CompileEnvironment` 的权威 Handle；不在目录内即拒绝 |
 | `gameplay_tags` / `input_state` / `temporal` | 标签类别、施放输入、Persistent/Shared State 与时间快照合法 |
 | `type_snapshot` / `optional_quantity` / `effect_result_scope` | 值类型、量纲、快照采样点正确；可选值必须有 `exists` 守卫；effect result 只在其作用域内可读 |
@@ -316,7 +316,7 @@ World revision 是防线：查询/命令携带期望 revision，Host 拒绝失�
 
 ### 确定性为什么能位一致回放
 
-- **全 int64 定点数学**：无 float。热路径用 128-bit 中间积的无分配定点算术（[fixed_math.go](fixed_math.go)），与 big.Int 参考实现 fuzz 验证位一致；三角函数是定点 CORDIC（[process_motion.go](process_motion.go) 的 `motionSinCos`，毫度角 → 百万分度向量）。
+- **全 int64 定点数学**：无 float。热路径用 128-bit 中间积的无分配定点算术（[fixed_math.go](fixed_math.go)），与 big.Int 参考实现 fuzz 验证位一致；三角函数是定点 CORDIC（[spawn_motion.go](spawn_motion.go) 的 `motionSinCos`，毫度角 → 百万分度向量）。
 - **随机是 HMAC 派生的纯函数**：`HMAC(matchSeed, digest, caster, castSequence)` 派生施法密钥，再按编译期编号的 random site + 调用序号求值（[runtime_random.go](runtime_random.go)）——没有全局 RNG 状态可漂移。
 - **调度稳定排序**：`Advance` 按 (dueTick, 稳定序) 消费任务；并行 flow 分支按声明顺序提交。
 - **checkpoint**：`Runtime.Checkpoint()` 产出带版本 + SHA-256 的权威镜像；`RestoreRuntime` 严格校验 Host revision/authority、Program digest，全部匹配才恢复（[runtime_checkpoint.go](runtime_checkpoint.go)）。仓库每个验收 fixture 都做 checkpoint 往返并比对快照字节。
@@ -353,7 +353,7 @@ World revision 是防线：查询/命令携带期望 revision，Host 拒绝失�
 
 **第三轮（40 分钟）——IR 到 Program**：`wire_*.go` → `ir_*.go` / [compile_normalize.go](compile_normalize.go) → [lower.go](lower.go) → `program_*.go` → [inspect.go](inspect.go)。
 
-**之后按能力选切口**（fixture 即可运行示例）：施法窗口/策略看 `toggle_aura`/`hold_beam`/`charge_projectile`/`ammo_burst`/`cast_window_interrupt` 配 [runtime_cast_policy.go](runtime_cast_policy.go)、[runtime_cast_window.go](runtime_cast_window.go)；弹道/运动看 `tracking_boomerang`/`path_projectile`/`carry_dash` 配 [process_motion.go](process_motion.go)；召唤物看 `owned_trap`/`owned_pet_command`；被动 proc 看 `passive_counter`/`passive_proc_guard` 配 [runtime_proc.go](runtime_proc.go)。完整对照表在 [docs/skill-implementation-guide.md](../docs/skill/skill-implementation-guide.md)（含 Visual/Sync 深入路线与实验清单），日常测试清单在 [docs/skill-testing-guide.md](../docs/skill/skill-testing-guide.md)。
+**之后按能力选切口**（fixture 即可运行示例）：施法窗口/策略看 `toggle_aura`/`hold_beam`/`charge_projectile`/`ammo_burst`/`cast_window_interrupt` 配 [runtime_cast_policy.go](runtime_cast_policy.go)、[runtime_cast_window.go](runtime_cast_window.go)；弹道/运动看 `tracking_boomerang`/`path_projectile`/`carry_dash` 配 [spawn_motion.go](spawn_motion.go)；召唤物看 `owned_trap`/`owned_pet_command`；被动 proc 看 `passive_counter`/`passive_proc_guard` 配 [runtime_proc.go](runtime_proc.go)。完整对照表在 [docs/skill-implementation-guide.md](../docs/skill/skill-implementation-guide.md)（含 Visual/Sync 深入路线与实验清单），日常测试清单在 [docs/skill-testing-guide.md](../docs/skill/skill-testing-guide.md)。
 
 验证一切正常的最短命令：
 
@@ -364,6 +364,7 @@ go test ./... -count=1
 
 ### 迁移与版本
 
+- **process → Spawn（衍生物）全量改名（2026-10-06，破坏性，不留旧名）**：飞行物、法术场、召唤物、光束、位移等施放后由技能逐 tick 驱动的东西统一叫 Spawn；DSL `"spawn"` / `modify_spawn` / `$spawn` / `spawn_start`，Host `StepSpawn` / `StopSpawn`，mutation `spawn_upsert` / `spawn_remove`，checkpoint 版本 4。对照表见 [docs/skill/README.md](../docs/skill/README.md#术语衍生物spawn) 与[重构记录](../docs/feature/REFACTOR-2026-10-06-skill-process-to-spawn.md)。
 - **compiler-2 语义修订（v1.4 → v1.5）**：`concurrent`、`global_cooldown_ticks`、窗口表达式进入 gameplay digest，旧 checkpoint/回放记录/skillcompose 契约在新版本下会得到明确解析错误。迁移动作（全量重编译、排空旧 checkpoint、重签契约）见 [docs/skill-casting-and-combat.md](../docs/skill/skill-casting-and-combat.md) 的迁移说明。
 - **旧 `/skillv2` → 稳定 `/skill` 的源码升级**：[docs/breaking-upgrade-skill-package.md](../docs/skill/breaking-upgrade-skill-package.md)。wire v2 与 compiler semantics 保持不变。
 - **生产部署与发布门槛**：[docs/production-readiness.md](../docs/skill/production-readiness.md)。

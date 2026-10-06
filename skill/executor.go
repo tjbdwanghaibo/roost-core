@@ -37,7 +37,7 @@ func (runtime *Runtime) executeCast(cast *castInstance) error {
 		}
 		switch control.kind {
 		case flowGoto:
-			if err := runtime.stopProcesses(cast, false); err != nil {
+			if err := runtime.stopSpawns(cast, false); err != nil {
 				return err
 			}
 			runtime.cancelPhaseTasks(cast, cast.phaseToken)
@@ -234,8 +234,8 @@ func (runtime *Runtime) executeOperation(cast *castInstance, index OperationInde
 	case abilityStateOperation:
 		result, err := runtime.executeAbilityStateMutation(cast, operation)
 		return runtime.resolveAbilityEffectExecution(cast, operation.effectContinuations, operation.effectIndex, result, err)
-	case modifyProcessOperation:
-		return flowControl{kind: flowContinue}, runtime.executeModifyProcess(cast, operation)
+	case modifySpawnOperation:
+		return flowControl{kind: flowContinue}, runtime.executeModifySpawn(cast, operation)
 	case spawnOperation:
 		result, err := runtime.executeOwnedSpawn(cast, operation)
 		if err == nil && cast.areaCallbackFinish {
@@ -296,7 +296,7 @@ func (runtime *Runtime) resolveControl(cast *castInstance, control flowControl) 
 	case flowSuspend:
 		return runtime.schedule(cast, control.dueTick, control.payload)
 	case flowGoto:
-		if err := runtime.stopProcesses(cast, false); err != nil {
+		if err := runtime.stopSpawns(cast, false); err != nil {
 			return err
 		}
 		runtime.cancelPhaseTasks(cast, cast.phaseToken)

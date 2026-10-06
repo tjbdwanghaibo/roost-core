@@ -36,7 +36,7 @@ type EffectEvent struct {
 // HostAdapter implements the combat effect surface of skill.Host over
 // combat components: damage, heal, and shield commands, attribute and
 // resource reads, and cost payment. Embed it in a business Host and delegate
-// the commands it recognizes; world queries (Select), motion, processes, and
+// the commands it recognizes; world queries (Select), motion, spawns, and
 // spawning stay with the business host. It follows the MemoryHost event
 // vocabulary (damage_resolved, combat_hook_*, shield_absorbed, ...) so proc
 // filters behave identically on both hosts.

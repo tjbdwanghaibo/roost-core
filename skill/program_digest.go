@@ -74,8 +74,8 @@ func gameplayProgramDigestPayload(program *Program) any {
 	for index, snapshot := range program.snapshots {
 		snapshots[index] = map[string]any{"slot": snapshot.slot, "entity": programValueDigest(snapshot.entity), "attribute": snapshot.attribute, "point": snapshot.point}
 	}
-	processTemplates := make([]any, len(program.processTemplates))
-	for index, template := range program.processTemplates {
+	spawnTemplates := make([]any, len(program.spawnTemplates))
+	for index, template := range program.spawnTemplates {
 		callbacks := make([]any, len(template.callbacks))
 		for callbackIndex, callback := range template.callbacks {
 			callbacks[callbackIndex] = map[string]any{"event": callback.event, "operation": callback.operation}
@@ -84,15 +84,15 @@ func gameplayProgramDigestPayload(program *Program) any {
 		for trackIndex, track := range template.numericTracks {
 			numericTracks[trackIndex] = map[string]any{"property": track.property, "operation": track.operation, "value": programValueDigest(track.value), "over_ticks": track.overTicks}
 		}
-		processTemplates[index] = map[string]any{"index": template.index, "duration_ticks": template.durationTicks, "interval_ticks": template.intervalTicks, "emit_leave_on_stop": template.emitLeaveOnStop, "visual": template.visual, "has_visual": template.hasVisual, "area": selectorProgramDigest(template.area), "motion": motionProgramDigest(template.motion), "numeric_tracks": numericTracks, "callbacks": callbacks}
+		spawnTemplates[index] = map[string]any{"index": template.index, "duration_ticks": template.durationTicks, "interval_ticks": template.intervalTicks, "emit_leave_on_stop": template.emitLeaveOnStop, "visual": template.visual, "has_visual": template.hasVisual, "area": selectorProgramDigest(template.area), "motion": motionProgramDigest(template.motion), "numeric_tracks": numericTracks, "callbacks": callbacks}
 	}
-	processProperties := make([]any, len(program.processProperties))
-	for index, property := range program.processProperties {
+	spawnProperties := make([]any, len(program.spawnProperties))
+	for index, property := range program.spawnProperties {
 		bindings := make([]any, len(property.slotBindings))
 		for bindingIndex, binding := range property.slotBindings {
 			bindings[bindingIndex] = map[string]any{"stage": binding.stage, "variant": binding.variant, "field": binding.field}
 		}
-		processProperties[index] = map[string]any{"handle": property.handle, "key": property.key, "minimum": property.minimum, "maximum": property.maximum, "interpolation": property.interpolation, "rounding": property.rounding, "operations": property.allowedOperationsMask, "process_kinds": property.processKinds, "slot_bindings": bindings}
+		spawnProperties[index] = map[string]any{"handle": property.handle, "key": property.key, "minimum": property.minimum, "maximum": property.maximum, "interpolation": property.interpolation, "rounding": property.rounding, "operations": property.allowedOperationsMask, "spawn_kinds": property.spawnKinds, "slot_bindings": bindings}
 	}
 	eventPlans := make([]any, len(program.eventPlans))
 	for index, plan := range program.eventPlans {
@@ -130,7 +130,7 @@ func gameplayProgramDigestPayload(program *Program) any {
 		},
 		"memory": memory, "persistent_state": states, "ability_properties": abilityProperties, "locals": locals, "phases": phases, "roots": roots,
 		"ability_control": map[string]any{"selectable_tags": program.abilityControl.selectableTags, "owner_relations": program.abilityControl.ownerRelations},
-		"operations":      operations, "selectors": selectors, "process_templates": processTemplates, "process_properties": processProperties,
+		"operations":      operations, "selectors": selectors, "spawn_templates": spawnTemplates, "spawn_properties": spawnProperties,
 		"snapshots": snapshots, "quantities": quantities, "random_sites": randomSites,
 		"event_plans": eventPlans, "limits": program.limits,
 	}
@@ -279,9 +279,9 @@ func operationDigestValue(operation operation) any {
 		addEffectDigest(base, typed.effectIndex, typed.effectContinuations)
 		base["owner"], base["ability"], base["property"], base["property_handle"] = programValueDigest(typed.owner), programValueDigest(typed.ability), typed.propertyName, typed.property
 		base["operation"], base["value"], base["duration_ticks"] = typed.operation, programValueDigest(typed.value), typed.durationTicks
-	case modifyProcessOperation:
+	case modifySpawnOperation:
 		addEffectDigest(base, typed.effectIndex, typed.effectContinuations)
-		base["process"], base["property"], base["operation"], base["value"], base["over_ticks"] = programValueDigest(typed.process), typed.property, typed.operation, programValueDigest(typed.value), typed.overTicks
+		base["spawn"], base["property"], base["operation"], base["value"], base["over_ticks"] = programValueDigest(typed.spawn), typed.property, typed.operation, programValueDigest(typed.value), typed.overTicks
 	case spawnOperation:
 		addEffectDigest(base, typed.effectIndex, typed.effectContinuations)
 		base["template"], base["position"], base["count"], base["duration_ticks"] = typed.template, programValueDigest(typed.position), typed.count, typed.durationTicks
@@ -319,7 +319,7 @@ func addEffectDigest(target map[string]any, index EffectIndex, continuations eff
 	target["effect_index"] = index
 	target["success"], target["failure"] = continuations.success, continuations.failure
 	target["has_success"], target["has_failure"] = continuations.hasSuccess, continuations.hasFailure
-	target["process_template"], target["has_process"] = continuations.processTemplate, continuations.hasProcess
+	target["spawn_template"], target["has_spawn"] = continuations.spawnTemplate, continuations.hasSpawn
 	fields := make([]any, len(continuations.result.fields))
 	for index, field := range continuations.result.fields {
 		fields[index] = map[string]any{"handle": field.handle, "name": field.name, "type": digestValueType(field.typ), "visibility": field.visibility}

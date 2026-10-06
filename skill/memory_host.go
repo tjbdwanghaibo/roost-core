@@ -32,8 +32,8 @@ type MemoryEntity struct {
 	TenacityBP                                                    int64
 }
 
-type memoryProcess struct {
-	state  ProcessHostState
+type memorySpawn struct {
+	state  SpawnHostState
 	active bool
 }
 
@@ -89,7 +89,7 @@ type MemoryHost struct {
 	tick                  Tick
 	revision              WorldRevision
 	entities              map[EntityID]MemoryEntity
-	processes             map[ProcessID]memoryProcess
+	spawns                map[SpawnID]memorySpawn
 	events                []RuntimeEvent
 	nextCursor            EventCursor
 	nextEntity            EntityID
@@ -117,7 +117,7 @@ func NewMemoryHost(authority AuthorityIdentity) *MemoryHost {
 }
 
 func NewMemoryHostWithOptions(authority AuthorityIdentity, options MemoryHostOptions) *MemoryHost {
-	return &MemoryHost{authority: authority, entities: make(map[EntityID]MemoryEntity), processes: make(map[ProcessID]memoryProcess), states: make(map[memoryStateKey]memoryStateRecord), ownedEntities: make(map[EntityID]OwnedEntityMetadata), ownedTransactions: make(map[OwnedSpawnTransactionID]ownedSpawnTransaction), temporalSnapshots: make(map[uint64]temporalSnapshotRecord), temporalBlocked: make(map[Position]Position), nextEntity: 1, compactEvents: options.CompactEvents}
+	return &MemoryHost{authority: authority, entities: make(map[EntityID]MemoryEntity), spawns: make(map[SpawnID]memorySpawn), states: make(map[memoryStateKey]memoryStateRecord), ownedEntities: make(map[EntityID]OwnedEntityMetadata), ownedTransactions: make(map[OwnedSpawnTransactionID]ownedSpawnTransaction), temporalSnapshots: make(map[uint64]temporalSnapshotRecord), temporalBlocked: make(map[Position]Position), nextEntity: 1, compactEvents: options.CompactEvents}
 }
 
 func (host *MemoryHost) AuthorityIdentity() AuthorityIdentity { return host.authority }
@@ -379,21 +379,21 @@ func (host *MemoryHost) requireRevisionLocked(required WorldRevision) error {
 	return nil
 }
 
-func (host *MemoryHost) commitLocked(kind string, entity EntityID, process ProcessID) CommitReceipt {
+func (host *MemoryHost) commitLocked(kind string, entity EntityID, spawn SpawnID) CommitReceipt {
 	host.revision++
-	host.appendEventLocked(kind, entity, process)
+	host.appendEventLocked(kind, entity, spawn)
 	return CommitReceipt{Revision: host.revision, Changed: true}
 }
 
-func (host *MemoryHost) appendEventLocked(kind string, entity EntityID, process ProcessID) {
-	host.appendContextEventLocked(kind, entity, process, EventContext{})
+func (host *MemoryHost) appendEventLocked(kind string, entity EntityID, spawn SpawnID) {
+	host.appendContextEventLocked(kind, entity, spawn, EventContext{})
 }
 
-func (host *MemoryHost) appendContextEventLocked(kind string, entity EntityID, process ProcessID, context EventContext) {
+func (host *MemoryHost) appendContextEventLocked(kind string, entity EntityID, spawn SpawnID, context EventContext) {
 	host.nextCursor++
 	context.Tick = host.tick
 	context.WorldRevision = host.revision
-	host.events = append(host.events, RuntimeEvent{Cursor: host.nextCursor, Revision: host.revision, Tick: host.tick, Kind: kind, Entity: entity, ProcessID: process, Context: context})
+	host.events = append(host.events, RuntimeEvent{Cursor: host.nextCursor, Revision: host.revision, Tick: host.tick, Kind: kind, Entity: entity, SpawnID: spawn, Context: context})
 }
 
 func cloneStringIntMap(values map[string]int64) map[string]int64 {

@@ -78,23 +78,23 @@ type AbilityStateSnapshot struct {
 }
 
 type NumericPropertySnapshot struct {
-	Property ProcessPropertyHandle `json:"property"`
-	Base     int64                 `json:"base"`
-	Current  int64                 `json:"current"`
-	Tracking bool                  `json:"tracking"`
-	Target   int64                 `json:"target,omitempty"`
-	EndTick  Tick                  `json:"end_tick,omitempty"`
+	Property SpawnPropertyHandle `json:"property"`
+	Base     int64               `json:"base"`
+	Current  int64               `json:"current"`
+	Tracking bool                `json:"tracking"`
+	Target   int64               `json:"target,omitempty"`
+	EndTick  Tick                `json:"end_tick,omitempty"`
 }
 
-type ProcessStateSnapshot struct {
-	ID              ProcessID                 `json:"id"`
+type SpawnStateSnapshot struct {
+	ID              SpawnID                   `json:"id"`
 	CastID          CastID                    `json:"cast_id"`
-	TemplateIndex   ProcessTemplateIndex      `json:"template_index"`
+	TemplateIndex   SpawnTemplateIndex        `json:"template_index"`
 	ProgramID       string                    `json:"program_id"`
 	GameplayDigest  string                    `json:"gameplay_digest"`
 	UnitTemplate    UnitTemplateHandle        `json:"unit_template"`
-	Status          ProcessStatus             `json:"status"`
-	Scope           ProcessScope              `json:"scope"`
+	Status          SpawnStatus               `json:"status"`
+	Scope           SpawnScope                `json:"scope"`
 	StartTick       Tick                      `json:"start_tick"`
 	NextTick        Tick                      `json:"next_tick"`
 	EndTick         Tick                      `json:"end_tick"`
@@ -132,7 +132,7 @@ type RuntimeStateSnapshot struct {
 	Cooldowns                   []CooldownStateSnapshot   `json:"cooldowns,omitempty"`
 	SkillResources              []SkillResourceSnapshot   `json:"skill_resources,omitempty"`
 	Abilities                   []AbilityStateSnapshot    `json:"abilities,omitempty"`
-	Processes                   []ProcessStateSnapshot    `json:"processes,omitempty"`
+	Spawns                      []SpawnStateSnapshot      `json:"spawns,omitempty"`
 	ActivePolicies              []ActivePolicySnapshot    `json:"active_policies,omitempty"`
 	PersistentStates            []PersistentStateSnapshot `json:"persistent_states,omitempty"`
 	LatestStateEventSequence    uint64                    `json:"latest_state_event_sequence"`
@@ -205,7 +205,7 @@ func (runtime *Runtime) stateSnapshotLocked() RuntimeStateSnapshot {
 		revision = runtime.host.CurrentRevision()
 	}
 	snapshot := RuntimeStateSnapshot{Tick: runtime.currentTick, WorldRevision: revision, LatestStateEventSequence: runtime.stateEventSequence, LatestStateMutationSequence: runtime.stateMutationSequence, LatestPresentationSequence: runtime.presentationSequence,
-		Casts: runtime.castsSnapshotLocked(), Cooldowns: runtime.cooldownsSnapshotLocked(), SkillResources: runtime.skillResourcesSnapshotLocked(), Abilities: runtime.abilitiesSnapshotLocked(), Processes: runtime.processesSnapshotLocked(), ActivePolicies: runtime.activePoliciesSnapshotLocked()}
+		Casts: runtime.castsSnapshotLocked(), Cooldowns: runtime.cooldownsSnapshotLocked(), SkillResources: runtime.skillResourcesSnapshotLocked(), Abilities: runtime.abilitiesSnapshotLocked(), Spawns: runtime.spawnsSnapshotLocked(), ActivePolicies: runtime.activePoliciesSnapshotLocked()}
 	snapshot.PersistentStates = runtime.persistentStatesSnapshotLocked()
 	return snapshot
 }
@@ -296,21 +296,21 @@ func (runtime *Runtime) abilitiesSnapshotLocked() []AbilityStateSnapshot {
 	return result
 }
 
-func (runtime *Runtime) processesSnapshotLocked() []ProcessStateSnapshot {
-	result := make([]ProcessStateSnapshot, 0, len(runtime.processes))
-	processIDs := make([]int, 0, len(runtime.processes))
-	for id := range runtime.processes {
-		processIDs = append(processIDs, int(id))
+func (runtime *Runtime) spawnsSnapshotLocked() []SpawnStateSnapshot {
+	result := make([]SpawnStateSnapshot, 0, len(runtime.spawns))
+	spawnIDs := make([]int, 0, len(runtime.spawns))
+	for id := range runtime.spawns {
+		spawnIDs = append(spawnIDs, int(id))
 	}
-	sort.Ints(processIDs)
-	for _, rawID := range processIDs {
-		process := runtime.processes[ProcessID(rawID)]
+	sort.Ints(spawnIDs)
+	for _, rawID := range spawnIDs {
+		spawn := runtime.spawns[SpawnID(rawID)]
 		programID, digest := "", ""
-		if process.Program != nil {
-			programID, digest = process.Program.id, process.Program.identity.gameplayDigest
+		if spawn.Program != nil {
+			programID, digest = spawn.Program.id, spawn.Program.identity.gameplayDigest
 		}
-		view := ProcessStateSnapshot{ID: process.ID, CastID: process.CastID, TemplateIndex: process.TemplateIndex, ProgramID: programID, GameplayDigest: digest, UnitTemplate: process.UnitTemplate, Status: process.Status, Scope: process.Scope, StartTick: process.StartTick, NextTick: process.NextTick, EndTick: process.EndTick, Owner: process.Owner, LifecycleEntity: process.LifecycleEntity, VisibleRevision: process.visibleRevision, HandedOff: process.handedOff, Motion: process.Motion}
-		for _, property := range process.Numeric.Properties {
+		view := SpawnStateSnapshot{ID: spawn.ID, CastID: spawn.CastID, TemplateIndex: spawn.TemplateIndex, ProgramID: programID, GameplayDigest: digest, UnitTemplate: spawn.UnitTemplate, Status: spawn.Status, Scope: spawn.Scope, StartTick: spawn.StartTick, NextTick: spawn.NextTick, EndTick: spawn.EndTick, Owner: spawn.Owner, LifecycleEntity: spawn.LifecycleEntity, VisibleRevision: spawn.visibleRevision, HandedOff: spawn.handedOff, Motion: spawn.Motion}
+		for _, property := range spawn.Numeric.Properties {
 			item := NumericPropertySnapshot{Property: property.Property, Base: property.Base, Current: property.Current}
 			if property.Track != nil {
 				item.Tracking = true

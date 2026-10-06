@@ -21,28 +21,28 @@ type compileContext struct {
 }
 
 type compileArtifacts struct {
-	passOrder         []string
-	ir                *skillIR
-	sources           sourceMap
-	shape             shapeArtifact
-	authority         authorityArtifact
-	gameplay          gameplayArtifact
-	snapshots         snapshotArtifact
-	proc              procArtifact
-	input             InputLayout
-	types             typedValueArtifact
-	graph             PhaseGraph
-	memory            memoryArtifact
-	state             stateArtifact
-	ability           abilityArtifact
-	temporal          temporalArtifact
-	processProperties []ProcessPropertyPolicy
-	lifetimes         map[string]lifecycleFact
-	identity          identityArtifact
-	limits            ComputedLimits
-	visual            visualArtifact
-	metadata          compileMetadata
-	lowerReady        bool
+	passOrder       []string
+	ir              *skillIR
+	sources         sourceMap
+	shape           shapeArtifact
+	authority       authorityArtifact
+	gameplay        gameplayArtifact
+	snapshots       snapshotArtifact
+	proc            procArtifact
+	input           InputLayout
+	types           typedValueArtifact
+	graph           PhaseGraph
+	memory          memoryArtifact
+	state           stateArtifact
+	ability         abilityArtifact
+	temporal        temporalArtifact
+	spawnProperties []SpawnPropertyPolicy
+	lifetimes       map[string]lifecycleFact
+	identity        identityArtifact
+	limits          ComputedLimits
+	visual          visualArtifact
+	metadata        compileMetadata
+	lowerReady      bool
 }
 
 type visualArtifact struct {
@@ -108,7 +108,7 @@ type lifecycleFact struct {
 	MaySuspend     bool
 	MaxLifetime    Tick
 	MaxSchedules   int
-	MaxProcesses   int
+	MaxSpawns      int
 }
 type operationIdentity struct {
 	Path  string
@@ -124,11 +124,11 @@ type identityArtifact struct {
 	RandomSites []RandomSite
 }
 type ComputedLimits struct {
-	FlowNodes, FlowDepth, ValueNodes, Repeat, Targets, Processes, Schedules, Mutations, EventsPerRoot, RandomSites, PassiveActivationsPerTick       int
-	AreaMembers, StatusStacks, StateInstances, AbilityMutations, OwnedEntities, OwnedProcesses, StatusMutations, InputPathPoints, TemporalSnapshots int
-	LocalFrames                                                                                                                                     int
-	LifetimeTicks                                                                                                                                   Tick
-	InputPathLength                                                                                                                                 int64
+	FlowNodes, FlowDepth, ValueNodes, Repeat, Targets, Spawns, Schedules, Mutations, EventsPerRoot, RandomSites, PassiveActivationsPerTick       int
+	AreaMembers, StatusStacks, StateInstances, AbilityMutations, OwnedEntities, OwnedSpawns, StatusMutations, InputPathPoints, TemporalSnapshots int
+	LocalFrames                                                                                                                                  int
+	LifetimeTicks                                                                                                                                Tick
+	InputPathLength                                                                                                                              int64
 }
 
 type shapeArtifact struct{ checked bool }
@@ -154,13 +154,13 @@ type resolvedDamageSemantics struct {
 type snapshotPoint string
 
 const (
-	snapshotCastStart    snapshotPoint = "cast_start"
-	snapshotPhaseStart   snapshotPoint = "phase_start"
-	snapshotProcessStart snapshotPoint = "process_start"
-	snapshotEachTick     snapshotPoint = "each_tick"
-	snapshotOnHit        snapshotPoint = "on_hit"
-	snapshotOnEvent      snapshotPoint = "on_event"
-	snapshotCurrent      snapshotPoint = "current"
+	snapshotCastStart  snapshotPoint = "cast_start"
+	snapshotPhaseStart snapshotPoint = "phase_start"
+	snapshotSpawnStart snapshotPoint = "spawn_start"
+	snapshotEachTick   snapshotPoint = "each_tick"
+	snapshotOnHit      snapshotPoint = "on_hit"
+	snapshotOnEvent    snapshotPoint = "on_event"
+	snapshotCurrent    snapshotPoint = "current"
 )
 
 type AttributeReadPlan struct {

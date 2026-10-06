@@ -65,7 +65,7 @@ func TestRuntimeCheckpointRestoresActiveTimelineDeterministically(t *testing.T) 
 	}
 }
 
-func TestRuntimeCheckpointRestoresActiveProcesses(t *testing.T) {
+func TestRuntimeCheckpointRestoresActiveSpawns(t *testing.T) {
 	tests := []struct {
 		fixture string
 		input   CastInput

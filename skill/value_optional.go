@@ -13,7 +13,7 @@ const (
 	valueKindHit
 	valueKindPath
 	valueKindDirection
-	valueKindProcess
+	valueKindSpawn
 	valueKindAttribute
 	valueKindElement
 	valueKindGameplayTag

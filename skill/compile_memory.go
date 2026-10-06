@@ -77,8 +77,8 @@ func analyzeMemoryFlow(context *compileContext, flow flowIR, state memoryState, 
 		return intersectMemoryStates(state, outputs...)
 	case *effectFlowIR:
 		typed.effect.walkValues(func(value valueIR) { checkMemoryReference(context, value, state, guarded) })
-		if typed.process != nil {
-			typed.process.walkValues(func(value valueIR) { checkMemoryReference(context, value, state, guarded) })
+		if typed.spawn != nil {
+			typed.spawn.walkValues(func(value valueIR) { checkMemoryReference(context, value, state, guarded) })
 		}
 		switch effect := typed.effect.(type) {
 		case *setMemoryEffectIR:

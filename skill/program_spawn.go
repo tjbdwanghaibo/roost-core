@@ -1,7 +1,7 @@
 package skill
 
-type processTemplateProgram struct {
-	index           ProcessTemplateIndex
+type spawnTemplateProgram struct {
+	index           SpawnTemplateIndex
 	durationTicks   Tick
 	intervalTicks   Tick
 	emitLeaveOnStop bool
@@ -10,110 +10,110 @@ type processTemplateProgram struct {
 	area            *selectorProgram
 	motion          *motionProgram
 	numericTracks   []numericTrackProgram
-	callbacks       []processCallbackProgram
+	callbacks       []spawnCallbackProgram
 }
 
-type processNumericOperation uint8
+type spawnNumericOperation uint8
 
 const (
-	processNumericSet processNumericOperation = iota + 1
-	processNumericAdd
-	processNumericMulBP
+	spawnNumericSet spawnNumericOperation = iota + 1
+	spawnNumericAdd
+	spawnNumericMulBP
 )
 
-type processNumericInterpolation uint8
+type spawnNumericInterpolation uint8
 
-const processNumericLinearInteger processNumericInterpolation = 1
+const spawnNumericLinearInteger spawnNumericInterpolation = 1
 
-type processNumericRounding uint8
+type spawnNumericRounding uint8
 
-const processNumericTruncateTowardZero processNumericRounding = 1
+const spawnNumericTruncateTowardZero spawnNumericRounding = 1
 
-type processPropertyKey uint8
+type spawnPropertyKey uint8
 
 const (
-	processPropertySpeed processPropertyKey = iota + 1
-	processPropertyRadius
-	processPropertyArcHeight
-	processPropertyTurnRateMDegPerTick
-	processPropertyAngularSpeedMDegPerTick
-	processPropertyOffsetAmplitude
-	processPropertyOffsetRadius
-	processPropertyReturnSpeedBP
-	processPropertyCollisionForce
+	spawnPropertySpeed spawnPropertyKey = iota + 1
+	spawnPropertyRadius
+	spawnPropertyArcHeight
+	spawnPropertyTurnRateMDegPerTick
+	spawnPropertyAngularSpeedMDegPerTick
+	spawnPropertyOffsetAmplitude
+	spawnPropertyOffsetRadius
+	spawnPropertyReturnSpeedBP
+	spawnPropertyCollisionForce
 )
 
-type processPropertyProcessKind uint8
+type spawnPropertySpawnKind uint8
 
 const (
-	processPropertyProcessDash processPropertyProcessKind = iota + 1
-	processPropertyProcessOrbit
-	processPropertyProcessProjectile
-	processPropertyProcessArea
+	spawnPropertySpawnDash spawnPropertySpawnKind = iota + 1
+	spawnPropertySpawnOrbit
+	spawnPropertySpawnProjectile
+	spawnPropertySpawnArea
 )
 
-type processPropertySlotStage uint8
+type spawnPropertySlotStage uint8
 
 const (
-	processPropertySlotTrajectory processPropertySlotStage = iota + 1
-	processPropertySlotSteering
-	processPropertySlotOffset
-	processPropertySlotCompletion
-	processPropertySlotCollision
+	spawnPropertySlotTrajectory spawnPropertySlotStage = iota + 1
+	spawnPropertySlotSteering
+	spawnPropertySlotOffset
+	spawnPropertySlotCompletion
+	spawnPropertySlotCollision
 )
 
-type processPropertySlotVariant uint8
+type spawnPropertySlotVariant uint8
 
 const (
-	processPropertyVariantLinear processPropertySlotVariant = iota + 1
-	processPropertyVariantPath
-	processPropertyVariantParabola
-	processPropertyVariantOrbit
-	processPropertyVariantTracking
-	processPropertyVariantZigzag
-	processPropertyVariantCircular
-	processPropertyVariantBoomerang
-	processPropertyVariantPresent
+	spawnPropertyVariantLinear spawnPropertySlotVariant = iota + 1
+	spawnPropertyVariantPath
+	spawnPropertyVariantParabola
+	spawnPropertyVariantOrbit
+	spawnPropertyVariantTracking
+	spawnPropertyVariantZigzag
+	spawnPropertyVariantCircular
+	spawnPropertyVariantBoomerang
+	spawnPropertyVariantPresent
 )
 
-type processPropertySlotField uint8
+type spawnPropertySlotField uint8
 
 const (
-	processPropertyFieldSpeed processPropertySlotField = iota + 1
-	processPropertyFieldRadius
-	processPropertyFieldHeight
-	processPropertyFieldTurnRateMDegPerTick
-	processPropertyFieldAngularSpeed
-	processPropertyFieldAmplitude
-	processPropertyFieldReturnSpeedBP
-	processPropertyFieldForce
+	spawnPropertyFieldSpeed spawnPropertySlotField = iota + 1
+	spawnPropertyFieldRadius
+	spawnPropertyFieldHeight
+	spawnPropertyFieldTurnRateMDegPerTick
+	spawnPropertyFieldAngularSpeed
+	spawnPropertyFieldAmplitude
+	spawnPropertyFieldReturnSpeedBP
+	spawnPropertyFieldForce
 )
 
-type processPropertySlotBindingProgram struct {
-	stage   processPropertySlotStage
-	variant processPropertySlotVariant
-	field   processPropertySlotField
+type spawnPropertySlotBindingProgram struct {
+	stage   spawnPropertySlotStage
+	variant spawnPropertySlotVariant
+	field   spawnPropertySlotField
 }
 
-type processPropertyProgram struct {
-	handle                ProcessPropertyHandle
-	key                   processPropertyKey
+type spawnPropertyProgram struct {
+	handle                SpawnPropertyHandle
+	key                   spawnPropertyKey
 	minimum, maximum      int64
-	interpolation         processNumericInterpolation
-	rounding              processNumericRounding
+	interpolation         spawnNumericInterpolation
+	rounding              spawnNumericRounding
 	allowedOperationsMask uint8
-	processKinds          []processPropertyProcessKind
-	slotBindings          []processPropertySlotBindingProgram
+	spawnKinds            []spawnPropertySpawnKind
+	slotBindings          []spawnPropertySlotBindingProgram
 }
 
 type numericTrackProgram struct {
-	property  ProcessPropertyHandle
-	operation processNumericOperation
+	property  SpawnPropertyHandle
+	operation spawnNumericOperation
 	value     programValue
 	overTicks Tick
 }
 
-type processCallbackProgram struct {
+type spawnCallbackProgram struct {
 	event     string
 	operation OperationIndex
 }
@@ -199,7 +199,7 @@ func (endMotionCompletionProgram) isMotionCompletionProgram()          {}
 func (pauseThenEndMotionCompletionProgram) isMotionCompletionProgram() {}
 func (boomerangMotionCompletionProgram) isMotionCompletionProgram()    {}
 
-type ProcessTemplateView struct {
-	Index     ProcessTemplateIndex
+type SpawnTemplateView struct {
+	Index     SpawnTemplateIndex
 	Callbacks []OperationIndex
 }

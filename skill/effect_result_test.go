@@ -76,7 +76,7 @@ func TestEffectResultScopeRejectsInvalidFieldOutcomeAndEscape(t *testing.T) {
 		"result escapes branch":     `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"},"result":{"as":"r","success":{"flow":"effect","effect":{"type":"set_memory","name":"branch","value":1}}}},{"flow":"if","condition":"$local.r.succeeded","then":{"flow":"finish"},"else":{"flow":"finish"}}]}`,
 		"branch suspends":           `{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"},"result":{"success":{"flow":"wait","ticks":1,"then":{"flow":"finish"}}}}`,
 		"failure reason closed set": `{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"},"result":{"as":"r","failure":{"flow":"if","condition":{"op":"eq","args":["$local.r.failure_reason","capacity_reached"]},"then":{"flow":"finish"},"else":{"flow":"finish"}}}}`,
-		"process result":            `{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"},"result":{"success":{"flow":"finish"}},"on":{"tick":{"flow":"finish"}}}`,
+		"spawn result":              `{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"},"result":{"success":{"flow":"finish"}},"on":{"tick":{"flow":"finish"}}}`,
 	}
 	for name, flow := range tests {
 		t.Run(name, func(t *testing.T) {

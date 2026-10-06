@@ -68,16 +68,16 @@ func assertRuntimeCheckpointRoundTrip(t *testing.T, runtime *Runtime, host Host,
 	checkpoint, err := runtime.Checkpoint()
 	if err != nil {
 		runtime.mutex.Lock()
-		processes, owned := len(runtime.processes), len(runtime.ownedProcesses)
-		processPrograms := make(map[ProcessID]bool, len(runtime.processes))
-		for id, process := range runtime.processes {
-			processPrograms[id] = process != nil && process.Program != nil
+		spawns, owned := len(runtime.spawns), len(runtime.ownedSpawns)
+		spawnPrograms := make(map[SpawnID]bool, len(runtime.spawns))
+		for id, spawn := range runtime.spawns {
+			spawnPrograms[id] = spawn != nil && spawn.Program != nil
 		}
 		tasks := append(taskHeap(nil), runtime.scheduler.tasks...)
 		baseline, _ := json.Marshal(runtime.stateMutationBaseline)
 		current, _ := json.Marshal(runtime.stateSnapshotLocked())
 		runtime.mutex.Unlock()
-		t.Fatalf("%v; processes=%d owned=%d programs=%v tasks=%+v\nbaseline=%s\ncurrent=%s", err, processes, owned, processPrograms, tasks, baseline, current)
+		t.Fatalf("%v; spawns=%d owned=%d programs=%v tasks=%+v\nbaseline=%s\ncurrent=%s", err, spawns, owned, spawnPrograms, tasks, baseline, current)
 	}
 	restored, err := RestoreRuntime(host, RuntimeOptions{}, checkpoint, ProgramResolverFunc(func(id, digest string) (*Program, error) {
 		if id == program.id && digest == program.identity.gameplayDigest {

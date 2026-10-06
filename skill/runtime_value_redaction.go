@@ -76,7 +76,7 @@ func RedactRuntimeValue(value RuntimeValue, options RuntimeValueRedactionOptions
 		if options.RedactSpatial {
 			return missing(), nil
 		}
-	case valueKindSnapshotToken, valueKindProcess:
+	case valueKindSnapshotToken, valueKindSpawn:
 		if options.RedactOpaque {
 			return missing(), nil
 		}

@@ -10,18 +10,18 @@ type numericTrackIR struct {
 
 func (track numericTrackIR) walkValues(visitor valueVisitor) { walkValue(track.value, visitor) }
 
-type modifyProcessEffectIR struct {
+type modifySpawnEffectIR struct {
 	source    sourceRef
-	process   valueIR
+	spawn     valueIR
 	property  string
 	operation string
 	value     valueIR
 	overTicks Tick
 }
 
-func (*modifyProcessEffectIR) isEffectIR()                 {}
-func (effect *modifyProcessEffectIR) sourceRef() sourceRef { return effect.source }
-func (effect *modifyProcessEffectIR) walkValues(visitor valueVisitor) {
-	walkValue(effect.process, visitor)
+func (*modifySpawnEffectIR) isEffectIR()                 {}
+func (effect *modifySpawnEffectIR) sourceRef() sourceRef { return effect.source }
+func (effect *modifySpawnEffectIR) walkValues(visitor valueVisitor) {
+	walkValue(effect.spawn, visitor)
 	walkValue(effect.value, visitor)
 }

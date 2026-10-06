@@ -105,8 +105,8 @@ type effectContinuations struct {
 	result                 resultLayoutProgram
 	resultLocal            LocalIndex
 	hasResultLocal         bool
-	processTemplate        ProcessTemplateIndex
-	hasProcess             bool
+	spawnTemplate          SpawnTemplateIndex
+	hasSpawn               bool
 	visual                 VisualIndex
 	hasVisual              bool
 }

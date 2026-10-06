@@ -1,8 +1,8 @@
 package skill
 
-type ProcessCommandMeta struct {
+type SpawnCommandMeta struct {
 	RequiredRevision WorldRevision
-	ProcessID        ProcessID
+	SpawnID          SpawnID
 	EffectIndex      EffectIndex
 }
 
@@ -32,7 +32,7 @@ type CarryMotionStep struct {
 	Attached bool
 }
 type CompletionMotionStep struct{ Complete bool }
-type SignalsMotionStep struct{ Signals []ProcessSignal }
+type SignalsMotionStep struct{ Signals []SpawnSignal }
 
 func (FrameMotionStep) isMotionStep()      {}
 func (SteeringMotionStep) isMotionStep()   {}
@@ -43,7 +43,7 @@ func (CarryMotionStep) isMotionStep()      {}
 func (CompletionMotionStep) isMotionStep() {}
 func (SignalsMotionStep) isMotionStep()    {}
 
-type ProcessNumericSnapshot struct {
+type SpawnNumericSnapshot struct {
 	Speed                   int64
 	Radius                  int64
 	ArcHeight               int64
@@ -55,22 +55,22 @@ type ProcessNumericSnapshot struct {
 	CollisionForce          int64
 }
 
-type ProcessStepCommand struct {
-	Meta    ProcessCommandMeta
+type SpawnStepCommand struct {
+	Meta    SpawnCommandMeta
 	Motion  MotionStep
-	Numeric ProcessNumericSnapshot
+	Numeric SpawnNumericSnapshot
 }
 
-type ProcessStopCommand struct{ Meta ProcessCommandMeta }
+type SpawnStopCommand struct{ Meta SpawnCommandMeta }
 
-type ProcessHostState struct {
-	ProcessID ProcessID
-	Position  Position
-	Active    bool
+type SpawnHostState struct {
+	SpawnID  SpawnID
+	Position Position
+	Active   bool
 }
 
-type ProcessStepResult struct {
+type SpawnStepResult struct {
 	Commit  CommitReceipt
-	State   ProcessHostState
-	Signals []ProcessSignal
+	State   SpawnHostState
+	Signals []SpawnSignal
 }

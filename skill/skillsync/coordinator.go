@@ -491,17 +491,17 @@ func (coordinator *Coordinator) presentationReset(observer syncstream.Observer) 
 
 // activePresentationEvent 把一条持续表现还原成 Runtime 会为它发出的增量事件形状（presentation.go 的
 // appendPresentation：Source 是施法者 / owner，Anchor.Target 是目标 / lifecycle 实体，PrimaryTarget 取条目的
-// PrimaryTarget——仍归施法的进程是施法目标而不是 lifecycle 实体），让 reset 与增量经过同一条过滤规则。
-// 之前 PrimaryTarget 用 Anchor.Target 代替，按 PrimaryTarget 判定的策略放行了增量里被挡住的进程表现（RR-20261006-22）。
+// PrimaryTarget——仍归施法的衍生物是施法目标而不是 lifecycle 实体），让 reset 与增量经过同一条过滤规则。
+// 之前 PrimaryTarget 用 Anchor.Target 代替，按 PrimaryTarget 判定的策略放行了增量里被挡住的衍生物表现（RR-20261006-22）。
 func activePresentationEvent(snapshot skill.PresentationRecoverySnapshot, entry skill.ActivePresentation) skill.PresentationEvent {
 	event := skill.PresentationEvent{
 		Sequence: snapshot.LatestPresentationSequence, Tick: snapshot.Tick, WorldRevision: snapshot.WorldRevision,
 		Kind: skill.PresentationCast, ProgramID: entry.ProgramID, GameplayDigest: entry.GameplayDigest, PresentationDigest: entry.PresentationDigest,
 		CastID: entry.CastID, VisualIndex: entry.VisualIndex, Source: entry.Anchor.Source, PrimaryTarget: entry.PrimaryTarget, Anchor: entry.Anchor,
 	}
-	if entry.Kind == skill.ActivePresentationProcess {
-		event.Kind = skill.PresentationProcessUpdate
-		event.ProcessID, event.ProcessTemplate, event.HasProcess, event.ProcessStatus = entry.ProcessID, entry.ProcessTemplate, true, entry.ProcessStatus
+	if entry.Kind == skill.ActivePresentationSpawn {
+		event.Kind = skill.PresentationSpawnUpdate
+		event.SpawnID, event.SpawnTemplate, event.HasSpawn, event.SpawnStatus = entry.SpawnID, entry.SpawnTemplate, true, entry.SpawnStatus
 	}
 	return event
 }

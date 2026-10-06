@@ -18,9 +18,9 @@ func evalContextStateJSON(t *testing.T, input, stateType, stateDefault, steps st
 	return stringsReplaceOnce(t, text, `"initial_phase"`, state)
 }
 
-// evalContextAreaSpawn 是一个 area 进程：启动时与之后每个 interval 都跑 tick 回调。
+// evalContextAreaSpawn 是一个 area 衍生物：启动时与之后每个 interval 都跑 tick 回调。
 func evalContextAreaSpawn(tick string) string {
-	return `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"process":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":` + tick + `}}`
+	return `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":` + tick + `}}`
 }
 
 // runEvalContextCast 编译、施法并推进 6 个 tick，返回第一个错误。
@@ -85,8 +85,8 @@ func TestMemoryDefaultsReadingTheCastStillRun(t *testing.T) {
 
 // RR-20261005-NC-281：持久状态的默认值在读 / 写这条状态的位置求值（evalStateRead /
 // executeStateMutation 用当时的 cast）。旧的类型检查按施法作用域检查默认值：`$input.target`
-// 这样的默认值能编译，状态在 spawn 进程回调里被读时，回调的 cast 没有施法输入，
-// Activate（进程启动那一步就跑回调）返回 ErrProgramInvariant。
+// 这样的默认值能编译，状态在 spawn 衍生物回调里被读时，回调的 cast 没有施法输入，
+// Activate（衍生物启动那一步就跑回调）返回 ErrProgramInvariant。
 func TestCompileRejectsStateDefaultsThatCannotBeEvaluatedEverywhere(t *testing.T) {
 	readInCallback := agreementSteps(evalContextAreaSpawn(`{"flow":"if","condition":{"op":"exists","args":[{"read_state":{"state":"who","owner":"$owner"}}]},"then":` + captureDamage("$event.target", "1") + `}`))
 	cases := []struct{ name, input, memory string }{
@@ -111,8 +111,8 @@ func TestCompileRejectsStateDefaultsThatCannotBeEvaluatedEverywhere(t *testing.T
 	}
 }
 
-// RR-20261005-NC-281 的控制：默认值读 `$caster` 的状态在施法流程与进程回调里都能读（回调里
-// `$caster` 求成进程的 owner，即同一个施法者），施法流程里写过之后读到的是写入值。
+// RR-20261005-NC-281 的控制：默认值读 `$caster` 的状态在施法流程与衍生物回调里都能读（回调里
+// `$caster` 求成衍生物的 owner，即同一个施法者），施法流程里写过之后读到的是写入值。
 func TestStateDefaultOfTheCasterRunsInCallbacks(t *testing.T) {
 	steps := agreementSteps(evalContextAreaSpawn(`{"flow":"if","condition":{"read_state":{"state":"who","owner":"$owner"}},"then":` + captureDamage("$event.target", "1") + `}`))
 	program, diagnostics := Compile(mustParseJSON(t, evalContextStateJSON(t, "none", "bool", `{"op":"eq","args":["$caster","$caster"]}`, steps)), DefaultCompileEnvironment())
@@ -212,16 +212,16 @@ func TestProjectedReferencesCompileAndRun(t *testing.T) {
 }
 
 // 表外引用在 Runtime 报 ErrReferenceOutOfContext 并点名上下文与表项，不再落到
-// ErrProgramInvariant（维护者第五轮决定）。用移交后的进程上下文直接求一个施法输入引用。
+// ErrProgramInvariant（维护者第五轮决定）。用移交后的衍生物上下文直接求一个施法输入引用。
 func TestRuntimeReportsOutOfContextReferencesAgainstTheTable(t *testing.T) {
 	program, _ := compileRuntimeJSON(t, agreementSkillJSON("none", "{}", "[]", agreementSteps(evalContextAreaSpawn(captureDamage("$event.target", "1")))))
 	runtime := NewRuntime(runtimeTestHost(DefaultCompileEnvironment()), RuntimeOptions{})
-	cast := &castInstance{program: program, caster: 1, evalContext: evalProcessStep}
+	cast := &castInstance{program: program, caster: 1, evalContext: evalSpawnStep}
 	_, err := runtime.evalReference(cast, referenceProgramValue{kind: referenceInput, index: 0, typ: evalEntityType})
 	if !errors.Is(err, ErrReferenceOutOfContext) || errors.Is(err, ErrProgramInvariant) {
 		t.Fatalf("err = %v, want ErrReferenceOutOfContext (not ErrProgramInvariant)", err)
 	}
-	for _, want := range []string{"process_step", "$input.*"} {
+	for _, want := range []string{"spawn_step", "$input.*"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q must name %q", err, want)
 		}

@@ -25,8 +25,8 @@ type Program struct {
 	roots                     []rootProgram
 	operations                []operation
 	selectors                 []selectorProgram
-	processTemplates          []processTemplateProgram
-	processProperties         []processPropertyProgram
+	spawnTemplates            []spawnTemplateProgram
+	spawnProperties           []spawnPropertyProgram
 	quantities                []quantityProgram
 	randomSites               []randomSiteProgram
 	visuals                   []visualProgram

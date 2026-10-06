@@ -208,41 +208,41 @@ type GameplayCatalog struct {
 }
 
 type MotionCapabilityCatalog struct {
-	Revision               string
-	ProcessTrajectoryPairs []MotionProcessTrajectoryPair
-	VariantCapabilities    []MotionVariantCapability
-	EnabledSlots           []string
-	HostFeatures           []string
-	MaximumSpeed           int64
-	MaximumDistance        int64
-	MaximumAngularSpeed    int64
-	MaximumTrackingTicks   Tick
+	Revision             string
+	SpawnTrajectoryPairs []MotionSpawnTrajectoryPair
+	VariantCapabilities  []MotionVariantCapability
+	EnabledSlots         []string
+	HostFeatures         []string
+	MaximumSpeed         int64
+	MaximumDistance      int64
+	MaximumAngularSpeed  int64
+	MaximumTrackingTicks Tick
 }
 
-type MotionProcessTrajectoryPair struct{ Process, Trajectory string }
+type MotionSpawnTrajectoryPair struct{ Spawn, Trajectory string }
 type MotionVariantCapability struct {
-	Process, Trajectory                           string
+	Spawn, Trajectory                             string
 	Frames, Steering, Offsets, CollisionResponses []string
 	Carry                                         bool
 	Completions                                   []string
 }
-type ProcessPropertyCatalog struct {
+type SpawnPropertyCatalog struct {
 	Revision   string
-	Properties []ProcessPropertyPolicy
+	Properties []SpawnPropertyPolicy
 }
-type ProcessPropertyHandle uint16
-type ProcessPropertySlotBinding struct {
+type SpawnPropertyHandle uint16
+type SpawnPropertySlotBinding struct {
 	Stage, Variant, Field string
 }
-type ProcessPropertyPolicy struct {
-	Handle           ProcessPropertyHandle
+type SpawnPropertyPolicy struct {
+	Handle           SpawnPropertyHandle
 	Key              string
 	Minimum, Maximum int64
-	ProcessKinds     []string
+	SpawnKinds       []string
 	Operations       []string
 	Interpolation    string
 	Rounding         string
-	SlotBindings     []ProcessPropertySlotBinding
+	SlotBindings     []SpawnPropertySlotBinding
 }
 type VisualCatalog struct {
 	Revision, Digest string
@@ -283,11 +283,11 @@ type NumericAuthority struct {
 }
 
 type CompileLimits struct {
-	MaxPhases, MaxFlowNodes, MaxFlowDepth, MaxValueNodes, MaxRepeat, MaxTargets, MaxProcesses, MaxSchedules, MaxMutations                                                                                                                                                                                                                                                                                                                                                              int
-	MaxLifetimeTicks                                                                                                                                                                                                                                                                                                                                                                                                                                                                   Tick
-	MaxMotionOffsets, MaxReflects, MaxPierces, MaxCarryTargets, MaxVisualRefs, MaxGameplayTags, MaxProcDepth, MaxEventsPerRoot, MaxRandomSites, MaxPassiveActivationsPerTick, MaxAreaMembers, MaxStatusStacks, MaxPersistentStates, MaxStateInstancesPerOwner, MaxAbilitySelections, MaxAbilityMutations, MaxOwnedEntities, MaxOwnedProcesses, MaxStatusSelections, MaxStatusMutations, MaxEffectResultSlots, MaxLocalFrames, MaxInputPathPoints, MaxTemporalSnapshots, MaxStringBytes int
-	MaxInputPathLength                                                                                                                                                                                                                                                                                                                                                                                                                                                                 int64
-	MaxTemporalSnapshotAge                                                                                                                                                                                                                                                                                                                                                                                                                                                             Tick
+	MaxPhases, MaxFlowNodes, MaxFlowDepth, MaxValueNodes, MaxRepeat, MaxTargets, MaxSpawns, MaxSchedules, MaxMutations                                                                                                                                                                                                                                                                                                                                                              int
+	MaxLifetimeTicks                                                                                                                                                                                                                                                                                                                                                                                                                                                                Tick
+	MaxMotionOffsets, MaxReflects, MaxPierces, MaxCarryTargets, MaxVisualRefs, MaxGameplayTags, MaxProcDepth, MaxEventsPerRoot, MaxRandomSites, MaxPassiveActivationsPerTick, MaxAreaMembers, MaxStatusStacks, MaxPersistentStates, MaxStateInstancesPerOwner, MaxAbilitySelections, MaxAbilityMutations, MaxOwnedEntities, MaxOwnedSpawns, MaxStatusSelections, MaxStatusMutations, MaxEffectResultSlots, MaxLocalFrames, MaxInputPathPoints, MaxTemporalSnapshots, MaxStringBytes int
+	MaxInputPathLength                                                                                                                                                                                                                                                                                                                                                                                                                                                              int64
+	MaxTemporalSnapshotAge                                                                                                                                                                                                                                                                                                                                                                                                                                                          Tick
 }
 
 type CompileEnvironment struct {
@@ -298,7 +298,7 @@ type CompileEnvironment struct {
 	Numeric                   NumericAuthority
 	Gameplay                  GameplayCatalog
 	Motion                    MotionCapabilityCatalog
-	ProcessProperties         ProcessPropertyCatalog
+	SpawnProperties           SpawnPropertyCatalog
 	Visual                    VisualCatalog
 }
 
@@ -306,7 +306,7 @@ func DefaultCompileEnvironment() CompileEnvironment {
 	environment := CompileEnvironment{
 		CompilerSemanticsRevision: "skillv2-compiler-2", Revision: "gameplay-default-1",
 		Limits: defaultCompileLimits(), Numeric: NumericAuthority{WorldDistanceScale: 1000, MillidegreesPerDegree: 1000, BasisPointsScale: 10000, SignedIntegerBits: 64, TickUnit: "logical_tick", DefaultRounding: "half_away_from_zero"},
-		Gameplay: defaultGameplayCatalog(), Motion: defaultMotionCapabilityCatalog(), ProcessProperties: defaultProcessPropertyCatalog(), Visual: defaultVisualCatalog(),
+		Gameplay: defaultGameplayCatalog(), Motion: defaultMotionCapabilityCatalog(), SpawnProperties: defaultSpawnPropertyCatalog(), Visual: defaultVisualCatalog(),
 	}
 	environment.Visual.Digest = digestStrings("visual", environment.Visual.Revision, environment.Visual.Themes)
 	environment.Digest = authorityDigest(environment)
@@ -351,54 +351,54 @@ func cloneVisualElements(source map[string]VisualElementDescriptor) map[string]V
 	return result
 }
 
-func defaultProcessPropertyCatalog() ProcessPropertyCatalog {
+func defaultSpawnPropertyCatalog() SpawnPropertyCatalog {
 	operations := func() []string { return []string{"set", "add", "mul_bp"} }
-	policy := func(handle ProcessPropertyHandle, key string, minimum, maximum int64, processKinds []string, bindings ...ProcessPropertySlotBinding) ProcessPropertyPolicy {
-		return ProcessPropertyPolicy{Handle: handle, Key: key, Minimum: minimum, Maximum: maximum, ProcessKinds: processKinds, Operations: operations(), Interpolation: "linear_integer", Rounding: "truncate_toward_zero", SlotBindings: bindings}
+	policy := func(handle SpawnPropertyHandle, key string, minimum, maximum int64, spawnKinds []string, bindings ...SpawnPropertySlotBinding) SpawnPropertyPolicy {
+		return SpawnPropertyPolicy{Handle: handle, Key: key, Minimum: minimum, Maximum: maximum, SpawnKinds: spawnKinds, Operations: operations(), Interpolation: "linear_integer", Rounding: "truncate_toward_zero", SlotBindings: bindings}
 	}
-	return ProcessPropertyCatalog{Revision: "process-2", Properties: []ProcessPropertyPolicy{
-		policy(1, "speed", 0, 100000, []string{"dash", "projectile", "area"}, ProcessPropertySlotBinding{"trajectory", "linear", "speed"}, ProcessPropertySlotBinding{"trajectory", "path", "speed"}, ProcessPropertySlotBinding{"trajectory", "parabola", "speed"}),
-		policy(2, "radius", 0, 1000000, []string{"orbit"}, ProcessPropertySlotBinding{"trajectory", "orbit", "radius"}),
-		policy(3, "arc_height", 0, 1000000, []string{"projectile"}, ProcessPropertySlotBinding{"trajectory", "parabola", "height"}),
-		policy(4, "turn_rate_mdeg_per_tick", 0, 360000, []string{"projectile"}, ProcessPropertySlotBinding{"steering", "tracking", "turn_rate_mdeg_per_tick"}),
-		policy(5, "angular_speed_mdeg_per_tick", -360000, 360000, []string{"orbit", "projectile"}, ProcessPropertySlotBinding{"trajectory", "orbit", "angular_speed"}, ProcessPropertySlotBinding{"offset", "circular", "angular_speed"}),
-		policy(6, "offset_amplitude", 0, 1000000, []string{"projectile"}, ProcessPropertySlotBinding{"offset", "zigzag", "amplitude"}),
-		policy(7, "offset_radius", 0, 1000000, []string{"orbit", "projectile"}, ProcessPropertySlotBinding{"offset", "circular", "radius"}),
-		policy(8, "return_speed_bp", 0, 100000, []string{"projectile"}, ProcessPropertySlotBinding{"completion", "boomerang", "return_speed_bp"}),
-		policy(9, "collision_force", 0, 1000000, []string{"dash", "projectile", "area"}, ProcessPropertySlotBinding{"collision", "present", "force"}),
+	return SpawnPropertyCatalog{Revision: "spawn-2", Properties: []SpawnPropertyPolicy{
+		policy(1, "speed", 0, 100000, []string{"dash", "projectile", "area"}, SpawnPropertySlotBinding{"trajectory", "linear", "speed"}, SpawnPropertySlotBinding{"trajectory", "path", "speed"}, SpawnPropertySlotBinding{"trajectory", "parabola", "speed"}),
+		policy(2, "radius", 0, 1000000, []string{"orbit"}, SpawnPropertySlotBinding{"trajectory", "orbit", "radius"}),
+		policy(3, "arc_height", 0, 1000000, []string{"projectile"}, SpawnPropertySlotBinding{"trajectory", "parabola", "height"}),
+		policy(4, "turn_rate_mdeg_per_tick", 0, 360000, []string{"projectile"}, SpawnPropertySlotBinding{"steering", "tracking", "turn_rate_mdeg_per_tick"}),
+		policy(5, "angular_speed_mdeg_per_tick", -360000, 360000, []string{"orbit", "projectile"}, SpawnPropertySlotBinding{"trajectory", "orbit", "angular_speed"}, SpawnPropertySlotBinding{"offset", "circular", "angular_speed"}),
+		policy(6, "offset_amplitude", 0, 1000000, []string{"projectile"}, SpawnPropertySlotBinding{"offset", "zigzag", "amplitude"}),
+		policy(7, "offset_radius", 0, 1000000, []string{"orbit", "projectile"}, SpawnPropertySlotBinding{"offset", "circular", "radius"}),
+		policy(8, "return_speed_bp", 0, 100000, []string{"projectile"}, SpawnPropertySlotBinding{"completion", "boomerang", "return_speed_bp"}),
+		policy(9, "collision_force", 0, 1000000, []string{"dash", "projectile", "area"}, SpawnPropertySlotBinding{"collision", "present", "force"}),
 	}}
 }
 
 func defaultMotionCapabilityCatalog() MotionCapabilityCatalog {
 	projectile := func(trajectory string) MotionVariantCapability {
-		return MotionVariantCapability{Process: "projectile", Trajectory: trajectory, Frames: []string{"world", "follow"}, Steering: []string{"fixed", "tracking"}, Offsets: []string{"zigzag", "circular"}, CollisionResponses: []string{"stop", "reflect", "pierce"}, Carry: true, Completions: []string{"end", "pause_then_end", "boomerang"}}
+		return MotionVariantCapability{Spawn: "projectile", Trajectory: trajectory, Frames: []string{"world", "follow"}, Steering: []string{"fixed", "tracking"}, Offsets: []string{"zigzag", "circular"}, CollisionResponses: []string{"stop", "reflect", "pierce"}, Carry: true, Completions: []string{"end", "pause_then_end", "boomerang"}}
 	}
 	return MotionCapabilityCatalog{
 		Revision: "motion-2",
-		ProcessTrajectoryPairs: []MotionProcessTrajectoryPair{
+		SpawnTrajectoryPairs: []MotionSpawnTrajectoryPair{
 			{"dash", "linear"}, {"orbit", "orbit"}, {"projectile", "linear"}, {"projectile", "path"}, {"projectile", "parabola"}, {"area", "stationary"}, {"area", "linear"}, {"beam", "stationary"},
 		},
 		VariantCapabilities: []MotionVariantCapability{
-			{Process: "dash", Trajectory: "linear", Frames: []string{"world", "follow"}, Steering: []string{"fixed"}, CollisionResponses: []string{"stop"}, Carry: true, Completions: []string{"end", "pause_then_end"}},
-			{Process: "orbit", Trajectory: "orbit", Frames: []string{"world"}, Offsets: []string{"circular"}, Completions: []string{"end", "pause_then_end"}},
+			{Spawn: "dash", Trajectory: "linear", Frames: []string{"world", "follow"}, Steering: []string{"fixed"}, CollisionResponses: []string{"stop"}, Carry: true, Completions: []string{"end", "pause_then_end"}},
+			{Spawn: "orbit", Trajectory: "orbit", Frames: []string{"world"}, Offsets: []string{"circular"}, Completions: []string{"end", "pause_then_end"}},
 			projectile("linear"), projectile("path"), projectile("parabola"),
-			{Process: "area", Trajectory: "stationary", Frames: []string{"world", "follow"}, Completions: []string{"end", "pause_then_end"}},
-			{Process: "area", Trajectory: "linear", Frames: []string{"world", "follow"}, Steering: []string{"fixed"}, CollisionResponses: []string{"stop"}, Completions: []string{"end", "pause_then_end"}},
-			{Process: "beam", Trajectory: "stationary", Frames: []string{"world", "follow"}, Completions: []string{"end"}},
+			{Spawn: "area", Trajectory: "stationary", Frames: []string{"world", "follow"}, Completions: []string{"end", "pause_then_end"}},
+			{Spawn: "area", Trajectory: "linear", Frames: []string{"world", "follow"}, Steering: []string{"fixed"}, CollisionResponses: []string{"stop"}, Completions: []string{"end", "pause_then_end"}},
+			{Spawn: "beam", Trajectory: "stationary", Frames: []string{"world", "follow"}, Completions: []string{"end"}},
 		},
 		EnabledSlots: []string{"frame", "steering", "offsets", "collision", "carry", "completion"}, HostFeatures: []string{"carry"}, MaximumSpeed: 100000, MaximumDistance: 100000, MaximumAngularSpeed: 100000, MaximumTrackingTicks: 36000,
 	}
 }
 
 func defaultCompileLimits() CompileLimits {
-	return CompileLimits{MaxPhases: 32, MaxFlowNodes: 1024, MaxFlowDepth: 64, MaxValueNodes: 4096, MaxRepeat: 64, MaxTargets: 128, MaxProcesses: 128, MaxSchedules: 2048, MaxMutations: 4096, MaxLifetimeTicks: 36000, MaxMotionOffsets: 8, MaxReflects: 16, MaxPierces: 32, MaxCarryTargets: 8, MaxVisualRefs: 256, MaxGameplayTags: 256, MaxProcDepth: 8, MaxEventsPerRoot: 1024, MaxRandomSites: 256, MaxPassiveActivationsPerTick: 256, MaxAreaMembers: 128, MaxStatusStacks: 128, MaxPersistentStates: 64, MaxStateInstancesPerOwner: 1024, MaxAbilitySelections: 64, MaxAbilityMutations: 128, MaxOwnedEntities: 128, MaxOwnedProcesses: 128, MaxStatusSelections: 128, MaxStatusMutations: 256, MaxEffectResultSlots: 128, MaxLocalFrames: 4096, MaxInputPathPoints: 64, MaxInputPathLength: 100000, MaxTemporalSnapshots: 16, MaxTemporalSnapshotAge: 3600, MaxStringBytes: 4096}
+	return CompileLimits{MaxPhases: 32, MaxFlowNodes: 1024, MaxFlowDepth: 64, MaxValueNodes: 4096, MaxRepeat: 64, MaxTargets: 128, MaxSpawns: 128, MaxSchedules: 2048, MaxMutations: 4096, MaxLifetimeTicks: 36000, MaxMotionOffsets: 8, MaxReflects: 16, MaxPierces: 32, MaxCarryTargets: 8, MaxVisualRefs: 256, MaxGameplayTags: 256, MaxProcDepth: 8, MaxEventsPerRoot: 1024, MaxRandomSites: 256, MaxPassiveActivationsPerTick: 256, MaxAreaMembers: 128, MaxStatusStacks: 128, MaxPersistentStates: 64, MaxStateInstancesPerOwner: 1024, MaxAbilitySelections: 64, MaxAbilityMutations: 128, MaxOwnedEntities: 128, MaxOwnedSpawns: 128, MaxStatusSelections: 128, MaxStatusMutations: 256, MaxEffectResultSlots: 128, MaxLocalFrames: 4096, MaxInputPathPoints: 64, MaxInputPathLength: 100000, MaxTemporalSnapshots: 16, MaxTemporalSnapshotAge: 3600, MaxStringBytes: 4096}
 }
 
 func defaultGameplayCatalog() GameplayCatalog {
 	attributes := []AttributeCatalogEntry{
 		{Handle: 1, Key: "health", ValueType: valueKindInt, Quantity: quantityCombatAmount, Readable: true, Snapshots: []string{"cast_start", "phase_start", "current"}, ModifierOperations: []string{"add", "mul_bp"}, Minimum: 0, Maximum: 1000000, Rounding: "half_away_from_zero"},
-		{Handle: 2, Key: "ability_power", ValueType: valueKindInt, Quantity: quantityCombatAmount, Readable: true, Snapshots: []string{"cast_start", "phase_start", "process_start", "each_tick", "on_hit", "current"}, ModifierOperations: []string{"add", "mul_bp"}, Minimum: 0, Maximum: 1000000, Rounding: "half_away_from_zero"},
-		{Handle: 3, Key: "move_speed", ValueType: valueKindInt, Quantity: quantitySpeedWorldPerTick, Readable: true, Snapshots: []string{"cast_start", "phase_start", "process_start", "each_tick", "current"}, ModifierOperations: []string{"add", "mul_bp"}, Minimum: 0, Maximum: 100000, Rounding: "toward_zero"},
+		{Handle: 2, Key: "ability_power", ValueType: valueKindInt, Quantity: quantityCombatAmount, Readable: true, Snapshots: []string{"cast_start", "phase_start", "spawn_start", "each_tick", "on_hit", "current"}, ModifierOperations: []string{"add", "mul_bp"}, Minimum: 0, Maximum: 1000000, Rounding: "half_away_from_zero"},
+		{Handle: 3, Key: "move_speed", ValueType: valueKindInt, Quantity: quantitySpeedWorldPerTick, Readable: true, Snapshots: []string{"cast_start", "phase_start", "spawn_start", "each_tick", "current"}, ModifierOperations: []string{"add", "mul_bp"}, Minimum: 0, Maximum: 100000, Rounding: "toward_zero"},
 	}
 	return GameplayCatalog{
 		Attributes: AttributeCatalog{Revision: "attributes-1", Entries: attributes},

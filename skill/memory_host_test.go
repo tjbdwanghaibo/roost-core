@@ -69,18 +69,18 @@ func TestMemoryHostRaycastUsesHitDistanceThenStableCollider(t *testing.T) {
 	}
 }
 
-func TestMemoryHostStopProcessIsIdempotent(t *testing.T) {
+func TestMemoryHostStopSpawnIsIdempotent(t *testing.T) {
 	host := NewMemoryHost(AuthorityIdentity{Revision: "test", Digest: "test"})
-	_, err := host.StepProcess(ProcessStepCommand{Meta: ProcessCommandMeta{ProcessID: 7}, Motion: StaticMotionStep{}}, ProcessHostState{ProcessID: 7})
+	_, err := host.StepSpawn(SpawnStepCommand{Meta: SpawnCommandMeta{SpawnID: 7}, Motion: StaticMotionStep{}}, SpawnHostState{SpawnID: 7})
 	if err != nil {
 		t.Fatal(err)
 	}
 	before := len(host.Events(0))
-	first, err := host.StopProcess(ProcessStopCommand{Meta: ProcessCommandMeta{ProcessID: 7}}, ProcessHostState{ProcessID: 7})
+	first, err := host.StopSpawn(SpawnStopCommand{Meta: SpawnCommandMeta{SpawnID: 7}}, SpawnHostState{SpawnID: 7})
 	if err != nil || !first.Changed {
 		t.Fatalf("first stop = %#v, %v", first, err)
 	}
-	second, err := host.StopProcess(ProcessStopCommand{Meta: ProcessCommandMeta{ProcessID: 7}}, ProcessHostState{ProcessID: 7})
+	second, err := host.StopSpawn(SpawnStopCommand{Meta: SpawnCommandMeta{SpawnID: 7}}, SpawnHostState{SpawnID: 7})
 	if err != nil || second.Changed || second.Revision != first.Revision {
 		t.Fatalf("second stop = %#v, %v", second, err)
 	}

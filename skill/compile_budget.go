@@ -20,7 +20,7 @@ func runBudgetPass(context *compileContext) {
 			fact := context.artifacts.lifetimes[flow.sourceRef().Path]
 			computed.LifetimeTicks = maxTick(computed.LifetimeTicks, fact.MaxLifetime)
 			computed.Schedules = maxInt(computed.Schedules, fact.MaxSchedules)
-			computed.Processes = maxInt(computed.Processes, fact.MaxProcesses)
+			computed.Spawns = maxInt(computed.Spawns, fact.MaxSpawns)
 		})
 	}
 	context.artifacts.limits = computed
@@ -31,13 +31,13 @@ func runBudgetPass(context *compileContext) {
 	checkBudget(context, "value_nodes", computed.ValueNodes, limits.MaxValueNodes)
 	checkBudget(context, "repeat", computed.Repeat, limits.MaxRepeat)
 	checkBudget(context, "targets", computed.Targets, limits.MaxTargets)
-	checkBudget(context, "processes", computed.Processes, limits.MaxProcesses)
+	checkBudget(context, "spawns", computed.Spawns, limits.MaxSpawns)
 	checkBudget(context, "schedules", computed.Schedules, limits.MaxSchedules)
 	checkBudget(context, "mutations", computed.Mutations, limits.MaxMutations)
 	checkBudget(context, "area_members", computed.AreaMembers, limits.MaxAreaMembers)
 	checkBudget(context, "ability_mutations", computed.AbilityMutations, limits.MaxAbilityMutations)
 	checkBudget(context, "owned_entities", computed.OwnedEntities, limits.MaxOwnedEntities)
-	checkBudget(context, "owned_processes", computed.OwnedProcesses, limits.MaxOwnedProcesses)
+	checkBudget(context, "owned_spawns", computed.OwnedSpawns, limits.MaxOwnedSpawns)
 	checkBudget(context, "status_mutations", computed.StatusMutations, limits.MaxStatusMutations)
 	checkBudget(context, "temporal_snapshots", computed.TemporalSnapshots, limits.MaxTemporalSnapshots)
 	checkBudget(context, "random_sites", computed.RandomSites, limits.MaxRandomSites)
@@ -90,21 +90,21 @@ func measureFlowBudget(flow flowIR, depth, invocationBound int, computed *Comput
 		measureFlowBudget(typed.onEmpty, depth+1, invocationBound, computed)
 	case *effectFlowIR:
 		computed.Mutations = saturatingAdd(computed.Mutations, invocationBound)
-		processInvocationBound := invocationBound
-		if spawn, ok := typed.effect.(*spawnEffectIR); ok && typed.process != nil && typed.process.kind == "area" {
-			processInvocationBound = saturatingMul(processInvocationBound, spawn.count)
+		spawnInvocationBound := invocationBound
+		if spawn, ok := typed.effect.(*spawnEffectIR); ok && typed.spawn != nil && typed.spawn.kind == "area" {
+			spawnInvocationBound = saturatingMul(spawnInvocationBound, spawn.count)
 		}
-		if typed.process != nil && len(typed.process.numericTracks) != 0 {
-			computed.Mutations = saturatingAdd(computed.Mutations, saturatingMul(processInvocationBound, len(typed.process.numericTracks)))
+		if typed.spawn != nil && len(typed.spawn.numericTracks) != 0 {
+			computed.Mutations = saturatingAdd(computed.Mutations, saturatingMul(spawnInvocationBound, len(typed.spawn.numericTracks)))
 		}
-		if typed.process != nil && typed.process.kind == "area" && typed.process.area != nil {
-			computed.AreaMembers = maxInt(computed.AreaMembers, saturatingMul(processInvocationBound, typed.process.area.limit))
+		if typed.spawn != nil && typed.spawn.kind == "area" && typed.spawn.area != nil {
+			computed.AreaMembers = maxInt(computed.AreaMembers, saturatingMul(spawnInvocationBound, typed.spawn.area.limit))
 		}
 		if spawn, ok := typed.effect.(*spawnEffectIR); ok {
 			spawned := saturatingMul(invocationBound, spawn.count)
 			computed.OwnedEntities = saturatingAdd(computed.OwnedEntities, spawned)
 			if typed.callbacks != nil {
-				computed.OwnedProcesses = saturatingAdd(computed.OwnedProcesses, spawned)
+				computed.OwnedSpawns = saturatingAdd(computed.OwnedSpawns, spawned)
 			}
 		}
 		if _, ok := typed.effect.(*modifyAbilityStateEffectIR); ok {
@@ -121,16 +121,16 @@ func measureFlowBudget(flow flowIR, depth, invocationBound int, computed *Comput
 			measureFlowBudget(typed.result.failure, depth+1, invocationBound, computed)
 		}
 		if typed.callbacks != nil {
-			computed.Processes = saturatingAdd(computed.Processes, processInvocationBound)
-			if typed.process != nil && typed.process.kind == "area" && typed.process.area != nil {
-				members := saturatingMul(processInvocationBound, typed.process.area.limit)
-				steps := areaStepBound(typed.process.durationTicks, typed.process.intervalTicks)
+			computed.Spawns = saturatingAdd(computed.Spawns, spawnInvocationBound)
+			if typed.spawn != nil && typed.spawn.kind == "area" && typed.spawn.area != nil {
+				members := saturatingMul(spawnInvocationBound, typed.spawn.area.limit)
+				steps := areaStepBound(typed.spawn.durationTicks, typed.spawn.intervalTicks)
 				callbackBound := saturatingMul(members, steps)
 				for _, callback := range []flowIR{typed.callbacks.leave, typed.callbacks.enter, typed.callbacks.tick} {
 					measureFlowBudget(callback, depth+1, callbackBound, computed)
 				}
 				walkPhaseFlows(phaseEventsIR{cancel: typed.callbacks.cancel, timeout: typed.callbacks.end, recast: typed.callbacks.hit, directionChanged: typed.callbacks.collision, targetChanged: typed.callbacks.transition}, func(child flowIR) {
-					measureFlowBudget(child, depth+1, processInvocationBound, computed)
+					measureFlowBudget(child, depth+1, spawnInvocationBound, computed)
 				})
 			} else {
 				walkPhaseFlows(phaseEventsIR{enter: typed.callbacks.enter, cancel: typed.callbacks.cancel, timeout: typed.callbacks.end, recast: typed.callbacks.hit, directionChanged: typed.callbacks.collision, targetChanged: typed.callbacks.transition, release: typed.callbacks.targetLost, pulse: typed.callbacks.tick}, func(child flowIR) {

@@ -339,21 +339,21 @@ func TestEntityCommandClosedSet(t *testing.T) {
 	}
 }
 
-func TestOwnedProcessHandoffAndPreHandoffCancellation(t *testing.T) {
-	processCallbacks := `"on":{"tick":{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}}`
-	finishedFlow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + processCallbacks + `},{"flow":"finish"}]}`
+func TestOwnedSpawnHandoffAndPreHandoffCancellation(t *testing.T) {
+	spawnCallbacks := `"on":{"tick":{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}}`
+	finishedFlow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + spawnCallbacks + `},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "handoff", finishedFlow)
 	host := runtimeTestHost(environment)
 	runtime := NewRuntime(host, RuntimeOptions{})
 	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 		t.Fatal(err)
 	}
-	owned := runtime.OwnedProcesses(1)
+	owned := runtime.OwnedSpawns(1)
 	if len(owned) != 1 || !owned[0].HandedOff || owned[0].LifecycleEntity == 0 {
-		t.Fatalf("owned processes=%#v", owned)
+		t.Fatalf("owned spawns=%#v", owned)
 	}
 
-	cancelFlow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + processCallbacks + `},{"flow":"wait","ticks":5,"then":{"flow":"finish"}}]}`
+	cancelFlow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + spawnCallbacks + `},{"flow":"wait","ticks":5,"then":{"flow":"finish"}}]}`
 	cancelProgram, _ := compileOwnedSkill(t, "cancel", cancelFlow)
 	cancelHost := runtimeTestHost(environment)
 	cancelRuntime := NewRuntime(cancelHost, RuntimeOptions{})
@@ -364,18 +364,18 @@ func TestOwnedProcessHandoffAndPreHandoffCancellation(t *testing.T) {
 	if err := cancelRuntime.Cancel(castID); err != nil {
 		t.Fatal(err)
 	}
-	if len(cancelRuntime.OwnedProcesses(1)) != 0 {
-		t.Fatal("cancelled cast handed off its entity process")
+	if len(cancelRuntime.OwnedSpawns(1)) != 0 {
+		t.Fatal("cancelled cast handed off its entity spawn")
 	}
 }
 
-func TestOwnedProcessCapacityFailureDoesNotMutateHost(t *testing.T) {
-	processCallbacks := `"on":{"tick":{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}}`
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + processCallbacks + `},{"flow":"finish"}]}`
+func TestOwnedSpawnCapacityFailureDoesNotMutateHost(t *testing.T) {
+	spawnCallbacks := `"on":{"tick":{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + spawnCallbacks + `},{"flow":"finish"}]}`
 	first, environment := compileOwnedSkill(t, "capacity-first", flow)
 	second, _ := compileOwnedSkill(t, "capacity-second", flow)
 	host := runtimeTestHost(environment)
-	runtime := NewRuntime(host, RuntimeOptions{MaxOwnedProcesses: 1})
+	runtime := NewRuntime(host, RuntimeOptions{MaxOwnedSpawns: 1})
 	if _, err := runtime.Activate(first, CastInput{Caster: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -387,15 +387,15 @@ func TestOwnedProcessCapacityFailureDoesNotMutateHost(t *testing.T) {
 	if got := ownedEntityIDs(host.OwnedEntities(1)); !equalEntityIDs(got, beforeEntities) {
 		t.Fatalf("entities=%v want=%v", got, beforeEntities)
 	}
-	if host.CurrentRevision() != beforeRevision || len(runtime.OwnedProcesses(1)) != 1 {
-		t.Fatalf("capacity failure mutated state: revision=%d/%d processes=%#v", host.CurrentRevision(), beforeRevision, runtime.OwnedProcesses(1))
+	if host.CurrentRevision() != beforeRevision || len(runtime.OwnedSpawns(1)) != 1 {
+		t.Fatalf("capacity failure mutated state: revision=%d/%d spawns=%#v", host.CurrentRevision(), beforeRevision, runtime.OwnedSpawns(1))
 	}
 }
 
-func TestOwnedProcessReplacementReleasesCapacityAtomically(t *testing.T) {
+func TestOwnedSpawnReplacementReleasesCapacityAtomically(t *testing.T) {
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
-	processCallbacks := `"on":{"tick":` + callback + `,"cancel":` + callback + `}`
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + processCallbacks + `},{"flow":"finish"}]}`
+	spawnCallbacks := `"on":{"tick":` + callback + `,"cancel":` + callback + `}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + spawnCallbacks + `},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "capacity-replacement", flow)
 	host := runtimeTestHost(environment)
 	catalog := environment.Gameplay
@@ -403,25 +403,25 @@ func TestOwnedProcessReplacementReleasesCapacityAtomically(t *testing.T) {
 	catalog.UnitTemplates.Entries[0].MaximumPerOwner = 1
 	catalog.UnitTemplates.Entries[0].MaximumPerSourceSkill = 1
 	host.ConfigureGameplayCatalog(catalog)
-	runtime := NewRuntime(host, RuntimeOptions{MaxOwnedProcesses: 1})
+	runtime := NewRuntime(host, RuntimeOptions{MaxOwnedSpawns: 1})
 	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 		t.Fatal(err)
 	}
-	first := runtime.OwnedProcesses(1)[0]
+	first := runtime.OwnedSpawns(1)[0]
 	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 		t.Fatal(err)
 	}
-	processes := runtime.OwnedProcesses(1)
+	spawns := runtime.OwnedSpawns(1)
 	entities := host.OwnedEntities(1)
-	if len(processes) != 1 || len(entities) != 1 || processes[0].ID == first.ID || processes[0].LifecycleEntity != entities[0].Entity {
-		t.Fatalf("processes=%#v entities=%#v", processes, entities)
+	if len(spawns) != 1 || len(entities) != 1 || spawns[0].ID == first.ID || spawns[0].LifecycleEntity != entities[0].Entity {
+		t.Fatalf("spawns=%#v entities=%#v", spawns, entities)
 	}
-	if countRuntimeEventKind(runtime.RuntimeEvents(), "owned_process_callback_cancel") != 1 {
+	if countRuntimeEventKind(runtime.RuntimeEvents(), "owned_spawn_callback_cancel") != 1 {
 		t.Fatalf("replacement callbacks=%#v", runtime.RuntimeEvents())
 	}
 }
 
-func TestOwnedProcessStartFailureRollsBackReplacement(t *testing.T) {
+func TestOwnedSpawnStartFailureRollsBackReplacement(t *testing.T) {
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
 	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":` + callback + `}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "rollback-replacement", flow)
@@ -432,32 +432,32 @@ func TestOwnedProcessStartFailureRollsBackReplacement(t *testing.T) {
 	catalog.UnitTemplates.Entries[0].MaximumPerSourceSkill = 1
 	catalog.UnitTemplates.Entries[0].Commands = []string{"hold_position"}
 	base.ConfigureGameplayCatalog(catalog)
-	host := &ownedProcessTestHost{MemoryHost: base}
-	runtime := NewRuntime(host, RuntimeOptions{MaxOwnedProcesses: 1})
+	host := &ownedSpawnTestHost{MemoryHost: base}
+	runtime := NewRuntime(host, RuntimeOptions{MaxOwnedSpawns: 1})
 	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 		t.Fatal(err)
 	}
 	beforeEntity := host.OwnedEntities(1)[0].Entity
-	beforeProcess := runtime.OwnedProcesses(1)[0].ID
+	beforeSpawn := runtime.OwnedSpawns(1)[0].ID
 	host.failNextStep = true
 	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err == nil {
-		t.Fatal("expected process start failure")
+		t.Fatal("expected spawn start failure")
 	}
 	entities := host.OwnedEntities(1)
-	processes := runtime.OwnedProcesses(1)
-	if len(entities) != 1 || entities[0].Entity != beforeEntity || len(processes) != 1 || processes[0].ID != beforeProcess {
-		t.Fatalf("entities=%#v processes=%#v", entities, processes)
+	spawns := runtime.OwnedSpawns(1)
+	if len(entities) != 1 || entities[0].Entity != beforeEntity || len(spawns) != 1 || spawns[0].ID != beforeSpawn {
+		t.Fatalf("entities=%#v spawns=%#v", entities, spawns)
 	}
 	if len(host.ownedTransactions) != 0 {
 		t.Fatalf("pending transactions=%#v", host.ownedTransactions)
 	}
 }
 
-func TestOwnedProcessSignalsUseCanonicalOrderAndTargetContext(t *testing.T) {
+func TestOwnedSpawnSignalsUseCanonicalOrderAndTargetContext(t *testing.T) {
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
 	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"hit":` + callback + `,"collision":` + callback + `,"enter":` + callback + `,"tick":` + callback + `}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "signal-order", flow)
-	host := &ownedProcessTestHost{MemoryHost: runtimeTestHost(environment), startSignals: []ProcessSignal{{Kind: ProcessSignalHit, Target: 99}}, tickSignals: []ProcessSignal{{Kind: ProcessSignalCollision, Target: 98}}}
+	host := &ownedSpawnTestHost{MemoryHost: runtimeTestHost(environment), startSignals: []SpawnSignal{{Kind: SpawnSignalHit, Target: 99}}, tickSignals: []SpawnSignal{{Kind: SpawnSignalCollision, Target: 98}}}
 	runtime := NewRuntime(host, RuntimeOptions{})
 	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 		t.Fatal(err)
@@ -465,12 +465,12 @@ func TestOwnedProcessSignalsUseCanonicalOrderAndTargetContext(t *testing.T) {
 	if err := runtime.Advance(1); err != nil {
 		t.Fatal(err)
 	}
-	wantKinds := []string{"owned_process_callback_hit", "owned_process_callback_enter", "owned_process_callback_collision", "owned_process_callback_tick"}
-	wantTargets := []EntityID{99, runtime.OwnedProcesses(1)[0].LifecycleEntity, 98, runtime.OwnedProcesses(1)[0].LifecycleEntity}
+	wantKinds := []string{"owned_spawn_callback_hit", "owned_spawn_callback_enter", "owned_spawn_callback_collision", "owned_spawn_callback_tick"}
+	wantTargets := []EntityID{99, runtime.OwnedSpawns(1)[0].LifecycleEntity, 98, runtime.OwnedSpawns(1)[0].LifecycleEntity}
 	events := runtime.RuntimeEvents()
 	callbacks := make([]RuntimeEvent, 0, len(wantKinds))
 	for _, event := range events {
-		if strings.HasPrefix(event.Kind, "owned_process_callback_") {
+		if strings.HasPrefix(event.Kind, "owned_spawn_callback_") {
 			callbacks = append(callbacks, event)
 		}
 	}
@@ -497,59 +497,59 @@ func TestOwnedEntityRuntimeFailsClosedWithoutOwnedHostContract(t *testing.T) {
 	}
 }
 
-func TestOwnedProcessStopFailureRemainsTrackedForRetry(t *testing.T) {
+func TestOwnedSpawnStopFailureRemainsTrackedForRetry(t *testing.T) {
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
 	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"cancel":` + callback + `}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "stop-retry", flow)
-	host := &ownedProcessTestHost{MemoryHost: runtimeTestHost(environment)}
+	host := &ownedSpawnTestHost{MemoryHost: runtimeTestHost(environment)}
 	runtime := NewRuntime(host, RuntimeOptions{})
 	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 		t.Fatal(err)
 	}
-	processID := runtime.OwnedProcesses(1)[0].ID
+	spawnID := runtime.OwnedSpawns(1)[0].ID
 	host.failNextStop = true
 	if err := runtime.RemoveProgram(program.id); err == nil {
 		t.Fatal("expected stop failure")
 	}
-	if processes := runtime.OwnedProcesses(1); len(processes) != 1 || processes[0].ID != processID || !host.processes[processID].active {
-		t.Fatalf("processes=%#v host=%#v", processes, host.processes[processID])
+	if spawns := runtime.OwnedSpawns(1); len(spawns) != 1 || spawns[0].ID != spawnID || !host.spawns[spawnID].active {
+		t.Fatalf("spawns=%#v host=%#v", spawns, host.spawns[spawnID])
 	}
 	if err := runtime.RemoveProgram(program.id); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.OwnedProcesses(1)) != 0 || host.processes[processID].active {
-		t.Fatal("retry did not stop tracked process")
+	if len(runtime.OwnedSpawns(1)) != 0 || host.spawns[spawnID].active {
+		t.Fatal("retry did not stop tracked spawn")
 	}
 }
 
-func TestOwnedProcessCleanupBoundaries(t *testing.T) {
-	processFlow := func(duration Tick) string {
+func TestOwnedSpawnCleanupBoundaries(t *testing.T) {
+	spawnFlow := func(duration Tick) string {
 		callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
 		return `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":` + strconv.Itoa(int(duration)) + `},"on":{"tick":` + callback + `,"end":` + callback + `,"cancel":` + callback + `}},{"flow":"finish"}]}`
 	}
 	t.Run("lifecycle entity", func(t *testing.T) {
-		program, environment := compileOwnedSkill(t, "cleanup-entity", processFlow(10))
+		program, environment := compileOwnedSkill(t, "cleanup-entity", spawnFlow(10))
 		host := runtimeTestHost(environment)
 		runtime := NewRuntime(host, RuntimeOptions{})
 		if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 			t.Fatal(err)
 		}
-		process := runtime.OwnedProcesses(1)[0]
-		if _, err := host.Apply(EffectCommand{Payload: OwnedEntityCommand{Owner: 1, GameplayDigest: program.identity.gameplayDigest, Target: process.LifecycleEntity, Command: "despawn"}}); err != nil {
+		spawn := runtime.OwnedSpawns(1)[0]
+		if _, err := host.Apply(EffectCommand{Payload: OwnedEntityCommand{Owner: 1, GameplayDigest: program.identity.gameplayDigest, Target: spawn.LifecycleEntity, Command: "despawn"}}); err != nil {
 			t.Fatal(err)
 		}
 		if err := runtime.Advance(1); err != nil {
 			t.Fatal(err)
 		}
-		if len(runtime.OwnedProcesses(1)) != 0 {
-			t.Fatal("process survived lifecycle entity despawn")
+		if len(runtime.OwnedSpawns(1)) != 0 {
+			t.Fatal("spawn survived lifecycle entity despawn")
 		}
-		if countRuntimeEventKind(runtime.RuntimeEvents(), "owned_process_callback_cancel") != 1 || countRuntimeEventKind(runtime.RuntimeEvents(), "owned_process_callback_end") != 0 {
+		if countRuntimeEventKind(runtime.RuntimeEvents(), "owned_spawn_callback_cancel") != 1 || countRuntimeEventKind(runtime.RuntimeEvents(), "owned_spawn_callback_end") != 0 {
 			t.Fatalf("lifecycle callbacks=%#v", runtime.RuntimeEvents())
 		}
 	})
 	t.Run("duration", func(t *testing.T) {
-		program, environment := compileOwnedSkill(t, "cleanup-duration", processFlow(3))
+		program, environment := compileOwnedSkill(t, "cleanup-duration", spawnFlow(3))
 		runtime := NewRuntime(runtimeTestHost(environment), RuntimeOptions{})
 		if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 			t.Fatal(err)
@@ -557,28 +557,28 @@ func TestOwnedProcessCleanupBoundaries(t *testing.T) {
 		if err := runtime.Advance(3); err != nil {
 			t.Fatal(err)
 		}
-		if len(runtime.OwnedProcesses(1)) != 0 {
-			t.Fatal("process survived bounded duration")
+		if len(runtime.OwnedSpawns(1)) != 0 {
+			t.Fatal("spawn survived bounded duration")
 		}
-		if countRuntimeEventKind(runtime.RuntimeEvents(), "owned_process_callback_tick") != 2 || countRuntimeEventKind(runtime.RuntimeEvents(), "owned_process_callback_end") != 1 || countRuntimeEventKind(runtime.RuntimeEvents(), "owned_process_callback_cancel") != 0 {
+		if countRuntimeEventKind(runtime.RuntimeEvents(), "owned_spawn_callback_tick") != 2 || countRuntimeEventKind(runtime.RuntimeEvents(), "owned_spawn_callback_end") != 1 || countRuntimeEventKind(runtime.RuntimeEvents(), "owned_spawn_callback_cancel") != 0 {
 			t.Fatalf("duration callbacks=%#v", runtime.RuntimeEvents())
 		}
 	})
 	t.Run("program removal and shutdown", func(t *testing.T) {
-		program, environment := compileOwnedSkill(t, "cleanup-runtime", processFlow(10))
+		program, environment := compileOwnedSkill(t, "cleanup-runtime", spawnFlow(10))
 		host := runtimeTestHost(environment)
 		runtime := NewRuntime(host, RuntimeOptions{})
 		if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 			t.Fatal(err)
 		}
-		if err := runtime.RemoveProgram(program.id); err != nil || len(runtime.OwnedProcesses(1)) != 0 || len(host.OwnedEntities(1)) != 0 {
-			t.Fatalf("remove program: err=%v processes=%#v entities=%#v", err, runtime.OwnedProcesses(1), host.OwnedEntities(1))
+		if err := runtime.RemoveProgram(program.id); err != nil || len(runtime.OwnedSpawns(1)) != 0 || len(host.OwnedEntities(1)) != 0 {
+			t.Fatalf("remove program: err=%v spawns=%#v entities=%#v", err, runtime.OwnedSpawns(1), host.OwnedEntities(1))
 		}
 		if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 			t.Fatal(err)
 		}
-		if err := runtime.Shutdown(); err != nil || len(runtime.OwnedProcesses(1)) != 0 || len(host.OwnedEntities(1)) != 0 {
-			t.Fatalf("shutdown: err=%v processes=%#v entities=%#v", err, runtime.OwnedProcesses(1), host.OwnedEntities(1))
+		if err := runtime.Shutdown(); err != nil || len(runtime.OwnedSpawns(1)) != 0 || len(host.OwnedEntities(1)) != 0 {
+			t.Fatalf("shutdown: err=%v spawns=%#v entities=%#v", err, runtime.OwnedSpawns(1), host.OwnedEntities(1))
 		}
 	})
 }
@@ -593,7 +593,7 @@ func countRuntimeEventKind(events []RuntimeEvent, kind string) int {
 	return count
 }
 
-func TestOwnedProcessDetachedScopeRejectsCastDependencies(t *testing.T) {
+func TestOwnedSpawnDetachedScopeRejectsCastDependencies(t *testing.T) {
 	tests := map[string]string{
 		"cast memory":   `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"if","condition":{"op":"eq","args":["$memory.count",0]},"then":{"flow":"goto","phase":"cast"},"else":{"flow":"goto","phase":"cast"}}}}`,
 		"input":         `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"effect","effect":{"type":"issue_entity_command","target":"$caster","command":"attack_target","target_entity":"$input.target"}}}}`,
@@ -670,29 +670,29 @@ func equalEntityIDs(left, right []EntityID) bool {
 	return true
 }
 
-type ownedProcessTestHost struct {
+type ownedSpawnTestHost struct {
 	*MemoryHost
 	failNextStep bool
 	failNextStop bool
 	stepCount    int
-	startSignals []ProcessSignal
-	tickSignals  []ProcessSignal
+	startSignals []SpawnSignal
+	tickSignals  []SpawnSignal
 }
 
-func (host *ownedProcessTestHost) StopProcess(command ProcessStopCommand, state ProcessHostState) (CommitReceipt, error) {
+func (host *ownedSpawnTestHost) StopSpawn(command SpawnStopCommand, state SpawnHostState) (CommitReceipt, error) {
 	if host.failNextStop {
 		host.failNextStop = false
 		return CommitReceipt{}, ErrProgramInvariant
 	}
-	return host.MemoryHost.StopProcess(command, state)
+	return host.MemoryHost.StopSpawn(command, state)
 }
 
-func (host *ownedProcessTestHost) StepProcess(command ProcessStepCommand, state ProcessHostState) (ProcessStepResult, error) {
+func (host *ownedSpawnTestHost) StepSpawn(command SpawnStepCommand, state SpawnHostState) (SpawnStepResult, error) {
 	if host.failNextStep {
 		host.failNextStep = false
-		return ProcessStepResult{}, ErrProgramInvariant
+		return SpawnStepResult{}, ErrProgramInvariant
 	}
-	result, err := host.MemoryHost.StepProcess(command, state)
+	result, err := host.MemoryHost.StepSpawn(command, state)
 	if err != nil {
 		return result, err
 	}
@@ -703,7 +703,7 @@ func (host *ownedProcessTestHost) StepProcess(command ProcessStepCommand, state 
 		} else {
 			result.Signals = append(result.Signals, host.tickSignals...)
 		}
-		result.Signals = normalizeProcessSignals(result.Signals)
+		result.Signals = normalizeSpawnSignals(result.Signals)
 	}
 	return result, nil
 }
@@ -737,11 +737,11 @@ func (host *hostWithoutOwnedContract) PayCosts(payment CostPayment) (CommitRecei
 func (host *hostWithoutOwnedContract) Apply(command EffectCommand) (EffectResult, error) {
 	return host.inner.Apply(command)
 }
-func (host *hostWithoutOwnedContract) StepProcess(command ProcessStepCommand, state ProcessHostState) (ProcessStepResult, error) {
-	return host.inner.StepProcess(command, state)
+func (host *hostWithoutOwnedContract) StepSpawn(command SpawnStepCommand, state SpawnHostState) (SpawnStepResult, error) {
+	return host.inner.StepSpawn(command, state)
 }
-func (host *hostWithoutOwnedContract) StopProcess(command ProcessStopCommand, state ProcessHostState) (CommitReceipt, error) {
-	return host.inner.StopProcess(command, state)
+func (host *hostWithoutOwnedContract) StopSpawn(command SpawnStopCommand, state SpawnHostState) (CommitReceipt, error) {
+	return host.inner.StopSpawn(command, state)
 }
 func (host *hostWithoutOwnedContract) Events(after EventCursor) []RuntimeEvent {
 	return host.inner.Events(after)

@@ -92,8 +92,8 @@ type effectFlowIR struct {
 	result          *effectResultIR
 	resultLayout    resultLayoutProgram
 	hasResultLayout bool
-	callbacks       *processCallbacksIR
-	process         *processIR
+	callbacks       *spawnCallbacksIR
+	spawn           *spawnIR
 }
 
 func (*effectFlowIR) isFlowIR()              {}
@@ -106,8 +106,8 @@ func (f *effectFlowIR) walkValues(visitor valueVisitor) {
 	if f.callbacks != nil {
 		f.callbacks.walkValues(visitor)
 	}
-	if f.process != nil {
-		f.process.walkValues(visitor)
+	if f.spawn != nil {
+		f.spawn.walkValues(visitor)
 	}
 }
 
@@ -129,9 +129,9 @@ func (*finishFlowIR) isFlowIR()               {}
 func (f *finishFlowIR) sourceRef() sourceRef  { return f.source }
 func (*finishFlowIR) walkValues(valueVisitor) {}
 
-type processCallbacksIR struct{ tick, hit, collision, end, cancel, transition, targetLost, enter, leave flowIR }
+type spawnCallbacksIR struct{ tick, hit, collision, end, cancel, transition, targetLost, enter, leave flowIR }
 
-func (p *processCallbacksIR) walkValues(visitor valueVisitor) {
+func (p *spawnCallbacksIR) walkValues(visitor valueVisitor) {
 	for _, flow := range []flowIR{p.tick, p.hit, p.collision, p.end, p.cancel, p.transition, p.targetLost, p.enter, p.leave} {
 		walkOptionalFlowValues(flow, visitor)
 	}

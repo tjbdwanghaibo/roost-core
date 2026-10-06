@@ -103,19 +103,19 @@ type finishOperation struct {
 	reason string
 }
 
-type modifyProcessOperation struct {
+type modifySpawnOperation struct {
 	operationHeader
 	effectContinuations
 	effectIndex EffectIndex
-	process     programValue
-	property    ProcessPropertyHandle
-	operation   processNumericOperation
+	spawn       programValue
+	property    SpawnPropertyHandle
+	operation   spawnNumericOperation
 	value       programValue
 	overTicks   Tick
 }
 
-func (operation modifyProcessOperation) isProgramOperation() {}
-func (operation modifyProcessOperation) header() operationHeader {
+func (operation modifySpawnOperation) isProgramOperation() {}
+func (operation modifySpawnOperation) header() operationHeader {
 	return operation.operationHeader
 }
 
@@ -198,8 +198,8 @@ func operationKind(value operation) string {
 		return "motion_impulse"
 	case stopMovementOperation:
 		return "stop_movement"
-	case modifyProcessOperation:
-		return "modify_process"
+	case modifySpawnOperation:
+		return "modify_spawn"
 	case gotoOperation:
 		return "goto"
 	case finishOperation:

@@ -58,7 +58,7 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
 列出的 Pass 顺序就是当前编译语义的主目录：
 
 1. `normalize`：Wire Definition 转为封闭 IR，并记录源路径。
-2. `shape`：校验 Flow、Effect、Select、Process 的基本结构。
+2. `shape`：校验 Flow、Effect、Select、Spawn 的基本结构。
 3. `authority_capability`：把属性、资源、状态、模板、标签等字符串解析到
    `CompileEnvironment` 提供的权威 Handle，并验证能力目录。
 4. `gameplay_tags`、`input_state`、`temporal`：验证标签类别、施放输入、
@@ -77,11 +77,11 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
 调用边界。
 
 引用在哪里能读，不在各个 Pass 里各写一份：[eval_contexts.go](../../skill/eval_contexts.go) 的求值上下文表
-（施法流程、memory 默认值、cast_start / phase_start / process_start 采样、进程每一步、进程回调、状态默认值 ×
+（施法流程、memory 默认值、cast_start / phase_start / spawn_start 采样、衍生物（Spawn）每一步、衍生物回调、状态默认值 ×
 `$input.*` / `$memory.*` / `$local.*` / `$caster` / `$cast.*` / `$owner` / `$event.*` …）是唯一来源：`type_snapshot`
 按表生成每个位点的作用域，Runtime 求值时查同一张表，表外引用报 `ErrReferenceOutOfContext`。给定义加新的值位点或新的
 求值上下文时先改表，`eval_contexts_table_test.go` 会要求每个格子补正例 / 反例（引用表与快照点表都逐格守）。
-格子只有“可用”与“不可用”两种：值会随进程移交或读写位置变化的格子一律不可用（O33，维护者第七轮决定），不可用格的说明写原因与“改用 …”，诊断原样带出。作者侧的规则与改写对照见 [施法语义 · 引用在哪里能读](skill-casting-and-combat.md#引用在哪里能读求值上下文)。
+格子只有“可用”与“不可用”两种：值会随衍生物移交或读写位置变化的格子一律不可用（O33，维护者第七轮决定），不可用格的说明写原因与“改用 …”，诊断原样带出。作者侧的规则与改写对照见 [施法语义 · 引用在哪里能读](skill-casting-and-combat.md#引用在哪里能读求值上下文)。
 [方案](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。
 
 建议配合阅读：
@@ -130,7 +130,7 @@ Activate
   -> 进入当前 phase 的 enter flow
   -> executor 执行 operation，必要时向 scheduler 注册后续任务
   -> Advance(tick) 以稳定顺序消费到期任务
-  -> Finish / Cancel / Release，清理 process 和 cast 状态
+  -> Finish / Cancel / Release，清理 spawn 和 cast 状态
 ```
 
 重点文件：
@@ -139,7 +139,7 @@ Activate
 - [runtime_cast_window.go](../../skill/runtime_cast_window.go)：windup、
   commit、recovery、`Cancel` 和 `Release`；
 - [scheduler.go](../../skill/scheduler.go)：`Advance`、稳定排序和任务执行；
-- `runtime_dispatch.go`、`runtime_event.go`：phase 事件与 process 信号如何进入 flow；
+- `runtime_dispatch.go`、`runtime_event.go`：phase 事件与 spawn 信号如何进入 flow；
 - [runtime_proc.go](../../skill/runtime_proc.go)：`ActivatePassive` 与
   递归/同根事件保护；
 - `runtime_state.go`、`runtime_ability.go`、`runtime_temporal.go`：状态、能力控制、
@@ -162,7 +162,7 @@ owner、source、target（以及需要时的 `Result: "kill"`），主动 fixtur
 - 执行选择查询；
 - 支付成本；
 - 提交伤害、治疗、状态、生成、移动等 Effect；
-- 推进/停止 Process；
+- 推进/停止 Spawn；
 - 读写持久或共享 State；
 - 读取事件流和世界 revision。
 
@@ -173,15 +173,15 @@ owner、source、target（以及需要时的 `Result: "kill"`），主动 fixtur
 World revision 是关键防线：Runtime 的 query/command 会携带期望 revision，Host 负责
 拒绝已失效读取或提交。因而不要缓存 Host 返回的可变对象，再在后续 tick 假设其仍然有效。
 
-**`StopProcess` 必须幂等**（Host 契约，2026-10-06）：停一个已经停掉或 Host 不认识的进程要成功返回、不产生第二次
-副作用（`MemoryHost` 返回当前 revision、不发事件）。只有进程在世界里确实还在运行时才返回错误。原因：宿主停止
-失败时 Runtime 把进程标成 `stop_pending`，之后的 tick 按退避重试同一个停止（`RuntimeOptions.ProcessStopRetryBackoff`
-默认 4 tick、每次失败翻倍到最多 64 倍，`ProcessStopRetryLimit` 默认 10 次）；`Shutdown` / `RemoveProgram` 也会再停
+**`StopSpawn` 必须幂等**（Host 契约，2026-10-06）：停一个已经停掉或 Host 不认识的衍生物要成功返回、不产生第二次
+副作用（`MemoryHost` 返回当前 revision、不发事件）。只有衍生物在世界里确实还在运行时才返回错误。原因：宿主停止
+失败时 Runtime 把衍生物标成 `stop_pending`，之后的 tick 按退避重试同一个停止（`RuntimeOptions.SpawnStopRetryBackoff`
+默认 4 tick、每次失败翻倍到最多 64 倍，`SpawnStopRetryLimit` 默认 10 次）；`Shutdown` / `RemoveProgram` 也会再停
 一次。宿主实际停掉了却报失败的，会再收到一次停止。到上限后 Runtime 不再自动重试，计
-`skill.process.stop_retry_exhausted.total` 并写一条 Warn 日志，记录保留；待停止条目最多
-`MaxStopPendingProcesses`（默认 256）条，超限丢最早的已告警条目（没有就丢最早仍在重试的），计
-`skill.process.stop_pending_dropped.total` 并写 Error 日志。细节见
-[施法语义](skill-casting-and-combat.md) 的“失败终态”与 `skill/runtime_process_stop_retry.go`。
+`skill.spawn.stop_retry_exhausted.total` 并写一条 Warn 日志，记录保留；待停止条目最多
+`MaxStopPendingSpawns`（默认 256）条，超限丢最早的已告警条目（没有就丢最早仍在重试的），计
+`skill.spawn.stop_pending_dropped.total` 并写 Error 日志。细节见
+[施法语义](skill-casting-and-combat.md) 的“失败终态”与 `skill/runtime_spawn_stop_retry.go`。
 
 ## 5. 过程与高级能力的阅读地图
 
@@ -191,12 +191,12 @@ World revision 是关键防线：Runtime 的 query/command 会携带期望 revis
 | --- | --- | --- |
 | Cast policy/window | `toggle_aura`、`hold_beam`、`charge_projectile`、`ammo_burst`、`cast_window_interrupt` | `runtime_cast_policy.go`、`runtime_cast_window.go` |
 | 输入约束 | `path_projectile`、`two_point_wall`、`portal_pair` | `wire_input.go`、`compile_input.go`、`runtime_input.go` |
-| 运动/过程 | `carry_dash`、`tracking_boomerang`、`beam`、`projectile_area` | `process*.go`、`process_motion.go`、`compile_motion.go` |
-| Area 成员事件 | `area_heal`、`area_membership`、`entity_scoped_aura` | `process_area.go`、`area_test.go` |
+| 运动/过程 | `carry_dash`、`tracking_boomerang`、`beam`、`projectile_area` | `spawn*.go`、`spawn_motion.go`、`compile_motion.go` |
+| Area 成员事件 | `area_heal`、`area_membership`、`entity_scoped_aura` | `spawn_area.go`、`area_test.go` |
 | 数值与快照 | `dynamic_numeric`、`attribute_scaling_snapshot` | `compile_quantity.go`、`compile_snapshot.go`、`runtime_eval.go` |
 | 状态 | `status_modifier`、`status_cleanse`、`status_steal` | `compile_status.go`、`runtime_select.go`、`memory_host_status.go` |
 | State/能力控制 | `persistent_mark`、`shared_state_combo`、`cooldown_refund`、`ability_disable` | `compile_state.go`、`runtime_state.go`、`runtime_ability.go` |
-| Owned Entity | `owned_trap`、`owned_pet_command` | `compile_owned_entity.go`、`runtime_owned_process.go`、`memory_host_owned_entity.go` |
+| Owned Entity | `owned_trap`、`owned_pet_command` | `compile_owned_entity.go`、`runtime_owned_spawn.go`、`memory_host_owned_entity.go` |
 | Temporal/Result | `temporal_rewind`、`effect_result_kill_branch` | `compile_temporal.go`、`runtime_temporal.go`、`runtime_effect_result.go` |
 | Passive proc | `passive_counter`、`passive_proc_guard`、`ammo_on_kill` | `compile_proc.go`、`runtime_proc.go` |
 
@@ -353,7 +353,7 @@ defer runtime.commitStateMutationsLocked()
 - Host 的 `CurrentRevision` 与 `AuthorityIdentity` 必须和镜像完全一致；
 - `ProgramResolver` 返回的 Program 必须同时匹配 id、gameplay digest、compiler semantics
   和 authority；
-- cast/process、frame、scheduler heap、随机调用计数、cooldown、ammo、policy、proc ledger、
+- cast/spawn、frame、scheduler heap、随机调用计数、cooldown、ammo、policy、proc ledger、
   ability overlay 及所有递增 ID 都会恢复；
 - trace、presentation queue、state delivery queue 属于观察/投递状态，不进入 gameplay 镜像；
   恢复后消费者先取 full state/presentation snapshot。
@@ -434,7 +434,7 @@ go vet ./skill ./skillcompose ./skillsync
 
 逐项执行并保留日志/指标证据：
 
-1. 在 preparing、committed、process running 三类时点 checkpoint，恢复后推进相同 tick，比较
+1. 在 preparing、committed、spawn running 三类时点 checkpoint，恢复后推进相同 tick，比较
    StateSnapshot、Host 结果和后续 checkpoint payload；
 2. 修改 checkpoint version、payload、checksum、Host revision、authority 和 Program digest，
    每项必须在返回 Runtime 前失败；

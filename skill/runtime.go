@@ -31,10 +31,10 @@ type RuntimeOptions struct {
 	SupportedCompilerSemanticsRevision string
 	PassiveRouter                      PassiveRouter
 	MaxPassiveActivationsPerTick       int
-	MaxOwnedProcesses                  int
-	MaxOwnedProcessesPerOwner          int
-	MaxOwnedProcessesPerProgram        int
-	MaxOwnedProcessesPerTemplate       int
+	MaxOwnedSpawns                     int
+	MaxOwnedSpawnsPerOwner             int
+	MaxOwnedSpawnsPerProgram           int
+	MaxOwnedSpawnsPerTemplate          int
 	TraceSink                          TraceSink
 	TraceLimits                        TraceLimits
 	// PresentationLimit bounds renderer-facing events retained for polling.
@@ -47,7 +47,7 @@ type RuntimeOptions struct {
 	RuntimeEventLimit int
 	// CompletedCastLimit bounds inspectable terminal casts. Active or still
 	// referenced casts (pending tasks, an active policy, a running or
-	// stop_pending process) are never evicted; an evicted cast takes its stopped process records
+	// stop_pending spawn) are never evicted; an evicted cast takes its stopped spawn records
 	// with it.
 	CompletedCastLimit int
 	// RootEventLimit bounds once-per-root accounting after inactive roots have
@@ -62,22 +62,22 @@ type RuntimeOptions struct {
 	MaxProcLedgerEntries int
 	// CastEventLimit bounds per-cast diagnostic history returned by InspectCast.
 	CastEventLimit int
-	// ProcessStopRetryBackoff is the delay, in ticks, before the Runtime
-	// retries a Host.StopProcess that failed while a cast was failing; the
+	// SpawnStopRetryBackoff is the delay, in ticks, before the Runtime
+	// retries a Host.StopSpawn that failed while a cast was failing; the
 	// delay doubles after every failed retry, up to 64 times this value.
 	// Default 4.
-	ProcessStopRetryBackoff Tick
-	// ProcessStopRetryLimit bounds the failed retries of one such stop. At the
+	SpawnStopRetryBackoff Tick
+	// SpawnStopRetryLimit bounds the failed retries of one such stop. At the
 	// limit the Runtime stops retrying, counts
-	// skill.process.stop_retry_exhausted.total, logs a warning and keeps the
+	// skill.spawn.stop_retry_exhausted.total, logs a warning and keeps the
 	// stop_pending record. Default 10 (about 64 seconds at 20 ticks per second
 	// with the default backoff).
-	ProcessStopRetryLimit int
-	// MaxStopPendingProcesses bounds stop_pending records. Past the bound the
+	SpawnStopRetryLimit int
+	// MaxStopPendingSpawns bounds stop_pending records. Past the bound the
 	// oldest exhausted record (else the oldest still retrying) is dropped,
-	// counted as skill.process.stop_pending_dropped.total and logged; the
-	// Runtime no longer stops that process. Default 256.
-	MaxStopPendingProcesses int
+	// counted as skill.spawn.stop_pending_dropped.total and logged; the
+	// Runtime no longer stops that spawn. Default 256.
+	MaxStopPendingSpawns int
 }
 
 type CastInput struct {
@@ -174,10 +174,10 @@ type castInstance struct {
 	cooldownOwner      EntityID
 	ability            AbilityHandle
 	abilityFinished    bool
-	detachedProcess    *ProcessInstance
+	detachedSpawn      *SpawnInstance
 	detachedEvent      EventContext
 	// evalContext 是当前求值所在的上下文（eval_contexts.go）。零值是施法流程；采样、memory
-	// 默认值、进程字段、状态默认值在求值期间临时切换（switchEvalContext），不进 checkpoint。
+	// 默认值、衍生物字段、状态默认值在求值期间临时切换（switchEvalContext），不进 checkpoint。
 	evalContext evalContext
 }
 
@@ -213,9 +213,9 @@ type Runtime struct {
 	nextTaskSequence        uint64
 	frames                  map[FrameID][]RuntimeValue
 	nextFrameID             FrameID
-	processes               map[ProcessID]*ProcessInstance
-	ownedProcesses          map[ProcessID]*ProcessInstance
-	nextProcessID           ProcessID
+	spawns                  map[SpawnID]*SpawnInstance
+	ownedSpawns             map[SpawnID]*SpawnInstance
+	nextSpawnID             SpawnID
 	cooldowns               map[cooldownKey]Tick
 	skillStates             map[skillStateKey]*skillState
 	activePolicies          map[skillStateKey]CastID
@@ -282,17 +282,17 @@ func newRuntimeCore(host Host, options RuntimeOptions) *Runtime {
 	if options.MaxPassiveActivationsPerTick <= 0 {
 		options.MaxPassiveActivationsPerTick = 256
 	}
-	if options.MaxOwnedProcesses <= 0 {
-		options.MaxOwnedProcesses = 128
+	if options.MaxOwnedSpawns <= 0 {
+		options.MaxOwnedSpawns = 128
 	}
-	if options.MaxOwnedProcessesPerOwner <= 0 {
-		options.MaxOwnedProcessesPerOwner = options.MaxOwnedProcesses
+	if options.MaxOwnedSpawnsPerOwner <= 0 {
+		options.MaxOwnedSpawnsPerOwner = options.MaxOwnedSpawns
 	}
-	if options.MaxOwnedProcessesPerProgram <= 0 {
-		options.MaxOwnedProcessesPerProgram = options.MaxOwnedProcesses
+	if options.MaxOwnedSpawnsPerProgram <= 0 {
+		options.MaxOwnedSpawnsPerProgram = options.MaxOwnedSpawns
 	}
-	if options.MaxOwnedProcessesPerTemplate <= 0 {
-		options.MaxOwnedProcessesPerTemplate = options.MaxOwnedProcesses
+	if options.MaxOwnedSpawnsPerTemplate <= 0 {
+		options.MaxOwnedSpawnsPerTemplate = options.MaxOwnedSpawns
 	}
 	if options.PresentationLimit <= 0 {
 		options.PresentationLimit = 1024
@@ -334,19 +334,19 @@ func newRuntimeCore(host Host, options RuntimeOptions) *Runtime {
 	if options.CastEventLimit <= 0 {
 		options.CastEventLimit = 256
 	}
-	if options.ProcessStopRetryBackoff <= 0 {
-		options.ProcessStopRetryBackoff = 4
+	if options.SpawnStopRetryBackoff <= 0 {
+		options.SpawnStopRetryBackoff = 4
 	}
-	if options.ProcessStopRetryLimit <= 0 {
-		options.ProcessStopRetryLimit = 10
+	if options.SpawnStopRetryLimit <= 0 {
+		options.SpawnStopRetryLimit = 10
 	}
-	if options.MaxStopPendingProcesses <= 0 {
-		options.MaxStopPendingProcesses = 256
+	if options.MaxStopPendingSpawns <= 0 {
+		options.MaxStopPendingSpawns = 256
 	}
 	runtime := &Runtime{
 		host: host, options: options,
 		casts: make(map[CastID]*castInstance), scheduler: newScheduler(),
-		frames: make(map[FrameID][]RuntimeValue), processes: make(map[ProcessID]*ProcessInstance), ownedProcesses: make(map[ProcessID]*ProcessInstance),
+		frames: make(map[FrameID][]RuntimeValue), spawns: make(map[SpawnID]*SpawnInstance), ownedSpawns: make(map[SpawnID]*SpawnInstance),
 		cooldowns:   make(map[cooldownKey]Tick),
 		skillStates: make(map[skillStateKey]*skillState), activePolicies: make(map[skillStateKey]CastID),
 		procLedger: make(map[procLedgerKey]struct{}), rootEventCounts: make(map[EventID]int),
@@ -465,18 +465,18 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 	runtime.markAbilityCastStarted(cast)
 	if err := runtime.prepareCast(cast); err != nil {
 		runtime.failCastLocked(cast, err)
-		if !cast.committed && !runtime.castHasRunningProcessLocked(cast.id) {
+		if !cast.committed && !runtime.castHasRunningSpawnLocked(cast.id) {
 			// 未提交的失败启动对调用方等于“没有施法”：删掉 cast 并把 ID 还给下一个 cast。
-			// failCastLocked 已撤掉它名下的全部排程任务、停掉它起的进程；已停进程的记录随 cast 一起删，
-			// 复用 ID 才安全（NC-110；进程记录见 RR-20261006-21）。
-			runtime.forgetCastProcessesLocked(cast.id)
+			// failCastLocked 已撤掉它名下的全部排程任务、停掉它起的衍生物；已停衍生物的记录随 cast 一起删，
+			// 复用 ID 才安全（NC-110；衍生物记录见 RR-20261006-21）。
+			runtime.forgetCastSpawnsLocked(cast.id)
 			delete(runtime.casts, cast.id)
 			runtime.forgetCompletedCastLocked(cast.id)
 			runtime.nextCastID--
 			return 0, err
 		}
-		// 已提交，或有进程停不下来（宿主 StopProcess 失败、记录已标成待停止）：cast 留作 failed 终态、不还 ID，
-		// 待停止的进程记录继续挂在一个存在的 cast 名下，由之后的 tick 重试停止，停掉后按 RR-23 回收。
+		// 已提交，或有衍生物停不下来（宿主 StopSpawn 失败、记录已标成待停止）：cast 留作 failed 终态、不还 ID，
+		// 待停止的衍生物记录继续挂在一个存在的 cast 名下，由之后的 tick 重试停止，停掉后按 RR-23 回收。
 		return cast.id, err
 	}
 	runtime.recordTrace(TraceEvent{Kind: TraceCastPrepared, Tick: runtime.currentTick, CastID: cast.id})

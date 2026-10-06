@@ -156,14 +156,14 @@ type NumericTrackDefinition struct {
 	OverTicks           Tick
 }
 
-type ModifyProcessEffectDefinition struct {
-	Process             Value
+type ModifySpawnEffectDefinition struct {
+	Spawn               Value
 	Property, Operation string
 	Value               Value
 	OverTicks           Tick
 }
 
-func (ModifyProcessEffectDefinition) effectDefinition() {}
+func (ModifySpawnEffectDefinition) effectDefinition() {}
 
 type SpawnEffectDefinition struct {
 	Template           string
@@ -514,10 +514,10 @@ func decodeEffect(data []byte) (EffectDefinition, error) {
 			return nil, err
 		}
 		return ModifyAbilityStateEffectDefinition{Owner: values[0], Ability: values[1], Property: raw.Property, Operation: raw.Operation, Value: values[2], DurationTicks: raw.DurationTicks}, nil
-	case "modify_process":
+	case "modify_spawn":
 		var raw struct {
 			Type      string          `json:"type"`
-			Process   json.RawMessage `json:"process"`
+			Spawn     json.RawMessage `json:"spawn"`
 			Property  string          `json:"property"`
 			Operation string          `json:"operation"`
 			Value     json.RawMessage `json:"value"`
@@ -526,11 +526,11 @@ func decodeEffect(data []byte) (EffectDefinition, error) {
 		if err := decodeStrictSingle(data, &raw); err != nil {
 			return nil, err
 		}
-		values, err := decodeValueList(raw.Process, raw.Value)
+		values, err := decodeValueList(raw.Spawn, raw.Value)
 		if err != nil {
 			return nil, err
 		}
-		return ModifyProcessEffectDefinition{Process: values[0], Property: raw.Property, Operation: raw.Operation, Value: values[1], OverTicks: raw.OverTicks}, nil
+		return ModifySpawnEffectDefinition{Spawn: values[0], Property: raw.Property, Operation: raw.Operation, Value: values[1], OverTicks: raw.OverTicks}, nil
 	case "spawn":
 		var raw struct {
 			Type               string                     `json:"type"`

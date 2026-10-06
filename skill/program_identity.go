@@ -7,7 +7,7 @@ type RootIndex uint16
 type SelectorIndex uint16
 type OperationIndex uint32
 type EffectIndex uint32
-type ProcessTemplateIndex uint16
+type SpawnTemplateIndex uint16
 type VisualIndex uint16
 type RandomSiteIndex uint16
 

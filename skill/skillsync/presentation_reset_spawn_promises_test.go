@@ -1,14 +1,14 @@
 package skillsync
 
-// SKILL-3 补测（RR-20261005-NC-114 的 process 条目）：presentation reset 里的持续进程表现要按“Runtime 为这个进程发出的
+// SKILL-3 补测（RR-20261005-NC-114 的 spawn 条目）：presentation reset 里的持续衍生物表现要按“Runtime 为这个衍生物发出的
 // 增量事件”交给 VisibilityPolicy.FilterPresentation，reset 与增量对同一 observer 得出同样的可见性与同样的 Anchor。
-// visibility_recovery_promises_test.go 只用了 cast 条目，process 条目此前没有专门用例。
+// visibility_recovery_promises_test.go 只用了 cast 条目，spawn 条目此前没有专门用例。
 //
-// 进程有两种归属：仍在施法里（增量经施法发出，Source / PrimaryTarget 是施法者与施法目标），以及施法结束后移交出去
-// （增量经 detachedProcessCast 发出，PrimaryTarget 是 lifecycle 实体）。两种都核对。
+// 衍生物有两种归属：仍在施法里（增量经施法发出，Source / PrimaryTarget 是施法者与施法目标），以及施法结束后移交出去
+// （增量经 detachedSpawnCast 发出，PrimaryTarget 是 lifecycle 实体）。两种都核对。
 //
 // RR-20261006-22：补测时“仍在施法里”是红的。activePresentationEvent 把 PrimaryTarget 填成 Anchor.Target（lifecycle
-// 实体），而增量里是施法目标；按 PrimaryTarget 判定的策略挡住了增量，reset 却把同一个进程表现发了出去。
+// 实体），而增量里是施法目标；按 PrimaryTarget 判定的策略挡住了增量，reset 却把同一个衍生物表现发了出去。
 
 import (
 	"testing"
@@ -17,11 +17,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/syncstream"
 )
 
-// visualAreaProcess 召出一个带 area 视觉的进程：lifecycle 实体是新生成的陷阱，不是施法目标。
-const visualAreaProcess = `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":8},"process":{"kind":"area","duration_ticks":8,"interval_ticks":1,"visual":{"category":"area","theme":"default","elements":["default"]},"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}}}`
+// visualAreaSpawn 召出一个带 area 视觉的衍生物：lifecycle 实体是新生成的陷阱，不是施法目标。
+const visualAreaSpawn = `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":8},"spawn":{"kind":"area","duration_ticks":8,"interval_ticks":1,"visual":{"category":"area","theme":"default","elements":["default"]},"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}}}`
 
-func visualProcessSkill(id, then string) string {
-	return `{"schema":"roost.skill/v2","id":"` + id + `","name":"Visual Area","description":"A continuing process visual.","presentation":{"icon_keywords":["flare","blade","spark"]},"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{"flow":"sequence","steps":[` + visualAreaProcess + `,` + then + `]}}}]}`
+func visualSpawnSkill(id, then string) string {
+	return `{"schema":"roost.skill/v2","id":"` + id + `","name":"Visual Area","description":"A continuing spawn visual.","presentation":{"icon_keywords":["flare","blade","spark"]},"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{"flow":"sequence","steps":[` + visualAreaSpawn + `,` + then + `]}}}]}`
 }
 
 // policyFunc 把一个函数当作 VisibilityPolicy，只用于 presentation。
@@ -37,13 +37,13 @@ func (policy policyFunc) FilterPresentation(observer syncstream.Observer, event 
 	return policy(observer, event)
 }
 
-func TestPresentationResetProcessEntryMatchesItsIncrementalEvent(t *testing.T) {
+func TestPresentationResetSpawnEntryMatchesItsIncrementalEvent(t *testing.T) {
 	for name, then := range map[string]string{
 		"owned by the running cast": `{"flow":"wait","ticks":6,"then":{"flow":"finish"}}`,
 		"handed off":                `{"flow":"finish"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			runtime, program := visibilityRuntimeFor(t, visualProcessSkill("skill.test.sync.visual_area", then), skill.RuntimeOptions{})
+			runtime, program := visibilityRuntimeFor(t, visualSpawnSkill("skill.test.sync.visual_area", then), skill.RuntimeOptions{})
 			if _, err := runtime.Start(program, skill.CastInput{Caster: 1, Target: 2}); err != nil {
 				t.Fatal(err)
 			}
@@ -52,17 +52,17 @@ func TestPresentationResetProcessEntryMatchesItsIncrementalEvent(t *testing.T) {
 			}
 			var latest skill.PresentationEvent
 			for _, event := range runtime.PresentationEvents(0) {
-				// start / update 带进程自身的 Anchor（signal 的 Anchor.Target 是被作用的实体）。
-				if event.HasProcess && (event.Kind == skill.PresentationProcessStart || event.Kind == skill.PresentationProcessUpdate) {
+				// start / update 带衍生物自身的 Anchor（signal 的 Anchor.Target 是被作用的实体）。
+				if event.HasSpawn && (event.Kind == skill.PresentationSpawnStart || event.Kind == skill.PresentationSpawnUpdate) {
 					latest = event
 				}
 			}
-			if latest.ProcessID == 0 {
-				t.Fatalf("runtime emitted no process start / update: %+v", runtime.PresentationEvents(0))
+			if latest.SpawnID == 0 {
+				t.Fatalf("runtime emitted no spawn start / update: %+v", runtime.PresentationEvents(0))
 			}
 			lifecycle := latest.Anchor.Target
 			if lifecycle == 0 || lifecycle == 2 {
-				t.Fatalf("process lifecycle entity = %d, want the spawned trap (not the cast target 2)", lifecycle)
+				t.Fatalf("spawn lifecycle entity = %d, want the spawned trap (not the cast target 2)", lifecycle)
 			}
 
 			// 1. 交给策略的事件形状：除序号 / tick / 类型外与 Runtime 的增量一致。
@@ -74,19 +74,19 @@ func TestPresentationResetProcessEntryMatchesItsIncrementalEvent(t *testing.T) {
 			reset := recoverPresentationReset(t, runtime, recorder)
 			var given *skill.PresentationEvent
 			for index := range seen {
-				if seen[index].HasProcess && seen[index].ProcessID == latest.ProcessID {
+				if seen[index].HasSpawn && seen[index].SpawnID == latest.SpawnID {
 					given = &seen[index]
 				}
 			}
 			if given == nil || len(reset) != 1 {
-				t.Fatalf("reset entries = %+v, policy saw %+v; want the one process entry", reset, seen)
+				t.Fatalf("reset entries = %+v, policy saw %+v; want the one spawn entry", reset, seen)
 			}
 			if given.Source != latest.Source || given.PrimaryTarget != latest.PrimaryTarget || given.CastID != latest.CastID ||
-				given.ProcessTemplate != latest.ProcessTemplate || given.ProcessStatus != latest.ProcessStatus || given.VisualIndex != latest.VisualIndex ||
+				given.SpawnTemplate != latest.SpawnTemplate || given.SpawnStatus != latest.SpawnStatus || given.VisualIndex != latest.VisualIndex ||
 				given.ProgramID != latest.ProgramID || given.GameplayDigest != latest.GameplayDigest || given.PresentationDigest != latest.PresentationDigest ||
 				given.Anchor.Source != latest.Anchor.Source || given.Anchor.Target != latest.Anchor.Target ||
 				given.Anchor.Position == nil || latest.Anchor.Position == nil || *given.Anchor.Position != *latest.Anchor.Position {
-				t.Errorf("reset hands the policy\n  %+v\nthe runtime's increment for the same process is\n  %+v", *given, latest)
+				t.Errorf("reset hands the policy\n  %+v\nthe runtime's increment for the same spawn is\n  %+v", *given, latest)
 			}
 
 			// 2. 同一策略对 reset 与增量得出同样的结论（可见性与过滤后的 Anchor）。
@@ -119,8 +119,8 @@ func TestPresentationResetProcessEntryMatchesItsIncrementalEvent(t *testing.T) {
 				if anchor.Source != want.Anchor.Source || anchor.Target != want.Anchor.Target || (anchor.Position == nil) != (want.Anchor.Position == nil) || (anchor.Direction == nil) != (want.Anchor.Direction == nil) {
 					t.Errorf("%s: reset anchor %+v, the filtered increment's anchor is %+v", policyName, anchor, want.Anchor)
 				}
-				if got[0].Kind != skill.ActivePresentationProcess || got[0].ProcessID != latest.ProcessID {
-					t.Errorf("%s: reset entry %+v is not the process %d", policyName, got[0], latest.ProcessID)
+				if got[0].Kind != skill.ActivePresentationSpawn || got[0].SpawnID != latest.SpawnID {
+					t.Errorf("%s: reset entry %+v is not the spawn %d", policyName, got[0], latest.SpawnID)
 				}
 			}
 		})

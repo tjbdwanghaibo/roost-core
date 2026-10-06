@@ -1,7 +1,7 @@
 package skill
 
 // RR-20261005-NC-110 / NC-111 / NC-112：施法的每条终止路径（启动失败、Cancel / Interrupt / Release 中途出错、
-// 排程任务失败）都必须把 cast 收敛到同一个终态：本 cast 的排程任务与帧全部撤掉、进程停止、policy 槽位释放、
+// 排程任务失败）都必须把 cast 收敛到同一个终态：本 cast 的排程任务与帧全部撤掉、衍生物停止、policy 槽位释放、
 // 不再占施法者窗口。旧实现各条路径手写收尾、各漏一步：启动失败删掉 cast 并复用 ID 却留下排程任务（NC-110）；
 // Cancel 回调失败时任务已撤、phase token 已推进，cast 停在 preparing 永久占住施法者（NC-111）；
 // 排程失败的 toggle 不释放 policy 槽位，下次激活变成对失败 cast 的 toggle-off（NC-112）。

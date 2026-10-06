@@ -92,15 +92,15 @@ func runShapePass(context *compileContext) {
 				context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path, "parallel branches must not be empty")
 			}
 		case *effectFlowIR:
-			// 只有 spawn 会启动实体进程（executeOwnedSpawn → startEntityProcess）。其他效果上的
-			// process / on 会被 lower 成进程模板，但 Runtime 从不启动、回调从不执行
+			// 只有 spawn 会启动实体衍生物（executeOwnedSpawn → startEntitySpawn）。其他效果上的
+			// spawn / on 会被 lower 成衍生物模板，但 Runtime 从不启动、回调从不执行
 			// （RR-20261005-NC-222）。
 			if _, spawn := typed.effect.(*spawnEffectIR); !spawn {
-				if typed.process != nil {
-					context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".process", "only a spawn effect starts a process")
+				if typed.spawn != nil {
+					context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".spawn", "only a spawn effect starts a spawn")
 				}
 				if typed.callbacks != nil {
-					context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".on", "only a spawn effect has process callbacks")
+					context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".on", "only a spawn effect has spawn callbacks")
 				}
 			}
 		case *selectFlowIR:
@@ -123,7 +123,7 @@ func runShapePass(context *compileContext) {
 // global_cooldown、cast window、policy 等字段在这里检查，其余字段要么不检查
 // （负 cooldown 让冷却立即结束、负 repeat 间隔在运行时排到过去而
 // ErrProgramInvariant、负状态时长每次被 Host 拒绝），要么靠预算 pass 把负数
-// 饱和成 MaxInt64 后在 `$` 报一个误导的生命期超限。motion、process、numeric
+// 饱和成 MaxInt64 后在 `$` 报一个误导的生命期超限。motion、spawn、numeric
 // track、状态生命期等字段仍由各自 pass 检查，这里只补没有检查的字段。
 func requireNonNegativeAuthoredTicks(context *compileContext) {
 	ir := context.artifacts.ir

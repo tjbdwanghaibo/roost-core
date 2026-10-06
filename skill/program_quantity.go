@@ -18,7 +18,7 @@ type QuantityView struct {
 }
 
 func valueKindName(kind valueKind) string {
-	names := [...]string{"invalid", "null", "int", "bool", "string", "entity", "position", "hit", "path", "direction", "process", "attribute", "element", "gameplay_tag", "ability", "status_instance", "snapshot_token", "entity_list", "string_list", "effect_result"}
+	names := [...]string{"invalid", "null", "int", "bool", "string", "entity", "position", "hit", "path", "direction", "spawn", "attribute", "element", "gameplay_tag", "ability", "status_instance", "snapshot_token", "entity_list", "string_list", "effect_result"}
 	if int(kind) < len(names) {
 		return names[kind]
 	}

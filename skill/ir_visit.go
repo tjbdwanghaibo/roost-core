@@ -50,9 +50,9 @@ func (ir *skillIR) walkEffects(visitor effectVisitor) {
 	})
 }
 
-func (ir *skillIR) walkProcesses(visitor effectVisitor) {
+func (ir *skillIR) walkSpawns(visitor effectVisitor) {
 	ir.walkEffects(func(effect effectIR) {
-		// Process variants are introduced as sealed effect IR types in Task 10.
+		// Spawn variants are introduced as sealed effect IR types in Task 10.
 		_ = effect
 	})
 	_ = visitor
@@ -68,8 +68,8 @@ func (ir *skillIR) walkVisualRefs(visitor visualVisitor) {
 		}
 	})
 	ir.walkFlows(func(flow flowIR) {
-		if effectFlow, ok := flow.(*effectFlowIR); ok && effectFlow.process != nil && effectFlow.process.visual != nil {
-			visitor(effectFlow.process.visual)
+		if effectFlow, ok := flow.(*effectFlowIR); ok && effectFlow.spawn != nil && effectFlow.spawn.visual != nil {
+			visitor(effectFlow.spawn.visual)
 		}
 	})
 }

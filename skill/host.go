@@ -17,15 +17,15 @@ package skill
 //     revision. Wall-clock time, map iteration order, and goroutine timing
 //     must never influence a result; replay and checkpoint recovery re-issue
 //     the same calls and must observe identical answers.
-//   - StopProcess must be idempotent: stopping a process that is already
+//   - StopSpawn must be idempotent: stopping a spawn that is already
 //     stopped, or that the Host does not know, succeeds without a second side
 //     effect (MemoryHost returns the current revision and emits no event).
-//     When StopProcess fails, the Runtime marks the process stop_pending and
+//     When StopSpawn fails, the Runtime marks the spawn stop_pending and
 //     retries the same stop on later ticks with backoff
-//     (RuntimeOptions.ProcessStopRetryBackoff / ProcessStopRetryLimit), and
+//     (RuntimeOptions.SpawnStopRetryBackoff / SpawnStopRetryLimit), and
 //     Shutdown / RemoveProgram may stop it again; a stop the Host actually
 //     performed but reported as failed is therefore re-issued. Return an
-//     error only when the process is still running in the world.
+//     error only when the spawn is still running in the world.
 type Host interface {
 	AuthorityProvider
 	StateStore
@@ -35,8 +35,8 @@ type Host interface {
 	Select(request SelectRequest) (SelectResult, error)
 	PayCosts(payment CostPayment) (CommitReceipt, error)
 	Apply(command EffectCommand) (EffectResult, error)
-	StepProcess(command ProcessStepCommand, state ProcessHostState) (ProcessStepResult, error)
-	StopProcess(command ProcessStopCommand, state ProcessHostState) (CommitReceipt, error)
+	StepSpawn(command SpawnStepCommand, state SpawnHostState) (SpawnStepResult, error)
+	StopSpawn(command SpawnStopCommand, state SpawnHostState) (CommitReceipt, error)
 	Events(after EventCursor) []RuntimeEvent
 }
 

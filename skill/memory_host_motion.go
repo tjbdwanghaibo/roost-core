@@ -2,7 +2,7 @@ package skill
 
 import "fmt"
 
-func (host *MemoryHost) applyMotionStepLocked(step MotionStep, state *ProcessHostState) ([]ProcessSignal, bool, error) {
+func (host *MemoryHost) applyMotionStepLocked(step MotionStep, state *SpawnHostState) ([]SpawnSignal, bool, error) {
 	switch typed := step.(type) {
 	case StaticMotionStep:
 		state.Position, state.Active = typed.Position, true
@@ -10,7 +10,7 @@ func (host *MemoryHost) applyMotionStepLocked(step MotionStep, state *ProcessHos
 	case FrameMotionStep:
 		state.Position, state.Active = typed.Position, true
 	case SteeringMotionStep:
-		// Direction is process-owned; the Host receives the resolved integer
+		// Direction is spawn-owned; the Host receives the resolved integer
 		// primitive for deterministic tracing but does not retain DSL state.
 	case TrajectoryMotionStep:
 		state.Position = typed.Position
@@ -23,7 +23,7 @@ func (host *MemoryHost) applyMotionStepLocked(step MotionStep, state *ProcessHos
 		if typed.Attached && typed.Target != 0 {
 			entity, found := host.entities[typed.Target]
 			if !found || !entity.Alive {
-				return []ProcessSignal{{Kind: ProcessSignalTargetLost, Target: typed.Target}}, false, nil
+				return []SpawnSignal{{Kind: SpawnSignalTargetLost, Target: typed.Target}}, false, nil
 			}
 			entity.Position = typed.Position
 			host.entities[typed.Target] = entity
@@ -33,7 +33,7 @@ func (host *MemoryHost) applyMotionStepLocked(step MotionStep, state *ProcessHos
 			state.Active = false
 		}
 	case SignalsMotionStep:
-		return normalizeProcessSignals(typed.Signals), true, nil
+		return normalizeSpawnSignals(typed.Signals), true, nil
 	default:
 		return nil, false, fmt.Errorf("skill: unsupported motion step %T", step)
 	}

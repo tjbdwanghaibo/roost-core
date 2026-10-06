@@ -300,7 +300,7 @@ func (n *normalizer) normalizeFlow(value FlowDefinition, path string) flowIR {
 	case SelectFlowDefinition:
 		return &selectFlowIR{source: source, selectPlan: n.normalizeSelect(typed.Select, path+".select"), consume: n.normalizeConsume(typed.Consume, path+".consume"), onEmpty: n.normalizeOptionalFlow(typed.OnEmpty, path+".on_empty")}
 	case EffectFlowDefinition:
-		return &effectFlowIR{source: source, effect: n.normalizeEffect(typed.Effect, path+".effect"), result: n.normalizeEffectResult(typed.Result, path+".result"), callbacks: n.normalizeCallbacks(typed.On, path+".on"), process: n.normalizeProcess(typed.Process, path+".process")}
+		return &effectFlowIR{source: source, effect: n.normalizeEffect(typed.Effect, path+".effect"), result: n.normalizeEffectResult(typed.Result, path+".result"), callbacks: n.normalizeCallbacks(typed.On, path+".on"), spawn: n.normalizeSpawn(typed.Spawn, path+".spawn")}
 	case GotoFlowDefinition:
 		return &gotoFlowIR{source: source, phase: typed.Phase}
 	case FinishFlowDefinition:
@@ -341,11 +341,11 @@ func (n *normalizer) normalizeEffectResult(value *EffectResultDefinition, path s
 	return result
 }
 
-func (n *normalizer) normalizeCallbacks(value *ProcessCallbacksDefinition, path string) *processCallbacksIR {
+func (n *normalizer) normalizeCallbacks(value *SpawnCallbacksDefinition, path string) *spawnCallbacksIR {
 	if value == nil {
 		return nil
 	}
-	return &processCallbacksIR{tick: n.normalizeOptionalFlow(value.Tick, path+".tick"), hit: n.normalizeOptionalFlow(value.Hit, path+".hit"), collision: n.normalizeOptionalFlow(value.Collision, path+".collision"), end: n.normalizeOptionalFlow(value.End, path+".end"), cancel: n.normalizeOptionalFlow(value.Cancel, path+".cancel"), transition: n.normalizeOptionalFlow(value.Transition, path+".transition"), targetLost: n.normalizeOptionalFlow(value.TargetLost, path+".target_lost"), enter: n.normalizeOptionalFlow(value.Enter, path+".enter"), leave: n.normalizeOptionalFlow(value.Leave, path+".leave")}
+	return &spawnCallbacksIR{tick: n.normalizeOptionalFlow(value.Tick, path+".tick"), hit: n.normalizeOptionalFlow(value.Hit, path+".hit"), collision: n.normalizeOptionalFlow(value.Collision, path+".collision"), end: n.normalizeOptionalFlow(value.End, path+".end"), cancel: n.normalizeOptionalFlow(value.Cancel, path+".cancel"), transition: n.normalizeOptionalFlow(value.Transition, path+".transition"), targetLost: n.normalizeOptionalFlow(value.TargetLost, path+".target_lost"), enter: n.normalizeOptionalFlow(value.Enter, path+".enter"), leave: n.normalizeOptionalFlow(value.Leave, path+".leave")}
 }
 
 func (n *normalizer) normalizeSelect(value SelectDefinition, path string) selectIR {
@@ -492,8 +492,8 @@ func (n *normalizer) normalizeEffect(value EffectDefinition, path string) effect
 		return &modifyStateEffectIR{source: source, state: typed.State, owner: n.normalizeOptionalValue(typed.Owner, path+".owner"), subject: n.normalizeOptionalValue(typed.Subject, path+".subject"), teamOf: n.normalizeOptionalValue(typed.TeamOf, path+".team_of"), operation: typed.Operation, value: n.normalizeOptionalValue(typed.Value, path+".value"), durationTicks: typed.DurationTicks, expiryPolicy: typed.ExpiryPolicy}
 	case ModifyAbilityStateEffectDefinition:
 		return &modifyAbilityStateEffectIR{source: source, owner: n.normalizeValue(typed.Owner, path+".owner"), ability: n.normalizeValue(typed.Ability, path+".ability"), property: typed.Property, operation: typed.Operation, value: n.normalizeValue(typed.Value, path+".value"), durationTicks: typed.DurationTicks}
-	case ModifyProcessEffectDefinition:
-		return &modifyProcessEffectIR{source: source, process: n.normalizeValue(typed.Process, path+".process"), property: typed.Property, operation: typed.Operation, value: n.normalizeValue(typed.Value, path+".value"), overTicks: typed.OverTicks}
+	case ModifySpawnEffectDefinition:
+		return &modifySpawnEffectIR{source: source, spawn: n.normalizeValue(typed.Spawn, path+".spawn"), property: typed.Property, operation: typed.Operation, value: n.normalizeValue(typed.Value, path+".value"), overTicks: typed.OverTicks}
 	case SpawnEffectDefinition:
 		overrideKeys := sortedStringKeys(typed.AttributeOverrides)
 		overrides := make([]spawnAttributeOverrideIR, 0, len(overrideKeys))

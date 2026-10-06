@@ -21,7 +21,7 @@ type Catalog struct {
 func DefaultCatalog() Catalog {
 	features := []FeatureDescriptor{
 		{Key: "effect.damage", Kind: "effect", IdentityWeight: 3}, {Key: "effect.heal", Kind: "effect", IdentityWeight: 3},
-		{Key: "select.chain", Kind: "select", IdentityWeight: 2}, {Key: "motion.process", Kind: "process", IdentityWeight: 2},
+		{Key: "select.chain", Kind: "select", IdentityWeight: 2}, {Key: "motion.spawn", Kind: "spawn", IdentityWeight: 2},
 	}
 	result := Catalog{Features: make(map[FeatureKey]FeatureDescriptor, len(features))}
 	for _, feature := range features {

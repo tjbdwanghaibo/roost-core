@@ -67,13 +67,13 @@ func TestPresentationPollingReportsRetentionLoss(t *testing.T) {
 	}
 }
 
-func TestProcessVisualCompilesAndEmitsLifecycle(t *testing.T) {
+func TestSpawnVisualCompilesAndEmitsLifecycle(t *testing.T) {
 	input := string(mustReadFixture(t, "projectile_area.json"))
-	input = strings.Replace(input, `"process":{"kind":"area"`, `"process":{"kind":"area","visual":{"category":"area","theme":"default","elements":["default"]}`, 1)
+	input = strings.Replace(input, `"spawn":{"kind":"area"`, `"spawn":{"kind":"area","visual":{"category":"area","theme":"default","elements":["default"]}`, 1)
 	program := mustCompileProgram(t, mustParseJSON(t, input))
 	plan := InspectPresentationPlan(program)
-	if len(plan.Processes) != 1 || !plan.Processes[0].HasProcess {
-		t.Fatalf("process mounts = %#v", plan.Processes)
+	if len(plan.Spawns) != 1 || !plan.Spawns[0].HasSpawn {
+		t.Fatalf("spawn mounts = %#v", plan.Spawns)
 	}
 	runtime := NewRuntime(runtimeTestHost(DefaultCompileEnvironment()), RuntimeOptions{})
 	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
@@ -85,15 +85,15 @@ func TestProcessVisualCompilesAndEmitsLifecycle(t *testing.T) {
 	events := runtime.PresentationEvents(0)
 	seenStart, seenStop := false, false
 	for _, event := range events {
-		if event.Kind == PresentationProcessStart {
+		if event.Kind == PresentationSpawnStart {
 			seenStart = true
 		}
-		if event.Kind == PresentationProcessStop {
+		if event.Kind == PresentationSpawnStop {
 			seenStop = true
 		}
 	}
 	if !seenStart || !seenStop {
-		t.Fatalf("process lifecycle events = %#v", events)
+		t.Fatalf("spawn lifecycle events = %#v", events)
 	}
 
 	wrong := strings.Replace(input, `"category":"area"`, `"category":"impact"`, 1)

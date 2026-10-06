@@ -85,8 +85,8 @@ func (runtime *Runtime) evalStateBinding(cast *castInstance, binding stateBindin
 	return result, nil
 }
 
-// evalStateDefault 在 state_default 上下文里求状态默认值：读 / 写处可能是施法流程、进程字段
-// 或进程回调，默认值只能用表里在所有这些位置都求得出的引用（RR-20261005-NC-281）。
+// evalStateDefault 在 state_default 上下文里求状态默认值：读 / 写处可能是施法流程、衍生物字段
+// 或衍生物回调，默认值只能用表里在所有这些位置都求得出的引用（RR-20261005-NC-281）。
 //
 // 交给 Host 的默认值总是带 state 声明的类型：null 默认值（entity / position / snapshot_token 状态，
 // 以及 shared 状态的缺省默认值）按字面量求值是 Base=valueKindNull 的缺省值，原样交出去时 Host 的 set

@@ -81,21 +81,21 @@ func (host *RecordingHost) Apply(value EffectCommand) (EffectResult, error) {
 	host.append("apply", value, result, err, before)
 	return result, err
 }
-func (host *RecordingHost) StepProcess(value ProcessStepCommand, state ProcessHostState) (ProcessStepResult, error) {
+func (host *RecordingHost) StepSpawn(value SpawnStepCommand, state SpawnHostState) (SpawnStepResult, error) {
 	before := host.host.CurrentRevision()
-	result, err := host.host.StepProcess(value, state)
-	host.append("step_process", struct {
-		Command ProcessStepCommand
-		State   ProcessHostState
+	result, err := host.host.StepSpawn(value, state)
+	host.append("step_spawn", struct {
+		Command SpawnStepCommand
+		State   SpawnHostState
 	}{value, state}, result, err, before)
 	return result, err
 }
-func (host *RecordingHost) StopProcess(value ProcessStopCommand, state ProcessHostState) (CommitReceipt, error) {
+func (host *RecordingHost) StopSpawn(value SpawnStopCommand, state SpawnHostState) (CommitReceipt, error) {
 	before := host.host.CurrentRevision()
-	result, err := host.host.StopProcess(value, state)
-	host.append("stop_process", struct {
-		Command ProcessStopCommand
-		State   ProcessHostState
+	result, err := host.host.StopSpawn(value, state)
+	host.append("stop_spawn", struct {
+		Command SpawnStopCommand
+		State   SpawnHostState
 	}{value, state}, result, err, before)
 	return result, err
 }
@@ -154,17 +154,17 @@ func (host *ReplayHost) Apply(value EffectCommand) (EffectResult, error) {
 	record := host.nextRecord("apply", value)
 	return record.Result.(EffectResult), record.Err
 }
-func (host *ReplayHost) StepProcess(value ProcessStepCommand, state ProcessHostState) (ProcessStepResult, error) {
-	record := host.nextRecord("step_process", struct {
-		Command ProcessStepCommand
-		State   ProcessHostState
+func (host *ReplayHost) StepSpawn(value SpawnStepCommand, state SpawnHostState) (SpawnStepResult, error) {
+	record := host.nextRecord("step_spawn", struct {
+		Command SpawnStepCommand
+		State   SpawnHostState
 	}{value, state})
-	return record.Result.(ProcessStepResult), record.Err
+	return record.Result.(SpawnStepResult), record.Err
 }
-func (host *ReplayHost) StopProcess(value ProcessStopCommand, state ProcessHostState) (CommitReceipt, error) {
-	record := host.nextRecord("stop_process", struct {
-		Command ProcessStopCommand
-		State   ProcessHostState
+func (host *ReplayHost) StopSpawn(value SpawnStopCommand, state SpawnHostState) (CommitReceipt, error) {
+	record := host.nextRecord("stop_spawn", struct {
+		Command SpawnStopCommand
+		State   SpawnHostState
 	}{value, state})
 	return record.Result.(CommitReceipt), record.Err
 }

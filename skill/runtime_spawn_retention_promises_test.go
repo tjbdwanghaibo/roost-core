@@ -1,9 +1,9 @@
 package skill
 
 // RR-20261006-23：CompletedCastLimit 承诺有界保留终态 cast，“仍被引用”的 cast 例外。castEvictableLocked 把 cast 名下
-// 任何进程记录都当作引用，而进程停止后记录从不删除：起过 entity 进程（summon / area）的 cast，进程早已结束也永不回收，
-// live Runtime 的 cast 与进程记录无界增长，完成队列超过 CompletedCastLimit 后 checkpoint 恢复判 corrupt。
-// 承诺：只有运行中的进程（包括移交后仍在运行的）钉住 cast；已停的记录随 cast 一起回收。
+// 任何衍生物记录都当作引用，而衍生物停止后记录从不删除：起过 entity 衍生物（summon / area）的 cast，衍生物早已结束也永不回收，
+// live Runtime 的 cast 与衍生物记录无界增长，完成队列超过 CompletedCastLimit 后 checkpoint 恢复判 corrupt。
+// 承诺：只有运行中的衍生物（包括移交后仍在运行的）钉住 cast；已停的记录随 cast 一起回收。
 
 import (
 	"strings"
@@ -17,7 +17,7 @@ func summonSkill(t *testing.T, id string, duration string) (*Program, CompileEnv
 	return compileRuntimeJSON(t, json)
 }
 
-func TestCastsWhoseProcessesEndedStayWithinTheCompletedCastLimit(t *testing.T) {
+func TestCastsWhoseSpawnsEndedStayWithinTheCompletedCastLimit(t *testing.T) {
 	short, environment := summonSkill(t, "skill.test.retention.short", "4")
 	long, _ := summonSkill(t, "skill.test.retention.long", "100")
 	host := runtimeTestHost(environment)
@@ -46,18 +46,18 @@ func TestCastsWhoseProcessesEndedStayWithinTheCompletedCastLimit(t *testing.T) {
 
 	pinned := start(long)
 	advance(3)
-	if owned := runtime.OwnedProcesses(1); len(owned) != 1 || owned[0].SourceCastID != pinned {
-		t.Fatalf("owned processes = %+v, want cast %d's summon handed off and running", owned, pinned)
+	if owned := runtime.OwnedSpawns(1); len(owned) != 1 || owned[0].SourceCastID != pinned {
+		t.Fatalf("owned spawns = %+v, want cast %d's summon handed off and running", owned, pinned)
 	}
 	for range 8 {
 		start(short)
-		advance(6) // cast 在 tick 2 结束、进程移交，tick 4 进程到期
+		advance(6) // cast 在 tick 2 结束、衍生物移交，tick 4 衍生物到期
 	}
 	if stats := runtime.RetentionStats(); stats.Casts > options.CompletedCastLimit+1 {
 		t.Errorf("retained casts = %d (completed queue %d) after 8 casts whose summons ended; CompletedCastLimit is %d plus the pinned one", stats.Casts, stats.CompletedCasts, options.CompletedCastLimit)
 	}
-	if len(runtime.processes) > options.CompletedCastLimit+1 {
-		t.Errorf("retained process records = %d: records of evicted casts stay behind", len(runtime.processes))
+	if len(runtime.spawns) > options.CompletedCastLimit+1 {
+		t.Errorf("retained spawn records = %d: records of evicted casts stay behind", len(runtime.spawns))
 	}
 	if _, found := runtime.InspectCast(pinned); !found {
 		t.Errorf("cast %d was evicted while its handed-off summon still runs", pinned)
@@ -70,7 +70,7 @@ func TestCastsWhoseProcessesEndedStayWithinTheCompletedCastLimit(t *testing.T) {
 		t.Fatalf("restore after 9 summon casts with CompletedCastLimit 3: %v", err)
 	}
 
-	advance(100) // 长进程到期，pinned 不再被引用
+	advance(100) // 长衍生物到期，pinned 不再被引用
 	start(short)
 	advance(6)
 	if _, found := runtime.InspectCast(pinned); found {
@@ -84,7 +84,7 @@ func TestCastsWhoseProcessesEndedStayWithinTheCompletedCastLimit(t *testing.T) {
 // RR-20261006-30：被钉住的终态 cast 可以多于 CompletedCastLimit（pruneCompletedCastsLocked 跳过仍被引用的 cast），
 // 恢复却要求完成队列不超过上限，live Runtime 合法持有的状态写出的 checkpoint 恢复不了。这里上限 1、两个移交后
 // 仍在运行的召唤各钉住一个 cast。承诺：恢复按 prune 的不变量核对——超出上限的部分必须都仍被引用。
-func TestHandedOffProcessesBeyondTheCompletedLimitStillRestore(t *testing.T) {
+func TestHandedOffSpawnsBeyondTheCompletedLimitStillRestore(t *testing.T) {
 	long, environment := summonSkill(t, "skill.test.retention.long", "100")
 	host := runtimeTestHost(environment)
 	runtime := NewRuntime(host, RuntimeOptions{CompletedCastLimit: 1})
@@ -96,8 +96,8 @@ func TestHandedOffProcessesBeyondTheCompletedLimitStillRestore(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if owned := runtime.OwnedProcesses(1); len(owned) != 2 {
-		t.Fatalf("owned processes = %+v, want both summons handed off and running", owned)
+	if owned := runtime.OwnedSpawns(1); len(owned) != 2 {
+		t.Fatalf("owned spawns = %+v, want both summons handed off and running", owned)
 	}
 	if stats := runtime.RetentionStats(); stats.CompletedCasts != 2 {
 		t.Fatalf("completed queue = %d, want both pinned casts kept beyond CompletedCastLimit 1", stats.CompletedCasts)

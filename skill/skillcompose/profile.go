@@ -27,6 +27,6 @@ type SelectionFact struct {
 	HasEmpty                         bool
 }
 type Metrics struct {
-	Targets, Processes, Mutations, EventsPerRoot, RandomSites int
-	LifetimeTicks                                             skill.Tick
+	Targets, Spawns, Mutations, EventsPerRoot, RandomSites int
+	LifetimeTicks                                          skill.Tick
 }

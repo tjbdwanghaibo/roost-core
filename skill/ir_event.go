@@ -16,7 +16,7 @@ type EventContext struct {
 	SkillID           string
 	CastID            CastID
 	EffectIndex       EffectIndex
-	ProcessID         ProcessID
+	SpawnID           SpawnID
 	DamageType        DamageTypeHandle
 	Element           ElementHandle
 	ProcDepth         int

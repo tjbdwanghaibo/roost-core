@@ -128,7 +128,7 @@ func TestAWaitingAcquireIsNotEvictedByTheFirstHoldersRelease(t *testing.T) {
 
 // CompletedCastLimit bounds inspectable terminal casts, but "active or still
 // referenced casts are never evicted": a finished cast that still has tasks
-// pending, or that a process still names, outlives the bound; the pruner
+// pending, or that a spawn still names, outlives the bound; the pruner
 // skips it and evicts the next evictable one instead. Removing that guard
 // left every test green (U-0028).
 func TestReferencedCompletedCastsSurviveTheRetentionBound(t *testing.T) {

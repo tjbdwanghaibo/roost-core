@@ -66,7 +66,7 @@ func runTypeCheckPass(context *compileContext) {
 				context.addDiagnostic(DiagnosticTypeMismatch, declaration.source.Path+".default", "state type does not allow null default")
 			}
 		} else {
-			// 状态默认值在读 / 写处求值，那里可能是进程回调或进程字段（表的 state_default 列，
+			// 状态默认值在读 / 写处求值，那里可能是衍生物回调或衍生物字段（表的 state_default 列，
 			// RR-20261005-NC-281）。
 			checker.expect(declaration.defaultValue, checker.scopeFor(evalStateDefault, ""), typ)
 		}
@@ -116,13 +116,13 @@ func declaredMemoryType(name string) valueType {
 }
 
 // scopeFor 按求值上下文表生成一个上下文的作用域：表里在该上下文可用、
-// 且在这个 Program 形状里存在（施法模式、area 进程）的行。输入槽位来自输入布局，memory
-// 来自声明；局部变量由流程加入。processKind 只对进程回调有意义（area 专有的事件字段）。
-func (c *typeChecker) scopeFor(context evalContext, processKind string) typeScope {
+// 且在这个 Program 形状里存在（施法模式、area 衍生物）的行。输入槽位来自输入布局，memory
+// 来自声明；局部变量由流程加入。spawnKind 只对衍生物回调有意义（area 专有的事件字段）。
+func (c *typeChecker) scopeFor(context evalContext, spawnKind string) typeScope {
 	scope := typeScope{context: context, values: make(map[string]valueType)}
 	mode := c.context.artifacts.ir.activation.policy.mode
 	for index, row := range evalReferenceTable {
-		if row.name == "" || !row.cells[context].usable() || !row.presentIn(mode, processKind) {
+		if row.name == "" || !row.cells[context].usable() || !row.presentIn(mode, spawnKind) {
 			continue
 		}
 		switch evalReferenceRowIndex(index) {
@@ -196,7 +196,7 @@ func (c *typeChecker) flow(flow flowIR, scope typeScope) {
 		c.flow(typed.onEmpty, cloneTypeScope(scope))
 	case *effectFlowIR:
 		c.effect(typed.effect, scope)
-		c.process(typed.process, scope)
+		c.spawn(typed.spawn, scope)
 		if typed.result != nil {
 			successScope, failureScope := cloneTypeScope(scope), cloneTypeScope(scope)
 			if typed.result.local != nil {
@@ -207,17 +207,17 @@ func (c *typeChecker) flow(flow flowIR, scope typeScope) {
 			c.flow(typed.result.failure, failureScope)
 		}
 		if typed.callbacks != nil {
-			processKind := ""
-			if typed.process != nil {
-				processKind = typed.process.kind
+			spawnKind := ""
+			if typed.spawn != nil {
+				spawnKind = typed.spawn.kind
 			}
-			// 回调的作用域只来自表的 process_callback 列：施法的输入、memory、局部变量与
+			// 回调的作用域只来自表的 spawn_callback 列：施法的输入、memory、局部变量与
 			// `$caster` / `$cast.*` 都不在里面（此前 owned entity pass 另写一份 detachedReferenceAllowed）。
-			callbackScope := c.scopeFor(evalProcessCallback, processKind)
-			if typed.process != nil {
-				for _, policy := range c.context.environment.ProcessProperties.Properties {
-					if containsString(policy.ProcessKinds, typed.process.kind) && processPropertyBindingCount(typed.process.motion, policy) == 1 {
-						callbackScope.values["#process_property:"+policy.Key] = valueType{Base: valueKindInt}
+			callbackScope := c.scopeFor(evalSpawnCallback, spawnKind)
+			if typed.spawn != nil {
+				for _, policy := range c.context.environment.SpawnProperties.Properties {
+					if containsString(policy.SpawnKinds, typed.spawn.kind) && spawnPropertyBindingCount(typed.spawn.motion, policy) == 1 {
+						callbackScope.values["#spawn_property:"+policy.Key] = valueType{Base: valueKindInt}
 					}
 				}
 			}
@@ -229,37 +229,37 @@ func (c *typeChecker) flow(flow flowIR, scope typeScope) {
 	}
 }
 
-// process 检查 spawn 进程的字段。每一步重新求值的字段（area 选择、motion 的目标 / 点 / 锚点 /
-// 目的地、未绑定到进程数值属性的数值字段）用表的 process_step 列；numeric track 的值与绑定到
-// 数值属性的字段只在启动时用施法求一次（initializeProcessNumeric），用施法作用域 castScope。
+// spawn 检查 spawn 衍生物的字段。每一步重新求值的字段（area 选择、motion 的目标 / 点 / 锚点 /
+// 目的地、未绑定到衍生物数值属性的数值字段）用表的 spawn_step 列；numeric track 的值与绑定到
+// 数值属性的字段只在启动时用施法求一次（initializeSpawnNumeric），用施法作用域 castScope。
 // 此前全部按施法作用域检查，再由 owned entity pass 另写一份前缀黑名单（RR-20261005-NC-224）。
-func (c *typeChecker) process(process *processIR, castScope typeScope) {
-	if process == nil {
+func (c *typeChecker) spawn(spawn *spawnIR, castScope typeScope) {
+	if spawn == nil {
 		return
 	}
-	stepScope := c.scopeFor(evalProcessStep, "")
+	stepScope := c.scopeFor(evalSpawnStep, "")
 	numeric := func(stage, variant, field string) typeScope {
-		if processNumericFieldBound(c.context.environment, process.kind, stage, variant, field) {
+		if spawnNumericFieldBound(c.context.environment, spawn.kind, stage, variant, field) {
 			return castScope
 		}
 		return stepScope
 	}
 	scope := stepScope
-	if process.area != nil {
-		c.selectPlan(process.area, scope)
+	if spawn.area != nil {
+		c.selectPlan(spawn.area, scope)
 	}
 	seen := make(map[string]bool)
-	for _, track := range process.numericTracks {
+	for _, track := range spawn.numericTracks {
 		path := track.source.Path
-		policy, found := lookupProcessPropertyPolicy(c.context.environment.ProcessProperties, track.property)
+		policy, found := lookupSpawnPropertyPolicy(c.context.environment.SpawnProperties, track.property)
 		if !found {
-			c.context.addDiagnostic(DiagnosticShapeInvalid, path+".property", "property is not mutable in the process property catalog")
+			c.context.addDiagnostic(DiagnosticShapeInvalid, path+".property", "property is not mutable in the spawn property catalog")
 		} else {
-			if !containsString(policy.ProcessKinds, process.kind) || processPropertyBindingCount(process.motion, policy) != 1 {
-				c.context.addDiagnostic(DiagnosticShapeInvalid, path+".property", "property must bind exactly one Motion slot for this process")
+			if !containsString(policy.SpawnKinds, spawn.kind) || spawnPropertyBindingCount(spawn.motion, policy) != 1 {
+				c.context.addDiagnostic(DiagnosticShapeInvalid, path+".property", "property must bind exactly one Motion slot for this spawn")
 			}
 			if !containsString(policy.Operations, track.operation) {
-				c.context.addDiagnostic(DiagnosticShapeInvalid, path+".operation", "operation is not allowed by the process property policy")
+				c.context.addDiagnostic(DiagnosticShapeInvalid, path+".operation", "operation is not allowed by the spawn property policy")
 			}
 		}
 		if seen[track.property] {
@@ -271,10 +271,10 @@ func (c *typeChecker) process(process *processIR, castScope typeScope) {
 		}
 		c.expect(track.value, castScope, valueType{Base: valueKindInt})
 	}
-	if process.motion == nil {
+	if spawn.motion == nil {
 		return
 	}
-	motion, ok := process.motion.(*canonicalMotionIR)
+	motion, ok := spawn.motion.(*canonicalMotionIR)
 	if !ok {
 		return
 	}
@@ -494,17 +494,17 @@ func (c *typeChecker) effect(effect effectIR, scope typeScope) {
 			}
 			c.expect(typed.value, scope, expected)
 		}
-	case *modifyProcessEffectIR:
-		c.expect(typed.process, scope, valueType{Base: valueKindProcess})
-		processReference, isProcessReference := typed.process.(*referenceValueIR)
-		if !isProcessReference || processReference.reference != "$process" {
-			c.context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".process", "modify_process requires the current callback $process")
+	case *modifySpawnEffectIR:
+		c.expect(typed.spawn, scope, valueType{Base: valueKindSpawn})
+		spawnReference, isSpawnReference := typed.spawn.(*referenceValueIR)
+		if !isSpawnReference || spawnReference.reference != "$spawn" {
+			c.context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".spawn", "modify_spawn requires the current callback $spawn")
 		}
-		policy, found := lookupProcessPropertyPolicy(c.context.environment.ProcessProperties, typed.property)
-		if !found || scope.values["#process_property:"+typed.property].Base == valueKindInvalid {
-			c.context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".property", "property is not bound to the current process Motion")
+		policy, found := lookupSpawnPropertyPolicy(c.context.environment.SpawnProperties, typed.property)
+		if !found || scope.values["#spawn_property:"+typed.property].Base == valueKindInvalid {
+			c.context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".property", "property is not bound to the current spawn Motion")
 		} else if !containsString(policy.Operations, typed.operation) {
-			c.context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".operation", "operation is not allowed by the process property policy")
+			c.context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".operation", "operation is not allowed by the spawn property policy")
 		}
 		if typed.overTicks < 0 {
 			c.context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".over_ticks", "over_ticks must be non-negative")
@@ -549,16 +549,16 @@ func (c *typeChecker) declaredMemory(name, effectPath string) (valueType, bool) 
 	return memoryType, found
 }
 
-func lookupProcessPropertyPolicy(catalog ProcessPropertyCatalog, key string) (ProcessPropertyPolicy, bool) {
+func lookupSpawnPropertyPolicy(catalog SpawnPropertyCatalog, key string) (SpawnPropertyPolicy, bool) {
 	for _, policy := range catalog.Properties {
 		if policy.Key == key {
 			return policy, true
 		}
 	}
-	return ProcessPropertyPolicy{}, false
+	return SpawnPropertyPolicy{}, false
 }
 
-func processPropertyBindingCount(value motionIR, policy ProcessPropertyPolicy) int {
+func spawnPropertyBindingCount(value motionIR, policy SpawnPropertyPolicy) int {
 	motion, ok := value.(*canonicalMotionIR)
 	if !ok || motion == nil {
 		return 0
@@ -870,12 +870,12 @@ func (c *typeChecker) validateExpectedFailureLiteral(referenceValue, literalValu
 	}
 }
 
-// checkCachedRead 按求值上下文表检查缓存型快照读取（cast_start / phase_start / process_start）：
+// checkCachedRead 按求值上下文表检查缓存型快照读取（cast_start / phase_start / spawn_start）：
 // 这些读取的整个求值（包括实体）发生在采样点，之后读缓存（runtime_eval.go captureSnapshots）。
-//   - 快照点在读取所在的上下文里要可用（evalSnapshotTable）：process_start 只在进程回调里，
-//     cast_start / phase_start 不在进程回调里（RR-20261005-NC-220）；
+//   - 快照点在读取所在的上下文里要可用（evalSnapshotTable）：spawn_start 只在衍生物回调里，
+//     cast_start / phase_start 不在衍生物回调里（RR-20261005-NC-220）；
 //   - 实体里的每个引用在采样上下文里要可用（引用表的采样列：采样点上没有局部变量，
-//     process_start 采样在进程上下文里），且不能是可缺省的——采样时没有读取处的 exists
+//     spawn_start 采样在衍生物上下文里），且不能是可缺省的——采样时没有读取处的 exists
 //     守卫，缺省即 Activate / 进 phase 失败（RR-20261005-NC-282）。
 //
 // current / each_tick / on_hit / on_event 在读取处求值，不受这两条限制。

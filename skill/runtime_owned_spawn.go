@@ -32,9 +32,9 @@ func (runtime *Runtime) executeOwnedSpawn(cast *castInstance, operation spawnOpe
 		parameters[index] = SpawnParameterBinding{Name: binding.name, Value: value}
 	}
 	command := SpawnCommand{Owner: cast.caster, GameplayDigest: cast.program.identity.gameplayDigest, SourceSkillID: cast.program.id, SourceCastID: cast.id, SourceEffectIndex: operation.effectIndex, Template: operation.template, Position: position, Count: operation.count, DurationTicks: operation.durationTicks, AttributeOverrides: overrides, ParameterBindings: parameters}
-	if operation.hasProcess {
+	if operation.hasSpawn {
 		command.Transactional = true
-		failure, previewErr := runtime.previewOwnedProcessCapacity(ownedHost, command)
+		failure, previewErr := runtime.previewOwnedSpawnCapacity(ownedHost, command)
 		if previewErr != nil {
 			return EffectResult{}, previewErr
 		}
@@ -43,7 +43,7 @@ func (runtime *Runtime) executeOwnedSpawn(cast *castInstance, operation spawnOpe
 		}
 	}
 	result, err := runtime.applyHostEffect(cast, EffectCommand{Meta: CommandMeta{RequiredRevision: cast.visibleRevision, EffectIndex: operation.effectIndex}, Payload: command})
-	if err != nil || !operation.hasProcess {
+	if err != nil || !operation.hasSpawn {
 		return result, err
 	}
 	payload, ok := result.Payload.(SpawnEffectResult)
@@ -56,30 +56,30 @@ func (runtime *Runtime) executeOwnedSpawn(cast *castInstance, operation spawnOpe
 	if payload.TransactionID == 0 {
 		return EffectResult{}, ErrHostContractViolation
 	}
-	started := make([]ProcessID, 0, len(payload.Entities))
+	started := make([]SpawnID, 0, len(payload.Entities))
 	for _, entity := range payload.Entities {
-		if err := runtime.startEntityProcess(cast, operation.processTemplate, operation.template, entity, operation.durationTicks, position); err != nil {
+		if err := runtime.startEntitySpawn(cast, operation.spawnTemplate, operation.template, entity, operation.durationTicks, position); err != nil {
 			cleanupErrors := []error{err}
-			for _, processID := range started {
-				cleanupErrors = append(cleanupErrors, runtime.terminateProcess(cast, runtime.processes[processID], StopCauseFailure, ""))
+			for _, spawnID := range started {
+				cleanupErrors = append(cleanupErrors, runtime.terminateSpawn(cast, runtime.spawns[spawnID], StopCauseFailure, ""))
 			}
 			cleanupErrors = append(cleanupErrors, ownedHost.RollbackOwnedSpawn(payload.TransactionID))
 			return EffectResult{}, errors.Join(cleanupErrors...)
 		}
-		started = append(started, runtime.nextProcessID)
+		started = append(started, runtime.nextSpawnID)
 	}
 	if err := ownedHost.CommitOwnedSpawn(payload.TransactionID); err != nil {
 		cleanupErrors := []error{err}
-		for _, processID := range started {
-			cleanupErrors = append(cleanupErrors, runtime.terminateProcess(cast, runtime.processes[processID], StopCauseFailure, ""))
+		for _, spawnID := range started {
+			cleanupErrors = append(cleanupErrors, runtime.terminateSpawn(cast, runtime.spawns[spawnID], StopCauseFailure, ""))
 		}
 		cleanupErrors = append(cleanupErrors, ownedHost.RollbackOwnedSpawn(payload.TransactionID))
 		return EffectResult{}, errors.Join(cleanupErrors...)
 	}
-	if err := runtime.reapUnhandedEntityProcesses(); err != nil {
+	if err := runtime.reapUnhandedEntitySpawns(); err != nil {
 		return EffectResult{}, err
 	}
-	if err := runtime.reapOwnedProcesses(); err != nil {
+	if err := runtime.reapOwnedSpawns(); err != nil {
 		return EffectResult{}, err
 	}
 	return result, nil

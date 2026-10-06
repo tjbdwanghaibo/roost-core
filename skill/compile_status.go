@@ -75,7 +75,7 @@ func runStatusInstancePass(context *compileContext) {
 			consumer = consume.body
 		}
 		if effectResultBranchMaySuspend(consumer) {
-			context.addDiagnostic(DiagnosticLifecycleControlConflict, consumer.sourceRef().Path, "status instance consumers cannot suspend (wait, repeat with interval_ticks) or start a process with on callbacks")
+			context.addDiagnostic(DiagnosticLifecycleControlConflict, consumer.sourceRef().Path, "status instance consumers cannot suspend (wait, repeat with interval_ticks) or start a spawn with on callbacks")
 		}
 	})
 	context.artifacts.ir.walkEffects(func(effect effectIR) {

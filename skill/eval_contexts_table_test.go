@@ -13,7 +13,7 @@ import (
 //     10 个 tick 不出错，位点之后的“见证”效果确实执行（证明引用被求值过）；
 //   - 不可用的格子：编译被拒绝，诊断点名该上下文与表项；Runtime 在该上下文里求这一行返回
 //     ErrReferenceOutOfContext（不是 ErrProgramInvariant）。
-//   - 该上下文没有这一行类型的位点时（采样点只求实体、进程字段没有字符串位点……），用例表
+//   - 该上下文没有这一行类型的位点时（采样点只求实体、衍生物字段没有字符串位点……），用例表
 //     写明理由，守卫照样要求这一格有记录。
 // 给表加一行或一个上下文而不补这里，TestEvalContextTableEveryCellHasACase 失败。快照点表
 // （evalSnapshotTable）由 TestEvalSnapshotTableCellsAgreeWithCompilerAndRuntime 逐格守。
@@ -27,7 +27,7 @@ type evalRowFixture struct {
 	memory    string // memory 声明
 	policy    string // 替换 {"mode":"tap"} 的 policy
 	// kind 决定放进位点的方式：entity、optional（可缺省实体）、position、comparable
-	// （能 eq 的 int / string / ability）、process。
+	// （能 eq 的 int / string / ability）、spawn。
 	kind string
 	// bp：值是 basis points，可以放进 scale_bp。
 	bp bool
@@ -51,7 +51,7 @@ var evalRowFixtures = map[evalReferenceRowIndex]evalRowFixture{
 	evalRowOwner:                {reference: "$owner", kind: "entity"},
 	evalRowOwnerPosition:        {reference: "$owner.position", kind: "position"},
 	evalRowLifecycleEntity:      {reference: "$lifecycle_entity", kind: "entity"},
-	evalRowProcess:              {reference: "$process", kind: "process"},
+	evalRowSpawn:                {reference: "$spawn", kind: "spawn"},
 	evalRowEventSource:          {reference: "$event.source", kind: "entity"},
 	evalRowEventOwner:           {reference: "$event.owner", kind: "entity"},
 	evalRowEventTarget:          {reference: "$event.target", kind: "entity"},
@@ -66,7 +66,7 @@ const evalWitness = `{"flow":"effect","effect":{"type":"damage","target":"$caste
 const evalCallbackWitness = `{"flow":"effect","effect":{"type":"damage","target":"$owner","amount":1,"damage_type":"physical"}}`
 
 // evalUse 把引用放进一段以 witness 结尾的流程：可比较的值进 if 条件，位置进 knockback 的起点，
-// 进程进 modify_process。返回 ""：这种值在流程里没有位点。
+// 衍生物进 modify_spawn。返回 ""：这种值在流程里没有位点。
 func evalUse(fixture evalRowFixture, reference, self, witness string) string {
 	switch fixture.kind {
 	case "entity", "comparable":
@@ -75,8 +75,8 @@ func evalUse(fixture evalRowFixture, reference, self, witness string) string {
 		return `{"flow":"if","condition":{"op":"exists","args":["` + reference + `"]},"then":` + witness + `}`
 	case "position":
 		return `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"knockback","target":"` + self + `","from":"` + reference + `","distance":0}},` + witness + `]}`
-	case "process":
-		return `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"modify_process","process":"` + reference + `","property":"speed","operation":"mul_bp","value":9000,"over_ticks":2}},` + witness + `]}`
+	case "spawn":
+		return `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"modify_spawn","spawn":"` + reference + `","property":"speed","operation":"mul_bp","value":9000,"over_ticks":2}},` + witness + `]}`
 	}
 	return ""
 }
@@ -121,10 +121,10 @@ func mergeJSONObjects(left, right string) string {
 	return strings.TrimSuffix(left, "}") + "," + strings.TrimPrefix(right, "{")
 }
 
-// evalArea 是一个 area 进程：from 是 area 选择的起点（进程每一步重新求值），radius 是半径，
+// evalArea 是一个 area 衍生物：from 是 area 选择的起点（衍生物每一步重新求值），radius 是半径，
 // tick 是 tick 回调。
 func evalArea(from, radius, tick string) string {
-	return `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"process":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":` + from + `,"kind":"entity","shape":{"type":"circle","radius":` + radius + `},"filters":[],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":` + tick + `}}`
+	return `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":` + from + `,"kind":"entity","shape":{"type":"circle","radius":` + radius + `},"filters":[],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":` + tick + `}}`
 }
 
 // evalCellCase 生成一个格子的定义；noSite 非空时表示没有位点。
@@ -135,12 +135,12 @@ func evalCellCase(t *testing.T, row evalReferenceRowIndex, context evalContext) 
 	read := func(point string) string {
 		return `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$caster","amount":` + captureRead(reference, point) + `,"damage_type":"physical"}},` + evalWitness + `]}`
 	}
-	callbackRead := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$owner","amount":` + captureRead(reference, "process_start") + `,"damage_type":"physical"}},` + evalCallbackWitness + `]}`
+	callbackRead := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$owner","amount":` + captureRead(reference, "spawn_start") + `,"damage_type":"physical"}},` + evalCallbackWitness + `]}`
 	switch context {
 	case evalCastFlow:
 		use := evalUse(fixture, reference, "$caster", evalWitness)
-		if fixture.kind == "process" {
-			use = `{"flow":"if","condition":{"op":"eq","args":["$process","$process"]},"then":` + evalWitness + `}`
+		if fixture.kind == "spawn" {
+			use = `{"flow":"if","condition":{"op":"eq","args":["$spawn","$spawn"]},"then":` + evalWitness + `}`
 		}
 		return evalDefinition(t, fixture, "{}", agreementSteps(evalWithLocal(row, "$caster", use)), ""), ""
 	case evalMemoryDefault:
@@ -170,7 +170,7 @@ func evalCellCase(t *testing.T, row evalReferenceRowIndex, context evalContext) 
 			body = `{"flow":"if","condition":{"op":"exists","args":["` + reference + `"]},"then":` + body + `}`
 		}
 		return evalDefinition(t, fixture, "{}", agreementSteps(evalWithLocal(row, "$caster", body)), ""), ""
-	case evalProcessStartCapture:
+	case evalSpawnStartCapture:
 		if !evalReferenceTable[row].entity {
 			return "", "采样点只求读取的实体"
 		}
@@ -179,7 +179,7 @@ func evalCellCase(t *testing.T, row evalReferenceRowIndex, context evalContext) 
 			body = `{"flow":"if","condition":{"op":"exists","args":["` + reference + `"]},"then":` + body + `}`
 		}
 		return evalDefinition(t, fixture, "{}", agreementSteps(evalArea(`"$caster"`, "4", evalWithLocal(row, "$owner", body))), ""), ""
-	case evalProcessStep:
+	case evalSpawnStep:
 		from, radius := `"$caster"`, "4"
 		switch {
 		case fixture.kind == "entity" || fixture.kind == "optional" || fixture.kind == "position":
@@ -187,17 +187,17 @@ func evalCellCase(t *testing.T, row evalReferenceRowIndex, context evalContext) 
 		case fixture.bp:
 			radius = `{"op":"scale_bp","args":[4,"` + reference + `"]}`
 		case evalReferenceTable[row].cells[context].usable():
-			return "", "进程字段没有这种类型（字符串 / 技能 / 非 bp 计数与 tick）的位点"
+			return "", "衍生物字段没有这种类型（字符串 / 技能 / 非 bp 计数与 tick）的位点"
 		default:
 			from = `"` + reference + `"`
 		}
 		steps := agreementSteps(evalWithLocal(row, "$caster", evalArea(from, radius, evalCallbackWitness)))
 		return evalDefinition(t, fixture, "{}", steps, ""), ""
-	case evalProcessCallback:
+	case evalSpawnCallback:
 		use := evalUse(fixture, reference, "$owner", evalCallbackWitness)
-		if fixture.kind == "process" {
-			// modify_process 只认绑定了数值属性的 motion 进程。
-			projectile := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"process":{` + numericLinearProcess() + `},"on":{"tick":` + use + `}}`
+		if fixture.kind == "spawn" {
+			// modify_spawn 只认绑定了数值属性的 motion 衍生物。
+			projectile := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{` + numericLinearSpawn() + `},"on":{"tick":` + use + `}}`
 			return evalDefinition(t, fixture, "{}", agreementSteps(projectile), ""), ""
 		}
 		return evalDefinition(t, fixture, "{}", agreementSteps(evalArea(`"$caster"`, "4", evalWithLocal(row, "$owner", use))), ""), ""
@@ -221,7 +221,7 @@ func evalCellCase(t *testing.T, row evalReferenceRowIndex, context evalContext) 
 			return `{"flow":"if","condition":` + readCondition(owner) + `,"then":` + witness + `}`
 		}
 		state := `{"type":"` + stateType + `","scope":"owner","default":` + stateDefault + `,"lifetime":{"duration_ticks":20,"maximum_duration_ticks":40,"on_write":"refresh","clear_on":[]}}`
-		// 同一条状态在施法流程与进程回调里各读一次：默认值在两个上下文里都要求得出。
+		// 同一条状态在施法流程与衍生物回调里各读一次：默认值在两个上下文里都要求得出。
 		steps := agreementSteps(evalWithLocal(row, "$caster", use("$caster", evalWitness)), evalArea(`"$caster"`, "4", use("$owner", evalCallbackWitness)))
 		return evalDefinition(t, fixture, "{}", steps, state), ""
 	}
@@ -362,37 +362,37 @@ func TestRuntimeEvaluatesReferencesOnlyWhereTheTableAllows(t *testing.T) {
 
 // O33（维护者第七轮决定）：`$primary_target` 作 area 选择的起点。此前编译通过，启动那一步以施法目标
 // （实体 2，远处）为圆心，移交后漂移成以 lifecycle 实体（陷阱，施法者脚下）为圆心；现在编译期拒绝，
-// 诊断点名 process_step 上下文与 `$primary_target` 表项，并给出替代写法。
-func TestProcessStepPrimaryTargetIsRejectedAtCompileTime(t *testing.T) {
+// 诊断点名 spawn_step 上下文与 `$primary_target` 表项，并给出替代写法。
+func TestSpawnStepPrimaryTargetIsRejectedAtCompileTime(t *testing.T) {
 	enter := `{"flow":"effect","effect":{"type":"damage","target":"$event.target","amount":1,"damage_type":"physical"}}`
-	area := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"process":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$primary_target","kind":"entity","shape":{"type":"circle","radius":2},"filters":[],"order":{"by":"stable_id","direction":"asc"},"limit":4}},"on":{"enter":` + enter + `}}`
+	area := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$primary_target","kind":"entity","shape":{"type":"circle","radius":2},"filters":[],"order":{"by":"stable_id","direction":"asc"},"limit":4}},"on":{"enter":` + enter + `}}`
 	program, diagnostics := Compile(mustParseJSON(t, agreementSkillJSON("entity", "{}", "[]", agreementSteps(area))), DefaultCompileEnvironment())
 	if program != nil {
-		t.Fatalf("$primary_target in a process field compiled; it drifts to the lifecycle entity after handoff (O33)")
+		t.Fatalf("$primary_target in a spawn field compiled; it drifts to the lifecycle entity after handoff (O33)")
 	}
 	for _, diagnostic := range diagnostics {
 		if diagnostic.Code == DiagnosticInputUnavailable && strings.HasSuffix(diagnostic.Path, ".area.from") &&
-			strings.Contains(diagnostic.Message, "process_step") && strings.Contains(diagnostic.Message, "row $primary_target") && strings.Contains(diagnostic.Message, "改用") {
+			strings.Contains(diagnostic.Message, "spawn_step") && strings.Contains(diagnostic.Message, "row $primary_target") && strings.Contains(diagnostic.Message, "改用") {
 			return
 		}
 	}
-	t.Fatalf("no INPUT_UNAVAILABLE at area.from naming process_step, the $primary_target row and an alternative: %#v", diagnostics)
+	t.Fatalf("no INPUT_UNAVAILABLE at area.from naming spawn_step, the $primary_target row and an alternative: %#v", diagnostics)
 }
 
 // evalO33ReferenceCells / evalO33SnapshotCells 是第五批 O33 记下的全部“漂移”格子（此前编译通过、
-// Runtime 不失败，但值随进程移交或求值位置变化）。维护者第七轮决定全部改为编译期拒绝；memory
+// Runtime 不失败，但值随衍生物移交或求值位置变化）。维护者第七轮决定全部改为编译期拒绝；memory
 // 默认值里的 phase_start 按方案 §8 的判断一并拒绝（它只是 Activate 时的值、与 cast_start 相同）。
 var evalO33ReferenceCells = func() map[evalReferenceRowIndex][]evalContext {
 	cells := map[evalReferenceRowIndex][]evalContext{}
 	for _, row := range []evalReferenceRowIndex{evalRowPrimaryTarget, evalRowAbilitySelf, evalRowCastElapsedTicks, evalRowCastChargeBP, evalRowCastReleaseReason, evalRowCastPulseIndex, evalRowCastStock, evalRowCastMaxStock} {
-		cells[row] = []evalContext{evalProcessStep, evalStateDefault}
+		cells[row] = []evalContext{evalSpawnStep, evalStateDefault}
 	}
 	return cells
 }()
 
 var evalO33SnapshotCells = map[snapshotPoint][]evalContext{
-	snapshotCastStart:  {evalProcessStep, evalStateDefault},
-	snapshotPhaseStart: {evalMemoryDefault, evalProcessStep, evalStateDefault},
+	snapshotCastStart:  {evalSpawnStep, evalStateDefault},
+	snapshotPhaseStart: {evalMemoryDefault, evalSpawnStep, evalStateDefault},
 }
 
 // O33 的每个格子：表里不可用，说明里有替代写法（“改用 …”），有位点的格子编译被拒绝且诊断点名
@@ -454,7 +454,7 @@ func diagnosticMentionsAll(diagnostics []Diagnostic, code DiagnosticCode, texts 
 // 不可用格编译被拒，ATTRIBUTE_SNAPSHOT_INVALID 点名上下文与表项。采样上下文只求实体，
 // 实体里没有属性读取，所以那三列没有格子。
 //
-// 读取用一个测试属性 reach（距离量纲）：进程字段只有实体 / 位置 / 距离 / 角度类型的位点，
+// 读取用一个测试属性 reach（距离量纲）：衍生物字段只有实体 / 位置 / 距离 / 角度类型的位点，
 // 默认目录里的属性都不是距离量纲，放不进 area 半径。
 const evalReachAttribute AttributeHandle = 41
 
@@ -462,7 +462,7 @@ func evalSnapshotEnvironment() CompileEnvironment {
 	environment := DefaultCompileEnvironment()
 	environment.Gameplay.Attributes.Entries = append(environment.Gameplay.Attributes.Entries, AttributeCatalogEntry{
 		Handle: evalReachAttribute, Key: "reach", ValueType: valueKindInt, Quantity: quantityWorldDistance, Readable: true,
-		Snapshots: []string{"cast_start", "phase_start", "process_start", "current"}, ModifierOperations: []string{"add"},
+		Snapshots: []string{"cast_start", "phase_start", "spawn_start", "current"}, ModifierOperations: []string{"add"},
 		Minimum: 0, Maximum: 100, Rounding: "toward_zero",
 	})
 	environment.Digest = AuthorityDigest(environment)
@@ -485,9 +485,9 @@ func evalSnapshotCellCase(t *testing.T, point snapshotPoint, context evalContext
 		definition = evalDefinition(t, fixture, "{}", agreementSteps(knockback("$caster", evalWitness)), "")
 	case evalMemoryDefault:
 		definition = evalDefinition(t, fixture, `{"probe":{"type":"bool","default":`+probe+`}}`, agreementSteps(`{"flow":"if","condition":"$memory.probe","then":`+evalWitness+`}`), "")
-	case evalProcessStep:
+	case evalSpawnStep:
 		definition = evalDefinition(t, fixture, "{}", agreementSteps(evalArea(`"$caster"`, read("$caster"), evalCallbackWitness)), "")
-	case evalProcessCallback:
+	case evalSpawnCallback:
 		definition = evalDefinition(t, fixture, "{}", agreementSteps(evalArea(`"$caster"`, "4", knockback("$owner", evalCallbackWitness))), "")
 	case evalStateDefault:
 		readState := func(owner, witness string) string {
@@ -502,7 +502,7 @@ func evalSnapshotCellCase(t *testing.T, point snapshotPoint, context evalContext
 }
 
 func TestEvalSnapshotTableCellsAgreeWithCompilerAndRuntime(t *testing.T) {
-	points := []snapshotPoint{snapshotCastStart, snapshotPhaseStart, snapshotProcessStart}
+	points := []snapshotPoint{snapshotCastStart, snapshotPhaseStart, snapshotSpawnStart}
 	if len(evalSnapshotTable) != len(points) {
 		t.Fatalf("snapshot table has %d points, the guard knows %d", len(evalSnapshotTable), len(points))
 	}
@@ -546,9 +546,9 @@ func TestEvalSnapshotTableCellsAgreeWithCompilerAndRuntime(t *testing.T) {
 }
 
 // O33 诊断里给出的替代写法确实能编译、执行（不能让作者照着改了还是编不过）：
-//   - `$primary_target` 进程字段 → spawn position 在施法流程里用施法目标的位置，回调里以
+//   - `$primary_target` 衍生物字段 → spawn position 在施法流程里用施法目标的位置，回调里以
 //     `$lifecycle_entity` 为中心 select（远处的目标被打到、施法者没有）；
-//   - `$cast.*` / cast_start 进程字段 → numeric track 的初值（启动时用施法求一次）；
+//   - `$cast.*` / cast_start 衍生物字段 → numeric track 的初值（启动时用施法求一次）；
 //   - 状态默认值里的施法引用 → 字面量 / `$caster` 默认值，在施法流程里 modify_state 写入同一个
 //     表达式（null 默认值的实体状态 set 在 MemoryHost 上类型不匹配，是另一处问题，这里不用它）；
 //   - memory 默认值里的 phase_start → cast_start（快照守卫的正例覆盖）。
@@ -587,13 +587,13 @@ func TestO33AlternativesCompileAndRun(t *testing.T) {
 			t.Fatalf("the callbacks must center on the lifecycle entity at the target: target health %d, caster health %d", host.HealthForTest(2), host.HealthForTest(1))
 		}
 	})
-	t.Run("numeric track instead of $cast state and cast_start in process fields", func(t *testing.T) {
+	t.Run("numeric track instead of $cast state and cast_start in spawn fields", func(t *testing.T) {
 		for _, value := range []string{
 			`{"op":"scale_bp","args":[10,"$cast.charge_bp"]}`,
 			`{"read_attribute":{"entity":"$caster","attribute":"reach","snapshot":"cast_start"}}`,
 		} {
-			spawn := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"process":{` +
-				numericLinearProcessWithTracks(`{"property":"speed","operation":"set","value":`+value+`,"over_ticks":0}`) + `}}`
+			spawn := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{` +
+				numericLinearSpawnWithTracks(`{"property":"speed","operation":"set","value":`+value+`,"over_ticks":0}`) + `}}`
 			program := compile(t, evalDefinition(t, evalRowFixtures[evalRowCastChargeBP], "{}", agreementSteps(spawn), ""))
 			host := runtimeTestHost(environment)
 			host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Health: 100, MaxHealth: 100, Resources: map[string]int64{"mana": 100}, Attributes: map[AttributeHandle]int64{evalReachAttribute: 2}})
@@ -612,7 +612,7 @@ func TestO33AlternativesCompileAndRun(t *testing.T) {
 		host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Health: 100, MaxHealth: 100, Resources: map[string]int64{"mana": 100}, Attributes: map[AttributeHandle]int64{evalReachAttribute: 2}})
 		run(t, program, CastInput{Caster: 1, Target: 2}, host)
 		if host.HealthForTest(1) >= 100 {
-			t.Fatalf("the process callback must see the states written in the cast flow: caster health %d", host.HealthForTest(1))
+			t.Fatalf("the spawn callback must see the states written in the cast flow: caster health %d", host.HealthForTest(1))
 		}
 	})
 }
