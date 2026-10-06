@@ -68,7 +68,7 @@ func stopRetryTap(t *testing.T) *Program {
 func onlySpawnOfCast(t *testing.T, runtime *Runtime, id CastID) *SpawnInstance {
 	t.Helper()
 	var found *SpawnInstance
-	for _, spawn := range runtime.spawns {
+	for _, spawn := range allSpawnRecords(runtime) {
 		if spawn.CastID != id {
 			continue
 		}

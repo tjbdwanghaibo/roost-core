@@ -21,8 +21,8 @@ func TestEffectResultBranchMayStartASpawnWithoutCallbacks(t *testing.T) {
 	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.ownedSpawns) != 1 {
-		t.Fatalf("owned spawns = %d, want the minion spawn started from the result branch", len(runtime.ownedSpawns))
+	if runtime.spawns.count(spawnHandedOff) != 1 {
+		t.Fatalf("owned spawns = %d, want the minion spawn started from the result branch", runtime.spawns.count(spawnHandedOff))
 	}
 }
 

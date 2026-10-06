@@ -51,7 +51,7 @@ func activeHostSpawns(host *MemoryHost) int {
 
 func runtimeSpawnsOfCast(runtime *Runtime, id CastID) int {
 	count := 0
-	for _, spawn := range runtime.spawns {
+	for _, spawn := range allSpawnRecords(runtime) {
 		if spawn.CastID == id {
 			count++
 		}

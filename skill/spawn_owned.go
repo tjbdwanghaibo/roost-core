@@ -47,7 +47,10 @@ func (runtime *Runtime) startEntitySpawn(cast *castInstance, template SpawnTempl
 		return errors.Join(err, runtime.detachMotionCarry(cast, spawn))
 	}
 	spawn.visibleRevision = cast.visibleRevision
-	runtime.spawns[spawn.ID] = spawn
+	if !runtime.spawns.add(spawn) {
+		// 不可达：ID 取自只增不减的 nextSpawnID，checkpoint 恢复核对过记录 ID 不超过它。
+		return ErrProgramInvariant
+	}
 	if err := runtime.drainHostEvents(cast); err != nil {
 		return err
 	}
@@ -58,7 +61,7 @@ func (runtime *Runtime) startEntitySpawn(cast *castInstance, template SpawnTempl
 	if err := runtime.captureOwnedSpawnSnapshots(spawn); err != nil {
 		stopErr := runtime.requestSpawnStop(cast, spawn, StopCauseFailure, "")
 		if stopErr == nil {
-			delete(runtime.spawns, spawn.ID)
+			runtime.spawns.drop(spawn.ID)
 		}
 		return errors.Join(err, stopErr)
 	}
@@ -70,7 +73,7 @@ func (runtime *Runtime) startEntitySpawn(cast *castInstance, template SpawnTempl
 		if areaErr != nil {
 			stopErr := runtime.requestSpawnStop(cast, spawn, StopCauseFailure, "")
 			if stopErr == nil {
-				delete(runtime.spawns, spawn.ID)
+				runtime.spawns.drop(spawn.ID)
 			}
 			return errors.Join(areaErr, stopErr)
 		}
@@ -85,7 +88,7 @@ func (runtime *Runtime) startEntitySpawn(cast *castInstance, template SpawnTempl
 	if err := runtime.dispatchOwnedSpawnSignals(spawn, startSignals); err != nil {
 		stopErr := runtime.requestSpawnStop(cast, spawn, StopCauseFailure, "")
 		if stopErr == nil {
-			delete(runtime.spawns, spawn.ID)
+			runtime.spawns.drop(spawn.ID)
 		}
 		return errors.Join(err, stopErr)
 	}
@@ -156,13 +159,10 @@ func (runtime *Runtime) captureOwnedSpawnSnapshots(spawn *SpawnInstance) error {
 
 func (runtime *Runtime) hasOwnedSpawnCapacityExcluding(owner EntityID, programID string, template UnitTemplateHandle, additional int, excluded map[EntityID]bool) bool {
 	total, ownerCount, programCount, templateCount := 0, 0, 0, 0
-	for _, spawn := range runtime.spawns {
-		// 待停止的衍生物仍在宿主侧运行，照样占容量。
-		if spawn.Scope != SpawnScopeEntity || !spawn.liveOnHost() {
-			continue
-		}
-		if excluded[spawn.LifecycleEntity] {
-			continue
+	// 待停止的衍生物仍在宿主侧运行，照样占容量。
+	runtime.spawns.each(func(spawn *SpawnInstance) {
+		if spawn.Scope != SpawnScopeEntity || excluded[spawn.LifecycleEntity] {
+			return
 		}
 		total++
 		if spawn.Owner == owner {
@@ -174,7 +174,7 @@ func (runtime *Runtime) hasOwnedSpawnCapacityExcluding(owner EntityID, programID
 		if spawn.UnitTemplate == template {
 			templateCount++
 		}
-	}
+	}, spawnLivePartitions...)
 	return total+additional <= runtime.options.MaxOwnedSpawns && ownerCount+additional <= runtime.options.MaxOwnedSpawnsPerOwner && programCount+additional <= runtime.options.MaxOwnedSpawnsPerProgram && templateCount+additional <= runtime.options.MaxOwnedSpawnsPerTemplate
 }
 
@@ -204,14 +204,9 @@ func (runtime *Runtime) failOwnedSpawn(spawn *SpawnInstance, cause error) error 
 }
 
 func (runtime *Runtime) handoffEntitySpawns(cast *castInstance) error {
-	ids := make([]SpawnID, 0)
-	for id, spawn := range runtime.spawns {
-		if spawn.CastID != cast.id || spawn.Scope != SpawnScopeEntity || spawn.Status != SpawnRunning || spawn.handedOff {
-			continue
-		}
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	ids := runtime.spawns.sortedIDs(func(spawn *SpawnInstance) bool {
+		return spawn.CastID == cast.id && spawn.Scope == SpawnScopeEntity
+	}, spawnCasting)
 	if len(ids) == 0 {
 		return nil
 	}
@@ -221,7 +216,7 @@ func (runtime *Runtime) handoffEntitySpawns(cast *castInstance) error {
 	}
 	valid, invalid := make([]SpawnID, 0, len(ids)), make([]SpawnID, 0)
 	for _, id := range ids {
-		spawn := runtime.spawns[id]
+		spawn := runtime.spawns.get(id)
 		if _, alive := host.OwnedEntity(spawn.LifecycleEntity); !alive {
 			invalid = append(invalid, id)
 		} else {
@@ -230,20 +225,19 @@ func (runtime *Runtime) handoffEntitySpawns(cast *castInstance) error {
 	}
 	var cleanupErr error
 	for _, id := range invalid {
-		spawn := runtime.spawns[id]
+		spawn := runtime.spawns.get(id)
 		cleanupErr = errors.Join(cleanupErr, runtime.requestSpawnStop(cast, spawn, StopCauseCancel, "cancel"))
 	}
 	if cleanupErr != nil {
 		for _, id := range valid {
-			spawn := runtime.spawns[id]
+			spawn := runtime.spawns.get(id)
 			cleanupErr = errors.Join(cleanupErr, runtime.requestSpawnStop(cast, spawn, StopCauseCancel, "cancel"))
 		}
 		return cleanupErr
 	}
 	for _, id := range valid {
-		spawn := runtime.spawns[id]
-		spawn.handedOff = true
-		runtime.ownedSpawns[spawn.ID] = spawn
+		spawn := runtime.spawns.get(id)
+		runtime.spawns.setState(spawn, spawn.Status, true)
 	}
 	return nil
 }
@@ -251,39 +245,37 @@ func (runtime *Runtime) handoffEntitySpawns(cast *castInstance) error {
 func (runtime *Runtime) OwnedSpawns(owner EntityID) []OwnedSpawnSnapshot {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
-	result := make([]OwnedSpawnSnapshot, 0, len(runtime.ownedSpawns))
-	for _, spawn := range runtime.ownedSpawns {
+	// 只扫已移交分区：移交给谁由记录的 Owner 字段表达。
+	result := make([]OwnedSpawnSnapshot, 0, runtime.spawns.count(spawnHandedOff))
+	runtime.spawns.each(func(spawn *SpawnInstance) {
 		if owner != 0 && spawn.Owner != owner {
-			continue
+			return
 		}
 		programID := ""
 		if spawn.Program != nil {
 			programID = spawn.Program.id
 		}
 		result = append(result, OwnedSpawnSnapshot{ID: spawn.ID, Owner: spawn.Owner, LifecycleEntity: spawn.LifecycleEntity, SourceCastID: spawn.CastID, ProgramID: programID, StartTick: spawn.StartTick, EndTick: spawn.EndTick, Status: spawn.Status, HandedOff: spawn.handedOff})
-	}
+	}, spawnHandedOff)
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result
 }
 
 func (runtime *Runtime) reapUnhandedEntitySpawns() error {
-	ids := make([]SpawnID, 0)
 	host, hostOK := runtime.host.(OwnedEntityRuntimeHost)
-	for id, spawn := range runtime.spawns {
-		if spawn.Scope != SpawnScopeEntity || spawn.Status != SpawnRunning || spawn.handedOff {
-			continue
-		}
-		if !hostOK {
-			return ErrHostContractViolation
-		}
-		if _, alive := host.OwnedEntity(spawn.LifecycleEntity); !alive {
+	entitySpawns := runtime.spawns.sortedIDs(func(spawn *SpawnInstance) bool { return spawn.Scope == SpawnScopeEntity }, spawnCasting)
+	if len(entitySpawns) != 0 && !hostOK {
+		return ErrHostContractViolation
+	}
+	ids := make([]SpawnID, 0)
+	for _, id := range entitySpawns {
+		if _, alive := host.OwnedEntity(runtime.spawns.get(id).LifecycleEntity); !alive {
 			ids = append(ids, id)
 		}
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	var firstErr error
 	for _, id := range ids {
-		spawn := runtime.spawns[id]
+		spawn := runtime.spawns.get(id)
 		cast := runtime.casts[spawn.CastID]
 		if err := runtime.requestSpawnStop(cast, spawn, StopCauseCancel, "cancel"); err != nil && firstErr == nil {
 			firstErr = err
@@ -299,14 +291,9 @@ func (runtime *Runtime) advanceOwnedSpawns() error {
 	if err := runtime.reapInvalidOwnedSpawns(); err != nil {
 		return err
 	}
-	ids := make([]SpawnID, 0, len(runtime.ownedSpawns))
-	for id := range runtime.ownedSpawns {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	for _, id := range ids {
-		spawn := runtime.ownedSpawns[id]
-		if spawn == nil || spawn.Status != SpawnRunning || spawn.NextTick > runtime.currentTick {
+	for _, id := range runtime.spawns.sortedIDs(nil, spawnHandedOff) {
+		spawn := runtime.spawns.get(id, spawnHandedOff)
+		if spawn == nil || spawn.NextTick > runtime.currentTick {
 			continue
 		}
 		stepCast := runtime.detachedSpawnCast(spawn, evalSpawnStep)
@@ -353,7 +340,7 @@ func (runtime *Runtime) advanceOwnedSpawns() error {
 
 func (runtime *Runtime) reapInvalidOwnedSpawns() error {
 	host, ok := runtime.host.(OwnedEntityRuntimeHost)
-	if !ok && len(runtime.ownedSpawns) != 0 {
+	if !ok && runtime.spawns.count(spawnHandedOff) != 0 {
 		return ErrHostContractViolation
 	}
 	type reapedSpawn struct {
@@ -362,7 +349,8 @@ func (runtime *Runtime) reapInvalidOwnedSpawns() error {
 		event string
 	}
 	items := make([]reapedSpawn, 0)
-	for id, spawn := range runtime.ownedSpawns {
+	for _, id := range runtime.spawns.sortedIDs(nil, spawnHandedOff) {
+		spawn := runtime.spawns.get(id)
 		moving := spawn.Program != nil && int(spawn.TemplateIndex) < len(spawn.Program.spawnTemplates) && spawn.Program.spawnTemplates[spawn.TemplateIndex].motion != nil
 		if spawn.Motion.Stage == MotionStageCompleted || spawn.EndTick <= runtime.currentTick {
 			if moving {
@@ -379,7 +367,6 @@ func (runtime *Runtime) reapInvalidOwnedSpawns() error {
 			items = append(items, reapedSpawn{id: id, cause: StopCauseCancel, event: "cancel"})
 		}
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].id < items[j].id })
 	var firstErr error
 	for _, item := range items {
 		if err := runtime.terminateOwnedSpawn(item.id, item.cause, item.event); err != nil && firstErr == nil {
@@ -419,10 +406,12 @@ func (runtime *Runtime) reapOwnedSpawns() error {
 		event string
 	}
 	expired := make([]expiredSpawn, 0)
-	for id, spawn := range runtime.ownedSpawns {
-		if !hostOK {
-			return ErrHostContractViolation
-		}
+	handedOff := runtime.spawns.sortedIDs(nil, spawnHandedOff)
+	if len(handedOff) != 0 && !hostOK {
+		return ErrHostContractViolation
+	}
+	for _, id := range handedOff {
+		spawn := runtime.spawns.get(id)
 		_, alive := host.OwnedEntity(spawn.LifecycleEntity)
 		if spawn.Motion.Stage == MotionStageCompleted || spawn.EndTick <= runtime.currentTick {
 			expired = append(expired, expiredSpawn{id: id, cause: StopCauseEnd, event: "end"})
@@ -430,7 +419,6 @@ func (runtime *Runtime) reapOwnedSpawns() error {
 			expired = append(expired, expiredSpawn{id: id, cause: StopCauseCancel, event: "cancel"})
 		}
 	}
-	sort.Slice(expired, func(i, j int) bool { return expired[i].id < expired[j].id })
 	var firstErr error
 	for _, item := range expired {
 		if err := runtime.terminateOwnedSpawn(item.id, item.cause, item.event); err != nil && firstErr == nil {
@@ -491,7 +479,7 @@ func (runtime *Runtime) runOwnedSpawnCallback(spawn *SpawnInstance, event string
 // terminateOwnedSpawn 请求停止一个移交后的衍生物（tick 驱动：到期、失效、步进失败、area 回调 finish）。
 // 宿主拒绝时 requestSpawnStop 把它转入待停止、摘出 owned 表，下一次 Advance 不会再卡在它上面（RR-20261006-31）。
 func (runtime *Runtime) terminateOwnedSpawn(id SpawnID, cause StopCause, callbackEvent string) error {
-	spawn := runtime.ownedSpawns[id]
+	spawn := runtime.spawns.get(id, spawnHandedOff)
 	if spawn == nil {
 		return nil
 	}
@@ -507,16 +495,16 @@ func (runtime *Runtime) RemoveProgram(programID string) error {
 	defer runtime.mutex.Unlock()
 	runtime.beginStateMutationLocked()
 	defer runtime.commitStateMutationsLocked()
-	ids := make([]SpawnID, 0)
-	for id, spawn := range runtime.spawns {
-		if spawn.Program != nil && spawn.Program.id == programID {
-			ids = append(ids, id)
-		}
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	// 已停止分区的记录，停止请求本来就是空操作，只看仍在宿主侧运行的分区。
+	ids := runtime.spawns.sortedIDs(func(spawn *SpawnInstance) bool {
+		return spawn.Program != nil && spawn.Program.id == programID
+	}, spawnLivePartitions...)
 	var firstErr error
 	for _, id := range ids {
-		spawn := runtime.spawns[id]
+		spawn := runtime.spawns.get(id)
+		if spawn == nil {
+			continue
+		}
 		cast := runtime.casts[spawn.CastID]
 		callbackEvent := ""
 		if spawn.handedOff {
@@ -544,17 +532,14 @@ func (runtime *Runtime) Shutdown() error {
 	defer runtime.mutex.Unlock()
 	runtime.beginStateMutationLocked()
 	defer runtime.commitStateMutationsLocked()
-	ids := make([]SpawnID, 0, len(runtime.spawns))
-	for id, spawn := range runtime.spawns {
-		// 待停止的衍生物（含重试已到上限的）在这里再请求一次；宿主 StopSpawn 幂等。
-		if spawn.liveOnHost() {
-			ids = append(ids, id)
-		}
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	// 待停止的衍生物（含重试已到上限的）在这里再请求一次；宿主 StopSpawn 幂等。
+	ids := runtime.spawns.sortedIDs(nil, spawnLivePartitions...)
 	var firstErr error
 	for _, id := range ids {
-		spawn := runtime.spawns[id]
+		spawn := runtime.spawns.get(id)
+		if spawn == nil {
+			continue
+		}
 		callbackEvent := ""
 		if spawn.handedOff {
 			callbackEvent = "cancel"

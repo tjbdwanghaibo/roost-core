@@ -213,8 +213,7 @@ type Runtime struct {
 	nextTaskSequence        uint64
 	frames                  map[FrameID][]RuntimeValue
 	nextFrameID             FrameID
-	spawns                  map[SpawnID]*SpawnInstance
-	ownedSpawns             map[SpawnID]*SpawnInstance
+	spawns                  spawnTable // 按分区存放衍生物记录，分区由记录字段决定（spawn_table.go）
 	nextSpawnID             SpawnID
 	cooldowns               map[cooldownKey]Tick
 	skillStates             map[skillStateKey]*skillState
@@ -346,7 +345,7 @@ func newRuntimeCore(host Host, options RuntimeOptions) *Runtime {
 	runtime := &Runtime{
 		host: host, options: options,
 		casts: make(map[CastID]*castInstance), scheduler: newScheduler(),
-		frames: make(map[FrameID][]RuntimeValue), spawns: make(map[SpawnID]*SpawnInstance), ownedSpawns: make(map[SpawnID]*SpawnInstance),
+		frames: make(map[FrameID][]RuntimeValue), spawns: newSpawnTable(),
 		cooldowns:   make(map[cooldownKey]Tick),
 		skillStates: make(map[skillStateKey]*skillState), activePolicies: make(map[skillStateKey]CastID),
 		procLedger: make(map[procLedgerKey]struct{}), rootEventCounts: make(map[EventID]int),

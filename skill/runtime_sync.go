@@ -297,14 +297,9 @@ func (runtime *Runtime) abilitiesSnapshotLocked() []AbilityStateSnapshot {
 }
 
 func (runtime *Runtime) spawnsSnapshotLocked() []SpawnStateSnapshot {
-	result := make([]SpawnStateSnapshot, 0, len(runtime.spawns))
-	spawnIDs := make([]int, 0, len(runtime.spawns))
-	for id := range runtime.spawns {
-		spawnIDs = append(spawnIDs, int(id))
-	}
-	sort.Ints(spawnIDs)
-	for _, rawID := range spawnIDs {
-		spawn := runtime.spawns[SpawnID(rawID)]
+	result := make([]SpawnStateSnapshot, 0, runtime.spawns.count())
+	for _, spawnID := range runtime.spawns.sortedIDs(nil) {
+		spawn := runtime.spawns.get(spawnID)
 		programID, digest := "", ""
 		if spawn.Program != nil {
 			programID, digest = spawn.Program.id, spawn.Program.identity.gameplayDigest

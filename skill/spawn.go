@@ -222,7 +222,7 @@ func (runtime *Runtime) stopSpawn(cast *castInstance, spawn *SpawnInstance, caus
 	if err != nil {
 		return errors.Join(detachErr, err)
 	}
-	spawn.Status = spawnStatusForStop(cause)
+	runtime.spawns.setState(spawn, spawnStatusForStop(cause), spawn.handedOff)
 	spawn.stopCause = cause
 	spawn.stopRetryAttempts, spawn.stopRetryTick, spawn.stopRetryExhausted = 0, 0, false
 	spawn.HostState.Active = false
@@ -308,19 +308,13 @@ func (runtime *Runtime) stopFinishingSpawns(cast *castInstance) error {
 }
 
 func (runtime *Runtime) stopScopedSpawns(cast *castInstance, includeCastScope, includeEntityScope bool) error {
-	spawnIDs := make([]SpawnID, 0, len(runtime.spawns))
-	for spawnID, spawn := range runtime.spawns {
-		if spawn.CastID != cast.id || spawn.Status != SpawnRunning {
-			continue
-		}
-		if spawn.Scope == SpawnScopePhase || includeCastScope && spawn.Scope == SpawnScopeCast || includeEntityScope && spawn.Scope == SpawnScopeEntity && !spawn.handedOff {
-			spawnIDs = append(spawnIDs, spawnID)
-		}
-	}
-	sort.Slice(spawnIDs, func(left, right int) bool { return spawnIDs[left] < spawnIDs[right] })
+	// 只看施放中分区：已移交的只有 entity 衍生物（checkpoint 恢复也核对），施法收尾不再停它们。
+	spawnIDs := runtime.spawns.sortedIDs(func(spawn *SpawnInstance) bool {
+		return spawn.CastID == cast.id && (spawn.Scope == SpawnScopePhase || includeCastScope && spawn.Scope == SpawnScopeCast || includeEntityScope && spawn.Scope == SpawnScopeEntity)
+	}, spawnCasting)
 	var firstErr error
 	for _, spawnID := range spawnIDs {
-		spawn := runtime.spawns[spawnID]
+		spawn := runtime.spawns.get(spawnID)
 		callbackEvent := ""
 		if spawn.Scope == SpawnScopeEntity {
 			callbackEvent = "cancel"

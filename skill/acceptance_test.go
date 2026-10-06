@@ -68,10 +68,10 @@ func assertRuntimeCheckpointRoundTrip(t *testing.T, runtime *Runtime, host Host,
 	checkpoint, err := runtime.Checkpoint()
 	if err != nil {
 		runtime.mutex.Lock()
-		spawns, owned := len(runtime.spawns), len(runtime.ownedSpawns)
-		spawnPrograms := make(map[SpawnID]bool, len(runtime.spawns))
-		for id, spawn := range runtime.spawns {
-			spawnPrograms[id] = spawn != nil && spawn.Program != nil
+		spawns, owned := runtime.spawns.count(), runtime.spawns.count(spawnHandedOff)
+		spawnPrograms := make(map[SpawnID]bool, runtime.spawns.count())
+		for _, spawn := range allSpawnRecords(runtime) {
+			spawnPrograms[spawn.ID] = spawn.Program != nil
 		}
 		tasks := append(taskHeap(nil), runtime.scheduler.tasks...)
 		baseline, _ := json.Marshal(runtime.stateMutationBaseline)

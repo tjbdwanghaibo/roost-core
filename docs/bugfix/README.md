@@ -6,6 +6,13 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 skill 衍生物分区存放（维护者第十三轮“skill 衍生物两张表”，`skpart`），未发版。** 衍生物记录按字段（`Status`、`handedOff`）分进施放中 / 已移交 / 待停止 / 已停止四个分区（`skill/spawn_table.go`），只有 `spawnTable.setState` 改分区字段并挪分区；删掉 `ownedSpawns` 与 checkpoint 的 `owned_spawns` 及恢复比对，checkpoint 版本 5 → 6。go/types 源码守卫 + 操作序列不变量守卫，变异四种都红。[方案](../feature/REFACTOR-2026-10-07-skill-spawn-partition.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-34](RR-20261006-34.md) | `Shutdown` / `RemoveProgram` 的循环跳过同一轮里被待停止上限删掉的记录，不再 panic | 已修复、声明场景验证，未发版 |
+| [RR-20261006-33](RR-20261006-33.md) | 源文档 digest 改为逐字段的规范表示：接口值写具体类型名，`json:"-"` 与未导出字段一并写出；全部定义的源文档 digest 改变，gameplay / presentation digest 不变 | 已修复、声明场景验证，未发版 |
+
 **10-07 停止入口统一（RR-20261006-21 后续二，`skstop`），未发版。** 唯一的停止函数 `requestSpawnStop`（`skill/runtime_spawn_stop.go`）：停止中 → 已停止 / 待停止 → 回收，全部入口只请求停止，宿主拒绝后的处理只在这里；删掉 `deferUnstoppedSpawnsLocked`、`deferRefusedStopLocked`、`stopOwnedSpawn` 与各入口的失败分支。`Shutdown` / `RemoveProgram` 停不下的衍生物留成 `stop_pending`、进 checkpoint，由 Runtime 在 tick 上重试（不同步重试）。登记表 + 源码守卫：新增入口不登记即红。[记录](RR-20261006-21.md#后续二停止入口统一维护者-2026-10-07) / [方案](../feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md)。
 
 | 编号 | 修复 | 状态 |

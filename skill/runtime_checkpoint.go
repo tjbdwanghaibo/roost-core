@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"reflect"
 	"sort"
 )
 
@@ -22,8 +21,10 @@ import (
 // docs/feature/REFACTOR-2026-10-06-skill-process-to-spawn.md）；维护者 2026-10-06 第十三轮决定，线上未部署，
 // 不兼容版本 3。5：生成宿主单位的效果改名为召唤（summon），cast 值里召唤效果结果的类型 spawn_result →
 // summon_result（字段名不变，变的是值；对照见 docs/feature/REFACTOR-2026-10-07-skill-summon-rename.md）；
-// 维护者第十三轮决定，线上未部署，不兼容版本 4。
-const RuntimeCheckpointVersion uint32 = 5
+// 维护者第十三轮决定，线上未部署，不兼容版本 4。6：衍生物记录只存一份（spawns），删掉重复存储“已移交、仍在运行”
+// 那部分的 owned_spawns；恢复时按记录字段（status、handed_off）重新分区（docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md）；
+// 维护者第十三轮“skill 衍生物两张表”，线上未部署，不兼容版本 5。
+const RuntimeCheckpointVersion uint32 = 6
 const RuntimeCheckpointMaxBytes = 64 << 20
 const RuntimeCheckpointMaxRecords = 1_000_000
 
@@ -111,7 +112,6 @@ type runtimeCheckpointPayload struct {
 	StateMutationReady    bool                      `json:"state_mutation_ready"`
 	Casts                 []checkpointCast          `json:"casts"`
 	Spawns                []checkpointSpawn         `json:"spawns"`
-	OwnedSpawns           []checkpointSpawn         `json:"owned_spawns"`
 	Frames                []checkpointFrame         `json:"frames"`
 	Tasks                 []checkpointTask          `json:"tasks"`
 	Cooldowns             []checkpointCooldown      `json:"cooldowns"`
@@ -600,11 +600,7 @@ func (runtime *Runtime) checkpointPayloadLocked() (runtimeCheckpointPayload, err
 		}
 		return nil
 	}
-	p.Spawns, err = checkpointSpawnMap(runtime.spawns, resolveSpawnProgram)
-	if err != nil {
-		return p, err
-	}
-	p.OwnedSpawns, err = checkpointSpawnMap(runtime.ownedSpawns, resolveSpawnProgram)
+	p.Spawns, err = checkpointSpawnTable(&runtime.spawns, resolveSpawnProgram)
 	if err != nil {
 		return p, err
 	}
@@ -699,15 +695,12 @@ func skillStateKeyLess(leftCaster EntityID, leftName string, rightCaster EntityI
 	return leftName < rightName
 }
 
-func checkpointSpawnMap(values map[SpawnID]*SpawnInstance, programFor func(*SpawnInstance) *Program) ([]checkpointSpawn, error) {
-	ids := make([]int, 0, len(values))
-	for id := range values {
-		ids = append(ids, int(id))
-	}
-	sort.Ints(ids)
+// checkpointSpawnTable 按 ID 升序写出全部分区的记录，每条一份；分区不进 checkpoint，恢复时由字段决定。
+func checkpointSpawnTable(table *spawnTable, programFor func(*SpawnInstance) *Program) ([]checkpointSpawn, error) {
+	ids := table.sortedIDs(nil)
 	result := make([]checkpointSpawn, 0, len(ids))
-	for _, raw := range ids {
-		spawn := values[SpawnID(raw)]
+	for _, id := range ids {
+		spawn := table.get(id)
 		program := programFor(spawn)
 		if spawn == nil || program == nil {
 			return nil, ErrCheckpointCorrupt
@@ -903,32 +896,8 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 		}
 	}
 	runtime.completedCastOrder = restoreCompletedCastOrder(p.CompletedCastOrder, completed, p.Casts)
-	var err error
-	runtime.spawns, err = restoreCheckpointSpawns(p.Spawns, resolver, p.Authority, p.SemanticsRevision, p.NextSpawnID)
-	if err != nil {
+	if err := restoreCheckpointSpawns(&runtime.spawns, p.Spawns, resolver, p.Authority, p.SemanticsRevision, p.NextSpawnID); err != nil {
 		return err
-	}
-	runtime.ownedSpawns, err = restoreCheckpointSpawns(p.OwnedSpawns, resolver, p.Authority, p.SemanticsRevision, p.NextSpawnID)
-	if err != nil {
-		return err
-	}
-	ownedWire := make(map[SpawnID]checkpointSpawn, len(p.OwnedSpawns))
-	for _, item := range p.OwnedSpawns {
-		ownedWire[item.ID] = item
-	}
-	for _, item := range p.Spawns {
-		owned, shared := runtime.ownedSpawns[item.ID]
-		if !shared {
-			continue
-		}
-		if owned == nil || !reflect.DeepEqual(item, ownedWire[item.ID]) {
-			return ErrCheckpointCorrupt
-		}
-		runtime.ownedSpawns[item.ID] = runtime.spawns[item.ID]
-		delete(ownedWire, item.ID)
-	}
-	if len(ownedWire) != 0 {
-		return ErrCheckpointCorrupt
 	}
 	for _, frame := range p.Frames {
 		if frame.ID == 0 || frame.ID > p.NextFrameID {
@@ -1086,7 +1055,7 @@ func runtimeSnapshotsEqual(left, right RuntimeStateSnapshot) bool {
 }
 
 func checkpointRecordCount(payload runtimeCheckpointPayload) int {
-	counts := []int{len(payload.Casts), len(payload.Spawns), len(payload.OwnedSpawns), len(payload.Frames), len(payload.Tasks), len(payload.Cooldowns), len(payload.SkillStates), len(payload.ActivePolicies), len(payload.ProcLedger), len(payload.RootEventCounts), len(payload.Abilities), len(payload.AbilityByProgram)}
+	counts := []int{len(payload.Casts), len(payload.Spawns), len(payload.Frames), len(payload.Tasks), len(payload.Cooldowns), len(payload.SkillStates), len(payload.ActivePolicies), len(payload.ProcLedger), len(payload.RootEventCounts), len(payload.Abilities), len(payload.AbilityByProgram)}
 	maximum := int(^uint(0) >> 1)
 	total := 0
 	for _, count := range counts {
@@ -1102,35 +1071,36 @@ func validCheckpointRuntimeLimits(payload runtimeCheckpointPayload) bool {
 	return payload.SemanticsRevision != "" && payload.MaxPassivePerTick > 0 && payload.MaxOwned > 0 && payload.MaxOwnedPerOwner > 0 && payload.MaxOwnedPerProgram > 0 && payload.MaxOwnedPerTemplate > 0 && payload.MaxActiveCasts > 0 && payload.MaxAbilities > 0 && payload.CompletedCastLimit > 0 && payload.RootEventLimit > 0 && payload.MaxProcLedgerEntries > 0 && payload.SpawnStopRetryBackoff > 0 && payload.SpawnStopRetryLimit > 0 && payload.MaxStopPendingSpawns > 0
 }
 
-func restoreCheckpointSpawns(values []checkpointSpawn, resolver ProgramResolver, authority AuthorityIdentity, semantics string, nextID SpawnID) (map[SpawnID]*SpawnInstance, error) {
-	result := make(map[SpawnID]*SpawnInstance, len(values))
+// restoreCheckpointSpawns 恢复衍生物记录，按字段放进分区（spawnTable.add）。分区由 status 与 handed_off 决定，
+// 所以两者要合法：status 是已知值，只有 entity 衍生物会移交（handoffEntitySpawns）。
+func restoreCheckpointSpawns(table *spawnTable, values []checkpointSpawn, resolver ProgramResolver, authority AuthorityIdentity, semantics string, nextID SpawnID) error {
 	for _, item := range values {
-		if item.ID == 0 || item.ID > nextID || result[item.ID] != nil {
-			return nil, ErrCheckpointCorrupt
+		if item.ID == 0 || item.ID > nextID || !validSpawnStatus(item.Status) || item.HandedOff && item.Scope != SpawnScopeEntity {
+			return ErrCheckpointCorrupt
 		}
 		program, err := resolveCheckpointProgram(item.Program, resolver, authority, semantics)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		inputs, err := restoreCheckpointValues(item.Inputs)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		memory, err := restoreCheckpointValues(item.Memory)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		locals, err := restoreCheckpointValues(item.Locals)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		snapshots, err := restoreCheckpointValueMap(item.Snapshots)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		random, err := restoreCheckpointRandom(item.RandomInvocations)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		numeric := SpawnNumericState{Initialized: item.Numeric.Initialized}
 		for _, state := range item.Numeric.Properties {
@@ -1148,16 +1118,18 @@ func restoreCheckpointSpawns(values []checkpointSpawn, resolver ProgramResolver,
 		spawn := &SpawnInstance{ID: item.ID, CastID: item.CastID, TemplateIndex: item.TemplateIndex, UnitTemplate: item.UnitTemplate, Status: item.Status, StartTick: item.StartTick, NextTick: item.NextTick, EndTick: item.EndTick, Scope: item.Scope, HostState: item.HostState, Motion: item.Motion, Numeric: numeric, Owner: item.Owner, LifecycleEntity: item.LifecycleEntity, Program: directProgram, inputs: inputs, memory: memory, locals: locals, snapshots: snapshots, randomKey: item.RandomKey, randomInvocations: random, visibleRevision: item.VisibleRevision, eventContext: restoreCheckpointEvent(item.EventContext), AreaMembers: make(map[EntityID]AreaMemberState), phaseToken: item.PhaseToken, stopCause: item.StopCause, handedOff: item.HandedOff, areaCallbackFinishedCast: item.AreaCallbackFinishedCast, stopRetryAttempts: item.StopRetryAttempts, stopRetryTick: item.StopRetryTick, stopRetryExhausted: item.StopRetryExhausted}
 		for _, member := range item.AreaMembers {
 			if member.Entity == 0 {
-				return nil, ErrCheckpointCorrupt
+				return ErrCheckpointCorrupt
 			}
 			if _, ok := spawn.AreaMembers[member.Entity]; ok {
-				return nil, ErrCheckpointCorrupt
+				return ErrCheckpointCorrupt
 			}
 			spawn.AreaMembers[member.Entity] = member.State
 		}
-		result[item.ID] = spawn
+		if !table.add(spawn) {
+			return ErrCheckpointCorrupt
+		}
 	}
-	return result, nil
+	return nil
 }
 
 func (runtime *Runtime) restoreCheckpointTask(w checkpointTask, resolver ProgramResolver, authority AuthorityIdentity, semantics string) (scheduledTask, error) {
@@ -1226,26 +1198,16 @@ func (runtime *Runtime) completedCastOrderWithinLimitLocked() bool {
 	return true
 }
 
-// stopPendingRecordsValidLocked 核对待停止重试状态：只有 stop_pending 的衍生物带重试字段，次数不超过上限，
-// 到上限才算 exhausted，条目数不超过 MaxStopPendingSpawns，且记录不在 owned 表里（进入待停止时摘掉）。
+// stopPendingRecordsValidLocked 核对待停止重试状态：只有待停止分区的衍生物带重试字段，次数不超过上限，
+// 到上限才算 exhausted，条目数不超过 MaxStopPendingSpawns。待停止的记录不会被当成已移交推进：分区由 status 决定。
 func (runtime *Runtime) stopPendingRecordsValidLocked() bool {
-	pending := 0
-	for _, spawn := range runtime.spawns {
-		if spawn.Status != SpawnStopPending {
-			if spawn.stopRetryAttempts != 0 || spawn.stopRetryTick != 0 || spawn.stopRetryExhausted {
-				return false
-			}
-			continue
-		}
-		pending++
-		if runtime.ownedSpawns[spawn.ID] != nil || spawn.stopRetryAttempts < 0 || spawn.stopRetryAttempts > runtime.options.SpawnStopRetryLimit || spawn.stopRetryExhausted != (spawn.stopRetryAttempts == runtime.options.SpawnStopRetryLimit) {
-			return false
-		}
-	}
-	for _, spawn := range runtime.ownedSpawns {
+	valid := true
+	runtime.spawns.each(func(spawn *SpawnInstance) {
 		if spawn.Status == SpawnStopPending {
-			return false
+			valid = valid && spawn.stopRetryAttempts >= 0 && spawn.stopRetryAttempts <= runtime.options.SpawnStopRetryLimit && spawn.stopRetryExhausted == (spawn.stopRetryAttempts == runtime.options.SpawnStopRetryLimit)
+		} else {
+			valid = valid && spawn.stopRetryAttempts == 0 && spawn.stopRetryTick == 0 && !spawn.stopRetryExhausted
 		}
-	}
-	return pending <= runtime.options.MaxStopPendingSpawns
+	})
+	return valid && runtime.spawns.count(spawnStopPending) <= runtime.options.MaxStopPendingSpawns
 }

@@ -6,6 +6,7 @@
 
 ### Changed
 
+- **skill：衍生物记录按字段分区存放，删掉重复的 owned 表；checkpoint 只存一份记录，版本 5 → 6**（维护者第十三轮“skill 衍生物两张表”，2026-10-07；线上未部署）：之前 `Runtime` 用 `spawns` 存全部衍生物、`ownedSpawns` 另存“已移交、仍在运行”的那部分（同一批记录的重复索引），checkpoint 也写两份、恢复时逐条比对。现在“移交给谁”只由记录字段（`Owner`、`handedOff`）表达，记录按 `Status` / `handedOff` 分进施放中、已移交、待停止、已停止四个分区，每条恰好在一个分区；只有一个函数改这两个字段并挪分区，go/types 源码守卫禁止别处写分区 map 或另起索引。`OwnedSpawns` 与移交后的逐 tick 推进只扫已移交分区，重试只扫待停止分区。checkpoint 删掉 `owned_spawns`，恢复按字段重新分区，并拒绝未知 `status` 与非 entity 衍生物上的 `handed_off`；版本 5 及更早得到 `ErrCheckpointUnsupported`（排空后再升级）。行为不变。[方案](docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md)
 - **skill：破坏性改名，生成宿主单位的那一套改叫召唤物（Summon），衍生物的 `kind: "summon"` 改为 `kind: "minion"`；不保留旧名、不做兼容别名**（维护者第十三轮“skill 生成宿主实体改名”，2026-10-07；线上未部署）：上一次 process → Spawn 改名后，“用单位模板在场景里生成真实单位”的效果与“技能逐 tick 驱动的衍生物”都叫 spawn。现在前者叫召唤物（Summon），后者仍是衍生物（Spawn）；衍生物里只跟着召唤物活的那种 kind 改叫 minion。行为不变；checkpoint 版本 4 → 5（cast 值里召唤效果结果的类型 `spawn_result` 改为 `summon_result`），默认编译环境与全部定义的 gameplay / presentation digest 改变，skillcompose 契约要重签。
 
   | 旧名 | 新名 |
@@ -70,6 +71,8 @@
 
 ### Fixed
 
+- **skill：源文档 digest 改为逐字段的规范表示，全部定义的 `SourceDocumentDigest` 会变化**（RR-20261006-33）：之前是 `json.Marshal(Definition)` 的摘要，接口值（效果、策略、输入、形状、过滤器……）不带具体类型、`json:"-"` 字段（消耗数量、cast window 的 windup / recovery 表达式）被跳过，只把 `set_memory` 改成 `add_memory`、只改消耗数量，源文档 digest 都不变。现在接口值先写具体类型名，结构体写全部字段，不看 json tag。**升级后全部定义的 `InspectIdentity(...).SourceDocumentDigest` 改变**（例 `owned_trap.json` `755f1b5c…` → `ae66782e…`）；gameplay / presentation digest 不经过它、不变，checkpoint、Program 查找、skillsync / skillcompose 契约不受影响。保存了旧值做比对的调用方第一次比对会认为全部源文档变了。[记录](docs/bugfix/RR-20261006-33.md)
+- **skill：`Shutdown` / `RemoveProgram` 在宿主拒绝停止、待停止条目到达上限时不再空指针 panic**（RR-20261006-34，`3fad5b6e` 停止入口统一引入，未发版）：前一个衍生物被拒、转入待停止时，`MaxStopPendingSpawns` 删掉的可能正是同一轮列表里后面的记录，循环取回 nil 后直接读字段。现在跳过被删的记录（Runtime 已告警、不再负责它），入口照常返回宿主的错误。[记录](docs/bugfix/RR-20261006-34.md)
 - **loadtest 的分位数不再取桶上界；阈值失败点名哪条阈值、实际值多少**（RR-20261006-27，真实进程演练 ⑤）：`metrics` 直方图记最小 / 最大观测值，`HistogramQuantile` 的插值区间收在观测范围内——以前排名落在桶内最后一个样本时估计就是桶上界（最多两倍），10 个机器人的 p95 = 最慢机器人所在桶的上界，两个 game 同机时整次运行 9.6s、p95 却报 16.384s，超过缺省 `-max-p95 16`、全部成功仍退出码 1；落进溢出的排名以前返回 65.536s，现在插到最大观测值。`ThresholdResult` 多 `samples`，阈值失败时 `RunSnapshot.Error` 是 `threshold violated: p95 = 17.2s > max 16s (10 samples)`，生成的 loadtest 退出行带上它。[记录](docs/bugfix/RR-20261006-27.md)
 - **生成工程可以整体切到 Redis Cluster**（RR-20261006-28，真实进程演练 ⑥）：`env: production` 的 Redis 要求改为 `redis.addr` 或 `redis.cluster_addrs`（以前只配 Cluster 的生产配置启动失败）；`cluster_addrs` 的解析收到 `app.RedisClusterAddrs`，`kit/mods.RedisClusterAddrs` 转调它。生成的 `cmd/accountctl` 加 `-redis-cluster`（以前只有单机客户端，对着 Cluster 只有槽恰好在所连节点上的键写得进，其余 `MOVED`），`deploy/dev/run.sh` 读到 `cluster_addrs` 时用它。切换清单（hash tag、`lock_key`、game 配置里的同名前缀）见 USER_GUIDE“生成工程切到 Redis Cluster”。[记录](docs/bugfix/RR-20261006-28.md)
 - **game-demo：活动窗口开头几秒的通关也计入活动**（RR-20261006-29）：窗口由 game 的循环每 5s 开一次，边界后最多 5s 里通关得到 `activity: not found`、贡献丢掉、`finish_dungeon` 回不出窗口 id，机器人判失败。`Contribute` 现在遇到窗口不存在时用同一个幂等的 `OpenActivity` 开窗再记（Activity 开关关着时不开）。[记录](docs/bugfix/RR-20261006-29.md)

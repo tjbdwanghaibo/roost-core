@@ -21,14 +21,12 @@ func (runtime *Runtime) RetentionStats() RuntimeRetentionStats {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
 	stats := RuntimeRetentionStats{Casts: len(runtime.casts), CompletedCasts: len(runtime.completedCastOrder), RootEvents: len(runtime.rootEventCounts), ProcLedgerEntries: len(runtime.procLedger), RuntimeEvents: len(runtime.runtimeEvents), RuntimeEventsDropped: runtime.runtimeEventDropped}
-	for _, spawn := range runtime.spawns {
-		if spawn.Status == SpawnStopPending {
-			stats.StopPendingSpawns++
-			if spawn.stopRetryExhausted {
-				stats.StopRetryExhaustedSpawns++
-			}
+	stats.StopPendingSpawns = runtime.spawns.count(spawnStopPending)
+	runtime.spawns.each(func(spawn *SpawnInstance) {
+		if spawn.stopRetryExhausted {
+			stats.StopRetryExhaustedSpawns++
 		}
-	}
+	}, spawnStopPending)
 	return stats
 }
 
@@ -65,29 +63,22 @@ func (runtime *Runtime) forgetCompletedCastLocked(id CastID) {
 // castHasRunningSpawnLocked 报告 cast 名下是否还有在宿主侧运行的衍生物（含已移交的，以及停止失败、等 Runtime
 // 重试停止的 stop_pending）。已停的衍生物记录不算：它们只是历史，随 cast 一起回收（forgetCastSpawnsLocked）。
 func (runtime *Runtime) castHasRunningSpawnLocked(id CastID) bool {
-	for _, records := range []map[SpawnID]*SpawnInstance{runtime.spawns, runtime.ownedSpawns} {
-		for _, spawn := range records {
-			if spawn != nil && spawn.CastID == id && spawn.liveOnHost() {
-				return true
-			}
-		}
-	}
-	return false
+	running := false
+	runtime.spawns.each(func(spawn *SpawnInstance) {
+		running = running || spawn.CastID == id
+	}, spawnLivePartitions...)
+	return running
 }
 
 // forgetCastSpawnsLocked 在 cast 被删除之前删掉它名下的衍生物记录（调用方已确认没有运行中的衍生物）。
-// 衍生物停止后记录一直留在 runtime.spawns 里；之前没有任何路径删它们：
+// 衍生物停止后记录一直留在已停止分区里；之前没有任何路径删它们：
 //   - 未提交的失败启动删 cast、还 ID 后，旧记录挂到下一个 cast 名下，entity 衍生物停止时又清掉了 Program，
 //     Checkpoint 找不到它的程序直接报 corrupt（RR-20261006-21）；
 //   - castEvictableLocked 把已停的记录也当作引用，起过衍生物的 cast 永不回收：live Runtime 的 cast 与衍生物记录无界增长，
 //     完成队列超过 CompletedCastLimit 后 checkpoint 恢复判 corrupt（RR-20261006-23）。
 func (runtime *Runtime) forgetCastSpawnsLocked(id CastID) {
-	for _, records := range []map[SpawnID]*SpawnInstance{runtime.spawns, runtime.ownedSpawns} {
-		for spawnID, spawn := range records {
-			if spawn != nil && spawn.CastID == id {
-				delete(records, spawnID)
-			}
-		}
+	for _, spawnID := range runtime.spawns.sortedIDs(func(spawn *SpawnInstance) bool { return spawn.CastID == id }) {
+		runtime.spawns.drop(spawnID)
 	}
 }
 
@@ -163,15 +154,12 @@ func (runtime *Runtime) rootEventReferencedLocked(root EventID) bool {
 			return true
 		}
 	}
-	for _, spawn := range runtime.spawns {
-		if spawn != nil && spawn.eventContext.RootEventID == root {
-			return true
-		}
-	}
-	for _, spawn := range runtime.ownedSpawns {
-		if spawn != nil && spawn.eventContext.RootEventID == root {
-			return true
-		}
+	referenced := false
+	runtime.spawns.each(func(spawn *SpawnInstance) {
+		referenced = referenced || spawn.eventContext.RootEventID == root
+	})
+	if referenced {
+		return true
 	}
 	for _, task := range runtime.scheduler.tasks {
 		if runtime.scheduledTaskRootLocked(task.Payload) == root {

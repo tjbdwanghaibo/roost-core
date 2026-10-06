@@ -61,7 +61,7 @@ func (runtime *Runtime) executeOwnedSummon(cast *castInstance, operation summonO
 		if err := runtime.startEntitySpawn(cast, operation.spawnTemplate, operation.template, entity, operation.durationTicks, position); err != nil {
 			cleanupErrors := []error{err}
 			for _, spawnID := range started {
-				cleanupErrors = append(cleanupErrors, runtime.requestSpawnStop(cast, runtime.spawns[spawnID], StopCauseFailure, ""))
+				cleanupErrors = append(cleanupErrors, runtime.requestSpawnStop(cast, runtime.spawns.get(spawnID), StopCauseFailure, ""))
 			}
 			cleanupErrors = append(cleanupErrors, ownedHost.RollbackOwnedSummon(payload.TransactionID))
 			return EffectResult{}, errors.Join(cleanupErrors...)
@@ -71,7 +71,7 @@ func (runtime *Runtime) executeOwnedSummon(cast *castInstance, operation summonO
 	if err := ownedHost.CommitOwnedSummon(payload.TransactionID); err != nil {
 		cleanupErrors := []error{err}
 		for _, spawnID := range started {
-			cleanupErrors = append(cleanupErrors, runtime.requestSpawnStop(cast, runtime.spawns[spawnID], StopCauseFailure, ""))
+			cleanupErrors = append(cleanupErrors, runtime.requestSpawnStop(cast, runtime.spawns.get(spawnID), StopCauseFailure, ""))
 		}
 		cleanupErrors = append(cleanupErrors, ownedHost.RollbackOwnedSummon(payload.TransactionID))
 		return EffectResult{}, errors.Join(cleanupErrors...)

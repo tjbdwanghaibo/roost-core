@@ -199,7 +199,7 @@ var spawnStopEntries = []spawnStopEntry{
 		wantErr: []error{errHostStopUnavailable}, callback: "owned_spawn_callback_cancel", wantCallbacks: 1,
 		trigger: func(t *testing.T) stopEntryRun {
 			runtime, host, program, castID, spawnID := waitingSummon(t, "handoff", "")
-			dismissLifecycle(t, host, program, runtime.spawns[spawnID])
+			dismissLifecycle(t, host, program, runtime.spawns.get(spawnID))
 			host.failStops = 1
 			runtime.mutex.Lock()
 			runtime.beginStateMutationLocked()
@@ -216,7 +216,7 @@ var spawnStopEntries = []spawnStopEntry{
 		wantErr: []error{errHostStopUnavailable}, callback: "owned_spawn_callback_cancel", wantCallbacks: 1,
 		trigger: func(t *testing.T) stopEntryRun {
 			runtime, host, program, _, spawnID := waitingSummon(t, "reap", "")
-			dismissLifecycle(t, host, program, runtime.spawns[spawnID])
+			dismissLifecycle(t, host, program, runtime.spawns.get(spawnID))
 			host.failStops = 1
 			err := runtime.Advance(1)
 			return stopEntryRun{runtime: runtime, host: host, spawnID: spawnID, err: err}
@@ -281,7 +281,7 @@ func TestEveryStopEntryDefersARefusedStopTheSameWay(t *testing.T) {
 					t.Errorf("entry returned %v, want it to report %v", run.err, want)
 				}
 			}
-			spawn := runtime.spawns[run.spawnID]
+			spawn := runtime.spawns.get(run.spawnID)
 			if spawn == nil {
 				t.Fatalf("spawn %d record gone after the refused stop", run.spawnID)
 			}
@@ -315,7 +315,7 @@ func TestEveryStopEntryDefersARefusedStopTheSameWay(t *testing.T) {
 			if want := []Tick{refused, refused + 4}; !equalTicks(host.stopTicks, want) {
 				t.Errorf("StopSpawn called at host ticks %v, want %v (the runtime retries after the backoff)", host.stopTicks, want)
 			}
-			if spawn := runtime.spawns[run.spawnID]; spawn != nil && spawn.liveOnHost() {
+			if spawn := runtime.spawns.get(run.spawnID); spawn != nil && spawn.liveOnHost() {
 				t.Errorf("spawn status at tick %d = %q, want stopped by the retry", runtime.currentTick, spawn.Status)
 			}
 			host.mutex.Lock()

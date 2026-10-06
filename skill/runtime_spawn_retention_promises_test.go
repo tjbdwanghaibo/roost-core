@@ -56,8 +56,8 @@ func TestCastsWhoseSpawnsEndedStayWithinTheCompletedCastLimit(t *testing.T) {
 	if stats := runtime.RetentionStats(); stats.Casts > options.CompletedCastLimit+1 {
 		t.Errorf("retained casts = %d (completed queue %d) after 8 casts whose minion spawns ended; CompletedCastLimit is %d plus the pinned one", stats.Casts, stats.CompletedCasts, options.CompletedCastLimit)
 	}
-	if len(runtime.spawns) > options.CompletedCastLimit+1 {
-		t.Errorf("retained spawn records = %d: records of evicted casts stay behind", len(runtime.spawns))
+	if runtime.spawns.count() > options.CompletedCastLimit+1 {
+		t.Errorf("retained spawn records = %d: records of evicted casts stay behind", runtime.spawns.count())
 	}
 	if _, found := runtime.InspectCast(pinned); !found {
 		t.Errorf("cast %d was evicted while its handed-off minion spawn still runs", pinned)

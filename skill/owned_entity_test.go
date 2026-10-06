@@ -514,13 +514,13 @@ func TestOwnedSpawnStopFailureRemainsTrackedForRetry(t *testing.T) {
 	if err := runtime.RemoveProgram(program.id); err == nil {
 		t.Fatal("expected stop failure")
 	}
-	if spawns := runtime.OwnedSpawns(1); len(spawns) != 0 || runtime.spawns[spawnID].Status != SpawnStopPending || !host.spawns[spawnID].active {
-		t.Fatalf("spawns=%#v record=%q host=%#v, want the record kept as stop_pending and the host spawn still running", spawns, runtime.spawns[spawnID].Status, host.spawns[spawnID])
+	if spawns := runtime.OwnedSpawns(1); len(spawns) != 0 || runtime.spawns.get(spawnID).Status != SpawnStopPending || !host.spawns[spawnID].active {
+		t.Fatalf("spawns=%#v record=%q host=%#v, want the record kept as stop_pending and the host spawn still running", spawns, runtime.spawns.get(spawnID).Status, host.spawns[spawnID])
 	}
 	if err := runtime.RemoveProgram(program.id); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.spawns[spawnID].liveOnHost() || host.spawns[spawnID].active {
+	if runtime.spawns.get(spawnID).liveOnHost() || host.spawns[spawnID].active {
 		t.Fatal("retry did not stop tracked spawn")
 	}
 	if callbacks := countRuntimeEventKind(runtime.RuntimeEvents(), "owned_spawn_callback_cancel"); callbacks != 1 {

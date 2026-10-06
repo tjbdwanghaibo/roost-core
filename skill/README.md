@@ -364,6 +364,8 @@ go test ./... -count=1
 
 ### 迁移与版本
 
+- **衍生物记录分区存放，checkpoint 版本 6（2026-10-07）**：Runtime 内部不再有重复的 owned 表，“移交给谁”只看记录字段；checkpoint 删掉 `owned_spawns`、只存一份 `spawns`，版本 5 及更早拒绝恢复（排空后再升级）。API 与行为不变。[方案](../docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md)
+- **源文档 digest 改为逐字段规范表示（2026-10-07，RR-20261006-33）**：`InspectIdentity(...).SourceDocumentDigest` 现在区分效果 / 策略 / 输入 / 形状 / 过滤器的类型，并包含消耗数量与 cast window 表达式；全部定义的源文档 digest 改变一次，gameplay / presentation digest 不变。[记录](../docs/bugfix/RR-20261006-33.md)
 - **生成宿主单位的效果改名为召唤物（Summon），衍生物 `kind: "summon"` 改为 `kind: "minion"`（2026-10-07，破坏性，不留旧名）**：效果 `"type":"spawn"` → `"type":"summon"`、`despawn` → `dismiss`，Host `PreviewOwnedSpawn` / `CommitOwnedSpawn` / `RollbackOwnedSpawn` → `PreviewOwnedSummon` / `CommitOwnedSummon` / `RollbackOwnedSummon`，`SpawnCommand` → `SummonCommand`，owned 选择 `spawn_tick` / `spawned_before` 等 → `summon_tick` / `summoned_before`，checkpoint 版本 5。衍生物（Spawn）那一套名字不变。对照表见 [docs/skill/README.md](../docs/skill/README.md#术语召唤物summon与衍生物spawn) 与[重构记录](../docs/feature/REFACTOR-2026-10-07-skill-summon-rename.md)。
 - **process → Spawn（衍生物）全量改名（2026-10-06，破坏性，不留旧名）**：飞行物、法术场、随从（minion，当时叫 summon）、光束、位移等施放后由技能逐 tick 驱动的东西统一叫 Spawn；DSL `"spawn"` / `modify_spawn` / `$spawn` / `spawn_start`，Host `StepSpawn` / `StopSpawn`，mutation `spawn_upsert` / `spawn_remove`，checkpoint 版本 4。对照表见 [docs/skill/README.md](../docs/skill/README.md#术语召唤物summon与衍生物spawn) 与[重构记录](../docs/feature/REFACTOR-2026-10-06-skill-process-to-spawn.md)。
 - **compiler-2 语义修订（v1.4 → v1.5）**：`concurrent`、`global_cooldown_ticks`、窗口表达式进入 gameplay digest，旧 checkpoint/回放记录/skillcompose 契约在新版本下会得到明确解析错误。迁移动作（全量重编译、排空旧 checkpoint、重签契约）见 [docs/skill-casting-and-combat.md](../docs/skill/skill-casting-and-combat.md) 的迁移说明。

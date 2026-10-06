@@ -310,14 +310,11 @@ func (runtime *Runtime) Advance(tick Tick) error {
 func (runtime *Runtime) nextOwnedSpawnTick() (Tick, bool) {
 	var due Tick
 	found := false
-	for _, spawn := range runtime.ownedSpawns {
-		if spawn.Status != SpawnRunning {
-			continue
-		}
+	runtime.spawns.each(func(spawn *SpawnInstance) {
 		if !found || spawn.NextTick < due {
 			due, found = spawn.NextTick, true
 		}
-	}
+	}, spawnHandedOff)
 	return due, found
 }
 
@@ -504,7 +501,7 @@ func (runtime *Runtime) cancelCastTasks(cast *castInstance) {
 }
 
 func (runtime *Runtime) executeSpawnStep(cast *castInstance, spawnID SpawnID) error {
-	spawn := runtime.spawns[spawnID]
+	spawn := runtime.spawns.get(spawnID)
 	if spawn == nil || spawn.Status != SpawnRunning {
 		return nil
 	}

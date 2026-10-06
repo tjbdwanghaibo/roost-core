@@ -177,7 +177,7 @@ func TestAreaMembership(t *testing.T) {
 		if err := runtime.Advance(2); err == nil {
 			t.Fatal("expected area select host failure")
 		}
-		for _, spawn := range runtime.spawns {
+		for _, spawn := range allSpawnRecords(runtime) {
 			if len(spawn.AreaMembers) != 0 {
 				t.Fatalf("host error leaked area members: %#v", spawn.AreaMembers)
 			}
@@ -237,7 +237,7 @@ func TestAreaCallbackFinishStopsRemainingSignals(t *testing.T) {
 	if host.stops != 1 {
 		t.Fatalf("StopSpawn calls = %d, want unified stop exactly once", host.stops)
 	}
-	for _, spawn := range runtime.spawns {
+	for _, spawn := range allSpawnRecords(runtime) {
 		if spawn.CastID == castID && (spawn.Status != SpawnCancelled || len(spawn.AreaMembers) != 0) {
 			t.Fatalf("area spawn after finish = status %q members %#v", spawn.Status, spawn.AreaMembers)
 		}

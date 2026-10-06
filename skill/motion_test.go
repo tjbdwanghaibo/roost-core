@@ -370,7 +370,7 @@ func TestCarryDetachesExactlyOnce(t *testing.T) {
 			name: "goto",
 			run: func(runtime *Runtime, cast *castInstance, spawn *SpawnInstance) error {
 				spawn.Scope = SpawnScopePhase
-				runtime.spawns[spawn.ID] = spawn
+				fileSpawnForTest(runtime, spawn)
 				if err := runtime.stopSpawns(cast, false); err != nil {
 					return err
 				}
@@ -381,7 +381,7 @@ func TestCarryDetachesExactlyOnce(t *testing.T) {
 			name: "finish",
 			run: func(runtime *Runtime, cast *castInstance, spawn *SpawnInstance) error {
 				spawn.Scope = SpawnScopeCast
-				runtime.spawns[spawn.ID] = spawn
+				fileSpawnForTest(runtime, spawn)
 				if err := runtime.stopFinishingSpawns(cast); err != nil {
 					return err
 				}
@@ -392,7 +392,7 @@ func TestCarryDetachesExactlyOnce(t *testing.T) {
 			name: "cancel",
 			run: func(runtime *Runtime, cast *castInstance, spawn *SpawnInstance) error {
 				spawn.Scope = SpawnScopePhase
-				runtime.spawns[spawn.ID] = spawn
+				fileSpawnForTest(runtime, spawn)
 				if err := runtime.stopSpawns(cast, true); err != nil {
 					return err
 				}
@@ -403,7 +403,7 @@ func TestCarryDetachesExactlyOnce(t *testing.T) {
 			name: "host error",
 			run: func(runtime *Runtime, cast *castInstance, spawn *SpawnInstance) error {
 				spawn.Scope = SpawnScopePhase
-				runtime.spawns[spawn.ID] = spawn
+				fileSpawnForTest(runtime, spawn)
 				runtime.casts[cast.id] = cast
 				cast.status = CastSuspended
 				cast.pendingTasks = 1
@@ -512,8 +512,7 @@ func TestOwnedSpawnCancellationDetachesBeforeCallback(t *testing.T) {
 		{
 			name: "invalid handoff",
 			run: func(runtime *Runtime, host *ownedCarryLifecycleHost, cast *castInstance, spawn *SpawnInstance) error {
-				spawn.handedOff = false
-				delete(runtime.ownedSpawns, spawn.ID)
+				runtime.spawns.setState(spawn, spawn.Status, false)
 				host.missingLifecycle = true
 				return runtime.handoffEntitySpawns(cast)
 			},
@@ -521,8 +520,7 @@ func TestOwnedSpawnCancellationDetachesBeforeCallback(t *testing.T) {
 		{
 			name: "reap unhanded",
 			run: func(runtime *Runtime, host *ownedCarryLifecycleHost, _ *castInstance, spawn *SpawnInstance) error {
-				spawn.handedOff = false
-				delete(runtime.ownedSpawns, spawn.ID)
+				runtime.spawns.setState(spawn, spawn.Status, false)
 				host.missingLifecycle = true
 				return runtime.reapUnhandedEntitySpawns()
 			},
@@ -695,10 +693,10 @@ func startOwnedCarryLifecycle(t *testing.T, completion, collision string) (*Runt
 	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.ownedSpawns) != 1 {
-		t.Fatalf("owned spawn count=%d, want 1", len(runtime.ownedSpawns))
+	if runtime.spawns.count(spawnHandedOff) != 1 {
+		t.Fatalf("owned spawn count=%d, want 1", runtime.spawns.count(spawnHandedOff))
 	}
-	for _, spawn := range runtime.ownedSpawns {
+	for _, spawn := range handedOffSpawnRecords(runtime) {
 		return runtime, host, spawn
 	}
 	t.Fatal("missing owned spawn")

@@ -2,7 +2,6 @@ package skill
 
 import (
 	"log/slog"
-	"sort"
 
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
@@ -12,8 +11,8 @@ import (
 // 每个停止入口只“请求停止”（requestSpawnStop），宿主拒绝 StopSpawn 之后的处理只在这里一处：
 //
 //	running ──请求停止──▶ 停止中：解除 carry、区域离开信号、回调（只对 running）、宿主 StopSpawn
-//	停止中 ──宿主已停──▶ 已停止（ended / cancelled / failed），摘出 owned 表；记录随 cast 按 RR-20261006-23 的规则回收
-//	停止中 ──宿主拒绝──▶ stop_pending，摘出 owned 表；Runtime 不再推进它（不步进、不派发信号、不跑回调）
+//	停止中 ──宿主已停──▶ 已停止（ended / cancelled / failed），进已停止分区；记录随 cast 按 RR-20261006-23 的规则回收
+//	停止中 ──宿主拒绝──▶ stop_pending，进待停止分区；Runtime 不再推进它（不步进、不派发信号、不跑回调）
 //	stop_pending ──重试到期 / 再次请求──▶ 停止中（只重发宿主 StopSpawn；停止原因沿用第一次请求）
 //	stop_pending ──失败的重试达到上限──▶ stop_pending（exhausted）：告警、记录保留，不再自动重试；再次请求仍会停
 //	stop_pending ──待停止条目超过 MaxStopPendingSpawns──▶ 记录删除：告警，Runtime 不再负责停它
@@ -64,7 +63,7 @@ func spawnStopRetryDelay(base Tick, attempts int) Tick {
 }
 
 // requestSpawnStop 是衍生物停止的唯一入口：停止入口只调用它，宿主拒绝之后的状态迁移只在这里。
-// 已停的衍生物直接返回；宿主停了就摘出 owned 表；宿主拒绝就转入 stop_pending、交给 retrySpawnStopsLocked。
+// 已停的衍生物直接返回；宿主停了，stopSpawn 已把记录挪进已停止分区；宿主拒绝就转入 stop_pending、交给 retrySpawnStopsLocked。
 // 错误（宿主拒绝、回调或区域信号出错）照常返回给这次请求的调用方。cast 为 nil 时经宿主当前 revision 发表现
 // （已移交的衍生物、Shutdown、tick 回收）。
 func (runtime *Runtime) requestSpawnStop(cast *castInstance, spawn *SpawnInstance, cause StopCause, callbackEvent string) error {
@@ -77,22 +76,18 @@ func (runtime *Runtime) requestSpawnStop(cast *castInstance, spawn *SpawnInstanc
 		cause = spawn.stopCause
 	}
 	err := runtime.terminateSpawn(cast, spawn, cause, callbackEvent)
-	switch {
-	case !spawn.liveOnHost():
-		delete(runtime.ownedSpawns, spawn.ID)
-	case !pending:
+	if spawn.liveOnHost() && !pending {
 		// terminateSpawn 总会调用 stopSpawn；之后仍是 running 只说明宿主拒绝了 StopSpawn。
 		runtime.enterStopPendingLocked(cast, spawn, cause)
 	}
 	return err
 }
 
-// enterStopPendingLocked 把宿主拒绝停止的衍生物转入 stop_pending：摘出 owned 表（Runtime 不再推进它），排第一次重试，
+// enterStopPendingLocked 把宿主拒绝停止的衍生物转入 stop_pending：挪进待停止分区（Runtime 不再推进它），排第一次重试，
 // 发一条带新状态的 spawn_update（宿主侧还在运行，与 PresentationSnapshot 的 reset 一致）。
 func (runtime *Runtime) enterStopPendingLocked(cast *castInstance, spawn *SpawnInstance, cause StopCause) {
 	runtime.makeRoomForStopPendingLocked()
-	delete(runtime.ownedSpawns, spawn.ID)
-	spawn.Status = SpawnStopPending
+	runtime.spawns.setState(spawn, SpawnStopPending, spawn.handedOff)
 	spawn.stopCause = cause
 	spawn.stopRetryAttempts, spawn.stopRetryExhausted = 0, false
 	spawn.stopRetryTick = saturatingTickAdd(runtime.currentTick, spawnStopRetryDelay(runtime.options.SpawnStopRetryBackoff, 0))
@@ -105,14 +100,9 @@ func (runtime *Runtime) enterStopPendingLocked(cast *castInstance, spawn *SpawnI
 
 // makeRoomForStopPendingLocked 在新增一条待停止记录之前保证总数不超过 MaxStopPendingSpawns。
 func (runtime *Runtime) makeRoomForStopPendingLocked() {
-	for {
-		pending := 0
+	for runtime.spawns.count(spawnStopPending) >= runtime.options.MaxStopPendingSpawns {
 		var oldestExhausted, oldestRetrying *SpawnInstance
-		for _, spawn := range runtime.spawns {
-			if spawn.Status != SpawnStopPending {
-				continue
-			}
-			pending++
+		runtime.spawns.each(func(spawn *SpawnInstance) {
 			if spawn.stopRetryExhausted {
 				if oldestExhausted == nil || spawn.ID < oldestExhausted.ID {
 					oldestExhausted = spawn
@@ -120,16 +110,12 @@ func (runtime *Runtime) makeRoomForStopPendingLocked() {
 			} else if oldestRetrying == nil || spawn.ID < oldestRetrying.ID {
 				oldestRetrying = spawn
 			}
-		}
-		if pending < runtime.options.MaxStopPendingSpawns {
-			return
-		}
+		}, spawnStopPending)
 		victim := oldestExhausted
 		if victim == nil {
 			victim = oldestRetrying
 		}
-		delete(runtime.spawns, victim.ID)
-		delete(runtime.ownedSpawns, victim.ID)
+		runtime.spawns.drop(victim.ID)
 		metrics.IncCounter(MetricSpawnStopPendingDropped, nil, 1)
 		slog.Default().Error("skill: stop-pending spawn dropped at MaxStopPendingSpawns; the runtime no longer stops it and the host may still run it",
 			"spawn_id", victim.ID, "cast_id", victim.CastID, "owner", victim.Owner, "lifecycle_entity", victim.LifecycleEntity,
@@ -140,20 +126,16 @@ func (runtime *Runtime) makeRoomForStopPendingLocked() {
 // retrySpawnStopsLocked 在 advanceHost 推进 tick 之后调用，按 ID 顺序对到期的待停止衍生物再请求一次停止。重试失败
 // 不让 Advance 失败：错误已在第一次请求时返回过调用方，这里只计次、退避，到上限告警。
 func (runtime *Runtime) retrySpawnStopsLocked() {
-	ids := make([]SpawnID, 0)
-	for id, spawn := range runtime.spawns {
-		if spawn.Status == SpawnStopPending && !spawn.stopRetryExhausted && spawn.stopRetryTick <= runtime.currentTick {
-			ids = append(ids, id)
-		}
-	}
+	ids := runtime.spawns.sortedIDs(func(spawn *SpawnInstance) bool {
+		return !spawn.stopRetryExhausted && spawn.stopRetryTick <= runtime.currentTick
+	}, spawnStopPending)
 	if len(ids) == 0 {
 		return
 	}
-	sort.Slice(ids, func(left, right int) bool { return ids[left] < ids[right] })
 	released := false
 	for _, id := range ids {
-		spawn := runtime.spawns[id]
-		if spawn == nil || spawn.Status != SpawnStopPending {
+		spawn := runtime.spawns.get(id, spawnStopPending)
+		if spawn == nil {
 			continue
 		}
 		// 已移交的衍生物经 detachedSpawnCast 发表现（与它移交后的增量一致，RR-20261006-22），用宿主当前 revision。

@@ -56,14 +56,14 @@ func (runtime *Runtime) PresentationSnapshot() PresentationRecoverySnapshot {
 			Anchor: PresentationAnchor{Source: cast.caster, Target: cast.primaryTarget}, PrimaryTarget: cast.primaryTarget,
 		})
 	}
-	for _, spawn := range runtime.spawns {
-		// 待停止的衍生物仍在宿主侧运行，表现保留到真正停掉（增量里进入待停止时发过一条带 stop_pending 的 spawn_update）。
-		if spawn == nil || spawn.Program == nil || !spawn.liveOnHost() || int(spawn.TemplateIndex) >= len(spawn.Program.spawnTemplates) {
-			continue
+	// 待停止的衍生物仍在宿主侧运行，表现保留到真正停掉（增量里进入待停止时发过一条带 stop_pending 的 spawn_update）。
+	runtime.spawns.each(func(spawn *SpawnInstance) {
+		if spawn.Program == nil || int(spawn.TemplateIndex) >= len(spawn.Program.spawnTemplates) {
+			return
 		}
 		template := spawn.Program.spawnTemplates[spawn.TemplateIndex]
 		if !template.hasVisual {
-			continue
+			return
 		}
 		position, direction := spawn.Motion.Position, spawn.Motion.Direction
 		result.Active = append(result.Active, ActivePresentation{
@@ -74,7 +74,7 @@ func (runtime *Runtime) PresentationSnapshot() PresentationRecoverySnapshot {
 			Anchor:        PresentationAnchor{Source: spawn.Owner, Target: spawn.LifecycleEntity, Position: &position, Direction: &direction},
 			PrimaryTarget: runtime.spawnPresentationTargetLocked(spawn),
 		})
-	}
+	}, spawnLivePartitions...)
 	sort.Slice(result.Active, func(i, j int) bool {
 		if result.Active[i].Kind != result.Active[j].Kind {
 			return result.Active[i].Kind < result.Active[j].Kind

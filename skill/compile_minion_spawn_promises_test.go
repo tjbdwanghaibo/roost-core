@@ -36,10 +36,10 @@ func TestMinionSpawnWithoutDurationCompilesAndLivesForTheSummonDuration(t *testi
 	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.ownedSpawns) != 1 {
-		t.Fatalf("owned spawns = %d, want the one minion spawn", len(runtime.ownedSpawns))
+	if runtime.spawns.count(spawnHandedOff) != 1 {
+		t.Fatalf("owned spawns = %d, want the one minion spawn", runtime.spawns.count(spawnHandedOff))
 	}
-	for _, spawn := range runtime.ownedSpawns {
+	for _, spawn := range handedOffSpawnRecords(runtime) {
 		if spawn.EndTick-spawn.StartTick != 10 {
 			t.Fatalf("minion spawn lives %d ticks, want the summon duration 10", spawn.EndTick-spawn.StartTick)
 		}
