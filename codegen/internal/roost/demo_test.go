@@ -536,6 +536,21 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if dashboard.UID != "roost-demo" || queries < 20 {
 		t.Errorf("dashboard uid=%q queries=%d", dashboard.UID, queries)
 	}
+	// A17: the scene's reopen-failure counter (RR-20260927-19) is listed in the
+	// observability README and had no panel; the name must be the one
+	// scene.go counts on, which /metrics exports as is (already _total).
+	reopenPanel := false
+	for _, panel := range dashboard.Panels {
+		for _, target := range panel.Targets {
+			reopenPanel = reopenPanel || strings.Contains(target.Expr, "scene_session_reopen_failed_total{")
+		}
+	}
+	if !reopenPanel {
+		t.Errorf("the dashboard has no panel querying scene_session_reopen_failed_total")
+	}
+	if scene := read("internal/service/game/scene.go"); !strings.Contains(scene, `sceneReopenFailedMetric = "scene_session_reopen_failed_total"`) {
+		t.Errorf("scene.go no longer counts on scene_session_reopen_failed_total; update the dashboard panel with it")
+	}
 	if scrape := read("deploy/dev/observability/prometheus.yml"); !strings.Contains(scrape, "job_name: game") || !strings.Contains(scrape, ":9300") {
 		t.Errorf("prometheus.yml does not scrape the game process and the load test:\n%s", scrape)
 	}

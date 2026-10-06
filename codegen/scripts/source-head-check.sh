@@ -37,10 +37,9 @@ echo "source-head-check: generating planet ($scenario) against this working tree
 GOWORK=off "$work/roost" project new planet -skip-deps -module example.com/planet -out "$work/planet" \
   -mods "$mods" -services "$services" ${template_args[@]+"${template_args[@]}"}
 if [[ "$scenario" == full ]]; then
-  (cd "$work/planet" && GOWORK=off "$work/roost" add access player --service gate \
-    && GOWORK=off "$work/roost" add transport tcp --service gate \
-    && GOWORK=off "$work/roost" add skill Fireball \
-    && GOWORK=off "$work/roost" add saga GuildTransfer -service game -steps debit,credit) || true
+  # The same add sequence the workflow runs, from the one place it is defined;
+  # a failing step fails this check.
+  (cd "$work/planet" && bash "$repo_root/codegen/scripts/full-scenario-adds.sh" "$work/roost" -skip-deps)
 fi
 
 if grep -qE '^[[:space:]]*replace[[:space:](]' "$work/planet/go.mod"; then

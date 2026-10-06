@@ -6,6 +6,8 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 收尾第 2 批（cb2）：生成形状相关的小项 A8 / A9 / A11 / A15 / A17，未发版。** 生成配置补齐 `remote_entity` 新键（生产化不再改墓碑 WAIT 副本数）、生成 TCP 越界报错逐条点名、full 场景 add 序列收拢到 `codegen/scripts/full-scenario-adds.sh` 且不吞失败、生成 TCP 加“handler 不配合 ctx”用例、game-demo 仪表盘加 `scene_session_reopen_failed_total` 面板。[记录](CLOSING-BATCH-2-2026-10-06.md)
+
 **10-06 收尾第 3 批 skill 小修（cb3）：RR-20261006-02～04 已修复、声明场景验证，未发版。** Runtime 交给 Host 的状态默认值缺省时带 state 声明类型；checkpoint 里的 `phase_timeout` 任务按 corrupt 拒绝并删除该任务类型；文件 outbox 打开时删除确认是自己生成的 `outbox-<数字>.tmp`。
 
 | 编号 | 修复 | 状态 |

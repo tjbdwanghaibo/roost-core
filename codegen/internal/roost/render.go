@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -642,12 +643,17 @@ func renderServiceConfig(m Manifest, service string, production bool) string {
 // stores get three replicas, logs go to stdout only. It is applied to the
 // whole rendered file at project creation and to each section a Mod added
 // later appends (appendModConfigSections), so the two never diverge.
+// streamReplicasLine matches a line whose key is exactly replicas with value 1.
+var streamReplicasLine = regexp.MustCompile(`(?m)^([ \t]*)replicas: 1$`)
+
 func productionizeConfig(value string) string {
 	value = strings.ReplaceAll(strings.ReplaceAll(value, "127.0.0.1", "CHANGE_ME"), "localhost", "CHANGE_ME")
 	value = strings.Replace(value,
 		"ops:\n  enabled: true\n  addr: CHANGE_ME:9100",
 		"ops:\n  enabled: true\n  addr: 0.0.0.0:9100", 1)
-	value = strings.ReplaceAll(value, "replicas: 1", "replicas: 3")
+	// 只改独占一行的 replicas: 1（syncbus / effects / saga 的流副本数）。
+	// remote_entity.snapshot_l2_tombstone_wait_replicas 是 L2 墓碑 WAIT 的副本数，不是流副本，不能跟着变成 3。
+	value = streamReplicasLine.ReplaceAllString(value, "${1}replicas: 3")
 	value = strings.ReplaceAll(value, "file: true", "file: false")
 	return strings.ReplaceAll(value, "dir: data/wal/dataengine", "dir: /var/lib/roost/wal")
 }

@@ -76,22 +76,11 @@ jobs:
           "${RUNNER_TEMP}/roost" project new planet "${skip_args[@]}" -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods "$mods" -services "$services" "${version_args[@]}" "${template_args[@]}"
           if [ "$SCENARIO" = full ]; then
             cd "${RUNNER_TEMP}/planet"
-            "${RUNNER_TEMP}/roost" add access player --service gate
-            "${RUNNER_TEMP}/roost" add transport tcp
-            # Player and its lifecycle come from -template game; the scenario
-            # builds on them rather than adding them a second time.
-            "${RUNNER_TEMP}/roost" add component Profile --entity Player
-            "${RUNNER_TEMP}/roost" add dao Player --entity Player
-            "${RUNNER_TEMP}/roost" add handler RenamePlayer --entity Player --component Profile
-            "${RUNNER_TEMP}/roost" add protocol RenamePlayer --group game --handler player
-            "${RUNNER_TEMP}/roost" add endpoint RenamePlayer --handler player
-            "${RUNNER_TEMP}/roost" add skill Fireball
-            "${RUNNER_TEMP}/roost" add saga GuildTransfer -service game -steps debit,credit
-            # A project-owned rpc: game owns it, gate calls it (uses_rpcs is a
-            # manifest edit, so it goes through sync).
-            "${RUNNER_TEMP}/roost" add rpc Guild -service game
-            sed -i 's/^    gate:$/    gate:\n        uses_rpcs:\n            - guild/' roost.yaml
-            "${RUNNER_TEMP}/roost" project sync "${skip_args[@]}"
+            # The add sequence (access, transport, component, dao, handler,
+            # protocol, endpoint, skill, saga, rpc, then project sync) is
+            # defined once, shared with the local mirror
+            # codegen/scripts/source-head-check.sh (A11).
+            bash "$GITHUB_WORKSPACE/codegen/scripts/full-scenario-adds.sh" "${RUNNER_TEMP}/roost" "${skip_args[@]}"
             # Pure-version scenarios exercise the transactional generate+tidy
             # path here. Source-head is compiled through go.work below because
             # its APIs may intentionally not exist in the latest tag yet.

@@ -36,6 +36,8 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
+	kitremoteentity "github.com/tjbdwanghaibo/roost-core/kit/remoteentity"
+	coreremote "github.com/tjbdwanghaibo/roost-core/remoteentity"
 	"gopkg.in/yaml.v3"
 )
 
@@ -97,6 +99,55 @@ func TestA4GeneratedConfigsPassValidation(t *testing.T) {
 				t.Errorf("%s with env: production is refused:\n%v", c.name, err)
 			}
 		})
+		if strings.Contains(c.body, "\nremote_entity:\n") {
+			t.Run(c.name+"/remote_entity", func(t *testing.T) { checkRemoteEntityKeys(t, c.name, load(t, c)) })
+		}
+	}
+}
+
+// checkRemoteEntityKeys：A8（收尾第 2 批）。生成的 remote_entity 段写出 B2 / O4 / O-M6-3 / Mirror 第 5 步的键，
+// 取值等于 core DefaultConfig（或 kit 的缺省）的语义，并通过两个 Mod 的 Init（值域检查在 Init 里，
+// ValidateServiceConfig 只查类型）。
+func checkRemoteEntityKeys(t *testing.T, name string, cfg *viper.Viper) {
+	for _, key := range []string{
+		"remote_entity.cached_max_staleness",
+		"remote_entity.snapshot_interest_per_consumer",
+		"remote_entity.snapshot_l2_tombstone_wait_replicas",
+		"remote_entity.snapshot_l2_tombstone_wait_timeout",
+		"remote_entity.mirror.shutdown_timeout",
+	} {
+		if !cfg.IsSet(key) {
+			t.Errorf("%s does not set %s", name, key)
+		}
+	}
+	defaults := coreremote.DefaultConfig()
+	if got := cfg.GetDuration("remote_entity.cached_max_staleness"); got != cfg.GetDuration("remote_entity.snapshot_cache_ttl") {
+		t.Errorf("%s: cached_max_staleness = %v, want snapshot_cache_ttl (%v): unset it follows snapshot_cache_ttl", name, got, cfg.GetDuration("remote_entity.snapshot_cache_ttl"))
+	}
+	if got := cfg.GetInt("remote_entity.snapshot_interest_per_consumer"); got != defaults.SnapshotInterestPerConsumer {
+		t.Errorf("%s: snapshot_interest_per_consumer = %d, want DefaultConfig %d", name, got, defaults.SnapshotInterestPerConsumer)
+	}
+	if got := cfg.GetInt("remote_entity.snapshot_l2_tombstone_wait_replicas"); got != defaults.SnapshotL2TombstoneWaitReplicas {
+		t.Errorf("%s: snapshot_l2_tombstone_wait_replicas = %d, want DefaultConfig %d", name, got, defaults.SnapshotL2TombstoneWaitReplicas)
+	}
+	if got := cfg.GetDuration("remote_entity.snapshot_l2_tombstone_wait_timeout"); got != defaults.SnapshotL2TombstoneWaitTimeout {
+		t.Errorf("%s: snapshot_l2_tombstone_wait_timeout = %v, want DefaultConfig %v", name, got, defaults.SnapshotL2TombstoneWaitTimeout)
+	}
+	if err := kitremoteentity.NewRemoteEntityMod(0).Init(cfg); err != nil {
+		t.Errorf("%s: RemoteEntityMod.Init refuses the generated remote_entity section: %v", name, err)
+	}
+	mirror := kitremoteentity.NewRemoteMirrorMod(0)
+	if err := mirror.Init(cfg); err != nil {
+		t.Errorf("%s: RemoteMirrorMod.Init refuses the generated remote_entity section: %v", name, err)
+	}
+	unset := viper.New()
+	unset.Set("sid", 1000)
+	defaultMirror := kitremoteentity.NewRemoteMirrorMod(0)
+	if err := defaultMirror.Init(unset); err != nil {
+		t.Fatal(err)
+	}
+	if mirror.StopBudget() != defaultMirror.StopBudget() {
+		t.Errorf("%s: mirror.shutdown_timeout = %v, want the kit default %v", name, mirror.StopBudget(), defaultMirror.StopBudget())
 	}
 }
 `

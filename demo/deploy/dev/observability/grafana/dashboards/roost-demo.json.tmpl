@@ -719,6 +719,61 @@
     },
     {
       "type": "row",
+      "title": "场景复制会话",
+      "id": 25,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "复制会话重开放弃（按原因，5 分钟内次数）",
+      "id": 26,
+      "description": "非零 = 有玩家仍连着、留在场景里，却没有自己的视图，要等下次登录。exhausted：传输一直在关旧会话，8 次“稍后重试”用尽；refused：会话上限等不会好转的拒绝。计数器在第一次递增前不存在，No data 是好消息（RR-20260927-19）。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (reason)(increase(scene_session_reopen_failed_total{job=\"{{GAME_SERVICE}}\"}[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
       "title": "跨服务调用（bus RPC，game ↔ match / mail）",
       "id": 18,
       "collapsed": false,
@@ -726,7 +781,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 47
       },
       "panels": []
     },
@@ -743,7 +798,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 40
+        "y": 48
       },
       "fieldConfig": {
         "defaults": {
@@ -794,7 +849,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 40
+        "y": 48
       },
       "fieldConfig": {
         "defaults": {
@@ -841,7 +896,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 55
       },
       "panels": []
     },
@@ -858,7 +913,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 48
+        "y": 56
       },
       "fieldConfig": {
         "defaults": {
@@ -909,7 +964,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 48
+        "y": 56
       },
       "fieldConfig": {
         "defaults": {
@@ -969,7 +1024,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 48
+        "y": 56
       },
       "fieldConfig": {
         "defaults": {

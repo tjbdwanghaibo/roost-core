@@ -282,25 +282,71 @@ func configFromViper(cfg *viper.Viper) (Config, error) {
 	return result, nil
 }
 
+// validateConfig refuses every setting outside its bounds, each by its key,
+// all at once. A limit bounded by another names that one too: a handshake runs
+// on an accepted connection and one IP's connections are the server's, so
+// max_handshakes and max_connections_per_ip cannot exceed max_connections, and
+// the login runs inside one dispatch. One sentence for every limit used to
+// leave the operator guessing which line to change (A9).
 func validateConfig(result Config) error {
-	if result.Addr == "" || result.MaxConnections <= 0 || result.MaxConnections > hardMaxConnections ||
-		result.MaxConnectionsPerIP <= 0 || result.MaxConnectionsPerIP > result.MaxConnections ||
-		result.MaxHandshakes <= 0 || result.MaxHandshakes > result.MaxConnections ||
-		result.MaxHandshakeBytes == 0 || result.MaxHandshakeBytes > 64<<10 ||
-		result.MaxPayloadBytes == 0 || result.MaxPayloadBytes > hardMaxPayload ||
-		result.HandshakeTimeout <= 0 || result.IdleTimeout <= 0 || result.WriteTimeout <= 0 || result.ShutdownTimeout <= 0 ||
-		result.DispatchTimeout <= 0 || result.LoginTimeout <= 0 {
-		return errors.New("player tcp: addr, limits and timeouts are outside safe bounds")
+	const key = "player_access.tcp."
+	var problems []error
+	refuse := func(format string, args ...any) {
+		problems = append(problems, fmt.Errorf("player tcp: "+format, args...))
 	}
-	if _, _, err := net.SplitHostPort(result.Addr); err != nil { return fmt.Errorf("player tcp: invalid addr %%q: %%w", result.Addr, err) }
-	if result.HandshakeTimeout > time.Minute || result.WriteTimeout > time.Minute || result.IdleTimeout > 24*time.Hour || result.ShutdownTimeout > 5*time.Minute ||
-		result.DispatchTimeout > 5*time.Minute {
-		return errors.New("player tcp: timeouts exceed safe bounds")
+	if result.Addr == "" {
+		refuse("%%saddr is empty", key)
+	} else if _, _, err := net.SplitHostPort(result.Addr); err != nil {
+		refuse("%%saddr = %%q is not host:port: %%w", key, result.Addr, err)
 	}
-	if result.LoginTimeout > result.DispatchTimeout {
-		return fmt.Errorf("player tcp: login_timeout %%v exceeds dispatch_timeout %%v; the login runs inside one dispatch", result.LoginTimeout, result.DispatchTimeout)
+	connectionsValid := result.MaxConnections > 0 && result.MaxConnections <= hardMaxConnections
+	if !connectionsValid {
+		refuse("%%smax_connections = %%d is outside 1..%%d", key, result.MaxConnections, hardMaxConnections)
 	}
-	return nil
+	for _, limit := range []struct {
+		name string
+		value int
+		why string
+	}{
+		{"max_connections_per_ip", result.MaxConnectionsPerIP, "one IP's connections are counted inside the server's"},
+		{"max_handshakes", result.MaxHandshakes, "every handshake runs on an accepted connection"},
+	} {
+		switch {
+		case limit.value <= 0:
+			refuse("%%s%%s = %%d must be positive", key, limit.name, limit.value)
+		case connectionsValid && limit.value > result.MaxConnections:
+			refuse("%%s%%s = %%d exceeds %%smax_connections = %%d; %%s", key, limit.name, limit.value, key, result.MaxConnections, limit.why)
+		}
+	}
+	for _, limit := range []struct {
+		name string
+		value, max uint32
+	}{{"max_handshake_bytes", result.MaxHandshakeBytes, 64 << 10}, {"max_payload_bytes", result.MaxPayloadBytes, hardMaxPayload}} {
+		if limit.value == 0 || limit.value > limit.max {
+			refuse("%%s%%s = %%d is outside 1..%%d", key, limit.name, limit.value, limit.max)
+		}
+	}
+	for _, timeout := range []struct {
+		name string
+		value, max time.Duration
+	}{
+		{"handshake_timeout", result.HandshakeTimeout, time.Minute},
+		{"idle_timeout", result.IdleTimeout, 24 * time.Hour},
+		{"write_timeout", result.WriteTimeout, time.Minute},
+		{"shutdown_timeout", result.ShutdownTimeout, 5 * time.Minute},
+		{"dispatch_timeout", result.DispatchTimeout, 5 * time.Minute},
+	} {
+		if timeout.value <= 0 || timeout.value > timeout.max {
+			refuse("%%s%%s = %%v is outside (0, %%v]", key, timeout.name, timeout.value, timeout.max)
+		}
+	}
+	switch {
+	case result.LoginTimeout <= 0:
+		refuse("%%slogin_timeout = %%v must be positive", key, result.LoginTimeout)
+	case result.DispatchTimeout > 0 && result.LoginTimeout > result.DispatchTimeout:
+		refuse("%%slogin_timeout = %%v exceeds %%sdispatch_timeout = %%v; the login runs inside one dispatch", key, result.LoginTimeout, key, result.DispatchTimeout)
+	}
+	return errors.Join(problems...)
 }
 
 type Authenticator interface {
@@ -1404,22 +1450,30 @@ const (
 // answers once the context ends.
 func stuckDispatchServer(t *testing.T, dispatchTimeout string) (*Server, <-chan context.Context) {
 	t.Helper()
+	started := make(chan context.Context, 4)
+	server := dispatchServer(t, dispatchTimeout, func(ctx *player_agent.Context, _ string) (string, error) {
+		started <- ctx.Context()
+		<-ctx.Context().Done()
+		return "gave up: " + ctx.Context().Err().Error(), nil
+	})
+	return server, started
+}
+
+// dispatchServer is a started server on loopback whose one request type
+// (stuckRequestID) runs handler under the given dispatch budget.
+func dispatchServer(t *testing.T, dispatchTimeout string, handler func(*player_agent.Context, string) (string, error)) *Server {
+	t.Helper()
 	cfg := viper.New()
 	cfg.Set("player_access.tcp.addr", "127.0.0.1:0")
 	cfg.Set("player_access.tcp.dispatch_timeout", dispatchTimeout)
 	cfg.Set("player_access.tcp.login_timeout", dispatchTimeout)
 	config, err := configFromViper(cfg)
 	if err != nil { t.Fatal(err) }
-	started := make(chan context.Context, 4)
 	protocols := player_agent.NewProtocolRegistry()
 	if err := player_agent.RegisterProtocol[string, string](protocols, stuckRequestID, stuckResponseID,
 		func(payload []byte) (string, error) { return string(payload), nil },
 		func(value string) ([]byte, error) { return []byte(value), nil },
-		func(ctx *player_agent.Context, _ string) (string, error) {
-			started <- ctx.Context()
-			<-ctx.Context().Done()
-			return "gave up: " + ctx.Context().Err().Error(), nil
-		}); err != nil { t.Fatal(err) }
+		handler); err != nil { t.Fatal(err) }
 	if err := protocols.Seal(); err != nil { t.Fatal(err) }
 	server, err := NewServer(config, &accessplayer.Runtime{Protocols: protocols}, AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
 		return gateway.Principal{PlayerID: 7, SessionID: token}, nil
@@ -1431,7 +1485,7 @@ func stuckDispatchServer(t *testing.T, dispatchTimeout string) (*Server, <-chan 
 		defer cancel()
 		_ = server.Stop(ctx)
 	})
-	return server, started
+	return server
 }
 
 func dialAuthenticated(t *testing.T, server *Server, token string) net.Conn {
@@ -1552,6 +1606,140 @@ func TestClosingASessionCancelsItsInFlightDispatch(t *testing.T) {
 		t.Fatal("the replaced session's in-flight dispatch is still running: closing a session did not cancel it")
 	}
 	waitReleased(t, server, 1)
+}
+
+// A15 (closing batch 2): a handler that does not honor its context. The
+// dispatch budget bounds the wait, not the work: at the deadline the
+// handler's context ends, but the read loop is synchronous (per-connection
+// order, no goroutine per request), so the handler keeps running until it
+// returns on its own. Its answer goes out only then, and it is the handler's
+// result, not a timeout. The connection's slot and per-IP count come back
+// only after the handler has returned and the connection has ended — a client
+// that hangs up first does not free them earlier, because the read loop that
+// would notice is still inside the handler.
+// TestADispatchThatOutlivesItsBudgetAnswersAndFreesTheSlot cannot pin this:
+// its handler returns as soon as its context ends.
+func TestADispatchTimeoutBoundsTheWaitNotAnUncooperativeHandler(t *testing.T) {
+	releases := make(chan struct{})
+	finished := make(chan struct{})
+	started := make(chan context.Context, 4)
+	returned := make(chan struct{}, 4)
+	server := dispatchServer(t, "100ms", func(ctx *player_agent.Context, _ string) (string, error) {
+		started <- ctx.Context()
+		select { // the context is not consulted: this is the uncooperative handler
+		case <-releases:
+		case <-finished:
+		}
+		returned <- struct{}{}
+		return "finished after the budget", nil
+	})
+	// Registered after the server's own cleanup, so it runs first and a failed
+	// test does not leave Stop waiting on a handler nobody releases.
+	t.Cleanup(func() { close(finished) })
+	awaitStart := func() context.Context {
+		t.Helper()
+		select {
+		case ctx := <-started:
+			return ctx
+		case <-time.After(2 * time.Second):
+			t.Fatal("the request never reached its handler")
+			return nil
+		}
+	}
+	inUse := func() (slots, perIP int) {
+		server.mu.RLock()
+		defer server.mu.RUnlock()
+		for _, count := range server.ipConnections { perIP += count }
+		return len(server.connectionSlots), perIP
+	}
+
+	connection := dialAuthenticated(t, server, "session-u")
+	sendStuckRequest(t, connection, 2)
+	dispatchCtx := awaitStart()
+	select {
+	case <-dispatchCtx.Done():
+		if !errors.Is(dispatchCtx.Err(), context.DeadlineExceeded) {
+			t.Fatalf("the dispatch context ended with %%v, want its deadline", dispatchCtx.Err())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the dispatch context did not end at its 100ms budget")
+	}
+	// The budget is over; the handler is not. Nothing is answered meanwhile.
+	_ = connection.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if early, releaseFrame, err := server.readFrame(connection); err == nil {
+		releaseFrame()
+		t.Fatalf("answered %%+v (%%q) while the handler past its budget was still running", early, early.payload)
+	} else if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
+		t.Fatalf("waiting for no answer: %%v, want a read timeout", err)
+	}
+	releases <- struct{}{}
+	<-returned
+	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	response, releaseFrame, err := server.readFrame(connection)
+	if err != nil { t.Fatalf("no answer after the handler returned: %%v", err) }
+	if response.messageID != stuckResponseID || response.sequence != 2 || string(response.payload) != "finished after the budget" {
+		releaseFrame()
+		t.Fatalf("answer %%+v (%%q), want the handler's own result for sequence 2", response, response.payload)
+	}
+	releaseFrame()
+	if slots, perIP := inUse(); slots != 1 || perIP != 1 {
+		t.Fatalf("connection slots = %%d, per-IP = %%d with the connection open, want 1 each", slots, perIP)
+	}
+
+	// The client hangs up while a second uncooperative request runs: the slot
+	// stays taken until the handler returns.
+	sendStuckRequest(t, connection, 3)
+	awaitStart()
+	_ = connection.Close()
+	for deadline := time.Now().Add(300 * time.Millisecond); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if slots, perIP := inUse(); slots != 1 || perIP != 1 {
+			t.Fatalf("connection slots = %%d, per-IP = %%d while its handler still runs, want 1 each: the slot came back before the work ended", slots, perIP)
+		}
+	}
+	releases <- struct{}{}
+	<-returned
+	waitReleased(t, server, 0)
+}
+
+// A9 (closing batch 2): a limit outside its bounds is refused by its key,
+// and a limit bounded by another names that one too, so the operator knows
+// which line to change. Before, every limit shared one sentence ("addr,
+// limits and timeouts are outside safe bounds", and "timeouts exceed safe
+// bounds" for the upper bounds of the timeouts).
+func TestAnOutOfBoundsSettingIsRefusedByName(t *testing.T) {
+	const key = "player_access.tcp."
+	for _, tc := range []struct {
+		name string
+		set map[string]any
+		want []string
+	}{
+		{"addr_without_port", map[string]any{"addr": "localhost"}, []string{key + "addr"}},
+		{"connections_above_the_hard_cap", map[string]any{"max_connections": 2000000}, []string{key + "max_connections = 2000000"}},
+		{"connections_negative", map[string]any{"max_connections": -1}, []string{key + "max_connections = -1"}},
+		{"per_ip_above_connections", map[string]any{"max_connections": 2000, "max_connections_per_ip": 3000}, []string{key + "max_connections_per_ip = 3000", key + "max_connections = 2000"}},
+		{"handshakes_above_connections", map[string]any{"max_connections": 1000, "max_handshakes": 2000}, []string{key + "max_handshakes = 2000", key + "max_connections = 1000"}},
+		{"handshake_bytes_above_64k", map[string]any{"max_handshake_bytes": 100000}, []string{key + "max_handshake_bytes = 100000"}},
+		{"handshake_timeout_above_a_minute", map[string]any{"handshake_timeout": "2m"}, []string{key + "handshake_timeout = 2m0s"}},
+		{"idle_timeout_negative", map[string]any{"idle_timeout": "-1s"}, []string{key + "idle_timeout = -1s"}},
+		{"dispatch_timeout_above_five_minutes", map[string]any{"dispatch_timeout": "10m"}, []string{key + "dispatch_timeout = 10m0s"}},
+		{"login_above_dispatch", map[string]any{"dispatch_timeout": "1s", "login_timeout": "2s"}, []string{key + "login_timeout = 2s", key + "dispatch_timeout = 1s"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := viper.New()
+			for name, value := range tc.set { cfg.Set(key+name, value) }
+			_, err := configFromViper(cfg)
+			if err == nil { t.Fatalf("%%v accepted", tc.set) }
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("%%v refused with %%q, want it to name %%q", tc.set, err, want)
+				}
+			}
+			if strings.Contains(err.Error(), "safe bounds") {
+				t.Errorf("%%v refused with the unnamed sentence: %%q", tc.set, err)
+			}
+		})
+	}
+	if _, err := configFromViper(viper.New()); err != nil { t.Fatalf("the defaults are refused: %%v", err) }
 }
 
 const pushTestMessageID uint32 = 20002

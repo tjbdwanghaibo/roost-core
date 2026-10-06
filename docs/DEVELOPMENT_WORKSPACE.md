@@ -49,6 +49,10 @@ go build ./...
 codegen/scripts/source-head-check.sh minimal   # 或 full
 ```
 
+`full` 在生成的工程上跑的 add 序列（access、transport、component、dao、handler、protocol、endpoint、skill、saga、rpc，再 `project sync`）
+定义在 `codegen/scripts/full-scenario-adds.sh`，CI（`framework-compat.yml` 的 full 场景）与这个脚本都调用它，任何一步失败都让检查失败；
+要改序列只改这一处（根包 `TestFullScenarioAddSequenceIsDefinedOnceAndNotSwallowed` 守着）。
+
 **go.work 永远不提交**（`.gitignore` 里有它）：提交一个 workspace 会让每个消费者被悄悄重定向到本地源码。
 
 ## 发布：一个 tag
