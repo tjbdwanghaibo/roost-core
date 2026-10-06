@@ -1,6 +1,6 @@
 # 收尾第 2 批：生成形状相关的小项（A8 / A9 / A11 / A15 / A17）
 
-- 日期：2026-10-06；基线 `8a292a5a`（分支 `cb2`）。来源：协调者的全仓盘点（维护者第十一轮“收尾：盘点全部未完成问题，处理完后统一发一个版本”），维护者已授权。**未发版**，随收尾统一发版。
+- 日期：2026-10-06；基线 `8a292a5a`（分支 `cb2`），提交 `fcc78ad0`（已推送 main）。来源：协调者的全仓盘点（维护者第十一轮“收尾：盘点全部未完成问题，处理完后统一发一个版本”），维护者已授权。**未发版**，随收尾统一发版。
 - 范围：`codegen/internal/roost`、`codegen/scripts`、`.github/workflows`、demo 模板、文档。不碰 skill 与 kit / core 小修（另两批）。
 - 读代码：codebase-memory 的共享 generation 停在 09-30，本批涉及的文件（`catalog.go`、`render_player_tcp.go`、`source-head-check.sh`、demo 仪表盘）都以当前源码为准直接阅读。
 

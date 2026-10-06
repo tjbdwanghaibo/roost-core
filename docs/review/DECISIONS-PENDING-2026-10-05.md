@@ -183,7 +183,7 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | O-M6-6 | 按推荐：同 sid 新进程（已持 App 单实例锁）启动时立即接管上一代同 sid 进程留下的 Remote 实体锁（按锁记录的进程代际令牌判定，只接管“同 sid、旧代际”） | 已实施（d483238e） |
 | 收尾 | 盘点全部未完成问题，处理完后统一发一个版本 | 进行中 |
 | 收尾 · 第 3 批 | skill 小修 A4～A6：null 默认值实体状态 set 类型不匹配、checkpoint 拒绝 `phase_timeout`（O20）、文件 outbox 清理遗留 tmp（O6） | 已实施（`b8fbcee0`，RR-20261006-02～04，未发版） |
-| 收尾 · 第 2 批 | 生成形状相关小项：A8 生成配置补 `remote_entity` 新键、A9 生成 TCP 越界报错点名、A11 full 场景 add 序列收拢且不吞失败、A15 生成 TCP 不配合 ctx 用例、A17 game-demo 重开放弃面板 | 已实施（提交号见下一笔 docs 提交，[记录](../bugfix/CLOSING-BATCH-2-2026-10-06.md)） |
+| 收尾 · 第 2 批 | 生成形状相关小项：A8 生成配置补 `remote_entity` 新键、A9 生成 TCP 越界报错点名、A11 full 场景 add 序列收拢且不吞失败、A15 生成 TCP 不配合 ctx 用例、A17 game-demo 重开放弃面板 | 已实施（`fcc78ad0`，未发版，[记录](../bugfix/CLOSING-BATCH-2-2026-10-06.md)） |
 
 ## 维护者决定（2026-10-06，第十二轮：收尾盘点 B 类）
 
