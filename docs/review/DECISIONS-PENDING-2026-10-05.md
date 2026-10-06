@@ -111,9 +111,9 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | skill 求值上下文表 | 做：一张表写明每种求值上下文（施法流程 / cast_start / phase_start / 进程启动 / 移交后每步）可用的引用，编译期与 Runtime 都查这一张（N09 第五批方向判断） | 待实施（随 N09 第六批） |
 | NC-224 方向 B | 不做：维持编译期拒绝（进程启动时不冻结施法输入） | — |
 | account 换名释放 | 做：未 admitted 计划、名字仅被他人 reserved 时，换名请求也释放 slot（判定表 `unadmitted other` 行） | 待实施 |
-| D1 | 按推荐：Degraded 算就绪（`/readyz` 返回 200 并在响应体注明降级），只有 Fail 返回 503 | 待实施 |
-| MissionRunner | 改为延后队列（与 ActionRunner / B7 一致：回调里的变更回调返回后按序执行） | 待实施 |
-| EndAll 清场 | 按推荐：保持现状，在接线说明写清“要清场先结束当前任务再 EndAll” | 待实施（文档） |
+| D1 | 按推荐：Degraded 算就绪（`/readyz` 返回 200 并在响应体注明降级），只有 Fail 返回 503 | **已实施（`f6828f17`，分支 `d1mr`）**：聚合规则只在 `health.Snapshot`（OK = 没有 Fail，新增 `Degraded` / `DegradedResults()`）；`/readyz` 响应体加 `degraded` 与 `degraded_dependencies`（name / status / message / error）；生成的 k8s / compose / shell / dev-run 探针都只看状态码，模板不改；OBSERVABILITY 新节、README、kit/README、USER_GUIDE、singleton 注释、T-267。修前 Degraded → 503（红），修后 200 带降级项、Fail 仍 503。[方案](../feature/D1-READYZ-DEGRADED-IS-READY-2026-10-06.md) |
+| MissionRunner | 改为延后队列（与 ActionRunner / B7 一致：回调里的变更回调返回后按序执行） | **已实施（`f6828f17`）**：StartMission / CancelMission / EndCurMission / Tick / OnActionEnd 经 `submit` 一处判定，回调里返回 nil、执行错误经 OnError（`deferred start mission`），`MaxDeferredCommands` / `MaxDeferredSteps` 有界，SetRuntime 补 recover、`executing` 在 defer 里复位；starting / ending 与 `ErrReentrantMutation` 分支删除。两条既有用例按延后语义改写（理由逐条）。ai 无代码改动（OnMissionEnd 里 SetMission 从 `ErrReentrantMutation` 变为 nil + 结束后启动）。[B7 方案 §7](../feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md) |
+| EndAll 清场 | 按推荐：保持现状，在接线说明写清“要清场先结束当前任务再 EndAll” | **已实施（`f6828f17`，文档 + 用例）**：actionflow 包注释、`EndAll` / `ActionList` 注释、ai `Controller.SetStrategy` 注释、kit/README、B7 方案 §8；`TestEndCurMissionBeforeEndAllLeavesNothingRunning` 钉住（现状即绿） |
 
 ## 新增待决定（2026-10-06，N11～N13 留项 revleft）
 
