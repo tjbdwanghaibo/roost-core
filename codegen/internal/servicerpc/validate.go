@@ -165,7 +165,7 @@ func emittedNames(service Service) []string {
 		"capability", "Capability", "OwnerCapabilities",
 		"CapabilityName", "LocalCapabilityName",
 		"Server", "NewServer",
-		"ClientMod", "NewClientMod",
+		"ClientMod", "NewClientMod", "clientModConfig",
 	}
 	for _, method := range service.Methods {
 		names = append(names,

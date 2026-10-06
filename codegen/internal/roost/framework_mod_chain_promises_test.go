@@ -25,7 +25,7 @@ func TestHostedServiceChainsItsOptionalCollaborators(t *testing.T) {
 }
 
 func TestPlatformConfigCarriesTheSecretsItsModRequires(t *testing.T) {
-	block := frameworkCatalog["platform"].ConfigFunc("demo")
+	block := frameworkConfigSection("platform", "demo")
 	for _, key := range []string{"session_secret:", "payment_secret:"} {
 		if !strings.Contains(block, key) {
 			t.Errorf("platform config block omits %s, so the process refuses to start:\n%s", key, block)
@@ -74,7 +74,7 @@ func TestAServiceNestedUnderAnotherIsHostable(t *testing.T) {
 // against), so a starter config that omits either is a process that cannot
 // start.
 func TestActivityConfigCarriesTheTTLItsModRequires(t *testing.T) {
-	block := frameworkCatalog["activity"].ConfigFunc("demo")
+	block := frameworkConfigSection("activity", "demo")
 	for _, want := range []string{"reservation_ttl:", "groups_file: " + activityGroupsFile + "\n"} {
 		if !strings.Contains(block, want) {
 			t.Errorf("activity config block omits %q:\n%s", want, block)

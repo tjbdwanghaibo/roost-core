@@ -2,10 +2,8 @@ package remoteentity
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	coreremote "github.com/tjbdwanghaibo/roost-core/remoteentity"
 
@@ -61,102 +59,44 @@ func NewRemoteEntityMod(localSid int32, opts ...ModOption) *RemoteEntityMod {
 
 func (m *RemoteEntityMod) Name() app.ModName { return mods.ModRemoteEntity }
 
-func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
-	if cfg == nil {
-		cfg = viper.New()
-	}
-	m.cfg = coreremote.DefaultConfig()
-	// 严格读取（维护者决定 A4）：写错类型的值不再被读成 0 / 纳秒后取默认，返回前一并报出。
-	read := app.NewConfigReader(cfg)
-	if m.localSid == 0 {
-		m.localSid = cfg.GetInt32("sid")
-	}
+// ConfigSchema 声明 remote_entity.*（含与 Mirror 共用的快照段）与 Cluster 判断用的 redis.cluster_addrs。
+func (m *RemoteEntityMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(entityConfig{}) }
 
-	if ttl := read.Duration("remote_entity.lock_ttl"); ttl > 0 {
-		m.cfg.LockTTL = ttl
+func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
+	var settings entityConfig
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("remote_entity mod: %w", err)
 	}
-	if key := cfg.GetString("remote_entity.lock_key"); key != "" {
-		m.cfg.LockKey = key
-	}
-	// 锁状态与 fence 在一个 Lua 中更新；Cluster 必须显式选择同槽前缀。
-	// 不自动改 key，否则滚动发布时新旧节点会锁住不同身份。
-	if len(mods.RedisClusterAddrs(cfg)) > 0 {
-		start := strings.IndexByte(m.cfg.LockKey, '{')
-		if start < 0 || strings.IndexByte(m.cfg.LockKey[start+1:], '}') <= 0 {
-			return fmt.Errorf("remote_entity: Redis Cluster requires a non-empty hash tag in remote_entity.lock_key (for example {roost:remote}); got %q", m.cfg.LockKey)
-		}
-	}
-	if retry := read.Int("remote_entity.retry_count"); retry > 0 {
-		m.cfg.RetryCount = retry
-	}
-	if delay := read.Duration("remote_entity.retry_delay"); delay > 0 {
-		m.cfg.RetryDelay = delay
-	}
-	if timeout := read.Duration("remote_entity.op_timeout"); timeout > 0 {
-		m.cfg.OpTimeout = timeout
-	}
-	if vttl := read.Duration("remote_entity.version_ttl"); vttl > 0 {
-		m.cfg.VersionTTL = vttl
-	}
-	if uRetry := read.Int("remote_entity.unlock_retry_count"); uRetry > 0 {
-		m.cfg.UnlockRetryCount = uRetry
-	}
-	if uInterval := read.Duration("remote_entity.unlock_retry_interval"); uInterval > 0 {
-		m.cfg.UnlockRetryInterval = uInterval
-	}
-	if interval := read.Duration("remote_entity.finalize_retry_interval"); interval > 0 {
-		m.cfg.FinalizeRetryInterval = interval
-	}
-	if wait := read.Duration("remote_entity.finalize_projection_timeout"); wait > 0 {
-		m.cfg.FinalizeProjectionTimeout = wait
-	}
-	if limit := read.Int("remote_entity.max_write_batch"); limit > 0 {
-		m.cfg.MaxWriteBatch = limit
-	}
-	if err := readSnapshotConfig(cfg, read, m.cfg); err != nil {
-		return err
-	}
-	if ttl := read.Duration("remote_entity.marker_cache_ttl"); ttl > 0 {
-		m.cfg.MarkerCacheTTL = ttl
-	}
-	if capacity := read.Int("remote_entity.async_finalize_capacity"); capacity > 0 {
-		m.cfg.AsyncFinalizeCapacity = capacity
-	}
-	if cfg.IsSet("remote_entity.max_concurrent_writes") {
-		limit := read.Int("remote_entity.max_concurrent_writes")
-		if limit < 0 {
-			return errors.Join(read.Err(), errors.New("remote_entity.max_concurrent_writes must not be negative"))
-		}
-		m.cfg.MaxConcurrentWrites = limit
-	}
-	if workers := read.Int("remote_entity.async_finalize_workers"); workers > 0 {
-		m.cfg.AsyncFinalizeWorkers = workers
-	}
-	if limit := read.Int("remote_entity.transaction_track_limit"); limit > 0 {
-		m.cfg.TransactionTrackLimit = limit
-	}
-	if ttl := read.Duration("remote_entity.transaction_track_ttl"); ttl > 0 {
-		m.cfg.TransactionTrackTTL = ttl
-	}
-	if limit := read.Int("remote_entity.wrapper_capacity"); limit > 0 {
-		m.cfg.WrapperCapacity = limit
-	}
-	if ttl := read.Duration("remote_entity.wrapper_idle_ttl"); ttl > 0 {
-		m.cfg.WrapperIdleTTL = ttl
+	if m.localSid == 0 {
+		m.localSid = settings.Sid
 	}
 	if m.localSid == 0 {
 		return fmt.Errorf("remote_entity mod: non-zero sid is required for ownership fencing")
 	}
-	m.mongoConfig = coreremote.MongoBackendConfig{
-		Database:       cfg.GetString("remote_entity.mongo.database"),
-		TransactionTTL: read.Duration("remote_entity.mongo.transaction_ttl"),
+	re := settings.RemoteEntity
+	m.cfg = coreremote.DefaultConfig()
+	setPositive(&m.cfg.LockTTL, re.LockTTL)
+	if re.LockKey != "" {
+		m.cfg.LockKey = re.LockKey
 	}
-	if m.mongoConfig.Database == "" {
-		m.mongoConfig.Database = "remote_entity"
-	}
-	if err := read.Err(); err != nil {
-		return fmt.Errorf("remote_entity mod: %w", err)
-	}
+	setPositive(&m.cfg.RetryCount, re.RetryCount)
+	setPositive(&m.cfg.RetryDelay, re.RetryDelay)
+	setPositive(&m.cfg.OpTimeout, re.OpTimeout)
+	setPositive(&m.cfg.VersionTTL, re.VersionTTL)
+	setPositive(&m.cfg.UnlockRetryCount, re.UnlockRetryCount)
+	setPositive(&m.cfg.UnlockRetryInterval, re.UnlockRetryInterval)
+	setPositive(&m.cfg.FinalizeRetryInterval, re.FinalizeRetryInterval)
+	setPositive(&m.cfg.FinalizeProjectionTimeout, re.FinalizeProjectionTimeout)
+	setPositive(&m.cfg.MaxWriteBatch, re.MaxWriteBatch)
+	re.snapshotConfig.apply(m.cfg)
+	setPositive(&m.cfg.AsyncFinalizeCapacity, re.AsyncFinalizeCapacity)
+	m.cfg.MaxConcurrentWrites = re.MaxConcurrentWrites
+	setPositive(&m.cfg.AsyncFinalizeWorkers, re.AsyncFinalizeWorkers)
+	setPositive(&m.cfg.TransactionTrackLimit, re.TransactionTrackLimit)
+	setPositive(&m.cfg.TransactionTrackTTL, re.TransactionTrackTTL)
+	setPositive(&m.cfg.WrapperCapacity, re.WrapperCapacity)
+	setPositive(&m.cfg.WrapperIdleTTL, re.WrapperIdleTTL)
+	m.mongoConfig = coreremote.MongoBackendConfig{Database: re.Mongo.Database, TransactionTTL: re.Mongo.TransactionTTL}
 	return nil
 }
 
@@ -281,92 +221,5 @@ func (m *RemoteEntityMod) StopWithContext(ctx context.Context) error {
 		return err
 	}
 	slog.Info("remote_entity mod: stopped")
-	return nil
-}
-
-// readSnapshotConfig 读 remote_entity.* 的快照段（RemoteEntityMod 与只读的 RemoteMirrorMod 共用，A4 严格读取）：
-// 缓存、共享 L2、陈旧上限、兴趣表、加载超时与等待者。类型错误攒在 read 里由调用方统一报出；值域错误直接返回。
-func readSnapshotConfig(cfg *viper.Viper, read *app.ConfigReader, out *coreremote.Config) error {
-	if shards := read.Int("remote_entity.snapshot_cache_shards"); shards > 0 {
-		out.SnapshotCacheShards = shards
-	}
-	if entries := read.Int("remote_entity.snapshot_cache_entries"); entries > 0 {
-		out.SnapshotCacheEntries = entries
-	}
-	if bytes := read.Int64("remote_entity.snapshot_cache_bytes"); bytes > 0 {
-		out.SnapshotCacheBytes = bytes
-	}
-	if ttl := read.Duration("remote_entity.snapshot_cache_ttl"); ttl > 0 {
-		out.SnapshotCacheTTL = ttl
-	}
-	if ttl := read.Duration("remote_entity.snapshot_l2_ttl"); ttl > 0 {
-		out.SnapshotL2TTL = ttl
-	}
-	// B2：Cached / Monotonic 读能交出的快照距最近一次被共享 L2 或权威确认的最长时间。严格读取（A4）：
-	// 不带单位的数字报错；设置了就必须为正；不配置时取 snapshot_cache_ttl。
-	if cfg.IsSet("remote_entity.cached_max_staleness") {
-		staleness := read.Duration("remote_entity.cached_max_staleness")
-		if err := read.Err(); err != nil {
-			return err
-		}
-		if staleness <= 0 {
-			return fmt.Errorf("remote_entity.cached_max_staleness must be positive, got %v", cfg.Get("remote_entity.cached_max_staleness"))
-		}
-		out.CachedMaxStaleness = staleness
-	}
-	// 共享 L2 快照键的部署前缀（RR-20260927-17）。kit 里没有部署级的 Redis 前缀：服务各自用 <service>.key_prefix，
-	// nats.prefix 只管 NATS 且缺省即 "roost"，remote_entity.lock_key 是锁身份（Cluster 下必须带 hash tag）。
-	// 从后两者派生都会让已配置它们的部署升级后换键，所以单列一项、缺省为空：不配置时键与旧版本逐字相同。
-	if prefix := cfg.GetString("remote_entity.snapshot_l2_key_prefix"); prefix != "" {
-		if err := coreremote.ValidateSnapshotL2KeyPrefix(prefix); err != nil {
-			return fmt.Errorf("remote_entity.snapshot_l2_key_prefix: %w", err)
-		}
-		out.SnapshotL2KeyPrefix = prefix
-	}
-	// O-M6-3：L2 写墓碑之后等几个副本确认、最多等多久（缺省 1 个、50ms；0 个关闭）。严格读取（A4）：写错类型
-	// 报错；副本数不能为负；超时必须为正（Redis 的 WAIT … 0 是永久阻塞）且不超过 1s（调用方最多多等这么久）。
-	if cfg.IsSet("remote_entity.snapshot_l2_tombstone_wait_replicas") {
-		replicas := read.Int("remote_entity.snapshot_l2_tombstone_wait_replicas")
-		if err := read.Err(); err != nil {
-			return err
-		}
-		if replicas < 0 {
-			return fmt.Errorf("remote_entity.snapshot_l2_tombstone_wait_replicas must not be negative, got %v", cfg.Get("remote_entity.snapshot_l2_tombstone_wait_replicas"))
-		}
-		out.SnapshotL2TombstoneWaitReplicas = replicas
-	}
-	if cfg.IsSet("remote_entity.snapshot_l2_tombstone_wait_timeout") {
-		timeout := read.Duration("remote_entity.snapshot_l2_tombstone_wait_timeout")
-		if err := read.Err(); err != nil {
-			return err
-		}
-		if timeout <= 0 || timeout > coreremote.MaxSnapshotL2TombstoneWaitTimeout {
-			return fmt.Errorf("remote_entity.snapshot_l2_tombstone_wait_timeout must be positive and at most %v, got %v", coreremote.MaxSnapshotL2TombstoneWaitTimeout, cfg.Get("remote_entity.snapshot_l2_tombstone_wait_timeout"))
-		}
-		out.SnapshotL2TombstoneWaitTimeout = timeout
-	}
-	if ttl := read.Duration("remote_entity.snapshot_interest_ttl"); ttl > 0 {
-		out.SnapshotInterestTTL = ttl
-	}
-	if limit := read.Int("remote_entity.snapshot_interest_keys"); limit > 0 {
-		out.SnapshotInterestKeys = limit
-	}
-	if limit := read.Int("remote_entity.snapshot_interest_subs"); limit > 0 {
-		out.SnapshotInterestSubs = limit
-	}
-	// O4：每个 consumer 节点在兴趣表里的配额（0 = snapshot_interest_subs / 16），不能超过每节点上限。
-	if cfg.IsSet("remote_entity.snapshot_interest_per_consumer") {
-		quota := read.Int("remote_entity.snapshot_interest_per_consumer")
-		if quota < 0 || quota > out.SnapshotInterestSubs {
-			return errors.Join(read.Err(), fmt.Errorf("remote_entity.snapshot_interest_per_consumer must be between 0 and remote_entity.snapshot_interest_subs (%d), got %v", out.SnapshotInterestSubs, cfg.Get("remote_entity.snapshot_interest_per_consumer")))
-		}
-		out.SnapshotInterestPerConsumer = quota
-	}
-	if timeout := read.Duration("remote_entity.snapshot_load_timeout"); timeout > 0 {
-		out.SnapshotLoadTimeout = timeout
-	}
-	if limit := read.Int("remote_entity.snapshot_max_waiters"); limit > 0 {
-		out.SnapshotMaxWaiters = limit
-	}
 	return nil
 }

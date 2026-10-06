@@ -36,6 +36,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
+	"{{MODULE}}/internal/bootstrap"
 	kitremoteentity "github.com/tjbdwanghaibo/roost-core/kit/remoteentity"
 	coreremote "github.com/tjbdwanghaibo/roost-core/remoteentity"
 	"gopkg.in/yaml.v3"
@@ -84,10 +85,15 @@ func TestA4GeneratedConfigsPassValidation(t *testing.T) {
 		cfg.Set("server_type", c.service) // App.run 按命令设置
 		return cfg
 	}
+	// A4 ①：每个服务按它在生成 bootstrap 里注册的全部 Mod 的声明检查（与 App 启动前、--check-config 相同）。
+	process, err := bootstrap.New()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range configs {
 		t.Run(c.name, func(t *testing.T) {
-			if err := app.ValidateServiceConfig(load(t, c)); err != nil {
-				t.Errorf("%s does not pass ValidateServiceConfig:\n%v", c.name, err)
+			if err := process.CheckServiceConfig(app.ServiceName(c.service), load(t, c)); err != nil {
+				t.Errorf("%s does not pass the declarations of %s's mods:\n%v", c.name, c.service, err)
 			}
 			if !c.prod {
 				return
@@ -95,7 +101,7 @@ func TestA4GeneratedConfigsPassValidation(t *testing.T) {
 			cfg := load(t, c)
 			cfg.Set("env", "production")
 			cfg.Set("ops.allow_public_addr", true)
-			if err := app.ValidateServiceConfig(cfg); err != nil {
+			if err := process.CheckServiceConfig(app.ServiceName(c.service), cfg); err != nil {
 				t.Errorf("%s with env: production is refused:\n%v", c.name, err)
 			}
 		})
@@ -175,7 +181,7 @@ func TestGeneratedConfigsPassStrictAndProductionValidation(t *testing.T) {
 	goMod = append(goMod, []byte("\nreplace github.com/tjbdwanghaibo/roost-core => "+strconv.Quote(filepath.ToSlash(repo))+"\n")...)
 	for rel, body := range map[string][]byte{
 		"go.mod":                                 goMod,
-		"internal/configcheck/a4_config_test.go": []byte(generatedConfigValidationTest),
+		"internal/configcheck/a4_config_test.go": []byte(strings.ReplaceAll(generatedConfigValidationTest, "{{MODULE}}", projectModule(t, goMod))),
 	} {
 		path := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -201,4 +207,14 @@ func TestGeneratedConfigsPassStrictAndProductionValidation(t *testing.T) {
 	if !strings.Contains(string(out), "--- PASS: TestA4GeneratedConfigsPassValidation") {
 		t.Errorf("TestA4GeneratedConfigsPassValidation did not run and pass:\n%s", out)
 	}
+}
+
+// projectModule is the module path a generated go.mod declares.
+func projectModule(t *testing.T, goMod []byte) string {
+	t.Helper()
+	match := regexp.MustCompile(`(?m)^module\s+(\S+)`).FindSubmatch(goMod)
+	if match == nil {
+		t.Fatal("generated go.mod has no module line")
+	}
+	return string(match[1])
 }

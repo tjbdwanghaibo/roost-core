@@ -39,9 +39,8 @@ type frameworkServiceSpec struct {
 	// index is the first). Each entry is a method call whose argument names a
 	// function in the project's collaborators file, so the default file must
 	// define it too.
-	ModChain   []string
-	Collabs    string
-	ConfigFunc func(project string) string
+	ModChain []string
+	Collabs  string
 }
 
 // ImportPath is the package's path under roost-kit/service/.
@@ -92,9 +91,6 @@ func NameRules() account.NameValidator {
 	})
 }
 `,
-		ConfigFunc: func(project string) string {
-			return "account:\n  key_prefix: roost:" + project + ":account\n  session_secret: CHANGE_ME\n  session_ttl: 30m\n  claim_ttl: 5m\n"
-		},
 	},
 	"mail": {
 		Package: "mail", Interface: "Mail", Depends: []string{"redis", "nats"},
@@ -103,9 +99,6 @@ func NameRules() account.NameValidator {
 // fail-closed configuration: broadcasts are refused rather than dropped.
 func Broadcast() mail.Deliverer { return nil }
 `,
-		ConfigFunc: func(project string) string {
-			return "mail:\n  key_prefix: roost:" + project + ":mail\n  send_ttl: 720h\n  claim_lease: 30s\n"
-		},
 	},
 	"match": {
 		Package: "match", Interface: "Matchmaker", Depends: []string{"redis", "nats"},
@@ -116,9 +109,6 @@ func Broadcast() mail.Deliverer { return nil }
 // match.Grouping (FirstComeGrouping, ScoreWindowGrouping or its own) and
 // Commits. See the game-demo template's internal/service/<game>/matchmaker.go.
 `,
-		ConfigFunc: func(project string) string {
-			return "match:\n  key_prefix: roost:" + project + ":match\n  ticket_ttl: 60s\n  sweep_queues: []\n"
-		},
 	},
 	"platform": {
 		Package: "platform", Interface: "Platform", Depends: []string{"redis", "nats"},
@@ -163,14 +153,6 @@ func Deliver() platform.Deliverer {
 // It may implement platform.RegistryBound to receive the process's registry.
 func Pending() platform.PendingOrders { return nil }
 `,
-		ConfigFunc: func(project string) string {
-			// session_secret and payment_secret are refused when empty at Init
-			// (an unset payment secret turns every provider callback into an
-			// invalid-signature refusal), so they are emitted as CHANGE_ME
-			// rather than omitted: a starter config whose process cannot start
-			// reads as a broken generator.
-			return "platform:\n  key_prefix: roost:" + project + ":platform\n  session_secret: CHANGE_ME\n  payment_secret: CHANGE_ME\n  session_ttl: 30m\n  delivery_attempts: 8\n"
-		},
 	},
 	"global": {
 		Package: "global", Interface: "Routing", Depends: []string{"redis", "nats"},
@@ -182,9 +164,6 @@ func Pending() platform.PendingOrders { return nil }
 // collaborators. Whether a game server is alive is not asked here: that is
 // the App's singleton lock, read with app.SingletonLiveness.Live.
 `,
-		ConfigFunc: func(project string) string {
-			return "global:\n  key_prefix: roost:" + project + ":global\n"
-		},
 	},
 	"activity": {
 		Package: "activity", Path: "global/activity", Interface: "Coordinator",
@@ -196,22 +175,6 @@ func Pending() platform.PendingOrders { return nil }
 // game's, and it stays in the game process, on the two sides of this service:
 // the progress it applies and the dispatch it acks.
 `,
-		ConfigFunc: func(project string) string {
-			// reservation_ttl is required with no default: it must exceed the
-			// caller's longest retry horizon, past which a replayed progress
-			// request is indistinguishable from a new one and is applied
-			// twice. Only the caller's transport knows that number, so the
-			// service refuses to pick one — and a starter config that omits
-			// it is a process that cannot start.
-			//
-			// groups_file is the activity groups file (C4): the groups the
-			// game servers open windows in, validated here at start, swept by
-			// this process (so their ids are not written a second time under
-			// sweep_groups) and checked against every window opened
-			// (RR-20261006-17). The Mod requires it (Init refuses to start
-			// without it, 2026-10-06), like reservation_ttl.
-			return "activity:\n  key_prefix: roost:" + project + ":activity\n  reservation_ttl: 30m\n  grace_window: 60s\n  dispatch_attempts: 5\n  dispatch_backoff: 5s\n  groups_file: " + activityGroupsFile + "\n"
-		},
 	},
 	"rank": {
 		Package: "rank", Interface: "Rank", Depends: []string{"redis", "nats"},
@@ -222,9 +185,6 @@ func Pending() platform.PendingOrders { return nil }
 // deliberately absent from the bus interface — emptying a board is an
 // operator action with an audit trail, not something every peer can reach.
 `,
-		ConfigFunc: func(project string) string {
-			return "rank:\n  key_prefix: roost:" + project + ":rank\n"
-		},
 	},
 	"session": {
 		Package: "session", Interface: "Session", Depends: []string{"redis", "nats"},
@@ -239,9 +199,6 @@ func Release() session.Releaser {
 	})
 }
 `,
-		ConfigFunc: func(project string) string {
-			return "session:\n  key_prefix: roost:" + project + ":session\n  run_ttl: 30m\n  request_ttl: 1h\n"
-		},
 	},
 	"chat": {
 		Package: "chat", Interface: "Messaging", Depends: []string{"redis", "nats"},
@@ -275,9 +232,6 @@ func System() chat.SystemAuthenticator {
 // Rules are the channel kinds and their scoping.
 func Rules() []chat.ChannelRule { return chat.DefaultChannelRules() }
 `,
-		ConfigFunc: func(project string) string {
-			return "chat:\n  key_prefix: roost:" + project + ":chat\n  retention_age: 168h\n  prune_channels: []\n"
-		},
 	},
 }
 

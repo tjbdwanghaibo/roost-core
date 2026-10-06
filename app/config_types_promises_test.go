@@ -31,8 +31,7 @@ func TestValidateServiceConfigRejectsABoolSwitchThatIsNotABool(t *testing.T) {
 		{"singleton_on", "singleton:\n  enabled: on\n  key_prefix: p\n", "singleton.enabled"},
 		{"singleton_yes", "singleton:\n  enabled: yes\n  key_prefix: p\n", "singleton.enabled"},
 		{"singleton_typo", "singleton:\n  enabled: ture\n  key_prefix: p\n", "singleton.enabled"},
-		{"reliable_bus_yes", "nats:\n  reliable:\n    enabled: yes\n", "nats.reliable.enabled"},
-		{"replica_set_check_off", "mongo:\n  require_replica_set: off\n", "mongo.require_replica_set"},
+		{"log_json_on", "log:\n  json: on\n", "log.json"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := ValidateServiceConfig(yamlConfig(t, tc.body))
@@ -45,9 +44,9 @@ func TestValidateServiceConfigRejectsABoolSwitchThatIsNotABool(t *testing.T) {
 
 func TestValidateServiceConfigAcceptsTheBoolSpellingsItAlwaysAccepted(t *testing.T) {
 	for _, value := range []string{"true", "false", "True", "FALSE", "\"true\"", "1", "0"} {
-		cfg := yamlConfig(t, "nats:\n  reliable:\n    enabled: "+value+"\n")
+		cfg := yamlConfig(t, "singleton:\n  enabled: "+value+"\n  key_prefix: p\n")
 		if err := ValidateServiceConfig(cfg); err != nil {
-			t.Fatalf("nats.reliable.enabled: %s: ValidateServiceConfig = %v, want accepted", value, err)
+			t.Fatalf("singleton.enabled: %s: ValidateServiceConfig = %v, want accepted", value, err)
 		}
 	}
 }
@@ -60,7 +59,7 @@ func TestValidateServiceConfigRejectsADurationWithoutAUnit(t *testing.T) {
 		{"singleton_all_unitless", "singleton:\n  enabled: true\n  key_prefix: p\n  ttl: 15\n  renew_interval: 3\n  guard: 5\n  startup_wait: 30\n", "singleton.ttl"},
 		{"singleton_quoted_number", "singleton:\n  enabled: true\n  key_prefix: p\n  ttl: \"15\"\n", "singleton.ttl"},
 		{"singleton_unparseable", "singleton:\n  enabled: true\n  key_prefix: p\n  renew_interval: abc\n", "singleton.renew_interval"},
-		{"remote_lock_ttl", "remote_entity:\n  lock_ttl: 15\n", "remote_entity.lock_ttl"},
+		{"log_rotate_unitless", "log:\n  rotate_interval: 24\n", "log.rotate_interval"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := ValidateServiceConfig(yamlConfig(t, tc.body))
@@ -72,7 +71,7 @@ func TestValidateServiceConfigRejectsADurationWithoutAUnit(t *testing.T) {
 }
 
 func TestValidateServiceConfigAcceptsDurationsWithUnits(t *testing.T) {
-	cfg := yamlConfig(t, "singleton:\n  enabled: true\n  key_prefix: p\n  ttl: 15s\n  renew_interval: 3000ms\n  guard: 5s\n  startup_wait: 1m\nremote_entity:\n  lock_ttl: 15s\n")
+	cfg := yamlConfig(t, "singleton:\n  enabled: true\n  key_prefix: p\n  ttl: 15s\n  renew_interval: 3000ms\n  guard: 5s\n  startup_wait: 1m\nlog:\n  rotate_interval: 24h\n")
 	if err := ValidateServiceConfig(cfg); err != nil {
 		t.Fatalf("ValidateServiceConfig = %v, want accepted", err)
 	}
@@ -83,17 +82,5 @@ func TestValidateServiceConfigAcceptsDurationsWithUnits(t *testing.T) {
 	cfg.Set("singleton.ttl", 15*time.Second)
 	if err := ValidateServiceConfig(cfg); err != nil {
 		t.Fatalf("ValidateServiceConfig with a time.Duration value = %v, want accepted", err)
-	}
-}
-
-// 守住 frameworkBoolKeys 与实际读取点同步（RR-20261005-NC-190，A4 扩到全部读取形式）：app、kit 与生成模板里
-// 每个按布尔读取的键——GetBool、ConfigBool、ConfigReader.Bool——都要在清单里（singleton.enabled 由
-// singletonSettings 自己严格读取）。新增开关忘了登记时这里报出键名。时长与整数键见
-// config_strict_reads_promises_test.go。
-func TestEveryFrameworkBoolSwitchIsCheckedStrictly(t *testing.T) {
-	for _, read := range scanFrameworkConfigReads(t) {
-		if read.kind == "bool" && !registeredConfigKey(read.kind, read.key) {
-			t.Errorf("%s reads the switch %q as a bool; add it to frameworkBoolKeys so `%s: on` is refused instead of read as false", read.file, read.key, read.key)
-		}
 	}
 }

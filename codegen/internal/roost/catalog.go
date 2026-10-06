@@ -10,8 +10,24 @@ type modSpec struct {
 	Alias       string
 	Constructor string
 	Depends     []string
-	Config      string
 	DevService  string
+}
+
+//go:generate go run ../../../kit/internal/configschemagen -out kitconfig_gen.go
+
+// modConfigSection is the configuration section a catalog Mod writes into a
+// service config: the keys its declaration marks with an example (the starter
+// keys), with the declaration's help as comments (maintainer decision A4 ①).
+// The declarations are the kit Mods' own, snapshotted into kitconfig_gen.go;
+// a Mod with no declared starter keys writes nothing.
+func modConfigSection(name string) string {
+	return kitConfigSchemas[name].StarterYAML(nil)
+}
+
+// frameworkConfigSection is the same for a hosted framework service; its key
+// prefix example names the project.
+func frameworkConfigSection(name, project string) string {
+	return kitConfigSchemas[name].StarterYAML(map[string]string{"project": project})
 }
 
 // defaultConfigDataDir is the generated config_data.dir: relative, resolved
@@ -32,47 +48,37 @@ var modCatalog = map[string]modSpec{
 	},
 	"ops": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/ops", Alias: "kitops", Constructor: "kitops.NewOpsMod()",
-		Config: "ops:\n  enabled: true\n  addr: 127.0.0.1:9100\n  admin_enabled: false\n  admin_token: \"\"\n  allow_dev_token: false\n",
 	},
 	"statslog": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/statslog", Alias: "kitstatslog", Constructor: "kitstatslog.NewStatsLogMod()",
-		Config: "stats_log:\n  enabled: true\n  dir: " + defaultStatsLogDir + "\n  interval: 1m\n",
 	},
 	"configdata": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/configdata", Alias: "kitconfigdata", Constructor: "kitconfigdata.NewConfigDataMod()",
-		Config: "config_data:\n  dir: " + defaultConfigDataDir + "\n",
 	},
 	"etcd": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/etcd", Alias: "kitetcd", Constructor: "kitetcd.NewEtcdMod()",
-		Config:     "etcd:\n  endpoints: 127.0.0.1:2379\n  username: \"\"\n  password: \"\"\n  service_prefix: /roost/services/\n  lease_ttl: 10\n  advertise_addr: 127.0.0.1:9000\n",
 		DevService: "etcd",
 	},
 	"redis": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/redis", Alias: "kitredis", Constructor: "kitredis.NewRedisMod()",
-		Config:     "redis:\n  addr: 127.0.0.1:6379\n  password: \"\"\n  db: 0\n  pool_size: 32\n  min_idle_conns: 4\n",
 		DevService: "redis",
 	},
 	"mongo": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/mongo", Alias: "kitmongo", Constructor: "kitmongo.NewMongoMod()",
-		Config:     "mongo:\n  uri: mongodb://127.0.0.1:27017/?replicaSet=rs0\n  connect_timeout: 5s\n  transaction_timeout: 30s\n  require_replica_set: true\n  max_pool_size: 100\n  min_pool_size: 5\n  max_idle_time: 5m\n",
 		DevService: "mongo",
 	},
 	"nats": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/nats", Alias: "kitnats", Constructor: "kitnats.NewNatsMod(nil)",
-		Config:     "nats:\n  url: nats://127.0.0.1:4222\n  prefix: roost\n  worker_num: 8\n  reliable:\n    enabled: false\n",
 		DevService: "nats",
 	},
 	"syncbus": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/syncbus", Alias: "kitsyncbus", Constructor: "kitsyncbus.NewSyncBusMod(0)", Depends: []string{"nats"},
-		Config: "syncbus:\n  transport: jetstream\n  prefix: roost.sync\n  # JetStream stream name. Left out it is derived from prefix (roost.sync -> ROOST_SYNC,\n  # zz.sync -> ZZ_SYNC), so deployments sharing one NATS with different prefixes get\n  # different streams; set it only to keep an existing stream and its consumer cursors.\n  # stream: ROOST_SYNC\n  storage: file\n  replicas: 1\n  publish_timeout: 3s\n",
 	},
 	"remote_entity": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/remoteentity", Alias: "kitremoteentity", Depends: []string{"redis", "mongo", "syncbus"},
-		Config: "remote_entity:\n  lock_ttl: 15s\n  retry_count: 3\n  retry_delay: 100ms\n  op_timeout: 3s\n  unlock_retry_count: 5\n  unlock_retry_interval: 100ms\n  version_ttl: 24h\n  finalize_retry_interval: 500ms\n  max_write_batch: 64\n  wrapper_capacity: 65536\n  wrapper_idle_ttl: 5m\n  snapshot_cache_shards: 64\n  snapshot_cache_entries: 10000\n  snapshot_cache_bytes: 268435456\n  snapshot_cache_ttl: 30s\n  # B2：Cached / Monotonic 读交出的快照距最近一次被共享 L2 或权威确认的最长时间，超过先重新确认，\n  # 确认不了就不交出。不配置时等于 snapshot_cache_ttl（这里写成与它相同）；配置了必须为正。\n  cached_max_staleness: 30s\n  snapshot_l2_ttl: 10m\n  # Prefix for the shared L2 snapshot keys (remote_entity:snapshot:*). Empty keeps the\n  # unprefixed keys; deployments sharing one Redis db must set different values, e.g.\n  # roost:<project>. Every node of a deployment must use the same value; no hash tags.\n  snapshot_l2_key_prefix: \"\"\n  # O-M6-3：L2 写删除墓碑后用 WAIT 等几个副本确认、最多等多久，缩小切主时删除短暂复活的窗口。\n  # 0 个副本即关闭；主节点没有副本时自动不等；确认不足只计数并记 Warn，不回滚。超时必须为正且不超过 1s。\n  snapshot_l2_tombstone_wait_replicas: 1\n  snapshot_l2_tombstone_wait_timeout: 50ms\n  snapshot_interest_ttl: 30s\n  snapshot_interest_keys: 10000\n  snapshot_interest_subs: 100000\n  # O4：每个 consumer 节点在兴趣表里的租约配额，0 取 snapshot_interest_subs / 16，不能超过 snapshot_interest_subs。\n  # 超出配额的 key 没有推送、按需读取（计 interest_rejected_total{reason}）。\n  snapshot_interest_per_consumer: 0\n  marker_cache_ttl: 2s\n  snapshot_load_timeout: 3s\n  snapshot_max_waiters: 4096\n  async_finalize_capacity: 4096\n  async_finalize_workers: 16\n  transaction_track_limit: 100000\n  transaction_track_ttl: 10m\n  mongo:\n    database: remote_entity\n    transaction_ttl: 168h\n  # Mirror 第 5 步：只读服务（kit/remoteentity.NewRemoteMirrorMod）声明给 App 的停机预算，RemoteEntityMod 不读它。\n  # 生成的 shutdown.total_timeout 与部署宽限期只计入生成器认识的 Mod，手工接入 Mirror Mod 时要一并调大。\n  mirror:\n    shutdown_timeout: 5s\n",
 	},
 	"dataengine": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/dataengine", Alias: "kitdataengine", Depends: []string{"mongo", "nats"},
-		Config: "persistence:\n  engine: dataengine\nnest:\n  worker_num: 8\n  heartbeat_worker_num: 2\n  queue_capacity: 4096\n  delayed_capacity: 4096\n  max_delay: 24h\n  tick_duration: 50ms\n  request_timeout: 3s\n  # Framework cap for one shared cold entity load; a caller's own deadline does not end it.\n  entity_load_timeout: 30s\n  # Reload of unloaded entities that still have Sync subscribers (0 keeps the framework\n  # default). Worst case before the last queued entity falls back to a remove is about\n  # ceil(queue_capacity/workers) * attempts * entity_load_timeout; see the roost-core USER_GUIDE.\n  unload_resync:\n    workers: 4\n    attempts: 5\n    queue_capacity: 4096\n  pipelined:\n    allowlist: []\n    async: false\n    async_workers: 8\n    async_queue_capacity: 4096\ndataengine:\n  database: game\n  startup_timeout: " + seconds(generatedDataEngineStartupTimeout) + "\n  # Stop budget declared to the App for draining WAL and projection; granted from\n  # shutdown.total_timeout after a 3s floor for each other Mod (scaled down with a warning\n  # only when the rest cannot cover it). The generated shutdown.total_timeout counts it:\n  # raise that too when raising this.\n  shutdown_timeout: " + seconds(generatedDataEngineShutdownTimeout) + "\n  transaction_receipt_ttl: 720h\n  receipt_ttl: 720h\n  wal:\n    dir: data/wal/dataengine\n    writer_version: 2\n    segment_bytes: 268435456\n    max_disk_bytes: 8589934592\n    max_unacked_age: 24h\n    queue_capacity: 8192\n    group_commit_interval: 2ms\n  projection:\n    batch_records: 256\n    retry_min: 100ms\n    retry_max: 5s\n  outbox:\n    workers: 2\n    batch_size: 64\n    lease_duration: 30s\n    poll_interval: 100ms\n    retry_min: 1s\n    retry_max: 1m\n    max_pending: 1000000\n    max_oldest_age: 30m\n  effects:\n    subject_prefix: roost.effect\n    stream: ROOST_EFFECTS\n    max_age: 168h\n    max_bytes: 8589934592\n    duplicate_window: 10m\n    replicas: 1\n",
 	},
 	"manager": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/manager", Alias: "kitmanager",
@@ -82,7 +88,6 @@ var modCatalog = map[string]modSpec{
 	},
 	"saga": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/saga", Alias: "kitsaga", Constructor: "kitsaga.NewMod()", Depends: []string{"mongo", "nats"},
-		Config: "saga:\n  database: saga\n  # Step timeout and retry budget (U-0280). Fields a saga definition leaves unset\n  # take these; one operation of a step gets up to max_attempts attempts, at most\n  # one of which takes effect.\n  step_defaults:\n    timeout: 5s\n    max_attempts: 5\n    backoff_min: 100ms\n    backoff_max: 5s\n  # Per-step overrides, winning over the definition and step_defaults:\n  # steps.<saga type>.<step name>.<timeout|max_attempts|backoff_min|backoff_max>.\n  steps: {}\n  subject_prefix: roost.saga\n  stream: ROOST_SAGA\n  coordinator_workers: 4\n  publisher_workers: 4\n  coordinator_claim_batch: 3\n  publisher_claim_batch: 1\n  lease_duration: 15s\n  store_timeout: 3s\n  poll_interval: 100ms\n  publish_timeout: 3s\n  publish_backoff_min: 50ms\n  publish_backoff_max: 5s\n  max_payload_bytes: 65536\n  completion_receipt_ttl: 720h\n  stream_max_age: 168h\n  stream_max_bytes: 8589934592\n  duplicate_window: 10m\n  replicas: 1\n  result_ack_wait: 30s\n  result_process_timeout: 3s\n  result_max_deliver: 25000\n  result_max_ack_pending: 256\n  result_nak_backoff_min: 250ms\n  result_nak_backoff_max: 30s\n  start_effect_stream: ROOST_EFFECTS\n  start_effect_prefix: roost.effect\n  start_effect_durable: roost-saga-start\n  start_effect_ack_wait: 30s\n  start_effect_process_timeout: 3s\n  start_effect_max_deliver: 25000\n  start_effect_max_ack_pending: 256\n  start_effect_nak_backoff_min: 250ms\n  start_effect_nak_backoff_max: 30s\n  result_effect_durable: roost-saga-start-result\n  result_effect_ack_wait: 30s\n  result_effect_process_timeout: 3s\n  result_effect_max_deliver: 25000\n  result_effect_max_ack_pending: 256\n  result_effect_nak_backoff_min: 250ms\n  result_effect_nak_backoff_max: 30s\n",
 	},
 }
 

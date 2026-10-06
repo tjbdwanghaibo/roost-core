@@ -125,7 +125,7 @@ func (allocator *redisAllocator) BindRegistry(registry *app.Registry) error {
 		return fmt.Errorf("demo player id allocator: %w", err)
 	}
 	// The same account.key_prefix the account Mod reads in Init.
-	prefix, err := mods.KeyPrefix(registry.Config(), "account")
+	prefix, err := account.KeyPrefix(registry.Config())
 	if err != nil {
 		return fmt.Errorf("demo player id allocator: %w", err)
 	}

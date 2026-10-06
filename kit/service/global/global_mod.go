@@ -1,6 +1,8 @@
 package global
 
 import (
+	"fmt"
+
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
@@ -39,6 +41,17 @@ func (m *Mod) Name() app.ModName { return CapabilityName }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
+// config 是 global.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	mods.ServiceMetricsConfig
+	Global struct {
+		KeyPrefix string `config:"key_prefix" required:"true" example:"roost:{project}:global" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
+	} `config:"global"`
+}
+
+// ConfigSchema 声明 global.* 与 service_metrics.enabled。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 // Init reads configuration.
 //
 //	global:
@@ -51,15 +64,17 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 // grace_window, dispatch_attempts, dispatch_backoff — moved with the service,
 // to activity.Mod's own section.
 func (m *Mod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("global mod: %w", err)
+	}
 	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
-	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+	settings.ApplyServiceMetrics(&m.metrics)
+	c := settings.Global
+	if err := mods.CheckKeyPrefix("global", c.KeyPrefix); err != nil {
 		return err
 	}
-	prefix, err := mods.KeyPrefix(cfg, "global")
-	if err != nil {
-		return err
-	}
-	m.prefix = prefix
+	m.prefix = c.KeyPrefix
 	return nil
 }
 

@@ -124,7 +124,7 @@ func TestGameTemplateRendersHostingAndClientWiring(t *testing.T) {
 		t.Errorf("frameworkdeps does not retain the kit services:\n%s", deps)
 	}
 	mailConfig := string(plan["configs/service/config.mail.yaml"].Body)
-	for _, want := range []string{"mail:\n  key_prefix: roost:planet:mail", "send_ttl: 720h", "redis:\n", "nats:\n"} {
+	for _, want := range []string{"mail:\n", "  key_prefix: roost:planet:mail\n", "send_ttl: 720h", "redis:\n", "nats:\n"} {
 		if !strings.Contains(mailConfig, want) {
 			t.Errorf("mail config missing %q:\n%s", want, mailConfig)
 		}

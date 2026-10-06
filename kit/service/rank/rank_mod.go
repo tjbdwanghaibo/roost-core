@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	kitredis "github.com/tjbdwanghaibo/roost-core/kit/redis"
 
 	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 )
@@ -49,23 +50,37 @@ func (m *Mod) Name() app.ModName { return CapabilityName }
 // exist before Provide runs.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
+// config 是 rank.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	mods.ServiceMetricsConfig
+	kitredis.ClusterConfig
+	Rank struct {
+		KeyPrefix string `config:"key_prefix" required:"true" example:"roost:{project}:rank" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
+	} `config:"rank"`
+}
+
+// ConfigSchema 声明 rank.* 与 service_metrics.enabled。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 // Init reads configuration.
 //
 //	rank:
 //	  key_prefix: roost:rank   # required, no default
 func (m *Mod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("rank mod: %w", err)
+	}
 	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
-	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+	settings.ApplyServiceMetrics(&m.metrics)
+	c := settings.Rank
+	if err := mods.CheckKeyPrefix("rank", c.KeyPrefix); err != nil {
 		return err
 	}
-	prefix, err := mods.KeyPrefix(cfg, "rank")
-	if err != nil {
+	if err := mods.ValidateClusterKeyPrefix(settings.ClusterAddrs, "rank", c.KeyPrefix); err != nil {
 		return err
 	}
-	if err := mods.ValidateClusterKeyPrefix(cfg, "rank", prefix); err != nil {
-		return err
-	}
-	m.prefix = prefix
+	m.prefix = c.KeyPrefix
 	return nil
 }
 

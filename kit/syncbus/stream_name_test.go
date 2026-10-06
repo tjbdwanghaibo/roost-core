@@ -30,7 +30,6 @@ func TestSyncBusStreamIsDerivedFromThePrefix(t *testing.T) {
 		{name: "kit default prefix written out", config: map[string]any{"syncbus.prefix": "roost.room"}, want: "ROOST_SYNC"},
 		{name: "isolated prefix", config: map[string]any{"syncbus.prefix": "zz3640.sync"}, want: "ZZ3640_SYNC"},
 		{name: "explicit stream wins", config: map[string]any{"syncbus.prefix": "zz3640.sync", "syncbus.stream": "ZZ3640_OWN"}, want: "ZZ3640_OWN"},
-		{name: "legacy room section prefix", config: map[string]any{"room.prefix": "zz3641.sync"}, want: "ZZ3641_SYNC"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := viper.New()

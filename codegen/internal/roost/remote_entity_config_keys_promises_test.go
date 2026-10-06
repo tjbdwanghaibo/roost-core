@@ -23,7 +23,7 @@ func TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys(t *testing.T) {
 			"\n  snapshot_interest_per_consumer: 0\n",
 			"\n  snapshot_l2_tombstone_wait_replicas: 1\n",
 			"\n  snapshot_l2_tombstone_wait_timeout: 50ms\n",
-			"\n  mirror:\n    shutdown_timeout: 5s\n",
+			"\n    shutdown_timeout: 5s\n",
 		} {
 			if !strings.Contains(config, want) {
 				t.Errorf("production=%v: config lacks %q:\n%s", production, strings.TrimSpace(want), config)

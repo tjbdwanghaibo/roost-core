@@ -2,12 +2,12 @@ package activity
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	kitredis "github.com/tjbdwanghaibo/roost-core/kit/redis"
 
 	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 )
@@ -37,12 +37,6 @@ type Mod struct {
 	service *Service
 }
 
-// generatedGroupsFile is where `roost project new` puts the activity groups
-// file and what it writes under activity.groups_file
-// (codegen/internal/roost activityGroupsFile). Init names it when the key is
-// missing, so the fix is one line to copy.
-const generatedGroupsFile = "configs/activity_groups.yaml"
-
 // NewMod returns an activity Mod.
 func NewMod(reporter servicemetrics.Reporter) *Mod {
 	return &Mod{metrics: reporter}
@@ -53,6 +47,24 @@ func (m *Mod) Name() app.ModName { return CapabilityName }
 
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
+
+// config 是 activity.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	mods.ServiceMetricsConfig
+	kitredis.ClusterConfig
+	Activity struct {
+		KeyPrefix        string        `config:"key_prefix" required:"true" example:"roost:{project}:activity" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
+		ReservationTTL   time.Duration `config:"reservation_ttl" required:"true" min:"1ns" example:"30m" help:"Required, with no default. It must exceed the longest client retry horizon: past it a replayed\nprogress request is indistinguishable from a new one and the progress is applied twice."`
+		GraceWindow      time.Duration `config:"grace_window" default:"60s" min:"1ns" example:"60s"`
+		DispatchAttempts int           `config:"dispatch_attempts" default:"5" min:"1" example:"5"`
+		DispatchBackoff  time.Duration `config:"dispatch_backoff" default:"5s" min:"1ns" example:"5s"`
+		GroupsFile       string        `config:"groups_file" required:"true" example:"configs/activity_groups.yaml" help:"活动组文件（C4）：game 服务在这些组里开窗口，本进程启动时校验、清扫它们"`
+		SweepGroups      []string      `config:"sweep_groups" help:"另外要清扫的组；不写取 groups_file 里的全部组"`
+	} `config:"activity"`
+}
+
+// ConfigSchema 声明 activity.* 与 service_metrics.enabled。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
 
 // Init reads configuration.
 //
@@ -68,7 +80,8 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 // groups_file is the activity groups file the game servers read too
 // (LoadGroupsFile, decision C4). It is required: a coordinator without it has
 // nothing to check a window's expected set against, so Init refuses to start
-// and names the key and the path the generator writes (generatedGroupsFile).
+// and names the key and the path the generator writes (the declaration's
+// example, configs/activity_groups.yaml).
 // It was optional until 2026-10-06 so projects generated before C4 kept
 // starting; the maintainer dropped that compatibility (nothing is deployed
 // yet, and one way to configure the coordinator is simpler than two).
@@ -89,61 +102,27 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 // The prefix may still point at the same root — each service owning its own
 // keyspace setting is the point, not that the keyspaces have to differ.
 func (m *Mod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("activity mod: %w", err)
+	}
 	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
-	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+	settings.ApplyServiceMetrics(&m.metrics)
+	c := settings.Activity
+	if err := mods.CheckKeyPrefix("activity", c.KeyPrefix); err != nil {
 		return err
 	}
-	prefix, err := mods.KeyPrefix(cfg, "activity")
-	if err != nil {
+	if err := mods.ValidateClusterKeyPrefix(settings.ClusterAddrs, "activity", c.KeyPrefix); err != nil {
 		return err
 	}
-	if err := mods.ValidateClusterKeyPrefix(cfg, "activity", prefix); err != nil {
-		return err
-	}
-	// Required, with no default. It must exceed the longest client retry
-	// horizon: past it a replayed progress request is indistinguishable from a
-	// new one and the progress is applied twice. That horizon belongs to the
-	// caller's transport, so this service cannot pick it.
-	reservationTTL, err := mods.RequiredDuration(cfg, "activity.reservation_ttl")
-	if err != nil {
-		return err
-	}
-	graceWindow, err := mods.Duration(cfg, "activity.grace_window", DefaultGraceWindow)
-	if err != nil {
-		return err
-	}
-	dispatchBackoff, err := mods.Duration(cfg, "activity.dispatch_backoff", DefaultDispatchBackoff)
-	if err != nil {
-		return err
-	}
-	dispatchAttempts := DefaultDispatchAttempts
-	if cfg.IsSet("activity.dispatch_attempts") {
-		dispatchAttempts, err = app.ConfigInt(cfg, "activity.dispatch_attempts")
-		if err != nil {
-			return fmt.Errorf("activity mod: %w", err)
-		}
-		if dispatchAttempts <= 0 {
-			return fmt.Errorf("activity mod: activity.dispatch_attempts must be positive, got %d", dispatchAttempts)
-		}
-	}
-	path := strings.TrimSpace(cfg.GetString("activity.groups_file"))
-	if path == "" {
-		return fmt.Errorf("activity mod: activity.groups_file is required: set it to the activity groups file "+
-			"the game servers read (generated projects use %s)", generatedGroupsFile)
-	}
-	groups, err := LoadGroupsFile(path)
+	groups, err := LoadGroupsFile(c.GroupsFile)
 	if err != nil {
 		return fmt.Errorf("activity mod: activity.groups_file: %w", err)
 	}
-	m.prefix, m.reservationTTL = prefix, reservationTTL
-	m.graceWindow, m.dispatchAttempts, m.dispatchBackoff = graceWindow, dispatchAttempts, dispatchBackoff
+	m.prefix, m.reservationTTL = c.KeyPrefix, c.ReservationTTL
+	m.graceWindow, m.dispatchAttempts, m.dispatchBackoff = c.GraceWindow, c.DispatchAttempts, c.DispatchBackoff
 	m.groups = &groups
-	m.sweepGroups = nil
-	for _, group := range cfg.GetStringSlice("activity.sweep_groups") {
-		if group = strings.TrimSpace(group); group != "" {
-			m.sweepGroups = append(m.sweepGroups, group)
-		}
-	}
+	m.sweepGroups = c.SweepGroups
 	if len(m.sweepGroups) == 0 {
 		m.sweepGroups = groups.IDs()
 	}

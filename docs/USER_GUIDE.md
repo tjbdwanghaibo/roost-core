@@ -20,13 +20,17 @@ RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登�
 
 时间分两个钟：**业务时钟** = 真实时间 + `time.logic_offset`，活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、游戏时间都读它，从 `app.BusinessClock(registry)` 拿（kit 的 activity、mail、rank、session Mod 已注入）；**系统时钟** = 真实时间，帧率、租约与锁、超时、重试、存储 TTL、Ack、日志与 WAL 时间戳，直接用 `time` 包。偏移只在启动时读一次，所有进程写同一个值；`env: production` 时非 0 拒绝启动。mail 信封的 Redis TTL 现在是业务剩余时长 + 24h 宽限（固定 `EnvelopeStorageGrace`；v1.21.0 的 `RedisConfig.StorageGrace` 已删）。`glsvet` 对 `game` 目录下的包直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，系统时间写 `//glsvet:system-clock <理由>` 豁免。第八轮起 match 票据、chat 展示给玩家的时间（新字段 `SentAtUnix`；保留期仍按系统时钟）、account 的创建与登录时间也走业务时钟，`roost project doctor` 检查同一套部署各服务的 `time.logic_offset` 是否一致。详见 [§10 业务时钟与系统时钟](#业务时钟与系统时钟)。[方案](feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md)
 
+## 2026-10-07 每个 Mod 声明自己的配置（A4 ①，main，未发版）
+
+配置键、类型、缺省值、范围 / 枚举、必填与说明写在 Mod 的配置结构体上（`app.SchemaOf` / `app.LoadConfig`），App 启动前、生成器写配置段、`roost project doctor` 检查配置三处用同一份声明；`app.ConfigReader` 删除。以前写 0 或负数静默取默认的键现在按声明的范围拒绝（不写就是缺省）。新增 `<bin> <service> --print-config` / `--check-config`。syncbus 只读 `syncbus.*` 段（`room` / `sync` 回退删除），生成的 `shutdown` 段不再写没人读的 `serve_wait_timeout`（RR-20261006-38）。详见 [§10 配置写法与启动校验](#配置写法与启动校验)。[方案](feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)
+
 ## 2026-10-06 配置数据规则在加载层强制、热更失败可见（B10 / C2，main，未发版）
 
 tablegen 标签（`required` / `unique` / `min` / `enum` / `ref`）与 cfggen 的同名选项变成一组 `configdata.FieldRule`，由 configdata 在每次加载与 reload 时对原始 JSON 检查——直接改 `configs/data` 再 `gm.config.reload` 也绕不过，删掉一个 required 列会被点名拒绝（表 / 行 / 字段 / 规则），旧快照保持；`roost generate` 与 `tablegen -check` 用同一个检查器提前反馈。热更失败（含 build 阶段）与撤回都留 Warn 日志并计入 `configdata.reload.total{result=failed}` / `configdata.rollback.total{trigger}`，`reason` 不再作指标标签。新生成的代码需要下一个版本的 core。详见 [§10 配置数据](#配置数据规则热更与可见性)。[方案](feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md)
 
 ## 2026-10-05 配置严格读取与生产校验范围（A4 / C1，main，未发版）
 
-框架读取的布尔、时长、整数配置一律严格：`on` / `yes`、不带单位的时长（`ttl: 15`）、`8k` / `1.5` / `10s` 这样的整数，App 启动时（`ValidateServiceConfig`，任何 Mod Init 之前）点名报错，不再静默读成 false / 纳秒 / 0（取默认）。自己写 Mod 读配置时用 `app.ConfigBool` / `ConfigDuration` / `ConfigInt`，一次读多个键用 `app.NewConfigReader(cfg)` 读完再看 `Err()`。`env: production` 只校验有读取方的设置，原先要求的 `player.login_auth_required`、`player_protocol.rate_limit.enabled`、`save_load.wal.*` 等开关已删除——它们从来不控制任何行为，生成的游戏服接入层既没有按请求限流也只有演示凭据，上线前要自己接入。详见 [§10 配置写法与启动校验](#配置写法与启动校验)。[A4 方案](feature/REFACTOR-2026-10-05-strict-config-reads.md) · [NC-192](bugfix/RR-20261005-NC-192.md)
+框架读取的布尔、时长、整数配置一律严格：`on` / `yes`、不带单位的时长（`ttl: 15`）、`8k` / `1.5` / `10s` 这样的整数，App 启动时（`ValidateServiceConfig`，任何 Mod Init 之前）点名报错，不再静默读成 false / 纳秒 / 0（取默认）。自己写 Mod 读配置时用 `app.ConfigBool` / `ConfigDuration` / `ConfigInt`，一次读多个键用 `app.NewConfigReader(cfg)` 读完再看 `Err()`（2026-10-07 A4 ① 起改为配置声明 + `app.LoadConfig`，`ConfigReader` 删除，见上一条）。`env: production` 只校验有读取方的设置，原先要求的 `player.login_auth_required`、`player_protocol.rate_limit.enabled`、`save_load.wal.*` 等开关已删除——它们从来不控制任何行为，生成的游戏服接入层既没有按请求限流也只有演示凭据，上线前要自己接入。详见 [§10 配置写法与启动校验](#配置写法与启动校验)。[A4 方案](feature/REFACTOR-2026-10-05-strict-config-reads.md) · [NC-192](bugfix/RR-20261005-NC-192.md)
 
 ## 2026-10-05 驱动重放与超时契约（A2，main，未发版）
 
@@ -164,7 +168,7 @@ redis:
 ```
 
 - **后端**：`kitredis.SingletonStore` 从同一份 `redis.*` 建两个独立的小客户端（不依赖 Redis Mod）：一个只做 CAS（获取 / 续期 / 释放），一个只做 `Live` 的读，Redis 变慢时并发的 `Live` 占满自己的连接也不会让续期等连接、误判失锁。CAS 复用 `redis.CompareAndSet` / `CompareAndDelete`；缺 `redis.addr` 与 `redis.cluster_addrs` 时启动失败（不沿用 Redis Mod 的 `localhost:6379` 兜底）。`enabled=true` 而 bootstrap 没调 `Singleton` 时启动失败，错误是 `app.ErrSingletonOpenerMissing`。
-- **写法**（`ValidateServiceConfig` 校验，RR-20261005-NC-190）：`enabled` 只接受 `true` / `false`（以及 `1` / `0`、`"true"`），`on` / `yes` / `off` / `no` 启动失败——宽松读取曾把它们读成 false、静默关掉锁；四个时长必须带单位（`15s`、`500ms`），不带单位的数字启动失败，不再当作纳秒。框架读取的其他布尔、时长与整数键同样严格（A4，见 [§10](#配置写法与启动校验)）；`redis.cluster_addrs` 可以写逗号分隔串或 YAML 列表。
+- **写法**（启动检查按 `singleton.*` 的声明，RR-20261005-NC-190）：`enabled` 只接受 `true` / `false`（以及 `1` / `0`、`"true"`），`on` / `yes` / `off` / `no` 启动失败——宽松读取曾把它们读成 false、静默关掉锁；四个时长必须带单位（`15s`、`500ms`），不带单位的数字启动失败，不再当作纳秒。框架读取的其他布尔、时长与整数键同样严格（A4，见 [§10](#配置写法与启动校验)）；`redis.cluster_addrs` 可以写逗号分隔串或 YAML 列表。
 - **时间关系**（`ValidateServiceConfig` 校验，违反即启动失败）：`renew_interval ≤ guard`、`2 × renew_interval ≤ ttl − guard`、`startup_wait ≥ ttl + 2 × renew_interval`。默认 15 / 3 / 5 / 30s 全部满足。
 - **启动**：键被别人持有时等待，每 `renew_interval` 重试，持有者变化时打一条 `singleton: waiting for the current holder to release or expire`（带对方的值，含 hostname / pid）；等待期间什么 Mod 都不 Init。对方已经停完（键已释放）时新进程立即拿到；对方还在优雅停机时，新进程在对方释放后的下一个节拍拿到（最多再等一个 `renew_interval`，重试不监听删除）；对方崩溃或卡住时最多等 `ttl + renew_interval`（2026-10-05 真实进程演练：kill -9 / SIGSTOP 后实测都是 15.0s，见[方案](feature/APP-SINGLETON-LOCK-2026-10-05.md) §13 第 5 笔）。到 `startup_wait` 仍被持有返回 `app.ErrSingletonHeld`——对方一直在续期，说明两个健康进程配了同一个服务类型 + sid，是部署错误，App 不会抢锁；最后一次是报错 / 超时则返回 `app.ErrSingletonStoreUnavailable`。等待期间 SIGTERM 按默认处置直接终止进程（还没持有锁）。
 - **持有**：一个 goroutine 按固定节拍续期（上一次成功的请求发出时刻 + k × `renew_interval`），窗口 `validUntil` 从请求发出时刻起算；回复迟到（晚于 `asked + ttl − guard`）不作数、立即再续一次。续期答“键已不是我的”，或续期失败且已到 `validUntil − guard`，即 `RuntimeFailure.Fail(app.ErrSingletonLost …)`：Nest 立即围栏、`Service.Shutdown`、Mod 逆序停、非零退出。代价是 Redis 连续不可用约 `ttl − guard`（默认 10s）以上时进程会退出重启；需要更宽容时调大 `ttl`。
@@ -476,27 +480,58 @@ Lockstep 适合客户端确定性模拟的 MOBA/RTS：服务器排序输入帧�
 
 ### 配置写法与启动校验
 
-App 在任何 Mod Init 之前调用 `ValidateServiceConfig`，按严格规则检查框架读取的全部类型化的键（`app/config_validation.go` 的 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys`，另有 syncbus 的 `syncbus` / `room` / `sync` 三段与所有 `<service>.call_timeout`）：
+维护者决定 A4 ①（[方案](feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)）：每个 Mod 把自己读的配置键声明在一个带 tag 的结构体上，
+Init 用 `app.LoadConfig` 按声明读；App 在任何 Mod Init 之前把本服务全部 Mod（共享 + 服务专属）与 App 自己的声明合并，对配置检查一遍，
+全部错误一次报出。同一个键被两个 Mod 声明得不一样也在这一步报错。服务配置只在启动时加载，没有运行期 reload。
 
 | 类型 | 接受 | 拒绝（启动失败并点名键） |
 | --- | --- | --- |
 | 布尔 | `true` / `false`（大小写不限）、`"true"`、`1` / `0` | `on` / `off` / `yes` / `no`、拼写错误 |
 | 时长 | `15s`、`500ms`、`1m30s`、`0` | 不带单位的非零数字（`15`、`"15"`，以前读成 15ns）、解析不了的值 |
 | 整数 | 整数、`1e3` 这样没有小数部分的数、十进制字符串（环境变量覆盖） | `8k`、`1.5`、`10s`、布尔值（以前读成 0 后取默认或被截断） |
+| 字符串 | 标量（两端空白去掉） | 映射、列表 |
+| 字符串列表 | YAML 列表、逗号分隔串 | 映射 |
 
-kit 的 Mod 在 Init 里也严格读取，直接装配 Mod、不经 App 启动的调用方同样拿到错误。业务 Mod 读配置用 `app.ConfigBool` / `ConfigDuration` / `ConfigInt` / `ConfigInt64`，或 `app.NewConfigReader(cfg)` 连续读、最后检查 `Err()`（一次报出全部写错的键）。框架内新增读取必须走这些函数并登记到上面的清单，app 的守卫测试会扫描源码。
+声明里还写了范围（`min` / `max`）、枚举（`enum`）、必填（`required`）、生产密钥（`secret`）：超出范围、不在枚举里、必填没写都点名报错。
+**以前“写 0 或负数静默取默认”的键现在按范围拒绝**——要缺省值就不写这个键；文档里本来就写“0 取框架默认”的键（`nest.*` 的 worker 与容量、
+`remote_entity.*` 的大部分数字、`dataengine.wal.*` 等）声明成可以为 0，行为不变。
+
+查看与检查：
+
+- `<bin> <service> --print-config` 打印这个服务全部 Mod（含业务 Mod）声明的键、缺省值与说明，可以直接当配置模板。
+- `<bin> <service> --check-config [-c 文件]` 只加载并检查配置（与启动前的检查相同），不启动任何 Mod；发布前用它检查真实的生产配置。
+- `roost project doctor` 的 `config-schema:<service>` 按生成器认识的框架声明检查工程里的开发配置、生产示例与 k8s Secret 示例：值不合声明、
+  框架段里出现没有任何声明的键（多半是拼错了）为 FAIL；键有声明但这个服务没有 Mod 读它（别的服务的段，或业务代码自己读的框架键）为 WARN。
+
+写自己的 Mod：
+
+```go
+type shopConfig struct {
+	MaxItems int           `config:"shop.max_items" default:"100" min:"1" max:"10000" help:"每个玩家商店最多上架的物品数"`
+	Refresh  time.Duration `config:"shop.refresh_interval" default:"1h" min:"1m"`
+	Region   string        `config:"shop.region" enum:"cn|us|eu" required:"true" example:"cn"`
+}
+
+func (*ShopMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(shopConfig{}) }
+func (m *ShopMod) Init(cfg *viper.Viper) error  { return app.LoadConfig(cfg, &m.cfg) }
+```
+
+tag：`config`（键名；嵌套结构体加前缀，匿名嵌入不加；以 `_` 结尾的前缀直接拼接，如 `config:"result_"` 下的 `ack_wait` 是 `result_ack_wait`）、
+`default`、`min` / `max`、`enum`（`|` 分隔）、`required:"true"`、`secret:"true"`、`example`（生成器写进配置文件的值）、`help`。
+跨键规则写成配置结构体的 `ValidateConfig(production bool) error`。`map[string]T` 字段声明成 `*` 段（例如 `saga.steps.<type>.<step>.timeout`），
+map 下没有声明的字段报错。`app.ConfigBool` / `ConfigDuration` / `ConfigInt` 只留给工具与测试读单个键；框架代码只经 `LoadConfig` 读配置，
+守卫测试（`app/config_declarations_promises_test.go`）拒绝直接调 viper 的读方法，也拒绝声明了却不读的字段。
 
 ### `env: production` 校验什么
 
-配置里 `env` / `app.env` / `environment` 为 `prod` / `production` 时，`ValidateServiceConfig` 追加以下检查，其余照常：
+配置里 `env` / `app.env` / `environment` 为 `prod` / `production` 时追加以下检查（规则跟着键的主人，只在注册了对应 Mod 的服务里生效）：
 
-- `ops.enabled` 时 `ops.addr` 只能绑回环地址；要绑 `0.0.0.0`（k8s 探针、Prometheus 抓取）须同时写 `ops.allow_public_addr: true`，表示端点已放在鉴权代理之后。生成的生产示例绑 `0.0.0.0:9100`，打开生产模式时要加这一行。
-- game / instance / account / match_group / global 必须写 `redis.addr` 或 `redis.cluster_addrs`（逗号串或 YAML 列表；只配 Cluster 的生产配置可以启动，RR-20261006-28）。
-- `account.session_secret`、`platform.session_secret`、`platform.payment_secret` 不能为空或以 `dev-` 开头。
-- admin_gateway：`admin_gateway.tokens` 非空且不是 dev 令牌；`local_ops` 目标没有自己的 `ops_token` 时 `default_ops_admin_token` 必须是非 dev 值。
-- `time.logic_offset` 必须为 0（或不写）：偏移只给测试环境前拨业务时间用（D-L3）。
+- ops（`kit/ops`）：`ops.enabled` 时 `ops.addr` 只能绑回环地址；要绑 `0.0.0.0`（k8s 探针、Prometheus 抓取）须同时写 `ops.allow_public_addr: true`，表示端点已放在鉴权代理之后。生成的生产示例绑 `0.0.0.0:9100`，打开生产模式时要加这一行。
+- Redis（`kit/redis` 的配置，Redis Mod 与单实例锁共用）：必须写 `redis.addr` 或 `redis.cluster_addrs`（逗号串或 YAML 列表；只配 Cluster 的生产配置可以启动，RR-20261006-28）。以前按服务类型（game / instance / account / match_group / global）写在 app 里。
+- 声明为 `secret` 的键（`account.session_secret`、`platform.session_secret`、`platform.payment_secret`）不能为空或以 `dev-` 开头。
+- App：`time.logic_offset` 必须为 0（或不写）：偏移只给测试环境前拨业务时间用（D-L3）。
 
-它**不**检查、也不代表已经开启：按请求限流、登录鉴权、WAL 持久级别（持久化由 `dataengine.*` 决定）、实例状态存储。RR-20261005-NC-192 之前这里要求的 `player.login_auth_required`、`player.login_secret`、`player_protocol.rate_limit.enabled`、`save_load.wal.*`、`instance.client_mode` / `state_store_required`、`account.ops_token`、`account.redis_required`、`global` / `match_group.redis_required` 没有任何代码读取，已删除；配置里留着也没有影响。生成的游戏服接入层只有演示凭据（`auth.go`），上线前换成真实校验；需要按请求限流时自己装配 `gateway.RateLimit` 或在接入层限流。
+它**不**检查、也不代表已经开启：按请求限流、登录鉴权、WAL 持久级别（持久化由 `dataengine.*` 决定）、实例状态存储。RR-20261005-NC-192 之前这里要求的 `player.login_auth_required`、`player.login_secret`、`player_protocol.rate_limit.enabled`、`save_load.wal.*`、`instance.client_mode` / `state_store_required`、`account.ops_token`、`account.redis_required`、`global` / `match_group.redis_required` 没有任何代码读取，已删除；`admin_gateway.*` 的生产检查（A4 ① 起）同样删除——仓内没有任何代码读这个段。配置里留着这些键也没有影响（doctor 对框架段之外的键不报）。生成的游戏服接入层只有演示凭据（`auth.go`），上线前换成真实校验；需要按请求限流时自己装配 `gateway.RateLimit` 或在接入层限流。
 
 ### 生成工程切到 Redis Cluster
 

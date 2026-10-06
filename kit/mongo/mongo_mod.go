@@ -35,38 +35,46 @@ func NewMongoMod() *MongoMod {
 
 func (m *MongoMod) Name() app.ModName { return mods.ModMongo }
 
-func (m *MongoMod) Init(cfg *viper.Viper) error {
-	uri := cfg.GetString("mongo.uri")
-	if uri == "" {
-		uri = "mongodb://localhost:27017"
-	}
-	m.cfg = fmongo.DefaultConfig(uri)
-	read := app.NewConfigReader(cfg) // 严格读取（维护者决定 A4）
+// config 是 mongo.* 的声明（维护者决定 A4 ①）。时长与连接池写 0 取驱动缺省。
+type config struct {
+	URI                string        `config:"mongo.uri" default:"mongodb://localhost:27017" example:"mongodb://127.0.0.1:27017/?replicaSet=rs0"`
+	ConnectTimeout     time.Duration `config:"mongo.connect_timeout" min:"0" example:"5s"`
+	TransactionTimeout time.Duration `config:"mongo.transaction_timeout" min:"0" example:"30s"`
+	RequireReplicaSet  bool          `config:"mongo.require_replica_set" default:"true" example:"true" help:"要求副本集（事务需要它）；只在确知用不到事务的单机环境写 false"`
+	MaxPoolSize        int64         `config:"mongo.max_pool_size" min:"0" example:"100"`
+	MinPoolSize        int64         `config:"mongo.min_pool_size" min:"0" example:"5"`
+	MaxIdleTime        time.Duration `config:"mongo.max_idle_time" min:"0" example:"5m"`
+	Index              struct {
+		AllowRecreate bool `config:"allow_recreate" help:"索引定义变了时允许删掉重建（大集合上很慢，默认拒绝启动）"`
+	} `config:"mongo.index"`
+}
 
-	if timeout := read.Duration("mongo.connect_timeout"); timeout > 0 {
-		m.cfg.ConnectTimeout = timeout
-	}
-	if maxPool := read.Int64("mongo.max_pool_size"); maxPool > 0 {
-		m.cfg.MaxPoolSize = uint64(maxPool)
-	}
-	if minPool := read.Int64("mongo.min_pool_size"); minPool > 0 {
-		m.cfg.MinPoolSize = uint64(minPool)
-	}
-	if maxIdle := read.Duration("mongo.max_idle_time"); maxIdle > 0 {
-		m.cfg.MaxIdleTime = maxIdle
-	}
-	if timeout := read.Duration("mongo.transaction_timeout"); timeout > 0 {
-		m.cfg.TransactionTimeout = timeout
-	}
-	if cfg.IsSet("mongo.require_replica_set") {
-		m.cfg.RequireReplicaSet = read.Bool("mongo.require_replica_set")
-	}
-	m.policy = mongodriver.IndexMigrationPolicy{
-		AllowRecreate: read.Bool("mongo.index.allow_recreate"),
-	}
-	if err := read.Err(); err != nil {
+// ConfigSchema 声明 mongo.*。
+func (m *MongoMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
+func (m *MongoMod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return fmt.Errorf("mongo mod: %w", err)
 	}
+	m.cfg = fmongo.DefaultConfig(settings.URI)
+	if settings.ConnectTimeout > 0 {
+		m.cfg.ConnectTimeout = settings.ConnectTimeout
+	}
+	if settings.MaxPoolSize > 0 {
+		m.cfg.MaxPoolSize = uint64(settings.MaxPoolSize)
+	}
+	if settings.MinPoolSize > 0 {
+		m.cfg.MinPoolSize = uint64(settings.MinPoolSize)
+	}
+	if settings.MaxIdleTime > 0 {
+		m.cfg.MaxIdleTime = settings.MaxIdleTime
+	}
+	if settings.TransactionTimeout > 0 {
+		m.cfg.TransactionTimeout = settings.TransactionTimeout
+	}
+	m.cfg.RequireReplicaSet = settings.RequireReplicaSet
+	m.policy = mongodriver.IndexMigrationPolicy{AllowRecreate: settings.Index.AllowRecreate}
 	return nil
 }
 

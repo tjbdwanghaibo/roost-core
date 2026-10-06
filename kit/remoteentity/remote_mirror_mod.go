@@ -82,41 +82,25 @@ func MirrorSource(r *app.Registry) (entity.RemoteSnapshotReadOnly, error) {
 
 func (m *RemoteMirrorMod) Name() app.ModName { return mods.ModRemoteMirror }
 
-// Init 只读 remote_entity.* 的快照段（与 RemoteEntityMod 同一个读取函数，A4 严格读取）、
-// remote_entity.mongo.database 与 remote_entity.mirror.shutdown_timeout。锁、提交、finalizer 的键不读。
+// ConfigSchema 声明 Mirror 读的键：与 RemoteEntityMod 共用的快照段、remote_entity.mongo.* 与 remote_entity.mirror.*。
+func (m *RemoteMirrorMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(mirrorConfig{}) }
+
+// Init 只读快照段、remote_entity.mongo.database 与 remote_entity.mirror.shutdown_timeout；锁、提交、finalizer 的键不读。
 func (m *RemoteMirrorMod) Init(cfg *viper.Viper) error {
-	if cfg == nil {
-		cfg = viper.New()
+	var settings mirrorConfig
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("remote_entity mirror mod: %w", err)
 	}
 	if m.localSid == 0 {
-		m.localSid = cfg.GetInt32("sid")
+		m.localSid = settings.Sid
 	}
 	if m.localSid == 0 {
 		return errors.New("remote_entity mirror mod: non-zero sid is required (it is the consumer identity of snapshot interests)")
 	}
-	read := app.NewConfigReader(cfg)
 	m.cfg = coreremote.DefaultConfig()
-	if err := readSnapshotConfig(cfg, read, m.cfg); err != nil {
-		return fmt.Errorf("remote_entity mirror mod: %w", err)
-	}
-	m.shutdownTimeout = defaultMirrorShutdownTimeout
-	if cfg.IsSet("remote_entity.mirror.shutdown_timeout") {
-		timeout := read.Duration("remote_entity.mirror.shutdown_timeout")
-		if err := read.Err(); err != nil {
-			return fmt.Errorf("remote_entity mirror mod: %w", err)
-		}
-		if timeout <= 0 {
-			return fmt.Errorf("remote_entity mirror mod: remote_entity.mirror.shutdown_timeout must be positive, got %v", cfg.Get("remote_entity.mirror.shutdown_timeout"))
-		}
-		m.shutdownTimeout = timeout
-	}
-	m.database = cfg.GetString("remote_entity.mongo.database")
-	if m.database == "" {
-		m.database = "remote_entity"
-	}
-	if err := read.Err(); err != nil {
-		return fmt.Errorf("remote_entity mirror mod: %w", err)
-	}
+	settings.RemoteEntity.snapshotConfig.apply(m.cfg)
+	m.shutdownTimeout = settings.RemoteEntity.Mirror.ShutdownTimeout
+	m.database = settings.RemoteEntity.Mongo.Database
 	return nil
 }
 

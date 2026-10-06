@@ -54,6 +54,40 @@ func (m *Mod) Name() app.ModName { return CapabilityName }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
+// keyPrefixConfig 是 account.key_prefix 的声明：Mod 与 KeyPrefix 共用。
+type keyPrefixConfig struct {
+	KeyPrefix string `config:"key_prefix" required:"true" example:"roost:{project}:account" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
+}
+
+// KeyPrefix 按 Mod 的声明读 account.key_prefix：同一个 Redis 前缀下还有业务自己的键（game-demo 的发货队列、玩家号计数器）的
+// 代码用它，与 Mod 读到的是同一个值、同一套检查。
+func KeyPrefix(cfg *viper.Viper) (string, error) {
+	var settings struct {
+		Account keyPrefixConfig `config:"account"`
+	}
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return "", fmt.Errorf("account: %w", err)
+	}
+	if err := mods.CheckKeyPrefix("account", settings.Account.KeyPrefix); err != nil {
+		return "", err
+	}
+	return settings.Account.KeyPrefix, nil
+}
+
+// config 是 account.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	mods.ServiceMetricsConfig
+	Account struct {
+		keyPrefixConfig
+		SessionSecret string        `config:"session_secret" required:"true" secret:"true" example:"CHANGE_ME"`
+		SessionTTL    time.Duration `config:"session_ttl" default:"30m" min:"1ns" example:"30m"`
+		ClaimTTL      time.Duration `config:"claim_ttl" default:"30s" min:"1ns" example:"5m"`
+	} `config:"account"`
+}
+
+// ConfigSchema 声明 account.* 与 service_metrics.enabled。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 // Init reads configuration.
 //
 //	account:
@@ -62,8 +96,14 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	  session_ttl: 30m            # optional
 //	  claim_ttl: 30s              # optional
 func (m *Mod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("account mod: %w", err)
+	}
 	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
-	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+	settings.ApplyServiceMetrics(&m.metrics)
+	c := settings.Account
+	if err := mods.CheckKeyPrefix("account", c.KeyPrefix); err != nil {
 		return err
 	}
 	missing := []string{}
@@ -80,23 +120,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("account mod: %v are required and have no defaults; each of them "+
 			"was absent in the implementation this replaces, and the absence looked like a default", missing)
 	}
-	prefix, err := mods.KeyPrefix(cfg, "account")
-	if err != nil {
-		return err
-	}
-	sessionSecret, err := mods.Secret(cfg, "account.session_secret")
-	if err != nil {
-		return err
-	}
-	sessionTTL, err := mods.Duration(cfg, "account.session_ttl", DefaultSessionTTL)
-	if err != nil {
-		return err
-	}
-	claimTTL, err := mods.Duration(cfg, "account.claim_ttl", DefaultClaimTTL)
-	if err != nil {
-		return err
-	}
-	m.prefix, m.sessionSecret, m.sessionTTL, m.claimTTL = prefix, sessionSecret, sessionTTL, claimTTL
+	m.prefix, m.sessionSecret, m.sessionTTL, m.claimTTL = c.KeyPrefix, c.SessionSecret, c.SessionTTL, c.ClaimTTL
 	return nil
 }
 

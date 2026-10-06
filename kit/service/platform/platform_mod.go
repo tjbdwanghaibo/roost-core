@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	kitredis "github.com/tjbdwanghaibo/roost-core/kit/redis"
 
 	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 )
@@ -67,6 +68,43 @@ func (m *Mod) Name() app.ModName { return CapabilityName }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
+// keyPrefixConfig 是 platform.key_prefix 的声明：Mod 与 KeyPrefix 共用。
+type keyPrefixConfig struct {
+	KeyPrefix string `config:"key_prefix" required:"true" example:"roost:{project}:platform" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
+}
+
+// KeyPrefix 按 Mod 的声明读 platform.key_prefix：同一个 Redis 前缀下还有业务自己的键（game-demo 的发货队列、玩家号计数器）的
+// 代码用它，与 Mod 读到的是同一个值、同一套检查。
+func KeyPrefix(cfg *viper.Viper) (string, error) {
+	var settings struct {
+		Platform keyPrefixConfig `config:"platform"`
+	}
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return "", fmt.Errorf("platform: %w", err)
+	}
+	if err := mods.CheckKeyPrefix("platform", settings.Platform.KeyPrefix); err != nil {
+		return "", err
+	}
+	return settings.Platform.KeyPrefix, nil
+}
+
+// config 是 platform.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	mods.ServiceMetricsConfig
+	kitredis.ClusterConfig
+	Platform struct {
+		keyPrefixConfig
+		SessionSecret    string        `config:"session_secret" required:"true" secret:"true" example:"CHANGE_ME" help:"session_secret and payment_secret are refused when empty at Init (an unset payment secret turns\nevery provider callback into an invalid-signature refusal), so they are emitted as CHANGE_ME."`
+		PaymentSecret    string        `config:"payment_secret" required:"true" secret:"true" example:"CHANGE_ME"`
+		SessionTTL       time.Duration `config:"session_ttl" default:"30m" min:"1ns" example:"30m"`
+		DeliveryAttempts int           `config:"delivery_attempts" default:"8" min:"1" example:"8"`
+		DeliveryBackoff  time.Duration `config:"delivery_backoff" default:"5s" min:"1ns"`
+	} `config:"platform"`
+}
+
+// ConfigSchema 声明 platform.* 与 service_metrics.enabled。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 // Init reads configuration.
 //
 //	platform:
@@ -77,8 +115,14 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	  delivery_attempts: 8         # optional
 //	  delivery_backoff: 5s         # optional
 func (m *Mod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("platform mod: %w", err)
+	}
 	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
-	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+	settings.ApplyServiceMetrics(&m.metrics)
+	c := settings.Platform
+	if err := mods.CheckKeyPrefix("platform", c.KeyPrefix); err != nil {
 		return err
 	}
 	missing := []string{}
@@ -95,39 +139,6 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("platform mod: %v are required and have no defaults; a permissive "+
 			"verifier is account takeover and a no-op deliverer takes money without delivering", missing)
 	}
-	prefix, err := mods.KeyPrefix(cfg, "platform")
-	if err != nil {
-		return err
-	}
-	// Refused at Init, not at call time. An unset payment secret in the
-	// implementation this replaces turned every provider callback into an
-	// invalid-signature refusal: a silent outage that looked like an attack.
-	sessionSecret, err := mods.Secret(cfg, "platform.session_secret")
-	if err != nil {
-		return err
-	}
-	paymentSecret, err := mods.Secret(cfg, "platform.payment_secret")
-	if err != nil {
-		return err
-	}
-	sessionTTL, err := mods.Duration(cfg, "platform.session_ttl", DefaultSessionTTL)
-	if err != nil {
-		return err
-	}
-	backoff, err := mods.Duration(cfg, "platform.delivery_backoff", DefaultDeliveryBackoff)
-	if err != nil {
-		return err
-	}
-	attempts := MaxDeliveryAttempts
-	if cfg.IsSet("platform.delivery_attempts") {
-		attempts, err = app.ConfigInt(cfg, "platform.delivery_attempts")
-		if err != nil {
-			return fmt.Errorf("platform mod: %w", err)
-		}
-		if attempts <= 0 {
-			return fmt.Errorf("platform mod: platform.delivery_attempts must be positive, got %d", attempts)
-		}
-	}
 	// The order and its index entry are written by one script, and one script
 	// can only be atomic across two keys if both keys hash to the same slot.
 	// On a single Redis that is free; on a cluster it requires a hash tag in
@@ -135,11 +146,11 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	// Refused here rather than discovered as a CROSSSLOT error on the first
 	// callback, or, worse, as an index that is only usually right
 	// (RR-20260919-04).
-	if err := mods.ValidateClusterKeyPrefix(cfg, "platform", prefix); err != nil {
+	if err := mods.ValidateClusterKeyPrefix(settings.ClusterAddrs, "platform", c.KeyPrefix); err != nil {
 		return err
 	}
-	m.prefix, m.sessionSecret, m.paymentSecret = prefix, sessionSecret, paymentSecret
-	m.sessionTTL, m.attempts, m.backoff = sessionTTL, attempts, backoff
+	m.prefix, m.sessionSecret, m.paymentSecret = c.KeyPrefix, c.SessionSecret, c.PaymentSecret
+	m.sessionTTL, m.attempts, m.backoff = c.SessionTTL, c.DeliveryAttempts, c.DeliveryBackoff
 	return nil
 }
 

@@ -6,30 +6,105 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 
 	"gopkg.in/yaml.v3"
 )
 
-var playerTCPConfigDefaults = []struct{ key, value string }{
-	{key: "enabled", value: "false"},
-	{key: "addr", value: "0.0.0.0:7000"},
-	{key: "max_connections", value: "10000"},
-	{key: "max_connections_per_ip", value: "128"},
-	{key: "max_handshakes", value: "1024"},
-	{key: "max_handshake_bytes", value: "8192"},
-	{key: "max_payload_bytes", value: "1048576"},
-	{key: "handshake_timeout", value: "5s"},
-	{key: "idle_timeout", value: "90s"},
-	{key: "write_timeout", value: "5s"},
-	// The generated Mod declares it as its stop budget and the generated
-	// shutdown.total_timeout counts it (RR-20260927-05).
-	{key: "shutdown_timeout", value: seconds(generatedPlayerTCPShutdownTimeout)},
-	// RR-20260926-36: dispatch_timeout matches the generated nest.request_timeout;
-	// login_timeout is the share of it a login gives to claim + cold load.
-	{key: "dispatch_timeout", value: "3s"},
-	{key: "login_timeout", value: "2s"},
+// playerTCPDeclaration is the declaration of what the generated player TCP
+// access Mod reads (maintainer decision A4 ①). It is real Go here so the tags
+// are checked when the generator starts (configschema.MustOf), and it is
+// rendered into the generated server_gen.go as tcpConfig — so the generated
+// Mod, the block `add transport tcp` writes, the reference copy and doctor all
+// come from this one place. Bounds stay in the generated validateConfig, which
+// also checks a Config built in code (NewServer); the defaults equal the
+// generated defaultConfig() (the generated TestDeclaredDefaultsAreDefaultConfig).
+//
+// nest.request_timeout is kit/nest's key, read here as the fallback dispatch
+// budget (RR-20260926-36); its declaration must equal kit/nest's
+// (TestPlayerTCPDeclarationAgreesWithKit).
+type playerTCPDeclaration struct {
+	TCP struct {
+		Enabled             bool          `config:"enabled" example:"false" help:"The listener stays off until auth.go is implemented and roost config enable player-tcp succeeds."`
+		Addr                string        `config:"addr" default:"0.0.0.0:7000" example:"0.0.0.0:7000"`
+		MaxConnections      int           `config:"max_connections" default:"10000" example:"10000"`
+		MaxConnectionsPerIP int           `config:"max_connections_per_ip" default:"128" example:"128"`
+		MaxHandshakes       int           `config:"max_handshakes" default:"1024" example:"1024"`
+		MaxHandshakeBytes   uint32        `config:"max_handshake_bytes" default:"8192" example:"8192"`
+		MaxPayloadBytes     uint32        `config:"max_payload_bytes" default:"1048576" example:"1048576"`
+		HandshakeTimeout    time.Duration `config:"handshake_timeout" default:"5s" example:"5s"`
+		IdleTimeout         time.Duration `config:"idle_timeout" default:"90s" example:"90s"`
+		WriteTimeout        time.Duration `config:"write_timeout" default:"5s" example:"5s"`
+		ShutdownTimeout     time.Duration `config:"shutdown_timeout" default:"10s" example:"10s" help:"The generated Mod declares it as its stop budget and the generated shutdown.total_timeout counts it (RR-20260927-05)."`
+		DispatchTimeout     time.Duration `config:"dispatch_timeout" example:"3s" help:"Bound of one request; unset or 0 follows nest.request_timeout (RR-20260926-36)."`
+		LoginTimeout        time.Duration `config:"login_timeout" example:"2s" help:"Share of the dispatch budget a login gives to claim + cold load; unset or 0 is min(2s, dispatch_timeout)."`
+	} `config:"player_access.tcp"`
+	Nest struct {
+		RequestTimeout time.Duration `config:"request_timeout" min:"0" example:"3s"`
+	} `config:"nest"`
+}
+
+var playerTCPSchemaOnce = sync.OnceValue(func() configschema.Schema { return configschema.MustOf(playerTCPDeclaration{}) })
+
+// playerTCPSchema is the declaration of everything the generated Mod reads.
+func playerTCPSchema() configschema.Schema { return playerTCPSchemaOnce() }
+
+// playerTCPBlockSchema is the player_access.tcp part: what `add transport tcp`
+// and the reference copy write.
+func playerTCPBlockSchema() configschema.Schema {
+	var block configschema.Schema
+	for _, key := range playerTCPSchema().Keys {
+		if strings.HasPrefix(key.Name, "player_access.tcp.") {
+			block.Keys = append(block.Keys, key)
+		}
+	}
+	return block
+}
+
+// playerTCPConfigDefaults is the player_access.tcp block as key / value pairs
+// in declaration order (the starter values).
+func playerTCPConfigDefaults() []struct{ key, value string } {
+	var out []struct{ key, value string }
+	for _, key := range playerTCPBlockSchema().Keys {
+		if key.Starter {
+			out = append(out, struct{ key, value string }{strings.TrimPrefix(key.Name, "player_access.tcp."), key.Example})
+		}
+	}
+	return out
+}
+
+// renderPlayerTCPDeclaration renders playerTCPDeclaration as the generated
+// tcpConfig type.
+func renderPlayerTCPDeclaration() string {
+	var b strings.Builder
+	b.WriteString("// tcpConfig is what this Mod reads (maintainer decision A4 ①). Generated from the\n")
+	b.WriteString("// generator's declaration; the App checks it before any Mod Init.\n")
+	b.WriteString("type tcpConfig ")
+	writeGoStructType(&b, reflect.TypeOf(playerTCPDeclaration{}), "")
+	return b.String()
+}
+
+func writeGoStructType(b *strings.Builder, typ reflect.Type, indent string) {
+	b.WriteString("struct {\n")
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		b.WriteString(indent + "\t" + field.Name + " ")
+		if field.Type.Kind() == reflect.Struct && field.Type.Name() == "" {
+			writeGoStructType(b, field.Type, indent+"\t")
+		} else {
+			b.WriteString(field.Type.String())
+		}
+		if field.Tag != "" {
+			b.WriteString(" `" + string(field.Tag) + "`")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(indent + "}")
 }
 
 // ensurePlayerTCPConfig adds only missing YAML keys and changes only the
@@ -139,7 +214,7 @@ func mergePlayerTCPConfig(text, name string, enabled bool) (string, error) {
 // transport deadline that cuts them off (RR-20260926-36). The login budget
 // stays at its default unless that would exceed the dispatch budget.
 func playerTCPDefaultsFor(document *yaml.Node) []struct{ key, value string } {
-	defaults := append([]struct{ key, value string }(nil), playerTCPConfigDefaults...)
+	defaults := playerTCPConfigDefaults()
 	_, nestNode := yamlMappingEntry(document, "nest")
 	_, requestNode := yamlMappingEntry(nestNode, "request_timeout")
 	if requestNode == nil || requestNode.Kind != yaml.ScalarNode {

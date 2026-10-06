@@ -83,6 +83,7 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 			report.Items = append(report.Items, CheckItem{Name: "config:" + service, Status: StatusOK, Detail: filepath.ToSlash(path)})
 		}
 	}
+	report.Items = append(report.Items, checkConfigDeclarations(root, m)...)
 	report.Items = append(report.Items, checkShutdownBudgets(root, m)...)
 	report.Items = append(report.Items, checkLogicOffsets(root, m))
 	if err := CheckIDs(root, m); err != nil {

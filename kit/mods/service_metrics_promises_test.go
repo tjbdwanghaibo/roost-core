@@ -2,13 +2,14 @@ package mods
 
 // C6（docs/feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md）：生成工程默认给每个服务装上
 // servicemetrics.NewMetricsReporter，service_metrics.enabled: false 在配置里把它关掉；未设置或 true 保持
-// collaborator 给的 Reporter；写成 off 这类非布尔值启动报错并点名键（与其他框架开关一样严格）。
+// collaborator 给的 Reporter；写成 off 这类非布尔值启动报错并点名键（与其他框架开关一样严格，A4 ① 起由声明检查）。
 
 import (
 	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/servicemetrics"
 )
 
@@ -18,11 +19,15 @@ func TestServiceMetricsSwitch(t *testing.T) {
 		t.Helper()
 		cfg := viper.New()
 		if value != nil {
-			cfg.Set(ServiceMetricsEnabledKey, value)
+			cfg.Set("service_metrics.enabled", value)
+		}
+		var settings ServiceMetricsConfig
+		if err := app.LoadConfig(cfg, &settings); err != nil {
+			return nil, err
 		}
 		var reporter servicemetrics.Reporter = supplied
-		err := ServiceMetrics(cfg, &reporter)
-		return reporter, err
+		settings.ApplyServiceMetrics(&reporter)
+		return reporter, nil
 	}
 	for _, tc := range []struct {
 		name  string
@@ -39,7 +44,7 @@ func TestServiceMetricsSwitch(t *testing.T) {
 			}
 		})
 	}
-	if _, err := apply(t, "off"); err == nil || !strings.Contains(err.Error(), ServiceMetricsEnabledKey) {
+	if _, err := apply(t, "off"); err == nil || !strings.Contains(err.Error(), "service_metrics.enabled") {
 		t.Fatalf("service_metrics.enabled: off: %v, want a refusal naming the key", err)
 	}
 }

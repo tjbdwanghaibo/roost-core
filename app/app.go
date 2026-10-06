@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/clock"
 	"github.com/tjbdwanghaibo/roost-core/lifecycle"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -34,6 +35,8 @@ type App struct {
 	// runtime
 	registry *Registry
 	cfg      *viper.Viper
+	// settings 是 App 自己的配置（appConfig），启动检查（checkConfig）读出后供日志、单实例锁、业务时间与停机使用。
+	settings appConfig
 
 	// signalSource exists to make shutdown sequencing testable on platforms
 	// where a process cannot deliver os.Interrupt to itself (notably Windows).
@@ -83,9 +86,23 @@ func (a *App) RegisterServer(serverType ServiceName, svc Service, mods ...Mod) *
 		Use:   st,
 		Short: fmt.Sprintf("Start %s server", st),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if print, _ := cmd.Flags().GetBool("print-config"); print {
+				return a.printConfig(serverType, cmd.OutOrStdout())
+			}
+			if check, _ := cmd.Flags().GetBool("check-config"); check {
+				if _, err := a.loadServiceConfig(serverType); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(cmd.OutOrStdout(), "config ok: %s\n", a.cfg.ConfigFileUsed())
+				return err
+			}
 			return a.run(serverType)
 		},
 	}
+	// 维护者决定 A4 ①：配置按本服务全部 Mod 的声明检查。--check-config 只加载并检查配置（与启动前的检查相同），
+	// 不启动任何 Mod，用来在发布前检查真实的生产配置；--print-config 打印本服务全部声明（含业务 Mod）生成的配置段。
+	cmd.Flags().Bool("check-config", false, "load and check the config against every mod's declaration, then exit")
+	cmd.Flags().Bool("print-config", false, "print every config key this service's mods declare, with defaults and help, then exit")
 	a.rootCmd.AddCommand(cmd)
 	return a
 }
@@ -102,8 +119,8 @@ func (a *App) RootCmd() *cobra.Command {
 	return a.rootCmd
 }
 
-func (a *App) run(serverType ServiceName) (runErr error) {
-	// --- Load config ---
+// loadServiceConfig 读配置文件并按 App 与本服务全部 Mod 的声明检查（任何 Mod Init 之前），返回配置文件路径。
+func (a *App) loadServiceConfig(serverType ServiceName) (string, error) {
 	cfgPath, _ := a.rootCmd.Flags().GetString("config")
 	explicitConfig := a.rootCmd.PersistentFlags().Changed("config")
 	if cfgPath == "" {
@@ -114,17 +131,10 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	a.cfg.SetConfigFile(cfgPath)
 	a.cfg.SetDefault("sid", sid)
 	a.cfg.SetDefault("server_type", serverType)
-	a.cfg.SetDefault("log.level", "info")
-	a.cfg.SetDefault("log.json", false)
-	a.cfg.SetDefault("log.stdout", true)
-	a.cfg.SetDefault("log.file", true)
-	a.cfg.SetDefault("log.dir", "log")
-	a.cfg.SetDefault("log.caller", false)
-	a.cfg.SetDefault("log.rotate_interval", "24h")
 
 	if err := a.cfg.ReadInConfig(); err != nil {
 		if explicitConfig || !isMissingConfig(err) {
-			return fmt.Errorf("read config %q: %w", cfgPath, err)
+			return "", fmt.Errorf("read config %q: %w", cfgPath, err)
 		}
 		slog.Warn("default config file not found, using development defaults", "path", cfgPath, "err", err)
 	}
@@ -132,26 +142,44 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	if a.rootCmd.Flags().Changed("sid") {
 		a.cfg.Set("sid", sid)
 	}
-	if err := ValidateServiceConfig(a.cfg); err != nil {
+	settings, err := checkConfig(a.cfg, a.serviceMods(serverType))
+	if err != nil {
+		return "", err
+	}
+	a.settings = settings
+	return cfgPath, nil
+}
+
+func (a *App) printConfig(serverType ServiceName, out io.Writer) error {
+	schema, err := a.ServiceConfigSchema(serverType)
+	if err != nil {
 		return err
 	}
-	// 类型已由 ValidateServiceConfig 严格检查过；这里同样严格读取，不再经宽松 getter（维护者决定 A4）。
-	read := NewConfigReader(a.cfg)
+	_, err = io.WriteString(out, schema.ReferenceYAML())
+	return err
+}
+
+func (a *App) run(serverType ServiceName) (runErr error) {
+	// --- Load and check config: before any Mod Init ---
+	cfgPath, err := a.loadServiceConfig(serverType)
+	if err != nil {
+		return err
+	}
 	// 进程级业务时钟（fctx.Now、框架库的缺省）在这里、启动时设一次，运行期不改（D-L3）；
-	// 生产环境非 0 已被 ValidateServiceConfig 拒绝。Registry 的业务时钟读同一个键。
-	clock.SetOffset(read.Duration(logicOffsetKey))
+	// 生产环境非 0 已被启动检查拒绝。Registry 的业务时钟读同一个键。
+	clock.SetOffset(a.settings.Time.LogicOffset)
 	fctx.SetRuntimeConfig(a.cfg)
 	if err := flog.Init(flog.Options{
-		LevelText:        a.cfg.GetString("log.level"),
-		JSON:             read.Bool("log.json"),
-		Stdout:           read.Bool("log.stdout"),
-		File:             read.Bool("log.file"),
-		Dir:              a.cfg.GetString("log.dir"),
+		LevelText:        a.settings.Log.Level,
+		JSON:             a.settings.Log.JSON,
+		Stdout:           a.settings.Log.Stdout,
+		File:             a.settings.Log.File,
+		Dir:              a.settings.Log.Dir,
 		Service:          string(serverType),
-		Sid:              read.Int("sid"),
-		Caller:           read.Bool("log.caller"),
-		RotateInterval:   read.Duration("log.rotate_interval"),
-		RotateTimeFormat: a.cfg.GetString("log.rotate_time_format"),
+		Sid:              int(a.settings.Sid),
+		Caller:           a.settings.Log.Caller,
+		RotateInterval:   a.settings.Log.RotateInterval,
+		RotateTimeFormat: a.settings.Log.RotateTimeFormat,
 		FrameFunc:        nest.CurTick,
 	}); err != nil {
 		return fmt.Errorf("init log: %w", err)
@@ -173,7 +201,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 		"name", a.name,
 		"version", a.version,
 		"type", serverType,
-		"sid", read.Int("sid"),
+		"sid", a.settings.Sid,
 		"config", cfgPath,
 	)
 
@@ -184,7 +212,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 		Service: string(serverType),
 		Name:    a.name,
 		Data: map[string]any{
-			"sid":    read.Int("sid"),
+			"sid":    int(a.settings.Sid),
 			"config": cfgPath,
 		},
 	}); err != nil {
@@ -426,10 +454,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	cancel()
 
 	// --- Graceful shutdown ---
-	shutdownTimeout, _ := ConfigDuration(a.cfg, "shutdown.total_timeout") // 启动时已严格检查
-	if shutdownTimeout <= 0 {
-		shutdownTimeout = 30 * time.Second
-	}
+	shutdownTimeout := a.settings.Shutdown.TotalTimeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 	// 启用单实例锁时，Mod 停机用的截止时间提前 releaseReserve，留给全部 Mod 停完之后的 Release：

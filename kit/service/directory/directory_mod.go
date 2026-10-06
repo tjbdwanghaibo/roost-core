@@ -41,14 +41,32 @@ func (m *Mod) Name() app.ModName { return mods.ModDirectory }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
+// config 是 directory.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	mods.ServiceMetricsConfig
+	Directory struct {
+		KeyPrefix      string        `config:"key_prefix" required:"true" example:"roost:{project}:directory" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
+		ReservationTTL time.Duration `config:"reservation_ttl" required:"true" min:"1ns" help:"Required and positive: a reservation that never expires burns the key when the caller dies.\nThere is no default because the right value depends on how long the caller's commit path takes."`
+	} `config:"directory"`
+}
+
+// ConfigSchema 声明 directory.* 与 service_metrics.enabled。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 // Init reads configuration.
 //
 //	directory:
 //	  key_prefix: roost:directory   # required, no default
 //	  reservation_ttl: 60s          # required, must be positive
 func (m *Mod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("directory mod: %w", err)
+	}
 	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
-	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+	settings.ApplyServiceMetrics(&m.metrics)
+	c := settings.Directory
+	if err := mods.CheckKeyPrefix("directory", c.KeyPrefix); err != nil {
 		return err
 	}
 	if m.normalize == nil {
@@ -57,19 +75,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("directory mod: a normalizer is required; it decides which raw keys " +
 			"are the same key, which is not a deployment setting")
 	}
-	prefix, err := mods.KeyPrefix(cfg, "directory")
-	if err != nil {
-		return err
-	}
-	// Required and positive: a reservation that never expires burns the key
-	// when the caller dies, which is the defect this primitive exists to
-	// prevent. There is no default because the right value depends on how
-	// long the caller's commit path takes.
-	ttl, err := mods.RequiredDuration(cfg, "directory.reservation_ttl")
-	if err != nil {
-		return err
-	}
-	m.prefix, m.defaultTTL = prefix, ttl
+	m.prefix, m.defaultTTL = c.KeyPrefix, c.ReservationTTL
 	return nil
 }
 

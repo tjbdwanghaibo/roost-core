@@ -44,6 +44,19 @@ func (m *Mod) Name() app.ModName { return CapabilityName }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
+// config 是 mail.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	mods.ServiceMetricsConfig
+	Mail struct {
+		KeyPrefix  string        `config:"key_prefix" required:"true" example:"roost:{project}:mail" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
+		SendTTL    time.Duration `config:"send_ttl" required:"true" min:"1ns" example:"720h" help:"Required, with no default. It must exceed the longest client retry horizon: past it a retried\nsend is indistinguishable from a new one and the recipient gets the mail twice."`
+		ClaimLease time.Duration `config:"claim_lease" default:"30s" min:"1ns" example:"30s"`
+	} `config:"mail"`
+}
+
+// ConfigSchema 声明 mail.* 与 service_metrics.enabled。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 // Init reads configuration.
 //
 //	mail:
@@ -51,27 +64,17 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	  send_ttl: 24h            # required; see below
 //	  claim_lease: 30s         # optional, defaults to DefaultClaimLease
 func (m *Mod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("mail mod: %w", err)
+	}
 	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
-	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+	settings.ApplyServiceMetrics(&m.metrics)
+	c := settings.Mail
+	if err := mods.CheckKeyPrefix("mail", c.KeyPrefix); err != nil {
 		return err
 	}
-	prefix, err := mods.KeyPrefix(cfg, "mail")
-	if err != nil {
-		return err
-	}
-	// Required, with no default. It must exceed the longest client retry
-	// horizon: past it a retried send is indistinguishable from a new one and
-	// the recipient gets the mail twice. That horizon is a property of the
-	// caller's transport, so this package cannot pick it.
-	sendTTL, err := mods.RequiredDuration(cfg, "mail.send_ttl")
-	if err != nil {
-		return err
-	}
-	claimLease, err := mods.Duration(cfg, "mail.claim_lease", DefaultClaimLease)
-	if err != nil {
-		return err
-	}
-	m.prefix, m.sendTTL, m.claimLease = prefix, sendTTL, claimLease
+	m.prefix, m.sendTTL, m.claimLease = c.KeyPrefix, c.SendTTL, c.ClaimLease
 	return nil
 }
 

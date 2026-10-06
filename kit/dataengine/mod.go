@@ -93,135 +93,181 @@ func (mod *Mod) OptionalDependsOn() []app.ModName {
 	return deps
 }
 
-func (mod *Mod) Init(cfg *viper.Viper) error {
-	if cfg == nil {
-		cfg = viper.New()
-	}
-	if _, err := mods.ResolvePersistenceEngine(cfg); err != nil {
+// EffectsConfig 是 dataengine.effects.* 的声明：效果流（ROOST_EFFECTS）的主题前缀、名字与保留期。
+// saga Mod 经 EffectStreamRetention 读同一份，两边对流的理解不会分叉。
+type EffectsConfig struct {
+	SubjectPrefix   string        `config:"subject_prefix" default:"roost.effect" example:"roost.effect"`
+	Stream          string        `config:"stream" default:"ROOST_EFFECTS" example:"ROOST_EFFECTS"`
+	MaxAge          time.Duration `config:"max_age" default:"168h" min:"1ns" example:"168h"`
+	MaxBytes        int64         `config:"max_bytes" default:"8589934592" min:"1" example:"8589934592"`
+	DuplicateWindow time.Duration `config:"duplicate_window" default:"10m" min:"1ns" example:"10m"`
+	Replicas        int           `config:"replicas" default:"1" min:"1" example:"1"`
+}
+
+// config 是 kit/dataengine 读的键（维护者决定 A4 ①）。数字与时长写 0 的取 core 缺省（声明里 min:"0" 的键）；
+// 其余键的缺省值就是声明的 default，写 0 或负数拒绝。
+type config struct {
+	app.ServiceIdentity
+	mods.PersistenceConfig
+	Database              string        `config:"dataengine.database" default:"game" example:"game"`
+	StartupTimeout        time.Duration `config:"dataengine.startup_timeout" default:"30s" min:"1ns" example:"30s"`
+	ShutdownTimeout       time.Duration `config:"dataengine.shutdown_timeout" default:"30s" min:"1ns" example:"30s" help:"Stop budget declared to the App for draining WAL and projection; granted from\nshutdown.total_timeout after a 3s floor for each other Mod (scaled down with a warning\nonly when the rest cannot cover it). The generated shutdown.total_timeout counts it:\nraise that too when raising this."`
+	TransactionReceiptTTL time.Duration `config:"dataengine.transaction_receipt_ttl" default:"720h" min:"1ns" example:"720h"`
+	ReceiptTTL            time.Duration `config:"dataengine.receipt_ttl" default:"720h" min:"1ns" example:"720h"`
+	WAL                   struct {
+		Dir                 string        `config:"dir" example:"data/wal/dataengine" help:"不写取 data/wal/dataengine/<sid>"`
+		WriterVersion       int           `config:"writer_version" default:"2" min:"1" max:"2" example:"2"`
+		SegmentBytes        int64         `config:"segment_bytes" min:"0" example:"268435456"`
+		MaxDiskBytes        int64         `config:"max_disk_bytes" min:"0" example:"8589934592"`
+		MaxUnackedAge       time.Duration `config:"max_unacked_age" min:"0" example:"24h"`
+		QueueCapacity       int           `config:"queue_capacity" min:"0" example:"8192"`
+		GroupCommitInterval time.Duration `config:"group_commit_interval" min:"0" example:"2ms"`
+	} `config:"dataengine.wal"`
+	Projection struct {
+		RemoteWorkers      int           `config:"remote_workers" min:"1" max:"64"`
+		BatchRecords       int           `config:"batch_records" min:"0" example:"256"`
+		BatchBytes         int           `config:"batch_bytes" min:"0"`
+		ReadBytes          int           `config:"read_bytes" min:"0"`
+		RetryMin           time.Duration `config:"retry_min" min:"0" example:"100ms"`
+		RetryMax           time.Duration `config:"retry_max" min:"0" example:"5s"`
+		CheckpointRecords  int           `config:"checkpoint_records" min:"0"`
+		CheckpointInterval time.Duration `config:"checkpoint_interval" min:"0"`
+		MaxUnackedRecords  int64         `config:"max_unacked_records" min:"0"`
+		WarnUnackedRecords int64         `config:"warn_unacked_records" min:"0"`
+	} `config:"dataengine.projection"`
+	Outbox struct {
+		Owner           string        `config:"owner" help:"不写取 dataengine-<sid>"`
+		Workers         int           `config:"workers" default:"2" min:"1" example:"2"`
+		BatchSize       int           `config:"batch_size" default:"64" min:"1" example:"64"`
+		LeaseDuration   time.Duration `config:"lease_duration" default:"30s" min:"1ns" example:"30s"`
+		PollInterval    time.Duration `config:"poll_interval" default:"100ms" min:"1ns" example:"100ms"`
+		RetryMin        time.Duration `config:"retry_min" default:"1s" min:"1ns" example:"1s"`
+		RetryMax        time.Duration `config:"retry_max" default:"1m" min:"1ns" example:"1m"`
+		MaxPending      int64         `config:"max_pending" min:"0" example:"1000000"`
+		MaxOldestAge    time.Duration `config:"max_oldest_age" min:"0" example:"30m"`
+		BacklogInterval time.Duration `config:"backlog_interval" default:"1s" min:"1ns"`
+	} `config:"dataengine.outbox"`
+	Effects   EffectsConfig `config:"dataengine.effects"`
+	Pipelined struct {
+		Allowlist          []string `config:"allowlist" example:"[]"`
+		Async              bool     `config:"async" example:"false"`
+		AsyncWorkers       int      `config:"async_workers" min:"0" example:"8"`
+		AsyncQueueCapacity int      `config:"async_queue_capacity" min:"0" example:"4096"`
+	} `config:"nest.pipelined"`
+}
+
+// ValidateConfig：告警水位不能高于硬上限；嵌入的持久化选择也要检查（自己定义了 ValidateConfig，提升的那个被遮住）。
+func (c *config) ValidateConfig(production bool) error {
+	if err := c.PersistenceConfig.ValidateConfig(production); err != nil {
 		return err
 	}
-	// 严格读取（维护者决定 A4）：写错类型的值不再被读成 0 / 纳秒后取默认，返回前一并报出。
-	read := app.NewConfigReader(cfg)
-	sid := cfg.GetInt32("sid")
-	database := strings.TrimSpace(cfg.GetString("dataengine.database"))
-	if database == "" {
-		database = "game"
+	if c.Projection.MaxUnackedRecords > 0 && c.Projection.WarnUnackedRecords > c.Projection.MaxUnackedRecords {
+		return errors.New("dataengine mod: invalid projection checkpoint or backlog limits: warn_unacked_records exceeds max_unacked_records")
 	}
-	dir := strings.TrimSpace(cfg.GetString("dataengine.wal.dir"))
+	return nil
+}
+
+// ConfigSchema 声明 dataengine.*、nest.pipelined.* 与持久化引擎的选择。
+func (mod *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
+func (mod *Mod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("dataengine mod: %w", err)
+	}
+	sid := settings.Sid
+	dir := settings.WAL.Dir
 	if dir == "" {
 		dir = filepath.Join("data", "wal", "dataengine", fmt.Sprintf("%d", sid))
 	}
 	wal := nestwal.DefaultOptions(dir)
-	switch read.Int("dataengine.wal.writer_version") {
-	case 0:
-		wal.WriterVersion = nestwal.WriterVersionV2
-	case 1:
+	wal.WriterVersion = nestwal.WriterVersionV2
+	if settings.WAL.WriterVersion == 1 {
 		wal.WriterVersion = nestwal.WriterVersionV1
-	case 2:
-		wal.WriterVersion = nestwal.WriterVersionV2
-	default:
-		return errors.Join(read.Err(), errors.New("dataengine mod: wal.writer_version must be 1 or 2"))
 	}
-	if value := read.Int64("dataengine.wal.segment_bytes"); value > 0 {
+	if value := settings.WAL.SegmentBytes; value > 0 {
 		wal.SegmentBytes = value
 	}
-	if value := read.Int("dataengine.wal.queue_capacity"); value > 0 {
+	if value := settings.WAL.QueueCapacity; value > 0 {
 		wal.QueueCapacity = value
 	}
-	if value := read.Duration("dataengine.wal.group_commit_interval"); value > 0 {
+	if value := settings.WAL.GroupCommitInterval; value > 0 {
 		wal.GroupCommitInterval = value
 	}
-	if value := read.Int64("dataengine.wal.max_disk_bytes"); value > 0 {
+	if value := settings.WAL.MaxDiskBytes; value > 0 {
 		wal.MaxDiskBytes = value
 	}
-	if value := read.Duration("dataengine.wal.max_unacked_age"); value > 0 {
+	if value := settings.WAL.MaxUnackedAge; value > 0 {
 		wal.MaxUnackedAge = value
 	}
 	wal.OnFatal = mod.onFatal
+	projection := settings.Projection
 	projector := engine.DefaultProjectorOptions()
-	if cfg.IsSet("dataengine.projection.remote_workers") {
-		value := read.Int("dataengine.projection.remote_workers")
-		if value < 1 || value > 64 {
-			return errors.Join(read.Err(), errors.New("dataengine mod: projection.remote_workers must be between 1 and 64"))
-		}
-		projector.RemoteProjectionWorkers = value
+	if projection.RemoteWorkers > 0 {
+		projector.RemoteProjectionWorkers = projection.RemoteWorkers
 	}
-	if value := read.Duration("dataengine.projection.retry_min"); value > 0 {
-		projector.RetryMin = value
+	if projection.RetryMin > 0 {
+		projector.RetryMin = projection.RetryMin
 	}
-	if value := read.Duration("dataengine.projection.retry_max"); value > 0 {
-		projector.RetryMax = value
+	if projection.RetryMax > 0 {
+		projector.RetryMax = projection.RetryMax
 	}
-	if value := read.Int("dataengine.projection.batch_records"); value > 0 {
-		projector.ReplayBatchRecords = value
+	if projection.BatchRecords > 0 {
+		projector.ReplayBatchRecords = projection.BatchRecords
 	}
-	if value := read.Int("dataengine.projection.batch_bytes"); value > 0 {
-		projector.ReplayBatchBytes = value
+	if projection.BatchBytes > 0 {
+		projector.ReplayBatchBytes = projection.BatchBytes
 	}
-	if value := read.Int("dataengine.projection.read_bytes"); value < 0 {
-		return errors.Join(read.Err(), errors.New("dataengine mod: projection.read_bytes must not be negative"))
-	} else if value > 0 {
-		projector.ReplayReadBytes = value
+	if projection.ReadBytes > 0 {
+		projector.ReplayReadBytes = projection.ReadBytes
 	}
-	checkpointRecords := read.Int("dataengine.projection.checkpoint_records")
-	checkpointInterval := read.Duration("dataengine.projection.checkpoint_interval")
-	maxUnacked := read.Int64("dataengine.projection.max_unacked_records")
-	warnUnacked := read.Int64("dataengine.projection.warn_unacked_records")
-	if checkpointRecords < 0 || checkpointInterval < 0 || maxUnacked < 0 || warnUnacked < 0 || (maxUnacked > 0 && warnUnacked > maxUnacked) {
-		return errors.Join(read.Err(), errors.New("dataengine mod: invalid projection checkpoint or backlog limits"))
+	if projection.CheckpointRecords > 0 {
+		projector.CheckpointRecords = projection.CheckpointRecords
 	}
-	if checkpointRecords > 0 {
-		projector.CheckpointRecords = checkpointRecords
+	if projection.CheckpointInterval > 0 {
+		projector.CheckpointInterval = projection.CheckpointInterval
 	}
-	if checkpointInterval > 0 {
-		projector.CheckpointInterval = checkpointInterval
-	}
-	projector.MaxUnackedRecords = uint64(maxUnacked)
-	projector.WarnUnackedRecords = uint64(warnUnacked)
+	projector.MaxUnackedRecords = uint64(projection.MaxUnackedRecords)
+	projector.WarnUnackedRecords = uint64(projection.WarnUnackedRecords)
 	projector.OnFatal = mod.onFatal
-	owner := strings.TrimSpace(cfg.GetString("dataengine.outbox.owner"))
+	owner := settings.Outbox.Owner
 	if owner == "" {
 		owner = fmt.Sprintf("dataengine-%d", sid)
 	}
 	outbox := engine.OutboxWorkerOptions{
-		Owner: owner, Workers: positive(read.Int("dataengine.outbox.workers"), 2),
-		BatchSize:     positive(read.Int("dataengine.outbox.batch_size"), 64),
-		LeaseDuration: duration(read.Duration("dataengine.outbox.lease_duration"), 30*time.Second),
-		PollInterval:  duration(read.Duration("dataengine.outbox.poll_interval"), 100*time.Millisecond),
-		RetryMin:      duration(read.Duration("dataengine.outbox.retry_min"), time.Second),
-		RetryMax:      duration(read.Duration("dataengine.outbox.retry_max"), time.Minute),
-		MaxPending:    read.Int64("dataengine.outbox.max_pending"), MaxOldestAge: read.Duration("dataengine.outbox.max_oldest_age"),
-		BacklogInterval: duration(read.Duration("dataengine.outbox.backlog_interval"), time.Second),
+		Owner: owner, Workers: settings.Outbox.Workers, BatchSize: settings.Outbox.BatchSize,
+		LeaseDuration: settings.Outbox.LeaseDuration, PollInterval: settings.Outbox.PollInterval,
+		RetryMin: settings.Outbox.RetryMin, RetryMax: settings.Outbox.RetryMax,
+		MaxPending: settings.Outbox.MaxPending, MaxOldestAge: settings.Outbox.MaxOldestAge,
+		BacklogInterval: settings.Outbox.BacklogInterval,
 		OnHardLimit:     mod.onFatal,
 	}
-	prefix := strings.Trim(strings.TrimSpace(cfg.GetString("dataengine.effects.subject_prefix")), ".")
-	if prefix == "" {
-		prefix = "roost.effect"
-	}
-	stream := effectStreamName(cfg)
+	effects := settings.Effects
+	prefix := effects.subjectPrefix()
 	mod.cfg = modConfig{
-		mongo: engine.MongoStoreConfig{DefaultDatabase: database, ServerID: sid,
-			TransactionReceiptTTL: duration(read.Duration("dataengine.transaction_receipt_ttl"), 30*24*time.Hour),
-			ReceiptTTL:            duration(read.Duration("dataengine.receipt_ttl"), 30*24*time.Hour)},
+		mongo: engine.MongoStoreConfig{DefaultDatabase: settings.Database, ServerID: sid,
+			TransactionReceiptTTL: settings.TransactionReceiptTTL, ReceiptTTL: settings.ReceiptTTL},
 		wal: wal, projector: projector, outbox: outbox, effectPrefix: prefix,
 		effectStream: fnats.JetStreamConfig{
-			Name: stream, Subjects: []string{prefix + ".>"}, Storage: fnats.JetStreamStorageFile,
-			MaxAge:     duration(read.Duration("dataengine.effects.max_age"), DefaultEffectMaxAge),
-			Duplicates: duration(read.Duration("dataengine.effects.duplicate_window"), 10*time.Minute),
-			Replicas:   positive(read.Int("dataengine.effects.replicas"), 1),
-			MaxBytes:   positiveInt64(read.Int64("dataengine.effects.max_bytes"), 8<<30),
+			Name: effects.Stream, Subjects: []string{prefix + ".>"}, Storage: fnats.JetStreamStorageFile,
+			MaxAge: effects.MaxAge, Duplicates: effects.DuplicateWindow, Replicas: effects.Replicas, MaxBytes: effects.MaxBytes,
 		},
-		startupTimeout:  duration(read.Duration("dataengine.startup_timeout"), 30*time.Second),
-		shutdownTimeout: duration(read.Duration("dataengine.shutdown_timeout"), 30*time.Second),
+		startupTimeout:  settings.StartupTimeout,
+		shutdownTimeout: settings.ShutdownTimeout,
 		pipelined: engine.PipelinedRuntimeConfig{
-			Allowlist: cfg.GetStringSlice("nest.pipelined.allowlist"), Async: read.Bool("nest.pipelined.async"),
-			AsyncWorkers: read.Int("nest.pipelined.async_workers"), AsyncQueueCap: read.Int("nest.pipelined.async_queue_capacity"),
+			Allowlist: settings.Pipelined.Allowlist, Async: settings.Pipelined.Async,
+			AsyncWorkers: settings.Pipelined.AsyncWorkers, AsyncQueueCap: settings.Pipelined.AsyncQueueCapacity,
 		},
-	}
-	if err := read.Err(); err != nil {
-		return fmt.Errorf("dataengine mod: %w", err)
 	}
 	return nil
+}
+
+// subjectPrefix 是去掉首尾点的主题前缀；只写了点时取缺省。
+func (c EffectsConfig) subjectPrefix() string {
+	if prefix := strings.Trim(c.SubjectPrefix, "."); prefix != "" {
+		return prefix
+	}
+	return "roost.effect"
 }
 
 func (mod *Mod) Provide(registry *app.Registry) error {
@@ -480,44 +526,16 @@ const (
 	DefaultEffectMaxAge = 7 * 24 * time.Hour
 )
 
-func effectStreamName(cfg *viper.Viper) string {
-	if stream := strings.TrimSpace(cfg.GetString("dataengine.effects.stream")); stream != "" {
-		return stream
-	}
-	return DefaultEffectStream
-}
-
-// EffectStreamRetention 按 DataEngine Mod 的读法返回效果流的名字与保留期
+// EffectStreamRetention 按 DataEngine Mod 的声明返回效果流的名字与保留期
 // （dataengine.effects.stream / dataengine.effects.max_age，未配置取缺省）。
 func EffectStreamRetention(cfg *viper.Viper) (stream string, maxAge time.Duration, err error) {
-	if cfg == nil {
-		return DefaultEffectStream, DefaultEffectMaxAge, nil
+	var settings struct {
+		Effects EffectsConfig `config:"dataengine.effects"`
 	}
-	read := app.NewConfigReader(cfg)
-	maxAge = duration(read.Duration("dataengine.effects.max_age"), DefaultEffectMaxAge)
-	if err := read.Err(); err != nil {
+	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return "", 0, err
 	}
-	return effectStreamName(cfg), maxAge, nil
-}
-
-func duration(value, fallback time.Duration) time.Duration {
-	if value > 0 {
-		return value
-	}
-	return fallback
-}
-func positive(value, fallback int) int {
-	if value > 0 {
-		return value
-	}
-	return fallback
-}
-func positiveInt64(value, fallback int64) int64 {
-	if value > 0 {
-		return value
-	}
-	return fallback
+	return settings.Effects.Stream, settings.Effects.MaxAge, nil
 }
 
 var _ app.Mod = (*Mod)(nil)

@@ -24,7 +24,11 @@ func TestJetStreamRPCConfigFromViper(t *testing.T) {
 	cfg.Set("nats.rpc.replicas", 2)
 	cfg.Set("nats.rpc.max_bytes", int64(1024))
 
-	got, enabled := jetStreamRPCConfigFromViper(cfg, app.NewConfigReader(cfg))
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		t.Fatal(err)
+	}
+	got, enabled := settings.jetStreamRPC()
 	if !enabled {
 		t.Fatal("jetstream rpc config should be enabled")
 	}
@@ -40,7 +44,11 @@ func TestJetStreamRPCConfigFromViper(t *testing.T) {
 }
 
 func TestJetStreamRPCConfigFromViperDisabledByDefault(t *testing.T) {
-	got, enabled := jetStreamRPCConfigFromViper(viper.New(), app.NewConfigReader(nil))
+	var settings config
+	if err := app.LoadConfig(viper.New(), &settings); err != nil {
+		t.Fatal(err)
+	}
+	got, enabled := settings.jetStreamRPC()
 	if enabled {
 		t.Fatalf("jetstream rpc config should be disabled by default: %+v", got)
 	}

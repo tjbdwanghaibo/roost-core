@@ -2,6 +2,7 @@ package roost
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
 )
@@ -12,22 +13,7 @@ func renderPlayerTCPConfig() string {
 # block to the owning service configs without changing unrelated YAML.
 # The listener stays disabled until auth.go is implemented and the explicit
 # roost config enable player-tcp command succeeds.
-player_access:
-  tcp:
-    enabled: false
-    addr: 0.0.0.0:7000
-    max_connections: 10000
-    max_connections_per_ip: 128
-    max_handshakes: 1024
-    max_handshake_bytes: 8192
-    max_payload_bytes: 1048576
-    handshake_timeout: 5s
-    idle_timeout: 90s
-    write_timeout: 5s
-    shutdown_timeout: 10s
-    dispatch_timeout: 3s
-    login_timeout: 2s
-`
+` + playerTCPBlockSchema().StarterYAML(nil)
 }
 
 func renderPlayerTCPAuthenticator() string {
@@ -127,6 +113,10 @@ func fail(format string, args ...any) {
 }
 
 func renderPlayerTCPServer(manifest Manifest) string {
+	return strings.Replace(renderPlayerTCPServerSource(manifest), "@@TCP_CONFIG_DECLARATION@@", renderPlayerTCPDeclaration(), 1)
+}
+
+func renderPlayerTCPServerSource(manifest Manifest) string {
 	return fmt.Sprintf(`%s
 package tcp
 
@@ -231,56 +221,41 @@ func defaultConfig() Config {
 	}
 }
 
-// configFromViper reads player_access.tcp.* strictly through app.ConfigReader
-// (maintainer decision A4): a value of the wrong type — "enabled: on",
+@@TCP_CONFIG_DECLARATION@@
+
+// configFromViper reads player_access.tcp.* through the declaration above
+// (maintainer decision A4 ①): a value of the wrong type — "enabled: on",
 // "max_payload_bytes: 8k", a duration without a unit — is refused by key
-// instead of being read as false / 0 (the default) / nanoseconds. Every bad
-// key is reported at once. An unset key keeps its default.
+// instead of being read as false / 0 (the default) / nanoseconds, every bad
+// key at once, and the App checks the same declaration before any Mod Init.
+// An unset key keeps its declared default (TestDeclaredDefaultsAreDefaultConfig);
+// validateConfig then applies the bounds, the same ones NewServer applies to
+// a Config built in code.
 func configFromViper(cfg *viper.Viper) (Config, error) {
-	result := defaultConfig()
-	if cfg == nil { return result, errors.New("player tcp: config is nil") }
-	const key = "player_access.tcp."
-	read := app.NewConfigReader(cfg)
-	result.Enabled = read.Bool(key + "enabled")
-	if value := cfg.GetString(key + "addr"); value != "" { result.Addr = value }
-	if value := read.Int(key + "max_connections"); value != 0 { result.MaxConnections = value }
-	if value := read.Int(key + "max_connections_per_ip"); value != 0 { result.MaxConnectionsPerIP = value }
-	if value := read.Int(key + "max_handshakes"); value != 0 { result.MaxHandshakes = value }
-	handshakeBytes := read.Int(key + "max_handshake_bytes")
-	payloadBytes := read.Int(key + "max_payload_bytes")
-	if value := read.Duration(key + "handshake_timeout"); value != 0 { result.HandshakeTimeout = value }
-	if value := read.Duration(key + "idle_timeout"); value != 0 { result.IdleTimeout = value }
-	if value := read.Duration(key + "write_timeout"); value != 0 { result.WriteTimeout = value }
-	if value := read.Duration(key + "shutdown_timeout"); value != 0 { result.ShutdownTimeout = value }
+	if cfg == nil { return defaultConfig(), errors.New("player tcp: config is nil") }
+	var settings tcpConfig
+	if err := app.LoadConfig(cfg, &settings); err != nil { return Config{}, fmt.Errorf("player tcp: %%w", err) }
+	tcp := settings.TCP
+	result := Config{
+		Enabled: tcp.Enabled, Addr: tcp.Addr, MaxConnections: tcp.MaxConnections,
+		MaxConnectionsPerIP: tcp.MaxConnectionsPerIP, MaxHandshakes: tcp.MaxHandshakes,
+		MaxHandshakeBytes: tcp.MaxHandshakeBytes, MaxPayloadBytes: tcp.MaxPayloadBytes,
+		HandshakeTimeout: tcp.HandshakeTimeout, IdleTimeout: tcp.IdleTimeout, WriteTimeout: tcp.WriteTimeout,
+		ShutdownTimeout: tcp.ShutdownTimeout, DispatchTimeout: tcp.DispatchTimeout, LoginTimeout: tcp.LoginTimeout,
+	}
 	// The dispatch budget follows the Nest request budget unless it is set on
 	// its own: a request is at least one Nest call, and a transport deadline
 	// shorter than that call's own would cut it off for no stated reason.
-	if value := read.Duration(key + "dispatch_timeout"); value != 0 {
-		result.DispatchTimeout = value
-	} else if value := read.Duration("nest.request_timeout"); value > 0 {
-		result.DispatchTimeout = value
-	}
-	if value := read.Duration(key + "login_timeout"); value != 0 {
-		result.LoginTimeout = value
-	} else {
-		result.LoginTimeout = min(defaultLoginTimeout, result.DispatchTimeout)
-	}
-	if err := read.Err(); err != nil { return Config{}, fmt.Errorf("player tcp: %%w", err) }
-	// The byte limits are uint32 on the wire. A negative value is refused by
-	// name rather than wrapped or read as the default.
-	for _, limit := range []struct {
-		name string
-		value int
-		field *uint32
-	}{{"max_handshake_bytes", handshakeBytes, &result.MaxHandshakeBytes}, {"max_payload_bytes", payloadBytes, &result.MaxPayloadBytes}} {
-		if limit.value < 0 || limit.value > hardMaxPayload {
-			return Config{}, fmt.Errorf("player tcp: %%s%%s = %%d is outside 1..%%d", key, limit.name, limit.value, hardMaxPayload)
-		}
-		if limit.value != 0 { *limit.field = uint32(limit.value) }
-	}
+	if result.DispatchTimeout == 0 { result.DispatchTimeout = settings.Nest.RequestTimeout }
+	if result.DispatchTimeout == 0 { result.DispatchTimeout = defaultDispatchTimeout }
+	if result.LoginTimeout == 0 { result.LoginTimeout = min(defaultLoginTimeout, result.DispatchTimeout) }
 	if err := validateConfig(result); err != nil { return Config{}, err }
 	return result, nil
 }
+
+// ConfigSchema implements app.ModConfigSchema: the App checks these keys
+// before any Mod Init, and `+"`--print-config`"+` prints them.
+func (*Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(tcpConfig{}) }
 
 // validateConfig refuses every setting outside its bounds, each by its key,
 // all at once. A limit bounded by another names that one too: a handshake runs
@@ -1363,6 +1338,15 @@ func TestAPanickingSubscriberDoesNotStopTheDispatcher(t *testing.T) {
 		}
 	}
 	runtime.stopLifecycle()
+}
+
+// A4 ①: the declared defaults are defaultConfig(): an empty config reads as
+// the Config NewServer is given in code, so the default the generator and
+// --print-config show is the one that runs.
+func TestDeclaredDefaultsAreDefaultConfig(t *testing.T) {
+	config, err := configFromViper(viper.New())
+	if err != nil { t.Fatal(err) }
+	if config != defaultConfig() { t.Fatalf("declared defaults %%+v, defaultConfig() %%+v", config, defaultConfig()) }
 }
 
 // RR-20260926-36: the dispatch budget follows nest.request_timeout unless it

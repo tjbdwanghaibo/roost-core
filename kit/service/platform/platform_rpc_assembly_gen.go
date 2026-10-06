@@ -205,40 +205,36 @@ func (m *ClientMod) Name() app.ModName { return CapabilityName }
 // tried to start (roost-codegen U-0024).
 func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }
 
-// Init reads configuration.
+// clientModConfig is what the client Mod reads (maintainer decision A4 ①):
+// the declaration the App checks before any Mod Init, and Init reads it with
+// app.LoadConfig. A bare number for call_timeout is refused rather than read
+// as nanoseconds (5 → 5ns, every call times out), a negative one rather than
+// clamped, and the error names the key.
 //
-//	platform:
-//	  service_type: platform   # optional, defaults to ServiceType
-//	  call_timeout: 3s                 # optional, defaults to DefaultCallTimeout
-//
-// It reads no key prefix and no store settings, because a client has no store.
-// A process that only calls this service therefore cannot be misconfigured
-// with a prefix that disagrees with the owner's — it has no prefix to get
-// wrong.
+// It declares no key prefix and no store settings, because a client has no
+// store. A process that only calls this service therefore cannot be
+// misconfigured with a prefix that disagrees with the owner's — it has no
+// prefix to get wrong.
+type clientModConfig struct {
+	Client struct {
+		ServiceType string        `config:"service_type" default:"platform" help:"bus service type the calls are addressed to"`
+		CallTimeout time.Duration `config:"call_timeout" min:"0" help:"timeout of one call; 0 keeps DefaultCallTimeout (3s)"`
+	} `config:"platform"`
+}
+
+// ConfigSchema implements app.ModConfigSchema.
+func (m *ClientMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(clientModConfig{}) }
+
+// Init reads platform.service_type and platform.call_timeout.
 func (m *ClientMod) Init(cfg *viper.Viper) error {
-	m.serviceType = cfg.GetString("platform.service_type")
-	if m.serviceType == "" {
-		m.serviceType = ServiceType
-	}
-	// Read strictly through app.ConfigDuration (maintainer decision A4): a
-	// bare number is refused rather than read as nanoseconds (5 → 5ns, every
-	// call times out) and a word that is not a duration is refused rather
-	// than read as 0 (the default). The error names the key.
-	//
-	// A negative value is refused rather than clamped: a caller that wrote -1
-	// meant something, and silently reading it as the default hides the
-	// mistake.
-	m.timeout = DefaultCallTimeout
-	timeout, err := app.ConfigDuration(cfg, "platform.call_timeout")
-	if err != nil {
+	var settings clientModConfig
+	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return fmt.Errorf("platform client mod: %w", err)
 	}
-	if timeout < 0 {
-		return fmt.Errorf("platform client mod: platform.call_timeout must not be "+
-			"negative, got %s", timeout)
-	}
-	if timeout > 0 {
-		m.timeout = timeout
+	m.serviceType = settings.Client.ServiceType
+	m.timeout = DefaultCallTimeout
+	if settings.Client.CallTimeout > 0 {
+		m.timeout = settings.Client.CallTimeout
 	}
 	return nil
 }

@@ -28,8 +28,8 @@ import (
 
 const opsMaxJSONBodyBytes int64 = 1 << 20
 
-// defaultAdminTimeout 是 /admin/execute 交给命令的 ctx 期限（ops.admin_timeout 未配置时）。
-// adminWriteMargin 是 HTTP 写超时比它多出的部分：配合 ctx 的命令到期返回之后，回复还来得及写出去。
+// defaultAdminTimeout 是没经 Init 直接装配的 OpsMod 交给命令的期限，与 ops.admin_timeout 声明的缺省相同
+// （TestOpsAdminTimeoutDefaultMatchesTheDeclaration）。adminWriteMargin 是 HTTP 写超时比它多出的部分：配合 ctx 的命令到期返回之后，回复还来得及写出去。
 const (
 	defaultAdminTimeout = 10 * time.Second
 	adminWriteMargin    = 5 * time.Second
@@ -63,35 +63,73 @@ func NewOpsMod() *OpsMod {
 
 func (m *OpsMod) Name() app.ModName { return mods.ModOps }
 
+// config 是 ops.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	app.ServiceIdentity
+	Enabled         bool          `config:"ops.enabled" example:"true" help:"打开 ops 端点（/healthz、/readyz、/metrics、/statsz、/admin）"`
+	Addr            string        `config:"ops.addr" default:"127.0.0.1:9100" example:"127.0.0.1:9100" help:"ops 端点监听地址；生产环境绑公网要同时写 ops.allow_public_addr: true"`
+	AllowPublicAddr bool          `config:"ops.allow_public_addr" help:"生产环境允许 ops.addr 不是回环地址（端点放在鉴权代理之后时才写 true）"`
+	AdminEnabled    bool          `config:"ops.admin_enabled" example:"false" help:"打开 /admin 命令；打开时必须写 ops.admin_token"`
+	AdminToken      string        `config:"ops.admin_token" example:"" help:"/admin 的令牌；dev- 开头的令牌要同时写 ops.allow_dev_token: true"`
+	AllowDevToken   bool          `config:"ops.allow_dev_token" example:"false"`
+	AdminTimeout    time.Duration `config:"ops.admin_timeout" default:"10s" min:"1ns" help:"/admin/execute 交给命令的期限"`
+}
+
+// ValidateConfig：打开 admin 必须有令牌、dev- 令牌要显式允许；生产环境 ops 端点不绑公网（以前在 app 的启动校验里）。
+//
+// ops 端点带着不鉴权的 /metrics，打开 admin 时还能执行全部已登记的 admin 命令。回环地址只是缺省值，所以绑到所有网卡
+// 必须是声明过的决定（端点放在鉴权代理之后时写 ops.allow_public_addr: true），而不是忘了改的缺省。
+func (c *config) ValidateConfig(production bool) error {
+	var errs []error
+	if c.AdminEnabled {
+		if c.AdminToken == "" {
+			errs = append(errs, errors.New("config: ops.admin_enabled requires admin_token: ops.admin_token is empty"))
+		}
+		if strings.HasPrefix(c.AdminToken, "dev-") && !c.AllowDevToken {
+			errs = append(errs, errors.New("config: dev ops.admin_token requires ops.allow_dev_token=true"))
+		}
+	}
+	if production && c.Enabled && !isLoopbackListenAddr(c.Addr) && !c.AllowPublicAddr {
+		errs = append(errs, fmt.Errorf(
+			"config: production ops.addr %q is not loopback; bind 127.0.0.1 or set ops.allow_public_addr=true after putting the endpoint behind an authenticated proxy", c.Addr))
+	}
+	return errors.Join(errs...)
+}
+
+// isLoopbackListenAddr reports whether a listen address is reachable only from
+// the host. A bare port or an empty/wildcard host means "every interface".
+func isLoopbackListenAddr(addr string) bool {
+	host := addr
+	if parsed, _, err := net.SplitHostPort(addr); err == nil {
+		host = parsed
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// ConfigSchema 声明 ops.*。
+func (m *OpsMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 func (m *OpsMod) Init(cfg *viper.Viper) error {
-	read := app.NewConfigReader(cfg) // 严格读取（维护者决定 A4）
-	m.enabled = read.Bool("ops.enabled")
-	m.addr = cfg.GetString("ops.addr")
-	if m.addr == "" {
-		m.addr = "127.0.0.1:9100"
-	}
-	m.adminEnabled = read.Bool("ops.admin_enabled")
-	m.adminToken = cfg.GetString("ops.admin_token")
-	m.allowDevToken = read.Bool("ops.allow_dev_token")
-	m.adminTimeout = defaultAdminTimeout
-	if timeout := read.Duration("ops.admin_timeout"); timeout > 0 {
-		m.adminTimeout = timeout
-	} else if cfg.IsSet("ops.admin_timeout") && read.Err() == nil {
-		return fmt.Errorf("ops: ops.admin_timeout must be positive, got %s", cfg.GetString("ops.admin_timeout"))
-	}
-	m.sid = cfg.GetInt32("sid")
-	m.service = cfg.GetString("server_type")
-	if err := read.Err(); err != nil {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return fmt.Errorf("ops: %w", err)
 	}
-	if m.adminEnabled {
-		if m.adminToken == "" {
-			return errors.New("ops: admin_enabled requires admin_token")
-		}
-		if strings.HasPrefix(m.adminToken, "dev-") && !m.allowDevToken {
-			return errors.New("ops: dev admin token is not allowed unless ops.allow_dev_token=true")
-		}
-	}
+	m.enabled = settings.Enabled
+	m.addr = settings.Addr
+	m.adminEnabled = settings.AdminEnabled
+	m.adminToken = settings.AdminToken
+	m.allowDevToken = settings.AllowDevToken
+	m.adminTimeout = settings.AdminTimeout
+	m.sid = settings.Sid
+	m.service = settings.ServerType
 	return nil
 }
 

@@ -553,7 +553,7 @@ func Managers() []app.IManager {
 
 // App 单实例锁（app.Singleton，docs/feature/APP-SINGLETON-LOCK-2026-10-05.md §6）的生成规则。
 //
-// 生成值与 app/singleton.go 的默认值相同（15s / 3s / 5s / 2×ttl），满足 ValidateServiceConfig 钉住的三条关系：
+// 生成值与 app/singleton.go 的默认值相同（15s / 3s / 5s / 2×ttl），满足 App 启动检查（singleton.* 的声明）钉住的三条关系：
 // renew_interval ≤ guard、2×renew_interval ≤ ttl − guard、startup_wait ≥ ttl + 2×renew_interval。
 const (
 	generatedSingletonTTL           = 15 * time.Second
@@ -614,25 +614,24 @@ func renderServiceConfig(m Manifest, service string, production bool) string {
 	b.WriteString(renderShutdownConfig(serviceShutdownPlan(m, service)))
 	seen := map[string]bool{}
 	for _, name := range mods {
-		if !seen[name] && modCatalog[name].Config != "" {
-			b.WriteString(modCatalog[name].Config)
+		if section := modConfigSection(name); !seen[name] && section != "" {
+			b.WriteString(section)
 			seen[name] = true
 		}
 	}
-	if spec, hosted := frameworkCatalog[m.Services[service].Framework]; hosted {
-		b.WriteString(spec.ConfigFunc(m.Project.Name))
+	if _, hosted := frameworkCatalog[m.Services[service].Framework]; hosted {
+		b.WriteString(frameworkConfigSection(m.Services[service].Framework, m.Project.Name))
 	}
 	singleton := serviceSingletonEnabled(m, service)
 	if singleton && !seen["redis"] {
 		// 只补 redis: 配置段给单实例锁的连接用，不把 Redis Mod 强加给服务。
-		b.WriteString(modCatalog["redis"].Config)
+		b.WriteString(modConfigSection("redis"))
 	}
 	b.WriteString(renderSingletonConfig(m.Project.Name, singleton))
 	if !production {
 		// One machine, every service at once: each gets its own ops port
 		// (see opsPort). Production keeps 9100 — one process per container.
-		return strings.Replace(b.String(), "ops:\n  enabled: true\n  addr: 127.0.0.1:9100",
-			fmt.Sprintf("ops:\n  enabled: true\n  addr: 127.0.0.1:%d", opsPort(m, service)), 1)
+		return opsAddrLine.ReplaceAllString(b.String(), fmt.Sprintf("${1}127.0.0.1:%d", opsPort(m, service)))
 	}
 	return productionizeConfig(b.String())
 }
@@ -643,14 +642,17 @@ func renderServiceConfig(m Manifest, service string, production bool) string {
 // stores get three replicas, logs go to stdout only. It is applied to the
 // whole rendered file at project creation and to each section a Mod added
 // later appends (appendModConfigSections), so the two never diverge.
+// opsAddrLine matches the generated ops.addr line (the only top-level section
+// key "addr" whose value is the 9100 ops port), whatever help comments the
+// declaration puts above it.
+var opsAddrLine = regexp.MustCompile(`(?m)^(  addr: )(?:127\.0\.0\.1|CHANGE_ME):9100$`)
+
 // streamReplicasLine matches a line whose key is exactly replicas with value 1.
 var streamReplicasLine = regexp.MustCompile(`(?m)^([ \t]*)replicas: 1$`)
 
 func productionizeConfig(value string) string {
 	value = strings.ReplaceAll(strings.ReplaceAll(value, "127.0.0.1", "CHANGE_ME"), "localhost", "CHANGE_ME")
-	value = strings.Replace(value,
-		"ops:\n  enabled: true\n  addr: CHANGE_ME:9100",
-		"ops:\n  enabled: true\n  addr: 0.0.0.0:9100", 1)
+	value = opsAddrLine.ReplaceAllString(value, "${1}0.0.0.0:9100")
 	// 只改独占一行的 replicas: 1（syncbus / effects / saga 的流副本数）。
 	// remote_entity.snapshot_l2_tombstone_wait_replicas 是 L2 墓碑 WAIT 的副本数，不是流副本，不能跟着变成 3。
 	value = streamReplicasLine.ReplaceAllString(value, "${1}replicas: 3")
@@ -680,8 +682,8 @@ func appendModConfigSections(root string, before, after Manifest, service string
 	current, _ := resolveMods(append(append([]string{}, after.SharedMods...), effectiveServiceMods(after, service)...))
 	var sections []string
 	for _, name := range current {
-		if !contains(previous, name) && modCatalog[name].Config != "" {
-			sections = append(sections, modCatalog[name].Config)
+		if section := modConfigSection(name); !contains(previous, name) && section != "" {
+			sections = append(sections, section)
 		}
 	}
 	// 后加进 dataengine 的服务：生成时写的 enabled: false 段翻成 true（turnGeneratedSingletonOn），
@@ -689,7 +691,7 @@ func appendModConfigSections(root string, before, after Manifest, service string
 	// 否则这个服务会带着 enabled: false 静默不启用（方案 §6.3）。
 	turnOn := !serviceSingletonEnabled(before, service) && serviceSingletonEnabled(after, service)
 	if turnOn {
-		sections = append(sections, modCatalog["redis"].Config, renderSingletonConfig(after.Project.Name, true))
+		sections = append(sections, modConfigSection("redis"), renderSingletonConfig(after.Project.Name, true))
 	}
 	if len(sections) == 0 {
 		return nil, nil

@@ -106,15 +106,9 @@ var (
 	ErrSingletonOpenerMissing = errors.New("singleton.enabled=true but no SingletonStore opener is installed; call App.Singleton in the bootstrap")
 )
 
-// 默认时间参数（方案 §3.3，维护者已同意 D2）。startup_wait 缺省为 2 × ttl。
-const (
-	defaultSingletonTTL           = 15 * time.Second
-	defaultSingletonRenewInterval = 3 * time.Second
-	defaultSingletonGuard         = 5 * time.Second
-	// singletonReleaseBudget 是停机时留给 Release 的时长：Mod 停机用的截止时间提前这么多，
-	// 启动失败路径的 Release 也用这个超时。
-	singletonReleaseBudget = 3 * time.Second
-)
+// singletonReleaseBudget 是停机时留给 Release 的时长：Mod 停机用的截止时间提前这么多，
+// 启动失败路径的 Release 也用这个超时。
+const singletonReleaseBudget = 3 * time.Second
 
 // Singleton 安装单实例锁的后端。是否启用由每个服务的 singleton.enabled 决定：
 // 启用而没有安装 opener 时启动失败；装了 opener 但未启用时不建连接，行为与不装相同。
@@ -123,91 +117,53 @@ func (a *App) Singleton(open SingletonOpener) *App {
 	return a
 }
 
-// singletonSettings 是 singleton.* 配置读出的值；未设置的时长取默认值。
-type singletonSettings struct {
-	enabled       bool
-	keyPrefix     string
-	ttl           time.Duration
-	renewInterval time.Duration
-	guard         time.Duration
-	startupWait   time.Duration
-	// readErrs 是读取时发现的类型错误（RR-20261005-NC-190）：`enabled: on` 不是布尔值、时长没写
-	// 单位。validate 先报它们，不管 enabled 读成了什么——宽松读取会把 `on` 读成 false，锁静默关闭。
-	readErrs []error
+// singletonConfig 是 singleton.* 的声明（A4 ①）。缺省时间参数见方案 §3.3（维护者已同意 D2）；startup_wait 不写取 2 × ttl。
+// 写错类型（`enabled: on`、不带单位的时长）由声明检查报出，不管 enabled 读成了什么——宽松读取会把 `on` 读成 false，锁静默关闭
+// （RR-20261005-NC-190）。
+type singletonConfig struct {
+	Enabled       bool          `config:"enabled" help:"同一服务类型 + sid 只让一个进程运行 Mod（单实例锁）"`
+	KeyPrefix     string        `config:"key_prefix" help:"锁键前缀，同一套部署的全部服务相同；启用时必填"`
+	TTL           time.Duration `config:"ttl" default:"15s" min:"1ns"`
+	RenewInterval time.Duration `config:"renew_interval" default:"3s" min:"1ns"`
+	Guard         time.Duration `config:"guard" default:"5s" min:"1ns"`
+	StartupWait   time.Duration `config:"startup_wait" min:"1ns" help:"启动时等锁的上限，不写取 2 × ttl"`
 }
 
-func readSingletonSettings(cfg *viper.Viper) singletonSettings {
-	var s singletonSettings
-	duration := func(key string, fallback time.Duration) time.Duration {
-		if !cfg.IsSet(key) {
-			return fallback
-		}
-		value, err := ConfigDuration(cfg, key)
-		if err != nil {
-			s.readErrs = append(s.readErrs, err)
-		}
-		return value
+// startupWait 是生效的启动等待：不写取 2 × ttl。
+func (s singletonConfig) startupWait() time.Duration {
+	if s.StartupWait > 0 {
+		return s.StartupWait
 	}
-	enabled, err := ConfigBool(cfg, "singleton.enabled")
-	if err != nil {
-		s.readErrs = append(s.readErrs, err)
-	}
-	s.enabled = enabled
-	s.keyPrefix = cfg.GetString("singleton.key_prefix")
-	s.ttl = duration("singleton.ttl", defaultSingletonTTL)
-	s.renewInterval = duration("singleton.renew_interval", defaultSingletonRenewInterval)
-	s.guard = duration("singleton.guard", defaultSingletonGuard)
-	s.startupWait = duration("singleton.startup_wait", 2*s.ttl)
-	return s
+	return 2 * s.TTL
 }
 
-// validate 检查启用时的配置（ValidateServiceConfig 调用）。三条时间关系的理由见方案 §3.3：
+// ValidateConfig 检查启用时的配置。三条时间关系的理由见方案 §3.3：
 //  1. renew_interval ≤ guard：续期一直 Unknown 时，进入 [validUntil−guard, validUntil) 之后的第一拍
 //     在 validUntil 之前发起；配合 cas 把单次超时截到 validUntil，Lost 不晚于 validUntil 判定。
 //  2. 2 × renew_interval ≤ ttl − guard：一次续期超时之后下一次仍在窗口内发起，一次抖动不判 Lost。
 //  3. startup_wait ≥ ttl + 2 × renew_interval：卡住的旧持有者最后一次续期可能在新进程启动前后才被
 //     处理，键最晚约 ttl 后过期，新进程的重试间隔又是一个 renew_interval。
-func (s singletonSettings) validate() []error {
-	if len(s.readErrs) > 0 {
-		return s.readErrs
-	}
-	if !s.enabled {
+func (s *singletonConfig) ValidateConfig(bool) error {
+	if !s.Enabled {
 		return nil
 	}
 	var errs []error
-	if strings.TrimSpace(s.keyPrefix) == "" {
+	if strings.TrimSpace(s.KeyPrefix) == "" {
 		errs = append(errs, errors.New("config: singleton.key_prefix is required when singleton.enabled=true"))
-	} else if strings.ContainsFunc(s.keyPrefix, unicode.IsSpace) {
-		errs = append(errs, fmt.Errorf("config: singleton.key_prefix %q must not contain whitespace", s.keyPrefix))
+	} else if strings.ContainsFunc(s.KeyPrefix, unicode.IsSpace) {
+		errs = append(errs, fmt.Errorf("config: singleton.key_prefix %q must not contain whitespace", s.KeyPrefix))
 	}
-	positive := true
-	for _, field := range []struct {
-		key   string
-		value time.Duration
-	}{
-		{"singleton.ttl", s.ttl},
-		{"singleton.renew_interval", s.renewInterval},
-		{"singleton.guard", s.guard},
-		{"singleton.startup_wait", s.startupWait},
-	} {
-		if field.value <= 0 {
-			errs = append(errs, fmt.Errorf("config: %s must be positive", field.key))
-			positive = false
-		}
+	startupWait := s.startupWait()
+	if s.RenewInterval > s.Guard {
+		errs = append(errs, fmt.Errorf("config: singleton.renew_interval (%s) must not exceed singleton.guard (%s): an unknown renewal must reach a verdict before the key can expire", s.RenewInterval, s.Guard))
 	}
-	if !positive {
-		return errs
+	if 2*s.RenewInterval > s.TTL-s.Guard {
+		errs = append(errs, fmt.Errorf("config: 2 x singleton.renew_interval (%s) must not exceed singleton.ttl - singleton.guard (%s - %s): one failed renewal must not lose the lock", 2*s.RenewInterval, s.TTL, s.Guard))
 	}
-	if s.renewInterval > s.guard {
-		errs = append(errs, fmt.Errorf("config: singleton.renew_interval (%s) must not exceed singleton.guard (%s): an unknown renewal must reach a verdict before the key can expire", s.renewInterval, s.guard))
+	if startupWait < s.TTL+2*s.RenewInterval {
+		errs = append(errs, fmt.Errorf("config: singleton.startup_wait (%s) must be at least singleton.ttl + 2 x singleton.renew_interval (%s): a stalled holder's key may outlive a shorter wait", startupWait, s.TTL+2*s.RenewInterval))
 	}
-	if 2*s.renewInterval > s.ttl-s.guard {
-		errs = append(errs, fmt.Errorf("config: 2 x singleton.renew_interval (%s) must not exceed singleton.ttl - singleton.guard (%s - %s): one failed renewal must not lose the lock", 2*s.renewInterval, s.ttl, s.guard))
-	}
-	if s.startupWait < s.ttl+2*s.renewInterval {
-		errs = append(errs, fmt.Errorf("config: singleton.startup_wait (%s) must be at least singleton.ttl + 2 x singleton.renew_interval (%s): a stalled holder's key may outlive a shorter wait", s.startupWait, s.ttl+2*s.renewInterval))
-	}
-	return errs
+	return errors.Join(errs...)
 }
 
 func singletonKey(prefix, serverType string, sid int32) string {
@@ -284,7 +240,7 @@ type singletonStatus struct {
 // 之后是续期 goroutine，二者不重叠），不存在旧回复作用到新状态上的交错，也就不需要世代号。
 // mu 只保护 status 字段，供健康检查等读者并发读取；持 mu 时不做 I/O。
 type singletonLock struct {
-	settings singletonSettings
+	settings singletonConfig
 	store    SingletonStore
 	clock    singletonClock
 	key      string
@@ -324,12 +280,12 @@ type casReply struct {
 // 自己的（方案 §3.4），报错则按窗口末尾判 Lost。启动获取时 validUntil 为零值，不受影响。
 func (l *singletonLock) cas(ctx context.Context, expected []byte) casReply {
 	asked := l.clock.Now()
-	timeout := l.settings.renewInterval
+	timeout := l.settings.RenewInterval
 	if validUntil := l.snapshot().validUntil; asked.Before(validUntil) {
 		timeout = min(timeout, validUntil.Sub(asked))
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	applied, current, err := l.store.CompareAndSet(callCtx, l.key, expected, l.value, l.settings.ttl)
+	applied, current, err := l.store.CompareAndSet(callCtx, l.key, expected, l.value, l.settings.TTL)
 	cancel()
 	return casReply{applied: applied, current: current, err: err, asked: asked, replied: l.clock.Now()}
 }
@@ -338,12 +294,12 @@ func (l *singletonLock) cas(ctx context.Context, expected []byte) casReply {
 // 时在途的续期可能已被处理，SIGCONT 后读到的是停之前的 Applied，那时键可能早已是别人的；
 // 迟到的 Applied 当作 Unknown，并立即再续一次（方案 §3.4）。
 func (l *singletonLock) timely(reply casReply) bool {
-	return reply.replied.Before(reply.asked.Add(l.settings.ttl - l.settings.guard))
+	return reply.replied.Before(reply.asked.Add(l.settings.TTL - l.settings.Guard))
 }
 
 func (l *singletonLock) hold(asked time.Time) {
 	l.mu.Lock()
-	l.status = singletonStatus{state: singletonHeld, validUntil: asked.Add(l.settings.ttl)}
+	l.status = singletonStatus{state: singletonHeld, validUntil: asked.Add(l.settings.TTL)}
 	l.mu.Unlock()
 }
 
@@ -372,7 +328,7 @@ var errSingletonWaitInterrupted = errors.New("singleton: interrupted while waiti
 // signals 非空时等待期间监听退出信号（测试注入的 signalSource）；生产上等待期间不注册信号，
 // SIGTERM 按默认处置直接终止进程——此时什么都没启动，也没持有锁。
 func (l *singletonLock) acquire(signals <-chan os.Signal) error {
-	deadline := l.clock.Now().Add(l.settings.startupWait)
+	deadline := l.clock.Now().Add(l.settings.startupWait())
 	var holder []byte
 	for {
 		reply := l.cas(context.Background(), nil)
@@ -401,7 +357,7 @@ func (l *singletonLock) acquire(signals <-chan os.Signal) error {
 			}
 			return fmt.Errorf("app: singleton %s: %w (holder %s)", l.key, ErrSingletonHeld, holder)
 		}
-		if !l.waitUntil(reply.asked.Add(l.settings.renewInterval), nil, signals) {
+		if !l.waitUntil(reply.asked.Add(l.settings.RenewInterval), nil, signals) {
 			return errSingletonWaitInterrupted
 		}
 	}
@@ -454,8 +410,8 @@ func (l *singletonLock) startRenewal() {
 	ctx, cancel := context.WithCancel(context.Background())
 	l.stopRenewal = cancel
 	l.renewalDone = make(chan struct{})
-	asked := l.snapshot().validUntil.Add(-l.settings.ttl)
-	go l.renewLoop(ctx, asked.Add(l.settings.renewInterval))
+	asked := l.snapshot().validUntil.Add(-l.settings.TTL)
+	go l.renewLoop(ctx, asked.Add(l.settings.RenewInterval))
 }
 
 // renewLoop 是持有期间唯一的写者。调度按固定节拍：节拍点是上一次 Applied 的 asked + k × renew_interval，
@@ -484,7 +440,7 @@ func (l *singletonLock) renewLoop(ctx context.Context, next time.Time) {
 		switch {
 		case reply.err == nil && reply.applied && l.timely(reply):
 			l.hold(reply.asked)
-			next = reply.asked.Add(l.settings.renewInterval)
+			next = reply.asked.Add(l.settings.RenewInterval)
 		case reply.err == nil && reply.applied:
 			l.markUnknown(errSingletonLateReply)
 			slog.Warn("singleton: renewal reply arrived after the window; renewing again now", "key", l.key,
@@ -495,14 +451,14 @@ func (l *singletonLock) renewLoop(ctx context.Context, next time.Time) {
 			return
 		default:
 			validUntil := l.snapshot().validUntil
-			if !reply.replied.Before(validUntil.Add(-l.settings.guard)) {
+			if !reply.replied.Before(validUntil.Add(-l.settings.Guard)) {
 				l.lose(fmt.Errorf("renewal outcome unknown at the end of the validity window: %w", reply.err), nil)
 				return
 			}
 			l.markUnknown(reply.err)
 			slog.Warn("singleton: renewal outcome unknown; retrying on the next beat", "key", l.key,
 				"err", reply.err, "valid_until_in", validUntil.Sub(reply.replied))
-			next = next.Add(l.settings.renewInterval)
+			next = next.Add(l.settings.RenewInterval)
 		}
 	}
 }
@@ -539,7 +495,7 @@ func (l *singletonLock) finish(mayRelease bool, releaseDeadline time.Time) {
 	case state == singletonLost:
 		slog.Warn("singleton: lock was lost; not releasing", "key", l.key)
 	case !mayRelease:
-		slog.Warn("singleton: shutdown incomplete; leaving the key to expire", "key", l.key, "ttl", l.settings.ttl)
+		slog.Warn("singleton: shutdown incomplete; leaving the key to expire", "key", l.key, "ttl", l.settings.TTL)
 	default:
 		l.release(releaseDeadline)
 	}
@@ -557,7 +513,7 @@ func (l *singletonLock) release(deadline time.Time) {
 	if !deadline.IsZero() {
 		budget = min(time.Until(deadline), singletonReleaseBudget)
 		if budget <= 0 {
-			slog.Warn("singleton: no shutdown time left to release; leaving the key to expire", "key", l.key, "ttl", l.settings.ttl)
+			slog.Warn("singleton: no shutdown time left to release; leaving the key to expire", "key", l.key, "ttl", l.settings.TTL)
 			return
 		}
 	}
@@ -566,7 +522,7 @@ func (l *singletonLock) release(deadline time.Time) {
 	applied, err := l.store.CompareAndDelete(ctx, l.key, l.value)
 	switch {
 	case err != nil:
-		slog.Warn("singleton: release failed; the key will expire", "key", l.key, "err", err, "ttl", l.settings.ttl)
+		slog.Warn("singleton: release failed; the key will expire", "key", l.key, "err", err, "ttl", l.settings.TTL)
 	case !applied:
 		slog.Warn("singleton: key no longer held at release", "key", l.key)
 	default:
@@ -631,8 +587,8 @@ func (s singletonLiveness) Live(ctx context.Context, serverType string, sids []i
 // openSingleton 在 NewRegistry 之后、任何 Mod 之前打开后端、登记 Live 能力与健康检查；
 // 未启用时返回 nil（不调用 opener）。获取由调用方随后执行。
 func (a *App) openSingleton(serverType ServiceName) (*singletonLock, error) {
-	settings := readSingletonSettings(a.cfg)
-	if !settings.enabled {
+	settings := a.settings.Singleton
+	if !settings.Enabled {
 		return nil, nil
 	}
 	if a.singletonOpener == nil {
@@ -665,17 +621,17 @@ func (a *App) openSingleton(serverType ServiceName) (*singletonLock, error) {
 		settings: settings,
 		store:    store,
 		clock:    clock,
-		key:      singletonKey(settings.keyPrefix, string(serverType), a.cfg.GetInt32("sid")),
+		key:      singletonKey(settings.KeyPrefix, string(serverType), a.settings.Sid),
 		value:    value,
 		failure:  failure,
 	}
-	if err := a.registry.Register(ModSingleton, SingletonLiveness(singletonLiveness{store: store, prefix: settings.keyPrefix})); err != nil {
+	if err := a.registry.Register(ModSingleton, SingletonLiveness(singletonLiveness{store: store, prefix: settings.KeyPrefix})); err != nil {
 		_ = store.Close()
 		return nil, err
 	}
 	// 本次启动的身份（O-M6-6）：Mod 在锁拿到之后才 Init / Provide，读到它时锁已持有。
 	token, _, _ := bytes.Cut(value, []byte("|"))
-	incarnation := SingletonIncarnation{Key: lock.key, Sid: a.cfg.GetInt32("sid"), Token: string(token)}
+	incarnation := SingletonIncarnation{Key: lock.key, Sid: a.settings.Sid, Token: string(token)}
 	if err := a.registry.Register(ModSingletonIncarnation, incarnation); err != nil {
 		_ = store.Close()
 		return nil, err

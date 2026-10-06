@@ -193,11 +193,13 @@ func TestRemoteMirrorModConfiguration(t *testing.T) {
 	if err := NewRemoteMirrorMod(0).Init(viper.New()); err == nil {
 		t.Error("Init without a sid succeeded; the consumer identity must be non-zero")
 	}
-	// 新键登记进 A4 的框架键：ValidateServiceConfig 一并检查类型。
+	// A4 ①：Mirror 的声明进 App 启动检查，类型错误在任何 Mod Init 之前报出。
 	bad := viper.New()
+	bad.Set("server_type", "reader")
+	bad.Set("sid", 4105)
 	bad.Set("remote_entity.mirror.shutdown_timeout", 5)
-	if err := app.ValidateServiceConfig(bad); err == nil || !strings.Contains(err.Error(), "remote_entity.mirror.shutdown_timeout") {
-		t.Errorf("ValidateServiceConfig with a unitless shutdown timeout = %v", err)
+	if err := app.CheckConfig(bad, NewRemoteMirrorMod(0)); err == nil || !strings.Contains(err.Error(), "remote_entity.mirror.shutdown_timeout") {
+		t.Errorf("CheckConfig with a unitless shutdown timeout = %v", err)
 	}
 }
 

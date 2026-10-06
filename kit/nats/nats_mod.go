@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/admin"
 	"github.com/tjbdwanghaibo/roost-core/app"
@@ -36,6 +36,49 @@ type NatsMod struct {
 	codec      bus.Codec
 	cfg        *fnats.Config
 	extra      natsdriver.ClientOptions
+	settings   config
+}
+
+// config 是 nats.* 的声明（维护者决定 A4 ①）。nats.rpc.* 只在 transport 为 jetstream / js 时生效，写了就检查。
+type config struct {
+	app.ServiceIdentity
+	URL                     string `config:"nats.url" default:"nats://localhost:4222" example:"nats://127.0.0.1:4222"`
+	Prefix                  string `config:"nats.prefix" default:"roost" example:"roost" help:"bus 主题前缀"`
+	WorkerNum               int    `config:"nats.worker_num" default:"8" min:"1" example:"8"`
+	IgnoreDiscoveredServers bool   `config:"nats.ignore_discovered_servers" help:"只连配置的地址，不跟随集群 gossip 发现的节点（代理、NAT、故障注入时用）"`
+	Reliable                struct {
+		Enabled  bool          `config:"enabled" example:"false" help:"可靠总线（需要 Redis Mod）"`
+		Prefix   string        `config:"prefix"`
+		InboxTTL time.Duration `config:"inbox_ttl" min:"1ns"`
+		DLQTTL   time.Duration `config:"dlq_ttl" min:"1ns"`
+	} `config:"nats.reliable"`
+	RPC struct {
+		Transport      string        `config:"transport" default:"core" enum:"core|nats|jetstream|js" help:"RPC 传输：core / nats 是 NATS request-reply，jetstream / js 走 JetStream"`
+		RequestStream  string        `config:"request_stream"`
+		ResponseStream string        `config:"response_stream"`
+		AckWait        time.Duration `config:"ack_wait" min:"1ns"`
+		MaxDeliver     int           `config:"max_deliver" min:"1"`
+		RequestTTL     time.Duration `config:"request_ttl" min:"1ns"`
+		CallTimeout    time.Duration `config:"call_timeout" min:"1ns"`
+		StreamMaxAge   time.Duration `config:"stream_max_age" min:"1ns"`
+		Duplicates     time.Duration `config:"duplicates" min:"1ns"`
+		Replicas       int           `config:"replicas" min:"0"`
+		MaxBytes       int64         `config:"max_bytes" min:"0"`
+		SetupTimeout   time.Duration `config:"setup_timeout" min:"1ns"`
+	} `config:"nats.rpc"`
+}
+
+// jetStreamRPC 返回 JetStream RPC 的配置；transport 不是 jetstream / js 时第二个返回值为 false。
+func (c config) jetStreamRPC() (bus.JetStreamRPCConfig, bool) {
+	if c.RPC.Transport != "jetstream" && c.RPC.Transport != "js" {
+		return bus.JetStreamRPCConfig{}, false
+	}
+	return bus.JetStreamRPCConfig{
+		RequestStream: c.RPC.RequestStream, ResponseStream: c.RPC.ResponseStream,
+		AckWait: c.RPC.AckWait, MaxDeliver: c.RPC.MaxDeliver, RequestTTL: c.RPC.RequestTTL, CallTimeout: c.RPC.CallTimeout,
+		StreamMaxAge: c.RPC.StreamMaxAge, Duplicates: c.RPC.Duplicates, Replicas: c.RPC.Replicas, MaxBytes: c.RPC.MaxBytes,
+		SetupTimeout: c.RPC.SetupTimeout,
+	}, true
 }
 
 // NewNatsMod creates a NatsMod with an optional codec.
@@ -50,19 +93,16 @@ func (m *NatsMod) Name() app.ModName { return mods.ModNats }
 // in which applications list Mods. Redis remains optional for plain NATS.
 func (m *NatsMod) OptionalDependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
+// ConfigSchema 声明 nats.*。
+func (m *NatsMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
+// Init 按声明读完 nats.* 的全部键：写错的值在建连接与 bus 之前一次报出。
 func (m *NatsMod) Init(cfg *viper.Viper) error {
-	url := cfg.GetString("nats.url")
-	if url == "" {
-		url = "nats://localhost:4222"
-	}
-	m.cfg = fnats.DefaultConfig(url)
-	// nats.ignore_discovered_servers: stay on the configured URLs instead of
-	// following cluster gossip — for proxies, NAT, and fault injection.
-	ignoreDiscovered, err := app.ConfigBool(cfg, "nats.ignore_discovered_servers")
-	if err != nil {
+	if err := app.LoadConfig(cfg, &m.settings); err != nil {
 		return fmt.Errorf("nats mod: %w", err)
 	}
-	m.extra = natsdriver.ClientOptions{IgnoreDiscoveredServers: ignoreDiscovered}
+	m.cfg = fnats.DefaultConfig(m.settings.URL)
+	m.extra = natsdriver.ClientOptions{IgnoreDiscoveredServers: m.settings.IgnoreDiscoveredServers}
 	return nil
 }
 
@@ -94,35 +134,21 @@ func (m *NatsMod) Provide(r *app.Registry) error {
 		}
 		return health.Result{Status: health.StatusOK, Message: "connected"}
 	}))
-	// Create bus。类型化的键先全部严格读完（维护者决定 A4），写错类型时在建 bus 之前报错。
-	read := app.NewConfigReader(r.Config())
-	sid := r.Config().GetInt32("sid")
-	svcType := r.Config().GetString("server_type")
-	prefix := r.Config().GetString("nats.prefix")
-	if prefix == "" {
-		prefix = "roost"
-	}
-	workerNum := read.Int("nats.worker_num")
-	if workerNum <= 0 {
-		workerNum = 8
-	}
-	rpcCfg, rpcEnabled := jetStreamRPCConfigFromViper(r.Config(), read)
+	settings := m.settings
+	rpcCfg, rpcEnabled := settings.jetStreamRPC()
 	reliable := bus.ReliableConfig{
 		Enabled:  true,
-		Prefix:   r.Config().GetString("nats.reliable.prefix"),
-		InboxTTL: read.Duration("nats.reliable.inbox_ttl"),
-		DLQTTL:   read.Duration("nats.reliable.dlq_ttl"),
+		Prefix:   settings.Reliable.Prefix,
+		InboxTTL: settings.Reliable.InboxTTL,
+		DLQTTL:   settings.Reliable.DLQTTL,
 	}
-	reliableEnabled := read.Bool("nats.reliable.enabled")
-	if err := read.Err(); err != nil {
-		return fmt.Errorf("nats mod: %w", err)
-	}
+	reliableEnabled := settings.Reliable.Enabled
 
 	m.bus = bus.New(m.asm.Client, m.asm.RPC, m.codec, bus.Config{
-		Sid:       sid,
-		SvcType:   svcType,
-		Prefix:    prefix,
-		WorkerNum: workerNum,
+		Sid:       settings.Sid,
+		SvcType:   settings.ServerType,
+		Prefix:    settings.Prefix,
+		WorkerNum: settings.WorkerNum,
 		QueueCap:  1024,
 	})
 	if rpcEnabled {
@@ -234,29 +260,4 @@ func busDrainPending(err error) bool {
 // is closed and nothing is left to drain.
 func assemblyClosePending(err error) bool {
 	return busDrainPending(err) && !errors.Is(err, natsdriver.ErrClosedUndrained)
-}
-
-// jetStreamRPCConfigFromViper 读取 JetStream RPC 配置；类型化的键经 read 严格读取，错误由调用方从 read.Err 取。
-func jetStreamRPCConfigFromViper(cfg *viper.Viper, read *app.ConfigReader) (bus.JetStreamRPCConfig, bool) {
-	if cfg == nil {
-		return bus.JetStreamRPCConfig{}, false
-	}
-	transport := strings.ToLower(strings.TrimSpace(cfg.GetString("nats.rpc.transport")))
-	enabled := transport == "jetstream" || transport == "js"
-	if !enabled {
-		return bus.JetStreamRPCConfig{}, false
-	}
-	return bus.JetStreamRPCConfig{
-		RequestStream:  cfg.GetString("nats.rpc.request_stream"),
-		ResponseStream: cfg.GetString("nats.rpc.response_stream"),
-		AckWait:        read.Duration("nats.rpc.ack_wait"),
-		MaxDeliver:     read.Int("nats.rpc.max_deliver"),
-		RequestTTL:     read.Duration("nats.rpc.request_ttl"),
-		CallTimeout:    read.Duration("nats.rpc.call_timeout"),
-		StreamMaxAge:   read.Duration("nats.rpc.stream_max_age"),
-		Duplicates:     read.Duration("nats.rpc.duplicates"),
-		Replicas:       read.Int("nats.rpc.replicas"),
-		MaxBytes:       read.Int64("nats.rpc.max_bytes"),
-		SetupTimeout:   read.Duration("nats.rpc.setup_timeout"),
-	}, true
 }

@@ -14,6 +14,7 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	kitplatform "github.com/tjbdwanghaibo/roost-core/kit/service/platform"
 )
 
 // PurchaseCapability is the name the drain is published under, so an endpoint
@@ -63,7 +64,7 @@ func NewPurchaseDrain(registry *app.Registry) (*PurchaseDrain, error) {
 	// The same prefix the platform service keeps its orders under. It is
 	// configuration on both sides rather than a constant, because a
 	// deployment that runs two worlds against one Redis separates them here.
-	prefix, err := mods.KeyPrefix(registry.Config(), "platform")
+	prefix, err := kitplatform.KeyPrefix(registry.Config())
 	if err != nil {
 		return nil, fmt.Errorf("purchase drain: %w", err)
 	}

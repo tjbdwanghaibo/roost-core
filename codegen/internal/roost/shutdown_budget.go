@@ -239,7 +239,7 @@ func renderShutdownConfig(plan serviceShutdown) string {
 			"  # The deployment's termination grace period (k8s terminationGracePeriodSeconds, compose\n"+
 			"  # stop_grace_period, systemd TimeoutStopSec, deploy/dev/run.sh) must be\n"+
 			"  # >= total_timeout + 5s: %s for this service.\n"+
-			"  total_timeout: %s\n  serve_wait_timeout: 5s\n",
+			"  total_timeout: %s\n",
 			plan.mods, seconds(plan.declared), plan.undeclared(), seconds(plan.margin), seconds(plan.release), seconds(plan.total),
 			seconds(plan.total+generatedGraceOverTotal), seconds(plan.total))
 	}
@@ -253,7 +253,7 @@ func renderShutdownConfig(plan serviceShutdown) string {
 		"  # The deployment's termination grace period (k8s terminationGracePeriodSeconds, compose\n"+
 		"  # stop_grace_period, systemd TimeoutStopSec, deploy/dev/run.sh) must be\n"+
 		"  # >= total_timeout + 5s: %s for this service.\n"+
-		"  total_timeout: %s\n  serve_wait_timeout: 5s\n",
+		"  total_timeout: %s\n",
 		plan.mods, seconds(plan.declared), plan.undeclared(), seconds(plan.margin), seconds(plan.total),
 		seconds(plan.total+generatedGraceOverTotal), seconds(plan.total))
 }

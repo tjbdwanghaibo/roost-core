@@ -97,7 +97,7 @@ func (deliverer *grantDeliverer) BindRegistry(registry *app.Registry) error {
 	if err != nil {
 		return err
 	}
-	prefix, err := mods.KeyPrefix(registry.Config(), "platform")
+	prefix, err := platform.KeyPrefix(registry.Config())
 	if err != nil {
 		return err
 	}

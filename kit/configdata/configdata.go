@@ -18,6 +18,11 @@ const (
 	cfgKeyDir = "config_data.dir"
 )
 
+// config 是 config_data.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	Dir string `config:"config_data.dir" default:"configs/data" example:"configs/data" help:"配置表目录（相对进程工作目录）"`
+}
+
 // Mod loads business configuration data into an immutable configdata Snapshot.
 type Mod struct {
 	store       *fconfigdata.Store
@@ -33,11 +38,15 @@ func NewConfigDataMod() *Mod {
 
 func (m *Mod) Name() app.ModName { return mods.ModConfigData }
 
+// ConfigSchema 声明 config_data.*。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 func (m *Mod) Init(cfg *viper.Viper) error {
-	m.dir = "configs/data"
-	if cfg != nil && cfg.IsSet(cfgKeyDir) {
-		m.dir = cfg.GetString(cfgKeyDir)
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("configdata mod: %w", err)
 	}
+	m.dir = settings.Dir
 	m.store = fconfigdata.NewStore(fconfigdata.DefaultRegistry(), m.dir)
 	return nil
 }

@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
@@ -24,31 +22,23 @@ func NewModWithEntitySync(getter entity.Getter, setup EntitySyncSetup, opts ...c
 	return m
 }
 
-func (m *Mod) initEntitySync(cfg *viper.Viper) error {
+func (m *Mod) initEntitySync(settings config) error {
 	if m.syncSetup == nil {
 		return nil
 	}
 	config := m.syncSetup.Config
-	if cfg.IsSet("sync.entity.mode") {
-		mode, err := entitysync.ParseSyncMode(cfg.GetString("sync.entity.mode"))
+	if settings.EntitySync.Mode != "" {
+		mode, err := entitysync.ParseSyncMode(settings.EntitySync.Mode)
 		if err != nil {
 			return err
 		}
 		config.Mode = mode
 	}
-	if cfg.IsSet("sync.entity.interval") {
-		interval, err := app.ConfigDuration(cfg, "sync.entity.interval")
-		if err != nil {
-			return err
-		}
-		config.Interval = interval
+	if settings.EntitySync.Interval > 0 {
+		config.Interval = settings.EntitySync.Interval
 	}
-	if cfg.IsSet("sync.entity.max_frozen_bytes") {
-		maxFrozen, err := app.ConfigInt64(cfg, "sync.entity.max_frozen_bytes")
-		if err != nil {
-			return err
-		}
-		config.MaxFrozenBytes = maxFrozen
+	if settings.EntitySync.MaxFrozenBytes > 0 {
+		config.MaxFrozenBytes = settings.EntitySync.MaxFrozenBytes
 	}
 	if m.syncSetup.Configure != nil {
 		m.syncSetup.Configure(&config)

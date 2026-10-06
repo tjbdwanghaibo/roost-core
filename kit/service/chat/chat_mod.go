@@ -68,14 +68,33 @@ func (m *Mod) Name() app.ModName { return CapabilityName }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
+// config 是 chat.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	mods.ServiceMetricsConfig
+	Chat struct {
+		KeyPrefix     string        `config:"key_prefix" required:"true" example:"roost:{project}:chat" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
+		RetentionAge  time.Duration `config:"retention_age" min:"0" example:"168h" help:"消息保留期，0 不清理"`
+		PruneChannels []string      `config:"prune_channels" example:"[]"`
+	} `config:"chat"`
+}
+
+// ConfigSchema 声明 chat.* 与 service_metrics.enabled。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 // Init reads configuration.
 //
 //	chat:
 //	  key_prefix: roost:chat   # required, no default
 //	  retention_age: 168h      # optional; zero means retain by count only
 func (m *Mod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("chat mod: %w", err)
+	}
 	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
-	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+	settings.ApplyServiceMetrics(&m.metrics)
+	c := settings.Chat
+	if err := mods.CheckKeyPrefix("chat", c.KeyPrefix); err != nil {
 		return err
 	}
 	missing := []string{}
@@ -92,19 +111,11 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("chat mod: %v are required and have no defaults; a permissive policy "+
 			"is what the client-settable Trusted bool amounted to", missing)
 	}
-	prefix, err := mods.KeyPrefix(cfg, "chat")
+	static, err := parsePruneChannels(c.PruneChannels)
 	if err != nil {
 		return err
 	}
-	retention, err := mods.Duration(cfg, "chat.retention_age", 0)
-	if err != nil {
-		return err
-	}
-	static, err := parsePruneChannels(cfg.GetStringSlice("chat.prune_channels"))
-	if err != nil {
-		return err
-	}
-	m.prefix, m.retentionAge, m.pruneStatic = prefix, retention, static
+	m.prefix, m.retentionAge, m.pruneStatic = c.KeyPrefix, c.RetentionAge, static
 	return nil
 }
 

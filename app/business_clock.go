@@ -1,10 +1,6 @@
 package app
 
 import (
-	"fmt"
-	"time"
-
-	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/clock"
 )
 
@@ -27,24 +23,4 @@ func BusinessClock(r *Registry) clock.Business {
 		return business
 	}
 	return clock.Process()
-}
-
-// configuredLogicOffset 读 time.logic_offset。类型错误由 ValidateServiceConfig 报出；这里读不出就当 0，
-// 不在 NewRegistry 里重复报错。
-func configuredLogicOffset(cfg *viper.Viper) time.Duration {
-	offset, err := ConfigDuration(cfg, logicOffsetKey)
-	if err != nil {
-		return 0
-	}
-	return offset
-}
-
-// validateProductionLogicOffset：生产环境偏移必须为 0（D-L3）。偏移只给测试环境前拨业务时间用，
-// 生产进程带着偏移启动，活动、邮件、副本截止都按错的时间走。
-func validateProductionLogicOffset(errs *[]error, cfg *viper.Viper) {
-	offset, err := ConfigDuration(cfg, logicOffsetKey)
-	if err != nil || offset == 0 {
-		return // 类型错误由通用的时长检查报出
-	}
-	*errs = append(*errs, fmt.Errorf("config: production requires %s = 0, got %s; the offset is for moving business time in test environments", logicOffsetKey, offset))
 }

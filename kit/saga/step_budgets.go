@@ -4,15 +4,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
 )
-
-// stepBudgetFields 是 saga.step_defaults 与 saga.steps.<type>.<step> 下允许的键。
-var stepBudgetFields = map[string]struct{}{"timeout": {}, "max_attempts": {}, "backoff_min": {}, "backoff_max": {}}
 
 // StepBudgetsFromConfig 读取步骤的超时与重试预算（U-0280：重试次数是配置，一次操作可以有多次尝试）：
 //
@@ -27,38 +23,33 @@ var stepBudgetFields = map[string]struct{}{"timeout": {}, "max_attempts": {}, "b
 //	      debit:                # Step.Name
 //	        max_attempts: 15
 //
-// definitions 非空时，saga.steps 下每个类型与步骤必须对应其中某个定义的步骤：写错名字的覆盖不会
-// 静默失效，而是让 Init 失败。未知字段同样拒绝。生成工程的测试可以用它在单元测试里得到与运行时相同的预算。
-// 定义里只差大小写的类型名或步骤名无法用配置键区分，直接报歧义错误（RR-20261006-06）。
+// 字段的类型与范围、未知字段由 saga Mod 的声明检查（A4 ①）。definitions 非空时，saga.steps 下每个类型与步骤必须
+// 对应其中某个定义的步骤：写错名字的覆盖不会静默失效，而是让 Init 失败。生成工程的测试可以用它在单元测试里得到
+// 与运行时相同的预算。定义里只差大小写的类型名或步骤名无法用配置键区分，直接报歧义错误（RR-20261006-06）。
 // definitions 为空时无法核对名字，覆盖以 viper 给出的小写键保存；Engine.Register 的 StepBudgets.Resolve
 // 原样查不到时按小写回退，大小写混写的类型 / 步骤名照样生效（RR-20261005-NC-194）。
 func StepBudgetsFromConfig(cfg *viper.Viper, definitions ...coresaga.Definition) (coresaga.StepBudgets, error) {
-	budgets := coresaga.StepBudgets{Defaults: coresaga.DefaultStepBudget()}
-	if cfg == nil {
-		return budgets, nil
-	}
-	defaults, err := readStepBudget(cfg, "saga.step_defaults")
-	if err != nil {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return coresaga.StepBudgets{}, err
 	}
-	budgets.Defaults = mergeStepBudget(budgets.Defaults, defaults)
+	return stepBudgets(settings.Saga.StepDefaults, settings.Saga.Steps, definitions)
+}
+
+func stepBudgets(defaults stepBudgetConfig, steps map[string]map[string]stepBudgetConfig, definitions []coresaga.Definition) (coresaga.StepBudgets, error) {
+	budgets := coresaga.StepBudgets{Defaults: mergeStepBudget(coresaga.DefaultStepBudget(), defaults.budget())}
 	known, err := knownSagaSteps(definitions)
 	if err != nil {
 		return coresaga.StepBudgets{}, err
 	}
-	sagaTypes := cfg.GetStringMap("saga.steps")
-	typeNames := make([]string, 0, len(sagaTypes))
-	for name := range sagaTypes {
+	typeNames := make([]string, 0, len(steps))
+	for name := range steps {
 		typeNames = append(typeNames, name)
 	}
 	sort.Strings(typeNames)
 	for _, typeName := range typeNames {
-		steps := cfg.GetStringMap("saga.steps." + typeName)
-		if len(steps) == 0 {
-			return coresaga.StepBudgets{}, fmt.Errorf("saga.steps.%s: expected a map of step names", typeName)
-		}
-		stepNames := make([]string, 0, len(steps))
-		for name := range steps {
+		stepNames := make([]string, 0, len(steps[typeName]))
+		for name := range steps[typeName] {
 			stepNames = append(stepNames, name)
 		}
 		sort.Strings(stepNames)
@@ -71,20 +62,21 @@ func StepBudgetsFromConfig(cfg *viper.Viper, definitions ...coresaga.Definition)
 				}
 				key = resolved
 			}
-			override, err := readStepBudget(cfg, "saga.steps."+typeName+"."+stepName)
-			if err != nil {
-				return coresaga.StepBudgets{}, err
-			}
 			if budgets.Overrides == nil {
 				budgets.Overrides = map[coresaga.StepKey]coresaga.StepBudget{}
 			}
-			budgets.Overrides[key] = override
+			budgets.Overrides[key] = steps[typeName][stepName].budget()
 		}
 	}
 	if err := budgets.Validate(); err != nil {
 		return coresaga.StepBudgets{}, err
 	}
 	return budgets, nil
+}
+
+// budget 把声明读出的字段转成 core 的预算；没写的字段是零值（不覆盖）。
+func (c stepBudgetConfig) budget() coresaga.StepBudget {
+	return coresaga.StepBudget{Timeout: c.Timeout, MaxAttempts: uint32(c.MaxAttempts), BackoffMin: c.BackoffMin, BackoffMax: c.BackoffMax}
 }
 
 // knownSagaSteps 按 viper 的小写键建已知步骤表。viper 读出的配置键一律小写，只差大小写的两个类型名或同一类型下
@@ -111,48 +103,6 @@ func knownSagaSteps(definitions []coresaga.Definition) (map[string]map[string]co
 		}
 	}
 	return known, nil
-}
-
-func readStepBudget(cfg *viper.Viper, prefix string) (coresaga.StepBudget, error) {
-	if !cfg.IsSet(prefix) {
-		return coresaga.StepBudget{}, nil
-	}
-	for field := range cfg.GetStringMap(prefix) {
-		if _, ok := stepBudgetFields[field]; !ok {
-			return coresaga.StepBudget{}, fmt.Errorf("%s.%s: unknown step budget field (want timeout, max_attempts, backoff_min, backoff_max)", prefix, field)
-		}
-	}
-	var budget coresaga.StepBudget
-	durations := []struct {
-		field  string
-		target *time.Duration
-	}{{"timeout", &budget.Timeout}, {"backoff_min", &budget.BackoffMin}, {"backoff_max", &budget.BackoffMax}}
-	for _, item := range durations {
-		key := prefix + "." + item.field
-		if !cfg.IsSet(key) {
-			continue
-		}
-		// 不带单位的数字以前读成纳秒、照样为正（RR-20261005-NC-190）。
-		value, err := app.ConfigDuration(cfg, key)
-		if err != nil {
-			return coresaga.StepBudget{}, err
-		}
-		if value <= 0 {
-			return coresaga.StepBudget{}, fmt.Errorf("%s: want a positive duration, got %q", key, cfg.GetString(key))
-		}
-		*item.target = value
-	}
-	if key := prefix + ".max_attempts"; cfg.IsSet(key) {
-		attempts, err := app.ConfigInt(cfg, key)
-		if err != nil {
-			return coresaga.StepBudget{}, err
-		}
-		if attempts <= 0 || attempts > 1000 {
-			return coresaga.StepBudget{}, fmt.Errorf("%s: want 1..1000, got %q", key, cfg.GetString(key))
-		}
-		budget.MaxAttempts = uint32(attempts)
-	}
-	return budget, nil
 }
 
 func mergeStepBudget(base, override coresaga.StepBudget) coresaga.StepBudget {

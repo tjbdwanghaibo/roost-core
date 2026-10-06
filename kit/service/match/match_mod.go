@@ -72,29 +72,40 @@ func (m *Mod) Name() app.ModName { return CapabilityName }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
+// config 是 match.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	mods.ServiceMetricsConfig
+	Match struct {
+		KeyPrefix   string        `config:"key_prefix" required:"true" example:"roost:{project}:match" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
+		TicketTTL   time.Duration `config:"ticket_ttl" default:"5m" min:"1ns" example:"60s"`
+		SweepQueues []string      `config:"sweep_queues" example:"[]"`
+	} `config:"match"`
+}
+
+// ConfigSchema 声明 match.* 与 service_metrics.enabled。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 // Init reads configuration.
 //
 //	match:
 //	  key_prefix: roost:match   # required, no default
 //	  ticket_ttl: 2m            # optional, defaults to DefaultTicketTTL
 func (m *Mod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("match mod: %w", err)
+	}
 	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
-	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+	settings.ApplyServiceMetrics(&m.metrics)
+	c := settings.Match
+	if err := mods.CheckKeyPrefix("match", c.KeyPrefix); err != nil {
 		return err
 	}
-	prefix, err := mods.KeyPrefix(cfg, "match")
+	sweep, err := parseSweepQueues(c.SweepQueues)
 	if err != nil {
 		return err
 	}
-	ttl, err := mods.Duration(cfg, "match.ticket_ttl", DefaultTicketTTL)
-	if err != nil {
-		return err
-	}
-	sweep, err := parseSweepQueues(cfg.GetStringSlice("match.sweep_queues"))
-	if err != nil {
-		return err
-	}
-	m.prefix, m.ticketTTL, m.sweep = prefix, ttl, sweep
+	m.prefix, m.ticketTTL, m.sweep = c.KeyPrefix, c.TicketTTL, sweep
 	return nil
 }
 

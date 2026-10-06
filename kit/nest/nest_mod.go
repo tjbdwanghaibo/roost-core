@@ -85,65 +85,80 @@ func (m *Mod) OptionalDependsOn() []app.ModName {
 	return []app.ModName{mods.ModDataEngine, mods.ModRemoteEntity}
 }
 
+// workerPool 是 nest.fast / nest.slow 的声明：0 取框架缺省。
+type workerPool struct {
+	Workers       int `config:"workers" min:"0"`
+	QueueCapacity int `config:"queue_capacity" min:"0"`
+}
+
+// config 是 kit/nest 读的键（维护者决定 A4 ①）。数字与时长写 0 取框架缺省（core nest / entity 的默认值）。
+type config struct {
+	mods.PersistenceConfig
+	Nest struct {
+		Fast               workerPool    `config:"fast"`
+		Slow               workerPool    `config:"slow"`
+		WorkerNum          int           `config:"worker_num" min:"0" example:"8"`
+		HeartbeatWorkerNum int           `config:"heartbeat_worker_num" min:"0" example:"2"`
+		RemoteWorkers      int           `config:"remote_workers" min:"0"`
+		QueueCapacity      int           `config:"queue_capacity" min:"0" example:"4096"`
+		DelayedCapacity    int           `config:"delayed_capacity" min:"0" example:"4096"`
+		MaxDelay           time.Duration `config:"max_delay" min:"0" example:"24h"`
+		TickDuration       time.Duration `config:"tick_duration" min:"0" example:"50ms"`
+		RequestTimeout     time.Duration `config:"request_timeout" min:"0" example:"3s"`
+		EntityLoadTimeout  time.Duration `config:"entity_load_timeout" min:"0" example:"30s" help:"Framework cap for one shared cold entity load; a caller's own deadline does not end it."`
+		UnloadResync       struct {
+			Workers       int `config:"workers" min:"0" example:"4"`
+			Attempts      int `config:"attempts" min:"0" example:"5"`
+			QueueCapacity int `config:"queue_capacity" min:"0" example:"4096"`
+		} `config:"unload_resync" help:"Reload of unloaded entities that still have Sync subscribers (0 keeps the framework\ndefault). Worst case before the last queued entity falls back to a remove is about\nceil(queue_capacity/workers) * attempts * entity_load_timeout; see the roost-core USER_GUIDE."`
+	} `config:"nest"`
+	// EntitySync 只在 NewModWithEntitySync 装配时读：写了就覆盖 EntitySyncSetup.Config 的同名字段。
+	EntitySync struct {
+		Mode           string        `config:"mode" enum:"periodic|on_change" help:"periodic（正式缺省）或 on_change"`
+		Interval       time.Duration `config:"interval" min:"0"`
+		MaxFrozenBytes int64         `config:"max_frozen_bytes" min:"0"`
+	} `config:"sync.entity"`
+}
+
+// ConfigSchema 声明 nest.*、sync.entity.* 与持久化引擎的选择。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 func (m *Mod) Init(cfg *viper.Viper) error {
 	if m == nil || m.getter == nil {
 		return corenest.ErrGetterNotSet
 	}
-	if cfg == nil {
-		cfg = viper.New()
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("nest mod: %w", err)
 	}
-	if _, err := mods.ResolvePersistenceEngine(cfg); err != nil {
-		return err
-	}
-	// 严格读取（维护者决定 A4）：写错类型的值不再被读成 0 / 纳秒后取默认。
-	read := app.NewConfigReader(cfg)
+	nest := settings.Nest
 	m.config = engineConfig{
-		fast:          corenest.WorkerPoolConfig{Workers: read.Int("nest.fast.workers"), QueueCap: read.Int("nest.fast.queue_capacity")},
-		slow:          corenest.WorkerPoolConfig{Workers: read.Int("nest.slow.workers"), QueueCap: read.Int("nest.slow.queue_capacity")},
-		workerNum:     read.Int("nest.worker_num"),
-		hbWorkerNum:   read.Int("nest.heartbeat_worker_num"),
-		remoteWorkers: read.Int("nest.remote_workers"),
-		queueCap:      read.Int("nest.queue_capacity"),
-		tick:          read.Duration("nest.tick_duration"),
-		timeout:       read.Duration("nest.request_timeout"),
-		delayedCap:    read.Int("nest.delayed_capacity"),
-		maxDelay:      read.Duration("nest.max_delay"),
+		fast:          corenest.WorkerPoolConfig{Workers: nest.Fast.Workers, QueueCap: nest.Fast.QueueCapacity},
+		slow:          corenest.WorkerPoolConfig{Workers: nest.Slow.Workers, QueueCap: nest.Slow.QueueCapacity},
+		workerNum:     nest.WorkerNum,
+		hbWorkerNum:   nest.HeartbeatWorkerNum,
+		remoteWorkers: nest.RemoteWorkers,
+		queueCap:      nest.QueueCapacity,
+		tick:          nest.TickDuration,
+		timeout:       nest.RequestTimeout,
+		delayedCap:    nest.DelayedCapacity,
+		maxDelay:      nest.MaxDelay,
 		unloadResync: entity.UnloadResyncConfig{
-			Workers:       read.Int("nest.unload_resync.workers"),
-			Attempts:      read.Int("nest.unload_resync.attempts"),
-			QueueCapacity: read.Int("nest.unload_resync.queue_capacity"),
+			Workers:       nest.UnloadResync.Workers,
+			Attempts:      nest.UnloadResync.Attempts,
+			QueueCapacity: nest.UnloadResync.QueueCapacity,
 		},
 	}
-	if err := read.Err(); err != nil {
-		return fmt.Errorf("nest mod: %w", err)
-	}
-	if err := m.initEntityLoadConfig(cfg); err != nil {
+	if err := m.initEntityLoadConfig(nest.EntityLoadTimeout); err != nil {
 		return err
 	}
-	return m.initEntitySync(cfg)
+	return m.initEntitySync(settings)
 }
 
-// initEntityLoadConfig 校验并接上 ManagerAccess 的两项可调参数（RR-20260927-13）：共享冷加载的框架上限
-// nest.entity_load_timeout（RR-54，缺省 entity.DefaultEntityLoadTimeout），与卸载后重载的 nest.unload_resync.*（RR-59，
-// Start 时交给 ConfigureUnloadResync）。键缺省或为 0 时行为与之前相同；负值拒绝启动。之前 kit 固定传零值
-// UnloadResyncConfig{}，ConfigureLoadTimeout 没有生产调用方，部署无法按规模调整。
-func (m *Mod) initEntityLoadConfig(cfg *viper.Viper) error {
-	for key, value := range map[string]int{
-		"nest.unload_resync.workers":        m.config.unloadResync.Workers,
-		"nest.unload_resync.attempts":       m.config.unloadResync.Attempts,
-		"nest.unload_resync.queue_capacity": m.config.unloadResync.QueueCapacity,
-	} {
-		if value < 0 {
-			return fmt.Errorf("nest mod: %s must not be negative (0 or unset uses the framework default), got %d", key, value)
-		}
-	}
-	loadTimeout, err := app.ConfigDuration(cfg, "nest.entity_load_timeout")
-	if err != nil {
-		return fmt.Errorf("nest mod: %w", err)
-	}
-	if loadTimeout < 0 {
-		return fmt.Errorf("nest mod: nest.entity_load_timeout must not be negative (0 or unset uses %s), got %s", entity.DefaultEntityLoadTimeout, loadTimeout)
-	}
+// initEntityLoadConfig 接上 ManagerAccess 的共享冷加载上限 nest.entity_load_timeout（RR-54，缺省
+// entity.DefaultEntityLoadTimeout）；卸载后重载的 nest.unload_resync.*（RR-59）在 Start 时交给 ConfigureUnloadResync
+// （RR-20260927-13）。负值由声明拒绝；0 或不写时行为与之前相同。
+func (m *Mod) initEntityLoadConfig(loadTimeout time.Duration) error {
 	if loadTimeout == 0 {
 		return nil
 	}

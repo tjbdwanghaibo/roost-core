@@ -11,97 +11,38 @@ import (
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
 	driver "github.com/tjbdwanghaibo/roost-core/sync/syncbus/driver"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/spf13/viper"
 )
 
-// 正式配置段为 syncbus；保留 room / sync 兼容，优先级依次降低。
-const (
-	configSection       = "syncbus"
-	roomConfigSection   = "room"
-	legacyConfigSection = "sync"
+// defaultPrefix 是未配置 prefix 时本 Mod 用的主题前缀（沿用 room 时代的名字）。
+const defaultPrefix = "roost.room"
 
-	// defaultPrefix 是未配置 prefix 时本 Mod 用的主题前缀（沿用 room 时代的名字）。
-	defaultPrefix = "roost.room"
-)
-
-// configKeys 是本 Mod 读取的全部键。三个配置段里的其他键没有任何效果，
-// 由 configWarnings 在启动时说出来（RR-20260926-12）。
-var configKeys = []string{
-	"transport", "prefix", "stream", "storage", "ack_wait", "max_deliver", "stream_max_age",
-	"duplicates", "replicas", "max_bytes", "setup_timeout", "publish_timeout",
+// config 是 syncbus.* 的声明（维护者决定 A4 ①）。A4 ① 起只读 syncbus 段：旧的 room / sync 同名回退删除
+// （线上未部署，不做旧格式兼容）；拼错的键由 App 启动时的未知键告警与 doctor 报出（RR-20260926-12 的初衷）。
+// 时长与整数写 0 取驱动缺省。
+type config struct {
+	app.ServiceIdentity
+	Transport      string        `config:"syncbus.transport" default:"nats" enum:"nats|jetstream|js" example:"jetstream" help:"服务间同步总线：nats 或 jetstream（持久投递）"`
+	Prefix         string        `config:"syncbus.prefix" default:"roost.room" example:"roost.sync" help:"主题前缀"`
+	Stream         string        `config:"syncbus.stream" help:"JetStream 流名。不写由 prefix 推出（roost.sync -> ROOST_SYNC，zz.sync -> ZZ_SYNC），共用一个 NATS 的部署 prefix 不同流就不同；只在要沿用已有的流与 consumer 游标时写"`
+	Storage        string        `config:"syncbus.storage" enum:"file|memory" example:"file"`
+	AckWait        time.Duration `config:"syncbus.ack_wait" min:"0"`
+	MaxDeliver     int           `config:"syncbus.max_deliver" min:"0"`
+	StreamMaxAge   time.Duration `config:"syncbus.stream_max_age" min:"0"`
+	Duplicates     time.Duration `config:"syncbus.duplicates" min:"0"`
+	Replicas       int           `config:"syncbus.replicas" min:"0" example:"1"`
+	MaxBytes       int64         `config:"syncbus.max_bytes" min:"0"`
+	SetupTimeout   time.Duration `config:"syncbus.setup_timeout" min:"0"`
+	PublishTimeout time.Duration `config:"syncbus.publish_timeout" min:"0" example:"3s"`
 }
 
-func configKey(cfg *viper.Viper, key string) string {
-	for _, section := range []string{configSection, roomConfigSection, legacyConfigSection} {
-		if cfg.IsSet(section + "." + key) {
-			return section + "." + key
-		}
+func (c config) prefix() string {
+	if c.Prefix != "" {
+		return c.Prefix
 	}
-	return configSection + "." + key
-}
-
-// configWarnings 列出配置里写了却不会生效或即将失效的部分。RR-12 的根因是生成器
-// 改了段名而 Mod 整段忽略、没有任何提示，所以“没被读取”必须可观测：
-//   - room / sync 段里本 Mod 实际读取的键：兼容读取，但告警弃用；
-//   - 被更高优先级段遮住的旧键：写了也不生效；
-//   - syncbus / room 段里不认识的键（多半是拼写错误）：没有任何效果。
-//
-// sync 段只看本 Mod 的键，sync.entity 归 kit/nest，不算未知。
-func configWarnings(cfg *viper.Viper) []string {
-	known := make(map[string]bool, len(configKeys))
-	for _, key := range configKeys {
-		known[key] = true
-	}
-	var warnings []string
-	for _, section := range []string{configSection, roomConfigSection, legacyConfigSection} {
-		var deprecated, shadowed, unknown []string
-		for _, full := range cfg.AllKeys() {
-			rest, ok := strings.CutPrefix(full, section+".")
-			if !ok {
-				continue
-			}
-			key, _, _ := strings.Cut(rest, ".")
-			switch {
-			case !known[key]:
-				// sync 段是共享的旧命名空间（sync.entity.* 归 kit/nest），
-				// 那里本 Mod 不认识的键不归它判断。
-				if section != legacyConfigSection {
-					unknown = append(unknown, full)
-				}
-			case configKey(cfg, key) != section+"."+key:
-				shadowed = append(shadowed, full+" (overridden by "+configKey(cfg, key)+")")
-			case section != configSection:
-				deprecated = append(deprecated, full)
-			}
-		}
-		if len(deprecated) > 0 {
-			warnings = append(warnings, fmt.Sprintf("config section %q is deprecated, rename %s to the %q section", section, strings.Join(deprecated, ", "), configSection))
-		}
-		if len(shadowed) > 0 {
-			warnings = append(warnings, "config keys are ignored: "+strings.Join(shadowed, ", "))
-		}
-		if len(unknown) > 0 {
-			warnings = append(warnings, "unknown config keys are ignored: "+strings.Join(unknown, ", "))
-		}
-	}
-	return warnings
-}
-
-func cfgGetString(cfg *viper.Viper, key string) string { return cfg.GetString(configKey(cfg, key)) }
-
-// 类型化的键经 app.ConfigReader 严格读取（维护者决定 A4）：先按 syncbus / room / sync 的优先级
-// 找到实际生效的完整键名，再读，报错时点名的是部署里写的那个键。
-func cfgInt(cfg *viper.Viper, read *app.ConfigReader, key string) int {
-	return read.Int(configKey(cfg, key))
-}
-func cfgInt64(cfg *viper.Viper, read *app.ConfigReader, key string) int64 {
-	return read.Int64(configKey(cfg, key))
-}
-func cfgDuration(cfg *viper.Viper, read *app.ConfigReader, key string) time.Duration {
-	return read.Duration(configKey(cfg, key))
+	return defaultPrefix
 }
 
 // SyncBusMod implements app.Mod, providing the service-to-service ISyncBus over NATS or JetStream.
@@ -119,56 +60,45 @@ func NewSyncBusMod(localSid int32) *SyncBusMod {
 }
 
 func (m *SyncBusMod) Name() app.ModName { return mods.ModSyncBus }
+
+// ConfigSchema 声明 syncbus.*。
+func (m *SyncBusMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 func (m *SyncBusMod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("syncbus mod: %w", err)
+	}
 	if m.localSid == 0 {
-		m.localSid = cfg.GetInt32("sid")
+		m.localSid = settings.Sid
 	}
-	m.prefix = configuredPrefix(cfg)
-	m.transport = strings.ToLower(strings.TrimSpace(cfgGetString(cfg, "transport")))
-	switch m.transport {
-	case "", "nats", "jetstream", "js":
-	default:
-		// 旧实现把任何不认识的值当作普通 NATS：配置的持久投递静默降级（RR-20260926-12）。
-		return fmt.Errorf("syncbus mod: %s must be nats or jetstream, got %q", configKey(cfg, "transport"), m.transport)
-	}
-	for _, warning := range configWarnings(cfg) {
-		slog.Warn("syncbus mod: " + warning)
-	}
-	read := app.NewConfigReader(cfg)
+	m.prefix = settings.prefix()
+	m.transport = settings.Transport
 	m.jsCfg = driver.JetStreamSyncConfig{
 		LocalSid:     m.localSid,
 		Prefix:       m.prefix,
-		Stream:       jetStreamStream(cfgGetString(cfg, "stream"), m.prefix),
-		Storage:      parseJetStreamSyncStorage(cfgGetString(cfg, "storage")),
-		AckWait:      cfgDuration(cfg, read, "ack_wait"),
-		MaxDeliver:   cfgInt(cfg, read, "max_deliver"),
-		StreamMaxAge: cfgDuration(cfg, read, "stream_max_age"),
-		Duplicates:   cfgDuration(cfg, read, "duplicates"),
-		Replicas:     cfgInt(cfg, read, "replicas"),
-		MaxBytes:     cfgInt64(cfg, read, "max_bytes"),
-		SetupTimeout: cfgDuration(cfg, read, "setup_timeout"),
-		PublishTime:  cfgDuration(cfg, read, "publish_timeout"),
-	}
-	if err := read.Err(); err != nil {
-		return fmt.Errorf("syncbus mod: %w", err)
+		Stream:       jetStreamStream(settings.Stream, m.prefix),
+		Storage:      fnats.JetStreamStorage(settings.Storage),
+		AckWait:      settings.AckWait,
+		MaxDeliver:   settings.MaxDeliver,
+		StreamMaxAge: settings.StreamMaxAge,
+		Duplicates:   settings.Duplicates,
+		Replicas:     settings.Replicas,
+		MaxBytes:     settings.MaxBytes,
+		SetupTimeout: settings.SetupTimeout,
+		PublishTime:  settings.PublishTimeout,
 	}
 	return nil
 }
 
-func configuredPrefix(cfg *viper.Viper) string {
-	if prefix := cfgGetString(cfg, "prefix"); prefix != "" {
-		return prefix
-	}
-	return defaultPrefix
-}
-
 // JetStreamStreamFromConfig 返回本 Mod 按 cfg 启动 JetStream 时实际使用的流名，规则与 Init 相同：
-// syncbus / room / sync 三段的键优先级、未写 prefix 时的缺省 roost.room、roost.room → ROOST_SYNC 的
-// 兼容映射、显式 stream 优先。生成工程的测试用它推期望流名（RR-20260927-35）：之前测试自己按
+// 未写 prefix 时的缺省 roost.room、roost.room → ROOST_SYNC 的兼容映射、显式 stream 优先。生成工程的测试用它推期望流名（RR-20260927-35）：之前测试自己按
 // driver.JetStreamSyncStream(prefix) 推，漏了兼容映射，按迁移说明保留 prefix: roost.room 的工程
 // 期望 ROOST_ROOM、实际 ROOST_SYNC，测试误报失败。只读 cfg，不校验 transport。
 func JetStreamStreamFromConfig(cfg *viper.Viper) string {
-	return jetStreamStream(cfgGetString(cfg, "stream"), configuredPrefix(cfg))
+	var settings config
+	_ = app.LoadConfig(cfg, &settings) // 只推流名；写错的值由 Init 报出
+	return jetStreamStream(settings.Stream, settings.prefix())
 }
 
 // jetStreamStream 决定 JetStream 流名（RR-20260926-56）：显式 stream 优先；否则由 prefix 派生，
@@ -264,15 +194,4 @@ func (m *SyncBusMod) registerHealth(reg *health.Registry, transport string) {
 		}
 		return health.Result{Status: health.StatusOK, Message: transport}
 	}))
-}
-
-func parseJetStreamSyncStorage(value string) fnats.JetStreamStorage {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case string(fnats.JetStreamStorageMemory):
-		return fnats.JetStreamStorageMemory
-	case string(fnats.JetStreamStorageFile):
-		return fnats.JetStreamStorageFile
-	default:
-		return ""
-	}
 }

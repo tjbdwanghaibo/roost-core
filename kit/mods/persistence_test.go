@@ -2,14 +2,16 @@ package mods
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/app"
 )
 
-func TestResolvePersistenceEngineDefaultsToDataEngine(t *testing.T) {
-	defaults, err := ResolvePersistenceEngine(viper.New())
-	if err != nil {
+func TestPersistenceConfigDefaultsToDataEngine(t *testing.T) {
+	var defaults PersistenceConfig
+	if err := app.LoadConfig(viper.New(), &defaults); err != nil {
 		t.Fatal(err)
 	}
 	if defaults.Engine != PersistenceDataEngine || !defaults.DataEngineEnabled {
@@ -17,39 +19,26 @@ func TestResolvePersistenceEngineDefaultsToDataEngine(t *testing.T) {
 	}
 	cfg := viper.New()
 	cfg.Set("persistence.engine", "dataengine")
-	selected, err := ResolvePersistenceEngine(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if selected.Engine != PersistenceDataEngine || !selected.DataEngineEnabled {
-		t.Fatalf("selected=%+v", selected)
+	cfg.Set("dataengine.enabled", true)
+	var selected PersistenceConfig
+	if err := app.LoadConfig(cfg, &selected); err != nil || selected.Engine != PersistenceDataEngine || !selected.DataEngineEnabled {
+		t.Fatalf("selected=%+v err=%v", selected, err)
 	}
 }
 
-func TestResolvePersistenceEngineRejectsRemovedOrDisabledEngines(t *testing.T) {
-	for _, configure := range []func(*viper.Viper){
-		func(cfg *viper.Viper) { cfg.Set("persistence.engine", "checkpoint") },
-		func(cfg *viper.Viper) { cfg.Set("persistence.engine", "other") },
-		func(cfg *viper.Viper) { cfg.Set("checkpoint.enabled", true) },
-		func(cfg *viper.Viper) { cfg.Set("checkpoint.enabled", false) },
-		func(cfg *viper.Viper) { cfg.Set("dataengine.enabled", false) },
-	} {
+func TestPersistenceConfigRejectsOtherOrDisabledEngines(t *testing.T) {
+	for _, engine := range []string{"checkpoint", "other"} {
 		cfg := viper.New()
-		configure(cfg)
-		if _, err := ResolvePersistenceEngine(cfg); !errors.Is(err, ErrPersistenceEngineSelection) {
-			t.Fatalf("err=%v", err)
+		cfg.Set("persistence.engine", engine)
+		var selection PersistenceConfig
+		if err := app.LoadConfig(cfg, &selection); err == nil || !strings.Contains(err.Error(), "persistence.engine must be one of dataengine") {
+			t.Fatalf("engine %s: err=%v", engine, err)
 		}
 	}
-}
-
-func TestResolvePersistenceEngineAcceptsLegacyDataEngineEnabledTrue(t *testing.T) {
 	cfg := viper.New()
-	cfg.Set("dataengine.enabled", true)
-	selection, err := ResolvePersistenceEngine(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if selection.Engine != PersistenceDataEngine || !selection.DataEngineEnabled {
-		t.Fatalf("selection=%+v", selection)
+	cfg.Set("dataengine.enabled", false)
+	var selection PersistenceConfig
+	if err := app.LoadConfig(cfg, &selection); !errors.Is(err, ErrPersistenceEngineSelection) {
+		t.Fatalf("dataengine.enabled=false: err=%v", err)
 	}
 }

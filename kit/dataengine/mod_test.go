@@ -3,6 +3,7 @@ package dataengine
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -70,26 +71,28 @@ func TestDataEngineModDefaultsToCanonicalWALWriterV2(t *testing.T) {
 	}
 }
 
-func TestDataEngineModKeepsProjectionBatchByteDefaultForNonPositiveValues(t *testing.T) {
-	for _, test := range []struct {
-		name  string
-		value int
-	}{
-		{name: "zero", value: 0},
-		{name: "negative", value: -1},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			cfg := viper.New()
-			cfg.Set("persistence.engine", "dataengine")
-			cfg.Set("dataengine.projection.batch_bytes", test.value)
-			mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
-			if err := mod.Init(cfg); err != nil {
-				t.Fatal(err)
-			}
-			if got, want := mod.cfg.projector.ReplayBatchBytes, 4<<20; got != want {
-				t.Fatalf("projection batch bytes=%d want default %d", got, want)
-			}
-		})
+// 0 取 core 缺省；负数自 A4 ① 起由声明拒绝（以前静默取缺省）。
+func TestDataEngineModKeepsProjectionBatchByteDefaultForZero(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("persistence.engine", "dataengine")
+	cfg.Set("dataengine.projection.batch_bytes", 0)
+	mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := mod.cfg.projector.ReplayBatchBytes, 4<<20; got != want {
+		t.Fatalf("projection batch bytes=%d want default %d", got, want)
+	}
+	cfg.Set("dataengine.projection.batch_bytes", -1)
+	if err := NewMod().Init(cfg); err == nil || !strings.Contains(err.Error(), "dataengine.projection.batch_bytes must not be negative") {
+		t.Fatalf("batch_bytes: -1: Init = %v, want a refusal naming the key", err)
+	}
+}
+
+func TestEffectStreamDefaultsMatchTheDeclaration(t *testing.T) {
+	stream, maxAge, err := EffectStreamRetention(nil)
+	if err != nil || stream != DefaultEffectStream || maxAge != DefaultEffectMaxAge {
+		t.Fatalf("EffectStreamRetention(nil) = %q, %v, %v; want the declared defaults %q, %v", stream, maxAge, err, DefaultEffectStream, DefaultEffectMaxAge)
 	}
 }
 

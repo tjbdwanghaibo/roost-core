@@ -25,7 +25,7 @@ func TestClusterAddrsAcceptAYAMLListAndTrimEntries(t *testing.T) {
 		if !conn.IsCluster() || len(conn.ClusterAddrs) != 2 || conn.ClusterAddrs[0] != "a:1" || conn.ClusterAddrs[1] != "b:2" {
 			t.Fatalf("cluster_addrs: %s -> cluster=%v addrs=%q, want Cluster [a:1 b:2]", text, conn.IsCluster(), conn.ClusterAddrs)
 		}
-		if err := mods.ValidateClusterKeyPrefix(cfg, "mail", "roost:mail"); err == nil {
+		if err := mods.ValidateClusterKeyPrefix(conn.ClusterAddrs, "mail", "roost:mail"); err == nil {
 			t.Fatalf("cluster_addrs: %s: a key prefix without a hash tag passed the Cluster check", text)
 		}
 	}
@@ -63,5 +63,40 @@ func TestRedisIntegerKeysAreReadStrictly(t *testing.T) {
 	}
 	if mod.cfg.DB != 2 || mod.cfg.PoolSize != 16 || mod.cfg.MinIdleConns != 3 {
 		t.Fatalf("db / pool_size / min_idle_conns = %d / %d / %d, want 2 / 16 / 3", mod.cfg.DB, mod.cfg.PoolSize, mod.cfg.MinIdleConns)
+	}
+}
+
+// RR-20261006-28：生产环境要有 Redis，但 redis.addr 与 redis.cluster_addrs 任一即可——只配 Cluster 的生产配置
+// 不必再写一个被 Cluster 覆盖、不起作用的 addr。A4 ① 起这条跟着 Redis 配置的声明走（以前按服务类型写在 app 的
+// 生产校验里），Redis Mod 与单实例锁的连接都受它约束。
+func TestProductionRedisNeedsAnAddrOrClusterSeeds(t *testing.T) {
+	production := func(body string) *viper.Viper {
+		cfg := viper.New()
+		cfg.SetConfigType("yaml")
+		if err := cfg.ReadConfig(strings.NewReader("env: production\n" + body)); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	for name, body := range map[string]string{
+		"addr":         "redis:\n  addr: 10.0.0.1:6379\n",
+		"comma string": "redis:\n  cluster_addrs: 10.0.0.1:7000,10.0.0.2:7000\n",
+		"yaml list":    "redis:\n  cluster_addrs: [10.0.0.1:7000, 10.0.0.2:7000]\n",
+	} {
+		if err := NewRedisMod().Init(production(body)); err != nil {
+			t.Errorf("production redis with %s: %v", name, err)
+		}
+	}
+	for name, body := range map[string]string{
+		"nothing":       "",
+		"empty addr":    "redis:\n  addr: \"\"\n",
+		"only commas":   "redis:\n  cluster_addrs: \" , \"\n",
+		"empty list":    "redis:\n  cluster_addrs: []\n",
+		"blank entries": "redis:\n  cluster_addrs: [\" \", \"\"]\n",
+	} {
+		err := NewRedisMod().Init(production(body))
+		if err == nil || !strings.Contains(err.Error(), "production requires redis.addr or redis.cluster_addrs") {
+			t.Errorf("production redis with %s: Init = %v, want a missing-redis refusal", name, err)
+		}
 	}
 }

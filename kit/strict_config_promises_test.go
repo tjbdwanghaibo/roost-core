@@ -4,7 +4,7 @@ package kit_test
 // 读成 0 / 纳秒后静默取默认。旧行为：`remote_entity.lock_ttl: 15` 读成 15ns（> 0，原样生效，锁几乎立刻过期）、
 // `remote_entity.snapshot_cache_entries: 10k` 读成 0 取默认、`saga.lease_duration: 15` 读成 15ns、
 // `dataengine.outbox.workers: two` 读成 0 取默认 2、`syncbus.ack_wait: 30` 读成 30ns，Init 一律成功。
-// App 启动时 ValidateServiceConfig 已先挡住这些键（app 包的用例）；这里守的是直接装配 Mod、不经 App 启动
+// App 启动时按 Mod 的声明先挡住这些键（A4 ①，config_schema_promises_test.go）；这里守的是直接装配 Mod、不经 App 启动
 // 校验的调用方（测试、工具、自定义入口）同样拿到错误。
 
 import (

@@ -133,32 +133,35 @@ func NewStatsLogMod() *StatsLogMod {
 
 func (m *StatsLogMod) Name() app.ModName { return mods.ModStatsLog }
 
+// config 是 stats_log.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	app.ServiceIdentity
+	Enabled  bool          `config:"stats_log.enabled" example:"true" help:"按 interval 把指标快照写进 stats 日志"`
+	Dir      string        `config:"stats_log.dir" default:"log" example:"log" help:"stats 日志目录（相对进程工作目录，部署要给它可写的挂载）"`
+	Filename string        `config:"stats_log.filename" help:"文件名，不写取 <server_type>-<sid>.stats.log"`
+	Interval time.Duration `config:"stats_log.interval" default:"1m" min:"1ns" example:"1m"`
+}
+
+// ConfigSchema 声明 stats_log.*。
+func (m *StatsLogMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 func (m *StatsLogMod) Init(cfg *viper.Viper) error {
-	if cfg == nil {
-		cfg = viper.New()
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("stats_log: %w", err)
 	}
-	read := app.NewConfigReader(cfg) // 严格读取（维护者决定 A4）
-	m.enabled = read.Bool("stats_log.enabled")
-	m.service = cfg.GetString("server_type")
+	m.enabled = settings.Enabled
+	m.service = settings.ServerType
 	if m.service == "" {
 		m.service = "roost"
 	}
-	m.sid = cfg.GetInt32("sid")
-	m.dir = cfg.GetString("stats_log.dir")
-	if m.dir == "" {
-		m.dir = "log"
-	}
-	m.filename = cfg.GetString("stats_log.filename")
+	m.sid = settings.Sid
+	m.dir = settings.Dir
+	m.filename = settings.Filename
 	if m.filename == "" {
 		m.filename = fmt.Sprintf("%s-%d.stats.log", m.service, m.sid)
 	}
-	m.interval = read.Duration("stats_log.interval")
-	if m.interval <= 0 {
-		m.interval = time.Minute
-	}
-	if err := read.Err(); err != nil {
-		return fmt.Errorf("stats_log: %w", err)
-	}
+	m.interval = settings.Interval
 	return nil
 }
 

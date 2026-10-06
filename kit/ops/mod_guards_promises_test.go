@@ -29,3 +29,10 @@ func TestOpsModRefusesTokenlessAdminAndBareRegistries(t *testing.T) {
 		t.Fatalf("Provide with a bare registry = %v, want the health capability named", err)
 	}
 }
+
+func TestOpsAdminTimeoutDefaultMatchesTheDeclaration(t *testing.T) {
+	key, ok := NewOpsMod().ConfigSchema().Lookup("ops.admin_timeout")
+	if !ok || key.Default != defaultAdminTimeout.String() {
+		t.Fatalf("ops.admin_timeout declared default = %q, want %s (defaultAdminTimeout)", key.Default, defaultAdminTimeout)
+	}
+}

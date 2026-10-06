@@ -172,12 +172,20 @@ func enableDemoAdmin(root, gameService string) error {
 	if err != nil {
 		return err
 	}
-	const before = "  admin_enabled: false\n  admin_token: \"\"\n  allow_dev_token: false\n"
-	const after = "  admin_enabled: true\n  admin_token: dev-gm-token\n  allow_dev_token: true\n"
-	if !strings.Contains(string(raw), before) {
-		return fmt.Errorf("%s: expected the ops admin block to replace", path)
+	// Line by line: the ops section is rendered from the ops Mod's declaration
+	// and its help comments sit between the keys (A4 ①).
+	text := string(raw)
+	for _, edit := range []struct{ before, after string }{
+		{"  admin_enabled: false\n", "  admin_enabled: true\n"},
+		{"  admin_token: \"\"\n", "  admin_token: dev-gm-token\n"},
+		{"  allow_dev_token: false\n", "  allow_dev_token: true\n"},
+	} {
+		if strings.Count(text, "\n"+edit.before) != 1 {
+			return fmt.Errorf("%s: expected the ops admin block to replace", path)
+		}
+		text = strings.Replace(text, "\n"+edit.before, "\n"+edit.after, 1)
 	}
-	return writeAtomic(path, []byte(strings.Replace(string(raw), before, after, 1)), 0o644)
+	return writeAtomic(path, []byte(text), 0o644)
 }
 
 // enableDemoPlayerTCP flips player_access.tcp.enabled in the game service's

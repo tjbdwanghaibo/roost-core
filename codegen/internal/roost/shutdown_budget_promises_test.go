@@ -47,12 +47,12 @@ func replaceShutdownBlock(t *testing.T, root, rel, block string) {
 		t.Fatalf("%s has no shutdown: block", rel)
 	}
 	indent := body[start[2]:start[3]]
-	endMark := indent + "  serve_wait_timeout: 5s\n"
-	end := strings.Index(body[start[0]:], endMark)
-	if end < 0 {
-		t.Fatalf("%s: shutdown: block has no serve_wait_timeout line", rel)
+	totalLine := strings.Index(body[start[0]:], indent+"  total_timeout: ")
+	if totalLine < 0 {
+		t.Fatalf("%s: shutdown: block has no total_timeout line", rel)
 	}
-	writeProjectFile(t, root, rel, body[:start[0]]+indentText(block, indent)+body[start[0]+end+len(endMark):])
+	end := totalLine + strings.IndexByte(body[start[0]+totalLine:], '\n') + 1
+	writeProjectFile(t, root, rel, body[:start[0]]+indentText(block, indent)+body[start[0]+end:])
 }
 
 func setShutdownTotal(t *testing.T, root, rel, total string) {

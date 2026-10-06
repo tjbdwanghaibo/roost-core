@@ -3,9 +3,7 @@ package mods
 import (
 	"fmt"
 	"strings"
-	"time"
 
-	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	"github.com/tjbdwanghaibo/roost-core/servicemetrics"
@@ -24,33 +22,29 @@ func Redis(r *app.Registry) (fredis.IRedis, error) {
 	return client, nil
 }
 
-// KeyPrefix reads a service's Redis key prefix from configuration.
+// CheckKeyPrefix checks a service's Redis key prefix (<service>.key_prefix).
 //
-// The prefix is REQUIRED to be non-empty and there is no default, which is a
+// Each service Mod declares the key as required with no default, which is a
 // deliberate choice rather than an oversight. A default would be the same
 // string in every deployment, so two services of the same kind sharing one
 // Redis — a staging environment beside production, two shards, a replay
 // harness — would silently share state. Refusing at startup makes that a
-// configuration error instead of a data corruption.
-func KeyPrefix(cfg *viper.Viper, service string) (string, error) {
-	key := service + ".key_prefix"
-	prefix := strings.TrimSpace(cfg.GetString(key))
-	if prefix == "" {
-		return "", fmt.Errorf("servicemods: %s is required and has no default; two deployments "+
-			"sharing one redis would otherwise share state", key)
-	}
+// configuration error instead of a data corruption. The declaration refuses
+// an empty value; this refuses embedded whitespace.
+func CheckKeyPrefix(service, prefix string) error {
 	if strings.ContainsAny(prefix, " \t\n") {
-		return "", fmt.Errorf("servicemods: %s contains whitespace: %q", key, prefix)
+		return fmt.Errorf("servicemods: %s.key_prefix contains whitespace: %q", service, prefix)
 	}
-	return prefix, nil
+	return nil
 }
 
 // ValidateClusterKeyPrefix validates the common hash tag needed by services
 // with atomic multi-key writes. Redis uses the first opening brace and the
 // first closing brace after it; an empty first pair disables tag hashing even
-// when a later pair is valid. Single-server prefixes are unchanged.
-func ValidateClusterKeyPrefix(cfg *viper.Viper, service, prefix string) error {
-	if len(RedisClusterAddrs(cfg)) == 0 {
+// when a later pair is valid. Single-server prefixes (no redis.cluster_addrs,
+// declared by kit/redis.ClusterConfig) are unchanged.
+func ValidateClusterKeyPrefix(clusterAddrs []string, service, prefix string) error {
+	if len(clusterAddrs) == 0 {
 		return nil
 	}
 	if start := strings.IndexByte(prefix, '{'); start >= 0 {
@@ -61,88 +55,22 @@ func ValidateClusterKeyPrefix(cfg *viper.Viper, service, prefix string) error {
 	return fmt.Errorf("servicemods: %s.key_prefix (%q) requires a non-empty closed first hash tag for Redis Cluster; use e.g. {roost:%s} so atomic keys share a slot", service, prefix, service)
 }
 
-// RedisClusterAddrs 返回 redis.cluster_addrs 里的 Cluster 种子地址，空表示单机（逗号串或 YAML 列表，
-// RR-20261005-NC-190）。解析在 app.RedisClusterAddrs，生产校验与这里共用一份（RR-20261006-28）。
-func RedisClusterAddrs(cfg *viper.Viper) []string {
-	return app.RedisClusterAddrs(cfg)
-}
-
-// Secret reads a required secret from configuration.
-//
-// Empty is refused at startup. The implementation this repository replaces
-// checked its payment secret at call time, so an unset secret turned every
-// provider callback into an invalid-signature refusal — a silent outage that
-// looked like an attack.
-func Secret(cfg *viper.Viper, key string) (string, error) {
-	secret := cfg.GetString(key)
-	if strings.TrimSpace(secret) == "" {
-		return "", fmt.Errorf("servicemods: %s is required and must not be empty", key)
-	}
-	return secret, nil
-}
-
-// Duration reads an optional duration, falling back to a default.
-//
-// A negative value is refused rather than clamped: a caller that wrote -1
-// meant something, and silently reading it as the default hides the mistake.
-//
-// The value must carry a unit: a bare number used to be read as nanoseconds,
-// and an unparseable one as zero and so the fallback (RR-20261005-NC-190).
-func Duration(cfg *viper.Viper, key string, fallback time.Duration) (time.Duration, error) {
-	if !cfg.IsSet(key) {
-		return fallback, nil
-	}
-	value, err := app.ConfigDuration(cfg, key)
-	if err != nil {
-		return 0, fmt.Errorf("servicemods: %w", err)
-	}
-	if value < 0 {
-		return 0, fmt.Errorf("servicemods: %s must not be negative, got %s", key, value)
-	}
-	if value == 0 {
-		return fallback, nil
-	}
-	return value, nil
-}
-
-// RequiredDuration reads a duration that has no sensible default.
-func RequiredDuration(cfg *viper.Viper, key string) (time.Duration, error) {
-	if !cfg.IsSet(key) {
-		return 0, fmt.Errorf("servicemods: %s is required and has no default", key)
-	}
-	value, err := app.ConfigDuration(cfg, key)
-	if err != nil {
-		return 0, fmt.Errorf("servicemods: %w", err)
-	}
-	if value <= 0 {
-		return 0, fmt.Errorf("servicemods: %s must be positive, got %s", key, value)
-	}
-	return value, nil
-}
-
-// ServiceMetrics applies service_metrics.enabled to the reporter a service
-// Mod will hand its service (decision C6): false replaces *reporter with nil,
-// so the service reports nothing; unset or true leaves it as the collaborator
-// supplied it.
+// ServiceMetricsConfig is service_metrics.enabled (decision C6), embedded by
+// every kit service Mod's config so they share one declaration: false
+// replaces the reporter with nil, so the service reports nothing; unset or
+// true leaves it as the collaborator supplied it.
 //
 // Generated collaborators return servicemetrics.NewMetricsReporter by
 // default, so this is how a deployment turns every service's metrics off in
 // config without editing code (returning nil from Metrics() still works too).
-// The key is read strictly (app.ConfigBool), like every framework switch.
-func ServiceMetrics(cfg *viper.Viper, reporter *servicemetrics.Reporter) error {
-	if cfg == nil || !cfg.IsSet(ServiceMetricsEnabledKey) {
-		return nil
-	}
-	enabled, err := app.ConfigBool(cfg, ServiceMetricsEnabledKey)
-	if err != nil {
-		return fmt.Errorf("servicemods: %w", err)
-	}
-	if !enabled {
-		*reporter = nil
-	}
-	return nil
+type ServiceMetricsConfig struct {
+	ServiceMetricsEnabled bool `config:"service_metrics.enabled" default:"true" help:"false 关掉本进程全部服务的业务指标"`
 }
 
-// ServiceMetricsEnabledKey turns the service metrics of every kit service Mod
-// in the process on or off (default on).
-const ServiceMetricsEnabledKey = "service_metrics.enabled"
+// ApplyServiceMetrics applies service_metrics.enabled to the reporter a
+// service Mod will hand its service.
+func (c ServiceMetricsConfig) ApplyServiceMetrics(reporter *servicemetrics.Reporter) {
+	if !c.ServiceMetricsEnabled {
+		*reporter = nil
+	}
+}

@@ -32,7 +32,7 @@ func NewRegistry(cfg *viper.Viper) *Registry {
 		cfg:   cfg,
 	}
 	r.store[ModHealth] = health.NewRegistry()
-	metricsRegistry := metrics.NewRegistry(metrics.WithMaxSeriesPerMetric(metricsMaxSeriesPerMetric(cfg)))
+	metricsRegistry := metrics.NewRegistry(metrics.WithMaxSeriesPerMetric(readMetricsConfig(cfg).MaxSeriesPerMetric))
 	metrics.SetDefaultRegistry(metricsRegistry)
 	r.store[ModMetrics] = metricsRegistry
 	r.store[ModAdmin] = admin.NewRegistry()
@@ -40,7 +40,7 @@ func NewRegistry(cfg *viper.Viper) *Registry {
 	r.store[ModLifecycle] = lifecycle.NewRegistry()
 	r.store[ModRuntimeFailure] = NewRuntimeFailure()
 	// 业务时钟（D-L3）：与 App.run 设进程级偏移读的是同一个键，同一份配置。
-	r.store[ModBusinessClock] = clock.NewBusiness(configuredLogicOffset(cfg))
+	r.store[ModBusinessClock] = clock.NewBusiness(readTimeConfig(cfg).LogicOffset)
 	return r
 }
 
@@ -117,12 +117,4 @@ func MustLookup[T any](r *Registry, name ModName) T {
 		panic(fmt.Sprintf("registry: capability %q not found or wrong type", name))
 	}
 	return v
-}
-
-func metricsMaxSeriesPerMetric(cfg *viper.Viper) int {
-	if cfg == nil {
-		return 0
-	}
-	value, _ := ConfigInt(cfg, "metrics.max_series_per_metric") // ValidateServiceConfig 已严格检查
-	return value
 }

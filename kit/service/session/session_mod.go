@@ -47,6 +47,19 @@ func (m *Mod) Name() app.ModName { return CapabilityName }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
+// config 是 session.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	mods.ServiceMetricsConfig
+	Session struct {
+		KeyPrefix  string        `config:"key_prefix" required:"true" example:"roost:{project}:session" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
+		RunTTL     time.Duration `config:"run_ttl" default:"30m" min:"1ns" example:"30m"`
+		RequestTTL time.Duration `config:"request_ttl" required:"true" min:"1ns" example:"1h" help:"Required, with no default: past the ttl a retried Enter is indistinguishable from a new one,\nand the caller gets a second run."`
+	} `config:"session"`
+}
+
+// ConfigSchema 声明 session.* 与 service_metrics.enabled。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 // Init reads configuration.
 //
 //	session:
@@ -54,8 +67,14 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 //	  run_ttl: 30m                # optional, defaults to DefaultTTL
 //	  request_ttl: 1h             # required; see below
 func (m *Mod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("session mod: %w", err)
+	}
 	// service_metrics.enabled: false turns the collaborator's reporter off (C6).
-	if err := mods.ServiceMetrics(cfg, &m.metrics); err != nil {
+	settings.ApplyServiceMetrics(&m.metrics)
+	c := settings.Session
+	if err := mods.CheckKeyPrefix("session", c.KeyPrefix); err != nil {
 		return err
 	}
 	if m.release == nil {
@@ -63,23 +82,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 			"resources and cannot release them is the leak this package prevents, and a default " +
 			"that did nothing would make leaking the out-of-the-box behaviour")
 	}
-	prefix, err := mods.KeyPrefix(cfg, "session")
-	if err != nil {
-		return err
-	}
-	ttl, err := mods.Duration(cfg, "session.run_ttl", DefaultTTL)
-	if err != nil {
-		return err
-	}
-	// Required, with no default, because the right value is a property of the
-	// caller's retry behaviour and getting it wrong is not visible: past the
-	// ttl a retried Enter is indistinguishable from a new one, and the caller
-	// gets a second run.
-	requestTTL, err := mods.RequiredDuration(cfg, "session.request_ttl")
-	if err != nil {
-		return err
-	}
-	m.prefix, m.ttl, m.requestTTL = prefix, ttl, requestTTL
+	m.prefix, m.ttl, m.requestTTL = c.KeyPrefix, c.RunTTL, c.RequestTTL
 	return nil
 }
 

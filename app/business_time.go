@@ -98,10 +98,10 @@ func (a *App) startBusinessTimeGuard(serverType ServiceName, lock *singletonLock
 	if isProductionServiceConfig(a.cfg) {
 		return nil, nil
 	}
-	offset := configuredLogicOffset(a.cfg)
+	offset := a.settings.Time.LogicOffset
 	guard := &businessTimeGuard{
 		offset:   offset,
-		writer:   fmt.Sprintf("%s|%s:%d", offset, serverType, a.cfg.GetInt32("sid")),
+		writer:   fmt.Sprintf("%s|%s:%d", offset, serverType, a.settings.Sid),
 		now:      BusinessClock(a.registry).Now,
 		interval: a.businessTimeInterval,
 	}
@@ -111,12 +111,12 @@ func (a *App) startBusinessTimeGuard(serverType ServiceName, lock *singletonLock
 	}
 	switch {
 	case lock != nil:
-		guard.store, guard.key = lock.store, lock.settings.keyPrefix+businessTimeKeySuffix
+		guard.store, guard.key = lock.store, lock.settings.KeyPrefix+businessTimeKeySuffix
 	case offset == 0:
 		// 业务时间就是真实时间；同一套部署回退时，开了单实例锁的服务会拒绝启动。
 		return nil, nil
 	default:
-		prefix := strings.TrimSpace(readSingletonSettings(a.cfg).keyPrefix)
+		prefix := strings.TrimSpace(a.settings.Singleton.KeyPrefix)
 		if a.singletonOpener == nil || prefix == "" {
 			return nil, fmt.Errorf("app: %w: %s is %s, but this process has nowhere to keep the deployment's high-water mark; "+
 				"install App.Singleton (kitredis.SingletonStore) in the bootstrap and set singleton.key_prefix "+

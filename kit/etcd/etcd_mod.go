@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/app"
@@ -35,87 +34,54 @@ func NewEtcdMod() *EtcdMod {
 
 func (m *EtcdMod) Name() app.ModName { return mods.ModEtcd }
 
-func (m *EtcdMod) Init(cfg *viper.Viper) error {
-	endpoints := cfg.GetString("etcd.endpoints")
-	if endpoints == "" {
-		endpoints = "localhost:2379"
-	}
-	eps := strings.Split(endpoints, ",")
-
-	m.cfg = fetcd.DefaultConfig(eps)
-	m.cfg.Username = cfg.GetString("etcd.username")
-	m.cfg.Password = cfg.GetString("etcd.password")
-
-	if prefix := cfg.GetString("etcd.service_prefix"); prefix != "" {
-		m.cfg.ServicePrefix = prefix
-	}
-	read := app.NewConfigReader(cfg) // 严格读取（维护者决定 A4）
-	if ttl := read.Int64("etcd.lease_ttl"); ttl > 0 {
-		m.cfg.LeaseTTL = ttl
-	}
-	if retryMin := read.Duration("etcd.register_retry_min_interval"); retryMin > 0 {
-		m.cfg.RegisterRetryMinInterval = retryMin
-	}
-	if retryMax := read.Duration("etcd.register_retry_max_interval"); retryMax > 0 {
-		m.cfg.RegisterRetryMaxInterval = retryMax
-	}
-	if err := read.Err(); err != nil {
-		return fmt.Errorf("etcd mod: %w", err)
-	}
-
-	// Build service info for auto-registration
-	sid := cfg.GetInt32("sid")
-	svcType := cfg.GetString("server_type")
-	addr := cfg.GetString("etcd.advertise_addr")
-	if addr == "" {
-		switch svcType {
-		case "gate":
-			addr = cfg.GetString("gate.backend_advertise_addr")
-			if addr == "" {
-				addr = cfg.GetString("gate.backend_addr")
-			}
-		case "game":
-			addr = cfg.GetString("game.advertise_addr")
-		}
-	}
-
-	m.serviceInfo = &fetcd.ServiceInfo{
-		ServiceType: svcType,
-		Sid:         sid,
-		Addr:        addr,
-		Metadata:    serviceMetadata(cfg, svcType, addr),
-	}
-
-	return nil
+// config 是 etcd.* 的声明（维护者决定 A4 ①）。
+type config struct {
+	app.ServiceIdentity
+	Endpoints     []string `config:"etcd.endpoints" default:"localhost:2379" example:"127.0.0.1:2379" help:"etcd 地址（逗号分隔或 YAML 列表）"`
+	Username      string   `config:"etcd.username" example:""`
+	Password      string   `config:"etcd.password" example:""`
+	ServicePrefix string   `config:"etcd.service_prefix" example:"/roost/services/" help:"服务注册的键前缀，不写取 etcd 包的缺省"`
+	LeaseTTL      int64    `config:"etcd.lease_ttl" min:"0" example:"10" help:"注册租约秒数，0 取 etcd 包的缺省"`
+	// AdvertiseAddr 是写进服务注册的地址；不写则注册不带地址。
+	AdvertiseAddr    string        `config:"etcd.advertise_addr" example:"127.0.0.1:9000" help:"写进服务注册的地址（其他进程据此连接本服务）"`
+	RegisterRetryMin time.Duration `config:"etcd.register_retry_min_interval" min:"0" help:"注册失败重试的最短间隔，0 取 etcd 包的缺省"`
+	RegisterRetryMax time.Duration `config:"etcd.register_retry_max_interval" min:"0" help:"注册失败重试的最长间隔，0 取 etcd 包的缺省"`
 }
 
-func serviceMetadata(cfg *viper.Viper, svcType string, addr string) map[string]string {
-	metadata := map[string]string{}
-	if addr != "" {
-		metadata["addr"] = addr
+// ConfigSchema 声明 etcd.*。
+func (m *EtcdMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
+// Init 读 etcd.*。A4 ① 起删掉了旧 gate 服务的地址回退（gate.backend_advertise_addr / gate.backend_addr /
+// game.advertise_addr）与 gate.* 元数据：仓内没有生成器写这些键，也没有任何代码读注册里的元数据。
+func (m *EtcdMod) Init(cfg *viper.Viper) error {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("etcd mod: %w", err)
 	}
-	switch svcType {
-	case "gate":
-		if v := cfg.GetString("gate.mode"); v != "" {
-			metadata["mode"] = v
-		}
-		if v := cfg.GetString("gate.ws_addr"); v != "" {
-			metadata["ws_addr"] = v
-		}
-		if v := cfg.GetString("gate.ws_path"); v != "" {
-			metadata["ws_path"] = v
-		}
-		if v := cfg.GetString("gate.tcp_addr"); v != "" {
-			metadata["tcp_addr"] = v
-		}
-		if v := cfg.GetString("gate.backend_addr"); v != "" && cfg.GetString("gate.mode") != "standalone" {
-			metadata["backend_addr"] = v
-		}
+	m.cfg = fetcd.DefaultConfig(settings.Endpoints)
+	m.cfg.Username = settings.Username
+	m.cfg.Password = settings.Password
+	if settings.ServicePrefix != "" {
+		m.cfg.ServicePrefix = settings.ServicePrefix
 	}
-	if len(metadata) == 0 {
-		return nil
+	if settings.LeaseTTL > 0 {
+		m.cfg.LeaseTTL = settings.LeaseTTL
 	}
-	return metadata
+	if settings.RegisterRetryMin > 0 {
+		m.cfg.RegisterRetryMinInterval = settings.RegisterRetryMin
+	}
+	if settings.RegisterRetryMax > 0 {
+		m.cfg.RegisterRetryMaxInterval = settings.RegisterRetryMax
+	}
+	m.serviceInfo = &fetcd.ServiceInfo{
+		ServiceType: settings.ServerType,
+		Sid:         settings.Sid,
+		Addr:        settings.AdvertiseAddr,
+	}
+	if settings.AdvertiseAddr != "" {
+		m.serviceInfo.Metadata = map[string]string{"addr": settings.AdvertiseAddr}
+	}
+	return nil
 }
 
 func (m *EtcdMod) Provide(r *app.Registry) error {

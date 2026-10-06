@@ -236,7 +236,7 @@ func TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods(t *testing.T) {
 	// Written by a generator before RR-20260926-66: kept as written too.
 	legacy := "shutdown:\n  # Keep it >= dataengine.shutdown_timeout + 3s x the other Mods.\n  total_timeout: 60s\n  serve_wait_timeout: 5s\n"
 	prod := readProjectFile(t, root, "configs/service/config.game.prod.example.yaml")
-	end := strings.Index(prod, "  serve_wait_timeout: 5s\n") + len("  serve_wait_timeout: 5s\n")
+	end := shutdownBlockEnd(prod)
 	writeProjectFile(t, root, "configs/service/config.game.prod.example.yaml", strings.Replace(prod, prod[strings.Index(prod, "shutdown:\n"):end], legacy, 1))
 	if _, err := Add(root, AddOptions{Kind: "mod", Name: "mongo", Service: "game"}); err != nil {
 		t.Fatal(err)
@@ -318,7 +318,7 @@ func TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal(t *testing.T) {
 		"  total_timeout: 60s\n  serve_wait_timeout: 5s\n"
 	for _, rel := range []string{"configs/service/config.account.yaml", "configs/service/config.account.prod.example.yaml"} {
 		body := readProjectFile(t, target, rel)
-		end := strings.Index(body, "  serve_wait_timeout: 5s\n") + len("  serve_wait_timeout: 5s\n")
+		end := shutdownBlockEnd(body)
 		writeProjectFile(t, target, rel, strings.Replace(body, body[strings.Index(body, "shutdown:\n"):end], legacy, 1))
 	}
 	// game: a hand-edited total above the formula's 111s.
@@ -394,4 +394,13 @@ func TestDoctorChecksEachServicesShutdownWindow(t *testing.T) {
 	if item := items["shutdown:game"]; item.Status != StatusWarn {
 		t.Errorf("game on 60s after sync: %s %s (the total still cannot cover its Mods)", item.Status, item.Detail)
 	}
+}
+
+// shutdownBlockEnd is the end of the first shutdown: block's total_timeout
+// line, the block's last line since RR-20261006-38 dropped the unread
+// serve_wait_timeout.
+func shutdownBlockEnd(body string) int {
+	start := strings.Index(body, "shutdown:\n")
+	line := strings.Index(body[start:], "  total_timeout: ") + start
+	return line + strings.IndexByte(body[line:], '\n') + 1
 }

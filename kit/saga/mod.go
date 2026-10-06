@@ -55,42 +55,37 @@ func (m *Mod) OptionalDependsOn() []app.ModName {
 	return []app.ModName{mods.ModDataEngine}
 }
 
+// ConfigSchema 声明 saga.*。
+func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
 func (m *Mod) Init(cfg *viper.Viper) error {
-	if cfg == nil {
-		cfg = viper.New()
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return fmt.Errorf("saga: %w", err)
 	}
+	c := settings.Saga
 	defaults := coresaga.DefaultOptions()
-	// 严格读取（维护者决定 A4）：写错类型的值不再被读成 0 / 纳秒后取默认，返回前一并报出。
-	read := app.NewConfigReader(cfg)
-	owner := cfg.GetString("saga.owner")
+	owner := c.Owner
 	if owner == "" {
-		owner = fmt.Sprintf("saga-%d-%s", cfg.GetInt32("sid"), coresaga.NewID())
+		owner = fmt.Sprintf("saga-%d-%s", settings.Sid, coresaga.NewID())
 	}
-	prefix := cfg.GetString("saga.subject_prefix")
-	if prefix == "" {
-		prefix = "roost.saga"
-	}
-	stream := cfg.GetString("saga.stream")
-	if stream == "" {
-		stream = "ROOST_SAGA"
-	}
-	durable := cfg.GetString("saga.result_durable")
-	if durable == "" {
-		durable = "roost-saga-coordinator"
-	}
+	resultStream := stringDefault(c.ResultEffectStream, c.StartEffectStream)
+	resultPrefix := stringDefault(c.ResultEffectPrefix, c.StartEffectPrefix)
 	m.config = coresaga.AssemblyConfig{
-		Store:  coresaga.MongoStoreOptions{Database: stringDefault(cfg.GetString("saga.database"), "saga"), SagaCollection: cfg.GetString("saga.collections.sagas"), OutboxCollection: cfg.GetString("saga.collections.outbox"), CompletionCollection: cfg.GetString("saga.collections.completions"), OperationCollection: cfg.GetString("saga.collections.operations"), CompletionReceiptTTL: durationDefault(read.Duration("saga.completion_receipt_ttl"), 30*24*time.Hour)},
-		Engine: coresaga.Options{Owner: owner, CoordinatorWorkers: intDefault(read.Int("saga.coordinator_workers"), defaults.CoordinatorWorkers), PublisherWorkers: intDefault(read.Int("saga.publisher_workers"), defaults.PublisherWorkers), CoordinatorBatch: intDefault(read.Int("saga.coordinator_claim_batch"), defaults.CoordinatorBatch), PublisherBatch: intDefault(read.Int("saga.publisher_claim_batch"), defaults.PublisherBatch), LeaseDuration: durationDefault(read.Duration("saga.lease_duration"), defaults.LeaseDuration), StoreTimeout: durationDefault(read.Duration("saga.store_timeout"), defaults.StoreTimeout), PollInterval: durationDefault(read.Duration("saga.poll_interval"), defaults.PollInterval), PublishTimeout: durationDefault(read.Duration("saga.publish_timeout"), defaults.PublishTimeout), PublishBackoffMin: durationDefault(read.Duration("saga.publish_backoff_min"), defaults.PublishBackoffMin), PublishBackoffMax: durationDefault(read.Duration("saga.publish_backoff_max"), defaults.PublishBackoffMax), MaxPayloadBytes: intDefault(read.Int("saga.max_payload_bytes"), defaults.MaxPayloadBytes)},
-		Prefix: prefix,
-		Stream: fnats.JetStreamConfig{Name: stream, Subjects: []string{prefix + ".>"}, Storage: fnats.JetStreamStorageFile, MaxAge: durationDefault(read.Duration("saga.stream_max_age"), 7*24*time.Hour), Duplicates: durationDefault(read.Duration("saga.duplicate_window"), 10*time.Minute), Replicas: intDefault(read.Int("saga.replicas"), 1), MaxBytes: int64Default(read.Int64("saga.stream_max_bytes"), 8<<30)},
+		Store: coresaga.MongoStoreOptions{Database: c.Database, SagaCollection: c.Collections.Sagas, OutboxCollection: c.Collections.Outbox,
+			CompletionCollection: c.Collections.Completions, OperationCollection: c.Collections.Operations, CompletionReceiptTTL: c.CompletionReceiptTTL},
+		Engine: coresaga.Options{Owner: owner, CoordinatorWorkers: c.CoordinatorWorkers, PublisherWorkers: c.PublisherWorkers,
+			CoordinatorBatch: c.CoordinatorClaimBatch, PublisherBatch: c.PublisherClaimBatch, LeaseDuration: c.LeaseDuration,
+			StoreTimeout: c.StoreTimeout, PollInterval: c.PollInterval, PublishTimeout: c.PublishTimeout,
+			PublishBackoffMin: c.PublishBackoffMin, PublishBackoffMax: c.PublishBackoffMax, MaxPayloadBytes: c.MaxPayloadBytes,
+			StepBudgets: defaults.StepBudgets},
+		Prefix: c.SubjectPrefix,
+		Stream: fnats.JetStreamConfig{Name: c.Stream, Subjects: []string{c.SubjectPrefix + ".>"}, Storage: fnats.JetStreamStorageFile,
+			MaxAge: c.StreamMaxAge, Duplicates: c.DuplicateWindow, Replicas: c.Replicas, MaxBytes: c.StreamMaxBytes},
 		Completions: coresaga.CompletionConsumerConfig{
-			Stream: stream, Durable: durable, SubjectPrefix: prefix,
-			AckWait:        durationDefault(read.Duration("saga.result_ack_wait"), 30*time.Second),
-			ProcessTimeout: durationDefault(read.Duration("saga.result_process_timeout"), defaults.StoreTimeout),
-			MaxDeliver:     intDefault(read.Int("saga.result_max_deliver"), 25_000),
-			MaxAckPending:  intDefault(read.Int("saga.result_max_ack_pending"), 256),
-			NakBackoffMin:  durationDefault(read.Duration("saga.result_nak_backoff_min"), 250*time.Millisecond),
-			NakBackoffMax:  durationDefault(read.Duration("saga.result_nak_backoff_max"), 30*time.Second),
+			Stream: c.Stream, Durable: c.ResultDurable, SubjectPrefix: c.SubjectPrefix,
+			AckWait: c.Result.AckWait, ProcessTimeout: c.Result.ProcessTimeout, MaxDeliver: c.Result.MaxDeliver,
+			MaxAckPending: c.Result.MaxAckPending, NakBackoffMin: c.Result.NakBackoffMin, NakBackoffMax: c.Result.NakBackoffMax,
 		},
 		// Native Nest steps commit their completion as an effect, so it
 		// arrives on the effect stream rather than the saga stream. Its
@@ -98,32 +93,17 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		// its own durable; core derives the rest when these are empty
 		// (RR-20260917-07).
 		NestResults: coresaga.NestCompletionConsumerConfig{
-			Stream:         stringDefault(cfg.GetString("saga.result_effect_stream"), stringDefault(cfg.GetString("saga.start_effect_stream"), "ROOST_EFFECTS")),
-			Durable:        cfg.GetString("saga.result_effect_durable"),
-			EffectPrefix:   stringDefault(cfg.GetString("saga.result_effect_prefix"), stringDefault(cfg.GetString("saga.start_effect_prefix"), "roost.effect")),
-			AckWait:        durationDefault(read.Duration("saga.result_effect_ack_wait"), 30*time.Second),
-			ProcessTimeout: durationDefault(read.Duration("saga.result_effect_process_timeout"), defaults.StoreTimeout),
-			MaxDeliver:     intDefault(read.Int("saga.result_effect_max_deliver"), 25_000),
-			MaxAckPending:  intDefault(read.Int("saga.result_effect_max_ack_pending"), 256),
-			NakBackoffMin:  durationDefault(read.Duration("saga.result_effect_nak_backoff_min"), 250*time.Millisecond),
-			NakBackoffMax:  durationDefault(read.Duration("saga.result_effect_nak_backoff_max"), 30*time.Second),
+			Stream: resultStream, Durable: c.ResultEffectDurable, EffectPrefix: resultPrefix,
+			AckWait: c.ResultEffect.AckWait, ProcessTimeout: c.ResultEffect.ProcessTimeout, MaxDeliver: c.ResultEffect.MaxDeliver,
+			MaxAckPending: c.ResultEffect.MaxAckPending, NakBackoffMin: c.ResultEffect.NakBackoffMin, NakBackoffMax: c.ResultEffect.NakBackoffMax,
 		},
 		Starts: coresaga.NestStartConsumerConfig{
-			Stream:         stringDefault(cfg.GetString("saga.start_effect_stream"), "ROOST_EFFECTS"),
-			Durable:        stringDefault(cfg.GetString("saga.start_effect_durable"), "roost-saga-start"),
-			EffectPrefix:   stringDefault(cfg.GetString("saga.start_effect_prefix"), "roost.effect"),
-			AckWait:        durationDefault(read.Duration("saga.start_effect_ack_wait"), 30*time.Second),
-			ProcessTimeout: durationDefault(read.Duration("saga.start_effect_process_timeout"), defaults.StoreTimeout),
-			MaxDeliver:     intDefault(read.Int("saga.start_effect_max_deliver"), 25_000),
-			MaxAckPending:  intDefault(read.Int("saga.start_effect_max_ack_pending"), 256),
-			NakBackoffMin:  durationDefault(read.Duration("saga.start_effect_nak_backoff_min"), 250*time.Millisecond),
-			NakBackoffMax:  durationDefault(read.Duration("saga.start_effect_nak_backoff_max"), 30*time.Second),
+			Stream: c.StartEffectStream, Durable: c.StartEffectDurable, EffectPrefix: c.StartEffectPrefix,
+			AckWait: c.StartEffect.AckWait, ProcessTimeout: c.StartEffect.ProcessTimeout, MaxDeliver: c.StartEffect.MaxDeliver,
+			MaxAckPending: c.StartEffect.MaxAckPending, NakBackoffMin: c.StartEffect.NakBackoffMin, NakBackoffMax: c.StartEffect.NakBackoffMax,
 		},
 	}
-	if err := read.Err(); err != nil {
-		return fmt.Errorf("saga: %w", err)
-	}
-	budgets, err := StepBudgetsFromConfig(cfg, m.definitions...)
+	budgets, err := stepBudgets(c.StepDefaults, c.Steps, m.definitions)
 	if err != nil {
 		return fmt.Errorf("saga: %w", err)
 	}
@@ -237,24 +217,6 @@ func (m *Mod) checkHealth(ctx context.Context) health.Result {
 	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("running conflicts=%d duplicates=%d publish_failures=%d store_failures=%d worker_failures=%d manual_required=%d late_after_abandon=%d", stats.Conflicts, stats.Duplicates, stats.PublishFailures, stats.StoreFailures, stats.WorkerFailures, stats.ManualRequired, stats.LateAfterAbandon)}
 }
 
-func durationDefault(value, fallback time.Duration) time.Duration {
-	if value <= 0 {
-		return fallback
-	}
-	return value
-}
-func intDefault(value, fallback int) int {
-	if value <= 0 {
-		return fallback
-	}
-	return value
-}
-func int64Default(value, fallback int64) int64 {
-	if value <= 0 {
-		return fallback
-	}
-	return value
-}
 func stringDefault(value, fallback string) string {
 	if value == "" {
 		return fallback

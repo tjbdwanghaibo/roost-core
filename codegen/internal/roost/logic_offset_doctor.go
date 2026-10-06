@@ -2,9 +2,9 @@ package roost
 
 import (
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -90,10 +90,10 @@ func checkLogicOffsets(root string, m Manifest) CheckItem {
 }
 
 // configLogicOffset reads time.logic_offset from a service config, or from the
-// config.yaml a k8s Secret example carries, the way the App reads it
-// (app.ConfigDuration): missing, empty, "0" and 0 are zero; a string must
-// parse as a Go duration; any other number needs a unit. The codegen layer
-// does not import app, so the rule is restated here.
+// config.yaml a k8s Secret example carries, with the App's own rule
+// (configschema.ParseDuration, the parser behind app.LoadConfig): missing,
+// empty, "0" and 0 are zero; a string must parse as a Go duration; any other
+// number needs a unit.
 func configLogicOffset(raw []byte, secret bool) (time.Duration, error) {
 	if secret {
 		var document struct {
@@ -112,27 +112,7 @@ func configLogicOffset(raw []byte, secret bool) (time.Duration, error) {
 	if err := yaml.Unmarshal(raw, &config); err != nil {
 		return 0, fmt.Errorf("does not parse: %w", err)
 	}
-	switch value := config.Time.LogicOffset.(type) {
-	case nil:
-		return 0, nil
-	case string:
-		text := strings.TrimSpace(value)
-		if text == "" || text == "0" {
-			return 0, nil
-		}
-		offset, err := time.ParseDuration(text)
-		if err != nil {
-			return 0, fmt.Errorf("time.logic_offset %q is not a duration (for example 24h)", text)
-		}
-		return offset, nil
-	case int, int64, uint64, float64:
-		if number, _ := strconv.ParseFloat(fmt.Sprint(value), 64); number == 0 {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("time.logic_offset %v needs a unit (for example 24h); a bare number would be read as nanoseconds", value)
-	default:
-		return 0, fmt.Errorf("time.logic_offset %v is not a duration (for example 24h)", value)
-	}
+	return configschema.ParseDuration("time.logic_offset", config.Time.LogicOffset)
 }
 
 // describeOffset renders an offset the way a config writes it: "24h", "1h30m",
