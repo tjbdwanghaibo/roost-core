@@ -262,5 +262,7 @@ HostAdapter：
 
 ### 12.6 验证（`GOWORK=off`）
 
+已实施（`e999f68e`，分支 `gaps`，未发版）。
+
 见 [RR-20261006-39 修复记录](../bugfix/RR-20261006-39.md)：`gofmt -l` 空；`go vet ./skill/...`；`go test -race -count=3 ./skill/...`；
 `skill/examples` 三个示例实跑、`skill/integration/sync-e2e`；根包；`go build ./... && go vet ./...`。

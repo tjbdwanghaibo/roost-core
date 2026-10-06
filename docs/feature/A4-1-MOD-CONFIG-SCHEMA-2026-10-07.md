@@ -398,4 +398,4 @@ OK    config-reads         66 package(s) read config only through declarations
 
 ### 7.6 验证（`GOWORK=off`）
 
-见 [RR-20261006-40 修复记录](../bugfix/RR-20261006-40.md)。
+已实施（`6e0619bb`，分支 `gaps`，未发版）。`gofmt -l` 空；改动包（app、internal/configschema、skill/...、kit/saga、kit/dataengine、codegen/...）`go vet`；`go test -race -count=3 ./skill/... ./app/... ./internal/configschema/... ./kit/saga/... ./kit/dataengine/...` 与 codegen 改动用例 `-race -count=3` 通过；`go test -count=1 ./codegen/...` 通过；`go generate ./...` 后 porcelain 干净；skill/examples 三个示例实跑、sync-e2e 通过；根包 `go test -count=1 .`（含 `TestExamplesRun`）通过；`go build ./... && go vet ./...` 通过；新生成 game-demo（replace 到 worktree）`go build / vet / test ./...` 通过，`roost project doctor`（strict）退出 0、零 WARN 零 FAIL。见 [RR-20261006-40 修复记录](../bugfix/RR-20261006-40.md)。
