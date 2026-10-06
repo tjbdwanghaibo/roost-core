@@ -154,3 +154,13 @@ $ GOWORK=off go test -count=1 -run 'TestRulesCheckTheValueEncodingJSONDecodes|Te
 - 第 1 条只在内存存储上验证；Redis owed 索引的打分函数 `owedDispatchEntry` 有直接断言，没有跑真实 Redis 的 integration（存储格式未变）。
 - 第 3 条的“滚动发布”用两个 Engine 共用一个 mongotest 存储模拟，没有在真实 NATS 上跑 nak 退避与 `MaxDeliver`。
 - 第 5 条的前提（结构体里没有只差大小写的 JSON 名）没有在注册时强制。
+
+## 更正（2026-10-06，第 5 条被“configdata 大小写敏感”取代）
+
+维护者随后决定“configdata 需要大小写敏感”（[下一轮规划](../review/NEXT-ROUND-PLAN-2026-10-06.md) 第 2 项，[方案](../feature/CONFIGDATA-CASE-SENSITIVE-KEYS-2026-10-06.md)）。第 5 条的前提——数据里可以出现只差大小写的键、规则要跟着 encoding/json 取最后一个——不再成立：这样的键现在在 Load / Reload / DryRun 整次拒绝（`Rule` 为 `case`，点名表 / 行 / 键 / 应有拼写），“几种拼写取哪一个”不会再出现。因此：
+
+- 删除第 5 条加的选择逻辑：`Rows` 不再预处理（`hasCaseVariants` / `keepLastCaseVariant` / `foldName` 删除），`Lookup` 改为逐字匹配，“手拼 map 取字节序最小的键”也随之删除。
+- 第 5 条的用例（`TestRulesCheckTheValueEncodingJSONDecodes`、`TestObjectRulesCheckTheValueEncodingJSONDecodes`、`TestRowsWithoutCaseVariantsAreUnchanged`、`TestLookupIsDeterministicOnAHandBuiltRow`）随逻辑删除，换成 `configdata/rules/key_spelling_promises_test.go`；`{"level":5,"Level":0}` 这类行现在被拒绝，而不是按 0 检查。
+- “未验证 / 风险”里第 5 条的前提（结构体里没有只差大小写的 JSON 名）不再需要：两个名字都逐字匹配各自的字段。
+
+上文第 5 节保留原文作为当时的记录；v1.21.0 发布的仍是第 5 条的行为，收紧在下一版生效。

@@ -3,6 +3,9 @@
 // -check）共用（维护者决定 B10，2026-10-06）。生成期检查只是提前反馈，真正把关的
 // 是加载层；两处跑的是同一段代码、同一组规则，改一处规则两处一起变。
 //
+// 键的拼写也是这里的一条规则（MisspelledKey）：数据文件里的键与声明的字段名逐字
+// 一致，只差大小写的键被拒绝，不交给 encoding/json 的大小写不敏感匹配。
+//
 // 规则在原始 JSON 行上检查，所以“缺列”和“零值”分得清——configdata 只拿类型化
 // 的行时做不到，这正是 required 以前在运行时查不了的原因（RR-20261005-NC-75）。
 // Ref 需要目标表，由加载层在全部表加载后用类型化的表检查，Check 跳过它。
@@ -16,17 +19,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 )
 
 // Rule 是一列的规则。零值 Rule 不约束任何东西。
 type Rule struct {
-	// Field 是数据文件里的 JSON 键，大小写不敏感匹配（与 encoding/json 一样）。
-	// 一行里同一列有几种大小写拼写时，取文档顺序里最后一个，即加载层解出的值，见 Rows。
+	// Field 是数据文件里的 JSON 键，逐字匹配（大小写敏感）。
 	Field string
 	// Required：每行都必须出现且不为 null。
 	Required bool
@@ -72,7 +74,7 @@ type Error struct {
 	Row    int
 	Key    string
 	Field  string
-	Rule   string // required / unique / min / enum / ref
+	Rule   string // required / unique / min / enum / ref / case
 	Detail string
 }
 
@@ -136,24 +138,11 @@ func Document(raw []byte) ([]byte, error) {
 }
 
 // Rows 把载荷解成原始行：表是行的列表，对象是唯一的一行。
-//
-// 一行里有几个键只差大小写（"level"、"Level"）时，只保留文档顺序里最后一个。
-// 加载层用 encoding/json 把同一份载荷解进行结构体，几个键落到同一个字段时按文档
-// 顺序最后一个生效，精确拼写并不优先；map 丢了顺序，所以在这里按原文定下来，规则
-// 查到的就是类型化行里的值。之前 Lookup 先取精确键、否则遍历 map 取第一个变体：
-// 精确键在前、变体在后时查错了值，没有精确键时取哪个随遍历顺序变（发版前审查观察）。
-// 前提是行结构体里没有两个只差大小写的 JSON 名（那样 encoding/json 会先按精确名
-// 分派，规则层不知道结构体的其他字段）。没有大小写变体的行原样返回，不多解析。
 func Rows(payload []byte, object bool) ([]map[string]json.RawMessage, error) {
 	if object {
 		var row map[string]json.RawMessage
 		if err := json.Unmarshal(payload, &row); err != nil {
 			return nil, err
-		}
-		if hasCaseVariants(row) {
-			if err := keepLastCaseVariant(row, payload); err != nil {
-				return nil, err
-			}
 		}
 		return []map[string]json.RawMessage{row}, nil
 	}
@@ -161,98 +150,61 @@ func Rows(payload []byte, object bool) ([]map[string]json.RawMessage, error) {
 	if err := json.Unmarshal(payload, &rows); err != nil {
 		return nil, err
 	}
-	var raw []json.RawMessage // 只在有行需要文档顺序时才解
-	for i, row := range rows {
-		if !hasCaseVariants(row) {
-			continue
-		}
-		if raw == nil {
-			if err := json.Unmarshal(payload, &raw); err != nil {
-				return nil, err
-			}
-		}
-		if err := keepLastCaseVariant(row, raw[i]); err != nil {
-			return nil, err
-		}
-	}
 	return rows, nil
 }
 
-// hasCaseVariants 报告一行里是否有两个键只差大小写。全是不含大写字母的 ASCII 键时
-// 不可能有（常见的 snake_case），不分配。
-func hasCaseVariants(row map[string]json.RawMessage) bool {
-	plain := true
-	for name := range row {
-		for i := 0; i < len(name); i++ {
-			if c := name[i]; c >= utf8.RuneSelf || ('A' <= c && c <= 'Z') {
-				plain = false
-				break
+// MisspelledKey 是键的拼写规则：键必须与声明的字段名逐字一致（大小写敏感）。它按
+// keys 的顺序找第一个不是声明名、却与某个声明名只差大小写的键，返回它和应有的拼写。
+// 与所有声明名都不只差大小写的键是未声明的键，不归这条规则管（加载层宽松模式忽略、
+// 严格模式由解码拒绝）。一行里同一字段写了几种大小写时，至多一个是逐字的拼写，其余
+// 都在这里被找出来，所以“几种拼写取哪一个”不会出现。
+//
+// encoding/json 匹配键时大小写不敏感，"Level" 会静默填进 json 名为 level 的字段；
+// 加载层（configdata）在解码后、生成器（tablegen 的 -check 与 CSV 表头）在转换时都用
+// 这一条规则核对（维护者 2026-10-06：“configdata 需要大小写敏感”）。
+func MisspelledKey(keys, declared []string) (key, want string, found bool) {
+	for _, key := range keys {
+		if slices.Contains(declared, key) {
+			continue
+		}
+		for _, name := range declared {
+			if strings.EqualFold(key, name) {
+				return key, name, true
 			}
 		}
-		if !plain {
-			break
-		}
 	}
-	if plain {
-		return false
-	}
-	seen := make(map[string]struct{}, len(row))
-	for name := range row {
-		folded := foldName(name)
-		if _, dup := seen[folded]; dup {
-			return true
-		}
-		seen[folded] = struct{}{}
-	}
-	return false
+	return "", "", false
 }
 
-// keepLastCaseVariant 按 object（这一行的原文）里键的顺序，在每组只差大小写的键里只留最后一个。
-func keepLastCaseVariant(row map[string]json.RawMessage, object []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(object))
-	if _, err := decoder.Token(); err != nil { // {
-		return err
-	}
-	last := make(map[string]string, len(row))
-	for decoder.More() {
-		token, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		name, ok := token.(string)
-		if !ok {
-			return fmt.Errorf("object key is %v, not a string", token)
-		}
-		last[foldName(name)] = name
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return err
-		}
-	}
-	for name := range row {
-		if last[foldName(name)] != name {
-			delete(row, name)
+// CaseError 点名一处拼写违反：table 的第 row 行（1 起；对象为 0，rowKey 是该行主键，
+// 未知时为空）里的 key 应拼作 want。field 是应有拼写在行里的位置：顶层就是 want，
+// 嵌套时形如 rewards[1].item_id。
+func CaseError(table string, row int, rowKey, field, key, want string) *Error {
+	return &Error{Table: table, Row: row, Key: rowKey, Field: field, Rule: "case",
+		Detail: fmt.Sprintf("key %q must be spelled %q (keys are case-sensitive)", key, want)}
+}
+
+// CheckKeys 对一张表的原始行执行拼写规则，declared 是行的字段名（json 名）。
+// key 给出第 i 行（0 起）的主键用于点名，可以为 nil。第一处违反即返回 *Error。
+func CheckKeys(table string, rows []map[string]json.RawMessage, declared []string, key func(row int) string) error {
+	for index, row := range rows {
+		if name, field, found := MisspelledKey(slices.Sorted(maps.Keys(row)), declared); found {
+			rowKey := ""
+			if key != nil {
+				rowKey = key(index)
+			}
+			return CaseError(table, index+1, rowKey, field, name, field)
 		}
 	}
 	return nil
 }
 
-// foldName 把每个字符换成它大小写等价类里最小的那个：foldName(a) == foldName(b)
-// 恰好是 strings.EqualFold(a, b)，与 encoding/json 匹配键时的折叠相同（含 K / ſ 这类
-// 非 ASCII 等价字符）。
-func foldName(name string) string {
-	var b strings.Builder
-	b.Grow(len(name))
-	for _, r := range name {
-		smallest := r
-		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
-			if f < smallest {
-				smallest = f
-			}
-		}
-		b.WriteRune(smallest)
+// CheckObjectKeys 对单例配置执行同样的拼写规则；错误里不带行号。
+func CheckObjectKeys(table string, row map[string]json.RawMessage, declared []string) error {
+	if name, field, found := MisspelledKey(slices.Sorted(maps.Keys(row)), declared); found {
+		return CaseError(table, 0, "", field, name, field)
 	}
-	return b.String()
+	return nil
 }
 
 // Check 对一张表的原始行执行 required / unique / min / enum（Ref 由加载层查）。
@@ -321,24 +273,10 @@ func check(table string, rows []map[string]json.RawMessage, rules []Rule, key fu
 	return nil
 }
 
-// Lookup 在一行里找 field 列：精确键，否则大小写不敏感的键。Rows 解出的行每组大小写
-// 变体只剩文档顺序里最后一个（encoding/json 解进结构体的那个），所以最多一个候选。
-// 不是 Rows 解出的行若仍有几个变体，取字节序最小的键——结果确定，但文档顺序只有 Rows 知道。
+// Lookup 在一行里找 field 列，键逐字匹配（大小写敏感，见 MisspelledKey）。
 func Lookup(row map[string]json.RawMessage, field string) (json.RawMessage, bool) {
-	if value, ok := row[field]; ok {
-		return value, true
-	}
-	var (
-		chosen string
-		value  json.RawMessage
-		found  bool
-	)
-	for name, candidate := range row {
-		if strings.EqualFold(name, field) && (!found || name < chosen) {
-			chosen, value, found = name, candidate, true
-		}
-	}
-	return value, found
+	value, ok := row[field]
+	return value, ok
 }
 
 // Canonical 是一个 JSON 值用于比较与报错的规范形式：字符串取原文，数字取规范

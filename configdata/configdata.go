@@ -408,6 +408,10 @@ type TableDef[K comparable, V any] struct {
 	// whole-table invariants (row-count bounds, cross-row business checks)
 	// that must fire even when the table is empty.
 	ValidateTable func(*BuildContext, *Table[K, V]) error
+	// Keys in the data file must spell the row type's json names exactly
+	// (case-sensitive, nested values included); a key that differs only in
+	// case is rejected on every Load / Reload / DryRun as rule "case".
+	//
 	// Rules are the declared column rules (required / unique / min / enum /
 	// ref), enforced on every Load and Reload — the one place they are
 	// enforced; generators only check the same rules early (B10). required /
@@ -443,12 +447,15 @@ func (d TableDef[K, V]) load(ctx *BuildContext) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configdata: load table %s: %w", d.Name, err)
 	}
+	keyOf := func(i int) string { return fmt.Sprint(d.Key(rows[i])) }
+	if err := checkKeySpelling[V](string(d.Name), payload, false, keyOf); err != nil {
+		return nil, fmt.Errorf("configdata: %w", err)
+	}
 	if len(d.Rules) > 0 {
 		rawRows, err := rules.Rows(payload, false)
 		if err != nil {
 			return nil, fmt.Errorf("configdata: load table %s: %w", d.Name, err)
 		}
-		keyOf := func(i int) string { return fmt.Sprint(d.Key(rows[i])) }
 		if err := rules.Check(string(d.Name), rawRows, d.Rules, keyOf); err != nil {
 			return nil, fmt.Errorf("configdata: %w", err)
 		}
@@ -515,6 +522,9 @@ func (d ObjectDef[V]) load(ctx *BuildContext) (any, error) {
 	payload, err := readJSON(filepath.Join(ctx.Dir, d.File), &obj, ctx.StrictJSON)
 	if err != nil {
 		return nil, fmt.Errorf("configdata: load object %s: %w", d.Name, err)
+	}
+	if err := checkKeySpelling[V](string(d.Name), payload, true, nil); err != nil {
+		return nil, fmt.Errorf("configdata: %w", err)
 	}
 	if len(d.Rules) > 0 {
 		rawRows, err := rules.Rows(payload, true)

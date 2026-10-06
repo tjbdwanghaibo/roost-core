@@ -26,8 +26,8 @@ type resolvedRule struct {
 	typ   reflect.Type
 }
 
-// resolveRules binds every rule to a field of V (matched the way
-// encoding/json matches keys) and checks the rule fits the field's kind. It
+// resolveRules binds every rule to the field of V whose json name it spells
+// exactly and checks the rule fits the field's kind. It
 // runs at registration, so a rule naming a field that does not exist — a
 // typo, a renamed column — fails at startup instead of never firing.
 func resolveRules[V any](declared []FieldRule, object bool) ([]resolvedRule, error) {
@@ -54,6 +54,15 @@ func resolveRules[V any](declared []FieldRule, object bool) ([]resolvedRule, err
 		seen[rule.Field] = true
 		field, ok := fieldForJSONKey(fields, rule.Field)
 		if !ok {
+			var names []string
+			for _, candidate := range fields {
+				if name, ok := decodedJSONName(candidate.field); ok && candidate.field.IsExported() {
+					names = append(names, name)
+				}
+			}
+			if _, want, found := rules.MisspelledKey([]string{rule.Field}, names); found {
+				return nil, fmt.Errorf("rule field %s matches no field of %s (names are case-sensitive: the field is %q)", rule.Field, rowType, want)
+			}
 			return nil, fmt.Errorf("rule field %s matches no field of %s", rule.Field, rowType)
 		}
 		base := field.field.Type
@@ -75,25 +84,16 @@ func resolveRules[V any](declared []FieldRule, object bool) ([]resolvedRule, err
 	return out, nil
 }
 
-// fieldForJSONKey finds the field encoding/json would fill from key: an exact
-// json name first, then a case-insensitive match (json tag name, or the Go
-// field name when there is no tag). Fields tagged json:"-" never match.
+// fieldForJSONKey finds the field whose json name (the json tag name, or the
+// Go field name when there is no tag) is exactly key: data keys are
+// case-sensitive (checkKeySpelling), so a rule spelled in another case would
+// never see a value. Fields tagged json:"-" never match.
 func fieldForJSONKey(fields []autoField, key string) (autoField, bool) {
-	var folded *autoField
 	for i := range fields {
 		name, ok := decodedJSONName(fields[i].field)
-		if !ok || !fields[i].field.IsExported() {
-			continue
-		}
-		if name == key {
+		if ok && fields[i].field.IsExported() && name == key {
 			return fields[i], true
 		}
-		if folded == nil && strings.EqualFold(name, key) {
-			folded = &fields[i]
-		}
-	}
-	if folded != nil {
-		return *folded, true
 	}
 	return autoField{}, false
 }

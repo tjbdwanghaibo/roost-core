@@ -519,24 +519,36 @@ func checkDocument(meta Meta, raw []byte) error {
 		return err
 	}
 	if meta.Kind != KindTable {
+		if err := rules.CheckObjectKeys(meta.Name, rows[0], fieldValues(meta.Fields, jsonName)); err != nil {
+			return err
+		}
 		return rules.CheckObject(meta.Name, rows[0], metaRules(meta))
+	}
+	if err := rules.CheckKeys(meta.Name, rows, fieldValues(meta.Fields, jsonName), rowKeyOf(meta, rows)); err != nil {
+		return err
 	}
 	return checkRows(meta, rows)
 }
 
+func jsonName(field Field) string { return field.JSON }
+
 // checkRows runs the meta's rules on table rows, naming a row by its key.
 func checkRows(meta Meta, rows []map[string]json.RawMessage) error {
-	var keyOf func(int) string
-	if meta.Kind == KindTable {
-		keyJSON := keyFieldInfo(meta).JSON
-		keyOf = func(i int) string {
-			if value, ok := rules.Lookup(rows[i], keyJSON); ok {
-				return rules.Canonical(value)
-			}
-			return ""
-		}
+	return rules.Check(meta.Name, rows, metaRules(meta), rowKeyOf(meta, rows))
+}
+
+// rowKeyOf names a table row by its key column, as configdata does.
+func rowKeyOf(meta Meta, rows []map[string]json.RawMessage) func(int) string {
+	if meta.Kind != KindTable {
+		return nil
 	}
-	return rules.Check(meta.Name, rows, metaRules(meta), keyOf)
+	keyJSON := keyFieldInfo(meta).JSON
+	return func(i int) string {
+		if value, ok := rules.Lookup(rows[i], keyJSON); ok {
+			return rules.Canonical(value)
+		}
+		return ""
+	}
 }
 
 // metaRules is the one translation of a meta's tags into rules. It feeds the
@@ -587,6 +599,12 @@ func readCSVRecords(path string, meta Meta) ([]map[string]any, error) {
 		return nil, nil
 	}
 	header := records[0]
+	// Column names are case-sensitive, like the JSON keys they become: a
+	// header that differs from a field's csv name only in case would
+	// otherwise be skipped as an unknown column and its values lost.
+	if column, want, found := rules.MisspelledKey(header, fieldValues(meta.Fields, func(f Field) string { return f.CSV })); found {
+		return nil, fmt.Errorf("%s: header %q must be spelled %q (column names are case-sensitive)", filepath.Base(path), column, want)
+	}
 	fieldByCSV := make(map[string]Field, len(meta.Fields))
 	for _, field := range meta.Fields {
 		fieldByCSV[field.CSV] = field
@@ -867,6 +885,9 @@ func convert{{.TypeName}}Records(records [][]string) ([]{{.Alias}}.{{.TypeName}}
 		return nil, nil
 	}
 	header := records[0]
+	if err := tablegenCheckHeader(header{{range .Fields}}, {{quote .CSV}}{{end}}); err != nil {
+		return nil, err
+	}
 	col := make(map[string]int, len(header))
 	for i, name := range header {
 		col[name] = i
@@ -905,6 +926,28 @@ func convert{{.TypeName}}Records(records [][]string) ([]{{.Alias}}.{{.TypeName}}
 	return out, nil
 }
 {{end}}
+
+// tablegenCheckHeader rejects a column whose name differs from a field's csv
+// name only in case: column names are case-sensitive, like the JSON keys
+// configdata loads (a misspelled column would be skipped and its values lost).
+func tablegenCheckHeader(header []string, names ...string) error {
+	for _, column := range header {
+		misspelled := ""
+		for _, name := range names {
+			if column == name {
+				misspelled = ""
+				break
+			}
+			if misspelled == "" && strings.EqualFold(column, name) {
+				misspelled = name
+			}
+		}
+		if misspelled != "" {
+			return fmt.Errorf("header %q must be spelled %q (column names are case-sensitive)", column, misspelled)
+		}
+	}
+	return nil
+}
 
 func tablegenEmptyRecord(record []string) bool {
 	for _, cell := range record {

@@ -59,11 +59,15 @@ func TestCheckNamesTableRowKeyFieldAndRule(t *testing.T) {
 			}
 		})
 	}
-	// Valid rows, optional columns absent or null, numeric enum spelled 2.0,
-	// keys matched case-insensitively the way encoding/json decodes them.
-	ok := rows(t, `{"rows":[{"id":1,"Name":"a","level":1,"kind":"melee","rank":2.0},{"id":2,"name":"b","level":null}]}`)
+	// Valid rows, optional columns absent or null, numeric enum spelled 2.0.
+	ok := rows(t, `{"rows":[{"id":1,"name":"a","level":1,"kind":"melee","rank":2.0},{"id":2,"name":"b","level":null}]}`)
 	if err := Check("monster", ok, declared, nil); err != nil {
 		t.Fatalf("valid rows rejected: %v", err)
+	}
+	// Keys are case-sensitive: "Name" is not the name column (CheckKeys names
+	// the misspelling itself).
+	if err := Check("monster", rows(t, `[{"id":1,"Name":"a"}]`), declared, nil); err == nil || !strings.Contains(err.Error(), "field name: required") {
+		t.Fatalf("Name accepted as name: %v", err)
 	}
 }
 

@@ -78,7 +78,7 @@ world, _ := cfg.WorldFrom(snap)              // 全局单例
 
 | 键 | 说明 |
 | --- | --- |
-| `name` | snake_case，合法 Go 标识符字符集；也是 JSON 数据里的键名 |
+| `name` | snake_case，合法 Go 标识符字符集；也是 JSON 数据里的键名，数据里必须逐字这样写（大小写敏感：`Level` 不是 `level`，加载 / reload 报 `case` 错误，见 [方案](../../docs/feature/CONFIGDATA-CASE-SENSITIVE-KEYS-2026-10-06.md)） |
 | `type` | 见下方类型系统 |
 | `index` | `true` 建以字段名命名的二级索引；写字符串则用该名字（须是合法标识符）。**`false`/省略 = 不建索引**；其他类型报错 |
 | `skipempty` | 配合 `index`：零值行不进索引（`scene_id=0` 表示"不限场景"这类语义时避免零值桶爆炸） |

@@ -122,3 +122,17 @@ func TestDeclaredRulesAreEnforcedOnReload(t *testing.T) {
 		})
 	}
 }
+
+// configdata case-sensitivity (maintainer, 2026-10-06): the generated CSV
+// converter reads columns by their exact csv names, like the JSON keys
+// configdata loads. A header that differs only in case used to be skipped as
+// an unknown column, its values silently left at zero.
+func TestGeneratedCSVConverterRejectsMisspelledHeaders(t *testing.T) {
+	if _, err := ConvertMonsterCSV(strings.NewReader("id,scene_id,Level\n10,1,3\n")); err == nil || !strings.Contains(err.Error(), `header "Level" must be spelled "level"`) {
+		t.Fatalf("ConvertMonsterCSV err = %v, want the misspelled header named", err)
+	}
+	rows, err := ConvertMonsterCSV(strings.NewReader("id,scene_id,level,note\n10,1,3,x\n"))
+	if err != nil || len(rows) != 1 || rows[0].Level != 3 {
+		t.Fatalf("exact headers: rows = %+v, err = %v", rows, err)
+	}
+}
