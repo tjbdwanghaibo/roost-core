@@ -183,3 +183,28 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | O-M6-6 | 按推荐：同 sid 新进程（已持 App 单实例锁）启动时立即接管上一代同 sid 进程留下的 Remote 实体锁（按锁记录的进程代际令牌判定，只接管“同 sid、旧代际”） | 已实施（d483238e） |
 | 收尾 | 盘点全部未完成问题，处理完后统一发一个版本 | 进行中 |
 | 收尾 · 第 3 批 | skill 小修 A4～A6：null 默认值实体状态 set 类型不匹配、checkpoint 拒绝 `phase_timeout`（O20）、文件 outbox 清理遗留 tmp（O6） | 已实施（`b8fbcee0`，RR-20261006-02～04，未发版） |
+
+## 维护者决定（2026-10-06，第十二轮：收尾盘点 B 类）
+
+维护者：“B 类的都按照推荐即可，mongo 的延迟可以分析下”。
+
+| # | 决定（均按推荐） | 实施状态 |
+| --- | --- | --- |
+| O-S5-2 | saga Mod 启动时校验 `dataengine.effects.max_age` 与 `saga.completion_receipt_ttl` | 待实施（kit 批） |
+| metrics 按标签删除 | Registry 加按标签删除，对象拥有者销毁时删 | 待实施（kit 批） |
+| readyz checker 期限 | 每个 checker 短期限，卡住报 Fail | 待实施（kit 批） |
+| 驱动 Close 契约 | 写进 A2 驱动契约表 | 待实施（文档） |
+| cfggen globals 规则 | 支持 required / min / enum，与 tablegen 统一 | 待实施（skill+cfggen 批） |
+| bus SETNX 去重 | 保持，写进 bus 契约 | 待实施（文档） |
+| L2 落后权威 | 保持，写明上界 | 待实施（文档） |
+| Ops Bearer | 收紧为必须带 `Bearer ` | 待实施（kit 批） |
+| CAS 冲突率口径 | versionstore 层统一计数 | 待实施（kit 批） |
+| activity 预约身份 | 保持 | — |
+| N10 O-T3 / O-T4 | 保持并写文档 | 待实施（文档） |
+| robot Stage 序号 | 只增不回收 | 待实施（kit 批） |
+| buff 投影 | 组件给投影入口，投影交业务 | 待实施（skill+cfggen 批） |
+| skill 剩余观察 | O22 编译期拒绝；O7 排序；O29 改文案；O15/O16/O17/O27/O28 保持并写作者文档；其余保持 | 待实施（skill+cfggen 批） |
+| NC-151 timeout_ticks | 保持 warning | — |
+| Mirror 剩余观察 | 保持；O-M6-5 owner 启动遇 Mongo 选举做有界重试 | 待实施（kit 批） |
+| 低优先 | `:lease:*` 旧键写迁移说明；业务时间高水位推进失败加计数；其余保持 | 待实施（kit 批 / 文档） |
+| Mongo 步骤延迟 | 维护者要求分析（9.0→17.4 ms/op） | 分析中 |
