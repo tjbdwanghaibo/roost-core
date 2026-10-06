@@ -123,8 +123,10 @@ description: "Roost（单仓 roost-core）bug 收敛一轮：把 review 登记�
 
 ## 7. Wanted 与相邻 skill
 
-- `docs/bug/WANTED.md` 是实现侧写给 review agent 的候选表（`W-YYYY-MM-DD-NN`，无状态、不进矩阵）。修 RR 时看到"签名承诺了但实现没履行 / 跨包契约对不上"，
-  **不要顺手改**，写一条（位置到 SHA+行、现象、为何可疑、会红的测试草稿、候选修法），等 review 三选一（登记 RR / 判非问题 / 再观察）。判为 RR 的按正常流程修，判非问题的删条目。
+- **交给 review 之前不留 WANTED**（维护者 2026-10-06：“这次不能有wanted，需要都解决后再给review, review是查问题”）。实现侧看到的疑点
+  （签名承诺了但实现没履行 / 跨包契约对不上 / 读源码推断出的风险）自己闭环，不写成待 review 拍板的条目：
+  能写出红测试的按 RR 流程登记并修；写不出红的，要么加结构性守卫（守卫测试、类型 / 入口收拢）让它不可能发生，要么写清不可达的证明并关闭；
+  真正需要产品决定的直接提给维护者选。`docs/bug/WANTED.md` 只作历史分流记录，新条目在同一轮内必须转为 RR / 守卫 / 关闭。
   roost-coding 已授权的历史 bug **复现确认后**直接修，不因旧"待拍板"重复请示。
 - `roost-review`：只审查行为、可补必要中文注释，登记 RR 与分流 Wanted，本 skill 的另一半。
   `roost-coding`（共同规范）/ `roost-optimize`（优化入口）：重构 / 性能优化按它们走，纯重构先写 `docs/feature/REFACTOR-*.md`。
