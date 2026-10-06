@@ -616,6 +616,9 @@ type ProgressReservation struct {
 
 	CreatedAtUnix int64 `json:"created_at_unix"`
 	AppliedAtUnix int64 `json:"applied_at_unix,omitempty"`
+	// ExpiresAtUnix is system time (Config.SystemNow, D-L3): it describes the
+	// store's relative TTL, which no offset moves. The other two are business
+	// time.
 	ExpiresAtUnix int64 `json:"expires_at_unix"`
 }
 
@@ -746,8 +749,10 @@ type Dispatch struct {
 
 	Attempts    int `json:"attempts"`
 	MaxAttempts int `json:"max_attempts"`
-	// NextAttemptAtUnix is when the next attempt may be handed out. A dispatch
-	// is created due immediately.
+	// NextAttemptAtUnix is when the next attempt may be handed out, on the
+	// system clock (Config.SystemNow, D-L3: retry scheduling is system time);
+	// the other timestamps here are business time. A dispatch is created due
+	// immediately.
 	NextAttemptAtUnix int64 `json:"next_attempt_at_unix"`
 
 	CreatedAtUnix     int64 `json:"created_at_unix"`

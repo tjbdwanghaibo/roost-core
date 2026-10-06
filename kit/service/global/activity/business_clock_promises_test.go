@@ -40,6 +40,11 @@ func TestTheModWiresTheCoordinatorToTheBusinessClock(t *testing.T) {
 		t.Fatalf("the coordinator's clock reads %v, %v from the wall clock; want the business clock, 24h ahead",
 			got.Format(time.RFC3339), got.Sub(before).Round(time.Second))
 	}
+	// 派发的重试排期与进度凭证有效期是系统时钟，不跟偏移走。
+	if system := mod.service.cfg.SystemNow(); system.Sub(time.Now()).Abs() > time.Second {
+		t.Fatalf("the coordinator's system clock reads %v, %v from the wall clock; want the wall clock",
+			system.Format(time.RFC3339), system.Sub(time.Now()).Round(time.Second))
+	}
 	// 过期判定跟着走：一个按真实时间还剩 1 小时的宽限期，在业务时钟上已经过了。
 	nowUnix := nowUnix(mod.service)
 	collecting := Activity{Status: StatusCollecting, GraceDeadlineUnix: time.Now().Add(time.Hour).Unix()}

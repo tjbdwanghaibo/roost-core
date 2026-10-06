@@ -126,6 +126,11 @@ func (i *MongoCommandInbox) Handle(ctx context.Context, command Command, handler
 	if errors.Is(err, fmongo.ErrDuplicateKey) {
 		// 同一 CommandID 的回执已被别人先提交（升级前的进程不写 claim，只靠回执的唯一 _id 排他）：
 		// 本次事务已中止，回放那份回执。
+		//
+		// 这里不交还、也不标记自己的 claim（发版前审查观察，列为观察不改）：它仍是 pending、租约有效，但读 claim 的
+		// 每条路径都先看回执——同一命令重投在 reserveInTransaction 第 1 步读到回执回放并顺手标记 completed；同一操作
+		// 实例的其他尝试经 attemptResult 读到这份回执，标记后回放，不会因为这份租约等待（resolveOtherAttempts 只对
+		// 没有结论的尝试看租约）。交还租约没有可观察的差别，所以不加这一步。
 		if replayed, readErr := i.readReceipt(ctx, command.ID, digest); readErr == nil {
 			return replayed, true, nil
 		}

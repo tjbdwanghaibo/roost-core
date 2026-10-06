@@ -7,6 +7,9 @@ package saga
 // saga 方向 ②之后两条流上的 completion 都来自带操作实例回放的收件箱：退避中到达、被丢弃的成功会由下一次尝试回放、
 // 由过期投递重发，普通流不再需要靠 nak 等协调器回到等待。两个消费者共用 isTerminalCompletionError，
 // 并把 ErrIdentityConflict（同一 CommandID 不同内容，回执是持久的，重投不会变）加入。
+//
+// 发版前审查更正：ErrDefinitionMissing 移出终态（滚动发布时定义会随新进程上线），两条流一起 nak 退避，
+// 见 completion_definition_rollout_promises_test.go。
 
 import (
 	"context"

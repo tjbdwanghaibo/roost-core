@@ -204,7 +204,10 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
   [方案](docs/feature/SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)）。
 
 **两个结果消费者的终态分类相同**（O-S5-1）：普通结果流（`SubscribeCompletions`）与原生 effect 流对 `ErrNotWaiting`、`ErrNotFound`、`ErrIdentityConflict`、
-`ErrDefinitionMissing`、`ErrInvalidRecord` 都 Term，不再 nak 到 `MaxDeliver`。退避中到达、被丢弃的成功由下一次尝试回放或由过期投递重发（上面第 3 条）。
+`ErrInvalidRecord` 都 Term，不再 nak 到 `MaxDeliver`。退避中到达、被丢弃的成功由下一次尝试回放或由过期投递重发（上面第 3 条）。
+`ErrDefinitionMissing` 不是终态（发版前审查更正）：Complete 只在记录正等着这个操作时才查定义，这时缺定义是滚动发布中“派发它的进程已升级、
+处理结果的协调器还没升级”的暂时状态，两条流都按可重试错误 nak 退避；新定义上线后重投被接收。定义一直不来时，步骤超时后没有定义的协调器把记录
+fence 到 `ManualRequired`（放弃关闭，第 4 条），之后的重投按迟到成功 ack 并告警，`MaxDeliver` 兜底。
 混跑期间若仍有旧 Mongo 步骤进程，“退避中到达的成功 + 最后一次尝试过期”这一角落少一次被接收的机会，按第 4 条落到告警。
 
 **代价与运维要点**：

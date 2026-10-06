@@ -203,6 +203,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-06 发版前审查观察收尾（分支 `auditfu`）：activity 协调器的派发重试排期（`NextAttemptAtUnix`、到期判断、owed 索引）与进度凭证 `ExpiresAtUnix` 改读系统时钟 `Config.SystemNow`（D-L3 更正，方案 §9）；saga `ErrDefinitionMissing` 改为可重试（两条结果流仍共用 `isTerminalCompletionError`），定义不来时由 NC-250 fence 收尾；`configdata/rules.Rows` 按文档顺序取大小写变体的最后一个，与 encoding/json 解出的行一致；mail `StorageGrace` 回拨上限写进 USER_GUIDE / T-270；saga `ErrDuplicateKey` 回放不交还 claim 列为观察。**已修复、声明场景验证，未发版**。[记录](bugfix/PRERELEASE-AUDIT-FOLLOWUP-2026-10-06.md)
+
 10-06 第六轮决定 D-L1 / D-L2（分支 `dl12`）：core `timer` 同期限按 (priority, 登记顺序) 触发，priority 小的先、缺省 0（`NewTimerWithPriority`）；未注册类型的到期节点删除时 Warn + `timer.unhandled_dropped_total{kind}`，加载时 `ReportUnhandledTypes` 每种告警一次；game-demo `TimerNode` 加 `priority`（旧节点按 0）。**已实施，未发版**（[方案](feature/D-L1-L2-TIMER-ORDER-AND-UNHANDLED-2026-10-06.md)，T-268，提交号见 DECISIONS-PENDING 第六轮）。D-L3（时间来源）另行实施。
 
 10-06 第五轮决定 D1 / MissionRunner / EndAll（分支 `d1mr`）：`/readyz` 只在 Fail 或就绪位为假时 503，Degraded 返回 200 并在 `degraded_dependencies` 里标出（聚合规则在 `health.Snapshot`，[方案](feature/D1-READYZ-DEGRADED-IS-READY-2026-10-06.md)，T-267）；`MissionRunner` 回调里的变更进延后队列、判定集中在 `submit`，与 ActionRunner 一致（有界、回调 panic 恢复）；EndAll 不是清场，先 EndCurMission 再 EndAll，写进文档并用例钉住（[B7 方案 §7 / §8](feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md)）。**已实施，未发版**（提交号见 DECISIONS-PENDING 第五轮）。

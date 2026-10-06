@@ -124,6 +124,10 @@ func owedDispatchEntry(dispatch Dispatch) (float64, bool) {
 		return 0, false
 	}
 	due := dispatch.NextAttemptAtUnix
+	// System time, like the nowUnix OwedDispatches queries with (D-L3). Only a
+	// record written before reopen stamped the system clock has 0 here; it
+	// was written with time.logic_offset 0, so its CreatedAtUnix is the same
+	// instant on both clocks.
 	if due <= 0 {
 		due = dispatch.CreatedAtUnix
 	}

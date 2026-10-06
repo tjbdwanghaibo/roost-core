@@ -142,11 +142,16 @@ func handleNestCompletion(ctx context.Context, message *fnats.JetStreamMsg, comp
 
 // isTerminalCompletionError names the outcomes a redelivery cannot improve. 两个结果消费者（原生 effect 流与普通结果流）
 // 共用它（O-S5-1）。ErrIdentityConflict：同一 CommandID 已记下另一份结果，回执是持久的，重投不会变。
+//
+// ErrDefinitionMissing 不在其中：Complete 只在记录正等着这个操作时才查定义，这时没有定义是滚动发布里的暂时状态——
+// 派发它的进程有这个定义版本，处理结果的协调器还没升级，定义会随新进程上线。它按可重试错误 nak 退避：定义上线后
+// 重投被接收；一直不来时，步骤超时后没有定义的协调器把记录 fence 到 ManualRequired（放弃关闭，NC-250），之后的
+// 重投按迟到成功 ack，MaxDeliver 兜底。之前它在这里，滚动发布中先到的结果被 Term 掉，记录只能等超时重派或被 fence。
 func isTerminalCompletionError(err error) bool {
 	switch {
 	case err == nil:
 		return false
-	case errors.Is(err, ErrNotWaiting), errors.Is(err, ErrNotFound), errors.Is(err, ErrInvalidRecord), errors.Is(err, ErrDefinitionMissing), errors.Is(err, ErrIdentityConflict):
+	case errors.Is(err, ErrNotWaiting), errors.Is(err, ErrNotFound), errors.Is(err, ErrInvalidRecord), errors.Is(err, ErrIdentityConflict):
 		return true
 	default:
 		return false

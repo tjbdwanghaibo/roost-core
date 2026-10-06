@@ -126,6 +126,9 @@ handler 事务失败（handler 错误、取消、fence）后交还租约（`leas
 ②之后普通结果流上的 completion 都来自带操作实例回放的收件箱（Mongo 步骤、原生步骤的回放），“退避中到达的成功”不再需要靠普通流 nak 等协调器回到等待：
 下一次尝试会回放它，过期投递也会重发它。所以两个消费者共用 `isTerminalCompletionError`，并把 `ErrIdentityConflict` 加入（同一 CommandID 不同内容，重投不会变）。
 普通流从此对 `ErrNotWaiting` / `ErrNotFound` / `ErrIdentityConflict` / `ErrDefinitionMissing` / `ErrInvalidRecord` Term，不再 nak 到 `MaxDeliver`。
+（发版前审查更正：`ErrDefinitionMissing` 移出终态，两条流一起改为 nak 退避——滚动发布时结果可能先到还没升级的协调器，定义会随新进程上线；
+定义一直不来时由协调器自己的定义缺失 fence（NC-250）收尾。共用 `isTerminalCompletionError` 不变。回归
+`saga/completion_definition_rollout_promises_test.go`，记录见 [发版前审查观察收尾](../bugfix/PRERELEASE-AUDIT-FOLLOWUP-2026-10-06.md)。）
 混跑代价：仍有旧 Mongo 步骤进程时，“退避中到达的成功 + 最后一次尝试过期”这一角落会少一次被接收的机会（旧进程过期分支不重发），按契约第 4 条落到告警。
 
 ## O-S5-3：被杀进程遗留的 Mongo 事务锁

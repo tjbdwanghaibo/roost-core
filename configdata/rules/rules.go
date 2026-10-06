@@ -19,12 +19,14 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Rule 是一列的规则。零值 Rule 不约束任何东西。
 type Rule struct {
-	// Field 是数据文件里的 JSON 键（与 encoding/json 一样，精确匹配优先，
-	// 否则大小写不敏感匹配）。
+	// Field 是数据文件里的 JSON 键，大小写不敏感匹配（与 encoding/json 一样）。
+	// 一行里同一列有几种大小写拼写时，取文档顺序里最后一个，即加载层解出的值，见 Rows。
 	Field string
 	// Required：每行都必须出现且不为 null。
 	Required bool
@@ -134,11 +136,24 @@ func Document(raw []byte) ([]byte, error) {
 }
 
 // Rows 把载荷解成原始行：表是行的列表，对象是唯一的一行。
+//
+// 一行里有几个键只差大小写（"level"、"Level"）时，只保留文档顺序里最后一个。
+// 加载层用 encoding/json 把同一份载荷解进行结构体，几个键落到同一个字段时按文档
+// 顺序最后一个生效，精确拼写并不优先；map 丢了顺序，所以在这里按原文定下来，规则
+// 查到的就是类型化行里的值。之前 Lookup 先取精确键、否则遍历 map 取第一个变体：
+// 精确键在前、变体在后时查错了值，没有精确键时取哪个随遍历顺序变（发版前审查观察）。
+// 前提是行结构体里没有两个只差大小写的 JSON 名（那样 encoding/json 会先按精确名
+// 分派，规则层不知道结构体的其他字段）。没有大小写变体的行原样返回，不多解析。
 func Rows(payload []byte, object bool) ([]map[string]json.RawMessage, error) {
 	if object {
 		var row map[string]json.RawMessage
 		if err := json.Unmarshal(payload, &row); err != nil {
 			return nil, err
+		}
+		if hasCaseVariants(row) {
+			if err := keepLastCaseVariant(row, payload); err != nil {
+				return nil, err
+			}
 		}
 		return []map[string]json.RawMessage{row}, nil
 	}
@@ -146,7 +161,98 @@ func Rows(payload []byte, object bool) ([]map[string]json.RawMessage, error) {
 	if err := json.Unmarshal(payload, &rows); err != nil {
 		return nil, err
 	}
+	var raw []json.RawMessage // 只在有行需要文档顺序时才解
+	for i, row := range rows {
+		if !hasCaseVariants(row) {
+			continue
+		}
+		if raw == nil {
+			if err := json.Unmarshal(payload, &raw); err != nil {
+				return nil, err
+			}
+		}
+		if err := keepLastCaseVariant(row, raw[i]); err != nil {
+			return nil, err
+		}
+	}
 	return rows, nil
+}
+
+// hasCaseVariants 报告一行里是否有两个键只差大小写。全是不含大写字母的 ASCII 键时
+// 不可能有（常见的 snake_case），不分配。
+func hasCaseVariants(row map[string]json.RawMessage) bool {
+	plain := true
+	for name := range row {
+		for i := 0; i < len(name); i++ {
+			if c := name[i]; c >= utf8.RuneSelf || ('A' <= c && c <= 'Z') {
+				plain = false
+				break
+			}
+		}
+		if !plain {
+			break
+		}
+	}
+	if plain {
+		return false
+	}
+	seen := make(map[string]struct{}, len(row))
+	for name := range row {
+		folded := foldName(name)
+		if _, dup := seen[folded]; dup {
+			return true
+		}
+		seen[folded] = struct{}{}
+	}
+	return false
+}
+
+// keepLastCaseVariant 按 object（这一行的原文）里键的顺序，在每组只差大小写的键里只留最后一个。
+func keepLastCaseVariant(row map[string]json.RawMessage, object []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(object))
+	if _, err := decoder.Token(); err != nil { // {
+		return err
+	}
+	last := make(map[string]string, len(row))
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := token.(string)
+		if !ok {
+			return fmt.Errorf("object key is %v, not a string", token)
+		}
+		last[foldName(name)] = name
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+	}
+	for name := range row {
+		if last[foldName(name)] != name {
+			delete(row, name)
+		}
+	}
+	return nil
+}
+
+// foldName 把每个字符换成它大小写等价类里最小的那个：foldName(a) == foldName(b)
+// 恰好是 strings.EqualFold(a, b)，与 encoding/json 匹配键时的折叠相同（含 K / ſ 这类
+// 非 ASCII 等价字符）。
+func foldName(name string) string {
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		smallest := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if f < smallest {
+				smallest = f
+			}
+		}
+		b.WriteRune(smallest)
+	}
+	return b.String()
 }
 
 // Check 对一张表的原始行执行 required / unique / min / enum（Ref 由加载层查）。
@@ -215,17 +321,24 @@ func check(table string, rows []map[string]json.RawMessage, rules []Rule, key fu
 	return nil
 }
 
-// Lookup 按 encoding/json 的规则在一行里找键：精确匹配优先，否则大小写不敏感。
+// Lookup 在一行里找 field 列：精确键，否则大小写不敏感的键。Rows 解出的行每组大小写
+// 变体只剩文档顺序里最后一个（encoding/json 解进结构体的那个），所以最多一个候选。
+// 不是 Rows 解出的行若仍有几个变体，取字节序最小的键——结果确定，但文档顺序只有 Rows 知道。
 func Lookup(row map[string]json.RawMessage, field string) (json.RawMessage, bool) {
 	if value, ok := row[field]; ok {
 		return value, true
 	}
-	for name, value := range row {
-		if strings.EqualFold(name, field) {
-			return value, true
+	var (
+		chosen string
+		value  json.RawMessage
+		found  bool
+	)
+	for name, candidate := range row {
+		if strings.EqualFold(name, field) && (!found || name < chosen) {
+			chosen, value, found = name, candidate, true
 		}
 	}
-	return nil, false
+	return value, found
 }
 
 // Canonical 是一个 JSON 值用于比较与报错的规范形式：字符串取原文，数字取规范

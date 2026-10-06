@@ -50,7 +50,7 @@ func BusinessClock(r *Registry) clock.Business   // Registry 里的业务时钟�
 | `kit/ops/ops_mod.go:267` `server_time_ms` | `clock.UnixMilli()` | 不变 | ops 展示的就是服务器逻辑时间 |
 | `timer/scheduler.go:128` 未注入时的缺省 | `time.Now()` | `clock.Now()` | 游戏定时器；World 定时器由调用方钉住时间，缺省只影响没注入的调用方 |
 | `ai/controller.go:236`、`actionflow/mission_runner.go:435`、`actionflow/action_runner.go:697` 未注入时的缺省 | `time.Now()` | `clock.Now()` | AI / 行为流的游戏时间 |
-| `kit/service/global/activity` `Config.Now`（`activity_mod.go` 装配） | 缺省 `time.Now` | Mod 注入业务时钟 | 维护者点名：活动窗口与协调器两端同钟。截止、宽限、退避都是同一个钟上的差值，偏移固定时与系统时长相同 |
+| `kit/service/global/activity` `Config.Now`（`activity_mod.go` 装配） | 缺省 `time.Now` | Mod 注入业务时钟；**派发重试排期与进度凭证有效期改读新增的 `Config.SystemNow`**（§9 更正） | 维护者点名：活动窗口与协调器两端同钟，截止、宽限、开关窗是业务时间。派发的 `NextAttemptAtUnix`（创建、退避、重开）与到期比较、owed 索引查询，以及 `ProgressReservation.ExpiresAtUnix` 是重试 / TTL，属系统时钟——最初把整个协调器划成业务时间，偏移往回拨时欠下的派发多挂一个偏移 |
 | `service/mail` `Config.Now`、`RedisConfig.Now`（`kit/service/mail/mail_mod.go:88` 装配） | 缺省 `time.Now` | Mod 注入业务时钟；**领取租约改用新增的 `Config.SystemNow`** | 邮件创建 / 过期 / 投递 / 已读是业务时间；`ClaimDeadlineUnix` 是 30s 的领取租约，属系统时钟 |
 | `service/mail/redis_store.go:165` 信封键 TTL | 等于业务剩余时长 | 业务剩余时长 + `StorageGrace`（缺省 24h） | 存储 TTL 只兜底且要比业务过期长；业务过期一直由 `Envelope.Expired` 判断 |
 | `kit/service/rank` `RedisConfig.Now`（`rank_mod.go` 装配） | 缺省 `time.Now` | Mod 注入业务时钟 | 同分按“谁先达到”排序是排行规则 |
@@ -94,7 +94,7 @@ skill / 战斗：`skill/` 运行时与 `battle.go.tmpl` 都按帧推进，不读
 | account 创建时间、认领 TTL | 不改（其他 agent 在改 account） | **第八轮已定并实施**：创建 / 登录等业务时间走业务钟，token 与认领 TTL 留系统钟（§8） |
 | platform 订单 | 系统时钟 | 支付与对账按真实时间。若有“限时礼包”这类业务过期，应由业务侧判断，不放在 platform |
 | security 会话令牌有效期 | 系统时钟 | 安全有效期按真实时间 |
-| activity 进度账本 `ExpiresAtUnix` | 业务钟打戳，去重靠 Redis 相对 TTL | 字段只做记录，没人比较；去重窗口是“客户端重试视野”（系统概念），相对 TTL 不受偏移影响 |
+| activity 进度账本 `ExpiresAtUnix` | ~~业务钟打戳~~ **系统钟打戳**（§9 更正），去重靠 Redis 相对 TTL | 字段只做记录，没人比较；去重窗口是“客户端重试视野”（系统概念），相对 TTL 不受偏移影响，所以描述它的时间戳也是系统时间 |
 | saga（`DeadlineAt`、迟到告警） | 系统时钟，不改 | 第八轮定：保留系统时钟 |
 
 ## 4. 迁移与兼容
@@ -103,8 +103,8 @@ skill / 战斗：`skill/` 运行时与 `battle.go.tmpl` 都按帧推进，不读
 
 | 钟 | 字段 |
 | --- | --- |
-| 业务 | activity 协调器的 Activity / Window / Dispatch / ProgressReservation 时间；World 的 `Timers[*].EndUnixMilli`、`timer_next_due`、活动结算时间；mail 信封 `CreatedAtUnix` / `ExpiresAtUnix`、mailbox 条目与 settled claim 的投递 / 更新 / 结算时间；session run 的 `StartedAtUnix` / `DeadlineUnix` / `FinishedAtUnix`；rank 缺省 tiebreak；game-demo 公会建立 / 加入时间、邮件领取与副本领奖的 `nowUnix`；**第八轮起**：match `Ticket.CreatedAtUnix` / `ExpiresAtUnix` / `ResolvedAtUnix` 与 `Match.CreatedAtUnix`，chat `Message.SentAtUnix`（新字段），account `Account.CreatedAtUnix` / `LastLoginAtUnix`、`RoleCreation.CreatedAtUnix`、`Role.CreatedAtUnix` / `LastLoginAtUnix` / `LastLogoutAtUnix` |
-| 系统 | mail `ClaimDeadlineUnix`；chat `Message.StoredAtUnix`；account `Session.ExpiresAtUnix`（与 token 内的签发时间）、`GameServer.UpdatedAtUnix`、`Account.AdminActionAtUnix`、名字目录预约的到期时间；WAL、回执、outbox、saga、订单、目录、路由、锁与租约的所有时间戳 |
+| 业务 | activity 协调器的 Activity / Window 时间、Dispatch 的 `CreatedAtUnix` / `LastAttemptAtUnix` / `AckedAtUnix` / `ExhaustedAtUnix` / `AdminActionAtUnix`、ProgressReservation 的 `CreatedAtUnix` / `AppliedAtUnix`；World 的 `Timers[*].EndUnixMilli`、`timer_next_due`、活动结算时间；mail 信封 `CreatedAtUnix` / `ExpiresAtUnix`、mailbox 条目与 settled claim 的投递 / 更新 / 结算时间；session run 的 `StartedAtUnix` / `DeadlineUnix` / `FinishedAtUnix`；rank 缺省 tiebreak；game-demo 公会建立 / 加入时间、邮件领取与副本领奖的 `nowUnix`；**第八轮起**：match `Ticket.CreatedAtUnix` / `ExpiresAtUnix` / `ResolvedAtUnix` 与 `Match.CreatedAtUnix`，chat `Message.SentAtUnix`（新字段），account `Account.CreatedAtUnix` / `LastLoginAtUnix`、`RoleCreation.CreatedAtUnix`、`Role.CreatedAtUnix` / `LastLoginAtUnix` / `LastLogoutAtUnix` |
+| 系统 | activity Dispatch 的 `NextAttemptAtUnix`（§9 更正）与 ProgressReservation 的 `ExpiresAtUnix`（§9 更正）；mail `ClaimDeadlineUnix`；chat `Message.StoredAtUnix`；account `Session.ExpiresAtUnix`（与 token 内的签发时间）、`GameServer.UpdatedAtUnix`、`Account.AdminActionAtUnix`、名字目录预约的到期时间；WAL、回执、outbox、saga、订单、目录、路由、锁与租约的所有时间戳 |
 
 - 偏移跨重启变化（只可能发生在非生产）：前拨后，业务时间戳整体“过去了”，到期的定时器、窗口、邮件在下一次检查时成批处理；后拨后，已打戳的业务截止会晚到一个偏移量。系统时钟的租约不受影响（这正是把 mail 领取租约拆成系统钟的原因）。
 - **偏移为 0 时行为不变**：业务时钟 `Now()` = `time.Now()`（`offset == 0` 时直接返回，不做 `Add`）；所有服务在没注入时仍退回 `time.Now`。唯一的行为变化是 mail 信封的 Redis TTL 多了 `StorageGrace`（缺省 24h），只影响空间回收，业务过期判断不变；`TestTheKeyTTLComesFromTheInjectedClock` 改为断言“剩余时长 + grace”。
@@ -217,3 +217,10 @@ $ GOWORK=off go test -count=1 -run TestDoctorNamesTheServicesWhoseLogicOffsetDis
 ### 8.3 验证
 
 全部 `GOWORK=off`：`gofmt -l` 为空；`go build ./... && go vet ./...`，另跑 `go vet -tags integration ./kit/service/integration/`；`go test -race -count=3 ./service/match/ ./kit/service/match/ ./kit/service/chat/ ./kit/service/account/`；`go test -count=1 ./kit/... ./service/...`；根包 `go test -count=1 .`；`go test -count=1 ./codegen/...`；`go generate ./...` 后 porcelain 只有本轮改动；integration 只跑 `-run 'TestEvery|TestOffsetMoves'`（隔离 Redis，唯一前缀、用完删键）。生成 game-demo、replace 到 worktree：`go build ./... && go vet ./... && go test ./...` 全过，`gofmt -l` 为空，`glsvet ./...` 退出码 0、无违例、无提示（豁免剩 5 处：支付时间、saga 截止 2 处、玩家归属租约 2 处）。Nest / DataEngine / Sync / Entity 没改，核心 glsvet 与 C01 不重跑。
+
+## 9. 更正：activity 协调器的重试排期与凭证有效期属系统钟（2026-10-06，发版前审查）
+
+发版前审查指出 §3.1 把整个 activity 协调器划成了业务时间，违反 §1 的“重试与退避属系统钟”：派发的 `NextAttemptAtUnix` 与进度凭证的 `ExpiresAtUnix` 读业务钟，
+测试环境两次运行之间把偏移往回拨 D，欠下的派发要多挂 D。改法仿照 mail 的领取租约：`Config.SystemNow`（nil 时沿用 `Now`，Mod 注入 `time.Now`），
+派发排期（创建、退避、重开）、全部到期比较、owed 索引查询与凭证 `ExpiresAtUnix` 读它；活动窗口、宽限、开关窗与记录上的事件时间戳仍是业务钟。上面 §3.1、§3.3、§4 的对应行已改。
+分支 `auditfu`，先红后绿与验证见[发版前审查观察收尾](../bugfix/PRERELEASE-AUDIT-FOLLOWUP-2026-10-06.md) §1；同一记录 §2 写明 mail 信封存储宽限（24h）只覆盖往回拨不超过 24h 的偏移。
