@@ -96,7 +96,7 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | C2 | “需要可见”：按协调者理解——保持新快照即刻可见的语义并写进契约；同时让热更失败 / 回滚可见（日志 + 指标，N07 C-O5） | **已实施（`b12216ed`）**：契约写进 configdata 包注释与 USER_GUIDE §10；`Store.OnReloadOutcome` 每次 Load / Reload / Rollback 恰好报告一次并写 Info / Warn 日志（失败带 stage，撤回为 `stage=apply`）；kit 指标 `configdata.reload.total{result=ok\|failed}`、`configdata.rollback.total{trigger=apply_failed\|operator}`，去掉 `reason` 标签（C-O6），被撤回的 reload 不再同时记 ok；observability README 改正版本号说法（C-O7）。[方案](../feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md) |
 | C5 | 停机中的进程仍算“活着”：保持现状，写进 `Live` 契约 | **已实施（`bd6df5e5`）**：`app/singleton.go` 的 `SingletonLiveness` 注释、USER_GUIDE §2、APP-SINGLETON-LOCK §3.6 / §7.2 写明契约与对 activity 的影响（窗口可能等到宽限期）；用例 `TestSingletonLiveCountsAStoppingProcessUntilRelease` 钉住 |
 | C9 | 过时测试开关要测：打开 `publishedDataEngineGeneratorDependencies` 覆盖的用例，放进需要网络的 CI lane 跑 | **已实施（`f556049c`）**：常量换成 `ROOST_NETWORK_TESTS=1`，framework-compat 新 job `codegen-network` 打开（SKIP 即失败），根包 `TestNetworkCodegenTestsRunInSomeWorkflow` 钉住；两条用例本机联网实跑通过（v1.20.2 刚发布，需 `GOPROXY=direct`）。默认 `go test` 不联网。 |
-| Mirror | 上述全部完成后，补齐 PLAN-REMOTE-POLICY-MIRROR 剩余实现（只读 DTO reader / 契约、共享 snapshot client、订阅代际与首载缓冲、kit 装配与 codegen 只读产物、真实环境故障与性能报告） | 进行中：**第 1～3 步已实施（`8495c5c4`，分支 `mirror13`）**——只读契约 `entity.RemoteSnapshotReadOnly` / 观察 token / DTO reader、快照缓存唯一读出口、共享 `remoteentity.SnapshotClient`（Manager 委托，停机套 A3 骨架）；修前红：Monotonic 未命中回源两次、Cached 交出低于最低版本的值。第 4～6 步未开始，入口与前置条件见 [实施记录 §7](../feature/MIRROR-STEPS-1-3-2026-10-06.md) |
+| Mirror | 上述全部完成后，补齐 PLAN-REMOTE-POLICY-MIRROR 剩余实现（只读 DTO reader / 契约、共享 snapshot client、订阅代际与首载缓冲、kit 装配与 codegen 只读产物、真实环境故障与性能报告） | 进行中：**第 1～3 步已实施（`8495c5c4`，分支 `mirror13`）**——只读契约 `entity.RemoteSnapshotReadOnly` / 观察 token / DTO reader、快照缓存唯一读出口、共享 `remoteentity.SnapshotClient`（Manager 委托，停机套 A3 骨架）；修前红：Monotonic 未命中回源两次、Cached 交出低于最低版本的值。**第 4 步已实施（`23e17d81`，分支 `mirror4`）**——可确认订阅（JetStream DeliverNew，普通 NATS 显式退化为按需读取）、首载缓冲、兴趣代际与撤销水位，见第九轮表；第 5～6 步未开始，入口见 [第 4 步记录 §6.8](../feature/MIRROR-STEP-4-AND-O4-2026-10-06.md) |
 
 ## 新增待决定（2026-10-06，N01 留项 revn01b）
 
@@ -154,3 +154,10 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | account | 创建时间等业务用途走业务时钟 | 已实施（fa472ee7） |
 | saga 截止 | 保留系统时钟 | — |
 | 偏移一致 | `roost doctor` 检查所有服务配置的 `time.logic_offset` 一致 | 已实施（fa472ee7） |
+
+## 维护者决定（2026-10-06，第九轮）
+
+| # | 决定 | 实施状态 |
+| --- | --- | --- |
+| Mirror 第 4 步 | 按推荐：推送订阅依赖 JetStream，`sync/syncbus/driver` 按主题加 DeliverNew 消费，保证确认订阅之后的发布不被静默丢掉；没开 JetStream 时退化为按需读取（Cached 按 `cached_max_staleness` 回源），显式检测并记日志；订阅可确认、首载缓冲有上界、溢出有明确行为，覆盖重连、旧 fetch 回调、renew / release 全交错；所有缓存写入仍只经 `admitLocked` | **已实施（`23e17d81`，分支 `mirror4`）**：`fsyncbus.ILiveSubscriber` / JetStream `SubscribeLive` / `mirror.NewLive`；`SnapshotClient.Start` 只在可确认订阅上开推送，普通 NATS 记 Warn、`PushEnabled=false`（T-272）；快照缓存 `ApplyReplica` 首载缓冲（缺省 64，溢出丢弃并再回源一次）；兴趣代际锁内分配 + release 撤销水位。修前红：加载期间的增量让权威读两次并丢失、release 后迟到的旧续租复活租约。真实 JetStream + Redis、B2 组合矩阵、生成工程 12 条通过。[记录](../feature/MIRROR-STEP-4-AND-O4-2026-10-06.md)（§6.8 第 5 步入口） |
+| O4 | 按推荐：兴趣容量按节点计数（每个 consumer 节点各有配额），满了明确拒绝、可识别错误、日志与指标，续期失败时消费方感知并退化为按需读取；配额作为配置项，A4 严格读取并登记 | **已实施（`23e17d81`）**：`remote_entity.snapshot_interest_per_consumer`（0 = `snapshot_interest_subs / 16`，不能超过它）；`ErrInterestQuotaExceeded` / `ErrInterestRegistryFull`；`interest_rejected_total{reason}` / `interest_renew_refused_total{reason}`、限频 Warn、健康信息 `interest_refused`（T-273）。修前红：一个 consumer 占满全表后另一个 consumer 的兴趣在 owner 处被拒、读路径静默吞掉 |
