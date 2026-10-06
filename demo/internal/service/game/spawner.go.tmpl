@@ -10,6 +10,7 @@ import (
 	monster "{{MODULE}}/game/entities/monster"
 	"{{MODULE}}/game/flags"
 	"{{MODULE}}/game/runtimeid"
+	"{{MODULE}}/game/settings"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"github.com/tjbdwanghaibo/roost-core/app"
@@ -179,11 +180,11 @@ func processSid(registry *app.Registry) int32 {
 	if registry == nil {
 		return 0
 	}
-	config := registry.Config()
-	if config == nil {
+	identity, err := settings.Identity(registry)
+	if err != nil {
 		return 0
 	}
-	return int32(config.GetInt("sid"))
+	return identity.Sid
 }
 
 // Count and IDs are what the GM commands report.

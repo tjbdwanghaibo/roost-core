@@ -451,6 +451,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/scene/runtime/refresh_test.go", why: "the population policy: asked once, an unreported spawn asked again, a death waits out the table's delay"},
 		{write: "game/entities/scene/entity.go", why: "the map as an Entity: no DAO, rebuilt from configuration, exporting its systems by interface"},
 		{write: "game/lifecycle/scene_singleton.go", why: "the one map this process runs, built from configuration before anyone can stand on it"},
+		{write: "game/settings/settings.go", why: "the config keys the game service's own code reads (activity.*, platform.*, sid), declared like a Mod's and read with app.LoadConfig: the App checks them at start and doctor knows them (A4 ①)"},
 		{write: "game/ranking/ranking.go", why: "the game's side of the rank service: which board, what a point is, and the run id that makes a submit idempotent"},
 		{write: "game/dungeon/dungeon.go", why: "what a clear is worth and why paying for one exactly once needs a claim ledger, not the request's own flag"},
 		{write: "game/dungeon/dungeon_test.go", why: "the claim window as a table test, shipped with the project"},

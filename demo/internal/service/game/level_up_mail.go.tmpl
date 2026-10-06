@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"{{MODULE}}/game/effects"
@@ -13,6 +12,7 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"github.com/tjbdwanghaibo/roost-core/nestwal"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/kit/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	svcmail "github.com/tjbdwanghaibo/roost-core/kit/service/mail"
 )
@@ -54,7 +54,10 @@ func startLevelUpMailer(ctx context.Context, registry *app.Registry) (fnats.IJet
 	if err != nil {
 		return nil, fmt.Errorf("level-up mail: %w", err)
 	}
-	database, prefix, stream := effectSettings(registry)
+	database, prefix, stream, err := effectSettings(registry)
+	if err != nil {
+		return nil, fmt.Errorf("level-up mail: %w", err)
+	}
 	inbox, err := nestwal.NewMongoEffectInbox(mongoClient, database, levelUpMailInbox)
 	if err != nil {
 		return nil, fmt.Errorf("level-up mail: %w", err)
@@ -91,23 +94,14 @@ func startLevelUpMailer(ctx context.Context, registry *app.Registry) (fnats.IJet
 	})
 }
 
-// effectSettings reads the same keys the dataengine Mod publishes effects
-// with, with the same defaults, so producer and consumer cannot disagree
-// about where effects go.
-func effectSettings(registry *app.Registry) (database, prefix, stream string) {
-	database, prefix, stream = "game", "roost.effect", "ROOST_EFFECTS"
-	cfg := registry.Config()
-	if cfg == nil {
-		return database, prefix, stream
+// effectSettings is where the dataengine Mod publishes effects, read through
+// that Mod's own declaration (kitdataengine.EffectSettings), so producer and
+// consumer cannot disagree about where effects go and the defaults are not
+// copied here.
+func effectSettings(registry *app.Registry) (database, prefix, stream string, err error) {
+	database, prefix, stream, err = kitdataengine.EffectSettings(registry.Config())
+	if err != nil {
+		return "", "", "", fmt.Errorf("effect settings: %w", err)
 	}
-	if value := strings.TrimSpace(cfg.GetString("dataengine.database")); value != "" {
-		database = value
-	}
-	if value := strings.Trim(strings.TrimSpace(cfg.GetString("dataengine.effects.subject_prefix")), "."); value != "" {
-		prefix = value
-	}
-	if value := strings.TrimSpace(cfg.GetString("dataengine.effects.stream")); value != "" {
-		stream = value
-	}
-	return database, prefix, stream
+	return database, prefix, stream, nil
 }

@@ -8,13 +8,13 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/purchase"
+	"{{MODULE}}/game/settings"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/clock"
 	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
-	kitplatform "github.com/tjbdwanghaibo/roost-core/kit/service/platform"
 )
 
 // PurchaseCapability is the name the drain is published under, so an endpoint
@@ -64,11 +64,12 @@ func NewPurchaseDrain(registry *app.Registry) (*PurchaseDrain, error) {
 	// The same prefix the platform service keeps its orders under. It is
 	// configuration on both sides rather than a constant, because a
 	// deployment that runs two worlds against one Redis separates them here.
-	prefix, err := kitplatform.KeyPrefix(registry.Config())
+	// Declared by the game service (game/settings), read through it.
+	platform, err := settings.LoadPlatform(registry)
 	if err != nil {
 		return nil, fmt.Errorf("purchase drain: %w", err)
 	}
-	return &PurchaseDrain{redis: client, nest: nest, prefix: prefix, business: app.BusinessClock(registry)}, nil
+	return &PurchaseDrain{redis: client, nest: nest, prefix: platform.KeyPrefix, business: app.BusinessClock(registry)}, nil
 }
 
 // DrainPlayer grants everything waiting for one player and reports what it

@@ -12,20 +12,19 @@ package app
 // 守卫用正则扫读取点核对清单；生成器的配置段、doctor 各写各的，新键漏进任何一处都没有东西报错。
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
+	"bytes"
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 )
 
 func TestConfigIntAcceptsWholeNumbersOnly(t *testing.T) {
@@ -111,20 +110,54 @@ func TestLoadConfigFillsDefaultsAndRefusesOutOfRangeValues(t *testing.T) {
 	}
 }
 
-// --- 守卫：读了没声明 ---
+// --- 业务服务的声明（A4 ① 收尾，2026-10-07） ---
 
-// viperReadMethods 是 *viper.Viper 读配置的方法。写入（Set、SetDefault）与读文件（ReadInConfig）不算读键。
-var viperReadMethods = map[string]bool{
-	"Get": true, "GetBool": true, "GetDuration": true, "GetFloat64": true, "GetInt": true, "GetInt32": true,
-	"GetInt64": true, "GetIntSlice": true, "GetSizeInBytes": true, "GetString": true, "GetStringMap": true,
-	"GetStringMapString": true, "GetStringMapStringSlice": true, "GetStringSlice": true, "GetTime": true,
-	"GetUint": true, "GetUint8": true, "GetUint16": true, "GetUint32": true, "GetUint64": true,
-	"IsSet": true, "AllKeys": true, "AllSettings": true, "InConfig": true, "Sub": true,
-	"Unmarshal": true, "UnmarshalKey": true, "UnmarshalExact": true,
+// 业务服务（RegisterServer 注册的 Service）与 Mod 一样实现 ConfigSchema：App 启动检查、CheckServiceConfig、
+// ServiceConfigSchema（--print-config）与 --print-config-schema 都带上它。修前只看 Mod：game-demo 的业务代码读的
+// activity.* / platform.* 没有任何声明，doctor 对 game 报 WARN，写错的值要到业务代码第一次读才暴露。
+type declaredService struct{ schema ConfigSchema }
+
+func (declaredService) Name() ServiceName               { return "shop" }
+func (declaredService) Init(*Registry) error            { return nil }
+func (declaredService) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
+func (declaredService) Shutdown(context.Context) error  { return nil }
+func (s declaredService) ConfigSchema() ConfigSchema    { return s.schema }
+
+func TestServiceDeclarationsAreCheckedAndPrintedWithTheMods(t *testing.T) {
+	a := New("planet", "test").RegisterServer("shop", declaredService{schema: SchemaOf(shopConfigForTest{})},
+		declaredMod{name: "bank", schema: SchemaOf(bankConfigForTest{})})
+	err := a.CheckServiceConfig("shop", yamlConfig(t, "shop:\n  max_items: 20000\n  region: mars\nbank:\n  retries: -1\n"))
+	for _, want := range []string{"service shop: config: shop.max_items must be at most 10000", "service shop: config: shop.region must be one of cn, us, eu", "mod bank: config: bank.retries must not be negative"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("CheckServiceConfig = %v\nwant it to contain %q", err, want)
+		}
+	}
+	if err := a.CheckServiceConfig("shop", yamlConfig(t, "shop:\n  region: cn\n")); err != nil {
+		t.Errorf("valid config: CheckServiceConfig = %v", err)
+	}
+	var out bytes.Buffer
+	if err := a.printConfigSchema("shop", &out); err != nil {
+		t.Fatal(err)
+	}
+	var keys []configschema.Key
+	if err := json.Unmarshal(out.Bytes(), &keys); err != nil {
+		t.Fatalf("--print-config-schema output is not a key list: %v\n%s", err, out.String())
+	}
+	names := map[string]bool{}
+	for _, key := range keys {
+		names[key.Name] = true
+	}
+	for _, want := range []string{"shop.region", "shop.max_items", "bank.retries", "sid", "log.level"} {
+		if !names[want] {
+			t.Errorf("--print-config-schema lacks %s: %v", want, keys)
+		}
+	}
+	if at := slices.IndexFunc(keys, func(k configschema.Key) bool { return k.Name == "shop.region" }); at >= 0 && (!keys[at].Required || !slices.Equal(keys[at].Enum, []string{"cn", "us", "eu"})) {
+		t.Errorf("shop.region printed as %+v; want the declaration (required, enum cn|us|eu)", keys[at])
+	}
 }
 
-// singleKeyReads 是 app 的单键读取：读到的键不在任何声明里。
-var singleKeyReads = map[string]bool{"ConfigBool": true, "ConfigDuration": true, "ConfigInt": true, "ConfigInt64": true}
+// --- 守卫：读了没声明 / 声明了没读（实现在 internal/configschema/guard.go，codegen 对生成工程用同一份） ---
 
 // declarationLoaderFiles 是唯一允许直接读 viper 的地方：声明读取的 viper 适配器与单键读取本身。
 var declarationLoaderFiles = map[string]bool{"config_schema.go": true, "config_values.go": true}
@@ -156,113 +189,14 @@ func TestFrameworkModsReadConfigOnlyThroughDeclarations(t *testing.T) {
 // undeclaredConfigReads 找出直接读 viper（参数、变量、字段或 Registry.Config() 的返回值）与单键读取的调用。
 func undeclaredConfigReads(t *testing.T, packages map[string][]string) []string {
 	t.Helper()
-	var out []string
-	for _, files := range packages {
-		fset := token.NewFileSet()
-		parsed := parseFiles(t, fset, files)
-		viperFields := map[string]bool{}
-		for _, file := range parsed {
-			ast.Inspect(file, func(node ast.Node) bool {
-				if field, ok := node.(*ast.Field); ok && isViperType(field.Type) {
-					for _, name := range field.Names {
-						viperFields[name.Name] = true
-					}
-				}
-				return true
-			})
-		}
-		for path, file := range parsed {
-			if filepath.Dir(path) == "." && declarationLoaderFiles[filepath.Base(path)] {
-				continue
-			}
-			viperNames := map[string]bool{}
-			for name := range viperFields { // 参数与字段：同一个包里叫这个名字的 *viper.Viper
-				viperNames[name] = true
-			}
-			ast.Inspect(file, func(node ast.Node) bool {
-				switch n := node.(type) {
-				case *ast.ValueSpec:
-					if isViperType(n.Type) {
-						for _, name := range n.Names {
-							viperNames[name.Name] = true
-						}
-					}
-				case *ast.AssignStmt:
-					for i, rhs := range n.Rhs {
-						if call, ok := rhs.(*ast.CallExpr); ok && i < len(n.Lhs) && returnsViper(call) {
-							if ident, ok := n.Lhs[i].(*ast.Ident); ok {
-								viperNames[ident.Name] = true
-							}
-						}
-					}
-				}
-				return true
-			})
-			ast.Inspect(file, func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				var bad bool
-				switch fun := call.Fun.(type) {
-				case *ast.SelectorExpr:
-					switch {
-					case viperReadMethods[fun.Sel.Name] && isViperValue(fun.X, viperNames, viperFields):
-						bad = true
-					case singleKeyReads[fun.Sel.Name] || fun.Sel.Name == "NewConfigReader":
-						if pkg, ok := fun.X.(*ast.Ident); ok && pkg.Name == "app" {
-							bad = true
-						}
-					}
-				case *ast.Ident:
-					bad = singleKeyReads[fun.Name] && filepath.Dir(path) == "."
-				}
-				if bad {
-					out = append(out, fset.Position(call.Pos()).String())
-				}
-				return true
-			})
-		}
+	reads, err := configschema.UndeclaredReads(packages, func(path string) bool {
+		return filepath.Dir(path) == "." && declarationLoaderFiles[filepath.Base(path)]
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	sort.Strings(out)
-	return out
+	return reads
 }
-
-func isViperType(expr ast.Expr) bool {
-	star, ok := expr.(*ast.StarExpr)
-	if !ok {
-		return false
-	}
-	sel, ok := star.X.(*ast.SelectorExpr)
-	return ok && sel.Sel.Name == "Viper"
-}
-
-func returnsViper(call *ast.CallExpr) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "viper" && sel.Sel.Name == "New" {
-		return true
-	}
-	return sel.Sel.Name == "Config" && len(call.Args) == 0
-}
-
-func isViperValue(expr ast.Expr, names, fields map[string]bool) bool {
-	switch x := expr.(type) {
-	case *ast.Ident:
-		return names[x.Name]
-	case *ast.SelectorExpr:
-		return fields[x.Sel.Name]
-	case *ast.CallExpr:
-		return returnsViper(x)
-	case *ast.ParenExpr:
-		return isViperValue(x.X, names, fields)
-	}
-	return false
-}
-
-// --- 守卫：声明了没读 ---
 
 func TestEveryDeclaredConfigFieldIsRead(t *testing.T) {
 	for _, unread := range unreadConfigFields(t, frameworkPackages(t)) {
@@ -272,89 +206,24 @@ func TestEveryDeclaredConfigFieldIsRead(t *testing.T) {
 
 func unreadConfigFields(t *testing.T, packages map[string][]string) []string {
 	t.Helper()
-	var out []string
-	for _, files := range packages {
-		fset := token.NewFileSet()
-		parsed := parseFiles(t, fset, files)
-		selected := map[string]bool{}
-		type declared struct {
-			name, key string
-			pos       token.Pos
-		}
-		var fields []declared
-		for _, file := range parsed {
-			ast.Inspect(file, func(node ast.Node) bool {
-				switch n := node.(type) {
-				case *ast.SelectorExpr:
-					selected[n.Sel.Name] = true
-				case *ast.StructType:
-					for _, field := range n.Fields.List {
-						if field.Tag == nil || len(field.Names) == 0 {
-							continue
-						}
-						tag, _ := strconv.Unquote(field.Tag.Value)
-						key, ok := reflect.StructTag(tag).Lookup("config")
-						if !ok {
-							continue
-						}
-						for _, name := range field.Names {
-							fields = append(fields, declared{name.Name, key, name.Pos()})
-						}
-					}
-				}
-				return true
-			})
-		}
-		for _, field := range fields {
-			if !selected[field.name] {
-				out = append(out, fset.Position(field.pos).String()+": "+field.name+" (config:\""+field.key+"\")")
-			}
-		}
+	unread, err := configschema.UnreadFields(packages)
+	if err != nil {
+		t.Fatal(err)
 	}
-	sort.Strings(out)
-	return out
+	return unread
 }
 
 // frameworkPackages 返回 app 与 kit 的非测试源文件，按目录（包）分组。
 func frameworkPackages(t *testing.T) map[string][]string {
 	t.Helper()
-	packages := map[string][]string{}
-	for _, root := range []string{".", "../kit"} {
-		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if entry.IsDir() && entry.Name() == "testdata" {
-				return filepath.SkipDir
-			}
-			if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			dir := filepath.Dir(path)
-			packages[dir] = append(packages[dir], path)
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
+	packages, err := configschema.GoPackages(".", "../kit")
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(packages) < 20 {
 		t.Fatalf("found only %d framework packages; the walk no longer reaches kit", len(packages))
 	}
 	return packages
-}
-
-func parseFiles(t *testing.T, fset *token.FileSet, files []string) map[string]*ast.File {
-	t.Helper()
-	parsed := make(map[string]*ast.File, len(files))
-	for _, path := range files {
-		file, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		parsed[path] = file
-	}
-	return parsed
 }
 
 // 守卫自己必须能红：在临时包里放一处直接读 viper、一个没人读的声明，两个守卫都要点名它们。

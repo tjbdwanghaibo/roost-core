@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"time"
 
 	db "{{MODULE}}/db"
@@ -25,6 +24,7 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/saga"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	kitsaga "github.com/tjbdwanghaibo/roost-core/kit/saga"
 	svcmail "github.com/tjbdwanghaibo/roost-core/kit/service/mail"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -104,8 +104,17 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) 
 	if err != nil {
 		return nil, fmt.Errorf("gift saga: %w", err)
 	}
-	prefix, stream, sagaDatabase := sagaSettings(registry)
-	dataEngineDatabase, _, _ := effectSettings(registry)
+	// What the saga Mod was configured with, read through its own
+	// declaration (kitsaga.StreamSettings), so the step consumers meet the
+	// coordinator on the same stream and subject prefix.
+	prefix, stream, sagaDatabase, err := kitsaga.StreamSettings(registry.Config())
+	if err != nil {
+		return nil, fmt.Errorf("gift saga: %w", err)
+	}
+	dataEngineDatabase, _, _, err := effectSettings(registry)
+	if err != nil {
+		return nil, fmt.Errorf("gift saga: %w", err)
+	}
 	// The same prefix the coordinator publishes commands under; the
 	// publisher here carries the completions back on it.
 	transport, err := saga.NewJetStreamPublisher(jetstream, prefix)
@@ -643,23 +652,3 @@ func refuse(reason string) saga.Completion {
 	return saga.Completion{Success: false, Retryable: false, Error: reason}
 }
 
-// sagaSettings reads what the saga Mod was configured with, with the Mod's
-// own defaults, so the step consumers meet the coordinator on the same
-// stream and subject prefix.
-func sagaSettings(registry *app.Registry) (prefix, stream, database string) {
-	prefix, stream, database = "roost.saga", "ROOST_SAGA", "saga"
-	cfg := registry.Config()
-	if cfg == nil {
-		return prefix, stream, database
-	}
-	if value := strings.Trim(strings.TrimSpace(cfg.GetString("saga.subject_prefix")), "."); value != "" {
-		prefix = value
-	}
-	if value := strings.TrimSpace(cfg.GetString("saga.stream")); value != "" {
-		stream = value
-	}
-	if value := strings.TrimSpace(cfg.GetString("saga.database")); value != "" {
-		database = value
-	}
-	return prefix, stream, database
-}

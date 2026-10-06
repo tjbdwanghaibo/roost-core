@@ -15,6 +15,7 @@ import (
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/purchase"
 	"{{MODULE}}/game/runtimeid"
+	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/skills"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -204,10 +205,14 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	// the first purchase: an empty secret turns every callback into an
 	// invalid-signature refusal, which reads as an attack rather than as a
 	// missing configuration key.
-	paymentSecret := registry.Config().GetString("platform.payment_secret")
-	if paymentSecret == "" {
-		return nil, fmt.Errorf("player controller: platform.payment_secret is empty; the demo signs its own payment callbacks with it")
+	// platform.payment_secret is declared by the game service (game/settings,
+	// required), so an empty one already stopped the process before any Mod
+	// started; this reads the checked value.
+	platform, err := settings.LoadPlatform(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
 	}
+	paymentSecret := platform.PaymentSecret
 	payments, ok := app.Lookup[svcplatform.Platform](registry, svcplatform.CapabilityName)
 	if !ok || payments == nil {
 		return nil, fmt.Errorf("player controller: capability %q not found; list platform under services.<game>.uses", svcplatform.CapabilityName)
@@ -215,7 +220,11 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	// The sid comes from the registry's config, not from the runtime-config
 	// slot: that slot holds whatever wrote to it last, and the config-data Mod
 	// overwrites it with its snapshot (U-0244).
-	serverSID := int32(registry.Config().GetInt("sid"))
+	identity, err := settings.Identity(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
+	serverSID := identity.Sid
 	ids, err := runtimeid.New(serverSID)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)

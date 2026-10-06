@@ -11,6 +11,7 @@ import (
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/rewards"
+	"{{MODULE}}/game/settings"
 	"github.com/tjbdwanghaibo/roost-core/admin"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/configdata"
@@ -147,7 +148,11 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 	// Which process answered. It is in the guild results because that is the
 	// one thing a remote-managed entity makes observable, and an operator
 	// running the same command on two processes should see it change.
-	localSID := int32(registry.Config().GetInt("sid"))
+	identity, err := settings.Identity(registry)
+	if err != nil {
+		return fmt.Errorf("gm: %w", err)
+	}
+	localSID := identity.Sid
 	// GM 命令里的时间是业务时间（D-L3）：关窗要算出与 runner 同一个窗口 id，入会时间是玩法时间。
 	business := app.BusinessClock(registry)
 	// player_id is whichever id the operator has at hand: the unique id the

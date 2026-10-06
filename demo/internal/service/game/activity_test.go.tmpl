@@ -312,6 +312,7 @@ func TestActivityRefusesAGroupNoWindowCouldOpenWith(t *testing.T) {
 		config := viper.New()
 		config.Set("sid", 1300)
 		config.Set("server_type", "game")
+		config.Set("activity.key_prefix", "roost:test:activity")
 		if groupsFile != "" {
 			config.Set("activity.groups_file", groupsFile)
 		}

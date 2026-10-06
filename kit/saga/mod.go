@@ -226,3 +226,14 @@ func stringDefault(value, fallback string) string {
 
 var _ app.Mod = (*Mod)(nil)
 var _ app.ModOptionalDependencyProvider = (*Mod)(nil)
+
+// StreamSettings 按 saga Mod 的声明（整份 saga.*，与 Mod Init 读的同一个结构体）返回步骤消费者与协调器会合要用的
+// 三样：命令主题前缀、saga 流名与 saga 库名。业务的步骤消费者（game-demo 的赠礼 saga）用它，不直接读 viper、
+// 不另抄一份缺省值（A4 ① 收尾）。
+func StreamSettings(cfg *viper.Viper) (subjectPrefix, stream, database string, err error) {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return "", "", "", fmt.Errorf("saga: %w", err)
+	}
+	return settings.Saga.SubjectPrefix, settings.Saga.Stream, settings.Saga.Database, nil
+}

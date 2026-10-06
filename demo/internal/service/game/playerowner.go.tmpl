@@ -10,6 +10,7 @@ import (
 
 	"{{MODULE}}/protocol/msgid"
 	lifecycle "{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/settings"
 	player "{{MODULE}}/game/entities/player"
 	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/app"
@@ -112,7 +113,11 @@ const evictBudget = 5 * time.Second
 
 // NewPlayerOwners 用本进程配置里的 sid 建驻留表。
 func NewPlayerOwners(registry *app.Registry) (*PlayerOwners, error) {
-	sid := int32(registry.Config().GetInt("sid"))
+	identity, err := settings.Identity(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player owners: %w", err)
+	}
+	sid := identity.Sid
 	if sid <= 0 {
 		return nil, fmt.Errorf("player owners: sid is %d; a game process serves the players bound to its sid and needs one", sid)
 	}

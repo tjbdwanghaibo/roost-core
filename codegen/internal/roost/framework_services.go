@@ -511,11 +511,15 @@ func WorldUniqueID(registry *app.Registry) (int64, error) {
 	if registry == nil {
 		return 0, fmt.Errorf("world: registry is required to know which server's World this is")
 	}
-	sid := registry.Config().GetInt64("sid")
-	if sid <= 0 {
-		return 0, fmt.Errorf("world: sid is %%d; a World belongs to a server and needs its id", sid)
+	// sid 经 App 的声明读（app.ServiceIdentity，A4 ①）：生成的代码不直接读 viper。
+	var identity app.ServiceIdentity
+	if err := app.LoadConfig(registry.Config(), &identity); err != nil {
+		return 0, fmt.Errorf("world: %%w", err)
 	}
-	return sid, nil
+	if identity.Sid <= 0 {
+		return 0, fmt.Errorf("world: sid is %%d; a World belongs to a server and needs its id", identity.Sid)
+	}
+	return int64(identity.Sid), nil
 }
 
 // WorldID is WorldUniqueID as the full entity id the Nest senders address.

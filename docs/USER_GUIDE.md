@@ -22,7 +22,7 @@ RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登�
 
 ## 2026-10-07 每个 Mod 声明自己的配置（A4 ①，main，未发版）
 
-配置键、类型、缺省值、范围 / 枚举、必填与说明写在 Mod 的配置结构体上（`app.SchemaOf` / `app.LoadConfig`），App 启动前、生成器写配置段、`roost project doctor` 检查配置三处用同一份声明；`app.ConfigReader` 删除。以前写 0 或负数静默取默认的键现在按声明的范围拒绝（不写就是缺省）。新增 `<bin> <service> --print-config` / `--check-config`。syncbus 只读 `syncbus.*` 段（`room` / `sync` 回退删除），生成的 `shutdown` 段不再写没人读的 `serve_wait_timeout`（RR-20261006-38）。详见 [§10 配置写法与启动校验](#配置写法与启动校验)。[方案](feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)
+配置键、类型、缺省值、范围 / 枚举、必填与说明写在 Mod 的配置结构体上（`app.SchemaOf` / `app.LoadConfig`），App 启动前、生成器写配置段、`roost project doctor` 检查配置三处用同一份声明；`app.ConfigReader` 删除。以前写 0 或负数静默取默认的键现在按声明的范围拒绝（不写就是缺省）。新增 `<bin> <service> --print-config` / `--check-config` / `--print-config-schema`。业务服务与 Mod 一样声明自己读的键，doctor 编译工程读回这些声明、新增 `config-reads` 检查，新生成的 game-demo 零 WARN（RR-20261006-40）。syncbus 只读 `syncbus.*` 段（`room` / `sync` 回退删除），生成的 `shutdown` 段不再写没人读的 `serve_wait_timeout`（RR-20261006-38）。详见 [§10 配置写法与启动校验](#配置写法与启动校验)。[方案](feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)
 
 ## 2026-10-06 配置数据规则在加载层强制、热更失败可见（B10 / C2，main，未发版）
 
@@ -500,8 +500,11 @@ Init 用 `app.LoadConfig` 按声明读；App 在任何 Mod Init 之前把本服�
 
 - `<bin> <service> --print-config` 打印这个服务全部 Mod（含业务 Mod）声明的键、缺省值与说明，可以直接当配置模板。
 - `<bin> <service> --check-config [-c 文件]` 只加载并检查配置（与启动前的检查相同），不启动任何 Mod；发布前用它检查真实的生产配置。
-- `roost project doctor` 的 `config-schema:<service>` 按生成器认识的框架声明检查工程里的开发配置、生产示例与 k8s Secret 示例：值不合声明、
-  框架段里出现没有任何声明的键（多半是拼错了）为 FAIL；键有声明但这个服务没有 Mod 读它（别的服务的段，或业务代码自己读的框架键）为 WARN。
+- `<bin> <service> --print-config-schema` 把同一份声明打印成 JSON 键表（doctor 读它）。
+- `roost project doctor` 的 `config-schema:<service>` 检查工程里的开发配置、生产示例与 k8s Secret 示例。声明取两处：生成器认识的框架声明，加上
+  工程能编译时 doctor `go build` 一次、对每个服务跑 `--print-config-schema` 读回的业务声明（业务服务与业务 Mod 的）。值不合声明、框架段或业务段里
+  出现没有任何声明的键（多半是拼错了）为 FAIL；键有框架声明但这个服务的进程里没有任何声明（别的服务的段）为 WARN。
+- `roost project doctor` 的 `config-reads` 扫工程源码：直接调 viper 的读方法或 `app.ConfigBool` 一类单键读取、声明了却没有任何代码读的字段为 FAIL。
 
 写自己的 Mod：
 
@@ -516,11 +519,22 @@ func (*ShopMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(shopConfig
 func (m *ShopMod) Init(cfg *viper.Viper) error  { return app.LoadConfig(cfg, &m.cfg) }
 ```
 
+业务服务自己的代码读的键写在服务上（A4 ① 收尾，[RR-20261006-40](bugfix/RR-20261006-40.md)）：`RegisterServer` 注册的 Service 实现同一个
+`ConfigSchema()`，App 把它与 Mod 的声明一起检查、一起打印（错误前缀 `service <名字>:`）。生成的 bootstrap 没有业务 Mod 的注册位，所以这是业务声明配置的地方；
+game-demo 的 `game/settings` 是写法示例（`activity.*`、`platform.*`、`sid` 由 game 服务声明，组件用 `settings.LoadActivity` / `LoadPlatform` / `Identity` 读）。
+本进程框架 Mod 的键不要在业务里再声明一遍（两份声明不同会启动失败），经 Mod 自己的读取函数拿（`kitsaga.StreamSettings`、`kitdataengine.EffectSettings`、
+`kitdataengine.EffectStreamRetention`）。
+
+```go
+func (*Service) ConfigSchema() app.ConfigSchema { return settings.Schema() }
+```
+
 tag：`config`（键名；嵌套结构体加前缀，匿名嵌入不加；以 `_` 结尾的前缀直接拼接，如 `config:"result_"` 下的 `ack_wait` 是 `result_ack_wait`）、
 `default`、`min` / `max`、`enum`（`|` 分隔）、`required:"true"`、`secret:"true"`、`example`（生成器写进配置文件的值）、`help`。
 跨键规则写成配置结构体的 `ValidateConfig(production bool) error`。`map[string]T` 字段声明成 `*` 段（例如 `saga.steps.<type>.<step>.timeout`），
-map 下没有声明的字段报错。`app.ConfigBool` / `ConfigDuration` / `ConfigInt` 只留给工具与测试读单个键；框架代码只经 `LoadConfig` 读配置，
-守卫测试（`app/config_declarations_promises_test.go`）拒绝直接调 viper 的读方法，也拒绝声明了却不读的字段。
+map 下没有声明的字段报错。`app.ConfigBool` / `ConfigDuration` / `ConfigInt` 只留给工具与测试读单个键；框架代码与生成工程的代码只经 `LoadConfig` 读配置，
+守卫测试（`app/config_declarations_promises_test.go`；生成工程由 codegen 的 `TestGeneratedProjectsReadConfigOnlyThroughDeclarations` 与 doctor 的 `config-reads`）
+拒绝直接调 viper 的读方法，也拒绝声明了却不读的字段。
 
 ### `env: production` 校验什么
 

@@ -299,5 +299,103 @@ func (m *ShopMod) Init(cfg *viper.Viper) error { return app.LoadConfig(cfg, &m.c
 
 - 生成器 Core 下限（`codegen/internal/roost/manifest.go` 的 `minimumVersions.Core` 与 `framework-compat.yml` 的 minimum 行）要在发 v1.23.0 时升到 v1.23.0：
   生成的 player TCP 接入层与 RPC 客户端 Mod 调用 `app.LoadConfig` / `app.SchemaOf`，v1.22.0 没有。本分支未改（发版步骤统一改）。
-- 业务 Mod 的声明只在编译后的进程里，doctor 只检查框架声明；业务键用 `--check-config` / `--print-config`。
-- “声明了没读”的守卫只扫 app 与 kit；生成工程里的业务 Mod 没有同样的守卫（`glsvet` 可以以后加提示）。
+- 业务 Mod 的声明只在编译后的进程里，doctor 只检查框架声明；业务键用 `--check-config` / `--print-config`。**（已由 §7 改为 doctor 编译工程、读回进程的声明。）**
+- “声明了没读”的守卫只扫 app 与 kit；生成工程里的业务 Mod 没有同样的守卫（`glsvet` 可以以后加提示）。**（已由 §7 补上：生成工程同样守住，doctor 读得到业务声明。）**
+
+## 7. 收尾：game-demo 的业务键有声明、生成工程同样守住（v1.23.0 发版前，2026-10-07）
+
+维护者要求交给 review 前不留能绕过检查的分支和 WARN。§6 留下两件事，登记为 [RR-20261006-40](../bug/RR-20261006-40.md)：
+
+1. 新生成的 game-demo 跑 `roost project doctor` 有一行 WARN：game 配置里的 `activity.groups_file`、`activity.key_prefix`、`platform.key_prefix`、
+   `platform.payment_secret` 是 game 的业务代码读的，没有任何 game 的声明（业务代码直接 `registry.Config().GetString(...)`，或经 kit 的
+   `platform.KeyPrefix(cfg)` 读一个本进程没有任何 Mod 声明的键）。这些键写错类型、拼错、漏写，App 启动检查都看不到，要到业务代码第一次读才暴露。
+2. “读了没声明 / 声明了没读”的守卫只扫 app 与 kit。修前新生成的 game-demo 有 16 处直接读 viper（game 读 activity.* / platform.* / sid /
+   server_type / saga.* / dataengine.*，生成器写的 `game/lifecycle/world_singleton.go` 读 sid）。
+
+### 7.1 doctor 怎么知道业务声明
+
+业务声明只有编译后的进程知道，这一点不变。§6 写的 `--check-config` 检查真实生产配置的值，但**不覆盖** WARN 这件事：进程不报“没有任何声明的键”
+（生成的配置会带别的进程才注册的 Mod 的键，例如只读 Mirror 的 `remote_entity.mirror.shutdown_timeout`，实测 game 的进程声明里没有它），生成工程的
+CI 也没有跑 `--check-config`（`make ci` 是 fmt / vet / glsvet / test / check-generated / config-check-all / id-check）。所以选：
+
+- **doctor 在工程里编译一次进程，对每个服务运行 `<bin> <service> --print-config-schema`**（新 flag，把这个服务的全部声明——App、全部 Mod、服务本身——打印成
+  JSON 键表），进程声明里框架快照没有的键就是业务声明。doctor 用它：①检查三份配置里业务键的值（类型 / 范围 / 枚举 / 必填 / 生产密钥）；②框架段里由业务
+  声明的键不再算“本服务没人读”；③只有业务声明用到的段里出现没有声明的键（拼错）为 FAIL。工程编译不过（`compile:go-list` 已 FAIL）时只做框架那一半；
+  能编译但进程读不出声明（`go build` 链接失败、`bootstrap.New()` 报错、两份声明冲突）时 `config-schema:<service>` 为 FAIL。
+- 没有改用 `go run . <svc> --check-config`：它只答“值对不对”，答不了“这个键有没有声明”；而且逐服务逐文件 `go run` 要编译多次。一次 `go build`
+  加每个服务一次 `--print-config-schema` 最简单。实测新生成的 game-demo 全量 doctor（strict）约 19s。
+
+### 7.2 业务代码的键由业务服务声明
+
+生成的 bootstrap 给业务服务注册的是框架 Mod，**没有业务 Mod 的注册位**（`services.<svc>.mods` 只认 kit 的 Mod 名）。要让 game 的业务代码有一个“业务 Mod”
+声明它读的键，要么给生成器加一个每个业务服务都有的 Mod 注册钩子（每个工程多一个文件、bootstrap 形状变化），要么让业务服务本身声明。选后者：
+`app` 把 `RegisterServer` 注册的 Service 与 Mod 同等对待——实现 `app.ModConfigSchema`（`ConfigSchema() app.ConfigSchema`）的服务，它的声明进 App 启动检查、
+`CheckServiceConfig`、`ServiceConfigSchema`（`--print-config`）与 `--print-config-schema`，错误前缀是 `service <名字>:`。写法与 kit Mod 一致：`app.SchemaOf` +
+`app.LoadConfig`。
+
+game-demo：
+
+| 位置 | 改动 |
+| --- | --- |
+| `demo/game/settings/settings.go.tmpl`（新） | `settings.Config`：嵌入 `app.ServiceIdentity`（与 App 的声明相同，Merge 不冲突），`activity.key_prefix` / `activity.groups_file`、`platform.key_prefix` / `platform.payment_secret`（全部 `required`，payment_secret 另加 `secret`），前缀的空白检查在 `Activity` / `Platform` 的 `ValidateConfig`；`Schema()`，以及 `Load` / `Identity` / `LoadActivity` / `LoadPlatform`（只读需要的部分，测试注册表只带 sid 也能用） |
+| `internal/service/game/service.go` | `func (*Service) ConfigSchema() app.ConfigSchema { return settings.Schema() }` |
+| `activity.go`、`playerowner.go`、`gm.go`、`spawner.go`、`purchase_drain.go`、`game/controllers/player/controller.go` | sid / server_type / activity.* / platform.* 经 `settings` 读；`purchase_drain` 不再经 kit 的 `platform.KeyPrefix` 读一个本进程没人声明的键；controller 的“payment_secret 为空”检查由 `required` 在启动时做 |
+| `gift_saga.go`、`level_up_mail.go`、`activity.go` | saga.* / dataengine.* 是本进程框架 Mod 的键，经那个 Mod 自己的声明读：新增 `kitsaga.StreamSettings(cfg)`、`kitdataengine.EffectSettings(cfg)`（按 Mod 的整份配置结构体 `LoadConfig`，与 Mod Init 读的同一份），删掉 demo 里手抄一份缺省值的 `sagaSettings` / `effectSettings` 读取 |
+| `activity_test.go` | 组文件拒绝用例的注册表补 `activity.key_prefix`（现在必填，与组文件一起在启动时检查） |
+| 生成器 `framework_services.go` | 生成的 `game/lifecycle/world_singleton.go` 经 `app.ServiceIdentity` + `app.LoadConfig` 读 sid（所有带 World 的工程） |
+
+### 7.3 生成工程的守卫
+
+“读了没声明 / 声明了没读”的实现从 app 的测试文件挪到叶子包 `internal/configschema/guard.go`（`GoPackages` / `UndeclaredReads` / `UnreadFields`，只依赖
+标准库，codegen 可以导入），app 的两个守卫测试改为调用它，判定不变。生成工程用同一份：
+
+- codegen `TestGeneratedProjectsReadConfigOnlyThroughDeclarations`（`codegen/internal/roost/config_reads_promises_test.go`）：game-demo、saga、configdata、
+  bare 四个夹具，加上全量渲染（game 模板 + 全部带配置的 Mod + player TCP + saga）的 Go 文件，逐包无直接读取，整个工程无没人读的声明字段（声明集中在
+  `game/settings`、由别的包读，所以“没读”按工程算）。
+- `roost project doctor` 新增 `config-reads`（FAIL）：对用户工程跑同一个检查。生成之后用户自己写的业务代码直接读 viper，doctor 同样点名——否则
+  这种读取既不在 App 启动检查里，也不在 `config-schema` 里。
+- codegen `TestDoctorReadsBusinessDeclarationsFromTheProcess`：game-demo 副本（roost-core replace 到本仓库、`go mod tidy`）经 `processConfigSchemas` 读回
+  进程声明，全部 `config-schema:*` 为 OK、game 有 4 个业务键；删掉服务的 `ConfigSchema` 之后同一行 WARN 回来。
+
+### 7.4 先红后绿
+
+修前（基线 `82dfe672`）：
+
+```text
+$ roost project doctor -root <新生成的 game-demo>
+WARN  config-schema:game   configs/service/config.game.yaml: no mod of game declares activity.groups_file, activity.key_prefix, platform.key_prefix, platform.payment_secret (another service's keys, or read by business code); configs/service/config.game.prod.example.yaml: …; deploy/k8s/base/secret.game.example.yaml: …
+```
+
+同一工程用 `configschema.UndeclaredReads` 扫（临时用例）：16 处直接读取——`game/controllers/player/controller.go:207`、`:218`，
+`game/lifecycle/world_singleton.go:20`，`internal/service/game/activity.go:103`、`:109`、`:115`、`:146`，`gift_saga.go:655`、`:658`、`:661`，`gm.go:150`，
+`level_up_mail.go:103`、`:106`、`:109`，`playerowner.go:115`，`spawner.go:186`。
+
+修后：新生成的 game-demo（replace 到本 worktree）`go build ./... && go vet ./... && go test ./...` 通过；`roost project doctor`（strict）退出 0，**零 WARN、零 FAIL**：
+
+```text
+OK    config-schema:game   3 file(s) match the declarations of every mod and the service (4 business key(s))
+OK    config-reads         66 package(s) read config only through declarations
+```
+
+变异（跑后还原）：
+
+| 变异 | 结果 |
+| --- | --- |
+| game-demo 副本里 gm.go 加 `registry.Config().GetString("gm.secret_knob")`、settings 加 `Forgotten int config:"forgotten"` | `TestGeneratedProjectConfigGuardCatchesDrift`：两个守卫各点名一处；doctor `config-reads` 为 FAIL 并点名 `internal/service/game/gm.go:` 与 `Forgotten (config:"forgotten")` |
+| 删掉 game 服务的 `ConfigSchema` | `TestDoctorReadsBusinessDeclarationsFromTheProcess`：`config-schema:game` 回到 WARN，点名那四个键 |
+| app 的 `serviceDeclarations` 不收服务的声明 | `TestServiceDeclarationsAreCheckedAndPrintedWithTheMods`：`CheckServiceConfig = mod bank: …`（缺 `service shop: config: shop.max_items must be at most 10000` 等两条），`--print-config-schema lacks shop.region` / `shop.max_items` |
+
+### 7.5 兼容
+
+线上未部署，不做兼容。
+
+- 新生成的 game-demo 多一个 `game/settings` 包；game 的配置少了任何一个 activity / platform 键现在在 App 启动检查时就拒绝（以前 activity.key_prefix 为空
+  要到 activity 启动、payment_secret 为空要到 controller 构造时才拒绝，两处的判空检查随之删除）。已生成工程是应用自有代码，不迁移。
+- 生成的 `world_singleton.go` 改用 `app.LoadConfig` 读 sid：`sid` 超出 int32 现在报错（以前截断）。
+- doctor：工程能编译时多一次 `go build` 与每个服务一次 `--print-config-schema`；新增 `config-reads` 检查，用户工程里直接读 viper 的代码会让 doctor FAIL。
+- `app`：服务的声明进启动检查；新 flag `--print-config-schema`；新 API `kitsaga.StreamSettings`、`kitdataengine.EffectSettings`。Core 下限照旧随 v1.23.0 升到 v1.23.0
+  （生成的 game-demo 用到这三个新 API）。
+
+### 7.6 验证（`GOWORK=off`）
+
+见 [RR-20261006-40 修复记录](../bugfix/RR-20261006-40.md)。

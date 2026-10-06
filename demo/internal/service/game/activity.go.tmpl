@@ -15,6 +15,7 @@ import (
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/rewards"
+	"{{MODULE}}/game/settings"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
@@ -99,20 +100,24 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 	if !ok || liveness == nil {
 		return nil, nil, fmt.Errorf("activity: capability %q not found; the activity's expected servers come from the App singleton lock, which needs singleton.enabled=true for this service", app.ModSingleton)
 	}
-	config := registry.Config()
-	gameSID := int32(config.GetInt("sid"))
+	// sid、server_type 与活动的两个键都经 game 服务的声明读（game/settings，A4 ①）。
+	identity, activity, err := settings.LoadActivity(registry)
+	if err != nil {
+		return nil, nil, fmt.Errorf("activity: %w", err)
+	}
+	gameSID := identity.Sid
 	if gameSID <= 0 {
 		return nil, nil, fmt.Errorf("activity: sid is %d; a server with no id cannot take part in an activity", gameSID)
 	}
 	// server_type 是 App 写进配置的本进程服务类型（同一部署的 game 进程跑同一个子命令，所以相同）；
 	// 用它查 Live，不写死 "game"——game 服务名由生成参数决定。
-	serverType := config.GetString("server_type")
+	serverType := identity.ServerType
 	if serverType == "" {
 		return nil, nil, errors.New("activity: server_type is empty; the App writes it before Init")
 	}
 	// 活动组在任何远端调用之前确定：组文件不合格、本服不在任何组里，都在这里点名拒绝（C4，取代
 	// RR-20261005-01 对 activity.game_sids 的检查）。
-	group, err := activityGroup(config.GetString("activity.groups_file"), gameSID)
+	group, err := activityGroup(activity.GroupsFile, gameSID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -143,13 +148,10 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 	runner := &ActivityRunner{
 		coordinator: coordinator, routing: routing, liveness: liveness, serverType: serverType,
 		mailer: mailer, nest: nestClient,
-		redis: redisClient, prefix: config.GetString("activity.key_prefix"),
+		redis: redisClient, prefix: activity.KeyPrefix,
 		worldID: worldID, gameSID: gameSID,
 		groupID: group.ID, candidates: group.GameSIDs,
 		now: app.BusinessClock(registry).Now,
-	}
-	if runner.prefix == "" {
-		return nil, nil, errors.New("activity: activity.key_prefix is empty; the game reads the coordinator's keyspace to keep its own board beside it")
 	}
 	if err := runner.bindGroup(ctx); err != nil {
 		return nil, nil, err
@@ -562,7 +564,10 @@ func startActivityPhaseConsumer(ctx context.Context, registry *app.Registry, run
 	if !ok || mongoClient == nil {
 		return nil, fmt.Errorf("activity phase: capability %q not found", mods.ModMongo)
 	}
-	database, prefix, stream := effectSettings(registry)
+	database, prefix, stream, err := effectSettings(registry)
+	if err != nil {
+		return nil, fmt.Errorf("activity phase: %w", err)
+	}
 	inbox, err := nestwal.NewMongoEffectInbox(mongoClient, database, activityPhaseInbox)
 	if err != nil {
 		return nil, fmt.Errorf("activity phase: %w", err)

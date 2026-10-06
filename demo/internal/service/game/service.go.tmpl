@@ -9,6 +9,7 @@ import (
 	world "{{MODULE}}/game/entities/world"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	migrations "{{MODULE}}/db/migrations"
+	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/skills"
 	accessplayer "{{MODULE}}/internal/access/player"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
@@ -42,6 +43,13 @@ type Service struct {
 
 func New() *Service                    { return &Service{} }
 func (*Service) Name() app.ServiceName { return app.ServiceName("{{GAME_SERVICE}}") }
+
+// ConfigSchema declares the keys this service's own code reads (game/settings):
+// the App checks them before any Mod starts, together with every Mod's, and
+// `--print-config` / `roost project doctor` know about them. Without it the
+// activity.* and platform.* sections in this service's config are keys no
+// declaration owns (maintainer decision A4 ①).
+func (*Service) ConfigSchema() app.ConfigSchema { return settings.Schema() }
 
 // Init runs after every Mod has started, so the Entity runtime, JetStream,
 // Mongo and the mail client are all up. The World — this process's one
@@ -299,3 +307,4 @@ func (s *Service) Shutdown(ctx context.Context) error {
 var errServiceStopping = errors.New("{{GAME_SERVICE}}: this process is stopping; reconnect")
 
 var _ app.Service = (*Service)(nil)
+var _ app.ModConfigSchema = (*Service)(nil)

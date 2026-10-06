@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/clock"
@@ -89,6 +90,9 @@ func (a *App) RegisterServer(serverType ServiceName, svc Service, mods ...Mod) *
 			if print, _ := cmd.Flags().GetBool("print-config"); print {
 				return a.printConfig(serverType, cmd.OutOrStdout())
 			}
+			if print, _ := cmd.Flags().GetBool("print-config-schema"); print {
+				return a.printConfigSchema(serverType, cmd.OutOrStdout())
+			}
 			if check, _ := cmd.Flags().GetBool("check-config"); check {
 				if _, err := a.loadServiceConfig(serverType); err != nil {
 					return err
@@ -103,6 +107,7 @@ func (a *App) RegisterServer(serverType ServiceName, svc Service, mods ...Mod) *
 	// 不启动任何 Mod，用来在发布前检查真实的生产配置；--print-config 打印本服务全部声明（含业务 Mod）生成的配置段。
 	cmd.Flags().Bool("check-config", false, "load and check the config against every mod's declaration, then exit")
 	cmd.Flags().Bool("print-config", false, "print every config key this service's mods declare, with defaults and help, then exit")
+	cmd.Flags().Bool("print-config-schema", false, "print this service's config declarations (app, mods and the service itself) as JSON, then exit; roost project doctor reads it")
 	a.rootCmd.AddCommand(cmd)
 	return a
 }
@@ -142,7 +147,7 @@ func (a *App) loadServiceConfig(serverType ServiceName) (string, error) {
 	if a.rootCmd.Flags().Changed("sid") {
 		a.cfg.Set("sid", sid)
 	}
-	settings, err := checkConfig(a.cfg, a.serviceMods(serverType))
+	settings, err := checkConfig(a.cfg, a.serviceDeclarations(serverType))
 	if err != nil {
 		return "", err
 	}
@@ -157,6 +162,19 @@ func (a *App) printConfig(serverType ServiceName, out io.Writer) error {
 	}
 	_, err = io.WriteString(out, schema.ReferenceYAML())
 	return err
+}
+
+// printConfigSchema 把本服务的全部声明（含业务服务与业务 Mod 的）打印成 JSON：键表的每一项是 configschema.Key。
+// 业务声明只有编译后的进程知道，`roost project doctor` 在工程里编译并运行它、读这份输出，
+// 才能按业务声明检查工程里的配置文件（A4 ① 收尾）。
+func (a *App) printConfigSchema(serverType ServiceName, out io.Writer) error {
+	schema, err := a.ServiceConfigSchema(serverType)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(schema.Keys)
 }
 
 func (a *App) run(serverType ServiceName) (runErr error) {

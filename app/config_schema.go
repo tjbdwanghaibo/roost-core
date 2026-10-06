@@ -31,9 +31,33 @@ import (
 // ConfigSchema 是一组配置键的声明，Mod 的 ConfigSchema 方法返回它。
 type ConfigSchema = configschema.Schema
 
-// ModConfigSchema 由声明了配置的 Mod 实现。App 启动时合并本服务全部 Mod 的声明检查配置，`--print-config` 按它打印配置段。
+// ModConfigSchema 由声明了配置的 Mod 实现；业务服务（RegisterServer 注册的 Service）读配置时同样实现它。
+// App 启动时合并 App 自己、本服务全部 Mod 与服务本身的声明检查配置，`--print-config` 按它打印配置段，
+// `--print-config-schema` 把它打印成 JSON（`roost project doctor` 读它，见 printConfigSchema）。
+//
+// 业务服务的声明（维护者决定 A4 ① 收尾，2026-10-07）：生成的 bootstrap 给业务服务注册的是框架 Mod，没有业务 Mod
+// 的位置，业务代码读的键（game-demo 的 activity.* / platform.* 等）就写在服务上，与 Mod 同样两行：
+//
+//	func (*Service) ConfigSchema() app.ConfigSchema { return app.SchemaOf(gameConfig{}) }
+//	// Init 里：app.LoadConfig(registry.Config(), &s.cfg)
 type ModConfigSchema interface {
 	ConfigSchema() ConfigSchema
+}
+
+// configDeclaration 是一份声明和它的主人（Mod 或业务服务），检查错误按主人点名。
+type configDeclaration struct {
+	owner  string
+	schema ConfigSchema
+}
+
+func modDeclarations(mods []Mod) []configDeclaration {
+	var out []configDeclaration
+	for _, mod := range mods {
+		if declared, ok := mod.(ModConfigSchema); ok {
+			out = append(out, configDeclaration{owner: "mod " + string(mod.Name()), schema: declared.ConfigSchema()})
+		}
+	}
+	return out
 }
 
 // SchemaOf 返回配置结构体（值或指针）的声明。声明写错（tag 解析不了、缺省值超出范围）是编程错误，panic。
@@ -54,30 +78,25 @@ func CheckConfig(cfg *viper.Viper, mods ...Mod) error {
 	if cfg == nil {
 		return errors.New("config: viper is nil")
 	}
-	_, err := checkConfig(cfg, mods)
+	_, err := checkConfig(cfg, modDeclarations(mods))
 	return err
 }
 
-func checkConfig(cfg *viper.Viper, mods []Mod) (appConfig, error) {
+func checkConfig(cfg *viper.Viper, declarations []configDeclaration) (appConfig, error) {
 	var settings appConfig
 	errs := unjoinErrors(LoadConfig(cfg, &settings))
 	schemas := []ConfigSchema{AppConfigSchema()}
 	source := viperSource{cfg}
 	production := isProductionServiceConfig(cfg)
-	for _, mod := range mods {
-		declared, ok := mod.(ModConfigSchema)
-		if !ok {
-			continue
-		}
-		schema := declared.ConfigSchema()
-		schemas = append(schemas, schema)
-		for _, err := range schema.Check(source, production) {
-			errs = append(errs, fmt.Errorf("mod %s: %w", mod.Name(), err))
+	for _, declaration := range declarations {
+		schemas = append(schemas, declaration.schema)
+		for _, err := range declaration.schema.Check(source, production) {
+			errs = append(errs, fmt.Errorf("%s: %w", declaration.owner, err))
 		}
 	}
-	// 没有任何 Mod 声明的键（拼错的键名）不在这里报：生成的配置会带别的进程才注册的 Mod 的键（例如只读 Mirror 的
-	// 停机预算），业务代码也会读框架段里的键（game-demo 读 activity / platform 的键前缀），进程看不出哪些是笔误。
-	// 这件事由 doctor 的 config-schema 检查按生成器认识的全部声明判断。
+	// 没有任何声明的键（拼错的键名）不在这里报：生成的配置会带别的进程才注册的 Mod 的键（例如只读 Mirror 的
+	// 停机预算），进程看不出哪些是笔误。这件事由 doctor 的 config-schema 检查判断：它按生成器认识的全部框架声明，
+	// 加上从本进程 --print-config-schema 读到的业务声明（业务服务读的键由服务自己声明，A4 ① 收尾）。
 	if _, err := configschema.Merge(schemas...); err != nil {
 		errs = append(errs, err)
 	}
@@ -88,21 +107,31 @@ func checkConfig(cfg *viper.Viper, mods []Mod) (appConfig, error) {
 // server_type / sid）。生成器的快照（kit/internal/configschemagen）与 doctor 用它。
 func AppConfigSchema() ConfigSchema { return SchemaOf(appConfig{}) }
 
-// CheckServiceConfig 用本 App 给 serverType 注册的全部 Mod（共享 + 服务专属）检查 cfg，与 run 启动前做的一样。
+// CheckServiceConfig 用本 App 给 serverType 注册的全部 Mod（共享 + 服务专属）与服务本身的声明检查 cfg，
+// 与 run 启动前做的一样。
 func (a *App) CheckServiceConfig(serverType ServiceName, cfg *viper.Viper) error {
-	_, err := checkConfig(cfg, a.serviceMods(serverType))
+	_, err := checkConfig(cfg, a.serviceDeclarations(serverType))
 	return err
 }
 
-// ServiceConfigSchema 返回 serverType 的全部声明（App 自己的加上全部 Mod 的），`--print-config` 用它。
+// ServiceConfigSchema 返回 serverType 的全部声明（App 自己的、全部 Mod 的与服务本身的），`--print-config` 用它。
 func (a *App) ServiceConfigSchema(serverType ServiceName) (ConfigSchema, error) {
 	schemas := []ConfigSchema{AppConfigSchema()}
-	for _, mod := range a.serviceMods(serverType) {
-		if declared, ok := mod.(ModConfigSchema); ok {
-			schemas = append(schemas, declared.ConfigSchema())
-		}
+	for _, declaration := range a.serviceDeclarations(serverType) {
+		schemas = append(schemas, declaration.schema)
 	}
 	return configschema.Merge(schemas...)
+}
+
+// serviceDeclarations 是 serverType 的全部 Mod 与服务本身的声明。
+func (a *App) serviceDeclarations(serverType ServiceName) []configDeclaration {
+	declarations := modDeclarations(a.serviceMods(serverType))
+	if entry, ok := a.services[serverType]; ok {
+		if declared, ok := entry.svc.(ModConfigSchema); ok {
+			declarations = append(declarations, configDeclaration{owner: "service " + string(serverType), schema: declared.ConfigSchema()})
+		}
+	}
+	return declarations
 }
 
 func (a *App) serviceMods(serverType ServiceName) []Mod {

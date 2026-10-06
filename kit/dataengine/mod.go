@@ -538,6 +538,18 @@ func EffectStreamRetention(cfg *viper.Viper) (stream string, maxAge time.Duratio
 	return settings.Effects.Stream, settings.Effects.MaxAge, nil
 }
 
+// EffectSettings 按 DataEngine Mod 的声明（整份 dataengine.*，与 Mod Init 读的同一个结构体）返回业务订阅效果流
+// 要用的三样：效果收件箱所在的库（dataengine.database）、主题前缀（去掉首尾点，与 Mod 发布时相同）与流名。
+// 业务代码（game-demo 的升级邮件、活动阶段消费者、赠礼 saga）用它，不直接读 viper、不另抄一份缺省值
+// （A4 ① 收尾：生成工程同样守住“读配置只经声明”）。
+func EffectSettings(cfg *viper.Viper) (database, subjectPrefix, stream string, err error) {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return "", "", "", fmt.Errorf("dataengine: %w", err)
+	}
+	return settings.Database, settings.Effects.subjectPrefix(), settings.Effects.Stream, nil
+}
+
 var _ app.Mod = (*Mod)(nil)
 var _ app.ModStopperWithContext = (*Mod)(nil)
 var _ app.ModStopBudgetProvider = (*Mod)(nil)

@@ -76,7 +76,7 @@ func TestGeneratedConfigsMatchDeclarations(t *testing.T) {
 			if !ok {
 				continue
 			}
-			bad, unread, err := checkServiceConfigText(body.Body, file.secret, file.production, schema, all)
+			bad, unread, err := checkServiceConfigText(body.Body, file.secret, file.production, schema, configschema.Schema{}, all)
 			if err != nil {
 				t.Fatalf("%s: %v", file.rel, err)
 			}
@@ -116,7 +116,7 @@ func TestGeneratedConfigCheckCatchesDrift(t *testing.T) {
 		if tc.edited == dev {
 			t.Fatalf("%s: the edit did not apply; the generated mail config changed shape:\n%s", tc.name, dev)
 		}
-		bad, _, err := checkServiceConfigText([]byte(tc.edited), false, false, schema, allFrameworkConfigSchema())
+		bad, _, err := checkServiceConfigText([]byte(tc.edited), false, false, schema, configschema.Schema{}, allFrameworkConfigSchema())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -168,14 +168,16 @@ func TestPlayerTCPDeclarationAgreesWithKit(t *testing.T) {
 }
 
 // doctor 的 config-schema 检查对新生成的 game-demo（含 demo 模板自己改过的配置：GM 管理端点、player TCP 打开）
-// 不报失败。
+// 不报失败。这里只按框架声明检查（不编译工程）：game 的业务代码读的 activity.* / platform.* 在这一半里仍是
+// “本服务没有 Mod 声明”的警告；完整的 doctor 编译工程、读回 game 服务自己的声明之后零警告
+// （TestDoctorReadsBusinessDeclarationsFromTheProcess）。
 func TestGameDemoConfigsPassTheDoctorConfigCheck(t *testing.T) {
 	root := copyOfNewProject(t, "game-demo")
 	m, err := LoadManifest(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	items := checkConfigDeclarations(root, m)
+	items := checkConfigDeclarations(root, m, nil)
 	if len(items) == 0 {
 		t.Fatal("no config-schema items")
 	}

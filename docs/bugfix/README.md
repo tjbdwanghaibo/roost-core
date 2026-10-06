@@ -6,6 +6,13 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 B3 ③ / A4 ① 收尾（`gaps`），未发版。** 能力表并入 Host 接口、准入不再有跳过分支；业务服务声明自己读的键，doctor 读回进程声明，生成工程同样守住“读配置只经声明”。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-40](RR-20261006-40.md) | 业务服务实现 `app.ModConfigSchema`（game-demo 的 `game/settings`）；doctor 编译工程读 `--print-config-schema`、新增 `config-reads`；守卫实现移到 `internal/configschema/guard.go`，codegen 对生成工程同样检查 | 已修复、声明场景验证，未发版 |
+| [RR-20261006-39](RR-20261006-39.md) | `HostCapabilityProvider` 并入 `skill.Host`，`RecordingHost` / `ReplayHost` 转发，Runtime 准入删掉“未实现则跳过” | 已修复、声明场景验证，未发版 |
+
 **10-07 A4 ① 每个 Mod 声明自己的配置（`a4s`），未发版。** 生成器的配置段从 Mod 的声明渲染，生成配置与声明不一致时 codegen 测试变红，[方案](../feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)。
 
 | 编号 | 修复 | 状态 |
