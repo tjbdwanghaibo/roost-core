@@ -163,7 +163,7 @@ if errors.Is(err, versionstore.ErrOutcomeUnknown) {
 
 ## 10. 实施状态
 
-已实施（分支 `a2t`，提交号见 DECISIONS-PENDING 第十三轮“A2③”行），未发版。
+已实施（`6b3a0eb9`，分支 `a2t`），未发版。
 
 - 代码：`versionstore/write_token.go`（令牌、信封头、判定、`settle`、`Resume`、`UnknownOutcomeError`、指标）；`versionstore/redis_store.go`（`Create` / `Update` / `DeleteIf` 走 `settle`，`WriteTokenHistory`，严格解码）；`versionstore/versionstore.go`（契约注释）；`redis/cas.go`（RR-20261006-35）。Lua 未改。调用方未改。
 - 红（修前 `66d72a33`，替身与真实 Redis 单机 / Cluster 都红）：
