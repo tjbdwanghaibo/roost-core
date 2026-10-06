@@ -101,3 +101,4 @@ TOOL（pretag、source-head-check、冲突标记门禁、mirror-local.sh、示�
 - drill3 已合（`3b06c66c`）：RR-27（直方图分位数夹到观测范围、阈值失败点明实际值）、-28（生产校验认 cluster_addrs、accountctl -redis-cluster、run.sh）、-29（Contribute 自开窗）；单机 Cluster 演练通过。影响 OWN-3（guide ~426）、APP-1（~146、E08 ~854）、APP-5、CFG-5、NONCORE-43、E08/E09 summary 行。
 - 进行中：nats/driver 自持“已关闭”状态（维护者方向决定 A，`wt-natsstate`）→ DRV-5。待维护者：skill 宿主撤除失败 A/B；生成配置的 key_prefix 默认带 hash tag（便于切 Cluster）是否要做。
 - 维护者：skill 撤除失败由 Runtime 重试（`wt-skretry` 实施中）；skill “进程”全量改名为 Spawn（衍生物），撤除重试合入后实施。分册 3 的 SKILL 全部条目与作者文档要随改名同步。
+- natsstate 已合（`f0de827a`、`e47d0cd6`）：nats/driver 自持关闭状态（`Client.state.closed` + `admit()`），守卫按导出方法表逐个断言；旧实现上守卫抓出 Drain / DrainWithContext / Unsubscribe 漏网。DRV-5 源码表两行过时（assembly.go `closed` 字段、Publish 同时 Is gonats 原错误）；RR-24/26 在分册 2 补条目时按新判据写。
