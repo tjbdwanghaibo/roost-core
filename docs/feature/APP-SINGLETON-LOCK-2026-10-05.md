@@ -243,6 +243,7 @@ func (r *RuntimeFailure) OnFail(hook func(error))
 - kit 的 Nest Mod 在 `Provide` 里构造 `NestMgr` 之后登记 `failure.OnFail(mgr.Fence)`。`NestMgr.Fence` 只拿一把锁、设置错误、通知 dispatcher（`nest/nest.go:227-240`），满足“快速、不阻塞”。
 - 效果：失锁、DataEngine fatal、Remote fatal 走同一条路，都会立即拒绝新的和排队中的 Nest 派发，然后 `run` 执行 `Service.Shutdown`（game-demo 在这里关闭全部连接）与 Mod 停机。DataEngine `onFatal` 里显式的 `Fence` 保留不动（幂等），不在本次改。RemoteEntity fatal 从此也会围栏 Nest，这是一处行为变化，方向是更安全的 fail-stop，列入 CHANGELOG。
 - 没有 App 级准入开关，也不向业务暴露 `Held()`。App 注册一个 `singleton` 健康检查（Held 为 OK，窗口内的 Unknown 为 Degraded，Lost 为 Fail，附带持有者的值），只供运维观察；它只进 `/readyz`（`/healthz` 是无条件的存活应答，`kit/ops/ops_mod.go:179-185`），不会触发存活探针重启。
+  - **更正（2026-10-06，维护者决定 D1）**：Degraded 算就绪。续期结果未知的窗口里 `/readyz` 仍返回 200，响应体 `degraded_dependencies` 列出 `singleton`；只有 Lost / 未持有（Fail）让它 503（[方案](D1-READYZ-DEGRADED-IS-READY-2026-10-06.md)）。
 
 ---
 

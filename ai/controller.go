@@ -59,6 +59,10 @@ func NewController(hooks ControllerHooks) *Controller { return &Controller{hooks
 // 动作也会被一并结束，而且切换期间的结束通知不送达策略：策略应在第一次 Tick 里发起
 // 动作，不要在 Init 里发起（BehaviorStrategy.Init 只重置树）。在策略回调里调用时延后到
 // 回调返回后执行并返回 nil（见 Controller 的说明）。
+//
+// EndAllAction 不是清场：结束动作时 OnEnded 推进的任务（如 PlanMission 的 OnFail 下一步）
+// 会在 EndAllAction 返回后启动新动作。切换策略要连任务一起清掉时，EndActions 里先
+// ActionList.EndCurMission 再 EndAllAction（actionflow 包说明“清场顺序”）。
 func (c *Controller) SetStrategy(next Strategy) error {
 	if c == nil {
 		return ErrStrategyInit
@@ -149,7 +153,10 @@ func (c *Controller) OnActionEnd(id int64, kind coreflow.ActionKind, reason core
 	}
 }
 
-// OnMissionEnd 把一次任务结束交给当前策略。冻结期间照常送达（见 notifiable）。
+// OnMissionEnd 把一次任务结束交给当前策略。冻结期间照常送达（见 notifiable）。通常接在
+// MissionRunner 的 OnEnded 钩子上：策略在这里调 ActionList.SetMission 时，MissionRunner 把它
+// 延后到本次结束做完之后执行并返回 nil（之前返回 taskflow 的 ErrReentrantMutation），执行时
+// 的错误经 MissionRunner 的 OnError 报告。
 func (c *Controller) OnMissionEnd(mission coreflow.Mission, reason coreflow.ActionReason) {
 	if !c.notifiable() {
 		return

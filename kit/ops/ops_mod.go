@@ -237,6 +237,12 @@ func (m *OpsMod) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// handleReady 是 readiness：就绪位为真且没有 checker 为 Fail 时 200，否则 503。
+//
+// Degraded 算就绪（维护者决定 D1，2026-10-06）：有降级项时仍返回 200、`ok` 为 true，
+// 用 `degraded: true` 与 `degraded_dependencies`（每项的 name / status / message / error）标出，
+// `dependencies` 照样列出全部 checker。之前 Degraded 与 Fail 一样 503，k8s 会把单副本服务唯一的
+// endpoint 摘掉，entitysync 在 80% 容量边界上还会来回翻转。/healthz 不受影响。
 func (m *OpsMod) handleReady(w http.ResponseWriter, r *http.Request) {
 	deps := health.Snapshot{OK: true}
 	if m.health != nil {
@@ -247,14 +253,20 @@ func (m *OpsMod) handleReady(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		status = http.StatusServiceUnavailable
 	}
+	degraded := deps.DegradedResults()
+	if degraded == nil {
+		degraded = []health.Result{}
+	}
 	writeJSON(w, status, map[string]any{
-		"ok":             ok,
-		"service":        m.service,
-		"sid":            m.sid,
-		"message":        m.readyMessage(),
-		"server_time_ms": clock.UnixMilli(),
-		"metrics":        m.metricCount(),
-		"dependencies":   deps.Results,
+		"ok":                    ok,
+		"degraded":              deps.Degraded,
+		"degraded_dependencies": degraded,
+		"service":               m.service,
+		"sid":                   m.sid,
+		"message":               m.readyMessage(),
+		"server_time_ms":        clock.UnixMilli(),
+		"metrics":               m.metricCount(),
+		"dependencies":          deps.Results,
 	})
 }
 

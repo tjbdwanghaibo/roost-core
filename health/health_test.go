@@ -49,3 +49,24 @@ func TestRegistrySnapshotRecoversCheckerPanic(t *testing.T) {
 		t.Fatalf("panic error = %q, want panic reason", got.Error)
 	}
 }
+
+// D1（维护者 2026-10-06 第五轮决定）：Degraded 算可用，只置 Degraded；Fail 与未知状态让 OK 为假。
+func TestRegistrySnapshotCountsDegradedAsAvailable(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register("mongo", CheckerFunc(func(context.Context) Result { return Result{Status: StatusOK} }))
+	reg.Register("singleton", CheckerFunc(func(context.Context) Result {
+		return Result{Status: StatusDegraded, Message: "renewal outcome unknown"}
+	}))
+	snap := reg.Snapshot(context.Background())
+	if !snap.OK || !snap.Degraded {
+		t.Fatalf("snapshot with a degraded checker = ok %v degraded %v, want ok and degraded", snap.OK, snap.Degraded)
+	}
+	if got := snap.DegradedResults(); len(got) != 1 || got[0].Name != "singleton" || got[0].Message != "renewal outcome unknown" {
+		t.Fatalf("DegradedResults = %+v", got)
+	}
+
+	reg.Register("custom", CheckerFunc(func(context.Context) Result { return Result{Status: "warn"} }))
+	if snap := reg.Snapshot(context.Background()); snap.OK || !snap.Degraded {
+		t.Fatalf("unknown status = ok %v degraded %v, want not ok (treated as fail), still degraded", snap.OK, snap.Degraded)
+	}
+}

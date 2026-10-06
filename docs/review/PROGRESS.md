@@ -60,7 +60,7 @@
 | --- | --- | --- |
 | Group 停止预算 | `lifecycle.ManagerGroup` 无 ctx、无生产调用方，骨架不适用（注释写明）；App 停机路径上的 hook 不受预算 | NC-231 |
 | Ops | bind 失败、hijack（不适用）、权限、关闭（A3 骨架套 OpsMod，绿）、命令期限 / 写超时 | NC-230；N02 O1 落实；O-P1 / O-P2 观察 |
-| Health | Degraded / Fail → `/readyz` / `/healthz` 映射与 k8s 探针核对，与文档一致 | DECISIONS-PENDING D1（Degraded 是否算就绪，含 n01s4 O2）；O-H1 |
+| Health | Degraded / Fail → `/readyz` / `/healthz` 映射与 k8s 探针核对，与文档一致 | DECISIONS-PENDING D1（Degraded 是否算就绪，含 n01s4 O2）——**已实施：Degraded 算就绪**（[方案](../feature/D1-READYZ-DEGRADED-IS-READY-2026-10-06.md)）；O-H1 |
 | n01s4 余项 | O1 是缺陷；O7 在 NC-193 后无残余；O8 维持现状（§3.4） | NC-232 |
 | N14 O3 / O4 | Redis Mod 停止重试、remoteentity 停止日志 | NC-233、NC-234 |
 

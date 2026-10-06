@@ -1,6 +1,16 @@
 // Package taskflow defines the stable action and mission contracts used by
 // game runtimes. Implementations must be externally serialized by the owning
 // entity; taskflow deliberately does not add a second lock domain.
+//
+// 回调里的变更延后执行：ActionRunner（B7）与 MissionRunner（2026-10-06 第五轮决定）在
+// 动作 / 任务回调和 runner 钩子运行期间收到的变更不立即生效，进各自的延后命令队列，最外层
+// 调用返回前按发起顺序执行；Deferring() 报告此刻是否会被延后。队列与执行步数有界
+// （ErrDeferredQueueFull / ErrDeferredRunaway），回调 panic 一律恢复成错误。
+//
+// 清场顺序：ActionRunner.EndAll 期间回调发起的动作（例如 PlanMission 在 OnFail 里推进到
+// 下一步）会在 EndAll 返回后启动，EndAll 本身不是清场。要让实体什么都不再运行，先结束当前
+// 任务（ActionList.EndCurMission / MissionRunner.EndCurMission——任务结束后送来的动作结束
+// 被忽略，不再推进），再调 EndAll（EndAllAction）。
 package actionflow
 
 type ActionKind uint8

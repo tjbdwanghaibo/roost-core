@@ -203,6 +203,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-06 第五轮决定 D1 / MissionRunner / EndAll（分支 `d1mr`）：`/readyz` 只在 Fail 或就绪位为假时 503，Degraded 返回 200 并在 `degraded_dependencies` 里标出（聚合规则在 `health.Snapshot`，[方案](feature/D1-READYZ-DEGRADED-IS-READY-2026-10-06.md)，T-267）；`MissionRunner` 回调里的变更进延后队列、判定集中在 `submit`，与 ActionRunner 一致（有界、回调 panic 恢复）；EndAll 不是清场，先 EndCurMission 再 EndAll，写进文档并用例钉住（[B7 方案 §7 / §8](feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md)）。**已实施，未发版**（提交号见 DECISIONS-PENDING 第五轮）。
+
 10-06 N11～N13 留项与小防护（revleft）：[NC-260](bug/RR-20261005-NC-260.md)～[NC-270](bug/RR-20261005-NC-270.md)（P3，NC-270 潜伏）**已修复、声明场景验证，未发版**；[本轮](review/REVIEW-2026-10-06-revleft.md)、[证据](bugfix/evidence/noncore-bugfix-20261006-revleft/README.md)。停机“再调用返回 nil”在第三方 Close 上第三次被打破（etcd → redis → mongo，NC-260），建议并入 A2 驱动契约表；行为收紧：robot Call 写阻塞按 ctx 返回、seq 非 0 无等待者的包丢弃；日志轮转失败续写上一分片；loadtest Duration 到期记 `duration`；Shutdown 后 TaskPool 不能再 Start。新增根包门禁 `TestNoMergeConflictMarkersInTrackedFiles`。N11 O6 / O7 / O9、N13 O10 待维护者（DECISIONS-PENDING D-L1～D-L4）。
 
 10-06 N06 S5 Saga 剩余项（revn06s5，未发版）：NC-250（P3）——定义缺失 fence 时退避中的步骤没有关闭为放弃，之后生效的成功被静默丢弃；截止 / 人工 Compensate / 定义缺失三个出口改用同一个 `abandonedOperation`。协调器租约接管后的晚到 Apply、outbox supersede 与 Ack 未知、真实 NATS + Mongo 两进程 SIGKILL 恢复（60/60 完成，恢复时间被遗留 Mongo 事务锁拉到约 60s 起）无缺陷。方向判断（“离开当前步骤”收成一个转移、Mongo 步骤纳入收件箱契约、只接收正在等的尝试的失败）与 O-S5-1 / O-S5-2 待维护者。[本轮](review/REVIEW-2026-10-06-n06s5.md)
@@ -219,7 +221,7 @@ bash scripts/test-remote-matrix.sh
 
 10-06 B2（维护者决定）：Remote 快照缓存以共享 L2 为水位权威、L1 只缓存 L2 确认过的版本并带确认时刻；`remote_entity.cached_max_staleness` 成为 Cached / Monotonic 的陈旧上限（超过即重新确认：读 L2、补写、回源权威）；复制消息带发布时刻，DeliverAll 重放的过老快照不再被接受（N05 O5 在真实 JetStream 上先红后绿）；墓碑侧表 / Superseded / FatalRemoteError / L1 冷预查四处删除。组合矩阵在真实 Redis 与自建 Redis Cluster 上各 20 格通过。**已实施，未发版**，[方案与实施](feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md)。
 
-10-06 B7（维护者决定，方向 b）：actionflow `ActionRunner` 回调里的变更进延后命令队列、最外层调用按发起顺序执行，判定集中在 `submit` 一处，删掉 U-0100 / NC-122 的六处事后比对；回调里的 Start / Enqueue 返回已分配 ID（`Deferring()`），队列有界（`MaxDeferredCommands`）、互相触发截停（`MaxDeferredSteps`）；`MissionRunner` 未改。**已实施，未发版**（`a9b7075b`，[方案与实施](feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md)）。
+10-06 B7（维护者决定，方向 b）：actionflow `ActionRunner` 回调里的变更进延后命令队列、最外层调用按发起顺序执行，判定集中在 `submit` 一处，删掉 U-0100 / NC-122 的六处事后比对；回调里的 Start / Enqueue 返回已分配 ID（`Deferring()`），队列有界（`MaxDeferredCommands`）、互相触发截停（`MaxDeferredSteps`）；`MissionRunner` 未改（第五轮已改为延后队列，见上）。**已实施，未发版**（`a9b7075b`，[方案与实施](feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md)）。
 
 10-06 B3 ①②（维护者决定）：skill `lower.go` 的名字查找经唯一入口 `resolveName`，查不到返回 `LOWER_UNRESOLVED` 编译错误、不交出 Program（类型检查之外的第二道防线，回归 `skill/lower_lookup_promises_test.go` 对全部种子逐表删条目）；phase 事件派发表单一来源 `skill/phase_events.go`。**已实施，未发版**（[方案与实施](feature/B3-SKILL-LOWER-FAILFAST-2026-10-06.md)）。
 

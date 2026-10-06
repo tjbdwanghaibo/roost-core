@@ -554,7 +554,8 @@ func (l *singletonLock) release(deadline time.Time) {
 }
 
 // checkHealth 是 singleton 健康检查（只进 /readyz）：Held 为 OK，窗口内的 Unknown 为 Degraded，
-// Lost 与尚未持有为 Fail。
+// Lost 与尚未持有为 Fail。Degraded 算就绪（维护者决定 D1）：续期结果未知的窗口里 /readyz 仍返回
+// 200，响应体 degraded_dependencies 列出本项与剩余窗口；失锁 / 未持有的 Fail 才让它 503。
 func (l *singletonLock) checkHealth(context.Context) health.Result {
 	status := l.snapshot()
 	switch status.state {

@@ -164,18 +164,25 @@ func TestActionRunnerRefusesInvalidConfigUnknownGroupsAndExhaustedIDs(t *testing
 	}
 }
 
+// reentrantMission 在自己的 Start 里再调 StartMission。MissionRunner 改为延后队列（第五轮
+// 决定）之后，这次调用返回 nil、回调返回前不构建也不替换，外层启动做完后再按序执行。
 type reentrantMission struct {
 	runnerTestMission
-	runner   *MissionRunner
-	innerErr error
+	runner       *MissionRunner
+	innerErr     error
+	innerCurrent Mission
+	builtAtCall  int
+	built        *int
 }
 
 func (m *reentrantMission) Start(ctx *MissionContext, param any) error {
 	m.innerErr = m.runner.StartMission(2, nil)
+	m.innerCurrent = m.runner.CurMission()
+	m.builtAtCall = *m.built
 	return m.runnerTestMission.Start(ctx, param)
 }
 
-func TestMissionRunnerRefusesReentrantStartExhaustedIDsAndIdleCancel(t *testing.T) {
+func TestMissionRunnerDefersReentrantStartAndRefusesExhaustedIDsAndIdleCancel(t *testing.T) {
 	if _, err := NewMissionRunner(MissionRunnerConfig{}); !errors.Is(err, ErrMissionBuilderNotFound) {
 		t.Fatalf("mission runner without registry = %v", err)
 	}
@@ -184,12 +191,13 @@ func TestMissionRunnerRefusesReentrantStartExhaustedIDsAndIdleCancel(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	mission := &reentrantMission{runnerTestMission: runnerTestMission{kind: 1}, runner: runner}
+	built := 0
+	mission := &reentrantMission{runnerTestMission: runnerTestMission{kind: 1}, runner: runner, built: &built}
 	if err := registry.RegisterMission(1, func() Mission { return mission }); err != nil {
 		t.Fatal(err)
 	}
-	built := 0
-	if err := registry.RegisterMission(2, func() Mission { built++; return &runnerTestMission{kind: 2} }); err != nil {
+	var second Mission
+	if err := registry.RegisterMission(2, func() Mission { built++; second = &runnerTestMission{kind: 2}; return second }); err != nil {
 		t.Fatal(err)
 	}
 	if err := runner.CancelMission("nothing"); !errors.Is(err, ErrMissionNotRunning) {
@@ -198,14 +206,16 @@ func TestMissionRunnerRefusesReentrantStartExhaustedIDsAndIdleCancel(t *testing.
 	if err := runner.StartMission(1, nil); err != nil {
 		t.Fatalf("outer StartMission = %v", err)
 	}
-	if !errors.Is(mission.innerErr, ErrReentrantMutation) || built != 0 {
-		t.Fatalf("inner StartMission = %v built=%d; want ErrReentrantMutation and no build", mission.innerErr, built)
+	if mission.innerErr != nil || mission.builtAtCall != 0 || mission.innerCurrent != mission {
+		t.Fatalf("inner StartMission = %v built=%d current=%v; want nil, nothing built and the outer mission still current inside its own Start",
+			mission.innerErr, mission.builtAtCall, mission.innerCurrent)
 	}
-	if runner.CurMission() != mission {
-		t.Fatalf("current mission = %v, want the outer one", runner.CurMission())
+	if built != 1 || runner.CurMission() != second || mission.ends != 1 {
+		t.Fatalf("after the outer start: built=%d current=%v outer ends=%d; want the deferred start to replace the outer mission once",
+			built, runner.CurMission(), mission.ends)
 	}
 	runner.nextID = math.MaxInt64
-	if err := runner.StartMission(2, nil); !errors.Is(err, ErrMissionIDExhausted) || built != 0 {
+	if err := runner.StartMission(2, nil); !errors.Is(err, ErrMissionIDExhausted) || built != 1 {
 		t.Fatalf("StartMission with exhausted ids = %v built=%d", err, built)
 	}
 	plan := MissionPlan{Steps: []MissionStep{{Action: 1}}}

@@ -44,3 +44,4 @@ schema 在现有 helpers 中递归复制 JSON 容器，包括空 map/嵌套数�
 - 停机路径上的每个回调（Service.Shutdown、Mod 停止、service.stopping / stopped hook）都是“goroutine + 在 shutdownCtx 内等，超时保留依赖”（NC-231 补上 hook）；启动阶段的 hook 与 `ManagerGroup` 的回调没有预算，前者由 startupProbe 兜底，后者无生产调用方、注释写明不要用于需要预算的对象。
 - `run` 的返回值包含整个生命周期里的 RuntimeFailure（NC-232），退出码因此能反映停机期间的 fail-stop。
 - Health：`/healthz` 无条件 200，`/readyz` = 就绪位 ∧ 全部 checker OK（Degraded 同 Fail）。Degraded 是否算就绪待 DECISIONS-PENDING D1。[本轮](REVIEW-2026-10-06-n01b.md)
+  - **更正（2026-10-06，D1 已实施）**：Degraded 算就绪，`/readyz` = 就绪位 ∧ 没有 checker 为 Fail；降级项在响应体 `degraded_dependencies` 里列出。[方案](../feature/D1-READYZ-DEGRADED-IS-READY-2026-10-06.md)

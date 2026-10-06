@@ -25,9 +25,28 @@ type Result struct {
 	Err       error  `json:"-"`
 }
 
+// Snapshot 是一次健康检查的聚合结果。
+//
+// 聚合规则（维护者决定 D1，2026-10-06）：Degraded 算可用。OK 为真表示没有任何 checker 为
+// Fail——Degraded 不影响 OK，只置 Degraded；Fail 与未知的 Status 一律让 OK 为假。Degraded 的
+// 含义是“还能服务、需要关注”（单实例锁续期结果未知、容量接近上限、写许可用满、积压告警），
+// Fail 是“不能再安全工作”。kit/ops 的 /readyz 据此只在 Fail（或就绪位为假）时返回 503，
+// 并在响应体里列出降级项。
 type Snapshot struct {
-	OK      bool     `json:"ok"`
-	Results []Result `json:"results"`
+	OK       bool     `json:"ok"`
+	Degraded bool     `json:"degraded"`
+	Results  []Result `json:"results"`
+}
+
+// DegradedResults 返回状态为 Degraded 的结果（按名字排序，与 Results 同序）。
+func (s Snapshot) DegradedResults() []Result {
+	var degraded []Result
+	for _, result := range s.Results {
+		if result.Status == StatusDegraded {
+			degraded = append(degraded, result)
+		}
+	}
+	return degraded
 }
 
 type Checker interface {
@@ -102,7 +121,11 @@ func (r *Registry) Snapshot(ctx context.Context) Snapshot {
 	now := time.Now().UnixMilli()
 	for _, name := range names {
 		result := checkOne(ctx, name, checkers[name], now)
-		if result.Status != StatusOK {
+		switch result.Status {
+		case StatusOK:
+		case StatusDegraded:
+			snap.Degraded = true
+		default:
 			snap.OK = false
 		}
 		snap.Results = append(snap.Results, result)

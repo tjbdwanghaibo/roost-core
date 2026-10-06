@@ -13,8 +13,8 @@ var (
 	ErrActionGroupInvalid = errors.New("taskflow: action group is invalid")
 	ErrActionGroupFrozen  = errors.New("taskflow: action group is frozen")
 	ErrActionIDExhausted  = errors.New("taskflow: action id exhausted")
-	// ErrReentrantMutation 现在只由 MissionRunner 返回（任务启动 / 结束途中的重入）。
-	// ActionRunner 自 B7 起把回调里的变更延后执行，不再返回它；保留导出名以兼容调用方。
+	// ErrReentrantMutation 已不再由任何 runner 返回：ActionRunner 自 B7 起、MissionRunner 自
+	// 2026-10-06 第五轮决定起，都把回调里的变更延后执行。保留导出名以兼容调用方。
 	ErrReentrantMutation = errors.New("taskflow: reentrant mutation changed current action")
 	// ErrDeferredQueueFull：一次最外层调用里，回调发起的待执行命令超过
 	// ActionRunnerConfig.MaxDeferredCommands。被拒的 Start / Enqueue 不分配 ID。
@@ -299,6 +299,8 @@ func (r *ActionRunner) End(group ActionGroup, force bool, reason ActionReason) e
 
 // EndAll 结束每个组的当前动作并丢弃排队项。回调（如 OnEnded 里推进任务）随之发起的
 // 变更在全部结束之后按序执行，所以 EndAll 返回时可能已有回调启动的新动作在运行（O-A1）。
+// EndAll 不是“清场”：要让什么都不再运行，先结束当前任务（MissionRunner.EndCurMission，
+// 任务结束后送来的动作结束被忽略、不再推进），再调 EndAll（维护者第五轮决定保持此语义）。
 func (r *ActionRunner) EndAll(force bool, reason ActionReason) error {
 	return r.submit(runnerCommand{op: opEndAll, force: force, reason: reason})
 }

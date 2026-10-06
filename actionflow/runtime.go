@@ -25,7 +25,12 @@ type Action interface {
 // ActionList 是业务对 ActionRunner / MissionRunner 的接线。动作回调与 runner 钩子里调用
 // CreateAction / EnqueueAction / EndCurAction / EndAllAction / ClearNextActions 时，ActionRunner
 // 把变更延后到回调返回后按序执行：返回的动作 ID 已分配、可以立即记下，结束照样以这个 ID
-// 送达（见 ActionRunner 的说明）。
+// 送达（见 ActionRunner 的说明）。任务回调与 MissionRunner 钩子里调用 SetMission /
+// EndCurMission 同样延后（见 MissionRunner 的说明）：SetMission 返回 nil，执行时的错误经
+// MissionRunner 的 OnError 报告。
+//
+// 清场：EndAllAction 期间回调发起的动作会在它返回后启动；要什么都不再运行，先
+// EndCurMission，再 EndAllAction。
 type ActionList interface {
 	Entity() entity.IThreadSafeEntity
 	CreateAction(kind ActionKind, param any) (int64, error)

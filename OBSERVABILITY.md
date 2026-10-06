@@ -134,6 +134,19 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | `dataengine.load.skipped.total{resource}` | Counter | 非 strict 载入模板无法解码而跳过的行数。**基线应为零**；持续增长意味着字段改名/编解码变更正在让整表静默加载不全（strict 模板会直接失败，非 strict 只跳过，所以这条曲线是它唯一的信号） |
 | `dataengine.fence.skipped.total{resource}` | Counter | 被 lease fence 拦下、整笔标记为 skipped 的事务数。**陈旧 saga worker 偶发是正常的**；但"所有被 fence 的事务同时开始跳过"意味着 fence 谓词已不可满足（claim schema 漂移），而这两种情况从进程内部无法区分——只能靠曲线形状判断：稳定低速率 = 正常，阶跃到与事务量同阶 = 事故 |
 
+## 健康与就绪（`/healthz`、`/readyz`）
+
+kit `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册（`app.ModHealth`），每项结果是 `ok` / `degraded` / `fail`：
+
+| 端点 | 200 的条件 | 503 的条件 | 探针 |
+| --- | --- | --- | --- |
+| `/healthz` | 进程的 HTTP 在答就 200 | — | startup / liveness |
+| `/readyz` | 就绪位为真（`service.started` 之后、`service.stopping` 之前），且没有 checker 为 `fail` | 就绪位为假，或任一 checker 为 `fail`（未知状态按 `fail` 算） | readiness、compose healthcheck、shell `healthcheck.sh`、`make dev-run` |
+
+**Degraded 算就绪**（维护者决定 D1，2026-10-06）：有 `degraded` 时 `/readyz` 仍返回 200、`ok: true`，响应体 `degraded: true`，`degraded_dependencies` 列出每个降级项的 `name` / `status` / `message` / `error`；`dependencies` 照样列出全部 checker。之前 Degraded 与 Fail 一样返回 503。现有的 Degraded 来源都是“还能服务、需要关注”：单实例锁续期结果未知（`singleton`，≤ `singleton.renew_interval` 的窗口）、entitysync 主体 / 会话 ≥ 80% 容量、remoteentity 写许可用满、DataEngine 投影积压告警。`fail` 是“不能再安全工作”：fenced、Projector / Outbox 不健康、容量用尽、已关闭、失锁或未持有单实例锁。
+
+部署侧的探针都只看 HTTP 状态码，Degraded 不再让 k8s 摘掉 endpoint，也不会让 compose / shell 部署判为未就绪；要对降级告警，抓 `/readyz` 响应体的 `degraded`，或看各来源自己的指标（`entitysync_*`、`remote_entity.*`、`dataengine_*`）。
+
 ## 告警基线建议
 
 1. `nest.pipelined.async_total{result="indeterminate"} > 0` —— 立即告警（fence 事故）。
@@ -145,5 +158,6 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 7. `lockstep.desync.total` 非零 —— 立即告警（确定性被破坏：作弊或模拟 bug，两者都必须查）。
 8. `dataengine_fence_skipped_total` 速率阶跃到与被 fence 事务量同阶 —— 立即告警（claim schema 漂移：事务正在静默变成 no-op，既无错误也无失败测试）。
 9. `obs_series_dropped_total` 非零 —— 某 metric 的 label 基数打满，新组合的观测在静默丢失；排查 label 来源或上调 `WithMaxSeriesPerMetric`。
+10. `/readyz` 响应体 `degraded: true` 持续数分钟 —— 关注（不会摘流量，见上一节）：按 `degraded_dependencies[].name` 查对应来源。
 
 Grafana 总览面板见 [observability/grafana-roost-overview.json](observability/grafana-roost-overview.json)（按上述四组布局，导入后选择 Prometheus 数据源即可）。

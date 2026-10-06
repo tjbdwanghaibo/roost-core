@@ -11,8 +11,8 @@ import (
 //
 // 任务计划在归一化时拒绝所有空 / 越界的形状（无步骤、起点越界、动作为 none、
 // 后继步骤越界、nil 指针），之后按步索引执行时再守一次越界；任务运行器的状态
-// / 变更钩子若在启动途中结束了任务，StartMission 必须报 ErrReentrantMutation
-// 而不是把一个已结束的任务当作当前任务；动作构建器交出 nil 动作必须被
+// / 变更钩子若在启动途中结束了任务，不能把一个已结束的任务当作当前任务（第五轮
+// 决定后结束延后到启动之后执行，之前是报 ErrReentrantMutation）；动作构建器交出 nil 动作必须被
 // ErrBuilderNil 拒绝。U-0100 记的另两处（action_runner 96、mission_runner 81）
 // 复核：前者与 finish 内部的同一判定重复，后者在 ending 标志下不可达。
 
@@ -67,29 +67,38 @@ func TestPlanMissionRefusesAStepIndexOutsideThePlan(t *testing.T) {
 	}
 }
 
-func TestMissionRunnerRefusesAHookThatEndsTheMissionDuringStart(t *testing.T) {
+// 第五轮决定（MissionRunner 改为延后队列）之后：钩子在启动途中发起的结束延后到启动做完
+// 之后执行，StartMission 返回 nil，任务完整启动一次、结束一次。原承诺“不把一个已结束的任务
+// 当作当前任务”不变：返回后没有当前任务。
+func TestMissionRunnerHookThatEndsTheMissionDuringStartEndsItAfterTheStart(t *testing.T) {
 	registry := NewRegistry()
 	mission := &runnerTestMission{kind: 1}
 	if err := registry.RegisterMission(1, func() Mission { return mission }); err != nil {
 		t.Fatal(err)
 	}
 	var runner *MissionRunner
+	statusAtEnd := MissionStatusIdle
 	runner, err := NewMissionRunner(MissionRunnerConfig{Registry: registry, Hooks: MissionRunnerHooks{
 		OnChanged: func(MissionInfo) {
-			// Ending the mission from the change hook is allowed by the ending
-			// guard (starting is not ending); the start must notice that the
-			// current mission is no longer the one it just installed.
 			runner.EndCurMission(NewActionReason("ended from hook"))
+		},
+		OnState: func(active bool) {
+			if !active {
+				statusAtEnd = mission.status
+			}
 		},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.StartMission(1, nil); !errors.Is(err, ErrReentrantMutation) {
-		t.Fatalf("StartMission with a hook ending the mission = %v, want ErrReentrantMutation", err)
+	if err := runner.StartMission(1, nil); err != nil {
+		t.Fatalf("StartMission with a hook ending the mission = %v, want nil (the end is deferred)", err)
 	}
 	if runner.CurMission() != nil {
 		t.Fatalf("a mission ended during its own start is still current: %v", runner.CurMission())
+	}
+	if mission.ends != 1 || statusAtEnd != MissionStatusCanceled {
+		t.Fatalf("mission ends=%d status at end=%v, want ended once after a complete start", mission.ends, statusAtEnd)
 	}
 }
 
