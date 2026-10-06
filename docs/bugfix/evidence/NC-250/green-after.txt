@@ -1,0 +1,6 @@
+2026/10/06 07:58:57 ERROR saga: step succeeded after the coordinator abandoned it; the effect is not compensated saga_id=nc250-compensate saga_type=rally status=manual_required phase=compensate step=0 command_id=nc250-compensate:2:0:1 operation=nc250-compensate:2:0
+--- PASS: TestDefinitionFenceDuringBackoffAbandonsTheOperation (0.00s)
+    --- PASS: TestDefinitionFenceDuringBackoffAbandonsTheOperation/forward (0.00s)
+    --- PASS: TestDefinitionFenceDuringBackoffAbandonsTheOperation/compensate (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/saga	0.370s

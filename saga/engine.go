@@ -387,12 +387,8 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 			// 补偿（成功迟到）照样回放而不重做。从正向发起的补偿在这一生里还没派发过补偿命令，不需要换代。
 			after.Incarnation++
 		}
-		var abandoned string
-		if record.Attempt > 0 {
-			// 当前步骤正在重试退避：人工补偿同样放弃了它，写放弃关闭的 tombstone（见 processClaimed 的截止分支）。
-			abandoned = operationKey(record.ID, record.Phase, record.Step)
-		}
-		_, err = e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, After: after, CloseOperation: abandoned})
+		// 当前步骤正在重试退避时，人工补偿同样放弃了它（abandonedOperation）。
+		_, err = e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, After: after, CloseOperation: abandonedOperation(record)})
 		if errors.Is(err, ErrConflict) {
 			e.conflicts.Add(1)
 			continue
@@ -725,7 +721,9 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 		after.CommandID = ""
 		after.OperationKey = ""
 		clearLease(&after)
-		_, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, ExpectedLease: record.Lease, After: after, CloseOperation: record.OperationKey})
+		// RR-20261005-NC-250：在等结果或正在重试退避的操作都被放弃。旧实现只关闭 record.OperationKey，
+		// 退避中它是空串：不写 tombstone、不删排队命令，之后到达的成功被当作 ErrNotWaiting 静默丢弃。
+		_, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, ExpectedLease: record.Lease, After: after, CloseOperation: abandonedOperation(record)})
 		if err == nil {
 			e.countTerminal(after.Status)
 		}
@@ -733,13 +731,7 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 	}
 	if !record.DeadlineAt.IsZero() && !now.Before(record.DeadlineAt) && record.Phase == PhaseForward {
 		after := e.beginCompensation(record, "saga deadline exceeded", now)
-		closed := closedOperation(record, after)
-		if closed == "" && record.Attempt > 0 {
-			// 截止时步骤正在重试退避（已派发过、还没有结果）：这个 operation 同样被放弃。写下放弃关闭的
-			// tombstone，之后到达的成功才能被识别为“放弃后生效”并告警，而不是以 ErrNotWaiting 静默丢弃（U-0280）。
-			closed = operationKey(record.ID, record.Phase, record.Step)
-		}
-		_, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, ExpectedLease: record.Lease, After: after, CloseOperation: closed})
+		_, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, ExpectedLease: record.Lease, After: after, CloseOperation: abandonedOperation(record)})
 		if err == nil {
 			e.countTerminal(after.Status)
 			e.signal(e.dueKick)
@@ -975,6 +967,21 @@ func canonicalDeadline(value time.Time) time.Time {
 	// before identity comparison keeps exact start-intent redelivery idempotent.
 	return value.UTC().Truncate(time.Millisecond)
 }
+
+// abandonedOperation 是协调器不等结果就离开当前步骤时要以“放弃”关闭的操作：正在等某次尝试（Waiting，
+// OperationKey 非空），或者已派发过、正在重试退避（Attempt > 0，OperationKey 已清空）。截止、人工 Compensate、
+// 定义缺失三个出口共用它（U-0280 / RR-20261005-NC-250）：写下放弃关闭的 tombstone，之后到达的成功才能被识别为
+// “放弃后生效”并告警，而不是以 ErrNotWaiting 静默丢弃；同一事务删掉它仍排队的命令。还没派发过的步骤返回空串。
+func abandonedOperation(record Record) string {
+	if record.OperationKey != "" {
+		return record.OperationKey
+	}
+	if record.Attempt > 0 {
+		return operationKey(record.ID, record.Phase, record.Step)
+	}
+	return ""
+}
+
 func closedOperation(before, after Record) string {
 	if before.OperationKey == "" {
 		return ""

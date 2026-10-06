@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- **saga：定义缺失 fence 时，退避中的步骤同样记为放弃，之后生效的成功告警**（RR-20261005-NC-250）：协调器因缺少定义版本把记录 fence 到 `ManualRequired` 时，若当前步骤正在重试退避，写放弃关闭的 tombstone、删掉它仍排队的命令；之前只在等结果时关闭，退避中较早尝试晚到的成功以 `ErrNotWaiting` 丢弃、不计入 `saga.completion.late_after_abandon_total`。截止、人工 Compensate、定义缺失三个出口现在共用一个判断。SAGA.md 补充：被 kill -9 的进程遗留的 Mongo 事务持锁到 `transactionLifetimeLimitSeconds`，Mongo 步骤预算应长于它。[修复](docs/bugfix/RR-20261005-NC-250.md)
 - **ai Controller：策略回调里的 SetStrategy / Shutdown 延后到回调返回后执行**（RR-20261005-NC-241，与 B7 同向）：之前立即切换，旧行为树在 Stop 之后接着跑、发起的动作没被切换结束，成为孤儿。回调里调用返回 nil，切换出错经 OnError 报告，回调返回前 `Strategy()` 仍是旧策略。[记录](docs/bugfix/RR-20261005-NC-241.md)
 - **ai Parallel 结果确定即停止本次 Tick**（RR-20261005-NC-240）：RequireAll 出现失败 / RequireOne 出现成功后不再 Tick 后面的子节点，此前会先发起没人要的动作再打断。[记录](docs/bugfix/RR-20261005-NC-240.md)
 - **actionflow 两处 B7 panic 路径收敛**（RR-20261005-NC-242 / NC-243）：`Update` 的 fn panic 恢复成错误，不再让 runner 永远处在“回调中”；替换动作时旧动作 Cancel panic 只经 OnError 报告，新动作照常启动——回调里交出的 ID 一定有结论，直接 Start 返回 (ID, nil)。[NC-242](docs/bugfix/RR-20261005-NC-242.md) · [NC-243](docs/bugfix/RR-20261005-NC-243.md)

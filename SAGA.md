@@ -246,6 +246,11 @@ worker 扫描；进程内 signal 只用于降低新任务延迟。
 `saga.step.expired_unexecuted_total`，不 nak、不占 `MaxAckPending`。原生步骤的结果经 WAL → 投影 → completion effect 送达，
 不依赖这条消息，所以 ack 不会丢掉已提交、还没投影的尝试。读回执出错时仍按退避重投。
 
+**进程被强杀时遗留的 Mongo 事务。** Mongo 步骤的 handler、协调器的状态推进都在 Mongo 事务里；进程被 kill -9 时服务端不会立刻知道，
+这笔事务保持打开、持锁，直到 `transactionLifetimeLimitSeconds`（服务端参数，默认 60s）才被回收。期间其他进程对同一文档的事务写一直得到
+`WriteConflict`，同一操作的尝试反复失败（真实 NATS + Mongo 两进程强杀实测恢复约 1～1.5 分钟，N06 S5 review）。默认步骤预算（5s × 5 次加退避，约 30s）
+短于它，受影响的操作可能用尽重试进入补偿。要让强杀后的步骤自己恢复，Mongo 步骤的 `Timeout × MaxAttempts` 加退避应长于锁回收时间，或在部署侧调小该服务端参数。
+
 生产集群应使用 MongoDB replica set（事务所需）和 JetStream file storage；关键区服
 通常配置 3 replicas。`AckWait` 必须大于步骤处理的高分位延迟，receipt/tombstone TTL
 必须长于 stream 最大保留时间。上线门禁需要在目标 Mongo/NATS 拓扑上验证持续吞吐、

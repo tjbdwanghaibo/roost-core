@@ -2,6 +2,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 N06 S5 Saga 剩余项（revn06s5）：NC-250 已修复、声明场景验证，未发版。** 截止、人工 Compensate、定义缺失三个“放弃当前步骤”的出口共用 `abandonedOperation`：定义缺失 fence 时退避中的操作写放弃关闭的 tombstone、删排队命令，之后的成功告警一次。[本轮](../review/REVIEW-2026-10-06-n06s5.md)
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261005-NC-250](RR-20261005-NC-250.md) | 三个放弃出口共用 `abandonedOperation`，定义缺失 fence 时退避中的操作同样放弃关闭 | 已修复、声明场景验证，未发版 |
+
 **10-06 N10 第二批（revn10b）：NC-240～247 已修复、声明场景验证，未发版。** Parallel 结果确定即停；Controller 回调里的切换延后到最外层回调返回（与 B7 同向）；Update 的 fn panic 恢复成错误；替换时旧动作 Cancel 失败只报告、新动作照常启动；LoadPlugin 指针分支去掉变量遮蔽；`Registry.ApplyBundle` 失败回滚到应用前那一代；Patched 由写者记录；Resolve[T] 同签名转换、不符计数。新增真实 .so 测试包 `hotcode/plugintest`。[本轮](../review/REVIEW-2026-10-06-noncore-n10b.md) · [证据](evidence/noncore-bugfix-20261006-n10b/README.md)。
 
 | 编号 | 修复 | 状态 |

@@ -1,5 +1,20 @@
 # Roost Review 跨轮进度
 
+## 2026-10-06 N06 S5 Saga 剩余项（revn06s5）
+
+基线 `897a1dd9`，分支 `revn06s5`，NC 段 250～259（用 250）；图谱 generation 2026-09-30，saga 相关文件 metadata_changed，全部按当前源码补证。[本轮](REVIEW-2026-10-06-n06s5.md) · [修复](../bugfix/RR-20261005-NC-250.md)。NC-250（P3）已修复、声明场景验证，未发版。不重做 U-0280 / U-0281 / B1 / NC-37～42。
+
+| 方向 | 本批 | 状态 / 下一入口 |
+| --- | --- | --- |
+| 租约接管 | A 租约过期 → B 接管 → A 晚到 Apply 三种顺序（mongotest + 真实副本集），负对照去掉 token fence 变红 | 无缺陷 |
+| 截止 / 补偿 / Resume 与晚结果 | 逐个“离开当前步骤”的出口核对放弃关闭 | NC-250；O-S5-7 |
+| 多 completion / 旧 attempt | B1 之后的余项 | 无新缺陷；O-S5-7 待维护者 |
+| TTL 之后重投 | 判断不加协调器计数（方向）；saga 流前提已校验，效果流跨 Mod 未校验 | O-S5-2 |
+| outbox | 发布失败、Ack 未知、并发 supersede、批量预算 | 无缺陷；O-S5-5 |
+| 真实跨进程恢复 | 隔离 NATS JetStream + Mongo，两个完整协调器 + Mongo 步骤进程，SIGKILL 一个，三次实跑 60/60 | 无缺陷；O-S5-3（遗留事务锁 ≤60s 主导恢复时间）、O-S5-4 |
+
+1 个修前红用例（正向 / 补偿两子用例各 3 条失败）→ 修后绿；3 个审查用例文件（含 1 个 integration 文件）。saga / kit/saga race×3、相关用例 race×50、根包、build / vet、`-tags integration` vet 与真实依赖用例通过。方向判断：同一不变量第五轮（U-0280 → 复核 ×2 → B1 → NC-250），建议把“离开当前步骤”收成一个转移、Mongo 步骤纳入收件箱契约（本轮有实证），待维护者。S5 剩余项完成，N06 不计 completed（指标落点等仍在）。
+
 ## 2026-10-06 N09 skill 第五批（random / snapshot / temporal / graph / effect_result / proc / quantity 逐分支；直接分支用例；B4 文档）
 
 基线 `57c0b3b6`（含 B3 `023eb276`），分支 `revn09e`，NC 段 220～229（用 220～224）；图谱 generation 2026-09-30，`lower.go` metadata_changed 以当前源码补证。[本轮/矩阵](REVIEW-2026-10-06-n09-batch5.md) · [修复](../bugfix/README.md)。NC-220 / 223 / 224（P2）、NC-221 / 222（P3）已修复、声明场景验证，未发版；NC-223 是 B3（v1.20.2）回归。

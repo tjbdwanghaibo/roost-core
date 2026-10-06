@@ -203,6 +203,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-06 N06 S5 Saga 剩余项（revn06s5，未发版）：NC-250（P3）——定义缺失 fence 时退避中的步骤没有关闭为放弃，之后生效的成功被静默丢弃；截止 / 人工 Compensate / 定义缺失三个出口改用同一个 `abandonedOperation`。协调器租约接管后的晚到 Apply、outbox supersede 与 Ack 未知、真实 NATS + Mongo 两进程 SIGKILL 恢复（60/60 完成，恢复时间被遗留 Mongo 事务锁拉到约 60s 起）无缺陷。方向判断（“离开当前步骤”收成一个转移、Mongo 步骤纳入收件箱契约、只接收正在等的尝试的失败）与 O-S5-1 / O-S5-2 待维护者。[本轮](review/REVIEW-2026-10-06-n06s5.md)
+
 10-06 N10 第二批（revn10b）：[NC-240](bug/RR-20261005-NC-240.md)～[NC-247](bug/RR-20261005-NC-247.md)（NC-241～245 P2，其余 P3）**已修复、声明场景验证，未发版**；[本轮](review/REVIEW-2026-10-06-noncore-n10b.md)、[证据](bugfix/evidence/noncore-bugfix-20261006-n10b/README.md)。ai Controller 回调里的 SetStrategy / Shutdown 延后执行（与 B7 同向）；actionflow 两处 B7 panic 路径收敛（Update fn、替换时旧动作 Cancel，后者即 O-A4）；hotcode 首次真实 .so 验证（独立测试包 `hotcode/plugintest`），插件部分应用回滚到应用前那一代（O-H1）。MissionRunner 延后语义与 O-A1“清场”无确认缺陷，选项与推荐见本轮“待维护者”。
 
 10-06 N01 留项 + N14 O3 / O4（revn01b，未发版）：NC-230～234（P3）——`OpsMod.Start` 同步 bind，端口被占用即启动失败（之前带着 Error 日志继续跑、同机健康检查可能探到别的进程）；停机阶段 lifecycle hook 在 `shutdown.total_timeout` 内等，service.stopping 卡住按停机不完整保留 Service / Mod / 单实例锁；停机开始之后的 RuntimeFailure 在 `run` 返回时并入（不再以 0 退出）；Redis Mod 第一次 Close 后交出连接池、错误只报一次；remote_entity Mod 停完才记 stopped。`ops.admin_timeout`（缺省 10s）给 admin 命令期限，到期回 504（结果未知），写超时随之放长。`lifecycle.ManagerGroup` 无停机预算（无生产调用方，注释写明）；Health 的 Degraded 是否算就绪待维护者决定（DECISIONS-PENDING D1）。[本轮](review/REVIEW-2026-10-06-n01b.md)
