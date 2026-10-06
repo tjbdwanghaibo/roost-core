@@ -157,7 +157,16 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	}
 	// This App run owns the configured sink. Close it before returning so a
 	// subsequent run can safely rotate or remove the same file on Windows.
-	defer func() { _ = flog.Close() }()
+	//
+	// 关闭之前先把最终错误写进日志（RR-20261006-07）：生成的 main 在 run 返回、文件日志已关之后才打印
+	// "server exit"，那一行只到 stderr；启动阶段失败（Mod Init / Provide / Start、单实例锁、业务时间检查）
+	// 直接返回，文件里没有退出原因。这个 defer 最先登记、最后执行，runErr 已含停机期间并入的 RuntimeFailure。
+	defer func() {
+		if runErr != nil {
+			slog.Error("app run failed", "err", runErr)
+		}
+		_ = flog.Close()
+	}()
 
 	slog.Info("starting server",
 		"name", a.name,

@@ -90,3 +90,34 @@ func TestStepBudgetConfigRejectsTyposAndImpossibleValues(t *testing.T) {
 		})
 	}
 }
+
+// RR-20261006-06（A12）：viper 把配置键折成小写，saga.steps 分不清只差大小写的类型或步骤名。之前已知表也按小写建，
+// 后注册的定义静默覆盖先注册的，覆盖落到哪一个取决于定义顺序。现在只差大小写的名字直接报歧义错误
+// （与 configdata 大小写敏感、不猜的方向一致），不论配置里有没有写到它。
+func TestStepBudgetConfigRejectsNamesThatDifferOnlyInCase(t *testing.T) {
+	cfg := yamlConfig(t, `
+saga:
+  steps:
+    gift_item:
+      debit:
+        max_attempts: 15
+`)
+	upperType := giftDefinition()
+	upperType.Type = "Gift_Item"
+	upperStep := giftDefinition()
+	upperStep.Steps = append(upperStep.Steps, coresaga.Step{Name: "Debit", ForwardTopic: "gift_item.Debit", CompensateTopic: "gift_item.Debit.compensate"})
+	for name, definitions := range map[string][]coresaga.Definition{
+		"types":         {giftDefinition(), upperType},
+		"types_swapped": {upperType, giftDefinition()},
+		"steps":         {upperStep},
+	} {
+		budgets, err := StepBudgetsFromConfig(cfg, definitions...)
+		if err == nil || !strings.Contains(err.Error(), "differ only in case") {
+			t.Fatalf("%s: err=%v overrides=%v, want an ambiguity error", name, err, budgets.Overrides)
+		}
+	}
+	// 同一个定义出现两次不是歧义。
+	if _, err := StepBudgetsFromConfig(cfg, giftDefinition(), giftDefinition()); err != nil {
+		t.Fatalf("the same definition twice: %v", err)
+	}
+}

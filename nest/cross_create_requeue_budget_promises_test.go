@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -59,7 +60,24 @@ func TestSymmetricCrossCreatePairsResolveWithinRequeueBudget(t *testing.T) {
 	if err := mgr.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = mgr.Shutdown(context.Background()) }()
+	// 失败要快速报出来：停机有上限，超时只记错误、不再等；放行闸门的 defer 后注册、先执行，
+	// 断言中途 t.Fatal 时停在 <-gate 的 handler 也会被放行，不让停机等它们（之前 Shutdown(Background) 会挂到包超时）。
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := mgr.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown: %v", err)
+		}
+	}()
+	var openGates sync.Once
+	releaseGates := func() {
+		openGates.Do(func() {
+			for _, gate := range proceed {
+				close(gate)
+			}
+		})
+	}
+	defer releaseGates()
 	out := make(chan requestResult, 2*pairs)
 	for slot := range 2 * pairs {
 		sendRequest(mgr, strconv.Itoa(slot), names[slot], ids[slot], out)
@@ -71,9 +89,7 @@ func TestSymmetricCrossCreatePairsResolveWithinRequeueBudget(t *testing.T) {
 			t.Fatal("not every handler reached its first created entity")
 		}
 	}
-	for _, gate := range proceed {
-		close(gate)
-	}
+	releaseGates()
 	results := make(map[string]requestResult, 2*pairs)
 	for len(results) < 2*pairs {
 		select {

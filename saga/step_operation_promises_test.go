@@ -758,12 +758,22 @@ func TestNativeStepConsumerHandlesOperationOutcomes(t *testing.T) {
 func TestMongoStoreTombstoneTellsAbandonedFromResolved(t *testing.T) {
 	ctx := context.Background()
 	t.Run("abandoned by timeout, then a late success", func(t *testing.T) {
-		engine, store, record := waitingOnMongo(t)
-		// rally 的 march 步骤 MaxAttempts 2，按 Attempt 已是 2 处理：超时即用尽 → 补偿 reserve。
-		// （mongotest 不支持 ClaimDue 的 $in []Status，这里直接交给 processClaimed，Apply 只按版本 fence。）
-		due := record.Clone()
-		due.Attempt = 2
-		if err := engine.processClaimed(ctx, due, record.NextRunAt.Add(time.Second)); err != nil {
+		engine, store, waiting := waitingOnMongo(t)
+		// rally 的 march 步骤 MaxAttempts 2：库里的记录已是第 2 次尝试，超时即用尽 → 补偿 reserve。
+		// 领取走真实的 ClaimDue（带租约 fence）；之前 mongotest 不支持 ClaimDue 的 $in []Status，
+		// 这里绕开领取直接交给 processClaimed（RR-20261006-08，O-S5-6）。
+		record := waiting.Clone()
+		record.Attempt, record.Version = 2, waiting.Version+1
+		record.CommandID = commandID(record.OperationKey, 0, 2)
+		if _, err := store.Apply(ctx, ApplyRequest{ExpectedVersion: waiting.Version, After: record}); err != nil {
+			t.Fatal(err)
+		}
+		now := record.NextRunAt.Add(time.Second)
+		claimed, err := store.ClaimDue(ctx, ClaimRequest{Owner: engine.opts.Owner, Now: now, LeaseDuration: time.Minute, Limit: 8})
+		if err != nil || len(claimed) != 1 || claimed[0].Attempt != 2 {
+			t.Fatalf("ClaimDue = %+v err=%v, want the waiting record at attempt 2", claimed, err)
+		}
+		if err := engine.processClaimed(ctx, claimed[0], now); err != nil {
 			t.Fatal(err)
 		}
 		late := Completion{CommandID: record.CommandID, IdempotencyKey: record.OperationKey, SagaID: record.ID, Success: true}

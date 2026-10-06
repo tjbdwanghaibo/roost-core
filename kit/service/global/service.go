@@ -57,6 +57,10 @@ func New(cfg Config) (*Service, error) {
 // game server that already has a binding is refused with ErrConflict, and
 // moving it goes through BeginMigration / CompleteMigration, which require
 // the current epoch. (There is no Rebind.)
+//
+// Bind 可以安全重试：已有绑定的 group 与 globalSID 和本次请求一致时，返回已存的绑定、按重放计数，
+// 不报冲突——上一次 Bind 可能已经落库、只是回复丢了（结果未知）。只有已存的绑定指向别处才是 ErrConflict
+// （RR-20261006-05）。之前 !created 时直接报冲突，调用方在结果未知后重试会被告知“已绑定”，却不知道绑的是不是自己。
 func (s *Service) Bind(ctx context.Context, gameSID int32, groupID string, globalSID int32) (RouteBinding, error) {
 	binding := RouteBinding{
 		GameSID: gameSID, GlobalGroupID: groupID, GlobalSID: globalSID,
@@ -70,8 +74,21 @@ func (s *Service) Bind(ctx context.Context, gameSID int32, groupID string, globa
 		return RouteBinding{}, err
 	}
 	if !created {
+		// Create 没建成时返回零值，要看已存的是什么只能再读一次。
+		current, found, err := s.cfg.Routes.Get(ctx, gameSID)
+		if err != nil {
+			return RouteBinding{}, err
+		}
+		if found && current.Value.GlobalGroupID == groupID && current.Value.GlobalSID == globalSID {
+			s.report.Replayed("bind")
+			return current.Value, nil
+		}
 		s.report.Conflict("bind")
-		return RouteBinding{}, fmt.Errorf("%w: game %d is already bound", ErrConflict, gameSID)
+		if !found {
+			return RouteBinding{}, fmt.Errorf("%w: game %d is already bound", ErrConflict, gameSID)
+		}
+		return RouteBinding{}, fmt.Errorf("%w: game %d is already bound to %s/%d", ErrConflict, gameSID,
+			current.Value.GlobalGroupID, current.Value.GlobalSID)
 	}
 	s.report.Accepted("bind")
 	return stored.Value, nil

@@ -29,6 +29,7 @@ var stepBudgetFields = map[string]struct{}{"timeout": {}, "max_attempts": {}, "b
 //
 // definitions 非空时，saga.steps 下每个类型与步骤必须对应其中某个定义的步骤：写错名字的覆盖不会
 // 静默失效，而是让 Init 失败。未知字段同样拒绝。生成工程的测试可以用它在单元测试里得到与运行时相同的预算。
+// 定义里只差大小写的类型名或步骤名无法用配置键区分，直接报歧义错误（RR-20261006-06）。
 // definitions 为空时无法核对名字，覆盖以 viper 给出的小写键保存；Engine.Register 的 StepBudgets.Resolve
 // 原样查不到时按小写回退，大小写混写的类型 / 步骤名照样生效（RR-20261005-NC-194）。
 func StepBudgetsFromConfig(cfg *viper.Viper, definitions ...coresaga.Definition) (coresaga.StepBudgets, error) {
@@ -41,15 +42,9 @@ func StepBudgetsFromConfig(cfg *viper.Viper, definitions ...coresaga.Definition)
 		return coresaga.StepBudgets{}, err
 	}
 	budgets.Defaults = mergeStepBudget(budgets.Defaults, defaults)
-	known := map[string]map[string]coresaga.StepKey{}
-	for _, definition := range definitions {
-		typeKey := strings.ToLower(definition.Type)
-		if known[typeKey] == nil {
-			known[typeKey] = map[string]coresaga.StepKey{}
-		}
-		for _, step := range definition.Steps {
-			known[typeKey][strings.ToLower(step.Name)] = coresaga.StepKey{Type: definition.Type, Step: step.Name}
-		}
+	known, err := knownSagaSteps(definitions)
+	if err != nil {
+		return coresaga.StepBudgets{}, err
 	}
 	sagaTypes := cfg.GetStringMap("saga.steps")
 	typeNames := make([]string, 0, len(sagaTypes))
@@ -90,6 +85,32 @@ func StepBudgetsFromConfig(cfg *viper.Viper, definitions ...coresaga.Definition)
 		return coresaga.StepBudgets{}, err
 	}
 	return budgets, nil
+}
+
+// knownSagaSteps 按 viper 的小写键建已知步骤表。viper 读出的配置键一律小写，只差大小写的两个类型名或同一类型下
+// 两个步骤名在 saga.steps 里无法区分：之前后注册的静默覆盖先注册的，覆盖落到谁身上取决于定义顺序
+// （RR-20261006-06）。这里直接报歧义错误，与 configdata 大小写敏感、不猜的方向一致；同一个名字重复出现不算冲突。
+func knownSagaSteps(definitions []coresaga.Definition) (map[string]map[string]coresaga.StepKey, error) {
+	known := map[string]map[string]coresaga.StepKey{}
+	typeNames := map[string]string{}
+	for _, definition := range definitions {
+		typeKey := strings.ToLower(definition.Type)
+		if previous, ok := typeNames[typeKey]; ok && previous != definition.Type {
+			return nil, fmt.Errorf("saga definitions: types %q and %q differ only in case; saga.steps keys are case-insensitive and cannot tell them apart", previous, definition.Type)
+		}
+		typeNames[typeKey] = definition.Type
+		if known[typeKey] == nil {
+			known[typeKey] = map[string]coresaga.StepKey{}
+		}
+		for _, step := range definition.Steps {
+			stepKey := strings.ToLower(step.Name)
+			if previous, ok := known[typeKey][stepKey]; ok && previous.Step != step.Name {
+				return nil, fmt.Errorf("saga definition %q: steps %q and %q differ only in case; saga.steps keys are case-insensitive and cannot tell them apart", definition.Type, previous.Step, step.Name)
+			}
+			known[typeKey][stepKey] = coresaga.StepKey{Type: definition.Type, Step: step.Name}
+		}
+	}
+	return known, nil
 }
 
 func readStepBudget(cfg *viper.Viper, prefix string) (coresaga.StepBudget, error) {

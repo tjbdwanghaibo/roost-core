@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -1655,20 +1656,44 @@ func operatorSpec(spec any) (bson.M, bool) {
 	return normalized, true
 }
 
+// valueList 展开 $in 的操作数。真实驱动把任意切片 / 数组编码成 BSON 数组、元素按底层类型编码，所以具名切片
+// （如 saga 的 []Status）也是合法操作数；之前这里只认 bson.A / []any / []string，其余报 ErrUnsupported，
+// MongoStore.ClaimDue 在替身上不可用（RR-20261006-08，O-S5-6）。[]byte 是二进制标量、不是数组，仍然拒绝。
 func valueList(operand any) ([]any, error) {
 	switch value := operand.(type) {
 	case bson.A:
 		return []any(value), nil
 	case []any:
 		return value, nil
-	case []string:
-		out := make([]any, 0, len(value))
-		for _, entry := range value {
-			out = append(out, entry)
-		}
-		return out, nil
-	default:
+	}
+	list := reflect.ValueOf(operand)
+	// 驱动只把元素类型恰好是 byte 的切片 / 数组编成二进制；具名的 uint8（saga.Status）照样是数组。
+	if (list.Kind() != reflect.Slice && list.Kind() != reflect.Array) || list.Type().Elem() == reflect.TypeFor[byte]() {
 		return nil, fmt.Errorf("%w: $in operand %T", ErrUnsupported, operand)
+	}
+	out := make([]any, 0, list.Len())
+	for i := range list.Len() {
+		out = append(out, underlyingScalar(list.Index(i)))
+	}
+	return out, nil
+}
+
+// underlyingScalar 把具名的整型、无符号、浮点、字符串、布尔元素换成对应的内置类型，与驱动按 Kind 编码一致；
+// valuesEqual 只认内置类型（具名整型带 String() 时 fmt.Sprint 会比成名字）。其余类型原样返回。
+func underlyingScalar(value reflect.Value) any {
+	switch value.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return value.Int()
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return value.Uint()
+	case reflect.Float32, reflect.Float64:
+		return value.Float()
+	case reflect.String:
+		return value.String()
+	case reflect.Bool:
+		return value.Bool()
+	default:
+		return value.Interface()
 	}
 }
 

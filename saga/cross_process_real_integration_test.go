@@ -5,7 +5,7 @@ package saga
 // N06 S5 review（2026-10-06）在真实依赖上的两组用例：
 //
 //  1. TestRealMongoCoordinatorLeaseTakeover：协调器 A 租约过期、B 接管、A 晚到 Apply 的三种顺序，跑完整的
-//     MongoStore.ClaimDue（mongotest 不支持候选查询的 `$in []Status`，单测只能跑领取的第二段）。
+//     MongoStore.ClaimDue（单测在 mongotest 上跑同一组用例，RR-20261006-08 之后同样走完整的 ClaimDue）。
 //  2. TestRealSagaCrossProcessKillRecovers：真实 NATS JetStream + Mongo 副本集上起两个协调器 + Mongo 步骤
 //     进程（同一组 durable），跑一批两步 saga，中途 SIGKILL 其中一个，只留另一个；核对恢复后所有 saga 完成、
 //     每个操作的业务写恰好一份、每个 CommandID 的业务事务至多提交一次、outbox 排空、没有残留租约。
@@ -66,7 +66,7 @@ func realRevn06s5Mongo(t *testing.T) (*driver.Client, string) {
 
 func TestRealMongoCoordinatorLeaseTakeover(t *testing.T) {
 	client, database := realRevn06s5Mongo(t)
-	runCoordinatorTakeoverCases(t, func(*testing.T) fmongo.IMongo { return client }, database, claimDue)
+	runCoordinatorTakeoverCases(t, func(*testing.T) fmongo.IMongo { return client }, database)
 }
 
 // crossProcessDefinition 是两步 saga，两步都是 Mongo 步骤。超时短，让被杀进程手里的尝试很快由协调器重发。

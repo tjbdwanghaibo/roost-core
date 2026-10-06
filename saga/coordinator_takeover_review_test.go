@@ -8,7 +8,6 @@ import (
 
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // N06 S5 review（2026-10-06）：协调器 A 领取记录后租约过期，B 接管；A 之后才执行 Apply。承诺：A 的晚到 Apply
@@ -16,40 +15,14 @@ import (
 // 的过滤条件给出：version 相等，且 ExpectedLease 的 owner + token 相等（ClaimDue 对每次领取 $inc lease_token）。
 // 覆盖三种到达顺序：B 已领取未 Apply、B 已 Apply、以及 A 在超时分支上与 completion 交错。
 //
-// mongotest 不支持 ClaimDue 候选查询里的 `$in []Status`（替身限制，真实驱动正常编码），这里的领取直接走 ClaimDue
-// 第二段——按 version 与 lease_until 条件 $inc lease_token 的那一次 FindOneAndUpdate；真实 Mongo 上的同一组用例
-// （-tags integration，TestRealMongoCoordinatorLeaseTakeover）走完整的 ClaimDue。
+// 领取走完整的 MongoStore.ClaimDue；真实 Mongo 上的同一组用例见 -tags integration 的 TestRealMongoCoordinatorLeaseTakeover。
+// 之前 mongotest 不支持 ClaimDue 候选查询里的 `$in []Status`，这里只能跑领取的第二段；替身已按底层类型展开具名切片
+// （RR-20261006-08，O-S5-6），绕行去掉。
 func TestCoordinatorLeaseTakeoverFencesTheLateApply(t *testing.T) {
-	runCoordinatorTakeoverCases(t, func(t *testing.T) fmongo.IMongo { return mongotest.NewClient() }, "takeover", claimSecondStage)
+	runCoordinatorTakeoverCases(t, func(t *testing.T) fmongo.IMongo { return mongotest.NewClient() }, "takeover")
 }
 
-// claimSecondStage 是 MongoStore.ClaimDue 对单个候选的领取写（同一过滤条件与更新）。
-func claimSecondStage(ctx context.Context, store *MongoStore, candidate Record, request ClaimRequest) ([]Record, error) {
-	filter := bson.M{"_id": candidate.ID, "version": candidate.Version, "lease_until": bson.M{"$lte": request.Now}}
-	update := bson.M{"$set": bson.M{"lease_owner": request.Owner, "lease_until": request.Now.Add(request.LeaseDuration)}, "$inc": bson.M{"lease_token": 1}}
-	var claimed recordDoc
-	err := store.sagas().FindOneAndUpdate(ctx, filter, update, &claimed, fmongo.FindOneAndUpdateOption{ReturnAfter: true})
-	if errors.Is(err, fmongo.ErrNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	record, err := validatedRecord(claimed)
-	if err != nil {
-		return nil, err
-	}
-	return []Record{record}, nil
-}
-
-// claimDue 走完整的 MongoStore.ClaimDue（真实 Mongo）。
-func claimDue(ctx context.Context, store *MongoStore, _ Record, request ClaimRequest) ([]Record, error) {
-	return store.ClaimDue(ctx, request)
-}
-
-type claimFunc func(context.Context, *MongoStore, Record, ClaimRequest) ([]Record, error)
-
-func runCoordinatorTakeoverCases(t *testing.T, newClient func(*testing.T) fmongo.IMongo, database string, claimWith claimFunc) {
+func runCoordinatorTakeoverCases(t *testing.T, newClient func(*testing.T) fmongo.IMongo, database string) {
 	ctx := context.Background()
 	setup := func(t *testing.T, status Status) (*MongoStore, *Engine, *Engine, Record, time.Time) {
 		t.Helper()
@@ -94,14 +67,9 @@ func runCoordinatorTakeoverCases(t *testing.T, newClient func(*testing.T) fmongo
 		}
 		return store, a, b, record, now
 	}
-	var current Record
 	claim := func(t *testing.T, store *MongoStore, owner string, now time.Time) Record {
 		t.Helper()
-		latest, err := store.Get(ctx, current.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		records, err := claimWith(ctx, store, latest, ClaimRequest{Owner: owner, Now: now, LeaseDuration: 2 * time.Second, Limit: 8})
+		records, err := store.ClaimDue(ctx, ClaimRequest{Owner: owner, Now: now, LeaseDuration: 2 * time.Second, Limit: 8})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -120,8 +88,7 @@ func runCoordinatorTakeoverCases(t *testing.T, newClient func(*testing.T) fmongo
 	}
 
 	t.Run("B claimed, A applies before B", func(t *testing.T) {
-		store, a, b, created, now := setup(t, StatusPending)
-		current = created
+		store, a, b, _, now := setup(t, StatusPending)
 		byA := claim(t, store, "coordinator-a", now)
 		byB := claim(t, store, "coordinator-b", now.Add(3*time.Second)) // A 的租约已过期
 		if err := a.processClaimed(ctx, byA, now.Add(3*time.Second)); !errors.Is(err, ErrConflict) {
@@ -143,8 +110,7 @@ func runCoordinatorTakeoverCases(t *testing.T, newClient func(*testing.T) fmongo
 	})
 
 	t.Run("B already applied, A applies late", func(t *testing.T) {
-		store, a, b, created, now := setup(t, StatusPending)
-		current = created
+		store, a, b, _, now := setup(t, StatusPending)
 		byA := claim(t, store, "coordinator-a", now)
 		byB := claim(t, store, "coordinator-b", now.Add(3*time.Second))
 		if err := b.processClaimed(ctx, byB, now.Add(3*time.Second)); err != nil {
@@ -167,7 +133,6 @@ func runCoordinatorTakeoverCases(t *testing.T, newClient func(*testing.T) fmongo
 
 	t.Run("A's timeout decision loses to B's and to a completion", func(t *testing.T) {
 		store, a, b, waiting, now := setup(t, StatusWaiting)
-		current = waiting
 		byA := claim(t, store, "coordinator-a", now) // A 领取它是为了判超时
 		byB := claim(t, store, "coordinator-b", now.Add(3*time.Second))
 		// 结果在 B 判超时之前到达：Complete 只按版本 fence，接收它。

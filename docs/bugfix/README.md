@@ -8,6 +8,8 @@
 
 **10-06 收尾第 2 批（cb2）：生成形状相关的小项 A8 / A9 / A11 / A15 / A17，未发版。** 生成配置补齐 `remote_entity` 新键（生产化不再改墓碑 WAIT 副本数）、生成 TCP 越界报错逐条点名、full 场景 add 序列收拢到 `codegen/scripts/full-scenario-adds.sh` 且不吞失败、生成 TCP 加“handler 不配合 ctx”用例、game-demo 仪表盘加 `scene_session_reopen_failed_total` 面板。[记录](CLOSING-BATCH-2-2026-10-06.md)
 
+**10-06 收尾第 4 批 kit / core 小修与测试设施（cb4）：RR-20261006-05～08 已修复、声明场景验证，未发版；A2 / A3 修用例。** global `Bind` 同参数重试按幂等成功（[05](RR-20261006-05.md)）；saga 步骤预算遇只差大小写的名字报歧义错误（[06](RR-20261006-06.md)）；`app.run` 关闭文件日志前写出最终错误（[07](RR-20261006-07.md)）；mongotest `$in` 用 reflect 展开具名切片，saga 用例改走 `ClaimDue`（[08](RR-20261006-08.md)）；nest `group_lock_test` 在无 Guard 作用域的 goroutine 里取锁、把同一个 Guard 两次放回池，污染 `-shuffle` 下后续用例，改为建作用域，目标用例失败时快速报出（[记录](CLOSING-BATCH-4-2026-10-06.md)）。
+
 **10-06 收尾第 3 批 skill 小修（cb3）：RR-20261006-02～04 已修复、声明场景验证，未发版。** Runtime 交给 Host 的状态默认值缺省时带 state 声明类型；checkpoint 里的 `phase_timeout` 任务按 corrupt 拒绝并删除该任务类型；文件 outbox 打开时删除确认是自己生成的 `outbox-<数字>.tmp`。
 
 | 编号 | 修复 | 状态 |

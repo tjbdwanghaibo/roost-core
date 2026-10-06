@@ -15,6 +15,11 @@
 
 ### Fixed
 
+- **global：`Bind` 结果未知后用同样参数重试按幂等成功**（RR-20261006-05，收尾 A7）：以前 `Create` 没建成就报 `ErrConflict "already bound"`，写已落库、回复丢失后重试同一个 `Bind` 会被告知“已绑定”。现在读回已存绑定，group 与 globalSID 都一致时返回它（计 `replayed:bind`），不一致才报冲突，错误里带上已存的 group / sid。[记录](docs/bugfix/RR-20261006-05.md)
+- **saga：步骤预算遇到只差大小写的类型 / 步骤名报歧义错误**（RR-20261006-06，收尾 A12）：viper 把 `saga.steps` 的键折成小写，以前已知表也按小写建，`gift_item` 与 `Gift_Item` 这类名字后注册的静默覆盖先注册的。现在 `StepBudgetsFromConfig` / `SagaMod.Init` 直接报错（与 configdata 大小写敏感一致），同名重复不算冲突。[记录](docs/bugfix/RR-20261006-06.md)
+- **app：关闭文件日志之前写出最终错误**（RR-20261006-07，收尾 A13）：生成的 main 在 `run` 返回、文件日志已关之后才打印 `server exit`，启动阶段失败（Mod Init / Provide / Start、单实例锁、业务时间检查）在日志文件里没有退出原因。现在 `run` 出错时先 `slog.Error("app run failed", "err", …)` 再关闭文件日志，带上停机期间并入的 RuntimeFailure。[记录](docs/bugfix/RR-20261006-07.md)
+- **mongotest：`$in` 接受具名切片与整型切片**（RR-20261006-08，收尾 A14，O-S5-6）：替身以前只认 `bson.A` / `[]any` / `[]string`，`saga.MongoStore.ClaimDue` 的 `$in []Status` 在替身上报 ErrUnsupported。现在按 reflect 展开切片 / 数组、元素按底层类型比较（与驱动编码一致），元素恰为 `byte` 的仍按二进制拒绝；saga 用例去掉绕行、改走完整的 `ClaimDue`。[记录](docs/bugfix/RR-20261006-08.md)
+- **nest 用例在 `-shuffle` 下互相污染**（收尾 A2 / A3）：`group_lock_test` 在没有 Guard 作用域的 goroutine 里取锁，组迁移重试把同一个 `EntityGuard` 两次放回池，之后两个快 worker 共用一个 Guard、互相解锁，排在后面的 `TestSymmetricCrossCreatePairsResolveWithinRequeueBudget` 失败或挂死。用例改为先建作用域（glsvet `-tests ./nest` 也不再报）；目标用例失败时放行闸门、停机有上限，不再挂到包超时。生产调用方都在作用域里，不受影响。[记录](docs/bugfix/CLOSING-BATCH-4-2026-10-06.md)
 - **skill：默认值为 null 的实体持久状态可以 `modify_state set`**（RR-20261006-02）：以前 Runtime 把 null 默认值按 null 类型交给 Host，MemoryHost 的 `set` 比较前后类型，第一次写入每次报 `ErrRuntimeTypeMismatch`。现在状态默认值缺省时按 state 声明的类型交出（shared 状态同样），Program 与摘要不变；状态事件里缺省的 Before 改为声明类型。[记录](docs/bugfix/RR-20261006-02.md)
 - **skill：checkpoint 恢复拒绝 `phase_timeout` 任务**（RR-20261006-03，O20）：phase 计时保持编译期拒绝（B3④），Runtime 从不调度这类任务，恢复时出现即 `ErrCheckpointCorrupt`；删除内部的 `phaseTimeoutTask`。checkpoint 版本不变，已发布版本产生的 checkpoint 不含该任务。[记录](docs/bugfix/RR-20261006-03.md)
 - **skillsync：文件 outbox 打开时清理崩溃遗留的临时文件**（RR-20261006-04，O6）：写入中途崩溃留下的 `outbox-<数字>.tmp` 以前永不回收；现在 `NewFileOutboxStore(WithOptions)` 删除名字精确匹配的普通文件（目录、符号链接、其他名字不动）。同一目录不能有两个在写的 store。[记录](docs/bugfix/RR-20261006-04.md)
