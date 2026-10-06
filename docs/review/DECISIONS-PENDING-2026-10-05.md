@@ -238,6 +238,6 @@
 | saga 收件箱改为单状态文档（维护者 2026-10-06） | “我希望直接改成一份状态文档”，本轮直接做；兼容范围补充决定“不考虑旧进程，完成按照新的处理，线上还没有旧的进程跑”：不读旧 claim、不保留兼容写、不支持混跑，混跑用例删除 | 已实施（`a013f9ff`，分支 `sagadoc`；[方案与实施](../feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md)，未发版） |
 | 合并 rv3 | 维护者同意（分册 3 文档，推 main 被权限规则拦下改推分支） | 已合并（`a3002263`） |
 | NONCORE-46 TaskPool 统计 | 维护者选 A：修，统计取一致快照，保证 completed ≤ total | 已实施（`41bdb9e5`，RR-20261006-20） |
-| B10 两条配置管线 | 维护者选 A：保持 tablegen（策划 Excel / CSV 表，`roost generate` 默认）与 cfggen（YAML 描述、JSON 数据、含全局单例 globals，可选）两条管线，规则已统一（`configdata/rules`），写明分工；不合成一套 | 实施中（文档） |
+| B10 两条配置管线 | 维护者选 A：保持 tablegen（策划 Excel / CSV 表，`roost generate` 默认）与 cfggen（YAML 描述、JSON 数据、含全局单例 globals，可选）两条管线，规则已统一（`configdata/rules`），写明分工；不合成一套 | 已实施（`2c01e06d`，分支 `tail`，未发版）：[B10 §2.4](../feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md#24-tablegen-与-cfggen-能否合成一套) 写明选 A 与理由；[USER_GUIDE 配置数据一节](../USER_GUIDE.md#配置数据规则热更与可见性)、[codegen README](../../codegen/README.md#配置管线该用哪条) 各加“该用哪条”对照表 |
 
 > 2026-10-06 额度用尽暂停：未完成工作与恢复步骤见 [handoff-v1.23.0](handoff-v1.23.0/README.md)。
