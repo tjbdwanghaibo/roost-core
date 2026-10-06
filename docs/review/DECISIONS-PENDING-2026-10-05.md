@@ -111,4 +111,6 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | skill 求值上下文表 | 做：一张表写明每种求值上下文（施法流程 / cast_start / phase_start / 进程启动 / 移交后每步）可用的引用，编译期与 Runtime 都查这一张（N09 第五批方向判断） | 待实施（随 N09 第六批） |
 | NC-224 方向 B | 不做：维持编译期拒绝（进程启动时不冻结施法输入） | — |
 | account 换名释放 | 做：未 admitted 计划、名字仅被他人 reserved 时，换名请求也释放 slot（判定表 `unadmitted other` 行） | 待实施 |
-| D1 / MissionRunner / EndAll 清场 | 维护者询问含义，已解释，待决定 | 待决定 |
+| D1 | 按推荐：Degraded 算就绪（`/readyz` 返回 200 并在响应体注明降级），只有 Fail 返回 503 | 待实施 |
+| MissionRunner | 改为延后队列（与 ActionRunner / B7 一致：回调里的变更回调返回后按序执行） | 待实施 |
+| EndAll 清场 | 按推荐：保持现状，在接线说明写清“要清场先结束当前任务再 EndAll” | 待实施（文档） |
