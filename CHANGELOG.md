@@ -6,6 +6,7 @@
 
 ### Changed
 
+- **versionstore：写入带一次性令牌，回复丢失的写由 store 自己核对；持久格式改变，升级需清空 versionstore 的全部键**（A2 ③，维护者第十三轮“原下个大版本项本版完成”，2026-10-07；线上未部署，不做旧格式兼容）：`RedisStore` 的信封从 `<version>\n<payload>` 改为 `<version>|<令牌>|…\n<payload>`，令牌由 store 每次写生成，和值在同一条 SET 里，每键保留最近 `RedisConfig.WriteTokenHistory`（缺省 8）个；Lua 不变，Redis Cluster 不新增键。写命令回复丢失时，store 读一次当前值：认出自己的令牌就返回那次写的结果（修前调用方重试 `Update` 会生效两次、重试 `Create` 会被判“已占用”），键仍是原值就原样重发，别人先写了那个版本就当作比输了。证明不了的（键原本不存在而此刻仍不存在、`Delete` 后键不存在、令牌被挤出、后端不答）返回新的 `ErrOutcomeUnknown`（`*UnknownOutcomeError`，原传输错误仍可 `errors.Is`），调用方可用 `versionstore.Resume(ctx, err)` 让下一次调用先核对上一次的令牌；同一令牌用于不同的写返回 `ErrWriteTokenMismatch`。新指标 `versionstore.unknown_outcome.total{store,result=applied|lost|unresolved}`。`Store` 接口不变，调用方不用改代码。**升级**：清空各服务 versionstore 前缀下的键（含带索引 store 的索引有序集合），不支持新旧进程混跑；没清空时读到旧信封报 `ErrMalformedRecord: no write token`（T-291）。删除与“键不存在”仍无法核对，是否加墓碑等维护者决定。[方案](docs/feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md)
 - **saga：协调器只接收正在等的那次尝试的可重试失败；放弃之后才到的正向成功自动补偿那一步，`Failed` / `Compensated` 会被重开**（saga 方向 ③④，维护者第十三轮“本版完成”，2026-10-07；线上未部署）：
   ③ 同一生较早尝试晚到的可重试失败不再推进记录（之前会用后一次的尝试计数判用尽、放弃正在执行的最后一次尝试，O-S5-7），计 `Stats().StaleAttempt` /
   `saga.completion.stale_attempt_total{saga_type,phase}`；成功与本生的拒绝仍从任何一次尝试接收（下一次尝试回放的是较早那次的 completion）。
@@ -79,6 +80,7 @@
 
 ### Fixed
 
+- **带索引的 compare-and-set 在索引分数为 NaN 时发出前拒绝，不再“值写入、索引没动、返回错误”**（RR-20261006-35）：`compareAndSetIndexedScript` 先 SET 后 ZADD，Redis 的 ZADD 拒绝 NaN 时 SET 已执行且脚本不回滚，破坏“索引当且仅当值写入时移动”。`redis.CompareAndSet` 现在对非删除的 NaN 分数返回 `ErrCASInvalidCommand`、什么都不发；`±Inf` 照常。[问题](docs/bug/RR-20261006-35.md) / [修复](docs/bugfix/RR-20261006-35.md)
 - **skill：源文档 digest 改为逐字段的规范表示，全部定义的 `SourceDocumentDigest` 会变化**（RR-20261006-33）：之前是 `json.Marshal(Definition)` 的摘要，接口值（效果、策略、输入、形状、过滤器……）不带具体类型、`json:"-"` 字段（消耗数量、cast window 的 windup / recovery 表达式）被跳过，只把 `set_memory` 改成 `add_memory`、只改消耗数量，源文档 digest 都不变。现在接口值先写具体类型名，结构体写全部字段，不看 json tag。**升级后全部定义的 `InspectIdentity(...).SourceDocumentDigest` 改变**（例 `owned_trap.json` `755f1b5c…` → `ae66782e…`）；gameplay / presentation digest 不经过它、不变，checkpoint、Program 查找、skillsync / skillcompose 契约不受影响。保存了旧值做比对的调用方第一次比对会认为全部源文档变了。[记录](docs/bugfix/RR-20261006-33.md)
 - **skill：`Shutdown` / `RemoveProgram` 在宿主拒绝停止、待停止条目到达上限时不再空指针 panic**（RR-20261006-34，`3fad5b6e` 停止入口统一引入，未发版）：前一个衍生物被拒、转入待停止时，`MaxStopPendingSpawns` 删掉的可能正是同一轮列表里后面的记录，循环取回 nil 后直接读字段。现在跳过被删的记录（Runtime 已告警、不再负责它），入口照常返回宿主的错误。[记录](docs/bugfix/RR-20261006-34.md)
 - **loadtest 的分位数不再取桶上界；阈值失败点名哪条阈值、实际值多少**（RR-20261006-27，真实进程演练 ⑤）：`metrics` 直方图记最小 / 最大观测值，`HistogramQuantile` 的插值区间收在观测范围内——以前排名落在桶内最后一个样本时估计就是桶上界（最多两倍），10 个机器人的 p95 = 最慢机器人所在桶的上界，两个 game 同机时整次运行 9.6s、p95 却报 16.384s，超过缺省 `-max-p95 16`、全部成功仍退出码 1；落进溢出的排名以前返回 65.536s，现在插到最大观测值。`ThresholdResult` 多 `samples`，阈值失败时 `RunSnapshot.Error` 是 `threshold violated: p95 = 17.2s > max 16s (10 samples)`，生成的 loadtest 退出行带上它。[记录](docs/bugfix/RR-20261006-27.md)

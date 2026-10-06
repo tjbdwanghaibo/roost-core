@@ -1,7 +1,6 @@
 package versionstore
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -52,6 +51,12 @@ type RedisConfig[K comparable, T any] struct {
 	RetryBackoff time.Duration
 	// Sleep is the delay function; nil means time.Sleep. Test seam.
 	Sleep func(time.Duration)
+	// WriteTokenHistory is how many write tokens each stored value keeps (A2
+	// ③); zero means DefaultWriteTokenHistory. A write whose reply was lost
+	// is recognised by its token while the key keeps it; after that many later
+	// writes the store answers ErrOutcomeUnknown instead. Each token costs 12
+	// bytes per key.
+	WriteTokenHistory int
 	// Index, when set, is a durable index of the entries a reader has work
 	// for, maintained in the SAME write as the value.
 	//
@@ -92,8 +97,11 @@ func (index *RedisIndex[T]) indexKeyFor(value T) string {
 	return index.Key
 }
 
-// RedisStore keeps versioned values as a framed envelope "<version>\n<payload>"
-// under one key, and mutates them with fredis.CompareAndSet.
+// RedisStore keeps versioned values as a framed envelope
+// "<version>|<token>|…\n<payload>" under one key, and mutates them with
+// fredis.CompareAndSet. The tokens are the key's most recent writes, newest
+// first (write_token.go): they are how a write whose reply was lost recognises
+// itself.
 //
 // The compare is on the exact bytes that were read, so it is a version compare
 // in effect: the version leads the envelope and the payload cannot change
@@ -123,6 +131,12 @@ func NewRedisStore[K comparable, T any](client RedisClient, cfg RedisConfig[K, T
 	}
 	if cfg.Sleep == nil {
 		cfg.Sleep = time.Sleep
+	}
+	if cfg.WriteTokenHistory < 0 {
+		return nil, fmt.Errorf("versionstore: write token history %d is negative", cfg.WriteTokenHistory)
+	}
+	if cfg.WriteTokenHistory == 0 {
+		cfg.WriteTokenHistory = DefaultWriteTokenHistory
 	}
 	if cfg.Index != nil {
 		fixed := strings.TrimSpace(cfg.Index.Key) != ""
@@ -335,6 +349,13 @@ func (s *RedisStore[K, T]) Update(ctx context.Context, key K, mutate Mutate[T]) 
 	if err != nil {
 		return Versioned[T]{}, false, err
 	}
+	if write := resumedWrite(ctx, redisKey); write != nil {
+		result, done, err := s.resumeUpdate(ctx, write, mutate)
+		if done || err != nil {
+			return result, done, err
+		}
+		// The earlier write provably did not land: this call performs it.
+	}
 
 	raw, current, found, err := s.readRaw(ctx, redisKey)
 	if err != nil {
@@ -348,27 +369,28 @@ func (s *RedisStore[K, T]) Update(ctx context.Context, key K, mutate Mutate[T]) 
 		if !save {
 			return current, false, nil
 		}
-		envelope, err := s.encodeEnvelope(next, current.Version+1)
-		if err != nil {
-			return Versioned[T]{}, false, err
-		}
-		// A missing key must be created, not overwritten: Expected == nil
-		// makes CompareAndSet require absence, so a value that appeared since
-		// the read loses instead of being clobbered.
-		var expected []byte
+		// A missing key must be created, not overwritten: a nil base makes
+		// CompareAndSet require absence, so a value that appeared since the
+		// read loses instead of being clobbered.
+		var base []byte
 		if found {
-			expected = raw
+			base = raw
 		}
-		result, err := fredis.CompareAndSet(ctx, s.client, fredis.CompareAndSetCommand{
-			Key: redisKey, Expected: expected, Next: envelope, TTL: s.cfg.TTL,
-			Index: s.indexEntry(key, next),
-		})
+		write, err := s.prepareWrite(writeUpdate, key, redisKey, base, next, current.Version+1)
 		if err != nil {
 			return Versioned[T]{}, false, err
 		}
-		CountCompareAndSet(s.cfg.Prefix, result.Applied)
-		if result.Applied {
-			return Versioned[T]{Value: next, Version: current.Version + 1}, true, nil
+		// settle also covers a lost reply: it checks this write's token and
+		// resends only when the key proves the command has not run, so a
+		// reply that went missing is neither applied twice nor mistaken for a
+		// lost race (A2 ③).
+		result, err := s.settle(ctx, write, false)
+		if result == outcomeFailed {
+			return Versioned[T]{}, false, err
+		}
+		CountCompareAndSet(s.cfg.Prefix, result == outcomeApplied)
+		if result == outcomeApplied {
+			return Versioned[T]{Value: next, Version: write.version}, true, nil
 		}
 		// Lost the race. Back off, then re-read: the backoff exists so the
 		// writer that won takes its turn, and the value CompareAndSet handed
@@ -387,26 +409,79 @@ func (s *RedisStore[K, T]) Update(ctx context.Context, key K, mutate Mutate[T]) 
 	return Versioned[T]{}, false, fmt.Errorf("%w: %s after %d attempts", ErrConflict, redisKey, s.cfg.MaxAttempts)
 }
 
+// resumeUpdate finishes an Update whose outcome an earlier call left open.
+// done reports that the earlier write landed and result is what it wrote;
+// done false with a nil error means it provably did not, and the caller
+// performs the update afresh.
+func (s *RedisStore[K, T]) resumeUpdate(ctx context.Context, write *pendingWrite, mutate Mutate[T]) (result Versioned[T], done bool, err error) {
+	if write.kind != writeUpdate {
+		return Versioned[T]{}, false, tokenMismatch(write, "the earlier write was not an Update")
+	}
+	// mutate is pure, so the same update from the same base yields the same
+	// bytes; anything else is a different write carrying this token.
+	var base Versioned[T]
+	found := write.base != nil
+	if found {
+		if base, err = s.decodeEnvelope(write.base); err != nil {
+			return Versioned[T]{}, false, err
+		}
+	}
+	next, save, err := mutate(base.Value, found)
+	if err != nil {
+		return Versioned[T]{}, false, err
+	}
+	if !save {
+		return Versioned[T]{}, false, tokenMismatch(write, "mutate no longer saves")
+	}
+	same, err := s.sameWrite(write, next)
+	if err != nil {
+		return Versioned[T]{}, false, err
+	}
+	if !same {
+		return Versioned[T]{}, false, tokenMismatch(write, "mutate yields a different value from the same base")
+	}
+	settled, err := s.settle(ctx, write, true)
+	switch settled {
+	case outcomeApplied:
+		return Versioned[T]{Value: next, Version: write.version}, true, nil
+	case outcomeLost:
+		return Versioned[T]{}, false, nil
+	default:
+		return Versioned[T]{}, false, err
+	}
+}
+
 func (s *RedisStore[K, T]) Create(ctx context.Context, key K, value T) (Versioned[T], bool, error) {
 	redisKey, err := s.key(key)
 	if err != nil {
 		return Versioned[T]{}, false, err
 	}
-	envelope, err := s.encodeEnvelope(value, 1)
-	if err != nil {
+	write := resumedWrite(ctx, redisKey)
+	resumed := write != nil
+	if resumed {
+		if write.kind != writeCreate {
+			return Versioned[T]{}, false, tokenMismatch(write, "the earlier write was not a Create")
+		}
+		same, err := s.sameWrite(write, value)
+		if err != nil {
+			return Versioned[T]{}, false, err
+		}
+		if !same {
+			return Versioned[T]{}, false, tokenMismatch(write, "Create retried with a different value")
+		}
+	} else if write, err = s.prepareWrite(writeCreate, key, redisKey, nil, value, 1); err != nil {
 		return Versioned[T]{}, false, err
 	}
-	result, err := fredis.CompareAndSet(ctx, s.client, fredis.CompareAndSetCommand{
-		Key: redisKey, Expected: nil, Next: envelope, TTL: s.cfg.TTL,
-		Index: s.indexEntry(key, value),
-	})
-	if err != nil {
-		return Versioned[T]{}, false, err
-	}
-	if !result.Applied {
+	// A lost reply is settled by the token: a Create that landed is reported
+	// created, not "already taken by someone" (A2 ③).
+	switch settled, err := s.settle(ctx, write, resumed); settled {
+	case outcomeApplied:
+		return Versioned[T]{Value: value, Version: 1}, true, nil
+	case outcomeLost:
 		return Versioned[T]{}, false, nil
+	default:
+		return Versioned[T]{}, false, err
 	}
-	return Versioned[T]{Value: value, Version: 1}, true, nil
 }
 
 func (s *RedisStore[K, T]) Delete(ctx context.Context, key K, expect Versioned[T]) error {
@@ -417,6 +492,15 @@ func (s *RedisStore[K, T]) DeleteIf(ctx context.Context, key K, expect Versioned
 	redisKey, err := s.key(key)
 	if err != nil {
 		return err
+	}
+	if write := resumedWrite(ctx, redisKey); write != nil {
+		if write.kind != writeDelete {
+			return tokenMismatch(write, "the earlier write was not a Delete")
+		}
+		if write.version != expect.Version {
+			return tokenMismatch(write, fmt.Sprintf("Delete retried holding version %d, the earlier one held %d", expect.Version, write.version))
+		}
+		return s.finishDelete(ctx, write, true)
 	}
 	raw, current, found, err := s.readRaw(ctx, redisKey)
 	if err != nil {
@@ -434,25 +518,33 @@ func (s *RedisStore[K, T]) DeleteIf(ctx context.Context, key K, expect Versioned
 	if match != nil && !match(current.Value) {
 		return fmt.Errorf("%w: %s identity changed", ErrVersionMismatch, redisKey)
 	}
-	keys := []string{redisKey}
-	member := ""
+	write := &pendingWrite{kind: writeDelete, key: redisKey, base: raw, version: current.Version, deleteKeys: []string{redisKey}}
 	if s.cfg.Index != nil {
 		// The set this value is in comes from the value itself when the index
 		// is per owner, which is why the read above is needed before the
 		// delete rather than only for the version compare.
 		if indexKey := s.cfg.Index.indexKeyFor(current.Value); indexKey != "" {
-			member = s.cfg.KeyOf(key)
-			keys = append(keys, indexKey)
+			write.deleteMember = s.cfg.KeyOf(key)
+			write.deleteKeys = append(write.deleteKeys, indexKey)
 		}
 	}
-	result, err := s.client.Eval(ctx, deleteIfScript, keys, raw, member)
-	if err != nil {
+	return s.finishDelete(ctx, write, false)
+}
+
+// finishDelete settles a delete. A delete writes no token, so a lost reply is
+// settled only when the key still holds the held bytes (resend) or has moved
+// on from them (someone else wrote: version mismatch); an absent key does not
+// say who deleted it, and stays unknown.
+func (s *RedisStore[K, T]) finishDelete(ctx context.Context, write *pendingWrite, resumed bool) error {
+	settled, err := s.settle(ctx, write, resumed)
+	switch settled {
+	case outcomeApplied:
+		return nil
+	case outcomeLost:
+		return fmt.Errorf("%w: %s changed during delete", ErrVersionMismatch, write.key)
+	default:
 		return err
 	}
-	if applied, _ := result.(int64); applied != 1 {
-		return fmt.Errorf("%w: %s changed during delete", ErrVersionMismatch, redisKey)
-	}
-	return nil
 }
 
 const deleteIfScript = `
@@ -466,37 +558,18 @@ func (s *RedisStore[K, T]) backoff(attempt int) {
 	RetryBackoff(attempt, s.cfg.RetryBackoff, s.cfg.Sleep)
 }
 
-func (s *RedisStore[K, T]) encodeEnvelope(value T, version uint64) ([]byte, error) {
-	payload, err := s.cfg.Codec.Encode(value)
-	if err != nil {
-		return nil, err
-	}
-	var buf bytes.Buffer
-	buf.WriteString(strconv.FormatUint(version, 10))
-	buf.WriteByte('\n')
-	buf.Write(payload)
-	return buf.Bytes(), nil
-}
-
 func (s *RedisStore[K, T]) decodeEnvelope(raw []byte) (Versioned[T], error) {
-	index := bytes.IndexByte(raw, '\n')
-	if index <= 0 {
-		return Versioned[T]{}, fmt.Errorf("%w: no version separator", ErrMalformedRecord)
-	}
-	version, err := strconv.ParseUint(string(raw[:index]), 10, 64)
+	header, err := parseEnvelope(raw)
 	if err != nil {
-		return Versioned[T]{}, fmt.Errorf("%w: version is not a number: %v", ErrMalformedRecord, err)
+		return Versioned[T]{}, err
 	}
-	if version == 0 {
-		return Versioned[T]{}, fmt.Errorf("%w: version is zero", ErrMalformedRecord)
-	}
-	value, err := s.cfg.Codec.Decode(raw[index+1:])
+	value, err := s.cfg.Codec.Decode(header.payload)
 	if err != nil {
 		// The codec's own error is kept as the cause; what is added is the
 		// classification, so a caller does not have to guess from the text.
 		return Versioned[T]{}, fmt.Errorf("%w: %v", ErrMalformedRecord, err)
 	}
-	return Versioned[T]{Value: value, Version: version}, nil
+	return Versioned[T]{Value: value, Version: header.version}, nil
 }
 
 func isRedisMiss(err error) bool {

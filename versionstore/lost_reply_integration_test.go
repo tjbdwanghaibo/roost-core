@@ -12,6 +12,9 @@ package versionstore_test
 // 承诺：回复丢失是结果未知，原样交给调用方（Redis 上恰好一次写入或零次写入），绝不在一次调用里
 // 静默写两次。toxiproxy 用本用例自建、端口随机的代理，只给本用例的连接加毒，不动环境共享的
 // redis 代理，也不 /reset 别人的代理。
+//
+// A2 ③ 之后：store 用信封里的一次性令牌核对，这种情况返回 applied / v2、err 为 nil
+// （write_token_integration_test.go 断言这一点）；本用例只守“绝不写两次”。
 
 import (
 	"bytes"

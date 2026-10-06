@@ -2,6 +2,8 @@ package versionstore
 
 import (
 	"context"
+	"errors"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,7 +35,32 @@ type fakeRedis struct {
 	// always won the race, so the retry budget can be exercised.
 	failEveryCAS bool
 	casCalls     int
+
+	// loseReplies makes the next N write scripts (compare-and-set or delete)
+	// RUN and then fail with errLostReply: what a reply cut after the server
+	// executed the script looks like to the caller (A2 ③). dropWrites makes the
+	// next N write scripts fail the same way WITHOUT running — the caller cannot
+	// tell the two apart, which is the whole problem.
+	loseReplies int
+	dropWrites  int
+	// failGets makes the next N GETs fail with errLostReply.
+	failGets int
+	// afterLostReply runs after a lost or dropped write, outside the lock and
+	// before the error is returned, so a test can let another writer in between
+	// "the script ran" and "the caller looks again".
+	afterLostReply func()
 }
+
+// fakeRedisReplyError is an error reply from the server, shaped like
+// go-redis's (it has RedisError).
+type fakeRedisReplyError string
+
+func (e fakeRedisReplyError) Error() string { return string(e) }
+func (fakeRedisReplyError) RedisError()     {}
+
+// errLostReply is a transport failure: not a server error reply and not a
+// dial failure, so the outcome of the command is unknown.
+var errLostReply = errors.New("fake redis: connection reset while reading the reply")
 
 func newFakeRedis() *fakeRedis {
 	return &fakeRedis{values: make(map[string][]byte), index: make(map[string]map[string]float64)}
@@ -42,6 +69,10 @@ func newFakeRedis() *fakeRedis {
 func (f *fakeRedis) Get(_ context.Context, key string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failGets > 0 {
+		f.failGets--
+		return nil, errLostReply
+	}
 	value, ok := f.values[key]
 	if !ok {
 		return nil, fredis.ErrNil
@@ -65,9 +96,34 @@ func (f *fakeRedis) Del(_ context.Context, keys ...string) (int64, error) {
 // Eval implements the one script versionstore relies on, with the same
 // semantics as roost-core/redis's compareAndSetScript: ARGV[1] expected,
 // ARGV[2] next, ARGV[3] ttl millis, ARGV[4] "1" when absence is expected.
-func (f *fakeRedis) Eval(_ context.Context, script string, keys []string, args ...any) (any, error) {
+func (f *fakeRedis) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	write := script == deleteIfScript || strings.Contains(script, "expect_missing")
+	dropped := write && f.dropWrites > 0
+	if dropped {
+		f.dropWrites--
+	}
+	var reply any
+	var err error
+	if !dropped {
+		reply, err = f.evalLocked(ctx, script, keys, args...)
+	}
+	lost := dropped || (write && err == nil && f.loseReplies > 0)
+	if lost && !dropped {
+		f.loseReplies--
+	}
+	hook := f.afterLostReply
+	f.mu.Unlock()
+	if lost {
+		if hook != nil {
+			hook()
+		}
+		return nil, errLostReply
+	}
+	return reply, err
+}
+
+func (f *fakeRedis) evalLocked(_ context.Context, script string, keys []string, args ...any) (any, error) {
 	if script == deleteIfScript {
 		current, found := f.values[keys[0]]
 		expected, _ := args[0].([]byte)
@@ -121,9 +177,12 @@ func (f *fakeRedis) Eval(_ context.Context, script string, keys []string, args .
 		if remove == "1" {
 			delete(entries, member)
 		} else {
+			// Like Redis: the SET above has already happened when ZADD rejects
+			// the score, and a script is not rolled back on error. Redis's ZADD
+			// refuses NaN even though strtod parses it (RR-20261006-35).
 			score, err := strconv.ParseFloat(scoreText, 64)
-			if err != nil {
-				return nil, err
+			if err != nil || math.IsNaN(score) {
+				return nil, fakeRedisReplyError("ERR value is not a valid float script: on @user_script")
 			}
 			entries[member] = score
 		}

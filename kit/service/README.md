@@ -38,6 +38,9 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
    （store 是存储的键前缀），自己写 compare-and-set 循环的存储（如 rank）调用
    `versionstore.CountCompareAndSet` / `CountConflict`。服务对 `versionstore.ErrConflict`
    不再另报 `Conflict`；`Conflict` 只留给业务冲突（insert-only 撞号、已绑定到别处等）。
+   写命令回复丢失时 versionstore 用信封里的一次性写令牌自己核对（A2 ③），核对结果计
+   `versionstore.unknown_outcome.total{store,result=applied|lost|unresolved}`；`unresolved`
+   持续增长说明后端不答或删除 / 新建遇到回复丢失，服务拿到 `versionstore.ErrOutcomeUnknown`。
 7. **任何列表接口都有上界**，且上界不能被 `0` 绕过。
 8. **测试用求值型替身**（`roost-kit/mongo/mongotest`），并发不变量必须有并发测试。
 9. **每个修掉的缺陷都有一条经"回退修复即变红"验证过的回归测试。**

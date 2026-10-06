@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 )
@@ -123,6 +124,13 @@ func CompareAndSet(ctx context.Context, client ScriptRunner, cmd CompareAndSetCo
 	if cmd.Index != nil {
 		if cmd.Index.Key == "" || cmd.Index.Member == "" {
 			return CompareAndSetResult{}, ErrCASInvalidCommand
+		}
+		// ZADD rejects NaN only after the script's SET has run, and a script is
+		// not rolled back on error: the value would land without its index
+		// entry while the caller gets an error (RR-20261006-35). Refuse it
+		// before anything is sent.
+		if !cmd.Index.Remove && math.IsNaN(cmd.Index.Score) {
+			return CompareAndSetResult{}, fmt.Errorf("%w: index score is NaN", ErrCASInvalidCommand)
 		}
 		remove := "0"
 		if cmd.Index.Remove {

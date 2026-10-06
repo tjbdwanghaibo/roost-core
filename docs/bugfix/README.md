@@ -6,6 +6,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 A2 ③ versionstore 一次性写令牌（`a2t`），未发版。** 信封 `<version>|<令牌>…\n<payload>`，回复丢失时按令牌核对、`Resume` 续核、`ErrWriteTokenMismatch` 防误用；持久格式改变，升级需清空（[方案](../feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md)）。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-35](RR-20261006-35.md) | `redis.CompareAndSet` 对非删除的 NaN 索引分数发出前返回 `ErrCASInvalidCommand`；替身先改忠实（ZADD 拒绝 NaN 时 SET 已生效） | 已修复、声明场景验证，未发版 |
+
 **10-07 skill 衍生物分区存放（维护者第十三轮“skill 衍生物两张表”，`skpart`），未发版。** 衍生物记录按字段（`Status`、`handedOff`）分进施放中 / 已移交 / 待停止 / 已停止四个分区（`skill/spawn_table.go`），只有 `spawnTable.setState` 改分区字段并挪分区；删掉 `ownedSpawns` 与 checkpoint 的 `owned_spawns` 及恢复比对，checkpoint 版本 5 → 6。go/types 源码守卫 + 操作序列不变量守卫，变异四种都红。[方案](../feature/REFACTOR-2026-10-07-skill-spawn-partition.md)。
 
 | 编号 | 修复 | 状态 |

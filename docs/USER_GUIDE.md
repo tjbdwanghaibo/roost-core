@@ -8,6 +8,10 @@ Mirror现有适配器新增payload身份校验（NC-33/34，main未发版）：c
 
 RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登记之后、它又登记了本次清理清单之外的 hash（另一布局发布了新键）、此次Lua明确未写；同布局的并发首次创建、并发删除、记录到期不会返回它（RR-20261004-09，未发版）。先读回当前schema/业务意图再决定重试，不自动以旧全量值覆盖新布局。网络/Eval错误仍可能已应用，不能按明确拒绝处理。Delete也要求adapter支持现有Eval；存储格式保持，历史孤儿不自动清理。[用法和限制](bugfix/RR-20261004-NC-30.md)。
 
+## 2026-10-07 versionstore 写入带一次性令牌（A2 ③，main，未发版）
+
+`versionstore.RedisStore` 的每次写带一个 store 生成的令牌，和值在同一条 SET 里写进信封（`<version>|<令牌>…\n<payload>`，每键保留最近 `RedisConfig.WriteTokenHistory` 个，缺省 8）。写命令回复丢失时 store 自己核对：令牌在就返回那次写的结果（`Update` 不会叠第二次、`Create` 不会把自己建的键报成已占用），键还是原值就原样重发，别人先写了那个版本就当作比输了重跑 mutate。证明不了的返回 `versionstore.ErrOutcomeUnknown`（`*UnknownOutcomeError`，原传输错误仍可 `errors.Is`）：键原本不存在而此刻仍不存在、`Delete` 之后键不存在（删除不留令牌）、令牌被后来的写挤出、后端不答。要在 store 之外再试一次，用 `store.Update(versionstore.Resume(ctx, err), key, mutate)`（`Create` / `Delete` 同理）：先核对上一次的令牌，已生效就返回上一次的结果；重试必须是同一次写（同样的值、同样的 mutate、同样持有的版本），否则 `ErrWriteTokenMismatch`、不写。Resume 只在本进程内有效，跨 RPC 的重试仍靠值里的请求 ID 去重。**持久格式改变，升级需清空 versionstore 的键**（旧信封读出 `ErrMalformedRecord: no write token`，T-291）。另：带索引的写 `Entry` 返回 NaN 分数时改为发出前拒绝（`redis.ErrCASInvalidCommand`），以前会“值写入、索引没动、返回错误”（RR-20261006-35）。[方案](feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md)
+
 ## 2026-10-06 业务时间只许前进（main，未发版）
 
 同一套部署的业务时间（真实时间 + `time.logic_offset`）不能往回走：App 在单实例锁之后、任何 Mod Init 之前读部署级高水位（协调存储 `<singleton.key_prefix>:business_time`），按新偏移算出的业务时间低于“高水位 − 1 分钟”就拒绝启动（`app.ErrBusinessTimeMovedBack`，点名偏移与高水位），运行中每 10s 推进高水位。只在非生产检查（生产偏移强制为 0，行为不变）；配了非 0 偏移的进程必须能打开协调存储（bootstrap 装 `App.Singleton`、写 `singleton.key_prefix`，`singleton.enabled` 可以是 false）。测试环境要回到过去只能清库重建。随之删掉了只为“偏移往回调”存在的 API：`activity.Config.SystemNow`、`mail.Config.SystemNow`、`mail.RedisConfig.StorageGrace`（宽限固定为 `mail.EnvelopeStorageGrace` = 24h，原 `DefaultEnvelopeStorageGrace` 改名）——activity 派发退避、进度凭证与 mail 领取租约回到业务时钟；手工装配设置过它们的地方删掉那一行即可。详见 [§10 业务时钟与系统时钟](#业务时钟与系统时钟)。[方案](feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md)

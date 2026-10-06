@@ -89,12 +89,17 @@ type Store[K comparable, T any] interface {
 	// It returns the value that was written and its new version; applied is
 	// false when mutate declined to save.
 	//
-	// A transport error (connection reset, timeout) leaves the outcome
-	// unknown: the write may have landed. Retrying the same Update re-applies
-	// mutate to whatever is stored, so a caller that retries needs an
+	// A transport error (connection reset, timeout) leaves the outcome open:
+	// the write may have landed. Every write carries a one-time token stored
+	// with the value (A2 ③), so the Redis store settles a lost reply itself:
+	// it reads the key and returns the write's own result when its token is
+	// there, resends only when the key proves the command has not run, and
+	// treats it as a lost race when someone else's write took that version. It
+	// never blindly replays a write (RR-20261005-NC-100). What it cannot prove
+	// comes back as ErrOutcomeUnknown; pass that error to Resume so the next
+	// call checks the token instead of re-applying mutate. Without Resume a
+	// retry re-applies mutate to whatever is stored, so it still needs an
 	// idempotent mutate — typically a request id recorded inside the value.
-	// The store itself never replays a write whose reply was lost
-	// (RR-20261005-NC-100).
 	Update(ctx context.Context, key K, mutate Mutate[T]) (result Versioned[T], applied bool, err error)
 
 	// Create stores a value only if the key is absent, and reports whether it
@@ -102,6 +107,11 @@ type Store[K comparable, T any] interface {
 	// different intent than "compute from current", and expressing it through
 	// Update would rely on the caller checking found — which is exactly the
 	// check that gets forgotten.
+	//
+	// A lost reply is settled by the write's token: a Create that landed
+	// reports created, never "already taken". One that cannot be proven — the
+	// key is still absent, which is also what "ran, then deleted by someone"
+	// looks like — comes back as ErrOutcomeUnknown and is not resent.
 	//
 	// When it does NOT create, the returned Versioned is the ZERO VALUE — not
 	// the value it collided with. A caller that needs to see what is already
@@ -112,6 +122,11 @@ type Store[K comparable, T any] interface {
 	Create(ctx context.Context, key K, value T) (Versioned[T], bool, error)
 
 	// Delete removes the key only if the caller's version still matches.
+	//
+	// A delete writes no token, so a lost reply is settled only while the key
+	// still holds the caller's version (resent) or has moved on from it
+	// (ErrVersionMismatch); an absent key does not say who deleted it and
+	// comes back as ErrOutcomeUnknown.
 	Delete(ctx context.Context, key K, expect Versioned[T]) error
 }
 

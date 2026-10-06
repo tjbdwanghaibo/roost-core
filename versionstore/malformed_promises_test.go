@@ -21,7 +21,11 @@ func TestAnUnreadableRecordIsReportedAsMalformed(t *testing.T) {
 		"no version separator":    "not-an-envelope",
 		"version not a number":    "abc\n{}",
 		"version is zero":         "0\n{}",
-		"payload does not decode": "1\n{not json",
+		"payload does not decode": "1|AAAAAAAAAAA\n{not json",
+		// A2 ③：令牌是信封的一部分，旧格式不兼容（升级需清空）。
+		"old envelope without a write token": "1\n{}",
+		"empty write token":                  "1|\n{}",
+		"more write tokens than versions":    "1|AAAAAAAAAAA|BBBBBBBBBBB\n{}",
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := newMalformedTestStore(t)
