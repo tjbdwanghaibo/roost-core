@@ -78,6 +78,8 @@ WAL checkpoint 不得超过持久日志；Close 必须等待外部 Flush/Replay/
 
 性能与功能 fixture 应经过正式 kit/Backend 适配链，检查能力声明是否逐层传递。新增配置要核对生成配置和运行时实际读取，重命名要覆盖旧 import、限定符号、标记及业务文件迁移边界。停机预算的生成值（`shutdown.total_timeout` 与部署宽限期）只计入生成器 Manifest 已知的 Mod：手写 Mod 即使实现 `app.ModStopBudgetProvider.StopBudget` 也不计入，doctor 也不检查它，新增这类 Mod 时须手工调大 total 与宽限期（RR-20260926-66，OPEN-ITEMS C31）。真实时钟可能连续两次读到相同值：用可控时间验证时间策略，不为统计测试增加生产 sleep 或改变门禁。
 
+**业务时钟与系统时钟**（维护者决定 D-L3，2026-10-06，[方案](../../feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md)）：业务时间（活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、游戏时间）读 `app.BusinessClock(registry)`（真实时间 + `time.logic_offset`，服务经 `Config.Now` 注入）；帧率、租约与锁、超时、重试退避、存储 TTL、Ack、日志 / 指标 / WAL 时间戳是系统时间，用 `time` 包。Nest / DataEngine / Sync 全部是系统时间，不要改成业务时钟。偏移只在启动时生效、生产强制为 0；业务过期不靠存储 TTL 判断，TTL 只兜底且更长。同一服务里两种都有时分开注入（如 mail 的 `Now` / `SystemNow`）。`glsvet` 对 `game` 目录下直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，系统时间写 `//glsvet:system-clock <理由>` 豁免。
+
 当前 Remote mutation 与 lease-fence receipt 混合事务在 WAL 前明确拒绝；不要误以为 generated RollbackRemoteCommit 保存了跨实体前像（它是 no-op）。投影时被跳过 / 持久拒绝后的在线恢复已有定案契约（RR-20260926-30 / 39，维护者批准），新路径沿用它，不另建机制：
 - 内存无法证明等于权威时不解冻、不原地“回滚”：原生步骤记录投影结论前，同实体写在 WAL 准入处以可重试的 `dataengine.ErrFencedEntityPending` 屏障；跳过 / 拒绝后经 `NestMgr.RunLocal`（`LocalExecutorBinder` 接线）在快池对受影响实例做仅内存卸载（`ManagerAccess.Unload`，`DestroyReasonMemoryUnload`），下一次访问从权威重载；卸载失败保持隔离并重试。
 - Sync：实体在权威里仍存在就换代——关闭旧状态、订阅保持、不发 remove，重载后 `Rebind` 强制全量；事务内新建而权威里不存在的实体才 `RetractSyncSubject`（remove-before-create）。

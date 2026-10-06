@@ -75,7 +75,8 @@ func (m *Mod) Provide(r *app.Registry) error {
 	if err != nil {
 		return err
 	}
-	store, err := NewRedisStore(client, RedisConfig{Prefix: m.prefix, Metrics: m.metrics})
+	// 同分按“谁先达到”排序是排行规则，读业务时钟（D-L3）。
+	store, err := NewRedisStore(client, RedisConfig{Prefix: m.prefix, Metrics: m.metrics, Now: app.BusinessClock(r).Now})
 	if err != nil {
 		return fmt.Errorf("rank mod: %w", err)
 	}

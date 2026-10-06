@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/featureflag"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	svcactivity "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity"
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
@@ -355,4 +356,64 @@ func TestAWindowOpensForTheGroupTheFilePutsThisServerIn(t *testing.T) {
 			t.Fatalf("window = %d expected (found %v, err %v), want %d", len(opened.ExpectedGameSIDs), found, err, svcactivity.MaxExpectedGames)
 		}
 	})
+}
+
+// keyRecorder 记下 OpenActivity 开的是哪个窗口；其余方法嵌入接口，没想到的调用直接 panic。
+type keyRecorder struct {
+	svcactivity.Coordinator
+	opened []svcactivity.Key
+}
+
+func (c *keyRecorder) OpenActivity(_ context.Context, key svcactivity.Key, _ []int32) (svcactivity.Activity, error) {
+	c.opened = append(c.opened, key)
+	return svcactivity.Activity{}, nil
+}
+
+// recordingNest 记下 runner 发给 Nest 的请求并回答一个错误（runner 只记日志），用来看请求里带的是哪个时间。
+type recordingNest struct {
+	corenest.Client
+	requests []corenest.Params
+}
+
+func (n *recordingNest) Request(_ context.Context, _ corenest.HandlerName, _ int64, params corenest.Params, _ ...corenest.SendOpt) (any, error) {
+	n.requests = append(n.requests, append(corenest.Params(nil), params...))
+	return nil, errors.New("recording nest: not served")
+}
+
+// D-L3（维护者第六轮决定）：活动窗口、关窗截止与 World 定时器读业务时钟（time.logic_offset）。
+// 业务时钟比真实时间快一天时，开的是业务时间所在的窗口，钉到 World 上的“现在”也是业务时间；
+// 修前 openCurrentWindow 读 time.Now()，开的是真实时间所在的窗口，与协调器的业务时钟错开一天。
+func TestTheWindowFollowsTheBusinessClock(t *testing.T) {
+	featureflag.Set(featureflag.Flag{Name: flags.Activity, Enabled: true})
+	t.Cleanup(func() { featureflag.Set(featureflag.Flag{Name: flags.Activity, Enabled: false}) })
+	business := time.Now().Add(24 * time.Hour)
+	coordinator := &keyRecorder{}
+	nest := &recordingNest{}
+	runner := &ActivityRunner{
+		coordinator: coordinator, liveness: &liveSource{live: []int32{1300}}, serverType: "game",
+		gameSID: 1300, groupID: "west", candidates: []int32{1300}, nest: nest,
+		now: func() time.Time { return business },
+	}
+	runner.openCurrentWindow(context.Background())
+	want := gameactivity.Key("west", gameactivity.ID(business.Unix()))
+	if len(coordinator.opened) != 1 || coordinator.opened[0] != want {
+		t.Fatalf("opened %v, want the window the business clock is in (%v), not the wall clock's (%v)",
+			coordinator.opened, want, gameactivity.Key("west", gameactivity.ID(time.Now().Unix())))
+	}
+	closeAt, _ := gameactivity.CloseAt(gameactivity.ID(business.Unix()))
+	if len(nest.requests) != 1 || fmt.Sprint(nest.requests[0]) != fmt.Sprint(corenest.Params{gameactivity.ID(business.Unix()), closeAt.Unix(), business.Unix()}) {
+		t.Fatalf("the World was armed with %v, want the business window, its close time and the business now", nest.requests)
+	}
+}
+
+// D-L3：World 定时器的每一拍带的是业务时间（A1 之后定时器由调用方钉时间，timer_component 的 scheduler(now)
+// 只认这一拍带来的时间），所以前拨偏移后到期的关窗节点按业务时间触发。
+func TestTheWorldTickCarriesBusinessTime(t *testing.T) {
+	business := time.Now().Add(24 * time.Hour)
+	nest := &recordingNest{}
+	runner := &ActivityRunner{nest: nest, worldID: 7, now: func() time.Time { return business }}
+	runner.tickWorldOnce(context.Background())
+	if len(nest.requests) != 1 || fmt.Sprint(nest.requests[0]) != fmt.Sprint(corenest.Params{business.UnixMilli()}) {
+		t.Fatalf("the World was ticked with %v, want the business clock's %d", nest.requests, business.UnixMilli())
+	}
 }

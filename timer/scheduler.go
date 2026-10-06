@@ -15,6 +15,7 @@ package timer
 
 import (
 	"container/heap"
+	"github.com/tjbdwanghaibo/roost-core/clock"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -110,10 +111,12 @@ func (s *Scheduler) Seed() int64 {
 	return s.seed
 }
 
-// SetClock replaces the time source used to stamp new timers' End (default
-// time.Now). Hosts that drive Tick with an offset-aware clock (e.g.
-// clock.Now under time.logic_offset) must inject the same source here,
-// otherwise every new timer is shifted by the offset relative to the ticks.
+// SetClock replaces the time source used to stamp new timers' End. Game
+// timers run on the business clock (D-L3), so the default is the process
+// business clock clock.Now (real time + time.logic_offset). A host that drives
+// Tick with its own time must inject the same source here — the World's
+// TimerComponent pins both to the tick's / transaction's time — otherwise
+// every new timer is shifted relative to the ticks.
 func (s *Scheduler) SetClock(now func() time.Time) {
 	if s == nil || now == nil {
 		return
@@ -125,7 +128,7 @@ func (s *Scheduler) now() time.Time {
 	if s != nil && s.clock != nil {
 		return s.clock()
 	}
-	return time.Now()
+	return clock.Now()
 }
 
 func (s *Scheduler) RegisterHandler(timerType int32, h Handler) {

@@ -98,7 +98,8 @@ type Config struct {
 	// another owner's run.
 	NewRunID func() (string, error)
 
-	// Now is the clock; nil means time.Now.
+	// Now is the business clock (D-L3: a run's deadline is game time; the
+	// kit Mod injects app.BusinessClock). nil means time.Now.
 	Now func() time.Time
 	// Metrics receives reports. A nil reporter means no reporting and never
 	// fails an operation.

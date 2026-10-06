@@ -44,8 +44,10 @@ func integrationStores(t *testing.T) (RedisStores, string) {
 	prefix := fmt.Sprintf("mailtest:%d", time.Now().UnixNano())
 	// OPEN-ITEMS B45：之前每跑一次在目标 Redis 留下约 30 个键（信封、收件箱、发送记录）。
 	t.Cleanup(func() { deleteKeysUnder(t, prefix) })
+	// StorageGrace 取最小正值：TestIntegrationAnEnvelopeExpiresOnItsOwnDeadline 要看到键在业务过期后
+	// 立刻被 Redis 回收（D-L3 的宽限缺省 24h）。
 	stores, err := NewRedisStores(client, RedisConfig{
-		Prefix: prefix, SendTTL: time.Hour,
+		Prefix: prefix, SendTTL: time.Hour, StorageGrace: time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)

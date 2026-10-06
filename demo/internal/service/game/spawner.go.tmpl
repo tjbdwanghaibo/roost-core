@@ -13,6 +13,7 @@ import (
 	sceneentity "{{MODULE}}/game/entities/scene"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/clock"
 	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
 )
 
@@ -40,6 +41,10 @@ type spawner struct {
 	lives  *lifecycle.MonsterLifecycle
 	ids    *runtimeid.Allocator
 
+	// business is the clock respawn cooldowns run on (D-L3: a cooldown is
+	// business time). How often the spawner looks is the ticker, system time.
+	business clock.Business
+
 	mu       sync.Mutex
 	monsters map[int64]*monster.Monster
 }
@@ -55,6 +60,7 @@ func startSpawner(ctx context.Context, registry *app.Registry, area *sceneentity
 	}
 	instance := &spawner{
 		area: area, bridge: bridge, lives: lives, ids: ids,
+		business: app.BusinessClock(registry),
 		monsters: make(map[int64]*monster.Monster),
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
@@ -67,8 +73,8 @@ func startSpawner(ctx context.Context, registry *app.Registry, area *sceneentity
 			select {
 			case <-loopCtx.Done():
 				return
-			case now := <-ticker.C:
-				instance.refill(loopCtx, now)
+			case <-ticker.C:
+				instance.refill(loopCtx, instance.business.Now())
 			}
 		}
 	}()
@@ -140,7 +146,7 @@ func (s *spawner) Kill(ctx context.Context, monsterID int64) error {
 	if !known {
 		return fmt.Errorf("spawner: monster %d is not here", monsterID)
 	}
-	s.area.Refresh().Died(monsterID, time.Now())
+	s.area.Refresh().Died(monsterID, s.business.Now())
 	s.bridge.HideSubject(ctx, monsterID)
 	return s.lives.Destroy(ctx, value, coreentity.DestroyReasonCommon, false)
 }

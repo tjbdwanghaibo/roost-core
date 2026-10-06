@@ -41,9 +41,21 @@ type RedisConfig struct {
 	// the SAME clock the Service uses: the ttl is computed from the expiry the
 	// Service compares against, and two components disagreeing about the
 	// current time is a mail that reads as live and has already been evicted.
-	// nil means time.Now.
+	// In a deployment it is the business clock (D-L3; the kit Mod injects
+	// app.BusinessClock). nil means time.Now.
 	Now func() time.Time
+	// StorageGrace is how much longer than the mail's business expiry its
+	// envelope key lives. D-L3: storage ttl only reclaims space and must
+	// outlive the business expiry, which the Service decides with
+	// Envelope.Expired; the grace also covers time.logic_offset being moved
+	// back between two runs of a test environment. Zero selects
+	// DefaultEnvelopeStorageGrace; negative is refused.
+	StorageGrace time.Duration
 }
+
+// DefaultEnvelopeStorageGrace is how long an envelope key outlives the mail's
+// business expiry when RedisConfig.StorageGrace is zero.
+const DefaultEnvelopeStorageGrace = 24 * time.Hour
 
 // NewRedisStores builds them.
 //
@@ -64,9 +76,15 @@ func NewRedisStores(client fredis.IRedis, cfg RedisConfig) (RedisStores, error) 
 			"longest client retry horizon, or a retried send becomes a second mail")
 	}
 
+	if cfg.StorageGrace < 0 {
+		return RedisStores{}, fmt.Errorf("mail: envelope storage grace must not be negative")
+	}
 	envelopes, err := NewRedisEnvelopes(client, cfg.Prefix, cfg.Now)
 	if err != nil {
 		return RedisStores{}, err
+	}
+	if cfg.StorageGrace > 0 {
+		envelopes.(*redisEnvelopes).grace = cfg.StorageGrace
 	}
 	mailboxes, err := versionstore.NewRedisStore(client, versionstore.RedisConfig[int64, Mailbox]{
 		Prefix:       cfg.Prefix + ":box:",
@@ -122,6 +140,8 @@ type redisEnvelopes struct {
 	client envelopeClient
 	prefix string
 	now    func() time.Time
+	// grace is added to the business remainder to get the key ttl (D-L3).
+	grace time.Duration
 }
 
 // NewRedisEnvelopes builds an EnvelopeStore over Redis.
@@ -142,7 +162,7 @@ func NewRedisEnvelopes(client envelopeClient, prefix string, now func() time.Tim
 	if now == nil {
 		now = time.Now
 	}
-	return &redisEnvelopes{client: client, prefix: prefix, now: now}, nil
+	return &redisEnvelopes{client: client, prefix: prefix, now: now, grace: DefaultEnvelopeStorageGrace}, nil
 }
 
 func (s *redisEnvelopes) key(id string) string { return s.prefix + ":env:" + id }
@@ -150,10 +170,12 @@ func (s *redisEnvelopes) key(id string) string { return s.prefix + ":env:" + id 
 // Create is SETNX, so it cannot overwrite. That is the property the contract
 // asks for and the reason a retried send is safe without a transaction.
 //
-// The key's TTL comes from the envelope's own expiry, so an expired mail stops
-// occupying storage without a sweep. An envelope whose expiry has already
-// passed is refused rather than written with a non-positive TTL — which Redis
-// would reject anyway, and which would be a mail nobody could ever read.
+// The key's TTL comes from the envelope's own expiry plus the storage grace,
+// so an expired mail stops occupying storage without a sweep. The ttl is only
+// that reclamation (D-L3): whether a mail is expired is the Service's
+// Envelope.Expired against the business clock, and the key outlives that by
+// the grace. An envelope whose expiry has already passed is refused rather
+// than stored — it would be a mail nobody could ever read.
 func (s *redisEnvelopes) Create(ctx context.Context, envelope Envelope) (bool, error) {
 	if err := envelope.Validate(); err != nil {
 		return false, err
@@ -162,12 +184,12 @@ func (s *redisEnvelopes) Create(ctx context.Context, envelope Envelope) (bool, e
 	if err != nil {
 		return false, fmt.Errorf("mail: encode envelope %s: %w", envelope.ID, err)
 	}
-	ttl := time.Unix(envelope.ExpiresAtUnix, 0).Sub(s.now())
-	if ttl <= 0 {
+	remaining := time.Unix(envelope.ExpiresAtUnix, 0).Sub(s.now())
+	if remaining <= 0 {
 		return false, fmt.Errorf("%w: mail %s expired at %d, before it was stored",
 			ErrExpired, envelope.ID, envelope.ExpiresAtUnix)
 	}
-	created, err := s.client.SetNX(ctx, s.key(envelope.ID), payload, ttl)
+	created, err := s.client.SetNX(ctx, s.key(envelope.ID), payload, remaining+s.grace)
 	if err != nil {
 		return false, fmt.Errorf("mail: store envelope %s: %w", envelope.ID, err)
 	}

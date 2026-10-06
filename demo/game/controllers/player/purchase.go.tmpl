@@ -60,7 +60,7 @@ func (controller *Controller) HandlePurchase(context *player_agent.Context, requ
 	raw, err := json.Marshal(map[string]any{
 		"order_id": orderID, "player_id": context.PlayerID, "channel": purchase.Channel,
 		"product_id": product.ID, "amount_minor": product.AmountMinor, "currency": product.Currency,
-		"paid_at_unix": time.Now().Unix(),
+		"paid_at_unix": time.Now().Unix(), //glsvet:system-clock the payment provider's paid time is real time
 	})
 	if err != nil {
 		return nil, fmt.Errorf("purchase endpoint: %w", err)

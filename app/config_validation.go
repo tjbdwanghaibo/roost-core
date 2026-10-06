@@ -89,7 +89,7 @@ func uniqueErrors(errs []error) []error {
 // validateProductionServiceConfig 是 env / app.env / environment 为 prod / production 时追加的检查。
 // 这里只要求有读取方、确实生效的设置（RR-20261005-NC-192，维护者决定 C1 方案 1）：ops 端点不暴露在
 // 公网、各服务真正读取的密钥不是空的或 dev- 开头、依赖 Redis 的服务写了 redis.addr、admin_gateway 的
-// 令牌。以前这里还要求 player.login_auth_required、player_protocol.rate_limit.enabled、save_load.wal.*、
+// 令牌、业务时钟偏移 time.logic_offset 为 0（D-L3）。以前这里还要求 player.login_auth_required、player_protocol.rate_limit.enabled、save_load.wal.*、
 // instance.*、account.ops_token、account.redis_required、global / match_group.redis_required 等开关，
 // 它们没有任何代码读取，写上只是为了让校验放行，却让人以为限流、登录鉴权、WAL 持久已经打开。
 // 以后接入真实的限流 / 鉴权开关时，再把它们的键加回这里。USER_GUIDE“生产环境校验”一节与本函数同步。
@@ -98,6 +98,7 @@ func validateProductionServiceConfig(errs *[]error, cfg *viper.Viper, serverType
 		return
 	}
 	validateProductionOpsExposure(errs, cfg)
+	validateProductionLogicOffset(errs, cfg)
 	serverType = strings.ToLower(strings.TrimSpace(serverType))
 	switch serverType {
 	case "game", "instance", "account", "match_group", "global":

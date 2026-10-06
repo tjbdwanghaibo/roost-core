@@ -80,10 +80,13 @@ type ActivityRunner struct {
 	// drawn from the ones whose process holds the App singleton lock, so an
 	// activity does not wait on a server nobody started.
 	candidates []int32
-	// now is the clock every window id is derived from. It is a field so a
-	// test can put a contribution and a lookup on opposite sides of a window
-	// boundary — which is the one case the wall clock makes unreproducible,
-	// and the one that was failing in CI (RR-20260921-01).
+	// now is the clock every window id, close deadline, World timer tick and
+	// settlement time is read from: the business clock (D-L3, real time +
+	// time.logic_offset), the same one the coordinator runs on, so the two
+	// ends move together under an offset. It is a field so a test can put a
+	// contribution and a lookup on opposite sides of a window boundary —
+	// which is the one case the wall clock makes unreproducible, and the one
+	// that was failing in CI (RR-20260921-01).
 	now func() time.Time
 }
 
@@ -143,7 +146,7 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 		redis: redisClient, prefix: config.GetString("activity.key_prefix"),
 		worldID: worldID, gameSID: gameSID,
 		groupID: group.ID, candidates: group.GameSIDs,
-		now: time.Now,
+		now: app.BusinessClock(registry).Now,
 	}
 	if runner.prefix == "" {
 		return nil, nil, errors.New("activity: activity.key_prefix is empty; the game reads the coordinator's keyspace to keep its own board beside it")
@@ -215,21 +218,29 @@ func (runner *ActivityRunner) bindGroup(ctx context.Context) error {
 	return nil
 }
 
-// tickWorld drives the World's timer heap through a Nest transaction.
+// tickWorld drives the World's timer heap through a Nest transaction. How
+// often it ticks is system time (the ticker); the time each tick carries is
+// business time, which is what the World's deadlines are dated in (D-L3).
 func (runner *ActivityRunner) tickWorld(ctx context.Context, done chan<- struct{}) {
 	defer func() { done <- struct{}{} }()
 	ticker := time.NewTicker(worldTickInterval)
 	defer ticker.Stop()
-	sender := syncsender.NewTickWorldTimersSender(runner.nest)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
-		if _, err := sender.Sync_TickWorldTimers(ctx, runner.worldID, time.Now().UnixMilli()); err != nil && ctx.Err() == nil {
-			slog.Warn("activity: world timer tick failed", "err", err)
-		}
+		runner.tickWorldOnce(ctx)
+	}
+}
+
+// tickWorldOnce fires whatever the World's timers have due at the business
+// clock's now.
+func (runner *ActivityRunner) tickWorldOnce(ctx context.Context) {
+	if _, err := syncsender.NewTickWorldTimersSender(runner.nest).
+		Sync_TickWorldTimers(ctx, runner.worldID, runner.clock().UnixMilli()); err != nil && ctx.Err() == nil {
+		slog.Warn("activity: world timer tick failed", "err", err)
 	}
 }
 
@@ -263,7 +274,7 @@ func (runner *ActivityRunner) openCurrentWindow(ctx context.Context) {
 	if !flags.Enabled(flags.Activity) {
 		return
 	}
-	now := time.Now()
+	now := runner.clock()
 	activityID := gameactivity.ID(now.Unix())
 	expected, err := runner.openWindow(ctx, activityID)
 	if err != nil {
@@ -389,10 +400,11 @@ func (runner *ActivityRunner) Contribute(ctx context.Context, playerID int64, ru
 }
 
 // clock is runner.now with a default, so a zero-valued runner in a test does
-// not panic before it can be given one.
+// not panic before it can be given one. The default is the process business
+// clock, the same one the registry's would be.
 func (runner *ActivityRunner) clock() time.Time {
 	if runner.now == nil {
-		return time.Now()
+		return app.BusinessClock(nil).Now()
 	}
 	return runner.now()
 }
@@ -493,7 +505,7 @@ func (runner *ActivityRunner) settle(ctx context.Context, activityID string, dis
 		}
 	}
 	recorded, err := syncsender.NewSettleActivitySender(runner.nest).
-		Sync_SettleActivity(ctx, runner.worldID, activityID, time.Now().Unix())
+		Sync_SettleActivity(ctx, runner.worldID, activityID, runner.clock().Unix())
 	if err != nil {
 		return fmt.Errorf("record settlement: %w", err)
 	}

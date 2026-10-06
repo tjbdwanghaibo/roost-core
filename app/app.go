@@ -134,7 +134,9 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	}
 	// 类型已由 ValidateServiceConfig 严格检查过；这里同样严格读取，不再经宽松 getter（维护者决定 A4）。
 	read := NewConfigReader(a.cfg)
-	clock.SetOffset(read.Duration("time.logic_offset"))
+	// 进程级业务时钟（fctx.Now、框架库的缺省）在这里、启动时设一次，运行期不改（D-L3）；
+	// 生产环境非 0 已被 ValidateServiceConfig 拒绝。Registry 的业务时钟读同一个键。
+	clock.SetOffset(read.Duration(logicOffsetKey))
 	fctx.SetRuntimeConfig(a.cfg)
 	if err := flog.Init(flog.Options{
 		LevelText:        a.cfg.GetString("log.level"),

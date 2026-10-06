@@ -36,6 +36,7 @@ type RedisConfig struct {
 	// for configured clusters; direct constructors must supply a valid prefix.
 	Prefix string
 	// Now supplies the default tiebreak for a submit that leaves Tie zero.
+	// It is the business clock (D-L3; the Mod injects app.BusinessClock).
 	// nil means time.Now.
 	Now func() time.Time
 	// RetryBackoff is the base delay between lost compare-and-swaps; zero

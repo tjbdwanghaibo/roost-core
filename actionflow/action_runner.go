@@ -3,6 +3,7 @@ package actionflow
 import (
 	"errors"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/clock"
 	"math"
 	"sort"
 	"sync"
@@ -694,7 +695,7 @@ func (r *ActionRunner) orderedGroups() []*actionGroupState {
 
 func (r *ActionRunner) acquireContext(now time.Time) (ctx *ActionContext) {
 	if now.IsZero() {
-		now = time.Now()
+		now = clock.Now() // 行为流的游戏时间是业务时钟（D-L3）
 	}
 	ctx = r.contextPool.Get().(*ActionContext)
 	*ctx = ActionContext{Now: now}

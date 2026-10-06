@@ -148,6 +148,8 @@ func (m *Mod) Provide(r *app.Registry) error {
 		GraceWindow: m.graceWindow, ReservationTTL: m.reservationTTL,
 		DispatchBackoff: m.dispatchBackoff, DispatchMaxAttempts: m.dispatchAttempts,
 		SweepGroups: m.sweepGroups, Metrics: m.metrics,
+		// 业务时钟（D-L3）：窗口截止、宽限、过期都与 game 一端的窗口 id 同钟，偏移非 0 时两端一起前移。
+		Now: app.BusinessClock(r).Now,
 	})
 	if err != nil {
 		return err

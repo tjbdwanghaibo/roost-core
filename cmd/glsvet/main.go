@@ -12,8 +12,11 @@
 // roost-core/worker Pool variables as the allowed .Go implementation. Test
 // files are skipped by default; pass -tests to include them. Stop/close
 // functions with a ctx parameter that receive from a channel outside a select
-// on that ctx get a review hint (-stophints, on by default); hints are printed
-// but never counted as findings. Exit status is 1
+// on that ctx get a review hint (-stophints, on by default), and business
+// packages (a directory named game under the module root, -businessdirs) that
+// read time.Now / Since / Until directly get a business-clock hint
+// (-clockhints, D-L3); hints are printed but never counted as findings. Exit
+// status is 1
 // when any finding is reported and 2 when an argument could not be vetted (a
 // missing directory or a file that does not parse).
 package main
@@ -89,7 +92,7 @@ func main() {
 		}
 	}
 	if hintCount > 0 {
-		fmt.Fprintf(os.Stderr, "glsvet: %d stop hint(s) for review; hints do not fail the run\n", hintCount)
+		fmt.Fprintf(os.Stderr, "glsvet: %d hint(s) for review; hints do not fail the run\n", hintCount)
 	}
 	if findings > 0 {
 		fmt.Fprintf(os.Stderr, "glsvet: %d finding(s)\n", findings)
@@ -152,6 +155,7 @@ func vetDirectory(fileSet *token.FileSet, directory string) (int, error) {
 		return *includeTests || !strings.HasSuffix(info.Name(), "_test.go")
 	}, 0)
 	findings := 0
+	hintCount += vetClockHints(fileSet, directory) // D-L3：只提示，不计入 findings
 	for _, pkg := range packages {
 		// Hints are advice, not findings: they are printed and do not change
 		// the exit status (A1, like the A3 review prompts).

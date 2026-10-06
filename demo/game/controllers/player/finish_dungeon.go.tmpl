@@ -12,7 +12,6 @@ import (
 	player_agent "{{MODULE}}/game/player_agent"
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
-	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/errcode"
@@ -79,13 +78,13 @@ func (controller *Controller) HandleFinishDungeon(context *player_agent.Context,
 	}
 	// When the run resolved, as the session service recorded it — the number
 	// the reward's deadline is computed from. It is deliberately not
-	// time.Now() and not anything the client sent: a claim window anchored to
+	// the clock's now and not anything the client sent: a claim window anchored to
 	// a time the game invents is a window the game can be talked out of.
 	resolvedAt := run.FinishedAtUnix
 	if resolvedAt <= 0 {
 		resolvedAt = run.StartedAtUnix
 	}
-	result, err := syncsender.NewClaimDungeonSender(controller.NestClient()).MultiSync_ClaimDungeon(context.Context(), entityID, controller.WorldID(), run.ID, DungeonClearExp, resolvedAt, time.Now().Unix())
+	result, err := syncsender.NewClaimDungeonSender(controller.NestClient()).MultiSync_ClaimDungeon(context.Context(), entityID, controller.WorldID(), run.ID, DungeonClearExp, resolvedAt, controller.BusinessNow().Unix())
 	if err != nil {
 		// The run is resolved either way; the reward failing is its own
 		// coded answer so the client can tell the two apart.

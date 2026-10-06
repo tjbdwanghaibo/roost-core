@@ -75,7 +75,10 @@ func startMatchmaker(ctx context.Context, registry *app.Registry, battles *battl
 		// Two pools, two policies: duel in arrival order, ranked by level
 		// inside a widening window. The policies live here, in the game
 		// process, not in the match service.
-		pools := matchmaking.Pools(func() int64 { return time.Now().Unix() })
+		// The match service dates tickets on the system clock (a queue timeout
+		// is real waiting time), and the widening window is measured from
+		// those dates, so the policy reads the same clock (D-L3).
+		pools := matchmaking.Pools(func() int64 { return time.Now().Unix() }) //glsvet:system-clock same clock as the match service's ticket times
 		for {
 			select {
 			case <-loopCtx.Done():

@@ -85,7 +85,10 @@ func (m *Mod) Provide(r *app.Registry) error {
 	// store's key ttls and the service's expiry comparisons cannot disagree
 	// about what time it is. They did once, and the result was a mail that
 	// read as live and had already been evicted.
-	now := time.Now
+	//
+	// It is the business clock (D-L3): mail expiry is business time. The
+	// claim lease is system time, so the service also gets time.Now for it.
+	now := app.BusinessClock(r).Now
 	stores, err := NewRedisStores(client, RedisConfig{
 		Prefix: m.prefix, SendTTL: m.sendTTL, Now: now,
 	})
@@ -94,7 +97,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 	}
 	service, err := New(Config{
 		Envelopes: stores.Envelopes, Mailboxes: stores.Mailboxes, Sends: stores.Sends,
-		Broadcast: m.broadcast, ClaimLease: m.claimLease, Now: now, Metrics: m.metrics,
+		Broadcast: m.broadcast, ClaimLease: m.claimLease, Now: now, SystemNow: time.Now, Metrics: m.metrics,
 	})
 	if err != nil {
 		return fmt.Errorf("mail mod: %w", err)

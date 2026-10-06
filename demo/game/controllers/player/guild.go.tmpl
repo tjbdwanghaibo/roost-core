@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	guildentity "{{MODULE}}/game/entities/guild"
 	player "{{MODULE}}/game/entities/player"
@@ -101,7 +100,7 @@ func (controller *Controller) HandleFoundGuild(context *player_agent.Context, re
 	}
 	guildID := created.ID()
 	info, err := syncsender.NewFoundGuildSender(controller.NestClient()).
-		MultiSync_FoundGuild(context.Context(), guildID, playerEntityID, request.Name, context.PlayerID, time.Now().Unix())
+		MultiSync_FoundGuild(context.Context(), guildID, playerEntityID, request.Name, context.PlayerID, controller.BusinessNow().Unix())
 	if err != nil {
 		return refuse(err, "found")
 	}
@@ -130,7 +129,7 @@ func (controller *Controller) HandleJoinGuild(context *player_agent.Context, req
 		return refuse(errcode.Wrap(apperrors.ErrGuildMissing, nil, "guild_id", request.GuildID), "validate")
 	}
 	info, err := syncsender.NewJoinGuildSender(controller.NestClient()).
-		MultiSync_JoinGuild(context.Context(), request.GuildID, playerID, context.PlayerID, time.Now().Unix())
+		MultiSync_JoinGuild(context.Context(), request.GuildID, playerID, context.PlayerID, controller.BusinessNow().Unix())
 	if err != nil {
 		return refuse(err, "join")
 	}

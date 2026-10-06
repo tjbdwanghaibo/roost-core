@@ -3,6 +3,7 @@ package ai
 import (
 	"errors"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/clock"
 	"reflect"
 	"time"
 
@@ -233,7 +234,7 @@ func (c *Controller) now() time.Time {
 			return now
 		}
 	}
-	return time.Now()
+	return clock.Now() // AI 的游戏时间是业务时钟（D-L3）
 }
 func (c *Controller) context(now time.Time) (ctx *Context) {
 	if now.IsZero() {

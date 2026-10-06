@@ -85,7 +85,8 @@ type Config struct {
 	// Zero selects DefaultOpeningGrace.
 	OpeningGrace time.Duration
 
-	// Now is the clock; nil means time.Now. Every deadline, grace window and
+	// Now is the business clock (D-L3: real time + time.logic_offset; the Mod
+	// injects app.BusinessClock); nil means time.Now. Every deadline, grace window and
 	// backoff in this file reads it, and none of them calls time.Now inline —
 	// a service whose expiry cannot be moved by a test has no test for
 	// expiry.

@@ -314,6 +314,8 @@ func (d *HeroDao) SetLevel(v int32) {
 
 `recordUndo` 注册失败会直接 panic：一次逃出回滚覆盖范围的修改会静默破坏事务保证，宁可炸在现场。
 
+**业务时钟与系统时钟**（维护者决定 D-L3，2026-10-06，[方案](../docs/feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md)）：game-demo 里的业务时间（活动窗口、World 定时器每一拍、GM 关窗、怪物重生、handler 的 `nowUnix`）读 `app.BusinessClock(registry)`，带 `time.logic_offset`；租约、saga 截止、匹配票据、支付时间仍是 `time` 包，并标了 `//glsvet:system-clock`。`cmd/glsvet` 对 `game` 目录下直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，不计入失败。
+
 **回滚统一走 DAO**（维护者决定 A1，2026-10-05，[方案](../docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）：生成 DAO 的 undo（`rollback=undo`）与快照（`rollback=state`）是唯一的回滚机制。事务内会改的状态一律放进 DAO——不该落库的用 `nopersist`（只同步 `nopersist,sync`、只参与事务 `nopersist,nosync`），派生值也一样；组件不持有这类内存状态，不自己调 `RecordUndo` / `DeferRollback`（`cmd/glsvet` 对组件方法里的这类调用打印 `hint:`，不计入失败）。同理，`MarshalPersist` / `MarshalSync` 内部 `bson.Marshal` 失败也会 panic——接口没有错误位，返回 nil 等于把数据静默丢掉。
 
 **③ patch——map 的键级修改记录在当前事务的 `PersistChange` 中，投影为 MongoDB 路径级 `$set`/`$unset`**，而不是整字段重写：

@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/purchase"
 	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/clock"
 	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
@@ -45,6 +45,9 @@ type PurchaseDrain struct {
 	redis  fredis.IRedis
 	nest   corenest.Client
 	prefix string
+	// business is the clock the grant transaction's now comes from (D-L3:
+	// a handler's nowUnix is business time). The paid time is the order's.
+	business clock.Business
 }
 
 // NewPurchaseDrain builds the drain from what the process publishes.
@@ -64,7 +67,7 @@ func NewPurchaseDrain(registry *app.Registry) (*PurchaseDrain, error) {
 	if err != nil {
 		return nil, fmt.Errorf("purchase drain: %w", err)
 	}
-	return &PurchaseDrain{redis: client, nest: nest, prefix: prefix}, nil
+	return &PurchaseDrain{redis: client, nest: nest, prefix: prefix, business: app.BusinessClock(registry)}, nil
 }
 
 // DrainPlayer grants everything waiting for one player and reports what it
@@ -101,7 +104,7 @@ func (drain *PurchaseDrain) DrainPlayer(ctx context.Context, playerID int64) ([]
 			slog.Error("purchase drain: unreadable grant", "player_id", playerID, "order_id", orderID, "err", err)
 			continue
 		}
-		result, err := sender.Sync_GrantPurchase(ctx, entityID, grant.OrderID, grant.ItemID, grant.Count, grant.PaidAtUnix, time.Now().Unix())
+		result, err := sender.Sync_GrantPurchase(ctx, entityID, grant.OrderID, grant.ItemID, grant.Count, grant.PaidAtUnix, drain.business.Now().Unix())
 		switch {
 		case err != nil:
 			// The grant STAYS. There is no failure here that makes a paid

@@ -45,7 +45,7 @@ func handlerStartGift(target player.IBagEntity, fromPlayerID int64, fromSID int3
 	}
 	if err := saga.EmitStart(saga.StartRequest{
 		ID: sagaID, Type: giftitem.Type, DefinitionVersion: giftitem.Version, BusinessKey: sagaID,
-		Data: state, DeadlineAt: time.Now().Add(gift.Deadline),
+		Data: state, DeadlineAt: time.Now().Add(gift.Deadline), //glsvet:system-clock a saga deadline is the coordinator's system time
 	}); err != nil {
 		return "", err
 	}

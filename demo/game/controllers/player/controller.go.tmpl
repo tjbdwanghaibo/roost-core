@@ -469,6 +469,17 @@ func (controller *Controller) WorldSceneID() int64 {
 	return controller.sceneID
 }
 
+// BusinessNow is the business clock's now (D-L3: real time +
+// time.logic_offset). Every time an endpoint hands a transaction as "now" —
+// mail claim expiry, a dungeon claim window, guild join times — is business
+// time; leases, timeouts and payment times are not, and use package time.
+func (controller *Controller) BusinessNow() time.Time {
+	if controller == nil {
+		return app.BusinessClock(nil).Now()
+	}
+	return app.BusinessClock(controller.registry).Now()
+}
+
 // WorldID is the full entity id of this process's World.
 func (controller *Controller) WorldID() int64 {
 	if controller == nil {

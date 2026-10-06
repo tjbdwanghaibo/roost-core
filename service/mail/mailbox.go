@@ -61,7 +61,9 @@ type Entry struct {
 	ClaimToken string `json:"claim_token,omitempty"`
 	// ClaimDeadlineUnix is when an in-flight claim may be retried. It bounds
 	// how long a crashed deliverer blocks the mail; it does NOT allow a
-	// different token to take over, because the token does not change.
+	// different token to take over, because the token does not change. It is
+	// on the system clock (Config.SystemNow, D-L3): a lease, unlike the other
+	// times here, which are business time.
 	ClaimDeadlineUnix int64 `json:"claim_deadline_unix,omitempty"`
 	// ClaimEnvelopeExpiresAtUnix is when the envelope this claim belongs to
 	// stops being claimable. It is copied into the settled-claim record when
@@ -102,7 +104,7 @@ func (m *Mailbox) expireEntries(nowUnix int64) bool {
 }
 
 // claimable reports whether a reservation may be taken now, and why not when
-// it may not.
+// it may not. nowUnix is system time: it is only compared with the lease.
 func (e Entry) claimable(nowUnix int64) error {
 	switch {
 	case e.Status == StatusClaimed:

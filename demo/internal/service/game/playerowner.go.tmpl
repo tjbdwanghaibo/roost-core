@@ -116,13 +116,13 @@ func NewPlayerOwners(registry *app.Registry) (*PlayerOwners, error) {
 	if sid <= 0 {
 		return nil, fmt.Errorf("player owners: sid is %d; a game process serves the players bound to its sid and needs one", sid)
 	}
-	return newPlayerOwners(sid, nil, time.Now), nil
+	return newPlayerOwners(sid, nil, time.Now), nil //glsvet:system-clock residency and idle unload are leases (D-L3)
 }
 
 // newPlayerOwners 是测试构造的入口。
 func newPlayerOwners(sid int32, fencer sessionFencer, now func() time.Time) *PlayerOwners {
 	if now == nil {
-		now = time.Now
+		now = time.Now //glsvet:system-clock residency and idle unload are leases (D-L3)
 	}
 	return &PlayerOwners{
 		sid: sid, fencer: fencer, now: now, evictWait: evictBudget,

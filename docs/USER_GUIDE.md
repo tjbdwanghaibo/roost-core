@@ -8,6 +8,10 @@ Mirror现有适配器新增payload身份校验（NC-33/34，main未发版）：c
 
 RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登记之后、它又登记了本次清理清单之外的 hash（另一布局发布了新键）、此次Lua明确未写；同布局的并发首次创建、并发删除、记录到期不会返回它（RR-20261004-09，未发版）。先读回当前schema/业务意图再决定重试，不自动以旧全量值覆盖新布局。网络/Eval错误仍可能已应用，不能按明确拒绝处理。Delete也要求adapter支持现有Eval；存储格式保持，历史孤儿不自动清理。[用法和限制](bugfix/RR-20261004-NC-30.md)。
 
+## 2026-10-06 业务时钟与系统时钟（D-L3，main，未发版）
+
+时间分两个钟：**业务时钟** = 真实时间 + `time.logic_offset`，活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、游戏时间都读它，从 `app.BusinessClock(registry)` 拿（kit 的 activity、mail、rank、session Mod 已注入）；**系统时钟** = 真实时间，帧率、租约与锁、超时、重试、存储 TTL、Ack、日志与 WAL 时间戳，直接用 `time` 包。偏移只在启动时读一次，所有进程写同一个值；`env: production` 时非 0 拒绝启动。mail 信封的 Redis TTL 现在是业务剩余时长 + 24h 宽限（`RedisConfig.StorageGrace`），领取租约改按系统时钟。`glsvet` 对 `game` 目录下的包直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，系统时间写 `//glsvet:system-clock <理由>` 豁免。详见 [§10 业务时钟与系统时钟](#业务时钟与系统时钟)。[方案](feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md)
+
 ## 2026-10-06 配置数据规则在加载层强制、热更失败可见（B10 / C2，main，未发版）
 
 tablegen 标签（`required` / `unique` / `min` / `enum` / `ref`）与 cfggen 的同名选项变成一组 `configdata.FieldRule`，由 configdata 在每次加载与 reload 时对原始 JSON 检查——直接改 `configs/data` 再 `gm.config.reload` 也绕不过，删掉一个 required 列会被点名拒绝（表 / 行 / 字段 / 规则），旧快照保持；`roost generate` 与 `tablegen -check` 用同一个检查器提前反馈。热更失败（含 build 阶段）与撤回都留 Warn 日志并计入 `configdata.reload.total{result=failed}` / `configdata.rollback.total{trigger}`，`reason` 不再作指标标签。新生成的代码需要下一个版本的 core。详见 [§10 配置数据](#配置数据规则热更与可见性)。[方案](feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md)
@@ -442,8 +446,25 @@ kit 的 Mod 在 Init 里也严格读取，直接装配 Mod、不经 App 启动�
 - game / instance / account / match_group / global 必须写 `redis.addr`。
 - `account.session_secret`、`platform.session_secret`、`platform.payment_secret` 不能为空或以 `dev-` 开头。
 - admin_gateway：`admin_gateway.tokens` 非空且不是 dev 令牌；`local_ops` 目标没有自己的 `ops_token` 时 `default_ops_admin_token` 必须是非 dev 值。
+- `time.logic_offset` 必须为 0（或不写）：偏移只给测试环境前拨业务时间用（D-L3）。
 
 它**不**检查、也不代表已经开启：按请求限流、登录鉴权、WAL 持久级别（持久化由 `dataengine.*` 决定）、实例状态存储。RR-20261005-NC-192 之前这里要求的 `player.login_auth_required`、`player.login_secret`、`player_protocol.rate_limit.enabled`、`save_load.wal.*`、`instance.client_mode` / `state_store_required`、`account.ops_token`、`account.redis_required`、`global` / `match_group.redis_required` 没有任何代码读取，已删除；配置里留着也没有影响。生成的游戏服接入层只有演示凭据（`auth.go`），上线前换成真实校验；需要按请求限流时自己装配 `gateway.RateLimit` 或在接入层限流。
+
+### 业务时钟与系统时钟
+
+维护者决定 D-L3，[方案与盘点](feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md)。
+
+| 钟 | 读法 | 用在 |
+| --- | --- | --- |
+| 业务时钟：真实时间 + `time.logic_offset` | `app.BusinessClock(registry).Now()`；服务的 `Config.Now` 由 Mod 注入它；请求上下文里 `fctx.Now()` | 活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、skill / 战斗游戏时间、业务计时规则 |
+| 系统时钟：真实时间 | `time.Now()` | server 帧率、租约与锁、超时与 ctx 截止、重试退避、存储 TTL、消息 Ack、日志、指标、WAL 与审计时间戳 |
+
+- `time.logic_offset`（时长，如 `24h`）只有这一个来源，所有进程写同一个值——game 与活动协调器偏移不同，窗口 id 与截止会错开。只在启动时生效，改了要重启全部进程；没有运行期修改入口。生产环境必须为 0。
+- 已接入：kit 的 activity 协调器、mail（过期是业务时间；领取租约 `ClaimDeadlineUnix` 是系统时间，`Config.SystemNow`）、rank（同分 tiebreak）、session（run 截止）；game-demo 的活动窗口、World 定时器的每一拍、GM 关窗、怪物重生、邮件领取 / 副本领奖 / 公会的 `nowUnix`。框架库（`timer.Scheduler`、`ai`、`actionflow`）没注入时间源时缺省读进程级业务时钟。match、chat、platform、directory、account、saga 与 Nest / DataEngine / Sync 全部是系统时钟。
+- 业务过期不靠存储 TTL：服务按业务时钟判断过期，存储 TTL 只兜底回收空间且更长（mail 信封 = 业务剩余时长 + `StorageGrace`，缺省 24h）。
+- 偏移在两次启动之间改变（只会在非生产）：前拨后到期的定时器、窗口、邮件在下一次检查时成批处理；后拨后已打戳的业务截止晚到一个偏移量。租约按系统时钟，不受影响。
+- 测试：在 cfg 里写 `time.logic_offset` 再 `app.NewRegistry(cfg)`，或给服务的 `Config.Now` 注入 `clock.BusinessFunc` / 函数。
+- `glsvet` 对业务包（模块根之下路径里有 `game` 目录，`-businessdirs` 可改）里直接读 `time.Now` / `time.Since` / `time.Until`（含把 `time.Now` 当函数值传）打印 `hint:`，不计入失败；确实是系统时间的在同一行或上一行写 `//glsvet:system-clock <理由>`，或写进函数文档注释豁免整个函数；`-clockhints=false` 关闭。
 
 ### 配置数据：规则、热更与可见性
 

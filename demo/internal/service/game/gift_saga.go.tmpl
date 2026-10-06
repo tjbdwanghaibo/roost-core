@@ -357,7 +357,7 @@ func (steps giftSteps) runHandoff(ctx context.Context, cmd *giftStepHandoff) err
 	if err := command.Validate(); err != nil {
 		return fmt.Errorf("gift saga: handoff command: %w", err)
 	}
-	if !time.Now().Before(command.DeadlineAt) {
+	if !time.Now().Before(command.DeadlineAt) { //glsvet:system-clock a saga deadline is the coordinator's system time
 		// Past its deadline the coordinator owns the outcome; starting the
 		// business now would race its timeout.
 		return nil

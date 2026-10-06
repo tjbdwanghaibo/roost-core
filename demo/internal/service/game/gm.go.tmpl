@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	gameactivity "{{MODULE}}/game/activity"
 	guild "{{MODULE}}/game/entities/guild"
@@ -149,6 +148,8 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 	// one thing a remote-managed entity makes observable, and an operator
 	// running the same command on two processes should see it change.
 	localSID := int32(registry.Config().GetInt("sid"))
+	// GM 命令里的时间是业务时间（D-L3）：关窗要算出与 runner 同一个窗口 id，入会时间是玩法时间。
+	business := app.BusinessClock(registry)
 	// player_id is whichever id the operator has at hand: the unique id the
 	// client sees (EnterGameResponse.PlayerID, the mail recipient) or the
 	// full entity id Mongo stores as the Player document's _id. The two
@@ -351,7 +352,7 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 				// point of exposing it: an operator closing a window early
 				// takes the path the deadline takes, rather than a second one
 				// that could behave differently.
-				activityID := gameactivity.ID(time.Now().Unix())
+				activityID := gameactivity.ID(activity.clock().Unix())
 				if err := activity.NotifyPhaseDue(ctx, activityID); err != nil {
 					return admin.Result{}, err
 				}
@@ -399,7 +400,7 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 					return admin.Result{}, err
 				}
 				info, err := syncsender.NewJoinGuildSender(nestClient).
-					MultiSync_JoinGuild(ctx, payload.GuildID, entityID, playerID, time.Now().Unix())
+					MultiSync_JoinGuild(ctx, payload.GuildID, entityID, playerID, business.Now().Unix())
 				if err != nil {
 					return admin.Result{}, err
 				}
