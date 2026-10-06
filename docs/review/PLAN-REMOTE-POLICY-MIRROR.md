@@ -146,3 +146,13 @@ Shutdown 停止准入，取消续租和加载，解绑订阅，等待已准入�
 - **公会摘要样例**：owner（Managed Guild，Nest → WAL → Remote 提交 → 发布）+ 只读子进程（kit SyncBusMod + RemoteMirrorMod + 生成 reader）；真实 JetStream + Redis + Mongo 上推送读到 v2，普通 NATS 上 3s 陈旧上限之后按需读到；跨租户 / profile 读不到、错配源被拒；只读进程没有写能力；停止后读返回 `ErrSnapshotClientStopped`、重复关闭 nil。
 - **版本下限**：生成的只读产物用到 v1.20.2 没有的 `entity.RemoteMirrorReader` / `RemoteSnapshotReadOnly` / `RemoteMirrorSpec`（第 1～3 步新增），kit 用到 `remoteentity.NewSnapshotClient`（第 3 步）与本步新增 API；发版准备时统一上调生成工程的 `minimumVersions.Core`，本步未改。
 - **第 6 步未开始**：外部条件见实施记录 §6。
+
+## 2026-10-06 第 6 步（本机替代）
+
+维护者指示“看能否在本机用别的方式替代”，[实施记录](../feature/MIRROR-STEP-6-LOCAL-2026-10-06.md)。方案本身未改；Linux 真实环境的那部分改为外部验证清单（记录 §5）。
+
+- **环境**：`scripts/mirror-local.sh` 自起私有依赖进程（不碰共享隔离环境），`test` / `bench` 结束清理并核对无残留进程。
+- **故障（两进程，生成工程 `testdata/remoteflow`）**：owner 强杀 + WAL 重放补发、NATS 节点强杀与 SIGSTOP 静默断线、toxiproxy 延迟 / 分区 / 丢数据（DeliverNew durable 续投）、Redis 单机与 Cluster 切主（墓碑不回退、不复活）、Mongo stepDown、owner 转移、只读服务强杀重启；只读方自己核对不回退 / 不复活 / 有界收敛，0 违例。
+- **缺陷**：[RR-20261006-01](../bug/RR-20261006-01.md) 删除 Remote 实体时确认交给已清空的实例、删除不发布，已修复（先红后绿）。
+- **性能**：同机交替 n=6 对照 v1.20.2，读延迟（L1 / L2 / 权威）、回源次数、推送扇出（1 / 10 / 100 读者 × 10 key）无显著差别。
+- **未完成**：Linux 内核网络、跨主机真实分区、长时间容量与长稳、目标负载下的扇出、Remote outbox（Mongo 已提交、发布前崩溃）的精确注入；观察 O-M6-1 / O-M6-3 待维护者。
