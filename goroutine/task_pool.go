@@ -44,6 +44,13 @@ func DefaultTaskPoolConfig() *TaskPoolConfig {
 	}
 }
 
+// 测试缝（RR-20261006-20）：只在测试里赋值，生产恒为 nil（每次 Submit / GetStats 多一次 nil 判断）。
+// 用来在“任务已进 channel”之后、“读第一个计数”之后停住，确定性地造出统计读写交错。
+var (
+	submitEnqueuedHook   func() // Submit：任务已进 worker channel 之后
+	statsFirstLoadedHook func() // GetStats：读完结束计数之后、读 total 之前
+)
+
 type TaskPool struct {
 	config  *TaskPoolConfig
 	workers []*taskWorker
@@ -111,10 +118,17 @@ func (tp *TaskPool) Submit(task Task) error {
 		return fmt.Errorf("task pool is not running")
 	}
 	workerIndex := tp.hashTaskID(task.GetID())
+	// 先计数再入队（RR-20261006-20）：任务一进 channel 就可能被执行完、计入 completed / failed，
+	// 入队之后才加 total 时，读统计会瞬间看到“结束数 > 提交数”。被拒绝时撤回这一次计数，
+	// 所以 total 可能短暂多算一个正在被拒绝的提交，但不会少算已结束的任务。
+	tp.totalTasks.Add(1)
 	if err := tp.workers[workerIndex].submitTask(task); err != nil {
+		tp.totalTasks.Add(-1)
 		return fmt.Errorf("failed to submit task[%d]: %w", task.GetID(), err)
 	}
-	tp.totalTasks.Add(1)
+	if h := submitEnqueuedHook; h != nil {
+		h()
+	}
 	return nil
 }
 
@@ -151,9 +165,18 @@ func (tp *TaskPool) ShutdownWithTimeout(timeout time.Duration) error {
 	}
 }
 
+// GetStats 返回提交、完成、失败计数与是否在运行。三个计数各自是原子量，不是同一时刻的快照，
+// 但保证 completed + failed ≤ total（RR-20261006-20）：Submit 先加 total 再入队，任务结束才加
+// completed / failed；这里先读结束数、后读 total，读到的每个结束任务的提交计数都已可见。
+// 没有用一把锁包住计数和读取：那会让每个任务的提交与完成都去抢同一把锁，只为统计一致。
 func (tp *TaskPool) GetStats() (total, completed, failed int64, running bool) {
-	return tp.totalTasks.Load(), tp.completedTasks.Load(),
-		tp.failedTasks.Load(), tp.running.Load()
+	completed = tp.completedTasks.Load()
+	failed = tp.failedTasks.Load()
+	if h := statsFirstLoadedHook; h != nil {
+		h()
+	}
+	total = tp.totalTasks.Load()
+	return total, completed, failed, tp.running.Load()
 }
 
 func (tp *TaskPool) IsRunning() bool {
