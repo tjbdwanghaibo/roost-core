@@ -333,9 +333,35 @@ Read 模式返回不可变 snapshot：L1 是进程内有界原子缓存，L2 是
 
 `Cached` / `Monotonic` 的陈旧上限是 `remote_entity.cached_max_staleness`（core `Config.CachedMaxStaleness`，缺省等于 `snapshot_cache_ttl`；必须是带单位的正时长）：交出的快照在交出前这段时间之内被 L2 或权威确认过“没有更新的版本或删除”。超过上限或未确认的 L1 条目先重新确认——读 L2（一次 HGET），L2 落后时把本机的新版本 / 删除补进 L2，L2 回答不了或已没有值时回源权威；都失败时读取返回错误，不交出旧值（行为收紧：之前 L2 断网时写入的条目会一直交出到 L1 TTL）。`Cached` 在 L1 与 L2 都没有该 key 时仍是“未找到”，不回源。不覆盖：owner 提交后写 L2 失败或结果未知时，L2 本身最长落后 `snapshot_l2_ttl`。复制消息带发布时刻，早于 `snapshot_l2_ttl / 2` 的快照更新（JetStream 同步总线给新 sid 重放的历史）不再被接受（[审查 O5](review/REVIEW-2026-10-05-n05-revn05.md)）。
 
-只读服务（另一个服务读 owner 发布的摘要）用 `remoteentity.NewSnapshotClient(cfg, remoteentity.SnapshotClientDeps{L2, Loader, ConsumerSID})` + `Start(bus)` / `Stop(ctx)`，不需要写 backend、锁或 finalizer；同进程已有 owner 的 Manager 时直接用 `Manager.SnapshotClient()`。业务读 DTO 用 `entity.NewRemoteMirrorReader(source, entity.RemoteMirrorSpec{Kind, Scope, Schema, Codec}, decode)`：解码拿到的是字节副本（改了不影响缓存），读侧校验 key 与 schema / codec，不注册 kind 或全局解码器，所以与同进程的 owner 不冲突。读结果带观察 token `entity.RemoteObservation`（route / marker epoch 与版本），可作为下一次读的最低要求或带给 owner 的命令；更新 epoch 的快照满足旧 token（不论版本），epoch 一新一旧返回 `ErrRemoteObservationIncomparable`。`Linearizable` 只在 loader 声明线性化能力（`LinearizableLoader`）时开放，否则返回 `ErrRemoteReadUnsupported`；Manager 沿用 backend 的线性化读。行为收紧（main 未发版，[Mirror 第 1～3 步](feature/MIRROR-STEPS-1-3-2026-10-06.md)）：`Cached` 带最低版本时，缓存里只有更低版本返回 `ErrRemoteSnapshotStale`（之前交出低于要求的值）；`Monotonic` 未命中只回源一次；`Assembly.Stop` 返回 nil 之后快照读返回 `ErrSnapshotClientStopped`。kit 只读装配与 codegen 只读产物尚未实施。
+只读服务（另一个服务读 owner 发布的摘要）用 `remoteentity.NewSnapshotClient(cfg, remoteentity.SnapshotClientDeps{L2, Loader, ConsumerSID})` + `Start(bus)` / `Stop(ctx)`，不需要写 backend、锁或 finalizer；同进程已有 owner 的 Manager 时直接用 `Manager.SnapshotClient()`。业务读 DTO 用 `entity.NewRemoteMirrorReader(source, entity.RemoteMirrorSpec{Kind, Scope, Schema, Codec}, decode)`：解码拿到的是字节副本（改了不影响缓存），读侧校验 key 与 schema / codec，不注册 kind 或全局解码器，所以与同进程的 owner 不冲突。读结果带观察 token `entity.RemoteObservation`（route / marker epoch 与版本），可作为下一次读的最低要求或带给 owner 的命令；更新 epoch 的快照满足旧 token（不论版本），epoch 一新一旧返回 `ErrRemoteObservationIncomparable`。`Linearizable` 只在 loader 声明线性化能力（`LinearizableLoader`）时开放，否则返回 `ErrRemoteReadUnsupported`；Manager 沿用 backend 的线性化读。行为收紧（main 未发版，[Mirror 第 1～3 步](feature/MIRROR-STEPS-1-3-2026-10-06.md)）：`Cached` 带最低版本时，缓存里只有更低版本返回 `ErrRemoteSnapshotStale`（之前交出低于要求的值）；`Monotonic` 未命中只回源一次；`Assembly.Stop` 返回 nil 之后快照读返回 `ErrSnapshotClientStopped`。kit 只读装配与 codegen 只读产物见下面“只读服务（Mirror DTO）”。
 
 快照推送依赖能确认订阅的同步总线（main 未发版，[Mirror 第 4 步与 O4](feature/MIRROR-STEP-4-AND-O4-2026-10-06.md)）：JetStream（`kit/syncbus` 的 `transport: jetstream`）上快照主题用 DeliverNew 的 durable 消费者，订阅确认之后发布的快照不会被静默丢掉，确认之前的历史不重放；某个 key 的权威加载在途时到达的复制消息先进有界缓冲（`Config.SnapshotReplicaBuffer`，缺省 64），加载装入后按到达顺序重放，溢出时丢弃缓冲并再回源一次。普通 NATS 是最多一次，`Assembly.Start` / `SnapshotClient.Start` 不订阅快照推送并记一条 Warn（`snapshot push disabled`），读取按 `cached_max_staleness` 经 L2 / 权威回源（按需读取），健康信息 `snapshot_push=false`。JetStream 部署升级后快照主题换用新的 durable（`sync_remote_entity_snapshot.live_<sid>_…`），旧的 DeliverAll durable 不再消费，可删除。
+
+### 只读服务（Mirror DTO）
+
+另一个服务只读 owner 发布的摘要（公会摘要、排行快照），接入是**一个 DTO + 一行装配**（main 未发版，[Mirror 第 5 步](feature/MIRROR-STEP-5-2026-10-06.md)）。DTO 放在 `roost generate` 会扫描的 `game/` 下：
+
+```go
+//roost:mirror entityKind=guild.EntityKindGuild coll=guild
+type GuildSummary struct {
+	Name      string `bson:"name"` // 按 owner DAO 的 bson 键写，只写要读的字段
+	FounderID int64  `bson:"founder_id"`
+}
+```
+
+生成 `guild_summary_gen_wire.go`：`GuildSummaryMirrorSpec`（`Kind`、`Scope = RemoteSnapshotScope(coll)`、`Schema = RemoteSnapshotSchema(kind, scope)`、`Codec 1`，与 `remote=managed` 生成的提交快照同一规则）、`DecodeGuildSummary`（owner DAO 的持久化 BSON → DTO，未声明的字段忽略）、`NewGuildSummaryReader(source)`。不生成 kind / builder / 解码器注册、DAO 或提交能力；DTO 带嵌入字段或 `comp:` / `dao:` 标签直接拒绝。旧的 `//roost:entity remote=mirror`（及 `lifetime=mirror_cache`）改为报迁移错误（T-274）。
+
+装配：只读服务加 `kitremote.NewRemoteMirrorMod(sid)`（`kit/remoteentity`），读取时：
+
+```go
+source, err := kitremote.MirrorSource(registry) // Provide 之后（服务 Init / Mod Start）
+reader, err := guildview.NewGuildSummaryReader(source)
+summary, found, err := reader.Read(ctx, guildID, entity.RemoteReadCached, entity.RemoteObservation{})
+```
+
+`RemoteMirrorMod` 只建 `remoteentity.SnapshotClient`：共享 L2 来自 `redis` Mod（`remote_entity.snapshot_l2_key_prefix` 与 owner 一致），总线来自 `syncbus` Mod（JetStream 才有推送，普通 NATS 按需读取），权威回源缺省是只读 Mongo loader（`remoteentity.NewMongoSnapshotLoader`，读 `remote_entity.mongo.database` 的 `_remote_entity_snapshots`，依赖 `mongo` Mod；不声明线性化，`Linearizable` 读返回 `ErrRemoteReadUnsupported`），`WithMirrorLoader(loader, linearizable)` 可换。不要求 Mongo 原子 backend、锁或 finalizer，注册表里唯一的能力是 `entity.RemoteSnapshotReadOnly`（`mods.ModRemoteMirror`）。配置只读 `remote_entity.*` 的快照段（与 `RemoteEntityMod` 同一个严格读取）与 `remote_entity.mirror.shutdown_timeout`（停机预算，缺省 5s，带单位的正时长）；`sid` 是兴趣的 consumer 身份，必须与 owner 及其他只读服务不同。健康项 `remote_mirror` 带 `snapshot_push` 与 `interest_refused`；本机兴趣表满时 Degraded，停止后 Fail。停机：`StopWithContext` 取消在途的权威加载、在 ctx 内等已准入的工作，超时如实返回、可重试，重复调用返回 nil。手写 Mod 的 `StopBudget` 不计入生成器算出的 `shutdown.total_timeout`，装它的服务要手工留出这段预算。
+
+owner 进程里 `RemoteEntityMod` 把 `Manager.SnapshotClient()` 登记为同一能力，同样的读取代码在 owner 进程里也能用；同一进程不要再装 `RemoteMirrorMod`（启动即报能力冲突）。生成的只读产物用到了 v1.20.2 之后新增的 `entity.RemoteMirrorReader` / `RemoteSnapshotReadOnly`，需要随下一版一起升级 core。
 
 兴趣容量按 consumer 计（O4）：每个 consumer 节点在每个节点的兴趣表里最多 `remote_entity.snapshot_interest_per_consumer` 份租约（缺省 0 = `snapshot_interest_subs / 16`，不能大于 `snapshot_interest_subs`）；`snapshot_interest_subs` 是每个节点兴趣表的条目上限（兴趣是广播，每个节点存所有 consumer 的租约），按“consumer 节点数 × 配额”选。超出配额的 key 没有推送、按需读取：consumer 本地就得到 `remoteentity.ErrInterestQuotaExceeded`（表满为 `ErrInterestRegistryFull`，都是 `ErrRemoteOverloaded`），计入 `remote_entity.remote.interest_renew_refused_total` 与健康信息 `interest_refused`；owner 侧按原因计入 `remote_entity.remote.interest_rejected_total{reason}` 并限频记日志。release 之后迟到的更旧续租不再复活租约。
 

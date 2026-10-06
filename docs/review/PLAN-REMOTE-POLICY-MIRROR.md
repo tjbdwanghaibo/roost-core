@@ -136,3 +136,13 @@ Shutdown 停止准入，取消续租和加载，解绑订阅，等待已准入�
 - O4 兴趣容量按 consumer 计。
 - 真实 JetStream + Redis：确认订阅、不重放历史、退订后重订续投；推送到达只读方；B2 组合矩阵与生成工程 12 条照样通过。
 - **第 5、6 步未开始**，入口见实施记录 §6.8。
+
+## 2026-10-06 第 5 步实施
+
+[实施记录](../feature/MIRROR-STEP-5-2026-10-06.md)。方案本身未改；样例放在生成工程 `testdata/remoteflow`（比 game-demo 新增一个服务更简单，验收用真实依赖跑两进程），game-demo 只更新了 `guild_info` 的说明。
+
+- **kit 装配**：`kit/remoteentity.RemoteMirrorMod`（`NewSnapshotClient` + `Start(bus)` / `Stop(ctx)`；只读快照段，新键 `remote_entity.mirror.shutdown_timeout`；不要求原子 backend；健康 `snapshot_push` / `interest_refused`；StopBudget），只读 Mongo loader `remoteentity.NewMongoSnapshotLoader`，`MirrorSource(registry)`；owner 进程的 `RemoteEntityMod` 登记同一能力。
+- **codegen 只读产物**：`//roost:mirror` DTO → spec / 解码 / reader；`remote=mirror` 迁移诊断。
+- **公会摘要样例**：owner（Managed Guild，Nest → WAL → Remote 提交 → 发布）+ 只读子进程（kit SyncBusMod + RemoteMirrorMod + 生成 reader）；真实 JetStream + Redis + Mongo 上推送读到 v2，普通 NATS 上 3s 陈旧上限之后按需读到；跨租户 / profile 读不到、错配源被拒；只读进程没有写能力；停止后读返回 `ErrSnapshotClientStopped`、重复关闭 nil。
+- **版本下限**：生成的只读产物用到 v1.20.2 没有的 `entity.RemoteMirrorReader` / `RemoteSnapshotReadOnly` / `RemoteMirrorSpec`（第 1～3 步新增），kit 用到 `remoteentity.NewSnapshotClient`（第 3 步）与本步新增 API；发版准备时统一上调生成工程的 `minimumVersions.Core`，本步未改。
+- **第 6 步未开始**：外部条件见实施记录 §6。

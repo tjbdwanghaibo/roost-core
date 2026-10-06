@@ -339,6 +339,23 @@ func remoteTransactionTTLSeconds(ttl time.Duration) int32 {
 }
 
 func (s *MongoCommitter) LoadRemoteSnapshot(ctx context.Context, key entity.RemoteSnapshotKey, _ entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
+	return loadMongoRemoteSnapshot(ctx, s.controlDB(), key, minVersion)
+}
+
+// NewMongoSnapshotLoader 返回只读的权威快照 loader（Mirror 第 5 步）：只读 owner 提交时写进 database 的
+// _remote_entity_snapshots（与 MongoCommitter.LoadRemoteSnapshot 同一个查询），不建索引、不写、不碰所有权与
+// 事务集合，所以只读服务不需要写 backend。它不声明线性化：装配时 LinearizableLoader 应为 false。
+func NewMongoSnapshotLoader(mongo fmongo.IMongo, database string) entity.RemoteSnapshotLoader {
+	return func(ctx context.Context, key entity.RemoteSnapshotKey, _ entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
+		if mongo == nil {
+			return entity.RemoteSnapshotEnvelope{}, false, errors.New("remote_entity: snapshot loader has no mongo client")
+		}
+		return loadMongoRemoteSnapshot(ctx, mongo.Database(database), key, minVersion)
+	}
+}
+
+// loadMongoRemoteSnapshot 按完整 key 读一份不低于 minVersion 的快照；没有返回 found=false。
+func loadMongoRemoteSnapshot(ctx context.Context, db fmongo.IDatabase, key entity.RemoteSnapshotKey, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
 	var doc struct {
 		StateVersion uint64                `bson:"state_version"`
 		BaseVersion  uint64                `bson:"base_version"`
@@ -350,7 +367,7 @@ func (s *MongoCommitter) LoadRemoteSnapshot(ctx context.Context, key entity.Remo
 		Full         bool                  `bson:"full"`
 		Data         []byte                `bson:"data"`
 	}
-	err := s.controlDB().Collection(remoteSnapshotCollection).FindOne(ctx, bson.M{"_id": remoteSnapshotStorageKey(key), "state_version": bson.M{"$gte": minVersion}}, &doc)
+	err := db.Collection(remoteSnapshotCollection).FindOne(ctx, bson.M{"_id": remoteSnapshotStorageKey(key), "state_version": bson.M{"$gte": minVersion}}, &doc)
 	if errors.Is(err, fmongo.ErrNotFound) {
 		return entity.RemoteSnapshotEnvelope{}, false, nil
 	}

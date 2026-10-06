@@ -31,6 +31,9 @@ func generateInPackage(ent EntityDef, siblings []string, pkg string, outFile str
 	if len(siblings) == 0 {
 		siblings = []string{ent.Name}
 	}
+	if ent.RemotePolicy == "entity.RemotePolicyMirror" || ent.Lifetime == "entity.EntityLifetimeMirrorCache" {
+		return false, fmt.Errorf("entity %s: %s", ent.Name, remoteMirrorMigration)
+	}
 	remoteV2 := ent.RemotePolicy == "entity.RemotePolicyManaged"
 	if remoteV2 && !ent.RemoteBase {
 		return false, fmt.Errorf("entity %s: remote=managed requires embedding *entity.RemoteEntityBase", ent.Name)

@@ -9,11 +9,20 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
-var registerEntityOnce sync.Once
+var registerGuildEntityOnce sync.Once
 
-// RegisterEntity registers the Guild entity builder.
+// RegisterEntity registers every entity generated in this package
+// (Guild). It is the package's single registry entry point;
+// each entity keeps its own once-guarded registration below.
+//
+//roost:register phase=entity
 func RegisterEntity() {
-	registerEntityOnce.Do(func() {
+	registerGuildEntity()
+}
+
+// registerGuildEntity registers the Guild entity builder.
+func registerGuildEntity() {
+	registerGuildEntityOnce.Do(func() {
 		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
 			Category: entity.MustEntityCategoryOfKind(EntityKindGuild),
 			Kind:     EntityKindGuild,

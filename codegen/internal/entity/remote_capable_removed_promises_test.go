@@ -25,8 +25,9 @@ func TestRemoteCapableMarkerIsRejectedWithTheCategoryReplacement(t *testing.T) {
 	}
 
 	// The surviving spellings still parse, and an unrelated typo still gets the
-	// plain "not one of" message rather than the migration hint.
-	for _, value := range []string{"none", "managed", "mirror", "no", "false", "off", ""} {
+	// plain "not one of" message rather than the migration hint. remote=mirror
+	// is a migration error since Mirror step 5 (mirror_promises_test.go).
+	for _, value := range []string{"none", "managed", "no", "false", "off", ""} {
 		if err := validateMarkerValues(map[string]string{"remote": value}); err != nil {
 			t.Errorf("remote=%q must still be accepted: %v", value, err)
 		}
@@ -35,7 +36,7 @@ func TestRemoteCapableMarkerIsRejectedWithTheCategoryReplacement(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), "no longer supported") {
 		t.Fatalf("remote=bogus should get the plain spelling error, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "none|managed|mirror") {
+	if !strings.Contains(err.Error(), "none|managed") {
 		t.Errorf("remote=bogus error %q does not list the accepted spellings", err)
 	}
 }

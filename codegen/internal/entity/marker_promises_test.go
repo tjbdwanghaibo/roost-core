@@ -77,7 +77,6 @@ func TestParseDirAcceptsEveryDocumentedMarkerForm(t *testing.T) {
 	for _, marker := range []string{
 		"//roost:entity id=1 entityKind=EntityKindPlayer",
 		"//roost:entity entityKind=EntityKindPlayer remote=managed sync=true",
-		"//roost:entity entityKind=EntityKindPlayer remote=mirror lifetime=mirror-cache",
 		"//roost:entity entityKind=EntityKindPlayer noPersist=true lifetime=ephemeral",
 		// The two packer spellings are alternatives, never both at once: they
 		// name one field (RR-20260918-01).

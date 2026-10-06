@@ -16,8 +16,8 @@ import (
 // owner 注册一次，consumer 用 RemoteMirrorReader 表达“我要读它”，所以两者不冲突。
 //
 // 迁移：旧的 remote=mirror 声明只是元数据（不订阅、不加载、不强制只读），把它当成可写 Entity 使用是
-// 方案明确不支持的用法；新代码用 RemoteMirrorReader 读 DTO。仓内没有 remote=mirror 的使用方；生成器对
-// 它的迁移诊断（报错并提示改用只读 DTO）属于方案第 5 步。
+// 方案明确不支持的用法；新代码用 RemoteMirrorReader 读 DTO。生成器对 remote=mirror 报迁移错误，只读 DTO
+// 用 //roost:mirror 标记生成 spec / 解码 / reader（Mirror 第 5 步，docs/feature/MIRROR-STEP-5-2026-10-06.md）。
 
 var (
 	// ErrRemoteObservationIncomparable 表示快照与最低观察 token 的 epoch 一个更新、一个更旧（混合），

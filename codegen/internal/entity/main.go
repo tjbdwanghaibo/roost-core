@@ -76,11 +76,12 @@ func run(args []string, stdout io.Writer) error {
 
 	for _, dir := range scanDirs {
 		// Parse all .go files in the directory
-		entities, pkg, err := parseDir(dir)
+		defs, pkg, err := parsePackage(dir)
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", dir, err)
 		}
-		if len(entities) == 0 && *output != "" {
+		entities, mirrors := defs.Entities, defs.Mirrors
+		if len(entities) == 0 && len(mirrors) == 0 && *output != "" {
 			for _, path := range []string{*output, guardTestFileFor(*output)} {
 				if _, err := retireEntityFile(path); err != nil {
 					return err
@@ -96,14 +97,26 @@ func run(args []string, stdout io.Writer) error {
 		// RegisterEntity down with whichever file lost. The tool exited 0 and
 		// the consumer failed to compile (RR-20260909-06). Refused here, before
 		// anything is written, so a failed run leaves no partial output.
-		if *output != "" && len(entities) > 1 {
-			names := make([]string, 0, len(entities))
+		if *output != "" && len(entities)+len(mirrors) > 1 {
+			names := make([]string, 0, len(entities)+len(mirrors))
 			for _, ent := range entities {
 				names = append(names, ent.Name)
 			}
+			for _, mirror := range mirrors {
+				names = append(names, mirror.Name)
+			}
 			sort.Strings(names)
-			return fmt.Errorf("-output names one file but %s declares %d entities (%s): each entity generates its own file, so one path would overwrite all but the last; drop -output to generate them side by side",
-				dir, len(entities), strings.Join(names, ", "))
+			return fmt.Errorf("-output names one file but %s declares %d entities / mirror DTOs (%s): each generates its own file, so one path would overwrite all but the last; drop -output to generate them side by side",
+				dir, len(names), strings.Join(names, ", "))
+		}
+		// 实体与只读 DTO 各写 <snake>_gen_wire.go：同名会互相覆盖，生成前拒绝。
+		outputs := make(map[string]string, len(entities)+len(mirrors))
+		for _, name := range append(entityNames(entities), mirrorNames(mirrors)...) {
+			file := toSnake(name)
+			if other, dup := outputs[file]; dup {
+				return fmt.Errorf("%s: %s and %s would both generate %s_gen_wire.go; rename one", dir, other, name, file)
+			}
+			outputs[file] = name
 		}
 
 		// Generate for each entity. The package-level RegisterEntity goes into
@@ -138,13 +151,49 @@ func run(args []string, stdout io.Writer) error {
 				fmt.Fprintf(stdout, "unchanged: %s\n", outFile)
 			}
 		}
+		// 只读 DTO（//roost:mirror）：spec、解码与 reader，不参与 RegisterEntity。
+		for _, mirror := range mirrors {
+			outFile := *output
+			if outFile == "" {
+				outFile = filepath.Join(dir, fmt.Sprintf("%s_gen_wire.go", toSnake(mirror.Name)))
+			}
+			changed, err := generateMirror(mirror, pkg, outFile, *force)
+			if err != nil {
+				return fmt.Errorf("generate mirror %s: %w", mirror.Name, err)
+			}
+			if changed {
+				fmt.Fprintf(stdout, "generated: %s\n", outFile)
+			} else {
+				fmt.Fprintf(stdout, "unchanged: %s\n", outFile)
+			}
+			// 由实体改成 DTO 时，旧实体留下的伴生守卫测试会编译不过，删掉。
+			if _, err := retireEntityFile(guardTestFileFor(outFile)); err != nil {
+				return err
+			}
+		}
 		if *output == "" {
-			if err := retireEntityOrphans(dir, siblings, stdout); err != nil {
+			if err := retireEntityOrphans(dir, siblings, mirrorNames(mirrors), stdout); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func entityNames(entities []EntityDef) []string {
+	names := make([]string, 0, len(entities))
+	for _, ent := range entities {
+		names = append(names, ent.Name)
+	}
+	return names
+}
+
+func mirrorNames(mirrors []MirrorDef) []string {
+	names := make([]string, 0, len(mirrors))
+	for _, mirror := range mirrors {
+		names = append(names, mirror.Name)
+	}
+	return names
 }
 
 func findEntityDirs(root string) ([]string, error) {
@@ -179,7 +228,7 @@ func findEntityDirs(root string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if marker.Has(string(content), "entity") {
+		if marker.Has(string(content), "entity") || marker.Has(string(content), "mirror") {
 			dirs[filepath.Dir(path)] = true
 		}
 		return nil
@@ -225,12 +274,15 @@ func retireEntityFile(path string) (bool, error) {
 	return true, os.Remove(path)
 }
 
-func retireEntityOrphans(dir string, siblings []string, stdout io.Writer) error {
-	expected := make(map[string]bool, len(siblings)*2)
+func retireEntityOrphans(dir string, siblings, mirrors []string, stdout io.Writer) error {
+	expected := make(map[string]bool, len(siblings)*2+len(mirrors))
 	for _, name := range siblings {
 		wire := fmt.Sprintf("%s_gen_wire.go", toSnake(name))
 		expected[wire] = true
 		expected[guardTestFileFor(wire)] = true
+	}
+	for _, name := range mirrors {
+		expected[fmt.Sprintf("%s_gen_wire.go", toSnake(name))] = true
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {

@@ -1,0 +1,182 @@
+package entity
+
+import (
+	"bytes"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// Mirror 第 5 步（roost-core docs/feature/MIRROR-STEP-5-2026-10-06.md）：旧的 remote=mirror 实体形式报迁移
+// 诊断；//roost:mirror 的 DTO 生成只读视图（spec、解码、reader），不生成任何写 / 提交 / 注册能力。
+
+// 旧形式：remote=mirror（以及它带来的 mirror_cache 生命周期）从生成一个可写 Entity 改为报错，错误指向新标记。
+func TestRemoteMirrorEntityMarkerIsAMigrationError(t *testing.T) {
+	for _, marker := range []string{
+		"//roost:entity entityKind=EntityKindPlayer remote=mirror",
+		"//roost:entity entityKind=EntityKindPlayer remote=mirror lifetime=mirror-cache",
+		"//roost:entity entityKind=EntityKindPlayer remote=MIRROR",
+		"//roost:entity entityKind=EntityKindPlayer lifetime=mirror_cache",
+	} {
+		dir, _ := writeEntitySource(t, "package game\n\n"+marker+"\ntype Player struct{}\n")
+		expectParseError(t, dir, "remote=mirror no longer generates an entity", "//roost:mirror entityKind=")
+	}
+	// 绕过解析直接交给生成器（程序化构造的定义）也拒绝，不写文件。
+	out := filepath.Join(t.TempDir(), "player_gen_wire.go")
+	if _, err := generate(EntityDef{Name: "Player", EntityKind: "EntityKindPlayer", RemotePolicy: "entity.RemotePolicyMirror", Lifetime: "entity.EntityLifetimeMirrorCache"}, "game", out, true); err == nil || !strings.Contains(err.Error(), "remote=mirror no longer generates an entity") {
+		t.Fatalf("generate of a remote=mirror entity = %v, want the migration error", err)
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatal("the refused remote=mirror entity still wrote a wire file")
+	}
+}
+
+// 新形式的产物与提交的 fixture 一致（重生成即复现），并且只有只读能力。
+func TestMirrorDTOGeneratesReadOnlyView(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"guild.go", "guild_summary.go"} {
+		raw, err := os.ReadFile(filepath.Join("testdata", "remote", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Run([]string{"-dir", dir}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "guild_summary_gen_wire.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(filepath.Join("testdata", "remote", "guild_summary_gen_wire.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("generated guild_summary_gen_wire.go differs from the committed fixture; regenerate testdata/remote:\n%s", got)
+	}
+	generated := string(got)
+	for _, required := range []string{
+		"var GuildSummaryMirrorSpec = entity.RemoteMirrorSpec{",
+		"Kind:   EntityKindGuild,",
+		`Scope:  entity.RemoteSnapshotScope("guilds"),`,
+		`Schema: entity.RemoteSnapshotSchema(EntityKindGuild, entity.RemoteSnapshotScope("guilds")),`,
+		"Codec: 1,",
+		"func DecodeGuildSummary(data []byte) (GuildSummary, error) {",
+		"func NewGuildSummaryReader(source entity.RemoteSnapshotReadOnly) (*entity.RemoteMirrorReader[GuildSummary], error) {",
+	} {
+		if !strings.Contains(generated, required) {
+			t.Errorf("mirror view missing %q", required)
+		}
+	}
+	// 只读：没有 kind / builder / 解码器注册、没有提交参与、没有发布、不进 RegisterEntity。
+	for _, forbidden := range []string{
+		"RegisterEntity", "RegisterEntityBuilder", "MustRegisterRemoteSnapshotDecoder", "MustRegisterEntityKind",
+		"IRemoteCommitParticipant", "BuildRemoteCommitLocked", "PublishRemoteSnapshot", "RemoteSnapshotPublisher",
+		"DaoManager", "dataengine", "//roost:register",
+	} {
+		if strings.Contains(generated, forbidden) {
+			t.Errorf("mirror view carries write / registration capability %q", forbidden)
+		}
+	}
+	// owner 实体的 RegisterEntity 只注册实体本身，不碰 DTO。
+	wire, err := os.ReadFile(filepath.Join(dir, "guild_gen_wire.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), "GuildSummary") {
+		t.Error("the owner entity's wiring references the mirror DTO")
+	}
+	// 快照身份与 owner 的提交同一规则：owner 按 DAO 集合名算 scope、schema 与 codec 1。
+	for _, rule := range []string{"entity.RemoteSnapshotScope(e.dao.CollName())", "entity.RemoteSnapshotSchema(e.GetEntityKind(), scope)", "Codec:    1,"} {
+		if !strings.Contains(string(wire), rule) {
+			t.Errorf("owner commit no longer uses %q; the mirror spec must follow the same identity rule", rule)
+		}
+	}
+}
+
+// 只有 DTO 的包（只读服务）也被目录扫描发现；DTO 删除后生成物被清理；实体改成 DTO 时旧的伴生守卫测试被删。
+func TestMirrorDTOOnlyPackageIsDiscoveredAndRetired(t *testing.T) {
+	root := t.TempDir()
+	view := filepath.Join(root, "views", "guildview")
+	if err := os.MkdirAll(view, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := "package guildview\n\nimport \"example.com/game/guild\"\n\n//roost:mirror entityKind=guild.EntityKindGuild coll=guild\ntype GuildSummary struct {\n\tName string `bson:\"name\"`\n}\n"
+	if err := os.WriteFile(filepath.Join(view, "summary.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 一个旧实体留下的伴生守卫测试（之前 GuildSummary 是 remote=managed 实体）。
+	stale := filepath.Join(view, "guild_summary_gen_wire_test.go")
+	if err := os.WriteFile(stale, []byte("// Code generated by tool/entity. DO NOT EDIT.\npackage guildview\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"-dir", root}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(view, "guild_summary_gen_wire.go")
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("a package holding only a mirror DTO was not generated: %v", err)
+	}
+	for _, required := range []string{`"example.com/game/guild"`, "Kind:   guild.EntityKindGuild,", `entity.RemoteSnapshotScope("guild")`} {
+		if !strings.Contains(string(raw), required) {
+			t.Errorf("generated view missing %q:\n%s", required, raw)
+		}
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("the stale entity guard test survived the switch to a mirror DTO: %v", err)
+	}
+	// 重跑不变。
+	var report bytes.Buffer
+	if err := Run([]string{"-dir", root}, &report); err != nil || !strings.Contains(report.String(), "unchanged: "+out) {
+		t.Fatalf("second run: %v\n%s", err, report.String())
+	}
+	// DTO 去掉标记：生成物作为孤儿被删除。
+	if err := os.WriteFile(filepath.Join(view, "summary.go"), []byte(strings.Replace(source, "//roost:mirror", "// was a mirror:", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(view, "other.go"), []byte("package guildview\n\n//roost:mirror entityKind=EntityKindOther coll=other\ntype Other struct{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"-dir", root}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Errorf("the generated view of a removed mirror DTO survived: %v", err)
+	}
+}
+
+// 标记写错直接拒绝，错误点名问题。
+func TestMirrorMarkerValidation(t *testing.T) {
+	cases := []struct{ source, want string }{
+		{"//roost:mirror coll=guild\ntype S struct{}\n", "needs entityKind="},
+		{"//roost:mirror entityKind=EntityKindGuild\ntype S struct{}\n", "needs coll="},
+		{"//roost:mirror entityKind=EntityKindGuild coll=guild sync=true\ntype S struct{}\n", `unknown parameter "sync"`},
+		{"//roost:mirror entityKind=EntityKindGuild coll=\"guild\"\ntype S struct{}\n", "without quotes"},
+		{"//roost:mirror entityKind=7 coll=guild\ntype S struct{}\n", "not a constant expression"},
+		{"//roost:mirror entityKind=EntityKindGuild coll=guild\ntype S int\n", "must annotate a struct"},
+		{"//roost:mirror entityKind=EntityKindGuild coll=guild\ntype S struct{ *entity.EntityBase }\n", "embeds *entity.EntityBase"},
+		{"//roost:mirror entityKind=EntityKindGuild coll=guild\ntype S struct{ dao *GuildDAO `dao:\"guild\"` }\n", "comp/dao tag"},
+		{"//roost:mirror entityKind=guild.EntityKindGuild coll=guild\ntype S struct{}\n", `package "guild" is not imported`},
+		{"//roost:mirror entityKind=EntityKindGuild coll=guild\n\n\n\ntype S struct{}\n", "not followed by a struct"},
+	}
+	for _, tc := range cases {
+		dir, _ := writeEntitySource(t, "package game\n\n"+tc.source)
+		if _, _, err := parsePackage(dir); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q: parse = %v, want an error mentioning %q", tc.source, err, tc.want)
+		}
+	}
+	// 实体与 DTO 生成同一个文件名：生成前拒绝，不写任何文件。
+	dir, _ := writeEntitySource(t, "package game\n\nimport \"github.com/tjbdwanghaibo/roost-core/entity\"\n\n//roost:entity entityKind=EntityKindGuild\ntype Guild struct{ *entity.EntityBase }\n\n//roost:mirror entityKind=EntityKindGuild coll=guild\ntype guild struct{}\n")
+	if err := Run([]string{"-dir", dir}, io.Discard); err == nil || !strings.Contains(err.Error(), "would both generate") {
+		t.Fatalf("entity and mirror with one output name: %v", err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, "*_gen_wire.go")); len(matches) != 0 {
+		t.Fatalf("a refused package still wrote %v", matches)
+	}
+}

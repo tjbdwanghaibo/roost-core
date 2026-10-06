@@ -115,3 +115,7 @@
 | kit 只读装配 | 新 Mod（建议 `kit/remoteentity` 同包，`RemoteMirrorMod`）：`remoteentity.NewSnapshotClient(cfg, SnapshotClientDeps{L2: NewSnapshotL2StoreWithKeyPrefix(redis, …), Loader, LinearizableLoader, ConsumerSID})` + `Start(bus)` / `Stop(ctx)` | 只读 `remote_entity.*` 的快照段（A4 严格读取，新键登记进 `frameworkIntKeys` / `frameworkDurationKeys`），不要求 Mongo 原子 backend；总线来自 `kit/syncbus`，JetStream 模式才有推送（`Stats().PushEnabled`），健康信息带 `snapshot_push` 与 `interest_refused`；停机预算登记（`StopBudget`）；Loader 由 owner 侧提供（Managed 用 `Backend.LoadRemoteSnapshot`，独立服务需要一个只读 Mongo loader） |
 | codegen 只读产物 | `codegen/internal/entity` 的 parse / gen：`remote=mirror` 报迁移诊断（提示改用只读 DTO）；为 DTO 生成 `entity.RemoteMirrorSpec` 与解码函数，给 `entity.NewRemoteMirrorReader` 用 | 不生成持久化 / 提交参与能力；改生成形状要重生成 fixture、跑 `go test ./codegen/...` 与 game-demo |
 | 公会摘要样例 | 两进程：owner（Managed 实体提交后发布）+ 只读服务（第 5 步的 Mod）；`TestSnapshotClientReadsWhatTheOwnerPublishesInTheSameProcess` 与本步的 `TestRealJetStreamLiveSnapshotPushReachesTheReader` 是单进程雏形 | 验收：生成后真实消费者编译；两进程读写分离；跨租户 / profile 拒绝；停止取消与重复关闭 |
+
+### 6.9 后续（追加）
+
+第 5 步已实施（2026-10-06，[记录](MIRROR-STEP-5-2026-10-06.md)）：kit `RemoteMirrorMod`、codegen `//roost:mirror` DTO、公会摘要两进程样例（生成工程 `testdata/remoteflow`）。第 6 步的外部条件见该记录 §6。

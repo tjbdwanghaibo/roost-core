@@ -1,6 +1,7 @@
 package entity
 
 import (
+	"errors"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
 	"go/ast"
@@ -70,16 +71,30 @@ type DaoField struct {
 	NoCollection bool
 }
 
+// packageDefs is everything the generator reads from one package: entities
+// (//roost:entity) and read-only mirror DTOs (//roost:mirror).
+type packageDefs struct {
+	Entities []EntityDef
+	Mirrors  []MirrorDef
+}
+
 // parseDir scans all .go files in dir for entity markers.
 func parseDir(dir string) ([]EntityDef, string, error) {
+	defs, pkg, err := parsePackage(dir)
+	return defs.Entities, pkg, err
+}
+
+// parsePackage scans all .go files in dir for entity and mirror markers.
+func parsePackage(dir string) (packageDefs, string, error) {
 	fset := token.NewFileSet()
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, "", err
+		return packageDefs{}, "", err
 	}
 
 	var entities []EntityDef
+	var mirrors []MirrorDef
 	var pkg string
 	type parsedFile struct {
 		path    string
@@ -106,12 +121,12 @@ func parseDir(dir string) ([]EntityDef, string, error) {
 		filePath := filepath.Join(dir, entry.Name())
 		content, err := os.ReadFile(filePath)
 		if err != nil {
-			return nil, "", err
+			return packageDefs{}, "", err
 		}
 
 		f, err := parser.ParseFile(fset, filePath, content, parser.ParseComments)
 		if err != nil {
-			return nil, "", fmt.Errorf("parse %s: %w", entry.Name(), err)
+			return packageDefs{}, "", fmt.Errorf("parse %s: %w", entry.Name(), err)
 		}
 
 		if pkg == "" {
@@ -138,12 +153,17 @@ func parseDir(dir string) ([]EntityDef, string, error) {
 		// Find marker comments and their associated structs
 		ents, err := extractEntities(fset, file.ast, file.content, file.path, file.imports, methods)
 		if err != nil {
-			return nil, "", err
+			return packageDefs{}, "", err
 		}
 		entities = append(entities, ents...)
+		mirs, err := extractMirrors(fset, file.ast, file.path, file.imports)
+		if err != nil {
+			return packageDefs{}, "", err
+		}
+		mirrors = append(mirrors, mirs...)
 	}
 
-	return entities, pkg, nil
+	return packageDefs{Entities: entities, Mirrors: mirrors}, pkg, nil
 }
 
 // extractEntities finds //roost:entity markers and extracts struct info.
@@ -293,11 +313,18 @@ func parseMarkerParams(s string) (map[string]string, error) {
 // validateMarkerValues rejects values outside the spellings the parsers
 // accept; each of them used to fall back to a default instead.
 func validateMarkerValues(params map[string]string) error {
+	// Mirror 第 5 步：旧的 remote=mirror 只是元数据，生成的仍是可写 Entity；迁移到 //roost:mirror DTO。
+	if v, ok := params["remote"]; ok && parseRemoteParam(v) == "entity.RemotePolicyMirror" {
+		return errors.New(remoteMirrorMigration)
+	}
+	if v, ok := params["lifetime"]; ok && parseLifetimeParam(v, false, "") == "entity.EntityLifetimeMirrorCache" {
+		return fmt.Errorf("lifetime=%s belongs to the retired remote=mirror entity: %s", v, remoteMirrorMigration)
+	}
 	if v, ok := params["remote"]; ok && parseRemoteParam(v) == "" {
 		if parseBoolParam(v) || strings.EqualFold(strings.TrimSpace(v), "capable") {
-			return fmt.Errorf(`remote=%q is no longer supported: lock order comes from the entity's category, so register the kind in a category (entity.EntityCategoryWorld / entity.EntityCategoryOther / ...) and use remote=none|managed|mirror`, v)
+			return fmt.Errorf(`remote=%q is no longer supported: lock order comes from the entity's category, so register the kind in a category (entity.EntityCategoryWorld / entity.EntityCategoryOther / ...) and use remote=none|managed`, v)
 		}
-		return fmt.Errorf(`remote=%q is not one of none|managed|mirror`, v)
+		return fmt.Errorf(`remote=%q is not one of none|managed (a read-only mirror is a //roost:mirror DTO)`, v)
 	}
 	if v, ok := params["category"]; ok && !validCategoryParam(v) {
 		return fmt.Errorf(`category=%q is not a category constant expression (e.g. entity.EntityCategoryOther, view.EntityCategoryPlayer, EntityCategoryWorld)`, v)

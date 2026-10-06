@@ -113,67 +113,11 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	if limit := read.Int("remote_entity.max_write_batch"); limit > 0 {
 		m.cfg.MaxWriteBatch = limit
 	}
-	if shards := read.Int("remote_entity.snapshot_cache_shards"); shards > 0 {
-		m.cfg.SnapshotCacheShards = shards
-	}
-	if entries := read.Int("remote_entity.snapshot_cache_entries"); entries > 0 {
-		m.cfg.SnapshotCacheEntries = entries
-	}
-	if bytes := read.Int64("remote_entity.snapshot_cache_bytes"); bytes > 0 {
-		m.cfg.SnapshotCacheBytes = bytes
-	}
-	if ttl := read.Duration("remote_entity.snapshot_cache_ttl"); ttl > 0 {
-		m.cfg.SnapshotCacheTTL = ttl
-	}
-	if ttl := read.Duration("remote_entity.snapshot_l2_ttl"); ttl > 0 {
-		m.cfg.SnapshotL2TTL = ttl
-	}
-	// B2：Cached / Monotonic 读能交出的快照距最近一次被共享 L2 或权威确认的最长时间。严格读取（A4）：
-	// 不带单位的数字报错；设置了就必须为正；不配置时取 snapshot_cache_ttl。
-	if cfg.IsSet("remote_entity.cached_max_staleness") {
-		staleness := read.Duration("remote_entity.cached_max_staleness")
-		if err := read.Err(); err != nil {
-			return err
-		}
-		if staleness <= 0 {
-			return fmt.Errorf("remote_entity.cached_max_staleness must be positive, got %v", cfg.Get("remote_entity.cached_max_staleness"))
-		}
-		m.cfg.CachedMaxStaleness = staleness
-	}
-	// 共享 L2 快照键的部署前缀（RR-20260927-17）。kit 里没有部署级的 Redis 前缀：服务各自用 <service>.key_prefix，
-	// nats.prefix 只管 NATS 且缺省即 "roost"，remote_entity.lock_key 是锁身份（Cluster 下必须带 hash tag）。
-	// 从后两者派生都会让已配置它们的部署升级后换键，所以单列一项、缺省为空：不配置时键与旧版本逐字相同。
-	if prefix := cfg.GetString("remote_entity.snapshot_l2_key_prefix"); prefix != "" {
-		if err := coreremote.ValidateSnapshotL2KeyPrefix(prefix); err != nil {
-			return fmt.Errorf("remote_entity.snapshot_l2_key_prefix: %w", err)
-		}
-		m.cfg.SnapshotL2KeyPrefix = prefix
-	}
-	if ttl := read.Duration("remote_entity.snapshot_interest_ttl"); ttl > 0 {
-		m.cfg.SnapshotInterestTTL = ttl
-	}
-	if limit := read.Int("remote_entity.snapshot_interest_keys"); limit > 0 {
-		m.cfg.SnapshotInterestKeys = limit
-	}
-	if limit := read.Int("remote_entity.snapshot_interest_subs"); limit > 0 {
-		m.cfg.SnapshotInterestSubs = limit
-	}
-	// O4：每个 consumer 节点在兴趣表里的配额（0 = snapshot_interest_subs / 16），不能超过每节点上限。
-	if cfg.IsSet("remote_entity.snapshot_interest_per_consumer") {
-		quota := read.Int("remote_entity.snapshot_interest_per_consumer")
-		if quota < 0 || quota > m.cfg.SnapshotInterestSubs {
-			return errors.Join(read.Err(), fmt.Errorf("remote_entity.snapshot_interest_per_consumer must be between 0 and remote_entity.snapshot_interest_subs (%d), got %v", m.cfg.SnapshotInterestSubs, cfg.Get("remote_entity.snapshot_interest_per_consumer")))
-		}
-		m.cfg.SnapshotInterestPerConsumer = quota
+	if err := readSnapshotConfig(cfg, read, m.cfg); err != nil {
+		return err
 	}
 	if ttl := read.Duration("remote_entity.marker_cache_ttl"); ttl > 0 {
 		m.cfg.MarkerCacheTTL = ttl
-	}
-	if timeout := read.Duration("remote_entity.snapshot_load_timeout"); timeout > 0 {
-		m.cfg.SnapshotLoadTimeout = timeout
-	}
-	if limit := read.Int("remote_entity.snapshot_max_waiters"); limit > 0 {
-		m.cfg.SnapshotMaxWaiters = limit
 	}
 	if capacity := read.Int("remote_entity.async_finalize_capacity"); capacity > 0 {
 		m.cfg.AsyncFinalizeCapacity = capacity
@@ -243,6 +187,9 @@ func (m *RemoteEntityMod) Provide(r *app.Registry) error {
 		mods.Capability{Name: mods.ModRemoteEntity, Value: entity.IRemoteEntityManager(asm.Manager)},
 		mods.Capability{Name: mods.ModRemoteEntityAtomicStore, Value: asm.AtomicStore},
 		mods.Capability{Name: mods.ModRedisVLock, Value: asm.LockFactory},
+		// 同进程的只读读取与只读服务用同一个能力名（Mirror 第 5 步）：业务读 DTO 的代码在两处一样。
+		// 只读的 RemoteMirrorMod 再装进同一进程会撞这个名字、启动即失败——同一 sid 不开第二个客户端。
+		mods.Capability{Name: mods.ModRemoteMirror, Value: entity.RemoteSnapshotReadOnly(asm.Manager.SnapshotClient())},
 	); err != nil {
 		return err
 	}
@@ -328,5 +275,70 @@ func (m *RemoteEntityMod) StopWithContext(ctx context.Context) error {
 		return err
 	}
 	slog.Info("remote_entity mod: stopped")
+	return nil
+}
+
+// readSnapshotConfig 读 remote_entity.* 的快照段（RemoteEntityMod 与只读的 RemoteMirrorMod 共用，A4 严格读取）：
+// 缓存、共享 L2、陈旧上限、兴趣表、加载超时与等待者。类型错误攒在 read 里由调用方统一报出；值域错误直接返回。
+func readSnapshotConfig(cfg *viper.Viper, read *app.ConfigReader, out *coreremote.Config) error {
+	if shards := read.Int("remote_entity.snapshot_cache_shards"); shards > 0 {
+		out.SnapshotCacheShards = shards
+	}
+	if entries := read.Int("remote_entity.snapshot_cache_entries"); entries > 0 {
+		out.SnapshotCacheEntries = entries
+	}
+	if bytes := read.Int64("remote_entity.snapshot_cache_bytes"); bytes > 0 {
+		out.SnapshotCacheBytes = bytes
+	}
+	if ttl := read.Duration("remote_entity.snapshot_cache_ttl"); ttl > 0 {
+		out.SnapshotCacheTTL = ttl
+	}
+	if ttl := read.Duration("remote_entity.snapshot_l2_ttl"); ttl > 0 {
+		out.SnapshotL2TTL = ttl
+	}
+	// B2：Cached / Monotonic 读能交出的快照距最近一次被共享 L2 或权威确认的最长时间。严格读取（A4）：
+	// 不带单位的数字报错；设置了就必须为正；不配置时取 snapshot_cache_ttl。
+	if cfg.IsSet("remote_entity.cached_max_staleness") {
+		staleness := read.Duration("remote_entity.cached_max_staleness")
+		if err := read.Err(); err != nil {
+			return err
+		}
+		if staleness <= 0 {
+			return fmt.Errorf("remote_entity.cached_max_staleness must be positive, got %v", cfg.Get("remote_entity.cached_max_staleness"))
+		}
+		out.CachedMaxStaleness = staleness
+	}
+	// 共享 L2 快照键的部署前缀（RR-20260927-17）。kit 里没有部署级的 Redis 前缀：服务各自用 <service>.key_prefix，
+	// nats.prefix 只管 NATS 且缺省即 "roost"，remote_entity.lock_key 是锁身份（Cluster 下必须带 hash tag）。
+	// 从后两者派生都会让已配置它们的部署升级后换键，所以单列一项、缺省为空：不配置时键与旧版本逐字相同。
+	if prefix := cfg.GetString("remote_entity.snapshot_l2_key_prefix"); prefix != "" {
+		if err := coreremote.ValidateSnapshotL2KeyPrefix(prefix); err != nil {
+			return fmt.Errorf("remote_entity.snapshot_l2_key_prefix: %w", err)
+		}
+		out.SnapshotL2KeyPrefix = prefix
+	}
+	if ttl := read.Duration("remote_entity.snapshot_interest_ttl"); ttl > 0 {
+		out.SnapshotInterestTTL = ttl
+	}
+	if limit := read.Int("remote_entity.snapshot_interest_keys"); limit > 0 {
+		out.SnapshotInterestKeys = limit
+	}
+	if limit := read.Int("remote_entity.snapshot_interest_subs"); limit > 0 {
+		out.SnapshotInterestSubs = limit
+	}
+	// O4：每个 consumer 节点在兴趣表里的配额（0 = snapshot_interest_subs / 16），不能超过每节点上限。
+	if cfg.IsSet("remote_entity.snapshot_interest_per_consumer") {
+		quota := read.Int("remote_entity.snapshot_interest_per_consumer")
+		if quota < 0 || quota > out.SnapshotInterestSubs {
+			return errors.Join(read.Err(), fmt.Errorf("remote_entity.snapshot_interest_per_consumer must be between 0 and remote_entity.snapshot_interest_subs (%d), got %v", out.SnapshotInterestSubs, cfg.Get("remote_entity.snapshot_interest_per_consumer")))
+		}
+		out.SnapshotInterestPerConsumer = quota
+	}
+	if timeout := read.Duration("remote_entity.snapshot_load_timeout"); timeout > 0 {
+		out.SnapshotLoadTimeout = timeout
+	}
+	if limit := read.Int("remote_entity.snapshot_max_waiters"); limit > 0 {
+		out.SnapshotMaxWaiters = limit
+	}
 	return nil
 }
