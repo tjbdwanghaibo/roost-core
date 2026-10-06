@@ -574,7 +574,7 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
 - 演练产物：日志、时间线、玩家快照、生成工程在 scratchpad `c5-drill/`（不进仓库）。
 - 清理：演练进程、etcd 均已停止。Mongo 库（`drill5_202610051033_*` 预演、`drill5_202610051039_*` 正式各 3 个）、JetStream 流（各 3 个 `DRILL5_…`）、Redis 键（`drill5_20261005103*:*`）以及预演误写进共享 `game` 库的四个集合，删除操作被本机的自动权限分类器拦下，**未删除**，交由维护者处理（命令见第 5 笔报告）。**更正（2026-10-05）**：维护者授权后已全部删除——6 个 `drill5_*` Mongo 库 dropDatabase；共享 `game` 库的 `player` / `guild` / `world` / `_guild_id_sequence` 四个集合 drop（删除前用 oplog 核对：四者的全部写入都在 10-05 02:35 UTC 预演窗口内，oplog 覆盖自 10-04 起；`game.players` 保留，仍 2 条）；6 个 `DRILL5_*` JetStream 流删除；Redis `drill5_20261005103*` 共 1240 个键 UNLINK。复查：无 `drill5_*` 库、流、键残留。
 - 验证（`GOWORK=off`）：见提交说明。
-- 未验证：Redis Cluster 下的真实进程演练；跨主机 / 换卷（不在范围内）；`c493a791` 与 obs34 的补偿预算调整之后的代码没有重跑演练（6b 在 `64acd782` 上测）。
+- 未验证：Redis Cluster 下的真实进程演练；跨主机 / 换卷（不在范围内）；`c493a791` 与 obs34 的补偿预算调整之后的代码没有重跑演练（6b 在 `64acd782` 上测）。**更正（2026-10-06，[真实进程演练 2026-10-06](../bugfix/REAL-PROCESS-DRILLS-2026-10-06.md)）**：已在 main `37338490`（含 `c493a791`、obs34 与之后全部修复）上重跑，步骤 0～5、5b、1c/2c、6、6a、6b、6c 全部符合预期：kill -9 / SIGSTOP 后立刻起的新进程等锁 15.006～15.010s，旧进程停机中起的等 3.0s，SIGCONT 到失锁 5ms、到退出 63ms，失锁时服务中的 4 个连接被断开，接手后玩家快照与 SIGSTOP 时逐字段相同；两个 sid 下 `Live` 给出 `[1000, 1001]`，绑定在另一 sid 的角色登录被 `player is bound to another server` 拒绝（OWN-2），6b 在途的 5 个赠礼 saga 由新进程按 `FromSID` 接手到终态、无 `manual_required`（OWN-3）。无新缺陷。仍未验证：Redis Cluster 下的真实进程演练（跨主机 / 换卷不在范围内）。
 
 ### 第 3 / 3b / 4 笔审查收尾（2026-10-05，obs34）
 
@@ -592,6 +592,6 @@ D1（等待，上限 2×TTL）、D2（15 / 3 / 5s）沿用维护者已同意的�
 - **`Destroy` 永不返回时泄漏**（RR-20261004-11 遗留）：卸载在自己的 goroutine 上跑到结束，等待方只受 `evictBudget` 约束；若 `EntityManager.Destroy` 永远等不到实体锁（实体上的事务永不结束），这个 goroutine 与 `evictions` 里的条目一直留着，该玩家此后 `Admit` / `AdmitBound` 一直拒绝、`Serve` 每次等满预算后回 `login_timeout`，直到进程重启。根因在实体上永不结束的事务，不在驻留表，维持现状。
 - **优雅停机时先断会话、listener 仍开着**：`Service.Shutdown` 第一步 `CloseServedSessions` 断开服务中的玩家，但传输层 Mod 要到后面逆序停止时才关 listener；这段时间里立即重连的客户端可能在本进程再登录一次（`Serve` 建记录、装载），随后在传输层停止时再被断开、到接替的进程重登。只是多一次重登，不形成两个写者（同一 sid 只有本进程持锁，接替进程要等本进程释放），维持现状。
 
-验证（`GOWORK=off`，独立 worktree，rebase 到 `10e2e0ea` 之后）：`gofmt -l` 空；`go build ./... && go vet ./...` 通过；`go generate ./...` 后 porcelain 只有本节文档；`go test -count=1 ./codegen/...` 全绿（`codegen/internal/roost` 87s）；根包 `go test -count=1 .` 通过。生成 game-demo（`project new sobs -template game-demo` + `go mod edit -replace` 指向本 worktree）：`go build ./... && go vet ./...`、`go test -race -count=3 ./internal/service/game/ ./game/controllers/player/ ./internal/access/...`、`go test ./...` 全绿，新用例 `-race -count=50` 稳定。没有重跑真实进程演练。
+验证（`GOWORK=off`，独立 worktree，rebase 到 `10e2e0ea` 之后）：`gofmt -l` 空；`go build ./... && go vet ./...` 通过；`go generate ./...` 后 porcelain 只有本节文档；`go test -count=1 ./codegen/...` 全绿（`codegen/internal/roost` 87s）；根包 `go test -count=1 .` 通过。生成 game-demo（`project new sobs -template game-demo` + `go mod edit -replace` 指向本 worktree）：`go build ./... && go vet ./...`、`go test -race -count=3 ./internal/service/game/ ./game/controllers/player/ ./internal/access/...`、`go test ./...` 全绿，新用例 `-race -count=50` 稳定。没有重跑真实进程演练。**更正（2026-10-06）**：已重跑，见第 5 笔“未验证”一条的更正与[真实进程演练 2026-10-06](../bugfix/REAL-PROCESS-DRILLS-2026-10-06.md)。
 
 **发布（2026-10-05）**：随 v1.20.0 发布（tag → `999dc672`）。

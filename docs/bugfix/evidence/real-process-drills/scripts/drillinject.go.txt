@@ -1,0 +1,60 @@
+// 演练 2 的故障注入（docs/bugfix/REAL-PROCESS-DRILLS-2026-10-06.md）：setup.sh 把本文件复制成生成工程的
+// cmd/drillinject/main.go。只用于私有演练环境。
+//
+//	drillinject conflict <nats-url> <stream> <durable> <filter>  删掉 durable 后按 DeliverLast 重建：game 的
+//	                                                            Init 最后一步 CreateOrUpdateConsumer（DeliverAll）
+//	                                                            因 “deliver policy can not be updated” 失败
+//	drillinject restore  <nats-url> <stream> <durable>           删掉 durable，下一次启动按 game 自己的配置重建
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+)
+
+func main() {
+	if len(os.Args) < 5 {
+		fmt.Fprintln(os.Stderr, "usage: drillinject conflict|restore <nats-url> <stream> <durable> [filter]")
+		os.Exit(2)
+	}
+	mode, url, stream, durable := os.Args[1], os.Args[2], os.Args[3], os.Args[4]
+	conn, err := nats.Connect(url)
+	if err != nil {
+		fail(err)
+	}
+	defer conn.Close()
+	js, err := jetstream.New(conn)
+	if err != nil {
+		fail(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := js.DeleteConsumer(ctx, stream, durable); err != nil && err != jetstream.ErrConsumerNotFound {
+		fail(fmt.Errorf("delete consumer %s/%s: %w", stream, durable, err))
+	}
+	if mode == "restore" {
+		fmt.Printf("deleted consumer %s/%s\n", stream, durable)
+		return
+	}
+	if mode != "conflict" || len(os.Args) < 6 {
+		fail(fmt.Errorf("conflict needs a filter subject"))
+	}
+	_, err = js.CreateConsumer(ctx, stream, jetstream.ConsumerConfig{
+		Name: durable, Durable: durable, FilterSubject: os.Args[5],
+		DeliverPolicy: jetstream.DeliverLastPolicy, AckPolicy: jetstream.AckExplicitPolicy,
+	})
+	if err != nil {
+		fail(fmt.Errorf("create conflicting consumer: %w", err))
+	}
+	fmt.Printf("created consumer %s/%s with DeliverLast (game wants DeliverAll)\n", stream, durable)
+}
+
+func fail(err error) {
+	fmt.Fprintln(os.Stderr, "drillinject:", err)
+	os.Exit(1)
+}

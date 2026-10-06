@@ -78,3 +78,26 @@ func TestEmitRecoversHookPanic(t *testing.T) {
 		t.Fatalf("Emit error = %v, want phase/name panic context", err)
 	}
 }
+
+// RR-20261006-25：EmitAllWatched 在每个 hook 开始前报出它的名字（按 Order），前一个失败也不跳过后面的报告。
+func TestEmitAllWatchedReportsEachHookBeforeItRuns(t *testing.T) {
+	reg := NewRegistry()
+	var events []string
+	_ = reg.Register(Hook{Name: "second", Phase: PhaseServiceStopping, Order: 2, Handler: func(context.Context, Event) error {
+		events = append(events, "run second")
+		return nil
+	}})
+	_ = reg.Register(Hook{Name: "first", Phase: PhaseServiceStopping, Order: 1, Handler: func(context.Context, Event) error {
+		events = append(events, "run first")
+		return errors.New("first failed")
+	}})
+	err := reg.EmitAllWatched(context.Background(), Event{Phase: PhaseServiceStopping}, func(hook string) {
+		events = append(events, "start "+hook)
+	})
+	if err == nil || !strings.Contains(err.Error(), "first failed") {
+		t.Fatalf("EmitAllWatched = %v, want the first hook's error", err)
+	}
+	if got, want := strings.Join(events, ","), "start first,run first,start second,run second"; got != want {
+		t.Fatalf("events = %s, want %s", got, want)
+	}
+}

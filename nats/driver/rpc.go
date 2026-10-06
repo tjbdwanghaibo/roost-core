@@ -184,10 +184,15 @@ func (r *RPCClient) CallWithTimeout(subject string, req []byte, timeout time.Dur
 	return r.Call(ctx, subject, req)
 }
 
+// errRPCStopped 是 RPC 客户端停止之后发起的 CallAsync 的结果：同时 errors.Is 到 fnats.ErrCancelled（旧
+// 结果，按它判断的调用方不变）与 fnats.ErrClosed（Close 之后的调用统一返回已关闭，RR-20261006-10 口径；
+// RR-20261006-24 之前只有 ErrCancelled）。停止时仍在途的调用照旧只收到 ErrCancelled。
+var errRPCStopped = fmt.Errorf("%w: %w", fnats.ErrCancelled, fnats.ErrClosed)
+
 func (r *RPCClient) CallAsync(subject string, req []byte, cb fnats.RpcCallback) {
 	if r.stopped.Load() {
 		if cb != nil {
-			cb(nil, fnats.ErrCancelled)
+			cb(nil, errRPCStopped)
 		}
 		return
 	}
@@ -203,7 +208,8 @@ func (r *RPCClient) CallAsync(subject string, req []byte, cb fnats.RpcCallback) 
 	})
 	if err != nil {
 		if cb != nil {
-			cb(nil, fmt.Errorf("rpc: subscribe inbox: %w", err))
+			// 连接已关闭 / 正在排空时可 errors.Is 到 fnats.ErrClosed（RR-20261006-24）。
+			cb(nil, fmt.Errorf("rpc: subscribe inbox: %w", closedError(err)))
 		}
 		return
 	}
@@ -214,7 +220,7 @@ func (r *RPCClient) CallAsync(subject string, req []byte, cb fnats.RpcCallback) 
 		r.callbackMu.Unlock()
 		pc.closeResources()
 		if cb != nil {
-			cb(nil, fnats.ErrCancelled)
+			cb(nil, errRPCStopped) // 停止先于登记，这次调用从未在途
 		}
 		return
 	}
@@ -232,7 +238,7 @@ func (r *RPCClient) CallAsync(subject string, req []byte, cb fnats.RpcCallback) 
 
 	// Publish request with reply subject
 	if err := r.client.natsConn().PublishRequest(subject, inbox, req); err != nil {
-		r.finishPending(sid, nil, fmt.Errorf("rpc: publish: %w", err))
+		r.finishPending(sid, nil, fmt.Errorf("rpc: publish: %w", closedError(err)))
 	}
 }
 

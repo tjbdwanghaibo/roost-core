@@ -1,0 +1,36 @@
+22:24:00.779 === step 6: two sids — P7 (1000) running, start Q1 (1001)
+22:24:00.829 start Q1 pid=31672 sid=1001 config=config.game1001.yaml 
+22:24:00.978 Q1 ready (readyz 200)
+22:24:01.011 keys: roost:rpd:singleton:game:1000 = <token>|<host>|31532|1791296626628 pttl=12642 ; roost:rpd:singleton:game:1001 = <token>|<host>|31672|1791296640805 pttl=14805
+22:24:01.024 === step 6a: robots on both sids (since 2026-10-06T14:24:01Z)
+22:24:01.037 loadtest D start endpoint=127.0.0.1:36701 sid=1001 count=10 first=100300 
+22:24:01.037 loadtest C start endpoint=127.0.0.1:36700 sid=1000 count=10 first=100200 
+22:24:10.869 loadtest C end rc=1 runner: stop started=10 success=10 failure=0 canceled=0
+22:24:11.069 loadtest D end rc=1 runner: stop started=10 success=10 failure=0 canceled=0
+22:24:16.489 sagas since 6a: total=40 max_attempt=0 last_terminal=2026-10-06T14:24:08.132Z nonterminal=0 {"1001/st4":10,"1000/st4":10,"1000/st5":10,"1001/st5":10}
+22:24:16.510 P7 handoffs: left=27 ran=14; Q1 left=24 ran=14
+22:24:16.519 === step 6c (OWN-2): robots whose roles are bound to 1001 log in at 1000's endpoint
+22:24:16.529 loadtest E start endpoint=127.0.0.1:36700 sid=1001 count=2 first=100400 -scenario idle -scenarios $DRILL_HOME/scenarios-idle -duration 20s
+22:24:16.750 loadtest E end rc=1 runner: stop started=2 success=0 failure=2 canceled=0
+22:24:16.763 E outcome: 
+22:24:16.774 === step 6b: gifts in flight on 1000, kill -9 P7, start P8 at once (since 2026-10-06T14:24:16Z)
+22:24:16.783 loadtest F start endpoint=127.0.0.1:36700 sid=1000 count=10 first=100500 
+22:24:21.801 sagas at kill: total=20 max_attempt=0 last_terminal=2026-10-06T14:24:21.661Z nonterminal=0 {"1000/st4":10,"1000/st5":10}
+22:24:21.831 kill -9 P7; roost:rpd:singleton:game:1000 = <token>|<host>|31532|1791296626628 pttl=12810
+22:24:21.881 start P8 pid=31940 sid=1000 config=config.game.yaml 
+22:24:36.814 loadtest F end rc=1 runner: stop started=10 success=0 failure=10 canceled=0
+22:24:37.194 P8 ready (readyz 200)
+22:24:42.607 sagas since 6b (+5s): total=20 max_attempt=0 last_terminal=2026-10-06T14:24:21.661Z nonterminal=0 {"1000/st4":10,"1000/st5":10}
+22:24:42.623 P8 ran handed-over steps: 0; Q1 left-to-sender: 56
+22:24:42.997 manual_required in saga db: 0
+22:24:43.007 === drill 1b done
+22:25:06.496 === step 6b: gifts in flight on 1000, kill -9 P8, start P9 at once (since 2026-10-06T14:25:06Z)
+22:25:06.510 loadtest F start endpoint=127.0.0.1:36700 sid=1000 count=10 first=100600 
+22:25:07.750 sagas at kill: total=5 max_attempt=1 last_terminal=- nonterminal=5 {"1000/st2/ph1/step0":5}
+22:25:07.825 kill -9 P8; roost:rpd:singleton:game:1000 = <token>|<host>|31940|1791296661872 pttl=14087
+22:25:07.901 start P9 pid=32492 sid=1000 config=config.game.yaml 
+22:25:17.538 loadtest F end rc=1 runner: stop started=10 success=0 failure=10 canceled=0
+22:25:23.423 P9 ready (readyz 200)
+22:25:28.791 sagas since 6b (+5s): total=9 max_attempt=0 last_terminal=2026-10-06T14:25:23.936Z nonterminal=0 {"1000/st4":9}
+22:25:28.806 P9 ran handed-over steps: 5; Q1 left-to-sender: 143
+22:25:29.153 manual_required in saga db: 0

@@ -1,0 +1,44 @@
+## H-stopping.pre-rr25
+22:26:08.578 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+22:26:08.578 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|33927|<ms>
+22:26:08.607 WARN drill: registered a stop hook that ignores its ctx hook=drill-stuck-service.stopping
+22:26:08.751 INFO received signal, shutting down signal=15
+22:26:08.751 INFO service shutdown service=game
+22:26:08.751 WARN drill: stop hook entered and will never return hook=drill-stuck-service.stopping
+22:26:18.752 WARN singleton: shutdown incomplete; leaving the key to expire key=roost:rpd:singleton:game:1000 ttl=15000000000
+22:26:18.752 WARN singleton: shutdown incomplete; keeping the store open for components still running key=roost:rpd:singleton:game:1000
+22:26:18.752 ERRO app run failed err=app: lifecycle service.stopping hooks did not return within the shutdown budget: context deadline exceeded
+mod stopped lines: 0
+## H-stopped.pre-rr25
+22:26:32.708 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+22:26:32.708 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|34523|<ms>
+22:26:32.743 WARN drill: registered a stop hook that ignores its ctx hook=drill-stuck-service.stopped
+22:26:32.880 INFO received signal, shutting down signal=15
+22:26:32.880 INFO service shutdown service=game
+22:26:32.946 INFO server stopped type=game
+22:26:32.946 WARN drill: stop hook entered and will never return hook=drill-stuck-service.stopped
+22:26:42.881 WARN singleton: no shutdown time left to release; leaving the key to expire key=roost:rpd:singleton:game:1000 ttl=15000000000
+22:26:42.881 ERRO app run failed err=app: lifecycle service.stopped hooks did not return within the shutdown budget: context deadline exceeded
+mod stopped lines: 25
+## H-stopping
+22:28:33.510 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+22:28:33.510 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|35856|<ms>
+22:28:33.544 WARN drill: registered a stop hook that ignores its ctx hook=drill-stuck-service.stopping
+22:28:33.650 INFO received signal, shutting down signal=15
+22:28:33.650 INFO service shutdown service=game
+22:28:33.650 WARN drill: stop hook entered and will never return hook=drill-stuck-service.stopping
+22:28:43.650 WARN singleton: shutdown incomplete; leaving the key to expire key=roost:rpd:singleton:game:1000 ttl=15000000000
+22:28:43.650 WARN singleton: shutdown incomplete; keeping the store open for components still running key=roost:rpd:singleton:game:1000
+22:28:43.650 ERRO app run failed err=app: lifecycle service.stopping hook "drill-stuck-service.stopping" did not return within the shutdown budget: context deadline exceeded
+mod stopped lines: 0
+## H-stopped
+22:28:57.991 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+22:28:57.991 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|36673|<ms>
+22:28:58.029 WARN drill: registered a stop hook that ignores its ctx hook=drill-stuck-service.stopped
+22:28:58.167 INFO received signal, shutting down signal=15
+22:28:58.167 INFO service shutdown service=game
+22:28:58.232 INFO server stopped type=game
+22:28:58.232 WARN drill: stop hook entered and will never return hook=drill-stuck-service.stopped
+22:29:08.169 WARN singleton: no shutdown time left to release; leaving the key to expire key=roost:rpd:singleton:game:1000 ttl=15000000000
+22:29:08.169 ERRO app run failed err=app: lifecycle service.stopped hook "drill-stuck-service.stopped" did not return within the shutdown budget: context deadline exceeded
+mod stopped lines: 25

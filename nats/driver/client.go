@@ -63,7 +63,7 @@ func (c *Client) Publish(subject string, data []byte) error {
 		if errors.Is(err, gonats.ErrConnectionClosed) || errors.Is(err, gonats.ErrConnectionDraining) {
 			// 连接已关闭 / 正在排空，重试不会成功：立即返回、可 errors.Is 到 fnats.ErrClosed，与 Request
 			// 一致（RR-20261006-10；旧实现空等 3 × 20ms 再返回，错误只能 Is 到 gonats 的错误）。
-			return fmt.Errorf("nats: publish to %s: %w: %w", subject, fnats.ErrClosed, err)
+			return fmt.Errorf("nats: publish to %s: %w", subject, closedError(err))
 		}
 		time.Sleep(publishRetryWait)
 	}
@@ -116,7 +116,7 @@ func (c *Client) Subscribe(subject string, handler fnats.MsgHandler) (fnats.ISub
 		})
 	})
 	if err != nil {
-		return nil, err
+		return nil, closedError(err)
 	}
 	return &subscription{sub: sub}, nil
 }
@@ -136,7 +136,7 @@ func (c *Client) QueueSubscribe(subject string, queue string, handler fnats.MsgH
 		})
 	})
 	if err != nil {
-		return nil, err
+		return nil, closedError(err)
 	}
 	return &subscription{sub: sub}, nil
 }
@@ -169,7 +169,7 @@ func (c *Client) DrainWithContext(ctx context.Context) error {
 	for !c.conn.IsClosed() {
 		select {
 		case <-ctx.Done():
-			c.conn.Close()
+			c.Close()
 			return ctx.Err()
 		case <-ticker.C:
 		}
@@ -189,9 +189,34 @@ func (c *Client) Close() {
 	}
 }
 
+// Connected 在 Close（含排空超时后的硬关）之后一直返回 false。不能只看 nats.go 的 IsConnected：排空被硬关
+// 打断时，nats.go 的排空协程（drainConnection）在 Close 之后仍会把状态翻回 DRAINING_PUBS、空等一次
+// FlushTimeout（最长 5s）再关一次，这段时间 IsConnected 为 true（RR-20261006-26，真实 NATS 上实测）。
+// 之后的调用不受影响：DRAINING_PUBS 下 nats.go 返回 ErrConnectionDraining，驱动同样映射为 fnats.ErrClosed。
 func (c *Client) Connected() bool {
-	return c != nil && c.conn != nil && c.conn.IsConnected()
+	return c != nil && c.conn != nil && !(c.state != nil && c.state.closing.Load()) && c.conn.IsConnected()
 }
+
+// closedError 把 nats.go 的“连接已关闭 / 正在排空”包成驱动的已关闭错误：errors.Is 同时命中
+// fnats.ErrClosed 与 nats.go 的原错误；其他错误原样返回。Close 之后的订阅、JetStream 与 RPC CallAsync
+// 经它返回，与 Publish / Request 同一口径（RR-20261006-24；旧实现原样返回 nats.go 的
+// ErrConnectionClosed，文本同为 "nats: connection closed"，却 errors.Is 不到 fnats.ErrClosed）。
+// 文本只取 nats.go 的原错误（它与 fnats.ErrClosed 同为 "nats: connection closed"，用 %w: %w 拼接会重复一遍）。
+func closedError(err error) error {
+	if err == nil || errors.Is(err, fnats.ErrClosed) {
+		return err
+	}
+	if errors.Is(err, gonats.ErrConnectionClosed) || errors.Is(err, gonats.ErrConnectionDraining) {
+		return connectionClosedError{cause: err}
+	}
+	return err
+}
+
+// connectionClosedError 同时 errors.Is 到 fnats.ErrClosed 与 nats.go 的原错误，文本是原错误的文本。
+type connectionClosedError struct{ cause error }
+
+func (e connectionClosedError) Error() string   { return e.cause.Error() }
+func (e connectionClosedError) Unwrap() []error { return []error{fnats.ErrClosed, e.cause} }
 
 func (c *Client) wrapError(err error) error {
 	if err == gonats.ErrTimeout {

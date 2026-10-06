@@ -1,0 +1,9 @@
+# RR-20261006-25 修前（app 单元，GOWORK=off go test ./app/ -run TestShutdownLifecycleHooksStayWithinTheShutdownBudget -count=1）
+--- FAIL: TestShutdownLifecycleHooksStayWithinTheShutdownBudget (0.61s)
+    --- FAIL: TestShutdownLifecycleHooksStayWithinTheShutdownBudget/service.stopping (0.30s)
+        shutdown_hooks_promises_test.go:93: run error = app: lifecycle service.stopping hooks did not return within the shutdown budget: context deadline exceeded, want it to name the hook that did not return ("blocking-service.stopping")
+    --- FAIL: TestShutdownLifecycleHooksStayWithinTheShutdownBudget/service.stopped (0.31s)
+        shutdown_hooks_promises_test.go:93: run error = app: lifecycle service.stopped hooks did not return within the shutdown budget: context deadline exceeded, want it to name the hook that did not return ("blocking-service.stopped")
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/app	1.135s
+FAIL

@@ -34,7 +34,7 @@ func (c *JetStreamClient) EnsureStream(ctx context.Context, cfg fnats.JetStreamC
 		return errors.New("nats jetstream: not initialized")
 	}
 	_, err := c.js.CreateOrUpdateStream(ctx, toJetStreamStreamConfig(cfg))
-	return err
+	return closedError(err)
 }
 
 func (c *JetStreamClient) Publish(ctx context.Context, subject string, data []byte, opts fnats.JetStreamPublishOptions) (fnats.JetStreamPublishAck, error) {
@@ -47,7 +47,7 @@ func (c *JetStreamClient) Publish(ctx context.Context, subject string, data []by
 	}
 	ack, err := c.js.Publish(ctx, subject, data, publishOpts...)
 	if err != nil {
-		return fnats.JetStreamPublishAck{}, err
+		return fnats.JetStreamPublishAck{}, closedError(err)
 	}
 	if ack == nil {
 		return fnats.JetStreamPublishAck{}, nil
@@ -68,7 +68,7 @@ func (c *JetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 	}
 	consumer, err := c.js.CreateOrUpdateConsumer(ctx, cfg.Stream, toJetStreamConsumerConfig(cfg))
 	if err != nil {
-		return nil, err
+		return nil, closedError(err)
 	}
 	handlerCtx, cancel := context.WithCancel(context.Background())
 	cc, err := consumer.Consume(func(msg gojs.Msg) {
@@ -77,7 +77,7 @@ func (c *JetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 	})
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, closedError(err)
 	}
 	return &jetStreamSubscription{cc: cc, cancel: cancel}, nil
 }

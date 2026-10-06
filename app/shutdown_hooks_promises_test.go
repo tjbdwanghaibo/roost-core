@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -84,6 +86,11 @@ func TestShutdownLifecycleHooksStayWithinTheShutdownBudget(t *testing.T) {
 			}
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("run error = %v, want the shutdown budget's DeadlineExceeded", err)
+			}
+			// RR-20261006-25：错误（“app run failed” 那一行）要点出卡住的是哪个 hook，同一阶段常有多个 hook
+			// （Ops 的就绪位、configdata、业务登记的），只报阶段运维无从下手。
+			if stuck := "blocking-" + string(tc.phase); !strings.Contains(err.Error(), strconv.Quote(stuck)) {
+				t.Fatalf("run error = %v, want it to name the hook that did not return (%q)", err, stuck)
 			}
 			if calls := shutdownCalls.Load(); calls != tc.wantShutdowns || shared.stops.Load() != tc.wantModStops {
 				t.Fatalf("Service.Shutdown calls=%d mod stops=%d, want %d / %d", calls, shared.stops.Load(), tc.wantShutdowns, tc.wantModStops)

@@ -1,0 +1,36 @@
+// 演练 3 的故障注入（docs/bugfix/REAL-PROCESS-DRILLS-2026-10-06.md）：setup.sh 把本文件复制成生成工程的
+// internal/service/game/zz_drill_hooks.go，并在 Service.Init 开头插入 registerDrillHooks(registry)。
+// ROOST_DRILL_STUCK_HOOK=service.stopping 或 service.stopped 时登记一个不配合 ctx 的停机 hook（模拟业务在
+// 停机时做不受 ctx 约束的 I/O），名字是 drill-stuck-<阶段>。没有这个环境变量时什么都不做。
+package game
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/lifecycle"
+)
+
+func registerDrillHooks(registry *app.Registry) error {
+	phase := lifecycle.Phase(os.Getenv("ROOST_DRILL_STUCK_HOOK"))
+	if phase == "" {
+		return nil
+	}
+	if phase != lifecycle.PhaseServiceStopping && phase != lifecycle.PhaseServiceStopped {
+		return fmt.Errorf("drill: ROOST_DRILL_STUCK_HOOK=%q, want service.stopping or service.stopped", phase)
+	}
+	reg, ok := app.Lookup[*lifecycle.Registry](registry, mods.ModLifecycle)
+	if !ok || reg == nil {
+		return fmt.Errorf("drill: lifecycle registry unavailable")
+	}
+	name := "drill-stuck-" + string(phase)
+	slog.Warn("drill: registered a stop hook that ignores its ctx", "hook", name)
+	return reg.Register(lifecycle.Hook{Name: name, Phase: phase, Handler: func(context.Context, lifecycle.Event) error {
+		slog.Warn("drill: stop hook entered and will never return", "hook", name)
+		select {}
+	}})
+}

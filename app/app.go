@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -807,11 +808,15 @@ func stopModSafely(ctx context.Context, mod Mod) error {
 // emitLifecycleWithin 是停机阶段（service.stopping / service.stopped）的 hook 派发：在 ctx（停机总预算）
 // 内等全部 hook 返回。hook 不配合 ctx 时 App 杀不掉它——到期返回 finished=false 与 ctx 错误，hook 留在
 // 自己的 goroutine 里继续跑，调用方按“停机不完整”保留依赖；与 Service.Shutdown、Mod 停机的处理相同
-// （roost-coding 三步停机②，RR-20261005-NC-231）。hook 自己返回的错误（包括配合 ctx 返回的 ctx 错误）
-// 算已返回，finished=true。启动阶段的 hook 没有停机预算，仍同步派发。
+// （roost-coding 三步停机②，RR-20261005-NC-231）。到期的错误点出卡住的 hook（最后一个开始、还没返回的，
+// 它之后的 hook 没有运行；RR-20261006-25），run 的 “app run failed” 日志带上它。hook 自己返回的错误
+// （包括配合 ctx 返回的 ctx 错误）算已返回，finished=true。启动阶段的 hook 没有停机预算，仍同步派发。
 func (a *App) emitLifecycleWithin(ctx context.Context, event lifecycle.Event) (finished bool, err error) {
+	var running atomic.Pointer[string]
 	result := make(chan error, 1)
-	go func() { result <- a.emitLifecycle(ctx, event) }()
+	go func() {
+		result <- a.emitStopLifecycle(ctx, event, func(hook string) { running.Store(&hook) })
+	}()
 	select {
 	case err := <-result:
 		return true, err
@@ -821,22 +826,42 @@ func (a *App) emitLifecycleWithin(ctx context.Context, event lifecycle.Event) (f
 			return true, err
 		default:
 		}
+		if hook := running.Load(); hook != nil {
+			return false, fmt.Errorf("app: lifecycle %s hook %q did not return within the shutdown budget: %w", event.Phase, *hook, ctx.Err())
+		}
 		return false, fmt.Errorf("app: lifecycle %s hooks did not return within the shutdown budget: %w", event.Phase, ctx.Err())
 	}
 }
 
 func (a *App) emitLifecycle(ctx context.Context, event lifecycle.Event) error {
+	if event.Phase == lifecycle.PhaseServiceStopping || event.Phase == lifecycle.PhaseServiceStopped {
+		return a.emitStopLifecycle(ctx, event, nil)
+	}
+	reg, err := a.lifecycleRegistry()
+	if err != nil {
+		return err
+	}
+	return reg.Emit(ctx, event)
+}
+
+// emitStopLifecycle 派发停机阶段的 hook：一个失败不挡住后面的（EmitAll），starting 记下正在运行的 hook。
+func (a *App) emitStopLifecycle(ctx context.Context, event lifecycle.Event, starting func(hook string)) error {
+	reg, err := a.lifecycleRegistry()
+	if err != nil {
+		return err
+	}
+	return reg.EmitAllWatched(ctx, event, starting)
+}
+
+func (a *App) lifecycleRegistry() (*lifecycle.Registry, error) {
 	if a == nil || a.registry == nil {
-		return fmt.Errorf("app: lifecycle registry unavailable")
+		return nil, fmt.Errorf("app: lifecycle registry unavailable")
 	}
 	reg, ok := Lookup[*lifecycle.Registry](a.registry, ModLifecycle)
 	if !ok || reg == nil {
-		return fmt.Errorf("app: capability %q not found or wrong type", ModLifecycle)
+		return nil, fmt.Errorf("app: capability %q not found or wrong type", ModLifecycle)
 	}
-	if event.Phase == lifecycle.PhaseServiceStopping || event.Phase == lifecycle.PhaseServiceStopped {
-		return reg.EmitAll(ctx, event)
-	}
-	return reg.Emit(ctx, event)
+	return reg, nil
 }
 
 func sortMods(mods []Mod, external map[ModName]struct{}) ([]Mod, error) {

@@ -1,0 +1,82 @@
+## P1
+22:22:13.506 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+22:22:13.506 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|28522|<ms>
+22:22:13.919 INFO etcd Discovery: registered key=/roost/services/game/1000 lease=297133197349696261
+22:22:14.714 INFO activity: window open activity_id=race-1791296400 closes_at=1791296700 expected_game_sids=[1000]
+22:22:52.418 WARN etcd Discovery: lease lost key=/roost/services/game/1000
+22:22:52.419 ERRO singleton lock lost; fail-stop key=roost:rpd:singleton:game:1000 holder= err=singleton key no longer holds this process's value (current holder "")
+22:22:52.419 ERRO runtime infrastructure failure, shutting down err=singleton lock lost: singleton key no longer holds this process's value (current holder "")
+22:22:52.424 INFO etcd Discovery: lease already gone; its keys were removed with it lease=297133197349696261 err=etcdserver: requested lease not found
+22:22:52.424 INFO etcd Discovery: deregistered key=/roost/services/game/1000
+22:22:52.477 INFO server stopped type=game
+22:22:52.477 WARN singleton: lock was lost; not releasing key=roost:rpd:singleton:game:1000
+22:22:52.477 ERRO app run failed err=singleton lock lost: singleton key no longer holds this process's value (current holder "")
+## P2
+22:22:34.958 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+22:22:34.962 INFO singleton: waiting for the current holder to release or expire key=roost:rpd:singleton:game:1000 holder=<token>|<host>|28522|<ms>
+22:22:49.968 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|28709|<ms>
+22:22:49.969 INFO singleton: released key=roost:rpd:singleton:game:1000
+22:22:49.969 ERRO app run failed err=mod ops start: ops: listen on ops.addr 127.0.0.1:36100: listen tcp 127.0.0.1:36100: bind: address already in use
+## P4
+22:23:20.849 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+22:23:20.849 INFO singleton: waiting for the current holder to release or expire key=roost:rpd:singleton:game:1000 holder=<token>|<host>|29885|<ms>
+22:23:23.851 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|30572|<ms>
+22:23:23.881 INFO etcd Discovery: registered key=/roost/services/game/1000 lease=297133197349696274
+22:23:24.033 INFO etcd Discovery: deregistered key=/roost/services/game/1000
+22:23:24.087 INFO server stopped type=game
+22:23:24.087 INFO singleton: released key=roost:rpd:singleton:game:1000
+## P5
+22:23:24.516 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+22:23:24.516 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|30746|<ms>
+22:23:24.542 INFO etcd Discovery: registered key=/roost/services/game/1000 lease=297133197349696278
+22:23:46.137 ERRO singleton lock lost; fail-stop key=roost:rpd:singleton:game:1000 holder= err=singleton key no longer holds this process's value (current holder "")
+22:23:46.137 WARN etcd Discovery: lease lost key=/roost/services/game/1000
+22:23:46.137 ERRO runtime infrastructure failure, shutting down err=singleton lock lost: singleton key no longer holds this process's value (current holder "")
+22:23:46.138 INFO game: disconnected the players this process served sessions_closed=4
+22:23:46.144 INFO etcd Discovery: lease already gone; its keys were removed with it lease=297133197349696278 err=etcdserver: requested lease not found
+22:23:46.144 INFO etcd Discovery: deregistered key=/roost/services/game/1000
+22:23:46.198 INFO server stopped type=game
+22:23:46.198 WARN singleton: lock was lost; not releasing key=roost:rpd:singleton:game:1000
+22:23:46.198 ERRO app run failed err=singleton lock lost: singleton key no longer holds this process's value (current holder "")
+## P6
+22:23:30.789 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+22:23:30.790 INFO singleton: waiting for the current holder to release or expire key=roost:rpd:singleton:game:1000 holder=<token>|<host>|30746|<ms>
+22:23:45.796 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|30819|<ms>
+22:23:45.798 INFO singleton: released key=roost:rpd:singleton:game:1000
+22:23:45.798 ERRO app run failed err=mod ops start: ops: listen on ops.addr 127.0.0.1:36100: listen tcp 127.0.0.1:36100: bind: address already in use
+## P8
+22:24:21.872 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+22:24:21.872 INFO singleton: waiting for the current holder to release or expire key=roost:rpd:singleton:game:1000 holder=<token>|<host>|31532|<ms>
+22:24:36.880 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|31940|<ms>
+22:24:37.087 INFO etcd Discovery: registered key=/roost/services/game/1000 lease=297133197349696290
+22:25:02.111 INFO activity: window open activity_id=race-1791296700 closes_at=1791297000 expected_game_sids=[1000, 1001]
+22:25:07.400 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100067 phase=debit command=gift-100067-demo-100067-1791-12:1:0:1
+22:25:07.449 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100069 phase=debit command=gift-100069-demo-100069-1791-12:1:0:1
+## P9
+22:25:07.886 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+22:25:07.899 INFO singleton: waiting for the current holder to release or expire key=roost:rpd:singleton:game:1000 holder=<token>|<host>|31940|<ms>
+22:25:22.906 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|32492|<ms>
+22:25:23.094 INFO etcd Discovery: registered key=/roost/services/game/1000 lease=297133197349696294
+22:25:23.286 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100073 phase=debit command=gift-100073-demo-100073-1791-12:1:0:4
+22:25:23.447 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100070 phase=debit command=gift-100070-demo-100070-1791-12:1:0:4
+22:25:23.492 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100068 phase=debit command=gift-100068-demo-100068-1791-12:1:0:4
+22:25:23.536 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100069 phase=debit command=gift-100069-demo-100069-1791-12:1:0:4
+22:25:23.579 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100075 phase=debit command=gift-100075-demo-100075-1791-13:1:0:4
+22:25:50.255 INFO etcd Discovery: deregistered key=/roost/services/game/1000
+22:25:50.308 INFO server stopped type=game
+22:25:50.308 INFO singleton: released key=roost:rpd:singleton:game:1000
+## Q1
+22:24:00.805 INFO singleton: acquiring key=roost:rpd:singleton:game:1001
+22:24:00.805 INFO singleton: acquired key=roost:rpd:singleton:game:1001 value=<token>|<host>|31672|<ms>
+22:24:00.845 INFO etcd Discovery: registered key=/roost/services/game/1001 lease=297133197349696286
+22:24:00.864 INFO activity: window open activity_id=race-1791296400 closes_at=1791296700 expected_game_sids=[1000, 1001]
+22:24:02.401 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100035 phase=debit command=gift-100035-demo-100035-1791-12:1:0:1
+22:24:03.537 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100040 phase=debit command=gift-100040-demo-100040-1791-13:1:0:1
+22:24:03.684 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100044 phase=debit command=gift-100044-demo-100044-1791-14:1:0:1
+22:24:04.151 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100035 phase=debit command=gift-100035-demo-100035-1791-22:1:0:1
+22:24:04.296 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100036 phase=debit command=gift-100036-demo-100036-1791-22:1:0:1
+22:24:04.802 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100035 phase=refund command=gift-100035-demo-100035-1791-22:2:0:1
+22:24:04.938 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100037 phase=debit command=gift-100037-demo-100037-1791-23:1:0:1
+22:24:04.983 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100039 phase=debit command=gift-100039-demo-100039-1791-23:1:0:1
+22:24:05.770 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100038 phase=debit command=gift-100038-demo-100038-1791-24:1:0:1
+22:24:05.976 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100044 phase=debit command=gift-100044-demo-100044-1791-24:1:0:1

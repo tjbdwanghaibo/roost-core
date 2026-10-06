@@ -1,0 +1,50 @@
+22:22:13.474 === drill 1 start (core a632a057+dirty)
+22:22:13.482 === step 0: P1 up + robots
+22:22:13.523 start P1 pid=28522 sid=1000 config=config.game.yaml 
+22:22:14.920 P1 ready (readyz 200)
+22:22:14.929 loadtest A start endpoint=127.0.0.1:36700 sid=1000 count=10 first=100000 
+22:22:23.192 loadtest A end rc=0 runner: stop started=10 success=10 failure=0 canceled=0
+22:22:23.204 loadtest A2 start endpoint=127.0.0.1:36700 sid=1000 count=10 first=100010 
+22:22:31.055 loadtest A2 end rc=0 runner: stop started=10 success=10 failure=0 canceled=0
+22:22:34.491 players in mongo:       20
+22:22:34.507 === step 1: SIGSTOP P1 (28522)
+22:22:34.536 SIGSTOP P1; roost:rpd:singleton:game:1000 = <token>|<host>|28522|1791296533506 pttl=14984
+22:22:34.933 players in mongo at stop:       20
+22:22:34.978 start P2 pid=28709 sid=1000 config=config.game.yaml 
+22:22:50.364 P2 exited code=1
+22:22:50.383 after P2: roost:rpd:singleton:game:1000 =  pttl=-2
+22:22:52.414 === step 2: SIGCONT P1
+22:22:52.866 P1 exited code=1
+22:22:52.884 after P1 exit: roost:rpd:singleton:game:1000 =  pttl=-2
+22:22:52.894 === step 3: P2b takes over
+22:22:52.939 start P2b pid=29757 sid=1000 config=config.game.yaml 
+22:22:53.074 P2b ready (readyz 200)
+22:22:54.510 players after takeover:       20
+22:22:54.521 takeover snapshot identical to stop snapshot
+22:22:54.533 loadtest B start endpoint=127.0.0.1:36700 sid=1000 count=10 first=100020 
+22:23:02.164 loadtest B end rc=0 runner: stop started=10 success=10 failure=0 canceled=0
+22:23:05.576 players after B:       30
+22:23:05.592 === step 4: kill -9 P2b; roost:rpd:singleton:game:1000 = <token>|<host>|29757|1791296572919 pttl=14337
+22:23:05.637 start P3 pid=29885 sid=1000 config=config.game.yaml 
+22:23:20.753 P3 ready (readyz 200)
+22:23:20.775 === step 5: SIGTERM P3, start P4 immediately
+22:23:20.874 start P4 pid=30572 sid=1000 config=config.game.yaml 
+22:23:21.197 P3 exited code=0
+22:23:24.008 P4 ready (readyz 200)
+22:23:24.019 === step 5b: SIGTERM P4, start P5 after P4 exits
+22:23:24.471 P4 exited code=0
+22:23:24.490 after P4 exit: roost:rpd:singleton:game:1000 =  pttl=-2
+22:23:24.540 start P5 pid=30746 sid=1000 config=config.game.yaml 
+22:23:24.692 P5 ready (readyz 200)
+22:23:24.701 === step 1c/2c: idle robots on P5, SIGSTOP, P6, SIGCONT
+22:23:24.710 loadtest idle start (background, enter_game then idle)
+22:23:30.748 tcp before stop: player_tcp_connections 4
+22:23:30.767 SIGSTOP P5; roost:rpd:singleton:game:1000 = <token>|<host>|30746|1791296604515 pttl=14758
+22:23:30.810 start P6 pid=30819 sid=1000 config=config.game.yaml 
+22:23:46.133 P6 exited code=1
+22:23:46.147 SIGCONT P5
+22:23:46.589 P5 exited code=1
+22:23:46.605 after P5 exit: roost:rpd:singleton:game:1000 =  pttl=-2
+22:23:46.648 start P7 pid=31532 sid=1000 config=config.game.yaml 
+22:23:46.794 P7 ready (readyz 200)
+22:23:46.803 === drill 1 single-sid part done

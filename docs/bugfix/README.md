@@ -6,6 +6,14 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 真实进程演练四项（drill2），未发版。** [演练记录](REAL-PROCESS-DRILLS-2026-10-06.md)：App 锁方案 §13、NC-193、NC-231、RR-20261006-10 的“未验证”都已在真实进程 / 真实依赖上实测。RR-20261006-24：关闭后的订阅、JetStream、RPC CallAsync 错误经 `closedError` 同时 `errors.Is` 到 `fnats.ErrClosed` 与 nats.go 原错误；RR-20261006-25：`lifecycle.Registry.EmitAllWatched` 报出正在跑的 hook，停机超时错误点名它；RR-20261006-26：`Client.Connected()` 在 Close 之后一直为 false。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-26](RR-20261006-26.md) | `Connected()` 看驱动自己的关闭标记；`DrainWithContext` 硬关走 `Client.Close` | 已修复、声明场景验证，未发版 |
+| [RR-20261006-25](RR-20261006-25.md) | `EmitAllWatched` + App 记下最后开始的 hook，超时错误 `hook "<名字>" did not return …` | 已修复、声明场景验证，未发版 |
+| [RR-20261006-24](RR-20261006-24.md) | `closedError` 映射 Subscribe / QueueSubscribe / JetStream 三方法 / CallAsync；RPC 停止后的 CallAsync 同时 Is ErrCancelled 与 ErrClosed | 已修复、声明场景验证，未发版 |
+
 **10-06 SKILL-1 / SKILL-3 补测（sktest2），未发版。** RR-20261006-21：未提交的失败启动删 cast、还 ID 前删掉它已停进程的记录，有进程停不下来时保留 failed cast、不还 ID；RR-20261006-23：只有运行中的进程钉住 cast，回收 cast 时连它已停的进程记录一起删；RR-20261006-22：`ActivePresentation` 带上增量里的 `PrimaryTarget`（`json:"-"`，不下发），reset 按增量的形状过滤。
 
 | 编号 | 修复 | 状态 |

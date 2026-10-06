@@ -6,6 +6,14 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 真实进程演练四项（drill2，恢复自 `wip/drill`）：RR-20261006-24（P3）、-25（P4）、-26（P4）已修复、声明场景验证，未发版。** 当前代码上重跑 game-demo 单实例锁 / fail-stop / 静态绑定演练（含 6b）、Init 中途失败收尾（NC-193）、停机 hook 卡住时 SIGTERM（NC-231）、kit Mongo / NATS Mod 接真实依赖的 Close（RR-20261006-10），[记录](../bugfix/REAL-PROCESS-DRILLS-2026-10-06.md)。演练发现：nats 驱动关闭后订阅 / JetStream / RPC CallAsync 的错误不是 `fnats.ErrClosed`（-24）；停机 hook 超时的错误不点名 hook（-25）；排空被硬关后 `Connected()` 约 5s 内仍为 true（-26，nats.go 排空协程翻回 `DRAINING_PUBS`）。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-26](RR-20261006-26.md) | P4 nats 排空被硬关后 nats.go 把状态翻回 DRAINING_PUBS，驱动 `Connected()` 最长约 5s 仍为 true | 已修复、声明场景验证，未发版 |
+| [RR-20261006-25](RR-20261006-25.md) | P4 停机 lifecycle hook 超时的错误只报阶段、不点名卡住的 hook | 已修复、声明场景验证，未发版 |
+| [RR-20261006-24](RR-20261006-24.md) | P3 nats 驱动关闭后 Subscribe / QueueSubscribe / JetStream / RPC CallAsync 的错误 `errors.Is` 不到 `fnats.ErrClosed` | 已修复、声明场景验证，未发版 |
+
 **10-06 SKILL-1 / SKILL-3 补测（sktest2）：RR-20261006-21（P2）、-22（P3）、-23（P2）已修复、声明场景验证，未发版。** 补发版文档 SKILL-1 / SKILL-3 review 检查点里没有专门用例的分支：Interrupt 停进程出错、toggle release 回调出错一次通过（变异证明能红）；charge enter 起进程后失败，已停进程的记录留在被复用的 cast ID 下、Checkpoint 报 corrupt（-21）；同一机制下起过进程的 cast 进程结束后也永不回收，超过 `CompletedCastLimit` 后 checkpoint 恢复判 corrupt（-23）；reset 的进程条目用 lifecycle 实体冒充 `PrimaryTarget`，与增量交给策略的事件不一致（-22）。
 
 | 编号 | 问题 | 状态 |

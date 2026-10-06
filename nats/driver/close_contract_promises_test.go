@@ -79,3 +79,78 @@ func TestClientPublishAfterCloseReportsErrClosed(t *testing.T) {
 		t.Fatalf("Publish after Close = %v, want fnats.ErrClosed", err)
 	}
 }
+
+// RR-20261006-24：Close 之后的订阅、JetStream 与 RPC 调用同样返回可 errors.Is 到 fnats.ErrClosed 的错误
+// （RR-20261006-10 统一口径第 3 条）。旧行为（真实进程演练第 4 项在真实 NATS 上发现）：Publish / Request /
+// RPC.Call 已映射到 fnats.ErrClosed，而 Subscribe / QueueSubscribe、JetStream 的 EnsureStream / Publish /
+// Subscribe 与 RPC.CallAsync 的订阅收件箱原样返回 nats.go 的 ErrConnectionClosed，文本同为
+// "nats: connection closed"，却 errors.Is 不到驱动的已关闭错误。
+func TestClientSubscribeAndJetStreamAfterCloseReportErrClosed(t *testing.T) {
+	a := closeContractAssembly(t)
+	js, err := NewJetStreamClient(a.Client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	calls := map[string]func() error{
+		"Subscribe": func() error {
+			_, err := a.Client.Subscribe("roost.close", func(*fnats.Msg) {})
+			return err
+		},
+		"QueueSubscribe": func() error {
+			_, err := a.Client.QueueSubscribe("roost.close", "q", func(*fnats.Msg) {})
+			return err
+		},
+		"JetStream.EnsureStream": func() error {
+			return js.EnsureStream(ctx, fnats.JetStreamConfig{Name: "ROOST_CLOSE", Subjects: []string{"roost.close.js"}})
+		},
+		"JetStream.Publish": func() error {
+			_, err := js.Publish(ctx, "roost.close.js", nil, fnats.JetStreamPublishOptions{})
+			return err
+		},
+		"JetStream.Subscribe": func() error {
+			_, err := js.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: "ROOST_CLOSE", Durable: "close"}, func(context.Context, *fnats.JetStreamMsg) error { return nil })
+			return err
+		},
+	}
+	for name, call := range calls {
+		if err := call(); !errors.Is(err, fnats.ErrClosed) {
+			t.Errorf("%s after Close = %v, want an error that errors.Is fnats.ErrClosed", name, err)
+		}
+	}
+	// 连接关了、RPC 客户端没停（只关 Client 的调用方）：CallAsync 订阅收件箱失败。
+	if err := callAsyncResult(a.RPC); !errors.Is(err, fnats.ErrClosed) {
+		t.Errorf("RPC.CallAsync after Client.Close = %v, want an error that errors.Is fnats.ErrClosed", err)
+	}
+}
+
+// RR-20261006-24：Assembly.Close 停了 RPC 客户端之后发起的 CallAsync 同样是“已关闭”。旧行为只回
+// fnats.ErrCancelled（与 Close 时在途调用的取消同一个错误）；现在同时 errors.Is 到 ErrCancelled 与
+// ErrClosed，按 ErrCancelled 判断的调用方不受影响。
+func TestRPCCallAsyncAfterAssemblyCloseReportsErrClosed(t *testing.T) {
+	a := closeContractAssembly(t)
+	_ = a.Close(context.Background()) // 不可达地址：ErrClosedUndrained，见 TestAssemblyTerminalCloseErrorIsReportedOnce
+	err := callAsyncResult(a.RPC)
+	if !errors.Is(err, fnats.ErrClosed) || !errors.Is(err, fnats.ErrCancelled) {
+		t.Fatalf("RPC.CallAsync after Assembly.Close = %v, want an error that errors.Is both fnats.ErrClosed and fnats.ErrCancelled", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := a.RPC.Call(ctx, "roost.close", nil); !errors.Is(err, fnats.ErrClosed) {
+		t.Fatalf("RPC.Call after Assembly.Close = %v, want fnats.ErrClosed", err)
+	}
+}
+
+// callAsyncResult 发起一次 CallAsync，返回回调拿到的错误；回调 1s 内不来按失败处理。
+func callAsyncResult(rpc *RPCClient) error {
+	done := make(chan error, 1)
+	rpc.CallAsync("roost.close", nil, func(_ []byte, err error) { done <- err })
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(time.Second):
+		return errors.New("CallAsync callback did not run within 1s")
+	}
+}

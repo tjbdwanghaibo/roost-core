@@ -1,0 +1,55 @@
+# RR-20261006-24 修前：nats/driver 单元（origin/main 的 client.go / jetstream.go / rpc.go，不可达地址）
+--- FAIL: TestClientSubscribeAndJetStreamAfterCloseReportErrClosed (0.00s)
+    close_contract_promises_test.go:119: Subscribe after Close = nats: connection closed, want an error that errors.Is fnats.ErrClosed
+    close_contract_promises_test.go:119: QueueSubscribe after Close = nats: connection closed, want an error that errors.Is fnats.ErrClosed
+    close_contract_promises_test.go:119: JetStream.EnsureStream after Close = nats: connection closed, want an error that errors.Is fnats.ErrClosed
+    close_contract_promises_test.go:119: JetStream.Publish after Close = nats: connection closed, want an error that errors.Is fnats.ErrClosed
+    close_contract_promises_test.go:119: JetStream.Subscribe after Close = nats: connection closed, want an error that errors.Is fnats.ErrClosed
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/nats/driver	0.526s
+FAIL
+--- FAIL: TestClientSubscribeAndJetStreamAfterCloseReportErrClosed (0.00s)
+    close_contract_promises_test.go:125: RPC.CallAsync after Client.Close = rpc: subscribe inbox: nats: connection closed, want an error that errors.Is fnats.ErrClosed
+--- FAIL: TestRPCCallAsyncAfterAssemblyCloseReportsErrClosed (0.00s)
+    close_contract_promises_test.go:137: RPC.CallAsync after Assembly.Close = nats: request cancelled, want an error that errors.Is both fnats.ErrClosed and fnats.ErrCancelled
+
+# RR-20261006-24 修前：kit/nats 真实 NATS（mirror-local 私有 JetStream 3 节点）
+    close_contract_real_promises_test.go:178: IClient.Subscribe after Stop = nats: connection closed, want an error that errors.Is fnats.ErrClosed
+    close_contract_real_promises_test.go:178: IClient.QueueSubscribe after Stop = nats: connection closed, want an error that errors.Is fnats.ErrClosed
+    close_contract_real_promises_test.go:178: IRpc.CallAsync after Stop = nats: request cancelled, want an error that errors.Is fnats.ErrClosed
+    close_contract_real_promises_test.go:178: IJetStream.EnsureStream after Stop = nats: connection closed, want an error that errors.Is fnats.ErrClosed
+    close_contract_real_promises_test.go:178: IJetStream.Publish after Stop = nats: connection closed, want an error that errors.Is fnats.ErrClosed
+    close_contract_real_promises_test.go:178: IJetStream.Subscribe after Stop = nats: connection closed, want an error that errors.Is fnats.ErrClosed
+--- FAIL: TestRealNatsModCloseContract (0.06s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/kit/nats	0.690s
+FAIL
+
+# 修后：kit/nats 真实 NATS
+    close_contract_real_promises_test.go:176: IClient.Publish after Stop = nats: publish to rr1006_10.real.1791296208056806000: nats: connection closed (0s)
+    close_contract_real_promises_test.go:176: IClient.Request after Stop = nats: connection closed (0s)
+    close_contract_real_promises_test.go:176: IClient.Subscribe after Stop = nats: connection closed (0s)
+    close_contract_real_promises_test.go:176: IClient.QueueSubscribe after Stop = nats: connection closed (0s)
+    close_contract_real_promises_test.go:176: IRpc.Call after Stop = nats: connection closed (0s)
+    close_contract_real_promises_test.go:176: IRpc.CallAsync after Stop = nats: request cancelled: nats: connection closed (0s)
+    close_contract_real_promises_test.go:176: IJetStream.EnsureStream after Stop = nats: connection closed (2ms)
+    close_contract_real_promises_test.go:176: IJetStream.Publish after Stop = nats: connection closed (0s)
+    close_contract_real_promises_test.go:176: IJetStream.Subscribe after Stop = nats: connection closed (1ms)
+    close_contract_real_promises_test.go:176: IBus.Send after Stop = nats: publish to rr1006_10_1791296208053882000.srv.1: nats: connection closed (0s)
+    close_contract_real_promises_test.go:176: IBus.Call after Stop = nats: connection closed (0s)
+--- PASS: TestRealNatsModCloseContract (0.06s)
+    close_contract_real_promises_test.go:221: first Stop = nats: connection closed before drain finished: context deadline exceeded
+--- PASS: TestRealNatsModUndrainedCloseIsReportedOnce (0.21s)
+--- PASS: TestRealNatsModStopAfterConnectionDrainBudgetConverges (0.10s)
+--- PASS: TestRealNatsModProvideRefusesBareRegistriesAndReliableWithoutRedis (0.10s)
+ok  	github.com/tjbdwanghaibo/roost-core/kit/nats	2.102s
+
+# 修后：kit/mongo 真实 Mongo 副本集
+    close_contract_real_promises_test.go:134: IMongo.Ping after Stop = client is disconnected (0s)
+    close_contract_real_promises_test.go:134: ICollection.InsertOne after Stop = client is disconnected (0s)
+    close_contract_real_promises_test.go:134: ICollection.FindOne after Stop = client is disconnected (0s)
+    close_contract_real_promises_test.go:134: ICollection.UpdateOne after Stop = client is disconnected (0s)
+    close_contract_real_promises_test.go:134: ICollection.CountDocuments after Stop = client is disconnected (0s)
+    close_contract_real_promises_test.go:134: ISession.WithTransaction after Stop = client is disconnected (0s)
+--- PASS: TestRealMongoModCloseContract (0.09s)
+ok  	github.com/tjbdwanghaibo/roost-core/kit/mongo	1.730s
