@@ -15,6 +15,7 @@ import (
 
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 	"github.com/tjbdwanghaibo/roost-core/goroutine"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 var (
@@ -64,7 +65,7 @@ func Init(opts Options) error {
 	}
 	opts.Level = level
 
-	writers := make([]io.Writer, 0, 2)
+	var sinks fanOutWriter
 	var file io.WriteCloser
 	var console io.Writer
 	if opts.Output != nil {
@@ -73,23 +74,20 @@ func Init(opts Options) error {
 		console = os.Stdout
 	}
 	if console != nil {
-		writers = append(writers, console)
+		sinks = append(sinks, namedSink{name: "console", w: console})
 	}
 	if opts.File {
 		file, err = openLogWriter(opts)
 		if err != nil {
 			return err
 		}
-		writers = append(writers, file)
+		sinks = append(sinks, namedSink{name: "file", w: file})
 	}
-	if len(writers) == 0 {
-		writers = append(writers, os.Stdout)
+	if len(sinks) == 0 {
+		sinks = append(sinks, namedSink{name: "console", w: os.Stdout})
 	}
 
-	var output io.Writer = writers[0]
-	if len(writers) > 1 {
-		output = io.MultiWriter(writers...)
-	}
+	var output io.Writer = sinks
 
 	logger := newLogger(output, opts)
 	loggerMu.Lock()
@@ -333,4 +331,36 @@ func callerAttrs(pc uintptr) []slog.Attr {
 		attrs = append(attrs, slog.String("caller_func", frame.Function))
 	}
 	return attrs
+}
+
+// namedSink 是一个日志输出及其在 log.write_errors 里的标签。
+type namedSink struct {
+	name string
+	w    io.Writer
+}
+
+// fanOutWriter 把每一行写给全部 sink：某个 sink 出错不影响其余 sink，错误按 sink 计入
+// log.write_errors，返回第一个错误（RR-20261005-NC-263）。旧实现用 io.MultiWriter，它在第一个写
+// 失败处停止——控制台排在前面，控制台出错时文件也收不到这一行；而 slog 吞掉 handler 的写错误，
+// 丢行没有任何痕迹。
+type fanOutWriter []namedSink
+
+func (f fanOutWriter) Write(p []byte) (int, error) {
+	var first error
+	for _, sink := range f {
+		n, err := sink.w.Write(p)
+		if err == nil && n != len(p) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			metrics.IncCounter("log.write_errors", metrics.Labels{"sink": sink.name}, 1)
+			if first == nil {
+				first = err
+			}
+		}
+	}
+	if first != nil {
+		return 0, first
+	}
+	return len(p), nil
 }

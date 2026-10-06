@@ -2,6 +2,7 @@ package sceneruntime
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"{{MODULE}}/game/scene"
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -23,8 +24,16 @@ const maxPlaceRings = 16
 // terrain is the state, and this system's lock is the terrain's read lock,
 // taken for the duration of one search so the grid cannot change underneath
 // A*.
+//
+// terrain is set once in Init and never cleared. The Scene hands this system
+// to callers that hold no Scene lock (the spawner's timer, an endpoint), so a
+// search can be running while the scene stops; Stop only flips stopped, and
+// the terrain answers "stopped" on its own once it is stopped. Clearing the
+// pointer in Stop raced every in-flight Path / Place and could nil it between
+// their check and their use (RR-20261005-NC-270).
 type PathFindSystem struct {
 	terrain *TerrainSystem
+	stopped atomic.Bool
 }
 
 func (p *PathFindSystem) Name() string { return SystemNamePathFind }
@@ -39,10 +48,10 @@ func (p *PathFindSystem) Init(ctx *Context) error {
 
 func (p *PathFindSystem) Start() error { return nil }
 
-func (p *PathFindSystem) Stop(entity.EntityDestroyReason) { p.terrain = nil }
+func (p *PathFindSystem) Stop(entity.EntityDestroyReason) { p.stopped.Store(true) }
 
 func (p *PathFindSystem) Path(from, to spatial.Point) ([]spatial.Point, error) {
-	if p.terrain == nil {
+	if p.stopped.Load() || p.terrain == nil {
 		return nil, fmt.Errorf("scene pathfind: stopped")
 	}
 	var path []spatial.Point
@@ -62,7 +71,7 @@ func (p *PathFindSystem) Path(from, to spatial.Point) ([]spatial.Point, error) {
 // caller means by "put me near here", and a scan would answer with whatever
 // the iteration order happened to reach first.
 func (p *PathFindSystem) Place(preferred spatial.Point) (spatial.Point, error) {
-	if p.terrain == nil {
+	if p.stopped.Load() || p.terrain == nil {
 		return spatial.Point{}, fmt.Errorf("scene pathfind: stopped")
 	}
 	if p.terrain.Walkable(preferred) {

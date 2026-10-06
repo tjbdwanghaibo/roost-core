@@ -2,6 +2,8 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 N11～N13 留项与小防护（revleft）：NC-260～270（P3，NC-270 潜伏）已修复、声明场景验证，未发版。** Mongo 客户端已断开时 Mod 的 Stop 永远失败（第三方 Close 不幂等第三例）；robot Call 发送不受 ctx 约束、迟到应答被当推送；日志轮转失败丢行 / 控制台出错连带文件丢行；Prometheus 标签转义；Coalescer.Close 不等 flush；Duration 截断记 completed；ObjectPool 重复 Put、拓扑排序切片别名、TaskPool 重启生命周期；game-demo 寻路系统停止时无锁清空 terrain。N11 O6 / O7 / O9 与 N13 O10 是需求选择，见 DECISIONS-PENDING。另加根包冲突标记门禁。[本轮](../review/REVIEW-2026-10-06-revleft.md)
+
 **10-06 N06 S5 Saga 剩余项（revn06s5）：NC-250（P3）已修复、声明场景验证，未发版。** 定义缺失 fence 时重试退避中的步骤没有关闭为“放弃”，之后生效的成功以 `ErrNotWaiting` 静默丢弃。租约接管后的晚到 Apply、outbox supersede / Ack 未知、真实 NATS + Mongo 两进程强杀恢复均无缺陷；TTL 之后的重投不加协调器计数（方向判断），观察 O-S5-1～7 与方向建议待维护者。[本轮](../review/REVIEW-2026-10-06-n06s5.md)
 
 | 编号 | 问题 | 状态 |
@@ -12,6 +14,17 @@
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
+| [RR-20261005-NC-270](RR-20261005-NC-270.md) | P3（潜伏） game-demo PathFindSystem.Stop 无锁清空 terrain，与场景外的并发寻路数据竞争 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-269](RR-20261005-NC-269.md) | P3 TaskPool 先 Shutdown 再 Start 之后再也停不下来；Shutdown 后 Start 把池标成 running 却拒绝一切任务 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-268](RR-20261005-NC-268.md) | P3 TopologicalSortCache 与调用方共享依赖切片 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-267](RR-20261005-NC-267.md) | P3 ObjectPool 同一对象 Put 两次，之后两次 Get 交出同一个对象 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-266](RR-20261005-NC-266.md) | P3 loadtest 运行被 profile 的 Duration 截断时停止原因记成 completed | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-265](RR-20261005-NC-265.md) | P3 robot Coalescer.Close 不等最后一次 flush 就返回 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-264](RR-20261005-NC-264.md) | P3 Prometheus 导出的标签值转义不符合 exposition 格式 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-263](RR-20261005-NC-263.md) | P3 日志轮转打不开新分片时整行丢失；控制台写失败时文件也收不到；两者都没有计数 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-262](RR-20261005-NC-262.md) | P3 robot 超时之后才到的应答被当成推送分发 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-261](RR-20261005-NC-261.md) | P3 robot Session.Call 的发送不受 ctx 约束，写阻塞时 Call 越过自己的超时 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-260](RR-20261005-NC-260.md) | P3 Mongo 客户端已断开时 Mongo Mod 的 Stop 永远失败（mongo-driver Disconnect 不幂等） | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-247](RR-20261005-NC-247.md) | P3 hotcode Resolve[T] 类型不符时静默回落 fallback | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-246](RR-20261005-NC-246.md) | P3 hotcode.list 用代码指针判 Patched，闭包补丁误报为未打补丁 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-245](RR-20261005-NC-245.md) | P2 hotcode 插件 Apply 中途失败，已替换的点留在插件版本 | 已修复、声明场景验证，未发版 |

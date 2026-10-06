@@ -138,9 +138,19 @@ func (s *Session) call(ctx context.Context, reqID uint32, respID uint32, req any
 	s.pending[seq] = ch
 	s.mu.Unlock()
 
-	if err := s.conn.WritePackets([]*transport.Packet{{MsgID: reqID, Seq: seq, Payload: payload}}); err != nil {
+	// 发送也受 ctx 约束（RR-20261005-NC-261）：服务端不读、TCP 发送缓冲满时写会一直阻塞，旧实现同步写，
+	// Call 越过自己的超时直到会话关闭。与 Notify 同用 sendWithContext；放弃等待的那次写仍在后台完成或随
+	// 会话关闭失败，晚到的应答按 NC-262 丢弃。没有采用写截止时间：net.Conn 写超时会留下半个帧，只能关会话。
+	if err := s.sendWithContext(ctx, &transport.Packet{MsgID: reqID, Seq: seq, Payload: payload}); err != nil {
 		s.removePending(seq)
-		observe("send_error")
+		switch {
+		case ctx.Err() != nil && errors.Is(err, ctx.Err()):
+			observe("timeout")
+		case errors.Is(err, ErrClosed):
+			observe("closed")
+		default:
+			observe("send_error")
+		}
 		return nil, err
 	}
 
@@ -265,6 +275,12 @@ func (s *Session) dispatch(packet *transport.Packet) {
 			ch <- result{msg: s.decode(packet)}
 			return
 		}
+		// seq 非 0 而没有等待者：是 Call 已经超时 / 放弃之后才到的应答。传输层约定 seq 0 才是推送，
+		// 旧实现落到下面的推送分发，同 msg id 的 WaitPush / handler 会把旧应答当成推送（RR-20261005-NC-262）。
+		metrics.IncCounter("robot.session.late_response", metrics.Labels{
+			"msg": strconv.FormatUint(uint64(packet.MsgID), 10),
+		}, 1)
+		return
 	}
 
 	msg := s.decode(packet)

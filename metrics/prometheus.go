@@ -103,7 +103,17 @@ func prometheusLabels(labels Labels) string {
 		if name == "" {
 			continue
 		}
-		parts = append(parts, name+"="+strconv.Quote(labels[k]))
+		parts = append(parts, name+`="`+prometheusLabelValue(labels[k])+`"`)
 	}
 	return strings.Join(parts, ",")
+}
+
+// prometheusLabelEscaper 是文本 exposition 格式定义的全部标签值转义：反斜杠、双引号、换行。
+var prometheusLabelEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`)
+
+// prometheusLabelValue 按 exposition 格式转义标签值，非法 UTF-8 换成 U+FFFD（RR-20261005-NC-264）。
+// 旧实现用 strconv.Quote，制表符、不可打印字符与非法字节会变成 `\t` / `\u....` / `\x..`，
+// 不在格式的转义集合里，抓取器整页解析失败或读成另一个值。
+func prometheusLabelValue(value string) string {
+	return prometheusLabelEscaper.Replace(strings.ToValidUTF8(value, "\uFFFD"))
 }

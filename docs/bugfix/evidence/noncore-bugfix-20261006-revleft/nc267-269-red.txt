@@ -1,0 +1,15 @@
+--- FAIL: TestObjectPoolIgnoresASecondPutOfTheSameObject (0.00s)
+    pool_topo_aliasing_promises_test.go:21: two Gets after a double Put returned the same object 0x…: both callers now share it
+--- FAIL: TestTopologicalSortCacheDoesNotShareSlicesWithCallers (0.00s)
+    pool_topo_aliasing_promises_test.go:45: dependencies of A after the caller reused its slice = [X C], want [B C]
+    pool_topo_aliasing_promises_test.go:51: dependencies of A after the caller edited the returned slice = [X Y], want [B C]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/container	0.803s
+FAIL
+--- FAIL: TestTaskPoolStartAfterShutdownIsRefused (0.00s)
+    task_pool_restart_promises_test.go:24: IsRunning = true after Start on a shut-down pool, while every Submit is refused
+--- FAIL: TestTaskPoolShutdownBeforeStartStillStopsALaterStart (0.20s)
+    task_pool_restart_promises_test.go:38: Shutdown after Shutdown-then-Start = task pool shutdown timeout after 200ms, want nil (the workers started after the first Shutdown must still stop)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/goroutine	0.472s
+FAIL

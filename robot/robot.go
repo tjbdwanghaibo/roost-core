@@ -250,6 +250,8 @@ type Coalescer[K comparable] struct {
 	closed  bool
 	wake    chan struct{}
 	done    chan struct{}
+	// exited 由当前 worker 退出时关闭；Close 等它，保证返回时最后一批已经 flush 完（RR-20261005-NC-265）。
+	exited chan struct{}
 }
 
 // NewCoalescer builds a coalescer flushing at most every interval (<= 0
@@ -282,7 +284,8 @@ func (c *Coalescer[K]) Add(key K, seq int64) {
 	}
 	if !c.running {
 		c.running = true
-		go c.worker()
+		c.exited = make(chan struct{})
+		go c.worker(c.exited)
 	}
 	c.mu.Unlock()
 	select {
@@ -291,7 +294,8 @@ func (c *Coalescer[K]) Add(key K, seq int64) {
 	}
 }
 
-func (c *Coalescer[K]) worker() {
+func (c *Coalescer[K]) worker(exited chan struct{}) {
+	defer close(exited)
 	timer := time.NewTimer(c.interval)
 	defer timer.Stop()
 	for {
@@ -331,21 +335,31 @@ func (c *Coalescer[K]) drain() bool {
 	return true
 }
 
-// Close flushes any pending batch and stops the worker.
+// Close flushes any pending batch and stops the worker. It returns after the
+// final flush has finished, so the caller may close the session the flush
+// writes to (RR-20261005-NC-265: the old Close only signalled the worker and
+// returned while the last batch was still being sent). flush runs without a
+// deadline; a flush that never returns keeps Close waiting.
 func (c *Coalescer[K]) Close() error {
 	if c == nil {
 		return nil
 	}
 	c.mu.Lock()
 	if c.closed {
+		exited := c.exited
 		c.mu.Unlock()
+		if exited != nil {
+			<-exited // a concurrent first Close may still be flushing
+		}
 		return nil
 	}
 	c.closed = true
 	running := c.running
+	exited := c.exited
 	c.mu.Unlock()
 	if running {
 		close(c.done)
+		<-exited
 	} else {
 		c.drain()
 	}

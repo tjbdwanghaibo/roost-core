@@ -77,6 +77,8 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | `failurelog_*_total` | Counter | 失败日志生命周期（append/delete/purge/trim 均带 namespace label） |
 | `failurelog_degraded_total{namespace,op}` | Counter | 适配器没有 Lua（Eval 返回空结果）时走了非原子回退；生产驱动不应出现，非零说明接了不支持脚本的 IRedis。脚本报错（结果未知）不降级，计入 `failurelog_append_total{result="error"}` 等并返回错误（RR-20261005-NC-160） |
 | `obs.series.dropped{metric}` | Counter | 指标基数打满后被丢弃的写入数（**非零即告警**：该 metric 的新 label 组合已静默失效） |
+| `log.rotate_failures` | Counter | 日志轮转打不开新分片的次数（EMFILE / ENOSPC / 权限）。失败期间继续写上一分片、1s 后重试（RR-20261005-NC-263）；**非零即查磁盘与日志目录** |
+| `log.write_errors{sink}` | Counter | 日志写失败的行数，`sink` 为 `console` / `file`；一个 sink 出错不影响另一个（NC-263）。slog 吞掉写错误，这是唯一能看到日志在丢的地方 |
 
 ### 跨服实体（kit/remote_entity）
 
@@ -104,6 +106,7 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
 | `robot.session.call{msg,result}` | Histogram | 每次请求/响应调用的时延分布；result 枚举 ok/timeout/closed/error/encode_error/send_error/mismatch/decode_error——非 ok 占比是被测服务的第一告警面 |
+| `robot.session.late_response{msg}` | Counter | Call 已超时 / 放弃之后才到的应答（seq 非 0 且没有等待者），直接丢弃、不当推送分发（RR-20261005-NC-262）；持续增长说明被测服务的应答慢于剧本超时 |
 | `robot.runner.scenario.cost{profile,run,scenario,result}` | Histogram | 一次场景执行的全程耗时（ok/error/canceled）；loadtest 阈值裁决从它取 p50–p99。`run` label 每场压测唯一——同 profile 连跑两场分布互不污染（series 随场次增长，靠 series 上限兜底，长驻进程注意场次频率） |
 | `robot.runner.scenario.total{profile,run,scenario,result}` | Counter | 场景执行结果计数（error_rate 的分母/分子） |
 | `robot.runner.target` / `robot.runner.online{profile,run,scenario}` | Gauge | 目标并发 vs 实际在线机器人（Stages 升降是否按预期跟随） |

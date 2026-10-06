@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+- **Mongo Mod 停止收敛**（RR-20261005-NC-260，NC-173 / NC-233 同类）：`mongo/driver` 的 `Client.Close` 对已经断开的客户端返回 nil，Mod 不再因 mongo-driver 的“client is disconnected”永远停不下。[记录](docs/bugfix/RR-20261005-NC-260.md)
+- **robot 会话：Call 发送受 ctx 约束，迟到应答不当推送**（RR-20261005-NC-261 / NC-262）：服务端不读时 Call 按调用方 ctx 返回（之前等到会话关闭）；seq 非 0 而无人等待的包丢弃并计 `robot.session.late_response{msg}`，不再交给同 msg id 的 `WaitPush` / 推送 handler。[记录](docs/bugfix/RR-20261005-NC-261.md)
+- **日志 sink 出错不再连带丢行，且可数**（RR-20261005-NC-263）：轮转打不开新分片时继续写上一分片、每秒重试一次（计 `log.rotate_failures`）；控制台与文件逐个写，一个出错不影响另一个（计 `log.write_errors{sink}`）。[记录](docs/bugfix/RR-20261005-NC-263.md)
+- **Prometheus 标签值按 exposition 格式转义**（RR-20261005-NC-264）：只转义 `\\`、`\"`、换行，非法 UTF-8 换成 U+FFFD；之前 `strconv.Quote` 产生的 `\t` / `\u` / `\x` 会让抓取整页失败。[记录](docs/bugfix/RR-20261005-NC-264.md)
+- **robot Coalescer.Close 等最后一次 flush；loadtest Duration 到期记 `stop_reason=duration`**（RR-20261005-NC-265 / NC-266）：之前 Close 立即返回、Duration 截断记成 completed。[记录](docs/bugfix/RR-20261005-NC-266.md)
+- **container / goroutine 零调用方 API 三处修正**（RR-20261005-NC-267～269）：ObjectPool 重复 Put 不再让两次 Get 拿到同一对象；TopologicalSortCache 复制依赖切片；TaskPool 一次性——先 Shutdown 再 Start 之后仍能停下，Shutdown 后 Start 无效。[记录](docs/bugfix/RR-20261005-NC-269.md)
+- **game-demo 场景寻路系统停止不再清空共享指针**（RR-20261005-NC-270，生成形状）：`PathFindSystem.Stop` 只置原子标志，与不持 Scene 锁的并发寻路不再数据竞争。[记录](docs/bugfix/RR-20261005-NC-270.md)
+- **根包门禁：跟踪文件不得带合并冲突标记**（revleft 小防护 A）：`TestNoMergeConflictMarkersInTrackedFiles` 用 `git grep` 扫 `<<<<<<<` / `>>>>>>>`（单独的 `=======` 是 Markdown 标题线，不报），并自检能抓到 `0aa2e1b9` 那次进 main 的冲突。[记录](docs/review/REVIEW-2026-10-06-revleft.md)
 - **saga：定义缺失 fence 时，退避中的步骤同样记为放弃，之后生效的成功告警**（RR-20261005-NC-250）：协调器因缺少定义版本把记录 fence 到 `ManualRequired` 时，若当前步骤正在重试退避，写放弃关闭的 tombstone、删掉它仍排队的命令；之前只在等结果时关闭，退避中较早尝试晚到的成功以 `ErrNotWaiting` 丢弃、不计入 `saga.completion.late_after_abandon_total`。截止、人工 Compensate、定义缺失三个出口现在共用一个判断。SAGA.md 补充：被 kill -9 的进程遗留的 Mongo 事务持锁到 `transactionLifetimeLimitSeconds`，Mongo 步骤预算应长于它。[修复](docs/bugfix/RR-20261005-NC-250.md)
 - **ai Controller：策略回调里的 SetStrategy / Shutdown 延后到回调返回后执行**（RR-20261005-NC-241，与 B7 同向）：之前立即切换，旧行为树在 Stop 之后接着跑、发起的动作没被切换结束，成为孤儿。回调里调用返回 nil，切换出错经 OnError 报告，回调返回前 `Strategy()` 仍是旧策略。[记录](docs/bugfix/RR-20261005-NC-241.md)
 - **ai Parallel 结果确定即停止本次 Tick**（RR-20261005-NC-240）：RequireAll 出现失败 / RequireOne 出现成功后不再 Tick 后面的子节点，此前会先发起没人要的动作再打断。[记录](docs/bugfix/RR-20261005-NC-240.md)

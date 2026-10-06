@@ -1,0 +1,8 @@
+--- FAIL: TestCallReturnsWhenTheWriteBlocksPastItsContext (2.00s)
+    session_promises_test.go:121: Call ignored its context while the write was blocked (still waiting 2s after a 50ms deadline)
+--- FAIL: TestALateResponseIsNotDeliveredAsAPush (0.02s)
+    session_promises_test.go:196: WaitPush delivered "late response", want the push: a response that arrived after its Call timed out was delivered as a push
+    session_promises_test.go:201: push handler saw ["late response" "push"], want only [push]: the late response reached the push handler
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/robot/session	2.268s
+FAIL

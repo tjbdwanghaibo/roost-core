@@ -86,7 +86,7 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 
 | # | 决定 | 实施状态 |
 | --- | --- | --- |
-| 留项 | 补齐 15 个非核心单元的单元内留项（见 REMAINING-REVIEW-HANDOFF 各行停点） | 进行中：**N01（含 N02 O1、N14 O3 / O4）已实施（`2c1c7be7`）**——NC-230～234、`ops.admin_timeout`，[记录](REVIEW-2026-10-06-n01b.md)；Health Degraded 映射待 D1（见文末）；其余单元待实施 |
+| 留项 | 补齐 15 个非核心单元的单元内留项（见 REMAINING-REVIEW-HANDOFF 各行停点） | 进行中：**N11 / N12 / N13 留项与小防护 A / B 已实施（revleft，NC-260～270，提交见 git log `fix(…)：NC-260～270`）**，O6 / O7 / O9 / N13 O10 待 D-L1～D-L4；**N01（含 N02 O1、N14 O3 / O4）已实施（`2c1c7be7`）**——NC-230～234、`ops.admin_timeout`，[记录](REVIEW-2026-10-06-n01b.md)；Health Degraded 映射待 D1（见文末）；其余单元待实施 |
 | 留项 · N10 | N10 第二批（ai 节点、actionflow 池化与 B7 留项、hotcode 真实 .so 与 O-H1 回滚） | **已实施（`44964553`，分支 `revn10b`）**：NC-240～247 修复（含 B7 留项 O-A4 → NC-243、O-H1～O-H3 → NC-245～247，真实 .so 发现 NC-244）；MissionRunner 延后语义、O-A1 清场无确认缺陷，选项与推荐（保持）见 [记录](REVIEW-2026-10-06-noncore-n10b.md#待维护者语义选择无确认缺陷) |
 | 留项 · N09 | N09 第五批（编译器 random / snapshot / temporal / graph / effect_result / proc / quantity 逐分支、直接分支用例、性质测试种子） | **已实施（`5c04726f`，分支 `revn09e`）**：NC-220～224 修复（NC-223 为 B3 回归）；NC-224 方向 B（冻结施法输入）、“求值上下文 → 可用引用”单一表与 O27～O33 待维护者定，见 [记录](REVIEW-2026-10-06-n09-batch5.md) |
 | B4 | skill Runtime 状态**不进**事务：保持现状，文档写明约束（handler 失败回滚后 Runtime 状态不回退，业务按此设计） | **已实施（`62cec54e`，分支 `revn09e`）**：[skill-casting-and-combat.md](../skill/skill-casting-and-combat.md)“Runtime 不在事务里（B4）”一节（回退 / 不回退对照表、先校验后推进、扣费交给 Runtime commit 路径、失败用 Runtime 终态、提交被拒由业务处理）；skill README 补说明；roost-coding A1 条写明例外；glsvet A1 提示不命中 skill，无需豁免（注释 + `TestSkillPackagesGetNoComponentUndoHint`） |
@@ -114,3 +114,15 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | D1 | 按推荐：Degraded 算就绪（`/readyz` 返回 200 并在响应体注明降级），只有 Fail 返回 503 | 待实施 |
 | MissionRunner | 改为延后队列（与 ActionRunner / B7 一致：回调里的变更回调返回后按序执行） | 待实施 |
 | EndAll 清场 | 按推荐：保持现状，在接线说明写清“要清场先结束当前任务再 EndAll” | 待实施（文档） |
+
+## 新增待决定（2026-10-06，N11～N13 留项 revleft）
+
+[记录 §5](REVIEW-2026-10-06-revleft.md)。编号带 L 前缀，避免与并行轮次的 D 编号相撞。
+
+| # | 事项 | 来由 | 选项 | 推荐 |
+| --- | --- | --- | --- | --- |
+| D-L1 | timer 同一期限的触发顺序 | N11 O6 | (a) 保持，注释写明未定义 (b) `timerHeap.Less` 以 ID 作第二键 = 登记顺序 | (b)，代价一次比较；无需求时 (a) 亦可 |
+| D-L2 | 存储节点的类型没有注册 handler 时到期 | N11 O7 | (a) 保持静默删除 (b) 删除 + Warn + 计数，加载时对无 handler 的存量类型告警一次 (c) 保留不删、跳过触发 | (b) |
+| D-L3 | World 定时器 / 活动窗口跟不跟 `time.logic_offset` | N11 O9 | (a) 保持墙钟，文档写明 offset 的作用范围 (b) game 与协调器全链用 `clock.Now`，部署约束同组 offset 相同（doctor 检查） | 现在 (a)；要用偏移测活动时再 (b)（只改 game 一端会与协调器错开） |
+| D-L4 | `goroutine.Parallel*` 回调 panic 吞成零值 | N13 O10 | (a) 保持 (b) 改返回签名带错误 (c) 删除零调用方 API | (a)，出现调用方再定 |
+

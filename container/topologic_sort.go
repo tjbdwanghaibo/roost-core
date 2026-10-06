@@ -2,6 +2,7 @@ package container
 
 import (
 	"log/slog"
+	"slices"
 	"sync"
 )
 
@@ -29,7 +30,9 @@ func (t *TopologicalSortCache[T]) RegisterCompDependency(tT T, dependencies ...T
 		return
 	}
 
-	t.dependencies[tT] = dependencies
+	// 复制调用方的切片：`deps...` 传入的就是调用方的数组，之后调用方复用它会改掉登记的依赖，
+	// 且不使排序缓存失效（RR-20261005-NC-268）。
+	t.dependencies[tT] = slices.Clone(dependencies)
 	t.invalidateTopologicalSortCache()
 }
 
@@ -120,7 +123,7 @@ func (t *TopologicalSortCache[T]) GetCompDependencies(componentType T) []T {
 	defer t.dependLock.RUnlock()
 
 	if deps, exists := t.dependencies[componentType]; exists {
-		return deps
+		return slices.Clone(deps) // 返回副本，调用方改动不影响登记（RR-20261005-NC-268）
 	}
 	return nil
 }

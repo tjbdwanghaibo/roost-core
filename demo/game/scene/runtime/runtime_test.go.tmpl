@@ -1,6 +1,7 @@
 package sceneruntime
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"{{MODULE}}/game/scene"
@@ -117,6 +118,37 @@ func TestStoppedSystemsAnswerInsteadOfPanicking(t *testing.T) {
 		t.Error("a stopped terrain accepted an occupancy")
 	}
 	if _, err := runtime.PathFind().Place(spatial.Point{X: 1, Y: 1}); err == nil {
+		t.Error("a stopped pathfinder answered")
+	}
+}
+
+// RR-20261005-NC-270（N11 观察 O4）：Scene 的系统访问器“可以从任何地方调用”（Scene 实体注释：endpoint、
+// spawner 的定时器、AOI tick），场景关闭时可能有寻路正在进行。旧 PathFindSystem.Stop 无锁把 terrain 置
+// nil，与并发的 Path / Place 读同一字段是数据竞争（-race 报告），而且 Place 先判 nil 再用，两次读之间被置
+// nil 会解引用空指针。地形系统自带锁、停止后自己回答 “stopped”，寻路系统不需要清空这个指针。
+func TestPathFindingWhileTheSceneStopsIsSafe(t *testing.T) {
+	runtime := newTestRuntime(t)
+	pathFind := runtime.PathFind()
+	var stopped atomic.Bool
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = pathFind.Place(spatial.Point{X: 1, Y: 1})
+		close(started)
+		for {
+			_, _ = pathFind.Place(spatial.Point{X: 1, Y: 1})
+			_, _ = pathFind.Path(spatial.Point{X: 0, Y: 0}, spatial.Point{X: 3, Y: 3})
+			if stopped.Load() {
+				return
+			}
+		}
+	}()
+	<-started
+	runtime.Stop(entity.DestroyReasonCommon)
+	stopped.Store(true)
+	<-done
+	if _, err := pathFind.Place(spatial.Point{X: 1, Y: 1}); err == nil {
 		t.Error("a stopped pathfinder answered")
 	}
 }

@@ -1,0 +1,40 @@
+==================
+WARNING: DATA RACE
+Write at 0x00c0000020a8 by goroutine 8:
+  example.com/revleftgd/game/scene/runtime.(*PathFindSystem).Stop()
+      <scratch>/revleftgd/game/scene/runtime/pathfind.go:42 +0x2c
+  example.com/revleftgd/game/scene/runtime.(*Runtime).Stop()
+      <scratch>/revleftgd/game/scene/runtime/runtime.go:99 +0x7c
+  example.com/revleftgd/game/scene/runtime.TestPathFindingWhileTheSceneStopsIsSafe()
+      <scratch>/revleftgd/game/scene/runtime/runtime_test.go:148 +0x1c4
+  testing.tRunner()
+      <goroot>/src/testing/testing.go:2193 +0x164
+  testing.(*T).Run.gowrap1()
+      <goroot>/src/testing/testing.go:2258 +0x34
+
+Previous read at 0x00c0000020a8 by goroutine 9:
+  example.com/revleftgd/game/scene/runtime.(*PathFindSystem).Path()
+      <scratch>/revleftgd/game/scene/runtime/pathfind.go:45 +0x40
+  example.com/revleftgd/game/scene/runtime.TestPathFindingWhileTheSceneStopsIsSafe.func1()
+      <scratch>/revleftgd/game/scene/runtime/runtime_test.go:141 +0x114
+
+Goroutine 8 (running) created at:
+  testing.(*T).Run()
+      <goroot>/src/testing/testing.go:2258 +0x7bc
+  testing.runTests.func1()
+      <goroot>/src/testing/testing.go:2742 +0x74
+  testing.tRunner()
+      <goroot>/src/testing/testing.go:2193 +0x164
+  testing.runTests()
+      <goroot>/src/testing/testing.go:2740 +0x7a0
+  testing.(*M).Run()
+      <goroot>/src/testing/testing.go:2600 +0xb38
+  main.main()
+      _testmain.go:62 +0x100
+
+Goroutine 9 (running) created at:
+  example.com/revleftgd/game/scene/runtime.TestPathFindingWhileTheSceneStopsIsSafe()
+      <scratch>/revleftgd/game/scene/runtime/runtime_test.go:135 +0x1ac
+  testing.tRunner()
+      <goroot>/src/testing/testing.go:2193 +0x164
+  testing.(*T).Run.gowrap1()

@@ -433,7 +433,16 @@ func (m *Manager) start(ctx context.Context, req StartRequest) (RunSnapshot, err
 	if rootCtx == nil {
 		rootCtx = context.Background()
 	}
-	runCtx, cancel := context.WithCancel(rootCtx)
+	// profile 的 Duration 也加在 manager 的 run ctx 上：Runner 自己的 WithTimeout 只在它内部可见，
+	// 旧实现到期后 stopReasonFromContext 读不到 DeadlineExceeded，把被 Duration 截断的运行记成
+	// completed（RR-20261005-NC-266）。Runner 在这个 ctx 上再套同一 Duration，截止时间以先到的这里为准。
+	var runCtx context.Context
+	var cancel context.CancelFunc
+	if profile.Run.Duration > 0 {
+		runCtx, cancel = context.WithTimeout(rootCtx, profile.Run.Duration)
+	} else {
+		runCtx, cancel = context.WithCancel(rootCtx)
+	}
 	runID := strings.TrimSpace(req.RunID)
 	if runID == "" {
 		runID = m.nextRunID(profileName)

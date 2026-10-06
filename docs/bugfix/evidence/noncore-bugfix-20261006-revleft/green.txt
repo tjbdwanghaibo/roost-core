@@ -1,0 +1,19 @@
+# revleft 修后（2026-10-06 08:07:02，HEAD 基线 dc877c04 + 本分支工作区，macOS arm64 / go1.27.0）
+$ GOWORK=off go test -race -count=3 -run <新用例> ...
+ok  	github.com/tjbdwanghaibo/roost-core/kit/mongo	2.184s
+ok  	github.com/tjbdwanghaibo/roost-core/robot	3.323s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/action	5.598s [no tests to run]
+ok  	github.com/tjbdwanghaibo/roost-core/robot/loadtest	4.030s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/runner	3.166s [no tests to run]
+ok  	github.com/tjbdwanghaibo/roost-core/robot/scenario	5.114s [no tests to run]
+ok  	github.com/tjbdwanghaibo/roost-core/robot/session	4.371s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/transport	1.618s [no tests to run]
+ok  	github.com/tjbdwanghaibo/roost-core/log	4.643s
+ok  	github.com/tjbdwanghaibo/roost-core/metrics	6.081s
+ok  	github.com/tjbdwanghaibo/roost-core/container	4.955s
+ok  	github.com/tjbdwanghaibo/roost-core/goroutine	4.852s
+$ GOWORK=off go test -count=1 -run TestNoMergeConflictMarkers -v .
+--- PASS: TestNoMergeConflictMarkersInTrackedFiles (0.30s)
+ok  	github.com/tjbdwanghaibo/roost-core	0.748s
+$ (生成 game-demo revleftgd，replace 到本分支) GOWORK=off go test -race -count=3 ./game/scene/runtime/
+ok  	example.com/revleftgd/game/scene/runtime	1.515s

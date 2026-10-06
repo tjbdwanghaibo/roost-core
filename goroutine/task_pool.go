@@ -45,11 +45,15 @@ func DefaultTaskPoolConfig() *TaskPoolConfig {
 }
 
 type TaskPool struct {
-	config    *TaskPoolConfig
-	workers   []*taskWorker
-	running   atomic.Bool
-	wg        sync.WaitGroup
-	closeOnce sync.Once
+	config  *TaskPoolConfig
+	workers []*taskWorker
+	running atomic.Bool
+	wg      sync.WaitGroup
+	// lifeMu 串行化 Start 与 Shutdown 的状态转换；shut 置位后池不能再启动（一次性）。
+	// 旧实现用 closeOnce：从未 Start 就 Shutdown 时 once 已执行却没关 worker，之后 Start 起的 worker
+	// 再也关不掉；Shutdown 之后 Start 又会把池标成 running、每次 Submit 却都被拒（RR-20261005-NC-269）。
+	lifeMu sync.Mutex
+	shut   bool
 
 	totalTasks     atomic.Int64
 	completedTasks atomic.Int64
@@ -86,8 +90,11 @@ func NewTaskPool(config *TaskPoolConfig) *TaskPool {
 	return pool
 }
 
+// Start 启动 worker。重复调用无效；Shutdown 之后调用无效（池是一次性的）。
 func (tp *TaskPool) Start() {
-	if !tp.running.CompareAndSwap(false, true) {
+	tp.lifeMu.Lock()
+	defer tp.lifeMu.Unlock()
+	if tp.shut || !tp.running.CompareAndSwap(false, true) {
 		return
 	}
 	for _, w := range tp.workers {
@@ -120,15 +127,15 @@ func (tp *TaskPool) Shutdown() error {
 }
 
 func (tp *TaskPool) ShutdownWithTimeout(timeout time.Duration) error {
-	tp.closeOnce.Do(func() {
-		if !tp.running.Load() {
-			return
-		}
+	tp.lifeMu.Lock()
+	if !tp.shut {
+		tp.shut = true
 		tp.running.Store(false)
 		for _, w := range tp.workers {
-			w.close()
+			w.close() // 从未启动的 worker 也关掉：之后的 Start 被拒，不会再起读它的 goroutine
 		}
-	})
+	}
+	tp.lifeMu.Unlock()
 
 	done := make(chan struct{})
 	go func() {

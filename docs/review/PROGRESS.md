@@ -1,5 +1,19 @@
 # Roost Review 跨轮进度
 
+## 2026-10-06 N11～N13 留项与两个小防护（revleft）
+
+基线 `dc877c04`，分支 `revleft`，NC 段 260～279（用 260～270）；图谱 generation 2026-09-30，多数引用文件 metadata_changed、`.tmpl` 不在图里，全部按当前源码与 `rg` 补证。[本轮](REVIEW-2026-10-06-revleft.md) · [证据](../bugfix/evidence/noncore-bugfix-20261006-revleft/README.md)。NC-260～270（P3，NC-270 潜伏）已修复、声明场景验证，未发版。
+
+| 单元 | 本批 | 状态 / 下一入口 |
+| --- | --- | --- |
+| N11 | O4 入口穷举（spawner 不持 Scene 锁，现有入口与 Stop 有先后）、O8 核对 NC-193 之后的残余 | NC-270；O8 无残余；O6 / O7 / O9 → DECISIONS-PENDING D-L1～D-L3 |
+| N12 | O4 / O6 / O8 / O10 / O11 | NC-261～266；O9 Stage 复用序号待语义决定；序列删除 API 待定 |
+| N13 | §4 O1～O11 逐条 | NC-267～269；其余不修理由见本轮 §4；D-L4（Parallel panic） |
+| 小防护 A | 根包冲突标记门禁 | `TestNoMergeConflictMarkersInTrackedFiles`，自检抓 `0aa2e1b9` |
+| 小防护 B | kit 各 Mod Stop / Close 再调用 | NC-260（mongo）；其余 Mod 收敛或不适用；方向判断：并入 A2 驱动契约表 |
+
+13 个新正式用例（10 个文件 + 1 个生成模板用例）修前红 → 修后绿，2 条控制用例修前即绿；改动包 race×3、相邻包 race、全仓 build/vet、根包、codegen、全新生成 game-demo 通过。三个单元剩外部项与待维护者的选择，不计 completed。
+
 ## 2026-10-06 N06 S5 Saga 剩余项（revn06s5）
 
 基线 `897a1dd9`，分支 `revn06s5`，NC 段 250～259（用 250）；图谱 generation 2026-09-30，saga 相关文件 metadata_changed，全部按当前源码补证。[本轮](REVIEW-2026-10-06-n06s5.md) · [修复](../bugfix/RR-20261005-NC-250.md)。NC-250（P3）已修复、声明场景验证，未发版。不重做 U-0280 / U-0281 / B1 / NC-37～42。

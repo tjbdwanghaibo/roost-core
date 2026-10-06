@@ -7,7 +7,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
+
+// rotateRetryInterval 是打开新分片失败之后到下一次重试的间隔。失败期间继续写当前分片，
+// 不在每一行上重试 MkdirAll + Open（RR-20261005-NC-263）。
+const rotateRetryInterval = time.Second
 
 type timeRotatingFileOptions struct {
 	Dir        string
@@ -28,6 +34,8 @@ type timeRotatingFileWriter struct {
 	slice string
 	file  *os.File
 	done  bool
+	// retryAt 非零时，打开新分片失败过：在此之前继续写当前分片、不重试。
+	retryAt time.Time
 }
 
 func newTimeRotatingFileWriter(opts timeRotatingFileOptions) (*timeRotatingFileWriter, error) {
@@ -60,9 +68,10 @@ func (w *timeRotatingFileWriter) Write(p []byte) (int, error) {
 	if w.done {
 		return 0, os.ErrClosed
 	}
-	if err := w.rotateLocked(w.nowFunc()); err != nil {
+	if err := w.rotateLocked(w.nowFunc()); err != nil && w.file == nil {
 		return 0, err
 	}
+	// 新分片打不开时 rotateLocked 保留了当前分片：这一行照常写进去，不丢（RR-20261005-NC-263）。
 	return w.file.Write(p)
 }
 
@@ -84,15 +93,19 @@ func (w *timeRotatingFileWriter) rotateLocked(now time.Time) error {
 	if w.file != nil && w.slice == slice {
 		return nil
 	}
+	if w.file != nil && now.Before(w.retryAt) {
+		return nil // 上次打开失败，重试间隔内继续写当前分片
+	}
 
-	path := filepath.Join(w.dir, rotatedLogFilename(w.filename, slice))
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	next, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	next, err := w.openSlice(slice)
 	if err != nil {
+		// 旧实现在这里返回错误、调用方丢掉整行，且每一行都重试一次。现在计数、记下重试时刻；
+		// 调用方有当前分片时继续写它，没有时（首次打开）才报错。
+		metrics.IncCounter("log.rotate_failures", nil, 1)
+		w.retryAt = now.Add(rotateRetryInterval)
 		return err
 	}
+	w.retryAt = time.Time{}
 	old := w.file
 	w.file = next
 	w.slice = slice
@@ -100,6 +113,14 @@ func (w *timeRotatingFileWriter) rotateLocked(now time.Time) error {
 		_ = old.Close()
 	}
 	return nil
+}
+
+func (w *timeRotatingFileWriter) openSlice(slice string) (*os.File, error) {
+	path := filepath.Join(w.dir, rotatedLogFilename(w.filename, slice))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 }
 
 func (w *timeRotatingFileWriter) sliceName(now time.Time) string {

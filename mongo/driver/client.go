@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	"time"
@@ -100,8 +101,15 @@ func (c *Client) Ping(ctx context.Context) error {
 	return c.cli.Ping(ctx, nil)
 }
 
+// Close 断开客户端，幂等：mongo-driver 的 Disconnect 对已经断开的客户端返回 ErrClientDisconnected，
+// 这时连接已经释放，重试也做不了任何事，按已关闭返回 nil（RR-20261005-NC-260，与 etcd Client.Close 的
+// NC-173 残余同类）。旧实现原样返回，Mongo Mod 只在成功时交出 client，之后每次 Stop 都失败。
+// Disconnect 断开各 server 时的 ctx 错误由驱动自己忽略，其余错误（FLE 客户端断开失败）照常返回。
 func (c *Client) Close(ctx context.Context) error {
-	return c.cli.Disconnect(ctx)
+	if err := c.cli.Disconnect(ctx); err != nil && !errors.Is(err, mongo.ErrClientDisconnected) {
+		return err
+	}
+	return nil
 }
 
 var _ fmongo.IMongo = (*Client)(nil)

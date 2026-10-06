@@ -2,6 +2,8 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 N11～N13 留项与小防护（revleft）：NC-260～270 已修复、声明场景验证，未发版。** Mongo driver `Client.Close` 对已断开客户端返回 nil；robot Call 发送用 `sendWithContext`、迟到应答丢弃并计数；日志轮转失败续写当前分片并限频重试、sink 逐个写并计 `log.write_errors`；Prometheus 标签只做格式定义的三种转义；Coalescer.Close 等最后一次 flush；loadtest run ctx 带 Duration；ObjectPool 忽略重复 Put、拓扑排序复制切片、TaskPool 一次性生命周期；game-demo PathFindSystem 停止只置标志。根包新增冲突标记门禁。[本轮](../review/REVIEW-2026-10-06-revleft.md) · [证据](evidence/noncore-bugfix-20261006-revleft/README.md)
+
 **10-06 N06 S5 Saga 剩余项（revn06s5）：NC-250 已修复、声明场景验证，未发版。** 截止、人工 Compensate、定义缺失三个“放弃当前步骤”的出口共用 `abandonedOperation`：定义缺失 fence 时退避中的操作写放弃关闭的 tombstone、删排队命令，之后的成功告警一次。[本轮](../review/REVIEW-2026-10-06-n06s5.md)
 
 | 编号 | 修复 | 状态 |
@@ -12,6 +14,17 @@
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
+| [RR-20261005-NC-270](RR-20261005-NC-270.md) | terrain 指针 Init 后不再改；Stop 只置 atomic stopped | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-269](RR-20261005-NC-269.md) | lifeMu + shut 取代 closeOnce：Shutdown 关闭全部 worker（含未启动的），之后 Start 无效 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-268](RR-20261005-NC-268.md) | 登记与读取都复制切片 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-267](RR-20261005-NC-267.md) | 不在 workList 的对象若已在 freeList 就忽略 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-266](RR-20261005-NC-266.md) | Duration 也加在 manager 的 run ctx 上 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-265](RR-20261005-NC-265.md) | worker 退出时关 exited，Close 等它 | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-264](RR-20261005-NC-264.md) | 标签值只转义反斜杠、双引号、换行，非法 UTF-8 换成 U+FFFD | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-263](RR-20261005-NC-263.md) | 轮转失败继续写当前分片、1s 后再试；sink 逐个写；`log.rotate_failures` 与 `log.write_errors{sink}` | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-262](RR-20261005-NC-262.md) | seq 非 0 且没有等待者的包丢弃，计 robot.session.late_response | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-261](RR-20261005-NC-261.md) | Call 的发送与 Notify 同用 sendWithContext | 已修复、声明场景验证，未发版 |
+| [RR-20261005-NC-260](RR-20261005-NC-260.md) | driver 层 Client.Close 幂等：已断开按已关闭返回 nil | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-247](RR-20261005-NC-247.md) | 同签名不同命名时转换；无法转换时回落并计入 ResolveMismatches | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-246](RR-20261005-NC-246.md) | Patched 由 Replace / Revert 记录在整体发布的状态里 | 已修复、声明场景验证，未发版 |
 | [RR-20261005-NC-245](RR-20261005-NC-245.md) | `Registry.ApplyBundle`：失败或 panic 时恢复成应用前那一代 | 已修复、声明场景验证，未发版 |

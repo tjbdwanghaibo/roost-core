@@ -104,8 +104,10 @@ func (c Config) Normalize() Config {
 
 // Stats are the run counters. Canceled counts robots whose scenario ended
 // because the run stopped — kept separate so the failure rate's denominator
-// (Success+Failure) is honest and Started == Success+Failure+Canceled once
-// the run drains.
+// (Success+Failure) is honest. For pool and arrival-rate runs, where each
+// robot runs its scenario once, Started == Success+Failure+Canceled once the
+// run drains. Looping robots repeat their scenario: Success and Failure count
+// scenario runs, Started counts robots, so the sum exceeds Started (N12 O9).
 type Stats struct {
 	Started  int64
 	Online   int64
@@ -209,9 +211,14 @@ func (r *Runner) Run(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	// 只建一个 ctx：旧实现先 WithCancel 再在 Duration > 0 时覆盖成 WithTimeout，第一个 cancel 丢失，
+	// 那个 ctx 直到父 ctx 结束才释放（N12 观察 O9）。
+	var runCtx context.Context
+	var cancel context.CancelFunc
 	if r.cfg.Duration > 0 {
 		runCtx, cancel = context.WithTimeout(ctx, r.cfg.Duration)
+	} else {
+		runCtx, cancel = context.WithCancel(ctx)
 	}
 	r.cancelMu.Lock()
 	r.cancel = cancel

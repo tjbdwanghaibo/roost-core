@@ -9,6 +9,9 @@ import "sync"
 // across goroutines races. The name and the embedded sync.Pool both invite the
 // opposite assumption, hence this note: scope one pool to one call stack.
 //
+// Put of an object already on the free list is ignored, so a double Put does
+// not hand the same object to two later Gets.
+//
 // Get takes from freeList as-is and applies resetFunc only on the sync.Pool
 // path — reuse inside a scope is meant to cost nothing. Release returns
 // everything to sync.Pool; Clear drops it instead, for objects that must not
@@ -59,6 +62,13 @@ func (p *ObjectPool[T]) Put(obj T) {
 		if any(v) == any(obj) {
 			p.workList = append(p.workList[:i], p.workList[i+1:]...)
 			p.freeList = append(p.freeList, obj)
+			return
+		}
+	}
+	// 不在 workList：外来对象，或同一对象第二次归还。已在 freeList 里的忽略——否则它在空闲表里有两份，
+	// 之后两次 Get 交出同一个对象，两个使用者共享一份可变状态（RR-20261005-NC-267）。
+	for _, v := range p.freeList {
+		if any(v) == any(obj) {
 			return
 		}
 	}
