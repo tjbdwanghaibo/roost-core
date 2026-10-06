@@ -282,7 +282,7 @@ func operationDigestValue(operation operation) any {
 	case modifySpawnOperation:
 		addEffectDigest(base, typed.effectIndex, typed.effectContinuations)
 		base["spawn"], base["property"], base["operation"], base["value"], base["over_ticks"] = programValueDigest(typed.spawn), typed.property, typed.operation, programValueDigest(typed.value), typed.overTicks
-	case spawnOperation:
+	case summonOperation:
 		addEffectDigest(base, typed.effectIndex, typed.effectContinuations)
 		base["template"], base["position"], base["count"], base["duration_ticks"] = typed.template, programValueDigest(typed.position), typed.count, typed.durationTicks
 		overrides := make([]any, len(typed.attributeOverrides))

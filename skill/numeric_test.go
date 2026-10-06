@@ -546,7 +546,7 @@ func numericSpawnSkillJSON(spawn, callbackEffect string) string {
 	if callbackEffect != "" {
 		callback = `,"on":{"tick":{"flow":"effect","effect":` + callbackEffect + `}}`
 	}
-	effect := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{` + spawn + `}` + callback + `}`
+	effect := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{` + spawn + `}` + callback + `}`
 	// enter 以 wait + finish 结束：phase 没有计时，落空的 enter 不能编译（RR-20261005-NC-151）。
 	return strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, `{"flow":"sequence","steps":[`+effect+`,{"flow":"wait","ticks":10,"then":{"flow":"finish"}}]}`, 1)
 }

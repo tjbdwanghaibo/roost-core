@@ -218,10 +218,10 @@ func (runtime *Runtime) buildSelectRequest(cast *castInstance, selector selector
 			filters = append(filters, OwnedSourceSkillFilter{SkillID: filter.text})
 		case "source_cast":
 			filters = append(filters, OwnedSourceCastFilter{CastID: filter.cast})
-		case "spawned_before":
-			filters = append(filters, OwnedSpawnTickFilter{Operation: "lt", Tick: filter.tick})
-		case "spawned_after":
-			filters = append(filters, OwnedSpawnTickFilter{Operation: "gt", Tick: filter.tick})
+		case "summoned_before":
+			filters = append(filters, OwnedSummonTickFilter{Operation: "lt", Tick: filter.tick})
+		case "summoned_after":
+			filters = append(filters, OwnedSummonTickFilter{Operation: "gt", Tick: filter.tick})
 		case "unit_template":
 			filters = append(filters, OwnedUnitTemplateFilter{Template: filter.template})
 		case "entity_tag":

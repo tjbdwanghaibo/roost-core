@@ -48,7 +48,7 @@ func (host *stopRetryHost) StopSpawn(command SpawnStopCommand, state SpawnHostSt
 	return host.MemoryHost.StopSpawn(command, state)
 }
 
-// chargeSummonThatCannotPay 的 enter 先召出一个寿命 100 tick 的陷阱（summon 衍生物），随后付 50 mana；测试把
+// chargeSummonThatCannotPay 的 enter 先召出一个寿命 100 tick 的陷阱（带 minion 衍生物），随后付 50 mana；测试把
 // mana 设成 10，提交前失败，走 failCastLocked 停衍生物。陷阱寿命要长：lifecycle 实体到期后，修前的
 // reapUnhandedEntitySpawns 会顺手再停一次，掩盖“没有重试”。
 func chargeSummonThatCannotPay(t *testing.T) (*Program, CompileEnvironment) {
@@ -147,7 +147,7 @@ func TestFailedStartRetriesTheStopItCouldNotFinish(t *testing.T) {
 
 	advanceEachTick(t, runtime, 20)
 	if active := activeHostSpawns(base); active != 0 {
-		t.Fatalf("host still runs the summon at tick %d; StopSpawn called at ticks %v, the runtime never retried", runtime.currentTick, host.stopTicks)
+		t.Fatalf("host still runs the minion spawn at tick %d; StopSpawn called at ticks %v, the runtime never retried", runtime.currentTick, host.stopTicks)
 	}
 	// 默认退避 4 tick：tick 0 失败，tick 4 重试成功；1～3 不打宿主。
 	if want := []Tick{0, 4}; !equalTicks(host.stopTicks, want) {
@@ -209,7 +209,7 @@ func TestStopPendingSurvivesCheckpointAndKeepsRetrying(t *testing.T) {
 	}
 	advanceEachTick(t, restored, 20)
 	if active := activeHostSpawns(base); active != 0 {
-		t.Fatalf("restored runtime never retried the stop: host still runs the summon, StopSpawn at ticks %v", host.stopTicks)
+		t.Fatalf("restored runtime never retried the stop: host still runs the minion spawn, StopSpawn at ticks %v", host.stopTicks)
 	}
 	if want := []Tick{0, 4}; !equalTicks(host.stopTicks, want) {
 		t.Errorf("StopSpawn called at ticks %v, want %v", host.stopTicks, want)
@@ -293,7 +293,7 @@ func TestStopRetriesAreBoundedAndAlertWhenExhausted(t *testing.T) {
 		t.Errorf("retention stats = %+v, want one stop-pending spawn, exhausted", stats)
 	}
 	if active := activeHostSpawns(base); active != 1 {
-		t.Errorf("host spawns = %d, want the summon the host keeps refusing to stop", active)
+		t.Errorf("host spawns = %d, want the minion spawn the host keeps refusing to stop", active)
 	}
 	checkpoint, err := runtime.Checkpoint()
 	if err != nil {
@@ -329,7 +329,7 @@ func TestStopRetriesAreBoundedAndAlertWhenExhausted(t *testing.T) {
 // visualAreaThatCannotPay 起一个带视觉的 area 衍生物，随后付费失败；用来核对待停止期间客户端看到的状态与表现。
 func visualAreaThatCannotPay(t *testing.T) (*Program, CompileEnvironment) {
 	t.Helper()
-	area := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":100},"spawn":{"kind":"area","duration_ticks":100,"interval_ticks":1,"visual":{"category":"area","theme":"default","elements":["default"]},"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}}}`
+	area := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":100},"spawn":{"kind":"area","duration_ticks":100,"interval_ticks":1,"visual":{"category":"area","theme":"default","elements":["default"]},"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}}}`
 	enter := `{"flow":"sequence","steps":[` + area + `,{"flow":"effect","effect":{"type":"resource","target":"$caster","resource":"mana","operation":"spend","amount":50}}]}`
 	json := `{"schema":"roost.skill/v2","id":"skill.test.stopretry.visual","name":"StopRetry","description":"Charge whose enter starts a visual area, then cannot pay.","presentation":{"icon_keywords":["flare","blade","spark"]},"activation":{"type":"active","policy":{"mode":"charge","max_charge_ticks":10,"min_charge_bp":0,"auto_release":false}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + enter + `,"release":{"flow":"finish"}}}]}`
 	return compileRuntimeJSON(t, json)
@@ -394,7 +394,7 @@ func TestStopPendingIsVisibleToSyncConsistently(t *testing.T) {
 	}
 }
 
-// RR-20261006-31：移交后的 summon 到期，宿主拒绝 StopSpawn。之前错误返回 Advance、衍生物仍到期，下一次 Advance
+// RR-20261006-31：移交后的 minion 衍生物到期，宿主拒绝 StopSpawn。之前错误返回 Advance、衍生物仍到期，下一次 Advance
 // 先重做它、再失败、再返回，Runtime 的 tick 停在原地（这个 Runtime 上所有施法一起冻住），每次 Advance 都打一次宿主。
 // 承诺：错误照常返回这一次，衍生物转为待停止、按退避重试；Runtime 继续前进，end 回调只跑一次。
 func TestHandedOffSpawnStopFailureDoesNotFreezeTheRuntime(t *testing.T) {
@@ -428,7 +428,7 @@ func TestHandedOffSpawnStopFailureDoesNotFreezeTheRuntime(t *testing.T) {
 		t.Errorf("StopSpawn called at host ticks %v, want %v", host.stopTicks, want)
 	}
 	if active := activeHostSpawns(base); active != 0 {
-		t.Errorf("host spawns = %d, want the summon stopped by the retry", active)
+		t.Errorf("host spawns = %d, want the minion spawn stopped by the retry", active)
 	}
 	if callbacks := runtimeEventCount(runtime, "owned_spawn_callback_end"); callbacks != 1 {
 		t.Errorf("end callbacks = %d, want exactly one", callbacks)

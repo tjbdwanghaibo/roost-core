@@ -578,7 +578,7 @@ func TestOwnedSpawnCancellationDetachesBeforeCallback(t *testing.T) {
 }
 
 func TestInitialMotionStepFailureDetachesCarry(t *testing.T) {
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{"kind":"projectile","duration_ticks":10,"motion":{"frame":{"type":"world"},"trajectory":{"type":"linear","speed":1},"carry":{"target":"$caster"},"completion":{"type":"end"}}}},{"flow":"finish"}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{"kind":"projectile","duration_ticks":10,"motion":{"frame":{"type":"world"},"trajectory":{"type":"linear","speed":1},"carry":{"target":"$caster"},"completion":{"type":"end"}}}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "initial-motion-carry-cleanup", flow)
 	host := &postAttachFailureHost{MemoryHost: runtimeTestHost(environment)}
 	runtime := NewRuntime(host, RuntimeOptions{})
@@ -687,7 +687,7 @@ func startOwnedCarryLifecycle(t *testing.T, completion, collision string) (*Runt
 		duration = "1"
 	}
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{"kind":"projectile","duration_ticks":` + duration + `,"motion":{"frame":{"type":"world"},"trajectory":{"type":"linear","speed":1}` + collision + `,"carry":{"target":"$caster"},"completion":` + completion + `}},"on":{"end":` + callback + `,"cancel":` + callback + `}},{"flow":"finish"}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{"kind":"projectile","duration_ticks":` + duration + `,"motion":{"frame":{"type":"world"},"trajectory":{"type":"linear","speed":1}` + collision + `,"carry":{"target":"$caster"},"completion":` + completion + `}},"on":{"end":` + callback + `,"cancel":` + callback + `}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "motion-terminal-lifecycle", flow)
 	host := &ownedCarryLifecycleHost{MemoryHost: runtimeTestHost(environment)}
 	host.UpsertEntity(MemoryEntity{ID: 1, Alive: true})
@@ -745,7 +745,7 @@ func newBoundedMotionRuntime(program *Program, host Host) (*Runtime, *castInstan
 
 func TestMovingSpawnUsesTemplateLifetimeAndCompletesOnTerminalTick(t *testing.T) {
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":5},"spawn":{"kind":"projectile","duration_ticks":2,"motion":{"frame":{"type":"world"},"trajectory":{"type":"linear","speed":1},"completion":{"type":"end"}}},"on":{"tick":` + callback + `,"end":` + callback + `}},{"flow":"finish"}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":5},"spawn":{"kind":"projectile","duration_ticks":2,"motion":{"frame":{"type":"world"},"trajectory":{"type":"linear","speed":1},"completion":{"type":"end"}}},"on":{"tick":` + callback + `,"end":` + callback + `}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "motion-terminal", flow)
 	host := &terminalMotionHost{MemoryHost: runtimeTestHost(environment)}
 	runtime := NewRuntime(host, RuntimeOptions{})
@@ -785,7 +785,7 @@ func TestMovingSpawnUsesTemplateLifetimeAndCompletesOnTerminalTick(t *testing.T)
 
 func TestTerminalCompletionEndSignalInvokesEndCallbackOnce(t *testing.T) {
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":5},"spawn":{"kind":"projectile","duration_ticks":2,"motion":{"frame":{"type":"world"},"trajectory":{"type":"linear","speed":1},"completion":{"type":"end"}}},"on":{"tick":` + callback + `,"end":` + callback + `}},{"flow":"finish"}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":5},"spawn":{"kind":"projectile","duration_ticks":2,"motion":{"frame":{"type":"world"},"trajectory":{"type":"linear","speed":1},"completion":{"type":"end"}}},"on":{"tick":` + callback + `,"end":` + callback + `}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "motion-terminal-end-signal", flow)
 	host := &terminalMotionHost{MemoryHost: runtimeTestHost(environment), emitEndOnCompletion: true}
 	runtime := NewRuntime(host, RuntimeOptions{})
@@ -1067,5 +1067,5 @@ func TestMotionValuesUseTypeAndMemoryValidation(t *testing.T) {
 
 func motionSkillJSON(spawn string) string {
 	// enter 以 wait + finish 结束：phase 没有计时，落空的 enter 不能编译（RR-20261005-NC-151）。
-	return strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{`+spawn+`}},{"flow":"wait","ticks":10,"then":{"flow":"finish"}}]}`, 1)
+	return strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{`+spawn+`}},{"flow":"wait","ticks":10,"then":{"flow":"finish"}}]}`, 1)
 }

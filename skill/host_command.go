@@ -28,7 +28,7 @@ type ResourceCommand struct {
 	Operation string
 	Amount    int64
 }
-type SpawnCommand struct {
+type SummonCommand struct {
 	Owner              EntityID
 	GameplayDigest     string
 	SourceSkillID      string
@@ -39,17 +39,17 @@ type SpawnCommand struct {
 	Count              int
 	DurationTicks      Tick
 	GameplayTags       []GameplayTagHandle
-	AttributeOverrides []SpawnAttributeOverride
-	ParameterBindings  []SpawnParameterBinding
+	AttributeOverrides []SummonAttributeOverride
+	ParameterBindings  []SummonParameterBinding
 	Transactional      bool
 }
 
-type SpawnAttributeOverride struct {
+type SummonAttributeOverride struct {
 	Attribute AttributeHandle
 	Value     int64
 }
 
-type SpawnParameterBinding struct {
+type SummonParameterBinding struct {
 	Name  string
 	Value RuntimeValue
 }
@@ -58,7 +58,7 @@ func (TeleportCommand) isEffectCommandPayload()    {}
 func (KnockbackCommand) isEffectCommandPayload()   {}
 func (PullCommand) isEffectCommandPayload()        {}
 func (ResourceCommand) isEffectCommandPayload()    {}
-func (SpawnCommand) isEffectCommandPayload()       {}
+func (SummonCommand) isEffectCommandPayload()      {}
 func (OwnedEntityCommand) isEffectCommandPayload() {}
 
 type EffectResult struct {
@@ -101,11 +101,11 @@ type TeleportEffectResult struct {
 
 func (TeleportEffectResult) isEffectResultPayload() {}
 
-type SpawnEffectResult struct {
+type SummonEffectResult struct {
 	ResultOutcome
 	Entities      []EntityID
 	FirstEntity   EntityID
-	TransactionID OwnedSpawnTransactionID
+	TransactionID OwnedSummonTransactionID
 }
 
 type StateChangeEffectResult struct {
@@ -138,7 +138,7 @@ type SnapshotRestoreEffectResult struct {
 	AppliedFields, SkippedFields []string
 }
 
-func (SpawnEffectResult) isEffectResultPayload()           {}
+func (SummonEffectResult) isEffectResultPayload()          {}
 func (StateChangeEffectResult) isEffectResultPayload()     {}
 func (AbilityChangeEffectResult) isEffectResultPayload()   {}
 func (EntityCommandEffectResult) isEffectResultPayload()   {}

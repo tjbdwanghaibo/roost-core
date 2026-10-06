@@ -50,8 +50,8 @@ func analyzeLifecycle(context *compileContext, flow flowIR) lifecycleFact {
 		fact = lifecycleFact{CanFallthrough: true}
 		if typed.spawn != nil && typed.spawn.kind == "area" {
 			spawns := 1
-			if spawn, ok := typed.effect.(*spawnEffectIR); ok {
-				spawns = spawn.count
+			if summon, ok := typed.effect.(*summonEffectIR); ok {
+				spawns = summon.count
 			}
 			fact.MaxLifetime = typed.spawn.durationTicks
 			fact.MaxSchedules = saturatingMul(spawns, areaStepBound(typed.spawn.durationTicks, typed.spawn.intervalTicks))

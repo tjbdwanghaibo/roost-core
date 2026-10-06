@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// RR-20261005-NC-211：编译器允许 spawn 出的 area 衍生物在 enter / tick / leave 等回调里
+// RR-20261005-NC-211：编译器允许召唤效果带的 area 衍生物在 enter / tick / leave 等回调里
 // `finish`（compile_owned_entity.go 的 allowAreaFinish），含义是“结束拥有它的施法并
 // 停止本 area 余下的信号”。但施法先结束时，entity 作用域衍生物被移交（handedOff），
 // 之后回调里的 finish 落到 runOwnedSpawnCallback 的
@@ -14,7 +14,7 @@ import (
 // 不能在运行期触发 ErrProgramInvariant；移交后的 finish 没有施法可结束，只结束本
 // area 衍生物（与施法存活时“finish 停止本 area 余下信号”的规则一致）。
 func areaHandoffFinishSkill(callbacks string) string {
-	area := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":6},"spawn":{"kind":"area","duration_ticks":6,"interval_ticks":1,"emit_leave_on_stop":true,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":` + callbacks + `}`
+	area := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":6},"spawn":{"kind":"area","duration_ticks":6,"interval_ticks":1,"emit_leave_on_stop":true,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":` + callbacks + `}`
 	return strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, `{"flow":"sequence","steps":[`+area+`,{"flow":"finish"}]}`, 1)
 }
 
@@ -71,7 +71,7 @@ func TestHandedOffAreaFinishEndsOnlyTheAreaSpawn(t *testing.T) {
 // 控制：施法存活时 area 回调的 finish 仍然结束施法（既有语义不变）。
 func TestLiveAreaFinishStillFinishesTheCast(t *testing.T) {
 	finish := `{"flow":"finish","reason":"area_complete"}`
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"enter":` + finish + `}},{"flow":"wait","ticks":5,"then":{"flow":"finish"}}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"enter":` + finish + `}},{"flow":"wait","ticks":5,"then":{"flow":"finish"}}]}`
 	environment := DefaultCompileEnvironment()
 	program, diagnostics := Compile(mustParseJSON(t, strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, flow, 1)), environment)
 	requireNoErrors(t, diagnostics)

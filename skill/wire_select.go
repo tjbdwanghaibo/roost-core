@@ -136,7 +136,7 @@ func (AbilitySlotFilterDefinition) filterDefinition() {}
 
 type OwnedSourceSkillFilterDefinition struct{ Skill string }
 type OwnedSourceCastFilterDefinition struct{ Cast CastID }
-type OwnedSpawnTickFilterDefinition struct {
+type OwnedSummonTickFilterDefinition struct {
 	Type string
 	Tick Tick
 }
@@ -150,7 +150,7 @@ type StatusInstanceFilterDefinition struct {
 
 func (OwnedSourceSkillFilterDefinition) filterDefinition()  {}
 func (OwnedSourceCastFilterDefinition) filterDefinition()   {}
-func (OwnedSpawnTickFilterDefinition) filterDefinition()    {}
+func (OwnedSummonTickFilterDefinition) filterDefinition()   {}
 func (OwnedUnitTemplateFilterDefinition) filterDefinition() {}
 func (OwnedEntityTagFilterDefinition) filterDefinition()    {}
 func (StatusInstanceFilterDefinition) filterDefinition()    {}
@@ -494,7 +494,7 @@ func decodeFilter(data []byte) (FilterDefinition, error) {
 			return nil, err
 		}
 		return OwnedSourceCastFilterDefinition{Cast: raw.Cast}, nil
-	case "spawned_before", "spawned_after":
+	case "summoned_before", "summoned_after":
 		var raw struct {
 			Type string `json:"type"`
 			Tick Tick   `json:"tick"`
@@ -502,7 +502,7 @@ func decodeFilter(data []byte) (FilterDefinition, error) {
 		if err := decodeStrictSingle(data, &raw); err != nil {
 			return nil, err
 		}
-		return OwnedSpawnTickFilterDefinition{Type: raw.Type, Tick: raw.Tick}, nil
+		return OwnedSummonTickFilterDefinition{Type: raw.Type, Tick: raw.Tick}, nil
 	case "unit_template":
 		var raw struct {
 			Type     string `json:"type"`

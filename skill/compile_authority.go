@@ -326,10 +326,10 @@ func validatePolicies(environment CompileEnvironment, diagnostics *[]Diagnostic)
 		abilityProperties[entry.Property] = true
 	}
 	for index, entry := range environment.Gameplay.UnitTemplates.Entries {
-		if entry.OwnerPolicy == "" || entry.MaximumPerOwner <= 0 || entry.MaximumPerSourceSkill <= 0 || entry.MaximumPerTeam <= 0 || entry.MaximumSpawnCount <= 0 || entry.MaximumLifetimeTicks <= 0 || entry.ReplacementPolicy == "" || entry.ControlProfile == "" || !validOwnedReplacementPolicy(entry.ReplacementPolicy) || !validOwnedLifecyclePolicy(entry.OwnerDeathPolicy) || !validOwnedLifecyclePolicy(entry.SkillRemovedPolicy) || !validOwnedLifecyclePolicy(entry.MatchEndPolicy) {
+		if entry.OwnerPolicy == "" || entry.MaximumPerOwner <= 0 || entry.MaximumPerSourceSkill <= 0 || entry.MaximumPerTeam <= 0 || entry.MaximumSummonCount <= 0 || entry.MaximumLifetimeTicks <= 0 || entry.ReplacementPolicy == "" || entry.ControlProfile == "" || !validOwnedReplacementPolicy(entry.ReplacementPolicy) || !validOwnedLifecyclePolicy(entry.OwnerDeathPolicy) || !validOwnedLifecyclePolicy(entry.SkillRemovedPolicy) || !validOwnedLifecyclePolicy(entry.MatchEndPolicy) {
 			appendDiagnostic(diagnostics, DiagnosticCatalogUnitPolicy, fmt.Sprintf("$.gameplay.unit_templates[%d]", index), "unit ownership, limit, replacement, and control profile are required")
 		}
-		if entry.MaximumPerOwner > environment.Limits.MaxOwnedEntities || entry.MaximumPerSourceSkill > environment.Limits.MaxOwnedEntities || entry.MaximumPerTeam > environment.Limits.MaxOwnedEntities || entry.MaximumSpawnCount > environment.Limits.MaxOwnedEntities || entry.MaximumLifetimeTicks > environment.Limits.MaxLifetimeTicks || !validOwnedCommandSet(entry.Commands) || !uniqueNonEmptyStrings(entry.Behaviors) || !validUnitTemplateParameters(entry.Parameters) {
+		if entry.MaximumPerOwner > environment.Limits.MaxOwnedEntities || entry.MaximumPerSourceSkill > environment.Limits.MaxOwnedEntities || entry.MaximumPerTeam > environment.Limits.MaxOwnedEntities || entry.MaximumSummonCount > environment.Limits.MaxOwnedEntities || entry.MaximumLifetimeTicks > environment.Limits.MaxLifetimeTicks || !validOwnedCommandSet(entry.Commands) || !uniqueNonEmptyStrings(entry.Behaviors) || !validUnitTemplateParameters(entry.Parameters) {
 			appendDiagnostic(diagnostics, DiagnosticCatalogUnitPolicy, fmt.Sprintf("$.gameplay.unit_templates[%d]", index), "unit limits, commands, and behaviors must be bounded closed sets")
 		}
 	}
@@ -350,7 +350,7 @@ func validateMotionCatalog(environment CompileEnvironment, diagnostics *[]Diagno
 	pairs := make(map[string]bool, len(catalog.SpawnTrajectoryPairs))
 	for index, pair := range catalog.SpawnTrajectoryPairs {
 		key := pair.Spawn + ":" + pair.Trajectory
-		if !validMotionSpawnKind(pair.Spawn) || !validMotionTrajectoryKind(pair.Trajectory) || pair.Spawn == "summon" || pairs[key] {
+		if !validMotionSpawnKind(pair.Spawn) || !validMotionTrajectoryKind(pair.Trajectory) || pair.Spawn == "minion" || pairs[key] {
 			appendDiagnostic(diagnostics, DiagnosticCatalogMotionPolicy, fmt.Sprintf("$.motion.spawn_trajectory_pairs[%d]", index), "spawn/trajectory capability must be a unique supported closed pair")
 		}
 		pairs[key] = true
@@ -447,7 +447,7 @@ func validTemporalFields(fields []string) bool {
 }
 
 func validOwnedLifecyclePolicy(policy string) bool {
-	return policy == "despawn" || policy == "persist_until_duration"
+	return policy == "dismiss" || policy == "persist_until_duration"
 }
 
 func validUnitTemplateParameters(parameters []UnitTemplateParameterPolicy) bool {
@@ -467,7 +467,7 @@ func validOwnedCommandSet(commands []string) bool {
 	}
 	for _, command := range commands {
 		switch command {
-		case "move_to", "follow", "attack_target", "hold_position", "return_to_owner", "stop", "invoke_behavior", "despawn":
+		case "move_to", "follow", "attack_target", "hold_position", "return_to_owner", "stop", "invoke_behavior", "dismiss":
 		default:
 			return false
 		}

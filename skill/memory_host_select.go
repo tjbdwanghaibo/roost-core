@@ -61,10 +61,10 @@ func (host *MemoryHost) Select(request SelectRequest) (SelectResult, error) {
 		switch order {
 		case SelectOrderDistance:
 			less, equal = left.distance < right.distance, left.distance == right.distance
-		case SelectOrderSpawnTick:
-			less, equal = left.owned.SpawnTick < right.owned.SpawnTick, left.owned.SpawnTick == right.owned.SpawnTick
-		case SelectOrderSpawnSequence:
-			less, equal = left.owned.SpawnSequence < right.owned.SpawnSequence, left.owned.SpawnSequence == right.owned.SpawnSequence
+		case SelectOrderSummonTick:
+			less, equal = left.owned.SummonTick < right.owned.SummonTick, left.owned.SummonTick == right.owned.SummonTick
+		case SelectOrderSummonSequence:
+			less, equal = left.owned.SummonSequence < right.owned.SummonSequence, left.owned.SummonSequence == right.owned.SummonSequence
 		case SelectOrderDistanceToOwner:
 			less, equal = left.distance < right.distance, left.distance == right.distance
 		case SelectOrderRemainingLifetime:
@@ -75,8 +75,8 @@ func (host *MemoryHost) Select(request SelectRequest) (SelectResult, error) {
 			less, equal = left.entity.ID < right.entity.ID, left.entity.ID == right.entity.ID
 		}
 		if equal {
-			if selectingOwned && left.owned.SpawnSequence != right.owned.SpawnSequence {
-				return left.owned.SpawnSequence < right.owned.SpawnSequence
+			if selectingOwned && left.owned.SummonSequence != right.owned.SummonSequence {
+				return left.owned.SummonSequence < right.owned.SummonSequence
 			}
 			return left.entity.ID < right.entity.ID
 		}
@@ -349,9 +349,9 @@ func (host *MemoryHost) entityMatchesFiltersLocked(entity MemoryEntity, request 
 			if !found || !containsGameplayTag(record.GameplayTags, typed.Tag) {
 				return false
 			}
-		case OwnedSpawnTickFilter:
+		case OwnedSummonTickFilter:
 			record, found := host.ownedEntities[entity.ID]
-			if !found || !compareInt(int64(record.SpawnTick), typed.Operation, int64(typed.Tick)) {
+			if !found || !compareInt(int64(record.SummonTick), typed.Operation, int64(typed.Tick)) {
 				return false
 			}
 		}

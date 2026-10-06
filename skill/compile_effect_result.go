@@ -44,7 +44,7 @@ func runEffectResultScopePass(context *compileContext) {
 }
 
 // effectResultBranchMaySuspend 是 result 分支与 status 实例消费流程的限制：不能有 wait、
-// 带间隔的 repeat，也不能启动带 on 回调的衍生物。spawn 加不带回调的衍生物不在其列，照常
+// 带间隔的 repeat，也不能启动带 on 回调的衍生物。召唤效果加不带回调的衍生物不在其列，照常
 // 编译、执行时照常启动衍生物（O29：诊断文案按这条规则写，不再笼统说不能启动衍生物）。
 func effectResultBranchMaySuspend(flow flowIR) bool {
 	if flow == nil {
@@ -98,8 +98,8 @@ func effectResultLayout(context *compileContext, effect effectIR) (resultLayoutP
 			propertyType.Quantity = abilityPropertyQuantity(typed.property)
 		}
 		return resultLayoutByType(resultTypeAbilityChange, propertyType), true
-	case *spawnEffectIR:
-		return resultLayoutByType(resultTypeSpawn, valueType{}), true
+	case *summonEffectIR:
+		return resultLayoutByType(resultTypeSummon, valueType{}), true
 	case *entityCommandEffectIR:
 		return resultLayoutByType(resultTypeEntityCommand, valueType{}), true
 	default:

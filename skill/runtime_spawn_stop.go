@@ -21,7 +21,7 @@ import (
 // 停止入口（spawn_stop_entries_promises_test.go 的 spawnStopEntries 逐个登记，守卫核对源码里调用 requestSpawnStop
 // 的函数与登记表一致）：
 //   - 施法里的停止：failCastLocked、goto、Cancel、Interrupt、施法收尾（stopScopedSpawns），衍生物启动失败的清理
-//     （startEntitySpawn、executeOwnedSpawn），移交时 lifecycle 实体已失效（handoffEntitySpawns）；
+//     （startEntitySpawn、executeOwnedSummon），移交时 lifecycle 实体已失效（handoffEntitySpawns）；
 //   - tick 驱动：施法期间 lifecycle 实体消失（reapUnhandedEntitySpawns），移交后的到期 / 失效 / 步进失败 / area 回调
 //     finish（terminateOwnedSpawn）；
 //   - 调用方驱动：RemoveProgram、Shutdown。

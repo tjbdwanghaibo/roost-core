@@ -11,7 +11,7 @@ package skill
 //   - charge 的 enter 在提交前起了 owned 衍生物后失败：Start 返回 (0, 原错误)，宿主侧衍生物停止，Runtime 不在被复用
 //     的 cast ID 名下留下衍生物记录，失败启动之后的 checkpoint 能恢复（NC-110 对排程任务的承诺扩到衍生物）。
 //
-// RR-20261006-21：第三条补测时是红的。失败启动删了 cast、还了 ID，但已停 summon 衍生物的记录留在 Runtime 里：
+// RR-20261006-21：第三条补测时是红的。失败启动删了 cast、还了 ID，但已停 minion 衍生物的记录留在 Runtime 里：
 // 记录挂到下一个 cast 名下，而且停止时已清掉 Program，Checkpoint 直接报 corrupt；宿主停不下衍生物时，运行中的
 // 记录同样被下一个 cast 接走。
 
@@ -20,12 +20,12 @@ import (
 	"testing"
 )
 
-// summonWithFailingCancel 是一个 summon 衍生物：取消时回调先给拥有者回 1 点血（用来数回调跑了几次），再向拥有者
+// summonWithFailingCancel 召出一个带 minion 衍生物的陷阱：取消时回调先给拥有者回 1 点血（用来数回调跑了几次），再向拥有者
 // 扣 500 mana，测试宿主上必然余额不足。
-const summonWithFailingCancel = `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{"kind":"summon"},"on":{"cancel":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"heal","target":"$owner","amount":1}},{"flow":"effect","effect":{"type":"resource","target":"$owner","resource":"mana","operation":"spend","amount":500}}]}}}`
+const summonWithFailingCancel = `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{"kind":"minion"},"on":{"cancel":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"heal","target":"$owner","amount":1}},{"flow":"effect","effect":{"type":"resource","target":"$owner","resource":"mana","operation":"spend","amount":500}}]}}}`
 
 // summonWithCountingCancel 的取消回调总能成功：给拥有者回 1 点血，用 owned_spawn_callback_cancel 事件计数。
-const summonWithCountingCancel = `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{"kind":"summon"},"on":{"cancel":{"flow":"effect","effect":{"type":"heal","target":"$owner","amount":1}}}}`
+const summonWithCountingCancel = `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{"kind":"minion"},"on":{"cancel":{"flow":"effect","effect":{"type":"heal","target":"$owner","amount":1}}}}`
 
 func runtimeEventCount(runtime *Runtime, kind string) int {
 	count := 0
@@ -74,7 +74,7 @@ func TestInterruptSpawnStopFailureStillEndsTheCast(t *testing.T) {
 		t.Fatal(err)
 	}
 	if active := activeHostSpawns(host); active != 1 {
-		t.Fatalf("host spawns before interrupt = %d, want the running summon", active)
+		t.Fatalf("host spawns before interrupt = %d, want the running minion spawn", active)
 	}
 	tag := program.cast.interruptTags[0]
 	if err := runtime.Interrupt(castID, tag); !errors.Is(err, ErrInsufficientResource) {
@@ -88,7 +88,7 @@ func TestInterruptSpawnStopFailureStillEndsTheCast(t *testing.T) {
 		t.Fatalf("cancel callbacks = %d, want exactly one (the failure path must not run the callback again)", callbacks)
 	}
 	if active := activeHostSpawns(host); active != 0 {
-		t.Fatalf("host spawns after failed interrupt = %d, want the summon spawn stopped", active)
+		t.Fatalf("host spawns after failed interrupt = %d, want the minion spawn stopped", active)
 	}
 	if left := scheduledTasksFor(runtime, castID); left != 0 {
 		t.Fatalf("failed interrupt left %d scheduled tasks for the cast", left)
@@ -175,12 +175,12 @@ func TestToggleReleaseCallbackFailureStillEndsTheCast(t *testing.T) {
 	}
 }
 
-// charge 的 enter 在提交前起了 summon 衍生物，随后付费失败：Start 返回 (0, 原错误)，等于“没有施法”。
+// charge 的 enter 在提交前起了 minion 衍生物，随后付费失败：Start 返回 (0, 原错误)，等于“没有施法”。
 // 宿主侧衍生物已停（cancel 回调跑一次），Runtime 不在被复用的 cast ID 名下留下衍生物记录，失败启动之后
 // checkpoint 能恢复，下一个拿到同一 ID 的 cast 只看到自己的衍生物。
 //
 // owned 实体本身不随失败启动删除：Runtime 不在事务里（维护者决定 B4），与 Cancel 停掉未移交的 entity 衍生物
-// 一样，实体按 spawn 的寿命由宿主回收。
+// 一样，实体按召唤效果的寿命由宿主回收。
 func TestFailedChargeStartWithOwnedSpawnLeavesNoResidue(t *testing.T) {
 	enter := `{"flow":"sequence","steps":[` + summonWithCountingCancel + `,{"flow":"effect","effect":{"type":"resource","target":"$caster","resource":"mana","operation":"spend","amount":50}}]}`
 	json := `{"schema":"roost.skill/v2","id":"skill.test.terminal.chargesummon","name":"Terminal","description":"Charge whose enter summons, then cannot pay.","activation":{"type":"active","policy":{"mode":"charge","max_charge_ticks":10,"min_charge_bp":0,"auto_release":false}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + enter + `,"release":{"flow":"finish"}}}]}`
@@ -192,7 +192,7 @@ func TestFailedChargeStartWithOwnedSpawnLeavesNoResidue(t *testing.T) {
 		t.Fatalf("first start = %d, %v; want 0, ErrInsufficientResource", id, err)
 	}
 	if active := activeHostSpawns(host); active != 0 {
-		t.Errorf("host spawns after the failed start = %d, want the summon spawn stopped", active)
+		t.Errorf("host spawns after the failed start = %d, want the minion spawn stopped", active)
 	}
 	if callbacks := runtimeEventCount(runtime, "owned_spawn_callback_cancel"); callbacks != 1 {
 		t.Errorf("cancel callbacks = %d, want exactly one", callbacks)
@@ -205,10 +205,10 @@ func TestFailedChargeStartWithOwnedSpawnLeavesNoResidue(t *testing.T) {
 	}
 	checkpoint, err := runtime.Checkpoint()
 	if err != nil {
-		t.Fatalf("checkpoint after a failed start with a summon: %v", err)
+		t.Fatalf("checkpoint after a failed start with a minion spawn: %v", err)
 	}
 	if _, err := RestoreRuntime(host, RuntimeOptions{}, checkpoint, ProgramResolverFunc(func(string, string) (*Program, error) { return program, nil })); err != nil {
-		t.Fatalf("restore after a failed start with a summon: %v", err)
+		t.Fatalf("restore after a failed start with a minion spawn: %v", err)
 	}
 	setTerminalMana(host, 100)
 	id, err := runtime.Start(program, CastInput{Caster: 1, Target: 2})
@@ -216,14 +216,14 @@ func TestFailedChargeStartWithOwnedSpawnLeavesNoResidue(t *testing.T) {
 		t.Fatalf("second start = %d, %v; want the reused id 1", id, err)
 	}
 	if spawns := runtimeSpawnsOfCast(runtime, id); spawns != 1 {
-		t.Fatalf("cast %d owns %d spawn records, want only its own summon", id, spawns)
+		t.Fatalf("cast %d owns %d spawn records, want only its own minion spawn", id, spawns)
 	}
 	if _, err := runtime.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint with the reused id: %v", err)
 	}
 }
 
-// 同一个失败启动，但宿主停不下 summon 衍生物：衍生物仍在宿主侧运行、Runtime 里还有它的运行中记录。这时不能把 cast
+// 同一个失败启动，但宿主停不下 minion 衍生物：衍生物仍在宿主侧运行、Runtime 里还有它的运行中记录。这时不能把 cast
 // 删掉、把 ID 还回去——记录会挂到下一个 cast 名下（下一个 cast 停衍生物时会连它一起停、checkpoint 引用不存在的
 // cast）。失败的 cast 保留为 failed 并返回它的 ID，衍生物记录仍归它，下一次启动拿新 ID，checkpoint 能恢复。
 func TestFailedChargeStartWhoseSpawnCannotStopKeepsItsCast(t *testing.T) {
@@ -239,7 +239,7 @@ func TestFailedChargeStartWhoseSpawnCannotStopKeepsItsCast(t *testing.T) {
 		t.Fatalf("first start = %d, %v; want the enter's ErrInsufficientResource", id, err)
 	}
 	if active := activeHostSpawns(base); active != 1 {
-		t.Fatalf("host spawns = %d, want the summon the host refused to stop", active)
+		t.Fatalf("host spawns = %d, want the minion spawn the host refused to stop", active)
 	}
 	if id != 1 {
 		t.Errorf("failed start returned cast %d; with a spawn still running it must keep (and report) cast 1", id)
@@ -253,7 +253,7 @@ func TestFailedChargeStartWhoseSpawnCannotStopKeepsItsCast(t *testing.T) {
 		t.Fatalf("second start = %d, %v; want a fresh id 2, cast 1 still owns a running spawn", next, err)
 	}
 	if spawns := runtimeSpawnsOfCast(runtime, next); spawns != 1 {
-		t.Errorf("cast %d owns %d spawn records, want only its own summon", next, spawns)
+		t.Errorf("cast %d owns %d spawn records, want only its own minion spawn", next, spawns)
 	}
 	checkpoint, err := runtime.Checkpoint()
 	if err != nil {

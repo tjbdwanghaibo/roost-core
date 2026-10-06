@@ -2,48 +2,48 @@ package skill
 
 import "sort"
 
-func (host *MemoryHost) PreviewOwnedSpawn(command SpawnCommand) (OwnedSpawnPreview, error) {
+func (host *MemoryHost) PreviewOwnedSummon(command SummonCommand) (OwnedSummonPreview, error) {
 	host.mutex.RLock()
 	defer host.mutex.RUnlock()
 	template, found := host.unitTemplate(command.Template)
 	if !found {
-		return OwnedSpawnPreview{}, ErrCombatHandleInvalid
+		return OwnedSummonPreview{}, ErrCombatHandleInvalid
 	}
 	remove, capacity := host.ownedReplacementPlan(command, template)
 	if !capacity {
-		return OwnedSpawnPreview{FailureReason: ExpectedFailureCapacityReached}, nil
+		return OwnedSummonPreview{FailureReason: ExpectedFailureCapacityReached}, nil
 	}
-	return OwnedSpawnPreview{ReplacedEntities: append([]EntityID(nil), remove...), FailureReason: ExpectedFailureNone}, nil
+	return OwnedSummonPreview{ReplacedEntities: append([]EntityID(nil), remove...), FailureReason: ExpectedFailureNone}, nil
 }
 
-func (host *MemoryHost) spawnOwnedLocked(command SpawnCommand) (EffectResult, error) {
+func (host *MemoryHost) summonOwnedLocked(command SummonCommand) (EffectResult, error) {
 	if command.Owner == 0 || command.GameplayDigest == "" || command.SourceSkillID == "" || command.SourceCastID == 0 {
 		return EffectResult{}, ErrHostContractViolation
 	}
 	owner, ownerFound := host.entities[command.Owner]
 	if !ownerFound || !owner.Alive {
-		return EffectResult{Commit: CommitReceipt{Revision: host.revision}, Payload: SpawnEffectResult{ResultOutcome: failedResultOutcome(ExpectedFailureInvalidTarget)}}, nil
+		return EffectResult{Commit: CommitReceipt{Revision: host.revision}, Payload: SummonEffectResult{ResultOutcome: failedResultOutcome(ExpectedFailureInvalidTarget)}}, nil
 	}
 	template, found := host.unitTemplate(command.Template)
 	if !found {
 		return EffectResult{}, ErrCombatHandleInvalid
 	}
-	if command.Count <= 0 || command.Count > template.MaximumSpawnCount || command.DurationTicks <= 0 || command.DurationTicks > template.MaximumLifetimeTicks {
+	if command.Count <= 0 || command.Count > template.MaximumSummonCount || command.DurationTicks <= 0 || command.DurationTicks > template.MaximumLifetimeTicks {
 		return EffectResult{}, ErrHostContractViolation
 	}
-	attributes, parameters, failure, err := host.resolveSpawnBindings(template, command)
+	attributes, parameters, failure, err := host.resolveSummonBindings(template, command)
 	if err != nil {
 		return EffectResult{}, err
 	}
 	if failure != ExpectedFailureNone {
-		return EffectResult{Commit: CommitReceipt{Revision: host.revision}, Payload: SpawnEffectResult{ResultOutcome: failedResultOutcome(failure)}}, nil
+		return EffectResult{Commit: CommitReceipt{Revision: host.revision}, Payload: SummonEffectResult{ResultOutcome: failedResultOutcome(failure)}}, nil
 	}
 	remove, capacity := host.ownedReplacementPlan(command, template)
 	if !capacity {
-		return EffectResult{Commit: CommitReceipt{Revision: host.revision}, Payload: SpawnEffectResult{ResultOutcome: failedResultOutcome(ExpectedFailureCapacityReached)}}, nil
+		return EffectResult{Commit: CommitReceipt{Revision: host.revision}, Payload: SummonEffectResult{ResultOutcome: failedResultOutcome(ExpectedFailureCapacityReached)}}, nil
 	}
-	transactionID := OwnedSpawnTransactionID(0)
-	transaction := ownedSpawnTransaction{}
+	transactionID := OwnedSummonTransactionID(0)
+	transaction := ownedSummonTransaction{}
 	if command.Transactional {
 		host.nextOwnedTransaction++
 		transactionID = host.nextOwnedTransaction
@@ -63,24 +63,24 @@ func (host *MemoryHost) spawnOwnedLocked(command SpawnCommand) (EffectResult, er
 		host.nextEntity++
 		host.nextOwnedSequence++
 		due := saturatingTickAdd(host.tick, command.DurationTicks)
-		metadata := OwnedEntityMetadata{Entity: entity, Owner: command.Owner, GameplayDigest: command.GameplayDigest, SourceSkillID: command.SourceSkillID, SourceCastID: command.SourceCastID, SourceEffectIndex: command.SourceEffectIndex, Template: command.Template, GameplayTags: append([]GameplayTagHandle(nil), template.GameplayTags...), SpawnTick: host.tick, SpawnSequence: host.nextOwnedSequence, LifetimeTicks: command.DurationTicks, DueTick: due, ControlProfile: template.ControlProfile, ParameterBindings: cloneRuntimeValueMap(parameters)}
+		metadata := OwnedEntityMetadata{Entity: entity, Owner: command.Owner, GameplayDigest: command.GameplayDigest, SourceSkillID: command.SourceSkillID, SourceCastID: command.SourceCastID, SourceEffectIndex: command.SourceEffectIndex, Template: command.Template, GameplayTags: append([]GameplayTagHandle(nil), template.GameplayTags...), SummonTick: host.tick, SummonSequence: host.nextOwnedSequence, LifetimeTicks: command.DurationTicks, DueTick: due, ControlProfile: template.ControlProfile, ParameterBindings: cloneRuntimeValueMap(parameters)}
 		host.ownedEntities[entity] = metadata
 		tags := make(map[GameplayTagHandle]bool, len(metadata.GameplayTags))
 		for _, tag := range metadata.GameplayTags {
 			tags[tag] = true
 		}
 		host.entities[entity] = MemoryEntity{ID: entity, Owner: command.Owner, Alive: true, Position: command.Position, TeamID: owner.TeamID, Resources: map[string]int64{}, Statuses: map[StatusHandle]bool{}, Attributes: cloneAttributeMap(attributes), GameplayTags: tags}
-		host.commitLocked("owned_entity_spawned", entity, 0)
+		host.commitLocked("owned_entity_summoned", entity, 0)
 		entities[index] = entity
 	}
 	if transactionID != 0 {
 		transaction.created = append([]EntityID(nil), entities...)
 		host.ownedTransactions[transactionID] = transaction
 	}
-	return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Value: EntityRuntimeValue(entities[0]), Payload: SpawnEffectResult{ResultOutcome: successfulResultOutcome(), Entities: entities, FirstEntity: entities[0], TransactionID: transactionID}}, nil
+	return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Value: EntityRuntimeValue(entities[0]), Payload: SummonEffectResult{ResultOutcome: successfulResultOutcome(), Entities: entities, FirstEntity: entities[0], TransactionID: transactionID}}, nil
 }
 
-func (host *MemoryHost) CommitOwnedSpawn(transactionID OwnedSpawnTransactionID) error {
+func (host *MemoryHost) CommitOwnedSummon(transactionID OwnedSummonTransactionID) error {
 	host.mutex.Lock()
 	defer host.mutex.Unlock()
 	if transactionID == 0 {
@@ -93,7 +93,7 @@ func (host *MemoryHost) CommitOwnedSpawn(transactionID OwnedSpawnTransactionID) 
 	return nil
 }
 
-func (host *MemoryHost) RollbackOwnedSpawn(transactionID OwnedSpawnTransactionID) error {
+func (host *MemoryHost) RollbackOwnedSummon(transactionID OwnedSummonTransactionID) error {
 	host.mutex.Lock()
 	defer host.mutex.Unlock()
 	transaction, found := host.ownedTransactions[transactionID]
@@ -109,7 +109,7 @@ func (host *MemoryHost) RollbackOwnedSpawn(transactionID OwnedSpawnTransactionID
 		host.entities[entity] = cloneMemoryEntity(transaction.entities[entity])
 	}
 	delete(host.ownedTransactions, transactionID)
-	host.commitLocked("owned_entity_spawn_rolled_back", 0, 0)
+	host.commitLocked("owned_entity_summon_rolled_back", 0, 0)
 	return nil
 }
 
@@ -122,7 +122,7 @@ func cloneMemoryEntity(entity MemoryEntity) MemoryEntity {
 	return entity
 }
 
-func (host *MemoryHost) resolveSpawnBindings(template UnitTemplateCatalogEntry, command SpawnCommand) (map[AttributeHandle]int64, map[string]RuntimeValue, ExpectedFailureReason, error) {
+func (host *MemoryHost) resolveSummonBindings(template UnitTemplateCatalogEntry, command SummonCommand) (map[AttributeHandle]int64, map[string]RuntimeValue, ExpectedFailureReason, error) {
 	attributePolicies := make(map[AttributeHandle]UnitTemplateAttributeOverridePolicy, len(template.AllowedAttributeOverrides))
 	for _, policy := range template.AllowedAttributeOverrides {
 		attributePolicies[policy.Attribute] = policy
@@ -197,7 +197,7 @@ func cloneRuntimeValueMap(values map[string]RuntimeValue) map[string]RuntimeValu
 	return result
 }
 
-func (host *MemoryHost) ownedReplacementPlan(command SpawnCommand, template UnitTemplateCatalogEntry) ([]EntityID, bool) {
+func (host *MemoryHost) ownedReplacementPlan(command SummonCommand, template UnitTemplateCatalogEntry) ([]EntityID, bool) {
 	ownerRecords := host.ownedRecordsLocked(func(record OwnedEntityMetadata) bool {
 		return record.Owner == command.Owner && record.Template == command.Template
 	})
@@ -275,11 +275,11 @@ func sortOwnedReplacementCandidates(records []OwnedEntityMetadata, policy string
 		a, b := records[left], records[right]
 		switch policy {
 		case "replace_newest":
-			if a.SpawnTick != b.SpawnTick {
-				return a.SpawnTick > b.SpawnTick
+			if a.SummonTick != b.SummonTick {
+				return a.SummonTick > b.SummonTick
 			}
-			if a.SpawnSequence != b.SpawnSequence {
-				return a.SpawnSequence > b.SpawnSequence
+			if a.SummonSequence != b.SummonSequence {
+				return a.SummonSequence > b.SummonSequence
 			}
 		case "replace_nearest", "replace_farthest":
 			da := distanceSquared(entities[a.Entity].Position, position)
@@ -290,15 +290,15 @@ func sortOwnedReplacementCandidates(records []OwnedEntityMetadata, policy string
 				}
 				return da < db
 			}
-			if a.SpawnSequence != b.SpawnSequence {
-				return a.SpawnSequence < b.SpawnSequence
+			if a.SummonSequence != b.SummonSequence {
+				return a.SummonSequence < b.SummonSequence
 			}
 		default:
-			if a.SpawnTick != b.SpawnTick {
-				return a.SpawnTick < b.SpawnTick
+			if a.SummonTick != b.SummonTick {
+				return a.SummonTick < b.SummonTick
 			}
-			if a.SpawnSequence != b.SpawnSequence {
-				return a.SpawnSequence < b.SpawnSequence
+			if a.SummonSequence != b.SummonSequence {
+				return a.SummonSequence < b.SummonSequence
 			}
 		}
 		return a.Entity < b.Entity
@@ -335,8 +335,8 @@ func (host *MemoryHost) commandOwnedLocked(command OwnedEntityCommand) (EffectRe
 	case "return_to_owner":
 		entity.Position = host.entities[record.Owner].Position
 		host.entities[command.Target] = entity
-	case "despawn":
-		host.removeOwnedLocked(command.Target, "owned_entity_despawned")
+	case "dismiss":
+		host.removeOwnedLocked(command.Target, "owned_entity_dismissed")
 		return EffectResult{Commit: CommitReceipt{Revision: host.revision, Changed: true}, Payload: EntityCommandEffectResult{ResultOutcome: successfulResultOutcome(), Applied: true}}, nil
 	}
 	receipt := host.commitLocked("owned_entity_commanded", command.Target, 0)
@@ -352,7 +352,7 @@ func validOwnedCommandPayload(command OwnedEntityCommand) bool {
 		return zeroPosition && command.TargetEntity != 0 && command.Behavior == ""
 	case "invoke_behavior":
 		return zeroPosition && command.TargetEntity == 0 && command.Behavior != ""
-	case "hold_position", "return_to_owner", "stop", "despawn":
+	case "hold_position", "return_to_owner", "stop", "dismiss":
 		return zeroPosition && command.TargetEntity == 0 && command.Behavior == ""
 	default:
 		return false
@@ -370,7 +370,7 @@ func (host *MemoryHost) expireOwnedLocked() {
 	for entity, record := range host.ownedEntities {
 		template, _ := host.unitTemplate(record.Template)
 		owner, ownerFound := host.entities[record.Owner]
-		if record.DueTick <= host.tick || template.OwnerDeathPolicy == "despawn" && (!ownerFound || !owner.Alive) {
+		if record.DueTick <= host.tick || template.OwnerDeathPolicy == "dismiss" && (!ownerFound || !owner.Alive) {
 			ids = append(ids, entity)
 		}
 	}
@@ -386,7 +386,7 @@ func (host *MemoryHost) RemoveOwnedEntitiesByProgram(programID string) error {
 	ids := make([]EntityID, 0)
 	for entity, record := range host.ownedEntities {
 		template, _ := host.unitTemplate(record.Template)
-		if record.SourceSkillID == programID && template.SkillRemovedPolicy == "despawn" {
+		if record.SourceSkillID == programID && template.SkillRemovedPolicy == "dismiss" {
 			ids = append(ids, entity)
 		}
 	}
@@ -403,7 +403,7 @@ func (host *MemoryHost) RemoveOwnedEntitiesForMatchEnd() error {
 	ids := make([]EntityID, 0)
 	for entity, record := range host.ownedEntities {
 		template, _ := host.unitTemplate(record.Template)
-		if template.MatchEndPolicy == "despawn" {
+		if template.MatchEndPolicy == "dismiss" {
 			ids = append(ids, entity)
 		}
 	}
@@ -438,8 +438,8 @@ func (host *MemoryHost) OwnedEntities(owner EntityID) []OwnedEntityMetadata {
 	defer host.mutex.RUnlock()
 	result := host.ownedRecordsLocked(func(record OwnedEntityMetadata) bool { return owner == 0 || record.Owner == owner })
 	sort.SliceStable(result, func(i, j int) bool {
-		if result[i].SpawnSequence != result[j].SpawnSequence {
-			return result[i].SpawnSequence < result[j].SpawnSequence
+		if result[i].SummonSequence != result[j].SummonSequence {
+			return result[i].SummonSequence < result[j].SummonSequence
 		}
 		return result[i].Entity < result[j].Entity
 	})

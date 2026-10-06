@@ -37,7 +37,7 @@ type stopEntryHost struct {
 }
 
 var errHostRemovalUnavailable = errors.New("test host: entity removal unavailable")
-var errHostCommitUnavailable = errors.New("test host: owned spawn commit unavailable")
+var errHostCommitUnavailable = errors.New("test host: owned summon commit unavailable")
 
 func (host *stopEntryHost) RemoveOwnedEntitiesForMatchEnd() error {
 	if host.failRemovals {
@@ -53,12 +53,12 @@ func (host *stopEntryHost) RemoveOwnedEntitiesByProgram(programID string) error 
 	return host.MemoryHost.RemoveOwnedEntitiesByProgram(programID)
 }
 
-func (host *stopEntryHost) CommitOwnedSpawn(transactionID OwnedSpawnTransactionID) error {
+func (host *stopEntryHost) CommitOwnedSummon(transactionID OwnedSummonTransactionID) error {
 	if host.failCommit {
 		host.failCommit = false
 		return errHostCommitUnavailable
 	}
-	return host.MemoryHost.CommitOwnedSpawn(transactionID)
+	return host.MemoryHost.CommitOwnedSummon(transactionID)
 }
 
 // stopEntryRun 是一个入口被触发之后的现场：被拒绝停止的衍生物、入口返回的错误。
@@ -82,14 +82,14 @@ type spawnStopEntry struct {
 	trigger func(t *testing.T) stopEntryRun
 }
 
-// 寿命 100 tick 的 summon，cancel 回调计数；寿命要长，避免到期回收在观察窗口里替入口再停一次。
+// 寿命 100 tick 的 minion 衍生物，cancel 回调计数；寿命要长，避免到期回收在观察窗口里替入口再停一次。
 var longSummonWithCountingCancel = strings.Replace(summonWithCountingCancel, `"duration_ticks":10`, `"duration_ticks":100`, 1)
 
 func newStopEntryHost(environment CompileEnvironment) *stopEntryHost {
 	return &stopEntryHost{stopRetryHost: &stopRetryHost{MemoryHost: runtimeTestHost(environment)}}
 }
 
-// handedOffSummon 起一个 tap 施法：召出长寿命 summon 后立即 finish，summon 移交给 Runtime 推进。
+// handedOffSummon 起一个 tap 施法：召出带长寿命 minion 衍生物的陷阱后立即 finish，衍生物移交给 Runtime 推进。
 func handedOffSummon(t *testing.T, id string) (*Runtime, *stopEntryHost, *Program, SpawnID) {
 	t.Helper()
 	program, environment := compileRuntimeJSON(t, asyncSkillJSON(id, `{"type":"entity"}`, `{"flow":"sequence","steps":[`+longSummonWithCountingCancel+`,{"flow":"finish"}]}`))
@@ -101,12 +101,12 @@ func handedOffSummon(t *testing.T, id string) (*Runtime, *stopEntryHost, *Progra
 	}
 	spawn := onlySpawnOfCast(t, runtime, castID)
 	if !spawn.handedOff {
-		t.Fatalf("summon not handed off after the cast finished")
+		t.Fatalf("minion spawn not handed off after the cast finished")
 	}
 	return runtime, host, program, spawn.ID
 }
 
-// waitingSummon 起一个 tap 施法：召出长寿命 summon 后等 50 tick 再 finish，summon 在施法期间未移交。
+// waitingSummon 起一个 tap 施法：召出带长寿命 minion 衍生物的陷阱后等 50 tick 再 finish，衍生物在施法期间未移交。
 func waitingSummon(t *testing.T, id, window string) (*Runtime, *stopEntryHost, *Program, CastID, SpawnID) {
 	t.Helper()
 	activation := `{"type":"active","policy":{"mode":"tap"}` + window + `}`
@@ -121,9 +121,9 @@ func waitingSummon(t *testing.T, id, window string) (*Runtime, *stopEntryHost, *
 	return runtime, host, program, castID, onlySpawnOfCast(t, runtime, castID).ID
 }
 
-func despawnLifecycle(t *testing.T, host *stopEntryHost, program *Program, spawn *SpawnInstance) {
+func dismissLifecycle(t *testing.T, host *stopEntryHost, program *Program, spawn *SpawnInstance) {
 	t.Helper()
-	if _, err := host.MemoryHost.Apply(EffectCommand{Payload: OwnedEntityCommand{Owner: 1, GameplayDigest: program.identity.gameplayDigest, Target: spawn.LifecycleEntity, Command: "despawn"}}); err != nil {
+	if _, err := host.MemoryHost.Apply(EffectCommand{Payload: OwnedEntityCommand{Owner: 1, GameplayDigest: program.identity.gameplayDigest, Target: spawn.LifecycleEntity, Command: "dismiss"}}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -157,7 +157,7 @@ var spawnStopEntries = []spawnStopEntry{
 		},
 	},
 	{
-		// summon 的 enter 回调付不起 500 mana：startEntitySpawn 停掉刚起的 summon（StopCauseFailure，不跑回调）。
+		// minion 衍生物的 enter 回调付不起 500 mana：startEntitySpawn 停掉刚起的衍生物（StopCauseFailure，不跑回调）。
 		name:    "failed spawn start",
 		callers: []string{"startEntitySpawn"},
 		wantErr: []error{ErrInsufficientResource, errHostStopUnavailable}, callback: "owned_spawn_callback_cancel", wantCallbacks: 0,
@@ -169,15 +169,15 @@ var spawnStopEntries = []spawnStopEntry{
 			runtime := NewRuntime(host, RuntimeOptions{})
 			id, err := runtime.Start(program, CastInput{Caster: 1, Target: 2})
 			if id == 0 {
-				t.Fatalf("start = (0, %v): the cast whose summon the host refused to stop must be kept (RR-21)", err)
+				t.Fatalf("start = (0, %v): the cast whose minion spawn the host refused to stop must be kept (RR-21)", err)
 			}
 			return stopEntryRun{runtime: runtime, host: host, spawnID: onlySpawnOfCast(t, runtime, id).ID, err: err}
 		},
 	},
 	{
-		// 宿主提交 owned 实体事务失败：executeOwnedSpawn 停掉本次已起的 summon（StopCauseFailure，不跑回调）。
-		name:    "failed owned spawn commit",
-		callers: []string{"executeOwnedSpawn"},
+		// 宿主提交 owned 实体事务失败：executeOwnedSummon 停掉本次已起的 minion 衍生物（StopCauseFailure，不跑回调）。
+		name:    "failed owned summon commit",
+		callers: []string{"executeOwnedSummon"},
 		wantErr: []error{errHostCommitUnavailable, errHostStopUnavailable}, callback: "owned_spawn_callback_cancel", wantCallbacks: 0,
 		trigger: func(t *testing.T) stopEntryRun {
 			program, environment := compileRuntimeJSON(t, asyncSkillJSON("stopentry.commitfail", `{"type":"entity"}`, `{"flow":"sequence","steps":[`+longSummonWithCountingCancel+`,{"flow":"finish"}]}`))
@@ -186,7 +186,7 @@ var spawnStopEntries = []spawnStopEntry{
 			runtime := NewRuntime(host, RuntimeOptions{})
 			id, err := runtime.Start(program, CastInput{Caster: 1, Target: 2})
 			if id == 0 {
-				t.Fatalf("start = (0, %v): the cast whose summon the host refused to stop must be kept (RR-21)", err)
+				t.Fatalf("start = (0, %v): the cast whose minion spawn the host refused to stop must be kept (RR-21)", err)
 			}
 			return stopEntryRun{runtime: runtime, host: host, spawnID: onlySpawnOfCast(t, runtime, id).ID, err: err}
 		},
@@ -199,7 +199,7 @@ var spawnStopEntries = []spawnStopEntry{
 		wantErr: []error{errHostStopUnavailable}, callback: "owned_spawn_callback_cancel", wantCallbacks: 1,
 		trigger: func(t *testing.T) stopEntryRun {
 			runtime, host, program, castID, spawnID := waitingSummon(t, "handoff", "")
-			despawnLifecycle(t, host, program, runtime.spawns[spawnID])
+			dismissLifecycle(t, host, program, runtime.spawns[spawnID])
 			host.failStops = 1
 			runtime.mutex.Lock()
 			runtime.beginStateMutationLocked()
@@ -216,14 +216,14 @@ var spawnStopEntries = []spawnStopEntry{
 		wantErr: []error{errHostStopUnavailable}, callback: "owned_spawn_callback_cancel", wantCallbacks: 1,
 		trigger: func(t *testing.T) stopEntryRun {
 			runtime, host, program, _, spawnID := waitingSummon(t, "reap", "")
-			despawnLifecycle(t, host, program, runtime.spawns[spawnID])
+			dismissLifecycle(t, host, program, runtime.spawns[spawnID])
 			host.failStops = 1
 			err := runtime.Advance(1)
 			return stopEntryRun{runtime: runtime, host: host, spawnID: spawnID, err: err}
 		},
 	},
 	{
-		// 移交后的 summon 到期：tick 驱动的回收（terminateOwnedSpawn，跑 end 回调；RR-20261006-31）。
+		// 移交后的 minion 衍生物到期：tick 驱动的回收（terminateOwnedSpawn，跑 end 回调；RR-20261006-31）。
 		name:    "handed-off spawn expiry",
 		callers: []string{"terminateOwnedSpawn"},
 		wantErr: []error{errHostStopUnavailable}, callback: "owned_spawn_callback_end", wantCallbacks: 1,
@@ -245,7 +245,7 @@ var spawnStopEntries = []spawnStopEntry{
 		},
 	},
 	{
-		// 宿主故障：停不下 summon，也删不掉程序的实体。
+		// 宿主故障：停不下 minion 衍生物，也删不掉程序的实体。
 		name:    "RemoveProgram",
 		callers: []string{"RemoveProgram"},
 		wantErr: []error{errHostStopUnavailable}, callback: "owned_spawn_callback_cancel", wantCallbacks: 1,
@@ -257,7 +257,7 @@ var spawnStopEntries = []spawnStopEntry{
 		},
 	},
 	{
-		// 宿主故障：停不下 summon，比赛结束的实体清理也失败。
+		// 宿主故障：停不下 minion 衍生物，比赛结束的实体清理也失败。
 		name:    "Shutdown",
 		callers: []string{"Shutdown"},
 		wantErr: []error{errHostStopUnavailable}, callback: "owned_spawn_callback_cancel", wantCallbacks: 1,

@@ -10,7 +10,7 @@ import (
 // docs/feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md）。
 //
 // 一个值位点在 Runtime 里总是在某个“求值上下文”里求值：施法流程、memory 默认值、三个缓存型
-// 快照的采样点、spawn 衍生物的每一步、衍生物回调、持久状态默认值。各上下文能读到的引用不同
+// 快照的采样点、衍生物的每一步、衍生物回调、持久状态默认值。各上下文能读到的引用不同
 // （移交后的衍生物没有施法的输入 / memory / 局部变量，施法流程没有 `$owner` / `$event.*`，
 // 采样点上还没有流程局部变量……）。此前编译期只有一套作用域（施法作用域 + 回调作用域），
 // 其余规则按 pass 各写一份（NC-211 / NC-220 / NC-221 / NC-223 / NC-224），每加一个上下文
@@ -38,7 +38,7 @@ type evalContext uint8
 
 const (
 	// evalCastFlow：施法流程。phase 事件流程与 effect result 分支、costs / sustain costs、
-	// windup / recovery 表达式、spawn 的位置 / 属性覆盖 / 参数，以及 spawn 衍生物的 numeric
+	// windup / recovery 表达式、召唤效果（summon）的位置 / 属性覆盖 / 参数，以及衍生物的 numeric
 	// track 初值与绑定到衍生物数值属性的 motion 字段（衍生物启动时用施法求一次）。
 	evalCastFlow evalContext = iota
 	// evalMemoryDefault：memory 默认值。Activate 按槽位顺序求值，早于 cast_start 采样。
@@ -48,15 +48,15 @@ const (
 	evalCastStartCapture
 	// evalPhaseStartCapture：phase_start 读取的实体，在每次进入 phase、执行 enter 之前求值。
 	evalPhaseStartCapture
-	// evalSpawnStartCapture：spawn_start 读取的实体，在 spawn 衍生物启动时、脱离施法的衍生物
+	// evalSpawnStartCapture：spawn_start 读取的实体，在衍生物启动时、脱离施法的衍生物
 	// 上下文里求值（captureOwnedSpawnSnapshots）。
 	evalSpawnStartCapture
-	// evalSpawnStep：spawn 衍生物每一步重新求值的字段（area 选择、follow / tracking / carry
+	// evalSpawnStep：衍生物每一步重新求值的字段（area 选择、follow / tracking / carry
 	// 目标、path 点、orbit 锚点、parabola 目的地、未绑定到衍生物数值属性的数值字段）。启动那一步
 	// 用施法本身求值，之后每一步用移交后的衍生物（detachedSpawnCast）求值，表里的引用必须在
 	// 两者里都能求出。
 	evalSpawnStep
-	// evalSpawnCallback：spawn 的 `on.*` 回调。启动时与移交后都在衍生物上下文里执行。
+	// evalSpawnCallback：衍生物的 `on.*` 回调。启动时与移交后都在衍生物上下文里执行。
 	evalSpawnCallback
 	// evalStateDefault：持久状态的默认值。在读 / 写这条状态的位置求值，那个位置可能是上面
 	// 任何一个上下文，所以只能用在所有上下文里都求得出的引用。
@@ -173,7 +173,7 @@ var (
 const (
 	evalNoLocalsYet       = "采样点上还没有流程局部变量（RR-20261005-NC-220）"
 	evalNoCastInSpawn     = "移交后的衍生物没有施法的输入、memory 与局部变量（RR-20261005-NC-224）"
-	evalCallbackOnly      = "只在 spawn 衍生物的回调与 spawn_start 采样里有"
+	evalCallbackOnly      = "只在衍生物的回调与 spawn_start 采样里有"
 	evalNotInMemoryInit   = "memory 默认值按槽位顺序求值，读另一个 memory 会读到未初始化的槽位（RR-20261005-NC-280）"
 	evalNotInStateDefault = "状态默认值在读 / 写处求值，那里可能是衍生物回调或衍生物字段，没有施法的输入与 memory（RR-20261005-NC-281）"
 	// 以下是 O33 收紧的格子（维护者第七轮决定）：此前编译通过、值随衍生物移交或求值位置漂移。
@@ -249,7 +249,7 @@ var evalReferenceTable = [evalRowCount]evalReferenceRow{
 		evalPhaseStartCapture: evalNone("可缺省：采样时没有 exists 守卫，缺省即失败（RR-20261005-NC-282）"),
 		evalSpawnStartCapture: evalNone(evalCallbackOnly),
 		evalSpawnStep: evalNone("衍生物字段每一步重新求值，移交后的衍生物没有施法的主目标（此前移交后漂移成 lifecycle 实体，O33 编译期拒绝）；" +
-			"改用施法流程里求一次的 spawn position（如 $input.target.position）把 lifecycle 实体放到目标处，" +
+			"改用施法流程里求一次的召唤效果 position（如 $input.target.position）把 lifecycle 实体放到目标处，" +
 			"或在回调里用 $lifecycle_entity / $event.target（如 on.tick 里 select from $lifecycle_entity 代替 area 选择）"),
 		evalSpawnCallback: evalNone("衍生物回调里没有施法的主目标，改用 $lifecycle_entity / $event.target"),
 		evalStateDefault: evalNone("状态默认值也在衍生物回调 / 衍生物字段里求值，那里没有施法的主目标（此前漂移成 lifecycle 实体，O33 编译期拒绝）；" +
@@ -280,7 +280,7 @@ var evalReferenceTable = [evalRowCount]evalReferenceRow{
 	evalRowCastMaxStock:         castStateRow("$cast.max_stock", quantityType(quantityCount), []castMode{castModeAmmo}, evalNone(evalCastStateInStep), evalNone(evalCastStateInState)),
 	evalRowOwner:                spawnRow("$owner", evalEntityType, true, false, evalAvail("衍生物的 owner（启动它的施法者）"), evalAvail("衍生物的 owner")),
 	evalRowOwnerPosition:        spawnRow("$owner.position", evalPositionType, false, false, evalAvail("（采样点只求实体）"), evalAvail("owner 求值时刻的位置")),
-	evalRowLifecycleEntity:      spawnRow("$lifecycle_entity", evalEntityType, true, false, evalAvail("spawn 出的 lifecycle 实体"), evalAvail("spawn 出的 lifecycle 实体")),
+	evalRowLifecycleEntity:      spawnRow("$lifecycle_entity", evalEntityType, true, false, evalAvail("召唤出的 lifecycle 实体"), evalAvail("召唤出的 lifecycle 实体")),
 	evalRowSpawn:                spawnRow("$spawn", valueType{Base: valueKindSpawn}, false, false, evalAvail("（采样点只求实体）"), evalAvail("当前衍生物（modify_spawn 只认它）")),
 	evalRowEventSource:          spawnRow("$event.source", evalEntityType, true, false, evalAvail("衍生物启动事件的 source（O28：不是之后每次回调的事件）"), evalAvail("触发本次回调的事件的 source")),
 	evalRowEventOwner:           spawnRow("$event.owner", evalEntityType, true, false, evalAvail("衍生物启动事件的 owner（O28）"), evalAvail("触发本次回调的事件的 owner")),

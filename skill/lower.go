@@ -500,7 +500,7 @@ func (c *loweringContext) lowerFilters(filters []filterIR, scope lowerScope) []f
 			result = append(result, filterProgram{kind: "source_skill", text: typed.skill})
 		case *ownedSourceCastFilterIR:
 			result = append(result, filterProgram{kind: "source_cast", cast: typed.cast})
-		case *ownedSpawnTickFilterIR:
+		case *ownedSummonTickFilterIR:
 			result = append(result, filterProgram{kind: typed.kind, tick: typed.tick})
 		case *ownedUnitTemplateFilterIR:
 			result = append(result, filterProgram{kind: "unit_template", template: c.unitTemplateHandle(typed.template)})
@@ -635,16 +635,16 @@ func (c *loweringContext) lowerEffect(header operationHeader, flow *effectFlowIR
 	case *modifySpawnEffectIR:
 		policy := c.lookupSpawnProperty(effect.property)
 		return modifySpawnOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, spawn: c.lowerValue(effect.spawn, scope), property: policy.Handle, operation: c.lowerSpawnNumericOperation(effect.operation), value: c.lowerValue(effect.value, scope), overTicks: effect.overTicks}
-	case *spawnEffectIR:
-		overrides := make([]spawnAttributeOverrideProgram, len(effect.attributeOverrides))
+	case *summonEffectIR:
+		overrides := make([]summonAttributeOverrideProgram, len(effect.attributeOverrides))
 		for index, override := range effect.attributeOverrides {
-			overrides[index] = spawnAttributeOverrideProgram{attribute: c.attributeHandle(override.attribute), value: c.lowerValue(override.value, scope)}
+			overrides[index] = summonAttributeOverrideProgram{attribute: c.attributeHandle(override.attribute), value: c.lowerValue(override.value, scope)}
 		}
-		parameters := make([]spawnParameterBindingProgram, len(effect.parameterBindings))
+		parameters := make([]summonParameterBindingProgram, len(effect.parameterBindings))
 		for index, binding := range effect.parameterBindings {
-			parameters[index] = spawnParameterBindingProgram{name: binding.name, value: c.lowerValue(binding.value, scope)}
+			parameters[index] = summonParameterBindingProgram{name: binding.name, value: c.lowerValue(binding.value, scope)}
 		}
-		return spawnOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, template: c.unitTemplateHandle(effect.template), position: c.lowerValue(effect.position, scope), count: effect.count, durationTicks: effect.durationTicks, attributeOverrides: overrides, parameterBindings: parameters}
+		return summonOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, template: c.unitTemplateHandle(effect.template), position: c.lowerValue(effect.position, scope), count: effect.count, durationTicks: effect.durationTicks, attributeOverrides: overrides, parameterBindings: parameters}
 	case *entityCommandEffectIR:
 		operation := entityCommandOperation{operationHeader: header, effectContinuations: continuations, effectIndex: effectIndex, target: c.lowerValue(effect.target, scope), command: effect.command, behavior: effect.behavior}
 		if effect.position != nil {

@@ -12,10 +12,10 @@ import (
 //     采样点求值，编译期却按读取所在位置检查；
 //   - NC-221：被动技能的输入只来自触发事件的 target、proc 深度按 `ProcDepth >= max_depth`
 //     压制，编译期不查这两个前提；
-//   - NC-222：只有 spawn 会启动衍生物，其他效果上的 `spawn` / `on` 编译后被丢弃。
+//   - NC-222：只有召唤效果（summon）会启动衍生物，其他效果上的 `spawn` / `on` 编译后被丢弃。
 
 func captureSpawn(tick string) string {
-	return `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":3},"spawn":{"kind":"area","duration_ticks":3,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":` + tick + `}}`
+	return `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":3},"spawn":{"kind":"area","duration_ticks":3,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":` + tick + `}}`
 }
 
 func captureRead(entity, point string) string {
@@ -29,9 +29,9 @@ func captureDamage(target, amount string) string {
 const captureHoldPosition = `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$event.target","command":"hold_position"}}`
 
 // RR-20261005-NC-220：缓存型快照点只能读采样点上可求值的实体。旧实现：
-//   - spawn_start 写在 phase 流程里也能编译。施法里有 owned spawn 时，衍生物启动按
+//   - spawn_start 写在 phase 流程里也能编译。施法里有召唤效果时，衍生物启动按
 //     spawn_start 采样全部计划，在脱离施法的衍生物上下文里求 `$input.target` /
-//     `$memory.x`，每次施法 ErrProgramInvariant；没有 spawn 时退化成“第一次读到的值”。
+//     `$memory.x`，每次施法 ErrProgramInvariant；没有召唤效果时退化成“第一次读到的值”。
 //   - 实体引用 `$local.*` 的缓存型读取在采样点没有局部变量，旧实现前面的 pass 不查，
 //     落到 lower 报 LOWER_UNRESOLVED（定位在 `$`，看不出是哪一处读取）。
 func TestCompileRejectsSnapshotsThatCannotBeCapturedWhereTheyAreRead(t *testing.T) {
@@ -40,13 +40,13 @@ func TestCompileRejectsSnapshotsThatCannotBeCapturedWhereTheyAreRead(t *testing.
 	}
 	enter := agreementEnterPath
 	requireAgreementRejected(t, []agreementCase{
-		{"spawn_start of an input in the phase flow with an owned spawn",
+		{"spawn_start of an input in the phase flow with a summon",
 			agreementSkillJSON("entity", "{}", "[]", agreementSteps(captureDamage("$input.target", captureRead("$input.target", "spawn_start")), captureSpawn(captureHoldPosition))),
 			string(DiagnosticAttributeSnapshotInvalid), enter + ".effect.amount.read_attribute.snapshot"},
-		{"spawn_start of a memory entity in the phase flow with an owned spawn",
+		{"spawn_start of a memory entity in the phase flow with a summon",
 			agreementSkillJSON("none", `{"who":{"type":"entity","default":"$caster"}}`, "[]", agreementSteps(captureDamage("$caster", captureRead("$memory.who", "spawn_start")), captureSpawn(captureHoldPosition))),
 			string(DiagnosticAttributeSnapshotInvalid), enter + ".effect.amount.read_attribute.snapshot"},
-		{"spawn_start in the phase flow without any spawn",
+		{"spawn_start in the phase flow without any summon",
 			agreementSkillJSON("entity", "{}", "[]", agreementSteps(captureDamage("$input.target", captureRead("$caster", "spawn_start")))),
 			string(DiagnosticAttributeSnapshotInvalid), enter + ".effect.amount.read_attribute.snapshot"},
 		{"cast_start of a select local",
@@ -153,10 +153,10 @@ func TestPassivesWithEventInputsStillActivate(t *testing.T) {
 	}
 }
 
-// RR-20261005-NC-222：只有 spawn 会启动实体衍生物（`executeOwnedSpawn` →
+// RR-20261005-NC-222：只有召唤效果会启动实体衍生物（`executeOwnedSummon` →
 // `startEntitySpawn`）。旧实现里其他效果上的 `spawn` / `on` 照样编译、lower 成衍生物
 // 模板（presentation plan 里还会出现衍生物挂载点），但 Runtime 从不启动，回调从不执行。
-func TestCompileRejectsSpawnsOnEffectsThatDoNotSpawn(t *testing.T) {
+func TestCompileRejectsSpawnsOnEffectsThatDoNotSummon(t *testing.T) {
 	spawn := `"spawn":{"kind":"area","duration_ticks":2,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}}`
 	callbacks := `"on":{"enter":{"flow":"effect","effect":{"type":"heal","target":"$event.target","amount":1}}}`
 	damage := `{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"}`
@@ -201,17 +201,17 @@ func TestReadsOfALocalEntityAtNonCachedPointsCompileAndRun(t *testing.T) {
 	}
 }
 
-// RR-20261005-NC-224：spawn 的衍生物字段（area 选择、motion、numeric track）在衍生物启动那一步
+// RR-20261005-NC-224：召唤效果上衍生物的字段（area 选择、motion、numeric track）在衍生物启动那一步
 // 用施法求值，之后每一步用 detachedSpawnCast 求值——那里没有施法的输入、memory 与局部变量
 // （AI 生成约束写明“Entity-scoped spawns cannot read expired Cast memory or input”，但
 // 只对回调检查了）。旧实现按施法作用域检查这些字段：能编译，Activate 正常，下一 tick 起
 // Advance 返回 ErrProgramInvariant（N09 第五批补的性质测试种子变异出 area.from=$input.target）。
 func TestCompileRejectsCastValuesInOwnedSpawnFields(t *testing.T) {
 	areaFrom := func(from string) string {
-		return `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":3},"spawn":{"kind":"area","duration_ticks":3,"interval_ticks":1,"area":{"from":"` + from + `","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}}}`
+		return `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":3},"spawn":{"kind":"area","duration_ticks":3,"interval_ticks":1,"area":{"from":"` + from + `","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}}}`
 	}
 	projectile := func(motion string) string {
-		return `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":5},"spawn":{"kind":"projectile","duration_ticks":5,"motion":` + motion + `}}`
+		return `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":5},"spawn":{"kind":"projectile","duration_ticks":5,"motion":` + motion + `}}`
 	}
 	eachTarget := func(do string) string {
 		return `{"flow":"select","select":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[],"order":{"by":"stable_id","direction":"asc"},"limit":1},"consume":{"mode":"each","as":"t","do":` + do + `}}`
@@ -228,8 +228,8 @@ func TestCompileRejectsCastValuesInOwnedSpawnFields(t *testing.T) {
 
 // RR-20261005-NC-224 的控制：`$caster` 系列在启动与移交后都是施法者，照常编译并跑满衍生物时长。
 func TestOwnedSpawnFieldsReadingTheCasterStillRun(t *testing.T) {
-	area := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":3},"spawn":{"kind":"area","duration_ticks":3,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":` + captureDamage("$event.target", "1") + `}}`
-	tracking := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":5},"spawn":{"kind":"projectile","duration_ticks":5,"motion":{"frame":{"type":"world"},"steering":{"type":"tracking","target":"$caster","duration_ticks":3},"trajectory":{"type":"linear","speed":1},"completion":{"type":"end"}}}}`
+	area := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":3},"spawn":{"kind":"area","duration_ticks":3,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":` + captureDamage("$event.target", "1") + `}}`
+	tracking := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":5},"spawn":{"kind":"projectile","duration_ticks":5,"motion":{"frame":{"type":"world"},"steering":{"type":"tracking","target":"$caster","duration_ticks":3},"trajectory":{"type":"linear","speed":1},"completion":{"type":"end"}}}}`
 	for name, steps := range map[string]string{"area": area, "tracking": tracking} {
 		t.Run(name, func(t *testing.T) {
 			program, diagnostics := Compile(mustParseJSON(t, agreementSkillJSON("none", "{}", "[]", agreementSteps(steps))), DefaultCompileEnvironment())

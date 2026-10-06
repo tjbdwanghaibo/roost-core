@@ -216,7 +216,7 @@ func presentationAnchorFromCommand(cast *castInstance, payload EffectCommandPayl
 		anchor.Target = command.Target
 		position := command.Toward
 		anchor.Position = &position
-	case SpawnCommand:
+	case SummonCommand:
 		anchor.Source = command.Owner
 		position := command.Position
 		anchor.Position = &position

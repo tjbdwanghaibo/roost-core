@@ -18,7 +18,7 @@ import (
 )
 
 // visualAreaSpawn 召出一个带 area 视觉的衍生物：lifecycle 实体是新生成的陷阱，不是施法目标。
-const visualAreaSpawn = `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":8},"spawn":{"kind":"area","duration_ticks":8,"interval_ticks":1,"visual":{"category":"area","theme":"default","elements":["default"]},"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}}}`
+const visualAreaSpawn = `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":8},"spawn":{"kind":"area","duration_ticks":8,"interval_ticks":1,"visual":{"category":"area","theme":"default","elements":["default"]},"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}}}`
 
 func visualSpawnSkill(id, then string) string {
 	return `{"schema":"roost.skill/v2","id":"` + id + `","name":"Visual Area","description":"A continuing spawn visual.","presentation":{"icon_keywords":["flare","blade","spark"]},"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{"flow":"sequence","steps":[` + visualAreaSpawn + `,` + then + `]}}}]}`
@@ -62,7 +62,7 @@ func TestPresentationResetSpawnEntryMatchesItsIncrementalEvent(t *testing.T) {
 			}
 			lifecycle := latest.Anchor.Target
 			if lifecycle == 0 || lifecycle == 2 {
-				t.Fatalf("spawn lifecycle entity = %d, want the spawned trap (not the cast target 2)", lifecycle)
+				t.Fatalf("spawn lifecycle entity = %d, want the summoned trap (not the cast target 2)", lifecycle)
 			}
 
 			// 1. 交给策略的事件形状：除序号 / tick / 类型外与 Runtime 的增量一致。

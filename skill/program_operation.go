@@ -188,8 +188,8 @@ func operationKind(value operation) string {
 		return "state"
 	case abilityStateOperation:
 		return "ability_state"
-	case spawnOperation:
-		return "spawn"
+	case summonOperation:
+		return "summon"
 	case entityCommandOperation:
 		return "entity_command"
 	case teleportOperation:

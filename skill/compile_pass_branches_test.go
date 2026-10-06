@@ -87,7 +87,7 @@ func TestRandomPassBranches(t *testing.T) {
 		}
 	})
 	t.Run("area order cannot be random", func(t *testing.T) {
-		area := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":2},"spawn":{"kind":"area","duration_ticks":2,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[],"order":{"by":"random","direction":"asc"},"limit":2}}}`
+		area := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":2},"spawn":{"kind":"area","duration_ticks":2,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[],"order":{"by":"random","direction":"asc"},"limit":2}}}`
 		requireAgreementRejected(t, []agreementCase{{"random area", agreementSkillJSON("none", "{}", "[]", agreementSteps(area)), string(DiagnosticShapeInvalid), agreementEnterPath + ".spawn.area.order"}})
 	})
 	t.Run("runtime order is seeded and limit applies after shuffling", func(t *testing.T) {
@@ -163,7 +163,7 @@ func TestGraphPassBranchesRunEveryReachablePhase(t *testing.T) {
 }
 
 // effect_result：没有即时结果的效果、带回调的衍生物效果、会挂起的分支都不能声明 result；
-// 结果槽位受预算限制。spawn + 无回调衍生物写在 result 分支里能编译并执行（O28）。
+// 结果槽位受预算限制。summon + 无回调衍生物写在 result 分支里能编译并执行（O28）。
 func TestEffectResultPassBranches(t *testing.T) {
 	wait := `{"flow":"wait","ticks":1,"then":{"flow":"finish"}}`
 	repeat := `{"flow":"repeat","times":2,"interval_ticks":1,"index_as":"i","do":{"flow":"finish"}}`
@@ -171,12 +171,12 @@ func TestEffectResultPassBranches(t *testing.T) {
 	damageThen := func(success string) string {
 		return `{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":1,"damage_type":"physical"},"result":{"as":"r","success":` + success + `,"failure":{"flow":"finish"}}}`
 	}
-	spawnWithCallbacks := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":2},"on":{"enter":{"flow":"effect","effect":{"type":"heal","target":"$event.target","amount":1}}},"result":{"as":"r","success":{"flow":"finish"}}}`
+	summonWithCallbacks := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":2},"on":{"enter":{"flow":"effect","effect":{"type":"heal","target":"$event.target","amount":1}}},"result":{"as":"r","success":{"flow":"finish"}}}`
 	requireAgreementRejected(t, []agreementCase{
 		{"resource has no result", agreementSkillJSON("none", "{}", "[]", agreementSteps(resource)), string(DiagnosticShapeInvalid), agreementEnterPath + ".result"},
 		{"wait in a result branch", agreementSkillJSON("entity", "{}", "[]", agreementSteps(damageThen(wait))), string(DiagnosticShapeInvalid), agreementEnterPath + ".result.success"},
 		{"timed repeat in a result branch", agreementSkillJSON("entity", "{}", "[]", agreementSteps(damageThen(repeat))), string(DiagnosticShapeInvalid), agreementEnterPath + ".result.success"},
-		{"spawn effect with a result", agreementSkillJSON("none", "{}", "[]", agreementSteps(spawnWithCallbacks)), string(DiagnosticShapeInvalid), agreementEnterPath + ".result"},
+		{"summon effect with a result", agreementSkillJSON("none", "{}", "[]", agreementSteps(summonWithCallbacks)), string(DiagnosticShapeInvalid), agreementEnterPath + ".result"},
 	})
 	t.Run("result slot budget", func(t *testing.T) {
 		environment := DefaultCompileEnvironment()
@@ -186,8 +186,8 @@ func TestEffectResultPassBranches(t *testing.T) {
 		_, diagnostics := Compile(mustParseJSON(t, input), environment)
 		requireDiagnosticAt(t, diagnostics, DiagnosticBudgetExceeded, "$")
 	})
-	t.Run("spawn with a spawn inside a result branch runs", func(t *testing.T) {
-		spawn := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":2},"spawn":{"kind":"area","duration_ticks":2,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}}}`
+	t.Run("summon with a spawn inside a result branch runs", func(t *testing.T) {
+		spawn := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":2},"spawn":{"kind":"area","duration_ticks":2,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}}}`
 		program := branchCompile(t, agreementSkillJSON("entity", "{}", "[]", agreementSteps(damageThen(spawn))))
 		runtime := branchRun(t, program, branchHost(t, DefaultCompileEnvironment()), CastInput{Caster: 1, Target: 2}, 0)
 		if started := runtime.OwnedSpawns(1); len(started) != 1 || started[0].Status != SpawnRunning {

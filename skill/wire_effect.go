@@ -165,7 +165,7 @@ type ModifySpawnEffectDefinition struct {
 
 func (ModifySpawnEffectDefinition) effectDefinition() {}
 
-type SpawnEffectDefinition struct {
+type SummonEffectDefinition struct {
 	Template           string
 	Position           Value
 	Count              int
@@ -174,11 +174,11 @@ type SpawnEffectDefinition struct {
 	ParameterBindings  map[string]Value
 }
 
-func (SpawnEffectDefinition) effectDefinition() {}
+func (SummonEffectDefinition) effectDefinition() {}
 
-type DespawnEffectDefinition struct{ Target Value }
+type DismissEffectDefinition struct{ Target Value }
 
-func (DespawnEffectDefinition) effectDefinition() {}
+func (DismissEffectDefinition) effectDefinition() {}
 
 type IssueEntityCommandEffectDefinition struct {
 	Target       Value
@@ -531,7 +531,7 @@ func decodeEffect(data []byte) (EffectDefinition, error) {
 			return nil, err
 		}
 		return ModifySpawnEffectDefinition{Spawn: values[0], Property: raw.Property, Operation: raw.Operation, Value: values[1], OverTicks: raw.OverTicks}, nil
-	case "spawn":
+	case "summon":
 		var raw struct {
 			Type               string                     `json:"type"`
 			Template           string                     `json:"template"`
@@ -556,8 +556,8 @@ func decodeEffect(data []byte) (EffectDefinition, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parameter_bindings: %w", err)
 		}
-		return SpawnEffectDefinition{Template: raw.Template, Position: position, Count: raw.Count, DurationTicks: raw.DurationTicks, AttributeOverrides: overrides, ParameterBindings: parameters}, nil
-	case "despawn":
+		return SummonEffectDefinition{Template: raw.Template, Position: position, Count: raw.Count, DurationTicks: raw.DurationTicks, AttributeOverrides: overrides, ParameterBindings: parameters}, nil
+	case "dismiss":
 		var raw struct {
 			Type   string          `json:"type"`
 			Target json.RawMessage `json:"target"`
@@ -569,7 +569,7 @@ func decodeEffect(data []byte) (EffectDefinition, error) {
 		if err != nil {
 			return nil, err
 		}
-		return DespawnEffectDefinition{Target: target}, nil
+		return DismissEffectDefinition{Target: target}, nil
 	case "issue_entity_command":
 		var raw struct {
 			Type         string          `json:"type"`

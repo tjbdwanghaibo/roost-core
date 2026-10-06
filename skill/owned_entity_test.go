@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestOwnedEntitySpawnRegistersAuthoritativeIdentityAndTypedResult(t *testing.T) {
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":2,"duration_ticks":10},"result":{"as":"spawned","success":{"flow":"if","condition":{"op":"eq","args":["$local.spawned.first_entity","$local.spawned.first_entity"]},"then":{"flow":"finish"},"else":{"flow":"finish"}},"failure":{"flow":"finish"}}},{"flow":"finish"}]}`
+func TestOwnedEntitySummonRegistersAuthoritativeIdentityAndTypedResult(t *testing.T) {
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":2,"duration_ticks":10},"result":{"as":"summoned","success":{"flow":"if","condition":{"op":"eq","args":["$local.summoned.first_entity","$local.summoned.first_entity"]},"then":{"flow":"finish"},"else":{"flow":"finish"}},"failure":{"flow":"finish"}}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "identity", flow)
 	host := runtimeTestHost(environment)
 	runtime := NewRuntime(host, RuntimeOptions{})
@@ -20,7 +20,7 @@ func TestOwnedEntitySpawnRegistersAuthoritativeIdentityAndTypedResult(t *testing
 		t.Fatalf("records=%#v", records)
 	}
 	for index, record := range records {
-		if record.Owner != 1 || record.GameplayDigest != program.identity.gameplayDigest || record.SourceSkillID != program.id || record.SourceCastID != castID || record.SourceEffectIndex != 0 || record.Template != 1 || record.SpawnSequence != uint64(index+1) || record.SpawnTick != 0 || record.LifetimeTicks != 10 {
+		if record.Owner != 1 || record.GameplayDigest != program.identity.gameplayDigest || record.SourceSkillID != program.id || record.SourceCastID != castID || record.SourceEffectIndex != 0 || record.Template != 1 || record.SummonSequence != uint64(index+1) || record.SummonTick != 0 || record.LifetimeTicks != 10 {
 			t.Fatalf("record[%d]=%#v", index, record)
 		}
 	}
@@ -30,7 +30,7 @@ func TestOwnedEntitySpawnRegistersAuthoritativeIdentityAndTypedResult(t *testing
 	}
 }
 
-func TestOwnedEntitySpawnBindingsAreTypedClampedAndCapabilityChecked(t *testing.T) {
+func TestOwnedEntitySummonBindingsAreTypedClampedAndCapabilityChecked(t *testing.T) {
 	environment := DefaultCompileEnvironment()
 	template := &environment.Gameplay.UnitTemplates.Entries[0]
 	template.AllowedAttributeOverrides = []UnitTemplateAttributeOverridePolicy{{Attribute: 2, Minimum: 10, Maximum: 100}}
@@ -41,8 +41,8 @@ func TestOwnedEntitySpawnBindingsAreTypedClampedAndCapabilityChecked(t *testing.
 	}
 	template.DynamicCollider = true
 	environment.Digest = authorityDigest(environment)
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10,"attribute_overrides":{"ability_power":200},"parameter_bindings":{"start_position":"$caster.position","end_position":"$caster.position","length":999}}},{"flow":"finish"}]}`
-	json := `{"schema":"roost.skill/v2","id":"skill.test.owned.bindings","name":"Bindings","description":"Typed spawn bindings.","gameplay_tags":["spell"],"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10,"attribute_overrides":{"ability_power":200},"parameter_bindings":{"start_position":"$caster.position","end_position":"$caster.position","length":999}}},{"flow":"finish"}]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.owned.bindings","name":"Bindings","description":"Typed summon bindings.","gameplay_tags":["spell"],"activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
 	program, diagnostics := Compile(mustParseJSON(t, json), environment)
 	requireNoErrors(t, diagnostics)
 	host := runtimeTestHost(environment)
@@ -92,9 +92,9 @@ func TestOwnedEntitySpawnBindingsAreTypedClampedAndCapabilityChecked(t *testing.
 	})
 	t.Run("forged parameter quantity", func(t *testing.T) {
 		host := runtimeTestHost(environment)
-		command := ownedSpawnCommand(Position{})
+		command := ownedSummonCommand(Position{})
 		command.GameplayDigest = environment.Digest
-		command.ParameterBindings = []SpawnParameterBinding{{Name: "length", Value: IntRuntimeValue(5, quantityWorldDistance)}}
+		command.ParameterBindings = []SummonParameterBinding{{Name: "length", Value: IntRuntimeValue(5, quantityWorldDistance)}}
 		before := host.CurrentRevision()
 		if _, err := host.Apply(EffectCommand{Payload: command}); err != ErrHostContractViolation {
 			t.Fatalf("err=%v", err)
@@ -119,15 +119,15 @@ func TestOwnedReplacementPoliciesAreStableAndAtomic(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.policy, func(t *testing.T) {
 			host := ownedPolicyHost(test.policy, 2)
-			spawnOwnedForTest(t, host, Position{X: 0})
-			spawnOwnedForTest(t, host, Position{X: 100})
+			summonOwnedForTest(t, host, Position{X: 0})
+			summonOwnedForTest(t, host, Position{X: 100})
 			before := host.CurrentRevision()
-			result, err := host.Apply(EffectCommand{Payload: ownedSpawnCommand(Position{X: 10})})
+			result, err := host.Apply(EffectCommand{Payload: ownedSummonCommand(Position{X: 10})})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if test.policy == "reject_new" {
-				outcome := result.Payload.(SpawnEffectResult)
+				outcome := result.Payload.(SummonEffectResult)
 				if outcome.Succeeded || outcome.FailureReason != ExpectedFailureCapacityReached || host.CurrentRevision() != before {
 					t.Fatalf("reject result=%#v revision=%d/%d", result, host.CurrentRevision(), before)
 				}
@@ -140,8 +140,8 @@ func TestOwnedReplacementPoliciesAreStableAndAtomic(t *testing.T) {
 	}
 }
 
-func TestOwnedReplacementDistanceTieUsesSpawnSequenceThenEntityID(t *testing.T) {
-	records := []OwnedEntityMetadata{{Entity: 2, SpawnSequence: 2}, {Entity: 9, SpawnSequence: 1}}
+func TestOwnedReplacementDistanceTieUsesSummonSequenceThenEntityID(t *testing.T) {
+	records := []OwnedEntityMetadata{{Entity: 2, SummonSequence: 2}, {Entity: 9, SummonSequence: 1}}
 	entities := map[EntityID]MemoryEntity{2: {ID: 2, Position: Position{X: 10}}, 9: {ID: 9, Position: Position{X: -10}}}
 	sortOwnedReplacementCandidates(records, "replace_nearest", Position{}, entities)
 	if records[0].Entity != 9 {
@@ -158,9 +158,9 @@ func TestOwnedReplacementLimitsPerSourceSkillAndTeam(t *testing.T) {
 		host := NewMemoryHost(AuthorityIdentity{Revision: "test", Digest: "test"})
 		host.ConfigureGameplayCatalog(catalog)
 		host.UpsertEntity(MemoryEntity{ID: 1, Alive: true})
-		spawnOwnedForTest(t, host, Position{})
-		result, err := host.Apply(EffectCommand{Payload: ownedSpawnCommand(Position{X: 1})})
-		if err != nil || result.Payload.(SpawnEffectResult).FailureReason != ExpectedFailureCapacityReached || len(host.OwnedEntities(1)) != 1 {
+		summonOwnedForTest(t, host, Position{})
+		result, err := host.Apply(EffectCommand{Payload: ownedSummonCommand(Position{X: 1})})
+		if err != nil || result.Payload.(SummonEffectResult).FailureReason != ExpectedFailureCapacityReached || len(host.OwnedEntities(1)) != 1 {
 			t.Fatalf("source limit result=%#v err=%v", result, err)
 		}
 	})
@@ -174,15 +174,15 @@ func TestOwnedReplacementLimitsPerSourceSkillAndTeam(t *testing.T) {
 		host.ConfigureGameplayCatalog(catalog)
 		host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, TeamID: 7})
 		host.UpsertEntity(MemoryEntity{ID: 2, Alive: true, TeamID: 7})
-		first := ownedSpawnCommand(Position{})
-		if result, err := host.Apply(EffectCommand{Payload: first}); err != nil || !result.Payload.(SpawnEffectResult).Succeeded {
+		first := ownedSummonCommand(Position{})
+		if result, err := host.Apply(EffectCommand{Payload: first}); err != nil || !result.Payload.(SummonEffectResult).Succeeded {
 			t.Fatalf("first=%#v err=%v", result, err)
 		}
-		second := ownedSpawnCommand(Position{X: 1})
+		second := ownedSummonCommand(Position{X: 1})
 		second.Owner = 2
 		second.SourceSkillID = "other"
 		result, err := host.Apply(EffectCommand{Payload: second})
-		if err != nil || result.Payload.(SpawnEffectResult).FailureReason != ExpectedFailureCapacityReached || len(host.OwnedEntities(0)) != 1 {
+		if err != nil || result.Payload.(SummonEffectResult).FailureReason != ExpectedFailureCapacityReached || len(host.OwnedEntities(0)) != 1 {
 			t.Fatalf("team limit result=%#v err=%v", result, err)
 		}
 	})
@@ -193,7 +193,7 @@ func TestOwnedEntityOwnerDeathLifecyclePolicy(t *testing.T) {
 		policy      string
 		wantAtTick1 int
 	}{
-		{policy: "despawn", wantAtTick1: 0},
+		{policy: "dismiss", wantAtTick1: 0},
 		{policy: "persist_until_duration", wantAtTick1: 1},
 	} {
 		t.Run(test.policy, func(t *testing.T) {
@@ -202,7 +202,7 @@ func TestOwnedEntityOwnerDeathLifecyclePolicy(t *testing.T) {
 			host := NewMemoryHost(AuthorityIdentity{Revision: "test", Digest: "test"})
 			host.ConfigureGameplayCatalog(catalog)
 			host.UpsertEntity(MemoryEntity{ID: 1, Alive: true})
-			command := ownedSpawnCommand(Position{})
+			command := ownedSummonCommand(Position{})
 			command.DurationTicks = 3
 			if _, err := host.Apply(EffectCommand{Payload: command}); err != nil {
 				t.Fatal(err)
@@ -225,11 +225,11 @@ func TestOwnedEntityOwnerDeathLifecyclePolicy(t *testing.T) {
 }
 
 func TestOwnedEntitySelectFiltersAndStableOrder(t *testing.T) {
-	flow := `{"flow":"sequence","steps":[{"flow":"select","select":{"from":"$caster","kind":"entity","shape":{"type":"owned_entities"},"filters":[{"type":"source_skill","skill":"skill.test.owned.select"},{"type":"source_cast","cast":1},{"type":"spawned_before","tick":1},{"type":"unit_template","template":"deployable.trap"},{"type":"entity_tag","tag":"spell"}],"order":{"by":"spawn_sequence","direction":"desc"},"limit":2},"consume":{"mode":"each","as":"owned","do":{"flow":"effect","effect":{"type":"add_memory","name":"count","value":1}}},"on_empty":{"flow":"finish"}},{"flow":"finish"}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"select","select":{"from":"$caster","kind":"entity","shape":{"type":"owned_entities"},"filters":[{"type":"source_skill","skill":"skill.test.owned.select"},{"type":"source_cast","cast":1},{"type":"summoned_before","tick":1},{"type":"unit_template","template":"deployable.trap"},{"type":"entity_tag","tag":"spell"}],"order":{"by":"summon_sequence","direction":"desc"},"limit":2},"consume":{"mode":"each","as":"owned","do":{"flow":"effect","effect":{"type":"add_memory","name":"count","value":1}}},"on_empty":{"flow":"finish"}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "select", flow)
 	host := runtimeTestHost(environment)
 	for index := 0; index < 3; index++ {
-		command := ownedSpawnCommand(Position{X: int64(index)})
+		command := ownedSummonCommand(Position{X: int64(index)})
 		command.SourceSkillID = program.id
 		command.GameplayDigest = program.identity.gameplayDigest
 		if _, err := host.Apply(EffectCommand{Payload: command}); err != nil {
@@ -252,7 +252,7 @@ func TestOwnedEntitySelectSupportsEveryStableOrder(t *testing.T) {
 	positions := []Position{{X: 30}, {X: 10}, {X: 20}}
 	durations := []Tick{20, 30, 40}
 	for index := range positions {
-		command := ownedSpawnCommand(positions[index])
+		command := ownedSummonCommand(positions[index])
 		command.DurationTicks = durations[index]
 		if _, err := host.Apply(EffectCommand{Payload: command}); err != nil {
 			t.Fatal(err)
@@ -269,8 +269,8 @@ func TestOwnedEntitySelectSupportsEveryStableOrder(t *testing.T) {
 		want  []EntityID
 	}{
 		{SelectOrderEntityID, SelectAscending, []EntityID{2, 3, 4}},
-		{SelectOrderSpawnTick, SelectAscending, []EntityID{2, 3, 4}},
-		{SelectOrderSpawnSequence, SelectDescending, []EntityID{4, 3, 2}},
+		{SelectOrderSummonTick, SelectAscending, []EntityID{2, 3, 4}},
+		{SelectOrderSummonSequence, SelectDescending, []EntityID{4, 3, 2}},
 		{SelectOrderDistanceToOwner, SelectAscending, []EntityID{3, 4, 2}},
 		{SelectOrderRemainingLifetime, SelectAscending, []EntityID{2, 3, 4}},
 	}
@@ -293,7 +293,7 @@ func TestOwnedEntitySelectSupportsEveryStableOrder(t *testing.T) {
 
 func TestEntityCommandEnforcesOwnershipAndControlProfile(t *testing.T) {
 	host := ownedPolicyHost("reject_new", 2)
-	entity := spawnOwnedForTest(t, host, Position{})
+	entity := summonOwnedForTest(t, host, Position{})
 	success, err := host.Apply(EffectCommand{Payload: OwnedEntityCommand{Owner: 1, GameplayDigest: "digest", Target: entity, Command: "hold_position"}})
 	if err != nil || !success.Payload.(EntityCommandEffectResult).Succeeded {
 		t.Fatalf("success=%#v err=%v", success, err)
@@ -314,13 +314,13 @@ func TestEntityCommandEnforcesOwnershipAndControlProfile(t *testing.T) {
 
 func TestEntityCommandClosedSet(t *testing.T) {
 	catalog := defaultGameplayCatalog()
-	catalog.UnitTemplates.Entries[0].Commands = []string{"move_to", "follow", "attack_target", "hold_position", "return_to_owner", "stop", "invoke_behavior", "despawn"}
+	catalog.UnitTemplates.Entries[0].Commands = []string{"move_to", "follow", "attack_target", "hold_position", "return_to_owner", "stop", "invoke_behavior", "dismiss"}
 	catalog.UnitTemplates.Entries[0].Behaviors = []string{"armed"}
 	host := NewMemoryHost(AuthorityIdentity{Revision: "test", Digest: "test"})
 	host.ConfigureGameplayCatalog(catalog)
 	host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Position: Position{X: 5}})
 	host.UpsertEntity(MemoryEntity{ID: 99, Alive: true})
-	entity := spawnOwnedForTest(t, host, Position{})
+	entity := summonOwnedForTest(t, host, Position{})
 	commands := []OwnedEntityCommand{
 		{Owner: 1, GameplayDigest: "digest", Target: entity, Command: "move_to", Position: Position{X: 10}},
 		{Owner: 1, GameplayDigest: "digest", Target: entity, Command: "follow", TargetEntity: 99},
@@ -329,7 +329,7 @@ func TestEntityCommandClosedSet(t *testing.T) {
 		{Owner: 1, GameplayDigest: "digest", Target: entity, Command: "return_to_owner"},
 		{Owner: 1, GameplayDigest: "digest", Target: entity, Command: "stop"},
 		{Owner: 1, GameplayDigest: "digest", Target: entity, Command: "invoke_behavior", Behavior: "armed"},
-		{Owner: 1, GameplayDigest: "digest", Target: entity, Command: "despawn"},
+		{Owner: 1, GameplayDigest: "digest", Target: entity, Command: "dismiss"},
 	}
 	for _, command := range commands {
 		result, err := host.Apply(EffectCommand{Payload: command})
@@ -341,7 +341,7 @@ func TestEntityCommandClosedSet(t *testing.T) {
 
 func TestOwnedSpawnHandoffAndPreHandoffCancellation(t *testing.T) {
 	spawnCallbacks := `"on":{"tick":{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}}`
-	finishedFlow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + spawnCallbacks + `},{"flow":"finish"}]}`
+	finishedFlow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + spawnCallbacks + `},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "handoff", finishedFlow)
 	host := runtimeTestHost(environment)
 	runtime := NewRuntime(host, RuntimeOptions{})
@@ -353,7 +353,7 @@ func TestOwnedSpawnHandoffAndPreHandoffCancellation(t *testing.T) {
 		t.Fatalf("owned spawns=%#v", owned)
 	}
 
-	cancelFlow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + spawnCallbacks + `},{"flow":"wait","ticks":5,"then":{"flow":"finish"}}]}`
+	cancelFlow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + spawnCallbacks + `},{"flow":"wait","ticks":5,"then":{"flow":"finish"}}]}`
 	cancelProgram, _ := compileOwnedSkill(t, "cancel", cancelFlow)
 	cancelHost := runtimeTestHost(environment)
 	cancelRuntime := NewRuntime(cancelHost, RuntimeOptions{})
@@ -371,7 +371,7 @@ func TestOwnedSpawnHandoffAndPreHandoffCancellation(t *testing.T) {
 
 func TestOwnedSpawnCapacityFailureDoesNotMutateHost(t *testing.T) {
 	spawnCallbacks := `"on":{"tick":{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}}`
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + spawnCallbacks + `},{"flow":"finish"}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + spawnCallbacks + `},{"flow":"finish"}]}`
 	first, environment := compileOwnedSkill(t, "capacity-first", flow)
 	second, _ := compileOwnedSkill(t, "capacity-second", flow)
 	host := runtimeTestHost(environment)
@@ -395,7 +395,7 @@ func TestOwnedSpawnCapacityFailureDoesNotMutateHost(t *testing.T) {
 func TestOwnedSpawnReplacementReleasesCapacityAtomically(t *testing.T) {
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
 	spawnCallbacks := `"on":{"tick":` + callback + `,"cancel":` + callback + `}`
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + spawnCallbacks + `},{"flow":"finish"}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},` + spawnCallbacks + `},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "capacity-replacement", flow)
 	host := runtimeTestHost(environment)
 	catalog := environment.Gameplay
@@ -423,7 +423,7 @@ func TestOwnedSpawnReplacementReleasesCapacityAtomically(t *testing.T) {
 
 func TestOwnedSpawnStartFailureRollsBackReplacement(t *testing.T) {
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":` + callback + `}},{"flow":"finish"}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":` + callback + `}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "rollback-replacement", flow)
 	base := runtimeTestHost(environment)
 	catalog := environment.Gameplay
@@ -455,7 +455,7 @@ func TestOwnedSpawnStartFailureRollsBackReplacement(t *testing.T) {
 
 func TestOwnedSpawnSignalsUseCanonicalOrderAndTargetContext(t *testing.T) {
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"hit":` + callback + `,"collision":` + callback + `,"enter":` + callback + `,"tick":` + callback + `}},{"flow":"finish"}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"hit":` + callback + `,"collision":` + callback + `,"enter":` + callback + `,"tick":` + callback + `}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "signal-order", flow)
 	host := &ownedSpawnTestHost{MemoryHost: runtimeTestHost(environment), startSignals: []SpawnSignal{{Kind: SpawnSignalHit, Target: 99}}, tickSignals: []SpawnSignal{{Kind: SpawnSignalCollision, Target: 98}}}
 	runtime := NewRuntime(host, RuntimeOptions{})
@@ -485,7 +485,7 @@ func TestOwnedSpawnSignalsUseCanonicalOrderAndTargetContext(t *testing.T) {
 }
 
 func TestOwnedEntityRuntimeFailsClosedWithoutOwnedHostContract(t *testing.T) {
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10}},{"flow":"finish"}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "host-contract", flow)
 	inner := runtimeTestHost(environment)
 	runtime := NewRuntime(&hostWithoutOwnedContract{inner: inner}, RuntimeOptions{})
@@ -493,7 +493,7 @@ func TestOwnedEntityRuntimeFailsClosedWithoutOwnedHostContract(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 	if len(inner.OwnedEntities(1)) != 0 {
-		t.Fatal("owned spawn reached a host without the required contract")
+		t.Fatal("owned summon reached a host without the required contract")
 	}
 }
 
@@ -502,7 +502,7 @@ func TestOwnedEntityRuntimeFailsClosedWithoutOwnedHostContract(t *testing.T) {
 // 不请求则由 Runtime 在 tick 上重试（TestEveryStopEntryDefersARefusedStopTheSameWay）。
 func TestOwnedSpawnStopFailureRemainsTrackedForRetry(t *testing.T) {
 	callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
-	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"cancel":` + callback + `}},{"flow":"finish"}]}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"cancel":` + callback + `}},{"flow":"finish"}]}`
 	program, environment := compileOwnedSkill(t, "stop-retry", flow)
 	host := &ownedSpawnTestHost{MemoryHost: runtimeTestHost(environment)}
 	runtime := NewRuntime(host, RuntimeOptions{})
@@ -531,7 +531,7 @@ func TestOwnedSpawnStopFailureRemainsTrackedForRetry(t *testing.T) {
 func TestOwnedSpawnCleanupBoundaries(t *testing.T) {
 	spawnFlow := func(duration Tick) string {
 		callback := `{"flow":"effect","effect":{"type":"issue_entity_command","target":"$lifecycle_entity","command":"hold_position"}}`
-		return `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":` + strconv.Itoa(int(duration)) + `},"on":{"tick":` + callback + `,"end":` + callback + `,"cancel":` + callback + `}},{"flow":"finish"}]}`
+		return `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":` + strconv.Itoa(int(duration)) + `},"on":{"tick":` + callback + `,"end":` + callback + `,"cancel":` + callback + `}},{"flow":"finish"}]}`
 	}
 	t.Run("lifecycle entity", func(t *testing.T) {
 		program, environment := compileOwnedSkill(t, "cleanup-entity", spawnFlow(10))
@@ -541,14 +541,14 @@ func TestOwnedSpawnCleanupBoundaries(t *testing.T) {
 			t.Fatal(err)
 		}
 		spawn := runtime.OwnedSpawns(1)[0]
-		if _, err := host.Apply(EffectCommand{Payload: OwnedEntityCommand{Owner: 1, GameplayDigest: program.identity.gameplayDigest, Target: spawn.LifecycleEntity, Command: "despawn"}}); err != nil {
+		if _, err := host.Apply(EffectCommand{Payload: OwnedEntityCommand{Owner: 1, GameplayDigest: program.identity.gameplayDigest, Target: spawn.LifecycleEntity, Command: "dismiss"}}); err != nil {
 			t.Fatal(err)
 		}
 		if err := runtime.Advance(1); err != nil {
 			t.Fatal(err)
 		}
 		if len(runtime.OwnedSpawns(1)) != 0 {
-			t.Fatal("spawn survived lifecycle entity despawn")
+			t.Fatal("spawn survived lifecycle entity dismiss")
 		}
 		if countRuntimeEventKind(runtime.RuntimeEvents(), "owned_spawn_callback_cancel") != 1 || countRuntimeEventKind(runtime.RuntimeEvents(), "owned_spawn_callback_end") != 0 {
 			t.Fatalf("lifecycle callbacks=%#v", runtime.RuntimeEvents())
@@ -601,13 +601,13 @@ func countRuntimeEventKind(events []RuntimeEvent, kind string) int {
 
 func TestOwnedSpawnDetachedScopeRejectsCastDependencies(t *testing.T) {
 	tests := map[string]string{
-		"cast memory":   `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"if","condition":{"op":"eq","args":["$memory.count",0]},"then":{"flow":"goto","phase":"cast"},"else":{"flow":"goto","phase":"cast"}}}}`,
-		"input":         `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"effect","effect":{"type":"issue_entity_command","target":"$caster","command":"attack_target","target_entity":"$input.target"}}}}`,
-		"goto":          `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"goto","phase":"cast"}}}`,
-		"finish":        `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"finish"}}}`,
-		"recursive":     `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"finish"}}}}}`,
-		"cast builtin":  `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"if","condition":{"op":"eq","args":["$cast.elapsed_ticks",1]},"then":{"flow":"finish"},"else":{"flow":"finish"}}}}`,
-		"cast snapshot": `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"effect","effect":{"type":"damage","target":"$lifecycle_entity","amount":{"read_attribute":{"entity":"$owner","attribute":"ability_power","snapshot":"cast_start"}},"damage_type":"physical"}}}}`,
+		"cast memory":   `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"if","condition":{"op":"eq","args":["$memory.count",0]},"then":{"flow":"goto","phase":"cast"},"else":{"flow":"goto","phase":"cast"}}}}`,
+		"input":         `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"effect","effect":{"type":"issue_entity_command","target":"$caster","command":"attack_target","target_entity":"$input.target"}}}}`,
+		"goto":          `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"goto","phase":"cast"}}}`,
+		"finish":        `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"finish"}}}`,
+		"recursive":     `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"finish"}}}}}`,
+		"cast builtin":  `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"if","condition":{"op":"eq","args":["$cast.elapsed_ticks",1]},"then":{"flow":"finish"},"else":{"flow":"finish"}}}}`,
+		"cast snapshot": `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"on":{"tick":{"flow":"effect","effect":{"type":"damage","target":"$lifecycle_entity","amount":{"read_attribute":{"entity":"$owner","attribute":"ability_power","snapshot":"cast_start"}},"damage_type":"physical"}}}}`,
 	}
 	for name, flow := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -639,19 +639,19 @@ func ownedPolicyHost(policy string, maximum int) *MemoryHost {
 	return host
 }
 
-func ownedSpawnCommand(position Position) SpawnCommand {
-	return SpawnCommand{Owner: 1, GameplayDigest: "digest", SourceSkillID: "skill", SourceCastID: 1, SourceEffectIndex: 0, Template: 1, Position: position, Count: 1, DurationTicks: 10, GameplayTags: []GameplayTagHandle{1}}
+func ownedSummonCommand(position Position) SummonCommand {
+	return SummonCommand{Owner: 1, GameplayDigest: "digest", SourceSkillID: "skill", SourceCastID: 1, SourceEffectIndex: 0, Template: 1, Position: position, Count: 1, DurationTicks: 10, GameplayTags: []GameplayTagHandle{1}}
 }
 
-func spawnOwnedForTest(t *testing.T, host *MemoryHost, position Position) EntityID {
+func summonOwnedForTest(t *testing.T, host *MemoryHost, position Position) EntityID {
 	t.Helper()
-	result, err := host.Apply(EffectCommand{Payload: ownedSpawnCommand(position)})
+	result, err := host.Apply(EffectCommand{Payload: ownedSummonCommand(position)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := result.Payload.(SpawnEffectResult)
+	payload := result.Payload.(SummonEffectResult)
 	if !payload.Succeeded || len(payload.Entities) != 1 {
-		t.Fatalf("spawn=%#v", result)
+		t.Fatalf("summon=%#v", result)
 	}
 	return payload.FirstEntity
 }

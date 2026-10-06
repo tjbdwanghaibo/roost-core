@@ -12,23 +12,23 @@ func runOwnedEntityPass(context *compileContext) {
 		switch typed := flow.(type) {
 		case *effectFlowIR:
 			switch effect := typed.effect.(type) {
-			case *spawnEffectIR:
+			case *summonEffectIR:
 				template, found := templates[effect.template]
 				if !found {
 					context.addDiagnostic(DiagnosticCapabilityUnknown, effect.source.Path+".template", "unknown unit template")
 					return
 				}
-				if effect.count <= 0 || effect.count > template.MaximumSpawnCount || effect.count > context.environment.Limits.MaxOwnedEntities {
-					context.addDiagnostic(DiagnosticBudgetExceeded, effect.source.Path+".count", "spawn count exceeds the unit template or environment maximum")
+				if effect.count <= 0 || effect.count > template.MaximumSummonCount || effect.count > context.environment.Limits.MaxOwnedEntities {
+					context.addDiagnostic(DiagnosticBudgetExceeded, effect.source.Path+".count", "summon count exceeds the unit template or environment maximum")
 				}
 				if effect.durationTicks <= 0 || effect.durationTicks > template.MaximumLifetimeTicks || effect.durationTicks > context.environment.Limits.MaxLifetimeTicks {
-					context.addDiagnostic(DiagnosticBudgetExceeded, effect.source.Path+".duration_ticks", "spawn lifetime exceeds the unit template or environment maximum")
+					context.addDiagnostic(DiagnosticBudgetExceeded, effect.source.Path+".duration_ticks", "summon lifetime exceeds the unit template or environment maximum")
 				}
 				if typed.callbacks != nil {
 					allowAreaFinish := typed.spawn != nil && typed.spawn.kind == "area"
 					validateDetachedCallbacks(context, typed.callbacks, allowAreaFinish)
 				}
-				validateSpawnBindings(context, effect, template)
+				validateSummonBindings(context, effect, template)
 			case *entityCommandEffectIR:
 				validateOwnedEntityCommand(context, effect)
 			}
@@ -38,7 +38,7 @@ func runOwnedEntityPass(context *compileContext) {
 	})
 }
 
-func validateSpawnBindings(context *compileContext, effect *spawnEffectIR, template UnitTemplateCatalogEntry) {
+func validateSummonBindings(context *compileContext, effect *summonEffectIR, template UnitTemplateCatalogEntry) {
 	allowedOverrides := make(map[AttributeHandle]bool, len(template.AllowedAttributeOverrides))
 	for _, policy := range template.AllowedAttributeOverrides {
 		allowedOverrides[policy.Attribute] = true
@@ -184,7 +184,7 @@ func validateOwnedEntityCommand(context *compileContext, effect *entityCommandEf
 		valid = effect.position == nil && effect.targetEntity != nil && effect.behavior == ""
 	case "invoke_behavior":
 		valid = effect.position == nil && effect.targetEntity == nil && effect.behavior != ""
-	case "hold_position", "return_to_owner", "stop", "despawn":
+	case "hold_position", "return_to_owner", "stop", "dismiss":
 		valid = effect.position == nil && effect.targetEntity == nil && effect.behavior == ""
 	}
 	if !valid {
@@ -214,9 +214,9 @@ func validateOwnedEntitySelect(context *compileContext, flow *selectFlowIR) {
 			if typed.cast == 0 {
 				context.addDiagnostic(DiagnosticShapeInvalid, filter.sourceRef().Path, "source_cast requires a non-zero cast id")
 			}
-		case *ownedSpawnTickFilterIR:
+		case *ownedSummonTickFilterIR:
 			if typed.tick < 0 {
-				context.addDiagnostic(DiagnosticShapeInvalid, filter.sourceRef().Path, "spawn tick filter requires a non-negative tick")
+				context.addDiagnostic(DiagnosticShapeInvalid, filter.sourceRef().Path, "summon tick filter requires a non-negative tick")
 			}
 		case *ownedUnitTemplateFilterIR:
 			if _, found := context.artifacts.authority.unitTemplates[typed.template]; !found {
@@ -235,7 +235,7 @@ func validateOwnedEntitySelect(context *compileContext, flow *selectFlowIR) {
 		return
 	}
 	switch flow.selectPlan.order.by {
-	case "stable_id", "entity_id", "spawn_tick", "spawn_sequence", "distance_to_owner", "remaining_lifetime":
+	case "stable_id", "entity_id", "summon_tick", "summon_sequence", "distance_to_owner", "remaining_lifetime":
 	default:
 		context.addDiagnostic(DiagnosticShapeInvalid, path+".order.by", "owned_entities requires a stable owned entity order")
 	}

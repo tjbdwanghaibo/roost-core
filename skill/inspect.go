@@ -187,7 +187,7 @@ func InspectOwnedEntities(program *Program) OwnedEntityView {
 	}
 	for _, operation := range program.operations {
 		switch operation.(type) {
-		case spawnOperation, entityCommandOperation:
+		case summonOperation, entityCommandOperation:
 			view.Operations++
 		}
 	}
@@ -380,7 +380,7 @@ func operationEffectContinuations(operation operation) (effectContinuations, Eff
 		return typed.effectContinuations, typed.effectIndex, true
 	case abilityStateOperation:
 		return typed.effectContinuations, typed.effectIndex, true
-	case spawnOperation:
+	case summonOperation:
 		return typed.effectContinuations, typed.effectIndex, true
 	case entityCommandOperation:
 		return typed.effectContinuations, typed.effectIndex, true

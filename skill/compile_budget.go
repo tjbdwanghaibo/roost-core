@@ -91,8 +91,8 @@ func measureFlowBudget(flow flowIR, depth, invocationBound int, computed *Comput
 	case *effectFlowIR:
 		computed.Mutations = saturatingAdd(computed.Mutations, invocationBound)
 		spawnInvocationBound := invocationBound
-		if spawn, ok := typed.effect.(*spawnEffectIR); ok && typed.spawn != nil && typed.spawn.kind == "area" {
-			spawnInvocationBound = saturatingMul(spawnInvocationBound, spawn.count)
+		if summon, ok := typed.effect.(*summonEffectIR); ok && typed.spawn != nil && typed.spawn.kind == "area" {
+			spawnInvocationBound = saturatingMul(spawnInvocationBound, summon.count)
 		}
 		if typed.spawn != nil && len(typed.spawn.numericTracks) != 0 {
 			computed.Mutations = saturatingAdd(computed.Mutations, saturatingMul(spawnInvocationBound, len(typed.spawn.numericTracks)))
@@ -100,11 +100,11 @@ func measureFlowBudget(flow flowIR, depth, invocationBound int, computed *Comput
 		if typed.spawn != nil && typed.spawn.kind == "area" && typed.spawn.area != nil {
 			computed.AreaMembers = maxInt(computed.AreaMembers, saturatingMul(spawnInvocationBound, typed.spawn.area.limit))
 		}
-		if spawn, ok := typed.effect.(*spawnEffectIR); ok {
-			spawned := saturatingMul(invocationBound, spawn.count)
-			computed.OwnedEntities = saturatingAdd(computed.OwnedEntities, spawned)
+		if summon, ok := typed.effect.(*summonEffectIR); ok {
+			summoned := saturatingMul(invocationBound, summon.count)
+			computed.OwnedEntities = saturatingAdd(computed.OwnedEntities, summoned)
 			if typed.callbacks != nil {
-				computed.OwnedSpawns = saturatingAdd(computed.OwnedSpawns, spawned)
+				computed.OwnedSpawns = saturatingAdd(computed.OwnedSpawns, summoned)
 			}
 		}
 		if _, ok := typed.effect.(*modifyAbilityStateEffectIR); ok {

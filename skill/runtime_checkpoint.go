@@ -20,8 +20,10 @@ import (
 // 不兼容版本 2）。4：process 全量改名为 spawn（衍生物），JSON 字段名随之改变（processes → spawns、
 // next_process_id → next_spawn_id、owned_processes → owned_spawns 等，对照见
 // docs/feature/REFACTOR-2026-10-06-skill-process-to-spawn.md）；维护者 2026-10-06 第十三轮决定，线上未部署，
-// 不兼容版本 3。
-const RuntimeCheckpointVersion uint32 = 4
+// 不兼容版本 3。5：生成宿主单位的效果改名为召唤（summon），cast 值里召唤效果结果的类型 spawn_result →
+// summon_result（字段名不变，变的是值；对照见 docs/feature/REFACTOR-2026-10-07-skill-summon-rename.md）；
+// 维护者第十三轮决定，线上未部署，不兼容版本 4。
+const RuntimeCheckpointVersion uint32 = 5
 const RuntimeCheckpointMaxBytes = 64 << 20
 const RuntimeCheckpointMaxRecords = 1_000_000
 

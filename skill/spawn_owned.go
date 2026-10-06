@@ -178,9 +178,9 @@ func (runtime *Runtime) hasOwnedSpawnCapacityExcluding(owner EntityID, programID
 	return total+additional <= runtime.options.MaxOwnedSpawns && ownerCount+additional <= runtime.options.MaxOwnedSpawnsPerOwner && programCount+additional <= runtime.options.MaxOwnedSpawnsPerProgram && templateCount+additional <= runtime.options.MaxOwnedSpawnsPerTemplate
 }
 
-func (runtime *Runtime) previewOwnedSpawnCapacity(host OwnedEntityRuntimeHost, command SpawnCommand) (ExpectedFailureReason, error) {
+func (runtime *Runtime) previewOwnedSpawnCapacity(host OwnedEntityRuntimeHost, command SummonCommand) (ExpectedFailureReason, error) {
 	excluded := make(map[EntityID]bool)
-	preview, err := host.PreviewOwnedSpawn(command)
+	preview, err := host.PreviewOwnedSummon(command)
 	if err != nil {
 		return ExpectedFailureNone, err
 	}

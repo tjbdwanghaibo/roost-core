@@ -118,8 +118,8 @@ func (host *MemoryHost) Apply(command EffectCommand) (EffectResult, error) {
 		entity.Resources[resource] = after
 		host.entities[payload.Target] = entity
 		return EffectResult{Commit: host.commitLocked("resource_changed", payload.Target, 0), Value: IntRuntimeValue(after, quantityResourceAmount)}, nil
-	case SpawnCommand:
-		return host.spawnOwnedLocked(payload)
+	case SummonCommand:
+		return host.summonOwnedLocked(payload)
 	case OwnedEntityCommand:
 		return host.commandOwnedLocked(payload)
 	default:

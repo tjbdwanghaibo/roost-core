@@ -32,7 +32,7 @@ func GraphFromProfile(profile SkillProfile) CausalGraph {
 		if i+1 < len(profile.Operations) {
 			graph.Edges[i] = []int{i + 1}
 		}
-		if op == "damage" || op == "heal" || op == "spawn" {
+		if op == "damage" || op == "heal" || op == "summon" {
 			graph.Sinks[i] = true
 		}
 	}

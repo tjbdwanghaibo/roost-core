@@ -11,7 +11,7 @@ const (
 	resultTypeAbilityChange     resultType = "ability_change_result"
 	resultTypeStatusOperation   resultType = "status_operation_result"
 	resultTypeAttributeModifier resultType = "attribute_modifier_result"
-	resultTypeSpawn             resultType = "spawn_result"
+	resultTypeSummon            resultType = "summon_result"
 	resultTypeEntityCommand     resultType = "entity_command_result"
 	resultTypeSnapshotCapture   resultType = "snapshot_capture_result"
 	resultTypeSnapshotRestore   resultType = "snapshot_restore_result"
@@ -126,7 +126,7 @@ func resultLayoutByType(typ resultType, dynamic valueType) resultLayoutProgram {
 	case resultTypeStateChange, resultTypeAbilityChange:
 		layout.allowedFailures = []ExpectedFailureReason{ExpectedFailurePolicyRejected, ExpectedFailurePermissionDenied, ExpectedFailureReferenceExpired}
 		layout.fields = fields(success("before", dynamic), success("after", dynamic), both("applied", boolean))
-	case resultTypeSpawn:
+	case resultTypeSummon:
 		layout.allowedFailures = []ExpectedFailureReason{ExpectedFailureInvalidPosition, ExpectedFailureCapacityReached, ExpectedFailurePermissionDenied, ExpectedFailurePolicyRejected}
 		layout.fields = fields(success("entities", valueType{Base: valueKindEntityList}), success("first_entity", valueType{Base: valueKindEntity}))
 	case resultTypeEntityCommand:

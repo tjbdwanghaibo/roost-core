@@ -229,7 +229,7 @@ func (c *typeChecker) flow(flow flowIR, scope typeScope) {
 	}
 }
 
-// spawn 检查 spawn 衍生物的字段。每一步重新求值的字段（area 选择、motion 的目标 / 点 / 锚点 /
+// spawn 检查召唤效果上衍生物的字段。每一步重新求值的字段（area 选择、motion 的目标 / 点 / 锚点 /
 // 目的地、未绑定到衍生物数值属性的数值字段）用表的 spawn_step 列；numeric track 的值与绑定到
 // 数值属性的字段只在启动时用施法求一次（initializeSpawnNumeric），用施法作用域 castScope。
 // 此前全部按施法作用域检查，再由 owned entity pass 另写一份前缀黑名单（RR-20261005-NC-224）。
@@ -510,7 +510,7 @@ func (c *typeChecker) effect(effect effectIR, scope typeScope) {
 			c.context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".over_ticks", "over_ticks must be non-negative")
 		}
 		c.expect(typed.value, scope, valueType{Base: valueKindInt})
-	case *spawnEffectIR:
+	case *summonEffectIR:
 		c.expect(typed.position, scope, valueType{Base: valueKindPosition})
 		if template, found := unitTemplateEntry(c.context, typed.template); found {
 			for _, override := range typed.attributeOverrides {

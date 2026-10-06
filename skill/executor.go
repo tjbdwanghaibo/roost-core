@@ -236,8 +236,8 @@ func (runtime *Runtime) executeOperation(cast *castInstance, index OperationInde
 		return runtime.resolveAbilityEffectExecution(cast, operation.effectContinuations, operation.effectIndex, result, err)
 	case modifySpawnOperation:
 		return flowControl{kind: flowContinue}, runtime.executeModifySpawn(cast, operation)
-	case spawnOperation:
-		result, err := runtime.executeOwnedSpawn(cast, operation)
+	case summonOperation:
+		result, err := runtime.executeOwnedSummon(cast, operation)
 		if err == nil && cast.areaCallbackFinish {
 			return flowControl{kind: flowFinish}, nil
 		}

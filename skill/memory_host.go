@@ -77,7 +77,7 @@ type memoryStateRecord struct {
 	event    EventContext
 }
 
-type ownedSpawnTransaction struct {
+type ownedSummonTransaction struct {
 	created  []EntityID
 	replaced map[EntityID]OwnedEntityMetadata
 	entities map[EntityID]MemoryEntity
@@ -102,8 +102,8 @@ type MemoryHost struct {
 	nextStateSequence     uint64
 	ownedEntities         map[EntityID]OwnedEntityMetadata
 	nextOwnedSequence     uint64
-	ownedTransactions     map[OwnedSpawnTransactionID]ownedSpawnTransaction
-	nextOwnedTransaction  OwnedSpawnTransactionID
+	ownedTransactions     map[OwnedSummonTransactionID]ownedSummonTransaction
+	nextOwnedTransaction  OwnedSummonTransactionID
 	temporalSnapshots     map[uint64]temporalSnapshotRecord
 	nextTemporalToken     uint64
 	temporalBlocked       map[Position]Position
@@ -117,7 +117,7 @@ func NewMemoryHost(authority AuthorityIdentity) *MemoryHost {
 }
 
 func NewMemoryHostWithOptions(authority AuthorityIdentity, options MemoryHostOptions) *MemoryHost {
-	return &MemoryHost{authority: authority, entities: make(map[EntityID]MemoryEntity), spawns: make(map[SpawnID]memorySpawn), states: make(map[memoryStateKey]memoryStateRecord), ownedEntities: make(map[EntityID]OwnedEntityMetadata), ownedTransactions: make(map[OwnedSpawnTransactionID]ownedSpawnTransaction), temporalSnapshots: make(map[uint64]temporalSnapshotRecord), temporalBlocked: make(map[Position]Position), nextEntity: 1, compactEvents: options.CompactEvents}
+	return &MemoryHost{authority: authority, entities: make(map[EntityID]MemoryEntity), spawns: make(map[SpawnID]memorySpawn), states: make(map[memoryStateKey]memoryStateRecord), ownedEntities: make(map[EntityID]OwnedEntityMetadata), ownedTransactions: make(map[OwnedSummonTransactionID]ownedSummonTransaction), temporalSnapshots: make(map[uint64]temporalSnapshotRecord), temporalBlocked: make(map[Position]Position), nextEntity: 1, compactEvents: options.CompactEvents}
 }
 
 func (host *MemoryHost) AuthorityIdentity() AuthorityIdentity { return host.authority }

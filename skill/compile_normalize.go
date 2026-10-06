@@ -437,8 +437,8 @@ func (n *normalizer) normalizeFilter(value FilterDefinition, path string) filter
 		return &ownedSourceSkillFilterIR{sourcedIR: source, skill: typed.Skill}
 	case OwnedSourceCastFilterDefinition:
 		return &ownedSourceCastFilterIR{sourcedIR: source, cast: typed.Cast}
-	case OwnedSpawnTickFilterDefinition:
-		return &ownedSpawnTickFilterIR{sourcedIR: source, kind: typed.Type, tick: typed.Tick}
+	case OwnedSummonTickFilterDefinition:
+		return &ownedSummonTickFilterIR{sourcedIR: source, kind: typed.Type, tick: typed.Tick}
 	case OwnedUnitTemplateFilterDefinition:
 		return &ownedUnitTemplateFilterIR{sourcedIR: source, template: typed.Template}
 	case OwnedEntityTagFilterDefinition:
@@ -494,20 +494,20 @@ func (n *normalizer) normalizeEffect(value EffectDefinition, path string) effect
 		return &modifyAbilityStateEffectIR{source: source, owner: n.normalizeValue(typed.Owner, path+".owner"), ability: n.normalizeValue(typed.Ability, path+".ability"), property: typed.Property, operation: typed.Operation, value: n.normalizeValue(typed.Value, path+".value"), durationTicks: typed.DurationTicks}
 	case ModifySpawnEffectDefinition:
 		return &modifySpawnEffectIR{source: source, spawn: n.normalizeValue(typed.Spawn, path+".spawn"), property: typed.Property, operation: typed.Operation, value: n.normalizeValue(typed.Value, path+".value"), overTicks: typed.OverTicks}
-	case SpawnEffectDefinition:
+	case SummonEffectDefinition:
 		overrideKeys := sortedStringKeys(typed.AttributeOverrides)
-		overrides := make([]spawnAttributeOverrideIR, 0, len(overrideKeys))
+		overrides := make([]summonAttributeOverrideIR, 0, len(overrideKeys))
 		for _, key := range overrideKeys {
-			overrides = append(overrides, spawnAttributeOverrideIR{attribute: key, value: n.normalizeValue(typed.AttributeOverrides[key], path+".attribute_overrides."+key)})
+			overrides = append(overrides, summonAttributeOverrideIR{attribute: key, value: n.normalizeValue(typed.AttributeOverrides[key], path+".attribute_overrides."+key)})
 		}
 		parameterKeys := sortedStringKeys(typed.ParameterBindings)
-		parameters := make([]spawnParameterBindingIR, 0, len(parameterKeys))
+		parameters := make([]summonParameterBindingIR, 0, len(parameterKeys))
 		for _, key := range parameterKeys {
-			parameters = append(parameters, spawnParameterBindingIR{name: key, value: n.normalizeValue(typed.ParameterBindings[key], path+".parameter_bindings."+key)})
+			parameters = append(parameters, summonParameterBindingIR{name: key, value: n.normalizeValue(typed.ParameterBindings[key], path+".parameter_bindings."+key)})
 		}
-		return &spawnEffectIR{source: source, template: typed.Template, position: n.normalizeValue(typed.Position, path+".position"), count: typed.Count, durationTicks: typed.DurationTicks, attributeOverrides: overrides, parameterBindings: parameters}
-	case DespawnEffectDefinition:
-		return &entityCommandEffectIR{source: source, target: n.normalizeValue(typed.Target, path+".target"), command: "despawn"}
+		return &summonEffectIR{source: source, template: typed.Template, position: n.normalizeValue(typed.Position, path+".position"), count: typed.Count, durationTicks: typed.DurationTicks, attributeOverrides: overrides, parameterBindings: parameters}
+	case DismissEffectDefinition:
+		return &entityCommandEffectIR{source: source, target: n.normalizeValue(typed.Target, path+".target"), command: "dismiss"}
 	case IssueEntityCommandEffectDefinition:
 		return &entityCommandEffectIR{source: source, target: n.normalizeValue(typed.Target, path+".target"), command: typed.Command, position: n.normalizeOptionalValue(typed.Position, path+".position"), targetEntity: n.normalizeOptionalValue(typed.TargetEntity, path+".target_entity"), behavior: typed.Behavior}
 	default:

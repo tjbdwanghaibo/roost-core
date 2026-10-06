@@ -28,7 +28,11 @@ guardrails, not capacity targets: tune them from room-level load tests.
   provide deterministic backpressure through `ErrRuntimeCapacityExceeded`.
 - Root event accounting is reclaimed only after no active cast, spawn, or
   scheduled task references the root, preserving once-per-root semantics.
-- Checkpoints use version 4 (2026-10-06: every `process` name in the
+- Checkpoints use version 5 (2026-10-07: the unit-creating effect became
+  `summon`, so a stored effect result's type `spawn_result` is now
+  `summon_result` — see the
+  [summon rename table](../feature/REFACTOR-2026-10-07-skill-summon-rename.md);
+  version 4, 2026-10-06: every `process` name in the
   payload became `spawn` — `spawns`, `next_spawn_id`, `owned_spawns`, … —
   see the [rename table](../feature/REFACTOR-2026-10-06-skill-process-to-spawn.md);
   version 3 added the stop_pending retry state and the three stop-retry

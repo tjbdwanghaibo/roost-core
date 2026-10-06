@@ -20,7 +20,7 @@ func evalContextStateJSON(t *testing.T, input, stateType, stateDefault, steps st
 
 // evalContextAreaSpawn 是一个 area 衍生物：启动时与之后每个 interval 都跑 tick 回调。
 func evalContextAreaSpawn(tick string) string {
-	return `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":` + tick + `}}`
+	return `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":` + tick + `}}`
 }
 
 // runEvalContextCast 编译、施法并推进 6 个 tick，返回第一个错误。

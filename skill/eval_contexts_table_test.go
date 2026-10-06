@@ -124,7 +124,7 @@ func mergeJSONObjects(left, right string) string {
 // evalArea 是一个 area 衍生物：from 是 area 选择的起点（衍生物每一步重新求值），radius 是半径，
 // tick 是 tick 回调。
 func evalArea(from, radius, tick string) string {
-	return `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":` + from + `,"kind":"entity","shape":{"type":"circle","radius":` + radius + `},"filters":[],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":` + tick + `}}`
+	return `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":` + from + `,"kind":"entity","shape":{"type":"circle","radius":` + radius + `},"filters":[],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"tick":` + tick + `}}`
 }
 
 // evalCellCase 生成一个格子的定义；noSite 非空时表示没有位点。
@@ -197,7 +197,7 @@ func evalCellCase(t *testing.T, row evalReferenceRowIndex, context evalContext) 
 		use := evalUse(fixture, reference, "$owner", evalCallbackWitness)
 		if fixture.kind == "spawn" {
 			// modify_spawn 只认绑定了数值属性的 motion 衍生物。
-			projectile := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{` + numericLinearSpawn() + `},"on":{"tick":` + use + `}}`
+			projectile := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{` + numericLinearSpawn() + `},"on":{"tick":` + use + `}}`
 			return evalDefinition(t, fixture, "{}", agreementSteps(projectile), ""), ""
 		}
 		return evalDefinition(t, fixture, "{}", agreementSteps(evalArea(`"$caster"`, "4", evalWithLocal(row, "$owner", use))), ""), ""
@@ -365,7 +365,7 @@ func TestRuntimeEvaluatesReferencesOnlyWhereTheTableAllows(t *testing.T) {
 // 诊断点名 spawn_step 上下文与 `$primary_target` 表项，并给出替代写法。
 func TestSpawnStepPrimaryTargetIsRejectedAtCompileTime(t *testing.T) {
 	enter := `{"flow":"effect","effect":{"type":"damage","target":"$event.target","amount":1,"damage_type":"physical"}}`
-	area := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$primary_target","kind":"entity","shape":{"type":"circle","radius":2},"filters":[],"order":{"by":"stable_id","direction":"asc"},"limit":4}},"on":{"enter":` + enter + `}}`
+	area := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"spawn":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$primary_target","kind":"entity","shape":{"type":"circle","radius":2},"filters":[],"order":{"by":"stable_id","direction":"asc"},"limit":4}},"on":{"enter":` + enter + `}}`
 	program, diagnostics := Compile(mustParseJSON(t, agreementSkillJSON("entity", "{}", "[]", agreementSteps(area))), DefaultCompileEnvironment())
 	if program != nil {
 		t.Fatalf("$primary_target in a spawn field compiled; it drifts to the lifecycle entity after handoff (O33)")
@@ -546,7 +546,7 @@ func TestEvalSnapshotTableCellsAgreeWithCompilerAndRuntime(t *testing.T) {
 }
 
 // O33 诊断里给出的替代写法确实能编译、执行（不能让作者照着改了还是编不过）：
-//   - `$primary_target` 衍生物字段 → spawn position 在施法流程里用施法目标的位置，回调里以
+//   - `$primary_target` 衍生物字段 → 召唤效果的 position 在施法流程里用施法目标的位置，回调里以
 //     `$lifecycle_entity` 为中心 select（远处的目标被打到、施法者没有）；
 //   - `$cast.*` / cast_start 衍生物字段 → numeric track 的初值（启动时用施法求一次）；
 //   - 状态默认值里的施法引用 → 字面量 / `$caster` 默认值，在施法流程里 modify_state 写入同一个
@@ -578,7 +578,7 @@ func TestO33AlternativesCompileAndRun(t *testing.T) {
 	}
 	t.Run("lifecycle entity instead of $primary_target", func(t *testing.T) {
 		tick := `{"flow":"select","select":{"from":"$lifecycle_entity","kind":"entity","shape":{"type":"circle","radius":2},"filters":[],"order":{"by":"stable_id","direction":"asc"},"limit":4},"consume":{"mode":"each","as":"t","do":{"flow":"effect","effect":{"type":"damage","target":"$local.t","amount":1,"damage_type":"physical"}}}}`
-		spawn := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$input.target.position","count":1,"duration_ticks":4},"on":{"tick":` + tick + `}}`
+		spawn := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$input.target.position","count":1,"duration_ticks":4},"on":{"tick":` + tick + `}}`
 		program := compile(t, agreementSkillJSON("entity", "{}", "[]", agreementSteps(spawn)))
 		host := runtimeTestHost(environment)
 		host.UpsertEntity(MemoryEntity{ID: 2, Alive: true, Health: 100, MaxHealth: 100, Position: Position{X: 50}})
@@ -592,7 +592,7 @@ func TestO33AlternativesCompileAndRun(t *testing.T) {
 			`{"op":"scale_bp","args":[10,"$cast.charge_bp"]}`,
 			`{"read_attribute":{"entity":"$caster","attribute":"reach","snapshot":"cast_start"}}`,
 		} {
-			spawn := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{` +
+			spawn := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{` +
 				numericLinearSpawnWithTracks(`{"property":"speed","operation":"set","value":`+value+`,"over_ticks":0}`) + `}}`
 			program := compile(t, evalDefinition(t, evalRowFixtures[evalRowCastChargeBP], "{}", agreementSteps(spawn), ""))
 			host := runtimeTestHost(environment)

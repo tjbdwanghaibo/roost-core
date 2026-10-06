@@ -1,28 +1,28 @@
 package skill
 
-type spawnEffectIR struct {
+type summonEffectIR struct {
 	source             sourceRef
 	template           string
 	position           valueIR
 	count              int
 	durationTicks      Tick
-	attributeOverrides []spawnAttributeOverrideIR
-	parameterBindings  []spawnParameterBindingIR
+	attributeOverrides []summonAttributeOverrideIR
+	parameterBindings  []summonParameterBindingIR
 }
 
-type spawnAttributeOverrideIR struct {
+type summonAttributeOverrideIR struct {
 	attribute string
 	value     valueIR
 }
 
-type spawnParameterBindingIR struct {
+type summonParameterBindingIR struct {
 	name  string
 	value valueIR
 }
 
-func (*spawnEffectIR) isEffectIR()            {}
-func (e *spawnEffectIR) sourceRef() sourceRef { return e.source }
-func (e *spawnEffectIR) walkValues(v valueVisitor) {
+func (*summonEffectIR) isEffectIR()            {}
+func (e *summonEffectIR) sourceRef() sourceRef { return e.source }
+func (e *summonEffectIR) walkValues(v valueVisitor) {
 	walkValue(e.position, v)
 	for _, override := range e.attributeOverrides {
 		walkValue(override.value, v)
@@ -60,7 +60,7 @@ type ownedSourceCastFilterIR struct {
 	sourcedIR
 	cast CastID
 }
-type ownedSpawnTickFilterIR struct {
+type ownedSummonTickFilterIR struct {
 	sourcedIR
 	kind string
 	tick Tick
@@ -82,5 +82,5 @@ func (*ownedEntityTagFilterIR) isFilterIR()                {}
 func (*ownedEntityTagFilterIR) walkValues(valueVisitor)    {}
 func (*ownedSourceCastFilterIR) isFilterIR()               {}
 func (*ownedSourceCastFilterIR) walkValues(valueVisitor)   {}
-func (*ownedSpawnTickFilterIR) isFilterIR()                {}
-func (*ownedSpawnTickFilterIR) walkValues(valueVisitor)    {}
+func (*ownedSummonTickFilterIR) isFilterIR()               {}
+func (*ownedSummonTickFilterIR) walkValues(valueVisitor)   {}

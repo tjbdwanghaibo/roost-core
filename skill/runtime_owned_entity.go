@@ -2,7 +2,7 @@ package skill
 
 import "errors"
 
-func (runtime *Runtime) executeOwnedSpawn(cast *castInstance, operation spawnOperation) (EffectResult, error) {
+func (runtime *Runtime) executeOwnedSummon(cast *castInstance, operation summonOperation) (EffectResult, error) {
 	ownedHost, ok := runtime.host.(OwnedEntityRuntimeHost)
 	if !ok {
 		return EffectResult{}, ErrHostContractViolation
@@ -15,23 +15,23 @@ func (runtime *Runtime) executeOwnedSpawn(cast *castInstance, operation spawnOpe
 	if !ok {
 		return EffectResult{}, ErrRuntimeTypeMismatch
 	}
-	overrides := make([]SpawnAttributeOverride, len(operation.attributeOverrides))
+	overrides := make([]SummonAttributeOverride, len(operation.attributeOverrides))
 	for index, override := range operation.attributeOverrides {
 		value, evalErr := runtime.evalInt(cast, override.value)
 		if evalErr != nil {
 			return EffectResult{}, evalErr
 		}
-		overrides[index] = SpawnAttributeOverride{Attribute: override.attribute, Value: value}
+		overrides[index] = SummonAttributeOverride{Attribute: override.attribute, Value: value}
 	}
-	parameters := make([]SpawnParameterBinding, len(operation.parameterBindings))
+	parameters := make([]SummonParameterBinding, len(operation.parameterBindings))
 	for index, binding := range operation.parameterBindings {
 		value, evalErr := runtime.evalValue(cast, binding.value)
 		if evalErr != nil {
 			return EffectResult{}, evalErr
 		}
-		parameters[index] = SpawnParameterBinding{Name: binding.name, Value: value}
+		parameters[index] = SummonParameterBinding{Name: binding.name, Value: value}
 	}
-	command := SpawnCommand{Owner: cast.caster, GameplayDigest: cast.program.identity.gameplayDigest, SourceSkillID: cast.program.id, SourceCastID: cast.id, SourceEffectIndex: operation.effectIndex, Template: operation.template, Position: position, Count: operation.count, DurationTicks: operation.durationTicks, AttributeOverrides: overrides, ParameterBindings: parameters}
+	command := SummonCommand{Owner: cast.caster, GameplayDigest: cast.program.identity.gameplayDigest, SourceSkillID: cast.program.id, SourceCastID: cast.id, SourceEffectIndex: operation.effectIndex, Template: operation.template, Position: position, Count: operation.count, DurationTicks: operation.durationTicks, AttributeOverrides: overrides, ParameterBindings: parameters}
 	if operation.hasSpawn {
 		command.Transactional = true
 		failure, previewErr := runtime.previewOwnedSpawnCapacity(ownedHost, command)
@@ -39,14 +39,14 @@ func (runtime *Runtime) executeOwnedSpawn(cast *castInstance, operation spawnOpe
 			return EffectResult{}, previewErr
 		}
 		if failure != ExpectedFailureNone {
-			return EffectResult{Commit: CommitReceipt{Revision: cast.visibleRevision}, Payload: SpawnEffectResult{ResultOutcome: failedResultOutcome(failure)}}, nil
+			return EffectResult{Commit: CommitReceipt{Revision: cast.visibleRevision}, Payload: SummonEffectResult{ResultOutcome: failedResultOutcome(failure)}}, nil
 		}
 	}
 	result, err := runtime.applyHostEffect(cast, EffectCommand{Meta: CommandMeta{RequiredRevision: cast.visibleRevision, EffectIndex: operation.effectIndex}, Payload: command})
 	if err != nil || !operation.hasSpawn {
 		return result, err
 	}
-	payload, ok := result.Payload.(SpawnEffectResult)
+	payload, ok := result.Payload.(SummonEffectResult)
 	if !ok {
 		return EffectResult{}, ErrHostContractViolation
 	}
@@ -63,17 +63,17 @@ func (runtime *Runtime) executeOwnedSpawn(cast *castInstance, operation spawnOpe
 			for _, spawnID := range started {
 				cleanupErrors = append(cleanupErrors, runtime.requestSpawnStop(cast, runtime.spawns[spawnID], StopCauseFailure, ""))
 			}
-			cleanupErrors = append(cleanupErrors, ownedHost.RollbackOwnedSpawn(payload.TransactionID))
+			cleanupErrors = append(cleanupErrors, ownedHost.RollbackOwnedSummon(payload.TransactionID))
 			return EffectResult{}, errors.Join(cleanupErrors...)
 		}
 		started = append(started, runtime.nextSpawnID)
 	}
-	if err := ownedHost.CommitOwnedSpawn(payload.TransactionID); err != nil {
+	if err := ownedHost.CommitOwnedSummon(payload.TransactionID); err != nil {
 		cleanupErrors := []error{err}
 		for _, spawnID := range started {
 			cleanupErrors = append(cleanupErrors, runtime.requestSpawnStop(cast, runtime.spawns[spawnID], StopCauseFailure, ""))
 		}
-		cleanupErrors = append(cleanupErrors, ownedHost.RollbackOwnedSpawn(payload.TransactionID))
+		cleanupErrors = append(cleanupErrors, ownedHost.RollbackOwnedSummon(payload.TransactionID))
 		return EffectResult{}, errors.Join(cleanupErrors...)
 	}
 	if err := runtime.reapUnhandedEntitySpawns(); err != nil {

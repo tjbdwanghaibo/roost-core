@@ -9,8 +9,8 @@ type OwnedEntityMetadata struct {
 	SourceEffectIndex EffectIndex
 	Template          UnitTemplateHandle
 	GameplayTags      []GameplayTagHandle
-	SpawnTick         Tick
-	SpawnSequence     uint64
+	SummonTick        Tick
+	SummonSequence    uint64
 	LifetimeTicks     Tick
 	DueTick           Tick
 	ControlProfile    string
@@ -35,7 +35,7 @@ type OwnedSourceSkillFilter struct{ SkillID string }
 type OwnedSourceCastFilter struct{ CastID CastID }
 type OwnedUnitTemplateFilter struct{ Template UnitTemplateHandle }
 type OwnedEntityTagFilter struct{ Tag GameplayTagHandle }
-type OwnedSpawnTickFilter struct {
+type OwnedSummonTickFilter struct {
 	Operation string
 	Tick      Tick
 }
@@ -44,7 +44,7 @@ func (OwnedSourceSkillFilter) isSelectFilter()  {}
 func (OwnedSourceCastFilter) isSelectFilter()   {}
 func (OwnedUnitTemplateFilter) isSelectFilter() {}
 func (OwnedEntityTagFilter) isSelectFilter()    {}
-func (OwnedSpawnTickFilter) isSelectFilter()    {}
+func (OwnedSummonTickFilter) isSelectFilter()   {}
 
 func validOwnedReplacementPolicy(policy string) bool {
 	switch policy {
@@ -55,18 +55,18 @@ func validOwnedReplacementPolicy(policy string) bool {
 	}
 }
 
-type OwnedSpawnPreview struct {
+type OwnedSummonPreview struct {
 	ReplacedEntities []EntityID
 	FailureReason    ExpectedFailureReason
 }
 
-type OwnedSpawnTransactionID uint64
+type OwnedSummonTransactionID uint64
 
 type OwnedEntityRuntimeHost interface {
-	PreviewOwnedSpawn(SpawnCommand) (OwnedSpawnPreview, error)
+	PreviewOwnedSummon(SummonCommand) (OwnedSummonPreview, error)
 	OwnedEntity(EntityID) (OwnedEntityMetadata, bool)
-	CommitOwnedSpawn(OwnedSpawnTransactionID) error
-	RollbackOwnedSpawn(OwnedSpawnTransactionID) error
+	CommitOwnedSummon(OwnedSummonTransactionID) error
+	RollbackOwnedSummon(OwnedSummonTransactionID) error
 	RemoveOwnedEntitiesByProgram(string) error
 	RemoveOwnedEntitiesForMatchEnd() error
 }

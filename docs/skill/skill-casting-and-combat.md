@@ -11,7 +11,7 @@
 
 - **施法互斥**：默认情况下，同一 caster 在已有施法窗口（windup / commit / recovery 阶段）内发起新的主动施法会得到 `ErrCasterBusy`。技能可在激活声明上用 `"concurrent": true` 退出互斥。proc / 被动触发的施法不受互斥与 GCD 限制。
 - **失败终态**：`Cancel` / `Interrupt` / `Release` 在已经改动 cast 之后出错（cancel 回调失败、Release 重新进入窗口时付费失败等），以及排程任务失败，cast 都进入 failed 终态：撤掉它的全部排程任务、停衍生物（Spawn）、释放 toggle / hold / charge 的 policy 槽位、不再占施法窗口；错误照常返回。对 failed cast 再调这三个 API 返回 `ErrCastInputRejected`。未提交就失败的 `Start` 返回 `(0, err)`，不留下任何排程工作（RR-20261005-NC-110～112）。
-- **停不下来的衍生物由 Runtime 收尾**（维护者 2026-10-06，RR-20261006-21 后续；2026-10-07 停止入口统一）：任何要停衍生物（召唤物、区域、飞行物等）的地方——施法失败终态、goto / Cancel / Interrupt / 施法收尾、衍生物启动失败的清理、tick 驱动的到期 / 失效回收、`RemoveProgram`、`Shutdown`——都走同一个停止函数、同一套状态。宿主 `StopSpawn` 失败时，错误照常返回这一次的调用方（`Start` 返回 `(cast ID, err)`，cast 留作 failed、ID 不复用），衍生物标成 `stop_pending`：Runtime 不再推进它（不步进、不派发信号、不再跑回调），在之后的 tick 按退避重试停止——第一次在 `SpawnStopRetryBackoff`（默认 4）tick 之后，每失败一次间隔翻倍、最多 64 倍；成功后衍生物进入 `cancelled`，cast 不再被钉住，按 `CompletedCastLimit` 连同记录回收。移交后的衍生物到期 / 失效、或 lifecycle 实体消失时宿主拒绝停止，也一样转为 `stop_pending`，那一次的 `Advance` 返回错误，之后 Runtime 照常前进（RR-20261006-31；之前每次 `Advance` 都卡在这个衍生物上，整个 Runtime 的 tick 不动）。`Shutdown` / `RemoveProgram` 停不下的衍生物也一样转为 `stop_pending`、写进 checkpoint（之前留成 running、列在 `OwnedSpawns` 里等调用方重试）：它们返回第一个错误，之后继续 `Advance`、或 `Checkpoint` 后在新进程恢复再 `Advance`，Runtime 都会按原来的重试时刻接着停；再调一次 `Shutdown` / `RemoveProgram` 会立即再请求一次。`Shutdown` 不在原地同步重试（Runtime 按 tick 确定性推进、没有 ctx）。程序被移除后它的待停止衍生物照样由 Runtime 重试，重试不执行程序代码。被拒绝的停止只在第一次请求时跑回调与区域离开信号，之后的重试只重发宿主停止（RR-20261006-32：之前施法里的停止被拒后会再停一次、cancel 回调跑两遍）。失败的重试达到 `SpawnStopRetryLimit`（默认 10）次后不再自动重试：计 `skill.spawn.stop_retry_exhausted.total`、写一条 Warn 日志，记录保留（`RetentionStats().StopRetryExhaustedSpawns`），`Shutdown` / `RemoveProgram` 仍会再停一次。待停止条目最多 `MaxStopPendingSpawns`（默认 256）条，超限时丢最早的已告警条目（没有就丢最早仍在重试的）：删除记录、计 `skill.spawn.stop_pending_dropped.total`、写 Error 日志，Runtime 不再负责停它。待停止状态写进 checkpoint（格式版本 4），恢复后按原时刻继续重试。
+- **停不下来的衍生物由 Runtime 收尾**（维护者 2026-10-06，RR-20261006-21 后续；2026-10-07 停止入口统一）：任何要停衍生物（minion、area、飞行物等）的地方——施法失败终态、goto / Cancel / Interrupt / 施法收尾、衍生物启动失败的清理、tick 驱动的到期 / 失效回收、`RemoveProgram`、`Shutdown`——都走同一个停止函数、同一套状态。宿主 `StopSpawn` 失败时，错误照常返回这一次的调用方（`Start` 返回 `(cast ID, err)`，cast 留作 failed、ID 不复用），衍生物标成 `stop_pending`：Runtime 不再推进它（不步进、不派发信号、不再跑回调），在之后的 tick 按退避重试停止——第一次在 `SpawnStopRetryBackoff`（默认 4）tick 之后，每失败一次间隔翻倍、最多 64 倍；成功后衍生物进入 `cancelled`，cast 不再被钉住，按 `CompletedCastLimit` 连同记录回收。移交后的衍生物到期 / 失效、或 lifecycle 实体消失时宿主拒绝停止，也一样转为 `stop_pending`，那一次的 `Advance` 返回错误，之后 Runtime 照常前进（RR-20261006-31；之前每次 `Advance` 都卡在这个衍生物上，整个 Runtime 的 tick 不动）。`Shutdown` / `RemoveProgram` 停不下的衍生物也一样转为 `stop_pending`、写进 checkpoint（之前留成 running、列在 `OwnedSpawns` 里等调用方重试）：它们返回第一个错误，之后继续 `Advance`、或 `Checkpoint` 后在新进程恢复再 `Advance`，Runtime 都会按原来的重试时刻接着停；再调一次 `Shutdown` / `RemoveProgram` 会立即再请求一次。`Shutdown` 不在原地同步重试（Runtime 按 tick 确定性推进、没有 ctx）。程序被移除后它的待停止衍生物照样由 Runtime 重试，重试不执行程序代码。被拒绝的停止只在第一次请求时跑回调与区域离开信号，之后的重试只重发宿主停止（RR-20261006-32：之前施法里的停止被拒后会再停一次、cancel 回调跑两遍）。失败的重试达到 `SpawnStopRetryLimit`（默认 10）次后不再自动重试：计 `skill.spawn.stop_retry_exhausted.total`、写一条 Warn 日志，记录保留（`RetentionStats().StopRetryExhaustedSpawns`），`Shutdown` / `RemoveProgram` 仍会再停一次。待停止条目最多 `MaxStopPendingSpawns`（默认 256）条，超限时丢最早的已告警条目（没有就丢最早仍在重试的）：删除记录、计 `skill.spawn.stop_pending_dropped.total`、写 Error 日志，Runtime 不再负责停它。待停止状态写进 checkpoint（格式版本 4 起；当前版本 5），恢复后按原时刻继续重试。
   - **客户端看到什么**：state mutation 依次是 `spawn_upsert`（`status: stop_pending`）→ 停掉后 `spawn_upsert`（`status: cancelled`）→ cast 回收时 `spawn_remove`；表现在进入待停止时多一条 `spawn_update`（`SpawnStatus: stop_pending`），停掉时 `spawn_stop`；待停止期间 presentation reset 仍带着这个衍生物（宿主侧还在）。重试次数与时刻不进同步状态，不会每次重试都发 mutation。`OwnedSpawns` 只列 Runtime 仍在推进的衍生物，待停止的看 `StateSnapshot().Spawns` 或 `RetentionStats()`。
 - **全局冷却**：定义顶层的 `"global_cooldown_ticks": N`。**从 commit tick 起算**（不是 Activate 时刻）：施法提交时把 caster 置入 N tick 的全局冷却，期间任何技能的主动施法返回 `ErrGlobalCooldownActive`。多次提交取最晚到期时间。
 - 全局冷却以保留程序 id `"$gcd"` 作为一条普通冷却条目存在：`StateSnapshot().Cooldowns`、增量 mutation 与 checkpoint 都能直接看到它，客户端按普通冷却渲染即可。
@@ -71,10 +71,10 @@ Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value
 
 | 写在哪里 | 上下文 | 能读 | 不能读 |
 | --- | --- | --- | --- |
-| phase 流程与 effect result 分支、costs / sustain costs、windup / recovery 表达式、spawn 的 `position` / 属性覆盖、衍生物 numeric track 的初值 | `cast_flow` | `$input.*`、`$memory.*`、`$local.*`、`$caster`、`$primary_target`、`$ability.self`、`$cast.*`；快照 `cast_start` / `phase_start` | `$owner`、`$lifecycle_entity`、`$spawn`、`$event.*`；`spawn_start` |
+| phase 流程与 effect result 分支、costs / sustain costs、windup / recovery 表达式、召唤效果（`summon`）的 `position` / 属性覆盖 / 参数、衍生物 numeric track 的初值 | `cast_flow` | `$input.*`、`$memory.*`、`$local.*`、`$caster`、`$primary_target`、`$ability.self`、`$cast.*`；快照 `cast_start` / `phase_start` | `$owner`、`$lifecycle_entity`、`$spawn`、`$event.*`；`spawn_start` |
 | memory 默认值 | `memory_default` | `$input.*`、`$caster`、`$primary_target`、`$ability.self`、`$cast.*`（都是 Activate 时的值）；`cast_start` | 别的 `$memory`、`$local`；`phase_start` |
-| spawn 衍生物**每一步重新求值**的字段：area 选择、follow / tracking / carry 目标、path 点、orbit 锚点、parabola 目的地、没有绑定到衍生物数值属性的数值字段 | `spawn_step` | `$caster`、`$caster.position`、`$cast.mode` | 其余施法引用与衍生物引用；全部缓存快照 |
-| spawn 的 `on.*` 回调 | `spawn_callback` | `$owner`、`$owner.position`、`$lifecycle_entity`、`$spawn`、`$event.*`、回调自己的 `$local.*`；`spawn_start` | 施法的一切（`$input`、`$memory`、`$caster`、`$primary_target`、`$ability.self`、`$cast.*`）；`cast_start` / `phase_start` |
+| 衍生物**每一步重新求值**的字段：area 选择、follow / tracking / carry 目标、path 点、orbit 锚点、parabola 目的地、没有绑定到衍生物数值属性的数值字段 | `spawn_step` | `$caster`、`$caster.position`、`$cast.mode` | 其余施法引用与衍生物引用；全部缓存快照 |
+| 衍生物的 `on.*` 回调 | `spawn_callback` | `$owner`、`$owner.position`、`$lifecycle_entity`、`$spawn`、`$event.*`、回调自己的 `$local.*`；`spawn_start` | 施法的一切（`$input`、`$memory`、`$caster`、`$primary_target`、`$ability.self`、`$cast.*`）；`cast_start` / `phase_start` |
 | 持久状态默认值 | `state_default` | 字面量、`$caster`、`$caster.position`、`$cast.mode` | 其余引用；全部缓存快照 |
 
 衍生物字段在启动那一步用施法求值，之后每一步用移交后的衍生物求值，所以只能读两边都求得出、且值一样的引用；状态默认值在读 / 写这条状态的地方求值，那里可能是施法流程、衍生物字段或衍生物回调，所以只能读在所有这些地方都一样的引用。
@@ -85,7 +85,7 @@ Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value
 
 | 写法 | 以前实际得到的值 | 改成 |
 | --- | --- | --- |
-| 衍生物字段里的 `$primary_target`（例如 area 的 `from`） | 启动那一步是施法目标，之后每一步是衍生物的 lifecycle 实体 | spawn 的 `position` 在施法流程里求一次，用 `$input.target.position` 把 lifecycle 实体放到目标处，再在回调里以 `$lifecycle_entity` / `$event.target` 为准（例如 `on.tick` 里 `select` from `$lifecycle_entity` 代替 area 选择）。每一步跟随一个移动中的施法目标没有等价写法：移交后的衍生物不持有施法目标 |
+| 衍生物字段里的 `$primary_target`（例如 area 的 `from`） | 启动那一步是施法目标，之后每一步是衍生物的 lifecycle 实体 | 召唤效果的 `position` 在施法流程里求一次，用 `$input.target.position` 把 lifecycle 实体放到目标处，再在回调里以 `$lifecycle_entity` / `$event.target` 为准（例如 `on.tick` 里 `select` from `$lifecycle_entity` 代替 area 选择）。每一步跟随一个移动中的施法目标没有等价写法：移交后的衍生物不持有施法目标 |
 | 衍生物字段里的 `$cast.charge_bp` / `$cast.release_reason` / `$cast.pulse_index` / `$cast.stock` / `$cast.max_stock` | 启动那一步是施法的值，之后是零值 | 衍生物 `numeric_tracks` 的初值（衍生物启动时用施法求一次，例如 `{"op":"scale_bp","args":[10,"$cast.charge_bp"]}`） |
 | 衍生物字段里的 `$cast.elapsed_ticks` | 之后每一步是当前 tick | 衍生物自己的计时：numeric track 加回调里 `modify_spawn` 的 `over_ticks`，或回调里的 `$event.tick` / `$event.membership_ticks` |
 | 衍生物字段里的 `$ability.self` | 之后 handle 为 0 | 在施法流程里读写技能状态 |
@@ -109,14 +109,14 @@ Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value
 - **`max_reflects: N` 实际反弹 N−1 次（O16）**：N 是**碰撞预算**，不是反弹次数。每次碰撞消耗 1；预算没用完时翻转方向、发 transition 并继续飞；第 N 次碰撞同样翻转方向、发 transition，然后在同一 tick 结束运动。所以 `max_reflects: 1` 是“碰到就结束”，想要弹 k 次再结束写 `k+1`。`max_pierces: N` 同理：穿过前 N−1 个，第 N 次碰撞时结束。
 - **Host 拿到的 numeric 快照与运动实际取值不同源（O17）**：`SpawnStepCommand.Numeric` 里，被 numeric track 绑定到衍生物数值属性的字段是衍生物当前值；**没有绑定**的字段报告的是衍生物启动时求一次的值，而运动每一步按 `spawn_step` 列重新求值表达式（见上文求值上下文表）。速度等字段写成随时间变化的表达式时，Host 在快照里看到的速度与实际位移用的速度可能不同。parabola 的 speed、tracking 的转向速率、boomerang 的回程速度、碰撞力在快照里的基值恒为 0（由 Host 自己管理）。Host 需要“这一步实际用的值”时，让技能用 numeric track 绑定该字段，或从运动步骤命令本身取位置 / 位移，不要依赖未绑定字段的快照。
 - **restore 的 `on_blocked` 与 profile 策略冲突时必然失败（O27）**：参考宿主 `MemoryHost` 的 temporal restore 里，`on_blocked` 为空时用快照 profile 的 `BlockedPositionPolicy`；写了且与 profile 不同，恢复返回预期失败 `policy_rejected`（走 `result.failure`），不会按 `on_blocked` 覆盖 profile。编译期只检查取值合法——token 可以经持久状态跨施法传递，profile 在编译期不一定可知。所以 `on_blocked` 实际只是“与 profile 一致”的断言：一般不写，写就写成与 profile 相同的值。自己实现 temporal 的 Host 应保持同一口径（`TestTemporalPassBranches` 钉住）。
-- **spawn_start 读取的实体按启动时的事件求值（O28）**：spawn 回调里 `read_attribute` 写 `snapshot: "spawn_start"` 时，整个读取（包括 `entity`）在衍生物启动那一刻求值，那时的 `$event` 是启动事件（`$event.target` 是 lifecycle 实体），不是每次回调的事件。所以 `{"entity":"$event.target","snapshot":"spawn_start"}` 读到的是 lifecycle 实体启动时的值，不是本次回调目标的值。这与 `cast_start` “整个读取在采样点求值”的口径一致。要按回调目标读，用 `snapshot: "current"`。
+- **spawn_start 读取的实体按启动时的事件求值（O28）**：衍生物回调里 `read_attribute` 写 `snapshot: "spawn_start"` 时，整个读取（包括 `entity`）在衍生物启动那一刻求值，那时的 `$event` 是启动事件（`$event.target` 是 lifecycle 实体），不是每次回调的事件。所以 `{"entity":"$event.target","snapshot":"spawn_start"}` 读到的是 lifecycle 实体启动时的值，不是本次回调目标的值。这与 `cast_start` “整个读取在采样点求值”的口径一致。要按回调目标读，用 `snapshot: "current"`。
 
 ### 编译期收紧与诊断文案（O22、O29，未发版）
 
 维护者第十二轮决定（2026-10-06）：
 
-- **summon 衍生物不写 `duration_ticks`（O22）**：summon 衍生物的寿命就是 spawn 效果的 `duration_ticks`（编译期要求为正），衍生物自己的 `duration_ticks` 从来不被读取，以前负数也能编译。现在 summon 上写 `duration_ticks`（非 0）报 `MOTION_INVALID`；`area`、`interval_ticks`、`emit_leave_on_stop` 同样拒绝（summon 不做成员检测，以前写了 `area` 编译通过、运行期启动即 `ErrProgramInvariant`）。**升级**：删掉 summon 衍生物上的这几个字段，行为不变。
-- **result 分支里可以启动不带回调的衍生物（O29，只改文案）**：effect result 分支与 status 实例选择的消费流程不能挂起（`wait`、带 `interval_ticks` 的 `repeat`），也不能启动带 `on` 回调的衍生物；spawn 加不带 `on` 的衍生物一直可以编译，执行时照常启动衍生物。诊断文案改为 “cannot suspend (wait, repeat with interval_ticks) or start a spawn with on callbacks”，以前写的 “cannot suspend or start a spawn” 与规则不符。
+- **minion 衍生物不写 `duration_ticks`（O22）**：minion 衍生物（`kind: "minion"`，2026-10-07 前叫 `summon`）的寿命就是召唤效果的 `duration_ticks`（编译期要求为正），衍生物自己的 `duration_ticks` 从来不被读取，以前负数也能编译。现在 minion 上写 `duration_ticks`（非 0）报 `MOTION_INVALID`；`area`、`interval_ticks`、`emit_leave_on_stop` 同样拒绝（minion 不做成员检测，以前写了 `area` 编译通过、运行期启动即 `ErrProgramInvariant`）。**升级**：删掉 minion 衍生物上的这几个字段，行为不变。
+- **result 分支里可以启动不带回调的衍生物（O29，只改文案）**：effect result 分支与 status 实例选择的消费流程不能挂起（`wait`、带 `interval_ticks` 的 `repeat`），也不能启动带 `on` 回调的衍生物；召唤效果加不带 `on` 的衍生物一直可以编译，执行时照常启动衍生物。诊断文案改为 “cannot suspend (wait, repeat with interval_ticks) or start a spawn with on callbacks”，以前写的 “cannot suspend or start a spawn” 与规则不符。
 
 ## combat：零依赖战斗内容电池
 
@@ -182,7 +182,7 @@ crit := combat.ChanceRoll(matchSeed, "crit", critChanceBP,
 - `CombatDao`：持有全部战斗状态，实现 `entity.DaoInterface` + `dataengine.Tracker` 契约 + `entity.PersistedDaoLoader`（BSON + schema 版本）与 nest 状态回滚接口；undo 策略下由 DAO 自己按字段掩码（vitals / attributes / buffs）登记逆操作并标脏，与生成 DAO 的 setter 同形。
 - `CombatComponent`：只持有 DAO，全部 mutator 经 DAO 改状态，自己不登记 undo（回滚统一走 DAO，[A1](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）——handler 失败或提交被拒后，两种回滚策略下实体字节一致。
 - **Runtime 不在事务里**（维护者决定 B4，见上文“Runtime 不在事务里（B4）”）：Nest 回滚只撤回 DAO；`skill.Runtime` 自己的状态不回退。
-- `HostAdapter`：实现 `skill.Host` 的战斗面（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepSpawn`/空间查询/生成物仍由业务 Host 实现。
+- `HostAdapter`：实现 `skill.Host` 的战斗面（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepSpawn`/空间查询/召唤物仍由业务 Host 实现。
 
 ### 属性投影（O2，未发版）
 

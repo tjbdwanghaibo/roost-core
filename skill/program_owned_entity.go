@@ -1,6 +1,6 @@
 package skill
 
-type spawnOperation struct {
+type summonOperation struct {
 	operationHeader
 	effectContinuations
 	effectIndex        EffectIndex
@@ -8,16 +8,16 @@ type spawnOperation struct {
 	position           programValue
 	count              int
 	durationTicks      Tick
-	attributeOverrides []spawnAttributeOverrideProgram
-	parameterBindings  []spawnParameterBindingProgram
+	attributeOverrides []summonAttributeOverrideProgram
+	parameterBindings  []summonParameterBindingProgram
 }
 
-type spawnAttributeOverrideProgram struct {
+type summonAttributeOverrideProgram struct {
 	attribute AttributeHandle
 	value     programValue
 }
 
-type spawnParameterBindingProgram struct {
+type summonParameterBindingProgram struct {
 	name  string
 	value programValue
 }
@@ -35,7 +35,7 @@ type entityCommandOperation struct {
 	behavior        string
 }
 
-func (operation spawnOperation) isProgramOperation()             {}
-func (operation spawnOperation) header() operationHeader         { return operation.operationHeader }
+func (operation summonOperation) isProgramOperation()            {}
+func (operation summonOperation) header() operationHeader        { return operation.operationHeader }
 func (operation entityCommandOperation) isProgramOperation()     {}
 func (operation entityCommandOperation) header() operationHeader { return operation.operationHeader }

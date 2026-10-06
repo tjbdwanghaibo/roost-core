@@ -200,7 +200,7 @@ World revision 是关键防线：Runtime 的 query/command 会携带期望 revis
 | 数值与快照 | `dynamic_numeric`、`attribute_scaling_snapshot` | `compile_quantity.go`、`compile_snapshot.go`、`runtime_eval.go` |
 | 状态 | `status_modifier`、`status_cleanse`、`status_steal` | `compile_status.go`、`runtime_select.go`、`memory_host_status.go` |
 | State/能力控制 | `persistent_mark`、`shared_state_combo`、`cooldown_refund`、`ability_disable` | `compile_state.go`、`runtime_state.go`、`runtime_ability.go` |
-| Owned Entity | `owned_trap`、`owned_pet_command` | `compile_owned_entity.go`、`runtime_owned_spawn.go`、`memory_host_owned_entity.go` |
+| Owned Entity | `owned_trap`、`owned_pet_command` | `compile_owned_entity.go`、`runtime_owned_entity.go`、`memory_host_owned_entity.go` |
 | Temporal/Result | `temporal_rewind`、`effect_result_kill_branch` | `compile_temporal.go`、`runtime_temporal.go`、`runtime_effect_result.go` |
 | Passive proc | `passive_counter`、`passive_proc_guard`、`ammo_on_kill` | `compile_proc.go`、`runtime_proc.go` |
 

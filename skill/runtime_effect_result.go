@@ -60,9 +60,9 @@ func runtimeEffectResultFromHost(layout resultLayoutProgram, payload EffectResul
 	}
 	if outcome.Succeeded {
 		switch typed := payload.(type) {
-		case SpawnEffectResult:
+		case SummonEffectResult:
 			if len(typed.Entities) == 0 || typed.FirstEntity == 0 || typed.Entities[0] != typed.FirstEntity {
-				return RuntimeValue{}, ResultOutcome{}, fmt.Errorf("%w: spawn success requires a stable non-empty entity result", ErrHostContractViolation)
+				return RuntimeValue{}, ResultOutcome{}, fmt.Errorf("%w: summon success requires a stable non-empty entity result", ErrHostContractViolation)
 			}
 		case SnapshotCaptureEffectResult:
 			if typed.Token.opaque == 0 {
@@ -110,7 +110,7 @@ func hostPayloadCarriesSuccessData(payload EffectResultPayload) bool {
 		return hasHooks || hasStatusResultData(result)
 	case AttributeModifierEffectResult:
 		return typed.Result != (AttributeModifierResult{})
-	case SpawnEffectResult:
+	case SummonEffectResult:
 		return len(typed.Entities) != 0 || typed.FirstEntity != 0
 	case StateChangeEffectResult:
 		return typed.Before.Present() || typed.After.Present() || typed.Applied
@@ -164,7 +164,7 @@ func normalizeEffectResultPayload(payload EffectResultPayload) EffectResultPaylo
 		if typed != nil {
 			return *typed
 		}
-	case *SpawnEffectResult:
+	case *SummonEffectResult:
 		if typed != nil {
 			return *typed
 		}
@@ -216,8 +216,8 @@ func effectPayloadOutcome(payload EffectResultPayload) (ResultOutcome, resultTyp
 		return typed.ResultOutcome, resultTypeStatusOperation, true
 	case AttributeModifierEffectResult:
 		return typed.ResultOutcome, resultTypeAttributeModifier, true
-	case SpawnEffectResult:
-		return typed.ResultOutcome, resultTypeSpawn, true
+	case SummonEffectResult:
+		return typed.ResultOutcome, resultTypeSummon, true
 	case StateChangeEffectResult:
 		return typed.ResultOutcome, resultTypeStateChange, true
 	case AbilityChangeEffectResult:
@@ -298,7 +298,7 @@ func hostResultField(payload EffectResultPayload, name string) (RuntimeValue, bo
 		case "due_tick":
 			return IntRuntimeValue(int64(typed.Result.DueTick), quantityTicks), true
 		}
-	case SpawnEffectResult:
+	case SummonEffectResult:
 		switch name {
 		case "entities":
 			return EntityListRuntimeValue(typed.Entities), true

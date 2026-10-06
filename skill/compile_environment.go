@@ -72,7 +72,7 @@ type UnitTemplateCatalogEntry struct {
 	MaximumPerOwner                                      int
 	MaximumPerSourceSkill                                int
 	MaximumPerTeam                                       int
-	MaximumSpawnCount                                    int
+	MaximumSummonCount                                   int
 	MaximumLifetimeTicks                                 Tick
 	Commands                                             []string
 	Behaviors                                            []string
@@ -321,7 +321,7 @@ func defaultVisualCatalog() VisualCatalog {
 	}
 	for category, effects := range map[string][]string{
 		"cast": {"cast"}, "impact": {"damage", "heal", "resource", "shield", "status", "attribute_modifier", "teleport", "knockback", "pull", "stop_movement"},
-		"attachment": {"shield", "status", "attribute_modifier"}, "movement": {"teleport", "knockback", "pull", "stop_movement"}, "projectile": {"projectile"}, "beam": {"beam"}, "area": {"area"}, "summon": {"spawn"},
+		"attachment": {"shield", "status", "attribute_modifier"}, "movement": {"teleport", "knockback", "pull", "stop_movement"}, "projectile": {"projectile"}, "beam": {"beam"}, "area": {"area"}, "summon": {"summon"},
 	} {
 		result.Categories[category] = VisualCategoryDescriptor{Key: category, Themes: map[string]VisualThemeDescriptor{"default": {Key: "default", AllowedEffects: append([]string(nil), effects...), AllowedElements: append([]string(nil), elements...), RequiredElements: 1, ClientPackageKey: "client.visual." + category + ".default"}}}
 	}
@@ -407,7 +407,7 @@ func defaultGameplayCatalog() GameplayCatalog {
 			{Handle: 1, Key: "slow", Category: "control", RefreshPolicy: "refresh", MaxStacks: 1, DispelCategory: "debuff", TenacityPolicy: "scale_duration", SourceOwnership: "source", RemovalPolicy: "expire", Polarity: "negative", DispelPriority: 10, AttributeModifiers: []StatusAttributeModifier{{Attribute: 3, Operation: "mul_bp", Value: 8000}}, PeriodicPolicy: "none", Dispellable: true, Copyable: true, Transferable: true, Stealable: true, DurationOperations: []string{"add_duration", "set_duration", "mul_duration_bp", "refresh"}, MaximumDurationTicks: 600},
 			{Handle: 2, Key: "shield", Category: "shield", RefreshPolicy: "stack", MaxStacks: 1, DispelCategory: "buff", TenacityPolicy: "none", SourceOwnership: "source", RemovalPolicy: "consume", Polarity: "positive", DispelPriority: 20, PeriodicPolicy: "none", Dispellable: true, Transferable: true, DurationOperations: []string{"add_duration", "set_duration", "mul_duration_bp", "refresh"}, MaximumDurationTicks: 600},
 		}},
-		UnitTemplates: UnitTemplateCatalog{Revision: "units-1", Entries: []UnitTemplateCatalogEntry{{Handle: 1, Key: "deployable.trap", OwnerPolicy: "owner", OwnerDeathPolicy: "despawn", SkillRemovedPolicy: "despawn", MatchEndPolicy: "despawn", MaximumPerOwner: 8, MaximumPerSourceSkill: 8, MaximumPerTeam: 8, MaximumSpawnCount: 8, MaximumLifetimeTicks: 600, ReplacementPolicy: "replace_oldest", ControlProfile: "trap-basic", Commands: []string{"hold_position", "despawn"}, Behaviors: []string{"armed"}, GameplayTags: []GameplayTagHandle{1}}}},
+		UnitTemplates: UnitTemplateCatalog{Revision: "units-1", Entries: []UnitTemplateCatalogEntry{{Handle: 1, Key: "deployable.trap", OwnerPolicy: "owner", OwnerDeathPolicy: "dismiss", SkillRemovedPolicy: "dismiss", MatchEndPolicy: "dismiss", MaximumPerOwner: 8, MaximumPerSourceSkill: 8, MaximumPerTeam: 8, MaximumSummonCount: 8, MaximumLifetimeTicks: 600, ReplacementPolicy: "replace_oldest", ControlProfile: "trap-basic", Commands: []string{"hold_position", "dismiss"}, Behaviors: []string{"armed"}, GameplayTags: []GameplayTagHandle{1}}}},
 		Collision:     CollisionLayerCatalog{Revision: "collision-1", Entries: []CollisionLayerCatalogEntry{{Handle: 1, Key: "terrain"}}},
 		DamageTypes:   DamageTypeCatalog{Revision: "damage-1", Entries: []DamageTypeCatalogEntry{{Handle: 1, Key: "physical"}, {Handle: 2, Key: "magic"}, {Handle: 3, Key: "true"}}},
 		Elements:      ElementCatalog{Revision: "elements-1", Entries: []ElementCatalogEntry{{Handle: 1, Key: "neutral", MatchupPolicy: "neutral"}, {Handle: 2, Key: "fire", MatchupPolicy: "elemental"}}},

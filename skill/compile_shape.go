@@ -92,15 +92,15 @@ func runShapePass(context *compileContext) {
 				context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path, "parallel branches must not be empty")
 			}
 		case *effectFlowIR:
-			// 只有 spawn 会启动实体衍生物（executeOwnedSpawn → startEntitySpawn）。其他效果上的
+			// 只有召唤效果（summon）会启动实体衍生物（executeOwnedSummon → startEntitySpawn）。其他效果上的
 			// spawn / on 会被 lower 成衍生物模板，但 Runtime 从不启动、回调从不执行
 			// （RR-20261005-NC-222）。
-			if _, spawn := typed.effect.(*spawnEffectIR); !spawn {
+			if _, summon := typed.effect.(*summonEffectIR); !summon {
 				if typed.spawn != nil {
-					context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".spawn", "only a spawn effect starts a spawn")
+					context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".spawn", "only a summon effect starts a spawn")
 				}
 				if typed.callbacks != nil {
-					context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".on", "only a spawn effect has spawn callbacks")
+					context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".on", "only a summon effect has spawn callbacks")
 				}
 			}
 		case *selectFlowIR:
