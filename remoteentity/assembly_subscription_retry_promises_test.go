@@ -10,7 +10,7 @@ import (
 )
 
 // N05：第二个订阅失败时，必须释放第一个订阅；同一 Assembly 的重试须恢复
-// 两个订阅，重复 Start 不重复绑定，重复 Stop 后资源最终为零。
+// 全部订阅，重复 Start 不重复绑定，重复 Stop 后资源最终为零。
 type retrySubscriptionBus struct {
 	calls, active int
 	failure       error
@@ -18,7 +18,7 @@ type retrySubscriptionBus struct {
 
 func (*retrySubscriptionBus) Publish(*fsyncbus.SyncMsg) error { return nil }
 
-// SubscribeLive 让快照推送开着（Mirror 第 4 步），两个订阅都经同一个计数。
+// SubscribeLive 让快照推送开着（Mirror 第 4 步），全部订阅都经同一个计数。
 func (b *retrySubscriptionBus) SubscribeLive(topic string, h fsyncbus.Handler) (func(), error) {
 	return b.Subscribe(topic, h)
 }
@@ -47,7 +47,8 @@ func TestRemoteAssemblyRetryAfterSecondSubscriptionFailure(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if b.active != 2 || b.calls != 4 {
+	// 重试订阅全部三个（快照、兴趣、兴趣续租请求），总共 2 + 3 次调用。
+	if b.active != liveSubscriptions || b.calls != 2+liveSubscriptions {
 		t.Fatalf("retry binding: active=%d calls=%d", b.active, b.calls)
 	}
 	for range 2 {

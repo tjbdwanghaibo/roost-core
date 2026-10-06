@@ -369,6 +369,10 @@ owner 进程里 `RemoteEntityMod` 把 `Manager.SnapshotClient()` 登记为同一
 
 兴趣容量按 consumer 计（O4）：每个 consumer 节点在每个节点的兴趣表里最多 `remote_entity.snapshot_interest_per_consumer` 份租约（缺省 0 = `snapshot_interest_subs / 16`，不能大于 `snapshot_interest_subs`）；`snapshot_interest_subs` 是每个节点兴趣表的条目上限（兴趣是广播，每个节点存所有 consumer 的租约），按“consumer 节点数 × 配额”选。超出配额的 key 没有推送、按需读取：consumer 本地就得到 `remoteentity.ErrInterestQuotaExceeded`（表满为 `ErrInterestRegistryFull`，都是 `ErrRemoteOverloaded`），计入 `remote_entity.remote.interest_renew_refused_total` 与健康信息 `interest_refused`；owner 侧按原因计入 `remote_entity.remote.interest_rejected_total{reason}` 并限频记日志。release 之后迟到的更旧续租不再复活租约。
 
+owner 同 sid 重启（O-M6-1）：重启的 owner 兴趣表是空的。`Assembly.Start`（`RemoteEntityMod`）订阅确认后在 `remote_entity_interest_refresh` 主题广播一条“请重新续租”，推送开着的只读方收到后把本机仍有效的兴趣立即续租一次，推送在一次往返内恢复，不用等各自的续租周期（剩余不足一半，缺省最长约 15s）。续租走与读时续租同一入口（代际、配额、撤销水位不变），请求合并、两次遍历至少隔 1s。旧版本只读方不订阅这个主题，混跑期间它们仍按原周期收敛；不需要任何配置（T-278）。
+
+墓碑写入等副本（O-M6-3）：L2 带版本删除写墓碑之后，在同一连接上对该键所在的 Redis 主节点发 `WAIT`，等 `remote_entity.snapshot_l2_tombstone_wait_replicas`（缺省 1，0 关闭）个副本确认，最多 `remote_entity.snapshot_l2_tombstone_wait_timeout`（缺省 50ms，必须为正且不超过 1s：调用方最多多等这么久，也要低于 Redis 客户端读超时）。主节点没有副本（单机开发环境）时自动不等。确认不足或 WAIT 出错时删除照常成功（墓碑已在主节点上），只计 `remote_entity.snapshot_l2_tombstone_wait_total{result}` 并限频 Warn（T-277）。它缩小“墓碑未复制就切主、新只读方在陈旧上限内读回已删除实体”的窗口，但副本断开时仍可能丢，要彻底避免需要部署约束（`min-replicas-to-write`）。普通快照写入不等。两项都是 A4 严格读取，`RemoteEntityMod` 与 `RemoteMirrorMod` 共用。
+
 L2 快照键默认是 `remote_entity:snapshot:<tenant>:<kind>:<id>:<scope>:<policy>`，不带部署前缀。多个部署共用一个 Redis db 时，给每个部署配置不同的
 `remote_entity.snapshot_l2_key_prefix`（例如 `roost:<工程名>`，core 为 `Config.SnapshotL2KeyPrefix`），键变为 `<prefix>:remote_entity:snapshot:…`，
 否则彼此读写同一份快照。缺省为空时键与旧版本逐字相同，不需要迁移。同一部署的所有节点必须配置同一个值：新设或修改前缀相当于换一套空的 L2（快照会从权威重新发布），

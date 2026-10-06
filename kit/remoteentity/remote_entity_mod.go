@@ -317,6 +317,28 @@ func readSnapshotConfig(cfg *viper.Viper, read *app.ConfigReader, out *coreremot
 		}
 		out.SnapshotL2KeyPrefix = prefix
 	}
+	// O-M6-3：L2 写墓碑之后等几个副本确认、最多等多久（缺省 1 个、50ms；0 个关闭）。严格读取（A4）：写错类型
+	// 报错；副本数不能为负；超时必须为正（Redis 的 WAIT … 0 是永久阻塞）且不超过 1s（调用方最多多等这么久）。
+	if cfg.IsSet("remote_entity.snapshot_l2_tombstone_wait_replicas") {
+		replicas := read.Int("remote_entity.snapshot_l2_tombstone_wait_replicas")
+		if err := read.Err(); err != nil {
+			return err
+		}
+		if replicas < 0 {
+			return fmt.Errorf("remote_entity.snapshot_l2_tombstone_wait_replicas must not be negative, got %v", cfg.Get("remote_entity.snapshot_l2_tombstone_wait_replicas"))
+		}
+		out.SnapshotL2TombstoneWaitReplicas = replicas
+	}
+	if cfg.IsSet("remote_entity.snapshot_l2_tombstone_wait_timeout") {
+		timeout := read.Duration("remote_entity.snapshot_l2_tombstone_wait_timeout")
+		if err := read.Err(); err != nil {
+			return err
+		}
+		if timeout <= 0 || timeout > coreremote.MaxSnapshotL2TombstoneWaitTimeout {
+			return fmt.Errorf("remote_entity.snapshot_l2_tombstone_wait_timeout must be positive and at most %v, got %v", coreremote.MaxSnapshotL2TombstoneWaitTimeout, cfg.Get("remote_entity.snapshot_l2_tombstone_wait_timeout"))
+		}
+		out.SnapshotL2TombstoneWaitTimeout = timeout
+	}
 	if ttl := read.Duration("remote_entity.snapshot_interest_ttl"); ttl > 0 {
 		out.SnapshotInterestTTL = ttl
 	}

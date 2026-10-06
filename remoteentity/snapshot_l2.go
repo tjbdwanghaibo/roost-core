@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/cache"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	rediscore "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
@@ -105,6 +109,31 @@ type remoteSnapshotL2Store struct {
 	// keyPrefix 为空时键与旧版本逐字相同（remote_entity:snapshot:…）；非空时键为 "<keyPrefix>:remote_entity:snapshot:…"，
 	// 让共用一个 Redis db 的多个部署不共享 L2 快照（RR-20260927-17）。
 	keyPrefix string
+	// tombstoneWait 是写墓碑之后的 WAIT（O-M6-3）；零值不等。
+	tombstoneWait tombstoneWait
+}
+
+// tombstoneWait 是 DeleteAtVersion 写墓碑之后的 WAIT 设置与计数（O-M6-3，
+// docs/feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md §3）。
+//
+// 为什么只对墓碑：Redis 异步复制，切主时还没复制到副本的写会丢。快照丢了只是回到更旧的版本，L2 的 CAS 与
+// 陈旧上限照样保证不回退；墓碑丢了，L1 空的新读者会在陈旧上限内把已删除的实体读成存在（O-M6-3）。删除很少，
+// 每次多等一次副本确认的代价小。WAIT 只缩小窗口：副本在确认前断开或被暂停时仍会丢，结果计为 short /
+// no_replicas，可观测。
+type tombstoneWait struct {
+	replicas int
+	timeout  time.Duration
+
+	confirmed, short, noReplicas, failed, skipped atomic.Uint64
+	lastWarnAt                                    atomic.Int64
+	noReplicaOnce                                 sync.Once
+}
+
+// SnapshotL2TombstoneWaitStats 是墓碑 WAIT 的累计结果（诊断与测试用）。
+type SnapshotL2TombstoneWaitStats struct {
+	// Confirmed：副本确认数达到配置。Short：WAIT 超时、确认不足。NoReplicas：主节点没有连着的副本，没等。
+	// Failed：ROLE / WAIT 出错（脚本已执行、复制未知）。Skipped：客户端不支持同连接 WAIT 或 Cluster 拓扑刚变，没等。
+	Confirmed, Short, NoReplicas, Failed, Skipped uint64
 }
 
 type remoteSnapshotL2Value struct {
@@ -139,6 +168,50 @@ func NewSnapshotL2StoreWithKeyPrefix(redis remoteSnapshotRedis, ttl time.Duratio
 		return nil, err
 	}
 	return &remoteSnapshotL2Store{redis: redis, ttl: ttl, keyPrefix: prefix}, nil
+}
+
+// NewSnapshotL2StoreFromConfig 按 Config 建 L2 store：SnapshotL2TTL、SnapshotL2KeyPrefix 与墓碑 WAIT
+// （SnapshotL2TombstoneWaitReplicas / Timeout，O-M6-3）。Assemble 与 kit 的只读 RemoteMirrorMod 都用它，
+// 规则只在这里检查一次。
+func NewSnapshotL2StoreFromConfig(redis remoteSnapshotRedis, cfg *Config) (*remoteSnapshotL2Store, error) {
+	if cfg == nil {
+		cfg = DefaultConfig()
+	}
+	if err := ValidateSnapshotL2TombstoneWait(cfg.SnapshotL2TombstoneWaitReplicas, cfg.SnapshotL2TombstoneWaitTimeout); err != nil {
+		return nil, err
+	}
+	store, err := NewSnapshotL2StoreWithKeyPrefix(redis, cfg.SnapshotL2TTL, cfg.SnapshotL2KeyPrefix)
+	if err != nil {
+		return nil, err
+	}
+	store.tombstoneWait.replicas = cfg.SnapshotL2TombstoneWaitReplicas
+	store.tombstoneWait.timeout = cfg.SnapshotL2TombstoneWaitTimeout
+	return store, nil
+}
+
+// MaxSnapshotL2TombstoneWaitTimeout 是墓碑 WAIT 超时的上限：调用方（owner 的提交后发布、只读方 apply
+// 删除消息）最多多等这么久；它也必须低于 Redis 客户端的读超时（缺省 3s），否则客户端先超时，WAIT 记为出错。
+const MaxSnapshotL2TombstoneWaitTimeout = time.Second
+
+// ValidateSnapshotL2TombstoneWait 校验墓碑 WAIT 的设置：副本数不能为负；要等副本时超时必须为正（Redis 的
+// WAIT … 0 是永久阻塞，删除会卡住），且不超过 MaxSnapshotL2TombstoneWaitTimeout。
+func ValidateSnapshotL2TombstoneWait(replicas int, timeout time.Duration) error {
+	if replicas < 0 {
+		return fmt.Errorf("remote_entity: snapshot L2 tombstone wait replicas must not be negative, got %d", replicas)
+	}
+	if replicas > 0 && (timeout <= 0 || timeout > MaxSnapshotL2TombstoneWaitTimeout) {
+		return fmt.Errorf("remote_entity: snapshot L2 tombstone wait timeout must be in (0, %v] when waiting for %d replica(s), got %v", MaxSnapshotL2TombstoneWaitTimeout, replicas, timeout)
+	}
+	return nil
+}
+
+// TombstoneWaitStats 返回墓碑 WAIT 的累计结果。
+func (s *remoteSnapshotL2Store) TombstoneWaitStats() SnapshotL2TombstoneWaitStats {
+	if s == nil {
+		return SnapshotL2TombstoneWaitStats{}
+	}
+	w := &s.tombstoneWait
+	return SnapshotL2TombstoneWaitStats{Confirmed: w.confirmed.Load(), Short: w.short.Load(), NoReplicas: w.noReplicas.Load(), Failed: w.failed.Load(), Skipped: w.skipped.Load()}
 }
 
 // ValidateSnapshotL2KeyPrefix 校验 L2 快照键前缀：可以为空（键不变）；非空时不能有首尾空白或内部空白，
@@ -244,13 +317,32 @@ func (s *remoteSnapshotL2Store) Delete(ctx context.Context, key entity.RemoteSna
 // than version refuses the delete; that is reported as cache.ErrStaleWrite so
 // the cache adopts the newer snapshot (B2). The script is idempotent — the
 // tombstone only ever rises — so re-sending it after an unknown result is safe.
+//
+// O-M6-3：配置了墓碑 WAIT 且客户端支持同连接 WAIT（fredis.ReplicatedEvaler）时，脚本之后在同一连接上等副本
+// 确认。WAIT 的结果不改变返回值——墓碑已经写在主节点上，报错只会把一次已提交的删除变成“结果未知”；
+// 确认不足、出错都只计数与记日志（recordTombstoneWait）。调用方最多多等 timeout。
 func (s *remoteSnapshotL2Store) DeleteAtVersion(ctx context.Context, key entity.RemoteSnapshotKey, version uint64) error {
 	if s == nil || s.redis == nil || !key.Valid() {
 		return nil
 	}
-	result, err := s.redis.Eval(ctx, remoteSnapshotL2DeleteAtVersion, []string{s.key(key)}, strconv.FormatUint(version, 10), s.ttl.Milliseconds())
-	if err != nil {
-		return err
+	redisKey := s.key(key)
+	args := []any{strconv.FormatUint(version, 10), s.ttl.Milliseconds()}
+	var result any
+	if replicated, ok := s.redis.(rediscore.ReplicatedEvaler); ok && s.tombstoneWait.replicas > 0 {
+		outcome, err := replicated.EvalReplicated(ctx, remoteSnapshotL2DeleteAtVersion, []string{redisKey}, s.tombstoneWait.replicas, s.tombstoneWait.timeout, args...)
+		if err != nil {
+			return err
+		}
+		result = outcome.Result
+		s.recordTombstoneWait(redisKey, outcome)
+	} else {
+		var err error
+		if result, err = s.redis.Eval(ctx, remoteSnapshotL2DeleteAtVersion, []string{redisKey}, args...); err != nil {
+			return err
+		}
+		if s.tombstoneWait.replicas > 0 {
+			s.recordTombstoneWait(redisKey, rediscore.ReplicatedEvalResult{Result: result, Skipped: rediscore.ReplicatedSkipUnsupported})
+		}
 	}
 	if fmt.Sprint(result) == "0" {
 		return fmt.Errorf("%w: L2 holds a snapshot newer than the delete", cache.ErrStaleWrite)
@@ -259,6 +351,45 @@ func (s *remoteSnapshotL2Store) DeleteAtVersion(ctx context.Context, key entity.
 }
 
 var _ entity.RemoteSnapshotVersionedDeleter = (*remoteSnapshotL2Store)(nil)
+
+// recordTombstoneWait 计墓碑 WAIT 的结果（指标 remote_entity.snapshot_l2_tombstone_wait_total{result}）：
+// short / error 限频 Warn（每个 store 10s 一条）；no_replicas 首次一条 Info（单机开发环境属正常）。
+func (s *remoteSnapshotL2Store) recordTombstoneWait(redisKey string, outcome rediscore.ReplicatedEvalResult) {
+	w := &s.tombstoneWait
+	var label string
+	switch {
+	case outcome.WaitErr != nil:
+		label = "error"
+		w.failed.Add(1)
+	case outcome.Waited && outcome.Replicas >= int64(w.replicas):
+		label = "confirmed"
+		w.confirmed.Add(1)
+	case outcome.Waited:
+		label = "short"
+		w.short.Add(1)
+	case outcome.Skipped == rediscore.ReplicatedSkipNoReplicas:
+		label = "no_replicas"
+		w.noReplicas.Add(1)
+		w.noReplicaOnce.Do(func() {
+			slog.Info("remote_entity: the Redis primary has no connected replica; snapshot tombstones are not waited for (expected on a single-node development Redis)",
+				"key", redisKey, "wait_replicas", w.replicas)
+		})
+	default:
+		label = "skipped"
+		w.skipped.Add(1)
+	}
+	metrics.IncCounter("remote_entity.snapshot_l2_tombstone_wait_total", metrics.Labels{"result": label}, 1)
+	if label != "short" && label != "error" {
+		return
+	}
+	now := time.Now().UnixNano()
+	last := w.lastWarnAt.Load()
+	if now-last < (10*time.Second).Nanoseconds() || !w.lastWarnAt.CompareAndSwap(last, now) {
+		return
+	}
+	slog.Warn("remote_entity: snapshot tombstone written on the Redis primary but not confirmed by its replicas; a failover now may bring the deleted snapshot back until cached_max_staleness",
+		"key", redisKey, "result", label, "acked_replicas", outcome.Replicas, "wait_replicas", w.replicas, "wait_timeout", w.timeout, "err", outcome.WaitErr)
+}
 
 // key 是本 store 的 Redis 键：无前缀时与 remoteSnapshotL2Key 逐字相同。
 func (s *remoteSnapshotL2Store) key(key entity.RemoteSnapshotKey) string {

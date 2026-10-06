@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **owner 同 sid 重启后推送立即恢复**（O-M6-1，维护者第十轮决定）：重启的 owner 兴趣表是空的，以前要等只读方的下一次续租（缺省最长约 15s），期间读取只靠陈旧上限回源。现在 `Assembly.Start` 订阅确认后在新主题 `remote_entity_interest_refresh` 广播一条“请重新续租”，只读方（`SnapshotClient`，推送开着时订阅）把本机仍有效的兴趣经同一续租入口（代际、O4 配额、撤销水位都不绕过）立即续租一次；请求合并、两次遍历间隔不小于 1s，已 release 的 key 不复活。wire 只新增主题：旧只读方不订阅、按原周期收敛，旧 owner 不发、新只读方不变。指标 `remote_entity.remote.interest_refresh_*`（T-278）。[记录](docs/feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md)
+- **L2 墓碑写入后 `WAIT` 副本确认**（O-M6-3，维护者第十轮决定）：带版本删除（墓碑脚本）成功后，在同一连接上对该键所在的主节点发 `WAIT`（新键 `remote_entity.snapshot_l2_tombstone_wait_replicas` 缺省 1、`remote_entity.snapshot_l2_tombstone_wait_timeout` 缺省 50ms、上限 1s，0 个副本关闭）；主节点没有副本时自动不等。确认不足或出错不回滚、不报错，只计 `remote_entity.snapshot_l2_tombstone_wait_total{result}` 并限频 Warn（T-277）。普通快照写入不变。私有环境确定性复现：复制滞后时写墓碑后立刻提升副本，修前新只读方读到已删除实体，修后墓碑仍在。新驱动能力 `fredis.ReplicatedEvaler` / `driver.Client.EvalReplicated`（WAIT 不重放、出错归“复制结果未知”，见 `redis/driver/README.md`）；core 新构造 `NewSnapshotL2StoreFromConfig`（`Assemble` 与 `RemoteMirrorMod` 使用；旧构造不等副本）。
+
+### Added
+
+- `scripts/mirror-local.sh test-core`（remoteentity 的私有环境集成用例）、`fault redis-cluster-stop-replica` / `redis-cluster-cont`；`ROOST_MIRROR_LOCAL_ONLY` 支持逗号分隔多个场景（例如 `S1,S7`）。
+
 ## [v1.22.0] - 2026-10-06
 
 > 版本说明：下一轮规划（`docs/review/NEXT-ROUND-PLAN-2026-10-06.md`）三项落地。**业务时间只许前进**：App 在 Redis 持久化业务时间高水位，非生产偏移回调超过 1 分钟拒绝启动，并删除只为“偏移回调”存在的拆分（activity / mail 的 `SystemNow`、`mail.RedisConfig.StorageGrace`，均为 v1.21.0 新加；`DefaultEnvelopeStorageGrace` 更名 `EnvelopeStorageGrace`）。**configdata 键大小写敏感**：只差大小写的键在 Load / Reload / DryRun 整次拒绝，tablegen CSV 表头同样精确。**Mirror 第 6 步本机替代**：`scripts/mirror-local.sh` 私有依赖故障矩阵与同机性能对照，并修复 RR-20261006-01（删除 Managed Remote 实体报“结果未知”且不发布墓碑）。**破坏性变更**：上述 v1.21.0 字段删除（手工装配者删掉对应行即可）；大小写不一致的配置数据启动 / 热更失败。生成器 Core 下限不变（v1.21.0）；已生成工程不迁移。

@@ -14,10 +14,12 @@
 #   scripts/mirror-local.sh up | status | down | clean
 #   scripts/mirror-local.sh fault <动作> [参数]   用例经 ROOST_MIRROR_LOCAL_SCRIPT 调用，动作见 fault_action
 #   scripts/mirror-local.sh test                  up → 生成工程里的 TestGeneratedRemoteMirrorLocal（两进程故障场景）→ clean
+#   scripts/mirror-local.sh test-core             up → remoteentity 的私有环境集成用例（缺省 ^TestMirrorLocal，
+#                                                 ROOST_MIRROR_LOCAL_CORE_RUN 覆盖；O-M6-3 墓碑 WAIT 的切主红绿）→ clean
 #   scripts/mirror-local.sh bench <输出目录>       up → remoteentity 的 BenchmarkMirrorLocal*（当前源码）→ clean
 #     基线对照：ROOST_MIRROR_LOCAL_BASELINE=<基线源码目录>（例如 v1.20.2 的 detached worktree）时同一份基准文件
 #     复制到基线上，与当前源码交替各跑 ROOST_MIRROR_LOCAL_COUNT（缺省 6）次，benchstat 出对照（见文档 §4）。
-#   ROOST_MIRROR_LOCAL_KEEP=1 时 test / bench 结束不清理（调试用，之后手工 clean）。
+#   ROOST_MIRROR_LOCAL_KEEP=1 时 test / test-core / bench 结束不清理（调试用，之后手工 clean）。
 set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 lib_dir="$repo_dir/kit/scripts/integration/lib"
@@ -146,6 +148,7 @@ environment_up() {
 		printf 'export ROOST_MIRROR_LOCAL_HOME=%q\n' "$home"
 		printf 'export ROOST_MIRROR_LOCAL_OFFSET=%q\n' "$offset"
 		printf 'export ROOST_MIRROR_LOCAL_REDIS_CLUSTER=%q\n' "$(cluster_addrs)"
+		printf 'export ROOST_MIRROR_LOCAL_REDIS_REPLICA=%q\n' "127.0.0.1:$(replica_port)"
 		printf 'export ROOST_MIRROR_LOCAL_NATS_MONITOR=%q\n' "http://127.0.0.1:$(nats_monitor_port 1)"
 	} >>"$ROOST_IT_ROOT/env.sh"
 }
@@ -326,6 +329,23 @@ fault_action() {
 			wait_until 30 "restarted node $master in sync" bash -c "redis-cli -p $(cluster_port "$master") info replication | grep -q 'master_link_status:up'"
 			printf 'killed cluster master %d (port %d); new master %s\n' "$master" "$(cluster_port "$master")" "$(cluster_master_of "$1")"
 			;;
+		redis-cluster-stop-replica)
+			# 只 SIGSTOP 该键主节点的副本、不断开复制连接：主节点仍认为副本在线，WAIT 等到超时（O-M6-3 的 short）。
+			# 之后用 redis-cluster-cont 恢复；暂停超过 node-timeout（1s）集群会把它标为失败，恢复后自动回来。
+			local master replica
+			master="$(cluster_master_of "$1")"
+			replica="$(cluster_replica_of "$master")"
+			signal_owned "$(cluster_dir "$replica")/redis.pid" STOP
+			printf 'stopped replica %d of master %d\n' "$replica" "$master"
+			;;
+		redis-cluster-cont)
+			local i
+			for i in 1 2 3 4 5 6; do
+				local pid
+				pid="$(read_owned_pid "$(cluster_dir "$i")/redis.pid" 2>/dev/null)" && kill -CONT "$pid" 2>/dev/null || true
+			done
+			wait_until 30 "redis cluster ok" cluster_ok
+			;;
 		redis-cluster-heal)
 			local i
 			for i in 1 2 3 4 5 6; do cluster_node_start "$i"; done
@@ -341,6 +361,17 @@ run_generated_tests() {
 	export ROOST_MIRROR_LOCAL=1
 	ROOST_REMOTE_RUN="${ROOST_REMOTE_RUN:-^TestGeneratedRemoteMirrorLocal$}" ROOST_REMOTE_TIMEOUT="${ROOST_REMOTE_TIMEOUT:-20m}" \
 		bash "$repo_dir/scripts/test-remote-generated.sh"
+}
+
+# run_core_tests：remoteentity 里依赖私有环境的集成用例（integration tag，ROOST_MIRROR_LOCAL=1 才运行）。
+run_core_tests() {
+	(
+		# shellcheck disable=SC1091
+		source "$ROOST_IT_ROOT/env.sh"
+		export ROOST_MIRROR_LOCAL=1
+		cd "$repo_dir"
+		GOWORK=off go test -tags integration -count=1 -run "${ROOST_MIRROR_LOCAL_CORE_RUN:-^TestMirrorLocal}" -v -timeout 10m ./remoteentity
+	)
 }
 
 # run_bench <输出文件> <源码目录>：在 <源码目录> 跑一次 BenchmarkMirrorLocal*（-count 1），追加到输出文件。
@@ -398,11 +429,16 @@ case "${1:-}" in
 		environment_up
 		run_generated_tests
 		;;
+	test-core)
+		trap finish EXIT
+		environment_up
+		run_core_tests
+		;;
 	bench)
 		[[ -n "${2:-}" ]] || { echo "bench needs an output directory" >&2; exit 2; }
 		trap finish EXIT
 		environment_up
 		bench_all "$2"
 		;;
-	*) sed -n '2,20p' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
+	*) sed -n '2,22p' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
 esac

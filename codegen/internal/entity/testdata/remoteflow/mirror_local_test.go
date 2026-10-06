@@ -142,11 +142,27 @@ func TestGeneratedRemoteMirrorLocal(t *testing.T) {
 		{"S6_owner_transfer", localOwnerTransfer},
 		{"S7_reader_kill_restart", localReaderKillRestart},
 	} {
-		if run := os.Getenv("ROOST_MIRROR_LOCAL_ONLY"); run != "" && !strings.Contains(scenario.name, run) {
+		if !localScenarioSelected(scenario.name, os.Getenv("ROOST_MIRROR_LOCAL_ONLY")) {
 			continue
 		}
 		t.Run(scenario.name, func(t *testing.T) { scenario.run(t, env) })
 	}
+}
+
+// localOwnerLockTTL 是 owner 子进程的共享锁 TTL：被强杀的 owner 持有的锁要这么久才过期（S1）。
+const localOwnerLockTTL = 3 * time.Second
+
+// localScenarioSelected：ROOST_MIRROR_LOCAL_ONLY 为空时全跑；否则是逗号分隔的子串列表（例如 S1,S7），场景名含其一即跑。
+func localScenarioSelected(name, only string) bool {
+	if only == "" {
+		return true
+	}
+	for _, part := range strings.Split(only, ",") {
+		if part = strings.TrimSpace(part); part != "" && strings.Contains(name, part) {
+			return true
+		}
+	}
+	return false
 }
 
 // localScenario 是一个场景的隔离单元：自己的总线前缀（因而自己的 JetStream 流）、L2 前缀与公会。
@@ -387,11 +403,21 @@ func localOwnerKillRestart(t *testing.T, env *localEnv) {
 	// 重放补发的那笔不经 Request 返回，没有确认时刻；从重启就绪起计时。
 	replayed := s.waitVersion(reader, v1+1, readyAt.UnixNano(), 60*time.Second)
 	env.results.add(t, "owner_restart_ready_ms=%d replayed_v%d_converge_ms=%d", readyAt.Sub(killedAt).Milliseconds(), v1+1, replayed)
+	// 被强杀的旧进程还持有共享锁，重启后的第一笔写要等它过期（O-M6-6，不是本轮改动引入的：以前 v2 要等陈旧上限
+	// 约 1.9s 才读到，这笔写开始时锁差不多已过期；O-M6-1 之后 v2 立即读到，这笔写就撞上旧锁，锁的重试预算用完时
+	// 报 versioned lock not acquired，Request 截止时则是结果未知）。这里先等旧锁过期，只量推送恢复。
+	if wait := time.Until(killedAt.Add(localOwnerLockTTL + 200*time.Millisecond)); wait > 0 {
+		time.Sleep(wait)
+	}
 	v3, at3 := s.commit(restarted, "c")
 	if v3 != v1+2 {
 		t.Fatalf("commit after the restart got version %d, want %d (the replayed write is v%d)", v3, v1+2, v1+1)
 	}
-	env.results.add(t, "after_restart_commit_v%d_converge_ms=%d", v3, s.waitVersion(reader, v3, at3, 30*time.Second))
+	// commit_ms 是这笔写本身的耗时；converge_ms 从开始写计时、含它在内；visible_after_confirm_ms 是确认之后只读方
+	// 还要等多久（负数：推送先于回复到达）——O-M6-1 前后对照看它。
+	commitMs := (at3 - s.started[v3]) / int64(time.Millisecond)
+	converge := s.waitVersion(reader, v3, at3, 30*time.Second)
+	env.results.add(t, "after_restart_commit_v%d commit_ms=%d converge_ms=%d visible_after_confirm_ms=%d", v3, commitMs, converge, converge-commitMs)
 	stats := s.stats(reader)
 	env.results.add(t, "reader_stats loads=%s errors=%s reads=%s", stats["loads"], stats["errors"], stats["reads"])
 	s.stopChild(reader)
@@ -947,7 +973,7 @@ func runLocalOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	rcfg := remoteentity.DefaultConfig()
-	rcfg.LockTTL = 3 * time.Second
+	rcfg.LockTTL = localOwnerLockTTL
 	rcfg.LockKey = "{m6}"
 	assembly, err := remoteentity.Assemble(remoteentity.AssemblyDeps{Redis: scoped, Backend: backend}, rcfg, cfg.sid, remoteentity.MongoBackendConfig{})
 	if err != nil {

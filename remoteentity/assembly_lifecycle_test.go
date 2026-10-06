@@ -21,6 +21,9 @@ func (b *lifecycleRemoteBackend) EnsureRemoteStorage(ctx context.Context) error 
 	return b.initialize(ctx)
 }
 
+// liveSubscriptions 是推送开着时一个 SnapshotClient 的订阅数：快照、兴趣、兴趣续租请求（O-M6-1）。
+const liveSubscriptions = 3
+
 type lifecycleRemoteBus struct {
 	active atomic.Int32
 	calls  atomic.Int32
@@ -28,7 +31,7 @@ type lifecycleRemoteBus struct {
 
 func (*lifecycleRemoteBus) Publish(*fsyncbus.SyncMsg) error { return nil }
 
-// SubscribeLive 让快照推送开着（Mirror 第 4 步），两个订阅都经同一个计数。
+// SubscribeLive 让快照推送开着（Mirror 第 4 步），全部订阅都经同一个计数。
 func (b *lifecycleRemoteBus) SubscribeLive(topic string, h fsyncbus.Handler) (func(), error) {
 	return b.Subscribe(topic, h)
 }
@@ -69,7 +72,7 @@ func TestRemoteAssemblyDuplicateStart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if b.active.Load() != 2 || b.calls.Load() != 2 {
+	if b.active.Load() != liveSubscriptions || b.calls.Load() != liveSubscriptions {
 		t.Fatalf("subscriptions active=%d calls=%d", b.active.Load(), b.calls.Load())
 	}
 }
@@ -91,7 +94,7 @@ func TestRemoteAssemblyRetryAfterStorageFailure(t *testing.T) {
 	if err := safeAssemblyStart(a, context.Background(), b); err != nil {
 		t.Fatal(err)
 	}
-	if b.active.Load() != 2 {
+	if b.active.Load() != liveSubscriptions {
 		t.Fatal("retry did not restore subscriptions")
 	}
 }
@@ -141,7 +144,7 @@ func TestRemoteAssemblyConcurrentLifecycleWaitIsCancelable(t *testing.T) {
 	if err := awaitChan(t, result, "Start completion"); err != nil {
 		t.Fatal(err)
 	}
-	if b.calls.Load() != 2 {
+	if b.calls.Load() != liveSubscriptions {
 		t.Fatal("concurrent Start rebound subscriptions")
 	}
 	if err := a.Stop(context.Background()); err != nil {
@@ -166,7 +169,7 @@ func TestRemoteAssemblyStopTimeoutKeepsReplicationUntilDrained(t *testing.T) {
 	if err := a.Stop(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Stop=%v", err)
 	}
-	if b.active.Load() != 2 {
+	if b.active.Load() != liveSubscriptions {
 		t.Fatal("timed-out Stop discarded replication")
 	}
 	if err := safeAssemblyStart(a, context.Background(), b); !errors.Is(err, ErrAssemblyStopped) {

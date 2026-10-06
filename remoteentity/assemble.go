@@ -3,6 +3,7 @@ package remoteentity
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -100,7 +101,7 @@ func Assemble(deps AssemblyDeps, cfg *Config, localSid int32, mongoCfg MongoBack
 	if authority == nil {
 		return nil, errors.New("remote_entity: backend must provide durable write authority")
 	}
-	snapshotL2, err := NewSnapshotL2StoreWithKeyPrefix(deps.Redis, cfg.SnapshotL2TTL, cfg.SnapshotL2KeyPrefix)
+	snapshotL2, err := NewSnapshotL2StoreFromConfig(deps.Redis, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -161,6 +162,13 @@ func (a *Assembly) Start(ctx context.Context, bus fsyncbus.ISyncBus) error {
 			snapshots.unsubscribe()
 		}
 	}()
+	// O-M6-1：同 sid 重启的 owner 兴趣表是空的（兴趣主题从 durable 游标续读，不重放已确认的兴趣）。订阅已确认，
+	// 之后发出的续租一定能到达，此时请求只读方立即重新续租，推送不必等下一个续租周期；放在存储初始化与 outbox
+	// 恢复之前，让续租尽早回来。失败只记日志，退化到原来的续租周期。
+	if err := snapshots.requestInterestRefresh(ctx); err != nil {
+		slog.Warn("remote_entity: could not ask consumers to renew their snapshot interest; pushes resume on their regular renewal",
+			"sid", snapshots.consumerSID, "err", err)
+	}
 	a.Manager.SealDependencies()
 	if initializer, ok := a.Manager.Backend().(entity.IRemoteStorageInitializer); ok {
 		storageCtx, cancel := context.WithTimeout(ctx, a.cfg.OpTimeout)

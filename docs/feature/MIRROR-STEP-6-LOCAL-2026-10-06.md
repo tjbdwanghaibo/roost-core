@@ -72,9 +72,9 @@
 
 ### 3.5 观察（不是确定缺陷）
 
-- **O-M6-1 owner 重启后兴趣表为空**：兴趣是广播软状态；同 sid 重启的 owner 从 durable 游标续读兴趣主题，之前已确认的兴趣消息不重放，表是空的；只读方的续租在剩余不足一半时才发（缺省 TTL 30s → 最长 15s），这段时间 owner 不推送，只读方只靠陈旧上限回源（S1：v2 1.9s、v3 3.0s，都卡在 3s 陈旧上限）。正确性不受影响，新鲜度退化到陈旧上限。新 sid 的 owner（S6）反而从头重放、立刻知道兴趣。可选方向：owner 启动时广播一次“请求续租”，或兴趣主题按 subject 取最新（DeliverLastPerSubject）；属于协议调整，交维护者判断。
+- **O-M6-1 owner 重启后兴趣表为空**：兴趣是广播软状态；同 sid 重启的 owner 从 durable 游标续读兴趣主题，之前已确认的兴趣消息不重放，表是空的；只读方的续租在剩余不足一半时才发（缺省 TTL 30s → 最长 15s），这段时间 owner 不推送，只读方只靠陈旧上限回源（S1：v2 1.9s、v3 3.0s，都卡在 3s 陈旧上限）。正确性不受影响，新鲜度退化到陈旧上限。新 sid 的 owner（S6）反而从头重放、立刻知道兴趣。可选方向：owner 启动时广播一次“请求续租”，或兴趣主题按 subject 取最新（DeliverLastPerSubject）；属于协议调整，交维护者判断。 **后续**：维护者第十轮按推荐实施（owner 启动广播续租请求），见 [O-M6-1 / O-M6-3 实施记录](MIRROR-M6-OBSERVATIONS-2026-10-06.md)。
 - **O-M6-2 推送与写回复耦合**：JetStream 流 leader 所在节点被杀 / 暂停时，owner 的写在 leader 重新选出之前一直失败（6～10.6s，三次里出现；首错为 `nats: no response from stream` 带结果未知，或 Request 截止），其中 Remote 提交可能已落 Mongo、只是发布失败，回复是“结果未知”，本用例的朴素重试每次都是新的一笔写。这是既有契约（结果未知不得当作未提交），业务侧应按结果未知处理（查询或等 finalizer 的持久结论），而不是盲目重试；只读方经 L2 在陈旧上限内收敛。记录在案，不改。
-- **O-M6-3 Redis 未复制即切主**：墓碑只在旧主上，副本被提升后 L2 回到删除前的版本；L1 里有墓碑的读者不受影响，L1 空的新读者在陈旧上限（3s）内把已删除的实体读成存在，之后回源 Mongo 得“不存在”。这是 B2“L2 为水位权威”的前提（Redis 异步复制会丢已确认写，`TestRealRemoteRedisClusterUnreplicatedFence` 同一类）。可选缓解：L2 写后 `WAIT` 副本、`min-replicas-to-write`，或陈旧上限内也带权威校验——都是设计 / 部署取舍，交维护者。
+- **O-M6-3 Redis 未复制即切主**：墓碑只在旧主上，副本被提升后 L2 回到删除前的版本；L1 里有墓碑的读者不受影响，L1 空的新读者在陈旧上限（3s）内把已删除的实体读成存在，之后回源 Mongo 得“不存在”。这是 B2“L2 为水位权威”的前提（Redis 异步复制会丢已确认写，`TestRealRemoteRedisClusterUnreplicatedFence` 同一类）。可选缓解：L2 写后 `WAIT` 副本、`min-replicas-to-write`，或陈旧上限内也带权威校验——都是设计 / 部署取舍，交维护者。 **后续**：维护者第十轮按推荐实施（只对墓碑写入加 `WAIT`），见 [实施记录](MIRROR-M6-OBSERVATIONS-2026-10-06.md)；S4a′ 这种副本已断开的情形 WAIT 也挡不住，计为 no_replicas / short。
 - **O-M6-4 静默断线靠 ping 发现**：SIGSTOP 节点后客户端要 ping 20s × 2 才断开重连；期间推送停住，读取在陈旧上限后回源（S2b 2.98s）。缩短 `PingInterval` 是部署参数，不改。
 - **O-M6-5 owner 启动撞上 Mongo 选举即失败**：开发期一次，S5 之后 mongo-1 选回期间起 owner，`EnsureInfrastructure` 返回 `InterruptedDueToReplStateChange`，子进程启动失败（fail-fast，由进程管理重启）。只读方不受影响。用例在 S5 结束时等选举稳定（`mongo-settle`）。
 
@@ -121,7 +121,7 @@
 ```bash
 # 故障场景（起私有环境 → 生成工程两进程场景 → 清理并核对无残留进程）
 ROOST_MIRROR_LOCAL_HOME=/abs/path scripts/mirror-local.sh test
-# 只跑某个场景：ROOST_MIRROR_LOCAL_ONLY=S4 …；调试保留环境：ROOST_MIRROR_LOCAL_KEEP=1 …，之后 scripts/mirror-local.sh clean
+# 只跑某个场景：ROOST_MIRROR_LOCAL_ONLY=S4 …（逗号分隔多个：S1,S7）；调试保留环境：ROOST_MIRROR_LOCAL_KEEP=1 …，之后 scripts/mirror-local.sh clean
 # 性能对照（基线放在一个 v1.20.2 的 detached worktree）
 git worktree add --detach /abs/base v1.20.2
 ROOST_MIRROR_LOCAL_HOME=/abs/path ROOST_MIRROR_LOCAL_BASELINE=/abs/base scripts/mirror-local.sh bench /abs/out

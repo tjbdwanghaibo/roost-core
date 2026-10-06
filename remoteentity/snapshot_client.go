@@ -66,14 +66,22 @@ type SnapshotClient struct {
 	bus         fsyncbus.ISyncBus
 	snapshotRep *mirror.Replicator
 	interestRep *mirror.Replicator
-	started     bool
-	stopped     atomic.Bool
+	// refreshRep 订阅兴趣续租请求（O-M6-1，interest_refresh.go）；只在快照推送开着时建立。
+	refreshRep *mirror.Replicator
+	started    bool
+	stopped    atomic.Bool
 	// work 是访问依赖（L2、权威 loader、兴趣广播）的准入与在途计数（共用 operation.Lifetime，A3）。
 	// Stop 关闭它并在调用方 ctx 内等在途调用返回；返回 nil 之后调用方才能释放 Redis / 权威 / 总线。
 	work operation.Lifetime
 	// stopCtx 在 Stop 时取消，在途的权威加载据此放弃（loader 不响应取消时 Stop 如实超时）。
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
+
+	// 兴趣续租请求的遍历状态（O-M6-1）：同一时刻最多一个遍历，进行中到达的请求只置 refreshPending。
+	refreshMu        sync.Mutex
+	refreshRunning   bool
+	refreshPending   bool
+	refreshLastStart time.Time
 }
 
 // SnapshotClientDeps 是只读客户端的依赖。没有写 backend、锁或 finalizer。
@@ -237,8 +245,17 @@ func (c *SnapshotClient) Stats() SnapshotClientStats {
 
 // RenewInterest 续租本机对 key 的兴趣：剩余不足一半才登记并广播新的 generation。
 func (c *SnapshotClient) RenewInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
+	_, err := c.renewInterest(ctx, key, false)
+	return err
+}
+
+// renewInterest 是续租的唯一入口。refresh 为 true 时是兴趣续租请求触发的重新续租（O-M6-1）：不看“剩余
+// 不足一半”的门槛，但只续本机表里仍然有效的 key——遍历开始之后被 release 或已过期的 key 不归它复活。
+// 其余（条带锁内分配代际、本机兴趣表按同一配额判定、广播、失败回滚）与读时续租完全相同。
+// 返回是否广播了一条续租。
+func (c *SnapshotClient) renewInterest(ctx context.Context, key entity.RemoteSnapshotKey, refresh bool) (bool, error) {
 	if c == nil || !key.Valid() {
-		return entity.ErrRemoteRejected
+		return false, entity.ErrRemoteRejected
 	}
 	ttl := c.cfg.SnapshotInterestTTL
 	stripe := &c.localInterestLocks[uint64(key.EntityID)%uint64(len(c.localInterestLocks))]
@@ -251,16 +268,20 @@ func (c *SnapshotClient) RenewInterest(ctx context.Context, key entity.RemoteSna
 	interest := entity.RemoteSnapshotInterest{ConsumerSID: c.consumerSID, Key: key, ExpiresAt: now + ttl.Nanoseconds(), Generation: c.nextInterestGeneration()}
 	c.localInterestMu.Lock()
 	current, loaded := c.localInterests[key]
-	if loaded && current-now > (ttl/2).Nanoseconds() {
+	switch {
+	case refresh && (!loaded || current <= now):
 		c.localInterestMu.Unlock()
-		return nil
+		return false, nil
+	case !refresh && loaded && current-now > (ttl/2).Nanoseconds():
+		c.localInterestMu.Unlock()
+		return false, nil
 	}
 	if !loaded && c.localInterestCapacity > 0 && len(c.localInterests) >= c.localInterestCapacity {
 		c.pruneLocalInterestsLocked(now)
 		if len(c.localInterests) >= c.localInterestCapacity {
 			c.localInterestMu.Unlock()
 			c.noteInterestRejected("local_table_full")
-			return entity.ErrRemoteOverloaded
+			return false, entity.ErrRemoteOverloaded
 		}
 	}
 	c.localInterests[key] = interest.ExpiresAt
@@ -271,18 +292,18 @@ func (c *SnapshotClient) RenewInterest(ctx context.Context, key entity.RemoteSna
 		if errors.Is(err, entity.ErrRemoteOverloaded) {
 			c.noteInterestRejected("registry")
 		}
-		return err
+		return false, err
 	}
 	if err := c.publishInterest(ctx, interest, false); err != nil {
 		c.rollbackLocalInterest(key, interest.ExpiresAt)
-		return err
+		return false, err
 	}
 	if c.localInterestOps.Add(1)&1023 == 0 {
 		c.localInterestMu.Lock()
 		c.pruneLocalInterestsLocked(now)
 		c.localInterestMu.Unlock()
 	}
-	return nil
+	return true, nil
 }
 
 // ReleaseInterest 撤销本机对 key 的兴趣（带新的 generation，只撤销不新于它的租约）。
@@ -409,12 +430,17 @@ func (c *SnapshotClient) bindLocked(bus fsyncbus.ISyncBus, live bool) (snapshotR
 	}
 	interestRep = mirror.New(bus, SyncTopicInterest, InterestReplicaStore{client: c})
 	c.bus, c.snapshotRep, c.interestRep = bus, snapshotRep, interestRep
+	c.refreshRep = nil
+	if live {
+		// 兴趣续租请求（O-M6-1）只对当下有意义：用可确认订阅（JetStream DeliverNew），新 sid 不重放历史请求。
+		c.refreshRep = mirror.NewLive(bus, SyncTopicInterestRefresh, InterestRefreshStore{client: c})
+	}
 	c.transport = &remoteSyncer{snapshotRep: snapshotRep, interestRep: interestRep, client: c}
 	return snapshotRep, interestRep
 }
 
-// Start 订阅快照与兴趣两个复制主题（幂等）。第二个订阅失败时退掉第一个再返回：失败不留下订阅，
-// 重试不会重复订阅。失败重试复用首次绑定的 bus；换 bus 要新建客户端。停止之后不能再启动。
+// Start 订阅快照、兴趣与兴趣续租请求（O-M6-1，只在推送开着时）三个复制主题（幂等）。任一订阅失败时
+// 退掉已建立的再返回：失败不留下订阅，重试不会重复订阅。失败重试复用首次绑定的 bus；换 bus 要新建客户端。停止之后不能再启动。
 //
 // 快照推送只在总线能确认订阅（fsyncbus.ILiveSubscriber，JetStream 的 DeliverNew）时开启（Mirror 第 4 步）：
 // 订阅确认之后发布的快照不会被静默丢掉，加载在途时到达的进首载缓冲。普通 NATS 是最多一次，推送随时可能
@@ -450,6 +476,14 @@ func (c *SnapshotClient) Start(bus fsyncbus.ISyncBus) error {
 		c.snapshotRep.Stop()
 		return fmt.Errorf("remote_entity: start interest replica: %w", err)
 	}
+	// 兴趣续租请求只在推送开着时有用（O-M6-1）：推送关着时 owner 不推，续租也就不必赶。
+	if push && c.refreshRep != nil {
+		if err := c.refreshRep.Start(); err != nil {
+			c.snapshotRep.Stop()
+			c.interestRep.Stop()
+			return fmt.Errorf("remote_entity: start interest refresh replica: %w", err)
+		}
+	}
 	c.started = true
 	c.push.Store(push)
 	pushGauge := int64(0)
@@ -469,7 +503,7 @@ func (c *SnapshotClient) Start(bus fsyncbus.ISyncBus) error {
 func (c *SnapshotClient) unsubscribe() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, rep := range []*mirror.Replicator{c.snapshotRep, c.interestRep} {
+	for _, rep := range []*mirror.Replicator{c.snapshotRep, c.interestRep, c.refreshRep} {
 		if rep != nil {
 			rep.Stop()
 		}
@@ -480,9 +514,9 @@ func (c *SnapshotClient) unsubscribe() {
 
 // Stop 按三步停机（roost-coding；契约骨架 internal/stopcontract）：
 //
-//  1. 发起关闭（幂等）：之后的读返回 ErrSnapshotClientStopped；关闭依赖准入；取消在途的权威加载；
-//     退掉两个复制订阅。
-//  2. 在 ctx 内等待排空：已准入的复制 handler 与依赖调用（L2、权威、兴趣广播）全部返回。ctx 先结束返回
+//  1. 发起关闭（幂等）：之后的读返回 ErrSnapshotClientStopped；关闭依赖准入；取消在途的权威加载与
+//     兴趣续租遍历（O-M6-1）；退掉复制订阅。
+//  2. 在 ctx 内等待排空：已准入的复制 handler、兴趣续租遍历与依赖调用（L2、权威、兴趣广播）全部返回。ctx 先结束返回
 //     ctx 错误，客户端保持“停止中”，用新 ctx 再调用会继续等同一批。
 //  3. 返回 nil 之后调用方才能释放 Redis / 权威 / 总线。不响应取消的 loader 不会被杀，Stop 如实超时。
 func (c *SnapshotClient) Stop(ctx context.Context) error {
@@ -496,7 +530,7 @@ func (c *SnapshotClient) Stop(ctx context.Context) error {
 	c.stopped.Store(true)
 	c.started = false
 	c.push.Store(false)
-	reps := []*mirror.Replicator{c.snapshotRep, c.interestRep}
+	reps := []*mirror.Replicator{c.snapshotRep, c.interestRep, c.refreshRep}
 	c.mu.Unlock()
 	c.work.Stop()
 	c.stopCancel()

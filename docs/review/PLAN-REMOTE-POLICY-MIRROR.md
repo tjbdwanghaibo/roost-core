@@ -155,4 +155,4 @@ Shutdown 停止准入，取消续租和加载，解绑订阅，等待已准入�
 - **故障（两进程，生成工程 `testdata/remoteflow`）**：owner 强杀 + WAL 重放补发、NATS 节点强杀与 SIGSTOP 静默断线、toxiproxy 延迟 / 分区 / 丢数据（DeliverNew durable 续投）、Redis 单机与 Cluster 切主（墓碑不回退、不复活）、Mongo stepDown、owner 转移、只读服务强杀重启；只读方自己核对不回退 / 不复活 / 有界收敛，0 违例。
 - **缺陷**：[RR-20261006-01](../bug/RR-20261006-01.md) 删除 Remote 实体时确认交给已清空的实例、删除不发布，已修复（先红后绿）。
 - **性能**：同机交替 n=6 对照 v1.20.2，读延迟（L1 / L2 / 权威）、回源次数、推送扇出（1 / 10 / 100 读者 × 10 key）无显著差别。
-- **未完成**：Linux 内核网络、跨主机真实分区、长时间容量与长稳、目标负载下的扇出、Remote outbox（Mongo 已提交、发布前崩溃）的精确注入；观察 O-M6-1 / O-M6-3 待维护者。
+- **未完成**：Linux 内核网络、跨主机真实分区、长时间容量与长稳、目标负载下的扇出、Remote outbox（Mongo 已提交、发布前崩溃）的精确注入；观察 O-M6-1 / O-M6-3 已按维护者第十轮决定实施（[记录](../feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md)）。

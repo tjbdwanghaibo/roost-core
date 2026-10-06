@@ -12,6 +12,7 @@
 | 写命令：SET、SETNX、DEL、EXPIRE、INCR、INCRBY、HSET、HDEL、LPUSH、RPUSH、LPOP、RPOP、LTRIM、LREM、ZADD、ZREM、SADD、SREM、PUBLISH | 每条都加了 `NoRetry` 标记再交给 go-redis，驱动在任何错误上都不重发。只有当错误满足 `IsDefinitelyNotExecuted`（见 §2）时，才由本包重发（`replay.go`） |
 | 脚本：EVAL、EVALSHA（`Client.Eval` / `EvalSha`） | 与写命令相同。脚本只要回复丢了就不重发（RR-20261005-NC-100）；确定没执行时照常重发，NC-100 之后丢掉的这部分可用性由此补回 |
 | `EvalDurable` / `EvalBatchDurable`（脚本加 WAITAOF，走同一条物理连接） | 整批不重放。只有每条命令的错误都证明没执行时，才换一条新连接整批重发 |
+| `EvalReplicated`（脚本加 ROLE，必要时同连接 WAIT；O-M6-3，L2 墓碑用） | 脚本与 ROLE 一条流水线，不经驱动重放；每条命令的错误都证明没执行时才换一条新连接整条重发。**WAIT 从不重放**：换了连接的 WAIT 只统计新连接上的写（没有），会立即给出假的确认。Cluster 下 WAIT 只发往脚本第一个键所在槽位的主节点（`MasterForKey` 取节点、在它的独占连接上发）；脚本回 MOVED / ASK 时改经集群客户端普通发送一次、不 WAIT。主节点没有连着的副本时不发 WAIT |
 | 含任一写命令的 pipeline（`IPipeline` 的 Set、Del、HSet、Incr、Expire、ZAdd、RPush、LPop） | 整条不重放，因为回复丢失时前面的写可能已经执行。只有每条命令的错误都证明没执行时，才整条重发 |
 | `DistLock` 的 SETNX、释放脚本、续期脚本 | 与写命令相同。被重放的 SETNX 会把自己刚拿到的锁报成“已被占用”，锁一直挂到 TTL；被重放的释放脚本会把成功释放报成 `ErrLockNotHeld` |
 | Subscribe | go-redis PubSub 断线后自动重连并重新订阅，推送不保证送达 |
@@ -33,6 +34,8 @@
 池里的坏连接（例如服务端已经关掉的空闲连接）在取出时由 go-redis 的健康检查丢弃并换成新连接，不会以错误形式出现。换新连接时如果拨号失败，归入第一行。连接池自己会先重拨 `DialerRetries` 次（缺省 5 次）；连续拨号失败达到 `PoolSize` 次后，在后台探测恢复之前会直接返回上一次的拨号错误，所以 PoolSize 小的客户端在 Redis 宕机期间，驱动层的重发基本都会很快失败。
 
 pipeline 只有在每条命令的错误都满足本函数时，才算整条没执行。
+
+**WAIT（`EvalReplicated`）的分类**：WAIT 不是写，它只回答“本连接之前的写有几个副本确认了”。脚本的回复已经收到时，脚本属于“已执行”（按脚本回复裁决），之后 ROLE / WAIT 的任何错误（EOF、超时、连接重置）都只说明**复制结果未知**——副本可能已经收到，也可能没有——放在 `ReplicatedEvalResult.WaitErr`，不改变脚本的分类，也不重放 WAIT 或脚本。WAIT 正常返回但确认数少于要求（超时）不是错误：写已在主节点上、尚未确认复制，切主可能丢。调用方据此计数或告警，不要回滚，也不要把已执行的写报成失败。
 
 ## 3. 驱动在哪里替换了 ctx
 

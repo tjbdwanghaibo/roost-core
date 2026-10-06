@@ -137,7 +137,7 @@ func (m *RemoteMirrorMod) Provide(r *app.Registry) error {
 	if !ok || redis == nil {
 		return fmt.Errorf("remote_entity mirror mod: required capability %q not found", mods.ModRedis)
 	}
-	l2, err := coreremote.NewSnapshotL2StoreWithKeyPrefix(redis, m.cfg.SnapshotL2TTL, m.cfg.SnapshotL2KeyPrefix)
+	l2, err := coreremote.NewSnapshotL2StoreFromConfig(redis, m.cfg)
 	if err != nil {
 		return fmt.Errorf("remote_entity mirror mod: %w", err)
 	}

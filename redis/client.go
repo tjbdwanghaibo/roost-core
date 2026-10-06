@@ -97,6 +97,41 @@ type DurableBatchEvaler interface {
 	EvalBatchDurable(ctx context.Context, script string, calls []EvalCall, numLocal, numReplicas int, timeout time.Duration) (results []any, local, replicas int64, err error)
 }
 
+// ReplicatedEvaler 执行一个脚本，然后在同一条物理连接上对执行它的主节点发 WAIT（O-M6-3）。WAIT 只统计
+// 本连接之前的写，所以必须与脚本同连接；独立的池化调用不满足这个约定。Cluster 下 WAIT 只发往脚本第一个键
+// 所在槽位的主节点。契约（重放、结果分类）见 redis/driver/README.md。
+//
+// 返回的 error 只属于脚本（与 Eval 的分类相同）；脚本成功之后 WAIT 的情况都在结果里：副本确认数不足
+// 不是错误，ROLE / WAIT 出错时脚本已执行、副本是否收到未知（WaitErr）。
+type ReplicatedEvaler interface {
+	EvalReplicated(ctx context.Context, script string, keys []string, numReplicas int, timeout time.Duration, args ...any) (ReplicatedEvalResult, error)
+}
+
+// ReplicatedEvalResult 是 EvalReplicated 在脚本成功时的结果。
+type ReplicatedEvalResult struct {
+	// Result 是脚本的回复。
+	Result any
+	// Waited 报告是否发了 WAIT；Replicas 是 WAIT 回复的副本确认数（没发时为 0）。
+	Waited   bool
+	Replicas int64
+	// Skipped 是没有发 WAIT 的原因（ReplicatedSkip*）；Waited 为 true 或 WaitErr 非空时为空。
+	Skipped string
+	// WaitErr 是 ROLE / WAIT 的错误：脚本已执行，副本是否收到未知；不重放。
+	WaitErr error
+}
+
+const (
+	// ReplicatedSkipNoReplicas：主节点当前没有连着的副本（例如单机开发环境），不等。
+	ReplicatedSkipNoReplicas = "no_replicas"
+	// ReplicatedSkipRedirected：Cluster 拓扑刚变（MOVED / ASK 或取不到槽位主节点），脚本改经集群客户端
+	// 普通发送（跟随重定向），没有同连接可等。
+	ReplicatedSkipRedirected = "redirected"
+	// ReplicatedSkipUnsupported：客户端类型不支持同连接 WAIT，脚本普通发送。
+	ReplicatedSkipUnsupported = "unsupported"
+	// ReplicatedSkipDisabled：numReplicas 或 timeout 不为正，没有要等的。
+	ReplicatedSkipDisabled = "disabled"
+)
+
 // ListTrimmer trims a list in place (LTRIM). Optional capability: callers
 // that would otherwise emulate a trim with DEL+RPUSH (a window in which a
 // crash loses the whole list) should prefer this when the client provides it.

@@ -205,6 +205,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+10-06 第十轮决定 O-M6-1 / O-M6-3（分支 `m6obs`，[记录](feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md)）：owner 的 `Assembly.Start` 订阅确认后在新主题 `remote_entity_interest_refresh` 广播“请重新续租”，推送开着的只读方经同一续租入口（代际、O4 配额、撤销水位）立即续租，请求合并、遍历间隔不小于 1s；私有环境 S1 重启后推送恢复从约 1.9～2.2s（陈旧上限回源）变为先于回复到达，S7 不变。L2 带版本删除（墓碑脚本）之后同连接 `WAIT`（`remote_entity.snapshot_l2_tombstone_wait_replicas` 缺省 1、`_timeout` 缺省 50ms、上限 1s；没有副本自动不等；结果只计数 / Warn，不回滚），新驱动能力 `EvalReplicated`（WAIT 不重放、出错归复制未知）；私有 Redis 复制滞后 + 立刻提升副本，修前新只读方读到已删实体、修后墓碑仍在，Cluster 上 WAIT 只打到该键的主节点。**已实施、未发版**（不进 v1.22.0）。新观察 O-M6-6：owner 强杀后同 sid 新进程的第一笔写要等旧锁 TTL，待维护者。
+
 10-06 configdata 键大小写敏感（分支 `cfgcase`，[下一轮规划](review/NEXT-ROUND-PLAN-2026-10-06.md) 第 2 项）：数据键、`FieldRule.Field`、CSV 表头逐字匹配声明名，只差大小写在 Load / Reload / DryRun 拒绝（`RuleError` `case`，点名表 / 行 / 主键 / 拼写，嵌套逐层）；删除 `5a3c4a60` 第 5 项的大小写变体选择逻辑（`Rows` 不预处理、`Lookup` 逐字）；tablegen `-check` / CSV 表头 / 生成的 `Convert<Type>CSV` 同一规则。**已实施、声明场景验证，未发版**。[方案](feature/CONFIGDATA-CASE-SENSITIVE-KEYS-2026-10-06.md)
 
 10-06 下一轮规划第 1 项：业务时间只许前进（分支 `monotime`）。App 在单实例锁之后、Mod Init 之前比对协调存储里的部署级业务时间高水位（`<singleton.key_prefix>:business_time`），回退超过 1 分钟拒绝启动（`app.ErrBusinessTimeMovedBack`），运行中每 10s 推进；只在非生产检查。随之撤回 `5a3c4a60` 第 1 条：activity 派发退避与进度凭证、mail 领取租约回到业务时钟，删除 `activity.Config.SystemNow`、`mail.Config.SystemNow`、`mail.RedisConfig.StorageGrace`（宽限固定 24h）；chat 保留期、account 会话 token 与运维时间是系统用途，保留。**已实施、声明场景验证，未发版**。[方案](feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md)

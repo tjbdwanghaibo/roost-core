@@ -14,7 +14,15 @@ type Config struct {
 	// 空（默认）时键为 remote_entity:snapshot:…，与旧版本逐字相同、无需迁移；共用一个 Redis db 的多个部署
 	// 应各自配置不同前缀，否则彼此读写同一份 L2 快照（RR-20260927-17）。同一部署的所有节点必须一致。
 	SnapshotL2KeyPrefix string
-	SnapshotInterestTTL time.Duration
+	// SnapshotL2TombstoneWaitReplicas 是 L2 带版本删除（写墓碑）之后用 WAIT 等几个副本确认（O-M6-3，kit：
+	// remote_entity.snapshot_l2_tombstone_wait_replicas）。0 关闭；DefaultConfig 为 1。普通快照写入不等。
+	// 主节点没有连着的副本时自动不等；确认不足不回滚、不报错，只计数与记日志
+	// （docs/feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md §3）。
+	SnapshotL2TombstoneWaitReplicas int
+	// SnapshotL2TombstoneWaitTimeout 是上面 WAIT 的超时（kit：remote_entity.snapshot_l2_tombstone_wait_timeout），
+	// 调用方最多多等这么久。等待副本时必须为正（Redis 的 WAIT … 0 是永久阻塞）；DefaultConfig 为 50ms。
+	SnapshotL2TombstoneWaitTimeout time.Duration
+	SnapshotInterestTTL            time.Duration
 	// SnapshotInterestKeys 是本机（consumer 侧）兴趣表的 key 上限。
 	SnapshotInterestKeys int
 	// SnapshotInterestSubs 是每个节点全集群兴趣表的条目上限（内存上限；兴趣是广播，每个节点存所有
@@ -70,34 +78,37 @@ type Config struct {
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		MaxWriteBatch:             100,
-		SnapshotCacheShards:       64,
-		SnapshotCacheEntries:      65536,
-		SnapshotCacheBytes:        256 << 20,
-		SnapshotCacheTTL:          30 * time.Second,
-		SnapshotL2TTL:             5 * time.Minute,
-		SnapshotInterestTTL:       30 * time.Second,
-		SnapshotInterestKeys:      65536,
-		SnapshotInterestSubs:      262144,
-		MarkerCacheTTL:            500 * time.Millisecond,
-		SnapshotLoadTimeout:       2 * time.Second,
-		SnapshotMaxWaiters:        256,
-		MaxConcurrentWrites:       128,
-		AsyncFinalizeCapacity:     4096,
-		AsyncFinalizeWorkers:      16,
-		TransactionTrackLimit:     65536,
-		TransactionTrackTTL:       10 * time.Minute,
-		FinalizeRetryInterval:     500 * time.Millisecond,
-		FinalizeProjectionTimeout: 30 * time.Second,
-		WrapperCapacity:           65536,
-		WrapperIdleTTL:            5 * time.Minute,
-		LockKey:                   "e",
-		LockTTL:                   24 * time.Hour,
-		RetryCount:                5,
-		RetryDelay:                100 * time.Millisecond,
-		UnlockRetryCount:          5,
-		UnlockRetryInterval:       100 * time.Millisecond,
-		VersionTTL:                24 * time.Hour,
-		OpTimeout:                 30 * time.Second,
+		MaxWriteBatch:        100,
+		SnapshotCacheShards:  64,
+		SnapshotCacheEntries: 65536,
+		SnapshotCacheBytes:   256 << 20,
+		SnapshotCacheTTL:     30 * time.Second,
+		SnapshotL2TTL:        5 * time.Minute,
+		// O-M6-3：墓碑等 1 个副本、最多 50ms（同机房的异步复制通常亚毫秒到几毫秒确认）。
+		SnapshotL2TombstoneWaitReplicas: 1,
+		SnapshotL2TombstoneWaitTimeout:  50 * time.Millisecond,
+		SnapshotInterestTTL:             30 * time.Second,
+		SnapshotInterestKeys:            65536,
+		SnapshotInterestSubs:            262144,
+		MarkerCacheTTL:                  500 * time.Millisecond,
+		SnapshotLoadTimeout:             2 * time.Second,
+		SnapshotMaxWaiters:              256,
+		MaxConcurrentWrites:             128,
+		AsyncFinalizeCapacity:           4096,
+		AsyncFinalizeWorkers:            16,
+		TransactionTrackLimit:           65536,
+		TransactionTrackTTL:             10 * time.Minute,
+		FinalizeRetryInterval:           500 * time.Millisecond,
+		FinalizeProjectionTimeout:       30 * time.Second,
+		WrapperCapacity:                 65536,
+		WrapperIdleTTL:                  5 * time.Minute,
+		LockKey:                         "e",
+		LockTTL:                         24 * time.Hour,
+		RetryCount:                      5,
+		RetryDelay:                      100 * time.Millisecond,
+		UnlockRetryCount:                5,
+		UnlockRetryInterval:             100 * time.Millisecond,
+		VersionTTL:                      24 * time.Hour,
+		OpTimeout:                       30 * time.Second,
 	}
 }
