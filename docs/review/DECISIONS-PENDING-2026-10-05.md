@@ -209,7 +209,7 @@
 | O-S5-2 | saga Mod 启动时校验 `dataengine.effects.max_age` 与 `saga.completion_receipt_ttl` | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)） |
 | metrics 按标签删除 | Registry 加按标签删除，对象拥有者销毁时删 | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：`metrics.DeleteSeries`，loadtest 运行挤出历史时删 `run` 序列；O3 的 `nest.dispatch.*{dispatcher}` 派发器排空后删除、`bus_rpc_pending{method}` 等 method 标签改为有界（无注销可挂）：已实施（`055a15d6`，分支 `oa`，未发版，[RR-20261006-18](../bug/RR-20261006-18.md)、[RR-20261006-19](../bug/RR-20261006-19.md)） |
 | readyz checker 期限 | 每个 checker 短期限，卡住报 Fail | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：并发、每个 1.5s |
-| 驱动 Close 契约 | 写进 A2 驱动契约表 | 已实施（`88f33776`，未发版）：按实测写进 [redis/driver](../../redis/driver/README.md) 与 [mongo/driver](../../mongo/driver/README.md) README §5；单机与 Cluster 重复 Close 不一致等登记 [WANTED W-2026-10-06-02](../bug/WANTED.md)，代码未改 |
+| 驱动 Close 契约 | 写进 A2 驱动契约表 | 已实施（`88f33776`，未发版）：按实测写进 [redis/driver](../../redis/driver/README.md) 与 [mongo/driver](../../mongo/driver/README.md) README §5；单机与 Cluster 重复 Close 不一致等登记 [WANTED W-2026-10-06-02](../bug/WANTED.md)，代码未改。更正（2026-10-06）：W-2026-10-06-02 已转 [RR-20261006-10](../bug/RR-20261006-10.md)，`d05a04a1` 统一 Close 口径并修复（未发版） |
 | cfggen globals 规则 | 支持 required / min / enum，与 tablegen 统一 | 已实施（229a5aa0） |
 | bus SETNX 去重 | 保持，写进 bus 契约 | 已实施（`88f33776`，未发版）：契约写进 `bus/reliable.go` 的 `ReliableStore` 注释（按当前源码：`BeginConsume` 出错进死信、不重投；死信重投用新 MsgID） |
 | L2 落后权威 | 保持，写明上界 | 已实施（`88f33776`，未发版）：[B2 §7](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) 与 USER_GUIDE——L2 最长落后 `snapshot_l2_ttl`，读者再加 `cached_max_staleness`，缺省约 5m30s（2026-10-06 补：这是 core `DefaultConfig`；按生成工程配置模板 `snapshot_l2_ttl: 10m` 部署约 10m30s） |
@@ -221,7 +221,7 @@
 | buff 投影 | 组件给投影入口，投影交业务 | 已实施（229a5aa0） |
 | skill 剩余观察 | O22 编译期拒绝；O7 排序；O29 改文案；O15/O16/O17/O27/O28 保持并写作者文档；其余保持 | 已实施（229a5aa0） |
 | NC-151 timeout_ticks | 保持 warning | 保持 |
-| Mirror 剩余观察 | 保持；O-M6-5 owner 启动遇 Mongo 选举做有界重试 | 其余保持；O-M6-5 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：`EnsureIndexes` 遇换主 10 次 × 1s，私有副本集 stepDown 红绿 |
+| Mirror 剩余观察 | 保持；O-M6-5 owner 启动遇 Mongo 选举做有界重试 | 其余保持；O-M6-5 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：`EnsureIndexes` 遇换主 10 次 × 1s（每个索引各自的预算，N 个索引都撞上选举时最坏约 N×10s，由调用方启动期限截断），私有副本集 stepDown 红绿 |
 | 低优先 | `:lease:*` 旧键写迁移说明；业务时间高水位推进失败加计数；其余保持 | 高水位计数 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）；`:lease:*` 迁移说明已实施（`88f33776`，未发版，[DEPLOYMENT §7.1](../DEPLOYMENT.md#71-升级后的手工清理)）；其余保持 |
 | Mongo 步骤延迟 | 维护者要求分析（9.0→17.4 ms/op） | 已分析（`ff08c941`，[分析](../feature/SAGA-MONGO-STEP-LATENCY-2026-10-06.md)）：代价是多一次落盘提交，吞吐同样约减半；不放松契约就没有安全优化，未改代码。**维护者选 A（接受现状）**：“目前真正走 saga 的实际业务场景不多，55tps 足够了”。契约与实现不变 |
 

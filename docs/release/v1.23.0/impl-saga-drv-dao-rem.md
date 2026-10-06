@@ -3,8 +3,8 @@
 v1.19.2 → v1.23.0 双文档的“实现”部分，覆盖四个主题：saga 最终性（SAGA）、Redis / Mongo 驱动契约（DRV）、回滚统一走 DAO（DAO）、remoteentity 快照缓存与 Mirror（REM）。
 写给 review agent，也让人能读懂。对应的说明文档是 [guide-saga-drv-dao-rem.md](guide-saga-drv-dao-rem.md)，两份文档用同一编号作锚点（`#saga-3` 这样的小写编号）。
 
-- **源码基准**：发版提交 `02c8a10d`。文中所有 `path:line` 都按这个提交的源码现查；历史记录（feature / bugfix）里的行号、符号名与源码冲突时以源码为准，并在条目里注明。
-- **范围**：`git log v1.19.2..02c8a10d` 里属于这四个主题的改动。每条写明首发版本；“v1.23.0（本版）”指 v1.22.0 之后、本次发版的提交。
+- **源码基准**：main `37338490`（初稿基于 `02c8a10d`，曾按冻结提交 `e6828e4f` 重核；`e6828e4f` 之后合入的 `055a15d6`、`41bdb9e5` 只改 activity / nest dispatcher / bus / goroutine，本部分引用的文件没有变化）。文中所有 `path:line` 都按 `37338490` 的源码现查，发版提交若再有代码改动，汇总时再核一次；历史记录（feature / bugfix）里的行号、符号名与源码冲突时以源码为准，并在条目里注明。
+- **范围**：`git log v1.19.2..37338490` 里属于这四个主题的改动。每条写明首发版本；“v1.23.0（本版）”指 v1.22.0 之后、本次发版的提交。
 - **不在本部分**：App 单实例锁、停机契约 A3、readyz（APP）；业务时钟（CLK）；严格配置 A4 / B10（CFG）；skill 编译器（SKILL）；N01～N15 非核心 review 的修复（NONCORE，本部分只在背景里引用 NC-35/36、NC-37～42、NC-61/65/130/131/140 等）；Ops 与指标（OPS）；pretag、门禁脚本（TOOL）。
 
 ## 怎么用这份文档 review
@@ -12,9 +12,9 @@ v1.19.2 → v1.23.0 双文档的“实现”部分，覆盖四个主题：saga �
 ### 建议顺序
 
 1. **DRV 先读**。DRV-3（A2 驱动重放契约）定义了“结果未知交给调用方”的口径，后面 REM 的 L2 写入、SAGA 的 Mongo 收件箱、DRV-4 的墓碑 `WAIT` 都按这个口径分类错误。先确认 `driver.IsDefinitelyNotExecuted` 与 `mongo.ErrCommitResultUnknown` 的判定边界，再看调用方。
-2. **SAGA 按时间读**：SAGA-1 / 2（U-0281、U-0280 原生步骤收件箱）→ SAGA-6（B1 代际）→ SAGA-7（NC-250）→ SAGA-8（方向① stepTransition）→ SAGA-9（方向② Mongo 收件箱）→ SAGA-10～13（发版前收尾）。后一条常常改写前一条的代码位置，按时间读能看清每一步收窄了什么。
-3. **DAO**：DAO-1 是框架契约变化（组件不再持有可回滚状态），DAO-2 是它的明确例外（skill Runtime），DAO-3 是例外边界上的投影入口。
-4. **REM 按层读**：REM-1（B2 水位权威与 `admitLocked`）是后面所有 Mirror 步骤的不变量基础；REM-2～6 是 Mirror 第 1～5 步；REM-7～13 是第 6 步本机替代、观察与发版前实测。
+2. **SAGA 按时间读**：SAGA-1 / 2（U-0281、U-0280 原生步骤收件箱）→ SAGA-6（B1 代际）→ SAGA-7（NC-250）→ SAGA-8（方向① stepTransition）→ SAGA-9（方向② Mongo 收件箱）→ SAGA-10～13（发版前收尾）→ SAGA-15（RR-20261006-14，`stepTransition` 自己写 Store）→ SAGA-14（第十三轮，收件箱改为每个操作一份状态文档）。后一条常常改写前一条的代码位置，按时间读能看清每一步收窄了什么。
+3. **DAO**：DAO-1 是框架契约变化（组件不再持有可回滚状态），DAO-2 是它的明确例外（skill Runtime），DAO-3 是例外边界上的投影入口，DAO-4 是 glsvet 对 A1 的两处提示补强（跟进一层 helper、组件字段写提示与 `//roost:cache`）。
+4. **REM 按层读**：REM-1（B2 水位权威与 `admitLocked`）是后面所有 Mirror 步骤的不变量基础；REM-2～6 是 Mirror 第 1～5 步；REM-7～13 是第 6 步本机替代、观察与发版前实测；REM-14 是 REM-4 撤销水位在兴趣表满时的缺口（RR-20261006-11）。
 
 ### 先读的规范
 
@@ -41,18 +41,20 @@ v1.19.2 → v1.23.0 双文档的“实现”部分，覆盖四个主题：saga �
 | 编号 | 一句话 | 首发 | 行为变化 / 兼容破坏 | 需业务改动 |
 | --- | --- | --- | --- | --- |
 | [SAGA-1](#saga-1) | 过期且无回执的原生步骤命令直接 ack，不再无限 nak 占满共享 durable（U-0281） | v1.20.1 | 是（nak → ack） | 否 |
-| [SAGA-2](#saga-2) | 原生步骤操作实例收件箱：同一操作最多生效一次、租约封顶到命令截止、放弃后迟到成功告警，含两处复核修复（U-0280） | v1.20.1 | 是（跨尝试回放 / 等待 / 接替；投影积压时步骤停住；持久格式只增） | 否（运维按 T-226 处置告警） |
+| [SAGA-2](#saga-2) | 原生步骤操作实例收件箱：同一操作最多生效一次、租约封顶到命令截止、放弃后迟到成功告警，含两处复核修复（U-0280） | v1.20.1 | 是（跨尝试回放 / 等待 / 接替；投影积压时步骤停住；收件箱存储本版改为每个操作一份状态文档，见 SAGA-14） | 否（运维按 T-226 处置告警） |
 | [SAGA-3](#saga-3) | 步骤超时与重试预算由配置 `saga.step_defaults` / `saga.steps` 提供 | v1.20.1 | 是（零值预算由 `Register` 补齐；写错配置 `Init` 失败） | 否（可选配置） |
 | [SAGA-4](#saga-4) | 步骤覆盖原样查不到时按小写回退（RR-20261005-NC-194） | v1.20.2 | 是（无定义时大小写混写的覆盖开始生效） | 否 |
 | [SAGA-5](#saga-5) | 步骤预算拒绝只差大小写的类型 / 步骤名（RR-20261006-06，收尾 A12） | v1.23.0（本版） | 是，收紧（这类命名启动失败） | 仅有这类命名的工程要改名 |
 | [SAGA-6](#saga-6) | 协调器接收 completion 时核对代际、迟到告警去重、补偿方向人工 Compensate 换代（B1） | v1.20.2 | 是，收紧 | 否（运维：补偿方向 `ManualRequired` 用 `Resume`） |
 | [SAGA-7](#saga-7) | 定义缺失 fence 时退避中的步骤同样记为放弃（RR-20261005-NC-250） | v1.21.0 | 是（迟到成功由丢弃改为 ack + 告警） | 否 |
 | [SAGA-8](#saga-8) | 离开当前步骤收成一个转移 `stepTransition` + 守卫测试与补漏（saga 方向 ①） | v1.21.0 | 否（唯一差异在正常不可达路径） | 否 |
-| [SAGA-9](#saga-9) | Mongo 步骤纳入操作实例收件箱（两事务、`_claims` 集合），结果消费者终态分类统一（saga 方向 ②、O-S5-1、O-S5-3） | v1.21.0 | 是（Mongo 步骤延迟约翻倍；新集合；普通结果流 Term 4 种错误） | 业务：事务外副作用仍需按 `IdempotencyKey` 幂等；运维：建议 `transactionLifetimeLimitSeconds=20` |
-| [SAGA-10](#saga-10) | `ErrDefinitionMissing` 改为可重试 nak；回放不交还 claim 列为观察 | v1.21.0 | 是（Term → nak 退避） | 否 |
+| [SAGA-9](#saga-9) | Mongo 步骤纳入操作实例收件箱（两事务；本版状态文档集合 `<收件箱集合>_operations`，v1.21.0～v1.22.0 是 `_claims`），结果消费者终态分类统一（saga 方向 ②、O-S5-1、O-S5-3） | v1.21.0 | 是（Mongo 步骤延迟约翻倍；新集合；普通结果流 Term 4 种错误） | 业务：事务外副作用仍需按 `IdempotencyKey` 幂等；运维：建议 `transactionLifetimeLimitSeconds=20` |
+| [SAGA-10](#saga-10) | `ErrDefinitionMissing` 改为可重试 nak；回执撞键时回放不交还租约列为观察 | v1.21.0 | 是（Term → nak 退避） | 否 |
 | [SAGA-11](#saga-11) | Mongo 步骤延迟分析，维护者选 A（接受两次落盘提交） | v1.23.0（本版） | 否（无生产代码改动） | 否 |
 | [SAGA-12](#saga-12) | saga Mod 启动时校验 `saga.completion_receipt_ttl > dataengine.effects.max_age`（O-S5-2） | v1.23.0（本版） | 是，收紧（不满足拒绝启动） | 仅调过这两个键的部署 |
 | [SAGA-13](#saga-13) | 真实 NATS 上 nak 退避 / `MaxDeliver` 实测，`TestAssemblyConsumesNativeNestCompletionEffects` 偶发失败根因 | v1.23.0（本版） | 否（只改测试） | 否 |
+| [SAGA-14](#saga-14) | 步骤收件箱改为每个操作一份状态文档：判定只读这一份，尝试次数与 Resume 次数不再进入判定（维护者第十三轮决定；取代 RR-20261006-15 / -16 的修法） | v1.23.0（本版） | 是，**不兼容**：存储形状改变，不读旧 claims 集合，不支持与旧步骤进程混跑；契约与延迟不变 | 运维：步骤服务先停旧再起新（原生步骤进程先排空 WAL），丢弃旧 claims 集合；业务无需改 |
+| [SAGA-15](#saga-15) | `stepTransition` 改为 Engine 方法、自己写 Store；守卫改为 `go/types` 全包检查（RR-20261006-14） | v1.23.0（本版） | 否（每个出口写入的请求与之前逐字段相同） | 否 |
 | [DRV-1](#drv-1) | Redis 脚本（Eval / EvalSha / EvalBatchDurable）回复丢失不再被驱动重放，一次调用至多执行一次（RR-20261005-NC-100） | v1.20.1 | 是（收紧）：脚本回复丢失返回传输错误 | 否 |
 | [DRV-2](#drv-2) | `mongo.transaction_timeout` 端到端约束事务含提交；EndSession 补发的 abort 有 5s 上限；退避中到期保留最后一次事务错误（RR-20261005-NC-101） | v1.20.1 | 是：分区时更早返回错误，该错误可能已提交 | 否 |
 | [DRV-3](#drv-3) | A2：Redis 写 / 含写 pipeline / EvalBatchDurable / DistLock 不经驱动重放，只在 `IsDefinitelyNotExecuted` 时重发；Mongo 提交后失败包 `ErrCommitResultUnknown`；契约表进仓 | v1.20.2 | 是（收紧）：写命令回复丢失返回结果未知；Mongo 错误文本多前缀 | 否（新增调用点按契约表 §6 核对） |
@@ -62,6 +64,7 @@ v1.19.2 → v1.23.0 双文档的“实现”部分，覆盖四个主题：saga �
 | [DAO-1](#dao-1) | A1：回滚统一走 DAO，组件不再持有可回滚状态、不再登记 undo；`nopersist,nosync` 字段有 mutator；glsvet A1 提示 | v1.20.2 | 是（规范）：组件写法改变；生成 DAO 只增方法；持久格式不变 | 新组件按规范；已生成工程不迁移 |
 | [DAO-2](#dao-2) | B4：skill Runtime 状态不进事务，写成约束 + 守卫测试 | v1.21.0 | 否（代码行为不变） | 是（设计约束）：先校验后推进 Runtime，扣费交给 Runtime commit |
 | [DAO-3](#dao-3) | combatcomponent 属性投影入口 `ProjectAttributes`：投影写 DAO vitals，随 DAO 回滚 | v1.23.0（本版） | 只新增 API；装了投影后被投影字段以投影为准 | 想让 buff 影响伤害的业务写投影函数 |
+| [DAO-4](#dao-4) | glsvet A1 提示跟进一层同包 helper（RR-20261006-13）；组件方法写非 DAO 字段给提示，缓存字段 `//roost:cache` 豁免（第十三轮 A1 盲区） | v1.23.0（本版） | 否（只多提示，退出码不变）；`roost:nest` 文档标注开始生效 | 已有工程组件若有可变字段会看到提示：移进 DAO 或标 `//roost:cache` |
 | [REM-1](#rem-1) | 共享 L2 为快照水位权威，L1 只缓存 L2 确认过的版本；`remote_entity.cached_max_staleness`；复制消息带 `published_at`，过老快照不再接受（O5） | v1.20.2 | 是（收紧：未确认 / 超上限条目先重新确认；L2 `DeleteAtVersion` 被拒返回 `ErrStaleWrite`） | 否 |
 | [REM-2](#rem-2) | Mirror 第 1～3 步：`RemoteSnapshotReadOnly` / `RemoteObservation` / `RemoteMirrorReader`、唯一读出口 `Read` + `Covers`、共享 `SnapshotClient` | v1.21.0 | 是（收紧：Monotonic 只回源一次；Cached 最低版本不满足返回 `ErrRemoteSnapshotStale`；Linearizable 需声明；停止后 `ErrSnapshotClientStopped`） | 否（只增 API） |
 | [REM-3](#rem-3) | nest `allow_stale` 的 Cached Remote 访问照旧接受低于 `min_version` 的快照 | v1.21.0 | 否（回到 Mirror 之前） | 否 |
@@ -75,6 +78,7 @@ v1.19.2 → v1.23.0 双文档的“实现”部分，覆盖四个主题：saga �
 | [REM-11](#rem-11) | L2 落后权威的上界：`snapshot_l2_ttl + cached_max_staleness`（core 缺省约 5m30s），保持不加后台补写 | v1.23.0（本版，文档） | 否 | 否 |
 | [REM-12](#rem-12) | Redis Cluster 迁槽 ASK / MOVED 下 L2 读写与墓碑 WAIT 实测；mirror-local Cluster 就绪判定补“每个主节点有 online 副本” | v1.23.0（本版） | 否 | 否 |
 | [REM-13](#rem-13) | 生成配置写出 `remote_entity` 五个新键；生产化不再把墓碑 WAIT 副本数改成 3 | v1.23.0（本版） | 否（只影响新生成工程） | 否 |
+| [REM-14](#rem-14) | 兴趣表满时 release 改记每个 consumer 一个的溢出水位，迟到的旧续租不再复活已撤销的租约（RR-20261006-11） | v1.23.0（本版） | 是，收紧（只在表满时：之前会复活的旧续租现在被忽略） | 否 |
 
 各编号链接到本文的实现条目；说明见 [guide-saga-drv-dao-rem.md](guide-saga-drv-dao-rem.md) 同编号。
 
@@ -93,26 +97,26 @@ v1.19.2 → v1.23.0 双文档的“实现”部分，覆盖四个主题：saga �
 | `877bb66c` | v1.20.1 | U-0280 复核 2：过期分支 ack 前先重发同一操作实例已生效的成功（见 [SAGA-2](#saga-2)） |
 | `9669d181` | v1.21.0 | Mongo 步骤过期分支同样先重发（`ackUnexecutedAttempt`，见 [SAGA-9](#saga-9)） |
 
-**2. 改动文件与关键符号**（行号以 `02c8a10d` 为准）
+**2. 改动文件与关键符号**（行号以 `37338490` 为准）
 
 | `path:line` | 符号 | 职责 |
 | --- | --- | --- |
-| `saga/command_consumer.go:384` | `SubscribeDataEngineStep` | 原生步骤消费者 |
-| `saga/command_consumer.go:419` | 过期分支（`!time.Now().Before(command.DeadlineAt)`） | 在 `Admit` / `Reserve` / handler 之前判断过期 |
-| `saga/command_consumer.go:441` | `metrics.IncCounter("saga.step.expired_unexecuted_total", ...)` | 无回执、无可重发成功时计数 |
-| `saga/command_consumer.go:442` | `slog.Info("saga: step command expired before it ran; ...")` | 带 `command_id` / `saga_id` / `deadline_at` |
+| `saga/command_consumer.go:380` | `SubscribeDataEngineStep` | 原生步骤消费者 |
+| `saga/command_consumer.go:415` | 过期分支（`!time.Now().Before(command.DeadlineAt)`） | 在 `Admit` / `Reserve` / handler 之前判断过期 |
+| `saga/command_consumer.go:437` | `metrics.IncCounter("saga.step.expired_unexecuted_total", ...)` | 无回执、无可重发成功时计数 |
+| `saga/command_consumer.go:438` | `slog.Info("saga: step command expired before it ran; ...")` | 带 `command_id` / `saga_id` / `deadline_at` |
 | `saga/dataengine_step_inbox.go:135` | `(*DataEngineStepInbox).Replay` | 只读回执，命中时 `markCompleted` |
-| `saga/command_consumer.go:302` | `SubscribeMongoStep` 过期分支 | Mongo 路径（本来就 ack；现在先 `ackUnexecutedAttempt`） |
+| `saga/command_consumer.go:298` | `SubscribeMongoStep` 过期分支 | Mongo 路径（本来就 ack；现在先 `ackUnexecutedAttempt`） |
 
 **3. 不变量与强制点**
 
-- 过期命令不开始任何业务：过期判断在 `Admit` 之前（`saga/command_consumer.go:419` 早于 `:449` 的 `config.Admit`），分支内只调 `Replay` 与 `replayOperationSuccess`。
-- 读回执出错不 ack：`:430-432` `replayErr != nil` 直接返回错误（nak）。
+- 过期命令不开始任何业务：过期判断在 `Admit` 之前（`saga/command_consumer.go:415` 早于 `:445` 的 `config.Admit`），分支内只调 `Replay` 与 `replayOperationSuccess`。
+- 读回执出错不 ack：`:426-428` `replayErr != nil` 直接返回错误（nak）。
 - 守卫测试：`TestExpiredStepCommandWithoutReceiptIsAcknowledgedNotRedelivered`（`saga/step_expired_promises_test.go`）把 `Admit` 与 handler 设成“一调用就失败”。
 
 **4. 控制流**
 
-1. 解码命令（`decodeStepCommand`，`saga/command_consumer.go:522`）。
+1. 解码命令（`decodeStepCommand`，`saga/command_consumer.go:518`）。
 2. `now >= DeadlineAt`：`inbox.Replay`；出错 → 返回错误（nak）。
 3. 命中回执 → 返回 nil（ack；completion 随投影的 effect 送达）。
 4. 未命中 → `replayOperationSuccess` 查同一操作实例另一次尝试已生效的成功：有 → 经 `transport.PublishCompletion` 重发（计 `saga.step.attempt_replayed_total`）后 ack；无 → 计 `saga.step.expired_unexecuted_total`、Info、ack。
@@ -144,14 +148,14 @@ v1.19.2 → v1.23.0 双文档的“实现”部分，覆盖四个主题：saga �
 
 **7. 性能证据**：无（不涉及热路径，过期分支只多一次计数与日志）。
 
-**8. 未验证项与已知风险**：真实 NATS 上 durable 被占满后的恢复没有复现；`saga.step.expired_unexecuted_total` 没有 `saga_type` 标签，运维只能从 Info 日志区分步骤。
+**8. 未验证项与已知风险**：NATS 多节点 HA 见 [E06](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)。“返回 nil 即 ack、释放 `MaxAckPending` 位”这一段：消费者返回 nil 时驱动 `settleJetStreamDelivery` 调 `msg.Ack()`（`nats/driver/jetstream.go:96-97`），真实 JetStream 上 ack floor 推进、`NumAckPending` 归零由 `TestRealNatsCompletionNakBackoffAndMaxDeliver`（[SAGA-13](#saga-13)）与 `TestRealJetStreamInterestHandlerErrorIsAcknowledged`（[REM-5](#rem-5)）实测；drill6 那种“durable 被占满后恢复”的整机场景没有单独重放。已知限制（设计）：`saga.step.expired_unexecuted_total` 没有 `saga_type` 标签，按 Info 日志的 `saga_id` / `command_id` 区分步骤。
 
 **9. review 检查点**
 
-- [ ] `saga/command_consumer.go:419-448`：确认过期分支里没有任何路径调用 `config.Admit`、`inbox.Reserve` 或 `handler`；`TestExpiredStepCommandWithoutReceiptIsAcknowledgedNotRedelivered` 的 `Admit` / handler “一调用就失败”是否覆盖了全部五个子用例。
-- [ ] `:430-432` 与 `:436-438`：`Replay` 或 `replayOperationSuccess` 持续失败（例如 claim 集合权限错误）时会一直 nak 到 `MaxDeliver`——与修前“读回执出错仍重投”同口径，确认这是接受的行为并有日志可查。
-- [ ] `saga/command_consumer.go:302-322`（Mongo）：`replayCtx` 只有 3s，`PublishCompletion` 超时返回错误 → nak；确认不会因此在 Mongo 路径重新引入长期 nak。
-- [ ] 确认 U-0281 记录“ack 不会丢掉已提交未投影的尝试”的前提仍成立：原生尝试的 completion 只经 effect 送达（`SubscribeDataEngineStep` 注释“never publishes the completion directly”，`saga/command_consumer.go:376-383`），唯一例外是 U-0280 之后的回放重发。
+- [ ] `saga/command_consumer.go:415-444`：确认过期分支里没有任何路径调用 `config.Admit`、`inbox.Reserve` 或 `handler`；`TestExpiredStepCommandWithoutReceiptIsAcknowledgedNotRedelivered` 的 `Admit` / handler “一调用就失败”是否覆盖了全部五个子用例。
+- [ ] `saga/command_consumer.go:426-428` 与 `:432-434`：`Replay` 或 `replayOperationSuccess` 持续失败（例如状态文档集合权限错误）时会一直 nak 到 `MaxDeliver`——与修前“读回执出错仍重投”同口径，确认这是接受的行为并有日志可查。
+- [ ] `saga/command_consumer.go:298-318`（Mongo）：`replayCtx` 只有 3s，`PublishCompletion` 超时返回错误 → nak；确认不会因此在 Mongo 路径重新引入长期 nak。
+- [ ] 确认 U-0281 记录“ack 不会丢掉已提交未投影的尝试”的前提仍成立：原生尝试的 completion 只经 effect 送达（`SubscribeDataEngineStep` 注释“never publishes the completion directly”，`saga/command_consumer.go:372-379`），唯一例外是 U-0280 之后的回放重发。
 
 <a id="saga-2"></a>
 ### SAGA-2 原生步骤操作实例收件箱：同一操作最多生效一次（U-0280）
@@ -171,29 +175,28 @@ v1.19.2 → v1.23.0 双文档的“实现”部分，覆盖四个主题：saga �
 | `23f82dbc` | v1.20.1 | 复核记录改用 rebase 后的提交号 |
 | `3fabe34d` | v1.20.2 | B1：`commandIncarnation` 改调协调器的 `commandIDIncarnation`（[SAGA-6](#saga-6)） |
 | `9669d181` | v1.21.0 | 操作实例代码原样移到 `saga/step_operation_inbox.go` 的 `stepOperationInbox`，原生与 Mongo 收件箱共用（[SAGA-9](#saga-9)） |
+| `a013f9ff` | v1.23.0（本版） | 收件箱改为每个操作一份状态文档：claim、守卫文档与按操作查询删除，契约不变（[SAGA-14](#saga-14)） |
 
-**2. 改动文件与关键符号**
+**2. 改动文件与关键符号**（行号以 main `37338490` 为准。v1.20.1～v1.22.0 的收件箱是“每次尝试一份 claim + 每个操作一份守卫文档”，本版改为每个操作一份状态文档，见 [SAGA-14](#saga-14)；本条只列契约相关的位置）
 
 | `path:line` | 符号 | 职责 |
 | --- | --- | --- |
-| `saga/step_operation_inbox.go:63` | `stepOperationInbox` | 两种收件箱共用的 claim / 守卫 / 判定 |
-| `saga/step_operation_inbox.go:92` | `stepClaim` | claim 文档：`operation_key`、`incarnation`、`superseded_by`、`lease_until`、`lease_token`、`status`、`expires_at` |
-| `saga/step_operation_inbox.go:112` | `ensureClaimIndexes` | 索引 `claim_expired`、`uniq_command`（唯一）、`ttl_expires_at`、`by_operation`、`by_operation_decision`（RR-20261006-15 复核） |
-| `saga/step_operation_inbox.go:124` | `reserve` | 一个 Mongo 事务里跑 `reserveInTransaction`；撞唯一键重试一次 |
-| `saga/step_operation_inbox.go:162` | `reserveInTransaction` | 回执 → 截止 → 自己的 claim → 守卫 → 其他尝试 → 新建 / 接管 |
-| `saga/step_operation_inbox.go:180` | 租约封顶 | `leaseUntil = min(now+leaseDuration, DeadlineAt)` |
-| `saga/step_operation_inbox.go:247` | `guardOperation` | upsert `saga-step-op/<IdempotencyKey>`，`$inc seq` 制造写冲突 |
-| `saga/step_operation_inbox.go:262` | `resolveOtherAttempts` | 成功任何一生回放、本生拒绝回放、可重试失败放行、在途 → 等、过期 → 接替 |
-| `saga/step_operation_inbox.go:322` | `operationSuccess` | 只读查同一操作已生效的成功（复核 2） |
-| `saga/step_operation_inbox.go:369` | `supersede` | `status=superseded`、`lease_token+1`，计 `saga.step_inbox.superseded_total` |
-| `saga/step_operation_inbox.go:413` | `commandIncarnation` | 从 `CommandID` 取代际（B1 起调 `commandIDIncarnation`） |
-| `saga/step_operation_inbox.go:422` | `releaseLease` | 交还未用上的租约（`lease_until = now`） |
-| `saga/dataengine_step_inbox.go:94` | `Bind` | 把 lease fence（owner / token / digest）绑进 Nest 事务 |
-| `dataengine/lease_fence.go:75` | `LeaseFence.Predicate` | 投影时的条件：owner、token、digest、`pending`、`lease_until > now` |
-| `saga/command_consumer.go:452-507` | `SubscribeDataEngineStep` Reserve 分支 | `ErrCommandExpired` / `errAttemptSuperseded` ack；回放他人结果经结果流重发；执行后 `waitReplay` |
-| `saga/command_consumer.go:513` | `replayOperationSuccess` | 不执行的投递在 ack 前重发同一操作的成功 |
-| `saga/engine.go:474` | `completeNotWaiting` | 回执 / tombstone 判重复或“放弃后迟到” |
-| `saga/engine.go:530` | `reportLateAfterAbandon` | ERROR + `saga.completion.late_after_abandon_total{saga_type,phase}` |
+| `saga/step_operation_inbox.go:65` | `stepOperationInbox` | 原生与 Mongo 收件箱共用的状态文档读写与判定 |
+| `saga/step_operation_inbox.go:92` | `stepOperation` | 每个操作实例一份（`_id = IdempotencyKey`）：当前尝试（`command_id`、`incarnation`、`digest`、`owner`、`lease_token`、`lease_until`、`deadline_at`、`status`、结论）、`refusals`、`superseded`、`version` |
+| `saga/step_operation_inbox.go:178` | `reserveInTransaction` | 一个事务里按 15 行判定表决定回放 / 等待 / 接替 / 执行（表见 [SAGA-14](#saga-14) §4） |
+| `saga/step_operation_inbox.go:321` | `leaseUntil` | 租约封顶：`min(now+leaseDuration, DeadlineAt)`，新建（`createOperation`，`:270`）与取租约（`grantLease`，`:287`）共用 |
+| `saga/step_operation_inbox.go:287` | `grantLease` | 以 `version` 做 CAS 取租约，`lease_token+1`；接替时把旧尝试记进 `superseded`、计 `saga.step_inbox.superseded_total`（`:316`） |
+| `saga/step_operation_inbox.go:425` | `operationSuccess` | 只读查同一操作另一次尝试已生效的成功（复核 2） |
+| `saga/step_operation_inbox.go:478` | `markCompleted` | 原生步骤读到权威回执后结算（只对仍是当前尝试、仍 pending 的状态生效） |
+| `saga/step_operation_inbox.go:492` | `commandIncarnation` | 从 `CommandID` 取代际，调协调器同一个 `commandIDIncarnation`（B1） |
+| `saga/step_operation_inbox.go:501` | `releaseLease` | 交还未用上的租约（`lease_until = now`），条件带 `command_id` / `digest` / `owner` / `lease_token` / `pending` |
+| `saga/dataengine_step_inbox.go:18` | `dataEngineOperationCollection` | 原生状态文档集合 `_dataengine_step_operations`（v1.22.0 及以前是 `_dataengine_inbox_claims`） |
+| `saga/dataengine_step_inbox.go:93` | `Bind` | 把 lease fence 绑进 Nest 事务，fence 指向 `(_dataengine_step_operations, IdempotencyKey)`（`:109-113`） |
+| `dataengine/lease_fence.go:75` | `LeaseFence.Predicate` | 投影时的条件：`_id`、owner、token、digest、`status=pending`、`lease_until > now`（未改，状态文档的顶层字段名与它一致） |
+| `saga/command_consumer.go:448-503` | `SubscribeDataEngineStep` Reserve 分支 | `ErrCommandExpired` / `errAttemptSuperseded` ack；回放他人结果经结果流重发；执行后 `waitReplay` |
+| `saga/command_consumer.go:509` | `replayOperationSuccess` | 不执行的投递在 ack 前重发同一操作的成功 |
+| `saga/engine.go:472` | `completeNotWaiting` | 回执 / tombstone 判重复或“放弃后迟到” |
+| `saga/engine.go:528` | `reportLateAfterAbandon` | ERROR + `saga.completion.late_after_abandon_total{saga_type,phase}` |
 | `saga/mongo_store.go:161` | `CompletionHistory` | 先查回执，再查 tombstone 与 `closure` |
 | `saga/mongo_store.go:328` | `Apply` 的 closure 判定 | 只有 `Receipt.Success` 才记 `result`，其余 `abandoned`（复核 1） |
 | `saga/store.go:65-93` | `OperationClosure` / `CompletionHistory` / `CompletionHistoryStore` | 可选扩展，`Store` 接口不变 |
@@ -202,64 +205,44 @@ v1.19.2 → v1.23.0 双文档的“实现”部分，覆盖四个主题：saga �
 
 | 不变量 | 强制点 | 守卫测试 |
 | --- | --- | --- |
-| 同一操作实例的并发 Reserve 串行化 | 守卫文档写在同一事务里（`saga/step_operation_inbox.go:210`），Mongo 写冲突让后者重跑并看到前者的 claim | `TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce`（真实 Mongo；mongotest 按集合检测写冲突，证明不了守卫） |
-| 尝试只在截止前生效 | 租约封顶 `:180-183`（新建 `:217-227` 与接管 `:229-233` 都用 `leaseUntil`）；投影条件 `lease_until > now`（`dataengine/lease_fence.go:82`） | `TestNativeStepLeaseNeverOutlivesTheCommandDeadline`；`TestNativeStepTakesEffectAtMostOncePerOperation/c` |
-| 接替与生效只能有一个提交 | `supersede` 与投影的 `Confirmation` 写同一个 claim 文档（`dataengine/lease_fence.go:86-94`） | `TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize`（40 轮，记录本次 39 / 1） |
-| 已生效的成功不被重做、不被丢失 | `resolveOtherAttempts` 成功回放 `:280-282`；不执行的投递经 `replayOperationSuccess` 重发 | `TestNativeStepTakesEffectAtMostOncePerOperation/a`、`/b`；`TestNativeStepExpiredDeliveryStillReplaysTheOperationsSuccess` |
+| 同一操作实例的并发 Reserve 串行化 | 所有 Reserve 都读写同一份状态文档（`_id = IdempotencyKey`），取租约是以 `version` 为条件的写（`saga/step_operation_inbox.go:308`），并发者在 Mongo 事务里写冲突、整笔重跑后重新判定 | `TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce`（真实 Mongo；mongotest 按集合检测写冲突，证明不了真实服务端的串行化） |
+| 尝试只在截止前生效 | 租约封顶 `leaseUntil`（`:321-327`）；投影条件 `lease_until > now`（`dataengine/lease_fence.go:82`） | `TestNativeStepLeaseNeverOutlivesTheCommandDeadline`；`TestNativeStepTakesEffectAtMostOncePerOperation/c` |
+| 接替与生效只能有一个提交 | 接替（`grantLease`）与投影的 `Confirmation`（`dataengine/lease_fence.go:86-94`）写同一份状态文档 | `TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize`（两边都可能先赢，断言从不两者都生效）；接替先赢的一边由 `TestRealMongoTakeoverFencesTheEarlierAttemptsProjection` 确定性构造 |
+| 已生效的成功不被重做、不被丢失 | 判定表第 10 步回放成功（`:235-239`）；不执行的投递经 `replayOperationSuccess` 重发 | `TestNativeStepTakesEffectAtMostOncePerOperation/a`、`/b`；`TestNativeStepExpiredDeliveryStillReplaysTheOperationsSuccess` |
 | 放弃之后才到的成功可见 | tombstone `closure`（`saga/mongo_store.go:328-341`）+ `completeNotWaiting` | `.../c'`、`TestNativeStepSuccessAfterAFailureClosedOperationIsAlarmed`、`TestMongoStoreTombstoneTellsAbandonedFromResolved` |
+| 投影的 fence 谓词与收件箱写的文档逐字段对得上 | 状态文档顶层字段名取自 `coredata.LeaseFence` 的字段常量（`operationStatusPending = coredata.LeaseFenceStatusPending`，`saga/step_operation_inbox.go:34`） | `TestDataEngineOperationStateSatisfiesProjectorFencePredicate`（真实状态文档经 BSON 往返后匹配真实谓词，且每个字段单独偏离都不匹配） |
 
 **4. 控制流 / 状态机**
 
-claim 文档状态机（每次尝试一份，`saga-step/<CommandID>`；守卫文档另算）：
+状态文档的当前尝试只有两个状态（`pending` / `settled`），完整的 15 行判定表与 CAS 条件见 [SAGA-14](#saga-14) §4。与本条契约直接相关的转移：
 
 ```mermaid
 stateDiagram-v2
-    [*] --> pending: Reserve 新建 claim，lease_token=1，租约封顶到 DeadlineAt
+    [*] --> pending: Reserve 新建状态文档，lease_token=1，租约封顶到 DeadlineAt
     pending --> pending: 同一命令重投且租约有效，返回 Duplicate
-    pending --> pending: 自己的租约已过期，接管并 lease_token+1
+    pending --> pending: 自己的租约已过期，重新取得，lease_token+1
+    pending --> pending: 另一尝试在租约过期后接替，旧尝试记进 superseded，lease_token+1
     pending --> pending: releaseLease，lease_until 设为 now
-    pending --> completed: 生效点条件写成功，原生投影或 Mongo settleOwnClaim
-    pending --> completed: Reserve 或 Replay 读到回执后 markCompleted
-    pending --> superseded: 同一操作另一尝试 Reserve 时租约已过期，supersede 并 lease_token+1
-    completed --> [*]: expires_at 到期 TTL 删除
-    superseded --> [*]: expires_at 到期 TTL 删除
+    pending --> settled: 生效点条件写成功，原生投影确认后由 Reserve / Replay 结算，Mongo 由 settleOwnAttempt 结算
+    settled --> pending: 当前结论是可重试失败或别的生的拒绝，新尝试取得租约
+    settled --> [*]: expires_at 到期 TTL 删除
+    pending --> [*]: expires_at 到期 TTL 删除
 ```
 
-Reserve 判定（`reserveInTransaction`，同一事务内）：
-
-```mermaid
-flowchart TD
-    A[读本命令回执] -->|有| R1[回放，Duplicate 加 Completion]
-    A -->|无| B{now 不早于 DeadlineAt}
-    B -->|是| E1[ErrCommandExpired]
-    B -->|否| C{本命令已有 claim}
-    C -->|completed| R2[回放 claim 里的 completion]
-    C -->|superseded| E2[errAttemptSuperseded]
-    C -->|pending 且租约有效| R3[Duplicate，等本尝试结果]
-    C -->|无或 pending 已过期| G[写守卫 saga-step-op]
-    G --> H{同一操作其他尝试}
-    H -->|有成功，任何一生| R4[回放那次成功]
-    H -->|有本生拒绝| R5[回放那次拒绝]
-    H -->|有 pending 且租约有效| E3[errOperationAttemptInFlight]
-    H -->|pending 已过期| S[supersede 后继续]
-    H -->|只有可重试失败或没有| N[新建或接管自己的 claim，执行]
-    S --> N
-```
-
-原生执行：消费者把 `Reservation` 放进 ctx（`withReservation`），handler 在 Nest 事务里 `Bind` + `EmitCompletion`；回执、lease fence 与 completion effect 同一条 WAL 记录；消费者 `waitReplay`（25ms 轮询）等回执投影后 ack。
+原生执行：消费者把 `Reservation` 放进 ctx（`withReservation`），handler 在 Nest 事务里 `Bind` + `EmitCompletion`；回执、lease fence 与 completion effect 同一条 WAL 记录；投影事务按 `LeaseFence.Predicate` 匹配状态文档并写 `updated_at`，不匹配整条记录跳过；消费者 `waitReplay`（25ms 轮询）等回执投影后 ack，`Replay` 读到回执时顺手结算状态文档。
 
 **5. 失败与不确定结果**
 
 | 情形 | 处理 | 对调用方的样子 |
 | --- | --- | --- |
 | kill -9 后 WAL 重放，截止已过 | 投影条件 `lease_until > now` 不匹配，记录被跳过，受影响实体驱逐重载（RR-20260926-30） | 不留回执、不发 completion；协调器按超时重试 |
-| 投影积压超过 `Timeout` | 每次尝试都在截止后投影、被跳过 | 步骤停住直到积压消退或重试用尽；`dataengine.fence.skipped.total{resource="_dataengine_inbox_claims"}` 与 `saga.step_inbox.superseded_total` 增长 |
-| handler 以 `ErrFencedEntityPending` 失败 | 交还租约（`saga/command_consumer.go:496-501`） | nak，屏障解除后重投立即重新 Reserve |
+| 投影积压超过 `Timeout` | 每次尝试都在截止后投影、被跳过 | 步骤停住直到积压消退或重试用尽；`dataengine.fence.skipped.total{resource="_dataengine_step_operations"}` 与 `saga.step_inbox.superseded_total` 增长 |
+| handler 以 `ErrFencedEntityPending` 失败 | 交还租约（`saga/command_consumer.go:492-497`） | nak，屏障解除后重投立即重新 Reserve |
 | 另一尝试租约有效 | `errOperationAttemptInFlight` | nak，重投时再判断 |
-| 尝试 k 的成功在退避期间被协调器丢弃（`ErrNotWaiting`） | k+1 的 Reserve 回放 k；若 k+1 已过期，过期分支重发 k 的成功 | 协调器收到 k 的成功（`CommandID` 是 k 的），不重复执行 |
+| 尝试 k 的成功在退避期间被协调器丢弃（`ErrNotWaiting`） | k+1 的 Reserve 先结算 k（第 9 步）再回放 k；若 k+1 已过期，过期分支重发 k 的成功 | 协调器收到 k 的成功（`CommandID` 是 k 的），不重复执行 |
 | 成功在协调器放弃后到达 | `completeNotWaiting` 告警，返回 `record, nil` | 消费者 ack；ERROR + 计数；运维按 T-226 处置 |
 | 回执 / tombstone TTL 之后的迟到成功 | 协调器无记录 | `ErrNotWaiting` → Term；不告警、不生效（守卫用例） |
-| `markCompleted` 失败（Reserve 第 1 步） | 只记 Warn + `saga.step_inbox.mark_completed_error_total`，回执仍是权威 | Reserve 结论不变 |
+| 读到回执后结算失败（Reserve 第 1 步） | 只记 Warn + `saga.step_inbox.mark_completed_error_total`（`saga/step_operation_inbox.go:184-188`），回执仍是权威 | Reserve 结论不变 |
 
 **6. 测试**
 
@@ -267,13 +250,13 @@ flowchart TD
 | --- | --- | --- |
 | `TestNativeStepTakesEffectAtMostOncePerOperation`（a / b / c / c' / d） | `saga/step_operation_promises_test.go` | 三种交错 + 截止后重放跳过 + 投影积压接替；走真实 `SubscribeDataEngineStep` 与 dataengine `MongoStore.Project` |
 | `TestNativeStepOperationInterleavingsWithCoordinatorDecisions`（Resume 回放、saga 截止告警、人工 Compensate 退避中放弃告警、可重试失败不挡、本生拒绝回放、TTL 后不告警） | 同上 | 协调器决定 × 收件箱 |
-| `TestNativeStepLeaseNeverOutlivesTheCommandDeadline` | 同上 | 新建 / 接管封顶、过期 `ErrCommandExpired` |
+| `TestNativeStepLeaseNeverOutlivesTheCommandDeadline` | 同上 | 新建 / 重新取得封顶、过期 `ErrCommandExpired` |
 | `TestNativeStepConsumerHandlesOperationOutcomes`（被接替 ack、在途 nak、零值 Completion 不 nak） | 同上 | 消费者分支 |
 | `TestMongoStoreTombstoneTellsAbandonedFromResolved` | 同上 | abandoned / result / 旧 tombstone / Resume 升级 |
 | `TestNativeStepSuccessAfterAFailureClosedOperationIsAlarmed`、`TestMongoStoreTombstoneOfAFailureCloseIsAbandoned` | `saga/step_operation_review_test.go` | 复核 1 |
 | `TestNativeStepExpiredDeliveryStillReplaysTheOperationsSuccess` | 同上 | 复核 2 |
-| `TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce`、`TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize` | `saga/step_operation_real_mongo_integration_test.go`（`-tags integration`） | 真实服务端写冲突与接替 / 投影串行化 |
-| `TestDataEngineStepInboxReservesCommandIdentityAndAllowsNewAttempt`、`TestDataEngineStepInboxUsesAbsoluteClaimExpiry`（按新契约改写） | `saga/dataengine_step_inbox_test.go` | 在途 / 截止后接替；索引数 3 → 4 |
+| `TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce`、`TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize`、`TestRealMongoTakeoverFencesTheEarlierAttemptsProjection` | `saga/step_operation_real_mongo_integration_test.go`（`-tags integration`） | 真实服务端写冲突、接替 / 投影串行化、接替先赢时旧尝试的投影被 fence |
+| `TestDataEngineStepInboxReservesCommandIdentityAndAllowsNewAttempt`、`TestDataEngineStepInboxUsesAbsoluteOperationExpiry`、`TestDataEngineOperationStateSatisfiesProjectorFencePredicate` | `saga/dataengine_step_inbox_test.go` | 在途 / 截止后接替；状态文档集合只有 TTL 索引；fence 谓词逐字段对得上 |
 
 修前红（原样，基线 `50e9a4e8`，全文 [formal-red-before.txt](../../bugfix/evidence/U-0280/formal-red-before.txt)，节选）：
 
@@ -293,7 +276,7 @@ attempt gift-1:1:0:2 took effect after the coordinator closed the operation on a
 ... the expired delivery of gift-N:1:0:2 was acknowledged without replaying it: the saga ended failed with CompletedSteps=0 and no late_after_abandon alarm
 ```
 
-负对照（原样，[real-mongo-guard-disabled-red.txt](../../bugfix/evidence/U-0280/real-mongo-guard-disabled-red.txt)，临时让 `guardOperation` 直接返回）：
+负对照（原样，[real-mongo-guard-disabled-red.txt](../../bugfix/evidence/U-0280/real-mongo-guard-disabled-red.txt)，当时的实现里临时让守卫文档写入 `guardOperation` 直接返回；状态文档之后串行化由状态文档本身的 CAS 写承担，同一用例照常通过）：
 
 ```text
     step_operation_real_mongo_integration_test.go:95: round 1: 6 attempts of one operation reserved a live lease at the same time, want exactly 1 (results=[<nil> <nil> <nil> <nil> <nil> <nil>])
@@ -307,23 +290,21 @@ tag=u0280b sagas=164 status={"5":164} (4=completed 5=compensated 6=failed 7=manu
 success receipts: debit=164 refund=164; sagas with debit>1=0 refund>1=0 failed_with_debit=0 compensated_debit!=refund=0
 ```
 
-修后命令（记录“验证”）：`go test -race -count=3 ./saga/... ./kit/saga/...` 通过；`-race -count=200 -run 'TestNativeStep|TestDataEngineStepInbox|TestStepBudget'` 通过；`go test -tags integration -run 'TestRealMongo(ConcurrentAttempts|SupersedeAndProjection)' ./saga/` 通过；`bash scripts/test-dataengine-generated.sh` 通过；生成 game-demo build / vet / test 通过。
+修后命令（记录“验证”）：`go test -race -count=3 ./saga/... ./kit/saga/...` 通过；`-race -count=200 -run 'TestNativeStep|TestDataEngineStepInbox|TestStepBudget'` 通过；`go test -tags integration -run 'TestRealMongo(ConcurrentAttempts|SupersedeAndProjection)' ./saga/` 通过；`bash scripts/test-dataengine-generated.sh` 通过；生成 game-demo build / vet / test 通过。状态文档改写后，上表全部用例不改断言通过（`-race -count=3`、私有三节点副本集 `-tags integration`，[SAGA-14](#saga-14) §6）。
 
-**7. 性能证据**：每次新建 / 接管 claim 多一次守卫 upsert 与一次 `by_operation` 索引查询。mongotest `BenchmarkDataEngineStepReservation/new_command` 0.52 → 1.33 ms/op、`duplicate_active_claim` 4.8 → 5.5 µs/op（记录原文；替身按集合快照，不代表真实 Mongo；样本数记录未写）。真实 Mongo 上的 Reserve 开销在 U-0280 时未测，[SAGA-11](#saga-11) 的分解给出 Reserve 事务约 5 条命令 + 1 次落盘提交。
+**7. 性能证据**：U-0280 当时每次新建 / 接管 claim 多一次守卫 upsert 与一次 `by_operation` 索引查询，mongotest `BenchmarkDataEngineStepReservation/new_command` 0.52 → 1.33 ms/op（记录原文；替身按集合快照，不代表真实 Mongo；样本数记录未写）。本版状态文档之后原生 Reserve 是一个事务三条命令（读回执、读状态、写状态），真实副本集上与改写前吞吐无显著差别、分配 −45%（`BenchmarkRealMongoNativeReserveThroughput`，[SAGA-14](#saga-14) §7）。
 
-**8. 未验证项与已知风险**：混跑未实跑；时钟偏差未注入；真实进程下投影积压超过 `Timeout` 未实跑（只有单元用例 d）；“截止前已投影、放弃后才送达”只在单测构造。
+**8. 未验证项与已知风险**：时钟偏差未注入实测（[E02](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)）；多主机强杀（[E13](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)）。“投影积压超过 `Timeout`”与“截止前已投影、放弃后才送达”由 `TestNativeStepTakesEffectAtMostOncePerOperation/d`、`/c'` 用真实消费者与真实投影器确定性构造。新旧步骤进程混跑不在支持范围（维护者 2026-10-06：“不考虑旧进程，完成按照新的处理，线上还没有旧的进程跑”，升级步骤见 [SAGA-14](#saga-14)）。
 
 **9. review 检查点**
 
-- [ ] `saga/step_operation_inbox.go:209-215`：确认守卫写（`guardOperation`）发生在 `resolveOtherAttempts` 读同一操作 claim **之前**、且在同一事务里；看 `TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce` 的负对照证据是否仍能复现（守卫被跳过时 6 个并发尝试都拿到租约）。
-- [ ] `:180-183` 与 `:229-233`：接管自己过期 claim 时 `$set lease_until` 用的也是封顶后的 `leaseUntil`；过滤条件 `lease_until $lte now` + `lease_token` 保证只接管一次。
-- [ ] `:115` 唯一索引 `uniq_command` 是 `(namespace, command_id)`；守卫文档的 `command_id` 写的是 `operationKey`、`namespace` 是 `saga-step-op`（`:251`），确认它与 claim（`namespace=saga-step`）不会互撞。
-- [x] `:45` `maxOperationAttempts = 4096`、`:311-316` 超过即 `ErrConflict`：每一生最多 1000 次尝试，多次 Resume 之后同一操作的 claim 数在 30 天 TTL 内是否可能超过 4096 导致这一步永远 Reserve 失败？
-  **已闭环（fixs，RR-20261006-15）**：会，五生约 4100 次尝试后新一生 Reserve 每次报 `ErrConflict`（越界是拒绝、不溢出、claim 停在 4097），修好原因再 Resume 也执行不了，直到旧 claim 过 TTL。已修：claim 写 `outcome`，按操作只取 pending / 成功 / 本生拒绝 / 旧 claim，结果集有界（证明见 `operationClaimsFilter` 注释），上限改名 `maxDecisiveOperationClaims`；`operationSuccess` 同一查询、超限报错。[问题](../../bug/RR-20261006-15.md)、[修复](../../bugfix/RR-20261006-15.md)。复核（rr15v）：修前进程实跑混跑，至多生效一次；升级前卡住的操作的 4097 份旧 claim 另修（[RR-20261006-16](../../bug/RR-20261006-16.md)，旧 claim 单独计数、上限 8192）；服务端查询补索引 `by_operation_decision`，1000～10000 份累积 claim 下 Reserve p50 都约 9.5ms。
-- [ ] `:164-174` 与 `:359-361`：Reserve 第 1 步 `markCompleted` 失败只告警，`attemptResult` 里 `markCompleted` 失败却让整个 Reserve 失败——确认这种不对称是有意的（后者在事务里，失败会中止重跑）。
-- [ ] `saga/command_consumer.go:470-475`（原生 `errAttemptSuperseded`）不重发同一操作的成功，而 Mongo 路径 `:331`（含 `errAttemptSuperseded`）会重发：确认原生侧“接替者负责回放或执行”足以覆盖被接替投递恰好是最后一次的情形。
+- [ ] `saga/step_operation_inbox.go:287-319` `grantLease`：确认取租约的写以读到的 `version` 为条件（`:308`）、`MatchedCount != 1` 返回 `ErrConflict`；在 Mongo 事务里并发两个 Reserve 时，后提交的一方因写冲突整笔重跑并重新读到前者写下的当前尝试（`TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce` 是否在真实副本集上覆盖了“都读到同一 version、只有一个提交”）。
+- [ ] `:321-327` 与 `:270-285` / `:287-319`：新建、重新取得自己的租约、接替三条路径的 `lease_until` 都经 `leaseUntil` 封顶到命令截止；确认没有别的写入路径会把 `lease_until` 写到截止之后（`releaseLease` 写 `now`，结算写 Unix 0）。
+- [ ] `saga/dataengine_step_inbox.go:105-113`：`Bind` 校验 reservation 的 `operationKey` / `commandID` / `owner` / `digest` 与命令一致后，fence 的 `DocumentID` 取 `command.IdempotencyKey`、`Token` 取 reservation 的 token；确认 `TestDataEngineOperationStateSatisfiesProjectorFencePredicate` 的逐字段偏离覆盖了 `_id`、owner、token、digest、status、`lease_until` 六个条件。
+- [ ] `saga/step_operation_inbox.go:180-190` 与 `:223-234`：Reserve 第 1 步结算失败只告警，第 9 步 `settleFromReceipt` 失败让整个 Reserve 失败——确认这种不对称是有意的（第 1 步的结论已由回执决定；第 9 步之后的判定依赖结算后的状态，失败就中止重跑）。
+- [ ] `saga/command_consumer.go:466-471`（原生 `errAttemptSuperseded`）不重发同一操作的成功，而 Mongo 路径 `:327`（含 `errAttemptSuperseded`）会重发：确认原生侧“接替者负责回放或执行”足以覆盖被接替投递恰好是最后一次的情形。
 - [ ] `saga/mongo_store.go:328-341`：只有 `Receipt.Success` 记 `result`；已存在 `abandoned` 的 tombstone 在新一生带结果关闭时升级为 `result`；确认反方向（`result` 不会被降级为 `abandoned`）。
-- [ ] 时钟：租约封顶读步骤进程 `o.now()`（`:176`），`DeadlineAt` 由协调器按自己的 `now` 算（`saga/engine.go:765`）；确认文档里“依赖时钟偏差远小于 `Timeout`”是唯一的假设，没有别处再依赖跨进程时钟。
+- [ ] 时钟：租约封顶读步骤进程 `o.now()`（`saga/step_operation_inbox.go:192`），`DeadlineAt` 由协调器按自己的 `now` 算（`saga/engine.go:763`）；确认文档里“依赖时钟偏差远小于 `Timeout`”是唯一的跨进程时钟假设。
 
 <a id="saga-3"></a>
 ### SAGA-3 步骤超时与重试预算由配置提供
@@ -374,8 +355,8 @@ success receipts: debit=164 refund=164; sagas with debit>1=0 refund>1=0 failed_w
 | --- | --- | --- |
 | `saga.steps` 写错类型 / 步骤（有定义） | `Init` 返回错误 | 进程启动失败，报错点名键 |
 | 未知字段、`max_attempts` 越界、时长非正或不带单位 | `Init` 返回错误 | 同上 |
-| 无定义（`NewMod()`）时写错名字 | 无法核对，保存为小写覆盖，`Resolve` 找不到即不生效 | 静默不生效（按源码推断） |
-| 覆盖只给 `backoff_min`，大于实际生效的 `backoff_max` | kit `Validate` 只看单个覆盖内的上下限，放行；`Register` 时 `Definition.Validate` 失败 | `ErrInvalidDefinition: step N`，不点名配置键（按源码推断，未验证） |
+| 无定义（`NewMod()`）时写错名字 | 无法核对，保存为小写覆盖（`kit/saga/step_budgets.go:66-81`），`Resolve` 原样与小写都找不到即不生效（`saga/record.go:124-127`） | 静默不生效（源码核对） |
+| 覆盖只给 `backoff_min`，大于实际生效的 `backoff_max` | kit `Validate` 只在同一份覆盖里两个值都非零时比较上下限（`saga/record.go:142`），放行；`Resolve` 逐字段合并后（`:130-131`）`Definition.Validate` 在 `Register` 时失败（`:192-193`） | `ErrInvalidDefinition: step N`，不点名配置键（源码核对） |
 
 **6. 测试**
 
@@ -389,7 +370,7 @@ success receipts: debit=164 refund=164; sagas with debit>1=0 refund>1=0 failed_w
 
 **7. 性能证据**：无（只在启动时执行）。
 
-**8. 未验证项与已知风险**：见第 5 节两条推断；已生成工程 `definition.go` 里写死的预算仍生效，运维只能用按步骤覆盖压过它。
+**8. 未验证项与已知风险**：无外部验证项。第 5 节两条行为已按源码核对（无定义时写错名字静默不生效；覆盖后的上下限在 `Register` 才报错、不点名键），是否改进见第 9 节第 1、2 条；已生成工程 `definition.go` 里写死的预算仍生效，运维只能用按步骤覆盖压过它。
 
 **9. review 检查点**
 
@@ -428,7 +409,7 @@ success receipts: debit=164 refund=164; sagas with debit>1=0 refund>1=0 failed_w
 
 | 情形 | 处理 | 对调用方的样子 |
 | --- | --- | --- |
-| 无定义、类型 `GiftItem` 与 `giftitem` 同时登记 | 两者原样都查不到时都命中同一条小写覆盖 | 两个类型拿到同一份覆盖，不报错（按源码推断） |
+| 无定义、类型 `GiftItem` 与 `giftitem` 同时登记 | 两者原样都查不到时都命中同一条小写覆盖（`saga/record.go:124-127`） | 两个类型拿到同一份覆盖，不报错（源码核对） |
 | 代码里同时给原样与小写两份覆盖 | 原样优先 | 守卫用例钉住 |
 
 **6. 测试**
@@ -451,7 +432,7 @@ FAIL
 
 **7. 性能证据**：无（启动时一次 map 查找）。
 
-**8. 未验证项与已知风险**：只差大小写的两个类型同时登记时无法区分（审查 O2）；有定义路径在 [SAGA-5](#saga-5) 改为报错，无定义路径仍是第 5 节的推断行为。
+**8. 未验证项与已知风险**：无外部验证项。只差大小写的两个类型同时登记时配置无法区分（审查 O2）；有定义路径在 [SAGA-5](#saga-5) 改为报错，无定义路径的行为见第 5 节（源码核对），是否在 `Engine.Register` 层检测见第 9 节。
 
 **9. review 检查点**
 
@@ -535,23 +516,23 @@ step_budgets_test.go:116: types: err=<nil> overrides=map[{Gift_Item debit}:{0s 1
 
 | `path:line` | 符号 | 职责 |
 | --- | --- | --- |
-| `saga/engine.go:406` | `Engine.Complete` | B1 判定顺序 |
-| `saga/engine.go:416` | `commandIDIncarnation(...)` 调用 | 从 `CommandID` 解析 completion 的代际 |
-| `saga/engine.go:424-433` | 接收判定 | 旧一生失败 / 更新代际 → stale；旧一生成功 → `positionedAt`；同一生 → 等待中 |
-| `saga/engine.go:461` | `positionedAt` | 在等它，或 `Pending` / `Compensating` 且当前方向 + 步骤就是它 |
-| `saga/engine.go:474` | `completeNotWaiting` | 放弃后迟到成功按（操作，代际）只告警一次 |
-| `saga/engine.go:507` | `reportStaleIncarnation` | WARN + `saga.completion.stale_incarnation_total{saga_type,phase}` |
-| `saga/engine.go:920` / `:930` | `commandID` / `commandIDIncarnation` | 铸造与解析同处：第 0 代 `key:attempt`，第 N 代 `key:rN:attempt` |
-| `saga/step_transition.go:54` | 换代规则 | Resume 总是；人工 Compensate 只在 `before.Phase == PhaseCompensate` |
+| `saga/engine.go:404` | `Engine.Complete` | B1 判定顺序 |
+| `saga/engine.go:414` | `commandIDIncarnation(...)` 调用 | 从 `CommandID` 解析 completion 的代际 |
+| `saga/engine.go:422-431` | 接收判定 | 旧一生失败 / 更新代际 → stale；旧一生成功 → `positionedAt`；同一生 → 等待中 |
+| `saga/engine.go:459` | `positionedAt` | 在等它，或 `Pending` / `Compensating` 且当前方向 + 步骤就是它 |
+| `saga/engine.go:472` | `completeNotWaiting` | 放弃后迟到成功按（操作，代际）只告警一次 |
+| `saga/engine.go:505` | `reportStaleIncarnation` | WARN + `saga.completion.stale_incarnation_total{saga_type,phase}` |
+| `saga/engine.go:918` / `:928` | `commandID` / `commandIDIncarnation` | 铸造与解析同处：第 0 代 `key:attempt`，第 N 代 `key:rN:attempt` |
+| `saga/step_transition.go:65` | 换代规则 | Resume 总是；人工 Compensate 只在 `before.Phase == PhaseCompensate` |
 | `saga/store.go:99` | `LateSuccessAlarmStore` | 可选接口 |
 | `saga/mongo_store.go:196` | `MongoStore.MarkLateSuccessAlarm` | 条件更新 `late_alarms.r<N>` `$exists:false`，`MatchedCount==1` 才是第一次 |
 | `saga/mongo_store.go:528` | `operationDoc.LateAlarms` | tombstone 子文档 |
 
 **3. 不变量与强制点**
 
-- 协调器与收件箱对“同一生”的判断不分叉：两边都调 `commandIDIncarnation`（`saga/engine.go:930`、`saga/step_operation_inbox.go:413-415`），守卫 `TestCommandIDIncarnationInvertsCommandID`。
+- 协调器与收件箱对“同一生”的判断不分叉：两边都调 `commandIDIncarnation`（`saga/engine.go:928`、`saga/step_operation_inbox.go:492-494`），守卫 `TestCommandIDIncarnationInvertsCommandID`。
 - 同一迟到成功只告警一次：单文档条件更新的原子性（`saga/mongo_store.go:200-206`），守卫 `TestRealMongoLateSuccessAlarmIsMarkedOnce`（20 轮 × 8 并发，每轮恰好 1 个 first）。
-- 新一生的 `CommandID` 与上一生不相交：只在 `stepTransition` 里改 `Incarnation`（[SAGA-8](#saga-8) 的守卫钉住）。
+- 新一生的 `CommandID` 与上一生不相交：`Incarnation` 只由 `stepTransition` 按 before 与原因决定（v1.23.0 起它重写 `after.Incarnation`，出口写的值不起作用，守卫 `TestStepTransitionAloneDecidesTheIncarnation`，见 [SAGA-15](#saga-15)）。
 
 **4. 控制流 / 状态机**
 
@@ -623,14 +604,14 @@ flowchart TD
 
 **7. 性能证据**：无（只在迟到成功路径多一次条件更新）。
 
-**8. 未验证项与已知风险**：新旧协调器混跑未实跑；B1 方案的方向判断写明：若之后在“Mongo 步骤仍按命令”或“迟到成功只告警”两处再出缺陷，应走 Mongo 步骤纳入收件箱（已在 [SAGA-9](#saga-9) 做）或 C，而不是继续在协调器加特判。
+**8. 未验证项与已知风险**：无外部验证项。新旧协调器混跑不在验证范围（维护者 2026-10-06：“不考虑旧进程，完成按照新的处理，线上还没有旧的进程跑”）。B1 方案的方向判断写明：若之后在“Mongo 步骤仍按命令”或“迟到成功只告警”两处再出缺陷，应走 Mongo 步骤纳入收件箱（已在 [SAGA-9](#saga-9) 做）或 C，而不是继续在协调器加特判。
 
 **9. review 检查点**
 
-- [ ] `saga/engine.go:424-426`：`incarnation > record.Incarnation` 的成功也被当作 stale 丢弃（返回 `record, nil`，消费者 ack）——确认“比记录还新”确实不可能由协调器产生（`Incarnation` 只增、只在 `stepTransition` 改），丢弃不会吞掉真实结果。
-- [ ] `saga/engine.go:930-943`：`commandIDIncarnation` 用 `operationKey+":r"` 前缀切分；`operationKey` 本身是 `<sagaID>:<phase>:<step>`，确认 sagaID 的字符集（`validSubjectToken`）不可能让第 0 代的 `key:attempt` 被误解析成 `key:rN:...`。
-- [ ] `saga/engine.go:461-472` `positionedAt` 对 `Pending` / `Compensating` 用 `operationKey(record.ID, record.Phase, record.Step)`：确认 Resume 进入补偿方向时（`Step = CompletedSteps-1`）旧一生**正向**成功不会被当作“停在这个操作上”（方向不同、键不同）。
-- [ ] `saga/step_transition.go:54`：人工 Compensate 只在 `before.Phase == PhaseCompensate` 时换代；从正向退避中发起的补偿保持 `CommandID`——确认这时补偿方向在这一生里确实从未派发过（否则会复用 ID，E4 同形）。
+- [ ] `saga/engine.go:422-424`：`incarnation > record.Incarnation` 的成功也被当作 stale 丢弃（返回 `record, nil`，消费者 ack）——确认“比记录还新”确实不可能由协调器产生（`Incarnation` 只增、只在 `stepTransition` 改），丢弃不会吞掉真实结果。
+- [ ] `saga/engine.go:928-941`：`commandIDIncarnation` 用 `operationKey+":r"` 前缀切分；`operationKey` 本身是 `<sagaID>:<phase>:<step>`，确认 sagaID 的字符集（`validSubjectToken`）不可能让第 0 代的 `key:attempt` 被误解析成 `key:rN:...`。
+- [ ] `saga/engine.go:459-470` `positionedAt` 对 `Pending` / `Compensating` 用 `operationKey(record.ID, record.Phase, record.Step)`：确认 Resume 进入补偿方向时（`Step = CompletedSteps-1`）旧一生**正向**成功不会被当作“停在这个操作上”（方向不同、键不同）。
+- [ ] `saga/step_transition.go:65`：人工 Compensate 只在 `before.Phase == PhaseCompensate` 时换代；从正向退避中发起的补偿保持 `CommandID`——确认这时补偿方向在这一生里确实从未派发过（否则会复用 ID，E4 同形）。
 - [ ] `saga/mongo_store.go:196-207`：过滤条件包含 `saga_id`；不同 saga 不会因为相同 `IdempotencyKey` 误标（`IdempotencyKey` 含 sagaID，通常不会）；没有 tombstone 时返回 false，`completeNotWaiting` 这时走 `Duplicates`——确认与“没有 tombstone 就 `ErrNotWaiting`”的前序判断不矛盾（`history.Recorded` 已保证 tombstone 存在）。
 
 <a id="saga-7"></a>
@@ -649,13 +630,13 @@ flowchart TD
 
 | `path:line` | 符号 | 职责 |
 | --- | --- | --- |
-| `saga/engine.go:697-714` | `processClaimed` 定义缺失分支 | fence 到 `ManualRequired`，`stepTransition(..., causeDefinitionMissing, fenced)` |
-| `saga/step_transition.go:73` | `openOperation` | `Waiting` → `OperationKey`；`Pending` / `Compensating` 且 `Attempt>0` → 当前方向 + 步骤的操作 |
-| `saga/step_transition.go:61-63` | 关闭规则 | `before` 开着的操作在 `after` 不再开着就关闭 |
+| `saga/engine.go:695-712` | `processClaimed` 定义缺失分支 | fence 到 `ManualRequired`，`stepTransition(..., causeDefinitionMissing, fenced)` |
+| `saga/step_transition.go:85` | `openOperation` | `Waiting` → `OperationKey`；`Pending` / `Compensating` 且 `Attempt>0` → 当前方向 + 步骤的操作 |
+| `saga/step_transition.go:72-74` | 关闭规则 | `before` 开着的操作在 `after` 不再开着就关闭 |
 | `saga/mongo_store.go:323-346` | `Apply` 的 `CloseOperation` | 写 tombstone（放弃关闭）、删排队命令 |
 | `saga/definition_fence_abandon_promises_test.go` | 回归 | 正向、补偿两个方向 |
 
-**3. 不变量与强制点**：协调器离开一个已派发过的操作（不论在等还是在退避）都写 tombstone；强制点在 `stepTransition`（`saga/step_transition.go:61`），守卫是 [SAGA-8](#saga-8) 的 `TestEveryCoordinatorWriteGoesThroughStepTransition`。
+**3. 不变量与强制点**：协调器离开一个已派发过的操作（不论在等还是在退避）都写 tombstone；强制点在 `stepTransition`（`saga/step_transition.go:72`），守卫是 [SAGA-8](#saga-8) 的 `TestEveryCoordinatorWriteGoesThroughStepTransition`。
 
 **4. 控制流**：协调器领到退避到期的记录 → 找不到定义 → `after.Status = ManualRequired`、清 `OperationKey` / `CommandID` → `stepTransition`：`openOperation(before)` = `<saga>:<phase>:<step>`（`Attempt>0`），`openOperation(after)` = 空 → `CloseOperation` = 该操作 → `MongoStore.Apply` 同一事务写放弃 tombstone、删排队命令。之后的迟到成功走 `completeNotWaiting` → 告警一次。
 
@@ -690,19 +671,19 @@ flowchart TD
 
 **7. 性能证据**：无（只多写一份 tombstone）。
 
-**8. 未验证项与已知风险**：混跑未实跑；真实 Mongo 上没有单独复跑 NC-250 的触发。
+**8. 未验证项与已知风险**：无外部验证项。新旧协调器混跑不在验证范围（同 [SAGA-6](#saga-6)）。NC-250 的关闭写的是 `MongoStore.Apply` 既有的 `CloseOperation` 分支（`saga/mongo_store.go:323-346`），mongotest 用例覆盖关闭逻辑，真实副本集上的同一分支由 `TestRealSagaCrossProcessKillRecovers` 与 `TestRealMongoCoordinatorLeaseTakeover` 经过（截止与超时出口）。
 
 **9. review 检查点**
 
-- [ ] `saga/step_transition.go:73-83`：`openOperation` 对 `Pending` / `Compensating` 只在 `Attempt > 0` 时返回操作；确认 `retryState`（`saga/engine.go:841-869`）在退避时保留 `Attempt`（不清零），否则退避中的操作不会被识别。
-- [ ] `saga/engine.go:697-714`：定义缺失分支 `after` 没有改 `Phase` / `Step`；确认 `openOperation(after)` 因 `Status = ManualRequired` 返回空，从而一定关闭。
+- [ ] `saga/step_transition.go:85-95`：`openOperation` 对 `Pending` / `Compensating` 只在 `Attempt > 0` 时返回操作；确认 `retryState`（`saga/engine.go:839-867`）在退避时保留 `Attempt`（不清零），否则退避中的操作不会被识别。
+- [ ] `saga/engine.go:695-712`：定义缺失分支 `after` 没有改 `Phase` / `Step`；确认 `openOperation(after)` 因 `Status = ManualRequired` 返回空，从而一定关闭。
 - [ ] `saga/mongo_store.go:323-346`：关闭时 `DeleteMany` 删的是 `command.idempotency_key == CloseOperation` 的排队命令；确认已被 publisher 领取（租约中）的命令也会被删，或其后续 Ack / Nack 对已删文档的处理是安全的（`TestOutboxSupersedeAndUnknownAckOnMongoStore` 是否覆盖）。
 - [ ] 修复记录与源码的对应：记录里的 `abandonedOperation` 已不存在（`a95cf4dc` 删除），确认 `openOperation` 对截止、人工 Compensate、定义缺失三个出口给出与 `abandonedOperation` 相同的答案（方案“行为对照”逐出口）。
 
 <a id="saga-8"></a>
 ### SAGA-8 离开当前步骤收成一个转移 stepTransition（saga 方向 ①）
 
-> 首发 v1.21.0 · [说明](guide-saga-drv-dao-rem.md#saga-8)
+> 首发 v1.21.0 · [说明](guide-saga-drv-dao-rem.md#saga-8) · 本版补强见 [SAGA-15](#saga-15)（RR-20261006-14）
 
 **1. 提交**
 
@@ -712,49 +693,49 @@ flowchart TD
 | `a95cf4dc` | v1.21.0 | 新增 `saga/step_transition.go`，`engine.go` 8 个出口改调，删除 `abandonedOperation` / `closedOperation`；守卫测试；负对照证据 |
 | `8d4bec52` | v1.21.0 | 方案与 DECISIONS-PENDING 写入提交号 |
 | `42419890` | v1.21.0 | 发版前复审：守卫补上不写字面量的两种绕过，负对照固定在 `saga/testdata/stepguard` |
+| `5ca32611` | v1.23.0（本版） | RR-20261006-14：`stepTransition` 改为 `Engine` 方法、自己调 `Store.Apply`；守卫改为 `go/types` 全包检查；`saga/testdata/stepguard` 与 `TestStepTransitionGuardSeesBypassesWithoutALiteral` 删除（[SAGA-15](#saga-15)） |
 
-**2. 改动文件与关键符号**
+**2. 改动文件与关键符号**（当前源码 `37338490`；v1.21.0 时 `stepTransition` 是返回 `ApplyRequest` 的包级函数、守卫是 `go/ast` 语法检查，见 [SAGA-15](#saga-15)）
 
 | `path:line` | 符号 | 职责 |
 | --- | --- | --- |
-| `saga/step_transition.go:12-31` | `transitionCause` | dispatch / result / timeout / deadline / definitionMissing / invalidStep / manualCompensate / resume |
-| `saga/step_transition.go:34` | `transition` | `cause`、`fenced`、`receipt`、`outbox` |
-| `saga/step_transition.go:53` | `stepTransition` | 唯一构造 `ApplyRequest`、唯一改 `Incarnation` |
-| `saga/step_transition.go:73` | `openOperation` | “当前开着哪个操作”的唯一回答 |
-| `saga/engine.go:343` / `:381` / `:440` / `:710` / `:718` / `:727` / `:742` / `:767` | 8 个出口 | Resume / Compensate / Complete / 定义缺失 / 截止 / 超时 / 步骤越界 / 派发 |
-| `saga/step_transition_guard_test.go:17` | `TestEveryCoordinatorWriteGoesThroughStepTransition` | 解析包内非测试源码 |
-| `saga/step_transition_guard_test.go:26` | `TestStepTransitionGuardSeesBypassesWithoutALiteral` | 守卫自己的负对照 |
-| `saga/testdata/stepguard/bypass.go` | `mutatedTransitionExit`、`aliasedStoreExit` | 两种不写字面量的绕过 |
+| `saga/step_transition.go:15-34` | `transitionCause` | dispatch / result / timeout / deadline / definitionMissing / invalidStep / manualCompensate / resume |
+| `saga/step_transition.go:37` | `transition` | `cause`、`fenced`、`receipt`、`outbox` |
+| `saga/step_transition.go:63` | `(*Engine).stepTransition` | 唯一构造 `ApplyRequest`、唯一调 `Store.Apply`（`:78`），按 before 与原因重写 `after.Incarnation`（`:64-67`） |
+| `saga/step_transition.go:85` | `openOperation` | “当前开着哪个操作”的唯一回答 |
+| `saga/engine.go:343` / `:380` / `:438` / `:708` / `:716` / `:725` / `:740` / `:765` | 8 个出口 | Resume / Compensate / Complete / 定义缺失 / 截止 / 超时 / 步骤越界 / 派发，都写 `e.stepTransition(ctx, record, after, transition{...})` |
+| `saga/step_transition_guard_test.go:39` | `TestEveryCoordinatorWriteGoesThroughStepTransition` | `go/types` 检查 saga 包全部非测试文件 |
+| `saga/step_transition_guard_test.go:46` | `TestStepTransitionAloneDecidesTheIncarnation` | 五种原因下出口写 `after.Incarnation=99`，写入的代际只取决于 before 与原因 |
 
 **3. 不变量与强制点**
 
 | 不变量 | 强制点 |
 | --- | --- |
-| 所有协调器写记录经 `stepTransition` | 守卫：`ApplyRequest{}` 复合字面量、`var x ApplyRequest`、`new(ApplyRequest)` 只能出现在 `stepTransition` 里（`saga/step_transition_guard_test.go:72-102`） |
-| `Incarnation` 只在 `stepTransition` 里改 | 赋值 / 自增检查（`:83-94`） |
-| `stepTransition` 的结果不被改写 | 对结果变量字段赋值、取地址报出（`:86-98`） |
-| `Engine` 方法里的 `store.Apply` 参数必须是 `stepTransition(...)` 或只被它赋值过的变量 | `:103-116`；对 `e.store` 以外的 `Apply` 调用报出（`:106-111`） |
-| 守卫没有失明 | `applyCalls == 0` 时 `t.Fatal`（`:122-124`） |
+| 所有协调器写记录经 `stepTransition` | 结构：出口拿到的是写入后的 `Record`，手里没有请求；守卫规则 3：`Store.Apply`（调用或方法值）只在 `stepTransition` 里出现（`saga/step_transition_guard_test.go:167-175`） |
+| 请求只能是 `stepTransition` 的决定 | 守卫规则 1：`ApplyRequest`（或其指针）类型的值只能在 `stepTransition` 里产生（复合字面量、`new`、零值变量、类型转换、函数返回、下标、解引用都算，`:176-202`）；规则 2：任何地方不能改写请求（赋值、自增、`range` 赋值、取地址，`:120-166`） |
+| `Incarnation` 只由 `stepTransition` 决定 | `saga/step_transition.go:64-67` 先把 `after.Incarnation` 设回 `before.Incarnation`，Resume 或补偿方向的人工 Compensate 再加一；`TestStepTransitionAloneDecidesTheIncarnation` |
+| 守卫没有失明 | 看不到 `stepTransition` 里的 `Store.Apply`、或看不到任何对请求参数的读取（`MongoStore.Apply`）时 `t.Fatal`（`:206-212`） |
 
-**4. 控制流**：每个出口算出 `after` → `stepTransition(before, after, transition{...})`：(1) `Resume`，或 `ManualCompensate` 且 `before.Phase == PhaseCompensate` → `after.Incarnation = before.Incarnation + 1`；(2) `ExpectedVersion = before.Version`，`fenced` 时带 `before.Lease`；(3) `openOperation(before)` 非空且不等于 `openOperation(after)` → `CloseOperation`；(4) 接收了成功 → `CloseOperation = receipt.IdempotencyKey`（覆盖第 3 步）。
+**4. 控制流**：每个出口算出 `after` → `e.stepTransition(ctx, before, after, transition{...})`：(1) `after.Incarnation = before.Incarnation`，`Resume`，或 `ManualCompensate` 且 `before.Phase == PhaseCompensate` → 加一；(2) `ExpectedVersion = before.Version`，`fenced` 时带 `before.Lease`；(3) `openOperation(before)` 非空且不等于 `openOperation(after)` → `CloseOperation`；(4) 接收了成功 → `CloseOperation = receipt.IdempotencyKey`（覆盖第 3 步）；(5) `e.store.Apply(ctx, request)`，返回 `request.After` 与 `ApplyOutcome`。
 
 **5. 失败与不确定结果**
 
 | 情形 | 处理 | 对调用方的样子 |
 | --- | --- | --- |
-| 新出口手拼请求 | 守卫测试失败并报文件:行号 | CI 红 |
-| 步骤越界且已派发（`Attempt > 0`） | 新规则放弃关闭该操作，旧代码不关闭 | 正常不可达；方案列为唯一行为差异 |
-| `ManualRequired` 上人工 Compensate（`Attempt>0`） | 旧代码会对已关闭的操作再关一次；新规则不重复关闭 | 可观察结果相同（tombstone 不改关闭方式，排队命令已删） |
+| 新出口手拼请求、改写请求或直接调 `Store.Apply` | 守卫测试失败并报文件:行号与规则 | CI 红 |
+| 步骤越界且已派发（`Attempt > 0`） | 放弃关闭该操作，v1.21.0 之前的代码不关闭 | 正常不可达；方案列为唯一行为差异 |
+| `ManualRequired` 上人工 Compensate（`Attempt>0`） | v1.21.0 之前会对已关闭的操作再关一次；新规则不重复关闭 | 可观察结果相同（tombstone 不改关闭方式，排队命令已删） |
+| `Store.Apply` 返回 `ErrConflict` | `stepTransition` 原样返回，出口照旧重读重试 | 与 v1.21.0 相同 |
 
 **6. 测试**
 
 | 用例 | 文件 | 覆盖 |
 | --- | --- | --- |
-| `TestEveryCoordinatorWriteGoesThroughStepTransition` | `saga/step_transition_guard_test.go` | 生产源码无违例 |
-| `TestStepTransitionGuardSeesBypassesWithoutALiteral` | 同上 + `saga/testdata/stepguard/bypass.go` | 两种绕过必须逐个报出 |
+| `TestEveryCoordinatorWriteGoesThroughStepTransition` | `saga/step_transition_guard_test.go` | 生产源码无违例（三条规则 + 防失明） |
+| `TestStepTransitionAloneDecidesTheIncarnation` | 同上 | 代际只由 before 与原因决定 |
 | U-0280、U-0281、B1、NC-250 与 `step_operation_*` 全部既有用例 | `saga/` | 不改断言通过（`-race -count=3` 全包；关键用例 `-race -count=50`） |
 
-负对照（原样，[guard-negative.txt](../../feature/evidence/sagadir/guard-negative.txt)）：
+v1.21.0 守卫的负对照（原样，[guard-negative.txt](../../feature/evidence/sagadir/guard-negative.txt)；这是当时的语法守卫，现在的类型守卫见 [SAGA-15](#saga-15)）：
 
 ```text
 # 负对照：在 saga 包里临时加一个手拼请求的 Engine 出口（handBuiltExit：Incarnation++ 后 store.Apply(ctx, ApplyRequest{...})），
@@ -766,26 +747,23 @@ flowchart TD
 FAIL
 ```
 
-`42419890` 的绕过负对照现在是常驻用例（`TestStepTransitionGuardSeesBypassesWithoutALiteral` 每次运行），修前（原守卫看不到这两种）的红文本记录未保留。
+`42419890` 的两种绕过负对照在 v1.21.0～v1.22.0 是常驻用例 `TestStepTransitionGuardSeesBypassesWithoutALiteral`；本版随 RR-20261006-14 删除（维护者要求负对照不留仓库），两种写法在新结构下一种编译不过、一种被类型守卫报出（[SAGA-15](#saga-15) §6）。
 
-**7. 性能证据**：无（纯重构，不涉及热路径）。
+**7. 性能证据**：无（不涉及热路径；类型守卫一次约 0.1～0.2s，含 `go list -export`）。
 
-**8. 未验证项与已知风险**：守卫是语法层（`go/ast`）检查，不做类型推断；见第 9 节列出的盲区。
+**8. 未验证项与已知风险**：无外部验证项。v1.21.0 语法守卫的盲区（包级 helper 改写参数里的请求再写入）已由 RR-20261006-14 闭环，见 [SAGA-15](#saga-15)。
 
 **9. review 检查点**
 
-- [x] 确认所有步骤状态转移只经 `stepTransition`：看守卫是否覆盖不写字面量的两种绕过——`saga/testdata/stepguard/bypass.go` 的 `mutatedTransitionExit`（改 `request.CloseOperation`）与 `aliasedStoreExit`（`var request ApplyRequest` + `store := e.store`），对应 `TestStepTransitionGuardSeesBypassesWithoutALiteral`。
-- [x] 盲区 1（按源码推断）：`engineMethod` 只看接收者为 `Engine` 的方法（`saga/step_transition_guard_test.go:65`、`:103-105`）；包级函数（例如 `func apply(s Store, r ApplyRequest)`）里的 `s.Apply(ctx, r)` 不被检查。
-- [x] 盲区 2（按源码推断）：`ApplyRequest` 作为**函数参数**传入时既不是 `ValueSpec` 也不是复合字面量，`transitionResultNames` 也不认它，参数上的字段赋值不会报出；配合盲区 1 可构造“经 helper 改写 `CloseOperation` 再写入”的绕过。
-- [x] `isRequestFromTransition`（`:213-235`）按标识符**名字**而不是 `ast.Object` 统计赋值；同一函数里不同作用域的同名变量会被合并计数——确认不会产生漏报（只会更严格还是可能放过？）。
-  **以上四条已闭环（fixs，RR-20261006-14）**：盲区 1 + 2 组合的 helper 绕过已在修前复现（原守卫两个用例都通过）。现在 `stepTransition` 是 Engine 方法、自己调 `Store.Apply` 并重写代际，出口拿不到请求；守卫改为 `go/types` 全包检查（请求只能在 stepTransition 里产生、不能改写、`Store.Apply` 只在那里调用），语法守卫、`isRequestFromTransition` 与 `saga/testdata/stepguard` 一并删除，负对照按维护者要求不留仓库，验证输出见[修复记录](../../bugfix/RR-20261006-14.md)。本节第 2、3、6 小节的符号与用例名是 v1.21.0 时的样子。
-- [ ] `saga/step_transition.go:61-66`：成功回执覆盖 `CloseOperation` 为 `receipt.IdempotencyKey`；确认可重试失败 / 拒绝的回执不会走这一分支，以失败关闭时仍按第 3 步关闭 `before` 开着的操作、由 Store 记为 `abandoned`。
-- [ ] `fenced` 只在协调循环出口为 true（`saga/engine.go:710-767`），`Complete` / `Compensate` / `Resume` 只按版本 fence；确认这与 `ClaimDue` 的租约语义一致（方案第 4 条）。
+- [ ] `saga/step_transition.go:72-77`：成功回执覆盖 `CloseOperation` 为 `receipt.IdempotencyKey`；确认可重试失败 / 拒绝的回执不会走这一分支，以失败关闭时仍按第 3 步关闭 `before` 开着的操作、由 Store 记为 `abandoned`。
+- [ ] `fenced` 只在协调循环出口为 true（`saga/engine.go:708-765`），`Complete` / `Compensate` / `Resume` 只按版本 fence；确认这与 `ClaimDue` 的租约语义一致（方案第 4 条）。
+- [ ] `saga/engine.go:343-352` 与 `:380-389`：Resume / Compensate 现在返回 `stepTransition` 写入的记录（v1.22.0 及以前读 `request.After`）；确认 `written` 的 `Incarnation` 与 Store 里的一致（`TestStepTransitionAloneDecidesTheIncarnation` 同时比较返回值与存储值）。
+- [ ] v1.21.0 版的四条守卫盲区（`engineMethod` 只看 Engine 方法、参数上的字段赋值不报、`isRequestFromTransition` 按名字计数、`saga/testdata/stepguard` 的两种绕过）已由 RR-20261006-14 闭环（`5ca32611`）：确认 [SAGA-15](#saga-15) 的类型守卫三条规则对这四种形状都报出或使其编译不过（修后负对照原文 [guard-after.txt](../../bugfix/evidence/RR-20261006-14/guard-after.txt)）。
 
 <a id="saga-9"></a>
 ### SAGA-9 Mongo 步骤纳入操作实例收件箱，结果消费者终态分类统一（saga 方向 ②、O-S5-1、O-S5-3）
 
-> 首发 v1.21.0 · [说明](guide-saga-drv-dao-rem.md#saga-9)
+> 首发 v1.21.0 · [说明](guide-saga-drv-dao-rem.md#saga-9) · 收件箱存储本版改为每个操作一份状态文档，见 [SAGA-14](#saga-14)
 
 **1. 提交**
 
@@ -795,20 +773,21 @@ FAIL
 | `8d4bec52` | v1.21.0 | 方案与 DECISIONS-PENDING 写入提交号 |
 | `5a3c4a60` | v1.21.0 | `ErrDefinitionMissing` 移出终态；`ErrDuplicateKey` 回放分支加观察注释（[SAGA-10](#saga-10)） |
 | `ff08c941` | v1.23.0（本版） | 延迟分析与基准文件（[SAGA-11](#saga-11)） |
+| `a013f9ff` | v1.23.0（本版） | 状态文档：`<收件箱集合>_claims` → `<收件箱集合>_operations`，`settleOwnClaim` → `settleOwnAttempt`，Reserve 事务 5 条命令 → 3 条（[SAGA-14](#saga-14)） |
 
-**2. 改动文件与关键符号**
+**2. 改动文件与关键符号**（当前源码 `37338490`）
 
 | `path:line` | 符号 | 职责 |
 | --- | --- | --- |
 | `saga/command_consumer.go:35` | `MongoCommandInbox` | 嵌入 `stepOperationInbox`，`collection` 存回执 |
-| `saga/command_consumer.go:41-48` | `CommandInboxOptions` | `ReceiptTTL`、`Owner`、`LeaseDuration` |
-| `saga/command_consumer.go:50` | `mongoInboxClaimSuffix = "_claims"` | claim / 守卫集合 = 收件箱集合 + 后缀 |
-| `saga/command_consumer.go:83` | `EnsureInfrastructure` | 回执 TTL 索引 + `ensureClaimIndexes` |
+| `saga/command_consumer.go:41-47` | `CommandInboxOptions` | `ReceiptTTL`、`Owner`、`LeaseDuration` |
+| `saga/command_consumer.go:50` | `mongoInboxOperationSuffix = "_operations"` | 状态文档集合 = 收件箱集合 + 后缀（v1.21.0～v1.22.0 是 `mongoInboxClaimSuffix = "_claims"`） |
+| `saga/command_consumer.go:83` | `EnsureInfrastructure` | 回执 TTL 索引 + `ensureOperationIndexes`（只有 `ttl_expires_at`） |
 | `saga/command_consumer.go:103` | `Handle` | Reserve 事务 → 执行事务；失败交还租约 |
-| `saga/command_consumer.go:150` | `execute` | handler → `settleOwnClaim` → 插回执，同一事务 |
-| `saga/step_operation_inbox.go:387` | `settleOwnClaim` | 条件写 owner / token / `pending` / `lease_until > now`，不匹配 → `errAttemptFenced` |
-| `saga/command_consumer.go:256` | `SubscribeMongoStep` | 过期、fence、接替、在途分支 |
-| `saga/command_consumer.go:358` | `ackUnexecutedAttempt` | 不执行的投递 ack 前重发同一操作的成功 |
+| `saga/command_consumer.go:146` | `execute` | handler → `settleOwnAttempt`（`:175`）→ 插回执（`:178`），同一事务 |
+| `saga/step_operation_inbox.go:455` | `settleOwnAttempt` | 条件写 `_id` / `command_id` / `digest` / `owner` / `lease_token` / `pending` / `lease_until > now`，写结论；不匹配 → `errAttemptFenced` |
+| `saga/command_consumer.go:252` | `SubscribeMongoStep` | 过期、fence、接替、在途分支 |
+| `saga/command_consumer.go:354` | `ackUnexecutedAttempt` | 不执行的投递 ack 前重发同一操作的成功 |
 | `saga/nest_completion_consumer.go:150` | `isTerminalCompletionError` | 两条结果流共用 |
 | `saga/jetstream.go:144` | 普通结果流调用点 | O-S5-1 |
 | `saga/nest_completion_consumer.go:137` | 原生结果流调用点 | O-S5-1 |
@@ -817,15 +796,15 @@ FAIL
 
 | 不变量 | 强制点 | 守卫 |
 | --- | --- | --- |
-| 同一操作实例至多一次业务写生效 | Reserve 事务（`saga/step_operation_inbox.go:124-146`）+ 执行事务里的条件写（`saga/command_consumer.go:179`） | `TestMongoStepAttemptsOfOneOperationTakeEffectOnce`（mongotest）与 `TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce`（真实副本集，同一份用例） |
-| 接替与生效只能一个提交 | `supersede`（`:369`）与 `settleOwnClaim`（`:387`）写同一 claim 文档 | 同上“in-flight attempt past its deadline” |
-| 回执格式不变 | 执行事务最后 `InsertOne(commandReceiptDoc{...})`（`saga/command_consumer.go:182`） | 混跑语义依赖它 |
+| 同一操作实例至多一次业务写生效 | Reserve 事务（`saga/step_operation_inbox.go:140-162`）+ 执行事务里的条件写（`saga/command_consumer.go:175`） | `TestMongoStepAttemptsOfOneOperationTakeEffectOnce`（mongotest）与 `TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce`（真实副本集，同一份用例） |
+| 接替与生效只能一个提交 | 接替（`grantLease`，`saga/step_operation_inbox.go:287`）与 `settleOwnAttempt`（`:455`）写同一份状态文档 | 同上“in-flight attempt past its deadline”；`TestRealMongoStepProcessesFenceAttemptsInFlightAcrossProcesses`（两个进程） |
+| 回执格式不变 | 执行事务最后 `InsertOne(commandReceiptDoc{...})`（`saga/command_consumer.go:178`） | `findReceipt` / `readReceipt` 读法不变 |
 | 两条结果流终态分类一致 | 共用 `isTerminalCompletionError` | `TestCompletionConsumersTermTheSameTerminalErrors` |
 | 跨进程强杀下每个操作恰好一次提交 | 上述全部 | `TestRealSagaCrossProcessKillRecovers` |
 
 **4. 控制流 / 状态机**
 
-Reserve 事务与执行事务（`MongoCommandInbox.Handle`）：
+Reserve 事务与执行事务（`MongoCommandInbox.Handle`，本版状态文档形状；v1.21.0～v1.22.0 的 Reserve 事务是 5 条命令：读回执、读自己的 claim、守卫 upsert、按操作查 claim、写 claim）：
 
 ```mermaid
 sequenceDiagram
@@ -838,10 +817,8 @@ sequenceDiagram
     C->>I: Handle(ctx 截止为 DeadlineAt)
     I->>R: StartSession 与 WithTransaction
     R->>M: findOne 回执集合 _id=CommandID
-    R->>M: findOne claims 本命令 claim
-    R->>M: findAndModify upsert 守卫 saga-step-op/IdempotencyKey
-    R->>M: find claims by operation_key
-    R->>M: insert 或接管本命令 claim，租约封顶到 DeadlineAt
+    R->>M: findOne 状态文档 _id=IdempotencyKey
+    R->>M: insert 或以 version 为条件 update 状态文档，租约封顶到 DeadlineAt
     R->>M: commitTransaction，w majority 且 j true
     alt 回放或在途
         R-->>I: Duplicate 带 Completion 或 errOperationAttemptInFlight
@@ -849,7 +826,7 @@ sequenceDiagram
     else 新租约
         I->>X: StartSession 与 WithTransaction
         X->>M: handler 用事务 ctx 写业务文档
-        X->>M: update claims，条件为 owner token pending 且 lease_until 大于 now
+        X->>M: update 状态文档，条件为当前尝试 owner token pending 且 lease_until 大于 now
         X->>M: insert 回执，_id=CommandID
         X->>M: commitTransaction
         alt 条件写未匹配
@@ -863,15 +840,15 @@ sequenceDiagram
     end
 ```
 
-`SubscribeMongoStep` 对 `Handle` 结果的分支（`saga/command_consumer.go:329-353`）：`ErrCommandExpired` / `errAttemptFenced` / `errAttemptSuperseded` → `ackUnexecutedAttempt` 后 ack；其他错误（含 `errOperationAttemptInFlight`、被截止打断的执行事务）→ nak；成功或回放 → `PublishCompletion`（回放的 `CommandID` 是生效那次的）。
+`SubscribeMongoStep` 对 `Handle` 结果的分支（`saga/command_consumer.go:325-349`）：`ErrCommandExpired` / `errAttemptFenced` / `errAttemptSuperseded` → `ackUnexecutedAttempt` 后 ack；其他错误（含 `errOperationAttemptInFlight`、被截止打断的执行事务）→ nak；成功或回放 → `PublishCompletion`（回放的 `CommandID` 是生效那次的）。
 
 **5. 失败与不确定结果**
 
 | 情形 | 处理 | 对调用方的样子 |
 | --- | --- | --- |
 | handler 返回错误 / ctx 取消 | 执行事务回滚，`releaseLease`（`WithoutCancel`） | nak，重投立即重新 Reserve |
-| 执行事务提交结果未知 | 若已提交，claim 是 completed，交还条件不匹配不改；重投读到回执回放 | 至多一次仍成立 |
-| 执行事务撞回执唯一键（混跑，旧进程先写回执） | 回放那份回执，不交还 claim（观察，[SAGA-10](#saga-10)） | 返回 duplicate |
+| 执行事务提交结果未知 | 若已提交，状态文档已 `settled`，交还条件（要求 `pending`）不匹配不改；重投读到回执回放 | 至多一次仍成立 |
+| 执行事务撞回执唯一键 | 正常不可达（同一命令的两次投递由租约串行，后一次在 Reserve 第 1 步读到回执）；纵深防御：回放那份回执，不交还租约（[SAGA-10](#saga-10)） | 返回 duplicate |
 | k 卡在执行事务里拖过截止，k+1 接替 | k 的条件写不匹配 → `errAttemptFenced`，不留回执 | k 不生效，k+1 执行 |
 | 被 kill -9 的进程遗留事务持锁 | 服务端到 `transactionLifetimeLimitSeconds` 才中止 | 后续尝试写同一批文档时等待；O-S5-3 建议调到 20s |
 | 事务外副作用（如发邮件）在被 fence 的尝试里已发出 | 框架不保证 | 业务仍需按 `IdempotencyKey` 幂等 |
@@ -886,6 +863,7 @@ sequenceDiagram
 | `TestMongoStepConsumerFollowsTheOperationInbox`（回放发布、在途 nak、过期重发、被接替 ack） | `saga/mongo_step_consumer_promises_test.go` | 消费者分支 |
 | `TestCompletionConsumersTermTheSameTerminalErrors` | `saga/completion_consumer_terminal_promises_test.go` | O-S5-1：`ErrNotFound` / `ErrNotWaiting` / `ErrIdentityConflict` 两条流都 Term |
 | `TestRealSagaCrossProcessKillRecovers` | `saga/cross_process_real_integration_test.go`（`-tags integration`） | 每个操作实例业务事务恰好提交一次 |
+| `TestRealMongoStepProcessesFenceAttemptsInFlightAcrossProcesses`、`TestRealMongoStepProcessesConcurrentAttemptsTakeEffectOnce` | `saga/mongo_step_multiprocess_real_mongo_integration_test.go`（`-tags integration`，本版） | 两个步骤进程：handler 里被 SIGKILL 后接替、停在事务里的提交被 fence、两进程各 4 个尝试并发恰好一个执行（[SAGA-14](#saga-14)） |
 | `BenchmarkMongoCommandInboxHandle` / `BenchmarkRealMongoCommandInboxHandle` | `saga/mongo_step_benchmark_test.go` / `saga/mongo_step_benchmark_real_mongo_integration_test.go` | 前后对照 |
 
 修前红：说明条目引了真实副本集三行，全文 [mongo-step-red-green.txt](../../feature/evidence/sagadir/mongo-step-red-green.txt)（基线 `a5e7b070` = `b3538251` + ①）。O-S5-1 修前红（原样，[o-s5-1-red.txt](../../feature/evidence/sagadir/o-s5-1-red.txt)，节选）：
@@ -912,22 +890,22 @@ sequenceDiagram
 | `BenchmarkMongoCommandInboxHandle`（mongotest） | 2000 次 × 5 | 433704～450968 ns/op，8169 allocs/op | 3557160～3626163 ns/op，63276～63278 allocs/op |
 | `BenchmarkRealMongoCommandInboxHandle`（真实三节点副本集） | 500 次 × 6，交替 | 8807913～9246100 ns/op | 16148137～18714654 ns/op |
 
-结论：延迟代价来自多出的一次事务提交（多数派写）；mongotest 按集合快照、按操作查询是扫描，只作同口径对照。并发吞吐与时间分解见 [SAGA-11](#saga-11)。
+结论：延迟代价来自多出的一次事务提交（多数派写）；mongotest 按集合快照、按操作查询是扫描，只作同口径对照。并发吞吐与时间分解见 [SAGA-11](#saga-11)。本版状态文档改写后 Reserve 少两条数据命令，真实副本集 `BenchmarkRealMongoStepThroughput` 与改写前无显著差别（g=1 54.2 → 55.0 ops/s，p=0.29），分配 −27%（[SAGA-14](#saga-14) §7）。
 
-**8. 未验证项与已知风险**：混跑没有实跑；`CommandInboxOptions.LeaseDuration` 不要求大于 `AckWait`（方案原意：租约总被截止封顶，截止后的投递走过期分支）；依赖步骤进程与协调器时钟偏差远小于 `Timeout`。
+**8. 未验证项与已知风险**：Mongo 跨主机副本集与切主（[E11](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)）；生产形态延迟（[E12](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)）；时钟偏差（[E02](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)）。`CommandInboxOptions.LeaseDuration` 不要求大于 `AckWait` 是设计（租约总被截止封顶，截止后的投递走过期分支），同一命令在途时的重投读到“自己的租约有效”→ nak，见第 9 节第 4 条。新旧 Mongo 步骤进程混跑不在支持范围（维护者 2026-10-06 决定，升级先停旧再起新，[SAGA-14](#saga-14)）。
 
 **9. review 检查点**
 
-- [ ] 确认 Reserve 与执行在**两个**事务里的边界：`saga/command_consumer.go:114`（`i.reserve`，自带 `WithTransaction`）与 `:150-187`（`execute`）之间没有共享 session；`settleOwnClaim`（`saga/command_consumer.go:179`）在 handler 之后、插回执之前，确认 handler 若用了非事务 ctx 写业务，框架无法发现（契约要求业务写经事务 ctx）。
-- [ ] 确认 claim 唯一索引：`<收件箱集合>_claims` 上 `uniq_command`（`saga/step_operation_inbox.go:115`）由 `EnsureInfrastructure`（`saga/command_consumer.go:83-92`）在订阅前建好；收件箱集合本身只有 `ttl_created_at`，回执排他靠 `_id`。
-- [ ] `saga/command_consumer.go:126-136` 撞 `ErrDuplicateKey`：只在读回执成功时回放；读回执失败时落到 `:137` 的交还租约 + 返回原错误——确认这条路径的 claim 状态与重投行为。
-- [ ] `saga/command_consumer.go:331` 把 `errAttemptSuperseded` 与过期 / fence 同样处理（先重发同一操作的成功再 ack），而原生 `:470-475` 不重发——两侧不对称是否有意。
-- [ ] `SubscribeMongoStep` 没有 `LeaseDuration > AckWait` 校验（对照原生 `:403`）：`AckWait` 小于实际执行时长时，同一命令的重投会读到“自己的 claim 租约有效”→ `Reservation.Duplicate` 无 completion → `errOperationAttemptInFlight` → nak（`:118-124`），确认这条路径不会在截止前让第二个投递执行。
+- [ ] 确认 Reserve 与执行在**两个**事务里的边界：`saga/command_consumer.go:114`（`i.reserve`，自带 `WithTransaction`）与 `:146-183`（`execute`）之间没有共享 session；`settleOwnAttempt`（`saga/command_consumer.go:175`）在 handler 之后、插回执之前，确认 handler 若用了非事务 ctx 写业务，框架无法发现（契约要求业务写经事务 ctx）。
+- [ ] `saga/command_consumer.go:126-132` 撞 `ErrDuplicateKey`：注释写“正常不可达、留作纵深防御”；确认同一命令的两次投递确实被状态文档的租约串行（后一次在 Reserve 第 1 步读到回执或第 7 步 Duplicate），以及读回执失败时落到 `:133-140` 交还租约 + 返回原错误后，重投的行为。
+- [ ] `saga/command_consumer.go:327` 把 `errAttemptSuperseded` 与过期 / fence 同样处理（先重发同一操作的成功再 ack），而原生 `:466-471` 不重发——两侧不对称是否有意。
+- [ ] `SubscribeMongoStep` 没有 `LeaseDuration > AckWait` 校验（对照原生 `saga/command_consumer.go:399`）：`AckWait` 小于实际执行时长时，同一命令的重投读到“自己是当前尝试、租约有效”（判定表第 7 步）→ `Reservation.Duplicate` 无 completion → `errOperationAttemptInFlight` → nak（`:118-124`），确认这条路径不会在截止前让第二个投递执行。
+- [ ] `saga/step_operation_inbox.go:455-475` `settleOwnAttempt` 的过滤条件与原生投影的 `LeaseFence.Predicate` 是否等价（同样要求 `command_id`、`digest`、`owner`、`lease_token`、`pending`、`lease_until > now`），两条生效点不应有一条比另一条宽。
 - [ ] `saga/nest_completion_consumer.go:150-159`：确认 `TestCompletionConsumersTermTheSameTerminalErrors` 覆盖的三种错误之外，`ErrInvalidRecord` 在两条流上同样是 Term（用例没有单列它）。
 - [ ] O-S5-3：`transactionLifetimeLimitSeconds=20` 只是文档建议（SAGA.md、USER_GUIDE §7），生成的 compose 模板没改（方案原意）；确认 `roost doctor` 或部署文档是否需要检查它。
 
 <a id="saga-10"></a>
-### SAGA-10 结果先于定义到达时 nak 退避；回放不交还 claim 列为观察
+### SAGA-10 结果先于定义到达时 nak 退避；回执撞键时回放不交还租约（观察）
 
 > 首发 v1.21.0 · [说明](guide-saga-drv-dao-rem.md#saga-10)
 
@@ -939,18 +917,19 @@ sequenceDiagram
 | `3d3b0c09` | v1.21.0 | 记录写入提交号 |
 | `8016580b` | v1.21.0 | DECISIONS-PENDING 登记发版前审查跟进 |
 | `ba13cb05` | v1.23.0（本版） | 真实 NATS 上的 nak 退避 / `MaxDeliver` 实测（[SAGA-13](#saga-13)） |
+| `a013f9ff` | v1.23.0（本版） | 状态文档：`ErrDuplicateKey` 分支注释改为“正常不可达、留作纵深防御”，理由改按状态文档写（[SAGA-14](#saga-14)） |
 
 **2. 改动文件与关键符号**
 
 | `path:line` | 符号 | 职责 |
 | --- | --- | --- |
 | `saga/nest_completion_consumer.go:150` | `isTerminalCompletionError` | 终态只剩 `ErrNotWaiting` / `ErrNotFound` / `ErrInvalidRecord` / `ErrIdentityConflict`（`:154`） |
-| `saga/engine.go:435-438` | `Complete` 里的定义查找 | 只在 `accept` 为真（记录正等着这个操作）时查，缺失返回 `ErrDefinitionMissing` |
-| `saga/command_consumer.go:126-136` | `Handle` 的 `ErrDuplicateKey` 分支 | 观察：不交还 claim，注释写明理由 |
+| `saga/engine.go:433-436` | `Complete` 里的定义查找 | 只在 `accept` 为真（记录正等着这个操作）时查，缺失返回 `ErrDefinitionMissing` |
+| `saga/command_consumer.go:126-132` | `Handle` 的 `ErrDuplicateKey` 分支 | 观察：回放那份回执、不交还租约，注释写明理由（v1.21.0 写的是“不交还 claim”，本版改为状态文档的租约） |
 
 **3. 不变量与强制点**：可恢复的暂时状态不能被当成终态 Term；强制点是共用分类函数（两条流同一处），守卫 `TestACompletionBeforeItsDefinitionIsRegisteredIsRetriedNotTerminated`、`TestADefinitionThatNeverArrivesEndsInTheCoordinatorFence`，以及 O-S5-1 的 `TestCompletionConsumersTermTheSameTerminalErrors` 不改断言通过。
 
-**4. 控制流**：结果到达 → `Complete` → 记录在等这个操作 → `e.definition(...)` 缺失 → `ErrDefinitionMissing` → 不是终态 → 消费者 nak（`NakBackoffMin` 起翻倍）→ (a) 新进程上线、定义注册 → 重投被接收；(b) 一直不来 → 步骤超时后没有定义的协调器在 `processClaimed`（`saga/engine.go:697-714`）fence 到 `ManualRequired` 并放弃关闭 → 之后重投走 `completeNotWaiting` → 迟到成功 ack 并告警一次 → `MaxDeliver` 兜底。
+**4. 控制流**：结果到达 → `Complete` → 记录在等这个操作 → `e.definition(...)` 缺失 → `ErrDefinitionMissing` → 不是终态 → 消费者 nak（`NakBackoffMin` 起翻倍）→ (a) 新进程上线、定义注册 → 重投被接收；(b) 一直不来 → 步骤超时后没有定义的协调器在 `processClaimed`（`saga/engine.go:695-712`）fence 到 `ManualRequired` 并放弃关闭 → 之后重投走 `completeNotWaiting` → 迟到成功 ack 并告警一次 → `MaxDeliver` 兜底。
 
 **5. 失败与不确定结果**
 
@@ -958,8 +937,8 @@ sequenceDiagram
 | --- | --- | --- |
 | 结果先到、定义随后 | nak 退避，重投接收 | 记录推进 |
 | 定义永不注册（配置错误） | 步骤超时前持续 nak，占一个 `MaxAckPending` 位 | 步骤超时时长与之前相同 |
-| 混跑撞回执唯一键 | 回放回执，claim 留 pending、租约有效 | 读 claim 的每条路径先看回执，不会因此等待（观察结论） |
-| 回执 30 天 TTL 后 claim 仍 pending | 会被接替 | 已在任何重试窗口之外 |
+| 执行事务撞回执唯一键（本版起正常不可达：同一命令的两次投递由状态文档的租约串行） | 回放回执，状态文档留 pending、租约有效 | 读状态文档的每条路径都先看回执，不会因此等待（观察结论） |
+| 回执过期后状态文档仍 pending | 状态文档与回执同一保留期（`receiptTTL`，缺省 30 天，`expires_at` 每次写入刷新）；仍 pending 时按判定表第 13 / 14 步等待或接替 | 已在任何重试窗口之外 |
 
 **6. 测试**
 
@@ -973,13 +952,13 @@ sequenceDiagram
 
 **7. 性能证据**：无。
 
-**8. 未验证项与已知风险**：“滚动发布”只在替身上模拟；真实 NATS 的退避节奏在 [SAGA-13](#saga-13) 补测。
+**8. 未验证项与已知风险**：滚动发布由两个 Engine 共用一个存储确定性模拟（错误分类）；真实 JetStream 上的 nak 退避、`MaxDeliver` 与定义上线后的接收由 [SAGA-13](#saga-13) 实测。多节点 JetStream 见 [E06](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)。
 
 **9. review 检查点**
 
-- [ ] `saga/engine.go:424-438`：确认 `ErrDefinitionMissing` 只可能在 `accept` 为真之后返回；`completeNotWaiting` 路径（`:433`）不查定义——否则“定义永不来”的结果会在不等待的记录上无限 nak。
+- [ ] `saga/engine.go:422-436`：确认 `ErrDefinitionMissing` 只可能在 `accept` 为真之后返回；`completeNotWaiting` 路径（`:431`）不查定义——否则“定义永不来”的结果会在不等待的记录上无限 nak。
 - [ ] `StartSaga`（`saga/engine.go:211`）与 `Resume`（`:316`）也返回 `ErrDefinitionMissing`：确认 start 效果消费者（`saga/nest_start_consumer.go`）对它的分类与本条一致或有意不同。
-- [ ] 观察第 4 条：核对 `saga/step_operation_inbox.go:164-174`（第 1 步先读回执）与 `:346-363`（`attemptResult` 先看回执）确实覆盖读 claim 的全部路径，包括 `operationSuccess`（`:322`）。
+- [ ] 观察第 4 条（状态文档形状）：核对读状态文档的三条路径都先看回执——Reserve 第 1 步读本命令回执（`saga/step_operation_inbox.go:180-190`）、第 9 步读当前尝试的回执并结算（`:223-234`）、`operationSuccess` 对 pending 的当前尝试读回执（`:441-450`）；没有别的读状态文档并据租约决定等待的路径。
 - [ ] 共用分类函数之后，任何新增“暂时性”错误都要显式不进 `isTerminalCompletionError`；是否需要一条用例枚举 `saga/errors.go` 的全部哨兵并断言其分类，防止下次误加。
 
 <a id="saga-11"></a>
@@ -1008,7 +987,7 @@ sequenceDiagram
 
 **3. 不变量与强制点**：契约不变（[SAGA-9](#saga-9)）。分析的“必要性”论证：(i) 在途尝试租约有效时别人要等，需要在途状态在业务事务提交前可见；(ii) 截止后即使旧事务还开着也要能接替——两者合起来要求在开业务事务之前已提交一份“我在途”的记录。守住它的是 ② 的用例 2（`in-flight attempt past its deadline is taken over and cannot commit`）。
 
-**4. 控制流**：每次尝试的命令构成（分析文档表，原意）：修前 1 个事务 4 条命令 + 1 次提交；修后 Reserve 事务 5 条命令（读回执、读自己的 claim、守卫 upsert、按操作查 claim、写 claim）+ 1 次提交，执行事务 3 条命令（业务写、claim 条件写、插回执）+ 1 次提交。修前 5 次往返，修后 10 次。
+**4. 控制流**：每次尝试的命令构成（分析文档表，原意）：修前 1 个事务 4 条命令 + 1 次提交；修后 Reserve 事务 5 条命令（读回执、读自己的 claim、守卫 upsert、按操作查 claim、写 claim）+ 1 次提交，执行事务 3 条命令（业务写、claim 条件写、插回执）+ 1 次提交。修前 5 次往返，修后 10 次。本版状态文档（[SAGA-14](#saga-14)）之后 Reserve 事务是 3 条命令（读回执、读状态文档、写状态文档）+ 1 次提交，执行事务 3 条命令（业务写、状态文档条件写、插回执）+ 1 次提交；落盘提交次数不变（每次尝试 2 次），所以本条“两次提交是延迟主因”的结论不变。
 
 **5. 失败与不确定结果**（各候选的正确性，分析文档原意）
 
@@ -1016,7 +995,7 @@ sequenceDiagram
 | --- | --- | --- |
 | 1 合并事务（选项 B） | 不采用 | 接替丢失；spike 在真实副本集上用例 2 变红 |
 | 2 首次尝试快路径 | 不采用 | 不写守卫 → 写偏斜违反最多一次；否则退化为 B 或 C |
-| 3 合并守卫与 claim 写 | 不采用 | 收益约 0.1～0.3 ms，小于噪声；要改原生投影 fence 格式 |
+| 3 合并守卫与 claim 写 | 当时不采用（不是为延迟） | 收益约 0.1～0.3 ms，小于噪声；要改原生投影 fence 指向。**之后已做到**：维护者第十三轮决定“直接改成一份状态文档”（`a013f9ff`，[SAGA-14](#saga-14)），守卫、claim 与按操作查询合成一份状态文档，原生 fence 改指向状态文档（`dataengine` 不改，谓词字段名一致）；实测延迟无显著变化、分配 −27%～−45%，与这里的预估一致 |
 | 4 Reserve 降写关注 | 不采用 | 读侧反例：回放一份最终被回滚的成功 |
 | 5 跨投递批量预约 | 暂不做 | 有效但引入调度层；无业务量证据；吞吐成瓶颈时首选 |
 
@@ -1046,7 +1025,7 @@ in-flight_attempt_past_its_deadline_is_taken_over_and_cannot_commit:
 
 数值原样取自 [throughput-benchstat.txt](../../feature/evidence/mongolat/throughput-benchstat.txt)（base = `9669d181^`（`a95cf4dc`），after = `78e26853`）。服务端口径（141 次 Handle，诊断日志）：`commitTransaction` 修前平均 8.34 ms（等写关注 7.67 ms），修后 8.44 ms（8.04 ms），次数翻倍。结论：瓶颈是副本集每秒能做的落盘提交数（8 协程修前 597 次提交/s，修后 592 次/s）。
 
-**8. 未验证项与已知风险**：64 个以上协程；选项 C 实测；生产 Linux + NVMe + 跨主机的提交耗时（文档写 1～5 ms 是推断）——[E12](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)。测量期间机器 load average 3.6～6.7（文档记录）。
+**8. 未验证项与已知风险**：生产形态（Linux + NVMe + 跨主机副本集的提交耗时，文档写 1～5 ms 是推断；更高并发下的吞吐）见 [E12](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)。选项 B / C 未采用（维护者选 A），C 不实施也不实测。测量期间机器 load average 3.6～6.7（文档记录）。
 
 **9. review 检查点**
 
@@ -1054,7 +1033,7 @@ in-flight_attempt_past_its_deadline_is_taken_over_and_cannot_commit:
 - [ ] 确认 `saga/mongo_step_latency_real_mongo_integration_test.go` 只在 `-bench` 下运行（`-run '^TestRealMongo'` 不会选中），不会拖慢常规 integration 跑。
 - [ ] 必要性论证依赖“Mongo 事务未提交的写只能通过写冲突被感知”：核对 `BenchmarkRealMongoCommitWriteConcern` 与 spike 证据是否足以支撑“没有不放松契约的单事务做法”，尤其选项 C 只做了推断。
 - [ ] 候选 4 的反例（`w:1` Reserve 读到未达多数派的回执并回放）：确认当前 Reserve 事务确实以 `w:majority` 提交、snapshot 读（`mongo/driver` 事务选项），否则反例在现状下也成立。
-- [ ] 影响面声明“原生步骤不经过这条路径”：原生 `DataEngineStepInbox.Reserve` 同样调 `stepOperationInbox.reserve`（分析文档“原生步骤为什么没有这笔代价”一节），确认原生步骤的 Reserve 落盘提交成本也被计入容量评估。
+- [ ] 影响面声明“原生步骤不经过这条路径”：原生 `DataEngineStepInbox.Reserve` 同样调 `stepOperationInbox.reserve`（分析文档“原生步骤为什么没有这笔代价”一节）；本版补了原生 Reserve 吞吐基准 `BenchmarkRealMongoNativeReserveThroughput`（`saga/step_operation_benchmark_real_mongo_integration_test.go:22`，[SAGA-14](#saga-14) §7：g=1 / 8 / 32 约 110 / 552 / 1671 ops/s），确认容量评估按它计入原生步骤的 Reserve 提交。
 
 <a id="saga-12"></a>
 ### SAGA-12 saga Mod 启动时校验效果流保留期与完成回执 TTL（O-S5-2）
@@ -1130,7 +1109,7 @@ in-flight_attempt_past_its_deadline_is_taken_over_and_cannot_commit:
 | `saga/nest_completion_promises_test.go:99` | `TestAssemblyConsumesNativeNestCompletionEffects` | 断言改为与协调器时序无关的事实 |
 | `saga/nest_completion_promises_test.go:140-160` | 新断言 | 不再等第 0 步、`CompletedSteps==1 && Step==1`、`Store.CompletionRecorded` 为真 |
 | `saga/consumer_nak_maxdeliver_real_integration_test.go:79` | `TestRealNatsCompletionNakBackoffAndMaxDeliver` | 两个子用例，各自流 / 前缀 |
-| `saga/engine.go:453` | `Complete` 末尾 `e.signal(e.dueKick)` | 偶发失败的产品侧原因：收下结果后立即唤醒协调器派发下一步 |
+| `saga/engine.go:451` | `Complete` 末尾 `e.signal(e.dueKick)` | 偶发失败的产品侧原因：收下结果后立即唤醒协调器派发下一步 |
 
 **3. 不变量与强制点**：测试只断言产品承诺（第 0 步被收下、回执已写），不断言协调器 goroutine 的调度顺序。nak 退避与 `MaxDeliver` 由 broker 与 `nats/driver` 的 settle 决定，用例在真实 JetStream 上核对。
 
@@ -1167,6 +1146,202 @@ go test -tags integration -count=1 -race -v -run '^TestRealNatsCompletionNakBack
 - [ ] “第 3 次失败后 Term”：确认是 broker 达到 `MaxDeliver` 停止投递，还是 `nats/driver` 在最后一次主动 Term；两者对 `nats.jetstream.terminal.total` 计数的影响不同。
 - [ ] 同包其他用例里断言协调器中间状态（`Status == StatusWaiting` 等）且引擎在 `Run` 的，是否还有同类时序假设（记录只核对了两处）。
 
+<a id="saga-14"></a>
+### SAGA-14 步骤收件箱改为每个操作一份状态文档（维护者第十三轮；取代 RR-20261006-15 / -16 的修法）
+
+> 首发 v1.23.0（本版） · [说明](guide-saga-drv-dao-rem.md#saga-14)
+
+**1. 提交**
+
+| 提交 | 版本 | 内容 |
+| --- | --- | --- |
+| `5ca32611` | 未发布（中间态） | RR-20261006-15：claim 写 `outcome`，按操作只取有影响的 claim（`operationClaimsFilter`），上限改名 `maxDecisiveOperationClaims`；`TestOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife` 复现用例（同提交另含 RR-20261006-14，见 [SAGA-15](#saga-15)） |
+| `20ee535f` | 未发布（中间态） | RR-20261006-16：不带 `outcome` 的旧 claim 单独计数（`maxLegacyOperationClaims = 8192`）；RR-15 复核补索引 `by_operation_decision`、新旧进程混跑用例 |
+| `a013f9ff` | v1.23.0（本版） | 每个操作一份状态文档：重写 `saga/step_operation_inbox.go`，原生集合 `_dataengine_step_operations`、Mongo 步骤 `<收件箱集合>_operations`；删除 claim / 守卫 / 按操作查询 / `outcome` / 两个上限 / 混跑用例；新增状态文档用例、两进程用例、原生 Reserve 基准；SAGA.md「操作状态文档」、CHANGELOG、方案文档 |
+| `e6828e4f` | v1.23.0（本版） | DECISIONS-PENDING 第十三轮补实施状态 |
+
+RR-15 / -16 的两个中间提交只在 main 上存在过，v1.23.0 发布的是状态文档；它们修的问题（跨 Resume 累积的尝试让这一步永远 Reserve 不了）自 v1.20.1 的 `maxOperationAttempts = 4096` 起就存在，本版由状态文档从结构上消除。
+
+**2. 改动文件与关键符号**（`37338490`）
+
+| `path:line` | 符号 | 职责 |
+| --- | --- | --- |
+| `saga/step_operation_inbox.go:19-29` | 文件头注释 | 每个操作一份状态文档；判定只读这一份；没有按操作的查询与上限 |
+| `saga/step_operation_inbox.go:32-48` | 常量 | `operationStatusPending = coredata.LeaseFenceStatusPending`、`settled`；结论 `success` / `refused` / `retryable`；`maxRememberedRefusalLives = 2`（`:44`）、`maxRememberedSuperseded = 16`（`:47`） |
+| `saga/step_operation_inbox.go:92` | `stepOperation` | 状态文档：当前尝试的顶层字段名与 `coredata.LeaseFence` 的谓词一致；`refusals`、`refusals_dropped_through`、`superseded`、`version`、`expires_at` |
+| `saga/step_operation_inbox.go:132` | `ensureOperationIndexes` | 只有 `ttl_expires_at`（`expires_at`，`ExpireAt`） |
+| `saga/step_operation_inbox.go:140` | `reserve` | 一个事务跑 `reserveInTransaction`；首次插入撞唯一键重试一次 |
+| `saga/step_operation_inbox.go:178` | `reserveInTransaction` | 15 行判定表（见 §4），注释按表中行号写 |
+| `saga/step_operation_inbox.go:270` | `createOperation` | 第一份状态文档，token 1 |
+| `saga/step_operation_inbox.go:287` | `grantLease` | 以 `version` 为条件取租约（`:308`），token+1；接替时追加 `superseded` 并只留最近 16 条（`:289-294`）；剪枝拒绝（`pruneRefusals`，`:330`） |
+| `saga/step_operation_inbox.go:373` | `settleFromReceipt` | 第 9 步：当前尝试已有回执（原生已投影未结算）时先以 `version` 为条件结算 |
+| `saga/step_operation_inbox.go:399` | `settleUpdate` | 结算写：`status=settled`、`result`、`completion`、`lease_until = Unix 0`，拒绝时写 `refusals.r<代际>` |
+| `saga/step_operation_inbox.go:425` | `operationSuccess` | 不执行的投递在 ack 前查同一操作已生效的成功 |
+| `saga/step_operation_inbox.go:455` | `settleOwnAttempt` | Mongo 步骤生效点（执行事务内的条件写） |
+| `saga/step_operation_inbox.go:478` | `markCompleted` | 原生读到回执后结算（只对仍是当前尝试、仍 pending 的状态生效） |
+| `saga/step_operation_inbox.go:501` | `releaseLease` | 交还未用上的租约 |
+| `saga/dataengine_step_inbox.go:18` | `dataEngineOperationCollection` | `_dataengine_step_operations` |
+| `saga/dataengine_step_inbox.go:93-115` | `Bind` | 校验 reservation 的 `operationKey` / `commandID` / `owner` / `digest`，fence 指向状态文档 |
+| `saga/dataengine_step_inbox.go:48-54` | `ReservationFromContext` | 同样要求未导出的 `commandID` / `owner` / `digest` 非空 |
+| `saga/command_consumer.go:50` | `mongoInboxOperationSuffix` | `<收件箱集合>_operations` |
+| `dataengine/lease_fence.go:75` | `LeaseFence.Predicate` | 未改：`_id`、owner、token、digest、`status=pending`、`lease_until > now` |
+
+**3. 不变量与强制点**
+
+| 不变量 | 强制点 | 守卫测试 |
+| --- | --- | --- |
+| 同一操作最多生效一次 | 生效只有两条路：原生投影的 fence 确认、Mongo 的 `settleOwnAttempt`，条件都要求“本尝试是当前尝试、token 相同、pending、租约未到期”；token 每次授予加一 | `TestNativeStepTakesEffectAtMostOncePerOperation`、`TestMongoStepAttemptsOfOneOperationTakeEffectOnce`、`TestRealSagaCrossProcessKillRecovers`、`TestRealMongoStepProcessesConcurrentAttemptsTakeEffectOnce` |
+| 接替与生效只能一个提交 | 接替（`grantLease`）与投影确认 / 结算写同一份文档，Mongo 只让一个提交；投影先提交时接替方重跑走第 9 步 | `TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize`、`TestRealMongoTakeoverFencesTheEarlierAttemptsProjection` |
+| 判定与尝试次数、Resume 次数无关 | Reserve 只按 `_id` 读一份文档；历史只有两段有界数组（`refusals` 两生、`superseded` 16 条） | `TestOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife`（5 生 × 820 次真实 `Handle`，超过原 4096；断言新一生执行、之后回放、整个操作只有一份文档）与真实 Mongo 版 `TestRealMongoOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife`（5 × 220） |
+| 拒绝只在同一生回放，剪掉的一生不执行 | 第 11、12 步；`pruneRefusals` 只留代际最大的两生并记 `refusals_dropped_through` | `TestOperationStateKeepsTheRefusalsOfTheTwoNewestLives` |
+| 被接替的尝试截止前不执行 | 第 4 步；`superseded` 只留最近 16 条，按接替先后剪 | `TestOperationStateRemembersTheLatestSupersededAttempts`、`TestMongoStepConsumerFollowsTheOperationInbox/a superseded attempt is acknowledged without running` |
+| 投影的 fence 谓词逐字段对得上 | 字段名取自 `coredata` 的 fence 常量 | `TestDataEngineOperationStateSatisfiesProjectorFencePredicate` |
+
+**4. 控制流 / 判定表**
+
+`reserveInTransaction`（`saga/step_operation_inbox.go:178-258`），按顺序命中即停。`c` 是这次投递的命令，`s` 是读到的状态文档，`cur` 是 `s` 的当前尝试：
+
+| # | 条件 | 结论 | 写入 | 源码 |
+| --- | --- | --- | --- | --- |
+| 1 | `c` 自己的回执存在 | 回放（Duplicate + 那份 completion） | 若 `cur = c` 且 pending：结算，失败只记 Warn + `saga.step_inbox.mark_completed_error_total` | `:180-190` |
+| 2 | `now ≥ c.DeadlineAt` | `ErrCommandExpired` | 无 | `:192-195` |
+| 3 | `s` 不存在 | 执行（新租约，token 1） | insert；并发插入撞唯一键由 `reserve` 重试一次 | `:200-202` |
+| 4 | `c ∈ s.superseded` | `errAttemptSuperseded` | 无 | `:203-205` |
+| 5 | `cur = c`，摘要不同 | `ErrIdentityConflict` | 无 | `:207-209` |
+| 6 | `cur = c`，settled | 回放 `s.completion` | 无 | `:211-213` |
+| 7 | `cur = c`，pending，租约有效 | Duplicate（同一命令另一次投递在途） | 无 | `:218-220` |
+| 8 | `cur = c`，pending，租约过期 | 执行（重新取得自己的租约） | 取租约，不记 superseded | `:221` |
+| 9 | `cur ≠ c`，pending，`cur` 的回执存在 | 先结算 `cur`，按 10～15 继续 | 结算写 | `:223-234` |
+| 10 | `cur` settled 且 success | 回放成功（任何一生） | 无 | `:235-239` |
+| 11 | `s.refusals` 有 `c` 这一生的拒绝 | 回放那份拒绝 | 无 | `:240-245` |
+| 12 | `c` 的代际 ≤ `refusals_dropped_through` | `errAttemptSuperseded` | 无 | `:246-249` |
+| 13 | `cur` pending，租约有效 | `errOperationAttemptInFlight` | 无 | `:251-253` |
+| 14 | `cur` pending，租约过期 | 执行（接替 `cur`） | 取租约，`cur` 追加进 superseded，计 `saga.step_inbox.superseded_total` | `:254` |
+| 15 | 其余（`cur` 可重试失败，或别的生的拒绝） | 执行 | 取租约 | `:257` |
+
+写入的 CAS 条件（方案 3.2～3.5）：
+
+| 写入 | 过滤条件 | 内容 |
+| --- | --- | --- |
+| 取租约（`grantLease`） | `_id`、`version = s.version` | 当前尝试 = `c`、`owner`、`lease_token+1`、`lease_until = min(now+LeaseDuration, DeadlineAt)`、`deadline_at`、`pending`，清 `result` / `completion`，`superseded` 与剪枝后的 `refusals`，`version+1`，刷新 `expires_at` |
+| Mongo 生效点（`settleOwnAttempt`） | `_id`、`command_id = c`、`digest`、`owner`、`lease_token`、`pending`、`lease_until > now` | 结算；不匹配 → `errAttemptFenced`，执行事务中止 |
+| 原生结算（`markCompleted` / `settleFromReceipt`） | `_id`、`command_id = c`、`pending`（`settleFromReceipt` 另带 `version`） | 结算（回执已是权威，不看租约） |
+| 原生投影确认 | `LeaseFence.Predicate` | `$set updated_at` |
+| 交还租约（`releaseLease`） | `_id`、`command_id`、`digest`、`owner`、`lease_token`、`pending` | `lease_until = now`，`version+1` |
+
+**5. 失败与不确定结果**（论证见方案第 4 节）
+
+| 情形 | 处理 | 对调用方的样子 |
+| --- | --- | --- |
+| 并发 Reserve 同一操作 | 写同一文档，事务写冲突，输家整笔重跑并重新判定；CAS 不匹配返回 `ErrConflict` | 至多一个取得租约，其余回放、等待或报冲突后重试 |
+| 被接替的尝试截止未到又被投递（租约被提前交还，或 `LeaseDuration` 短于步骤 `Timeout`） | 第 4 步 ack，不执行 | 正常运行里至多一两条；方案 4.4 |
+| 第 17 次接替之后，最早那条被接替尝试的截止仍未到又被投递 | 不在 `superseded` 里，按当前状态判定（可能执行）；仍受“token 不同则生效点不匹配”约束 | 至多一次不受影响；方案 4.4 的极端情形 |
+| 同一生收到拒绝后、截止未到的更早尝试又来 | 第 11 步回放拒绝 | 不执行 |
+| 一个 `Timeout` 内连续两次 Resume、两生都被拒绝后，更老一生的投递 | 第 12 步 `errAttemptSuperseded`，ack 不执行（协调器已前进至少两生，按 B1 不接收它的结果） | 方案 4.5 的极端情形 |
+| 回执先于结算（原生投影已提交、还没结算） | 本命令重投在第 1 步、其他尝试在第 9 步、不执行的投递在 `operationSuccess` 读到回执后结算 | 回执是权威，结论不变 |
+| 执行事务提交结果未知 | 若已提交，状态文档已 settled，交还条件不匹配；重投读到回执回放 | 至多一次仍成立 |
+
+**6. 测试**
+
+| 用例 | 文件 | 覆盖 |
+| --- | --- | --- |
+| 全部既有收件箱用例（U-0280、U-0281、B1、方向 ②、O-S5-1 的 `*_promises_test.go`，`mongo_step_operation_promises_test.go`，`TestRealMongo*`） | `saga/` | 不改断言通过；只读写 claim 内部结构的断言改为读状态文档的同义断言 |
+| `TestOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife` / `TestRealMongoOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife` | `saga/step_operation_attempt_cap_promises_test.go:23` / `saga/mongo_step_operation_real_mongo_integration_test.go:51` | RR-15 的承诺：5 生 × 820（真实 Mongo 5 × 220）次真实 `Handle` 后新一生执行、之后回放、只有一份文档 |
+| `TestOperationStateKeepsTheRefusalsOfTheTwoNewestLives` | `saga/step_operation_state_promises_test.go:20` | 拒绝只留两生；被剪掉的一生不执行；没剪掉的老一生回放自己的拒绝 |
+| `TestOperationStateRemembersTheLatestSupersededAttempts` | `saga/step_operation_state_promises_test.go:76` | 被接替尝试截止前不执行、截止后过期、只记最近 16 条 |
+| `TestDataEngineOperationStateSatisfiesProjectorFencePredicate`、`TestDataEngineStepInboxUsesAbsoluteOperationExpiry` | `saga/dataengine_step_inbox_test.go:199` / `:149` | fence 谓词逐字段起作用；只有 TTL 索引 |
+| `TestRealMongoStepProcessesFenceAttemptsInFlightAcrossProcesses`、`TestRealMongoStepProcessesConcurrentAttemptsTakeEffectOnce` | `saga/mongo_step_multiprocess_real_mongo_integration_test.go:251` / `:317`（`-tags integration`） | 原混跑用例里验证契约本身的三个场景，两边同一版本：handler 里被 SIGKILL 后接替、停在事务里的提交被 fence、两进程并发至多一次 |
+| `TestRealMongoTakeoverFencesTheEarlierAttemptsProjection` | `saga/step_operation_real_mongo_integration_test.go:188`（`-tags integration`） | 接替先赢的一边确定性构造：k 写进 WAL 后 k+1 接替，再投影 k，k 因 token 不匹配被跳过、没有回执 |
+| `TestRealMongoFencedProjectionSerializesWithLeaseTakeover` | `dataengine/engine/lease_fence_integration_test.go`（`-tags integration`） | 投影与接替写同一份状态文档 |
+
+实施中的一处红（原样，方案“实施中的一处修正”）：初版按截止时间剪 `superseded`，`-race -count=3` 时
+
+```text
+TestMongoStepConsumerFollowsTheOperationInbox/a superseded attempt is acknowledged without running
+delivery of the superseded attempt = saga: another attempt of this step operation holds a live lease, want nil (ack)
+```
+
+接替方时钟在前，按它判断截止已过的尝试在投递方看来截止未到；改为按接替先后只留最近 16 条后转绿（方案 4.4）。
+
+RR-15 / -16 的修前红仍是本条的历史证据：RR-15 `after 4100 attempts over 5 lives, the first attempt of the next life gift-1:1:0:r5:1: {...} duplicate=false err=saga: optimistic concurrency conflict: operation gift-1:1:0 has more than 4096 attempts, ...`（[red-before.txt](../../bugfix/evidence/RR-20261006-15/red-before.txt)）；RR-16 `... has more than 4096 undecided, successful or same-life refused attempts ...`（[red-before.txt](../../bugfix/evidence/RR-20261006-16/red-before.txt)）。状态文档之后同一用例（改写为真实 `Handle`）通过。
+
+修后验证（方案“验证”，`GOWORK=off`）：`gofmt -l` 空；`go vet ./saga/... ./kit/saga/...` 与 `-tags integration`（含 `./dataengine/...`）；`go build ./... && go vet ./...`；`go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync`；`go test -race -count=3 ./saga/... ./kit/saga/...`；私有三节点副本集 `go test -tags integration -count=1 ./saga/` 全部通过；跨进程强杀 60/60 完成、120 个操作、120 次提交、0 个操作被多次提交（[cross-process-kill.txt](../../feature/evidence/sagadoc/cross-process-kill.txt)，恢复 1m5s）；`scripts/test-dataengine-generated.sh`、`go test -count=1 ./codegen/...`、根包通过。
+
+**7. 性能证据**（[bench.txt](../../feature/evidence/sagadoc/bench.txt)；Apple M5，私有三节点副本集 mongod 8.0.28，base `76885daa` 与 after 各编一个测试二进制交替 6 轮，`-benchtime 1000x`，benchstat 中位数；load average 3.7～5.4）
+
+| 基准 | 协程 | ops/s base → after | p50 ms | p99 ms | allocs/op |
+| --- | --- | --- | --- | --- | --- |
+| `BenchmarkRealMongoStepThroughput`（Mongo 步骤 `Handle`） | 1 | 54.2 → 55.0（p=0.29） | 18.7 → 18.1 | 26.0 → 26.0 | 1343 → 980（−27%） |
+| | 8 | 287 → 278（p=0.49） | 27.0 → 28.0 | 41.7 → 44.2 | 1352 → 987 |
+| | 32 | 972 → 978（p=1.00） | 30.6 → 29.9 | 70.5 → 76.6 | 1350 → 987 |
+| `BenchmarkRealMongoNativeReserveThroughput`（原生 `Reserve`，新增，`saga/step_operation_benchmark_real_mongo_integration_test.go:22`） | 1 | 109 → 110（p=0.85） | 9.11 → 9.07 | 14.2 → 14.5 | 834 → 460（−45%） |
+| | 8 | 582 → 552（p=0.09） | 13.2 → 14.0 | 23.3 → 24.9 | 843 → 464 |
+| | 32 | 1734 → 1671（p=0.39） | 16.1 → 17.6 | 42.1 → 46.1 | 843 → 467 |
+
+结论：延迟与吞吐没有统计显著的变化（全部 p > 0.05；原生 g=8 单独交替复测 8 轮 `-benchtime 2000x` 为 619 → 607 ops/s，p=0.28）；分配降 27～45%。每次尝试的落盘提交次数不变（Reserve 1 次 + 生效点 1 次），省下的两条数据命令只有 0.1～0.3 ms，被 8～9 ms 的提交淹没，与 [SAGA-11](#saga-11) 候选 3 的预估一致。收益在于不随历史变慢。
+
+**8. 未验证项与已知风险**：生产形态（Linux、跨主机副本集）的延迟见 [E12](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)，跨主机副本集与切主见 [E11](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)。不兼容是维护者的决定（见说明条目）：新代码不读旧 claims 集合，不支持与 v1.22.0 及以前的步骤进程混跑。
+
+**9. review 检查点**
+
+- [ ] 对照方案 3.1 的 15 行表逐行核对 `saga/step_operation_inbox.go:178-258` 的判定顺序，特别是第 4 步（被接替）在第 5 步（身份）之前、第 9 步（先结算当前尝试）在第 10～15 步之前。
+- [ ] `grantLease`（`:287-319`）的 CAS 只以 `version` 为条件：确认所有会改变当前尝试或租约的写（取租约、结算、交还）都 `version+1`（`settleUpdate` 的 `$inc`、`releaseLease` 的 `$inc`），投影确认只写 `updated_at`、不改 `version`——在 Mongo 事务里它与取租约仍写同一文档、写冲突串行化，确认这一点不依赖 `version`。
+- [ ] `markCompleted`（`:478-487`）的过滤条件不带 `version`、不带 token：回执已是权威时直接结算；确认它不会把一个已被接替（`command_id` 已不是它）的状态结算掉（条件里有 `command_id`）。
+- [ ] 方案 4.4 的取舍：`superseded` 按接替先后只留 16 条、不按截止剪；确认“第 17 次接替后最早那条截止仍未到”只在租约被提前交还或 `LeaseDuration` 短于 `Timeout` 时出现，且即使被当作新尝试判定，生效点的 token 条件仍保证至多一次。
+- [ ] 方案 4.5 的取舍：只留两生的拒绝，更老一生的投递 `errAttemptSuperseded`（ack 不执行）；确认协调器（B1，`saga/engine.go:422-431`）对比当前代际旧的拒绝本来就不接收，这里不执行不会丢失任何会被接收的结果。
+- [ ] 升级步骤：SAGA.md「操作状态文档」写“原生步骤进程要排空 WAL”——WAL 里旧进程留下的记录的 fence 指向旧 `_dataengine_inbox_claims` 文档，新投影器按新谓词去旧集合找不到文档会跳过；确认说明文档的升级步骤足以避免这种跳过（先停旧、排空，再清集合、起新）。
+- [ ] `saga/dataengine_step_inbox.go:48-54` 与 `:105-107`：`Reservation` 新增的未导出 `operationKey` 在 `Bind` 里被校验，但 `ReservationFromContext` 只校验 `commandID` / `owner` / `digest` 非空；确认缺 `operationKey` 的 reservation（例如手工构造）在 `Bind` 处被拒。
+
+<a id="saga-15"></a>
+### SAGA-15 stepTransition 自己写 Store，守卫改为全包类型检查（RR-20261006-14）
+
+> 首发 v1.23.0（本版） · [说明](guide-saga-drv-dao-rem.md#saga-15) · 背景见 [SAGA-8](#saga-8)
+
+**1. 提交**
+
+| 提交 | 版本 | 内容 |
+| --- | --- | --- |
+| `5ca32611` | v1.23.0（本版） | `stepTransition` 改为 `Engine` 方法、内含 `e.store.Apply`，重写 `after.Incarnation`；`engine.go` 8 个出口改调；守卫重写为 `go/types`；新增 `TestStepTransitionAloneDecidesTheIncarnation`；删除 `saga/testdata/stepguard/bypass.go` 与 `TestStepTransitionGuardSeesBypassesWithoutALiteral`；证据 `guard-red-before.txt` / `guard-after.txt`（同提交另含 RR-20261006-15，见 [SAGA-14](#saga-14)） |
+| `ca029401` | v1.23.0（本版） | DECISIONS-PENDING 第十三轮补实施状态 |
+
+**2. 改动文件与关键符号**：见 [SAGA-8](#saga-8) §2（当前源码）。要点：`saga/step_transition.go:63` `func (e *Engine) stepTransition(ctx, before, after Record, t transition) (Record, ApplyOutcome, error)`；`saga/step_transition_guard_test.go:86` `stepTransitionGuardViolations`（规则 1 `:176-202`、规则 2 `:120-166`、规则 3 `:167-175`、防失明 `:206-212`）；`:245` `typeCheckSagaSources`（`go list -export -deps` 取依赖导出数据，按编译器的文件集类型检查）。
+
+**3. 不变量与强制点**：见 [SAGA-8](#saga-8) §3。新增的结构性强制：出口拿到的是写入后的 `Record`，手里没有 `ApplyRequest`，修前那份 helper 绕过在修后编译不过。
+
+**4. 控制流**：见 [SAGA-8](#saga-8) §4。
+
+**5. 失败与不确定结果**
+
+| 情形 | 处理 |
+| --- | --- |
+| 有人在 saga 包里构造 / 改写 `ApplyRequest` 或调用 `Store.Apply` | 守卫报出文件:行号与规则 |
+| 运行守卫的环境没有模块缓存且离线 | `go list -export` 失败，守卫 `t.Fatalf`（报错而不是静默通过） |
+| 反射或 `unsafe` 构造请求 | 不在检查范围（包内没有对 `ApplyRequest` 用它们）；其他包构造 `saga.ApplyRequest` 直接调 `Store.Apply` 不经过协调器，不属于本守卫的不变量（全仓除 saga 外没有引用 `ApplyRequest`） |
+
+**6. 测试**
+
+修前红（原样，[guard-red-before.txt](../../bugfix/evidence/RR-20261006-14/guard-red-before.txt)：临时 helper 绕过放进 saga 包，原守卫两个用例都通过）：
+
+```text
+--- PASS: TestEveryCoordinatorWriteGoesThroughStepTransition (0.00s)
+--- PASS: TestStepTransitionGuardSeesBypassesWithoutALiteral (0.00s)
+ok  	github.com/tjbdwanghaibo/roost-core/saga	1.295s
+```
+
+修后负对照（临时文件，跑完删除，[guard-after.txt](../../bugfix/evidence/RR-20261006-14/guard-after.txt)）：A. 修前那份 helper 绕过原样放进修后代码，`undefined: stepTransition`，编译失败；B. 修后仍能编译的七种写法逐个报出（14 条）：helper 改写参数里的请求再 `store.Apply`、出口手拼字面量交给 helper、`var request ApplyRequest` 逐字段赋值后经 `store := e.store` 别名写入、泛型 `zeroOf[ApplyRequest]()`、`apply := e.store.Apply` 方法值、从同形结构体做类型转换、指针 helper `clearClose(*ApplyRequest)`。
+
+修后：`TestEveryCoordinatorWriteGoesThroughStepTransition`、`TestStepTransitionAloneDecidesTheIncarnation` 通过；`go test -race -count=3 ./saga/... ./kit/saga/...`、私有三节点副本集 `-run '^TestRealMongo' ./saga/`、根包、`go build ./... && go vet ./...` 通过（[修复记录](../../bugfix/RR-20261006-14.md)）。之后的状态文档改写（[SAGA-14](#saga-14)）没有动协调器与守卫，守卫照常通过。
+
+**7. 性能证据**：守卫一次约 0.1～0.2s（含 `go list -export`）；生产代码每个出口写入的请求与修前逐字段相同，无运行期变化。
+
+**8. 未验证项与已知风险**：无外部验证项。
+
+**9. review 检查点**
+
+- [ ] `saga/step_transition_guard_test.go:120-202`：确认三条规则对 `ApplyRequest` 指针、切片元素、嵌套结构体字段、方法值、泛型实例化都按类型判定（`isRequest` 用 `types.Identical`，指针先解一层），没有按名字匹配的残留。
+- [ ] `:245-307` `typeCheckSagaSources`：确认文件集取自 `go list` 的 `GoFiles`（与编译器一致，含构建标签筛选），不会漏掉只在某个构建标签下编译的非测试文件。
+- [ ] 规则 1 允许“读收到的参数”（`ParamVar` / `RecvVar`）：确认 Store 实现（`MongoStore.Apply`、内存 Store）只读参数、不把它存起来或改写后再传出（规则 2 也会报改写）。
+
 ## DRV：Redis / Mongo 驱动契约
 
 <a id="drv-1"></a>
@@ -1182,7 +1357,7 @@ go test -tags integration -count=1 -race -v -run '^TestRealNatsCompletionNakBack
 | `998857ab` | v1.20.1 | revn04 证据补共享 toxiproxy 事故影响核对与 `-run` 复跑结果（只改证据 README） |
 | `cf5721c9` | v1.20.2 | A2：`scriptCmd` 并入通用 `noReplay`（`redis/driver/replay.go`），脚本在确定没执行时恢复重发（见 [DRV-3](#drv-3)） |
 
-**2. 改动文件与关键符号**（当前源码 `02c8a10d`）
+**2. 改动文件与关键符号**（当前源码 `37338490`）
 
 | `path:line` | 符号 | 职责 |
 | --- | --- | --- |
@@ -1275,9 +1450,9 @@ GOWORK=off go test -tags integration -count=1 -run 'TestMGet|TestIntegrationPipe
 **8. 未验证项与已知风险**
 
 - Redis Cluster 下脚本的 MOVED / ASK 与节点故障（本机无 Cluster），外部验证 E08。
-- `redis/driver/lock_toxic_integration_test.go` 会 `/reset` 共享 toxiproxy，本轮没在共享环境上跑。
-- remoteentity marker / snapshot L2 在回复丢失时现在看到错误而不是驱动重放，只经既有单元与真实锁用例验证，未上故障矩阵。
-- 测试名 `TestOnlyScriptCommandsOptOutOfTheDriverRetry` 在 A2 之后已不准确（写命令也带 `NoRetry`），注释已改，名字未改。**已改名（fixs）**：`TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`。
+- `redis/driver/lock_toxic_integration_test.go` 会 `/reset` 共享 toxiproxy，按 A5 只能在自建代理或私有环境上跑，不在共享隔离环境上运行。
+- remoteentity marker / snapshot L2 / versioned lock 的脚本在回复丢失时返回错误而不是被驱动重放：驱动层由 `TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver`（eval / evalsha）覆盖，调用方对错误的处理沿用各自的结果未知契约，真实锁路径由 `TestRealVersionedLock*`（`remoteentity`，`-tags integration`）覆盖。
+- 测试名：A2 之后原名 `TestOnlyScriptCommandsOptOutOfTheDriverRetry` 名不副实（写命令也带 `NoRetry`），fixs 已改名为 `TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`（`redis/driver/script_no_retry_promises_test.go:167`）。
 
 **9. review 检查点**
 
@@ -1419,7 +1594,7 @@ GOWORK=off go test -count=5 -run TestWithTransactionKeepsTheLastCallbackErrorWhe
 - mongos 上提交失败后 abort 的并发问题（本实现同样不 abort，未实测）、主从切换期间的提交、`transactionLifetimeLimitSeconds` 与短窗口的组合：E11。
 - 驱动升级时便捷 API 规则若变，需同步本循环（`mongo/driver/README.md` 文首写明）。
 - 上限内没送达的 abort 留下的服务端事务持锁到 60s，其间同文档写入得到 WriteConflict 并重跑。
-- kit/dataengine 的真实 Mongo 集成套件（含主节点切换）本轮没在共享环境上跑。
+- 主节点切换期间的事务行为属 E11（NC-101 修复当轮没有跑 kit/dataengine 含主节点切换的真实 Mongo 套件；本机副本集的切主在 [DRV-6](#drv-6) 的 `TestMirrorLocalOwnerStorageInitSurvivesAMongoElection` 里覆盖启动 DDL 一条路径）。
 
 **9. review 检查点**
 
@@ -1575,7 +1750,7 @@ GOWORK=off go test -race -count=1 ./kit/redis/ ./versionstore/ ./failurelog/ ./s
 
 - Cluster 下 `noReplay` 的 MOVED / ASK 跟随与换节点只按源码核对（E08）。
 - 握手阶段失败（新建连接时 HELLO 上的 EOF）保守归为结果未知，不重发。
-- `writeCalls` 表里名为 `set` 的条目实际调用的是 `SetNX`；`Client.Set`（`redis/driver/client.go:150`）与 pipeline 的 `Set` / `Del` / `HSet` / `Expire` / `ZAdd` / `LPop` 没有逐个进“回复丢失只执行一次”的表，靠同一 `write` / `queueWrite` 路径与 `TestAPipelineWithAnExecutedCommandIsNotResent` 间接覆盖（推断，未见专门用例）。
+- 覆盖范围（源码核对）：`writeCalls` 表里名为 `set` 的条目实际调用的是 `SetNX`；`Client.Set`（`redis/driver/client.go:150`）与 pipeline 的 `Set` / `Del` / `HSet` / `Expire` / `ZAdd` / `LPop` 没有逐个进“回复丢失只执行一次”的表，它们与表里的方法共用同一入口（19 个写方法都经 `write`，pipeline 写方法都经 `queueWrite`，`redis/driver/pipeline.go:45`），由 `TestAPipelineWithAnExecutedCommandIsNotResent` 覆盖 pipeline 整条不重发；是否逐个补进表见第 9 节。
 - bus `BeginConsume` 的 SETNX 去重在回复丢失时进死信（第十二轮决定保持，契约在 `bus/reliable.go` 的 `ReliableStore` 注释）。
 - ③ versionstore 一次性写令牌留到下个大版本。
 
@@ -1714,8 +1889,8 @@ MIRROR O-M6-3 cluster: stopped replica, delete took 241ms, wait stats {Confirmed
 **8. 未验证项与已知风险**
 
 - 副本在确认前断开时 WAIT 挡不住（S4a′“未复制即切主”），计 `short` / `no_replicas`；真实多机复制延迟见 E10。
-- 记录写 `WAIT` 超时要低于 Redis 客户端读超时 3s，否则客户端先超时计为 error；上限 1s 满足，但若运维把 `ReadTimeout` 调到 1s 以下（kit 不暴露该项）会出现此情形（推断）。
-- 指标标签：MIRROR-M6 方案 §3 表把未执行 WAIT 的情形写成 `redirected` / `unsupported`，源码标签统一为 `skipped`（`remoteentity/snapshot_l2.go:373-375`；T-277 与发版前验证记录写的也是 `skipped`）——以源码为准。
+- `WAIT` 超时要低于 Redis 客户端读超时，否则客户端先超时、计为 `error`：上限 1s；kit 的 Redis 客户端读超时固定为 `fredis.DefaultConfig` 的 3s（`kit/redis/redis_mod.go:60`、`redis/config.go:28`，kit 不读 `read_timeout`），所以只有直接用 core 构造、把 `ReadTimeout` 设到 1s 以下的装配会出现（源码核对）。
+- 指标标签：源码统一为 `skipped`（`remoteentity/snapshot_l2.go:373-375`）；MIRROR-M6-OBSERVATIONS §3 原写 `redirected` / `unsupported`，已按源码更正（fixr，`155b9f91`），T-277 与发版前验证记录写的也是 `skipped`。
 - `kit` 读取：只设 `_timeout` 不设 `_replicas` 时，timeout 仍按 (0, 1s] 校验（即使副本数为 0）；core 校验只在 replicas > 0 时要求 timeout 合法——两层口径略有差别（源码观察，未见文档说明）。
 
 **9. review 检查点**
@@ -1762,7 +1937,7 @@ MIRROR O-M6-3 cluster: stopped replica, delete took 241ms, wait stats {Confirmed
 | `kit/mongo/mongo_mod.go:25-26` / `:128` / `:181` | `stopSerial` / `mu`；`StopWithContext`；`Client()` | Stop 用 `Serial` 串行（会阻塞到 ctx），`mu` 保护 `client` |
 | `kit/nats/nats_mod.go:32` / `:176` | `stopSerial`；`StopWithContext` | 同上 |
 | `redis/driver/README.md` §5、`mongo/driver/README.md` §5 | 契约表 | 统一后的口径 |
-| `docs/agent-skills/roost-coding/SKILL.md:73` | A3 停机条目追加 | 停止入口用 `operation.Serial`；Close 统一口径；唯一例外 nats `ErrClosedUndrained` |
+| `docs/agent-skills/roost-coding/SKILL.md:73` | A3 停机条目追加 | 停止入口用 `operation.Serial`；Close 统一口径；唯一例外 nats `ErrClosedUndrained`。`b7471ae4` 补了一条例外：临界区很短、关闭不等在途工作的可以用 `sync.Mutex`（kit `RedisMod` 停止持 `mu`，`kit/redis/redis_mod.go:22-23`） |
 
 **3. 不变量与强制点**
 
@@ -1866,10 +2041,10 @@ redis / etcd / 单实例锁用 `sync.Once`：第一个调用者执行关闭并�
 
 **8. 未验证项与已知风险**
 
-- 用不可达地址与私有 redis-server 验证；未用真实 Mongo / etcd / NATS；三个 toxiproxy 用例、`TestSingletonStoreGetAcrossClusterSlots`（需 Cluster）未跑。
+- Close 契约（重复 Close 返回 nil、并发后到者等待、关闭后返回已关闭错误）在各驱动的包装层实现（`internal/operation.Serial` 与 closed 标志），用例用不可达地址与私有 redis-server 驱动同一代码路径；与服务端交互的断开动作（Mongo `Disconnect`、etcd / NATS 的连接关闭）是驱动库自身行为。
 - etcd 与 Close 并发的在途调用不被打断；`Discovery` / 选举经 `Raw()` 直接用 clientv3，不在此列。
 - 没有静态守卫约束新写的 Close；新驱动 / Mod 要按 roost-coding 规则自觉套用。
-- 文档状态：`docs/review/DECISIONS-PENDING-2026-10-05.md` 文首“当前总状态”仍把 W-2026-10-06-02 列为“待 review 判断”，第十二轮表“驱动 Close 契约”行仍写“代码未改”；`docs/bug/WANTED.md` 已标“已转 RR-20261006-10，已修复”——以源码与 WANTED 为准。
+- 文档状态：`docs/review/DECISIONS-PENDING-2026-10-05.md` 文首“当前总状态”已写明 W-2026-10-06-02 转 RR-20261006-10 并修复；第十二轮表“驱动 Close 契约”行原写“代码未改”，本次加了更正（指向 `d05a04a1`）；`docs/bug/WANTED.md` 已标“已转 RR-20261006-10，已修复”。
 
 **9. review 检查点**
 
@@ -1904,7 +2079,7 @@ redis / etcd / 单实例锁用 `sync.Once`：第一个调用者执行关闭并�
 | `mongo/driver/collection.go:286` | `isElectionError` | `errors.As(err, &mongo.ServerError)` + `HasErrorCode` |
 | `mongo/driver/collection.go:299` | `retryDuringElection` | 计数、用完 / ctx 到期时点名选举，原错误 `%w` 在链里 |
 
-调用方（全部启动 DDL）：`dataengine/engine/mongo_store.go:104/109/114`、`remoteentity/mongo_committer.go:228`、`saga/mongo_store.go:74/83/90/93`、`saga/command_consumer.go:88`、`saga/step_operation_inbox.go:113`、`nestwal/effect_inbox.go:73`。
+调用方（全部启动 DDL）：`dataengine/engine/mongo_store.go:104/109/114`、`remoteentity/mongo_committer.go:228`、`saga/mongo_store.go:74/83/90/93`、`saga/command_consumer.go:88`、`saga/step_operation_inbox.go:133`、`nestwal/effect_inbox.go:73`。
 
 **3. 不变量与强制点**
 
@@ -1966,7 +2141,7 @@ owner_startup_election_integration_test.go:104: stepDown: mongo-3; 20 owner stor
 **8. 未验证项与已知风险**
 
 - 多机副本集与 mongos：E11。
-- 次数按“每个索引”计：`EnsureIndexes` 带 N 个索引时，选举恰好跨越多个索引的最坏总时长可到约 N × 10s；决定表与记录写“10 次 × 1s”（字面上是每个索引的上界），总时长由调用方启动 ctx（缺省 30s）兜底（源码观察）。
+- 次数按“每个索引”计（源码 `mongo/driver/collection.go:251-252`）：`EnsureIndexes` 带 N 个索引时，选举恰好跨越多个索引的最坏总时长约 N × 10s，总时长由调用方启动 ctx（缺省 30s）兜底。CHANGELOG 与 [第十二轮 kit 批 §7](../../feature/DECISIONS-R12-KIT-2026-10-06.md) 已写清（fixr），DECISIONS-PENDING 第十二轮行本次加注。
 - 错误码表随驱动 / 服务端版本可能变化，升级时需核对。
 
 **9. review 检查点**
@@ -2013,8 +2188,8 @@ owner_startup_election_integration_test.go:104: stepDown: mongo-3; 20 owner stor
 | `…/timer_component.go.tmpl:130` / `:153` / `:165` | `scheduler` / `settle` / `persist` | 一次调用内从 DAO 建调度器；变更钩子写穿 DAO；写回最早到期 |
 | `…/timer_component.go.tmpl:233` | `Tick` | `timer_next_due` 为 0 或未到直接返回（不建堆） |
 | `skill/combatcomponent/component.go:334` / `:374` | `CombatDao.beginChange` / `markChanged` | 按字段掩码登记逆操作（`nest.RecordUndo(dao, Field…)`）/ 标持久与同步脏 |
-| `cmd/glsvet/main.go:672-676` / `:691` | `componentUndoCalls` / `componentUndoHints` | 组件方法里的 `RecordUndo` / `RecordUndoToken` / `DeferRollback` 打 `hint:` |
-| `cmd/glsvet/main.go:162` | `vetDirectory` | 打印提示、不计 findings |
+| `cmd/glsvet/main.go:681-685` / `:703` | `componentUndoCalls` / `componentUndoHints` | 组件方法里的 `RecordUndo` / `RecordUndoToken` / `DeferRollback` 打 `hint:` |
+| `cmd/glsvet/main.go:166` | `vetDirectory` | 打印提示、不计 findings |
 | `codegen/internal/roost/add_entity.go:325` | 组件骨架注释 | 新规范 |
 | `docs/agent-skills/roost-coding/SKILL.md:39` | 执行契约“回滚统一走 DAO” | 规则正文（含 B4 例外） |
 
@@ -2180,15 +2355,15 @@ skill/combatcomponent/component.go:296:2: hint: component CombatComponent.undoBu
 
 **8. 未验证项与已知风险**
 
-- 未在真实三进程（WAL + Mongo 投影）链路上跑被拒提交（用真实 Nest + 拒绝的 committer 与真实文件 WAL 覆盖，同一 `rejectCommit` 路径）。
-- glsvet A1 提示的盲区（源码观察）：只认接收者类型名以 `Component` 结尾或匿名嵌入 `ComponentBase` 的方法，只看方法体里**直接**出现的 `RecordUndo` / `RecordUndoToken` / `DeferRollback` 调用；组件调用包级辅助函数间接登记、或组件字段持有可变状态但不登记 undo（直接漏回滚）都不会提示。“组件上不再有可回滚字段”没有自动检查。**（发版文档之后的更新，未发版）**：前者由 [RR-20261006-13](../../bug/RR-20261006-13.md) 补上（跟进一层同包 helper，`b7471ae4`）；后者按维护者第十三轮“A1 盲区”决定新增字段写提示——组件方法（`OnInitFinish` / `OnDestroy` 除外，同样跟进一层 helper）写非 DAO 句柄、非函数类型、未标 `//roost:cache` 的组件字段时打印 `hint:`，全仓 / 示例 / game-demo 0 条（[记录](../../feature/A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md)）。
+- 被拒提交的回滚由真实 Nest 引擎 + 拒绝的 committer 与真实文件 WAL 覆盖（与三进程 WAL + Mongo 投影链路是同一个 `rejectCommit` 路径）。
+- glsvet A1 提示（当前形状，见 [DAO-4](#dao-4)）：组件识别口径是接收者类型名以 `Component` 结尾或匿名嵌入 `ComponentBase`；undo 登记提示看方法体里的直接调用与一层同包 helper（RR-20261006-13，`b7471ae4`）；字段写提示看组件方法（`OnInitFinish` / `OnDestroy` 除外）写非 DAO 句柄、非函数类型、未标 `//roost:cache` 的字段，同样跟进一层 helper（第十三轮“A1 盲区”，`565f657b`）。两者都是语法层提示、不计入失败：没有类型信息时看不见先取到局部变量再改、经方法调用改、嵌入提升的字段、两层以上的 helper（设计取舍，记录写明，[A1 字段写提示 §2](../../feature/A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md)）。
 - 已生成工程不迁移，旧 `captureRollback` 仍在用户工程里；glsvet 在 CI（`go run ./cmd/glsvet ./...`）里会打提示但不失败。
 - 定时器节点数到数千时需换写法（方案 §8）。
 
 **9. review 检查点**
 
 - [ ] 确认组件上不再有可回滚字段：读 `demo/game/entities/**/*_component.go.tmpl` 与 `skill/combatcomponent/component.go:222-225` 的组件结构体，字段只应是 `owner` / `dao` / 投影函数这类非事务状态。
-- [ ] 确认 glsvet A1 提示覆盖的范围：`cmd/glsvet/main.go:691` `componentUndoHints` 只识别组件方法里的直接调用（之后 RR-20261006-13 跟进一层同包 helper，第十三轮“A1 盲区”新增 `cmd/glsvet/componentfields.go` 字段写提示与 `//roost:cache` 豁免，见上条“未验证项”的更新）；`TestComponentRecordingItsOwnUndoIsHinted`（`cmd/glsvet/main_test.go:166`）覆盖了哪些形状（嵌入 `ComponentBase` / 名字后缀 / 三种调用名）；CI 的 `go run ./cmd/glsvet ./...` 输出里当前应为 0 条 A1 hint。
+- [ ] 确认 glsvet A1 提示覆盖的范围：`cmd/glsvet/main.go:703` `componentUndoHints`（直接调用，RR-20261006-13 起跟进一层同包 helper，`packageUndoHelpers` `:756`）与 `cmd/glsvet/componentfields.go:271` `componentFieldHints`（第十三轮“A1 盲区”，[DAO-4](#dao-4)）；`TestComponentRecordingItsOwnUndoIsHinted`（`cmd/glsvet/main_test.go:166`）、`TestComponentRecordingUndoThroughHelperIsHinted`（`:222`）、`TestComponentFieldWritesOutsideTheDaoAreHinted`（`cmd/glsvet/componentfields_promises_test.go:17`）覆盖了哪些形状；CI 的 `go run ./cmd/glsvet ./...` 输出里当前应为 0 条 A1 hint。
 - [ ] 确认全仓生产代码里登记 undo 的只有 DAO：`grep -rln 'RecordUndo\|DeferRollback' --include='*.go' . | grep -v _test.go` 只应是 `nest/`、`cmd/glsvet/main.go`（字符串）、`codegen/internal/dao/template_*.go`、`skill/combatcomponent/component.go`（且只在 `CombatDao.beginChange` 里，`:340-354`）。
 - [ ] 确认 `nopersist,nosync` 字段不进提交记录 / WAL / 同步：看 `template_dao.go` 里 `persistFields` / `syncFields` 的使用点与 daoruntime `TestATransientFieldNeverReachesTheCommitRecordOrSync`。
 - [ ] 确认 `CombatDao.beginChange`（`skill/combatcomponent/component.go:334`）在事务外 panic、在 state 策略下 `nest.RecordUndo` 返回 false 由快照兜底，且同一字段一笔事务只记第一条逆操作（`nest/rollback.go:187-191` 的 `undoKeys`）。
@@ -2214,8 +2389,8 @@ skill/combatcomponent/component.go:296:2: hint: component CombatComponent.undoBu
 | --- | --- | --- |
 | `docs/skill/skill-casting-and-combat.md:145` | “Runtime 不在事务里（B4）” | 回退 / 不回退对照表与四条设计约束 |
 | `docs/agent-skills/roost-coding/SKILL.md:39` | A1 条“明确例外” | 不要为 Runtime 补 undo 或 DAO 化 |
-| `cmd/glsvet/main.go:678-690` | `componentUndoHints` 注释 | 说明 Runtime 不会被命中、无需豁免 |
-| `cmd/glsvet/main_test.go:222` | `TestSkillPackagesGetNoComponentUndoHint` | skill 各包零 A1 提示 |
+| `cmd/glsvet/main.go:687-702` | `componentUndoHints` 注释 | 说明 Runtime 不会被命中、无需豁免 |
+| `cmd/glsvet/main_test.go:271` | `TestSkillPackagesGetNoComponentUndoHint` | skill 各包零 A1 提示 |
 | `skill/README.md` | combatcomponent 段 | 补 B4 说明 |
 
 **3. 不变量与强制点**
@@ -2244,7 +2419,7 @@ skill/combatcomponent/component.go:296:2: hint: component CombatComponent.undoBu
 
 | 用例 | 文件 | 覆盖 |
 | --- | --- | --- |
-| `TestSkillPackagesGetNoComponentUndoHint` | `cmd/glsvet/main_test.go:222` | skill 四个包零 A1 提示 |
+| `TestSkillPackagesGetNoComponentUndoHint` | `cmd/glsvet/main_test.go:271` | skill 四个包零 A1 提示 |
 
 修前红文本：记录未保留原文（B4 是“写成约束 + 守卫”，守卫在实施时新增即绿，没有修前红）。验证命令：记录未保留原文（`62cec54e` 提交说明只列改动）。
 
@@ -2257,7 +2432,7 @@ skill/combatcomponent/component.go:296:2: hint: component CombatComponent.undoBu
 
 **9. review 检查点**
 
-- [ ] 确认 `TestSkillPackagesGetNoComponentUndoHint`（`cmd/glsvet/main_test.go:222`）的目录列表是否应补 `skill/skillcompose`（`find skill -name '*.go' ! -name '*_test.go' -exec dirname {} \; | sort -u` 列出 8 个目录）。
+- [ ] 确认 `TestSkillPackagesGetNoComponentUndoHint`（`cmd/glsvet/main_test.go:271`）的目录列表是否应补 `skill/skillcompose`（`find skill -name '*.go' ! -name '*_test.go' -exec dirname {} \; | sort -u` 列出 8 个目录）。
 - [ ] 确认 `docs/skill/skill-casting-and-combat.md:145` 一节列的“不回退”项与 Runtime 源码一致：`runtime_cast_window.go` 的 `commitCast` 顺序“支付 → ammo → 冷却”，`failCastLocked` 的冷却处理。
 - [ ] 确认 roost-coding A1 条（`docs/agent-skills/roost-coding/SKILL.md:39`）的例外文字与 DECISIONS-PENDING 第四轮 B4 行一致。
 - [ ] 确认仓内没有生产代码在 nest handler 里推进 Runtime 后再做会失败的业务检查（当前 Runtime 无正式生产调用方，方案 §4.4）。
@@ -2354,16 +2529,92 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 **8. 未验证项与已知风险**
 
 - 投影纯度只靠约定；投影函数写了过程状态字段会被每次投影覆盖或回滚，没有检查。
-- `reflect.DeepEqual` 比较整个 Combatant（含 map），成本随字段增长（推断，未测）。
 - 加载时投影函数变化导致内存与存储不同、直到下一次 vitals 提交才写回：期间若只改了别的字段，存储里的 vitals 仍是旧投影（文档已写明“下一次 vitals 提交写回”）。
 
 **9. review 检查点**
 
+- [ ] `skill/combatcomponent/component.go` 的投影写入用 `reflect.DeepEqual` 比较整个 Combatant（含 map）决定是否写 DAO：每个改属性来源的 mutator 末尾多一次 Combatant 克隆与比较，只在装了投影时发生；这一成本没有基准，确认对战斗热路径可以接受（或需要补基准）。
 - [ ] 确认每个改 attributes / buffs 的 mutator 末尾都调了 `deriveProjection`：`grep -n 'beginChange(Field\(Attributes\|Buffs\))' skill/combatcomponent/component.go` 的每个函数都应有对应调用；`SetBuffDueTick`（`:442`）例外是有意的。
 - [ ] 确认 `deriveProjection`（`:262`）在事务内先 `beginChange` 再写 `dao.combatant`，且在事务外的分支不 `markChanged`。
 - [ ] 确认 `HostAdapter` / `StatusBridge` 的命令最终都经上述 mutator 落地（`skill/combatcomponent/adapter.go`、`status_bridge.go`），而不是直接改 `dao.attributes` / `dao.buffs`。
 - [ ] 确认 `ApplyDamage`（`:487`）不改属性、因而不重投影的前提成立（只改 vitals 的 Health / Shield 等）。
 - [ ] 确认 `skill/examples/statusbridge/main.go` 在 `nest.RunDetachedTransaction` 内调用战斗 mutator，且已登记在根包 `TestExamplesRun` 的 `exampleRuns` 里。
+
+<a id="dao-4"></a>
+### DAO-4 glsvet A1 提示：跟进一层同包 helper（RR-20261006-13）与组件字段写提示 `//roost:cache`（第十三轮 A1 盲区）
+
+> 首发 v1.23.0（本版） · [说明](guide-saga-drv-dao-rem.md#dao-4) · 背景见 [DAO-1](#dao-1)
+
+**1. 提交**
+
+| 提交 | 版本 | 内容 |
+| --- | --- | --- |
+| `b7471ae4` | v1.23.0（本版） | RR-20261006-13：`componentUndoHints` 跟进一层同包包级 helper（`packageUndoHelpers`、`undoCallName`）；回归 `TestComponentRecordingUndoThroughHelperIsHinted`；A1 方案 glsvet 一条补“跟进一层同包 helper”（同提交另含 RR-20261006-12，属 NONCORE） |
+| `71c8f394` | v1.23.0（本版） | 记录维护者第十三轮“A1 盲区”选 A |
+| `565f657b` | v1.23.0（本版） | 组件字段写提示：`cmd/glsvet/componentfields.go`（新）、`vetDirectory` 接线并改为 `parser.ParseComments`、两个 A1 提示计入 hint 汇总；夹具 `testdata/a1fields/quest.go`；roost-coding A1 条、A1 方案 §5、`codegen/README.md` 与生成工程文档（`render_docs.go`）、`docs/skill/skill-casting-and-combat.md`、CHANGELOG |
+| `dcf170e4` | v1.23.0（本版） | DECISIONS-PENDING 第十三轮 A1 盲区补实施状态 |
+
+**2. 改动文件与关键符号**（`37338490`）
+
+| `path:line` | 符号 | 职责 |
+| --- | --- | --- |
+| `cmd/glsvet/main.go:155-160` | `vetDirectory` 解析 | 改为 `parser.ParseComments`（读 `//roost:cache` 与 `roost:nest` 文档标注） |
+| `cmd/glsvet/main.go:166-173` | 接线 | 两个 A1 提示打印 `hint:` 并计入 `hintCount`（结尾 `N hint(s) for review`，`:97`），不计 findings |
+| `cmd/glsvet/main.go:703` | `componentUndoHints` | 组件方法里直接调 `RecordUndo` / `RecordUndoToken` / `DeferRollback`，或以 `f(...)` 调用同包 helper |
+| `cmd/glsvet/main.go:756` | `packageUndoHelpers` | 收集同包里**直接**登记 undo 的包级函数（名字本身就是这三个的包装函数不算 helper，避免重复） |
+| `cmd/glsvet/componentfields.go:47` | `componentTypes` | 组件识别（名字以 `Component` 结尾或匿名嵌入 `ComponentBase`），两个 A1 提示共用 |
+| `cmd/glsvet/componentfields.go:30-38` | `cacheDirective`、初始化钩子表 | `//roost:cache`；`OnInitFinish` / `OnDestroy` 不检查 |
+| `cmd/glsvet/componentfields.go:110` / `:126` / `:148` | `hasCacheDirective` / `isDaoHandleType` / `isFuncFieldType` | 豁免：字段上一行或行尾 `//roost:cache`；类型名以 `Dao` / `DAO` 结尾；函数类型字段 |
+| `cmd/glsvet/componentfields.go:191` | `fieldWrites` | 以 `接收者.字段` 为根的赋值左值（`=`、`op=`、`++` / `--`、`range` 赋值，含 `c.f[k]`、`c.f.x`、`*c.f`）与内建 `delete` / `clear` 的第一个参数 |
+| `cmd/glsvet/componentfields.go:242` | `packageFieldWriteHelpers` | 一层同包 helper：参数类型是本包组件（或指针）、函数体写了它的未豁免字段 |
+| `cmd/glsvet/componentfields.go:271` | `componentFieldHints` | 输出 `hint: component X.M writes field f outside the DAO ...` |
+| `docs/agent-skills/roost-coding/SKILL.md:39` | A1 条 | 补 helper 跟进与 `//roost:cache` |
+
+**3. 不变量与强制点**：两个提示都只打印、不改退出码（`cmd/glsvet/main.go:166-173`），所以不会让 CI 或生成工程的 glsvet 门禁变红；口径与 A3 停止提示一致（跟进一层同包 helper，不跟方法调用）。守卫：`TestComponentRecordingItsOwnUndoIsHinted`、`TestComponentRecordingUndoThroughHelperIsHinted`、`TestSkillPackagesGetNoComponentUndoHint`（`cmd/glsvet/main_test.go:166` / `:222` / `:271`），`TestComponentFieldWritesOutsideTheDaoAreHinted`、`TestSkillPackagesGetNoComponentFieldHint`、`TestNestDirectiveMarksAHandlerWithoutTheHandlerPrefix`（`cmd/glsvet/componentfields_promises_test.go:17` / `:50` / `:72`）。
+
+**4. 控制流**：`vetDirectory` → 每个包：`componentUndoHints`（组件方法体里找三种调用名；对 `f(...)` 查 `packageUndoHelpers`）→ `componentFieldHints`（组件字段表 + 豁免 → 组件方法体的写 → 一层 helper）→ 打印 `hint:` 并计数 → 其余 finding 检查照旧。
+
+**5. 失败与不确定结果**（语法层提示，没有类型信息）
+
+| 形状 | 是否提示 | 理由（记录原意） |
+| --- | --- | --- |
+| 组件方法直接写未豁免字段 / 改字段里的 map、slice 元素 | 提示 | 规则本体 |
+| 经一层同包包级 helper 写字段或登记 undo | 提示（在调用处） | 与 A3 停止提示同口径 |
+| 两层以上 helper、方法调用 `x.f()`、先取局部变量再改、嵌入提升的字段 | 不提示 | 没有类型信息时按名字匹配会误报（例如组件调 DAO setter `c.dao.SetLevel(v)`），回归里钉住“两层链不报”“调 DAO setter 不报” |
+| `OnInitFinish` / `OnDestroy` 里写字段 | 不提示 | 不在业务事务里 |
+| DAO 句柄、函数类型字段、`//roost:cache` 字段 | 不提示 | 不是事务状态 |
+
+**6. 测试**
+
+RR-20261006-13 修前红（原样，[问题记录](../../bug/RR-20261006-13.md)）：
+
+```text
+main_test.go:260: hints = [], want exactly one hint: BuffComponent.push registering undo through rememberPop (not the DAO setter call, not the two-level outer → rememberPop chain)
+--- FAIL: TestComponentRecordingUndoThroughHelperIsHinted (0.00s)
+```
+
+字段写提示修前红（原样节选，[A1 字段写提示记录](../../feature/A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md) §3，`componentfields.go` 已在、`vetDirectory` 未接线）：
+
+```text
+missing hint "quest.go:31:44: hint: component QuestComponent.Accept writes field active outside the DAO"
+...
+0 field-write hints, want 5 (no hint for the //roost:cache fields, the func field, the DAO handle, OnInitFinish or reads)
+```
+
+（红时期望的列号是初稿算错的，绿时改为实际列 `31:45`；失败原因是没有任何输出，与列号无关。）`TestNestDirectiveMarksAHandlerWithoutTheHandlerPrefix` 在旧 `main.go` 上 `findings = 0, want 1`。修后五条提示齐全、豁免字段零提示、退出码 0。
+
+误报核对（两份记录原文）：全仓 `./...` 与 `-tests ./...`、全部 `testdata` 目录、两个示例模块、重新生成的 game-demo，修前修后 A1 提示都是 0 条；规则初稿在 `skill/combatcomponent/component.go:252` `CombatComponent.ProjectAttributes` 写 `projection` 报 1 条，判为规则误判（装配方法装投影函数），收紧为“函数类型字段不提示”。改为带注释解析后全仓 finding 与提示排序后逐行相同。验证：`go test -race -count=3 ./cmd/glsvet/...`、`go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync`、`go test -count=1 ./codegen/...`、`go generate ./...` 后 porcelain、重新生成 game-demo 的 build / vet / test / glsvet、根包、`go build ./... && go vet ./...` 通过。
+
+**7. 性能证据**：无（静态检查）。
+
+**8. 未验证项与已知风险**：无外部验证项。第 5 节“不提示”的形状是维护者选 A（提示而非门禁）下的设计取舍。
+
+**9. review 检查点**
+
+- [ ] `cmd/glsvet/componentfields.go:191-229` `fieldWrites`：确认 `op=`、`++` / `--`、`range` 的 key / value 赋值、`delete` / `clear` 都被识别，且只认以接收者为根的左值（局部变量同名不误报）。
+- [ ] `:110-124` `hasCacheDirective`：确认上一行与行尾两种写法都认、`//roost:cache 理由` 也认，且不会把 `//roost:cachex` 之类的前缀误认。
+- [ ] `cmd/glsvet/main.go:756-` `packageUndoHelpers`：确认名字本身就是 `RecordUndo` / `RecordUndoToken` / `DeferRollback` 的包级包装函数不会被重复提示（直接检查已命中），以及 helper 只看函数体里的**直接**调用。
+- [ ] 带注释解析之后 `isNestHandler` 开始读 `roost:nest` 文档标注：确认名字不以 `handler` 开头、只靠标注的 handler 现在会被检查（`TestNestDirectiveMarksAHandlerWithoutTheHandlerPrefix`），且记录说的“全仓与 game-demo 无新违例”在当前源码上仍成立（`go run ./cmd/glsvet ./...` 无输出）。
 
 ## REM：remoteentity 快照缓存与 Mirror
 
@@ -2385,27 +2636,28 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 | `05633529` | v1.20.2 | DECISIONS-PENDING B2 标为已实施 |
 | `88f33776` | v1.23.0（本版） | B2 §7 回填“L2 落后于权威”的上界（见 [REM-11](#rem-11)） |
 | `fcc78ad0` | v1.23.0（本版） | 生成配置模板写出 `cached_max_staleness`（见 [REM-13](#rem-13)） |
+| `155b9f91` | v1.23.0（本版） | 写入点结构守卫 `TestRemoteSnapshotCacheWritesStayInTheListedFunctions`；类型注释、`admitLocked` / `loadAuthoritative` / `ApplyReplica` 注释与 B2 §2 按源码改为“新值经 `admitLocked`，其余直接写点只回填 L2 的值或删除”（同提交的 RR-20261006-11 见 [REM-14](#rem-14)） |
 
-**2. 改动文件与关键符号**（行号以 `02c8a10d` 为准）
+**2. 改动文件与关键符号**（行号以 `37338490` 为准）
 
 | `path:line` | 符号 | 职责 |
 | --- | --- | --- |
 | `entity/remote_snapshot.go:105` | `RemoteSnapshotCacheConfig` | 新增 `MaxStaleness`（`:119`）、`Now`（`:121`） |
 | `entity/remote_snapshot.go:127` | `RemoteSnapshotCache` 类型注释 | 写明 B2 契约：L2 唯一权威、L1 有界副本、写入经 `admitLocked`、降级不冒充已确认 |
-| `entity/remote_snapshot.go:162` | `publishMu [64]sync.Mutex` | 同一 key 全部 L1 写入与它们的 L2 调用串行化 |
-| `entity/remote_snapshot.go:211` | `remoteSnapshotEntry` | L1 条目：快照或删除标记 + `confirmedAt`（0 = 未确认） |
-| `entity/remote_snapshot.go:271` | `NewRemoteSnapshotCache` 缺省 | `MaxStaleness` 零值取 `TTL`，`TTL` 也为零取 30s |
-| `entity/remote_snapshot.go:330` | `fresh` | `confirmedAt != 0 && now-confirmedAt <= maxStaleness` |
-| `entity/remote_snapshot.go:601` | `remoteSnapshotEntryStale` | L1 唯一新旧判定（快照按 epoch / 版本；删除只按版本，同版本删除胜） |
-| `entity/remote_snapshot.go:684` | `readConfirmed` | 热路径一次 L1 读 + 一次读时钟；否则 `coalesce` 合并的 `refresh` |
-| `entity/remote_snapshot.go:719` | `refresh` | 锁外读 L2，锁内与 L1 比较：同值改记确认、L2 更新改记 L2、L1 更新补写 L2、L2 无值回源 |
-| `entity/remote_snapshot.go:807` | `loadForRefresh` | L2 担保不了时回源；权威说不存在就删掉加载开始前确认的 L1 快照 |
-| `entity/remote_snapshot.go:901` | `publishLocked` | 快照写入的前置判断（同值只延有效期 / 补确认；已确认的更新条目在前则不写 L2） |
-| `entity/remote_snapshot.go:937` | `admitLocked` | 唯一的“先 L2 后 L1”写入口：接受 / stale→`adoptSharedLocked` / 冲突原样返回 / 其他错误降级未确认 |
-| `entity/remote_snapshot.go:959` | `writeShared` | 快照 `l2.Set`（CAS），删除 `DeleteAtVersion`（无能力时退化为 `Delete`） |
-| `entity/remote_snapshot.go:983` | `adoptSharedLocked` | L2 拒绝后让 L1 跟上 L2；L2 无活值时删掉不新于被拒写的 L1 快照 |
-| `entity/remote_snapshot.go:1008` | `setL1Locked` | 实际写 L1（`AtomicLocalStore.SetWithTTL`，L1 自己的 Stale / Conflict 准入） |
-| `entity/remote_snapshot.go:1096` | `DeleteAtVersion` | 删除标记经 `admitLocked` |
+| `entity/remote_snapshot.go:166` | `publishMu [64]sync.Mutex` | 同一 key 全部 L1 写入与它们的 L2 调用串行化 |
+| `entity/remote_snapshot.go:215` | `remoteSnapshotEntry` | L1 条目：快照或删除标记 + `confirmedAt`（0 = 未确认） |
+| `entity/remote_snapshot.go:275` | `NewRemoteSnapshotCache` 缺省 | `MaxStaleness` 零值取 `TTL`，`TTL` 也为零取 30s |
+| `entity/remote_snapshot.go:334` | `fresh` | `confirmedAt != 0 && now-confirmedAt <= maxStaleness` |
+| `entity/remote_snapshot.go:606` | `remoteSnapshotEntryStale` | L1 唯一新旧判定（快照按 epoch / 版本；删除只按版本，同版本删除胜） |
+| `entity/remote_snapshot.go:689` | `readConfirmed` | 热路径一次 L1 读 + 一次读时钟；否则 `coalesce` 合并的 `refresh` |
+| `entity/remote_snapshot.go:724` | `refresh` | 锁外读 L2，锁内与 L1 比较：同值改记确认、L2 更新改记 L2、L1 更新补写 L2、L2 无值回源 |
+| `entity/remote_snapshot.go:812` | `loadForRefresh` | L2 担保不了时回源；权威说不存在就删掉加载开始前确认的 L1 快照 |
+| `entity/remote_snapshot.go:906` | `publishLocked` | 快照写入的前置判断（同值只延有效期 / 补确认；已确认的更新条目在前则不写 L2） |
+| `entity/remote_snapshot.go:942` | `admitLocked` | 唯一的“先 L2 后 L1”写入口：接受 / stale→`adoptSharedLocked` / 冲突原样返回 / 其他错误降级未确认 |
+| `entity/remote_snapshot.go:964` | `writeShared` | 快照 `l2.Set`（CAS），删除 `DeleteAtVersion`（无能力时退化为 `Delete`） |
+| `entity/remote_snapshot.go:988` | `adoptSharedLocked` | L2 拒绝后让 L1 跟上 L2；L2 无活值时删掉不新于被拒写的 L1 快照 |
+| `entity/remote_snapshot.go:1013` | `setL1Locked` | 实际写 L1（`AtomicLocalStore.SetWithTTL`，L1 自己的 Stale / Conflict 准入） |
+| `entity/remote_snapshot.go:1101` | `DeleteAtVersion` | 删除标记经 `admitLocked` |
 | `remoteentity/snapshot_l2.go:43` | `remoteSnapshotL2CAS` | L2 版本 CAS 脚本（未改），成功时 `PEXPIRE`（`:70`） |
 | `remoteentity/snapshot_l2.go:88` | `remoteSnapshotL2DeleteAtVersion` | 墓碑脚本（未改），`PEXPIRE`（`:98`） |
 | `remoteentity/snapshot_l2.go:324` | `remoteSnapshotL2Store.DeleteAtVersion` | 脚本返回 0（L2 持有更新快照）时返回 `cache.ErrStaleWrite`（`:348`），之前 nil |
@@ -2413,19 +2665,19 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 | `remoteentity/syncer.go:126` | `SnapshotReplicaStore.ApplyReplica` 历史过滤 | 早于 `snapshot_l2_ttl / 2` 的快照更新丢弃并计数；删除在 `:113` 之前处理、不过滤 |
 | `remoteentity/syncer.go:147` | `SnapshotReplicaStore.historic` | 无发布时刻或无 L2 TTL 时不过滤 |
 | `remoteentity/config.go:44` | `Config.CachedMaxStaleness` | 核心配置项 |
-| `remoteentity/snapshot_client.go:156` | `newSnapshotClient` | 把 `CachedMaxStaleness` 交给缓存 `MaxStaleness` |
+| `remoteentity/snapshot_client.go:158` | `newSnapshotClient` | 把 `CachedMaxStaleness` 交给缓存 `MaxStaleness` |
 | `kit/remoteentity/remote_entity_mod.go:307` | `readSnapshotConfig` | `cached_max_staleness` 严格读取、必须为正 |
 | `app/config_validation.go:287` | `frameworkDurationKeys` | 登记 `remote_entity.cached_max_staleness` |
 
 **3. 不变量与强制点**
 
-- 不变量 I1：一个 key 的全部 L1 写入在该 key 的 `publishMu` 分片锁下进行（`entity/remote_snapshot.go:162`）。核对结果：`Publish`（`:886`）、`fetchAndAdmit`（`:465`）、`refresh`（`:733`）、`loadForRefresh`（`:817`）、`Delete`（`:1078`）、`DeleteAtVersion`（`:1100`）都先取这把锁。
+- 不变量 I1：一个 key 的全部 L1 写入在该 key 的 `publishMu` 分片锁下进行（`entity/remote_snapshot.go:166`）。核对结果：`Publish`（`:891`）、`fetchAndAdmit`（`:469`）、`refresh`（`:738`）、`loadForRefresh`（`:822`）、`Delete`（`:1083`）、`DeleteAtVersion`（`:1105`）都先取这把锁。
 - 不变量 I2：写进 L1 的快照值要么被 L2 以 CAS / 带版本删除接受过（`admitLocked`），要么就是刚从 L2 读到的值（`refresh` / `adoptSharedLocked`），要么带 `confirmedAt = 0` 降级。
-  - **与记录的字面差异**：方案 §2.1 与类型注释（`:131`）写“全部 L1 写入都经 `admitLocked`”。源码里经 `admitLocked` 的是 `publishLocked`（`:924`）、`DeleteAtVersion`（`:1110`）、`refresh` 的“L1 比 L2 新”修复分支（`:765`）；另有直接写 L1 的点：`refresh` 的 `setL1Locked`（`:744`、`:756`、`:779`、`:795`，写入的是 L2 刚读到的值或给删除标记补确认时刻）、`adoptSharedLocked` 的 `setL1Locked`（`:1001`）与 `l1.Delete`（`:997`）、`loadForRefresh` 的 `l1.Delete`（`:820`）、无版本 `Delete` 的 `l1.Delete`（`:1088`）。这些写入都在 `publishMu` 下，值都来自 L2 或权威“不存在”，语义上不违反“L1 只缓存 L2 确认过的版本”，但不是字面上的“只经 `admitLocked`”。（已闭环，fixr：注释与 B2 §2、DECISIONS 第九轮按源码改为“新值经 `admitLocked`，其余只回填 L2 的值或删除”，逐点核对没有绕过准入，见 [RR-20261006-11 记录](../../bugfix/RR-20261006-11.md) §2.1。）
+  - **写入点清单（源码 `37338490`）**：新值经 `admitLocked`（`entity/remote_snapshot.go:942`）的是 `publishLocked`（`:929`）、`DeleteAtVersion`（`:1115`）与 `refresh` 的“L1 比 L2 新”修复分支（`:770`）；直接写 L1、写入的都不是新值的点：`refresh` 的 `setL1Locked`（`:749`、`:761`、`:784`、`:800`，记下 L2 刚读到的值或改记确认时刻）、`adoptSharedLocked` 的 `setL1Locked`（`:1006`）与 `l1.Delete`（`:1002`）、`loadForRefresh` 的 `l1.Delete`（`:825`）、无版本 `Delete` 的 `l1.Delete`（`:1093`）。全部在 `publishMu` 下，值都来自 L2 或权威“不存在”。v1.20.2～v1.22.0 的方案 §2.1、类型注释与 DECISIONS 第九轮写“全部 L1 写入都经 `admitLocked`”，字面不成立；fixr（`155b9f91`）逐点核对没有绕过准入，把类型注释（`entity/remote_snapshot.go:131-137`）、`admitLocked` / `loadAuthoritative` / `ApplyReplica` 注释、`remoteentity/snapshot_client.go:35-37` 与 B2 §2、DECISIONS 第九轮改为“新值经 `admitLocked`，其余直接写点只回填 L2 的值或删除”（[RR-20261006-11 记录](../../bugfix/RR-20261006-11.md) §2.1）。
 - 不变量 I3：非线性读只交出 `fresh` 的条目（`readConfirmed` `:687`、`refresh` `:736`）；`Linearizable` 每次读权威（`Read` `:658`）。
 - 不变量 I4：同版本异值是一致性错误、不降级（`admitLocked` `:949`、`refresh` `:751`）。
 - 不变量 I5：早于 `snapshot_l2_ttl / 2` 的复制快照不进缓存（`remoteentity/syncer.go:126`）。
-- 守卫测试：`TestB2*` 六条（`remoteentity/snapshot_l2_watermark_promises_test.go`）；组合矩阵 `TestRealB2WatermarkMatrixStandalone` / `TestRealB2WatermarkMatrixCluster`（`remoteentity/snapshot_l2_watermark_matrix_integration_test.go`）；O5 `TestRealJetStreamReplayAfterL2ExpiryDoesNotResurrect`（`remoteentity/snapshot_replay_jetstream_integration_test.go`）。**没有结构性守卫**（例如 grep 新增的 L1 写入点）防止今后绕过 `publishMu` / `admitLocked` 新增写入口。（已闭环，fixr：加 AST 守卫 `TestRemoteSnapshotCacheWritesStayInTheListedFunctions`，见 [RR-20261006-11 记录](../../bugfix/RR-20261006-11.md) §2.1。）
+- 守卫测试：`TestB2*` 六条（`remoteentity/snapshot_l2_watermark_promises_test.go`）；组合矩阵 `TestRealB2WatermarkMatrixStandalone` / `TestRealB2WatermarkMatrixCluster`（`remoteentity/snapshot_l2_watermark_matrix_integration_test.go`）；O5 `TestRealJetStreamReplayAfterL2ExpiryDoesNotResurrect`（`remoteentity/snapshot_replay_jetstream_integration_test.go`）。结构守卫（本版，fixr `155b9f91`）：`TestRemoteSnapshotCacheWritesStayInTheListedFunctions`（`entity/remote_snapshot_write_guard_test.go:41`）按源码 AST 检查——直接写 L1（`setL1Locked`、`l1` 上除读以外的方法）与直接写 L2（`l2` 上除 `Get` 以外的方法）只出现在封闭表 `remoteSnapshotDirectWriters`（`:26`，每个函数带理由）里，表里的函数不再写时也报错；需要分片锁的 helper（`*Locked` 与 `writeShared`）只被 `*Locked` 方法或自己取 `publishMu` 的函数调用。负对照（临时改源码，未提交）：`ApplyUpdate` 里加一句 `setL1Locked`、去掉 `loadForRefresh` 的取锁，守卫报三条（原文见记录 §2.1）。
 
 **4. 控制流**
 
@@ -2493,6 +2745,7 @@ flowchart TD
 | `TestB2LostL2DeleteIsRepairedByTheNextRead` | 同上 `:205` | 丢失的带版本删除由下一次读重发 |
 | `TestB2HistoricReplicaPastL2MemoryIsNotAdmitted` | 同上 `:255` | O5：过老的复制快照不准入 |
 | `TestB2ConcurrentWritersAndReconfirmingReadersConvergeOnL2` | 同上 `:293` | 并发写与重新确认读收敛到 L2 |
+| `TestRemoteSnapshotCacheWritesStayInTheListedFunctions` | `entity/remote_snapshot_write_guard_test.go:41` | 本版结构守卫：直接写 L1 / L2 只在封闭表里的函数、需要分片锁的 helper 只在持锁处调用（负对照三条，见 [RR-20261006-11 记录](../../bugfix/RR-20261006-11.md) §2.1） |
 | `TestRealB2WatermarkMatrixStandalone` / `…Cluster` | `remoteentity/snapshot_l2_watermark_matrix_integration_test.go:43` / `:47` | 真实 Redis 单机与自建 3 主 3 从 Cluster，各 20 格 |
 | `TestRealJetStreamReplayAfterL2ExpiryDoesNotResurrect` | `remoteentity/snapshot_replay_jetstream_integration_test.go:33` | 真实 JetStream + Redis 复现 O5 |
 | `TestCachedMaxStalenessConfiguration` | `kit/remoteentity/cached_max_staleness_test.go:13` | 严格读取、必须为正 |
@@ -2534,7 +2787,7 @@ ok  remoteentity  TestB2*（6 条，含并发收敛；-race -count=5）
 --- PASS: TestRealSnapshotL2KeyPrefixOnRedis / OnRedisCluster / StaleWrite / Tombstone（既有真实 Redis 用例）
 ```
 
-改了断言的既有用例（契约变化，记录 B2 §7）：`TestRemoteSnapshotPublishDoesNotPinShardOnUnresponsiveL2`（`entity/remote_snapshot_test.go`）、`TestStaleBackfillControls/L2 outage`、`TestPublishConflictAfterPreflight`（`entity/snapshot_delete_l2_promises_test.go`，预查已删，改为直接验证 CAS 裁决）、`TestRemoteSnapshotL2DeleteAtVersionKeepsNewerSnapshot` 与 `TestRealSnapshotL2KeyPrefixOnRedis(Cluster)`（被拒的带版本删除返回 `cache.ErrStaleWrite`）、`TestRemoteSnapshotDeleteAtVersionPromiseClearedByNewerSnapshot`。负对照：记录未保留单独的“退回修复变红”运行；修前红即基线实现上的红。
+改了断言的既有用例（契约变化，记录 B2 §7）：`TestRemoteSnapshotPublishDoesNotPinShardOnUnresponsiveL2`（`entity/remote_snapshot_test.go`）、`TestStaleBackfillControls/L2 outage`、`TestPublishConflictAfterPreflight`（`entity/snapshot_delete_l2_promises_test.go`，预查已删，改为直接验证 CAS 裁决）、`TestRemoteSnapshotL2DeleteAtVersionKeepsNewerSnapshot` 与 `TestRealSnapshotL2KeyPrefixOnRedis(Cluster)`（被拒的带版本删除返回 `cache.ErrStaleWrite`）、`TestRemoteSnapshotDeleteAtVersionPromiseFencesOlderSnapshot`。负对照：记录未保留单独的“退回修复变红”运行；修前红即基线实现上的红。
 
 **7. 性能证据**（原样，出处 B2 §7；真实 Redis 单机，同机交替 3 轮 × count 2，`-benchtime 3000x`，Apple M5，Go 1.27.0；基准在 `remoteentity/snapshot_l2_watermark_bench_integration_test.go:66`～`:112`）
 
@@ -2553,16 +2806,16 @@ allocs/op: PublishWarm 29 → 29，ReplicaCold 46 → 28，CachedHit 0 → 0，C
 
 - O5 的发布时刻用发布方 `time.Now()` 与接收方 `time.Now()` 比较（`remoteentity/syncer.go:47`、`:126`），跨主机时钟偏差只靠“留一半窗口”吸收，未在多主机验证（E02）。
 - 没有共享 L2 的装配里删除标记受 L1 容量淘汰，迟到旧消息可复活（只适合单进程 / 测试）。
-- 滚动升级期间旧发布者不带 `published_at`。
+- v1.20.2 之前的发布者不带 `published_at`，接收方照旧接受（不考虑旧进程，维护者 2026-10-06）。
 - L2 落后于权威的上界见 [REM-11](#rem-11)。
 
 **9. review 检查点**
 
-- [x] grep `entity/remote_snapshot.go` 中全部 L1 写入点（`setL1Locked(`、`admitLocked(`、`c.l1.Delete(`、`c.l1.SetWithTTL(`，当前 `:744 :756 :765 :779 :795 :820 :924 :946 :954 :997 :1001 :1013 :1088 :1110`），逐一确认都在 `publishMu[shard(key)]` 下；并判断“只经 `admitLocked`”的字面说法（`:131`、B2 §2.1、DECISIONS 第九轮）是否应改为“经 `admitLocked`，或写入刚从 L2 读到的值”。（fixr：已核对并加守卫，见 [RR-20261006-11 记录](../../bugfix/RR-20261006-11.md) §2.1。）
-- [ ] 确认 `refresh`（`:719`）在锁外读 L2、锁内重看 L1 时，`hasCurrent && fresh` 的短路（`:736`）不会把一个“别人刚以 `confirmedAt = authoritativeAt` 写入、但比 L2 旧”的条目当作 fresh 交出（关注 `authoritativeAt` 早于 `started` 的情形）。
-- [ ] 确认 `publishLocked` 的“已确认的更新条目在前则不写 L2”（`:918`）与 O5 一起成立：L1 有已确认 v2、L2 已过期时，迟到的 v1 不会写进 L2（看 `TestRealB2WatermarkMatrix*` 的 `deliverall-replay/replica/hot` 格）。
-- [ ] 确认 `adoptSharedLocked` 在 L2 无活值时只删“不新于被拒写”的 L1 快照、不记删除标记（`:995`～`:998`），并看注释给的理由（避免挡住键过期后另一 epoch 的合法写入）是否被某个用例钉住。
-- [ ] 确认 `remoteSnapshotL2Store.DeleteAtVersion` 返回 `ErrStaleWrite`（`remoteentity/snapshot_l2.go:348`）之后，`admitLocked` 走 `adoptSharedLocked` 而不是降级（`entity/remote_snapshot.go:947`）。
+- [ ] 确认结构守卫 `TestRemoteSnapshotCacheWritesStayInTheListedFunctions`（`entity/remote_snapshot_write_guard_test.go:41`）的封闭表 `remoteSnapshotDirectWriters`（`:26-34`）与当前写入点一一对应：`grep -n 'setL1Locked(\|admitLocked(\|l1.Delete(' entity/remote_snapshot.go` 当前为 `:749 :761 :770 :784 :800 :825 :929 :951 :959 :1002 :1006 :1093 :1115`，逐一确认都在 `publishMu[shard(key)]` 下或在 `*Locked` 函数里；“新值经 `admitLocked`、其余只回填 L2 的值或删除”的口径已写进类型注释（`:131-137`）与 B2 §2（闭环提交 `155b9f91`，[RR-20261006-11 记录](../../bugfix/RR-20261006-11.md) §2.1）。
+- [ ] 确认 `refresh`（`entity/remote_snapshot.go:724`）在锁外读 L2、锁内重看 L1 时，`hasCurrent && fresh` 的短路（`:741`）不会把一个“别人刚以 `confirmedAt = authoritativeAt` 写入、但比 L2 旧”的条目当作 fresh 交出（关注 `authoritativeAt` 早于 `started` 的情形）。
+- [ ] 确认 `publishLocked` 的“已确认的更新条目在前则不写 L2”（`entity/remote_snapshot.go:923`）与 O5 一起成立：L1 有已确认 v2、L2 已过期时，迟到的 v1 不会写进 L2（看 `TestRealB2WatermarkMatrix*` 的 `deliverall-replay/replica/hot` 格）。
+- [ ] 确认 `adoptSharedLocked` 在 L2 无活值时只删“不新于被拒写”的 L1 快照、不记删除标记（`entity/remote_snapshot.go:1000`～`:1003`），并看注释给的理由（避免挡住键过期后另一 epoch 的合法写入）是否被某个用例钉住。
+- [ ] 确认 `remoteSnapshotL2Store.DeleteAtVersion` 返回 `ErrStaleWrite`（`remoteentity/snapshot_l2.go:348`）之后，`admitLocked` 走 `adoptSharedLocked` 而不是降级（`entity/remote_snapshot.go:952`）。
 - [ ] 确认 `historic`（`remoteentity/syncer.go:147`）只过滤快照更新、不过滤删除（删除分支 `:113` 在过滤之前返回）。
 - [ ] 确认 kit 的 `cached_max_staleness` 严格读取：写成 `30`（无单位）时 `read.Err()` 先于“必须为正”报错（`kit/remoteentity/remote_entity_mod.go:308`～`:313`），对照 `TestCachedMaxStalenessConfiguration`。
 
@@ -2589,27 +2842,27 @@ allocs/op: PublishWarm 29 → 29，ReplicaCold 46 → 28，CachedHit 0 → 0，C
 | `entity/remote_mirror.go:37` | `RemoteObservation` | 观察 token（MarkerEpoch / RouteEpoch / StateVersion） |
 | `entity/remote_mirror.go:56` | `RemoteObservation.Covers` | 所有读出口共用的最低要求判定 |
 | `entity/remote_mirror.go:74` | `RemoteSnapshotRead` | 一次只读请求（Key / Consistency / After） |
-| `entity/remote_mirror.go:85` | `RemoteSnapshotReadOnly` | 只读方唯一能力 `ReadSnapshot` |
-| `entity/remote_mirror.go:90` | `RemoteMirrorSpec` | 视图身份（Tenant / Kind / Scope / Policy / Schema / Codec） |
-| `entity/remote_mirror.go:117` | `NewRemoteMirrorReader` | 校验 spec，返回 reader |
-| `entity/remote_mirror.go:133` | `RemoteMirrorReader.Read` | 读侧核对 key / schema / codec，解码 `BytesCopy()`（`:149`） |
-| `entity/remote_snapshot.go:643` | `RemoteSnapshotCache.Read` | 唯一读出口：Linearizable 每次读权威、Monotonic 不足合并回源、Cached 不回源且不满足返回 `ErrRemoteSnapshotStale` |
-| `entity/remote_snapshot.go:629` | `Get` | 旧签名外观 |
-| `entity/remote_snapshot.go:350` | `LoadAuthoritative` | 旧签名外观 |
-| `entity/remote_snapshot.go:366` | `loaderMinVersion` | 只约束版本的 token 下推给 loader，带 epoch 的不下推 |
-| `entity/remote_snapshot.go:375` | `covers` | 读出口最低要求检查 |
-| `entity/remote_snapshot.go:226` | `remoteSnapshotLoadKey` | 合并键 `(key, after, refresh)` |
+| `entity/remote_mirror.go:87` | `RemoteSnapshotReadOnly` | 只读方唯一能力 `ReadSnapshot` |
+| `entity/remote_mirror.go:92` | `RemoteMirrorSpec` | 视图身份（Tenant / Kind / Scope / Policy / Schema / Codec） |
+| `entity/remote_mirror.go:119` | `NewRemoteMirrorReader` | 校验 spec，返回 reader |
+| `entity/remote_mirror.go:135` | `RemoteMirrorReader.Read` | 读侧核对 key / schema / codec，解码 `BytesCopy()`（`:151`） |
+| `entity/remote_snapshot.go:648` | `RemoteSnapshotCache.Read` | 唯一读出口：Linearizable 每次读权威、Monotonic 不足合并回源、Cached 不回源且不满足返回 `ErrRemoteSnapshotStale` |
+| `entity/remote_snapshot.go:634` | `Get` | 旧签名外观 |
+| `entity/remote_snapshot.go:354` | `LoadAuthoritative` | 旧签名外观 |
+| `entity/remote_snapshot.go:370` | `loaderMinVersion` | 只约束版本的 token 下推给 loader，带 epoch 的不下推 |
+| `entity/remote_snapshot.go:379` | `covers` | 读出口最低要求检查 |
+| `entity/remote_snapshot.go:230` | `remoteSnapshotLoadKey` | 合并键 `(key, after, refresh)` |
 | `remoteentity/snapshot_client.go:22` | `ErrSnapshotClientStopped` | 客户端已停 |
-| `remoteentity/snapshot_client.go:36` | `SnapshotClient` | 快照协议唯一实现 |
-| `remoteentity/snapshot_client.go:102` | `NewSnapshotClient` | 校验后构造（`validateSnapshotClientConfig` `:112`） |
-| `remoteentity/snapshot_client.go:133` | `newSnapshotClient` | 不校验的构造（Manager 内嵌） |
-| `remoteentity/snapshot_client.go:165` | `ReadSnapshot` | 停止检查（`:181`）、Linearizable 能力门（`:184`）、续租兴趣（`:192`）、`cache.Read`（`:193`） |
-| `remoteentity/snapshot_client.go:387` | `publishCommitted` | owner 提交后发布（包内，只读方拿不到） |
-| `remoteentity/snapshot_client.go:450` | `Start` | 订阅复制主题，失败逐步回收 |
-| `remoteentity/snapshot_client.go:503` | `unsubscribe` | Assembly 启动后续失败时退订 |
-| `remoteentity/snapshot_client.go:522` | `Stop` | 三步停机 |
-| `remoteentity/snapshot_client.go:556` | `gatedLoader` | 权威加载受 `work` 准入约束、Stop 时取消 |
-| `remoteentity/snapshot_client.go:573` | `gatedSnapshotL2` | L2 调用受 `work` 准入约束 |
+| `remoteentity/snapshot_client.go:38` | `SnapshotClient` | 快照协议唯一实现 |
+| `remoteentity/snapshot_client.go:104` | `NewSnapshotClient` | 校验后构造（`validateSnapshotClientConfig` `:114`） |
+| `remoteentity/snapshot_client.go:135` | `newSnapshotClient` | 不校验的构造（Manager 内嵌） |
+| `remoteentity/snapshot_client.go:167` | `ReadSnapshot` | 停止检查（`:183`）、Linearizable 能力门（`:186`）、续租兴趣（`:194`）、`cache.Read`（`:195`） |
+| `remoteentity/snapshot_client.go:389` | `publishCommitted` | owner 提交后发布（包内，只读方拿不到） |
+| `remoteentity/snapshot_client.go:452` | `Start` | 订阅复制主题，失败逐步回收 |
+| `remoteentity/snapshot_client.go:505` | `unsubscribe` | Assembly 启动后续失败时退订 |
+| `remoteentity/snapshot_client.go:524` | `Stop` | 三步停机 |
+| `remoteentity/snapshot_client.go:558` | `gatedLoader` | 权威加载受 `work` 准入约束、Stop 时取消 |
+| `remoteentity/snapshot_client.go:575` | `gatedSnapshotL2` | L2 调用受 `work` 准入约束 |
 | `remoteentity/transaction_manager.go:725` | `Manager.ReadRemoteSnapshot` | 委托客户端（外层回退已删除） |
 | `remoteentity/transaction_manager.go:734` | `Manager.ReadSnapshot` | 只读能力 |
 | `remoteentity/transaction_manager.go:743` | `Manager.SnapshotClient` | 同进程只读方用 |
@@ -2617,12 +2870,12 @@ allocs/op: PublishWarm 29 → 29，ReplicaCold 46 → 28，CachedHit 0 → 0，C
 
 **3. 不变量与强制点**
 
-- 唯一读出口：所有非线性 / 线性读经 `RemoteSnapshotCache.Read`（`entity/remote_snapshot.go:643`）；`SnapshotClient.ReadSnapshot` 只调它（`remoteentity/snapshot_client.go:193`）；Manager 的读委托客户端（`remoteentity/transaction_manager.go:729`、`:738`）。守卫：`TestRemoteSnapshotReadExitsShareOnePostCondition`（`entity/remote_mirror_promises_test.go`）、`TestReadRemoteSnapshotMonotonic*`（`remoteentity/snapshot_read_exit_promises_test.go`）。
-- 只读方无写能力：`SnapshotClient` 没有导出的发布 / 删除方法，`publishCommitted` 包内（`:387`）。守卫：`TestSnapshotClientHasNoWriteCapability`（`remoteentity/snapshot_client_promises_test.go`）。
-- Linearizable 能力门（`:184`），守卫 `TestSnapshotClientLinearizableNeedsADeclaredLoader`。
-- 启动失败不留订阅（`Start` `:475`～`:485`），守卫 `TestSnapshotClientStartFailureLeavesNoSubscription`。
-- 停机三步、返回 nil 前不释放依赖（`Stop` `:522`～`:550`，`work.Wait`），守卫 `TestSnapshotClientStopContract`（`stopcontract.Check` + `CallerReleases`）、`TestSnapshotClientStopCancelsLoads`。
-- DTO 不污染缓存（`BytesCopy`，`entity/remote_mirror.go:149`），守卫 `TestRemoteMirrorReaderDTOMutationDoesNotPolluteCache`。
+- 唯一读出口：所有非线性 / 线性读经 `RemoteSnapshotCache.Read`（`entity/remote_snapshot.go:648`）；`SnapshotClient.ReadSnapshot` 只调它（`remoteentity/snapshot_client.go:195`）；Manager 的读委托客户端（`remoteentity/transaction_manager.go:729`、`:738`）。守卫：`TestRemoteSnapshotReadExitsShareOnePostCondition`（`entity/remote_mirror_promises_test.go`）、`TestReadRemoteSnapshotMonotonic*`（`remoteentity/snapshot_read_exit_promises_test.go`）。
+- 只读方无写能力：`SnapshotClient` 没有导出的发布 / 删除方法，`publishCommitted` 包内（`remoteentity/snapshot_client.go:389`）。守卫：`TestSnapshotClientHasNoWriteCapability`（`remoteentity/snapshot_client_promises_test.go`）。
+- Linearizable 能力门（`remoteentity/snapshot_client.go:186`），守卫 `TestSnapshotClientLinearizableNeedsADeclaredLoader`。
+- 启动失败不留订阅（`Start`，`remoteentity/snapshot_client.go:477`～`:487`），守卫 `TestSnapshotClientStartFailureLeavesNoSubscription`。
+- 停机三步、返回 nil 前不释放依赖（`Stop`，`remoteentity/snapshot_client.go:524`～`:552`，`work.Wait`），守卫 `TestSnapshotClientStopContract`（`stopcontract.Check` + `CallerReleases`）、`TestSnapshotClientStopCancelsLoads`。
+- DTO 不污染缓存（`BytesCopy`，`entity/remote_mirror.go:151`），守卫 `TestRemoteMirrorReaderDTOMutationDoesNotPolluteCache`。
 - 缓存写入不新增路径：客户端全部写入经 `Publish` / `DeleteAtVersion` / `LoadAuthoritative`（→ `admitLocked`），见 [REM-1](#rem-1)。
 
 **4. 控制流**（`SnapshotClient.ReadSnapshot`）
@@ -2729,15 +2982,15 @@ N8 带 epoch 的 token 也把版本下推给 loader
 **8. 未验证项与已知风险**
 
 - owner 的提交后总线发布不经客户端准入（停止后仍可发布），属 K3。
-- `RemoteSnapshotRead.After` 的注释（`entity/remote_mirror.go:78`）写“Cached 读……不满足就是未找到”，源码 `Read` 对 Cached 不满足返回 `ErrRemoteSnapshotStale`（`entity/remote_snapshot.go:673`～`:674`）；以源码为准，注释过时。
+- `RemoteSnapshotRead.After` 的注释原写“Cached 读……不满足就是未找到”，与源码 `Read` 对 Cached 不满足返回 `ErrRemoteSnapshotStale`（`entity/remote_snapshot.go:678-679`）不符；fixr（`155b9f91`）已按源码改正注释（`entity/remote_mirror.go:78-80`）。
 
 **9. review 检查点**
 
 - [ ] 确认仓内不再有绕过 `RemoteSnapshotCache.Read` 的读：grep `LoadAuthoritative(`、`.Get(ctx, key, consistency` 的调用方，确认只剩 `SnapshotReplicaStore.ApplyReplica` 的缺基回填（`remoteentity/syncer.go:139`）与外观本身。
-- [ ] 确认 `loadAuthoritative` 对返回值的最终检查（`entity/remote_snapshot.go:419`～`:432`）覆盖 Linearizable 出口（`Read` `:662` 直接返回它）。
-- [ ] 确认 `gatedSnapshotL2` 的四个方法（`remoteentity/snapshot_client.go:578`～`:612`）都先 `work.Begin()`，且 `Stop` 中 `work.Stop()` 先于 `stopCancel()`（`:535`～`:536`）。
+- [ ] 确认 `loadAuthoritative` 对返回值的最终检查（`entity/remote_snapshot.go:423`～`:436`）覆盖 Linearizable 出口（`Read` `:667` 直接返回它）。
+- [ ] 确认 `gatedSnapshotL2` 的四个方法（`remoteentity/snapshot_client.go:580`～`:614`）都先 `work.Begin()`，且 `Stop` 中 `work.Stop()` 先于 `stopCancel()`（`:537`～`:538`）。
 - [ ] 确认 `Covers` 的“两个 epoch 都 ≥ 且至少一个更新”分支（`entity/remote_mirror.go:63`）与 L2 CAS 脚本的“marker 或 route 任一更小即拒”（`remoteentity/snapshot_l2.go` CAS 脚本）对混合 epoch 的处理一致。
-- [x] 修正或登记 `entity/remote_mirror.go:78` 注释与源码的不一致。（fixr：已按源码改正。）
+- [ ] 确认 `RemoteSnapshotRead.After` 改正后的注释（`entity/remote_mirror.go:78-80`，`155b9f91`）与 `Read` 的实际行为一致：Cached 有确认值但不满足 After 返回 `ErrRemoteSnapshotStale`（epoch 不可比时 `ErrRemoteObservationIncomparable`），没有值才是未找到（`entity/remote_snapshot.go:676-686`）。
 
 <a id="rem-3"></a>
 ### REM-3 allow_stale 的 Cached Remote 访问接受低于 min_version 的快照（发版前复审修复）
@@ -2784,7 +3037,7 @@ N8 带 epoch 的 token 也把版本下推给 loader
 
 **7. 性能证据**：无（不涉及热路径）。
 
-**8. 未验证项与已知风险**：发版前审查报告未入库；只覆盖 nest 一个调用方，其他直接用 `Cached + minVersion` 的调用方（若有）仍按新契约得到 `ErrRemoteSnapshotStale`。
+**8. 未验证项与已知风险**：无外部验证项。发版前审查报告未入库（红绿文本只在提交说明里）。仓内 `entity` / `remoteentity` 之外调用 `ReadRemoteSnapshot` 的只有 `nest/remote_access.go:133` 这一处（源码核对），没有别的 `Cached + minVersion` 调用方受收紧影响。
 
 **9. review 检查点**
 
@@ -2804,6 +3057,7 @@ N8 带 epoch 的 token 也把版本下推给 loader
 | --- | --- | --- |
 | `23e17d81` | v1.21.0 | `ILiveSubscriber` / JetStream `SubscribeLive` / `mirror.NewLive`；`ApplyReplica` 首载缓冲；兴趣代际锁内分配与撤销水位；O4（见 [REM-5](#rem-5)）；用例与真实环境用例 |
 | `c99b59f6` | v1.21.0 | DECISIONS-PENDING 第九轮标为已实施 |
+| `155b9f91` | v1.23.0（本版） | durable 名实测用例 `TestRealJetStreamLiveDurableNameShape`；MIRROR-STEP-4 §4 / USER_GUIDE 改为实测名字；表满时 release 的溢出水位见 [REM-14](#rem-14) |
 
 **2. 改动文件与关键符号**
 
@@ -2815,33 +3069,33 @@ N8 带 epoch 的 token 也把版本下推给 loader
 | `sync/syncbus/mirror/envelope.go:39` | `ErrLiveSubscribeUnsupported` | 总线不支持可确认订阅 |
 | `sync/syncbus/mirror/envelope.go:65` | `NewLive` | 用 `SubscribeLive` 的复制器 |
 | `sync/syncbus/mirror/envelope.go:72` | `Replicator.Live` | 是否 live |
-| `entity/remote_snapshot.go:124` | `RemoteSnapshotCacheConfig.ReplicaBuffer` | 首载缓冲条数（缺省 64，`:246`、`:280`） |
-| `entity/remote_snapshot.go:183` | `RemoteSnapshotReplica` | 一条复制消息（更新或删除） |
-| `entity/remote_snapshot.go:392` | `loadAuthoritative` | `beginBootstrap` → `fetchAndAdmit` → `endBootstrap` → 溢出再回源 → `replayReplicas` |
-| `entity/remote_snapshot.go:479` | `ApplyReplica` | 复制消息唯一入口 |
-| `entity/remote_snapshot.go:510` / `:522` | `beginBootstrap` / `endBootstrap` | 登记 / 结束一次在途加载，最后一个取走缓冲 |
-| `entity/remote_snapshot.go:539` | `bufferDuringBootstrap` | 进缓冲；满则清空并标记溢出、Warn、计数 |
-| `entity/remote_snapshot.go:564` | `replayReplicas` | 按到达顺序重放，失败只计数 |
-| `entity/remote_snapshot.go:576` | `BootstrapStats` | 累计计数 |
+| `entity/remote_snapshot.go:124` | `RemoteSnapshotCacheConfig.ReplicaBuffer` | 首载缓冲条数（缺省 64，`:250`、`:284`） |
+| `entity/remote_snapshot.go:187` | `RemoteSnapshotReplica` | 一条复制消息（更新或删除） |
+| `entity/remote_snapshot.go:396` | `loadAuthoritative` | `beginBootstrap` → `fetchAndAdmit` → `endBootstrap` → 溢出再回源 → `replayReplicas` |
+| `entity/remote_snapshot.go:484` | `ApplyReplica` | 复制消息唯一入口 |
+| `entity/remote_snapshot.go:515` / `:527` | `beginBootstrap` / `endBootstrap` | 登记 / 结束一次在途加载，最后一个取走缓冲 |
+| `entity/remote_snapshot.go:544` | `bufferDuringBootstrap` | 进缓冲；满则清空并标记溢出、Warn、计数 |
+| `entity/remote_snapshot.go:569` | `replayReplicas` | 按到达顺序重放，失败只计数 |
+| `entity/remote_snapshot.go:581` | `BootstrapStats` | 累计计数 |
 | `remoteentity/config.go:37` | `Config.SnapshotReplicaBuffer` | core 配置（无 kit 键） |
 | `remoteentity/syncer.go:137` | `SnapshotReplicaStore.ApplyReplica` | 改走 `cache.ApplyReplica`；不在首载时的缺基回源（`:138`～`:140`） |
-| `remoteentity/snapshot_client.go:450` | `SnapshotClient.Start` | 按 `bus.(ILiveSubscriber)` 选推送 / 退化（`:466`），Warn（`:495`），gauge（`:493`） |
-| `remoteentity/snapshot_client.go:425` | `bindLocked` | live 时快照复制器用 `mirror.NewLive` |
-| `remoteentity/snapshot_client.go:256` | `renewInterest` | generation 在条带锁内分配（`:268`） |
-| `remoteentity/snapshot_client.go:310` | `ReleaseInterest` | generation 在条带锁内分配（`:317`） |
+| `remoteentity/snapshot_client.go:452` | `SnapshotClient.Start` | 按 `bus.(ILiveSubscriber)` 选推送 / 退化（`:468`），Warn（`:497`），gauge（`:495`） |
+| `remoteentity/snapshot_client.go:427` | `bindLocked` | live 时快照复制器用 `mirror.NewLive` |
+| `remoteentity/snapshot_client.go:258` | `renewInterest` | generation 在条带锁内分配（`:270`） |
+| `remoteentity/snapshot_client.go:312` | `ReleaseInterest` | generation 在条带锁内分配（`:319`） |
 | `remoteentity/interest.go:40` | `interestLease.released` | 撤销水位 |
-| `remoteentity/interest.go:134` | `renewIfNeeded` 撤销水位判定 | 不新于水位的 renew 被忽略 |
-| `remoteentity/interest.go:218` | `release` | `g>0` 留水位（`:234`）；`g==0` 或表满放不下时只撤销（`:229`） |
-| `remoteentity/interest.go:238` | `drop` | 本机回滚 / 清理，不留水位 |
+| `remoteentity/interest.go:191` | `renewIfNeeded` 撤销水位判定 | 不新于水位的 renew 被忽略 |
+| `remoteentity/interest.go:281` | `release` | `g>0` 留水位（`:306`）；`g==0` 只撤销（`:292-296`）；表满放不下水位时 v1.21.0～v1.22.0 只撤销，本版改记溢出水位（`:300-304`，RR-20261006-11，[REM-14](#rem-14)） |
+| `remoteentity/interest.go:310` | `drop` | 本机回滚 / 清理，不留水位 |
 | `remoteentity/assembly.go:18` / `:20` | `Stats.SnapshotPush` / `InterestRefused` | Manager 统计 |
 
 **3. 不变量与强制点**
 
-- 推送只在可确认订阅上开：`SnapshotClient.Start` 的类型断言（`remoteentity/snapshot_client.go:466`）与 `mirror.Replicator.Start` 的 live 分支（`sync/syncbus/mirror/envelope.go:87`～`:92`）双重强制。守卫：`TestSnapshotClientWithoutConfirmedSubscriptionsReadsOnDemand`、`TestJetStreamSubscribeLiveUsesASeparateDeliverNewDurable`。
-- 首载期间的复制消息不与加载结果交错写入：`bufferDuringBootstrap` 在 `bootMu` 下判定（`entity/remote_snapshot.go:539`）；`bootMu` 持有期间不调用 L2 / loader（注释 `:174`）。重放与加载结果都经 `admitLocked`。守卫：`TestSnapshotBootstrapBuffersDeltaDuringFirstLoad`、`TestSnapshotBootstrapReplayMatrix`、`TestSnapshotBootstrapOverflowDropsTheBufferAndReloads`。
-- 溢出后再回源一次：`loadAuthoritative` `:411`～`:414`（条件 `overflowed && err == nil`）。守卫：`TestSnapshotBootstrapOverflowDropsTheBufferAndReloads`（负对照：去掉再回源 → `version=5 loads=1 … Reloads:0`）。
-- 兴趣代际锁内分配：`renewInterest` 在 `stripe.Lock()`（`:262`）之后才 `nextInterestGeneration()`（`:268`）；`ReleaseInterest` 同（`:315`、`:317`）。守卫：`TestInterestRenewReleaseConvergesInEveryDeliveryOrder`（覆盖线上乱序投递；**没有并发 renew / release 的竞态用例**直接钉住“锁内分配”）。
-- release 撤销水位：`remoteentity/interest.go:134`、`:234`。守卫：同上，以及改了断言的 `TestStaleInterestReleaseDoesNotCancelANewerRenewal`（`remoteentity/interest_generation_promises_test.go:28`）。
+- 推送只在可确认订阅上开：`SnapshotClient.Start` 的类型断言（`remoteentity/snapshot_client.go:468`）与 `mirror.Replicator.Start` 的 live 分支（`sync/syncbus/mirror/envelope.go:87`～`:92`）双重强制。守卫：`TestSnapshotClientWithoutConfirmedSubscriptionsReadsOnDemand`、`TestJetStreamSubscribeLiveUsesASeparateDeliverNewDurable`。
+- 首载期间的复制消息不与加载结果交错写入：`bufferDuringBootstrap` 在 `bootMu` 下判定（`entity/remote_snapshot.go:544`）；`bootMu` 持有期间不调用 L2 / loader（注释 `:178`）。重放与加载结果都经 `admitLocked`。守卫：`TestSnapshotBootstrapBuffersDeltaDuringFirstLoad`、`TestSnapshotBootstrapReplayMatrix`、`TestSnapshotBootstrapOverflowDropsTheBufferAndReloads`。
+- 溢出后再回源一次：`loadAuthoritative`（`entity/remote_snapshot.go:415`～`:418`，条件 `overflowed && err == nil`）。守卫：`TestSnapshotBootstrapOverflowDropsTheBufferAndReloads`（负对照：去掉再回源 → `version=5 loads=1 … Reloads:0`）。
+- 兴趣代际锁内分配：`renewInterest` 在 `stripe.Lock()`（`remoteentity/snapshot_client.go:264`）之后才 `nextInterestGeneration()`（`:270`）；`ReleaseInterest` 同（`:317`、`:319`）。守卫：`TestInterestRenewReleaseConvergesInEveryDeliveryOrder`（覆盖线上乱序投递；**没有并发 renew / release 的竞态用例**直接钉住“锁内分配”）。
+- release 撤销水位：`remoteentity/interest.go:191`、`:306`。守卫：同上，以及改了断言的 `TestStaleInterestReleaseDoesNotCancelANewerRenewal`（`remoteentity/interest_generation_promises_test.go:28`）。
 
 **4. 控制流**
 
@@ -2889,8 +3143,8 @@ stateDiagram-v2
 | 缓冲溢出 | 丢缓冲，加载装入后整体再回源一次 | 读者拿到第二次加载后的值 |
 | 缓冲溢出但首次加载出错 | 不再回源（`err != nil`） | 读者拿到加载错误 |
 | 重放失败（缺基、L2 冲突） | 只计数 | 新鲜度交给陈旧上限 |
-| 多个并发加载（不同合并键）同一 key | 只有最后结束的加载取走缓冲 / 溢出标记 | 先结束的加载返回时缓冲尚未重放（推断，按 `endBootstrap` `:530` 源码） |
-| 表满放不下撤销水位 | 只撤销，不留水位（`remoteentity/interest.go:229`） | 迟到的旧 renew 会复活租约；已修复（RR-20261006-11）：表满时改记溢出水位，不再复活 |
+| 多个并发加载（不同合并键）同一 key | 只有最后结束的加载取走缓冲 / 溢出标记（`endBootstrap`，`entity/remote_snapshot.go:527-541`：`loads` 归零才取） | 先结束的加载返回权威加载结果（满足读出口后置条件），缓冲里的较新值在最后一个加载结束时经 `admitLocked` 重放（源码核对） |
+| 表满放不下撤销水位 | v1.21.0～v1.22.0：只撤销、不留水位；本版改记每个 consumer 一个的溢出水位（`remoteentity/interest.go:300-304`，RR-20261006-11，[REM-14](#rem-14)） | 迟到的旧 renew 被忽略，不再复活租约 |
 
 **6. 测试**
 
@@ -2928,17 +3182,17 @@ stateDiagram-v2
 
 - 无 L2 装配里 L1 删除标记被 LRU 淘汰后旧 upsert 可复活。
 - 订阅断开到重连之间漏掉的推送只影响新鲜度（上界 `cached_max_staleness`）；JetStream durable 续投依赖流保留期（MaxAge）。
-- durable 名：记录（MIRROR-STEP-4 §4、USER_GUIDE）写 `sync_remote_entity_snapshot.live_<sid>_…`；源码 `durableSyncName` 经 `sanitizeSyncName` 把 `.` 换成 `_`（`sync/syncbus/driver/jetstream.go:427`、`:445`），实际可读部分应为 `sync_remote_entity_snapshot_live_<sid>_<hash>`（推断，未实跑核对服务端名字）。（已实跑核对，fixr：隔离 NATS 上服务端名字为 `sync_remote_entity_snapshot_live_<sid>_<hex16>`，用例 `TestRealJetStreamLiveDurableNameShape`；MIRROR-STEP-4 与 USER_GUIDE 已改。）
+- durable 名（实测）：`durableSyncName` 经 `sanitizeSyncName` 把 `.` 换成 `_`（`sync/syncbus/driver/jetstream.go:427`、`:445`），隔离 NATS 上列出的服务端名字是 `sync_remote_entity_snapshot_live_<sid>_<16 位十六进制>`（DeliverAll 的是 `sync_remote_entity_snapshot_<sid>_<16 位十六进制>`），用例 `TestRealJetStreamLiveDurableNameShape`（`remoteentity/mirror_step4_jetstream_integration_test.go:97`，fixr `155b9f91`）；MIRROR-STEP-4 §4 与 USER_GUIDE 已按实测改正。
 - 推送 / 退化在多节点 JetStream HA 与 Linux 网络下：E06 / E01。
 
 **9. review 检查点**
 
-- [ ] 确认兴趣代际在锁内分配：`renewInterest`（`remoteentity/snapshot_client.go:262`→`:268`）与 `ReleaseInterest`（`:315`→`:317`）都在 `stripe.Lock()` 之后取 generation；评估是否需要补一个并发 renew / release 的竞态用例（现有守卫只覆盖线上乱序）。
-- [ ] 确认首载缓冲溢出后再回源一次：`entity/remote_snapshot.go:411`～`:414`；检查首次加载出错时不回源是否符合“溢出有明确行为”的决定，并看 `TestSnapshotBootstrapOverflowDropsTheBufferAndReloads` 是否覆盖出错分支。
-- [ ] 确认缓冲重放与溢出回源都只经 `applyReplica` → `ApplyUpdate` / `DeleteAtVersion` / `Delete` 与 `fetchAndAdmit` → `publishLocked`，没有直接写 L1 的新路径（`entity/remote_snapshot.go:492`、`:564`）。
-- [ ] 检查同一 key 多个并发加载（合并键 `(key, after, refresh)` 不同）时只有最后结束的加载重放缓冲（`endBootstrap` `:530`）：先返回的加载是否可能交出缺少缓冲增量的值，以及是否违反“读者看到的值不早于加载结果”。
-- [x] 检查 `release` 在表满时不留水位（`remoteentity/interest.go:229`）是否会让迟到的旧 renew 复活租约，是否需要计数或日志。（fixr：会复活，登记并修复 RR-20261006-11，见 [RR-20261006-11 记录](../../bugfix/RR-20261006-11.md)。）
-- [ ] 确认普通 NATS 退化时兴趣主题仍订阅、`refreshRep` 不建立（`remoteentity/snapshot_client.go:434`～`:437`、`:480`）。
+- [ ] 确认兴趣代际在锁内分配：`renewInterest`（`remoteentity/snapshot_client.go:264`→`:270`）与 `ReleaseInterest`（`:317`→`:319`）都在 `stripe.Lock()` 之后取 generation；评估是否需要补一个并发 renew / release 的竞态用例（现有守卫只覆盖线上乱序）。
+- [ ] 确认首载缓冲溢出后再回源一次：`entity/remote_snapshot.go:415`～`:418`；检查首次加载出错时不回源是否符合“溢出有明确行为”的决定，并看 `TestSnapshotBootstrapOverflowDropsTheBufferAndReloads` 是否覆盖出错分支。
+- [ ] 确认缓冲重放与溢出回源都只经 `applyReplica` → `ApplyUpdate` / `DeleteAtVersion` / `Delete` 与 `fetchAndAdmit` → `publishLocked`，没有直接写 L1 的新路径（`entity/remote_snapshot.go:497`、`:569`）。
+- [ ] 同一 key 多个并发加载（合并键 `(key, after, refresh)` 不同）时只有最后结束的加载重放缓冲（`endBootstrap`，`entity/remote_snapshot.go:535-537`）：第 5 节按源码给出的结论是先返回的加载交出的是权威加载结果、满足读出口后置条件；确认没有读者在此期间读到早于自己那次加载结果的值（同 key 的 L1 写都在 `publishMu` 下经 `admitLocked`，版本不回退）。
+- [ ] 表满时 `release` 的撤销水位（v1.21.0～v1.22.0 不留，迟到的旧 renew 会复活租约）已由 RR-20261006-11 改为溢出水位（`155b9f91`，到期实测 `d5682dc4`）：具体检查点见 [REM-14](#rem-14) §9。
+- [ ] 确认普通 NATS 退化时兴趣主题仍订阅、`refreshRep` 不建立（`remoteentity/snapshot_client.go:436`～`:439`、`:482`）。
 
 <a id="rem-5"></a>
 ### REM-5 O4：兴趣容量按 consumer 配额
@@ -2952,6 +3206,7 @@ stateDiagram-v2
 | `23e17d81` | v1.21.0 | `remoteInterestRegistry` 按 consumer 计、错误哨兵、指标与限频日志；kit 严格读取与 `frameworkIntKeys` 登记 |
 | `c99b59f6` | v1.21.0 | DECISIONS-PENDING 第九轮 O4 标为已实施 |
 | `fcc78ad0` | v1.23.0（本版） | 生成配置写出 `snapshot_interest_per_consumer: 0`（见 [REM-13](#rem-13)） |
+| `d5682dc4` | v1.23.0（本版） | 兴趣 handler 出错时 JetStream 的结算实测为 Ack（`TestRealJetStreamInterestHandlerErrorIsAcknowledged`，含负对照），记入 MIRROR-STEP-4 §6.10；同提交的溢出水位到期实测见 [REM-14](#rem-14) |
 
 **2. 改动文件与关键符号**
 
@@ -2961,22 +3216,22 @@ stateDiagram-v2
 | `remoteentity/interest.go:28` | `ErrInterestRegistryFull` | 包裹 `entity.ErrRemoteOverloaded` |
 | `remoteentity/interest.go:48` | `remoteInterestLimits` | PerConsumer / Total / ReleaseFence |
 | `remoteentity/interest.go:58` | `interestQuotaShare = 16` | 缺省配额比例 |
-| `remoteentity/interest.go:78` | `newRemoteInterestRegistry` | 缺省 `max(1, Total/16)` |
-| `remoteentity/interest.go:139`～`:149` | `renewIfNeeded` 配额与表满判定 | 先按 consumer 配额，再按每节点上限；各自先 `pruneExpiredLocked` 再判 |
-| `remoteentity/interest.go:156` | `rejectLocked` | 计数 + 每表每 10s 至多一条 Warn |
-| `remoteentity/interest.go:168` | `setLocked` | 维护 `perConsumer`（不含撤销水位）与 `total` |
-| `remoteentity/snapshot_client.go:290` | `renewInterest` 本机预判 | 本机兴趣表按同一配额判定，被拒不广播并回滚本机条目 |
-| `remoteentity/snapshot_client.go:326` | `noteInterestRejected` | `interest_renew_refused_total{reason}` |
-| `remoteentity/snapshot_client.go:126` | `validateSnapshotClientConfig` | 配额越界拒绝 |
+| `remoteentity/interest.go:131` | `newRemoteInterestRegistry` | 缺省 `max(1, Total/16)` |
+| `remoteentity/interest.go:200`～`:210` | `renewIfNeeded` 配额与表满判定 | 先按 consumer 配额，再按每节点上限；各自先 `pruneExpiredLocked` 再判 |
+| `remoteentity/interest.go:217` | `rejectLocked` | 计数 + 每表每 10s 至多一条 Warn |
+| `remoteentity/interest.go:229` | `setLocked` | 维护 `perConsumer`（不含撤销水位）与 `total` |
+| `remoteentity/snapshot_client.go:292` | `renewInterest` 本机预判 | 本机兴趣表按同一配额判定，被拒不广播并回滚本机条目 |
+| `remoteentity/snapshot_client.go:328` | `noteInterestRejected` | `interest_renew_refused_total{reason}` |
+| `remoteentity/snapshot_client.go:128` | `validateSnapshotClientConfig` | 配额越界拒绝 |
 | `remoteentity/config.go:34` | `Config.SnapshotInterestPerConsumer` | core 配置 |
 | `kit/remoteentity/remote_entity_mod.go:358` | `readSnapshotConfig` | `snapshot_interest_per_consumer` 严格读取与范围 |
 | `app/config_validation.go:324` | `frameworkIntKeys` | 登记 |
 
 **3. 不变量与强制点**
 
-- 一个 consumer 的拒绝只取决于它自己的租约数（`perConsumer[sid] >= quota`，`remoteentity/interest.go:142`）；撤销水位不计入配额（`setLocked` `:177`～`:182`）。
-- consumer 本机与 owner 用同一份判定：本机兴趣表收到自己的全部续租（`renewInterest` 调 `c.interests.renew`，`remoteentity/snapshot_client.go:290`）。
-- 读路径不因拒绝失败（`ReadSnapshot` 忽略 `RenewInterest` 错误，`remoteentity/snapshot_client.go:192`）。
+- 一个 consumer 的拒绝只取决于它自己的租约数（`perConsumer[sid] >= quota`，`remoteentity/interest.go:203`）；撤销水位不计入配额（`setLocked` `:238`～`:243`）。
+- consumer 本机与 owner 用同一份判定：本机兴趣表收到自己的全部续租（`renewInterest` 调 `c.interests.renew`，`remoteentity/snapshot_client.go:292`）。
+- 读路径不因拒绝失败（`ReadSnapshot` 忽略 `RenewInterest` 错误，`remoteentity/snapshot_client.go:194`）。
 - 守卫：`TestInterestCapacityIsPerConsumer`、`TestInterestQuotaRefusalIsVisibleAndReadsGoOnDemand`（`remoteentity/mirror_step4_promises_test.go:171`、`:340`）、`TestRemoteInterestRegistryHasHardCapacityLimits`（`remoteentity/interest_test.go`）、`TestInterestPerConsumerConfiguration`（`kit/remoteentity/interest_quota_config_test.go`）。
 
 **4. 控制流**（`renewIfNeeded`）
@@ -2994,7 +3249,7 @@ stateDiagram-v2
 | --- | --- | --- |
 | consumer 配额满（本机） | 回滚本机条目，计 `interest_renew_refused_total{reason=registry}` | 读不失败；该 key 无推送，按需读取 |
 | 本机兴趣表 key 数满 | 先清过期，仍满则拒绝，计 `{reason=local_table_full}` | 同上（`ErrRemoteOverloaded`） |
-| owner 处配额满 / 表满 | `interest_rejected_total{reason}`、限频 Warn；`InterestReplicaStore.ApplyReplica` 返回错误 | 复制 handler 收到错误；JetStream 上是否 NAK 重投到 MaxDeliver 未核对（推断） |
+| owner 处配额满 / 表满 | `interest_rejected_total{reason}`、限频 Warn；`InterestReplicaStore.ApplyReplica` 返回错误 | 同步总线对 handler 错误记 Warn 后 Ack，不重投、不 Term（真实 JetStream 实测 `TestRealJetStreamInterestHandlerErrorIsAcknowledged`，[MIRROR-STEP-4 §6.10](../../feature/MIRROR-STEP-4-AND-O4-2026-10-06.md)）；consumer 以更新代际在下次续租时恢复 |
 | 配置 `per_consumer > subs` | kit `Init` 与 `NewSnapshotClient` 拒绝 | 启动失败 |
 
 **6. 测试**
@@ -3005,6 +3260,7 @@ stateDiagram-v2
 | `TestInterestQuotaRefusalIsVisibleAndReadsGoOnDemand` | 同上 `:340` | 超额 `ErrInterestQuotaExceeded`、计数、读取经权威 |
 | `TestRemoteInterestRegistryHasHardCapacityLimits` | `remoteentity/interest_test.go` | 按 consumer 配额 + 每节点上限（改了断言） |
 | `TestInterestPerConsumerConfiguration` | `kit/remoteentity/interest_quota_config_test.go` | 严格读取、范围、`ValidateServiceConfig` |
+| `TestRealJetStreamInterestHandlerErrorIsAcknowledged` | `remoteentity/interest_handler_error_jetstream_integration_test.go:35`（`-tags integration`，本版） | owner 表满拒绝与身份不符两条消息：handler 各调一次，ack floor 推进到 2、无待确认、`NumRedelivered=0`，过 AckWait 后不再投递，`nats.jetstream.terminal.total` 不变；之后有空位时 consumer 以更新代际续租成功。负对照（临时让总线把 handler 错误交给驱动）两条消息各 NAK 重投到 MaxDeliver |
 
 修前红（原样，出处 [MIRROR-STEP-4 §6.2](../../feature/MIRROR-STEP-4-AND-O4-2026-10-06.md)）：
 
@@ -3020,15 +3276,15 @@ stateDiagram-v2
 **8. 未验证项与已知风险**
 
 - 兴趣表是广播副本，两边收到的消息不同时判定可能不一致；总线丢兴趣消息由租约过期收敛。
-- 记录写“缺省总上限的 1/16，即 16384”只对 core `DefaultConfig`（262144）成立；生成配置 `snapshot_interest_subs: 100000`（`codegen/internal/roost/catalog.go:71`）时缺省配额是 6250。（已补进 USER_GUIDE 与 MIRROR-STEP-4，fixr。）
+- 缺省配额：core `DefaultConfig`（`snapshot_interest_subs` 262144）下为 16384；生成配置 `snapshot_interest_subs: 100000`（`codegen/internal/roost/catalog.go:71`）下为 6250。USER_GUIDE 与 MIRROR-STEP-4 已分开写明（fixr）。
 - 满载容量的多主机验证：E13 / E15 / E16。
 
 **9. review 检查点**
 
-- [ ] 确认 `perConsumer` 计数在 `setLocked` / `removeLocked`（`remoteentity/interest.go:168`、`:190`）里对“租约 ↔ 撤销水位”互转维护正确（水位不计配额、租约变水位时减一）。
+- [ ] 确认 `perConsumer` 计数在 `setLocked` / `removeLocked`（`remoteentity/interest.go:229`、`:251`）里对“租约 ↔ 撤销水位”互转维护正确（水位不计配额、租约变水位时减一）。
 - [ ] 确认 kit 读取 `snapshot_interest_per_consumer` 写错类型时报错：`read.Int` 返回 0 不触发范围检查（`kit/remoteentity/remote_entity_mod.go:359`～`:362`），错误要靠 Init 末尾的 `read.Err()`（`:157`）；看 `TestInterestPerConsumerConfiguration` 是否有错类型用例。
-- [ ] 确认 `InterestReplicaStore.ApplyReplica` 在 owner 拒绝时返回错误（`remoteentity/interest.go:315`～`:317`）对 JetStream 消费的影响（是否反复重投），以及兴趣主题当前用普通订阅（`remoteentity/snapshot_client.go:431`）。
-- [ ] 确认 `rejectLocked` 的限频（`lastLogAt`）在锁内读写（`remoteentity/interest.go:158`）。
+- [ ] `InterestReplicaStore.ApplyReplica` 在 owner 拒绝时返回错误（`remoteentity/interest.go:392`～`:394`）：已实测结算为 Ack、不重投（`d5682dc4`，`TestRealJetStreamInterestHandlerErrorIsAcknowledged`，`remoteentity/interest_handler_error_jetstream_integration_test.go:35`，链路见 [MIRROR-STEP-4 §6.10](../../feature/MIRROR-STEP-4-AND-O4-2026-10-06.md)）。确认这一结算依赖的是同步总线对所有主题的统一契约（`jetStreamSyncBus.invoke` 记 Warn 后返回 nil，`sync/syncbus/driver/jetstream.go:297-304`），兴趣主题仍是普通订阅（`remoteentity/snapshot_client.go:433`），以后若有人让总线把 handler 错误交给驱动 NAK，这里会变成 MaxDeliver 内反复重投。
+- [ ] 确认 `rejectLocked` 的限频（`lastLogAt`）在锁内读写（`remoteentity/interest.go:219`）。
 
 <a id="rem-6"></a>
 ### REM-6 Mirror 第 5 步：kit RemoteMirrorMod、codegen `//roost:mirror` DTO、公会摘要样例
@@ -3169,7 +3425,7 @@ nats:      MIRROR READY push=false / FIRST 1 alpha 1 / ISOLATED / SECOND 2 beta 
 
 **8. 未验证项与已知风险**
 
-- 生成的 spec 不带 `Tenant` / `Policy`（`codegen/internal/entity/mirror.go:235`～`:241` 的模板只设 Kind / Scope / Schema / Codec），多租户 / profile 视图要手写 spec（推断）。
+- 生成的 spec 不带 `Tenant` / `Policy`（`codegen/internal/entity/mirror.go:234-240` 的模板只设 Kind / Scope / Schema / Codec，源码核对），多租户 / 多 profile 的视图要手写 spec（样例里跨租户 / profile 的读是改了 spec 的负对照）。
 - `RemoteMirrorMod` 的 `StopBudget` 不计入生成器 `shutdown.total_timeout`（RR-20260926-66）。
 - owner 删除没有带版本的 Mongo 墓碑，防复活只靠 L2 墓碑。
 - 健康语义两 Mod 不同：只读 Mod 本机兴趣表满报 Degraded（`kit/remoteentity/remote_mirror_mod.go:241`），`RemoteEntityMod` 同一条件报 Fail（`kit/remoteentity/remote_entity_mod.go:230`）。
@@ -3201,7 +3457,7 @@ nats:      MIRROR READY push=false / FIRST 1 alpha 1 / ISOLATED / SECOND 2 beta 
 | --- | --- | --- |
 | `remoteentity/transaction_manager.go:996` | `Manager.acknowledgeRemoteCommit` | 推进内存实例；`live.ID() != commit.EntityID` 时 `detachEntity` 并返回 nil（`:1009`～`:1012`） |
 | `remoteentity/transaction_manager.go:815` | `afterRemoteCommit` | 核对回执（`:816`）→ 确认（`:819`）→ `publishCommitted`（`:822`） |
-| `remoteentity/snapshot_client.go:405` | `publishCommitted` 的 Invalidations 分支 | `DeleteAtVersion(key, NextVersion)` + 推送删除 |
+| `remoteentity/snapshot_client.go:407` | `publishCommitted` 的 Invalidations 分支 | `DeleteAtVersion(key, NextVersion)` + 推送删除 |
 | `remoteentity/remote_delete_ack_promises_test.go:57` | `TestRemoteDeleteCommitPublishesItsTombstoneAfterTheInstanceIsCleared` | 回归 |
 
 **3. 不变量与强制点**：确认只推进“这个实体”的内存实例；实例已不是它时确认视为完成，发布不被跳过（单点：`remoteentity/transaction_manager.go:1009`）。回执校验仍在调用方 `validateRemoteReceipt`（`:816`），提交 / 发布 / 回执顺序不变。生成代码的身份核对不变。守卫：上表用例（先 `ClearBase` 再确认的顺序）。
@@ -3259,13 +3515,13 @@ PROBE mongo:            （两个集合都已空）
 
 **7. 性能证据**：无（不涉及热路径）。
 
-**8. 未验证项与已知风险**：pipelined 带 Remote 批次未单独实测；Durability 0 与清空的先后未在生成链路核对；包内 `testRemoteEntity.AcknowledgeRemoteCommit` 不核对身份，所以既有删除用例当初没暴露问题（问题记录“根因”末段）。
+**8. 未验证项与已知风险**：无外部验证项。确认的两条入口——批次内同步确认 `reconcileRemoteEntries`（`remoteentity/transaction_manager.go:518`，调用点 `:541`）与投影器稍后到达的 `afterRemoteCommit`（`:815`，调用点 `:819`）——都经同一个 `acknowledgeRemoteCommit`（`:996`）；修法与确认、清空的先后无关：实例还没清空时身份相符，走原有确认路径，已清空时按 `:1009` 摘掉并视为完成（源码核对）。所以 pipelined 带 Remote 批次与 Durability 0 不需要另一条修法；实测覆盖的是 strict 路径。包内 `testRemoteEntity.AcknowledgeRemoteCommit` 不核对身份，所以既有删除用例当初没暴露问题（问题记录“根因”末段）。
 
 **9. review 检查点**
 
 - [ ] 确认 `remoteentity/transaction_manager.go:1009` 的身份判定位于 `remoteReceiptObsolete`（`:1002`）之后，且 `detachEntity(live)` 只摘这个实例、不影响同 ID 新实例的登记。
 - [ ] 确认实例被回收给别的实体（ID 非 0 但不同）时同样走摘除分支，不会 `SetRemoteVersionVector` 到别人身上。
-- [ ] 确认 `publishCommitted` 的删除用 `commit.NextVersion`（`remoteentity/snapshot_client.go:409`、`:413`）与 `afterRemoteCommit` 的 `notifyRemoteVersion` 一致。
+- [ ] 确认 `publishCommitted` 的删除用 `commit.NextVersion`（`remoteentity/snapshot_client.go:411`、`:415`）与 `afterRemoteCommit` 的 `notifyRemoteVersion` 一致。
 - [ ] 评估是否需要生成工程上的 pipelined 删除端到端用例。
 
 <a id="rem-8"></a>
@@ -3368,18 +3624,18 @@ PROBE mongo:            （两个集合都已空）
 | `remoteentity/interest_refresh.go:116` | `acceptInterestRefresh` | 单飞 / 合并 |
 | `remoteentity/interest_refresh.go:135` | `runInterestRefresh` | 间隔、循环到无待办 |
 | `remoteentity/interest_refresh.go:185` | `refreshInterestsOnce` | 遍历本机仍有效的 key，`renewInterest(ctx, key, true)` |
-| `remoteentity/snapshot_client.go:256` | `renewInterest` | 唯一续租入口；refresh 时只续仍有效的 key（`:272`） |
-| `remoteentity/snapshot_client.go:436` | `bindLocked` | push 时建 `refreshRep = mirror.NewLive(...)` |
-| `remoteentity/snapshot_client.go:480` | `Start` | push 时启动第三个订阅，失败逐步回收 |
+| `remoteentity/snapshot_client.go:258` | `renewInterest` | 唯一续租入口；refresh 时只续仍有效的 key（`:274`） |
+| `remoteentity/snapshot_client.go:438` | `bindLocked` | push 时建 `refreshRep = mirror.NewLive(...)` |
+| `remoteentity/snapshot_client.go:482` | `Start` | push 时启动第三个订阅，失败逐步回收 |
 | `remoteentity/assemble.go:179` | `Assembly.Start` | `snapshots.Start` 之后、存储初始化之前调用 `requestInterestRefresh`，失败只 Warn |
 
 **3. 不变量与强制点**
 
-- 续租只有一个入口 `renewInterest`（`remoteentity/snapshot_client.go:256`）：代际锁内分配、本机按 O4 配额判定、撤销水位都不被绕过。守卫：`TestInterestRefreshRenewsOnlyLiveInterests`。
-- 遍历不复活已 release / 已过期的 key：条带锁内重查本机表（`:272`）。守卫同上。
+- 续租只有一个入口 `renewInterest`（`remoteentity/snapshot_client.go:258`）：代际锁内分配、本机按 O4 配额判定、撤销水位都不被绕过。守卫：`TestInterestRefreshRenewsOnlyLiveInterests`。
+- 遍历不复活已 release / 已过期的 key：条带锁内重查本机表（`remoteentity/snapshot_client.go:274`）。守卫同上。
 - 有界：同一时刻至多一个遍历，进行中的请求只置待办（`remoteentity/interest_refresh.go:118`），两次开始间隔 ≥ 1s（`:139`）。守卫：`TestInterestRefreshRequestsCoalesceAndAreValidated`。
 - 停机：遍历持 `work` 准入（`:123`、`:136`），`Stop` 取消 `stopCtx`。守卫：`TestInterestRefreshGapWaitEndsOnStop`。
-- 推送关着时不订阅、不发送（`requestInterestRefresh` `:50`；`Start` `:480`）。守卫：`TestInterestRefreshNeedsPushAndToleratesOldConsumers`。
+- 推送关着时不订阅、不发送（`requestInterestRefresh`，`remoteentity/interest_refresh.go:50`；`Start`，`remoteentity/snapshot_client.go:482`）。守卫：`TestInterestRefreshNeedsPushAndToleratesOldConsumers`。
 - 订阅失败逐步回收。守卫：`TestSnapshotClientRefreshSubscriptionFailureLeavesNoSubscription`。
 
 **4. 控制流**
@@ -3446,15 +3702,15 @@ sequenceDiagram
 **8. 未验证项与已知风险**
 
 - 过期判定用接收方 `time.Now()` 减发送方 `requested_at`（`remoteentity/interest_refresh.go:100`），跨主机时钟偏差未验证（E02）。
-- 记录 §2 列出的 `interest_refresh_requests_total` 结果值不含源码的 `stopped`（`remoteentity/interest_refresh.go:125`），也没提 `interest_refresh_sent_total`（`:73`）。（已补进 MIRROR-M6-OBSERVATIONS §2 与 T-278，fixr。）
+- 指标口径：源码结果值含 `stopped`（`remoteentity/interest_refresh.go:125`），owner 侧另有 `interest_refresh_sent_total`（`:73`）；MIRROR-M6-OBSERVATIONS §2 与 T-278 已按源码补上（fixr）。
 - 多主机强杀重启：E13。
 
 **9. review 检查点**
 
 - [ ] 确认 `refreshInterestsOnce` 对每个 key 走 `renewInterest(ctx, key, true)` 而不是直接广播（`remoteentity/interest_refresh.go:201`），因而 O4 配额与撤销水位都生效。
-- [ ] 确认 `renewInterest` 的 refresh 分支在条带锁内、`nextInterestGeneration()` 之后才判断“仍有效”（`remoteentity/snapshot_client.go:268`～`:274`）：被跳过的 key 也消耗了一个代际号，评估是否有副作用（推断无：代际只需单调）。
-- [ ] 确认 `runInterestRefresh` 的间隔从 `refreshLastStart` 算起、首次遍历 `refreshLastStart` 为零值时不等待（`:139`）。
-- [ ] 确认 `Assembly.Start` 中请求在 `SnapshotClient.Start` 之后（`remoteentity/assemble.go:167` → `:179`），且启动后续失败时 `unsubscribe` 退掉第三个订阅（`remoteentity/snapshot_client.go:506`）。
+- [ ] 确认 `renewInterest` 的 refresh 分支在条带锁内、`nextInterestGeneration()` 之后才判断“仍有效”（`remoteentity/snapshot_client.go:272`～`:278`）：被跳过的 key 也消耗了一个代际号；确认代际只被用来比较新旧（撤销水位、溢出水位都只比大小），没有别处依赖代际连续。
+- [ ] 确认 `runInterestRefresh` 的间隔从 `refreshLastStart` 算起、首次遍历 `refreshLastStart` 为零值时不等待（`remoteentity/interest_refresh.go:139`）。
+- [ ] 确认 `Assembly.Start` 中请求在 `SnapshotClient.Start` 之后（`remoteentity/assemble.go:167` → `:179`），且启动后续失败时 `unsubscribe` 退掉第三个订阅（`remoteentity/snapshot_client.go:508`）。
 - [ ] 确认 `RemoteMirrorMod.Start` 不调 `requestInterestRefresh`（`kit/remoteentity/remote_mirror_mod.go:180`）。
 
 <a id="rem-10"></a>
@@ -3588,8 +3844,8 @@ MIRROR6 .../S1_owner_kill_restart_wal_replay reader_stats loads=0 errors=0 reads
 | `remoteentity/snapshot_l2.go:98` | 墓碑脚本 `PEXPIRE` | 墓碑同 TTL |
 | `remoteentity/config.go:86` | `DefaultConfig.SnapshotL2TTL` | 5m |
 | `codegen/internal/roost/catalog.go:71` | 生成模板 | `snapshot_l2_ttl: 10m`、`cached_max_staleness: 30s` |
-| `entity/remote_snapshot.go:787`～`:803` | `refresh` 的 L2 无值分支 | L1 有快照而 L2 无值 → 回源权威 |
-| `entity/remote_snapshot.go:762`～`:777` | `refresh` 的“L1 比 L2 新”分支 | owner 自己下一次读补写 L2 |
+| `entity/remote_snapshot.go:792`～`:808` | `refresh` 的 L2 无值分支 | L1 有快照而 L2 无值 → 回源权威 |
+| `entity/remote_snapshot.go:767`～`:782` | `refresh` 的“L1 比 L2 新”分支 | owner 自己下一次读补写 L2 |
 
 **3. 不变量与强制点**：上界 = `snapshot_l2_ttl`（L2 记住旧值的最长时间）+ `cached_max_staleness`（读者最后一次确认后还能交出的时间）。没有后台补写，靠 owner 下一次读（`refresh` 补写）、复制更新 / 删除在每个接收节点写 L2、下一笔提交写 L2。无专门守卫测试（文档决定）；相关行为由 `TestB2PublisherRepairsALostL2Write`、`TestB2LostL2DeleteIsRepairedByTheNextRead` 钉住。
 
@@ -3609,14 +3865,14 @@ MIRROR6 .../S1_owner_kill_restart_wal_replay reader_stats loads=0 errors=0 reads
 
 **8. 未验证项与已知风险**
 
-- 记录（B2 §7、USER_GUIDE、DECISIONS 第十二轮）写“缺省约 5m30s”，按 core `DefaultConfig`（5m + 30s）成立；生成配置模板 `snapshot_l2_ttl: 10m`（`codegen/internal/roost/catalog.go:71`），按模板部署时约 10m30s（推断，按模板值计算）。（已补进 USER_GUIDE、B2 §7 与 DECISIONS，fixr。）
-- 读者重新确认读到同值时只改记确认时刻、不写 L2（`entity/remote_snapshot.go:750`～`:761`），所以读者不会续命 L2 的旧值；但收到旧版本复制消息（未过 O5 窗口）且 L1 冷的节点会把旧值 CAS 进 L2 并续期（推断，CAS 对同版本同值也 `PEXPIRE`）。
+- 上界口径：core `DefaultConfig`（`snapshot_l2_ttl` 5m + `cached_max_staleness` 30s）约 5m30s；生成配置模板 `snapshot_l2_ttl: 10m`（`codegen/internal/roost/catalog.go:71`）约 10m30s。USER_GUIDE、B2 §7 与 DECISIONS 已分开写明（fixr）。
+- “最后一次写进 L2”包括同值重写：读者重新确认读到同值时只改记确认时刻、不写 L2（`entity/remote_snapshot.go:760`～`:771`），读者不会续命 L2 的旧值；但 L2 的 CAS 脚本对同版本同值同样 `HSET` + `PEXPIRE`（`remoteentity/snapshot_l2.go:66-71`），L1 冷的节点在 O5 窗口内收到旧值的复制消息会把旧值写回并续期。O5 丢弃发布超过 `snapshot_l2_ttl / 2` 的快照更新，所以这种续期最晚发生在旧值发布后 `snapshot_l2_ttl / 2`，从旧值发布起算的最坏上界约 1.5 × `snapshot_l2_ttl` + `cached_max_staleness`（源码核对；发生条件是新版本的复制消息没有到达这些节点，推送开着时新版本的复制消息会把 L2 修好）。
 
 **9. review 检查点**
 
-- [ ] 确认“读者不会给 L2 旧值续期”：`refresh` 同值分支（`entity/remote_snapshot.go:750`）只 `setL1Locked`，不调 `admitLocked` / L2。
-- [ ] 评估“L1 冷节点收到较旧复制消息时 CAS 同值续期 L2 旧值”是否会让上界超过 `snapshot_l2_ttl`（CAS 脚本 `remoteentity/snapshot_l2.go:66`～`:70`）。
-- [x] 在 USER_GUIDE 与生成模板注释里核对“约 5m30s”是否需要注明“按 core 缺省；生成模板为 10m L2 TTL”。（fixr：USER_GUIDE 与 B2 §7 已分别写明 core 缺省约 5m30s、生成模板约 10m30s。）
+- [ ] 确认“读者不会给 L2 旧值续期”：`refresh` 同值分支（`entity/remote_snapshot.go:755`）只 `setL1Locked`，不调 `admitLocked` / L2。
+- [ ] 核对第 8 节“同值 CAS 续期”的推导：L1 冷节点在 O5 窗口内收到旧值的复制消息会把旧值写回 L2 并续期（CAS 脚本 `remoteentity/snapshot_l2.go:66`～`:70`），O5 的丢弃阈值 `snapshot_l2_ttl / 2`（`remoteentity/syncer.go:126`）决定续期最晚发生在旧值发布后多久；确认“从旧值发布起算约 1.5 × `snapshot_l2_ttl` + `cached_max_staleness`、从最后一次写进 L2 起算仍是 `snapshot_l2_ttl + cached_max_staleness`”两种起算口径都成立。
+- [ ] 确认 USER_GUIDE（`docs/USER_GUIDE.md:339`）与 B2 §7 分开写明了 core 缺省（约 5m30s）与生成模板（`snapshot_l2_ttl: 10m`，约 10m30s）两种上界（`155b9f91`），并与本条第 8 节“同值 CAS 也续期”的起算口径一致。
 - [ ] 确认 `snapshot_l2_ttl` 调小的代价（墓碑寿命同时变短）写进了说明。
 
 <a id="rem-12"></a>
@@ -3671,8 +3927,8 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 
 **8. 未验证项与已知风险**
 
-- ASK 窗口只覆盖“键已搬到目标”。
-- 记录 [MIRROR-M6-OBSERVATIONS §3](../../feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md) 的结果表写 `redirected` / `unsupported` 两种结果；源码 `recordTombstoneWait` 的指标标签只有 `skipped`（`remoteentity/snapshot_l2.go:377`～`:379`，统计字段 `Skipped`），以源码为准（DRV 主题，此处登记）。（已改 MIRROR-M6-OBSERVATIONS §3，fixr。）
+- 用例的 ASK 窗口只构造“键已搬到目标”；“键还在源上、槽位 MIGRATING”时 Redis 对源上存在的键照常执行、不重定向，走的是与无迁移时相同的路径（Cluster 用例 `TestRealB2WatermarkMatrixCluster` 等覆盖）。
+- 指标标签：源码 `recordTombstoneWait` 只有 `confirmed|short|no_replicas|error|skipped`（`remoteentity/snapshot_l2.go:377`～`:379`，统计字段 `Skipped`），MIRROR-M6-OBSERVATIONS §3 已按源码更正（fixr）。
 - `cluster_replicas_online` 只看 `slave0:` 一行（`scripts/mirror-local.sh:108`），每主一个副本时等价于“至少一个 online 副本”。
 - 多机 Cluster：E08；异步复制丢写：E10。
 
@@ -3733,9 +3989,9 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 
 **8. 未验证项与已知风险**
 
-- 记录写“v1.21.0 / v1.22.0 的 kit 不认识墓碑两键，viper 忽略未知键”；A4 严格读取只针对登记的键，未登记键是否在 `ValidateServiceConfig` 被当作未知键报错未核对（推断忽略）。
+- 生成器 Core 下限不变的依据（源码核对）：v1.21.0 / v1.22.0 的 kit 不读墓碑两键，`app.ValidateServiceConfig` 只严格检查登记过的键与 `.call_timeout` 后缀（两个版本的 `app/config_validation.go` 里 `frameworkDurationSuffixes = []string{".call_timeout"}`，没有按全部键报“未知键”），所以旧 core 遇到新生成配置里的这两个键不会报错。
 - 生成模板的 `snapshot_l2_ttl: 10m`、`snapshot_interest_subs: 100000` 与 core `DefaultConfig`（5m、262144）不同，影响 [REM-11](#rem-11) 上界与 [REM-5](#rem-5) 缺省配额的实际数值。
-- framework-compat full 场景未在 GitHub 上等结果。
+- 按约定不等 GitHub CI（framework-compat full 场景）；本地验证见 [CLOSING-BATCH-2 §A8](../../bugfix/CLOSING-BATCH-2-2026-10-06.md)（`TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys`、`TestGeneratedConfigsPassStrictAndProductionValidation`）。
 
 **9. review 检查点**
 
@@ -3743,6 +3999,93 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 - [ ] 确认模板 `cached_max_staleness: 30s` 与模板 `snapshot_cache_ttl: 30s` 同值，注释说明“不能写 0”（kit 要求设置了必须为正）。
 - [ ] 确认 `mirror.shutdown_timeout` 写在 `remote_entity:` 下的 `mirror:` 子段，与 kit 读取的键名 `remote_entity.mirror.shutdown_timeout` 一致（`kit/remoteentity/remote_mirror_mod.go:103`）。
 - [ ] 确认 `TestGeneratedConfigsPassStrictAndProductionValidation` 对每份含 `remote_entity:` 的配置都同时跑 `RemoteEntityMod.Init` 与 `RemoteMirrorMod.Init`。
+
+<a id="rem-14"></a>
+### REM-14 兴趣表满时 release 改记溢出水位（RR-20261006-11）与到期实测
+
+> 首发 v1.23.0（本版） · [说明](guide-saga-drv-dao-rem.md#rem-14) · 背景见 [REM-4](#rem-4)（撤销水位）、[REM-5](#rem-5)（容量）
+
+**1. 提交**
+
+| 提交 | 版本 | 内容 |
+| --- | --- | --- |
+| `155b9f91` | v1.23.0（本版） | RR-20261006-11：`release` 表满时记溢出水位（`interestOverflowFence`），`renewIfNeeded` 建新租约前查它，`pruneExpiredLocked` 清过期水位；回归 `TestInterestReleaseOnAFullRegistryStillFencesTheLateRenewal`。同提交另有 REM 疑点闭环（L1 写入点守卫见 [REM-1](#rem-1)，durable 名实测见 [REM-4](#rem-4)，注释与文档更正） |
+| `6b38cc11` | v1.23.0（本版） | DECISIONS-PENDING 第十三轮补实施状态 |
+| `d5682dc4` | v1.23.0（本版） | 到期实测：兴趣表时钟注入缝 `remoteInterestRegistry.now`；`TestInterestOverflowFenceExpiresOneTTLAfterTheLastRelease`、`TestInterestOverflowFencesAreOnePerConsumerAndReclaimedOnExpiry`；同提交的兴趣 handler 出错结算实测见 [REM-5](#rem-5) |
+| `d6f5edd3` | v1.23.0（本版） | DECISIONS / 交接补提交号 |
+
+**2. 改动文件与关键符号**（`37338490`）
+
+| `path:line` | 符号 | 职责 |
+| --- | --- | --- |
+| `remoteentity/interest.go:76-80` | `remoteInterestRegistry.overflow` / `.now` | 每个 consumer 至多一个溢出水位，不占表容量；兴趣表读时钟的注入缝（生产取 `time.Now().UnixNano()`，`:83`、`:147`） |
+| `remoteentity/interest.go:90` | `interestOverflowFence` | 代际上限、256 位 key 指纹位图（`[4]uint64`）、到期时刻 |
+| `remoteentity/interest.go:96` | `interestOverflowBit` | 指纹 = `remoteInterestReplicaKey(...) % 256` |
+| `remoteentity/interest.go:102` | `overflowFencedLocked` | 未到期、续租代际不新于上限、key 落在位图里 → 挡；读到过期的就地删除（`:107-110`） |
+| `remoteentity/interest.go:116` | `fenceOverflowLocked` | 记一次表满 release：位图置位、代际取最大、到期 = 最后一次 release + `ReleaseFence`（`:125-128`） |
+| `remoteentity/interest.go:195-198` | `renewIfNeeded` 溢出判定 | 撤销水位判定之后、配额判定之前；被挡时 `false, nil`（与撤销水位相同，不报错、不触发重投） |
+| `remoteentity/interest.go:297-305` | `release` 表满分支 | 先 `pruneExpiredLocked`（可能腾出位置，就照常写撤销水位），仍满才 `fenceOverflowLocked` |
+| `remoteentity/interest.go:350-355` | `pruneExpiredLocked` | 顺带清过期的溢出水位 |
+
+**3. 不变量与强制点**：撤销之前发出、之后才到的续租不能建立租约——表不满时由撤销水位（`:306`、`:191`）挡，表满时由溢出水位（`:300-304`、`:195-198`）挡，两者存活同一个上界 `ReleaseFence`（= `snapshot_interest_ttl`：撤销之前发出的续租此时都已过期）。溢出水位每个 consumer 至多一个，内存与 `perConsumer` 同量级，不计入 `snapshot_interest_subs`。守卫：`TestInterestReleaseOnAFullRegistryStillFencesTheLateRenewal`、`TestInterestOverflowFenceExpiresOneTTLAfterTheLastRelease`、`TestInterestOverflowFencesAreOnePerConsumerAndReclaimedOnExpiry`。
+
+**4. 控制流**：release(key, sid, g)：`g < 现有代际` → 忽略；`g == 0` → 只撤销；表满 → 清过期 → 仍满 → 溢出水位（位图置位、代际取大、到期后移）；否则写撤销水位。renew(interest)：过期 → 拒；撤销水位挡 → 忽略；溢出水位挡 → 忽略；配额 / 表满 → 拒；否则建租约。
+
+**5. 失败与不确定结果**
+
+| 情形 | 处理 | 后果 |
+| --- | --- | --- |
+| 同一窗口（一个兴趣 TTL）里这个 consumer 另一个 key 的迟到旧续租指纹碰撞 | 也被忽略 | 与续租被拒相同：这个 key 暂无推送、读取按陈旧上限回源；consumer 下一次续租（代际更新）照常建立。只在表满时出现（记录“取舍”） |
+| 撤销之后发出的续租 | 代际更新，不受影响 | — |
+| 同一 consumer 多次表满 release | 合并成一个水位，到期随最后一次后移 | 到期前一直挡 |
+| 水位过期 | 读到时就地删；任何一次清理（另一 consumer 的表满 release 也会触发）都会回收 | 不需要原 consumer 再出现 |
+
+未采用（记录原意）：水位不计入总上限（撤销水位数量由 release 速率 × TTL 决定，没有配置上界，等于放开内存上限）；每个 consumer 只记代际上限（会挡住同一窗口里该 consumer 所有 key 的迟到旧续租，误伤面更大）；表满时挤掉别的条目（只是把丢失挪了地方）。
+
+**6. 测试**
+
+修前红（原样，[问题记录](../../bug/RR-20261006-11.md)）：
+
+```text
+--- FAIL: TestInterestReleaseOnAFullRegistryStillFencesTheLateRenewal (0.00s)
+    interest_release_full_promises_test.go:41: a renewal issued before the release brought the withdrawn lease back after the full registry dropped the watermark
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/remoteentity	0.569s
+```
+
+| 用例 | 文件 | 覆盖 |
+| --- | --- | --- |
+| `TestInterestReleaseOnAFullRegistryStillFencesTheLateRenewal` | `remoteentity/interest_release_full_promises_test.go:16` | 表满 release 后迟到的旧续租不复活；撤销之后的续租照常建立；指纹不碰撞的另一 key 的迟到旧续租照常建立 |
+| `TestInterestOverflowFenceExpiresOneTTLAfterTheLastRelease` | `remoteentity/interest_overflow_expiry_promises_test.go:35` | 到期随最后一次 release 后移；到期前 1ns 仍挡、到期那一刻起清掉 |
+| `TestInterestOverflowFencesAreOnePerConsumerAndReclaimedOnExpiry` | 同上 `:90` | 两个 consumer 表满共撤销 1500 个 key，溢出水位只有 2 条、表条目数不变；到期后被别的 consumer 的清理回收 |
+
+到期用例是给已修代码补的验证，修前没有红；变异确认它们落在承诺上（原样，[修复记录](../../bugfix/RR-20261006-11.md) §5.1，临时改 `interest.go`，未提交）：
+
+```text
+M1 读时不判到期、清理也不删：
+    interest_overflow_expiry_promises_test.go:83: the overflow fence still refused a renewal after it expired
+    interest_overflow_expiry_promises_test.go:117: overflow after expiry = 3 entries (consumer 9 present: true), want only consumer 9's
+M2 到期时刻不随后续 release 后移：
+    interest_overflow_expiry_promises_test.go:63: the overflow fence expired one TTL after the first release; it must last until one TTL after the last
+M3 清理不回收过期水位：
+    interest_overflow_expiry_promises_test.go:117: overflow after expiry = 3 entries (consumer 9 present: true), want only consumer 9's
+M4 每次 release 各记一条：
+    interest_overflow_expiry_promises_test.go:48: overflow entries = 2 after two releases by one consumer, want 1
+    interest_overflow_expiry_promises_test.go:103: overflow entries = 1500 after 1500 releases by two consumers, want 2
+```
+
+修后验证（记录 §3、§5.3，`GOWORK=off`）：`gofmt -l` 空；`go vet ./remoteentity/`、`-tags integration`；`go test -race -count=3 ./entity/... ./remoteentity/... ./sync/...` 通过；glsvet 三大模块无输出；根包与 `go build ./... && go vet ./...` 通过；`scripts/test-remote-generated.sh` 13 条 `TestGeneratedRemote*` 通过。
+
+**7. 性能证据**：无（只在表满时多一次 map 查找与位运算；每个 consumer 至多一个 48 字节条目）。
+
+**8. 未验证项与已知风险**：兴趣表满载容量的多主机验证见 [E13](../../review/EXTERNAL-VERIFICATION-2026-10-06.md) / [E15](../../review/EXTERNAL-VERIFICATION-2026-10-06.md) / [E16](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)。指纹碰撞的误挡是设计取舍（见第 5 节），只影响推送、不影响读到的值。
+
+**9. review 检查点**
+
+- [ ] `remoteentity/interest.go:297-305`：表满时先 `pruneExpiredLocked` 再判断，清出空位就照常写撤销水位；确认溢出水位只在真的放不下时才记（`TestInterestReleaseOnAFullRegistryStillFencesTheLateRenewal` 的表在 release 时没有可清的过期条目）。
+- [ ] `:195-198` 的位置在撤销水位判定之后、配额判定之前：确认被溢出水位挡下的续租返回 `false, nil`（不计 `interest_rejected_total`、不让复制 handler 报错），与撤销水位的行为一致。
+- [ ] `:102-113` `overflowFencedLocked`：确认“代际不新于上限 **且** key 在位图里”才挡；撤销之后发出的续租代际一定更新（consumer 侧 `nextInterestGeneration` 单调），不会被误挡。
+- [ ] 时钟注入缝 `now`（`:78-80`）：确认生产只经 `newRemoteInterestRegistry` 取系统时钟（`:147`），`renewIfNeeded` / `release` / `interested` 都经它读时间、没有残留的 `time.Now()` 直读（`grep -n 'time.Now' remoteentity/interest.go`）。
 
 ## 全局守卫测试 / 门禁清单
 
@@ -3757,7 +4100,7 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 | `TestNativeStepConsumerHandlesOperationOutcomes` | `saga/step_operation_promises_test.go` | 消费者分支 | SAGA-2 |
 | `TestMongoStoreTombstoneTellsAbandonedFromResolved` | `saga/step_operation_promises_test.go` | tombstone `closure` | SAGA-2 |
 | `TestNativeStepSuccessAfterAFailureClosedOperationIsAlarmed`、`TestMongoStoreTombstoneOfAFailureCloseIsAbandoned`、`TestNativeStepExpiredDeliveryStillReplaysTheOperationsSuccess` | `saga/step_operation_review_test.go` | 两处复核修复 | SAGA-2 |
-| `TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce`、`TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize` | `saga/step_operation_real_mongo_integration_test.go`（integration） | 真实服务端守卫串行化、接替 vs 投影 | SAGA-2 |
+| `TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce`、`TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize`、`TestRealMongoTakeoverFencesTheEarlierAttemptsProjection` | `saga/step_operation_real_mongo_integration_test.go`（integration） | 真实服务端上同一操作的 Reserve 串行化（本版起由状态文档的写冲突承担）、接替 vs 投影两边各一 | SAGA-2 / SAGA-14 |
 | `TestStepBudgetsComeFromConfigWithPerStepOverrides`、`TestStepBudgetConfigRejectsTyposAndImpossibleValues` | `kit/saga/step_budgets_test.go` | 预算配置与校验 | SAGA-3 |
 | `TestPerStepOverrideAppliesToMixedCaseNamesWithoutDefinitions`、`TestExactOverrideWinsOverTheLowercaseFallback` | `kit/saga/step_override_case_promises_test.go` | 小写回退与原样优先 | SAGA-4 |
 | `TestStepBudgetConfigRejectsNamesThatDifferOnlyInCase` | `kit/saga/step_budgets_test.go` | 大小写歧义报错 | SAGA-5 |
@@ -3765,8 +4108,8 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 | `TestRealMongoLateSuccessAlarmIsMarkedOnce` | `saga/late_alarm_real_mongo_integration_test.go`（integration） | 并发告警标记只有一个 first | SAGA-6 |
 | `TestDefinitionFenceDuringBackoffAbandonsTheOperation` | `saga/definition_fence_abandon_promises_test.go` | 定义缺失出口放弃关闭 | SAGA-7 |
 | `TestCoordinatorLeaseTakeoverFencesTheLateApply`、`TestOutboxSupersedeAndUnknownAckOnMongoStore` | `saga/coordinator_takeover_review_test.go` | N06 S5 审查用例（租约接管晚 Apply、outbox 替换与未知 ack） | SAGA-7 |
-| `TestEveryCoordinatorWriteGoesThroughStepTransition` | `saga/step_transition_guard_test.go` | 协调器写记录只经 `stepTransition`（源码 AST 守卫） | SAGA-8 |
-| ~~`TestStepTransitionGuardSeesBypassesWithoutALiteral`~~ | 已删除（RR-20261006-14）；守卫改为类型检查，另加 `TestStepTransitionAloneDecidesTheIncarnation` | 原为守卫自己的负对照 | SAGA-8 |
+| `TestEveryCoordinatorWriteGoesThroughStepTransition` | `saga/step_transition_guard_test.go` | 协调器写记录只经 `stepTransition`：v1.21.0 起语法守卫，本版改为 `go/types` 全包检查（请求只能在 `stepTransition` 里产生、不能改写、`Store.Apply` 只在那里调用） | SAGA-8 / SAGA-15 |
+| `TestStepTransitionAloneDecidesTheIncarnation` | 同上 | 代际只由 `stepTransition` 按 before 与原因决定（本版新增；原负对照 `TestStepTransitionGuardSeesBypassesWithoutALiteral` 与 `saga/testdata/stepguard` 随 RR-20261006-14 删除） | SAGA-15 |
 | `TestMongoStepAttemptsOfOneOperationTakeEffectOnce` / `TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce` | `saga/mongo_step_operation_promises_test.go` / `saga/mongo_step_operation_real_mongo_integration_test.go` | Mongo 步骤操作实例最多一次（mongotest 与真实副本集同一份用例） | SAGA-9 |
 | `TestMongoStepConsumerFollowsTheOperationInbox` | `saga/mongo_step_consumer_promises_test.go` | Mongo 步骤消费者分支 | SAGA-9 |
 | `TestCompletionConsumersTermTheSameTerminalErrors` | `saga/completion_consumer_terminal_promises_test.go` | 两条结果流同一终态分类（O-S5-1） | SAGA-9 |
@@ -3775,6 +4118,11 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 | `BenchmarkRealMongoStepLatencyBreakdown`、`BenchmarkRealMongoStepThroughput`、`BenchmarkRealMongoCommitWriteConcern` | `saga/mongo_step_latency_real_mongo_integration_test.go`（integration，只在 `-bench` 下运行） | 可复跑的延迟分析基准 | SAGA-11 |
 | `TestModRefusesAnEffectStreamThatOutlivesTheCompletionReceipts`、`TestModChecksEffectRetentionOnlyAgainstTheStreamItReadsResultsFrom` | `kit/saga/effect_retention_promises_test.go` | O-S5-2 跨 Mod 校验 | SAGA-12 |
 | `TestRealNatsCompletionNakBackoffAndMaxDeliver` | `saga/consumer_nak_maxdeliver_real_integration_test.go`（integration） | 真实 JetStream 上 nak 退避与 `MaxDeliver` | SAGA-13 |
+| `TestOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife` / `TestRealMongoOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife` | `saga/step_operation_attempt_cap_promises_test.go` / `saga/mongo_step_operation_real_mongo_integration_test.go`（integration） | 跨 Resume 累积的尝试不挡新一生、整个操作只有一份状态文档（RR-20261006-15 的承诺） | SAGA-14 |
+| `TestOperationStateKeepsTheRefusalsOfTheTwoNewestLives`、`TestOperationStateRemembersTheLatestSupersededAttempts` | `saga/step_operation_state_promises_test.go` | 状态文档的两段有界历史：拒绝两生、被接替 16 条 | SAGA-14 |
+| `TestDataEngineOperationStateSatisfiesProjectorFencePredicate` | `saga/dataengine_step_inbox_test.go` | 投影的 fence 谓词逐字段匹配状态文档 | SAGA-14 |
+| `TestRealMongoStepProcessesFenceAttemptsInFlightAcrossProcesses`、`TestRealMongoStepProcessesConcurrentAttemptsTakeEffectOnce` | `saga/mongo_step_multiprocess_real_mongo_integration_test.go`（integration） | 两个步骤进程：被杀后接替、停住的提交被 fence、并发至多一次 | SAGA-14 |
+| `BenchmarkRealMongoNativeReserveThroughput` | `saga/step_operation_benchmark_real_mongo_integration_test.go`（integration，只在 `-bench` 下运行） | 原生 Reserve 吞吐基准 | SAGA-14 |
 | `TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver` | `redis/driver/script_no_retry_promises_test.go` | eval / evalsha 回复丢失只执行一次 | DRV-1 |
 | `TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`（原名 `TestOnlyScriptCommandsOptOutOfTheDriverRetry`） | 同上 | `noReplay` 克隆保留标记；普通命令可重试 | DRV-1 |
 | `TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice` | `versionstore/lost_reply_integration_test.go` | 真实 Redis：Update 至多写一次（integration） | DRV-1 |
@@ -3800,20 +4148,24 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 | `TestAttributeRollbackIsTheDaoRollback` / `TestNonPersistentAttributeLayersStayOutOfTheWAL` / `TestTimerRollbackIsTheDaoRollback` / `TestTimerBookkeepingStaysOutOfTheCommitRecord` | `demo/game/entities/{player,world}/*_component_test.go.tmpl` | 生成 game-demo 的组合回滚、WAL 不含非持久字段 | DAO-1 |
 | `TestCombatRollbackIsTheDaoRollback` | `skill/combatcomponent/dao_rollback_promises_test.go` | 两策略 × 两失败路径字节一致 | DAO-1 |
 | `TestSkillPackagesGetNoComponentUndoHint` | `cmd/glsvet/main_test.go` | skill 四个包零 A1 提示 | DAO-2 |
+| `TestComponentRecordingUndoThroughHelperIsHinted` | `cmd/glsvet/main_test.go` | 经一层同包 helper 登记 undo 被提示；调 DAO setter 与两层链不提示（RR-20261006-13） | DAO-4 |
+| `TestComponentFieldWritesOutsideTheDaoAreHinted`、`TestSkillPackagesGetNoComponentFieldHint`、`TestNestDirectiveMarksAHandlerWithoutTheHandlerPrefix` | `cmd/glsvet/componentfields_promises_test.go` | 组件字段写提示与豁免；skill 四个包零字段写提示；`roost:nest` 文档标注生效 | DAO-4 |
 | `TestBuffAttributeModifierReachesDamage` / `TestAttributeProjectionRollsBackWithTheDao` / `TestAttributeProjectionReprojectsOnLoad` | `skill/combatcomponent/attribute_projection_promises_test.go` | buff 进伤害、投影随 DAO 回滚、加载重投影不标脏 | DAO-3 |
 | `TestB2CachedReadPastMaxStalenessReconfirmsAgainstL2` 等 `TestB2*` 6 条 | `remoteentity/snapshot_l2_watermark_promises_test.go` | 陈旧上限、未确认不交出、补写丢失的 L2 写 / 删除、O5、并发收敛 | REM-1 |
 | `TestRealB2WatermarkMatrixStandalone` / `…Cluster` | `remoteentity/snapshot_l2_watermark_matrix_integration_test.go` | 真实 Redis 单机 / Cluster 各 20 格水位矩阵 | REM-1 |
 | `TestRealJetStreamReplayAfterL2ExpiryDoesNotResurrect` | `remoteentity/snapshot_replay_jetstream_integration_test.go` | O5：DeliverAll 重放不复活 | REM-1 |
 | `TestCachedMaxStalenessConfiguration` | `kit/remoteentity/cached_max_staleness_test.go` | 新键严格读取 | REM-1 |
+| `TestRemoteSnapshotCacheWritesStayInTheListedFunctions` | `entity/remote_snapshot_write_guard_test.go` | 快照缓存直接写 L1 / L2 只在封闭表里的函数、分片锁 helper 只在持锁处调用（本版结构守卫） | REM-1 |
 | `TestRemoteObservationCoversFollowsAdmissionOrder`、`TestRemoteMirrorReaderDTOMutationDoesNotPolluteCache`、`TestRemoteMirrorReaderNeedsNoRegistrationBesideTheOwner`、`TestRemoteMirrorReaderRejectsForeignIdentityAndSchema`、`TestRemoteSnapshotReadExitsShareOnePostCondition` | `entity/remote_mirror_promises_test.go` | token 排序、DTO 副本、无注册冲突、读侧身份、读出口后置条件 | REM-2 |
 | `TestReadRemoteSnapshotMonotonicMissLoadsAuthorityOnce` / `…BelowMinimumLoadsAuthorityOnce` | `remoteentity/snapshot_read_exit_promises_test.go` | 一次 Monotonic 只回源一次 | REM-2 |
 | `TestSnapshotClientHasNoWriteCapability`、`…LinearizableNeedsADeclaredLoader`、`…StartFailureLeavesNoSubscription`、`…StopContract`、`…StopCancelsLoads`、`…ReadsWhatTheOwnerPublishesInTheSameProcess` | `remoteentity/snapshot_client_promises_test.go` | 只读、线性化门、启动回收、三步停机 | REM-2 |
 | `TestCachedRemoteAccessWithAllowStaleStillAcceptsAnOlderSnapshot` | `nest/remote_cached_allow_stale_promises_test.go` | allow_stale 的 Cached 访问 | REM-3 |
 | `TestSnapshotBootstrapBuffersDeltaDuringFirstLoad`、`TestSnapshotBootstrapReplayMatrix`、`TestSnapshotBootstrapOverflowDropsTheBufferAndReloads`、`TestInterestRenewReleaseConvergesInEveryDeliveryOrder`、`TestSnapshotClientWithoutConfirmedSubscriptionsReadsOnDemand` | `remoteentity/mirror_step4_promises_test.go` | 首载缓冲、溢出再回源、renew / release 乱序收敛、退化 | REM-4 |
 | `TestJetStreamSubscribeLiveUsesASeparateDeliverNewDurable` | `sync/syncbus/driver/jetstream_live_promises_test.go` | DeliverNew durable 与 DeliverAll 分开 | REM-4 |
-| `TestRealJetStreamLiveSubscriptionConfirmsAndResumes`、`TestRealJetStreamLiveSnapshotPushReachesTheReader` | `remoteentity/mirror_step4_jetstream_integration_test.go` | 真实 JetStream 确认订阅与推送 | REM-4 |
+| `TestRealJetStreamLiveSubscriptionConfirmsAndResumes`、`TestRealJetStreamLiveSnapshotPushReachesTheReader`、`TestRealJetStreamLiveDurableNameShape` | `remoteentity/mirror_step4_jetstream_integration_test.go` | 真实 JetStream 确认订阅与推送；服务端 durable 名的实际形状（本版） | REM-4 |
 | `TestInterestCapacityIsPerConsumer`、`TestInterestQuotaRefusalIsVisibleAndReadsGoOnDemand` | `remoteentity/mirror_step4_promises_test.go` | 按 consumer 配额、拒绝可见 | REM-5 |
 | `TestInterestPerConsumerConfiguration` | `kit/remoteentity/interest_quota_config_test.go` | 新键严格读取与范围 | REM-5 |
+| `TestRealJetStreamInterestHandlerErrorIsAcknowledged` | `remoteentity/interest_handler_error_jetstream_integration_test.go`（integration） | 兴趣 handler 出错时 JetStream 结算为 Ack、不重投（本版） | REM-5 |
 | `TestRemoteMirrorModRegistersOnlyReadCapability`、`…RefusesASecondClientBesideTheOwner`、`…Configuration`、`…StopContract`、`…StopCancelsInFlightReads`、`…HealthReportsPushMode` | `kit/remoteentity/remote_mirror_mod_promises_test.go` | 只读装配、冲突、配置、停机、健康 | REM-6 |
 | `TestRemoteMirrorEntityMarkerIsAMigrationError`、`TestMirrorDTOGeneratesReadOnlyView`、`TestMirrorDTOOnlyPackageIsDiscoveredAndRetired`、`TestMirrorMarkerValidation` | `codegen/internal/entity/mirror_promises_test.go` | 迁移诊断、生成物无写能力 | REM-6 |
 | `TestGeneratedRemoteMirrorGuildSummary/{jetstream,nats}`、`TestGeneratedRemoteMirrorReaderProcess` | `codegen/internal/entity/testdata/remoteflow/mirror_test.go` | 两进程样例（`scripts/test-remote-generated.sh`） | REM-6 |
@@ -3828,23 +4180,25 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 | `TestMirrorLocalClusterSlotMigrationSnapshotReadWriteAndTombstone` | `remoteentity/cluster_slot_migration_integration_test.go` | Cluster ASK / MOVED 下 L2 与墓碑 | REM-12 |
 | `TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys` | `codegen/internal/roost/remote_entity_config_keys_promises_test.go` | 生成配置带五个键 | REM-13 |
 | `TestGeneratedConfigsPassStrictAndProductionValidation` | `codegen/internal/roost/generated_config_validation_promises_test.go` | 生成配置取值等于缺省并通过严格校验 | REM-13 |
+| `TestInterestReleaseOnAFullRegistryStillFencesTheLateRenewal` | `remoteentity/interest_release_full_promises_test.go` | 表满时 release 记溢出水位，迟到的旧续租不复活 | REM-14 |
+| `TestInterestOverflowFenceExpiresOneTTLAfterTheLastRelease`、`TestInterestOverflowFencesAreOnePerConsumerAndReclaimedOnExpiry` | `remoteentity/interest_overflow_expiry_promises_test.go` | 溢出水位到期时刻、每 consumer 一个、过期回收 | REM-14 |
 
 ## 按包的改动索引
 
 | 包（目录） | 条目 |
 | --- | --- |
-| `saga/`（`command_consumer.go`） | SAGA-1、SAGA-2、SAGA-9、SAGA-10 |
-| `saga/`（`step_operation_inbox.go`、`dataengine_step_inbox.go`） | SAGA-2、SAGA-6、SAGA-9 |
-| `saga/`（`engine.go`、`step_transition.go`） | SAGA-2、SAGA-6、SAGA-7、SAGA-8、SAGA-10 |
+| `saga/`（`command_consumer.go`） | SAGA-1、SAGA-2、SAGA-9、SAGA-10、SAGA-14 |
+| `saga/`（`step_operation_inbox.go`、`dataengine_step_inbox.go`） | SAGA-2、SAGA-6、SAGA-9、SAGA-14 |
+| `saga/`（`engine.go`、`step_transition.go`） | SAGA-2、SAGA-6、SAGA-7、SAGA-8、SAGA-10、SAGA-15 |
 | `saga/`（`mongo_store.go`、`store.go`） | SAGA-2、SAGA-6、SAGA-7 |
 | `saga/`（`record.go`） | SAGA-3、SAGA-4 |
 | `saga/`（`nest_completion_consumer.go`、`jetstream.go`） | SAGA-9、SAGA-10 |
-| `saga/`（仅测试） | SAGA-11、SAGA-13 |
+| `saga/`（仅测试） | SAGA-11、SAGA-13、SAGA-14（两进程用例、原生 Reserve 基准）、SAGA-15（类型守卫） |
 | `kit/saga/` | SAGA-3、SAGA-4、SAGA-5、SAGA-12 |
 | `kit/dataengine/`（`EffectStreamRetention`） | SAGA-12 |
-| `dataengine/`（`lease_fence.go`，未改，契约依赖） | SAGA-2 |
+| `dataengine/`（`lease_fence.go`，未改，契约依赖；`engine/lease_fence_integration_test.go` 本版改为状态文档） | SAGA-2、SAGA-14 |
 | `codegen/internal/roost/`（`add.go`、`catalog.go`、`demo.go`）与 `demo/` 模板 | SAGA-2、SAGA-3、SAGA-9 |
-| 文档：`SAGA.md`、`docs/USER_GUIDE.md`、`docs/TROUBLESHOOTING.md`（T-225 / T-226 / T-281） | SAGA-1、SAGA-2、SAGA-6、SAGA-9、SAGA-10、SAGA-12 |
+| 文档：`SAGA.md`（含「操作状态文档」）、`docs/USER_GUIDE.md`、`docs/TROUBLESHOOTING.md`（T-225 / T-226 / T-281） | SAGA-1、SAGA-2、SAGA-6、SAGA-9、SAGA-10、SAGA-12、SAGA-14 |
 | `redis/driver` | DRV-1、DRV-3、DRV-4、DRV-5 |
 | `redis`（`fredis` 接口） | DRV-4 |
 | `mongo`（`fmongo`） | DRV-3 |
@@ -3859,12 +4213,12 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 | `cache` | DRV-3 |
 | `codegen/internal/dao`、`codegen/internal/roost` | DAO-1 |
 | `demo`（game-demo 模板） | DAO-1 |
-| `cmd/glsvet` | DAO-1、DAO-2 |
+| `cmd/glsvet` | DAO-1、DAO-2、DAO-4 |
 | `skill/combatcomponent` | DAO-1、DAO-3 |
 | `skill/examples/statusbridge` | DAO-3 |
-| `docs/skill`、`docs/agent-skills/roost-coding` | DAO-1、DAO-2、DAO-3、DRV-5 |
-| `entity/` | REM-1、REM-2、REM-4 |
-| `remoteentity/` | REM-1、REM-2、REM-4、REM-5、REM-6（只读 Mongo loader）、REM-7、REM-8（基准）、REM-9、REM-10、REM-11、REM-12 |
+| `docs/skill`、`docs/agent-skills/roost-coding` | DAO-1、DAO-2、DAO-3、DAO-4、DRV-5 |
+| `entity/` | REM-1（含写入点守卫）、REM-2、REM-4 |
+| `remoteentity/` | REM-1、REM-2、REM-4、REM-5、REM-6（只读 Mongo loader）、REM-7、REM-8（基准）、REM-9、REM-10、REM-11、REM-12、REM-14 |
 | `sync/syncbus/`（`sync.go`、`driver/`、`mirror/`） | REM-4 |
 | `kit/remoteentity/` | REM-1、REM-5、REM-6、REM-10 |
 | `kit/mods/` | REM-6、REM-10 |

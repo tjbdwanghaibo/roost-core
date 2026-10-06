@@ -32,7 +32,9 @@ U-0280（`054fdd66`）→ 复核两处（`23b97942`、`877bb66c`）→ B1（`3fa
 ### 目标
 
 `saga/engine.go` 新增唯一的转移构造 `stepTransition(before, after Record, cause transitionCause, receipt *Completion, outbox *OutboxRecord) ApplyRequest`，
-所有 `store.Apply` 的请求都由它产生，它在一处决定：
+所有 `store.Apply` 的请求都由它产生，它在一处决定（更正注，2026-10-06：这是方案稿的签名。实施 `a95cf4dc` 放在 `saga/step_transition.go`，签名为
+`stepTransition(before, after Record, t transition) ApplyRequest`，原因、`fenced`、回执与 outbox 收进 `transition` 结构体；v1.23.0 起 RR-20261006-14 把它改为
+`func (e *Engine) stepTransition(ctx context.Context, before, after Record, t transition) (Record, ApplyOutcome, error)`（`saga/step_transition.go:63`），自己调 `Store.Apply`）：
 
 1. **开着的操作**（`openOperation(record)`）：`Waiting` 时是 `OperationKey`；`Pending` / `Compensating` 且 `Attempt > 0`（已派发、在重试退避）时是当前方向 + 步骤的操作；
    其余（还没派发、终态、`Failed` / `ManualRequired`——进入它们时已经关闭过）为空。
@@ -134,7 +136,7 @@ handler 事务失败（handler 错误、取消、fence）后交还租约（`leas
 
 ②之后普通结果流上的 completion 都来自带操作实例回放的收件箱（Mongo 步骤、原生步骤的回放），“退避中到达的成功”不再需要靠普通流 nak 等协调器回到等待：
 下一次尝试会回放它，过期投递也会重发它。所以两个消费者共用 `isTerminalCompletionError`，并把 `ErrIdentityConflict` 加入（同一 CommandID 不同内容，重投不会变）。
-普通流从此对 `ErrNotWaiting` / `ErrNotFound` / `ErrIdentityConflict` / `ErrDefinitionMissing` / `ErrInvalidRecord` Term，不再 nak 到 `MaxDeliver`。
+普通流从此对 `ErrNotWaiting` / `ErrNotFound` / `ErrIdentityConflict` / `ErrDefinitionMissing` / `ErrInvalidRecord` Term，不再 nak 到 `MaxDeliver`（随后的更正把 `ErrDefinitionMissing` 移出，实际为其余 4 种，见下）。
 （发版前审查更正：`ErrDefinitionMissing` 移出终态，两条流一起改为 nak 退避——滚动发布时结果可能先到还没升级的协调器，定义会随新进程上线；
 定义一直不来时由协调器自己的定义缺失 fence（NC-250）收尾。共用 `isTerminalCompletionError` 不变。回归
 `saga/completion_definition_rollout_promises_test.go`，记录见 [发版前审查观察收尾](../bugfix/PRERELEASE-AUDIT-FOLLOWUP-2026-10-06.md)。）

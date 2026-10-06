@@ -143,7 +143,7 @@ ok  remoteentity  TestB2*（6 条，含并发收敛；-race -count=5）
 - `TestRemoteSnapshotPublishDoesNotPinShardOnUnresponsiveL2`、`TestStaleBackfillControls/L2 outage`：L2 断网时写入仍不失败、L1 仍持有（`l1Snapshot` / `WaitForVersion` 观察），但 Cached 读不再交出未确认的条目。
 - `TestPublishConflictAfterPreflight`：预查已删除，改为直接验证 L2 CAS 的同版本异值裁决返回 `ErrRemoteVersionConflict` 且 L1 不写。
 - `TestRemoteSnapshotL2DeleteAtVersionKeepsNewerSnapshot`、`TestRealSnapshotL2KeyPrefixOnRedis(Cluster)`：被更新快照拒绝的带版本删除返回 `cache.ErrStaleWrite`（之前 nil）。
-- `TestRemoteSnapshotDeleteAtVersionPromiseClearedByNewerSnapshot`：墓碑侧表不存在了，改为检查 L1 条目已从删除标记换成新快照。
+- `TestRemoteSnapshotDeleteAtVersionPromiseFencesOlderSnapshot`（`entity/snapshot_delete_version_promises_test.go`；更正注，2026-10-06：原写作 `…ClearedByNewerSnapshot`，源码没有这个名字）：墓碑侧表不存在了，改为检查 L1 条目已从删除标记换成新快照。
 
 ### 性能（真实 Redis 单机，同机交替 3 轮 × count 2，`-benchtime 3000x`，Apple M5，Go 1.27.0）
 

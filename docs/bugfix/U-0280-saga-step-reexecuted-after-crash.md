@@ -36,6 +36,11 @@
    否则 `CompletionRecorded`：退避期间（pending）没有 tombstone → `ErrNotWaiting`，`nest_completion_consumer.go:137` 作为 Permanent 丢弃；
    操作已关闭（进入下一步、补偿或 Failed，`closedOperation:805`）→ `mongo_store.go:162` 查到 tombstone 就当作已记录 → 计 `duplicates`，静默吞掉。
 
+（更正注，2026-10-06：上面的文件与行号是根因分析时的基线 `47a9132c`。之后 `9669d181` 把 `reserveInTransaction`、`commandIncarnation` 移到
+`saga/step_operation_inbox.go`，`readReceipt` 仍在 `saga/dataengine_step_inbox.go`；v1.23.0 的收件箱改为每个操作一份状态文档（`a013f9ff`，
+[方案](../feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md)），claim 不再存在。main `37338490` 时的位置：`reserveInTransaction` `saga/step_operation_inbox.go:178`、
+`commandIncarnation` `:492`、`readReceipt` `saga/dataengine_step_inbox.go:156`。）
+
 kill -9 时序：发送方进程 A 把尝试 k 的 WAL 记录（扣款 + 回执 + completion effect）提交后被杀；新进程 B 要等单实例锁（~15s）；
 协调器 5s 后判 k 超时，发出 k+1、k+2……（投到别的 sid 被 `Admit` 拒绝，过期）；B 启动重放 WAL，k 的 claim 租约仍有效，投影生效。之后：
 

@@ -91,7 +91,8 @@ Mongo 步骤（`MongoCommandInbox`）的跨尝试幂等不在本方案内（DECI
 - `saga/engine.go`：`Complete` 判定顺序、`Compensate` 递增代际、`commandIDIncarnation`、stale 计数与告警去重。
 - `saga/store.go`：`LateSuccessAlarmStore` 可选接口。
 - `saga/mongo_store.go`：`MarkLateSuccessAlarm`、`operationDoc.LateAlarms`。
-- `saga/dataengine_step_inbox.go`：`commandIncarnation` 改调 `commandIDIncarnation`（理由见第 2 节，行为不变）。
+- `saga/dataengine_step_inbox.go`：`commandIncarnation` 改调 `commandIDIncarnation`（理由见第 2 节，行为不变）。（更正注，2026-10-06：`9669d181` 之后
+  `commandIncarnation` 在 `saga/step_operation_inbox.go`，main `37338490` 时 `:492`；两种收件箱共用。）
 - `command_consumer.go`、kit/saga 不改。
 - 文档：SAGA.md 契约第 3 / 4 条与“失败语义”、本方案、U-0280 记录追加“B1 实施”、TROUBLESHOOTING T-226、CHANGELOG、DECISIONS-PENDING。
 
