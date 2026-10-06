@@ -229,5 +229,5 @@
 
 | # | 决定 | 实施状态 |
 | --- | --- | --- |
-| 不留 WANTED | “这次不能有wanted，需要都解决后再给review, review是查问题”：交给 review 前所有疑点本轮闭环（RR 修复 / 结构性守卫 / 不可达证明），roost-bugfix §7 已改（`87d8d91e`） | 进行中（W-2026-10-06-01、glsvet A1 间接调用、stepTransition 盲区、maxOperationAttempts、L1 单一写入口、interest 表满撤销水位） |
+| 不留 WANTED | “这次不能有wanted，需要都解决后再给review, review是查问题”：交给 review 前所有疑点本轮闭环（RR 修复 / 结构性守卫 / 不可达证明），roost-bugfix §7 已改（`87d8d91e`） | 进行中（W-2026-10-06-01、glsvet A1 间接调用、stepTransition 盲区、maxOperationAttempts、L1 单一写入口、interest 表满撤销水位）。L1 单一写入口已闭环（`155b9f91`：写入点 AST 守卫 + 注释 / 文档按源码更正，逐点核对无绕过）；interest 表满撤销水位已修复（`155b9f91`，RR-20261006-11，未发版）；同批 REM 文档口径更正见 [记录](../bugfix/RR-20261006-11.md) |
 | Windows | “windows的问题可以暂存，加一个说明 window问题不保证正确”：README / DEPLOYMENT 写明 Windows 不保证正确；W-2026-10-04-05、E25、E27 的 Windows 部分暂存 | 已实施（本提交） |
