@@ -1,6 +1,6 @@
 # D-L3：业务时钟与系统时钟（2026-10-06）
 
-维护者第六轮决定 D-L3（修订版，[DECISIONS-PENDING 第六轮](../review/DECISIONS-PENDING-2026-10-05.md)，选项来由 [revleft §5](../review/REVIEW-2026-10-06-revleft.md)）：时间分成两个钟，边界写死。本文是方案与实施记录；第八轮决定的留项（match / chat / account 换钟、doctor 偏移一致检查）见 §8。基线 `e320578c`；源码盘点以当前源码为准（codebase-memory 共享 generation 停在 09-30，本轮用 `rg` 逐行核对）。
+维护者第六轮决定 D-L3（修订版，[DECISIONS-PENDING 第六轮](../review/DECISIONS-PENDING-2026-10-05.md)，选项来由 [revleft §5](../review/REVIEW-2026-10-06-revleft.md)）：时间分成两个钟，边界写死。本文是方案与实施记录；第八轮决定的留项（match / chat / account 换钟、doctor 偏移一致检查）见 §8；业务时间只许前进（偏移不得回调）与随之删掉的拆分见 §10。基线 `e320578c`；源码盘点以当前源码为准（codebase-memory 共享 generation 停在 09-30，本轮用 `rg` 逐行核对）。
 
 ## 1. 规则
 
@@ -9,10 +9,13 @@
 | **业务时钟** | 真实时间 + `time.logic_offset` | 玩法与业务时间：活动窗口与活动协调器（global 一侧也算）、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、skill / 战斗里的游戏时间、业务层计时规则 | `app.BusinessClock(registry)`（`clock.Business` 接口）；服务的 `Config.Now` 由 Mod 注入它；框架库的缺省是进程级业务时钟 `clock.Now()` |
 | **系统时钟** | 真实时间 | server 帧率、租约与锁（单实例锁、saga claim、versioned lock…）、超时与 ctx 截止、重试与退避、存储 TTL（Redis、Mongo TTL 索引）、消息 Ack / AckWait、日志、指标、WAL 与审计时间戳 | 继续用 `time` 包 |
 
+**更正（§10，业务时间只许前进）**：业务服务内部、只与业务时间比较的退避和租约（activity 派发退避、mail 领取租约）读业务时钟；“租约与锁、重试与退避属系统钟”指依赖存储服务端 TTL、与读系统钟的进程比较、或属于框架基础设施（单实例锁、saga、Nest / DataEngine / Sync）的那些。
+
 约束：
 
 - 偏移只有一个配置来源 `time.logic_offset`，所有进程读同一份（部署时写在公共配置里）。
-- 偏移只在启动时生效，运行期没有修改入口（§5 比较了“只许前拨”的做法，没有采用）。
+- 偏移只在启动时生效，运行期没有修改入口（§5 比较了“运行期只许前拨”的做法，没有采用）。
+- **业务时间只许前进**（§10）：跨重启也不能让业务时间回到这套部署已经到过的时刻；App 用协调存储里的高水位在启动时拒绝。测试环境要回到过去只能清库重建。
 - `env` / `app.env` / `environment` 为 `prod` / `production` 时，启动校验要求偏移为 0，否则拒绝启动。
 - 业务过期不靠存储 TTL 判断。存储 TTL 只兜底回收空间，而且比业务过期更长。
 - `glsvet` 对业务包里直接调用 `time.Now()` / `time.Since()` / `time.Until()`（以及把 `time.Now` 当函数值传）打印 `hint:`，只提示、不计入违例；豁免写 `//glsvet:system-clock <理由>`。
@@ -50,9 +53,9 @@ func BusinessClock(r *Registry) clock.Business   // Registry 里的业务时钟�
 | `kit/ops/ops_mod.go:267` `server_time_ms` | `clock.UnixMilli()` | 不变 | ops 展示的就是服务器逻辑时间 |
 | `timer/scheduler.go:128` 未注入时的缺省 | `time.Now()` | `clock.Now()` | 游戏定时器；World 定时器由调用方钉住时间，缺省只影响没注入的调用方 |
 | `ai/controller.go:236`、`actionflow/mission_runner.go:435`、`actionflow/action_runner.go:697` 未注入时的缺省 | `time.Now()` | `clock.Now()` | AI / 行为流的游戏时间 |
-| `kit/service/global/activity` `Config.Now`（`activity_mod.go` 装配） | 缺省 `time.Now` | Mod 注入业务时钟；**派发重试排期与进度凭证有效期改读新增的 `Config.SystemNow`**（§9 更正） | 维护者点名：活动窗口与协调器两端同钟，截止、宽限、开关窗是业务时间。派发的 `NextAttemptAtUnix`（创建、退避、重开）与到期比较、owed 索引查询，以及 `ProgressReservation.ExpiresAtUnix` 是重试 / TTL，属系统时钟——最初把整个协调器划成业务时间，偏移往回拨时欠下的派发多挂一个偏移 |
-| `service/mail` `Config.Now`、`RedisConfig.Now`（`kit/service/mail/mail_mod.go:88` 装配） | 缺省 `time.Now` | Mod 注入业务时钟；**领取租约改用新增的 `Config.SystemNow`** | 邮件创建 / 过期 / 投递 / 已读是业务时间；`ClaimDeadlineUnix` 是 30s 的领取租约，属系统时钟 |
-| `service/mail/redis_store.go:165` 信封键 TTL | 等于业务剩余时长 | 业务剩余时长 + `StorageGrace`（缺省 24h） | 存储 TTL 只兜底且要比业务过期长；业务过期一直由 `Envelope.Expired` 判断 |
+| `kit/service/global/activity` `Config.Now`（`activity_mod.go` 装配） | 缺省 `time.Now` | Mod 注入业务时钟；~~派发重试排期与进度凭证有效期改读新增的 `Config.SystemNow`（§9）~~ **全部业务时钟，`SystemNow` 已删（§10）** | 维护者点名：活动窗口与协调器两端同钟，截止、宽限、开关窗是业务时间；维护者明确要求 activity 走业务时间。派发退避只由协调器自己比较，没有服务端 TTL；§9 拆到系统钟只为偏移往回调，业务时间不能回退之后不再需要 |
+| `service/mail` `Config.Now`、`RedisConfig.Now`（`kit/service/mail/mail_mod.go:88` 装配） | 缺省 `time.Now` | Mod 注入业务时钟；~~领取租约改用新增的 `Config.SystemNow`~~ **领取租约也是业务时钟，`SystemNow` 已删（§10）** | 邮件创建 / 过期 / 投递 / 已读是业务时间；`ClaimDeadlineUnix` 是 30s 的领取租约，只在 mail 服务内部比较、所有实例同一偏移、没有服务端 TTL，拆到系统钟只为偏移往回调 |
+| `service/mail/redis_store.go:165` 信封键 TTL | 等于业务剩余时长 | 业务剩余时长 + `StorageGrace`（缺省 24h）；**§10 起固定 `EnvelopeStorageGrace` = 24h，`StorageGrace` 字段已删** | 存储 TTL 只兜底且要比业务过期长；业务过期一直由 `Envelope.Expired` 判断。可配置只为覆盖更大的回拨，回拨被禁止后不再需要 |
 | `kit/service/rank` `RedisConfig.Now`（`rank_mod.go` 装配） | 缺省 `time.Now` | Mod 注入业务时钟 | 同分按“谁先达到”排序是排行规则 |
 | `service/session` `Config.Now`（`kit/service/session/session_mod.go` 装配） | 缺省 `time.Now` | Mod 注入业务时钟 | 副本 run 的截止时间发给客户端，是玩法计时；run / claim 没有存储 TTL |
 | `demo/internal/service/game/activity.go.tmpl` `tickWorld` / `openCurrentWindow` / 结算 / `now` 字段 | `time.Now()` | `runner.clock()`，缺省 `app.BusinessClock(registry).Now` | World 定时器的时间来源（A1 之后定时器由调用方钉时间，见 `timer/scheduler.go` `SetClock` 注释与 `timer_component.go.tmpl` `scheduler(now)`），窗口 id、关窗截止、结算时间 |
@@ -94,7 +97,7 @@ skill / 战斗：`skill/` 运行时与 `battle.go.tmpl` 都按帧推进，不读
 | account 创建时间、认领 TTL | 不改（其他 agent 在改 account） | **第八轮已定并实施**：创建 / 登录等业务时间走业务钟，token 与认领 TTL 留系统钟（§8） |
 | platform 订单 | 系统时钟 | 支付与对账按真实时间。若有“限时礼包”这类业务过期，应由业务侧判断，不放在 platform |
 | security 会话令牌有效期 | 系统时钟 | 安全有效期按真实时间 |
-| activity 进度账本 `ExpiresAtUnix` | ~~业务钟打戳~~ **系统钟打戳**（§9 更正），去重靠 Redis 相对 TTL | 字段只做记录，没人比较；去重窗口是“客户端重试视野”（系统概念），相对 TTL 不受偏移影响，所以描述它的时间戳也是系统时间 |
+| activity 进度账本 `ExpiresAtUnix` | ~~业务钟打戳~~ ~~系统钟打戳（§9 更正）~~ **业务钟打戳（§10）**，去重靠 Redis 相对 TTL | 字段只做记录，没人比较；与 `CreatedAtUnix` 同钟，`ExpiresAtUnix − CreatedAtUnix` 就是 `ReservationTTL` |
 | saga（`DeadlineAt`、迟到告警） | 系统时钟，不改 | 第八轮定：保留系统时钟 |
 
 ## 4. 迁移与兼容
@@ -103,15 +106,17 @@ skill / 战斗：`skill/` 运行时与 `battle.go.tmpl` 都按帧推进，不读
 
 | 钟 | 字段 |
 | --- | --- |
-| 业务 | activity 协调器的 Activity / Window 时间、Dispatch 的 `CreatedAtUnix` / `LastAttemptAtUnix` / `AckedAtUnix` / `ExhaustedAtUnix` / `AdminActionAtUnix`、ProgressReservation 的 `CreatedAtUnix` / `AppliedAtUnix`；World 的 `Timers[*].EndUnixMilli`、`timer_next_due`、活动结算时间；mail 信封 `CreatedAtUnix` / `ExpiresAtUnix`、mailbox 条目与 settled claim 的投递 / 更新 / 结算时间；session run 的 `StartedAtUnix` / `DeadlineUnix` / `FinishedAtUnix`；rank 缺省 tiebreak；game-demo 公会建立 / 加入时间、邮件领取与副本领奖的 `nowUnix`；**第八轮起**：match `Ticket.CreatedAtUnix` / `ExpiresAtUnix` / `ResolvedAtUnix` 与 `Match.CreatedAtUnix`，chat `Message.SentAtUnix`（新字段），account `Account.CreatedAtUnix` / `LastLoginAtUnix`、`RoleCreation.CreatedAtUnix`、`Role.CreatedAtUnix` / `LastLoginAtUnix` / `LastLogoutAtUnix` |
-| 系统 | activity Dispatch 的 `NextAttemptAtUnix`（§9 更正）与 ProgressReservation 的 `ExpiresAtUnix`（§9 更正）；mail `ClaimDeadlineUnix`；chat `Message.StoredAtUnix`；account `Session.ExpiresAtUnix`（与 token 内的签发时间）、`GameServer.UpdatedAtUnix`、`Account.AdminActionAtUnix`、名字目录预约的到期时间；WAL、回执、outbox、saga、订单、目录、路由、锁与租约的所有时间戳 |
+| 业务 | activity 协调器的 Activity / Window 时间、Dispatch 的 `CreatedAtUnix` / `NextAttemptAtUnix`（§10）/ `LastAttemptAtUnix` / `AckedAtUnix` / `ExhaustedAtUnix` / `AdminActionAtUnix`、ProgressReservation 的 `CreatedAtUnix` / `AppliedAtUnix` / `ExpiresAtUnix`（§10）；mail `ClaimDeadlineUnix`（§10）；World 的 `Timers[*].EndUnixMilli`、`timer_next_due`、活动结算时间；mail 信封 `CreatedAtUnix` / `ExpiresAtUnix`、mailbox 条目与 settled claim 的投递 / 更新 / 结算时间；session run 的 `StartedAtUnix` / `DeadlineUnix` / `FinishedAtUnix`；rank 缺省 tiebreak；game-demo 公会建立 / 加入时间、邮件领取与副本领奖的 `nowUnix`；**第八轮起**：match `Ticket.CreatedAtUnix` / `ExpiresAtUnix` / `ResolvedAtUnix` 与 `Match.CreatedAtUnix`，chat `Message.SentAtUnix`（新字段），account `Account.CreatedAtUnix` / `LastLoginAtUnix`、`RoleCreation.CreatedAtUnix`、`Role.CreatedAtUnix` / `LastLoginAtUnix` / `LastLogoutAtUnix` |
+| 系统 | chat `Message.StoredAtUnix`（空间回收按真实年龄）；account `Session.ExpiresAtUnix`（与 token 内的签发时间）、`GameServer.UpdatedAtUnix`、`Account.AdminActionAtUnix`、名字目录预约的到期时间；WAL、回执、outbox、saga、订单、目录、路由、锁与租约的所有时间戳 |
 
-- 偏移跨重启变化（只可能发生在非生产）：前拨后，业务时间戳整体“过去了”，到期的定时器、窗口、邮件在下一次检查时成批处理；后拨后，已打戳的业务截止会晚到一个偏移量。系统时钟的租约不受影响（这正是把 mail 领取租约拆成系统钟的原因）。
+- 偏移跨重启变化（只可能发生在非生产）：前拨后，业务时间戳整体“过去了”，到期的定时器、窗口、邮件在下一次检查时成批处理，业务钟上的退避与租约提前结束（只是早一点重试）。~~后拨后，已打戳的业务截止会晚到一个偏移量。系统时钟的租约不受影响（这正是把 mail 领取租约拆成系统钟的原因）。~~ **更正（§10）**：让业务时间回退的后拨被 App 在启动时拒绝；偏移只能在“距上次运行的真实时间 + 1 分钟容差”以内改小。
 - **偏移为 0 时行为不变**：业务时钟 `Now()` = `time.Now()`（`offset == 0` 时直接返回，不做 `Add`）；所有服务在没注入时仍退回 `time.Now`。唯一的行为变化是 mail 信封的 Redis TTL 多了 `StorageGrace`（缺省 24h），只影响空间回收，业务过期判断不变；`TestTheKeyTTLComesFromTheInjectedClock` 改为断言“剩余时长 + grace”。
 - **热路径**：nest / dataengine / sync / entity 一行不改，C01 不重跑。`fctx` 请求上下文仍是原来的 `clock.Now()`（一次原子读 + Add）。新增的接口调用只在 kit 服务的单次请求里出现，那里每次都有 Redis 往返（毫秒级），一次接口分派（纳秒级）可以忽略。
 - 已生成工程不迁移；`roost project sync` 可取新模板。模板与 codegen 同步改。
 
 ## 5. 运行期调整：只许启动时（比较）
+
+（这里比较的是**运行期**能不能改偏移。跨重启的方向限制见 §10：业务时间只许前进，偏移后拨到让业务时间回退时拒绝启动。）
 
 | 做法 | 代价 |
 | --- | --- |
@@ -224,3 +229,29 @@ $ GOWORK=off go test -count=1 -run TestDoctorNamesTheServicesWhoseLogicOffsetDis
 测试环境两次运行之间把偏移往回拨 D，欠下的派发要多挂 D。改法仿照 mail 的领取租约：`Config.SystemNow`（nil 时沿用 `Now`，Mod 注入 `time.Now`），
 派发排期（创建、退避、重开）、全部到期比较、owed 索引查询与凭证 `ExpiresAtUnix` 读它；活动窗口、宽限、开关窗与记录上的事件时间戳仍是业务钟。上面 §3.1、§3.3、§4 的对应行已改。
 分支 `auditfu`，先红后绿与验证见[发版前审查观察收尾](../bugfix/PRERELEASE-AUDIT-FOLLOWUP-2026-10-06.md) §1；同一记录 §2 写明 mail 信封存储宽限（24h）只覆盖往回拨不超过 24h 的偏移。
+
+**再更正（§10）**：本节的拆分只为“偏移往回调”。业务时间只许前进之后，activity 派发退避与进度凭证回到业务钟，`Config.SystemNow` 删除；“往回拨 D 多挂 D”的场景由 App 启动拒绝取代。
+
+## 10. 业务时间只许前进（2026-10-06，下一轮规划第 1 项）
+
+维护者指示（[下一轮规划 §1](../review/NEXT-ROUND-PLAN-2026-10-06.md)）：业务时间不能往回调，为回调写的特殊逻辑一并清理。方案与实施记录：[业务时间只许前进](BUSINESS-TIME-MONOTONIC-2026-10-06.md)。要点：
+
+- **约束**：同一套部署的业务时间单调不减。App 把部署级高水位存在协调存储（单实例锁的 `SingletonStore`，共享 Redis，键 `<singleton.key_prefix>:business_time`，不过期）里；单实例锁之后、第一个 Mod Init 之前，`真实时间 + 新偏移 < 高水位 − 1 分钟` 就拒绝启动（`app.ErrBusinessTimeMovedBack`，点名偏移、高水位、写入者与键），否则推进高水位；运行中每 10s 推进一次。各模块不感知。
+- **谁检查**：非生产里开了单实例锁的进程，以及配了非 0 偏移的进程（没开锁的只为高水位打开一个连接；装不了就拒绝启动，`app.ErrBusinessTimeGuardMissing`）。生产不检查：偏移强制为 0，生产行为不变。
+- **容差 1 分钟**：吸收主机之间的时钟偏差与运行中推进的间隔；放过的回退与生产里多主机本来就有的偏差同一量级。
+- **回到过去**：只能清库重建（连同这个键）。只删键保留数据等于跳过守卫，不要这样做。
+
+**时钟归属的更正**（逐项理由见方案 §4）：
+
+| 位置 | 之前 | 现在 | 理由 |
+| --- | --- | --- | --- |
+| activity 派发 `NextAttemptAtUnix`（创建 / 退避 / 重开）、到期比较、owed 查询 | 系统钟（§9） | 业务钟，`Config.SystemNow` 删除 | §9 的拆分只为偏移往回调；值只由协调器自己比较，没有服务端 TTL。维护者要求 activity 走业务时间 |
+| activity 进度凭证 `ExpiresAtUnix` | 系统钟（§9） | 业务钟 | 只是记录；去重靠 Redis 相对 TTL |
+| mail 领取租约 `ClaimDeadlineUnix` | 系统钟 | 业务钟，`Config.SystemNow` 删除 | 只在 mail 服务内部比较、所有实例同一偏移、存在没有 TTL 的 versionstore 里；前拨时提前结束，重试拿到同一个 token |
+| mail 信封存储宽限 | `RedisConfig.StorageGrace`，缺省 24h | 固定 `EnvelopeStorageGrace` = 24h，字段删除 | “存储 TTL 比业务过期长”是 §1 的独立原则（过期后领取报 `ErrExpired` 而不是 `ErrMailMissing`，并吸收主机偏差），保留；可配置只为覆盖更大的回拨 |
+| chat `StoredAtUnix` 与 `Prune` 保留期 | 系统钟 | **不变** | 空间回收按真实年龄；前拨一周时按业务钟会删掉刚存的消息 |
+| account 会话 token 签发 / 校验、`Session.ExpiresAtUnix` | 系统钟 | **不变** | 安全有效期，`security.VerifySessionToken` 按真实时间校验 |
+| account `GameServer.UpdatedAtUnix`、`AdminActionAtUnix` | 系统钟 | **不变** | 运维记录与审计 |
+| match | 业务钟（§8） | 不变 | 没有拆分 |
+
+偏移为 0 时两个钟相等，以上合并在生产里没有可观察差异；信封宽限仍是 24h。

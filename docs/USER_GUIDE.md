@@ -8,9 +8,13 @@ Mirror现有适配器新增payload身份校验（NC-33/34，main未发版）：c
 
 RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登记之后、它又登记了本次清理清单之外的 hash（另一布局发布了新键）、此次Lua明确未写；同布局的并发首次创建、并发删除、记录到期不会返回它（RR-20261004-09，未发版）。先读回当前schema/业务意图再决定重试，不自动以旧全量值覆盖新布局。网络/Eval错误仍可能已应用，不能按明确拒绝处理。Delete也要求adapter支持现有Eval；存储格式保持，历史孤儿不自动清理。[用法和限制](bugfix/RR-20261004-NC-30.md)。
 
+## 2026-10-06 业务时间只许前进（main，未发版）
+
+同一套部署的业务时间（真实时间 + `time.logic_offset`）不能往回走：App 在单实例锁之后、任何 Mod Init 之前读部署级高水位（协调存储 `<singleton.key_prefix>:business_time`），按新偏移算出的业务时间低于“高水位 − 1 分钟”就拒绝启动（`app.ErrBusinessTimeMovedBack`，点名偏移与高水位），运行中每 10s 推进高水位。只在非生产检查（生产偏移强制为 0，行为不变）；配了非 0 偏移的进程必须能打开协调存储（bootstrap 装 `App.Singleton`、写 `singleton.key_prefix`，`singleton.enabled` 可以是 false）。测试环境要回到过去只能清库重建。随之删掉了只为“偏移往回调”存在的 API：`activity.Config.SystemNow`、`mail.Config.SystemNow`、`mail.RedisConfig.StorageGrace`（宽限固定为 `mail.EnvelopeStorageGrace` = 24h，原 `DefaultEnvelopeStorageGrace` 改名）——activity 派发退避、进度凭证与 mail 领取租约回到业务时钟；手工装配设置过它们的地方删掉那一行即可。详见 [§10 业务时钟与系统时钟](#业务时钟与系统时钟)。[方案](feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md)
+
 ## 2026-10-06 业务时钟与系统时钟（D-L3，main，未发版）
 
-时间分两个钟：**业务时钟** = 真实时间 + `time.logic_offset`，活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、游戏时间都读它，从 `app.BusinessClock(registry)` 拿（kit 的 activity、mail、rank、session Mod 已注入）；**系统时钟** = 真实时间，帧率、租约与锁、超时、重试、存储 TTL、Ack、日志与 WAL 时间戳，直接用 `time` 包。偏移只在启动时读一次，所有进程写同一个值；`env: production` 时非 0 拒绝启动。mail 信封的 Redis TTL 现在是业务剩余时长 + 24h 宽限（`RedisConfig.StorageGrace`），领取租约改按系统时钟。`glsvet` 对 `game` 目录下的包直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，系统时间写 `//glsvet:system-clock <理由>` 豁免。第八轮起 match 票据、chat 展示给玩家的时间（新字段 `SentAtUnix`；保留期仍按系统时钟）、account 的创建与登录时间也走业务时钟，`roost project doctor` 检查同一套部署各服务的 `time.logic_offset` 是否一致。详见 [§10 业务时钟与系统时钟](#业务时钟与系统时钟)。[方案](feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md)
+时间分两个钟：**业务时钟** = 真实时间 + `time.logic_offset`，活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、游戏时间都读它，从 `app.BusinessClock(registry)` 拿（kit 的 activity、mail、rank、session Mod 已注入）；**系统时钟** = 真实时间，帧率、租约与锁、超时、重试、存储 TTL、Ack、日志与 WAL 时间戳，直接用 `time` 包。偏移只在启动时读一次，所有进程写同一个值；`env: production` 时非 0 拒绝启动。mail 信封的 Redis TTL 现在是业务剩余时长 + 24h 宽限（固定 `EnvelopeStorageGrace`；v1.21.0 的 `RedisConfig.StorageGrace` 已删）。`glsvet` 对 `game` 目录下的包直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，系统时间写 `//glsvet:system-clock <理由>` 豁免。第八轮起 match 票据、chat 展示给玩家的时间（新字段 `SentAtUnix`；保留期仍按系统时钟）、account 的创建与登录时间也走业务时钟，`roost project doctor` 检查同一套部署各服务的 `time.logic_offset` 是否一致。详见 [§10 业务时钟与系统时钟](#业务时钟与系统时钟)。[方案](feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md)
 
 ## 2026-10-06 配置数据规则在加载层强制、热更失败可见（B10 / C2，main，未发版）
 
@@ -489,16 +493,12 @@ kit 的 Mod 在 Init 里也严格读取，直接装配 Mod、不经 App 启动�
 | 业务时钟：真实时间 + `time.logic_offset` | `app.BusinessClock(registry).Now()`；服务的 `Config.Now` 由 Mod 注入它；请求上下文里 `fctx.Now()` | 活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、skill / 战斗游戏时间、匹配票据与等待放宽、展示给玩家的聊天时间、账号 / 角色创建与登录登出时间、业务计时规则 |
 | 系统时钟：真实时间 | `time.Now()` | server 帧率、租约与锁、超时与 ctx 截止、重试退避、存储 TTL、消息 Ack、日志、指标、WAL 与审计时间戳 |
 
-- `time.logic_offset`（时长，如 `24h`）只有这一个来源，所有进程写同一个值——game 与活动协调器、match 偏移不同，窗口 id、截止与票据时间会错开。只在启动时生效，改了要重启全部进程；没有运行期修改入口。生产环境必须为 0。`roost project doctor` 的 `time:logic_offset` 一行检查同一套部署里每个服务的配置是否一致：dev 配置（`configs/service/config.<service>.yaml`）、prod example、k8s secret example 三套各自比较（不写等于 0s），不一致时 FAIL 并列出每个服务的值；格式错（如 `1d`、不带单位的数字）也 FAIL 并点名文件。三套之间可以不同（测试环境前拨、生产为 0）；仓库外的生产配置看不到。
-- 已接入：kit 的 activity 协调器（窗口、宽限、开关窗是业务时间；派发的重试排期 `NextAttemptAtUnix`、owed 清单的到期判断与进度凭证 `ExpiresAtUnix` 是系统时间，`Config.SystemNow`）、mail（过期是业务时间；领取租约 `ClaimDeadlineUnix` 是系统时间，`Config.SystemNow`）、rank（同分 tiebreak）、session（run 截止）、match（票据的创建 / 过期 / 结束时间与超时判断）、chat（`Message.SentAtUnix` 是展示时间，业务时钟；`StoredAtUnix` 与 `Prune` 的保留期截止是系统时钟，`Config.SystemNow`）、account（账号创建与最近登录、角色创建、角色登录 / 登出时间是业务时钟；会话 token 签发与有效期、`UpsertServer` 与运维处置的记录时间是系统时钟，`Config.SystemNow`；建角时的名字预约 TTL 是目录自己的系统时钟）；game-demo 的活动窗口、World 定时器的每一拍、GM 关窗、怪物重生、匹配的等待放宽（`matchmaking.Pools`）、邮件领取 / 副本领奖 / 公会的 `nowUnix`。框架库（`timer.Scheduler`、`ai`、`actionflow`）没注入时间源时缺省读进程级业务时钟。platform、directory、saga 与 Nest / DataEngine / Sync 全部是系统时钟。
+- `time.logic_offset`（时长，如 `24h`）只有这一个来源，所有进程写同一个值——game 与活动协调器、match 偏移不同，窗口 id、截止与票据时间会错开。只在启动时生效，改了要重启全部进程；没有运行期修改入口。生产环境必须为 0。
+- **业务时间只许前进**（[方案](feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md)）：偏移可以前拨，不能让业务时间回到这套部署已经到过的时刻。App 把高水位存在协调存储（单实例锁的存储，共享 Redis，键 `<singleton.key_prefix>:business_time`，不过期）里，单实例锁之后、任何 Mod Init 之前检查：`真实时间 + 新偏移 < 高水位 − 1 分钟` 就拒绝启动，错误 `app.ErrBusinessTimeMovedBack` 写明偏移、两边的业务时间、写入者和至少要用多大的偏移；运行中每 10s 推进一次高水位。也就是说偏移最多能改小“距上次运行的真实时间 + 1 分钟”。1 分钟容差吸收主机之间的时钟偏差。检查的进程：非生产里开了单实例锁的，以及配了非 0 偏移的（没开锁的只为高水位打开一个连接；bootstrap 没装 `App.Singleton` 或没写 `singleton.key_prefix` 时拒绝启动，`app.ErrBusinessTimeGuardMissing`）；读写高水位失败也拒绝启动。生产不检查，行为不变。**测试环境要回到过去只能清库重建**（Redis、Mongo、WAL 等全部业务数据连同这个键）；只删键保留数据等于跳过守卫，已打戳的业务截止会晚到一个回退量。`roost project doctor` 的 `time:logic_offset` 一行检查同一套部署里每个服务的配置是否一致：dev 配置（`configs/service/config.<service>.yaml`）、prod example、k8s secret example 三套各自比较（不写等于 0s），不一致时 FAIL 并列出每个服务的值；格式错（如 `1d`、不带单位的数字）也 FAIL 并点名文件。三套之间可以不同（测试环境前拨、生产为 0）；仓库外的生产配置看不到。
+- 已接入：kit 的 activity 协调器（窗口、宽限、开关窗、派发的重试排期 `NextAttemptAtUnix` 与 owed 清单的到期判断、进度凭证 `ExpiresAtUnix` 全部是业务时间）、mail（过期与领取租约 `ClaimDeadlineUnix` 都是业务时间——租约只在 mail 服务内部比较，业务时间不回退，前拨只让它提前结束，重试拿到同一个 token）、rank（同分 tiebreak）、session（run 截止）、match（票据的创建 / 过期 / 结束时间与超时判断）、chat（`Message.SentAtUnix` 是展示时间，业务时钟；`StoredAtUnix` 与 `Prune` 的保留期截止是系统时钟，`Config.SystemNow`）、account（账号创建与最近登录、角色创建、角色登录 / 登出时间是业务时钟；会话 token 签发与有效期、`UpsertServer` 与运维处置的记录时间是系统时钟，`Config.SystemNow`；建角时的名字预约 TTL 是目录自己的系统时钟）；game-demo 的活动窗口、World 定时器的每一拍、GM 关窗、怪物重生、匹配的等待放宽（`matchmaking.Pools`）、邮件领取 / 副本领奖 / 公会的 `nowUnix`。框架库（`timer.Scheduler`、`ai`、`actionflow`）没注入时间源时缺省读进程级业务时钟。platform、directory、saga 与 Nest / DataEngine / Sync 全部是系统时钟。
 - chat 的持久格式只加了 `sent_at_unix`，`stored_at_unix` 含义与用途（保留期）不变。加字段之前存下的消息没有 `sent_at_unix`，读出时（Publish 的重放应答、History / Conversation / Scrollback）用 `StoredAtUnix` 兜底，存着的数据不改写；那时偏移为 0，两个时间一致。客户端展示消息时间请读 `SentAtUnix`。
-- 业务过期不靠存储 TTL：服务按业务时钟判断过期，存储 TTL 只兜底回收空间且更长（mail 信封 = 业务剩余时长 + `StorageGrace`，缺省 24h）。
-  宽限只覆盖往回拨不超过它的偏移：偏移往回调超过 `StorageGrace` 时，存储可能早于业务过期被回收——在 +D₁ 下创建的邮件，下一次运行把偏移往回拨 Δ，
-  业务上要晚 Δ 才过期，键却在原来的业务过期之后 `StorageGrace` 就被 Redis 删掉；Δ 更大时邮件从列表里提前消失
-  （`service.dropped.total{service="mail",op="list.missing_envelope"}` 计数），领取返回 `ErrMailMissing`。kit 的 mail Mod 没有这个配置键，固定 24h；
-  测试环境要往回拨更多时，自己装配 `mail.NewRedisStores(client, mail.RedisConfig{..., StorageGrace: <大于最大回拨量>})`（过期邮件在 Redis 里多留这么久），
-  或在回拨前清掉测试环境的邮件数据。生产偏移强制为 0，不受影响。
-- 偏移在两次启动之间改变（只会在非生产）：前拨后到期的定时器、窗口、邮件在下一次检查时成批处理；后拨后已打戳的业务截止晚到一个偏移量。租约按系统时钟，不受影响。
+- 业务过期不靠存储 TTL：服务按业务时钟判断过期，存储 TTL 只兜底回收空间且更长（mail 信封 = 业务剩余时长 + `EnvelopeStorageGrace`，固定 24h：过期后一天内领取报 `ErrExpired` 而不是 `ErrMailMissing`，也吸收主机之间的时钟偏差）。业务时间不能回退，所以不再有“偏移往回调超过宽限、存储早于业务过期被回收”的情形；v1.21.0 的 `RedisConfig.StorageGrace` 已删。
+- 偏移在两次启动之间改变（只会在非生产）：前拨后到期的定时器、窗口、邮件在下一次检查时成批处理，业务时钟上的退避与租约提前结束（只是早一点重试）；让业务时间回退的后拨在启动时被拒绝（见上）。
 - 测试：在 cfg 里写 `time.logic_offset` 再 `app.NewRegistry(cfg)`，或给服务的 `Config.Now` 注入 `clock.BusinessFunc` / 函数。
 - `glsvet` 对业务包（模块根之下路径里有 `game` 目录，`-businessdirs` 可改）里直接读 `time.Now` / `time.Since` / `time.Until`（含把 `time.Now` 当函数值传）打印 `hint:`，不计入失败；确实是系统时间的在同一行或上一行写 `//glsvet:system-clock <理由>`，或写进函数文档注释豁免整个函数；`-clockhints=false` 关闭。
 

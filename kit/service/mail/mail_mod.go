@@ -97,7 +97,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 	}
 	service, err := New(Config{
 		Envelopes: stores.Envelopes, Mailboxes: stores.Mailboxes, Sends: stores.Sends,
-		Broadcast: m.broadcast, ClaimLease: m.claimLease, Now: now, SystemNow: time.Now, Metrics: m.metrics,
+		Broadcast: m.broadcast, ClaimLease: m.claimLease, Now: now, Metrics: m.metrics,
 	})
 	if err != nil {
 		return fmt.Errorf("mail mod: %w", err)

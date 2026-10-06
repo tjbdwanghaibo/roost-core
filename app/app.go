@@ -42,6 +42,8 @@ type App struct {
 	singletonOpener SingletonOpener
 	singletonClock  singletonClock
 	singleton       *singletonLock
+	// businessTimeInterval 是运行中推进业务时间高水位的间隔；0 为 businessTimeAdvanceInterval（测试缩短它）。
+	businessTimeInterval time.Duration
 }
 
 // serviceEntry holds a service and its specific mods.
@@ -232,6 +234,16 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 		slog.Info("singleton: acquired", "key", singleton.key, "value", string(singleton.value))
 		singleton.startRenewal()
 	}
+
+	// --- Business time only moves forward: before any Mod Init ---
+	// 业务时间高水位（docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md）：按新偏移算出的业务时间早于
+	// 这套部署到过的时刻就拒绝启动。它可能与单实例锁共用存储，所以 stop 登记在锁的 finish 之后、先于它执行。
+	businessTime, err := a.startBusinessTimeGuard(serverType, singleton)
+	if err != nil {
+		singletonReleasable = true
+		return err
+	}
+	defer businessTime.stop()
 
 	sharedMods, err := sortMods(a.mods, nil)
 	if err != nil {

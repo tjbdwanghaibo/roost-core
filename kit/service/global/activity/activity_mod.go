@@ -150,8 +150,6 @@ func (m *Mod) Provide(r *app.Registry) error {
 		SweepGroups: m.sweepGroups, Metrics: m.metrics,
 		// 业务时钟（D-L3）：窗口截止、宽限、过期都与 game 一端的窗口 id 同钟，偏移非 0 时两端一起前移。
 		Now: app.BusinessClock(r).Now,
-		// 系统时钟（D-L3）：派发的重试排期（NextAttemptAtUnix 与 owed 索引）和进度凭证的 ExpiresAtUnix。
-		SystemNow: time.Now,
 	})
 	if err != nil {
 		return err

@@ -44,18 +44,19 @@ type RedisConfig struct {
 	// In a deployment it is the business clock (D-L3; the kit Mod injects
 	// app.BusinessClock). nil means time.Now.
 	Now func() time.Time
-	// StorageGrace is how much longer than the mail's business expiry its
-	// envelope key lives. D-L3: storage ttl only reclaims space and must
-	// outlive the business expiry, which the Service decides with
-	// Envelope.Expired; the grace also covers time.logic_offset being moved
-	// back between two runs of a test environment. Zero selects
-	// DefaultEnvelopeStorageGrace; negative is refused.
-	StorageGrace time.Duration
 }
 
-// DefaultEnvelopeStorageGrace is how long an envelope key outlives the mail's
-// business expiry when RedisConfig.StorageGrace is zero.
-const DefaultEnvelopeStorageGrace = 24 * time.Hour
+// EnvelopeStorageGrace is how long an envelope key outlives the mail's
+// business expiry. D-L3: the storage ttl only reclaims space and must outlive
+// the business expiry, which the Service decides with Envelope.Expired — so a
+// claim after expiry answers ErrExpired rather than ErrMailMissing, and the
+// clock skew between hosts cannot evict a mail another host still reads as
+// live. It is fixed: business time only moves forward (the App refuses to
+// start a deployment whose business time would move back,
+// docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md), so there is no
+// rollback for a larger grace to cover. (Release v1.21.0 made it configurable
+// as RedisConfig.StorageGrace for exactly that; the field is gone.)
+const EnvelopeStorageGrace = 24 * time.Hour
 
 // NewRedisStores builds them.
 //
@@ -76,15 +77,9 @@ func NewRedisStores(client fredis.IRedis, cfg RedisConfig) (RedisStores, error) 
 			"longest client retry horizon, or a retried send becomes a second mail")
 	}
 
-	if cfg.StorageGrace < 0 {
-		return RedisStores{}, fmt.Errorf("mail: envelope storage grace must not be negative")
-	}
 	envelopes, err := NewRedisEnvelopes(client, cfg.Prefix, cfg.Now)
 	if err != nil {
 		return RedisStores{}, err
-	}
-	if cfg.StorageGrace > 0 {
-		envelopes.(*redisEnvelopes).grace = cfg.StorageGrace
 	}
 	mailboxes, err := versionstore.NewRedisStore(client, versionstore.RedisConfig[int64, Mailbox]{
 		Prefix:       cfg.Prefix + ":box:",
@@ -140,7 +135,8 @@ type redisEnvelopes struct {
 	client envelopeClient
 	prefix string
 	now    func() time.Time
-	// grace is added to the business remainder to get the key ttl (D-L3).
+	// grace is added to the business remainder to get the key ttl (D-L3):
+	// EnvelopeStorageGrace; only a test of key expiry shortens it.
 	grace time.Duration
 }
 
@@ -162,7 +158,7 @@ func NewRedisEnvelopes(client envelopeClient, prefix string, now func() time.Tim
 	if now == nil {
 		now = time.Now
 	}
-	return &redisEnvelopes{client: client, prefix: prefix, now: now, grace: DefaultEnvelopeStorageGrace}, nil
+	return &redisEnvelopes{client: client, prefix: prefix, now: now, grace: EnvelopeStorageGrace}, nil
 }
 
 func (s *redisEnvelopes) key(id string) string { return s.prefix + ":env:" + id }

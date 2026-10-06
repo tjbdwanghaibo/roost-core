@@ -138,12 +138,10 @@ func (s *Service) ReopenDispatch(ctx context.Context, key Key, gameSID int32, no
 			next.Attempts = 0
 			// Due immediately: the operator reopened it because the receiving
 			// game is back, and a backoff they did not set is a reason to
-			// reach past this API into the store. "Now" on the system clock,
-			// which is what the owed index is scored and queried on (D-L3);
-			// 0 would fall back to CreatedAtUnix, a business-time stamp that
-			// sits an offset in the system clock's future when
-			// time.logic_offset is positive.
-			next.NextAttemptAtUnix = s.cfg.SystemNow().Unix()
+			// reach past this API into the store. Written as "now" rather
+			// than 0 so the owed index scores it by this moment, not by the
+			// dispatch's CreatedAtUnix.
+			next.NextAttemptAtUnix = nowUnix
 			next.ExhaustedAtUnix = 0
 			// next.Token is deliberately NOT regenerated. See the doc comment:
 			// it is the only key a game server can deduplicate a re-delivered

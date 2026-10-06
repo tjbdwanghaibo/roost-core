@@ -164,3 +164,10 @@ $ GOWORK=off go test -count=1 -run 'TestRulesCheckTheValueEncodingJSONDecodes|Te
 - “未验证 / 风险”里第 5 条的前提（结构体里没有只差大小写的 JSON 名）不再需要：两个名字都逐字匹配各自的字段。
 
 上文第 5 节保留原文作为当时的记录；v1.21.0 发布的仍是第 5 条的行为，收紧在下一版生效。
+
+## 更正（2026-10-06，业务时间只许前进）
+
+维护者随后加了强约束：同一套部署的业务时间不能往回调（[下一轮规划 §1](../review/NEXT-ROUND-PLAN-2026-10-06.md)，[方案](../feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md)）。App 在启动时比对协调存储里的业务时间高水位，回退超过 1 分钟就拒绝启动；测试环境回到过去只能清库重建。本记录前两条随之改变：
+
+- **第 1 条撤回**：activity 派发退避（`NextAttemptAtUnix` 的创建 / 退避 / 重开、到期比较、owed 查询）与进度凭证 `ExpiresAtUnix` 回到业务时钟，`Config.SystemNow` 删除；`ReopenDispatch` 写业务时钟的当前时间（仍是“立即可取”）。拆分的唯一理由是“偏移往回拨 D 多挂 D”，这个场景现在在启动时就被拒绝。`system_clock_promises_test.go` 删除（它构造的就是回调场景，组件不再承诺它），由 `app.TestBusinessTimeMovingBackRefusesToStart` 取代；组件层改为 `monotonic_business_time_promises_test.go`，证明单调业务时间下退避恰好持续 `DispatchBackoff`、立即可取的照样立即可取、前拨只让退避提前结束。
+- **第 2 条不再成立**：“偏移往回调超过 `StorageGrace`”不会再发生；`mail.RedisConfig.StorageGrace` 删除，宽限固定为 `mail.EnvelopeStorageGrace` = 24h（值不变）。USER_GUIDE 与 T-270 的相应说明已改为“禁止回调”。

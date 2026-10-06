@@ -49,14 +49,19 @@ type Config struct {
 	NewClaimToken func() (string, error)
 
 	// Now is the business clock (D-L3): creation, expiry, delivery and read
-	// times. The kit Mod injects app.BusinessClock. nil means time.Now.
+	// times, and the claim lease (Entry.ClaimDeadlineUnix). The kit Mod
+	// injects app.BusinessClock. nil means time.Now.
+	//
+	// The claim lease is on it too: it is compared only here, by mail service
+	// instances that all run on the deployment's one offset, and nothing
+	// outside (no Redis ttl, no other process's wall clock) reads it. The App
+	// refuses to start a deployment whose business time would move back
+	// (docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md), so a lease never
+	// outlives its length by more than the clock skew between hosts; an
+	// offset moved forward only ends it early, and the retry gets the same
+	// token. (Release v1.21.0 kept the lease on a separate SystemNow to
+	// survive the offset moving back; that is no longer possible.)
 	Now func() time.Time
-	// SystemNow is the system clock the claim lease (ClaimDeadlineUnix) is
-	// measured on: a lease is system time under D-L3, so moving
-	// time.logic_offset between runs cannot hold a reservation for a day. nil
-	// means Now when Now was given — a test that injects one clock keeps one
-	// clock — and time.Now otherwise.
-	SystemNow func() time.Time
 	// Metrics receives reports. A nil reporter means no reporting and never
 	// fails an operation.
 	Metrics servicemetrics.Reporter
@@ -98,14 +103,8 @@ func New(cfg Config) (*Service, error) {
 	if cfg.NewClaimToken == nil {
 		cfg.NewClaimToken = randomID
 	}
-	if cfg.SystemNow == nil {
-		cfg.SystemNow = cfg.Now
-	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
-	}
-	if cfg.SystemNow == nil {
-		cfg.SystemNow = time.Now
 	}
 	return &Service{cfg: cfg, report: servicemetrics.Wrap(cfg.Metrics)}, nil
 }
@@ -562,7 +561,6 @@ func (s *Service) List(ctx context.Context, playerID int64, cursor string, limit
 	}
 
 	nowUnix := s.cfg.Now().Unix()
-	leaseNowUnix := s.cfg.SystemNow().Unix() // 领取租约是系统时钟（D-L3）
 	page := Page{Items: make([]Item, 0, len(window)), Unread: mailbox.Unread, Evicted: mailbox.Evicted}
 	for _, entry := range window {
 		envelope, ok := envelopes[entry.MailID]
@@ -580,7 +578,7 @@ func (s *Service) List(ctx context.Context, playerID int64, cursor string, limit
 		page.Items = append(page.Items, Item{
 			Envelope:  envelope,
 			Status:    entry.Status,
-			Claimable: envelope.HasAttachment() && entry.claimable(leaseNowUnix) == nil,
+			Claimable: envelope.HasAttachment() && entry.claimable(nowUnix) == nil,
 		})
 	}
 	if end < len(entries) {
@@ -775,9 +773,6 @@ func (s *Service) ReserveClaim(ctx context.Context, playerID int64, mailID strin
 		return Claim{}, fmt.Errorf("%w: mail %s does not address player %d", ErrNotRecipient, mailID, playerID)
 	}
 	nowUnix := s.cfg.Now().Unix()
-	// 领取租约（ClaimDeadlineUnix）按系统时钟量：租约属于系统时间（D-L3），偏移在两次运行之间
-	// 往回调时，按业务时钟打戳的租约会多挂一个偏移量。邮件过期仍按业务时钟。
-	leaseNowUnix := s.cfg.SystemNow().Unix()
 	if envelope.Expired(nowUnix) {
 		s.report.Refused("reserve_claim", "expired")
 		return Claim{}, fmt.Errorf("%w: mail %s", ErrExpired, mailID)
@@ -836,7 +831,7 @@ func (s *Service) ReserveClaim(ctx context.Context, playerID int64, mailID strin
 			return current, false, fmt.Errorf("%w: mail %s was not delivered to player %d",
 				ErrMailMissing, mailID, playerID)
 		}
-		if err := entry.claimable(leaseNowUnix); err != nil {
+		if err := entry.claimable(nowUnix); err != nil {
 			switch {
 			case errors.Is(err, ErrAlreadyClaimed):
 				refusal = "already_claimed"
@@ -865,7 +860,7 @@ func (s *Service) ReserveClaim(ctx context.Context, playerID int64, mailID strin
 		// record that outlives the entry can be kept for exactly that long
 		// (RR-20260911-01).
 		entry.ClaimEnvelopeExpiresAtUnix = envelope.ExpiresAtUnix
-		entry.ClaimDeadlineUnix = leaseNowUnix + int64(s.cfg.ClaimLease.Seconds())
+		entry.ClaimDeadlineUnix = nowUnix + int64(s.cfg.ClaimLease.Seconds())
 		entry.ClaimAttempts++
 		entry.UpdatedAtUnix = nowUnix
 		current.Entries[mailID] = entry

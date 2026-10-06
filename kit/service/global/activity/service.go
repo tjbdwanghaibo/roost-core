@@ -86,22 +86,20 @@ type Config struct {
 	OpeningGrace time.Duration
 
 	// Now is the business clock (D-L3: real time + time.logic_offset; the Mod
-	// injects app.BusinessClock); nil means time.Now. Activity, window and
-	// grace deadlines and the record timestamps read it, and none of them
+	// injects app.BusinessClock); nil means time.Now. Every deadline, grace
+	// window, dispatch backoff (Dispatch.NextAttemptAtUnix and the owed
+	// index) and record timestamp in this package reads it, and none of them
 	// calls time.Now inline — a service whose expiry cannot be moved by a
 	// test has no test for expiry.
+	//
+	// Backoff is on the business clock too, deliberately: the App refuses to
+	// start a deployment whose business time would move back
+	// (docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md), so a stamp written
+	// in one run is never in a later run's future by more than the clock skew
+	// between hosts. An offset moved forward only makes a backoff end early,
+	// which retries sooner. (Release v1.21.0 ran backoff on a separate system
+	// clock to survive the offset moving back; that is no longer possible.)
 	Now func() time.Time
-	// SystemNow is the system clock (D-L3: retry and backoff are system time).
-	// It schedules dispatch delivery — Dispatch.NextAttemptAtUnix when a
-	// dispatch is created, after each attempt's backoff and when an operator
-	// reopens it, and every "is it due" comparison against it, including the
-	// owed index — and stamps ProgressReservation.ExpiresAtUnix, which
-	// describes the ledger's relative TTL. Before this, both read Now: moving
-	// time.logic_offset back by D between two runs of a test environment held
-	// every owed dispatch for D more. nil means Now when Now was given — a test
-	// that injects one clock keeps one clock — and time.Now otherwise (the
-	// same convention as mail's SystemNow).
-	SystemNow func() time.Time
 	// NewDispatchToken mints ACK tokens; nil means a 128-bit random token.
 	// They must be unguessable because the token is what authorizes the ACK:
 	// a guessable one lets any caller mark a delivery processed that never
@@ -223,14 +221,8 @@ func New(cfg Config) (*Service, error) {
 	if cfg.OpeningGrace == 0 {
 		cfg.OpeningGrace = DefaultOpeningGrace
 	}
-	if cfg.SystemNow == nil {
-		cfg.SystemNow = cfg.Now
-	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
-	}
-	if cfg.SystemNow == nil {
-		cfg.SystemNow = time.Now
 	}
 	if cfg.NewDispatchToken == nil {
 		cfg.NewDispatchToken = randomDispatchToken
@@ -1267,8 +1259,7 @@ func (s *Service) applyProgress(ctx context.Context, key Key, participantID, req
 		Delta:         delta,
 		State:         ReservationReserved,
 		CreatedAtUnix: now.Unix(),
-		// The ledger's TTL is relative system time; the stamp describes it (D-L3).
-		ExpiresAtUnix: s.cfg.SystemNow().Add(s.cfg.ReservationTTL).Unix(),
+		ExpiresAtUnix: now.Add(s.cfg.ReservationTTL).Unix(),
 	}
 	_, created, err := s.cfg.Ledger.Create(ctx, requestKey, reservation)
 	if err != nil {
@@ -1451,7 +1442,6 @@ func (s *Service) ensureDispatches(ctx context.Context, activity Activity) error
 	}
 	result := activity.result()
 	nowUnix := s.cfg.Now().Unix()
-	dueUnix := s.cfg.SystemNow().Unix() // delivery scheduling is system time (D-L3)
 	for _, gameSID := range activity.ExpectedGameSIDs {
 		key := DispatchKey{Activity: activity.Key, GameSID: gameSID}
 		_, found, err := s.cfg.Dispatches.Get(ctx, key)
@@ -1476,7 +1466,7 @@ func (s *Service) ensureDispatches(ctx context.Context, activity Activity) error
 			Result:            result.clone(),
 			State:             DispatchPending,
 			MaxAttempts:       s.cfg.DispatchMaxAttempts,
-			NextAttemptAtUnix: dueUnix,
+			NextAttemptAtUnix: nowUnix,
 			CreatedAtUnix:     nowUnix,
 		}
 		if _, _, err := s.cfg.Dispatches.Create(ctx, key, dispatch); err != nil {
@@ -1542,7 +1532,7 @@ func (s *Service) OwedDispatches(ctx context.Context, groupID string, gameSID in
 		return nil, fmt.Errorf("%w: this deployment's dispatch store keeps no per-game index, "+
 			"so what a game server is owed cannot be enumerated; use NewRedisStores", ErrUnsupported)
 	}
-	keys, err := index.OwedDispatches(ctx, groupID, gameSID, s.cfg.SystemNow().Unix(), limit)
+	keys, err := index.OwedDispatches(ctx, groupID, gameSID, s.cfg.Now().Unix(), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1567,14 +1557,14 @@ func (s *Service) DueDispatches(ctx context.Context, key Key, limit int) ([]Disp
 	if !found {
 		return nil, fmt.Errorf("%w: activity %s", ErrMissing, key)
 	}
-	dueUnix := s.cfg.SystemNow().Unix()
+	nowUnix := s.cfg.Now().Unix()
 	out := make([]Dispatch, 0, limit)
 	for _, gameSID := range activity.ExpectedGameSIDs {
 		current, exists, err := s.cfg.Dispatches.Get(ctx, DispatchKey{Activity: key, GameSID: gameSID})
 		if err != nil {
 			return nil, err
 		}
-		if !exists || !current.Value.Due(dueUnix) {
+		if !exists || !current.Value.Due(nowUnix) {
 			continue
 		}
 		out = append(out, current.Value.clone())
@@ -1603,11 +1593,8 @@ func (s *Service) AttemptDispatch(ctx context.Context, key Key, gameSID int32) (
 	if gameSID <= 0 {
 		return Dispatch{}, fmt.Errorf("%w: game sid must be positive, got %d", ErrInvalid, gameSID)
 	}
-	nowUnix := s.cfg.Now().Unix()
-	// When an attempt may be taken is retry scheduling: system time (D-L3).
-	// The record's attempt and exhaustion stamps stay business time.
-	systemNow := s.cfg.SystemNow()
-	dueUnix := systemNow.Unix()
+	now := s.cfg.Now()
+	nowUnix := now.Unix()
 
 	var (
 		result    Dispatch
@@ -1633,8 +1620,8 @@ func (s *Service) AttemptDispatch(ctx context.Context, key Key, gameSID int32) (
 					ErrDispatchExhausted, key, gameSID, current.Attempts)
 				return current, false, nil
 			}
-			if !current.Due(dueUnix) {
-				refusal = fmt.Errorf("%w: activity %s game %d is due at %d, now %d", ErrDispatchNotDue, key, gameSID, current.NextAttemptAtUnix, dueUnix)
+			if !current.Due(nowUnix) {
+				refusal = fmt.Errorf("%w: activity %s game %d is due at %d, now %d", ErrDispatchNotDue, key, gameSID, current.NextAttemptAtUnix, nowUnix)
 				return current, false, nil
 			}
 			if current.Attempts >= current.MaxAttempts {
@@ -1651,7 +1638,7 @@ func (s *Service) AttemptDispatch(ctx context.Context, key Key, gameSID int32) (
 			next := current.clone()
 			next.Attempts++
 			next.LastAttemptAtUnix = nowUnix
-			next.NextAttemptAtUnix = systemNow.Add(s.dispatchBackoff(next.Attempts)).Unix()
+			next.NextAttemptAtUnix = now.Add(s.dispatchBackoff(next.Attempts)).Unix()
 			result = next.clone()
 			return next, true, nil
 		})

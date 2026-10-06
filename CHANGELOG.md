@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 - **configdata 键大小写敏感**（维护者 2026-10-06，行为收紧）：数据文件里的键必须与字段的 json 名逐字一致（嵌套对象同样）。只差大小写的键（`Level` 对 `level`）或一行里同一字段的几种拼写，在 Load / Reload / DryRun 整次拒绝、旧快照保持，错误是 `*configdata.RuleError`（`Rule` 为 `case`）：`table monster row 1 (key 1) field level: case: key "Level" must be spelled "level"`——以前 encoding/json 大小写不敏感地接受，几种拼写按文档顺序取最后一个。`FieldRule.Field` 也要逐字是 json 名，否则注册失败。未声明的键维持原样（宽松忽略、严格模式拒绝）。`configdata/rules` 删除 v1.21.0 的大小写变体选择逻辑（`Rows` 不再预处理，`Lookup` 逐字匹配），新增唯一的拼写规则 `MisspelledKey`（及 `CheckKeys` / `CheckObjectKeys` / `CaseError`）。tablegen 的 `-check` 用同一条规则；CSV 转换与生成的 `Convert<Type>CSV` 拒绝只差大小写的表头（以前被当成未知列跳过、值丢成零值）。以前能加载的、键只差大小写的配置数据现在启动 / reload 失败，改成声明的拼写即可。[方案](docs/feature/CONFIGDATA-CASE-SENSITIVE-KEYS-2026-10-06.md)
+- **业务时间只许前进（偏移不得回调）**：同一套部署的业务时间（真实时间 + `time.logic_offset`）不能回到它已经到过的时刻。App 在单实例锁之后、任何 Mod Init 之前读协调存储里的部署级高水位（`<singleton.key_prefix>:business_time`，不过期），按新偏移算出的业务时间低于“高水位 − 1 分钟”就拒绝启动（`app.ErrBusinessTimeMovedBack`，点名偏移与高水位），运行中每 10s 推进；只在非生产检查，生产行为不变；配了非 0 偏移却没有协调存储的进程拒绝启动（`app.ErrBusinessTimeGuardMissing`）。测试环境回到过去只能清库重建。随之删掉只为“偏移往回调”存在的拆分：activity 派发退避与进度凭证、mail 领取租约回到业务时钟。**破坏性变更**（只影响手工装配）：删除 `activity.Config.SystemNow`、`mail.Config.SystemNow`、`mail.RedisConfig.StorageGrace`，`mail.DefaultEnvelopeStorageGrace` 改名 `EnvelopeStorageGrace`（仍是 24h）。[方案](docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md)
 
 ## [v1.21.0] - 2026-10-06
 

@@ -8,6 +8,10 @@
 //     消息 Ack、日志、指标、WAL 与审计时间戳。
 //
 // 偏移只有一个配置来源 time.logic_offset，App 在启动时读一次（生产环境强制为 0），运行期没有修改入口。
+// 同一套部署的业务时间只许前进：偏移可以前拨，不能让业务时间回到部署已经到过的时刻——App 用存在协调
+// 存储里的高水位在启动时拒绝（docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md），要回到过去只能清库重建。
+// 因此业务服务内部、只与业务时间比较的退避和租约（activity 派发退避、mail 领取租约）也读业务时钟；
+// 依赖存储服务端 TTL、与读系统时钟的进程比较、安全有效期、空间回收、审计的才是系统时钟。
 // 业务代码从 app.BusinessClock(registry) 拿 Business，或由服务的 Config.Now 注入；本包的全局函数
 // （Now / UnixMilli）是进程级业务时钟，给 fctx 与框架库在没有注入时做缺省。
 package clock

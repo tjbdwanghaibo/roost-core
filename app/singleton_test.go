@@ -167,6 +167,10 @@ type fakeSingletonStore struct {
 	getErr   error
 	closed   bool
 	onCAS    func(call fakeCASCall, apply func() (bool, []byte)) (bool, []byte, error)
+	// 业务时间高水位键（<prefix>:business_time）的调用单独记账：不进 casCalls、不走 onCAS，
+	// 单实例锁的用例只看锁键；markErr 非 nil 时高水位的 CAS 报这个错。
+	markCalls []fakeCASCall
+	markErr   error
 }
 
 type fakeEntry struct {
@@ -256,8 +260,19 @@ func (s *fakeSingletonStore) CompareAndSet(ctx context.Context, key string, expe
 	if expected == nil {
 		call.expected = nil
 	}
-	s.casCalls = append(s.casCalls, call)
-	hook := s.onCAS
+	isMark := strings.HasSuffix(key, businessTimeKeySuffix)
+	var hook func(call fakeCASCall, apply func() (bool, []byte)) (bool, []byte, error)
+	if isMark {
+		s.markCalls = append(s.markCalls, call)
+		if s.markErr != nil {
+			err := s.markErr
+			s.mu.Unlock()
+			return false, nil, err
+		}
+	} else {
+		s.casCalls = append(s.casCalls, call)
+		hook = s.onCAS
+	}
 	s.mu.Unlock()
 	apply := func() (bool, []byte) {
 		s.mu.Lock()
@@ -270,7 +285,11 @@ func (s *fakeSingletonStore) CompareAndSet(ctx context.Context, key string, expe
 		} else if current == nil || !bytes.Equal(current, expected) {
 			return false, append([]byte(nil), current...)
 		}
-		s.entries[key] = fakeEntry{value: append([]byte(nil), next...), expires: s.clock.Now().Add(ttl)}
+		entry := fakeEntry{value: append([]byte(nil), next...)}
+		if ttl > 0 { // 与 redis.CompareAndSet 一致：ttl 为 0 是不过期的 SET
+			entry.expires = s.clock.Now().Add(ttl)
+		}
+		s.entries[key] = entry
 		return true, append([]byte(nil), next...)
 	}
 	if hook != nil {

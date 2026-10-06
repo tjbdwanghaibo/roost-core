@@ -29,7 +29,11 @@ import (
 // core 只定义后端接口与状态机，不 import Redis 驱动；Redis 实现在 kit/redis（kitredis.SingletonStore）。
 
 // SingletonStore 是单实例锁的后端：两个原子操作，语义与 redis.CompareAndSet / CompareAndDelete 相同。
-// expected 为 nil 表示“键必须不存在”；applied=false 时 current 是键里现在的值（不存在为 nil）。
+// expected 为 nil 表示“键必须不存在”；applied=false 时 current 是键里现在的值（不存在为 nil）；
+// ttl 为 0 表示不过期。
+//
+// 它同时是 App 的协调存储：业务时间高水位（<key_prefix>:business_time，不过期，只用 CompareAndSet）
+// 也存在这里，见 business_time.go。
 //
 // 实现必须遵守：
 //   - 每个方法都遵守 ctx 的截止时间：到期即返回错误，不能继续阻塞。App 给每次 CAS 一个截到 validUntil
@@ -49,6 +53,7 @@ type SingletonStore interface {
 }
 
 // SingletonOpener 在配置读完之后、任何 Mod Init 之前调用，自己建连接（不依赖任何 Mod）。
+// singleton.enabled=false 而 time.logic_offset 非 0（非生产）时，App 也用它只为业务时间高水位打开一个连接。
 type SingletonOpener func(cfg *viper.Viper) (SingletonStore, error)
 
 // SingletonLiveness 回答“同一服务类型下，这些 sid 中哪些有进程持有单实例锁”。只读，不要求本进程

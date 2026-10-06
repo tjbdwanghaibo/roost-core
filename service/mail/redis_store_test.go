@@ -364,7 +364,7 @@ func TestTheKeyTTLComesFromTheInjectedClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	// D-L3：键 TTL = 业务剩余时长 + 存储宽限，只兜底回收空间，比业务过期长。
-	if fake.lastTTL != 2*time.Hour+DefaultEnvelopeStorageGrace {
+	if fake.lastTTL != 2*time.Hour+EnvelopeStorageGrace {
 		t.Fatalf("the key ttl is %s, want 2h plus the storage grace; a ttl derived from the wall clock while the "+
 			"service runs on an injected one makes every envelope already expired",
 			fake.lastTTL)
