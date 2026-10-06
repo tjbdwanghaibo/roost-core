@@ -161,3 +161,10 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | --- | --- | --- |
 | Mirror 第 4 步 | 按推荐：推送订阅依赖 JetStream，`sync/syncbus/driver` 按主题加 DeliverNew 消费，保证确认订阅之后的发布不被静默丢掉；没开 JetStream 时退化为按需读取（Cached 按 `cached_max_staleness` 回源），显式检测并记日志；订阅可确认、首载缓冲有上界、溢出有明确行为，覆盖重连、旧 fetch 回调、renew / release 全交错；所有缓存写入仍只经 `admitLocked` | **已实施（`23e17d81`，分支 `mirror4`）**：`fsyncbus.ILiveSubscriber` / JetStream `SubscribeLive` / `mirror.NewLive`；`SnapshotClient.Start` 只在可确认订阅上开推送，普通 NATS 记 Warn、`PushEnabled=false`（T-272）；快照缓存 `ApplyReplica` 首载缓冲（缺省 64，溢出丢弃并再回源一次）；兴趣代际锁内分配 + release 撤销水位。修前红：加载期间的增量让权威读两次并丢失、release 后迟到的旧续租复活租约。真实 JetStream + Redis、B2 组合矩阵、生成工程 12 条通过。[记录](../feature/MIRROR-STEP-4-AND-O4-2026-10-06.md)（§6.8 第 5 步入口） |
 | O4 | 按推荐：兴趣容量按节点计数（每个 consumer 节点各有配额），满了明确拒绝、可识别错误、日志与指标，续期失败时消费方感知并退化为按需读取；配额作为配置项，A4 严格读取并登记 | **已实施（`23e17d81`）**：`remote_entity.snapshot_interest_per_consumer`（0 = `snapshot_interest_subs / 16`，不能超过它）；`ErrInterestQuotaExceeded` / `ErrInterestRegistryFull`；`interest_rejected_total{reason}` / `interest_renew_refused_total{reason}`、限频 Warn、健康信息 `interest_refused`（T-273）。修前红：一个 consumer 占满全表后另一个 consumer 的兴趣在 owner 处被拒、读路径静默吞掉 |
+
+## 发版前审查跟进（2026-10-06）
+
+| # | 事项 | 实施状态 |
+| --- | --- | --- |
+| 审查修复 | Cached + AllowStale 远程访问回归（`207163f9`）、saga stepTransition 守卫补漏（`42419890`） | 已实施 |
+| 审查观察 | activity 派发退避 / 凭证改系统钟、saga `ErrDefinitionMissing` 改可重试、`configdata/rules` 大小写选择确定化、mail 存储宽限写文档；saga 回放不交还 claim 列为观察（[记录](../bugfix/PRERELEASE-AUDIT-FOLLOWUP-2026-10-06.md)） | 已实施（`5a3c4a60`） |
