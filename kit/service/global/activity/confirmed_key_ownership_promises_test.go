@@ -43,8 +43,8 @@ func TestSweepSkipsConfirmedKeysOfAnotherGroup(t *testing.T) {
 	ctx := context.Background()
 
 	foreign := Key{GroupID: "group-b", ActivityID: "foreign", Phase: PhaseClose}
-	openActivity(t, s, foreign, 7, 8)
-	notify(t, s, foreign, 7) // collecting in its own group
+	openActivity(t, s, foreign, 2001, 2002)
+	notify(t, s, foreign, 2001) // collecting in its own group
 	local := activityKey("local")
 	openActivity(t, s, local, 1, 2)
 	notify(t, s, local, 1)
@@ -61,7 +61,7 @@ func TestSweepSkipsConfirmedKeysOfAnotherGroup(t *testing.T) {
 	if got, _, err := s.LookupActivity(ctx, foreign); err != nil || got.Status != StatusCollecting {
 		t.Fatalf("group-a's sweep wrote group-b's activity: %+v err=%v", got, err)
 	}
-	if _, found, err := s.LookupDispatch(ctx, foreign, 7); err != nil || found {
+	if _, found, err := s.LookupDispatch(ctx, foreign, 2001); err != nil || found {
 		t.Fatalf("group-a's sweep created group-b's dispatch: found=%v err=%v", found, err)
 	}
 	window, _, err := windows.Get(ctx, "group-a")

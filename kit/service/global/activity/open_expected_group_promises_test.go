@@ -119,3 +119,24 @@ func TestTheCoordinatorRefusesToStartWithoutAGroupsFile(t *testing.T) {
 		})
 	}
 }
+
+// 后续二（维护者 2026-10-06：不留能绕过核对的分支）：groups_file 必填之后，“没有组就不核对”只剩直接调
+// New 构造这一条路。承诺：Config.Groups 为 nil 时 New 拒绝构造，错误点名 Groups 与它对应的配置键；
+// 修前 New 照常返回，开一个组文件里根本不存在的组的窗口也会成功。
+func TestNewRefusesACoordinatorWithoutGroups(t *testing.T) {
+	stores := memoryStores()
+	service, err := New(Config{
+		Activities: stores.Activities, Participants: stores.Participants, Ledger: stores.Ledger,
+		Audits: stores.Audits, Dispatches: stores.Dispatches, Windows: stores.Windows,
+	})
+	if err == nil {
+		key := Key{GroupID: "no-such-group", ActivityID: "race-1", Phase: PhaseClose}
+		_, openErr := service.OpenActivity(context.Background(), key, []int32{4242})
+		t.Fatalf("New accepted a coordinator with no Groups; OpenActivity(%s, [4242]) then returned %v without checking the group", key.GroupID, openErr)
+	}
+	for _, want := range []string{"Groups", "activity.groups_file"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not name %s", err, want)
+		}
+	}
+}

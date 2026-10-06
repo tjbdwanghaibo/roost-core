@@ -65,7 +65,7 @@ func TestAFullGroupOpensAWindowWithTheCoordinator(t *testing.T) {
 	}
 	// Every member live: the expected set is the whole group, which is what
 	// the coordinator must take.
-	service, _ := newActivityService(t)
+	service, _ := newActivityService(t, func(c *Config) { c.Groups = &groups })
 	key := Key{GroupID: group.ID, ActivityID: "race-1", Phase: PhaseClose}
 	opened, err := service.OpenActivity(context.Background(), key, group.GameSIDs)
 	if err != nil {

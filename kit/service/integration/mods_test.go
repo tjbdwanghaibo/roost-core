@@ -45,15 +45,19 @@ import (
 // accepts a realistic configuration, that Provide finds what it needs, and
 // that what lands in the registry is the type a caller will assert on.
 
+// activityGroupsYAML is the activity groups file of every coordinator these
+// tests build, through the Mod (modConfig) or directly with activity.New: game
+// 7, the one the activity subtests open windows for, in group-a.
+const activityGroupsYAML = "groups:\n  - id: group-a\n    game_sids: [7]\n"
+
 // modConfig is one configuration for all nine services, shaped the way a
 // deployment's roost.yaml would be — including the required values that have
 // no defaults, since a config missing any of them is supposed to fail. The
-// activity groups file (required since 2026-10-06) puts game 7, the one the
-// activity subtests open windows for, in group-a.
+// activity groups file (required since 2026-10-06) is activityGroupsYAML.
 func modConfig(t *testing.T, root string) *viper.Viper {
 	t.Helper()
 	groups := filepath.Join(t.TempDir(), "activity_groups.yaml")
-	if err := os.WriteFile(groups, []byte("groups:\n  - id: group-a\n    game_sids: [7]\n"), 0o644); err != nil {
+	if err := os.WriteFile(groups, []byte(activityGroupsYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg := viper.New()

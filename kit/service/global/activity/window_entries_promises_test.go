@@ -59,9 +59,9 @@ func TestDeliveringSkipsMalformedEntriesAndKeepsThem(t *testing.T) {
 	// group-b's own activity: complete, every dispatch acked, still listed in
 	// group-b's Delivering (group-b's sweep has not run yet).
 	foreign := Key{GroupID: "group-b", ActivityID: "foreign", Phase: PhaseClose}
-	openActivity(t, s, foreign, 7)
-	notify(t, s, foreign, 7)
-	ackAll(t, s, foreign, 7)
+	openActivity(t, s, foreign, 2001)
+	notify(t, s, foreign, 2001)
+	ackAll(t, s, foreign, 2001)
 	// group-a's own activity, complete and still delivering.
 	local := activityKey("local")
 	openActivity(t, s, local, 1)

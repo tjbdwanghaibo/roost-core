@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -11,14 +12,14 @@ import (
 )
 
 // modConfig is the smallest configuration Init accepts: the two keys with no
-// default and the required groups file, here one group "group-a" (the group
-// activityKey uses) of games 1, 2 and 3.
+// default and the required groups file, here testGroupsYAML — the groups the
+// directly built coordinators use too.
 func modConfig(t testing.TB) *viper.Viper {
 	t.Helper()
 	cfg := viper.New()
 	cfg.Set("activity.key_prefix", "roost:activity")
 	cfg.Set("activity.reservation_ttl", 30*time.Minute)
-	cfg.Set("activity.groups_file", writeGroups(t, groupYAML("group-a", []int64{1, 2, 3})))
+	cfg.Set("activity.groups_file", writeGroups(t, testGroupsYAML))
 	return cfg
 }
 
@@ -115,7 +116,7 @@ func TestModReadsSweepGroups(t *testing.T) {
 		t.Fatalf("sweep groups = %v", mod.sweepGroups)
 	}
 	bare := NewMod(nil)
-	if err := bare.Init(modConfig(t)); err != nil || len(bare.sweepGroups) != 1 || bare.sweepGroups[0] != "group-a" {
-		t.Fatalf("no key: groups=%v err=%v, want the groups file's [group-a]", bare.sweepGroups, err)
+	if err := bare.Init(modConfig(t)); err != nil || !slices.Equal(bare.sweepGroups, []string{"group-a", "group-b"}) {
+		t.Fatalf("no key: groups=%v err=%v, want the groups file's [group-a group-b]", bare.sweepGroups, err)
 	}
 }

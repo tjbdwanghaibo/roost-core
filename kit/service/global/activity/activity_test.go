@@ -34,10 +34,34 @@ func (c *activityClock) advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
+// testGroupsYAML is the activity groups file every coordinator in this
+// package's tests is built with, unless a test is about the groups themselves:
+// "group-a" (the group activityKey uses) of games 1 to 9 and 1000, and
+// "group-b" of games 2001 and 2002 for the tests that need a second group. New
+// requires groups (RR-20261006-17), and the Mod's tests read the same file
+// (modConfig), so the two ways of building a coordinator agree on it.
+const testGroupsYAML = `groups:
+  - id: group-a
+    game_sids: [1, 2, 3, 4, 5, 6, 7, 8, 9, 1000]
+  - id: group-b
+    game_sids: [2001, 2002]
+`
+
+// testGroups parses testGroupsYAML for a Config built directly.
+func testGroups(t testing.TB) *Groups {
+	t.Helper()
+	groups, err := ParseGroups([]byte(testGroupsYAML), "test activity groups")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &groups
+}
+
 func newActivityService(t *testing.T, mutate ...func(*Config)) (*Service, *activityClock) {
 	t.Helper()
 	c := &activityClock{now: time.Unix(1_700_000_000, 0)}
 	cfg := Config{
+		Groups:              testGroups(t),
 		Activities:          versionstore.NewMemoryStore[Key, Activity](),
 		Participants:        versionstore.NewMemoryStore[ParticipantKey, Participant](),
 		Ledger:              versionstore.NewMemoryStore[RequestKey, ProgressReservation](),
@@ -451,6 +475,7 @@ func TestNewActivityServiceRejectsAnIncompleteConfig(t *testing.T) {
 			Audits:       versionstore.NewMemoryStore[Key, NotifyAuditLog](),
 			Dispatches:   versionstore.NewMemoryStore[DispatchKey, Dispatch](),
 			Windows:      versionstore.NewMemoryStore[string, Window](),
+			Groups:       testGroups(t),
 		}
 	}
 	for _, testCase := range []struct {
@@ -463,6 +488,7 @@ func TestNewActivityServiceRejectsAnIncompleteConfig(t *testing.T) {
 		{"no audit store", func(c *Config) { c.Audits = nil }},
 		{"no dispatch store", func(c *Config) { c.Dispatches = nil }},
 		{"no window store", func(c *Config) { c.Windows = nil }},
+		{"no groups", func(c *Config) { c.Groups = nil }},
 		{"negative grace window", func(c *Config) { c.GraceWindow = -time.Second }},
 		{"negative reservation ttl", func(c *Config) { c.ReservationTTL = -time.Second }},
 		{"negative dispatch backoff", func(c *Config) { c.DispatchBackoff = -time.Second }},

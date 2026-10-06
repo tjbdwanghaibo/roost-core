@@ -877,11 +877,15 @@ func driveEveryPackage(t *testing.T, c fredis.IRedis, root string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	actGroups, err := activity.ParseGroups([]byte(activityGroupsYAML), "integration activity groups")
+	if err != nil {
+		t.Fatal(err)
+	}
 	actSvc, err := activity.New(activity.Config{
 		Activities: actStores.Activities, Participants: actStores.Participants,
 		Ledger: actStores.Ledger, Audits: actStores.Audits,
 		Dispatches: actStores.Dispatches, Windows: actStores.Windows,
-		ReservationTTL: 30 * time.Minute,
+		ReservationTTL: 30 * time.Minute, Groups: &actGroups,
 	})
 	if err != nil {
 		t.Fatal(err)

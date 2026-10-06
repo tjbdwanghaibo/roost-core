@@ -282,11 +282,17 @@ func TestActivityRefusesAGroupNoWindowCouldOpenWith(t *testing.T) {
 
 // C4：正常的组经真实协调器（内存存储）开窗——Key 的组 id 是组文件里本服所在的组，expected 是 Live 在组成员里
 // 找到的活着的服；组的全部 MaxExpectedGames 个成员都活着时，协调器同样接受。
+// 协调器读的是 game 读的同一个组文件（与部署相同），New 没有组就拒绝构造（RR-20261006-17）。
 func TestAWindowOpensForTheGroupTheFilePutsThisServerIn(t *testing.T) {
 	ctx := context.Background()
-	newCoordinator := func(t *testing.T) *svcactivity.Service {
+	newCoordinator := func(t *testing.T, path string) *svcactivity.Service {
 		t.Helper()
+		groups, err := svcactivity.LoadGroupsFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
 		coordinator, err := svcactivity.New(svcactivity.Config{
+			Groups:              &groups,
 			Activities:          versionstore.NewMemoryStore[svcactivity.Key, svcactivity.Activity](),
 			Participants:        versionstore.NewMemoryStore[svcactivity.ParticipantKey, svcactivity.Participant](),
 			Ledger:              versionstore.NewMemoryStore[svcactivity.RequestKey, svcactivity.ProgressReservation](),
@@ -315,7 +321,7 @@ func TestAWindowOpensForTheGroupTheFilePutsThisServerIn(t *testing.T) {
 
 	t.Run("the-live-members-of-this-servers-group", func(t *testing.T) {
 		path := writeGroupsFile(t, map[string][]int64{"east": {1200, 1201}, "west": {1300, 1301, 1302}}, "east", "west")
-		coordinator := newCoordinator(t)
+		coordinator := newCoordinator(t, path)
 		runner := runnerFor(t, path, []int32{1300, 1302}, coordinator)
 		if !slices.Equal(runner.candidates, []int32{1300, 1301, 1302}) {
 			t.Fatalf("candidates %v, want the members of group west", runner.candidates)
@@ -346,7 +352,7 @@ func TestAWindowOpensForTheGroupTheFilePutsThisServerIn(t *testing.T) {
 		for i, sid := range sids {
 			live[i] = int32(sid)
 		}
-		coordinator := newCoordinator(t)
+		coordinator := newCoordinator(t, path)
 		runner := runnerFor(t, path, live, coordinator)
 		if _, err := runner.openWindow(ctx, "race-2"); err != nil {
 			t.Fatalf("the coordinator refused a window expecting a whole %d-server group: %v", svcactivity.MaxExpectedGames, err)

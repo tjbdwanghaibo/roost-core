@@ -115,10 +115,10 @@ type Config struct {
 	// Groups is the activity groups file (activity.groups_file, C4).
 	// OpenActivity refuses a window whose group the file does not define, or
 	// whose expected set names a game outside that group (RR-20261006-17).
-	// The Mod always sets it — the key is required and Init refuses to start
-	// without it. Nil is only for a Service built directly with New (in-memory
-	// coordinators in tests, the generated game's tests), whose expected sets
-	// are then checked for shape alone.
+	// It is required: the Mod sets it from the file Init loaded, and New
+	// refuses a nil one, so no coordinator — the Mod's, a test's in-memory
+	// one or a hand-assembled one — opens windows unchecked. A coordinator
+	// built directly takes it from LoadGroupsFile or ParseGroups.
 	Groups *Groups
 
 	// Metrics receives reports. A nil reporter means no reporting and never
@@ -199,6 +199,13 @@ func New(cfg Config) (*Service, error) {
 	if cfg.Windows == nil {
 		return nil, fmt.Errorf("activity: window store is required")
 	}
+	if cfg.Groups == nil {
+		// Without the groups nothing checks an expected set against the group
+		// it opens under (RR-20261006-17). The Mod requires
+		// activity.groups_file for the same reason; a Service built directly
+		// had no such gate until this one, and was the last way around it.
+		return nil, fmt.Errorf("activity: Groups is required (the activity.groups_file the Mod loads; build it with LoadGroupsFile or ParseGroups)")
+	}
 	if cfg.GraceWindow < 0 {
 		return nil, fmt.Errorf("activity: grace window must not be negative")
 	}
@@ -273,10 +280,8 @@ func (s *Service) OpenActivity(ctx context.Context, key Key, expectedGameSIDs []
 	}
 	// Before anything is written: a refused open leaves no opening entry for
 	// the sweep to help forward (RR-20261006-17).
-	if s.cfg.Groups != nil {
-		if err := s.cfg.Groups.checkExpected(key.GroupID, expectedGameSIDs); err != nil {
-			return Activity{}, err
-		}
+	if err := s.cfg.Groups.checkExpected(key.GroupID, expectedGameSIDs); err != nil {
+		return Activity{}, err
 	}
 
 	nowUnix := s.cfg.Now().Unix()
