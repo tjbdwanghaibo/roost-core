@@ -32,8 +32,9 @@
 
 ## 2. 目标不变量
 
-1. **一个判定入口。** 一个 key 的全部 L1 写入（发布、复制、加载回填、L2 回填、删除、修复）都走 `admitLocked`，并在该 key 的 publish 分片锁下进行。L2 回填的 L2 读在锁外，写 L1 时在锁内重新比较。
-2. **先 L2，后 L1。** 写入先在 L2 上以版本 CAS 落地（`Set` / `DeleteAtVersion` 两个脚本，规则不变），只有 L2 接受、或 L2 已有同值 / 更新值时，L1 才记下这份值，并带上**确认时刻**（`confirmedAt`，L2 调用开始前的本机时间，保守）。L2 拒绝时 L1 改记 L2 当前持有的值；L2 已无值（墓碑或过期）时 L1 记一个删除标记。
+1. **一个判定入口。** 一个 key 的全部 L1 写入都在该 key 的 publish 分片锁下进行；新值（发布、复制、权威加载结果、带版本删除、L1 比 L2 新时的修复）都走 `admitLocked`。L2 回填的 L2 读在锁外，写 L1 时在锁内重新比较。
+   - 2026-10-06 按源码更正（原文写“全部 L1 写入都走 `admitLocked`”，字面上不成立）：另有几处直接写 L1，写入的都不是新值——`refresh` 记下刚从 L2 读到的值、同值或删除标记改记确认时刻；`adoptSharedLocked` 记下 L2 拒绝之后读到的值，或在 L2 已没有活值时删掉不比被拒写入新的 L1 快照；`loadForRefresh` 在权威说不存在时删掉加载开始之前确认的 L1 快照；不带版本的 `Delete`（旧发布者的失效）连 L2 一起删、不留水位。它们都过 L1 自己的 `Stale` / `Conflict` 准入，没有绕过墓碑或版本判定。写入点是一张封闭的表，`entity/remote_snapshot_write_guard_test.go` 的 `TestRemoteSnapshotCacheWritesStayInTheListedFunctions` 按源码 AST 检查：直接写 L1 / L2 只出现在表里的函数（每处写明理由），需要分片锁的 helper 只被 `*Locked` 方法或自己取 `publishMu` 的函数调用。
+2. **先 L2，后 L1。** 写入先在 L2 上以版本 CAS 落地（`Set` / `DeleteAtVersion` 两个脚本，规则不变），只有 L2 接受、或 L2 已有同值 / 更新值时，L1 才记下这份值，并带上**确认时刻**（`confirmedAt`，L2 调用开始前的本机时间，保守）。L2 拒绝时 L1 改记 L2 当前持有的值；L2 已无值（墓碑或过期）时删掉 L1 里不比被拒写入新的快照（2026-10-06 按源码更正：原文写“记一个删除标记”；`adoptSharedLocked` 不知道墓碑的确切版本，按被拒的版本记标记会挡住键过期后另一个 epoch 的合法写入，所以只删不记）。
 3. **L1 的删除标记取代本机墓碑侧表。** 删除在 L1 里是一个条目（`deleted` + 版本），与快照条目用同一条 `Stale` 规则排序：标记挡住不新于它的快照，不新于快照的删除被拒。墓碑侧表、`Superseded` 钩子、`FatalRemoteError` 分类、L1 冷时预查四处一起删掉；`cache` 包里的通用 `Superseded` / `FatalRemoteError` 能力保留（公开 API，有自己的测试），Remote 快照不再使用。
 4. **L2 回答不了时降级，但不冒充已确认。** L2 断网或结果未知时，L1 仍记下这份值，但 `confirmedAt = 0`（未确认）。权威加载的结果例外：它本身就是权威在加载开始之后的状态，记为在加载开始时刻已确认。
 5. **陈旧上限。** `remote_entity.cached_max_staleness`（core `Config.CachedMaxStaleness`，缺省等于 `snapshot_cache_ttl`，30s）。非线性读（Cached / Monotonic）只交出 `now − confirmedAt ≤ 上限` 的 L1 条目；否则先**重新确认**（见 §3），确认不了就不交出。Linearizable 照旧每次读权威。
@@ -164,8 +165,8 @@ allocs/op: PublishWarm 29 → 29，ReplicaCold 46 → 28，CachedHit 0 → 0，C
 ### 未完成 / 后续
 
 - **L2 落后于权威**（owner 写 L2 失败或结果未知）：维护者第十二轮决定**保持**，写明上界（2026-10-06）。陈旧上限确认到的是 L2，所以：
-  - **L2 的上界**：从这个 key 的旧值最后一次写进 L2 算起，最长 `snapshot_l2_ttl`（缺省 5m）。CAS 与带版本删除每次成功都重设 TTL，同一版本重写也会续期；之后 key 过期，读者重新确认时 L2 没有值，回源权威。
-  - **读者看到的上界**：Cached / Monotonic 最长在 `snapshot_l2_ttl` 之后再交出 `cached_max_staleness`（缺省等于 `snapshot_cache_ttl`，30s），即缺省配置下约 5m30s。`Linearizable` 不受影响，每次读权威。
+  - **L2 的上界**：从这个 key 的旧值最后一次写进 L2 算起，最长 `snapshot_l2_ttl`（core `DefaultConfig` 5m；生成工程配置模板 10m）。CAS 与带版本删除每次成功都重设 TTL，同一版本重写也会续期；之后 key 过期，读者重新确认时 L2 没有值，回源权威。
+  - **读者看到的上界**：Cached / Monotonic 最长在 `snapshot_l2_ttl` 之后再交出 `cached_max_staleness`（缺省等于 `snapshot_cache_ttl`，30s），即 `snapshot_l2_ttl + cached_max_staleness`：core `DefaultConfig` 约 5m30s，按生成工程配置模板（`snapshot_l2_ttl: 10m`、`cached_max_staleness: 30s`）部署约 10m30s（2026-10-06 补：原文只写了 core 缺省）。`Linearizable` 不受影响，每次读权威。
   - **通常更早修好**：owner 的 L1 条目未确认，自己下一次读这个实体时把新版本 CAS 进 L2；推送开着时，收到复制更新 / 删除的每个节点都会把它写进 L2（CAS 与带版本删除幂等）；这个实体的下一笔提交也会写 L2。
   - 没有后台补写队列。需要更短上界的部署调小 `snapshot_l2_ttl`（代价是 L2 命中率与墓碑寿命一起变短）。
 - **O4 兴趣容量**：全集群合计、满后续期在 owner 处被拒且消费者不知道。B2 只把它的后果收紧到陈旧上限，容量设计未改。

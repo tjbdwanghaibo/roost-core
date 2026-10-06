@@ -170,7 +170,7 @@
 
 | # | 决定 | 实施状态 |
 | --- | --- | --- |
-| Mirror 第 4 步 | 按推荐：推送订阅依赖 JetStream，`sync/syncbus/driver` 按主题加 DeliverNew 消费，保证确认订阅之后的发布不被静默丢掉；没开 JetStream 时退化为按需读取（Cached 按 `cached_max_staleness` 回源），显式检测并记日志；订阅可确认、首载缓冲有上界、溢出有明确行为，覆盖重连、旧 fetch 回调、renew / release 全交错；所有缓存写入仍只经 `admitLocked` | **已实施（`23e17d81`，分支 `mirror4`）**：`fsyncbus.ILiveSubscriber` / JetStream `SubscribeLive` / `mirror.NewLive`；`SnapshotClient.Start` 只在可确认订阅上开推送，普通 NATS 记 Warn、`PushEnabled=false`（T-272）；快照缓存 `ApplyReplica` 首载缓冲（缺省 64，溢出丢弃并再回源一次）；兴趣代际锁内分配 + release 撤销水位。修前红：加载期间的增量让权威读两次并丢失、release 后迟到的旧续租复活租约。真实 JetStream + Redis、B2 组合矩阵、生成工程 12 条通过。[记录](../feature/MIRROR-STEP-4-AND-O4-2026-10-06.md)（§6.8 第 5 步入口） |
+| Mirror 第 4 步 | 按推荐：推送订阅依赖 JetStream，`sync/syncbus/driver` 按主题加 DeliverNew 消费，保证确认订阅之后的发布不被静默丢掉；没开 JetStream 时退化为按需读取（Cached 按 `cached_max_staleness` 回源），显式检测并记日志；订阅可确认、首载缓冲有上界、溢出有明确行为，覆盖重连、旧 fetch 回调、renew / release 全交错；所有缓存写入仍只经 `admitLocked` | **已实施（`23e17d81`，分支 `mirror4`）**：`fsyncbus.ILiveSubscriber` / JetStream `SubscribeLive` / `mirror.NewLive`；`SnapshotClient.Start` 只在可确认订阅上开推送，普通 NATS 记 Warn、`PushEnabled=false`（T-272）；快照缓存 `ApplyReplica` 首载缓冲（缺省 64，溢出丢弃并再回源一次）；兴趣代际锁内分配 + release 撤销水位。修前红：加载期间的增量让权威读两次并丢失、release 后迟到的旧续租复活租约。真实 JetStream + Redis、B2 组合矩阵、生成工程 12 条通过。[记录](../feature/MIRROR-STEP-4-AND-O4-2026-10-06.md)（§6.8 第 5 步入口）。2026-10-06 更正：“所有缓存写入仍只经 `admitLocked`”按源码应为“新值经 `admitLocked`；回填 L2 读到的值与删除的几处直接写 L1，都在分片锁下”，写入点封闭清单由守卫测试 `TestRemoteSnapshotCacheWritesStayInTheListedFunctions` 检查（[B2 §2](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md#2-目标不变量)）；表满时 release 不留撤销水位的缺口见 RR-20261006-11（已修复，未发版） |
 | O4 | 按推荐：兴趣容量按节点计数（每个 consumer 节点各有配额），满了明确拒绝、可识别错误、日志与指标，续期失败时消费方感知并退化为按需读取；配额作为配置项，A4 严格读取并登记 | **已实施（`23e17d81`）**：`remote_entity.snapshot_interest_per_consumer`（0 = `snapshot_interest_subs / 16`，不能超过它）；`ErrInterestQuotaExceeded` / `ErrInterestRegistryFull`；`interest_rejected_total{reason}` / `interest_renew_refused_total{reason}`、限频 Warn、健康信息 `interest_refused`（T-273）。修前红：一个 consumer 占满全表后另一个 consumer 的兴趣在 owner 处被拒、读路径静默吞掉 |
 
 ## 发版前审查跟进（2026-10-06）
@@ -210,7 +210,7 @@
 | 驱动 Close 契约 | 写进 A2 驱动契约表 | 已实施（`88f33776`，未发版）：按实测写进 [redis/driver](../../redis/driver/README.md) 与 [mongo/driver](../../mongo/driver/README.md) README §5；单机与 Cluster 重复 Close 不一致等登记 [WANTED W-2026-10-06-02](../bug/WANTED.md)，代码未改 |
 | cfggen globals 规则 | 支持 required / min / enum，与 tablegen 统一 | 已实施（229a5aa0） |
 | bus SETNX 去重 | 保持，写进 bus 契约 | 已实施（`88f33776`，未发版）：契约写进 `bus/reliable.go` 的 `ReliableStore` 注释（按当前源码：`BeginConsume` 出错进死信、不重投；死信重投用新 MsgID） |
-| L2 落后权威 | 保持，写明上界 | 已实施（`88f33776`，未发版）：[B2 §7](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) 与 USER_GUIDE——L2 最长落后 `snapshot_l2_ttl`，读者再加 `cached_max_staleness`，缺省约 5m30s |
+| L2 落后权威 | 保持，写明上界 | 已实施（`88f33776`，未发版）：[B2 §7](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) 与 USER_GUIDE——L2 最长落后 `snapshot_l2_ttl`，读者再加 `cached_max_staleness`，缺省约 5m30s（2026-10-06 补：这是 core `DefaultConfig`；按生成工程配置模板 `snapshot_l2_ttl: 10m` 部署约 10m30s） |
 | Ops Bearer | 收紧为必须带 `Bearer ` | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)） |
 | CAS 冲突率口径 | versionstore 层统一计数 | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：chat / rank 自报删除 |
 | activity 预约身份 | 保持 | 保持 |

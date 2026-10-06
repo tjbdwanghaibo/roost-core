@@ -95,7 +95,7 @@ func remoteSnapshotReplicaKey(key entity.RemoteSnapshotKey) int64 {
 	return result
 }
 
-// SnapshotReplicaStore 把快照复制消息按 key 落到 SnapshotClient 的缓存（经 admitLocked）。
+// SnapshotReplicaStore 把快照复制消息按 key 落到 SnapshotClient 的缓存（经 RemoteSnapshotCache.ApplyReplica 准入）。
 type SnapshotReplicaStore struct{ client *SnapshotClient }
 
 func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envelope) error {

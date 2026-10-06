@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"sync"
 	"testing"
@@ -87,6 +88,66 @@ func (e *step4JetStream) bus(sid int32) fsyncbus.ISyncBus {
 		_ = bus.StopWithContext(stopCtx)
 	})
 	return bus
+}
+
+// durable 名在服务端的实际形状（发版文档 REM-4 疑点闭环，2026-10-06）：durableSyncName 经 sanitizeSyncName
+// 把主题里的 "." 换成 "_"，所以快照主题的 DeliverNew durable 是 sync_remote_entity_snapshot_live_<sid>_<16 位
+// 十六进制>，旧的 DeliverAll durable 是 sync_remote_entity_snapshot_<sid>_<16 位十六进制>（MIRROR-STEP-4 与
+// USER_GUIDE 之前写成 sync_remote_entity_snapshot.live_<sid>_…）。这里从服务端列出消费者名核对。
+func TestRealJetStreamLiveDurableNameShape(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	env := newStep4JetStream(t, ctx)
+	bus := env.bus(2503)
+	live, ok := bus.(fsyncbus.ILiveSubscriber)
+	if !ok {
+		t.Fatal("the JetStream sync bus must provide confirmed subscriptions")
+	}
+	nop := func(*fsyncbus.SyncMsg) error { return nil }
+	unsubAll, err := bus.Subscribe(SyncTopicSnapshot, nop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unsubAll()
+	unsubLive, err := live.SubscribeLive(SyncTopicSnapshot, nop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unsubLive()
+
+	nc, err := gonats.Connect(env.url, gonats.Timeout(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	js, err := gojs.New(nc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := js.Stream(ctx, syncdriver.JetStreamSyncStream(env.prefix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	lister := stream.ConsumerNames(ctx)
+	for name := range lister.Name() {
+		names = append(names, name)
+	}
+	if err := lister.Err(); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(names)
+	t.Logf("server-side durable names: %v", names)
+	liveName := regexp.MustCompile(`^sync_remote_entity_snapshot_live_2503_[0-9a-f]{16}$`)
+	allName := regexp.MustCompile(`^sync_remote_entity_snapshot_2503_[0-9a-f]{16}$`)
+	var sawLive, sawAll bool
+	for _, name := range names {
+		sawLive = sawLive || liveName.MatchString(name)
+		sawAll = sawAll || allName.MatchString(name)
+	}
+	if !sawLive || !sawAll || len(names) != 2 {
+		t.Fatalf("durables %v; want one sync_remote_entity_snapshot_live_2503_<hex16> (DeliverNew) and one sync_remote_entity_snapshot_2503_<hex16> (DeliverAll)", names)
+	}
 }
 
 // 可确认订阅：确认之前入流的历史不重放（DeliverNew）；确认之后发布的每条都投递；退订期间发布的，同一身份

@@ -26,14 +26,14 @@
 
 **混跑**：旧 owner 不发请求 → 新只读方行为不变；旧只读方不订阅新主题 → 新 owner 的请求没人收，旧只读方按原来的续租周期收敛（最长约 15s，与现在相同）；JetStream 流的 subject 是 `<prefix>.>`，新主题不用改流配置。普通 NATS（推送本来就关着）两端都不收不发。
 
-**可观测**：`remote_entity.remote.interest_refresh_requests_total{result=accepted|coalesced|historic|own|invalid}`、`remote_entity.remote.interest_refresh_renewed_total`；owner 发送失败 Warn。
+**可观测**（2026-10-06 按源码更正：补 `stopped` 与 owner 侧发送计数）：只读方 `remote_entity.remote.interest_refresh_requests_total{result=accepted|coalesced|historic|own|invalid|stopped}`（`stopped`：客户端已停，`work` 准入关闭，请求不再安排遍历）、`remote_entity.remote.interest_refresh_renewed_total`；owner `remote_entity.remote.interest_refresh_sent_total{result=sent|error}`，发送失败另记 Warn。
 
 ## 3. O-M6-3 方案：墓碑写入后 WAIT
 
 **驱动（redis，A2 契约）**：新增可选能力 `fredis.ReplicatedEvaler.EvalReplicated(ctx, script, keys, numReplicas, timeout, args...)`，`redis/driver.Client` 实现：
 
 - 在一条独占的物理连接上流水线发 `EVAL` 与 `ROLE`（一次往返）；`ROLE` 报告主节点当前连着的副本数。为 0 时不发 `WAIT`（单机开发环境不被 `WAIT` 卡到超时），结果标 `no_replicas`；否则同一连接上发 `WAIT <numReplicas> <timeout>`。`WAIT` 只统计本连接之前的写，所以必须与脚本同连接（与 `EvalDurable` 的 WAITAOF 同理）。
-- Cluster：先按脚本第一个键取该槽的主节点（`MasterForKey`），在那个节点的独占连接上做同样的事，`WAIT` 只发往该主节点。脚本回 `MOVED` / `ASK`（拓扑刚变，脚本没执行）时改经集群客户端发一次普通脚本（自动跟随重定向），不再 `WAIT`，结果标 `redirected`。其他客户端类型（Ring 等）发普通脚本，标 `unsupported`。
+- Cluster：先按脚本第一个键取该槽的主节点（`MasterForKey`），在那个节点的独占连接上做同样的事，`WAIT` 只发往该主节点。脚本回 `MOVED` / `ASK`（拓扑刚变，脚本没执行）时改经集群客户端发一次普通脚本（自动跟随重定向），不再 `WAIT`，驱动结果的跳过原因为 `ReplicatedSkipRedirected`。其他客户端类型（Ring 等）发普通脚本，跳过原因为 `ReplicatedSkipUnsupported`。两种跳过在 L2 store 的指标与统计里合并为 `skipped`（见下表）。
 - 重放：脚本照旧不重放，只有流水线里每条命令都证明没执行时才整条换连接重发（与 `EvalBatchDurable` 相同）；`WAIT` 从不重放。`WAIT` 或 `ROLE` 出错时脚本回复已经收到：脚本属于“已执行”，副本是否收到属于**结果未知**（复制未知），只体现在 `WaitErr`，不改变脚本的分类。
 
 **L2 store**：`DeleteAtVersion` 在配置了副本数且 redis 提供上述能力时改走 `EvalReplicated`；脚本结果的处理不变。`WAIT` 的结果**不回滚、不报错给调用方**——墓碑已经写在主节点上，报错只会把一次已提交的删除变成“结果未知”：
@@ -44,7 +44,9 @@
 | `short` | `WAIT` 超时、确认数不足（副本落后或暂停） | 计数 + 限频 Warn（每个 store 10s 一条） |
 | `no_replicas` | 主节点没有连着的副本 | 计数 + 每个 store 首次一条 Info |
 | `error` | `WAIT` / `ROLE` 出错（复制未知） | 计数 + 限频 Warn |
-| `redirected` / `unsupported` | 没有执行 `WAIT` | 计数 |
+| `skipped` | 没有执行 `WAIT`：驱动报重定向（Cluster 拓扑刚变）或客户端不支持；redis 不提供该能力时 store 自己发普通脚本，同样计 `skipped` | 计数（统计字段 `Skipped`） |
+
+（2026-10-06 按源码更正：原表写 `redirected` / `unsupported` 两个结果；`recordTombstoneWait`（`remoteentity/snapshot_l2.go`）的指标标签只有 `confirmed|short|no_replicas|error|skipped` 五个值，跳过原因只在驱动返回值里区分。）
 
 指标 `remote_entity.snapshot_l2_tombstone_wait_total{result}`；store 另有 `TombstoneWaitStats()` 供测试与诊断。调用方最多多等 `timeout`。
 

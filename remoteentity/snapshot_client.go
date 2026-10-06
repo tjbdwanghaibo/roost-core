@@ -32,7 +32,9 @@ var ErrSnapshotClientStopped = errors.New("remote_entity: snapshot client is sto
 // 它不要求写 backend：依赖只有可选的共享 L2、可选的权威 loader 和同步总线。Manager（写 owner）组合一个
 // SnapshotClient 并委托它，owner 的提交后发布走包内入口 publishCommitted，只读方拿不到。
 //
-// 一个 key 的全部缓存写入仍只经 RemoteSnapshotCache 的 admitLocked（B2）：本类型不直接写 L1 / L2。
+// 本类型不直接写 L1 / L2：全部缓存写入经 RemoteSnapshotCache 的公开入口（Publish / ApplyReplica /
+// DeleteAtVersion / Read / LoadAuthoritative），新值由其中的 admitLocked 先经 L2 准入（B2）；缓存内部
+// 直接写 L1 的几处只回填 L2 的值或删除，清单见 RemoteSnapshotCache 类型注释。
 type SnapshotClient struct {
 	cfg          *Config
 	consumerSID  int32
@@ -382,7 +384,7 @@ func (c *SnapshotClient) pruneLocalInterestsLocked(now int64) {
 
 // ---- owner 侧（包内入口） ----
 
-// publishCommitted 是 owner 提交后的发布：先经缓存唯一的写入口记下（admitLocked，L2 CAS 在前），再按兴趣
+// publishCommitted 是 owner 提交后的发布：先经缓存新值的唯一写入口记下（admitLocked，L2 CAS 在前），再按兴趣
 // 广播；删除同理，带提交版本。只有 Manager（写 owner）调用；只读方的公开 API 里没有它。
 func (c *SnapshotClient) publishCommitted(ctx context.Context, commit entity.RemoteCommit) error {
 	publisher, publish := c.transport.(entity.IRemoteSnapshotPublisher)

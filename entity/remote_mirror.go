@@ -75,7 +75,9 @@ type RemoteSnapshotRead struct {
 	Key RemoteSnapshotKey
 	// Consistency 零值按 RemoteReadCached。
 	Consistency RemoteReadConsistency
-	// After 是最低观察 token；零值不限。Cached 读不因它回源：不满足就是未找到（Cached 只读缓存）。
+	// After 是最低观察 token；零值不限。Cached 读不因它回源（Cached 只读缓存）：缓存里有确认过的值但不满足
+	// After 时返回 ErrRemoteSnapshotStale（epoch 不可比时 ErrRemoteObservationIncomparable），缓存里没有值
+	// 才是未找到（found=false、err=nil）。
 	After RemoteObservation
 }
 

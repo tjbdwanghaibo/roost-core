@@ -37,8 +37,8 @@
 - 公开 API 只增不删；wire、L2 键、Lua、生成形状不变；`Manager.BindSync` 的旧用法照旧用普通订阅（调用方自管）。
 - **行为变化**：
   - `Assembly.Start` / `SnapshotClient.Start` 在没有 `SubscribeLive` 的总线（kit 缺省的普通 NATS）上不再订阅快照推送：Cached 读在陈旧上限（缺省 30s）后经 L2 / 权威重新确认，之前推送能更早刷新。启动日志与 `Stats().PushEnabled` 明示。
-  - JetStream 上快照主题改用新的 DeliverNew durable（`sync_remote_entity_snapshot.live_<sid>_…`），旧的 DeliverAll durable 不再被消费，可由运维删除。
-  - 兴趣表按 consumer 配额（缺省总上限的 1/16，即 16384）：单个 consumer 超过配额的 key 不再有推送，按需读取；不再因为别的 consumer 占满全表而被拒。兴趣表不再单独限制 key 数（`snapshot_interest_keys` 仍是 consumer 本机表上限）。
+  - JetStream 上快照主题改用新的 DeliverNew durable（服务端名字 `sync_remote_entity_snapshot_live_<sid>_<16 位十六进制>`；2026-10-06 更正：原写 `sync_remote_entity_snapshot.live_<sid>_…`，`durableSyncName` 经 `sanitizeSyncName` 把 `.` 换成 `_`，已在隔离 NATS 上列消费者核对，用例 `TestRealJetStreamLiveDurableNameShape`），旧的 DeliverAll durable（`sync_remote_entity_snapshot_<sid>_<16 位十六进制>`）不再被消费，可由运维删除。
+  - 兴趣表按 consumer 配额（缺省总上限的 1/16：core `DefaultConfig` 总上限 262144，即 16384；生成工程配置模板 `snapshot_interest_subs: 100000`，即 6250）：单个 consumer 超过配额的 key 不再有推送，按需读取；不再因为别的 consumer 占满全表而被拒。兴趣表不再单独限制 key 数（`snapshot_interest_keys` 仍是 consumer 本机表上限）。
 - 配置：新键 `remote_entity.snapshot_interest_per_consumer`（int，0 = 总上限 / 16，必须 ≤ `snapshot_interest_subs`）。
 
 ## 5. 验证
@@ -56,7 +56,7 @@
 - **可确认订阅**：`fsyncbus.ILiveSubscriber`；JetStream `SubscribeLive` 建 DeliverNew durable（名 `durableSyncName(prefix, topic+".live", sid)`），与同主题的 DeliverAll durable、本地 fanout 都分开；`mirror.NewLive` / `Replicator.Live()`，总线不支持时 `Start` 返回 `mirror.ErrLiveSubscribeUnsupported`。
 - **推送 / 退化**：`SnapshotClient.Start` 按 `bus.(fsyncbus.ILiveSubscriber)` 选择；支持时快照复制器用 `NewLive`；不支持时不订阅快照主题（发布用的复制器照建，供 owner 发布），Warn `snapshot push disabled …`、指标 `remote_entity.snapshot_push_enabled{sid}` = 0、`Stats().PushEnabled=false`（`Manager.Stats().SnapshotPush`，kit 健康信息 `snapshot_push=`）。兴趣主题照旧订阅。`Manager.BindSync` 的旧用法不变（普通订阅，调用方自管）。
 - **首载缓冲**（`entity/remote_snapshot.go`）：`loadAuthoritative` 在取得加载名额后 `beginBootstrap`，`fetchAndAdmit`（原加载 + 准入逻辑原样搬入）之后 `endBootstrap`；复制消息经 `ApplyReplica` 进入，key 在首载时进缓冲（`ReplicaBuffer`，缺省 64，remoteentity `Config.SnapshotReplicaBuffer`），最后一个加载结束时取走并按到达顺序重放（`applyReplica` → `ApplyUpdate` / `DeleteAtVersion` / `Delete`，都经 `admitLocked`）；溢出：清空缓冲、标记，之后到达的也丢，加载结束后 `fetchAndAdmit` 再回源一次，Warn + `remote_entity.snapshot_bootstrap_overflow_total`；重放失败只计数（`…_replay_failed_total`）。`BootstrapStats()` / `SnapshotClientStats.Bootstrap`。`SnapshotReplicaStore` 改走 `ApplyReplica`，不在首载时的缺基仍由它回源（那次回源本身也是首载）。
-- **兴趣代际**：`RenewInterest` / `ReleaseInterest` 在条带锁内分配 generation；兴趣表的 `release(g>0)` 留撤销水位（`released` 条目，存活 `SnapshotInterestTTL`，计入每节点条目、不计入配额），之前发出的 renew 迟到后被忽略；generation 0（旧发布者）不留水位；本机回滚 / 清理用 `drop`（不留水位）。
+- **兴趣代际**：`RenewInterest` / `ReleaseInterest` 在条带锁内分配 generation；兴趣表的 `release(g>0)` 留撤销水位（`released` 条目，存活 `SnapshotInterestTTL`，计入每节点条目、不计入配额），之前发出的 renew 迟到后被忽略；generation 0（旧发布者）不留水位；本机回滚 / 清理用 `drop`（不留水位）。表满、被撤销的条目又不存在（续租还在路上或曾被拒）时，原实现只撤销不留水位，表里随后空出一格就会让迟到的旧续租复活租约（[RR-20261006-11](../bug/RR-20261006-11.md)）；现在改记到每个 consumer 一个的溢出水位（代际上限 + key 指纹位图，同样存活 `SnapshotInterestTTL`，不占表容量）。
 - **O4**：`remoteInterestRegistry` 按 consumer 计（`perConsumer`），配额 `Config.SnapshotInterestPerConsumer`（kit `remote_entity.snapshot_interest_per_consumer`，0 = `SnapshotInterestSubs / 16`），`SnapshotInterestSubs` 是每节点条目上限；去掉全表 key 数上限（`snapshot_interest_keys` 仍是 consumer 本机表上限）。拒绝：`ErrInterestQuotaExceeded` / `ErrInterestRegistryFull`（都 `errors.Is` `entity.ErrRemoteOverloaded`），指标 `remote_entity.remote.interest_rejected_total{reason=consumer_quota|registry_full}`，Warn 每表每 10 秒至多一条；consumer 侧 `remote_entity.remote.interest_renew_refused_total{reason}`、`Stats().InterestRejected`（`Manager.Stats().InterestRefused`，健康信息 `interest_refused=`）。配额大于总上限：`NewSnapshotClient` 与 kit `Init` 拒绝；键登记进 `app` 的 `frameworkIntKeys`（A4 严格读取，`ValidateServiceConfig` 一并检查类型）。
 
 ### 6.2 先红后绿

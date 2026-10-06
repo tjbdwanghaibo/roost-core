@@ -73,6 +73,54 @@ type remoteInterestRegistry struct {
 	maxSubs     int
 	fence       time.Duration
 	lastLogAt   int64
+	// overflow 是表满放不下撤销水位时的退路（RR-20261006-11），每个 consumer 至多一个，不占表容量。
+	overflow map[int32]*interestOverflowFence
+}
+
+// interestOverflowFence 记一个 consumer 在表满时发出、没能留下撤销水位的 release：代际上限、涉及 key 的
+// 指纹位图与到期时刻（最后一次 release + 兴趣 TTL，与撤销水位同一个上界）。到期前，这个 consumer 代际不新于
+// generation、key 落在位图里的新租约一律拒绝。位图有碰撞：同一窗口里别的 key 的迟到旧续租也可能被拒，
+// 后果与被拒的续租相同（这个 key 暂无推送、读取按陈旧上限回源），下一次续租（代际更新）照常建立。
+// 撤销之后发出的续租代际一定更新，不受影响。
+type interestOverflowFence struct {
+	generation uint64
+	expiresAt  int64
+	keys       [4]uint64
+}
+
+func interestOverflowBit(key entity.RemoteSnapshotKey, sid int32) (word int, mask uint64) {
+	bit := uint64(remoteInterestReplicaKey(entity.RemoteSnapshotInterest{ConsumerSID: sid, Key: key})) % 256
+	return int(bit / 64), uint64(1) << (bit % 64)
+}
+
+// overflowFencedLocked 报告一条新租约是否落在表满时没能留下水位的 release 之后（见 interestOverflowFence）。
+func (r *remoteInterestRegistry) overflowFencedLocked(now int64, interest entity.RemoteSnapshotInterest) bool {
+	fence := r.overflow[interest.ConsumerSID]
+	if fence == nil {
+		return false
+	}
+	if fence.expiresAt <= now {
+		delete(r.overflow, interest.ConsumerSID)
+		return false
+	}
+	word, mask := interestOverflowBit(interest.Key, interest.ConsumerSID)
+	return interest.Generation <= fence.generation && fence.keys[word]&mask != 0
+}
+
+// fenceOverflowLocked 在表满、放不下撤销水位时记下这次 release（见 interestOverflowFence）。
+func (r *remoteInterestRegistry) fenceOverflowLocked(now int64, key entity.RemoteSnapshotKey, sid int32, generation uint64) {
+	fence := r.overflow[sid]
+	if fence == nil || fence.expiresAt <= now {
+		fence = &interestOverflowFence{}
+		if r.overflow == nil {
+			r.overflow = make(map[int32]*interestOverflowFence)
+		}
+		r.overflow[sid] = fence
+	}
+	word, mask := interestOverflowBit(key, sid)
+	fence.keys[word] |= mask
+	fence.generation = max(fence.generation, generation)
+	fence.expiresAt = now + r.fence.Nanoseconds()
 }
 
 func newRemoteInterestRegistry(limits remoteInterestLimits) *remoteInterestRegistry {
@@ -133,6 +181,10 @@ func (r *remoteInterestRegistry) renewIfNeeded(interest entity.RemoteSnapshotInt
 	}
 	if exists && interest.Generation <= current.generation {
 		// 撤销水位之前发出的续租迟到了：consumer 已经撤销，不能把租约复活。
+		return false, nil
+	}
+	if r.overflowFencedLocked(now, interest) {
+		// 同上，只是那次撤销赶上表满、水位记在 overflow 里（RR-20261006-11）。
 		return false, nil
 	}
 	// 新租约（或撤销水位之后的续租）：先按这个 consumer 的配额，再按每节点的内存上限。
@@ -214,7 +266,9 @@ func (r *remoteInterestRegistry) removeLocked(key entity.RemoteSnapshotKey, sid 
 // A release with a generation leaves a watermark (Mirror 第 4 步): before it,
 // a release that overtook an older renewal on the wire found nothing to
 // cancel, and the late renewal then created a lease the consumer had already
-// withdrawn. Generation 0 is the legacy publisher and leaves none.
+// withdrawn. Generation 0 is the legacy publisher and leaves none. When the
+// registry is full and the entry does not exist, the watermark goes to the
+// consumer's overflow fence instead of the table (RR-20261006-11).
 func (r *remoteInterestRegistry) release(key entity.RemoteSnapshotKey, consumerSID int32, generation uint64) {
 	if r == nil {
 		return
@@ -226,9 +280,18 @@ func (r *remoteInterestRegistry) release(key entity.RemoteSnapshotKey, consumerS
 	if exists && generation < current.generation {
 		return
 	}
-	if generation == 0 || (!exists && r.total >= r.maxSubs) {
-		// 旧发布者没有代际，或表已满放不下水位：只撤销（之前的行为）。
+	if generation == 0 {
+		// 旧发布者没有代际：只撤销（之前的行为）。
 		r.removeLocked(key, consumerSID)
+		return
+	}
+	if !exists && r.total >= r.maxSubs {
+		r.pruneExpiredLocked(now)
+	}
+	if !exists && r.total >= r.maxSubs {
+		// 表已满放不下水位。之前在这里只撤销：之后表里空出一格，迟到的旧续租就复活了 consumer 已撤销的
+		// 租约（RR-20261006-11）。改记到 overflow，不占表容量。
+		r.fenceOverflowLocked(now, key, consumerSID, generation)
 		return
 	}
 	r.setLocked(key, consumerSID, interestLease{expiresAt: now + r.fence.Nanoseconds(), generation: generation, released: true})
@@ -276,6 +339,11 @@ func (r *remoteInterestRegistry) consumerLeases(sid int32) int {
 }
 
 func (r *remoteInterestRegistry) pruneExpiredLocked(now int64) {
+	for sid, fence := range r.overflow {
+		if fence.expiresAt <= now {
+			delete(r.overflow, sid)
+		}
+	}
 	for key, consumers := range r.entries {
 		for sid, lease := range consumers {
 			if lease.expiresAt <= now {

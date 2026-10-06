@@ -128,9 +128,13 @@ type RemoteSnapshotCacheConfig struct {
 // docs/feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md）之后它的契约是：
 //
 //   - 共享 L2 是快照水位（已知最新版本 / 是否已删除）的唯一权威，L1 只是它的有界副本。
-//   - 一个 key 的全部 L1 写入——owner 发布、复制消息、权威加载回填、L2 回填、删除、修复——都在该 key 的
-//     publish 分片锁下经 admitLocked：先在 L2 上以版本 CAS（或带版本删除）落地，L1 只记下 L2 接受或
-//     L2 已持有的值，带上确认时刻 confirmedAt。L2 拒绝时 L1 改记 L2 当前的值。
+//   - 一个 key 的全部 L1 写入都在该 key 的 publish 分片锁下。新值——owner 发布、复制消息、权威加载结果、
+//     带版本删除、L1 比 L2 新时的修复——经 admitLocked：先在 L2 上以版本 CAS（或带版本删除）落地，L1 只记下
+//     L2 接受或 L2 已持有的值，带上确认时刻 confirmedAt。L2 拒绝时 L1 改记 L2 当前的值。
+//   - 其余几处直接写 L1，写入的都不是新值：refresh 记下刚从 L2 读到的值或给已有条目改记确认时刻，
+//     adoptSharedLocked 记下 L2 拒绝之后读到的值，loadForRefresh 在权威说不存在时删掉旧快照，不带版本的
+//     Delete（旧发布者）连 L2 一起删。写入点是一张封闭的表，由 TestRemoteSnapshotCacheWritesStayInTheListedFunctions
+//     按源码检查（每处的理由写在表里）；新增写入点先想清楚为什么不能经 admitLocked。
 //   - L2 回答不了（断网、结果未知）时降级：L1 照记，但 confirmedAt = 0（未确认）。权威加载的结果例外，
 //     记为在加载开始时确认。
 //   - 非线性读只交出 now − confirmedAt ≤ MaxStaleness 的条目；其余先 refresh 重新确认。
@@ -383,7 +387,7 @@ func covers(snapshot RemoteSnapshotEnvelope, after RemoteObservation) error {
 	return nil
 }
 
-// loadAuthoritative 读权威并经 admitLocked 记入缓存（唯一写入口），返回缓存最终持有、满足 after 的值。
+// loadAuthoritative 读权威并经 admitLocked 记入缓存（新值的唯一写入口），返回缓存最终持有、满足 after 的值。
 //
 // 加载期间这个 key 处于首载（beginBootstrap）：复制消息进缓冲，不与加载结果交错写入。加载结果装入之后
 // 结束首载、按到达顺序重放缓冲（仍经 admitLocked，版本 / epoch / 删除标记决定取舍）：加载期间的增量
@@ -475,7 +479,8 @@ func (c *RemoteSnapshotCache) fetchAndAdmit(ctx context.Context, key RemoteSnaps
 
 // ApplyReplica 是复制消息进入缓存的入口（Mirror 第 4 步）。这个 key 的权威加载在途时消息进首载缓冲，
 // 由加载结束时重放；否则直接准入：快照更新经 ApplyUpdate（增量缺基返回 ErrRemoteSnapshotGap，由调用方
-// 决定是否回源），带版本删除经 DeleteAtVersion，不带版本的失效经 Delete。全部写入都经 admitLocked。
+// 决定是否回源），带版本删除经 DeleteAtVersion，不带版本的失效经 Delete。快照与带版本删除经 admitLocked；
+// 不带版本的失效是旧发布者的语义，直接删 L1 与 L2、不留水位。
 func (c *RemoteSnapshotCache) ApplyReplica(ctx context.Context, msg RemoteSnapshotReplica) error {
 	if c == nil || c.l1 == nil {
 		return nil
@@ -924,7 +929,7 @@ func (c *RemoteSnapshotCache) publishLocked(ctx context.Context, snapshot Remote
 	return c.admitLocked(ctx, next, authoritativeAt)
 }
 
-// admitLocked 是 L1 唯一的写入口（B2）：先让共享 L2 判定（快照走版本 CAS，删除走带版本删除），再按
+// admitLocked 是新值进入缓存的唯一写入口（B2；其余直接写 L1 的点只回填 L2 的值或删除，见类型注释）：先让共享 L2 判定（快照走版本 CAS，删除走带版本删除），再按
 // 判定写 L1——
 //
 //   - 接受：L1 记下这份，确认时刻为 L2 调用开始前（权威答案取更早的加载开始时刻）；

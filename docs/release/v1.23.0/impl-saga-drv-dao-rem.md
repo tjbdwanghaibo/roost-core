@@ -2419,11 +2419,11 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 
 - 不变量 I1：一个 key 的全部 L1 写入在该 key 的 `publishMu` 分片锁下进行（`entity/remote_snapshot.go:162`）。核对结果：`Publish`（`:886`）、`fetchAndAdmit`（`:465`）、`refresh`（`:733`）、`loadForRefresh`（`:817`）、`Delete`（`:1078`）、`DeleteAtVersion`（`:1100`）都先取这把锁。
 - 不变量 I2：写进 L1 的快照值要么被 L2 以 CAS / 带版本删除接受过（`admitLocked`），要么就是刚从 L2 读到的值（`refresh` / `adoptSharedLocked`），要么带 `confirmedAt = 0` 降级。
-  - **与记录的字面差异**：方案 §2.1 与类型注释（`:131`）写“全部 L1 写入都经 `admitLocked`”。源码里经 `admitLocked` 的是 `publishLocked`（`:924`）、`DeleteAtVersion`（`:1110`）、`refresh` 的“L1 比 L2 新”修复分支（`:765`）；另有直接写 L1 的点：`refresh` 的 `setL1Locked`（`:744`、`:756`、`:779`、`:795`，写入的是 L2 刚读到的值或给删除标记补确认时刻）、`adoptSharedLocked` 的 `setL1Locked`（`:1001`）与 `l1.Delete`（`:997`）、`loadForRefresh` 的 `l1.Delete`（`:820`）、无版本 `Delete` 的 `l1.Delete`（`:1088`）。这些写入都在 `publishMu` 下，值都来自 L2 或权威“不存在”，语义上不违反“L1 只缓存 L2 确认过的版本”，但不是字面上的“只经 `admitLocked`”。
+  - **与记录的字面差异**：方案 §2.1 与类型注释（`:131`）写“全部 L1 写入都经 `admitLocked`”。源码里经 `admitLocked` 的是 `publishLocked`（`:924`）、`DeleteAtVersion`（`:1110`）、`refresh` 的“L1 比 L2 新”修复分支（`:765`）；另有直接写 L1 的点：`refresh` 的 `setL1Locked`（`:744`、`:756`、`:779`、`:795`，写入的是 L2 刚读到的值或给删除标记补确认时刻）、`adoptSharedLocked` 的 `setL1Locked`（`:1001`）与 `l1.Delete`（`:997`）、`loadForRefresh` 的 `l1.Delete`（`:820`）、无版本 `Delete` 的 `l1.Delete`（`:1088`）。这些写入都在 `publishMu` 下，值都来自 L2 或权威“不存在”，语义上不违反“L1 只缓存 L2 确认过的版本”，但不是字面上的“只经 `admitLocked`”。（已闭环，fixr：注释与 B2 §2、DECISIONS 第九轮按源码改为“新值经 `admitLocked`，其余只回填 L2 的值或删除”，逐点核对没有绕过准入，见 [RR-20261006-11 记录](../../bugfix/RR-20261006-11.md) §2.1。）
 - 不变量 I3：非线性读只交出 `fresh` 的条目（`readConfirmed` `:687`、`refresh` `:736`）；`Linearizable` 每次读权威（`Read` `:658`）。
 - 不变量 I4：同版本异值是一致性错误、不降级（`admitLocked` `:949`、`refresh` `:751`）。
 - 不变量 I5：早于 `snapshot_l2_ttl / 2` 的复制快照不进缓存（`remoteentity/syncer.go:126`）。
-- 守卫测试：`TestB2*` 六条（`remoteentity/snapshot_l2_watermark_promises_test.go`）；组合矩阵 `TestRealB2WatermarkMatrixStandalone` / `TestRealB2WatermarkMatrixCluster`（`remoteentity/snapshot_l2_watermark_matrix_integration_test.go`）；O5 `TestRealJetStreamReplayAfterL2ExpiryDoesNotResurrect`（`remoteentity/snapshot_replay_jetstream_integration_test.go`）。**没有结构性守卫**（例如 grep 新增的 L1 写入点）防止今后绕过 `publishMu` / `admitLocked` 新增写入口。
+- 守卫测试：`TestB2*` 六条（`remoteentity/snapshot_l2_watermark_promises_test.go`）；组合矩阵 `TestRealB2WatermarkMatrixStandalone` / `TestRealB2WatermarkMatrixCluster`（`remoteentity/snapshot_l2_watermark_matrix_integration_test.go`）；O5 `TestRealJetStreamReplayAfterL2ExpiryDoesNotResurrect`（`remoteentity/snapshot_replay_jetstream_integration_test.go`）。**没有结构性守卫**（例如 grep 新增的 L1 写入点）防止今后绕过 `publishMu` / `admitLocked` 新增写入口。（已闭环，fixr：加 AST 守卫 `TestRemoteSnapshotCacheWritesStayInTheListedFunctions`，见 [RR-20261006-11 记录](../../bugfix/RR-20261006-11.md) §2.1。）
 
 **4. 控制流**
 
@@ -2556,7 +2556,7 @@ allocs/op: PublishWarm 29 → 29，ReplicaCold 46 → 28，CachedHit 0 → 0，C
 
 **9. review 检查点**
 
-- [ ] grep `entity/remote_snapshot.go` 中全部 L1 写入点（`setL1Locked(`、`admitLocked(`、`c.l1.Delete(`、`c.l1.SetWithTTL(`，当前 `:744 :756 :765 :779 :795 :820 :924 :946 :954 :997 :1001 :1013 :1088 :1110`），逐一确认都在 `publishMu[shard(key)]` 下；并判断“只经 `admitLocked`”的字面说法（`:131`、B2 §2.1、DECISIONS 第九轮）是否应改为“经 `admitLocked`，或写入刚从 L2 读到的值”。
+- [x] grep `entity/remote_snapshot.go` 中全部 L1 写入点（`setL1Locked(`、`admitLocked(`、`c.l1.Delete(`、`c.l1.SetWithTTL(`，当前 `:744 :756 :765 :779 :795 :820 :924 :946 :954 :997 :1001 :1013 :1088 :1110`），逐一确认都在 `publishMu[shard(key)]` 下；并判断“只经 `admitLocked`”的字面说法（`:131`、B2 §2.1、DECISIONS 第九轮）是否应改为“经 `admitLocked`，或写入刚从 L2 读到的值”。（fixr：已核对并加守卫，见 [RR-20261006-11 记录](../../bugfix/RR-20261006-11.md) §2.1。）
 - [ ] 确认 `refresh`（`:719`）在锁外读 L2、锁内重看 L1 时，`hasCurrent && fresh` 的短路（`:736`）不会把一个“别人刚以 `confirmedAt = authoritativeAt` 写入、但比 L2 旧”的条目当作 fresh 交出（关注 `authoritativeAt` 早于 `started` 的情形）。
 - [ ] 确认 `publishLocked` 的“已确认的更新条目在前则不写 L2”（`:918`）与 O5 一起成立：L1 有已确认 v2、L2 已过期时，迟到的 v1 不会写进 L2（看 `TestRealB2WatermarkMatrix*` 的 `deliverall-replay/replica/hot` 格）。
 - [ ] 确认 `adoptSharedLocked` 在 L2 无活值时只删“不新于被拒写”的 L1 快照、不记删除标记（`:995`～`:998`），并看注释给的理由（避免挡住键过期后另一 epoch 的合法写入）是否被某个用例钉住。
@@ -2735,7 +2735,7 @@ N8 带 epoch 的 token 也把版本下推给 loader
 - [ ] 确认 `loadAuthoritative` 对返回值的最终检查（`entity/remote_snapshot.go:419`～`:432`）覆盖 Linearizable 出口（`Read` `:662` 直接返回它）。
 - [ ] 确认 `gatedSnapshotL2` 的四个方法（`remoteentity/snapshot_client.go:578`～`:612`）都先 `work.Begin()`，且 `Stop` 中 `work.Stop()` 先于 `stopCancel()`（`:535`～`:536`）。
 - [ ] 确认 `Covers` 的“两个 epoch 都 ≥ 且至少一个更新”分支（`entity/remote_mirror.go:63`）与 L2 CAS 脚本的“marker 或 route 任一更小即拒”（`remoteentity/snapshot_l2.go` CAS 脚本）对混合 epoch 的处理一致。
-- [ ] 修正或登记 `entity/remote_mirror.go:78` 注释与源码的不一致。
+- [x] 修正或登记 `entity/remote_mirror.go:78` 注释与源码的不一致。（fixr：已按源码改正。）
 
 <a id="rem-3"></a>
 ### REM-3 allow_stale 的 Cached Remote 访问接受低于 min_version 的快照（发版前复审修复）
@@ -2888,7 +2888,7 @@ stateDiagram-v2
 | 缓冲溢出但首次加载出错 | 不再回源（`err != nil`） | 读者拿到加载错误 |
 | 重放失败（缺基、L2 冲突） | 只计数 | 新鲜度交给陈旧上限 |
 | 多个并发加载（不同合并键）同一 key | 只有最后结束的加载取走缓冲 / 溢出标记 | 先结束的加载返回时缓冲尚未重放（推断，按 `endBootstrap` `:530` 源码） |
-| 表满放不下撤销水位 | 只撤销，不留水位（`remoteentity/interest.go:229`） | 迟到的旧 renew 可能复活租约（推断） |
+| 表满放不下撤销水位 | 只撤销，不留水位（`remoteentity/interest.go:229`） | 迟到的旧 renew 会复活租约；已修复（RR-20261006-11）：表满时改记溢出水位，不再复活 |
 
 **6. 测试**
 
@@ -2926,7 +2926,7 @@ stateDiagram-v2
 
 - 无 L2 装配里 L1 删除标记被 LRU 淘汰后旧 upsert 可复活。
 - 订阅断开到重连之间漏掉的推送只影响新鲜度（上界 `cached_max_staleness`）；JetStream durable 续投依赖流保留期（MaxAge）。
-- durable 名：记录（MIRROR-STEP-4 §4、USER_GUIDE）写 `sync_remote_entity_snapshot.live_<sid>_…`；源码 `durableSyncName` 经 `sanitizeSyncName` 把 `.` 换成 `_`（`sync/syncbus/driver/jetstream.go:427`、`:445`），实际可读部分应为 `sync_remote_entity_snapshot_live_<sid>_<hash>`（推断，未实跑核对服务端名字）。
+- durable 名：记录（MIRROR-STEP-4 §4、USER_GUIDE）写 `sync_remote_entity_snapshot.live_<sid>_…`；源码 `durableSyncName` 经 `sanitizeSyncName` 把 `.` 换成 `_`（`sync/syncbus/driver/jetstream.go:427`、`:445`），实际可读部分应为 `sync_remote_entity_snapshot_live_<sid>_<hash>`（推断，未实跑核对服务端名字）。（已实跑核对，fixr：隔离 NATS 上服务端名字为 `sync_remote_entity_snapshot_live_<sid>_<hex16>`，用例 `TestRealJetStreamLiveDurableNameShape`；MIRROR-STEP-4 与 USER_GUIDE 已改。）
 - 推送 / 退化在多节点 JetStream HA 与 Linux 网络下：E06 / E01。
 
 **9. review 检查点**
@@ -2935,7 +2935,7 @@ stateDiagram-v2
 - [ ] 确认首载缓冲溢出后再回源一次：`entity/remote_snapshot.go:411`～`:414`；检查首次加载出错时不回源是否符合“溢出有明确行为”的决定，并看 `TestSnapshotBootstrapOverflowDropsTheBufferAndReloads` 是否覆盖出错分支。
 - [ ] 确认缓冲重放与溢出回源都只经 `applyReplica` → `ApplyUpdate` / `DeleteAtVersion` / `Delete` 与 `fetchAndAdmit` → `publishLocked`，没有直接写 L1 的新路径（`entity/remote_snapshot.go:492`、`:564`）。
 - [ ] 检查同一 key 多个并发加载（合并键 `(key, after, refresh)` 不同）时只有最后结束的加载重放缓冲（`endBootstrap` `:530`）：先返回的加载是否可能交出缺少缓冲增量的值，以及是否违反“读者看到的值不早于加载结果”。
-- [ ] 检查 `release` 在表满时不留水位（`remoteentity/interest.go:229`）是否会让迟到的旧 renew 复活租约，是否需要计数或日志。
+- [x] 检查 `release` 在表满时不留水位（`remoteentity/interest.go:229`）是否会让迟到的旧 renew 复活租约，是否需要计数或日志。（fixr：会复活，登记并修复 RR-20261006-11，见 [RR-20261006-11 记录](../../bugfix/RR-20261006-11.md)。）
 - [ ] 确认普通 NATS 退化时兴趣主题仍订阅、`refreshRep` 不建立（`remoteentity/snapshot_client.go:434`～`:437`、`:480`）。
 
 <a id="rem-5"></a>
@@ -3018,7 +3018,7 @@ stateDiagram-v2
 **8. 未验证项与已知风险**
 
 - 兴趣表是广播副本，两边收到的消息不同时判定可能不一致；总线丢兴趣消息由租约过期收敛。
-- 记录写“缺省总上限的 1/16，即 16384”只对 core `DefaultConfig`（262144）成立；生成配置 `snapshot_interest_subs: 100000`（`codegen/internal/roost/catalog.go:71`）时缺省配额是 6250。
+- 记录写“缺省总上限的 1/16，即 16384”只对 core `DefaultConfig`（262144）成立；生成配置 `snapshot_interest_subs: 100000`（`codegen/internal/roost/catalog.go:71`）时缺省配额是 6250。（已补进 USER_GUIDE 与 MIRROR-STEP-4，fixr。）
 - 满载容量的多主机验证：E13 / E15 / E16。
 
 **9. review 检查点**
@@ -3444,7 +3444,7 @@ sequenceDiagram
 **8. 未验证项与已知风险**
 
 - 过期判定用接收方 `time.Now()` 减发送方 `requested_at`（`remoteentity/interest_refresh.go:100`），跨主机时钟偏差未验证（E02）。
-- 记录 §2 列出的 `interest_refresh_requests_total` 结果值不含源码的 `stopped`（`remoteentity/interest_refresh.go:125`），也没提 `interest_refresh_sent_total`（`:73`）。
+- 记录 §2 列出的 `interest_refresh_requests_total` 结果值不含源码的 `stopped`（`remoteentity/interest_refresh.go:125`），也没提 `interest_refresh_sent_total`（`:73`）。（已补进 MIRROR-M6-OBSERVATIONS §2 与 T-278，fixr。）
 - 多主机强杀重启：E13。
 
 **9. review 检查点**
@@ -3607,14 +3607,14 @@ MIRROR6 .../S1_owner_kill_restart_wal_replay reader_stats loads=0 errors=0 reads
 
 **8. 未验证项与已知风险**
 
-- 记录（B2 §7、USER_GUIDE、DECISIONS 第十二轮）写“缺省约 5m30s”，按 core `DefaultConfig`（5m + 30s）成立；生成配置模板 `snapshot_l2_ttl: 10m`（`codegen/internal/roost/catalog.go:71`），按模板部署时约 10m30s（推断，按模板值计算）。
+- 记录（B2 §7、USER_GUIDE、DECISIONS 第十二轮）写“缺省约 5m30s”，按 core `DefaultConfig`（5m + 30s）成立；生成配置模板 `snapshot_l2_ttl: 10m`（`codegen/internal/roost/catalog.go:71`），按模板部署时约 10m30s（推断，按模板值计算）。（已补进 USER_GUIDE、B2 §7 与 DECISIONS，fixr。）
 - 读者重新确认读到同值时只改记确认时刻、不写 L2（`entity/remote_snapshot.go:750`～`:761`），所以读者不会续命 L2 的旧值；但收到旧版本复制消息（未过 O5 窗口）且 L1 冷的节点会把旧值 CAS 进 L2 并续期（推断，CAS 对同版本同值也 `PEXPIRE`）。
 
 **9. review 检查点**
 
 - [ ] 确认“读者不会给 L2 旧值续期”：`refresh` 同值分支（`entity/remote_snapshot.go:750`）只 `setL1Locked`，不调 `admitLocked` / L2。
 - [ ] 评估“L1 冷节点收到较旧复制消息时 CAS 同值续期 L2 旧值”是否会让上界超过 `snapshot_l2_ttl`（CAS 脚本 `remoteentity/snapshot_l2.go:66`～`:70`）。
-- [ ] 在 USER_GUIDE 与生成模板注释里核对“约 5m30s”是否需要注明“按 core 缺省；生成模板为 10m L2 TTL”。
+- [x] 在 USER_GUIDE 与生成模板注释里核对“约 5m30s”是否需要注明“按 core 缺省；生成模板为 10m L2 TTL”。（fixr：USER_GUIDE 与 B2 §7 已分别写明 core 缺省约 5m30s、生成模板约 10m30s。）
 - [ ] 确认 `snapshot_l2_ttl` 调小的代价（墓碑寿命同时变短）写进了说明。
 
 <a id="rem-12"></a>
@@ -3670,7 +3670,7 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 **8. 未验证项与已知风险**
 
 - ASK 窗口只覆盖“键已搬到目标”。
-- 记录 [MIRROR-M6-OBSERVATIONS §3](../../feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md) 的结果表写 `redirected` / `unsupported` 两种结果；源码 `recordTombstoneWait` 的指标标签只有 `skipped`（`remoteentity/snapshot_l2.go:377`～`:379`，统计字段 `Skipped`），以源码为准（DRV 主题，此处登记）。
+- 记录 [MIRROR-M6-OBSERVATIONS §3](../../feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md) 的结果表写 `redirected` / `unsupported` 两种结果；源码 `recordTombstoneWait` 的指标标签只有 `skipped`（`remoteentity/snapshot_l2.go:377`～`:379`，统计字段 `Skipped`），以源码为准（DRV 主题，此处登记）。（已改 MIRROR-M6-OBSERVATIONS §3，fixr。）
 - `cluster_replicas_online` 只看 `slave0:` 一行（`scripts/mirror-local.sh:108`），每主一个副本时等价于“至少一个 online 副本”。
 - 多机 Cluster：E08；异步复制丢写：E10。
 
