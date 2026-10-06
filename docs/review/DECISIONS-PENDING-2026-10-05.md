@@ -168,3 +168,10 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | --- | --- | --- |
 | 审查修复 | Cached + AllowStale 远程访问回归（`207163f9`）、saga stepTransition 守卫补漏（`42419890`） | 已实施 |
 | 审查观察 | activity 派发退避 / 凭证改系统钟、saga `ErrDefinitionMissing` 改可重试、`configdata/rules` 大小写选择确定化、mail 存储宽限写文档；saga 回放不交还 claim 列为观察（[记录](../bugfix/PRERELEASE-AUDIT-FOLLOWUP-2026-10-06.md)） | 已实施（`5a3c4a60`） |
+
+## 维护者决定（2026-10-06，第十轮：Mirror 第 6 步观察）
+
+| # | 决定 | 实施状态 |
+| --- | --- | --- |
+| O-M6-1 | 按推荐：同 sid 重启的 owner 启动时广播“请重新续租兴趣”，只读方收到后立即续租，推送不等 15s | 待实施 |
+| O-M6-3 | 按推荐：只对 L2 删除墓碑写入加 `WAIT`（等副本确认后返回），缩小切主时墓碑未复制导致的删除短暂复活窗口 | 待实施 |
