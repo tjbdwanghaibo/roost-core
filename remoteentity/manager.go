@@ -34,14 +34,16 @@ type Manager struct {
 	lockFactoryWarn sync.Once
 	backend         entity.IRemoteEntityBackend
 	ownershipStore  entity.IRemoteEntityOwnershipStore
-	syncer          remoteSyncTransport
 	cfg             *Config
 	localSid        int32
 	remote          *remoteState
-	sealed          bool
-	fatalMu         sync.RWMutex
-	fatalErr        error
-	onFatal         func(error)
+	// snapshots 是快照读、兴趣、复制接收与它们的生命周期（Mirror 方案第 3 步）。Manager 只组合并委托它，
+	// owner 的提交后发布经它的包内入口 publishCommitted。
+	snapshots *SnapshotClient
+	sealed    bool
+	fatalMu   sync.RWMutex
+	fatalErr  error
+	onFatal   func(error)
 	// localExecutor 是 Nest 注入的本地执行入口（BindLocalExecutor → NestMgr.RunLocal），后台收尾据此回到快池。
 	localExecutor atomic.Pointer[func(func()) error]
 }
@@ -118,7 +120,22 @@ func NewManager(lockFactory redis.IVersionedLockFactory, cfg *Config, localSid i
 			mgr.lockFactoryErr = fmt.Errorf("remote_entity: lock factory %T does not provide fenced locks (redis.IFencedVersionedLock); shared entities cannot be served", lockFactory)
 		}
 	}
-	mgr.remote = newRemoteState(mgr, cfg, snapshotL2...)
+	mgr.remote = newRemoteState(cfg)
+	var l2 cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]
+	if len(snapshotL2) > 0 {
+		l2 = snapshotL2[0]
+	}
+	// 权威 loader 晚绑定：backend 在 SetBackend 之后才有。Manager 的 backend 是写 owner 的权威存储，
+	// 沿用它一直提供的 Linearizable 读。
+	mgr.snapshots = newSnapshotClient(cfg, SnapshotClientDeps{
+		L2: l2, ConsumerSID: localSid, LinearizableLoader: true,
+		Loader: func(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
+			if mgr.backend == nil {
+				return entity.RemoteSnapshotEnvelope{}, false, nil
+			}
+			return mgr.backend.LoadRemoteSnapshot(ctx, key, consistency, minVersion)
+		},
+	})
 	return mgr
 }
 
@@ -268,7 +285,7 @@ func (m *Manager) SetSyncer(syncer remoteSyncTransport) {
 	if m.sealed {
 		panic("remote_entity: dependencies are sealed")
 	}
-	m.syncer = syncer
+	m.snapshots.transport = syncer
 }
 
 func (m *Manager) SealDependencies() {

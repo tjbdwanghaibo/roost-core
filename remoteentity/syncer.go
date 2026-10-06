@@ -20,7 +20,8 @@ const SyncTopicSnapshot = "remote_entity_snapshot"
 type remoteSyncer struct {
 	snapshotRep *mirror.Replicator
 	interestRep *mirror.Replicator
-	mgr         *Manager
+	// client 提供全集群兴趣表（发布门控）；nil 时不门控（NewSyncer 的旧用法）。
+	client *SnapshotClient
 }
 
 func NewSyncer(snapshot *mirror.Replicator) *remoteSyncer {
@@ -40,7 +41,7 @@ func (s *remoteSyncer) PublishRemoteSnapshot(ctx context.Context, update entity.
 	if s == nil || s.snapshotRep == nil {
 		return nil
 	}
-	if s.mgr != nil && s.mgr.remote != nil && !s.mgr.remote.interests.interested(update.Key) {
+	if s.client != nil && !s.client.interests.interested(update.Key) {
 		return nil
 	}
 	raw, err := json.Marshal(remoteSnapshotWire{Key: update.Key, Update: update.Clone(), PublishedAt: time.Now().UnixNano()})
@@ -94,12 +95,14 @@ func remoteSnapshotReplicaKey(key entity.RemoteSnapshotKey) int64 {
 	return result
 }
 
-type SnapshotReplicaStore struct{ mgr *Manager }
+// SnapshotReplicaStore 把快照复制消息按 key 落到 SnapshotClient 的缓存（经 admitLocked）。
+type SnapshotReplicaStore struct{ client *SnapshotClient }
 
 func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envelope) error {
-	if s.mgr == nil || s.mgr.remote == nil || len(env.Payload) == 0 {
+	if s.client == nil || s.client.cache == nil || len(env.Payload) == 0 {
 		return nil
 	}
+	snapshotCache := s.client.cache
 	var wire remoteSnapshotWire
 	if err := json.Unmarshal(env.Payload, &wire); err != nil {
 		return err
@@ -115,9 +118,9 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 		// (U-0187, RR-20260913-01). A version-less delete stays a plain
 		// invalidation for compatibility with older publishers.
 		if env.Version <= 0 {
-			return s.mgr.remote.cache.Delete(ctx, wire.Key)
+			return snapshotCache.Delete(ctx, wire.Key)
 		}
-		return s.mgr.remote.cache.DeleteAtVersion(ctx, wire.Key, uint64(env.Version))
+		return snapshotCache.DeleteAtVersion(ctx, wire.Key, uint64(env.Version))
 	}
 	if s.historic(wire.PublishedAt, time.Now()) {
 		// N05 O5：同步总线的 durable 用 DeliverAll，新 sid 或落后的游标会重放保留期内的历史。共享 L2 对
@@ -128,9 +131,9 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 		metrics.IncCounter("remote_entity.snapshot_replica_historic_dropped_total", nil, 1)
 		return nil
 	}
-	err := s.mgr.remote.cache.ApplyUpdate(ctx, wire.Update)
+	err := snapshotCache.ApplyUpdate(ctx, wire.Update)
 	if errors.Is(err, entity.ErrRemoteSnapshotGap) || errors.Is(err, entity.ErrRemoteSnapshotEpochMismatch) || errors.Is(err, entity.ErrRemoteSnapshotSchemaMismatch) {
-		_, _, loadErr := s.mgr.remote.cache.LoadAuthoritative(ctx, wire.Update.Key, entity.RemoteReadMonotonic, wire.Update.StateVersion)
+		_, _, loadErr := snapshotCache.LoadAuthoritative(ctx, wire.Update.Key, entity.RemoteReadMonotonic, wire.Update.StateVersion)
 		return loadErr
 	}
 	return err
@@ -139,10 +142,10 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 // historic 报告一条带发布时刻的快照更新是否已老到共享 L2 无法担保（见 ApplyReplica）。没有发布时刻
 // （旧发布者）或没有配置 L2 TTL 时不过滤。
 func (s SnapshotReplicaStore) historic(publishedAt int64, now time.Time) bool {
-	if publishedAt <= 0 || s.mgr == nil || s.mgr.cfg == nil || s.mgr.cfg.SnapshotL2TTL <= 0 {
+	if publishedAt <= 0 || s.client == nil || s.client.cfg == nil || s.client.cfg.SnapshotL2TTL <= 0 {
 		return false
 	}
-	return now.UnixNano()-publishedAt > (s.mgr.cfg.SnapshotL2TTL / 2).Nanoseconds()
+	return now.UnixNano()-publishedAt > (s.client.cfg.SnapshotL2TTL / 2).Nanoseconds()
 }
 
 // validateSnapshotWireIdentity binds the payload's own identity to the

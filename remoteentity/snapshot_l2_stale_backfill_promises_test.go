@@ -89,12 +89,12 @@ func TestLateReplicaOnColdNodeDoesNotPinL1BelowSharedL2(t *testing.T) {
 			key := staleBackfillKey(t, staleBackfillReplicaKind, 9401+int64(tc.newerRoute))
 			owner := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1001, NewSnapshotL2Store(redis, time.Minute))
 			reader := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1002, NewSnapshotL2Store(redis, time.Minute))
-			if err := owner.remote.cache.Publish(ctx, staleBackfillEnvelope(key, tc.newerVersion, tc.newerRoute, "v2")); err != nil {
+			if err := owner.snapshots.cache.Publish(ctx, staleBackfillEnvelope(key, tc.newerVersion, tc.newerRoute, "v2")); err != nil {
 				t.Fatal(err)
 			}
 
 			late := staleBackfillReplica(t, key, tc.lateVersion, tc.lateRoute, "v1")
-			if err := (SnapshotReplicaStore{mgr: reader}).ApplyReplica(ctx, late); err != nil {
+			if err := (SnapshotReplicaStore{client: reader.snapshots}).ApplyReplica(ctx, late); err != nil {
 				t.Fatalf("a late replica is the past, not a failure: %v", err)
 			}
 			for _, consistency := range []entity.RemoteReadConsistency{entity.RemoteReadCached, entity.RemoteReadMonotonic} {
@@ -114,7 +114,7 @@ func TestLateReplicaOnColdNodeDoesNotPinL1BelowSharedL2(t *testing.T) {
 
 			// 恢复：更新的复制消息照常生效。
 			next := staleBackfillReplica(t, key, tc.newerVersion+1, tc.newerRoute, "v3")
-			if err := (SnapshotReplicaStore{mgr: reader}).ApplyReplica(ctx, next); err != nil {
+			if err := (SnapshotReplicaStore{client: reader.snapshots}).ApplyReplica(ctx, next); err != nil {
 				t.Fatal(err)
 			}
 			got, found, err := reader.ReadRemoteSnapshot(ctx, key, entity.RemoteReadCached, 0)
@@ -166,16 +166,16 @@ func TestStaleBackfillControls(t *testing.T) {
 	t.Run("L2 outage still degrades to L1", func(t *testing.T) {
 		key := staleBackfillKey(t, staleBackfillReplicaKind, 9421)
 		reader := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1003, NewSnapshotL2Store(failingEvalRedis{newSnapshotRedisFake()}, time.Minute))
-		if err := (SnapshotReplicaStore{mgr: reader}).ApplyReplica(ctx, staleBackfillReplica(t, key, 1, 1, "v1")); err != nil {
+		if err := (SnapshotReplicaStore{client: reader.snapshots}).ApplyReplica(ctx, staleBackfillReplica(t, key, 1, 1, "v1")); err != nil {
 			t.Fatalf("an L2 outage must not fail replication: %v", err)
 		}
 		// WaitForVersion 只看 L1 是否持有该版本（不论是否确认）：已持有时立即返回。
 		waitCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 		defer cancel()
-		if err := reader.remote.cache.WaitForVersion(waitCtx, key, 1); err != nil {
+		if err := reader.snapshots.cache.WaitForVersion(waitCtx, key, 1); err != nil {
 			t.Fatalf("L1 after an L2 outage does not hold v1: %v", err)
 		}
-		if got, found, _ := reader.remote.cache.Get(ctx, key, entity.RemoteReadCached, 0); found {
+		if got, found, _ := reader.snapshots.cache.Get(ctx, key, entity.RemoteReadCached, 0); found {
 			t.Fatalf("an unconfirmed entry was served: version=%d", got.StateVersion)
 		}
 	})
@@ -184,13 +184,13 @@ func TestStaleBackfillControls(t *testing.T) {
 		key := staleBackfillKey(t, staleBackfillReplicaKind, 9422)
 		owner := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1004, NewSnapshotL2Store(redis, time.Minute))
 		reader := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1005, NewSnapshotL2Store(redis, time.Minute))
-		if err := owner.remote.cache.Publish(ctx, staleBackfillEnvelope(key, 2, 1, "v2")); err != nil {
+		if err := owner.snapshots.cache.Publish(ctx, staleBackfillEnvelope(key, 2, 1, "v2")); err != nil {
 			t.Fatal(err)
 		}
-		if err := (SnapshotReplicaStore{mgr: reader}).ApplyReplica(ctx, staleBackfillReplica(t, key, 2, 1, "v2")); err != nil {
+		if err := (SnapshotReplicaStore{client: reader.snapshots}).ApplyReplica(ctx, staleBackfillReplica(t, key, 2, 1, "v2")); err != nil {
 			t.Fatalf("the same snapshot again: %v", err)
 		}
-		got, found, err := reader.remote.cache.Get(ctx, key, entity.RemoteReadCached, 0)
+		got, found, err := reader.snapshots.cache.Get(ctx, key, entity.RemoteReadCached, 0)
 		if err != nil || !found || got.StateVersion != 2 {
 			t.Fatalf("after an identical republish: version=%d found=%v err=%v", got.StateVersion, found, err)
 		}

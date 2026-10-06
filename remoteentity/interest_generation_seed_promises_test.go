@@ -24,7 +24,7 @@ func TestInterestGenerationSeedAdvancesPastIssuedGenerationsUnderAFrozenClock(t 
 	}}
 	ctx := context.Background()
 	first := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
-	first.syncer = publisher
+	first.snapshots.transport = publisher
 	// renew → release → renew:三条消息、三个递增代际(同 key 的连续 renew 会被去重)。
 	if err := first.RenewRemoteSnapshotInterest(ctx, key); err != nil {
 		t.Fatal(err)
@@ -36,7 +36,7 @@ func TestInterestGenerationSeedAdvancesPastIssuedGenerationsUnderAFrozenClock(t 
 		t.Fatal(err)
 	}
 	restarted := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
-	restarted.syncer = publisher
+	restarted.snapshots.transport = publisher
 	if err := restarted.RenewRemoteSnapshotInterest(ctx, key); err != nil {
 		t.Fatal(err)
 	}

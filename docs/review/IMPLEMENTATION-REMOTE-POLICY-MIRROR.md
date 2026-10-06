@@ -105,3 +105,7 @@ N05最新适配器审查修复了[缓存payload身份](../bugfix/RR-20261005-NC-
 [本轮机制与边界](IMPLEMENTATION-MIRROR-PAYLOAD-IDENTITY-AND-ROUTING.md)和[审查证据](REVIEW-2026-10-05-noncore-23.md)仅闭合现有适配器缺陷。独立DTO reader/MirrorClient、首次加载水位、跨节点删除屏障与重连补洞仍按本方案交接，未在本轮实施或验收，不能把13新增回归计为完整Mirror功能完成。
 
 方案中的SubscriptionCoordinator为历史引用，实施前须按当前entitysync公开接入契约重新核对，不能作为现有API直接调用；本轮没有复审entitysync完整实现。
+
+## 2026-10-06 第 1～3 步实施
+
+只读 reader 契约（`entity.RemoteSnapshotReadOnly` / `RemoteMirrorReader[T]` / 观察 token）与共享 `remoteentity.SnapshotClient`（上文“MirrorClient”的落地名）已实施，Manager 组合并委托它；订阅代际、首载缓冲、kit 只读装配与 codegen 只读产物仍未实施。[实施记录](../feature/MIRROR-STEPS-1-3-2026-10-06.md)。

@@ -43,7 +43,7 @@ func TestInterestPayloadIdentityBeforeRegistryMutation(t *testing.T) {
 				}
 				seed := payload
 				seed.Generation = 10
-				if err := m.remote.interests.renew(seed); err != nil {
+				if err := m.snapshots.interests.renew(seed); err != nil {
 					t.Fatal(err)
 				}
 				raw, err := mirror.MarshalPayload(remoteInterestWire{Interest: payload, Release: release})
@@ -51,24 +51,24 @@ func TestInterestPayloadIdentityBeforeRegistryMutation(t *testing.T) {
 					t.Fatal(err)
 				}
 				err = mirror.New(bus, SyncTopicInterest, nil).Publish(context.Background(), mirror.Envelope{Key: remoteInterestReplicaKey(base), Version: base.ExpiresAt, Op: op, Payload: raw})
-				lease, exists := m.remote.interests.entries[seed.Key][seed.ConsumerSID]
-				if !exists || lease.generation != seed.Generation || lease.expiresAt != seed.ExpiresAt || m.remote.interests.total != 1 {
-					t.Errorf("refused message changed lease: %+v exists=%v total=%d", lease, exists, m.remote.interests.total)
+				lease, exists := m.snapshots.interests.entries[seed.Key][seed.ConsumerSID]
+				if !exists || lease.generation != seed.Generation || lease.expiresAt != seed.ExpiresAt || m.snapshots.interests.total != 1 {
+					t.Errorf("refused message changed lease: %+v exists=%v total=%d", lease, exists, m.snapshots.interests.total)
 				}
 				if err == nil {
 					t.Error("interest identity mismatch returned success")
 				}
 				// 拒绝之后仍能按发布端正式格式续租、撤销；不是关掉全部接收。
-				if err := m.syncer.PublishRemoteInterest(context.Background(), payload, false); err != nil {
+				if err := m.snapshots.transport.PublishRemoteInterest(context.Background(), payload, false); err != nil {
 					t.Fatal(err)
 				}
-				if !m.remote.interests.interested(payload.Key) {
+				if !m.snapshots.interests.interested(payload.Key) {
 					t.Fatal("honest renewal missing")
 				}
-				if err := m.syncer.PublishRemoteInterest(context.Background(), payload, true); err != nil {
+				if err := m.snapshots.transport.PublishRemoteInterest(context.Background(), payload, true); err != nil {
 					t.Fatal(err)
 				}
-				if m.remote.interests.interested(payload.Key) {
+				if m.snapshots.interests.interested(payload.Key) {
 					t.Fatal("honest release missing")
 				}
 			})
@@ -87,44 +87,44 @@ func TestInterestWireGenerationAndLegacyCompatibility(t *testing.T) {
 	i := entity.RemoteSnapshotInterest{Key: interestKeyFor(t, 244, 9351), ConsumerSID: 7, ExpiresAt: time.Now().Add(time.Hour).UnixNano()}
 	ctx := context.Background()
 	// Generation=0 的旧发布端仍可正常续租/撤销。
-	if err := m.syncer.PublishRemoteInterest(ctx, i, false); err != nil {
+	if err := m.snapshots.transport.PublishRemoteInterest(ctx, i, false); err != nil {
 		t.Fatal(err)
 	}
-	if !m.remote.interests.interested(i.Key) {
+	if !m.snapshots.interests.interested(i.Key) {
 		t.Fatal("legacy renewal missing")
 	}
-	if err := m.syncer.PublishRemoteInterest(ctx, i, true); err != nil {
+	if err := m.snapshots.transport.PublishRemoteInterest(ctx, i, true); err != nil {
 		t.Fatal(err)
 	}
-	if m.remote.interests.interested(i.Key) {
+	if m.snapshots.interests.interested(i.Key) {
 		t.Fatal("legacy release missing")
 	}
 	i.Generation = 12
-	if err := m.syncer.PublishRemoteInterest(ctx, i, false); err != nil {
+	if err := m.snapshots.transport.PublishRemoteInterest(ctx, i, false); err != nil {
 		t.Fatal(err)
 	}
 	stale := i
 	stale.Generation = 11
 	stale.ExpiresAt = time.Now().UnixNano()
-	if err := m.syncer.PublishRemoteInterest(ctx, stale, true); err != nil {
+	if err := m.snapshots.transport.PublishRemoteInterest(ctx, stale, true); err != nil {
 		t.Fatal(err)
 	}
-	if !m.remote.interests.interested(i.Key) {
+	if !m.snapshots.interests.interested(i.Key) {
 		t.Fatal("stale wire release canceled newer lease")
 	}
 	// 通用无 payload Delete 没有完整订阅身份，维持原先的无副作用兼容行为。
 	if err := mirror.New(bus, SyncTopicInterest, nil).PublishDelete(ctx, remoteInterestReplicaKey(i), i.ExpiresAt); err != nil {
 		t.Fatal(err)
 	}
-	if !m.remote.interests.interested(i.Key) {
+	if !m.snapshots.interests.interested(i.Key) {
 		t.Fatal("identity-free delete changed registry")
 	}
 	i.Generation = 13
 	i.ExpiresAt = time.Now().UnixNano()
-	if err := m.syncer.PublishRemoteInterest(ctx, i, true); err != nil {
+	if err := m.snapshots.transport.PublishRemoteInterest(ctx, i, true); err != nil {
 		t.Fatal(err)
 	}
-	if m.remote.interests.interested(i.Key) {
+	if m.snapshots.interests.interested(i.Key) {
 		t.Fatal("current generation release missing")
 	}
 }

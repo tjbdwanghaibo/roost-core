@@ -1,0 +1,514 @@
+package remoteentity
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/cache"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
+	"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror"
+)
+
+// ErrSnapshotClientStopped 表示 SnapshotClient 已停止：不再读、不再访问 L2 / 权威 / 总线。停止是单次的，
+// 重新运行要新建客户端。
+var ErrSnapshotClientStopped = errors.New("remote_entity: snapshot client is stopped")
+
+// SnapshotClient 是 Remote 快照协议的唯一实现（Mirror 方案第 3 步，docs/feature/MIRROR-STEPS-1-3-2026-10-06.md）：
+//
+//   - 读：ReadSnapshot / ReadRemoteSnapshot，经快照缓存唯一的读出口 RemoteSnapshotCache.Read；
+//   - 兴趣：读时续租本机兴趣并广播，全集群兴趣表决定 owner 发布哪些 key；
+//   - 按 key apply：复制消息（SnapshotReplicaStore）与兴趣消息（InterestReplicaStore）都落到这里；
+//   - 回填：缺基 / epoch / schema 不符时经权威 loader 回填；
+//   - 状态与生命周期：Stats；Start 订阅两个复制主题，Stop 三步停机。
+//
+// 它不要求写 backend：依赖只有可选的共享 L2、可选的权威 loader 和同步总线。Manager（写 owner）组合一个
+// SnapshotClient 并委托它，owner 的提交后发布走包内入口 publishCommitted，只读方拿不到。
+//
+// 一个 key 的全部缓存写入仍只经 RemoteSnapshotCache 的 admitLocked（B2）：本类型不直接写 L1 / L2。
+type SnapshotClient struct {
+	cfg          *Config
+	consumerSID  int32
+	linearizable bool
+	cache        *entity.RemoteSnapshotCache
+	interests    *remoteInterestRegistry
+
+	// interestGeneration stamps this consumer's renewals and releases. Seeded
+	// from the clock so a restart that reuses the SID starts above anything
+	// the previous process could have issued, instead of at zero where an
+	// old release in flight would outrank every new renewal (RR-20260913-02).
+	interestGeneration atomic.Uint64
+	// 本机兴趣：key → 本机认为的租约到期时刻。续租在剩余时间不足一半时才广播（避免每次读一条消息）。
+	localInterestMu       sync.Mutex
+	localInterestLocks    [64]sync.Mutex
+	localInterests        map[entity.RemoteSnapshotKey]int64
+	localInterestOps      atomic.Uint64
+	localInterestCapacity int
+
+	// transport 在装配期设置（BindSync / Start / SetSyncer），之后只读。
+	transport remoteSyncTransport
+
+	// 生命周期。mu 只保护下面的字段，不在持有它时等待。
+	mu          sync.Mutex
+	bus         fsyncbus.ISyncBus
+	snapshotRep *mirror.Replicator
+	interestRep *mirror.Replicator
+	started     bool
+	stopped     atomic.Bool
+	// work 是访问依赖（L2、权威 loader、兴趣广播）的准入与在途计数（共用 operation.Lifetime，A3）。
+	// Stop 关闭它并在调用方 ctx 内等在途调用返回；返回 nil 之后调用方才能释放 Redis / 权威 / 总线。
+	work operation.Lifetime
+	// stopCtx 在 Stop 时取消，在途的权威加载据此放弃（loader 不响应取消时 Stop 如实超时）。
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
+}
+
+// SnapshotClientDeps 是只读客户端的依赖。没有写 backend、锁或 finalizer。
+type SnapshotClientDeps struct {
+	// L2 是共享快照层（生产为 Redis，NewSnapshotL2StoreWithKeyPrefix）。nil 时 L1 自己是水位，只适合
+	// 单进程或测试。
+	L2 cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]
+	// Loader 是权威加载（缺基回填、Monotonic 不足、L2 担保不了时回源）。nil 时只读缓存与 L2。
+	Loader entity.RemoteSnapshotLoader
+	// LinearizableLoader 声明 Loader 提供线性化读。false 时 Linearizable 读返回
+	// entity.ErrRemoteReadUnsupported，不静默退化。
+	LinearizableLoader bool
+	// ConsumerSID 是兴趣的消费者身份（本服 sid），必须非零。
+	ConsumerSID int32
+}
+
+// NewSnapshotClient 构造只读客户端。cfg 为 nil 时用 DefaultConfig；非法组合直接拒绝。
+func NewSnapshotClient(cfg *Config, deps SnapshotClientDeps) (*SnapshotClient, error) {
+	if cfg == nil {
+		cfg = DefaultConfig()
+	}
+	if err := validateSnapshotClientConfig(cfg, deps); err != nil {
+		return nil, err
+	}
+	return newSnapshotClient(cfg, deps), nil
+}
+
+func validateSnapshotClientConfig(cfg *Config, deps SnapshotClientDeps) error {
+	switch {
+	case deps.ConsumerSID == 0:
+		return errors.New("remote_entity: snapshot client needs a non-zero consumer sid")
+	case deps.LinearizableLoader && deps.Loader == nil:
+		return errors.New("remote_entity: a linearizable snapshot client needs a loader")
+	case cfg.SnapshotInterestTTL <= 0:
+		return errors.New("remote_entity: snapshot_interest_ttl must be positive")
+	case cfg.SnapshotLoadTimeout <= 0:
+		return errors.New("remote_entity: snapshot_load_timeout must be positive")
+	case cfg.SnapshotCacheTTL < 0 || cfg.CachedMaxStaleness < 0:
+		return errors.New("remote_entity: snapshot cache ttl and cached_max_staleness must not be negative")
+	case deps.L2 != nil && cfg.SnapshotL2TTL <= 0:
+		return errors.New("remote_entity: snapshot_l2_ttl must be positive when a shared L2 is configured")
+	}
+	return nil
+}
+
+// newSnapshotClient 是不校验的构造（Manager 内嵌用，保持 NewManager 不返回错误的旧签名）。
+func newSnapshotClient(cfg *Config, deps SnapshotClientDeps) *SnapshotClient {
+	stopCtx, stopCancel := context.WithCancel(context.Background())
+	c := &SnapshotClient{
+		cfg: cfg, consumerSID: deps.ConsumerSID, linearizable: deps.LinearizableLoader,
+		interests:             newRemoteInterestRegistry(cfg.SnapshotInterestKeys, cfg.SnapshotInterestSubs),
+		localInterests:        make(map[entity.RemoteSnapshotKey]int64),
+		localInterestCapacity: cfg.SnapshotInterestKeys,
+		stopCtx:               stopCtx, stopCancel: stopCancel,
+	}
+	var l2 cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]
+	if deps.L2 != nil {
+		l2 = gatedSnapshotL2{client: c, next: deps.L2}
+	}
+	var loader entity.RemoteSnapshotLoader
+	if deps.Loader != nil {
+		loader = c.gatedLoader(deps.Loader)
+	}
+	c.cache = entity.NewRemoteSnapshotCache(entity.RemoteSnapshotCacheConfig{
+		Shards: cfg.SnapshotCacheShards, MaxEntries: cfg.SnapshotCacheEntries,
+		MaxBytes: cfg.SnapshotCacheBytes, TTL: cfg.SnapshotCacheTTL,
+		LoadTimeout: cfg.SnapshotLoadTimeout, MaxWaiters: cfg.SnapshotMaxWaiters,
+		MaxStaleness: cfg.CachedMaxStaleness,
+	}, l2, loader)
+	return c
+}
+
+var _ entity.RemoteSnapshotReadOnly = (*SnapshotClient)(nil)
+
+// ReadSnapshot 是只读读取（entity.RemoteSnapshotReadOnly）。读时续租这个完整 key 的兴趣（失败只意味着
+// 之后回源，不影响这次读）；快照的全部后置条件由缓存唯一的读出口保证。
+func (c *SnapshotClient) ReadSnapshot(ctx context.Context, req entity.RemoteSnapshotRead) (snapshot entity.RemoteSnapshotEnvelope, found bool, err error) {
+	started := time.Now()
+	defer func() {
+		result := "hit"
+		if err != nil {
+			result = "error"
+		} else if !found {
+			result = "miss"
+		}
+		labels := metrics.Labels{"result": result, "consistency": remoteConsistencyLabel(req.Consistency)}
+		metrics.IncCounter("remote_entity.remote.read_total", labels, 1)
+		metrics.ObserveDuration("remote_entity.remote.read_latency", labels, time.Since(started))
+	}()
+	if c == nil || c.cache == nil || !req.Key.Valid() {
+		return entity.RemoteSnapshotEnvelope{}, false, entity.ErrRemoteRejected
+	}
+	if c.stopped.Load() {
+		return entity.RemoteSnapshotEnvelope{}, false, ErrSnapshotClientStopped
+	}
+	if req.Consistency == entity.RemoteReadLinearizable && !c.linearizable {
+		return entity.RemoteSnapshotEnvelope{}, false, entity.ErrRemoteReadUnsupported
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_ = c.RenewInterest(ctx, req.Key)
+	return c.cache.Read(ctx, req)
+}
+
+// ReadRemoteSnapshot 是旧签名（entity.RemoteSnapshotReader）：minVersion 是只约束版本的 token，
+// consistency 必须显式给出。
+func (c *SnapshotClient) ReadRemoteSnapshot(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
+	if consistency == 0 {
+		return entity.RemoteSnapshotEnvelope{}, false, entity.ErrRemoteReadConsistency
+	}
+	return c.ReadSnapshot(ctx, entity.RemoteSnapshotRead{Key: key, Consistency: consistency, After: entity.RemoteObservation{StateVersion: minVersion}})
+}
+
+func remoteConsistencyLabel(consistency entity.RemoteReadConsistency) string {
+	switch consistency {
+	case entity.RemoteReadCached, 0:
+		return "cached"
+	case entity.RemoteReadLinearizable:
+		return "linearizable"
+	default:
+		return "monotonic"
+	}
+}
+
+// SnapshotClientStats 是健康检查用的容量。
+type SnapshotClientStats struct {
+	LocalInterests int
+}
+
+// Stats 返回本机兴趣数。RR-20261005-NC-131：过期条目只在新建兴趣且表满、或每 1024 次续租时清理，空闲进程
+// 里会一直留着；健康检查拿这个数和上限比，所以表满时先清掉过期的再数。只在表满时清理，平时不全表扫描。
+func (c *SnapshotClient) Stats() SnapshotClientStats {
+	if c == nil {
+		return SnapshotClientStats{}
+	}
+	c.localInterestMu.Lock()
+	defer c.localInterestMu.Unlock()
+	if capacity := c.localInterestCapacity; capacity > 0 && len(c.localInterests) >= capacity {
+		c.pruneLocalInterestsLocked(time.Now().UnixNano())
+	}
+	return SnapshotClientStats{LocalInterests: len(c.localInterests)}
+}
+
+// ---- 兴趣 ----
+
+// RenewInterest 续租本机对 key 的兴趣：剩余不足一半才登记并广播新的 generation。
+func (c *SnapshotClient) RenewInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
+	if c == nil || !key.Valid() {
+		return entity.ErrRemoteRejected
+	}
+	ttl := c.cfg.SnapshotInterestTTL
+	now := time.Now().UnixNano()
+	interest := entity.RemoteSnapshotInterest{ConsumerSID: c.consumerSID, Key: key, ExpiresAt: now + ttl.Nanoseconds(), Generation: c.nextInterestGeneration()}
+	stripe := &c.localInterestLocks[uint64(key.EntityID)%uint64(len(c.localInterestLocks))]
+	stripe.Lock()
+	defer stripe.Unlock()
+	c.localInterestMu.Lock()
+	current, loaded := c.localInterests[key]
+	if loaded && current-now > (ttl/2).Nanoseconds() {
+		c.localInterestMu.Unlock()
+		return nil
+	}
+	if !loaded && c.localInterestCapacity > 0 && len(c.localInterests) >= c.localInterestCapacity {
+		c.pruneLocalInterestsLocked(now)
+		if len(c.localInterests) >= c.localInterestCapacity {
+			c.localInterestMu.Unlock()
+			return entity.ErrRemoteOverloaded
+		}
+	}
+	c.localInterests[key] = interest.ExpiresAt
+	c.localInterestMu.Unlock()
+	if err := c.interests.renew(interest); err != nil {
+		c.rollbackLocalInterest(key, interest.ExpiresAt)
+		return err
+	}
+	if err := c.publishInterest(ctx, interest, false); err != nil {
+		c.rollbackLocalInterest(key, interest.ExpiresAt)
+		return err
+	}
+	if c.localInterestOps.Add(1)&1023 == 0 {
+		c.localInterestMu.Lock()
+		c.pruneLocalInterestsLocked(now)
+		c.localInterestMu.Unlock()
+	}
+	return nil
+}
+
+// ReleaseInterest 撤销本机对 key 的兴趣（带新的 generation，只撤销不新于它的租约）。
+func (c *SnapshotClient) ReleaseInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
+	if c == nil || !key.Valid() {
+		return entity.ErrRemoteRejected
+	}
+	interest := entity.RemoteSnapshotInterest{ConsumerSID: c.consumerSID, Key: key, ExpiresAt: time.Now().UnixNano(), Generation: c.nextInterestGeneration()}
+	stripe := &c.localInterestLocks[uint64(key.EntityID)%uint64(len(c.localInterestLocks))]
+	stripe.Lock()
+	defer stripe.Unlock()
+	c.localInterestMu.Lock()
+	delete(c.localInterests, key)
+	c.localInterestMu.Unlock()
+	c.interests.release(key, c.consumerSID, interest.Generation)
+	return c.publishInterest(ctx, interest, true)
+}
+
+// publishInterest 经同步总线广播兴趣；它访问总线，所以受 work 准入约束。
+func (c *SnapshotClient) publishInterest(ctx context.Context, interest entity.RemoteSnapshotInterest, release bool) error {
+	publisher, ok := c.transport.(remoteInterestPublisher)
+	if !ok {
+		return nil
+	}
+	if !c.work.Begin() {
+		return ErrSnapshotClientStopped
+	}
+	defer c.work.End()
+	return publisher.PublishRemoteInterest(ctx, interest, release)
+}
+
+// nextInterestGeneration issues the next generation for this consumer's
+// interest messages. The first call seeds from the clock (see
+// interestGenerationClock).
+func (c *SnapshotClient) nextInterestGeneration() uint64 {
+	for {
+		current := c.interestGeneration.Load()
+		if current == 0 {
+			seed := seedInterestGeneration(interestGenerationNow())
+			if !c.interestGeneration.CompareAndSwap(0, seed) {
+				continue
+			}
+		}
+		generation := c.interestGeneration.Add(1)
+		noteInterestGenerationIssued(generation)
+		return generation
+	}
+}
+
+func (c *SnapshotClient) rollbackLocalInterest(key entity.RemoteSnapshotKey, expiresAt int64) {
+	c.localInterestMu.Lock()
+	if c.localInterests[key] == expiresAt {
+		delete(c.localInterests, key)
+		// This process withdrawing its own lease locally: no message was
+		// reordered, so the latest generation it issued is the right stamp.
+		c.interests.release(key, c.consumerSID, c.interestGeneration.Load())
+	}
+	c.localInterestMu.Unlock()
+}
+
+func (c *SnapshotClient) pruneLocalInterestsLocked(now int64) {
+	for key, expiresAt := range c.localInterests {
+		if expiresAt <= now {
+			delete(c.localInterests, key)
+			c.interests.release(key, c.consumerSID, c.interestGeneration.Load())
+		}
+	}
+}
+
+// ---- owner 侧（包内入口） ----
+
+// publishCommitted 是 owner 提交后的发布：先经缓存唯一的写入口记下（admitLocked，L2 CAS 在前），再按兴趣
+// 广播；删除同理，带提交版本。只有 Manager（写 owner）调用；只读方的公开 API 里没有它。
+func (c *SnapshotClient) publishCommitted(ctx context.Context, commit entity.RemoteCommit) error {
+	publisher, publish := c.transport.(entity.IRemoteSnapshotPublisher)
+	for _, record := range commit.Snapshots {
+		envelope := entity.RemoteSnapshotEnvelope{
+			Key: record.Key, BaseVersion: record.BaseVersion, StateVersion: record.StateVersion,
+			MarkerEpoch: record.MarkerEpoch, RouteEpoch: record.RouteEpoch,
+			Schema: record.Schema, Codec: record.Codec, Checksum: record.Checksum, Full: record.Full,
+			PublishedAt: time.Now().UnixNano(), Payload: entity.CopyFrozenRemoteSnapshotPayload(record.Data),
+		}
+		if err := c.cache.Publish(ctx, envelope); err != nil {
+			return err
+		}
+		if publish {
+			if err := publisher.PublishRemoteSnapshot(ctx, record.Clone()); err != nil {
+				return err
+			}
+		}
+	}
+	for _, key := range commit.Invalidations {
+		// Same rule as the replica side (U-0187): the local copy is deleted
+		// at the commit's version so a concurrent older publish for the key
+		// cannot repopulate it behind this commit.
+		if err := c.cache.DeleteAtVersion(ctx, key, commit.NextVersion); err != nil {
+			return err
+		}
+		if publish {
+			if err := publisher.DeleteRemoteSnapshot(ctx, key, commit.NextVersion); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// ---- 生命周期 ----
+
+// bindLocked 在 bus 上建两个复制器并装上发布用的 transport；复制器未启动。调用方持有 mu。
+func (c *SnapshotClient) bindLocked(bus fsyncbus.ISyncBus) (snapshotRep, interestRep *mirror.Replicator) {
+	snapshotRep = mirror.New(bus, SyncTopicSnapshot, SnapshotReplicaStore{client: c})
+	interestRep = mirror.New(bus, SyncTopicInterest, InterestReplicaStore{client: c})
+	c.bus, c.snapshotRep, c.interestRep = bus, snapshotRep, interestRep
+	c.transport = &remoteSyncer{snapshotRep: snapshotRep, interestRep: interestRep, client: c}
+	return snapshotRep, interestRep
+}
+
+// Start 订阅快照与兴趣两个复制主题（幂等）。第二个订阅失败时退掉第一个再返回：失败不留下订阅，
+// 重试不会重复订阅。失败重试复用首次绑定的 bus；换 bus 要新建客户端。停止之后不能再启动。
+func (c *SnapshotClient) Start(bus fsyncbus.ISyncBus) error {
+	if c == nil {
+		return errors.New("remote_entity: snapshot client is nil")
+	}
+	if bus == nil {
+		return errors.New("remote_entity: sync bus is required")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stopped.Load() {
+		return ErrSnapshotClientStopped
+	}
+	if c.started {
+		return nil
+	}
+	if c.snapshotRep == nil {
+		c.bindLocked(bus)
+	}
+	if err := c.snapshotRep.Start(); err != nil {
+		return fmt.Errorf("remote_entity: start snapshot replica: %w", err)
+	}
+	if err := c.interestRep.Start(); err != nil {
+		c.snapshotRep.Stop()
+		return fmt.Errorf("remote_entity: start interest replica: %w", err)
+	}
+	c.started = true
+	return nil
+}
+
+// unsubscribe 退掉两个订阅、不等待在途 handler，客户端仍可用、可再次 Start（Assembly 启动后续步骤失败时
+// 的回收）。留下的在途 handler 由之后的 Stop 一并等待。
+func (c *SnapshotClient) unsubscribe() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, rep := range []*mirror.Replicator{c.snapshotRep, c.interestRep} {
+		if rep != nil {
+			rep.Stop()
+		}
+	}
+	c.started = false
+}
+
+// Stop 按三步停机（roost-coding；契约骨架 internal/stopcontract）：
+//
+//  1. 发起关闭（幂等）：之后的读返回 ErrSnapshotClientStopped；关闭依赖准入；取消在途的权威加载；
+//     退掉两个复制订阅。
+//  2. 在 ctx 内等待排空：已准入的复制 handler 与依赖调用（L2、权威、兴趣广播）全部返回。ctx 先结束返回
+//     ctx 错误，客户端保持“停止中”，用新 ctx 再调用会继续等同一批。
+//  3. 返回 nil 之后调用方才能释放 Redis / 权威 / 总线。不响应取消的 loader 不会被杀，Stop 如实超时。
+func (c *SnapshotClient) Stop(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.mu.Lock()
+	c.stopped.Store(true)
+	c.started = false
+	reps := []*mirror.Replicator{c.snapshotRep, c.interestRep}
+	c.mu.Unlock()
+	c.work.Stop()
+	c.stopCancel()
+	for _, rep := range reps {
+		if rep != nil {
+			rep.Stop()
+		}
+	}
+	for _, rep := range reps {
+		if rep == nil {
+			continue
+		}
+		if err := rep.StopWithContext(ctx); err != nil {
+			return err
+		}
+	}
+	return c.work.Wait(ctx)
+}
+
+// ---- 依赖准入 ----
+
+// gatedLoader 让权威加载受 work 准入约束，并在 Stop 时取消。
+func (c *SnapshotClient) gatedLoader(loader entity.RemoteSnapshotLoader) entity.RemoteSnapshotLoader {
+	return func(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
+		if !c.work.Begin() {
+			return entity.RemoteSnapshotEnvelope{}, false, ErrSnapshotClientStopped
+		}
+		defer c.work.End()
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		stopWatch := context.AfterFunc(c.stopCtx, cancel)
+		defer stopWatch()
+		return loader(ctx, key, consistency, minVersion)
+	}
+}
+
+// gatedSnapshotL2 让共享 L2 的每次调用受 work 准入约束（L2 调用本身已由缓存的 LoadTimeout 限时，不另外
+// 绑定取消）。停止之后 L2 调用返回 ErrSnapshotClientStopped，缓存按 L2 不可用降级（B2）：写入记为未确认，
+// 读取不交出未确认的条目。
+type gatedSnapshotL2 struct {
+	client *SnapshotClient
+	next   cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]
+}
+
+func (g gatedSnapshotL2) Get(ctx context.Context, key entity.RemoteSnapshotKey) (entity.RemoteSnapshotEnvelope, bool, error) {
+	if !g.client.work.Begin() {
+		return entity.RemoteSnapshotEnvelope{}, false, ErrSnapshotClientStopped
+	}
+	defer g.client.work.End()
+	return g.next.Get(ctx, key)
+}
+
+func (g gatedSnapshotL2) Set(ctx context.Context, value entity.RemoteSnapshotEnvelope) error {
+	if !g.client.work.Begin() {
+		return ErrSnapshotClientStopped
+	}
+	defer g.client.work.End()
+	return g.next.Set(ctx, value)
+}
+
+func (g gatedSnapshotL2) Delete(ctx context.Context, key entity.RemoteSnapshotKey) error {
+	if !g.client.work.Begin() {
+		return ErrSnapshotClientStopped
+	}
+	defer g.client.work.End()
+	return g.next.Delete(ctx, key)
+}
+
+// DeleteAtVersion 转发带版本删除；下层没有这项能力时与缓存原来的退化相同（无条件删除）。
+func (g gatedSnapshotL2) DeleteAtVersion(ctx context.Context, key entity.RemoteSnapshotKey, version uint64) error {
+	if !g.client.work.Begin() {
+		return ErrSnapshotClientStopped
+	}
+	defer g.client.work.End()
+	if deleter, ok := g.next.(entity.RemoteSnapshotVersionedDeleter); ok {
+		return deleter.DeleteAtVersion(ctx, key, version)
+	}
+	return g.next.Delete(ctx, key)
+}

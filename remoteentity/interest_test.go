@@ -59,9 +59,9 @@ func TestLocalInterestCapacityPrunesExpiredAndCoalescesConcurrentRenewal(t *test
 	if err := mgr.RenewRemoteSnapshotInterest(context.Background(), first); err != nil {
 		t.Fatal(err)
 	}
-	mgr.remote.localInterestMu.Lock()
-	mgr.remote.localInterests[first] = time.Now().Add(-time.Second).UnixNano()
-	mgr.remote.localInterestMu.Unlock()
+	mgr.snapshots.localInterestMu.Lock()
+	mgr.snapshots.localInterests[first] = time.Now().Add(-time.Second).UnixNano()
+	mgr.snapshots.localInterestMu.Unlock()
 	if err := mgr.RenewRemoteSnapshotInterest(context.Background(), second); err != nil {
 		t.Fatalf("expired interest did not release capacity: %v", err)
 	}
@@ -86,9 +86,9 @@ func TestLocalInterestCapacityPrunesExpiredAndCoalescesConcurrentRenewal(t *test
 			t.Fatalf("concurrent renewal failed: %v", err)
 		}
 	}
-	mgr.remote.localInterestMu.Lock()
-	count := len(mgr.remote.localInterests)
-	mgr.remote.localInterestMu.Unlock()
+	mgr.snapshots.localInterestMu.Lock()
+	count := len(mgr.snapshots.localInterests)
+	mgr.snapshots.localInterestMu.Unlock()
 	if count != 1 {
 		t.Fatalf("local interest count = %d, want 1", count)
 	}

@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/cache"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
@@ -20,19 +19,6 @@ type remoteVersionWaiter struct {
 }
 
 type remoteState struct {
-	cache     *entity.RemoteSnapshotCache
-	interests *remoteInterestRegistry
-	// interestGeneration stamps this consumer's renewals and releases. Seeded
-	// from the clock so a restart that reuses the SID starts above anything
-	// the previous process could have issued, instead of at zero where an
-	// old release in flight would outrank every new renewal.
-	interestGeneration    atomic.Uint64
-	localInterestMu       sync.Mutex
-	localInterestLocks    [64]sync.Mutex
-	localInterests        map[entity.RemoteSnapshotKey]int64
-	localInterestOps      atomic.Uint64
-	localInterestCapacity int
-
 	txMu sync.Mutex
 	txs  map[entity.RemoteTransactionID]*remoteTransactionTracker
 	// 终态按首次完成顺序链接，和 txs 共用 txMu；等待者单独持有 tracker。
@@ -100,7 +86,7 @@ type remoteUnresolvedRejecter interface {
 
 const unresolvedMemoryRejectCause = "memory durability outcome unresolved; rejected by finalizer"
 
-func newRemoteState(mgr *Manager, cfg *Config, snapshotL2 ...cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]) *remoteState {
+func newRemoteState(cfg *Config) *remoteState {
 	finalizeCtx, finalizeCancel := context.WithCancel(context.Background())
 	capacity := cfg.AsyncFinalizeCapacity
 	if capacity <= 0 {
@@ -120,29 +106,10 @@ func newRemoteState(mgr *Manager, cfg *Config, snapshotL2 ...cache.Store[entity.
 		maxVersions: cfg.SnapshotCacheEntries,
 		waiters:     make(map[int64][]remoteVersionWaiter),
 		maxWaiters:  cfg.SnapshotMaxWaiters,
-		interests:   newRemoteInterestRegistry(cfg.SnapshotInterestKeys, cfg.SnapshotInterestSubs),
-		// (interestGeneration is seeded right after construction, below.)
-		localInterests:        make(map[entity.RemoteSnapshotKey]int64),
-		localInterestCapacity: cfg.SnapshotInterestKeys,
-		finalizeCtx:           finalizeCtx, finalizeCancel: finalizeCancel,
+		finalizeCtx: finalizeCtx, finalizeCancel: finalizeCancel,
 		finalizeQueue: make(chan deferredRemoteClose, capacity),
 		writeSlots:    make(chan struct{}, writeLimit), finalizeDone: make(chan struct{}),
 	}
-	var l2 cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]
-	if len(snapshotL2) > 0 {
-		l2 = snapshotL2[0]
-	}
-	state.cache = entity.NewRemoteSnapshotCache(entity.RemoteSnapshotCacheConfig{
-		Shards: cfg.SnapshotCacheShards, MaxEntries: cfg.SnapshotCacheEntries,
-		MaxBytes: cfg.SnapshotCacheBytes, TTL: cfg.SnapshotCacheTTL,
-		LoadTimeout: cfg.SnapshotLoadTimeout, MaxWaiters: cfg.SnapshotMaxWaiters,
-		MaxStaleness: cfg.CachedMaxStaleness,
-	}, l2, func(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
-		if mgr == nil || mgr.backend == nil {
-			return entity.RemoteSnapshotEnvelope{}, false, nil
-		}
-		return mgr.backend.LoadRemoteSnapshot(ctx, key, consistency, minVersion)
-	})
 	return state
 }
 
@@ -754,107 +721,44 @@ func (m *Manager) publishAppliedRemoteTransaction(ctx context.Context, status en
 	return nil
 }
 
-func (m *Manager) ReadRemoteSnapshot(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (snapshot entity.RemoteSnapshotEnvelope, found bool, err error) {
-	started := time.Now()
-	defer func() {
-		result := "hit"
-		if err != nil {
-			result = "error"
-		} else if !found {
-			result = "miss"
-		}
-		labels := metrics.Labels{"result": result, "consistency": remoteConsistencyLabel(consistency)}
-		metrics.IncCounter("remote_entity.remote.read_total", labels, 1)
-		metrics.ObserveDuration("remote_entity.remote.read_latency", labels, time.Since(started))
-	}()
-	if m == nil || m.remote == nil || m.remote.cache == nil || !key.Valid() {
+// ReadRemoteSnapshot 委托 SnapshotClient（Mirror 方案第 3 步：全仓只有一份读 / 兴趣 / 接收协议）。
+func (m *Manager) ReadRemoteSnapshot(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
+	if m == nil || m.snapshots == nil {
 		return entity.RemoteSnapshotEnvelope{}, false, entity.ErrRemoteRejected
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	// Reads automatically renew soft-state interest for this exact scope/policy.
-	// A lost renewal only causes a later authoritative refill, never stale apply.
-	_ = m.RenewRemoteSnapshotInterest(ctx, key)
-	if consistency == entity.RemoteReadLinearizable {
-		return m.remote.cache.LoadAuthoritative(ctx, key, consistency, minVersion)
-	}
-	snapshot, found, err = m.remote.cache.Get(ctx, key, consistency, minVersion)
-	if err == nil && found {
-		return snapshot, true, nil
-	}
-	if consistency == entity.RemoteReadCached && !errors.Is(err, entity.ErrRemoteSnapshotStale) {
-		return snapshot, found, err
-	}
-	if consistency == entity.RemoteReadMonotonic && minVersion > 0 {
-		waitCtx, cancel := context.WithTimeout(ctx, 2*time.Millisecond)
-		waitErr := m.remote.cache.WaitForVersion(waitCtx, key, minVersion)
-		cancel()
-		if waitErr == nil {
-			return m.remote.cache.Get(ctx, key, consistency, minVersion)
-		}
-	}
-	return m.remote.cache.LoadAuthoritative(ctx, key, consistency, minVersion)
+	return m.snapshots.ReadRemoteSnapshot(ctx, key, consistency, minVersion)
 }
 
-func remoteConsistencyLabel(consistency entity.RemoteReadConsistency) string {
-	switch consistency {
-	case entity.RemoteReadCached:
-		return "cached"
-	case entity.RemoteReadLinearizable:
-		return "linearizable"
-	default:
-		return "monotonic"
+// ReadSnapshot 是只读能力（entity.RemoteSnapshotReadOnly），同进程的只读方可以直接用 Manager 或
+// SnapshotClient()，不必再注册身份。
+func (m *Manager) ReadSnapshot(ctx context.Context, req entity.RemoteSnapshotRead) (entity.RemoteSnapshotEnvelope, bool, error) {
+	if m == nil || m.snapshots == nil {
+		return entity.RemoteSnapshotEnvelope{}, false, entity.ErrRemoteRejected
 	}
+	return m.snapshots.ReadSnapshot(ctx, req)
+}
+
+// SnapshotClient 返回 Manager 组合的快照客户端。同进程的只读方（同一 kind 的 consumer）用它构造
+// entity.RemoteMirrorReader，不另建订阅、不重复注册身份。
+func (m *Manager) SnapshotClient() *SnapshotClient {
+	if m == nil {
+		return nil
+	}
+	return m.snapshots
 }
 
 var _ entity.RemoteSnapshotInterestManager = (*Manager)(nil)
+var _ entity.RemoteSnapshotReadOnly = (*Manager)(nil)
 
 type remoteInterestPublisher interface {
 	PublishRemoteInterest(context.Context, entity.RemoteSnapshotInterest, bool) error
 }
 
 func (m *Manager) RenewRemoteSnapshotInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
-	if m == nil || m.remote == nil || !key.Valid() {
+	if m == nil || m.snapshots == nil {
 		return entity.ErrRemoteRejected
 	}
-	ttl := m.cfg.SnapshotInterestTTL
-	now := time.Now().UnixNano()
-	interest := entity.RemoteSnapshotInterest{ConsumerSID: m.localSid, Key: key, ExpiresAt: now + ttl.Nanoseconds(), Generation: m.nextInterestGeneration()}
-	stripe := &m.remote.localInterestLocks[uint64(key.EntityID)%uint64(len(m.remote.localInterestLocks))]
-	stripe.Lock()
-	defer stripe.Unlock()
-	m.remote.localInterestMu.Lock()
-	current, loaded := m.remote.localInterests[key]
-	if loaded && current-now > (ttl/2).Nanoseconds() {
-		m.remote.localInterestMu.Unlock()
-		return nil
-	}
-	if !loaded && m.remote.localInterestCapacity > 0 && len(m.remote.localInterests) >= m.remote.localInterestCapacity {
-		m.pruneLocalInterestsLocked(now)
-		if len(m.remote.localInterests) >= m.remote.localInterestCapacity {
-			m.remote.localInterestMu.Unlock()
-			return entity.ErrRemoteOverloaded
-		}
-	}
-	m.remote.localInterests[key] = interest.ExpiresAt
-	m.remote.localInterestMu.Unlock()
-	if err := m.remote.interests.renew(interest); err != nil {
-		m.rollbackLocalInterest(key, interest.ExpiresAt)
-		return err
-	}
-	if publisher, ok := m.syncer.(remoteInterestPublisher); ok {
-		if err := publisher.PublishRemoteInterest(ctx, interest, false); err != nil {
-			m.rollbackLocalInterest(key, interest.ExpiresAt)
-			return err
-		}
-	}
-	if m.remote.localInterestOps.Add(1)&1023 == 0 {
-		m.remote.localInterestMu.Lock()
-		m.pruneLocalInterestsLocked(now)
-		m.remote.localInterestMu.Unlock()
-	}
-	return nil
+	return m.snapshots.RenewInterest(ctx, key)
 }
 
 // interestGenerationClock is the process-wide high-water mark of every
@@ -894,40 +798,11 @@ func noteInterestGenerationIssued(generation uint64) {
 	}
 }
 
-// nextInterestGeneration issues the next generation for this consumer's
-// interest messages. The first call seeds from the clock (see the field).
-func (m *Manager) nextInterestGeneration() uint64 {
-	for {
-		current := m.remote.interestGeneration.Load()
-		if current == 0 {
-			seed := seedInterestGeneration(interestGenerationNow())
-			if !m.remote.interestGeneration.CompareAndSwap(0, seed) {
-				continue
-			}
-			current = seed
-		}
-		generation := m.remote.interestGeneration.Add(1)
-		noteInterestGenerationIssued(generation)
-		return generation
-	}
-}
-
 func (m *Manager) ReleaseRemoteSnapshotInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
-	if m == nil || m.remote == nil || !key.Valid() {
+	if m == nil || m.snapshots == nil {
 		return entity.ErrRemoteRejected
 	}
-	interest := entity.RemoteSnapshotInterest{ConsumerSID: m.localSid, Key: key, ExpiresAt: time.Now().UnixNano(), Generation: m.nextInterestGeneration()}
-	stripe := &m.remote.localInterestLocks[uint64(key.EntityID)%uint64(len(m.remote.localInterestLocks))]
-	stripe.Lock()
-	defer stripe.Unlock()
-	m.remote.localInterestMu.Lock()
-	delete(m.remote.localInterests, key)
-	m.remote.localInterestMu.Unlock()
-	m.remote.interests.release(key, m.localSid, interest.Generation)
-	if publisher, ok := m.syncer.(remoteInterestPublisher); ok {
-		return publisher.PublishRemoteInterest(ctx, interest, true)
-	}
-	return nil
+	return m.snapshots.ReleaseInterest(ctx, key)
 }
 
 func validateRemoteReceipt(commit entity.RemoteCommit, receipt entity.RemoteCommitReceipt) error {
@@ -944,67 +819,11 @@ func (m *Manager) afterRemoteCommit(ctx context.Context, commit entity.RemoteCom
 	if err := m.acknowledgeRemoteCommit(commit); err != nil {
 		return err
 	}
-	for _, record := range commit.Snapshots {
-		envelope := entity.RemoteSnapshotEnvelope{
-			Key: record.Key, BaseVersion: record.BaseVersion, StateVersion: record.StateVersion,
-			MarkerEpoch: record.MarkerEpoch, RouteEpoch: record.RouteEpoch,
-			Schema: record.Schema, Codec: record.Codec, Checksum: record.Checksum, Full: record.Full,
-			PublishedAt: time.Now().UnixNano(), Payload: entity.CopyFrozenRemoteSnapshotPayload(record.Data),
-		}
-		if err := m.remote.cache.Publish(ctx, envelope); err != nil {
-			return err
-		}
-		if publisher, ok := m.snapshotPublisher(); ok {
-			if err := publisher.PublishRemoteSnapshot(ctx, record.Clone()); err != nil {
-				return err
-			}
-		}
-	}
-	for _, key := range commit.Invalidations {
-		// Same rule as the replica side (U-0187): the local copy is deleted
-		// at the commit's version so a concurrent older publish for the key
-		// cannot repopulate it behind this commit.
-		if err := m.remote.cache.DeleteAtVersion(ctx, key, commit.NextVersion); err != nil {
-			return err
-		}
-		if publisher, ok := m.snapshotPublisher(); ok {
-			if err := publisher.DeleteRemoteSnapshot(ctx, key, commit.NextVersion); err != nil {
-				return err
-			}
-		}
+	if err := m.snapshots.publishCommitted(ctx, commit); err != nil {
+		return err
 	}
 	m.notifyRemoteVersion(commit.EntityID, commit.NextVersion)
 	return nil
-}
-
-func (m *Manager) snapshotPublisher() (entity.IRemoteSnapshotPublisher, bool) {
-	if publisher, ok := m.syncer.(entity.IRemoteSnapshotPublisher); ok {
-		return publisher, true
-	}
-	return nil, false
-}
-
-func (m *Manager) rollbackLocalInterest(key entity.RemoteSnapshotKey, expiresAt int64) {
-	if m == nil || m.remote == nil {
-		return
-	}
-	m.remote.localInterestMu.Lock()
-	if m.remote.localInterests[key] == expiresAt {
-		delete(m.remote.localInterests, key)
-		// This process withdrawing its own lease locally: no message was
-		// reordered, so the latest generation it issued is the right stamp.
-		m.remote.interests.release(key, m.localSid, m.remote.interestGeneration.Load())
-	}
-	m.remote.localInterestMu.Unlock()
-}
-
-func (m *Manager) pruneLocalInterestsLocked(now int64) {
-	for key, expiresAt := range m.remote.localInterests {
-		if expiresAt <= now {
-			delete(m.remote.localInterests, key)
-			m.remote.interests.release(key, m.localSid, m.remote.interestGeneration.Load())
-		}
-	}
 }
 
 func (m *Manager) FlushRemoteEntity(ctx context.Context, id int64, minVersion uint64) error {

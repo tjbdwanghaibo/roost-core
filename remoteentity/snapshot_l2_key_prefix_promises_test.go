@@ -139,7 +139,7 @@ func TestAssembleWiresSnapshotL2KeyPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := asm.Manager.remote.cache.Publish(context.Background(), l2Envelope(key, 3, "wired")); err != nil {
+	if err := asm.Manager.snapshots.cache.Publish(context.Background(), l2Envelope(key, 3, "wired")); err != nil {
 		t.Fatal(err)
 	}
 	keys := redis.fake.keys()

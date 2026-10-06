@@ -225,6 +225,8 @@ bash scripts/test-remote-matrix.sh
 
 10-06 B2（维护者决定）：Remote 快照缓存以共享 L2 为水位权威、L1 只缓存 L2 确认过的版本并带确认时刻；`remote_entity.cached_max_staleness` 成为 Cached / Monotonic 的陈旧上限（超过即重新确认：读 L2、补写、回源权威）；复制消息带发布时刻，DeliverAll 重放的过老快照不再被接受（N05 O5 在真实 JetStream 上先红后绿）；墓碑侧表 / Superseded / FatalRemoteError / L1 冷预查四处删除。组合矩阵在真实 Redis 与自建 Redis Cluster 上各 20 格通过。**已实施，未发版**，[方案与实施](feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md)。
 
+10-06 Mirror 第 1～3 步（维护者第四轮决定）：只读契约（`entity.RemoteSnapshotReadOnly`、观察 token、DTO reader）、快照缓存唯一读出口 `RemoteSnapshotCache.Read`、共享 `remoteentity.SnapshotClient`（Manager 委托，Assembly 的复制启停交给它，停机套 A3 骨架）。修前红：Monotonic 未命中回源两次、Cached 交出低于最低版本的值。真实 Redis / 自建 Cluster 矩阵与生成工程通过。**已实施，未发版**；第 4～6 步（订阅代际与首载缓冲、kit / codegen 只读产物、真实故障与性能）未开始，入口见[实施记录 §7](feature/MIRROR-STEPS-1-3-2026-10-06.md)。
+
 10-06 B7（维护者决定，方向 b）：actionflow `ActionRunner` 回调里的变更进延后命令队列、最外层调用按发起顺序执行，判定集中在 `submit` 一处，删掉 U-0100 / NC-122 的六处事后比对；回调里的 Start / Enqueue 返回已分配 ID（`Deferring()`），队列有界（`MaxDeferredCommands`）、互相触发截停（`MaxDeferredSteps`）；`MissionRunner` 未改（第五轮已改为延后队列，见上）。**已实施，未发版**（`a9b7075b`，[方案与实施](feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md)）。
 
 10-06 B3 ①②（维护者决定）：skill `lower.go` 的名字查找经唯一入口 `resolveName`，查不到返回 `LOWER_UNRESOLVED` 编译错误、不交出 Program（类型检查之外的第二道防线，回归 `skill/lower_lookup_promises_test.go` 对全部种子逐表删条目）；phase 事件派发表单一来源 `skill/phase_events.go`。**已实施，未发版**（[方案与实施](feature/B3-SKILL-LOWER-FAILFAST-2026-10-06.md)）。

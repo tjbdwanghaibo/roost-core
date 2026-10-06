@@ -115,3 +115,13 @@ Shutdown 停止准入，取消续租和加载，解绑订阅，等待已准入�
 ## 2026-10-06 B2：方案与实现状态
 
 维护者选了 B2 方向 (a)（[实施记录](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md)）：共享 L2 为水位权威、L1 只是有界副本，`cached_max_staleness` 落地为配置与契约（对应本方案“读取和关闭”里的 MaxStaleness），DeliverAll 重放的过老快照按发布时刻丢弃。本方案的只读 DTO reader、观察 token、订阅代际与首载缓冲仍未实施。
+
+## 2026-10-06 第 1～3 步实施
+
+维护者第四轮决定补齐本方案，本批做六步表的 1～3，[实施记录](../feature/MIRROR-STEPS-1-3-2026-10-06.md)。方案本身未改。
+
+- **第 1 步（只读契约）**：`entity.RemoteSnapshotReadOnly`（只读方唯一能力）、观察 token `entity.RemoteObservation`（排序与 L1 / L2 准入同一规则，混合 epoch 返回 `ErrRemoteObservationIncomparable`）、DTO reader `entity.RemoteMirrorReader[T]`（解码独立副本、读侧校验身份与 schema / codec、不注册 kind 或全局解码器，同进程 owner / consumer 不冲突）、`ErrRemoteReadUnsupported`；迁移策略见实施记录 §3。
+- **第 2 步（统一读出口）**：B2 已覆盖陈旧上限、过期与同版本刷新；本批补齐 Manager 外层回退（一次 Monotonic 未命中回源两次，先红后绿）、Cached 交出低于最低版本的值（先红后绿）、带 epoch 的 token、Linearizable 能力门。全部读出口经 `RemoteSnapshotCache.Read` 与 `Covers`。
+- **第 3 步（共享 snapshot client）**：`remoteentity.SnapshotClient` 拥有读、兴趣、按 key apply、回填、状态与生命周期；Manager 组合并委托，`Assembly` 的复制启停交给它；客户端不要求写 backend；启动失败逐步回收、无重复订阅；`Stop` 套 A3 三步停机骨架。缓存写入仍只经 `admitLocked`。
+- 真实 Redis + 自建 Cluster 的 `TestRealB2WatermarkMatrix*`、真实 JetStream 重放、生成工程 12 条 `TestGeneratedRemote*` 通过。
+- **第 4～6 步未开始**，入口与前置条件见实施记录 §7（核心前置：总线能否证明确认后的发布不被静默丢弃；不满足时第 4 步只交付按需读）。

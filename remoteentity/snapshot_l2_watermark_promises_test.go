@@ -258,7 +258,7 @@ func TestB2HistoricReplicaPastL2MemoryIsNotAdmitted(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.SnapshotL2TTL = time.Minute
 	reader := NewManager(newMockVersionedLockFactory(), cfg, 1501, NewSnapshotL2Store(redis, cfg.SnapshotL2TTL))
-	store := SnapshotReplicaStore{mgr: reader}
+	store := SnapshotReplicaStore{client: reader.snapshots}
 	key := staleBackfillKey(t, b2WatermarkKind, 9506)
 
 	historic := b2ReplicaWire(t, key, 1, "v1-from-history", time.Now().Add(-10*time.Minute).UnixNano(), 1)

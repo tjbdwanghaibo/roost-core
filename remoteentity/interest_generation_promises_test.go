@@ -80,7 +80,7 @@ func TestManagerStampsInterestMessagesWithAdvancingGenerations(t *testing.T) {
 		captured = append(captured, i)
 	}}
 	manager := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
-	manager.syncer = publisher
+	manager.snapshots.transport = publisher
 
 	ctx := context.Background()
 	if err := manager.RenewRemoteSnapshotInterest(ctx, key); err != nil {
@@ -103,7 +103,7 @@ func TestManagerStampsInterestMessagesWithAdvancingGenerations(t *testing.T) {
 	// A fresh manager (a restart reusing the SID) starts above where any
 	// earlier process could plausibly have been, because the seed is a clock.
 	restarted := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
-	restarted.syncer = publisher
+	restarted.snapshots.transport = publisher
 	if err := restarted.RenewRemoteSnapshotInterest(ctx, key); err != nil {
 		t.Fatal(err)
 	}

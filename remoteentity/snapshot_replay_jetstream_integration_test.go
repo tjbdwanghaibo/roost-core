@@ -98,14 +98,14 @@ func TestRealJetStreamReplayAfterL2ExpiryDoesNotResurrect(t *testing.T) {
 	defer ownerInterests.Stop()
 
 	// 一个消费者对这个 key 有兴趣：owner 的提交进流。
-	if err := owner.remote.interests.renew(entity.RemoteSnapshotInterest{ConsumerSID: 2102, Key: key, ExpiresAt: time.Now().Add(time.Minute).UnixNano(), Generation: 1}); err != nil {
+	if err := owner.snapshots.interests.renew(entity.RemoteSnapshotInterest{ConsumerSID: 2102, Key: key, ExpiresAt: time.Now().Add(time.Minute).UnixNano(), Generation: 1}); err != nil {
 		t.Fatal(err)
 	}
 	v1 := staleBackfillEnvelope(key, 1, 1, "v1")
-	if err := owner.remote.cache.Publish(ctx, v1); err != nil {
+	if err := owner.snapshots.cache.Publish(ctx, v1); err != nil {
 		t.Fatal(err)
 	}
-	publisher, ok := owner.snapshotPublisher()
+	publisher, ok := owner.snapshots.transport.(entity.IRemoteSnapshotPublisher)
 	if !ok {
 		t.Fatal("owner has no snapshot publisher")
 	}
@@ -116,8 +116,8 @@ func TestRealJetStreamReplayAfterL2ExpiryDoesNotResurrect(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 兴趣过期后 owner 提交 v2：只写 L2，不进流。
-	owner.remote.interests.release(key, 2102, 2)
-	if err := owner.remote.cache.Publish(ctx, staleBackfillEnvelope(key, 2, 1, "v2")); err != nil {
+	owner.snapshots.interests.release(key, 2102, 2)
+	if err := owner.snapshots.cache.Publish(ctx, staleBackfillEnvelope(key, 2, 1, "v2")); err != nil {
 		t.Fatal(err)
 	}
 	// 键在 L2 TTL 内没有新的写入：等它过期。
@@ -143,7 +143,7 @@ func TestRealJetStreamReplayAfterL2ExpiryDoesNotResurrect(t *testing.T) {
 	}
 	late := NewManager(newMockVersionedLockFactory(), cfg, 2103, lateL2)
 	var applied atomic.Int32
-	lateReplicator := mirror.New(busFor(2103), SyncTopicSnapshot, countingReplicaStore{inner: SnapshotReplicaStore{mgr: late}, applied: &applied})
+	lateReplicator := mirror.New(busFor(2103), SyncTopicSnapshot, countingReplicaStore{inner: SnapshotReplicaStore{client: late.snapshots}, applied: &applied})
 	if err := lateReplicator.Start(); err != nil {
 		t.Fatal(err)
 	}

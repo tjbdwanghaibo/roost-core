@@ -23,7 +23,7 @@ func deleteOrderSetup(t *testing.T, kind entity.EntityKind, seq int64) (*Manager
 		t.Fatal(err)
 	}
 	manager := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
-	return manager, SnapshotReplicaStore{mgr: manager}, entity.RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 1}
+	return manager, SnapshotReplicaStore{client: manager.snapshots}, entity.RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 1}
 }
 
 func deleteOrderUpsert(t *testing.T, key entity.RemoteSnapshotKey, version uint64) mirror.Envelope {
@@ -59,7 +59,7 @@ func TestApplyReplicaPromiseDelayedDeleteKeepsNewerSnapshot(t *testing.T) {
 	if err := store.ApplyReplica(ctx, deleteOrderDelete(t, key, 2)); err != nil {
 		t.Fatal(err)
 	}
-	got, ok, err := manager.remote.cache.Get(ctx, key, entity.RemoteReadCached, 0)
+	got, ok, err := manager.snapshots.cache.Get(ctx, key, entity.RemoteReadCached, 0)
 	if err != nil || !ok || got.StateVersion != 3 {
 		t.Fatalf("old delete removed v3: found=%v version=%d err=%v", ok, got.StateVersion, err)
 	}
@@ -74,7 +74,7 @@ func TestApplyReplicaPromiseDeleteFencesDelayedOlderSnapshot(t *testing.T) {
 	if err := store.ApplyReplica(ctx, deleteOrderUpsert(t, key, 1)); err != nil {
 		t.Fatal(err)
 	}
-	got, ok, err := manager.remote.cache.Get(ctx, key, entity.RemoteReadCached, 0)
+	got, ok, err := manager.snapshots.cache.Get(ctx, key, entity.RemoteReadCached, 0)
 	if err != nil || ok {
 		t.Fatalf("deleted snapshot resurrected: found=%v version=%d err=%v", ok, got.StateVersion, err)
 	}
@@ -82,7 +82,7 @@ func TestApplyReplicaPromiseDeleteFencesDelayedOlderSnapshot(t *testing.T) {
 	if err := store.ApplyReplica(ctx, deleteOrderUpsert(t, key, 3)); err != nil {
 		t.Fatal(err)
 	}
-	got, ok, err = manager.remote.cache.Get(ctx, key, entity.RemoteReadCached, 0)
+	got, ok, err = manager.snapshots.cache.Get(ctx, key, entity.RemoteReadCached, 0)
 	if err != nil || !ok || got.StateVersion != 3 {
 		t.Fatalf("ordered newer snapshot lost: found=%v version=%d err=%v", ok, got.StateVersion, err)
 	}

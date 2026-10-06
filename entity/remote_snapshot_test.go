@@ -206,7 +206,7 @@ func TestRemoteSnapshotMonotonicStaleLoadsAreCoalesced(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for {
 		cache.loadMu.Lock()
-		call := cache.loads[remoteSnapshotLoadKey{key: key, minVersion: 2}]
+		call := cache.loads[remoteSnapshotLoadKey{key: key, after: RemoteObservation{StateVersion: 2}}]
 		waiters := 0
 		if call != nil {
 			waiters = call.waiters

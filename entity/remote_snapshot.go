@@ -182,8 +182,8 @@ type remoteVersionWaiter struct {
 }
 
 type remoteSnapshotLoadKey struct {
-	key        RemoteSnapshotKey
-	minVersion uint64
+	key   RemoteSnapshotKey
+	after RemoteObservation
 	// refresh 区分“重新确认 / L2 回填”与按最低版本的权威加载，两者各自合并。
 	refresh bool
 }
@@ -298,6 +298,8 @@ func (c *RemoteSnapshotCache) l1Snapshot(ctx context.Context, key RemoteSnapshot
 	return entry.snapshot, true, nil
 }
 
+// LoadAuthoritative 是直接回源的外观（复制消息缺基回填、旧调用方）：读权威、经 admitLocked 记入缓存，
+// 返回缓存最终持有的值。最低版本与其他读出口共用 RemoteObservation.Covers（见 Read）。
 func (c *RemoteSnapshotCache) LoadAuthoritative(ctx context.Context, key RemoteSnapshotKey, consistency RemoteReadConsistency, minVersion uint64) (RemoteSnapshotEnvelope, bool, error) {
 	if c == nil || c.loader == nil {
 		return RemoteSnapshotEnvelope{}, false, nil
@@ -307,6 +309,37 @@ func (c *RemoteSnapshotCache) LoadAuthoritative(ctx context.Context, key RemoteS
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	return c.loadAuthoritative(ctx, key, consistency, RemoteObservation{StateVersion: minVersion})
+}
+
+// loaderMinVersion 是交给 loader 的版本下限。只约束版本的 token 原样下推（loader 可据此过滤，如 Mongo 的
+// state_version >= min）；带 epoch 的 token 不下推：换代后版本可能更小，下推会让 loader 把更新的快照
+// 当成不存在。返回值仍由 Covers 检查。
+func loaderMinVersion(after RemoteObservation) uint64 {
+	if after.versionOnly() {
+		return after.StateVersion
+	}
+	return 0
+}
+
+// covers 是读出口的最低要求检查：不满足返回 ErrRemoteSnapshotStale，epoch 不可比返回
+// ErrRemoteObservationIncomparable。
+func covers(snapshot RemoteSnapshotEnvelope, after RemoteObservation) error {
+	ok, err := snapshot.Observation().Covers(after)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrRemoteSnapshotStale
+	}
+	return nil
+}
+
+// loadAuthoritative 读权威并经 admitLocked 记入缓存（唯一写入口），返回缓存最终持有、满足 after 的值。
+func (c *RemoteSnapshotCache) loadAuthoritative(ctx context.Context, key RemoteSnapshotKey, consistency RemoteReadConsistency, after RemoteObservation) (RemoteSnapshotEnvelope, bool, error) {
+	if c.loader == nil {
+		return RemoteSnapshotEnvelope{}, false, ErrRemoteSnapshotStale
 	}
 	loadCtx := ctx
 	var cancel context.CancelFunc
@@ -323,7 +356,7 @@ func (c *RemoteSnapshotCache) LoadAuthoritative(ctx context.Context, key RemoteS
 	// 权威的答案反映加载开始之后的某个时刻：以开始时刻作确认时刻（保守）。
 	loadStart := c.nowNanos()
 	c.authorityLoads.Add(1)
-	snapshot, ok, err := c.loader(loadCtx, key, consistency, minVersion)
+	snapshot, ok, err := c.loader(loadCtx, key, consistency, loaderMinVersion(after))
 	if err != nil {
 		c.loadErrors.Add(1)
 		return snapshot, ok, err
@@ -336,8 +369,8 @@ func (c *RemoteSnapshotCache) LoadAuthoritative(ctx context.Context, key RemoteS
 	if snapshot.Key != key {
 		return RemoteSnapshotEnvelope{}, false, fmt.Errorf("remote snapshot: authoritative result key does not match requested key")
 	}
-	if snapshot.StateVersion < minVersion {
-		return RemoteSnapshotEnvelope{}, false, ErrRemoteSnapshotStale
+	if err := covers(snapshot, after); err != nil {
+		return RemoteSnapshotEnvelope{}, false, err
 	}
 	// Every outward read shares one post-condition: never a snapshot past
 	// its own deadline. The authority's raw answer and whatever L1 keeps
@@ -365,8 +398,8 @@ func (c *RemoteSnapshotCache) LoadAuthoritative(ctx context.Context, key RemoteS
 	}
 	// RR-20261005-NC-36：epoch 准入或并发发布可能保留另一份 L1；
 	// 最低版本承诺约束的是最终返回值，不能只检查权威的原始结果。
-	if stored.StateVersion < minVersion {
-		return RemoteSnapshotEnvelope{}, false, ErrRemoteSnapshotStale
+	if err := covers(stored, after); err != nil {
+		return RemoteSnapshotEnvelope{}, false, err
 	}
 	return stored.Clone(), true, nil
 }
@@ -412,30 +445,58 @@ func remoteSnapshotSameVersion(a, b RemoteSnapshotEnvelope) bool {
 	return a.MarkerEpoch == b.MarkerEpoch && a.RouteEpoch == b.RouteEpoch && a.StateVersion == b.StateVersion
 }
 
+// Get 是 Read 的旧签名外观：minVersion 是只约束版本的 token。
 func (c *RemoteSnapshotCache) Get(ctx context.Context, key RemoteSnapshotKey, consistency RemoteReadConsistency, minVersion uint64) (RemoteSnapshotEnvelope, bool, error) {
+	if consistency == 0 {
+		return RemoteSnapshotEnvelope{}, false, ErrRemoteReadConsistency
+	}
+	return c.Read(ctx, RemoteSnapshotRead{Key: key, Consistency: consistency, After: RemoteObservation{StateVersion: minVersion}})
+}
+
+// Read 是快照缓存唯一的读出口（Mirror 方案第 2 步）。Cached / Monotonic / Linearizable 与直接加载
+// 共用同一组后置条件：完整 key 一致、未过 ExpiresAt、满足 After（RemoteObservation.Covers）；非线性读
+// 另要求条目在陈旧上限内被确认（B2）。
+//
+//   - Linearizable：每次读权威（不合并：先开始的加载不能代表之后开始的读）。
+//   - Monotonic：确认过的 L1 满足 After 就交出，否则按 (key, After) 合并回源一次。
+//   - Cached：只读缓存，不因未命中回源；L1 有值但不满足 After 返回 ErrRemoteSnapshotStale。
+func (c *RemoteSnapshotCache) Read(ctx context.Context, req RemoteSnapshotRead) (RemoteSnapshotEnvelope, bool, error) {
 	if c == nil || c.l1 == nil {
 		return RemoteSnapshotEnvelope{}, false, nil
 	}
+	consistency := req.Consistency
+	if consistency == 0 {
+		consistency = RemoteReadCached
+	}
+	key := req.Key
 	if !key.Valid() || consistency < RemoteReadMonotonic || consistency > RemoteReadLinearizable {
 		return RemoteSnapshotEnvelope{}, false, ErrRemoteReadConsistency
 	}
-	if consistency == RemoteReadLinearizable {
-		return c.LoadAuthoritative(ctx, key, consistency, minVersion)
-	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if consistency == RemoteReadLinearizable {
+		if c.loader == nil {
+			return RemoteSnapshotEnvelope{}, false, nil
+		}
+		return c.loadAuthoritative(ctx, key, consistency, req.After)
 	}
 	snapshot, ok, err := c.readConfirmed(ctx, key)
 	if err != nil {
 		return RemoteSnapshotEnvelope{}, false, err
 	}
-	if ok && (consistency == RemoteReadCached || snapshot.StateVersion >= minVersion) {
-		return snapshot, true, nil
+	if ok {
+		err := covers(snapshot, req.After)
+		if err == nil {
+			return snapshot, true, nil
+		}
+		if consistency == RemoteReadCached || !errors.Is(err, ErrRemoteSnapshotStale) {
+			return RemoteSnapshotEnvelope{}, false, err
+		}
+	} else if consistency == RemoteReadCached {
+		return RemoteSnapshotEnvelope{}, false, nil
 	}
-	if consistency == RemoteReadMonotonic {
-		return c.loadMonotonic(ctx, key, minVersion)
-	}
-	return RemoteSnapshotEnvelope{}, false, nil
+	return c.loadMonotonic(ctx, key, req.After)
 }
 
 // readConfirmed 是非线性读看到的 L1：条目在陈旧上限内已确认就直接用（不碰 L2，热路径只有一次 L1 读）；
@@ -568,7 +629,7 @@ func (c *RemoteSnapshotCache) loadForRefresh(ctx context.Context, key RemoteSnap
 		return RemoteSnapshotEnvelope{}, false, ErrRemoteSnapshotStale
 	}
 	loadStart := c.nowNanos()
-	snapshot, found, err := c.LoadAuthoritative(ctx, key, RemoteReadMonotonic, 0)
+	snapshot, found, err := c.loadAuthoritative(ctx, key, RemoteReadMonotonic, RemoteObservation{})
 	if err != nil || found {
 		return snapshot, found, err
 	}
@@ -582,12 +643,12 @@ func (c *RemoteSnapshotCache) loadForRefresh(ctx context.Context, key RemoteSnap
 	return RemoteSnapshotEnvelope{}, false, nil
 }
 
-func (c *RemoteSnapshotCache) loadMonotonic(ctx context.Context, key RemoteSnapshotKey, minVersion uint64) (RemoteSnapshotEnvelope, bool, error) {
+func (c *RemoteSnapshotCache) loadMonotonic(ctx context.Context, key RemoteSnapshotKey, after RemoteObservation) (RemoteSnapshotEnvelope, bool, error) {
 	if c.loader == nil {
 		return RemoteSnapshotEnvelope{}, false, ErrRemoteSnapshotStale
 	}
-	return c.coalesce(ctx, remoteSnapshotLoadKey{key: key, minVersion: minVersion}, func(ctx context.Context) (RemoteSnapshotEnvelope, bool, error) {
-		return c.LoadAuthoritative(ctx, key, RemoteReadMonotonic, minVersion)
+	return c.coalesce(ctx, remoteSnapshotLoadKey{key: key, after: after}, func(ctx context.Context) (RemoteSnapshotEnvelope, bool, error) {
+		return c.loadAuthoritative(ctx, key, RemoteReadMonotonic, after)
 	})
 }
 

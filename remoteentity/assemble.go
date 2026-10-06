@@ -3,7 +3,6 @@ package remoteentity
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
-	"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror"
 )
 
 // AssemblyDeps are the capabilities Remote Entity consumes. Redis is always
@@ -40,9 +38,7 @@ type Assembly struct {
 	LockFactory fredis.IVersionedLockFactory
 	AtomicStore AtomicCommitStore
 
-	cfg         *Config
-	snapshotRep *mirror.Replicator
-	interestRep *mirror.Replicator
+	cfg *Config
 
 	// 启停持有整个操作的所有权；等待者可取消，但不能提前回收持有者的资源。
 	lifecycleMu   sync.Mutex
@@ -154,22 +150,17 @@ func (a *Assembly) Start(ctx context.Context, bus fsyncbus.ISyncBus) error {
 	if err := entity.ValidateRemoteManagedDaoScopes(entity.GetAllEntityBuilders()); err != nil {
 		return err
 	}
-	// 第一次绑定后保留同一组 replicator；失败重试只重订阅，不改动已封存的依赖。
-	if a.snapshotRep == nil {
-		a.snapshotRep, a.interestRep = a.Manager.BindSync(bus)
+	// 快照复制归 SnapshotClient：第一次启动绑定 bus，失败重试只重订阅，不改动已封存的依赖。
+	snapshots := a.Manager.snapshots
+	if err := snapshots.Start(bus); err != nil {
+		return err
 	}
 	started := false
 	defer func() {
 		if !started {
-			a.stopReplicators()
+			snapshots.unsubscribe()
 		}
 	}()
-	if err := a.snapshotRep.Start(); err != nil {
-		return fmt.Errorf("remote_entity: start snapshot replica: %w", err)
-	}
-	if err := a.interestRep.Start(); err != nil {
-		return fmt.Errorf("remote_entity: start interest replica: %w", err)
-	}
 	a.Manager.SealDependencies()
 	if initializer, ok := a.Manager.Backend().(entity.IRemoteStorageInitializer); ok {
 		storageCtx, cancel := context.WithTimeout(ctx, a.cfg.OpTimeout)
@@ -194,11 +185,12 @@ func (a *Assembly) Start(ctx context.Context, bus fsyncbus.ISyncBus) error {
 	return nil
 }
 
-// Stop stops the finalizer within ctx and then the replicators. A timeout keeps
+// Stop stops the finalizer within ctx and then the snapshot client. A timeout keeps
 // replication available for accepted work; a later Stop finishes the cleanup.
-// Replicators stop in three steps (RR-20261005-NC-174): admission closes and the
-// subscriptions go, then Stop waits within ctx for the replica handlers already
-// applying; a timeout returns the ctx error and a later Stop waits again.
+// The snapshot client stops in three steps (RR-20261005-NC-174, Mirror 第 3 步): admission
+// closes and the subscriptions go, then Stop waits within ctx for the replica handlers and
+// the L2 / authority / interest calls already admitted; a timeout returns the ctx error and
+// a later Stop waits again.
 func (a *Assembly) Stop(ctx context.Context) error {
 	if a == nil {
 		return nil
@@ -217,36 +209,12 @@ func (a *Assembly) Stop(ctx context.Context) error {
 			return err
 		}
 	}
-	a.stopReplicators()
-	if err := a.drainReplicators(ctx); err != nil {
-		return err
-	}
-	a.started = false
-	return nil
-}
-
-// stopReplicators 关闭复制的准入并退订（幂等），不等待在途 handler；启动失败的清理也走这里，
-// 留下的在途 handler 由之后的 Stop 一并等待。
-func (a *Assembly) stopReplicators() {
-	if a.snapshotRep != nil {
-		a.snapshotRep.Stop()
-	}
-	if a.interestRep != nil {
-		a.interestRep.Stop()
-	}
-}
-
-// drainReplicators 在 ctx 内等两个 replicator 已准入的 handler 返回；它们写 Manager 的快照缓存与兴趣表，
-// 可能读 L2 与权威，返回之前 Redis / SyncBus 等依赖不能被释放。
-func (a *Assembly) drainReplicators(ctx context.Context) error {
-	for _, rep := range []*mirror.Replicator{a.snapshotRep, a.interestRep} {
-		if rep == nil {
-			continue
-		}
-		if err := rep.StopWithContext(ctx); err != nil {
+	if a.Manager != nil {
+		if err := a.Manager.snapshots.Stop(ctx); err != nil {
 			return err
 		}
 	}
+	a.started = false
 	return nil
 }
 

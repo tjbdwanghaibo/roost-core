@@ -54,7 +54,7 @@ func TestRealSnapshotL2StaleWriteIsReportedAndNotPinnedInL1(t *testing.T) {
 	}
 
 	reader := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1301, mustPrefixedL2(t, r, prefix))
-	if err := (SnapshotReplicaStore{mgr: reader}).ApplyReplica(ctx, staleBackfillReplica(t, key, 7, 1, "late-old-epoch")); err != nil {
+	if err := (SnapshotReplicaStore{client: reader.snapshots}).ApplyReplica(ctx, staleBackfillReplica(t, key, 7, 1, "late-old-epoch")); err != nil {
 		t.Fatal(err)
 	}
 	got, found, err := reader.ReadRemoteSnapshot(ctx, key, entity.RemoteReadCached, 0)
@@ -108,7 +108,7 @@ func TestRealSnapshotL2TombstoneFencesEveryWriter(t *testing.T) {
 	owner := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1311, mustPrefixedL2(t, r, prefix))
 	nodeB := entity.NewRemoteSnapshotCache(entity.RemoteSnapshotCacheConfig{TTL: time.Minute}, mustPrefixedL2(t, r, prefix),
 		func(context.Context, entity.RemoteSnapshotKey, entity.RemoteReadConsistency, uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
-			if err := owner.remote.cache.DeleteAtVersion(ctx, key, 3); err != nil {
+			if err := owner.snapshots.cache.DeleteAtVersion(ctx, key, 3); err != nil {
 				t.Errorf("owner delete: %v", err)
 			}
 			return staleBackfillEnvelope(key, 1, 1, "v1"), true, nil

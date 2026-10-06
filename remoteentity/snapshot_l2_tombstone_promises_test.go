@@ -25,12 +25,12 @@ func TestDeleteWatermarkHoldsInL2AgainstAnInflightLoadOnAnotherNode(t *testing.T
 	redis := newSnapshotRedisFake()
 	key := staleBackfillKey(t, staleBackfillLoadKind, 9431)
 	owner := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1201, NewSnapshotL2Store(redis, time.Minute))
-	if err := owner.remote.cache.Publish(ctx, staleBackfillEnvelope(key, 1, 1, "v1")); err != nil {
+	if err := owner.snapshots.cache.Publish(ctx, staleBackfillEnvelope(key, 1, 1, "v1")); err != nil {
 		t.Fatal(err)
 	}
 	nodeB := entity.NewRemoteSnapshotCache(entity.RemoteSnapshotCacheConfig{TTL: time.Minute}, NewSnapshotL2Store(redis, time.Minute),
 		func(context.Context, entity.RemoteSnapshotKey, entity.RemoteReadConsistency, uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
-			if err := owner.remote.cache.DeleteAtVersion(ctx, key, 2); err != nil {
+			if err := owner.snapshots.cache.DeleteAtVersion(ctx, key, 2); err != nil {
 				t.Errorf("owner delete: %v", err)
 			}
 			return staleBackfillEnvelope(key, 1, 1, "v1"), true, nil
@@ -48,13 +48,13 @@ func TestDeleteWatermarkHoldsInL2AgainstALateReplicaOnAnotherNode(t *testing.T) 
 	key := staleBackfillKey(t, staleBackfillReplicaKind, 9432)
 	owner := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1211, NewSnapshotL2Store(redis, time.Minute))
 	nodeB := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1212, NewSnapshotL2Store(redis, time.Minute))
-	if err := owner.remote.cache.Publish(ctx, staleBackfillEnvelope(key, 1, 1, "v1")); err != nil {
+	if err := owner.snapshots.cache.Publish(ctx, staleBackfillEnvelope(key, 1, 1, "v1")); err != nil {
 		t.Fatal(err)
 	}
-	if err := owner.remote.cache.DeleteAtVersion(ctx, key, 2); err != nil {
+	if err := owner.snapshots.cache.DeleteAtVersion(ctx, key, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := (SnapshotReplicaStore{mgr: nodeB}).ApplyReplica(ctx, staleBackfillReplica(t, key, 1, 1, "v1")); err != nil {
+	if err := (SnapshotReplicaStore{client: nodeB.snapshots}).ApplyReplica(ctx, staleBackfillReplica(t, key, 1, 1, "v1")); err != nil {
 		t.Fatalf("a late replica is the past, not a failure: %v", err)
 	}
 	assertDeletedEverywhere(t, ctx, redis, key, 1213)
@@ -68,37 +68,37 @@ func TestDeleteWatermarkControls(t *testing.T) {
 		redis := newSnapshotRedisFake()
 		key := staleBackfillKey(t, staleBackfillReplicaKind, 9433)
 		owner := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1221, NewSnapshotL2Store(redis, time.Minute))
-		if err := owner.remote.cache.Publish(ctx, staleBackfillEnvelope(key, 1, 1, "v1")); err != nil {
+		if err := owner.snapshots.cache.Publish(ctx, staleBackfillEnvelope(key, 1, 1, "v1")); err != nil {
 			t.Fatal(err)
 		}
-		if err := owner.remote.cache.DeleteAtVersion(ctx, key, 2); err != nil {
+		if err := owner.snapshots.cache.DeleteAtVersion(ctx, key, 2); err != nil {
 			t.Fatal(err)
 		}
-		if err := owner.remote.cache.DeleteAtVersion(ctx, key, 2); err != nil {
+		if err := owner.snapshots.cache.DeleteAtVersion(ctx, key, 2); err != nil {
 			t.Fatalf("repeated delete: %v", err)
 		}
-		if err := owner.remote.cache.DeleteAtVersion(ctx, key, 1); err != nil {
+		if err := owner.snapshots.cache.DeleteAtVersion(ctx, key, 1); err != nil {
 			t.Fatalf("older delete: %v", err)
 		}
 		// 更旧的删除没有把水位降到 1：v2 的快照仍是“删除之前”。
 		other := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1222, NewSnapshotL2Store(redis, time.Minute))
-		if err := other.remote.cache.Publish(ctx, staleBackfillEnvelope(key, 2, 1, "v2")); err != nil {
+		if err := other.snapshots.cache.Publish(ctx, staleBackfillEnvelope(key, 2, 1, "v2")); err != nil {
 			t.Fatal(err)
 		}
 		if _, held, err := NewSnapshotL2Store(redis, time.Minute).Get(ctx, key); err != nil || held {
 			t.Fatalf("a snapshot at the delete's own version reached L2: held=%v err=%v", held, err)
 		}
 		recreated := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1223, NewSnapshotL2Store(redis, time.Minute))
-		if err := recreated.remote.cache.Publish(ctx, staleBackfillEnvelope(key, 3, 1, "v3")); err != nil {
+		if err := recreated.snapshots.cache.Publish(ctx, staleBackfillEnvelope(key, 3, 1, "v3")); err != nil {
 			t.Fatal(err)
 		}
 		cold := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1224, NewSnapshotL2Store(redis, time.Minute))
-		got, found, err := cold.remote.cache.Get(ctx, key, entity.RemoteReadCached, 0)
+		got, found, err := cold.snapshots.cache.Get(ctx, key, entity.RemoteReadCached, 0)
 		if err != nil || !found || got.StateVersion != 3 || string(got.Payload.BytesCopy()) != "v3" {
 			t.Fatalf("recreated v3 on a cold node: version=%d found=%v err=%v", got.StateVersion, found, err)
 		}
 		// 重建之后 v3 不受旧墓碑影响：更旧的 v2 仍不能覆盖它，更新的 v4 照常。
-		if err := recreated.remote.cache.Publish(ctx, staleBackfillEnvelope(key, 4, 1, "v4")); err != nil {
+		if err := recreated.snapshots.cache.Publish(ctx, staleBackfillEnvelope(key, 4, 1, "v4")); err != nil {
 			t.Fatal(err)
 		}
 		if stored, held, err := NewSnapshotL2Store(redis, time.Minute).Get(ctx, key); err != nil || !held || stored.StateVersion != 4 {
@@ -109,11 +109,11 @@ func TestDeleteWatermarkControls(t *testing.T) {
 		redis := newSnapshotRedisFake()
 		key := staleBackfillKey(t, staleBackfillReplicaKind, 9434)
 		owner := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1231, NewSnapshotL2Store(redis, time.Minute))
-		if err := owner.remote.cache.Publish(ctx, staleBackfillEnvelope(key, 3, 1, "v3")); err != nil {
+		if err := owner.snapshots.cache.Publish(ctx, staleBackfillEnvelope(key, 3, 1, "v3")); err != nil {
 			t.Fatal(err)
 		}
 		late := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1232, NewSnapshotL2Store(redis, time.Minute))
-		if err := late.remote.cache.DeleteAtVersion(ctx, key, 2); err != nil {
+		if err := late.snapshots.cache.DeleteAtVersion(ctx, key, 2); err != nil {
 			t.Fatal(err)
 		}
 		if stored, held, err := NewSnapshotL2Store(redis, time.Minute).Get(ctx, key); err != nil || !held || stored.StateVersion != 3 {

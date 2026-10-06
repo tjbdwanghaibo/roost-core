@@ -28,7 +28,7 @@ func TestApplyReplicaRefusesPayloadIdentityThatContradictsTheEnvelope(t *testing
 	foreign := entity.RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 2}
 
 	manager := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
-	store := SnapshotReplicaStore{mgr: manager}
+	store := SnapshotReplicaStore{client: manager.snapshots}
 	record := entity.RemoteSnapshotRecord{
 		Key: declared, StateVersion: 4, MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Codec: 1,
 		Full: true, Data: []byte("payload"),
@@ -71,7 +71,7 @@ func TestApplyReplicaRefusesPayloadIdentityThatContradictsTheEnvelope(t *testing
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			before, hadBefore, err := manager.remote.cache.Get(context.Background(), foreign, entity.RemoteReadCached, 0)
+			before, hadBefore, err := manager.snapshots.cache.Get(context.Background(), foreign, entity.RemoteReadCached, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -79,7 +79,7 @@ func TestApplyReplicaRefusesPayloadIdentityThatContradictsTheEnvelope(t *testing
 			if err := store.ApplyReplica(context.Background(), env); err == nil {
 				t.Fatal("a message whose payload identity contradicts its envelope was applied")
 			}
-			after, hasAfter, err := manager.remote.cache.Get(context.Background(), foreign, entity.RemoteReadCached, 0)
+			after, hasAfter, err := manager.snapshots.cache.Get(context.Background(), foreign, entity.RemoteReadCached, 0)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -34,7 +34,7 @@ func TestRemoteAssemblyStopContract(t *testing.T) {
 			if handler == nil {
 				t.Fatal("interest replicator did not subscribe")
 			}
-			registry := a.Manager.remote.interests
+			registry := a.Manager.snapshots.interests
 			registry.mu.Lock()
 			unlock = sync.OnceFunc(registry.mu.Unlock)
 			go func() { applied <- handler(interestRenewMessage(t, interest)) }()
@@ -47,7 +47,7 @@ func TestRemoteAssemblyStopContract(t *testing.T) {
 	if err := <-applied; err != nil {
 		t.Fatalf("in-flight renew: %v", err)
 	}
-	if !a.Manager.remote.interests.interested(interest.Key) {
+	if !a.Manager.snapshots.interests.interested(interest.Key) {
 		t.Fatal("the admitted renewal was lost")
 	}
 }

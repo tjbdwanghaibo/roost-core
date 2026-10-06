@@ -155,7 +155,7 @@ func runB2WatermarkMatrix(t *testing.T, backend string, r fredis.IRedis) {
 						})
 					} else {
 						reader = NewManager(newMockVersionedLockFactory(), cfg, 2202, newL2())
-						readerCache = reader.remote.cache
+						readerCache = reader.snapshots.cache
 					}
 					read := func() (entity.RemoteSnapshotEnvelope, bool, error) {
 						if reader != nil {
@@ -170,14 +170,14 @@ func runB2WatermarkMatrix(t *testing.T, backend string, r fredis.IRedis) {
 						if sc.name == "migration-old-epoch" {
 							seed = staleBackfillEnvelope(key, 5, 1, "route1-v5")
 						}
-						if err := owner.remote.cache.Publish(ctx, seed); err != nil {
+						if err := owner.snapshots.cache.Publish(ctx, seed); err != nil {
 							t.Fatal(err)
 						}
 						if got, found, err := read(); err != nil || !found || got.StateVersion != seed.StateVersion {
 							t.Fatalf("hot seed: version=%d found=%v err=%v", got.StateVersion, found, err)
 						}
 					}
-					stale, publishedAt := sc.newer(t, ctx, owner.remote.cache, key, redisKey, r)
+					stale, publishedAt := sc.newer(t, ctx, owner.snapshots.cache, key, redisKey, r)
 
 					switch source {
 					case "publish":
@@ -185,7 +185,7 @@ func runB2WatermarkMatrix(t *testing.T, backend string, r fredis.IRedis) {
 							t.Fatalf("a stale publish is the past, not a failure: %v", err)
 						}
 					case "replica":
-						if err := (SnapshotReplicaStore{mgr: reader}).ApplyReplica(ctx, b2ReplicaWire(t, key, stale.StateVersion, string(stale.Payload.BytesCopy()), publishedAt, stale.RouteEpoch)); err != nil {
+						if err := (SnapshotReplicaStore{client: reader.snapshots}).ApplyReplica(ctx, b2ReplicaWire(t, key, stale.StateVersion, string(stale.Payload.BytesCopy()), publishedAt, stale.RouteEpoch)); err != nil {
 							t.Fatalf("a stale replica is the past, not a failure: %v", err)
 						}
 					case "load":

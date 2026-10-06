@@ -114,7 +114,7 @@ func TestRemoteAssemblyStopWaitsForAnInFlightReplicaHandler(t *testing.T) {
 	interest := entity.RemoteSnapshotInterest{Key: interestKeyFor(t, 244, 9471), ConsumerSID: 9, ExpiresAt: time.Now().Add(time.Hour).UnixNano(), Generation: 1}
 
 	// 测试持有兴趣表的锁：投递进入 ApplyReplica 后卡在 renew 上。
-	registry := a.Manager.remote.interests
+	registry := a.Manager.snapshots.interests
 	registry.mu.Lock()
 	var unlockOnce sync.Once
 	unlock := func() { unlockOnce.Do(registry.mu.Unlock) }
@@ -151,7 +151,7 @@ func TestRemoteAssemblyStopWaitsForAnInFlightReplicaHandler(t *testing.T) {
 	if err := a.Stop(context.Background()); err != nil {
 		t.Fatalf("retry Stop after the handler returned = %v", err)
 	}
-	if !a.Manager.remote.interests.interested(interest.Key) {
+	if !a.Manager.snapshots.interests.interested(interest.Key) {
 		t.Fatal("the admitted renewal was lost")
 	}
 }

@@ -163,10 +163,11 @@ type remoteInterestWire struct {
 	Interest entity.RemoteSnapshotInterest `json:"interest"`
 }
 
-type InterestReplicaStore struct{ mgr *Manager }
+// InterestReplicaStore 把兴趣消息落到 SnapshotClient 的全集群兴趣表。
+type InterestReplicaStore struct{ client *SnapshotClient }
 
 func (s InterestReplicaStore) ApplyReplica(_ context.Context, env mirror.Envelope) error {
-	if s.mgr == nil || s.mgr.remote == nil || len(env.Payload) == 0 {
+	if s.client == nil || len(env.Payload) == 0 {
 		return nil
 	}
 	var wire remoteInterestWire
@@ -182,9 +183,9 @@ func (s InterestReplicaStore) ApplyReplica(_ context.Context, env mirror.Envelop
 		return fmt.Errorf("remote_entity: interest message identity does not match its payload")
 	}
 	if wire.Release {
-		s.mgr.remote.interests.release(wire.Interest.Key, wire.Interest.ConsumerSID, wire.Interest.Generation)
+		s.client.interests.release(wire.Interest.Key, wire.Interest.ConsumerSID, wire.Interest.Generation)
 	} else {
-		if err := s.mgr.remote.interests.renew(wire.Interest); err != nil {
+		if err := s.client.interests.renew(wire.Interest); err != nil {
 			return err
 		}
 	}

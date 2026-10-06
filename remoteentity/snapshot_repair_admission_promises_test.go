@@ -37,7 +37,7 @@ func TestSnapshotReplicaAuthoritativeRepairAdmission(t *testing.T) {
 			loadFailure := errors.New("authority unavailable")
 			bad := true
 			calls := 0
-			m.remote.cache = entity.NewRemoteSnapshotCache(entity.RemoteSnapshotCacheConfig{Shards: 1, MaxEntries: 4, MaxBytes: 4096, TTL: time.Minute}, nil,
+			m.snapshots.cache = entity.NewRemoteSnapshotCache(entity.RemoteSnapshotCacheConfig{Shards: 1, MaxEntries: 4, MaxBytes: 4096, TTL: time.Minute}, nil,
 				func(_ context.Context, requested entity.RemoteSnapshotKey, _ entity.RemoteReadConsistency, minimum uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
 					calls++
 					if requested != key || minimum != 9 {
@@ -48,7 +48,7 @@ func TestSnapshotReplicaAuthoritativeRepairAdmission(t *testing.T) {
 					}
 					return answer, true, nil
 				})
-			if err := m.remote.cache.Publish(ctx, current); err != nil {
+			if err := m.snapshots.cache.Publish(ctx, current); err != nil {
 				t.Fatal(err)
 			}
 			bus := &interestIdentityBus{}
@@ -72,7 +72,7 @@ func TestSnapshotReplicaAuthoritativeRepairAdmission(t *testing.T) {
 			if scenario == "retained-epoch" && !errors.Is(err, entity.ErrRemoteSnapshotStale) {
 				t.Fatalf("minimum-version error lost: %v", err)
 			}
-			got, found, readErr := m.remote.cache.Get(ctx, key, entity.RemoteReadCached, 0)
+			got, found, readErr := m.snapshots.cache.Get(ctx, key, entity.RemoteReadCached, 0)
 			if readErr != nil || !found || calls != 1 {
 				t.Fatalf("repair state: found=%v calls=%d err=%v", found, calls, readErr)
 			}
@@ -81,7 +81,7 @@ func TestSnapshotReplicaAuthoritativeRepairAdmission(t *testing.T) {
 					t.Fatal("failed repair changed requested cache")
 				}
 				if scenario == "foreign-key" {
-					if _, found, _ := m.remote.cache.Get(ctx, answer.Key, entity.RemoteReadCached, 0); found {
+					if _, found, _ := m.snapshots.cache.Get(ctx, answer.Key, entity.RemoteReadCached, 0); found {
 						t.Fatal("foreign repair poisoned another key")
 					}
 				}
@@ -90,7 +90,7 @@ func TestSnapshotReplicaAuthoritativeRepairAdmission(t *testing.T) {
 				if err := publisher.PublishRemoteSnapshot(ctx, update); err != nil {
 					t.Fatalf("repair retry: %v", err)
 				}
-				got, found, readErr = m.remote.cache.Get(ctx, key, entity.RemoteReadCached, 0)
+				got, found, readErr = m.snapshots.cache.Get(ctx, key, entity.RemoteReadCached, 0)
 				if calls != 2 {
 					t.Fatalf("repair retry calls=%d", calls)
 				}
