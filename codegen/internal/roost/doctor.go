@@ -84,6 +84,7 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 		}
 	}
 	report.Items = append(report.Items, checkShutdownBudgets(root, m)...)
+	report.Items = append(report.Items, checkLogicOffsets(root, m))
 	if err := CheckIDs(root, m); err != nil {
 		report.Items = append(report.Items, CheckItem{Name: "ids", Status: StatusFail, Detail: err.Error()})
 	} else {

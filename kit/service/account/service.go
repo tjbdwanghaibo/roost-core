@@ -49,8 +49,19 @@ type Config struct {
 	// ClaimTTL is how long an uncommitted name claim is held while a role is being
 	// created; zero selects DefaultClaimTTL.
 	ClaimTTL time.Duration
-	// Now is the clock; nil means time.Now.
+	// Now is the business clock (D-L3 round 8; the account Mod injects
+	// app.BusinessClock, real time + time.logic_offset): the times a game
+	// shows or builds rules on — account creation, role creation, last login
+	// and logout. nil means time.Now.
 	Now func() time.Time
+	// SystemNow is the system clock: session token issue and expiry, and the
+	// operator-facing times (UpsertServer, ResolvePendingCreation's audit
+	// stamp). A token's life is a security bound in real time and an audit
+	// says when an operator acted, so neither moves with the business offset.
+	// nil means Now, so a test that drives both with one clock keeps doing so;
+	// the account Mod injects time.Now. Name claims during role creation run
+	// on the name directory's own clock, which the Mod leaves on time.Now.
+	SystemNow func() time.Time
 	// Metrics receives reports. A nil reporter means no reporting and never
 	// fails an operation.
 	//
@@ -134,6 +145,9 @@ func New(cfg Config) (*Service, error) {
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.SystemNow == nil {
+		cfg.SystemNow = cfg.Now
 	}
 	return &Service{cfg: cfg, report: servicemetrics.Wrap(cfg.Metrics)}, nil
 }
@@ -274,8 +288,9 @@ func (s *Service) SelectRole(ctx context.Context, accountID string, playerID int
 	if err := s.roleReady(ctx, role.Value); err != nil {
 		return Session{}, err
 	}
-	now := s.cfg.Now()
-	token, err := security.SignSessionToken(playerID, s.cfg.SessionSecret, s.cfg.SessionTTL, now)
+	// The login stamp is business time; the token is system time (D-L3).
+	now, issued := s.cfg.Now(), s.cfg.SystemNow()
+	token, err := security.SignSessionToken(playerID, s.cfg.SessionSecret, s.cfg.SessionTTL, issued)
 	if err != nil {
 		return Session{}, err
 	}
@@ -293,13 +308,13 @@ func (s *Service) SelectRole(ctx context.Context, accountID string, playerID int
 	}
 	return Session{
 		PlayerID: playerID, AccountID: accountID, ServerID: role.Value.ServerID,
-		Token: token, ExpiresAtUnix: now.Add(s.cfg.SessionTTL).Unix(),
+		Token: token, ExpiresAtUnix: issued.Add(s.cfg.SessionTTL).Unix(),
 	}, nil
 }
 
 // ValidateSession verifies a token and returns the role it names.
 func (s *Service) ValidateSession(ctx context.Context, playerID int64, token string) (Role, error) {
-	if _, err := security.VerifySessionToken(token, s.cfg.SessionSecret, playerID, s.cfg.Now()); err != nil {
+	if _, err := security.VerifySessionToken(token, s.cfg.SessionSecret, playerID, s.cfg.SystemNow()); err != nil {
 		s.report.Refused("validate_session", "bad_token")
 		return Role{}, fmt.Errorf("%w: %s", ErrSessionInvalid, err)
 	}
@@ -386,7 +401,7 @@ func (s *Service) UpsertServer(ctx context.Context, server GameServer) (GameServ
 	if server.Status == "" {
 		server.Status = ServerOpen
 	}
-	now := s.cfg.Now()
+	now := s.cfg.SystemNow() // an operator record, not game time
 	var result GameServer
 	_, _, err := s.cfg.Servers.Update(ctx, server.ID, func(current GameServer, _ bool) (GameServer, bool, error) {
 		next := server

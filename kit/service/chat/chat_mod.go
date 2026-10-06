@@ -150,9 +150,12 @@ func (m *Mod) Provide(r *app.Registry) error {
 	if err != nil {
 		return err
 	}
+	// Two clocks (D-L3 round 8): the time shown to players is business time,
+	// retention is space reclamation and runs on the system clock.
 	store, err := NewRedisStore(client, m.prefix, Config{
 		Policy: m.policy, Bodies: m.bodies, Rules: m.rules,
 		RetentionAge: m.retentionAge, Metrics: m.metrics,
+		Now: app.BusinessClock(r).Now, SystemNow: time.Now,
 	})
 	if err != nil {
 		return fmt.Errorf("chat mod: %w", err)

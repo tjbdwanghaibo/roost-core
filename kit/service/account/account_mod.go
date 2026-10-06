@@ -122,6 +122,9 @@ func (m *Mod) Provide(r *app.Registry) error {
 		Verifier: m.verifier, Allocator: m.allocator, NameRules: m.nameRules,
 		SessionSecret: m.sessionSecret, SessionTTL: m.sessionTTL, ClaimTTL: m.claimTTL,
 		Metrics: m.metrics,
+		// Creation and login times are business time; session tokens and
+		// operator stamps are system time (D-L3 round 8).
+		Now: app.BusinessClock(r).Now, SystemNow: time.Now,
 	})
 	if err != nil {
 		return fmt.Errorf("account mod: %w", err)

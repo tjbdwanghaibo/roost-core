@@ -10,7 +10,7 @@ RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登�
 
 ## 2026-10-06 业务时钟与系统时钟（D-L3，main，未发版）
 
-时间分两个钟：**业务时钟** = 真实时间 + `time.logic_offset`，活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、游戏时间都读它，从 `app.BusinessClock(registry)` 拿（kit 的 activity、mail、rank、session Mod 已注入）；**系统时钟** = 真实时间，帧率、租约与锁、超时、重试、存储 TTL、Ack、日志与 WAL 时间戳，直接用 `time` 包。偏移只在启动时读一次，所有进程写同一个值；`env: production` 时非 0 拒绝启动。mail 信封的 Redis TTL 现在是业务剩余时长 + 24h 宽限（`RedisConfig.StorageGrace`），领取租约改按系统时钟。`glsvet` 对 `game` 目录下的包直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，系统时间写 `//glsvet:system-clock <理由>` 豁免。详见 [§10 业务时钟与系统时钟](#业务时钟与系统时钟)。[方案](feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md)
+时间分两个钟：**业务时钟** = 真实时间 + `time.logic_offset`，活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、游戏时间都读它，从 `app.BusinessClock(registry)` 拿（kit 的 activity、mail、rank、session Mod 已注入）；**系统时钟** = 真实时间，帧率、租约与锁、超时、重试、存储 TTL、Ack、日志与 WAL 时间戳，直接用 `time` 包。偏移只在启动时读一次，所有进程写同一个值；`env: production` 时非 0 拒绝启动。mail 信封的 Redis TTL 现在是业务剩余时长 + 24h 宽限（`RedisConfig.StorageGrace`），领取租约改按系统时钟。`glsvet` 对 `game` 目录下的包直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，系统时间写 `//glsvet:system-clock <理由>` 豁免。第八轮起 match 票据、chat 展示给玩家的时间（新字段 `SentAtUnix`；保留期仍按系统时钟）、account 的创建与登录时间也走业务时钟，`roost project doctor` 检查同一套部署各服务的 `time.logic_offset` 是否一致。详见 [§10 业务时钟与系统时钟](#业务时钟与系统时钟)。[方案](feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md)
 
 ## 2026-10-06 配置数据规则在加载层强制、热更失败可见（B10 / C2，main，未发版）
 
@@ -456,11 +456,12 @@ kit 的 Mod 在 Init 里也严格读取，直接装配 Mod、不经 App 启动�
 
 | 钟 | 读法 | 用在 |
 | --- | --- | --- |
-| 业务时钟：真实时间 + `time.logic_offset` | `app.BusinessClock(registry).Now()`；服务的 `Config.Now` 由 Mod 注入它；请求上下文里 `fctx.Now()` | 活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、skill / 战斗游戏时间、业务计时规则 |
+| 业务时钟：真实时间 + `time.logic_offset` | `app.BusinessClock(registry).Now()`；服务的 `Config.Now` 由 Mod 注入它；请求上下文里 `fctx.Now()` | 活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、skill / 战斗游戏时间、匹配票据与等待放宽、展示给玩家的聊天时间、账号 / 角色创建与登录登出时间、业务计时规则 |
 | 系统时钟：真实时间 | `time.Now()` | server 帧率、租约与锁、超时与 ctx 截止、重试退避、存储 TTL、消息 Ack、日志、指标、WAL 与审计时间戳 |
 
-- `time.logic_offset`（时长，如 `24h`）只有这一个来源，所有进程写同一个值——game 与活动协调器偏移不同，窗口 id 与截止会错开。只在启动时生效，改了要重启全部进程；没有运行期修改入口。生产环境必须为 0。
-- 已接入：kit 的 activity 协调器、mail（过期是业务时间；领取租约 `ClaimDeadlineUnix` 是系统时间，`Config.SystemNow`）、rank（同分 tiebreak）、session（run 截止）；game-demo 的活动窗口、World 定时器的每一拍、GM 关窗、怪物重生、邮件领取 / 副本领奖 / 公会的 `nowUnix`。框架库（`timer.Scheduler`、`ai`、`actionflow`）没注入时间源时缺省读进程级业务时钟。match、chat、platform、directory、account、saga 与 Nest / DataEngine / Sync 全部是系统时钟。
+- `time.logic_offset`（时长，如 `24h`）只有这一个来源，所有进程写同一个值——game 与活动协调器、match 偏移不同，窗口 id、截止与票据时间会错开。只在启动时生效，改了要重启全部进程；没有运行期修改入口。生产环境必须为 0。`roost project doctor` 的 `time:logic_offset` 一行检查同一套部署里每个服务的配置是否一致：dev 配置（`configs/service/config.<service>.yaml`）、prod example、k8s secret example 三套各自比较（不写等于 0s），不一致时 FAIL 并列出每个服务的值；格式错（如 `1d`、不带单位的数字）也 FAIL 并点名文件。三套之间可以不同（测试环境前拨、生产为 0）；仓库外的生产配置看不到。
+- 已接入：kit 的 activity 协调器、mail（过期是业务时间；领取租约 `ClaimDeadlineUnix` 是系统时间，`Config.SystemNow`）、rank（同分 tiebreak）、session（run 截止）、match（票据的创建 / 过期 / 结束时间与超时判断）、chat（`Message.SentAtUnix` 是展示时间，业务时钟；`StoredAtUnix` 与 `Prune` 的保留期截止是系统时钟，`Config.SystemNow`）、account（账号创建与最近登录、角色创建、角色登录 / 登出时间是业务时钟；会话 token 签发与有效期、`UpsertServer` 与运维处置的记录时间是系统时钟，`Config.SystemNow`；建角时的名字预约 TTL 是目录自己的系统时钟）；game-demo 的活动窗口、World 定时器的每一拍、GM 关窗、怪物重生、匹配的等待放宽（`matchmaking.Pools`）、邮件领取 / 副本领奖 / 公会的 `nowUnix`。框架库（`timer.Scheduler`、`ai`、`actionflow`）没注入时间源时缺省读进程级业务时钟。platform、directory、saga 与 Nest / DataEngine / Sync 全部是系统时钟。
+- chat 的持久格式只加了 `sent_at_unix`，`stored_at_unix` 含义与用途（保留期）不变。加字段之前存下的消息没有 `sent_at_unix`，读出时（Publish 的重放应答、History / Conversation / Scrollback）用 `StoredAtUnix` 兜底，存着的数据不改写；那时偏移为 0，两个时间一致。客户端展示消息时间请读 `SentAtUnix`。
 - 业务过期不靠存储 TTL：服务按业务时钟判断过期，存储 TTL 只兜底回收空间且更长（mail 信封 = 业务剩余时长 + `StorageGrace`，缺省 24h）。
 - 偏移在两次启动之间改变（只会在非生产）：前拨后到期的定时器、窗口、邮件在下一次检查时成批处理；后拨后已打戳的业务截止晚到一个偏移量。租约按系统时钟，不受影响。
 - 测试：在 cfg 里写 `time.logic_offset` 再 `app.NewRegistry(cfg)`，或给服务的 `Config.Now` 注入 `clock.BusinessFunc` / 函数。

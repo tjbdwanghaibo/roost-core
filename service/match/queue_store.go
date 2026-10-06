@@ -96,7 +96,11 @@ type Config struct {
 	// queue entry that leaks when its client disconnects, which is what
 	// happened when the deadline was written but never read.
 	TicketTTL time.Duration
-	// Now is the clock; nil means time.Now.
+	// Now is the clock tickets are dated on (CreatedAtUnix, ExpiresAtUnix,
+	// ResolvedAtUnix, Match.CreatedAtUnix) and expiry is judged by; nil means
+	// time.Now. The match Mod injects the business clock (D-L3): matchmaking
+	// is business logic, and ScoreWindowGrouping.NowUnix must read the same
+	// clock, since the widening window is measured from CreatedAtUnix.
 	Now func() time.Time
 	// SweepQueues is the queue set this process's server sweeps for expired
 	// tickets, once per tick. A deployment knows its queues — from the modes

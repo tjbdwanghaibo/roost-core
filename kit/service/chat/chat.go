@@ -483,12 +483,23 @@ type Message struct {
 	// RequestID is the idempotency key that produced this message. A replay of
 	// it returns this message instead of storing a second copy.
 	RequestID string `json:"request_id"`
-	// StoredAtUnix is when the service stored it, from the injected clock. It
-	// exists for retention and for display. Nothing orders by it. Retention is
-	// the only reason it is a date at all: the implementation this replaces
-	// persisted milliseconds in an int64, which no TTL and no age-based prune
-	// can use.
+	// StoredAtUnix is when the service stored it, on the system clock
+	// (Config.SystemNow). It exists for retention: Prune reclaims space by real
+	// age, whatever time.logic_offset says (D-L3). Nothing orders by it, and it
+	// is not what a client shows; SentAtUnix is. Retention is the only reason
+	// it is a date at all: the implementation this replaces persisted
+	// milliseconds in an int64, which no TTL and no age-based prune can use.
 	StoredAtUnix int64 `json:"stored_at_unix"`
+	// SentAtUnix is the time shown to players, on the business clock
+	// (Config.Now: real time + time.logic_offset, D-L3 round 8). Nothing orders
+	// or prunes by it.
+	//
+	// Added after StoredAtUnix and never replacing it: a message stored before
+	// the field existed has none, and every read path (Publish's replay
+	// answer, History, Conversation, Scrollback) fills it from StoredAtUnix.
+	// Those were written with the business offset at 0, which production
+	// enforces, so the two clocks agreed for them.
+	SentAtUnix int64 `json:"sent_at_unix,omitempty"`
 }
 
 // PublishRequest is what a role's publish carries.

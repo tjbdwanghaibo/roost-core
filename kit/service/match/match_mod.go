@@ -104,8 +104,14 @@ func (m *Mod) Provide(r *app.Registry) error {
 	if err != nil {
 		return err
 	}
+	// Ticket times are business time (D-L3, maintainer round 8): a ticket's
+	// creation, its deadline and the "the longer you wait, the wider the
+	// window" policy in the game's matchmaker all read the business clock, so
+	// a test environment that moves time.logic_offset moves them together.
+	// The offset only takes effect at start, so a wait is still real time.
 	store, err := NewRedisStore(client, m.prefix, Config{
 		TicketTTL: m.ticketTTL, Metrics: m.metrics, SweepQueues: m.sweep,
+		Now: app.BusinessClock(r).Now,
 	})
 	if err != nil {
 		return fmt.Errorf("match mod: %w", err)

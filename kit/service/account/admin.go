@@ -143,7 +143,7 @@ func (s *Service) ResolvePendingCreation(ctx context.Context, accountID string, 
 	default:
 		return RoleCreation{}, fmt.Errorf("account: creation table answered %d for slot %d, name %d", action, state, name)
 	}
-	nowUnix := s.cfg.Now().Unix()
+	nowUnix := s.cfg.SystemNow().Unix() // audit: when the operator acted, real time
 	_, _, err = s.cfg.Accounts.Update(ctx, accountID, func(current Account, found bool) (Account, bool, error) {
 		if !found {
 			return current, false, fmt.Errorf("%w: %s", ErrAccountMissing, accountID)

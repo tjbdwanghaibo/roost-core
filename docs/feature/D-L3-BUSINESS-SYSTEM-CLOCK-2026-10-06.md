@@ -1,6 +1,6 @@
 # D-L3：业务时钟与系统时钟（2026-10-06）
 
-维护者第六轮决定 D-L3（修订版，[DECISIONS-PENDING 第六轮](../review/DECISIONS-PENDING-2026-10-05.md)，选项来由 [revleft §5](../review/REVIEW-2026-10-06-revleft.md)）：时间分成两个钟，边界写死。本文是方案与实施记录。基线 `e320578c`；源码盘点以当前源码为准（codebase-memory 共享 generation 停在 09-30，本轮用 `rg` 逐行核对）。
+维护者第六轮决定 D-L3（修订版，[DECISIONS-PENDING 第六轮](../review/DECISIONS-PENDING-2026-10-05.md)，选项来由 [revleft §5](../review/REVIEW-2026-10-06-revleft.md)）：时间分成两个钟，边界写死。本文是方案与实施记录；第八轮决定的留项（match / chat / account 换钟、doctor 偏移一致检查）见 §8。基线 `e320578c`；源码盘点以当前源码为准（codebase-memory 共享 generation 停在 09-30，本轮用 `rg` 逐行核对）。
 
 ## 1. 规则
 
@@ -60,6 +60,10 @@ func BusinessClock(r *Registry) clock.Business   // Registry 里的业务时钟�
 | `demo/internal/service/game/spawner.go.tmpl:70/143` | ticker 时间、`time.Now()` | 业务时钟（ticker 频率仍是系统） | 怪物重生是冷却 |
 | `demo/game/controllers/player/claim_mail.go.tmpl:74`、`finish_dungeon.go.tmpl:88`、`guild.go.tmpl:104/133` | `time.Now().Unix()` | 业务时钟 | 与邮件业务过期 / session 结算时间 / 公会玩法时间比较 |
 | `demo/internal/service/game/purchase_drain.go.tmpl:104` | `time.Now().Unix()` | 业务时钟 | handler 的 `nowUnix` 参数统一是业务事务时间（该 handler 现在不读它） |
+| `service/match` `Config.Now`（`kit/service/match/match_mod.go` 装配）**第八轮** | 缺省 `time.Now` | Mod 注入业务时钟 | 匹配是业务逻辑：票据创建 / 过期 / 结束时间、Match 创建时间与超时判断 |
+| `demo/internal/service/game/matchmaker.go.tmpl` `matchmaking.Pools` 的 `now` **第八轮** | `time.Now().Unix()` + 豁免 | `app.BusinessClock(registry)`，去掉 `//glsvet:system-clock` | 等待放宽从票据的 `CreatedAtUnix` 量起，必须与 match 服务同钟；偏移只在启动生效，等待时长仍是真实时长 |
+| `kit/service/chat` `Config.Now`（`chat_mod.go` 装配）**第八轮** | 缺省 `time.Now`，一个时间戳兼管展示与保留期 | Mod 注入业务时钟，只打新字段 `Message.SentAtUnix`；`StoredAtUnix` 与 `Prune` 截止改读新增的 `Config.SystemNow`（Mod 注入 `time.Now`，为 nil 时沿用 `Now`） | 展示给玩家的时间是业务时间；保留期是空间回收，按真实年龄 |
+| `kit/service/account` `Config.Now`（`account_mod.go` 装配）**第八轮** | 缺省 `time.Now`，一个钟兼管全部 | Mod 注入业务时钟：账号 `CreatedAtUnix` / `LastLoginAtUnix`、建角计划与角色 `CreatedAtUnix`、角色 `LastLoginAtUnix` / `LastLogoutAtUnix`；新增 `Config.SystemNow`（Mod 注入 `time.Now`，为 nil 时沿用 `Now`）管会话 token 签发 / 校验 / `Session.ExpiresAtUnix`、`GameServer.UpdatedAtUnix`、`Account.AdminActionAtUnix` | 创建与登录时间是业务用途（新手期、账号年龄、登录展示）；token 有效期是安全边界，运维记录是审计，都是真实时间。名字预约 TTL 由名字目录自己的钟管（Mod 不注入，`time.Now`），本轮不变 |
 
 skill / 战斗：`skill/` 运行时与 `battle.go.tmpl` 都按帧推进，不读墙钟；“游戏时间”就是帧号，没有需要迁移的点。日 / 周重置、赛季切换：框架与 game-demo 都没有实现（`demo/game/ranking` 的赛季是常量，切换是运维操作），业务实现时读 `app.BusinessClock`，glsvet 会提示直接读 `time.Now()` 的写法。
 
@@ -78,20 +82,20 @@ skill / 战斗：`skill/` 运行时与 `battle.go.tmpl` 都按帧推进，不读
 | skill | `presentation_asset_cache.go`（缓存 LRU）、`skillsync/*`（outbox 重试、积压年龄） |
 | saga | `engine.go` / `command_consumer.go` / `mongo_store.go` / `nest.go` / `record.go` / `dataengine_step_inbox.go`：协调器截止、claim、回执 TTL、迟到告警；saga 在 `wt-sagadir` 改动中，本轮不碰 |
 | codegen | `render_player_tcp.go`（生成 TCP 的读写 deadline、耗时）、`project.go`（工具重试截止）、`shutdown_budget.go`（注释） |
-| kit 服务 | `kit/service/directory`（目录项 TTL 租约）、`kit/service/global` 路由（迁移审计时间）、`kit/service/platform`（订单、支付、投递退避）、`service/match`（排队票据超时、等待放宽）、`kit/service/chat`（消息时间戳与保留期清理）、`kit/service/account`（创建认领 TTL、审计；`wt-revn09f` 在改，本轮不碰） |
-| game-demo 模板 | `playerowner.go.tmpl`（玩家归属租约）、`matchmaker.go.tmpl:78`（与 match 服务的票据时间同钟）、`gift_saga.go.tmpl:353` 与 `game/handler/start_gift.go.tmpl:48`（saga 截止）、`game/controllers/player/purchase.go.tmpl:63`（支付时间）、`internal/access/player/tcp/auth.go.tmpl`（会话 id）、`cmd/loadtest`；落在 `game` 目录下的几处标 `//glsvet:system-clock` |
+| kit 服务 | `kit/service/directory`（目录项 TTL 租约）、`kit/service/global` 路由（迁移审计时间）、`kit/service/platform`（订单、支付、投递退避）、`kit/service/chat`（`StoredAtUnix` 与保留期清理，第八轮起）、`kit/service/account`（会话 token、名字预约 TTL、服务器行与运维记录时间，第八轮起）；match 第八轮整体改为业务时钟（§3.1） |
+| game-demo 模板 | `playerowner.go.tmpl`（玩家归属租约）、`gift_saga.go.tmpl:353` 与 `game/handler/start_gift.go.tmpl:48`（saga 截止）、`game/controllers/player/purchase.go.tmpl:63`（支付时间）、`internal/access/player/tcp/auth.go.tmpl`（会话 id）、`cmd/loadtest`；落在 `game` 目录下的几处标 `//glsvet:system-clock` |
 
 ### 3.3 拿不准、交维护者
 
 | 项 | 本轮做法 | 要定什么 |
 | --- | --- | --- |
-| match 票据（5 分钟超时、等待越久窗口越宽） | 系统时钟 | 这是“真实等待时长”。若要把匹配超时也算业务规则（随偏移测），match 服务与 game 的 `matchmaking.Pools` 要一起换钟 |
-| chat 消息时间戳 | 系统时钟 | 消息时间展示给玩家，但保留期清理是存储回收。若展示时间要跟偏移，需拆成“业务展示时间 + 系统保留时间” |
-| account 创建时间、认领 TTL | 不改（其他 agent 在改 account） | 账号创建时间若用于业务（新手期、账号年龄奖励），应改业务钟；认领 TTL 是租约，留系统钟 |
+| match 票据（5 分钟超时、等待越久窗口越宽） | 系统时钟 | **第八轮已定并实施**：业务时钟，match 服务与 `matchmaking.Pools` 一起换（§8） |
+| chat 消息时间戳 | 系统时钟 | **第八轮已定并实施**：拆成业务展示时间 `SentAtUnix` + 系统保留时间 `StoredAtUnix`（§8） |
+| account 创建时间、认领 TTL | 不改（其他 agent 在改 account） | **第八轮已定并实施**：创建 / 登录等业务时间走业务钟，token 与认领 TTL 留系统钟（§8） |
 | platform 订单 | 系统时钟 | 支付与对账按真实时间。若有“限时礼包”这类业务过期，应由业务侧判断，不放在 platform |
 | security 会话令牌有效期 | 系统时钟 | 安全有效期按真实时间 |
 | activity 进度账本 `ExpiresAtUnix` | 业务钟打戳，去重靠 Redis 相对 TTL | 字段只做记录，没人比较；去重窗口是“客户端重试视野”（系统概念），相对 TTL 不受偏移影响 |
-| saga（`DeadlineAt`、迟到告警） | 系统时钟，不改 | `wt-sagadir` 推送后若要把某些业务截止换钟，另列 |
+| saga（`DeadlineAt`、迟到告警） | 系统时钟，不改 | 第八轮定：保留系统时钟 |
 
 ## 4. 迁移与兼容
 
@@ -99,8 +103,8 @@ skill / 战斗：`skill/` 运行时与 `battle.go.tmpl` 都按帧推进，不读
 
 | 钟 | 字段 |
 | --- | --- |
-| 业务 | activity 协调器的 Activity / Window / Dispatch / ProgressReservation 时间；World 的 `Timers[*].EndUnixMilli`、`timer_next_due`、活动结算时间；mail 信封 `CreatedAtUnix` / `ExpiresAtUnix`、mailbox 条目与 settled claim 的投递 / 更新 / 结算时间；session run 的 `StartedAtUnix` / `DeadlineUnix` / `FinishedAtUnix`；rank 缺省 tiebreak；game-demo 公会建立 / 加入时间、邮件领取与副本领奖的 `nowUnix` |
-| 系统 | mail `ClaimDeadlineUnix`；WAL、回执、outbox、saga、订单、目录、路由、账号、聊天、锁与租约的所有时间戳 |
+| 业务 | activity 协调器的 Activity / Window / Dispatch / ProgressReservation 时间；World 的 `Timers[*].EndUnixMilli`、`timer_next_due`、活动结算时间；mail 信封 `CreatedAtUnix` / `ExpiresAtUnix`、mailbox 条目与 settled claim 的投递 / 更新 / 结算时间；session run 的 `StartedAtUnix` / `DeadlineUnix` / `FinishedAtUnix`；rank 缺省 tiebreak；game-demo 公会建立 / 加入时间、邮件领取与副本领奖的 `nowUnix`；**第八轮起**：match `Ticket.CreatedAtUnix` / `ExpiresAtUnix` / `ResolvedAtUnix` 与 `Match.CreatedAtUnix`，chat `Message.SentAtUnix`（新字段），account `Account.CreatedAtUnix` / `LastLoginAtUnix`、`RoleCreation.CreatedAtUnix`、`Role.CreatedAtUnix` / `LastLoginAtUnix` / `LastLogoutAtUnix` |
+| 系统 | mail `ClaimDeadlineUnix`；chat `Message.StoredAtUnix`；account `Session.ExpiresAtUnix`（与 token 内的签发时间）、`GameServer.UpdatedAtUnix`、`Account.AdminActionAtUnix`、名字目录预约的到期时间；WAL、回执、outbox、saga、订单、目录、路由、锁与租约的所有时间戳 |
 
 - 偏移跨重启变化（只可能发生在非生产）：前拨后，业务时间戳整体“过去了”，到期的定时器、窗口、邮件在下一次检查时成批处理；后拨后，已打戳的业务截止会晚到一个偏移量。系统时钟的租约不受影响（这正是把 mail 领取租约拆成系统钟的原因）。
 - **偏移为 0 时行为不变**：业务时钟 `Now()` = `time.Now()`（`offset == 0` 时直接返回，不做 `Add`）；所有服务在没注入时仍退回 `time.Now`。唯一的行为变化是 mail 信封的 Redis TTL 多了 `StorageGrace`（缺省 24h），只影响空间回收，业务过期判断不变；`TestTheKeyTTLComesFromTheInjectedClock` 改为断言“剩余时长 + grace”。
@@ -168,5 +172,48 @@ $ GOWORK=off go test -count=1 -run TestTheWindowFollowsTheBusinessClock ./intern
 
 ### 未完成 / 后续
 
-- §3.3 各项等维护者定：match 票据、chat 消息时间、account 创建时间（`wt-revn09f` 在改 account）、saga 截止（`wt-sagadir` 在改 saga）。
-- “所有进程同一个偏移”目前只写在文档与 T-270，没有 doctor 检查；需要时可让 `roost project doctor` 比较各服务配置里的 `time.logic_offset`。
+- §3.3 各项维护者已在第八轮定下，实施见 §8；saga 截止保留系统时钟。
+- “所有进程同一个偏移”的 doctor 检查已在第八轮加上（§8）。
+
+## 8. 第八轮：留项实施（2026-10-06）
+
+维护者第八轮决定（[DECISIONS-PENDING 第八轮](../review/DECISIONS-PENDING-2026-10-05.md)）：match、chat 展示时间、account 业务时间走业务时钟；saga 截止保留系统时钟；`roost doctor` 检查偏移一致。分支 `dl3b`，基线 `2a7d2a65`（含 o33 合入），未发版。源码盘点用 `rg` 逐行核对当前源码（codebase-memory 共享 generation 停在 09-30）。
+
+### 8.1 改动
+
+| 项 | 改法 | 兼容 |
+| --- | --- | --- |
+| match | `kit/service/match` Mod 给 `Config.Now` 注入 `app.BusinessClock(r).Now`；`service/match` 本身不变（它所有时间本来就读 `Config.Now`）。game-demo `matchmaker.go.tmpl` 的 `matchmaking.Pools` 改读 `app.BusinessClock(registry)`，去掉 `//glsvet:system-clock` | 偏移只在启动生效，票据 TTL、等待放宽量的仍是真实时长；票据上的绝对时间戳变成业务时间（§4）。偏移为 0 时不变 |
+| chat | `Message` 加 `SentAtUnix`（`json:"sent_at_unix,omitempty"`），读 `Config.Now`（Mod 注入业务时钟）；`StoredAtUnix` 与 `Prune` 截止改读新增的 `Config.SystemNow`（Mod 注入 `time.Now`；为 nil 时沿用 `Now`，与 mail 的 `SystemNow` 同一约定） | 持久格式只增不改：旧消息没有 `sent_at_unix`，读出时（`forReader`：Publish 重放应答、History / Conversation / Scrollback）用 `StoredAtUnix` 兜底，存着的数据不改写；旧数据写入时偏移为 0（生产强制），两个钟一致。客户端展示改读 `SentAtUnix`；game-demo 的聊天推送不带时间，没有要改的 |
+| account | `Config.Now` 定为业务时钟（Mod 注入）：账号 / 角色创建、登录、登出；新增 `Config.SystemNow`（Mod 注入 `time.Now`；nil 沿用 `Now`）：会话 token 签发与校验、`Session.ExpiresAtUnix`、`UpsertServer` 的 `UpdatedAtUnix`、`ResolvePendingCreation` 的 `AdminActionAtUnix` | `creation_table.go` 与 `create_role.go` 一行没改（建角计划的 `CreatedAtUnix` 本来就读 `Config.Now`，换钟发生在 Mod 注入处），判定表格子不动。`rg` 盘点：仓库里没有新手期 / 账号年龄的业务实现，game-demo 不读账号时间 |
+| doctor | `codegen/internal/roost/logic_offset_doctor.go`：`roost project doctor` 加一行 `time:logic_offset`。dev（`configs/service/config.<service>.yaml`）、prod example、k8s secret example 三套各自比较每个服务的值（不写 = 0s），按 App 的读法解析（`app.ConfigDuration`：空 / `"0"` / 0 是 0，字符串按 Go 时长，非 0 的裸数字要单位）；不一致 FAIL 并列出 `service=value`，格式错 FAIL 并点名文件与原值 | 三套之间不比：测试环境前拨、生产为 0 是正常的；比跨套会让每个用偏移的测试环境都报错。仓库外的真实生产配置看不到 |
+| 生成文档 | `render_docs.go` 的时间规则补上匹配、聊天展示、账号时间与 doctor 检查 | 生成工程的 AGENTS 说明随 `roost project sync` 更新 |
+
+### 8.2 先红后绿
+
+修前（`2a7d2a65` + 新用例；chat 的展示时间在修前只有 `StoredAtUnix`，红跑时临时用它代替 `SentAtUnix` 断言，其余断言原样）：
+
+```text
+$ REDIS_ADDR=<隔离 Redis> GOWORK=off go test -tags integration -count=1 -run TestOffsetMovesMatchChatAndAccountBusinessTimesButNotRetentionOrSessions ./kit/service/integration/
+--- FAIL: TestOffsetMovesMatchChatAndAccountBusinessTimesButNotRetentionOrSessions (0.01s)
+    business_clock_test.go:61: ticket.CreatedAtUnix = 2026-10-06T09:38:12+08:00, 0s from the wall clock; want 24h0m0s
+    business_clock_test.go:62: ticket.ExpiresAtUnix = 2026-10-06T09:43:12+08:00, 5m0s from the wall clock; want 24h5m0s
+    business_clock_test.go:74: message.StoredAtUnix (shown to players, pre-fix) = 2026-10-06T09:38:12+08:00, 0s from the wall clock; want 24h0m0s
+    business_clock_test.go:97: account.CreatedAtUnix = 2026-10-06T09:38:12+08:00, 0s from the wall clock; want 24h0m0s
+    business_clock_test.go:98: account.LastLoginAtUnix = 2026-10-06T09:38:12+08:00, 0s from the wall clock; want 24h0m0s
+    business_clock_test.go:106: role.CreatedAtUnix = 2026-10-06T09:38:12+08:00, 0s from the wall clock; want 24h0m0s
+$ GOWORK=off go test -count=1 -run TestDoctorNamesTheServicesWhoseLogicOffsetDisagrees ./codegen/internal/roost/
+--- FAIL: TestDoctorNamesTheServicesWhoseLogicOffsetDisagrees (8.66s)
+    logic_offset_doctor_promises_test.go:59: only the dev game config sets time.logic_offset 24h: doctor says {Name: Status: Detail:} (present=false), want FAIL
+```
+
+修后全部通过：
+
+- `kit/service/integration`（真实 Redis，Mod 从配置 Init / Provide，偏移 +24h）：`TestOffsetMovesMatchChatAndAccountBusinessTimesButNotRetentionOrSessions`——match 票据创建 / 过期、chat `SentAtUnix`、account 创建 / 最近登录、角色创建都是真实时间 +24h；chat `StoredAtUnix` 是真实时间，保留期 1h 的 `Prune` 不删刚存的消息；会话 `ExpiresAtUnix` = 真实时间 + 30min，token 校验通过。负对照：把 `Prune` 截止临时改回业务时钟，用例报 `Prune with a 1h retention dropped 1 message(s) stored a moment ago`。
+- `kit/service/chat`：`TestDisplayTimeIsBusinessTimeAndRetentionIsSystemTime`（只前拨业务时钟一周不清理，系统时钟过保留期才清理）；`TestAMessageStoredBeforeSentAtUnixShowsItsStoredTime`（旧 JSON 没有 `sent_at_unix`，History 与重放应答用 `StoredAtUnix` 兜底，存着的消息不改写）。
+- `kit/service/account`：`TestAccountTimesAreBusinessTimeAndSessionsAreSystemTime`（创建 / 登录 / 登出是业务时钟，服务器行与 token 是系统时钟；只前拨业务时钟 token 仍有效，系统时钟过 TTL 才失效）。
+- `codegen/internal/roost`：`TestDoctorNamesTheServicesWhoseLogicOffsetDisagrees`（dev 只有 game 配 24h → FAIL，列出 `game=24h`、`activity=0s`、`match=0s` 与文件模式，doctor 返回错误；全部未配置 → OK；dev 全部 24h、prod example 0 → OK；secret example 写 `1d` → FAIL 点名文件和 `"1d"`）。
+
+### 8.3 验证
+
+全部 `GOWORK=off`：`gofmt -l` 为空；`go build ./... && go vet ./...`，另跑 `go vet -tags integration ./kit/service/integration/`；`go test -race -count=3 ./service/match/ ./kit/service/match/ ./kit/service/chat/ ./kit/service/account/`；`go test -count=1 ./kit/... ./service/...`；根包 `go test -count=1 .`；`go test -count=1 ./codegen/...`；`go generate ./...` 后 porcelain 只有本轮改动；integration 只跑 `-run 'TestEvery|TestOffsetMoves'`（隔离 Redis，唯一前缀、用完删键）。生成 game-demo、replace 到 worktree：`go build ./... && go vet ./... && go test ./...` 全过，`gofmt -l` 为空，`glsvet ./...` 退出码 0、无违例、无提示（豁免剩 5 处：支付时间、saga 截止 2 处、玩家归属租约 2 处）。Nest / DataEngine / Sync / Entity 没改，核心 glsvet 与 C01 不重跑。

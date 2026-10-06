@@ -50,7 +50,9 @@ type ScoreWindowGrouping struct {
 	WidenPerSecond int64
 	// MaxWindow caps it; zero means uncapped.
 	MaxWindow int64
-	// NowUnix supplies the current time; required, because the window depends
+	// NowUnix supplies the current time on the clock tickets are dated on (the
+	// store's Config.Now — the business clock when the match Mod built it,
+	// D-L3); required, because the window depends
 	// on how long the oldest candidate has waited.
 	NowUnix func() int64
 }

@@ -35,7 +35,8 @@ type Pool struct {
 }
 
 // Pools lists every queue the matchmaker sweeps. now feeds the ranked window
-// (how long the oldest candidate has waited).
+// (how long the oldest candidate has waited); it is the business clock
+// (app.BusinessClock), the clock the match service dates tickets on.
 func Pools(now func() int64) []Pool {
 	return []Pool{
 		{Queue: DuelQueue, Grouping: svcmatch.FirstComeGrouping{}},

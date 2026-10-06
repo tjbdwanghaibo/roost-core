@@ -138,6 +138,17 @@ func (m Message) clone() Message {
 	return out
 }
 
+// forReader is the copy a caller gets back. A message stored before SentAtUnix
+// existed has none; its StoredAtUnix stands in (see Message.SentAtUnix). The
+// stored message is not rewritten — the persisted shape only gains a field.
+func (m Message) forReader() Message {
+	out := m.clone()
+	if out.SentAtUnix == 0 {
+		out.SentAtUnix = out.StoredAtUnix
+	}
+	return out
+}
+
 // find returns the retained message with this sequence. The ring is ascending,
 // so this is a binary search rather than a scan.
 func (s channelState) find(seq uint64) (Message, bool) {
@@ -255,10 +266,16 @@ type Config struct {
 	// selects DefaultRetentionAge. It must be positive: an age of zero would
 	// make Prune delete the channel.
 	RetentionAge time.Duration
-	// Now is the clock; nil means time.Now. Injected because a stored
-	// timestamp must come from one place — and because the ordering test
-	// requires a clock that runs backwards.
+	// Now is the business clock the time shown to players (SentAtUnix) is
+	// read from; nil means time.Now. The chat Mod injects app.BusinessClock
+	// (D-L3). Injected because a stored timestamp must come from one place —
+	// and because the ordering test requires a clock that runs backwards.
 	Now func() time.Time
+	// SystemNow is the system clock retention runs on: StoredAtUnix and the
+	// Prune cutoff. Retention reclaims space, so it is real age, never moved
+	// by time.logic_offset. nil means Now, so a test that drives both with one
+	// clock keeps doing so; the chat Mod injects time.Now.
+	SystemNow func() time.Time
 	// Metrics is optional. Nil means no reporting.
 	Metrics Metrics
 }
@@ -268,7 +285,8 @@ type channelStore struct {
 	rules   ruleTable
 	policy  ChannelPolicy
 	bodies  *BodyRegistry
-	now     func() time.Time
+	now     func() time.Time // business: SentAtUnix
+	system  func() time.Time // system: StoredAtUnix and the Prune cutoff
 	age     time.Duration
 	metrics servicemetrics.Sink
 }
@@ -297,6 +315,9 @@ func NewStore(state StateStore, cfg Config) (Store, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.SystemNow == nil {
+		cfg.SystemNow = cfg.Now
+	}
 	rules, err := newRuleTable(cfg.Rules)
 	if err != nil {
 		return nil, err
@@ -307,6 +328,7 @@ func NewStore(state StateStore, cfg Config) (Store, error) {
 		policy:  cfg.Policy,
 		bodies:  cfg.Bodies,
 		now:     cfg.Now,
+		system:  cfg.SystemNow,
 		age:     cfg.RetentionAge,
 		metrics: servicemetrics.Wrap(cfg.Metrics),
 	}, nil
@@ -420,7 +442,7 @@ func (s *channelStore) AppendSystem(ctx context.Context, token SystemToken, req 
 // idempotency key and enforce retention, all inside a single compare-and-set.
 func (s *channelStore) store(ctx context.Context, ref ChannelRef, rule ChannelRule, draft Message) (Message, error) {
 	draft = draft.clone()
-	storedAt := s.now().Unix()
+	sentAt, storedAt := s.now().Unix(), s.system().Unix()
 
 	var (
 		result    Message
@@ -461,6 +483,7 @@ func (s *channelStore) store(ctx context.Context, ref ChannelRef, rule ChannelRu
 		// failed write burns nothing: nobody has seen the number yet.
 		message.Seq = next.LastSeq + 1
 		message.StoredAtUnix = storedAt
+		message.SentAtUnix = sentAt
 		next.LastSeq = message.Seq
 		next.Ring = append(next.Ring, message)
 		next.Requests[message.RequestID] = message.Seq
@@ -484,7 +507,7 @@ func (s *channelStore) store(ctx context.Context, ref ChannelRef, rule ChannelRu
 		s.metrics.Accepted(publishOp(ref.Kind))
 		s.metrics.Dropped("message.evicted."+string(ref.Kind), evicted)
 	}
-	return result.clone(), nil
+	return result.forReader(), nil
 }
 
 // sameSender reports whether a stored message and a draft come from the same
@@ -625,7 +648,7 @@ func pageOf(state channelState, query HistoryQuery) Page {
 	}
 	page.Messages = make([]Message, 0, len(selected))
 	for _, message := range selected {
-		page.Messages = append(page.Messages, message.clone())
+		page.Messages = append(page.Messages, message.forReader())
 	}
 	if len(page.Messages) > 0 {
 		page.NextCursor = page.Messages[len(page.Messages)-1].Seq
@@ -654,7 +677,8 @@ func (s *channelStore) Prune(ctx context.Context, ref ChannelRef, limit int) (in
 	if limit > MaxRetain {
 		return 0, fmt.Errorf("%w: limit %d exceeds %d", ErrRangeInvalid, limit, MaxRetain)
 	}
-	cutoff := s.now().Add(-s.age).Unix()
+	// System clock: retention is space reclamation by real age (D-L3).
+	cutoff := s.system().Add(-s.age).Unix()
 
 	pruned := 0
 	_, _, err := s.state.Update(ctx, ref.key, func(current channelState, found bool) (channelState, bool, error) {
