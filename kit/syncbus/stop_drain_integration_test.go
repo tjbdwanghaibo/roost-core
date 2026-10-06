@@ -30,7 +30,7 @@ func TestRealJetStreamSyncBusStopDrainsAnInFlightHandler(t *testing.T) {
 			close(release)
 		}
 	})
-	if _, err := subscriber.bus.Subscribe(migrationTopic, func(*fsyncbus.SyncMsg) error {
+	if _, err := subscriber.bus.Subscribe(migrationTopic, func(context.Context, *fsyncbus.SyncMsg) error {
 		entered <- struct{}{}
 		<-release
 		return nil

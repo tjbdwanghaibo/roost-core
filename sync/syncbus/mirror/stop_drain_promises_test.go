@@ -12,7 +12,8 @@ import (
 )
 
 // RR-20261005-NC-174：StopWithContext 等已准入的 ApplyReplica 返回；超时如实返回 ctx 错误，重试再等；
-// 退订之后迟到的投递（JetStream fanout 用旧快照调用）不再进入 Store。
+// 退订之后迟到的投递（JetStream fanout 用旧快照调用）不再进入 Store。A3 ② 之后排空与准入在传输层的
+// fsyncbus.Subscription 里，Replicator 不再自己维护准入门；本用例验证组合结果不变。
 
 type blockingStore struct {
 	entered chan struct{}
@@ -32,23 +33,24 @@ func (s *blockingStore) ApplyReplica(_ context.Context, env Envelope) error {
 	return nil
 }
 
-// lingeringBus 的退订不撤掉已经拿到的 handler：模拟传输层在退订后仍交付一条在途消息。
+// lingeringBus 的退订不撤掉已经拿到的订阅：模拟传输层在退订后仍交付一条在途消息。
 type lingeringBus struct {
-	mu      sync.Mutex
-	handler fsyncbus.Handler
+	mu  sync.Mutex
+	sub *fsyncbus.Subscription
 }
 
 func (*lingeringBus) Publish(*fsyncbus.SyncMsg) error { return nil }
-func (b *lingeringBus) Subscribe(_ string, h fsyncbus.Handler) (func(), error) {
-	b.mu.Lock()
-	b.handler = h
-	b.mu.Unlock()
-	return func() {}, nil
-}
-func (b *lingeringBus) last() fsyncbus.Handler {
+func (b *lingeringBus) Subscribe(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.handler
+	b.sub = fsyncbus.NewSubscription(topic, h, nil)
+	return b.sub, nil
+}
+func (b *lingeringBus) last() func(*fsyncbus.SyncMsg) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	sub := b.sub
+	return func(msg *fsyncbus.SyncMsg) error { return sub.Deliver(context.Background(), msg) }
 }
 
 func replicaMsg(t *testing.T, version int64) *fsyncbus.SyncMsg {
@@ -84,8 +86,8 @@ func TestReplicatorStopWithContextWaitsForAdmittedHandlers(t *testing.T) {
 		t.Fatalf("StopWithContext with a handler still applying = %v, want context.Canceled", err)
 	}
 	// 退订后迟到的投递不进入 Store。
-	if err := first(replicaMsg(t, 2)); err != nil {
-		t.Fatalf("late delivery after stop = %v", err)
+	if err := first(replicaMsg(t, 2)); !errors.Is(err, fsyncbus.ErrUnsubscribed) {
+		t.Fatalf("late delivery after stop = %v, want ErrUnsubscribed (not applied)", err)
 	}
 	// 停止之后重新启动：新订阅照常接收，旧订阅的在途 handler 仍由之后的 StopWithContext 等待。
 	if err := rep.Start(); err != nil {

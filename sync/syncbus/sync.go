@@ -18,7 +18,10 @@ type SyncMsg struct {
 
 // Handler processes an incoming sync message.
 // Return error to log warning (message is NOT retried).
-type Handler func(msg *SyncMsg) error
+//
+// ctx 是这次投递的 ctx（Subscription.Deliver 交出）：它带着“正在执行这个订阅的回调”的标记，handler 里
+// 退订自己时必须把它（或由它派生的 ctx）传给 Subscription.Unsubscribe，否则会等自己。退订不取消它。
+type Handler func(ctx context.Context, msg *SyncMsg) error
 
 // IPublisher publishes sync messages to subscribers.
 type IPublisher interface {
@@ -33,9 +36,9 @@ type IContextPublisher interface {
 
 // ISubscriber subscribes to sync topics.
 type ISubscriber interface {
-	// Subscribe registers a handler for a topic.
-	// Returns unsubscribe function.
-	Subscribe(topic string, handler Handler) (unsub func(), err error)
+	// Subscribe registers a handler for a topic. 返回的 Subscription.Unsubscribe(ctx) 返回 nil 之后，
+	// 这个订阅既没有在途回调、也不会再有新回调（A3 ②，见 Subscription）。
+	Subscribe(topic string, handler Handler) (*Subscription, error)
 }
 
 // ILiveSubscriber 是可确认订阅的能力（Mirror 第 4 步，docs/feature/MIRROR-STEP-4-AND-O4-2026-10-06.md）。
@@ -47,7 +50,7 @@ type ISubscriber interface {
 // 普通 NATS 是最多一次，不提供这项能力；JetStream 用 DeliverNew 的 durable 消费者提供。需要推送一致性的
 // 调用方先做类型断言，拿不到时显式退化（例如 remoteentity 的快照推送退化为按需读取并记日志）。
 type ILiveSubscriber interface {
-	SubscribeLive(topic string, handler Handler) (unsub func(), err error)
+	SubscribeLive(topic string, handler Handler) (*Subscription, error)
 }
 
 // ISyncBus combines publish and subscribe capabilities.

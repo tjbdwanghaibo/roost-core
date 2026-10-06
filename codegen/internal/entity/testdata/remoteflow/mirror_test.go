@@ -61,9 +61,9 @@ type mirrorInterestBus struct {
 	interests chan struct{}
 }
 
-func (b mirrorInterestBus) Subscribe(topic string, h fsyncbus.Handler) (func(), error) {
-	return b.ISyncBus.Subscribe(topic, func(msg *fsyncbus.SyncMsg) error {
-		err := h(msg)
+func (b mirrorInterestBus) Subscribe(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
+	return b.ISyncBus.Subscribe(topic, func(ctx context.Context, msg *fsyncbus.SyncMsg) error {
+		err := h(ctx, msg)
 		if err == nil && topic == remoteentity.SyncTopicInterest {
 			select {
 			case b.interests <- struct{}{}:
@@ -77,7 +77,7 @@ func (b mirrorInterestBus) Subscribe(topic string, h fsyncbus.Handler) (func(), 
 // mirrorInterestLiveBus 同上，并保留下层的可确认订阅（JetStream）。
 type mirrorInterestLiveBus struct{ mirrorInterestBus }
 
-func (b mirrorInterestLiveBus) SubscribeLive(topic string, h fsyncbus.Handler) (func(), error) {
+func (b mirrorInterestLiveBus) SubscribeLive(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	return b.ISyncBus.(fsyncbus.ILiveSubscriber).SubscribeLive(topic, h)
 }
 

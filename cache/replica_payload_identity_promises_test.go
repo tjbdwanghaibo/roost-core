@@ -30,7 +30,7 @@ func TestReplicaPayloadIdentityBeforeStoreMutation(t *testing.T) {
 			if err := s.Start(); err != nil {
 				t.Fatal(err)
 			}
-			defer s.Stop()
+			defer func() { _ = s.Stop(context.Background()) }()
 			raw, err := mirror.MarshalPayload(tc.value)
 			if err != nil {
 				t.Fatal(err)
@@ -65,7 +65,7 @@ func TestReplicaOptionalVersionAndDeleteRemainUsable(t *testing.T) {
 	if err := s.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer s.Stop()
+	defer func() { _ = s.Stop(context.Background()) }()
 	if err := s.Publish(ctx, testItem{ID: 7, Version: 99}); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestReplicaNullPointerRefusedBeforeIdentityCallback(t *testing.T) {
 	if err := s.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer s.Stop()
+	defer func() { _ = s.Stop(context.Background()) }()
 	if err := mirror.New(bus, "pointer", nil).Publish(context.Background(), mirror.Envelope{Key: 7, Payload: []byte(" null ")}); err == nil {
 		t.Fatal("null pointer must be refused")
 	}

@@ -9,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
-	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
 )
 
@@ -44,16 +42,13 @@ type Replicator struct {
 	store Store
 	topic string
 	// live 为 true 时经 fsyncbus.ILiveSubscriber 订阅（NewLive）：Start 返回 nil 之后发布的消息不被静默丢掉。
-	live    bool
-	unsub   func()
+	live bool
+	mu   sync.Mutex
+	// subs 是还没确认排空的订阅，started 时最后一个是当前订阅。排空由传输负责（A3 ②）：
+	// Subscription.Unsubscribe(ctx) 返回 nil 即这个订阅不再有在途或新的 Store 调用（RR-20261005-NC-174
+	// 原来在这里自己维护的准入门已删除）。每次 Start 一个新订阅，Replicator 可重启。
+	subs    []*fsyncbus.Subscription
 	started bool
-	mu      sync.Mutex
-	// gate 是当前一次 Start 的投递准入与在途计数（共用的 operation.Lifetime，A3）；Stop 关掉它并移进
-	// draining，StopWithContext 等 draining 里的在途 handler 全部返回（RR-20261005-NC-174）。
-	// 退订（ISyncBus 的 unsub）不保证在途回调已返回，JetStream fanout 的回调还可能在退订之后用旧快照
-	// 调到这个 handler；关闭后到达的投递不再进入 Store。每次 Start 用新的 Lifetime，Replicator 可重启。
-	gate     *operation.Lifetime
-	draining []*operation.Lifetime
 }
 
 func New(bus fsyncbus.ISyncBus, topic string, store Store) *Replicator {
@@ -91,12 +86,7 @@ func (r *Replicator) Start() error {
 		}
 		subscribe = live.SubscribeLive
 	}
-	gate := &operation.Lifetime{}
-	unsub, err := subscribe(r.topic, func(msg *fsyncbus.SyncMsg) error {
-		if !gate.Begin() {
-			return nil // 这次订阅已停止：等同于退订先一步生效
-		}
-		defer gate.End()
+	sub, err := subscribe(r.topic, func(ctx context.Context, msg *fsyncbus.SyncMsg) error {
 		if msg == nil {
 			return fmt.Errorf("replica: message is nil")
 		}
@@ -108,7 +98,7 @@ func (r *Replicator) Start() error {
 		}
 		if len(msg.Data) == 0 {
 			env := Envelope{Topic: r.topic, Key: msg.Key, Version: msg.Version, Op: OpDelete}
-			return r.store.ApplyReplica(fctx.BaseContext(), env)
+			return r.store.ApplyReplica(ctx, env)
 		}
 		var env Envelope
 		if err := json.Unmarshal(msg.Data, &env); err != nil {
@@ -132,61 +122,53 @@ func (r *Replicator) Start() error {
 		if env.Op != OpUpsert && env.Op != OpDelete {
 			return fmt.Errorf("replica: unsupported operation %d", env.Op)
 		}
-		return r.store.ApplyReplica(fctx.BaseContext(), env)
+		return r.store.ApplyReplica(ctx, env)
 	})
 	if err != nil {
 		return err
 	}
-	r.unsub = unsub
-	r.gate = gate
+	r.subs = append(r.subs, sub)
 	r.started = true
 	return nil
 }
 
-// Stop 发起停止：关闭当前订阅的准入并退订，不等待已进入 Store 的 handler（幂等）。
+// Stop 发起停止：退订当前订阅（关准入、撤传输登记），不等已进入 Store 的 handler（幂等）。
 // 需要“返回即已静止”的调用方用 StopWithContext。
 func (r *Replicator) Stop() {
-	if r == nil {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.gate != nil {
-		r.gate.Stop()
-		r.draining = append(r.draining, r.gate)
-		r.gate = nil
-	}
-	if r.unsub != nil {
-		r.unsub()
-	}
-	r.unsub = nil
-	r.started = false
+	_ = r.StopWithContext(initiateOnly) // 只做第 1 步；排空由之后的 StopWithContext 等
 }
 
-// StopWithContext 按三步停机（RR-20261005-NC-174）：①Stop 关闭准入并退订（幂等）；②在 ctx 内等此前
-// 每次订阅已准入的 handler 返回，超时返回 ctx 错误，重试再等同一批；③全部返回后才报告 nil，调用方
-// 此后可以释放 Store 的依赖。不配合的 Store 不会被终止。
+// initiateOnly 是已取消的 ctx：Unsubscribe 用它只发起退订、不等待（已排空时照样返回 nil）。
+var initiateOnly = func() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}()
+
+// StopWithContext 按三步停机（RR-20261005-NC-174）：①退订（幂等）；②在 ctx 内等此前每次订阅的在途
+// handler 返回（传输的 Subscription.Unsubscribe，A3 ②），超时返回 ctx 错误，重试再等同一批；③全部返回后
+// 才报告 nil，调用方此后可以释放 Store 的依赖。不配合的 Store 不会被终止。
 func (r *Replicator) StopWithContext(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	r.Stop()
 	r.mu.Lock()
-	pending := append([]*operation.Lifetime(nil), r.draining...)
+	r.started = false
+	pending := slices.Clone(r.subs)
 	r.mu.Unlock()
-	for _, gate := range pending {
-		if err := gate.Wait(ctx); err != nil {
-			return err
+	// 每个订阅都要发起退订：ctx 到期后剩下的 Unsubscribe 只发起、立即返回 ctx 错误。
+	var firstErr error
+	for _, sub := range pending {
+		if err := sub.Unsubscribe(ctx); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
-	// 只移除已排空的：等待期间 Stop / Start 交替可能又追加了新的 gate，留给下一次 StopWithContext。
+	if firstErr != nil {
+		return firstErr
+	}
+	// 只移除已排空的：等待期间 Start 可能又追加了新的订阅，留给下一次停止。
 	r.mu.Lock()
-	r.draining = slices.DeleteFunc(r.draining, func(gate *operation.Lifetime) bool {
-		return slices.Contains(pending, gate)
-	})
+	r.subs = slices.DeleteFunc(r.subs, func(sub *fsyncbus.Subscription) bool { return slices.Contains(pending, sub) })
 	r.mu.Unlock()
 	return nil
 }

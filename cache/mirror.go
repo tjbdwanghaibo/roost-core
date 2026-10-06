@@ -37,10 +37,13 @@ func (s *ReplicaSyncer[K, V]) Start() error {
 	return s.replicator.Start()
 }
 
-func (s *ReplicaSyncer[K, V]) Stop() {
-	if s != nil && s.replicator != nil {
-		s.replicator.Stop()
+// Stop 退订并在 ctx 内等在途的 Store 写入返回（三步停机，经 Replicator.StopWithContext）：超时返回 ctx
+// 错误，重试再等同一批；返回 nil 之后 Store 不会再被复制消息调用，调用方可以释放它。
+func (s *ReplicaSyncer[K, V]) Stop(ctx context.Context) error {
+	if s == nil || s.replicator == nil {
+		return nil
 	}
+	return s.replicator.StopWithContext(ctx)
 }
 
 func (s *ReplicaSyncer[K, V]) Publish(ctx context.Context, value V) error {

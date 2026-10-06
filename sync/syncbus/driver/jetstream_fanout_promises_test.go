@@ -59,11 +59,15 @@ func TestJetStreamSyncBusPromiseSameTopicSubscribersAllReceive(t *testing.T) {
 	}
 	defer bus.Stop()
 	var first, second []int64
-	unsubFirst, err := bus.Subscribe("state", func(m *fsyncbus.SyncMsg) error { first = append(first, m.Key); m.Data[0] = 'X'; return nil })
+	unsubFirst, err := bus.Subscribe("state", func(_ context.Context, m *fsyncbus.SyncMsg) error {
+		first = append(first, m.Key)
+		m.Data[0] = 'X'
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	unsubSecond, err := bus.Subscribe("state", func(m *fsyncbus.SyncMsg) error {
+	unsubSecond, err := bus.Subscribe("state", func(_ context.Context, m *fsyncbus.SyncMsg) error {
 		second = append(second, m.Key)
 		if string(m.Data) != "payload" {
 			t.Fatalf("handler saw another handler's mutation: %q", m.Data)
@@ -85,7 +89,9 @@ func TestJetStreamSyncBusPromiseSameTopicSubscribersAllReceive(t *testing.T) {
 		t.Fatalf("broadcast became work-sharing: first=%v second=%v", first, second)
 	}
 	// 退订一个:另一个继续收,底层订阅不停。
-	unsubFirst()
+	if err := unsubFirst.Unsubscribe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if err := js.deliver("roost.sync.state", fanoutMsg(t, 5)); err != nil {
 		t.Fatal(err)
 	}
@@ -96,12 +102,16 @@ func TestJetStreamSyncBusPromiseSameTopicSubscribersAllReceive(t *testing.T) {
 		t.Fatal("underlying subscription stopped while a local handler remained")
 	}
 	// 最后一位离开:底层订阅停止;再订阅重新创建。
-	unsubSecond()
-	unsubSecond() // 幂等
+	if err := unsubSecond.Unsubscribe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := unsubSecond.Unsubscribe(context.Background()); err != nil { // 幂等
+		t.Fatal(err)
+	}
 	if js.subs[0].stops.Load() != 1 {
 		t.Fatalf("last unsubscribe must stop the shared subscription exactly once: stops=%d", js.subs[0].stops.Load())
 	}
-	if _, err := bus.Subscribe("state", func(*fsyncbus.SyncMsg) error { return nil }); err != nil {
+	if _, err := bus.Subscribe("state", func(context.Context, *fsyncbus.SyncMsg) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(js.consumers); got != 2 {
@@ -116,11 +126,11 @@ func TestJetStreamSyncBusPromiseHandlerPanicIsIsolated(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bus.Stop()
-	if _, err := bus.Subscribe("state", func(*fsyncbus.SyncMsg) error { panic("boom") }); err != nil {
+	if _, err := bus.Subscribe("state", func(context.Context, *fsyncbus.SyncMsg) error { panic("boom") }); err != nil {
 		t.Fatal(err)
 	}
 	got := 0
-	if _, err := bus.Subscribe("state", func(*fsyncbus.SyncMsg) error { got++; return nil }); err != nil {
+	if _, err := bus.Subscribe("state", func(context.Context, *fsyncbus.SyncMsg) error { got++; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if err := js.deliver("roost.sync.state", fanoutMsg(t, 1)); err != nil {
@@ -143,7 +153,7 @@ func TestJetStreamSyncBusPromiseConcurrentFirstSubscribersShareOneConsumer(t *te
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := bus.Subscribe("state", func(*fsyncbus.SyncMsg) error { return nil }); err != nil {
+			if _, err := bus.Subscribe("state", func(context.Context, *fsyncbus.SyncMsg) error { return nil }); err != nil {
 				t.Error(err)
 			}
 		}()

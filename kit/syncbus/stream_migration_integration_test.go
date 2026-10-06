@@ -123,7 +123,7 @@ type migrationInbox struct {
 
 func newMigrationInbox() *migrationInbox { return &migrationInbox{got: make(chan struct{}, 64)} }
 
-func (in *migrationInbox) handle(msg *fsyncbus.SyncMsg) error {
+func (in *migrationInbox) handle(_ context.Context, msg *fsyncbus.SyncMsg) error {
 	in.mu.Lock()
 	in.keys = append(in.keys, msg.Key)
 	in.mu.Unlock()

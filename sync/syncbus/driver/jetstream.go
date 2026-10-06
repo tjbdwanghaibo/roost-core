@@ -99,26 +99,26 @@ type jetStreamSyncBus struct {
 var errJetStreamSyncStopping = errors.New("jetstream sync: bus is stopping; delivery returned to the broker")
 
 // topicFanout is one topic's single durable consumer plus every local
-// handler registered on it (U-0209, RR-20260916-03). ISyncBus.Subscribe is
+// subscription registered on it (U-0209, RR-20260916-03). ISyncBus.Subscribe is
 // broadcast: the plain NATS bus gives every local subscriber every message.
 // A durable JetStream consumer is a work queue — two Consume calls on the
 // same consumer name split the stream between them — so one underlying
 // subscription per topic fans out locally instead of one per Subscribe.
 type topicFanout struct {
-	sub      fnats.IJetStreamSubscription
-	handlers map[uint64]fsyncbus.Handler
-	nextID   uint64
+	sub    fnats.IJetStreamSubscription
+	locals map[uint64]*fsyncbus.Subscription
+	nextID uint64
 }
 
-func (f *topicFanout) snapshot() []fsyncbus.Handler {
-	ids := make([]uint64, 0, len(f.handlers))
-	for id := range f.handlers {
+func (f *topicFanout) snapshot() []*fsyncbus.Subscription {
+	ids := make([]uint64, 0, len(f.locals))
+	for id := range f.locals {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	out := make([]fsyncbus.Handler, 0, len(ids))
+	out := make([]*fsyncbus.Subscription, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, f.handlers[id])
+		out = append(out, f.locals[id])
 	}
 	return out
 }
@@ -182,7 +182,7 @@ func (b *jetStreamSyncBus) PublishContext(ctx context.Context, msg *fsyncbus.Syn
 	return err
 }
 
-func (b *jetStreamSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (func(), error) {
+func (b *jetStreamSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	return b.subscribe(topic, handler, false)
 }
 
@@ -192,13 +192,17 @@ func (b *jetStreamSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (fu
 // 消费者分开（durableSyncName 的主题加 ".live"）：服务端不允许改已有 durable 的投递策略，共用名字会让
 // 已部署的 DeliverAll durable 建不出来；分开后旧 durable 不再被消费，可由运维删除。同一 sid 重启时
 // durable 仍在，从上次的确认游标续投（不超过流的 MaxAge）。
-func (b *jetStreamSyncBus) SubscribeLive(topic string, handler fsyncbus.Handler) (func(), error) {
+func (b *jetStreamSyncBus) SubscribeLive(topic string, handler fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	return b.subscribe(topic, handler, true)
 }
 
-// subscribe 建（或复用）一个主题的 durable 消费者并登记本地 handler。live 选 DeliverNew 的那个消费者；
-// 两种消费者在 topics 里用不同的键，互不共享本地 handler。
-func (b *jetStreamSyncBus) subscribe(topic string, handler fsyncbus.Handler, live bool) (func(), error) {
+// subscribe 建（或复用）一个主题的 durable 消费者并登记本地订阅。live 选 DeliverNew 的那个消费者；
+// 两种消费者在 topics 里用不同的键，互不共享本地订阅。
+//
+// 每个本地订阅是一个 fsyncbus.Subscription（A3 ②）：consume 回调经它的 Deliver 调 handler，退订
+// （Subscription.Unsubscribe）先关准入、经 release 从 fanout 删除（最后一个时停消费者），再在调用方 ctx
+// 内等这个订阅的在途回调——fanout 快照里还拿着它的旧投递也会被等到或被拒，订阅者不必自己排空。
+func (b *jetStreamSyncBus) subscribe(topic string, handler fsyncbus.Handler, live bool) (*fsyncbus.Subscription, error) {
 	if b == nil || b.js == nil {
 		return nil, fmt.Errorf("jetstream sync: bus is not initialized")
 	}
@@ -222,9 +226,9 @@ func (b *jetStreamSyncBus) subscribe(topic string, handler fsyncbus.Handler, liv
 	fanout := b.topics[fanoutKey]
 	if fanout == nil {
 		// First local subscriber: create the topic's one durable consumer.
-		// Its handler dispatches to whatever handlers are registered at
-		// delivery time, so later subscribers only need to register.
-		fanout = &topicFanout{handlers: make(map[uint64]fsyncbus.Handler)}
+		// Its handler dispatches to whatever local subscriptions are registered
+		// at delivery time, so later subscribers only need to register.
+		fanout = &topicFanout{locals: make(map[uint64]*fsyncbus.Subscription)}
 		name := durableSyncName(cfg.Prefix, durableTopic, cfg.LocalSid)
 		ctx, cancel := context.WithTimeout(fctx.BaseContext(), cfg.SetupTimeout)
 		defer cancel()
@@ -253,14 +257,14 @@ func (b *jetStreamSyncBus) subscribe(topic string, handler fsyncbus.Handler, liv
 				return nil
 			}
 			b.mu.Lock()
-			handlers := fanout.snapshot()
+			locals := fanout.snapshot()
 			b.mu.Unlock()
-			for _, h := range handlers {
+			for _, local := range locals {
 				// Each handler owns its copy: the plain bus hands every
 				// subscriber its own message and a handler may mutate it.
 				own := msg
 				own.Data = append([]byte(nil), msg.Data...)
-				b.invoke(topic, h, &own)
+				b.invoke(local, &own)
 			}
 			return nil
 		})
@@ -272,36 +276,35 @@ func (b *jetStreamSyncBus) subscribe(topic string, handler fsyncbus.Handler, liv
 	}
 	fanout.nextID++
 	id := fanout.nextID
-	fanout.handlers[id] = handler
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			b.mu.Lock()
-			delete(fanout.handlers, id)
-			var stop fnats.IJetStreamSubscription
-			if len(fanout.handlers) == 0 && b.topics[fanoutKey] == fanout {
-				delete(b.topics, fanoutKey)
-				stop = fanout.sub
-			}
-			b.mu.Unlock()
-			if stop != nil {
-				stop.Stop() // the last local subscriber releases the shared consumer
-			}
-		})
-	}, nil
+	local := fsyncbus.NewSubscription(topic, handler, func() {
+		b.mu.Lock()
+		delete(fanout.locals, id)
+		var stop fnats.IJetStreamSubscription
+		if len(fanout.locals) == 0 && b.topics[fanoutKey] == fanout {
+			delete(b.topics, fanoutKey)
+			stop = fanout.sub
+		}
+		b.mu.Unlock()
+		if stop != nil {
+			stop.Stop() // the last local subscriber releases the shared consumer
+		}
+	})
+	fanout.locals[id] = local
+	return local, nil
 }
 
-// invoke runs one local handler with the bus's existing error contract (log
-// and continue) plus panic isolation, so one subscriber cannot take the
-// delivery away from its siblings.
-func (b *jetStreamSyncBus) invoke(topic string, handler fsyncbus.Handler, msg *fsyncbus.SyncMsg) {
+// invoke runs one local subscription with the bus's existing error contract
+// (log and continue) plus panic isolation, so one subscriber cannot take the
+// delivery away from its siblings. A subscription that is unsubscribing
+// skips the message (fsyncbus.ErrUnsubscribed).
+func (b *jetStreamSyncBus) invoke(local *fsyncbus.Subscription, msg *fsyncbus.SyncMsg) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			slog.Error("jetstream sync: handler panic", "topic", topic, "key", msg.Key, "version", msg.Version, "panic", recovered)
+			slog.Error("jetstream sync: handler panic", "topic", local.Topic(), "key", msg.Key, "version", msg.Version, "panic", recovered)
 		}
 	}()
-	if err := handler(msg); err != nil {
-		slog.Warn("jetstream sync: handler error", "topic", topic, "key", msg.Key, "version", msg.Version, "err", err)
+	if err := local.Deliver(fctx.BaseContext(), msg); err != nil && !errors.Is(err, fsyncbus.ErrUnsubscribed) {
+		slog.Warn("jetstream sync: handler error", "topic", local.Topic(), "key", msg.Key, "version", msg.Version, "err", err)
 	}
 }
 
@@ -315,7 +318,8 @@ func (b *jetStreamSyncBus) Stop() {
 //  2. 在 ctx 内等已准入的 consume 回调返回，超时返回 ctx 错误，重试再等同一批；
 //  3. 返回 nil 之后调用方才能释放总线与它下面的 NATS 连接（kit SyncBusMod 出错时保留总线）。
 //
-// 不配合的 handler 不会被终止；单个本地订阅的退订函数不等待，等待只在总线停止时发生。
+// 不配合的 handler 不会被终止。这里等的是传输自己的 consume 回调（交还连接的前提）；单个订阅的排空
+// 由 Subscription.Unsubscribe 负责（A3 ②），两者互不依赖。
 func (b *jetStreamSyncBus) StopWithContext(ctx context.Context) error {
 	if b == nil {
 		return nil

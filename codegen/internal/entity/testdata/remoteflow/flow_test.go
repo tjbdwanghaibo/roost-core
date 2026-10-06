@@ -87,9 +87,9 @@ type observedBus struct {
 	interests chan struct{}
 }
 
-func (b observedBus) Subscribe(topic string, h fsyncbus.Handler) (func(), error) {
-	return b.ISyncBus.Subscribe(topic, func(msg *fsyncbus.SyncMsg) error {
-		err := h(msg)
+func (b observedBus) Subscribe(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
+	return b.ISyncBus.Subscribe(topic, func(ctx context.Context, msg *fsyncbus.SyncMsg) error {
+		err := h(ctx, msg)
 		if err == nil && topic == remoteentity.SyncTopicInterest {
 			select {
 			case b.interests <- struct{}{}:

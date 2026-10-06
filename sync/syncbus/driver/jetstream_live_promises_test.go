@@ -21,7 +21,7 @@ func TestJetStreamSubscribeLiveUsesASeparateDeliverNewDurable(t *testing.T) {
 		t.Fatal(err)
 	}
 	var live fsyncbus.ILiveSubscriber = bus
-	nop := func(*fsyncbus.SyncMsg) error { return nil }
+	nop := func(context.Context, *fsyncbus.SyncMsg) error { return nil }
 	unsubAll, err := bus.Subscribe("remote_entity_snapshot", nop)
 	if err != nil {
 		t.Fatal(err)
@@ -49,8 +49,12 @@ func TestJetStreamSubscribeLiveUsesASeparateDeliverNewDurable(t *testing.T) {
 	if bus.topics["remote_entity_snapshot"] == bus.topics["remote_entity_snapshot\x00live"] {
 		t.Fatal("the two subscription kinds share one local fanout")
 	}
-	unsubAll()
-	unsubLive()
+	if err := unsubAll.Unsubscribe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := unsubLive.Unsubscribe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := bus.topics["remote_entity_snapshot\x00live"]; !ok {
 		t.Fatal("removing one of two live subscribers released the shared live consumer")
 	}

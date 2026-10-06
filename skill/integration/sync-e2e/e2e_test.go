@@ -1,6 +1,7 @@
 package synce2e
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -15,7 +16,7 @@ import (
 
 type confirmedBus struct {
 	mutex    sync.Mutex
-	handlers map[string][]coresyncbus.Handler
+	handlers map[string][]*coresyncbus.Subscription
 	failNext bool
 	frames   int
 }
@@ -32,25 +33,26 @@ func (bus *confirmedBus) publish(message *coresyncbus.SyncMsg) error {
 		return errors.New("injected broker confirmation failure")
 	}
 	bus.frames++
-	handlers := append([]coresyncbus.Handler(nil), bus.handlers[message.Topic]...)
+	handlers := append([]*coresyncbus.Subscription(nil), bus.handlers[message.Topic]...)
 	bus.mutex.Unlock()
 	for _, handler := range handlers {
 		copy := *message
 		copy.Data = append([]byte(nil), message.Data...)
-		if err := handler(&copy); err != nil {
+		if err := handler.Deliver(context.Background(), &copy); err != nil && !errors.Is(err, coresyncbus.ErrUnsubscribed) {
 			return err
 		}
 	}
 	return nil
 }
-func (bus *confirmedBus) Subscribe(topic string, handler coresyncbus.Handler) (func(), error) {
+func (bus *confirmedBus) Subscribe(topic string, handler coresyncbus.Handler) (*coresyncbus.Subscription, error) {
 	bus.mutex.Lock()
+	defer bus.mutex.Unlock()
 	if bus.handlers == nil {
-		bus.handlers = make(map[string][]coresyncbus.Handler)
+		bus.handlers = make(map[string][]*coresyncbus.Subscription)
 	}
-	bus.handlers[topic] = append(bus.handlers[topic], handler)
-	bus.mutex.Unlock()
-	return func() {}, nil
+	sub := coresyncbus.NewSubscription(topic, handler, nil)
+	bus.handlers[topic] = append(bus.handlers[topic], sub)
+	return sub, nil
 }
 
 type stateConsumer struct{ snapshots int }

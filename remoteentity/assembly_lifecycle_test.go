@@ -32,14 +32,14 @@ type lifecycleRemoteBus struct {
 func (*lifecycleRemoteBus) Publish(*fsyncbus.SyncMsg) error { return nil }
 
 // SubscribeLive 让快照推送开着（Mirror 第 4 步），全部订阅都经同一个计数。
-func (b *lifecycleRemoteBus) SubscribeLive(topic string, h fsyncbus.Handler) (func(), error) {
+func (b *lifecycleRemoteBus) SubscribeLive(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	return b.Subscribe(topic, h)
 }
 
-func (b *lifecycleRemoteBus) Subscribe(string, fsyncbus.Handler) (func(), error) {
+func (b *lifecycleRemoteBus) Subscribe(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	b.calls.Add(1)
 	b.active.Add(1)
-	return sync.OnceFunc(func() { b.active.Add(-1) }), nil
+	return fsyncbus.NewSubscription(topic, h, func() { b.active.Add(-1) }), nil
 }
 func newLifecycleAssembly(t *testing.T, init func(context.Context) error) (*Assembly, *lifecycleRemoteBus) {
 	t.Helper()

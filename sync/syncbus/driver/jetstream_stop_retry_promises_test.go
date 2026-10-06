@@ -20,7 +20,7 @@ func TestJetStreamSyncBusStopWithContextIsBoundedAndRetryable(t *testing.T) {
 	var releaseOnce sync.Once
 	defer releaseOnce.Do(func() { close(release) })
 	calls := 0
-	if _, err := bus.Subscribe("state", func(m *fsyncbus.SyncMsg) error {
+	if _, err := bus.Subscribe("state", func(_ context.Context, m *fsyncbus.SyncMsg) error {
 		calls++
 		if m.Key == 1 {
 			close(entered)
@@ -43,7 +43,7 @@ func TestJetStreamSyncBusStopWithContextIsBoundedAndRetryable(t *testing.T) {
 	if err := js.deliver("roost.sync.state", fanoutMsg(t, 2)); !errors.Is(err, errJetStreamSyncStopping) {
 		t.Fatalf("delivery after stop = %v, want errJetStreamSyncStopping", err)
 	}
-	if _, err := bus.Subscribe("other", func(*fsyncbus.SyncMsg) error { return nil }); err == nil {
+	if _, err := bus.Subscribe("other", func(context.Context, *fsyncbus.SyncMsg) error { return nil }); err == nil {
 		t.Fatal("Subscribe after stop created a consumer whose deliveries could never be admitted")
 	}
 	if err := bus.StopWithContext(expired); !errors.Is(err, context.Canceled) {

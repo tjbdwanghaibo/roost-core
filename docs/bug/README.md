@@ -6,6 +6,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 A3 ② 排空下沉到传输层（分支 `a3d`），未发版。** `ISyncBus` 的退订带 ctx 排空（`syncbus.Subscription.Unsubscribe`），[方案](../feature/A3-2-SYNCBUS-DRAINING-UNSUBSCRIBE-2026-10-07.md)。穷举订阅方时发现 RR-20261006-36（P3），已修复、声明场景验证，未发版。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-36](RR-20261006-36.md) | P3 `syncbus.PatchSyncer.Stop`、`cache.ReplicaSyncer.Stop`、`syncstream` 的退订函数返回时 `Apply` / `Store` / handler 仍可能在跑（传输的退订不等在途回调，这三处没有自己补等待） | 已修复、声明场景验证，未发版 |
+
 **10-07 A2 ③ versionstore 一次性写令牌（分支 `a2t`，维护者第十三轮“原下个大版本项本版完成”），未发版。** versionstore 信封带写令牌，回复丢失的写由 store 核对（[方案](../feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md)）；实施中发现带索引写的 NaN 分数漏洞：
 
 | 编号 | 问题 | 状态 |

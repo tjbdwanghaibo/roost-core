@@ -130,10 +130,12 @@ func TestInterestWireGenerationAndLegacyCompatibility(t *testing.T) {
 }
 
 // 同步传输夹具只递送消息；编解码和接收校验使用正式 Replicator。
-type interestIdentityBus struct{ handler fsyncbus.Handler }
+type interestIdentityBus struct{ sub *fsyncbus.Subscription }
 
-func (b *interestIdentityBus) Publish(msg *fsyncbus.SyncMsg) error { return b.handler(msg) }
-func (b *interestIdentityBus) Subscribe(_ string, h fsyncbus.Handler) (func(), error) {
-	b.handler = h
-	return func() { b.handler = nil }, nil
+func (b *interestIdentityBus) Publish(msg *fsyncbus.SyncMsg) error {
+	return b.sub.Deliver(context.Background(), msg)
+}
+func (b *interestIdentityBus) Subscribe(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
+	b.sub = fsyncbus.NewSubscription(topic, h, nil)
+	return b.sub, nil
 }

@@ -77,26 +77,28 @@ func (s *fakeStore) ApplyReplica(_ context.Context, env Envelope) error {
 	return nil
 }
 
+// fakeBus 的退订不撤登记（release 为 nil）：已退订的订阅由 Subscription 的准入拒绝投递。
 type fakeBus struct {
-	handlers map[string][]fsyncbus.Handler
+	handlers map[string][]*fsyncbus.Subscription
 }
 
 func newFakeBus() *fakeBus {
-	return &fakeBus{handlers: make(map[string][]fsyncbus.Handler)}
+	return &fakeBus{handlers: make(map[string][]*fsyncbus.Subscription)}
 }
 
 func (b *fakeBus) Publish(msg *fsyncbus.SyncMsg) error {
-	for _, h := range b.handlers[msg.Topic] {
-		if err := h(msg); err != nil {
+	for _, sub := range b.handlers[msg.Topic] {
+		if err := sub.Deliver(context.Background(), msg); err != nil && !errors.Is(err, fsyncbus.ErrUnsubscribed) {
 			return err
 		}
 	}
 	return nil
 }
 
-func (b *fakeBus) Subscribe(topic string, handler fsyncbus.Handler) (func(), error) {
-	b.handlers[topic] = append(b.handlers[topic], handler)
-	return func() {}, nil
+func (b *fakeBus) Subscribe(topic string, handler fsyncbus.Handler) (*fsyncbus.Subscription, error) {
+	sub := fsyncbus.NewSubscription(topic, handler, nil)
+	b.handlers[topic] = append(b.handlers[topic], sub)
+	return sub, nil
 }
 
 var _ fsyncbus.ISyncBus = (*fakeBus)(nil)
@@ -109,7 +111,7 @@ type recordingBus struct {
 }
 
 func newRecordingBus() *recordingBus {
-	return &recordingBus{fakeBus: fakeBus{handlers: make(map[string][]fsyncbus.Handler)}}
+	return &recordingBus{fakeBus: fakeBus{handlers: make(map[string][]*fsyncbus.Subscription)}}
 }
 
 func (b *recordingBus) Publish(msg *fsyncbus.SyncMsg) error {

@@ -30,32 +30,32 @@ import (
 type loopbackBus struct {
 	mu       sync.Mutex
 	next     int
-	handlers map[string]map[int]fsyncbus.Handler
+	handlers map[string]map[int]*fsyncbus.Subscription
 	// failSubscribe 非空时，对这个主题的下一次订阅失败一次。
 	failSubscribe string
 	subscribes    map[string]int
 }
 
 func newLoopbackBus() *loopbackBus {
-	return &loopbackBus{handlers: make(map[string]map[int]fsyncbus.Handler), subscribes: make(map[string]int)}
+	return &loopbackBus{handlers: make(map[string]map[int]*fsyncbus.Subscription), subscribes: make(map[string]int)}
 }
 
 func (b *loopbackBus) Publish(msg *fsyncbus.SyncMsg) error {
 	b.mu.Lock()
-	handlers := make([]fsyncbus.Handler, 0, len(b.handlers[msg.Topic]))
-	for _, h := range b.handlers[msg.Topic] {
-		handlers = append(handlers, h)
+	subs := make([]*fsyncbus.Subscription, 0, len(b.handlers[msg.Topic]))
+	for _, sub := range b.handlers[msg.Topic] {
+		subs = append(subs, sub)
 	}
 	b.mu.Unlock()
-	for _, h := range handlers {
-		if err := h(msg); err != nil {
+	for _, sub := range subs {
+		if err := sub.Deliver(context.Background(), msg); err != nil && !errors.Is(err, fsyncbus.ErrUnsubscribed) {
 			return err
 		}
 	}
 	return nil
 }
 
-func (b *loopbackBus) Subscribe(topic string, h fsyncbus.Handler) (func(), error) {
+func (b *loopbackBus) Subscribe(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.subscribes[topic]++
@@ -64,20 +64,21 @@ func (b *loopbackBus) Subscribe(topic string, h fsyncbus.Handler) (func(), error
 		return nil, fmt.Errorf("subscribe %s: broker unavailable", topic)
 	}
 	if b.handlers[topic] == nil {
-		b.handlers[topic] = make(map[int]fsyncbus.Handler)
+		b.handlers[topic] = make(map[int]*fsyncbus.Subscription)
 	}
 	b.next++
 	id := b.next
-	b.handlers[topic][id] = h
-	return sync.OnceFunc(func() {
+	sub := fsyncbus.NewSubscription(topic, h, func() {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		delete(b.handlers[topic], id)
-	}), nil
+	})
+	b.handlers[topic][id] = sub
+	return sub, nil
 }
 
 // SubscribeLive：同步进程内投递，订阅返回即确认（fsyncbus.ILiveSubscriber，快照推送开着）。
-func (b *loopbackBus) SubscribeLive(topic string, h fsyncbus.Handler) (func(), error) {
+func (b *loopbackBus) SubscribeLive(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	return b.Subscribe(topic, h)
 }
 

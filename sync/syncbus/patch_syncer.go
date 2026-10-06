@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	stdsync "sync"
 )
 
@@ -21,11 +22,13 @@ type PatchSyncerConfig[T any] struct {
 }
 
 type PatchSyncer[T any] struct {
-	bus   ISyncBus
-	cfg   PatchSyncerConfig[T]
-	mu    stdsync.Mutex
-	unsub func()
-	ids   *DeliveryIDs
+	bus ISyncBus
+	cfg PatchSyncerConfig[T]
+	mu  stdsync.Mutex
+	// subs 是还没确认排空的订阅（最后一个在 started 时是当前订阅）；排空由传输的 Unsubscribe 负责（A3 ②）。
+	subs    []*Subscription
+	started bool
+	ids     *DeliveryIDs
 }
 
 func NewPatchSyncer[T any](bus ISyncBus, cfg PatchSyncerConfig[T]) *PatchSyncer[T] {
@@ -41,27 +44,42 @@ func (s *PatchSyncer[T]) Start() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.unsub != nil {
+	if s.started {
 		return nil
 	}
-	unsub, err := s.bus.Subscribe(s.cfg.Topic, s.handle)
+	sub, err := s.bus.Subscribe(s.cfg.Topic, s.handle)
 	if err != nil {
 		return err
 	}
-	s.unsub = unsub
+	s.subs = append(s.subs, sub)
+	s.started = true
 	return nil
 }
 
-func (s *PatchSyncer[T]) Stop() {
+// Stop 退订并在 ctx 内等在途的 Apply 返回（三步停机）：超时返回 ctx 错误，重试再等同一批；返回 nil
+// 之后 Apply 不会再被调用。停止之后可以再 Start。
+func (s *PatchSyncer[T]) Stop(ctx context.Context) error {
 	if s == nil {
-		return
+		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.unsub != nil {
-		s.unsub()
+	s.started = false
+	pending := slices.Clone(s.subs)
+	s.mu.Unlock()
+	// 每个订阅都要发起退订：ctx 到期后剩下的 Unsubscribe 只发起、立即返回 ctx 错误。
+	var firstErr error
+	for _, sub := range pending {
+		if err := sub.Unsubscribe(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	s.unsub = nil
+	if firstErr != nil {
+		return firstErr
+	}
+	s.mu.Lock()
+	s.subs = slices.DeleteFunc(s.subs, func(sub *Subscription) bool { return slices.Contains(pending, sub) })
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *PatchSyncer[T]) Publish(ctx context.Context, patch T) error {
@@ -99,7 +117,7 @@ func (s *PatchSyncer[T]) Publish(ctx context.Context, patch T) error {
 	return s.bus.Publish(msg)
 }
 
-func (s *PatchSyncer[T]) handle(msg *SyncMsg) error {
+func (s *PatchSyncer[T]) handle(ctx context.Context, msg *SyncMsg) error {
 	if s == nil || msg == nil || msg.Key == 0 || len(msg.Data) == 0 {
 		return nil
 	}
@@ -121,7 +139,7 @@ func (s *PatchSyncer[T]) handle(msg *SyncMsg) error {
 	if s.empty(patch) {
 		return nil
 	}
-	return s.cfg.Apply(context.Background(), patch)
+	return s.cfg.Apply(ctx, patch)
 }
 
 func (s *PatchSyncer[T]) keyOf(patch T) int64 {

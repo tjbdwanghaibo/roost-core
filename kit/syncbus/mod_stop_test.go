@@ -29,8 +29,8 @@ type contextStopSyncBus struct {
 
 func (b *contextStopSyncBus) Publish(*fsyncbus.SyncMsg) error { return nil }
 
-func (b *contextStopSyncBus) Subscribe(string, fsyncbus.Handler) (func(), error) {
-	return func() {}, nil
+func (b *contextStopSyncBus) Subscribe(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
+	return fsyncbus.NewSubscription(topic, h, nil), nil
 }
 
 func (b *contextStopSyncBus) Stop() {

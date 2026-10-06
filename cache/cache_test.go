@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -107,7 +108,7 @@ func TestReplicaSyncerAppliesUpdate(t *testing.T) {
 	if err := syncer.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer syncer.Stop()
+	defer func() { _ = syncer.Stop(context.Background()) }()
 
 	if err := syncer.Publish(context.Background(), testItem{ID: 7, Version: 3, Data: "payload"}); err != nil {
 		t.Fatal(err)
@@ -158,35 +159,32 @@ func TestRedisRawSortedSetStoreUsesZSet(t *testing.T) {
 }
 
 type fakeSyncBus struct {
-	handlers map[string][]fsyncbus.Handler
+	handlers map[string][]*fsyncbus.Subscription
 }
 
 func newFakeSyncBus() *fakeSyncBus {
-	return &fakeSyncBus{handlers: make(map[string][]fsyncbus.Handler)}
+	return &fakeSyncBus{handlers: make(map[string][]*fsyncbus.Subscription)}
 }
 
 func (b *fakeSyncBus) Publish(msg *fsyncbus.SyncMsg) error {
 	if msg == nil {
 		return nil
 	}
-	for _, h := range b.handlers[msg.Topic] {
-		if err := h(msg); err != nil {
+	for _, sub := range b.handlers[msg.Topic] {
+		if err := sub.Deliver(context.Background(), msg); err != nil && !errors.Is(err, fsyncbus.ErrUnsubscribed) {
 			return err
 		}
 	}
 	return nil
 }
 
-func (b *fakeSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (func(), error) {
-	b.handlers[topic] = append(b.handlers[topic], handler)
-	idx := len(b.handlers[topic]) - 1
-	return func() {
-		handlers := b.handlers[topic]
-		if idx < 0 || idx >= len(handlers) {
-			return
-		}
-		b.handlers[topic] = append(handlers[:idx], handlers[idx+1:]...)
-	}, nil
+func (b *fakeSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (*fsyncbus.Subscription, error) {
+	var sub *fsyncbus.Subscription
+	sub = fsyncbus.NewSubscription(topic, handler, func() {
+		b.handlers[topic] = slices.DeleteFunc(b.handlers[topic], func(s *fsyncbus.Subscription) bool { return s == sub })
+	})
+	b.handlers[topic] = append(b.handlers[topic], sub)
+	return sub, nil
 }
 
 var _ fsyncbus.ISyncBus = (*fakeSyncBus)(nil)

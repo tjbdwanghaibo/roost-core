@@ -64,7 +64,7 @@ func TestReplicatorRefusesEachMalformedInboundMessage(t *testing.T) {
 			bus, store, _ := startedReplicator(t)
 			// Deliver straight to the subscriber, the way a transport would:
 			// the topic on the wire is whatever the publisher put there.
-			err := bus.handlers["topic"][0](tc.msg(t))
+			err := bus.handlers["topic"][0].Deliver(context.Background(), tc.msg(t))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("subscriber returned %v, want %q", err, tc.want)
 			}

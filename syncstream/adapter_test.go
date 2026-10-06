@@ -222,7 +222,7 @@ func TestConfirmedPublisherCapabilityIsExplicit(t *testing.T) {
 }
 
 type memoryBus struct {
-	handler coresyncbus.Handler
+	handler *coresyncbus.Subscription
 	last    *coresyncbus.SyncMsg
 }
 
@@ -231,14 +231,16 @@ func (bus *memoryBus) Publish(message *coresyncbus.SyncMsg) error {
 	copyMessage.Data = append([]byte(nil), message.Data...)
 	bus.last = &copyMessage
 	if bus.handler != nil {
-		return bus.handler(&copyMessage)
+		if err := bus.handler.Deliver(context.Background(), &copyMessage); !errors.Is(err, coresyncbus.ErrUnsubscribed) {
+			return err
+		}
 	}
 	return nil
 }
 
-func (bus *memoryBus) Subscribe(_ string, handler coresyncbus.Handler) (func(), error) {
-	bus.handler = handler
-	return func() {}, nil
+func (bus *memoryBus) Subscribe(topic string, handler coresyncbus.Handler) (*coresyncbus.Subscription, error) {
+	bus.handler = coresyncbus.NewSubscription(topic, handler, nil)
+	return bus.handler, nil
 }
 
 type capturingPublisher struct {

@@ -31,7 +31,7 @@ func TestJetStreamSyncBusPublishesAndAcknowledgesHandlerError(t *testing.T) {
 	}
 
 	handlerErr := errors.New("apply failed")
-	_, err = bus.Subscribe("remote_entity", func(msg *fsyncbus.SyncMsg) error {
+	_, err = bus.Subscribe("remote_entity", func(_ context.Context, msg *fsyncbus.SyncMsg) error {
 		if msg.Topic != "remote_entity" || msg.Key != 101 || msg.Version != 3 || msg.FromSid != 12 {
 			t.Fatalf("sync msg mismatch: %+v", msg)
 		}
@@ -84,7 +84,7 @@ func TestJetStreamSyncBusSkipsSelfMessages(t *testing.T) {
 		t.Fatalf("NewJetStreamSyncBus error: %v", err)
 	}
 	called := false
-	if _, err := bus.Subscribe("player.public", func(*fsyncbus.SyncMsg) error {
+	if _, err := bus.Subscribe("player.public", func(context.Context, *fsyncbus.SyncMsg) error {
 		called = true
 		return nil
 	}); err != nil {
@@ -124,14 +124,16 @@ func TestJetStreamSyncUnsubscribeRemovesTrackedSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unsub, err := bus.Subscribe("player", func(*fsyncbus.SyncMsg) error { return nil })
+	unsub, err := bus.Subscribe("player", func(context.Context, *fsyncbus.SyncMsg) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(bus.topics) != 1 {
 		t.Fatalf("tracked topics=%d, want 1", len(bus.topics))
 	}
-	unsub()
+	if err := unsub.Unsubscribe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if len(bus.topics) != 0 {
 		t.Fatalf("tracked topics=%d, want 0", len(bus.topics))
 	}

@@ -6,6 +6,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 A3 ② 排空下沉到传输层（`a3d`），未发版。** 订阅方停止只等传输层的 `Subscription.Unsubscribe(ctx)`，[方案](../feature/A3-2-SYNCBUS-DRAINING-UNSUBSCRIBE-2026-10-07.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-36](RR-20261006-36.md) | `PatchSyncer.Stop(ctx)` / `ReplicaSyncer.Stop(ctx)` 等在途回调，`syncstream.Subscribe*` 返回 `*syncbus.Subscription`；不再各自补准入门 | 已修复、声明场景验证，未发版 |
+
 **10-07 A2 ③ versionstore 一次性写令牌（`a2t`），未发版。** 信封 `<version>|<令牌>…\n<payload>`，回复丢失时按令牌核对、`Resume` 续核、`ErrWriteTokenMismatch` 防误用；持久格式改变，升级需清空（[方案](../feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md)）。
 
 | 编号 | 修复 | 状态 |

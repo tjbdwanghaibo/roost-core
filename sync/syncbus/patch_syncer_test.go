@@ -2,6 +2,7 @@ package syncbus
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -37,7 +38,7 @@ func TestPatchSyncerPublishesAndAppliesRemotePatch(t *testing.T) {
 	if err := syncer.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer syncer.Stop()
+	defer func() { _ = syncer.Stop(context.Background()) }()
 
 	if err := syncer.Publish(context.Background(), testPatch{PlayerID: 7, Name: "hero", Version: 11}); err != nil {
 		t.Fatal(err)
@@ -82,7 +83,7 @@ func TestPatchSyncerRejectsMismatchedKey(t *testing.T) {
 	if err := syncer.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer syncer.Stop()
+	defer func() { _ = syncer.Stop(context.Background()) }()
 
 	err := bus.Publish(&SyncMsg{
 		Topic: "player.patch",
@@ -109,7 +110,7 @@ func TestPatchSyncerSkipsEmptyPatch(t *testing.T) {
 	if err := syncer.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer syncer.Stop()
+	defer func() { _ = syncer.Stop(context.Background()) }()
 
 	if err := syncer.Publish(context.Background(), testPatch{PlayerID: 7}); err != nil {
 		t.Fatal(err)
@@ -120,12 +121,12 @@ func TestPatchSyncerSkipsEmptyPatch(t *testing.T) {
 }
 
 type patchFakeBus struct {
-	handlers  map[string][]Handler
+	handlers  map[string][]*Subscription
 	published []*SyncMsg
 }
 
 func newPatchFakeBus() *patchFakeBus {
-	return &patchFakeBus{handlers: make(map[string][]Handler)}
+	return &patchFakeBus{handlers: make(map[string][]*Subscription)}
 }
 
 func (b *patchFakeBus) Publish(msg *SyncMsg) error {
@@ -135,24 +136,21 @@ func (b *patchFakeBus) Publish(msg *SyncMsg) error {
 	clone := *msg
 	clone.Data = append([]byte(nil), msg.Data...)
 	b.published = append(b.published, &clone)
-	for _, h := range b.handlers[msg.Topic] {
-		if err := h(msg); err != nil {
+	for _, sub := range b.handlers[msg.Topic] {
+		if err := sub.Deliver(context.Background(), msg); err != nil && err != ErrUnsubscribed {
 			return err
 		}
 	}
 	return nil
 }
 
-func (b *patchFakeBus) Subscribe(topic string, handler Handler) (func(), error) {
-	b.handlers[topic] = append(b.handlers[topic], handler)
-	idx := len(b.handlers[topic]) - 1
-	return func() {
-		handlers := b.handlers[topic]
-		if idx < 0 || idx >= len(handlers) {
-			return
-		}
-		b.handlers[topic] = append(handlers[:idx], handlers[idx+1:]...)
-	}, nil
+func (b *patchFakeBus) Subscribe(topic string, handler Handler) (*Subscription, error) {
+	var sub *Subscription
+	sub = NewSubscription(topic, handler, func() {
+		b.handlers[topic] = slices.DeleteFunc(b.handlers[topic], func(s *Subscription) bool { return s == sub })
+	})
+	b.handlers[topic] = append(b.handlers[topic], sub)
+	return sub, nil
 }
 
 var _ ISyncBus = (*patchFakeBus)(nil)

@@ -3,7 +3,6 @@ package remoteentity
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
@@ -19,17 +18,17 @@ type retrySubscriptionBus struct {
 func (*retrySubscriptionBus) Publish(*fsyncbus.SyncMsg) error { return nil }
 
 // SubscribeLive 让快照推送开着（Mirror 第 4 步），全部订阅都经同一个计数。
-func (b *retrySubscriptionBus) SubscribeLive(topic string, h fsyncbus.Handler) (func(), error) {
+func (b *retrySubscriptionBus) SubscribeLive(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	return b.Subscribe(topic, h)
 }
 
-func (b *retrySubscriptionBus) Subscribe(string, fsyncbus.Handler) (func(), error) {
+func (b *retrySubscriptionBus) Subscribe(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	b.calls++
 	if b.calls == 2 {
 		return nil, b.failure
 	}
 	b.active++
-	return sync.OnceFunc(func() { b.active-- }), nil
+	return fsyncbus.NewSubscription(topic, h, func() { b.active-- }), nil
 }
 
 func TestRemoteAssemblyRetryAfterSecondSubscriptionFailure(t *testing.T) {

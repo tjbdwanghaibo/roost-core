@@ -231,7 +231,7 @@ func TestInterestRefreshRequestsCoalesceAndAreValidated(t *testing.T) {
 	var mu sync.Mutex
 	renewals := 0
 	// 第一次遍历广播第一条续租时再到达 3 个请求：它们合并成之后的一次遍历。
-	unsub, err := bus.Subscribe(SyncTopicInterest, func(*fsyncbus.SyncMsg) error {
+	unsub, err := bus.Subscribe(SyncTopicInterest, func(context.Context, *fsyncbus.SyncMsg) error {
 		mu.Lock()
 		renewals++
 		first := renewals == 1
@@ -248,7 +248,7 @@ func TestInterestRefreshRequestsCoalesceAndAreValidated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unsub()
+	defer func() { _ = unsub.Unsubscribe(context.Background()) }()
 	now := time.Now().UnixNano()
 	for i := range 5 {
 		if err := store.ApplyReplica(ctx, refreshEnvelope(t, 2621, now+int64(i))); err != nil {
@@ -336,7 +336,7 @@ func TestInterestRefreshNeedsPushAndToleratesOldConsumers(t *testing.T) {
 	loop := newLoopbackBus()
 	var mu sync.Mutex
 	requests := 0
-	count := func(*fsyncbus.SyncMsg) error { mu.Lock(); requests++; mu.Unlock(); return nil }
+	count := func(context.Context, *fsyncbus.SyncMsg) error { mu.Lock(); requests++; mu.Unlock(); return nil }
 	cfg := DefaultConfig()
 
 	plainReader := newRefreshReader(t, cfg, 2642, plainBus{inner: loop})
@@ -354,7 +354,9 @@ func TestInterestRefreshNeedsPushAndToleratesOldConsumers(t *testing.T) {
 	if requests != 0 {
 		t.Fatalf("an owner without push sent %d refresh requests", requests)
 	}
-	unsub()
+	if err := unsub.Unsubscribe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	// 没有订阅者（旧版本只读方不订阅这个主题）：请求无人收，owner 启动不受影响。
 	other := newLoopbackBus()

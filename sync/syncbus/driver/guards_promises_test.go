@@ -45,7 +45,7 @@ func expectGuardErr(t *testing.T, err error, want string) {
 func TestSyncBusesRefuseEachInvalidArgumentBeforeTheWire(t *testing.T) {
 	t.Run("nats", func(t *testing.T) {
 		expectGuardErr(t, NewNatsSyncBus(nil, 1, "").Publish(&fsyncbus.SyncMsg{Topic: "room"}), "nats sync: bus is not initialized")
-		_, err := NewNatsSyncBus(nil, 1, "").Subscribe("room", func(*fsyncbus.SyncMsg) error { return nil })
+		_, err := NewNatsSyncBus(nil, 1, "").Subscribe("room", func(context.Context, *fsyncbus.SyncMsg) error { return nil })
 		expectGuardErr(t, err, "nats sync: bus is not initialized")
 		var nilBus *natsSyncBus
 		expectGuardErr(t, nilBus.Publish(&fsyncbus.SyncMsg{Topic: "room"}), "nats sync: bus is not initialized")
@@ -54,7 +54,7 @@ func TestSyncBusesRefuseEachInvalidArgumentBeforeTheWire(t *testing.T) {
 		bus := NewNatsSyncBus(client, 1, "")
 		expectGuardErr(t, bus.Publish(nil), "nats sync: message is nil")
 		expectGuardErr(t, bus.Publish(&fsyncbus.SyncMsg{Topic: "  "}), "nats sync: topic is empty")
-		_, err = bus.Subscribe(" ", func(*fsyncbus.SyncMsg) error { return nil })
+		_, err = bus.Subscribe(" ", func(context.Context, *fsyncbus.SyncMsg) error { return nil })
 		expectGuardErr(t, err, "nats sync: topic is empty")
 		_, err = bus.Subscribe("room", nil)
 		expectGuardErr(t, err, "nats sync: handler is nil")
@@ -68,7 +68,7 @@ func TestSyncBusesRefuseEachInvalidArgumentBeforeTheWire(t *testing.T) {
 		}
 		var nilBus *jetStreamSyncBus
 		expectGuardErr(t, nilBus.Publish(&fsyncbus.SyncMsg{Topic: "room"}), "jetstream sync: bus is not initialized")
-		_, err := nilBus.Subscribe("room", func(*fsyncbus.SyncMsg) error { return nil })
+		_, err := nilBus.Subscribe("room", func(context.Context, *fsyncbus.SyncMsg) error { return nil })
 		expectGuardErr(t, err, "jetstream sync: bus is not initialized")
 
 		js := newFakeJetStream()
@@ -78,7 +78,7 @@ func TestSyncBusesRefuseEachInvalidArgumentBeforeTheWire(t *testing.T) {
 		}
 		expectGuardErr(t, bus.Publish(nil), "jetstream sync: message is nil")
 		expectGuardErr(t, bus.Publish(&fsyncbus.SyncMsg{Topic: "\t"}), "jetstream sync: topic is empty")
-		_, err = bus.Subscribe("", func(*fsyncbus.SyncMsg) error { return nil })
+		_, err = bus.Subscribe("", func(context.Context, *fsyncbus.SyncMsg) error { return nil })
 		expectGuardErr(t, err, "jetstream sync: topic is empty")
 		_, err = bus.Subscribe("room", nil)
 		expectGuardErr(t, err, "jetstream sync: handler is nil")

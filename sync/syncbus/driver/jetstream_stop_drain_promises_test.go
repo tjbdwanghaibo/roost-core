@@ -57,7 +57,7 @@ func TestJetStreamSyncBusStopWaitsForAnInFlightHandler(t *testing.T) {
 	defer releaseOnce.Do(func() { close(release) })
 	var handled []int64
 	var handledMu sync.Mutex
-	if _, err := bus.Subscribe("state", func(m *fsyncbus.SyncMsg) error {
+	if _, err := bus.Subscribe("state", func(_ context.Context, m *fsyncbus.SyncMsg) error {
 		if m.Key == 1 {
 			close(entered)
 			<-release

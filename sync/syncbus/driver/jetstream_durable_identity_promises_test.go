@@ -25,7 +25,7 @@ func TestDurableSyncNamePromiseDistinguishesPrefixes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer busTwo.Stop()
-	noop := func(*fsyncbus.SyncMsg) error { return nil }
+	noop := func(context.Context, *fsyncbus.SyncMsg) error { return nil }
 	if _, err := busOne.Subscribe("state", noop); err != nil {
 		t.Fatal(err)
 	}

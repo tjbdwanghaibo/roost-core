@@ -26,7 +26,7 @@ func TestJetStreamSyncBusStopContract(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := bus.Subscribe("state", func(m *fsyncbus.SyncMsg) error {
+			if _, err := bus.Subscribe("state", func(_ context.Context, m *fsyncbus.SyncMsg) error {
 				if m.Key == 1 {
 					close(entered)
 					<-release

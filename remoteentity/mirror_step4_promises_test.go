@@ -386,7 +386,7 @@ func TestInterestQuotaRefusalIsVisibleAndReadsGoOnDemand(t *testing.T) {
 type plainBus struct{ inner *loopbackBus }
 
 func (b plainBus) Publish(msg *fsyncbus.SyncMsg) error { return b.inner.Publish(msg) }
-func (b plainBus) Subscribe(topic string, h fsyncbus.Handler) (func(), error) {
+func (b plainBus) Subscribe(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	return b.inner.Subscribe(topic, h)
 }
 

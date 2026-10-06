@@ -22,33 +22,39 @@ import (
 // handlerBus 记下每个 topic 当前的 handler，测试直接投递；退订后再投递不会到达。
 type handlerBus struct {
 	mu       sync.Mutex
-	handlers map[string]fsyncbus.Handler
+	handlers map[string]*fsyncbus.Subscription
 }
 
 func (*handlerBus) Publish(*fsyncbus.SyncMsg) error { return nil }
-func (b *handlerBus) Subscribe(topic string, h fsyncbus.Handler) (func(), error) {
+func (b *handlerBus) Subscribe(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.handlers == nil {
-		b.handlers = make(map[string]fsyncbus.Handler)
+		b.handlers = make(map[string]*fsyncbus.Subscription)
 	}
-	b.handlers[topic] = h
-	return sync.OnceFunc(func() {
+	sub := fsyncbus.NewSubscription(topic, h, func() {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		delete(b.handlers, topic)
-	}), nil
+	})
+	b.handlers[topic] = sub
+	return sub, nil
 }
 
 // SubscribeLive：测试直接投递，订阅即确认（Mirror 第 4 步的推送模式）。
-func (b *handlerBus) SubscribeLive(topic string, h fsyncbus.Handler) (func(), error) {
+func (b *handlerBus) SubscribeLive(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	return b.Subscribe(topic, h)
 }
 
-func (b *handlerBus) handler(topic string) fsyncbus.Handler {
+// handler 返回 topic 当前订阅的投递入口；没有订阅时返回 nil。
+func (b *handlerBus) handler(topic string) func(*fsyncbus.SyncMsg) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.handlers[topic]
+	sub := b.handlers[topic]
+	if sub == nil {
+		return nil
+	}
+	return func(msg *fsyncbus.SyncMsg) error { return sub.Deliver(context.Background(), msg) }
 }
 
 func interestRenewMessage(t *testing.T, interest entity.RemoteSnapshotInterest) *fsyncbus.SyncMsg {

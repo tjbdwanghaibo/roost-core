@@ -8,7 +8,7 @@
 
 - **未决事项：零。** 下面每一张“待决定”表里的项都已在后面某一轮“维护者决定”表里定案；每一轮决定表的每一行都已是“已实施（提交号）”或“保持”（维护者决定不改代码）。
 - **版本**：第二、三轮决定随 v1.20.2 发布（tag → `c85d4565`），第四～九轮随 v1.21.0（`4881f2b7`），下一轮规划三项随 v1.22.0（`9bf690fb`）。第十轮起（O-M6-1 / 3 / 6、收尾第 1～4 批、第十二轮）都未发版，随 v1.23.0 发布。各行里写“未发版”的是实施当时的状态。
-- **留到下个大版本、不在本轮做的**：A2 ③（versionstore 一次性写令牌）、A3 ②（排空下沉到 `ISyncBus` 带 ctx 的退订）、A4 ①（配置 schema）、B3 ③（Host 取值能力表）。
+- **留到下个大版本、不在本轮做的**：A2 ③（versionstore 一次性写令牌）、A3 ②（排空下沉到 `ISyncBus` 带 ctx 的退订）、A4 ①（配置 schema）、B3 ③（Host 取值能力表）。（第十三轮维护者要求这几项本版完成；A3 ② 已实施，见第十三轮“A3②：维护者要求本版完成”行。）
 - **只剩外部环境验证**：Linux 内核网络、跨主机分区、多节点 HA、长时间容量与 soak、多机 Redis Cluster、Windows、真实部署与客户端，统一见 [外部验证清单](EXTERNAL-VERIFICATION-2026-10-06.md)（E01～E28）。表里标“外部验证”的行指向它。
 - **两条 WANTED 待 review 判断**（不是维护者决定项）：W-2026-10-06-01（nest 无 Guard 作用域分支）、W-2026-10-06-02（驱动重复 Close 口径不一致，第十二轮“驱动 Close 契约”实测时登记）。两条都已转 RR 并修复（未发版）：W-2026-10-06-01 → [RR-20261006-12](../bug/RR-20261006-12.md)，W-2026-10-06-02 → [RR-20261006-10](../bug/RR-20261006-10.md)。
 - 非核心 review 的完成总结见 [NONCORE-REVIEW-COMPLETION](NONCORE-REVIEW-COMPLETION-2026-10-06.md)，各单元状态见 [单元状态](REMAINING-REVIEW-HANDOFF-2026-10-05.md)。
@@ -253,3 +253,4 @@
 | 原“下个大版本”项 | 维护者：“还有留到下个版本的几项在本机能完成吗？希望本次能完成了” → 本版完成：A2③ versionstore 一次性写令牌（`wt-a2t`）、A3② ISyncBus 带 ctx 的排空退订（`wt-a3d`）、A4① 每个 Mod 声明配置 schema（`wt-a4s`）、saga 方向③④（`wt-saga34`）、B3③ Host 取值能力表（skill 已放弃分区合入后派）。C8 / B5 维护者此前已定“保持”，不在此列 | 实施中 |
 | saga 方向③④ | 维护者要求本版完成（第六轮“③④ 暂不做”）：③ 只接收正在等的那次尝试的可重试失败；④ 方向 C，放弃后迟到生效的正向步骤只补偿这一步（重开 Failed / Compensated） | 已实施（`a6a902cd`，分支 `saga34`，未发版；[方案与实施](../feature/SAGA-DIRECTION-3-4-2026-10-07.md)） |
 | A2③：维护者要求本版完成 | 维护者：“还有留到下个版本的几项在本机能完成吗？希望本次能完成了”——versionstore 写入带一次性令牌（改持久格式，不做旧格式兼容，升级需清空） | 已实施（`6b3a0eb9`，分支 `a2t`，未发版，[方案与验证](../feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md)）：信封带写令牌，回复丢失由 store 按令牌核对，`Resume` 续核、`ErrWriteTokenMismatch` 防误用，单机 toxiproxy 与 mirror-local Cluster 3 主 3 从红绿；同批 RR-20261006-35。“键不存在 / 删除之后”无法核对，**墓碑与保留期待维护者决定**（方案 §8，推荐 A：保持） |
+| A3②：维护者要求本版完成 | 维护者：“还有留到下个版本的几项在本机能完成吗？希望本次能完成了”；线上未部署，不留兼容期，直接替换 | 已实施（本提交，分支 `a3d`，未发版，[方案与验证](../feature/A3-2-SYNCBUS-DRAINING-UNSUBSCRIBE-2026-10-07.md)）：`Subscribe` / `SubscribeLive` 返回 `*syncbus.Subscription`，`Unsubscribe(ctx)` 本身排空（handler 带投递 ctx，回调里退订自己不死锁）；JetStream / 普通 NATS 驱动与全部替身改用它，`mirror.Replicator` 删掉自己的准入门；实施中登记并修复 RR-20261006-36 |

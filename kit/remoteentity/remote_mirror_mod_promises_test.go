@@ -48,8 +48,8 @@ func (emptyRedis) Del(context.Context, ...string) (int64, error) { return 0, nil
 type plainBus struct{}
 
 func (plainBus) Publish(*fsyncbus.SyncMsg) error { return nil }
-func (plainBus) Subscribe(string, fsyncbus.Handler) (func(), error) {
-	return func() {}, nil
+func (plainBus) Subscribe(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
+	return fsyncbus.NewSubscription(topic, h, nil), nil
 }
 
 // mirrorRegistry 装好 RemoteMirrorMod 的依赖（不含 Mongo：用例用 WithMirrorLoader）。

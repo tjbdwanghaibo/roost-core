@@ -180,6 +180,8 @@ client ahead 时，自动调用 provider 生成 full、Append 成新恢复锚点
 4. 校验 envelope 和 payload 大小；
 5. 给 handler 传递脱离副本。
 
+返回值是总线的 `*syncbus.Subscription`：停机时 `Unsubscribe(ctx)` 返回 nil 之后 handler 不会再被调用，这时才释放 handler 用到的依赖（A3 ②）。
+
 高吞吐场景可在 Publisher 外包 `BufferedPublisher`。队列满时返回 `ErrBackpressure`，
 不静默丢包；关闭时停止接收并排空已接收包。异步下游最终失败会进入 OnError 和指标，
 客户端通过 History/Resync 修复。需要 broker 级确认与持久投递时选择 JetStream。

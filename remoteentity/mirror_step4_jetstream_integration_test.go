@@ -103,17 +103,17 @@ func TestRealJetStreamLiveDurableNameShape(t *testing.T) {
 	if !ok {
 		t.Fatal("the JetStream sync bus must provide confirmed subscriptions")
 	}
-	nop := func(*fsyncbus.SyncMsg) error { return nil }
+	nop := func(context.Context, *fsyncbus.SyncMsg) error { return nil }
 	unsubAll, err := bus.Subscribe(SyncTopicSnapshot, nop)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unsubAll()
+	defer func() { _ = unsubAll.Unsubscribe(context.Background()) }()
 	unsubLive, err := live.SubscribeLive(SyncTopicSnapshot, nop)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unsubLive()
+	defer func() { _ = unsubLive.Unsubscribe(context.Background()) }()
 
 	nc, err := gonats.Connect(env.url, gonats.Timeout(2*time.Second))
 	if err != nil {
@@ -171,7 +171,7 @@ func TestRealJetStreamLiveSubscriptionConfirmsAndResumes(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var got []int64
-	handler := func(msg *fsyncbus.SyncMsg) error {
+	handler := func(_ context.Context, msg *fsyncbus.SyncMsg) error {
 		mu.Lock()
 		got = append(got, msg.Version)
 		mu.Unlock()
@@ -203,13 +203,15 @@ func TestRealJetStreamLiveSubscriptionConfirmsAndResumes(t *testing.T) {
 	if seen := waitFor(2); !slices.Equal(seen, []int64{2}) {
 		t.Fatalf("delivered %v; want only the message published after the subscription was confirmed (no history replay)", seen)
 	}
-	unsub()
+	if err := unsub.Unsubscribe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	publish(3) // 退订期间
 	unsub, err = live.SubscribeLive(topic, handler)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unsub()
+	defer func() { _ = unsub.Unsubscribe(context.Background()) }()
 	publish(4)
 	// 退订时停掉的拉取请求可能已把 3 交出（未确认）：它在 AckWait（这里 2s）之后重投，不会丢。
 	waitFor(4)

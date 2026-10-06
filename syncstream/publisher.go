@@ -217,10 +217,12 @@ type SubscribeOptions struct {
 	RequireChecksum  bool
 }
 
-func Subscribe(bus coresyncbus.ISubscriber, topic string, handler Handler) (func(), error) {
+// Subscribe 订阅 topic 上的包流。返回的 Subscription.Unsubscribe(ctx) 返回 nil 之后 handler 不再被调用
+// （排空在传输层，A3 ②），分片重组表随之可回收。
+func Subscribe(bus coresyncbus.ISubscriber, topic string, handler Handler) (*coresyncbus.Subscription, error) {
 	return SubscribeWithOptions(bus, topic, SubscribeOptions{}, handler)
 }
-func SubscribeForObserver(bus coresyncbus.ISubscriber, topic string, observer Observer, handler Handler) (func(), error) {
+func SubscribeForObserver(bus coresyncbus.ISubscriber, topic string, observer Observer, handler Handler) (*coresyncbus.Subscription, error) {
 	return SubscribeWithOptions(bus, topic, SubscribeOptions{ExpectedObserver: &observer}, handler)
 }
 
@@ -245,7 +247,7 @@ type reassembler struct {
 	values  map[assemblyKey]*assembly
 }
 
-func SubscribeWithOptions(bus coresyncbus.ISubscriber, topic string, options SubscribeOptions, handler Handler) (func(), error) {
+func SubscribeWithOptions(bus coresyncbus.ISubscriber, topic string, options SubscribeOptions, handler Handler) (*coresyncbus.Subscription, error) {
 	if bus == nil {
 		return nil, ErrSubscriberRequired
 	}
@@ -265,7 +267,7 @@ func SubscribeWithOptions(bus coresyncbus.ISubscriber, topic string, options Sub
 		options.AssemblyTTL = 30 * time.Second
 	}
 	assembler := &reassembler{options: options, values: make(map[assemblyKey]*assembly)}
-	unsub, err := bus.Subscribe(topic, func(message *coresyncbus.SyncMsg) error {
+	return bus.Subscribe(topic, func(_ context.Context, message *coresyncbus.SyncMsg) error {
 		if message == nil {
 			return nil
 		}
@@ -282,15 +284,6 @@ func SubscribeWithOptions(bus coresyncbus.ISubscriber, topic string, options Sub
 		}
 		return handler(packet.Clone())
 	})
-	if err != nil {
-		return nil, err
-	}
-	return func() {
-		unsub()
-		assembler.mutex.Lock()
-		assembler.values = make(map[assemblyKey]*assembly)
-		assembler.mutex.Unlock()
-	}, nil
 }
 
 func (assembler *reassembler) accept(message *coresyncbus.SyncMsg, now time.Time) ([]byte, bool, error) {
