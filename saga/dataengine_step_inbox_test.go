@@ -36,7 +36,7 @@ func TestDataEngineStepBindCarriesExplicitReservationFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := dataEngineCommand("command-fenced", "operation-fenced", "payload")
-	reservation := inbox.activeReservation(command.ID, mustCommandDigest(t, command), 9)
+	reservation := inbox.activeReservation(command.IdempotencyKey, command.ID, mustCommandDigest(t, command), 9)
 	ctx := withReservation(context.Background(), reservation)
 	extracted, ok := ReservationFromContext(ctx)
 	if !ok || extracted.Token != reservation.Token {
@@ -53,7 +53,7 @@ func TestDataEngineStepBindCarriesExplicitReservationFence(t *testing.T) {
 		t.Fatalf("receipts=%+v", committer.record.Receipts)
 	}
 	fence, control, err := coredata.DecodeLeaseFenceReceipt(committer.record.Receipts[0])
-	if err != nil || !control || fence.Owner != "worker-1" || fence.Token != 9 || fence.DocumentID != "saga-step/command-fenced" || !bytes.Equal(fence.Digest, mustCommandDigest(t, command)) {
+	if err != nil || !control || fence.Owner != "worker-1" || fence.Token != 9 || fence.Resource != dataEngineOperationCollection || fence.DocumentID != command.IdempotencyKey || !bytes.Equal(fence.Digest, mustCommandDigest(t, command)) {
 		t.Fatalf("fence=%+v control=%t err=%v", fence, control, err)
 	}
 }
@@ -65,7 +65,7 @@ func TestDataEngineStepBindRejectsReservationFromAnotherCommand(t *testing.T) {
 	}
 	reserved := dataEngineCommand("command-a", "operation-a", "payload-a")
 	other := dataEngineCommand("command-b", "operation-b", "payload-b")
-	reservation := inbox.activeReservation(reserved.ID, mustCommandDigest(t, reserved), 1)
+	reservation := inbox.activeReservation(reserved.IdempotencyKey, reserved.ID, mustCommandDigest(t, reserved), 1)
 	committer := &stepFenceCommitter{}
 	_, err = corenest.RunIsolatedTransaction(context.Background(), committer, "saga-fence-test", func() (any, error) {
 		return nil, inbox.Bind(other, reservation)
@@ -111,12 +111,14 @@ func TestDataEngineStepInboxReservesCommandIdentityAndAllowsNewAttempt(t *testin
 	if reservation, err := inbox.Reserve(context.Background(), newAttempt); err != nil || reservation.Duplicate {
 		t.Fatalf("new attempt after the first attempt's deadline=%+v err=%v", reservation, err)
 	}
-	var firstClaim dataEngineClaim
-	if err := inboxClaims(client).FindOne(context.Background(), bson.M{"_id": dataEngineStepNamespace + "/" + command.ID}, &firstClaim); err != nil {
-		t.Fatal(err)
+	// 状态文档：第二次尝试是当前尝试（token 2，第一次尝试的 fence 从此不再匹配），第一次尝试记为被它接替。
+	state := inboxOperation(t, client, command.IdempotencyKey)
+	if state.CommandID != newAttempt.ID || state.LeaseToken != 2 || state.Status != operationStatusPending ||
+		len(state.Superseded) != 1 || state.Superseded[0].CommandID != command.ID || state.Superseded[0].By != newAttempt.ID {
+		t.Fatalf("operation state after the first attempt was superseded=%+v", state)
 	}
-	if firstClaim.Status != claimStatusSuperseded || firstClaim.LeaseToken != 2 || firstClaim.SupersededBy != newAttempt.ID {
-		t.Fatalf("first attempt after being superseded=%+v", firstClaim)
+	if _, err := inbox.Reserve(context.Background(), command); !errors.Is(err, errAttemptSuperseded) && !errors.Is(err, ErrCommandExpired) {
+		t.Fatalf("redelivery of the superseded first attempt err=%v, want errAttemptSuperseded or ErrCommandExpired", err)
 	}
 }
 
@@ -144,7 +146,7 @@ func TestDataEngineStepInboxReplaysAuthoritativeReceiptAndCompletesClaim(t *test
 	}
 }
 
-func TestDataEngineStepInboxUsesAbsoluteClaimExpiry(t *testing.T) {
+func TestDataEngineStepInboxUsesAbsoluteOperationExpiry(t *testing.T) {
 	client := newDataEngineInboxMongo()
 	inbox, err := NewDataEngineStepInbox(client, "game", DataEngineStepInboxOptions{Owner: "worker-1"})
 	if err != nil {
@@ -153,44 +155,48 @@ func TestDataEngineStepInboxUsesAbsoluteClaimExpiry(t *testing.T) {
 	if err := inbox.EnsureInfrastructure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	claims := inboxClaims(client)
-	// 第 5 个是按操作查询有影响的 claim 用的 by_operation_decision（RR-20261006-15 复核）。
-	if len(claims.Indexes) != 5 {
-		t.Fatalf("claim indexes=%d, want 5", len(claims.Indexes))
+	operations := inboxOperations(client)
+	// 每个操作一份状态文档，所有读写按 _id：只有过期清理一个索引（状态文档方案，claims 集合的四个索引已删除）。
+	if len(operations.Indexes) != 1 || !operations.HasIndex("expires_at") {
+		t.Fatalf("operation indexes=%+v, want only the expiry index", operations.Indexes)
 	}
-	// The claim path and the command-identity uniqueness both depend on their
-	// index existing, so assert them by shape rather than by position alone.
-	if !claims.HasIndex("status", "lease_until") || !claims.HasIndex("namespace", "command_id") || !claims.HasIndex("namespace", "operation_key") ||
-		!claims.HasIndex("namespace", "operation_key", "status", "outcome", "incarnation") {
-		t.Fatalf("claim indexes=%+v", claims.Indexes)
-	}
-	expiry := claims.Indexes[2]
+	expiry := operations.Indexes[0]
 	if !expiry.ExpireAt || expiry.TTL != 0 || !expiry.RecreateOnConflict {
-		t.Fatalf("claim expiry index=%+v", expiry)
+		t.Fatalf("operation expiry index=%+v", expiry)
 	}
 }
 
 func newDataEngineInboxMongo() *mongotest.Client { return mongotest.NewClient() }
 
-func inboxClaims(client *mongotest.Client) *mongotest.Collection {
-	return client.Collection("game", dataEngineClaimCollection)
+func inboxOperations(client *mongotest.Client) *mongotest.Collection {
+	return client.Collection("game", dataEngineOperationCollection)
+}
+
+// inboxOperation 读原生收件箱里一个操作实例的状态文档。
+func inboxOperation(t *testing.T, client *mongotest.Client, operationKey string) stepOperation {
+	t.Helper()
+	var state stepOperation
+	if err := inboxOperations(client).FindOne(context.Background(), bson.M{"_id": operationKey}, &state); err != nil {
+		t.Fatalf("operation %s: %v", operationKey, err)
+	}
+	return state
 }
 
 func inboxReceipts(client *mongotest.Client) *mongotest.Collection {
 	return client.Collection("game", dataEngineReceiptCollection)
 }
 
-// The projector lives in another package and queries the claim document this
+// The projector lives in another package and queries the operation state document this
 // package writes. Nothing in the compiler ties the two together, and a
 // mismatch is silent by construction: an unsatisfiable predicate looks exactly
 // like a legitimately stale lease, so every fenced transaction would be
 // acknowledged as a skipped no-op with no error and no failing test.
 //
-// This closes that gap by round-tripping a real claim through BSON and
+// This closes that gap by round-tripping a real state document through BSON and
 // evaluating the real predicate against it, then verifying the predicate
 // rejects every single-field deviation. A rename or a type change on either
 // side fails here.
-func TestDataEngineClaimSatisfiesProjectorFencePredicate(t *testing.T) {
+func TestDataEngineOperationStateSatisfiesProjectorFencePredicate(t *testing.T) {
 	client := mongotest.NewClient()
 	inbox, err := NewDataEngineStepInbox(client, "game", DataEngineStepInboxOptions{
 		Owner: "worker-1", LeaseDuration: time.Minute, ReceiptTTL: time.Hour,
@@ -218,12 +224,12 @@ func TestDataEngineClaimSatisfiesProjectorFencePredicate(t *testing.T) {
 		t.Fatalf("fence=%+v control=%v err=%v", fence, control, err)
 	}
 
-	claims := inboxClaims(client)
+	operations := inboxOperations(client)
 	now := time.Now().UTC()
 	var found bson.M
-	if err := claims.FindOne(context.Background(), fence.Predicate(now), &found); err != nil {
-		stored, _ := claims.Lookup(fence.DocumentID)
-		t.Fatalf("the projector's predicate does not match the claim this package writes: %v\npredicate=%v\nstored=%v",
+	if err := operations.FindOne(context.Background(), fence.Predicate(now), &found); err != nil {
+		stored, _ := operations.Lookup(fence.DocumentID)
+		t.Fatalf("the projector's predicate does not match the operation state this package writes: %v\npredicate=%v\nstored=%v",
 			err, fence.Predicate(now), stored)
 	}
 
@@ -234,31 +240,31 @@ func TestDataEngineClaimSatisfiesProjectorFencePredicate(t *testing.T) {
 		"other token":  func(f *coredata.LeaseFence) { f.Token++ },
 		"other digest": func(f *coredata.LeaseFence) { f.Digest = bytes.Repeat([]byte{9}, len(f.Digest)) },
 		"other document": func(f *coredata.LeaseFence) {
-			f.DocumentID = dataEngineStepNamespace + "/other-command"
+			f.DocumentID = "other-operation"
 		},
 	} {
 		deviated := fence
 		mutate(&deviated)
-		if err := claims.FindOne(context.Background(), deviated.Predicate(now), &found); !errors.Is(err, fmongo.ErrNotFound) {
+		if err := operations.FindOne(context.Background(), deviated.Predicate(now), &found); !errors.Is(err, fmongo.ErrNotFound) {
 			t.Fatalf("%s: predicate still matched (err=%v)", name, err)
 		}
 	}
 
 	// An expired lease must stop matching without touching the document.
-	if err := claims.FindOne(context.Background(), fence.Predicate(now.Add(2*time.Minute)), &found); !errors.Is(err, fmongo.ErrNotFound) {
+	if err := operations.FindOne(context.Background(), fence.Predicate(now.Add(2*time.Minute)), &found); !errors.Is(err, fmongo.ErrNotFound) {
 		t.Fatalf("expired lease still matched: %v", err)
 	}
 
-	// A completed claim must stop matching: the status value is shared with
+	// A settled attempt must stop matching: the status value is shared with
 	// the projector precisely so this transition is respected.
 	completion := Completion{
 		CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID,
 		Success: true, CompletedAt: now,
 	}
-	if err := inbox.markCompleted(context.Background(), command.ID, completion); err != nil {
+	if err := inbox.markCompleted(context.Background(), command.IdempotencyKey, command.ID, completion); err != nil {
 		t.Fatal(err)
 	}
-	if err := claims.FindOne(context.Background(), fence.Predicate(now), &found); !errors.Is(err, fmongo.ErrNotFound) {
-		t.Fatalf("completed claim still matched the pending predicate: %v", err)
+	if err := operations.FindOne(context.Background(), fence.Predicate(now), &found); !errors.Is(err, fmongo.ErrNotFound) {
+		t.Fatalf("settled attempt still matched the pending predicate: %v", err)
 	}
 }

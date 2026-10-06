@@ -442,7 +442,9 @@ game-demo 在 game 服务的三份配置里把 `gift_item.debit.max_attempts` �
 `timeout` 时步骤停住（每次尝试都在截止后才投影、被跳过），积压消退后才成功，而不是像以前那样重复执行。Mongo 步骤
 （`SubscribeMongoStep`）自 2026-10-06 纳入同一契约（saga 方向 ②）：生效点是 handler 的 Mongo 事务，业务写经 handler 拿到的事务 ctx
 写进这笔事务时，按 `IdempotencyKey` 的业务幂等只是可选的纵深防御；调用另一个服务（如发邮件）不在事务里，仍要按 `IdempotencyKey` 幂等。
-新增集合 `<收件箱集合>_claims`；跨尝试最多一次要等全部 Mongo 步骤进程升级后成立（[SAGA.md「Mongo 步骤」](../SAGA.md#mongo-步骤2026-10-06-纳入)）。
+两种步骤的收件箱对每个操作只写一份状态文档（原生 `_dataengine_step_operations`，Mongo 步骤 `<收件箱集合>_operations`，2026-10-06）。
+**升级要求**：存储形状与 v1.22.0 及以前不兼容，步骤服务先停旧再起新，清空或丢弃旧的 `_dataengine_inbox_claims` / `<收件箱集合>_claims`
+（[SAGA.md「操作状态文档」](../SAGA.md#操作状态文档2026-10-06维护者决定直接改成一份状态文档)）。
 
 **部署：Mongo 的 `transactionLifetimeLimitSeconds`**。进程被 kill -9 时它手里的 Mongo 事务在服务端保持打开、持锁到这个参数（默认 60s），
 期间同一文档上的步骤尝试一直 WriteConflict；默认步骤预算约 27s，短于它，受影响的操作会被拖进补偿。生产建议把它调到 20

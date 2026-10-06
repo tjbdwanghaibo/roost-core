@@ -48,11 +48,12 @@ func reserveFencedStep(t *testing.T, ctx context.Context, h *tradeFixture, name 
 	return fencedStep{inbox: inbox, command: command, reservation: reservation}
 }
 
-// expire 把 claim 的租约改到过去：投影时 fence 不再成立，整笔记录被跳过。
+// expire 把这个操作状态文档（saga 原生收件箱，每个操作一份，_id = IdempotencyKey）的租约改到过去：
+// 投影时 fence 不再成立，整笔记录被跳过。
 func (step fencedStep) expire(t *testing.T, ctx context.Context, h *tradeFixture) {
 	t.Helper()
-	claims := h.client.Database(h.database).Collection("_dataengine_inbox_claims")
-	if _, err := claims.UpdateOne(ctx, bson.M{"_id": "saga-step/" + step.command.ID}, bson.M{"$set": bson.M{"lease_until": time.Now().UTC().Add(-time.Second)}}); err != nil {
+	operations := h.client.Database(h.database).Collection("_dataengine_step_operations")
+	if _, err := operations.UpdateOne(ctx, bson.M{"_id": step.command.IdempotencyKey}, bson.M{"$set": bson.M{"lease_until": time.Now().UTC().Add(-time.Second)}}); err != nil {
 		t.Fatal(err)
 	}
 }

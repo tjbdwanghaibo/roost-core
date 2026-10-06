@@ -46,19 +46,9 @@ func TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce(t *testing.T) {
 	runMongoStepOperationCases(t, func(t *testing.T) (fmongo.IMongo, string) { return realSagadirMongo(t) })
 }
 
-// RR-20261006-15：跨 Resume 累积的尝试不挡新一生；有影响的 claim 的查询在真实服务端上的匹配（第 0 代 incarnation 的两种写法）。
+// RR-20261006-15 的承诺在状态文档形状下：任意多次尝试与 Resume 之后新一生照常执行（真实副本集，次数比 mongotest 少，
+// 每次 Handle 是两次落盘提交）。
 func TestRealMongoOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife(t *testing.T) {
 	client, database := realSagadirMongo(t)
-	runAccumulatedAttemptsCase(t, client, database)
-}
-
-func TestRealMongoOperationClaimsFilterSelectsOnlyDecisiveClaims(t *testing.T) {
-	client, database := realSagadirMongo(t)
-	runOperationClaimsFilterCase(t, client.Database(database).Collection("claims"))
-}
-
-// RR-20261006-16：升级前就卡住的操作（4097 份不带 outcome 的 claim）升级后能执行新一生。
-func TestRealMongoOperationStuckBeforeUpgradeExecutesAfterUpgrade(t *testing.T) {
-	client, database := realSagadirMongo(t)
-	runLegacyStuckOperationCase(t, client, database)
+	runAccumulatedAttemptsCase(t, client, database, 5, 220)
 }

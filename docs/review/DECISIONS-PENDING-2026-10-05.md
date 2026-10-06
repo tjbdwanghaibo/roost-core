@@ -233,3 +233,4 @@
 | Windows | “windows的问题可以暂存，加一个说明 window问题不保证正确”：README / DEPLOYMENT 写明 Windows 不保证正确；W-2026-10-04-05、E25、E27 的 Windows 部分暂存 | 已实施（本提交） |
 | 合并 fixn | 维护者同意合并；与 fixr 撞号，fixn 的两条顺延为 RR-20261006-12（nest 派发要求 Guard 作用域）/ -13（glsvet A1 跟进同包 helper） | 已合并（`b7471ae4`） |
 | A1 盲区 | 组件普通字段存事务内可变状态、不登记 undo → 静默不回滚。维护者选 A：glsvet 对组件方法（不含初始化）写非 DAO 字段给提示，缓存类字段用简短标注豁免（“tag命名需要简洁一些”，定为 `//roost:cache`） | 已实施（`565f657b`，分支 `a1f`，未发版，[记录](../feature/A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md)）：组件方法（`OnInitFinish` / `OnDestroy` 除外，跟进一层同包 helper）写非 DAO 句柄、非函数类型、未标 `//roost:cache` 的组件字段打印 `hint:`，不计入失败；全仓 / 示例 / 重新生成的 game-demo 0 条，初稿在 `CombatComponent.projection`（投影函数）的 1 条判为误判、收紧为函数类型字段不提示 |
+| saga 收件箱改为单状态文档（维护者 2026-10-06） | “我希望直接改成一份状态文档”，本轮直接做；兼容范围补充决定“不考虑旧进程，完成按照新的处理，线上还没有旧的进程跑”：不读旧 claim、不保留兼容写、不支持混跑，混跑用例删除 | 已实施（分支 `sagadoc`，提交号见下一笔补登；[方案与实施](../feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md)，未发版） |

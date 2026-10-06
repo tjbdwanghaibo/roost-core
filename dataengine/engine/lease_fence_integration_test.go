@@ -107,8 +107,9 @@ func TestRealMongoFencedProjectionSerializesWithLeaseTakeover(t *testing.T) {
 	})
 
 	// 租约边界：接管方（真实时钟）看到租约已过期；投影方的时钟仍在到期之前。
-	claims := client.Database(database).Collection("_dataengine_inbox_claims")
-	if _, err := claims.UpdateOne(ctx, bson.M{"_id": "saga-step/" + command.ID}, bson.M{"$set": bson.M{"lease_until": now.Add(-time.Second)}}); err != nil {
+	// 原生步骤的操作状态文档（saga 收件箱，每个操作一份，_id = IdempotencyKey）。
+	operations := client.Database(database).Collection("_dataengine_step_operations")
+	if _, err := operations.UpdateOne(ctx, bson.M{"_id": command.IdempotencyKey}, bson.M{"$set": bson.M{"lease_until": now.Add(-time.Second)}}); err != nil {
 		t.Fatal(err)
 	}
 	store.now = func() time.Time { return now.Add(-time.Minute) }

@@ -12,7 +12,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // RR-20260926-30：原生步骤的 Nest 事务在 WAL 准入处被实体屏障拒绝（ErrFencedEntityPending，常见是本命令
@@ -59,10 +58,7 @@ func TestDataEngineStepHandsBackTheLeaseWhenTheEntityIsFenced(t *testing.T) {
 			if err := client.handler(context.Background(), &fnats.JetStreamMsg{Data: raw}); !errors.Is(err, tc.handlerErr) {
 				t.Fatalf("delivery=%v, want the handler error", err)
 			}
-			var claim dataEngineClaim
-			if err := inboxClaims(mongoClient).FindOne(context.Background(), bson.M{"_id": dataEngineStepNamespace + "/" + command.ID}, &claim); err != nil {
-				t.Fatal(err)
-			}
+			claim := inboxOperation(t, mongoClient, command.IdempotencyKey)
 			if released := !claim.LeaseUntil.After(time.Now()); released != tc.released || claim.LeaseToken != 1 {
 				t.Fatalf("after the failed delivery: lease released=%v want %v (token=%d lease_until=%v)", released, tc.released, claim.LeaseToken, claim.LeaseUntil)
 			}

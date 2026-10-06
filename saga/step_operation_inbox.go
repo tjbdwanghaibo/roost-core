@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strconv"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
@@ -15,47 +17,34 @@ import (
 )
 
 // 步骤收件箱的“操作实例”协调，原生步骤（DataEngineStepInbox）与 Mongo 步骤（MongoCommandInbox）共用
-// （SAGA.md「原生步骤执行契约」；U-0280 为原生步骤建立，saga 方向 ②把 Mongo 步骤纳入同一份代码）。
+// （SAGA.md「原生步骤执行契约」；方案 docs/feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md）。
 //
-// 每次尝试在 Reserve 事务里拿一份 claim（`saga-step/<CommandID>`，租约封顶到命令截止），同一操作实例
-// （Command.IdempotencyKey）的各次尝试按 operation_key 找到彼此，并都写守卫文档 `saga-step-op/<IdempotencyKey>`
-// 串行化。尝试只有在它的生效点对自己的 claim 做条件写（owner、token、pending、租约未过期）成功时才生效：
-// 原生步骤的生效点是 DataEngine 投影事务，Mongo 步骤的生效点是 handler 的 Mongo 事务（settleOwnClaim）。
-// 接替（supersede）写的是同一个 claim 文档，与生效点的条件写只能有一个提交。
+// 每个操作实例（Command.IdempotencyKey）只有一份状态文档 stepOperation：当前尝试（谁持有租约、token、到期、
+// 结论）、本生的拒绝（有界）与截止未到的被接替尝试（有界）。Reserve 在一个 Mongo 事务里读回执与这份文档、
+// 做判定，需要时以 version 做 CAS 写回；同一操作的并发 Reserve 在这份文档上写冲突串行化。
+// 尝试只有在它的生效点对这份文档做条件写（当前尝试是它、token 相同、pending、租约未过期）成功时才生效：
+// 原生步骤的生效点是 DataEngine 投影事务（lease fence 直接匹配文档的顶层字段），Mongo 步骤的生效点是
+// handler 的 Mongo 事务（settleOwnAttempt）。接替与生效点写同一份文档，二者只能有一个提交。
 //
-// 两种收件箱的差别只在 claim 所在集合与回执（receipt）怎么读：原生回执由投影写进 `_dataengine_receipts`，
-// Mongo 回执由 handler 事务写进收件箱自己的集合。
+// 判定只读这一份文档：尝试次数、Resume 次数都不进入判定，没有按操作的查询，也没有上限
+// （取代了 RR-20261006-15 / -16 的 claim 扫描与上限）。
 
 const (
-	stepClaimNamespace = "saga-step"
-	// claimStatusPending 必须与投影匹配的值相同，所以取自共享的 fence 契约。
-	claimStatusPending   = coredata.LeaseFenceStatusPending
-	claimStatusCompleted = "completed"
-	// claimStatusSuperseded 标记“同一操作实例的较新尝试已经接替这次尝试”：这次尝试的租约已过期、
-	// 还没有回执，接替时 lease_token 同时加一，所以它的生效点的条件写不再匹配（原生：WAL 里未投影的
-	// 记录投影时被跳过；Mongo：handler 事务中止）。被接替的尝试永远不会再生效。
-	claimStatusSuperseded = "superseded"
+	// operationStatusPending 必须与投影匹配的值相同，所以取自共享的 fence 契约：当前尝试结论未知、可能持有租约。
+	operationStatusPending = coredata.LeaseFenceStatusPending
+	// operationStatusSettled：当前尝试的结论已写进 result / completion。
+	operationStatusSettled = "settled"
 
-	// 操作实例守卫文档与 claim 同集合，命名空间不同：同一操作实例的各个尝试在 Reserve 事务里都写它，
-	// Mongo 的写冲突让这些 Reserve 串行化（U-0280）。
-	stepOperationNamespace    = "saga-step-op"
-	claimStatusOperationGuard = "operation"
-	// claim 的 outcome：标记 completed 时按结论写入，让 Reserve 只读取会影响判定的 claim（RR-20261006-15）。
-	// 没有 outcome 的 completed claim 是升级前（或混跑中的旧进程）写的，按“可能有影响”读取。
-	claimOutcomeSuccess   = "success"
-	claimOutcomeRefused   = "refused"
-	claimOutcomeRetryable = "retryable"
+	operationResultSuccess   = "success"
+	operationResultRefused   = "refused"
+	operationResultRetryable = "retryable"
 
-	// maxDecisiveOperationClaims 是一次扫描同一操作实例“有影响的 claim”的上限，超过说明数据异常，拒绝而不是做无界
-	// 扫描。有影响的 claim 有界、与尝试次数和 Resume 次数无关（RR-20261006-15，证明见 operationClaimsFilter）：
-	// 旧实现按全部 claim 计数，协调器每生最多 1000 次尝试、Resume 不限次数，几次 Resume 之后同一步骤就永远 Reserve 不了。
-	maxDecisiveOperationClaims = 4096
-	// maxLegacyOperationClaims 是同一操作实例不带 outcome 的 completed claim（升级前、或混跑中的旧进程写的）的上限，
-	// 与 maxDecisiveOperationClaims 分开计数（RR-20261006-16）。旧进程按“这个操作的全部 claim”计数、看到 4096 份时
-	// 还会再写一份，所以升级前就卡住的操作恰好有 4097 份不带 outcome 的 claim，和新写的 claim 共用 4096 的上限时
-	// 升级后照样卡住；混跑中旧进程还可能给新进程留下的 pending claim 补标 completed（原生步骤的回执先于标记）。
-	// 取 2×4096 留出这部分余量，超过同样说明数据异常。
-	maxLegacyOperationClaims = 2 * maxDecisiveOperationClaims
+	// maxRememberedRefusalLives：拒绝只保留代际最大的两生（论证见方案 4.5）。更老一生的拒绝被剪掉时记
+	// refusals_dropped_through，那一生的投递不再执行。
+	maxRememberedRefusalLives = 2
+	// maxRememberedSuperseded：被接替的尝试最多记最近的这么多条（方案 4.4）。只有截止未到的那些需要记住，正常运行里
+	// 至多一两条；按接替先后剪掉最早的，被剪掉的早已过了截止。
+	maxRememberedSuperseded = 16
 )
 
 // ErrCommandExpired 表示命令已过 DeadlineAt：协调器已不再等这次尝试，收件箱不再为它分配租约。
@@ -68,19 +57,19 @@ var errOperationAttemptInFlight = errors.New("saga: another attempt of this step
 // errAttemptSuperseded 表示这次尝试已被同一操作实例的较新尝试接替，永远不会执行。
 var errAttemptSuperseded = errors.New("saga: step attempt was superseded by a newer attempt")
 
-// errAttemptFenced 表示 Mongo 步骤的 handler 事务在提交前对自己 claim 的条件写没有匹配：租约已过期（命令截止已过）
+// errAttemptFenced 表示 Mongo 步骤的 handler 事务在提交前对状态文档的条件写没有匹配：租约已过期（命令截止已过）
 // 或已被较新的尝试接替。事务整体中止，这次尝试没有生效。
 var errAttemptFenced = errors.New("saga: step attempt lost its lease before it could commit")
 
-// stepOperationInbox 是两种收件箱共用的 claim / 守卫 / 判定。
+// stepOperationInbox 是两种收件箱共用的状态文档读写与判定。
 type stepOperationInbox struct {
-	client          fmongo.IMongo
-	database        string
-	claimCollection string
-	owner           string
-	leaseDuration   time.Duration
-	receiptTTL      time.Duration
-	now             func() time.Time
+	client              fmongo.IMongo
+	database            string
+	operationCollection string
+	owner               string
+	leaseDuration       time.Duration
+	receiptTTL          time.Duration
+	now                 func() time.Time
 	// receipt 读这个收件箱的权威回执：found=false 表示没有；摘要不同返回 ErrIdentityConflict。
 	receipt func(ctx context.Context, commandID string, digest []byte) (Completion, bool, error)
 }
@@ -89,60 +78,65 @@ type Reservation struct {
 	Token     uint64
 	Duplicate bool
 	// Completion 非空时是这个操作实例已有的结果：可能是本命令自己的回执，也可能是同一操作实例
-	// 较早一次尝试的回执（Completion.CommandID 与当前命令不同，消费者把它重发给协调器）。
-	Completion Completion
-	commandID  string
-	owner      string
-	digest     []byte
+	// 另一次尝试的结果（Completion.CommandID 与当前命令不同，消费者把它重发给协调器）。
+	Completion   Completion
+	operationKey string
+	commandID    string
+	owner        string
+	digest       []byte
 }
 
-// stepClaim 的 updated_at 也由原生投影事务按 coredata.LeaseFenceFieldUpdatedAt 条件写入，
-// 使投影与 reserveInTransaction 的过期接管写同一文档、在 Mongo 里串行化（RR-20260926-30 §6）。
-//
-// OperationKey / Incarnation 是 U-0280 增加的字段：同一操作实例（Command.IdempotencyKey）的各次尝试
-// 按 operation_key 找到彼此；Incarnation 是 Resume 代际，只用来决定旧一生的拒绝要不要回放。
-// 升级前写的 claim 没有这两个字段，新 Reserve 看不到它们（混跑语义见 SAGA.md「原生步骤执行契约」）。
-type stepClaim struct {
-	ID           string    `bson:"_id"`
-	Namespace    string    `bson:"namespace"`
-	CommandID    string    `bson:"command_id"`
-	OperationKey string    `bson:"operation_key,omitempty"`
-	Incarnation  uint32    `bson:"incarnation,omitempty"`
-	Digest       []byte    `bson:"digest"`
-	Owner        string    `bson:"owner"`
-	LeaseUntil   time.Time `bson:"lease_until"`
-	LeaseToken   uint64    `bson:"lease_token"`
-	Status       string    `bson:"status"`
-	Completion   []byte    `bson:"completion,omitempty"`
-	SupersededBy string    `bson:"superseded_by,omitempty"`
-	// Outcome 是 completed claim 的结论（claimOutcome*，RR-20261006-15）；升级前写的 claim 没有。
-	Outcome   string    `bson:"outcome,omitempty"`
+// stepOperation 是一个操作实例的状态文档。当前尝试的字段在顶层，字段名与 coredata.LeaseFence 的谓词一致：
+// 原生投影事务按 coredata.LeaseFence.Predicate 对它做条件写（确认写 updated_at），与 Reserve 的接替写同一文档、
+// 在 Mongo 里串行化（RR-20260926-30 §6）。
+type stepOperation struct {
+	ID      string `bson:"_id"` // Command.IdempotencyKey
+	Version uint64 `bson:"version"`
+
+	CommandID   string    `bson:"command_id"`
+	Incarnation uint32    `bson:"incarnation"`
+	Digest      []byte    `bson:"digest"`
+	Owner       string    `bson:"owner"`
+	LeaseToken  uint64    `bson:"lease_token"`
+	LeaseUntil  time.Time `bson:"lease_until"`
+	DeadlineAt  time.Time `bson:"deadline_at"`
+	Status      string    `bson:"status"`
+	Result      string    `bson:"result,omitempty"`
+	Completion  []byte    `bson:"completion,omitempty"`
+
+	// Refusals 以 "r<代际>" 为键，只留代际最大的 maxRememberedRefusalLives 生。
+	Refusals map[string]operationRefusal `bson:"refusals,omitempty"`
+	// RefusalsDroppedThrough 是被剪掉的拒绝里最大的代际；nil 表示没剪过。
+	RefusalsDroppedThrough *uint32 `bson:"refusals_dropped_through,omitempty"`
+	// Superseded 是最近被接替的尝试（最多 maxRememberedSuperseded 条）。
+	Superseded []supersededAttempt `bson:"superseded,omitempty"`
+
 	CreatedAt time.Time `bson:"created_at"`
 	UpdatedAt time.Time `bson:"updated_at"`
 	ExpiresAt time.Time `bson:"expires_at"`
 }
 
-func stepClaimID(commandID string) string { return stepClaimNamespace + "/" + commandID }
+type operationRefusal struct {
+	CommandID  string `bson:"command_id"`
+	Completion []byte `bson:"completion"`
+}
 
-func (o *stepOperationInbox) ensureClaimIndexes(ctx context.Context) error {
-	return o.claims().EnsureIndexes(ctx, []fmongo.IndexModel{
-		{Keys: bson.D{{Key: "status", Value: 1}, {Key: "lease_until", Value: 1}}, Name: "claim_expired"},
-		{Keys: bson.D{{Key: "namespace", Value: 1}, {Key: "command_id", Value: 1}}, Name: "uniq_command", Unique: true},
+type supersededAttempt struct {
+	CommandID  string    `bson:"command_id"`
+	By         string    `bson:"by"`
+	DeadlineAt time.Time `bson:"deadline_at"`
+}
+
+func refusalKey(incarnation uint32) string { return "r" + strconv.FormatUint(uint64(incarnation), 10) }
+
+func (o *stepOperationInbox) ensureOperationIndexes(ctx context.Context) error {
+	return o.operations().EnsureIndexes(ctx, []fmongo.IndexModel{
+		// 所有读写都按 _id；只需要过期清理。
 		{Keys: bson.D{{Key: "expires_at", Value: 1}}, Name: "ttl_expires_at", ExpireAt: true, RecreateOnConflict: true},
-		// 同一操作实例的尝试互相查找（U-0280）。修前进程的查询只按这两个字段，滚动升级期间仍要用它。
-		{Keys: bson.D{{Key: "namespace", Value: 1}, {Key: "operation_key", Value: 1}}, Name: "by_operation"},
-		// operationClaimsFilter 的每个 $or 分支都是这个索引的前缀上的等值或区间（pending 只用到 status；成功、旧 claim
-		// 用到 outcome；本生拒绝用到 incarnation），服务端只碰有影响的 claim，与累积的可重试失败、被接替的尝试、旧一生
-		// 的拒绝数量无关（RR-20261006-15 复核补修）。只有 by_operation 时服务端要取出这个操作的全部 claim 逐个过滤，
-		// 检查的文档数随尝试与 Resume 线性增长；$or 还让优化器在集合里只有少数操作时改选 claim_expired 或 uniq_command。
-		{Keys: bson.D{
-			{Key: "namespace", Value: 1}, {Key: "operation_key", Value: 1}, {Key: "status", Value: 1}, {Key: "outcome", Value: 1}, {Key: "incarnation", Value: 1},
-		}, Name: "by_operation_decision"},
 	})
 }
 
-// reserve 在一个 Mongo 事务里决定这次投递做什么（reserveInTransaction）；首次创建守卫或 claim 时并发 upsert / insert
-// 撞唯一键，重试一次。
+// reserve 在一个 Mongo 事务里决定这次投递做什么（reserveInTransaction）；首次创建状态文档时并发插入撞唯一键，重试一次。
 func (o *stepOperationInbox) reserve(ctx context.Context, command Command, digest []byte) (Reservation, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -167,30 +161,30 @@ func (o *stepOperationInbox) reserve(ctx context.Context, command Command, diges
 	return Reservation{}, fmongo.ErrDuplicateKey
 }
 
-// reserveInTransaction 在一个 Mongo 事务里决定这次投递要做什么（SAGA.md「原生步骤执行契约」）：
+// reserveInTransaction 按方案 3.1 的表依次判定（编号即表中的行）：
 //
-//  1. 本命令已有回执：回放（Duplicate + Completion）。
-//  2. 本命令已有 claim：租约有效 → Duplicate（同一尝试的重投，等它的回执）；被接替 → errAttemptSuperseded；
-//     租约过期 → 先看同一操作实例的其他尝试，再接管自己的 claim。
-//  3. 要新建或接管 claim 时先写操作实例守卫，让同一操作实例的并发 Reserve 串行化。
-//  4. 同一操作实例的其他尝试：有成功回执（任何一生）或本生的拒绝回执 → 回放那次的 completion，不执行；
-//     可重试失败 → 忽略；仍 pending 且租约有效 → errOperationAttemptInFlight（等它有结论）；
-//     pending 且租约过期 → 接替（status=superseded、lease_token+1），它的生效点随后不再匹配。
-//  5. 以上都没有：写自己的 claim 并执行。
+//  1. 本命令已有回执：回放（并结算仍 pending 的自己）。
+//  2. 命令已过截止：ErrCommandExpired。
+//  3. 还没有状态文档：新建，本命令执行。
+//  4. 本命令已被接替：errAttemptSuperseded。
+//     5～8. 本命令就是当前尝试：摘要不同 → ErrIdentityConflict；已结算 → 回放；租约有效 → Duplicate（同一命令在途）；
+//     租约过期 → 重新取得租约并执行。
+//     9～15. 另一次尝试是当前尝试：它已投影未结算先结算；有成功（任何一生）→ 回放；有本生的拒绝 → 回放；这一生的拒绝
+//     可能已被剪掉 → errAttemptSuperseded；它的租约有效 → errOperationAttemptInFlight；过期 → 接替；其余 → 执行。
 //
-// 租约封顶到命令截止时间：lease_until = min(now+LeaseDuration, Command.DeadlineAt)。协调器只在截止后
-// 才判这次尝试超时、放弃或发出下一次尝试，所以截止后才到生效点的尝试（崩溃重启后的 WAL 重放、投影积压、
-// Mongo 事务在写冲突重试里拖过截止）一律不生效——一次尝试只可能在协调器等它的窗口内生效。
+// 租约封顶到命令截止时间：lease_until = min(now+LeaseDuration, Command.DeadlineAt)。协调器只在截止后才判这次尝试超时、
+// 放弃或发出下一次尝试，所以截止后才到生效点的尝试（崩溃重启后的 WAL 重放、投影积压、Mongo 事务在写冲突重试里拖过截止）
+// 一律不生效——一次尝试只可能在协调器等它的窗口内生效。
 func (o *stepOperationInbox) reserveInTransaction(ctx context.Context, command Command, digest []byte) (Reservation, error) {
-	commandID := command.ID
-	if completion, found, err := o.receipt(ctx, commandID, digest); err != nil || found {
+	key := command.IdempotencyKey
+	if completion, found, err := o.receipt(ctx, command.ID, digest); err != nil || found {
 		if found {
-			// 回执是权威，claim 只是协调行：标记失败不改变 Reserve 的结论（真实服务端会因写错误中止事务并由驱动重跑）。
+			// 回执是权威，状态文档只是协调行：结算失败不改变 Reserve 的结论（真实服务端会因写错误中止事务并由驱动重跑）。
 			// 但不能静默吞掉——将来出现确定性失败时会一直重跑到超时，日志与计数是唯一线索（RR-20260927-16）。
-			if markErr := o.markCompleted(ctx, commandID, completion); markErr != nil {
+			if markErr := o.markCompleted(ctx, key, command.ID, completion); markErr != nil {
 				metrics.IncCounter("saga.step_inbox.mark_completed_error_total", nil, 1)
-				slog.Warn("saga step inbox: mark claim completed failed; the receipt stays authoritative",
-					"command_id", commandID, "err", markErr)
+				slog.Warn("saga step inbox: mark operation attempt settled failed; the receipt stays authoritative",
+					"command_id", command.ID, "err", markErr)
 			}
 		}
 		return Reservation{Duplicate: found, Completion: completion}, err
@@ -199,286 +193,277 @@ func (o *stepOperationInbox) reserveInTransaction(ctx context.Context, command C
 	if !now.Before(command.DeadlineAt) {
 		return Reservation{}, ErrCommandExpired
 	}
-	leaseUntil := now.Add(o.leaseDuration)
-	if command.DeadlineAt.Before(leaseUntil) {
-		leaseUntil = command.DeadlineAt
-	}
-	claimID := stepClaimID(commandID)
-	var claim stepClaim
-	err := o.claims().FindOne(ctx, bson.M{"_id": claimID}, &claim)
-	if err != nil && !errors.Is(err, fmongo.ErrNotFound) {
+	state, exists, err := o.loadOperation(ctx, key)
+	if err != nil {
 		return Reservation{}, err
 	}
-	ownClaim := err == nil
-	if ownClaim {
-		if !bytes.Equal(claim.Digest, digest) {
+	if !exists {
+		return o.createOperation(ctx, command, digest, now)
+	}
+	if state.supersededAttempt(command.ID) {
+		return Reservation{}, errAttemptSuperseded
+	}
+	if state.CommandID == command.ID {
+		if !bytes.Equal(state.Digest, digest) {
 			return Reservation{}, ErrIdentityConflict
 		}
-		switch claim.Status {
-		case claimStatusCompleted:
-			completion, err := DecodeCompletionEffect(claim.Completion)
-			return Reservation{Token: claim.LeaseToken, Duplicate: true, Completion: completion}, err
-		case claimStatusSuperseded:
-			return Reservation{}, errAttemptSuperseded
-		case claimStatusPending:
+		switch state.Status {
+		case operationStatusSettled:
+			completion, err := DecodeCompletionEffect(state.Completion)
+			return Reservation{Token: state.LeaseToken, Duplicate: true, Completion: completion}, err
+		case operationStatusPending:
 		default:
 			return Reservation{}, ErrConflict
 		}
-		if claim.LeaseUntil.After(now) {
-			return Reservation{Token: claim.LeaseToken, Duplicate: true}, nil
+		if state.LeaseUntil.After(now) {
+			return Reservation{Token: state.LeaseToken, Duplicate: true}, nil
 		}
+		return o.grantLease(ctx, state, command, digest, now, false)
 	}
-	// 到这里这次投递要么新建 claim，要么接管自己过期的 claim：先写守卫，再看同一操作实例的其他尝试。
-	if err := o.guardOperation(ctx, command.IdempotencyKey, now); err != nil {
-		return Reservation{}, err
-	}
-	if replay, found, err := o.resolveOtherAttempts(ctx, command, now); err != nil || found {
-		return replay, err
-	}
-	if !ownClaim {
-		claim = stepClaim{
-			ID: claimID, Namespace: stepClaimNamespace, CommandID: commandID,
-			OperationKey: command.IdempotencyKey, Incarnation: commandIncarnation(command),
-			Digest: append([]byte(nil), digest...), Owner: o.owner, LeaseUntil: leaseUntil, LeaseToken: 1,
-			Status: claimStatusPending, CreatedAt: now, UpdatedAt: now,
-			ExpiresAt: now.Add(o.receiptTTL),
-		}
-		if _, err := o.claims().InsertOne(ctx, claim); err != nil {
+	if state.Status == operationStatusPending {
+		// 第 9 步：当前尝试已有回执（原生：投影已提交，还没结算）就先结算，再按它的结论判定。
+		completion, found, err := o.receipt(ctx, state.CommandID, state.Digest)
+		if err != nil {
 			return Reservation{}, err
 		}
-		return o.activeReservation(commandID, digest, 1), nil
-	}
-	filter := bson.M{"_id": claimID, "digest": digest, "status": claimStatusPending, "lease_token": claim.LeaseToken, "lease_until": bson.M{"$lte": now}}
-	update := bson.M{"$set": bson.M{
-		"owner": o.owner, "lease_until": leaseUntil, "updated_at": now,
-		"operation_key": command.IdempotencyKey, "incarnation": commandIncarnation(command),
-	}, "$inc": bson.M{"lease_token": 1}}
-	var renewed stepClaim
-	if err := o.claims().FindOneAndUpdate(ctx, filter, update, &renewed, fmongo.FindOneAndUpdateOption{ReturnAfter: true}); err != nil {
-		if errors.Is(err, fmongo.ErrNotFound) {
-			return Reservation{Token: claim.LeaseToken, Duplicate: true}, nil
+		if found {
+			if state, err = o.settleFromReceipt(ctx, state, completion, now); err != nil {
+				return Reservation{}, err
+			}
 		}
+	}
+	if state.Status == operationStatusSettled && state.Result == operationResultSuccess {
+		// 成功在任何一生里都不重做：Resume 之后的新一生遇到旧一生已生效的步骤，同样回放它。
+		completion, err := DecodeCompletionEffect(state.Completion)
+		return Reservation{Duplicate: true, Completion: completion}, err
+	}
+	incarnation := commandIncarnation(command)
+	if refusal, ok := state.Refusals[refusalKey(incarnation)]; ok {
+		// 业务拒绝只在同一生里回放；Resume 的目的就是在修复原因之后重新执行。
+		completion, err := DecodeCompletionEffect(refusal.Completion)
+		return Reservation{Duplicate: true, Completion: completion}, err
+	}
+	if state.RefusalsDroppedThrough != nil && incarnation <= *state.RefusalsDroppedThrough {
+		// 这一生的拒绝可能已被剪掉，不能证明它没被拒绝过；协调器已前进至少两生，不再接收它的结果（方案 4.5）。
+		return Reservation{}, errAttemptSuperseded
+	}
+	if state.Status == operationStatusPending {
+		if state.LeaseUntil.After(now) {
+			return Reservation{}, errOperationAttemptInFlight
+		}
+		return o.grantLease(ctx, state, command, digest, now, true)
+	}
+	// 当前尝试是可重试失败，或别的生的拒绝：那次尝试已有结论且没有生效，这次执行。
+	return o.grantLease(ctx, state, command, digest, now, false)
+}
+
+func (o *stepOperationInbox) loadOperation(ctx context.Context, key string) (stepOperation, bool, error) {
+	var state stepOperation
+	err := o.operations().FindOne(ctx, bson.M{"_id": key}, &state)
+	if errors.Is(err, fmongo.ErrNotFound) {
+		return stepOperation{}, false, nil
+	}
+	return state, err == nil, err
+}
+
+// createOperation 写这个操作的第一份状态文档：本命令是当前尝试，token 1。
+func (o *stepOperationInbox) createOperation(ctx context.Context, command Command, digest []byte, now time.Time) (Reservation, error) {
+	state := stepOperation{
+		ID: command.IdempotencyKey, Version: 1,
+		CommandID: command.ID, Incarnation: commandIncarnation(command), Digest: append([]byte(nil), digest...),
+		Owner: o.owner, LeaseToken: 1, LeaseUntil: o.leaseUntil(command, now), DeadlineAt: command.DeadlineAt.UTC(),
+		Status:    operationStatusPending,
+		CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(o.receiptTTL),
+	}
+	if _, err := o.operations().InsertOne(ctx, state); err != nil {
 		return Reservation{}, err
 	}
-	return o.activeReservation(commandID, digest, renewed.LeaseToken), nil
+	return o.activeReservation(command.IdempotencyKey, command.ID, digest, 1), nil
 }
 
-// guardOperation 写操作实例守卫文档。同一操作实例的两个 Reserve 事务都写它，Mongo 只让一个提交，
-// 另一个以写冲突（TransientTransactionError）重跑，重跑时就能看到前者写下的 claim；首次创建时
-// 并发 upsert 撞唯一键，由 reserve 的外层循环重试。
-func (o *stepOperationInbox) guardOperation(ctx context.Context, operationKey string, now time.Time) error {
-	guardID := stepOperationNamespace + "/" + operationKey
-	update := bson.M{
-		"$set": bson.M{
-			"namespace": stepOperationNamespace, "command_id": operationKey, "status": claimStatusOperationGuard,
-			"updated_at": now, "expires_at": now.Add(o.receiptTTL),
-		},
-		"$inc": bson.M{"seq": 1},
+// grantLease 把本命令设为当前尝试并授予新租约（token 加一，旧尝试的生效点从此不再匹配）。takeover=true 表示
+// 接替一次租约过期、结论未知的其他尝试：把它记进 superseded，它的迟到投递不再执行。
+// 写入以读到的 version 做 CAS；在事务里与并发写同一文档写冲突，输家整笔重跑、重新判定。
+func (o *stepOperationInbox) grantLease(ctx context.Context, state stepOperation, command Command, digest []byte, now time.Time, takeover bool) (Reservation, error) {
+	superseded := slices.Clone(state.Superseded)
+	if takeover {
+		// 被接替的尝试记下来，它的迟到投递不再执行；只留最近的 maxRememberedSuperseded 条（方案 4.4）。
+		superseded = append(superseded, supersededAttempt{CommandID: state.CommandID, By: command.ID, DeadlineAt: state.DeadlineAt})
+		if len(superseded) > maxRememberedSuperseded {
+			superseded = superseded[len(superseded)-maxRememberedSuperseded:]
+		}
 	}
-	var guard bson.M
-	return o.claims().FindOneAndUpdate(ctx, bson.M{"_id": guardID}, update, &guard, fmongo.FindOneAndUpdateOption{Upsert: true, ReturnAfter: true})
-}
-
-// resolveOtherAttempts 处理同一操作实例的其他尝试（见 reserveInTransaction 第 4 步）。found=true 时
-// 返回的 Reservation 是回放；err 为 errOperationAttemptInFlight 时调用方稍后重试。
-func (o *stepOperationInbox) resolveOtherAttempts(ctx context.Context, command Command, now time.Time) (Reservation, bool, error) {
-	incarnation := commandIncarnation(command)
-	claims, err := o.operationClaims(ctx, command.IdempotencyKey, true, incarnation)
+	refusals, droppedThrough := pruneRefusals(state.Refusals, state.RefusalsDroppedThrough)
+	token := state.LeaseToken + 1
+	set := bson.M{
+		"version": state.Version + 1, "command_id": command.ID, "incarnation": commandIncarnation(command),
+		"digest": append([]byte(nil), digest...), "owner": o.owner, "lease_token": token,
+		"lease_until": o.leaseUntil(command, now), "deadline_at": command.DeadlineAt.UTC(), "status": operationStatusPending,
+		"superseded": superseded, "refusals": refusals, "updated_at": now, "expires_at": now.Add(o.receiptTTL),
+	}
+	if droppedThrough != nil {
+		set["refusals_dropped_through"] = *droppedThrough
+	}
+	update := bson.M{"$set": set, "$unset": bson.M{"result": "", "completion": ""}}
+	result, err := o.operations().UpdateOne(ctx, bson.M{"_id": state.ID, "version": state.Version}, update)
 	if err != nil {
-		return Reservation{}, false, err
+		return Reservation{}, err
 	}
-	var refusal *Completion
-	var live []stepClaim
-	for i := range claims {
-		other := claims[i]
-		if other.CommandID == command.ID || other.Status == claimStatusSuperseded {
+	if result == nil || result.MatchedCount != 1 {
+		return Reservation{}, ErrConflict
+	}
+	if takeover {
+		metrics.IncCounter("saga.step_inbox.superseded_total", nil, 1)
+	}
+	return o.activeReservation(state.ID, command.ID, digest, token), nil
+}
+
+func (o *stepOperationInbox) leaseUntil(command Command, now time.Time) time.Time {
+	leaseUntil := now.Add(o.leaseDuration)
+	if command.DeadlineAt.Before(leaseUntil) {
+		leaseUntil = command.DeadlineAt.UTC()
+	}
+	return leaseUntil
+}
+
+// pruneRefusals 只留代际最大的 maxRememberedRefusalLives 生，返回剪枝后的表与被剪掉的最大代际（没剪且以前也没剪过时为 nil）。
+func pruneRefusals(refusals map[string]operationRefusal, droppedThrough *uint32) (map[string]operationRefusal, *uint32) {
+	kept := make(map[string]operationRefusal, len(refusals))
+	if len(refusals) <= maxRememberedRefusalLives {
+		for key, refusal := range refusals {
+			kept[key] = refusal
+		}
+		return kept, droppedThrough
+	}
+	lives := make([]uint32, 0, len(refusals))
+	byLife := make(map[uint32]string, len(refusals))
+	for key := range refusals {
+		life, err := strconv.ParseUint(key[1:], 10, 32)
+		if err != nil {
 			continue
 		}
-		completion, settled, err := o.attemptResult(ctx, other)
-		if err != nil {
-			return Reservation{}, false, err
-		}
-		switch {
-		case settled && completion.Success:
-			// 成功在任何一生里都不重做：Resume 之后的新一生遇到旧一生已生效的步骤，同样回放它。
-			return Reservation{Duplicate: true, Completion: completion}, true, nil
-		case settled && !completion.Retryable:
-			// 业务拒绝只在同一生里回放；Resume 的目的就是在修复原因之后重新执行。
-			if other.Incarnation == incarnation && refusal == nil {
-				refusal = &completion
+		lives = append(lives, uint32(life))
+		byLife[uint32(life)] = key
+	}
+	slices.Sort(lives)
+	cut := len(lives) - maxRememberedRefusalLives
+	for i, life := range lives {
+		if i < cut {
+			if droppedThrough == nil || life > *droppedThrough {
+				dropped := life
+				droppedThrough = &dropped
 			}
-		case settled:
-			// 可重试失败：那次尝试已有结论且没有生效，允许新尝试执行。
-		default:
-			live = append(live, other)
+			continue
 		}
+		kept[byLife[life]] = refusals[byLife[life]]
 	}
-	if refusal != nil {
-		return Reservation{Duplicate: true, Completion: *refusal}, true, nil
-	}
-	for _, other := range live {
-		if other.LeaseUntil.After(now) {
-			return Reservation{}, false, errOperationAttemptInFlight
-		}
-		if err := o.supersede(ctx, other, command.ID, now); err != nil {
-			return Reservation{}, false, err
-		}
-	}
-	return Reservation{}, false, nil
+	return kept, droppedThrough
 }
 
-// operationClaims 读同一操作实例里会影响判定的 claim（见 operationClaimsFilter）。refusalsOf 是要回放拒绝的那一生；
-// sameLifeRefusals=false 时不读任何拒绝（operationSuccess）。
-func (o *stepOperationInbox) operationClaims(ctx context.Context, operationKey string, sameLifeRefusals bool, refusalsOf uint32) ([]stepClaim, error) {
-	var claims []stepClaim
-	filter := operationClaimsFilter(operationKey, sameLifeRefusals, refusalsOf)
-	// 两类各有上限：取到 Limit 份说明至少一类超了；没取满时两类的份数都是准确的。
-	if err := o.claims().Find(ctx, filter, &claims, fmongo.FindOption{Limit: maxDecisiveOperationClaims + maxLegacyOperationClaims + 1}); err != nil {
-		return nil, err
-	}
-	legacy := 0
-	for i := range claims {
-		if claims[i].Status == claimStatusCompleted && claims[i].Outcome == "" {
-			legacy++
+func (state stepOperation) supersededAttempt(commandID string) bool {
+	for _, attempt := range state.Superseded {
+		if attempt.CommandID == commandID {
+			return true
 		}
 	}
-	if legacy > maxLegacyOperationClaims {
-		return nil, fmt.Errorf("%w: operation %s has more than %d attempts completed before the claim outcome was recorded", ErrConflict, operationKey, maxLegacyOperationClaims)
-	}
-	if len(claims)-legacy > maxDecisiveOperationClaims {
-		return nil, fmt.Errorf("%w: operation %s has more than %d undecided, successful or same-life refused attempts", ErrConflict, operationKey, maxDecisiveOperationClaims)
-	}
-	return claims, nil
+	return false
 }
 
-// operationClaimsFilter 选出同一操作实例里有影响的 claim（RR-20261006-15）：
-//
-//   - pending：还没结论的尝试（在途要等，过期要接替），以及原生投影已写回执、还没标记的尝试；
-//   - 成功（任何一生）：要回放；
-//   - refusalsOf 这一生的拒绝：同一生里回放；
-//   - 没有 outcome 的 completed：升级前写的，结论只能读 completion 才知道。
-//
-// 可重试失败、被接替的尝试、旧一生的拒绝不影响判定（resolveOtherAttempts 跳过它们），也就不读取——它们随尝试与
-// Resume 无界累积，正是旧实现超过上限的来源。
-//
-// 有界性：一次 Reserve 只有在处理完其他尝试之后才写自己的 claim（接替全部过期的 pending，有在途的就不写），守卫让同一
-// 操作实例的 Reserve 串行，所以任何时刻没有结论的 pending 至多一份，加上结论已写、尚未被下一次 Reserve 标记的少数几份；
-// 一个操作至多生效一次（U-0280），成功至多一份；同一生出现拒绝之后，后来的尝试回放它、不再写 claim，拒绝至多一份；
-// 没有 outcome 的只有升级前与混跑期间写的，受旧进程自己的上限约束、单独计数（maxLegacyOperationClaims，RR-20261006-16），
-// 并随 TTL 消失。所以带 outcome 的结果集是个小常数，与尝试次数、Resume 次数无关，两个上限都只在数据异常时触发。
-//
-// 第 0 代的 incarnation：新建 claim 时带 omitempty 不写这个字段，接管自己过期的 claim 时 $set 写成 0，两种都要匹配。
-func operationClaimsFilter(operationKey string, sameLifeRefusals bool, refusalsOf uint32) bson.M {
-	decisive := bson.A{
-		bson.M{"status": claimStatusPending},
-		bson.M{"status": claimStatusCompleted, "outcome": claimOutcomeSuccess},
-		bson.M{"status": claimStatusCompleted, "outcome": bson.M{"$exists": false}},
+// settleFromReceipt 在 Reserve 里结算一次已有回执、状态仍 pending 的当前尝试（原生：投影已提交、还没结算），返回结算后的状态。
+func (o *stepOperationInbox) settleFromReceipt(ctx context.Context, state stepOperation, completion Completion, now time.Time) (stepOperation, error) {
+	effect, err := NewCompletionEffect(completion)
+	if err != nil {
+		return stepOperation{}, err
 	}
-	if sameLifeRefusals {
-		decisive = append(decisive, bson.M{"status": claimStatusCompleted, "outcome": claimOutcomeRefused, "incarnation": refusalsOf})
-		if refusalsOf == 0 {
-			// 第 0 代的另一种写法单列一支，不写成嵌套的 $or：嵌套 $or 让优化器给这一支改选 claim_expired，
-			// 扫这个集合全部 completed claim（RR-20261006-15 复核补修，explain 实测）。
-			decisive = append(decisive, bson.M{"status": claimStatusCompleted, "outcome": claimOutcomeRefused, "incarnation": bson.M{"$exists": false}})
+	result, err := o.operations().UpdateOne(ctx, bson.M{"_id": state.ID, "version": state.Version}, settleUpdate(state.Incarnation, state.CommandID, completion, effect.Payload, now, o.receiptTTL))
+	if err != nil {
+		return stepOperation{}, err
+	}
+	if result == nil || result.MatchedCount != 1 {
+		return stepOperation{}, ErrConflict
+	}
+	state.Version++
+	state.Status, state.Result, state.Completion = operationStatusSettled, operationResult(completion), effect.Payload
+	if state.Result == operationResultRefused {
+		refusals := make(map[string]operationRefusal, len(state.Refusals)+1)
+		for key, refusal := range state.Refusals {
+			refusals[key] = refusal
 		}
+		refusals[refusalKey(state.Incarnation)] = operationRefusal{CommandID: state.CommandID, Completion: effect.Payload}
+		state.Refusals = refusals
 	}
-	return bson.M{"namespace": stepClaimNamespace, "operation_key": operationKey, "$or": decisive}
+	return state, nil
 }
 
-// claimOutcome 是一份 completion 写进 claim 的结论。
-func claimOutcome(completion Completion) string {
+// settleUpdate 是写结论的更新：当前尝试 settled，存下 completion，租约置为过去；拒绝同时记进本生的 refusals。
+func settleUpdate(incarnation uint32, commandID string, completion Completion, payload []byte, now time.Time, ttl time.Duration) bson.M {
+	set := bson.M{
+		"status": operationStatusSettled, "result": operationResult(completion), "completion": payload,
+		"lease_until": time.Unix(0, 0).UTC(), "updated_at": now, "expires_at": now.Add(ttl),
+	}
+	if operationResult(completion) == operationResultRefused {
+		set["refusals."+refusalKey(incarnation)] = operationRefusal{CommandID: commandID, Completion: payload}
+	}
+	return bson.M{"$set": set, "$inc": bson.M{"version": 1}}
+}
+
+// operationResult 是一份 completion 的结论。
+func operationResult(completion Completion) string {
 	switch {
 	case completion.Success:
-		return claimOutcomeSuccess
+		return operationResultSuccess
 	case completion.Retryable:
-		return claimOutcomeRetryable
+		return operationResultRetryable
 	default:
-		return claimOutcomeRefused
+		return operationResultRefused
 	}
 }
 
-// operationSuccess 找同一操作实例另一次尝试已经生效的成功（任何一生）。只读：不写守卫、不接替，
-// 供不会执行的投递（过期、认领前过截止、被 fence）在 ack 前把成功重发给协调器（见 replayOperationSuccess）。
+// operationSuccess 找同一操作实例另一次尝试已经生效的成功（任何一生）。只读判定、不授予租约，供不会执行的投递
+// （过期、认领前过截止、被 fence、被接替）在 ack 前把成功重发给协调器（见 replayOperationSuccess）。
+// 当前尝试已投影、还没结算时顺手结算（与 Reserve 第 9 步相同）。
 func (o *stepOperationInbox) operationSuccess(ctx context.Context, command Command) (Completion, bool, error) {
-	// 旧实现在这里用同一个 Limit 截断而不报错，尝试多了可能看不到已经生效的成功（RR-20261006-15）；
-	// 现在只读有影响的 claim，并与 Reserve 一样在超过上限时报错。
-	claims, err := o.operationClaims(ctx, command.IdempotencyKey, false, 0)
-	if err != nil {
+	state, exists, err := o.loadOperation(ctx, command.IdempotencyKey)
+	if err != nil || !exists || state.CommandID == command.ID {
 		return Completion{}, false, err
 	}
-	for i := range claims {
-		other := claims[i]
-		if other.CommandID == command.ID || other.Status == claimStatusSuperseded {
-			continue
+	switch state.Status {
+	case operationStatusSettled:
+		if state.Result != operationResultSuccess {
+			return Completion{}, false, nil
 		}
-		completion, settled, err := o.attemptResult(ctx, other)
-		if err != nil {
-			return Completion{}, false, err
-		}
-		if settled && completion.Success {
-			return completion, true, nil
-		}
-	}
-	return Completion{}, false, nil
-}
-
-// attemptResult 读另一次尝试的结论：claim 已标 completed 就用它保存的 completion；仍 pending 时看回执
-// （原生：投影已写回执、claim 还没来得及标记），有回执顺手标记。settled=false 表示还没有结论。
-func (o *stepOperationInbox) attemptResult(ctx context.Context, claim stepClaim) (Completion, bool, error) {
-	switch claim.Status {
-	case claimStatusCompleted:
-		completion, err := DecodeCompletionEffect(claim.Completion)
+		completion, err := DecodeCompletionEffect(state.Completion)
 		return completion, err == nil, err
-	case claimStatusPending:
+	case operationStatusPending:
 	default:
 		return Completion{}, false, ErrConflict
 	}
-	completion, found, err := o.receipt(ctx, claim.CommandID, claim.Digest)
+	completion, found, err := o.receipt(ctx, state.CommandID, state.Digest)
 	if err != nil || !found {
 		return Completion{}, false, err
 	}
-	if err := o.markCompleted(ctx, claim.CommandID, completion); err != nil {
+	if err := o.markCompleted(ctx, state.ID, state.CommandID, completion); err != nil {
 		return Completion{}, false, err
 	}
-	return completion, true, nil
+	return completion, completion.Success, nil
 }
 
-// supersede 让一次租约已过期、还没有回执的尝试永远失效：status 改为 superseded 且 lease_token 加一。
-// 它与那次尝试生效点的条件写写同一文档，二者只能有一个提交：生效点先提交，这里的事务重跑后会读到结论；
-// 这里先提交，生效点的条件写不再匹配（原生记录投影时被跳过，受影响实体按 RR-20260926-30 驱逐重载；
-// Mongo 步骤的 handler 事务中止）。
-func (o *stepOperationInbox) supersede(ctx context.Context, claim stepClaim, by string, now time.Time) error {
-	filter := bson.M{"_id": claim.ID, "status": claimStatusPending, "lease_token": claim.LeaseToken, "lease_until": bson.M{"$lte": now}}
-	update := bson.M{"$set": bson.M{"status": claimStatusSuperseded, "superseded_by": by, "updated_at": now}, "$inc": bson.M{"lease_token": 1}}
-	result, err := o.claims().UpdateOne(ctx, filter, update)
-	if err != nil {
-		return err
-	}
-	if result == nil || result.MatchedCount != 1 {
-		return ErrConflict
-	}
-	metrics.IncCounter("saga.step_inbox.superseded_total", nil, 1)
-	return nil
-}
-
-// settleOwnClaim 是 Mongo 步骤的生效点（saga 方向 ②）：在 handler 的 Mongo 事务里、业务写之后，对自己的 claim 做
-// 条件写（owner、token、pending、租约未过期）并存下 completion。不匹配说明租约已过期（命令截止已过）或已被较新的
-// 尝试接替，返回 errAttemptFenced，调用方让整笔事务中止。条件在事务里最后一次写时检查，剩下的窗口是提交本身的延迟，
-// 与原生投影的条件写相同。
-func (o *stepOperationInbox) settleOwnClaim(ctx context.Context, reservation Reservation, completion Completion) error {
+// settleOwnAttempt 是 Mongo 步骤的生效点（saga 方向 ②）：在 handler 的 Mongo 事务里、业务写之后，对状态文档做条件写
+// （当前尝试是自己、owner、token、pending、租约未过期）并存下 completion。不匹配说明租约已过期（命令截止已过）或已被
+// 较新的尝试接替，返回 errAttemptFenced，调用方让整笔事务中止。条件在事务里最后一次写时检查，剩下的窗口是提交本身的
+// 延迟，与原生投影的条件写相同。
+func (o *stepOperationInbox) settleOwnAttempt(ctx context.Context, reservation Reservation, completion Completion) error {
 	effect, err := NewCompletionEffect(completion)
 	if err != nil {
 		return err
 	}
 	now := o.now().UTC()
 	filter := bson.M{
-		"_id": stepClaimID(reservation.commandID), "digest": reservation.digest, "owner": reservation.owner,
-		"lease_token": reservation.Token, "status": claimStatusPending, "lease_until": bson.M{"$gt": now},
+		"_id": reservation.operationKey, "command_id": reservation.commandID, "digest": reservation.digest, "owner": reservation.owner,
+		"lease_token": reservation.Token, "status": operationStatusPending, "lease_until": bson.M{"$gt": now},
 	}
-	result, err := o.claims().UpdateOne(ctx, filter, bson.M{"$set": bson.M{
-		"status": claimStatusCompleted, "outcome": claimOutcome(completion), "completion": effect.Payload, "lease_until": time.Unix(0, 0).UTC(), "updated_at": now,
-		"expires_at": now.Add(o.receiptTTL),
-	}})
+	incarnation := commandIDIncarnation(reservation.operationKey, reservation.commandID)
+	result, err := o.operations().UpdateOne(ctx, filter, settleUpdate(incarnation, reservation.commandID, completion, effect.Payload, now, o.receiptTTL))
 	if err != nil {
 		return err
 	}
@@ -488,6 +473,19 @@ func (o *stepOperationInbox) settleOwnClaim(ctx context.Context, reservation Res
 	return nil
 }
 
+// markCompleted 在读到一次尝试的权威回执之后写下它的结论（原生步骤：投影写回执，结论由之后的 Reserve / Replay 写）。
+// 只对仍是当前尝试、仍 pending 的状态生效；已结算或已不是当前尝试时什么都不做（回执仍是权威、可回放）。
+func (o *stepOperationInbox) markCompleted(ctx context.Context, operationKey, commandID string, completion Completion) error {
+	effect, err := NewCompletionEffect(completion)
+	if err != nil {
+		return err
+	}
+	now := o.now().UTC()
+	filter := bson.M{"_id": operationKey, "command_id": commandID, "status": operationStatusPending}
+	_, err = o.operations().UpdateOne(ctx, filter, settleUpdate(commandIDIncarnation(operationKey, commandID), commandID, completion, effect.Payload, now, o.receiptTTL))
+	return err
+}
+
 // commandIncarnation 从协调器生成的 CommandID（operationKey:attempt 或 operationKey:rN:attempt）取出
 // Resume 代际；不是这个格式的 CommandID（测试或手工命令）按第 0 代处理。解析与协调器核对 completion 代际
 // 用同一个函数（commandIDIncarnation，B1），两边对“同一生”的判断不会分叉。
@@ -495,10 +493,10 @@ func commandIncarnation(command Command) uint32 {
 	return commandIDIncarnation(command.IdempotencyKey, command.ID)
 }
 
-// releaseLease 交还本次投递刚拿到、但没有用上的租约：把 lease_until 设为现在，只对仍属于这个
-// owner/token 的 pending claim 生效。调用方要确定这个租约下没有、也不会再有生效的写：原生步骤只在 handler 以
+// releaseLease 交还本次投递刚拿到、但没有用上的租约：把 lease_until 设为现在，只对仍是当前尝试、仍属于这个
+// owner/token 的 pending 状态生效。调用方要确定这个租约下没有、也不会再有生效的写：原生步骤只在 handler 以
 // coredata.ErrFencedEntityPending 失败时调用（Nest 事务在 WAL 准入前整体回滚，RR-20260926-30）；Mongo 步骤在
-// handler 事务失败后调用（事务没有提交；提交结果未知时 claim 若已 completed，条件不匹配，不改动）。不交还的话，
+// handler 事务失败后调用（事务没有提交；提交结果未知时状态若已 settled，条件不匹配，不改动）。不交还的话，
 // 之后的重投都会读到“租约有效”，一直等到本次租约自然过期。
 func (o *stepOperationInbox) releaseLease(ctx context.Context, reservation Reservation) error {
 	if o == nil || o.client == nil || reservation.Duplicate || reservation.Token == 0 || reservation.commandID == "" {
@@ -506,36 +504,22 @@ func (o *stepOperationInbox) releaseLease(ctx context.Context, reservation Reser
 	}
 	now := o.now().UTC()
 	filter := bson.M{
-		"_id": stepClaimID(reservation.commandID), "digest": reservation.digest,
-		"owner": reservation.owner, "lease_token": reservation.Token, "status": claimStatusPending,
+		"_id": reservation.operationKey, "command_id": reservation.commandID, "digest": reservation.digest,
+		"owner": reservation.owner, "lease_token": reservation.Token, "status": operationStatusPending,
 	}
-	_, err := o.claims().UpdateOne(ctx, filter, bson.M{"$set": bson.M{"lease_until": now, "updated_at": now}})
+	_, err := o.operations().UpdateOne(ctx, filter, bson.M{"$set": bson.M{"lease_until": now, "updated_at": now}, "$inc": bson.M{"version": 1}})
 	return err
 }
 
-func (o *stepOperationInbox) activeReservation(commandID string, digest []byte, token uint64) Reservation {
+func (o *stepOperationInbox) activeReservation(operationKey, commandID string, digest []byte, token uint64) Reservation {
 	return Reservation{
-		Token: token, commandID: commandID, owner: o.owner,
+		Token: token, operationKey: operationKey, commandID: commandID, owner: o.owner,
 		digest: append([]byte(nil), digest...),
 	}
 }
 
-func (o *stepOperationInbox) markCompleted(ctx context.Context, commandID string, completion Completion) error {
-	effect, err := NewCompletionEffect(completion)
-	if err != nil {
-		return err
-	}
-	now := o.now().UTC()
-	// claim 不存在（回执比 claim 活得久、或是升级前写的回执）时不报错：回执仍是权威、可回放。
-	_, err = o.claims().UpdateOne(ctx, bson.M{"_id": stepClaimID(commandID)}, bson.M{"$set": bson.M{
-		"status": claimStatusCompleted, "outcome": claimOutcome(completion), "completion": effect.Payload, "lease_until": time.Unix(0, 0).UTC(), "updated_at": now,
-		"expires_at": now.Add(o.receiptTTL),
-	}})
-	return err
-}
-
-func (o *stepOperationInbox) claims() fmongo.ICollection {
-	return o.client.Database(o.database).Collection(o.claimCollection)
+func (o *stepOperationInbox) operations() fmongo.ICollection {
+	return o.client.Database(o.database).Collection(o.operationCollection)
 }
 
 func (reservation Reservation) String() string {

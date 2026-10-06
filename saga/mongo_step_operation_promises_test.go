@@ -8,7 +8,7 @@ package saga
 //
 //  1. 尝试 k 已提交、结果没送达，协调器发出 k+1：k+1 不执行，回放 k 的结果（CommandID 是 k 的）。
 //  2. 尝试 k 的事务在途（业务写已做、未提交），k+1 到达：k 的租约有效时 k+1 不执行；k 过了截止，k+1 接替并执行；
-//     k 之后再想提交，事务里对自己 claim 的条件写不再匹配，整笔中止。
+//     k 之后再想提交，事务里对操作状态文档的条件写不再匹配，整笔中止。
 //
 // runMongoStepOperationCases 同时跑在 mongotest 与真实 Mongo 副本集上（mongo_step_operation_real_mongo_integration_test.go）。
 

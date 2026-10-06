@@ -76,11 +76,11 @@ func TestNativeStepCancellationAndFenceRecovery(t *testing.T) {
 			if err := client.handler(firstCtx, message); !errors.Is(err, want) {
 				t.Fatalf("first delivery=%v", err)
 			}
-			var claim dataEngineClaim
-			if err := inbox.claims().FindOne(ctx, bson.M{"_id": dataEngineStepNamespace + "/" + command.ID}, &claim); err != nil {
+			var claim stepOperation
+			if err := inbox.operations().FindOne(ctx, bson.M{"_id": command.IdempotencyKey}, &claim); err != nil {
 				t.Fatal(err)
 			}
-			if claim.LeaseToken != 1 || claim.Status != claimStatusPending {
+			if claim.CommandID != command.ID || claim.LeaseToken != 1 || claim.Status != operationStatusPending {
 				t.Fatalf("first claim=%+v", claim)
 			}
 			if scenario == "cancelled_delivery" {
@@ -112,7 +112,7 @@ func TestNativeStepCancellationAndFenceRecovery(t *testing.T) {
 			if scenario == "fenced_before_wal" && (calls != 2 || len(tokens) != 2 || tokens[1] != tokens[0]+1) {
 				t.Fatalf("fence recovery did not acquire new generation: calls=%d tokens=%v", calls, tokens)
 			}
-			if err := inbox.claims().FindOne(ctx, bson.M{"_id": dataEngineStepNamespace + "/" + command.ID}, &claim); err != nil || claim.Status != claimStatusCompleted {
+			if err := inbox.operations().FindOne(ctx, bson.M{"_id": command.IdempotencyKey}, &claim); err != nil || claim.CommandID != command.ID || claim.Status != operationStatusSettled {
 				t.Fatalf("claim not settled=%+v err=%v", claim, err)
 			}
 		})

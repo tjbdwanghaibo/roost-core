@@ -29,9 +29,9 @@ import (
 // 服务）不受这个保证：被 fence 中止的尝试可能已经发出调用，这类步骤仍要按 IdempotencyKey 幂等。
 type StepHandler func(context.Context, Command) (Completion, error)
 
-// MongoCommandInbox 是 Mongo 步骤的收件箱（saga 方向 ②）。与原生步骤共用操作实例的 claim / 守卫 / 判定
-// （stepOperationInbox，claim 与守卫在 `<collection>_claims`），回执仍以 CommandID 为 `_id` 写在 collection 里（格式不变）。
-// 生效点是 handler 的 Mongo 事务：业务写、对自己 claim 的条件写（settleOwnClaim）与回执在同一事务提交。
+// MongoCommandInbox 是 Mongo 步骤的收件箱（saga 方向 ②）。与原生步骤共用操作实例的状态文档与判定
+// （stepOperationInbox，状态文档在 `<collection>_operations`），回执仍以 CommandID 为 `_id` 写在 collection 里（格式不变）。
+// 生效点是 handler 的 Mongo 事务：业务写、对状态文档的条件写（settleOwnAttempt）与回执在同一事务提交。
 type MongoCommandInbox struct {
 	stepOperationInbox
 	collection string
@@ -40,14 +40,14 @@ type MongoCommandInbox struct {
 // CommandInboxOptions 配置 MongoCommandInbox。
 type CommandInboxOptions struct {
 	ReceiptTTL time.Duration
-	// Owner 是这个收件箱实例在 claim 上的名字，同一操作实例的尝试据此区分租约持有者；缺省 saga-mongo-inbox-<随机 ID>。
+	// Owner 是这个收件箱实例在状态文档租约上的名字，同一操作实例的尝试据此区分租约持有者；缺省 saga-mongo-inbox-<随机 ID>。
 	Owner string
 	// LeaseDuration 是一次尝试的租约上限，实际租约再封顶到命令截止；缺省 1 分钟。
 	LeaseDuration time.Duration
 }
 
-// mongoInboxClaimSuffix：Mongo 步骤的 claim / 守卫集合是收件箱集合名加这个后缀（与回执分开，回执格式不变）。
-const mongoInboxClaimSuffix = "_claims"
+// mongoInboxOperationSuffix：Mongo 步骤的操作状态文档集合是收件箱集合名加这个后缀（与回执分开，回执格式不变）。
+const mongoInboxOperationSuffix = "_operations"
 
 func NewMongoCommandInbox(client fmongo.IMongo, database, collection string, options ...CommandInboxOptions) (*MongoCommandInbox, error) {
 	database = strings.TrimSpace(database)
@@ -73,7 +73,7 @@ func NewMongoCommandInbox(client fmongo.IMongo, database, collection string, opt
 	}
 	inbox := &MongoCommandInbox{collection: collection}
 	inbox.stepOperationInbox = stepOperationInbox{
-		client: client, database: database, claimCollection: collection + mongoInboxClaimSuffix,
+		client: client, database: database, operationCollection: collection + mongoInboxOperationSuffix,
 		owner: option.Owner, leaseDuration: option.LeaseDuration, receiptTTL: option.ReceiptTTL,
 		now: time.Now, receipt: inbox.findReceipt,
 	}
@@ -88,7 +88,7 @@ func (i *MongoCommandInbox) EnsureInfrastructure(ctx context.Context) error {
 	if err := i.collectionRef().EnsureIndexes(ctx, []fmongo.IndexModel{{Keys: bson.D{{Key: "created_at", Value: 1}}, Name: "ttl_created_at", TTL: int32(ttl)}}); err != nil {
 		return err
 	}
-	return i.ensureClaimIndexes(ctx)
+	return i.ensureOperationIndexes(ctx)
 }
 
 // Handle 执行一次 Mongo 步骤尝试（SAGA.md「原生步骤执行契约」）：
@@ -96,7 +96,7 @@ func (i *MongoCommandInbox) EnsureInfrastructure(ctx context.Context) error {
 //  1. Reserve 事务（与原生步骤同一份判定）：本命令已有回执 → 回放；同一操作实例另一次尝试已成功（任何一生）或
 //     本生已拒绝 → 回放那次的 completion（CommandID 是那次的），不执行；另一次尝试或同一命令的另一次投递持有有效租约
 //     → errOperationAttemptInFlight；租约过期 → 接替；命令已过截止 → ErrCommandExpired；被接替 → errAttemptSuperseded。
-//  2. 执行事务：handler → 对自己 claim 的条件写（租约未过期、未被接替）→ 插入回执。条件写不匹配 → errAttemptFenced，
+//  2. 执行事务：handler → 对状态文档的条件写（仍是当前尝试、租约未过期）→ 插入回执。条件写不匹配 → errAttemptFenced，
 //     事务中止，业务写随之回滚。
 //
 // 执行事务失败时交还租约，重投能立刻重试。duplicate=true 表示返回的是已有结果的回放。
@@ -124,20 +124,16 @@ func (i *MongoCommandInbox) Handle(ctx context.Context, command Command, handler
 	}
 	completion, err := i.execute(ctx, command, digest, reservation, handler)
 	if errors.Is(err, fmongo.ErrDuplicateKey) {
-		// 同一 CommandID 的回执已被别人先提交（升级前的进程不写 claim，只靠回执的唯一 _id 排他）：
-		// 本次事务已中止，回放那份回执。
-		//
-		// 这里不交还、也不标记自己的 claim（发版前审查观察，列为观察不改）：它仍是 pending、租约有效，但读 claim 的
-		// 每条路径都先看回执——同一命令重投在 reserveInTransaction 第 1 步读到回执回放并顺手标记 completed；同一操作
-		// 实例的其他尝试经 attemptResult 读到这份回执，标记后回放，不会因为这份租约等待（resolveOtherAttempts 只对
-		// 没有结论的尝试看租约）。交还租约没有可观察的差别，所以不加这一步。
+		// 同一 CommandID 的回执已被别人先提交：本次事务已中止，回放那份回执。正常不可达（同一命令的两次投递由租约
+		// 串行，后一次在 Reserve 第 1 步就读到回执），留作纵深防御。这里不交还租约：读状态文档的每条路径都先看回执
+		// （本命令重投在 Reserve 第 1 步回放并结算；其他尝试在第 9 步读到当前尝试的回执，结算后回放），不会因为这份租约等待。
 		if replayed, readErr := i.readReceipt(ctx, command.ID, digest); readErr == nil {
 			return replayed, true, nil
 		}
 	}
 	if err != nil {
-		// 事务没有提交（handler 失败、取消、fence）：交还租约，重投不必等它自然过期。提交结果未知时 claim 若已
-		// completed，交还的条件不匹配，不改动；重投读到回执回放。
+		// 事务没有提交（handler 失败、取消、fence）：交还租约，重投不必等它自然过期。提交结果未知时状态若已
+		// settled，交还的条件不匹配，不改动；重投读到回执回放。
 		if releaseErr := i.releaseLease(context.WithoutCancel(ctx), reservation); releaseErr != nil {
 			err = errors.Join(err, fmt.Errorf("saga inbox: release unused step lease: %w", releaseErr))
 		}
@@ -146,7 +142,7 @@ func (i *MongoCommandInbox) Handle(ctx context.Context, command Command, handler
 	return completion, false, nil
 }
 
-// execute 是 Mongo 步骤的生效点：handler 的业务写、对自己 claim 的条件写与回执在同一个 Mongo 事务里提交。
+// execute 是 Mongo 步骤的生效点：handler 的业务写、对状态文档的条件写与回执在同一个 Mongo 事务里提交。
 func (i *MongoCommandInbox) execute(ctx context.Context, command Command, digest []byte, reservation Reservation, handler StepHandler) (Completion, error) {
 	session, err := i.client.StartSession(ctx)
 	if err != nil {
@@ -176,7 +172,7 @@ func (i *MongoCommandInbox) execute(ctx context.Context, command Command, digest
 			return marshalErr
 		}
 		// fence 放在业务写之后、提交之前：检查与提交之间只剩提交本身的延迟。
-		if err := i.settleOwnClaim(txCtx, reservation, completion); err != nil {
+		if err := i.settleOwnAttempt(txCtx, reservation, completion); err != nil {
 			return err
 		}
 		_, insertErr := i.collectionRef().InsertOne(txCtx, commandReceiptDoc{ID: command.ID, Digest: digest, Completion: raw, CreatedAt: time.Now().UTC()})
@@ -418,7 +414,7 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 		}
 		if !time.Now().Before(command.DeadlineAt) {
 			// 过了截止时间：协调器已按超时自行进入下一次尝试或补偿，不再等这次尝试的回答，
-			// 这里也不再开始业务。有回执就把 claim 标成完成后 ack（completion 本身随投影的
+			// 这里也不再开始业务。有回执就结算状态文档后 ack（completion 本身随投影的
 			// effect 送达协调器）；没有回执同样 ack。
 			//
 			// 无回执时 ack 不会丢掉“已执行、回执还没投影”的尝试：那次尝试的结果走 WAL → 投影 →

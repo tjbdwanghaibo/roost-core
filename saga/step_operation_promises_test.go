@@ -659,18 +659,12 @@ func TestNativeStepLeaseNeverOutlivesTheCommandDeadline(t *testing.T) {
 	if _, err := inbox.Reserve(context.Background(), command); err != nil {
 		t.Fatal(err)
 	}
-	claim := func() dataEngineClaim {
-		var claim dataEngineClaim
-		if err := inboxClaims(client).FindOne(context.Background(), bson.M{"_id": dataEngineStepNamespace + "/" + command.ID}, &claim); err != nil {
-			t.Fatal(err)
-		}
-		return claim
-	}
-	if got := claim(); !got.LeaseUntil.Equal(command.DeadlineAt) || got.OperationKey != command.IdempotencyKey {
-		t.Fatalf("claim lease_until=%v operation=%q, want the command deadline %v (LeaseDuration 2m is longer)", got.LeaseUntil, got.OperationKey, command.DeadlineAt)
+	claim := func() stepOperation { return inboxOperation(t, client, command.IdempotencyKey) }
+	if got := claim(); !got.LeaseUntil.Equal(command.DeadlineAt) || got.CommandID != command.ID {
+		t.Fatalf("operation lease_until=%v current=%q, want the command deadline %v (LeaseDuration 2m is longer)", got.LeaseUntil, got.CommandID, command.DeadlineAt)
 	}
 	// 同一命令在截止前的接管（例如租约被交还）同样封顶。
-	if err := inbox.releaseLease(context.Background(), inbox.activeReservation(command.ID, mustCommandDigest(t, command), 1)); err != nil {
+	if err := inbox.releaseLease(context.Background(), inbox.activeReservation(command.IdempotencyKey, command.ID, mustCommandDigest(t, command), 1)); err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(time.Second)

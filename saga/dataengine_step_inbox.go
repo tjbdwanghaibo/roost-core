@@ -13,10 +13,12 @@ import (
 )
 
 const (
-	dataEngineClaimCollection   = "_dataengine_inbox_claims"
-	dataEngineReceiptCollection = "_dataengine_receipts"
-	// dataEngineStepNamespace 是 claim / 回执 / lease fence 文档 ID 的前缀；投影按 `saga-step/<CommandID>` 找 claim。
-	dataEngineStepNamespace = stepClaimNamespace
+	// dataEngineOperationCollection 是原生步骤的操作状态文档集合（每个操作实例一份，_id = IdempotencyKey）；
+	// 投影的 lease fence 指向这里（docs/feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md）。
+	dataEngineOperationCollection = "_dataengine_step_operations"
+	dataEngineReceiptCollection   = "_dataengine_receipts"
+	// dataEngineStepNamespace 是原生步骤回执的 ID 前缀：投影把回执写成 `saga-step/<CommandID>`。
+	dataEngineStepNamespace = StepReceiptNamespace
 )
 
 type DataEngineStepInboxOptions struct {
@@ -26,16 +28,13 @@ type DataEngineStepInboxOptions struct {
 	PollInterval  time.Duration
 }
 
-// DataEngineStepInbox 是原生步骤（Nest 事务 + DataEngine WAL）的收件箱。操作实例的 claim / 守卫 / 判定在
+// DataEngineStepInbox 是原生步骤（Nest 事务 + DataEngine WAL）的收件箱。操作实例的状态文档与判定在
 // stepOperationInbox（与 Mongo 步骤共用）；这里只有原生特有的部分：回执由投影写进 `_dataengine_receipts`，
-// 生效点是投影事务对 claim 的条件写（Bind 把 lease fence 绑进 Nest 事务）。
+// 生效点是投影事务对状态文档的条件写（Bind 把 lease fence 绑进 Nest 事务）。
 type DataEngineStepInbox struct {
 	stepOperationInbox
 	options DataEngineStepInboxOptions
 }
-
-// dataEngineClaim 是原生收件箱的 claim 文档（格式与 Mongo 步骤的相同）。
-type dataEngineClaim = stepClaim
 
 type reservationContextKey struct{}
 
@@ -75,7 +74,7 @@ func NewDataEngineStepInbox(client fmongo.IMongo, database string, options DataE
 	}
 	inbox := &DataEngineStepInbox{options: options}
 	inbox.stepOperationInbox = stepOperationInbox{
-		client: client, database: database, claimCollection: dataEngineClaimCollection,
+		client: client, database: database, operationCollection: dataEngineOperationCollection,
 		owner: options.Owner, leaseDuration: options.LeaseDuration, receiptTTL: options.ReceiptTTL,
 		now: time.Now, receipt: inbox.readReceipt,
 	}
@@ -86,7 +85,7 @@ func (inbox *DataEngineStepInbox) EnsureInfrastructure(ctx context.Context) erro
 	if inbox == nil || inbox.client == nil {
 		return ErrInvalidRecord
 	}
-	return inbox.ensureClaimIndexes(ctx)
+	return inbox.ensureOperationIndexes(ctx)
 }
 
 // Bind is called from inside the native Nest handler. The inbox owns the
@@ -103,12 +102,13 @@ func (inbox *DataEngineStepInbox) Bind(command Command, reservations ...Reservat
 	if err != nil {
 		return err
 	}
-	if reservation.commandID != command.ID || reservation.owner != inbox.options.Owner || !bytes.Equal(reservation.digest, digest) {
+	if reservation.operationKey != command.IdempotencyKey || reservation.commandID != command.ID || reservation.owner != inbox.options.Owner || !bytes.Equal(reservation.digest, digest) {
 		return fmt.Errorf("saga dataengine inbox: reservation does not match command identity")
 	}
+	// fence 指向这个操作的状态文档：投影时它必须仍以本命令为当前尝试、token 相同、pending、租约未过期。
 	fence := coredata.LeaseFence{
-		Database: inbox.database, Resource: dataEngineClaimCollection,
-		DocumentID: dataEngineStepNamespace + "/" + command.ID,
+		Database: inbox.database, Resource: dataEngineOperationCollection,
+		DocumentID: command.IdempotencyKey,
 		Owner:      reservation.owner, Token: reservation.Token, Digest: append([]byte(nil), digest...),
 	}
 	return BindCommand(command, inbox.now().UTC().Add(inbox.options.ReceiptTTL), fence)
@@ -147,7 +147,7 @@ func (inbox *DataEngineStepInbox) Replay(ctx context.Context, command Command) (
 	if err != nil || !found {
 		return completion, found, err
 	}
-	if err := inbox.markCompleted(ctx, command.ID, completion); err != nil {
+	if err := inbox.markCompleted(ctx, command.IdempotencyKey, command.ID, completion); err != nil {
 		return Completion{}, false, err
 	}
 	return completion, true, nil

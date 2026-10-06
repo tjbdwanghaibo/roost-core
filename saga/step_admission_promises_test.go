@@ -66,7 +66,7 @@ func TestStepConsumersAdmitBeforeTakingTheClaim(t *testing.T) {
 		if ran {
 			t.Fatal("the handler ran on a process that was refused admission")
 		}
-		if count := mongoClient.Collection("game", dataEngineClaimCollection).Len(); count != 0 {
+		if count := mongoClient.Collection("game", dataEngineOperationCollection).Len(); count != 0 {
 			t.Fatalf("a refused delivery left %d claim(s) behind; the owner cannot run the command until they expire", count)
 		}
 	})

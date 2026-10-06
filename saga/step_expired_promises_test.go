@@ -67,7 +67,7 @@ func TestExpiredStepCommandWithoutReceiptIsAcknowledgedNotRedelivered(t *testing
 		if grown := expiredUnexecuted() - before; grown != 1 {
 			t.Fatalf("saga.step.expired_unexecuted_total grew by %d, want 1: an acknowledged-without-running command must be countable", grown)
 		}
-		if count := mongoClient.Collection("game", dataEngineClaimCollection).Len(); count != 0 {
+		if count := mongoClient.Collection("game", dataEngineOperationCollection).Len(); count != 0 {
 			t.Fatalf("an expired command left %d claim(s) behind", count)
 		}
 		if client.subject != "" {

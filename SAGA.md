@@ -84,10 +84,10 @@ handler 的返回值不使用：原生步骤的结果是它在事务里 `EmitCom
 
 Entity mutation、`saga-step/CommandID` receipt、lease fence control receipt，以及 ID 为
 `saga-completion:{CommandID}` 的 completion effect 会形成同一个 CommitRecord。Mongo
-投影在同一事务里对 claim 做一次条件写（owner、lease token、digest、`pending`、
-`lease_until > now` 都匹配才写 `updated_at`）；不匹配就只写入幂等的 skipped transaction
-marker，不应用业务 mutation/effect，并让 WAL 安全 ACK。条件写让投影与另一 worker 的
-过期接管（`$inc lease_token`）写同一文档，二者只能有一个提交：租约到期附近不会出现
+投影在同一事务里对这个操作的状态文档（`_dataengine_step_operations`，`_id = IdempotencyKey`，见下文「操作状态文档」）
+做一次条件写（当前尝试的 owner、lease token、digest、`pending`、`lease_until > now` 都匹配才写 `updated_at`）；
+不匹配就只写入幂等的 skipped transaction marker，不应用业务 mutation/effect，并让 WAL 安全 ACK。条件写让投影与另一
+worker 的过期接管（换当前尝试、lease token 加一）写同一文档，二者只能有一个提交：租约到期附近不会出现
 “投影落库、接管也成功”的双执行（RR-20260926-30 §6）。控制 receipt 不进入业务 receipt
 collection。
 
@@ -118,19 +118,19 @@ receipt；同一 Nest 事务里若还有 Remote 实体的修改，DataEngine 在
 lease fence 在投影时失效会跳过整笔记录，而 Remote 写在准入时已经改了内存、占住写权限与
 分布式锁；生成 Entity 的 `RollbackRemoteCommit` 不保存跨实体前像，投影阶段无法撤销，旧实现
 下这笔 Remote 事务会一直得不到结论。这个拒绝不是业务 Completion：handler 返回错误后消息
-重投，同一 CommandID 的 claim 仍在租约内，重投得到 `Duplicate` 并等待 completion 直到步骤
+重投，同一 CommandID 仍是当前尝试、租约有效，重投得到 `Duplicate` 并等待 completion 直到步骤
 deadline，之后按 `Timeout` / `MaxAttempts` 重试、最终补偿，而不是立即得到业务拒绝。框架目前
 没有让原生步骤与 Remote 写原子提交的入口：Remote 实体的修改应放在 Saga 之外、以
 `IdempotencyKey` 幂等的 Remote 事务里，原生步骤只修改本地 Entity。
 
 handler 返回后不得直接 publish NATS；Mongo 投影负责原子保存 mutation、receipt 和
-outbox，独立 publisher 再投递 effect。重复 CommandID 由短租约 claim 协调，最终以
+outbox，独立 publisher 再投递 effect。重复 CommandID 由操作状态文档上的短租约协调，最终以
 receipt 为权威；同 ID 不同 digest 返回 `ErrIdentityConflict`。不同 CommandID、相同 IdempotencyKey 是同一操作实例的
 不同尝试，由下面的契约保证最多一次生效，业务 step 不需要再按 IdempotencyKey 自己做幂等。
-Reserve 读到 receipt 时顺手把 claim 标成 completed；这一步失败不改变 Reserve 的结论（receipt 仍是权威，
+Reserve 读到 receipt 时顺手把状态文档里这次尝试结算为 settled；这一步失败不改变 Reserve 的结论（receipt 仍是权威，
 写错误会让 Mongo 中止事务并由驱动重跑），但每次失败记 Warn（带 `command_id` 与原因）并累加
 `saga.step_inbox.mark_completed_error_total`。该计数持续增长、同一步骤反复 Duplicate 直到 deadline 时，
-检查 claim 集合的写入（权限、索引、文档校验）（RR-20260927-16）。
+检查操作状态文档集合的写入（权限、索引、文档校验）（RR-20260927-16）。
 
 raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo transaction 中；
 不要在这类 handler 中混用 Nest Entity 修改。它与原生步骤共用同一套操作实例契约（下文「Mongo 步骤」，saga 方向 ②）。两种 inbox 分开是为了保持各自的原子边界，
@@ -147,16 +147,16 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
 1. **最多生效一次的单位是操作实例**：saga + 步骤 + 方向（`Command.IdempotencyKey`，即 `<saga>:<phase>:<step>`）。
    一次操作可以有多次尝试（`MaxAttempts`，配置），每次尝试有自己的 `CommandID`；同一操作实例的所有尝试里**至多一次**
    让业务写、回执与 completion 落库。跨 Resume 的代际也算同一操作实例：新一生遇到旧一生已生效的成功会回放它。
-2. **每次尝试的生效窗口包含在协调器等它的窗口内**：claim 租约 `lease_until = min(now + LeaseDuration, Command.DeadlineAt)`。
+2. **每次尝试的生效窗口包含在协调器等它的窗口内**：租约 `lease_until = min(now + LeaseDuration, Command.DeadlineAt)`。
    协调器只在 `DeadlineAt` 之后才判这次尝试超时、放弃或发出下一次尝试；之后才投影的记录（kill -9 重启后的 WAL 重放、投影积压）
    lease fence 不再匹配，被跳过（受影响实体按 RR-20260926-30 驱逐重载），不留回执、不发 completion。
-3. **新尝试先看同一操作实例的其他尝试**（`DataEngineStepInbox.Reserve`，在一个 Mongo 事务里，同一操作实例的并发 Reserve 由
-   守卫文档 `saga-step-op/<IdempotencyKey>` 串行化）：
+3. **新尝试先看同一操作实例的其他尝试**（`DataEngineStepInbox.Reserve`，在一个 Mongo 事务里只读这个操作的状态文档，
+   同一操作实例的并发 Reserve 在这份文档上写冲突串行化，见「操作状态文档」）：
    - 已有**成功**回执（任何一生）或**本生的拒绝**（`Success=false, Retryable=false`）→ 不执行，把那次的 completion 经 saga 结果流
      重发给协调器（它的 completion effect 可能在退避期间被丢弃）；
    - 只有**可重试失败** → 那次尝试已有结论且没有生效，新尝试照常执行；
    - 仍 pending 且租约有效 → 不执行，返回可重试错误（nak 后重投），等它有结论；
-   - pending 且租约已过期 → **接替**（`status=superseded`、`lease_token+1`），它在 WAL 里未投影的记录随后被 fence 跳过；
+   - pending 且租约已过期 → **接替**（新尝试成为当前尝试、`lease_token+1`，被接替的记进 `superseded`），它在 WAL 里未投影的记录随后被 fence 跳过；
      被接替尝试的迟到投递直接 ack、不执行。
    - 过了自己截止的投递（U-0281 的过期 ack、Reserve 的 `ErrCommandExpired`）不执行，但 ack 前同样把同一操作实例已生效的
      **成功**经 saga 结果流重发：它可能是最后一次尝试，较早尝试的成功又在退避期间被丢弃，不重发就没人再送达（审查 2026-10-05）。
@@ -183,13 +183,13 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
 
 #### Mongo 步骤（2026-10-06 纳入）
 
-`MongoCommandInbox` 与 `DataEngineStepInbox` 共用 claim、守卫与判定代码（`saga/step_operation_inbox.go`），第 1～4 条逐条相同：
+`MongoCommandInbox` 与 `DataEngineStepInbox` 共用操作状态文档与判定代码（`saga/step_operation_inbox.go`），第 1～4 条逐条相同：
 新尝试先看同一操作实例的其他尝试（成功或本生的拒绝 → 回放，不执行；在途且租约有效 → nak 等待；租约过期 → 接替），租约封顶到命令截止。
 差别只在**生效点**：
 
-- **提交点是 handler 的 Mongo 事务**。`Handle` 先在一个 Reserve 事务里拿 claim，再开执行事务：handler 的业务写 →
-  对自己 claim 的条件写（owner、token、`pending`、`lease_until > now`，标 completed 并存 completion）→ 插入回执（`_id = CommandID`，格式不变）。
-  条件写不匹配（截止已过、已被接替）时整笔事务中止，业务写随之回滚；接替写的是同一个 claim 文档，两者只能有一个提交。
+- **提交点是 handler 的 Mongo 事务**。`Handle` 先在一个 Reserve 事务里拿租约，再开执行事务：handler 的业务写 →
+  对状态文档的条件写（当前尝试是自己、owner、token、`pending`、`lease_until > now`，结算为 settled 并存 completion）→ 插入回执（`_id = CommandID`，格式不变）。
+  条件写不匹配（截止已过、已被接替）时整笔事务中止，业务写随之回滚；接替写的是同一份状态文档，两者只能有一个提交。
   条件在事务最后一次写时检查，剩下的窗口是提交本身的延迟（与原生投影相同）。
 - **业务写必须经 handler 拿到的事务 ctx 写进这笔事务**，才在契约内；这时业务按 `IdempotencyKey` 幂等从“必需”降为可选的纵深防御。
   调用另一个服务的步骤不在事务里：被中止的尝试可能已经发出调用，仍要业务幂等。
@@ -197,45 +197,49 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
 - 消费者：回放的 completion 原样发布（`CommandID` 是生效那次的）；截止已过、被 fence、被接替的投递不执行，ack 前把同一操作实例已生效的成功
   经 saga 结果流重发；在途等待按可重试错误 nak。
 - `CommandInboxOptions` 增 `Owner`（缺省每个实例随机）与 `LeaseDuration`（缺省 1 分钟，再封顶到命令截止）。
-- **持久格式只增**：新集合 `<收件箱集合>_claims`（claim 与守卫，文档格式与原生 `_dataengine_inbox_claims` 相同），回执集合不变。
-- **混跑**：旧 Mongo 步骤进程不写 claim，新进程看不到它处理的尝试；“同一命令最多一次”在混跑中仍成立（双方都写同一个回执 `_id`），
-  “同一操作实例最多一次”只在全部 Mongo 步骤进程升级后成立，之前仍靠业务幂等。已生成工程不迁移（维护者决定），仓库模板与 `roost add saga` 生成物已同步注释。
-- 代价：每次执行多一个 Reserve 事务（读回执、读 claim、守卫 upsert、按操作查询、写 claim），执行事务多一次条件更新（测量见
-  [方案](docs/feature/SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)）。
+- 状态文档集合是 `<收件箱集合>_operations`（缺省 `_saga_step_inbox_operations`），回执集合不变。已生成工程不迁移（维护者决定），仓库模板与
+  `roost add saga` 生成物已同步注释。
+- 代价：每次执行多一个 Reserve 事务（读回执、读状态文档、写状态文档），执行事务多一次条件更新（测量见
+  [方案](docs/feature/SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)、[状态文档方案](docs/feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md)）。
 
 **两个结果消费者的终态分类相同**（O-S5-1）：普通结果流（`SubscribeCompletions`）与原生 effect 流对 `ErrNotWaiting`、`ErrNotFound`、`ErrIdentityConflict`、
 `ErrInvalidRecord` 都 Term，不再 nak 到 `MaxDeliver`。退避中到达、被丢弃的成功由下一次尝试回放或由过期投递重发（上面第 3 条）。
 `ErrDefinitionMissing` 不是终态（发版前审查更正）：Complete 只在记录正等着这个操作时才查定义，这时缺定义是滚动发布中“派发它的进程已升级、
 处理结果的协调器还没升级”的暂时状态，两条流都按可重试错误 nak 退避；新定义上线后重投被接收。定义一直不来时，步骤超时后没有定义的协调器把记录
 fence 到 `ManualRequired`（放弃关闭，第 4 条），之后的重投按迟到成功 ack 并告警，`MaxDeliver` 兜底。
-混跑期间若仍有旧 Mongo 步骤进程，“退避中到达的成功 + 最后一次尝试过期”这一角落少一次被接收的机会，按第 4 条落到告警。
 
 **代价与运维要点**：
 - **投影积压超过步骤 `Timeout` 时步骤停住而不是重复执行**：每次尝试都在截止后才投影、被跳过，步骤要等积压消退后的那次尝试才能成功；
-  积压持续到重试用尽则补偿或 Failed。现象是 `dataengine.fence.skipped.total{resource="_dataengine_inbox_claims"}` 与
+  积压持续到重试用尽则补偿或 Failed。现象是 `dataengine.fence.skipped.total{resource="_dataengine_step_operations"}` 与
   `saga.step_inbox.superseded_total` 增长、步骤超时。调大 `Timeout` 或解决 Mongo 变慢，不要调大 `LeaseDuration`（它已被截止时间封顶）。
 - `LeaseDuration` 现在只是上限，实际租约不超过命令截止；`LeaseDuration > AckWait` 的校验保留。
 - 依赖协调器、步骤进程与投影进程的时钟偏差远小于 `Timeout`。
-- 每次新建 / 接管 claim 多一次守卫 upsert 与一次按 `operation_key` 的索引查询（索引 `by_operation`；RR-20261006-15 复核后查询走
-  `by_operation_decision (namespace, operation_key, status, outcome, incarnation)`，`by_operation` 留给混跑中的旧进程）。
-- **按操作查询只取有影响的 claim**（RR-20261006-15）：pending、任何一生的成功、本生的拒绝，以及没有 `outcome` 的旧 claim；可重试失败、被接替的尝试、
-  旧一生的拒绝不取。它们随尝试与 Resume 累积（每生最多 1000 次尝试、Resume 不限次数、claim 保留 `receiptTTL`），此前全部计数、超过 4096 就让这一步每次
-  Reserve 都报 `ErrConflict`，几次 Resume 之后修好原因也执行不了。现在有影响的 claim 是与尝试次数、Resume 次数无关的小常数，4096 只在数据异常时触发。
-  claim 标记 completed 时多写 `outcome`（`success` / `refused` / `retryable`）；升级前与混跑中旧进程写的 claim 没有它，按“可能有影响”读取，混跑期间行为与升级前相同。
-  服务端也只碰有影响的 claim（索引 `by_operation_decision`，单个操作 10000 份累积 claim 时 Reserve p50 约 9.5ms，与 1000 份相同）。不带 `outcome` 的旧 claim
-  只能全部读出，单独计数、上限 8192（RR-20261006-16：修前进程在看到 4096 份时还会再写一份，升级前卡住的操作有 4097 份旧 claim，升级后要能执行）；
-  4097 份时 Reserve p50 约 24ms，随 TTL 消失。实测见 `docs/bugfix/RR-20261006-15.md`“复核后的补修与验证”。
-- **持久格式增量**：claim 多 `operation_key`、`incarnation`、`superseded_by`、`outcome`（RR-20261006-15）字段与 `superseded` 状态，claims 集合多守卫文档（`namespace=saga-step-op`）
-  与索引 `by_operation_decision`（RR-20261006-15 复核）；
-  tombstone（`_saga_operations`）多 `closure` 字段，B1 再多 `late_alarms` 子文档（`r<代际>: 首次告警时间`）。旧数据缺字段：旧 claim 不参与跨尝试判断，
-  没有 `closure` 的 tombstone 不告警，没有 `late_alarms` 的 tombstone 第一次迟到成功照常告警并补上标记。
-- **滚动升级到 RR-20261006-15 / -16 之后的版本**（修前进程实跑混跑验证）：新旧步骤进程可以同时处理同一操作，至多生效一次、互相读得懂对方的 claim。
-  旧进程仍按全部 claim 计数，一个操作超过 4096 份 claim 后旧进程对它报 `ErrConflict`（事务中止、不写任何东西，nak 后重投由新进程执行或回放），
-  新进程不受影响。步骤进程尽快全部升级，与协调器的顺序无关；claims 集合很大时可在发布前手工建 `by_operation_decision`，否则新进程启动时在线建立。
-- **混跑**：契约只在所有步骤进程与协调器都升级后成立。旧进程写的 claim 没有 `operation_key`、租约不封顶；旧协调器不写 `closure`；
-  B1 之前的协调器按 `IdempotencyKey` 接收任一代际的结果、每次送达都告警、人工 `Compensate` 不换代——它处理的 completion 与运维操作不受 B1 约束，
-  记录本身仍按版本号 fence，新旧协调器不会互相覆盖。
+- 每次授予租约（新建、接管、接替）只读写这个操作的一份状态文档，不按操作查询、没有上限：尝试次数、Resume 次数与历史都不进入判定
+  （取代了 RR-20261006-15 / -16 的 claim 扫描、`outcome` 字段与 4096 / 8192 上限）。
+- **持久格式**：tombstone（`_saga_operations`）有 `closure` 字段，B1 再多 `late_alarms` 子文档（`r<代际>: 首次告警时间`）；没有 `closure` 的 tombstone
+  不告警，没有 `late_alarms` 的 tombstone 第一次迟到成功照常告警并补上标记。收件箱的持久格式见下面「操作状态文档」。
+- **混跑**：B1 之前的协调器按 `IdempotencyKey` 接收任一代际的结果、每次送达都告警、人工 `Compensate` 不换代——它处理的 completion 与运维操作不受 B1 约束，
+  记录本身仍按版本号 fence，新旧协调器不会互相覆盖。步骤进程不支持新旧混跑（见「操作状态文档」的升级步骤）。
   已生成工程不提供迁移（维护者决定）；仓库内模板与生成物已同步。
+
+#### 操作状态文档（2026-10-06，维护者决定“直接改成一份状态文档”）
+
+两种收件箱对每个操作实例（`Command.IdempotencyKey`）只写一份状态文档，判定只读它（[方案](docs/feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md)）：
+
+- **集合**：原生 `_dataengine_step_operations`；Mongo 步骤 `<收件箱集合>_operations`（缺省 `_saga_step_inbox_operations`）。`_id = IdempotencyKey`，
+  索引只有 `ttl_expires_at`（`expires_at` 每次写入刷新为 `now + receiptTTL`，缺省 30 天）。`EnsureInfrastructure` / 订阅时自动建立。
+- **内容**：当前尝试（`command_id`、`incarnation`、`digest`、`owner`、`lease_token`、`lease_until`、`deadline_at`、`status` = `pending` / `settled`、
+  结算后的 `result` 与 `completion`）——原生投影的 lease fence 直接匹配这几个顶层字段；`refusals.r<代际>`（只留代际最大的两生，剪掉的记
+  `refusals_dropped_through`，那一生迟到的投递不执行）；`superseded`（最近 16 个被接替的尝试，它们迟到的投递不执行）；`version`（Reserve 的 CAS）。
+- **Reserve 一个事务三条命令**：读本命令回执、读状态文档、需要时以 `version` 做条件写；同一操作的并发 Reserve 在这份文档上写冲突串行化。
+  `lease_token` 每次授予租约加一，旧尝试的 fence 与结算条件从此不再匹配。
+- **升级（不兼容 v1.22.0 及以前）**：存储形状改变，新代码不读也不写旧的 claims 集合（`_dataengine_inbox_claims`、`<收件箱集合>_claims`），
+  不支持与旧步骤进程混跑（维护者 2026-10-06 决定，线上未部署）。步骤服务先停旧再起新：停掉全部旧步骤进程（原生步骤进程要排空 WAL：
+  旧记录的 fence 指向旧 claim 文档），清空或丢弃旧 claims 集合（`db.<name>.drop()`），再起新进程。回执集合、协调器记录、tombstone、wire 不变，
+  协调器的升级顺序不受影响。
+- **运维观察**：`saga.step_inbox.superseded_total`（接替）、`saga.step_inbox.mark_completed_error_total`（读到回执后结算失败）、
+  `dataengine.fence.skipped.total{resource="_dataengine_step_operations"}`（原生记录因租约失效被跳过）。看某个操作卡在哪里，直接
+  `db._dataengine_step_operations.findOne({_id: "<saga>:<phase>:<step>"})`：`status=pending` 且 `lease_until` 在未来就是有尝试在途。
 
 ## 失败语义
 

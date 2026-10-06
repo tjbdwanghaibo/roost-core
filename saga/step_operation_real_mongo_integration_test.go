@@ -181,3 +181,62 @@ func TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize(t *testing.T) 
 	}
 	t.Logf("40 rounds: k projected and replayed %d times, k superseded and k+1 executed %d times", projectedK, executedK1)
 }
+
+// 接替先提交的一边（确定性）：k 已写进 WAL、还没投影，k+1 的收件箱时钟已过 k 的截止并接替它；之后投影器（真实时钟、
+// 仍在 k 的租约内）投影 k 的记录，状态文档的当前尝试已是 k+1、token 已加一，fence 不匹配，k 被跳过；k+1 照常执行。
+// 上面的并发用例由时序决定哪一边先赢（多数轮次是投影先赢），这里固定接替先赢，证明 token fence 落在状态文档上。
+func TestRealMongoTakeoverFencesTheEarlierAttemptsProjection(t *testing.T) {
+	client, database := realMongoU0280(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	projector, err := deengine.NewMongoStore(client, deengine.MongoStoreConfig{DefaultDatabase: database, ServerID: 4, TransactionReceiptTTL: 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := projector.EnsureInfrastructure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	inboxA, _ := NewDataEngineStepInbox(client, database, DataEngineStepInboxOptions{Owner: "takeover-a", LeaseDuration: time.Minute})
+	inboxB, _ := NewDataEngineStepInbox(client, database, DataEngineStepInboxOptions{Owner: "takeover-b", LeaseDuration: time.Minute})
+	if err := inboxA.EnsureInfrastructure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	operation := "gift-t:1:0"
+	k := dataEngineCommand(operation+":1", operation, "x")
+	k.SagaID = "gift-t"
+	k.DeadlineAt = time.Now().UTC().Add(time.Minute)
+	reservation, err := inboxA.Reserve(ctx, k)
+	if err != nil || reservation.Duplicate {
+		t.Fatalf("reserve k: %+v %v", reservation, err)
+	}
+	committer := &stepFenceCommitter{}
+	if _, err := corenest.RunIsolatedTransaction(ctx, committer, "takeover", func() (any, error) {
+		if err := inboxA.Bind(k, reservation); err != nil {
+			return nil, err
+		}
+		return nil, EmitCompletion(Completion{CommandID: k.ID, IdempotencyKey: k.IdempotencyKey, SagaID: k.SagaID, Success: true})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	k1 := k
+	k1.ID, k1.Attempt = operation+":2", 2
+	k1.DeadlineAt = k.DeadlineAt.Add(time.Minute)
+	inboxB.now = func() time.Time { return k.DeadlineAt.Add(time.Millisecond) }
+	r1, err := inboxB.Reserve(ctx, k1)
+	if err != nil || r1.Duplicate || r1.Token != reservation.Token+1 {
+		t.Fatalf("k+1 reserve after k's deadline: %+v err=%v, want it to take over with token %d", r1, err, reservation.Token+1)
+	}
+	if err := projector.Project(ctx, committer.record); err != nil {
+		t.Fatal(err)
+	}
+	var marker bson.M
+	if err := client.Database(database).Collection(deengine.TransactionCollection).FindOne(ctx, bson.M{"_id": committer.record.ID.String()}, &marker); err != nil {
+		t.Fatal(err)
+	}
+	if marker["skipped"] != true {
+		t.Fatalf("attempt k was projected after k+1 took the operation over: marker=%v, want it skipped by the lease fence", marker)
+	}
+	if _, found, err := inboxA.Replay(ctx, k); err != nil || found {
+		t.Fatalf("receipt of the fenced attempt k: found=%v err=%v, want none", found, err)
+	}
+}
