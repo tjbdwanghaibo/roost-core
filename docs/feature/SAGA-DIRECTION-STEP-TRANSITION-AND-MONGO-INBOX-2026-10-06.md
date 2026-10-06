@@ -145,7 +145,7 @@ handler 事务失败（handler 错误、取消、fence）后交还租约（`leas
 
 ## 实施状态
 
-**已实施，未发版**。① `a5e7b070`（纯重构）；② 与 O-S5-1、文档见同分支随后的提交（提交号见 DECISIONS-PENDING 末表）。证据在 [evidence/sagadir](evidence/sagadir)。
+**已实施，未发版**。① `a95cf4dc`（纯重构）；② 与 O-S5-1、文档 `9669d181`。证据里的基线 `a5e7b070` 是 ① 在 rebase 前的提交（内容同 `a95cf4dc`）。证据在 [evidence/sagadir](evidence/sagadir)。
 
 ### ①
 
