@@ -184,15 +184,25 @@ func (r *RPCClient) CallWithTimeout(subject string, req []byte, timeout time.Dur
 	return r.Call(ctx, subject, req)
 }
 
-// errRPCStopped 是 RPC 客户端停止之后发起的 CallAsync 的结果：同时 errors.Is 到 fnats.ErrCancelled（旧
-// 结果，按它判断的调用方不变）与 fnats.ErrClosed（Close 之后的调用统一返回已关闭，RR-20261006-10 口径；
-// RR-20261006-24 之前只有 ErrCancelled）。停止时仍在途的调用照旧只收到 ErrCancelled。
+// errRPCStopped 是 RPC 客户端停止之后的 CallAsync 结果，停止时仍在途的调用与停止之后发起的调用相同：
+// 同时 errors.Is 到 fnats.ErrCancelled（旧结果，按它判断的调用方不变）与 fnats.ErrClosed（关闭之后的
+// 调用统一返回已关闭，RR-20261006-10 口径）。RPC 客户端的“已停止”是它自己的 stopped（回调池的生命
+// 周期），连接的已关闭判据在 client 上（见 Client 的类型注释）。
 var errRPCStopped = fmt.Errorf("%w: %w", fnats.ErrCancelled, fnats.ErrClosed)
 
+// CallAsync 的回调恰好一次：RPC 已停止回 errRPCStopped；连接已关闭回 fnats.ErrClosed（入口检查，或
+// 订阅收件箱 / 发布在 Close 之后失败）；在途调用由回复、5s 超时（这时连接已关闭则为 fnats.ErrClosed）
+// 或 Stop（errRPCStopped）三者之一终结。
 func (r *RPCClient) CallAsync(subject string, req []byte, cb fnats.RpcCallback) {
 	if r.stopped.Load() {
 		if cb != nil {
 			cb(nil, errRPCStopped)
+		}
+		return
+	}
+	if err := r.client.admit(); err != nil {
+		if cb != nil {
+			cb(nil, err)
 		}
 		return
 	}
@@ -208,8 +218,7 @@ func (r *RPCClient) CallAsync(subject string, req []byte, cb fnats.RpcCallback) 
 	})
 	if err != nil {
 		if cb != nil {
-			// 连接已关闭 / 正在排空时可 errors.Is 到 fnats.ErrClosed（RR-20261006-24）。
-			cb(nil, fmt.Errorf("rpc: subscribe inbox: %w", closedError(err)))
+			cb(nil, fmt.Errorf("rpc: subscribe inbox: %w", r.client.wrapError(err)))
 		}
 		return
 	}
@@ -228,18 +237,26 @@ func (r *RPCClient) CallAsync(subject string, req []byte, cb fnats.RpcCallback) 
 	metrics.IncCounter("nats.rpc.started.total", nil, 1)
 	metrics.AddGauge("nats.rpc.pending", nil, 1)
 	r.callbackMu.Unlock()
-	pc.setTimer(time.AfterFunc(5*time.Second, func() {
-		r.finishPending(sid, nil, fnats.ErrTimeout)
-	}))
+	pc.setTimer(time.AfterFunc(5*time.Second, func() { r.expirePending(sid) }))
 	if r.stopped.Load() {
-		r.finishPending(sid, nil, fnats.ErrCancelled)
+		r.finishPending(sid, nil, errRPCStopped)
 		return
 	}
 
 	// Publish request with reply subject
 	if err := r.client.natsConn().PublishRequest(subject, inbox, req); err != nil {
-		r.finishPending(sid, nil, fmt.Errorf("rpc: publish: %w", closedError(err)))
+		r.finishPending(sid, nil, fmt.Errorf("rpc: publish: %w", r.client.wrapError(err)))
 	}
+}
+
+// expirePending 是在途调用的 5s 超时：连接这时已关闭（只关了连接、没停 RPC，收件箱随连接关闭，回复
+// 不会再来）按 fnats.ErrClosed 终结，否则 fnats.ErrTimeout。
+func (r *RPCClient) expirePending(sid int64) {
+	err := fnats.ErrTimeout
+	if r.client.closed() {
+		err = fnats.ErrClosed
+	}
+	r.finishPending(sid, nil, err)
 }
 
 func (r *RPCClient) Reply(replySubject string, resp []byte) error {
@@ -298,7 +315,7 @@ func (r *RPCClient) drainCallbacks() {
 		if sid, ok := key.(int64); ok {
 			// 队列拒绝时 fallback 在这里同步执行。隔离其 panic，后续
 			// pending 仍须取消；阻塞则由这个唯一停止任务保留责任。
-			goroutine.SafeFunc(func() { r.finishPending(sid, nil, fnats.ErrCancelled) })
+			goroutine.SafeFunc(func() { r.finishPending(sid, nil, errRPCStopped) })
 		}
 		return true
 	})

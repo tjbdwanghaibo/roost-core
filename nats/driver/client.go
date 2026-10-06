@@ -21,19 +21,42 @@ const (
 )
 
 // Client implements fnats.IClient by wrapping nats-io/nats.go.
+//
+// 已关闭判据（REFACTOR-2026-10-06-nats-driver-closed-state）：Client 自己持有唯一的“已关闭”状态
+// state.closed，Close 一开始就置位，排空正常结束时也置位。Client、Assembly、JetStreamClient、
+// RPCClient 与订阅句柄的公开方法入口先经 admit 查它（关闭类的 Close / Stop 幂等返回 nil，状态查询返回
+// false），已关闭直接返回 fnats.ErrClosed、不碰 nats.go；
+// 调用过了入口、在 nats.go 里失败时，wrapError 也先看它——这期间 Close 了就是 fnats.ErrClosed。所以与
+// Close 并发的调用要么在 Close 之前完成，要么返回 fnats.ErrClosed。nats.go 的连接状态与错误只在未关闭时
+// 作辅助分类（排空中、nats.go 自己放弃重连后关闭）。
 type Client struct {
 	conn  *gonats.Conn
 	cfg   *fnats.Config
 	state *natsLifecycleState
+
+	// testAfterAdmit 只给测试用（生产为 nil）：调用通过 admit 的已关闭检查之后、碰 nats.go 之前执行，
+	// 用来确定性地让 Close 插进“已过入口、还没调 nats.go”的窗口。
+	testAfterAdmit func()
 }
 
+// natsLifecycleState 是驱动自己的连接生命周期状态，与 nats.go 的回调共享（回调在 Client 之前创建）。
+// closed 是唯一的已关闭判据；draining 只用来把排空 / 关闭引起的断开记成 Info 日志。
 type natsLifecycleState struct {
 	draining atomic.Bool
-	closing  atomic.Bool
+	closed   atomic.Bool
+}
+
+func (s *natsLifecycleState) isClosed() bool {
+	return s != nil && s.closed.Load()
+}
+
+// markClosed 置已关闭，返回是否由这次调用置位（nil 状态只在测试里出现，按置位成功处理）。
+func (s *natsLifecycleState) markClosed() bool {
+	return s == nil || s.closed.CompareAndSwap(false, true)
 }
 
 func (s *natsLifecycleState) expectedDisconnect() bool {
-	return s != nil && (s.draining.Load() || s.closing.Load())
+	return s != nil && (s.draining.Load() || s.closed.Load())
 }
 
 func NewClient(cfg *fnats.Config, extra ClientOptions) (*Client, error) {
@@ -50,20 +73,35 @@ func NewClient(cfg *fnats.Config, extra ClientOptions) (*Client, error) {
 	return &Client{conn: conn, cfg: cfg, state: state}, nil
 }
 
+// closed 是驱动的已关闭判据：Close 已开始或排空已完成；nil Client 与没有连接的 Client 同样算已关闭。
+func (c *Client) closed() bool {
+	return c == nil || c.conn == nil || c.state.isClosed()
+}
+
+// admit 是每个公开方法的入口检查：已关闭返回 fnats.ErrClosed，不碰 nats.go。
+func (c *Client) admit() error {
+	if c.closed() {
+		return fnats.ErrClosed
+	}
+	if c.testAfterAdmit != nil {
+		c.testAfterAdmit()
+	}
+	return nil
+}
+
 func (c *Client) Publish(subject string, data []byte) error {
 	if err := c.validateSubject(subject); err != nil {
 		return err
 	}
 	var err error
 	for i := 0; i < publishRetries; i++ {
-		err = c.conn.Publish(subject, data)
+		err = c.wrapError(c.conn.Publish(subject, data))
 		if err == nil {
 			return nil
 		}
-		if errors.Is(err, gonats.ErrConnectionClosed) || errors.Is(err, gonats.ErrConnectionDraining) {
-			// 连接已关闭 / 正在排空，重试不会成功：立即返回、可 errors.Is 到 fnats.ErrClosed，与 Request
-			// 一致（RR-20261006-10；旧实现空等 3 × 20ms 再返回，错误只能 Is 到 gonats 的错误）。
-			return fmt.Errorf("nats: publish to %s: %w", subject, closedError(err))
+		if errors.Is(err, fnats.ErrClosed) {
+			// 已关闭 / 正在排空，重试不会成功：立即返回（RR-20261006-10）。
+			return fmt.Errorf("nats: publish to %s: %w", subject, err)
 		}
 		time.Sleep(publishRetryWait)
 	}
@@ -93,10 +131,12 @@ func (c *Client) requestWithContext(ctx context.Context, subject string, data []
 	}
 	msg, err := c.conn.RequestWithContext(ctx, subject, data)
 	if err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		switch {
+		case c.state.isClosed():
+			return nil, fnats.ErrClosed
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			return nil, fnats.ErrTimeout
-		}
-		if ctx.Err() != nil {
+		case ctx.Err() != nil:
 			return nil, fnats.ErrCancelled
 		}
 		return nil, c.wrapError(err)
@@ -116,9 +156,9 @@ func (c *Client) Subscribe(subject string, handler fnats.MsgHandler) (fnats.ISub
 		})
 	})
 	if err != nil {
-		return nil, closedError(err)
+		return nil, c.wrapError(err)
 	}
-	return &subscription{sub: sub}, nil
+	return &subscription{sub: sub, client: c}, nil
 }
 
 func (c *Client) QueueSubscribe(subject string, queue string, handler fnats.MsgHandler) (fnats.ISubscription, error) {
@@ -136,9 +176,9 @@ func (c *Client) QueueSubscribe(subject string, queue string, handler fnats.MsgH
 		})
 	})
 	if err != nil {
-		return nil, closedError(err)
+		return nil, c.wrapError(err)
 	}
-	return &subscription{sub: sub}, nil
+	return &subscription{sub: sub, client: c}, nil
 }
 
 func (c *Client) Drain() error {
@@ -151,9 +191,11 @@ func (c *Client) Drain() error {
 	return c.DrainWithContext(ctx)
 }
 
+// DrainWithContext 排空连接：正常结束时由它置已关闭并返回 nil；ctx 先结束就 Close（硬关）并返回
+// ctx 错误；排空期间被别人 Close 返回 fnats.ErrClosed（连接没排空）。已关闭时返回 fnats.ErrClosed。
 func (c *Client) DrainWithContext(ctx context.Context) error {
-	if c == nil || c.conn == nil {
-		return nil
+	if err := c.admit(); err != nil {
+		return err
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -162,7 +204,7 @@ func (c *Client) DrainWithContext(ctx context.Context) error {
 		c.state.draining.Store(true)
 	}
 	if err := c.conn.Drain(); err != nil {
-		return err
+		return c.wrapError(err)
 	}
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
@@ -174,58 +216,45 @@ func (c *Client) DrainWithContext(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+	if !c.state.markClosed() {
+		return fnats.ErrClosed // 排空期间被 Close 硬关
+	}
 	return nil
 }
 
+// Close 先置已关闭、再关 nats.go 连接；之后 Connected 一直为 false、其他调用一直返回 fnats.ErrClosed。
+// nats.go 在硬关打断排空后会把状态翻回 DRAINING_PUBS、约 5s 内 IsConnected 为 true（RR-20261006-26），
+// 驱动不看它。
 func (c *Client) Close() {
 	if c == nil {
 		return
 	}
-	if c.state != nil {
-		c.state.closing.Store(true)
-	}
+	c.state.markClosed()
 	if c.conn != nil {
 		c.conn.Close()
 	}
 }
 
-// Connected 在 Close（含排空超时后的硬关）之后一直返回 false。不能只看 nats.go 的 IsConnected：排空被硬关
-// 打断时，nats.go 的排空协程（drainConnection）在 Close 之后仍会把状态翻回 DRAINING_PUBS、空等一次
-// FlushTimeout（最长 5s）再关一次，这段时间 IsConnected 为 true（RR-20261006-26，真实 NATS 上实测）。
-// 之后的调用不受影响：DRAINING_PUBS 下 nats.go 返回 ErrConnectionDraining，驱动同样映射为 fnats.ErrClosed。
+// Connected 已关闭时返回 false，未关闭时才看 nats.go 的连接状态。
 func (c *Client) Connected() bool {
-	return c != nil && c.conn != nil && !(c.state != nil && c.state.closing.Load()) && c.conn.IsConnected()
+	return !c.closed() && c.conn.IsConnected()
 }
 
-// closedError 把 nats.go 的“连接已关闭 / 正在排空”包成驱动的已关闭错误：errors.Is 同时命中
-// fnats.ErrClosed 与 nats.go 的原错误；其他错误原样返回。Close 之后的订阅、JetStream 与 RPC CallAsync
-// 经它返回，与 Publish / Request 同一口径（RR-20261006-24；旧实现原样返回 nats.go 的
-// ErrConnectionClosed，文本同为 "nats: connection closed"，却 errors.Is 不到 fnats.ErrClosed）。
-// 文本只取 nats.go 的原错误（它与 fnats.ErrClosed 同为 "nats: connection closed"，用 %w: %w 拼接会重复一遍）。
-func closedError(err error) error {
-	if err == nil || errors.Is(err, fnats.ErrClosed) {
-		return err
-	}
-	if errors.Is(err, gonats.ErrConnectionClosed) || errors.Is(err, gonats.ErrConnectionDraining) {
-		return connectionClosedError{cause: err}
-	}
-	return err
-}
-
-// connectionClosedError 同时 errors.Is 到 fnats.ErrClosed 与 nats.go 的原错误，文本是原错误的文本。
-type connectionClosedError struct{ cause error }
-
-func (e connectionClosedError) Error() string   { return e.cause.Error() }
-func (e connectionClosedError) Unwrap() []error { return []error{fnats.ErrClosed, e.cause} }
-
+// wrapError 把 nats.go 的失败翻译成驱动契约的错误。先看驱动自己的状态：已关闭（调用过了入口检查之后
+// 才 Close）一律 fnats.ErrClosed，不管 nats.go 返回了什么。未关闭时按 nats.go 的错误辅助分类：
+// 超时 / 无响应者映射到 fnats 的对应错误；连接已关闭 / 正在排空（排空进行中，或 nats.go 放弃重连后
+// 自己关闭）映射到 fnats.ErrClosed；其他原样返回。
 func (c *Client) wrapError(err error) error {
-	if err == gonats.ErrTimeout {
+	switch {
+	case err == nil:
+		return nil
+	case c != nil && c.state.isClosed():
+		return fnats.ErrClosed
+	case errors.Is(err, gonats.ErrTimeout):
 		return fnats.ErrTimeout
-	}
-	if err == gonats.ErrNoResponders {
+	case errors.Is(err, gonats.ErrNoResponders):
 		return fnats.ErrNoResponders
-	}
-	if err == gonats.ErrConnectionClosed || err == gonats.ErrConnectionDraining {
+	case errors.Is(err, gonats.ErrConnectionClosed), errors.Is(err, gonats.ErrConnectionDraining):
 		return fnats.ErrClosed
 	}
 	return err
@@ -240,8 +269,8 @@ func (c *Client) natsConn() *gonats.Conn {
 }
 
 func (c *Client) validateSubject(subject string) error {
-	if c == nil || c.conn == nil {
-		return fnats.ErrClosed
+	if err := c.admit(); err != nil {
+		return err
 	}
 	if strings.TrimSpace(subject) == "" || strings.TrimSpace(subject) != subject {
 		return fmt.Errorf("nats: invalid subject %q", subject)

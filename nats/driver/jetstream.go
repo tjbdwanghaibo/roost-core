@@ -14,8 +14,11 @@ import (
 	gojs "github.com/nats-io/nats.go/jetstream"
 )
 
+// JetStreamClient 是同一连接上的 JetStream。已关闭判据在 client 上（见 Client 的类型注释）：
+// 入口经 admit 检查，nats.go 的失败经 client.wrapError 翻译（Close 之后一律 fnats.ErrClosed）。
 type JetStreamClient struct {
-	js gojs.JetStream
+	js     gojs.JetStream
+	client *Client
 }
 
 func NewJetStreamClient(client *Client) (*JetStreamClient, error) {
@@ -26,20 +29,31 @@ func NewJetStreamClient(client *Client) (*JetStreamClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &JetStreamClient{js: js}, nil
+	return &JetStreamClient{js: js, client: client}, nil
 }
 
-func (c *JetStreamClient) EnsureStream(ctx context.Context, cfg fnats.JetStreamConfig) error {
+// admit 先报未初始化，再查连接是否已关闭（没有 client 的只在测试里出现，不查）。
+func (c *JetStreamClient) admit() error {
 	if c == nil || c.js == nil {
 		return errors.New("nats jetstream: not initialized")
 	}
+	if c.client == nil {
+		return nil
+	}
+	return c.client.admit()
+}
+
+func (c *JetStreamClient) EnsureStream(ctx context.Context, cfg fnats.JetStreamConfig) error {
+	if err := c.admit(); err != nil {
+		return err
+	}
 	_, err := c.js.CreateOrUpdateStream(ctx, toJetStreamStreamConfig(cfg))
-	return closedError(err)
+	return c.client.wrapError(err)
 }
 
 func (c *JetStreamClient) Publish(ctx context.Context, subject string, data []byte, opts fnats.JetStreamPublishOptions) (fnats.JetStreamPublishAck, error) {
-	if c == nil || c.js == nil {
-		return fnats.JetStreamPublishAck{}, errors.New("nats jetstream: not initialized")
+	if err := c.admit(); err != nil {
+		return fnats.JetStreamPublishAck{}, err
 	}
 	publishOpts := make([]gojs.PublishOpt, 0, 1)
 	if opts.MsgID != "" {
@@ -47,7 +61,7 @@ func (c *JetStreamClient) Publish(ctx context.Context, subject string, data []by
 	}
 	ack, err := c.js.Publish(ctx, subject, data, publishOpts...)
 	if err != nil {
-		return fnats.JetStreamPublishAck{}, closedError(err)
+		return fnats.JetStreamPublishAck{}, c.client.wrapError(err)
 	}
 	if ack == nil {
 		return fnats.JetStreamPublishAck{}, nil
@@ -60,15 +74,15 @@ func (c *JetStreamClient) Publish(ctx context.Context, subject string, data []by
 }
 
 func (c *JetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamConsumerConfig, handler fnats.JetStreamHandler) (fnats.IJetStreamSubscription, error) {
-	if c == nil || c.js == nil {
-		return nil, errors.New("nats jetstream: not initialized")
+	if err := c.admit(); err != nil {
+		return nil, err
 	}
 	if handler == nil {
 		return nil, errors.New("nats jetstream: handler is nil")
 	}
 	consumer, err := c.js.CreateOrUpdateConsumer(ctx, cfg.Stream, toJetStreamConsumerConfig(cfg))
 	if err != nil {
-		return nil, closedError(err)
+		return nil, c.client.wrapError(err)
 	}
 	handlerCtx, cancel := context.WithCancel(context.Background())
 	cc, err := consumer.Consume(func(msg gojs.Msg) {
@@ -77,7 +91,7 @@ func (c *JetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 	})
 	if err != nil {
 		cancel()
-		return nil, closedError(err)
+		return nil, c.client.wrapError(err)
 	}
 	return &jetStreamSubscription{cc: cc, cancel: cancel}, nil
 }

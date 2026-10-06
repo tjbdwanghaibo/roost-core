@@ -76,7 +76,7 @@ WatchCallback.CloseWithContext取消/超时只结束本次等待，同一subscri
 
 JetStream无handler拒绝也使用版本1 response envelope，保持远端错误status，不按本地ErrNoHandler做errors.Is。ServiceRPC.CallDiscoveredChecked的配置timeout覆盖发现、picker与传输，较短父期限保留；独立PickServer仍使用调用方ctx，timeout/未知结果不代表业务未执行，不能自动重试副作用。
 
-RPCClient提供可选StopWithContext；取消仅结束caller等待，同一实例的唯一停止任务继续负责pending、终态callback和pool排空。Assembly.Close与KitNats保留未完成资源，使用新预算再次等待同一对象；例外是连接drain失败或超预算：连接此时已被硬关闭，Assembly.Close返回包裹原错误的终态`natsdriver.ErrClosedUndrained`（仍可`errors.Is`原ctx错误），KitNats报告该错误并释放引用，再次Stop返回nil（[RR-20261004-08](bugfix/RR-20261004-08.md)）。业务callback必须最终退出；callback内不要用Stop/Background等待自身，采用可取消等待并由外部生命周期最终排空。旧Stop依然无期限，重复Stop现在等待同一收尾任务，不再直接返回。[三项修复与验证限制](review/REVIEW-2026-10-04-noncore-07.md)。
+RPCClient提供可选StopWithContext；取消仅结束caller等待，同一实例的唯一停止任务继续负责pending、终态callback和pool排空。Assembly.Close与KitNats保留未完成资源，使用新预算再次等待同一对象；例外是连接drain失败或超预算：连接此时已被硬关闭，Assembly.Close返回包裹原错误的终态`natsdriver.ErrClosedUndrained`（仍可`errors.Is`原ctx错误），KitNats报告该错误并释放引用，再次Stop返回nil（[RR-20261004-08](bugfix/RR-20261004-08.md)）。Close之后经nats驱动的调用（以及过了入口检查、Close先完成的调用）一律返回可`errors.Is`到`fnats.ErrClosed`的错误，`Connected()`为false；判据是驱动自己的已关闭状态，不看nats.go的连接状态（[nats/driver README §5](../nats/driver/README.md)）。业务callback必须最终退出；callback内不要用Stop/Background等待自身，采用可取消等待并由外部生命周期最终排空。旧Stop依然无期限，重复Stop现在等待同一收尾任务，不再直接返回。[三项修复与验证限制](review/REVIEW-2026-10-04-noncore-07.md)。
 
 ## 2026-10-04 请求边界（main，尚未发版）
 

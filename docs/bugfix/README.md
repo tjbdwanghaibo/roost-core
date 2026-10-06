@@ -18,9 +18,9 @@
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-26](RR-20261006-26.md) | `Connected()` 看驱动自己的关闭标记；`DrainWithContext` 硬关走 `Client.Close` | 已修复、声明场景验证，未发版 |
+| [RR-20261006-26](RR-20261006-26.md) | `Connected()` 看驱动自己的关闭标记；`DrainWithContext` 硬关走 `Client.Close` | 已修复、声明场景验证，未发版；后续并入 [nats 驱动已关闭状态重构](../feature/REFACTOR-2026-10-06-nats-driver-closed-state.md) |
 | [RR-20261006-25](RR-20261006-25.md) | `EmitAllWatched` + App 记下最后开始的 hook，超时错误 `hook "<名字>" did not return …` | 已修复、声明场景验证，未发版 |
-| [RR-20261006-24](RR-20261006-24.md) | `closedError` 映射 Subscribe / QueueSubscribe / JetStream 三方法 / CallAsync；RPC 停止后的 CallAsync 同时 Is ErrCancelled 与 ErrClosed | 已修复、声明场景验证，未发版 |
+| [RR-20261006-24](RR-20261006-24.md) | `closedError` 映射 Subscribe / QueueSubscribe / JetStream 三方法 / CallAsync；RPC 停止后的 CallAsync 同时 Is ErrCancelled 与 ErrClosed | 已修复、声明场景验证，未发版；后续并入 [nats 驱动已关闭状态重构](../feature/REFACTOR-2026-10-06-nats-driver-closed-state.md) |
 
 **10-06 SKILL-1 / SKILL-3 补测（sktest2），未发版。** RR-20261006-21：未提交的失败启动删 cast、还 ID 前删掉它已停进程的记录，有进程停不下来时保留 failed cast、不还 ID；RR-20261006-23：只有运行中的进程钉住 cast，回收 cast 时连它已停的进程记录一起删；RR-20261006-22：`ActivePresentation` 带上增量里的 `PrimaryTarget`（`json:"-"`，不下发），reset 按增量的形状过滤。
 
