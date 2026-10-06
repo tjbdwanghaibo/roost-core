@@ -70,6 +70,7 @@ WAL checkpoint 不得超过持久日志；Close 必须等待外部 Flush/Replay/
 
 **新的停机对象优先用共用类型，并套用契约测试骨架**（维护者决定 A3，2026-10-05；此前“不为此抽公共框架类型”的说法作废——同一不变量已被打破 11 次）：
 - 在途工作的准入 / 计数 / 等待用 `internal/operation.Lifetime`：`Begin`/`End` 包住每次回调或调用，`Stop` 幂等关准入，`Wait(ctx)` 在调用方 ctx 内等排空（超时保留计数、可重试，已排空时任何 ctx 都返回 nil），返回 nil 之后才释放依赖；需要“停后可再启动”的对象每次启动换一个新的 Lifetime（见 `sync/syncbus/mirror`）。不要再手写一份“mutex + running + idle chan”。
+- 停止入口（Close / StopWithContext）的并发串行用 `internal/operation.Serial`（等待受后到者自己的 ctx 约束，不用 `sync.Mutex`）。驱动与 Mod 的 Close 统一口径：重复 Close 返回 nil（首次错误只报给那一次调用），Close 之后的其他调用返回该驱动可 `errors.Is` 的“已关闭”错误（RR-20261006-10；唯一例外是 nats `Assembly.Close` 的 `ErrClosedUndrained` 报一次）。
 - 停止入口的回归用 `internal/stopcontract.Check` 写：给出 Start / Block（投递一个卡住的工作）/ Stop(ctx) / Release / Released 钩子，骨架统一断言首次超时返回 ctx 错误且资源保留、未放行时重试仍超时、放行后新 ctx 重试返回 nil 且资源确实释放、再调用返回 nil。`Released` 要观察真实后果（依赖被关闭、登记被撤销、派发器退出），不能读被测对象自己的“已停”字段；自己不持有依赖、由调用方在 nil 之后释放的对象用 `stopcontract.CallerReleases`。生成代码（另一个模块）在 codegen 测试里注入骨架源码运行（`codegen/internal/roost/player_tcp_stop_contract_promises_test.go`）。
 - `glsvet` 默认对带 ctx 的停止类函数里不受 ctx 约束的通道接收给出 `hint:`（含跟进一层同包 helper），只提示、不计入违例；看到提示时确认通道一定在预算内关闭，或改成 select ctx / `Lifetime.Wait`。Mutex.Lock 不提示（实测全是短临界区），锁被在途工作长期持有的风险靠契约骨架在行为上覆盖。
 - 排空下沉到传输层（`ISyncBus` 带 ctx 的退订）是下个大版本的方向（A3 ②），现在仍由订阅者各自用 Lifetime 排空。
