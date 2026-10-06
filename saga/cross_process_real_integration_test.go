@@ -9,6 +9,8 @@ package saga
 //  2. TestRealSagaCrossProcessKillRecovers：真实 NATS JetStream + Mongo 副本集上起两个协调器 + Mongo 步骤
 //     进程（同一组 durable），跑一批两步 saga，中途 SIGKILL 其中一个，只留另一个；核对恢复后所有 saga 完成、
 //     每个操作的业务写恰好一份、每个 CommandID 的业务事务至多提交一次、outbox 排空、没有残留租约。
+//     saga 方向 ②（2026-10-06）之后再断言：每个操作实例的业务事务恰好提交一次（相邻两次尝试不再都提交；
+//     N06 S5 的第 2、3 次实跑各有 1 个操作被两次尝试提交，当时靠业务按 IdempotencyKey 幂等兜住）。
 //
 // 资源：库 roost_revn06s5_<pid>_<ns>、流 REVN06S5_<pid>_<ns>、subject 前缀 revn06s5x<pid>x<ns>，用后删除。
 // 运行：source ~/.roost-it/roost-dataengine-it/env.sh 后
@@ -136,8 +138,8 @@ func TestRealSagaCrossProcessChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 业务写：effects 按操作实例（IdempotencyKey）计提交次数，executions 按 CommandID 计。两者都在 handler 的
-	// Mongo 事务里，只有提交了的执行才计数。Mongo 步骤跨尝试按 IdempotencyKey 幂等（契约第 5 条），所以
-	// effects 的文档数是“生效的操作数”，commits > 1 只说明跨尝试重跑过。
+	// Mongo 事务里，只有提交了的执行才计数。handler 自己不做按操作的幂等（$inc 每次提交都加一），所以 effects.commits
+	// 就是这个操作实例生效的次数；框架的收件箱契约（SAGA.md「原生步骤执行契约」）要求它恰好是 1。
 	handler := func(txCtx context.Context, command Command) (Completion, error) {
 		// 先写后等：被杀时在途的事务已经写了 effects / executions，锁在服务端保留到事务过期。
 		defer time.Sleep(time.Duration(rand.IntN(300)) * time.Millisecond)
@@ -353,6 +355,9 @@ func TestRealSagaCrossProcessKillRecovers(t *testing.T) {
 	}
 	rerunOps, byB := 0, 0
 	for _, effect := range effects {
+		if effect.Commits != 1 {
+			t.Errorf("operation %s committed its business transaction %d times, want exactly once per operation", effect.ID, effect.Commits)
+		}
 		if effect.Commits > 1 {
 			rerunOps++
 			var owners []string
@@ -376,7 +381,7 @@ func TestRealSagaCrossProcessKillRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("recovered in %v: %d sagas completed, %d operations, %d committed step executions (%d by coordinator-b), %d operations re-run by a later attempt (allowed for Mongo steps: idempotent by IdempotencyKey), %d coordinator receipts",
+	t.Logf("recovered in %v: %d sagas completed, %d operations, %d committed step executions (%d by coordinator-b), %d operations committed by more than one attempt (want 0), %d coordinator receipts",
 		recovered.Round(time.Millisecond), sagas, len(effects), len(executions), byB, rerunOps, receipts)
 	if err := b.cmd.Process.Signal(syscall.SIGTERM); err == nil {
 		done := make(chan struct{})

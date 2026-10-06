@@ -133,7 +133,7 @@ Reserve 读到 receipt 时顺手把 claim 标成 completed；这一步失败不�
 检查 claim 集合的写入（权限、索引、文档校验）（RR-20260927-16）。
 
 raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo transaction 中；
-不要在这类 handler 中混用 Nest Entity 修改。两种 inbox 分开是为了保持各自的原子边界，
+不要在这类 handler 中混用 Nest Entity 修改。它与原生步骤共用同一套操作实例契约（下文「Mongo 步骤」，saga 方向 ②）。两种 inbox 分开是为了保持各自的原子边界，
 不是让 Saga coordinator 改走 Entity WAL。Coordinator 的 state/outbox/completion receipt
 仍由 Saga Store 的 Mongo transaction 负责。
 
@@ -141,6 +141,8 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
 大对象；业务实体仍应存放在其权威服务中。
 
 ### 原生步骤执行契约（U-0280，维护者 2026-10-05 决定）
+
+本节的契约自 2026-10-06 起同样适用于 Mongo 步骤（`MongoCommandInbox`，维护者第六轮决定 saga 方向 ②），差别只在生效点，见本节末「Mongo 步骤」。
 
 1. **最多生效一次的单位是操作实例**：saga + 步骤 + 方向（`Command.IdempotencyKey`，即 `<saga>:<phase>:<step>`）。
    一次操作可以有多次尝试（`MaxAttempts`，配置），每次尝试有自己的 `CommandID`；同一操作实例的所有尝试里**至多一次**
@@ -174,9 +176,36 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
    这一步的结果，不告警（第 3 条）。已进入补偿或 Compensated 的，补偿不含这一步，要按业务手工撤销它。
    B 之后这只剩“截止前已投影、completion 在放弃后才送达”（effect 发布延迟）、“较早尝试晚到的失败让协调器在最后一次尝试执行中放弃”
    与时钟偏差三种来源。
-5. **分工**：框架兑现跨尝试幂等（收件箱 + 租约封顶 + 协调器告警），原生步骤模板不再需要自己按 `IdempotencyKey` 做业务幂等。
-   Mongo 步骤（`MongoCommandInbox`）不在本契约内：它仍是“同一命令最多一次”，跨尝试按 `IdempotencyKey` 做业务幂等
-   （如 mail 的 `RequestID`），因为它的提交点在 handler 的 Mongo 事务里、与命令截止时间没有绑定。
+5. **分工**：框架兑现跨尝试幂等（收件箱 + 租约封顶 + 协调器告警），步骤模板不再需要自己按 `IdempotencyKey` 做业务幂等——
+   前提是业务写在生效点的同一事务里（原生：Nest 事务；Mongo 步骤：handler 拿到的 Mongo 事务 ctx）。不在事务里的副作用
+   （调用另一个服务，如 gift deliver 发邮件）不受这个保证，仍要按 `IdempotencyKey` 幂等（mail 的 `RequestID`）。
+   2026-10-06 之前 Mongo 步骤不在本契约内（只保证同一命令最多一次），见下。
+
+#### Mongo 步骤（2026-10-06 纳入）
+
+`MongoCommandInbox` 与 `DataEngineStepInbox` 共用 claim、守卫与判定代码（`saga/step_operation_inbox.go`），第 1～4 条逐条相同：
+新尝试先看同一操作实例的其他尝试（成功或本生的拒绝 → 回放，不执行；在途且租约有效 → nak 等待；租约过期 → 接替），租约封顶到命令截止。
+差别只在**生效点**：
+
+- **提交点是 handler 的 Mongo 事务**。`Handle` 先在一个 Reserve 事务里拿 claim，再开执行事务：handler 的业务写 →
+  对自己 claim 的条件写（owner、token、`pending`、`lease_until > now`，标 completed 并存 completion）→ 插入回执（`_id = CommandID`，格式不变）。
+  条件写不匹配（截止已过、已被接替）时整笔事务中止，业务写随之回滚；接替写的是同一个 claim 文档，两者只能有一个提交。
+  条件在事务最后一次写时检查，剩下的窗口是提交本身的延迟（与原生投影相同）。
+- **业务写必须经 handler 拿到的事务 ctx 写进这笔事务**，才在契约内；这时业务按 `IdempotencyKey` 幂等从“必需”降为可选的纵深防御。
+  调用另一个服务的步骤不在事务里：被中止的尝试可能已经发出调用，仍要业务幂等。
+- 执行事务失败（handler 错误、取消、fence）后交还租约，重投立即重试，与改动前“失败后重投立即重跑”一致；提交结果未知时回执已在，重投回放。
+- 消费者：回放的 completion 原样发布（`CommandID` 是生效那次的）；截止已过、被 fence、被接替的投递不执行，ack 前把同一操作实例已生效的成功
+  经 saga 结果流重发；在途等待按可重试错误 nak。
+- `CommandInboxOptions` 增 `Owner`（缺省每个实例随机）与 `LeaseDuration`（缺省 1 分钟，再封顶到命令截止）。
+- **持久格式只增**：新集合 `<收件箱集合>_claims`（claim 与守卫，文档格式与原生 `_dataengine_inbox_claims` 相同），回执集合不变。
+- **混跑**：旧 Mongo 步骤进程不写 claim，新进程看不到它处理的尝试；“同一命令最多一次”在混跑中仍成立（双方都写同一个回执 `_id`），
+  “同一操作实例最多一次”只在全部 Mongo 步骤进程升级后成立，之前仍靠业务幂等。已生成工程不迁移（维护者决定），仓库模板与 `roost add saga` 生成物已同步注释。
+- 代价：每次执行多一个 Reserve 事务（读回执、读 claim、守卫 upsert、按操作查询、写 claim），执行事务多一次条件更新（测量见
+  [方案](docs/feature/SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)）。
+
+**两个结果消费者的终态分类相同**（O-S5-1）：普通结果流（`SubscribeCompletions`）与原生 effect 流对 `ErrNotWaiting`、`ErrNotFound`、`ErrIdentityConflict`、
+`ErrDefinitionMissing`、`ErrInvalidRecord` 都 Term，不再 nak 到 `MaxDeliver`。退避中到达、被丢弃的成功由下一次尝试回放或由过期投递重发（上面第 3 条）。
+混跑期间若仍有旧 Mongo 步骤进程，“退避中到达的成功 + 最后一次尝试过期”这一角落少一次被接收的机会，按第 4 条落到告警。
 
 **代价与运维要点**：
 - **投影积压超过步骤 `Timeout` 时步骤停住而不是重复执行**：每次尝试都在截止后才投影、被跳过，步骤要等积压消退后的那次尝试才能成功；
@@ -249,7 +278,14 @@ worker 扫描；进程内 signal 只用于降低新任务延迟。
 **进程被强杀时遗留的 Mongo 事务。** Mongo 步骤的 handler、协调器的状态推进都在 Mongo 事务里；进程被 kill -9 时服务端不会立刻知道，
 这笔事务保持打开、持锁，直到 `transactionLifetimeLimitSeconds`（服务端参数，默认 60s）才被回收。期间其他进程对同一文档的事务写一直得到
 `WriteConflict`，同一操作的尝试反复失败（真实 NATS + Mongo 两进程强杀实测恢复约 1～1.5 分钟，N06 S5 review）。默认步骤预算（5s × 5 次加退避，约 30s）
-短于它，受影响的操作可能用尽重试进入补偿。要让强杀后的步骤自己恢复，Mongo 步骤的 `Timeout × MaxAttempts` 加退避应长于锁回收时间，或在部署侧调小该服务端参数。
+短于它，受影响的操作可能用尽重试进入补偿。要让强杀后的步骤自己恢复，二选一（O-S5-3，saga 方向 ②方案）：
+
+- **推荐：把服务端 `transactionLifetimeLimitSeconds` 调到 20**（`db.adminCommand({setParameter: 1, transactionLifetimeLimitSeconds: 20})`，或启动参数
+  `--setParameter transactionLifetimeLimitSeconds=20`）。框架自己的事务由 `mongo.transaction_timeout`（默认 30s）约束整个重试过程，单次事务远短于 20s；
+  被服务端按寿命中止的事务以 TransientTransactionError 重跑。业务里若有单次超过 20s 的 Mongo 事务，按它调大，同时调大受影响步骤的预算。
+- 或按步骤调大 Mongo 步骤的预算（`saga.steps.<type>.<step>.max_attempts`），让 `Timeout × MaxAttempts` 加退避长于该参数。默认步骤预算不改：它约束所有 saga 的失败检测时间。
+
+saga 方向 ②之后被杀进程手里的尝试**不会在锁释放后补提交**（它的事务已随进程消失，服务端回收时中止），接替它的尝试照常执行一次；锁只影响恢复时间。
 
 生产集群应使用 MongoDB replica set（事务所需）和 JetStream file storage；关键区服
 通常配置 3 replicas。`AckWait` 必须大于步骤处理的高分位延迟，receipt/tombstone TTL

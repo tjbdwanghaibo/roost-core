@@ -392,8 +392,15 @@ game-demo 在 game 服务的三份配置里把 `gift_item.debit.max_attempts` �
 预算正反两个方向共用；重试次数只决定协调器等多久，不会让同一次操作生效多次：原生步骤（`SubscribeDataEngineStep`）保证同一
 操作实例的所有尝试里最多一次生效，尝试只在命令截止前生效，协调器放弃后才到的成功记 `saga.completion.late_after_abandon_total` 告警，
 不重开终态（[SAGA.md「原生步骤执行契约」](../SAGA.md#原生步骤执行契约u-0280维护者-2026-10-05-决定)）。代价：Mongo 投影积压超过步骤
-`timeout` 时步骤停住（每次尝试都在截止后才投影、被跳过），积压消退后才成功，而不是像以前那样重复执行；Mongo 步骤
-（`SubscribeMongoStep`）仍按 `IdempotencyKey` 做业务幂等。
+`timeout` 时步骤停住（每次尝试都在截止后才投影、被跳过），积压消退后才成功，而不是像以前那样重复执行。Mongo 步骤
+（`SubscribeMongoStep`）自 2026-10-06 纳入同一契约（saga 方向 ②）：生效点是 handler 的 Mongo 事务，业务写经 handler 拿到的事务 ctx
+写进这笔事务时，按 `IdempotencyKey` 的业务幂等只是可选的纵深防御；调用另一个服务（如发邮件）不在事务里，仍要按 `IdempotencyKey` 幂等。
+新增集合 `<收件箱集合>_claims`；跨尝试最多一次要等全部 Mongo 步骤进程升级后成立（[SAGA.md「Mongo 步骤」](../SAGA.md#mongo-步骤2026-10-06-纳入)）。
+
+**部署：Mongo 的 `transactionLifetimeLimitSeconds`**。进程被 kill -9 时它手里的 Mongo 事务在服务端保持打开、持锁到这个参数（默认 60s），
+期间同一文档上的步骤尝试一直 WriteConflict；默认步骤预算约 27s，短于它，受影响的操作会被拖进补偿。生产建议把它调到 20
+（`--setParameter transactionLifetimeLimitSeconds=20`）：框架的事务由 `mongo.transaction_timeout`（默认 30s）约束整个重试过程，单次事务远短于 20s。
+不能改服务端参数时，按步骤调大 Mongo 步骤的 `max_attempts`，让预算长于它（SAGA.md「进程被强杀时遗留的 Mongo 事务」）。
 
 ## 8. 实时同步怎么选
 

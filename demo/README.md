@@ -185,8 +185,10 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
   - deliver（查 Player 集合确认收件人进过游戏，再 `mail.Send` 带附件）的业务是一次 bus 调用，不是 Nest 事务，没有东西可以绑，
     收件人查的是 Player DAO 自己的库和集合（`db.PlayerDaoDBName` / `db.PlayerDaoCollection`，即 DAO 标记的 `db=game`），不是 `dataengine.database`——
     后者只给原生步骤的 inbox 用（RR-20260930-22 之前两处只在默认 `game` 时碰巧一致）。
-    所以留在 `saga.SubscribeMongoStep`：Mongo inbox 先占命令 id，第二层幂等是 mail 服务自己的（Send 按 RequestID 去重，
-    而 RequestID 就是命令的 IdempotencyKey）。deliver 的补偿什么也不做（邮件不撤回）。
+    所以留在 `saga.SubscribeMongoStep`：Mongo inbox 与原生步骤同一套操作实例契约（已有结果的尝试回放、在途尝试等待、过期接替，
+    roost-core SAGA.md「Mongo 步骤」），但它只管写进 handler 那笔 Mongo 事务的东西；邮件是 bus 调用，不在事务里，
+    被 fence 中止的尝试可能已经发出邮件，所以 mail 服务自己的幂等仍是**必需**的（Send 按 RequestID 去重，RequestID 就是命令的
+    IdempotencyKey）。deliver 的补偿什么也不做（邮件不撤回）。
   - 这条分界是规则不是权宜：原生路径给"业务本来就经 Nest 提交"的步骤用；拿它去包一次跨服务调用，等于把回执绑在一个
     并不包含那次副作用的事务上。
   - 业务拒绝也**提交**：不动数据，只写回执和一个失败的完成结果——协调器听不到的拒绝会让 saga 空等到 deadline。

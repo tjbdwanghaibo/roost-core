@@ -372,3 +372,9 @@ E4: manual Compensate re-dispatched the refund as gift-4:2:0:1, the CommandID of
 放弃后迟到的成功按（操作，代际）在 tombstone 的 `late_alarms` 上只告警一次（可选接口 `LateSuccessAlarmStore`）；
 补偿方向 `ManualRequired` 上的人工 `Compensate` 进入新一生。持久格式只增 `late_alarms`；契约正文已更新（SAGA.md「原生步骤执行契约」第 3、4 条与「失败语义」）。
 修后四条转绿；“补偿方向 ManualRequired 用 Resume 重新执行补偿”的守卫修前修后都绿。验证与兼容见方案文档第 8 节。
+
+## Mongo 步骤纳入同一契约（2026-10-06，维护者第六轮决定 saga 方向 ②）
+
+「与推荐的差异」里“Mongo 步骤不在本契约内”已改变：`MongoCommandInbox` 与 `DataEngineStepInbox` 共用 claim / 守卫 / 判定（`saga/step_operation_inbox.go`），
+生效点是 handler 的 Mongo 事务里对自己 claim 的条件写。同时协调器写记录收成一个转移（方向 ①）。见
+[方案与实施](../feature/SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)；本记录的契约正文以 SAGA.md 为准。

@@ -504,8 +504,12 @@ const (
 
 // The step topics. A step whose business is a Nest transaction subscribes
 // with saga.SubscribeDataEngineStep and binds its receipt inside that
-// transaction; one whose business is a call into another service uses the
-// Mongo inbox helpers below. Both address the same topics.
+// transaction; any other step uses the Mongo inbox helpers below. Both
+// address the same topics, and both inboxes let at most one attempt of an
+// operation take effect (roost-core SAGA.md, 原生步骤执行契约 / Mongo 步骤).
+// For a Mongo step that covers what its handler writes through the Mongo
+// transaction it is given; a call into another service is outside that
+// transaction and still has to be idempotent by Command.IdempotencyKey.
 const (
 %s)
 
@@ -514,7 +518,7 @@ const (
 // backoff, and saga.steps.%s.<step>.<field> overrides one step (see the
 // roost-core USER_GUIDE, "Saga 步骤预算"). One operation of a step may take up
 // to MaxAttempts attempts; the framework makes sure at most one of them takes
-// effect (roost-core SAGA.md, 原生步骤执行契约).
+// effect (roost-core SAGA.md, 原生步骤执行契约; Mongo steps since 2026-10-06).
 func Definition() saga.Definition {
 	return saga.Definition{Type: Type, Version: Version, Steps: []saga.Step{
 %s	}}

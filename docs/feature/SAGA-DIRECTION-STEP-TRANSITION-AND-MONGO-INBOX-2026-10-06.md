@@ -145,4 +145,66 @@ handler 事务失败（handler 错误、取消、fence）后交还租约（`leas
 
 ## 实施状态
 
-（实施后补）
+**已实施，未发版**。① `a5e7b070`（纯重构）；② 与 O-S5-1、文档见同分支随后的提交（提交号见 DECISIONS-PENDING 末表）。证据在 [evidence/sagadir](evidence/sagadir)。
+
+### ①
+
+- `saga/step_transition.go`：`stepTransition` / `openOperation` / `transitionCause`；`engine.go` 8 个出口全部改调它，删除 `abandonedOperation`、`closedOperation`。
+- 守卫 `saga/step_transition_guard_test.go`；负对照（临时加一个手拼请求、`Incarnation++` 的 Engine 出口）三处全部报出：[guard-negative.txt](evidence/sagadir/guard-negative.txt)。
+- U-0280、U-0281、B1、NC-250 与 `step_operation_*` 全部既有用例**不改断言**通过（`-race -count=3` 全包；关键用例 `-race -count=50`）。
+
+### ②
+
+- `saga/step_operation_inbox.go`：原生收件箱的 claim / 守卫 / 判定原样移入 `stepOperationInbox`，另加 Mongo 步骤的生效点 `settleOwnClaim` 与 `errAttemptFenced`。
+  `DataEngineStepInbox` 只剩原生特有部分（回执读法、`Bind`、`Replay`、`waitReplay`），`dataEngineClaim` 是 `stepClaim` 的别名（测试与持久格式不变）。
+- `saga/command_consumer.go`：`MongoCommandInbox` 嵌入同一核心，`Handle` 改为 Reserve 事务 + 执行事务；`CommandInboxOptions` 增 `Owner`、`LeaseDuration`；
+  `SubscribeMongoStep` 处理回放 / 在途 / 过期 / fence / 接替，过期分支补上“重发同一操作已生效的成功”。
+- **先红后绿**（[mongo-step-red-green.txt](evidence/sagadir/mongo-step-red-green.txt)），`saga/mongo_step_operation_promises_test.go` 同一份用例跑 mongotest 与真实副本集：
+  ```text
+  committed attempt is replayed by the next attempt:
+    operation gift-1:1:1 took effect 2 time(s), want 1: the business write ran for [gift-1:1:1:1 gift-1:1:1:2] although attempt gift-1:1:1:1 had already committed
+  in-flight attempt past its deadline is taken over and cannot commit:
+    attempt gift-1:1:1:2 ran while attempt gift-1:1:1:1 was still in flight with a live lease
+    operation gift-1:1:1 took effect 2 time(s), want 1: attempt gift-1:1:1:1 committed after gift-1:1:1:2 took it over (k returned <nil>, ...)
+  ```
+  修后两边都绿：k+1 回放 k 的结果（CommandID 是 k 的）；在途时 k+1 不执行，k 截止后 k+1 接替执行，k 的事务以 `errAttemptFenced` 中止、不留回执。
+- 消费者 `saga/mongo_step_consumer_promises_test.go`：回放发布、在途 nak、过期重发同一操作的成功、被接替 ack。
+- **跨进程强杀实跑**（[cross-process-kill.txt](evidence/sagadir/cross-process-kill.txt)）：`TestRealSagaCrossProcessKillRecovers` 现在断言每个操作实例业务事务恰好提交一次。
+  修后：60/60 完成，120 个操作、120 次提交、**0 个操作被多次提交**（N06 S5 第 2、3 次实跑各 1 个）；恢复 1m22.7s（仍由遗留事务锁主导）；
+  存活进程 232 次“过了截止不执行”，期间出现 MaxTimeMSExpired、连接中断导致的提交结果未知，仍然恰好一次。
+
+### O-S5-1
+
+普通结果消费者与原生结果消费者共用 `isTerminalCompletionError`，并加入 `ErrIdentityConflict`。修前红（[o-s5-1-red.txt](evidence/sagadir/o-s5-1-red.txt)）：
+`plain result stream = saga: not found (permanent=false) ...`、`... step is not waiting for a result (permanent=false) ...`、`... idempotency identity conflict (permanent=false) ...`；修后两条流都 Term。
+
+### O-S5-3
+
+按方案写进文档，不改默认步骤预算：SAGA.md「进程被强杀时遗留的 Mongo 事务」与 USER_GUIDE §7 建议 `transactionLifetimeLimitSeconds=20`，或按步骤调大 Mongo 步骤预算。
+没有改生成的 compose 模板（开发环境不涉及强杀恢复时长；改它会动全部生成工程的 compose 快照）。
+
+### 性能（[bench.txt](evidence/sagadir/bench.txt)，同机 Apple M5，顺序单协程，每次新命令）
+
+| 环境 | 修前 | 修后 | 说明 |
+| --- | --- | --- | --- |
+| mongotest（2000 次 × 5） | 0.44 ms/op，8.2k allocs | 3.6 ms/op，63k allocs | 替身按集合快照、按操作查询是扫描，集合越大越慢，只作同口径对照 |
+| 真实三节点副本集（500 次 × 6，交替） | 9.0 ms/op（8.8～9.2） | 17.4 ms/op（16.1～18.7） | 每次多一次事务提交（Reserve 事务），延迟约翻倍；吞吐随并发步骤扩展，未做并发压测 |
+
+延迟代价来自多出的一次事务提交（多数派写），而不是守卫 upsert 与查询本身。没有把 Reserve 与执行合成一个事务：那样“在途尝试”在别人看来不可见，
+只能靠写冲突重试等待，无法接替，被杀进程遗留的事务还会连守卫一起锁住（见“实现”一节）。
+
+### 验证（`GOWORK=off`）
+
+- `gofmt -l` 空；`go build ./... && go vet ./...`；`go vet -tags integration ./saga/`；`go test -race -count=3 ./saga/... ./kit/saga/...`；
+  `-race -count=20` 跑新增与 `TestNativeStep*`、`TestDataEngineStepInbox*`、`TestExpiredStepCommand*`、`TestMongoCommandInbox*`；根包 `go test -count=1 .`。
+- `go test -count=1 ./codegen/...`；`go generate ./...` 后 porcelain 只有本次改动；生成 game-demo（replace 到 worktree）`go build ./... && go vet ./... && go test ./...`（18 个包通过）。
+- 真实依赖（`~/.roost-it/roost-dataengine-it`，验收锁空闲，库 `roost_sagadir_*` / `roost_revn06s5_*`、流 `REVN06S5_*` 用后删除）：`-run '^TestRealMongo'` 全部 saga 真实 Mongo 用例、
+  `TestRealSagaCrossProcessKillRecovers`、`scripts/test-dataengine-generated.sh` 通过。
+- 未改 nest / entity / dataengine / sync：没有跑 glsvet。
+
+### 兼容与未完成
+
+- 持久格式只增（新集合 `<收件箱集合>_claims`）；wire、摘要、回执格式不变；公开 API 只增（`CommandInboxOptions.Owner` / `LeaseDuration`）。
+- 行为变化：Mongo 步骤跨尝试回放 / 等待 / 接替；在途时同一命令的并发重投改为 nak（修前等对方提交后回放）；普通结果流对五种终态错误 Term。
+- 混跑没有实跑（语义见 SAGA.md「Mongo 步骤」）。
+- 真实 Mongo 上的并发吞吐对照没有做，只测了单协程延迟。

@@ -139,6 +139,11 @@ func SubscribeCompletions(ctx context.Context, client fnats.IJetStream, config C
 		if err != nil {
 			logConsumerError("completion", message, err)
 		}
+		// 与原生结果消费者同一份终态分类（O-S5-1）：重投不会改变结论的错误 Term，不 nak 到 MaxDeliver。
+		// 退避中到达、被这里丢弃的成功由同一操作实例的下一次尝试（或过期投递）经收件箱回放（SAGA.md「原生步骤执行契约」）。
+		if isTerminalCompletionError(err) {
+			return kitnats.Permanent(err)
+		}
 		return err
 	})
 }

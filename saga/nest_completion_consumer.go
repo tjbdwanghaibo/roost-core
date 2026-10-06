@@ -140,12 +140,13 @@ func handleNestCompletion(ctx context.Context, message *fnats.JetStreamMsg, comp
 	return err
 }
 
-// isTerminalCompletionError names the outcomes a redelivery cannot improve.
+// isTerminalCompletionError names the outcomes a redelivery cannot improve. 两个结果消费者（原生 effect 流与普通结果流）
+// 共用它（O-S5-1）。ErrIdentityConflict：同一 CommandID 已记下另一份结果，回执是持久的，重投不会变。
 func isTerminalCompletionError(err error) bool {
 	switch {
 	case err == nil:
 		return false
-	case errors.Is(err, ErrNotWaiting), errors.Is(err, ErrNotFound), errors.Is(err, ErrInvalidRecord), errors.Is(err, ErrDefinitionMissing):
+	case errors.Is(err, ErrNotWaiting), errors.Is(err, ErrNotFound), errors.Is(err, ErrInvalidRecord), errors.Is(err, ErrDefinitionMissing), errors.Is(err, ErrIdentityConflict):
 		return true
 	default:
 		return false

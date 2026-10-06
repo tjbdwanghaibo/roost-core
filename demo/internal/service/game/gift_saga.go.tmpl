@@ -53,10 +53,17 @@ import (
 //     publishes nothing of its own — it waits for the receipt to be
 //     projected, then acknowledges.
 //   - **deliver is a mail call**, not a Nest transaction, so there is nothing
-//     to bind it to. It stays on `SubscribeMongoStep`, whose Mongo inbox
-//     reserves the command id before the handler runs; its second layer of
-//     idempotency is the mail service's own, since Send deduplicates by
-//     RequestID and the RequestID is the command's IdempotencyKey.
+//     to bind it to. It stays on `SubscribeMongoStep`, whose Mongo inbox runs
+//     the same per-operation contract as the native one (an attempt finds an
+//     earlier attempt's result and replays it, waits while another attempt
+//     holds a live lease, takes over an expired one; roost-core SAGA.md,
+//     「Mongo 步骤」). That contract covers what the handler writes through
+//     its Mongo transaction, and the mail is not such a write: an attempt
+//     fenced at commit may already have sent it. So the mail service's own
+//     idempotency is still REQUIRED here, not optional: Send deduplicates by
+//     RequestID and the RequestID is the command's IdempotencyKey. A Mongo
+//     step whose business is a write through the handler's transaction needs
+//     no idempotency of its own.
 //
 // That split is the rule, not a demo convenience: the native path is for a
 // step whose business already commits through Nest. Using it for a step that
@@ -593,7 +600,10 @@ func (steps giftSteps) deliver(ctx context.Context, command saga.Command) (saga.
 		Audience: svcmail.AudienceDirect, Recipients: []int64{state.To},
 		Subject: gift.Subject(state), Body: gift.Body(state), Attachment: attachment,
 		ExpiresInSeconds: gift.MailExpiresIn,
-		// One mail per step, however many times the command is delivered.
+		// One mail per step, however many times the command is delivered
+		// and however many attempts the step takes. Required: the mail is
+		// outside the inbox's transaction, so the framework's
+		// one-attempt-per-operation contract does not cover it.
 		RequestID: "gift:" + command.IdempotencyKey,
 	})
 	if err != nil {
