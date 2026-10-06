@@ -6,6 +6,7 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 未验证项闭环（fixr2），无新 RR，未发版。** 兴趣表加未导出时钟字段 `remoteInterestRegistry.now`，补溢出水位到期用例（[RR-20261006-11](RR-20261006-11.md) §5）；真实 NATS 用例 `TestRealJetStreamInterestHandlerErrorIsAcknowledged` 断言兴趣 handler 出错时 Ack；RR-20261005-01 回归在 C4 后逐项对照、变异证明能红，新增 `TestAGroupFitsOneLiveQuery`（[记录](RR-20261005-01.md)末节）。
 **10-06 saga / 驱动疑点闭环（fixs），未发版。** RR-20261006-14：`stepTransition` 改为 Engine 方法、自己调 `Store.Apply`，守卫改为 `go/types` 全包检查（产生 / 改写请求、调用 Apply 都只能在 stepTransition 里）；RR-20261006-15：claim 记 `outcome`，按操作只取有影响的 claim，上限与尝试次数、Resume 次数脱钩。同批 `TestOnlyScriptCommandsOptOutOfTheDriverRetry` 改名 `TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`；Mongo 步骤延迟的 9.0→17.4 与 8.965→18.321 两组数字标明各自的测量轮次。
 
 | 编号 | 修复 | 状态 |
@@ -24,7 +25,7 @@
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-11](RR-20261006-11.md) | 兴趣表满时 release 改记溢出水位，迟到的旧续租不再复活租约；同批 REM 疑点闭环（写入点守卫、注释与文档更正） | 已修复、声明场景验证，未发版 |
+| [RR-20261006-11](RR-20261006-11.md) | 兴趣表满时 release 改记溢出水位，迟到的旧续租不再复活租约；同批 REM 疑点闭环（写入点守卫、注释与文档更正）；fixr2 补到期与 JetStream 结算实测 | 已修复、声明场景验证，未发版 |
 
 **10-06 驱动 Close 口径统一（wclose）：RR-20261006-10 已修复、声明场景验证，未发版。** 重复 Close 幂等返回 nil、第一次的错误只报一次，并发 Close 串行（后到者在自己的 ctx 内等），Close 之后的调用返回已关闭错误；kit 三个 Mod 停止入口串行化；同批 `skill/README.md` 链接改对、根包加文档相对链接门禁。
 
@@ -295,7 +296,7 @@
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261005-01](RR-20261005-01.md) | activity 启动时拒绝注定开不出窗口的候选集 | 已修复，未发版 |
+| [RR-20261005-01](RR-20261005-01.md) | activity 启动时拒绝注定开不出窗口的候选集（C4 后由活动组文件兑现，10-06 复核见末节） | 已修复，未发版 |
 
 **10-05 N02续审：NC-80/81/83已修复、声明场景验证，未发版；合并前复核：NC-80改为Encoder+推迟写状态（不再复制响应体）、NC-81补FlushError透传、NC-82按每主体上限+满表O(1)拒绝修复，NC-83评估为当前最好。** 正式回归在旧产品上7+4+3红、修后全绿；race×3 六包438 pass、生成TCP包race×3 117 pass、根包/build/vet/codegen与game-demo全工程通过。[本轮](../review/REVIEW-2026-10-05-noncore-n02.md) · [证据](evidence/noncore-bugfix-20261005-n02/README.md)。T-242/243/244。已生成工程需重新生成 player TCP 文件。
 

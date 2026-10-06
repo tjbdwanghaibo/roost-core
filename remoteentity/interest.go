@@ -75,7 +75,12 @@ type remoteInterestRegistry struct {
 	lastLogAt   int64
 	// overflow 是表满放不下撤销水位时的退路（RR-20261006-11），每个 consumer 至多一个，不占表容量。
 	overflow map[int32]*interestOverflowFence
+	// now 是兴趣表读的系统时钟（纳秒）。租约与水位的到期是系统时间（D-L3），这里只为测试留一个注入缝：
+	// 生产只经 newRemoteInterestRegistry 取 time.Now，测试替换它来走到期，不加睡眠。
+	now func() int64
 }
+
+func systemNowNanos() int64 { return time.Now().UnixNano() }
 
 // interestOverflowFence 记一个 consumer 在表满时发出、没能留下撤销水位的 release：代际上限、涉及 key 的
 // 指纹位图与到期时刻（最后一次 release + 兴趣 TTL，与撤销水位同一个上界）。到期前，这个 consumer 代际不新于
@@ -139,6 +144,7 @@ func newRemoteInterestRegistry(limits remoteInterestLimits) *remoteInterestRegis
 		quota:       limits.PerConsumer,
 		maxSubs:     limits.Total,
 		fence:       limits.ReleaseFence,
+		now:         systemNowNanos,
 	}
 }
 
@@ -151,10 +157,13 @@ func (r *remoteInterestRegistry) renew(interest entity.RemoteSnapshotInterest) e
 // read paths pass a threshold so cache hits do not cause one network message
 // per read; replica apply passes zero and remains idempotent.
 func (r *remoteInterestRegistry) renewIfNeeded(interest entity.RemoteSnapshotInterest, remainingThreshold time.Duration) (bool, error) {
-	if r == nil || interest.ConsumerSID == 0 || !interest.Key.Valid() || interest.ExpiresAt <= time.Now().UnixNano() {
+	if r == nil || interest.ConsumerSID == 0 || !interest.Key.Valid() {
 		return false, entity.ErrRemoteRejected
 	}
-	now := time.Now().UnixNano()
+	now := r.now()
+	if interest.ExpiresAt <= now {
+		return false, entity.ErrRemoteRejected
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	current, exists := r.entries[interest.Key][interest.ConsumerSID]
@@ -273,7 +282,7 @@ func (r *remoteInterestRegistry) release(key entity.RemoteSnapshotKey, consumerS
 	if r == nil {
 		return
 	}
-	now := time.Now().UnixNano()
+	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	current, exists := r.entries[key][consumerSID]
@@ -313,7 +322,7 @@ func (r *remoteInterestRegistry) interested(key entity.RemoteSnapshotKey) bool {
 	if r == nil {
 		return false
 	}
-	now := time.Now().UnixNano()
+	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for sid, lease := range r.entries[key] {

@@ -119,3 +119,19 @@
 ### 6.9 后续（追加）
 
 第 5 步已实施（2026-10-06，[记录](MIRROR-STEP-5-2026-10-06.md)）：kit `RemoteMirrorMod`、codegen `//roost:mirror` DTO、公会摘要两进程样例（生成工程 `testdata/remoteflow`）。第 6 步的外部条件见该记录 §6。
+
+### 6.10 兴趣 handler 出错时 JetStream 的结算（2026-10-06 实测，分支 `fixr2`）
+
+发版文档 REM-5 写“owner 拒绝时 `InterestReplicaStore.ApplyReplica` 返回错误，JetStream 上是否 NAK 重投到 MaxDeliver 未核对”。核对结果：**Ack，不重投、不 Term**。
+
+- 链路：兴趣主题用普通 `Subscribe`（DeliverAll durable `sync_remote_entity_interest_<sid>_<hex16>`，`mirror.New`）；`InterestReplicaStore.ApplyReplica` 的错误经复制器 handler 交给同步总线，`jetStreamSyncBus.invoke` 按总线的错误契约“记 Warn、继续”（`jetstream sync: handler error`），consume 回调返回 nil，驱动 `settleJetStreamDelivery` 走 Ack。这是同步总线对所有主题的统一契约（同一投递扇出给多个本地 handler，一个 handler 出错不能让别的 handler 再收一次；单测 `TestJetStreamSyncBusPublishesAndAcknowledgesHandlerError`）。只有停止中的总线拒绝投递（`errJetStreamSyncStopping`）才 NAK。
+- 与设计一致：兴趣被拒的原因（配额 / 表满 / 已过期 / 身份与载荷不符）由同一份消息历史决定，原样重投只会再被拒；空位要等别的租约过期或撤销，立即 NAK 会在几毫秒内耗尽 MaxDeliver 再 Term。恢复由 consumer 负责：它本机先按同一张表判定（本机被拒就不广播，计 `interest_renew_refused_total`）；只在 owner 侧被拒（两边收到的消息顺序不同、表满判定不一致）时，consumer 在租约剩余不足一半时（缺省 TTL 30s，即最长约 15s，且该 key 有读取）或 owner 启动时的续租请求（O-M6-1）以更新的代际重新续租。期间这个 key 没有推送，读取按 `cached_max_staleness` 回源，正确性不依赖推送（§1 第 4 条）。迟到的旧续租由撤销水位 / 溢出水位挡住，与结算方式无关。
+- 真实 JetStream 用例 `TestRealJetStreamInterestHandlerErrorIsAcknowledged`（`remoteentity/interest_handler_error_jetstream_integration_test.go`，隔离环境，自建前缀流、用例结束删流）：owner 兴趣表容量 1 且已满，consumer 发一条续租（owner 拒绝 `ErrInterestRegistryFull`）和一条身份不符的消息；断言 handler 各调用一次，服务端 ack floor 推进到 2、无待确认、`NumRedelivered=0`，等过 AckWait（2s）后投递计数仍是 2，`nats.jetstream.terminal.total` 不变；随后表里有空位，consumer 以更新代际的续租建立租约。
+
+  ```
+  WARN jetstream sync: handler error topic=remote_entity_interest ... err="remote_entity: snapshot interest registry is full: remote entity: capacity exceeded"
+  WARN jetstream sync: handler error topic=remote_entity_interest key=12345 version=1 err="remote_entity: interest message identity does not match its payload"
+  --- PASS: TestRealJetStreamInterestHandlerErrorIsAcknowledged (3.05s)
+  ```
+
+  负对照（临时改 `sync/syncbus/driver/jetstream.go`，让 consume 回调返回 handler 的错误，未提交）：两条消息各被 NAK 重投到 MaxDeliver（5 次），用例报 `handler errors [... 10 条 ...]; want the registry-full refusal and the identity mismatch` 失败——说明用例能区分 Ack 与 NAK。
