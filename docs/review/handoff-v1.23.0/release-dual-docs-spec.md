@@ -95,3 +95,5 @@ TOOL（pretag、source-head-check、冲突标记门禁、mirror-local.sh、示�
 - rv2 已合（`65bef66e`，分册 2 共 39 条，未闭环 0）。drill 合入后复核 SAGA-1 `nats/driver/jetstream.go:96-97` 与 DRV-5 引用。
 - tail 已合（`2c01e06d`、`363be382`）：groups_file 必填（破坏性）、slow_reroute 补测、B10 分工文档。汇总时改 OWN-5（guide ~450-460、迁移表第 10 行 ~102、impl 709-742）、OPS-2（guide ~628、impl ~1046）、CFG-7（guide-cfg ~1453“列为后续”→维护者选 A 不做）、核 CFG-11（~403）；兼容破坏总表加“groups_file 必填”。对照表注意：tablegen 也有单例 `//roost:object`。
 - 跟进：`activity.New` 在 `Config.Groups == nil` 时仍不核对（只剩直接构造的测试路径）→ 改为必填，消除不核对分支（`wt-grpnew`）。
+- grpnew 已合（`061cb538`、`068bf5d4`）：`activity.New` 要求 Groups。**发版必做**：生成的 game 测试用了 `activity.Config.Groups`（v1.22.0 没有）→ `codegen/internal/roost/manifest.go` `minimumVersions.Core` 与 `.github/workflows/framework-compat.yml` minimum 行提到 v1.23.0（打 tag 时一起改）。OWN-5 补“New 也要求组”。
+- sktest 已合（`5c1f4176`）：RR-20261006-21/22/23（skill 进程记录生命周期）。分册 3 的 SKILL-1、SKILL-3、SKILL-5 按 `5c1f4176` 更新。待维护者：宿主停进程失败时 Runtime 不重试（A 保持+文档 / B 重试）。
