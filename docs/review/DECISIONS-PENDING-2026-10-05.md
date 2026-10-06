@@ -243,3 +243,4 @@
 > 2026-10-06 额度用尽暂停：未完成工作与恢复步骤见 [handoff-v1.23.0](handoff-v1.23.0/README.md)。
 | skill 宿主撤除失败 | 维护者：“如果是技能本身的问题是不是技能自己处理比较好” → Runtime 记录待撤除并按退避重试，有上限与告警，写入 checkpoint | 实施中（`wt-skretry`） |
 | skill “进程”改名 | 维护者：“skill的一个流程叫做进程很奇怪，用更专业的词语” → 选 **Spawn（衍生物）**：`process` 全量改名为 `spawn`（`$spawn`、`spawn_step`、`modify_spawn`、`spawn_start`、`SpawnStepCommand`、`StepSpawn`、`spawn_remove` 等），不保留旧名（线上未部署） | 待实施（撤除重试合入后） |
+| nats/driver 已关闭状态 | 维护者方向调整，按推荐 A：nats/driver 自己维护唯一的“已关闭”状态，不再依赖 nats.go 的连接状态（Close 已修三次：RR-20261004-08、RR-20261006-10、RR-20261006-24 / -26） | 已实施（`f0de827a`，分支 `natsstate`，未发版，[方案与验证](../feature/REFACTOR-2026-10-06-nats-driver-closed-state.md)）：Client 原子标记为唯一判据，入口先查、失败先看它；删 `closedError` / `closing` / `Assembly.closed`；导出方法守卫 + 屏障 + 真实 NATS 窗口用例；受影响发版条目 DRV-5 |
