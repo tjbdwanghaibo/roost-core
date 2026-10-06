@@ -238,7 +238,7 @@ func (m *ShopMod) Init(cfg *viper.Viper) error { return app.LoadConfig(cfg, &m.c
 
 ## 6. 实施状态
 
-已实施（提交见 DECISIONS-PENDING 第十三轮“A4①”行，分支 `a4s`，基线 `66d72a33`，rebase 到 `b839b77f`），未发版。
+已实施（`d1226825`，分支 `a4s`，基线 `66d72a33`，rebase 到 `b839b77f`），未发版。
 
 ### 迁移清单
 
