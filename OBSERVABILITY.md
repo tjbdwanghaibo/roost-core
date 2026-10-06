@@ -26,7 +26,7 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | `nest.dispatch.total` / `nest.dispatch.remote.total` | Counter | 分发量（labels: handler/result） |
 | `nest.dispatch.cost` | Duration | 单次分发耗时 |
 | `nest.dispatch.slow_trace_suppressed` | Counter | 被进程级采样窗口抑制的重复全堆栈诊断，无实体 ID 标签 |
-| `nest.dispatch.queue_len` / `worker_num` / `delayed_messages` | Gauge | 队列水位 |
+| `nest.dispatch.queue_len` / `worker_num` / `delayed_messages` | Gauge | 队列水位（labels: dispatcher/pool）；派发器排空停止后删除，同名派发器还有活着的不删（RR-20261006-18） |
 | `nest.dispatch.requeue.total` | Counter | 锁冲突重排队 |
 | `nest.handler.lock_hold` | Duration | 从进入事务执行到调用 release 前或事务返回；不含等锁及完整 release hook 成本，保留旧口径 |
 | `nest.handler.lock_hold.slow.total` | Counter | 超阈值持锁（默认 100ms，`NestOptionWithSlowLockThreshold`） |
@@ -73,7 +73,7 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | ~~`cache.refhmap.write_degraded_total`~~ | — | **v1.19.0 起已移除**（RR-20261004-NC-21）：RefHMap Eval 失败不再降级为非原子写，而是保留原始错误返回调用方；按业务判别结果未知（USER_GUIDE §4）。旧面板 / 告警请删除这一项 |
 | `bus_dispatch_total` / `bus_dispatch_drop_total` / `bus_dispatch_duration` | C/C/D | 总线吞吐与丢弃 |
 | `bus_dead_letter_total` / `_requeue_total` / `_purge_total` | Counter | 死信生命周期 |
-| `bus_duplicate_total`、`bus_rpc_*` | Counter/Gauge | 去重与 RPC 水位 |
+| `bus_duplicate_total`、`bus_rpc_*` | Counter/Gauge | 去重与 RPC 水位。可靠 RPC 的 `method` 标签有界（RR-20261006-19）：被调方只用注册过的方法，其余 `_unregistered`；调用方每个 Bus 至多 256 个方法，其余 `_other` |
 | `failurelog_*_total` | Counter | 失败日志生命周期（append/delete/purge/trim 均带 namespace label） |
 | `failurelog_degraded_total{namespace,op}` | Counter | 适配器没有 Lua（Eval 返回空结果）时走了非原子回退；生产驱动不应出现，非零说明接了不支持脚本的 IRedis。脚本报错（结果未知）不降级，计入 `failurelog_append_total{result="error"}` 等并返回错误（RR-20261005-NC-160） |
 | `obs.series.dropped{metric}` | Counter | 指标基数打满后被丢弃的写入数（**非零即告警**：该 metric 的新 label 组合已静默失效） |

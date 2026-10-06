@@ -112,6 +112,12 @@ type Config struct {
 	// start. Until U-0119 there was no way to supply them at all, so the grace
 	// window was never enforced by any process.
 	SweepGroups []string
+	// Groups is the activity groups file (activity.groups_file, C4) when the
+	// deployment has one. OpenActivity then refuses a window whose group the
+	// file does not define, or whose expected set names a game outside that
+	// group (RR-20261006-17). Nil means no file: the expected set is checked
+	// only for shape, as before the file existed.
+	Groups *Groups
 
 	// Metrics receives reports. A nil reporter means no reporting and never
 	// fails an operation.
@@ -262,6 +268,13 @@ func (s *Service) OpenActivity(ctx context.Context, key Key, expectedGameSIDs []
 	}
 	if err := validateExpectedGames(expectedGameSIDs); err != nil {
 		return Activity{}, err
+	}
+	// Before anything is written: a refused open leaves no opening entry for
+	// the sweep to help forward (RR-20261006-17).
+	if s.cfg.Groups != nil {
+		if err := s.cfg.Groups.checkExpected(key.GroupID, expectedGameSIDs); err != nil {
+			return Activity{}, err
+		}
 	}
 
 	nowUnix := s.cfg.Now().Unix()

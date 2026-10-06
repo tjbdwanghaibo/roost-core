@@ -41,6 +41,7 @@ type Groups struct {
 	source string
 	groups []Group
 	bySID  map[int32]int
+	byID   map[string]int
 }
 
 // groupsFile is the file's shape. The sids are decoded wider than int32 so a
@@ -90,8 +91,7 @@ func ParseGroups(raw []byte, source string) (Groups, error) {
 	if len(file.Groups) == 0 {
 		return Groups{}, fmt.Errorf("activity groups %s: no group is defined", source)
 	}
-	out := Groups{source: source, groups: make([]Group, 0, len(file.Groups)), bySID: map[int32]int{}}
-	ids := make(map[string]struct{}, len(file.Groups))
+	out := Groups{source: source, groups: make([]Group, 0, len(file.Groups)), bySID: map[int32]int{}, byID: map[string]int{}}
 	for index, entry := range file.Groups {
 		id := strings.TrimSpace(entry.ID)
 		switch {
@@ -100,10 +100,10 @@ func ParseGroups(raw []byte, source string) (Groups, error) {
 		case strings.Contains(id, "/"):
 			return Groups{}, fmt.Errorf("activity groups %s: group id %q contains '/'", source, id)
 		}
-		if _, repeated := ids[id]; repeated {
+		if _, repeated := out.byID[id]; repeated {
 			return Groups{}, fmt.Errorf("activity groups %s: group %q is defined twice", source, id)
 		}
-		ids[id] = struct{}{}
+		out.byID[id] = len(out.groups)
 		if len(entry.GameSIDs) == 0 {
 			return Groups{}, fmt.Errorf("activity groups %s: group %q lists no game server", source, id)
 		}
@@ -140,6 +140,34 @@ func (g Groups) Of(gameSID int32) (Group, bool) {
 		return Group{}, false
 	}
 	return g.groups[index].clone(), true
+}
+
+// checkExpected is the coordinator's half of the file (RR-20261006-17): the
+// expected set of a window opened under groupID must be drawn from that group.
+// A subset is normal — a game passes the members that are live — but a sid
+// from another group or from no group, or a group the file does not define,
+// means the opener and the coordinator disagree about who is in the group:
+// the window would wait for a game that never looks at it, or hand a result to
+// one that is not part of the activity. The error names the file, the group
+// and the sid, and wraps ErrInvalid so the RPC reports a caller error.
+func (g Groups) checkExpected(groupID string, expected []int32) error {
+	index, ok := g.byID[groupID]
+	if !ok {
+		return fmt.Errorf("%w: group %q is not defined in activity groups file %s (groups: %s)",
+			ErrInvalid, groupID, g.source, strings.Join(g.IDs(), ", "))
+	}
+	for _, sid := range expected {
+		other, member := g.bySID[sid]
+		switch {
+		case !member:
+			return fmt.Errorf("%w: game %d is expected by a window of group %q but is in no group of activity groups file %s",
+				ErrInvalid, sid, groupID, g.source)
+		case other != index:
+			return fmt.Errorf("%w: game %d is expected by a window of group %q but belongs to group %q in activity groups file %s",
+				ErrInvalid, sid, groupID, g.groups[other].ID, g.source)
+		}
+	}
+	return nil
 }
 
 // IDs is every group id, in file order.

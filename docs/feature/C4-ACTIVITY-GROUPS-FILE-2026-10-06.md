@@ -73,4 +73,7 @@
   - 生成工程（game-demo，replace 到 worktree）：`TestActivityRefusesAGroupNoWindowCouldOpenWith`（65 个成员、重复、两组、超 int32、本服不在组里、未配文件，均按名拒绝；64 个通过组检查）、`TestAWindowOpensForTheGroupTheFilePutsThisServerIn`（真实协调器内存存储：Key 的组 id 来自文件、expected 是 `Live` 的结果、另一组没有窗口、重复开窗正常；64 个全活能开窗）。`go build ./... && go vet ./... && go test ./...` 全绿。
   - codegen：`activity_groups_promises_test.go`（文件覆盖 compose / k8s / run.sh / second-game.sh 的 sid；协调器与 game 配置写 `groups_file`、不再有 `sweep_groups` / `game_sids`；Dockerfile 与 install.sh 带上文件；没有协调器的工程不生成）；`go test ./codegen/...` 全绿。
   - `second-game.sh`：`SECOND_SID=1005` 启动前退出并点名文件；1001 / 1003 通过检查。
-- 未做：协调器的 `OpenActivity` 不核对 expected 集合是否属于 Key 的组（会改 `Service` 逻辑，留待需要时再做）；没有在真实依赖上起进程演练（启动拒绝发生在任何远端调用之前，单测与生成工程测试已覆盖）。
+- ~~未做：协调器的 `OpenActivity` 不核对 expected 集合是否属于 Key 的组（会改 `Service` 逻辑，留待需要时再做）~~ **已实施**（2026-10-06，分支 `oa`，
+  [RR-20261006-17](../bug/RR-20261006-17.md) / [修复](../bugfix/RR-20261006-17.md)）：Mod 把已加载的组经 `Config.Groups` 交给 Service，`OpenActivity` 写入前要求 Key 的组在文件里、
+  expected ⊆ 组成员，否则 `ErrInvalid` 点名；未设置 `groups_file` 的协调器不变。这改了 §2 写的“`Service` 逻辑不变”。
+- 没有在真实依赖上起进程演练（启动拒绝发生在任何远端调用之前，单测与生成工程测试已覆盖）。

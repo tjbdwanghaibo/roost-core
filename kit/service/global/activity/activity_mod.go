@@ -32,6 +32,7 @@ type Mod struct {
 	dispatchAttempts int
 	dispatchBackoff  time.Duration
 	sweepGroups      []string
+	groups           *Groups
 
 	service *Service
 }
@@ -64,7 +65,11 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 // with, and an empty sweep_groups means "every group in the file" — the group
 // ids are then written once, in that file, instead of again in this config.
 // An explicit sweep_groups still decides, for a deployment that splits the
-// back-stop across replicas.
+// back-stop across replicas. With the file set, OpenActivity also checks every
+// window against it: the group must be in the file and every expected game a
+// member of that group (RR-20261006-17). Without it, nothing about groups is
+// checked, as before C4 — the setting is optional so projects generated before
+// the file existed keep working unchanged; projects generated since write it.
 //
 // Redis Cluster requires a common non-empty hash tag in key_prefix, for
 // example {roost:activity}; dispatch records and their owed index share a CAS.
@@ -119,11 +124,13 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 			m.sweepGroups = append(m.sweepGroups, group)
 		}
 	}
+	m.groups = nil
 	if path := strings.TrimSpace(cfg.GetString("activity.groups_file")); path != "" {
 		groups, err := LoadGroupsFile(path)
 		if err != nil {
 			return fmt.Errorf("activity mod: activity.groups_file: %w", err)
 		}
+		m.groups = &groups
 		if len(m.sweepGroups) == 0 {
 			m.sweepGroups = groups.IDs()
 		}
@@ -141,16 +148,8 @@ func (m *Mod) Provide(r *app.Registry) error {
 	if err != nil {
 		return err
 	}
-	service, err := New(Config{
-		Activities: stores.Activities, Participants: stores.Participants,
-		Ledger: stores.Ledger, Audits: stores.Audits,
-		Dispatches: stores.Dispatches, Windows: stores.Windows,
-		GraceWindow: m.graceWindow, ReservationTTL: m.reservationTTL,
-		DispatchBackoff: m.dispatchBackoff, DispatchMaxAttempts: m.dispatchAttempts,
-		SweepGroups: m.sweepGroups, Metrics: m.metrics,
-		// 业务时钟（D-L3）：窗口截止、宽限、过期都与 game 一端的窗口 id 同钟，偏移非 0 时两端一起前移。
-		Now: app.BusinessClock(r).Now,
-	})
+	// 业务时钟（D-L3）：窗口截止、宽限、过期都与 game 一端的窗口 id 同钟，偏移非 0 时两端一起前移。
+	service, err := m.newService(stores, app.BusinessClock(r).Now)
 	if err != nil {
 		return err
 	}
@@ -159,6 +158,20 @@ func (m *Mod) Provide(r *app.Registry) error {
 	// apart: the interface consumers look up, and the owner-only name the
 	// Server looks up to know this process holds the implementation.
 	return mods.RegisterAll(r, OwnerCapabilities(service)...)
+}
+
+// newService builds the Service from what Init read. It is Provide without the
+// Redis lookup, so a test can wire the same configuration over memory stores.
+func (m *Mod) newService(stores RedisStores, now func() time.Time) (*Service, error) {
+	return New(Config{
+		Activities: stores.Activities, Participants: stores.Participants,
+		Ledger: stores.Ledger, Audits: stores.Audits,
+		Dispatches: stores.Dispatches, Windows: stores.Windows,
+		GraceWindow: m.graceWindow, ReservationTTL: m.reservationTTL,
+		DispatchBackoff: m.dispatchBackoff, DispatchMaxAttempts: m.dispatchAttempts,
+		SweepGroups: m.sweepGroups, Groups: m.groups, Metrics: m.metrics,
+		Now: now,
+	})
 }
 
 // Start implements app.Mod.

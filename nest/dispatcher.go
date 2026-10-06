@@ -42,6 +42,10 @@ type Dispatcher struct {
 
 	// coldTargets 由 NestMgr 装配：统一准入时只读内存判断声明目标是否需要慢阶段预加载。
 	coldTargets func(*Msg) bool
+
+	// seriesName 非 nil 表示本派发器以这个名字持有 nest.dispatch.*{dispatcher} 序列
+	// （dispatcher_series.go，RR-20261006-18）；由 dispatcherSeries.mu 保护。
+	seriesName *string
 }
 
 type delayedMsg struct {
@@ -133,6 +137,7 @@ func (m *Dispatcher) OnInit() {
 		slow.QueueCap = 64
 	}
 	m.queue = newDispatchQueue(m.Name, WorkerPoolConfig{Workers: m.workerNum, QueueCap: m.MsgCap}, slow, m.handler, m.remoteHandler)
+	m.holdSeries()
 
 }
 
@@ -210,7 +215,13 @@ func (m *Dispatcher) OnDestroyWithContext(ctx context.Context) error {
 		recycleMsg(dm.msg)
 	}
 
-	return m.queue.stop(ctx)
+	if err := m.queue.stop(ctx); err != nil {
+		// Workers are still running and still report; the series stay until a
+		// retry sees them drained (RR-20261006-18).
+		return err
+	}
+	m.releaseSeries()
+	return nil
 }
 
 func hashKey(key int64) uint64 {
@@ -300,20 +311,20 @@ func (m *Dispatcher) observeStats() {
 		return
 	}
 	fast, slow, continuations := m.queue.stats()
-	m.observePoolStats("fast", fast)
-	m.observePoolStats("slow", slow)
-	metrics.SetGauge("nest.dispatch.fast_continuations", metrics.Labels{"dispatcher": m.Name}, int64(continuations))
-	metrics.SetGauge("nest.dispatch.delayed_messages", metrics.Labels{
-		"dispatcher": m.Name,
-	}, int64(m.delayedCount()))
+	delayed := m.delayedCount()
+	// Only while the series are held: a report racing the release must not
+	// recreate what the release deleted (RR-20261006-18).
+	m.reportSeries(func(name string) {
+		observePoolStats(name, "fast", fast)
+		observePoolStats(name, "slow", slow)
+		metrics.SetGauge("nest.dispatch.fast_continuations", metrics.Labels{"dispatcher": name}, int64(continuations))
+		metrics.SetGauge("nest.dispatch.delayed_messages", metrics.Labels{"dispatcher": name}, int64(delayed))
+	})
 }
 
-func (m *Dispatcher) observePoolStats(poolName string, stats worker.PoolStats) {
-	if m == nil {
-		return
-	}
+func observePoolStats(dispatcher, poolName string, stats worker.PoolStats) {
 	labels := metrics.Labels{
-		"dispatcher": m.Name,
+		"dispatcher": dispatcher,
 		"pool":       poolName,
 	}
 	metrics.SetGauge("nest.dispatch.queue_len", labels, int64(stats.QueueLen))

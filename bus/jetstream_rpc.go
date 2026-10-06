@@ -90,8 +90,16 @@ type jetStreamRPC struct {
 	cfg             JetStreamRPCConfig
 	pending         sync.Map // request id -> *pendingJetStreamRPCCall
 	pendingCount    atomic.Int64
-	pendingByMethod sync.Map // method -> *atomic.Int64
+	pendingByMethod sync.Map // method label -> *atomic.Int64
 	seq             atomic.Uint64
+
+	// methodLabels is the set of caller-side method labels this Bus has
+	// handed out (jetStreamRPCCallerMethodLabel, RR-20261006-19); labelMu
+	// serializes adding to it so the bound holds under concurrent first calls.
+	labelMu        sync.Mutex
+	methodLabels   sync.Map // method -> struct{}
+	methodLabelLen int
+	labelOverflow  atomic.Bool
 
 	mu          sync.Mutex
 	subs        []fnats.IJetStreamSubscription // request consumers
@@ -319,10 +327,12 @@ func (b *Bus) callJetStreamRPC(ctx context.Context, subject string, method strin
 	reqID := b.nextJetStreamRPCRequestID()
 	pending := &pendingJetStreamRPCCall{resp: make(chan []byte, 1)}
 	b.jsRPC.pending.Store(reqID, pending)
-	b.addJetStreamRPCPending(method, 1)
+	// The wire carries the real method; only the metrics label is bounded.
+	label := b.jetStreamRPCCallerMethodLabel(method)
+	b.addJetStreamRPCPending(label, 1)
 	defer func() {
 		b.jsRPC.pending.Delete(reqID)
-		b.addJetStreamRPCPending(method, -1)
+		b.addJetStreamRPCPending(label, -1)
 	}()
 
 	now := time.Now()
@@ -344,20 +354,20 @@ func (b *Bus) callJetStreamRPC(ctx context.Context, subject string, method strin
 	}
 	data, err := b.codec.Marshal(req)
 	if err != nil {
-		b.recordJetStreamRPCCall(method, "marshal_error", "marshal")
+		b.recordJetStreamRPCCall(label, "marshal_error", "marshal")
 		return nil, fmt.Errorf("bus: marshal jetstream rpc req: %w", err)
 	}
 	if _, err := b.jsRPC.js.Publish(callCtx, subject, data, fnats.JetStreamPublishOptions{MsgID: reqID}); err != nil {
-		b.recordJetStreamRPCCall(method, "publish_error", "publish")
+		b.recordJetStreamRPCCall(label, "publish_error", "publish")
 		return nil, fmt.Errorf("bus: publish jetstream rpc %s: %w", subject, err)
 	}
 	select {
 	case resp, ok := <-pending.resp:
 		if !ok {
-			b.recordJetStreamRPCCall(method, "cancel", "closed")
+			b.recordJetStreamRPCCall(label, "cancel", "closed")
 			return nil, fnats.ErrCancelled
 		}
-		b.recordJetStreamRPCCall(method, "ok", "")
+		b.recordJetStreamRPCCall(label, "ok", "")
 		return resp, nil
 	case <-callCtx.Done():
 		err := jetStreamRPCContextError(callCtx)
@@ -367,7 +377,7 @@ func (b *Bus) callJetStreamRPC(ctx context.Context, subject string, method strin
 			result = "timeout"
 			reason = "timeout"
 		}
-		b.recordJetStreamRPCCall(method, result, reason)
+		b.recordJetStreamRPCCall(label, result, reason)
 		return nil, err
 	}
 }
@@ -432,6 +442,16 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	if req.MsgName == "" {
 		req.MsgName = b.extractRpcMethod(msg.Subject)
 	}
+	b.mu.RLock()
+	handler, ok := b.rpcHandlers[req.MsgName]
+	b.mu.RUnlock()
+	// The method label is the registered method, never the envelope's
+	// free-form name: a request naming no registered method is counted under
+	// one label, so the served methods bound these series (RR-20261006-19).
+	label := req.MsgName
+	if !ok {
+		label = jetStreamRPCUnregisteredMethod
+	}
 	if strings.TrimSpace(req.ReplySubject) == "" {
 		// callJetStreamRPC always sets a reply subject. A request without one is a
 		// lightweight Call / CallTo the request stream captured (its subjects cover
@@ -439,29 +459,26 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 		// and nobody can receive this answer, so it must not run — the old code ran
 		// it with no deadline and dropped the reply (RR-20261005-NC-92).
 		slog.Warn("bus: refuse jetstream rpc request without reply subject; the caller used the lightweight transport", "method", req.MsgName, "request_id", req.SessionId)
-		b.recordJetStreamRPCRequest(req.MsgName, "no_reply_subject")
+		b.recordJetStreamRPCRequest(label, "no_reply_subject")
 		return nil
 	}
 	if msg.NumDelivered > 0 {
 		metrics.SetGauge("bus_rpc_consumer_delivery", metrics.Labels{
 			"transport": "jetstream",
-			"method":    req.MsgName,
+			"method":    label,
 		}, int64(msg.NumDelivered))
 	}
 	if req.DeadlineAt > 0 && time.Now().UnixMilli() > req.DeadlineAt {
 		slog.Warn("bus: drop expired jetstream rpc request", "method", req.MsgName, "request_id", req.SessionId)
-		b.recordJetStreamRPCRequest(req.MsgName, "expired")
+		b.recordJetStreamRPCRequest(label, "expired")
 		return nil
 	}
 	processCtx, cancel := b.jetStreamRPCProcessContext(req)
 	defer cancel()
 
-	b.mu.RLock()
-	handler, ok := b.rpcHandlers[req.MsgName]
-	b.mu.RUnlock()
 	if !ok {
 		slog.Warn("bus: no jetstream rpc handler", "method", req.MsgName)
-		b.recordJetStreamRPCRequest(req.MsgName, "no_handler")
+		b.recordJetStreamRPCRequest(label, "no_handler")
 		// RR-20261004-NC-08：拒绝也要走客户端要求的版本 envelope。
 		data, err := encodeRPCFailure(b.codec, fmt.Errorf("%w: %s", ErrNoHandler, req.MsgName))
 		if err != nil {
@@ -503,7 +520,7 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	if handlerErr != nil && errors.Is(processCtx.Err(), context.Canceled) {
 		// processCtx 只会因 Bus 停止被取消（期限到达是 DeadlineExceeded）。handler 因此中断时
 		// 不把“已取消”当业务结果回给调用方，消息交还 broker（NAK），由其他实例处理（NC-90）。
-		b.recordJetStreamRPCRequest(req.MsgName, "interrupted")
+		b.recordJetStreamRPCRequest(label, "interrupted")
 		return fmt.Errorf("bus: jetstream rpc %s interrupted by stop: %w", req.MsgName, handlerErr)
 	}
 
@@ -515,17 +532,17 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 		data, err = encodeRPCSuccess(b.codec, resp)
 	}
 	if err != nil {
-		b.recordJetStreamRPCRequest(req.MsgName, "marshal_error")
+		b.recordJetStreamRPCRequest(label, "marshal_error")
 		return fmt.Errorf("bus: marshal jetstream rpc resp %s: %w", req.MsgName, err)
 	}
 	if err := b.publishJetStreamRPCReply(req, data); err != nil {
-		b.recordJetStreamRPCRequest(req.MsgName, "publish_error")
+		b.recordJetStreamRPCRequest(label, "publish_error")
 		return err
 	}
 	if handlerErr != nil {
-		b.recordJetStreamRPCRequest(req.MsgName, "handler_error")
+		b.recordJetStreamRPCRequest(label, "handler_error")
 	} else {
-		b.recordJetStreamRPCRequest(req.MsgName, "ok")
+		b.recordJetStreamRPCRequest(label, "ok")
 	}
 	return nil
 }
@@ -642,6 +659,60 @@ func (b *Bus) addJetStreamRPCPending(method string, delta int64) {
 		"transport": "jetstream",
 		"method":    method,
 	}, methodValue)
+}
+
+// Method labels of the reliable RPC metrics (RR-20261006-19).
+//
+// A method has no unregister: HandleRpc only adds, and nothing removes one
+// method from a running Bus. So these series are not deleted; they are
+// bounded instead, each side by what it can know:
+//
+//   - the served side labels a request with the method only when this process
+//     registered a handler for it, and with jetStreamRPCUnregisteredMethod
+//     otherwise. The envelope's MsgName comes from the peer, and before this
+//     every name a peer sent became a new series. Bound: registered methods + 1.
+//   - the calling side cannot know which methods exist on the callee, so each
+//     Bus labels at most jetStreamRPCMethodLabelLimit distinct methods and
+//     counts the rest under jetStreamRPCOtherMethod, logging the first one. The
+//     call itself is unaffected. Bound: the limit + 1 (bus_rpc_pending,
+//     bus_rpc_call_total, and the pendingByMethod counters).
+//
+// Every RPC client the framework generates calls generated method constants
+// (57 across the repository today), far below the limit. 256 also keeps
+// bus_rpc_call_total, with its handful of results per method, under the
+// registry's per-metric cap of 2048, so the cap never drops a real method's
+// series in favour of a stray one.
+const (
+	jetStreamRPCMethodLabelLimit   = 256
+	jetStreamRPCOtherMethod        = "_other"
+	jetStreamRPCUnregisteredMethod = "_unregistered"
+)
+
+// jetStreamRPCCallerMethodLabel is the label method's calling-side metrics
+// carry.
+func (b *Bus) jetStreamRPCCallerMethodLabel(method string) string {
+	if b == nil || b.jsRPC == nil {
+		return method
+	}
+	rpc := b.jsRPC
+	if _, ok := rpc.methodLabels.Load(method); ok {
+		return method
+	}
+	rpc.labelMu.Lock()
+	defer rpc.labelMu.Unlock()
+	if _, ok := rpc.methodLabels.Load(method); ok {
+		return method
+	}
+	if rpc.methodLabelLen < jetStreamRPCMethodLabelLimit {
+		rpc.methodLabels.Store(method, struct{}{})
+		rpc.methodLabelLen++
+		return method
+	}
+	if rpc.labelOverflow.CompareAndSwap(false, true) {
+		slog.Warn("bus: more distinct jetstream rpc methods called than the metrics label limit; further new methods are counted under the overflow label",
+			"limit", jetStreamRPCMethodLabelLimit, "label", jetStreamRPCOtherMethod, "first_overflow_method", method)
+	}
+	return jetStreamRPCOtherMethod
 }
 
 func (b *Bus) jetStreamRPCMethodPendingCounter(method string) *atomic.Int64 {

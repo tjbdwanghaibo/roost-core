@@ -38,7 +38,9 @@ effect_retention_promises_test.go:43: renamed shared stream with 800h retention:
 run_series_lifecycle_promises_test.go:66: series count kept growing across runs: map[1:7 2:11 3:15 4:19 5:23 6:27] (history limit 2)
 ```
 
-**未改**：O3 的 `nest.dispatch.*{dispatcher}`（Nest 属核心线，原观察只记录）与 `bus_rpc_pending{method}`（受 2048 上限约束）。拥有者需要时直接调用 `DeleteSeries`。`robot.loadtest.active{profile}` 的 profile 来自配置，有界。
+~~**未改**：O3 的 `nest.dispatch.*{dispatcher}`（Nest 属核心线，原观察只记录）与 `bus_rpc_pending{method}`（受 2048 上限约束）。拥有者需要时直接调用 `DeleteSeries`。~~
+**已实施（2026-10-06，分支 `oa`）**：`nest.dispatch.*{dispatcher}` 在派发器排空停止后删除（同名按计数、超时不删，[RR-20261006-18](../bug/RR-20261006-18.md)）；
+`bus_rpc_pending{method}` 等可靠 RPC 的 method 标签没有注销可挂，改为有界并用断言测试固定——被调方只用注册方法，调用方每 Bus 至多 256 个（[RR-20261006-19](../bug/RR-20261006-19.md)）。`robot.loadtest.active{profile}` 的 profile 来自配置，有界。
 
 ## 3. readyz 每个 checker 的期限
 
@@ -148,4 +150,4 @@ owner_startup_election_integration_test.go:104: stepDown: mongo-3; 20 owner stor
 - 行为收紧：Ops `Authorization` 必须带 `Bearer `（§4）；saga 在效果流保留期不小于回执 TTL 时拒绝启动（§1）；`/readyz` 的 checker 超过 1.5s 记 fail（§3，之前是一直等）。
 - 指标口径：chat 的 `conflict:append` / `conflict:prune`、rank 的 `conflict:submit` 不再上报，改为 `versionstore_cas_total` / `versionstore_conflict_total`（§5）。
 - 新 API：`metrics.Registry.DeleteSeries` / `SeriesCount` / `metrics.DeleteSeries`、`health.DefaultCheckTimeout` / `Registry.SetCheckTimeout`、`versionstore.MetricCompareAndSet` / `MetricConflict` / `CountCompareAndSet` / `CountConflict`、`kit/dataengine.EffectStreamRetention` / `DefaultEffectStream` / `DefaultEffectMaxAge`。
-- 未做：O3 的 nest 派发器 gauge 与 `bus_rpc_pending{method}` 的删除（见 §2）；account / activity 等直接用 `versionstore.RedisStore` 的服务自动获得 CAS 计数，没有逐服务补测试（计数在 versionstore 一处，已有用例）。
+- ~~未做：O3 的 nest 派发器 gauge 与 `bus_rpc_pending{method}` 的删除（见 §2）~~ 已实施（分支 `oa`，[RR-20261006-18](../bug/RR-20261006-18.md)、[RR-20261006-19](../bug/RR-20261006-19.md)）；account / activity 等直接用 `versionstore.RedisStore` 的服务自动获得 CAS 计数，没有逐服务补测试（计数在 versionstore 一处，已有用例）。
