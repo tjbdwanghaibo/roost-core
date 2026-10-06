@@ -2,8 +2,8 @@
 
 给汇总者用：把本分册的条目、行为变化、需改动项、守卫、按包索引、未验证项与边界项集中在一处，便于并入两份主文档的总目录与总表。正文见 [说明分册](guide-cfg-skill-noncore.md) 与 [实现分册](impl-cfg-skill-noncore.md)。
 
-- 范围：`v1.19.2..02c8a10d` 里属于 CFG / SKILL / NONCORE 的改动；行号以 `02c8a10d` 为准。
-- 条目数：91（CFG 13、SKILL 22、NONCORE 56）。两份分册各 91 个锚点，编号一一对应。
+- 范围：`v1.19.2..e6828e4f`（代码冻结提交）里属于 CFG / SKILL / NONCORE 的改动；行号以 `e6828e4f` 为准（起草时 `02c8a10d`，重核见下方“重核”一节）。
+- 条目数：91（CFG 13、SKILL 22、NONCORE 56）。两份分册各 91 个锚点，编号一一对应；其中 NONCORE-1、23、24、40、45、50、56 与其他分册重复，只保留索引。
 - 首发版本用 `git tag --contains` 核对；v1.22.0 之后的提交记为“v1.23.0（本版）”。
 
 ## 条目总表
@@ -64,7 +64,7 @@
 | [NONCORE-17](guide-cfg-skill-noncore.md#noncore-17) | saga 启动身份与完成路由（NC-39 / 40） | v1.20.1 | 收紧：缺摘要的旧记录重投冲突 | 自定义 Store 保存新字段 |
 | [NONCORE-18](guide-cfg-skill-noncore.md#noncore-18) | saga outbox 领取与 activity 恢复校验（NC-41 / 42） | v1.20.1 | 收紧 | 否 |
 | [NONCORE-19](guide-cfg-skill-noncore.md#noncore-19) | account 换名释放死计划、activity 确认键校验（NC-50 / 51） | v1.20.1 | 行为变化 | 否 |
-| [NONCORE-20](guide-cfg-skill-noncore.md#noncore-20) | `activity.game_sids` 启动校验（RR-20261005-01） | v1.20.1（v1.20.2 被 C4 取代） | 已取代 | 否 |
+| [NONCORE-20](guide-cfg-skill-noncore.md#noncore-20) | `activity.game_sids` 启动校验（RR-20261005-01；C4 后由组文件兑现、回归改名） | v1.20.1（v1.20.2 被 C4 取代） | 已取代 | 否 |
 | [NONCORE-21](guide-cfg-skill-noncore.md#noncore-21) | activity 窗口条目统一入口与修复入口；account 判定表（B9） | v1.21.0 | 坏条目不再交出；新 Admin 入口 | 否（运维可用新入口） |
 | [NONCORE-22](guide-cfg-skill-noncore.md#noncore-22) | account 换名释放未 admitted 计划（第五轮、O37） | v1.21.0 | 行为变化 | 否 |
 | [NONCORE-23](guide-cfg-skill-noncore.md#noncore-23) | saga 定义缺失 fence 时退避中步骤记为放弃（NC-250） | v1.21.0 | 迟到成功告警 | 否 |
@@ -98,7 +98,7 @@
 | [NONCORE-51](guide-cfg-skill-noncore.md#noncore-51) | N15 脚本与门禁（NC-200～208）、A5 | v1.20.2 | 收紧：glsvet 对没检查到的输入退出 2 | 已有工程 `.gitignore` 补 `/data/wal/` |
 | [NONCORE-52](guide-cfg-skill-noncore.md#noncore-52) | 停机三步（NC-170～174） | v1.20.2 | 收紧 | 否 |
 | [NONCORE-53](guide-cfg-skill-noncore.md#noncore-53) | Mongo Mod 停止收敛（NC-260） | v1.21.0 | 重复 Close 返回 nil | 否 |
-| [NONCORE-54](guide-cfg-skill-noncore.md#noncore-54) | nest 用例隔离（A2 / A3）；W-2026-10-06-01 | v1.23.0（本版） | 只改测试 | 否 |
+| [NONCORE-54](guide-cfg-skill-noncore.md#noncore-54) | nest 用例隔离（A2 / A3）；派发取锁要求 Guard 作用域（RR-20261006-12，原 W-2026-10-06-01） | v1.23.0（本版） | 生产行为不变；nest 内部派发函数在没有 Guard 作用域时返回错误 | 否 |
 | [NONCORE-55](guide-cfg-skill-noncore.md#noncore-55) | Nest 重排抖动（U-0279） | v1.20.1 | 平均重排延迟 5ms → 7.5ms | 否 |
 | [NONCORE-56](guide-cfg-skill-noncore.md#noncore-56) | 租约修复 RR-20261004-10 / 11 / 14（同版被静态绑定取代） | v1.20.0 | 代码已删 | 否 |
 
@@ -173,6 +173,8 @@
 | glsvet 输入守卫（退出码） | `cmd/glsvet/inputs_promises_test.go` | NONCORE-51 |
 | 共享隔离环境：全局命令持 `remote-acceptance.lock`；toxic 用例自建代理 | `kit/scripts/integration`、根包守卫 | NONCORE-51 |
 | `glsvet -tests ./nest` 无输出 | — | NONCORE-54 |
+| `TestDispatchLockingWithoutGuardScopeNeverReturnsCallerGuardToPool`、`TestDispatchLockingGroupRetryInScopeKeepsGuardUntilScopeEnds`、`TestDispatchEntriesRequireGuardScope` | `nest/dispatch_guard_scope_promises_test.go` | NONCORE-54 |
+| `TestAGroupFitsOneLiveQuery`（组上限 ≤ 一次 `App.Live` 上限） | `kit/service/global/activity/groups_live_limit_promises_test.go` | NONCORE-20 |
 | hotcode 真实 .so 测试包 | `hotcode/plugintest` | NONCORE-36 |
 
 
@@ -191,7 +193,7 @@
 | `kit/statslog` | NONCORE-43 |
 | `kit/service/account` | NONCORE-19、NONCORE-21、NONCORE-22 |
 | `kit/service/global` | NONCORE-20（注释）、NONCORE-24 |
-| `kit/service/global/activity` | NONCORE-18、NONCORE-19、NONCORE-21 |
+| `kit/service/global/activity` | NONCORE-18、NONCORE-19、NONCORE-20（C4 后的守卫）、NONCORE-21 |
 | `kit/scripts/integration`、`scripts`、`cmd/glsvet` | NONCORE-51 |
 | `configdata` | CFG-7、CFG-8、CFG-10 |
 | `configdata/rules` | CFG-7、CFG-9、CFG-10 |
@@ -229,64 +231,71 @@
 | `robot/...`、`log`、`metrics` | NONCORE-43、NONCORE-44、NONCORE-45 |
 | `container`、`safemap`、`goroutine`、`internal/rangecontract` | NONCORE-46～48 |
 | `manager`、`sync/syncbus/driver`、`sync/syncbus/mirror` | NONCORE-52 |
-| `nest` | NONCORE-54（只改测试）、NONCORE-55 |
+| `nest` | NONCORE-54（A2 / A3 只改测试；RR-20261006-12 改派发取锁）、NONCORE-55 |
 | `.github/workflows` | CFG-6（`ci.yml`）、NONCORE-31（`framework-compat.yml`） |
 | 根包测试 | CFG-7（边界）、NONCORE-31（C9） |
 
 ## 未验证与外部验证项
 
-| 项 | 条目 | 归属 |
+只列外部环境项，编号对应 [外部验证清单](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)；本机能做的已在 `e6828e4f` 上做完（见下方“重核”）。
+
+| 项 | 条目 | 外部验证 |
 | --- | --- | --- |
-| 真实 Redis Cluster 下 `redis.cluster_addrs` YAML 列表起服 | CFG-1 | 外部 E08 |
-| `stage=apply` 撤回与运维 Rollback 未在真实进程触发（只有单测） | CFG-8 | 本机未做 |
-| `tablegen-runtime.sh` 按 pin 跑时只能验生成代码；运行时行为需 `ROOST_CORE_DIR` | CFG-10 | 本机限制 |
-| skillsync 经真实传输（kit syncstream / NATS）端到端 | SKILL-3、4 | 外部 E04 |
-| skill 生产 Host 的 checkpoint 与世界成对恢复（只用 MemoryHost） | SKILL-5 | 无正式接线（O3） |
-| 真实客户端资源加载器 | SKILL-9 | 本机未做 |
-| HTTP/2、真实网关 / 反向代理 | NONCORE-2～5 | 外部 E05 |
-| JetStream / etcd 多节点 HA | NONCORE-6、7、52 | 外部 E06、E07 |
-| 真实 Mongo / HA / 生产已有坏 WAL 恢复 | NONCORE-9、16～18 | 外部 E11 |
-| Redis Cluster / 多进程下的 account / chat / activity | NONCORE-11、19、21、22 | 外部 E09 |
-| 复制丢写与切主、多主机强杀 | NONCORE-15 | 外部 E10、E13 |
-| World 定时器三进程提交被拒、日志磁盘写满 | NONCORE-39、44 | 外部 E19 |
-| systemd / k8s 停机 | NONCORE-1 | 外部 E21、E22 |
-| Windows：CLI 信号与进程树、文件 outbox 替换 | NONCORE-27、28、31、33 | 外部 E25 |
-| Linux：CLI 信号、NC-202 pid 认领、修后 heal / 矩阵实跑 | NONCORE-31、51 | 外部 E26 |
-| hotcode 真实插件加载（Linux / Windows） | NONCORE-36 | 外部 E27 |
-| nest `-shuffle` 全 seed 扫描 | NONCORE-54 | 本机未做 |
-| WANTED W-2026-10-06-01（`releaseDispatchLocks` 无作用域分支） | NONCORE-54 | 待核心线 review 判断 |
+| 多机 Redis Cluster 下 `redis.cluster_addrs` YAML 列表起服；failurelog 在 Cluster 下 | CFG-1、NONCORE-42 | E08 |
+| skillsync 经真实传输（kit syncstream / NATS）端到端 | SKILL-3、4 | E04 |
+| HTTP/2、真实网关 / 反向代理、robot 发送缓冲满 | NONCORE-2～5、43、44 | E05 |
+| 跨主机 broker 与弱网下的复制丢更新 | NONCORE-13 | E03 / E06 |
+| JetStream / etcd 多节点 HA | NONCORE-6、7、52 | E06、E07 |
+| Mongo 跨主机副本集 / 切主中提交 / 网络丢回复 | NONCORE-9、16～18 | E11 |
+| account / activity / versionstore 在 Cluster 与多进程下 | NONCORE-11、19、21、22 | E09 |
+| 复制丢写与切主、多主机强杀 | NONCORE-15 | E10、E13 |
+| World 定时器三进程提交被拒、日志磁盘写满 | NONCORE-39、44 | E19 |
+| systemd / k8s 停机 | NONCORE-1（以 APP / OPS 为准） | E21、E22 |
+| Windows：CLI 信号与进程树、暂存树、文件 outbox 替换——**暂存，不保证正确** | NONCORE-27、28、31、33 | E25 |
+| Linux：CLI 信号与进程树、NC-202 pid 认领 | NONCORE-31、51 | E26 |
+| hotcode 真实插件加载（Linux；Windows 部分暂存，不保证正确） | NONCORE-34、36 | E27 |
+
+WANTED 未决数：**0**（W-2026-10-06-01 已转 RR-20261006-12 并修复，NONCORE-54）。
+
+## 重核（按代码冻结提交 `e6828e4f`）
+
+- **引用**：机器比对全部 `path:line`（正文约 490 处）在 `02c8a10d` 与 `e6828e4f` 上的内容和相邻符号名，再人工看没有符号可比的引用；约 165 个测试名逐个核对。共改 8 处：行号 3 处、NONCORE-54 随重写换 3 处、已删除符号 1 处、已改名测试 1 处。明细：NONCORE-14（`entity/remote_snapshot.go` `:392`→`:396`、`:629`→`:634`）、NONCORE-55（`transientRequeueDelay` 定义 `:411`，原文的 `:399` 是调用点）、NONCORE-54（随 RR-20261006-12 重写，`releaseDispatchLocks` 已删除，改为 `dispatchScopeGuard` / `releaseDispatchEntities` 等现名）、SKILL-2（`undoVitals` 已在 A1 删除，改为 DAO `beginChange`）。其余引用与所述符号一致；修前红文本里的 `文件:行` 是当时原文，不改。测试名逐个在 `e6828e4f` 上核对存在（已删除的 CFG-9 用例与 RR-20261005-01 原回归按“已删除 / 已改名”写明）。
+- **新增或并入的条目**：RR-20261006-12（原 W-2026-10-06-01，`b7471ae4`）并入 NONCORE-54 并写全；RR-20261005-01 回归改名（`d5682dc4`，`TestActivityRefusesAGroupNoWindowCouldOpenWith` + 新守卫 `TestAGroupFitsOneLiveQuery`）并入 NONCORE-20；`skill/README.md` 52 个旧链接修复（`d05a04a1`）以 TOOL-5 为准，本分册在 SKILL 主题开头与 NONCORE“只引用”表里引用。条目总数仍为 91。
+- **去重**：CFG-12 保留，REM-13 改为引用 CFG-12；NONCORE-1、23、24、40、45、50、56 改为只保留编号与一句话结论的索引条目，以 APP-4 / 7 / 8 + OPS-3、SAGA-7、OWN-6、CLK-6、OPS-7、APP-9、OWN-1 为准。
+- **本机补跑**（`e6828e4f`）：真实 Mongo 副本集 `TestRealMongoCoordinatorLeaseTakeover`（NONCORE-12）与 `TestRealSagaCrossProcessKillRecovers`（NONCORE-18）通过；临时探针（未入库）在真实副本集上跑 Resume 代际持久（NONCORE-16）、Mongo Mod 在已断开客户端上停止（NONCORE-53），以及 mongo-driver v2.6.0 的 12 种带口令 URI 错误文本不含口令（NONCORE-49）；nest `-shuffle` 有界扫描 230 个 seed + `-race` 30 个 seed 全部通过（NONCORE-54）；GitHub framework-compat 在 `e6828e4f` 上全部通过（run `37461843085`，CFG-12、NONCORE-31）。
+- **改为说明、不再列为未验证的**（依据都是已有的维护者决定或源码事实，写在各条）：CFG-6（对象不支持 Ref）、CFG-7（B10 分层）、CFG-8（生成工程无 Rollback / 失败的 AfterApply，单测覆盖）、SKILL-5 / 9 / 10 / 19（第十二轮“其余保持”）、SKILL-13（B3 ③ 下个大版本）、SKILL-14（按上下文判断是表的设计）、SKILL-15（O36）、NONCORE-15（升级兼容说明）、NONCORE-42（bus 去重契约下死信写失败没有重投链）、NONCORE-46（revleft O9 处置 + C8 保留）、NONCORE-51（发版矩阵已在共享隔离环境实跑）。
+- **留给 review 的覆盖缺口**（写成检查点，没有单独用例）：SKILL-1 的 `Interrupt` 停进程出错分支、toggle release 回调出错分支、charge enter 失败后 owned 进程的宿主侧残留；SKILL-3 reset 里的 process 条目。
 
 ## 边界项与其他分册的对应（汇总者去重用）
 
-写完本分册后对照了同目录另两份分册（`_summary-app-own-clk-ops-tool.md`、`_summary-saga-drv-dao-rem.md`），对应关系如下。正文里这些条目开头都加了一行“其他分册对应”。
-
-| 本分册条目 | 内容 | 其他分册 | 建议 |
+| 本分册条目 | 内容 | 其他分册 | 处理 |
 | --- | --- | --- | --- |
 | CFG-1 | NC-190 严格布尔 / 时长 | APP-1 提到 `singleton.enabled` | 本条为主 |
-| CFG-12 | 生成配置写出 `remote_entity` 五个新键（A8） | REM-13 同一项 | 二选一（任务分工指定 CFG） |
-| NONCORE-1 | NC-230～234、`ops.admin_timeout` | APP-4、APP-7、APP-8、OPS-3 | 以 APP / OPS 为准，本条可只保留索引 |
+| CFG-12 | 生成配置写出 `remote_entity` 五个新键（A8） | REM-13 同一项 | **本条保留，REM-13 改为引用本条** |
+| NONCORE-1 | NC-230～234、`ops.admin_timeout` | APP-4、APP-7、APP-8、OPS-3 | **以对方为准**，本条只留索引 |
 | NONCORE-15 | NC-130 / 131、RR-20260913-01 残余 | REM-1 只在背景里提到 | 本条为主 |
-| NONCORE-23 | NC-250 | SAGA-7 | 以 SAGA 为准 |
-| NONCORE-24 | RR-20261006-05 global `Bind` | OWN-6 | 以 OWN 为准 |
-| NONCORE-40 | D-L1 / D-L2 timer | CLK-6 | 以 CLK 为准 |
+| NONCORE-20 | RR-20261005-01 与 C4 后的回归去向 | OWN-5（组文件） | 本条为主（回归对照在本条） |
+| NONCORE-23 | NC-250 | SAGA-7 | **以对方为准**，本条只留索引 |
+| NONCORE-24 | RR-20261006-05 global `Bind` | OWN-6 | **以对方为准**，本条只留索引 |
+| NONCORE-40 | D-L1 / D-L2 timer | CLK-6 | **以对方为准**，本条只留索引 |
 | NONCORE-43 | NC-161～165 | APP-12 背景提到 NC-165 | 本条为主 |
-| NONCORE-45 | RR-20261006-09 robot Stage 序号 | OPS-7 | 以 OPS 为准 |
-| NONCORE-50 | NC-193 | APP-9 | 以 APP 为准 |
+| NONCORE-45 | RR-20261006-09 robot Stage 序号 | OPS-7 | **以对方为准**，本条只留索引 |
+| NONCORE-50 | NC-193 | APP-9 | **以对方为准**，本条只留索引 |
 | NONCORE-51 | N15 脚本、A5 | TOOL-1（NC-205）、TOOL-7（NC-207、全局命令持锁） | 其余 N15 项本条为主 |
 | NONCORE-52 | NC-170～174 | APP-6 背景 | 本条为主 |
 | NONCORE-53 | NC-260 | DRV-5 的 Close 口径表 | 本条为主 |
-| NONCORE-56 | RR-20261004-10 / 11 / 14 | OWN-1 | 以 OWN 为准 |
+| NONCORE-54 | A2 / A3 与 RR-20261006-12（原 W-2026-10-06-01） | DAO 部分写同提交的 RR-20261006-13 | 本条为主 |
+| NONCORE-56 | RR-20261004-10 / 11 / 14 | OWN-1 | **以对方为准**，本条只留索引 |
 | NONCORE-32、55 | DAO `nocoll`、U-0279 | 其他分册未收 | 本条为主 |
+| （引用） | `skill/README.md` 52 个旧链接修复与文档链接门禁（`d05a04a1`） | TOOL-5 | 以 TOOL-5 为准，本分册只引用 |
 
 其他分册标出“未归入任何分册”的 C9 与 B9，本分册已收：NONCORE-31（B6 + C9）、NONCORE-21（B9）。C6（服务指标默认开启）由 OPS-1 收。收尾第 1 批文档（`88f33776`）里本分册只收了 bus `ReliableStore` 注释（NONCORE-8）与 ai O-T3 / O-T4（NONCORE-38），其余（A10 codegen 文档旧模块路径即 N08 O5、A16 CombatComponent 注释、驱动 README Close 契约、`:lease:*` 迁移说明、L2 落后上界）由对应分册处理或只改文档。
 
-`02c8a10d` 之后 main 上有维护者第十三轮决定（不留 WANTED、Windows 不保证正确，`87d8d91e` / `7fec136e`），不在本分册范围；本分册的 W-2026-10-06-01 与 Windows 未验证项已加注。
+## 文档与源码不一致（已在源文档改正）
 
-## 文档与源码不一致
-
-1. A4 方案的登记键数 16 / 95 / 77，发版提交上为 17 / 99 / 79（之后各批新增 7 个键）。
-2. B10 方案 §2.1 / §2.2 仍写 `rules.Lookup` 与规则字段绑定“按 encoding/json 的键匹配”；v1.22.0 起源码逐字匹配。
-3. `docs/skill/skill-casting-and-combat.md` 第 80 行“（O33，未发版）”与发布事实不符（v1.21.0 已发布）。
-4. 提交 `2a7d2a65` 的说明引用 rebase 前的 `a6e75488`，实际为 `f6043e44`。
-5. NC-220 / NC-224 记录里的修复函数在同版求值上下文表实施时已删除（记录描述当时的提交）。
-6. RR-20261005-01 的回归用例随 C4 删除，发版提交上不存在。
+1. A4 方案（`docs/feature/REFACTOR-2026-10-05-strict-config-reads.md`）的登记键数 16 / 95 / 77 → 17 / 99 / 79，注明实施当时的数。
+2. B10 方案 §2.1 / §2.2 “按 encoding/json 的键匹配” → 逐字匹配（`configdata/rules/rules.go:276-280`、`configdata/fieldrules.go:91`），注明来自 CFG-10（v1.22.0）。
+3. `docs/skill/skill-casting-and-combat.md` 第 80 行“（O33，未发版）”→“（O33，v1.21.0）”。
+4. `2a7d2a65` 的提交说明引用 rebase 前的 `a6e75488`，实际为 `f6043e44`：提交历史不改，在 DECISIONS-PENDING 第七轮表下加更正注。
+5. NC-220 / NC-224 修复记录末尾加后注：记录里的修复函数已在同版被求值上下文表取代，写明现在的位置。
+6. RR-20261005-01 的回归用例随 C4 删除：已由 `d5682dc4` 在问题 / 修复记录末节闭环（改名为组文件形态 + 新守卫），本分册 NONCORE-20 写了逐项对照。

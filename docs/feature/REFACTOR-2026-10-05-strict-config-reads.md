@@ -16,7 +16,7 @@
 
 - 新增 `ConfigInt` / `ConfigInt64`：接受 YAML 整数、没有小数部分的浮点数（YAML 的 `1e3`）与十进制字符串（环境变量覆盖），拒绝小数、带后缀、时长、布尔值。
 - 新增 `ConfigReader`（`NewConfigReader(cfg)`，`Bool` / `Duration` / `Int` / `Int64`，`Err()` 汇总）：Mod 的 Init 一次读几十个键，逐个返回错误会把读取淹没在分支里；读完统一检查，运维一次看到全部写错的键。读取失败的键返回零值，调用方照常“≤0 取默认”，只在语义检查和返回前看 `Err()`。
-- `frameworkBoolKeys` 扩为三份登记 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys`（16 / 95 / 77 个键），另有 syncbus 三段（`syncbus` / `room` / `sync`）的同名字段与按后缀登记的 `<service>.call_timeout`。`checkFrameworkConfigTypes` 逐个严格读取；与语义检查重复的同一条错误只报一次。
+- `frameworkBoolKeys` 扩为三份登记 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys`（17 / 99 / 79 个键，按 v1.23.0 代码冻结提交 `e6828e4f` 核对；本方案实施当时是 16 / 95 / 77，之后各批登记了 `service_metrics.enabled`、`ops.admin_timeout`、`remote_entity.cached_max_staleness`、`remote_entity.mirror.shutdown_timeout`、`remote_entity.snapshot_l2_tombstone_wait_timeout`、`remote_entity.snapshot_interest_per_consumer`、`remote_entity.snapshot_l2_tombstone_wait_replicas` 七个键），另有 syncbus 三段（`syncbus` / `room` / `sync`）的同名字段与按后缀登记的 `<service>.call_timeout`。`checkFrameworkConfigTypes` 逐个严格读取；与语义检查重复的同一条错误只报一次。
 - `app.go` 的日志 / 时钟 / 停机预算、`registry.go` 的 metrics 上限改用严格读取。
 
 **kit**：`dataengine`、`remoteentity`、`saga`（Mod 与步骤预算的 `max_attempts`）、`nats`（JetStream RPC、reliable、worker 数，类型化的键在建 bus 之前读完）、`nest`（Mod 与 `sync.entity.*`）、`syncbus`、`mongo`、`ops`、`etcd`、`statslog`、`mods.ResolvePersistenceEngine`、`service/platform`、`service/global/activity` 全部改用 `app.ConfigReader` / `app.Config*`。错误前缀沿用各 Mod 原有的（`dataengine mod: …`）。

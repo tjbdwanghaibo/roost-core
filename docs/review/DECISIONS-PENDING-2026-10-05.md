@@ -156,6 +156,8 @@
 | O34～O36 | 按推荐：保持现状并写进作者文档 | **已实施（`f6043e44`，文档）**：[施法语义 · 引用在哪里能读](../skill/skill-casting-and-combat.md#引用在哪里能读求值上下文)、AI prompt、表 semantics |
 | O37 | 按推荐：account 判定表 `unadmitted other` 行的 free 格也释放名额并用新名字建角 | **已实施（`f6043e44`）**：free 格 limit → retry，[B9 方案 §6.1](../feature/B9-C5-WINDOW-ENTRIES-ROLE-TABLE-2026-10-06.md) |
 
+更正（2026-10-06，v1.23.0 发版文档重核）：本表的标注提交 `2a7d2a65` 的提交说明写“实施状态（a6e75488）”，`a6e75488` 是 rebase 前的提交号、不在 main 历史上；正确的是 `f6043e44`（表内一直写对）。提交历史不改。
+
 ## 维护者决定（2026-10-06，第八轮：D-L3 留项）
 
 | # | 决定 | 实施状态 |

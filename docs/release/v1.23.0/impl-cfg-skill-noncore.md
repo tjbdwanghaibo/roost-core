@@ -1,6 +1,8 @@
 # v1.23.0 实现文档（分册）：配置、skill 与非核心 review（CFG / SKILL / NONCORE）
 
-本分册写给 review agent，也让人能读懂：每条给出提交、改动文件与关键符号（`path:line`，以发版提交 `02c8a10d` 为准）、不变量与守卫测试、控制流、失败处理、修前红文本（原样抄自 `docs/bug` / `docs/bugfix` / 方案记录）、复跑命令、未验证项与 review 检查点。配套的说明文档是 [guide-cfg-skill-noncore.md](guide-cfg-skill-noncore.md)，同一编号互链。APP、OWN、CLK、OPS、TOOL、SAGA、DRV、DAO、REM 主题在同目录的其他分册里。
+本分册写给 review agent，也让人能读懂：每条给出提交、改动文件与关键符号（`path:line`，以代码冻结提交 `e6828e4f` 为准）、不变量与守卫测试、控制流、失败处理、修前红文本（原样抄自 `docs/bug` / `docs/bugfix` / 方案记录）、复跑命令、未验证项与 review 检查点。配套的说明文档是 [guide-cfg-skill-noncore.md](guide-cfg-skill-noncore.md)，同一编号互链。APP、OWN、CLK、OPS、TOOL、SAGA、DRV、DAO、REM 主题在同目录的其他分册里。
+
+**重核说明（2026-10-06，按 `e6828e4f`）**：起草时以 `02c8a10d` 为准，冻结后逐条重核全部 `path:line`、函数名与测试名。方法：机器比对每个引用行在两个提交上的内容与相邻的符号名，再人工看没有符号可比的引用。结果：正文（不含修前红文本）约 490 处 `path:line`、约 165 个测试名逐个核对；`02c8a10d..e6828e4f` 期间本分册引用到的源文件只有 nest 与 `entity/remote_snapshot.go` 变了。共改 8 处：行号 3 处（NONCORE-14 两处、NONCORE-55 一处）；NONCORE-54 原有 3 处引用随 RR-20261006-12 重写换成现名现行号（`releaseDispatchLocks` 已删除）；已删除的符号 1 处（SKILL-2 `undoVitals` → `beginChange`）；已改名的测试 1 处（NONCORE-20 原回归 → `TestActivityRefusesAGroupNoWindowCouldOpenWith`）。其余引用在 `e6828e4f` 上与所述符号一致。修前红文本里的 `文件:行` 是当时的原文，不改。各条“未验证”只留外部环境项并指向 [外部验证清单](../../review/EXTERNAL-VERIFICATION-2026-10-06.md) 的 E 编号（Windows 一律“暂存，不保证正确”）；本机能做的已在 `e6828e4f` 上补跑并写进对应条目。与其他分册重复的条目（NONCORE-1、23、24、40、45、50、56）只保留索引，以对方分册为准。
 
 ## 怎么用这份文档 review
 
@@ -105,7 +107,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 | [NONCORE-17](#noncore-17) | saga 启动身份与完成路由（NC-39 / 40） | v1.20.1 | 收紧：缺摘要的旧记录重投冲突 | 自定义 Store 保存新字段 |
 | [NONCORE-18](#noncore-18) | saga outbox 领取与 activity 恢复校验（NC-41 / 42） | v1.20.1 | 收紧 | 否 |
 | [NONCORE-19](#noncore-19) | account 换名释放死计划、activity 确认键校验（NC-50 / 51） | v1.20.1 | 行为变化 | 否 |
-| [NONCORE-20](#noncore-20) | `activity.game_sids` 启动校验（RR-20261005-01） | v1.20.1（v1.20.2 被 C4 取代） | 已取代 | 否 |
+| [NONCORE-20](#noncore-20) | `activity.game_sids` 启动校验（RR-20261005-01；C4 后由组文件兑现、回归改名） | v1.20.1（v1.20.2 被 C4 取代） | 已取代 | 否 |
 | [NONCORE-21](#noncore-21) | activity 窗口条目统一入口与修复入口；account 判定表（B9） | v1.21.0 | 坏条目不再交出；新 Admin 入口 | 否（运维可用新入口） |
 | [NONCORE-22](#noncore-22) | account 换名释放未 admitted 计划（第五轮、O37） | v1.21.0 | 行为变化 | 否 |
 | [NONCORE-23](#noncore-23) | saga 定义缺失 fence 时退避中步骤记为放弃（NC-250） | v1.21.0 | 迟到成功告警 | 否 |
@@ -139,7 +141,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 | [NONCORE-51](#noncore-51) | N15 脚本与门禁（NC-200～208）、A5 | v1.20.2 | 收紧：glsvet 对没检查到的输入退出 2 | 已有工程 `.gitignore` 补 `/data/wal/` |
 | [NONCORE-52](#noncore-52) | 停机三步（NC-170～174） | v1.20.2 | 收紧 | 否 |
 | [NONCORE-53](#noncore-53) | Mongo Mod 停止收敛（NC-260） | v1.21.0 | 重复 Close 返回 nil | 否 |
-| [NONCORE-54](#noncore-54) | nest 用例隔离（A2 / A3）；W-2026-10-06-01 | v1.23.0（本版） | 只改测试 | 否 |
+| [NONCORE-54](#noncore-54) | nest 用例隔离（A2 / A3）；派发取锁要求 Guard 作用域（RR-20261006-12，原 W-2026-10-06-01） | v1.23.0（本版） | 生产行为不变；nest 内部派发函数在没有 Guard 作用域时返回错误 | 否 |
 | [NONCORE-55](#noncore-55) | Nest 重排抖动（U-0279） | v1.20.1 | 平均重排延迟 5ms → 7.5ms | 否 |
 | [NONCORE-56](#noncore-56) | 租约修复 RR-20261004-10 / 11 / 14（同版被静态绑定取代） | v1.20.0 | 代码已删 | 否 |
 
@@ -189,7 +191,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 | NONCORE-17 | `12726715` |
 | NONCORE-18 | `10c73e0c` |
 | NONCORE-19 | `be7bcc18` |
-| NONCORE-20 | `46c4dfba`（v1.20.2 被 `277e1252` 取代） |
+| NONCORE-20 | `46c4dfba`（v1.20.2 被 `277e1252` 取代；回归去向复核 `d5682dc4`） |
 | NONCORE-21 | `bd6df5e5` |
 | NONCORE-22 | `b18d5613`、`f6043e44` |
 | NONCORE-23 | `31b48bc0` |
@@ -223,7 +225,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 | NONCORE-51 | `6c1538be`、`d43aa3ba`、`3e3350d5` |
 | NONCORE-52 | `c99a687d`（NC-173 补修 `50f2ac2a`） |
 | NONCORE-53 | `36220f34` |
-| NONCORE-54 | `611d5d72` |
+| NONCORE-54 | `611d5d72`（A2 / A3）、`b7471ae4`（RR-20261006-12） |
 | NONCORE-55 | `47a9132c` |
 | NONCORE-56 | `18bb86ae`、`a28a3152`、`890abdda`（同版 `f051e24a` 删除） |
 
@@ -242,7 +244,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 [说明](guide-cfg-skill-noncore.md#cfg-1)
 
 1. **提交与版本**：`f9367785`（修复）、`0aa2e1b9`（N14 收口文档）；审查 `efe219c1`。首发 v1.20.2。
-2. **改动与符号**（以 `02c8a10d` 为准）：
+2. **改动与符号**（以 `e6828e4f` 为准）：
 
    | 位置 | 职责 |
    | --- | --- |
@@ -326,7 +328,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
    - 修后：上述用例、`TestConfigIntAcceptsWholeNumbersOnly`（`:82`）、`TestConfigReaderReportsEveryBadKeyAtOnce`（`:105`）、负对照 `TestValidateServiceConfigAcceptsFrameworkValuesWrittenCorrectly`（`:48`）通过；生成工程三份配置（game-demo 与 CI full 场景）在严格校验下全部通过。
    - 复跑：`GOWORK=off go test -count=1 ./app ./kit`；变更影响面 `go test -race -count=3 ./app ./kit/...`。
 7. **性能**：无。
-8. **未验证**：真实依赖用例未跑（类型检查在 Init 之前完成，不改连接行为）。
+8. **未验证**：无。真实依赖上的 Init 路径已由之后每版的发版矩阵覆盖（v1.20.2 / v1.21.0 / v1.22.0 各 21/21，`kit/dataengine`、`remoteentity` 的 `TestReal*` 用例经严格读取装配 Mod，见 [交接 §7](../../CORE-OPTIMIZATION-HANDOFF.md) 各版条目）。
 9. **review 检查点**：
    - 发版提交上 `TestFrameworkCodeDoesNotReadConfigLeniently` 的例外是否只剩 `sid` 与 cobra flags（`:149-151`）？
    - 新增的配置键（例如 v1.23.0 的 `snapshot_l2_tombstone_wait_*`）是否既在 kit 用 `read.X` 读、又出现在登记表？可以临时删掉登记表里的一项，`TestEveryFrameworkDurationAndIntKeyIsCheckedStrictly` 应点名它。
@@ -431,7 +433,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
    - 修后：`TestCheckJSONEnforcesTheDeclaredRules`（`codegen/internal/tablegen/check_json_promises_test.go:26`）、`TestRefDeclarationsAreResolvedAtGeneration`（`:57`，合法 / 指针 / 未知目标 / 类型不符）、运行期门 `TestDanglingRefIsRejectedOnLoadAndReload`（`testdata/runtime/roundtrip_test.go:60`）通过。
    - 复跑：`GOWORK=off go test -count=1 ./codegen/internal/tablegen/`；`ROOST_CORE_DIR=$PWD sh codegen/scripts/tablegen-runtime.sh -race -count=1`。
 7. **性能**：无。
-8. **未验证**：object 文件的 ref（当时未做，B10 起对象不支持 Ref）。
+8. **未验证**：无。object 文件不支持 `Ref`（B10 起注册期拒绝，`configdata/fieldrules.go:33` `resolveRules` 的 `object` 分支），不存在待验证的路径。
 9. **review 检查点**：`resolveRefs` 是否仍在 `generateGo`（`:716`）之前调用；运行期门是否用 `ROOST_CORE_DIR` 能指向本地 core（否则按 pin 跑会缺新 API）。
 
 <a id="cfg-7"></a>
@@ -489,7 +491,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
    - 端到端（[e2e-reload.txt](../../feature/evidence/b10-c2-20261006/e2e-reload.txt)）：生成 game-demo、隔离环境起 global + game，`gm.config.reload` 删掉 spawn 的 template → `configdata: table spawn row 1 (key 1) field template: required: missing or null`；hp 0 → `min`；template null → `required`；三次失败后版本仍 2、存活仍 4，`configdata_reload_total{result="failed"} 3`。修前同一场景见 N07 第二批 H2e（reload 被接受、按 template 0 刷怪，日志 0 行）。
    - 复跑：`GOWORK=off go test -race -count=3 ./configdata/... ./kit/configdata/ ./codegen/internal/tablegen/ ./codegen/internal/cfggen/`；`ROOST_CORE_DIR=$PWD sh codegen/scripts/tablegen-runtime.sh -race`；`ROOST_CORE_DIR=$PWD sh codegen/scripts/cfggen-golden-runtime.sh -race`；根包 `go test -count=1 .`。
 7. **性能**：每次加载多解析一次原始行（只在加载 / 热更）；未做基准。
-8. **未验证**：tablegen 生成期的 ref 数据检查（只在加载时查）；两种标签方言合一（列为后续）。
+8. **未验证**：无。ref 只在加载时查是 B10 决定的分层（“规则统一由运行时加载层强制，生成期检查只作提前反馈”，DECISIONS-PENDING 第四轮 B10 行）；两种标签方言合一是 B10 §2.4 评估后列的后续工作，不是待验证项。
 9. **review 检查点**：
    - `rules.Check` 是否对“键缺失”与“值为 null”给出同一 `required` 错误、对“值为 0”不报 required（看 `rules.go:221` 起的 `check` 与 `isNull`）。
    - `resolveRules` 是否在注册时拒绝 `Min` 用在字符串字段、`Unique` 用在对象上（`fieldrules.go:33`）。
@@ -533,7 +535,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
    - 修后通过；端到端见 CFG-7（三条 Warn `config reload failed … stage=build`）。
    - 复跑：`GOWORK=off go test -count=1 -run 'TestFailedReloadAndRollback|TestEveryReloadReportsOneOutcome' ./kit/configdata/ ./configdata/`。
 7. **性能**：无。
-8. **未验证**：`stage=apply` 撤回与运维 Rollback 未在真实进程里触发（生成的 game-demo 没有这两种入口）。
+8. **未验证**：无外部项。`stage=apply` 撤回与运维 Rollback 由单测在同一个 `Store` 上覆盖（`TestEveryReloadReportsOneOutcome`、`TestFailedReloadAndRollbackAreCountedAndLogged`）；生成的 game-demo 没有运维 Rollback 入口、也没有会失败的 AfterApply 监听者，没有可演练这两条路径的真实进程（B10 方案“未完成 / 后续”第 3 条）。
 9. **review 检查点**：
    - `OnReloadOutcome` 的取消函数是否在 kit Mod 停止时调用（`kit/configdata/configdata.go` 的 `unregisters`）。
    - DryRun（`configdata.go:1106`）占版本号（`:1112` `s.version.Add(1)`）但不经 `report`，不产生 outcome、日志与计数；契约只承诺 Load / Reload / Rollback 各报告一次。确认运维用 DryRun 预检时看不到指标属于预期。
@@ -606,7 +608,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
    - 修后全部通过：`configdata/key_case_promises_test.go:84` / `:104` / `:156`、`configdata/rules/key_spelling_promises_test.go:14` / `:43` / `:55`、`codegen/internal/tablegen/key_case_promises_test.go:12` / `:30`、`testdata/runtime/roundtrip_test.go:130`。生成 game-demo 临时用例：把 `spawn.json` 的 `template` 改成 `Template` 等，Start 报 `table spawn row 1 (key 1) field template: case: key "Template" must be spelled "template"`（临时用例不入库）。
    - 复跑：`GOWORK=off go test -race -count=3 ./configdata/... ./kit/configdata/ ./codegen/internal/tablegen/ ./codegen/internal/cfggen/`；`ROOST_CORE_DIR=$PWD sh codegen/scripts/tablegen-runtime.sh -race -count=1`。
 7. **性能**：每次加载多解析一次载荷（原始行 + 逐层 map），未做基准。
-8. **未验证**：`tablegen-runtime.sh` 按 pin（v1.21.0）跑时新用例只依赖生成代码；同名 json 字段在不同嵌入深度时按“浅层优先”。
+8. **未验证**：无。说明两点（不是待验证项）：`tablegen-runtime.sh` 按 pin（v1.21.0）跑时新用例只依赖生成代码，要验运行时行为用 `ROOST_CORE_DIR` 指向本地 core；同名 json 字段在不同嵌入深度时按“浅层优先”取类型（行为限制，见说明文档 CFG-10）。
 9. **review 检查点**：
    - `checkKeySpelling` 是否对 `json.RawMessage` / `time.Time` 字段不递归（`keyspelling.go:56` `jsonUnmarshalerType`）。
    - 生成的 `tablegenCheckHeader`（`main.go:933`）与 `rules.MisspelledKey` 是否同一判定（两份代码，需人工对照）。
@@ -634,13 +636,13 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
    - 修后：单测通过（Rules 字面量、无规则 global 输出不变、unique / min 非数值 / enum 重复 / bean 上 enum 仍拒绝）；`ROOST_CORE_DIR=<worktree> cfggen-golden-runtime.sh -race` 通过：缺 width、width 0、height 0、mode 拼错四种在启动 Load 与 Reload 都被拒。
    - 复跑：`GOWORK=off go test -count=1 ./codegen/internal/cfggen/`；`ROOST_CORE_DIR=$PWD sh codegen/scripts/cfggen-golden-runtime.sh -race`。
 7. **性能**：无。
-8. **未验证**：game-demo 模板不用 cfggen，未重新生成 game-demo。
+8. **未验证**：无。game-demo 模板不用 cfggen，生成物由运行期门 `cfggen-golden-runtime.sh` 覆盖。
 9. **review 检查点**：`fieldRule` 是 tables 与 globals 共用的唯一翻译吗（`rg 'rules.Rule{' codegen/internal/cfggen` 应只在 `fieldRule` 里）；global struct 上是否确实不再写规则 `cfg` 标签（`:799` 附近）。
 
 <a id="cfg-12"></a>
 ### CFG-12 生成配置写出 `remote_entity` 新键（A8）
 
-> 其他分册对应：REM-13 写了同一项（按分工本条为主）。
+> 其他分册对应：REM-13 是同一项。汇总去重：本条保留，REM-13 改为引用本条。
 
 [说明](guide-cfg-skill-noncore.md#cfg-12)
 
@@ -664,7 +666,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
    - 修后通过；生成的 game 服务带这份配置在隔离环境起来并就绪。
    - 复跑：`GOWORK=off go test -count=1 -run 'RemoteEntitySection|GeneratedConfigsPass' ./codegen/internal/roost`。
 7. **性能**：无。
-8. **未验证**：GitHub framework-compat full 场景（按约定不等 CI）。
+8. **未验证**：无。GitHub framework-compat 在 `e6828e4f` 上全部通过（run `37461843085`：minimum / released / source-head × minimal / demo / full 九格与 `codegen-network`）。
 9. **review 检查点**：`streamReplicasLine` 的正则 `(?m)^([ \t]*)replicas: 1$` 是否不会命中 `snapshot_l2_tombstone_wait_replicas: 1`（行首锚定 + 键名恰为 `replicas`）；五个键的缺省值是否仍与 `remoteentity.DefaultConfig()` 一致（若以后改缺省，生成工程测试会报差异）。
 
 <a id="cfg-13"></a>
@@ -695,7 +697,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 
 ## SKILL：skill 编译器、Runtime 与同步
 
-先读：`skill/README.md` 的 pass 表（各 pass 负责拒绝什么）、[`docs/skill/skill-implementation-guide.md`](../../skill/skill-implementation-guide.md)、[作者文档](../../skill/skill-casting-and-combat.md)“引用在哪里能读”与“Runtime 不在事务里（B4）”，以及 roost-coding A1 条里 skill Runtime 的例外（第 39 行）。
+先读：`skill/README.md` 的 pass 表（各 pass 负责拒绝什么；该文件合仓后 52 个按旧仓布局写的相对链接已在 `d05a04a1` 改对，并加了根包文档链接门禁，见 TOOL-5，本分册不重复）、[`docs/skill/skill-implementation-guide.md`](../../skill/skill-implementation-guide.md)、[作者文档](../../skill/skill-casting-and-combat.md)“引用在哪里能读”与“Runtime 不在事务里（B4）”，以及 roost-coding A1 条里 skill Runtime 的例外（第 39 行）。
 
 本主题的全局守卫（改 skill 编译器或 Runtime 时都要跑）：
 
@@ -756,8 +758,10 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    - 修后：`go test -race -count=3 ./skill/...` 5 包通过（影子校验打开）；`skill/examples` 的 fireball、sync-e2e 通过。
 7. **性能**：无。
-8. **未验证**：`Interrupt` 的 `stopProcesses` 出错分支与 toggle release 回调出错分支没有单独用例；owned 进程在 charge enter 失败后的宿主侧残留。
-9. **review 检查点**：`rg 'cast.status = CastFailed' skill` 除 `failCastLocked` 外是否还有直接置 failed 的地方；`startLocked` 删除 cast 是否在 `failCastLocked` 之后（顺序反了会让任务残留在被复用的 ID 上）。
+8. **未验证**：无外部项。
+9. **review 检查点**：
+   - `rg 'cast.status = CastFailed' skill` 除 `failCastLocked` 外是否还有直接置 failed 的地方；`startLocked` 删除 cast 是否在 `failCastLocked` 之后（顺序反了会让任务残留在被复用的 ID 上）。
+   - 下面三条路径没有单独用例，核对它们与已测的五条一样经 `failCastLocked` 收尾：`Interrupt` 的 `stopProcesses` 出错分支（`skill/runtime_cast_window.go:297-299`）、toggle release 回调出错分支、charge enter 失败后 owned 进程在宿主侧是否留下实体。
 
 <a id="skill-2"></a>
 ### SKILL-2 Combatant 副本不共享 map（NC-113）
@@ -766,7 +770,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
 1. **提交与版本**：`855c2a38`。首发 v1.20.1。
 2. **改动**：`skill/combatcomponent/component.go:292` `cloneCombatant`；`Combatant()` 返回它、`InitCombatant` 存它。
-3. **不变量**：存储的 `ElementMultipliersBP` 不可变（DAO 自身从不原地改它），所以 `undoVitals` 的浅拷贝 `before` 仍精确。守卫：`TestCombatantCopiesDoNotShareElementMultipliers`（`skill/combatcomponent/combatant_copy_promises_test.go:16`）。
+3. **不变量**：存储的 `ElementMultipliersBP` 不可变（DAO 自身从不原地改它），所以 DAO `beginChange`（`skill/combatcomponent/component.go:334`）对 vitals 的浅拷贝 `before` 仍精确。（NC-113 当时这份浅拷贝在组件方法 `undoVitals` 里；v1.20.2 的 A1 `5407f127` 把逆操作登记移进 DAO，`undoVitals` 已删除。）守卫：`TestCombatantCopiesDoNotShareElementMultipliers`（`skill/combatcomponent/combatant_copy_promises_test.go:16`）。
 4. **控制流**：无。
 5. **失败处理**：无。
 6. **测试**：修前红：
@@ -816,8 +820,10 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    修后：`go test ./skill/skillsync -run 'TestPresentationResetFrom|TestStateSnapshotAndDeltasHideTheSameAbility|TestRemoveMutationsOfInvisibleEntitiesAreFiltered' -count=1` 与 `go test ./skill -run TestRemoveMutationsCarryTheEntityTheirUpsertCarried -count=1` 通过。
 7. **性能**：无。
-8. **未验证**：reset 的 process 条目只经源码推导与通用断言覆盖；没有接 kit syncstream / NATS 端到端。
-9. **review 检查点**：`rg 'PresentationSnapshot\(\)' skill/skillsync` 是否只在 `presentationReset` 里被投影给 observer；Applier 的 `decodeStrict` 是否认识新增的 `caster` / `owner`（同一结构体，新旧互通）。
+8. **未验证**：经 kit syncstream / NATS 的端到端（外部 E04）。
+9. **review 检查点**：
+   - reset 里的 process 条目没有专门用例（只经源码推导与 `presentationReset` 的通用断言覆盖）：核对 `activePresentationEvent` 对 process 条目还原出的事件形状与 Runtime 增量里的 process 事件一致。
+   - `rg 'PresentationSnapshot\(\)' skill/skillsync` 是否只在 `presentationReset` 里被投影给 observer；Applier 的 `decodeStrict` 是否认识新增的 `caster` / `owner`（同一结构体，新旧互通）。
 
 <a id="skill-4"></a>
 ### SKILL-4 Applier 被拒包不改 epoch（NC-116）
@@ -838,7 +844,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    修后通过。
 7. **性能**：无。
-8. **未验证**：没有接真实传输。
+8. **未验证**：经真实传输的端到端（外部 E04）。
 9. **review 检查点**：`admit` 里是否还有在拒绝分支之前改 `applier.*` 字段的写法。
 
 <a id="skill-5"></a>
@@ -860,7 +866,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：无。
-8. **未验证**：生产 Host 的 checkpoint 与世界成对恢复（O3：没有正式接线）。
+8. **未验证**：无外部项。生产 Host 的 checkpoint 与世界成对恢复没有正式接线（N09 O3，第十二轮“skill 剩余观察：其余保持”），不存在可验证的生产路径；本条只在 MemoryHost 上成立。
 9. **review 检查点**：失败启动登记时若队列已满，会先淘汰一条更老的终态 cast 再被撤掉——确认这只损失可检查的历史、不影响正确性。
 
 <a id="skill-6"></a>
@@ -882,7 +888,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    修后通过；36 个 fixture、fuzz 种子、skillsync / combatcomponent（RuntimeValue JSON 往返）race×3 通过。
 7. **性能**：每个对象多一次 map 解码，只发生在 Parse / checkpoint 恢复。
-8. **未验证**：仓外的非 Go JSON 生产者。
+8. **未验证**：无。仓外的非 Go JSON 生产者若写非规范大小写会被拒，属兼容说明（见说明文档 SKILL-6“兼容”）。
 9. **review 检查点**：用 AST 扫描确认 wire / value / parse 里没有别的无 tag 解码目标（记录写已扫过，新增解码结构体时要补 tag）。
 
 <a id="skill-7"></a>
@@ -909,7 +915,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：无。
-8. **未验证**：没有在生成工程里实际启动 game 服；checkpoint 里的 `phase_timeout` 任务当时仍可恢复（O20），v1.23.0 由 SKILL-21 收口。
+8. **未验证**：无。game 服 Init 用 `skills.CompileAll` 编译全部定义（`demo/internal/service/game/service.go.tmpl:61`），之后两次在隔离环境起生成的 game 服并就绪都经过这条编译（v1.21.0 CFG-7 端到端、v1.23.0 CFG-12）。checkpoint 里的 `phase_timeout` 任务当时仍可恢复（O20），v1.23.0 由 SKILL-21 收口。
 9. **review 检查点**：game-demo 机器人 `cmd/loadtest` 断言 `Warnings == 0`——生成模板里的技能定义不应带 `timeout_ticks`。
 
 <a id="skill-8"></a>
@@ -932,7 +938,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：无。
-8. **未验证**：编译器其余 pass 的 Tick 字段由各自既有检查负责（审查时 37 fixture × 每个 tick 字段 -1 扫描确认被拒）。
+8. **未验证**：无。编译器其余 pass 的 Tick 字段由各自既有检查负责，审查时用 37 fixture × 每个 tick 字段改成 -1 扫描确认全部被拒。
 9. **review 检查点**：未采用“`Tick` 类型自带拒绝负数的 `UnmarshalJSON`”（`Tick` 也用于 Runtime / checkpoint / sync 的 JSON），确认没有人以后这样改。
 
 <a id="skill-9"></a>
@@ -955,7 +961,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    资产层用例给等待者 20ms 有界窗口进入等待，只影响修前能否复现；修后两种顺序都通过，`-race -count=5` 通过。
 7. **性能**：只在别人取消时多一次加载。
-8. **未验证**：真实客户端资源加载器；O18（取消不触发空闲淘汰）未改。
+8. **未验证**：无外部项。加载器由业务客户端提供，仓内没有真实加载器，用例用可控的假加载器覆盖“创建者取消”与“真实失败”两种时序；O18（取消不触发空闲淘汰）按第十二轮“skill 剩余观察：其余保持”不改。
 9. **review 检查点**：plan 层用例是否断言释放后 asset 引用归零（防止重试路径漏还引用）。
 
 <a id="skill-10"></a>
@@ -984,7 +990,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    - NC-214：`TestCompileRejectsUnknownCatalogNames` 八个子用例 `compiled; diagnostics=[]skill.Diagnostic(nil)`。
    - NC-215：`TestCompileRejectsValuesEveryHostRejects` 七个子用例 `compiled; diagnostics=[]skill.Diagnostic(nil)`；探针在 MemoryHost 上施法分别得到 `unsupported modifier operation "set"`、`modifier duration must be positive`、`status duration must be positive`、`unsupported resource operation "mul_bp"`、`runtime value type mismatch`。
 7. **性能**：无。
-8. **未验证**：Host 之间口径不同的取值（shield 时长、relation 取值，O24 / O25）不动；cost 表达式的符号由运行期 `payCostList` 拒绝。
+8. **未验证**：无。Host 之间口径不同的取值（shield 时长、relation 取值，O24 / O25）按第十二轮“skill 剩余观察：其余保持”不动；cost 表达式的符号由运行期 `payCostList` 拒绝。
 9. **review 检查点**：`compile_shape.go:173` 里每个“只接受默认值”的字段是否在 `ChainSelectShape` / `AttributeModifierCommand` 里确实没有对应字段（若以后实现方向 A，这里要同步放宽）。
 
 <a id="skill-11"></a>
@@ -1005,7 +1011,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：无。
-8. **未验证**：combatcomponent 宿主不实现 `OwnedEntityRuntimeHost`，没有在它上面跑 owned 进程。
+8. **未验证**：无（不适用：combatcomponent 宿主不实现 `OwnedEntityRuntimeHost`，不跑 owned 进程）。
 9. **review 检查点**：停止过程中（`terminateProcess` 的 leave）触发的 finish 是否不会重复停止。
 
 <a id="skill-12"></a>
@@ -1020,7 +1026,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 5. **失败处理**：`ErrSchemaNegotiationFailed`。
 6. **测试**：修前红：`NegotiateSchema({0 5}, {2 3}) = 3; server contains=false client contains=true, want ErrSchemaNegotiationFailed`。
 7. **性能**：无。
-8. **未验证**：无生产调用方。
+8. **未验证**：无（仓内无生产调用方）。
 9. **review 检查点**：无。
 
 <a id="skill-13"></a>
@@ -1053,7 +1059,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    修后通过；全部既有用例与 digest 不变。
 7. **性能**：无。
-8. **未验证**：B3 ③（Host 取值能力表）下个大版本；process callback 事件是另一张表，不在本项。
+8. **未验证**：无。B3 ③（Host 取值能力表）维护者定为下个大版本；process callback 事件是另一张表，不在本项。
 9. **review 检查点**：
    - `rg 'artifacts.authority.statuses\[' skill/lower.go` 应无直接 map 读（都经 `resolveName`）。
    - B3 后的回归 NC-223（SKILL-14）说明：`resolveName` 在空作用域下会把合法的局部变量引用判为未解析——lower 快照计划时要用读取处的作用域。
@@ -1063,7 +1069,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
 [说明](guide-cfg-skill-noncore.md#skill-14)
 
-1. **提交与版本**：`5c04726f`（分支 `revn09e`）、`86882561`（标注）。首发 v1.21.0。v1.21.0 内随后 `4ed038d9`（SKILL-15）把 NC-220 / NC-224 的按 pass 检查收拢到求值上下文表：发版提交上 `compile_snapshot.go` 的 `snapshotCapturableWhereRead` / `readsInsideProcessCallbacks` 与 `compile_owned_entity.go` 的 `validateDetachedProcessFields` 已不存在（`rg` 无结果），判断改由表完成。
+1. **提交与版本**：`5c04726f`（分支 `revn09e`）、`86882561`（标注）。首发 v1.21.0。v1.21.0 内随后 `4ed038d9`（SKILL-15）把 NC-220 / NC-224 的按 pass 检查收拢到求值上下文表：发版提交上 `compile_snapshot.go` 的 `snapshotCapturableWhereRead` / `readsInsideProcessCallbacks` 与 `compile_owned_entity.go` 的 `validateDetachedProcessFields` 已不存在（`rg` 无结果），判断改由表完成（NC-220 / NC-224 修复记录已加后注）。
 2. **改动（发版提交上的位置）**：
 
    | 编号 | 位置 |
@@ -1085,7 +1091,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    - NC-224：五个子用例（临时还原实现）`compiled; diagnostics=[]skill.Diagnostic(nil)`；性质测试 `seed.process_start_read $.phases[0].on.enter.steps[1].process.area.from=$input.target: compiled without errors but advance[0] 1: skill: immutable program invariant failed`。
    - 修后通过；42 个既有种子 gameplay / presentation digest 逐一相同。
 7. **性能**：无。
-8. **未验证**：没有逐一核对“进程只活一步、从不走到移交后求值”的边缘情形（同样被拒绝）。
+8. **未验证**：无。说明：编译期按字段所在的求值上下文（process_step 列）判断，不看进程实际活几步，所以“进程只活一步、从不走到移交后求值”的定义同样被拒绝——这是表的设计（O33 之后同一列的漂移格子也一律拒绝），不是漏验。
 9. **review 检查点**：NC-223 的修法让非缓存型采样点的计划实体取读取处的值——确认 `lowerSnapshots` 对没有记录的计划仍按空作用域 lower 并在查不到时报错（不再定位在 `$`，而是计划的源路径）。
 
 <a id="skill-15"></a>
@@ -1134,7 +1140,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    - 用例位置：`skill/eval_context_promises_test.go:46` / `:90` / `:133` / `:177`；控制 `:72` / `:116` / `:157`。修后通过；45 个既有种子 gameplay / presentation digest 修前修后相同。
    - 复跑：`go test -race -count=3 ./skill/...`、`SKILL_MUTATION_FULL=1` 性质测试。
 7. **性能**：无基准。
-8. **未验证**：`$caster` 在进程回调里 Runtime 其实求得出（= owner），表维持编译期不可用（O36）。
+8. **未验证**：无。`$caster` 在进程回调里 Runtime 其实求得出（= owner），表维持编译期不可用：第七轮 O34～O36“保持现状并写进作者文档”。
 9. **review 检查点**：
    - 新增一个求值点时，是否在 Runtime 那一侧设置了 `evalContext`（否则零值是施法流程，会放过表外引用）。看 `rg 'evalContext:' skill/*.go` 的赋值点是否覆盖 8 个上下文。
    - `referenceProgramValue.row` 确实不进 digest：`programValueDigest` 不读 `row`。
@@ -1145,7 +1151,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
 [说明](guide-cfg-skill-noncore.md#skill-16)
 
-1. **提交与版本**：`4da5e7ea`（记录第七轮决定）、`f6043e44`（实施，分支 `o33`，基线 `4da5e7ea`；同提交含 O37 account，见 NONCORE）、`2a7d2a65`（标注；提交说明里的 `a6e75488` 是 rebase 前的号，不在 main 上）。首发 v1.21.0。
+1. **提交与版本**：`4da5e7ea`（记录第七轮决定）、`f6043e44`（实施，分支 `o33`，基线 `4da5e7ea`；同提交含 O37 account，见 NONCORE）、`2a7d2a65`（标注；提交说明里的 `a6e75488` 是 rebase 前的号，不在 main 上，正确的是 `f6043e44`；DECISIONS-PENDING 第七轮表下已加更正注）。首发 v1.21.0。
 2. **改动**：`skill/eval_contexts.go`：21 格改为不可用（引用表 process_step / state_default 两列 8 行 = 16 格；快照点表 process_step / state_default 两列的 cast_start、phase_start = 4 格；memory_default 列的 phase_start = 1 格）；`evalDrifting` 删除，`usable()` 改为 `== evalAvailable`；每格 semantics 写“为什么没有、此前实际得到的值、改用 …”。Runtime 不用改（本来查同一张表）。作者文档、`ai-skill-system-prompt.md` 同步。
 3. **不变量**：表里只有两种格子。守卫：`TestProcessStepPrimaryTargetIsRejectedAtCompileTime`（`eval_contexts_table_test.go:366`）、`TestEvalContextTableRejectsTheO33DriftCellsWithAnAlternative`（`:400`，21 格逐格：不可用、semantics 有“改用”、有位点的格子诊断点名上下文 / 表项 / 替代写法）、`TestEvalSnapshotTableCellsAgreeWithCompilerAndRuntime`（`:504`，3 个快照点 × 5 个非采样上下文 = 15 格，此前快照点表没有逐格守卫）、`TestO33AlternativesCompileAndRun`（`:555`，替代写法逐条能编译能跑）。
 4. **控制流**：同 SKILL-15。
@@ -1168,7 +1174,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 8. **未验证**：无（仓内 36 个 fixture、examples、`roost add skill` 骨架、game-demo `fireball.json.tmpl` 都不用漂移格子）。
 9. **review 检查点**：
    - 21 格的 semantics 都含“改用”（守卫已查）；替代写法里排除了两条看似可行的写法（绑定到进程数值属性的 motion 字段只收字面量；`set_memory` 不能存属性读取），确认作者文档没有写回它们。
-   - 作者文档 `docs/skill/skill-casting-and-combat.md` 第 80 行标题仍写“（O33，未发版）”，与发布事实不符（v1.21.0 已发布），建议发版时改正。
+   - 作者文档 `docs/skill/skill-casting-and-combat.md` 第 80 行标题原写“（O33，未发版）”，已改为“（O33，v1.21.0）”（本次重核）；确认同文其余“未发版”标注（O22 / O29 / O2）只指 v1.23.0 本版的内容。
 
 <a id="skill-17"></a>
 ### SKILL-17 O22 summon 字段编译期拒绝
@@ -1212,7 +1218,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 5. **失败处理**：无。
 6. **测试**：修前红：`result branch diagnostic "effect result branches cannot suspend or start a process" must name process on callbacks`。
 7. **性能**：无。
-8. **未验证**：O27 的口径只钉在 MemoryHost（`TestTemporalPassBranches`），自定义 Host 需自行保持。
+8. **未验证**：无。O27 按第十二轮“保持并写作者文档”：口径钉在 MemoryHost（`TestTemporalPassBranches`），自定义 Host 按作者文档自行保持。
 9. **review 检查点**：status 实例消费流程的文案与 result 分支是否同一说法（两处代码各写一遍）。
 
 <a id="skill-20"></a>
@@ -1284,29 +1290,11 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 <a id="noncore-1"></a>
 ### NONCORE-1 N01 留项（NC-230～234）与 `ops.admin_timeout`
 
-> 其他分册对应：APP-4（NC-232）、APP-7（NC-233 / 234）、APP-8（NC-231）、OPS-3（NC-230 与 `ops.admin_timeout`），以那里为准。
+> 与其他分册重复：以对方条目为准——NC-230 与 `ops.admin_timeout` 见 [OPS-3](impl-app-own-clk-ops-tool.md#ops-3)，NC-231 见 [APP-8](impl-app-own-clk-ops-tool.md#app-8)，NC-232 见 [APP-4](impl-app-own-clk-ops-tool.md#app-4)，NC-233 / 234 见 [APP-7](impl-app-own-clk-ops-tool.md#app-7)；本条只保留编号与索引（汇总去重）。
 
 [说明](guide-cfg-skill-noncore.md#noncore-1)
 
-1. **提交与版本**：`2c1c7be7`（分支 revn01b）、`897a1dd9`（标注）。首发 v1.21.0。
-2. **改动**：`kit/ops/ops_mod.go:139` `Start` 在 `:163` 同步 `net.Listen`；`:31` `defaultAdminTimeout`、`:77-80` 读 `ops.admin_timeout`、`:351-360` 到期回 504（`command did not finish within ops.admin_timeout (%s); its effects are unknown`）；`app/app.go` 停机 hook 受 `shutdown.total_timeout`（`:428`）约束、停机期 RuntimeFailure 并入 `run` 返回值；`kit/redis/redis_mod.go`（第一次 Close 后交出池）；`kit/remoteentity/remote_entity_mod.go:280` `stop incomplete`；`lifecycle/manager_group.go`；`app/config_validation.go` 登记 `ops.admin_timeout`。
-3. **不变量与守卫**：Start 返回 nil 即端点可用（`TestOpsStartFailsWhenTheAddressIsTaken`，`kit/ops/listen_promises_test.go:20`；`TestOpsStartServesOnTheBoundAddress`）；停机总时长受预算（`TestShutdownLifecycleHooksStayWithinTheShutdownBudget`，`app/shutdown_hooks_promises_test.go:42`）；停机期失败非零退出且只出现一次（`TestRuntimeFailureDuringShutdownIsReturned`，`app/late_runtime_failure_promises_test.go:15`；对照 `TestRuntimeFailureThatStartsTheShutdownIsReturnedOnce`）；Stop 收敛（`TestRedisModStopConvergesAfterACloseError`，`kit/redis/stop_retry_promises_test.go:18`）；不误报 stopped（`TestRemoteEntityModDoesNotLogStoppedWhenStopFails`，`kit/remoteentity/stop_log_promises_test.go:16`）。
-4. **控制流**：信号 → `service.stopping` hook（预算内）→ `Service.Shutdown` → Mod 停止 → `service.stopped` hook → 释放单实例锁；任一步不完整则不释放锁。
-5. **失败处理**：stopping hook 卡住与 Shutdown 不完整同处理：不停 Service / Mod、不 Release。
-6. **测试**（修前红，问题记录原文）：
-
-   ```text
-   listen_promises_test.go:31: Start on 127.0.0.1:59850 (already in use) = nil, want the bind error: the process would run without its probe endpoints
-   shutdown_hooks_promises_test.go:79: run did not return 5.3s after a service.stopping hook that ignores its ctx (shutdown.total_timeout 300ms)
-   late_runtime_failure_promises_test.go:27: run error = <nil>, want the runtime failure that happened during shutdown
-   stop_retry_promises_test.go:30: Stop after the pool was closed = redis: client is closed, want nil: retrying can never succeed
-   stop_log_promises_test.go:29: a failed stop logged success:
-       time=2026-10-06T07:32:14.551+08:00 level=INFO msg="remote_entity mod: stopped"
-   ```
-
-7. **性能**：无。
-8. **未验证**：外部 E08 / E13 / E21 / E22；NC-233 未跑 integration（不涉及与 Redis 的交互）。
-9. **review 检查点**：NC-231 修后 `run` 在预算附近返回 `DeadlineExceeded`；确认 stopping 卡住时 Shutdown 0 次、Mod 停 0 次、不 Release（用例断言了）。`ops.admin_timeout` 已进 `frameworkDurationKeys`（CFG-2）。与 APP 部分去重时以 APP 为准。
+**提交与版本**：`2c1c7be7`（分支 revn01b）、`897a1dd9`（标注）。首发 v1.21.0。`ops.admin_timeout` 登记进 `frameworkDurationKeys` 见本分册 CFG-2。外部验证项（E08 / E13 / E21 / E22）也在那几条里。
 
 <a id="noncore-2"></a>
 ### NONCORE-2 HTTP JSON 先编码后写；recover 尊重已开始的响应（NC-80 / 81）
@@ -1335,7 +1323,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 5. **失败处理**：拒绝即限流。
 6. **测试**：修前 3 红（N02 提交上），修后 3 绿。
 7. **性能**：`BenchmarkRateLimiterFullTableUnseenKey`（`-benchtime 200x -count 3`）满表陌生 key 修前 1k 表约 5.7µs、100k 表约 529µs；修后 89～102ns、56～89ns。
-8. **未验证**：仓内无装配方（N02 O6）。
+8. **未验证**：无（仓内无装配方，N02 O6）。
 9. **review 检查点**：`MaxKeysPerOwner` 被 Clamp 到不超过 `MaxKeys`。
 
 <a id="noncore-4"></a>
@@ -1430,7 +1418,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 5. **失败处理**：预校验失败不提交；缺 loader / Id 的手写候选拒绝。
 6. **测试**：修前 5 失败 / 3 对照通过，失败文本 `invalid migration reached CommitSystem: changed=true error=<nil> commits=1`；正式 DAO CLI 消费 3 失败 / 8 对照通过。修后 12 新增正式、原 11 消费和含 6 新场景的 17 消费通过。
 7. **性能**：无。
-8. **未验证**：真实 Mongo / HA / 持续竞争与生产已有坏 WAL 恢复。
+8. **未验证**：真实副本集 / HA / 持续竞争（外部 E11）。生产上已有的坏 WAL 按兼容说明处理（不自动跳过或删除，见说明文档 NONCORE-9），不是待验证项。
 9. **review 检查点**：这是 DataEngine（核心线）文件，改动由非核心线发起；确认 glsvet `./dataengine/engine` 通过。
 
 <a id="noncore-10"></a>
@@ -1445,7 +1433,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 5. **失败处理**：无。
 6. **测试**：修前九项 `loaded child level=99 but commit records=0, want 1`；CLI 六项 `persisted descendant changed to 99 but commit records=0, want 1`。修后完整金样 53 个叶子、最终消费者 28 个叶子通过。
 7. **性能**：无。
-8. **未验证**：不据此宣称所有组合都已验收；历史漏写不补回。
+8. **未验证**：无。范围说明：验收的是上面九项入口组合与六项 CLI 消费，不据此宣称所有组合；修复前漏写的历史数据不补回（兼容说明）。
 9. **review 检查点**：DirtyHook 是每个结构体自己的函数槽——确认没有其他按值返回后再绑定的路径（迁移后重载、回滚恢复、同步入口共用同一 wire）。
 
 <a id="noncore-11"></a>
@@ -1467,7 +1455,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    真实隔离 Redis 探针：修前三轮 6 写者 0～2/120、8 写者 3～5/160 次 ErrConflict，修后 0/120、0/160（小样本，只证明方向）。chat 两副本并发 Append + Prune 组合修前持续失败、修后 9/9。
 7. **性能**：只在输掉 CAS 后多一次 GET。
-8. **未验证**：Redis Cluster。
+8. **未验证**：Redis Cluster 与多进程（外部 E09）。
 9. **review 检查点**：退避期间键被删时以版本 1 重建（用例覆盖）。
 
 <a id="noncore-12"></a>
@@ -1488,7 +1476,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：无。
-8. **未验证**：`TestRealMongoCoordinatorLeaseTakeover` 本批未在真实 Mongo 上重跑（改动只是删掉调用参数）。
+8. **未验证**：无。`TestRealMongoCoordinatorLeaseTakeover` 已在 `e6828e4f` 上用隔离环境的真实副本集重跑，三个子用例通过（`GOWORK=off go test -tags integration -count=1 -run '^TestRealMongoCoordinatorLeaseTakeover$' ./saga/`，1.85s）。
 9. **review 检查点**：元素按“底层类型”比较与驱动编码一致——具名 int 类型与 int64 是否同值相等。
 
 <a id="noncore-13"></a>
@@ -1503,7 +1491,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 5. **失败处理**：明确拒绝、Store 不变；含身份的 null 更新在回调前拒绝。
 6. **测试**：修前 `refused message changed key 8: {ID:8 Version:3 Data:bad}`、`payload identity mismatch returned success`；interest 修前真实副作用 `generation:11` 和 `exists=false total=0`。
 7. **性能**：无。
-8. **未验证**：真实 broker / 跨服务丢更新未制造。
+8. **未验证**：跨主机 broker 与弱网下的丢更新（外部 E03 / E06）。
 9. **review 检查点**：无 VersionOf 的发布 / 删除兼容保持（控制用例）。
 
 <a id="noncore-14"></a>
@@ -1512,7 +1500,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#noncore-14)
 
 1. **提交与版本**：`7949da08`。首发 v1.20.0。之后 B2（`f376bba0`）、Mirror 第 1～3 步（`8495c5c4`）重写了 `entity/remote_snapshot.go` 的大部分结构（REM 部分）。
-2. **改动**：`entity/remote_snapshot.go`（发版提交上相关入口：`:392` `loadAuthoritative`、`:629` `Get`）。
+2. **改动**：`entity/remote_snapshot.go`（`e6828e4f` 上相关入口：`:396` `loadAuthoritative`、`:634` `Get`；`02c8a10d` 上为 `:392` / `:629`；`155b9f91`（RR-20261006-11 同批）按源码改写了该文件的注释，行号后移）。
 3. **不变量**：权威结果写缓存前绑定完整请求键；返回前按最终 L1 重新检查最低版本。守卫：`entity/snapshot_authoritative_admission_promises_test.go`、`remoteentity/snapshot_repair_admission_promises_test.go`、`entity/snapshot_expiry_authoritative_promises_test.go`。
 4. **控制流**：Get → 权威加载 → 键核对 → 缓存准入 → 最终最低版本检查。
 5. **失败处理**：异键明确拒绝；版本不足 `ErrRemoteSnapshotStale`。
@@ -1545,8 +1533,8 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    真实 Redis：`older write on real Redis = <nil>, want cache.ErrStaleWrite`。
 7. **性能**：无（B2 的性能数据见 REM）。
-8. **未验证**：滚动升级混跑窗口。
-9. **review 检查点**：与 REM 部分去重；墓碑与 v1.23.0 的 O-M6-3 `WAIT` 副本确认（REM）是同一墓碑。
+8. **未验证**：复制丢写与切主、多主机强杀（外部 E10 / E13）。滚动升级期间旧节点（< v1.20.2）不认墓碑、仍可能写回旧数据，是 [RR-20260913-01 记录](../../bugfix/RR-20260913-01.md)“兼容”里写明的升级说明，不是待验证项。
+9. **review 检查点**：墓碑与 v1.23.0 的 O-M6-3 `WAIT` 副本确认（REM）是同一次写：看 `remoteentity/snapshot_l2.go` 的 `tombstoneWait`（`:113`）只挂在 `DeleteAtVersion` 写墓碑之后。
 
 <a id="noncore-16"></a>
 ### NONCORE-16 saga 三消费者健康与 Resume 持久代际（NC-37 / 38）
@@ -1560,7 +1548,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 5. **失败处理**：无。
 6. **测试**：NC-37 修前 10 叶子 4 红 / 6 控制；NC-38 修前 `persisted generation=0, want 1`、`redispatch reused old command ID "resume:1:0:1" at generation 1`（补偿为 `resume:2:0:1`）。
 7. **性能**：无。
-8. **未验证**：真实 Mongo 未运行（mongotest 检验了正式 BSON 转换与状态消费）。
+8. **未验证**：跨主机副本集与切主（外部 E11）。单机真实副本集已验：本次重核在 `e6828e4f` 上把 `saga/mongo_resume_incarnation_promises_test.go` 的两个用例临时换成隔离环境的真实副本集（库名唯一、用后删除，探针未入库）跑过：Resume 三代持久与重派发（forward / compensate）、`incarnation` 在 0 / 1 / 17 / 2³²−1 下经 Get / GetByBusinessKey / List / Apply 不丢，全部通过。
 9. **review 检查点**：uint32 最大值只验 BSON 往返，不验 Resume 溢出。
 
 <a id="noncore-17"></a>
@@ -1575,7 +1563,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 5. **失败处理**：异键 Permanent 拒绝（复用既有 NATS settle）。
 6. **测试**：修前 `original start redelivery rejected after progress: saga: idempotency identity conflict`、`runtime state accepted as a new start intent after progress: <nil>`；`foreign route="saga.result.other" was not refused permanently: <nil>`、`foreign route mutated saga: version=2 status=pending`、`foreign route recorded completion: recorded=true err=<nil>`。
 7. **性能**：无。
-8. **未验证**：发布鉴权不在范围。
+8. **未验证**：无（发布鉴权不在本条范围）。
 9. **review 检查点**：旧的已推进、缺摘要记录重投收紧为冲突——确认运维知道这类重投会被拒（不自动迁移）。
 
 <a id="noncore-18"></a>
@@ -1590,7 +1578,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 5. **失败处理**：非法计划 `ErrConflict`（可 `errors.Is`）。
 6. **测试**：修前 `stale scan claimed unavailable retry (future_nack): next=2026-10-05 07:55:06.781 +0000 UTC now=2026-10-05 06:55:06.781 +0000 UTC`；`malformed foreign_key plan was accepted: <nil>`。
 7. **性能**：无。
-8. **未验证**：真实 Mongo 网络 / 未知提交与多进程压力。
+8. **未验证**：Mongo 网络丢回复与提交结果未知（外部 E11）。多进程：本次重核在 `e6828e4f` 上跑了 `TestRealSagaCrossProcessKillRecovers`（真实 JetStream + Mongo 副本集，两个协调器 + Mongo 步骤进程，中途 SIGKILL 一个）：60 个 saga 全部完成、120 个操作各恰好提交一次、outbox 排空、无残留租约（76s）。
 9. **review 检查点**：NC-250（NONCORE-23）补修时用“去掉 `applyFilter` 的租约条件”做过负对照，确认该条件仍在。
 
 <a id="noncore-19"></a>
@@ -1611,30 +1599,44 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：无。
-8. **未验证**：真实 Redis / Cluster（纯窗口逻辑）。
+8. **未验证**：Redis Cluster 与多进程（外部 E09）。
 9. **review 检查点**：见 NONCORE-21。
 
 <a id="noncore-20"></a>
-### NONCORE-20 activity.game_sids 启动校验（RR-20261005-01，已被 C4 取代）
+### NONCORE-20 activity.game_sids 启动校验（RR-20261005-01，已被 C4 取代；回归在组文件形态下兑现）
 
 [说明](guide-cfg-skill-noncore.md#noncore-20)
 
-1. **提交与版本**：`54e8bea3`（登记）、`46c4dfba`（修复）。首发 v1.20.1；v1.20.2 `277e1252`（C4）删除 `activity.game_sids`。
-2. **改动**：当时 `demo/internal/service/game/activity.go.tmpl`、`codegen/internal/roost/demo.go`、`kit/service/global/service.go`（注释更正不存在的 `Rebind`）。发版提交上该校验由 `kit/service/global/activity.LoadGroupsFile` 承担（OWN）。
-3. **不变量**：注定开不出窗口的配置在启动时点名失败。
-4. **控制流**：无（已取代）。
-5. **失败处理**：`Service.Init` 失败。
-6. **测试**：修前（模板只加测试）：
+1. **提交与版本**：`54e8bea3`（登记）、`46c4dfba`（修复）。首发 v1.20.1；v1.20.2 `277e1252`（C4）删除 `activity.game_sids`。回归去向复核 `d5682dc4`（分支 `fixr2`，新增守卫，首发 v1.23.0 本版）。
+2. **改动**：当时 `demo/internal/service/game/activity.go.tmpl`、`codegen/internal/roost/demo.go`、`kit/service/global/service.go`（注释更正不存在的 `Rebind`）。`e6828e4f` 上这条承诺由活动组文件兑现：`kit/service/global/activity/groups.go:80` `ParseGroups`（`:58` `LoadGroupsFile` 调它）加载时拒绝组内重复、非正数 / 超出 int32、一组超过 `MaxExpectedGames`（`kit/service/global/activity/types.go:223`，64）；game-demo `startActivity` 在查协调器能力之前按 `activity.groups_file` 点名拒绝（OWN-5）。
+3. **不变量**：注定开不出窗口的候选集在启动时、任何远端调用之前按配置键名失败。C4 之后候选集 = 本服在 `configs/activity_groups.yaml` 里所在组的成员。
+4. **控制流**：game Init → `startActivity` → `activityGroup`（`ParseGroups` 校验）→ 才查协调器能力。
+5. **失败处理**：`Service.Init` 失败，错误点名 `activity.groups_file`。
+6. **测试**：
+   - 修前（v1.20.1，模板只加测试，原用例 `TestActivityRefusesACandidateListNoWindowCouldOpenWith`）：
 
-   ```text
-   activity_test.go:236: startActivity with activity.game_sids=[1302 1301 1302]: error activity: game: capability "service.global.activity" not found; is the activity process running and reachable over the bus? does not refuse the list by name; every window it would try to open would fail
-   --- FAIL: .../a-repeated-sid (0.00s)
-   --- FAIL: .../more-candidates-than-one-live-query (0.00s)
-   --- FAIL: .../a-sid-beyond-int32 (0.00s)
-   ```
+     ```text
+     activity_test.go:236: startActivity with activity.game_sids=[1302 1301 1302]: error activity: game: capability "service.global.activity" not found; is the activity process running and reachable over the bus? does not refuse the list by name; every window it would try to open would fail
+     --- FAIL: .../a-repeated-sid (0.00s)
+     --- FAIL: .../more-candidates-than-one-live-query (0.00s)
+     --- FAIL: .../a-sid-beyond-int32 (0.00s)
+     ```
 
-7～8. 无。
-9. **review 检查点**：确认 C4 的 `LoadGroupsFile` 覆盖了同样三种情形（重复、超 int32、超过单窗口上限）。
+   - **回归改名对照**（C4 `277e1252` 删除 `candidateSIDs` 时原用例一并删除；`d5682dc4` 复核结论：承诺仍需要，回归没有丢、改名改形，见 [修复记录](../../bugfix/RR-20261005-01.md)末节）：
+
+     | 原子用例（`277e1252^` 的 `activity_test.go.tmpl`） | `e6828e4f` 上的覆盖 |
+     | --- | --- |
+     | `a-repeated-sid` | 模板 `TestActivityRefusesAGroupNoWindowCouldOpenWith/a-repeated-sid`（`demo/internal/service/game/activity_test.go.tmpl:235`）；kit `TestAGroupsFileThatCannotBeUsedIsRefusedByName/repeated-sid`（`kit/service/global/activity/groups_promises_test.go:79`），另有 `a-sid-in-two-groups` / `sid-in-two-groups` |
+     | `a-sid-beyond-int32` | 模板 `…/a-sid-beyond-int32`；kit `…/beyond-int32`、`…/non-positive` |
+     | `more-candidates-than-one-live-query`（> `app.SingletonLiveMaxSIDs` = 200） | 一组至多 64 个成员、加载时拒绝：模板 `…/more-than-the-coordinator-takes`；kit `TestAGroupLargerThanOneWindowIsRefusedWhenLoaded`（`groups_promises_test.go:44`）；**新增**守卫 `TestAGroupFitsOneLiveQuery`（`kit/service/global/activity/groups_live_limit_promises_test.go:15`，`MaxExpectedGames` ≤ `app.SingletonLiveMaxSIDs`，两个常量改一个不改另一个时先红） |
+     | `own-sid-and-non-positive-entries-are-skipped` | 不再适用：组文件里本服必须是成员、非正数从“跳过”收紧为“拒绝”——模板 `…/this-server-in-no-group`、`…/no-groups-file`；kit `…/non-positive` |
+     | `exactly-one-live-query-is-accepted` | 恰好 64 个成员的组接受：模板 `…/a-full-group-is-accepted`、`TestAWindowOpensForTheGroupTheFilePutsThisServerIn/a-full-group-all-live`；kit `TestAFullGroupOpensAWindowWithTheCoordinator` |
+
+   - 能红（`d5682dc4` 记录，临时改源码未提交）：去掉 `ParseGroups` 的重复 / int32 / 组大小检查各自变红；把 `MaxExpectedGames` 改成 201，`TestAGroupFitsOneLiveQuery` 红在 `an activity group may hold 201 game servers (MaxExpectedGames) but one App.Live query takes at most 200 …`；生成 game-demo 里把 `activityGroup` 挪到能力查找之后，模板用例红在与修前同一形状（`capability "service.global.activity" not found … does not refuse the group by name`）。
+   - 复跑：`GOWORK=off go test -count=1 -run 'TestAGroup|TestAFullGroup' ./kit/service/global/activity/`；生成 game-demo 后 `go test -count=1 -run TestActivityRefusesAGroupNoWindowCouldOpenWith ./internal/service/game/`。
+7. **性能**：无。
+8. **未验证**：无。
+9. **review 检查点**：`ParseGroups` 是否仍是组文件的唯一校验入口（协调器与 game 读同一文件、同一规则）；`TestAGroupFitsOneLiveQuery` 比较的是 `MaxExpectedGames` 与 `app.SingletonLiveMaxSIDs` 两个常量本身，而不是各写一份字面量。
 
 <a id="noncore-21"></a>
 ### NONCORE-21 B9：activity 窗口条目统一入口与修复入口；account 建角判定表
@@ -1666,7 +1668,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    修复入口是新 API，没有修前红。`go test -race -count=3 ./kit/service/global/activity/ ./kit/service/account/`。
 7. **性能**：无。
-8. **未验证**：真实 Redis / Cluster（纯窗口逻辑）。
+8. **未验证**：Redis Cluster 与多进程（外部 E09）。
 9. **review 检查点**：activity 包里读已存窗口条目（Keys / Delivering 列表）的地方除 `window_entries.go` 外不应再直接遍历原始列表；`RemoveMalformedWindowEntry` 对健康条目拒绝（用例覆盖四种拒绝）。
 
 <a id="noncore-22"></a>
@@ -1686,49 +1688,20 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 <a id="noncore-23"></a>
 ### NONCORE-23 saga 定义缺失 fence 时退避中的步骤记为放弃（NC-250）
 
-> 其他分册对应：SAGA-7，以那里为准。
+> 与其他分册重复：以 [SAGA-7](impl-saga-drv-dao-rem.md#saga-7) 为准，本条只保留编号与索引（汇总去重）。
 
 [说明](guide-cfg-skill-noncore.md#noncore-23)
 
-1. **提交与版本**：`31b48bc0`。首发 v1.21.0。之后 `a95cf4dc`（saga 方向 ①）把截止 / 人工 Compensate / 定义缺失 / 超时 / 接收 / Resume / 派发收成 `stepTransition`（SAGA）。
-2. **改动**：`saga/engine.go`（三个出口共用一个判断）；`SAGA.md`（kill -9 遗留事务锁与预算）。
-3. **不变量**：放弃关闭的操作之后到达的成功必告警。守卫：`saga/definition_fence_abandon_promises_test.go:21`。
-4. **控制流**：定义缺失 → fence `ManualRequired` → 若在退避中：写 abandoned tombstone、删排队命令。
-5. **失败处理**：迟到成功 ack 并告警（`saga.completion.late_after_abandon_total`）。
-6. **测试**：修前（[red-before.txt](../../bugfix/evidence/NC-250/red-before.txt)）：
-
-   ```text
-   --- FAIL: TestDefinitionFenceDuringBackoffAbandonsTheOperation/forward (0.00s)
-       definition_fence_abandon_promises_test.go:92: the fenced operation still has 1 queued command(s) (first nc250-forward:1:1:1): the definition fence did not close the operation it abandoned
-       definition_fence_abandon_promises_test.go:99: late success after the definition fence = saga: step is not waiting for a result, want nil (acknowledged and alarmed): ErrNotWaiting means the coordinator has no record of the abandoned operation and drops the effect silently
-       definition_fence_abandon_promises_test.go:102: a step that took effect after the definition fence abandoned it was not alarmed: LateAfterAbandon=0, counter grew by 0, want 1 and 1
-   ```
-
-7～8. 无。
-9. **review 检查点**：与 SAGA 部分去重时以 SAGA 为准。
+**提交与版本**：`31b48bc0`。首发 v1.21.0。之后 `a95cf4dc`（saga 方向 ①）把各出口收成 `stepTransition`，同样见 SAGA 部分。
 
 <a id="noncore-24"></a>
 ### NONCORE-24 global `Bind` 同参重试幂等（RR-20261006-05）
 
-> 其他分册对应：OWN-6，以那里为准。
+> 与其他分册重复：以 [OWN-6](impl-app-own-clk-ops-tool.md#own-6) 为准，本条只保留编号与索引（汇总去重）。
 
 [说明](guide-cfg-skill-noncore.md#noncore-24)
 
-1. **提交与版本**：`611d5d72`（收尾第 4 批 A7）、`53fd9e9c`（标注）；真实 Redis 用例在 `ba13cb05`。首发 v1.23.0（本版）。
-2. **改动**：`kit/service/global/service.go:64` `Bind`：`Create` 失败时读回已存绑定，group 与 globalSID 都一致返回它并计 `replayed:bind`。
-3. **不变量**：同参重试成功、绑定不变；异参仍冲突（`conflict:bind`）。守卫：`kit/service/global/bind_retry_promises_test.go:33`。
-4. **控制流**：Bind → Create（结果未知 / 已存在）→ 读回 → 比较 → 返回或冲突。
-5. **失败处理**：冲突错误带上已存的 group / sid。
-6. **测试**：修前：
-
-   ```text
-   --- FAIL: TestBindRetriedAfterUnknownOutcomeReturnsTheSameBinding (0.00s)
-       bind_retry_promises_test.go:47: retrying the same bind after an unknown outcome: global: conflict: game 7 is already bound, want the stored binding
-   ```
-
-   修后 `go test -race -count=3 ./kit/service/global` 通过。
-7～8. 无。
-9. **review 检查点**：读回与比较不在同一原子操作里——确认绑定一旦写入不会被改（只有迁移 API 改），所以读回结果可信。
+**提交与版本**：`611d5d72`（收尾第 4 批 A7）、`53fd9e9c`（标注）；真实 Redis 用例在 `ba13cb05`。首发 v1.23.0（本版）。
 
 <a id="noncore-25"></a>
 ### NONCORE-25 N07 第一批（NC-60～63）
@@ -1793,7 +1766,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    生成物不变：修前 / 修后两个 roost 二进制生成三个工程 `diff -r` 完全相同。
 7. **性能**：无。
-8. **未验证**：Windows 上的清理失败是否全由此引起。
+8. **未验证**：Windows 上的清理失败是否全由此引起——Windows 暂存，不保证正确（外部 E25）。
 9. **review 检查点**：`rg 'os.Chdir' codegen` 应无结果。
 
 <a id="noncore-28"></a>
@@ -1813,9 +1786,9 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    go_command_tree_promises_test.go:176: runDependencyCommand (buffered output) was still blocked 10s after its context ended: Wait is held by grandchild 1370's copy of the output pipe
    ```
 
-   负对照：去掉信号接管只留进程组，`TestDependencyCommandInterruptKillsTheGoTreeAndStillKillsRoost` 红——`interrupted roost returned but grandchild 4006 is still alive 2s later`。
+   负对照：去掉信号接管只留进程组，`TestDependencyCommandInterruptKillsTheGoTreeAndStillKillsRoost` 红——`interrupted roost returned but grandchild 4006 is still alive 2s later`。另做过真 go 探针：修前确认 `kill -9` go 会留下 compile 孙进程，修后不留（修前修后的承诺由上面两条单测的红绿给出）。
 7. **性能**：无。
-8. **未验证**：真 go 修后探针没有做修前负对照（只确认了修前 `kill -9` go 会留下 compile 孙进程）。
+8. **未验证**：Windows（`taskkill /T` 分支只 `GOOS=windows go vet`）——Windows 暂存，不保证正确（外部 E25）。
 9. **review 检查点**：`GOOS=windows go vet ./codegen/internal/roost/` 通过（taskkill 分支）。
 
 <a id="noncore-29"></a>
@@ -1875,7 +1848,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 5. **失败处理**：go 命令被取消时错误为 `go <args> interrupted: context canceled`（`errors.Is(err, context.Canceled)`）；doctor 返回 `doctor interrupted, no report`。
 6. **测试**：先红：O6 三个阶段用例在旧机制上红在“暂存树残留”；C9 负对照：把变量改成 `"0"` 即红。Unix 信号用例 macOS 上 `-race -count=3`；`GOOS=windows go vet`。
 7. **性能**：无。
-8. **未验证**：Windows 不接管信号（只 vet）；GitHub 上 `codegen-network` job 按约定不等 CI。
+8. **未验证**：Windows 不接管信号（只 vet）——Windows 暂存，不保证正确（外部 E25）；Linux 上的信号与进程树（外部 E26）。GitHub `codegen-network` job 在 `e6828e4f` 上通过（framework-compat run `37461843085`）。
 9. **review 检查点**：`reraisedSignalGrace` 只剩入口一处（`rg reraisedSignalGrace codegen`）；提交点之后的步骤确实不查 ctx（否则会留半份提交）。
 
 <a id="noncore-32"></a>
@@ -1889,7 +1862,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 4～5. 生成期点名报错（见说明的五种组合）。
 6. **测试**：见 [方案 §7 实施结果](../../feature/DAO-NO-COLLECTION-2026-10-04.md)。
 7～8. 无。
-9. **review 检查点**：与 DAO 部分去重。
+9. **review 检查点**：nocoll DAO 的生成物里没有集合名与 Mongo 读写路径：看金样 `codegen/internal/dao/testdata/golden/gen_wraith_dao.go` 与运行期用例 `codegen/internal/dao/testdata/runtime/nocoll_test.go`。
 
 <a id="noncore-33"></a>
 ### NONCORE-33 文件 outbox 清理遗留临时文件（RR-20261006-04）
@@ -1903,7 +1876,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 5. **失败处理**：删除失败（ErrNotExist 除外）让打开失败（fail-closed）。
 6. **测试**：修前 `crash leftover outbox-2862453243.tmp survived reopening the outbox (stat err=<nil>)`；修后通过；`GOOS=windows go vet ./skill/skillsync` 通过。
 7. **性能**：只在打开时扫描一次。
-8. **未验证**：Windows 上未实际运行。
+8. **未验证**：Windows 上未实际运行（只 `GOOS=windows go vet`）——Windows 暂存，不保证正确（外部 E25）。
 9. **review 检查点**：判别依赖 Go 1.27 `os.CreateTemp` 的随机部分是 `uint32` 十进制（记录写明）；升级 Go 版本时复核。
 
 <a id="noncore-34"></a>
@@ -1925,7 +1898,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：无。
-8. **未验证**：NC-123 的红是有界对撞而不是受控调度，单核 / `GOMAXPROCS=1` 环境里修前也可能不红；修后的正确性不依赖概率。插件真实 `.so` 路径当时未跑（NC-244 时补了 `hotcode/plugintest`）。
+8. **未验证**：Linux / Windows 上的真实插件加载（外部 E27，Windows 部分暂存，不保证正确）。说明：NC-123 的红是有界对撞而不是受控调度，单核 / `GOMAXPROCS=1` 环境里修前也可能不红，修后的正确性不依赖概率；插件真实 `.so` 路径由 NC-244 补的 `hotcode/plugintest` 覆盖（NONCORE-36）。
 9. **review 检查点**：hotcode 状态是否只经一次原子 Store 发布（读者不会看到 Patched 与 Meta 不一致）。
 
 <a id="noncore-35"></a>
@@ -1966,7 +1939,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：未做基准（回调内多一次入队）。
-8. **未验证**：仓内无生产使用方（B7 选项 c 的理由）。
+8. **未验证**：无（仓内无生产使用方，B7 选项 c 的理由）。
 9. **review 检查点**：`rg 'ErrReentrantMutation' actionflow` 只剩定义与注释；`drain` 在 panic 后是否复位 `executing`（NC-242 补的就是这里，见 NONCORE-36）。
 
 <a id="noncore-36"></a>
@@ -1993,7 +1966,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    修后 `go test -race -count=3 ./ai ./actionflow ./hotcode/...` 通过。
 7. **性能**：无。
-8. **未验证**：Linux / Windows 真实插件加载（外部 E27）。
+8. **未验证**：Linux 真实插件加载（外部 E27）；Windows 部分暂存，不保证正确。
 9. **review 检查点**：`ApplyBundle` 回滚目标是“加载前那一代”而不是原函数（用例 `first(1) = 11` 钉住）。
 
 <a id="noncore-37"></a>
@@ -2058,31 +2031,11 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 <a id="noncore-40"></a>
 ### NONCORE-40 timer D-L1 / D-L2
 
-> 其他分册对应：CLK-6，以那里为准。
+> 与其他分册重复：以 [CLK-6](impl-app-own-clk-ops-tool.md#clk-6) 为准，本条只保留编号与索引（汇总去重）。
 
 [说明](guide-cfg-skill-noncore.md#noncore-40)
 
-1. **提交与版本**：`b3538251`（第六轮决定）、`5abae51e`（实施，分支 `dl12`，基线 `ce79ef18`）、`e320578c`（标注）。首发 v1.21.0。
-2. **改动**：`timer/scheduler.go:405` `timerHeap.Less`（End → Priority → ID）、`:148` `NewTimerWithPriority`、`:165` `ReportUnhandledTypes`、`:31` `UnhandledDroppedMetric`；`demo/db/def/world.go.tmpl`（`TimerNode.Priority int32 bson:"priority"`）、`demo/game/entities/world/timer_component.go.tmpl`（`OnInitFinish` 建一次调度器、`ReportUnhandledTypes`、`settle`）；`OBSERVABILITY.md`。
-3. **不变量**：同期限顺序是全序（与入堆顺序、存储遍历顺序无关）；未注册类型的节点删除可见。守卫：`timer/order_and_unhandled_promises_test.go`；生成工程 `timer_component_test.go`（模板）。
-4. **控制流**：Tick → 取堆顶 → 有 handler 执行 / 无 handler 删除 + Warn + 计数。
-5. **失败处理**：日志量以被删节点数为界。
-6. **测试**：修前（方案 §4 原文）：
-
-   ```text
-   --- FAIL: TestTimersWithTheSameDeadlineFireInRegistrationOrder/armed_in_one_scheduler
-       timers due at the same instant fired in order [1 6 5 4 3 2], want registration order [1 2 3 4 5 6]
-   --- FAIL: TestPriorityOrdersTimersWithTheSameDeadline
-       fired [6 3 5 4 1 2], want [6 2 3 5 1 4] (deadline, then priority ascending, then registration order)
-   --- FAIL: TestADueTimerWithoutAHandlerIsDroppedWithAWarningAndACount
-       timer.unhandled_dropped_total{kind="7"} = 0, want 2
-   --- FAIL: TestDeadlinesDueAtTheSameMomentFireInArmOrder
-       deadlines due at the same moment fired in order [race-c race-f race-e race-b race-h race-g race-a race-d], want the order they were armed in [race-a race-b … race-h]
-   ```
-
-7. **性能**：`Less` 多一到两次比较。
-8. **未验证**：无。
-9. **review 检查点**：`ChangeTimer` 与按返回值重排都保留 ID（否则“登记顺序”会被改期打乱，用例 `rescheduled_timers_keep_their_place` 钉住）。
+**提交与版本**：`b3538251`（第六轮决定）、`5abae51e`（实施，分支 `dl12`）、`e320578c`（标注）。首发 v1.21.0。
 
 <a id="noncore-41"></a>
 ### NONCORE-41 PathFindSystem.Stop（NC-270）
@@ -2124,7 +2077,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：无。
-8. **未验证**：Redis Cluster；bus 死信写失败之后的完整重投链。
+8. **未验证**：Redis Cluster（外部 E08）。`DeadLetter` 写失败之后不存在重投链：按 bus 去重契约（NONCORE-8，`bus/reliable.go` `ReliableStore` 注释，第十二轮“保持并写进契约”），消息只留 `bus: write dead letter failed` 错误日志（`bus/bus.go:1036`），InboxTTL 内同 MsgID 的投递按重复跳过；本修复只让结果未知也走这条既有分支。
 9. **review 检查点**：与 A2（DRV）口径一致——写结果未知交给调用方。
 
 <a id="noncore-43"></a>
@@ -2173,30 +2126,17 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：无。
-8. **未验证**：真实网关上的发送缓冲满、`-duration` 重跑；真实磁盘写满；root 用户下目录权限用例跳过。
+8. **未验证**：真实网关上的发送缓冲满、`-duration` 重跑（外部 E05）；真实磁盘写满（外部 E19）。说明：目录权限用例在 root 用户下自动跳过（root 不受权限位限制），本机非 root 已跑。
 9. **review 检查点**：新指标 `robot.session.late_response{msg}`、`log.rotate_failures`、`log.write_errors{sink}` 标签低基数（msg 是消息类型名，sink 是固定枚举）。
 
 <a id="noncore-45"></a>
 ### NONCORE-45 robot Stage 序号只增不回收（RR-20261006-09）
 
-> 其他分册对应：OPS-7，以那里为准。
+> 与其他分册重复：以 [OPS-7](impl-app-own-clk-ops-tool.md#ops-7) 为准，本条只保留编号与索引（汇总去重）。
 
 [说明](guide-cfg-skill-noncore.md#noncore-45)
 
-1. **提交与版本**：`7b73aabc`（第十二轮 kit 批，分支 `bkit`；同提交的其他项属 OPS / APP / SAGA / REM / CLK）、`d6a677e0`（标注）。首发 v1.23.0（本版）。
-2. **改动**：`robot/runner/runner.go`。
-3. **守卫**：`robot/runner/stage_ordinal_promises_test.go`（`TestStageRegrowDoesNotReuseOrdinals`）。
-4～5. 无。
-6. **测试**：修前：
-
-   ```text
-   --- FAIL: TestStageRegrowDoesNotReuseOrdinals (0.06s)
-       stage_ordinal_promises_test.go:48: robot ordinal 2 was handed out twice across the stages (launch order [1 2 3 2 3]); a regrown stage must not reuse the ordinal (and player id) of a robot it just stopped
-   ```
-
-   修后 `[1 2 3 4 5]`，`go test -race -count=3 ./robot/runner` 通过。
-7～8. 无。
-9. **review 检查点**：默认 `IdentityProvider` 对超过 `Count` 的序号是否仍给出合法 PlayerID。
+**提交与版本**：`7b73aabc`（第十二轮 kit 批，分支 `bkit`）、`d6a677e0`（标注）。首发 v1.23.0（本版）。
 
 <a id="noncore-46"></a>
 ### NONCORE-46 N13（NC-180～185 与复审补修）
@@ -2222,7 +2162,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    复审：`TestManagerRangeNeverHandsOutAClearedEntity` 修前两叶红（`id=0 category=0`）。
 7. **性能**：`EntityManager.Range` 10 万实体约 0.86ms → 4.1ms（Apple M5，两次 CAS / 实体）；`BenchmarkFastMapSetGet` 修前 38.09ns ± 22%、修后 38.71ns ± 26%（p=0.937），0 allocs。
-8. **未验证**：随机模型探针（2 万个种子）未发现违反；`totalTasks` 的瞬时不一致没有确定性红测试，未改。
+8. **未验证**：无。随机模型探针（2 万个种子）未发现违反。`TaskPool.totalTasks` 入队后才加、统计瞬间可能 completed > total，按 [revleft 记录](../../review/REVIEW-2026-10-06-revleft.md) §4 O9 的处置不改（零调用方 API，C8 决定“保留”；没有确定性红测试）。
 9. **review 检查点**：`EntityManager.Range` 持引用的协议与 nest 分发持有实体引用是同一协议——确认没有引入快池等待（`Touch` / `UnTouch` 是原子计数、不阻塞）。
 
 <a id="noncore-47"></a>
@@ -2245,7 +2185,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：无新增（`RangeGroupEntities` 仓内零调用方）。
-8. **未验证**：index / lock 无遍历回调；`ShardedSafeMap.Read` / `Compute` 不适用。
+8. **未验证**：无（不适用：index / lock 无遍历回调；`ShardedSafeMap.Read` / `Compute` 不是遍历回调，C7 已定）。
 9. **review 检查点**：新增或修改遍历入口时是否套了 `rangecontract.Check`（roost-coding 要求）；nest 的 `EntityLockGroupScope.Range` 走 `GetGroupEntities`，未改。
 
 <a id="noncore-48"></a>
@@ -2280,33 +2220,17 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 4～5. 无。
 6. **测试**：修前 `uri_log_promises_test.go:63: Start logged the Mongo password: "... msg=\"mongo mod: connected\" uri=\"mongodb://roost:s3cret-pw@db1:27017,db2:27017/?replicaSet=rs0\"\n"`。
 7. **性能**：无。
-8. **未验证**：mongo-driver 自身错误信息是否带口令。
+8. **未验证**：无。mongo-driver 自身的错误信息：本次重核在 `e6828e4f` 依赖的 mongo-driver v2.6.0 上用临时探针（未入库）试了 12 种带口令的 URI——端口非数字、口令里非法转义 / 未转义的 `:` 与 `@`、非法选项值、非法 authMechanism、srv 带端口、srv 解析失败、错误 scheme、连不上的主机（server selection 超时）、以及对隔离环境 Mongo 的认证失败（`auth error: sasl conversation error …`）——错误文本都不含口令。
 9. **review 检查点**：未采用 `net/url`（多主机与 `mongodb+srv` 解析边界不稳定）。
 
 <a id="noncore-50"></a>
 ### NONCORE-50 启动失败先收回 Service（NC-193）
 
-> 其他分册对应：APP-9，以那里为准。
+> 与其他分册重复：以 [APP-9](impl-app-own-clk-ops-tool.md#app-9) 为准，本条只保留编号与索引（汇总去重）。
 
 [说明](guide-cfg-skill-noncore.md#noncore-50)
 
-1. **提交与版本**：`d6550a16`。首发 v1.20.2。
-2. **改动**：`app/app.go`、`app/service.go`（Init 失败也调用 `Shutdown`，限时 5s；不完整则不停 Mod、不释放锁）。
-3. **守卫**：`app/startup_cleanup_promises_test.go`。
-4. **控制流**：Init 失败 → Shutdown（5s）→ 完成则停 Mod、Release；不完整则保留。
-5. **失败处理**：与正常停机一致。
-6. **测试**：修前：
-
-   ```text
-   startup_cleanup_promises_test.go:71: Service.Shutdown called 0 times after a failed Init, want 1: what Init started keeps running
-   --- FAIL: TestStartupCleanupThatDoesNotFinishKeepsTheModsAndTheLock/cooperative_timeout (5.00s)
-       startup_cleanup_promises_test.go:126: mods stopped 1 times while Service.Shutdown had not finished; the service may still be using them
-   --- FAIL: TestStartupCleanupThatDoesNotFinishKeepsTheModsAndTheLock/uncooperative (20.00s)
-       startup_cleanup_promises_test.go:117: run did not return 15s after a startup failure whose Service.Shutdown never finished
-   ```
-
-7～8. 无。
-9. **review 检查点**：与 APP 部分去重。
+**提交与版本**：`d6550a16`。首发 v1.20.2。
 
 <a id="noncore-51"></a>
 ### NONCORE-51 N15 脚本与门禁（NC-200～208）、A5
@@ -2336,8 +2260,8 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    A5 红（基线 `bb3aa647`）：垫片一节四条全部 `lock=free`。NC-207 绿：8 个 go test 格 `FAIL(no tests ran)`，矩阵 exit 1。
 7. **性能**：无。
-8. **未验证**：修后 heal / 矩阵在真实共享隔离环境上实跑；Linux 上 NC-202 的 pid 认领（随 E26）。
-9. **review 检查点**：NC-205（pretag）与 TOOL 部分去重；`kit/scripts/integration/README.md` 的共享使用规则与 roost-bugfix lessons 一致。
+8. **未验证**：Linux 上 NC-202 的 pid 认领（外部 E26）。修后 heal / 矩阵已在真实共享隔离环境上实跑：`scripts/test-remote-matrix.sh` 先 `dataengine-env.sh heal` 再逐格跑、每格前再 heal，v1.20.2 / v1.21.0 / v1.22.0 发版矩阵各 21/21（`matrix-v1202-c85d4565` / `matrix-v1210-4881f2b7` / `matrix-v1220-9bf690fb`，见 [交接 §7](../../CORE-OPTIMIZATION-HANDOFF.md)）。
+9. **review 检查点**：`kit/scripts/integration/README.md` 的共享使用规则与 roost-bugfix lessons 是否一致（NC-205 pretag 以 TOOL-1 为准）。
 
 <a id="noncore-52"></a>
 ### NONCORE-52 停机三步（NC-170～174）
@@ -2363,8 +2287,8 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    真实 nats-server：修前 `err=<nil> bus_retained=false nats_closed=true`、`ack_pending=1 ack_floor=0`；修后 `err=context deadline exceeded bus_retained=true nats_closed=false`、重试 `err=<nil>`、`ack_pending=0 ack_floor=1`。真实 etcd：修前 `client_open=false`、重试 `grpc: the client connection is closing`；修后 `elapsed=500ms client_open=true`、解冻后重试 `err=<nil> keys=0`。
 7. **性能**：无。
-8. **未验证**：无额外项。
-9. **review 检查点**：与 APP 部分（A3 骨架）去重；`-race -count=10` 记录通过。
+8. **未验证**：JetStream / etcd 多节点 HA（外部 E06 / E07）。
+9. **review 检查点**：A3 的 `internal/stopcontract.Check` 是否套在本条列出的全部停止入口上（骨架本身见 APP-6）；记录里 `-race -count=10` 通过。
 
 <a id="noncore-53"></a>
 ### NONCORE-53 Mongo Mod 停止收敛（NC-260）
@@ -2384,30 +2308,56 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    stop_retry_promises_test.go:53: Close on the released client = client is disconnected, want nil
    ```
 
-7～8. 真实部署上的断开路径未另验。
-9. **review 检查点**：与 DRV 部分去重。
+7. **性能**：无。
+8. **未验证**：无。真实 Mongo：本次重核在 `e6828e4f` 上把 `kit/mongo/stop_retry_promises_test.go` 的两个用例临时换成隔离环境的真实副本集（先 Ping 确认已连上，探针未入库）：已断开客户端上连续两次 Stop 返回 nil、正常停止后再 Stop 与再 Close 返回 nil，通过。
+9. **review 检查点**：`mongo/driver/client.go:119` `Close` 在 RR-20261006-10 统一口径（DRV-5，串行化）之后仍对已断开的客户端返回 nil。
 
 <a id="noncore-54"></a>
-### NONCORE-54 nest 用例隔离（A2 / A3）与 W-2026-10-06-01
+### NONCORE-54 nest 用例隔离（A2 / A3）与派发取锁要求 Guard 作用域（RR-20261006-12，原 W-2026-10-06-01）
 
 [说明](guide-cfg-skill-noncore.md#noncore-54)
 
-1. **提交与版本**：`611d5d72`（收尾第 4 批）、`53fd9e9c`（标注）。首发 v1.23.0（本版），只改测试。
-2. **改动**：`nest/group_lock_test.go`（三条在 goroutine 里取锁的用例改用 `withDispatchGuardScope`：`entity.WithGuardScope` 建作用域、`scope.Guard()` 取锁）；`nest/cross_create_requeue_budget_promises_test.go`（放行闸门改成 `sync.Once` 包住的 `releaseGates`，后于停机 defer 登记、先执行；`Shutdown` 用 10s 上限的 ctx）。
-3. **不变量**：测试不污染进程级 `guardPool`。守卫：`go run ./cmd/glsvet -tests ./nest` 无输出。
-4. **控制流（缺陷机理）**：无作用域 → `GetEntityGuard()` 从池取 Guard → 组迁移重试：第一次取锁后校验失败 `releaseLocks()`（`nest/group_lock.go:248`），`releaseDispatchLocks`（`nest/nest_dispatch.go:480`）无作用域时 `EntityGuardRelease` 归还 Guard → 重试仍用同一 Guard，成功后再释放一次 → `sync.Pool` 里同一指针两份 → 之后两个 `NewGuardScope` 取到同一 Guard、互相解锁（`unlock of unowned mutex`）。
-5. **失败处理**：目标用例失败时放行闸门、停机有上限，不再挂到包超时。
-6. **测试**：修前（基线，seed `1791263156350214000`，6 次：4 次挂到 60s 包超时，另两次）：
+1. **提交与版本**：`611d5d72`（收尾第 4 批 A2 / A3，只改测试）、`53fd9e9c`（标注）；`b7471ae4`（RR-20261006-12 修复，分支 `fixn`，基线 `87d8d91e`；同提交的 RR-20261006-13 glsvet 跟进属 DAO 部分）、`71c8f394`（记录 fixn 合并时 -11 → -12 顺延）。均首发 v1.23.0（本版）。WANTED W-2026-10-06-01 已转 RR 并关闭（`docs/bug/WANTED.md` 标为已转）。
+2. **改动与符号**（以 `e6828e4f` 为准）：
 
-   ```text
-   cross_create_requeue_budget_promises_test.go:106: pair 2: winners=0 losers=2, want one each
-   cross_create_requeue_budget_promises_test.go:97: pair 1 slot 2 exhausted the requeue budget after 401 attempts: nest: lock timeout: nest: created entity is locked by another holder: entity 10192837 cannot be waited for in lock order
-   ```
+   | 位置 | 职责 |
+   | --- | --- |
+   | `nest/group_lock.go:237` `errDispatchWithoutGuardScope`、`:247` `dispatchScopeGuard` | 派发取锁只用当前 goroutine Guard 作用域里的 Guard；没有作用域返回未导出错误 |
+   | `nest/group_lock.go:258` `lockDispatchEntitiesForHandlerWithStore` | 开头检查传入的 Guard 就是作用域里那一个（`:259-261`），否则取锁前返回错误、不取任何锁；组迁移重试（`:273-279`）只放本次取得的实体锁，Guard 不归还 |
+   | `nest/nest_dispatch.go:370` `dispatchLoadedEntities`（`:375`）、`nest/group_transition.go:124` `groupTransitionDispatch`（`:134`，取组锁之前） | 用 `dispatchScopeGuard` 取 Guard，没有作用域时不留副作用 |
+   | `nest/nest_dispatch.go:485` `releaseDispatchEntities` | 逆序只放 `acquired`；Guard 本身与其上的其他持有（handler 新建实体、被取代实例、解锁后回调）由作用域结束时统一释放，Guard 只在那时归还池一次。原 `releaseDispatchLocks`（`02c8a10d` 上 `nest/nest_dispatch.go:480`，无作用域时 `EntityGuardRelease` 整个归还 Guard）**已删除** |
+   | `nest/group_lock_test.go:147` `withDispatchGuardScope`；`nest/cross_create_requeue_budget_promises_test.go:72-92` | A2 / A3：用例先建作用域再取锁；放行闸门是 `sync.Once` 包住的 `releaseGates`，后于停机 defer 登记、先执行，`Shutdown` 用 10s 上限的 ctx |
+   | `nest/dispatch_guard_scope_promises_test.go`（新） | RR-20261006-12 三条回归，见第 6 点 |
 
-   修后：成对 0/10 失败；该 seed 全包 8 次通过；seed `11`、`22`、`333`、`4444`、`98765` 各 1 次通过；`go test -race -count=3 ./nest` 通过。
-7. **性能**：无。
-8. **未验证**：nest 包里是否还有别的跨用例污染，没有做全 seed 扫描。
-9. **review 检查点（WANTED W-2026-10-06-01，未判）**：`releaseDispatchLocks` 的无作用域分支是否应改为“只释放 `acquired`、不归还 Guard”或“无作用域直接拒绝”。当前生产调用方 `dispatchLoadedEntities`、`groupTransitionDispatch` 都在 `runNestLogic` 的作用域里（`nest_dispatch.go:443-448` 的注释核对过）。这是核心线代码，需要核心线判断。`02c8a10d` 之后维护者第十三轮要求交给 review 前闭环（状态“进行中”），review 时以 main 上的最新状态为准。
+3. **不变量**：Guard 的所有权只有一种——作用域；取锁、组迁移重试与派发释放从不归还 Guard，Guard 每次进池恰好一次。生产入口全在作用域里：派发函数的非测试调用方只有 `runNestLogic` 的 `switch`，它在 `switch` 之前 `entity.NewGuardScope`（`nest/nest_dispatch.go:204`）；`runNestLogic` 的调用方是快池派发与 `remote_dispatch.go` 的快续行。守卫：第 6 点三条用例；`go run ./cmd/glsvet -tests ./nest` 无输出（测试不在 go 语句里取无作用域 Guard）。
+4. **控制流（修前缺陷机理）**：无作用域 → `GetEntityGuard()` 从池取 Guard → 第一次取锁后锁组变了 → `releaseLocks()` → 旧 `releaseDispatchLocks` 无作用域时把 Guard 整个归还池 → 重试仍用同一 Guard，成功后调用方再归还一次 → `sync.Pool` 里同一指针两份 → 之后两个 `NewGuardScope` 取到同一 Guard、两个快 worker 互相解对方的实体锁（`unlock of unowned mutex`，A2 的 `-shuffle` 失败）。修后：同样的调用在取锁前返回 `errDispatchWithoutGuardScope`。
+5. **失败处理**：无作用域的调用拿到可 `errors.Is` 的未导出错误（只有直接调用内部函数的测试会走到）；没有改成 panic——入口本来返回 error，`runNestLogic` 的 recover 也会把 panic 变成错误，panic 没有额外收益。未采用“调用方持有、重试不归还”：Guard 上挂的不只本次取得的实体锁，只有完整的作用域释放能收尾，而且 handler 里 `CurrentGuardScope()` 为 nil 时 `Cast` 返回 `ErrCastNoContext`，与快池派发语义不一致（见 [修复记录](../../bugfix/RR-20261006-12.md)“两种修法的取舍”）。
+6. **测试**：
+   - A2 修前（`611d5d72` 之前，seed `1791263156350214000`，6 次里 4 次挂到 60s 包超时，另两次）：
+
+     ```text
+     cross_create_requeue_budget_promises_test.go:106: pair 2: winners=0 losers=2, want one each
+     cross_create_requeue_budget_promises_test.go:97: pair 1 slot 2 exhausted the requeue budget after 401 attempts: nest: lock timeout: nest: created entity is locked by another holder: entity 10192837 cannot be waited for in lock order
+     ```
+
+   - RR-20261006-12 修前红（基线 `87d8d91e`，[问题记录](../../bug/RR-20261006-12.md)原文；锁组在第一次 `Lock` 成功后由测试 Mutex 钩子改掉，确定触发重试，不靠 sleep）：
+
+     ```text
+     dispatch_guard_scope_promises_test.go:69: dispatch locking returned the caller's guard to the pool 2 time(s) during a lock-group retry (err=<nil>); the guard belongs to its scope / caller and must be returned exactly once, by its owner
+     --- FAIL: TestDispatchLockingWithoutGuardScopeNeverReturnsCallerGuardToPool (0.00s)
+     dispatch_guard_scope_promises_test.go:147: singleDispatch without guard scope err = <nil>, want errDispatchWithoutGuardScope
+     --- FAIL: TestDispatchEntriesRequireGuardScope (0.00s)
+     ```
+
+   - 修后（`nest/dispatch_guard_scope_promises_test.go`）：`TestDispatchLockingWithoutGuardScopeNeverReturnsCallerGuardToPool`（`:50`，无作用域 + 重试形状返回错误、归还 0 次、不留锁）、`TestDispatchLockingGroupRetryInScopeKeepsGuardUntilScopeEnds`（`:89`，作用域里重试只放实体锁、作用域结束归还恰好 1 次；修前也通过，钉住作用域路径）、`TestDispatchEntriesRequireGuardScope`（`:129`，`singleDispatch` / `groupTransitionDispatch` 无作用域返回错误、handler 不执行；放进作用域照常执行）。记录里 `go test -race -count=3 ./nest/... ./entity/...`、A2 seed 3 次、glsvet 三项均通过。
+   - 本次重核（`e6828e4f`，有界 seed 扫描）：`go test -c ./nest` 后 `-test.shuffle` 取 1～20、101、202 … 909、`1791263156350214000`、1000～1199 共 230 个 seed 各跑 1 次，另用 `-race` 测试二进制跑 5000～5029 共 30 个 seed，**260 次全部通过**。
+   - 复跑：`GOWORK=off go test -race -count=3 ./nest/... ./entity/...`；`go test -count=1 -shuffle=on ./nest`；`go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync` 与 `go run ./cmd/glsvet -tests ./nest`。
+7. **性能**：无（生产路径不经过被删除的分支）。
+8. **未验证**：无。
+9. **review 检查点**：
+   - nest 非测试代码里是否已没有 `entity.EntityGuardRelease` 调用（`rg 'EntityGuardRelease|GetEntityGuard\(' nest --glob '!*_test.go'` 在 `e6828e4f` 上只剩一行注释与 `nest/cast.go:115`、`:211`）；核对 `cast.go` 这两处取到的都是当前作用域的 Guard（`:211` 前有 `CurrentGuardScope() == nil` 检查，`:115` 前是 `currentNestDispatchMsg()` 检查）。
+   - 派发函数的非测试调用方是否仍只有 `runNestLogic` 的 `switch`（`nest/nest_dispatch.go:219-230` 一带）；`broadcastDispatch` 每个目标自建作用域、不经这几个函数。
+   - `lockDispatchEntities`（`nest/nest_dispatch.go:442`）的 `useTryLock` 注释已随本修复改写为 `dispatchScopeGuard`，确认注释描述与代码一致。
 
 <a id="noncore-55"></a>
 ### NONCORE-55 Nest 重排抖动（U-0279）
@@ -2415,7 +2365,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#noncore-55)
 
 1. **提交与版本**：`47a9132c`。首发 v1.20.1。
-2. **改动**：`nest/group_transition.go:399` `transientRequeueDelay`（下限 `entityGroupDispatchRequeueDelay` 加 `[0, 下限)` 均匀抖动）。
+2. **改动**：`nest/group_transition.go:411` `transientRequeueDelay`（下限 `entityGroupDispatchRequeueDelay` 加 `[0, 下限)` 均匀抖动；`:399` 是重排调用点。`02c8a10d` 上定义在 `:407`，原文写的 `:399` 指的是调用点）。
 3. **不变量**：400 次上限与最短约 2s 的重排窗口不变。守卫：`nest/requeue_jitter_promises_test.go:19` `TestSymmetricTransientRequeuesAreNotReadmittedInLockstep`。
 4～5. 无。
 6. **测试**：见 [U-0279 记录](../../bugfix/U-0279-nest-requeue-jitter.md)；生成工程 `TestGeneratedDataEngineCrossCreateResolvesOnRealWAL` 修前正常负载下失败率 25%～55%。
@@ -2426,14 +2376,11 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 <a id="noncore-56"></a>
 ### NONCORE-56 被静态绑定取代的租约修复（RR-20261004-10 / 11 / 14）
 
-> 其他分册对应：OWN-1，以那里为准。
+> 与其他分册重复：以 [OWN-1](impl-app-own-clk-ops-tool.md#own-1) 为准，本条只保留编号与索引（汇总去重）。
 
 [说明](guide-cfg-skill-noncore.md#noncore-56)
 
-1. **提交与版本**：`18bb86ae`（-10）、`a28a3152`（-11）、`890abdda`（-14）、`5d1cb974` / `1cf96347`（记录）；随后 `f051e24a`（静态绑定，同在 v1.20.0）删除这段逻辑。
-2. **改动**：当时 `demo/internal/service/game/playerowner.go.tmpl`；发版提交上该模板已是静态绑定版本（`handBackPassBudget`、`SetNX`、`interrupted` 均无结果）。
-3～8. 无（代码已删）。
-9. **review 检查点**：无需复核这三条的代码；如需理解为何改为静态绑定，读 [APP 单实例锁方案](../../feature/APP-SINGLETON-LOCK-2026-10-05.md) 与 [静态绑定方案](../../feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md)。
+**提交与版本**：`18bb86ae`（-10）、`a28a3152`（-11）、`890abdda`（-14）、`5d1cb974` / `1cf96347`（记录）；同在 v1.20.0 被 `f051e24a`（静态绑定）删除，发布物里没有这段代码。
 
 ## 全局守卫测试与门禁（本部分）
 
@@ -2456,6 +2403,8 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 | `TestNetworkCodegenTestsRunInSomeWorkflow` | `ci_generated_code_test.go:184` | `ROOST_NETWORK_TESTS=1` 的 job 存在且点名两条用例 | NONCORE-31 |
 | glsvet 输入守卫 | `cmd/glsvet/inputs_promises_test.go` | 没检查到的输入退出 2 | NONCORE-51 |
 | `go run ./cmd/glsvet -tests ./nest` | — | nest 测试不在 go 语句里取无作用域 Guard | NONCORE-54 |
+| `TestDispatchLockingWithoutGuardScopeNeverReturnsCallerGuardToPool`、`TestDispatchLockingGroupRetryInScopeKeepsGuardUntilScopeEnds`、`TestDispatchEntriesRequireGuardScope` | `nest/dispatch_guard_scope_promises_test.go:50`、`:89`、`:129` | 派发取锁只用作用域的 Guard，Guard 每次进池恰好一次 | NONCORE-54 |
+| `TestAGroupFitsOneLiveQuery` | `kit/service/global/activity/groups_live_limit_promises_test.go:15` | 活动组上限不超过一次 `App.Live` 查询的上限 | NONCORE-20 |
 | 根包 `TestExamplesRun`、`TestTrackedMarkdownRelativeLinksResolve`、`TestNoMergeConflictMarkersInTrackedFiles` | 根包（TOOL 部分） | 示例实跑、文档链接、冲突标记 | SKILL-22；本分册自身 |
 
 A3 的 `internal/stopcontract.Check` 骨架（套在 manager、kit/nest、syncbus、etcd、mirror、remoteentity、bus、生成 TCP 上）守着 NONCORE-4 / 6 / 52 的停止入口，属于 APP 部分。
@@ -2475,7 +2424,7 @@ A3 的 `internal/stopcontract.Check` 骨架（套在 manager、kit/nest、syncbu
 | `kit/statslog` | NONCORE-43 |
 | `kit/service/account` | NONCORE-19、NONCORE-21、NONCORE-22 |
 | `kit/service/global` | NONCORE-20（注释）、NONCORE-24 |
-| `kit/service/global/activity` | NONCORE-18、NONCORE-19、NONCORE-21 |
+| `kit/service/global/activity` | NONCORE-18、NONCORE-19、NONCORE-20（C4 后的守卫）、NONCORE-21 |
 | `kit/scripts/integration`、`scripts`、`cmd/glsvet` | NONCORE-51 |
 | `configdata` | CFG-7、CFG-8、CFG-10 |
 | `configdata/rules` | CFG-7、CFG-9、CFG-10 |
@@ -2513,6 +2462,6 @@ A3 的 `internal/stopcontract.Check` 骨架（套在 manager、kit/nest、syncbu
 | `robot/...`、`log`、`metrics` | NONCORE-43、NONCORE-44、NONCORE-45 |
 | `container`、`safemap`、`goroutine`、`internal/rangecontract` | NONCORE-46～48 |
 | `manager`、`sync/syncbus/driver`、`sync/syncbus/mirror` | NONCORE-52 |
-| `nest` | NONCORE-54（只改测试）、NONCORE-55 |
+| `nest` | NONCORE-54（A2 / A3 只改测试；RR-20261006-12 改派发取锁）、NONCORE-55 |
 | `.github/workflows` | CFG-6（`ci.yml`）、NONCORE-31（`framework-compat.yml`） |
 | 根包测试 | CFG-7（边界）、NONCORE-31（C9） |

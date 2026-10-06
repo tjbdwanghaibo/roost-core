@@ -1,5 +1,7 @@
 # B10 / C2：配置规则统一由运行时加载层强制；热更失败与回滚可见（2026-10-06）
 
+> **更正（2026-10-06，v1.23.0 发版文档重核）**：§2.1 `Lookup` 与 §2.2 规则字段的键匹配原写“按 encoding/json 的键匹配”（大小写不敏感）。v1.22.0（`c474a6ef`，configdata 键大小写敏感）起源码是逐字匹配（`configdata/rules/rules.go:276-280` `Lookup`、`configdata/fieldrules.go:91` `fieldForJSONKey`），正文已按源码改。
+>
 > **状态（2026-10-06 核对）**：已实施（`b12216ed`），已随 v1.21.0 发布。文末“cfggen globals 规则留作后续”已在第十二轮实施（`229a5aa0`，[记录](ROUND12-SKILL-CFGGEN-2026-10-06.md)，未发版，随 v1.23.0 发布）。
 
 维护者决定（[DECISIONS-PENDING 第四轮](../review/DECISIONS-PENDING-2026-10-05.md)）：
@@ -42,7 +44,7 @@ func Document(raw []byte) ([]byte, error)                                 // 文
 func Rows(payload []byte, object bool) ([]map[string]json.RawMessage, error)
 func Check(table string, rows []map[string]json.RawMessage, rules []Rule, key func(row int) string) error
 func CheckObject(table string, row map[string]json.RawMessage, rules []Rule) error
-func Lookup(row map[string]json.RawMessage, field string) (json.RawMessage, bool) // encoding/json 的键匹配
+func Lookup(row map[string]json.RawMessage, field string) (json.RawMessage, bool) // 键逐字匹配（大小写敏感）
 func Canonical(value json.RawMessage) string                                      // 1 / 1.0 / 1e0 同形
 ```
 
@@ -53,7 +55,7 @@ func Canonical(value json.RawMessage) string                                    
 ### 2.2 运行时加载层（configdata）
 
 - `TableDef.Rules` / `ObjectDef.Rules []FieldRule`（`FieldRule = rules.Rule`，`RuleError = rules.Error` 别名）。加载时同一份字节解一次类型化行、一次原始行，跑 `rules.Check`；全部表加载后跑 ref；任何违反 → 整次 build 失败，旧快照保持（沿用现有语义）。
-- 注册时校验声明：规则字段必须对应行类型的一个字段（按 encoding/json 的键匹配），`Min` 只能用在数值字段、`Enum` 只能用在字符串 / 整数 / bool、`Ref` 只能用在整数 / 字符串（可为指针）；对象不支持 `Unique` / `Ref`。拼错的规则在启动时失败，不是“永远不查”。
+- 注册时校验声明：规则字段必须对应行类型的一个字段（json 名逐字匹配，大小写敏感），`Min` 只能用在数值字段、`Enum` 只能用在字符串 / 整数 / bool、`Ref` 只能用在整数 / 字符串（可为指针）；对象不支持 `Unique` / `Ref`。拼错的规则在启动时失败，不是“永远不查”。
 - `required` 统一为“出现且不为 null”。`required` + `ref`：值必须出现且是目标表的主键（零值不再当“无引用”放过）。
 - auto 表（`cfg` 标签）解析成同一组 `Rule`：`required` 不再要求配 `ref`，新增 `unique`、`min=<n>`、`enum=a|b`；auto 表自己的 `validateRefs` 删除，ref 走公共路径。
 

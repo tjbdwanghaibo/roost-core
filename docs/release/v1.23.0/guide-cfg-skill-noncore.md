@@ -1,6 +1,6 @@
 # v1.23.0 说明文档（分册）：配置、skill 与非核心 review（CFG / SKILL / NONCORE）
 
-本分册是 v1.23.0 发版双文档的一部分，覆盖 `v1.19.2..02c8a10d` 里属于三个主题的全部改动：
+本分册是 v1.23.0 发版双文档的一部分，覆盖 `v1.19.2..e6828e4f`（代码冻结提交）里属于三个主题的全部改动：
 
 - **CFG**：严格配置读取、配置数据规则统一（`configdata/rules`）、热更结果可见、键大小写敏感、cfggen globals 规则、生成配置与生成 TCP 报错。
 - **SKILL**：skill 编译器与 Runtime 的收紧（N09 六批、B3、求值上下文表、O 系列观察）。
@@ -8,7 +8,7 @@
 
 配套的实现文档是 [impl-cfg-skill-noncore.md](impl-cfg-skill-noncore.md)，两份文档用同一编号（`CFG-n` / `SKILL-n` / `NONCORE-n`）做锚点，每条说明末尾的“实现”链接直达对应条目。APP、OWN、CLK、OPS、TOOL、SAGA、DRV、DAO、REM 主题在同目录的其他分册里，本分册只引用它们的主题名。
 
-**怎么读**：先看下面的条目总表与“本部分总览”，再按需要跳到条目。每条按同一顺序写：结论 → 背景 → 维护者决定 → 现在的行为 → 兼容与迁移 → 限制 / 外部验证 → 链接。行号、符号一律以发版提交 `02c8a10d` 的源码为准；历史记录与源码不一致的地方在文末单列。
+**怎么读**：先看下面的条目总表与“本部分总览”，再按需要跳到条目。每条按同一顺序写：结论 → 背景 → 维护者决定 → 现在的行为 → 兼容与迁移 → 限制 / 外部验证 → 链接。行号、符号一律以代码冻结提交 `e6828e4f` 的源码为准（起草时为 `02c8a10d`，冻结后逐条重核，见实现文档开头的“重核说明”）；历史记录与源码不一致的地方在文末单列。“限制 / 外部验证”只写外部环境项并给出外部验证清单的 E 编号，Windows 一律暂存、不保证正确。与其他分册重复的七条（NONCORE-1、23、24、40、45、50、56）只保留一句话结论，以对方分册为准。
 
 ## 条目总表
 
@@ -68,7 +68,7 @@
 | [NONCORE-17](#noncore-17) | saga 启动身份与完成路由（NC-39 / 40） | v1.20.1 | 收紧：缺摘要的旧记录重投冲突 | 自定义 Store 保存新字段 |
 | [NONCORE-18](#noncore-18) | saga outbox 领取与 activity 恢复校验（NC-41 / 42） | v1.20.1 | 收紧 | 否 |
 | [NONCORE-19](#noncore-19) | account 换名释放死计划、activity 确认键校验（NC-50 / 51） | v1.20.1 | 行为变化 | 否 |
-| [NONCORE-20](#noncore-20) | `activity.game_sids` 启动校验（RR-20261005-01） | v1.20.1（v1.20.2 被 C4 取代） | 已取代 | 否 |
+| [NONCORE-20](#noncore-20) | `activity.game_sids` 启动校验（RR-20261005-01；C4 后由组文件兑现、回归改名） | v1.20.1（v1.20.2 被 C4 取代） | 已取代 | 否 |
 | [NONCORE-21](#noncore-21) | activity 窗口条目统一入口与修复入口；account 判定表（B9） | v1.21.0 | 坏条目不再交出；新 Admin 入口 | 否（运维可用新入口） |
 | [NONCORE-22](#noncore-22) | account 换名释放未 admitted 计划（第五轮、O37） | v1.21.0 | 行为变化 | 否 |
 | [NONCORE-23](#noncore-23) | saga 定义缺失 fence 时退避中步骤记为放弃（NC-250） | v1.21.0 | 迟到成功告警 | 否 |
@@ -102,7 +102,7 @@
 | [NONCORE-51](#noncore-51) | N15 脚本与门禁（NC-200～208）、A5 | v1.20.2 | 收紧：glsvet 对没检查到的输入退出 2 | 已有工程 `.gitignore` 补 `/data/wal/` |
 | [NONCORE-52](#noncore-52) | 停机三步（NC-170～174） | v1.20.2 | 收紧 | 否 |
 | [NONCORE-53](#noncore-53) | Mongo Mod 停止收敛（NC-260） | v1.21.0 | 重复 Close 返回 nil | 否 |
-| [NONCORE-54](#noncore-54) | nest 用例隔离（A2 / A3）；W-2026-10-06-01 | v1.23.0（本版） | 只改测试 | 否 |
+| [NONCORE-54](#noncore-54) | nest 用例隔离（A2 / A3）；派发取锁要求 Guard 作用域（RR-20261006-12，原 W-2026-10-06-01） | v1.23.0（本版） | 生产行为不变；nest 内部派发函数在没有 Guard 作用域时返回错误 | 否 |
 | [NONCORE-55](#noncore-55) | Nest 重排抖动（U-0279） | v1.20.1 | 平均重排延迟 5ms → 7.5ms | 否 |
 | [NONCORE-56](#noncore-56) | 租约修复 RR-20261004-10 / 11 / 14（同版被静态绑定取代） | v1.20.0 | 代码已删 | 否 |
 
@@ -225,7 +225,7 @@ NC-75（tablegen ref + -check）──► B10 规则统一到 configdata/rules�
 **现在的行为**：
 
 - 新增 `app.ConfigInt` / `ConfigInt64`（接受 YAML 整数、没有小数部分的浮点数如 `1e3`、十进制字符串；拒绝小数、带后缀、时长、布尔值）与汇总错误的 `app.ConfigReader`（Mod Init 一次读几十个键，读完统一 `Err()`，运维一次看到全部写错的键）。
-- `ValidateServiceConfig` 按 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys` 逐个严格读取（发版提交上分别为 17 / 99 / 79 个键，另有 syncbus 三段 `syncbus` / `room` / `sync` 的同名字段与按后缀登记的 `<service>.call_timeout`）。A4 实施时是 16 / 95 / 77 个，之后 C6、`ops.admin_timeout`、B2 / O4 / Mirror 第 5 步 / O-M6-3 各自登记了新键（见实现文档）。
+- `ValidateServiceConfig` 按 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys` 逐个严格读取（冻结提交 `e6828e4f` 上分别为 17 / 99 / 79 个键，另有 syncbus 三段 `syncbus` / `room` / `sync` 的同名字段与按后缀登记的 `<service>.call_timeout`）。A4 实施时是 16 / 95 / 77 个，之后 C6、`ops.admin_timeout`、B2 / O4 / Mirror 第 5 步 / O-M6-3 各自登记了新键（见实现文档）。
 - kit 的 dataengine、remoteentity、saga、nats、nest、syncbus、mongo、ops、etcd、statslog、platform、activity 与 app 自身改用 `ConfigReader`，错误前缀沿用各 Mod 原有的（如 `dataengine mod: …`）。
 - 唯一保留的宽松读取是 `sid`（启动校验先严格检查它是 int32 范围内的正整数）。
 
@@ -347,7 +347,7 @@ NC-75（tablegen ref + -check）──► B10 规则统一到 configdata/rules�
 
 **兼容与迁移**：指标标签变化——`configdata.reload.total` 去掉 `reason`，`result` 不再有 `rollback`；按 `sum(rate(configdata_reload_total))` 的看板不受影响，按 `reason` / `result="rollback"` 的要改。v1.23.0 起 game-demo 仪表盘有“配置撤回”面板（OPS 部分）。
 
-**限制**：生成的 game-demo 没有运维 Rollback 入口，也没有会失败的 AfterApply 监听者，`stage=apply` 撤回与运维 Rollback 只由单测覆盖，未在真实进程里触发。
+**限制**：无外部项。生成的 game-demo 没有运维 Rollback 入口，也没有会失败的 AfterApply 监听者，所以 `stage=apply` 撤回与运维 Rollback 没有真实进程路径可演练；这两条由单测在同一个 configdata `Store` 上覆盖。
 
 **链接**：[B10 / C2 方案](../../feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md)
 
@@ -418,7 +418,7 @@ NC-75（tablegen ref + -check）──► B10 规则统一到 configdata/rules�
 <a id="cfg-12"></a>
 ### CFG-12 生成配置写出 `remote_entity` 的新键（收尾第 2 批 A8）
 
-> 其他分册对应：REM-13 写了同一项（按分工本条为主）。
+> 其他分册对应：REM-13 是同一项。汇总去重：本条保留，REM-13 改为引用本条。
 
 **结论**：新生成工程的开发配置、生产示例与 k8s Secret 示例带上 B2 / O4 / O-M6-3 / Mirror 第 5 步新增的五个 `remote_entity` 键，取值等于 core / kit 缺省，并附中文注释。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#cfg-12)
 
@@ -550,7 +550,7 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 
 **兼容**：checkpoint 格式不变。旧版本写出的、已超上限的 checkpoint 在旧版本同样恢复不了，修复不自动迁移。
 
-**限制**：只用 MemoryHost；生产 Host 的 checkpoint 与世界成对恢复没有在真实持久化上演练。
+**限制**：无外部项。生产 Host 的 checkpoint 与世界成对恢复没有正式接线（N09 O3，第十二轮“skill 剩余观察：其余保持”），本条只在 MemoryHost 上成立。
 
 **链接**：[bugfix 记录](../../bugfix/RR-20261005-NC-117.md)
 
@@ -608,7 +608,7 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 
 **兼容**：成功路径、真实失败、等待者自身取消的行为不变；skillcompose 只多一条诊断。
 
-**限制**：没有接真实客户端资源加载器；skillcompose 仓内无正式调用方。
+**限制**：无外部项。资源加载器由业务客户端提供，用例用可控的假加载器覆盖“创建者取消”与“真实失败”两种时序；skillcompose 仓内无正式调用方。
 
 **链接**：[NC-153](../../bugfix/RR-20261005-NC-153.md) · [NC-154](../../bugfix/RR-20261005-NC-154.md)
 
@@ -724,7 +724,7 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 
 **兼容与迁移**：**新拒绝**，以前能编译的这类定义启动期失败，按[作者文档改写对照](../../skill/skill-casting-and-combat.md)修改；接受集合其余部分与 gameplay digest 不变。仓内 fixture、示例、`roost add skill` 骨架、game-demo 的 `fireball.json.tmpl` 都不用漂移格子。
 
-**文档与源码差异**：作者文档该节标题仍写“（O33，未发版）”，实际随 v1.21.0 发布（`f6043e44` 是 `v1.21.0` 的祖先）。另：DECISIONS-PENDING 的标注提交 `2a7d2a65` 的提交说明写“实施状态（a6e75488）”，`a6e75488` 是 rebase 前的提交号、不在 main 历史上，正确的是 `f6043e44`（DECISIONS-PENDING 表内已写对）。
+**文档与源码差异（已更正）**：作者文档该节标题原写“（O33，未发版）”，实际随 v1.21.0 发布（`f6043e44` 是 `v1.21.0` 的祖先），已改为“（O33，v1.21.0）”。DECISIONS-PENDING 的标注提交 `2a7d2a65` 的提交说明写“实施状态（a6e75488）”，`a6e75488` 是 rebase 前的提交号、不在 main 历史上，正确的是 `f6043e44`（表内一直写对）；提交历史不改，已在 DECISIONS-PENDING 第七轮表下加更正注。
 
 **链接**：[方案 §8](../../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md) · [作者文档](../../skill/skill-casting-and-combat.md)
 
@@ -816,9 +816,10 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 | B2、Mirror 第 1～6 步、O4、O-M6-* | REM |
 | D-L3 双时钟、业务时间只许前进 | CLK |
 | C6 服务指标、metrics 按标签删除、Ops Bearer、CAS 口径、面板 | OPS |
-| pretag / source-head-check / 冲突标记门禁 / 示例实跑门禁 / mirror-local.sh | TOOL |
+| pretag / source-head-check / 冲突标记门禁 / 示例实跑门禁 / mirror-local.sh；文档链接门禁与 `skill/README.md` 52 个旧链接修复（`d05a04a1`，TOOL-5） | TOOL |
+| glsvet A1 提示跟进同包 helper（RR-20261006-13）、组件字段写入提示（`565f657b`） | DAO |
 
-**边界项**：下面几条与上表主题相邻，本部分完整写出，并在[汇总文件](_summary-cfg-skill-noncore.md)里列为“边界项”，供汇总者去重：NONCORE-1（N01 留项，近 APP / OPS）、NONCORE-15（NC-130 / 131，近 REM）、NONCORE-23（NC-250，近 SAGA）、NONCORE-32（DAO nocoll，近 DAO）、NONCORE-40（D-L1 / D-L2 定时器，近 CLK）、NONCORE-50（NC-193，近 APP）、NONCORE-51（N15 脚本，近 TOOL）、NONCORE-52（NC-170～174，近 APP）、NONCORE-53（NC-260，近 DRV）、NONCORE-55（U-0279，核心线修复）、NONCORE-56（已被静态绑定取代的租约修复，近 OWN）。
+**边界项**（[汇总文件](_summary-cfg-skill-noncore.md)“边界项”表）：本部分为主、完整写出的是 NONCORE-15（NC-130 / 131，近 REM）、NONCORE-32（DAO nocoll，近 DAO）、NONCORE-51（N15 脚本，近 TOOL）、NONCORE-52（NC-170～174，近 APP）、NONCORE-53（NC-260，近 DRV）、NONCORE-54（RR-20261006-12，核心线 nest）、NONCORE-55（U-0279，核心线修复）；与其他分册重复、只留编号与一句话结论的是 NONCORE-1（APP-4 / 7 / 8、OPS-3）、NONCORE-23（SAGA-7）、NONCORE-24（OWN-6）、NONCORE-40（CLK-6）、NONCORE-45（OPS-7）、NONCORE-50（APP-9）、NONCORE-56（OWN-1）。
 
 **对业务 / 运维最重要的几条**：
 
@@ -833,20 +834,9 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 <a id="noncore-1"></a>
 #### NONCORE-1 N01 留项：Ops 同步 bind、停机 hook 受预算、停机期 fail-stop 非零退出、Redis / remote_entity Mod 停止收尾、`ops.admin_timeout`（RR-20261005-NC-230～234）
 
-> 其他分册对应：APP-4（NC-232）、APP-7（NC-233 / 234）、APP-8（NC-231）、OPS-3（NC-230 与 `ops.admin_timeout`），以那里为准。
+> 与其他分册重复：以对方条目为准——NC-230 与 `ops.admin_timeout` 见 [OPS-3](guide-app-own-clk-ops-tool.md#ops-3)，NC-231 见 [APP-8](guide-app-own-clk-ops-tool.md#app-8)，NC-232 见 [APP-4](guide-app-own-clk-ops-tool.md#app-4)，NC-233 / 234 见 [APP-7](guide-app-own-clk-ops-tool.md#app-7)；本条只保留编号与一句话结论（汇总去重）。
 
 **结论**：五个停机 / 启动边角与 admin 命令期限，首发 v1.21.0（`2c1c7be7`）。边界项（近 APP / OPS）。[实现](impl-cfg-skill-noncore.md#noncore-1)
-
-| 编号 | 以前 | 现在 |
-| --- | --- | --- |
-| NC-230 | Ops 端口被占时 bind 在后台 goroutine 里失败只记日志，进程在没有 `/healthz`、`/readyz` 的情况下继续跑；同机部署的探针可能探到占着端口的另一个进程 | `OpsMod.Start` 同步 `net.Listen`，失败返回 `ops: listen on ops.addr …`，按启动失败收尾。**同机多实例须各配 `ops.addr`** |
-| NC-231 | 一个忽略 ctx 的 `service.stopping` / `service.stopped` hook 让停机永远不返回 | hook 在 `shutdown.total_timeout` 内等；stopping 卡住时与 `Service.Shutdown` 不完整相同：不停 Service / Mod、不释放单实例锁 |
-| NC-232 | 信号之后才发生的 RuntimeFailure（DataEngine / Remote fatal、失锁）只写 Error、以 0 退出 | 在 `run` 返回时并入错误，进程非零退出；安全动作（围栏、失锁不 Release）不变 |
-| NC-233 | Redis Mod 第一次 Close 出错后每次重试都得到 `redis: client is closed` | 第一次 Close 后不论结果都交出连接池，错误只报一次，之后的 Stop 返回 nil |
-| NC-234 | remote_entity Mod 停止失败也记 `stopped` | 失败记 Warn `stop incomplete`，停完才记 `stopped` |
-| N02 O1 | `/admin/execute` 的命令没有期限 | ctx 带 `ops.admin_timeout`（缺省 10s），到期回 504 并写明结果未知；Ops 写超时 = max(15s, admin_timeout + 5s) |
-
-**决定**：DECISIONS-PENDING 第四轮“留项”行（补齐 15 个单元的单元内留项）。**兼容**：NC-230 是行为收紧；`ops.admin_timeout` 让超过 10s 的配合 ctx 的命令回 504，需调大该值；不配合 ctx 的命令仍可能以传输错误结束（同样是结果未知）。**限制**：外部 E08 / E13 / E21 / E22。**链接**：[n01b 记录](../../review/REVIEW-2026-10-06-n01b.md) · [NC-230](../../bugfix/RR-20261005-NC-230.md) · [NC-231](../../bugfix/RR-20261005-NC-231.md) · [NC-232](../../bugfix/RR-20261005-NC-232.md) · [NC-233](../../bugfix/RR-20261005-NC-233.md) · [NC-234](../../bugfix/RR-20261005-NC-234.md) · [Ops 超时方案](../../feature/OPS-ADMIN-TIMEOUT-2026-10-06.md)
 
 ### N02 httpclient / httpserver / security / gateway / webroute
 
@@ -916,7 +906,7 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 
 **结论**：DataEngine 迁移复用 Mongo BSON / ID 与目标 `RestorePersisted` 预校验；坏 BSON、字段类型或身份不再先持久提交。首发 v1.20.0。[实现](impl-cfg-skill-noncore.md#noncore-9)
 
-**兼容**：手写迁移候选须提供 loader / Id；预校验用目标 schema、旧 version；正常 CAS / 投影等待 / 整聚合重读与 int32 ID 兼容保持。**已有坏 WAL 不自动跳过或删除**。**限制**：真实 Mongo / HA / 持续竞争与生产已有坏 WAL 的恢复未验。**链接**：[NC-31](../../bugfix/RR-20261004-NC-31.md)
+**兼容**：手写迁移候选须提供 loader / Id；预校验用目标 schema、旧 version；正常 CAS / 投影等待 / 整聚合重读与 int32 ID 兼容保持。**已有坏 WAL 不自动跳过或删除**。**限制**：真实副本集 / HA / 持续竞争见外部验证 E11；生产上已有的坏 WAL 按上面的兼容说明处理。**链接**：[NC-31](../../bugfix/RR-20261004-NC-31.md)
 
 <a id="noncore-10"></a>
 #### NONCORE-10 生成 DAO 恢复后深层嵌套修改进入持久提交（RR-20261005-NC-32）
@@ -968,7 +958,7 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 | RR-20260913-01 残余 | 另一节点的在途加载或迟到消息能把已删除实体写回 L2，冷节点读到它直到 L2 TTL | 版本化删除在 L2 留只含 `deleted_version`、与 `snapshot_l2_ttl` 同 TTL 的墓碑，不新于它的写一律拒绝，更新的写清墓碑（**L2 键格式增加字段**） |
 | NC-131 | 一阵读取把兴趣表读满后，空闲进程的健康一直报 `capacity exhausted` | 表满时 `Manager.Stats` 先清理过期条目再计数 |
 
-**兼容**：滚动升级期间旧节点仍可能写回（修复前行为），新节点的下一次删除会收敛。**链接**：[NC-130](../../bugfix/RR-20261005-NC-130.md) · [NC-131](../../bugfix/RR-20261005-NC-131.md) · [RR-20260913-01](../../bugfix/RR-20260913-01.md) · [revn05 记录](../../review/REVIEW-2026-10-05-n05-revn05.md)
+**兼容**：从 v1.20.2 之前的版本滚动升级期间，旧节点不认墓碑、仍可能写回（修复前行为），新节点的下一次删除会收敛。**限制**：复制丢写与切主、多主机强杀见外部验证 E10 / E13。**链接**：[NC-130](../../bugfix/RR-20261005-NC-130.md) · [NC-131](../../bugfix/RR-20261005-NC-131.md) · [RR-20260913-01](../../bugfix/RR-20260913-01.md) · [revn05 记录](../../review/REVIEW-2026-10-05-n05-revn05.md)
 
 ### N06 service / saga / servicemetrics
 
@@ -991,7 +981,7 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 
 **结论**：原子领取复查 `next_attempt_at` 与 lease，陈旧候选不能绕过另一发布者的 Nack 退避（NC-41）；activity 公开 `Open` 在 Create 前拒绝异键 / 非 pending / 非法 expected 计划，sweep 在访问 Activities 前跳过非法键 / 跨组 opening（NC-42）。首发 v1.20.1。[实现](impl-cfg-skill-noncore.md#noncore-18)
 
-**兼容**：API / 格式不变；**不自动修坏存量**，诊断按所属窗口清理。之后 B9 把窗口条目读取收成一个入口（NONCORE-21）。**限制**：真实 Mongo 网络 / 未知提交与多进程压力未验证。**链接**：[NC-41](../../bugfix/RR-20261005-NC-41.md) · [NC-42](../../bugfix/RR-20261005-NC-42.md)
+**兼容**：API / 格式不变；**不自动修坏存量**，诊断按所属窗口清理。之后 B9 把窗口条目读取收成一个入口（NONCORE-21）。**限制**：Mongo 网络丢回复与提交结果未知见外部验证 E11。多进程已在 `e6828e4f` 上实跑：`TestRealSagaCrossProcessKillRecovers`（真实 JetStream + Mongo 副本集，中途 SIGKILL 一个协调器）60 个 saga 全部完成、outbox 排空、无残留租约。**链接**：[NC-41](../../bugfix/RR-20261005-NC-41.md) · [NC-42](../../bugfix/RR-20261005-NC-42.md)
 
 <a id="noncore-19"></a>
 #### NONCORE-19 account 换名释放已被他人提交的死计划、补偿失败计数；activity sweep 验证确认键（RR-20261005-NC-50 / NC-51、RR-20261001-06 残余）
@@ -1003,9 +993,20 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 <a id="noncore-20"></a>
 #### NONCORE-20 game-demo activity 启动时拒绝注定开不出窗口的 `activity.game_sids`（RR-20261005-01，已被 C4 取代）
 
-**结论**：v1.20.1 的修复：列表里重复的 sid、超出 int32 的值、本服加配置超过 `app.SingletonLiveMaxSIDs` 三种情形在 `startActivity` 任何远端调用之前按键名报错。**v1.20.2 起 `activity.game_sids` 键被 C4 活动组文件取代并删除**（OWN 部分），这段校验随之由 `activity.LoadGroupsFile` 承担。首发 v1.20.1。[实现](impl-cfg-skill-noncore.md#noncore-20)
+**结论**：v1.20.1 的修复：列表里重复的 sid、超出 int32 的值、本服加配置超过 `app.SingletonLiveMaxSIDs` 三种情形在 `startActivity` 任何远端调用之前按键名报错。**v1.20.2 起 `activity.game_sids` 键被 C4 活动组文件取代并删除**（OWN 部分），这条承诺改由组文件兑现：`kit/service/global/activity.ParseGroups` 加载时拒绝组内重复、非正数 / 超出 int32、一组超过 64 个成员，game-demo 在查协调器能力之前按 `activity.groups_file` 点名拒绝。首发 v1.20.1。[实现](impl-cfg-skill-noncore.md#noncore-20)
 
-**链接**：[RR-20261005-01](../../bugfix/RR-20261005-01.md) · [C4 方案](../../feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md)
+**回归的去向**（`d5682dc4` 复核，v1.23.0）：原回归 `TestActivityRefusesACandidateListNoWindowCouldOpenWith` 随 C4（`277e1252`）删除，承诺仍然需要，回归改名改形为模板用例 `TestActivityRefusesAGroupNoWindowCouldOpenWith`，kit 有同等用例：
+
+| 原子用例 | 现在 |
+| --- | --- |
+| 重复 sid、超出 int32 | 组文件加载时拒绝（模板与 kit 各有用例；另加“一个 sid 在两个组里”） |
+| 候选超过一次 `Live` 查询上限（200） | 一组至多 64 个成员；**新增守卫** `TestAGroupFitsOneLiveQuery`：组上限不得超过 `app.SingletonLiveMaxSIDs`，两个常量改一个不改另一个时先红 |
+| 本服与非正数跳过 | 不再适用：本服必须在某个组里，非正数从“跳过”收紧为“拒绝” |
+| 恰好一次 Live 上限被接受 | 恰好 64 个成员的组被接受，且全活时能开窗 |
+
+kit 与生成 game-demo 上都做过变异证明这些用例能红（见修复记录末节）。
+
+**链接**：[RR-20261005-01 修复记录](../../bugfix/RR-20261005-01.md)（末节“更正 / 后续”是逐项对照） · [问题记录](../../bug/RR-20261005-01.md) · [C4 方案](../../feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md)
 
 <a id="noncore-21"></a>
 #### NONCORE-21 activity 窗口条目统一读入口与运维修复入口；account 建角判定表（B9）
@@ -1021,7 +1022,7 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 - activity：`PendingActivities`、`DeliveringActivities`、`RetireDelivered` 与后台 sweep 都经 `readWindowEntries`；别的组的键或不合法的键跳过、保留、计数（新增 `sweep.delivering_key_malformed`）；此前 Delivering 里的这种键会让本组 sweep 去写别的组的窗口、自己永远留着，`PendingActivities` 会把它交给 game。`RetireDelivered` 只在本次确实移走时返回 true。新增持有方专用 `Admin.MalformedWindowEntries` / `RemoveMalformedWindowEntry`（**note 必填**，只删确实坏的条目）；窗口记录多两个可选字段 `admin_note` / `admin_action_at_unix`。
 - account：`decideCreation`（名额 6 × 入口 4 × 名字 6，144 格表格测试），对外行为不变；两个换名请求并发释放同一个死计划时 `create_role.plan_released` 不再计两次。
 
-**兼容**：`PendingActivities` 不再交出坏键；`RetireDelivered` 返回值语义收紧（仓内唯一调用方不看返回值）。**限制**：真实 Redis / Cluster 未跑（纯窗口逻辑）。**链接**：[B9 / C5 方案](../../feature/B9-C5-WINDOW-ENTRIES-ROLE-TABLE-2026-10-06.md) · [NC-51 复核补修](../../bugfix/RR-20261005-NC-51.md) · [NC-50 复核补修](../../bugfix/RR-20261005-NC-50.md)
+**兼容**：`PendingActivities` 不再交出坏键；`RetireDelivered` 返回值语义收紧（仓内唯一调用方不看返回值）。**限制**：Redis Cluster 与多进程见外部验证 E09。**链接**：[B9 / C5 方案](../../feature/B9-C5-WINDOW-ENTRIES-ROLE-TABLE-2026-10-06.md) · [NC-51 复核补修](../../bugfix/RR-20261005-NC-51.md) · [NC-50 复核补修](../../bugfix/RR-20261005-NC-50.md)
 
 <a id="noncore-22"></a>
 #### NONCORE-22 account 换名建角也释放未 admitted 的计划（第五轮、第七轮 O37）
@@ -1037,20 +1038,16 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 <a id="noncore-23"></a>
 #### NONCORE-23 saga 定义缺失 fence 时退避中的步骤同样记为放弃（RR-20261005-NC-250）
 
-> 其他分册对应：SAGA-7，以那里为准。
+> 与其他分册重复：以 [SAGA-7](guide-saga-drv-dao-rem.md#saga-7) 为准，本条只保留编号与一句话结论（汇总去重）。
 
 **结论**：协调器因缺少定义版本把记录 fence 到 `ManualRequired` 时，若当前步骤正在重试退避，写放弃关闭的 tombstone、删掉它仍排队的命令；之后才到的成功告警（`saga.completion.late_after_abandon_total`）。截止、人工 Compensate、定义缺失三个出口共用一个判断。首发 v1.21.0。边界项（近 SAGA）。[实现](impl-cfg-skill-noncore.md#noncore-23)
-
-**背景**：此前只在等结果时关闭，退避中较早尝试晚到的成功以 `ErrNotWaiting` 丢弃、不计入告警。SAGA.md 同时补充：被 kill -9 的进程遗留的 Mongo 事务持锁到 `transactionLifetimeLimitSeconds`，Mongo 步骤预算应长于它。随后 saga 方向 ①（`stepTransition`）把所有出口收成一个转移（SAGA 部分）。**链接**：[NC-250](../../bugfix/RR-20261005-NC-250.md) · [n06s5 记录](../../review/REVIEW-2026-10-06-n06s5.md)
 
 <a id="noncore-24"></a>
 #### NONCORE-24 global `Bind` 结果未知后用同样参数重试按幂等成功（RR-20261006-05）
 
-> 其他分册对应：OWN-6，以那里为准。
+> 与其他分册重复：以 [OWN-6](guide-app-own-clk-ops-tool.md#own-6) 为准，本条只保留编号与一句话结论（汇总去重）。
 
 **结论**：`Create` 没建成时读回已存绑定，group 与 globalSID 都一致就返回它（计 `replayed:bind`），不一致才报冲突，错误里带上已存的 group / sid。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#noncore-24)
-
-**背景**：A2 之后写结果未知时由调用方重试；写已落库、回复丢失后重试同一个 `Bind` 会被告知“已绑定”（`ErrConflict "already bound"`）。来源：A2 核对调用方时留的观察，收尾第 4 批 A7。**兼容**：放宽（同参重试从冲突变成功）；换 group / globalSID 仍冲突。**限制**：真实 Redis 上的同参重试由发版前验证的真实依赖用例覆盖（TOOL 部分记录）。**链接**：[RR-20261006-05](../../bugfix/RR-20261006-05.md) · [收尾第 4 批](../../bugfix/CLOSING-BATCH-4-2026-10-06.md)
 
 ### N07 configdata / attribute / event / errcode
 
@@ -1082,14 +1079,14 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 
 **结论**：生成器拿工程根下的绝对路径，不再 `os.Chdir`；生成物逐字节不变。首发 v1.20.0。[实现](impl-cfg-skill-noncore.md#noncore-27)
 
-**背景**：生成器运行期间 chdir 进 `.roost-sync-*` 暂存树，同进程其他 goroutine 不设 `Dir` 启动的子进程会继承它；Windows 上暂存目录删不掉而残留。**兼容**：两行生成器提示从相对路径变为绝对路径。**限制**：Windows CI 上的两次清理失败是否全由此引起，未在 Windows 上证实（外部 E21～E26 一带）。**链接**：[RR-20261004-12](../../bugfix/RR-20261004-12.md)
+**背景**：生成器运行期间 chdir 进 `.roost-sync-*` 暂存树，同进程其他 goroutine 不设 `Dir` 启动的子进程会继承它；Windows 上暂存目录删不掉而残留。**兼容**：两行生成器提示从相对路径变为绝对路径。**限制**：Windows CI 上的两次清理失败是否全由此引起——Windows 暂存，不保证正确（外部验证 E25）。**链接**：[RR-20261004-12](../../bugfix/RR-20261004-12.md)
 
 <a id="noncore-28"></a>
 #### NONCORE-28 roost 跑的 go 命令按进程树取消，Wait 有界；Ctrl-C 后重发信号等其生效（RR-20261004-13 与补修）
 
 **结论**：doctor 的 `go mod verify` / `go list` / `go test` 与 project deps / generate 的 `go get` / `go mod tidy` 超时 / 取消时连同子进程一起结束（Unix 进程组、Windows `taskkill /T`），Wait 最多再等 5 秒。首发 v1.20.0；补修 `cb11be90` 首发 v1.20.1。之后 B6（NONCORE-31）把信号接管收到 CLI 入口。[实现](impl-cfg-skill-noncore.md#noncore-28)
 
-**背景**：超时只杀 go，它起的 compile / link / git 继续以暂存树为工作目录，输出被缓冲时调用还要等它们结束、超时不起作用。补修：重发给自己的信号异步生效，满载时调用方会先跑下去。**链接**：[RR-20261004-13](../../bugfix/RR-20261004-13.md)
+**背景**：超时只杀 go，它起的 compile / link / git 继续以暂存树为工作目录，输出被缓冲时调用还要等它们结束、超时不起作用。补修：重发给自己的信号异步生效，满载时调用方会先跑下去。**限制**：Windows 的 `taskkill /T` 分支只做了交叉 vet——Windows 暂存，不保证正确（外部验证 E25）。**链接**：[RR-20261004-13](../../bugfix/RR-20261004-13.md)
 
 <a id="noncore-29"></a>
 #### NONCORE-29 中断不留暂存树、预览列出将刷新的配置、cfggen 帮助目录、`roost id` 用生成器口径（RR-20261005-NC-70～73）
@@ -1123,6 +1120,8 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 
 **现在的行为**：O2——upgrade / sync 依赖解析失败的错误提示 `roost project deps --root <dir>`；O3——生成器在暂存树里报的错误改指工程路径；C9——过时常量换成 `ROOST_NETWORK_TESTS=1`，framework-compat 新 job `codegen-network` 打开（SKIP 即失败），默认 `go test` 不联网。Windows 不接管信号，行为不变。
 
+**限制**：Windows 暂存，不保证正确（外部验证 E25）；Linux 上的信号与进程树见外部验证 E26。`codegen-network` job 在 `e6828e4f` 上通过（framework-compat run `37461843085`）。
+
 **链接**：[B6 方案与实施](../../feature/B6-CLI-SIGNAL-OWNERSHIP-2026-10-06.md)
 
 <a id="noncore-32"></a>
@@ -1139,7 +1138,7 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 
 **结论**：`NewFileOutboxStore(WithOptions)` 删除名字精确匹配 `outbox-<数字>.tmp` 的普通文件（目录、符号链接、其他名字不动）。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#noncore-33)
 
-**背景**：写入中途崩溃留下的临时文件以前永不回收。**决定**：收尾第 3 批 A6。**现在**：同一目录不能有两个在写的 store（另一个 store 的在途临时文件会被删掉，它的替换失败并返回错误，不会静默损坏），写进 `FileOutboxStore` 注释与 `docs/skill/production-readiness.md`。**限制**：Windows 上未实际运行（只做了交叉 vet）。**链接**：[RR-20261006-04](../../bugfix/RR-20261006-04.md)
+**背景**：写入中途崩溃留下的临时文件以前永不回收。**决定**：收尾第 3 批 A6。**现在**：同一目录不能有两个在写的 store（另一个 store 的在途临时文件会被删掉，它的替换失败并返回错误，不会静默损坏），写进 `FileOutboxStore` 注释与 `docs/skill/production-readiness.md`。**限制**：Windows 上未实际运行（只做了交叉 vet）——Windows 暂存，不保证正确（外部验证 E25）。**链接**：[RR-20261006-04](../../bugfix/RR-20261006-04.md)
 
 ### N10 ai / actionflow / featureflag / hotcode
 
@@ -1186,7 +1185,7 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 | NC-246 | 同一工厂产生的闭包补丁被误报未打补丁 | `Patched` 由 Replace / Revert 记录 |
 | NC-247 | `Resolve[T]` 在签名相同只差命名时回落 fallback，补丁不生效 | 转换后返回补丁；签名不符仍回落，计入新字段 `PointInfo.ResolveMismatches` |
 
-**限制**：Linux / Windows 上的真实插件加载未验（外部 E27，本机 macOS arm64 / Go 1.27.0）。**链接**：[n10b 记录](../../review/REVIEW-2026-10-06-noncore-n10b.md) · [NC-240](../../bugfix/RR-20261005-NC-240.md) … [NC-247](../../bugfix/RR-20261005-NC-247.md)
+**限制**：Linux 上的真实插件加载见外部验证 E27（本机 macOS arm64 / Go 1.27.0 已跑真实 `.so`）；Windows 部分暂存，不保证正确。**链接**：[n10b 记录](../../review/REVIEW-2026-10-06-noncore-n10b.md) · [NC-240](../../bugfix/RR-20261005-NC-240.md) … [NC-247](../../bugfix/RR-20261005-NC-247.md)
 
 <a id="noncore-37"></a>
 #### NONCORE-37 MissionRunner 回调里的变更进延后队列；EndAll 清场顺序写明（第五轮）
@@ -1225,15 +1224,9 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 <a id="noncore-40"></a>
 #### NONCORE-40 timer 同期限按 priority、再按登记顺序触发；未注册类型的节点删除时可见（D-L1 / D-L2）
 
-> 其他分册对应：CLK-6，以那里为准。
+> 与其他分册重复：以 [CLK-6](guide-app-own-clk-ops-tool.md#clk-6) 为准，本条只保留编号与一句话结论（汇总去重）。
 
 **结论**：堆按 (End, `Node.Priority`, ID) 排序，priority 数值小的先触发、缺省 0，新增 `Scheduler.NewTimerWithPriority`；到期节点的类型没有 handler 时照旧删除，另打 Warn 并计 `timer.unhandled_dropped_total{kind}`，新增 `Scheduler.ReportUnhandledTypes()`。首发 v1.21.0，**行为变化**。边界项（D-L 系列的时间来源 D-L3 在 CLK）。[实现](impl-cfg-skill-noncore.md#noncore-40)
-
-**背景**（N11 O6 / O7）：同期限顺序由堆形状决定（登记 1..6 按 1、6、5、4、3、2 触发）；World 每次从 DAO 的 map 重建调度器，顺序每次都可能不同。下线一种定时器类型后存量节点到期即无声消失。
-
-**维护者决定**（DECISIONS-PENDING 第六轮原文）：D-L1“同期限定时器缺省按登记顺序（ID 作第二键）；**新增可选 `priority` 字段**用于排序：先比期限，再比 priority，同 priority 按登记顺序”；D-L2“按推荐：未注册类型的到期节点删除时 Warn + 计数，加载时对无 handler 的存量类型告警一次”。
-
-**兼容**：game-demo 模板 `TimerNode` 加 `priority`（旧节点按 0，不迁移），World `OnInitFinish` 调 `ReportUnhandledTypes`；已生成工程 `roost project sync` 后生效，不同步也能编译。**链接**：[方案](../../feature/D-L1-L2-TIMER-ORDER-AND-UNHANDLED-2026-10-06.md)
 
 <a id="noncore-41"></a>
 #### NONCORE-41 game-demo 场景寻路系统停止不再清空共享指针（RR-20261005-NC-270）
@@ -1249,7 +1242,7 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 
 **结论**：`AppendRaw` / `DeleteRaw` / `Purge` 的 Lua 脚本报错（连接断开、读超时、ctx 到期）时原样返回错误，不再补做 RPUSH / LREM / LLEN+DEL。首发 v1.20.2，**行为收紧**。[实现](impl-cfg-skill-noncore.md#noncore-42)
 
-**背景**：降级会让同一条死信写两份、多删一条同值记录、把清空之后新到的死信删掉（真实 Redis 上复现两份）。降级只留给 Eval 返回 `(nil, nil)` 的无 Lua 适配器。bus 侧表现为 `bus: write dead letter failed`。**限制**：Redis Cluster；`DeadLetter` 报错之后 bus 的完整重投链未做端到端演练。**链接**：[NC-160](../../bugfix/RR-20261005-NC-160.md)
+**背景**：降级会让同一条死信写两份、多删一条同值记录、把清空之后新到的死信删掉（真实 Redis 上复现两份）。降级只留给 Eval 返回 `(nil, nil)` 的无 Lua 适配器。bus 侧表现为 `bus: write dead letter failed`。**限制**：Redis Cluster 见外部验证 E08。`DeadLetter` 报错之后没有重投链：按 bus 去重契约（NONCORE-8，第十二轮“保持并写进契约”），消息只留 `bus: write dead letter failed` 错误日志，InboxTTL 内同 MsgID 的投递按重复跳过；本修复只让结果未知也走这条既有分支。**链接**：[NC-160](../../bugfix/RR-20261005-NC-160.md)
 
 <a id="noncore-43"></a>
 #### NONCORE-43 robot / statslog / log 五处（RR-20261005-NC-161～165）
@@ -1287,11 +1280,9 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 <a id="noncore-45"></a>
 #### NONCORE-45 robot：Stage 先缩后扩不再复用刚停掉的机器人的序号与 PlayerID（RR-20261006-09，N12 O9）
 
-> 其他分册对应：OPS-7，以那里为准。
+> 与其他分册重复：以 [OPS-7](guide-app-own-clk-ops-tool.md#ops-7) 为准，本条只保留编号与一句话结论（汇总去重）。
 
 **结论**：序号只增不回收。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#noncore-45)
-
-**维护者决定**（第十二轮“robot Stage 序号”行原文）：“只增不回收”。**兼容**：有过缩扩的 staged 运行会用到超过 `Count` 的序号，**自定义 `IdentityProvider` 要覆盖到**。**链接**：[RR-20261006-09](../../bugfix/RR-20261006-09.md)
 
 ### N13 container / safemap / goroutine / misc
 
@@ -1338,16 +1329,14 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 
 **结论**：`mongo mod: connected` 的 `uri` 把 userinfo 口令换成 `***`。首发 v1.20.2。[实现](impl-cfg-skill-noncore.md#noncore-49)
 
-**限制**：mongo-driver 自身的错误信息（例如 URI 解析失败）是否带口令没有查。**链接**：[NC-191](../../bugfix/RR-20261005-NC-191.md)
+**限制**：无。mongo-driver 自身的错误信息已查：本次重核用 mongo-driver v2.6.0（`e6828e4f` 的依赖）试了 12 种带口令的 URI（解析失败的各种形状、连不上的主机、对隔离环境 Mongo 的认证失败），错误文本都不含口令。**链接**：[NC-191](../../bugfix/RR-20261005-NC-191.md)
 
 <a id="noncore-50"></a>
 #### NONCORE-50 启动失败先收回 Service 已启动的部分（RR-20261005-NC-193）
 
-> 其他分册对应：APP-9，以那里为准。
+> 与其他分册重复：以 [APP-9](guide-app-own-clk-ops-tool.md#app-9) 为准，本条只保留编号与一句话结论（汇总去重）。
 
 **结论**：`Service.Init` 返回错误时 App 同样调用 `Shutdown`（限时 5s），再停 Mod、释放单实例锁；Shutdown 没在时限内结束（含不配合 ctx、panic）时不停 Mod、不释放锁，与正常停机一致。首发 v1.20.2。边界项（近 APP）。[实现](impl-cfg-skill-noncore.md#noncore-50)
-
-**兼容**：契约补充——**`Shutdown` 须容忍部分初始化**。**链接**：[NC-193](../../bugfix/RR-20261005-NC-193.md)
 
 ### N15 scripts / cmd 与非 Go 资产
 
@@ -1372,7 +1361,7 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 
 **维护者决定**（DECISIONS-PENDING 第二轮 A5 行原文）：“按推荐：② 共享，全局运维命令保留锁”。规则写进 `kit/scripts/integration/README.md`、roost-coding 与 roost-bugfix lessons：并行会话各跑 `-run` 选定的用例，故障一律自建代理 / 进程。
 
-**限制**：修后 heal / 矩阵在真实共享隔离环境上实跑（会注入故障）、Linux 上 NC-202 的 pid 认领未验（随 E26）。**链接**：[N15 记录](../../review/REVIEW-2026-10-05-n15.md) · [NC-200](../../bugfix/RR-20261005-NC-200.md) … [NC-208](../../bugfix/RR-20261005-NC-208.md)
+**限制**：Linux 上 NC-202 的 pid 认领见外部验证 E26。修后 heal / 矩阵已在真实共享隔离环境上实跑：v1.20.2 / v1.21.0 / v1.22.0 发版矩阵各 21/21（矩阵先 heal、每格前再 heal）。**链接**：[N15 记录](../../review/REVIEW-2026-10-05-n15.md) · [NC-200](../../bugfix/RR-20261005-NC-200.md) … [NC-208](../../bugfix/RR-20261005-NC-208.md)
 
 ### 跨单元与核心线相关
 
@@ -1403,13 +1392,21 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 **兼容**：依赖第二次关闭报错的调用方现在看到 nil。**链接**：[NC-260](../../bugfix/RR-20261005-NC-260.md)
 
 <a id="noncore-54"></a>
-#### NONCORE-54 nest 用例在 `-shuffle` 下互相污染（收尾第 4 批 A2 / A3）与 WANTED W-2026-10-06-01
+#### NONCORE-54 nest 用例在 `-shuffle` 下互相污染（收尾第 4 批 A2 / A3）；派发取锁要求 Guard 作用域（RR-20261006-12，原 W-2026-10-06-01）
 
-**结论**：用例隔离问题，不是产品缺陷：`group_lock_test` 在没有 Guard 作用域的 goroutine 里取锁，组迁移重试把同一个 `EntityGuard` 两次放回池，之后两个快 worker 共用一个 Guard、互相解锁。用例改为先建作用域；目标用例失败时放行闸门、停机有上限。首发 v1.23.0（本版，只改测试）。[实现](impl-cfg-skill-noncore.md#noncore-54)
+**结论**：两步。① 收尾第 4 批（`611d5d72`，只改测试）：`group_lock_test` 在没有 Guard 作用域的 goroutine 里取锁，组迁移重试把同一个 `EntityGuard` 两次放回池，之后两个快 worker 共用一个 Guard、互相解锁；用例改为先建作用域，目标用例失败时放行闸门、停机有上限。② 根因修在产品代码（`b7471ae4`，RR-20261006-12）：nest 派发取锁只用当前 goroutine Guard 作用域里的 Guard，没有作用域时取锁前返回错误；删除了“无作用域时把整个 Guard 归还池”的 `releaseDispatchLocks`，释放只放本次取得的实体锁，Guard 只由作用域结束时归还一次。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#noncore-54)
 
-**留给 review 判断**：WANTED W-2026-10-06-01——`releaseDispatchLocks` 的无 Guard 作用域分支会把调用方仍在用的 Guard 放回池。生产调用方（`dispatchLoadedEntities`、`groupTransitionDispatch`）都在 `runNestLogic` 的作用域里，按当前源码不可达；但任何将来的无作用域调用方只要碰上组迁移重试就会污染全进程的 Guard 池。候选修法：只释放 `acquired`、不归还 Guard，或无作用域时直接拒绝。截至 `02c8a10d` **未判**；之后维护者第十三轮要求交给 review 前闭环（DECISIONS-PENDING 末表，状态“进行中”）。**更新**：已转 [RR-20261006-12](../../bug/RR-20261006-12.md) 并修复（`b7471ae4`，未发版）：派发取锁只用 Guard 作用域里的 Guard，没有作用域时取锁前返回错误。
+**背景**：A2 查 `-shuffle` 失败时发现，这一分支按当时源码生产不可达（派发入口都在 `runNestLogic` 的作用域里），登记为 WANTED W-2026-10-06-01 留给核心线判断。维护者第十三轮决定交给 review 前不留 WANTED，转为 RR-20261006-12（P3）修复；fixn 合并时与 fixr 撞号，顺延为 -12（`71c8f394`）。
 
-**链接**：[收尾第 4 批](../../bugfix/CLOSING-BATCH-4-2026-10-06.md) · [WANTED](../../bug/WANTED.md)
+**选这个修法的理由**：没有采用“无作用域时调用方持有、重试不归还”——Guard 上挂的不只本次取得的实体锁（handler 新建实体的锁、被取代的旧实例、解锁后回调），只有完整的作用域释放能收尾，调用方等于要自己再写一遍作用域；而且 handler 里没有作用域时 `Cast` 返回 `ErrCastNoContext`，与快池派发的语义不一致。报错而不 panic：入口本来就返回 error。
+
+**现在的行为**：生产行为不变（入口全在作用域里）。直接调用 nest 内部派发函数而不建作用域的测试会拿到未导出的 `errDispatchWithoutGuardScope`，要像 `runNestLogic` 一样先建作用域。
+
+**兼容**：只改 nest 未导出函数；业务代码不受影响。
+
+**验证**：三条新回归先红后绿（无作用域重试时 Guard 被归还 2 次 → 0 次；无作用域 `singleDispatch` 成功执行 → 返回错误）；本次重核在 `e6828e4f` 上做了有界 seed 扫描：`-shuffle` 230 个 seed、`-race` 30 个 seed，260 次全部通过。
+
+**链接**：[RR-20261006-12 问题](../../bug/RR-20261006-12.md) · [修复](../../bugfix/RR-20261006-12.md) · [收尾第 4 批](../../bugfix/CLOSING-BATCH-4-2026-10-06.md) · [WANTED（已转 RR）](../../bug/WANTED.md)
 
 <a id="noncore-55"></a>
 #### NONCORE-55 Nest 暂时性冲突的重新准入加抖动（U-0279）
@@ -1421,11 +1418,9 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 <a id="noncore-56"></a>
 #### NONCORE-56 game-demo 玩家租约的三处修复（RR-20261004-10 / 11 / 14），同版被静态绑定取代
 
-> 其他分册对应：OWN-1，以那里为准。
+> 与其他分册重复：以 [OWN-1](guide-app-own-clk-ops-tool.md#own-1) 为准，本条只保留编号与一句话结论（汇总去重）。
 
 **结论**：v1.20.0 开发期间先修了按玩家 Redis 租约的三处缺陷（刷新回合重新认领的时间预算、撤离进行中拒绝准入、租约窗口从设键那次请求起算），随后同一版本里 `f051e24a` 把 PlayerOwners 改为静态绑定、删除了整套租约逻辑（OWN 部分）。**v1.20.0 发布物里这些代码已不存在**（发版提交上模板中 `handBackPassBudget` / `SetNX` 等均无结果）。边界项（近 OWN）。[实现](impl-cfg-skill-noncore.md#noncore-56)
-
-**意义**：这是“反复出问题要上报方向判断”的先例——按玩家租约连续多轮出问题，维护者确认前提不成立后改为静态绑定 + App 单实例锁。**链接**：[RR-20261004-10](../../bugfix/RR-20261004-10.md) · [RR-20261004-11](../../bugfix/RR-20261004-11.md) · [RR-20261004-14](../../bugfix/RR-20261004-14.md) · [静态绑定方案](../../feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md)
 
 ## 外部验证（本部分相关）
 
@@ -1433,35 +1428,38 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 
 | 编号 | 内容 | 相关条目 |
 | --- | --- | --- |
+| E03 / E06 | 跨主机 broker 与弱网下的复制丢更新 | NONCORE-13 |
 | E04 | Sync 真实网络（含 skillsync 经 kit syncstream / NATS 的端到端） | SKILL-3、SKILL-4 |
-| E05 | 真实网关 / 反向代理后的 HTTP 与 robot 重连 | NONCORE-2～5、NONCORE-43、NONCORE-44 |
+| E05 | 真实网关 / 反向代理后的 HTTP（含 HTTP/2）与 robot 重连、发送缓冲满 | NONCORE-2～5、NONCORE-43、NONCORE-44 |
 | E06 / E07 | NATS JetStream、etcd 多节点 HA | NONCORE-6、NONCORE-7、NONCORE-52 |
-| E08 | 多机 Redis Cluster（含 `redis.cluster_addrs` 列表写法起服） | CFG-1、NONCORE-1、NONCORE-42 |
-| E09 | account / chat / activity 在 Cluster 与多进程下 | NONCORE-11、NONCORE-19、NONCORE-21、NONCORE-22 |
+| E08 | 多机 Redis Cluster（含 `redis.cluster_addrs` 列表写法起服） | CFG-1、NONCORE-1（以 APP / OPS 为准）、NONCORE-42 |
+| E09 | account / chat / activity 与 versionstore 在 Cluster 与多进程下 | NONCORE-11、NONCORE-19、NONCORE-21、NONCORE-22 |
 | E10 / E13 | 异步复制丢写与切主、多主机强杀 | NONCORE-15 |
-| E11 | Mongo 跨主机副本集、切主中提交 | NONCORE-16～18 |
+| E11 | Mongo 跨主机副本集、切主中提交、网络丢回复 | NONCORE-9、NONCORE-16～18 |
 | E19 | 物理断电与三进程恢复链路（含 World 定时器提交被拒、日志磁盘写满） | NONCORE-39、NONCORE-44 |
-| E21 / E22 | 真实 systemd / k8s 停机 | NONCORE-1 |
-| E25 | Windows：CLI 信号与进程树、暂存树、文件 outbox 替换 | NONCORE-27、NONCORE-28、NONCORE-31、NONCORE-33 |
-| E26 | Linux 上 CLI 信号、NC-202 pid 认领、修后 heal / 矩阵实跑 | NONCORE-31、NONCORE-51 |
-| E27 | hotcode 真实插件加载（Linux / Windows） | NONCORE-36 |
+| E21 / E22 | 真实 systemd / k8s 停机 | NONCORE-1（以 APP / OPS 为准） |
+| E25 | Windows：CLI 信号与进程树、暂存树、文件 outbox 替换——**暂存，不保证正确** | NONCORE-27、NONCORE-28、NONCORE-31、NONCORE-33 |
+| E26 | Linux 上 CLI 信号与进程树、NC-202 pid 认领 | NONCORE-31、NONCORE-51 |
+| E27 | hotcode 真实插件加载（Linux；Windows 部分暂存，不保证正确） | NONCORE-34、NONCORE-36 |
 
-本机未验证、也不在外部清单里的，各条“限制”里写明（例如 CFG-8 的 `stage=apply` 撤回只由单测覆盖、SKILL-5 只用 MemoryHost、NONCORE-54 没有做全 seed 扫描）。
+本机能做的验证在 `e6828e4f` 上都已做完或有既有证据，各条“限制”写了结论。本次重核补跑的：真实 Mongo 副本集上的 `TestRealMongoCoordinatorLeaseTakeover`（NONCORE-12）、Resume 代际持久（NONCORE-16，临时探针）、`TestRealSagaCrossProcessKillRecovers`（NONCORE-18）、Mongo Mod 在已断开的真实客户端上停止（NONCORE-53，临时探针）；mongo-driver 错误信息不带口令（NONCORE-49，临时探针）；nest `-shuffle` 有界 seed 扫描 260 次（NONCORE-54）；GitHub framework-compat 在 `e6828e4f` 上全部通过（CFG-12、NONCORE-31）。临时探针都没有入库。
 
 ## 仍待决定的事项
 
 - **维护者决定项：无**。[DECISIONS-PENDING](../../review/DECISIONS-PENDING-2026-10-05.md) 文首“当前总状态”：未决事项为零。
+- **WANTED 未决数：0**。本部分原有的 W-2026-10-06-01（nest 无 Guard 作用域分支）已转 [RR-20261006-12](../../bug/RR-20261006-12.md) 并修复（`b7471ae4`，NONCORE-54）。
 - **明确留到下个大版本**（维护者决定，不在本版）：A4 ① 每个 Mod 声明配置 schema（CFG-2 的后续形态）；B3 ③ Host 取值约束做成随环境下发的能力表（SKILL-13）。
 - **保持方向 B、不实现的语义**：NC-151 / NC-213 方向 A（phase 计时、recast、chain 间隔 / 重复、modifier 叠层），B3 ④“保持 B”，第十二轮“NC-151 timeout_ticks：保持 warning”；NC-224 方向 B（冻结施法输入）第五轮“不做”。
-- **列为后续、未排期**：tablegen 与 cfggen 两种标签方言合一、tablegen 生成期的 ref 数据检查（B10 方案 §2.4 与“未完成 / 后续”）。
-- **WANTED 未判**：W-2026-10-06-01（nest `releaseDispatchLocks` 无 Guard 作用域分支，见 NONCORE-54），由核心线 review 判断。**更新**：已转 RR-20261006-12 并修复（`b7471ae4`，未发版）。
-- **`02c8a10d` 之后的变化（不在本分册范围，供读者知悉）**：维护者第十三轮决定（DECISIONS-PENDING 末表）——“这次不能有wanted，需要都解决后再给review, review是查问题”，W-2026-10-06-01 等疑点要在交给 review 前闭环（状态“进行中”）；“windows的问题可以暂存，加一个说明 window问题不保证正确”，外部验证 E25 与 E27 的 Windows 部分暂存（`7fec136e`）。本分册里提到 Windows 未验证的条目（NONCORE-27、28、31、33、36）按此理解。
+- **列为后续的功能**（不是缺陷、不是待验证项）：tablegen 与 cfggen 两种标签方言合一（B10 方案 §2.4 评估后列为后续）；tablegen 生成期的 ref 数据检查（B10 决定规则由运行时加载层强制、生成期检查只作提前反馈，ref 只在加载时查）。
+- **Windows**：维护者第十三轮“windows的问题可以暂存，加一个说明 window问题不保证正确”（`7fec136e`）。本部分提到 Windows 的条目（NONCORE-27、28、31、33、34、36）一律按“暂存，不保证正确”理解。
 
 ## 文档与源码不一致（以源码为准）
 
-1. A4 方案写 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys` 为 16 / 95 / 77 个键；发版提交上是 17 / 99 / 79。差额来自之后各批登记的新键（`service_metrics.enabled`；`ops.admin_timeout`、`remote_entity.cached_max_staleness`、`remote_entity.mirror.shutdown_timeout`、`remote_entity.snapshot_l2_tombstone_wait_timeout`；`remote_entity.snapshot_interest_per_consumer`、`remote_entity.snapshot_l2_tombstone_wait_replicas`）。方案是实施当时的快照，不算错误，但 review 时以源码为准（CFG-2）。
-2. B10 方案 §2.1 的 API 草图写 `rules.Lookup` 是“encoding/json 的键匹配”、§2.2 写规则字段“按 encoding/json 的键匹配”；v1.22.0 起源码是逐字匹配（`configdata/rules/rules.go:276-280`、`configdata/fieldrules.go:91`）。方案文首的状态行没有提到这一变化（CFG-7、CFG-10）。
-3. 作者文档 `docs/skill/skill-casting-and-combat.md` 第 80 行标题仍写“（O33，未发版）”；O33 随 v1.21.0 发布（`f6043e44`）。同文 O22 / O29 / O2 标“未发版”在本版发布前是对的，发版时一并改（SKILL-16）。
-4. DECISIONS-PENDING 标注提交 `2a7d2a65` 的提交说明写“实施状态（a6e75488）”，`a6e75488` 是 rebase 前的提交号、不在 main 历史上；正确的是 `f6043e44`（DECISIONS-PENDING 表内已写对）（SKILL-16）。
-5. NC-220 / NC-224 的 bugfix 记录写修复位置在 `compile_snapshot.go`（`snapshotCapturableWhereRead` / `readsInsideProcessCallbacks`）与 `compile_owned_entity.go`（`validateDetachedProcessFields`）；同一版本（v1.21.0）内求值上下文表把它们收拢到表上，发版提交上这三个函数已不存在（SKILL-14）。记录描述的是当时的提交，不算错误。
-6. RR-20261005-01 的回归用例 `TestActivityRefusesACandidateListNoWindowCouldOpenWith` 在发版提交上已不存在：C4 删除了 `activity.game_sids`（NONCORE-20）。
+下面六项在本次重核时已处理：1～5 改的是源文档本身（同一提交），6 已由 RR-20261005-01 记录末节闭环。
+
+1. A4 方案（`docs/feature/REFACTOR-2026-10-05-strict-config-reads.md`）写 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys` 为 16 / 95 / 77 个键；冻结提交上是 17 / 99 / 79，差额来自之后各批登记的新键（`service_metrics.enabled`；`ops.admin_timeout`、`remote_entity.cached_max_staleness`、`remote_entity.mirror.shutdown_timeout`、`remote_entity.snapshot_l2_tombstone_wait_timeout`；`remote_entity.snapshot_interest_per_consumer`、`remote_entity.snapshot_l2_tombstone_wait_replicas`）。**已改**为 17 / 99 / 79 并注明实施当时的数（CFG-2）。
+2. B10 方案 §2.1 的 API 草图写 `rules.Lookup` 是“encoding/json 的键匹配”、§2.2 写规则字段“按 encoding/json 的键匹配”；v1.22.0 起源码是逐字匹配（`configdata/rules/rules.go:276-280`、`configdata/fieldrules.go:91`）。**已改**为逐字匹配并注明来自 CFG-10（CFG-7、CFG-10）。
+3. 作者文档 `docs/skill/skill-casting-and-combat.md` 第 80 行标题原写“（O33，未发版）”；O33 随 v1.21.0 发布（`f6043e44`）。**已改**为“（O33，v1.21.0）”。同文 O22 / O29 / O2 标“未发版”指 v1.23.0 本版内容，发版时一并改（SKILL-16）。
+4. DECISIONS-PENDING 标注提交 `2a7d2a65` 的提交说明写“实施状态（a6e75488）”，`a6e75488` 是 rebase 前的提交号、不在 main 历史上；正确的是 `f6043e44`（表内一直写对）。提交历史不改，**已在** DECISIONS-PENDING 第七轮表下加更正注（SKILL-16）。
+5. NC-220 / NC-224 的 bugfix 记录写修复位置在 `compile_snapshot.go`（`snapshotCapturableWhereRead` / `readsInsideProcessCallbacks`）与 `compile_owned_entity.go`（`validateDetachedProcessFields`）；同一版本（v1.21.0）内求值上下文表把它们收拢到表上，冻结提交上这三个函数已不存在（SKILL-14）。**已在**两份记录末尾加后注，指向现在的位置。
+6. RR-20261005-01 的回归用例 `TestActivityRefusesACandidateListNoWindowCouldOpenWith` 随 C4 删除。`d5682dc4` 复核：承诺仍需要，回归改名为组文件形态的 `TestActivityRefusesAGroupNoWindowCouldOpenWith`，另加守卫 `TestAGroupFitsOneLiveQuery`；逐项对照见 NONCORE-20 与该记录末节。
