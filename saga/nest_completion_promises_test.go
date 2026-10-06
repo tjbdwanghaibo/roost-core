@@ -137,15 +137,26 @@ func TestAssemblyConsumesNativeNestCompletionEffects(t *testing.T) {
 		t.Fatalf("delivering %s to the native completion consumer: %v", subject, err)
 	}
 
+	// 断言只看“第 0 步的结果被收下”，不看此刻的 Status（2026-10-06 发版前验证）：Complete 收下结果后
+	// 立即 kick 协调器，协调器会把第 1 步派发出去、记录重新回到 waiting（等第 1 步）。之前这里断言
+	// Status != waiting，压力下（-cpu 1 时协调器 goroutine 常先于测试的 Get 运行）读到
+	// {Status:waiting Step:1 CompletedSteps:1} 而偶发失败——产品行为正确，是用例的时序假设。
 	stored, err := assembly.Store.Get(context.Background(), record.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Status == StatusWaiting {
-		t.Fatalf("the saga is still waiting after its native step reported success: %+v", stored)
+	if stored.Status == StatusWaiting && stored.OperationKey == record.OperationKey {
+		t.Fatalf("the saga is still waiting on step 0 after its native step reported success: %+v", stored)
 	}
-	if stored.CompletedSteps != 1 {
-		t.Fatalf("completed steps = %d, want 1", stored.CompletedSteps)
+	if stored.CompletedSteps != 1 || stored.Step != 1 {
+		t.Fatalf("completed steps = %d at step %d, want 1 at step 1: %+v", stored.CompletedSteps, stored.Step, stored)
+	}
+	recorded, err := assembly.Store.CompletionRecorded(context.Background(), completion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recorded {
+		t.Fatalf("the native completion left no receipt: %+v", stored)
 	}
 }
 

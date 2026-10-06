@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- **示例可运行性与发版前验证跟进**（2026-10-06 v1.23.0 发版前验证）：`examples/` 模块 go.sum 补上 robot / nettransport 新依赖的条目（之前 `GOWORK=off` 下 `go run ./robotdemo` 编译不过）；saga `TestAssemblyConsumesNativeNestCompletionEffects` 的偶发失败是用例假设“收下结果后记录不再 waiting”，而协调器会立即派发下一步（`-cpu 1` 加压 8/480），断言改为第 0 步已收下、回执已写；`scripts/mirror-local.sh` 的 Cluster 就绪判定加上“每个主节点有 online 副本”，之前副本还在全量同步时墓碑 WAIT 被跳过。[记录](docs/bugfix/PRERELEASE-VERIFICATION-2026-10-06.md)
 - **robot：Stage 先缩后扩不再复用刚停掉的机器人的序号与 PlayerID**（RR-20261006-09，N12 O9，维护者第十二轮决定）：序号只增不回收；有过缩扩的 staged 运行会用到超过 `Count` 的序号，自定义 `IdentityProvider` 要覆盖到。[记录](docs/bugfix/RR-20261006-09.md)
 - **global：`Bind` 结果未知后用同样参数重试按幂等成功**（RR-20261006-05，收尾 A7）：以前 `Create` 没建成就报 `ErrConflict "already bound"`，写已落库、回复丢失后重试同一个 `Bind` 会被告知“已绑定”。现在读回已存绑定，group 与 globalSID 都一致时返回它（计 `replayed:bind`），不一致才报冲突，错误里带上已存的 group / sid。[记录](docs/bugfix/RR-20261006-05.md)
 - **saga：步骤预算遇到只差大小写的类型 / 步骤名报歧义错误**（RR-20261006-06，收尾 A12）：viper 把 `saga.steps` 的键折成小写，以前已知表也按小写建，`gift_item` 与 `Gift_Item` 这类名字后注册的静默覆盖先注册的。现在 `StepBudgetsFromConfig` / `SagaMod.Init` 直接报错（与 configdata 大小写敏感一致），同名重复不算冲突。[记录](docs/bugfix/RR-20261006-06.md)
@@ -35,6 +36,8 @@
 - **skillsync：文件 outbox 打开时清理崩溃遗留的临时文件**（RR-20261006-04，O6）：写入中途崩溃留下的 `outbox-<数字>.tmp` 以前永不回收；现在 `NewFileOutboxStore(WithOptions)` 删除名字精确匹配的普通文件（目录、符号链接、其他名字不动）。同一目录不能有两个在写的 store。[记录](docs/bugfix/RR-20261006-04.md)
 
 ### Added
+
+- **示例实跑门禁 `TestExamplesRun`**（根包）：穷尽发现所有 `examples/` 下的 `main` 包，`GOWORK=off` 在各自模块里编译并运行，要求退出码 0、带超时；新示例须登记，只有需要外部依赖的才允许写明理由跳过。起因是 A1 之后 `skill/examples/statusbridge` 一运行就 panic 而 build / vet / 测试全绿。另补三条真实依赖用例：global `Bind` 同参数重试（RR-20261006-05）在真实 Redis 上、saga 结果消费者在真实 NATS 上的 nak 退避与 MaxDeliver、Redis Cluster 槽位迁移（ASK / MOVED）中的 Remote 快照 L2 读写与墓碑 WAIT。[记录](docs/bugfix/PRERELEASE-VERIFICATION-2026-10-06.md)
 - 文档（收尾第 1 批）：`docs/DEPLOYMENT.md` §7.1 写明从 v1.20.0 之前升级后手工删除旧 `<global.key_prefix>:lease:*` 键（无 TTL，不再读写）；`redis/driver`、`mongo/driver` README §5 写明 Close 的重复调用 / 出错后再调用行为（实测，单机与 Cluster 不一致登记 WANTED W-2026-10-06-02，代码未改）；`bus.ReliableStore` 注释写明 inbox 去重契约；USER_GUIDE 写明 L2 落后于权威时读者看到旧值的上界（缺省约 5m30s）。新增[外部验证清单](docs/review/EXTERNAL-VERIFICATION-2026-10-06.md)。
 - `app.business_time.advance_failed.total`：运行中推进业务时间高水位失败的次数（维护者第十二轮决定），之前只有 Warn 日志（T-284）。[记录](docs/feature/DECISIONS-R12-KIT-2026-10-06.md#8-业务时间高水位推进失败计数)
 - game-demo 仪表盘“事件链与配置”行新增“配置撤回”面板，按 `trigger` 显示 `configdata_rollback_total` 5 分钟内的次数（可观测性 README 已列出该指标，此前没有面板，维护者第十二轮决定）；demo 测试断言面板存在且 kit/configdata 仍以这个名字计数。[记录](docs/feature/DECISIONS-R12-KIT-2026-10-06.md#9-configdata_rollback_total-面板)

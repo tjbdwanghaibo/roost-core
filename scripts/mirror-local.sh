@@ -97,6 +97,18 @@ cluster_ok() {
 		redis-cli -p "$(cluster_port "$i")" cluster info 2>/dev/null | grep -q 'cluster_state:ok' || return 1
 	done
 }
+# cluster_replicas_online：每个主节点都至少有一个 state=online 的副本。只看 cluster_state:ok 不够——刚建好的集群
+# 副本还在全量同步，ROLE 不列出它们，墓碑 WAIT 按 no_replicas 跳过（2026-10-06 发版前验证：
+# TestMirrorLocalTombstoneWaitOnClusterGoesToTheKeysPrimary 单独或第一个跑时因此失败）。
+cluster_replicas_online() {
+	local i info
+	for i in 1 2 3 4 5 6; do
+		info="$(redis-cli -p "$(cluster_port "$i")" info replication 2>/dev/null)" || return 1
+		if grep -q '^role:master' <<<"$info"; then
+			grep -q '^slave0:.*state=online' <<<"$info" || return 1
+		fi
+	done
+}
 cluster_up() {
 	local i addrs=()
 	for i in 1 2 3 4 5 6; do
@@ -107,6 +119,7 @@ cluster_up() {
 		redis-cli --cluster create "${addrs[@]}" --cluster-replicas 1 --cluster-yes >"$ROOST_IT_ROOT/redis-cluster-create.log" 2>&1
 	fi
 	wait_until 30 "redis cluster ok" cluster_ok
+	wait_until 30 "redis cluster replicas online" cluster_replicas_online
 }
 
 # ---- 进程控制 ----

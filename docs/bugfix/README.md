@@ -6,6 +6,8 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 v1.23.0 发版前补充验证（relprep，[记录](PRERELEASE-VERIFICATION-2026-10-06.md)），未发版。** 示例实跑门禁 `TestExamplesRun`（先红：statusbridge 退回即 panic、examples 模块 go.sum 过期编译不过）；saga `TestAssemblyConsumesNativeNestCompletionEffects` 偶发失败已复现，根因是用例时序假设（协调器立即派发下一步），改断言；global Bind 重试、saga 真实 NATS nak / MaxDeliver、Cluster ASK / MOVED 下的 L2 读写与墓碑 WAIT 在真实依赖上通过；mirror-local Cluster 就绪判定补“副本 online”。均非产品缺陷，不登记 RR。
+
 **10-06 维护者第十二轮 kit / core 批（bkit）：RR-20261006-09 已修复、声明场景验证；另八项决定已实施，未发版。** robot Stage 序号只增不回收（[09](RR-20261006-09.md)）；O-S5-2 回执 TTL 与效果流保留期跨 Mod 校验、metrics 按标签删除（loadtest 运行序列随运行记录删除）、`/readyz` checker 期限、Ops 必须带 `Bearer `、CAS 冲突率在 versionstore 统一计数、O-M6-5 启动期建索引遇选举有界重试、业务时间高水位推进失败计数、game-demo `configdata_rollback_total` 面板见 [第十二轮 kit 批](../feature/DECISIONS-R12-KIT-2026-10-06.md)。
 
 | 编号 | 修复 | 状态 |

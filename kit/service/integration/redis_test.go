@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -512,6 +513,15 @@ func TestGlobalRunsOnRedis(t *testing.T) {
 	binding, err := service.Bind(ctx, 7, "group-a", 100)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// RR-20261006-05：结果未知后用同样参数重试（这里第一次已成功，等价于回复丢失后的重试），
+	// 真实 Redis 的 Create 报“已存在”，Bind 回读后返回同一个绑定，而不是 ErrConflict。
+	if again, err := service.Bind(ctx, 7, "group-a", 100); err != nil || again != binding {
+		t.Fatalf("retried Bind against real Redis = %+v, %v; want the same binding %+v", again, err, binding)
+	}
+	// 参数不同仍是真正的冲突。
+	if _, err := service.Bind(ctx, 7, "group-b", 100); !errors.Is(err, global.ErrConflict) {
+		t.Fatalf("Bind to another group against real Redis = %v, want ErrConflict", err)
 	}
 	// A stale epoch is refused by the compare-and-set, against real Redis.
 	if _, err := service.BeginMigration(ctx, 7, 200, binding.Epoch+9); err == nil {

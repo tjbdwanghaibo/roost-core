@@ -17,4 +17,6 @@ review 按共同规范补必要的中文契约注释，保持行为不变；显�
 
 提交、重载、关闭、装配或配置变更还应核对共同规范的“生命周期与装配的复审要点”，相关实证见 `docs/review/REVIEW-2026-09-26-release-fixes.md`；历史性能记录须区分直连存储与正式 Backend 装配。
 
+改了示例用到的 API 或新增示例时，按共同规范“验证与性能纪律”跑根包 `TestExamplesRun`：所有 `examples/` 下的 `main` 包都要实际运行通过，编译通过不算（2026-10-06，statusbridge 运行即 panic 而 build / vet / 测试全绿）。
+
 修复或复审改变错误返回、有效期、取消/关闭所有权时，按共同规范的[组合契约复核](../roost-coding/references/fix-contract-review.md)检查调用方与恢复后状态；包测试通过不代替这些行为证据。
