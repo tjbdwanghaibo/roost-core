@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,13 @@ const fileOutboxVersion uint32 = 1
 const fileOutboxMaxRecords = 1_000_000
 const fileOutboxMaxRecordBytes int64 = 64 << 20
 
+// PutRecord 的临时文件由 os.CreateTemp 按 “outbox-*.tmp” 生成，* 是十进制随机数。
+const (
+	fileOutboxTemporaryPrefix  = "outbox-"
+	fileOutboxTemporarySuffix  = ".tmp"
+	fileOutboxTemporaryPattern = fileOutboxTemporaryPrefix + "*" + fileOutboxTemporarySuffix
+)
+
 type fileOutboxEnvelope struct {
 	Version  uint32       `json:"version"`
 	Record   OutboxRecord `json:"record"`
@@ -29,6 +37,9 @@ type fileOutboxEnvelope struct {
 // FileOutboxStore persists one atomically replaceable file per network packet.
 // This makes packet insertion and retry-metadata updates crash-safe without a
 // database dependency.
+//
+// 目录归一个 store 独占：打开时会删掉崩溃遗留的 outbox-<数字>.tmp 临时文件，同一目录不能同时被
+// 另一个在写的 store 使用（RR-20261006-04）。
 type FileOutboxStore struct {
 	mutex          sync.Mutex
 	directory      string
@@ -72,6 +83,7 @@ func NewFileOutboxStoreWithOptions(directory string, options FileOutboxOptions) 
 		return nil, err
 	}
 	count := 0
+	removedTemporary := false
 	for _, entry := range entries {
 		if entry.Type()&os.ModeSymlink != 0 && filepath.Ext(entry.Name()) == ".packet" {
 			return nil, ErrRecordInvalid
@@ -79,9 +91,23 @@ func NewFileOutboxStoreWithOptions(directory string, options FileOutboxOptions) 
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".packet" {
 			count++
 		}
+		// 写入中途崩溃会留下 PutRecord 的临时文件：它们从未替换成记录，内容不完整也不计入上限，
+		// 只有打开时清理才不会每次崩溃泄漏一个（RR-20261006-04，O6）。目录归这一个 store 所有，
+		// 打开时没有在途写入；只删确认是本 outbox 生成的普通文件，其他文件一律不动。
+		if isFileOutboxTemporary(entry) {
+			if err := os.Remove(filepath.Join(absolute, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, err
+			}
+			removedTemporary = true
+		}
 	}
 	if count > options.MaxRecords {
 		return nil, ErrOutboxStoreLimit
+	}
+	if removedTemporary {
+		if err := syncDirectory(absolute); err != nil {
+			return nil, err
+		}
 	}
 	return &FileOutboxStore{directory: absolute, maxRecords: options.MaxRecords, maxRecordBytes: options.MaxRecordBytes, recordCount: count}, nil
 }
@@ -190,7 +216,7 @@ func (store *FileOutboxStore) PutRecord(record OutboxRecord) error {
 	if !exists && store.recordCount >= store.maxRecords {
 		return ErrOutboxStoreLimit
 	}
-	temporary, err := os.CreateTemp(store.directory, "outbox-*.tmp")
+	temporary, err := os.CreateTemp(store.directory, fileOutboxTemporaryPattern)
 	if err != nil {
 		return err
 	}
@@ -256,6 +282,29 @@ func (store *FileOutboxStore) Delete(observer syncstream.Observer, stream syncst
 		store.recordCount--
 	}
 	return syncDirectory(store.directory)
+}
+
+// isFileOutboxTemporary 只认 os.CreateTemp(dir, fileOutboxTemporaryPattern) 生成的名字：
+// “outbox-” + 十进制数 + “.tmp”，且是普通文件（不跟随符号链接、不碰目录）。
+func isFileOutboxTemporary(entry os.DirEntry) bool {
+	if !entry.Type().IsRegular() {
+		return false
+	}
+	name := entry.Name()
+	digits, ok := strings.CutPrefix(name, fileOutboxTemporaryPrefix)
+	if !ok {
+		return false
+	}
+	digits, ok = strings.CutSuffix(digits, fileOutboxTemporarySuffix)
+	if !ok || digits == "" {
+		return false
+	}
+	for _, character := range digits {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func readOutboxFile(path string, maximum int64) ([]byte, error) {

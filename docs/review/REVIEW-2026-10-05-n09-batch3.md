@@ -39,7 +39,7 @@
 - **O17 numeric 快照与运动取值不同源**。未被 track 绑定的属性在 `ProcessStepCommand.Numeric` 里报告的是进程初始化时求值的 base（`process_numeric.go:217-240`），而运动每 tick 重新求值表达式（`resolveProcessNumeric` → `evalInt`，`process_motion.go:416-421`）；speed 等用动态表达式时 Host 看到的速度与实际位移不一致。parabola speed、tracking turn rate、boomerang return speed、collision force 的 base 恒为 0（Host 自管）。未登记：Host 对 `Numeric` 的契约没有文档。
 - **O18 取消的 Acquire 不触发空闲淘汰**。`cancelAcquireReservation` 故意不淘汰（`presentation_asset_cache.go:162-163` 注释），最后一个引用因取消离开时条目以 idle 状态留在缓存，直到下一次 `Release` 才按 `MaxIdlePlans` 淘汰；`MaxIdlePlans: 0` 时资源会被保留到下一次释放。
 - **O19 生成的技能定义没有 Parse + Compile 测试**。`TestAddSkillUsesStablePackageAndNeutralDefinition` 只做字符串包含检查，game-demo 的 `fireball.json` 只在生成工程启动和机器人里被编译；skill 包改编译规则时 codegen 测试看不见。修复时加控制用例。
-- **O20 checkpoint 仍接受 `phase_timeout` 任务**。live 代码不产生它（NC-151），恢复出来执行时只会 `ErrProgramInvariant`；建议在决定 NC-151 的方向 A / B 后一并处理（实现或在恢复时拒绝）。
+- **O20 checkpoint 仍接受 `phase_timeout` 任务**。live 代码不产生它（NC-151），恢复出来执行时只会 `ErrProgramInvariant`；建议在决定 NC-151 的方向 A / B 后一并处理（实现或在恢复时拒绝）。（维护者 B3④ 保持方向 B；10-06 收尾第 3 批改为恢复时拒绝：[RR-20261006-03](../bugfix/RR-20261006-03.md)）
 - **O1～O12（前两批）**：本批没有找到新的触发路径，不改行为，等维护者决定。
 
 ## 4. 未审 / 未验证

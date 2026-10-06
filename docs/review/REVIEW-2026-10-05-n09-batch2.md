@@ -33,7 +33,7 @@
 ## 3. 观察与设计建议（不登记 RR）
 
 - **O5 一个 observer 卡住会停掉整个 Coordinator**。`capacityError` 的年龄检查是全局最老 pending（`outbox.go:228-230`），`PublishDue` / `Put` / `NewOutbox` 都先过它：一个断线却没 `CloseObserver` 的 observer 超过 `MaxPendingAge`（默认 24h）后，所有 observer 停发、新 Append 失败、重启装载也失败。`docs/skill/skill-implementation-guide.md` §11.5 写明这是有意的硬限制，故不登记；建议维护者考虑按 observer 驱逐 / 自动 Close，而不是全局停摆。
-- **O6 文件 outbox 不清理崩溃遗留的 `outbox-*.tmp`**（`file_outbox.go:193-203` 只在本次调用内删除）。每次写入中途崩溃留一个，不计入上限，启动时也不扫。
+- **O6 文件 outbox 不清理崩溃遗留的 `outbox-*.tmp`**（`file_outbox.go:193-203` 只在本次调用内删除）。每次写入中途崩溃留一个，不计入上限，启动时也不扫。（10-06 收尾第 3 批登记并修复：[RR-20261006-04](../bugfix/RR-20261006-04.md)）
 - **O7 checkpoint payload 字节不确定**。`ActivePolicies`、`ProcLedger`、`RootEventCounts`、`AbilityByProgram` 按 map 迭代顺序写出未排序（`runtime_checkpoint.go:630-655`）；恢复时 `rootEventOrder` 按 ID 排序，而 live 是插入顺序。目前没有承诺 checkpoint 字节可比，root 淘汰只淘汰不活跃 root，语义无影响；若以后用 checkpoint 摘要做一致性比对，需要先排序。
 - **O8 Recover 不推进 source cursor**。Recover 生成新的 state full / presentation reset 后，Coordinator 的 `cursors` 不变，下一次 Flush 会再发 full 之前的增量，客户端 Applier 按 mutation / presentation 序号丢弃（`applier.go:272, 311`），只是浪费。
 - **O9 时钟字段不可见时增量仍带 Tick / WorldRevision**。`FilterStateSnapshot` 在 `clock` 不可见时清零 Tick，但每条 mutation 与 record header 都带 Tick / WorldRevision（`skillsync.go:98-101`）。是否算泄漏取决于业务把 clock 设为不可见的意图，未登记。

@@ -108,7 +108,7 @@
   `reference "$primary_target" is not available in evaluation context process_step: 进程字段每一步重新求值，移交后的进程没有施法的主目标（此前移交后漂移成 lifecycle 实体，O33 编译期拒绝）；改用施法流程里求一次的 spawn position（如 $input.target.position）把 lifecycle 实体放到目标处，或在回调里用 $lifecycle_entity / $event.target（如 on.tick 里 select from $lifecycle_entity 代替 area 选择） (evaluation context table row $primary_target)`。
   快照诊断补上表项：`… (evaluation context snapshot table row cast_start)`（此前只写 `snapshot table`）。
 - Runtime 不用改：`evalReference` 本来就查同一张表，这些格子在 Runtime 里同样返回 `ErrReferenceOutOfContext`（只有编译器漏位点时才会出现）。
-- 替代写法逐条验证过能编译、能跑（`TestO33AlternativesCompileAndRun`）。验证时排除了两条看似可行的写法：绑定到进程数值属性的 motion 字段只收字面量（`MOTION_INVALID`），不能放施法期的值；`set_memory` 不能存属性读取（量纲不符），所以 memory 默认值的替代不写“先存进 memory”。另发现 null 默认值的实体状态用 `modify_state set` 在 MemoryHost 上类型不匹配（null 默认值按 `valueKindNull` lower，`applyStateOperation` 比较 Base），与 O33 无关，已另开任务，替代写法用 `$caster` 默认值避开。
+- 替代写法逐条验证过能编译、能跑（`TestO33AlternativesCompileAndRun`）。验证时排除了两条看似可行的写法：绑定到进程数值属性的 motion 字段只收字面量（`MOTION_INVALID`），不能放施法期的值；`set_memory` 不能存属性读取（量纲不符），所以 memory 默认值的替代不写“先存进 memory”。另发现 null 默认值的实体状态用 `modify_state set` 在 MemoryHost 上类型不匹配（null 默认值按 `valueKindNull` lower，`applyStateOperation` 比较 Base），与 O33 无关，已另开任务，替代写法用 `$caster` 默认值避开（已登记并修复：[RR-20261006-02](../bugfix/RR-20261006-02.md)，收尾第 3 批）。
 
 ### 8.2 memory 默认值里的 phase_start：拒绝
 

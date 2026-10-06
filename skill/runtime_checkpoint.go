@@ -712,11 +712,6 @@ func checkpointScheduledTask(task scheduledTask) (checkpointTask, error) {
 		w.Times = t.Times
 		w.Interval = t.Interval
 		w.Tail = append([]OperationIndex(nil), t.Tail...)
-	case *phaseTimeoutTask:
-		w.Kind = "phase_timeout"
-		w.CastID = t.CastID
-		w.PhaseToken = t.PhaseToken
-		w.Frame = t.Frame
 	case *chainHopTask:
 		w.Kind = "chain_hop"
 		w.CastID = t.CastID
@@ -1130,7 +1125,10 @@ func (runtime *Runtime) restoreCheckpointTask(w checkpointTask, resolver Program
 	case "repeat":
 		payload = &repeatIterationTask{CastID: w.CastID, PhaseToken: w.PhaseToken, Frame: w.Frame, Body: w.Body, IndexLocal: w.IndexLocal, Iteration: w.Iteration, Times: w.Times, Interval: w.Interval, Tail: append([]OperationIndex(nil), w.Tail...)}
 	case "phase_timeout":
-		payload = &phaseTimeoutTask{CastID: w.CastID, PhaseToken: w.PhaseToken, Frame: w.Frame}
+		// phase 计时保持方向 B（B3④）：timeout_ticks > 0 编译期拒绝，Runtime 从不调度这类任务，
+		// 任务类型已删除。旧 checkpoint 里出现它说明来源不可信或格式不符，按 corrupt 拒绝、不迁移
+		// （RR-20261006-03，O20）。
+		return scheduledTask{}, ErrCheckpointCorrupt
 	case "chain_hop":
 		payload = &chainHopTask{CastID: w.CastID, PhaseToken: w.PhaseToken, Frame: w.Frame, Operation: w.Operation, Hop: w.Hop}
 	case "process_step":

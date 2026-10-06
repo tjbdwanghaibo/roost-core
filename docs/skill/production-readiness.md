@@ -56,7 +56,11 @@ should consume `DeriveContractPromptView`, not unsigned profile input.
 Production coordinators must set `RequireDurableOutbox` and use a durable
 `OutboxStore`. `FileOutboxStore` writes checksummed envelopes with atomic file
 replacement and durability barriers. It rejects legacy unchecksummed formats
-and bounds record count/record bytes through `FileOutboxOptions`.
+and bounds record count/record bytes through `FileOutboxOptions`. The
+directory belongs to one store: opening it removes `outbox-<digits>.tmp`
+files left by a crash during a write (regular files with exactly that name
+only; anything else is kept), so two live stores must not share a directory
+(RR-20261006-04).
 
 Publish attempts and retry deadlines are persisted after every attempt.
 `MaxPublishBatch` bounds both the selected candidate memory and one retry cycle.

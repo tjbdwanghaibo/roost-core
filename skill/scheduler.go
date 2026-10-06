@@ -39,15 +39,6 @@ type repeatIterationTask struct {
 func (*repeatIterationTask) isScheduledTaskPayload() {}
 func (task *repeatIterationTask) frameID() FrameID   { return task.Frame }
 
-type phaseTimeoutTask struct {
-	CastID     CastID
-	PhaseToken uint64
-	Frame      FrameID
-}
-
-func (*phaseTimeoutTask) isScheduledTaskPayload() {}
-func (task *phaseTimeoutTask) frameID() FrameID   { return task.Frame }
-
 type chainHopTask struct {
 	CastID     CastID
 	PhaseToken uint64
@@ -377,8 +368,6 @@ func scheduledTaskIdentity(payload scheduledTaskPayload) (CastID, uint64) {
 	case *flowContinuationTask:
 		return task.CastID, task.PhaseToken
 	case *repeatIterationTask:
-		return task.CastID, task.PhaseToken
-	case *phaseTimeoutTask:
 		return task.CastID, task.PhaseToken
 	case *chainHopTask:
 		return task.CastID, task.PhaseToken
