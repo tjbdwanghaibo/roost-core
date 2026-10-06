@@ -6,6 +6,14 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 SKILL-1 / SKILL-3 补测（sktest2）：RR-20261006-21（P2）、-22（P3）、-23（P2）已修复、声明场景验证，未发版。** 补发版文档 SKILL-1 / SKILL-3 review 检查点里没有专门用例的分支：Interrupt 停进程出错、toggle release 回调出错一次通过（变异证明能红）；charge enter 起进程后失败，已停进程的记录留在被复用的 cast ID 下、Checkpoint 报 corrupt（-21）；同一机制下起过进程的 cast 进程结束后也永不回收，超过 `CompletedCastLimit` 后 checkpoint 恢复判 corrupt（-23）；reset 的进程条目用 lifecycle 实体冒充 `PrimaryTarget`，与增量交给策略的事件不一致（-22）。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-23](RR-20261006-23.md) | P2 起过 entity 进程的 cast 在进程结束后也永不回收（已停的进程记录被当作引用），cast 与进程记录无界增长，超过 CompletedCastLimit 后 checkpoint 恢复判 corrupt | 已修复、声明场景验证，未发版 |
+| [RR-20261006-22](RR-20261006-22.md) | P3 presentation reset 的进程条目把 lifecycle 实体当 PrimaryTarget 交给策略，仍归施法的进程与增量不一致，按 PrimaryTarget 判定的策略在 reset 里放出增量挡住的表现 | 已修复、声明场景验证，未发版 |
+| [RR-20261006-21](RR-20261006-21.md) | P2 起过进程的未提交启动失败后，已停进程的记录留在被复用的 cast ID 名下，之后每次 Checkpoint 报 corrupt；宿主停不下进程时运行中的记录被下一个 cast 接走 | 已修复、声明场景验证，未发版 |
+
 **10-06 NONCORE-46 维护者选 A（tpstat）：RR-20261006-20（P4）已修复、声明场景验证，未发版。** N13 O9 后半：`goroutine.TaskPool` 入队后才加 total、`GetStats` 先读 total，统计瞬间读到结束数大于提交数；revleft 曾以“无确定性红、零调用方”不改，现用测试缝确定性复现。
 
 | 编号 | 问题 | 状态 |

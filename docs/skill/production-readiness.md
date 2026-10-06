@@ -19,7 +19,10 @@ guardrails, not capacity targets: tune them from room-level load tests.
   `EventsDropped`. Monitor dropped
   counters and force a snapshot when a state cursor expires.
 - `CompletedCastLimit` retains recent terminal casts for inspection. Active or
-  still referenced casts are never evicted.
+  still referenced casts (pending tasks, an active policy, or a process that is
+  still running, including one handed off to its owner) are never evicted; when
+  a cast is evicted, the records of its stopped processes go with it
+  (RR-20261006-23).
 - `MaxActiveCasts`, `MaxAbilities`, `MaxOwnedProcesses*`, `RootEventLimit`, and
   `MaxProcLedgerEntries`
   provide deterministic backpressure through `ErrRuntimeCapacityExceeded`.

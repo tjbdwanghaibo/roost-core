@@ -6,6 +6,14 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 SKILL-1 / SKILL-3 补测（sktest2），未发版。** RR-20261006-21：未提交的失败启动删 cast、还 ID 前删掉它已停进程的记录，有进程停不下来时保留 failed cast、不还 ID；RR-20261006-23：只有运行中的进程钉住 cast，回收 cast 时连它已停的进程记录一起删；RR-20261006-22：`ActivePresentation` 带上增量里的 `PrimaryTarget`（`json:"-"`，不下发），reset 按增量的形状过滤。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-23](RR-20261006-23.md) | `castEvictableLocked` 只看运行中的进程；`pruneCompletedCastsLocked` 回收 cast 前删它的进程记录 | 已修复、声明场景验证，未发版 |
+| [RR-20261006-22](RR-20261006-22.md) | `PresentationSnapshot` 按增量来源填 PrimaryTarget（未移交进程取施法目标），`activePresentationEvent` 用它 | 已修复、声明场景验证，未发版 |
+| [RR-20261006-21](RR-20261006-21.md) | `startLocked` 未提交失败：无运行中进程时删记录、删 cast、还 ID；否则保留 failed cast 并返回其 ID | 已修复、声明场景验证，未发版 |
+
 **10-06 NONCORE-46 维护者选 A（tpstat），未发版。** RR-20261006-20：`TaskPool.Submit` 先计提交再入队（被拒撤回），`GetStats` 先读结束数再读 total，保证 `completed + failed ≤ total`；不加锁，热路径只多一次拒绝时的原子减。
 
 | 编号 | 修复 | 状态 |

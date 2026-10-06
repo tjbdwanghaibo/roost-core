@@ -46,7 +46,9 @@ type RuntimeOptions struct {
 	// RuntimeEventLimit bounds diagnostic events retained by RuntimeEvents.
 	RuntimeEventLimit int
 	// CompletedCastLimit bounds inspectable terminal casts. Active or still
-	// referenced casts are never evicted.
+	// referenced casts (pending tasks, an active policy, a running process)
+	// are never evicted; an evicted cast takes its stopped process records
+	// with it.
 	CompletedCastLimit int
 	// RootEventLimit bounds once-per-root accounting after inactive roots have
 	// been reclaimed.
@@ -438,14 +440,18 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 	runtime.markAbilityCastStarted(cast)
 	if err := runtime.prepareCast(cast); err != nil {
 		runtime.failCastLocked(cast, err)
-		if !cast.committed {
+		if !cast.committed && !runtime.castHasRunningProcessLocked(cast.id) {
 			// 未提交的失败启动对调用方等于“没有施法”：删掉 cast 并把 ID 还给下一个 cast。
-			// failCastLocked 已撤掉它名下的全部排程任务，复用 ID 才安全（NC-110）。
+			// failCastLocked 已撤掉它名下的全部排程任务、停掉它起的进程；已停进程的记录随 cast 一起删，
+			// 复用 ID 才安全（NC-110；进程记录见 RR-20261006-21）。
+			runtime.forgetCastProcessesLocked(cast.id)
 			delete(runtime.casts, cast.id)
 			runtime.forgetCompletedCastLocked(cast.id)
 			runtime.nextCastID--
 			return 0, err
 		}
+		// 已提交，或有进程停不下来（宿主 StopProcess 失败）：cast 留作 failed 终态、不还 ID，
+		// 仍在运行的进程记录继续挂在一个存在的 cast 名下。
 		return cast.id, err
 	}
 	runtime.recordTrace(TraceEvent{Kind: TraceCastPrepared, Tick: runtime.currentTick, CastID: cast.id})

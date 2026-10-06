@@ -482,7 +482,7 @@ func (coordinator *Coordinator) presentationReset(observer syncstream.Observer) 
 			coordinator.counters.filtered.Add(1)
 			continue
 		}
-		entry.Anchor = filtered.Anchor
+		entry.Anchor, entry.PrimaryTarget = filtered.Anchor, filtered.PrimaryTarget
 		active = append(active, entry)
 	}
 	snapshot.Active = active
@@ -490,13 +490,14 @@ func (coordinator *Coordinator) presentationReset(observer syncstream.Observer) 
 }
 
 // activePresentationEvent 把一条持续表现还原成 Runtime 会为它发出的增量事件形状（presentation.go 的
-// appendPresentation：Source 是施法者 / owner，PrimaryTarget 与 Anchor.Target 是目标 / lifecycle 实体），
-// 让 reset 与增量经过同一条过滤规则。
+// appendPresentation：Source 是施法者 / owner，Anchor.Target 是目标 / lifecycle 实体，PrimaryTarget 取条目的
+// PrimaryTarget——仍归施法的进程是施法目标而不是 lifecycle 实体），让 reset 与增量经过同一条过滤规则。
+// 之前 PrimaryTarget 用 Anchor.Target 代替，按 PrimaryTarget 判定的策略放行了增量里被挡住的进程表现（RR-20261006-22）。
 func activePresentationEvent(snapshot skill.PresentationRecoverySnapshot, entry skill.ActivePresentation) skill.PresentationEvent {
 	event := skill.PresentationEvent{
 		Sequence: snapshot.LatestPresentationSequence, Tick: snapshot.Tick, WorldRevision: snapshot.WorldRevision,
 		Kind: skill.PresentationCast, ProgramID: entry.ProgramID, GameplayDigest: entry.GameplayDigest, PresentationDigest: entry.PresentationDigest,
-		CastID: entry.CastID, VisualIndex: entry.VisualIndex, Source: entry.Anchor.Source, PrimaryTarget: entry.Anchor.Target, Anchor: entry.Anchor,
+		CastID: entry.CastID, VisualIndex: entry.VisualIndex, Source: entry.Anchor.Source, PrimaryTarget: entry.PrimaryTarget, Anchor: entry.Anchor,
 	}
 	if entry.Kind == skill.ActivePresentationProcess {
 		event.Kind = skill.PresentationProcessUpdate
