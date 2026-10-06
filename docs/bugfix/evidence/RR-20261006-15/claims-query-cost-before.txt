@@ -1,0 +1,26 @@
+# TestRealMongoOperationClaimsQueryCost，RR-20261006-15 提交时的查询（嵌套 $or，只有 by_operation 等既有索引）
+# index=false/true：本测量当时的 by_operation_decision 为 4 键 (namespace, operation_key, status, outcome)，此表只取 index=false 行作修前对照
+fixture  index     bg claims | plan (reserve query)                                         |   keys   docs   ret | reserve50      p90 | opSucc50      p90 |  query50  pre-fix
+outcome  false      0   1000 | LIMIT<-FETCH<-IXSCAN(by_operation)                           |   1060   1060     0 |   9.81ms  10.92ms |   1.16ms   1.32ms |    870µs   3.38ms
+outcome  false      0   4000 | LIMIT<-FETCH<-IXSCAN(by_operation)                           |   4060   4060     0 |  11.55ms   12.2ms |   2.82ms   3.12ms |   2.92ms   10.9ms
+outcome  false      0  10000 | LIMIT<-FETCH<-OR<-[FETCH<-IXSCAN(claim_expired),IXSCAN(claim_expired)] |  10060  10060     0 |  14.38ms  18.96ms |   5.03ms   5.41ms |      6ms  11.25ms
+legacy   false      0   1000 | LIMIT<-FETCH<-IXSCAN(uniq_command)                           |   1060   1060  1000 |  13.05ms  13.66ms |   4.63ms   5.02ms |    3.4ms   3.15ms
+legacy   false      0   4097 | LIMIT<-FETCH<-IXSCAN(uniq_command)                           |   4157   4157  4097 |  23.48ms  24.46ms |  14.75ms  15.32ms |  12.33ms  10.63ms
+outcome  false  50000   1000 | LIMIT<-FETCH<-IXSCAN(by_operation)                           |   1060   1060     0 |   9.85ms  10.98ms |   1.17ms   1.32ms |    860µs   3.39ms
+outcome  false  50000   4000 | LIMIT<-FETCH<-IXSCAN(by_operation)                           |   4060   4060     0 |  11.95ms  13.08ms |   2.96ms   3.26ms |   3.08ms  11.47ms
+outcome  false  50000  10000 | LIMIT<-FETCH<-IXSCAN(by_operation)                           |  10060  10060     0 |   15.7ms  16.43ms |   6.35ms   6.51ms |   7.34ms  11.49ms
+legacy   false  50000   1000 | LIMIT<-FETCH<-IXSCAN(by_operation)                           |   1060   1060  1000 |   12.5ms  13.38ms |   4.42ms   4.83ms |   3.47ms   3.35ms
+legacy   false  50000   4097 | LIMIT<-FETCH<-IXSCAN(by_operation)                           |   4157   4157  4097 |   23.3ms  24.14ms |  14.64ms  15.07ms |  12.07ms  11.03ms
+outcome   true      0   1000 | LIMIT<-FETCH<-OR<-[IXSCAN(by_operation_decision),FETCH<-IXSCAN(by_operation_decision),IXSCAN(by_operation_decision),FETCH<-IXSCAN(by_operation_decision)] |      0      0     0 |   8.72ms  12.48ms |    320µs    450µs |    180µs   3.31ms
+outcome   true      0   4000 | LIMIT<-FETCH<-OR<-[IXSCAN(by_operation_decision),FETCH<-IXSCAN(by_operation_decision),IXSCAN(by_operation_decision),FETCH<-IXSCAN(by_operation_decision)] |      0      0     0 |   9.58ms  12.72ms |    280µs    360µs |    330µs  11.47ms
+outcome   true      0  10000 | LIMIT<-FETCH<-OR<-[IXSCAN(by_operation_decision),FETCH<-IXSCAN(by_operation_decision),IXSCAN(by_operation_decision),FETCH<-IXSCAN(by_operation_decision)] |      0      0     0 |   9.46ms  11.54ms |    310µs    500µs |    320µs  11.37ms
+legacy    true      0   1000 | LIMIT<-FETCH<-IXSCAN(uniq_command)                           |   1060   1060  1000 |   12.6ms  13.58ms |   4.38ms   4.77ms |   3.53ms   3.34ms
+legacy    true      0   4097 | LIMIT<-FETCH<-IXSCAN(uniq_command)                           |   4157   4157  4097 |  23.74ms  25.06ms |  15.44ms  16.24ms |  12.82ms  11.02ms
+outcome   true  50000   1000 | LIMIT<-FETCH<-OR<-[IXSCAN(by_operation_decision),FETCH<-IXSCAN(by_operation_decision),IXSCAN(by_operation_decision),FETCH<-IXSCAN(by_operation_decision)] |      0      0     0 |  12.66ms  15.67ms |    320µs    500µs |    190µs   3.34ms
+outcome   true  50000   4000 | LIMIT<-FETCH<-OR<-[IXSCAN(by_operation_decision),FETCH<-IXSCAN(by_operation_decision),IXSCAN(by_operation_decision),FETCH<-IXSCAN(by_operation_decision)] |      0      0     0 |   9.58ms  13.55ms |    290µs    510µs |    320µs  11.17ms
+outcome   true  50000  10000 | LIMIT<-FETCH<-OR<-[IXSCAN(by_operation_decision),FETCH<-IXSCAN(by_operation_decision),IXSCAN(by_operation_decision),FETCH<-IXSCAN(by_operation_decision)] |      0      0     0 |    9.5ms  13.63ms |    440µs    610µs |    310µs  11.08ms
+legacy    true  50000   1000 | LIMIT<-FETCH<-IXSCAN(by_operation)                           |   1060   1060  1000 |  12.61ms   13.5ms |   4.49ms   4.71ms |    3.3ms    3.2ms
+legacy    true  50000   4097 | LIMIT<-FETCH<-IXSCAN(by_operation)                           |   4157   4157  4097 |  23.21ms  23.94ms |  14.27ms  14.84ms |   11.8ms  10.75ms
+--- PASS: TestRealMongoOperationClaimsQueryCost (67.94s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/saga	69.192s

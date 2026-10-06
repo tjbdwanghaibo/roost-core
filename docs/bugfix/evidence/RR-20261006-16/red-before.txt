@@ -1,0 +1,16 @@
+# 修前（基线 ca029401 = RR-20261006-15 修复之后，saga/step_operation_inbox.go 未改）。
+
+## 1. mongotest
+--- FAIL: TestOperationStuckBeforeUpgradeExecutesAfterUpgrade (1.23s)
+    step_operation_legacy_claims_promises_test.go:92: an operation left with 4097 claims written before the upgrade: the first attempt of the next life gift-1:1:0:r5:1: {CommandID: IdempotencyKey: SagaID: Success:false Retryable:false Data:[] Error: CompletedAt:0001-01-01 00:00:00 +0000 UTC} duplicate=false err=saga: optimistic concurrency conflict: operation gift-1:1:0 has more than 4096 undecided, successful or same-life refused attempts, want it to execute: claims without outcome must not keep the step unexecutable after the upgrade
+
+## 2. 私有三节点副本集（scripts/mirror-local.sh，偏移 24600）
+--- FAIL: TestRealMongoOperationStuckBeforeUpgradeExecutesAfterUpgrade (0.47s)
+    step_operation_legacy_claims_promises_test.go:92: an operation left with 4097 claims written before the upgrade: the first attempt of the next life gift-1:1:0:r5:1: {CommandID: IdempotencyKey: SagaID: Success:false Retryable:false Data:[] Error: CompletedAt:0001-01-01 00:00:00 +0000 UTC} duplicate=false err=saga: optimistic concurrency conflict: operation gift-1:1:0 has more than 4096 undecided, successful or same-life refused attempts, want it to execute: claims without outcome must not keep the step unexecutable after the upgrade
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/saga	1.054s
+FAIL
+
+## 3. 混跑：修前进程（5ca32611^ 编译的测试二进制）在上限边上写下第 4097 份，新进程（基线 ca029401）随后的尝试
+    mongo_step_mixed_version_real_mongo_integration_test.go:503: new gift-1:1:5:r5:3: {CommandID:gift-1:1:5:r5:3 Completed: Success:false Retryable:false Duplicate:false Kind:conflict Err:saga: optimistic concurrency conflict: operation gift-1:1:5 has more than 4096 undecided, successful or same-life refused attempts}, want it to execute (success=true)
+--- FAIL: TestRealMongoMixedVersionOldProcessAtTheCapDoesNotStopTheNewProcess (0.45s)

@@ -56,3 +56,9 @@ func TestRealMongoOperationClaimsFilterSelectsOnlyDecisiveClaims(t *testing.T) {
 	client, database := realSagadirMongo(t)
 	runOperationClaimsFilterCase(t, client.Database(database).Collection("claims"))
 }
+
+// RR-20261006-16：升级前就卡住的操作（4097 份不带 outcome 的 claim）升级后能执行新一生。
+func TestRealMongoOperationStuckBeforeUpgradeExecutesAfterUpgrade(t *testing.T) {
+	client, database := realSagadirMongo(t)
+	runLegacyStuckOperationCase(t, client, database)
+}

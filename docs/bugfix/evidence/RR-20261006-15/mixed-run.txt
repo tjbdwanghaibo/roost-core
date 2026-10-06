@@ -1,0 +1,37 @@
+# 新旧进程混跑（saga/mongo_step_mixed_version_real_mongo_integration_test.go），私有三节点副本集，旧进程 = 5ca32611^ 编译的测试二进制
+
+## 1. 新进程为基线 ca029401（RR-20261006-15 修复之后、本轮补修之前）
+--- PASS: TestRealMongoMixedVersionAlternatingAttemptsTakeEffectOnce (0.63s)
+--- PASS: TestRealMongoMixedVersionRefusalsReplayWithinTheirLife (0.49s)
+--- PASS: TestRealMongoMixedVersionInFlightAttemptsAreFencedAcrossVersions (6.40s)
+--- PASS: TestRealMongoMixedVersionConcurrentAttemptsTakeEffectOnce (0.86s)
+--- PASS: TestRealMongoMixedVersionAttemptCapOnlyStopsTheOldProcess (0.50s)
+    mongo_step_mixed_version_real_mongo_integration_test.go:503: new gift-1:1:5:r5:3: {CommandID:gift-1:1:5:r5:3 Completed: Success:false Retryable:false Duplicate:false Kind:conflict Err:saga: optimistic concurrency conflict: operation gift-1:1:5 has more than 4096 undecided, successful or same-life refused attempts}, want it to execute (success=true)
+--- FAIL: TestRealMongoMixedVersionOldProcessAtTheCapDoesNotStopTheNewProcess (0.45s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/saga	10.072s
+FAIL
+
+## 2. 新进程为本轮补修之后（RR-20261006-16 + by_operation_decision），全部 ^TestRealMongo
+--- PASS: TestRealMongoCoordinatorLeaseTakeover (1.79s)
+    dataengine_step_inbox_real_mongo_integration_test.go:91: Reserve after 5.000312208s: reservation=token=0 duplicate=true err=context deadline exceeded
+--- PASS: TestRealMongoReserveDeterministicMarkCompletedFailureIsReportedNotSilent (5.47s)
+--- PASS: TestRealMongoLateSuccessAlarmIsMarkedOnce (0.89s)
+--- PASS: TestRealMongoMixedVersionAlternatingAttemptsTakeEffectOnce (0.63s)
+--- PASS: TestRealMongoMixedVersionRefusalsReplayWithinTheirLife (0.50s)
+--- PASS: TestRealMongoMixedVersionInFlightAttemptsAreFencedAcrossVersions (6.39s)
+--- PASS: TestRealMongoMixedVersionConcurrentAttemptsTakeEffectOnce (0.97s)
+--- PASS: TestRealMongoMixedVersionAttemptCapOnlyStopsTheOldProcess (0.51s)
+--- PASS: TestRealMongoMixedVersionOldProcessAtTheCapDoesNotStopTheNewProcess (0.65s)
+--- PASS: TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce (2.27s)
+--- PASS: TestRealMongoOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife (0.76s)
+--- PASS: TestRealMongoOperationClaimsFilterSelectsOnlyDecisiveClaims (0.08s)
+--- PASS: TestRealMongoOperationStuckBeforeUpgradeExecutesAfterUpgrade (0.51s)
+    step_operation_claims_cost_real_mongo_integration_test.go:32: ROOST_SAGA_CLAIM_COST=1 runs the measurement
+--- SKIP: TestRealMongoOperationClaimsQueryCost (0.00s)
+--- PASS: TestRealMongoOperationClaimsQueryExaminesOnlyDecisiveClaims (0.33s)
+--- PASS: TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce (0.89s)
+    step_operation_real_mongo_integration_test.go:182: 40 rounds: k projected and replayed 39 times, k superseded and k+1 executed 1 times
+--- PASS: TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize (2.22s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/saga	25.362s

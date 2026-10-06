@@ -178,7 +178,7 @@ v1.19.2 → v1.23.0 双文档的“实现”部分，覆盖四个主题：saga �
 | --- | --- | --- |
 | `saga/step_operation_inbox.go:63` | `stepOperationInbox` | 两种收件箱共用的 claim / 守卫 / 判定 |
 | `saga/step_operation_inbox.go:92` | `stepClaim` | claim 文档：`operation_key`、`incarnation`、`superseded_by`、`lease_until`、`lease_token`、`status`、`expires_at` |
-| `saga/step_operation_inbox.go:112` | `ensureClaimIndexes` | 索引 `claim_expired`、`uniq_command`（唯一）、`ttl_expires_at`、`by_operation` |
+| `saga/step_operation_inbox.go:112` | `ensureClaimIndexes` | 索引 `claim_expired`、`uniq_command`（唯一）、`ttl_expires_at`、`by_operation`、`by_operation_decision`（RR-20261006-15 复核） |
 | `saga/step_operation_inbox.go:124` | `reserve` | 一个 Mongo 事务里跑 `reserveInTransaction`；撞唯一键重试一次 |
 | `saga/step_operation_inbox.go:162` | `reserveInTransaction` | 回执 → 截止 → 自己的 claim → 守卫 → 其他尝试 → 新建 / 接管 |
 | `saga/step_operation_inbox.go:180` | 租约封顶 | `leaseUntil = min(now+leaseDuration, DeadlineAt)` |
@@ -319,7 +319,7 @@ success receipts: debit=164 refund=164; sagas with debit>1=0 refund>1=0 failed_w
 - [ ] `:180-183` 与 `:229-233`：接管自己过期 claim 时 `$set lease_until` 用的也是封顶后的 `leaseUntil`；过滤条件 `lease_until $lte now` + `lease_token` 保证只接管一次。
 - [ ] `:115` 唯一索引 `uniq_command` 是 `(namespace, command_id)`；守卫文档的 `command_id` 写的是 `operationKey`、`namespace` 是 `saga-step-op`（`:251`），确认它与 claim（`namespace=saga-step`）不会互撞。
 - [x] `:45` `maxOperationAttempts = 4096`、`:311-316` 超过即 `ErrConflict`：每一生最多 1000 次尝试，多次 Resume 之后同一操作的 claim 数在 30 天 TTL 内是否可能超过 4096 导致这一步永远 Reserve 失败？
-  **已闭环（fixs，RR-20261006-15）**：会，五生约 4100 次尝试后新一生 Reserve 每次报 `ErrConflict`（越界是拒绝、不溢出、claim 停在 4097），修好原因再 Resume 也执行不了，直到旧 claim 过 TTL。已修：claim 写 `outcome`，按操作只取 pending / 成功 / 本生拒绝 / 旧 claim，结果集有界（证明见 `operationClaimsFilter` 注释），上限改名 `maxDecisiveOperationClaims`；`operationSuccess` 同一查询、超限报错。[问题](../../bug/RR-20261006-15.md)、[修复](../../bugfix/RR-20261006-15.md)。
+  **已闭环（fixs，RR-20261006-15）**：会，五生约 4100 次尝试后新一生 Reserve 每次报 `ErrConflict`（越界是拒绝、不溢出、claim 停在 4097），修好原因再 Resume 也执行不了，直到旧 claim 过 TTL。已修：claim 写 `outcome`，按操作只取 pending / 成功 / 本生拒绝 / 旧 claim，结果集有界（证明见 `operationClaimsFilter` 注释），上限改名 `maxDecisiveOperationClaims`；`operationSuccess` 同一查询、超限报错。[问题](../../bug/RR-20261006-15.md)、[修复](../../bugfix/RR-20261006-15.md)。复核（rr15v）：修前进程实跑混跑，至多生效一次；升级前卡住的操作的 4097 份旧 claim 另修（[RR-20261006-16](../../bug/RR-20261006-16.md)，旧 claim 单独计数、上限 8192）；服务端查询补索引 `by_operation_decision`，1000～10000 份累积 claim 下 Reserve p50 都约 9.5ms。
 - [ ] `:164-174` 与 `:359-361`：Reserve 第 1 步 `markCompleted` 失败只告警，`attemptResult` 里 `markCompleted` 失败却让整个 Reserve 失败——确认这种不对称是有意的（后者在事务里，失败会中止重跑）。
 - [ ] `saga/command_consumer.go:470-475`（原生 `errAttemptSuperseded`）不重发同一操作的成功，而 Mongo 路径 `:331`（含 `errAttemptSuperseded`）会重发：确认原生侧“接替者负责回放或执行”足以覆盖被接替投递恰好是最后一次的情形。
 - [ ] `saga/mongo_store.go:328-341`：只有 `Receipt.Success` 记 `result`；已存在 `abandoned` 的 tombstone 在新一生带结果关闭时升级为 `result`；确认反方向（`result` 不会被降级为 `abandoned`）。

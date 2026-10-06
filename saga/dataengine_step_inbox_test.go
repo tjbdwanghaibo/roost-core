@@ -154,12 +154,14 @@ func TestDataEngineStepInboxUsesAbsoluteClaimExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	claims := inboxClaims(client)
-	if len(claims.Indexes) != 4 {
-		t.Fatalf("claim indexes=%d, want 4", len(claims.Indexes))
+	// 第 5 个是按操作查询有影响的 claim 用的 by_operation_decision（RR-20261006-15 复核）。
+	if len(claims.Indexes) != 5 {
+		t.Fatalf("claim indexes=%d, want 5", len(claims.Indexes))
 	}
 	// The claim path and the command-identity uniqueness both depend on their
 	// index existing, so assert them by shape rather than by position alone.
-	if !claims.HasIndex("status", "lease_until") || !claims.HasIndex("namespace", "command_id") || !claims.HasIndex("namespace", "operation_key") {
+	if !claims.HasIndex("status", "lease_until") || !claims.HasIndex("namespace", "command_id") || !claims.HasIndex("namespace", "operation_key") ||
+		!claims.HasIndex("namespace", "operation_key", "status", "outcome", "incarnation") {
 		t.Fatalf("claim indexes=%+v", claims.Indexes)
 	}
 	expiry := claims.Indexes[2]

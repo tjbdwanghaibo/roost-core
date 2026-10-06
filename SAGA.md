@@ -216,14 +216,22 @@ fence 到 `ManualRequired`（放弃关闭，第 4 条），之后的重投按迟
   `saga.step_inbox.superseded_total` 增长、步骤超时。调大 `Timeout` 或解决 Mongo 变慢，不要调大 `LeaseDuration`（它已被截止时间封顶）。
 - `LeaseDuration` 现在只是上限，实际租约不超过命令截止；`LeaseDuration > AckWait` 的校验保留。
 - 依赖协调器、步骤进程与投影进程的时钟偏差远小于 `Timeout`。
-- 每次新建 / 接管 claim 多一次守卫 upsert 与一次按 `operation_key` 的索引查询（新索引 `by_operation`）。
+- 每次新建 / 接管 claim 多一次守卫 upsert 与一次按 `operation_key` 的索引查询（索引 `by_operation`；RR-20261006-15 复核后查询走
+  `by_operation_decision (namespace, operation_key, status, outcome, incarnation)`，`by_operation` 留给混跑中的旧进程）。
 - **按操作查询只取有影响的 claim**（RR-20261006-15）：pending、任何一生的成功、本生的拒绝，以及没有 `outcome` 的旧 claim；可重试失败、被接替的尝试、
   旧一生的拒绝不取。它们随尝试与 Resume 累积（每生最多 1000 次尝试、Resume 不限次数、claim 保留 `receiptTTL`），此前全部计数、超过 4096 就让这一步每次
   Reserve 都报 `ErrConflict`，几次 Resume 之后修好原因也执行不了。现在有影响的 claim 是与尝试次数、Resume 次数无关的小常数，4096 只在数据异常时触发。
   claim 标记 completed 时多写 `outcome`（`success` / `refused` / `retryable`）；升级前与混跑中旧进程写的 claim 没有它，按“可能有影响”读取，混跑期间行为与升级前相同。
-- **持久格式增量**：claim 多 `operation_key`、`incarnation`、`superseded_by`、`outcome`（RR-20261006-15）字段与 `superseded` 状态，claims 集合多守卫文档（`namespace=saga-step-op`）；
+  服务端也只碰有影响的 claim（索引 `by_operation_decision`，单个操作 10000 份累积 claim 时 Reserve p50 约 9.5ms，与 1000 份相同）。不带 `outcome` 的旧 claim
+  只能全部读出，单独计数、上限 8192（RR-20261006-16：修前进程在看到 4096 份时还会再写一份，升级前卡住的操作有 4097 份旧 claim，升级后要能执行）；
+  4097 份时 Reserve p50 约 24ms，随 TTL 消失。实测见 `docs/bugfix/RR-20261006-15.md`“复核后的补修与验证”。
+- **持久格式增量**：claim 多 `operation_key`、`incarnation`、`superseded_by`、`outcome`（RR-20261006-15）字段与 `superseded` 状态，claims 集合多守卫文档（`namespace=saga-step-op`）
+  与索引 `by_operation_decision`（RR-20261006-15 复核）；
   tombstone（`_saga_operations`）多 `closure` 字段，B1 再多 `late_alarms` 子文档（`r<代际>: 首次告警时间`）。旧数据缺字段：旧 claim 不参与跨尝试判断，
   没有 `closure` 的 tombstone 不告警，没有 `late_alarms` 的 tombstone 第一次迟到成功照常告警并补上标记。
+- **滚动升级到 RR-20261006-15 / -16 之后的版本**（修前进程实跑混跑验证）：新旧步骤进程可以同时处理同一操作，至多生效一次、互相读得懂对方的 claim。
+  旧进程仍按全部 claim 计数，一个操作超过 4096 份 claim 后旧进程对它报 `ErrConflict`（事务中止、不写任何东西，nak 后重投由新进程执行或回放），
+  新进程不受影响。步骤进程尽快全部升级，与协调器的顺序无关；claims 集合很大时可在发布前手工建 `by_operation_decision`，否则新进程启动时在线建立。
 - **混跑**：契约只在所有步骤进程与协调器都升级后成立。旧进程写的 claim 没有 `operation_key`、租约不封顶；旧协调器不写 `closure`；
   B1 之前的协调器按 `IdempotencyKey` 接收任一代际的结果、每次送达都告警、人工 `Compensate` 不换代——它处理的 completion 与运维操作不受 B1 约束，
   记录本身仍按版本号 fence，新旧协调器不会互相覆盖。

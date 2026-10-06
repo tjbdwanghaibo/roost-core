@@ -50,6 +50,12 @@ const (
 	// 扫描。有影响的 claim 有界、与尝试次数和 Resume 次数无关（RR-20261006-15，证明见 operationClaimsFilter）：
 	// 旧实现按全部 claim 计数，协调器每生最多 1000 次尝试、Resume 不限次数，几次 Resume 之后同一步骤就永远 Reserve 不了。
 	maxDecisiveOperationClaims = 4096
+	// maxLegacyOperationClaims 是同一操作实例不带 outcome 的 completed claim（升级前、或混跑中的旧进程写的）的上限，
+	// 与 maxDecisiveOperationClaims 分开计数（RR-20261006-16）。旧进程按“这个操作的全部 claim”计数、看到 4096 份时
+	// 还会再写一份，所以升级前就卡住的操作恰好有 4097 份不带 outcome 的 claim，和新写的 claim 共用 4096 的上限时
+	// 升级后照样卡住；混跑中旧进程还可能给新进程留下的 pending claim 补标 completed（原生步骤的回执先于标记）。
+	// 取 2×4096 留出这部分余量，超过同样说明数据异常。
+	maxLegacyOperationClaims = 2 * maxDecisiveOperationClaims
 )
 
 // ErrCommandExpired 表示命令已过 DeadlineAt：协调器已不再等这次尝试，收件箱不再为它分配租约。
@@ -123,8 +129,15 @@ func (o *stepOperationInbox) ensureClaimIndexes(ctx context.Context) error {
 		{Keys: bson.D{{Key: "status", Value: 1}, {Key: "lease_until", Value: 1}}, Name: "claim_expired"},
 		{Keys: bson.D{{Key: "namespace", Value: 1}, {Key: "command_id", Value: 1}}, Name: "uniq_command", Unique: true},
 		{Keys: bson.D{{Key: "expires_at", Value: 1}}, Name: "ttl_expires_at", ExpireAt: true, RecreateOnConflict: true},
-		// 同一操作实例的尝试互相查找（U-0280）。
+		// 同一操作实例的尝试互相查找（U-0280）。修前进程的查询只按这两个字段，滚动升级期间仍要用它。
 		{Keys: bson.D{{Key: "namespace", Value: 1}, {Key: "operation_key", Value: 1}}, Name: "by_operation"},
+		// operationClaimsFilter 的每个 $or 分支都是这个索引的前缀上的等值或区间（pending 只用到 status；成功、旧 claim
+		// 用到 outcome；本生拒绝用到 incarnation），服务端只碰有影响的 claim，与累积的可重试失败、被接替的尝试、旧一生
+		// 的拒绝数量无关（RR-20261006-15 复核补修）。只有 by_operation 时服务端要取出这个操作的全部 claim 逐个过滤，
+		// 检查的文档数随尝试与 Resume 线性增长；$or 还让优化器在集合里只有少数操作时改选 claim_expired 或 uniq_command。
+		{Keys: bson.D{
+			{Key: "namespace", Value: 1}, {Key: "operation_key", Value: 1}, {Key: "status", Value: 1}, {Key: "outcome", Value: 1}, {Key: "incarnation", Value: 1},
+		}, Name: "by_operation_decision"},
 	})
 }
 
@@ -319,10 +332,20 @@ func (o *stepOperationInbox) resolveOtherAttempts(ctx context.Context, command C
 func (o *stepOperationInbox) operationClaims(ctx context.Context, operationKey string, sameLifeRefusals bool, refusalsOf uint32) ([]stepClaim, error) {
 	var claims []stepClaim
 	filter := operationClaimsFilter(operationKey, sameLifeRefusals, refusalsOf)
-	if err := o.claims().Find(ctx, filter, &claims, fmongo.FindOption{Limit: maxDecisiveOperationClaims + 1}); err != nil {
+	// 两类各有上限：取到 Limit 份说明至少一类超了；没取满时两类的份数都是准确的。
+	if err := o.claims().Find(ctx, filter, &claims, fmongo.FindOption{Limit: maxDecisiveOperationClaims + maxLegacyOperationClaims + 1}); err != nil {
 		return nil, err
 	}
-	if len(claims) > maxDecisiveOperationClaims {
+	legacy := 0
+	for i := range claims {
+		if claims[i].Status == claimStatusCompleted && claims[i].Outcome == "" {
+			legacy++
+		}
+	}
+	if legacy > maxLegacyOperationClaims {
+		return nil, fmt.Errorf("%w: operation %s has more than %d attempts completed before the claim outcome was recorded", ErrConflict, operationKey, maxLegacyOperationClaims)
+	}
+	if len(claims)-legacy > maxDecisiveOperationClaims {
 		return nil, fmt.Errorf("%w: operation %s has more than %d undecided, successful or same-life refused attempts", ErrConflict, operationKey, maxDecisiveOperationClaims)
 	}
 	return claims, nil
@@ -341,8 +364,8 @@ func (o *stepOperationInbox) operationClaims(ctx context.Context, operationKey s
 // 有界性：一次 Reserve 只有在处理完其他尝试之后才写自己的 claim（接替全部过期的 pending，有在途的就不写），守卫让同一
 // 操作实例的 Reserve 串行，所以任何时刻没有结论的 pending 至多一份，加上结论已写、尚未被下一次 Reserve 标记的少数几份；
 // 一个操作至多生效一次（U-0280），成功至多一份；同一生出现拒绝之后，后来的尝试回放它、不再写 claim，拒绝至多一份；
-// 没有 outcome 的只有升级前与混跑期间写的，数量有限并随 TTL 消失。所以结果集是个小常数，与尝试次数、Resume 次数无关，
-// maxDecisiveOperationClaims 只在数据异常时触发。
+// 没有 outcome 的只有升级前与混跑期间写的，受旧进程自己的上限约束、单独计数（maxLegacyOperationClaims，RR-20261006-16），
+// 并随 TTL 消失。所以带 outcome 的结果集是个小常数，与尝试次数、Resume 次数无关，两个上限都只在数据异常时触发。
 //
 // 第 0 代的 incarnation：新建 claim 时带 omitempty 不写这个字段，接管自己过期的 claim 时 $set 写成 0，两种都要匹配。
 func operationClaimsFilter(operationKey string, sameLifeRefusals bool, refusalsOf uint32) bson.M {
@@ -352,12 +375,12 @@ func operationClaimsFilter(operationKey string, sameLifeRefusals bool, refusalsO
 		bson.M{"status": claimStatusCompleted, "outcome": bson.M{"$exists": false}},
 	}
 	if sameLifeRefusals {
-		sameLife := bson.M{"status": claimStatusCompleted, "outcome": claimOutcomeRefused, "incarnation": refusalsOf}
+		decisive = append(decisive, bson.M{"status": claimStatusCompleted, "outcome": claimOutcomeRefused, "incarnation": refusalsOf})
 		if refusalsOf == 0 {
-			delete(sameLife, "incarnation")
-			sameLife["$or"] = bson.A{bson.M{"incarnation": uint32(0)}, bson.M{"incarnation": bson.M{"$exists": false}}}
+			// 第 0 代的另一种写法单列一支，不写成嵌套的 $or：嵌套 $or 让优化器给这一支改选 claim_expired，
+			// 扫这个集合全部 completed claim（RR-20261006-15 复核补修，explain 实测）。
+			decisive = append(decisive, bson.M{"status": claimStatusCompleted, "outcome": claimOutcomeRefused, "incarnation": bson.M{"$exists": false}})
 		}
-		decisive = append(decisive, sameLife)
 	}
 	return bson.M{"namespace": stepClaimNamespace, "operation_key": operationKey, "$or": decisive}
 }

@@ -493,7 +493,7 @@ definition_fence_abandon_promises_test.go:102: a step that took effect after the
 | `Owner` | `saga-mongo-inbox-<随机 ID>` | 这个收件箱实例在 claim 上的名字 |
 | `LeaseDuration` | 1 分钟 | 一次尝试的租约上限，再封顶到命令截止；不要求大于 `AckWait` |
 
-- 新集合 `<收件箱集合>_claims`（缺省 `_saga_step_inbox_claims`），索引 `claim_expired`、`uniq_command`（唯一）、`ttl_expires_at`、`by_operation`；回执集合格式不变。
+- 新集合 `<收件箱集合>_claims`（缺省 `_saga_step_inbox_claims`），索引 `claim_expired`、`uniq_command`（唯一）、`ttl_expires_at`、`by_operation`、`by_operation_decision`（RR-20261006-15 复核；集合很大时可在发布前手工建好）；回执集合格式不变。
 - O-S5-1：普通结果流（`SubscribeCompletions`）与原生 effect 流共用 `isTerminalCompletionError`，对 `ErrNotWaiting` / `ErrNotFound` / `ErrInvalidRecord` / `ErrIdentityConflict` Term（`ErrDefinitionMissing` 在发版前审查移出终态，见 [SAGA-10](#saga-10)）。
 - O-S5-3：SAGA.md 与 USER_GUIDE 建议把服务端 `transactionLifetimeLimitSeconds` 调到 20s，或让 Mongo 步骤 `Timeout × MaxAttempts` 加退避长于该参数——被 kill -9 的进程遗留的 Mongo 事务会持锁到这个上限。
 
