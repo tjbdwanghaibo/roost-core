@@ -445,12 +445,16 @@ go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -metrics-addr 127.0.0.1
 `CreateRole` 会拒绝未知或未开放的服务器，而 **`UpsertServer` 刻意不在 account 的 RPC 接口上**：登记 / 开关服务器改变的是
 所有玩家能登录什么，game 进程无权做，放在 Login 同一条总线上等于任何能到达 account 的进程都能关服。所以 demo 给了一个
 操作员工具 `cmd/accountctl`：用 Redis 凭据直接打开 account 服务自己的 store 写入服务器记录——
-`go run ./cmd/accountctl -redis 127.0.0.1:6379 upsert-server -sid 1000`，环境准备时跑一次。
+`go run ./cmd/accountctl -redis 127.0.0.1:6379 upsert-server -sid 1000`，环境准备时跑一次。account 配成 Redis Cluster
+（`redis.cluster_addrs`）时改用 `-redis-cluster <种子,种子,…>`：单机客户端只写得进槽恰好在所连节点上的键，其余 `MOVED`。
 
 每个机器人：`connect`（握手凭据是 account 签发的票据）→ `enter_game`（GetOrCreate Player）→ `add_item` → `add_exp`（升级，触发奖励邮件）
 → `join_queue` → `wait_push` 等服务端推送的 `MatchFound`（msg 10100，10s 超时后退回每 250ms `poll_match`，`selector` 节点）
 → `world_stats`（两个计数都得大于零）。
 任何一步返回非零 code、或 `error_rate` / `p95` 超阈值，进程以非零码退出并打印 JSON 报告。**`-count` 要给偶数**：duel 两人一组。
+退出前最后一行点名违反的阈值、实际值、上限与样本数（例如 `threshold violated: p95 = 17.2s > max 16s (10 samples)`）。
+`p95` 由翻倍桶估计、收在最快与最慢机器人之间，10 个机器人及以下就是最慢的那个；缺省 `-max-p95 16` 约为健康运行
+（单 sid 7～8s、两个 game 同机约 10s）的两倍。
 **`-count` 不要超过 `player_access.tcp.max_connections_per_ip`（默认 128）**：机器人全从一个 IP 来，超出的连接在握手前就被
 server 关掉，机器人报 `connect: auth send: robot session: closed`，server 侧计入 `player_tcp_connection_rejected_total{reason}`。
 600 个机器人的实跑正好 128 成功、472 这样失败——这是上限在工作，不是缺陷；要压更大就在 game 配置里调高它。

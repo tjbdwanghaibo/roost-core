@@ -159,6 +159,10 @@ type ThresholdResult struct {
 	Threshold
 	Actual   float64 `json:"actual"`
 	Violated bool    `json:"violated"`
+	// Samples is how many observations Actual is computed from: completed
+	// scenarios for error_rate, ok scenario costs for a quantile. A quantile
+	// over few samples is its slowest one (p95 of 10 is the 10th).
+	Samples int64 `json:"samples"`
 	// Reason explains a violation that is not "Actual > Max": no_samples when
 	// there was nothing to judge, unknown_metric for an unsupported Metric.
 	Reason string `json:"reason,omitempty"`
@@ -493,6 +497,7 @@ func (m *Manager) execute(rec *runRecord) {
 	case violated:
 		rec.State = StateFailed
 		rec.StopReason = StopReasonThreshold
+		rec.Error = describeViolations(thresholds)
 	default:
 		rec.State = StateFinished
 		if rec.StopReason == "" {
@@ -514,12 +519,17 @@ func (m *Manager) execute(rec *runRecord) {
 	metrics.SetGauge("robot.loadtest.active", metrics.Labels{"profile": rec.Profile}, 0)
 	metrics.IncCounter("robot.loadtest.run.total", metrics.Labels{"profile": rec.Profile, "result": result}, 1)
 	metrics.ObserveDuration("robot.loadtest.run.duration", metrics.Labels{"profile": rec.Profile, "result": result}, ended.Sub(start))
-	slog.Info("robot loadtest: run done",
+	attrs := []any{
 		"run_id", rec.RunID, "profile", rec.Profile,
 		"state", snapshot.State, "stop_reason", snapshot.StopReason,
 		"started", snapshot.Stats.Started, "success", snapshot.Stats.Success,
 		"failure", snapshot.Stats.Failure, "canceled", snapshot.Stats.Canceled,
-		"elapsed", ended.Sub(start), "err", err)
+		"elapsed", ended.Sub(start), "err", err,
+	}
+	if snapshot.StopReason == StopReasonThreshold {
+		attrs = append(attrs, "verdict", snapshot.Error)
+	}
+	slog.Info("robot loadtest: run done", attrs...)
 	close(rec.done)
 }
 
@@ -560,9 +570,35 @@ func (m *Manager) evaluate(rec *runRecord) (map[string]int64, []ThresholdResult)
 			results = append(results, ThresholdResult{Threshold: threshold, Violated: true, Reason: ThresholdReasonNoSamples})
 			continue
 		}
-		results = append(results, ThresholdResult{Threshold: threshold, Actual: actual, Violated: actual > threshold.Max})
+		results = append(results, ThresholdResult{Threshold: threshold, Actual: actual, Violated: actual > threshold.Max, Samples: samples})
 	}
 	return quantiles, results
+}
+
+// describeViolations names every violated threshold with its actual value,
+// bound and sample count — the line an operator reads first when a run ends
+// failed/threshold (RR-20261006-27: the generated loadtest used to exit 1 with
+// only "ended failed (threshold)").
+func describeViolations(results []ThresholdResult) string {
+	parts := make([]string, 0, len(results))
+	for _, r := range results {
+		if !r.Violated {
+			continue
+		}
+		unit := ""
+		if strings.ToLower(strings.TrimSpace(r.Metric)) != "error_rate" {
+			unit = "s"
+		}
+		switch r.Reason {
+		case ThresholdReasonNoSamples:
+			parts = append(parts, fmt.Sprintf("%s: no samples to judge (max %g%s)", r.Metric, r.Max, unit))
+		case ThresholdReasonUnknownMetric:
+			parts = append(parts, fmt.Sprintf("%q: unknown metric", r.Metric))
+		default:
+			parts = append(parts, fmt.Sprintf("%s = %g%s > max %g%s (%d samples)", r.Metric, r.Actual, unit, r.Max, unit, r.Samples))
+		}
+	}
+	return "threshold violated: " + strings.Join(parts, "; ")
 }
 
 func (m *Manager) historyLocked(limit int) []RunSnapshot {

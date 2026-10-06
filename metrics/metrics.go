@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"log/slog"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -77,32 +78,71 @@ type timer struct {
 }
 
 type histogram struct {
-	buckets     [17]atomic.Int64 // cumulative-on-export; stored as per-bucket counts
-	overflow    atomic.Int64
+	buckets  [17]atomic.Int64 // cumulative-on-export; stored as per-bucket counts
+	overflow atomic.Int64
+	// minNanos / maxNanos bound every quantile estimate (RR-20261006-27);
+	// minNanos starts at math.MaxInt64 (newHistogram).
+	minNanos    atomic.Int64
+	maxNanos    atomic.Int64
 	count       atomic.Int64
 	totalNanos  atomic.Int64
 	lastUpdated atomic.Int64
 }
 
+func newHistogram() *histogram {
+	h := &histogram{}
+	h.minNanos.Store(math.MaxInt64)
+	return h
+}
+
 func (h *histogram) observe(nanos int64) {
-	h.count.Add(1)
-	h.totalNanos.Add(nanos)
+	// min / max first: a reader that sees this observation's count also sees
+	// the range it widened, so the clamp in quantile never cuts it off.
+	for old := h.minNanos.Load(); nanos < old && !h.minNanos.CompareAndSwap(old, nanos); old = h.minNanos.Load() {
+	}
+	for old := h.maxNanos.Load(); nanos > old && !h.maxNanos.CompareAndSwap(old, nanos); old = h.maxNanos.Load() {
+	}
 	h.lastUpdated.Store(time.Now().UnixNano())
+	h.totalNanos.Add(nanos)
+	counted := false
 	for i, bound := range histogramBucketsNanos {
 		if nanos <= bound {
 			h.buckets[i].Add(1)
-			return
+			counted = true
+			break
 		}
 	}
-	h.overflow.Add(1)
+	if !counted {
+		h.overflow.Add(1)
+	}
+	h.count.Add(1)
 }
 
 // quantile estimates the q-quantile (0..1) by linear interpolation inside
-// the winning bucket — the standard Prometheus histogram_quantile shape.
+// the winning bucket — the Prometheus histogram_quantile shape — with the
+// interpolation range narrowed to the observed [min, max].
+//
+// RR-20261006-27: interpolating over the bare bucket bounds put the estimate
+// outside every sample. Buckets double, so the last sample of a bucket was
+// reported at the bucket's upper bound — up to twice its real value; with 10
+// samples p95 is that last sample, and a drill whose 10 robots all finished
+// within 9.6s read p95 = 16.384s and failed its 16s gate. A rank in the
+// overflow returned the largest bound (65.536s), below every overflowing
+// sample. The true quantile always lies in [min, max], so clamping to it only
+// removes error.
 func (h *histogram) quantile(q float64) time.Duration {
 	total := h.count.Load()
 	if total == 0 {
 		return 0
+	}
+	lowest, highest := h.minNanos.Load(), h.maxNanos.Load()
+	interpolate := func(from, to, rankInBucket, bucketCount int64) time.Duration {
+		from, to = max(from, lowest), min(to, highest)
+		if to < from { // a concurrent observation the snapshot of min / max missed
+			to = from
+		}
+		fraction := float64(rankInBucket) / float64(bucketCount)
+		return time.Duration(float64(from) + fraction*float64(to-from))
 	}
 	rank := int64(q*float64(total) + 0.5)
 	if rank < 1 {
@@ -114,15 +154,17 @@ func (h *histogram) quantile(q float64) time.Duration {
 		bucketCount := h.buckets[i].Load()
 		if cumulative+bucketCount >= rank {
 			if bucketCount == 0 {
-				return time.Duration(bound)
+				return time.Duration(min(max(bound, lowest), highest))
 			}
-			fraction := float64(rank-cumulative) / float64(bucketCount)
-			return time.Duration(float64(lower) + fraction*float64(bound-lower))
+			return interpolate(lower, bound, rank-cumulative, bucketCount)
 		}
 		cumulative += bucketCount
 		lower = bound
 	}
-	return time.Duration(histogramBucketsNanos[len(histogramBucketsNanos)-1])
+	if overflow := h.overflow.Load(); overflow > 0 {
+		return interpolate(lower, highest, min(rank-cumulative, overflow), overflow)
+	}
+	return time.Duration(highest)
 }
 
 type Registry struct {
@@ -337,7 +379,7 @@ func (r *Registry) histogram(name string, labels Labels) *histogram {
 	if !r.reserveSeriesLocked(name, key) {
 		return nil
 	}
-	h = &histogram{}
+	h = newHistogram()
 	r.histograms[key] = h
 	r.labels[key] = cloneLabels(labels)
 	r.names[key] = name

@@ -1,0 +1,27 @@
+--- FAIL: TestProductionServicesOnARedisClusterPassWithoutRedisAddr (0.00s)
+    production_redis_cluster_promises_test.go:23: production game on a Redis Cluster (comma string): config: production game requires redis.addr
+    production_redis_cluster_promises_test.go:23: production game on a Redis Cluster (yaml list): config: production game requires redis.addr
+    production_redis_cluster_promises_test.go:23: production instance on a Redis Cluster (comma string): config: production instance requires redis.addr
+    production_redis_cluster_promises_test.go:23: production instance on a Redis Cluster (yaml list): config: production instance requires redis.addr
+    production_redis_cluster_promises_test.go:23: production account on a Redis Cluster (comma string): config: production account requires redis.addr
+    production_redis_cluster_promises_test.go:23: production account on a Redis Cluster (yaml list): config: production account requires redis.addr
+    production_redis_cluster_promises_test.go:23: production global on a Redis Cluster (comma string): config: production global requires redis.addr
+    production_redis_cluster_promises_test.go:23: production global on a Redis Cluster (yaml list): config: production global requires redis.addr
+    production_redis_cluster_promises_test.go:23: production match_group on a Redis Cluster (yaml list): config: production match_group requires redis.addr
+    production_redis_cluster_promises_test.go:23: production match_group on a Redis Cluster (comma string): config: production match_group requires redis.addr
+--- FAIL: TestProductionServicesStillNeedSomeRedis (0.00s)
+    production_redis_cluster_promises_test.go:41: production game with cluster_addrs empty list and no addr: ValidateServiceConfig error = config: production game requires redis.addr, want a missing-redis error
+    production_redis_cluster_promises_test.go:41: production game with cluster_addrs blank entries and no addr: ValidateServiceConfig error = config: production game requires redis.addr, want a missing-redis error
+    production_redis_cluster_promises_test.go:41: production game with cluster_addrs empty string and no addr: ValidateServiceConfig error = config: production game requires redis.addr, want a missing-redis error
+    production_redis_cluster_promises_test.go:41: production game with cluster_addrs only commas and no addr: ValidateServiceConfig error = config: production game requires redis.addr, want a missing-redis error
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/app	0.557s
+FAIL
+--- FAIL: TestDevRunRegistersTheGameServerOnTheAccountServicesRedisCluster (0.68s)
+    --- FAIL: TestDevRunRegistersTheGameServerOnTheAccountServicesRedisCluster/comma_string (0.47s)
+        dev_run_account_promises_test.go:132: accountctl -redis-cluster = "" (present false), want the three seeds; args ["run" "./cmd/accountctl" "-redis" "127.0.0.1:6379" "-redis-password" "" "-redis-db" "0" "-prefix" "roost:planet:account" "upsert-server" "-sid" "1000"]
+    --- FAIL: TestDevRunRegistersTheGameServerOnTheAccountServicesRedisCluster/yaml_list (0.21s)
+        dev_run_account_promises_test.go:132: accountctl -redis-cluster = "" (present false), want the three seeds; args ["run" "./cmd/accountctl" "-redis" "127.0.0.1:6379" "-redis-password" "" "-redis-db" "0" "-prefix" "roost:planet:account" "upsert-server" "-sid" "1000"]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	1.382s
+FAIL

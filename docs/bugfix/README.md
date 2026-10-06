@@ -6,6 +6,14 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 真实进程演练追加两项（drill3），未发版。** [演练记录](REAL-PROCESS-DRILLS-2026-10-06.md) ⑤ ⑥：loadtest 的 `rc=1` 查清并修复，Redis Cluster 下重跑单实例锁 / fail-stop / 静态绑定 / 在途 saga 接手全部符合，App 锁方案 §13 的“未验证”改为实测结论。RR-20261006-27：直方图记最小 / 最大观测值，分位数插值收在观测范围内，阈值失败写明哪条阈值、实际值、上限与样本数；RR-20261006-28：生产校验接受 `redis.cluster_addrs`（解析收到 `app.RedisClusterAddrs`），accountctl 加 `-redis-cluster`，dev run.sh 读 `cluster_addrs`；RR-20261006-29：`Contribute` 遇到还没开的窗口自己开窗再记。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-29](RR-20261006-29.md) | `Contribute` 收到 `CodeMissing` 且开关开着时 `openWindow` 后重试一次，关窗截止由循环下一轮装上 | 已修复、声明场景验证，未发版 |
+| [RR-20261006-28](RR-20261006-28.md) | 生产校验 `redis.addr` 或 `redis.cluster_addrs`；`app.RedisClusterAddrs` 一处解析；accountctl `-redis-cluster`；dev run.sh 读 `cluster_addrs` | 已修复、声明场景验证，未发版 |
+| [RR-20261006-27](RR-20261006-27.md) | 直方图 min / max 收窄插值区间（溢出侧插到最大值）；`ThresholdResult.Samples`、阈值失败写 `RunSnapshot.Error`；loadtest 退出行带说明 | 已修复、声明场景验证，未发版 |
+
 **10-06 真实进程演练四项（drill2），未发版。** [演练记录](REAL-PROCESS-DRILLS-2026-10-06.md)：App 锁方案 §13、NC-193、NC-231、RR-20261006-10 的“未验证”都已在真实进程 / 真实依赖上实测。RR-20261006-24：关闭后的订阅、JetStream、RPC CallAsync 错误经 `closedError` 同时 `errors.Is` 到 `fnats.ErrClosed` 与 nats.go 原错误；RR-20261006-25：`lifecycle.Registry.EmitAllWatched` 报出正在跑的 hook，停机超时错误点名它；RR-20261006-26：`Client.Connected()` 在 Close 之后一直为 false。
 
 | 编号 | 修复 | 状态 |

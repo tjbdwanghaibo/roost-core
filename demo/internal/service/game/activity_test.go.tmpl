@@ -112,6 +112,80 @@ func TestAContributionSaysWhichWindowTookIt(t *testing.T) {
 	}
 }
 
+// lateOpenCoordinator 只在窗口开过之后接受进度：没开的窗口 ApplyProgress 答 ErrMissing（真实协调方的
+// “activity: not found”），重复开窗答 ErrExists。
+type lateOpenCoordinator struct {
+	svcactivity.Coordinator
+	open   map[string]bool
+	opened []string
+	scores map[string]int64
+}
+
+func (c *lateOpenCoordinator) OpenActivity(_ context.Context, key svcactivity.Key, _ []int32) (svcactivity.Activity, error) {
+	if c.open[key.ActivityID] {
+		return svcactivity.Activity{}, svcactivity.ErrExists
+	}
+	c.open[key.ActivityID] = true
+	c.opened = append(c.opened, key.ActivityID)
+	return svcactivity.Activity{Key: key}, nil
+}
+
+func (c *lateOpenCoordinator) ApplyProgress(_ context.Context, key svcactivity.Key, _ string, _ string, delta svcactivity.ProgressDelta) (svcactivity.Participant, error) {
+	if !c.open[key.ActivityID] {
+		return svcactivity.Participant{}, svcactivity.ErrMissing
+	}
+	c.scores[key.ActivityID] += delta.Score
+	return svcactivity.Participant{Score: c.scores[key.ActivityID], Progress: c.scores[key.ActivityID]}, nil
+}
+
+// RR-20261006-29：窗口刚滚动、开窗循环还没跑到时通关，这一点也要算进当前窗口。
+//
+// 窗口由 runActivity 每 activityLoopInterval（5s）开一次，于是每个 300 秒边界之后最长 5s 里，时钟所在的
+// 窗口在协调方那里还不存在：这段时间的通关 ApplyProgress 得到 “activity: not found”，贡献丢掉，
+// finish_dungeon 回不出窗口 id，机器人判失败、loadtest 退出码 1（Redis Cluster 演练里 10 个机器人有 5 个
+// 落在 23:05:00～23:05:04 这段）。Contribute 遇到“窗口不存在”时自己把它开起来（与开窗循环同一个幂等
+// 调用）再记一次；Activity 开关关着时不开窗，与循环一致。
+func TestAClearInTheFirstSecondsOfAWindowStillCounts(t *testing.T) {
+	ctx := context.Background()
+	newRunner := func(coordinator *lateOpenCoordinator, clock time.Time) *ActivityRunner {
+		return &ActivityRunner{
+			coordinator: coordinator, redis: boardRedis{}, prefix: "test", groupID: "test-group",
+			liveness: &liveSource{live: []int32{1300}}, serverType: "game", gameSID: 1300, candidates: []int32{1300},
+			now: func() time.Time { return clock },
+		}
+	}
+	// 上一个窗口开着（循环在边界前跑过），时钟已经进了下一个窗口 1 秒。
+	previous := gameactivity.WindowStart(time.Now().Unix())
+	clock := time.Unix(previous+gameactivity.WindowSeconds+1, 0)
+	current := gameactivity.ID(clock.Unix())
+
+	t.Run("activity-on", func(t *testing.T) {
+		featureflag.Set(featureflag.Flag{Name: flags.Activity, Enabled: true})
+		t.Cleanup(func() { featureflag.Set(featureflag.Flag{Name: flags.Activity, Enabled: false}) })
+		coordinator := &lateOpenCoordinator{open: map[string]bool{gameactivity.ID(previous): true}, scores: map[string]int64{}}
+		contributed, participant, err := newRunner(coordinator, clock).Contribute(ctx, 900001, "run-1")
+		if err != nil {
+			t.Fatalf("a clear 1s into window %s was refused: %v", current, err)
+		}
+		if contributed != current || participant.Score != 1 || coordinator.scores[current] != 1 {
+			t.Fatalf("the clear went to %q score=%d (scores %v), want window %s score 1", contributed, participant.Score, coordinator.scores, current)
+		}
+		if !slices.Equal(coordinator.opened, []string{current}) {
+			t.Fatalf("windows opened %v, want exactly the clock's window %s", coordinator.opened, current)
+		}
+	})
+	t.Run("activity-off-opens-nothing", func(t *testing.T) {
+		featureflag.Set(featureflag.Flag{Name: flags.Activity, Enabled: false})
+		coordinator := &lateOpenCoordinator{open: map[string]bool{}, scores: map[string]int64{}}
+		if _, _, err := newRunner(coordinator, clock).Contribute(ctx, 900001, "run-1"); svcactivity.Code(err) != svcactivity.CodeMissing {
+			t.Fatalf("with the activity switched off a clear in an unopened window answered %v, want not found", err)
+		}
+		if len(coordinator.opened) != 0 {
+			t.Fatalf("the switched-off activity opened %v", coordinator.opened)
+		}
+	})
+}
+
 // liveSource 是 App 单实例锁的 Live 查询的替身：回答固定的活 sid 集合或一个错误，并记下被问了什么。
 type liveSource struct {
 	live       []int32

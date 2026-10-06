@@ -66,7 +66,7 @@ func main() {
 	// The scenario deliberately waits for matchmaking (poll every 250ms while
 	// the matchmaker ticks every 500ms), so a whole-scenario p95 of a few
 	// hundred milliseconds is the floor, not a regression.
-	maxP95 := flag.Float64("max-p95", 16.0, "threshold: scenario cost p95, seconds; a regression bound, not an SLO. The scenario waits on four asynchronous chains (reward mail, two gift sagas, match) and then plays a lockstep battle for its full frame budget, and the cost histogram has power-of-two buckets — a healthy run lands in the 8s bucket, so the bound is the next one")
+	maxP95 := flag.Float64("max-p95", 16.0, "threshold: scenario cost p95, seconds; a regression bound, not an SLO. The scenario waits on four asynchronous chains (reward mail, two gift sagas, match) and then plays a lockstep battle for its full frame budget: the slowest robot of a healthy run takes 7-10s (two game servers on one machine at the top of that range), so the bound is about twice that. The p95 is estimated from power-of-two buckets narrowed to the observed fastest and slowest robot; with 10 robots or fewer it is the slowest robot")
 	metricsAddr := flag.String("metrics-addr", "", "serve this process's metrics at http://<addr>/metrics for Prometheus (deploy/dev/observability scrapes 127.0.0.1:9300)")
 	accountNATS := flag.String("account-nats", "nats://127.0.0.1:4222", "NATS url of the bus the account service answers on; robots log in for real (Login → CreateRole → SelectRole) and present session tickets")
 	natsPrefix := flag.String("nats-prefix", "roost", "bus subject prefix (nats.prefix in the services' configs)")
@@ -148,7 +148,9 @@ func run(endpoint string, count int, duration time.Duration, scenarioDir, scenar
 	report, _ := json.MarshalIndent(snapshot, "", "  ")
 	fmt.Println(string(report))
 	if snapshot.State != loadtest.StateFinished {
-		return fmt.Errorf("run %s ended %s (%s)", snapshot.RunID, snapshot.State, snapshot.StopReason)
+		// snapshot.Error names the violated threshold with its actual value
+		// and bound, or the runner's error; the JSON above has every verdict.
+		return fmt.Errorf("run %s ended %s (%s): %s", snapshot.RunID, snapshot.State, snapshot.StopReason, snapshot.Error)
 	}
 	return nil
 }

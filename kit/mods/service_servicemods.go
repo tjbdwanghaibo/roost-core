@@ -61,31 +61,10 @@ func ValidateClusterKeyPrefix(cfg *viper.Viper, service, prefix string) error {
 	return fmt.Errorf("servicemods: %s.key_prefix (%q) requires a non-empty closed first hash tag for Redis Cluster; use e.g. {roost:%s} so atomic keys share a slot", service, prefix, service)
 }
 
-// RedisClusterAddrs 返回 redis.cluster_addrs 里的 Cluster 种子地址，空表示单机。接受逗号分隔的
-// 字符串与 YAML 列表两种写法，去掉每项两端空白、丢弃空项。Redis Mod、单实例锁连接与各服务的
-// Cluster hash tag 校验都经它判断是否是 Cluster：旧实现用 GetString，列表写法读成空串，Redis Mod
-// 退回 localhost:6379 单机、hash tag 校验被跳过（RR-20261005-NC-190）。
+// RedisClusterAddrs 返回 redis.cluster_addrs 里的 Cluster 种子地址，空表示单机（逗号串或 YAML 列表，
+// RR-20261005-NC-190）。解析在 app.RedisClusterAddrs，生产校验与这里共用一份（RR-20261006-28）。
 func RedisClusterAddrs(cfg *viper.Viper) []string {
-	if cfg == nil || !cfg.IsSet("redis.cluster_addrs") {
-		return nil
-	}
-	var items []string
-	switch raw := cfg.Get("redis.cluster_addrs").(type) {
-	case string:
-		items = strings.Split(raw, ",")
-	default:
-		items = cfg.GetStringSlice("redis.cluster_addrs")
-	}
-	addrs := make([]string, 0, len(items))
-	for _, item := range items {
-		if item = strings.TrimSpace(item); item != "" {
-			addrs = append(addrs, item)
-		}
-	}
-	if len(addrs) == 0 {
-		return nil
-	}
-	return addrs
+	return app.RedisClusterAddrs(cfg)
 }
 
 // Secret reads a required secret from configuration.

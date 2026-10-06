@@ -486,12 +486,24 @@ kit 的 Mod 在 Init 里也严格读取，直接装配 Mod、不经 App 启动�
 配置里 `env` / `app.env` / `environment` 为 `prod` / `production` 时，`ValidateServiceConfig` 追加以下检查，其余照常：
 
 - `ops.enabled` 时 `ops.addr` 只能绑回环地址；要绑 `0.0.0.0`（k8s 探针、Prometheus 抓取）须同时写 `ops.allow_public_addr: true`，表示端点已放在鉴权代理之后。生成的生产示例绑 `0.0.0.0:9100`，打开生产模式时要加这一行。
-- game / instance / account / match_group / global 必须写 `redis.addr`。
+- game / instance / account / match_group / global 必须写 `redis.addr` 或 `redis.cluster_addrs`（逗号串或 YAML 列表；只配 Cluster 的生产配置可以启动，RR-20261006-28）。
 - `account.session_secret`、`platform.session_secret`、`platform.payment_secret` 不能为空或以 `dev-` 开头。
 - admin_gateway：`admin_gateway.tokens` 非空且不是 dev 令牌；`local_ops` 目标没有自己的 `ops_token` 时 `default_ops_admin_token` 必须是非 dev 值。
 - `time.logic_offset` 必须为 0（或不写）：偏移只给测试环境前拨业务时间用（D-L3）。
 
 它**不**检查、也不代表已经开启：按请求限流、登录鉴权、WAL 持久级别（持久化由 `dataengine.*` 决定）、实例状态存储。RR-20261005-NC-192 之前这里要求的 `player.login_auth_required`、`player.login_secret`、`player_protocol.rate_limit.enabled`、`save_load.wal.*`、`instance.client_mode` / `state_store_required`、`account.ops_token`、`account.redis_required`、`global` / `match_group.redis_required` 没有任何代码读取，已删除；配置里留着也没有影响。生成的游戏服接入层只有演示凭据（`auth.go`），上线前换成真实校验；需要按请求限流时自己装配 `gateway.RateLimit` 或在接入层限流。
+
+### 生成工程切到 Redis Cluster
+
+生成的配置是单机 Redis。整体切到 Cluster（[真实进程演练](bugfix/REAL-PROCESS-DRILLS-2026-10-06.md)第 ⑥ 项在 3 主 3 从上走通的清单）：
+
+1. 每个服务配置的 `redis.addr` 换成 `redis.cluster_addrs`（逗号串或 YAML 列表；两者都写时 Cluster 优先）。
+2. 有跨键原子写的服务，`key_prefix` 必须带非空的首个 hash tag：`activity`、`platform`、`rank`（例如 `"{roost:<project>:activity}"`，YAML 里加引号）。game 配置里的 `activity.key_prefix`、`platform.key_prefix` 与这两个服务**是同一个键空间**，要一起改——只改服务一侧时，购买的发货写进带 tag 的键、game 去旧键里取（机器人报 `delivered 10 of item … but the bag holds 0`），活动的贡献榜同理。漏改的服务在 Init 时点名报错（`requires a non-empty closed first hash tag for Redis Cluster`）。
+3. game 配置加 `remote_entity.lock_key`，带 hash tag（例如 `"{roost:<project>:remote}"`）；缺省 `e` 在 Cluster 下 Init 报错。改锁身份要整体重启（见上文 Remote 键表）。
+4. 单实例锁（`singleton.key_prefix`）、account、session、mail、chat、global、match 是单键操作，前缀不用改。
+5. 登记游戏服：`go run ./cmd/accountctl -redis-cluster <种子,种子,…> -prefix <account.key_prefix> upsert-server -sid N`（`deploy/dev/run.sh` 读到 `cluster_addrs` 时自动这样调用）。用 `-redis <单个节点>` 只有键槽恰好在这个节点上才写得进去，其余报 `MOVED`（RR-20261006-28）。
+
+改前缀等于换键空间：已有数据不会自动搬过去，生产上按各服务的迁移说明处理（activity 见 REVIEW-2026-09-29-services-08 的建议），不要只改配置。
 
 ### 业务时钟与系统时钟
 

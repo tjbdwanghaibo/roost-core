@@ -1,0 +1,26 @@
+# 生成工程切到 Redis Cluster 的过程（准备环境时的失败，按出现顺序）
+
+## 1. 只把 redis.addr 换成 redis.cluster_addrs：activity / platform / rank 起不来（设计如此：跨键原子写要求 hash tag）
+22:53:59.325 ERRO app run failed err=mod service.global.activity init: servicemods: activity.key_prefix ("roost:rpd:activity") requires a non-empty closed first hash tag for Redis Cluster; use e.g. {roost:activity} so atomic keys share a slot
+22:54:32.819 ERRO app run failed err=mod service.platform init: servicemods: platform.key_prefix ("roost:rpd:platform") requires a non-empty closed first hash tag for Redis Cluster; use e.g. {roost:platform} so atomic keys share a slot
+22:55:04.134 ERRO app run failed err=mod service.rank init: servicemods: rank.key_prefix ("roost:rpd:rank") requires a non-empty closed first hash tag for Redis Cluster; use e.g. {roost:rank} so atomic keys share a slot
+
+## 2. 修前的 accountctl（只有 -redis）对着 Cluster 每个节点登记 sid 1000（RR-20261006-28 的红）
+== seed 48400   accountctl: upsert server: MOVED 14044 127.0.0.1:48402
+== seed 48401   accountctl: upsert server: MOVED 14044 127.0.0.1:48402
+== seed 48402   （成功：槽 14044 的主）
+== seed 48403   accountctl: upsert server: MOVED 14044 127.0.0.1:48402
+== seed 48404   accountctl: upsert server: MOVED 14044 127.0.0.1:48402
+== seed 48405   accountctl: upsert server: MOVED 14044 127.0.0.1:48402
+
+## 3. game 起不来：remote_entity.lock_key 缺省 e（设计如此，Cluster 下要求 hash tag）
+22:59:25.701 ERRO app run failed err=mod remote_entity init: remote_entity: Redis Cluster requires a non-empty hash tag in remote_entity.lock_key (for example {roost:remote}); got "e"
+
+## 4. 只改了 platform 服务的 key_prefix、没改 game 配置里同一个 platform.key_prefix：发货写进带 tag 的键，game 去旧键取
+robot runner: scenario failed robot=10 player=100010 scenario=demo err="robot action purchase: order demo-100001-demo-100001-1791298818221703000-34 delivered 10 of item 1001 but the bag holds 0"
+robot runner: scenario failed robot=2 player=100002 scenario=demo err="robot action purchase: order demo-100003-demo-100003-1791298818222150000-35 delivered 10 of item 1001 but the bag holds 0"
+（同时可以看到 RR-27 修后的失败说明：）
+loadtest: run robot-demo-20261006-230018-001 ended failed (threshold): threshold violated: error_rate = 1 > max 0 (10 samples); p95: no samples to judge (max 16s)
+
+## 5. 第 3 / 4 次尝试是本 agent 只删了 Mongo 演练库、没删 remote_entity 库与 Redis L2 快照造成的版本冲突（操作失误，不是缺陷），之后整套 teardown + setup 重来
+23:02:55.303 ERRO found_guild failed player_id=100067 stage=found err=nest: finish remote write batch: remote entity persistence outcome is indeterminate: remote entity: state version conflict: L2 same version has different content

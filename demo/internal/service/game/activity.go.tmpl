@@ -376,12 +376,31 @@ func (runner *ActivityRunner) NotifyPhaseDue(ctx context.Context, activityID str
 // nothing downstream can tell that apart from "the point did not count"
 // (RR-20260921-01). The point is not lost in that case: it stays in the
 // window it landed in and settles with it.
+//
+// A window the coordinator does not know yet is opened here, with the same
+// idempotent call the loop makes, and the progress applied again
+// (RR-20261006-29). runActivity opens the clock's window once every
+// activityLoopInterval, so for up to that long after every boundary the
+// window the clock is in does not exist: a clear then answered "activity: not
+// found", its point was dropped and the endpoint reported no window. The
+// close deadline is still armed by the loop's next pass, which finds the
+// window open. With the Activity switch off nothing is opened, as in the loop.
 func (runner *ActivityRunner) Contribute(ctx context.Context, playerID int64, runID string) (string, svcactivity.Participant, error) {
 	activityID := gameactivity.ID(runner.clock().Unix())
-	participant, err := runner.coordinator.ApplyProgress(ctx,
-		runner.key(activityID), strconv.FormatInt(playerID, 10),
-		gameactivity.ProgressRequestID(runID),
-		svcactivity.ProgressDelta{Score: gameactivity.ProgressPerClear, Progress: gameactivity.ProgressPerClear})
+	apply := func() (svcactivity.Participant, error) {
+		return runner.coordinator.ApplyProgress(ctx,
+			runner.key(activityID), strconv.FormatInt(playerID, 10),
+			gameactivity.ProgressRequestID(runID),
+			svcactivity.ProgressDelta{Score: gameactivity.ProgressPerClear, Progress: gameactivity.ProgressPerClear})
+	}
+	participant, err := apply()
+	if svcactivity.Code(err) == svcactivity.CodeMissing && flags.Enabled(flags.Activity) {
+		if _, openErr := runner.openWindow(ctx, activityID); openErr != nil {
+			err = fmt.Errorf("%w (opening the window: %v)", err, openErr)
+		} else {
+			participant, err = apply()
+		}
+	}
 	if err != nil {
 		// The window is reported even on failure: the caller's log line is
 		// worth more when it says which window refused it.

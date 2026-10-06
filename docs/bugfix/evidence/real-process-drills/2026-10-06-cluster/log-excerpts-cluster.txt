@@ -1,0 +1,88 @@
+# Redis Cluster 演练日志摘录（第二轮，3 主 3 从，mirror-local 偏移 31000；condense.py 摘录，token / 主机名已脱敏）
+
+## 单实例锁键的槽位（两个 sid 的键在不同主节点上）
+roost:rpd:singleton:game:1000 slot=12937
+roost:rpd:singleton:game:1001 slot=8872
+master 127.0.0.1:48402@58402 slots 10923-16383
+master 127.0.0.1:48401@58401 slots 5461-10922
+master 127.0.0.1:48400@58400 slots 0-5460
+
+## P1
+23:14:58.552 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+23:14:58.552 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|63664|<ms>
+23:15:35.622 ERRO singleton lock lost; fail-stop key=roost:rpd:singleton:game:1000 holder= err=singleton key no longer holds this process's value (current holder "")
+23:15:35.622 ERRO runtime infrastructure failure, shutting down err=singleton lock lost: singleton key no longer holds this process's value (current holder "")
+23:15:35.686 INFO server stopped type=game
+23:15:35.686 WARN singleton: lock was lost; not releasing key=roost:rpd:singleton:game:1000
+23:15:35.686 ERRO app run failed err=singleton lock lost: singleton key no longer holds this process's value (current holder "")
+  (stderr) Error: singleton lock lost: singleton key no longer holds this process's value (current holder "")
+
+## P2
+23:15:18.165 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+23:15:18.165 INFO singleton: waiting for the current holder to release or expire key=roost:rpd:singleton:game:1000 holder=<token>|<host>|63664|<ms>
+23:15:33.175 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|63825|<ms>
+23:15:33.183 INFO singleton: released key=roost:rpd:singleton:game:1000
+23:15:33.183 ERRO app run failed err=mod ops start: ops: listen on ops.addr 127.0.0.1:36100: listen tcp 127.0.0.1:36100: bind: address already in use
+
+## P2b
+23:15:36.108 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+23:15:36.108 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|64352|<ms>
+
+## P3
+23:15:48.759 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+23:15:48.760 INFO singleton: waiting for the current holder to release or expire key=roost:rpd:singleton:game:1000 holder=<token>|<host>|64352|<ms>
+23:16:03.761 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|64474|<ms>
+23:16:04.020 INFO server stopped type=game
+23:16:04.021 INFO singleton: released key=roost:rpd:singleton:game:1000
+
+## P4
+23:16:03.985 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+23:16:03.986 INFO singleton: waiting for the current holder to release or expire key=roost:rpd:singleton:game:1000 holder=<token>|<host>|64474|<ms>
+23:16:06.987 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|65030|<ms>
+23:16:07.227 INFO server stopped type=game
+23:16:07.227 INFO singleton: released key=roost:rpd:singleton:game:1000
+
+## P5
+23:16:07.643 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+23:16:07.644 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|65178|<ms>
+23:16:29.436 ERRO singleton lock lost; fail-stop key=roost:rpd:singleton:game:1000 holder= err=singleton key no longer holds this process's value (current holder "")
+23:16:29.436 ERRO runtime infrastructure failure, shutting down err=singleton lock lost: singleton key no longer holds this process's value (current holder "")
+23:16:29.437 INFO game: disconnected the players this process served sessions_closed=4
+23:16:29.494 INFO server stopped type=game
+23:16:29.494 WARN singleton: lock was lost; not releasing key=roost:rpd:singleton:game:1000
+23:16:29.495 ERRO app run failed err=singleton lock lost: singleton key no longer holds this process's value (current holder "")
+  (stderr) Error: singleton lock lost: singleton key no longer holds this process's value (current holder "")
+
+## P6
+23:16:14.018 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+23:16:14.019 INFO singleton: waiting for the current holder to release or expire key=roost:rpd:singleton:game:1000 holder=<token>|<host>|65178|<ms>
+23:16:29.025 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|65250|<ms>
+23:16:29.035 INFO singleton: released key=roost:rpd:singleton:game:1000
+23:16:29.036 ERRO app run failed err=mod ops start: ops: listen on ops.addr 127.0.0.1:36100: listen tcp 127.0.0.1:36100: bind: address already in use
+
+## P8
+23:16:47.398 INFO singleton: acquiring key=roost:rpd:singleton:game:1000
+23:16:47.398 INFO singleton: waiting for the current holder to release or expire key=roost:rpd:singleton:game:1000 holder=<token>|<host>|65803|<ms>
+23:17:02.405 INFO singleton: acquired key=roost:rpd:singleton:game:1000 value=<token>|<host>|66045|<ms>
+
+## P8 接手在途赠礼（6b）
+23:17:02.903 INFO service init service=game
+23:17:02.968 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100124 phase=debit command=gift-100124-demo-100124-1791-13:1:0:1
+23:17:03.140 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100130 phase=debit command=gift-100130-demo-100130-1791-13:1:0:1
+23:17:03.195 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100126 phase=debit command=gift-100126-demo-100126-1791-12:1:0:4
+23:17:03.331 INFO gift saga: ran a step handed over by another process source=bus handler=game.gift.handoff:gift.step.handoff player_id=100127 phase=debit command=gift-100127-demo-100127-1791-13:1:0:1
+
+## 两个 sid 时的开窗（Live 跨槽读两个键）
+
+## RR-29 修后：23:15:00 边界由通关开窗（协调方记录 opened_at_unix=1791299701 = 23:15:01，game 循环 23:15:03.6 才轮到）
+1
+{"key":{"group_id":"rpd","activity_id":"race-1791299700","phase":"close"},"expected_game_sids":[1000],"status":"pending","opened_at_unix":1791299701,"updated_at_unix":1791299701}
+23:14:58.613 INFO activity: window open activity_id=race-1791299400 closes_at=1791299700 expected_game_sids=[1000]
+23:15:03.623 INFO activity: window open activity_id=race-1791299700 closes_at=1791300000 expected_game_sids=[1000]
+
+## loadtest 判定（RR-27 修后：p95 是最慢机器人）
+A finished completed run 7.455s quantiles_ms {'p50': 6715, 'p90': 7307, 'p95': 7454, 'p99': 7454} thresholds [('error_rate', 0, 0, 10), ('p95', 7.454, 16, 10)]
+A2 finished completed run 7.820s quantiles_ms {'p50': 6838, 'p90': 7624, 'p95': 7820, 'p99': 7820} thresholds [('error_rate', 0, 0, 10), ('p95', 7.82, 16, 10)]
+B finished completed run 7.478s quantiles_ms {'p50': 6490, 'p90': 7284, 'p95': 7483, 'p99': 7483} thresholds [('error_rate', 0, 0, 10), ('p95', 7.483, 16, 10)]
+C finished completed run 10.130s quantiles_ms {'p50': 8918, 'p90': 9888, 'p95': 10130, 'p99': 10130} thresholds [('error_rate', 0, 0, 10), ('p95', 10.13, 16, 10)]
+D finished completed run 9.837s quantiles_ms {'p50': 8809, 'p90': 9631, 'p95': 9837, 'p99': 9837} thresholds [('error_rate', 0, 0, 10), ('p95', 9.837, 16, 10)]

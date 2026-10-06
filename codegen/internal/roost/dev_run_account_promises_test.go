@@ -117,3 +117,23 @@ func TestDevRunKeepsAccountctlDefaultsWhenTheRedisKeysAreAbsent(t *testing.T) {
 		})
 	}
 }
+
+// RR-20261006-28：account 服务配成 Redis Cluster（redis.cluster_addrs，逗号串或 YAML 列表）时，登记游戏服
+// 也要连这个 Cluster。旧脚本只读 redis.addr，读不到就用 127.0.0.1:6379，而且 accountctl 只有单机客户端：
+// 对着 Cluster 的某个节点写，只有槽恰好在这个节点上的键能写进去，其余都是 MOVED（真实进程演练实测）。
+func TestDevRunRegistersTheGameServerOnTheAccountServicesRedisCluster(t *testing.T) {
+	for name, config := range map[string]string{
+		"comma string": "redis:\n  cluster_addrs: \"10.0.0.1:7000, 10.0.0.2:7000,10.0.0.3:7000\"\n  password: \"\"\naccount:\n  key_prefix: roost:planet:account\n",
+		"yaml list":    "redis:\n  cluster_addrs:\n    - 10.0.0.1:7000\n    - \"10.0.0.2:7000\"\n    - 10.0.0.3:7000\n  password: \"\"\naccount:\n  key_prefix: roost:planet:account\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			args := registerGameServerArgs(t, config)
+			if got, ok := flagValue(args, "-redis-cluster"); !ok || got != "10.0.0.1:7000,10.0.0.2:7000,10.0.0.3:7000" {
+				t.Errorf("accountctl -redis-cluster = %q (present %v), want the three seeds; args %q", got, ok, args)
+			}
+			if got, ok := flagValue(args, "-prefix"); !ok || got != "roost:planet:account" {
+				t.Errorf("accountctl -prefix = %q, want roost:planet:account; args %q", got, args)
+			}
+		})
+	}
+}

@@ -11,5 +11,5 @@ for svc in account activity chat global mail match platform rank session; do
   curl -fsS --max-time 1 -o /dev/null "http://127.0.0.1:$port/readyz" && echo "$svc ready" || { echo "$svc NOT ready"; tail -5 "$D/logs/dev/$svc.log"; }
 done
 for sid in 1000 1001; do
-  bin/accountctl -redis "$ROOST_DATAENGINE_IT_REDIS_ADDR" -prefix roost:rpd:account upsert-server -sid $sid && echo "registered $sid"
+  bin/accountctl "${ACCOUNTCTL_REDIS[@]}" -prefix roost:rpd:account upsert-server -sid $sid && echo "registered $sid"
 done

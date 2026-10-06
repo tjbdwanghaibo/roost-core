@@ -131,8 +131,17 @@ register_game_server() {
     redis_db=$(awk '/^redis:/{r=1;next} r&&/^  db:/{print $2;exit} r&&/^[^ ]/{r=0}' configs/service/config.account.yaml | tr -d '"')
     redis_password=$(awk '/^redis:/{r=1;next} r&&/^  password:/{sub(/^  password:[ \t]*/, ""); print; exit} r&&/^[^ ]/{r=0}' configs/service/config.account.yaml | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")
     prefix=$(awk '/^account:/{a=1;next} a&&/^  key_prefix:/{print $2;exit} a&&/^[^ ]/{a=0}' configs/service/config.account.yaml | tr -d '"')
+    # redis.cluster_addrs (a comma string or a YAML list) puts the account
+    # service on a Redis Cluster and wins over addr, as in the Redis Mod; a
+    # single-node client there only reaches the keys of that node's slots
+    # (RR-20261006-28).
+    cluster=$(awk '/^redis:/{r=1;next} r&&/^[^ ]/{exit} l&&/^    - /{v=$0; sub(/^    - [ \t]*/, "", v); out=out (out=="" ? "" : ",") v; next} l{exit} r&&/^  cluster_addrs:/{v=$0; sub(/^  cluster_addrs:[ \t]*/, "", v); if (v != "") {out=v; exit}; l=1} END{print out}' configs/service/config.account.yaml | tr -d "\"' ")
     echo "registering game server $SID with the account service"
-    go run ./cmd/accountctl -redis "${redis:-127.0.0.1:6379}" -redis-password "$redis_password" -redis-db "${redis_db:-0}" -prefix "${prefix:-roost:account}" upsert-server -sid "$SID" >/dev/null
+    if [ -n "$cluster" ]; then
+      go run ./cmd/accountctl -redis-cluster "$cluster" -redis-password "$redis_password" -prefix "${prefix:-roost:account}" upsert-server -sid "$SID" >/dev/null
+    else
+      go run ./cmd/accountctl -redis "${redis:-127.0.0.1:6379}" -redis-password "$redis_password" -redis-db "${redis_db:-0}" -prefix "${prefix:-roost:account}" upsert-server -sid "$SID" >/dev/null
+    fi
   fi
 }
 

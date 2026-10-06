@@ -6,6 +6,14 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 真实进程演练追加两项（drill3）：RR-20261006-27（P3）、-28（P3）、-29（P3）已修复、声明场景验证，未发版。** 上一轮留下的两处未闭环：两个 sid 时 loadtest 全部成功仍 `rc=1`、Redis Cluster 下没跑过演练，[记录](../bugfix/REAL-PROCESS-DRILLS-2026-10-06.md) ⑤ ⑥。p95 的 16.384s 是直方图估计取了桶上界、不是延迟，失败行也不说哪条阈值（-27）；生成工程整体切 Cluster 时生产校验只认 `redis.addr`、accountctl 与 dev run.sh 只会连单机（-28）；每个活动窗口开头最多 5s 的通关不计入、机器人判失败（-29，与 Cluster 无关）。Cluster 下单实例锁等待 / 接管、失锁 fail-stop、静态绑定、在途 saga 接手全部符合，与单机一致。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-29](RR-20261006-29.md) | P3 game-demo 活动窗口由循环每 5s 开一次，边界后最多 5s 的通关 `activity: not found`、贡献丢失，机器人判失败 | 已修复、声明场景验证，未发版 |
+| [RR-20261006-28](RR-20261006-28.md) | P3 生成工程不能整体切到 Redis Cluster：生产校验只认 `redis.addr`，accountctl / dev run.sh 只会连单机（其余节点 `MOVED`） | 已修复、声明场景验证，未发版 |
+| [RR-20261006-27](RR-20261006-27.md) | P3 loadtest 的分位数取桶上界（两个 sid 时 p95 = 16.384s，整次运行才 9.6s），全部成功仍 `rc=1`；失败行不点名阈值 | 已修复、声明场景验证，未发版 |
+
 **10-06 真实进程演练四项（drill2，恢复自 `wip/drill`）：RR-20261006-24（P3）、-25（P4）、-26（P4）已修复、声明场景验证，未发版。** 当前代码上重跑 game-demo 单实例锁 / fail-stop / 静态绑定演练（含 6b）、Init 中途失败收尾（NC-193）、停机 hook 卡住时 SIGTERM（NC-231）、kit Mongo / NATS Mod 接真实依赖的 Close（RR-20261006-10），[记录](../bugfix/REAL-PROCESS-DRILLS-2026-10-06.md)。演练发现：nats 驱动关闭后订阅 / JetStream / RPC CallAsync 的错误不是 `fnats.ErrClosed`（-24）；停机 hook 超时的错误不点名 hook（-25）；排空被硬关后 `Connected()` 约 5s 内仍为 true（-26，nats.go 排空协程翻回 `DRAINING_PUBS`）。
 
 | 编号 | 问题 | 状态 |

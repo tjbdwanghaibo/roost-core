@@ -88,7 +88,7 @@ func uniqueErrors(errs []error) []error {
 
 // validateProductionServiceConfig 是 env / app.env / environment 为 prod / production 时追加的检查。
 // 这里只要求有读取方、确实生效的设置（RR-20261005-NC-192，维护者决定 C1 方案 1）：ops 端点不暴露在
-// 公网、各服务真正读取的密钥不是空的或 dev- 开头、依赖 Redis 的服务写了 redis.addr、admin_gateway 的
+// 公网、各服务真正读取的密钥不是空的或 dev- 开头、依赖 Redis 的服务写了 redis.addr 或 redis.cluster_addrs、admin_gateway 的
 // 令牌、业务时钟偏移 time.logic_offset 为 0（D-L3）。以前这里还要求 player.login_auth_required、player_protocol.rate_limit.enabled、save_load.wal.*、
 // instance.*、account.ops_token、account.redis_required、global / match_group.redis_required 等开关，
 // 它们没有任何代码读取，写上只是为了让校验放行，却让人以为限流、登录鉴权、WAL 持久已经打开。
@@ -102,8 +102,11 @@ func validateProductionServiceConfig(errs *[]error, cfg *viper.Viper, serverType
 	serverType = strings.ToLower(strings.TrimSpace(serverType))
 	switch serverType {
 	case "game", "instance", "account", "match_group", "global":
-		if strings.TrimSpace(cfg.GetString("redis.addr")) == "" {
-			*errs = append(*errs, fmt.Errorf("config: production %s requires redis.addr", serverType))
+		// Either form connects the Redis Mod; cluster_addrs wins over addr there,
+		// so an addr written only to get past this check would do nothing
+		// (RR-20261006-28).
+		if strings.TrimSpace(cfg.GetString("redis.addr")) == "" && len(RedisClusterAddrs(cfg)) == 0 {
+			*errs = append(*errs, fmt.Errorf("config: production %s requires redis.addr or redis.cluster_addrs", serverType))
 		}
 	}
 	switch serverType {
@@ -414,4 +417,32 @@ func validateNonNegativeIntIfSet(errs *[]error, cfg *viper.Viper, key string) {
 	if value, err := ConfigInt64(cfg, key); err == nil && value < 0 {
 		*errs = append(*errs, fmt.Errorf("config: %s must be non-negative", key))
 	}
+}
+
+// RedisClusterAddrs 返回 redis.cluster_addrs 里的 Cluster 种子地址，空表示单机。接受逗号分隔的
+// 字符串与 YAML 列表两种写法，去掉每项两端空白、丢弃空项。这是唯一的解析处：Redis Mod、单实例锁
+// 连接、各服务的 Cluster hash tag 校验（经 kit/mods.RedisClusterAddrs）与生产校验都按它判断是否是
+// Cluster。旧实现用 GetString，列表写法读成空串，Redis Mod 退回 localhost:6379 单机、hash tag 校验
+// 被跳过（RR-20261005-NC-190）；生产校验只认 redis.addr，只配 Cluster 的生产配置启动不了（RR-20261006-28）。
+func RedisClusterAddrs(cfg *viper.Viper) []string {
+	if cfg == nil || !cfg.IsSet("redis.cluster_addrs") {
+		return nil
+	}
+	var items []string
+	switch raw := cfg.Get("redis.cluster_addrs").(type) {
+	case string:
+		items = strings.Split(raw, ",")
+	default:
+		items = cfg.GetStringSlice("redis.cluster_addrs")
+	}
+	addrs := make([]string, 0, len(items))
+	for _, item := range items {
+		if item = strings.TrimSpace(item); item != "" {
+			addrs = append(addrs, item)
+		}
+	}
+	if len(addrs) == 0 {
+		return nil
+	}
+	return addrs
 }

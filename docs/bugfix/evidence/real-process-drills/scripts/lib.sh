@@ -4,6 +4,8 @@
 #   export DRILL_HOME=<私有目录，例如 scratchpad 下的 rpd2>
 # 依赖由 scripts/mirror-local.sh 起在 $DRILL_HOME/env（端口偏移 DRILL_OFFSET，缺省 30000）；env.sh 含连接串，
 # 只 source、不打印。
+# DRILL_REDIS=cluster 时生成工程的 redis.* 指向 mirror-local 的 3 主 3 从 Cluster（setup.sh 改写配置），
+# 这里的 redis-cli 用 -c 跟随 MOVED，accountctl 用 -redis-cluster。缺省 standalone（单机 Redis）。
 : "${DRILL_HOME:?set DRILL_HOME to the private drill directory}"
 D=$DRILL_HOME
 SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)   # 下面会 cd 到生成工程，先记下脚本目录
@@ -14,7 +16,14 @@ cd "$D/rpd" || return 1
 export PATH=/opt/homebrew/bin:$PATH
 # shellcheck disable=SC1091
 source "$D/env/roost-dataengine-it/env.sh"
-R="redis-cli -h ${ROOST_DATAENGINE_IT_REDIS_ADDR%:*} -p ${ROOST_DATAENGINE_IT_REDIS_ADDR##*:}"
+if [ "${DRILL_REDIS:-standalone}" = cluster ]; then
+  seed=${ROOST_MIRROR_LOCAL_REDIS_CLUSTER%%,*}
+  R="redis-cli -c -h ${seed%:*} -p ${seed##*:}"
+  ACCOUNTCTL_REDIS=(-redis-cluster "$ROOST_MIRROR_LOCAL_REDIS_CLUSTER")
+else
+  R="redis-cli -h ${ROOST_DATAENGINE_IT_REDIS_ADDR%:*} -p ${ROOST_DATAENGINE_IT_REDIS_ADDR##*:}"
+  ACCOUNTCTL_REDIS=(-redis "$ROOST_DATAENGINE_IT_REDIS_ADDR")
+fi
 mkdir -p "$D/logs"
 
 ts() { perl -MTime::HiRes=time -MPOSIX=strftime -e '$t=time; printf "%s.%03d\n", strftime("%H:%M:%S",localtime $t), ($t-int $t)*1000'; }
