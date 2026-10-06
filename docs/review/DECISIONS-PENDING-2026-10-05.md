@@ -96,7 +96,7 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | C2 | “需要可见”：按协调者理解——保持新快照即刻可见的语义并写进契约；同时让热更失败 / 回滚可见（日志 + 指标，N07 C-O5） | **已实施（`b12216ed`）**：契约写进 configdata 包注释与 USER_GUIDE §10；`Store.OnReloadOutcome` 每次 Load / Reload / Rollback 恰好报告一次并写 Info / Warn 日志（失败带 stage，撤回为 `stage=apply`）；kit 指标 `configdata.reload.total{result=ok\|failed}`、`configdata.rollback.total{trigger=apply_failed\|operator}`，去掉 `reason` 标签（C-O6），被撤回的 reload 不再同时记 ok；observability README 改正版本号说法（C-O7）。[方案](../feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md) |
 | C5 | 停机中的进程仍算“活着”：保持现状，写进 `Live` 契约 | **已实施（`bd6df5e5`）**：`app/singleton.go` 的 `SingletonLiveness` 注释、USER_GUIDE §2、APP-SINGLETON-LOCK §3.6 / §7.2 写明契约与对 activity 的影响（窗口可能等到宽限期）；用例 `TestSingletonLiveCountsAStoppingProcessUntilRelease` 钉住 |
 | C9 | 过时测试开关要测：打开 `publishedDataEngineGeneratorDependencies` 覆盖的用例，放进需要网络的 CI lane 跑 | **已实施（`f556049c`）**：常量换成 `ROOST_NETWORK_TESTS=1`，framework-compat 新 job `codegen-network` 打开（SKIP 即失败），根包 `TestNetworkCodegenTestsRunInSomeWorkflow` 钉住；两条用例本机联网实跑通过（v1.20.2 刚发布，需 `GOPROXY=direct`）。默认 `go test` 不联网。 |
-| Mirror | 上述全部完成后，补齐 PLAN-REMOTE-POLICY-MIRROR 剩余实现（只读 DTO reader / 契约、共享 snapshot client、订阅代际与首载缓冲、kit 装配与 codegen 只读产物、真实环境故障与性能报告） | 排队 |
+| Mirror | 上述全部完成后，补齐 PLAN-REMOTE-POLICY-MIRROR 剩余实现（只读 DTO reader / 契约、共享 snapshot client、订阅代际与首载缓冲、kit 装配与 codegen 只读产物、真实环境故障与性能报告） | 进行中：**第 1～3 步已实施（`8495c5c4`，分支 `mirror13`）**——只读契约 `entity.RemoteSnapshotReadOnly` / 观察 token / DTO reader、快照缓存唯一读出口、共享 `remoteentity.SnapshotClient`（Manager 委托，停机套 A3 骨架）；修前红：Monotonic 未命中回源两次、Cached 交出低于最低版本的值。第 4～6 步未开始，入口与前置条件见 [实施记录 §7](../feature/MIRROR-STEPS-1-3-2026-10-06.md) |
 
 ## 新增待决定（2026-10-06，N01 留项 revn01b）
 
