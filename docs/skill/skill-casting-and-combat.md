@@ -63,6 +63,42 @@ environment.Digest = skill.AuthorityDigest(environment) // 重封，否则 ENVIR
 
 Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value)` / `skill.ResourceRuntimeValue(value)` 构造，量纲自动取自目录。
 
+## 引用在哪里能读（求值上下文）
+
+一个值写在定义的哪里，决定它在哪个**求值上下文**里求值、能读哪些引用。完整的表在 [`skill/eval_contexts.go`](../../skill/eval_contexts.go)（每格一句语义；编译诊断原样带出这句话，诊断里会点名上下文与表项，能替代的写“改用 …”），设计见[方案](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。写技能时记住这五行就够：
+
+| 写在哪里 | 上下文 | 能读 | 不能读 |
+| --- | --- | --- | --- |
+| phase 流程与 effect result 分支、costs / sustain costs、windup / recovery 表达式、spawn 的 `position` / 属性覆盖、进程 numeric track 的初值 | `cast_flow` | `$input.*`、`$memory.*`、`$local.*`、`$caster`、`$primary_target`、`$ability.self`、`$cast.*`；快照 `cast_start` / `phase_start` | `$owner`、`$lifecycle_entity`、`$process`、`$event.*`；`process_start` |
+| memory 默认值 | `memory_default` | `$input.*`、`$caster`、`$primary_target`、`$ability.self`、`$cast.*`（都是 Activate 时的值）；`cast_start` | 别的 `$memory`、`$local`；`phase_start` |
+| spawn 进程**每一步重新求值**的字段：area 选择、follow / tracking / carry 目标、path 点、orbit 锚点、parabola 目的地、没有绑定到进程数值属性的数值字段 | `process_step` | `$caster`、`$caster.position`、`$cast.mode` | 其余施法引用与进程引用；全部缓存快照 |
+| spawn 的 `on.*` 回调 | `process_callback` | `$owner`、`$owner.position`、`$lifecycle_entity`、`$process`、`$event.*`、回调自己的 `$local.*`；`process_start` | 施法的一切（`$input`、`$memory`、`$caster`、`$primary_target`、`$ability.self`、`$cast.*`）；`cast_start` / `phase_start` |
+| 持久状态默认值 | `state_default` | 字面量、`$caster`、`$caster.position`、`$cast.mode` | 其余引用；全部缓存快照 |
+
+进程字段在启动那一步用施法求值，之后每一步用移交后的进程求值，所以只能读两边都求得出、且值一样的引用；状态默认值在读 / 写这条状态的地方求值，那里可能是施法流程、进程字段或进程回调，所以只能读在所有这些地方都一样的引用。
+
+### 进程字段与状态默认值里的施法引用：编译期拒绝（O33，未发版）
+
+维护者第七轮决定（2026-10-06）。下面这些写法此前能编译、运行也不报错，但值会随进程移交或读写位置悄悄变掉；现在编译期报 `INPUT_UNAVAILABLE`（引用）或 `ATTRIBUTE_SNAPSHOT_INVALID`（快照），升级后按右列改写：
+
+| 写法 | 以前实际得到的值 | 改成 |
+| --- | --- | --- |
+| 进程字段里的 `$primary_target`（例如 area 的 `from`） | 启动那一步是施法目标，之后每一步是进程的 lifecycle 实体 | spawn 的 `position` 在施法流程里求一次，用 `$input.target.position` 把 lifecycle 实体放到目标处，再在回调里以 `$lifecycle_entity` / `$event.target` 为准（例如 `on.tick` 里 `select` from `$lifecycle_entity` 代替 area 选择）。每一步跟随一个移动中的施法目标没有等价写法：移交后的进程不持有施法目标 |
+| 进程字段里的 `$cast.charge_bp` / `$cast.release_reason` / `$cast.pulse_index` / `$cast.stock` / `$cast.max_stock` | 启动那一步是施法的值，之后是零值 | 进程 `numeric_tracks` 的初值（进程启动时用施法求一次，例如 `{"op":"scale_bp","args":[10,"$cast.charge_bp"]}`） |
+| 进程字段里的 `$cast.elapsed_ticks` | 之后每一步是当前 tick | 进程自己的计时：numeric track 加回调里 `modify_process` 的 `over_ticks`，或回调里的 `$event.tick` / `$event.membership_ticks` |
+| 进程字段里的 `$ability.self` | 之后 handle 为 0 | 在施法流程里读写技能状态 |
+| 进程字段里的 `cast_start` / `phase_start` 读取 | 之后退化为 `current` | numeric track 的初值；要进程启动时的值，在回调里用 `process_start`；否则直接写 `current` |
+| 状态默认值里的 `$primary_target`、`$ability.self`、`$cast.*`（`$cast.mode` 除外）、`cast_start` / `phase_start` 读取 | 在施法里读写时是施法的值，在进程回调 / 进程字段里读写时是 lifecycle 实体 / handle 0 / 零值 / `current` | 默认值用字面量或 `$caster`，在施法流程里用 `modify_state` 把同一个表达式的值写入（表达式类型就是状态类型，总能写进去）；快照也可以直接改成 `current` |
+| memory 默认值里的 `phase_start` 读取 | Activate 时的值：memory 初始化早于第一个 phase，也早于 costs 与 windup，与 `cast_start` 读到的是同一个值 | `cast_start`（同一个值）；要 phase 开始时的值，就在 phase 流程里读 `phase_start` |
+
+### 保持现状的三处语义（O34～O36）
+
+维护者第七轮决定保持行为不变、写明：
+
+- **costs / windup 里的 `phase_start`（O34）**：`phase_start` 是“最近一次进入的 phase 开始时”的值。costs 与 windup 表达式在进入第一个 phase **之前**求值（非 charge 模式在 Activate 时；`refund_before_commit` 的 costs 在 commit 那一刻），那时还没有 phase 开始的值，读到的是**求值那一刻**的值（等同 `current`）。charge 模式的 costs / windup 在 release 时求值，那时已在 phase 里，读到的是当前 phase 开始时的值；sustain costs 每个 pulse 求值，同样是当前 phase 开始时的值。要“施法开始时”的值请写 `cast_start`。
+- **进程回调里的 `self_ability` / `not_self_ability` 过滤（O35）**：移交后的进程没有技能句柄，回调里的技能选择拿 handle 0 比较——`self_ability` 永远不匹配、`not_self_ability` 匹配全部技能。要按“本技能”筛选，请在施法流程里做。
+- **进程回调里的 `$caster`（O36）**：Runtime 其实求得出（= 进程的 owner，即同一个施法者），但编译期按表拒绝，统一写 `$owner`（`$caster.position` 同理写 `$owner.position`）。
+
 ## combat：零依赖战斗内容电池
 
 `combat` 包是可复用的确定性战斗数学，零外部依赖：

@@ -80,7 +80,8 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
 （施法流程、memory 默认值、cast_start / phase_start / process_start 采样、进程每一步、进程回调、状态默认值 ×
 `$input.*` / `$memory.*` / `$local.*` / `$caster` / `$cast.*` / `$owner` / `$event.*` …）是唯一来源：`type_snapshot`
 按表生成每个位点的作用域，Runtime 求值时查同一张表，表外引用报 `ErrReferenceOutOfContext`。给定义加新的值位点或新的
-求值上下文时先改表，`eval_contexts_table_test.go` 会要求每个格子补正例 / 反例。
+求值上下文时先改表，`eval_contexts_table_test.go` 会要求每个格子补正例 / 反例（引用表与快照点表都逐格守）。
+格子只有“可用”与“不可用”两种：值会随进程移交或读写位置变化的格子一律不可用（O33，维护者第七轮决定），不可用格的说明写原因与“改用 …”，诊断原样带出。作者侧的规则与改写对照见 [施法语义 · 引用在哪里能读](skill-casting-and-combat.md#引用在哪里能读求值上下文)。
 [方案](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。
 
 建议配合阅读：

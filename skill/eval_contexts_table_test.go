@@ -9,13 +9,17 @@ import (
 )
 
 // 求值上下文表的守卫（维护者第五轮决定）：表的每个格子都有用例。
-//   - 可用 / 漂移的格子：把这一行的引用放进该上下文的一个位点，定义编译无 error，施法推进
+//   - 可用的格子：把这一行的引用放进该上下文的一个位点，定义编译无 error，施法推进
 //     10 个 tick 不出错，位点之后的“见证”效果确实执行（证明引用被求值过）；
-//   - 不可用的格子：编译被拒绝，诊断点名该上下文；Runtime 在该上下文里求这一行返回
+//   - 不可用的格子：编译被拒绝，诊断点名该上下文与表项；Runtime 在该上下文里求这一行返回
 //     ErrReferenceOutOfContext（不是 ErrProgramInvariant）。
 //   - 该上下文没有这一行类型的位点时（采样点只求实体、进程字段没有字符串位点……），用例表
 //     写明理由，守卫照样要求这一格有记录。
-// 给表加一行或一个上下文而不补这里，TestEvalContextTableEveryCellHasACase 失败。
+// 给表加一行或一个上下文而不补这里，TestEvalContextTableEveryCellHasACase 失败。快照点表
+// （evalSnapshotTable）由 TestEvalSnapshotTableCellsAgreeWithCompilerAndRuntime 逐格守。
+// 第五批 O33 的“漂移”格子（维护者第七轮决定改为编译期拒绝）另由
+// TestEvalContextTableRejectsTheO33DriftCellsWithAnAlternative 钉住，诊断里的替代写法由
+// TestO33AlternativesCompileAndRun 证明确实可用。
 
 type evalRowFixture struct {
 	reference string
@@ -225,9 +229,13 @@ func evalCellCase(t *testing.T, row evalReferenceRowIndex, context evalContext) 
 	return "", ""
 }
 
-func runEvalCell(program *Program, fixture evalRowFixture) (*MemoryHost, error) {
+func evalCellHost() *MemoryHost {
 	host := runtimeTestHost(DefaultCompileEnvironment())
 	host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Health: 100, MaxHealth: 100, Resources: map[string]int64{"mana": 100}, Attributes: map[AttributeHandle]int64{2: 1}})
+	return host
+}
+
+func runEvalCell(program *Program, fixture evalRowFixture, host *MemoryHost) (*MemoryHost, error) {
 	runtime := NewRuntime(host, RuntimeOptions{})
 	input := CastInput{Caster: 1}
 	if fixture.input == "entity" {
@@ -302,15 +310,13 @@ func TestEvalContextTableCellsAgreeWithCompilerAndRuntime(t *testing.T) {
 					if context.isCapture() {
 						code = DiagnosticAttributeSnapshotInvalid
 					}
-					for _, diagnostic := range diagnostics {
-						if diagnostic.Code == code && strings.Contains(diagnostic.Message, context.String()) {
-							return
-						}
+					if diagnosticMentionsAll(diagnostics, code, context.String(), row.name) {
+						return
 					}
-					t.Fatalf("no %s diagnostic naming %s: %#v", code, context, diagnostics)
+					t.Fatalf("no %s diagnostic naming %s and row %s: %#v", code, context, row.name, diagnostics)
 				}
 				requireNoErrors(t, diagnostics)
-				host, err := runEvalCell(program, fixture)
+				host, err := runEvalCell(program, fixture, evalCellHost())
 				if err != nil {
 					t.Fatalf("cast failed: %v", err)
 				}
@@ -354,29 +360,259 @@ func TestRuntimeEvaluatesReferencesOnlyWhereTheTableAllows(t *testing.T) {
 	}
 }
 
-// O33：移交后进程字段里漂移的引用，值就是表里写的那样。`$primary_target` 作 area 选择的起点：
-// 启动那一步以施法目标（实体 2，远处）为圆心，移交后以 lifecycle 实体（陷阱，施法者脚下）为圆心。
-func TestProcessStepPrimaryTargetDriftsToTheLifecycleEntity(t *testing.T) {
+// O33（维护者第七轮决定）：`$primary_target` 作 area 选择的起点。此前编译通过，启动那一步以施法目标
+// （实体 2，远处）为圆心，移交后漂移成以 lifecycle 实体（陷阱，施法者脚下）为圆心；现在编译期拒绝，
+// 诊断点名 process_step 上下文与 `$primary_target` 表项，并给出替代写法。
+func TestProcessStepPrimaryTargetIsRejectedAtCompileTime(t *testing.T) {
 	enter := `{"flow":"effect","effect":{"type":"damage","target":"$event.target","amount":1,"damage_type":"physical"}}`
 	area := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":4},"process":{"kind":"area","duration_ticks":4,"interval_ticks":1,"area":{"from":"$primary_target","kind":"entity","shape":{"type":"circle","radius":2},"filters":[],"order":{"by":"stable_id","direction":"asc"},"limit":4}},"on":{"enter":` + enter + `}}`
 	program, diagnostics := Compile(mustParseJSON(t, agreementSkillJSON("entity", "{}", "[]", agreementSteps(area))), DefaultCompileEnvironment())
-	requireNoErrors(t, diagnostics)
-	host := runtimeTestHost(DefaultCompileEnvironment())
-	host.UpsertEntity(MemoryEntity{ID: 2, Alive: true, Health: 100, MaxHealth: 100, Position: Position{X: 50}})
-	runtime := NewRuntime(host, RuntimeOptions{})
-	if _, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2}); err != nil {
-		t.Fatal(err)
+	if program != nil {
+		t.Fatalf("$primary_target in a process field compiled; it drifts to the lifecycle entity after handoff (O33)")
 	}
-	if health := host.HealthForTest(2); health != 99 {
-		t.Fatalf("start step must center on the cast target: target health = %d, want 99", health)
-	}
-	casterBefore := host.HealthForTest(1)
-	for tick := Tick(1); tick <= 3; tick++ {
-		if err := runtime.Advance(tick); err != nil {
-			t.Fatal(err)
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == DiagnosticInputUnavailable && strings.HasSuffix(diagnostic.Path, ".area.from") &&
+			strings.Contains(diagnostic.Message, "process_step") && strings.Contains(diagnostic.Message, "row $primary_target") && strings.Contains(diagnostic.Message, "改用") {
+			return
 		}
 	}
-	if host.HealthForTest(1) >= casterBefore {
-		t.Fatalf("after handoff the area must center on the lifecycle entity at the caster's feet: caster health %d -> %d", casterBefore, host.HealthForTest(1))
+	t.Fatalf("no INPUT_UNAVAILABLE at area.from naming process_step, the $primary_target row and an alternative: %#v", diagnostics)
+}
+
+// evalO33ReferenceCells / evalO33SnapshotCells 是第五批 O33 记下的全部“漂移”格子（此前编译通过、
+// Runtime 不失败，但值随进程移交或求值位置变化）。维护者第七轮决定全部改为编译期拒绝；memory
+// 默认值里的 phase_start 按方案 §8 的判断一并拒绝（它只是 Activate 时的值、与 cast_start 相同）。
+var evalO33ReferenceCells = func() map[evalReferenceRowIndex][]evalContext {
+	cells := map[evalReferenceRowIndex][]evalContext{}
+	for _, row := range []evalReferenceRowIndex{evalRowPrimaryTarget, evalRowAbilitySelf, evalRowCastElapsedTicks, evalRowCastChargeBP, evalRowCastReleaseReason, evalRowCastPulseIndex, evalRowCastStock, evalRowCastMaxStock} {
+		cells[row] = []evalContext{evalProcessStep, evalStateDefault}
 	}
+	return cells
+}()
+
+var evalO33SnapshotCells = map[snapshotPoint][]evalContext{
+	snapshotCastStart:  {evalProcessStep, evalStateDefault},
+	snapshotPhaseStart: {evalMemoryDefault, evalProcessStep, evalStateDefault},
+}
+
+// O33 的每个格子：表里不可用，说明里有替代写法（“改用 …”），有位点的格子编译被拒绝且诊断点名
+// 上下文、表项与替代写法。
+func TestEvalContextTableRejectsTheO33DriftCellsWithAnAlternative(t *testing.T) {
+	for row, contexts := range evalO33ReferenceCells {
+		entry := evalReferenceTable[row]
+		for _, context := range contexts {
+			cell := entry.cells[context]
+			if cell.usable() || !strings.Contains(cell.semantics, "改用") {
+				t.Errorf("row %s context %s: usable=%v semantics %q; O33 cells are rejected and name an alternative", entry.name, context, cell.usable(), cell.semantics)
+				continue
+			}
+			definition, noSite := evalCellCase(t, row, context)
+			if definition == "" {
+				t.Errorf("row %s context %s: rejected cell has no negative case (%s)", entry.name, context, noSite)
+				continue
+			}
+			_, diagnostics := Compile(mustParseJSON(t, definition), DefaultCompileEnvironment())
+			if !diagnosticMentionsAll(diagnostics, DiagnosticInputUnavailable, context.String(), "row "+entry.name, "改用") {
+				t.Errorf("row %s context %s: no diagnostic naming the context, the row and an alternative: %#v", entry.name, context, diagnostics)
+			}
+		}
+	}
+	for point, contexts := range evalO33SnapshotCells {
+		for _, context := range contexts {
+			cell := evalSnapshotTable[point][context]
+			if cell.usable() || !strings.Contains(cell.semantics, "改用") {
+				t.Errorf("snapshot %s context %s: usable=%v semantics %q; O33 cells are rejected and name an alternative", point, context, cell.usable(), cell.semantics)
+				continue
+			}
+			environment, definition := evalSnapshotCellCase(t, point, context)
+			_, diagnostics := Compile(mustParseJSON(t, definition), environment)
+			if !diagnosticMentionsAll(diagnostics, DiagnosticAttributeSnapshotInvalid, context.String(), "row "+string(point), "改用") {
+				t.Errorf("snapshot %s context %s: no diagnostic naming the context, the row and an alternative: %#v", point, context, diagnostics)
+			}
+		}
+	}
+}
+
+func diagnosticMentionsAll(diagnostics []Diagnostic, code DiagnosticCode, texts ...string) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code != code {
+			continue
+		}
+		found := true
+		for _, text := range texts {
+			found = found && strings.Contains(diagnostic.Message, text)
+		}
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+// 快照点表（evalSnapshotTable）的守卫：每个快照点在每个非采样上下文里都有一格、有说明，
+// 并逐格编译 / 施法——可用格编译无 error、施法推进 10 tick 不出错、位点之后的见证效果执行；
+// 不可用格编译被拒，ATTRIBUTE_SNAPSHOT_INVALID 点名上下文与表项。采样上下文只求实体，
+// 实体里没有属性读取，所以那三列没有格子。
+//
+// 读取用一个测试属性 reach（距离量纲）：进程字段只有实体 / 位置 / 距离 / 角度类型的位点，
+// 默认目录里的属性都不是距离量纲，放不进 area 半径。
+const evalReachAttribute AttributeHandle = 41
+
+func evalSnapshotEnvironment() CompileEnvironment {
+	environment := DefaultCompileEnvironment()
+	environment.Gameplay.Attributes.Entries = append(environment.Gameplay.Attributes.Entries, AttributeCatalogEntry{
+		Handle: evalReachAttribute, Key: "reach", ValueType: valueKindInt, Quantity: quantityWorldDistance, Readable: true,
+		Snapshots: []string{"cast_start", "phase_start", "process_start", "current"}, ModifierOperations: []string{"add"},
+		Minimum: 0, Maximum: 100, Rounding: "toward_zero",
+	})
+	environment.Digest = AuthorityDigest(environment)
+	return environment
+}
+
+func evalSnapshotCellCase(t *testing.T, point snapshotPoint, context evalContext) (CompileEnvironment, string) {
+	t.Helper()
+	read := func(entity string) string {
+		return `{"read_attribute":{"entity":"` + entity + `","attribute":"reach","snapshot":"` + string(point) + `"}}`
+	}
+	knockback := func(entity, witness string) string {
+		return `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"knockback","target":"` + entity + `","from":"` + entity + `.position","distance":` + read(entity) + `}},` + witness + `]}`
+	}
+	probe := `{"op":"eq","args":[` + read("$caster") + `,` + read("$caster") + `]}`
+	fixture := evalRowFixture{}
+	var definition string
+	switch context {
+	case evalCastFlow:
+		definition = evalDefinition(t, fixture, "{}", agreementSteps(knockback("$caster", evalWitness)), "")
+	case evalMemoryDefault:
+		definition = evalDefinition(t, fixture, `{"probe":{"type":"bool","default":`+probe+`}}`, agreementSteps(`{"flow":"if","condition":"$memory.probe","then":`+evalWitness+`}`), "")
+	case evalProcessStep:
+		definition = evalDefinition(t, fixture, "{}", agreementSteps(evalArea(`"$caster"`, read("$caster"), evalCallbackWitness)), "")
+	case evalProcessCallback:
+		definition = evalDefinition(t, fixture, "{}", agreementSteps(evalArea(`"$caster"`, "4", knockback("$owner", evalCallbackWitness))), "")
+	case evalStateDefault:
+		readState := func(owner, witness string) string {
+			return `{"flow":"if","condition":{"read_state":{"state":"who_state","owner":"` + owner + `"}},"then":` + witness + `}`
+		}
+		state := `{"type":"bool","scope":"owner","default":` + probe + `,"lifetime":{"duration_ticks":20,"maximum_duration_ticks":40,"on_write":"refresh","clear_on":[]}}`
+		definition = evalDefinition(t, fixture, "{}", agreementSteps(readState("$caster", evalWitness), evalArea(`"$caster"`, "4", readState("$owner", evalCallbackWitness))), state)
+	default:
+		t.Fatalf("context %s has no snapshot case builder", context)
+	}
+	return evalSnapshotEnvironment(), definition
+}
+
+func TestEvalSnapshotTableCellsAgreeWithCompilerAndRuntime(t *testing.T) {
+	points := []snapshotPoint{snapshotCastStart, snapshotPhaseStart, snapshotProcessStart}
+	if len(evalSnapshotTable) != len(points) {
+		t.Fatalf("snapshot table has %d points, the guard knows %d", len(evalSnapshotTable), len(points))
+	}
+	for _, point := range points {
+		row, found := evalSnapshotTable[point]
+		if !found {
+			t.Fatalf("snapshot table has no row %s", point)
+		}
+		for context := evalCastFlow; context < evalContextCount; context++ {
+			if context.isCapture() {
+				continue
+			}
+			cell := row[context]
+			t.Run(fmt.Sprintf("%s/%s", point, context), func(t *testing.T) {
+				if strings.TrimSpace(cell.semantics) == "" {
+					t.Fatalf("no semantics")
+				}
+				environment, definition := evalSnapshotCellCase(t, point, context)
+				program, diagnostics := Compile(mustParseJSON(t, definition), environment)
+				if !cell.usable() {
+					if program != nil {
+						t.Fatalf("unavailable cell compiled: %s", definition)
+					}
+					if !diagnosticMentionsAll(diagnostics, DiagnosticAttributeSnapshotInvalid, context.String(), "row "+string(point)) {
+						t.Fatalf("no %s diagnostic naming %s and row %s: %#v", DiagnosticAttributeSnapshotInvalid, context, point, diagnostics)
+					}
+					return
+				}
+				requireNoErrors(t, diagnostics)
+				host := runtimeTestHost(environment)
+				host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Health: 100, MaxHealth: 100, Resources: map[string]int64{"mana": 100}, Attributes: map[AttributeHandle]int64{evalReachAttribute: 2}})
+				if _, err := runEvalCell(program, evalRowFixture{}, host); err != nil {
+					t.Fatalf("cast failed: %v", err)
+				}
+				if health := host.HealthForTest(1); health >= 100 {
+					t.Fatalf("the witness after the site never ran: caster health = %d", health)
+				}
+			})
+		}
+	}
+}
+
+// O33 诊断里给出的替代写法确实能编译、执行（不能让作者照着改了还是编不过）：
+//   - `$primary_target` 进程字段 → spawn position 在施法流程里用施法目标的位置，回调里以
+//     `$lifecycle_entity` 为中心 select（远处的目标被打到、施法者没有）；
+//   - `$cast.*` / cast_start 进程字段 → numeric track 的初值（启动时用施法求一次）；
+//   - 状态默认值里的施法引用 → 字面量 / `$caster` 默认值，在施法流程里 modify_state 写入同一个
+//     表达式（null 默认值的实体状态 set 在 MemoryHost 上类型不匹配，是另一处问题，这里不用它）；
+//   - memory 默认值里的 phase_start → cast_start（快照守卫的正例覆盖）。
+func TestO33AlternativesCompileAndRun(t *testing.T) {
+	environment := evalSnapshotEnvironment()
+	compile := func(t *testing.T, definition string) *Program {
+		t.Helper()
+		program, diagnostics := Compile(mustParseJSON(t, definition), environment)
+		requireNoErrors(t, diagnostics)
+		return program
+	}
+	run := func(t *testing.T, program *Program, input CastInput, host *MemoryHost) {
+		t.Helper()
+		runtime := NewRuntime(host, RuntimeOptions{})
+		castID, err := runtime.Activate(program, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for tick := Tick(1); tick <= 6; tick++ {
+			if tick == 3 && program.cast.mode == castModeCharge {
+				_ = runtime.Release(castID)
+			}
+			if err := runtime.Advance(tick); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	t.Run("lifecycle entity instead of $primary_target", func(t *testing.T) {
+		tick := `{"flow":"select","select":{"from":"$lifecycle_entity","kind":"entity","shape":{"type":"circle","radius":2},"filters":[],"order":{"by":"stable_id","direction":"asc"},"limit":4},"consume":{"mode":"each","as":"t","do":{"flow":"effect","effect":{"type":"damage","target":"$local.t","amount":1,"damage_type":"physical"}}}}`
+		spawn := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$input.target.position","count":1,"duration_ticks":4},"on":{"tick":` + tick + `}}`
+		program := compile(t, agreementSkillJSON("entity", "{}", "[]", agreementSteps(spawn)))
+		host := runtimeTestHost(environment)
+		host.UpsertEntity(MemoryEntity{ID: 2, Alive: true, Health: 100, MaxHealth: 100, Position: Position{X: 50}})
+		run(t, program, CastInput{Caster: 1, Target: 2}, host)
+		if host.HealthForTest(2) >= 100 || host.HealthForTest(1) != 100 {
+			t.Fatalf("the callbacks must center on the lifecycle entity at the target: target health %d, caster health %d", host.HealthForTest(2), host.HealthForTest(1))
+		}
+	})
+	t.Run("numeric track instead of $cast state and cast_start in process fields", func(t *testing.T) {
+		for _, value := range []string{
+			`{"op":"scale_bp","args":[10,"$cast.charge_bp"]}`,
+			`{"read_attribute":{"entity":"$caster","attribute":"reach","snapshot":"cast_start"}}`,
+		} {
+			spawn := `{"flow":"effect","effect":{"type":"spawn","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"process":{` +
+				numericLinearProcessWithTracks(`{"property":"speed","operation":"set","value":`+value+`,"over_ticks":0}`) + `}}`
+			program := compile(t, evalDefinition(t, evalRowFixtures[evalRowCastChargeBP], "{}", agreementSteps(spawn), ""))
+			host := runtimeTestHost(environment)
+			host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Health: 100, MaxHealth: 100, Resources: map[string]int64{"mana": 100}, Attributes: map[AttributeHandle]int64{evalReachAttribute: 2}})
+			run(t, program, CastInput{Caster: 1}, host)
+		}
+	})
+	t.Run("modify_state in the cast flow instead of a state default", func(t *testing.T) {
+		lifetime := `"lifetime":{"duration_ticks":20,"maximum_duration_ticks":40,"on_write":"refresh","clear_on":[]}`
+		state := `"persistent_state":{"who":{"type":"entity","scope":"owner","default":"$caster",` + lifetime + `},"flag":{"type":"bool","scope":"owner","default":false,` + lifetime + `}},"initial_phase"`
+		write := `{"flow":"if","condition":{"op":"exists","args":["$primary_target"]},"then":{"flow":"effect","effect":{"type":"modify_state","state":"who","owner":"$caster","operation":"set","value":"$primary_target","duration_ticks":20,"expiry_policy":"refresh"}}}`
+		flag := `{"flow":"effect","effect":{"type":"modify_state","state":"flag","owner":"$caster","operation":"set","value":{"op":"gte","args":[{"read_attribute":{"entity":"$caster","attribute":"reach","snapshot":"cast_start"}},1]},"duration_ticks":20,"expiry_policy":"refresh"}}`
+		read := `{"flow":"if","condition":{"op":"and","args":[{"read_state":{"state":"flag","owner":"$owner"}},{"op":"exists","args":[{"read_state":{"state":"who","owner":"$owner"}}]}]},"then":` + evalCallbackWitness + `}`
+		definition := stringsReplaceOnce(t, agreementSkillJSON("entity", "{}", "[]", agreementSteps(write, flag, evalArea(`"$caster"`, "4", read))), `"initial_phase"`, state)
+		program := compile(t, definition)
+		host := runtimeTestHost(environment)
+		host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Health: 100, MaxHealth: 100, Resources: map[string]int64{"mana": 100}, Attributes: map[AttributeHandle]int64{evalReachAttribute: 2}})
+		run(t, program, CastInput{Caster: 1, Target: 2}, host)
+		if host.HealthForTest(1) >= 100 {
+			t.Fatalf("the process callback must see the states written in the cast flow: caster health %d", host.HealthForTest(1))
+		}
+	})
 }

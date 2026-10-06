@@ -118,3 +118,19 @@ activity 的真实 Redis / 两者的 Cluster 未跑：改动是窗口与判定�
   修前：`role limit reached for this server: another name is pending on server 1`，slot 仍是 Hero 的计划；修后建出 Knight、他人的预约不变、`plan_released` = 1。
   `TestCreationTableEveryCell` 随规格表更新；`TestADifferentNameKeepsAPlanThatCanStillComplete/foreign_reservation_only`（已 admitted）不变、仍通过。
 - 验证：`GOWORK=off go vet ./kit/service/account && go test -race -count=3 ./kit/service/account` 通过（Memory 后端）；真实 Redis 后端未跑（`DeleteIf` 调用与既有 RR-06 换名释放同一路径，存储调用序列不变）。
+
+### 6.1 第七轮补记：free 格也释放（O37，2026-10-06，分支 `o33`）
+
+维护者第七轮决定按推荐：**`unadmitted other` 行的 free 格（计划未 admitted、名字已无人持有）也释放名额并用新名字建角**，与 res-else 格（`b18d5613`）一致。上面“free 列维持 limit、留给维护者”的说法到此作废。
+
+- 理由：free 说明计划的名字没有活着的预约——要么预约过期，要么从没预约成功。admitted 之前什么都没发生，释放不会留下角色；同一行里只剩名字仍归本计划（by-plan）时保留 slot，因为可能有一次尝试已过 Reserve、正要 admit。
+- 改动：`decideCreation` 的 `entryOtherName` 分支改为“名字被别人 committed → retry；未 admitted 且名字被别人 reserved 或 free → retry；其余 limit”；规格表 `unadmitted other` 行 free 格 `limit` → `retry`（`TestCreationTableEveryCell`）。执行仍走 `actReleaseAndRetry`：`releaseCreationSlot` 的 `DeleteIf` 只在删除那一刻计划仍未 admitted 时删，与并发的 admission 互斥；并发的同名尝试若随后 Reserve 成功，admission CAS 会因 slot 已变而失败，它的预约自然过期。
+- 回归：`pending_creation_unadmitted_rename_promises_test.go` 新增 `TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsFree`（预约回执丢失留下未 admitted 的计划 → 预约过期、Hero 无人持有 → 换名 Knight）。修前（基线 `4da5e7ea`）：
+  ```
+  --- FAIL: TestCreationTableEveryCell
+      unadmitted / other / name=2: decideCreation = 8, table says retry (5)
+  --- FAIL: TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsFree
+      a different name must release the unadmitted plan whose name is free, got account: role limit reached for this server: another name is pending on server 1 (slot {… Creation:{… Name:Hero … Admitted:false}})
+  ```
+  修后建出 Knight、Hero 仍无人持有、`plan_released` = 1；已 admitted 的计划在 free 上仍答 `ErrRoleLimit`（`admitted other` 行不变）。
+- 验证：`GOWORK=off go vet ./kit/service/account && go test -race -count=3 ./kit/service/account` 通过（Memory 后端）；真实 Redis 后端未跑（存储调用序列与 res-else 格、RR-06 换名释放同一路径）。

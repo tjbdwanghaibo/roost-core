@@ -26,6 +26,12 @@ import (
 //
 // 改表的规则：加一行或一个上下文，必须同时在 eval_contexts_table_test.go 里给每个格子补
 // 正例 / 反例（或写明“没有该类型的位点”），守卫测试会逐格检查。
+//
+// 格子只有两种结论：可用（值就是 semantics 写的那样，任何时刻都成立）或不可用（编译期拒绝）。
+// 第五批 O33 记下的“可用但值漂移”格子——进程字段 / 状态默认值里的 `$primary_target`、
+// `$ability.self`、`$cast.*`（`$cast.mode` 除外）与 cast_start / phase_start 读取，以及 memory
+// 默认值里的 phase_start——维护者第七轮决定全部改为编译期拒绝（方案 §8）。不可用格的 semantics
+// 写明原因，能替代的写“改用 …”，诊断原样带出。
 
 // evalContext 是 Runtime 求值时所处的上下文。零值是施法流程：普通 castInstance 不需要设置。
 type evalContext uint8
@@ -89,10 +95,6 @@ const (
 	evalUnavailable evalAvailability = iota
 	// evalAvailable：可用，值就是 semantics 写的那样。
 	evalAvailable
-	// evalDrifting：可用（编译通过、Runtime 不失败），但值随进程移交或求值位置变化，
-	// semantics 写明变成什么（第五批 O33）。维护者决定不冻结施法上下文（NC-224 方向 B 不做），
-	// 这些格子保持现状、在表里写明；要收紧时把格子改成 evalUnavailable 并补反例即可。
-	evalDrifting
 )
 
 type evalCell struct {
@@ -103,14 +105,11 @@ type evalCell struct {
 func evalAvail(semantics string) evalCell {
 	return evalCell{availability: evalAvailable, semantics: semantics}
 }
-func evalDrift(semantics string) evalCell {
-	return evalCell{availability: evalDrifting, semantics: semantics}
-}
 func evalNone(reason string) evalCell {
 	return evalCell{availability: evalUnavailable, semantics: reason}
 }
 
-func (cell evalCell) usable() bool { return cell.availability != evalUnavailable }
+func (cell evalCell) usable() bool { return cell.availability == evalAvailable }
 
 // evalReferenceRow 是表的一行：一个引用（或一类引用）在每个上下文里的结论。
 type evalReferenceRow struct {
@@ -177,8 +176,18 @@ const (
 	evalCallbackOnly      = "只在 spawn 进程的回调与 process_start 采样里有"
 	evalNotInMemoryInit   = "memory 默认值按槽位顺序求值，读另一个 memory 会读到未初始化的槽位（RR-20261005-NC-280）"
 	evalNotInStateDefault = "状态默认值在读 / 写处求值，那里可能是进程回调或进程字段，没有施法的输入与 memory（RR-20261005-NC-281）"
-	evalCastStateInStep   = "启动那一步是施法的值；移交后的进程没有施法状态，值是零值重算（O33）"
-	evalCastStateInState  = "在施法里读写时是施法的值；在进程回调 / 进程字段里读写时是零值重算（O33）"
+	// 以下是 O33 收紧的格子（维护者第七轮决定）：此前编译通过、值随进程移交或求值位置漂移。
+	evalCastStateInStep = "进程字段每一步重新求值，移交后的进程没有施法状态（此前移交后是零值重算，O33 编译期拒绝）；" +
+		"改用 numeric track 的初值（进程启动时用施法求一次），随时间变化用回调里 modify_process 的 over_ticks"
+	evalCastStateInState = "状态默认值也在进程回调 / 进程字段里求值，那里没有施法状态（此前是零值重算，O33 编译期拒绝）；" +
+		evalWriteStateInCast
+	evalCastSnapshotInStep = "进程字段每一步重新求值，移交后的进程没有施法的快照（此前移交后退化为 current，O33 编译期拒绝）；" +
+		"改用 numeric track 的初值（进程启动时用施法求一次）；要进程启动时的值，在回调里用 process_start；否则用 current"
+	evalCastSnapshotInState = "状态默认值也在进程回调 / 进程字段里求值，那里没有施法的快照（此前退化为 current，O33 编译期拒绝）；" +
+		"改用 current，或在施法流程里用 modify_state 把同一个表达式的值写入（默认值用字面量）"
+	// evalWriteStateInCast：状态默认值的表达式类型就是状态的类型，所以同一个表达式总能在施法流程里
+	// 求值后用 modify_state 写入。
+	evalWriteStateInCast = "改用：在施法流程里用 modify_state 把同一个表达式的值写入（默认值用字面量）"
 )
 
 // evalReferenceTable 是求值上下文表本身。行的顺序就是 evalReferenceRowIndex。
@@ -220,7 +229,7 @@ var evalReferenceTable = [evalRowCount]evalReferenceRow{
 		evalPhaseStartCapture:   evalAvail("施法者"),
 		evalProcessStartCapture: evalNone("进程上下文里用 $owner"),
 		evalProcessStep:         evalAvail("施法者（移交后是进程的 owner，即同一个施法者）"),
-		evalProcessCallback:     evalNone("进程回调里用 $owner"),
+		evalProcessCallback:     evalNone("进程回调里统一用 $owner。Runtime 其实求得出（= 进程的 owner，即同一个施法者），编译期按表拒绝（O36），改用 $owner"),
 		evalStateDefault:        evalAvail("读写这条状态的施法者；在进程里是进程的 owner"),
 	}},
 	evalRowCasterPosition: {name: "$caster.position", typ: evalPositionType, cells: [evalContextCount]evalCell{
@@ -230,7 +239,7 @@ var evalReferenceTable = [evalRowCount]evalReferenceRow{
 		evalPhaseStartCapture:   evalAvail("（采样点只求实体）"),
 		evalProcessStartCapture: evalNone("进程上下文里用 $owner.position"),
 		evalProcessStep:         evalAvail("施法者每一步时的位置"),
-		evalProcessCallback:     evalNone("进程回调里用 $owner.position"),
+		evalProcessCallback:     evalNone("进程回调里统一用 $owner（O36），改用 $owner.position"),
 		evalStateDefault:        evalAvail("读写这条状态的施法者（进程里是 owner）的位置"),
 	}},
 	evalRowPrimaryTarget: {name: "$primary_target", typ: valueType{Base: valueKindEntity, Optional: true}, entity: true, cells: [evalContextCount]evalCell{
@@ -239,9 +248,12 @@ var evalReferenceTable = [evalRowCount]evalReferenceRow{
 		evalCastStartCapture:    evalNone("可缺省：采样时没有 exists 守卫，缺省即失败（RR-20261005-NC-282）"),
 		evalPhaseStartCapture:   evalNone("可缺省：采样时没有 exists 守卫，缺省即失败（RR-20261005-NC-282）"),
 		evalProcessStartCapture: evalNone(evalCallbackOnly),
-		evalProcessStep:         evalDrift("启动那一步是施法的主目标；移交后是进程的 lifecycle 实体（O33）"),
-		evalProcessCallback:     evalNone("进程回调里用 $lifecycle_entity / $event.target"),
-		evalStateDefault:        evalDrift("在施法里是主目标；在进程回调 / 进程字段里是进程的 lifecycle 实体（O33）"),
+		evalProcessStep: evalNone("进程字段每一步重新求值，移交后的进程没有施法的主目标（此前移交后漂移成 lifecycle 实体，O33 编译期拒绝）；" +
+			"改用施法流程里求一次的 spawn position（如 $input.target.position）把 lifecycle 实体放到目标处，" +
+			"或在回调里用 $lifecycle_entity / $event.target（如 on.tick 里 select from $lifecycle_entity 代替 area 选择）"),
+		evalProcessCallback: evalNone("进程回调里没有施法的主目标，改用 $lifecycle_entity / $event.target"),
+		evalStateDefault: evalNone("状态默认值也在进程回调 / 进程字段里求值，那里没有施法的主目标（此前漂移成 lifecycle 实体，O33 编译期拒绝）；" +
+			"改用 $caster 作默认值，在施法流程里用 modify_state 写入主目标"),
 	}},
 	evalRowAbilitySelf: {name: "$ability.self", typ: valueType{Base: valueKindAbility}, cells: [evalContextCount]evalCell{
 		evalCastFlow:            evalAvail("施法者身上的本技能"),
@@ -249,17 +261,23 @@ var evalReferenceTable = [evalRowCount]evalReferenceRow{
 		evalCastStartCapture:    evalAvail("（采样点只求实体）"),
 		evalPhaseStartCapture:   evalAvail("（采样点只求实体）"),
 		evalProcessStartCapture: evalNone(evalCallbackOnly),
-		evalProcessStep:         evalDrift("启动那一步是本技能；移交后 handle 为 0，按它读写技能状态会被拒绝（O33）"),
-		evalProcessCallback:     evalNone("进程回调里没有技能句柄"),
-		evalStateDefault:        evalDrift("在施法里是本技能；在进程里 handle 为 0（O33）"),
+		evalProcessStep: evalNone("进程字段每一步重新求值，移交后的进程没有技能句柄（此前移交后 handle 为 0，O33 编译期拒绝）；" +
+			"改用在施法流程里读写技能状态"),
+		evalProcessCallback: evalNone("进程回调里没有技能句柄（技能选择的 self_ability / not_self_ability 过滤在这里比较的是 handle 0，O35）；" +
+			"改用在施法流程里读写技能状态"),
+		evalStateDefault: evalNone("状态默认值也在进程回调 / 进程字段里求值，那里没有技能句柄（此前 handle 为 0，O33 编译期拒绝）；" +
+			evalWriteStateInCast),
 	}},
-	evalRowCastMode:             castStateRow("$cast.mode", valueType{Base: valueKindString}, nil, evalAvail("施法模式（Program 常量，任何时刻相同）"), evalAvail("施法模式（Program 常量）")),
-	evalRowCastElapsedTicks:     castStateRow("$cast.elapsed_ticks", quantityType(quantityTicks), nil, evalDrift("启动那一步是施法已过的 tick；移交后从 tick 0 算，即当前 tick（O33）"), evalDrift("在施法里是已过 tick；在进程里是当前 tick（O33）")),
-	evalRowCastChargeBP:         castStateRow("$cast.charge_bp", quantityType(quantityBasisPoints), []castMode{castModeCharge}, evalDrift(evalCastStateInStep), evalDrift(evalCastStateInState)),
-	evalRowCastReleaseReason:    castStateRow("$cast.release_reason", valueType{Base: valueKindString}, []castMode{castModeCharge}, evalDrift(evalCastStateInStep), evalDrift(evalCastStateInState)),
-	evalRowCastPulseIndex:       castStateRow("$cast.pulse_index", quantityType(quantityCount), []castMode{castModeHold, castModeToggle}, evalDrift(evalCastStateInStep), evalDrift(evalCastStateInState)),
-	evalRowCastStock:            castStateRow("$cast.stock", quantityType(quantityCount), []castMode{castModeAmmo}, evalDrift(evalCastStateInStep), evalDrift(evalCastStateInState)),
-	evalRowCastMaxStock:         castStateRow("$cast.max_stock", quantityType(quantityCount), []castMode{castModeAmmo}, evalDrift(evalCastStateInStep), evalDrift(evalCastStateInState)),
+	evalRowCastMode: castStateRow("$cast.mode", valueType{Base: valueKindString}, nil, evalAvail("施法模式（Program 常量，任何时刻相同）"), evalAvail("施法模式（Program 常量）")),
+	evalRowCastElapsedTicks: castStateRow("$cast.elapsed_ticks", quantityType(quantityTicks), nil,
+		evalNone("进程字段每一步重新求值，移交后的进程没有施法计时（此前移交后从 tick 0 算、即当前 tick，O33 编译期拒绝）；"+
+			"改用进程自己的计时：numeric track 加回调里 modify_process 的 over_ticks，或回调里的 $event.tick / $event.membership_ticks"),
+		evalNone("状态默认值也在进程回调 / 进程字段里求值，那里没有施法计时（此前在进程里是当前 tick，O33 编译期拒绝）；"+evalWriteStateInCast)),
+	evalRowCastChargeBP:         castStateRow("$cast.charge_bp", quantityType(quantityBasisPoints), []castMode{castModeCharge}, evalNone(evalCastStateInStep), evalNone(evalCastStateInState)),
+	evalRowCastReleaseReason:    castStateRow("$cast.release_reason", valueType{Base: valueKindString}, []castMode{castModeCharge}, evalNone(evalCastStateInStep), evalNone(evalCastStateInState)),
+	evalRowCastPulseIndex:       castStateRow("$cast.pulse_index", quantityType(quantityCount), []castMode{castModeHold, castModeToggle}, evalNone(evalCastStateInStep), evalNone(evalCastStateInState)),
+	evalRowCastStock:            castStateRow("$cast.stock", quantityType(quantityCount), []castMode{castModeAmmo}, evalNone(evalCastStateInStep), evalNone(evalCastStateInState)),
+	evalRowCastMaxStock:         castStateRow("$cast.max_stock", quantityType(quantityCount), []castMode{castModeAmmo}, evalNone(evalCastStateInStep), evalNone(evalCastStateInState)),
 	evalRowOwner:                processRow("$owner", evalEntityType, true, false, evalAvail("进程的 owner（启动它的施法者）"), evalAvail("进程的 owner")),
 	evalRowOwnerPosition:        processRow("$owner.position", evalPositionType, false, false, evalAvail("（采样点只求实体）"), evalAvail("owner 求值时刻的位置")),
 	evalRowLifecycleEntity:      processRow("$lifecycle_entity", evalEntityType, true, false, evalAvail("spawn 出的 lifecycle 实体"), evalAvail("spawn 出的 lifecycle 实体")),
@@ -380,16 +398,19 @@ var evalSnapshotTable = map[snapshotPoint][evalContextCount]evalCell{
 	snapshotCastStart: {
 		evalCastFlow:        evalAvail("施法开始时的值"),
 		evalMemoryDefault:   evalAvail("施法开始时的值（memory 默认值与采样同一 tick）"),
-		evalProcessStep:     evalDrift("启动那一步是施法开始时的值；移交后的进程没有施法的快照，退化为 current（O33）"),
-		evalProcessCallback: evalNone("进程回调读不到施法的快照"),
-		evalStateDefault:    evalDrift("在施法里是施法开始时的值；在进程里退化为 current"),
+		evalProcessStep:     evalNone(evalCastSnapshotInStep),
+		evalProcessCallback: evalNone("进程回调读不到施法的快照，改用 process_start（本进程启动时的值）或 current"),
+		evalStateDefault:    evalNone(evalCastSnapshotInState),
 	},
 	snapshotPhaseStart: {
-		evalCastFlow:        evalAvail("当前 phase 开始时的值（costs / windup 在第一个 phase 之前求值时读到的是求值那一刻的值）"),
-		evalMemoryDefault:   evalDrift("Activate 时的值：memory 初始化早于第一个 phase 开始"),
-		evalProcessStep:     evalDrift("启动那一步是 phase 开始时的值；移交后退化为 current（O33）"),
-		evalProcessCallback: evalNone("进程回调读不到施法的快照"),
-		evalStateDefault:    evalDrift("在施法里是 phase 开始时的值；在进程里退化为 current"),
+		evalCastFlow: evalAvail("最近一次进入的 phase 开始时的值。costs / windup 在进入第一个 phase 之前求值时（非 charge 模式的 Activate；" +
+			"refund_before_commit 时 costs 在 commit 那一刻），还没有 phase 开始的值，读到的是求值那一刻的值（O34）；charge 模式在 release 时求值，" +
+			"那时已在 phase 里，读到的是当前 phase 开始时的值"),
+		evalMemoryDefault: evalNone("memory 初始化早于第一个 phase（也早于 costs 与 windup），这里没有 phase 开始时的值，此前读到的只是 Activate 时的值、" +
+			"与 cast_start 相同（O33 编译期拒绝）；改用 cast_start（同一个值），要 phase 开始时的值就在 phase 流程里读 phase_start"),
+		evalProcessStep:     evalNone(evalCastSnapshotInStep),
+		evalProcessCallback: evalNone("进程回调读不到施法的快照，改用 process_start（本进程启动时的值）或 current"),
+		evalStateDefault:    evalNone(evalCastSnapshotInState),
 	},
 	snapshotProcessStart: {
 		evalCastFlow:        evalNone("process_start 只在 owned 进程启动时采样，施法流程里读到的不是进程启动时的值（RR-20261005-NC-220）"),

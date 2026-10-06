@@ -152,11 +152,18 @@ func decideCreation(slot slotState, entry creationEntry, name nameState) creatio
 	case entryOtherName:
 		// A plan that can never complete gives way to another name; one that
 		// may still complete keeps the slot (ErrRoleLimit). A never-admitted
-		// plan whose name someone else has reserved also gives way: nothing
-		// after admission has happened, so the release strands nothing — the
-		// same fact on which a same-name retry already releases it
-		// (maintainer decision, 2026-10-06, round 5).
-		if name == nameCommittedElsewhere || slot == slotPendingUnadmitted && name == nameReservedElsewhere {
+		// plan also gives way when its name is reserved by someone else or
+		// free: nothing after admission has happened, so the release strands
+		// nothing — the same fact on which a same-name retry already releases
+		// it (maintainer decisions, 2026-10-06: round 5 for reserved
+		// elsewhere, round 7 / O37 for free). Only a never-admitted plan that
+		// still holds its own name keeps the slot: an attempt may be past
+		// Reserve and about to admit. The release itself is a DeleteIf that
+		// deletes only while the plan is still unadmitted (releaseCreationSlot).
+		if name == nameCommittedElsewhere {
+			return actReleaseAndRetry
+		}
+		if slot == slotPendingUnadmitted && (name == nameReservedElsewhere || name == nameFree) {
 			return actReleaseAndRetry
 		}
 		return actRefuseRoleLimit

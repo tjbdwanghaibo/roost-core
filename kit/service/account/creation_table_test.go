@@ -57,11 +57,13 @@ legacy        resolve         unres     unres    unres    unres     unres     un
 # an admitted one only when its name is final elsewhere (RR-20261001-06).
 # Another name gives way to a final fact (RR-20261001-06 残余), and — for a
 # never-admitted plan — also to a foreign reservation, the fact on which a
-# same-name retry already releases it (维护者第五轮决定 2026-10-06); the
-# operator may release anything that does not hold its own name.
+# same-name retry already releases it (维护者第五轮决定 2026-10-06), and to a
+# free name: nothing holds it, so no attempt of the plan is in flight past
+# Reserve (O37, 维护者第七轮决定 2026-10-06); the operator may release
+# anything that does not hold its own name.
 unadmitted    same            resume    resume   resume   resume    resume    resume
 unadmitted    same-refused    read      taken-r  taken-r  taken-r   taken-r   taken-r
-unadmitted    other           read      limit    limit    limit     retry     retry
+unadmitted    other           read      retry    limit    limit     retry     retry
 unadmitted    resolve         read      release  unres    unres     release   release
 
 admitted      same            resume    resume   resume   resume    resume    resume

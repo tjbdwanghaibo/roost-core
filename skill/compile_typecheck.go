@@ -115,7 +115,7 @@ func declaredMemoryType(name string) valueType {
 	}
 }
 
-// scopeFor 按求值上下文表生成一个上下文的作用域：表里在该上下文可用（含“漂移”格子）、
+// scopeFor 按求值上下文表生成一个上下文的作用域：表里在该上下文可用、
 // 且在这个 Program 形状里存在（施法模式、area 进程）的行。输入槽位来自输入布局，memory
 // 来自声明；局部变量由流程加入。processKind 只对进程回调有意义（area 专有的事件字段）。
 func (c *typeChecker) scopeFor(context evalContext, processKind string) typeScope {
@@ -886,7 +886,7 @@ func (c *typeChecker) checkCachedRead(read *attributeReadValueIR, scope typeScop
 		return
 	}
 	if cell := evalSnapshotTable[point][scope.context]; !cell.usable() {
-		c.context.addDiagnostic(DiagnosticAttributeSnapshotInvalid, read.source.Path+".read_attribute.snapshot", fmt.Sprintf("a %s snapshot is not available in evaluation context %s: %s (evaluation context snapshot table)", point, scope.context, cell.semantics))
+		c.context.addDiagnostic(DiagnosticAttributeSnapshotInvalid, read.source.Path+".read_attribute.snapshot", fmt.Sprintf("a %s snapshot is not available in evaluation context %s: %s (evaluation context snapshot table row %s)", point, scope.context, cell.semantics, point))
 		return
 	}
 	captureScope := c.scopeFor(captureContext, "")

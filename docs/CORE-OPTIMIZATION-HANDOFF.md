@@ -239,6 +239,8 @@ bash scripts/test-remote-matrix.sh
 
 10-05 A2（维护者决定）：Redis 驱动默认不再重放写命令，只在确定没执行时重发（脚本在这类错误上同样重发）；新增 `driver.IsDefinitelyNotExecuted`；Mongo 提交发出之后的失败带 `mongo.ErrCommitResultUnknown`；cache 的 hash / 有序集合在写结果未知时仍补发 EXPIRE。**已实施，未发版**。契约表见 [redis/driver](../redis/driver/README.md) 和 [mongo/driver](../mongo/driver/README.md)，[方案、红绿与调用方核对](feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)。Redis Cluster 与 bus 的 SETNX 去重仍在外部验证或归属方待办里。
 
+10-06 维护者第七轮决定（分支 o33）：skill 求值上下文表的 O33 漂移格子全部改为编译期拒绝（进程字段 / 状态默认值里的施法引用与快照、memory 默认值里的 phase_start），诊断带替代写法，快照点表补逐格守卫；O34～O36 写进作者文档（[施法语义 · 引用在哪里能读](skill/skill-casting-and-combat.md#引用在哪里能读求值上下文)）；account 判定表 `unadmitted other` 行 free 格也释放（O37）。**已实施，未发版**。[表方案 §8](feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md) · [B9 方案 §6.1](feature/B9-C5-WINDOW-ENTRIES-ROLE-TABLE-2026-10-06.md)
+
 10-06 N09 skill 第六批（revn09f，维护者第五轮决定）：求值上下文表 `skill/eval_contexts.go` 落地（编译期作用域与 Runtime 求值共用，表外引用 `ErrReferenceOutOfContext`），[NC-280](bug/RR-20261005-NC-280.md) / [NC-281](bug/RR-20261005-NC-281.md) / [NC-282](bug/RR-20261005-NC-282.md) / [NC-283](bug/RR-20261005-NC-283.md)（P2）**已修复、声明场景验证，未发版**；account 换名释放（B9 判定表一格）同批单独提交。[表方案](feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md) · [第六批](review/REVIEW-2026-10-06-n09-batch6.md)
 
 10-06 N09 skill 第五批（revn09e）：[NC-220](bug/RR-20261005-NC-220.md) / [NC-223](bug/RR-20261005-NC-223.md) / [NC-224](bug/RR-20261005-NC-224.md)（P2）与 [NC-221](bug/RR-20261005-NC-221.md) / [NC-222](bug/RR-20261005-NC-222.md)（P3）**已修复、声明场景验证，未发版**。NC-223 是 B3（v1.20.2）回归：以局部变量为实体的 read_attribute 编译失败。编译器的作用域与 Runtime 求值上下文不一致第五次出现，方向判断与 NC-224 方向 B（冻结施法输入）待维护者定；B4 文档约束同批落实。[本轮](review/REVIEW-2026-10-06-n09-batch5.md)。

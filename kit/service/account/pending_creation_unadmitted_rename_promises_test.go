@@ -73,3 +73,45 @@ func TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsReservedElsewhere(t *t
 		t.Fatalf("plan release counted %d times; %s", got, sink.Events())
 	}
 }
+
+// 维护者第七轮决定（O37，2026-10-06）：同一行的 free 格也释放。计划还没 admitted、它的名字已经
+// 无人持有（预约过期或从未预约成功）时，换名请求释放 slot 并用新名字建角，与 res-else 格一致。
+//
+// 旧行为（free 格 = limit）：答 ErrRoleLimit、slot 保留——玩家只能先用旧名字重试一次才能换名，
+// 而这个计划 admitted 之前什么都没发生，释放不会留下角色。
+func TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsFree(t *testing.T) {
+	sink := servicemetrics.NewRecorder()
+	s, clock, cfg := revn06AccountService(t, func(c *Config) {
+		c.Metrics = sink
+		c.Names = &lostReserveReply{Directory: c.Names}
+	})
+	ctx := context.Background()
+	a := login(t, s, "o37-rename-free")
+	if _, err := s.CreateRole(ctx, a.ID, 1, "Hero"); err == nil {
+		t.Fatal("fixture must lose the reserve reply")
+	}
+	if slot := mustSlot(t, cfg, a.ID); slot.Creation.Name != "Hero" || slot.Creation.Admitted {
+		t.Fatalf("fixture must leave an unadmitted plan for Hero: %+v", slot)
+	}
+	revn06Lapse(t, cfg, clock, "Hero")
+	if _, found, err := cfg.Names.Lookup(ctx, "Hero"); err != nil || found {
+		t.Fatalf("fixture must leave Hero free: found=%v err=%v", found, err)
+	}
+
+	knight, err := s.CreateRole(ctx, a.ID, 1, "Knight")
+	if err != nil {
+		t.Fatalf("a different name must release the unadmitted plan whose name is free, got %v (slot %+v)", err, mustSlot(t, cfg, a.ID))
+	}
+	if knight.Name != "Knight" {
+		t.Fatalf("created %+v, want Knight", knight)
+	}
+	if slot := mustSlot(t, cfg, a.ID); slot.PlayerID != knight.PlayerID || slot.Creation.Name != "Knight" {
+		t.Fatalf("slot after the fresh plan: %+v", slot)
+	}
+	if _, found, err := cfg.Names.Lookup(ctx, "Hero"); err != nil || found {
+		t.Fatalf("Hero must stay free: found=%v err=%v", found, err)
+	}
+	if got := sink.Count("dropped:create_role.plan_released"); got != 1 {
+		t.Fatalf("plan release counted %d times; %s", got, sink.Events())
+	}
+}
