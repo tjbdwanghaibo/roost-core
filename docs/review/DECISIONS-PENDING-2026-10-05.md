@@ -184,6 +184,7 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | 收尾 | 盘点全部未完成问题，处理完后统一发一个版本 | 进行中 |
 | 收尾 · 第 3 批 | skill 小修 A4～A6：null 默认值实体状态 set 类型不匹配、checkpoint 拒绝 `phase_timeout`（O20）、文件 outbox 清理遗留 tmp（O6） | 已实施（`b8fbcee0`，RR-20261006-02～04，未发版） |
 | 收尾 · 第 2 批 | 生成形状相关小项：A8 生成配置补 `remote_entity` 新键、A9 生成 TCP 越界报错点名、A11 full 场景 add 序列收拢且不吞失败、A15 生成 TCP 不配合 ctx 用例、A17 game-demo 重开放弃面板 | 已实施（`fcc78ad0`，未发版，[记录](../bugfix/CLOSING-BATCH-2-2026-10-06.md)） |
+| 收尾 · 第 4 批 | kit / core 小修与测试设施：A2 nest `-shuffle` 失败（用例隔离）、A3 glsvet `-tests ./nest` 3 条、A7 global `Bind` 重试误报冲突、A12 saga 步骤预算大小写冲突、A13 `app.run` 退出原因进文件日志、A14 mongotest `$in` 具名切片（O-S5-6） | 已实施（`611d5d72`，RR-20261006-05～08，未发版，[记录](../bugfix/CLOSING-BATCH-4-2026-10-06.md)） |
 
 ## 维护者决定（2026-10-06，第十二轮：收尾盘点 B 类）
 
