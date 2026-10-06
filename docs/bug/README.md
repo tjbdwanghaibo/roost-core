@@ -1,5 +1,7 @@
 # Roost Review 问题索引
 
+**v1.21.0 已发布（2026-10-06，tag → `4881f2b7`）**：维护者第四～九轮决定（B4/B6/B9/B10/C2/C5/C9/D1、MissionRunner 延后队列、求值上下文表、O33～O37、D-L1～D-L3、saga 方向 ①②、Mirror 第 1～5 步、O4）、单元留项修复与发版前审查跟进随本版发布；下方“未发版”指发布前状态。
+
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
 **10-06 N09 skill 第六批（revn09f，维护者第五轮决定“求值上下文表”）：NC-280～283（均 P2）已修复、声明场景验证，未发版。** memory 默认值读另一个 memory 时编译结果随 map 顺序变化、通过时每次 Activate 类型不匹配；持久状态默认值按施法作用域检查、在进程回调里读写即 ErrProgramInvariant；cast_start / phase_start 读取可缺省实体时读取处的 exists 守卫在采样点不生效；投射引用（`$primary_target.position`、`$event.*.position`、`$input.target.position`）编译通过却求不出。均为做“求值上下文 → 可用引用”表时逐格对照 Runtime 求值点发现。[本轮](../review/REVIEW-2026-10-06-n09-batch6.md) · [表方案](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)
