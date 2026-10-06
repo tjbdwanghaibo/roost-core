@@ -66,12 +66,15 @@ type Stats struct {
 	Started, Dispatched, Completed, Compensated, Failed, ManualRequired   uint64
 	Conflicts, Duplicates, PublishFailures, StoreFailures, WorkerFailures uint64
 	// LateAfterAbandon 计协调器放弃一个步骤之后才到达的成功 completion（U-0280）：那一步已经生效，
-	// 却不在 CompletedSteps 里、不会被补偿。按（操作，代际）计一次（Store 实现 LateSuccessAlarmStore 时，B1），
-	// 每次记 ERROR，需要运维核对（见 TROUBLESHOOTING T-226）。
+	// 却不在 CompletedSteps 里。按（操作，代际）计一次（正向由回执去重，补偿方向由 LateSuccessAlarmStore，B1）。
+	// 正向的由协调器自动补偿（saga 方向 ④，记 WARN）；补偿方向的只告警（ERROR），需要运维核对（TROUBLESHOOTING T-226）。
 	LateAfterAbandon uint64
 	// StaleIncarnation 计被协调器拒收的旧一生结果（B1）：Resume 或补偿方向的人工 Compensate 进入新一生之后，
 	// 上一生某次尝试的拒绝 / 失败才到达。收件箱也不回放旧一生的拒绝，新一生照常执行，这些结果只计数。
 	StaleIncarnation uint64
+	// StaleAttempt 计被协调器拒收的同一生较早尝试的可重试失败（saga 方向 ③）：协调器在等之后的一次尝试，较早那次的
+	// 可重试失败只说明那一次没有生效，之后的尝试照常执行，它不能推进记录。只计数、记 WARN。
+	StaleAttempt uint64
 }
 
 type Engine struct {
@@ -91,7 +94,7 @@ type Engine struct {
 	started, dispatched, completed, compensated, failed, manualRequired atomic.Uint64
 	conflicts, duplicates, publishFailures                              atomic.Uint64
 	storeFailures, workerFailures, lateAfterAbandon                     atomic.Uint64
-	staleIncarnation                                                    atomic.Uint64
+	staleIncarnation, staleAttempt                                      atomic.Uint64
 }
 
 func NewEngine(store Store, publisher Publisher, options Options) (*Engine, error) {
@@ -331,10 +334,9 @@ func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, err
 			return Record{}, ErrDeadlineExpired
 		}
 		clearLease(&after)
-		if record.Phase == PhaseCompensate || record.CompletedSteps > 0 {
-			after.Phase = PhaseCompensate
-			after.Status = StatusCompensating
-			after.Step = after.CompletedSteps - 1
+		if record.Phase == PhaseCompensate || record.CompletedSteps > 0 || record.LateStep > 0 {
+			// 补偿：先补放弃后才生效的那一步（saga 方向 ④），再按倒序补已完成的前缀。
+			after = nextCompensation(after, now)
 		} else {
 			after.Phase = PhaseForward
 			after.Status = StatusPending
@@ -373,7 +375,7 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 		if record.Status == StatusWaiting {
 			return Record{}, fmt.Errorf("saga: cannot force compensation while a step result is in flight")
 		}
-		if record.CompletedSteps == 0 {
+		if record.CompletedSteps == 0 && record.LateStep == 0 {
 			return Record{}, fmt.Errorf("saga: no completed steps to compensate")
 		}
 		// 当前步骤正在重试退避时人工补偿放弃了它；补偿方向停下的记录进入新一生（B1）。两者都由 stepTransition 决定。
@@ -399,7 +401,9 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 //     收件箱同样不回放旧一生的拒绝，新一生的尝试照常执行。
 //  2. 旧一生的成功：记录正停在这个操作上（在等它，或 Resume 后还没派发、新一生的尝试在退避）就接收为该操作的
 //     结果——成功在任何一生里都不重做，新一生的尝试在收件箱里看到它也只会回放。
-//  3. 同一生、记录在等这个操作：接收（同一生较早尝试的成功、拒绝、可重试失败都算，与收件箱一致）。
+//  3. 同一生、记录在等这个操作：成功与拒绝（操作的结论）从哪次尝试来都接收——收件箱不让之后的尝试再执行，下一次尝试
+//     回放的正是较早那次的 completion；可重试失败（尝试的结论）只接收正在等的那次尝试的（saga 方向 ③）：较早尝试的
+//     可重试失败只说明那一次没生效，正在等的尝试照常执行，接收它会用后一次的尝试计数判用尽、放弃正在执行的尝试（O-S5-7）。
 //  4. 其余按回执与 tombstone 判断重复或“放弃后迟到的成功”（completeNotWaiting）。
 func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, error) {
 	if completion.Validate() != nil {
@@ -426,9 +430,18 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 			accept = positionedAt(record, completion.IdempotencyKey)
 		default:
 			accept = record.Status == StatusWaiting && record.OperationKey == completion.IdempotencyKey
+			if accept && completion.Retryable && completion.CommandID != record.CommandID {
+				e.reportStaleAttempt(record, completion)
+				return record, nil
+			}
 		}
 		if !accept {
-			return e.completeNotWaiting(ctx, record, completion, incarnation)
+			written, err := e.completeNotWaiting(ctx, record, completion, incarnation)
+			if errors.Is(err, ErrConflict) {
+				e.conflicts.Add(1)
+				continue
+			}
+			return written, err
 		}
 		definition, ok := e.definition(record.Type, record.DefinitionVersion)
 		if !ok {
@@ -467,8 +480,9 @@ func positionedAt(record Record, operation string) bool {
 	}
 }
 
-// completeNotWaiting 处理协调器不接收的 completion：已记录的按重复确认；放弃关闭之后才到的成功告警，
-// 按（操作，completion 的代际）只告警一次（B1）；协调器既不在等、也没有记录的返回 ErrNotWaiting。
+// completeNotWaiting 处理协调器不接收的 completion：已记录的按重复确认；放弃关闭之后才到的正向成功交给
+// compensateLateStep 补偿那一步（saga 方向 ④），补偿方向的只告警，按（操作，completion 的代际）只告警一次（B1）；
+// 协调器既不在等、也没有记录的返回 ErrNotWaiting。写记录冲突时返回 ErrConflict，由 Complete 重读重试。
 func (e *Engine) completeNotWaiting(ctx context.Context, record Record, completion Completion, incarnation uint32) (Record, error) {
 	history, err := e.completionHistory(ctx, completion)
 	if err != nil {
@@ -478,6 +492,9 @@ func (e *Engine) completeNotWaiting(ctx context.Context, record Record, completi
 		return Record{}, ErrNotWaiting
 	}
 	if completion.Success && !history.Receipt && history.Closure == OperationAbandoned {
+		if step, ok := lateForwardStep(record, completion.IdempotencyKey); ok {
+			return e.compensateLateStep(ctx, record, completion, step)
+		}
 		first, err := e.markLateSuccessAlarm(ctx, completion, incarnation)
 		if err != nil {
 			return Record{}, err
@@ -501,6 +518,98 @@ func (e *Engine) markLateSuccessAlarm(ctx context.Context, completion Completion
 	return true, nil
 }
 
+// lateForwardStep 判断一份放弃后迟到的成功能否由协调器补偿（saga 方向 ④），返回那一步的步骤号。只处理正向操作，
+// 且记录已离开正向（补偿方向、Failed，或等运维的 ManualRequired）。下面几种按 4.3 的论证不会发生，出现时退回只告警：
+// 记录还在正向非终态、已记着另一个迟到步骤、或这一步在已完成前缀之内。
+func lateForwardStep(record Record, operation string) (int, bool) {
+	phase, step, ok := parseOperationKey(record.ID, operation)
+	if !ok || phase != PhaseForward || step < record.CompletedSteps || (record.LateStep != 0 && record.LateStep != step+1) {
+		return 0, false
+	}
+	return step, record.Phase == PhaseCompensate || record.Status == StatusFailed || record.Status == StatusManualRequired
+}
+
+// compensateLateStep 是方向 C：第 step 步在协调器放弃之后生效了，把它补偿掉。一个 Store 事务里记下这份 completion 的回执、
+// 把 tombstone 改为带结果关闭（stepTransition 收到成功回执时的既有行为；之后的送达按回执去重），并在记录上写 LateStep / LateData：
+//
+//   - 记录在两个补偿之间（Compensating 且还没派发）或已经终态（Failed / Compensated）：立即转去补偿这一步，终态被重开；
+//   - 某个补偿在等结果或在重试退避：不打断它（它可能生效），它接收结果后 nextCompensation 先补这一步；
+//   - ManualRequired：只记下，运维 Resume / Compensate 时先补这一步（等运维的记录不自动跑）。
+func (e *Engine) compensateLateStep(ctx context.Context, record Record, completion Completion, step int) (Record, error) {
+	now := completion.CompletedAt
+	after := record.Clone()
+	after.Version++
+	after.UpdatedAt = now
+	after.LateStep = step + 1
+	after.LateData = append([]byte(nil), completion.Data...)
+	clearLease(&after)
+	if openOperation(record) == "" && record.Status != StatusManualRequired {
+		after.LastError = fmt.Sprintf("step %d took effect after the coordinator abandoned it", step)
+		after = nextCompensation(after, now)
+	}
+	written, outcome, err := e.stepTransition(ctx, record, after, transition{cause: causeLateSuccess, receipt: &completion})
+	if err != nil {
+		return Record{}, err
+	}
+	if outcome == ApplyDuplicate {
+		e.duplicates.Add(1)
+		return e.store.Get(ctx, record.ID)
+	}
+	e.reportLateCompensation(record, completion)
+	e.signal(e.dueKick)
+	return written.Clone(), nil
+}
+
+// nextCompensation 选下一个要补偿的步骤：先补放弃后才生效的那一步（LateStep，saga 方向 ④），再按 CompletedSteps 倒序；
+// 都补完是 Compensated。开始补偿（compensationState）、补偿成功（applyCompletion）、Resume、迟到成功到达都经这里，
+// 选择规则只有这一处。after 的版本、时间、错误由调用方设置。
+func nextCompensation(after Record, now time.Time) Record {
+	after.Phase = PhaseCompensate
+	after.Attempt = 0
+	after.CommandID = ""
+	after.OperationKey = ""
+	switch {
+	case after.LateStep > 0:
+		after.Status = StatusCompensating
+		after.Step = after.LateStep - 1
+		after.NextRunAt = now
+	case after.CompletedSteps > 0:
+		after.Status = StatusCompensating
+		after.Step = after.CompletedSteps - 1
+		after.NextRunAt = now
+	default:
+		after.Status = StatusCompensated
+		after.NextRunAt = time.Time{}
+	}
+	return after
+}
+
+// compensatingLateStep 表示记录当前的补偿操作是迟到的那一步（不是已完成前缀里的一步）。
+func compensatingLateStep(record Record) bool {
+	return record.Phase == PhaseCompensate && record.LateStep > 0 && record.Step == record.LateStep-1
+}
+
+// reportLateCompensation 记一次由协调器自动补偿的迟到成功（saga 方向 ④）：仍计 late_after_abandon（phase=forward），
+// 但已经有了归宿，只记 WARN。
+func (e *Engine) reportLateCompensation(record Record, completion Completion) {
+	e.lateAfterAbandon.Add(1)
+	phase, step := operationPosition(completion.IdempotencyKey)
+	metrics.IncCounter("saga.completion.late_after_abandon_total", metrics.Labels{"saga_type": record.Type, "phase": phase}, 1)
+	slog.Warn("saga: step succeeded after the coordinator abandoned it; compensating it",
+		"saga_id", completion.SagaID, "saga_type", record.Type, "status", record.Status.String(), "step", step,
+		"command_id", completion.CommandID, "operation", completion.IdempotencyKey)
+}
+
+// reportStaleAttempt 记一份被拒收的同一生较早尝试的可重试失败（saga 方向 ③）：协调器在等之后的那次尝试。
+func (e *Engine) reportStaleAttempt(record Record, completion Completion) {
+	e.staleAttempt.Add(1)
+	phase, step := operationPosition(completion.IdempotencyKey)
+	metrics.IncCounter("saga.completion.stale_attempt_total", metrics.Labels{"saga_type": record.Type, "phase": phase}, 1)
+	slog.Warn("saga: ignored a retryable failure from an earlier attempt; waiting for the current attempt",
+		"saga_id", completion.SagaID, "saga_type", record.Type, "phase", phase, "step", step,
+		"command_id", completion.CommandID, "waiting_for", record.CommandID, "error", completion.Error)
+}
+
 // reportStaleIncarnation 记一份被拒收的旧一生结果（B1）。这是 Resume 之后的正常现象，不是故障：只计数、记 WARN。
 func (e *Engine) reportStaleIncarnation(record Record, completion Completion, incarnation uint32) {
 	e.staleIncarnation.Add(1)
@@ -521,15 +630,14 @@ func (e *Engine) completionHistory(ctx context.Context, completion Completion) (
 	return CompletionHistory{Recorded: recorded}, err
 }
 
-// reportLateAfterAbandon 处理“协调器放弃之后才到的成功”（U-0280 C'）：步骤已经生效，但协调器在超时用尽
-// 或 saga 截止时已经关闭了它，CompletedSteps 不含它、补偿也不会撤销它。这里只告警，不重开终态、不自动
-// 补偿；运维按 TROUBLESHOOTING T-226 核对业务数据，Failed / ManualRequired 的 saga 可以 Resume——新一生
-// 的同一步骤会回放这次成功而不是再执行一次。标签只有 saga 类型与方向，保持低基数。
+// reportLateAfterAbandon 告警一份协调器不能自己处理的“放弃之后才到的成功”（U-0280 C'）：补偿方向的操作（正向的由
+// compensateLateStep 补偿，saga 方向 ④），以及 lateForwardStep 判为不应发生的情形。运维按 TROUBLESHOOTING T-226 核对；
+// 补偿方向停在 ManualRequired 时 Resume，新一生的同一补偿会回放这次成功而不是再执行一次。标签只有 saga 类型与方向，保持低基数。
 func (e *Engine) reportLateAfterAbandon(record Record, completion Completion) {
 	e.lateAfterAbandon.Add(1)
 	phase, step := operationPosition(completion.IdempotencyKey)
 	metrics.IncCounter("saga.completion.late_after_abandon_total", metrics.Labels{"saga_type": record.Type, "phase": phase}, 1)
-	slog.Error("saga: step succeeded after the coordinator abandoned it; the effect is not compensated",
+	slog.Error("saga: step succeeded after the coordinator abandoned it; the coordinator cannot account for it",
 		"saga_id", completion.SagaID, "saga_type", record.Type, "status", record.Status.String(), "phase", phase, "step", step,
 		"command_id", completion.CommandID, "operation", completion.IdempotencyKey)
 }
@@ -600,7 +708,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 }
 
 func (e *Engine) Stats() Stats {
-	return Stats{Started: e.started.Load(), Dispatched: e.dispatched.Load(), Completed: e.completed.Load(), Compensated: e.compensated.Load(), Failed: e.failed.Load(), ManualRequired: e.manualRequired.Load(), Conflicts: e.conflicts.Load(), Duplicates: e.duplicates.Load(), PublishFailures: e.publishFailures.Load(), StoreFailures: e.storeFailures.Load(), WorkerFailures: e.workerFailures.Load(), LateAfterAbandon: e.lateAfterAbandon.Load(), StaleIncarnation: e.staleIncarnation.Load()}
+	return Stats{Started: e.started.Load(), Dispatched: e.dispatched.Load(), Completed: e.completed.Load(), Compensated: e.compensated.Load(), Failed: e.failed.Load(), ManualRequired: e.manualRequired.Load(), Conflicts: e.conflicts.Load(), Duplicates: e.duplicates.Load(), PublishFailures: e.publishFailures.Load(), StoreFailures: e.storeFailures.Load(), WorkerFailures: e.workerFailures.Load(), LateAfterAbandon: e.lateAfterAbandon.Load(), StaleIncarnation: e.staleIncarnation.Load(), StaleAttempt: e.staleAttempt.Load()}
 }
 
 func (e *Engine) coordinatorLoop(ctx context.Context) {
@@ -760,7 +868,12 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 			topic = step.ForwardTopic + ".compensate"
 		}
 	}
-	command := Command{ID: after.CommandID, IdempotencyKey: after.OperationKey, SagaID: record.ID, SagaType: record.Type, DefinitionVersion: record.DefinitionVersion, BusinessKey: record.BusinessKey, Step: record.Step, StepName: step.Name, Phase: record.Phase, Attempt: after.Attempt, Topic: topic, Payload: append([]byte(nil), record.Data...), DeadlineAt: after.NextRunAt, CreatedAt: now}
+	payload := record.Data
+	if compensatingLateStep(record) {
+		// 补偿迟到生效的那一步，载荷是它自己的正向成功 Data（saga 方向 ④）。
+		payload = record.LateData
+	}
+	command := Command{ID: after.CommandID, IdempotencyKey: after.OperationKey, SagaID: record.ID, SagaType: record.Type, DefinitionVersion: record.DefinitionVersion, BusinessKey: record.BusinessKey, Step: record.Step, StepName: step.Name, Phase: record.Phase, Attempt: after.Attempt, Topic: topic, Payload: append([]byte(nil), payload...), DeadlineAt: after.NextRunAt, CreatedAt: now}
 	outbox := &OutboxRecord{Command: command, NextAttemptAt: now, CreatedAt: now}
 	_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeDispatch, fenced: true, outbox: outbox})
 	if err == nil {
@@ -779,7 +892,8 @@ func (e *Engine) applyCompletion(record Record, definition Definition, result Co
 	after.OperationKey = ""
 	clearLease(&after)
 	if result.Success {
-		if result.Data != nil {
+		late := compensatingLateStep(record)
+		if result.Data != nil && !late {
 			after.Data = append(after.Data[:0], result.Data...)
 		}
 		after.Attempt = 0
@@ -798,16 +912,13 @@ func (e *Engine) applyCompletion(record Record, definition Definition, result Co
 				after.NextRunAt = now
 			}
 		} else {
-			after.CompletedSteps--
-			if after.CompletedSteps <= 0 {
-				after.CompletedSteps = 0
-				after.Status = StatusCompensated
-				after.NextRunAt = time.Time{}
+			if late {
+				// 迟到的那一步补偿完了（saga 方向 ④）：它不在已完成前缀里，CompletedSteps 不变；它的结果不进入 Data 链。
+				after.LateStep, after.LateData = 0, nil
 			} else {
-				after.Step = after.CompletedSteps - 1
-				after.Status = StatusCompensating
-				after.NextRunAt = now
+				after.CompletedSteps--
 			}
+			after = nextCompensation(after, now)
 		}
 		return after
 	}
@@ -889,16 +1000,12 @@ func compensationState(after Record, reason string, now time.Time) Record {
 	after.CommandID = ""
 	after.OperationKey = ""
 	clearLease(&after)
-	if after.CompletedSteps == 0 {
+	if after.CompletedSteps == 0 && after.LateStep == 0 {
 		after.Status = StatusFailed
 		after.NextRunAt = time.Time{}
 		return after
 	}
-	after.Status = StatusCompensating
-	after.Phase = PhaseCompensate
-	after.Step = after.CompletedSteps - 1
-	after.NextRunAt = now
-	return after
+	return nextCompensation(after, now)
 }
 
 func stepFor(record Record, definition Definition) (Step, bool) {
@@ -909,6 +1016,27 @@ func stepFor(record Record, definition Definition) (Step, bool) {
 }
 func operationKey(id string, phase Phase, step int) string {
 	return fmt.Sprintf("%s:%d:%d", id, phase, step)
+}
+
+// parseOperationKey 是 operationKey 的逆：取出这个 saga 的操作的方向与步骤号；不是这个 saga 的操作返回 false。
+func parseOperationKey(id, operation string) (Phase, int, bool) {
+	rest, ok := strings.CutPrefix(operation, id+":")
+	if !ok {
+		return 0, 0, false
+	}
+	phaseText, stepText, ok := strings.Cut(rest, ":")
+	if !ok {
+		return 0, 0, false
+	}
+	phase, err := strconv.Atoi(phaseText)
+	if err != nil || (Phase(phase) != PhaseForward && Phase(phase) != PhaseCompensate) {
+		return 0, 0, false
+	}
+	step, err := strconv.Atoi(stepText)
+	if err != nil || step < 0 {
+		return 0, 0, false
+	}
+	return Phase(phase), step, true
 }
 
 // commandID names one dispatch attempt. Incarnation 0 keeps the historical

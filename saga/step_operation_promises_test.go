@@ -97,7 +97,8 @@ func TestNativeStepTakesEffectAtMostOncePerOperation(t *testing.T) {
 		w.assertEffective(k.IdempotencyKey, 0)
 	})
 
-	t.Run("c': success projected before the deadline but delivered after abandonment is alarmed, not reopened", func(t *testing.T) {
+	// saga 方向 ④（2026-10-07）：之前是“只告警、不重开”，现在重开去补偿这一步；告警计数不变。
+	t.Run("c': success projected before the deadline but delivered after abandonment is alarmed and compensated", func(t *testing.T) {
 		w := newNativeWorld(t, 1, time.Now().UTC())
 		w.tick(0)
 		k := w.pendingCommand()
@@ -110,8 +111,8 @@ func TestNativeStepTakesEffectAtMostOncePerOperation(t *testing.T) {
 		duplicatesBefore := w.engine.Stats().Duplicates
 		w.deliverEffect(recordK)
 		record := w.record()
-		if record.Status != StatusFailed || record.CompletedSteps != 0 {
-			t.Fatalf("a late success reopened or advanced an abandoned saga: %+v", record)
+		if record.Status != StatusCompensating || record.Phase != PhaseCompensate || record.Step != 0 || record.CompletedSteps != 0 {
+			t.Fatalf("a late success did not bring the abandoned saga back to compensate only that step: %+v", record)
 		}
 		if grown := counterValue("saga.completion.late_after_abandon_total") - before; grown != 1 {
 			t.Errorf("success of %s arrived after the coordinator abandoned the step; saga.completion.late_after_abandon_total grew by %d, want 1 (duplicates grew by %d): an effective but uncompensated step must be visible",
@@ -143,7 +144,9 @@ func TestNativeStepTakesEffectAtMostOncePerOperation(t *testing.T) {
 // S5 与 U-0280 重叠的交错：deadline / compensation / Resume 与晚到回执、同一操作多个结果或旧尝试、
 // receipt / tombstone TTL 之后的重投。
 func TestNativeStepOperationInterleavingsWithCoordinatorDecisions(t *testing.T) {
-	t.Run("Resume after a late effective step replays it instead of running it again", func(t *testing.T) {
+	// saga 方向 ④（2026-10-07）：之前迟到成功只告警、saga 仍 Failed，运维 Resume 让新一生回放它、继续向前。现在协调器
+	// 自己把 saga 带回补偿、只补偿这一步，不需要 Resume（Compensating 也不能 Resume）；这一步仍然只执行过一次。
+	t.Run("a late effective step on a failed saga is compensated, not run again", func(t *testing.T) {
 		w := newNativeWorld(t, 1, time.Now().UTC())
 		w.tick(0)
 		k := w.pendingCommand()
@@ -152,24 +155,24 @@ func TestNativeStepOperationInterleavingsWithCoordinatorDecisions(t *testing.T) 
 			t.Fatal("attempt projected within its deadline was skipped")
 		}
 		w.tick(5 * time.Second)
-		w.deliverEffect(recordK) // 放弃之后才到：告警，saga 仍 Failed
-		if _, err := w.engine.Resume(w.ctx, ResumeRequest{ID: w.sagaID, Now: w.at(6 * time.Second)}); err != nil {
-			t.Fatal(err)
-		}
+		w.deliverEffect(recordK) // 放弃之后才到：补偿这一步
 		w.tick(6 * time.Second)
-		resumed := w.pendingCommand()
-		if !strings.Contains(resumed.ID, ":r1:") {
-			t.Fatalf("resumed command %q is not in a new incarnation", resumed.ID)
+		compensation := w.pendingCommand()
+		if compensation.Phase != PhaseCompensate || compensation.Step != 0 {
+			t.Fatalf("the late effective step was not compensated: %+v", compensation)
 		}
-		w.deliverCommand(w.inboxB, resumed)
-		w.deliverReplays()
-		if record := w.record(); record.Step != 1 || record.CompletedSteps != 1 {
-			t.Fatalf("Resume did not pick up the effective step: %+v", record)
+		w.completeCompensation(compensation, "")
+		if record := w.record(); record.Status != StatusCompensated {
+			t.Fatalf("want Compensated after compensating the late step: %+v", record)
 		}
 		w.assertEffective(k.IdempotencyKey, 1)
+		if got := w.executions(k.IdempotencyKey); got != 1 {
+			t.Fatalf("debit handler ran %d times, want 1", got)
+		}
 	})
 
-	t.Run("saga deadline abandons a step whose success arrives later: alarm, no reopen", func(t *testing.T) {
+	// saga 方向 ④（2026-10-07）：之前是“告警、不重开”，现在告警并重开去补偿这一步。
+	t.Run("saga deadline abandons a step whose success arrives later: alarm and compensate it", func(t *testing.T) {
 		w := newNativeWorldWithDeadline(t, 15, time.Now().UTC(), 7*time.Second)
 		w.tick(0)
 		k := w.pendingCommand()
@@ -181,8 +184,8 @@ func TestNativeStepOperationInterleavingsWithCoordinatorDecisions(t *testing.T) 
 		w.tick(8 * time.Second) // saga 截止 → 没有已完成步骤 → Failed，操作被放弃
 		before := counterValue("saga.completion.late_after_abandon_total")
 		w.deliverEffect(recordK)
-		if record := w.record(); record.Status != StatusFailed {
-			t.Fatalf("late success changed a saga closed by its deadline: %+v", record)
+		if record := w.record(); record.Status != StatusCompensating || record.Step != 0 || record.LateStep != 1 {
+			t.Fatalf("late success did not bring a saga closed by its deadline back to compensate the step: %+v", record)
 		}
 		if grown := counterValue("saga.completion.late_after_abandon_total") - before; grown != 1 {
 			t.Fatalf("late success after the saga deadline grew the alarm by %d, want 1", grown)

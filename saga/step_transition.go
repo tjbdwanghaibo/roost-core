@@ -31,6 +31,8 @@ const (
 	causeManualCompensate
 	// causeResume：人工 / 自动 Resume。
 	causeResume
+	// causeLateSuccess：放弃之后才到的正向成功，记下回执并补偿那一步（saga 方向 ④）。
+	causeLateSuccess
 )
 
 // transition 是一次写记录除目标状态以外的输入。
@@ -50,7 +52,8 @@ type transition struct {
 // 这里构造、只在这里交给 Store，调用方拿到的是写入的记录，拿不到可改写的请求。
 //
 //  1. 关闭：before 开着的操作（openOperation）在 after 里不再开着，就关闭它；接收了成功结果时关闭结果所属的操作
-//     （Resume 之后还没派发、记录停在该操作上时 before 没有开着的操作，B1）。
+//     （Resume 之后还没派发、记录停在该操作上时 before 没有开着的操作，B1；放弃后迟到的正向成功，它的操作早已放弃关闭，
+//     这里改为带结果关闭，saga 方向 ④）。
 //  2. 代际：after.Incarnation 只由 before 与原因决定，调用方在 after 上写的值不起作用。Resume 总是开新一生；
 //     人工 Compensate 只在补偿方向停下的记录上开（B1：要重新执行的补偿步骤在这一生里已经派发过，不换代会复用
 //     上一轮的 CommandID，收件箱只会回放旧的拒绝或报身份冲突）。

@@ -86,8 +86,9 @@ type CompletionHistory struct {
 }
 
 // CompletionHistoryStore 是 Store 的可选扩展。实现它的 Store 让协调器区分“重复的结果”和
-// “放弃之后才到的成功”：后者说明那一步已经生效、却没有被纳入补偿，协调器记 ERROR 与计数
-// （saga.completion.late_after_abandon_total），但不重开终态。没实现的 Store 一律按重复处理。
+// “放弃之后才到的成功”：后者说明那一步已经生效、却没有被纳入补偿。正向的协调器把 saga 带回补偿、只补偿那一步
+// （saga 方向 ④，终态会被重开），补偿方向的记 ERROR 与计数（saga.completion.late_after_abandon_total）。
+// 没实现的 Store 一律按重复处理，迟到生效的步骤不会被补偿。
 type CompletionHistoryStore interface {
 	CompletionHistory(context.Context, Completion) (CompletionHistory, error)
 }

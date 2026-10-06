@@ -89,8 +89,9 @@ func TestCoordinatorChecksTheIncarnationOfACompletion(t *testing.T) {
 				k.ID, grown)
 		}
 		w.assertEffective(k.IdempotencyKey, 1)
-		if record := w.record(); record.Status != StatusFailed || record.CompletedSteps != 0 {
-			t.Fatalf("late success changed the failed saga: %+v", record)
+		// saga 方向 ④（2026-10-07）：迟到的成功不再只告警，saga 被带回补偿、只补偿这一步（之前断言“Failed 不变”）。
+		if record := w.record(); record.Status != StatusCompensating || record.Step != 0 || record.LateStep != 1 || record.CompletedSteps != 0 {
+			t.Fatalf("late success did not bring the failed saga back to compensate that step: %+v", record)
 		}
 	})
 

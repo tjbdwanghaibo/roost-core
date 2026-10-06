@@ -7,44 +7,9 @@ import (
 	"time"
 )
 
-// U-0280 复核：协调器在等最后一次尝试时接收了较早一次尝试晚到的可重试失败，重试用尽而关闭操作。
-// 这次关闭没有让协调器知道任何生效的结果——它和“超时用尽”一样是放弃：正在执行的最后一次尝试
-// 读到较早尝试只是可重试失败，照常执行并生效，它的成功到达时 CompletedSteps 不含它、补偿不会撤销它，
-// 必须告警，不能当作重复静默确认。
-func TestNativeStepSuccessAfterAFailureClosedOperationIsAlarmed(t *testing.T) {
-	w := newNativeWorld(t, 2, time.Now().UTC())
-	w.outcome = func(command Command) Completion {
-		if command.Attempt == 1 {
-			return Completion{Success: false, Retryable: true, Error: "busy"}
-		}
-		return Completion{Success: true}
-	}
-	w.tick(0)
-	k := w.pendingCommand()
-	recordK := w.commitAttempt(w.inboxA, k)
-	if !w.project(recordK) { // k 在截止前投影：一次可重试失败，completion effect 还在路上
-		t.Fatal("attempt k projected within its deadline was skipped")
-	}
-	w.tick(5 * time.Second)  // k 超时 → 退避
-	w.tick(10 * time.Second) // 发出最后一次尝试 k+1
-	k1 := w.pendingCommand()
-	w.deliverEffect(recordK) // k 的可重试失败在协调器等 k+1 时到达 → 接收，重试用尽 → Failed
-	if record := w.record(); record.Status != StatusFailed {
-		t.Fatalf("the stale retryable failure on the last attempt did not exhaust the step: %+v", record)
-	}
-	before := counterValue("saga.completion.late_after_abandon_total")
-	duplicatesBefore := w.engine.Stats().Duplicates
-	w.deliverCommand(w.inboxB, k1) // k+1 看到 k 只是可重试失败 → 执行并生效
-	w.deliverEffects()
-	w.assertEffective(k.IdempotencyKey, 1)
-	if record := w.record(); record.Status != StatusFailed || record.CompletedSteps != 0 {
-		t.Fatalf("late success changed the failed saga: %+v", record)
-	}
-	if grown := counterValue("saga.completion.late_after_abandon_total") - before; grown != 1 {
-		t.Errorf("attempt %s took effect after the coordinator closed the operation on a stale retryable failure; saga.completion.late_after_abandon_total grew by %d, want 1 (duplicates grew by %d): the debit is neither in CompletedSteps nor compensated, and nobody is told",
-			k1.ID, grown, w.engine.Stats().Duplicates-duplicatesBefore)
-	}
-}
+// U-0280 复核的“较早尝试晚到的可重试失败让协调器在最后一次尝试执行中放弃”（O-S5-7）已由 saga 方向 ③ 去掉（2026-10-07）：
+// 协调器不再接收那份失败，原用例 TestNativeStepSuccessAfterAFailureClosedOperationIsAlarmed 改写为
+// saga_direction_3_4_promises_test.go 的 TestNativeStepStaleAttemptRetryableFailureDoesNotAbandonTheLastAttempt。
 
 // 同一承诺在 MongoStore 上：以失败 receipt 关闭的 operation 记为放弃关闭，只有成功 receipt 记为带结果关闭。
 func TestMongoStoreTombstoneOfAFailureCloseIsAbandoned(t *testing.T) {

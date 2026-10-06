@@ -223,7 +223,14 @@ type Record struct {
 	// resumed operation can never reuse a CommandID from a previous life of
 	// the same Saga (Resume resets Attempt), which would collide with stale
 	// completion receipts and stall the Saga as a false duplicate.
-	Incarnation  uint32
+	Incarnation uint32
+	// LateStep 是放弃之后才生效、还没补偿的正向步骤号 + 1，0 表示没有（saga 方向 ④，方向 C）。协调器放弃了第 s 步
+	// （超时用尽、saga 截止、人工 Compensate、定义缺失），这一步的某次尝试却在截止前生效了，成功在放弃之后才送达：
+	// 它不在 CompletedSteps 里，补偿的倒序不会撤销它。协调器记下它，下一个补偿先补它（nextCompensation）。
+	// 正向一次只开一个操作、放弃即离开正向，所以最多一个；恒有 LateStep-1 >= CompletedSteps。
+	LateStep int
+	// LateData 是那次迟到成功的 Completion.Data，补偿第 LateStep-1 步的命令载荷；它的补偿结果不进入 Data 链。
+	LateData     []byte
 	Version      uint64
 	Data         []byte
 	LastError    string
@@ -238,16 +245,30 @@ type Record struct {
 
 func (r Record) Clone() Record {
 	r.Data = append([]byte(nil), r.Data...)
+	if r.LateData != nil {
+		r.LateData = append([]byte(nil), r.LateData...)
+	}
 	return r
 }
 
 func (r Record) Validate() error {
 	waitingFields := r.OperationKey != "" && len(r.OperationKey) <= 192 && r.CommandID != "" && len(r.CommandID) <= 192 && r.Attempt > 0
 	leaseValid := (r.Lease.Owner == "" && r.Lease.Token == 0 && r.Lease.Until.IsZero()) || (strings.TrimSpace(r.Lease.Owner) != "" && len(r.Lease.Owner) <= 256 && r.Lease.Token > 0 && !r.Lease.Until.IsZero())
-	if !validSubjectToken(r.ID, 128) || strings.TrimSpace(r.Type) != r.Type || r.Type == "" || len(r.Type) > 128 || r.DefinitionVersion == 0 || strings.TrimSpace(r.BusinessKey) != r.BusinessKey || r.BusinessKey == "" || len(r.BusinessKey) > 512 || len(r.Data) > 4<<20 || len(r.LastError) > 4096 || r.Status < StatusPending || r.Status > StatusManualRequired || r.Phase < PhaseForward || r.Phase > PhaseCompensate || r.Version == 0 || r.Step < 0 || r.CompletedSteps < 0 || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || (!r.Status.Terminal() && r.NextRunAt.IsZero()) || (r.Status == StatusWaiting) != waitingFields || (r.Status != StatusWaiting && (r.OperationKey != "" || r.CommandID != "")) || (r.Status == StatusCompensating && (r.Phase != PhaseCompensate || r.CompletedSteps == 0)) || (r.Status == StatusCompensated && r.CompletedSteps != 0) || !leaseValid {
+	if !validSubjectToken(r.ID, 128) || strings.TrimSpace(r.Type) != r.Type || r.Type == "" || len(r.Type) > 128 || r.DefinitionVersion == 0 || strings.TrimSpace(r.BusinessKey) != r.BusinessKey || r.BusinessKey == "" || len(r.BusinessKey) > 512 || len(r.Data) > 4<<20 || len(r.LastError) > 4096 || r.Status < StatusPending || r.Status > StatusManualRequired || r.Phase < PhaseForward || r.Phase > PhaseCompensate || r.Version == 0 || r.Step < 0 || r.CompletedSteps < 0 || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || (!r.Status.Terminal() && r.NextRunAt.IsZero()) || (r.Status == StatusWaiting) != waitingFields || (r.Status != StatusWaiting && (r.OperationKey != "" || r.CommandID != "")) || (r.Status == StatusCompensating && (r.Phase != PhaseCompensate || (r.CompletedSteps == 0 && r.LateStep == 0))) || (r.Status == StatusCompensated && r.CompletedSteps != 0) || !leaseValid || !r.lateStepValid() {
 		return ErrInvalidRecord
 	}
 	return nil
+}
+
+// lateStepValid 检查迟到步骤（LateStep / LateData，saga 方向 ④）的不变量：没有迟到步骤时没有载荷；有时它在已完成前缀之外，
+// 记录在补偿方向或等运维处理（ManualRequired），不会在 Completed / Compensated / Failed 上。
+func (r Record) lateStepValid() bool {
+	if r.LateStep == 0 {
+		return len(r.LateData) == 0
+	}
+	return r.LateStep > 0 && r.LateStep-1 >= r.CompletedSteps && len(r.LateData) <= 4<<20 &&
+		(r.Phase == PhaseCompensate || r.Status == StatusManualRequired) &&
+		r.Status != StatusCompleted && r.Status != StatusCompensated && r.Status != StatusFailed
 }
 
 type Command struct {

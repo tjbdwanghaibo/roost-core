@@ -18,8 +18,8 @@ Saga 用于跨越多个独立事务域的业务流程。单个 Nest handler、�
 - 按 `CommandID` 保存的 completion receipt 与状态推进在一个存储事务中提交；
 - operation 关闭时写入有 TTL 的 tombstone，并在同一事务清理尚未发布的旧 attempt；
 - 新 attempt 会在同一事务替换该 operation 仍排队的旧 outbox，避免重试扇出；
-- 重复、迟到的 command/result 不会重复推进状态；协调器放弃一个步骤之后才到达的成功只告警（计数
-  `saga.completion.late_after_abandon_total`、ERROR 日志），不重开终态（U-0280）。
+- 重复、迟到的 command/result 不会重复推进状态；协调器放弃一个**正向**步骤之后才到达的成功说明它已生效，协调器把 saga 带回补偿、
+  只补偿这一步（`Failed` / `Compensated` 会被重开，saga 方向 ④）；补偿方向的只告警（计数 `saga.completion.late_after_abandon_total`、ERROR 日志，U-0280）。
 
 Nest start、command 和 completion 使用严格的 `WireVersion=1` envelope；未知版本直接
 拒绝并进入受退避约束的重新投递，不通过猜测字段做隐式兼容。协议变更必须显式升级版本。
@@ -165,17 +165,22 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
      旧一生的拒绝 / 失败**不接收**，只计 `Stats().StaleIncarnation` 与 `saga.completion.stale_incarnation_total{saga_type,phase}`
      （新一生照常执行，收件箱也不回放它）；旧一生的成功在记录正停在这个操作上（在等它，或 Resume 之后还没派发、新一生的尝试在退避）时
      **接收为该操作的结果**，不再派发这一步；同一生的结果按原规则接收。不在这个操作上的旧一生成功按第 4 条处理。
-4. **放弃之后迟到的成功只告警**：协调器在重试用尽、saga 截止、人工 `Compensate` 或定义缺失时关闭操作，tombstone 记为“放弃关闭”；
-   只有接收了**成功**才关闭的记为“带结果关闭”，以失败关闭（可重试失败用尽、拒绝）同样记为放弃关闭——协调器在等最后一次尝试时
-   可能接收较早尝试晚到的可重试失败而用尽重试，正在执行的最后一次尝试仍会生效（审查 2026-10-05）。放弃关闭之后才到的成功说明那一步已生效、却不在 `CompletedSteps` 里、不会被补偿：
-   记 ERROR、`Stats().LateAfterAbandon` 与 `saga.completion.late_after_abandon_total{saga_type,phase}`，**不重开终态、不自动补偿**。
-   同一个成功会多次送达（effect 重投、过期投递的回放、JetStream 重投），告警**按（操作，代际）只记一次**：tombstone 上记
-   `late_alarms.r<代际>`（`LateSuccessAlarmStore`，B1），之后的送达计 `Duplicates`。
-   运维按 TROUBLESHOOTING T-226 核对：saga 停在 Failed（这一步前面没有已完成步骤）时可以 `Resume`，新一生的同一步骤
-   （原生收件箱）回放这次成功、继续往后走，而不是再执行；成功若在 Resume 之后、新一生派发之前才到达，协调器直接把它接收为
-   这一步的结果，不告警（第 3 条）。已进入补偿或 Compensated 的，补偿不含这一步，要按业务手工撤销它。
-   B 之后这只剩“截止前已投影、completion 在放弃后才送达”（effect 发布延迟）、“较早尝试晚到的失败让协调器在最后一次尝试执行中放弃”
-   与时钟偏差三种来源。
+   - **可重试失败只接收正在等的那次尝试的**（saga 方向 ③，2026-10-07）：同一生里较早一次尝试晚到的可重试失败只说明那一次没生效，
+     正在等的尝试照常执行；协调器不接收它，计 `Stats().StaleAttempt` 与 `saga.completion.stale_attempt_total{saga_type,phase}`（WARN）。
+     成功与本生的拒绝是操作的结论，从哪次尝试来都接收——下一次尝试回放的正是较早那次的 completion（`CommandID` 是那次的）。
+4. **放弃之后迟到的成功**：协调器在重试用尽、saga 截止、人工 `Compensate` 或定义缺失时关闭操作，tombstone 记为“放弃关闭”；
+   只有接收了**成功**才关闭的记为“带结果关闭”，以失败关闭（可重试失败用尽、拒绝）同样记为放弃关闭。放弃关闭之后才到的成功说明那一步已生效、
+   却不在 `CompletedSteps` 里（saga 方向 ③ 之后来源只剩“截止前已生效、completion 在放弃后才送达”与时钟偏差）：
+   - **正向步骤 s：协调器补偿它**（saga 方向 ④，即 U-0280 的方向 C，2026-10-07）。同一个 Store 事务里记下这份成功的回执、tombstone 改为带结果关闭、
+     记录写 `LateStep = s+1` 与 `LateData = Data`；记录在两个补偿之间或已终态（`Failed` / `Compensated`）时立即进入 `Compensating` 补偿第 s 步
+     （**终态会被重开**，结束后回到 `Compensated`）；某个补偿正在等结果或重试退避时不打断它，它接收结果后先补第 s 步；`ManualRequired` 只记下，
+     运维 `Resume` / `Compensate` 时先补第 s 步。补偿第 s 步的载荷是 `LateData`，它的结果不进入 `Data` 链；之后回到 `CompletedSteps` 的倒序。
+     第 s 步在“下一个边界”补偿，可能排在一个已在途的补偿之后（在途的补偿不能放弃，它可能生效）。计 `late_after_abandon_total{phase="forward"}`、WARN。
+   - **补偿方向：只告警**：记 ERROR、`Stats().LateAfterAbandon` 与 `saga.completion.late_after_abandon_total{phase="compensate"}`，不改记录。
+     补偿方向的放弃都停在 `ManualRequired`，运维按 TROUBLESHOOTING T-226 核对后 `Resume`，新一生的同一补偿回放这次成功而不是再执行。
+   同一个成功会多次送达（effect 重投、过期投递的回放、JetStream 重投），**按（操作，代际）只计一次**：正向由回执去重，补偿方向由 tombstone 上的
+   `late_alarms.r<代际>`（`LateSuccessAlarmStore`，B1）；之后的送达计 `Duplicates`。成功若在 Resume 之后、新一生派发之前才到达，协调器直接把它接收为
+   这一步的结果（第 3 条），不是迟到。
 5. **分工**：框架兑现跨尝试幂等（收件箱 + 租约封顶 + 协调器告警），步骤模板不再需要自己按 `IdempotencyKey` 做业务幂等——
    前提是业务写在生效点的同一事务里（原生：Nest 事务；Mongo 步骤：handler 拿到的 Mongo 事务 ctx）。不在事务里的副作用
    （调用另一个服务，如 gift deliver 发邮件）不受这个保证，仍要按 `IdempotencyKey` 幂等（mail 的 `RequestID`）。
@@ -217,7 +222,8 @@ fence 到 `ManualRequired`（放弃关闭，第 4 条），之后的重投按迟
 - 每次授予租约（新建、接管、接替）只读写这个操作的一份状态文档，不按操作查询、没有上限：尝试次数、Resume 次数与历史都不进入判定
   （取代了 RR-20261006-15 / -16 的 claim 扫描、`outcome` 字段与 4096 / 8192 上限）。
 - **持久格式**：tombstone（`_saga_operations`）有 `closure` 字段，B1 再多 `late_alarms` 子文档（`r<代际>: 首次告警时间`）；没有 `closure` 的 tombstone
-  不告警，没有 `late_alarms` 的 tombstone 第一次迟到成功照常告警并补上标记。收件箱的持久格式见下面「操作状态文档」。
+  不告警，没有 `late_alarms` 的 tombstone 第一次迟到成功照常告警并补上标记。saga 记录（`_sagas`）在有待补偿的迟到步骤时多 `late_step` / `late_data`
+  （saga 方向 ④，正常记录没有）；自定义 Store 要在 `Create` / `Get` / `Apply` 中原样保存 `Record.LateStep` / `LateData`。收件箱的持久格式见下面「操作状态文档」。
 - **混跑**：B1 之前的协调器按 `IdempotencyKey` 接收任一代际的结果、每次送达都告警、人工 `Compensate` 不换代——它处理的 completion 与运维操作不受 B1 约束，
   记录本身仍按版本号 fence，新旧协调器不会互相覆盖。步骤进程不支持新旧混跑（见「操作状态文档」的升级步骤）。
   已生成工程不提供迁移（维护者决定）；仓库内模板与生成物已同步。
@@ -249,6 +255,7 @@ fence 到 `ManualRequired`（放弃关闭，第 4 条），之后的重投按迟
 - 补偿持续失败：进入 `ManualRequired`；
 - `Resume(ResumeRequest)`：故障修复后继续失败或补偿流程；原 deadline 已过期时必须
   显式提供新的未来 deadline，或设置 `ClearDeadline`；
+- 放弃之后才到的正向成功：自动补偿那一步，`Failed` / `Compensated` 会被重开回 `Compensating`（上文契约第 4 条，saga 方向 ④）；
 - `Compensate`：仅在没有 in-flight step 时允许人工发起补偿（中止正向、开始补偿）。在补偿方向停下的 `ManualRequired`
   上调用时与 `Resume` 一样进入新一生（`Incarnation+1`）：要重新执行的补偿步骤在这一生里已经派发过，不换代就会复用上一轮
   的 `CommandID`，收件箱只会回放旧的拒绝或报身份冲突（B1）。**补偿方向 `ManualRequired` 修复原因后的正确做法是 `Resume`**

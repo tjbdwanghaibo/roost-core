@@ -1,0 +1,18 @@
+# saga 方向 ③④：私有三节点副本集（scripts/mirror-local.sh，offset 26900）上 go test -tags integration -count=1 ./saga/（2026-10-07，分支 saga34）
+--- PASS: TestRealNatsCompletionNakBackoffAndMaxDeliver (8.83s)
+--- PASS: TestRealMongoCoordinatorLeaseTakeover (3.18s)
+--- SKIP: TestRealSagaCrossProcessChild (0.00s)
+    cross_process_real_integration_test.go:308: SIGKILL coordinator-a with 16/60 sagas completed, 1 saga leases held by it
+    cross_process_real_integration_test.go:384: recovered in 1m10.54s: 60 sagas completed, 120 operations, 120 committed step executions (99 by coordinator-b), 0 operations committed by more than one attempt (want 0), 120 coordinator receipts
+--- PASS: TestRealSagaCrossProcessKillRecovers (75.25s)
+--- PASS: TestRealMongoReserveDeterministicMarkCompletedFailureIsReportedNotSilent (5.33s)
+--- PASS: TestRealMongoLateSuccessAlarmIsMarkedOnce (1.04s)
+--- PASS: TestRealMongoStepProcessesFenceAttemptsInFlightAcrossProcesses (6.26s)
+--- PASS: TestRealMongoStepProcessesConcurrentAttemptsTakeEffectOnce (0.69s)
+--- PASS: TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce (1.96s)
+--- PASS: TestRealMongoOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife (23.15s)
+--- PASS: TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce (0.45s)
+--- PASS: TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize (1.79s)
+--- PASS: TestRealMongoTakeoverFencesTheEarlierAttemptsProjection (0.57s)
+ok  	github.com/tjbdwanghaibo/roost-core/saga	136.594s
+--- PASS: TestRealMongoLateSuccessReopensACompensatedSagaOnce（新增，-count=3，单独跑）
