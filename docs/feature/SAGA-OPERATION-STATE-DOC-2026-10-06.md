@@ -169,7 +169,7 @@ status = pending, result/completion 清空, superseded（接替时追加）, ref
 
 ## 实施状态
 
-**已实施，未发版**（分支 `sagadoc`，提交号见 DECISIONS-PENDING 第十三轮“saga 收件箱改为单状态文档”一行）。证据在 [evidence/sagadoc](evidence/sagadoc)。
+**已实施，未发版**（`a013f9ff`，分支 `sagadoc`）。证据在 [evidence/sagadoc](evidence/sagadoc)。
 
 ### 改动
 
