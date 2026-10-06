@@ -8,7 +8,7 @@ package skill
 //   - 停止失败的衍生物记录标成 stop_pending（复用 RR-21 / RR-23 的记录生命周期：记录钉住 cast，cast ID 不复用）；
 //   - 之后的 tick 按退避重试 StopSpawn，不每个 tick 打宿主；成功后记录按 RR-23 的规则随 cast 回收；
 //   - 重试有次数上限，到上限发 skill.spawn.stop_retry_exhausted.total 与一条日志，记录保留；
-//   - 待停止条目数受 MaxStopPendingSpawns 约束；
+//   - 待停止条目数受 MaxStopPendingSpawns 约束（超限的最早条目挪进已放弃分区，维护者第十三轮“待停止上限”选 B）；
 //   - 待停止状态进 checkpoint，恢复后继续重试。
 
 import (
@@ -30,6 +30,7 @@ type stopRetryHost struct {
 	failStops int
 	tick      Tick
 	stopTicks []Tick
+	stopIDs   []SpawnID
 }
 
 func (host *stopRetryHost) Advance(tick Tick) (WorldRevision, error) {
@@ -39,6 +40,7 @@ func (host *stopRetryHost) Advance(tick Tick) (WorldRevision, error) {
 
 func (host *stopRetryHost) StopSpawn(command SpawnStopCommand, state SpawnHostState) (CommitReceipt, error) {
 	host.stopTicks = append(host.stopTicks, host.tick)
+	host.stopIDs = append(host.stopIDs, command.Meta.SpawnID)
 	if host.failStops != 0 {
 		if host.failStops > 0 {
 			host.failStops--
@@ -257,14 +259,17 @@ func captureDefaultLog(t *testing.T) *bytes.Buffer {
 }
 
 // 宿主一直停不下：重试按退避进行、到 SpawnStopRetryLimit 告警（指标 + 一条日志）后不再打宿主，记录保留；
-// 待停止条目数受 MaxStopPendingSpawns 约束，超限时丢最早的已告警条目并告警。
+// 待停止条目数受 MaxStopPendingSpawns 约束，超限时最早的已告警条目挪进已放弃分区并告警。
+// 2026-10-07 按维护者第十三轮“待停止上限”选 B 改断言：之前要求超限的记录被删掉（skill.spawn.stop_pending_dropped.total、
+// cast 1 名下不剩记录、日志 “stop-pending spawn dropped”）；现在记录留下、status abandoned，计 skill.spawn.abandoned.total，
+// 日志 “stop-pending spawn abandoned”。retained casts 的上界不变（已放弃的记录不钉住 cast）。
 func TestStopRetriesAreBoundedAndAlertWhenExhausted(t *testing.T) {
 	program, environment := chargeSummonThatCannotPay(t)
 	base := runtimeTestHost(environment)
 	setTerminalMana(base, 10)
 	host := &stopRetryHost{MemoryHost: base, failStops: -1}
 	logs := captureDefaultLog(t)
-	exhaustedBefore, droppedBefore := counterValue(MetricSpawnStopRetryExhausted), counterValue(MetricSpawnStopPendingDropped)
+	exhaustedBefore, abandonedBefore := counterValue(MetricSpawnStopRetryExhausted), counterValue(MetricSpawnAbandoned)
 	options := RuntimeOptions{SpawnStopRetryBackoff: 2, SpawnStopRetryLimit: 3, MaxStopPendingSpawns: 2, CompletedCastLimit: 1}
 	runtime := NewRuntime(host, options)
 	if id, err := runtime.Start(program, CastInput{Caster: 1, Target: 2}); id != 1 || !errors.Is(err, ErrInsufficientResource) {
@@ -303,7 +308,7 @@ func TestStopRetriesAreBoundedAndAlertWhenExhausted(t *testing.T) {
 		t.Fatalf("restore with an exhausted stop: %v", err)
 	}
 
-	// 内存有界：再失败两次启动，待停止条目最多 2 条；超限时丢最早的已告警条目（衍生物 1）。
+	// 内存有界：再失败两次启动，待停止条目最多 2 条；超限时最早的已告警条目（衍生物 1）挪进已放弃分区。
 	for want := CastID(2); want <= 3; want++ {
 		if id, err := runtime.Start(program, CastInput{Caster: 1, Target: 2}); id != want || !errors.Is(err, ErrInsufficientResource) {
 			t.Fatalf("failed start = %d, %v; want cast %d kept", id, err, want)
@@ -312,14 +317,14 @@ func TestStopRetriesAreBoundedAndAlertWhenExhausted(t *testing.T) {
 	if stats := runtime.RetentionStats(); stats.StopPendingSpawns != 2 {
 		t.Errorf("stop-pending spawns = %d, want MaxStopPendingSpawns 2", stats.StopPendingSpawns)
 	}
-	if got := counterValue(MetricSpawnStopPendingDropped) - droppedBefore; got != 1 {
-		t.Errorf("%s grew by %d, want 1", MetricSpawnStopPendingDropped, got)
+	if got := counterValue(MetricSpawnAbandoned) - abandonedBefore; got != 1 {
+		t.Errorf("%s grew by %d, want 1", MetricSpawnAbandoned, got)
 	}
-	if left := runtimeSpawnsOfCast(runtime, 1); left != 0 {
-		t.Errorf("the dropped record of cast 1 is still there (%d records)", left)
+	if spawn := onlySpawnOfCast(t, runtime, 1); spawn.Status != SpawnAbandoned {
+		t.Errorf("the record of cast 1 past the limit has status %q, want abandoned (kept)", spawn.Status)
 	}
-	if !strings.Contains(logs.String(), "stop-pending spawn dropped") {
-		t.Errorf("no log for the dropped stop-pending record: %q", logs.String())
+	if !strings.Contains(logs.String(), "stop-pending spawn abandoned") {
+		t.Errorf("no log for the abandoned stop-pending record: %q", logs.String())
 	}
 	if stats := runtime.RetentionStats(); stats.Casts > options.CompletedCastLimit+options.MaxStopPendingSpawns {
 		t.Errorf("retained casts = %d, want at most CompletedCastLimit + MaxStopPendingSpawns", stats.Casts)

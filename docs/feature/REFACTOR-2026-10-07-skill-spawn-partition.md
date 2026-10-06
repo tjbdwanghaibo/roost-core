@@ -149,3 +149,123 @@ DECISIONS-PENDING 第十三轮“skill 衍生物两张表”：选 A——“移
 - **C：去掉 `MaxStopPendingSpawns`**，只靠重试上限（exhausted 后不再重试）与 cast 回收约束内存。代价：宿主长时间故障时待停止记录无界增长（每条约数百字节），要靠运维告警发现。
 
 倾向 B，或者在确认宿主故障时记录量可接受后选 C；两者都能删掉“循环中途记录消失”这一类问题。
+
+## 11. 待停止上限改为“已放弃”分区（维护者第十三轮“待停止上限”选 B，2026-10-07）
+
+分支 `skabandon`，基线 main `3028214b`。维护者在 §10 的三个候选里选 B（[DECISIONS-PENDING](../review/DECISIONS-PENDING-2026-10-05.md) 第十三轮“待停止上限”一行），并要求从结构上解决、不再按入口逐个打补丁。读代码：codebase-memory 共享 generation 停在 09-30，`spawn_table.go`、`runtime_spawn_stop.go`、`spawn_owned.go` 不在图里，`runtime.go`、`runtime_checkpoint.go` 为 metadata_changed，以当前源码为准；`drop` / `spawns.get` / `spawnLivePartitions` 的全部调用点用 `rg` 穷举，改完由 go/types 源码守卫再核一遍。
+
+### 11.1 改了什么
+
+- 新状态 `SpawnAbandoned`（`"abandoned"`）与第五个分区 `spawnAbandoned`。`makeRoomForStopPendingLocked` 不再删记录：新条目会使待停止数超过 `MaxStopPendingSpawns` 时，最早的已到重试上限的条目（没有就是最早仍在重试的，选法不变）经 `abandonSpawnLocked` → `setState(spawn, abandoned, handedOff)` 挪进已放弃分区。
+- 放弃时：重试字段清零（只在待停止时有意义，checkpoint 核对不变），计 `skill.spawn.abandoned.total`（替换 `skill.spawn.stop_pending_dropped.total`，常量 `MetricSpawnStopPendingDropped` 删除、换成 `MetricSpawnAbandoned`），写一条 Error 日志点名 `spawn_id`、`cast_id`、`owner`、`lifecycle_entity` 与放弃前的重试次数，发一条 `spawn_update`（status abandoned）。
+- 已放弃的记录不算 live（`liveOnHost` 为 false，不在 `spawnLivePartitions` 里）：不再重试、不再推进、Shutdown / RemoveProgram 不再停它（停止请求是空操作），不占待停止名额、不占 owned 容量、不在 `OwnedSpawns` 里，不钉住 cast。
+- 已放弃分区有自己的上限 `RuntimeOptions.MaxAbandonedSpawns`（默认 1024，进 checkpoint）。超限清理只有一个安全点：`Advance` 返回前（`defer`，含出错返回；先于 state mutation 提交）调用 `pruneAbandonedSpawnsLocked`，从 ID 最小的删起，每条计 `skill.spawn.abandoned_pruned.total`、写一条 Warn 日志。两次 `Advance` 之间（`Shutdown`、`Start` 失败等入口只放弃、不删）可以暂时超限；`Advance(当前 tick)` 且没有到期工作时直接返回，不清理，留到下一次推进。
+- `RetentionStats` 加 `AbandonedSpawns`。
+
+### 11.2 cast 回收按 RR-23 重新论证
+
+RR-20261006-23 的规则：cast 在没有 live 衍生物时可回收，已停止的记录只是历史，随 cast 一起删。已放弃的记录：
+
+- 不需要 cast：Runtime 不再推进、不再重试它，也就不再经它的 cast 求值或发表现（放弃那一刻的 `spawn_update` 在挪分区时就发了）；checkpoint 解析程序优先用记录自带的 `Program`——live Runtime 只放弃 entity 衍生物，`Program` 只在停止成功时释放，放弃的记录一定带着。所以已放弃不钉住 cast，cast 照 RR-23 回收。
+- 不随 cast 删：`forgetCastSpawnsLocked` 改为只删已停止分区里该 cast 的记录。否则“放弃 + cast 回收”在同一个入口里发生时（`commitStateMutationsLocked` 前会 `pruneCompletedCastsLocked`），客户端只看到 `spawn_remove`、看不到 abandoned，等于回到删记录。已放弃的记录比 cast 活得久，只由 Advance 末尾按上限清理，CastID 允许悬空（恢复不核对衍生物的 cast 是否存在，之前也不核对）。
+- cast ID 不复用：未提交的失败启动删 cast、还 ID（`nextCastID--`）的条件加上“名下没有已放弃的记录”（`castHasAbandonedSpawnLocked`），免得悬空的记录挂到下一个 cast 名下（RR-20261006-21 那类问题）。正常路径下这时它名下的最后一条待停止记录仍在待停止（新条目总是留在待停止里），这一条是兜底。
+
+### 11.3 客户端看到什么
+
+| 时刻 | presentation 增量 | state mutation | presentation reset |
+| --- | --- | --- | --- |
+| 放弃 | 一条 `spawn_update`，`spawn_status: abandoned` | 一条 `spawn_upsert`，`status: abandoned` | 不再带它 |
+| 之后（cast 被回收、Shutdown 等） | 无 | 无 | 不带 |
+| Advance 末尾超出 `MaxAbandonedSpawns` 被清理 | 无 | `spawn_remove`（Runtime 不再记得它，不代表宿主已停） | 不带 |
+
+放弃时不发 `spawn_stop`、不发 `spawn_remove`：宿主那边可能仍在运行它。客户端把 abandoned 当作表现层的终态（Runtime 不再为它发事件）；它若是宿主侧的真实单位，是否可见由宿主 / 实体同步决定。
+
+### 11.4 状态迁移表（替换 [停止入口统一方案](REFACTOR-2026-10-06-skill-spawn-stop-unified.md) §3.1 的“超限”一行，并加两行）
+
+| 从 | 事件 | 到 | 副作用 |
+| --- | --- | --- | --- |
+| stop_pending | 新条目会使待停止数超过 `MaxStopPendingSpawns` | abandoned（已放弃分区） | 先选最早的 exhausted、没有就选最早仍在重试的；重试字段清零；`skill.spawn.abandoned.total`、Error 日志、`spawn_update(abandoned)` / `spawn_upsert(abandoned)`；不再钉住 cast |
+| abandoned | Shutdown / RemoveProgram / 重试 / cast 回收 | abandoned | 无（不是 live，停止请求是空操作；不随 cast 删） |
+| abandoned | Advance 末尾，已放弃数超过 `MaxAbandonedSpawns` | 记录删除（ID 最小的先删） | `skill.spawn.abandoned_pruned.total`、Warn 日志；state mutation `spawn_remove` |
+
+记录删除只剩三个点（`spawnDropSites`）：Advance 末尾清理已放弃分区、随 cast 回收已停止的记录、衍生物启动失败且已停掉之后（`startEntitySpawn`，调用方不持有 ID 列表）。
+
+### 11.5 守卫
+
+- `TestSpawnPartitionWritesStayInSpawnTable` 扩展：`spawnTable.drop` 只能出现在登记表 `spawnDropSites` 的三个函数里；`pruneAbandonedSpawnsLocked` 只能由 `Runtime.Advance` 引用。
+- `TestSpawnPartitionsFollowRecordFields` 扩展：原“重试到上限与待停止上限”序列改为断言最早的一条在已放弃分区；新增序列“待停止上限 1、已放弃上限 2、宿主一直拒绝，六轮施放 → 移交 → Shutdown，奇数轮之后 Advance”，每一步核对分区与 checkpoint 恢复，核对 Advance 之外不删、Advance 之后不超过 2 条；最后暂时超限时 checkpoint，恢复出的 Runtime 与 live 各推进一次，分区相同；宿主恢复后 Shutdown 停掉待停止的、已放弃的不动。
+- 行为用例（新文件 `runtime_spawn_abandon_promises_test.go`）：`TestStopSweepAbandonsAtTheStopPendingLimit`（Shutdown / RemoveProgram 循环中途触发上限）、`TestAbandonedSpawnsArePrunedOnlyAtTheEndOfAdvance`（含版本 6 checkpoint 拒绝）、`TestAbandonedSpawnIsVisibleToSyncConsistently`（客户端可见性、cast 回收后记录留下）。`stopRetryHost` 加 `stopIDs` 记下每次 StopSpawn 的衍生物。
+
+### 11.6 先红后绿
+
+在基线代码上（只加了新常量 / 选项字段 / `SpawnAbandoned` 以便编译，行为未改）跑三个新用例，全部红：
+
+```
+runtime_spawn_abandon_promises_test.go:94: spawn 2 status "" at MaxStopPendingSpawns, want abandoned (kept, not dropped)
+runtime_spawn_abandon_promises_test.go:100: skill.spawn.abandoned.total grew by 0, want 1
+runtime_spawn_abandon_promises_test.go:107: state mutations for spawn 2 = "spawn_upsert:running spawn_upsert:stop_pending spawn_remove", want it to end in spawn_upsert:abandoned without spawn_remove
+runtime_spawn_abandon_promises_test.go:159: before Advance: spawn 1 status "", want "abandoned"
+runtime_spawn_abandon_promises_test.go:190: state mutations for spawn 1 = "spawn_upsert:running spawn_upsert:stop_pending spawn_remove", want spawn_remove only after the Advance that pruned it
+runtime_spawn_abandon_promises_test.go:220: cast 1 owns no spawn record
+```
+
+“以前只能靠空记录检查才不崩”：基线代码去掉 `Shutdown` 循环的判空（变异，未提交），`TestStopSweepAbandonsAtTheStopPendingLimit/Shutdown` 红：`Shutdown = panicked: runtime error: invalid memory address or nil pointer dereference`。修后同样去掉 `Shutdown` 与 `RemoveProgram` 两处判空，相关用例全部通过——循环取回的是已放弃的记录，不依赖判空。判空保留作双重保险（加了注释）。
+
+修后全绿。原有用例改断言的只有三处，都是“到上限删除”这一条语义本身：
+
+| 用例 | 之前断言 | 现在断言 |
+| --- | --- | --- |
+| `TestStopRetriesAreBoundedAndAlertWhenExhausted`（“到上限删除 + `stop_pending_dropped`”那条） | `skill.spawn.stop_pending_dropped.total` +1；cast 1 名下不剩记录；日志含 `stop-pending spawn dropped` | `skill.spawn.abandoned.total` +1；cast 1 名下那条记录 status abandoned；日志含 `stop-pending spawn abandoned`；retained casts 上界不变 |
+| `TestStopSweepSkipsSpawnsDroppedAtTheStopPendingLimit`（RR-34） | 后一个衍生物 status `""`（被删） | status `abandoned` |
+| `TestSpawnPartitionsFollowRecordFields/retry exhaustion and the stop-pending limit` | 最早的一条不在表里 | 最早的一条在已放弃分区 |
+
+其余用例原断言不变。
+
+### 11.7 变异证明（未提交，均已撤回，`cmp` 核对过）
+
+| 变异 | 结果 |
+| --- | --- |
+| `Shutdown` 循环里停止后对不再 live 的记录直接 `drop` | 源码守卫红：`spawn_owned.go:551:4: Runtime.Shutdown: references spawnTable.drop; records leave the table only at the sites registered in spawnDropSites (no deletion in the middle of another loop)`；行为用例同时红（`spawn 2 status "" at MaxStopPendingSpawns, want abandoned`） |
+| `makeRoomForStopPendingLocked` 恢复旧写法 `drop(victim.ID)` | 源码守卫红：`runtime_spawn_stop.go:129:3: Runtime.makeRoomForStopPendingLocked: references spawnTable.drop; …`；不变量守卫红：`oldest stop-pending spawn 1 not abandoned past MaxStopPendingSpawns`、`round 1 before Advance: abandoned partition holds 0 records, want 1` |
+| `forgetCastSpawnsLocked` 删该 cast 全部分区的记录（已放弃的随 cast 删） | 行为用例红：`TestAbandonedSpawnIsVisibleToSyncConsistently`、`TestStopRetriesAreBoundedAndAlertWhenExhausted` 报 `cast 1 owns no spawn record` |
+| `Shutdown` 末尾调用 `pruneAbandonedSpawnsLocked` | 源码守卫红：`Runtime.Shutdown: references pruneAbandonedSpawnsLocked; the abandoned partition is pruned only at the end of Advance`；行为红：`skill.spawn.abandoned_pruned.total grew by 1 outside Advance, want 0`、`round 3 before Advance: abandoned partition holds 2 records, want 3` |
+| checkpoint 不存 `max_abandoned_spawns`（实施中途的真实状态） | `restored runtime after Advance: … abandoned=[1 2], live … abandoned=[2]` |
+
+### 11.8 checkpoint（版本 6 → 7）
+
+记录的 `status` 可以是 `abandoned`（`validSpawnStatus`），payload 加 `max_abandoned_spawns`（必须 > 0）。恢复额外要求已放弃的记录带 `direct_program`（它可能比 cast 活得久，只能从自带的程序解析）；已放弃条数不按上限核对（两次 Advance 之间可以暂时超限，恢复后的下一次 Advance 末尾照样清理）。版本 6 及更早得到 `ErrCheckpointUnsupported`（线上未部署，排空后再升级）；新用例显式核对版本 6 被拒。
+
+### 11.9 代码量（如实）
+
+非测试代码（`skill/` 下 9 个文件，无新文件）：+137 / −33。新增行里注释 71 行、代码 63 行、空行 3 行；删除的是注释 19 行、代码 14 行。净增代码约 49 行、注释约 52 行。没有变少：多了一个状态、一个分区、一个清理函数、一个选项与 checkpoint 字段；换来的是“记录在别人手里时消失”这一类路径没有了——删记录只剩三个登记点，守卫在源码层核对。
+
+测试：既有测试文件 +138 / −19（其中 `spawn_partition_promises_test.go` 的守卫扩展与新序列 +117；三处改断言；`stopRetryHost.stopIDs`）；新增 `runtime_spawn_abandon_promises_test.go` 259 行。
+
+### 11.10 行为变化与兼容
+
+- 到 `MaxStopPendingSpawns` 不再删记录，改为 abandoned；指标 `skill.spawn.stop_pending_dropped.total` 改为 `skill.spawn.abandoned.total`（告警规则要改名），新增 `skill.spawn.abandoned_pruned.total`；Error 日志文案由 `stop-pending spawn dropped` 改为 `stop-pending spawn abandoned`。
+- 客户端：放弃时看到 `spawn_update` / `spawn_upsert`（abandoned），不再看到 `spawn_remove`；`spawn_remove` 推迟到 Advance 末尾超出 `MaxAbandonedSpawns` 时。客户端代码若按 status 分支，要认识 `abandoned`。
+- 放弃之后 `Shutdown` / `RemoveProgram` 不再对它再请求停止（之前记录已删，同样不会再停；只是现在记录还在）。宿主侧清理靠宿主自己的比赛结束 / 程序移除（`RemoveOwnedEntitiesForMatchEnd` / `ByProgram` 照常调用）。
+- checkpoint 版本 7。
+- 公开 API：新增 `SpawnAbandoned`、`RuntimeOptions.MaxAbandonedSpawns`、`RuntimeRetentionStats.AbandonedSpawns`、`MetricSpawnAbandoned`、`MetricSpawnAbandonedPruned`；删除 `MetricSpawnStopPendingDropped`（10-06 改名时引入，未发版）。
+
+### 11.11 验证（2026-10-07，`GOWORK=off`，go1.27.0 darwin/arm64，worktree 基线 `3028214b`）
+
+| 命令 | 结果 |
+| --- | --- |
+| `gofmt -l skill/` | 空 |
+| `go vet ./skill/...` | 通过 |
+| `go test -race -count=3 ./skill/...` | skill 76s、combat、combatcomponent、skillcompose、skillsync 全部 ok（含 `compile_mutation_property_test.go` 性质测试） |
+| `go test -run '^$' -fuzz FuzzParseGeneratedNeverPanics -fuzztime 25s ./skill/` | PASS，211 万次 |
+| `go test -run '^$' -fuzz FuzzRestoreRuntimeCheckpointNeverPanics -fuzztime 25s ./skill/` | PASS，50 万次 |
+| `skill/examples`：`go vet ./... && go test ./...` | 通过（无测试文件，实跑由根包 `TestExamplesRun` 覆盖） |
+| `skill/integration/sync-e2e`：`go vet ./... && go test ./...` | ok |
+| 根包 `go test -count=1 .` | ok；`TestExamplesRun` 实跑 6 个示例（含 `skill/examples` 的 combat / fireball / statusbridge）全部 PASS |
+| `go build ./... && go vet ./...` | 通过 |
+| `go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync` | rc=0，无违例（本次不涉及这四个包，按要求确认） |
+
+没跑的：codegen 测试、`go generate ./...` 与 game-demo 重新生成——codegen、demo 模板、kit 不引用 `skill` 的这些内部结构与指标名（`rg 'stop_pending_dropped|MaxStopPendingSpawns' codegen kit demo` 无结果），生成形状不变。真实依赖用例不涉及。
+
+### 11.12 实施状态
+
+已实施，未发版（分支 `skabandon`）。`docs/release/v1.23.0/*` 未改，受影响条目：SKILL-18 / SKILL-21 / SKILL-5（checkpoint 版本与恢复口径，版本 7 拒绝 6），以及 §9 已列的“发版文档尚未收录 10-06 之后的衍生物改名、停止入口统一、分区存放”——本次的 abandoned 状态、指标改名、`MaxAbandonedSpawns` 同样未收录。

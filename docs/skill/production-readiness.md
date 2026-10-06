@@ -49,8 +49,20 @@ guardrails, not capacity targets: tune them from room-level load tests.
   failed retries, then `skill.spawn.stop_retry_exhausted.total` is counted,
   a warning is logged and the record is kept. At most
   `MaxStopPendingSpawns` (default 256) such records are kept; past it the
-  oldest exhausted one is dropped (`skill.spawn.stop_pending_dropped.total`
-  plus an error log). `Shutdown` / `RemoveProgram` return the first refusal
+  oldest exhausted one (else the oldest still retrying) is abandoned: status
+  `abandoned`, no more retries, it no longer pins its cast or counts against
+  the stop-pending or owned limits, and `Shutdown` / `RemoveProgram` no longer
+  stop it (`skill.spawn.abandoned.total` plus an error log naming spawn, cast
+  and owner; the metric replaces `skill.spawn.stop_pending_dropped.total`).
+  The record is kept — clients see one `spawn_update` / `spawn_upsert` with
+  status `abandoned`, no `spawn_remove`, because the host may still run it.
+  At most `MaxAbandonedSpawns` (default 1024) abandoned records are kept; the
+  oldest past it are removed only at the end of `Advance`
+  (`skill.spawn.abandoned_pruned.total` plus a warning; only then does a
+  `spawn_remove` appear). No record leaves the Runtime in the middle of
+  another loop. Alert on `skill.spawn.abandoned.total`: each one is a spawn
+  the host may still run with nobody stopping it until match end / program
+  removal. `Shutdown` / `RemoveProgram` return the first refusal
   and leave the spawn `stop_pending` in the checkpoint; keep advancing, or
   restore and advance, and the Runtime keeps retrying (calling them again
   re-requests immediately). New stop entries must be registered in

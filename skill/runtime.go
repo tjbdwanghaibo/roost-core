@@ -74,10 +74,16 @@ type RuntimeOptions struct {
 	// with the default backoff).
 	SpawnStopRetryLimit int
 	// MaxStopPendingSpawns bounds stop_pending records. Past the bound the
-	// oldest exhausted record (else the oldest still retrying) is dropped,
-	// counted as skill.spawn.stop_pending_dropped.total and logged; the
-	// Runtime no longer stops that spawn. Default 256.
+	// oldest exhausted record (else the oldest still retrying) is abandoned:
+	// it moves to status abandoned (no more retries, no longer pins its cast),
+	// counted as skill.spawn.abandoned.total and logged as an error; the
+	// record is kept, the host may still run that spawn. Default 256.
 	MaxStopPendingSpawns int
+	// MaxAbandonedSpawns bounds abandoned records. Only at the end of Advance
+	// the oldest ones past the bound are removed, counted as
+	// skill.spawn.abandoned_pruned.total and logged; between two Advance calls
+	// the count may exceed it. Default 1024.
+	MaxAbandonedSpawns int
 }
 
 type CastInput struct {
@@ -342,6 +348,9 @@ func newRuntimeCore(host Host, options RuntimeOptions) *Runtime {
 	if options.MaxStopPendingSpawns <= 0 {
 		options.MaxStopPendingSpawns = 256
 	}
+	if options.MaxAbandonedSpawns <= 0 {
+		options.MaxAbandonedSpawns = 1024
+	}
 	runtime := &Runtime{
 		host: host, options: options,
 		casts: make(map[CastID]*castInstance), scheduler: newScheduler(),
@@ -464,7 +473,7 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 	runtime.markAbilityCastStarted(cast)
 	if err := runtime.prepareCast(cast); err != nil {
 		runtime.failCastLocked(cast, err)
-		if !cast.committed && !runtime.castHasRunningSpawnLocked(cast.id) {
+		if !cast.committed && !runtime.castHasRunningSpawnLocked(cast.id) && !runtime.castHasAbandonedSpawnLocked(cast.id) {
 			// 未提交的失败启动对调用方等于“没有施法”：删掉 cast 并把 ID 还给下一个 cast。
 			// failCastLocked 已撤掉它名下的全部排程任务、停掉它起的衍生物；已停衍生物的记录随 cast 一起删，
 			// 复用 ID 才安全（NC-110；衍生物记录见 RR-20261006-21）。
@@ -476,6 +485,7 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 		}
 		// 已提交，或有衍生物停不下来（宿主 StopSpawn 失败、记录已标成待停止）：cast 留作 failed 终态、不还 ID，
 		// 待停止的衍生物记录继续挂在一个存在的 cast 名下，由之后的 tick 重试停止，停掉后按 RR-23 回收。
+		// 名下有已放弃的记录（它比 cast 活得久）同样不还 ID，免得这条记录挂到下一个 cast 名下。
 		return cast.id, err
 	}
 	runtime.recordTrace(TraceEvent{Kind: TraceCastPrepared, Tick: runtime.currentTick, CastID: cast.id})

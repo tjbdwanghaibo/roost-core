@@ -13,8 +13,12 @@ type RuntimeRetentionStats struct {
 	// Runtime still owns (bounded by MaxStopPendingSpawns);
 	// StopRetryExhaustedSpawns is the subset whose retries hit
 	// SpawnStopRetryLimit and are no longer retried automatically.
+	// AbandonedSpawns counts records abandoned past MaxStopPendingSpawns
+	// that are still kept (bounded by MaxAbandonedSpawns at the end of
+	// Advance); the Runtime no longer stops them.
 	StopPendingSpawns        int
 	StopRetryExhaustedSpawns int
+	AbandonedSpawns          int
 }
 
 func (runtime *Runtime) RetentionStats() RuntimeRetentionStats {
@@ -27,6 +31,7 @@ func (runtime *Runtime) RetentionStats() RuntimeRetentionStats {
 			stats.StopRetryExhaustedSpawns++
 		}
 	}, spawnStopPending)
+	stats.AbandonedSpawns = runtime.spawns.count(spawnAbandoned)
 	return stats
 }
 
@@ -62,6 +67,9 @@ func (runtime *Runtime) forgetCompletedCastLocked(id CastID) {
 
 // castHasRunningSpawnLocked 报告 cast 名下是否还有在宿主侧运行的衍生物（含已移交的，以及停止失败、等 Runtime
 // 重试停止的 stop_pending）。已停的衍生物记录不算：它们只是历史，随 cast 一起回收（forgetCastSpawnsLocked）。
+// 已放弃的也不算（维护者第十三轮“待停止上限”选 B）：Runtime 不再推进、不再重试它，没有任何路径要再经它的 cast
+// 求值或发表现，所以 cast 照 RR-20261006-23 的规则回收；放弃的记录自带 Program，不随 cast 删，只在 Advance 末尾
+// 按 MaxAbandonedSpawns 清理。
 func (runtime *Runtime) castHasRunningSpawnLocked(id CastID) bool {
 	running := false
 	runtime.spawns.each(func(spawn *SpawnInstance) {
@@ -70,14 +78,24 @@ func (runtime *Runtime) castHasRunningSpawnLocked(id CastID) bool {
 	return running
 }
 
-// forgetCastSpawnsLocked 在 cast 被删除之前删掉它名下的衍生物记录（调用方已确认没有运行中的衍生物）。
+// castHasAbandonedSpawnLocked 报告 cast 名下是否有已放弃的衍生物记录：未提交的失败启动据此决定能不能还 cast ID。
+func (runtime *Runtime) castHasAbandonedSpawnLocked(id CastID) bool {
+	found := false
+	runtime.spawns.each(func(spawn *SpawnInstance) {
+		found = found || spawn.CastID == id
+	}, spawnAbandoned)
+	return found
+}
+
+// forgetCastSpawnsLocked 在 cast 被删除之前删掉它名下已停止的衍生物记录（调用方已确认没有运行中的衍生物）。
+// 已放弃的记录不在这里删：它们只在 Advance 末尾按 MaxAbandonedSpawns 清理（pruneAbandonedSpawnsLocked）。
 // 衍生物停止后记录一直留在已停止分区里；之前没有任何路径删它们：
 //   - 未提交的失败启动删 cast、还 ID 后，旧记录挂到下一个 cast 名下，entity 衍生物停止时又清掉了 Program，
 //     Checkpoint 找不到它的程序直接报 corrupt（RR-20261006-21）；
 //   - castEvictableLocked 把已停的记录也当作引用，起过衍生物的 cast 永不回收：live Runtime 的 cast 与衍生物记录无界增长，
 //     完成队列超过 CompletedCastLimit 后 checkpoint 恢复判 corrupt（RR-20261006-23）。
 func (runtime *Runtime) forgetCastSpawnsLocked(id CastID) {
-	for _, spawnID := range runtime.spawns.sortedIDs(func(spawn *SpawnInstance) bool { return spawn.CastID == id }) {
+	for _, spawnID := range runtime.spawns.sortedIDs(func(spawn *SpawnInstance) bool { return spawn.CastID == id }, spawnStopped) {
 		runtime.spawns.drop(spawnID)
 	}
 }

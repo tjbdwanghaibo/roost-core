@@ -47,7 +47,7 @@
 | state mutation `process_upsert` / `process_remove`，表现 `process_start` / `process_update` / `process_signal` / `process_stop` | `spawn_upsert` / `spawn_remove`，`spawn_start` / `spawn_update` / `spawn_signal` / `spawn_stop` |
 | Host `StepProcess` / `StopProcess`、`ProcessStepCommand` / `ProcessStopCommand` / `ProcessHostState` / `ProcessID` | `StepSpawn` / `StopSpawn`、`SpawnStepCommand` / `SpawnStopCommand` / `SpawnHostState` / `SpawnID` |
 | `RuntimeOptions.ProcessStopRetryBackoff` / `ProcessStopRetryLimit` / `MaxStopPendingProcesses` / `MaxOwnedProcesses*` | `SpawnStopRetryBackoff` / `SpawnStopRetryLimit` / `MaxStopPendingSpawns` / `MaxOwnedSpawns*` |
-| 指标 `skill.process.stop_retry_exhausted.total` / `skill.process.stop_pending_dropped.total` | `skill.spawn.stop_retry_exhausted.total` / `skill.spawn.stop_pending_dropped.total` |
+| 指标 `skill.process.stop_retry_exhausted.total` / `skill.process.stop_pending_dropped.total` | `skill.spawn.stop_retry_exhausted.total` / `skill.spawn.stop_pending_dropped.total`（10-07 待停止上限选 B 起改为 `skill.spawn.abandoned.total`，超限不再删记录，见[分区方案 §11](../feature/REFACTOR-2026-10-07-skill-spawn-partition.md#11-待停止上限改为已放弃分区维护者第十三轮待停止上限选-b2026-10-07)） |
 | checkpoint 版本 3（`processes`、`owned_processes`、`next_process_id` …） | 版本 4（`spawns`、`owned_spawns`、`next_spawn_id` …），旧版本拒绝恢复 |
 
 完整对照（全部导出 / 未导出标识符、JSON 字段、文件名）与没改的部分（`proc` 是被动“触发”，不是 process）见

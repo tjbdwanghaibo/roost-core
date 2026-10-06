@@ -182,8 +182,11 @@ World revision 是关键防线：Runtime 的 query/command 会携带期望 revis
 `Shutdown` 停不下的衍生物同样留成 `stop_pending` 并写进 checkpoint，宿主侧要准备好在 `Shutdown` 之后（继续推进或
 恢复之后）再收到这些停止；回调与区域离开信号只在第一次停止请求时执行，重试只调 `StopSpawn`。到上限后 Runtime 不再自动重试，计
 `skill.spawn.stop_retry_exhausted.total` 并写一条 Warn 日志，记录保留；待停止条目最多
-`MaxStopPendingSpawns`（默认 256）条，超限丢最早的已告警条目（没有就丢最早仍在重试的），计
-`skill.spawn.stop_pending_dropped.total` 并写 Error 日志。细节见
+`MaxStopPendingSpawns`（默认 256）条，超限时最早的已告警条目（没有就是最早仍在重试的）改为 `abandoned`：
+Runtime 不再重试、不再请求停止它（`Shutdown` / `RemoveProgram` 也不再停），计 `skill.spawn.abandoned.total` 并写
+Error 日志；宿主侧要靠比赛结束 / 程序移除（`RemoveOwnedEntitiesForMatchEnd` / `ByProgram`，照常调用）或自己的清理
+收掉这类衍生物。记录保留到 `Advance` 末尾超出 `MaxAbandonedSpawns`（默认 1024）时才删（`skill.spawn.abandoned_pruned.total`）。
+细节见
 [施法语义](skill-casting-and-combat.md) 的“失败终态”、`skill/runtime_spawn_stop.go`（状态迁移表与停止入口清单）与
 [停止入口统一方案](../feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md)。
 

@@ -271,6 +271,9 @@ func (runtime *Runtime) Advance(tick Tick) error {
 	}
 	runtime.beginStateMutationLocked()
 	defer runtime.commitStateMutationsLocked()
+	// tick 末尾的安全点：Advance 返回前（含出错返回）清理超出 MaxAbandonedSpawns 的已放弃记录，此时没有任何遍历在进行；
+	// defer 后进先出，清理先于 state mutation 提交，删掉的记录在同一批里发 spawn_remove。
+	defer runtime.pruneAbandonedSpawnsLocked()
 	for {
 		task, found := runtime.scheduler.Peek()
 		ownedDue, ownedFound := runtime.nextOwnedSpawnTick()

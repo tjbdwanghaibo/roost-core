@@ -7,6 +7,10 @@ package skill
 //
 // 承诺：同一轮停止里被上限删掉的记录跳过（Runtime 已告警、不再负责它，与 retrySpawnStopsLocked 一致），
 // 入口照常返回宿主的错误，其余衍生物照常转入待停止并在之后的 tick 重试停掉。
+//
+// 2026-10-07 维护者第十三轮“待停止上限”选 B：到上限不再删记录，最早的挪进已放弃分区（runtime_spawn_abandon_promises_test.go）。
+// 循环取回的是那条已放弃的记录、停止请求是空操作，不再依赖判空；判空保留作双重保险。本用例只把“后一个被删掉”
+// （status ""）的断言改成“后一个已放弃”（status abandoned），其余不变。
 
 import (
 	"errors"
@@ -55,8 +59,8 @@ func TestStopSweepSkipsSpawnsDroppedAtTheStopPendingLimit(t *testing.T) {
 			if status := spawnStatusInSnapshot(runtime, firstSpawn); status != SpawnStopPending {
 				t.Errorf("spawn %d status %q after the refused stop, want stop_pending", firstSpawn, status)
 			}
-			if status := spawnStatusInSnapshot(runtime, secondSpawn); status != "" {
-				t.Errorf("spawn %d status %q, want it dropped at MaxStopPendingSpawns", secondSpawn, status)
+			if status := spawnStatusInSnapshot(runtime, secondSpawn); status != SpawnAbandoned {
+				t.Errorf("spawn %d status %q, want it abandoned at MaxStopPendingSpawns", secondSpawn, status)
 			}
 			advanceEachTick(t, runtime, runtime.currentTick+8)
 			if status := spawnStatusInSnapshot(runtime, firstSpawn); status != SpawnCancelled {

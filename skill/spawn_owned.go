@@ -489,7 +489,8 @@ func (runtime *Runtime) terminateOwnedSpawn(id SpawnID, cause StopCause, callbac
 // RemoveProgram 请求停止该程序的全部衍生物（已移交的跑 cancel 回调），再让宿主删除它的 owned 实体。
 // 宿主拒绝停止时返回第一个错误（errors.Is 宿主的错误），停不下的衍生物留成 stop_pending：程序移除之后仍由 Runtime
 // 在之后的 tick 按退避重试（重试只重发宿主 StopSpawn，不执行程序代码），再调用一次 RemoveProgram 会立即再请求一次。
-// 之前它们留成 running、列在 OwnedSpawns 里等调用方重试（停止入口统一，维护者 2026-10-07）。
+// 之前它们留成 running、列在 OwnedSpawns 里等调用方重试（停止入口统一，维护者 2026-10-07）。该程序已放弃的衍生物
+// 不再停；它们的记录仍引用程序（checkpoint 恢复时 resolver 仍要能解析它），直到 Advance 末尾按 MaxAbandonedSpawns 清理。
 func (runtime *Runtime) RemoveProgram(programID string) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -503,6 +504,8 @@ func (runtime *Runtime) RemoveProgram(programID string) error {
 	for _, id := range ids {
 		spawn := runtime.spawns.get(id)
 		if spawn == nil {
+			// 双重保险（RR-20261006-34）：循环中途不会删记录——到待停止上限的记录挪进已放弃分区而不删，取回的是
+			// 那条已放弃的记录，停止请求对它是空操作；删记录只在 spawnDropSites 登记的安全点。
 			continue
 		}
 		cast := runtime.casts[spawn.CastID]
@@ -526,7 +529,8 @@ func (runtime *Runtime) RemoveProgram(programID string) error {
 // Shutdown 请求停止全部仍在宿主侧的衍生物（含 stop_pending，已移交的跑 cancel 回调），再让宿主清理比赛的 owned 实体。
 // 宿主拒绝停止时返回第一个错误（errors.Is 宿主的错误），停不下的衍生物留成 stop_pending 并写进 checkpoint：
 // 继续 Advance、或 Checkpoint 后在新进程 RestoreRuntime 再 Advance，Runtime 都会按原来的重试时刻接着停；再调用一次
-// Shutdown 会立即再请求一次。Shutdown 不在原地同步重试，理由见 runtime_spawn_stop.go。
+// Shutdown 会立即再请求一次。Shutdown 不在原地同步重试，理由见 runtime_spawn_stop.go。已放弃的衍生物
+// （待停止超过 MaxStopPendingSpawns 时放弃的）不再停：Runtime 已告警、不再负责它们，记录留到 Advance 末尾按上限清理。
 func (runtime *Runtime) Shutdown() error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -538,6 +542,8 @@ func (runtime *Runtime) Shutdown() error {
 	for _, id := range ids {
 		spawn := runtime.spawns.get(id)
 		if spawn == nil {
+			// 双重保险（RR-20261006-34）：循环中途不会删记录——到待停止上限的记录挪进已放弃分区而不删，取回的是
+			// 那条已放弃的记录，停止请求对它是空操作；删记录只在 spawnDropSites 登记的安全点。
 			continue
 		}
 		callbackEvent := ""

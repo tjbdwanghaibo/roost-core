@@ -6,16 +6,20 @@ import "sort"
 //
 // 之前 Runtime 有两张 map：spawns 存全部记录，ownedSpawns 是其中“已移交、仍在运行”那部分的重复索引，指向同一批
 // *SpawnInstance；两张表要在移交、停止、待停止、回收时一起维护，checkpoint 也存两份、恢复时逐条比对。现在“移交给谁”
-// 只由记录字段（Owner、handedOff）表达，记录按字段分进四个分区，每条记录恰好在一个分区里：
+// 只由记录字段（Owner、handedOff）表达，记录按字段分进五个分区，每条记录恰好在一个分区里：
 //
 //	分区              字段                               谁按它查
 //	spawnCasting      Status == running，未移交          施法收尾 / 打断 / goto 停衍生物，移交，施法期间 lifecycle 失效回收
 //	spawnHandedOff    Status == running，已移交          OwnedSpawns，移交后的逐 tick 推进、到期 / 失效回收，下一次推进的 tick
 //	spawnStopPending  Status == stop_pending             退避重试，待停止条目上限，RetentionStats
 //	spawnStopped      Status == ended/cancelled/failed   只是历史：随 cast 回收、checkpoint、状态快照
+//	spawnAbandoned    Status == abandoned                待停止超过 MaxStopPendingSpawns 时放弃的；Advance 末尾按 MaxAbandonedSpawns 清理
 //
 // 只有 setState 改分区字段（Status、handedOff）并把记录挪到对应分区；新记录经 add 入表、按字段落分区，删除经 drop。
 // spawn_partition_promises_test.go 的源码守卫禁止别处写分区 map、给这两个字段赋值。
+// drop 只有三个调用点（同一守卫登记）：Advance 末尾清理已放弃分区（pruneAbandonedSpawnsLocked）、随 cast 回收已停止的
+// 记录（forgetCastSpawnsLocked）、衍生物启动失败且已停掉之后（startEntitySpawn）。任何“取 ID 列表 → 逐个处理”的循环
+// 中途都不会删记录（维护者第十三轮“待停止上限”选 B，docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md §11）。
 type spawnPartition uint8
 
 const (
@@ -23,11 +27,12 @@ const (
 	spawnHandedOff
 	spawnStopPending
 	spawnStopped
+	spawnAbandoned
 	spawnPartitionCount
 )
 
-// spawnLivePartitions 是衍生物仍在宿主侧运行的分区（liveOnHost）：钉住所属 cast、占用 owned 衍生物容量，
-// Shutdown / RemoveProgram 要停它们。
+// spawnLivePartitions 是衍生物仍在宿主侧运行、且由 Runtime 负责的分区（liveOnHost）：钉住所属 cast、占用 owned
+// 衍生物容量，Shutdown / RemoveProgram 要停它们。已放弃分区不在其中：宿主侧可能仍在运行，但 Runtime 不再负责。
 var spawnLivePartitions = []spawnPartition{spawnCasting, spawnHandedOff, spawnStopPending}
 
 // partition 由记录字段决定记录所在的分区。checkpoint 恢复只接受已知的 Status（validSpawnStatus）。
@@ -40,6 +45,8 @@ func (spawn *SpawnInstance) partition() spawnPartition {
 		return spawnCasting
 	case SpawnStopPending:
 		return spawnStopPending
+	case SpawnAbandoned:
+		return spawnAbandoned
 	default:
 		return spawnStopped
 	}
@@ -47,7 +54,7 @@ func (spawn *SpawnInstance) partition() spawnPartition {
 
 func validSpawnStatus(status SpawnStatus) bool {
 	switch status {
-	case SpawnRunning, SpawnStopPending, SpawnEnded, SpawnCancelled, SpawnFailed:
+	case SpawnRunning, SpawnStopPending, SpawnEnded, SpawnCancelled, SpawnFailed, SpawnAbandoned:
 		return true
 	}
 	return false
@@ -88,7 +95,7 @@ func (table *spawnTable) add(spawn *SpawnInstance) bool {
 	return true
 }
 
-// drop 把记录从表里删掉（cast 回收、待停止条目超限、启动失败且已停的记录）。
+// drop 把记录从表里删掉（Advance 末尾清理已放弃分区、cast 回收已停止的记录、启动失败且已停的记录）。
 func (table *spawnTable) drop(id SpawnID) {
 	if spawn := table.get(id); spawn != nil {
 		delete(table.partitions[spawn.partition()], id)
@@ -136,7 +143,7 @@ func (table *spawnTable) sortedIDs(match func(*SpawnInstance) bool, partitions .
 	return ids
 }
 
-var allSpawnPartitions = []spawnPartition{spawnCasting, spawnHandedOff, spawnStopPending, spawnStopped}
+var allSpawnPartitions = []spawnPartition{spawnCasting, spawnHandedOff, spawnStopPending, spawnStopped, spawnAbandoned}
 
 func orAllSpawnPartitions(partitions []spawnPartition) []spawnPartition {
 	if len(partitions) == 0 {

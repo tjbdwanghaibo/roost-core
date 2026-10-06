@@ -15,7 +15,8 @@ import (
 //	停止中 ──宿主拒绝──▶ stop_pending，进待停止分区；Runtime 不再推进它（不步进、不派发信号、不跑回调）
 //	stop_pending ──重试到期 / 再次请求──▶ 停止中（只重发宿主 StopSpawn；停止原因沿用第一次请求）
 //	stop_pending ──失败的重试达到上限──▶ stop_pending（exhausted）：告警、记录保留，不再自动重试；再次请求仍会停
-//	stop_pending ──待停止条目超过 MaxStopPendingSpawns──▶ 记录删除：告警，Runtime 不再负责停它
+//	stop_pending ──待停止条目超过 MaxStopPendingSpawns──▶ abandoned，进已放弃分区：告警，不再重试，Runtime 不再负责停它
+//	abandoned ──已放弃分区超过 MaxAbandonedSpawns，Advance 末尾──▶ 记录删除（最早的先删）
 //
 // 停止入口（spawn_stop_entries_promises_test.go 的 spawnStopEntries 逐个登记，守卫核对源码里调用 requestSpawnStop
 // 的函数与登记表一致）：
@@ -39,15 +40,24 @@ import (
 //
 // 重试（retrySpawnStopsLocked，advanceHost 每推进到一个 tick 调用）：第一次在 SpawnStopRetryBackoff 个 tick 之后，
 // 之后每失败一次间隔翻倍，最多翻到 64 倍；成功后 cast 不再被钉住，按 CompletedCastLimit 连同记录回收。失败的重试
-// 达到 SpawnStopRetryLimit 次后记 skill.spawn.stop_retry_exhausted.total、写一条 Warn 日志；待停止条目超过
-// MaxStopPendingSpawns 时先丢最早的已到上限的条目、没有就丢最早仍在重试的，记 skill.spawn.stop_pending_dropped.total、
-// 写一条 Error 日志（state mutation 发 spawn_remove）。
+// 达到 SpawnStopRetryLimit 次后记 skill.spawn.stop_retry_exhausted.total、写一条 Warn 日志。
+//
+// 待停止上限（维护者第十三轮“待停止上限”选 B，2026-10-07）：新条目会使待停止数超过 MaxStopPendingSpawns 时，
+// 最早的已到重试上限的条目（没有就是最早仍在重试的）挪进已放弃分区（abandonSpawnLocked），不删记录。之前这里删记录：
+// 删除发生在 Shutdown / RemoveProgram 等“取 ID 列表 → 逐个处理”的循环中途，后面取回 nil 就崩（RR-20261006-34），
+// Runtime 也不再记得一个宿主仍在运行的衍生物、客户端收到 spawn_remove。已放弃的记录不再重试、不再推进、不钉住 cast、
+// 不占待停止与 owned 名额；客户端看到一次 spawn_update / spawn_upsert（status abandoned），没有 spawn_remove。
+// 已放弃分区自己的上限 MaxAbandonedSpawns 只在 Advance 末尾这一个安全点清理（pruneAbandonedSpawnsLocked），
+// 那时没有任何循环在进行；这时删掉的记录 state mutation 才发 spawn_remove（Runtime 不再记得它，不代表宿主已停）。
 //
 // 宿主侧要求 StopSpawn 幂等（Host 契约）：重试、再次请求都可能对同一个衍生物再停一次。重试只发生在 Advance 推进
 // tick 时，结果是 tick 与宿主应答的确定函数；重试状态（次数、下一次时刻、是否已到上限）随衍生物记录写进 checkpoint。
 const (
 	MetricSpawnStopRetryExhausted = "skill.spawn.stop_retry_exhausted.total"
-	MetricSpawnStopPendingDropped = "skill.spawn.stop_pending_dropped.total"
+	// MetricSpawnAbandoned 计待停止上限放弃的衍生物（替换之前的 skill.spawn.stop_pending_dropped.total）；
+	// MetricSpawnAbandonedPruned 计已放弃分区超过 MaxAbandonedSpawns、在 Advance 末尾删掉的记录。
+	MetricSpawnAbandoned       = "skill.spawn.abandoned.total"
+	MetricSpawnAbandonedPruned = "skill.spawn.abandoned_pruned.total"
 
 	// spawnStopRetryMaxDoublings 限制退避翻倍次数：默认 4 tick 起，最长间隔 256 tick。
 	spawnStopRetryMaxDoublings = 6
@@ -98,7 +108,8 @@ func (runtime *Runtime) enterStopPendingLocked(cast *castInstance, spawn *SpawnI
 	runtime.emitSpawnPresentation(cast, spawn, PresentationSpawnUpdate, "", "", revision)
 }
 
-// makeRoomForStopPendingLocked 在新增一条待停止记录之前保证总数不超过 MaxStopPendingSpawns。
+// makeRoomForStopPendingLocked 在新增一条待停止记录之前保证总数不超过 MaxStopPendingSpawns：超出的最早一条
+// 挪进已放弃分区，记录仍在表里——调用方正在遍历的 ID 列表取回的是这条已放弃的记录，停止请求对它是空操作。
 func (runtime *Runtime) makeRoomForStopPendingLocked() {
 	for runtime.spawns.count(spawnStopPending) >= runtime.options.MaxStopPendingSpawns {
 		var oldestExhausted, oldestRetrying *SpawnInstance
@@ -115,11 +126,48 @@ func (runtime *Runtime) makeRoomForStopPendingLocked() {
 		if victim == nil {
 			victim = oldestRetrying
 		}
-		runtime.spawns.drop(victim.ID)
-		metrics.IncCounter(MetricSpawnStopPendingDropped, nil, 1)
-		slog.Default().Error("skill: stop-pending spawn dropped at MaxStopPendingSpawns; the runtime no longer stops it and the host may still run it",
-			"spawn_id", victim.ID, "cast_id", victim.CastID, "owner", victim.Owner, "lifecycle_entity", victim.LifecycleEntity,
-			"retry_exhausted", victim.stopRetryExhausted, "limit", runtime.options.MaxStopPendingSpawns)
+		runtime.abandonSpawnLocked(victim)
+	}
+}
+
+// abandonSpawnLocked 把一条待停止记录挪进已放弃分区：不再重试（重试字段清零，只在待停止时有意义）、计指标、写一条
+// Error 日志点名衍生物、cast 与宿主侧的 owner / lifecycle 实体，发一条带 abandoned 的 spawn_update。宿主那边可能
+// 仍在运行它，所以不发 spawn_stop，state mutation 也是 spawn_upsert 而不是 spawn_remove。
+func (runtime *Runtime) abandonSpawnLocked(spawn *SpawnInstance) {
+	attempts, exhausted := spawn.stopRetryAttempts, spawn.stopRetryExhausted
+	runtime.spawns.setState(spawn, SpawnAbandoned, spawn.handedOff)
+	spawn.stopRetryAttempts, spawn.stopRetryTick, spawn.stopRetryExhausted = 0, 0, false
+	metrics.IncCounter(MetricSpawnAbandoned, nil, 1)
+	slog.Default().Error("skill: stop-pending spawn abandoned at MaxStopPendingSpawns; the runtime no longer retries it and the host may still run it",
+		"spawn_id", spawn.ID, "cast_id", spawn.CastID, "owner", spawn.Owner, "lifecycle_entity", spawn.LifecycleEntity,
+		"stop_retry_attempts", attempts, "retry_exhausted", exhausted, "limit", runtime.options.MaxStopPendingSpawns)
+	// 与 retrySpawnStopsLocked 一致：已移交的经 detachedSpawnCast、用宿主当前 revision 发表现，未移交的经所属 cast。
+	cast := runtime.casts[spawn.CastID]
+	if spawn.handedOff {
+		cast = nil
+	}
+	revision := runtime.host.CurrentRevision()
+	if cast != nil {
+		revision = cast.visibleRevision
+	}
+	runtime.emitSpawnPresentation(cast, spawn, PresentationSpawnUpdate, "", "", revision)
+}
+
+// pruneAbandonedSpawnsLocked 是已放弃分区唯一的清理点，只由 Advance 在返回前调用（tick 末尾，没有任何遍历在进行）：
+// 超过 MaxAbandonedSpawns 时从最早（ID 最小）的删起，每条计指标、写一条日志。两次 Advance 之间已放弃分区可以暂时
+// 超过上限（Shutdown、Start 失败等入口只放弃、不删），checkpoint 恢复也不因此拒绝。
+func (runtime *Runtime) pruneAbandonedSpawnsLocked() {
+	excess := runtime.spawns.count(spawnAbandoned) - runtime.options.MaxAbandonedSpawns
+	if excess <= 0 {
+		return
+	}
+	for _, id := range runtime.spawns.sortedIDs(nil, spawnAbandoned)[:excess] {
+		spawn := runtime.spawns.get(id, spawnAbandoned)
+		runtime.spawns.drop(id)
+		metrics.IncCounter(MetricSpawnAbandonedPruned, nil, 1)
+		slog.Default().Warn("skill: abandoned spawn pruned at MaxAbandonedSpawns; the runtime forgets it and the host may still run it",
+			"spawn_id", spawn.ID, "cast_id", spawn.CastID, "owner", spawn.Owner, "lifecycle_entity", spawn.LifecycleEntity,
+			"limit", runtime.options.MaxAbandonedSpawns)
 	}
 }
 

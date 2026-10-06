@@ -46,6 +46,8 @@
 | stop_pending | 新条目会使总数超过 `MaxStopPendingSpawns` | 记录删除 | 先丢最早的 exhausted、没有就丢最早仍在重试的；计指标、Error 日志、`spawn_remove` |
 | 已停止 | cast 被回收 | 记录删除 | RR-23 |
 
+> 更正（2026-10-07，维护者第十三轮“待停止上限”选 B）：“超过 `MaxStopPendingSpawns` → 记录删除”一行已改为挪进已放弃分区（status `abandoned`，不再重试、不钉住 cast、不发 `spawn_remove`），已放弃分区只在 Advance 末尾按 `MaxAbandonedSpawns` 清理；新表见[分区方案 §11.4](REFACTOR-2026-10-07-skill-spawn-partition.md#114-状态迁移表替换-停止入口统一方案-31-的超限一行并加两行)。
+
 stop_pending 期间：钉住 cast、ID 不复用（RR-21）；不步进、不派发信号、不跑回调；占 owned 容量；在 `StateSnapshot().Spawns` 与 presentation reset 里可见，不在 `OwnedSpawns` 里。
 
 ### 3.2 各入口前后对照

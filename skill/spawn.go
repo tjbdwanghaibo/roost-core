@@ -16,6 +16,10 @@ const (
 	// 宿主侧运行。Runtime 不再推进它（不步进、不派发信号、不跑回调），只在之后的 tick 按退避重试 StopSpawn，
 	// 成功后改成停止状态；状态机见 runtime_spawn_stop.go（停止入口统一，维护者 2026-10-07）。
 	SpawnStopPending SpawnStatus = "stop_pending"
+	// SpawnAbandoned 表示待停止条目超过 MaxStopPendingSpawns 时，Runtime 放弃了这个停不下的衍生物（维护者第十三轮
+	// “待停止上限”选 B，2026-10-07）：不再重试、不再推进，不钉住 cast、不占 owned 容量；宿主那边可能仍在运行它。
+	// 记录留在“已放弃”分区里，Runtime 不在任何循环中途删它，只在 Advance 末尾按 MaxAbandonedSpawns 清理最早的。
+	SpawnAbandoned SpawnStatus = "abandoned"
 )
 
 type SpawnScope string
@@ -108,8 +112,9 @@ type SpawnInstance struct {
 	stopRetryExhausted bool
 }
 
-// liveOnHost 报告衍生物在宿主侧是否还在运行：运行中，或停止失败、等待 Runtime 重试停止。
-// 两种状态都钉住所属 cast、占用 owned 衍生物容量，Shutdown / RemoveProgram 都要停它。
+// liveOnHost 报告衍生物是否仍由 Runtime 负责、且在宿主侧运行：运行中，或停止失败、等待 Runtime 重试停止。
+// 两种状态都钉住所属 cast、占用 owned 衍生物容量，Shutdown / RemoveProgram 都要停它。已放弃（abandoned）的
+// 衍生物宿主侧可能仍在运行，但 Runtime 已不再负责，不算 live：停止请求对它是空操作。
 func (spawn *SpawnInstance) liveOnHost() bool {
 	return spawn != nil && (spawn.Status == SpawnRunning || spawn.Status == SpawnStopPending)
 }

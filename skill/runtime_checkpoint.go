@@ -23,8 +23,10 @@ import (
 // summon_result（字段名不变，变的是值；对照见 docs/feature/REFACTOR-2026-10-07-skill-summon-rename.md）；
 // 维护者第十三轮决定，线上未部署，不兼容版本 4。6：衍生物记录只存一份（spawns），删掉重复存储“已移交、仍在运行”
 // 那部分的 owned_spawns；恢复时按记录字段（status、handed_off）重新分区（docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md）；
-// 维护者第十三轮“skill 衍生物两张表”，线上未部署，不兼容版本 5。
-const RuntimeCheckpointVersion uint32 = 6
+// 维护者第十三轮“skill 衍生物两张表”，线上未部署，不兼容版本 5。7：衍生物新状态 abandoned（待停止超过
+// MaxStopPendingSpawns 时放弃、不删记录），payload 加 max_abandoned_spawns；维护者第十三轮“待停止上限”选 B
+// （docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md §11），线上未部署，不兼容版本 6。
+const RuntimeCheckpointVersion uint32 = 7
 const RuntimeCheckpointMaxBytes = 64 << 20
 const RuntimeCheckpointMaxRecords = 1_000_000
 
@@ -91,6 +93,7 @@ type runtimeCheckpointPayload struct {
 	SpawnStopRetryBackoff Tick                      `json:"spawn_stop_retry_backoff"`
 	SpawnStopRetryLimit   int                       `json:"spawn_stop_retry_limit"`
 	MaxStopPendingSpawns  int                       `json:"max_stop_pending_spawns"`
+	MaxAbandonedSpawns    int                       `json:"max_abandoned_spawns"`
 	CurrentTick           Tick                      `json:"current_tick"`
 	EventCursor           EventCursor               `json:"event_cursor"`
 	NextCastID            CastID                    `json:"next_cast_id"`
@@ -423,6 +426,7 @@ func RestoreRuntime(host Host, options RuntimeOptions, checkpoint RuntimeCheckpo
 	options.SpawnStopRetryBackoff = payload.SpawnStopRetryBackoff
 	options.SpawnStopRetryLimit = payload.SpawnStopRetryLimit
 	options.MaxStopPendingSpawns = payload.MaxStopPendingSpawns
+	options.MaxAbandonedSpawns = payload.MaxAbandonedSpawns
 	// newRuntimeCore, not NewRuntime: the fresh-runtime path fast-forwards
 	// the event cursor to the host's frontier and compacts everything before
 	// it — which would DELETE the events emitted between the checkpoint and
@@ -576,7 +580,7 @@ func (runtime *Runtime) checkpointPayloadLocked() (runtimeCheckpointPayload, err
 	if !runtime.stateMutationReady || !runtimeSnapshotsEqual(runtime.stateMutationBaseline, runtime.stateSnapshotLocked()) {
 		return runtimeCheckpointPayload{}, ErrCheckpointHostMismatch
 	}
-	p := runtimeCheckpointPayload{WorldRevision: runtime.host.CurrentRevision(), Authority: runtime.host.AuthorityIdentity(), MatchSeed: runtime.options.MatchSeed, SemanticsRevision: runtime.options.SupportedCompilerSemanticsRevision, MaxPassivePerTick: runtime.options.MaxPassiveActivationsPerTick, MaxOwned: runtime.options.MaxOwnedSpawns, MaxOwnedPerOwner: runtime.options.MaxOwnedSpawnsPerOwner, MaxOwnedPerProgram: runtime.options.MaxOwnedSpawnsPerProgram, MaxOwnedPerTemplate: runtime.options.MaxOwnedSpawnsPerTemplate, MaxActiveCasts: runtime.options.MaxActiveCasts, MaxAbilities: runtime.options.MaxAbilities, CompletedCastLimit: runtime.options.CompletedCastLimit, RootEventLimit: runtime.options.RootEventLimit, MaxProcLedgerEntries: runtime.options.MaxProcLedgerEntries, SpawnStopRetryBackoff: runtime.options.SpawnStopRetryBackoff, SpawnStopRetryLimit: runtime.options.SpawnStopRetryLimit, MaxStopPendingSpawns: runtime.options.MaxStopPendingSpawns, CurrentTick: runtime.currentTick, EventCursor: runtime.eventCursor, NextCastID: runtime.nextCastID, NextTaskSequence: runtime.nextTaskSequence, NextFrameID: runtime.nextFrameID, NextSpawnID: runtime.nextSpawnID, NextPassiveActivation: runtime.nextPassiveActivationID, NextAbilityHandle: runtime.nextAbilityHandle, NextAbilityOverlay: runtime.nextAbilityOverlay, PassiveCountTick: runtime.passiveCountTick, PassiveCount: runtime.passiveCount, TraceSequence: runtime.traceSequence, PresentationSequence: runtime.presentationSequence, StateEventSequence: runtime.stateEventSequence, StateEventDropped: runtime.stateEventDropped, StateMutationSequence: runtime.stateMutationSequence, StateMutationDropped: runtime.stateMutationDropped, StateMutationBaseline: runtime.stateMutationBaseline, StateMutationReady: runtime.stateMutationReady}
+	p := runtimeCheckpointPayload{WorldRevision: runtime.host.CurrentRevision(), Authority: runtime.host.AuthorityIdentity(), MatchSeed: runtime.options.MatchSeed, SemanticsRevision: runtime.options.SupportedCompilerSemanticsRevision, MaxPassivePerTick: runtime.options.MaxPassiveActivationsPerTick, MaxOwned: runtime.options.MaxOwnedSpawns, MaxOwnedPerOwner: runtime.options.MaxOwnedSpawnsPerOwner, MaxOwnedPerProgram: runtime.options.MaxOwnedSpawnsPerProgram, MaxOwnedPerTemplate: runtime.options.MaxOwnedSpawnsPerTemplate, MaxActiveCasts: runtime.options.MaxActiveCasts, MaxAbilities: runtime.options.MaxAbilities, CompletedCastLimit: runtime.options.CompletedCastLimit, RootEventLimit: runtime.options.RootEventLimit, MaxProcLedgerEntries: runtime.options.MaxProcLedgerEntries, SpawnStopRetryBackoff: runtime.options.SpawnStopRetryBackoff, SpawnStopRetryLimit: runtime.options.SpawnStopRetryLimit, MaxStopPendingSpawns: runtime.options.MaxStopPendingSpawns, MaxAbandonedSpawns: runtime.options.MaxAbandonedSpawns, CurrentTick: runtime.currentTick, EventCursor: runtime.eventCursor, NextCastID: runtime.nextCastID, NextTaskSequence: runtime.nextTaskSequence, NextFrameID: runtime.nextFrameID, NextSpawnID: runtime.nextSpawnID, NextPassiveActivation: runtime.nextPassiveActivationID, NextAbilityHandle: runtime.nextAbilityHandle, NextAbilityOverlay: runtime.nextAbilityOverlay, PassiveCountTick: runtime.passiveCountTick, PassiveCount: runtime.passiveCount, TraceSequence: runtime.traceSequence, PresentationSequence: runtime.presentationSequence, StateEventSequence: runtime.stateEventSequence, StateEventDropped: runtime.stateEventDropped, StateMutationSequence: runtime.stateMutationSequence, StateMutationDropped: runtime.stateMutationDropped, StateMutationBaseline: runtime.stateMutationBaseline, StateMutationReady: runtime.stateMutationReady}
 	p.CompletedCastOrder = append([]CastID(nil), runtime.completedCastOrder...)
 	castIDs := make([]int, 0, len(runtime.casts))
 	for id := range runtime.casts {
@@ -1068,14 +1072,17 @@ func checkpointRecordCount(payload runtimeCheckpointPayload) int {
 }
 
 func validCheckpointRuntimeLimits(payload runtimeCheckpointPayload) bool {
-	return payload.SemanticsRevision != "" && payload.MaxPassivePerTick > 0 && payload.MaxOwned > 0 && payload.MaxOwnedPerOwner > 0 && payload.MaxOwnedPerProgram > 0 && payload.MaxOwnedPerTemplate > 0 && payload.MaxActiveCasts > 0 && payload.MaxAbilities > 0 && payload.CompletedCastLimit > 0 && payload.RootEventLimit > 0 && payload.MaxProcLedgerEntries > 0 && payload.SpawnStopRetryBackoff > 0 && payload.SpawnStopRetryLimit > 0 && payload.MaxStopPendingSpawns > 0
+	return payload.SemanticsRevision != "" && payload.MaxPassivePerTick > 0 && payload.MaxOwned > 0 && payload.MaxOwnedPerOwner > 0 && payload.MaxOwnedPerProgram > 0 && payload.MaxOwnedPerTemplate > 0 && payload.MaxActiveCasts > 0 && payload.MaxAbilities > 0 && payload.CompletedCastLimit > 0 && payload.RootEventLimit > 0 && payload.MaxProcLedgerEntries > 0 && payload.SpawnStopRetryBackoff > 0 && payload.SpawnStopRetryLimit > 0 && payload.MaxStopPendingSpawns > 0 && payload.MaxAbandonedSpawns > 0
 }
 
 // restoreCheckpointSpawns 恢复衍生物记录，按字段放进分区（spawnTable.add）。分区由 status 与 handed_off 决定，
-// 所以两者要合法：status 是已知值，只有 entity 衍生物会移交（handoffEntitySpawns）。
+// 所以两者要合法：status 是已知值，只有 entity 衍生物会移交（handoffEntitySpawns）。已放弃的记录可能比所属 cast
+// 活得久，checkpoint 只能从记录自带的 Program 解析程序，所以它必须带 direct_program（live Runtime 只放弃仍在运行、
+// Program 未释放的 entity 衍生物）。已放弃的条数不按 MaxAbandonedSpawns 核对：两次 Advance 之间可以暂时超限，
+// 恢复后的下一次 Advance 末尾照样清理。
 func restoreCheckpointSpawns(table *spawnTable, values []checkpointSpawn, resolver ProgramResolver, authority AuthorityIdentity, semantics string, nextID SpawnID) error {
 	for _, item := range values {
-		if item.ID == 0 || item.ID > nextID || !validSpawnStatus(item.Status) || item.HandedOff && item.Scope != SpawnScopeEntity {
+		if item.ID == 0 || item.ID > nextID || !validSpawnStatus(item.Status) || item.HandedOff && item.Scope != SpawnScopeEntity || item.Status == SpawnAbandoned && !item.DirectProgram {
 			return ErrCheckpointCorrupt
 		}
 		program, err := resolveCheckpointProgram(item.Program, resolver, authority, semantics)

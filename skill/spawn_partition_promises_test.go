@@ -3,15 +3,17 @@ package skill
 // 衍生物分区存放（维护者第十三轮“skill 衍生物两张表”，docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md）。
 //
 // 承诺：每条衍生物记录恰好在一个分区里，分区由记录字段（Status、handedOff）决定——施放中 / 已移交 / 待停止 /
-// 已停止；不再有指向同一批记录的第二张表。施放、移交、停止、待停止、重试、到上限、超限删除、随 cast 回收、
-// checkpoint 恢复之后都成立，恢复出的分区与恢复前一致。
+// 已停止 / 已放弃；不再有指向同一批记录的第二张表。施放、移交、停止、待停止、重试、到上限、到待停止上限挪进已放弃、
+// 已放弃分区超限清理、随 cast 回收、checkpoint 恢复之后都成立，恢复出的分区与恢复前一致。
 //
 // 守卫：
 //   - TestSpawnPartitionsFollowRecordFields 在上面这些操作序列的每一步之后核对分区；
 //   - TestSpawnPartitionWritesStayInSpawnTable 用 go/types 读包源码：分区 map 只能在 spawn_table.go 里引用，
 //     写 map[SpawnID]*SpawnInstance（下标赋值、delete）只能在 spawnTable 的 setState / add / drop 与
 //     newSpawnTable 里，给 SpawnInstance 的 Status、handedOff 赋值只能在 setState 里，Runtime.spawns 整体不能
-//     被重新赋值。另起一张衍生物索引表、绕过 setState 改字段都会红。
+//     被重新赋值。另起一张衍生物索引表、绕过 setState 改字段都会红；
+//   - 同一守卫核对删记录的调用点（维护者第十三轮“待停止上限”选 B）：spawnTable.drop 只能在登记表 spawnDropSites 里的
+//     函数调用，已放弃分区的清理 pruneAbandonedSpawnsLocked 只能由 Advance 调用。在 Shutdown 等循环里直接 drop 会红。
 
 import (
 	"fmt"
@@ -51,7 +53,7 @@ func spawnRecordsIn(runtime *Runtime, partitions ...spawnPartition) []*SpawnInst
 	return result
 }
 
-var spawnPartitionNames = [spawnPartitionCount]string{"casting", "handed_off", "stop_pending", "stopped"}
+var spawnPartitionNames = [spawnPartitionCount]string{"casting", "handed_off", "stop_pending", "stopped", "abandoned"}
 
 // spawnPartitionViolations 核对分区不变量：每条记录恰好在一个分区里，键就是记录 ID，所在分区与字段一致。
 func spawnPartitionViolations(runtime *Runtime) []string {
@@ -192,7 +194,8 @@ func TestSpawnPartitionsFollowRecordFields(t *testing.T) {
 		}
 	})
 
-	// 一直拒绝停止：Shutdown → 待停止 → 重试到上限（exhausted）→ 新的待停止条目超过 MaxStopPendingSpawns，最早的被删掉。
+	// 一直拒绝停止：Shutdown → 待停止 → 重试到上限（exhausted）→ 新的待停止条目超过 MaxStopPendingSpawns，最早的挪进已放弃。
+	// 2026-10-07（待停止上限选 B）：之前断言最早的那条被删掉，现在断言它在已放弃分区里。
 	t.Run("retry exhaustion and the stop-pending limit", func(t *testing.T) {
 		program, environment := compileRuntimeJSON(t, asyncSkillJSON("partition.limits", `{"type":"entity"}`, `{"flow":"sequence","steps":[`+longSummonWithCountingCancel+`,{"flow":"finish"}]}`))
 		host := newStopEntryHost(environment)
@@ -221,8 +224,8 @@ func TestSpawnPartitionsFollowRecordFields(t *testing.T) {
 		if got := runtime.spawns.count(spawnStopPending); got != 2 {
 			t.Errorf("stop-pending partition holds %d records, want MaxStopPendingSpawns 2: %s", got, spawnPartitionLayout(runtime))
 		}
-		if runtime.spawns.get(started[0]) != nil {
-			t.Errorf("oldest stop-pending spawn %d kept past MaxStopPendingSpawns: %s", started[0], spawnPartitionLayout(runtime))
+		if runtime.spawns.get(started[0], spawnAbandoned) == nil {
+			t.Errorf("oldest stop-pending spawn %d not abandoned past MaxStopPendingSpawns: %s", started[0], spawnPartitionLayout(runtime))
 		}
 		if stats := runtime.RetentionStats(); stats.StopRetryExhaustedSpawns == 0 {
 			t.Errorf("retention stats %+v: no spawn reached the retry limit", stats)
@@ -236,6 +239,95 @@ func TestSpawnPartitionsFollowRecordFields(t *testing.T) {
 			t.Errorf("%d spawns still live after a successful shutdown: %s", live, spawnPartitionLayout(runtime))
 		}
 	})
+
+	// 待停止上限 1、已放弃上限 2，宿主一直拒绝：每轮“施放 → 移交 → Shutdown”把上一条待停止挪进已放弃；
+	// 偶数轮之后 Advance，已放弃分区只在 Advance 末尾清理到 2 条；每一步都经 checkpoint 恢复核对。
+	// 最后从同一个 checkpoint 恢复一份，与 live 各推进一次，分区相同（恢复出的 Runtime 按同一上限清理）。
+	t.Run("abandoned at the stop-pending limit, pruned at the end of Advance", func(t *testing.T) {
+		program, environment := compileRuntimeJSON(t, asyncSkillJSON("partition.abandon", `{"type":"entity"}`, `{"flow":"sequence","steps":[`+longSummonWithCountingCancel+`,{"flow":"finish"}]}`))
+		host := newStopEntryHost(environment)
+		host.failStops, host.failRemovals = -1, true
+		runtime := NewRuntime(host, RuntimeOptions{MaxStopPendingSpawns: 1, MaxAbandonedSpawns: 2})
+		resolver := resolveAnyOf(program)
+		var started []SpawnID
+		wantAbandoned := 0
+		for round := range 6 {
+			castID, err := runtime.Start(program, CastInput{Caster: 1, Target: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			started = append(started, onlySpawnOfCast(t, runtime, castID).ID)
+			if err := runtime.Shutdown(); err == nil {
+				t.Fatalf("round %d: Shutdown returned nil with every stop refused", round)
+			}
+			assertSpawnPartitions(t, fmt.Sprintf("round %d shutdown", round), runtime, host, resolver)
+			// 第一轮之后每轮 Shutdown 都把上一条待停止挪进已放弃；Advance 之外不删。
+			if round > 0 {
+				wantAbandoned++
+			}
+			if got := runtime.spawns.count(spawnAbandoned); got != wantAbandoned {
+				t.Errorf("round %d before Advance: abandoned partition holds %d records, want %d (nothing pruned outside Advance): %s", round, got, wantAbandoned, spawnPartitionLayout(runtime))
+			}
+			if round%2 == 1 {
+				if err := runtime.Advance(runtime.currentTick + 1); err != nil {
+					t.Fatal(err)
+				}
+				assertSpawnPartitions(t, fmt.Sprintf("round %d advance", round), runtime, host, resolver)
+				wantAbandoned = min(wantAbandoned, 2)
+				if got := runtime.spawns.count(spawnAbandoned); got != wantAbandoned {
+					t.Errorf("round %d after Advance: abandoned partition holds %d records, want %d (MaxAbandonedSpawns 2): %s", round, got, wantAbandoned, spawnPartitionLayout(runtime))
+				}
+			}
+		}
+		if got := runtime.spawns.sortedIDs(nil, spawnAbandoned); len(got) != 2 || got[0] != started[3] || got[1] != started[4] {
+			t.Errorf("abandoned partition %v, want the two newest abandoned %v: %s", got, started[3:5], spawnPartitionLayout(runtime))
+		}
+		// 再放弃一条（暂时超限）后 checkpoint；恢复出的 Runtime 与 live 各推进一次，清理结果相同。
+		if _, err := runtime.Start(program, CastInput{Caster: 1, Target: 2}); err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.Shutdown(); err == nil {
+			t.Fatal("Shutdown returned nil with every stop refused")
+		}
+		checkpoint, err := runtime.Checkpoint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		restored, err := RestoreRuntime(host, RuntimeOptions{}, checkpoint, resolver)
+		if err != nil {
+			t.Fatalf("restore with the abandoned partition over its limit: %v", err)
+		}
+		next := runtime.currentTick + 1
+		if err := runtime.Advance(next); err != nil {
+			t.Fatal(err)
+		}
+		if err := restored.Advance(next); err != nil {
+			t.Fatal(err)
+		}
+		for _, violation := range spawnPartitionViolations(restored) {
+			t.Errorf("restored after Advance: %s", violation)
+		}
+		if live, got := spawnPartitionLayout(runtime), spawnPartitionLayout(restored); live != got || runtime.spawns.count(spawnAbandoned) != 2 {
+			t.Errorf("after Advance: restored %s, live %s (want 2 abandoned in both)", got, live)
+		}
+		// 宿主恢复：Shutdown 停掉待停止的，已放弃的不再停（Runtime 不再负责），记录留到被清理。
+		host.failStops, host.failRemovals = 0, false
+		if err := runtime.Shutdown(); err != nil {
+			t.Fatal(err)
+		}
+		assertSpawnPartitions(t, "final shutdown", runtime, host, resolver)
+		if live, abandoned := runtime.spawns.count(spawnLivePartitions...), runtime.spawns.count(spawnAbandoned); live != 0 || abandoned != 2 {
+			t.Errorf("after a successful shutdown: %d live, %d abandoned, want 0 and 2: %s", live, abandoned, spawnPartitionLayout(runtime))
+		}
+	})
+}
+
+// spawnDropSites 是允许调用 spawnTable.drop 的函数登记表（维护者第十三轮“待停止上限”选 B）。删记录只发生在这三个安全点，
+// 不在任何“取 ID 列表 → 逐个处理”的循环中途；新增调用点必须在这里登记并说明为什么不会让别的循环取回 nil。
+var spawnDropSites = map[string]string{
+	"Runtime.pruneAbandonedSpawnsLocked": "Advance 末尾清理超出 MaxAbandonedSpawns 的已放弃记录（只由 Advance 调用）",
+	"Runtime.forgetCastSpawnsLocked":     "随 cast 回收已停止分区的记录（cast 已确认没有 live 衍生物）",
+	"Runtime.startEntitySpawn":           "衍生物启动失败、停止成功之后回收这条刚启动的记录（调用方不持有它的 ID 列表）",
 }
 
 // 源码守卫：分区 map 与分区字段只在 spawn_table.go 的指定函数里写。
@@ -286,6 +378,14 @@ func spawnPartitionWriteViolations(t *testing.T) []string {
 
 	mapWriters := map[string]bool{"spawnTable.setState": true, "spawnTable.add": true, "spawnTable.drop": true, "newSpawnTable": true}
 	fieldWriters := map[string]bool{"spawnTable.setState": true}
+	method := func(typeName, name string) types.Object {
+		object, _, _ := types.LookupFieldOrMethod(types.NewPointer(pkg.Scope().Lookup(typeName).Type()), false, pkg, name)
+		if object == nil {
+			t.Fatalf("%s has no method %s", typeName, name)
+		}
+		return object
+	}
+	dropMethod, pruneMethod := method("spawnTable", "drop"), method("Runtime", "pruneAbandonedSpawnsLocked")
 
 	selected := func(expr ast.Expr) types.Object {
 		if selector, ok := ast.Unparen(expr).(*ast.SelectorExpr); ok {
@@ -330,6 +430,16 @@ func spawnPartitionWriteViolations(t *testing.T) []string {
 			ast.Inspect(function.Body, func(node ast.Node) bool {
 				switch typed := node.(type) {
 				case *ast.SelectorExpr:
+					switch selected(typed) {
+					case dropMethod:
+						if _, ok := spawnDropSites[name]; !ok {
+							report(typed, "references spawnTable.drop; records leave the table only at the sites registered in spawnDropSites (no deletion in the middle of another loop)")
+						}
+					case pruneMethod:
+						if name != "Runtime.Advance" {
+							report(typed, "references pruneAbandonedSpawnsLocked; the abandoned partition is pruned only at the end of Advance")
+						}
+					}
 					if obj := selected(typed); obj == partitionsField && fileName != "spawn_table.go" {
 						report(typed, "references spawnTable.partitions outside spawn_table.go; go through spawnTable's methods")
 					}
