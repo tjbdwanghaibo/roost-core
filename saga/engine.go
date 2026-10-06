@@ -319,9 +319,6 @@ func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, err
 		after.Version++
 		after.UpdatedAt = now
 		after.Attempt = 0
-		// A new incarnation keeps future CommandIDs disjoint from every
-		// receipt recorded before this resume; see Record.Incarnation.
-		after.Incarnation++
 		after.LastError = ""
 		after.CommandID = ""
 		after.OperationKey = ""
@@ -342,7 +339,9 @@ func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, err
 			after.Phase = PhaseForward
 			after.Status = StatusPending
 		}
-		_, err = e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, After: after})
+		// 新一生（Incarnation+1）由 stepTransition 开：之后的 CommandID 与 Resume 之前的所有回执不相交。
+		request := stepTransition(record, after, transition{cause: causeResume})
+		_, err = e.store.Apply(ctx, request)
 		if errors.Is(err, ErrConflict) {
 			e.conflicts.Add(1)
 			continue
@@ -351,7 +350,7 @@ func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, err
 			return Record{}, err
 		}
 		e.signal(e.dueKick)
-		return after, nil
+		return request.After, nil
 	}
 	return Record{}, ErrConflict
 }
@@ -378,17 +377,9 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 		if record.CompletedSteps == 0 {
 			return Record{}, fmt.Errorf("saga: no completed steps to compensate")
 		}
-		after := e.beginCompensation(record, reason, now)
-		if record.Phase == PhaseCompensate {
-			// B1：补偿方向停下（补偿步骤拒绝或重试用尽 → ManualRequired）后再发起补偿，要重新执行的补偿步骤在
-			// 这一生里已经派发过。代际不变、Attempt 归零会让新的第一次尝试复用上一轮第一次尝试的 CommandID：
-			// 原生收件箱按摘要报身份冲突一直 nak，Mongo 收件箱回放旧的拒绝，协调器按回执去重，补偿永远不会
-			// 真正重新执行。与 Resume 一样进入新一生：CommandID 不相交，上一生的拒绝不再回放，上一生已生效的
-			// 补偿（成功迟到）照样回放而不重做。从正向发起的补偿在这一生里还没派发过补偿命令，不需要换代。
-			after.Incarnation++
-		}
-		// 当前步骤正在重试退避时，人工补偿同样放弃了它（abandonedOperation）。
-		_, err = e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, After: after, CloseOperation: abandonedOperation(record)})
+		// 当前步骤正在重试退避时人工补偿放弃了它；补偿方向停下的记录进入新一生（B1）。两者都由 stepTransition 决定。
+		request := stepTransition(record, e.beginCompensation(record, reason, now), transition{cause: causeManualCompensate})
+		_, err = e.store.Apply(ctx, request)
 		if errors.Is(err, ErrConflict) {
 			e.conflicts.Add(1)
 			continue
@@ -397,7 +388,7 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 			return Record{}, err
 		}
 		e.signal(e.dueKick)
-		return after, nil
+		return request.After, nil
 	}
 	return Record{}, ErrConflict
 }
@@ -446,13 +437,7 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 			return Record{}, fmt.Errorf("%w: %s", ErrDefinitionMissing, record.Type)
 		}
 		after := e.applyCompletion(record, definition, completion)
-		closed := closedOperation(record, after)
-		if completion.Success {
-			// 成功总是关闭这个操作（带结果）。记录停在 Pending / Compensating 时没有 OperationKey，
-			// closedOperation 得不出它，这里显式给出。
-			closed = completion.IdempotencyKey
-		}
-		outcome, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, After: after, Receipt: &completion, CloseOperation: closed})
+		outcome, err := e.store.Apply(ctx, stepTransition(record, after, transition{cause: causeResult, receipt: &completion}))
 		if errors.Is(err, ErrConflict) {
 			e.conflicts.Add(1)
 			continue
@@ -721,9 +706,8 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 		after.CommandID = ""
 		after.OperationKey = ""
 		clearLease(&after)
-		// RR-20261005-NC-250：在等结果或正在重试退避的操作都被放弃。旧实现只关闭 record.OperationKey，
-		// 退避中它是空串：不写 tombstone、不删排队命令，之后到达的成功被当作 ErrNotWaiting 静默丢弃。
-		_, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, ExpectedLease: record.Lease, After: after, CloseOperation: abandonedOperation(record)})
+		// RR-20261005-NC-250：在等结果或正在重试退避的操作都被放弃（stepTransition 关闭它）。
+		_, err := e.store.Apply(ctx, stepTransition(record, after, transition{cause: causeDefinitionMissing, fenced: true}))
 		if err == nil {
 			e.countTerminal(after.Status)
 		}
@@ -731,7 +715,7 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 	}
 	if !record.DeadlineAt.IsZero() && !now.Before(record.DeadlineAt) && record.Phase == PhaseForward {
 		after := e.beginCompensation(record, "saga deadline exceeded", now)
-		_, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, ExpectedLease: record.Lease, After: after, CloseOperation: abandonedOperation(record)})
+		_, err := e.store.Apply(ctx, stepTransition(record, after, transition{cause: causeDeadline, fenced: true}))
 		if err == nil {
 			e.countTerminal(after.Status)
 			e.signal(e.dueKick)
@@ -740,7 +724,7 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 	}
 	if record.Status == StatusWaiting {
 		after := e.retryOrCompensate(record, definition, "step result timeout", now)
-		_, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, ExpectedLease: record.Lease, After: after, CloseOperation: closedOperation(record, after)})
+		_, err := e.store.Apply(ctx, stepTransition(record, after, transition{cause: causeTimeout, fenced: true}))
 		if err == nil {
 			e.countTerminal(after.Status)
 			e.signal(e.dueKick)
@@ -755,7 +739,7 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 		after.Version++
 		after.UpdatedAt = now
 		clearLease(&after)
-		_, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, ExpectedLease: record.Lease, After: after})
+		_, err := e.store.Apply(ctx, stepTransition(record, after, transition{cause: causeInvalidStep, fenced: true}))
 		if err == nil {
 			e.failed.Add(1)
 			e.manualRequired.Add(1)
@@ -780,7 +764,7 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 	}
 	command := Command{ID: after.CommandID, IdempotencyKey: after.OperationKey, SagaID: record.ID, SagaType: record.Type, DefinitionVersion: record.DefinitionVersion, BusinessKey: record.BusinessKey, Step: record.Step, StepName: step.Name, Phase: record.Phase, Attempt: after.Attempt, Topic: topic, Payload: append([]byte(nil), record.Data...), DeadlineAt: after.NextRunAt, CreatedAt: now}
 	outbox := &OutboxRecord{Command: command, NextAttemptAt: now, CreatedAt: now}
-	_, err := e.store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, ExpectedLease: record.Lease, After: after, Outbox: outbox})
+	_, err := e.store.Apply(ctx, stepTransition(record, after, transition{cause: causeDispatch, fenced: true, outbox: outbox}))
 	if err == nil {
 		e.dispatched.Add(1)
 		e.signal(e.outboxKick)
@@ -968,30 +952,6 @@ func canonicalDeadline(value time.Time) time.Time {
 	return value.UTC().Truncate(time.Millisecond)
 }
 
-// abandonedOperation 是协调器不等结果就离开当前步骤时要以“放弃”关闭的操作：正在等某次尝试（Waiting，
-// OperationKey 非空），或者已派发过、正在重试退避（Attempt > 0，OperationKey 已清空）。截止、人工 Compensate、
-// 定义缺失三个出口共用它（U-0280 / RR-20261005-NC-250）：写下放弃关闭的 tombstone，之后到达的成功才能被识别为
-// “放弃后生效”并告警，而不是以 ErrNotWaiting 静默丢弃；同一事务删掉它仍排队的命令。还没派发过的步骤返回空串。
-func abandonedOperation(record Record) string {
-	if record.OperationKey != "" {
-		return record.OperationKey
-	}
-	if record.Attempt > 0 {
-		return operationKey(record.ID, record.Phase, record.Step)
-	}
-	return ""
-}
-
-func closedOperation(before, after Record) string {
-	if before.OperationKey == "" {
-		return ""
-	}
-	sameStep := before.Phase == after.Phase && before.Step == after.Step
-	if sameStep && (after.Status == StatusPending || after.Status == StatusCompensating) {
-		return ""
-	}
-	return before.OperationKey
-}
 func (e *Engine) definition(name string, version uint32) (Definition, bool) {
 	e.mu.RLock()
 	d, ok := e.definitions[definitionKey{typeName: name, version: version}]

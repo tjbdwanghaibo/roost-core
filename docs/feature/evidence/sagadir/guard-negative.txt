@@ -1,0 +1,7 @@
+# 负对照：在 saga 包里临时加一个手拼请求的 Engine 出口（handBuiltExit：Incarnation++ 后 store.Apply(ctx, ApplyRequest{...})），
+# GOWORK=off go test -count=1 -run TestEveryCoordinatorWriteGoesThroughStepTransition ./saga/   （验证后删除该文件）
+--- FAIL: TestEveryCoordinatorWriteGoesThroughStepTransition (0.00s)
+    step_transition_guard_test.go:20: ./zz_guard_negative.go:8:2: Incarnation changed outside stepTransition in handBuiltExit
+    step_transition_guard_test.go:20: ./zz_guard_negative.go:9:12: store.Apply in handBuiltExit does not take stepTransition(...)
+    step_transition_guard_test.go:20: ./zz_guard_negative.go:9:31: ApplyRequest built outside stepTransition in handBuiltExit
+FAIL
