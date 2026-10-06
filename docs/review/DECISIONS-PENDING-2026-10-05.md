@@ -196,7 +196,7 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | metrics 按标签删除 | Registry 加按标签删除，对象拥有者销毁时删 | 待实施（kit 批） |
 | readyz checker 期限 | 每个 checker 短期限，卡住报 Fail | 待实施（kit 批） |
 | 驱动 Close 契约 | 写进 A2 驱动契约表 | 待实施（文档） |
-| cfggen globals 规则 | 支持 required / min / enum，与 tablegen 统一 | 待实施（skill+cfggen 批） |
+| cfggen globals 规则 | 支持 required / min / enum，与 tablegen 统一 | 已实施（229a5aa0） |
 | bus SETNX 去重 | 保持，写进 bus 契约 | 待实施（文档） |
 | L2 落后权威 | 保持，写明上界 | 待实施（文档） |
 | Ops Bearer | 收紧为必须带 `Bearer ` | 待实施（kit 批） |
@@ -204,8 +204,8 @@ v1.20.1（tag → `be7407ab`）之后 main 上又有 N05、N09 第三 / 四批�
 | activity 预约身份 | 保持 | — |
 | N10 O-T3 / O-T4 | 保持并写文档 | 待实施（文档） |
 | robot Stage 序号 | 只增不回收 | 待实施（kit 批） |
-| buff 投影 | 组件给投影入口，投影交业务 | 待实施（skill+cfggen 批） |
-| skill 剩余观察 | O22 编译期拒绝；O7 排序；O29 改文案；O15/O16/O17/O27/O28 保持并写作者文档；其余保持 | 待实施（skill+cfggen 批） |
+| buff 投影 | 组件给投影入口，投影交业务 | 已实施（229a5aa0） |
+| skill 剩余观察 | O22 编译期拒绝；O7 排序；O29 改文案；O15/O16/O17/O27/O28 保持并写作者文档；其余保持 | 已实施（229a5aa0） |
 | NC-151 timeout_ticks | 保持 warning | — |
 | Mirror 剩余观察 | 保持；O-M6-5 owner 启动遇 Mongo 选举做有界重试 | 待实施（kit 批） |
 | 低优先 | `:lease:*` 旧键写迁移说明；业务时间高水位推进失败加计数；其余保持 | 待实施（kit 批 / 文档） |
