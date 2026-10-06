@@ -90,3 +90,8 @@ TOOL（pretag、source-head-check、冲突标记门禁、mirror-local.sh、示�
 - oa 已合（`055a15d6`、`543d4287`）：RR-20261006-17（OpenActivity 按组核对 expected）、-18（派发器序列随销毁删除）、-19（bus method 标签上界 257）。汇总时 OWN-5 / OPS-2 更新（guide-app…:628、impl-app…:1046、_summary-app…:161）。
 - 待收尾小项（下一批合并做）：① `activity.groups_file` 未设时不核对是为旧工程兼容——按“线上未部署不做兼容”改为必填（协调器启动即拒绝缺失），删掉不核对分支；② `slow_reroute.total` 的删除补一条触发冷目标改道的用例。
 - rv3 已合（`a3002263`）。维护者：NONCORE-46 选 A（修，`wt-tpstat`）；B10 两条管线待维护者在澄清后选 A/B。
+
+## 恢复后进展（2026-10-06 续）
+- rv2 已合（`65bef66e`，分册 2 共 39 条，未闭环 0）。drill 合入后复核 SAGA-1 `nats/driver/jetstream.go:96-97` 与 DRV-5 引用。
+- tail 已合（`2c01e06d`、`363be382`）：groups_file 必填（破坏性）、slow_reroute 补测、B10 分工文档。汇总时改 OWN-5（guide ~450-460、迁移表第 10 行 ~102、impl 709-742）、OPS-2（guide ~628、impl ~1046）、CFG-7（guide-cfg ~1453“列为后续”→维护者选 A 不做）、核 CFG-11（~403）；兼容破坏总表加“groups_file 必填”。对照表注意：tablegen 也有单例 `//roost:object`。
+- 跟进：`activity.New` 在 `Config.Groups == nil` 时仍不核对（只剩直接构造的测试路径）→ 改为必填，消除不核对分支（`wt-grpnew`）。
