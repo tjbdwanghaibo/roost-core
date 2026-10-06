@@ -240,12 +240,16 @@ func TestEntityLockGroupTransitionTimeoutClearsPending(t *testing.T) {
 		mu.Unlock()
 	}()
 	awaitChan(t, locked, "the group transition to acquire the entity lock")
-	_, err := mgr.groupTransitionDispatch(&GroupTransitionRequest{
-		EntityID:      id,
-		TargetGroupID: 8402,
-		State:         entity.EntityGroupTransitionJoin,
-		Attempts:      entityGroupTransitionRetryMax,
-		Deadline:      time.Now().Add(-time.Millisecond),
+	// 派发取锁要求 Guard 作用域（RR-20261006-12），与 runNestLogic 一致。
+	err := entity.WithGuardScope("group-transition-test", func(*entity.GuardScope) error {
+		_, err := mgr.groupTransitionDispatch(&GroupTransitionRequest{
+			EntityID:      id,
+			TargetGroupID: 8402,
+			State:         entity.EntityGroupTransitionJoin,
+			Attempts:      entityGroupTransitionRetryMax,
+			Deadline:      time.Now().Add(-time.Millisecond),
+		})
+		return err
 	})
 	close(release)
 

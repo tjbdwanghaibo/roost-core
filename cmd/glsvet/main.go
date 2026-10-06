@@ -684,6 +684,9 @@ var componentUndoCalls = map[string]bool{
 // that embeds ComponentBase or whose name ends in "Component". A DAO's own
 // methods may record undo; that is how a generated setter works.
 //
+// 组件方法调用同包里直接登记 undo 的包级 helper 函数也提示，跟进一层（RR-20261006-13，与停止类函数的
+// 提示同样做法，见 packageUndoHelpers）。
+//
 // skill.Runtime 是 A1 的明确例外（维护者决定 B4，2026-10-06）：它的冷却、ammo、cast、proc
 // 账本与 revision 不进事务，handler 回滚后不回退，业务按此设计（docs/skill/
 // skill-casting-and-combat.md）。Runtime 不是组件、也不登记 undo，这条提示本来就不会命中它，
@@ -710,6 +713,7 @@ func componentUndoHints(fileSet *token.FileSet, pkg *ast.Package) []string {
 			return true
 		})
 	}
+	undoHelpers := packageUndoHelpers(pkg)
 	var hints []string
 	for _, file := range pkg.Files {
 		for _, declaration := range file.Decls {
@@ -726,22 +730,61 @@ func componentUndoHints(fileSet *token.FileSet, pkg *ast.Package) []string {
 				if !ok {
 					return true
 				}
-				name := ""
-				switch fun := call.Fun.(type) {
-				case *ast.SelectorExpr:
-					name = fun.Sel.Name
-				case *ast.Ident:
-					name = fun.Name
-				}
+				name := undoCallName(call)
 				if componentUndoCalls[name] {
 					hints = append(hints, fmt.Sprintf("%s: hint: component %s.%s registers its own undo (%s); keep transaction state in the DAO (a nopersist field if it must not be stored) so the DAO's rollback covers it",
 						fileSet.Position(call.Pos()), receiver, function.Name.Name, name))
+					return true
+				}
+				if ident, ok := call.Fun.(*ast.Ident); ok {
+					if undo := undoHelpers[ident.Name]; undo != "" {
+						hints = append(hints, fmt.Sprintf("%s: hint: component %s.%s registers undo through %s (%s); keep transaction state in the DAO (a nopersist field if it must not be stored) so the DAO's rollback covers it",
+							fileSet.Position(call.Pos()), receiver, function.Name.Name, ident.Name, undo))
+					}
 				}
 				return true
 			})
 		}
 	}
 	return hints
+}
+
+// undoCallName 返回调用的函数名（f(...) 或 x.f(...) 的 f），用来与 componentUndoCalls 比较。
+func undoCallName(call *ast.CallExpr) string {
+	switch fun := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return fun.Sel.Name
+	case *ast.Ident:
+		return fun.Name
+	}
+	return ""
+}
+
+// packageUndoHelpers 返回同包里直接登记 undo 的包级函数：函数名 → 它调用的第一个 undo 入口（RR-20261006-13）。
+// 组件方法调用这样的 helper 与直接登记是同一个违例；之前只看组件方法体里的直接调用，把 RecordUndo 挪进 helper 就看不见。
+// 与停止类函数的提示一样只跟一层。只看包级函数、不看方法：没有类型信息时 x.f() 按名字匹配会把组件调 DAO setter
+// （DAO 方法自己登记 undo，A1 要求的正确写法）误报成违例；组件自己的方法已经各自被直接检查。
+func packageUndoHelpers(pkg *ast.Package) map[string]string {
+	helpers := make(map[string]string)
+	for _, file := range pkg.Files {
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Recv != nil || function.Body == nil || componentUndoCalls[function.Name.Name] {
+				continue
+			}
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				if helpers[function.Name.Name] != "" {
+					return false
+				}
+				if call, ok := node.(*ast.CallExpr); ok && componentUndoCalls[undoCallName(call)] {
+					helpers[function.Name.Name] = undoCallName(call)
+					return false
+				}
+				return true
+			})
+		}
+	}
+	return helpers
 }
 
 func embedsComponentBase(expression ast.Expr) bool {

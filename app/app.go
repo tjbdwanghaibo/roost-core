@@ -547,9 +547,6 @@ func isMissingConfig(err error) bool {
 	return errors.As(err, &notFound)
 }
 
-// stopModsReverse 是启动失败路径的逆序停止（无总截止时间，每个 Mod 用自己的默认时长）。
-// 返回是否全部停完：某个 Mod 停机超时会中断后续停止、保留它们的依赖，此时返回 false，
-// 调用方据此不释放单实例锁。Mod 返回普通错误仍算停完。
 // startupCleanupTimeout 是启动失败时留给 Service.Shutdown 收回已启动部分的时长。
 const startupCleanupTimeout = 5 * time.Second
 
@@ -591,6 +588,9 @@ func shutdownAfterStartupFailure(svc Service) (stopped bool, err error) {
 	}
 }
 
+// stopModsReverse 是启动失败路径的逆序停止（无总截止时间，每个 Mod 用自己的默认时长）。
+// 返回是否全部停完：某个 Mod 停机超时会中断后续停止、保留它们的依赖，此时返回 false，
+// 调用方据此不释放单实例锁。Mod 返回普通错误仍算停完。
 func stopModsReverse(mods []Mod, msg string) bool {
 	err := stopModsReverseWithContext(context.Background(), mods, msg)
 	if err != nil {

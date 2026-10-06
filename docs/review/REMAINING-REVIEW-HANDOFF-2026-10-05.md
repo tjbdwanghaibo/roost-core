@@ -154,11 +154,11 @@
 
 Nest、Sync、DataEngine、Remote 本体由核心工作线 review（[核心优化交接](../CORE-OPTIMIZATION-HANDOFF.md)），本线只沿集成需要读取。接口处的待办：
 
-- K1 Nest / Entity：快池禁阻塞、冷加载 / 慢续行、组迁移等由核心线负责；本线新增的 [WANTED W-2026-10-06-01](../bug/WANTED.md)（`releaseDispatchLocks` 无 Guard 作用域分支）等 review 判断。
+- K1 Nest / Entity：快池禁阻塞、冷加载 / 慢续行、组迁移等由核心线负责；本线新增的 [WANTED W-2026-10-06-01](../bug/WANTED.md)（`releaseDispatchLocks` 无 Guard 作用域分支）等 review 判断。（2026-10-06 已转 [RR-20261006-12](../bug/RR-20261006-12.md) 并修复，未发版。）
 - K2 DataEngine / K3 Remote 权限 / K4 Sync：本线修复只跑受影响回归，不冒认核心线的独立验收。
 
 ## 接手
 
 1. 先 `git fetch`，读 AGENTS.md、[roost-coding](../agent-skills/roost-coding/SKILL.md)、核心优化交接与本文。
-2. 新的 review 从 [WANTED](../bug/WANTED.md) 的未分流条目（W-2026-10-06-01、W-2026-10-06-02）和新增功能的增量开始；本文各单元的“保持现状”观察只在出现新证据（真实触发路径、性能或运维数据）时重开，不要重新登记。
+2. 新的 review 从 [WANTED](../bug/WANTED.md) 的未分流条目（W-2026-10-06-01、W-2026-10-06-02，2026-10-06 均已转 RR 并修复：RR-20261006-12、RR-20261006-10）和新增功能的增量开始；本文各单元的“保持现状”观察只在出现新证据（真实触发路径、性能或运维数据）时重开，不要重新登记。
 3. 外部环境到位时按 [外部验证清单](EXTERNAL-VERIFICATION-2026-10-06.md) 逐项做，在该清单的状态列回填。

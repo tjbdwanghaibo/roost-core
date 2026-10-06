@@ -54,7 +54,7 @@ func TestEntityLockGroupScopeAvailableForGroupedDispatch(t *testing.T) {
 	})
 
 	mgr := &NestMgr{getter: getter}
-	got, err := mgr.singleDispatch(name.String(), id1, nil)
+	got, err := singleDispatchInGuardScope(mgr, name.String(), id1)
 	if err != nil {
 		t.Fatalf("singleDispatch: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestEntityLockGroupScopeNilForNormalDispatch(t *testing.T) {
 	})
 
 	mgr := &NestMgr{getter: getter}
-	got, err := mgr.singleDispatch(name.String(), id, nil)
+	got, err := singleDispatchInGuardScope(mgr, name.String(), id)
 	if err != nil {
 		t.Fatalf("singleDispatch: %v", err)
 	}
@@ -122,6 +122,17 @@ func TestEntityLockGroupSnapshotDetectsPendingTransition(t *testing.T) {
 	}
 }
 
+// singleDispatchInGuardScope 在当前 goroutine 上建 Guard 作用域再直接调用 singleDispatch，与 runNestLogic 一致：
+// 派发取锁要求作用域（RR-20261006-12）。
+func singleDispatchInGuardScope(mgr *NestMgr, name string, id int64) (got any, err error) {
+	err = entity.WithGuardScope("group-lock-test", func(*entity.GuardScope) error {
+		var dispatchErr error
+		got, dispatchErr = mgr.singleDispatch(name, id, nil)
+		return dispatchErr
+	})
+	return got, err
+}
+
 // withDispatchGuardScope 在当前 goroutine 上建 Guard 作用域再取锁，与快池派发（runNestLogic 先 NewGuardScope、
 // dispatchLoadedEntities 再取锁）一致：Guard 归作用域所有，作用域结束时只归还池一次。
 //
@@ -130,7 +141,8 @@ func TestEntityLockGroupSnapshotDetectsPendingTransition(t *testing.T) {
 // Guard 重新取锁并再释放一次，同一个 Guard 进池两次；之后同进程里两个快 worker 会取到同一个 Guard，互相解对方
 // goroutine 持有的实体锁（“unlock of unowned mutex”），-shuffle 下排在后面的
 // TestSymmetricCrossCreatePairsResolveWithinRequeueBudget 出现 winners=0、sync timeout 或停机挂死。
-// 生产调用方都在 Guard 作用域里，不走那条分支（见 docs/bugfix/CLOSING-BATCH-4-2026-10-06.md A2）。
+// 生产调用方都在 Guard 作用域里，不走那条分支（见 docs/bugfix/CLOSING-BATCH-4-2026-10-06.md A2）。之后 RR-20261006-12 删掉了
+// 这条分支：没有作用域时派发取锁直接返回 errDispatchWithoutGuardScope，Guard 只由作用域归还。
 // glsvet -tests 也因此不再报 “GetEntityGuard called inside a go statement”。
 func withDispatchGuardScope(fn func(guard *entity.EntityGuard) error) error {
 	return entity.WithGuardScope("group-lock-test", func(scope *entity.GuardScope) error {

@@ -216,6 +216,55 @@ func (d *PlayerDao) SetLevel(v int32) {
 	}
 }
 
+// RR-20261006-13：组件方法经同包 helper 函数登记 undo，与直接登记是同一个违例，也要提示（跟进一层，与停止类函数
+// 的提示同样做法）。之前只看组件方法体里的直接调用，把 RecordUndo 挪进一个包级 helper 就看不见了。
+// 组件调 DAO 的 setter（DAO 方法自己登记 undo）是 A1 要求的正确写法，不能因为跟进而误报；helper 只跟一层。
+func TestComponentRecordingUndoThroughHelperIsHinted(t *testing.T) {
+	source := `package player
+import (
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+)
+type BuffComponent struct {
+	entity.ComponentBase
+	dao   *PlayerDao
+	stack []int
+}
+func (c *BuffComponent) push(v int) {
+	c.stack = append(c.stack, v)
+	rememberPop(c)
+}
+func (c *BuffComponent) level(v int32) { c.dao.SetLevel(v) }
+func (c *BuffComponent) deep() { outer(c) }
+func rememberPop(c *BuffComponent) {
+	nest.CurrentRollbackTx().RecordUndo(c, 1, func() error { c.stack = c.stack[:len(c.stack)-1]; return nil })
+}
+func outer(c *BuffComponent) { rememberPop(c) }
+type PlayerDao struct{ level int32 }
+func (d *PlayerDao) SetLevel(v int32) {
+	nest.RecordUndo(d, 1, func() error { return nil })
+	d.level = v
+}
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "component.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fileSet := token.NewFileSet()
+	packages, err := parser.ParseDir(fileSet, dir, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hints := componentUndoHints(fileSet, packages["player"])
+	if len(hints) != 1 || !strings.Contains(hints[0], "BuffComponent.push") || !strings.Contains(hints[0], "rememberPop") {
+		t.Fatalf("hints = %q, want exactly one hint: BuffComponent.push registering undo through rememberPop "+
+			"(not the DAO setter call, not the two-level outer → rememberPop chain)", hints)
+	}
+	if findings, err := vetDirectory(token.NewFileSet(), dir); err != nil || findings != 0 {
+		t.Fatalf("findings = %d err = %v, want 0: the component undo check is a hint, not a gate", findings, err)
+	}
+}
+
 // B4（维护者 2026-10-06）：skill.Runtime 的状态按决定不进事务，是 A1 的明确例外。A1 的提示只看
 // 组件方法里的 undo 登记，skill 各包（含手写 CombatDao 自己登记逆操作的 combatcomponent）都不应
 // 命中；命中说明提示的判定变了，需要先确认是否误报再决定豁免。

@@ -852,7 +852,9 @@ Wanted-02 → RR-20260917-05（嵌套通知），Wanted-03 → RR-20260917-06（
 - **为何可疑**：三处都可能让本地以为持有而共享表不认（或反之），与 RR-20260921-03 / RR-20261004-10 / 14 同族。读码所得，均未写出红测试。
 - **来源**：RR-20261004-14 修复报告 §没验证的。
 
-### W-2026-10-06-01：nest `releaseDispatchLocks` 的无 Guard 作用域分支会把调用方仍在用的 Guard 放回池（组迁移重试时同一 Guard 两次归还）
+### W-2026-10-06-01：nest `releaseDispatchLocks` 的无 Guard 作用域分支会把调用方仍在用的 Guard 放回池（组迁移重试时同一 Guard 两次归还）（已转 RR：[RR-20261006-12](RR-20261006-12.md)，已修复未发版）
+
+已转 RR，不再属于待审候选：按候选修法第二种处理——派发取锁只用当前 goroutine 作用域里的 Guard，没有作用域时取锁前返回错误，删掉归还 Guard 的分支；两种修法的取舍见[修复记录](../bugfix/RR-20261006-12.md)。下面保留来源。
 
 - **位置**：`nest/nest_dispatch.go:480` `releaseDispatchLocks`（`entity.CurrentGuardScope() == nil` 时 `entity.EntityGuardRelease(guard)`）；`nest/group_lock.go:235` `lockDispatchEntitiesForHandlerWithStore` 校验失败后 `releaseLocks()` 再 `continue`，下一轮仍用同一个 `guard`。基线 `94548913`。
 - **现象**：没有 Guard 作用域时，第一次 `releaseLocks()` 已把 Guard 放回 `guardPool`，重试又用它取锁、成功后再释放一次——`sync.Pool` 里同一个指针两份，之后两个 `NewGuardScope` 取到同一个 Guard，互相解对方 goroutine 的实体锁（`unlock of unowned mutex`）。收尾第 4 批 A2 的 `-shuffle` 失败就是这样来的（用例已改为建作用域，[记录](../bugfix/CLOSING-BATCH-4-2026-10-06.md)）。

@@ -82,7 +82,7 @@ Runtime 是自带锁、调度器、进程表、trace / presentation / state muta
 
 - `docs/agent-skills/roost-coding/SKILL.md` 执行契约（Nest 与 Entity）加一条：事务内会改的状态一律放在 DAO（必要时用 `nopersist` 字段），组件不得自行维护需要回滚的内存状态，不在组件里登记 undo。
 - 生成器文档：`codegen/README.md` 的 tag 表与 undo 小节；生成工程文档（`render_docs.go`）的 DAO 说明；`add entity` 组件骨架注释；demo 两个 DAO 定义的字段注释。
-- `cmd/glsvet` 加提示（不计入失败、不改退出码，与 A3“只做提示”一致）：在组件方法（接收者类型嵌入 `ComponentBase` 或名字以 `Component` 结尾）里直接调用 `RecordUndo` / `RecordUndoToken` / `DeferRollback` 时打印 `hint:`。
+- `cmd/glsvet` 加提示（不计入失败、不改退出码，与 A3“只做提示”一致）：在组件方法（接收者类型嵌入 `ComponentBase` 或名字以 `Component` 结尾）里直接调用 `RecordUndo` / `RecordUndoToken` / `DeferRollback` 时打印 `hint:`。（2026-10-06 [RR-20261006-13](../bugfix/RR-20261006-13.md) 起也跟进一层同包包级 helper 函数：组件方法调用直接登记 undo 的包级函数时，在调用处提示。）
 
 ## 6. 兼容、Nest 衔接与性能
 

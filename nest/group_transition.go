@@ -130,6 +130,11 @@ func (mgr *NestMgr) groupTransitionDispatch(req *GroupTransitionRequest) (ret an
 	if mgr == nil || mgr.getter == nil || req == nil {
 		return nil, ErrNestStopped
 	}
+	// 取锁用 runNestLogic 作用域里的 Guard（RR-20261006-12）；放在取组锁之前，没有作用域时不留任何副作用。
+	guard, err := dispatchScopeGuard()
+	if err != nil {
+		return nil, err
+	}
 	fullID, err := entity.NormalizeFullID(req.EntityID, entity.EntityKindNone)
 	if err != nil {
 		return nil, err
@@ -151,12 +156,11 @@ func (mgr *NestMgr) groupTransitionDispatch(req *GroupTransitionRequest) (ret an
 	}
 	defer unlockGroups()
 
-	guard := entity.GetEntityGuard()
 	acquired, err := tryLockDispatchEntities(guard, []entity.IThreadSafeEntity{ent})
 	if err != nil {
 		return nil, mgr.retryGroupTransition(req, "entity_lock_busy")
 	}
-	defer releaseDispatchLocks(guard, acquired)
+	defer releaseDispatchEntities(guard, acquired)
 
 	if ent.Base().GroupTransitionState() != req.State ||
 		ent.Base().GroupTransitionTargetID() != req.TargetGroupID {
