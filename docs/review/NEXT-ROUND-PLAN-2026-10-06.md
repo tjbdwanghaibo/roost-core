@@ -17,7 +17,7 @@
   - D-L3 方案文档 §5 / §9、USER_GUIDE、T-270 中关于“往回调”的说明改为“禁止回调”。
 - **保留系统钟的不变**：租约 / 锁、超时、重试退避中依赖服务端 TTL 或跨进程墙钟比较的部分、存储 TTL、Ack、日志 / 指标 / WAL。
 - **验收**：启动时偏移回调被拒（红→绿）；删除的拆分逐条有用例证明行为在“单调业务时间”下不变；偏移为 0 时生产行为不变。
-- **状态**：待实施。
+- **状态**：已实施（`3e77beb9`，分支 `monotime`，未发版）。高水位放在单实例锁的协调存储（共享 Redis，键 `<singleton.key_prefix>:business_time`），容差 1 分钟，运行中每 10s 推进，只在非生产检查；activity 派发退避 / 进度凭证、mail 领取租约合并回业务钟，`mail.RedisConfig.StorageGrace` 删除（宽限固定 24h）；chat 保留期、account token / 运维时间保留系统钟。[方案与实施记录](../feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md)
 
 ## 2. configdata 大小写敏感
 
