@@ -62,6 +62,6 @@
 | 第十二轮 · skill 与 cfggen | O22 / O7 / O29、buff 投影入口 `ProjectAttributes`、cfggen globals 规则 | `229a5aa0` |
 | 第十二轮 · kit | O-S5-2、metrics 按标签删除、readyz checker 期限、Ops Bearer、CAS 口径、RR-20261006-09、O-M6-5、高水位计数、回滚面板 | `7b73aabc` |
 | 第十二轮 · Mongo 步骤延迟 | 只做分析，维护者选 A（接受现状），代码不变 | `ff08c941` |
-| 收尾第 1 批 | 文档刷新：交接 / 索引 / 规划、驱动 Close 契约、bus 去重契约、L2 落后上界、O-T3 / O-T4、`:lease:*` 迁移说明、外部验证清单 | 本批提交 |
+| 收尾第 1 批 | 文档刷新：交接 / 索引 / 规划、驱动 Close 契约、bus 去重契约、L2 落后上界、O-T3 / O-T4、`:lease:*` 迁移说明、外部验证清单 | `88f33776` |
 
 另一路发版准备（saga 测试、示例实跑门禁）由并行分支提交，以 CHANGELOG `[Unreleased]` 为准。

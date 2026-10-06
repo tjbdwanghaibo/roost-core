@@ -193,7 +193,7 @@
 | --- | --- | --- |
 | O-M6-6 | 按推荐：同 sid 新进程（已持 App 单实例锁）启动时立即接管上一代同 sid 进程留下的 Remote 实体锁（按锁记录的进程代际令牌判定，只接管“同 sid、旧代际”） | 已实施（d483238e） |
 | 收尾 | 盘点全部未完成问题，处理完后统一发一个版本 | 第 1～4 批与第十二轮决定已实施（见下面各行与第十二轮表），随 v1.23.0 发布 |
-| 收尾 · 第 1 批 | 文档刷新：DECISIONS-PENDING / 单元状态 / 下一轮规划 / 缺陷索引 / feature 状态行；A10 codegen 文档旧模块路径；A16 CombatComponent 注释；A18 核心优化交接四条旧疑点核对；第十二轮文档类决定；外部验证清单；非核心 review 完成总结 | 已实施（`CB1_COMMIT`，未发版） |
+| 收尾 · 第 1 批 | 文档刷新：DECISIONS-PENDING / 单元状态 / 下一轮规划 / 缺陷索引 / feature 状态行；A10 codegen 文档旧模块路径；A16 CombatComponent 注释；A18 核心优化交接四条旧疑点核对；第十二轮文档类决定；外部验证清单；非核心 review 完成总结 | 已实施（`88f33776`，未发版） |
 | 收尾 · 第 3 批 | skill 小修 A4～A6：null 默认值实体状态 set 类型不匹配、checkpoint 拒绝 `phase_timeout`（O20）、文件 outbox 清理遗留 tmp（O6） | 已实施（`b8fbcee0`，RR-20261006-02～04，未发版） |
 | 收尾 · 第 2 批 | 生成形状相关小项：A8 生成配置补 `remote_entity` 新键、A9 生成 TCP 越界报错点名、A11 full 场景 add 序列收拢且不吞失败、A15 生成 TCP 不配合 ctx 用例、A17 game-demo 重开放弃面板 | 已实施（`fcc78ad0`，未发版，[记录](../bugfix/CLOSING-BATCH-2-2026-10-06.md)） |
 | 收尾 · 第 4 批 | kit / core 小修与测试设施：A2 nest `-shuffle` 失败（用例隔离）、A3 glsvet `-tests ./nest` 3 条、A7 global `Bind` 重试误报冲突、A12 saga 步骤预算大小写冲突、A13 `app.run` 退出原因进文件日志、A14 mongotest `$in` 具名切片（O-S5-6） | 已实施（`611d5d72`，RR-20261006-05～08，未发版，[记录](../bugfix/CLOSING-BATCH-4-2026-10-06.md)） |
@@ -207,20 +207,20 @@
 | O-S5-2 | saga Mod 启动时校验 `dataengine.effects.max_age` 与 `saga.completion_receipt_ttl` | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)） |
 | metrics 按标签删除 | Registry 加按标签删除，对象拥有者销毁时删 | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：`metrics.DeleteSeries`，loadtest 运行挤出历史时删 `run` 序列 |
 | readyz checker 期限 | 每个 checker 短期限，卡住报 Fail | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：并发、每个 1.5s |
-| 驱动 Close 契约 | 写进 A2 驱动契约表 | 已实施（`CB1_COMMIT`，未发版）：按实测写进 [redis/driver](../../redis/driver/README.md) 与 [mongo/driver](../../mongo/driver/README.md) README §5；单机与 Cluster 重复 Close 不一致等登记 [WANTED W-2026-10-06-02](../bug/WANTED.md)，代码未改 |
+| 驱动 Close 契约 | 写进 A2 驱动契约表 | 已实施（`88f33776`，未发版）：按实测写进 [redis/driver](../../redis/driver/README.md) 与 [mongo/driver](../../mongo/driver/README.md) README §5；单机与 Cluster 重复 Close 不一致等登记 [WANTED W-2026-10-06-02](../bug/WANTED.md)，代码未改 |
 | cfggen globals 规则 | 支持 required / min / enum，与 tablegen 统一 | 已实施（229a5aa0） |
-| bus SETNX 去重 | 保持，写进 bus 契约 | 已实施（`CB1_COMMIT`，未发版）：契约写进 `bus/reliable.go` 的 `ReliableStore` 注释（按当前源码：`BeginConsume` 出错进死信、不重投；死信重投用新 MsgID） |
-| L2 落后权威 | 保持，写明上界 | 已实施（`CB1_COMMIT`，未发版）：[B2 §7](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) 与 USER_GUIDE——L2 最长落后 `snapshot_l2_ttl`，读者再加 `cached_max_staleness`，缺省约 5m30s |
+| bus SETNX 去重 | 保持，写进 bus 契约 | 已实施（`88f33776`，未发版）：契约写进 `bus/reliable.go` 的 `ReliableStore` 注释（按当前源码：`BeginConsume` 出错进死信、不重投；死信重投用新 MsgID） |
+| L2 落后权威 | 保持，写明上界 | 已实施（`88f33776`，未发版）：[B2 §7](../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md) 与 USER_GUIDE——L2 最长落后 `snapshot_l2_ttl`，读者再加 `cached_max_staleness`，缺省约 5m30s |
 | Ops Bearer | 收紧为必须带 `Bearer ` | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)） |
 | CAS 冲突率口径 | versionstore 层统一计数 | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：chat / rank 自报删除 |
 | activity 预约身份 | 保持 | 保持 |
-| N10 O-T3 / O-T4 | 保持并写文档 | 已实施（`CB1_COMMIT`，未发版）：`ai/strategy.go`（`Strategy`、`StoppableStrategy`）、`Controller.Shutdown` 注释与 kit/README ai 段 |
+| N10 O-T3 / O-T4 | 保持并写文档 | 已实施（`88f33776`，未发版）：`ai/strategy.go`（`Strategy`、`StoppableStrategy`）、`Controller.Shutdown` 注释与 kit/README ai 段 |
 | robot Stage 序号 | 只增不回收 | 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：RR-20261006-09 |
 | buff 投影 | 组件给投影入口，投影交业务 | 已实施（229a5aa0） |
 | skill 剩余观察 | O22 编译期拒绝；O7 排序；O29 改文案；O15/O16/O17/O27/O28 保持并写作者文档；其余保持 | 已实施（229a5aa0） |
 | NC-151 timeout_ticks | 保持 warning | 保持 |
 | Mirror 剩余观察 | 保持；O-M6-5 owner 启动遇 Mongo 选举做有界重试 | 其余保持；O-M6-5 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）：`EnsureIndexes` 遇换主 10 次 × 1s，私有副本集 stepDown 红绿 |
-| 低优先 | `:lease:*` 旧键写迁移说明；业务时间高水位推进失败加计数；其余保持 | 高水位计数 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）；`:lease:*` 迁移说明已实施（`CB1_COMMIT`，未发版，[DEPLOYMENT §7.1](../DEPLOYMENT.md#71-升级后的手工清理)）；其余保持 |
+| 低优先 | `:lease:*` 旧键写迁移说明；业务时间高水位推进失败加计数；其余保持 | 高水位计数 已实施（`7b73aabc`，分支 `bkit`，未发版，[记录](../feature/DECISIONS-R12-KIT-2026-10-06.md)）；`:lease:*` 迁移说明已实施（`88f33776`，未发版，[DEPLOYMENT §7.1](../DEPLOYMENT.md#71-升级后的手工清理)）；其余保持 |
 | Mongo 步骤延迟 | 维护者要求分析（9.0→17.4 ms/op） | 已分析（`ff08c941`，[分析](../feature/SAGA-MONGO-STEP-LATENCY-2026-10-06.md)）：代价是多一次落盘提交，吞吐同样约减半；不放松契约就没有安全优化，未改代码。**维护者选 A（接受现状）**：“目前真正走 saga 的实际业务场景不多，55tps 足够了”。契约与实现不变 |
 
 另按维护者第十二轮实施要求，game-demo 仪表盘补 `configdata_rollback_total{trigger}` 面板（A17 顺带观察），同一提交 `7b73aabc`。
