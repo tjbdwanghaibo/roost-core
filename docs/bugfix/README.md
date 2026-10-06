@@ -6,6 +6,13 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-06 RR-20261006-21 后续：Runtime 负责重试停止（`skretry`），未发版。** 维护者决定技能自己启动的东西由技能自己收尾：`failCastLocked` 停不下的进程标成 `stop_pending`，`advanceHost` 按退避重试（默认 4 tick 起翻倍、10 次上限），到上限计 `skill.process.stop_retry_exhausted.total` 并写日志、记录保留，条目数受 `MaxStopPendingProcesses` 约束，状态进 checkpoint（版本 3）；`Host.StopProcess` 契约写明必须幂等。[记录](RR-20261006-21.md#后续runtime-负责重试停止维护者-2026-10-06)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-31](RR-20261006-31.md) | tick 驱动的停止被宿主拒绝时转为 `stop_pending`、从 owned 表摘掉，错误只返回这一次，Runtime 继续前进 | 已修复、声明场景验证，未发版 |
+| [RR-20261006-30](RR-20261006-30.md) | 恢复按 `pruneCompletedCastsLocked` 的不变量核对完成队列：超出上限的部分必须都仍被引用 | 已修复、声明场景验证，未发版 |
+
 **10-06 真实进程演练追加两项（drill3），未发版。** [演练记录](REAL-PROCESS-DRILLS-2026-10-06.md) ⑤ ⑥：loadtest 的 `rc=1` 查清并修复，Redis Cluster 下重跑单实例锁 / fail-stop / 静态绑定 / 在途 saga 接手全部符合，App 锁方案 §13 的“未验证”改为实测结论。RR-20261006-27：直方图记最小 / 最大观测值，分位数插值收在观测范围内，阈值失败写明哪条阈值、实际值、上限与样本数；RR-20261006-28：生产校验接受 `redis.cluster_addrs`（解析收到 `app.RedisClusterAddrs`），accountctl 加 `-redis-cluster`，dev run.sh 读 `cluster_addrs`；RR-20261006-29：`Contribute` 遇到还没开的窗口自己开窗再记。
 
 | 编号 | 修复 | 状态 |
@@ -28,7 +35,7 @@
 | --- | --- | --- |
 | [RR-20261006-23](RR-20261006-23.md) | `castEvictableLocked` 只看运行中的进程；`pruneCompletedCastsLocked` 回收 cast 前删它的进程记录 | 已修复、声明场景验证，未发版 |
 | [RR-20261006-22](RR-20261006-22.md) | `PresentationSnapshot` 按增量来源填 PrimaryTarget（未移交进程取施法目标），`activePresentationEvent` 用它 | 已修复、声明场景验证，未发版 |
-| [RR-20261006-21](RR-20261006-21.md) | `startLocked` 未提交失败：无运行中进程时删记录、删 cast、还 ID；否则保留 failed cast 并返回其 ID | 已修复、声明场景验证，未发版 |
+| [RR-20261006-21](RR-20261006-21.md) | `startLocked` 未提交失败：无运行中进程时删记录、删 cast、还 ID；否则保留 failed cast 并返回其 ID；后续：停不下的进程由 Runtime 退避重试 | 已修复、声明场景验证，未发版 |
 
 **10-06 NONCORE-46 维护者选 A（tpstat），未发版。** RR-20261006-20：`TaskPool.Submit` 先计提交再入队（被拒撤回），`GetStats` 先读结束数再读 total，保证 `completed + failed ≤ total`；不加锁，热路径只多一次拒绝时的原子减。
 

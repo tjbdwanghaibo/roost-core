@@ -157,7 +157,8 @@ func (runtime *Runtime) captureOwnedProcessSnapshots(process *ProcessInstance) e
 func (runtime *Runtime) hasOwnedProcessCapacityExcluding(owner EntityID, programID string, template UnitTemplateHandle, additional int, excluded map[EntityID]bool) bool {
 	total, ownerCount, programCount, templateCount := 0, 0, 0, 0
 	for _, process := range runtime.processes {
-		if process.Scope != ProcessScopeEntity || process.Status != ProcessRunning {
+		// 待停止的进程仍在宿主侧运行，照样占容量。
+		if process.Scope != ProcessScopeEntity || !process.liveOnHost() {
 			continue
 		}
 		if excluded[process.LifecycleEntity] {
@@ -283,8 +284,12 @@ func (runtime *Runtime) reapUnhandedEntityProcesses() error {
 	var firstErr error
 	for _, id := range ids {
 		process := runtime.processes[id]
-		if err := runtime.terminateProcess(runtime.casts[process.CastID], process, StopCauseCancel, "cancel"); err != nil && firstErr == nil {
-			firstErr = err
+		cast := runtime.casts[process.CastID]
+		if err := runtime.terminateProcess(cast, process, StopCauseCancel, "cancel"); err != nil {
+			runtime.deferRefusedStopLocked(cast, process, StopCauseCancel)
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 	return firstErr
@@ -496,6 +501,8 @@ func (runtime *Runtime) terminateOwnedProcess(cast *castInstance, id ProcessID, 
 		return nil
 	}
 	if err := runtime.terminateProcess(cast, process, cause, callbackEvent); err != nil {
+		// 宿主拒绝停止：交给退避重试，不让下一次 Advance 卡在同一个进程上（RR-20261006-31）。
+		runtime.deferRefusedStopLocked(cast, process, cause)
 		return err
 	}
 	delete(runtime.ownedProcesses, id)
@@ -547,7 +554,8 @@ func (runtime *Runtime) Shutdown() error {
 	defer runtime.commitStateMutationsLocked()
 	ids := make([]ProcessID, 0, len(runtime.processes))
 	for id, process := range runtime.processes {
-		if process.Status == ProcessRunning {
+		// 待停止的进程（含重试已到上限的）在这里再停一次；宿主 StopProcess 幂等。
+		if process.liveOnHost() {
 			ids = append(ids, id)
 		}
 	}

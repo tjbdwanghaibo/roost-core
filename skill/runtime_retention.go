@@ -9,12 +9,27 @@ type RuntimeRetentionStats struct {
 	ProcLedgerEntries    int
 	RuntimeEvents        int
 	RuntimeEventsDropped uint64
+	// StopPendingProcesses counts processes the Host failed to stop that the
+	// Runtime still owns (bounded by MaxStopPendingProcesses);
+	// StopRetryExhaustedProcesses is the subset whose retries hit
+	// ProcessStopRetryLimit and are no longer retried automatically.
+	StopPendingProcesses        int
+	StopRetryExhaustedProcesses int
 }
 
 func (runtime *Runtime) RetentionStats() RuntimeRetentionStats {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
-	return RuntimeRetentionStats{Casts: len(runtime.casts), CompletedCasts: len(runtime.completedCastOrder), RootEvents: len(runtime.rootEventCounts), ProcLedgerEntries: len(runtime.procLedger), RuntimeEvents: len(runtime.runtimeEvents), RuntimeEventsDropped: runtime.runtimeEventDropped}
+	stats := RuntimeRetentionStats{Casts: len(runtime.casts), CompletedCasts: len(runtime.completedCastOrder), RootEvents: len(runtime.rootEventCounts), ProcLedgerEntries: len(runtime.procLedger), RuntimeEvents: len(runtime.runtimeEvents), RuntimeEventsDropped: runtime.runtimeEventDropped}
+	for _, process := range runtime.processes {
+		if process.Status == ProcessStopPending {
+			stats.StopPendingProcesses++
+			if process.stopRetryExhausted {
+				stats.StopRetryExhaustedProcesses++
+			}
+		}
+	}
+	return stats
 }
 
 func (runtime *Runtime) trackCompletedCastLocked(cast *castInstance) {
@@ -47,12 +62,12 @@ func (runtime *Runtime) forgetCompletedCastLocked(id CastID) {
 	}
 }
 
-// castHasRunningProcessLocked 报告 cast 名下是否还有运行中的进程（含已移交、停止失败而仍在运行的）。
-// 已停的进程记录不算：它们只是历史，随 cast 一起回收（forgetCastProcessesLocked）。
+// castHasRunningProcessLocked 报告 cast 名下是否还有在宿主侧运行的进程（含已移交的，以及停止失败、等 Runtime
+// 重试停止的 stop_pending）。已停的进程记录不算：它们只是历史，随 cast 一起回收（forgetCastProcessesLocked）。
 func (runtime *Runtime) castHasRunningProcessLocked(id CastID) bool {
 	for _, records := range []map[ProcessID]*ProcessInstance{runtime.processes, runtime.ownedProcesses} {
 		for _, process := range records {
-			if process != nil && process.CastID == id && process.Status == ProcessRunning {
+			if process != nil && process.CastID == id && process.liveOnHost() {
 				return true
 			}
 		}

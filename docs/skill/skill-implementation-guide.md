@@ -173,6 +173,16 @@ owner、source、target（以及需要时的 `Result: "kill"`），主动 fixtur
 World revision 是关键防线：Runtime 的 query/command 会携带期望 revision，Host 负责
 拒绝已失效读取或提交。因而不要缓存 Host 返回的可变对象，再在后续 tick 假设其仍然有效。
 
+**`StopProcess` 必须幂等**（Host 契约，2026-10-06）：停一个已经停掉或 Host 不认识的进程要成功返回、不产生第二次
+副作用（`MemoryHost` 返回当前 revision、不发事件）。只有进程在世界里确实还在运行时才返回错误。原因：宿主停止
+失败时 Runtime 把进程标成 `stop_pending`，之后的 tick 按退避重试同一个停止（`RuntimeOptions.ProcessStopRetryBackoff`
+默认 4 tick、每次失败翻倍到最多 64 倍，`ProcessStopRetryLimit` 默认 10 次）；`Shutdown` / `RemoveProgram` 也会再停
+一次。宿主实际停掉了却报失败的，会再收到一次停止。到上限后 Runtime 不再自动重试，计
+`skill.process.stop_retry_exhausted.total` 并写一条 Warn 日志，记录保留；待停止条目最多
+`MaxStopPendingProcesses`（默认 256）条，超限丢最早的已告警条目（没有就丢最早仍在重试的），计
+`skill.process.stop_pending_dropped.total` 并写 Error 日志。细节见
+[施法语义](skill-casting-and-combat.md) 的“失败终态”与 `skill/runtime_process_stop_retry.go`。
+
 ## 5. 过程与高级能力的阅读地图
 
 以下表按功能给出最小切入 fixture 与主要实现位置：

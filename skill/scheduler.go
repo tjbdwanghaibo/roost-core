@@ -329,6 +329,7 @@ func (runtime *Runtime) advanceHost(tick Tick) error {
 	if err := runtime.collectHostEvents(); err != nil {
 		return err
 	}
+	runtime.retryProcessStopsLocked()
 	return runtime.advanceOwnedProcesses()
 }
 
@@ -467,8 +468,8 @@ func (runtime *Runtime) failScheduledCast(cast *castInstance, err error) error {
 }
 
 // failCastLocked 是施法失败的唯一终态入口：记 failed（保留第一次的失败原因）、撤掉本 cast 名下的全部排程
-// 任务与帧、停进程、释放 policy 槽位、结束 ability 计数。可重复调用（排程路径里 releaseCast 已失败收尾后，
-// failScheduledCast 还会再进来一次）。
+// 任务与帧、停进程（停不下的标成待停止、由 Runtime 重试）、释放 policy 槽位、结束 ability 计数。
+// 可重复调用（排程路径里 releaseCast 已失败收尾后，failScheduledCast 还会再进来一次）。
 //
 // 之前每条终止路径各自手写这些步骤、各漏一步：启动失败不撤任务而 ID 被复用（NC-110）、Cancel / Interrupt /
 // Release 出错直接返回停在半终止（NC-111）、排程失败不释放 policy 槽位（NC-112，v1.5.0 只修了 Cancel / Interrupt）。
@@ -479,6 +480,8 @@ func (runtime *Runtime) failCastLocked(cast *castInstance, err error) error {
 	}
 	runtime.cancelCastTasks(cast)
 	_ = runtime.stopProcesses(cast, true)
+	// 宿主停不下的进程不就此放手：标成待停止，之后的 tick 按退避重试（RR-20261006-21 后续）。
+	runtime.deferUnstoppedProcessesLocked(cast)
 	runtime.releasePolicySlot(cast)
 	runtime.markAbilityCastFinished(cast)
 	return err

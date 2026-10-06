@@ -80,3 +80,34 @@ func TestCastsWhoseProcessesEndedStayWithinTheCompletedCastLimit(t *testing.T) {
 		t.Errorf("retained casts = %d after the long summon ended, want at most %d", stats.Casts, options.CompletedCastLimit)
 	}
 }
+
+// RR-20261006-30：被钉住的终态 cast 可以多于 CompletedCastLimit（pruneCompletedCastsLocked 跳过仍被引用的 cast），
+// 恢复却要求完成队列不超过上限，live Runtime 合法持有的状态写出的 checkpoint 恢复不了。这里上限 1、两个移交后
+// 仍在运行的召唤各钉住一个 cast。承诺：恢复按 prune 的不变量核对——超出上限的部分必须都仍被引用。
+func TestHandedOffProcessesBeyondTheCompletedLimitStillRestore(t *testing.T) {
+	long, environment := summonSkill(t, "skill.test.retention.long", "100")
+	host := runtimeTestHost(environment)
+	runtime := NewRuntime(host, RuntimeOptions{CompletedCastLimit: 1})
+	for range 2 {
+		if _, err := runtime.Start(long, CastInput{Caster: 1, Target: 2}); err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.Advance(runtime.currentTick + 3); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if owned := runtime.OwnedProcesses(1); len(owned) != 2 {
+		t.Fatalf("owned processes = %+v, want both summons handed off and running", owned)
+	}
+	if stats := runtime.RetentionStats(); stats.CompletedCasts != 2 {
+		t.Fatalf("completed queue = %d, want both pinned casts kept beyond CompletedCastLimit 1", stats.CompletedCasts)
+	}
+	checkpoint, err := runtime.Checkpoint()
+	if err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	resolver := ProgramResolverFunc(func(string, string) (*Program, error) { return long, nil })
+	if _, err := RestoreRuntime(host, RuntimeOptions{}, checkpoint, resolver); err != nil {
+		t.Fatalf("restore with two pinned casts and CompletedCastLimit 1: %v", err)
+	}
+}

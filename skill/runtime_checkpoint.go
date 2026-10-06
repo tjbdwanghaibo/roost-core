@@ -14,7 +14,11 @@ import (
 	"sort"
 )
 
-const RuntimeCheckpointVersion uint32 = 2
+// RuntimeCheckpointVersion 标识 checkpoint payload 的格式。格式只做扩展；每次扩展递增版本号，恢复只接受当前版本，
+// 旧版本得到 ErrCheckpointUnsupported（排空后再升级）。3：进程记录加待停止重试状态（stop_pending 与
+// stop_retry_*），payload 加 process_stop_retry_backoff / process_stop_retry_limit / max_stop_pending_processes
+// （RR-20261006-21 后续，2026-10-06；线上未部署，不兼容版本 2）。
+const RuntimeCheckpointVersion uint32 = 3
 const RuntimeCheckpointMaxBytes = 64 << 20
 const RuntimeCheckpointMaxRecords = 1_000_000
 
@@ -74,40 +78,44 @@ type runtimeCheckpointPayload struct {
 	// with "lowest id" and made retention diverge across a restore
 	// (RR-20260910-04). Absent in checkpoints written before this field, and
 	// restore then falls back to id order — what it did all along.
-	CompletedCastOrder    []CastID                  `json:"completed_cast_order,omitempty"`
-	RootEventLimit        int                       `json:"root_event_limit"`
-	MaxProcLedgerEntries  int                       `json:"max_proc_ledger_entries"`
-	CurrentTick           Tick                      `json:"current_tick"`
-	EventCursor           EventCursor               `json:"event_cursor"`
-	NextCastID            CastID                    `json:"next_cast_id"`
-	NextTaskSequence      uint64                    `json:"next_task_sequence"`
-	NextFrameID           FrameID                   `json:"next_frame_id"`
-	NextProcessID         ProcessID                 `json:"next_process_id"`
-	NextPassiveActivation PassiveActivationID       `json:"next_passive_activation_id"`
-	NextAbilityHandle     AbilityHandle             `json:"next_ability_handle"`
-	NextAbilityOverlay    uint64                    `json:"next_ability_overlay"`
-	PassiveCountTick      Tick                      `json:"passive_count_tick"`
-	PassiveCount          int                       `json:"passive_count"`
-	TraceSequence         uint64                    `json:"trace_sequence"`
-	PresentationSequence  uint64                    `json:"presentation_sequence"`
-	StateEventSequence    uint64                    `json:"state_event_sequence"`
-	StateEventDropped     uint64                    `json:"state_event_dropped"`
-	StateMutationSequence uint64                    `json:"state_mutation_sequence"`
-	StateMutationDropped  uint64                    `json:"state_mutation_dropped"`
-	StateMutationBaseline RuntimeStateSnapshot      `json:"state_mutation_baseline"`
-	StateMutationReady    bool                      `json:"state_mutation_ready"`
-	Casts                 []checkpointCast          `json:"casts"`
-	Processes             []checkpointProcess       `json:"processes"`
-	OwnedProcesses        []checkpointProcess       `json:"owned_processes"`
-	Frames                []checkpointFrame         `json:"frames"`
-	Tasks                 []checkpointTask          `json:"tasks"`
-	Cooldowns             []checkpointCooldown      `json:"cooldowns"`
-	SkillStates           []checkpointSkillState    `json:"skill_states"`
-	ActivePolicies        []checkpointActivePolicy  `json:"active_policies"`
-	ProcLedger            []checkpointProcLedger    `json:"proc_ledger"`
-	RootEventCounts       []checkpointRootEvent     `json:"root_event_counts"`
-	Abilities             []checkpointAbility       `json:"abilities"`
-	AbilityByProgram      []checkpointAbilityLookup `json:"ability_by_program"`
+	CompletedCastOrder   []CastID `json:"completed_cast_order,omitempty"`
+	RootEventLimit       int      `json:"root_event_limit"`
+	MaxProcLedgerEntries int      `json:"max_proc_ledger_entries"`
+	// 停止重试的三项选项随 checkpoint 走，恢复后的 Runtime 与原 Runtime 在同样的 tick 重试（版本 3）。
+	ProcessStopRetryBackoff Tick                      `json:"process_stop_retry_backoff"`
+	ProcessStopRetryLimit   int                       `json:"process_stop_retry_limit"`
+	MaxStopPendingProcesses int                       `json:"max_stop_pending_processes"`
+	CurrentTick             Tick                      `json:"current_tick"`
+	EventCursor             EventCursor               `json:"event_cursor"`
+	NextCastID              CastID                    `json:"next_cast_id"`
+	NextTaskSequence        uint64                    `json:"next_task_sequence"`
+	NextFrameID             FrameID                   `json:"next_frame_id"`
+	NextProcessID           ProcessID                 `json:"next_process_id"`
+	NextPassiveActivation   PassiveActivationID       `json:"next_passive_activation_id"`
+	NextAbilityHandle       AbilityHandle             `json:"next_ability_handle"`
+	NextAbilityOverlay      uint64                    `json:"next_ability_overlay"`
+	PassiveCountTick        Tick                      `json:"passive_count_tick"`
+	PassiveCount            int                       `json:"passive_count"`
+	TraceSequence           uint64                    `json:"trace_sequence"`
+	PresentationSequence    uint64                    `json:"presentation_sequence"`
+	StateEventSequence      uint64                    `json:"state_event_sequence"`
+	StateEventDropped       uint64                    `json:"state_event_dropped"`
+	StateMutationSequence   uint64                    `json:"state_mutation_sequence"`
+	StateMutationDropped    uint64                    `json:"state_mutation_dropped"`
+	StateMutationBaseline   RuntimeStateSnapshot      `json:"state_mutation_baseline"`
+	StateMutationReady      bool                      `json:"state_mutation_ready"`
+	Casts                   []checkpointCast          `json:"casts"`
+	Processes               []checkpointProcess       `json:"processes"`
+	OwnedProcesses          []checkpointProcess       `json:"owned_processes"`
+	Frames                  []checkpointFrame         `json:"frames"`
+	Tasks                   []checkpointTask          `json:"tasks"`
+	Cooldowns               []checkpointCooldown      `json:"cooldowns"`
+	SkillStates             []checkpointSkillState    `json:"skill_states"`
+	ActivePolicies          []checkpointActivePolicy  `json:"active_policies"`
+	ProcLedger              []checkpointProcLedger    `json:"proc_ledger"`
+	RootEventCounts         []checkpointRootEvent     `json:"root_event_counts"`
+	Abilities               []checkpointAbility       `json:"abilities"`
+	AbilityByProgram        []checkpointAbilityLookup `json:"ability_by_program"`
 }
 
 type checkpointCast struct {
@@ -177,6 +185,10 @@ type checkpointProcess struct {
 	StopCause                StopCause                    `json:"stop_cause"`
 	HandedOff                bool                         `json:"handed_off"`
 	AreaCallbackFinishedCast bool                         `json:"area_callback_finished_cast"`
+	// 只在 status 为 stop_pending 时出现（版本 3）。
+	StopRetryAttempts  int  `json:"stop_retry_attempts,omitempty"`
+	StopRetryTick      Tick `json:"stop_retry_tick,omitempty"`
+	StopRetryExhausted bool `json:"stop_retry_exhausted,omitempty"`
 }
 
 type checkpointProcessNumeric struct {
@@ -403,6 +415,9 @@ func RestoreRuntime(host Host, options RuntimeOptions, checkpoint RuntimeCheckpo
 	options.CompletedCastLimit = payload.CompletedCastLimit
 	options.RootEventLimit = payload.RootEventLimit
 	options.MaxProcLedgerEntries = payload.MaxProcLedgerEntries
+	options.ProcessStopRetryBackoff = payload.ProcessStopRetryBackoff
+	options.ProcessStopRetryLimit = payload.ProcessStopRetryLimit
+	options.MaxStopPendingProcesses = payload.MaxStopPendingProcesses
 	// newRuntimeCore, not NewRuntime: the fresh-runtime path fast-forwards
 	// the event cursor to the host's frontier and compacts everything before
 	// it — which would DELETE the events emitted between the checkpoint and
@@ -556,7 +571,7 @@ func (runtime *Runtime) checkpointPayloadLocked() (runtimeCheckpointPayload, err
 	if !runtime.stateMutationReady || !runtimeSnapshotsEqual(runtime.stateMutationBaseline, runtime.stateSnapshotLocked()) {
 		return runtimeCheckpointPayload{}, ErrCheckpointHostMismatch
 	}
-	p := runtimeCheckpointPayload{WorldRevision: runtime.host.CurrentRevision(), Authority: runtime.host.AuthorityIdentity(), MatchSeed: runtime.options.MatchSeed, SemanticsRevision: runtime.options.SupportedCompilerSemanticsRevision, MaxPassivePerTick: runtime.options.MaxPassiveActivationsPerTick, MaxOwned: runtime.options.MaxOwnedProcesses, MaxOwnedPerOwner: runtime.options.MaxOwnedProcessesPerOwner, MaxOwnedPerProgram: runtime.options.MaxOwnedProcessesPerProgram, MaxOwnedPerTemplate: runtime.options.MaxOwnedProcessesPerTemplate, MaxActiveCasts: runtime.options.MaxActiveCasts, MaxAbilities: runtime.options.MaxAbilities, CompletedCastLimit: runtime.options.CompletedCastLimit, RootEventLimit: runtime.options.RootEventLimit, MaxProcLedgerEntries: runtime.options.MaxProcLedgerEntries, CurrentTick: runtime.currentTick, EventCursor: runtime.eventCursor, NextCastID: runtime.nextCastID, NextTaskSequence: runtime.nextTaskSequence, NextFrameID: runtime.nextFrameID, NextProcessID: runtime.nextProcessID, NextPassiveActivation: runtime.nextPassiveActivationID, NextAbilityHandle: runtime.nextAbilityHandle, NextAbilityOverlay: runtime.nextAbilityOverlay, PassiveCountTick: runtime.passiveCountTick, PassiveCount: runtime.passiveCount, TraceSequence: runtime.traceSequence, PresentationSequence: runtime.presentationSequence, StateEventSequence: runtime.stateEventSequence, StateEventDropped: runtime.stateEventDropped, StateMutationSequence: runtime.stateMutationSequence, StateMutationDropped: runtime.stateMutationDropped, StateMutationBaseline: runtime.stateMutationBaseline, StateMutationReady: runtime.stateMutationReady}
+	p := runtimeCheckpointPayload{WorldRevision: runtime.host.CurrentRevision(), Authority: runtime.host.AuthorityIdentity(), MatchSeed: runtime.options.MatchSeed, SemanticsRevision: runtime.options.SupportedCompilerSemanticsRevision, MaxPassivePerTick: runtime.options.MaxPassiveActivationsPerTick, MaxOwned: runtime.options.MaxOwnedProcesses, MaxOwnedPerOwner: runtime.options.MaxOwnedProcessesPerOwner, MaxOwnedPerProgram: runtime.options.MaxOwnedProcessesPerProgram, MaxOwnedPerTemplate: runtime.options.MaxOwnedProcessesPerTemplate, MaxActiveCasts: runtime.options.MaxActiveCasts, MaxAbilities: runtime.options.MaxAbilities, CompletedCastLimit: runtime.options.CompletedCastLimit, RootEventLimit: runtime.options.RootEventLimit, MaxProcLedgerEntries: runtime.options.MaxProcLedgerEntries, ProcessStopRetryBackoff: runtime.options.ProcessStopRetryBackoff, ProcessStopRetryLimit: runtime.options.ProcessStopRetryLimit, MaxStopPendingProcesses: runtime.options.MaxStopPendingProcesses, CurrentTick: runtime.currentTick, EventCursor: runtime.eventCursor, NextCastID: runtime.nextCastID, NextTaskSequence: runtime.nextTaskSequence, NextFrameID: runtime.nextFrameID, NextProcessID: runtime.nextProcessID, NextPassiveActivation: runtime.nextPassiveActivationID, NextAbilityHandle: runtime.nextAbilityHandle, NextAbilityOverlay: runtime.nextAbilityOverlay, PassiveCountTick: runtime.passiveCountTick, PassiveCount: runtime.passiveCount, TraceSequence: runtime.traceSequence, PresentationSequence: runtime.presentationSequence, StateEventSequence: runtime.stateEventSequence, StateEventDropped: runtime.stateEventDropped, StateMutationSequence: runtime.stateMutationSequence, StateMutationDropped: runtime.stateMutationDropped, StateMutationBaseline: runtime.stateMutationBaseline, StateMutationReady: runtime.stateMutationReady}
 	p.CompletedCastOrder = append([]CastID(nil), runtime.completedCastOrder...)
 	castIDs := make([]int, 0, len(runtime.casts))
 	for id := range runtime.casts {
@@ -701,7 +716,7 @@ func checkpointProcessMap(values map[ProcessID]*ProcessInstance, programFor func
 			}
 			numeric.Properties = append(numeric.Properties, checkpointNumericProperty{Property: state.Property, Base: state.Base, Current: state.Current, Track: track, Stage: state.Binding.stage, Variant: state.Binding.variant, Field: state.Binding.field, Bound: state.Bound})
 		}
-		item := checkpointProcess{ID: process.ID, CastID: process.CastID, TemplateIndex: process.TemplateIndex, UnitTemplate: process.UnitTemplate, Status: process.Status, StartTick: process.StartTick, NextTick: process.NextTick, EndTick: process.EndTick, Scope: process.Scope, HostState: process.HostState, Motion: process.Motion, Numeric: numeric, Owner: process.Owner, LifecycleEntity: process.LifecycleEntity, Program: programCheckpointRef(program), DirectProgram: process.Program != nil, Inputs: checkpointValues(process.inputs), Memory: checkpointValues(process.memory), Locals: checkpointValues(process.locals), Snapshots: checkpointValueMap(process.snapshots), RandomKey: process.randomKey, RandomInvocations: checkpointRandom(process.randomInvocations), VisibleRevision: process.visibleRevision, EventContext: checkpointEvent(process.eventContext), PhaseToken: process.phaseToken, StopCause: process.stopCause, HandedOff: process.handedOff, AreaCallbackFinishedCast: process.areaCallbackFinishedCast}
+		item := checkpointProcess{ID: process.ID, CastID: process.CastID, TemplateIndex: process.TemplateIndex, UnitTemplate: process.UnitTemplate, Status: process.Status, StartTick: process.StartTick, NextTick: process.NextTick, EndTick: process.EndTick, Scope: process.Scope, HostState: process.HostState, Motion: process.Motion, Numeric: numeric, Owner: process.Owner, LifecycleEntity: process.LifecycleEntity, Program: programCheckpointRef(program), DirectProgram: process.Program != nil, Inputs: checkpointValues(process.inputs), Memory: checkpointValues(process.memory), Locals: checkpointValues(process.locals), Snapshots: checkpointValueMap(process.snapshots), RandomKey: process.randomKey, RandomInvocations: checkpointRandom(process.randomInvocations), VisibleRevision: process.visibleRevision, EventContext: checkpointEvent(process.eventContext), PhaseToken: process.phaseToken, StopCause: process.stopCause, HandedOff: process.handedOff, AreaCallbackFinishedCast: process.areaCallbackFinishedCast, StopRetryAttempts: process.stopRetryAttempts, StopRetryTick: process.stopRetryTick, StopRetryExhausted: process.stopRetryExhausted}
 		entities := make([]int, 0, len(process.AreaMembers))
 		for entity := range process.AreaMembers {
 			entities = append(entities, int(entity))
@@ -1038,7 +1053,7 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 	if len(runtime.abilityByProgram) != len(runtime.abilities) {
 		return ErrCheckpointCorrupt
 	}
-	if runtime.activeCastCount > runtime.options.MaxActiveCasts || len(runtime.abilities) > runtime.options.MaxAbilities || len(runtime.completedCastOrder) > runtime.options.CompletedCastLimit || len(runtime.rootEventCounts) > runtime.options.RootEventLimit || len(runtime.procLedger) > runtime.options.MaxProcLedgerEntries {
+	if runtime.activeCastCount > runtime.options.MaxActiveCasts || len(runtime.abilities) > runtime.options.MaxAbilities || !runtime.completedCastOrderWithinLimitLocked() || len(runtime.rootEventCounts) > runtime.options.RootEventLimit || len(runtime.procLedger) > runtime.options.MaxProcLedgerEntries || !runtime.stopPendingRecordsValidLocked() {
 		return ErrCheckpointCorrupt
 	}
 	for key, state := range runtime.abilities {
@@ -1079,7 +1094,7 @@ func checkpointRecordCount(payload runtimeCheckpointPayload) int {
 }
 
 func validCheckpointRuntimeLimits(payload runtimeCheckpointPayload) bool {
-	return payload.SemanticsRevision != "" && payload.MaxPassivePerTick > 0 && payload.MaxOwned > 0 && payload.MaxOwnedPerOwner > 0 && payload.MaxOwnedPerProgram > 0 && payload.MaxOwnedPerTemplate > 0 && payload.MaxActiveCasts > 0 && payload.MaxAbilities > 0 && payload.CompletedCastLimit > 0 && payload.RootEventLimit > 0 && payload.MaxProcLedgerEntries > 0
+	return payload.SemanticsRevision != "" && payload.MaxPassivePerTick > 0 && payload.MaxOwned > 0 && payload.MaxOwnedPerOwner > 0 && payload.MaxOwnedPerProgram > 0 && payload.MaxOwnedPerTemplate > 0 && payload.MaxActiveCasts > 0 && payload.MaxAbilities > 0 && payload.CompletedCastLimit > 0 && payload.RootEventLimit > 0 && payload.MaxProcLedgerEntries > 0 && payload.ProcessStopRetryBackoff > 0 && payload.ProcessStopRetryLimit > 0 && payload.MaxStopPendingProcesses > 0
 }
 
 func restoreCheckpointProcesses(values []checkpointProcess, resolver ProgramResolver, authority AuthorityIdentity, semantics string, nextID ProcessID) (map[ProcessID]*ProcessInstance, error) {
@@ -1125,7 +1140,7 @@ func restoreCheckpointProcesses(values []checkpointProcess, resolver ProgramReso
 		if item.DirectProgram {
 			directProgram = program
 		}
-		process := &ProcessInstance{ID: item.ID, CastID: item.CastID, TemplateIndex: item.TemplateIndex, UnitTemplate: item.UnitTemplate, Status: item.Status, StartTick: item.StartTick, NextTick: item.NextTick, EndTick: item.EndTick, Scope: item.Scope, HostState: item.HostState, Motion: item.Motion, Numeric: numeric, Owner: item.Owner, LifecycleEntity: item.LifecycleEntity, Program: directProgram, inputs: inputs, memory: memory, locals: locals, snapshots: snapshots, randomKey: item.RandomKey, randomInvocations: random, visibleRevision: item.VisibleRevision, eventContext: restoreCheckpointEvent(item.EventContext), AreaMembers: make(map[EntityID]AreaMemberState), phaseToken: item.PhaseToken, stopCause: item.StopCause, handedOff: item.HandedOff, areaCallbackFinishedCast: item.AreaCallbackFinishedCast}
+		process := &ProcessInstance{ID: item.ID, CastID: item.CastID, TemplateIndex: item.TemplateIndex, UnitTemplate: item.UnitTemplate, Status: item.Status, StartTick: item.StartTick, NextTick: item.NextTick, EndTick: item.EndTick, Scope: item.Scope, HostState: item.HostState, Motion: item.Motion, Numeric: numeric, Owner: item.Owner, LifecycleEntity: item.LifecycleEntity, Program: directProgram, inputs: inputs, memory: memory, locals: locals, snapshots: snapshots, randomKey: item.RandomKey, randomInvocations: random, visibleRevision: item.VisibleRevision, eventContext: restoreCheckpointEvent(item.EventContext), AreaMembers: make(map[EntityID]AreaMemberState), phaseToken: item.PhaseToken, stopCause: item.StopCause, handedOff: item.HandedOff, areaCallbackFinishedCast: item.AreaCallbackFinishedCast, stopRetryAttempts: item.StopRetryAttempts, stopRetryTick: item.StopRetryTick, stopRetryExhausted: item.StopRetryExhausted}
 		for _, member := range item.AreaMembers {
 			if member.Entity == 0 {
 				return nil, ErrCheckpointCorrupt
@@ -1188,4 +1203,44 @@ func (runtime *Runtime) restoreCheckpointTask(w checkpointTask, resolver Program
 		}
 	}
 	return scheduledTask{DueTick: w.DueTick, Sequence: w.Sequence, Payload: payload}, nil
+}
+
+// completedCastOrderWithinLimitLocked 核对恢复出的完成队列满足 pruneCompletedCastsLocked 的不变量：不超过
+// CompletedCastLimit，或者超出部分全是仍被引用、不能回收的 cast（排程任务、policy、运行中或待停止的进程）。
+// 之前直接要求不超过上限：被钉住的 cast 多于上限时（例如上限 3、4 个移交后仍在运行的召唤），live Runtime
+// 合法保留着它们，checkpoint 却恢复不了（RR-20261006-30）。
+func (runtime *Runtime) completedCastOrderWithinLimitLocked() bool {
+	if len(runtime.completedCastOrder) <= runtime.options.CompletedCastLimit {
+		return true
+	}
+	for _, id := range runtime.completedCastOrder {
+		if runtime.castEvictableLocked(runtime.casts[id]) {
+			return false
+		}
+	}
+	return true
+}
+
+// stopPendingRecordsValidLocked 核对待停止重试状态：只有 stop_pending 的进程带重试字段，次数不超过上限，
+// 到上限才算 exhausted，条目数不超过 MaxStopPendingProcesses，且记录不在 owned 表里（进入待停止时摘掉）。
+func (runtime *Runtime) stopPendingRecordsValidLocked() bool {
+	pending := 0
+	for _, process := range runtime.processes {
+		if process.Status != ProcessStopPending {
+			if process.stopRetryAttempts != 0 || process.stopRetryTick != 0 || process.stopRetryExhausted {
+				return false
+			}
+			continue
+		}
+		pending++
+		if runtime.ownedProcesses[process.ID] != nil || process.stopRetryAttempts < 0 || process.stopRetryAttempts > runtime.options.ProcessStopRetryLimit || process.stopRetryExhausted != (process.stopRetryAttempts == runtime.options.ProcessStopRetryLimit) {
+			return false
+		}
+	}
+	for _, process := range runtime.ownedProcesses {
+		if process.Status == ProcessStopPending {
+			return false
+		}
+	}
+	return pending <= runtime.options.MaxStopPendingProcesses
 }

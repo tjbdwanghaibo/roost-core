@@ -46,8 +46,8 @@ type RuntimeOptions struct {
 	// RuntimeEventLimit bounds diagnostic events retained by RuntimeEvents.
 	RuntimeEventLimit int
 	// CompletedCastLimit bounds inspectable terminal casts. Active or still
-	// referenced casts (pending tasks, an active policy, a running process)
-	// are never evicted; an evicted cast takes its stopped process records
+	// referenced casts (pending tasks, an active policy, a running or
+	// stop_pending process) are never evicted; an evicted cast takes its stopped process records
 	// with it.
 	CompletedCastLimit int
 	// RootEventLimit bounds once-per-root accounting after inactive roots have
@@ -62,6 +62,22 @@ type RuntimeOptions struct {
 	MaxProcLedgerEntries int
 	// CastEventLimit bounds per-cast diagnostic history returned by InspectCast.
 	CastEventLimit int
+	// ProcessStopRetryBackoff is the delay, in ticks, before the Runtime
+	// retries a Host.StopProcess that failed while a cast was failing; the
+	// delay doubles after every failed retry, up to 64 times this value.
+	// Default 4.
+	ProcessStopRetryBackoff Tick
+	// ProcessStopRetryLimit bounds the failed retries of one such stop. At the
+	// limit the Runtime stops retrying, counts
+	// skill.process.stop_retry_exhausted.total, logs a warning and keeps the
+	// stop_pending record. Default 10 (about 64 seconds at 20 ticks per second
+	// with the default backoff).
+	ProcessStopRetryLimit int
+	// MaxStopPendingProcesses bounds stop_pending records. Past the bound the
+	// oldest exhausted record (else the oldest still retrying) is dropped,
+	// counted as skill.process.stop_pending_dropped.total and logged; the
+	// Runtime no longer stops that process. Default 256.
+	MaxStopPendingProcesses int
 }
 
 type CastInput struct {
@@ -318,6 +334,15 @@ func newRuntimeCore(host Host, options RuntimeOptions) *Runtime {
 	if options.CastEventLimit <= 0 {
 		options.CastEventLimit = 256
 	}
+	if options.ProcessStopRetryBackoff <= 0 {
+		options.ProcessStopRetryBackoff = 4
+	}
+	if options.ProcessStopRetryLimit <= 0 {
+		options.ProcessStopRetryLimit = 10
+	}
+	if options.MaxStopPendingProcesses <= 0 {
+		options.MaxStopPendingProcesses = 256
+	}
 	runtime := &Runtime{
 		host: host, options: options,
 		casts: make(map[CastID]*castInstance), scheduler: newScheduler(),
@@ -450,8 +475,8 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 			runtime.nextCastID--
 			return 0, err
 		}
-		// 已提交，或有进程停不下来（宿主 StopProcess 失败）：cast 留作 failed 终态、不还 ID，
-		// 仍在运行的进程记录继续挂在一个存在的 cast 名下。
+		// 已提交，或有进程停不下来（宿主 StopProcess 失败、记录已标成待停止）：cast 留作 failed 终态、不还 ID，
+		// 待停止的进程记录继续挂在一个存在的 cast 名下，由之后的 tick 重试停止，停掉后按 RR-23 回收。
 		return cast.id, err
 	}
 	runtime.recordTrace(TraceEvent{Kind: TraceCastPrepared, Tick: runtime.currentTick, CastID: cast.id})

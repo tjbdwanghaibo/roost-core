@@ -12,6 +12,10 @@ const (
 	ProcessEnded     ProcessStatus = "ended"
 	ProcessCancelled ProcessStatus = "cancelled"
 	ProcessFailed    ProcessStatus = "failed"
+	// ProcessStopPending 表示 Runtime 已决定停掉这个进程（施法失败走 failCastLocked），但宿主 StopProcess
+	// 失败，进程仍在宿主侧运行。Runtime 不再推进它（不步进、不派发信号、不跑回调），只在之后的 tick 按退避
+	// 重试 StopProcess，成功后改成停止状态；见 runtime_process_stop_retry.go（RR-20261006-21 后续）。
+	ProcessStopPending ProcessStatus = "stop_pending"
 )
 
 type ProcessScope string
@@ -95,6 +99,19 @@ type ProcessInstance struct {
 	stopCause                StopCause
 	handedOff                bool
 	areaCallbackFinishedCast bool
+
+	// 以下三项只在 Status == ProcessStopPending 时有意义（runtime_process_stop_retry.go）：
+	// stopRetryAttempts 是进入待停止之后失败的重试次数，stopRetryTick 是下一次重试的 tick，
+	// stopRetryExhausted 表示已到 ProcessStopRetryLimit、已告警、不再自动重试（记录保留）。
+	stopRetryAttempts  int
+	stopRetryTick      Tick
+	stopRetryExhausted bool
+}
+
+// liveOnHost 报告进程在宿主侧是否还在运行：运行中，或停止失败、等待 Runtime 重试停止。
+// 两种状态都钉住所属 cast、占用 owned 进程容量，Shutdown / RemoveProgram 都要停它。
+func (process *ProcessInstance) liveOnHost() bool {
+	return process != nil && (process.Status == ProcessRunning || process.Status == ProcessStopPending)
 }
 
 type ProcessSignalKind string
@@ -186,8 +203,11 @@ func processStatusForStop(cause StopCause) ProcessStatus {
 	}
 }
 
+// stopProcess 让宿主停掉进程。宿主出错时进程状态不变（运行中或待停止），由调用方决定后续：
+// failCastLocked 把仍在运行的标成待停止、交给重试（runtime_process_stop_retry.go）。待停止的进程也走这里重试，
+// 它的回调与区域离开信号在第一次停止时已经处理过，terminateProcess 不会再跑。
 func (runtime *Runtime) stopProcess(cast *castInstance, process *ProcessInstance, cause StopCause) error {
-	if process == nil || process.Status != ProcessRunning {
+	if !process.liveOnHost() {
 		return nil
 	}
 	stopAreaMembership(process, false)
@@ -205,6 +225,7 @@ func (runtime *Runtime) stopProcess(cast *castInstance, process *ProcessInstance
 	}
 	process.Status = processStatusForStop(cause)
 	process.stopCause = cause
+	process.stopRetryAttempts, process.stopRetryTick, process.stopRetryExhausted = 0, 0, false
 	process.HostState.Active = false
 	runtime.emitProcessPresentation(cast, process, PresentationProcessStop, "", cause, receipt.Revision)
 	if process.Scope == ProcessScopeEntity {

@@ -57,7 +57,8 @@ func (runtime *Runtime) PresentationSnapshot() PresentationRecoverySnapshot {
 		})
 	}
 	for _, process := range runtime.processes {
-		if process == nil || process.Program == nil || process.Status != ProcessRunning || int(process.TemplateIndex) >= len(process.Program.processTemplates) {
+		// 待停止的进程仍在宿主侧运行，表现保留到真正停掉（增量里进入待停止时发过一条带 stop_pending 的 process_update）。
+		if process == nil || process.Program == nil || !process.liveOnHost() || int(process.TemplateIndex) >= len(process.Program.processTemplates) {
 			continue
 		}
 		template := process.Program.processTemplates[process.TemplateIndex]

@@ -28,8 +28,22 @@ guardrails, not capacity targets: tune them from room-level load tests.
   provide deterministic backpressure through `ErrRuntimeCapacityExceeded`.
 - Root event accounting is reclaimed only after no active cast, process, or
   scheduled task references the root, preserving once-per-root semantics.
-- Checkpoints use version 2. `CheckpointMaxBytes` and
+- Checkpoints use version 3 (2026-10-06: process records gained the
+  stop_pending retry state, the payload the three stop-retry options; version
+  2 checkpoints are rejected with `ErrCheckpointUnsupported` — nothing was
+  deployed, drain before upgrading). The format is only ever extended, and
+  every extension bumps the version. `CheckpointMaxBytes` and
   `CheckpointMaxRecords` are checked before recovery publishes a runtime.
+- A process the Host fails to stop stays owned by the Runtime: it is marked
+  `stop_pending` and retried with backoff (`ProcessStopRetryBackoff`, default
+  4 ticks, doubling up to 64x) up to `ProcessStopRetryLimit` (default 10)
+  failed retries, then `skill.process.stop_retry_exhausted.total` is counted,
+  a warning is logged and the record is kept. At most
+  `MaxStopPendingProcesses` (default 256) such records are kept; past it the
+  oldest exhausted one is dropped (`skill.process.stop_pending_dropped.total`
+  plus an error log). Host `StopProcess` must be idempotent. A restored
+  checkpoint may hold more terminal casts than `CompletedCastLimit` when the
+  excess are still referenced (RR-20261006-30).
 - The same Runtime state always checkpoints to the same bytes and checksum:
   every list built from a map is written sorted by key (O7, maintainer round
   12; before that four lists followed map iteration order). The format did not
