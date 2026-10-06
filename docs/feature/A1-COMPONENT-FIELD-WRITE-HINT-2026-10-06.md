@@ -72,7 +72,7 @@ A1 的规则是回滚统一走 DAO（[方案](REFACTOR-2026-10-05-dao-unified-ro
 
 ## 7. 实施状态与验证结果
 
-已实施，未发版（提交号见 DECISIONS-PENDING 第十三轮“A1 盲区”行）。验证（`GOWORK=off`，基线 `71c8f394`，Go 1.27.0）：
+已实施（`565f657b`），未发版。验证（`GOWORK=off`，基线 `71c8f394`，Go 1.27.0）：
 
 - `gofmt -l` 空；`go vet ./cmd/glsvet ./codegen/internal/roost` 通过；`go test -race -count=3 ./cmd/glsvet/...` 通过。
 - `go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync` 退出 0、无输出；全仓 `./...` 退出 0、无输出；`-tests ./...` 退出 0，只有改前就有的 4 条 A3 停止提示（`kit/nats` 等测试文件）。
