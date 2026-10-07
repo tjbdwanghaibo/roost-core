@@ -24,7 +24,7 @@
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-66](RR-20261006-66.md) | P3 协调器在别的进程时 `EmitStart` 只按 4 MiB 校验，超过 `saga.max_payload_bytes` 的启动意图随业务事务提交（F06-S7 跨进程，RR-43 后续） | 已修复，未发版 |
+| [RR-20261006-66](RR-20261006-66.md) | P3 协调器在别的进程时 `EmitStart` 只按 4 MiB 校验，超过 `saga.max_payload_bytes` 的启动意图随业务事务提交（F06-S7 跨进程，RR-43 后续） | 已修复（`133a4e88`），未发版 |
 | [RR-20261006-60](RR-20261006-60.md) | P3 手写 `HandlerMeta{Rollback: state\|undo}` 不写 `Durability` 时零值即 memory，注册照收，要到运行期第一次改持久字段才报错（F02-8，RR-41 后续） | 已修复（`2a8b2e64`），未发版 |
 | [RR-20261006-59](RR-20261006-59.md) | P1 生成的 RPC 客户端固定 `CallChecked(ctx, 0, …)`、不带 discovery，match 7 个 / activity 11 个带 affinity 的方法随机路由（F09-R1） | 已修复（`8dd984eb`），未发版 |
 | [RR-20261006-58](RR-20261006-58.md) | P2 `generate --changed` 拿相对仓库根、带引号的 porcelain 路径比相对工程根的前缀，工程在子目录时只跑 registry 还报成功（F12 G3） | 已修复（`a461ee2f`），未发版 |

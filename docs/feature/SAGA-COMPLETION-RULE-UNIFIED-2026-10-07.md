@@ -98,7 +98,7 @@ completion 的代际 `inc` 从 `CommandID` 解析（`commandIDIncarnation`，不
 
 ## 8. 实施状态
 
-已实施（分支 `sagarule`，未发版）。
+已实施（`133a4e88`，分支 `sagarule`，未发版）。
 
 **代码量（如实）**：`Complete` 从 69 行减到 59 行，文档注释从 18 行（5 条编号规则）减到 3 行；新增 `completionVerdict` 类型与四个常量、
 `judgeCompletion`（连注释 50 行）。`saga/engine.go` 合计 1208 → 1232 行（非注释非空行 1028 → 1047，+19）：规则没有变少的代码量，
