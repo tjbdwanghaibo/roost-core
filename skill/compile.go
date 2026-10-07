@@ -21,7 +21,6 @@ func compileToArtifactsInternal(definition *Definition, environment CompileEnvir
 		compilePassFunc{"input_state", runInputStatePass},
 		compilePassFunc{"temporal", runTemporalPass},
 		compilePassFunc{"type_snapshot", runTypeSnapshotPass},
-		compilePassFunc{"optional_quantity", runOptionalQuantityPass},
 		compilePassFunc{"effect_result_scope", runEffectResultScopePass},
 		compilePassFunc{"graph", runGraphPass},
 		compilePassFunc{"memory", runMemoryPass},
@@ -65,5 +64,4 @@ func runNormalizePass(context *compileContext) {
 	}
 	context.diagnostics = append(context.diagnostics, diagnostics...)
 }
-func runOptionalQuantityPass(*compileContext)       {}
 func runLowerReadinessPass(context *compileContext) { context.artifacts.lowerReady = true }

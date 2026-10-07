@@ -126,7 +126,7 @@ func TestAbilityOverlayExpiriesDoNotPinRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	handle := runtime.abilityByProgram[skillStateKey{Caster: 1, Skill: program.id}]
-	// 覆盖数没有配置上限：12 个不同根的覆盖都在 5 tick 内有效。
+	// 覆盖上限独立于根事件上限：12 个不同根的覆盖都在 5 tick 内有效。
 	for root := EventID(1); root <= 12; root++ {
 		if _, err := runtime.ModifyAbilityState(1, handle, "enabled", "set", BoolRuntimeValue(false), 5, EventContext{EventID: 100 + root, RootEventID: root}); err != nil {
 			t.Fatal(err)

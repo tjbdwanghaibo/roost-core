@@ -278,6 +278,16 @@ func (host *lyingModifierHost) HostCapabilities() HostCapabilityTable {
 	return host.MemoryHost.HostCapabilities()
 }
 
+type outsideCatalogAttributeHost struct{ *MemoryHost }
+
+func (host *outsideCatalogAttributeHost) Read(request ReadRequest) (ReadResult, error) {
+	if attribute, ok := request.Payload.(AttributeRead); ok && attribute.Attribute == 4 {
+		attribute.Attribute = 1 // 故意把未声明 handle 当成合法字段，保留负例语义。
+		request.Payload = attribute
+	}
+	return host.MemoryHost.Read(request)
+}
+
 func TestCheckHostCapabilitiesCatchesMisdeclaredHosts(t *testing.T) {
 	environment := DefaultCompileEnvironment()
 	extended := environment.Gameplay
@@ -301,9 +311,9 @@ func TestCheckHostCapabilitiesCatchesMisdeclaredHosts(t *testing.T) {
 			return &overDeclaredHost{MemoryHost: hostCapabilityProbeHost(environment), extra: HostCapabilityTable{Resources: []string{"rage"}}}
 		}, extended, `resource "rage": declared but`},
 		{"answers attributes outside the catalog with 0", func() Host {
-			host := NewMemoryHost(AuthorityIdentity{Revision: environment.Revision, Digest: environment.Digest}) // 未配置 catalog：按实体数据作答
+			host := NewMemoryHost(AuthorityIdentity{Revision: environment.Revision, Digest: environment.Digest})
 			host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Resources: map[string]int64{"mana": 100}})
-			return host
+			return &outsideCatalogAttributeHost{MemoryHost: host}
 		}, environment.Gameplay, `attribute "<handle 4>": outside the catalog but Read(AttributeRead) answered`},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -94,7 +94,6 @@ type MemoryHost struct {
 	nextCursor            EventCursor
 	nextEntity            EntityID
 	gameplay              GameplayCatalog
-	gameplayConfigured    bool
 	criticalTag, spellTag GameplayTagHandle
 	statuses              []statusInstance
 	modifiers             []attributeModifierInstance
@@ -118,7 +117,9 @@ func NewMemoryHost(authority AuthorityIdentity) *MemoryHost {
 }
 
 func NewMemoryHostWithOptions(authority AuthorityIdentity, options MemoryHostOptions) *MemoryHost {
-	return &MemoryHost{authority: authority, entities: make(map[EntityID]MemoryEntity), spawns: make(map[SpawnID]memorySpawn), states: make(map[memoryStateKey]memoryStateRecord), ownedEntities: make(map[EntityID]OwnedEntityMetadata), ownedTransactions: make(map[OwnedSummonTransactionID]ownedSummonTransaction), temporalSnapshots: make(map[uint64]temporalSnapshotRecord), temporalBlocked: make(map[Position]Position), nextEntity: 1, compactEvents: options.CompactEvents}
+	host := &MemoryHost{authority: authority, entities: make(map[EntityID]MemoryEntity), spawns: make(map[SpawnID]memorySpawn), states: make(map[memoryStateKey]memoryStateRecord), ownedEntities: make(map[EntityID]OwnedEntityMetadata), ownedTransactions: make(map[OwnedSummonTransactionID]ownedSummonTransaction), temporalSnapshots: make(map[uint64]temporalSnapshotRecord), temporalBlocked: make(map[Position]Position), nextEntity: 1, compactEvents: options.CompactEvents}
+	host.ConfigureGameplayCatalog(defaultGameplayCatalog())
+	return host
 }
 
 func (host *MemoryHost) AuthorityIdentity() AuthorityIdentity { return host.authority }
@@ -140,7 +141,6 @@ func (host *MemoryHost) ConfigureGameplayCatalog(catalog GameplayCatalog) {
 	host.mutex.Lock()
 	defer host.mutex.Unlock()
 	host.gameplay = cloneHostGameplayCatalog(catalog)
-	host.gameplayConfigured = true
 	if handle, ok := lookupTag(catalog.Tags, "critical"); ok {
 		host.criticalTag = handle
 	}
@@ -149,36 +149,28 @@ func (host *MemoryHost) ConfigureGameplayCatalog(catalog GameplayCatalog) {
 	}
 }
 
-// HostCapabilities 声明 MemoryHost 的能力表（B3 ③）：可读属性与资源取配置的 Gameplay catalog
-// （未配置时按默认环境的 catalog），其余各列 MemoryHost 全部实现。配置了 catalog 之后，表外的
-// 属性读取、资源读取与付费返回 ErrHostCapabilityMissing，不再静默当成 0；未配置的 MemoryHost
-// 保持按实体数据作答（测试便利），只用于默认环境。
+// HostCapabilities 与实际读写共用同一份 catalog。构造时安装默认目录，自定义目录
+// 必须显式 Configure；表外属性、资源与付费拒绝，不再保留“声明默认、执行未配置”的分叉。
 func (host *MemoryHost) HostCapabilities() HostCapabilityTable {
 	host.mutex.RLock()
 	defer host.mutex.RUnlock()
 	catalog := host.gameplay
-	if !host.gameplayConfigured {
-		catalog = defaultGameplayCatalog()
-	}
 	attributes, resources := catalogHostCapabilities(catalog)
 	return HostCapabilityTable{Attributes: attributes, Resources: resources, HostCapabilityCatalog: FullHostCapabilityCatalog()}
 }
 
-// readableAttributeLocked 报告属性能否读取：未配置 catalog 时一律可读（按实体数据作答）。
+// readableAttributeLocked 只允许目录中声明可读的属性。
 func (host *MemoryHost) readableAttributeLocked(handle AttributeHandle) (AttributeCatalogEntry, bool) {
 	for _, entry := range host.gameplay.Attributes.Entries {
 		if entry.Handle == handle {
-			return entry, entry.Readable || !host.gameplayConfigured
+			return entry, entry.Readable
 		}
 	}
-	return AttributeCatalogEntry{}, !host.gameplayConfigured
+	return AttributeCatalogEntry{}, false
 }
 
-// knownResourceLocked 报告资源 key 在不在能力表里：未配置 catalog 时一律接受。
+// knownResourceLocked 与能力声明使用同一份资源目录。
 func (host *MemoryHost) knownResourceLocked(resource string) bool {
-	if !host.gameplayConfigured {
-		return true
-	}
 	for _, entry := range host.gameplay.Resources.Entries {
 		if entry.Key == resource {
 			return true

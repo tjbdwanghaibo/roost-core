@@ -132,7 +132,7 @@ func dismissLifecycle(t *testing.T, host *stopEntryHost, program *Program, spawn
 var spawnStopEntries = []spawnStopEntry{
 	{
 		name:    "cast failure (failCastLocked)",
-		callers: []string{"stopScopedSpawns"},
+		callers: []string{"stopCastSpawns"},
 		wantErr: []error{ErrInsufficientResource}, callback: "owned_spawn_callback_cancel", wantCallbacks: 1,
 		trigger: func(t *testing.T) stopEntryRun {
 			program, environment := chargeSummonThatCannotPay(t)
@@ -146,7 +146,7 @@ var spawnStopEntries = []spawnStopEntry{
 	},
 	{
 		name:    "interrupt",
-		callers: []string{"stopScopedSpawns"},
+		callers: []string{"stopCastSpawns"},
 		wantErr: []error{errHostStopUnavailable}, callback: "owned_spawn_callback_cancel", wantCallbacks: 1,
 		trigger: func(t *testing.T) stopEntryRun {
 			window := `,"cast_window":{"windup_ticks":0,"commit_tick":0,"recovery_ticks":1,"movement":"locked","turning":"allowed","interrupt_tags":["spell"],"refund_before_commit":true}`
@@ -360,10 +360,11 @@ func TestSpawnStopEntriesAreRegistered(t *testing.T) {
 			t.Errorf("spawnStopEntries registers %s, which no longer calls requestSpawnStop", caller)
 		}
 	}
-	for callee, allowed := range map[string]string{"terminateSpawn": "requestSpawnStop", "stopSpawn": "terminateSpawn", "StopSpawn": "stopSpawn"} {
+	// Runtime 业务停止仍只有唯一入口。能力自检拥有独立探针，必须清理自己创建的 Host 资源。
+	for callee, allowed := range map[string]map[string]bool{"terminateSpawn": {"requestSpawnStop": true}, "stopSpawn": {"terminateSpawn": true}, "StopSpawn": {"stopSpawn": true, "cleanupSpawnProbe": true}} {
 		for _, caller := range calls[callee] {
-			if caller != allowed {
-				t.Errorf("%s calls %s directly; only %s may (stop entries go through requestSpawnStop)", caller, callee, allowed)
+			if !allowed[caller] {
+				t.Errorf("%s calls %s directly; allowed owners: %v", caller, callee, allowed)
 			}
 		}
 	}

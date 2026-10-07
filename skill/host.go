@@ -29,7 +29,7 @@ package skill
 //     checkpoint, and Shutdown / RemoveProgram stop it again on request; a
 //     stop the Host actually performed but reported as failed is therefore
 //     re-issued. Callbacks run only on the first request; retries call
-//     StopSpawn alone. Return an error only when the spawn is still running
+//     any outstanding carry detach before StopSpawn. Return an error only when the spawn is still running
 //     in the world.
 //   - HostCapabilities declares what the Host supports (B3 ③). Every Host
 //     must declare it: the Runtime admits a Program on its first use only when

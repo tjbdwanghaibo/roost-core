@@ -13,7 +13,7 @@ func TestSpawnStopIsUnifiedAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spawn := &SpawnInstance{ID: 7, CastID: castID, Status: SpawnRunning, Scope: SpawnScopeCast, HostState: SpawnHostState{SpawnID: 7, Active: true}}
+	spawn := &SpawnInstance{ID: 7, CastID: castID, Status: SpawnRunning, Scope: SpawnScopeEntity, HostState: SpawnHostState{SpawnID: 7, Active: true}}
 	fileSpawnForTest(runtime, spawn)
 	if _, err := host.StepSpawn(SpawnStepCommand{Meta: SpawnCommandMeta{SpawnID: 7}, Motion: StaticMotionStep{}}, spawn.HostState); err != nil {
 		t.Fatal(err)

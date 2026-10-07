@@ -64,6 +64,9 @@ type RuntimeOptions struct {
 	// queue_full, skill.passive.dispatch_rejected.total{reason="queue_full"}).
 	// Default 2048.
 	MaxQueuedTasks int
+	// MaxAbilityOverlays 限制整个 Runtime 的临时禁用覆盖数（含到期任务）。默认 10000；
+	// 设置入口超限返回 ErrAbilityOverlaysFull，覆盖到期后释放额度，不占根事件额度。
+	MaxAbilityOverlays int
 	// CheckpointMaxBytes and CheckpointMaxRecords bound recovery input before
 	// it can allocate unbounded object graphs.
 	CheckpointMaxBytes   int
@@ -250,6 +253,7 @@ type Runtime struct {
 	abilityByProgram        map[skillStateKey]AbilityHandle
 	nextAbilityHandle       AbilityHandle
 	nextAbilityOverlay      uint64
+	abilityOverlays         int // 活跃覆盖总数；到期扣减，恢复从记录重建。
 	trace                   []TraceEvent
 	traceSequence           uint64
 	traceTruncated          bool
@@ -354,6 +358,9 @@ func newRuntimeCore(host Host, options RuntimeOptions) *Runtime {
 	}
 	if options.MaxAbilities <= 0 {
 		options.MaxAbilities = 10000
+	}
+	if options.MaxAbilityOverlays <= 0 {
+		options.MaxAbilityOverlays = 10000
 	}
 	if options.MaxProcLedgerEntries <= 0 {
 		options.MaxProcLedgerEntries = 262144

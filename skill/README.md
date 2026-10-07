@@ -280,7 +280,7 @@ Runtime 从不回头解析 JSON，Host 之外没有任何世界写入路径，UI
 
 ### 编译管线：每个 pass 证明一件事
 
-[compile.go](compile.go) 按固定顺序运行 18 个静态 pass，随后公开的 `Compile` 完成 lowering。后面的 pass 假定前面的 pass 已收窄名称、类型与作用域——它们不是可乱序的 lint 集合：
+[compile.go](compile.go) 按固定顺序运行 17 个编译阶段（含 lowering 就绪阶段），随后公开的 `Compile` 完成 lowering。后面的 pass 假定前面的 pass 已收窄名称、类型与作用域——它们不是可乱序的 lint 集合：
 
 | Pass | 静态证明 |
 | --- | --- |
@@ -288,7 +288,7 @@ Runtime 从不回头解析 JSON，Host 之外没有任何世界写入路径，UI
 | `shape` | Flow/Effect/Select/Spawn 结构合法；只接受 Runtime / Host 实际执行的取值（不传给 Host 的字段、两个参考 Host 都拒绝的操作与时长在这里拒绝） |
 | `authority_capability` | 环境 catalog 的 handle 与 key 各自唯一；属性、资源、状态、伤害类型、元素等字符串（含 effect、filter、cost 里的引用）解析到 `CompileEnvironment` 的权威 Handle；不在目录内即拒绝 |
 | `gameplay_tags` / `input_state` / `temporal` | 标签类别、施放输入、Persistent/Shared State 与时间快照合法 |
-| `type_snapshot` / `optional_quantity` / `effect_result_scope` | 值类型、量纲、快照采样点正确；可选值必须有 `exists` 守卫；effect result 只在其作用域内可读 |
+| `type_snapshot` / `effect_result_scope` | 值类型、量纲、快照采样点正确；可选值必须有 `exists` 守卫；effect result 只在其作用域内可读 |
 | `graph` | phase/flow 图可达、无非法跳转 |
 | `memory` | 每个 memory 读之前必然已初始化 |
 | `lifetime_ownership` | 生命周期与拥有关系有界（不会有泄漏的召唤物/过程） |

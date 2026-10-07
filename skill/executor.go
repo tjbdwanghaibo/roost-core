@@ -37,9 +37,6 @@ func (runtime *Runtime) executeCast(cast *castInstance) error {
 		}
 		switch control.kind {
 		case flowGoto:
-			if err := runtime.stopSpawns(cast, false); err != nil {
-				return err
-			}
 			runtime.cancelPhaseTasks(cast, cast.phaseToken)
 			cast.phaseToken++
 			cast.currentPhase = control.phase
@@ -296,9 +293,6 @@ func (runtime *Runtime) resolveControl(cast *castInstance, control flowControl) 
 	case flowSuspend:
 		return runtime.schedule(cast, control.dueTick, control.payload)
 	case flowGoto:
-		if err := runtime.stopSpawns(cast, false); err != nil {
-			return err
-		}
 		runtime.cancelPhaseTasks(cast, cast.phaseToken)
 		cast.phaseToken++
 		cast.currentPhase = control.phase

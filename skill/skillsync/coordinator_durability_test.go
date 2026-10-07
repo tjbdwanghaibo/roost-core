@@ -2,6 +2,7 @@ package skillsync
 
 import (
 	"errors"
+	"github.com/tjbdwanghaibo/roost-core/skill"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/syncstream"
@@ -29,8 +30,19 @@ func (journal *acknowledgeFailureJournal) Record(mutation syncstream.HistoryMuta
 }
 func (*acknowledgeFailureJournal) Checkpoint(syncstream.HistorySnapshot) error { return nil }
 
-func coordinatorForDurabilityTest(history *syncstream.History, box *Outbox) *Coordinator {
-	return &Coordinator{history: history, outbox: box, viewLocks: make(map[observerKey]*viewLockEntry), closedObservers: make(map[syncstream.Observer]struct{})}
+func coordinatorForDurabilityTest(t *testing.T, history *syncstream.History, box *Outbox) *Coordinator {
+	t.Helper()
+	projector, _ := NewProjector(1)
+	c, err := NewCoordinator(CoordinatorOptions{Runtime: skill.NewRuntime(skill.NewMemoryHost(skill.AuthorityIdentity{}), skill.RuntimeOptions{}), History: history, Outbox: box, Projector: projector, Publisher: &recordingPublisher{}, Visibility: AllowAllVisibility{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stream := range history.Export().Streams {
+		if err := c.OpenObserver(stream.Observer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return c
 }
 
 func (store *deleteFailureStore) Load() ([]syncstream.Packet, error) {
@@ -84,7 +96,7 @@ func TestCoordinatorRepairsPartialOutboxDeleteFailure(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	coordinator := coordinatorForDurabilityTest(history, box)
+	coordinator := coordinatorForDurabilityTest(t, history, box)
 	if err := coordinator.Acknowledge(latest.Observer, latest.Stream, latest.Epoch, latest.Sequence); !errors.Is(err, injected) {
 		t.Fatalf("ack error = %v", err)
 	}
@@ -111,7 +123,7 @@ func TestCoordinatorAckKeepsHistoryWhenOutboxDeleteFails(t *testing.T) {
 	if err := box.Put(packet); err != nil {
 		t.Fatal(err)
 	}
-	coordinator := coordinatorForDurabilityTest(history, box)
+	coordinator := coordinatorForDurabilityTest(t, history, box)
 	if err := coordinator.Acknowledge(packet.Observer, packet.Stream, packet.Epoch, packet.Sequence); !errors.Is(err, injected) {
 		t.Fatalf("ack error = %v", err)
 	}
@@ -134,7 +146,7 @@ func TestCoordinatorRejectsAckAheadBeforeDeletingOutbox(t *testing.T) {
 	if err := box.Put(packet); err != nil {
 		t.Fatal(err)
 	}
-	coordinator := coordinatorForDurabilityTest(history, box)
+	coordinator := coordinatorForDurabilityTest(t, history, box)
 	if err := coordinator.Acknowledge(packet.Observer, packet.Stream, packet.Epoch, packet.Sequence+1); !errors.Is(err, syncstream.ErrAckAhead) {
 		t.Fatalf("ack error = %v", err)
 	}
@@ -161,7 +173,7 @@ func TestCoordinatorRepairsOutboxWhenHistoryAckFails(t *testing.T) {
 	if err := box.Put(packet); err != nil {
 		t.Fatal(err)
 	}
-	coordinator := coordinatorForDurabilityTest(history, box)
+	coordinator := coordinatorForDurabilityTest(t, history, box)
 	if err := coordinator.Acknowledge(packet.Observer, packet.Stream, packet.Epoch, packet.Sequence); !errors.Is(err, injected) {
 		t.Fatalf("ack error = %v", err)
 	}
@@ -188,7 +200,7 @@ func TestCoordinatorCloseKeepsHistoryWhenOutboxDeleteFails(t *testing.T) {
 	if err := box.Put(packet); err != nil {
 		t.Fatal(err)
 	}
-	coordinator := &Coordinator{history: history, outbox: box, closedObservers: make(map[syncstream.Observer]struct{}), closingObservers: make(map[syncstream.Observer]struct{}), viewLocks: make(map[observerKey]*viewLockEntry), cursors: make(map[observerKey]sourceCursor)}
+	coordinator := coordinatorForDurabilityTest(t, history, box)
 	if err := coordinator.CloseObserver(packet.Observer); !errors.Is(err, injected) {
 		t.Fatalf("close error = %v", err)
 	}

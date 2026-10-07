@@ -104,6 +104,9 @@ func TestCrashRecoveryThroughConfirmedFragmentedTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := coordinator.OpenObserver(observer); err != nil {
+		t.Fatal(err)
+	}
 	if err := coordinator.PublishSnapshot(observer, stream.Key); err == nil {
 		t.Fatal("expected injected broker failure")
 	}
@@ -138,6 +141,9 @@ func TestCrashRecoveryThroughConfirmedFragmentedTransport(t *testing.T) {
 	}
 	restarted, err := skillsync.NewCoordinator(skillsync.CoordinatorOptions{Runtime: runtime, History: reopenedHistory, Publisher: publisher, Projector: projector, Visibility: skillsync.AllowAllVisibility{}, Outbox: reopenedOutbox, RequireDurableOutbox: true})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.OpenObserver(observer); err != nil {
 		t.Fatal(err)
 	}
 	if err := restarted.RetryPending(time.Now().Add(time.Second)); err != nil {

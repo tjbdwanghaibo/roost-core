@@ -4,7 +4,13 @@
 
 ## [Unreleased]
 
+- B1 续批 RR-20261007-21～25：carry 解除失败进入待停止重试；Host 自检不再把乘法属性归零并回收探针，默认 MemoryHost catalog 与声明一致，付费探针只用句柄。删除无实际创建点的 scope 停止分支和空编译 pass。
+- **不兼容升级**：Runtime `MaxAbilityOverlays` 默认 10000，满额设置拒绝、到期释放。checkpoint 版本 10 保存上限并校验恢复数量，拒绝所有旧版本。线上尚未部署，升级需先停旧进程、清空旧 checkpoint，再启动新版本。
+
+
 ### 修复（skillsync B1 首批）
+
+- API 行为收紧：所有 observer 初次连接及重启重连必须先 `OpenObserver`，默认最多 4096 个；`RegisterProgram` 现在返回错误，默认最多 1024 个计划，冲突拒绝，新增 `UnregisterProgram`。key 是 Runtime 命名空间，不是 Program 过滤器。自定义持久 outbox 必须实现 `RecordOutboxStore`，缺失 CreatedAt 的记录拒绝；文件格式不变（RR-20261007-19～20）。
 
 - RecordingHost / ReplayHost 补齐可选世界能力；nil Host 推進返回错误，checkpoint 保留缺能力错误身份，准入缓存有界；组合校验接受已授权的非伤害效果（RR-20261007-14～18）。
 

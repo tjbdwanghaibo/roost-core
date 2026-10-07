@@ -12,10 +12,11 @@ import (
 )
 
 var (
-	ErrOutboxStoreRequired    = errors.New("skillsync: durable outbox store is required")
-	ErrOutboxCapacityExceeded = errors.New("skillsync: outbox capacity exceeded")
-	ErrOutboxPendingTooOld    = errors.New("skillsync: oldest outbox packet exceeds maximum age")
-	ErrOutboxStoreLimit       = errors.New("skillsync: outbox store exceeds configured limits")
+	ErrOutboxStoreRequired       = errors.New("skillsync: durable outbox store is required")
+	ErrOutboxRecordStoreRequired = errors.New("skillsync: outbox store must persist record age and retry metadata")
+	ErrOutboxCapacityExceeded    = errors.New("skillsync: outbox capacity exceeded")
+	ErrOutboxPendingTooOld       = errors.New("skillsync: oldest outbox packet exceeds maximum age")
+	ErrOutboxStoreLimit          = errors.New("skillsync: outbox store exceeds configured limits")
 )
 
 type OutboxStore interface {
@@ -130,6 +131,11 @@ func NewOutbox(options OutboxOptions) (*Outbox, error) {
 	if options.RequireDurable && options.Store == nil {
 		return nil, ErrOutboxStoreRequired
 	}
+	if options.Store != nil {
+		if _, ok := options.Store.(RecordOutboxStore); !ok {
+			return nil, ErrOutboxRecordStoreRequired
+		}
+	}
 	if options.AckRetryInterval <= 0 {
 		options.AckRetryInterval = 5 * time.Second
 	}
@@ -170,7 +176,7 @@ func NewOutbox(options OutboxOptions) (*Outbox, error) {
 				return nil, err
 			}
 			if record.CreatedAt.IsZero() {
-				record.CreatedAt = time.Now()
+				return nil, ErrRecordInvalid
 			}
 			id := packetID(packet)
 			if _, duplicate := box.pending[id]; duplicate {
@@ -197,16 +203,7 @@ func loadOutboxRecords(store OutboxStore) ([]OutboxRecord, error) {
 	if records, ok := store.(RecordOutboxStore); ok {
 		return records.LoadRecords()
 	}
-	packets, err := store.Load()
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now()
-	result := make([]OutboxRecord, len(packets))
-	for index := range packets {
-		result[index] = OutboxRecord{Packet: packets[index], CreatedAt: now}
-	}
-	return result, nil
+	return nil, ErrOutboxRecordStoreRequired
 }
 
 func outboxPacketBytes(packet syncstream.Packet) (int64, error) {
@@ -501,7 +498,7 @@ func (box *Outbox) addPendingLocked(id pendingID, entry *pendingPacket) {
 	box.noteCreatedAt(entry.createdAt)
 }
 
-func (box *Outbox) due(now time.Time, observer *syncstream.Observer, stream *syncstream.Stream) []syncstream.Packet {
+func (box *Outbox) due(now time.Time, observer *syncstream.Observer, stream *syncstream.Stream, allowed func(syncstream.Observer) bool) []syncstream.Packet {
 	box.mutex.Lock()
 	defer box.mutex.Unlock()
 	packets := make(packetMaxHeap, 0, box.maxPublish)
@@ -521,6 +518,9 @@ func (box *Outbox) due(now time.Time, observer *syncstream.Observer, stream *syn
 	}
 	for _, entry := range box.pending {
 		if observer != nil && entry.packet.Observer != *observer || stream != nil && entry.packet.Stream != *stream {
+			continue
+		}
+		if allowed != nil && !allowed(entry.packet.Observer) {
 			continue
 		}
 		key := streamID(entry.packet)
@@ -617,10 +617,14 @@ func observerLess(left, right syncstream.Observer) bool {
 // packets remain pending until ACK and are periodically retried to repair a
 // lost final delivery.
 func (box *Outbox) PublishDue(publisher PacketPublisher, now time.Time, observer *syncstream.Observer, stream *syncstream.Stream) error {
+	return box.publishDue(publisher, now, observer, stream, nil)
+}
+
+func (box *Outbox) publishDue(publisher PacketPublisher, now time.Time, observer *syncstream.Observer, stream *syncstream.Stream, allowed func(syncstream.Observer) bool) error {
 	if publisher == nil {
 		return ErrPublisherRequired
 	}
-	packets := box.due(now, observer, stream)
+	packets := box.due(now, observer, stream, allowed)
 	defer box.releasePublishing(packets)
 	var firstError error
 	failed := make(map[pendingStreamID]bool)

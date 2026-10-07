@@ -16,6 +16,9 @@ func TestHostCommandPayloadsAreNarrowAndTyped(t *testing.T) {
 
 func TestMemoryHostPayCostsIsAtomic(t *testing.T) {
 	host := NewMemoryHost(AuthorityIdentity{Revision: "test", Digest: "test"})
+	catalog := defaultGameplayCatalog()
+	catalog.Resources.Entries = append(catalog.Resources.Entries, ResourceCatalogEntry{Handle: 2, Key: "rage", Maximum: 100})
+	host.ConfigureGameplayCatalog(catalog)
 	host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Resources: map[string]int64{"mana": 10, "rage": 0}})
 	beforeRevision := host.CurrentRevision()
 	_, err := host.PayCosts(CostPayment{Entity: 1, Entries: []CostEntry{{Resource: "mana", Amount: 10}, {Resource: "rage", Amount: 1}}})

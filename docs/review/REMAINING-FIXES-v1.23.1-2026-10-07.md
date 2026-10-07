@@ -88,3 +88,9 @@ B1 续进：RR-20261007-14～18（H2/H3/H4/R6/Y8）已修复；Y5/Y7/Y9/R9 与 Y
 ## 2026-10-07 validation
 
 `GOWORK=off go build ./...`, `go vet ./...`, `go test ./... -count=1`: PASS (130 tested packages). `go test -race ./skill/... ./syncstream -count=1`: PASS (6 packages). Logs: `artifacts/perf/remaining-fixes-20261007/roost-remaining-b1-{build,vet,all-test}.log`. Not pushed or released. CBM generation 2026-09-30 is stale; current worktree source and regressions are the evidence.
+
+## 9. B1 最终验收（2026-10-07）
+
+B1 已完成：RR-20261007-07～25、R7/R8/H8 与合同文档更正；Y14 按维护者 Windows 决定明确暂存。首批 376d848d，续批本提交。MaxAbilityOverlays 默认 10000，checkpoint v10，旧版本拒绝。
+
+全仓 build / vet / test（130 包）通过，skill 全族与 syncstream 共 6 包 race 通过；独立 skill/integration/sync-e2e race 通过。原始日志 `artifacts/perf/remaining-fixes-20261007/roost-remaining-b1-final-*.log` 和 `roost-remaining-b1-complete-race.log`。未推送、未发布；继续 B2～B4/B6～B8。

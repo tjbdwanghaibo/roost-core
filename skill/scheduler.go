@@ -473,7 +473,7 @@ func (runtime *Runtime) failCastLocked(cast *castInstance, err error) error {
 		cast.status, cast.failure = CastFailed, err.Error()
 	}
 	runtime.cancelCastTasks(cast)
-	_ = runtime.stopSpawns(cast, true)
+	_ = runtime.stopCastSpawns(cast)
 	runtime.releasePolicySlot(cast)
 	runtime.markAbilityCastFinished(cast)
 	return err

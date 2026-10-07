@@ -25,6 +25,9 @@ func TestSnapshotStartsPresentationAtCurrentRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	observer := syncstream.Observer{ID: 9}
+	if err := c.OpenObserver(observer); err != nil {
+		t.Fatal(err)
+	}
 	if err := c.PublishSnapshot(observer, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +55,9 @@ func TestSnapshotStartsPresentationAtCurrentRuntime(t *testing.T) {
 
 type rejectingPacketStore struct{ fail bool }
 
-func (*rejectingPacketStore) Load() ([]syncstream.Packet, error) { return nil, nil }
+func (*rejectingPacketStore) Load() ([]syncstream.Packet, error)    { return nil, nil }
+func (*rejectingPacketStore) LoadRecords() ([]OutboxRecord, error)  { return nil, nil }
+func (s *rejectingPacketStore) PutRecord(record OutboxRecord) error { return s.Put(record.Packet) }
 func (s *rejectingPacketStore) Put(syncstream.Packet) error {
 	if s.fail {
 		return errors.New("outbox unavailable")
@@ -81,6 +86,9 @@ func TestOutboxFailureDoesNotAppendTheSameSourceAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	observer := syncstream.Observer{ID: 10}
+	if err := c.OpenObserver(observer); err != nil {
+		t.Fatal(err)
+	}
 	stream := syncstream.Stream{Topic: TopicState, Key: 1}
 	for range 3 {
 		if err := c.Flush(observer, 1); err == nil {
@@ -111,6 +119,9 @@ func TestFullRecoveryAdvancesSourceCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	observer := syncstream.Observer{ID: 11}
+	if err := c.OpenObserver(observer); err != nil {
+		t.Fatal(err)
+	}
 	stream := syncstream.Stream{Topic: TopicState, Key: 1}
 	if _, err := c.Recover(syncstream.ResyncRequest{Observer: observer, Stream: stream, SchemaVersion: 1}); err != nil {
 		t.Fatal(err)

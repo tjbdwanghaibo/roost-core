@@ -86,6 +86,9 @@ func TestPresentationResetFromRecoverHonoursVisibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	observer := syncstream.Observer{ID: 7}
+	if err := coordinator.OpenObserver(observer); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := coordinator.Recover(syncstream.ResyncRequest{Observer: observer, Stream: syncstream.Stream{Topic: TopicPresentation, Key: 1}, SchemaVersion: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +107,9 @@ func TestPresentationResetFromExpiredCursorHonoursVisibility(t *testing.T) {
 	projector, _ := NewProjector(1)
 	coordinator, err := NewCoordinator(CoordinatorOptions{Runtime: runtime, History: syncstream.NewHistory(syncstream.HistoryOptions{SchemaVersion: 1}), Publisher: publisher, Projector: projector, Visibility: hideEntityOne})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.OpenObserver(syncstream.Observer{ID: 7}); err != nil {
 		t.Fatal(err)
 	}
 	if err := coordinator.Flush(syncstream.Observer{ID: 7}, 1); err != nil {

@@ -6,7 +6,7 @@ import (
 )
 
 // HostCapabilityProbe 是 CheckHostCapabilities 用的探针世界。检查会真的调用 Host：读属性 /
-// 资源、付零费、施加零值资源变化与持续 1 tick 的零值属性修正、步进一个探针衍生物，
+// 资源、付零费、施加中性资源/属性修正、步进并停止一个探针衍生物，
 // 所以要在测试世界上跑，不要对线上世界跑。
 type HostCapabilityProbe struct {
 	// Entity：一个存活的实体，带声明的全部属性与资源（零值即可）。
@@ -33,15 +33,18 @@ func CheckHostCapabilities(host Host, catalog GameplayCatalog, probe HostCapabil
 	for _, column := range hostCapabilityColumns {
 		checker.column(column)
 	}
+	checker.cleanupSpawnProbe()
 	return errors.Join(checker.failures...)
 }
 
 type hostCapabilityChecker struct {
-	host     Host
-	catalog  GameplayCatalog
-	table    HostCapabilityTable
-	probe    HostCapabilityProbe
-	failures []error
+	host         Host
+	catalog      GameplayCatalog
+	table        HostCapabilityTable
+	probe        HostCapabilityProbe
+	failures     []error
+	probeStarted bool
+	probeState   SpawnHostState
 }
 
 func (checker *hostCapabilityChecker) fail(capability HostCapability, format string, args ...any) {
@@ -158,7 +161,8 @@ func (checker *hostCapabilityChecker) undeclaredAttributeHandle() {
 func (checker *hostCapabilityChecker) resource(capability HostCapability, declared bool) {
 	entry, _ := checker.resourceEntry(capability.Key)
 	_, readErr := checker.host.Read(ReadRequest{Meta: checker.meta(), Payload: ResourceRead{Entity: checker.probe.Entity, Resource: capability.Key}})
-	_, payErr := checker.host.PayCosts(CostPayment{Meta: checker.commandMeta(), Entity: checker.probe.Entity, Entries: []CostEntry{{Resource: capability.Key, Handle: entry.Handle, Amount: 0}}})
+	// 与 Runtime 的付费形状一致：只发编译后的 Handle，不能让名字替缺失实现兜底。
+	_, payErr := checker.host.PayCosts(CostPayment{Meta: checker.commandMeta(), Entity: checker.probe.Entity, Entries: []CostEntry{{Handle: entry.Handle, Amount: 0}}})
 	switch {
 	case declared && readErr != nil:
 		checker.fail(capability, "declared but Read(ResourceRead) failed: %v", readErr)
@@ -194,7 +198,7 @@ func (checker *hostCapabilityChecker) resourceOperation(capability HostCapabilit
 	}
 }
 
-// modifierOperation：对第一个允许这种 operation 的属性施加持续 1 tick 的零值修正。
+// modifierOperation：加法 0、乘法 10000 BP 才是中性修正，乘法 0 会清空属性。
 func (checker *hostCapabilityChecker) modifierOperation(capability HostCapability) {
 	var target AttributeCatalogEntry
 	for _, entry := range checker.catalog.Attributes.Entries {
@@ -207,18 +211,38 @@ func (checker *hostCapabilityChecker) modifierOperation(capability HostCapabilit
 		checker.fail(capability, "no catalog attribute allows this modifier operation")
 		return
 	}
-	command := EffectCommand{Meta: checker.commandMeta(), Payload: AttributeModifierCommand{SourceOwner: checker.probe.Entity, Target: checker.probe.Entity, Attribute: target.Handle, Operation: capability.Key, Value: 0, DurationTicks: 1}}
+	value := int64(0)
+	if capability.Key == "mul_bp" {
+		value = 10000
+	}
+	command := EffectCommand{Meta: checker.commandMeta(), Payload: AttributeModifierCommand{SourceOwner: checker.probe.Entity, Target: checker.probe.Entity, Attribute: target.Handle, Operation: capability.Key, Value: value, DurationTicks: 1}}
 	if _, err := checker.host.Apply(command); err != nil {
 		checker.fail(capability, "declared but Apply(AttributeModifierCommand) failed: %v", err)
 	}
 }
 
-// step 步进探针衍生物一步。检查不调用 StopSpawn：包内只有 Runtime 的统一停止函数可以停衍生物
-// （TestSpawnStopEntriesAreRegistered），探针衍生物留在测试世界里。
+// step 的探针归 checker 所有，不进入 Runtime 的业务衍生物状态机；检查结束自行清理。
 func (checker *hostCapabilityChecker) step(step MotionStep, numeric SpawnNumericSnapshot) error {
 	meta := SpawnCommandMeta{RequiredRevision: checker.host.CurrentRevision(), SpawnID: checker.probe.SpawnID}
-	_, err := checker.host.StepSpawn(SpawnStepCommand{Meta: meta, Motion: step, Numeric: numeric}, SpawnHostState{SpawnID: checker.probe.SpawnID})
+	if !checker.probeStarted {
+		checker.probeState.SpawnID = checker.probe.SpawnID
+	}
+	checker.probeStarted = true
+	result, err := checker.host.StepSpawn(SpawnStepCommand{Meta: meta, Motion: step, Numeric: numeric}, checker.probeState)
+	if err == nil {
+		checker.probeState = result.State
+	}
 	return err
+}
+
+func (checker *hostCapabilityChecker) cleanupSpawnProbe() {
+	if !checker.probeStarted {
+		return
+	}
+	_, err := checker.host.StopSpawn(SpawnStopCommand{Meta: SpawnCommandMeta{RequiredRevision: checker.host.CurrentRevision(), SpawnID: checker.probe.SpawnID}}, checker.probeState)
+	if err != nil {
+		checker.fail(HostCapability{Kind: HostCapabilitySpawnKind, Key: "probe"}, "cleanup StopSpawn failed: %v", err)
+	}
 }
 
 // spawnKind：Host 的 StepSpawn 不带 kind，非 minion 的 kind 只能核对基本步骤（static、

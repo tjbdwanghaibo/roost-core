@@ -122,8 +122,8 @@ coordinator, err := skillsync.NewCoordinator(skillsync.CoordinatorOptions{
 
 推荐调用顺序：
 
-1. 编译并注册 Program：`RegisterProgram(key, program)`；
-2. 新 observer 加入时发布 manifest full 和 state snapshot；
+1. 编译并调用 `RegisterProgram(key, program)`，检查错误；不同计划不能覆盖同 key 的 manifest；
+2. 新 observer 加入时先 `OpenObserver`，再发布 manifest full 和 state snapshot；重启重连同样先开放会话；
 3. 每个逻辑 tick 提交 Runtime 后调用 `Flush(observer, key)`；
 4. 客户端处理成功后提交 `Epoch + Packet.Sequence` ACK；
 5. 重连提交 ResyncRequest，调用 `Recover`；
@@ -132,6 +132,10 @@ coordinator, err := skillsync.NewCoordinator(skillsync.CoordinatorOptions{
 Coordinator 对每个 observer/key 保存独立的 Runtime source cursor。可见性拒绝的事件只
 推进该 observer 的 source cursor，不会进入其 History。Packet 一旦 Append 成功，即使
 Publisher 随后失败也仍可由 Resync 重放；如果 Append 失败，source cursor 不前进。
+
+一个 Coordinator 绑定一个 Runtime。key 是整个 Runtime 的同步命名空间，Flush 不按 key 筛选 Program；一个 key 的 manifest 只描述一个 Program。需要内容隔离时使用独立 Runtime/Coordinator，不能把 key 当 AOI 或 Program 过滤器。
+
+`MaxObservers` 默认 4096，计算开放及未完成关闭的会话；成功关闭释放名额。`MaxPrograms` 默认 1024，停止 key 的生产后调用 `UnregisterProgram` 释放。持久 outbox store 必须实现 `RecordOutboxStore` 并保存真实 CreatedAt；只存 Packet 的旧式 store 启动拒绝。
 
 state full、state delta、presentation 增量与 presentation reset 都经过同一 observer 的
 VisibilityPolicy：reset 的每条持续表现按它对应的增量事件交给 `FilterPresentation`；ability

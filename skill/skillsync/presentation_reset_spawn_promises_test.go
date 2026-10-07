@@ -157,6 +157,9 @@ func recoverPresentationReset(t *testing.T, runtime *skill.Runtime, policy Visib
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := coordinator.OpenObserver(syncstream.Observer{ID: 7}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := coordinator.Recover(syncstream.ResyncRequest{Observer: syncstream.Observer{ID: 7}, Stream: syncstream.Stream{Topic: TopicPresentation, Key: 1}, SchemaVersion: 1}); err != nil {
 		t.Fatal(err)
 	}

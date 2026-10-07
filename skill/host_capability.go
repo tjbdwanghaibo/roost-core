@@ -40,12 +40,12 @@ type HostCapabilityCatalog struct {
 	// ModifierOperations：attribute_modifier 效果的 operation（add / mul_bp）。属性自己的
 	// AttributeCatalogEntry.ModifierOperations 是玩法策略，两者都要满足。
 	ModifierOperations []string
-	// Summon：Host 实现 OwnedEntityRuntimeHost（summon 效果、召唤物命令、owned_entities 选择、
-	// minion 衍生物都需要）。
+	// Summon 声明召唤生态支持：summon 事务需 OwnedEntityRuntimeHost；
+	// 召唤物命令通过 Apply，owned_entities 通过 Select，不能只实现该可选接口。
 	Summon bool
 }
 
-// HostCapabilityTable 是完整的能力表：可读属性与资源两列来自 Gameplay catalog，其余来自
+// HostCapabilityTable 描述可配置的能力列：可读属性与资源两列来自 Gameplay catalog，其余来自
 // HostCapabilityCatalog。环境用 HostCapabilityTableOf 得到它；Host 用 HostCapabilityProvider 声明它。
 type HostCapabilityTable struct {
 	// Attributes：Host 能答 AttributeRead 的属性 key（read_attribute、快照、attribute_compare 过滤）。

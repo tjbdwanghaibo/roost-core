@@ -141,14 +141,10 @@ func (runtime *Runtime) beginCastExecution(cast *castInstance) error {
 }
 
 func (runtime *Runtime) beginCastRecovery(cast *castInstance) error {
-	if err := runtime.stopFinishingSpawns(cast); err != nil {
-		_ = runtime.stopSpawns(cast, true)
-		return err
-	}
 	cast.logicalFinished = true
 	cast.windowStage = CastWindowRecovering
 	if err := runtime.handoffEntitySpawns(cast); err != nil {
-		_ = runtime.stopSpawns(cast, true)
+		_ = runtime.stopCastSpawns(cast)
 		return err
 	}
 	if cast.pendingTasks > 0 {
@@ -251,7 +247,7 @@ func (runtime *Runtime) Cancel(id CastID) error {
 			return runtime.failCastLocked(cast, err)
 		}
 	}
-	if err := runtime.stopSpawns(cast, true); err != nil {
+	if err := runtime.stopCastSpawns(cast); err != nil {
 		return runtime.failCastLocked(cast, err)
 	}
 	runtime.releasePolicySlot(cast)
@@ -294,7 +290,7 @@ func (runtime *Runtime) Interrupt(id CastID, tag GameplayTagHandle) error {
 	if cast.committed && (cast.program.cast.mode == castModeToggle || cast.program.cast.mode == castModeHold) {
 		runtime.startCooldown(cast)
 	}
-	if err := runtime.stopSpawns(cast, true); err != nil {
+	if err := runtime.stopCastSpawns(cast); err != nil {
 		return runtime.failCastLocked(cast, err)
 	}
 	runtime.releasePolicySlot(cast)

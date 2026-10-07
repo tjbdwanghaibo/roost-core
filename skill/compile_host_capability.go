@@ -3,6 +3,8 @@ package skill
 // runHostCapabilityCheck 收集定义在运行期会向 Host 要的每一项能力（B3 ③），逐项对照环境的
 // Host 能力表：表外的项报 HOST_CAPABILITY_MISSING 并点名；全部需求排序去重后交给 lower 写进
 // Program（hostRequirements），Runtime 用同一份列表核对 Host 声明的表。
+// 表只覆盖这些可配置列；基础 Apply/StateStore 的 damage/heal/shield/status/temporal/state
+// 命令仍是 Host 接口契约，需业务 Host 的行为集成测试，不会被这张表逐命令自检。
 //
 // 编译器对 Host 能力的判断只经 HostCapabilityTableOf 读取（守卫
 // TestCompilerReadsHostCapabilitiesOnlyThroughTheTable）；这里收集的项必须覆盖 Runtime 实际

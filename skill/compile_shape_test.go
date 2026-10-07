@@ -9,7 +9,7 @@ import (
 func TestCompilePassOrder(t *testing.T) {
 	artifacts, diagnostics := compileToArtifacts(mustParseFixture(t, "simple_damage.json"), DefaultCompileEnvironment())
 	requireNoErrors(t, diagnostics)
-	want := []string{"normalize", "shape", "authority_capability", "gameplay_tags", "input_state", "temporal", "type_snapshot", "optional_quantity", "effect_result_scope", "graph", "memory", "lifetime_ownership", "motion", "event_proc", "identity_random", "budget", "visual", "lower"}
+	want := []string{"normalize", "shape", "authority_capability", "gameplay_tags", "input_state", "temporal", "type_snapshot", "effect_result_scope", "graph", "memory", "lifetime_ownership", "motion", "event_proc", "identity_random", "budget", "visual", "lower"}
 	if !reflect.DeepEqual(artifacts.passOrder, want) {
 		t.Fatalf("pass order = %v, want %v", artifacts.passOrder, want)
 	}

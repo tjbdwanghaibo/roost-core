@@ -1,9 +1,12 @@
 package skill
 
 import (
+	"fmt"
 	"math"
 	"sort"
 )
+
+var ErrAbilityOverlaysFull = fmt.Errorf("%w: ability overlays at MaxAbilityOverlays", ErrRuntimeCapacityExceeded)
 
 type abilityKey struct {
 	owner  EntityID
@@ -317,13 +320,21 @@ func (runtime *Runtime) modifyAbilityStateLocked(owner EntityID, ability Ability
 		if !ok || enabled || duration <= 0 || duration > policy.maximumDuration {
 			return AbilityChangeResult{}, ErrCastInputRejected
 		}
-		runtime.nextAbilityOverlay++
-		overlayID := runtime.nextAbilityOverlay
-		state.overlays[overlayID] = runtime.currentTick + duration
-		runtime.touchAbilityLocked(abilityKey{owner: state.owner, handle: state.handle})
-		if err := runtime.scheduleSystem(runtime.currentTick+duration, &abilityOverlayExpiryTask{Owner: owner, Ability: ability, OverlayID: overlayID, Context: cloneEventContext(event)}); err != nil {
+		if runtime.abilityOverlays >= runtime.options.MaxAbilityOverlays {
+			return AbilityChangeResult{}, ErrAbilityOverlaysFull
+		}
+		if runtime.currentTick > Tick(math.MaxInt64)-duration || runtime.nextAbilityOverlay == math.MaxUint64 {
+			return AbilityChangeResult{}, ErrRuntimeArithmeticOverflow
+		}
+		due, overlayID := runtime.currentTick+duration, runtime.nextAbilityOverlay+1
+		// 先准入到期任务，再发布覆盖；拒绝不能留下永不到期的禁用状态。
+		if err := runtime.scheduleSystem(due, &abilityOverlayExpiryTask{Owner: owner, Ability: ability, OverlayID: overlayID, Context: cloneEventContext(event)}); err != nil {
 			return AbilityChangeResult{}, err
 		}
+		runtime.nextAbilityOverlay = overlayID
+		state.overlays[overlayID] = due
+		runtime.abilityOverlays++
+		runtime.touchAbilityLocked(abilityKey{owner: state.owner, handle: state.handle})
 		after := BoolRuntimeValue(false)
 		runtime.emitAbilityChange(state, property, operation, before, after, event)
 		return AbilityChangeResult{ResultOutcome: successfulResultOutcome(), Before: before, After: after}, nil
@@ -469,6 +480,7 @@ func (runtime *Runtime) expireAbilityOverlay(task *abilityOverlayExpiryTask) err
 		return nil
 	}
 	delete(state.overlays, task.OverlayID)
+	runtime.abilityOverlays--
 	runtime.touchAbilityLocked(abilityKey{owner: task.Owner, handle: task.Ability})
 	if len(state.overlays) == 0 {
 		context := cloneEventContext(task.Context)

@@ -547,7 +547,7 @@ func (runtime *Runtime) terminateOwnedSpawn(id SpawnID, cause StopCause, callbac
 // spawnCancelCallbackEvent），再让宿主删除它的 owned 实体。之前只给已移交的跑，施放中的被 RemoveProgram 停下时一次
 // cancel 也没有，与 Shutdown / Cancel / Interrupt 不一致（RR-20261006-55 后续二，维护者 2026-10-07 F08-H+2 ②）。
 // 宿主拒绝停止时返回第一个错误（errors.Is 宿主的错误），停不下的衍生物留成 stop_pending：程序移除之后仍由 Runtime
-// 在之后的 tick 按退避重试（重试只重发宿主 StopSpawn，不执行程序代码），再调用一次 RemoveProgram 会立即再请求一次。
+// 在之后的 tick 按退避重试（重试先重试尚未成功的 carry 解除，再发宿主 StopSpawn，不执行程序代码），再调用一次 RemoveProgram 会立即再请求一次。
 // 之前它们留成 running、列在 OwnedSpawns 里等调用方重试（停止入口统一，维护者 2026-10-07）。该程序已放弃的衍生物
 // 不再停；它们的记录仍引用程序（checkpoint 恢复时 resolver 仍要能解析它），直到 Advance 末尾按 MaxAbandonedSpawns 清理。
 func (runtime *Runtime) RemoveProgram(programID string) error {

@@ -137,6 +137,9 @@ func TestCoordinatorRetainsPublishFailureForRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	observer := syncstream.Observer{ID: 4}
+	if err := coordinator.OpenObserver(observer); err != nil {
+		t.Fatal(err)
+	}
 	if err := coordinator.PublishSnapshot(observer, 8); err == nil {
 		t.Fatal("expected injected publish failure")
 	}
@@ -171,6 +174,9 @@ func TestCoordinatorReclaimsViewLocksAndRequiresExplicitReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	observer := syncstream.Observer{ID: 90}
+	if err := coordinator.OpenObserver(observer); err != nil {
+		t.Fatal(err)
+	}
 	for key := int64(1); key <= 100; key++ {
 		if err := coordinator.PublishSnapshot(observer, key); err != nil {
 			t.Fatal(err)

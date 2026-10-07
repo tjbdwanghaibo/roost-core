@@ -29,6 +29,9 @@ func TestConcurrentCoordinatorMetricsCountEachPublishOnce(t *testing.T) {
 	}
 	stream := syncstream.Stream{Topic: TopicState, Key: 1}
 	for id := int64(1); id <= 2; id++ {
+		if err := coordinator.OpenObserver(syncstream.Observer{ID: id}); err != nil {
+			t.Fatal(err)
+		}
 		if err := coordinator.outbox.Put(syncstream.Packet{Observer: syncstream.Observer{ID: id}, Stream: stream, Epoch: 1, Sequence: 1}); err != nil {
 			t.Fatal(err)
 		}

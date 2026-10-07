@@ -25,7 +25,9 @@ const (
 type SpawnScope string
 
 const (
-	SpawnScopePhase  SpawnScope = "phase"
+	// Deprecated: Runtime 只创建 entity 衍生物；保留旧常量供源码迁移。
+	SpawnScopePhase SpawnScope = "phase"
+	// Deprecated: Runtime 只创建 entity 衍生物；正常施法结束会移交，不按 cast 停止。
 	SpawnScopeCast   SpawnScope = "cast"
 	SpawnScopeEntity SpawnScope = "entity"
 )
@@ -216,6 +218,9 @@ func (runtime *Runtime) stopSpawn(cast *castInstance, spawn *SpawnInstance, caus
 	}
 	stopAreaMembership(spawn, false)
 	detachErr := runtime.detachMotionCarry(cast, spawn)
+	if detachErr != nil {
+		return detachErr
+	}
 	requiredRevision := runtime.host.CurrentRevision()
 	if cast != nil {
 		requiredRevision = cast.visibleRevision
@@ -225,7 +230,7 @@ func (runtime *Runtime) stopSpawn(cast *castInstance, spawn *SpawnInstance, caus
 		SpawnID:          spawn.ID,
 	}}, spawn.HostState)
 	if err != nil {
-		return errors.Join(detachErr, err)
+		return err
 	}
 	runtime.spawns.setState(spawn, spawnStatusForStop(cause), spawn.handedOff)
 	spawn.stopCause = cause
@@ -244,7 +249,7 @@ func (runtime *Runtime) stopSpawn(cast *castInstance, spawn *SpawnInstance, caus
 		cast.visibleRevision = maxRevision(cast.visibleRevision, receipt.Revision)
 		runtime.drainHostEvents(cast)
 	}
-	return detachErr
+	return nil
 }
 
 func (runtime *Runtime) detachMotionCarry(cast *castInstance, spawn *SpawnInstance) error {
@@ -252,8 +257,6 @@ func (runtime *Runtime) detachMotionCarry(cast *castInstance, spawn *SpawnInstan
 		return nil
 	}
 	target := spawn.Motion.CarryTarget
-	spawn.Motion.CarryTarget = 0
-	spawn.Motion.CarryAttached = false
 	requiredRevision := runtime.host.CurrentRevision()
 	if cast != nil {
 		requiredRevision = cast.visibleRevision
@@ -269,6 +272,9 @@ func (runtime *Runtime) detachMotionCarry(cast *castInstance, spawn *SpawnInstan
 	if err != nil {
 		return err
 	}
+	// Host 确认解除后才能释放本地身份；失败保留到 stop_pending 重试及 checkpoint。
+	spawn.Motion.CarryTarget = 0
+	spawn.Motion.CarryAttached = false
 	spawn.HostState = result.State
 	if cast != nil {
 		cast.visibleRevision = maxRevision(cast.visibleRevision, result.Commit.Revision)
@@ -281,8 +287,8 @@ func (runtime *Runtime) detachMotionCarry(cast *castInstance, spawn *SpawnInstan
 }
 
 // terminateSpawn 是 requestSpawnStop 的“停止中”一步，不直接调用。carry 解除排在任何回调之前：
-// 挂载归衍生物所有，先清掉它，宿主报解除失败时重试或嵌套回调也无害。区域离开信号与回调只对 running 的衍生物
-// 跑一次；待停止的衍生物再进来时只剩宿主 StopSpawn。
+// 先尝试解除，只有 Host 确认才清掉本地挂载。失败时仍通知一次区域离开/取消回调，
+// 但保留挂载与 stop_pending；重试只补解除和 StopSpawn，不重复业务回调。
 func (runtime *Runtime) terminateSpawn(cast *castInstance, spawn *SpawnInstance, cause StopCause, callbackEvent string) error {
 	detachErr := runtime.detachMotionCarry(cast, spawn)
 	var areaErr error
@@ -300,6 +306,9 @@ func (runtime *Runtime) terminateSpawn(cast *castInstance, spawn *SpawnInstance,
 	if areaErr == nil && callbackEvent != "" && callbackLive {
 		callbackErr = runtime.runOwnedSpawnCallback(spawn, callbackEvent)
 	}
+	if detachErr != nil {
+		return errors.Join(detachErr, areaErr, callbackErr)
+	}
 	stopErr := runtime.stopSpawn(cast, spawn, cause)
 	return errors.Join(detachErr, areaErr, callbackErr, stopErr)
 }
@@ -314,18 +323,10 @@ func spawnCancelCallbackEvent(spawn *SpawnInstance) string {
 	return ""
 }
 
-func (runtime *Runtime) stopSpawns(cast *castInstance, includeCastScope bool) error {
-	return runtime.stopScopedSpawns(cast, includeCastScope, includeCastScope)
-}
-
-func (runtime *Runtime) stopFinishingSpawns(cast *castInstance) error {
-	return runtime.stopScopedSpawns(cast, true, false)
-}
-
-func (runtime *Runtime) stopScopedSpawns(cast *castInstance, includeCastScope, includeEntityScope bool) error {
+func (runtime *Runtime) stopCastSpawns(cast *castInstance) error {
 	// 只看施放中分区：已移交的只有 entity 衍生物（checkpoint 恢复也核对），施法收尾不再停它们。
 	spawnIDs := runtime.spawns.sortedIDs(func(spawn *SpawnInstance) bool {
-		return spawn.CastID == cast.id && (spawn.Scope == SpawnScopePhase || includeCastScope && spawn.Scope == SpawnScopeCast || includeEntityScope && spawn.Scope == SpawnScopeEntity)
+		return spawn.CastID == cast.id
 	}, spawnCasting)
 	var firstErr error
 	for _, spawnID := range spawnIDs {

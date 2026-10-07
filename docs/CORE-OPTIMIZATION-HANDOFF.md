@@ -217,6 +217,8 @@ bash scripts/test-remote-matrix.sh
 
 ## 7. 缺陷记录索引
 
+2026-10-07：B1 检查点 `376d848d`（RR-20261007-07～18）已提交；130 包全量与 6 包 race 通过。后续 RR-20261007-19～20 已实施，skillsync / 独立 sync-e2e race 通过，待本批提交与组合验证；全部交接仍未完成。
+
 2026-10-07 B1 续进：RR-20261007-14～18 已修复（Host 包装/恢复/nil/缓存、组合效果），skill 全族与 syncstream 6 包 race 通过；仍有 B1 后续及其他批次，未发布。
 
 2026-10-07 B1 第一批：RR-20261007-07～13 已修复，skillsync / syncstream race 通过；完整 B1 尚未完成，B2～B4、B6～B8 继续。尚未推送/发布。
@@ -659,3 +661,9 @@ N04源文40/40累计复用已读、场景部分完成；另一线三大核心只
 | [RR-20260930-CG-12](bug/REVIEW-2026-09-30-codegen-05.md#rr-20260930-12) | P2 cfggen false 索引生成无用导入 | [修复/真实消费回归](bugfix/RR-20260930-CG-12.md)（未发版） |
 | [RR-20260930-CG-13](bug/REVIEW-2026-09-30-codegen-05.md#rr-20260930-13) | P2 cfggen bean 与函数/import 名冲突 | [修复/写入前拒绝](bugfix/RR-20260930-CG-13.md)（未发版） |
 | [RR-20260930-CG-14](bug/REVIEW-2026-09-30-codegen-05.md#rr-20260930-14) | P2 deps 事务遗漏合仓迁移文件回写 | [修复/隔离与正式 CLI 消费](bugfix/RR-20260930-CG-14.md)（未发版） |
+
+### B1 续批（2026-10-07，待提交/全仓复验）
+
+RR-20261007-19～25：持久 outbox 年龄、显式 observer 生命周期与资源上限、carry 解除重试、Host 自检/默认 catalog/付费形状、能力覆盖上限。R7/R8/H8 文档与无效分支同步收敛。checkpoint v10；旧版本拒绝，升级先停旧并清空旧 checkpoint。B2～B4/B6～B8 仍待完成。
+
+B1 最终验收：全仓 build/vet/test（130 包）、6 包 race、独立 sync-e2e race 通过；本批本地提交，未推送/发布。

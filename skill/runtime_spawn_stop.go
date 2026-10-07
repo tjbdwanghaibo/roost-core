@@ -13,14 +13,14 @@ import (
 //	running ──请求停止──▶ 停止中：解除 carry、区域离开信号、回调（只对 running）、宿主 StopSpawn
 //	停止中 ──宿主已停──▶ 已停止（ended / cancelled / failed），进已停止分区；记录随 cast 按 RR-20261006-23 的规则回收
 //	停止中 ──宿主拒绝──▶ stop_pending，进待停止分区；Runtime 不再推进它（不步进、不派发信号、不跑回调）
-//	stop_pending ──重试到期 / 再次请求──▶ 停止中（只重发宿主 StopSpawn；停止原因沿用第一次请求）
+//	stop_pending ──重试到期 / 再次请求──▶ 停止中（先重试尚未成功的 carry 解除，再发宿主 StopSpawn；停止原因沿用第一次请求）
 //	stop_pending ──失败的重试达到上限──▶ stop_pending（exhausted）：告警、记录保留，不再自动重试；再次请求仍会停
 //	stop_pending ──待停止条目超过 MaxStopPendingSpawns──▶ abandoned，进已放弃分区：告警，不再重试，Runtime 不再负责停它
 //	abandoned ──已放弃分区超过 MaxAbandonedSpawns，Advance 末尾──▶ 记录删除（最早的先删）
 //
 // 停止入口（spawn_stop_entries_promises_test.go 的 spawnStopEntries 逐个登记，守卫核对源码里调用 requestSpawnStop
 // 的函数与登记表一致）：
-//   - 施法里的停止：failCastLocked、goto、Cancel、Interrupt、施法收尾（stopScopedSpawns），衍生物启动失败的清理
+//   - 施法里的停止：failCastLocked、Cancel、Interrupt（stopCastSpawns），衍生物启动失败的清理
 //     （startEntitySpawn、executeOwnedSummon），移交时 lifecycle 实体已失效（handoffEntitySpawns）；
 //   - tick 驱动：施法期间 lifecycle 实体消失（reapUnhandedEntitySpawns），逐 tick 推进的衍生物（施放中与已移交，
 //     RR-20261006-51）的到期 / 失效 / 步进失败 / area 回调 finish（terminateOwnedSpawn）；
@@ -35,7 +35,7 @@ import (
 // 在新进程 RestoreRuntime 再 Advance，都会按原来的重试时刻接着停；再调一次 Shutdown 会立即再请求一次。不在 Shutdown
 // 里同步重试：Runtime 是按 tick 推进的确定性状态机，没有 ctx 也不读系统时钟，原地循环只会在宿主状态不变时连打宿主，
 // 按墙钟等待会让回放与 checkpoint 恢复失去确定性，还会在调用方的执行线程上阻塞。RemoveProgram 之后，程序的
-// stop_pending 衍生物同样由 Runtime 在 tick 上重试：重试只重发宿主 StopSpawn，不执行程序代码，记录仍引用程序
+// stop_pending 衍生物同样由 Runtime 在 tick 上重试：重试先重试尚未成功的 carry 解除，再发宿主 StopSpawn，不执行程序代码，记录仍引用程序
 // （checkpoint 恢复时 resolver 仍要能解析它，cast 记录本来也引用它）。
 //
 // 重试（retrySpawnStopsLocked，advanceHost 每推进到一个 tick 调用）：第一次在 SpawnStopRetryBackoff 个 tick 之后，
@@ -87,7 +87,7 @@ func (runtime *Runtime) requestSpawnStop(cast *castInstance, spawn *SpawnInstanc
 	}
 	err := runtime.terminateSpawn(cast, spawn, cause, callbackEvent)
 	if spawn.liveOnHost() && !pending {
-		// terminateSpawn 总会调用 stopSpawn；之后仍是 running 只说明宿主拒绝了 StopSpawn。
+		// 解除 carry 或 StopSpawn 被宿主拒绝时仍存活；两者共用待停止重试。
 		runtime.enterStopPendingLocked(cast, spawn, cause)
 	}
 	return err

@@ -367,36 +367,14 @@ func TestCarryDetachesExactlyOnce(t *testing.T) {
 			},
 		},
 		{
-			name: "goto",
-			run: func(runtime *Runtime, cast *castInstance, spawn *SpawnInstance) error {
-				spawn.Scope = SpawnScopePhase
-				fileSpawnForTest(runtime, spawn)
-				if err := runtime.stopSpawns(cast, false); err != nil {
-					return err
-				}
-				return runtime.stopSpawns(cast, false)
-			},
-		},
-		{
-			name: "finish",
-			run: func(runtime *Runtime, cast *castInstance, spawn *SpawnInstance) error {
-				spawn.Scope = SpawnScopeCast
-				fileSpawnForTest(runtime, spawn)
-				if err := runtime.stopFinishingSpawns(cast); err != nil {
-					return err
-				}
-				return runtime.stopFinishingSpawns(cast)
-			},
-		},
-		{
 			name: "cancel",
 			run: func(runtime *Runtime, cast *castInstance, spawn *SpawnInstance) error {
-				spawn.Scope = SpawnScopePhase
+				spawn.Scope = SpawnScopeEntity
 				fileSpawnForTest(runtime, spawn)
-				if err := runtime.stopSpawns(cast, true); err != nil {
+				if err := runtime.stopCastSpawns(cast); err != nil {
 					return err
 				}
-				return runtime.stopSpawns(cast, true)
+				return runtime.stopCastSpawns(cast)
 			},
 		},
 		{
@@ -404,7 +382,7 @@ func TestCarryDetachesExactlyOnce(t *testing.T) {
 			run: func(runtime *Runtime, cast *castInstance, spawn *SpawnInstance) error {
 				// 步进被宿主拒绝之后停止：解除 carry 恰好一次。之前经 spawnStepTask 步进；那类任务已删除，衍生物只由
 				// advanceOwnedSpawns 推进（RR-20261006-51），这里直接走同一个步进函数。
-				spawn.Scope = SpawnScopePhase
+				spawn.Scope = SpawnScopeEntity
 				fileSpawnForTest(runtime, spawn)
 				runtime.casts[cast.id] = cast
 				if _, err := runtime.stepSpawnMotion(cast, spawn); err == nil {

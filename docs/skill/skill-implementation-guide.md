@@ -63,7 +63,7 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
    `CompileEnvironment` 提供的权威 Handle，并验证能力目录。
 4. `gameplay_tags`、`input_state`、`temporal`：验证标签类别、施放输入、
    Persistent/Shared State 与时间快照。
-5. `type_snapshot`、`optional_quantity`、`effect_result_scope`：检查值类型、
+5. `type_snapshot`、`effect_result_scope`：检查值类型、
    单位/快照点、Effect Result 的作用域与字段。
 6. `graph`、`memory`、`lifetime_ownership`：证明 phase/flow 可达、Memory 已初始化、
    生命周期和拥有关系有界。

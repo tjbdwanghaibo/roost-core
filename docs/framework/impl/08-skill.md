@@ -703,3 +703,18 @@ cd skill/integration/sync-e2e && go test ./...
 - Y8：已修复 [RR-20261007-18](../../bugfix/RR-20261007-18.md)，合法非伤害效果被组合校验拒绝。
 
 Y5/Y7/Y9：文档更正 presentation 的可靠链、无密钥摘要的信任边界、公开扩展 API 的保留；Constraints/Obligations/Packages 只做格式校验。R9：世界与 Runtime 成对恢复；HostEventCompactor 可压缩已消费事件，不能在更新 Host 上用旧 checkpoint 重建世界。Y6 嵌套投影限制已明确，不保证未来嵌套字段自动隐藏。
+
+## v1.23.1 B1 续批校正（未发版）
+
+- Y12 / Y15 / Y16 / Y17：RR-20261007-19～20。持久 store 必须保存 CreatedAt；显式 OpenObserver，MaxObservers 默认 4096，MaxPrograms 默认 1024，成功关闭/注销释放额度。key 是整个 Runtime 的同步命名空间，不筛选 Program；一个 key 的 manifest 不可被另一个程序覆盖。
+- R5：RR-20261007-21，解除 carry 的失败会留在 StopPending 重试，成功后才清附着状态。取消回调只一次。
+- R7：正式创建的衍生物只有 entity scope；删除 goto / 正常 finish 的空停止调用与无创建点分支，保留公开 scope 常量并标弃用。取消 / 失败停本次施法所有未移交衍生物；DSL 行为回归验证 goto、正常 finish 不提前解除 carry。
+- R8：删除空 optional_quantity pass，编译流水线 17 阶段（含 lower 就绪）。实际类型 / 可选值约束仍由 type_snapshot 等有实现阶段检查。
+- H5 / H6 / H7：RR-20261007-22～24。自检 mul_bp 中性值 10000、统一收回探针；MemoryHost 初始化默认 catalog；付费探针与 Runtime 都只给句柄。
+- H8：能力表检查其声明的可配置列；damage/heal/shield/status/temporal/state 属 Host 基础实现契约，不能以表验证通过宣称这些命令已做行为验收。summon 列描述已按 OwnedEntityRuntimeHost / Apply / Select 的真实入口更正。
+- D1：RR-20261007-25，MaxAbilityOverlays 默认 10000，独立于根事件表，入口拒绝 / 到期释放 / 恢复检查；checkpoint 版本 **10**，新增 max_ability_overlays，旧版拒绝，升级先停旧、清空旧 checkpoint 再起新。
+- Y14：遵循维护者 Windows 仅编译与 CLI 兼容的决定，Windows 持久屏障不在本轮实现范围。
+
+以上基于当前工作树源码；CBM 2026-09-30 代际不覆盖这些新增实现。
+
+B1 最终验收：全仓 build/vet/test（130 包）、6 包 race、独立 sync-e2e race 通过；本批本地提交，未推送/发布。

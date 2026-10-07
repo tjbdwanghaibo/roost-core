@@ -145,6 +145,9 @@ func TestEpochRotationRetiresOldOutboxBeforeRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	observer := syncstream.Observer{ID: 1}
+	if err := c.OpenObserver(observer); err != nil {
+		t.Fatal(err)
+	}
 	if err := c.PublishSnapshot(observer, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -157,6 +160,9 @@ func TestEpochRotationRetiresOldOutboxBeforeRetry(t *testing.T) {
 	}
 	if len(p.sequences) != 0 || c.outbox.Metrics().Pending != 0 {
 		t.Fatalf("old epoch still pending: published=%v pending=%d", p.sequences, c.outbox.Metrics().Pending)
+	}
+	if err := c.OpenObserver(observer); err != nil {
+		t.Fatal(err)
 	}
 	if err := c.PublishSnapshot(observer, 1); err != nil {
 		t.Fatal(err)
