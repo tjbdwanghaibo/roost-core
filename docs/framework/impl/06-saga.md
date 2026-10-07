@@ -211,6 +211,27 @@ flowchart TD
 
 `nextCompensation`（`:607-626`）是选下一个补偿的唯一处：`LateStep>0` → 补 `LateStep-1`；否则 `CompletedSteps>0` → 补 `CompletedSteps-1`；否则 `Compensated`。
 
+### 3.6.1 v1.23.1 起统一规则
+
+维护者 2026-10-07 选 A（[方案](../../feature/SAGA-COMPLETION-RULE-UNIFIED-2026-10-07.md)）：上面流程图里按记录状态逐条列举的接收分支（B1 代际、方向 ③、RR-20261006-42 退避）
+收敛为 `judgeCompletion`（`saga/engine.go`）一处，`Complete` 只按它的四个结论走：
+
+> **成功是操作的结论，只要这个操作开过、还没有带结果关闭，就接收。** 拒绝是本生这个操作的结论，可重试失败是一次尝试的结论，只在协调器正等着时接收。
+
+| 顺序 | 条件 | 结论 |
+| --- | --- | --- |
+| 0 | completion 代际 > 记录代际 | `stale_incarnation` |
+| S | 成功，且（本生：`openOperation(r)=k`；旧一生：`positionedAt(r,k)`） | 接收（`applyCompletion`，带结果关闭） |
+| S' | 成功，其余 | `completeNotWaiting`：放弃关闭 → 方向 ④ 补偿 / 告警；带结果关闭 → 重复；没开过 → `ErrNotWaiting` |
+| R/F-old | 拒绝 / 可重试失败，旧一生 | `stale_incarnation` |
+| R/F-gone | 本生，记录不在等 `k` | `completeNotWaiting` |
+| F-stale | 可重试失败，本生，在等 `k`，不是正在等的尝试 | `stale_attempt` |
+| R / F | 其余 | 接收 |
+
+记录停在 `k` 上时 `k` 不可能已带结果关闭（离开后回到同一操作键只有开新一生的 Resume / 补偿方向人工 Compensate，二者都不回到已带结果
+关闭的步骤），所以 S 不读 tombstone。行为与原 5 条规则一致；守卫 `saga/completion_rule_guard_test.go`（48 格判定表 + `Complete` 不得自己读
+记录状态、只调用一次 `judgeCompletion`）。下文不变量表 I8 / I9 的行号指向原分支，v1.23.1 起对应 `judgeCompletion`。
+
 ### 3.7 迟到成功（方向 ④）与重开
 
 `lateForwardStep`（`saga/engine.go:540-546`）：只处理本 saga 的正向操作、`step ≥ CompletedSteps`、`LateStep` 为空或就是这一步，且记录已离开正向（补偿方向 / `Failed` / `ManualRequired`）。`compensateLateStep`（`:554-580`）在一个 `stepTransition(causeLateSuccess, receipt)` 里：写回执、tombstone 改 `result`（成功回执触发）、`LateStep = s+1`、`LateData = Data`；记录没有开着的操作且不是 `ManualRequired` 时立即 `nextCompensation`（重开 `Failed` / `Compensated`）。之后 `reportLateCompensation`（WARN，`late_after_abandon{phase=forward}`）与 `reportReopen`（`saga.reopened_total`，`:595-602`）。`Resume` / `Compensate` 在 `record.LateStep>0` 时也 `reportReopen`（`:358-360`、`:398-400`）。

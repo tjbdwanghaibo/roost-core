@@ -66,9 +66,11 @@ A4 ① 的跨键规则（`ValidateConfig`）拒绝 `saga.step_defaults.timeout` 
 
 需要与当前 Nest handler 的 Entity 修改可靠绑定时，不要直接调用 `StartSaga`，而应
 在 handler 内调用 `saga.EmitStart`。启动意图会与 Entity mutation 写入同一个 Nest
-WAL record，再由 kit 的 durable consumer 幂等创建 Saga。`EmitStart` 在事务里就按本进程为这个类型注册的协调器的
-`MaxPayloadBytes`（`saga.max_payload_bytes`，缺省 64 KiB）校验 `Data`，超过时返回 `ErrInvalidRecord`、事务回滚（RR-20261006-43）；
-本进程没有这个类型的协调器时只按线上硬上限 4 MiB 校验，协调器若拒绝，由启动消费者 Term 并计 `saga.start.rejected_total`。
+WAL record，再由 kit 的 durable consumer 幂等创建 Saga。`EmitStart` 在事务里就按 `saga.max_payload_bytes`（缺省 64 KiB）
+校验 `Data`，超过时返回 `ErrInvalidRecord`、事务回滚（RR-20261006-43）。这个键是**发起方与协调器共用的配置**（RR-20261006-66，v1.23.1 起）：
+`kit/nest`（发起方）与 `kit/saga`（协调器）共用一份声明，协调器在别的进程时发起方也按它拒绝；两类进程的配置要写同一个值
+（生成的配置段不写它，即都取缺省）。本进程同时有该类型的协调器时与它的 `MaxPayloadBytes` 取小；未经 kit 装配的进程只按线上硬上限
+4 MiB。值不一致导致协调器拒绝时，由启动消费者 Term 并计 `saga.start.rejected_total`。
 直接 `StartSaga` 只用于
 本身已经处于可靠消息消费者、运维任务或不需要与另一笔提交原子绑定的入口。
 相同 type/business key 只有在 ID、payload、deadline 表示同一意图时才返回已有记录，
@@ -171,6 +173,10 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
      被接替尝试的迟到投递直接 ack、不执行。
    - 过了自己截止的投递（U-0281 的过期 ack、Reserve 的 `ErrCommandExpired`）不执行，但 ack 前同样把同一操作实例已生效的
      **成功**经 saga 结果流重发：它可能是最后一次尝试，较早尝试的成功又没有送达，不重发就没人再送达（审查 2026-10-05）。
+   - **协调器接收结果的统一规则**（v1.23.1 起，维护者 2026-10-07 选 A，[方案](docs/feature/SAGA-COMPLETION-RULE-UNIFIED-2026-10-07.md)）：
+     **成功是操作的结论，只要这个操作开过、还没有带结果关闭，就接收**——记录还停在这个操作上就接收为它的结果，记录已离开（放弃关闭）
+     就补偿这一步（第 4 条），已带结果关闭是重复；**拒绝是本生这个操作的结论、可重试失败是一次尝试的结论**，只在协调器正等着时接收。
+     判定只在 `judgeCompletion` 一处（守卫 `saga/completion_rule_guard_test.go`）；下面三段是这条规则在代际、尝试、退避上的展开（B1、方向 ③、RR-20261006-42）。
    - **协调器用同一张表接收结果**（B1，维护者决定 2026-10-05）：completion 的代际从 `CommandID` 解析（第 0 代 `<key>:<attempt>`，
      第 N 代 `<key>:rN:<attempt>`，与铸造 ID 的 `commandID` 同一处），与记录当前代际（`Record.Incarnation`）比较。
      旧一生的拒绝 / 失败**不接收**，只计 `Stats().StaleIncarnation` 与 `saga.completion.stale_incarnation_total{saga_type,phase}`

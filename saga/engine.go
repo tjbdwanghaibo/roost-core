@@ -412,24 +412,9 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 	return Record{}, ErrConflict
 }
 
-// Complete 接收一次尝试的结果。协调器对每个操作（saga + 方向 + 步骤，即 IdempotencyKey）记着当前代际
-// （Record.Incarnation，Resume / 补偿方向的人工 Compensate 递增）与当前等待的尝试；completion 的代际从
-// CommandID 解析（commandIDIncarnation）。判定顺序（B1，对齐 SAGA.md「原生步骤执行契约」第 3 条）：
-//
-//  1. 旧一生（或比记录还新、不可能由协调器产生）的拒绝 / 失败：不接收，只计数（StaleIncarnation）。
-//     收件箱同样不回放旧一生的拒绝，新一生的尝试照常执行。
-//  2. 旧一生的成功：记录正停在这个操作上（在等它，或 Resume 后还没派发、新一生的尝试在退避）就接收为该操作的
-//     结果——成功在任何一生里都不重做，新一生的尝试在收件箱里看到它也只会回放。
-//  3. 同一生、记录在等这个操作：成功与拒绝（操作的结论）从哪次尝试来都接收——收件箱不让之后的尝试再执行，下一次尝试
-//     回放的正是较早那次的 completion；可重试失败（尝试的结论）只接收正在等的那次尝试的（saga 方向 ③）：较早尝试的
-//     可重试失败只说明那一次没生效，正在等的尝试照常执行，接收它会用后一次的尝试计数判用尽、放弃正在执行的尝试（O-S5-7）。
-//  4. 同一生、这个操作还开着、正在重试退避（Pending / Compensating 且 Attempt>0，openOperation）：成功接收为该操作的
-//     结果（RR-20261006-42）。之前只在 Waiting 时接收，退避中送达的成功被当作 ErrNotWaiting Term，指望下一次尝试经收件箱
-//     回放；但截止、人工 Compensate、定义缺失可以在下一次派发之前关闭这个操作，之后再没有尝试会回放它，这一步已生效却
-//     不在 CompletedSteps 里、不补偿、不告警。接收它与规则 2（旧一生成功在记录停在该操作上时接收）是同一条理由：成功是
-//     操作的结论，收件箱保证之后的尝试只会回放它。拒绝与可重试失败在退避中仍不接收：拒绝会由下一次尝试回放，操作若先被
-//     放弃关闭，拒绝本来就没有生效的东西要补；可重试失败按方向 ③ 只认正在等的那次尝试，退避中没有正在等的尝试。
-//  5. 其余按回执与 tombstone 判断重复或“放弃后迟到的成功”（completeNotWaiting）。
+// Complete 接收一次尝试的结果。接收与否只由 judgeCompletion 判定（v1.23.1 起的统一规则，
+// docs/feature/SAGA-COMPLETION-RULE-UNIFIED-2026-10-07.md）：成功是操作的结论，只要这个操作还没有带结果关闭就接收；
+// 拒绝是本生这个操作的结论、可重试失败是一次尝试的结论，二者只在协调器正等着它们时接收。
 func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, error) {
 	if completion.Validate() != nil {
 		return Record{}, ErrInvalidRecord
@@ -446,24 +431,14 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 		if err != nil {
 			return Record{}, err
 		}
-		var accept bool
-		switch {
-		case incarnation != record.Incarnation && (!completion.Success || incarnation > record.Incarnation):
+		switch judgeCompletion(record, completion, incarnation) {
+		case verdictStaleIncarnation:
 			e.reportStaleIncarnation(record, completion, incarnation)
 			return record, nil
-		case incarnation != record.Incarnation:
-			accept = positionedAt(record, completion.IdempotencyKey)
-		case record.Status == StatusWaiting && record.OperationKey == completion.IdempotencyKey:
-			accept = true
-			if completion.Retryable && completion.CommandID != record.CommandID {
-				e.reportStaleAttempt(record, completion)
-				return record, nil
-			}
-		default:
-			// 同一生、操作还开着但在重试退避（RR-20261006-42）：成功照样接收。
-			accept = completion.Success && openOperation(record) == completion.IdempotencyKey
-		}
-		if !accept {
+		case verdictStaleAttempt:
+			e.reportStaleAttempt(record, completion)
+			return record, nil
+		case verdictHistory:
 			written, err := e.completeNotWaiting(ctx, record, completion, incarnation)
 			if errors.Is(err, ErrConflict) {
 				e.conflicts.Add(1)
@@ -500,8 +475,57 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 	return Record{}, ErrConflict
 }
 
-// positionedAt 判断记录是否正停在这个操作上：在等它的某次尝试，或者下一步就要派发它（Resume 之后还没派发、
-// 本生的尝试在退避）。
+// completionVerdict 是 judgeCompletion 的结论，Complete 按它走四个去向之一。
+type completionVerdict int
+
+const (
+	// verdictAccept：接收为记录所停操作的结果（applyCompletion + stepTransition，成功时带结果关闭这个操作）。
+	verdictAccept completionVerdict = iota
+	// verdictHistory：记录不在这个操作上（或没在等这个结论），按回执与 tombstone 判断（completeNotWaiting）：
+	// 已带结果关闭 → 重复；放弃关闭后迟到的成功 → 补偿这一步（方向 ④）或告警；从没开过 → ErrNotWaiting。
+	verdictHistory
+	// verdictStaleIncarnation：上一生的拒绝 / 失败（B1），或协调器不可能产生的更新代际；只计数。
+	verdictStaleIncarnation
+	// verdictStaleAttempt：较早一次尝试的可重试失败（方向 ③）；只计数。
+	verdictStaleAttempt
+)
+
+// judgeCompletion 是 saga 完成判定的唯一规则（v1.23.1 起；替代按记录状态逐条列举的 B1 / 方向 ③ / RR-20261006-42 分支）：
+//
+//   - 成功是操作的结论，不分代际、不分尝试：只要这个操作开过、还没有带结果关闭就接收。记录停在这个操作上（positionedAt：
+//     在等它、它在重试退避、或下一步就派发它）且 completion 所属的那一生开过它（本生：记录开着它；旧一生：CommandID 的代际
+//     更旧）时，操作必定没带结果关闭（离开后回到同一操作键只有开新一生的 Resume / 人工 Compensate，且都不会回到已带结果
+//     关闭的步骤），直接接收为结果；其余由回执与 tombstone 区分放弃关闭（仍接收，落点是方向 ④ 补偿这一步）、带结果关闭
+//     （重复）与从没开过（ErrNotWaiting）。
+//   - 拒绝是本生这个操作的结论：本生、记录在等这个操作时接收，从哪次尝试来都一样（收件箱让之后的尝试只回放它）。
+//   - 可重试失败是一次尝试的结论：只接收正在等的那次尝试的（方向 ③，O-S5-7）。
+//   - 比记录还新的代际协调器不可能产生，一律不接收。
+//
+// 收件箱的每操作状态文档保证同一操作至多一次生效，所以“未带结果关闭的成功”就是还没计过的那一次。
+func judgeCompletion(record Record, completion Completion, incarnation uint32) completionVerdict {
+	operation := completion.IdempotencyKey
+	switch {
+	case incarnation > record.Incarnation:
+		return verdictStaleIncarnation
+	case completion.Success:
+		// 协调器开过这个操作（本生开着它，或 completion 所属的旧一生派发过它）且记录还停在它上面：接收为结果。
+		opened := openOperation(record) == operation || incarnation < record.Incarnation
+		if opened && positionedAt(record, operation) {
+			return verdictAccept
+		}
+		return verdictHistory
+	case incarnation != record.Incarnation:
+		return verdictStaleIncarnation
+	case record.Status != StatusWaiting || record.OperationKey != operation:
+		return verdictHistory
+	case completion.Retryable && completion.CommandID != record.CommandID:
+		return verdictStaleAttempt
+	default:
+		return verdictAccept
+	}
+}
+
+// positionedAt 判断记录是否正停在这个操作上：在等它的某次尝试，或者下一步就要派发它（重试退避中、Resume 之后还没派发）。
 func positionedAt(record Record, operation string) bool {
 	switch record.Status {
 	case StatusWaiting:

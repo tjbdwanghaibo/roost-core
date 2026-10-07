@@ -6,6 +6,7 @@
 
 ### 行为收紧
 
+- **saga：`saga.max_payload_bytes` 是发起方与协调器共用的配置键，协调器在别的进程时 `EmitStart` 也在发起事务内按它拒绝**（RR-20261006-66，F06-S7 跨进程）。`kit/nest` 与 `kit/saga` 共用一份声明（`kit/mods.SagaPayloadConfig`，新增上界 4 MiB）；两类进程的配置要写同一个值，生成的配置段不再写这个键（取缺省）。新 API `saga.SetStartDataLimit`。[问题](docs/bug/RR-20261006-66.md) · [修复](docs/bugfix/RR-20261006-66.md)
 - **nest：手写 `HandlerMeta` 的 `Rollback` 不为 none 时必须显式写 `Durability`**（RR-20261006-60，F02-8）。之前 `Durability` 零值即 memory（`//roost:nest` 缺省却是 async），忘写的要到运行期第一次改持久字段才被 RR-20261006-41 拒绝；现在注册时就失败，错误满足 `errors.Is(err, nest.ErrDurabilityUnset)`，点名 handler 并列出可选值。`HandlerMeta{}` 仍是 rollback=none 的 memory 快路径，显式写 `DurabilityMemory` 的照常可用，生成的 handler 不受影响。API：`nest.DurabilityPolicy` 不再是 `dataengine.Durability` 的别名（零值表示未声明，常量名不变）；记录上下文改用 `dataengine.DurabilityX` 或 `nest.DurabilityX.Record()`，`uint8(nest.DurabilityX)` 数值会多 1，须改为 `.Record()`。WAL 字节与远端 outcome 数值不变。[问题](docs/bug/RR-20261006-60.md) · [修复](docs/bugfix/RR-20261006-60.md)
 - **codegen：标记键名拼错一律报错**（RR-20261006-56，F12 G1 / F09-R4）。`//roost:nest`、`dao`、`redisdao`、`attribute`、`proto` / `protocol` / `msg` / `view`、`table` / `object`、`rpc` 之前只取认识的键，拼错的键按“没写”取缺省（`durabilty=strict` 生成 async，`dbscop=sid` 写进全局库）。现在 15 种带选项的标记都经 `codegen/internal/marker` 的同一词表解析，未知键、重复键、多余的裸词让生成失败并点名键、文件、行。[问题](docs/bug/RR-20261006-56.md) · [修复](docs/bugfix/RR-20261006-56.md)
 - **codegen：生成器随 `versions.core` 运行，`versions.codegen` 废弃**（RR-20261006-57，F12 G2）。生成的 Makefile 改为 `go run …/codegen/cmd/roost@$(CORE_VERSION)`，取 `versions.core`；`roost.yaml` 里写了 `versions.codegen` 会被拒绝（`roost project upgrade` 删掉它），`-codegen-version` / `-codegen` 参数删除。发版时 core 下限须升到 v1.23.1。[问题](docs/bug/RR-20261006-57.md) · [修复](docs/bugfix/RR-20261006-57.md)
@@ -19,6 +20,11 @@
 - **lockstep 2 人房的 desync 能裁出来**（RR-20261006-64，F04-8）。全部座位已上报、有分歧且没有哈希达到 quorum 时裁为 `DesyncVerdict.NoMajority`，全部座位都是离群者（2 人房两人都报），触发 `OnDesync` 并计 `lockstep.desync.total`；业务应按整局分叉处理。[问题](docs/bug/RR-20261006-64.md) · [修复](docs/bugfix/RR-20261006-64.md)
 - **robot：`LockstepBot` 发现缺口即追帧**（RR-20261006-65，F04-9）。之前只在 256 帧乱序缓冲溢出时请求，缺口不够大时局卡住；请求被服务端放弃后也不重发。现在 `Gap()` 为真即请求，`Next` 停住超过 `CatchupRetryPackets`（缺省 64 个包）重发。[问题](docs/bug/RR-20261006-65.md) · [修复](docs/bugfix/RR-20261006-65.md)
 - 端到端门禁 `sync/lockstep/e2e_gate_test.go`：两个真实客户端 + 一个机器人经 KCP 回环连同一房间，满载 3 秒，注入 desync、丢包追帧与卡住的追帧，断言广播不被拒、desync 裁出且有指标、追帧成功不卡局、`Tick` 不被拖垮。
+
+### 重构
+
+- **saga：完成判定收敛为一条统一规则**（维护者选 A）。`Engine.Complete` 原先按记录状态逐条列举的五条接收规则（U-0280、B1、方向 ③④、RR-20261006-42）换成 `judgeCompletion` 一处：成功是操作的结论，只要这个操作开过、还没有带结果关闭就接收；拒绝是本生操作的结论、可重试失败是一次尝试的结论，只在协调器正等着时接收。行为不变，守卫 `saga/completion_rule_guard_test.go`。[方案](docs/feature/SAGA-COMPLETION-RULE-UNIFIED-2026-10-07.md)
+- demo 测试模板（`enter_game_test` / `guild_ids_test`）写 `CommitRecord` 时改用 `coredata.DurabilityStrict`：RR-20261006-60 之后 `nest.DurabilityStrict` 不再是 `dataengine.Durability`，重新生成的 game-demo `go vet` 报类型不符。
 
 ### 修复（codegen）
 

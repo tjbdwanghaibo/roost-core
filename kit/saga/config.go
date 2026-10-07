@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
 )
 
@@ -34,6 +35,8 @@ type consumerConfig struct {
 
 type config struct {
 	app.ServiceIdentity
+	// saga.max_payload_bytes 与发起方（kit/nest）共用一份声明（RR-20261006-66）。
+	mods.SagaPayloadConfig
 	Saga struct {
 		Database     string           `config:"database" default:"saga" example:"saga"`
 		StepDefaults stepBudgetConfig `config:"step_defaults,closed" help:"Step timeout and retry budget (U-0280). Fields a saga definition leaves unset\ntake these; one operation of a step gets up to max_attempts attempts, at most\none of which takes effect."`
@@ -58,7 +61,6 @@ type config struct {
 		PublishTimeout        time.Duration  `config:"publish_timeout" default:"3s" min:"1ns" example:"3s"`
 		PublishBackoffMin     time.Duration  `config:"publish_backoff_min" default:"50ms" min:"1ns" example:"50ms"`
 		PublishBackoffMax     time.Duration  `config:"publish_backoff_max" default:"5s" min:"1ns" example:"5s"`
-		MaxPayloadBytes       int            `config:"max_payload_bytes" default:"65536" min:"1" example:"65536"`
 		CompletionReceiptTTL  time.Duration  `config:"completion_receipt_ttl" default:"720h" min:"1ns" example:"720h"`
 		StreamMaxAge          time.Duration  `config:"stream_max_age" default:"168h" min:"1ns" example:"168h"`
 		StreamMaxBytes        int64          `config:"stream_max_bytes" default:"8589934592" min:"1" example:"8589934592"`

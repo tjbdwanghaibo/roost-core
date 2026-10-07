@@ -73,6 +73,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 	"dataengine": {Keys: []configschema.Key{
 		{Name: "persistence.engine", Kind: "string", Default: "dataengine", Help: "持久化引擎；只支持 dataengine", Starter: true, Example: "dataengine", Enum: []string{"dataengine"}},
 		{Name: "dataengine.enabled", Kind: "bool", Default: "true", Help: "只能是 true：DataEngine 是唯一的持久化引擎，写 false 拒绝启动"},
+		{Name: "saga.max_payload_bytes", Kind: "int", Default: "65536", Min: "1", Max: "4194304", Help: "Upper bound of a saga start intent's and step result's Data. Shared by the\ninitiators (EmitStart refuses over it inside the Nest transaction) and the\ncoordinator; write the same value in both."},
 		{Name: "nest.fast.workers", Kind: "int", Min: "0"},
 		{Name: "nest.fast.queue_capacity", Kind: "int", Min: "0"},
 		{Name: "nest.slow.workers", Kind: "int", Min: "0"},
@@ -304,6 +305,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 	"saga": {Keys: []configschema.Key{
 		{Name: "server_type", Kind: "string", Help: "服务类型，App 按启动的子命令写入"},
 		{Name: "sid", Kind: "int", Help: "服务实例号（正整数），同一服务类型内唯一；也可以用 --sid 覆盖"},
+		{Name: "saga.max_payload_bytes", Kind: "int", Default: "65536", Min: "1", Max: "4194304", Help: "Upper bound of a saga start intent's and step result's Data. Shared by the\ninitiators (EmitStart refuses over it inside the Nest transaction) and the\ncoordinator; write the same value in both."},
 		{Name: "saga.database", Kind: "string", Default: "saga", Starter: true, Example: "saga"},
 		{Name: "saga.step_defaults", Kind: "section", Help: "Step timeout and retry budget (U-0280). Fields a saga definition leaves unset\ntake these; one operation of a step gets up to max_attempts attempts, at most\none of which takes effect.", Closed: true},
 		{Name: "saga.step_defaults.timeout", Kind: "duration", Min: "1ns", Starter: true, Example: "5s"},
@@ -334,7 +336,6 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "saga.publish_timeout", Kind: "duration", Default: "3s", Min: "1ns", Starter: true, Example: "3s"},
 		{Name: "saga.publish_backoff_min", Kind: "duration", Default: "50ms", Min: "1ns", Starter: true, Example: "50ms"},
 		{Name: "saga.publish_backoff_max", Kind: "duration", Default: "5s", Min: "1ns", Starter: true, Example: "5s"},
-		{Name: "saga.max_payload_bytes", Kind: "int", Default: "65536", Min: "1", Starter: true, Example: "65536"},
 		{Name: "saga.completion_receipt_ttl", Kind: "duration", Default: "720h", Min: "1ns", Starter: true, Example: "720h"},
 		{Name: "saga.stream_max_age", Kind: "duration", Default: "168h", Min: "1ns", Starter: true, Example: "168h"},
 		{Name: "saga.stream_max_bytes", Kind: "int", Default: "8589934592", Min: "1", Starter: true, Example: "8589934592"},

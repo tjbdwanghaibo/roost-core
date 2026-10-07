@@ -16,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/health"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
 )
 
 // Mod owns one instance-scoped Nest engine. It intentionally does not install
@@ -94,6 +95,8 @@ type workerPool struct {
 // config 是 kit/nest 读的键（维护者决定 A4 ①）。数字与时长写 0 取框架缺省（core nest / entity 的默认值）。
 type config struct {
 	mods.PersistenceConfig
+	// saga.max_payload_bytes：EmitStart 在 Nest 事务里按它拒绝超限的启动意图，与协调器（kit/saga）共用一份声明（RR-20261006-66）。
+	mods.SagaPayloadConfig
 	Nest struct {
 		Fast               workerPool    `config:"fast"`
 		Slow               workerPool    `config:"slow"`
@@ -131,6 +134,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return fmt.Errorf("nest mod: %w", err)
 	}
+	coresaga.SetStartDataLimit(settings.SagaPayloadLimit())
 	nest := settings.Nest
 	m.config = engineConfig{
 		fast:          corenest.WorkerPoolConfig{Workers: nest.Fast.Workers, QueueCap: nest.Fast.QueueCapacity},

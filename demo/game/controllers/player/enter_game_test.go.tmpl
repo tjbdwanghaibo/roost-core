@@ -23,7 +23,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/errcode"
 	"github.com/tjbdwanghaibo/roost-core/gateway"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/kit/service/account"
-	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/nestwal"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -125,7 +124,7 @@ func newStuckLogin(t *testing.T) *stuckLogin {
 	}
 	var id coredata.TransactionID
 	id[15] = 1
-	record := coredata.CommitRecord{ID: id, Durability: corenest.DurabilityStrict, Mutations: []coredata.Mutation{{
+	record := coredata.CommitRecord{ID: id, Durability: coredata.DurabilityStrict, Mutations: []coredata.Mutation{{
 		Key:  coredata.DocumentKey{Database: "game", Resource: "player", ID: fullID},
 		Kind: coredata.MutationPut, NextVersion: 1, Data: payload,
 	}}}

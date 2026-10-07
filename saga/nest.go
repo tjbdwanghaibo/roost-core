@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
@@ -53,21 +54,36 @@ func registerStartDataLimit(sagaType string, limit int) {
 	}
 }
 
-// startDataLimit 返回这个类型的启动 Data 上限：本进程有协调器注册了它时取那份 MaxPayloadBytes，否则只有线上硬上限
-// （协调器在别的进程，或配置不同；那份意图若被协调器拒绝，由启动消费者 Term 并告警）。
+// configuredStartDataLimit 是本进程配置的 saga.max_payload_bytes（RR-20261006-66）：发起方与协调器共用这个配置键，
+// kit/nest 的 Mod 在 Init 里写入（每个调 EmitStart 的进程都有 Nest），协调器不在本进程时 EmitStart 也按它拒绝。0 表示没配置。
+var configuredStartDataLimit atomic.Int64
+
+// SetStartDataLimit 设置本进程 EmitStart 的 Data 上限（saga.max_payload_bytes，发起方与协调器共用的配置键）。
+// limit ≤ 0 清除配置，只剩本进程协调器注册的上限与线上硬上限。
+func SetStartDataLimit(limit int) {
+	configuredStartDataLimit.Store(int64(max(limit, 0)))
+}
+
+// startDataLimit 返回这个类型的启动 Data 上限：线上硬上限、配置的 saga.max_payload_bytes（RR-20261006-66）、本进程协调器
+// 为它注册的 MaxPayloadBytes（RR-20261006-43）三者取小。都没有时只有线上硬上限（未经 kit 装配的进程；意图若被协调器拒绝，
+// 由启动消费者 Term 并告警）。
 func startDataLimit(sagaType string) int {
+	limit := maxStartWireDataBytes
+	if configured := int(configuredStartDataLimit.Load()); configured > 0 {
+		limit = min(limit, configured)
+	}
 	startDataLimits.RLock()
 	defer startDataLimits.RUnlock()
-	if limit, ok := startDataLimits.byType[sagaType]; ok {
-		return limit
+	if registered, ok := startDataLimits.byType[sagaType]; ok {
+		limit = min(limit, registered)
 	}
-	return maxStartWireDataBytes
+	return limit
 }
 
 // NewStartEffect creates a stable Nest transactional outbox intent. The
 // enclosing handler's entity mutations and this intent share one WAL record.
 //
-// Data 的上限是本进程为这个类型注册的协调器的 MaxPayloadBytes（RR-20261006-43）：协调器必定拒绝的意图在 Nest 事务里
+// Data 的上限是 startDataLimit（配置的 saga.max_payload_bytes 与本进程协调器注册的 MaxPayloadBytes 取小，RR-20261006-43 / -61）：协调器必定拒绝的意图在 Nest 事务里
 // 就以 ErrInvalidRecord 拒绝，handler 拿到错误，实体修改随事务回滚；之前只按 4 MiB 校验，超过 MaxPayloadBytes 的意图随事务
 // 提交，协调器拒绝后启动消费者 nak 到 MaxDeliver，saga 静默不创建。
 func NewStartEffect(request StartRequest) (nest.Effect, error) {
