@@ -242,7 +242,7 @@ func (runtime *Runtime) stopSpawn(cast *castInstance, spawn *SpawnInstance, caus
 	}
 	if cast != nil {
 		cast.visibleRevision = maxRevision(cast.visibleRevision, receipt.Revision)
-		detachErr = errors.Join(detachErr, runtime.drainHostEvents(cast))
+		runtime.drainHostEvents(cast)
 	}
 	return detachErr
 }
@@ -273,7 +273,7 @@ func (runtime *Runtime) detachMotionCarry(cast *castInstance, spawn *SpawnInstan
 	if cast != nil {
 		cast.visibleRevision = maxRevision(cast.visibleRevision, result.Commit.Revision)
 		spawn.visibleRevision = cast.visibleRevision
-		return runtime.drainHostEvents(cast)
+		runtime.drainHostEvents(cast)
 	} else {
 		spawn.visibleRevision = maxRevision(spawn.visibleRevision, result.Commit.Revision)
 	}

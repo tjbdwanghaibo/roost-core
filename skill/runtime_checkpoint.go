@@ -25,8 +25,10 @@ import (
 // 那部分的 owned_spawns；恢复时按记录字段（status、handed_off）重新分区（docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md）；
 // 维护者第十三轮“skill 衍生物两张表”，线上未部署，不兼容版本 5。7：衍生物新状态 abandoned（待停止超过
 // MaxStopPendingSpawns 时放弃、不删记录），payload 加 max_abandoned_spawns；维护者第十三轮“待停止上限”选 B
-// （docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md §11），线上未部署，不兼容版本 6。
-const RuntimeCheckpointVersion uint32 = 7
+// （docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md §11），线上未部署，不兼容版本 6。8：payload 加
+// spawn_event_sequence（衍生物回调事件 ID 的计数，RR-20261006-53），任务删掉 spawn_step 一类与它的 spawn_id 字段
+// （衍生物只由 advanceOwnedSpawns 推进，RR-20261006-51）；施放中衍生物的 next_tick 从此生效。线上未部署，不兼容版本 7。
+const RuntimeCheckpointVersion uint32 = 8
 const RuntimeCheckpointMaxBytes = 64 << 20
 const RuntimeCheckpointMaxRecords = 1_000_000
 
@@ -100,6 +102,7 @@ type runtimeCheckpointPayload struct {
 	NextTaskSequence      uint64                    `json:"next_task_sequence"`
 	NextFrameID           FrameID                   `json:"next_frame_id"`
 	NextSpawnID           SpawnID                   `json:"next_spawn_id"`
+	SpawnEventSequence    uint64                    `json:"spawn_event_sequence"`
 	NextPassiveActivation PassiveActivationID       `json:"next_passive_activation_id"`
 	NextAbilityHandle     AbilityHandle             `json:"next_ability_handle"`
 	NextAbilityOverlay    uint64                    `json:"next_ability_overlay"`
@@ -327,7 +330,6 @@ type checkpointTask struct {
 	Tail       []OperationIndex       `json:"tail,omitempty"`
 	Operation  OperationIndex         `json:"operation,omitempty"`
 	Hop        int                    `json:"hop,omitempty"`
-	SpawnID    SpawnID                `json:"spawn_id,omitempty"`
 	PulseIndex int64                  `json:"pulse_index,omitempty"`
 	Reason     string                 `json:"reason,omitempty"`
 	Caster     EntityID               `json:"caster,omitempty"`
@@ -581,7 +583,7 @@ func (runtime *Runtime) checkpointPayloadLocked() (runtimeCheckpointPayload, err
 	if !runtime.stateMutationReady || !runtimeSnapshotsEqual(runtime.stateMutationBaseline, runtime.stateSnapshotLocked()) {
 		return runtimeCheckpointPayload{}, ErrCheckpointHostMismatch
 	}
-	p := runtimeCheckpointPayload{WorldRevision: runtime.host.CurrentRevision(), Authority: runtime.host.AuthorityIdentity(), MatchSeed: runtime.options.MatchSeed, SemanticsRevision: runtime.options.SupportedCompilerSemanticsRevision, MaxPassivePerTick: runtime.options.MaxPassiveActivationsPerTick, MaxOwned: runtime.options.MaxOwnedSpawns, MaxOwnedPerOwner: runtime.options.MaxOwnedSpawnsPerOwner, MaxOwnedPerProgram: runtime.options.MaxOwnedSpawnsPerProgram, MaxOwnedPerTemplate: runtime.options.MaxOwnedSpawnsPerTemplate, MaxActiveCasts: runtime.options.MaxActiveCasts, MaxAbilities: runtime.options.MaxAbilities, CompletedCastLimit: runtime.options.CompletedCastLimit, RootEventLimit: runtime.options.RootEventLimit, MaxProcLedgerEntries: runtime.options.MaxProcLedgerEntries, SpawnStopRetryBackoff: runtime.options.SpawnStopRetryBackoff, SpawnStopRetryLimit: runtime.options.SpawnStopRetryLimit, MaxStopPendingSpawns: runtime.options.MaxStopPendingSpawns, MaxAbandonedSpawns: runtime.options.MaxAbandonedSpawns, CurrentTick: runtime.currentTick, EventCursor: runtime.eventCursor, NextCastID: runtime.nextCastID, NextTaskSequence: runtime.nextTaskSequence, NextFrameID: runtime.nextFrameID, NextSpawnID: runtime.nextSpawnID, NextPassiveActivation: runtime.nextPassiveActivationID, NextAbilityHandle: runtime.nextAbilityHandle, NextAbilityOverlay: runtime.nextAbilityOverlay, PassiveCountTick: runtime.passiveCountTick, PassiveCount: runtime.passiveCount, TraceSequence: runtime.traceSequence, PresentationSequence: runtime.presentationSequence, StateEventSequence: runtime.stateEventSequence, StateEventDropped: runtime.stateEventDropped, StateMutationSequence: runtime.stateMutationSequence, StateMutationDropped: runtime.stateMutationDropped, StateMutationBaseline: runtime.stateMutationBaseline, StateMutationReady: runtime.stateMutationReady}
+	p := runtimeCheckpointPayload{WorldRevision: runtime.host.CurrentRevision(), Authority: runtime.host.AuthorityIdentity(), MatchSeed: runtime.options.MatchSeed, SemanticsRevision: runtime.options.SupportedCompilerSemanticsRevision, MaxPassivePerTick: runtime.options.MaxPassiveActivationsPerTick, MaxOwned: runtime.options.MaxOwnedSpawns, MaxOwnedPerOwner: runtime.options.MaxOwnedSpawnsPerOwner, MaxOwnedPerProgram: runtime.options.MaxOwnedSpawnsPerProgram, MaxOwnedPerTemplate: runtime.options.MaxOwnedSpawnsPerTemplate, MaxActiveCasts: runtime.options.MaxActiveCasts, MaxAbilities: runtime.options.MaxAbilities, CompletedCastLimit: runtime.options.CompletedCastLimit, RootEventLimit: runtime.options.RootEventLimit, MaxProcLedgerEntries: runtime.options.MaxProcLedgerEntries, SpawnStopRetryBackoff: runtime.options.SpawnStopRetryBackoff, SpawnStopRetryLimit: runtime.options.SpawnStopRetryLimit, MaxStopPendingSpawns: runtime.options.MaxStopPendingSpawns, MaxAbandonedSpawns: runtime.options.MaxAbandonedSpawns, CurrentTick: runtime.currentTick, EventCursor: runtime.eventCursor, NextCastID: runtime.nextCastID, NextTaskSequence: runtime.nextTaskSequence, NextFrameID: runtime.nextFrameID, NextSpawnID: runtime.nextSpawnID, SpawnEventSequence: runtime.spawnEventSequence, NextPassiveActivation: runtime.nextPassiveActivationID, NextAbilityHandle: runtime.nextAbilityHandle, NextAbilityOverlay: runtime.nextAbilityOverlay, PassiveCountTick: runtime.passiveCountTick, PassiveCount: runtime.passiveCount, TraceSequence: runtime.traceSequence, PresentationSequence: runtime.presentationSequence, StateEventSequence: runtime.stateEventSequence, StateEventDropped: runtime.stateEventDropped, StateMutationSequence: runtime.stateMutationSequence, StateMutationDropped: runtime.stateMutationDropped, StateMutationBaseline: runtime.stateMutationBaseline, StateMutationReady: runtime.stateMutationReady}
 	p.CompletedCastOrder = append([]CastID(nil), runtime.completedCastOrder...)
 	castIDs := make([]int, 0, len(runtime.casts))
 	for id := range runtime.casts {
@@ -760,12 +762,6 @@ func checkpointScheduledTask(task scheduledTask) (checkpointTask, error) {
 		w.Frame = t.Frame
 		w.Operation = t.Operation
 		w.Hop = t.Hop
-	case *spawnStepTask:
-		w.Kind = "spawn_step"
-		w.CastID = t.CastID
-		w.PhaseToken = t.PhaseToken
-		w.Frame = t.Frame
-		w.SpawnID = t.SpawnID
 	case *castCommitTask:
 		w.Kind = "cast_commit"
 		w.CastID = t.CastID
@@ -853,6 +849,7 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 	runtime.nextTaskSequence = p.NextTaskSequence
 	runtime.nextFrameID = p.NextFrameID
 	runtime.nextSpawnID = p.NextSpawnID
+	runtime.spawnEventSequence = p.SpawnEventSequence
 	runtime.nextPassiveActivationID = p.NextPassiveActivation
 	runtime.nextAbilityHandle = p.NextAbilityHandle
 	runtime.nextAbilityOverlay = p.NextAbilityOverlay
@@ -1155,7 +1152,10 @@ func (runtime *Runtime) restoreCheckpointTask(w checkpointTask, resolver Program
 	case "chain_hop":
 		payload = &chainHopTask{CastID: w.CastID, PhaseToken: w.PhaseToken, Frame: w.Frame, Operation: w.Operation, Hop: w.Hop}
 	case "spawn_step":
-		payload = &spawnStepTask{CastID: w.CastID, PhaseToken: w.PhaseToken, Frame: w.Frame, SpawnID: w.SpawnID}
+		// 衍生物只由 advanceOwnedSpawns 按记录的 NextTick 推进（RR-20261006-51），这类任务已删除：它在生产路径上
+		// 从未被创建，checkpoint 里出现它说明来源不可信或格式不符，按 corrupt 拒绝；接受它会让同一个衍生物在一个
+		// tick 里走两步。
+		return scheduledTask{}, ErrCheckpointCorrupt
 	case "cast_commit":
 		payload = &castCommitTask{CastID: w.CastID, PhaseToken: w.PhaseToken, Frame: w.Frame}
 	case "cast_execute":

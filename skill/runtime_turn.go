@@ -25,5 +25,8 @@ func (runtime *Runtime) payCostList(cast *castInstance, costs []costProgram) err
 		return err
 	}
 	cast.visibleRevision = maxRevision(cast.visibleRevision, receipt.Revision)
-	return runtime.drainHostEvents(cast)
+	// PayCosts 成功之后这里不能再失败：调用方按“付费失败 = 没有付”回滚（未提交的启动被删、ID 回收），付费之后的
+	// 失败会让费用扣了不退。drainHostEvents 不返回错误（RR-20261006-55）。
+	runtime.drainHostEvents(cast)
+	return nil
 }

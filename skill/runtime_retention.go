@@ -172,10 +172,12 @@ func (runtime *Runtime) rootEventReferencedLocked(root EventID) bool {
 			return true
 		}
 	}
+	// 衍生物继承施法的根事件（RR-20261006-53）：Runtime 仍负责的衍生物还会在这个根下产生事件，根不能被淘汰，否则
+	// once_per_root 的账本随根一起删掉、同一个根再触发一次。已停止 / 已放弃的记录不再产生事件，不钉住根。
 	referenced := false
 	runtime.spawns.each(func(spawn *SpawnInstance) {
 		referenced = referenced || spawn.eventContext.RootEventID == root
-	})
+	}, spawnLivePartitions...)
 	if referenced {
 		return true
 	}

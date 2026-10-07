@@ -27,6 +27,23 @@ type EventContext struct {
 	gameplayTags      []GameplayTagHandle
 }
 
+// 事件 ID 的编号空间（RR-20261006-53 / 54）：
+//
+//	主动施法（根事件）            castID
+//	proc 施放自己的事件           castID<<32（低 32 位为 0）
+//	施法流程里第 i 号效果         castID<<32 | (i+1)
+//	衍生物回调、回调里的每个效果  spawnEventIDBit | 序号（nextSpawnEventID，Runtime 级计数，随 checkpoint 保存）
+//
+// 前三类的 castID 小于 2^31 时不置最高位，与第四类不相交（castID 到 2^32 时第二、三类本来就会回绕）。衍生物回调跑在
+// 脱离施法的 cast 上，cast.id 是所属施法：按前三类编号，同一个回调效果每个 tick、每个目标都是同一个 ID，所以单独编号。
+const spawnEventIDBit EventID = 1 << 63
+
+// nextSpawnEventID 给衍生物回调或回调里的一次效果结算分配一个新的事件 ID。
+func (runtime *Runtime) nextSpawnEventID() EventID {
+	runtime.spawnEventSequence++
+	return spawnEventIDBit | EventID(runtime.spawnEventSequence)
+}
+
 func newRootEvent(id EventID) EventContext {
 	return EventContext{EventID: id, RootEventID: id, ProcCoefficientBP: 10000}
 }

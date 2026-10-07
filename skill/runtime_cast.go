@@ -172,9 +172,7 @@ func (runtime *Runtime) applyHostEffect(cast *castInstance, command EffectComman
 		return EffectResult{}, err
 	}
 	cast.visibleRevision = maxRevision(cast.visibleRevision, result.Commit.Revision)
-	if err := runtime.drainHostEvents(cast); err != nil {
-		return EffectResult{}, err
-	}
+	runtime.drainHostEvents(cast)
 	if outcome, _, known := effectPayloadOutcome(result.Payload); !known || outcome.Succeeded {
 		if continuations, found := presentationEffectMount(cast.program, command.Meta.EffectIndex); found {
 			runtime.emitEffectPresentation(cast, continuations, command.Meta.EffectIndex, result.Commit.Revision, presentationAnchorFromCommand(cast, command.Payload))
@@ -228,8 +226,13 @@ func presentationAnchorFromCommand(cast *castInstance, payload EffectCommandPayl
 	return anchor
 }
 
+// effectEventContext 是一次效果结算的事件：父事件是施法（或衍生物回调）的事件，继承根事件与 proc 深度。衍生物回调里的
+// 效果每次结算一个新 ID（nextSpawnEventID）：同一个回调效果会在每个 tick、对每个目标结算（RR-20261006-53）。
 func (runtime *Runtime) effectEventContext(cast *castInstance, effect EffectIndex) EventContext {
 	id := EventID((uint64(cast.id) << 32) | uint64(effect+1))
+	if cast.detachedSpawn != nil {
+		id = runtime.nextSpawnEventID()
+	}
 	context := deriveEvent(cast.eventContext, id)
 	context.EffectIndex = effect
 	return context

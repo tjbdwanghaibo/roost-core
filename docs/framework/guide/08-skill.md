@@ -9,7 +9,7 @@
 - skill 是服务器权威的 2D 技能框架：技能 JSON 先经严格 **Parse**，再经 18 个静态 pass 的 **Compile** 降成不可变 **Program**，由确定性 **Runtime** 按 tick 执行；Runtime 对世界的一切读写只经 **Host** 接口。全程 int64 定点数学、HMAC 派生随机，同一输入位一致回放。
 - 最重要的保证：**编译通过 ⇒ Runtime 与 Host 能执行**。引用在哪里能读只看一张求值上下文表（`skill/eval_contexts.go`）；phase 事件只看一张派发表（`skill/phase_events.go`）；Host 能读 / 能支持什么只看一张能力表（`skill/host_capability.go`，随环境进 authority digest）；lower 查不到名字就报 `LOWER_UNRESOLVED`，不交出 Program。
 - 衍生物（飞行物、法术场、光束、位移、环绕、随从）的停止只有一个入口 `requestSpawnStop`：Host 拒绝停止时转入**待停止**，Runtime 按退避重试；待停止超过上限的最早一条转入**已放弃**（记录保留、告警），只在 `Advance` 末尾按上限清理。
-- 最容易踩的坑：① Runtime **不在 Nest 事务里**（B4），handler 回滚只撤回战斗 DAO，冷却、ammo、cast、衍生物都不回退——先校验、后推进 Runtime；② 衍生物只能挂在**召唤效果（`summon`）**上，衍生物在**施法逻辑结束（移交）之前不逐 tick 推进**（§7.3，探针证实）；③ `StopSpawn` 必须幂等，Host 方法不得阻塞、不得重入 Runtime；④ 衍生物字段、回调、状态默认值里能读的引用很少，按 §4.1.4 的五行表写。
+- 最容易踩的坑：① Runtime **不在 Nest 事务里**（B4），handler 回滚只撤回战斗 DAO，冷却、ammo、cast、衍生物都不回退——先校验、后推进 Runtime；② 衍生物只能挂在**召唤效果（`summon`）**上，衍生物在施法逻辑结束（移交）之前不逐 tick 推进（§7.3 G1，v1.23.1 已修复：施放中与移交后一样逐 tick 推进，RR-20261006-51）；③ `StopSpawn` 必须幂等，Host 方法不得阻塞、不得重入 Runtime；④ 衍生物字段、回调、状态默认值里能读的引用很少，按 §4.1.4 的五行表写。
 - 已知缺口（本篇写作时探针证实，见 §7.3）：G1 衍生物移交前的 tick 丢失；G2 运动衍生物启动时第一步之后的某一步被 Host 拒绝，Host 侧已登记的衍生物没人停（Runtime 没有记录）；G3 衍生物回调的事件丢掉根事件与 proc 深度。全部源码疑点见[实现文档 §11](../impl/08-skill.md#11-源码疑点与文档不一致)。
 
 本篇覆盖的包：
@@ -217,7 +217,7 @@ live 的衍生物钉住所属 cast（cast 不回收、ID 不复用）、占 owne
 | 数值轨道 | `numeric_tracks: [{"property":"speed","operation":"add","value":10,"over_ticks":2}]` 让衍生物属性随时间变化（`skill/testdata/dynamic_numeric.json`）；回调里用 `modify_spawn` 改当前衍生物 |
 | 碰撞预算 | `max_reflects: N` 是碰撞预算，实际反弹 N−1 次；`max_pierces` 同理（O16） |
 | area 的 `$event.enter_count` | 恒为 1：成员离开时成员状态随即删除（O15） |
-| 时间推进 | 衍生物在**施法逻辑结束（移交）之后**才逐 tick 推进；施法还在 `wait` / `repeat` / policy 等待时，已召出的衍生物停在启动那一步（§7.3 G1，探针证实）。要“边施法边生效”，召唤后立即 `finish`，用 `cast_window.recovery_ticks` 或衍生物自己的寿命表达持续时间 |
+| 时间推进 | 衍生物从召唤后的下一个 tick 起逐 tick 推进，与施法是否已结束（移交）无关（v1.23.1 起，RR-20261006-51；之前移交前不推进，§7.3 G1） |
 
 更多：`owned_trap` / `owned_pet_command`（召唤物与指令）、`beam` / `hold_beam`、`projectile_area`、`entity_scoped_aura`；全部 36 个 fixture 在 `skill/testdata/`，每个都被 `TestAllFixturesParseCompileInspectAndRun`（`skill/acceptance_test.go:21`）完整跑一遍。
 
@@ -512,7 +512,7 @@ Runtime 的诊断还有 `InspectTrace()` / `FlushTrace()`（`RuntimeOptions.Trac
 | summon 施法返回 `skill: host contract violation` | Host 没实现 `OwnedEntityRuntimeHost`（或实现了旧方法名、或被 `RecordingHost` 包装） | 实现 `PreviewOwnedSummon` 等；不要用包装器跑召唤物 |
 | `skill.spawn.abandoned.total` 增长 | 宿主 `StopSpawn` 持续失败 | T-290：先修宿主停止失败；被放弃的衍生物靠比赛结束 / 程序移除清理 |
 | `Advance` 每次都返回同一个错误，tick 不前进 | 某个 Host 事件派发失败，事件 cursor 停住（例如 `PassiveRouter` 返回 Host 不支持的 Program） | 实现文档 §11 H1；检查 `PassiveRouter` 返回的 Program 是否都经过同一 Host 的准入 |
-| `RestoreRuntime` 返回 `checkpoint version is unsupported` | checkpoint 版本不是 7 | 排空后升级，不做兼容 |
+| `RestoreRuntime` 返回 `checkpoint version is unsupported` | checkpoint 版本不是当前版本（v1.23.1 起为 8，`skill.RuntimeCheckpointVersion`） | 排空后升级，不做兼容 |
 | `RestoreRuntime` 返回 `checkpoint does not match host state` | 世界没有恢复到 checkpoint 的 revision，或 authority 变了 | 先恢复世界，再恢复 Runtime |
 | skillsync `Health` 报 `outbox_pending_age`，随后所有 observer 都发不出去 | 某个流的包长期没被 ACK（客户端掉线未关、History 删流后 ACK 不回来） | 对掉线 observer 调 `CloseObserver`；见实现文档 §11 Y2 |
 | 客户端 `ErrSequenceGap` | 丢包（含表现流） | 走 `Recover` 重同步 |
@@ -550,9 +550,9 @@ Runtime 的诊断还有 `InspectTrace()` / `FlushTrace()`（`RuntimeOptions.Trac
 
 | # | 现象 | 对作者 / 业务的影响 | 绕开 |
 | --- | --- | --- | --- |
-| G1（实现文档 R1） | 衍生物在施法逻辑结束（移交）之前不逐 tick 推进；寿命仍从召唤时算起，移交前的 tick 永久丢失 | 召唤后 `wait 3` 再 `finish` 的 6 tick 法术场只结算 4 次（tick 0、3、4、5） | 召唤后立即 `finish`，用 `cast_window.recovery_ticks` 或衍生物自己的寿命表达持续时间 |
-| G2（R2） | 运动衍生物启动时，第一步之后的某一步被 Host 拒绝：召唤被回滚、Runtime 没有记录，Host 侧已登记的衍生物没人停 | Host 里残留一个“活着”的衍生物 | Host 的 `StepSpawn` 不要在启动阶段部分成功；或在 Host 侧把未提交召唤事务的衍生物一起清理 |
-| G3（R3） | 衍生物回调里的效果事件丢掉施法的根事件与 proc 深度：每个衍生物自成一个根，`ProcDepth` 归零，同一回调效果每 tick 的事件 ID 相同 | `max_depth` 管不住经衍生物的 proc 链；`once_per_root` 对衍生物整个寿命只触发一次 | 被动的 proc 限制不要依赖穿过衍生物的深度；用冷却或 `max_activations_per_tick` 兜底 |
+| G1（实现文档 R1） | 衍生物在施法逻辑结束（移交）之前不逐 tick 推进；寿命仍从召唤时算起，移交前的 tick 永久丢失 | 召唤后 `wait 3` 再 `finish` 的 6 tick 法术场只结算 4 次（tick 0、3、4、5） | 召唤后立即 `finish`，用 `cast_window.recovery_ticks` 或衍生物自己的寿命表达持续时间。**v1.23.1 已修复，见 [RR-20261006-51](../../bug/RR-20261006-51.md)** |
+| G2（R2） | 运动衍生物启动时，第一步之后的某一步被 Host 拒绝：召唤被回滚、Runtime 没有记录，Host 侧已登记的衍生物没人停 | Host 里残留一个“活着”的衍生物 | Host 的 `StepSpawn` 不要在启动阶段部分成功；或在 Host 侧把未提交召唤事务的衍生物一起清理。**v1.23.1 已修复，见 [RR-20261006-52](../../bug/RR-20261006-52.md)** |
+| G3（R3） | 衍生物回调里的效果事件丢掉施法的根事件与 proc 深度：每个衍生物自成一个根，`ProcDepth` 归零，同一回调效果每 tick 的事件 ID 相同 | `max_depth` 管不住经衍生物的 proc 链；`once_per_root` 对衍生物整个寿命只触发一次 | 被动的 proc 限制不要依赖穿过衍生物的深度；用冷却或 `max_activations_per_tick` 兜底。**v1.23.1 已修复，见 [RR-20261006-53](../../bug/RR-20261006-53.md)** |
 
 [↑ 速览](#速览) · [实现文档 §11](../impl/08-skill.md#11-源码疑点与文档不一致)
 

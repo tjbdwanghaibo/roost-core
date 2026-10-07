@@ -50,16 +50,6 @@ type chainHopTask struct {
 func (*chainHopTask) isScheduledTaskPayload() {}
 func (task *chainHopTask) frameID() FrameID   { return task.Frame }
 
-type spawnStepTask struct {
-	CastID     CastID
-	PhaseToken uint64
-	Frame      FrameID
-	SpawnID    SpawnID
-}
-
-func (*spawnStepTask) isScheduledTaskPayload() {}
-func (task *spawnStepTask) frameID() FrameID   { return task.Frame }
-
 type castCommitTask struct {
 	CastID     CastID
 	PhaseToken uint64
@@ -310,6 +300,7 @@ func (runtime *Runtime) Advance(tick Tick) error {
 	return nil
 }
 
+// nextOwnedSpawnTick 是逐 tick 推进的衍生物（施放中与已移交，spawnSteppedPartitions）里最早的下一步 tick。
 func (runtime *Runtime) nextOwnedSpawnTick() (Tick, bool) {
 	var due Tick
 	found := false
@@ -317,7 +308,7 @@ func (runtime *Runtime) nextOwnedSpawnTick() (Tick, bool) {
 		if !found || spawn.NextTick < due {
 			due, found = spawn.NextTick, true
 		}
-	}, spawnHandedOff)
+	}, spawnSteppedPartitions...)
 	return due, found
 }
 
@@ -333,6 +324,8 @@ func (runtime *Runtime) advanceHost(tick Tick) error {
 	return runtime.advanceOwnedSpawns()
 }
 
+// collectHostEvents 是 tick 推进时的事件派发（事件记进每个运行中的 cast）。被拒的被动候选只告警、事件照常前进；唯一的错误
+// 是根事件表满，事件留在原处下次重试（dispatchEvent，RR-20261006-55）。
 func (runtime *Runtime) collectHostEvents() error {
 	events := runtime.host.Events(runtime.eventCursor)
 	if len(events) == 0 {
@@ -371,8 +364,6 @@ func scheduledTaskIdentity(payload scheduledTaskPayload) (CastID, uint64) {
 	case *repeatIterationTask:
 		return task.CastID, task.PhaseToken
 	case *chainHopTask:
-		return task.CastID, task.PhaseToken
-	case *spawnStepTask:
 		return task.CastID, task.PhaseToken
 	case *castCommitTask:
 		return task.CastID, task.PhaseToken
@@ -427,9 +418,6 @@ func (runtime *Runtime) executeScheduledTask(task scheduledTask) error {
 		control, err = runtime.executeOperations(cast, payload.Operations)
 	case *repeatIterationTask:
 		control, err = runtime.executeRepeatIteration(cast, payload)
-	case *spawnStepTask:
-		err = runtime.executeSpawnStep(cast, payload.SpawnID)
-		control = flowControl{kind: flowContinue}
 	case *castCommitTask:
 		err = runtime.commitCast(cast)
 		if err != nil {
@@ -501,18 +489,4 @@ func (runtime *Runtime) cancelCastTasks(cast *castInstance) {
 	runtime.scheduler.tasks = kept
 	heap.Init(&runtime.scheduler.tasks)
 	cast.pendingTasks = 0
-}
-
-func (runtime *Runtime) executeSpawnStep(cast *castInstance, spawnID SpawnID) error {
-	spawn := runtime.spawns.get(spawnID)
-	if spawn == nil || spawn.Status != SpawnRunning {
-		return nil
-	}
-	signals, err := runtime.stepSpawnMotion(cast, spawn)
-	if err != nil {
-		return err
-	}
-	runtime.emitSpawnPresentation(cast, spawn, PresentationSpawnUpdate, "", "", cast.visibleRevision)
-	runtime.emitSpawnSignals(cast, spawn, signals, cast.visibleRevision)
-	return nil
 }

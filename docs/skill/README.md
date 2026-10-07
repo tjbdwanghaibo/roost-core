@@ -12,7 +12,7 @@
 | | 召唤物（Summon） | 衍生物（Spawn） |
 | --- | --- | --- |
 | 是什么 | 用单位模板（`UnitTemplateCatalog`）在场景里生成的真实单位：陷阱、宠物、图腾、墙等，归施法者所有 | 技能施放时生成、之后每个 tick 由技能驱动的东西：飞行物、法术场 / 光环、光束、位移、环绕，以及驱动召唤物的随从（minion） |
-| 谁管 | 宿主：单位的存活、指令、到期与清理在业务 Host 里，Runtime 只经事务创建它、经指令指挥它 | Runtime：Runtime 逐 tick 推进、派发信号、执行回调，宿主只执行每一步运动与停止 |
+| 谁管 | 宿主：单位的存活、指令、到期与清理在业务 Host 里，Runtime 只经事务创建它、经指令指挥它 | Runtime：Runtime 逐 tick 推进（从召唤后的下一个 tick 起，施法结束前后都一样，RR-20261006-51）、派发信号、执行回调，宿主只执行每一步运动与停止 |
 | DSL | 效果 `{"type":"summon","template":…,"count":…,"duration_ticks":…}`；`{"type":"dismiss","target":…}`；`issue_entity_command`；owned 选择 `summoned_before` / `summoned_after`、排序 `summon_tick` / `summon_sequence` | effect flow 上的 `"spawn": {"kind": …}` 与 `on` 回调；`$spawn`、`modify_spawn`、`spawn_start`、`spawn_step`、`spawn_callback` |
 | Host | `OwnedEntityRuntimeHost.PreviewOwnedSummon` / `CommitOwnedSummon` / `RollbackOwnedSummon`，命令 `SummonCommand`，结果 `SummonEffectResult` | `Host.StepSpawn(SpawnStepCommand, SpawnHostState)` / `StopSpawn(SpawnStopCommand, SpawnHostState)` |
 | 同步 | 单位本身按业务实体同步，skill 不发它的 mutation | state mutation `spawn_upsert` / `spawn_remove`，表现 `spawn_start` / `spawn_update` / `spawn_signal` / `spawn_stop` |

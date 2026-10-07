@@ -402,15 +402,12 @@ func TestCarryDetachesExactlyOnce(t *testing.T) {
 		{
 			name: "host error",
 			run: func(runtime *Runtime, cast *castInstance, spawn *SpawnInstance) error {
+				// 步进被宿主拒绝之后停止：解除 carry 恰好一次。之前经 spawnStepTask 步进；那类任务已删除，衍生物只由
+				// advanceOwnedSpawns 推进（RR-20261006-51），这里直接走同一个步进函数。
 				spawn.Scope = SpawnScopePhase
 				fileSpawnForTest(runtime, spawn)
 				runtime.casts[cast.id] = cast
-				cast.status = CastSuspended
-				cast.pendingTasks = 1
-				frame := FrameID(1)
-				runtime.frames[frame] = nil
-				err := runtime.executeScheduledTask(scheduledTask{Payload: &spawnStepTask{CastID: cast.id, PhaseToken: cast.phaseToken, Frame: frame, SpawnID: spawn.ID}})
-				if err == nil {
+				if _, err := runtime.stepSpawnMotion(cast, spawn); err == nil {
 					return errors.New("expected Host step error")
 				}
 				return runtime.stopSpawn(cast, spawn, StopCauseFailure)

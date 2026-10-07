@@ -9,8 +9,8 @@ import "sort"
 // 只由记录字段（Owner、handedOff）表达，记录按字段分进五个分区，每条记录恰好在一个分区里：
 //
 //	分区              字段                               谁按它查
-//	spawnCasting      Status == running，未移交          施法收尾 / 打断 / goto 停衍生物，移交，施法期间 lifecycle 失效回收
-//	spawnHandedOff    Status == running，已移交          OwnedSpawns，移交后的逐 tick 推进、到期 / 失效回收，下一次推进的 tick
+//	spawnCasting      Status == running，未移交          施法收尾 / 打断 / goto 停衍生物，移交，施法期间 lifecycle 失效回收；逐 tick 推进
+//	spawnHandedOff    Status == running，已移交          OwnedSpawns；逐 tick 推进、到期 / 失效回收与施放中分区相同（spawnSteppedPartitions）
 //	spawnStopPending  Status == stop_pending             退避重试，待停止条目上限，RetentionStats
 //	spawnStopped      Status == ended/cancelled/failed   只是历史：随 cast 回收、checkpoint、状态快照
 //	spawnAbandoned    Status == abandoned                待停止超过 MaxStopPendingSpawns 时放弃的；Advance 末尾按 MaxAbandonedSpawns 清理
@@ -34,6 +34,11 @@ const (
 // spawnLivePartitions 是衍生物仍在宿主侧运行、且由 Runtime 负责的分区（liveOnHost）：钉住所属 cast、占用 owned
 // 衍生物容量，Shutdown / RemoveProgram 要停它们。已放弃分区不在其中：宿主侧可能仍在运行，但 Runtime 不再负责。
 var spawnLivePartitions = []spawnPartition{spawnCasting, spawnHandedOff, spawnStopPending}
+
+// spawnSteppedPartitions 是 Runtime 逐 tick 推进的分区：运行中的衍生物不论是否已移交，都由 advanceOwnedSpawns 这一个
+// 入口按 NextTick 推进、按 EndTick / 运动完成回收（RR-20261006-51）。之前只推进已移交分区，施放中的衍生物在移交之前
+// 一步都不走，移交前的 tick 永久丢失。是否移交只决定停止、表现与 revision 记在谁名下（spawnOwnerCast）。
+var spawnSteppedPartitions = []spawnPartition{spawnCasting, spawnHandedOff}
 
 // partition 由记录字段决定记录所在的分区。checkpoint 恢复只接受已知的 Status（validSpawnStatus）。
 func (spawn *SpawnInstance) partition() spawnPartition {

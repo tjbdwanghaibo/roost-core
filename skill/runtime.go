@@ -221,6 +221,7 @@ type Runtime struct {
 	nextFrameID             FrameID
 	spawns                  spawnTable // 按分区存放衍生物记录，分区由记录字段决定（spawn_table.go）
 	nextSpawnID             SpawnID
+	spawnEventSequence      uint64 // 衍生物回调事件 ID 的计数（nextSpawnEventID），随 checkpoint 保存
 	cooldowns               map[cooldownKey]Tick
 	skillStates             map[skillStateKey]*skillState
 	activePolicies          map[skillStateKey]CastID
@@ -454,7 +455,9 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 	if parentEvent == nil {
 		cast.eventContext = newRootEvent(EventID(tentativeID))
 	} else {
-		cast.eventContext = deriveEvent(*parentEvent, EventID((uint64(tentativeID)<<32)|1))
+		// proc 施放自己的事件 ID 低 32 位为 0：第 i 号效果的事件是 castID<<32 | (i+1)（effectEventContext），之前这里用
+		// castID<<32 | 1，与第 0 号效果撞号，第 0 号效果事件的父事件是它自己（RR-20261006-54）。
+		cast.eventContext = deriveEvent(*parentEvent, EventID(uint64(tentativeID)<<32))
 		cast.eventContext.ProcDepth = parentEvent.ProcDepth + 1
 	}
 	cast.eventContext.Source, cast.eventContext.Owner, cast.eventContext.Target, cast.eventContext.SkillID, cast.eventContext.CastID = input.Caster, input.Caster, input.Target, program.id, tentativeID

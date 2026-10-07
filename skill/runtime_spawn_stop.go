@@ -22,8 +22,8 @@ import (
 // 的函数与登记表一致）：
 //   - 施法里的停止：failCastLocked、goto、Cancel、Interrupt、施法收尾（stopScopedSpawns），衍生物启动失败的清理
 //     （startEntitySpawn、executeOwnedSummon），移交时 lifecycle 实体已失效（handoffEntitySpawns）；
-//   - tick 驱动：施法期间 lifecycle 实体消失（reapUnhandedEntitySpawns），移交后的到期 / 失效 / 步进失败 / area 回调
-//     finish（terminateOwnedSpawn）；
+//   - tick 驱动：施法期间 lifecycle 实体消失（reapUnhandedEntitySpawns），逐 tick 推进的衍生物（施放中与已移交，
+//     RR-20261006-51）的到期 / 失效 / 步进失败 / area 回调 finish（terminateOwnedSpawn）；
 //   - 调用方驱动：RemoveProgram、Shutdown。
 //
 // 宿主拒绝时入口照常把错误返回这一次，之后由 Runtime 在 tick 上重试；入口不再各自写失败分支。之前四类入口各管各的
@@ -142,10 +142,7 @@ func (runtime *Runtime) abandonSpawnLocked(spawn *SpawnInstance) {
 		"spawn_id", spawn.ID, "cast_id", spawn.CastID, "owner", spawn.Owner, "lifecycle_entity", spawn.LifecycleEntity,
 		"stop_retry_attempts", attempts, "retry_exhausted", exhausted, "limit", runtime.options.MaxStopPendingSpawns)
 	// 与 retrySpawnStopsLocked 一致：已移交的经 detachedSpawnCast、用宿主当前 revision 发表现，未移交的经所属 cast。
-	cast := runtime.casts[spawn.CastID]
-	if spawn.handedOff {
-		cast = nil
-	}
+	cast := runtime.spawnOwnerCast(spawn)
 	revision := runtime.host.CurrentRevision()
 	if cast != nil {
 		revision = cast.visibleRevision
@@ -187,10 +184,7 @@ func (runtime *Runtime) retrySpawnStopsLocked() {
 			continue
 		}
 		// 已移交的衍生物经 detachedSpawnCast 发表现（与它移交后的增量一致，RR-20261006-22），用宿主当前 revision。
-		cast := runtime.casts[spawn.CastID]
-		if spawn.handedOff {
-			cast = nil
-		}
+		cast := runtime.spawnOwnerCast(spawn)
 		err := runtime.requestSpawnStop(cast, spawn, spawn.stopCause, "")
 		if spawn.Status != SpawnStopPending {
 			// 宿主已停：之后的事件派发错误不影响“已停”这一事实，与 failCastLocked 忽略停止错误一致。

@@ -515,8 +515,6 @@ func (runtime *Runtime) applySpawnMotionStep(cast *castInstance, spawn *SpawnIns
 	spawn.HostState = result.State
 	cast.visibleRevision = maxRevision(cast.visibleRevision, result.Commit.Revision)
 	spawn.visibleRevision = cast.visibleRevision
-	if err := runtime.drainHostEvents(cast); err != nil {
-		return nil, err
-	}
+	runtime.drainHostEvents(cast)
 	return result.Signals, nil
 }

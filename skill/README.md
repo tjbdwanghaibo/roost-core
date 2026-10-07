@@ -364,6 +364,7 @@ go test ./... -count=1
 
 ### 迁移与版本
 
+- **衍生物“施放 → 移交 → 停止”，checkpoint 版本 8（2026-10-07，未发版）**：施放中的衍生物与移交后一样逐 tick 推进（唯一入口 `advanceOwnedSpawns`，删掉 `spawnStepTask`）；衍生物回调继承施法的事件链，每次结算一个新 EventID（payload 加 `spawn_event_sequence`）；被拒的被动候选只告警、不卡住事件流。见 `docs/bugfix/RR-20261006-51.md`～`-55.md`，旧版本 checkpoint 拒绝恢复。
 - **衍生物记录分区存放，checkpoint 版本 6（2026-10-07）**：Runtime 内部不再有重复的 owned 表，“移交给谁”只看记录字段；checkpoint 删掉 `owned_spawns`、只存一份 `spawns`，版本 5 及更早拒绝恢复（排空后再升级）。API 与行为不变。[方案](../docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md)
 - **源文档 digest 改为逐字段规范表示（2026-10-07，RR-20261006-33）**：`InspectIdentity(...).SourceDocumentDigest` 现在区分效果 / 策略 / 输入 / 形状 / 过滤器的类型，并包含消耗数量与 cast window 表达式；全部定义的源文档 digest 改变一次，gameplay / presentation digest 不变。[记录](../docs/bugfix/RR-20261006-33.md)
 - **生成宿主单位的效果改名为召唤物（Summon），衍生物 `kind: "summon"` 改为 `kind: "minion"`（2026-10-07，破坏性，不留旧名）**：效果 `"type":"spawn"` → `"type":"summon"`、`despawn` → `dismiss`，Host `PreviewOwnedSpawn` / `CommitOwnedSpawn` / `RollbackOwnedSpawn` → `PreviewOwnedSummon` / `CommitOwnedSummon` / `RollbackOwnedSummon`，`SpawnCommand` → `SummonCommand`，owned 选择 `spawn_tick` / `spawned_before` 等 → `summon_tick` / `summoned_before`，checkpoint 版本 5。衍生物（Spawn）那一套名字不变。对照表见 [docs/skill/README.md](../docs/skill/README.md#术语召唤物summon与衍生物spawn) 与[重构记录](../docs/feature/REFACTOR-2026-10-07-skill-summon-rename.md)。
