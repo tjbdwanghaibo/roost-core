@@ -61,10 +61,12 @@
 
 ## 6. 接手进度：B5 第一批（2026-10-07）
 
-基线 `85a13d4c`，隔离分支 `codex/maintainer-rules`。先统一维护者本轮确认的 review 中文注释与疑点证据规则（`47595026`）；Codex 本地 coding / optimize / bugfix / review 已同步，Claude 专属文件保持原样。
+基线 `85a13d4c`，隔离分支 `codex/maintainer-rules`。先统一维护者本轮确认的 review 中文注释与疑点证据规则（`1d6816d8`）；Codex 本地 coding / optimize / bugfix / review 已同步，Claude 专属文件保持原样。
 
 - F01-8：[RR-20261007-01](../bugfix/RR-20261007-01.md)，检查缺失配置不能报成功。
 - F01-9：[RR-20261007-02](../bugfix/RR-20261007-02.md)，服务专属 Mod 不能与共享 Mod 重名。
 - F02-3：[RR-20261007-03](../bugfix/RR-20261007-03.md)，方法 handler 进入 glsvet 并发/捕获检查。
 
 三项都有修前行为失败；修后 App/glsvet 三轮 race、全仓 build/vet、根包与三大模块 glsvet 已通过，全量测试通过（130 个包）。B5 其余项保持待处理，本批不代表 B5 全部完成。没有接手 remfix 的范围，没有发版。
+
+本批实现提交 `aa12460b`，规范提交 `1d6816d8`；已对齐远端 `494fe096` 并再次通过目标 race、全仓 build/vet/test（130 个包）。未推送、未发布。原始日志在主检出 `artifacts/perf/core-b5-20261007/`。
