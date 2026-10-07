@@ -1,16 +1,18 @@
 # v1.23.0 实现文档（分册）：配置、skill 与非核心 review（CFG / SKILL / NONCORE）
 
-本分册写给 review agent，也让人能读懂：每条给出提交、改动文件与关键符号（`path:line`，以代码冻结提交 `e6828e4f` 为准）、不变量与守卫测试、控制流、失败处理、修前红文本（原样抄自 `docs/bug` / `docs/bugfix` / 方案记录）、复跑命令、未验证项与 review 检查点。配套的说明文档是 [guide-cfg-skill-noncore.md](guide-cfg-skill-noncore.md)，同一编号互链。APP、OWN、CLK、OPS、TOOL、SAGA、DRV、DAO、REM 主题在同目录的其他分册里。
+本分册写给 review agent，也让人能读懂：每条给出提交、改动文件与关键符号（`path:line`，以最终代码冻结提交 `5e72ca4d` 为准）、不变量与守卫测试、控制流、失败处理、修前红文本（原样抄自 `docs/bug` / `docs/bugfix` / 方案记录）、复跑命令、未验证项与 review 检查点。配套的说明文档是 [guide-cfg-skill-noncore.md](guide-cfg-skill-noncore.md)，同一编号互链。APP、OWN、CLK、OPS、TOOL、SAGA、DRV、DAO、REM 主题在同目录的其他分册里。
 
-**重核说明（2026-10-06，按 `e6828e4f`）**：起草时以 `02c8a10d` 为准，冻结后逐条重核全部 `path:line`、函数名与测试名。方法：机器比对每个引用行在两个提交上的内容与相邻的符号名，再人工看没有符号可比的引用。结果：正文（不含修前红文本）约 490 处 `path:line`、约 165 个测试名逐个核对；`02c8a10d..e6828e4f` 期间本分册引用到的源文件只有 nest 与 `entity/remote_snapshot.go` 变了。共改 8 处：行号 3 处（NONCORE-14 两处、NONCORE-55 一处）；NONCORE-54 原有 3 处引用随 RR-20261006-12 重写换成现名现行号（`releaseDispatchLocks` 已删除）；已删除的符号 1 处（SKILL-2 `undoVitals` → `beginChange`）；已改名的测试 1 处（NONCORE-20 原回归 → `TestActivityRefusesAGroupNoWindowCouldOpenWith`）。其余引用在 `e6828e4f` 上与所述符号一致。修前红文本里的 `文件:行` 是当时的原文，不改。各条“未验证”只留外部环境项并指向 [外部验证清单](../../review/EXTERNAL-VERIFICATION-2026-10-06.md) 的 E 编号（Windows 一律“暂存，不保证正确”）；本机能做的已在 `e6828e4f` 上补跑并写进对应条目。与其他分册重复的条目（NONCORE-1、23、24、40、45、50、56）只保留索引，以对方分册为准。
+**第二次重核与补写（2026-10-07，按最终冻结点 `5e72ca4d`）**：`e6828e4f..5e72ca4d` 有 57 个提交，本分册引用到的源文件里 skill 包经历两次全量改名（process → Spawn、宿主单位 spawn → Summon，16 + 2 个文件改名）与停止状态机 / 分区重构，app 与 kit 的配置读取被 A4 ① 整体替换。方法同第一次：从三份分册的正文（不含修前红文本）抽出全部 `path:line` 与 `:行` 简写，共 524 处，按 `git diff -U0 -M e6828e4f 5e72ca4d` 把每个引用行映射到新提交——行内容没变的直接换行号，变了、文件被删或改名的人工改；再对每处引用核对同一行附近能找到所述符号或测试名，并把正文里出现的每个标识符与 `5e72ca4d` 全仓词表比对，找出不再存在的名字。结果：391 处不变；**共改 126 处**——行号漂移、内容不变 54 处（机器换号后逐个核对符号），人工改 72 处（CFG-1～5、CFG-7、CFG-12 随 A4 ① 删除或搬移的 48 处，SKILL 随改名与文件改名的 24 处）；另有 2 处（`saga/mongo_store.go:431`、`saga/record.go:226`）行号与内容都没变、只是对齐空白。测试名与符号：随 A4 ① 删除的测试 9 个、删除或搬移的符号约 15 个，改为“`e6828e4f` 上的位置 + `5e72ca4d` 上的对应物”两列写法，历史位置保留；随改名改变的测试 7 个、符号 9 个，正文改为新名并注“原名”。修前红文本（135 处 `文件:行`）是当时原文，不改。新补的 11 个条目（CFG-14～16、SKILL-23～30）与 NONCORE-46 的 RR-20261006-20 直接按 `5e72ca4d` 写。
+
+**第一次重核（2026-10-06，按 `e6828e4f`）**：起草时以 `02c8a10d` 为准，冻结后逐条重核全部 `path:line`、函数名与测试名。方法：机器比对每个引用行在两个提交上的内容与相邻的符号名，再人工看没有符号可比的引用。结果：正文（不含修前红文本）约 490 处 `path:line`、约 165 个测试名逐个核对；`02c8a10d..e6828e4f` 期间本分册引用到的源文件只有 nest 与 `entity/remote_snapshot.go` 变了。共改 8 处：行号 3 处（NONCORE-14 两处、NONCORE-55 一处）；NONCORE-54 原有 3 处引用随 RR-20261006-12 重写换成现名现行号（`releaseDispatchLocks` 已删除）；已删除的符号 1 处（SKILL-2 `undoVitals` → `beginChange`）；已改名的测试 1 处（NONCORE-20 原回归 → `TestActivityRefusesAGroupNoWindowCouldOpenWith`）。其余引用在 `e6828e4f` 上与所述符号一致。修前红文本里的 `文件:行` 是当时的原文，不改。各条“未验证”只留外部环境项并指向 [外部验证清单](../../review/EXTERNAL-VERIFICATION-2026-10-06.md) 的 E 编号（Windows 一律“暂存，不保证正确”）；本机能做的已在 `e6828e4f` 上补跑并写进对应条目。与其他分册重复的条目（NONCORE-1、23、24、40、45、50、56）只保留索引，以对方分册为准。
 
 ## 怎么用这份文档 review
 
 **建议顺序**：
 
 1. 先读说明文档的“本部分总览”，知道哪些是破坏性变化。
-2. CFG 的数据规则主线：CFG-7 → CFG-8 → CFG-10 → CFG-11（`configdata` 加载流水线是一处共享代码，先建立整体图）。再看严格读取 CFG-1 → CFG-2（守卫是源码扫描，要看扫描模式会不会漏）。
-3. SKILL 的结构主线：SKILL-13（B3）→ SKILL-14 → SKILL-15（求值上下文表）→ SKILL-16（O33）。这四条决定了“编译接受 ⇒ Runtime 能执行”是否成立；其余 SKILL 条目是单点修复。
+2. CFG 的数据规则主线：CFG-7 → CFG-8 → CFG-10 → CFG-11 → CFG-16（`configdata` 加载流水线是一处共享代码，先建立整体图）。服务配置主线：CFG-1 → CFG-2（A4 ② 的历史形态）→ **CFG-14 → CFG-15**（A4 ① 现行形态：声明、启动检查、生成器、doctor 与“读了没声明 / 声明了没读”守卫，守卫是 AST 扫描，要看会不会漏）。
+3. SKILL 的结构主线：SKILL-13（B3）→ SKILL-14 → SKILL-15（求值上下文表）→ SKILL-16（O33）→ SKILL-30（B3 ③ 能力表）。这五条决定了“编译接受 ⇒ Runtime / Host 能执行”是否成立。**衍生物生命周期主线**：SKILL-23 → SKILL-24 → SKILL-26 → SKILL-28 → SKILL-29（停止状态机、分区、已放弃；SKILL-25 / 27 是改名，先看对照表）。其余 SKILL 条目是单点修复。
 4. NONCORE 里改了契约的：NONCORE-35 / 37（actionflow 延后队列）、NONCORE-47（遍历回调契约）、NONCORE-21（activity 窗口条目入口、account 判定表）、NONCORE-52（停机三步）。
 5. 其余条目按包查（文末“按包的改动索引”）。
 
@@ -20,9 +22,9 @@
 | --- | --- | --- |
 | 20～27 | 写给人阅读、错误保留 `errors.Is`、指标标签低基数 | 全部 |
 | 39 | A1 回滚统一走 DAO；B4 skill Runtime 不进事务的例外 | SKILL、NONCORE-25 / 26 / 39 |
-| 63～80 | 生命周期复审要点：三步停机、A3 共用类型与契约骨架、C7 遍历回调契约、新增配置核对生成配置与读取方 | NONCORE-1 / 4 / 6 / 46 / 47 / 52、CFG-12 |
-| 105 | 反复出问题要上报方向判断 | SKILL 主线、NONCORE-21 / 31 / 35 / 56 |
-| 123～129 | 验证纪律：按影响面验证、示例要实跑、性能对照 | 全部 |
+| 63～82 | 生命周期复审要点：三步停机、A3 共用类型与契约骨架、C7 遍历回调契约（78）、配置只经声明读（82，A4 ①） | NONCORE-1 / 4 / 6 / 46 / 47 / 52、CFG-12、CFG-14 / 15 |
+| 107 | 反复出问题要上报方向判断 | SKILL 主线（含衍生物生命周期决定链）、NONCORE-21 / 31 / 35 / 56 |
+| 125～131 | 验证纪律：按影响面验证、示例要实跑、性能对照 | 全部 |
 
 **本地复跑环境与命令**（全部 `GOWORK=off`，在仓库根执行）：
 
@@ -66,28 +68,39 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 | [CFG-11](#cfg-11) | cfggen globals 支持 required / min / enum | v1.23.0（本版） | 新能力；已有输出不变 | 否（可选） |
 | [CFG-12](#cfg-12) | 生成配置写出 `remote_entity` 新键（A8） | v1.23.0（本版） | 只影响新生成工程 | 否 |
 | [CFG-13](#cfg-13) | 生成 TCP 越界报错逐条点名（A9） | v1.23.0（本版） | 只改报错文本 | 按旧文本匹配的脚本要更新 |
+| [CFG-14](#cfg-14) | 每个 Mod 用“配置结构体 + tag”声明自己的配置，启动检查 / 生成器 / doctor 共用（A4 ①，RR-20261006-38） | v1.23.0（本版） | **破坏**：0 / 负数 / 枚举外的值按声明拒绝；syncbus 旧回退删除；生成器 Core 下限升到 v1.23.0 | 修正配置；自写 Mod 改成声明 + `app.LoadConfig` |
+| [CFG-15](#cfg-15) | 业务服务声明自己读的键，doctor 读回进程声明，生成工程同样守住“读配置只经声明”（A4 ① 收尾，RR-20261006-40） | v1.23.0（本版） | 收紧：game-demo 漏写 activity / platform 键启动即拒绝；doctor 新增 `config-reads` | 业务代码直接读 viper 的改成声明 |
+| [CFG-16](#cfg-16) | 配置数据保持 tablegen 与 cfggen 两条管线，写明分工（B10，维护者选 A） | v1.23.0（本版） | 只改文档 | 否 |
 | [SKILL-1](#skill-1) | 施法失败只走一个终态入口（NC-110～112） | v1.20.1 | 收紧：终态 cast 的输入被拒；手动 Release 失败不可重试 | 否 |
 | [SKILL-2](#skill-2) | Combatant 副本不共享 map（NC-113） | v1.20.1 | 改副本不再改实体 | 误用者改用 `InitCombatant` |
 | [SKILL-3](#skill-3) | skillsync 三条下发路径同一可见性（NC-114 / 115） | v1.20.1 | wire 追加字段；可见性变化时 remove 不下发 | 可见性变化时重发快照 |
 | [SKILL-4](#skill-4) | Applier 被拒包不改 epoch（NC-116） | v1.20.1 | 无 | 否 |
-| [SKILL-5](#skill-5) | 提交前失败的 cast 有界回收（NC-117） | v1.20.1 | 无 | 否 |
+| [SKILL-5](#skill-5) | 提交前失败的 cast 有界回收（NC-117） | v1.20.1 | 无（checkpoint 版本后来升到 7，见 SKILL-24～29） | 否 |
 | [SKILL-6](#skill-6) | wire 字段名逐字匹配（NC-150） | v1.20.2 | 收紧：非规范大小写 Parse 失败 | 修正技能 JSON |
 | [SKILL-7](#skill-7) | 拒绝 Runtime 不派发的 phase 事件（NC-151） | v1.20.2 | 收紧；非零 `timeout_ticks` 给 warning | 修正定义；loadtest 断言 `Warnings == 0` |
 | [SKILL-8](#skill-8) | 作者写的 tick 非负（NC-152） | v1.20.2 | 收紧 | 修正负值 |
 | [SKILL-9](#skill-9) | 表现缓存等待者、skillcompose 诊断（NC-153 / 154） | v1.20.2 | 无 | 否 |
 | [SKILL-10](#skill-10) | 编译器只接受 Runtime / Host 执行的范围（NC-210、212～215） | v1.20.2 | 收紧 | 修正定义与 catalog |
-| [SKILL-11](#skill-11) | 移交后 area finish 只结束本进程（NC-211） | v1.20.2 | 放宽（不再报错） | 否 |
+| [SKILL-11](#skill-11) | 移交后 area finish 只结束本衍生物（原名进程，NC-211） | v1.20.2 | 放宽（不再报错） | 否 |
 | [SKILL-12](#skill-12) | `NegotiateSchema` 拒绝空区间（NC-216） | v1.20.2 | 收紧 | 否（无生产调用方） |
 | [SKILL-13](#skill-13) | lower fail-fast 与 phase 事件表单一来源（B3） | v1.20.2 | 正常定义不变；引入一处回归（v1.21.0 修） | 否 |
 | [SKILL-14](#skill-14) | 按 Runtime 求值上下文收紧，修 B3 回归（NC-220～224） | v1.21.0 | 收紧；NC-223 恢复 | 修正定义；v1.20.1 的相关 checkpoint 先排空 |
 | [SKILL-15](#skill-15) | 求值上下文表（第五轮，NC-280～283） | v1.21.0 | 收紧 + 放宽；诊断码变化 | 修正定义；按诊断码匹配的工具更新 |
 | [SKILL-16](#skill-16) | O33 漂移格子编译期拒绝；O34～O36 写文档 | v1.21.0 | **破坏**：以前能编译的定义启动失败 | 按作者文档改写 |
-| [SKILL-17](#skill-17) | summon 进程拒绝 `duration_ticks` 与 area 成员字段（O22） | v1.23.0（本版） | 收紧 | 删掉这些字段 |
-| [SKILL-18](#skill-18) | checkpoint 字节确定（O7） | v1.23.0（本版） | 字节变、格式不变 | 不要跨版本比较字节 |
+| [SKILL-17](#skill-17) | minion 衍生物（原名 summon 进程）拒绝 `duration_ticks` 与 area 成员字段（O22） | v1.23.0（本版） | 收紧 | 删掉这些字段 |
+| [SKILL-18](#skill-18) | checkpoint 字节确定（O7） | v1.23.0（本版） | 同一版本内字节确定；本版 checkpoint 版本为 7，旧版本拒绝恢复 | 不要跨版本比较字节 |
 | [SKILL-19](#skill-19) | result 分支诊断文案（O29）；O15～O17 / O27 / O28 写文档 | v1.23.0（本版） | 只改文案 | 按文案匹配的工具更新 |
 | [SKILL-20](#skill-20) | null 默认值实体状态可以 set（RR-20261006-02） | v1.23.0（本版） | 放宽；事件 Before 的缺省值类型变化 | 否 |
 | [SKILL-21](#skill-21) | checkpoint 恢复拒绝 `phase_timeout`（RR-20261006-03） | v1.23.0（本版） | 只拒绝不会出现的任务 | 否 |
 | [SKILL-22](#skill-22) | 示例 `statusbridge` 能运行 | v1.23.0（本版） | 只改示例 | 否 |
+| [SKILL-23](#skill-23) | 衍生物记录随 cast 一起回收；失败启动不留记录；reset 条目带增量的 PrimaryTarget（RR-20261006-21 / 22 / 23） | v1.23.0（本版） | 行为变化：停不下衍生物的失败启动返回非零 cast ID 并保留 failed cast | 否 |
+| [SKILL-24](#skill-24) | 宿主停不下的衍生物由 Runtime 退避重试（RR-20261006-21 后续，RR-20261006-30 / 31） | v1.23.0（本版） | 新状态 `stop_pending`；`Host.StopSpawn` 必须幂等；checkpoint 版本 3 | 客户端认 `stop_pending`；宿主 StopSpawn 幂等 |
+| [SKILL-25](#skill-25) | “进程”（process）全量改名为衍生物（Spawn） | v1.23.0（本版） | **破坏**：DSL / wire / Host 接口 / 指标改名，不留别名；checkpoint 版本 4；digest 全变 | 技能 JSON、Host 实现、客户端、告警按对照表改名 |
+| [SKILL-26](#skill-26) | 衍生物停止入口统一走一套停止 / 待停止状态机（RR-20261006-32） | v1.23.0（本版） | `Shutdown` / `RemoveProgram` 停不下的衍生物转 `stop_pending` 由 Runtime 重试；被拒的停止回调不再重跑 | 改看 `StateSnapshot` / `RetentionStats` |
+| [SKILL-27](#skill-27) | 生成宿主单位的效果改名为召唤物（Summon），`despawn` → `dismiss`，衍生物 kind `summon` → `minion` | v1.23.0（本版） | **破坏**：DSL / Host 契约改名；checkpoint 版本 5；环境与 digest 全变 | 技能 JSON、Host 实现按对照表改名 |
+| [SKILL-28](#skill-28) | 衍生物记录按字段分区存放、删掉重复的 owned 表；源文档 digest 逐字段；停止循环判空（RR-20261006-33 / 34） | v1.23.0（本版） | checkpoint 版本 6；全部 `SourceDocumentDigest` 改变 | 保存旧源文档 digest 比对的调用方一次性重算 |
+| [SKILL-29](#skill-29) | 待停止到上限不删记录，挪进“已放弃”分区（维护者选 B） | v1.23.0（本版） | 新状态 `abandoned`；指标改名 `skill.spawn.abandoned.total`；checkpoint 版本 7 | 告警规则改名；客户端认 `abandoned` |
+| [SKILL-30](#skill-30) | Host 取值能力表随编译环境下发，编译器 / Runtime / Host 共用（B3 ③，RR-20261006-37 / 39） | v1.23.0（本版） | **破坏**：`skill.Host` 必须实现 `HostCapabilities()`；环境格式与 authority digest 变化；表外能力启动 / 注册时拒绝 | Host 声明能力表；重新编译 / 重签 |
 | [NONCORE-1](#noncore-1) | N01 留项：Ops 同步 bind、停机 hook 预算、停机期 fail-stop 退出码、Mod 停止收尾、`ops.admin_timeout`（NC-230～234） | v1.21.0 | 收紧：Ops 端口被占启动失败；admin 命令 10s 期限 | 同机多实例各配 `ops.addr`；长命令调大 `ops.admin_timeout` |
 | [NONCORE-2](#noncore-2) | HTTP JSON 先编码后写；recover 尊重已开始的响应（NC-80 / 81） | v1.20.1 | 编码失败回 500 | 否 |
 | [NONCORE-3](#noncore-3) | RateLimiter 每主体 key 上限（NC-82） | v1.20.1 | 行为变化：每主体默认 256 key | 否 |
@@ -133,7 +146,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 | [NONCORE-43](#noncore-43) | robot / statslog / log（NC-161～165） | v1.20.2 | 收紧：loadtest 无样本判失败 | 否 |
 | [NONCORE-44](#noncore-44) | robot 会话 / 日志 sink / Prometheus 转义等（NC-261～266） | v1.21.0 | 行为变化 | 否 |
 | [NONCORE-45](#noncore-45) | robot Stage 序号只增不回收（RR-20261006-09） | v1.23.0（本版） | 行为变化 | 自定义 `IdentityProvider` 覆盖超出 `Count` 的序号 |
-| [NONCORE-46](#noncore-46) | N13 遍历与 TaskPool 等（NC-180～185） | v1.20.2 | 行为变化 | 否 |
+| [NONCORE-46](#noncore-46) | N13 遍历与 TaskPool 等（NC-180～185）；TaskPool 统计不再读到结束数大于提交数（RR-20261006-20） | v1.20.2 / v1.23.0（本版） | 行为变化 | 否 |
 | [NONCORE-47](#noncore-47) | 遍历回调仓库级契约（C7） | v1.20.2 | 契约成文 | 否 |
 | [NONCORE-48](#noncore-48) | container / goroutine 零调用方 API（NC-267～269） | v1.21.0 | 无 | 否 |
 | [NONCORE-49](#noncore-49) | Mongo URI 口令脱敏（NC-191） | v1.20.2 | 无 | 否 |
@@ -145,7 +158,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 | [NONCORE-55](#noncore-55) | Nest 重排抖动（U-0279） | v1.20.1 | 平均重排延迟 5ms → 7.5ms | 否 |
 | [NONCORE-56](#noncore-56) | 租约修复 RR-20261004-10 / 11 / 14（同版被静态绑定取代） | v1.20.0 | 代码已删 | 否 |
 
-共 91 条：CFG 13 条、SKILL 22 条、NONCORE 56 条。
+共 102 条：CFG 16 条、SKILL 30 条、NONCORE 56 条（2026-10-07 按 `5e72ca4d` 补写 CFG-14～16、SKILL-23～30 共 11 条，RR-20261006-20 并入 NONCORE-46）。
 
 ### 提交速查
 
@@ -162,6 +175,9 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 | CFG-10 | `c474a6ef` |
 | CFG-11 | `229a5aa0` |
 | CFG-12 / CFG-13 | `fcc78ad0` |
+| CFG-14 | `d1226825`（A4 ① 与 RR-20261006-38） |
+| CFG-15 | `6e0619bb`（A4 ① 收尾，RR-20261006-40） |
+| CFG-16 | `2c01e06d`（只改文档） |
 | SKILL-1 / 2 | `855c2a38` |
 | SKILL-3 / 4 / 5 | `f37a94e3` |
 | SKILL-6～9 | `bfd353c0` |
@@ -172,6 +188,14 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 | SKILL-16 | `f6043e44` |
 | SKILL-17～19、22 | `229a5aa0` |
 | SKILL-20 / 21 | `b8fbcee0` |
+| SKILL-23 | `5c1f4176`（RR-20261006-21～23） |
+| SKILL-24 | `1ce01e5c`（RR-20261006-21 后续、-30、-31） |
+| SKILL-25 | `4451a0a5` |
+| SKILL-26 | `3fad5b6e`（RR-20261006-32） |
+| SKILL-27 | `509c381f` |
+| SKILL-28 | `6826eeb2`（RR-20261006-33、-34） |
+| SKILL-29 | `f28285ad` |
+| SKILL-30 | `cd8ed341`（RR-20261006-37）、`e999f68e`（RR-20261006-39） |
 | NONCORE-1 | `2c1c7be7` |
 | NONCORE-2 | `c8d72122`、`eef7822e` |
 | NONCORE-3 | `eef7822e` |
@@ -217,7 +241,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 | NONCORE-43 | `5fea59ce`、`efeede0f`、`92547035`、`2a9e0c2c`、`e798a759` |
 | NONCORE-44 | `36220f34` |
 | NONCORE-45 | `7b73aabc` |
-| NONCORE-46 | `7e4ed438`、`20400337`、`1d600b9b`、`4c26b4b5`、`815c3661` |
+| NONCORE-46 | `7e4ed438`、`20400337`、`1d600b9b`、`4c26b4b5`、`815c3661`；RR-20261006-20 `41bdb9e5` |
 | NONCORE-47 | `cd43a5ac` |
 | NONCORE-48 | `36220f34` |
 | NONCORE-49 | `e1a6b01d` |
@@ -231,10 +255,10 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 
 ## CFG：配置读取、配置数据规则与生成配置
 
-先读：roost-coding“写给人阅读的代码”第 27 行（指标标签低基数、错误保留 `errors.Is` 语义）与第 80 行（新增配置要核对生成配置和运行时实际读取）。本主题的两条主线各有一组守卫：
+先读：roost-coding“写给人阅读的代码”第 27 行（指标标签低基数、错误保留 `errors.Is` 语义）与第 82 行（配置只经声明读，A4 ①）。本主题的两条主线各有一组守卫：
 
-- 严格读取：`app/config_strict_reads_promises_test.go`、`app/config_types_promises_test.go` 扫描 app、kit 与两份生成模板的源码。新增宽松读取或没登记的键会让它们点名失败。
-- 规则单一来源：`configdata/rules` 是唯一实现；根包 `TestSharedConfigRulesStayALeaf`（`dependency_boundary_test.go:209`）保证它只依赖标准库，因为 codegen 也 import 它。
+- 服务配置只经声明读（v1.23.0 起，取代 A4 ② 的登记表与正则扫描）：`app/config_declarations_promises_test.go` 的 `TestFrameworkModsReadConfigOnlyThroughDeclarations` / `TestEveryDeclaredConfigFieldIsRead` 用 `go/ast` 扫 app、kit 与两份生成模板；`kit/config_schema_promises_test.go` 的 `TestEveryKitModLoadsWhatItDeclares` 逐键核对 Init 读的就是声明；生成工程侧 `codegen/internal/roost/config_reads_promises_test.go` 用同一份判定（`internal/configschema/guard.go`）。
+- 规则单一来源：`configdata/rules` 是唯一实现；根包 `TestSharedConfigRulesStayALeaf`（`dependency_boundary_test.go:215`）保证它与 `internal/configschema` 只依赖标准库，因为 codegen 也 import 它们。
 
 <a id="cfg-1"></a>
 ### CFG-1 布尔开关与时长严格读取（NC-190）
@@ -244,20 +268,20 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 [说明](guide-cfg-skill-noncore.md#cfg-1)
 
 1. **提交与版本**：`f9367785`（修复）、`0aa2e1b9`（N14 收口文档）；审查 `efe219c1`。首发 v1.20.2。
-2. **改动与符号**（以 `e6828e4f` 为准）：
+2. **改动与符号**（NC-190 时的形态；`e6828e4f` 上仍如此，v1.23.0 的 CFG-14 改写了其中五行，见下表右列）：
 
-   | 位置 | 职责 |
-   | --- | --- |
-   | `app/config_values.go:30` `ConfigBool` | 严格布尔：YAML 布尔、`ParseBool` 字符串、整数 0 / 1；其余点名报错 |
-   | `app/config_values.go:55` `ConfigDuration` | 严格时长：`ParseDuration` 字符串、`time.Duration`、0；不带单位的非零数字报错 |
-   | `app/singleton.go:134-172` `singletonSettings.readErrs` / `readSingletonSettings` | 读取错误先记下，`validate` 先报它们，不受 `enabled` 读成什么影响 |
-   | `app/config_validation.go:17` `ValidateServiceConfig` | 对 `frameworkBoolKeys` 严格检查（NC-190 时 15 个，A4 后扩为三份登记，见 CFG-2） |
-   | `kit/mods/service_servicemods.go:112` `Duration`、`:130` `RequiredDuration` | 服务 Mod 的时长改走 `app.ConfigDuration` |
-   | `kit/saga/step_budgets.go:136` | 步骤预算时长改走 `app.ConfigDuration` |
-   | `kit/mods/service_servicemods.go:68` `RedisClusterAddrs` | 逗号串或 YAML 列表、去空白；Redis Mod（`kit/redis/redis_mod.go:73`）、`ValidateClusterKeyPrefix`、remoteentity hash tag 检查都经它 |
+   | 位置（`e6828e4f`） | 职责 | `5e72ca4d` 上 |
+   | --- | --- | --- |
+   | `app/config_values.go:30` `ConfigBool` | 严格布尔：YAML 布尔、`ParseBool` 字符串、整数 0 / 1；其余点名报错 | `app/config_values.go:18`，单键入口保留；解析移到 `internal/configschema/parse.go:22` `ParseBool`，声明读取与它同一份 |
+   | `app/config_values.go:55` `ConfigDuration` | 严格时长：`ParseDuration` 字符串、`time.Duration`、0；不带单位的非零数字报错 | `app/config_values.go:23`；解析在 `internal/configschema/parse.go:42` `ParseDuration` |
+   | `app/singleton.go:134-172` `singletonSettings.readErrs` / `readSingletonSettings` | 读取错误先记下，`validate` 先报它们，不受 `enabled` 读成什么影响 | 已删除；`app/singleton.go:123` `singletonConfig` 声明 `singleton.*`，类型错误由启动检查报出（不经 `enabled`），三条时间关系在 `:146` `ValidateConfig` |
+   | `app/config_validation.go:17` `ValidateServiceConfig` | 对 `frameworkBoolKeys` 严格检查（NC-190 时 15 个，A4 后扩为三份登记，见 CFG-2） | `app/config_validation.go:13`，只检查 App 自己的声明（`CheckConfig(cfg)`）；登记表已删除 |
+   | `kit/mods/service_servicemods.go:112` `Duration`、`:130` `RequiredDuration` | 服务 Mod 的时长改走 `app.ConfigDuration` | 已删除；各服务 Mod 的时长写在自己的配置声明里 |
+   | `kit/saga/step_budgets.go:136` | 步骤预算时长改走 `app.ConfigDuration` | `kit/saga/config.go:14` `stepBudgetConfig`（`step_defaults` 与 `steps.*.*` 共用），`kit/saga/step_budgets.go:31` `StepBudgetsFromConfig` |
+   | `kit/mods/service_servicemods.go:68` `RedisClusterAddrs` | 逗号串或 YAML 列表、去空白；Redis Mod、`ValidateClusterKeyPrefix`、remoteentity hash tag 检查都经它 | 已删除；`kit/redis/redis_mod.go:45` `ClusterConfig`（`[]string` 字段，`internal/configschema/parse.go:136` `ParseStrings` 接受两种写法），服务 Mod 与 remoteentity 嵌入它；`kit/mods/service_servicemods.go:46` `ValidateClusterKeyPrefix(clusterAddrs []string, …)` |
 
-3. **不变量**：已设置的框架布尔 / 时长键要么严格解析成功，要么启动失败并点名键；没有“读成零值继续跑”的分支。守卫：`TestEveryFrameworkBoolSwitchIsCheckedStrictly`（`app/config_types_promises_test.go:93`）扫描 `GetBool("…")`，新开关忘了登记即点名失败。
-4. **控制流**：`App.Run` → `ValidateServiceConfig`（`app/app.go:134`，任何 Mod Init 之前）→ 单实例锁读配置 → Mod Init（kit 的 `mods.Duration` 等再严格读一遍）。
+3. **不变量**：已设置的框架布尔 / 时长键要么严格解析成功，要么启动失败并点名键；没有“读成零值继续跑”的分支。守卫：NC-190 时是 `TestEveryFrameworkBoolSwitchIsCheckedStrictly`（`e6828e4f` 的 `app/config_types_promises_test.go:93`，扫描 `GetBool("…")`）；v1.23.0 起删除，换成 CFG-14 的“读了没声明 / 声明了没读 / 声明与 Init 对得上”三条守卫（读配置只能经声明，所以不存在没登记的读取点）。
+4. **控制流**（`5e72ca4d`）：`App.run` 读配置 → `checkConfig(a.cfg, a.serviceDeclarations(serverType))`（`app/app.go:150`，任何 Mod Init 之前，合并 App、全部 Mod 与服务本身的声明）→ 单实例锁用检查读出的 `settings` → Mod Init（各自 `app.LoadConfig` 再按同一份声明读一遍）。NC-190 时是 `ValidateServiceConfig`（`e6828e4f` 的 `app/app.go:134`）。
 5. **失败处理**：读取错误汇总后返回，进程不启动；未设置的键返回零值，调用方照常“≤0 取默认”。
 6. **测试**：
    - 修前红（基线 `f6245613`，[nc190-red.txt](../../review/evidence/noncore-review-20261005-n14/nc190-red.txt) 原文节选）：
@@ -275,14 +299,14 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
          config_types_promises_test.go:23: cluster_addrs: a:1, b:2 -> cluster=true addrs=["a:1" " b:2"], want Cluster [a:1 b:2]
      ```
 
-   - 修后：上述用例与 `…AcceptsTheBoolSpellingsItAlwaysAccepted`（`app/config_types_promises_test.go:46`，负对照：合法写法照常接受）、`…AcceptsDurationsWithUnits`（`:74`）通过。
-   - 复跑：`GOWORK=off go test -count=1 -run 'BoolSwitch|DurationWithoutAUnit|DurationsWithUnits|BoolSpellings|FrameworkBoolSwitch' ./app` 与 `./kit/mods ./kit/saga ./kit/redis` 同名用例。
+   - 修后：上述用例与 `…AcceptsTheBoolSpellingsItAlwaysAccepted`（`app/config_types_promises_test.go:45`，负对照：合法写法照常接受）、`…AcceptsDurationsWithUnits`（`:73`）通过。`5e72ca4d` 上仍在的：`TestValidateServiceConfigRejectsABoolSwitchThatIsNotABool`（`app/config_types_promises_test.go:27`）、`…RejectsADurationWithoutAUnit`（`:54`）、上面两条负对照、`TestStepBudgetDurationsRefuseValuesWithoutAUnit`（`kit/saga/config_types_promises_test.go:10`）、`TestClusterAddrsAcceptAYAMLListAndTrimEntries`（`kit/redis/config_types_promises_test.go:14`）；`TestServiceDurationsRefuseValuesWithoutAUnit` 随 `kit/mods.Duration` 删除，同一承诺由 `TestEveryKitModLoadsWhatItDeclares`（`kit/config_schema_promises_test.go:86`，逐键写错误类型）覆盖。
+   - 复跑：`GOWORK=off go test -count=1 -run 'BoolSwitch|DurationWithoutAUnit|DurationsWithUnits|BoolSpellings' ./app` 与 `-run 'WithoutAUnit|ClusterAddrs' ./kit/saga ./kit/redis`。
 7. **性能**：无（只在启动时读）。
 8. **未验证**：真实 Redis Cluster 下 YAML 列表 `cluster_addrs` 起服（外部 E08）。
 9. **review 检查点**：
-   - `ConfigBool` 是否仍接受 `1` / `0` / `"true"` / `True`（兼容承诺），并拒绝 `on` / `yes`？看 `app/config_values.go:30` 与 `config_types_promises_test.go:46`。
-   - `readSingletonSettings` 的错误是否在 `enabled` 判断之前返回（`app/singleton.go:171`）？若有人把 `if !enabled { return nil }` 移到前面，`singleton_on` 用例应变红。
-   - `RedisClusterAddrs` 的所有调用点是否都改了：`rg 'cluster_addrs' kit` 中不应再有 `GetString("redis.cluster_addrs")`。
+   - 严格布尔是否仍接受 `1` / `0` / `"true"` / `True`（兼容承诺），并拒绝 `on` / `yes`？看 `internal/configschema/parse.go:22` `ParseBool` 与 `app/config_types_promises_test.go:45`。
+   - 单实例锁：`singleton.enabled: on` 是否由声明检查点名报错，而不是在 `singletonConfig.ValidateConfig`（`app/singleton.go:146`）里因 `enabled` 读成 false 提前返回？`TestValidateServiceConfigRejectsABoolSwitchThatIsNotABool/singleton_on` 应保持绿。
+   - `redis.cluster_addrs` 只有一个声明（`kit/redis/redis_mod.go:45` `ClusterConfig`）：`rg 'cluster_addrs' kit app` 不应有直接读 viper 的写法（`TestFrameworkModsReadConfigOnlyThroughDeclarations` 同样会点名）。
 
 <a id="cfg-2"></a>
 ### CFG-2 框架配置一律严格读取（A4）
@@ -290,21 +314,22 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 [说明](guide-cfg-skill-noncore.md#cfg-2)
 
 1. **提交与版本**：`3e3350d5`（app + kit 严格读取，与 C1 同批）、`61fb0894`（DECISIONS-PENDING 标注）；后续登记新键：`7d49e54d`（B2 键）、`491aaf3b`（C6 `service_metrics.enabled`）、`2c1c7be7`（`ops.admin_timeout`）、`23e17d81`（O4）、`a6985cf3`（Mirror 第 5 步）、`db67b8ee`（O-M6-3）。首发 v1.20.2。
-2. **改动与符号**：
+2. **改动与符号**（A4 ② 的形态，`e6828e4f` 上的位置；**v1.23.0 由 CFG-14 取代**：登记表、`ConfigReader`、正则守卫全部删除，下表最后一列是 `5e72ca4d` 上的对应物）：
 
-   | 位置 | 职责 |
-   | --- | --- |
-   | `app/config_values.go:91` `ConfigInt`、`:103` `ConfigInt64` | 严格整数：YAML 整数、无小数部分的浮点、十进制字符串 |
-   | `app/config_values.go:135-172` `ConfigReader`（`NewConfigReader`、`Bool` / `Duration` / `Int` / `Int64`、`Err`） | 一次读多键，错误汇总；读失败的键返回零值 |
-   | `app/config_validation.go:255` `frameworkBoolKeys`、`:264` `frameworkDurationKeys`、`:304` `frameworkIntKeys` | 三份登记。发版提交上 17 / 99 / 79 个键；A4 方案写的是实施当时的 16 / 95 / 77（**文档与源码差异**：之后各批新增 `service_metrics.enabled`、`ops.admin_timeout`、`remote_entity.cached_max_staleness`、`remote_entity.mirror.shutdown_timeout`、`remote_entity.snapshot_l2_tombstone_wait_timeout`、`remote_entity.snapshot_interest_per_consumer`、`remote_entity.snapshot_l2_tombstone_wait_replicas`） |
-   | `app/config_validation.go:347` `checkFrameworkConfigTypes` | 按三份登记加 syncbus 三段与 `<service>.call_timeout` 后缀逐个严格读；与语义检查重复的同一条错误只报一次（`uniqueErrors`，`:76`） |
-   | kit 各 Mod | `dataengine`、`remoteentity`、`saga`、`nats`、`nest`、`syncbus`、`mongo`、`ops`、`etcd`、`statslog`、`mods.ResolvePersistenceEngine`、`service/platform`、`service/global/activity` 改用 `app.ConfigReader`，变量按约定叫 `read` |
+   | 位置（`e6828e4f`） | 职责 | `5e72ca4d` 上 |
+   | --- | --- | --- |
+   | `app/config_values.go:91` `ConfigInt`、`:103` `ConfigInt64` | 严格整数：YAML 整数、无小数部分的浮点、十进制字符串 | `app/config_values.go:28` / `:40` 保留为单键入口；解析在 `internal/configschema/parse.go:73` `ParseInt` |
+   | `app/config_values.go:135-172` `ConfigReader`（`NewConfigReader`、`Bool` / `Duration` / `Int` / `Int64`、`Err`） | 一次读多键，错误汇总；读失败的键返回零值 | 已删除；一次读全部键并汇总错误的是 `app.LoadConfig`（`app/config_schema.go:68`，`errors.Join`） |
+   | `app/config_validation.go:255` `frameworkBoolKeys`、`:264` `frameworkDurationKeys`、`:304` `frameworkIntKeys` | 三份登记。删除前 17 / 99 / 79 个键；A4 方案写的是实施当时的 16 / 95 / 77（**文档与源码差异**：之后各批新增 `service_metrics.enabled`、`ops.admin_timeout`、`remote_entity.cached_max_staleness`、`remote_entity.mirror.shutdown_timeout`、`remote_entity.snapshot_l2_tombstone_wait_timeout`、`remote_entity.snapshot_interest_per_consumer`、`remote_entity.snapshot_l2_tombstone_wait_replicas`） | 已删除；每个键由读它的 Mod 声明 |
+   | `app/config_validation.go:347` `checkFrameworkConfigTypes` | 按三份登记加 syncbus 三段与 `<service>.call_timeout` 后缀逐个严格读；与语义检查重复的同一条错误只报一次（`uniqueErrors`） | 已删除；启动检查是 `app/config_schema.go:85` `checkConfig`（合并声明后 `Schema.Check`），重复错误去重仍是 `uniqueErrors`（`app/config_validation.go:18`） |
+   | kit 各 Mod | `dataengine`、`remoteentity`、`saga`、`nats`、`nest`、`syncbus`、`mongo`、`ops`、`etcd`、`statslog`、`mods.ResolvePersistenceEngine`、`service/platform`、`service/global/activity` 改用 `app.ConfigReader`，变量按约定叫 `read` | 各 Mod 的配置结构体 + `app.LoadConfig`（迁移清单见 [A4 ① 方案 §6](../../feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)） |
 
-3. **不变量与守卫**（`app/config_strict_reads_promises_test.go`）：
-   - `TestFrameworkCodeDoesNotReadConfigLeniently`（`:140`）：app、kit 非测试源码与两份生成模板出现 `GetBool` / `GetDuration` / `GetInt*` / `GetUint*` / `GetFloat*` / `GetSizeInBytes` 即失败；例外只有 cobra 的 `Flags().` 与键 `sid`。
-   - `TestEveryFrameworkDurationAndIntKeyIsCheckedStrictly`（`:125`）：按读取形式（`GetX`、`ConfigX`、`read.X`、`mods.Duration`、syncbus `cfgX(cfg, read, …)`、player TCP `read.X(key + "…")`）扫出键，没登记就点名失败；扫到的读取少于 150 处时认为扫描模式失效、直接失败。
+3. **不变量与守卫**（A4 ② 时在 `app/config_strict_reads_promises_test.go`，该文件 v1.23.0 删除）：
+   - `TestFrameworkCodeDoesNotReadConfigLeniently`：app、kit 非测试源码与两份生成模板出现 `GetBool` / `GetDuration` / `GetInt*` / `GetUint*` / `GetFloat*` / `GetSizeInBytes` 即失败；例外只有 cobra 的 `Flags().` 与键 `sid`。
+   - `TestEveryFrameworkDurationAndIntKeyIsCheckedStrictly`：按读取形式扫出键，没登记就点名失败；扫到的读取少于 150 处时认为扫描模式失效、直接失败。
    - 守卫做过变异：往 kit 加一处 `cfg.GetBool("stats_log.new_switch")`，两条守卫都点名失败（见 NC-192 记录）。
-4. **控制流**：同 CFG-1；Mod Init 里 `read := app.NewConfigReader(cfg)` → 读全部键 → 语义检查前 `if err := read.Err(); err != nil { return … }`。
+   - v1.23.0 起由 CFG-14 的 `TestFrameworkModsReadConfigOnlyThroughDeclarations`、`TestEveryDeclaredConfigFieldIsRead`（`app/config_declarations_promises_test.go:171`、`:201`）与 `TestEveryKitModLoadsWhatItDeclares`（`kit/config_schema_promises_test.go:86`）取代：不是“读取点都在清单里”，而是“读配置只能经声明”。
+4. **控制流**：同 CFG-1；A4 ② 时 Mod Init 里 `read := app.NewConfigReader(cfg)` → 读全部键 → `read.Err()`；v1.23.0 起是 `app.LoadConfig(cfg, &m.cfg)`。
 5. **失败处理**：启动校验一次报全；Mod Init 用各自的错误前缀。
 6. **测试**：
    - 修前红（[a4-red.txt](../../bugfix/evidence/a4-config-20261005/a4-red.txt)、[kit-red.txt](../../bugfix/evidence/a4-config-20261005/kit-red.txt) 节选）：
@@ -324,15 +349,14 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
      （共 6 个子用例同形）
      ```
 
-     说明：修前红用例文件名是 `a4_red_test.go`（临时文件），入库后同一断言在 `app/config_strict_reads_promises_test.go:20` `TestValidateServiceConfigRejectsFrameworkValuesOfTheWrongType`；kit 侧是 `kit/strict_config_promises_test.go:21`。
-   - 修后：上述用例、`TestConfigIntAcceptsWholeNumbersOnly`（`:82`）、`TestConfigReaderReportsEveryBadKeyAtOnce`（`:105`）、负对照 `TestValidateServiceConfigAcceptsFrameworkValuesWrittenCorrectly`（`:48`）通过；生成工程三份配置（game-demo 与 CI full 场景）在严格校验下全部通过。
-   - 复跑：`GOWORK=off go test -count=1 ./app ./kit`；变更影响面 `go test -race -count=3 ./app ./kit/...`。
+     说明：修前红用例文件名是 `a4_red_test.go`（临时文件），入库后 app 侧断言在 `app/config_strict_reads_promises_test.go` `TestValidateServiceConfigRejectsFrameworkValuesOfTheWrongType`（该文件 v1.23.0 随登记表删除）；kit 侧是 `kit/strict_config_promises_test.go:21` `TestKitModsRefuseConfigValuesOfTheWrongType`（`5e72ca4d` 上仍在，守“直接装配 Mod 的调用方同样拿到错误”）。
+   - 修后：上述用例、`TestConfigIntAcceptsWholeNumbersOnly`、`TestConfigReaderReportsEveryBadKeyAtOnce`、负对照 `TestValidateServiceConfigAcceptsFrameworkValuesWrittenCorrectly` 通过；生成工程三份配置（game-demo 与 CI full 场景）在严格校验下全部通过。`5e72ca4d` 上：`TestConfigIntAcceptsWholeNumbersOnly` 在 `app/config_declarations_promises_test.go:30`；`TestConfigReaderReportsEveryBadKeyAtOnce` 随 `ConfigReader` 删除，“一次报全”由 `TestCheckConfigReportsEveryModsErrorsAtOnce`（`:80`）与 `TestDecodeReportsEveryBadKeyByName`（`internal/configschema/schema_test.go:76`）覆盖；app 侧“写对的照常接受”由 `TestValidateServiceConfigAcceptsMinimalConfig`（`app/config_validation_test.go:9`）与 `TestProductionServiceConfigBaselineIsValid`（`:29`）覆盖。
+   - 复跑：`GOWORK=off go test -count=1 ./app ./kit ./internal/configschema`；变更影响面 `go test -race -count=3 ./app ./kit/...`。
 7. **性能**：无。
 8. **未验证**：无。真实依赖上的 Init 路径已由之后每版的发版矩阵覆盖（v1.20.2 / v1.21.0 / v1.22.0 各 21/21，`kit/dataengine`、`remoteentity` 的 `TestReal*` 用例经严格读取装配 Mod，见 [交接 §7](../../CORE-OPTIMIZATION-HANDOFF.md) 各版条目）。
 9. **review 检查点**：
-   - 发版提交上 `TestFrameworkCodeDoesNotReadConfigLeniently` 的例外是否只剩 `sid` 与 cobra flags（`:149-151`）？
-   - 新增的配置键（例如 v1.23.0 的 `snapshot_l2_tombstone_wait_*`）是否既在 kit 用 `read.X` 读、又出现在登记表？可以临时删掉登记表里的一项，`TestEveryFrameworkDurationAndIntKeyIsCheckedStrictly` 应点名它。
-   - `ConfigInt` 是否拒绝 `1.5`、`8k`、`10s`、`true`，接受 `1e3` 与 `"42"`？看 `TestConfigIntAcceptsWholeNumbersOnly`。
+   - 本条的守卫已被 CFG-14 取代，检查点并入 CFG-14：确认 `5e72ca4d` 上 `rg 'frameworkBoolKeys|NewConfigReader|checkFrameworkConfigTypes' app kit` 只剩注释与守卫里的字符串（`app/config_declarations_promises_test.go:11` 的“旧形态”注释、`internal/configschema/guard.go:123` 把 `NewConfigReader` 当作被禁的读取形式）。
+   - 严格整数是否仍拒绝 `1.5`、`8k`、`10s`、`true`，接受 `1e3` 与 `"42"`？看 `TestConfigIntAcceptsWholeNumbersOnly`（`app/config_declarations_promises_test.go:30`）与 `internal/configschema/parse.go:73`。
 
 <a id="cfg-3"></a>
 ### CFG-3 A4 留项：kit/redis 三个整数键
@@ -340,7 +364,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 [说明](guide-cfg-skill-noncore.md#cfg-3)
 
 1. **提交与版本**：`5df60765`（分支 `c4c6`）、`cb3e2549`（DECISIONS-PENDING 标注）。首发 v1.20.2。
-2. **改动**：`kit/redis/redis_mod.go:58` `redisConfig` 返回 `(*fredis.Config, error)`，`:59` 起 `read := app.NewConfigReader(cfg)` 读 `redis.db` / `pool_size` / `min_idle_conns`；Redis Mod 与 `kitredis.SingletonStore` 共用。守卫 `TestFrameworkCodeDoesNotReadConfigLeniently` 删掉“文件 + 键”的三项放行。
+2. **改动**：`e6828e4f` 上 `kit/redis/redis_mod.go:58` `redisConfig` 返回 `(*fredis.Config, error)`，`:59` 起 `read := app.NewConfigReader(cfg)` 读 `redis.db` / `pool_size` / `min_idle_conns`；Redis Mod 与 `kitredis.SingletonStore` 共用。守卫 `TestFrameworkCodeDoesNotReadConfigLeniently` 删掉“文件 + 键”的三项放行。`5e72ca4d` 上：三个键是 `kit/redis/redis_mod.go:51` `Config` 的字段（`min:"0"`），`redisConfig`（`:101`）改为 `app.LoadConfig(cfg, &settings)`（`:103`），仍由 Redis Mod 与 `SingletonStore` 共用。
 3. **不变量**：同 CFG-2。
 4. **控制流**：`RedisMod.Init` / `SingletonStore` → `redisConfig` → 错误 `redis mod: config: redis.db …`。
 5. **失败处理**：Init 返回错误。
@@ -349,7 +373,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
    - 修后：`TestRedisIntegerKeysAreReadStrictly`（`kit/redis/config_types_promises_test.go:38`，三键 × 三种坏值，Mod 与 SingletonStore 都拒绝；负对照：合法的 2 / 16 / 3 读对）通过；`go test -race -count=3 ./kit/redis ./app` 与根包通过。
 7. **性能**：无。
 8. **未验证**：无。
-9. **review 检查点**：`rg 'GetInt\(' kit/redis` 应无结果；`SingletonStore` 是否也走 `redisConfig`（两个独立小客户端都从同一份 `redis.*` 建）。
+9. **review 检查点**：`rg 'GetInt\(' kit/redis` 应无结果；`SingletonStore` 是否也走 `redisConfig`（两个独立小客户端都从同一份 `redis.*` 声明建；`TestRedisIntegerKeysAreReadStrictly` 在 `kit/redis/config_types_promises_test.go:38` 对两者都断言拒绝）。
 
 <a id="cfg-4"></a>
 ### CFG-4 A4 留项：生成的 player TCP 与 RPC 客户端严格读取
@@ -361,21 +385,21 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 
    | 位置 | 职责 |
    | --- | --- |
-   | `codegen/internal/roost/render_player_tcp.go:239` `configFromViper`（模板内） | `read := app.NewConfigReader(cfg)`（`:243`）读 `player_access.tcp.*` 与 `nest.request_timeout`，最后 `read.Err()` |
-   | `codegen/internal/servicerpc/template.go:519` | `app.ConfigDuration(cfg, "{{.ServiceType}}.call_timeout")` |
+   | `codegen/internal/roost/render_player_tcp.go:239` `configFromViper`（模板内，`e6828e4f`） | `read := app.NewConfigReader(cfg)`（`:243`）读 `player_access.tcp.*` 与 `nest.request_timeout`，最后 `read.Err()`。`5e72ca4d` 上 `configFromViper` 在 `:234`，改为 `var settings tcpConfig` + `app.LoadConfig`（`:236-237`），`tcpConfig` 由生成器的 `playerTCPDeclaration`（`codegen/internal/roost/player_tcp_config.go:31`）渲染，Mod 的 `ConfigSchema` 在 `:258` |
+   | `codegen/internal/servicerpc/template.go:519`（`e6828e4f`） | `app.ConfigDuration(cfg, "{{.ServiceType}}.call_timeout")`。`5e72ca4d` 上是模板里的 `clientModConfig`（`codegen/internal/servicerpc/template.go:505`）+ `app.LoadConfig` |
    | `kit/service/*_rpc_assembly_gen.go`（九份） | `go generate ./...` 重生成 |
-   | `app/config_strict_reads_promises_test.go` `generatedConfigTemplates` | 两份模板纳入扫描；`playerTCPReadPattern` 改认 `read.X(key + "…")` |
+   | `app/config_strict_reads_promises_test.go` `generatedConfigTemplates`（v1.23.0 删除） | 两份模板纳入扫描；`playerTCPReadPattern` 改认 `read.X(key + "…")`。v1.23.0 起两份模板由 `TestFrameworkModsReadConfigOnlyThroughDeclarations` 按文本检查（`app/config_declarations_promises_test.go:169` `templateConfigRead`） |
 
 3. **不变量**：生成进工程的配置读取与框架同一规则；守卫扫描模板源码，所以生成物不再靠登记表兜底。
 4. **控制流**：生成工程 `Mod.Init` → `configFromViper` → `validateConfig`（CFG-13）。
 5. **失败处理**：`max_handshake_bytes` / `max_payload_bytes` 先按 int 读，负数或超过 16 MiB 点名拒绝，再转 uint32。
 6. **测试**：
    - 修前红（提交说明原文）：“enabled: on、max_payload_bytes: 8k、max_handshake_bytes: -1、idle_timeout: 90、handshake_timeout: soon、nest.request_timeout: 7 六项 Init returned <nil>（读成 false / 默认 / 90ns / 7ns），max_connections: 1.5 只报不点名的 safe bounds；mail.call_timeout: 5 / soon 两项 error = <nil>。”
-   - 修后：生成用例 `TestConfigValuesOfTheWrongTypeAreRefusedByName`（模板内，`render_player_tcp.go:1404`）7 项全部点名拒绝；负对照：合法字符串写法（`enabled: "true"`、`max_payload_bytes: "65536"`）照常读取；kit/service/mail `call_timeout` 5 / soon 拒绝、2s 读对。
+   - 修后：生成用例 `TestConfigValuesOfTheWrongTypeAreRefusedByName`（模板内，`e6828e4f` 的 `render_player_tcp.go:1404`，`5e72ca4d` 上 `:1388`）7 项全部点名拒绝；负对照：合法字符串写法（`enabled: "true"`、`max_payload_bytes: "65536"`）照常读取；kit/service/mail `call_timeout` 5 / soon 拒绝、2s 读对。
    - 复跑：`GOWORK=off go test -count=1 ./codegen/... ./app ./kit/service/...`；生成 game-demo（`go mod edit -replace` 到本仓）后 `go test ./internal/access/player/tcp/`。
 7. **性能**：无。
 8. **未验证**：无额外项；已生成工程不迁移。
-9. **review 检查点**：`manifest.go:83` 的 `minimumVersions.Core` 是否 ≥ v1.20.2（发版提交上是 v1.21.0，因 CFG-7 再次上调）；`.github/workflows/framework-compat.yml` minimum 格与 `codegen/ci/framework-release.yaml` 是否同步。
+9. **review 检查点**：`codegen/internal/roost/manifest.go:83` 的 `minimumVersions.Core`：冻结点 `5e72ca4d` 上是 v1.21.0（CFG-7 上调），CFG-14 / 15 之后生成代码需要 v1.23.0——这是交接规格写明的“发版必做”（打 tag 时与 `.github/workflows/framework-compat.yml` minimum 行、`codegen/ci/framework-release.yaml` 一起改），review 时核对发版提交上三处一致且为 v1.23.0。
 
 <a id="cfg-5"></a>
 ### CFG-5 生产校验只查有读取方的设置（C1 / NC-192）
@@ -383,9 +407,10 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 [说明](guide-cfg-skill-noncore.md#cfg-5)
 
 1. **提交与版本**：`3e3350d5`（与 A4 同批）、`61fb0894`。首发 v1.20.2。
-2. **改动**：`app/config_validation.go:96` `validateProductionServiceConfig` 只保留：`validateProductionOpsExposure`（`:173`）、`validateProductionLogicOffset`（CLK 主题，后加）、五类服务的 `redis.addr`、`validateProductionSecret`（`:162`，account / platform 密钥）、`validateProductionAdminGateway`（`:120`）。删掉 `app.go` 对 `player_protocol.rate_limit.enabled` 的 `SetDefault`。USER_GUIDE §10 新增“`env: production` 校验什么”。
-3. **不变量**：生产校验的每一项都有运行时读取方。守卫：`TestValidateServiceConfigDoesNotRequireSwitchesNothingReads`（`app/config_validation_test.go:120`）；生成工程侧 `TestGeneratedConfigsPassStrictAndProductionValidation`（`codegen/internal/roost/generated_config_validation_promises_test.go:155`）在生成的 game-demo 里用真实 `app.ValidateServiceConfig` 读开发配置、生产示例、Secret 示例（后两者加 `env: production`）。
-4. **控制流**：`ValidateServiceConfig` → `isProductionServiceConfig`（`:204`）→ 上述检查。
+2. **改动**（`e6828e4f` 上的位置）：`app/config_validation.go:96` `validateProductionServiceConfig` 只保留：`validateProductionOpsExposure`（`:173`）、`validateProductionLogicOffset`（CLK 主题，后加）、五类服务的 `redis.addr`、`validateProductionSecret`（`:162`，account / platform 密钥）、`validateProductionAdminGateway`（`:120`）。删掉 `app.go` 对 `player_protocol.rate_limit.enabled` 的 `SetDefault`。USER_GUIDE §10 新增“`env: production` 校验什么”。
+   **v1.23.0（CFG-14）**：`validateProductionServiceConfig` 与四个 `validateProduction*` 函数删除，生产规则跟着键的主人走——密钥是声明上的 `secret:"true"`（`internal/configschema` 检查），ops 端点不绑公网在 `kit/ops/ops_mod.go:82` `config.ValidateConfig`（`ops.allow_public_addr` 声明在 `:71`），Redis 地址在 `kit/redis/redis_mod.go:63` `Config.ValidateConfig`（`redis.addr` 或 `redis.cluster_addrs`），业务时钟偏移在 `app/config_schema.go:234` `appConfig.ValidateConfig`；`admin_gateway.*` 的生产检查删除（仓内无读取方）。是否生产由 `app/config_schema.go:186` `isProductionServiceConfig` 判断。
+3. **不变量**：生产校验的每一项都有运行时读取方（v1.23.0 起更强：规则写在读这个键的声明上，没有读取方的键无法声明——“声明了没读”守卫）。守卫：A4 ② 时 `TestValidateServiceConfigDoesNotRequireSwitchesNothingReads`（`e6828e4f` 的 `app/config_validation_test.go:120`），`5e72ca4d` 上是 `TestProductionDoesNotRequireSwitchesNothingReads`（`kit/config_schema_promises_test.go:217`）；生成工程侧 `TestGeneratedConfigsPassStrictAndProductionValidation`（`codegen/internal/roost/generated_config_validation_promises_test.go:161`）在生成的 game-demo 里用真实 `app.ValidateServiceConfig` 读开发配置、生产示例、Secret 示例（后两者加 `env: production`）。
+4. **控制流**：A4 ② 时 `ValidateServiceConfig` → `isProductionServiceConfig` → 上述检查；v1.23.0 起 `checkConfig` 合并声明 → 每个声明按 `production` 检查 `secret` 与各自的 `ValidateConfig`。
 5. **失败处理**：缺项汇总报错，进程不启动。
 6. **测试**：
    - 修前红（[c1-red.txt](../../bugfix/evidence/a4-config-20261005/c1-red.txt) 节选）：
@@ -402,11 +427,11 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
          config: production global requires global.redis_required=true
      ```
 
-   - 修后：两条通过；负对照 `TestValidateServiceConfigRejectsProductionServicesWithoutRedis`（`:141`）与 ops 暴露、密钥拒绝用例仍通过。原先断言无效键的用例按新契约改写。
-   - 复跑：`GOWORK=off go test -count=1 -run 'Production' ./app`、`go test -count=1 -run TestGeneratedConfigsPassStrictAndProductionValidation ./codegen/internal/roost`（会生成工程，较慢）。
+   - 修后：两条通过；负对照 `TestValidateServiceConfigRejectsProductionServicesWithoutRedis`（`e6828e4f` 的 `app/config_validation_test.go:141`）与 ops 暴露、密钥拒绝用例仍通过。原先断言无效键的用例按新契约改写。`5e72ca4d` 上这几条随规则搬到 kit：`TestProductionRedisNeedsAnAddrOrClusterSeeds`（`kit/redis/config_types_promises_test.go:72`）、`TestProductionRefusesDevSecrets`（`kit/config_schema_promises_test.go:173`）、`TestProductionRefusesAPublicOpsAddrUnlessDeclared`（`:194`）。
+   - 复跑：`GOWORK=off go test -count=1 -run 'Production' ./app ./kit ./kit/redis`、`go test -count=1 -run TestGeneratedConfigsPassStrictAndProductionValidation ./codegen/internal/roost`（会生成工程，较慢）。
 7. **性能**：无。
 8. **未验证**：无。
-9. **review 检查点**：`validateProductionServiceConfig` 每个检查的键都能在非测试源码里找到读取点（`rg '"redis.addr"' kit app`）；新增生产要求时应同时有读取方。
+9. **review 检查点**：`5e72ca4d` 上 `rg 'validateProduction' app` 应无结果；每条生产规则都在读那个键的声明上（`secret` tag 或该配置的 `ValidateConfig`），新增生产要求时写在键的主人那里。
 
 <a id="cfg-6"></a>
 ### CFG-6 tablegen `ref` 与 `-check`（NC-75）
@@ -455,7 +480,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
    | `configdata/auto.go:385-399` | `cfg` 标签 `required` / `unique` / `min=` / `enum=` / `ref=` 解析成同一组 `Rule`；auto 自己的 `validateRefs` 删除 |
    | `codegen/internal/tablegen/main.go:559` `metaRules`、`:725` `rule.Validate()`、`:796` / `:810` 生成 `Rules: []configdata.FieldRule{…}`、`:845` `<Type>Table()` | 一个 schema 标签同时驱动 CSV 转换、`-check` 与生成 loader |
    | `codegen/internal/cfggen/main.go` | `required` 独立，新增 `unique` / `min` / `enum` |
-   | `dependency_boundary_test.go:204-227` `sharedConfigRules` / `TestSharedConfigRulesStayALeaf`；`:257` / `:273` 边界例外 | codegen 只允许 import `configdata/rules`，该包只能依赖标准库 |
+   | `dependency_boundary_test.go:205` `sharedConfigRules`、`:215` `TestSharedConfigRulesStayALeaf`（`:216` 起同时检查 `:210` `sharedConfigSchema`，A4 ① 加入）；`:192` 层规则例外、`:269` / `:285` 拒绝 / 放行用例 | codegen 只允许 import `configdata/rules` 与 `internal/configschema`，两个包都只能依赖标准库 |
 
 3. **不变量**：
    - 一份规则声明、一个检查器：生成期（tablegen CSV 转换、`-check`）与运行时（configdata Load / Reload）调用同一个 `rules.Check`。守卫：`TestOneTagDrivesTheGenerationCheckAndTheGeneratedLoader`（`codegen/internal/tablegen/rules_single_source_promises_test.go:17`）改一个标签，生成期与 loader 同时变。
@@ -491,12 +516,12 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
    - 端到端（[e2e-reload.txt](../../feature/evidence/b10-c2-20261006/e2e-reload.txt)）：生成 game-demo、隔离环境起 global + game，`gm.config.reload` 删掉 spawn 的 template → `configdata: table spawn row 1 (key 1) field template: required: missing or null`；hp 0 → `min`；template null → `required`；三次失败后版本仍 2、存活仍 4，`configdata_reload_total{result="failed"} 3`。修前同一场景见 N07 第二批 H2e（reload 被接受、按 template 0 刷怪，日志 0 行）。
    - 复跑：`GOWORK=off go test -race -count=3 ./configdata/... ./kit/configdata/ ./codegen/internal/tablegen/ ./codegen/internal/cfggen/`；`ROOST_CORE_DIR=$PWD sh codegen/scripts/tablegen-runtime.sh -race`；`ROOST_CORE_DIR=$PWD sh codegen/scripts/cfggen-golden-runtime.sh -race`；根包 `go test -count=1 .`。
 7. **性能**：每次加载多解析一次原始行（只在加载 / 热更）；未做基准。
-8. **未验证**：无。ref 只在加载时查是 B10 决定的分层（“规则统一由运行时加载层强制，生成期检查只作提前反馈”，DECISIONS-PENDING 第四轮 B10 行）；两种标签方言合一是 B10 §2.4 评估后列的后续工作，不是待验证项。
+8. **未验证**：无。ref 只在加载时查是 B10 决定的分层（“规则统一由运行时加载层强制，生成期检查只作提前反馈”，DECISIONS-PENDING 第四轮 B10 行）；两种标签方言是否合一，第十三轮维护者选 A（保持两条管线、写明分工，CFG-16），不是待验证项。
 9. **review 检查点**：
    - `rules.Check` 是否对“键缺失”与“值为 null”给出同一 `required` 错误、对“值为 0”不报 required（看 `rules.go:221` 起的 `check` 与 `isNull`）。
    - `resolveRules` 是否在注册时拒绝 `Min` 用在字符串字段、`Unique` 用在对象上（`fieldrules.go:33`）。
    - tablegen 生成的 loader 里是否还有手写 ref 循环（`rg ValidateTable codegen/internal/tablegen/main.go` 只应剩用户自定义钩子相关）。
-   - `codegen` 下除 `configdata/rules` 外是否没有 import 任何 core 包：跑根包边界测试。
+   - `codegen` 下除 `configdata/rules` 与 `internal/configschema` 外是否没有 import 任何 core 包：跑根包边界测试。
 
 <a id="cfg-8"></a>
 ### CFG-8 热更失败与回滚可见（C2）
@@ -512,7 +537,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
    | `configdata/configdata.go:914` `ReloadOutcome`、`:936` `Reverted`、`:943` `OnReloadOutcome` | 每次 Load / Reload / Rollback 恰好一个结果 |
    | `configdata/configdata.go:967` `report` | 写日志（`:983` rolled back、`:985` applied、`:987` reverted、`:990` failed）并通知订阅者 |
    | `configdata/configdata.go:860` `ReloadWithReason`、`:1106` `DryRun`、`:1126` `Rollback` | 各入口都经 `report` |
-   | `kit/configdata/configdata.go:63-81` | 订阅 outcome 记 `configdata.reload.total{result}`、`configdata.rollback.total{trigger}`、`configdata.version`；不再挂 ReloadHook |
+   | `kit/configdata/configdata.go:72-90` | 订阅 outcome 记 `configdata.reload.total{result}`、`configdata.rollback.total{trigger}`、`configdata.version`；不再挂 ReloadHook |
 
 3. **不变量**：一次尝试恰好一个 outcome、一条日志、至多一次 `reload.total` 计数；标签只有 `result` / `trigger` 两种低基数值。守卫：`TestEveryReloadReportsOneOutcome`（`configdata/field_rules_promises_test.go:151`）、`TestFailedReloadAndRollbackAreCountedAndLogged`（`kit/configdata/reload_visibility_promises_test.go:56`）。
 4. **控制流**：见 CFG-7 的流程图；`report` 在持锁状态下复制订阅者列表后调用。
@@ -647,8 +672,8 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 [说明](guide-cfg-skill-noncore.md#cfg-12)
 
 1. **提交与版本**：`fcc78ad0`（收尾第 2 批，分支 `cb2`，基线 `8a292a5a`）、`94548913`（标注）。首发 v1.23.0（本版）。
-2. **改动**：`codegen/internal/roost/catalog.go:71`（`remote_entity` 段模板，五个键与中文注释）；`codegen/internal/roost/render.go:646-656` `streamReplicasLine`（只替换独占一行、键名恰为 `replicas: 1` 的行）。
-3. **不变量**：生成值等于 core `remoteentity.DefaultConfig()` / kit 缺省；生产化不改墓碑 `WAIT` 副本数。守卫：`TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys`（`codegen/internal/roost/remote_entity_config_keys_promises_test.go:17`）；`TestGeneratedConfigsPassStrictAndProductionValidation`（`generated_config_validation_promises_test.go:155`）在生成工程里注入 `a4_config_test.go`，核对五键已设置、取值一致、`ValidateServiceConfig` 通过、`RemoteEntityMod.Init` 与 `RemoteMirrorMod.Init` 接受。
+2. **改动**：`fcc78ad0` 时是 `codegen/internal/roost/catalog.go:71`（`remote_entity` 段的手写模板字符串，五个键与中文注释）；`codegen/internal/roost/render.go:651` `streamReplicasLine`（只替换独占一行、键名恰为 `replicas: 1` 的行，`:658` 在 `productionizeConfig` 里使用）。**v1.23.0 的 CFG-14 之后**手写模板删除：配置段由 `catalog.go:24` `modConfigSection` 从 `kitconfig_gen.go` 快照渲染，五个键的写入值来自 `kit/remoteentity/config.go:25`（`cached_max_staleness`）、`:29`（`snapshot_l2_tombstone_wait_replicas`）、`:30`（`snapshot_l2_tombstone_wait_timeout`）、`:34`（`snapshot_interest_per_consumer`）与 `:142`（`mirror.shutdown_timeout`）声明上的 `example`。
+3. **不变量**：生成值等于 core `remoteentity.DefaultConfig()` / kit 缺省；生产化不改墓碑 `WAIT` 副本数。守卫：`TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys`（`codegen/internal/roost/remote_entity_config_keys_promises_test.go:17`）；`TestGeneratedConfigsPassStrictAndProductionValidation`（`generated_config_validation_promises_test.go:161`）在生成工程里注入 `a4_config_test.go`，核对五键已设置、取值一致、`ValidateServiceConfig` 通过、`RemoteEntityMod.Init` 与 `RemoteMirrorMod.Init` 接受。
 4. **控制流**：生成器拼接 Mod 配置段 → `productionizeConfig`（生产示例 / Secret 示例）。
 5. **失败处理**：无运行时变化。
 6. **测试**：
@@ -667,7 +692,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
    - 复跑：`GOWORK=off go test -count=1 -run 'RemoteEntitySection|GeneratedConfigsPass' ./codegen/internal/roost`。
 7. **性能**：无。
 8. **未验证**：无。GitHub framework-compat 在 `e6828e4f` 上全部通过（run `37461843085`：minimum / released / source-head × minimal / demo / full 九格与 `codegen-network`）。
-9. **review 检查点**：`streamReplicasLine` 的正则 `(?m)^([ \t]*)replicas: 1$` 是否不会命中 `snapshot_l2_tombstone_wait_replicas: 1`（行首锚定 + 键名恰为 `replicas`）；五个键的缺省值是否仍与 `remoteentity.DefaultConfig()` 一致（若以后改缺省，生成工程测试会报差异）。
+9. **review 检查点**：`streamReplicasLine` 的正则 `(?m)^([ \t]*)replicas: 1$` 是否不会命中 `snapshot_l2_tombstone_wait_replicas: 1`（行首锚定 + 键名恰为 `replicas`）；五个键声明上的 `default` / `example` 是否仍与 `remoteentity.DefaultConfig()` 一致——`TestRemoteEntityDeclaredDefaultsMatchCoreDefaults`（`kit/remoteentity/config_declaration_promises_test.go:14`）守 default，`TestKitConfigSchemasMatchKitDeclarations`（`codegen/internal/roost/config_declarations_promises_test.go:23`）守生成器快照与 kit 声明一致。
 
 <a id="cfg-13"></a>
 ### CFG-13 生成 TCP 越界报错逐条点名（A9）
@@ -675,8 +700,8 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 [说明](guide-cfg-skill-noncore.md#cfg-13)
 
 1. **提交与版本**：`fcc78ad0`、`94548913`。首发 v1.23.0（本版）。
-2. **改动**：`codegen/internal/roost/render_player_tcp.go:288-349` `validateConfig`（模板内）：逐条检查，`refuse(...)` 收集，`errors.Join` 一次报全；`:312` 一带是“受约束键”表（`max_handshakes`、`max_connections_per_ip` 不超过 `max_connections`），`:345-347` 是 `login_timeout` 与 `dispatch_timeout` 的关系。
-3. **不变量**：接受 / 拒绝的边界不变，只改报错。守卫：生成用例 `TestAnOutOfBoundsSettingIsRefusedByName`（`render_player_tcp.go:1709`，10 个子用例，如 `:1720` handshakes_above_connections、`:1725` login_above_dispatch）；`TestConfigValuesOfTheWrongTypeAreRefusedByName`、`TestServerRejectsInvalidConstruction` 不变（负对照：缺省配置仍被接受）。
+2. **改动**：`codegen/internal/roost/render_player_tcp.go:263-324` `validateConfig`（模板内）：逐条检查，`refuse(...)` 收集，`errors.Join` 一次报全；`:287` 一带是“受约束键”表（`max_handshakes`、`max_connections_per_ip` 不超过 `max_connections`），`:320-322` 是 `login_timeout` 与 `dispatch_timeout` 的关系。
+3. **不变量**：接受 / 拒绝的边界不变，只改报错。守卫：生成用例 `TestAnOutOfBoundsSettingIsRefusedByName`（`render_player_tcp.go:1693`，10 个子用例，如 `:1704` handshakes_above_connections、`:1709` login_above_dispatch）；`TestConfigValuesOfTheWrongTypeAreRefusedByName`、`TestServerRejectsInvalidConstruction` 不变（负对照：缺省配置仍被接受）。
 4. **控制流**：`configFromViper`（CFG-4）→ `validateConfig`。
 5. **失败处理**：`max_connections` 本身不合法时不再报关系类错误，免得一条错因生出三条。
 6. **测试**：
@@ -695,6 +720,140 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 8. **未验证**：无。
 9. **review 检查点**：错误里每条是否都带 `player_access.tcp.` 前缀与当前值；关系类错误是否只在被约束键本身合法时报出。
 
+<a id="cfg-14"></a>
+### CFG-14 每个 Mod 声明自己的配置（A4 ①，RR-20261006-38）
+
+[说明](guide-cfg-skill-noncore.md#cfg-14)
+
+1. **提交与版本**：`d1226825`（实施，分支 `a4s`，基线 `66d72a33`，rebase 到 `b839b77f`；同提交修 RR-20261006-38）、`82dfe672`（DECISIONS 第十三轮 A4 ① 行补提交号）、`f18f6f42`（第十三轮记录“配置声明选 A”）。首发 v1.23.0（本版）。
+2. **改动与符号**（`5e72ca4d`）：
+
+   | 位置 | 职责 |
+   | --- | --- |
+   | `internal/configschema/schema.go:40` `Key`、`:63` `Schema`、`:70` `Validator`、`:81` `MustOf` / `:90` `Of`、`:296` `Merge` | tag → 键表的唯一解析；`Merge` 合并多份声明，同一键声明不同即报错 |
+   | `internal/configschema/check.go:23` `Decode`、`:299` `Schema.Check`、`:350` `Schema.Undeclared` | 按声明读出（取 default、检查类型 / 范围 / 枚举 / 必填 / 生产密钥，再调 `ValidateConfig`）；启动检查；doctor 用的“未声明键” |
+   | `internal/configschema/parse.go:22` `ParseBool`、`:42` `ParseDuration`、`:73` `ParseInt`、`:136` `ParseStrings` | 严格类型解析（自 `app/config_values.go` 移入，规则与 A4 ② 相同） |
+   | `internal/configschema/yaml.go:10` `StarterYAML`、`:24` `ReferenceYAML` | 生成器与 `--print-config` 用的 YAML 渲染 |
+   | `app/config_schema.go:32` `ConfigSchema`（类型别名）、`:43` `ModConfigSchema`、`:64` `SchemaOf`、`:68` `LoadConfig`、`:77` `CheckConfig`、`:85` `checkConfig`、`:112` `CheckServiceConfig`、`:118` `ServiceConfigSchema` | app 对外的声明 API；`checkConfig` 合并声明并一次报全（`uniqueErrors` 去重） |
+   | `app/config_schema.go:203` `appConfig`、`:234` `ValidateConfig`；`:197` `ServiceIdentity`；`app/singleton.go:123` `singletonConfig` | App 自己读的键（`sid`、`server_type`、`env`、`log.*`、`time.logic_offset`、`metrics.*`、`shutdown.total_timeout`、`singleton.*`） |
+   | `app/app.go:108-110` | `--check-config` / `--print-config` / `--print-config-schema`（后者见 CFG-15） |
+   | kit 全部 Mod | 各自的配置结构体 + `ConfigSchema()` + `app.LoadConfig`（例：`kit/dataengine/mod.go:171` / `:175`、`kit/redis/redis_mod.go:51` `Config` / `:45` `ClusterConfig`、`kit/ops/ops_mod.go:82` `ValidateConfig`、`kit/saga/config.go:14` `stepBudgetConfig`）；迁移清单见[方案 §6](../../feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md) |
+   | `kit/internal/configschemagen/main.go:50` `groups`、`:115` `render` | 把 app 与 kit 各 Mod 的声明按生成器认识的单元分组，写出 `codegen/internal/roost/kitconfig_gen.go:9` `kitConfigSchemas`（`go:generate` 在 `catalog.go`） |
+   | `codegen/internal/roost/catalog.go:24` `modConfigSection`、`:30` `frameworkConfigSection` | 配置段从快照渲染（有 `example` 的键写成生效行，其余写成注释） |
+   | `codegen/internal/roost/player_tcp_config.go:31` `playerTCPDeclaration` | 生成器里的 Go 类型，渲染成生成的 `tcpConfig`；`add transport tcp`、参考配置、doctor 都从它来 |
+   | `codegen/internal/servicerpc/template.go:505` `clientModConfig` | RPC 客户端 Mod 的声明（模板内） |
+   | `codegen/internal/roost/config_schema_doctor.go:179` `checkConfigDeclarations`、`:243` `checkServiceConfigText` | doctor `config-schema:<服务>` |
+   | `codegen/internal/roost/shutdown_budget.go:229` `renderShutdownConfig` | RR-38：`shutdown:` 段以 `total_timeout` 结尾，不再写 `serve_wait_timeout` |
+   | `dependency_boundary_test.go:210` `sharedConfigSchema` | codegen 允许 import 的第二个叶子包 |
+
+3. **不变量与守卫**：
+   - 读配置只经声明：`TestFrameworkModsReadConfigOnlyThroughDeclarations`（`app/config_declarations_promises_test.go:171`）用 `go/ast` 扫 app、kit 非测试源码，对 `*viper.Viper` 的任何读方法（`Get*`、`IsSet`、`AllKeys`、`UnmarshalKey`、`Sub` …）或 `app.Config*` 单键读取即失败；两份生成模板按文本检查（`:169` `templateConfigRead`）。唯一例外是 app 的 viper 适配器与单键读取本身。
+   - 声明了就要读：`TestEveryDeclaredConfigFieldIsRead`（`:201`）——带 `config` tag 的字段必须在本包非测试代码里被读。
+   - 守卫自身能红：`TestConfigDeclarationGuardsCatchTheirDrift`（`:230`）。
+   - 声明与 Init 对得上：`TestEveryKitModLoadsWhatItDeclares`（`kit/config_schema_promises_test.go:86`）对每个 kit Mod 把声明的每个键依次写成错误类型调用 `Init`，要求点名该键；同时合并全部 kit Mod 与 app 的声明，冲突即红。
+   - 范围在 Mod Init 与启动检查两处都拒绝：`TestKitModsRefuseOutOfRangeValuesAtLoadAndAtStartup`（`:115`）。缺省值与 core 一致：`TestSagaDeclaredDefaultsMatchCoreDefaults`（`kit/saga/config_declaration_promises_test.go:13`）、`TestRemoteEntityDeclaredDefaultsMatchCoreDefaults`（`kit/remoteentity/config_declaration_promises_test.go:14`）。
+   - 生成器漂移：`TestKitConfigSchemasMatchKitDeclarations`（`codegen/internal/roost/config_declarations_promises_test.go:23`，`go run ../../../kit/internal/configschemagen -check` 比对快照）、`TestGeneratedConfigsMatchDeclarations`（`:61`，全量工程的三份配置逐份过声明，框架段里没有未声明键）、`TestGeneratorConstantsMatchTheDeclaredExamples`（`:131`）、`TestPlayerTCPDeclarationAgreesWithKit`（`:153`）；生成的接入层 `TestDeclaredDefaultsAreDefaultConfig`（`render_player_tcp.go:1346`）；`go generate ./...` 后 porcelain 干净。
+   - 声明解析本身：`internal/configschema/schema_test.go`（`:61` 读值与缺省、`:76` 一次报全、`:95` `ValidateConfig` 只在声明检查通过后执行、`:103` 生产密钥、`:134` 冲突声明、`:149` 坏声明、`:166` starter YAML）。
+4. **控制流**：
+
+   ```text
+   进程启动：读配置文件 → checkConfig(合并 App + 本服务全部 Mod + 服务本身的声明)（app/app.go:150）
+            → 任一错误：errors.Join 一次报全，进程不启动（--check-config 到这里就退出）
+            → Mod Init：app.LoadConfig(cfg, &m.cfg)（同一份声明再读一遍，直接装配 Mod 的调用方也拿到同样的错误）
+   生成：kit 声明 ─configschemagen→ kitconfig_gen.go ─StarterYAML→ configs/service/*.yaml（生产示例沿用文本变换）
+   doctor：三份配置 × 该服务注册的 Mod 的声明（快照）→ config-schema:<服务>
+   ```
+
+5. **失败处理**：声明写错（tag 解析不了、缺省值超出范围）是编程错误，`SchemaOf` panic；配置错误一律 `config: <键> …` 开头、点名键。
+6. **测试**：
+   - 修前红（方案 §6 原文，基线 `66d72a33` 上的临时用例）：
+
+     ```text
+     --- FAIL: TestA4RangeBaseline/outbox_workers_negative (0.00s)
+         zz_a4_range_baseline_test.go:35: Init = <nil>; want a refusal naming dataengine.outbox.workers
+         zz_a4_range_baseline_test.go:38: ValidateServiceConfig = <nil>; want a refusal naming dataengine.outbox.workers
+     （effects_replicas_zero、redis_pool_negative、saga_workers_negative、syncbus_storage_typo 同样两处 <nil>）
+     ```
+
+     “读了没声明”守卫放到基线上：201 处直接读 viper / 单键读取（例：`../kit/configdata/configdata.go:38:19`、`../kit/dataengine/mod.go:104:10`）。
+   - RR-20261006-38 修前红（[问题记录](../../bug/RR-20261006-38.md)原文）：
+
+     ```text
+     --- FAIL: TestGeneratedConfigsMatchDeclarations (0.03s)
+         config_declarations_promises_test.go:84: configs/service/config.account.yaml: config: shutdown.serve_wait_timeout is not a key any framework mod declares (misspelled? nothing would read it)
+         config_declarations_promises_test.go:84: configs/service/config.account.prod.example.yaml: config: shutdown.serve_wait_timeout is not a key any framework mod declares (misspelled? nothing would read it)
+     ```
+
+   - 变异（方案 §6，全部变红后还原）：M1 kit/ops 加一行 `cfg.GetString("ops.extra")`；M2 声明一个没人读的字段；M3 ops Init 不调 `LoadConfig`；M4 去掉 `dataengine.outbox.workers` 的 `min:"1"`；M5 生成器把 `serve_wait_timeout` 加回；M6 改 example 不重新生成快照；M7 快照里 example 改成越界值。
+   - 修后：`gofmt -l` 空；`go build ./... && go vet ./...`；`go vet -tags integration ./kit/... ./app/... ./codegen/... .`；`go test -count=1 ./app ./internal/... ./kit/... .`；`go test -count=1 ./codegen/...`；改动包 `-race -count=3`；`go generate ./...` 后 porcelain 干净；新生成 game-demo（replace 到 worktree）build / vet / test 通过，`planet game --check-config` 对开发配置与生产示例输出 `config ok`，写错的配置一次报出三个 Mod 的错误。
+   - 复跑：`GOWORK=off go test -count=1 ./app ./internal/configschema ./kit`；`go test -count=1 -run 'Declaration|Declared|KitConfigSchemas|GeneratedConfigsMatch' ./codegen/internal/roost`；`go generate ./... && git status --porcelain`。
+7. **性能**：无（只在启动、生成与 doctor 时）。
+8. **未验证**：无。
+9. **review 检查点**：
+   - `TestFrameworkModsReadConfigOnlyThroughDeclarations` 的例外是否只有 app 的 viper 适配器（`app/config_schema.go` 的 `viperSource`）与单键读取（`app/config_values.go`）？守卫按名字识别 `*viper.Viper`（参数、字段、变量、`Registry.Config()`）——确认 kit 里没有经接口或别名把 viper 传出去再读的写法。
+   - 匿名嵌入的结构体其 `ValidateConfig` 被提升为外层方法；外层自己定义了 `ValidateConfig` 时要显式调用被嵌入的那个（Go 的方法遮蔽）。核对 `kit/dataengine` 的 `config`（方案 §2.1 点名）与其他“嵌入 + 自定义 ValidateConfig”的结构体都显式调用了。
+   - 0 有含义的键是否都声明成 `min:"0"` 且不写 `default`（Mod 只在大于 0 时覆盖 core 缺省）；`TestSagaDeclaredDefaultsMatchCoreDefaults` / `TestRemoteEntityDeclaredDefaultsMatchCoreDefaults` 覆盖了 saga 与 remoteentity，其余 Mod 的 `default` 与 core 缺省是否一致只靠逐个阅读。
+   - 进程不报“没有任何 Mod 声明的键”是有意的（生成配置会带别的进程才注册的 Mod 的键），拼错由 doctor 的 `config-schema` 判断——确认 doctor 对框架段的“未声明键”是 FAIL 而不是 WARN（`config_schema_doctor.go:179`）。
+   - 生成器 Core 下限：冻结点 `manifest.go:83` 仍是 v1.21.0，发版时须与 framework-compat minimum 行一起升到 v1.23.0（交接规格“发版必做”）。
+
+<a id="cfg-15"></a>
+### CFG-15 业务服务声明、doctor 读回进程声明、生成工程守卫（A4 ① 收尾，RR-20261006-40）
+
+[说明](guide-cfg-skill-noncore.md#cfg-15)
+
+1. **提交与版本**：`6e0619bb`（分支 `gaps`，基线 `82dfe672`）、`af3e3926`（补提交号与验证结果）。首发 v1.23.0（本版）。
+2. **改动与符号**（`5e72ca4d`）：
+
+   | 位置 | 职责 |
+   | --- | --- |
+   | `app/config_schema.go:127` `serviceDeclarations`（`:131` 收服务本身的声明，前缀 `service <名字>`） | `RegisterServer` 注册的服务实现 `ModConfigSchema` 时与 Mod 同等进入启动检查、`CheckServiceConfig`、`ServiceConfigSchema` |
+   | `app/app.go:93-94`、`:110`；`:167` `printConfigSchema` | `--print-config-schema`：把本服务全部声明（App、Mod、服务本身）打印成 JSON 键表 |
+   | `internal/configschema/guard.go:40` `GoPackages`、`:66` `UndeclaredReads`、`:144` `UnreadFields` | “读了没声明 / 声明了没读”的判定（自 app 测试移入，判定不变；跳过 testdata、vendor 与点开头的目录） |
+   | `codegen/internal/roost/config_schema_doctor.go:42` `processConfigSchemas`、`:99` `businessDeclarations`、`:295` `checkConfigReads` | doctor：`go build` 一次 + 每个服务 `--print-config-schema`；业务声明 = 进程声明减框架快照；新增 `config-reads` 检查 |
+   | `codegen/internal/roost/doctor.go:77`、`:93-94` | 能编译时读回进程声明，`config-schema` 与 `config-reads` 两项 |
+   | `demo/game/settings/settings.go.tmpl:27` `Config`、`:39` `Activity`、`:47` `Platform`、`:60` `Schema`、`:64` `Load`、`:83` `LoadActivity`、`:95` `LoadPlatform` | game 业务代码读的键与读法 |
+   | `demo/internal/service/game/service.go.tmpl:52` | `func (*Service) ConfigSchema() app.ConfigSchema { return settings.Schema() }` |
+   | `kit/saga/mod.go:233` `StreamSettings`、`kit/dataengine/mod.go:545` `EffectSettings` | 业务代码按框架 Mod 的整份声明读 `saga.*` / `dataengine.*`，不手抄缺省值 |
+   | `codegen/internal/roost/framework_services.go:514-516` | 生成的 `world_singleton.go` 经 `app.ServiceIdentity` + `app.LoadConfig` 读 `sid` |
+
+3. **不变量与守卫**：
+   - 生成工程同样只经声明读：`TestGeneratedProjectsReadConfigOnlyThroughDeclarations`（`codegen/internal/roost/config_reads_promises_test.go:56`，game-demo、saga、configdata、bare 四个夹具与全量渲染，逐包无直接读取、整个工程无没人读的声明字段）；`TestGeneratedProjectConfigGuardCatchesDrift`（`:86`，守卫能红）。
+   - doctor 读得到业务声明：`TestDoctorReadsBusinessDeclarationsFromTheProcess`（`:132`，全部 `config-schema:*` 为 OK、game 有 4 个业务键；删掉服务的 `ConfigSchema` 后 WARN 回来）。
+   - 服务声明进检查与打印：`TestServiceDeclarationsAreCheckedAndPrintedWithTheMods`（`app/config_declarations_promises_test.go:126`）。
+4. **控制流**：`roost project doctor` → `compile:go-list` 通过 → `processConfigSchemas` 编译一次进程 → 每个服务 `<bin> <service> --print-config-schema` → 业务声明 + 框架快照 → `config-schema:<服务>`（值检查；框架段里由业务声明的键不再算“没人读”；业务声明用到的段里出现未声明键为 FAIL）→ `config-reads`（用户工程的直接读取为 FAIL）。工程编译不过时只做框架那一半；能编译但读不出声明时 `config-schema` 为 FAIL。
+5. **失败处理**：见上；doctor 每项独立给出 OK / WARN / FAIL。
+6. **测试**：
+   - 修前红（[问题记录](../../bug/RR-20261006-40.md)原文，基线 `82dfe672`）：
+
+     ```text
+     WARN  config-schema:game   configs/service/config.game.yaml: no mod of game declares activity.groups_file, activity.key_prefix, platform.key_prefix, platform.payment_secret (another service's keys, or read by business code); configs/service/config.game.prod.example.yaml: …; deploy/k8s/base/secret.game.example.yaml: …
+     ```
+
+     同一工程 16 处直接读取（`game/controllers/player/controller.go:207`、`:218`，`game/lifecycle/world_singleton.go:20`，`internal/service/game/activity.go:103` 等，均为生成工程里的路径）。
+   - 修后：新生成 game-demo（replace 到 worktree）`go build ./... && go vet ./... && go test ./...` 通过；`roost project doctor`（strict）退出 0，零 WARN、零 FAIL（`OK config-schema:game … (4 business key(s))`、`OK config-reads 66 package(s) read config only through declarations`）。变异三项全红（方案 §7.4：业务代码加直接读取与没人读的字段、删掉服务的 `ConfigSchema`、app 不收服务声明）。
+   - 复跑：`GOWORK=off go test -count=1 -run 'ServiceDeclarations' ./app`；`go test -count=1 -run 'ConfigOnlyThroughDeclarations|ConfigGuardCatchesDrift|DoctorReadsBusiness' ./codegen/internal/roost`（会生成并编译工程，较慢）。
+7. **性能**：doctor 在能编译的工程里多一次 `go build` 与每个服务一次进程启动；实测新生成 game-demo 全量 doctor（strict）约 19s。
+8. **未验证**：无。守卫是按名字的语法检查，把非 viper 的值命名成某个 `*viper.Viper` 参数 / 字段的名字会被误报（已知误报形态，改名即可；修复记录“未验证 / 风险”唯一一条，不是待验证项）。
+9. **review 检查点**：
+   - `serviceDeclarations` 收服务声明时，服务嵌入 `app.ServiceIdentity` 与 App 的声明是否完全相同（`Merge` 不冲突）——`settings.Config` 就是这样写的；业务服务若另写 `sid` 字段会在启动时报冲突。
+   - `businessDeclarations`（`config_schema_doctor.go:99`）按“进程声明减框架快照”得到业务键：框架快照过期（没重新 `go generate`）时，新增的框架键会被当成业务键——`TestKitConfigSchemasMatchKitDeclarations` 在 CI 守住快照，确认 doctor 用的是同一份快照。
+   - `config-reads` 对用户工程是 FAIL：确认它只扫用户代码（跳过 testdata、vendor 与点开头的目录），不会因 vendored 依赖误报。
+
+<a id="cfg-16"></a>
+### CFG-16 两条配置管线分工（B10，维护者选 A）
+
+[说明](guide-cfg-skill-noncore.md#cfg-16)
+
+1. **提交与版本**：`344edf1d`（第十三轮记录 B10 两条管线选 A）、`2c01e06d`（文档实施，分支 `tail`，与 OWN-5 的 groups_file 必填同一提交）、`363be382`（DECISIONS B10 行改为已实施）。首发 v1.23.0（本版）。
+2. **改动**：只改文档——[B10 方案 §2.4](../../feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md#24-tablegen-与-cfggen-能否合成一套) 写明选 A 与理由；`docs/USER_GUIDE.md` “配置数据：规则、热更与可见性”与 `codegen/README.md:41`“配置管线：该用哪条”各加对照表。
+3. **不变量**：两条管线的生成 loader 都经 `configdata` 加载层、同一份 `configdata/rules` 检查（CFG-7 的守卫 `TestOneTagDrivesTheGenerationCheckAndTheGeneratedLoader` 与两个运行期门 `tablegen-runtime.sh` / `cfggen-golden-runtime.sh` 覆盖两条管线）。
+4. **控制流**：无变化。
+5. **失败处理**：无变化。
+6. **测试**：无新增；根包 `TestTrackedMarkdownRelativeLinksResolve` 覆盖新加的文档链接。
+7. **性能**：无。
+8. **未验证**：无。
+9. **review 检查点**：两份“该用哪条”对照表与 B10 §2.4 的说法一致（tablegen：策划 Excel / CSV 表，`roost generate` 默认；cfggen：YAML 描述、JSON 数据、含 globals，可选）。
+
 ## SKILL：skill 编译器、Runtime 与同步
 
 先读：`skill/README.md` 的 pass 表（各 pass 负责拒绝什么；该文件合仓后 52 个按旧仓布局写的相对链接已在 `d05a04a1` 改对，并加了根包文档链接门禁，见 TOOL-5，本分册不重复）、[`docs/skill/skill-implementation-guide.md`](../../skill/skill-implementation-guide.md)、[作者文档](../../skill/skill-casting-and-combat.md)“引用在哪里能读”与“Runtime 不在事务里（B4）”，以及 roost-coding A1 条里 skill Runtime 的例外（第 39 行）。
@@ -709,6 +868,12 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 | phase 事件单一来源 | `skill/phase_events_promises_test.go:11` `TestPhaseEventTableIsTheSingleSource` | 表覆盖 IR 与定义的全部字段、派发与拒绝两组不重不漏 |
 | 求值上下文表逐格 | `skill/eval_contexts_table_test.go:259` / `:290` / `:333` / `:504` | 每格有用例或理由；编译期与 Runtime 对每格的判断一致 |
 | 增量 state mutation 影子校验 | `skill/runtime_mutation.go:94` `stateMutationVerifyIncremental`（测试打开） | skill 包全部用例里增量 mutation 与全量快照逐笔比对 |
+| 衍生物停止入口登记表 | `skill/spawn_stop_entries_promises_test.go:132` `spawnStopEntries`、`:274` `TestEveryStopEntryDefersARefusedStopTheSameWay`、`:336` `TestSpawnStopEntriesAreRegistered` | 九个停止入口被拒后进入同一个 `stop_pending` 并按退避重试；`go/ast` 核对只有登记的函数调 `requestSpawnStop`，`terminateSpawn` / `stopSpawn` / 宿主 `StopSpawn` 各只有一个调用方 |
+| 衍生物分区 | `skill/spawn_partition_promises_test.go:134` `TestSpawnPartitionsFollowRecordFields`、`:334` `TestSpawnPartitionWritesStayInSpawnTable`（`:327` `spawnDropSites`） | 每一步每条记录恰好在字段决定的分区里、checkpoint 恢复后分区相同；`go/types` 核对分区字段只由 `setState` 写、删记录只在三个登记点、`pruneAbandonedSpawnsLocked` 只由 `Advance` 调 |
+| Host 能力表 | `skill/host_capability_promises_test.go:356` `TestCompilerConsultsTheTableForEveryRequirement`、`:550` `TestRuntimeAsksHostOnlyForCompiledRequirements`、`:636` `TestCompilerReadsHostCapabilitiesOnlyThroughTheTable`；`skill/host_capability_required_promises_test.go:85` `TestNoHostCapabilitySkipBranch` | 编译器对每项需求都查表；Runtime 发给 Host 的每次取值都在编译出的需求里；编译器源文件不绕过表读 `environment.Host`；Runtime 没有“未实现则跳过”的分支 |
+| 源文档 digest | `skill/canonical_definition_promises_test.go:43` `TestSourceDocumentDigestSeesEveryDifference` | 只差效果类型、消耗数量、cast window 表达式、策略 / 输入 / 形状 / 过滤器类型的定义对摘要不同 |
+
+**术语**：衍生物 = Spawn（原名进程 / process，`4451a0a5`），召唤物 = Summon（效果原名 `spawn`、移除原名 `despawn`，`509c381f`），衍生物 kind `minion` 原名 `summon`。下文 `path:line` 与符号一律用 `5e72ca4d` 上的新名；修前红文本、提交说明与历史记录里的旧名原样保留，正文引用时注“原名”。两次改名的完整对照见 SKILL-25、SKILL-27。
 
 本地复跑（全部 `GOWORK=off`，不需要外部依赖）：
 
@@ -716,6 +881,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 go test -race -count=3 ./skill/...                   # skill / combat / combatcomponent / skillcompose / skillsync
 SKILL_MUTATION_FULL=1 go test -count=1 -run 'TestCompiledMutations' ./skill   # 完整变异集（较慢）
 go test ./skill -run '^$' -fuzz FuzzRestoreRuntimeCheckpointNeverPanics -fuzztime 20s
+go test ./skill -run '^$' -fuzz FuzzParseGeneratedNeverPanics -fuzztime 20s
 (cd skill/examples && go build ./... && go vet ./... && go run ./fireball && go run ./combat && go run ./statusbridge)
 (cd skill/integration/sync-e2e && go test -count=1 ./...)
 go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
@@ -731,8 +897,8 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    | 位置 | 职责 |
    | --- | --- |
-   | `skill/scheduler.go:476` `failCastLocked` | 记 failed（保留第一次原因）→ 撤本 cast 全部排程与帧 → 停进程 → 释放 policy 槽位 → 标记 ability cast 结束；可重复调用 |
-   | `skill/scheduler.go:489` `cancelCastTasks` | 按 cast ID 撤任务与帧（不分 phase token） |
+   | `skill/scheduler.go:477` `failCastLocked` | 记 failed（保留第一次原因）→ 撤本 cast 全部排程与帧 → 停衍生物（原名进程；v1.23.0 起经 `stopSpawns` → `requestSpawnStop`，见 SKILL-26）→ 释放 policy 槽位 → 标记 ability cast 结束；可重复调用 |
+   | `skill/scheduler.go:490` `cancelCastTasks` | 按 cast ID 撤任务与帧（不分 phase token） |
    | `skill/runtime_cast_window.go:323` `castEnded` | failed / finished / 逻辑结束 / 恢复期 / 完成 / 已取消都拒绝 Cancel / Interrupt / Release，替代三处重复的窗口阶段判断 |
    | `skill/runtime.go` `startLocked`、`Cancel`、`Interrupt`、`releaseCast` | 出错时先 `failCastLocked` 再返回原错误；`startLocked` 在它之后才删 cast、还 ID |
 
@@ -761,7 +927,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 8. **未验证**：无外部项。
 9. **review 检查点**：
    - `rg 'cast.status = CastFailed' skill` 除 `failCastLocked` 外是否还有直接置 failed 的地方；`startLocked` 删除 cast 是否在 `failCastLocked` 之后（顺序反了会让任务残留在被复用的 ID 上）。
-   - 下面三条路径没有单独用例，核对它们与已测的五条一样经 `failCastLocked` 收尾：`Interrupt` 的 `stopProcesses` 出错分支（`skill/runtime_cast_window.go:297-299`）、toggle release 回调出错分支、charge enter 失败后 owned 进程在宿主侧是否留下实体。
+   - （已闭环）`e6828e4f` 时这里列的三条无单独用例的路径——`Interrupt` 的停衍生物出错分支（`skill/runtime_cast_window.go:297-299`，原 `stopProcesses`，今 `stopSpawns`）、toggle release 回调出错分支、charge enter 失败后衍生物在宿主侧是否留下实体——已由 `5c1f4176` 补测：`TestInterruptSpawnStopFailureStillEndsTheCast`、`TestToggleReleaseCallbackFailureStillEndsTheCast`、`TestFailedChargeStartWithOwnedSpawnLeavesNoResidue`、`TestFailedChargeStartWhoseSpawnCannotStopKeepsItsCast`（`skill/runtime_cast_terminal_branches_promises_test.go:64` / `:119` / `:184` / `:229`），第三条查出 RR-20261006-21（SKILL-23）。留给 review 的问题：`failCastLocked` 里停衍生物出错时，cast 进 failed 的顺序与 SKILL-26 的“被拒即转 `stop_pending`”是否一致（`TestEveryStopEntryDefersARefusedStopTheSameWay` 的 `cast failure (failCastLocked)` 一行）。
 
 <a id="skill-2"></a>
 ### SKILL-2 Combatant 副本不共享 map（NC-113）
@@ -796,9 +962,9 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    | 位置 | 职责 |
    | --- | --- |
    | `skill/skillsync/coordinator.go:472` `presentationReset` | reset 的唯一构造点；游标过期的 Flush 与 Recover 都调用它 |
-   | `skill/skillsync/coordinator.go:495` `activePresentationEvent` | 把 `ActivePresentation` 还原成 Runtime 为它发出的增量事件形状，交给 `FilterPresentation` |
+   | `skill/skillsync/coordinator.go:496` `activePresentationEvent` | 把 `ActivePresentation` 还原成 Runtime 为它发出的增量事件形状，交给 `FilterPresentation` |
    | `skill/skillsync/visibility.go:383` `abilityHandleReference` | ability 快照与增量共用按 handle 的 `FieldVisible` 键 |
-   | `skill/runtime_mutation.go` `diffCastStates` / `diffProcessStates` | cast remove 带 `Caster`、process remove 带 `Owner`（增量写点与全量 diff 共用） |
+   | `skill/runtime_mutation.go:460` `diffCastStates` / `:573` `diffSpawnStates`（原名 `diffProcessStates`） | `cast_remove` 带 `Caster`、`spawn_remove`（原名 `process_remove`）带 `Owner`（增量写点与全量 diff 共用） |
 
 3. **不变量**：同一 observer 在快照、增量、reset 三条路径上看到的可见集合一致；不可见实体的 remove 不下发。守卫：`skill/skillsync/visibility_recovery_promises_test.go:77` / `:95` / `:119` / `:144`、`skill/runtime_mutation_remove_identity_promises_test.go:9`。
 4. **控制流**：Flush / Recover → `presentationReset` → 每条持续表现 → 策略过滤（不可见整条去掉、可见的取回过滤后的 Anchor）。
@@ -822,7 +988,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 7. **性能**：无。
 8. **未验证**：经 kit syncstream / NATS 的端到端（外部 E04）。
 9. **review 检查点**：
-   - reset 里的 process 条目没有专门用例（只经源码推导与 `presentationReset` 的通用断言覆盖）：核对 `activePresentationEvent` 对 process 条目还原出的事件形状与 Runtime 增量里的 process 事件一致。
+   - （已闭环）`e6828e4f` 时“reset 里的衍生物（原名 process）条目没有专门用例”已由 `5c1f4176` 补测 `TestPresentationResetSpawnEntryMatchesItsIncrementalEvent`（`skill/skillsync/presentation_reset_spawn_promises_test.go:40`），查出并修复 RR-20261006-22（SKILL-23）。留给 review 的问题：`activePresentationEvent`（`skill/skillsync/coordinator.go:496`）还原事件的 `Sequence` / `Kind` 取快照序号与 `spawn_update`，与增量的 `spawn_start` 不同——确认没有自定义策略按 `Kind` 判定去留（NC-114 记录已列）。
    - `rg 'PresentationSnapshot\(\)' skill/skillsync` 是否只在 `presentationReset` 里被投影给 observer；Applier 的 `decodeStrict` 是否认识新增的 `caster` / `owner`（同一结构体，新旧互通）。
 
 <a id="skill-4"></a>
@@ -853,8 +1019,8 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#skill-5)
 
 1. **提交与版本**：`f37a94e3`。首发 v1.20.1。
-2. **改动**：`skill/runtime_retention.go:20` `trackCompletedCastLocked`（收所有终态）、`:41` `forgetCompletedCastLocked`（`startLocked` 删除失败启动、复用 ID 时撤掉刚登记的条目）。
-3. **不变量**：完成队列与 checkpoint 恢复对“完成”的口径一致，按 `CompletedCastLimit` 回收。守卫：`TestUncommittedFailedCastsStayWithinTheCompletedCastLimit`（`skill/runtime_failed_cast_retention_promises_test.go:35`）、`TestFailedStartLeavesNoCompletedQueueEntry`（`:71`，负对照：修前也通过）。
+2. **改动**：`skill/runtime_retention.go:38` `trackCompletedCastLocked`（收所有终态）、`:59` `forgetCompletedCastLocked`（`startLocked` 删除失败启动、复用 ID 时撤掉刚登记的条目）。
+3. **不变量**：完成队列与 checkpoint 恢复对“完成”的口径一致，按 `CompletedCastLimit` 回收。守卫：`TestUncommittedFailedCastsStayWithinTheCompletedCastLimit`（`skill/runtime_failed_cast_retention_promises_test.go:35`）、`TestFailedStartLeavesNoCompletedQueueEntry`（`:71`，负对照：修前也通过）。之后同一不变量在两处扩展：回收只跳过仍被引用（排程任务、policy、仍在宿主侧的衍生物）的 cast（RR-20261006-23，SKILL-23）；恢复侧按同一判据核对——超过上限时剩下的必须全被引用（RR-20261006-30，`skill/runtime_checkpoint.go:1197` `completedCastOrderWithinLimitLocked`，SKILL-24）。checkpoint 格式：本条不改；v1.23.0 发版时 `RuntimeCheckpointVersion` 为 7（`skill/runtime_checkpoint.go:29`，SKILL-24～29 先后 3 → 7），旧版本一律 `ErrCheckpointUnsupported`。
 4. **控制流**：cast 进终态 → 入队 → 超限淘汰最老可回收者（产生 `cast_remove`）。
 5. **失败处理**：无。
 6. **测试**：修前红：
@@ -897,7 +1063,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#skill-7)
 
 1. **提交与版本**：`bfd353c0`。首发 v1.20.2。之后 `023eb276`（B3 ②）把事件集合收进 `phaseEventTable`（SKILL-13）。
-2. **改动**：`skill/compile_lifetime.go:192` `requireDispatchedPhaseEvents`（`:12` 调用）；fallthrough 条件去掉 `timeoutTicks == 0`；删除 `skill/testdata/recast_combo.json`；测试辅助改为 `sequence[进程效果, wait N → finish]`。
+2. **改动**：`skill/compile_lifetime.go:192` `requireDispatchedPhaseEvents`（`:12` 调用）；fallthrough 条件去掉 `timeoutTicks == 0`；删除 `skill/testdata/recast_combo.json`；测试辅助改为 `sequence[衍生物效果（原名进程效果）, wait N → finish]`。
 3. **不变量**：编译通过的定义里不含 Runtime 没有派发点的事件。守卫：`skill/phase_event_dispatch_promises_test.go:14` / `:31` / `:53`；控制 `skill/generated_definitions_compile_test.go`（`roost add skill` 骨架与 game-demo `fireball.json.tmpl` 零诊断，O19 的补位）。
 4. **控制流**：生命期 pass → 每个 phase → `requireDispatchedPhaseEvents`。
 5. **失败处理**：recast / timeout 为 error；`timeout_ticks > 0` 为 warning。
@@ -915,7 +1081,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：无。
-8. **未验证**：无。game 服 Init 用 `skills.CompileAll` 编译全部定义（`demo/internal/service/game/service.go.tmpl:61`），之后两次在隔离环境起生成的 game 服并就绪都经过这条编译（v1.21.0 CFG-7 端到端、v1.23.0 CFG-12）。checkpoint 里的 `phase_timeout` 任务当时仍可恢复（O20），v1.23.0 由 SKILL-21 收口。
+8. **未验证**：无。game 服 Init 用 `skills.CompileAll` 编译全部定义（`demo/internal/service/game/service.go.tmpl:69`），之后两次在隔离环境起生成的 game 服并就绪都经过这条编译（v1.21.0 CFG-7 端到端、v1.23.0 CFG-12）。checkpoint 里的 `phase_timeout` 任务当时仍可恢复（O20），v1.23.0 由 SKILL-21 收口。
 9. **review 检查点**：game-demo 机器人 `cmd/loadtest` 断言 `Warnings == 0`——生成模板里的技能定义不应带 `timeout_ticks`。
 
 <a id="skill-8"></a>
@@ -975,9 +1141,9 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    | 编号 | 位置 |
    | --- | --- |
    | NC-210 | `skill/compile_typecheck.go:544` `declaredMemory`（set / add / clear_memory 共用） |
-   | NC-212 | `skill/compile_authority.go:113` `validateCatalogHandles` 末尾、`:141` `checkKeys` |
+   | NC-212 | `skill/compile_authority.go:115` `validateCatalogHandles` 末尾、`:143` `checkKeys` |
    | NC-213 / NC-215 | `skill/compile_shape.go:173` `rejectValuesTheRuntimeDoesNotExecute`（`:14` 调用） |
-   | NC-214 / NC-215 | `skill/compile_capability.go:109` `validateCatalogReferences`、`:61` `validateTargetFilterList` |
+   | NC-214 / NC-215 | `skill/compile_capability.go:110` `validateCatalogReferences`、`:62` `validateTargetFilterList` |
    | 性质测试 | `skill/compile_mutation_property_test.go` |
 
 3. **不变量**：编译通过 ⇒ Runtime 与参考 Host 能执行。守卫：`skill/compile_runtime_agreement_promises_test.go:54` / `:84` / `:132` / `:161` / `:182`；控制 `TestDeclaredMemoryEffectsWriteTheirOwnSlot`、`TestCatalogConsistentEffectsStillCompileAndRun`；变异性质测试（见本主题开头）。
@@ -999,9 +1165,9 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#skill-11)
 
 1. **提交与版本**：`7cf86f98`。首发 v1.20.2。
-2. **改动**：`skill/process_owned.go`：`runOwnedProcessCallback`（`:441`）对已移交或拥有者已终态的 finish 只置 `areaCallbackFinishedCast`；`advanceOwnedProcesses` 派发信号后看到标记即按 `StopCauseCancel` 停进程（`:92`、`:332`、`:394`）。
-3. **不变量**：施法存活时 finish 结束施法；已移交时只结束本 area 进程，不跑 end / cancel 回调。守卫：`TestHandedOffAreaFinishEndsOnlyTheAreaProcess`（`skill/area_handoff_finish_promises_test.go:21`）、控制 `TestLiveAreaFinishStillFinishesTheCast`（`:72`）、既有 `TestAreaCallbackFinishStopsRemainingSignals`、`TestAreaFinalLeaveFinishSuppressesTerminalCallback`；性质测试种子 `seed.area_handoff`。
-4. **控制流**：信号派发 → 回调 finish → 标记 → 同一 tick 停进程并回收。
+2. **改动**（`5e72ca4d`；`7cf86f98` 时文件是 `skill/process_owned.go`，函数名带 Process）：`skill/spawn_owned.go`：`runOwnedSpawnCallback`（`:431`）对已移交或拥有者已终态的 finish 只置 `areaCallbackFinishedCast`（`:472`）；`advanceOwnedSpawns` 派发信号后看到标记即按 `StopCauseCancel` 停衍生物（`:95`、`:321`、`:383`，v1.23.0 起经 `requestSpawnStop`）。
+3. **不变量**：施法存活时 finish 结束施法；已移交时只结束本 area 衍生物，不跑 end / cancel 回调。守卫：`TestHandedOffAreaFinishEndsOnlyTheAreaSpawn`（原名 `…AreaProcess`，`skill/area_handoff_finish_promises_test.go:21`）、控制 `TestLiveAreaFinishStillFinishesTheCast`（`:72`）、既有 `TestAreaCallbackFinishStopsRemainingSignals`、`TestAreaFinalLeaveFinishSuppressesTerminalCallback`；性质测试种子 `seed.area_handoff`。
+4. **控制流**：信号派发 → 回调 finish → 标记 → 同一 tick 停衍生物并回收。
 5. **失败处理**：标记只在同一次 Advance 内生效，不进 checkpoint。
 6. **测试**：修前红：
 
@@ -1011,8 +1177,8 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：无。
-8. **未验证**：无（不适用：combatcomponent 宿主不实现 `OwnedEntityRuntimeHost`，不跑 owned 进程）。
-9. **review 检查点**：停止过程中（`terminateProcess` 的 leave）触发的 finish 是否不会重复停止。
+8. **未验证**：无（不适用：combatcomponent 宿主不实现 `OwnedEntityRuntimeHost`，不跑 owned 衍生物）。
+9. **review 检查点**：停止过程中（`terminateSpawn` 的 leave，原名 `terminateProcess`）触发的 finish 是否不会重复停止——v1.23.0 起停止只经 `requestSpawnStop`，`terminateSpawn` 对非 running 不跑回调与离开信号（SKILL-26）。
 
 <a id="skill-12"></a>
 ### SKILL-12 NegotiateSchema 拒绝空区间（NC-216）
@@ -1040,7 +1206,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    | 位置 | 职责 |
    | --- | --- |
    | `skill/lower.go:33` `resolveName[T]` | 所有“名字 → 槽位 / handle”查找的唯一入口；查不到记 `LOWER_UNRESOLVED`（带源路径），返回零值继续以一次报全 |
-   | `skill/diagnostic.go:58` `DiagnosticLowerUnresolved` | 新诊断码 |
+   | `skill/diagnostic.go:59` `DiagnosticLowerUnresolved` | 新诊断码 |
    | `lowerProgram` | 签名改为 `(*Program, []Diagnostic)`（包内）；有失败即不交出 Program |
    | `skill/phase_events.go:25` `phaseEventTable`、`:46` `dispatchedPhaseEventFlows`、`:57` `undispatchedPhaseEventFlows` | 事件名与是否派发只写一次；lower 导出、编译期拒绝、Runtime 派发点共用同名常量 |
 
@@ -1059,7 +1225,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    修后通过；全部既有用例与 digest 不变。
 7. **性能**：无。
-8. **未验证**：无。B3 ③（Host 取值能力表）维护者定为下个大版本；process callback 事件是另一张表，不在本项。
+8. **未验证**：无。B3 ③（Host 取值能力表）第二轮定为下个大版本，第十三轮维护者要求本版完成，已实施（SKILL-30）；衍生物回调（原名 process callback）事件是另一张表，不在本项。“全部既有用例与 digest 不变”是 `023eb276` 时的结论；同版之后的改名（SKILL-25、27）让全部 gameplay / presentation digest 改变、checkpoint 版本到 7，那是名字与格式的变化，B3 ①② 本身的“lower 不改正常定义的输出”仍成立（`TestLowerRefusesEveryUnresolvedLookup` 在改名后原样通过）。
 9. **review 检查点**：
    - `rg 'artifacts.authority.statuses\[' skill/lower.go` 应无直接 map 读（都经 `resolveName`）。
    - B3 后的回归 NC-223（SKILL-14）说明：`resolveName` 在空作用域下会把合法的局部变量引用判为未解析——lower 快照计划时要用读取处的作用域。
@@ -1076,22 +1242,22 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    | --- | --- |
    | NC-220 | `skill/compile_typecheck.go:882` `checkCachedRead` + `skill/eval_contexts.go:397` `evalSnapshotTable` |
    | NC-221 | `skill/compile_shape.go:74-81`（被动 `max_depth` 与 `input_schema`） |
-   | NC-222 | `skill/compile_shape.go:100`、`:103`（`only a spawn effect starts a process` / `has process callbacks`） |
+   | NC-222 | `skill/compile_shape.go:100`、`:103`（今文案 `only a summon effect starts a spawn` / `only a summon effect has spawn callbacks`，`5c04726f` 时为 `only a spawn effect starts a process` / `has process callbacks`） |
    | NC-223 | `skill/lower.go:22-24` `loweringContext.readEntities`（读取处 lower 出的实体按源路径记下，`lowerSnapshots` 用它） |
-   | NC-224 | 表的 process_step 列不含 `$input` / `$memory` / `$local`（`skill/eval_contexts.go:194` 起） |
+   | NC-224 | 表的 spawn_step 列（原名 process_step）不含 `$input` / `$memory` / `$local`（`skill/eval_contexts.go:194` 起） |
 
-3. **不变量**：编译接受的读取在它实际求值的上下文里都能求出。守卫：`skill/compile_capture_context_promises_test.go:37` / `:119` / `:159` / `:176` / `:209`，控制 `:68` / `:136` / `:230`；性质测试新种子 `seed.process_start_read`、`seed.passive_entity_input`、`seed.local_attribute_read`。
+3. **不变量**：编译接受的读取在它实际求值的上下文里都能求出。守卫：`skill/compile_capture_context_promises_test.go:37` / `:119` / `:159` / `:176` / `:209`，控制 `:68` / `:136` / `:230`；性质测试新种子 `seed.spawn_start_read`（原名 `seed.process_start_read`）、`seed.passive_entity_input`、`seed.local_attribute_read`（`skill/compile_mutation_property_test.go:76-78`）。
 4. **控制流**：见 SKILL-15。
 5. **失败处理**：`ATTRIBUTE_SNAPSHOT_INVALID` / `SHAPE_INVALID` / `INPUT_UNAVAILABLE`。
 6. **测试**（修前红，记录原文）：
    - NC-220：六个子用例，三个 `compiled; diagnostics=[]skill.Diagnostic(nil)`，三个 `missing error ATTRIBUTE_SNAPSHOT_INVALID at ….read_attribute.entity in [… Code:"LOWER_UNRESOLVED", Path:"$" …]`；探针 Activate 返回 `skill: immutable program invariant failed`。
    - NC-221：`TestCompileRejectsPassivesThatCanNeverActivate` 五个子用例 `compiled; diagnostics=[]skill.Diagnostic(nil)`。
-   - NC-222：`TestCompileRejectsProcessesOnEffectsThatDoNotSpawn` 三个子用例同上。
+   - NC-222：`TestCompileRejectsProcessesOnEffectsThatDoNotSpawn`（今 `TestCompileRejectsSpawnsOnEffectsThatDoNotSummon`，`skill/compile_capture_context_promises_test.go:159`）三个子用例同上。
    - NC-223：`TestReadsOfALocalEntityAtNonCachedPointsCompileAndRun` 四个子用例 `unexpected diagnostic: … Code:"LOWER_UNRESOLVED", Path:"$" …`；同一用例在 `023eb276^` 上通过（回归证据）。
    - NC-224：五个子用例（临时还原实现）`compiled; diagnostics=[]skill.Diagnostic(nil)`；性质测试 `seed.process_start_read $.phases[0].on.enter.steps[1].process.area.from=$input.target: compiled without errors but advance[0] 1: skill: immutable program invariant failed`。
    - 修后通过；42 个既有种子 gameplay / presentation digest 逐一相同。
 7. **性能**：无。
-8. **未验证**：无。说明：编译期按字段所在的求值上下文（process_step 列）判断，不看进程实际活几步，所以“进程只活一步、从不走到移交后求值”的定义同样被拒绝——这是表的设计（O33 之后同一列的漂移格子也一律拒绝），不是漏验。
+8. **未验证**：无。说明：编译期按字段所在的求值上下文（spawn_step 列，原名 process_step）判断，不看衍生物实际活几步，所以“衍生物只活一步、从不走到移交后求值”的定义同样被拒绝——这是表的设计（O33 之后同一列的漂移格子也一律拒绝），不是漏验。
 9. **review 检查点**：NC-223 的修法让非缓存型采样点的计划实体取读取处的值——确认 `lowerSnapshots` 对没有记录的计划仍按空作用域 lower 并在查不到时报错（不再定位在 `$`，而是计划的源路径）。
 
 <a id="skill-15"></a>
@@ -1109,9 +1275,9 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    | `skill/eval_contexts.go:371` `ErrReferenceOutOfContext` | Runtime 查表拒绝时的错误，点名上下文与表项；不包裹 `ErrProgramInvariant` |
    | `skill/eval_contexts.go:397` `evalSnapshotTable` | 三个缓存型快照点能写在哪个上下文 |
    | `skill/compile_typecheck.go:121` `scopeFor`、`:707` `referenceType`、`:882` `checkCachedRead` | 作用域由表生成；不可用报 `INPUT_UNAVAILABLE`；快照按采样上下文检查 |
-   | `skill/lower.go:814` `lowerReference`；`program_operation.go` `referenceProgramValue.row` | 引用带表行号（不进 digest）；builtin / 输入槽位的投射拆成根 + field（NC-283） |
+   | `skill/lower.go:815` `lowerReference`；`program_operation.go` `referenceProgramValue.row` | 引用带表行号（不进 digest）；builtin / 输入槽位的投射拆成根 + field（NC-283） |
    | `skill/runtime_eval.go:107` `evalReference` | 先查 `cast.evalContext` 的格子 |
-   | `skill/runtime.go:161-163` `castInstance.evalContext`；`skill/process_owned.go:109` `detachedProcessCast(process, evalContext)`；`skill/runtime_state.go:95` `evalStateDefault` | 各求值点切到对应上下文 |
+   | `skill/runtime.go:185-187` `castInstance.evalContext`；`skill/spawn_owned.go:112` `detachedSpawnCast(spawn, evalContext)`（原 `process_owned.go` `detachedProcessCast`）；`skill/runtime_state.go:95` `evalStateDefault` | 各求值点切到对应上下文 |
 
 3. **不变量**：编译期与 Runtime 对每个（上下文，引用）格子的判断一致。守卫：
 
@@ -1127,7 +1293,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
    ```text
    Compile: typeChecker.scopeFor(上下文) 按表生成作用域 → referenceType 查格子 → checkCachedRead 查快照点表
-   Runtime: 进入求值点（Activate memory 默认值 / 采样 / 进程启动 / 进程每步 / 进程回调 / 状态默认值）设 cast.evalContext
+   Runtime: 进入求值点（Activate memory 默认值 / 采样 / 衍生物启动 / 衍生物每步 / 衍生物回调 / 状态默认值）设 cast.evalContext
             → evalReference 查同一格子 → 不可用返回 ErrReferenceOutOfContext（只有编译器漏了位点才会出现）
    ```
 
@@ -1140,11 +1306,11 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    - 用例位置：`skill/eval_context_promises_test.go:46` / `:90` / `:133` / `:177`；控制 `:72` / `:116` / `:157`。修后通过；45 个既有种子 gameplay / presentation digest 修前修后相同。
    - 复跑：`go test -race -count=3 ./skill/...`、`SKILL_MUTATION_FULL=1` 性质测试。
 7. **性能**：无基准。
-8. **未验证**：无。`$caster` 在进程回调里 Runtime 其实求得出（= owner），表维持编译期不可用：第七轮 O34～O36“保持现状并写进作者文档”。
+8. **未验证**：无。`$caster` 在衍生物回调里 Runtime 其实求得出（= owner），表维持编译期不可用：第七轮 O34～O36“保持现状并写进作者文档”。
 9. **review 检查点**：
    - 新增一个求值点时，是否在 Runtime 那一侧设置了 `evalContext`（否则零值是施法流程，会放过表外引用）。看 `rg 'evalContext:' skill/*.go` 的赋值点是否覆盖 8 个上下文。
    - `referenceProgramValue.row` 确实不进 digest：`programValueDigest` 不读 `row`。
-   - 按 pass 各写一份的检查已删除（`rg 'validateDetachedProcessFields|detachedReferenceAllowed|snapshotCapturableWhereRead' skill` 无结果）；回调不能 finish / goto / wait / 递归建进程 / 改 memory 的控制流规则仍在 `compile_owned_entity.go`。
+   - 按 pass 各写一份的检查已删除（`rg 'validateDetachedProcessFields|detachedReferenceAllowed|snapshotCapturableWhereRead' skill` 无结果）；回调不能 finish / goto / wait / 递归建衍生物 / 改 memory 的控制流规则仍在 `compile_owned_entity.go`。
 
 <a id="skill-16"></a>
 ### SKILL-16 O33 漂移格子编译期拒绝；O34～O36
@@ -1152,8 +1318,8 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#skill-16)
 
 1. **提交与版本**：`4da5e7ea`（记录第七轮决定）、`f6043e44`（实施，分支 `o33`，基线 `4da5e7ea`；同提交含 O37 account，见 NONCORE）、`2a7d2a65`（标注；提交说明里的 `a6e75488` 是 rebase 前的号，不在 main 上，正确的是 `f6043e44`；DECISIONS-PENDING 第七轮表下已加更正注）。首发 v1.21.0。
-2. **改动**：`skill/eval_contexts.go`：21 格改为不可用（引用表 process_step / state_default 两列 8 行 = 16 格；快照点表 process_step / state_default 两列的 cast_start、phase_start = 4 格；memory_default 列的 phase_start = 1 格）；`evalDrifting` 删除，`usable()` 改为 `== evalAvailable`；每格 semantics 写“为什么没有、此前实际得到的值、改用 …”。Runtime 不用改（本来查同一张表）。作者文档、`ai-skill-system-prompt.md` 同步。
-3. **不变量**：表里只有两种格子。守卫：`TestProcessStepPrimaryTargetIsRejectedAtCompileTime`（`eval_contexts_table_test.go:366`）、`TestEvalContextTableRejectsTheO33DriftCellsWithAnAlternative`（`:400`，21 格逐格：不可用、semantics 有“改用”、有位点的格子诊断点名上下文 / 表项 / 替代写法）、`TestEvalSnapshotTableCellsAgreeWithCompilerAndRuntime`（`:504`，3 个快照点 × 5 个非采样上下文 = 15 格，此前快照点表没有逐格守卫）、`TestO33AlternativesCompileAndRun`（`:555`，替代写法逐条能编译能跑）。
+2. **改动**：`skill/eval_contexts.go`：21 格改为不可用（引用表 spawn_step（原名 process_step）/ state_default 两列 8 行 = 16 格；快照点表 spawn_step / state_default 两列的 cast_start、phase_start = 4 格；memory_default 列的 phase_start = 1 格）；`evalDrifting` 删除，`usable()` 改为 `== evalAvailable`；每格 semantics 写“为什么没有、此前实际得到的值、改用 …”。Runtime 不用改（本来查同一张表）。作者文档、`ai-skill-system-prompt.md` 同步。
+3. **不变量**：表里只有两种格子。守卫：`TestSpawnStepPrimaryTargetIsRejectedAtCompileTime`（原名 `TestProcessStepPrimaryTargetIsRejectedAtCompileTime`，`eval_contexts_table_test.go:366`）、`TestEvalContextTableRejectsTheO33DriftCellsWithAnAlternative`（`:400`，21 格逐格：不可用、semantics 有“改用”、有位点的格子诊断点名上下文 / 表项 / 替代写法）、`TestEvalSnapshotTableCellsAgreeWithCompilerAndRuntime`（`:504`，3 个快照点 × 5 个非采样上下文 = 15 格，此前快照点表没有逐格守卫）、`TestO33AlternativesCompileAndRun`（`:555`，替代写法逐条能编译能跑）。
 4. **控制流**：同 SKILL-15。
 5. **失败处理**：`INPUT_UNAVAILABLE`（引用）/ `ATTRIBUTE_SNAPSHOT_INVALID`（快照）。
 6. **测试**：修前红（基线 `4da5e7ea`，只加测试，方案 §8.4 原文）：
@@ -1173,23 +1339,23 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 7. **性能**：无。
 8. **未验证**：无（仓内 36 个 fixture、examples、`roost add skill` 骨架、game-demo `fireball.json.tmpl` 都不用漂移格子）。
 9. **review 检查点**：
-   - 21 格的 semantics 都含“改用”（守卫已查）；替代写法里排除了两条看似可行的写法（绑定到进程数值属性的 motion 字段只收字面量；`set_memory` 不能存属性读取），确认作者文档没有写回它们。
-   - 作者文档 `docs/skill/skill-casting-and-combat.md` 第 80 行标题原写“（O33，未发版）”，已改为“（O33，v1.21.0）”（本次重核）；确认同文其余“未发版”标注（O22 / O29 / O2）只指 v1.23.0 本版的内容。
+   - 21 格的 semantics 都含“改用”（守卫已查）；替代写法里排除了两条看似可行的写法（绑定到衍生物数值属性的 motion 字段只收字面量；`set_memory` 不能存属性读取），确认作者文档没有写回它们。
+   - 作者文档 `docs/skill/skill-casting-and-combat.md` 该节标题（`e6828e4f` 第 80 行，`5e72ca4d` 第 82 行）原写“（O33，未发版）”，第一次重核已改为“（O33，v1.21.0）”；确认同文其余“未发版”标注只指 v1.23.0 本版的内容，发版时一并改。
 
 <a id="skill-17"></a>
-### SKILL-17 O22 summon 字段编译期拒绝
+### SKILL-17 O22 minion 衍生物（原名 summon 进程）字段编译期拒绝
 
 [说明](guide-cfg-skill-noncore.md#skill-17)
 
 1. **提交与版本**：`78e26853`（记录第十二轮决定）、`229a5aa0`（实施，分支 `bsk`）、`6bf15516`（标注）。首发 v1.23.0（本版）。
-2. **改动**：`skill/compile_motion.go:112` `validateProcessMotion`：`:118` summon 分支不再提前返回，`:125` motion、`:128` `duration_ticks`（“summon processes live for the spawn effect's duration_ticks; remove the process duration_ticks”），`area` / `interval_ticks` / `emit_leave_on_stop` 按非 area 进程同样规则拒绝。
-3. **不变量**：编译接受的 summon 进程字段都会被 Runtime 读取。守卫：`TestSummonProcessRejectsFieldsItNeverReads`（`skill/compile_summon_process_promises_test.go:16`，五个子用例）、`TestSummonProcessWithoutDurationCompilesAndLivesForTheSpawnDuration`（`:32`，钉住不写时寿命 = spawn 的 10 tick）。
+2. **改动**（`5e72ca4d`）：`skill/compile_motion.go:112` `validateSpawnMotion`（原名 `validateProcessMotion`）：`:118` minion 分支（原 summon 分支）不再提前返回，`:125` motion、`:128` `duration_ticks`（今文案 “minion spawns live for the summon effect's duration_ticks; remove the spawn's own duration_ticks”，`229a5aa0` 时为 “summon processes live for the spawn effect's duration_ticks; remove the process duration_ticks”），`area` / `interval_ticks` / `emit_leave_on_stop` 按非 area 衍生物同样规则拒绝。
+3. **不变量**：编译接受的 minion 衍生物字段都会被 Runtime 读取。守卫：`TestMinionSpawnRejectsFieldsItNeverReads`（`skill/compile_minion_spawn_promises_test.go:16`，五个子用例；原名 `TestSummonProcessRejectsFieldsItNeverReads`，文件原名 `compile_summon_process_promises_test.go`，两次改名见 SKILL-25 / 27）、`TestMinionSpawnWithoutDurationCompilesAndLivesForTheSummonDuration`（`:32`，钉住不写时寿命 = 召唤效果的 10 tick）。
 4. **控制流**：motion pass。
 5. **失败处理**：`MOTION_INVALID`。
 6. **测试**：修前红：五个子用例（正 / 负 duration、area、interval、emit_leave_on_stop）全部 `missing diagnostic MOTION_INVALID in []skill.Diagnostic(nil)`。修后通过。
 7. **性能**：无。
 8. **未验证**：无。
-9. **review 检查点**：Runtime `startEntityProcess`（`process_owned.go`）是否确实只在带 motion / area 的进程上读模板时长——这是“summon 的 duration_ticks 从不被读”的依据。
+9. **review 检查点**：Runtime `startEntitySpawn`（`skill/spawn_owned.go:20`，原 `process_owned.go` `startEntityProcess`）是否确实只在带 motion / area 的衍生物上读模板时长（`:25-26`）——这是“minion 的 duration_ticks 从不被读”的依据。
 
 <a id="skill-18"></a>
 ### SKILL-18 O7 checkpoint 字节确定
@@ -1197,14 +1363,14 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#skill-18)
 
 1. **提交与版本**：`229a5aa0`。首发 v1.23.0（本版）。
-2. **改动**：`skill/runtime_checkpoint.go:555` `checkpointPayloadLocked`：`:635` `ActivePolicies` 按 `(caster, skill)`、`:641` `ProcLedger` 按 `(root, caster, digest)`、`:650` `RootEventCounts` 按 ID、`:668` `AbilityByProgram` 排序。其余列表此前已排序（`:565` 起）。
+2. **改动**：`skill/runtime_checkpoint.go:580` `checkpointPayloadLocked`：`:656` `ActivePolicies` 按 `(caster, skill)`、`:662` `ProcLedger` 按 `(root, caster, digest)`、`:671` `RootEventCounts` 按 ID、`:689` `AbilityByProgram` 排序。其余列表此前已排序（`:590` 起）。
 3. **不变量**：同一状态两次 Checkpoint 字节与 Checksum 相同；恢复与列表顺序无关。守卫：`TestRuntimeCheckpointBytesAreDeterministic`（`skill/checkpoint_deterministic_bytes_promises_test.go:40`，20 次 Checkpoint）、`TestRuntimeRestoresUnsortedLegacyCheckpointLists`（`:78`，倒序的旧样子照常恢复，再 Checkpoint 与排序版逐字节相同）。
 4. **控制流**：无。
 5. **失败处理**：无。
 6. **测试**：修前红：`checkpoint 2 of the same state differs`；恢复乱序 checkpoint 后再 Checkpoint 的字节与排序版不同。修后通过；`FuzzRestoreRuntimeCheckpointNeverPanics` 20s 通过。
 7. **性能**：四次排序，只在 Checkpoint 时。
 8. **未验证**：无。
-9. **review 检查点**：`RuntimeCheckpointVersion` 未变（格式不变是兼容承诺的前提）。
+9. **review 检查点**：O7 本身不改 `RuntimeCheckpointVersion`（`229a5aa0` 时为 2，排序不改格式）；之后同版 SKILL-24～29 升到 7（`skill/runtime_checkpoint.go:29`，`:16-28` 注释逐版写明 3～7 各改了什么），v1.23.0 发布物只恢复版本 7。确认 `TestRuntimeRestoresUnsortedLegacyCheckpointLists` 的“旧样子”指同一版本里乱序写出的列表，不是旧版本号的 checkpoint（旧版本号在 `:382` 先被拒）。
 
 <a id="skill-19"></a>
 ### SKILL-19 O29 文案；O15 / O16 / O17 / O27 / O28 文档
@@ -1212,8 +1378,8 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#skill-19)
 
 1. **提交与版本**：`229a5aa0`。首发 v1.23.0（本版）。
-2. **改动**：`skill/compile_effect_result.go:37`、`skill/compile_status.go:78` 文案；`docs/skill/skill-casting-and-combat.md`“进程、运动与 temporal 的既定语义”“编译期收紧与诊断文案”。
-3. **不变量**：规则 `effectResultBranchMaySuspend` 不变。守卫：`TestEffectResultBranchDiagnosticNamesProcessCallbacks`（`skill/effect_result_branch_process_promises_test.go:29`）、行为钉子 `TestEffectResultBranchMayStartAProcessWithoutCallbacks`（`:16`，修前修后都通过）。
+2. **改动**：`skill/compile_effect_result.go:37`、`skill/compile_status.go:78` 文案；`docs/skill/skill-casting-and-combat.md`“衍生物、运动与 temporal 的既定语义”（原标题“进程、…”）“编译期收紧与诊断文案”。
+3. **不变量**：规则 `effectResultBranchMaySuspend` 不变。守卫：`TestEffectResultBranchDiagnosticNamesSpawnCallbacks`（`skill/effect_result_branch_spawn_promises_test.go:29`；原名 `…NamesProcessCallbacks`，文件原名 `effect_result_branch_process_promises_test.go`）、行为钉子 `TestEffectResultBranchMayStartASpawnWithoutCallbacks`（`:16`，原名 `…StartAProcessWithoutCallbacks`，修前修后都通过）。
 4. **控制流**：无。
 5. **失败处理**：无。
 6. **测试**：修前红：`result branch diagnostic "effect result branches cannot suspend or start a process" must name process on callbacks`。
@@ -1228,7 +1394,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
 1. **提交与版本**：`b8fbcee0`（收尾第 3 批 A4～A6，分支 `cb3`，基线 `8a292a5a`）、`efecb24a`（标注）。首发 v1.23.0（本版）。
 2. **改动**：`skill/runtime_state.go:95` `evalStateDefault(cast, state)`：求得的默认值缺省时返回 `MissingRuntimeValue(state.typ)`（`:103`）；`skill/host_state.go` `StateMutationCommand` 注释写明 Default 的类型契约。
-3. **不变量**：交给 Host 的状态默认值类型等于 state 声明类型。守卫：`TestNullDefaultEntityStateCanBeSet`（`skill/state_null_default_promises_test.go:15`）。同形分支（`runtime_ability.go:397`、`runtime_cast.go:113`、`combatcomponent/adapter.go:134`）逐一核对不受影响（理由见问题记录）。
+3. **不变量**：交给 Host 的状态默认值类型等于 state 声明类型。守卫：`TestNullDefaultEntityStateCanBeSet`（`skill/state_null_default_promises_test.go:15`）。同形分支（`runtime_ability.go:400`、`runtime_cast.go:113`、`combatcomponent/adapter.go:134`）逐一核对不受影响（理由见问题记录）。
 4. **控制流**：`modify_state` → `evalStateDefault` → Host `applyStateOperation`。
 5. **失败处理**：无。
 6. **测试**：修前红：
@@ -1250,7 +1416,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
 1. **提交与版本**：`b8fbcee0`。首发 v1.23.0（本版）。
 2. **改动**：`skill/scheduler.go` 删除 `phaseTimeoutTask` 与 `scheduledTaskIdentity` 分支；`skill/runtime_checkpoint.go` 删除编码分支，恢复时 `case "phase_timeout"`（`:1150`）→ `ErrCheckpointCorrupt`（显式分支只为说明，落到 default 也是 corrupt）。
-3. **不变量**：恢复不接受 Runtime 不会产生的任务。守卫：`TestCheckpointRestoreRejectsPhaseTimeoutTask`（`skill/checkpoint_phase_timeout_promises_test.go:16`，对照：未改动的 checkpoint 能恢复）。
+3. **不变量**：恢复不接受 Runtime 不会产生的任务。守卫：`TestCheckpointRestoreRejectsPhaseTimeoutTask`（`skill/checkpoint_phase_timeout_promises_test.go:16`，对照：未改动的 checkpoint 能恢复）。checkpoint 版本口径：本条不改版本（`b8fbcee0` 时为 2）；v1.23.0 发布物的版本是 7（SKILL-24～29），旧版本的 checkpoint 在版本号检查（`skill/runtime_checkpoint.go:382`）处就被拒，走不到任务解码。
 4. **控制流**：无。
 5. **失败处理**：`ErrCheckpointCorrupt`。
 6. **测试**：修前红：
@@ -1279,9 +1445,343 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 8. **未验证**：无。
 9. **review 检查点**：示例模块依赖变化时是否在 `skill/examples` 下 `GOWORK=off go mod tidy`。
 
+<a id="skill-23"></a>
+### SKILL-23 衍生物记录生命周期：失败启动、回收与 reset（RR-20261006-21 / 22 / 23）
+
+[说明](guide-cfg-skill-noncore.md#skill-23)
+
+1. **提交与版本**：`5c1f4176`（分支 `sktest2`，基线 `37338490`，恢复自 `wip/sktest`）、`7b0c2d57`（交接规格登记）。首发 v1.23.0（本版）。来源是 SKILL-1 / SKILL-3 在 `e6828e4f` 时的 review 检查点补测。
+2. **改动与符号**（`5e72ca4d`；实施时名字是 `*Process*`）：
+
+   | 位置 | 职责 |
+   | --- | --- |
+   | `skill/runtime.go:396` `startLocked`（`:481-488`） | 未提交且没有仍在宿主侧的衍生物（后来加上“没有已放弃的记录”，SKILL-29）：删记录、删 cast、还 ID，返回 `(0, err)`；否则保留 failed cast、返回 `(cast.id, err)`（RR-21） |
+   | `skill/runtime_retention.go:73` `castHasRunningSpawnLocked`、`:97` `forgetCastSpawnsLocked` | 按 cast 判“有衍生物仍在宿主侧”、删它名下的已停记录（RR-21 / 23 共用） |
+   | `skill/runtime_retention.go:103` `pruneCompletedCastsLocked`、`:129` `castEvictableLocked` | 只有仍在宿主侧的衍生物钉住 cast；回收 cast 前删它的已停记录（RR-23） |
+   | `skill/presentation_recovery.go:28` `ActivePresentation.PrimaryTarget`（`json:"-"`）、`:56`、`:75`、`:92` `spawnPresentationTargetLocked` | 按增量来源填 PrimaryTarget（RR-22） |
+   | `skill/skillsync/coordinator.go:496` `activePresentationEvent` | 还原事件用条目的 PrimaryTarget；过滤后回写 |
+
+3. **不变量**：运行中的记录始终挂在一个存在的 cast 名下；已停记录的寿命与它的 cast 相同；reset 交给策略的事件与增量同形。守卫：`TestFailedChargeStartWithOwnedSpawnLeavesNoResidue`、`TestFailedChargeStartWhoseSpawnCannotStopKeepsItsCast`（`skill/runtime_cast_terminal_branches_promises_test.go:184` / `:229`）、`TestCastsWhoseSpawnsEndedStayWithinTheCompletedCastLimit`（`skill/runtime_spawn_retention_promises_test.go:20`）、`TestPresentationResetSpawnEntryMatchesItsIncrementalEvent`（`skill/skillsync/presentation_reset_spawn_promises_test.go:40`，仍归施法 / 已移交两种 × 四种策略）；同批补的 SKILL-1 检查点用例 `TestInterruptSpawnStopFailureStillEndsTheCast`（`skill/runtime_cast_terminal_branches_promises_test.go:64`）、`TestToggleReleaseCallbackFailureStillEndsTheCast`（`skill/runtime_cast_terminal_branches_promises_test.go:119`）。
+4. **控制流**：失败启动 → `failCastLocked` 停衍生物 → 有仍在宿主侧的？保留 cast：删记录、删 cast、还 ID；cast 进终态 → 完成队列 → 超限时跳过仍被引用的 → 回收时连同已停记录一起删（state mutation 的 `spawn_remove` 与 `cast_remove` 同一笔）。
+5. **失败处理**：宿主停不下时 Runtime 状态自洽（记录有归属、checkpoint 可恢复），停不下的衍生物之后由 SKILL-24 负责。
+6. **测试**（修前红，问题记录原文；文件与用例当时叫 process）：
+
+   ```text
+   --- FAIL: TestFailedChargeStartWithOwnedProcessLeavesNoResidue (0.00s)
+       runtime_cast_terminal_branches_promises_test.go:204: failed start left 1 process records under cast 1, the id the next cast reuses
+       runtime_cast_terminal_branches_promises_test.go:208: checkpoint after a failed start with a summon: skill: runtime checkpoint is corrupt
+   --- FAIL: TestFailedChargeStartWhoseProcessCannotStopKeepsItsCast (0.00s)
+       runtime_cast_terminal_branches_promises_test.go:245: failed start returned cast 0; with a process still running it must keep (and report) cast 1
+       runtime_cast_terminal_branches_promises_test.go:248: cast 1 after the failed start: found=false status=, want it kept as failed
+       runtime_cast_terminal_branches_promises_test.go:253: second start = 1, <nil>; want a fresh id 2, cast 1 still owns a running process
+   --- FAIL: TestCastsWhoseProcessesEndedStayWithinTheCompletedCastLimit (0.01s)
+       runtime_process_retention_promises_test.go:57: retained casts = 9 (completed queue 9) after 8 casts whose summons ended; CompletedCastLimit is 3 plus the pinned one
+       runtime_process_retention_promises_test.go:60: retained process records = 9: records of evicted casts stay behind
+       runtime_process_retention_promises_test.go:70: restore after 9 summon casts with CompletedCastLimit 3: skill: runtime checkpoint is corrupt
+   --- FAIL: TestPresentationResetProcessEntryMatchesItsIncrementalEvent/owned_by_the_running_cast (0.00s)
+       presentation_reset_process_promises_test.go:89: reset hands the policy {… Kind:process_update … PrimaryTarget:3 …} the runtime's increment for the same process is {… Kind:process_start … PrimaryTarget:2 …}
+       presentation_reset_process_promises_test.go:110: primary target hidden: the increment is hidden but the reset sends [{Kind:process … ProcessID:1 …}]
+   ```
+
+   修后全部通过；变异：`castEvictableLocked` 不再看运行中的衍生物 → `cast 1 was evicted while its handed-off summon still runs`。验证：`go test -race -count=3 ./skill/...`（影子校验打开）、根包、`go build ./... && go vet ./...`。复跑：`GOWORK=off go test -count=1 -run 'TestFailedChargeStart|TestCastsWhoseSpawnsEnded|TestInterruptSpawnStop|TestToggleRelease' ./skill`、`-run TestPresentationResetSpawnEntry ./skill/skillsync`。
+7. **性能**：回收时扫描衍生物表，与修前同阶（SKILL-28 之后只扫对应分区）。
+8. **未验证**：经 kit syncstream / NATS 的端到端（外部 E04）。
+9. **review 检查点**：
+   - `startLocked` 只有三项同时成立（未提交、名下没有仍在宿主侧的衍生物、名下没有已放弃的记录，`skill/runtime.go:481`）才删记录、删 cast、还 ID；任一不成立都保留 failed cast、返回 `(cast.id, err)`、不 `nextCastID--`——确认三个判据与 `castEvictableLocked` / `forgetCastSpawnsLocked` 用的是同一组分区。
+   - 还原事件的 `Kind` / `Sequence` 取 `spawn_update` 与快照序号，与增量的 `spawn_start` 不同（NC-114 记录已列）；`PrimaryTarget` 不进 wire，Applier 严格解码不受影响。
+
+<a id="skill-24"></a>
+### SKILL-24 宿主停不下的衍生物由 Runtime 退避重试（RR-20261006-21 后续，RR-20261006-30 / 31）
+
+[说明](guide-cfg-skill-noncore.md#skill-24)
+
+1. **提交与版本**：`90c92caf`（第十三轮记录撤除重试）、`1ce01e5c`（实施，分支 `skretry`，基线 `90c92caf`；同提交修 RR-30 / 31）、`3285d354`（DECISIONS 补提交号）。首发 v1.23.0（本版）。
+2. **改动与符号**（`5e72ca4d`；实施时为 `ProcessStopPending`、`runtime_process_stop_retry.go`、`deferUnstoppedProcessesLocked` / `deferRefusedStopLocked`，后两者在 SKILL-26 删除）：
+
+   | 位置 | 职责 |
+   | --- | --- |
+   | `skill/spawn.go:18` `SpawnStopPending`、`:107` 起三个重试字段、`:118` `liveOnHost` | 待停止状态与“仍在宿主侧”判据（running 或 stop_pending） |
+   | `skill/runtime_spawn_stop.go:55-63`（`MetricSpawnStopRetryExhausted`、`spawnStopRetryMaxDoublings = 6`）、`:67` `spawnStopRetryDelay`、`:176` `retrySpawnStopsLocked` | 退避（每失败一次翻倍、最多 64 倍）、到上限告警、按 ID 顺序重试到期条目 |
+   | `skill/scheduler.go:324` `advanceHost`（`:332` 调 `retrySpawnStopsLocked`） | 推进到一个 tick 后重试；重试失败不让 `Advance` 返回错误 |
+   | `skill/runtime.go:69` `SpawnStopRetryBackoff`、`:75` `SpawnStopRetryLimit`、`:81` `MaxStopPendingSpawns` | 三项选项（默认 4 / 10 / 256），进 checkpoint |
+   | `skill/host.go:20-32`、`:51` `StopSpawn` | 契约：`StopSpawn` 必须幂等；失败时 Runtime 标待停止并重试 |
+   | `skill/runtime_checkpoint.go:1197` `completedCastOrderWithinLimitLocked` | RR-30：恢复按 `pruneCompletedCastsLocked` 的同一不变量核对完成队列 |
+   | `skill/runtime_retention.go:24` `RetentionStats` | `StopPendingSpawns` / `StopRetryExhaustedSpawns` |
+
+3. **不变量**：Runtime 启动过的衍生物，宿主拒绝停止时由 Runtime 负责到底（有界重试、到上限告警、记录可见）；tick 驱动的停止被拒不冻住 Runtime。守卫（`skill/runtime_spawn_stop_retry_promises_test.go`）：`TestFailedStartRetriesTheStopItCouldNotFinish`（`:132`）、`TestStopPendingSurvivesCheckpointAndKeepsRetrying`（`:187`）、`TestPinnedCastsBeyondTheCompletedLimitStillRestore`（`:223`）、`TestStopRetriesAreBoundedAndAlertWhenExhausted`（`:266`）、`TestStopPendingIsVisibleToSyncConsistently`（`:346`）、`TestHandedOffSpawnStopFailureDoesNotFreezeTheRuntime`（`:405`，RR-31）；`TestHandedOffSpawnsBeyondTheCompletedLimitStillRestore`（`skill/runtime_spawn_retention_promises_test.go:87`，RR-30）；`TestMemoryHostStopSpawnIsIdempotent`。
+4. **控制流**：入口请求停止 → 宿主拒绝 → `stop_pending`（钉住 cast、占 owned 容量、不步进 / 不派发 / 不跑回调）→ `advanceHost` 每 tick 末尾检查到期条目 → 重试只重发宿主 `StopSpawn` → 成功：cancelled + `spawn_stop`，随后 `pruneCompletedCastsLocked` 按 RR-23 回收；失败：次数 +1、间隔翻倍；到 `SpawnStopRetryLimit`：exhausted、指标 + 一条 Warn，记录保留。
+5. **失败处理**：错误只在第一次停止时返回给调用方；重试失败不返回错误、不刷日志（只在到上限与超内存上限时写）。
+6. **测试**（修前红，问题记录原文；当时叫 process）：
+
+   ```text
+   --- FAIL: TestHandedOffProcessesBeyondTheCompletedLimitStillRestore (0.00s)
+       runtime_process_retention_promises_test.go:111: restore with two pinned casts and CompletedCastLimit 1: skill: runtime checkpoint is corrupt
+       zz_owned_stop_probe_test.go:21: Advance(4) = test host: stop unavailable (runtime tick stays 4)
+       zz_owned_stop_probe_test.go:21: Advance(5) = test host: stop unavailable (runtime tick stays 4)
+       zz_owned_stop_probe_test.go:21: Advance(6) = test host: stop unavailable (runtime tick stays 4)
+       zz_owned_stop_probe_test.go:27: StopProcess at host ticks [4 4 4 4]
+   --- FAIL: TestHandedOffProcessStopFailureDoesNotFreezeTheRuntime (0.00s)
+   ```
+
+   `TestFailedStartRetriesTheStopItCouldNotFinish`、`TestStopPendingSurvivesCheckpointAndKeepsRetrying` 的修前红见 [RR-21 问题记录“后续”一节](../../bug/RR-20261006-21.md)。修后 6 个新用例通过，RR-21 / 22 / 23 原有用例原样通过；`FuzzRestoreRuntimeCheckpointNeverPanics` 30s、`FuzzParseGeneratedNeverPanics` 15s 无失败。复跑：`GOWORK=off go test -count=1 -run 'StopPending|StopRetries|FailedStartRetries|PinnedCasts|HandedOffSpawn' ./skill`。
+7. **性能**：重试与内存上限按待停止条目处理，只在有条目时发生（SKILL-28 之后只扫待停止分区）。
+8. **未验证**：无外部依赖，未在真实宿主上演练（参考宿主与测试替身覆盖）。
+9. **review 检查点**：
+   - 重试只重发宿主 `StopSpawn`、不再跑回调与区域离开信号：确认 `terminateSpawn`（`skill/spawn.go:286`）对非 running 的记录跳过回调（SKILL-26 之后所有停止都经它）。
+   - 待停止的记录仍占 owned 容量（宿主侧还在）：核对 `hasOwnedSpawnCapacityExcluding`（`skill/spawn_owned.go:160`）按 `spawnLivePartitions`（施放中 / 已移交 / 待停止，即 `liveOnHost`）计数，不数已放弃（SKILL-29）。
+   - RR-30 的恢复检查是 O(完成队列 × 衍生物数)，只在恢复时跑一次。
+
+<a id="skill-25"></a>
+### SKILL-25 “进程”全量改名为衍生物（Spawn）
+
+[说明](guide-cfg-skill-noncore.md#skill-25)
+
+1. **提交与版本**：`90c92caf`（第十三轮记录改名）、`4451a0a5`（实施，分支 `spawnrename`，基线 `3285d354`）、`a492be13`（DECISIONS 补提交号）。首发 v1.23.0（本版）。
+2. **改动**：`skill/`（含 skillsync、skillcompose、combatcomponent、testdata、integration/sync-e2e、examples）全部 Go / JSON / Markdown，`docs/skill/*`；16 个文件改名（`skill/process*.go` → `skill/spawn*.go`、`host_process.go` → `host_spawn.go`、`runtime_owned_process.go` → `runtime_owned_spawn.go`（SKILL-27 再改为 `runtime_owned_entity.go`）、`runtime_process_stop_retry.go` → `runtime_spawn_stop_retry.go`（SKILL-26 再改为 `runtime_spawn_stop.go`）等）；导出标识符 76 个、未导出 198 个、测试函数 34 个，逐个列在[重构记录 §3.6～§3.8](../../feature/REFACTOR-2026-10-06-skill-process-to-spawn.md)。`skill/runtime_checkpoint.go:29` `RuntimeCheckpointVersion` 3 → 4（`:19-22` 注释）。
+3. **不变量**：行为不变——测试除改名外不改断言；`proc`（被动触发账本）不是 process，不改。改名后 `rg -n -i 'process' skill docs/skill` 剩下的每一处在记录 §4.2 逐条给了理由（动词、操作系统进程、对照表本身）。
+4. **控制流**：无变化。
+5. **失败处理**：旧定义 Parse 失败（`phases: [0].on: [0]: json: unknown field "process"`，T-288）；旧 checkpoint `ErrCheckpointUnsupported`。
+6. **测试**：无修前红（纯改名）；验证（记录 §5）：`go test -race -count=3 ./skill/...` 5 包通过；两个 fuzz 各 20s；`skill/examples`、`sync-e2e` 两个独立模块通过；根包（含 `TestExamplesRun`、`TestTrackedMarkdownRelativeLinksResolve`）；`go build ./... && go vet ./...`；glsvet 无违例；digest 对比：36 个 testdata 定义的 gameplay / presentation digest 全部变化，source document digest 35 个变化。
+7. **性能**：无。
+8. **未验证**：无。codegen、demo 模板、kit 不引用这些名字（`rg` 核对），没跑 codegen 测试与 game-demo 重新生成（记录 §5 写明理由）。
+9. **review 检查点**：
+   - wire 与 checkpoint 的 JSON 字段名全部改了（`spawn_upsert` / `spawn_remove`、`spawns` / `next_spawn_id` 等）——确认 skillsync Applier 的严格解码与 Runtime 写出一致（sync-e2e 覆盖）。
+   - digest 输入里有字段名，所以改名改变 digest；确认没有为保留 digest 把旧名留在 digest 输入里（维护者要求不保留旧名）。
+
+<a id="skill-26"></a>
+### SKILL-26 衍生物停止入口统一（RR-20261006-32）
+
+[说明](guide-cfg-skill-noncore.md#skill-26)
+
+1. **提交与版本**：`57c87634`（第十三轮记录）、`3fad5b6e`（实施，分支 `skstop`，基线 `57c87634`；同提交修 RR-32）、`8bde60ac`（DECISIONS 补提交号）。首发 v1.23.0（本版）。
+2. **改动与符号**（`5e72ca4d`）：
+
+   | 位置 | 职责 |
+   | --- | --- |
+   | `skill/runtime_spawn_stop.go:79` `requestSpawnStop` | 唯一停止函数：已停 → 返回；停止中 → `terminateSpawn`；仍是 running（宿主拒绝）→ `enterStopPendingLocked`（`:98`）；本来就是 `stop_pending` 再失败 → 重试记账不变；错误返回给这一次请求 |
+   | `skill/spawn.go:286` `terminateSpawn`、`:213` `stopSpawn` | 解除 carry → 区域离开信号 → 回调（后两步只对 running）→ 宿主 `StopSpawn` |
+   | `skill/spawn.go:307` `stopSpawns`、`:315` `stopScopedSpawns` | 施法里的入口（失败、Interrupt / Cancel、goto、收尾）只选 running 的、只请求停止 |
+   | `skill/spawn_owned.go:20` `startEntitySpawn`、`:206` `handoffEntitySpawns`、`:264` `reapUnhandedEntitySpawns`、`:481` `terminateOwnedSpawn`、`:494` `RemoveProgram`、`:534` `Shutdown`；`skill/runtime_owned_entity.go:5` `executeOwnedSummon` | 其余入口都只调 `requestSpawnStop` |
+
+   删掉：`deferUnstoppedSpawnsLocked`、`deferRefusedStopLocked`、`stopOwnedSpawn`；文件 `runtime_spawn_stop_retry.go` 改名为 `runtime_spawn_stop.go`。
+3. **不变量**：处理宿主拒绝的位置只有一处；被拒的同一请求只打一次宿主、回调只跑一次；`Shutdown` / `RemoveProgram` 停不下的衍生物同样进入待停止由 Runtime 重试。守卫（`skill/spawn_stop_entries_promises_test.go`）：`spawnStopEntries`（`:132`）登记九个入口（施法失败、interrupt、衍生物启动失败、召唤事务提交失败、移交时 lifecycle 已失效、移交前 lifecycle 消失、移交后到期、`RemoveProgram`、`Shutdown`），每行写明触发场景；`TestEveryStopEntryDefersARefusedStopTheSameWay`（`:274`）每个入口让宿主拒绝一次，断言返回该错误、记录 `stop_pending`、同一请求只打一次宿主、不在 `OwnedSpawns`、`StateSnapshot` 可见，再推进 20 tick 断言恰好在第 4 个 tick 被重试并停掉、回调次数符合；`TestSpawnStopEntriesAreRegistered`（`:336`）用 `go/ast` 核对调 `requestSpawnStop` 的函数与登记表完全一致，`terminateSpawn` / `stopSpawn` / 宿主 `StopSpawn` 各只有一个调用方。按新语义改断言的旧用例：`TestOwnedSpawnStopFailureRemainsTrackedForRetry`（`skill/owned_entity_test.go:522`）。
+4. **控制流**（状态迁移，[方案 §3.1](../../feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md) 与[分区方案 §11.4](../../feature/REFACTOR-2026-10-07-skill-spawn-partition.md) 的合并）：
+
+   ```text
+   running ──请求停止，宿主已停──► ended / cancelled / failed（回调与离开信号各一次；spawn_stop）
+   running ──请求停止，宿主拒绝──► stop_pending（回调与离开信号各一次；spawn_update；重试时刻 = 当前 + backoff；错误返回这一次）
+   stop_pending ──重试到期，宿主已停──► ended / cancelled / failed（只重发 StopSpawn）
+   stop_pending ──重试到期，宿主拒绝──► stop_pending（次数 +1、间隔翻倍；到上限 exhausted + 告警）
+   stop_pending ──Shutdown / RemoveProgram 再请求──► 已停 / 不变（重试记账不变）
+   stop_pending ──待停止超过 MaxStopPendingSpawns──► abandoned（SKILL-29；本提交时是删记录）
+   ```
+
+5. **失败处理**：`Shutdown` / `RemoveProgram` 返回第一个错误；不在 `Shutdown` 里同步重试（Runtime 没有 ctx、按 tick 确定性推进；墙钟等待会让 `RecordingHost` / `ReplayHost` 的记录随时间变化，并阻塞快池 / 帧线程上的调用方）。
+6. **测试**：修前（基线 `57c87634`）施法失败、tick 到期、施法期间 lifecycle 消失三行已绿，其余六行红，节选（方案 §6 原文）：
+
+   ```text
+   --- FAIL: TestEveryStopEntryDefersARefusedStopTheSameWay/interrupt (0.00s)
+       spawn_stop_entries_promises_test.go:289: spawn status after the refused stop = "cancelled", want stop_pending
+       spawn_stop_entries_promises_test.go:292: StopSpawn called at host ticks [0 0] within the request, want exactly one refused call
+       spawn_stop_entries_promises_test.go:328: owned_spawn_callback_cancel ran 2 times, want 1 (a refused stop must not run the callback again)
+   --- FAIL: TestEveryStopEntryDefersARefusedStopTheSameWay/RemoveProgram (0.00s)
+       spawn_stop_entries_promises_test.go:289: spawn status after the refused stop = "running", want stop_pending
+       spawn_stop_entries_promises_test.go:296: spawn 1 still listed by OwnedSpawns (status "running"): the runtime would keep stepping it
+       spawn_stop_entries_promises_test.go:316: StopSpawn called at host ticks [0], want [0 4] (the runtime retries after the backoff)
+       spawn_stop_entries_promises_test.go:325: host still runs spawn 1 at tick 20
+   --- FAIL: TestSpawnStopEntriesAreRegistered (0.04s)
+       spawn_stop_entries_promises_test.go:351: no function calls requestSpawnStop: the stop entries do not share the unified stop
+   ```
+
+   （failed spawn start / failed owned spawn commit / handoff 三行与 Shutdown 一行同形，见方案 §6；interrupt / 启动失败 / 移交三行就是 RR-32。）变异：`Shutdown` 改回直接调 `terminateSpawn` 加 `else delete(ownedSpawns)` → 两条守卫都红（方案 §5）。修后两条通过；RR-21 / 22 / 23 / 30 / 31 与撤除重试的原有用例原样通过。复跑：`GOWORK=off go test -count=1 -run 'TestEveryStopEntry|TestSpawnStopEntries|TestOwnedSpawnStopFailure' ./skill`。
+7. **性能**：代码行 1524 → 1501；直接调 `terminateSpawn` 的位置 14 → 1（方案 §3.4）。
+8. **未验证**：无外部依赖，未在真实宿主上演练。
+9. **review 检查点**：
+   - 新增停止入口时 `TestSpawnStopEntriesAreRegistered` 会红，必须在 `spawnStopEntries` 登记一行并给出触发场景——确认登记表里九行的 `callers` 与源码一致，且没有经函数值 / 方法表达式间接调用 `requestSpawnStop` 而绕过 AST 识别的写法。
+   - `failCastLocked` 的 `stopScopedSpawns` 只选 running：之前被拒的已在 `stop_pending`，不会被再停一次（RR-32 的根因）。
+   - RR-34 是本提交引入的（`Shutdown` / `RemoveProgram` 现在也会进待停止，第一次碰上“上限删记录”），由 SKILL-28 修、SKILL-29 从结构上消除。
+
+<a id="skill-27"></a>
+### SKILL-27 生成宿主单位的效果改名为召唤物（Summon）
+
+[说明](guide-cfg-skill-noncore.md#skill-27)
+
+1. **提交与版本**：`57c87634` / `8861dbdc`（第十三轮记录 Summon 改名、第 2 类保持 Spawn、kind `summon` → `minion`）、`509c381f`（实施，分支 `summon`，基线 `8bde60ac`）、`443d08f6`（DECISIONS 补提交号）、`66d72a33`（第十三轮记录 `dismiss`）。首发 v1.23.0（本版）。
+2. **改动与符号**（`5e72ca4d`）：`skill/host_owned_entity.go:65` `OwnedEntityRuntimeHost`（`:66` `PreviewOwnedSummon(SummonCommand)`、`:68` `CommitOwnedSummon`、`:69` `RollbackOwnedSummon`）；`skill/host_command.go:31` `SummonCommand`；`skill/runtime_owned_entity.go:5` `executeOwnedSummon`、`:88` `executeOwnedCommand`（文件原名 `runtime_owned_spawn.go`）；`skill/compile_motion.go:118` minion 分支、`:336` 衍生物 kind 闭集合（`dash` / `orbit` / `projectile` / `area` / `beam` / `minion`）；`skill/runtime_checkpoint.go:29` 版本 4 → 5（`:22-24` 注释：cast 值里 `spawn_result` → `summon_result`）。逐个判定的个案与完整名单见[重构记录 §3.2～§3.7](../../feature/REFACTOR-2026-10-07-skill-summon-rename.md)。
+3. **不变量**：行为不变；skill 包里剩下的 `spawn` 只属于衍生物或通用英文（记录 §4.2 逐类核对：Go 词元 347 个属于衍生物）。`SpawnCommandMeta`、`OwnedSpawns` / `OwnedSpawnSnapshot`、`MaxOwnedSpawns*`、`HasSpawn`、`SpawnTemplate*` 经核对属于衍生物、不改。
+4. **控制流**：无变化。
+5. **失败处理**：旧定义 Parse 失败（`phases: [0].on: [0]: effect: unsupported effect "spawn"`，T-289）；召唤效果上挂 `"spawn":{"kind":"summon"}` 编译报 `MOTION_INVALID at $.phases[0].on.enter.steps[0].spawn.kind: spawn kind is not a closed motion kind`。
+6. **测试**：无修前红（纯改名）；验证（记录 §5）：`go test -race -count=3 ./skill/...`、两个 fuzz、两个独立模块、根包、`go build ./... && go vet ./...`、glsvet；digest 对比：默认环境 digest `68cd09d4…` → `a855e2dc…`，36 个定义的 gameplay / presentation digest 全部变化，source document digest 3 个变化（改了描述 / 别名的）。
+7. **性能**：无。
+8. **未验证**：无。实施中发现的 source document digest 缺陷已登记 RR-20261006-33 并在 SKILL-28 修复。
+9. **review 检查点**：
+   - `rg -n 'summon|minion' skill` 剩下的 `summon` 全是召唤效果 / 召唤物，`minion` 全是衍生物 kind；`rg -w 'despawn|spawned_before|spawn_tick|spawn_result|owned_entity_spawned' skill docs/skill` 只在对照表里出现。
+   - `previewOwnedSpawnCapacity`（`skill/spawn_owned.go:181`）名字里的 Spawn 指衍生物容量、参数是 `SummonCommand`——确认读法与记录 §3.3 一致。
+
+<a id="skill-28"></a>
+### SKILL-28 衍生物分区存放；源文档 digest；停止循环判空（RR-20261006-33 / 34）
+
+[说明](guide-cfg-skill-noncore.md#skill-28)
+
+1. **提交与版本**：`05e99cce`（第十三轮记录两张表改为分区）、`6826eeb2`（实施，分支 `skpart`，基线 `443d08f6`；同提交修 RR-33 / 34）、`822f2481`（合并、DECISIONS 补提交号）。首发 v1.23.0（本版）。
+2. **改动与符号**（`5e72ca4d`，含 SKILL-29 加的第五个分区）：
+
+   | 位置 | 职责 |
+   | --- | --- |
+   | `skill/spawn_table.go:23` `spawnPartition`（`spawnCasting` / `spawnHandedOff` / `spawnStopPending` / `spawnStopped` / `spawnAbandoned`）、`:36` `spawnLivePartitions`、`:39` `SpawnInstance.partition()` | 分区由记录字段决定；“仍在宿主侧”是前三个分区 |
+   | `skill/spawn_table.go:77` `setState`、`:90` `add`、`:99` `drop`、`:67` `newSpawnTable` | 唯一写入口：`setState` 摘下 → 改字段 → 放进新分区；记录不在表里时只改字段、不入表 |
+   | `skill/spawn_table.go:106` `get`、`:116` `count`、`:126` `each`、`:135` `sortedIDs` | 按分区查询；副作用遍历一律按 ID 排序 |
+   | `skill/runtime.go:222` `spawns spawnTable` | 删掉 `ownedSpawns` 字段 |
+   | `skill/spawn_owned.go:245` `OwnedSpawns` | 扫已移交分区按 `Owner` 过滤 |
+   | `skill/runtime_checkpoint.go:29`（版本 6，后到 7）、`:1086` | 只存一份 `spawns`；恢复按 `status` / `handed_off` 落分区，拒绝未知 status 与非 entity 衍生物上的 `handed_off` |
+   | `skill/canonical_definition.go:25` `canonicalDefinitionDigest`、`:31` `canonicalEncoder` | RR-33：按反射逐字段写出（接口写具体类型名、`json:"-"` 字段也写、map 按 key 排序、nil 与空区分、字符串带长度前缀）；没有规范形式的类型 panic |
+   | `skill/spawn_owned.go:506`、`:544` | RR-34：`RemoveProgram` / `Shutdown` 循环取回后判空、跳过 |
+
+3. **不变量与守卫**：每条记录恰好在一个分区、分区等于字段推出的分区——`TestSpawnPartitionsFollowRecordFields`（`skill/spawn_partition_promises_test.go:134`，停止入口九行 × 12 tick、移交到期回收、宿主一直拒绝三条序列，每步核对并 checkpoint 恢复后再核对）；只有 `setState` 写分区字段——`TestSpawnPartitionWritesStayInSpawnTable`（`:334`，`go/types` 按对象判断：分区 map 不外泄、`map[SpawnID]*SpawnInstance` 的写只在四个函数里、`Status` / `handedOff` 只在 `setState` 里赋值、`Runtime.spawns` 不被整体重赋）。RR-33：`TestSourceDocumentDigestSeesEveryDifference`（`skill/canonical_definition_promises_test.go:43`，十组只差一处的定义对）、`TestSourceDocumentDigestSeesTheEffectType`（`:108`，端到端）。RR-34：`TestStopSweepSkipsSpawnsDroppedAtTheStopPendingLimit`（`skill/runtime_spawn_stop_sweep_promises_test.go:22`，SKILL-29 后断言改为“后一个已放弃”）。
+4. **控制流**：tick 入口各扫自己的分区——推进 / 到期回收扫已移交，重试 / 上限扫待停止，施法收尾 / 移交 / 施法期间回收扫施放中，cast 回收扫已停止。
+5. **失败处理**：分区不变量破坏只可能来自绕过 `setState`，由源码守卫在测试期拦住；恢复时字段组合不合法即 `ErrCheckpointCorrupt`。
+6. **测试**：
+   - 变异（方案 §7，均已撤回）：`setState` 不从旧分区摘下 → `record 1 sits in both casting and stop_pending`；`handoffEntitySpawns` 直接 `spawn.handedOff = true` → `spawn_owned.go:240:3: Runtime.handoffEntitySpawns: assigns a partition field …; only spawnTable.setState may`；`enterStopPendingLocked` 另记一张索引 → `runtime_spawn_stop.go:92:2: … writes a map[SpawnID]*SpawnInstance; only spawnTable.setState / add / drop and newSpawnTable may (no second spawn index)`。
+   - RR-33 修前红（问题记录原文节选）：
+
+     ```text
+     --- FAIL: TestSourceDocumentDigestSeesEveryDifference/effect_type_set_memory_/_add_memory (0.00s)
+         canonical_definition_promises_test.go:90: source document digest beb5c6c6e7a42aaf7db52a3c9ebb06dc19f5cfb5d518e2d8def0353627004ee4 for both definitions; they differ in effect type set_memory / add_memory
+     --- FAIL: TestSourceDocumentDigestSeesEveryDifference/cost_amount (0.00s)
+         canonical_definition_promises_test.go:90: source document digest a027b7c05060e46260dccc9e2580153d2f791dbd3d36443e75f80a6fcf458bc4 for both definitions; they differ in cost amount
+     （cast window windup / recovery 表达式、cast policy、两组 input schema、两组 select shape、select filter 同形，共十个子用例）
+     --- FAIL: TestSourceDocumentDigestSeesTheEffectType (0.00s)
+         canonical_definition_promises_test.go:110: source document digest a1e1450871876a052ceb5dd1f4874b353f9bcafc866023e3aa2a167a8d935dc3 for set_memory and add_memory: the source changed, the digest did not
+     ```
+
+   - RR-34 修前红：
+
+     ```text
+         runtime_spawn_stop_sweep_promises_test.go:53: Shutdown = panicked: runtime error: invalid memory address or nil pointer dereference, want the refused stop reported
+         runtime_spawn_stop_sweep_promises_test.go:53: RemoveProgram = panicked: runtime error: invalid memory address or nil pointer dereference, want the refused stop reported
+     --- FAIL: TestStopSweepSkipsSpawnsDroppedAtTheStopPendingLimit (0.00s)
+     ```
+
+   - 修后：`go test -race -count=3 ./skill/...`（skill 66s）、两个 fuzz 各 25s、两个独立模块、根包、`go build ./... && go vet ./...`、glsvet。复跑：`GOWORK=off go test -count=1 -run 'TestSpawnPartition|TestSourceDocumentDigest|TestStopSweep' ./skill`。
+7. **性能**：非测试代码净 +48 行（删两张表的同步约 100 行，加 146 行的分区类型）；tick 入口不再扫已停止的历史记录。未做基准。
+8. **未验证**：无。保存旧 `SourceDocumentDigest` 比对的仓外调用方没有清单可核对；框架内无此类调用方，`skill/examples`、`sync-e2e` 不读它。
+9. **review 检查点**：
+   - `setState` 对“记录不在表里”只改字段、不入表——被删掉的记录不能因一次迟到的状态变化回到表里；确认 `stopSpawn` / `enterStopPendingLocked` 对已 drop 的记录调用 `setState` 时不会重新出现在任何分区。
+   - RR-33：Go 类型名与字段名进了源文档摘要，重命名 wire 类型或字段会改变源文档 digest（与之前用 json 编码时同一性质）；确认 `canonicalEncoder` 对函数、通道等无规范形式的类型 panic 的分支在全部 fixture 上不触发（`TestAllFixturesParseCompileInspectAndRun` 每次编译都求摘要）。
+
+<a id="skill-29"></a>
+### SKILL-29 已放弃分区（待停止上限选 B）
+
+[说明](guide-cfg-skill-noncore.md#skill-29)
+
+1. **提交与版本**：`3028214b`（第十三轮记录待停止上限选 B）、`f28285ad`（实施，分支 `skabandon`，基线 `3028214b`）、`dac4f38c`（DECISIONS 改为已实施）。首发 v1.23.0（本版）。
+2. **改动与符号**（`5e72ca4d`）：
+
+   | 位置 | 职责 |
+   | --- | --- |
+   | `skill/spawn.go:22` `SpawnAbandoned`；`skill/spawn_table.go:146` `allSpawnPartitions`（含 `spawnAbandoned`） | 新状态与第五个分区；不在 `spawnLivePartitions` 里 |
+   | `skill/runtime_spawn_stop.go:113` `makeRoomForStopPendingLocked`、`:136` `abandonSpawnLocked` | 超过 `MaxStopPendingSpawns` 时选最早的 exhausted（没有就最早仍在重试的）经 `setState` 挪进已放弃；重试字段清零；指标、Error 日志、`spawn_update` / `spawn_upsert` |
+   | `skill/runtime_spawn_stop.go:159` `pruneAbandonedSpawnsLocked`；`skill/scheduler.go:276`（`Advance` 里 `defer`） | 唯一清理点：`Advance` 返回前按 `MaxAbandonedSpawns` 从 ID 最小的删起，每条计 `skill.spawn.abandoned_pruned.total`、一条 Warn |
+   | `skill/runtime_spawn_stop.go:59` `MetricSpawnAbandoned`、`:60` `MetricSpawnAbandonedPruned` | 替换 `MetricSpawnStopPendingDropped` |
+   | `skill/runtime.go:86` `MaxAbandonedSpawns`（默认 1024） | 进 checkpoint（`skill/runtime_checkpoint.go:96` `max_abandoned_spawns`） |
+   | `skill/runtime_retention.go:82` `castHasAbandonedSpawnLocked`；`skill/runtime.go:481` | 失败启动还 ID 的条件加上“名下没有已放弃的记录”，免得悬空记录挂到下一个 cast 名下 |
+   | `skill/runtime_retention.go:97` `forgetCastSpawnsLocked` | 只删已停止分区里该 cast 的记录（已放弃的比 cast 活得久） |
+   | `skill/runtime_checkpoint.go:1086` | 恢复：已放弃的记录必须带 `direct_program`；已放弃条数不按上限核对（两次 Advance 之间可暂时超限） |
+
+3. **不变量**：删记录只剩三个登记点（`spawnDropSites`：`Advance` 末尾清理已放弃分区、随 cast 回收已停止的记录、衍生物启动失败且已停）；没有“记录在别的循环进行中消失”的路径。守卫：`TestSpawnPartitionWritesStayInSpawnTable` 扩展（`drop` 只在登记点、`pruneAbandonedSpawnsLocked` 只由 `Advance` 引用）；`TestSpawnPartitionsFollowRecordFields` 扩展（待停止上限 1、已放弃上限 2、六轮施放 → 移交 → Shutdown，核对 Advance 之外不删、Advance 之后不超过 2 条、暂时超限时 checkpoint 恢复与 live 推进后分区相同）；行为用例 `TestStopSweepAbandonsAtTheStopPendingLimit`、`TestAbandonedSpawnsArePrunedOnlyAtTheEndOfAdvance`（含版本 6 checkpoint 被拒）、`TestAbandonedSpawnIsVisibleToSyncConsistently`（`skill/runtime_spawn_abandon_promises_test.go:53` / `:138` / `:215`）。
+4. **控制流**：见 SKILL-26 的状态迁移表最后一行，以及：`abandoned` ──Shutdown / RemoveProgram / 重试 / cast 回收──► `abandoned`（无副作用）；`abandoned` ──Advance 末尾、超过 `MaxAbandonedSpawns`──► 记录删除（`spawn_remove`）。
+5. **失败处理**：放弃不代表宿主已停，不发 `spawn_stop` / `spawn_remove`；宿主侧清理靠比赛结束 / 程序移除（`RemoveOwnedEntitiesForMatchEnd` / `ByProgram` 照常调用）。
+6. **测试**：修前（基线只加常量 / 选项字段以便编译）三个新用例全红，原文（方案 §11.6）：
+
+   ```text
+   runtime_spawn_abandon_promises_test.go:94: spawn 2 status "" at MaxStopPendingSpawns, want abandoned (kept, not dropped)
+   runtime_spawn_abandon_promises_test.go:100: skill.spawn.abandoned.total grew by 0, want 1
+   runtime_spawn_abandon_promises_test.go:107: state mutations for spawn 2 = "spawn_upsert:running spawn_upsert:stop_pending spawn_remove", want it to end in spawn_upsert:abandoned without spawn_remove
+   runtime_spawn_abandon_promises_test.go:159: before Advance: spawn 1 status "", want "abandoned"
+   runtime_spawn_abandon_promises_test.go:190: state mutations for spawn 1 = "spawn_upsert:running spawn_upsert:stop_pending spawn_remove", want spawn_remove only after the Advance that pruned it
+   runtime_spawn_abandon_promises_test.go:220: cast 1 owns no spawn record
+   ```
+
+   “以前只能靠判空才不崩”：基线去掉 `Shutdown` 判空即 `nil pointer dereference`；修后去掉两处判空相关用例仍全部通过（判空保留作双重保险）。改断言的旧用例只有三处，都是“到上限删除”这条语义本身（方案 §11.6 表）。变异五项全红（§11.7）。修后：`go test -race -count=3 ./skill/...`（skill 76s）、两个 fuzz 各 25s、两个独立模块、根包、`go build ./... && go vet ./...`、glsvet。复跑：`GOWORK=off go test -count=1 -run 'Abandon|TestSpawnPartition|TestStopRetriesAreBounded' ./skill`。
+7. **性能**：非测试代码 +137 / −33（净增代码约 49 行、注释约 52 行）。
+8. **未验证**：无。
+9. **review 检查点**：
+   - 已放弃的记录不钉住 cast、但 CastID 允许悬空：确认恢复不核对已放弃记录的 cast 是否存在（之前也不核对），而解析程序只用记录自带的 `Program`（`direct_program` 必须为真）。
+   - `Advance(当前 tick)` 且没有到期工作时在 `skill/scheduler.go:265-270` 早返回，位于清理的 `defer`（`:276`）之前：这一次不清理、暂时超限留到下一次推进（方案 §11.1 写明是有意的）。确认这条路径上也不会新增已放弃记录（早返回之前没有任何停止请求）。
+
+<a id="skill-30"></a>
+### SKILL-30 Host 取值能力表（B3 ③，RR-20261006-37 / 39）
+
+[说明](guide-cfg-skill-noncore.md#skill-30)
+
+1. **提交与版本**：`66d72a33`（第十三轮记录原下个大版本项本版完成）、`cd8ed341`（实施，分支 `b3cap`，基线 `dac4f38c`；同提交修 RR-37）、`13f032a3`（登记）、`b839b77f`（方案补验证结果）、`e999f68e`（收尾，分支 `gaps`，基线 `82dfe672`；修 RR-39）、`af3e3926`（补提交号）。首发 v1.23.0（本版）。
+2. **改动与符号**（`5e72ca4d`）：
+
+   | 位置 | 职责 |
+   | --- | --- |
+   | `skill/host_capability.go:27` `HostCapabilityCatalog`、`:50` `HostCapabilityTable`、`:62` `HostCapabilityProvider`、`:81` `HostCapability`、`:95` `ErrHostCapabilityMissing`（`errors.Is` `ErrHostContractViolation`） | 能力表的类型 |
+   | `skill/host_capability.go:109` `hostCapabilityColumns`、`:123` `hostOnlySpawnNumericFields` | 八列的唯一登记处（Has / Items / 校验 / 合并 / 守卫都遍历它） |
+   | `skill/host_capability.go:136` `HostCapabilityTableOf`、`:166` `FullHostCapabilityCatalog`、`:217` `Missing`、`:229` `MergeHostCapabilities`、`:253` `HostSupportsEnvironment`、`:274` `validateHostCapabilityCatalog` | 环境的表、合并、核对、环境校验（`CATALOG_HOST_POLICY_INVALID`，`skill/diagnostic.go:32`） |
+   | `skill/compile_environment.go:302` `CompileEnvironment.Host`（`:310` 默认 `FullHostCapabilityCatalog()`） | 随环境下发、进 authority digest；`Motion.EnabledSlots` / `HostFeatures` 删除 |
+   | `skill/compile_host_capability.go:10` `runHostCapabilityCheck`、`:25` `collectHostRequirements`、`:86` `collectSpawnHostRequirements` | 编译器收集需求（带第一次用到的源路径）对照表，表外报 `HOST_CAPABILITY_MISSING`（`skill/diagnostic.go:62`）；RR-37：运动衍生物固定需要 frame / steering / offsets / completion |
+   | `skill/runtime_host_capability.go:16` `admitHostCapabilitiesLocked`、`:33` `hostCoversProgram`、`:44` `hostCheckedResolver` | Runtime 在 Program 第一次 Start / RegisterAbility / ActivatePassive / RestoreRuntime 时准入；RR-39：直接 `host.HostCapabilities()`，没有类型断言与跳过分支 |
+   | `skill/host.go:40-42` `Host` 嵌入 `HostCapabilityProvider` | RR-39：每个 Host 都声明能力表 |
+   | `skill/replay.go:52` `RecordingHost.HostCapabilities` | 转发被包装 Host 的表并记录（`host_capabilities`），`ReplayHost` 回放 |
+   | `skill/memory_host.go:156` `MemoryHost.HostCapabilities`；`skill/combatcomponent/adapter.go:274` `HostAdapter.HostCapabilities` | 两个参考实现的声明；配置了 catalog 后对表外属性 / 资源报 `ErrHostCapabilityMissing` |
+   | `skill/host_capability_check.go:24` `CheckHostCapabilities` | 按声明逐项调用 Host 核对（读属性核量纲、读资源与付零费、零值资源变化与 1 tick 零值修正、按步骤 `StepSpawn`、断言 `OwnedEntityRuntimeHost`；属性 / 资源两列再核对表外 key 被拒） |
+
+3. **不变量与守卫**（`skill/host_capability_promises_test.go`，另注文件）：
+   - 编译器对每项需求都查表：`TestCompilerConsultsTheTableForEveryRequirement`（`:356`，全部变异种子 × 默认表每一项，去掉这一项后在需求里 ⇒ 只报点名它的 `HOST_CAPABILITY_MISSING`，不在 ⇒ 照常编译，1200 次）。
+   - Runtime 只向 Host 要编译出的需求：`TestRuntimeAsksHostOnlyForCompiledRequirements`（`:550`，记录型 Host 上跑全部种子）。
+   - 编译器不绕过表：`TestCompilerReadsHostCapabilitiesOnlyThroughTheTable`（`:636`）。只给 Host 的数值字段与 Runtime 用法一致：`TestHostOnlySpawnNumericFieldsMatchRuntime`（`:592`）。环境校验与 digest：`TestEnvironmentHostCapabilityCatalogIsValidatedAndDigested`（`:319`）。
+   - 行为：`TestHostCapabilityMissingIsRejectedAtCompileTime`（`:159`）、`TestRuntimeRefusesProgramsOutsideTheHostTable`（`:184`，mana 仍是 100）、`TestRestoreRefusesProgramsOutsideTheHostTable`（`:207`）、`TestMemoryHostCapabilitiesMatchItsBehavior`（`:239`）、`TestCheckHostCapabilitiesCatchesMisdeclaredHosts`（`:281`）；HostAdapter 四条（`skill/combatcomponent/host_capability_promises_test.go:74` / `:90` / `:104` / `:119`）。
+   - RR-39：`TestHostInterfaceRequiresTheCapabilityTable`、`TestWrappingHostsForwardTheWrappedCapabilities`、`TestEmptyTableRefusesEveryRequirement`、`TestNoHostCapabilitySkipBranch`（`skill/host_capability_required_promises_test.go:31` / `:41` / `:71` / `:85`）；改写的 `TestOwnedEntityRuntimeFailsClosedWithoutOwnedHostContract`（`skill/owned_entity_test.go:497`，如实声明的 Host 在准入处被拒；谎报 summon 的 Host 由施法中途的类型断言兜底，原断言保留在这一层）。
+4. **控制流**：
+
+   ```text
+   CompileEnvironment.Host + Gameplay catalog ─HostCapabilityTableOf→ 编译器 collectHostRequirements ─逐项 Has→ 表外 HOST_CAPABILITY_MISSING
+        └→ Program.hostRequirements（排序去重，不进 gameplay / presentation digest）
+   第一次 Start / RegisterAbility / ActivatePassive / RestoreRuntime ─host.HostCapabilities().Missing(requirements)→ ErrHostCapabilityMissing（不扣费）
+   通过的 Program 记在 hostAdmitted，之后不重复核对；恢复经 hostCheckedResolver（失败为 ErrCheckpointProgram，点名缺的项）
+   ```
+
+5. **失败处理**：表外能力在编译期或准入处拒绝并点名；谎报能力的 Host 由施法中途的类型断言（召唤物）或 Host 自己的错误（运动步骤）兜底，业务测试里由 `CheckHostCapabilities` 发现。
+6. **测试**：
+   - 修前（基线 `dac4f38c`，旧 API 的临时用例，方案 §7.1 原文）：
+
+     ```text
+     summon 写在不实现 OwnedEntityRuntimeHost 的 Host 上：
+       compile errors=false; Activate err=skill: host contract violation; caster mana after=90 (was 100)
+     带 collision 的衍生物跑在不接受碰撞步骤的 Host 上：
+       compile errors=false; Activate err=host: collision motion is not supported; cast status=failed; caster mana after=90 (was 100)
+     enabled_slots 去掉 steering、定义不写 steering（RR-20261006-37）：
+       compile errors=false; Activate err=host: steering motion is not supported; cast status=failed; caster mana after=90 (was 100)
+     MemoryHost（配置了默认 catalog）：
+       attribute handle 99 (not in catalog): value=0 err=<nil>; resource "rage" (not in catalog): value=0 err=<nil>; PayCosts rage 0 err=<nil>
+     HostAdapter：
+       HostAdapter AttributeRead handle 99 (not in catalog): handled=true value=0 err=<nil>
+     ```
+
+   - RR-39 修前（基线 `82dfe672`，临时用例）：
+
+     ```text
+     --- FAIL: TestRedUndeclaredHostBypassesAdmission (0.00s)
+         zz_red_undeclared_test.go:20: host without HostCapabilities: Activate err = skill: host contract violation, mana = 90; want ErrHostCapabilityMissing before paying (mana 100)
+         zz_red_undeclared_test.go:20: RecordingHost over a no-summon host: Activate err = skill: host contract violation, mana = 90; want ErrHostCapabilityMissing before paying (mana 100)
+     ```
+
+   - 变异（方案 §7.4 八项、§12.4 三项，全部变红后还原），例：steering 需求改回“写了才要” → `runtime asked the host for motion_step "steering" via StepSpawn, but the compiled requirements […] do not list it`；Runtime 恢复跳过分支 → `runtime_host_capability.go:37 asserts HostCapabilityProvider; every Host declares its table, read host.HostCapabilities() directly`。
+   - 修后：`go test -race -count=3 ./skill/...`、两个 fuzz 各 25s、`skill/examples` 三个示例实跑、`sync-e2e`、根包、`go build ./... && go vet ./...`、glsvet；`go test -count=1 ./codegen/...` 与新生成 game-demo build / vet / test 通过（生成形状不变）。复跑：`GOWORK=off go test -count=1 -run 'HostCapabilit|TestRuntimeAsksHost|TestCompilerConsults|TestWrappingHosts|TestEmptyTable|TestNoHostCapabilitySkip' ./skill ./skill/combatcomponent`。
+7. **性能**：准入每个 Program 在一个 Runtime 上只核对一次；未做基准。
+8. **未验证**：无。设计边界（方案 §11）：`spawn_numeric_field` 只能核对 `StepSpawn` 接受该字段，Host 是否真的使用无法从接口上观察；非 minion 的衍生物 kind 同理（`StepSpawn` 不带 kind）——声明即承诺。
+9. **review 检查点**：
+   - 资源列就是 catalog（不另抄一份）、属性列是 catalog 里 `Readable` 的属性：确认 `Readable` 原来没有读取方（方案 §2.1），现在只有 `HostCapabilityTableOf` 读它，`TestCompilerReadsHostCapabilitiesOnlyThroughTheTable` 守住。
+   - 未配置 catalog 的 MemoryHost 维持按实体数据作答（测试便利）——确认没有生产路径用未配置 catalog 的 MemoryHost。
+   - 资源 / 修正 operation 的语言封闭集合检查（`SHAPE_INVALID`，NC-215）保留，Host 表是它的子集：确认两者没有被合并成只查 Host 表（那样会让 DSL 取值范围随 Host 变化）。
+
 ## NONCORE：非核心 review（N01～N15）的修复与收尾
 
-先读：roost-coding“生命周期与装配的复审要点”（三步停机、A3 共用类型与契约骨架、C7 遍历回调契约，第 63～80 行）与“反复出问题要上报方向判断”（第 105 行），以及 [fix-contract-review](../../agent-skills/roost-coding/references/fix-contract-review.md)。各单元的场景矩阵与“保持现状的观察”在 [单元状态](../../review/REMAINING-REVIEW-HANDOFF-2026-10-05.md)。
+先读：roost-coding“生命周期与装配的复审要点”（三步停机、A3 共用类型与契约骨架、C7 遍历回调契约，第 63～82 行）与“反复出问题要上报方向判断”（第 107 行），以及 [fix-contract-review](../../agent-skills/roost-coding/references/fix-contract-review.md)。各单元的场景矩阵与“保持现状的观察”在 [单元状态](../../review/REMAINING-REVIEW-HANDOFF-2026-10-05.md)。
 
 本主题的条目大多是“单点缺陷 + 一条先红后绿用例”。review 时建议先看每条的“不变量”与守卫用例是否真的钉住承诺（而不是钉住实现细节），再看第 9 点的检查点。红文本均取自 `docs/bug/` 或 `docs/bugfix/` 记录原文；记录只给证据链接的，这里抄证据文件的首段。
 
@@ -1333,7 +1833,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
 1. **提交与版本**：`c8d72122`。首发 v1.20.1。之后 `50f2ac2a`（A3，APP）用 `internal/stopcontract` 骨架套了生成 TCP 的停止入口。
 2. **改动**：`codegen/internal/roost/render_player_tcp.go`（模板内 `Server.Stop` / `Mod.StopWithContext`）。
-3. **不变量**：三步停机——超时返回错误并保留 server，重试继续等真实排空。守卫：生成用例 `TestAStopRetryWaitsForAConnectionTheFirstStopCouldNotDrain`（`render_player_tcp.go:2203`）、`TestAModStopRetryKeepsTheServerUntilItDrains`（`:2226`）、`TestABlockingCloseSubscriberDoesNotHoldStopPastItsContext`（`:2254`）。
+3. **不变量**：三步停机——超时返回错误并保留 server，重试继续等真实排空。守卫：生成用例 `TestAStopRetryWaitsForAConnectionTheFirstStopCouldNotDrain`（`render_player_tcp.go:2187`）、`TestAModStopRetryKeepsTheServerUntilItDrains`（`:2210`）、`TestABlockingCloseSubscriberDoesNotHoldStopPastItsContext`（`:2238`）。
 4. **控制流**：关准入 → ctx 内等连接 goroutine → 排空后释放。
 5. **失败处理**：超时 → ctx 错误、保留。
 6. **测试**：与旧生成器的 `server_gen.go` 组合时 3 红（`retry Stop reported success...`、`server kept = false`、`ignored its context`），新生成物 3 绿。
@@ -1347,7 +1847,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#noncore-5)
 
 1. **提交与版本**：`fcc78ad0`（收尾第 2 批）。首发 v1.23.0（本版）。
-2. **改动**：只加测试：生成用例 `TestADispatchTimeoutBoundsTheWaitNotAnUncooperativeHandler`（`codegen/internal/roost/render_player_tcp.go:1622`），测试辅助 `stuckDispatchServer` 抽出通用的 `dispatchServer`。
+2. **改动**：只加测试：生成用例 `TestADispatchTimeoutBoundsTheWaitNotAnUncooperativeHandler`（`codegen/internal/roost/render_player_tcp.go:1606`），测试辅助 `stuckDispatchServer` 抽出通用的 `dispatchServer`。
 3. **不变量**：DispatchTimeout 只界定等待；名额在 handler 返回且连接结束后才归还。
 4. **控制流**：无变化。
 5. **失败处理**：无。
@@ -1362,7 +1862,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#noncore-6)
 
 1. **提交与版本**：`e81d81bc`（N03 登记）、`ae742984`（NC-90）、`64179ad5`（NC-91）、`25646001`（NC-92）、`a80be80c`（收口）。首发 v1.20.1。之后 `50f2ac2a`（A3）把 bus JetStream RPC 的手写准入门改用 `internal/operation.Lifetime`。
-2. **改动**：`bus/bus.go:317` `Stop`、`:334` `StopWithContext`、`:425` `stopResources`；`bus/jetstream_rpc.go:255` `stopJetStreamRPCRequests`、`:285` `stopJetStreamRPCResponses`（响应消费者推迟到排空之后再停）；`bus/rpc_error.go:19` `ErrRPCCapturedByJetStream`、`:68` 识别 PubAck。
+2. **改动**：`bus/bus.go:317` `Stop`、`:334` `StopWithContext`、`:425` `stopResources`；`bus/jetstream_rpc.go:263` `stopJetStreamRPCRequests`、`:293` `stopJetStreamRPCResponses`（响应消费者推迟到排空之后再停）；`bus/rpc_error.go:19` `ErrRPCCapturedByJetStream`、`:68` 识别 PubAck。
 3. **不变量**：停止时先关 JetStream 请求准入、再在 ctx 内等在途 handler；回包不随 Bus 停止取消；没有 reply subject 的 JetStream RPC 请求不执行。守卫：`bus/jetstream_stop_promises_test.go`（`:120` `TestJetStreamStopHandsInterruptedRequestBackToBroker` 为行为保持的控制）；真实 NATS `kit/nats/jetstream_stop_real_promises_test.go:81` `TestRealJetStreamStopWaitsForInFlightHandler`（`-tags integration`）。
 4. **控制流**：Stop → 关请求准入 → 等在途 handler（超预算返回 ctx 错误、保留，重试继续等）→ 停响应消费者 → 关连接。
 5. **失败处理**：因停止被取消而中断的 handler 不回“已取消”失败包，交还 broker 重投；投递次数已到 MaxDeliver 时被 Term（与修前相同）。
@@ -1485,7 +1985,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#noncore-13)
 
 1. **提交与版本**：`be4eb0fa`。首发 v1.20.0。
-2. **改动**：`cache/mirror.go:85` `replicaStore.ApplyReplica`（反序列化后先核对 key / version 与信封）；`remoteentity/interest.go`（写注册表前核对完整消息身份）。
+2. **改动**：`cache/mirror.go:88` `replicaStore.ApplyReplica`（反序列化后先核对 key / version 与信封）；`remoteentity/interest.go`（写注册表前核对完整消息身份）。
 3. **不变量**：信封与载荷身份不一致的消息不改 Store / 注册表。守卫：`cache/replica_payload_identity_promises_test.go`、`remoteentity/interest_payload_identity_promises_test.go`（八项）。
 4. **控制流**：消息 → 解码 → 身份核对 → Set / Upsert。
 5. **失败处理**：明确拒绝、Store 不变；含身份的 null 更新在回调前拒绝。
@@ -1548,7 +2048,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 5. **失败处理**：无。
 6. **测试**：NC-37 修前 10 叶子 4 红 / 6 控制；NC-38 修前 `persisted generation=0, want 1`、`redispatch reused old command ID "resume:1:0:1" at generation 1`（补偿为 `resume:2:0:1`）。
 7. **性能**：无。
-8. **未验证**：跨主机副本集与切主（外部 E11）。单机真实副本集已验：本次重核在 `e6828e4f` 上把 `saga/mongo_resume_incarnation_promises_test.go` 的两个用例临时换成隔离环境的真实副本集（库名唯一、用后删除，探针未入库）跑过：Resume 三代持久与重派发（forward / compensate）、`incarnation` 在 0 / 1 / 17 / 2³²−1 下经 Get / GetByBusinessKey / List / Apply 不丢，全部通过。
+8. **未验证**：跨主机副本集与切主（外部 E11）。单机真实副本集已验：第一次重核在 `e6828e4f` 上把 `saga/mongo_resume_incarnation_promises_test.go` 的两个用例临时换成隔离环境的真实副本集（库名唯一、用后删除，探针未入库）跑过：Resume 三代持久与重派发（forward / compensate）、`incarnation` 在 0 / 1 / 17 / 2³²−1 下经 Get / GetByBusinessKey / List / Apply 不丢，全部通过。
 9. **review 检查点**：uint32 最大值只验 BSON 往返，不验 Resume 溢出。
 
 <a id="noncore-17"></a>
@@ -1578,7 +2078,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 5. **失败处理**：非法计划 `ErrConflict`（可 `errors.Is`）。
 6. **测试**：修前 `stale scan claimed unavailable retry (future_nack): next=2026-10-05 07:55:06.781 +0000 UTC now=2026-10-05 06:55:06.781 +0000 UTC`；`malformed foreign_key plan was accepted: <nil>`。
 7. **性能**：无。
-8. **未验证**：Mongo 网络丢回复与提交结果未知（外部 E11）。多进程：本次重核在 `e6828e4f` 上跑了 `TestRealSagaCrossProcessKillRecovers`（真实 JetStream + Mongo 副本集，两个协调器 + Mongo 步骤进程，中途 SIGKILL 一个）：60 个 saga 全部完成、120 个操作各恰好提交一次、outbox 排空、无残留租约（76s）。
+8. **未验证**：Mongo 网络丢回复与提交结果未知（外部 E11）。多进程：第一次重核在 `e6828e4f` 上跑了 `TestRealSagaCrossProcessKillRecovers`（真实 JetStream + Mongo 副本集，两个协调器 + Mongo 步骤进程，中途 SIGKILL 一个）：60 个 saga 全部完成、120 个操作各恰好提交一次、outbox 排空、无残留租约（76s）。
 9. **review 检查点**：NC-250（NONCORE-23）补修时用“去掉 `applyFilter` 的租约条件”做过负对照，确认该条件仍在。
 
 <a id="noncore-19"></a>
@@ -1587,7 +2087,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#noncore-19)
 
 1. **提交与版本**：`be7bcc18`。首发 v1.20.1。B9（`bd6df5e5`）复核补修见 NONCORE-21。
-2. **改动**：`kit/service/account/create_role.go`（换名也释放；补偿失败计 `rollback.failed`）；`kit/service/global/activity/service.go:988` `windowKeyProblem`（Opening 与 sweep 共用）。
+2. **改动**：`kit/service/account/create_role.go`（换名也释放；补偿失败计 `rollback.failed`）；`kit/service/global/activity/service.go:1008` `windowKeyProblem`（Opening 与 sweep 共用）。
 3. **不变量**：建角补偿的计数如实反映发生了什么；sweep 只结算本组的合法键。守卫：`kit/service/account/pending_creation_other_name_promises_test.go:237` 等；`kit/service/global/activity/confirmed_key_ownership_promises_test.go`。
 4. **控制流**：换名请求 → 名字已被他人提交 → 释放死计划 → 按新名建角。
 5. **失败处理**：坏条目跳过、保留、计 `sweep.window_key_malformed`。
@@ -1608,7 +2108,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#noncore-20)
 
 1. **提交与版本**：`54e8bea3`（登记）、`46c4dfba`（修复）。首发 v1.20.1；v1.20.2 `277e1252`（C4）删除 `activity.game_sids`。回归去向复核 `d5682dc4`（分支 `fixr2`，新增守卫，首发 v1.23.0 本版）。
-2. **改动**：当时 `demo/internal/service/game/activity.go.tmpl`、`codegen/internal/roost/demo.go`、`kit/service/global/service.go`（注释更正不存在的 `Rebind`）。`e6828e4f` 上这条承诺由活动组文件兑现：`kit/service/global/activity/groups.go:80` `ParseGroups`（`:58` `LoadGroupsFile` 调它）加载时拒绝组内重复、非正数 / 超出 int32、一组超过 `MaxExpectedGames`（`kit/service/global/activity/types.go:223`，64）；game-demo `startActivity` 在查协调器能力之前按 `activity.groups_file` 点名拒绝（OWN-5）。
+2. **改动**：当时 `demo/internal/service/game/activity.go.tmpl`、`codegen/internal/roost/demo.go`、`kit/service/global/service.go`（注释更正不存在的 `Rebind`）。`e6828e4f` 上这条承诺由活动组文件兑现：`kit/service/global/activity/groups.go:81` `ParseGroups`（`:59` `LoadGroupsFile` 调它）加载时拒绝组内重复、非正数 / 超出 int32、一组超过 `MaxExpectedGames`（`kit/service/global/activity/types.go:223`，64）；game-demo `startActivity` 在查协调器能力之前按 `activity.groups_file` 点名拒绝（OWN-5）。
 3. **不变量**：注定开不出窗口的候选集在启动时、任何远端调用之前按配置键名失败。C4 之后候选集 = 本服在 `configs/activity_groups.yaml` 里所在组的成员。
 4. **控制流**：game Init → `startActivity` → `activityGroup`（`ParseGroups` 校验）→ 才查协调器能力。
 5. **失败处理**：`Service.Init` 失败，错误点名 `activity.groups_file`。
@@ -1626,7 +2126,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
      | 原子用例（`277e1252^` 的 `activity_test.go.tmpl`） | `e6828e4f` 上的覆盖 |
      | --- | --- |
-     | `a-repeated-sid` | 模板 `TestActivityRefusesAGroupNoWindowCouldOpenWith/a-repeated-sid`（`demo/internal/service/game/activity_test.go.tmpl:235`）；kit `TestAGroupsFileThatCannotBeUsedIsRefusedByName/repeated-sid`（`kit/service/global/activity/groups_promises_test.go:79`），另有 `a-sid-in-two-groups` / `sid-in-two-groups` |
+     | `a-repeated-sid` | 模板 `TestActivityRefusesAGroupNoWindowCouldOpenWith/a-repeated-sid`（`demo/internal/service/game/activity_test.go.tmpl:309`）；kit `TestAGroupsFileThatCannotBeUsedIsRefusedByName/repeated-sid`（`kit/service/global/activity/groups_promises_test.go:79`），另有 `a-sid-in-two-groups` / `sid-in-two-groups` |
      | `a-sid-beyond-int32` | 模板 `…/a-sid-beyond-int32`；kit `…/beyond-int32`、`…/non-positive` |
      | `more-candidates-than-one-live-query`（> `app.SingletonLiveMaxSIDs` = 200） | 一组至多 64 个成员、加载时拒绝：模板 `…/more-than-the-coordinator-takes`；kit `TestAGroupLargerThanOneWindowIsRefusedWhenLoaded`（`groups_promises_test.go:44`）；**新增**守卫 `TestAGroupFitsOneLiveQuery`（`kit/service/global/activity/groups_live_limit_promises_test.go:15`，`MaxExpectedGames` ≤ `app.SingletonLiveMaxSIDs`，两个常量改一个不改另一个时先红） |
      | `own-sid-and-non-positive-entries-are-skipped` | 不再适用：组文件里本服必须是成员、非正数从“跳过”收紧为“拒绝”——模板 `…/this-server-in-no-group`、`…/no-groups-file`；kit `…/non-positive` |
@@ -2139,13 +2639,13 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 **提交与版本**：`7b73aabc`（第十二轮 kit 批，分支 `bkit`）、`d6a677e0`（标注）。首发 v1.23.0（本版）。
 
 <a id="noncore-46"></a>
-### NONCORE-46 N13（NC-180～185 与复审补修）
+### NONCORE-46 N13（NC-180～185 与复审补修）；TaskPool 统计口径（RR-20261006-20）
 
 [说明](guide-cfg-skill-noncore.md#noncore-46)
 
-1. **提交与版本**：`e7bbac3d`（登记）、`7e4ed438`（NC-180 / 181 container）、`20400337`（NC-184 / 185）、`1d600b9b`（NC-182）、`4c26b4b5`（NC-183）、`815c3661`（NC-180 复审：entity 持引用）、`c10cc9ac` / `8d6f4652`（记录与复审）。首发 v1.20.2。
-2. **改动**：`container/bucket.go:157` `Bucket.Range`（读锁内复制、锁外回调）、`:68` `RangeAll` / `:49` `RangeWithCursorCnt`（false 跨桶停止）；`entity/entity_manager.go:337` `Range`、`:343` `RangeByCategory`、`:369` `rangeHeld`（Touch / UnTouch）；`safemap/fast.go:54` `Set`、`:133` `Clear`、`:149` `Range`；`goroutine/task_pool.go`（受理与关闭互斥）；`container/topologic_sort.go`、`container/keymap.go:97` `Range`。
-3. **不变量与守卫**：`container/bucket_range_promises_test.go`、`entity/entity_manager_range_promises_test.go`（含 `TestManagerRangeNeverHandsOutAClearedEntity`）、`safemap/fastmap_range_promises_test.go`、`goroutine/task_pool_shutdown_promises_test.go`、`container/keymap_topo_promises_test.go`；生成 `VarietyDao` 组合（真实文件 WAL 重放，`-race -count=50`）。
+1. **提交与版本**：`e7bbac3d`（登记）、`7e4ed438`（NC-180 / 181 container）、`20400337`（NC-184 / 185）、`1d600b9b`（NC-182）、`4c26b4b5`（NC-183）、`815c3661`（NC-180 复审：entity 持引用）、`c10cc9ac` / `8d6f4652`（记录与复审）。首发 v1.20.2。RR-20261006-20：`41bdb9e5`（修复，分支 `tpstat`，基线 `a3002263`）、`344edf1d`（第十三轮记录 NONCORE-46 选 A），首发 v1.23.0（本版）。
+2. **改动**：`container/bucket.go:157` `Bucket.Range`（读锁内复制、锁外回调）、`:68` `RangeAll` / `:49` `RangeWithCursorCnt`（false 跨桶停止）；`entity/entity_manager.go:337` `Range`、`:343` `RangeByCategory`、`:369` `rangeHeld`（Touch / UnTouch）；`safemap/fast.go:54` `Set`、`:133` `Clear`、`:149` `Range`；`goroutine/task_pool.go`（受理与关闭互斥）；`container/topologic_sort.go`、`container/keymap.go:97` `Range`。RR-20261006-20：`goroutine/task_pool.go:116` `Submit` 先 `totalTasks.Add(1)`（`:124`）再入队、被拒时 `Add(-1)` 撤回（`:126`）；`:172` `GetStats` 先读结束数再读 total；两个未导出测试缝 `submitEnqueuedHook` / `statsFirstLoadedHook`（`:50`、`:51`，生产恒为 nil）。
+3. **不变量与守卫**：`container/bucket_range_promises_test.go`、`entity/entity_manager_range_promises_test.go`（含 `TestManagerRangeNeverHandsOutAClearedEntity`）、`safemap/fastmap_range_promises_test.go`、`goroutine/task_pool_shutdown_promises_test.go`、`container/keymap_topo_promises_test.go`；生成 `VarietyDao` 组合（真实文件 WAL 重放，`-race -count=50`）。RR-20261006-20：`completed + failed ≤ total`——`TestTaskPoolStatsCountSubmitBeforeTheTaskCanFinish`（`goroutine/task_pool_stats_promises_test.go:46`，写侧窗口）、`TestTaskPoolStatsReadFinishedBeforeSubmitted`（`:76`，读侧窗口）、`TestTaskPoolRejectedSubmitIsNotCounted`（`:95`，负对照：拒绝的提交撤回计数，修前也通过）；两个窗口都用测试缝确定性停住，不靠 sleep。
 4. **控制流**：快照 → 锁外逐个回调 → 实体先 `Touch`，失败跳过 → 回调后 `UnTouch`（最后一个 UnTouch 才清理被销毁的实体）。
 5. **失败处理**：无。
 6. **测试**：修前：
@@ -2161,9 +2661,22 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
    复审：`TestManagerRangeNeverHandsOutAClearedEntity` 修前两叶红（`id=0 category=0`）。
+
+   RR-20261006-20 修前红（[问题记录](../../bug/RR-20261006-20.md)原文，基线只加两个测试缝）：
+
+   ```text
+   --- FAIL: TestTaskPoolStatsCountSubmitBeforeTheTaskCanFinish (0.00s)
+       task_pool_stats_promises_test.go:67: GetStats = total 0, completed 1, failed 0: more tasks finished than submitted
+   --- FAIL: TestTaskPoolStatsReadFinishedBeforeSubmitted (0.00s)
+       task_pool_stats_promises_test.go:91: GetStats = total 0, completed 1, failed 0: more tasks finished than submitted
+   ```
+
+   修后三条通过；`go test -race -count=3 ./goroutine` ok；根包、`go build ./... && go vet ./...` 通过。复跑：`GOWORK=off go test -count=1 -run 'TestTaskPoolStats|TestTaskPoolRejected' ./goroutine`。
 7. **性能**：`EntityManager.Range` 10 万实体约 0.86ms → 4.1ms（Apple M5，两次 CAS / 实体）；`BenchmarkFastMapSetGet` 修前 38.09ns ± 22%、修后 38.71ns ± 26%（p=0.937），0 allocs。
-8. **未验证**：无。随机模型探针（2 万个种子）未发现违反。`TaskPool.totalTasks` 入队后才加、统计瞬间可能 completed > total，按 [revleft 记录](../../review/REVIEW-2026-10-06-revleft.md) §4 O9 的处置不改（零调用方 API，C8 决定“保留”；没有确定性红测试）。
-9. **review 检查点**：`EntityManager.Range` 持引用的协议与 nest 分发持有实体引用是同一协议——确认没有引入快池等待（`Touch` / `UnTouch` 是原子计数、不阻塞）。
+8. **未验证**：无。随机模型探针（2 万个种子）未发现违反。`TaskPool` 统计瞬间可能 completed > total（revleft §4 O9 曾以“零调用方、没有确定性红测试”不改）已按第十三轮维护者选 A 修复（RR-20261006-20，`41bdb9e5`），两个窗口都有确定性红绿用例；零调用方 API 按 C8 保留。随机并发压测未做：两个窗口由测试缝确定性覆盖，顺序论证见[修复记录](../../bugfix/RR-20261006-20.md)。
+9. **review 检查点**：
+   - `EntityManager.Range` 持引用的协议与 nest 分发持有实体引用是同一协议——确认没有引入快池等待（`Touch` / `UnTouch` 是原子计数、不阻塞）。
+   - RR-20261006-20：`Submit` 的“先加、被拒撤回”对 `submitTask` 返回的每种错误（队列满 / 已关闭）都撤回（`task_pool.go:124-126`），池未运行时在计数之前返回（`:117`）；`GetStats` 的读取顺序是“结束数在前、total 在后”，与写侧“total 先于入队、入队先于执行、执行先于结束计数”配对才成立——确认没有别处在入队之后才加 total。
 
 <a id="noncore-47"></a>
 ### NONCORE-47 C7 遍历回调仓库级契约
@@ -2215,12 +2728,12 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#noncore-49)
 
 1. **提交与版本**：`efe219c1`（N14 登记）、`e1a6b01d`（修复）。首发 v1.20.2。
-2. **改动**：`kit/mongo/mongo_mod.go:159` `redactedURI`（userinfo 取到 `?` 之前的最后一个 `@`，口令里没转义的 `/` 也盖得住）；只有日志用它，连接仍用原 URI。
+2. **改动**：`kit/mongo/mongo_mod.go:167` `redactedURI`（userinfo 取到 `?` 之前的最后一个 `@`，口令里没转义的 `/` 也盖得住）；只有日志用它，连接仍用原 URI。
 3. **守卫**：`kit/mongo/uri_log_promises_test.go`（`TestStartDoesNotLogTheMongoPassword`：多主机、srv、无选项；`TestRedactedURIKeepsEverythingButThePassword`：7 种形状）。
 4～5. 无。
 6. **测试**：修前 `uri_log_promises_test.go:63: Start logged the Mongo password: "... msg=\"mongo mod: connected\" uri=\"mongodb://roost:s3cret-pw@db1:27017,db2:27017/?replicaSet=rs0\"\n"`。
 7. **性能**：无。
-8. **未验证**：无。mongo-driver 自身的错误信息：本次重核在 `e6828e4f` 依赖的 mongo-driver v2.6.0 上用临时探针（未入库）试了 12 种带口令的 URI——端口非数字、口令里非法转义 / 未转义的 `:` 与 `@`、非法选项值、非法 authMechanism、srv 带端口、srv 解析失败、错误 scheme、连不上的主机（server selection 超时）、以及对隔离环境 Mongo 的认证失败（`auth error: sasl conversation error …`）——错误文本都不含口令。
+8. **未验证**：无。mongo-driver 自身的错误信息：第一次重核在 `e6828e4f` 依赖的 mongo-driver v2.6.0 上用临时探针（未入库）试了 12 种带口令的 URI——端口非数字、口令里非法转义 / 未转义的 `:` 与 `@`、非法选项值、非法 authMechanism、srv 带端口、srv 解析失败、错误 scheme、连不上的主机（server selection 超时）、以及对隔离环境 Mongo 的认证失败（`auth error: sasl conversation error …`）——错误文本都不含口令。
 9. **review 检查点**：未采用 `net/url`（多主机与 `mongodb+srv` 解析边界不稳定）。
 
 <a id="noncore-50"></a>
@@ -2271,7 +2784,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 [说明](guide-cfg-skill-noncore.md#noncore-52)
 
 1. **提交与版本**：`c99a687d`、`ae66d593`（记录）；NC-173 的 A3 复核补修 `50f2ac2a`。首发 v1.20.2。
-2. **改动**：`manager/engine.go:209` `Stop`；`kit/nest/nest_mod.go:291` `Stop` / `:295` `StopWithContext`；`sync/syncbus/driver/jetstream.go:309` `Stop` / `:319` `StopWithContext`；`etcd/driver/discovery.go:203` `Deregister`、`etcd/driver/assembly.go:76` `Close`；`sync/syncbus/mirror/envelope.go:148` / `:169`；`remoteentity/assemble.go:213` `Stop`。
+2. **改动**：`manager/engine.go:209` `Stop`；`kit/nest/nest_mod.go:306` `Stop` / `:310` `StopWithContext`；`sync/syncbus/driver/jetstream.go:312` `Stop` / `:323` `StopWithContext`；`etcd/driver/discovery.go:203` `Deregister`、`etcd/driver/assembly.go:76` `Close`；`sync/syncbus/mirror/envelope.go:137` / `:151`；`remoteentity/assemble.go:213` `Stop`。
 3. **不变量**：①发起关闭幂等 ②ctx 内等真实排空，超时返回错误并保留对象 ③排空后才释放。守卫：`manager/stop_retry_promises_test.go`、`kit/nest/unload_resync_stop_retry_promises_test.go`、`sync/syncbus/driver/jetstream_stop_drain_promises_test.go` / `jetstream_stop_retry_promises_test.go`、`etcd/driver/deregister_budget_promises_test.go`、`remoteentity/assembly_replica_drain_promises_test.go`；真实 nats-server / etcd（测试自起私有进程）。之后 A3 的 `internal/stopcontract.Check` 套了这些入口（APP）。
 4. **控制流**：见不变量。
 5. **失败处理**：不配合 ctx 的 `StopWithContext` 不会被终止，只是如实超时并保留；只实现 `Stop()` 的 manager 没有期限（与修前相同）。
@@ -2309,7 +2822,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
    ```
 
 7. **性能**：无。
-8. **未验证**：无。真实 Mongo：本次重核在 `e6828e4f` 上把 `kit/mongo/stop_retry_promises_test.go` 的两个用例临时换成隔离环境的真实副本集（先 Ping 确认已连上，探针未入库）：已断开客户端上连续两次 Stop 返回 nil、正常停止后再 Stop 与再 Close 返回 nil，通过。
+8. **未验证**：无。真实 Mongo：第一次重核在 `e6828e4f` 上把 `kit/mongo/stop_retry_promises_test.go` 的两个用例临时换成隔离环境的真实副本集（先 Ping 确认已连上，探针未入库）：已断开客户端上连续两次 Stop 返回 nil、正常停止后再 Stop 与再 Close 返回 nil，通过。
 9. **review 检查点**：`mongo/driver/client.go:119` `Close` 在 RR-20261006-10 统一口径（DRV-5，串行化）之后仍对已断开的客户端返回 nil。
 
 <a id="noncore-54"></a>
@@ -2350,7 +2863,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
      ```
 
    - 修后（`nest/dispatch_guard_scope_promises_test.go`）：`TestDispatchLockingWithoutGuardScopeNeverReturnsCallerGuardToPool`（`:50`，无作用域 + 重试形状返回错误、归还 0 次、不留锁）、`TestDispatchLockingGroupRetryInScopeKeepsGuardUntilScopeEnds`（`:89`，作用域里重试只放实体锁、作用域结束归还恰好 1 次；修前也通过，钉住作用域路径）、`TestDispatchEntriesRequireGuardScope`（`:129`，`singleDispatch` / `groupTransitionDispatch` 无作用域返回错误、handler 不执行；放进作用域照常执行）。记录里 `go test -race -count=3 ./nest/... ./entity/...`、A2 seed 3 次、glsvet 三项均通过。
-   - 本次重核（`e6828e4f`，有界 seed 扫描）：`go test -c ./nest` 后 `-test.shuffle` 取 1～20、101、202 … 909、`1791263156350214000`、1000～1199 共 230 个 seed 各跑 1 次，另用 `-race` 测试二进制跑 5000～5029 共 30 个 seed，**260 次全部通过**。
+   - 第一次重核（`e6828e4f`，有界 seed 扫描）：`go test -c ./nest` 后 `-test.shuffle` 取 1～20、101、202 … 909、`1791263156350214000`、1000～1199 共 230 个 seed 各跑 1 次，另用 `-race` 测试二进制跑 5000～5029 共 30 个 seed，**260 次全部通过**。
    - 复跑：`GOWORK=off go test -race -count=3 ./nest/... ./entity/...`；`go test -count=1 -shuffle=on ./nest`；`go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync` 与 `go run ./cmd/glsvet -tests ./nest`。
 7. **性能**：无（生产路径不经过被删除的分支）。
 8. **未验证**：无。
@@ -2386,11 +2899,13 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 
 | 守卫 | 位置 | 守什么 | 条目 |
 | --- | --- | --- | --- |
-| `TestFrameworkCodeDoesNotReadConfigLeniently` | `app/config_strict_reads_promises_test.go:140` | app、kit 与两份生成模板不出现宽松 getter（例外只有 `sid` 与 cobra flags） | CFG-2～4 |
-| `TestEveryFrameworkDurationAndIntKeyIsCheckedStrictly` | `app/config_strict_reads_promises_test.go:125` | 扫出的时长 / 整数键都在登记表里；扫到少于 150 处即认为模式失效 | CFG-2 |
-| `TestEveryFrameworkBoolSwitchIsCheckedStrictly` | `app/config_types_promises_test.go:93` | 布尔开关都在登记表里 | CFG-1 |
-| `TestGeneratedConfigsPassStrictAndProductionValidation` | `codegen/internal/roost/generated_config_validation_promises_test.go:155` | 生成工程三份配置过严格校验与生产校验；`remote_entity` 新键取值与缺省一致 | CFG-5、CFG-12 |
-| `TestSharedConfigRulesStayALeaf` 与边界例外 | `dependency_boundary_test.go:209`、`:257`、`:273` | `configdata/rules` 只依赖标准库；codegen 只允许 import 它 | CFG-7 |
+| `TestFrameworkModsReadConfigOnlyThroughDeclarations`、`TestEveryDeclaredConfigFieldIsRead`、`TestConfigDeclarationGuardsCatchTheirDrift` | `app/config_declarations_promises_test.go:171`、`:201`、`:230` | app、kit 与两份生成模板读配置只经声明；声明了的字段都被读；守卫能红（取代 A4 ② 的 `TestFrameworkCodeDoesNotReadConfigLeniently` / `TestEveryFrameworkDurationAndIntKeyIsCheckedStrictly` / `TestEveryFrameworkBoolSwitchIsCheckedStrictly`，`e6828e4f` 上在 `app/config_strict_reads_promises_test.go:140` / `:125` 与 `app/config_types_promises_test.go:93`，v1.23.0 删除） | CFG-1～4、CFG-14 |
+| `TestEveryKitModLoadsWhatItDeclares`、`TestKitModsRefuseOutOfRangeValuesAtLoadAndAtStartup` | `kit/config_schema_promises_test.go:86`、`:115` | 每个 kit Mod 的 Init 读的就是它的声明；范围在 Init 与启动检查两处都拒绝；全部声明合并不冲突 | CFG-14 |
+| `TestKitConfigSchemasMatchKitDeclarations`、`TestGeneratedConfigsMatchDeclarations`、`TestGeneratorConstantsMatchTheDeclaredExamples`、`TestPlayerTCPDeclarationAgreesWithKit`；`go generate ./...` 后 porcelain 干净 | `codegen/internal/roost/config_declarations_promises_test.go:23`、`:61`、`:131`、`:153` | 生成器快照与 kit 声明一致；生成的全量工程配置逐份过声明（RR-20261006-38 由它发现） | CFG-14 |
+| `TestGeneratedProjectsReadConfigOnlyThroughDeclarations`、`TestGeneratedProjectConfigGuardCatchesDrift`、`TestDoctorReadsBusinessDeclarationsFromTheProcess` | `codegen/internal/roost/config_reads_promises_test.go:56`、`:86`、`:132` | 生成工程同样只经声明读；doctor 读得到业务声明 | CFG-15 |
+| `TestServiceDeclarationsAreCheckedAndPrintedWithTheMods` | `app/config_declarations_promises_test.go:126` | 业务服务的声明进启动检查与打印 | CFG-15 |
+| `TestGeneratedConfigsPassStrictAndProductionValidation` | `codegen/internal/roost/generated_config_validation_promises_test.go:161` | 生成工程三份配置过严格校验与生产校验；`remote_entity` 新键取值与缺省一致 | CFG-5、CFG-12 |
+| `TestSharedConfigRulesStayALeaf` 与边界例外 | `dependency_boundary_test.go:215`、`:269`、`:285` | `configdata/rules` 与 `internal/configschema` 只依赖标准库；codegen 只允许 import 这两个 core 包 | CFG-7、CFG-14 |
 | `TestOneTagDrivesTheGenerationCheckAndTheGeneratedLoader` | `codegen/internal/tablegen/rules_single_source_promises_test.go:17` | 一个标签同时驱动生成期检查与生成 loader | CFG-7 |
 | tablegen / cfggen 运行期门 | `codegen/scripts/tablegen-runtime.sh`、`cfggen-golden-runtime.sh`（`.github/workflows/ci.yml:79`、`:81`） | 生成 loader 在真实 configdata 上执行规则 | CFG-6、7、10、11 |
 | `TestFailedReloadAndRollbackAreCountedAndLogged`、`TestEveryReloadReportsOneOutcome` | `kit/configdata/reload_visibility_promises_test.go:56`、`configdata/field_rules_promises_test.go:151` | 每次一个 outcome、低基数标签 | CFG-8 |
@@ -2399,6 +2914,11 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
 | `TestPhaseEventTableIsTheSingleSource` | `skill/phase_events_promises_test.go:11` | phase 事件单一来源 | SKILL-7、13 |
 | 求值上下文表逐格守卫 | `skill/eval_contexts_table_test.go:259`、`:290`、`:333`、`:400`、`:504`、`:555` | 编译期与 Runtime 对每格一致；O33 格子有替代写法 | SKILL-15、16 |
 | `stateMutationVerifyIncremental` | `skill/runtime_mutation.go:94`（测试打开） | 增量 mutation 与全量快照逐笔一致 | SKILL-1、3、5 |
+| 衍生物停止入口登记表 `spawnStopEntries`、`TestEveryStopEntryDefersARefusedStopTheSameWay`、`TestSpawnStopEntriesAreRegistered` | `skill/spawn_stop_entries_promises_test.go:132`、`:274`、`:336` | 九个停止入口走同一状态机；只有登记的函数调 `requestSpawnStop` | SKILL-24、26 |
+| `TestSpawnPartitionsFollowRecordFields`、`TestSpawnPartitionWritesStayInSpawnTable`（`spawnDropSites`） | `skill/spawn_partition_promises_test.go:134`、`:334`（`:327`） | 分区随字段、只有 `setState` 写分区字段、删记录只在三个登记点 | SKILL-28、29 |
+| Host 能力表守卫 | `skill/host_capability_promises_test.go:356`、`:550`、`:592`、`:636`；`skill/host_capability_required_promises_test.go:31`、`:85` | 编译器 / Runtime / Host 对能力查同一张表；`Host` 必须声明、没有跳过分支 | SKILL-30 |
+| `TestSourceDocumentDigestSeesEveryDifference` | `skill/canonical_definition_promises_test.go:43` | 源文档 digest 看得见效果类型与 `json:"-"` 字段 | SKILL-28 |
+| `TestTaskPoolStatsCountSubmitBeforeTheTaskCanFinish`、`TestTaskPoolStatsReadFinishedBeforeSubmitted` | `goroutine/task_pool_stats_promises_test.go:46`、`:76` | `completed + failed ≤ total` | NONCORE-46 |
 | `internal/rangecontract.Check` | `internal/rangecontract/rangecontract.go:66`；套在 container / safemap / entity / 生成 DAO | 遍历回调契约 | NONCORE-46、47 |
 | `TestNetworkCodegenTestsRunInSomeWorkflow` | `ci_generated_code_test.go:184` | `ROOST_NETWORK_TESTS=1` 的 job 存在且点名两条用例 | NONCORE-31 |
 | glsvet 输入守卫 | `cmd/glsvet/inputs_promises_test.go` | 没检查到的输入退出 2 | NONCORE-51 |
@@ -2413,10 +2933,12 @@ A3 的 `internal/stopcontract.Check` 骨架（套在 manager、kit/nest、syncbu
 
 | 包 / 目录 | 条目 |
 | --- | --- |
-| `app` | CFG-1、CFG-2、CFG-5、NONCORE-1、NONCORE-50 |
-| `kit`（根）、`kit/mods` | CFG-1、CFG-2 |
-| `kit/redis` | CFG-1、CFG-3、NONCORE-1 |
-| `kit/saga` | CFG-1、CFG-2 |
+| `app` | CFG-1、CFG-2、CFG-5、CFG-14、CFG-15、NONCORE-1、NONCORE-50 |
+| `kit`（根）、`kit/mods` | CFG-1、CFG-2、CFG-14 |
+| `kit/redis` | CFG-1、CFG-3、CFG-14、NONCORE-1 |
+| `kit/saga`、`kit/dataengine` | CFG-1、CFG-2、CFG-14、CFG-15（`StreamSettings` / `EffectSettings`） |
+| `kit/internal/configschemagen`、`internal/configschema` | CFG-14、CFG-15 |
+| kit 其余 Mod（nest、remoteentity、nats、syncbus、mongo、etcd、ops、statslog、configdata、service/*） | CFG-14（各自的配置声明） |
 | `kit/ops`、`kit/remoteentity`、`lifecycle` | NONCORE-1 |
 | `kit/configdata` | CFG-8 |
 | `kit/mongo` | NONCORE-49、NONCORE-53 |
@@ -2428,16 +2950,16 @@ A3 的 `internal/stopcontract.Check` 骨架（套在 manager、kit/nest、syncbu
 | `kit/scripts/integration`、`scripts`、`cmd/glsvet` | NONCORE-51 |
 | `configdata` | CFG-7、CFG-8、CFG-10 |
 | `configdata/rules` | CFG-7、CFG-9、CFG-10 |
-| `codegen/internal/tablegen` | CFG-6、CFG-7、CFG-10 |
-| `codegen/internal/cfggen` | CFG-7、CFG-11 |
-| `codegen/internal/roost` | CFG-4、CFG-12、CFG-13、NONCORE-4、NONCORE-5、NONCORE-26、NONCORE-27～31、NONCORE-51（NC-206） |
-| `codegen/internal/servicerpc` | CFG-4、NONCORE-27 |
+| `codegen/internal/tablegen` | CFG-6、CFG-7、CFG-10、CFG-16 |
+| `codegen/internal/cfggen` | CFG-7、CFG-11、CFG-16 |
+| `codegen/internal/roost` | CFG-4、CFG-12、CFG-13、CFG-14、CFG-15、NONCORE-4、NONCORE-5、NONCORE-26、NONCORE-27～31、NONCORE-51（NC-206） |
+| `codegen/internal/servicerpc` | CFG-4、CFG-14、NONCORE-27 |
 | `codegen/internal/dao`、`codegen/internal/entity` | NONCORE-10、NONCORE-32 |
 | `codegen/internal/attribute`、`codegen/internal/errcode` | NONCORE-25、NONCORE-29 |
 | `codegen/cmd/*` | NONCORE-31 |
-| `skill` | SKILL-1、SKILL-5～8、SKILL-10、SKILL-11、SKILL-13～21 |
-| `skill/combatcomponent` | SKILL-2（投影入口属 DAO） |
-| `skill/skillsync` | SKILL-3、SKILL-4、SKILL-12、NONCORE-33 |
+| `skill` | SKILL-1、SKILL-5～8、SKILL-10、SKILL-11、SKILL-13～21、SKILL-23～30 |
+| `skill/combatcomponent` | SKILL-2（投影入口属 DAO）、SKILL-30（`HostAdapter` 能力表） |
+| `skill/skillsync` | SKILL-3、SKILL-4、SKILL-12、SKILL-23（RR-22）、SKILL-25（改名）、NONCORE-33 |
 | `skill/skillcompose` | SKILL-9 |
 | `skill/examples` | SKILL-22 |
 | `httpserver`、`webroute`、`security`、`gateway` | NONCORE-2、NONCORE-3 |
@@ -2452,7 +2974,7 @@ A3 的 `internal/stopcontract.Check` 骨架（套在 manager、kit/nest、syncbu
 | `remoteentity` | NONCORE-13、NONCORE-15、NONCORE-52 |
 | `saga`、`servicemetrics` | NONCORE-16～18、NONCORE-23（`saga` 用例另见 NONCORE-12） |
 | `attribute` | NONCORE-25 |
-| `demo/` 模板 | NONCORE-20、NONCORE-25、NONCORE-26、NONCORE-39～41、NONCORE-56 |
+| `demo/` 模板 | CFG-15（`game/settings`）、NONCORE-20、NONCORE-25、NONCORE-26、NONCORE-39～41、NONCORE-56 |
 | `ai` | NONCORE-34、NONCORE-36、NONCORE-38 |
 | `actionflow` | NONCORE-34～37 |
 | `hotcode` | NONCORE-34、NONCORE-36 |
@@ -2460,8 +2982,9 @@ A3 的 `internal/stopcontract.Check` 骨架（套在 manager、kit/nest、syncbu
 | `spatial`、`index` | NONCORE-39 |
 | `failurelog` | NONCORE-42 |
 | `robot/...`、`log`、`metrics` | NONCORE-43、NONCORE-44、NONCORE-45 |
-| `container`、`safemap`、`goroutine`、`internal/rangecontract` | NONCORE-46～48 |
+| `container`、`safemap`、`goroutine`、`internal/rangecontract` | NONCORE-46～48（`goroutine` 另有 RR-20261006-20） |
 | `manager`、`sync/syncbus/driver`、`sync/syncbus/mirror` | NONCORE-52 |
 | `nest` | NONCORE-54（A2 / A3 只改测试；RR-20261006-12 改派发取锁）、NONCORE-55 |
 | `.github/workflows` | CFG-6（`ci.yml`）、NONCORE-31（`framework-compat.yml`） |
-| 根包测试 | CFG-7（边界）、NONCORE-31（C9） |
+| 根包测试 | CFG-7、CFG-14（边界）、NONCORE-31（C9） |
+| 文档（`docs/USER_GUIDE.md`、`codegen/README.md`、B10 方案） | CFG-16 |

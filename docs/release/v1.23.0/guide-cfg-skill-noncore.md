@@ -1,14 +1,16 @@
 # v1.23.0 说明文档（分册）：配置、skill 与非核心 review（CFG / SKILL / NONCORE）
 
-本分册是 v1.23.0 发版双文档的一部分，覆盖 `v1.19.2..e6828e4f`（代码冻结提交）里属于三个主题的全部改动：
+本分册是 v1.23.0 发版双文档的一部分，覆盖 `v1.19.2..5e72ca4d`（最终代码冻结提交）里属于三个主题的全部改动：
 
-- **CFG**：严格配置读取、配置数据规则统一（`configdata/rules`）、热更结果可见、键大小写敏感、cfggen globals 规则、生成配置与生成 TCP 报错。
-- **SKILL**：skill 编译器与 Runtime 的收紧（N09 六批、B3、求值上下文表、O 系列观察）。
+- **CFG**：严格配置读取、每个 Mod 声明自己的配置（A4 ①）、配置数据规则统一（`configdata/rules`）与两条配置管线分工、热更结果可见、键大小写敏感、cfggen globals 规则、生成配置与生成 TCP 报错。
+- **SKILL**：skill 编译器与 Runtime 的收紧（N09 六批、B3、求值上下文表、O 系列观察），衍生物（Spawn）记录生命周期与停止状态机，召唤物（Summon）改名，Host 取值能力表（B3 ③）。
 - **NONCORE**：非核心 review N01～N15 中不属于其他主题的修复与收尾。
 
 配套的实现文档是 [impl-cfg-skill-noncore.md](impl-cfg-skill-noncore.md)，两份文档用同一编号（`CFG-n` / `SKILL-n` / `NONCORE-n`）做锚点，每条说明末尾的“实现”链接直达对应条目。APP、OWN、CLK、OPS、TOOL、SAGA、DRV、DAO、REM 主题在同目录的其他分册里，本分册只引用它们的主题名。
 
-**怎么读**：先看下面的条目总表与“本部分总览”，再按需要跳到条目。每条按同一顺序写：结论 → 背景 → 维护者决定 → 现在的行为 → 兼容与迁移 → 限制 / 外部验证 → 链接。行号、符号一律以代码冻结提交 `e6828e4f` 的源码为准（起草时为 `02c8a10d`，冻结后逐条重核，见实现文档开头的“重核说明”）；历史记录与源码不一致的地方在文末单列。“限制 / 外部验证”只写外部环境项并给出外部验证清单的 E 编号，Windows 一律暂存、不保证正确。与其他分册重复的七条（NONCORE-1、23、24、40、45、50、56）只保留一句话结论，以对方分册为准。
+**怎么读**：先看下面的条目总表与“本部分总览”，再按需要跳到条目。每条按同一顺序写：结论 → 背景 → 维护者决定 → 现在的行为 → 兼容与迁移 → 限制 / 外部验证 → 链接。行号、符号一律以最终代码冻结提交 `5e72ca4d` 的源码为准（起草时为 `02c8a10d`，第一次冻结 `e6828e4f` 重核，2026-10-07 按 `5e72ca4d` 再次重核，见实现文档开头的“重核说明”）；历史记录与源码不一致的地方在文末单列。“限制 / 外部验证”只写外部环境项并给出外部验证清单的 E 编号，Windows 一律暂存、不保证正确。与其他分册重复的七条（NONCORE-1、23、24、40、45、50、56）只保留一句话结论，以对方分册为准。
+
+**skill 术语**（维护者第十三轮）：技能施放时生成、之后每个 tick 由技能驱动的东西（飞行物、法术场、光束、位移、环绕等）叫**衍生物（Spawn）**，原名“进程”（process），`4451a0a5` 全量改名（SKILL-25）；效果生成的宿主真实单位（陷阱、宠物、图腾）叫**召唤物（Summon）**，效果 `type: summon`、移除用 `dismiss`，原名 `spawn` / `despawn`，`509c381f` 改名（SKILL-27）；衍生物里只跟着召唤物活的那一种 kind 叫 `minion`，原名 `summon`。本分册正文一律用新名；历史记录、修前红文本与旧提交说明里的旧名原样保留，正文引用到时注“原名”。
 
 ## 条目总表
 
@@ -27,28 +29,39 @@
 | [CFG-11](#cfg-11) | cfggen globals 支持 required / min / enum | v1.23.0（本版） | 新能力；已有输出不变 | 否（可选） |
 | [CFG-12](#cfg-12) | 生成配置写出 `remote_entity` 新键（A8） | v1.23.0（本版） | 只影响新生成工程 | 否 |
 | [CFG-13](#cfg-13) | 生成 TCP 越界报错逐条点名（A9） | v1.23.0（本版） | 只改报错文本 | 按旧文本匹配的脚本要更新 |
+| [CFG-14](#cfg-14) | 每个 Mod 用“配置结构体 + tag”声明自己的配置，启动检查 / 生成器 / doctor 共用（A4 ①，RR-20261006-38） | v1.23.0（本版） | **破坏**：0 / 负数 / 枚举外的值按声明拒绝；syncbus 旧回退删除；生成器 Core 下限升到 v1.23.0 | 修正配置；自写 Mod 改成声明 + `app.LoadConfig` |
+| [CFG-15](#cfg-15) | 业务服务声明自己读的键，doctor 读回进程声明，生成工程同样守住“读配置只经声明”（A4 ① 收尾，RR-20261006-40） | v1.23.0（本版） | 收紧：game-demo 漏写 activity / platform 键启动即拒绝；doctor 新增 `config-reads` | 业务代码直接读 viper 的改成声明 |
+| [CFG-16](#cfg-16) | 配置数据保持 tablegen 与 cfggen 两条管线，写明分工（B10，维护者选 A） | v1.23.0（本版） | 只改文档 | 否 |
 | [SKILL-1](#skill-1) | 施法失败只走一个终态入口（NC-110～112） | v1.20.1 | 收紧：终态 cast 的输入被拒；手动 Release 失败不可重试 | 否 |
 | [SKILL-2](#skill-2) | Combatant 副本不共享 map（NC-113） | v1.20.1 | 改副本不再改实体 | 误用者改用 `InitCombatant` |
 | [SKILL-3](#skill-3) | skillsync 三条下发路径同一可见性（NC-114 / 115） | v1.20.1 | wire 追加字段；可见性变化时 remove 不下发 | 可见性变化时重发快照 |
 | [SKILL-4](#skill-4) | Applier 被拒包不改 epoch（NC-116） | v1.20.1 | 无 | 否 |
-| [SKILL-5](#skill-5) | 提交前失败的 cast 有界回收（NC-117） | v1.20.1 | 无 | 否 |
+| [SKILL-5](#skill-5) | 提交前失败的 cast 有界回收（NC-117） | v1.20.1 | 无（checkpoint 版本后来升到 7，见 SKILL-24～29） | 否 |
 | [SKILL-6](#skill-6) | wire 字段名逐字匹配（NC-150） | v1.20.2 | 收紧：非规范大小写 Parse 失败 | 修正技能 JSON |
 | [SKILL-7](#skill-7) | 拒绝 Runtime 不派发的 phase 事件（NC-151） | v1.20.2 | 收紧；非零 `timeout_ticks` 给 warning | 修正定义；loadtest 断言 `Warnings == 0` |
 | [SKILL-8](#skill-8) | 作者写的 tick 非负（NC-152） | v1.20.2 | 收紧 | 修正负值 |
 | [SKILL-9](#skill-9) | 表现缓存等待者、skillcompose 诊断（NC-153 / 154） | v1.20.2 | 无 | 否 |
 | [SKILL-10](#skill-10) | 编译器只接受 Runtime / Host 执行的范围（NC-210、212～215） | v1.20.2 | 收紧 | 修正定义与 catalog |
-| [SKILL-11](#skill-11) | 移交后 area finish 只结束本进程（NC-211） | v1.20.2 | 放宽（不再报错） | 否 |
+| [SKILL-11](#skill-11) | 移交后 area finish 只结束本衍生物（原名进程，NC-211） | v1.20.2 | 放宽（不再报错） | 否 |
 | [SKILL-12](#skill-12) | `NegotiateSchema` 拒绝空区间（NC-216） | v1.20.2 | 收紧 | 否（无生产调用方） |
 | [SKILL-13](#skill-13) | lower fail-fast 与 phase 事件表单一来源（B3） | v1.20.2 | 正常定义不变；引入一处回归（v1.21.0 修） | 否 |
 | [SKILL-14](#skill-14) | 按 Runtime 求值上下文收紧，修 B3 回归（NC-220～224） | v1.21.0 | 收紧；NC-223 恢复 | 修正定义；v1.20.1 的相关 checkpoint 先排空 |
 | [SKILL-15](#skill-15) | 求值上下文表（第五轮，NC-280～283） | v1.21.0 | 收紧 + 放宽；诊断码变化 | 修正定义；按诊断码匹配的工具更新 |
 | [SKILL-16](#skill-16) | O33 漂移格子编译期拒绝；O34～O36 写文档 | v1.21.0 | **破坏**：以前能编译的定义启动失败 | 按作者文档改写 |
-| [SKILL-17](#skill-17) | summon 进程拒绝 `duration_ticks` 与 area 成员字段（O22） | v1.23.0（本版） | 收紧 | 删掉这些字段 |
-| [SKILL-18](#skill-18) | checkpoint 字节确定（O7） | v1.23.0（本版） | 字节变、格式不变 | 不要跨版本比较字节 |
+| [SKILL-17](#skill-17) | minion 衍生物（原名 summon 进程）拒绝 `duration_ticks` 与 area 成员字段（O22） | v1.23.0（本版） | 收紧 | 删掉这些字段 |
+| [SKILL-18](#skill-18) | checkpoint 字节确定（O7） | v1.23.0（本版） | 同一版本内字节确定；本版 checkpoint 版本为 7，旧版本拒绝恢复 | 不要跨版本比较字节 |
 | [SKILL-19](#skill-19) | result 分支诊断文案（O29）；O15～O17 / O27 / O28 写文档 | v1.23.0（本版） | 只改文案 | 按文案匹配的工具更新 |
 | [SKILL-20](#skill-20) | null 默认值实体状态可以 set（RR-20261006-02） | v1.23.0（本版） | 放宽；事件 Before 的缺省值类型变化 | 否 |
 | [SKILL-21](#skill-21) | checkpoint 恢复拒绝 `phase_timeout`（RR-20261006-03） | v1.23.0（本版） | 只拒绝不会出现的任务 | 否 |
 | [SKILL-22](#skill-22) | 示例 `statusbridge` 能运行 | v1.23.0（本版） | 只改示例 | 否 |
+| [SKILL-23](#skill-23) | 衍生物记录随 cast 一起回收；失败启动不留记录；reset 条目带增量的 PrimaryTarget（RR-20261006-21 / 22 / 23） | v1.23.0（本版） | 行为变化：停不下衍生物的失败启动返回非零 cast ID 并保留 failed cast | 否 |
+| [SKILL-24](#skill-24) | 宿主停不下的衍生物由 Runtime 退避重试（RR-20261006-21 后续，RR-20261006-30 / 31） | v1.23.0（本版） | 新状态 `stop_pending`；`Host.StopSpawn` 必须幂等；checkpoint 版本 3 | 客户端认 `stop_pending`；宿主 StopSpawn 幂等 |
+| [SKILL-25](#skill-25) | “进程”（process）全量改名为衍生物（Spawn） | v1.23.0（本版） | **破坏**：DSL / wire / Host 接口 / 指标改名，不留别名；checkpoint 版本 4；digest 全变 | 技能 JSON、Host 实现、客户端、告警按对照表改名 |
+| [SKILL-26](#skill-26) | 衍生物停止入口统一走一套停止 / 待停止状态机（RR-20261006-32） | v1.23.0（本版） | `Shutdown` / `RemoveProgram` 停不下的衍生物转 `stop_pending` 由 Runtime 重试；被拒的停止回调不再重跑 | 改看 `StateSnapshot` / `RetentionStats` |
+| [SKILL-27](#skill-27) | 生成宿主单位的效果改名为召唤物（Summon），`despawn` → `dismiss`，衍生物 kind `summon` → `minion` | v1.23.0（本版） | **破坏**：DSL / Host 契约改名；checkpoint 版本 5；环境与 digest 全变 | 技能 JSON、Host 实现按对照表改名 |
+| [SKILL-28](#skill-28) | 衍生物记录按字段分区存放、删掉重复的 owned 表；源文档 digest 逐字段；停止循环判空（RR-20261006-33 / 34） | v1.23.0（本版） | checkpoint 版本 6；全部 `SourceDocumentDigest` 改变 | 保存旧源文档 digest 比对的调用方一次性重算 |
+| [SKILL-29](#skill-29) | 待停止到上限不删记录，挪进“已放弃”分区（维护者选 B） | v1.23.0（本版） | 新状态 `abandoned`；指标改名 `skill.spawn.abandoned.total`；checkpoint 版本 7 | 告警规则改名；客户端认 `abandoned` |
+| [SKILL-30](#skill-30) | Host 取值能力表随编译环境下发，编译器 / Runtime / Host 共用（B3 ③，RR-20261006-37 / 39） | v1.23.0（本版） | **破坏**：`skill.Host` 必须实现 `HostCapabilities()`；环境格式与 authority digest 变化；表外能力启动 / 注册时拒绝 | Host 声明能力表；重新编译 / 重签 |
 | [NONCORE-1](#noncore-1) | N01 留项：Ops 同步 bind、停机 hook 预算、停机期 fail-stop 退出码、Mod 停止收尾、`ops.admin_timeout`（NC-230～234） | v1.21.0 | 收紧：Ops 端口被占启动失败；admin 命令 10s 期限 | 同机多实例各配 `ops.addr`；长命令调大 `ops.admin_timeout` |
 | [NONCORE-2](#noncore-2) | HTTP JSON 先编码后写；recover 尊重已开始的响应（NC-80 / 81） | v1.20.1 | 编码失败回 500 | 否 |
 | [NONCORE-3](#noncore-3) | RateLimiter 每主体 key 上限（NC-82） | v1.20.1 | 行为变化：每主体默认 256 key | 否 |
@@ -94,7 +107,7 @@
 | [NONCORE-43](#noncore-43) | robot / statslog / log（NC-161～165） | v1.20.2 | 收紧：loadtest 无样本判失败 | 否 |
 | [NONCORE-44](#noncore-44) | robot 会话 / 日志 sink / Prometheus 转义等（NC-261～266） | v1.21.0 | 行为变化 | 否 |
 | [NONCORE-45](#noncore-45) | robot Stage 序号只增不回收（RR-20261006-09） | v1.23.0（本版） | 行为变化 | 自定义 `IdentityProvider` 覆盖超出 `Count` 的序号 |
-| [NONCORE-46](#noncore-46) | N13 遍历与 TaskPool 等（NC-180～185） | v1.20.2 | 行为变化 | 否 |
+| [NONCORE-46](#noncore-46) | N13 遍历与 TaskPool 等（NC-180～185）；TaskPool 统计不再读到结束数大于提交数（RR-20261006-20） | v1.20.2 / v1.23.0（本版） | 行为变化 | 否 |
 | [NONCORE-47](#noncore-47) | 遍历回调仓库级契约（C7） | v1.20.2 | 契约成文 | 否 |
 | [NONCORE-48](#noncore-48) | container / goroutine 零调用方 API（NC-267～269） | v1.21.0 | 无 | 否 |
 | [NONCORE-49](#noncore-49) | Mongo URI 口令脱敏（NC-191） | v1.20.2 | 无 | 否 |
@@ -106,7 +119,7 @@
 | [NONCORE-55](#noncore-55) | Nest 重排抖动（U-0279） | v1.20.1 | 平均重排延迟 5ms → 7.5ms | 否 |
 | [NONCORE-56](#noncore-56) | 租约修复 RR-20261004-10 / 11 / 14（同版被静态绑定取代） | v1.20.0 | 代码已删 | 否 |
 
-共 91 条：CFG 13 条、SKILL 22 条、NONCORE 56 条。
+共 102 条：CFG 16 条、SKILL 30 条、NONCORE 56 条（2026-10-07 按 `5e72ca4d` 补写 CFG-14～16、SKILL-23～30 共 11 条，RR-20261006-20 并入 NONCORE-46）。
 
 ## 本部分总览
 
@@ -119,19 +132,20 @@
 | v1.20.2 | `c85d4565` | 2026-10-06 | CFG-1～5；SKILL-6～13；NONCORE-15、35、42、43、46、47、49～52 |
 | v1.21.0 | `4881f2b7` | 2026-10-06 | CFG-7、8、9；SKILL-14、15、16；NONCORE-1、21、22、23、31、36、37、40、41、44、48、53 |
 | v1.22.0 | `9bf690fb` | 2026-10-06 | CFG-10 |
-| v1.23.0（本版） | 发版提交 | — | CFG-11、12、13；SKILL-17～22；NONCORE-5、8、12（RR-20261006-08）、24、33、38、45、54 |
+| v1.23.0（本版） | 发版提交 | — | CFG-11～16；SKILL-17～30；NONCORE-5、8、12（RR-20261006-08）、24、33、38、45、46（RR-20261006-20）、54 |
 
 首发版本用 `git tag --contains <提交>` 取最早的 tag 核对；v1.22.0 之后的提交都随 v1.23.0 发布。
 
 ### 主题地图
 
 ```text
-CFG   严格读取： CFG-1 → CFG-2 → CFG-3 / CFG-4 ；CFG-5（同批）
-      数据规则： CFG-6 → CFG-7（B10）+ CFG-8（C2）→ CFG-9（被取代）→ CFG-10（大小写）→ CFG-11（globals）
-      生成配置： CFG-12、CFG-13
+CFG   严格读取： CFG-1 → CFG-2 → CFG-3 / CFG-4 ；CFG-5（同批）→ CFG-14（A4 ① 声明取代登记表）→ CFG-15（业务声明、doctor）
+      数据规则： CFG-6 → CFG-7（B10）+ CFG-8（C2）→ CFG-9（被取代）→ CFG-10（大小写）→ CFG-11（globals）→ CFG-16（两条管线分工）
+      生成配置： CFG-12、CFG-13（v1.23.0 起配置段由 CFG-14 的声明渲染）
 SKILL 终态与同步：SKILL-1～5、SKILL-9、SKILL-12
-      编译期收紧：SKILL-6～8、SKILL-10、SKILL-11 → SKILL-13（B3）→ SKILL-14 → SKILL-15（表）→ SKILL-16（O33）→ SKILL-17～19
+      编译期收紧：SKILL-6～8、SKILL-10、SKILL-11 → SKILL-13（B3 ①②）→ SKILL-14 → SKILL-15（表）→ SKILL-16（O33）→ SKILL-17～19 → SKILL-30（B3 ③ 能力表）
       收尾小修：SKILL-20、21、22
+      衍生物生命周期（第十三轮决定链）：SKILL-23 → SKILL-24 → SKILL-25（改名 Spawn）→ SKILL-26 → SKILL-27（改名 Summon）→ SKILL-28 → SKILL-29
 NONCORE 按单元：N01 → 1；N02 → 2～5；N03 → 6～8；N04 → 9～12；N05 → 13～15；N06 → 16～24；N07 → 25～26；
       N08 → 27～32；N09 → 33；N10 → 34～38；N11 → 39～41；N12 → 42～45；N13 → 46～48；N14 → 49～50；N15 → 51；
       跨单元 / 核心线 → 52～56
@@ -146,12 +160,17 @@ NONCORE 按单元：N01 → 1；N02 → 2～5；N03 → 6～8；N04 → 9～12�
 | CFG-7 | 违反 required / unique / min / enum / ref 的配置数据启动或 reload 失败（新生成的 loader；旧 loader 不查 required） | 修正数据 |
 | CFG-8 | 依赖 `configdata.reload.total{reason}` 或 `result="rollback"` 的看板 / 告警 | 改查 `configdata_rollback_total{trigger}` 与 `result=ok\|failed` |
 | CFG-10 | 键只差大小写的配置数据、CSV 表头；手写的 `FieldRule{Field: "Level"}` | 改成声明的拼写 |
+| CFG-14 | 以前“写 0 或负数静默取默认”的键按声明的范围拒绝（如 `dataengine.outbox.workers: 0`）；字符串枚举对所有服务、所有值检查；syncbus 不再回退读 `room.*` / `sync.*`；`app.ConfigReader`、`kit/mods.Duration` / `RedisClusterAddrs` 等读取 API 删除 | 要缺省就不写这个键；syncbus 配置写在 `syncbus.*`；自写 Mod 改成配置结构体 + `app.LoadConfig` |
+| CFG-15 | 新生成 game-demo 的 game 配置漏写 `activity.*` / `platform.*` 任一键在启动检查时拒绝；用户工程里直接读 viper 的代码让 `roost project doctor` 的 `config-reads` FAIL | 补齐键；业务读取改为服务声明 + `app.LoadConfig` |
 | SKILL-6～8、10、14～17 | 以前能编译的 skill 定义在游戏服启动期 `CompileAll` 失败 | 按错误路径与作者文档改写；仓内 fixture、示例与生成骨架都不受影响 |
+| SKILL-25、27 | 用旧名写的技能 JSON 在 Parse 时失败（`unknown field "process"`、`unsupported effect "spawn"`）；Host 实现的方法名、事件名、指标名、客户端看到的 mutation / 表现 kind 全部改名；旧 checkpoint、旧回放记录、按旧 digest 签的 skillcompose 契约不再适用 | 按 [Spawn 对照](../../feature/REFACTOR-2026-10-06-skill-process-to-spawn.md) 与 [Summon 对照](../../feature/REFACTOR-2026-10-07-skill-summon-rename.md) 改名；checkpoint 排空后升级；契约重签 |
+| SKILL-24～29 | checkpoint 版本 3 → 7，旧版本得到 `ErrCheckpointUnsupported` | 排空后升级（线上未部署，不做兼容） |
+| SKILL-30 | 业务自己的 `skill.Host` 实现不写 `HostCapabilities()` 编译不过；环境格式变化（`CompileEnvironment.Host`，删 `Motion.EnabledSlots` / `HostFeatures`）、所有 authority digest 改变；Program 需要 Host 表外的能力时在启动 / 注册 / 恢复处被拒；配置了 catalog 的 MemoryHost 与 HostAdapter 对表外属性 / 资源报错（原来读成 0） | Host 声明能力表（嵌入 `*skill.MemoryHost` 的自动得到）；重新编译、重签；旧录制回放重录 |
 | NONCORE-35、37 | `ActionRunner` / `MissionRunner` 回调里的变更不再立即生效、不再返回 `ErrReentrantMutation` | 按延后语义写：回调里返回 nil，执行错误经 OnError；要清场先 `EndCurMission` 再 `EndAll` |
 
-**收紧**（写错的配置 / 用法从“静默读错”变为报错）：CFG-1～4（类型错误的配置）、CFG-6（悬空 ref）、SKILL-1（终态 cast 的输入）、NONCORE-1（Ops 端口被占）、NONCORE-6（JetStream 截获的轻量 RPC）、NONCORE-17（缺摘要的旧 saga 记录重投）、NONCORE-25（非字面量 errcode）、NONCORE-42（failurelog 结果未知）、NONCORE-43（loadtest 无样本）、NONCORE-51（glsvet 输入不存在）。
+**收紧**（写错的配置 / 用法从“静默读错”变为报错）：CFG-1～4（类型错误的配置）、CFG-14 / 15（声明外的值、漏写的必填键）、CFG-6（悬空 ref）、SKILL-1（终态 cast 的输入）、NONCORE-1（Ops 端口被占）、NONCORE-6（JetStream 截获的轻量 RPC）、NONCORE-17（缺摘要的旧 saga 记录重投）、NONCORE-25（非字面量 errcode）、NONCORE-42（failurelog 结果未知）、NONCORE-43（loadtest 无样本）、NONCORE-51（glsvet 输入不存在）。
 
-**生成器 Core 下限**：v1.20.2（CFG-4 生成代码用 `app.ConfigReader`），v1.21.0（CFG-7 生成 loader 用 `configdata.FieldRule`）。v1.23.0 不再上调（CFG-12 的新键在旧 kit 上被 viper 忽略）。**已生成工程一律不迁移**（维护者决定），模板变化在 `roost generate` / `roost project sync` 后生效。
+**生成器 Core 下限**：v1.20.2（CFG-4 生成代码用 `app.ConfigReader`，已被 CFG-14 删除），v1.21.0（CFG-7 生成 loader 用 `configdata.FieldRule`），**v1.23.0**（CFG-14 / 15：生成的 player TCP 接入层、RPC 客户端 Mod 与 game-demo 用 `app.LoadConfig` / `app.SchemaOf` / `kitsaga.StreamSettings` / `kitdataengine.EffectSettings`；OWN-5 的 `activity.Config.Groups` 同样要求 v1.23.0）。冻结提交 `5e72ca4d` 上 `codegen/internal/roost/manifest.go:83` 的 `minimumVersions.Core` 仍是 `v1.21.0`，按交接规格“发版必做”在打 v1.23.0 tag 时与 `.github/workflows/framework-compat.yml` 的 minimum 行一起改。**已生成工程一律不迁移**（维护者决定），模板变化在 `roost generate` / `roost project sync` 后生效。
 
 **放宽**：CFG-5（生产校验）、SKILL-11、SKILL-15（投射引用）、SKILL-20、NONCORE-24（Bind 同参重试）。
 
@@ -167,20 +186,26 @@ NONCORE 按单元：N01 → 1；N02 → 2～5；N03 → 6～8；N04 → 9～12�
 8. 已有工程的 `.gitignore` 手工补 `/data/wal/`（NONCORE-51，NC-206）。
 9. 用常量编号的 errcode 改成字面量（NONCORE-25）。
 10. 自定义 robot `IdentityProvider` 覆盖超过 `Count` 的序号（NONCORE-45）。
-11. skill checkpoint：不要拿新旧版本各自写出的字节互相比对（SKILL-18）；v1.20.1 上保存了“以局部变量为实体的读取”类技能的 checkpoint，升级前排空（SKILL-14）。
+11. skill checkpoint：本版 checkpoint 版本为 7，旧版本写出的一律拒绝，升级前排空（SKILL-24～29）；不要拿新旧版本各自写出的字节互相比对（SKILL-18）。
 12. 同一目录不要有两个在写的 skillsync 文件 outbox（NONCORE-33）。
+13. 配置：自写 Mod 与业务服务读配置改成“配置结构体 + tag”声明 + `app.LoadConfig`；用 `<bin> <service> --check-config` 检查真实生产配置，`--print-config` 查看全部声明（CFG-14、15）。
+14. skill 改名：技能 JSON（`process` → `spawn`、`$process` → `$spawn`、效果 `spawn` → `summon`、`despawn` → `dismiss`、kind `summon` → `minion` 等）、Host 实现（`StepProcess` → `StepSpawn`、`PreviewOwnedSpawn` → `PreviewOwnedSummon` 等）、客户端（`process_*` → `spawn_*` 的 mutation / 表现 kind）与告警（`skill.process.*` → `skill.spawn.*`）按对照表改（SKILL-25、27）。
+15. skill Host：实现 `HostCapabilities()` 声明能力表，测试里用 `skill.CheckHostCapabilities` 核对声明与行为一致；宿主 `StopSpawn` 必须幂等（SKILL-24、30）。
+16. 客户端 / 渲染器按衍生物状态分支时认 `stop_pending` 与 `abandoned`；告警把 `skill.spawn.stop_pending_dropped.total` 换成 `skill.spawn.abandoned.total`（SKILL-24、29）。
 
 ## CFG：配置读取、配置数据规则与生成配置
 
-本主题回答三个问题：框架读配置时写错类型会怎样（CFG-1～CFG-5）；配置数据（`configs/data/*.json`）的规则在哪一层检查、热更失败能不能看见（CFG-6～CFG-11）；生成工程的配置与生成 TCP 的报错（CFG-12、CFG-13）。
+本主题回答四个问题：框架读配置时写错类型会怎样（CFG-1～CFG-5）、每个键由谁声明（CFG-14、CFG-15）；配置数据（`configs/data/*.json`）的规则在哪一层检查、热更失败能不能看见、两条配置管线怎么分工（CFG-6～CFG-11、CFG-16）；生成工程的配置与生成 TCP 的报错（CFG-12、CFG-13）。
 
 主题内的先后关系：
 
 ```text
-NC-190（布尔 / 时长）──► A4 严格读取（app + kit；同批 C1 生产校验只查有读取方的键）──► A4 留项：kit/redis、生成代码
+NC-190（布尔 / 时长）──► A4 ② 严格读取（app + kit；同批 C1 生产校验只查有读取方的键）──► A4 留项：kit/redis、生成代码
+                       └► A4 ① 每个 Mod 声明配置（v1.23.0，取代三张登记表与 ConfigReader）──► 收尾：业务服务声明、doctor 读回进程声明
 NC-75（tablegen ref + -check）──► B10 规则统一到 configdata/rules（运行时强制）+ C2 热更可见
                                    └► 发版前审查：大小写变体取最后一个（v1.21.0）──► 大小写敏感（v1.22.0，取代前者）
                                    └► cfggen globals 规则（v1.23.0）
+                                   └► 两条管线保持、写明分工（v1.23.0，维护者选 A）
 ```
 
 <a id="cfg-1"></a>
@@ -202,8 +227,10 @@ NC-75（tablegen ref + -check）──► B10 规则统一到 configdata/rules�
 | 布尔接受 | YAML 布尔、`strconv.ParseBool` 认的字符串（`"true"`、`True`）、整数 0 / 1 |
 | 时长接受 | `time.ParseDuration` 认的字符串、`time.Duration`、0；拒绝不带单位的非零数字 |
 | 单实例锁 | `singleton.*` 读取错误先报，不管 `enabled` 读成了什么（`on` 不再让校验提前返回） |
-| 其他读取点 | `kit/mods.Duration` / `RequiredDuration`、saga 步骤预算时长改用 `app.ConfigDuration` |
-| `redis.cluster_addrs` | `kit/mods.RedisClusterAddrs` 接受逗号串或 YAML 列表并去空白 |
+| 其他读取点 | `kit/mods.Duration` / `RequiredDuration`、saga 步骤预算时长改用 `app.ConfigDuration`（v1.23.0 起这些读取函数删除，键由各 Mod 的声明读，见 CFG-14） |
+| `redis.cluster_addrs` | `kit/mods.RedisClusterAddrs` 接受逗号串或 YAML 列表并去空白（v1.23.0 起是 `kit/redis.ClusterConfig` 的 `[]string` 字段，同样接受两种写法） |
+
+**v1.23.0 起**（CFG-14，A4 ①）：严格解析规则不变（同一套 `on` / 无单位时长报错），实现移到叶子包 `internal/configschema`，由每个 Mod 的配置声明调用；`app.ConfigBool` / `ConfigDuration` 保留为单键解析（工具、测试用）。单实例锁的键由 `singletonConfig` 声明，写错类型由启动检查报出，不管 `enabled` 读成了什么。
 
 错误示例（来自修前红用例的断言）：`ValidateServiceConfig = <nil>; want an error naming singleton.enabled`——修后返回点名该键的错误。
 
@@ -220,18 +247,18 @@ NC-75（tablegen ref + -check）──► B10 规则统一到 configdata/rules�
 
 **背景**：配置没有 schema，靠宽松 getter 加事后清单校验（RR-20260926-12、NC-190、NC-192、N02 O2）。NC-190 只修了开关与少数时长，kit 里还有约 80 处宽松读取：`nest.worker_num: 8k` 读成 0（取默认）、`dataengine.wal.queue_capacity: 1.5` 被截断等。
 
-**维护者决定**（[DECISIONS-PENDING 第二轮](../../review/DECISIONS-PENDING-2026-10-05.md)，A4 行原文）：“按推荐：先 ②（逐个改严格读取），① schema 作为后续重构”。可选方案是 ① 每个 Mod 声明配置 schema、校验 / 生成器 / doctor 共用；② 逐个 Mod 改用严格读取。选 ② 的理由：改动可以分批做、立刻堵住静默读错；① 涉及全部 Mod 的声明形态，列为下个大版本。
+**维护者决定**（[DECISIONS-PENDING 第二轮](../../review/DECISIONS-PENDING-2026-10-05.md)，A4 行原文）：“按推荐：先 ②（逐个改严格读取），① schema 作为后续重构”。可选方案是 ① 每个 Mod 声明配置 schema、校验 / 生成器 / doctor 共用；② 逐个 Mod 改用严格读取。选 ② 的理由：改动可以分批做、立刻堵住静默读错；① 涉及全部 Mod 的声明形态，当时列为下个大版本。**第十三轮维护者要求 ① 本版完成**（“还有留到下个版本的几项在本机能完成吗？希望本次能完成了”），已实施，见 CFG-14。
 
-**现在的行为**：
+**v1.20.2～v1.22.0 的行为**（v1.23.0 起三张登记表、`ConfigReader` 与正则守卫被 CFG-14 的声明取代，严格解析规则不变）：
 
 - 新增 `app.ConfigInt` / `ConfigInt64`（接受 YAML 整数、没有小数部分的浮点数如 `1e3`、十进制字符串；拒绝小数、带后缀、时长、布尔值）与汇总错误的 `app.ConfigReader`（Mod Init 一次读几十个键，读完统一 `Err()`，运维一次看到全部写错的键）。
-- `ValidateServiceConfig` 按 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys` 逐个严格读取（冻结提交 `e6828e4f` 上分别为 17 / 99 / 79 个键，另有 syncbus 三段 `syncbus` / `room` / `sync` 的同名字段与按后缀登记的 `<service>.call_timeout`）。A4 实施时是 16 / 95 / 77 个，之后 C6、`ops.admin_timeout`、B2 / O4 / Mirror 第 5 步 / O-M6-3 各自登记了新键（见实现文档）。
+- `ValidateServiceConfig` 按 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys` 逐个严格读取（删除前的最后形态 `e6828e4f` 上分别为 17 / 99 / 79 个键，另有 syncbus 三段 `syncbus` / `room` / `sync` 的同名字段与按后缀登记的 `<service>.call_timeout`）。A4 实施时是 16 / 95 / 77 个，之后 C6、`ops.admin_timeout`、B2 / O4 / Mirror 第 5 步 / O-M6-3 各自登记了新键（见实现文档）。
 - kit 的 dataengine、remoteentity、saga、nats、nest、syncbus、mongo、ops、etcd、statslog、platform、activity 与 app 自身改用 `ConfigReader`，错误前缀沿用各 Mod 原有的（如 `dataengine mod: …`）。
 - 唯一保留的宽松读取是 `sid`（启动校验先严格检查它是 int32 范围内的正整数）。
 
 **兼容与迁移**：行为收紧。`true` / `false` / `1` / `0` / `"true"`、带单位的时长、整数与十进制字符串照常接受。以前被静默读错的写法现在启动失败。删除了 `remote_entity.sync_retry_queue_cap` 的非负检查（没有任何代码读它）。
 
-**限制**：配置 schema（A4 ①）留到下个大版本；三份登记表加源码扫描守卫是过渡形态，登记集中在 app。
+**后续**：三份登记表加源码扫描守卫是过渡形态，登记集中在 app；第十三轮按维护者要求在本版换成每个 Mod 自己的声明（A4 ①，CFG-14），登记表与 `ConfigReader` 已删除。
 
 **链接**：[A4 方案](../../feature/REFACTOR-2026-10-05-strict-config-reads.md) · [验证记录](../../bugfix/RR-20261005-NC-192.md)（“A4 严格读取的验证”一节）
 
@@ -244,7 +271,7 @@ NC-75（tablegen ref + -check）──► B10 规则统一到 configdata/rules�
 
 **决定**：A4 留项，第二轮决定的延续（DECISIONS-PENDING A4 行“未做”一栏划掉、写明 `5df60765`）。
 
-**现在的行为**：未设置或 ≤ 0 的 `pool_size` / `min_idle_conns` 仍取驱动默认值；错误形如 `redis mod: config: redis.db …`。守卫删掉了这三项放行。
+**现在的行为**：未设置或 ≤ 0 的 `pool_size` / `min_idle_conns` 仍取驱动默认值；错误形如 `redis mod: config: redis.db …`。守卫删掉了这三项放行。v1.23.0 起三个键写在 `kit/redis.Config` 的声明里（`min:"0"`，负数按声明拒绝），Redis Mod 与 `SingletonStore` 共用这一份声明（CFG-14）。
 
 **兼容**：经 App 启动的进程此前已由 `ValidateServiceConfig` 拒绝这些值，行为不变；变化只在绕过 App 直接装配 Mod 的调用方（测试、工具）——从“读成 0”变为报错。
 
@@ -266,6 +293,8 @@ NC-75（tablegen ref + -check）──► B10 规则统一到 configdata/rules�
 
 **兼容与迁移**：经 App 启动的进程在 v1.20.2 core 上此前已被启动校验拒绝，行为不变；变化在直接调用 Mod Init 的路径。新生成代码需要 core ≥ v1.20.2；**已生成工程不迁移**（维护者决定），`roost generate` 后取新模板。
 
+**v1.23.0 起**（CFG-14）：两份模板改成配置结构体声明 + `app.LoadConfig`（player TCP 的 `tcpConfig` 由生成器里的 `playerTCPDeclaration` 渲染，RPC 客户端 Mod 的 `clientModConfig` 写在模板里），新生成代码需要 core ≥ v1.23.0。
+
 **链接**：[A4 方案“A4 留项：生成进工程的代码”](../../feature/REFACTOR-2026-10-05-strict-config-reads.md) · 提交 `914a725f`
 
 <a id="cfg-5"></a>
@@ -278,6 +307,8 @@ NC-75（tablegen ref + -check）──► B10 规则统一到 configdata/rules�
 **维护者决定**（DECISIONS-PENDING 第二轮 C1 行原文）：“随 A4 按方案 1”。方案 1 = 删掉无效要求并写明校验范围，之后接入真实限流 / 鉴权开关时再加回。未采用：方案 2（换成真实生效的键，需要先在生成接入层装配按请求限流与鉴权）、方案 3（只改措辞，误导仍在）。
 
 **现在的行为**：保留 ops 端点不绑公网（或声明 `ops.allow_public_addr`）、game / instance / account / match_group / global 必须写 `redis.addr`、account / platform 的密钥不是空的或 `dev-` 开头、admin_gateway 令牌。另有 CLK 主题的 `time.logic_offset` 生产必须为 0（见 CLK 部分）。USER_GUIDE §10 写明校验范围。
+
+**v1.23.0 起**（CFG-14）：生产规则跟着键的主人走，不再集中在 app 的 `validateProductionServiceConfig`（已删除）——密钥非空非 `dev-` 是声明上的 `secret` tag，ops 端点不绑公网在 `kit/ops` 配置的 `ValidateConfig`，Redis 地址（`redis.addr` 或 `redis.cluster_addrs`）在 `kit/redis.Config` 的 `ValidateConfig`，`time.logic_offset` 在 App 自己的 `appConfig.ValidateConfig`；`admin_gateway.*` 的生产检查删除（仓内没有任何代码读这个段，同 C1 方案 1 的原则）。
 
 **兼容**：放宽。旧配置里为通过校验写的这些键留着也无影响（本来就不控制任何行为）。注意：生成的游戏服接入层没有按请求限流、只有演示凭据，上线前要自己接入。
 
@@ -305,7 +336,7 @@ NC-75（tablegen ref + -check）──► B10 规则统一到 configdata/rules�
 
 **背景**：三套检查实现（tablegen 的 `validateRows` / `parseCell`、生成 loader 里的 ref 循环、auto 表的 `validateRefs`），两种语义的 `required`。直接改 `configs/data/*.json` 再 `gm.config.reload` 只经过运行时那一层，required / unique / min 全被绕过——N07 H2e 实测：删掉 spawn 的 `template` 后 reload 被接受，按 template 0 刷怪。
 
-**维护者决定**（DECISIONS-PENDING 第四轮 B10 行原文）：“按推荐：configdata 新增能看到原始字段是否出现的接口，必填在加载 / 热更时检查（A）；规则统一由运行时加载层强制，生成期检查只作提前反馈。维护者附加原则：**config 使用要容易，手写整理代码尽量少，结构简单易懂**”。未采用方案 B（生成的校验器重读原始 JSON：有替换窗口、每表 25～30 行胶水）。tablegen 与 cfggen 两种标签方言合一评估后列为后续（改写所有已有工程的 schema，收益只是少一个解析函数）。
+**维护者决定**（DECISIONS-PENDING 第四轮 B10 行原文）：“按推荐：configdata 新增能看到原始字段是否出现的接口，必填在加载 / 热更时检查（A）；规则统一由运行时加载层强制，生成期检查只作提前反馈。维护者附加原则：**config 使用要容易，手写整理代码尽量少，结构简单易懂**”。未采用方案 B（生成的校验器重读原始 JSON：有替换窗口、每表 25～30 行胶水）。tablegen 与 cfggen 能否合成一套：B10 时评估为后续，第十三轮维护者在澄清后**选 A：保持两条管线、规则已统一、写明分工，不合成一套**（`2c01e06d`，见 CFG-16）。
 
 **现在的行为**：
 
@@ -326,7 +357,7 @@ NC-75（tablegen ref + -check）──► B10 规则统一到 configdata/rules�
 - **已生成工程不迁移**：旧 loader 在新 core 上照常编译、行为不变（只是不查 required）；重新 `roost generate` 后获得运行时规则。
 - `codegen` 层原本不得 import core，这里给根包边界测试加了唯一例外 `configdata/rules`，并加门禁要求该包只依赖标准库。
 
-**链接**：[B10 / C2 方案与实施](../../feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md) · [NC-75 后续](../../bugfix/RR-20261005-NC-75.md)
+**链接**：[B10 / C2 方案与实施](../../feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md) · [NC-75 后续](../../bugfix/RR-20261005-NC-75.md) · 两条管线分工见 CFG-16
 
 <a id="cfg-8"></a>
 ### CFG-8 热更失败与回滚可见（C2）
@@ -424,6 +455,8 @@ NC-75（tablegen ref + -check）──► B10 规则统一到 configdata/rules�
 
 **背景**：这些键只在 USER_GUIDE 里，运维要去文档里找键名才知道能调。
 
+> v1.23.0 后续（CFG-14）：生成器的配置段不再是 `catalog.go` 里手写的字符串，改由 kit Mod 的配置声明渲染（`example` 写成生效行、`help` 写成注释）；这五个键的写入值现在来自 `kit/remoteentity/config.go` 声明上的 `example`，取值与下表相同。
+
 **决定**：维护者第十一轮“收尾：盘点全部未完成问题，处理完后统一发一个版本”，协调者盘点项 A8，已授权。
 
 **现在的行为**：
@@ -464,6 +497,85 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 
 **链接**：[收尾第 2 批记录 A9](../../bugfix/CLOSING-BATCH-2-2026-10-06.md)
 
+<a id="cfg-14"></a>
+### CFG-14 每个 Mod 用“配置结构体 + tag”声明自己的配置，启动检查 / 生成器 / doctor 共用一份声明（A4 ①，RR-20261006-38）
+
+**结论**：app、kit 全部 Mod 与生成的 player TCP / RPC 客户端 Mod 都把自己读的键写成一个配置结构体（字段类型就是键的类型，tag 写键名、缺省、范围 / 枚举、必填、密钥、示例、说明），读配置只剩 `app.LoadConfig` 一个入口；App 在任何 Mod Init 之前合并本服务全部声明检查配置、一次报全；生成器的配置段与 `roost project doctor` 用同一份声明。CFG-2 的三张登记表、`app.ConfigReader` 与正则守卫删除。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#cfg-14)
+
+**背景**：一个配置键的知识分散在四处——Mod 的 `Init` 读取（缺省值、范围散在 `if v <= 0` 里）、app 的三张手写清单（17 / 99 / 79 个键）、生成器 `catalog.go` / `framework_services.go` 里手写的配置字符串、doctor（不知道任何键的类型）。新加一个键要改四处，漏一处没有任何东西报错，A8、A4 两批都出过“清单漏键”“模板缺键”。A4 ② 只解决了“读错类型静默”，没有解决“四处各写一遍”。
+
+**维护者决定**：
+
+- 第二轮 A4 行原文“按推荐：先 ②（逐个改严格读取），① schema 作为后续重构”，① 当时列为下个大版本（CFG-2）。
+- 第十三轮“A4①：维护者要求本版完成”，原话：“还有留到下个版本的几项在本机能完成吗？希望本次能完成了”；线上未部署，不做旧格式兼容。
+- 第十三轮“配置声明形式”：**维护者同意 A：配置结构体 + tag**。另一种形式（Mod 方法返回键表 + 读取句柄，`app.IntKey("…", 2).Min(1)`）未采用：每个键要写一次声明、一次读取，“声明了没读”要靠扫描句柄变量，读出的值没有结构。
+- 原则沿用维护者的配置易用原则：手写整理代码尽量少、结构简单、规则只在运行时加载时强制一次。
+
+**现在的行为**：
+
+| 项 | 内容 |
+| --- | --- |
+| 声明 | `config:"键"`、`default`、`min` / `max`（闭区间）、`enum`（`\|` 分隔，忽略大小写与空白，读出值规范成小写）、`required:"true"`、`secret:"true"`（生产环境非空且不以 `dev-` 开头）、`example`（生成器写成生效行）、`help`（写成注释）；嵌套结构体拼前缀，`config:"x,closed"` 的段与 map 元素出现未声明键报错；跨键规则写成可选方法 `ValidateConfig(production bool) error` |
+| Mod 写法 | `func (*Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(modConfig{}) }` + `Init` 里 `app.LoadConfig(cfg, &m.cfg)` 两行；业务 Mod 同样写（[方案 §2.7 前后对比](../../feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)） |
+| 启动检查 | App 合并 App 自己（`appConfig`）、本服务全部 Mod 的声明，在任何 Mod Init 之前检查；两个 Mod 声明同一个键时声明必须完全相同，否则启动报错；进程不报“没有任何 Mod 声明的键”（生成配置会带别的进程才注册的 Mod 的键），拼错的键名由 doctor 判断 |
+| 错误 | 类型错误文本不变（`config: x must be true or false, got "on"`、`… needs a unit …`）；新增范围 / 枚举 / 必填一律 `config: <键> …` 开头、点名键，`errors.Join` 一次报全 |
+| 进程 flag | `--check-config`（加载并检查配置后退出，不启动 Mod，用来检查真实生产配置）、`--print-config`（打印本服务全部声明生成的配置段，含业务 Mod） |
+| 生成器 | `kit/internal/configschemagen` 把 kit 各 Mod 的声明快照成 `codegen/internal/roost/kitconfig_gen.go`（`go:generate`）；配置段从快照渲染：有 `example` 的键写成生效行，其余写成带缺省值的注释行，`help` 写成键上方注释 |
+| doctor | 新增 `config-schema:<服务>`：开发配置、生产示例、k8s Secret 示例按该服务注册的 Mod 合并声明检查（类型、范围、枚举、必填、生产密钥为 FAIL；框架段里出现没有声明的键为 FAIL） |
+| 守卫 | “读了没声明”（框架代码对 viper 的任何读方法即失败）、“声明了没读”（带 `config` tag 的字段必须在本包非测试代码里被读）、“声明与 Init 对得上”（逐键写错误类型调用 `Init` 要点名该键）；生成器侧快照与 kit 当前声明一致、生成的全量工程配置逐份通过声明 |
+
+**实施中发现**：[RR-20261006-38](../../bug/RR-20261006-38.md)（P3）——生成的每个服务配置 `shutdown:` 段写着 `serve_wait_timeout: 5s`，app、kit 没有任何代码读它（运维调它什么都不会发生）。由新守卫 `TestGeneratedConfigsMatchDeclarations` 第一次运行发现，修复删掉这一行（停机顺序与预算由 `shutdown.total_timeout` 统一管）。
+
+**兼容与迁移**（线上未部署，不做旧格式兼容）：
+
+- **行为收紧**：以前“写 0 或负数静默取默认”的键按声明的范围拒绝（例：`dataengine.outbox.workers: 0`），要缺省就不写这个键；文档本来就写“0 取框架默认”的键（`nest.*` 的 worker / 容量、`remote_entity.snapshot_interest_per_consumer` 等）声明成 `min:"0"`，行为不变。
+- 字符串枚举（`nats.rpc.transport`、`sync.transport`、`syncbus.transport`、`sync.entity.mode`、`persistence.engine` …）对所有服务、所有值检查。
+- syncbus 只读 `syncbus.*` 段，旧的 `room.*` / `sync.*` 同名回退删除；etcd 的 gate 回退删除。
+- 生产规则跟着键的主人走（见 CFG-5 的 v1.23.0 注）；`admin_gateway.*` 的生产检查删除。
+- 生成的配置文件形状改变（每个框架段带说明注释，未写进 starter 的键以注释列出缺省值）；已生成工程的配置是应用自有文件，不迁移。
+- 公开 API：新增 `app.ConfigSchema`、`app.SchemaOf`、`app.LoadConfig`、`app.CheckConfig`、`app.ModConfigSchema`、`App.CheckServiceConfig`、`App.ServiceConfigSchema`；删除 `app.ConfigReader` / `NewConfigReader`、`kit/mods.Duration` / `RequiredDuration` / `KeyPrefix` / `Secret` / `ResolvePersistenceEngine` / `RedisClusterAddrs`。`app.ConfigBool` / `ConfigDuration` / `ConfigInt` / `ConfigInt64` 保留为单键严格解析（工具、测试用）。
+- **生成器 Core 下限**：生成的 player TCP 接入层与 RPC 客户端 Mod 调用 `app.LoadConfig` / `app.SchemaOf`，需要 core v1.23.0；`minimumVersions.Core` 与 framework-compat 的 minimum 行在打 tag 时上调（冻结点上仍是 v1.21.0，见“本部分总览”）。
+
+**限制**：无外部项。业务 Mod 的声明只有编译后的进程知道——这一点由 CFG-15 收尾。
+
+**链接**：[A4 ① 方案与实施](../../feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md) · [RR-20261006-38 问题](../../bug/RR-20261006-38.md) · [修复](../../bugfix/RR-20261006-38.md) · [A4 ② 方案](../../feature/REFACTOR-2026-10-05-strict-config-reads.md)
+
+<a id="cfg-15"></a>
+### CFG-15 业务服务声明自己读的键，doctor 读回进程声明，生成工程同样守住“读配置只经声明”（A4 ① 收尾，RR-20261006-40）
+
+**结论**：`RegisterServer` 注册的业务服务与 Mod 同等对待——实现 `app.ModConfigSchema` 的服务，它的声明进 App 启动检查、`--check-config` / `--print-config` 与新的 `--print-config-schema`；新生成的 game-demo 由 `game/settings` 声明 game 业务代码读的 `activity.*` / `platform.*` 键；`roost project doctor` 编译一次工程、读回每个服务的进程声明，并新增 `config-reads` 检查；“读了没声明 / 声明了没读”的判定挪到叶子包，app、codegen 用例与 doctor 共用。新生成 game-demo 的 doctor 零 WARN、零 FAIL。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#cfg-15)
+
+**背景**：CFG-14 实施后留下两件事（方案 §6 自己列出），登记为 [RR-20261006-40](../../bug/RR-20261006-40.md)（P3）：新生成 game-demo 的 doctor 有一行无法消除的 WARN（game 配置里的 `activity.groups_file`、`activity.key_prefix`、`platform.key_prefix`、`platform.payment_secret` 由业务代码直接读，没有任何声明，写错类型、拼错、漏写都要到业务代码第一次读才暴露）；守卫只扫 app 与 kit，新生成的 game-demo 有 16 处直接读 viper。
+
+**维护者决定**：v1.23.0 发版前“交给 review 前不留能绕过检查的分支和 WARN”（第十三轮“不留 WANTED”的同一原则）。实施取舍：业务键由**业务服务本身**声明，而不是给生成器加业务 Mod 注册钩子（每个工程多一个文件、bootstrap 形状变化）；doctor 用一次 `go build` 加每个服务一次 `--print-config-schema` 读回进程声明，而不是 `go run . <svc> --check-config`（它只答“值对不对”，答不了“这个键有没有声明”）。
+
+**现在的行为**：
+
+- 业务服务写法与 Mod 相同：`func (*Service) ConfigSchema() app.ConfigSchema { return settings.Schema() }`，错误前缀 `service <名字>:`。
+- game-demo：`game/settings` 声明 `activity.key_prefix` / `activity.groups_file`、`platform.key_prefix` / `platform.payment_secret`（全部 `required`，`payment_secret` 另加 `secret`）；`saga.*` / `dataengine.*` 是本进程框架 Mod 的键，经新 API `kitsaga.StreamSettings` / `kitdataengine.EffectSettings` 按 Mod 自己的声明读，不在业务里抄一份缺省值；生成的 `world_singleton.go` 经 `app.ServiceIdentity` + `app.LoadConfig` 读 `sid`。
+- doctor：`config-schema:<服务>` 检查业务键的值，框架段里由业务声明的键不再算“本服务没人读”，只有业务声明用到的段里出现没有声明的键为 FAIL；工程能编译但读不出进程声明时为 FAIL。新增 `config-reads`（FAIL）：用户工程里直接读 viper 的业务代码点名。实测新生成 game-demo 全量 doctor（strict）约 19s。
+
+**兼容与迁移**：game 配置漏写 activity / platform 任一键在启动检查时拒绝（以前分别到 activity 启动、controller 构造时才拒绝）；`world_singleton.go` 对超出 int32 的 `sid` 报错（以前截断）；doctor 在能编译的工程里多一次 `go build`；已生成工程是应用自有代码，不迁移。
+
+**限制**：守卫是按名字的语法检查：把非 viper 的值命名成某个 `*viper.Viper` 参数 / 字段的名字并调 `Get*` 会被误报，改名即可（修复记录“未验证 / 风险”唯一一条，属已知误报形态，不是待验证项）。
+
+**链接**：[A4 ① 方案 §7](../../feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md) · [RR-20261006-40 问题](../../bug/RR-20261006-40.md) · [修复](../../bugfix/RR-20261006-40.md) · [codegen README 配置段](../../../codegen/README.md)
+
+<a id="cfg-16"></a>
+### CFG-16 配置数据保持 tablegen 与 cfggen 两条管线，写明分工（B10，维护者选 A）
+
+**结论**：配置数据（`configs/data/*.json`）继续有两条生成管线——tablegen（策划 Excel / CSV 表，`roost generate` 默认）与 cfggen（YAML 描述、JSON 数据、含全局单例 globals，可选）；规则早已统一在 `configdata/rules`（CFG-7、CFG-11），不合成一套，只在文档里写明“该用哪条”。首发 v1.23.0（本版，只改文档）。[实现](impl-cfg-skill-noncore.md#cfg-16)
+
+**背景**：B10 §2.4 评估“两种标签方言能否合成一套”时列为后续：合一要改写所有已有工程的 schema，收益只是少一个解析函数。之后交给维护者在澄清后选 A / B。
+
+**维护者决定**（DECISIONS-PENDING 第十三轮“B10 两条配置管线”行）：“维护者选 A：保持 tablegen（策划 Excel / CSV 表，`roost generate` 默认）与 cfggen（YAML 描述、JSON 数据、含全局单例 globals，可选）两条管线，规则已统一（`configdata/rules`），写明分工；不合成一套”。
+
+**现在的行为**：[B10 §2.4](../../feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md#24-tablegen-与-cfggen-能否合成一套) 写明选 A 与理由；[USER_GUIDE 配置数据一节](../../USER_GUIDE.md#配置数据规则热更与可见性) 与 [codegen README](../../../codegen/README.md#配置管线该用哪条) 各加“该用哪条”对照表。两条管线生成的 loader 都走同一个 `configdata` 加载层、同一份 `configdata/rules` 检查。
+
+**兼容**：无代码变化。
+
+**链接**：DECISIONS-PENDING 第十三轮 · 提交 `2c01e06d`（与 OWN-5 的 groups_file 必填同一提交）
+
 ## SKILL：skill 编译器、Runtime 与同步
 
 本主题的主线是一个方向判断：**skill 编译器认可的写法与 Runtime / Host 真正会执行的写法各自维护**，N09 六批 review 里同一形状的缺陷出现了二十多次（NC-110～117、NC-150～154、NC-210～224、NC-280～283）。维护者分三步改结构，而不是继续补孤立分支：
@@ -476,15 +588,28 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 | 第四步（第五轮）：求值上下文表 | 编译期作用域与 Runtime 求值查同一张表 | SKILL-14、SKILL-15 |
 | 第五步（第七轮）：漂移格子编译期拒绝 | 表里只剩“可用 / 不可用”两种格子 | SKILL-16 |
 | 收尾（第十二轮） | O22 / O7 / O29 与作者文档 | SKILL-17～SKILL-19 |
+| 第六步（第十三轮，B3 ③）：Host 取值能力表 | 编译器、Runtime、Host 对“能读什么、支持什么”查同一张表；表外能力在编译期或启动 / 注册时拒绝，不再施法到一半、扣费之后才失败 | SKILL-30 |
+
+同一个方向判断在 Runtime 一侧又出现一次：**衍生物（原名进程）的记录生命周期与停止**。SKILL-1 / SKILL-3 的 review 检查点补测时查出 RR-20261006-21 / 22 / 23，之后两天里同一块接连出问题（RR-30 / 31 / 32 / 34），属于 roost-coding“同一机制反复出缺陷要上报方向判断”的信号。维护者按顺序做了七个决定，每一步都把“各入口各自处理”收成一处：
+
+| 顺序 | 维护者决定（原话或决定行） | 方向判断 | 做了什么 | 条目 |
+| --- | --- | --- | --- | --- |
+| 0 | SKILL-1 / SKILL-3 检查点补测（交接 sktest） | 记录生命周期补测，暴露“已停记录从不删” | 记录随 cast 回收；失败启动不留记录；reset 条目带增量的 PrimaryTarget | SKILL-23 |
+| 1 | “如果是技能本身的问题是不是技能自己处理比较好” | 选 B：Runtime 对自己启动的东西负责到底（不是交给调用方重试） | 宿主停不下的衍生物进 `stop_pending`，退避重试、有上限与告警、进 checkpoint | SKILL-24 |
+| 2 | “skill的一个流程叫做进程很奇怪，用更专业的词语” → “Spawn吧” | 名字跟着领域走，不留旧名 | `process` 全量改名为 `spawn`（衍生物） | SKILL-25 |
+| 3 | “停止入口统一” | 失败处理收进一个函数，入口只“请求停止”；登记表 + 源码守卫固定 | 唯一停止函数 `requestSpawnStop`，九个入口登记 | SKILL-26 |
+| 4 | “第 1 类改 Summon”；kind 改 minion“按照推荐处理”；移除召唤物用 `dismiss`（“用推荐的”） | 两类 spawn 分开命名，消除混读 | 召唤物改名 Summon；`despawn` → `dismiss`；kind `summon` → `minion` | SKILL-27 |
+| 5 | 两张表选 A：“如果为了性能可以给spawns分类map，这样也不用扫全部” | 状态只由记录字段表达，分区由字段决定，只有一个函数改字段 | 四个分区、唯一写入口 `setState`、checkpoint 只存一份 | SKILL-28 |
+| 6 | 待停止上限在三个候选（A 维持 / B 放弃分区 / C 去掉上限）里选 B，并要求从结构上解决、不再按入口逐个打补丁 | 消除“记录在别人手里时消失”这一类路径 | 到上限不删记录，挪进第五个分区“已放弃”，只在 Advance 末尾清理 | SKILL-29 |
 
 与其他主题的边界：**skill Runtime 状态不进事务（B4）** 与 **buff 属性投影 `CombatComponent.ProjectAttributes`（N09 O2）** 在 DAO 部分；本部分只写示例 `statusbridge` 的修复（SKILL-22）。文件 outbox 遗留临时文件（RR-20261006-04）在 NONCORE（见 NONCORE-33）。
 
-**对业务作者最重要的一句**：v1.20.2 与 v1.21.0 两次收紧了编译器，以前能编译的定义可能在游戏服启动期 `CompileAll` 失败（错误带 JSON 路径与诊断码）。升级前用新版本跑一次 CompileAll；按[作者文档](../../skill/skill-casting-and-combat.md)“引用在哪里能读”的改写对照修改。所有收紧都只拒绝“以前要么每次施法失败、要么静默不执行、要么结果随机”的定义；正常定义的 gameplay digest 不变。
+**对业务作者最重要的一句**：v1.20.2 与 v1.21.0 两次收紧了编译器，以前能编译的定义可能在游戏服启动期 `CompileAll` 失败（错误带 JSON 路径与诊断码）。升级前用新版本跑一次 CompileAll；按[作者文档](../../skill/skill-casting-and-combat.md)“引用在哪里能读”的改写对照修改。所有收紧都只拒绝“以前要么每次施法失败、要么静默不执行、要么结果随机”的定义；正常定义的 gameplay digest 不变。**v1.23.0 另有两次改名（SKILL-25 衍生物 Spawn、SKILL-27 召唤物 Summon）与能力表（SKILL-30）**：用旧名写的技能 JSON 与 Host 实现要按对照表改名，所有 digest 都变，checkpoint 版本 7、旧的一律拒绝——这些是名字与格式的变化，不是语义变化。
 
 <a id="skill-1"></a>
 ### SKILL-1 施法失败只走一个终态入口（RR-20261005-NC-110～112）
 
-**结论**：启动失败、Cancel / Interrupt / Release 出错、排程失败都经 `failCastLocked` 收尾：撤掉本 cast 的全部排程、停进程、释放 policy 槽位。首发 v1.20.1。[实现](impl-cfg-skill-noncore.md#skill-1)
+**结论**：启动失败、Cancel / Interrupt / Release 出错、排程失败都经 `failCastLocked` 收尾：撤掉本 cast 的全部排程、停衍生物（原名进程）、释放 policy 槽位。首发 v1.20.1。[实现](impl-cfg-skill-noncore.md#skill-1)
 
 **背景**：8 个终止点各自手写收尾，失败路径漏掉的步骤各不相同：启动失败不撤任务却复用 ID（旧任务落到下一个拿到同一 ID 的 cast 上，失败启动后的 checkpoint 也恢复不了，NC-110）；回调出错直接返回，cast 停在半终止、施法者永久 `ErrCasterBusy`（NC-111）；排程失败不释放 policy 槽位，下一次激活对失败 cast 执行 toggle-off（NC-112）。来源：[N09 第一批](../../review/REVIEW-2026-10-05-n09-batch1.md)。
 
@@ -497,6 +622,8 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 - 排程失败的 toggle / hold / charge 释放槽位，下一次激活开始新 cast。
 
 **兼容**：行为收紧（见上）。checkpoint 格式与 wire 不变，只是少了失效任务。
+
+**后续**：本条 review 检查点里“没有单独用例”的三条路径（Interrupt 停衍生物出错、toggle release 回调出错、charge enter 失败后衍生物在宿主侧的残留）已由 `5c1f4176` 补测，查出并修复 RR-20261006-21 / 23（SKILL-23）；“失败后停不下的衍生物由谁负责”在 SKILL-24 / 26 定案。
 
 **链接**：[bugfix 记录](../../bugfix/RR-20261005-NC-110.md) · [NC-111](../../bugfix/RR-20261005-NC-111.md) · [NC-112](../../bugfix/RR-20261005-NC-112.md)
 
@@ -514,19 +641,21 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 <a id="skill-3"></a>
 ### SKILL-3 skillsync 三条下发路径共用同一可见性规则（RR-20261005-NC-114 / NC-115）
 
-**结论**：presentation reset、state 快照、增量三条路径都按同一 `VisibilityPolicy` 过滤；cast / process remove 带上归属实体。首发 v1.20.1。[实现](impl-cfg-skill-noncore.md#skill-3)
+**结论**：presentation reset、state 快照、增量三条路径都按同一 `VisibilityPolicy` 过滤；cast / 衍生物 remove（原名 process remove）带上归属实体。首发 v1.20.1。[实现](impl-cfg-skill-noncore.md#skill-3)
 
-**背景**：可见性在快照、增量、presentation reset 三处各写一套：reset 完全不过滤，不可见施法者的持续表现、目标与坐标发给所有 observer（NC-114）；ability 快照按空 handle、增量按具体 handle 问 `FieldVisible`；cast / process remove 不带归属实体，persistent remove 不看 `Binding`（NC-115）。来源：[N09 第二批](../../review/REVIEW-2026-10-05-n09-batch2.md)。
+**背景**：可见性在快照、增量、presentation reset 三处各写一套：reset 完全不过滤，不可见施法者的持续表现、目标与坐标发给所有 observer（NC-114）；ability 快照按空 handle、增量按具体 handle 问 `FieldVisible`；cast / process（今衍生物）remove 不带归属实体，persistent remove 不看 `Binding`（NC-115）。来源：[N09 第二批](../../review/REVIEW-2026-10-05-n09-batch2.md)。
 
 **决定**：bugfix。reset 复用现有 `FilterPresentation`（自定义策略无需改动）；未采用“在 `VisibilityPolicy` 接口上加 `FilterPresentationReset`”（破坏所有自定义策略的编译、同一规则写两遍）。
 
 **现在的行为**：
 
-- wire：`StateMutation` 的 cast / process remove 多出 `caster` / `owner` 字段（`omitempty`，只追加；旧客户端不读）。
+- wire：`StateMutation` 的 `cast_remove` / `spawn_remove`（原名 `process_remove`，SKILL-25 改名）多出 `caster` / `owner` 字段（`omitempty`，只追加；旧客户端不读）。
 - 行为收紧：observer 可见性在 upsert 与 remove 之间变化时以 remove 时为准，“先可见后不可见”的实体其 remove 不再下发——**业务应在可见性变化时重发快照**。
 - presentation reset 可能因策略报错而失败（fail-closed，与 state 快照一致）。
 
 **限制**：没有接 kit syncstream / NATS 端到端（外部验证随 E04）。自定义策略若依赖 `PresentationEvent.Sequence`，reset 里的还原事件取 `LatestPresentationSequence`。
+
+**后续**：本条检查点“reset 里的衍生物条目没有专门用例”已由 `5c1f4176` 补测，查出并修复 RR-20261006-22（reset 用 lifecycle 实体冒充 PrimaryTarget，SKILL-23）。
 
 **链接**：[bugfix 记录](../../bugfix/RR-20261005-NC-114.md) · [NC-115](../../bugfix/RR-20261005-NC-115.md)
 
@@ -548,7 +677,7 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 
 **背景**：提交前失败的 cast（commit 付费不足、Cancel / Release 回调失败）永不进完成队列，累计超过上限（默认 2048）后 checkpoint 恢复判 corrupt。
 
-**兼容**：checkpoint 格式不变。旧版本写出的、已超上限的 checkpoint 在旧版本同样恢复不了，修复不自动迁移。
+**兼容**：本条修复本身不改 checkpoint 格式。旧版本写出的、已超上限的 checkpoint 在旧版本同样恢复不了，修复不自动迁移。v1.23.0 发版时 checkpoint 版本为 7（SKILL-24～29 先后 3 → 7），旧版本写出的一律 `ErrCheckpointUnsupported`。“完成队列可以合法地长于上限（剩下的全被钉住）”这一口径由 RR-20261006-30 在恢复侧对齐（SKILL-24）。
 
 **限制**：无外部项。生产 Host 的 checkpoint 与世界成对恢复没有正式接线（N09 O3，第十二轮“skill 剩余观察：其余保持”），本条只在 MemoryHost 上成立。
 
@@ -634,9 +763,9 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 **链接**：[NC-210](../../bugfix/RR-20261005-NC-210.md) · [NC-212](../../bugfix/RR-20261005-NC-212.md) · [NC-213](../../bugfix/RR-20261005-NC-213.md) · [NC-214](../../bugfix/RR-20261005-NC-214.md) · [NC-215](../../bugfix/RR-20261005-NC-215.md)
 
 <a id="skill-11"></a>
-### SKILL-11 移交后的 area 回调 `finish` 只结束本 area 进程（RR-20261005-NC-211）
+### SKILL-11 移交后的 area 回调 `finish` 只结束本 area 衍生物（原名进程，RR-20261005-NC-211）
 
-**结论**：施法先结束、spawn 出的 area 进程已移交时，回调里的 `finish` 只停止本 area 进程；施法仍存活时照旧结束施法。首发 v1.20.2。[实现](impl-cfg-skill-noncore.md#skill-11)
+**结论**：施法先结束、召唤效果（原名 spawn 效果）带出的 area 衍生物已移交时，回调里的 `finish` 只停止本 area 衍生物；施法仍存活时照旧结束施法。首发 v1.20.2。[实现](impl-cfg-skill-noncore.md#skill-11)
 
 **背景**：编译器允许 area 回调 finish，但不知道施法会不会先结束；移交后 Runtime 对这个合法状态返回 `ErrProgramInvariant`，`Advance` 失败。
 
@@ -662,7 +791,7 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 
 **背景**：前面的 pass 每漏查一种名字，lower 就静默产出指向槽位 / handle 0 的 Program（NC-210、NC-214 都是这个形状）；少数查找直接 panic；`$memory.` / `$local.` / `$input.` 引用查不到时退成同名 builtin、运行期才 `ErrProgramInvariant`。回归逐表删条目，修前 35 处静默兜底 / 23 处未解析引用照样出 Program / 4 处 panic。
 
-**维护者决定**（DECISIONS-PENDING 第二轮 B3 行原文）：“lower 查找失败一律报错：做”；实施状态栏：“① …… ② phase 事件派发表单一来源（代价小，一并做）。③ 下个大版本，④ 保持 B”。待决定表里的选项：① lower fail-fast ② 事件派发表单一来源 ③ Host 取值约束做成随环境下发的能力表（改环境格式与 authority digest）④ NC-151 / NC-213 走方向 A 还是保持 B。
+**维护者决定**（DECISIONS-PENDING 第二轮 B3 行原文）：“lower 查找失败一律报错：做”；实施状态栏：“① …… ② phase 事件派发表单一来源（代价小，一并做）。③ 下个大版本，④ 保持 B”。③ 第十三轮改为本版完成（“还有留到下个版本的几项在本机能完成吗？希望本次能完成了”），见 SKILL-30。待决定表里的选项：① lower fail-fast ② 事件派发表单一来源 ③ Host 取值约束做成随环境下发的能力表（改环境格式与 authority digest）④ NC-151 / NC-213 走方向 A 还是保持 B。
 
 **现在的行为**：类型检查之外的第二道防线；正常定义的输出与 gameplay / presentation digest 不变。产物不完整、IR 形状未知等编译器自身不变量仍 panic（不是名字查找）。
 
@@ -673,19 +802,19 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 <a id="skill-14"></a>
 ### SKILL-14 编译器按 Runtime 求值上下文收紧，修复 B3 回归（RR-20261005-NC-220～224）
 
-**结论**：缓存型快照点、被动、`process` / `on` 的位置、进程字段里的施法引用在编译期按 Runtime 的实际求值上下文检查；B3 引入的局部变量 `read_attribute` 回归修复。首发 v1.21.0。[实现](impl-cfg-skill-noncore.md#skill-14)
+**结论**：缓存型快照点、被动、衍生物定义（原名 `process`）/ `on` 的位置、衍生物字段里的施法引用在编译期按 Runtime 的实际求值上下文检查；B3 引入的局部变量 `read_attribute` 回归修复。首发 v1.21.0。[实现](impl-cfg-skill-noncore.md#skill-14)
 
 **背景**（[N09 第五批](../../review/REVIEW-2026-10-06-n09-batch5.md)）：
 
 | 编号 | 问题 | 现在 |
 | --- | --- | --- |
-| NC-220 | cast_start / phase_start / process_start 的实体读 `$local.*`（采样点上还没有局部变量）；process_start 写在 spawn 进程回调以外 | `ATTRIBUTE_SNAPSHOT_INVALID` |
+| NC-220 | cast_start / phase_start / spawn_start（原名 process_start）的实体读 `$local.*`（采样点上还没有局部变量）；spawn_start 写在衍生物回调以外 | `ATTRIBUTE_SNAPSHOT_INVALID` |
 | NC-221 | 被动 `proc_policy.max_depth: 0` 永不触发；被动的 `input_schema` 为 position / direction 永远填不上 | `SHAPE_INVALID` / `INPUT_UNAVAILABLE at $.input_schema` |
-| NC-222 | 非 spawn 效果上的 `process` / `on` 被静默丢弃 | `SHAPE_INVALID` |
+| NC-222 | 非召唤效果上的衍生物定义（原名 `process`，今 `spawn`）/ `on` 被静默丢弃 | `SHAPE_INVALID` |
 | NC-223 | B3 回归：以局部变量为实体的 current / each_tick / on_hit / on_event 读取编译失败 | 恢复可编译，digest 与 v1.20.1 相同 |
-| NC-224 | spawn 进程每一步重新求值的字段读 `$input` / `$memory` / `$local`，移交后 `ErrProgramInvariant` | `INPUT_UNAVAILABLE`（方向 A：编译期拒绝） |
+| NC-224 | 衍生物每一步重新求值的字段读 `$input` / `$memory` / `$local`，移交后 `ErrProgramInvariant` | `INPUT_UNAVAILABLE`（方向 A：编译期拒绝） |
 
-**维护者决定**（DECISIONS-PENDING 第五轮）：“NC-224 方向 B：不做：维持编译期拒绝（进程启动时不冻结施法输入）”。方向 B 是“进程启动时把施法输入冻结进 `ProcessInstance`”，可以让 path 投射物（`points: $input.path`）真正可用，但属于语义扩展。
+**维护者决定**（DECISIONS-PENDING 第五轮）：“NC-224 方向 B：不做：维持编译期拒绝（进程启动时不冻结施法输入）”。方向 B 是“衍生物启动时把施法输入冻结进 `SpawnInstance`（原名 `ProcessInstance`）”，可以让 path 投射物（`points: $input.path`）真正可用，但属于语义扩展。
 
 **兼容**：行为收紧；NC-223 是恢复。若有部署在 v1.20.1 上保存了含 NC-223 那类技能的 checkpoint，升级后这些 cast 的 Program 因 digest 不同查不到，需要先排空。
 
@@ -698,29 +827,29 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 
 **背景**：编译期只有一套作用域（施法作用域 + 回调作用域），Runtime 至少有五种求值上下文，二者之间没有对照表；第五批之前同一形态已出五次（NC-211、NC-220、NC-221、NC-223、NC-224）。
 
-**维护者决定**（DECISIONS-PENDING 第五轮“skill 求值上下文表”行原文）：“做：一张表写明每种求值上下文（施法流程 / cast_start / phase_start / 进程启动 / 移交后每步）可用的引用，编译期与 Runtime 都查这一张（N09 第五批方向判断）”。
+**维护者决定**（DECISIONS-PENDING 第五轮“skill 求值上下文表”行原文，“进程”即今天的衍生物）：“做：一张表写明每种求值上下文（施法流程 / cast_start / phase_start / 进程启动 / 移交后每步）可用的引用，编译期与 Runtime 都查这一张（N09 第五批方向判断）”。
 
 **现在的行为**：
 
-- 8 个上下文：施法流程（cast_flow）、memory 默认值、cast_start 采样、phase_start 采样、process_start 采样、进程每一步（process_step）、进程回调（process_callback）、状态默认值（state_default）。比决定列的五种多三个，审表时发现它们是独立求值点。完整表见[方案 §3](../../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。
+- 8 个上下文：施法流程（cast_flow）、memory 默认值、cast_start 采样、phase_start 采样、spawn_start 采样、衍生物每一步（spawn_step）、衍生物回调（spawn_callback）、状态默认值（state_default）。三个衍生物上下文原名 process_start / process_step / process_callback（SKILL-25 改名）。比决定列的五种多三个，审表时发现它们是独立求值点。完整表见[方案 §3](../../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。
 - 新拒绝：memory 默认值读另一个 memory（NC-280，此前编译结果随 map 顺序）；状态默认值读 `$input` / `$memory`（NC-281）；cast_start / phase_start 读取可缺省的实体（NC-282）。
 - 新放行：`$primary_target.position`、`$lifecycle_entity.position`、`$event.*.position`、`$input.target.position` 等投射（NC-283，此前每次求值失败或 B3 起编译失败）。
-- 诊断码变化：进程回调里的施法引用由 `REFERENCE_UNKNOWN` 改为 `INPUT_UNAVAILABLE`（点名表项）；回调里的 cast_start / phase_start 读取改报 `ATTRIBUTE_SNAPSHOT_INVALID`（拒绝集合不变）。
+- 诊断码变化：衍生物回调里的施法引用由 `REFERENCE_UNKNOWN` 改为 `INPUT_UNAVAILABLE`（点名表项）；回调里的 cast_start / phase_start 读取改报 `ATTRIBUTE_SNAPSHOT_INVALID`（拒绝集合不变）。
 
-**兼容**：既有定义 digest 不变（`row` 不进 digest）；不改线格式、checkpoint、生成形状。按诊断码字符串匹配的工具要更新。
+**兼容**：既有定义 digest 不变（`row` 不进 digest）；不改线格式、checkpoint、生成形状（当时）。按诊断码字符串匹配的工具要更新。v1.23.0 的改名（SKILL-25、27）让上下文名、诊断文案与全部 digest 改变，见那两条。
 
 **链接**：[方案](../../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md) · [第六批记录](../../review/REVIEW-2026-10-06-n09-batch6.md) · [NC-280](../../bugfix/RR-20261005-NC-280.md) · [NC-281](../../bugfix/RR-20261005-NC-281.md) · [NC-282](../../bugfix/RR-20261005-NC-282.md) · [NC-283](../../bugfix/RR-20261005-NC-283.md)
 
 <a id="skill-16"></a>
 ### SKILL-16 漂移格子编译期拒绝（O33）；O34～O36 写进作者文档
 
-**结论**：进程字段与状态默认值里会随移交 / 读写位置变值的施法引用（`$primary_target`、`$ability.self`、`$cast.*` 除 `$cast.mode`、cast_start / phase_start 读取），以及 memory 默认值里的 phase_start 读取，共 21 格从“可用但漂移”改为编译期拒绝，诊断给出替代写法。首发 v1.21.0。[实现](impl-cfg-skill-noncore.md#skill-16)
+**结论**：衍生物字段（原名进程字段）与状态默认值里会随移交 / 读写位置变值的施法引用（`$primary_target`、`$ability.self`、`$cast.*` 除 `$cast.mode`、cast_start / phase_start 读取），以及 memory 默认值里的 phase_start 读取，共 21 格从“可用但漂移”改为编译期拒绝，诊断给出替代写法。首发 v1.21.0。[实现](impl-cfg-skill-noncore.md#skill-16)
 
 **背景**：第五批 O33：这些写法能编译、运行不报错，但主目标移交后变成 lifecycle 实体、施法状态变零值、快照退化为 current。求值上下文表起初把它们标成第三种格子“漂移”，保持现状、写明语义。
 
-**维护者决定**（DECISIONS-PENDING 第七轮 O33 行原文）：“漂移格子改为编译期拒绝：进程字段 / 状态默认值里使用会漂移的施法引用（`$primary_target`、`$cast.*`、`$ability.self`、进程字段里的 cast_start / phase_start 读取等）直接报错，提示改用进程自己的引用”；O34～O36：“按推荐：保持现状并写进作者文档”。memory 默认值的 phase_start 由实施者判断“不合理，拒绝”（名字承诺“phase 开始时的值”，实际是 Activate 时的值，与 cast_start 相同）。
+**维护者决定**（DECISIONS-PENDING 第七轮 O33 行原文）：“漂移格子改为编译期拒绝：进程字段 / 状态默认值里使用会漂移的施法引用（`$primary_target`、`$cast.*`、`$ability.self`、进程字段里的 cast_start / phase_start 读取等）直接报错，提示改用进程自己的引用”（原话里的“进程”即今天的衍生物）；O34～O36：“按推荐：保持现状并写进作者文档”。memory 默认值的 phase_start 由实施者判断“不合理，拒绝”（名字承诺“phase 开始时的值”，实际是 Activate 时的值，与 cast_start 相同）。
 
-**现在的行为**：诊断示例（节选）：`reference "$primary_target" is not available in evaluation context process_step: …；改用施法流程里求一次的 spawn position（如 $input.target.position）…（evaluation context table row $primary_target)`。快照诊断多了 `row <point>`。O34（costs / windup 里的 phase_start 取求值那一刻的值）、O35（进程回调里 `self_ability` 过滤比较 handle 0）、O36（进程回调里 `$caster` 编译期拒绝，改写 `$owner`）保持行为、写进作者文档。
+**现在的行为**：诊断示例（节选，`f6043e44` 时的文案）：`reference "$primary_target" is not available in evaluation context process_step: …；改用施法流程里求一次的 spawn position（如 $input.target.position）…（evaluation context table row $primary_target)`。v1.23.0 起上下文名是 `spawn_step`，替代写法说成“施法流程里求一次的召唤 position”（SKILL-25、27）。快照诊断多了 `row <point>`。O34（costs / windup 里的 phase_start 取求值那一刻的值）、O35（衍生物回调里 `self_ability` 过滤比较 handle 0）、O36（衍生物回调里 `$caster` 编译期拒绝，改写 `$owner`）保持行为、写进作者文档。
 
 **兼容与迁移**：**新拒绝**，以前能编译的这类定义启动期失败，按[作者文档改写对照](../../skill/skill-casting-and-combat.md)修改；接受集合其余部分与 gameplay digest 不变。仓内 fixture、示例、`roost add skill` 骨架、game-demo 的 `fireball.json.tmpl` 都不用漂移格子。
 
@@ -729,41 +858,41 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 **链接**：[方案 §8](../../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md) · [作者文档](../../skill/skill-casting-and-combat.md)
 
 <a id="skill-17"></a>
-### SKILL-17 summon 进程不再接受 `duration_ticks` 与 area 成员字段（O22）
+### SKILL-17 minion 衍生物（原名 summon 进程）不再接受 `duration_ticks` 与 area 成员字段（O22）
 
-**结论**：summon 进程上写非 0 的 `duration_ticks`、或 `area` / `interval_ticks` / `emit_leave_on_stop`，编译期报 `MOTION_INVALID`。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#skill-17)
+**结论**：kind 为 `minion` 的衍生物（实施时叫 summon 进程，SKILL-27 把 kind 改名为 `minion`）上写非 0 的 `duration_ticks`、或 `area` / `interval_ticks` / `emit_leave_on_stop`，编译期报 `MOTION_INVALID`。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#skill-17)
 
-**背景**：summon 的寿命一直是 spawn 效果的 `duration_ticks`，进程自己的 `duration_ticks` 从不被读（负数也能编译）；写了 `area` 的 summon 编译通过、启动即 `ErrProgramInvariant`（同一处提前返回造成）。
+**背景**：minion 衍生物的寿命一直是召唤效果（原名 spawn 效果）的 `duration_ticks`，衍生物自己的 `duration_ticks` 从不被读（负数也能编译）；写了 `area` 的 minion 编译通过、启动即 `ErrProgramInvariant`（同一处提前返回造成）。
 
 **维护者决定**（DECISIONS-PENDING 第十二轮“skill 剩余观察”行原文）：“O22 编译期拒绝；O7 排序；O29 改文案；O15/O16/O17/O27/O28 保持并写作者文档；其余保持”。
 
-**兼容与迁移**：已有定义在 summon 进程上写了这些字段的，升级后编译失败；删掉即可，行为不变（area 那种本来运行即失败）。
+**兼容与迁移**：已有定义在这类衍生物上写了这些字段的，升级后编译失败；删掉即可，行为不变（area 那种本来运行即失败）。
 
 **链接**：[第十二轮记录 §1.1](../../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md)
 
 <a id="skill-18"></a>
 ### SKILL-18 同一状态的 checkpoint 字节确定（O7）
 
-**结论**：`ActivePolicies`、`ProcLedger`、`RootEventCounts`、`AbilityByProgram` 改为按键排序写出；格式与版本不变，新旧版本写出的 checkpoint 双向可读。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#skill-18)
+**结论**：`ActivePolicies`、`ProcLedger`、`RootEventCounts`、`AbilityByProgram` 改为按键排序写出，同一状态两次 Checkpoint 字节相同。首发 v1.23.0（本版）。O7 实施（`229a5aa0`）时格式与版本（2）都不变、与之前写出的 checkpoint 双向可读；之后同版的 SKILL-24～29 把 checkpoint 版本升到 7，**v1.23.0 发布物只恢复版本 7**，旧版本写出的一律 `ErrCheckpointUnsupported`。[实现](impl-cfg-skill-noncore.md#skill-18)
 
 **背景**：这四个列表按 map 迭代顺序写出，两次 Checkpoint 同一状态的字节与 Checksum 不同。
 
 **决定**：同 SKILL-17（第十二轮 O7 排序）。
 
-**兼容**：恢复本来与列表顺序无关；依赖“同一状态两次 checkpoint 字节相同”的比对从本版起成立，但**不能拿新旧版本各自写出的字节互相比对**。
+**兼容**：恢复本来与列表顺序无关；依赖“同一状态两次 checkpoint 字节相同”的比对从本版起成立，但**不能拿新旧版本各自写出的字节互相比对**（版本号也不同）。
 
 **链接**：[第十二轮记录 §1.2](../../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md)
 
 <a id="skill-19"></a>
 ### SKILL-19 result 分支诊断文案（O29）；O15 / O16 / O17 / O27 / O28 写进作者文档
 
-**结论**：effect result 分支与 status 实例消费流程的诊断改为 “cannot suspend (wait, repeat with interval_ticks) or start a process with on callbacks”（规则不变，spawn 加不带回调的进程一直可以）；五条既定语义写进作者文档。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#skill-19)
+**结论**：effect result 分支与 status 实例消费流程的诊断改为 “cannot suspend (wait, repeat with interval_ticks) or start a spawn with on callbacks”（实施时文案里是 process，SKILL-25 改名；规则不变，召唤效果带不带回调的衍生物一直可以）；五条既定语义写进作者文档。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#skill-19)
 
-**写进作者文档的五条**（行为不变）：area 的 `$event.enter_count` 恒为 1（O15）；`max_reflects: N` 是碰撞预算、实际反弹 N−1 次，`max_pierces` 同理（O16）；Host 拿到的 numeric 快照里未绑定字段是启动时的值、运动每步重新求值（O17）；restore 的 `on_blocked` 与 profile 策略不同时必然 `policy_rejected`（O27）；process_start 读取的实体按启动事件求值（O28）。
+**写进作者文档的五条**（行为不变）：area 的 `$event.enter_count` 恒为 1（O15）；`max_reflects: N` 是碰撞预算、实际反弹 N−1 次，`max_pierces` 同理（O16）；Host 拿到的 numeric 快照里未绑定字段是启动时的值、运动每步重新求值（O17）；restore 的 `on_blocked` 与 profile 策略不同时必然 `policy_rejected`（O27）；spawn_start（原名 process_start）读取的实体按启动事件求值（O28）。
 
 **兼容**：只改诊断文案；按旧文案字符串匹配的工具要更新。
 
-**链接**：[作者文档“进程、运动与 temporal 的既定语义”](../../skill/skill-casting-and-combat.md) · [第十二轮记录 §1.3～1.4](../../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md)
+**链接**：[作者文档“衍生物、运动与 temporal 的既定语义”](../../skill/skill-casting-and-combat.md) · [第十二轮记录 §1.3～1.4](../../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md)
 
 <a id="skill-20"></a>
 ### SKILL-20 默认值为 null 的实体持久状态可以 `modify_state set`（RR-20261006-02）
@@ -783,7 +912,7 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 
 **结论**：Runtime 从不调度 `phase_timeout` 任务（phase 计时在编译期拒绝，B3 ④），恢复时出现即 `ErrCheckpointCorrupt`；内部的 `phaseTimeoutTask` 删除。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#skill-21)
 
-**兼容**：`RuntimeCheckpointVersion` 不变。`git log -S '&phaseTimeoutTask{'` 显示自 V1.9（`67c9df54`）起除恢复外没有任何代码构造这个任务，已发布版本的 checkpoint 不含它。
+**兼容**：本条（`b8fbcee0`）不改 `RuntimeCheckpointVersion`（当时为 2）；v1.23.0 发版时版本为 7（SKILL-24～29），旧版本写出的 checkpoint 先在版本号上被拒。`git log -S '&phaseTimeoutTask{'` 显示自 V1.9（`67c9df54`）起除恢复外没有任何代码构造这个任务，已发布版本的 checkpoint 不含它。
 
 **链接**：[bugfix 记录](../../bugfix/RR-20261006-03.md)
 
@@ -797,6 +926,205 @@ player tcp: player_access.tcp.handshake_timeout = 2m0s is outside (0, 1m0s]
 **兼容**：只改示例。
 
 **链接**：[第十二轮记录 §1.5](../../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md) · [发版前验证记录](../../bugfix/PRERELEASE-VERIFICATION-2026-10-06.md)
+
+<a id="skill-23"></a>
+### SKILL-23 衍生物记录随 cast 一起回收；失败启动不留记录；reset 条目带增量的 PrimaryTarget（RR-20261006-21 / 22 / 23）
+
+> 决定链第 0 步（见本主题开头的表）。方向判断：这是 SKILL-1 / SKILL-3 review 检查点的补测，查出的是“记录生命周期从来没定义”，后面六步都从这里展开。
+
+**结论**：三处修复，首发 v1.23.0（本版，`5c1f4176`）。①失败启动删 cast、还 ID 之前先删掉它名下已停的衍生物记录；有衍生物停不下来时保留 failed cast、不还 ID（RR-21，P2）。②只有仍在运行的衍生物钉住 cast，已停的记录随 cast 一起回收（RR-23，P2）。③presentation reset 的衍生物条目带上 Runtime 增量里的 `PrimaryTarget`，交给可见性策略的事件与增量同形（RR-22，P3）。[实现](impl-cfg-skill-noncore.md#skill-23)
+
+**背景**（实施时还叫“进程”）：
+
+| 编号 | 以前 | 后果 |
+| --- | --- | --- |
+| RR-20261006-21 | 失败启动（提交前失败，例如 charge 的 enter 先召唤、再付费失败）只撤排程任务（NC-110），衍生物停了但记录留在 `runtime.spawns`，`CastID` 是被还回去的 ID | 之后每一次 `Checkpoint` 都报 corrupt；下一个拿到同一 ID 的 cast 接走不属于它的记录 |
+| RR-20261006-23 | 回收 cast 时把名下**任何**衍生物记录当作引用，而记录在衍生物停止后从不删除 | 起过衍生物的 cast 永不回收，一局里累计超过 `CompletedCastLimit`（默认 2048）后 checkpoint 恢复判 corrupt |
+| RR-20261006-22 | `ActivePresentation` 不带 `PrimaryTarget`，reset 用 `Anchor.Target`（lifecycle 实体）代替 | 按 `PrimaryTarget` 决定去留的自定义策略，reset 里放出增量里挡住的衍生物表现（NC-114 的承诺是两条路径同一规则） |
+
+**决定**：bugfix（交接规格“sktest 已合（`5c1f4176`）：RR-20261006-21/22/23”）。未采用：失败启动永不复用 ID（改变 NC-110“未提交失败等于没有施法”）、停衍生物时立即删记录（同一提交里客户端只看到 remove、看不到停止状态）、`PrimaryTarget` 进 wire（旧 Applier 严格解码会拒绝未知字段）。
+
+**现在的行为**：
+
+- 正常失败启动之后不再残留衍生物记录，Start 照旧返回 `(0, 原错误)`、ID 照旧复用；宿主停不下衍生物时返回 `(cast.id, 原错误)` 并保留 failed cast（之前返回 0、记录被下一个 cast 接走）。停不下的衍生物之后怎么办，见 SKILL-24。
+- 起过衍生物的 cast 在衍生物结束后按 `CompletedCastLimit` 回收，已停记录同批删除（state mutation 的 `spawn_remove` 与 `cast_remove` 同一笔）。
+- `ActivePresentation.PrimaryTarget`（`json:"-"`，不进 wire）按增量来源填：施法条目与仍归施法的衍生物是施法目标，已移交的是 lifecycle 实体。默认 `EntityVisibilityPolicy` 结论不变。
+
+**兼容**：API、checkpoint 格式（当时版本 2）、wire 不变；`ActivePresentation` 多一个不序列化的导出字段。
+
+**限制**：经 kit syncstream / NATS 的端到端随 E04。
+
+**链接**：[RR-21 问题](../../bug/RR-20261006-21.md) · [修复](../../bugfix/RR-20261006-21.md) · [RR-22 修复](../../bugfix/RR-20261006-22.md) · [RR-23 修复](../../bugfix/RR-20261006-23.md)
+
+<a id="skill-24"></a>
+### SKILL-24 宿主停不下的衍生物由 Runtime 退避重试（RR-20261006-21 后续，RR-20261006-30 / 31）
+
+> 决定链第 1 步。方向判断：Runtime 对自己启动的东西负责到底（维护者选 B），不交给调用方重试；复用 RR-21 / 23 的记录生命周期，不另建状态表。
+
+**结论**：施法失败时宿主拒绝停止的衍生物，不再“就此不管”，而是标成新状态 `stop_pending`，由 Runtime 按退避重试，有次数上限、告警与内存上限，并写进 checkpoint；实施中另修两处：被钉住的 cast 多于上限时 checkpoint 恢复判 corrupt（RR-30，P3），tick 驱动的停止被拒时 Runtime 的 tick 冻住（RR-31，P2）。首发 v1.23.0（本版，`1ce01e5c`）。[实现](impl-cfg-skill-noncore.md#skill-24)
+
+**背景**：SKILL-23 修完后 RR-21 修复记录的“未验证 / 风险”写着：宿主停不下进程时 Runtime 不会自动重试，进程在宿主侧仍运行。交接规格把它列为待维护者：“宿主停进程失败时 Runtime 不重试（A 保持 + 文档 / B 重试）”。
+
+**维护者决定**（DECISIONS-PENDING 第十三轮“skill 宿主撤除失败”行）：维护者原话“如果是技能本身的问题是不是技能自己处理比较好” → Runtime 记录待撤除并按退避重试，有上限与告警，写入 checkpoint。实施取舍：不建单独的“待撤除”表（两份状态各自同步、各自进 checkpoint）；不每 tick 重试（宿主故障期间被每 tick 打一次）；到上限保留记录让运维看到。
+
+**现在的行为**（名字按 SKILL-25 改名之后；实施时是 `ProcessStopPending`、`skill.process.*`）：
+
+| 项 | 行为 |
+| --- | --- |
+| 状态 | `SpawnStopPending`（`stop_pending`）：钉住 cast、ID 不复用、不步进、不派发信号、不跑回调；仍占 owned 容量；在 `StateSnapshot().Spawns` 与 presentation reset 里可见，不在 `OwnedSpawns` 里 |
+| 重试 | 第一次在 `SpawnStopRetryBackoff`（默认 4）tick 之后，失败一次间隔翻倍，最多 64 倍；成功后进入 cancelled、发 `spawn_stop` 表现，cast 与记录按 SKILL-23 的规则回收 |
+| 上限与告警 | 失败的重试到 `SpawnStopRetryLimit`（默认 10，约 1276 tick）后不再自动重试：计 `skill.spawn.stop_retry_exhausted.total`、一条 Warn 日志，记录保留；`RetentionStats` 有 `StopPendingSpawns` / `StopRetryExhaustedSpawns` |
+| 内存上限 | 待停止条目最多 `MaxStopPendingSpawns`（默认 256）。实施时超限删记录（`stop_pending_dropped`），SKILL-29 改为挪进“已放弃”分区 |
+| 宿主契约 | `Host.StopSpawn` 必须幂等（Runtime 会对同一个衍生物再次请求停止）；`MemoryHost` 本来幂等 |
+| 客户端 | 进入待停止一条 `spawn_upsert`（`status: stop_pending`）与一条 `spawn_update` 表现；停掉后 `spawn_upsert`（cancelled）与 `spawn_stop`；cast 回收时 `spawn_remove` |
+| RR-30 | 恢复按回收的同一不变量核对完成队列：超过上限时队列里不能有可回收的 cast（放宽：被钉住的 cast 多于上限现在能恢复） |
+| RR-31 | 移交后的衍生物到期 / 失效时宿主拒绝停止：那一次 `Advance` 返回错误，之后转待停止、tick 照常前进（修前 `Advance` 一直卡在同一 tick，同一 tick 连打宿主四次） |
+
+**兼容**：新状态值 `stop_pending` 出现在衍生物状态快照、state mutation 与表现事件里，按状态分支的客户端 / 渲染器要认它；`RuntimeOptions` 新增三项、`RuntimeRetentionStats` 新增两个字段（零值取默认）；checkpoint 版本 2 → 3（之后到 7）。
+
+**限制**：无外部依赖，未在真实宿主上演练（参考宿主与测试替身覆盖）。
+
+**链接**：[RR-21 修复“后续”一节](../../bugfix/RR-20261006-21.md#后续runtime-负责重试停止维护者-2026-10-06) · [RR-30 修复](../../bugfix/RR-20261006-30.md) · [RR-31 修复](../../bugfix/RR-20261006-31.md)
+
+<a id="skill-25"></a>
+### SKILL-25 “进程”（process）全量改名为衍生物（Spawn）
+
+> 决定链第 2 步。方向判断：名字跟着领域走；线上未部署，不保留旧名、不做兼容别名。
+
+**结论**：skill 包里的 process 一律改名为 spawn（衍生物）：DSL、求值上下文、同步与表现、checkpoint 字段、Host 接口、指标、公开与未导出的 Go 标识符、16 个文件名。行为不变（测试除改名外不改断言）；checkpoint 版本 3 → 4，gameplay / presentation digest 全部改变（digest 输入里有字段名）。首发 v1.23.0（本版，`4451a0a5`）。[实现](impl-cfg-skill-noncore.md#skill-25)
+
+**维护者决定**（DECISIONS-PENDING 第十三轮“skill 进程改名”行）：原话“skill的一个流程叫做进程很奇怪，用更专业的词语”，选 **Spawn（衍生物）**（“Spawn吧”）：`process` 全量改名为 `spawn`，不保留旧名（线上未部署）。`proc`（被动触发、`ProcLedger`）是游戏术语“触发”，不是 process 的缩写，不改。
+
+**主要对照**（完整对照见[重构记录 §3](../../feature/REFACTOR-2026-10-06-skill-process-to-spawn.md)）：
+
+| 类别 | 旧 | 新 |
+| --- | --- | --- |
+| DSL | effect flow 的 `"process": {…}`、`modify_process`、`$process`、快照点 `process_start`、环境 `process_properties` / `process_kinds` | `"spawn": {…}`、`modify_spawn`、`$spawn`、`spawn_start`、`spawn_properties` / `spawn_kinds` |
+| 求值上下文 | `process_start` / `process_step` / `process_callback` | `spawn_start` / `spawn_step` / `spawn_callback` |
+| 同步与表现 | `process_upsert` / `process_remove`；`process_start` / `_update` / `_signal` / `_stop`；字段 `process_id` 等 | `spawn_upsert` / `spawn_remove`；`spawn_start` / … ；`spawn_id` 等 |
+| Host 接口 | `StepProcess(ProcessStepCommand, ProcessHostState)`、`StopProcess(…)` | `StepSpawn(SpawnStepCommand, SpawnHostState)`、`StopSpawn(…)`（幂等契约不变） |
+| 选项 / 统计 | `ProcessStopRetryBackoff`、`MaxStopPendingProcesses`、`MaxOwnedProcesses*`、`StopPendingProcesses` | `SpawnStopRetryBackoff`、`MaxStopPendingSpawns`、`MaxOwnedSpawns*`、`StopPendingSpawns` |
+| 指标 | `skill.process.stop_retry_exhausted.total` | `skill.spawn.stop_retry_exhausted.total` |
+| checkpoint | `processes`、`owned_processes`、`next_process_id` … | `spawns`、`owned_spawns`、`next_spawn_id` …（版本 4） |
+
+**兼容与迁移（破坏性）**：用旧名写的技能 JSON Parse 失败（`phases: [0].on: [0]: json: unknown field "process"`，TROUBLESHOOTING T-288）；Host 实现、客户端、告警按对照表改名；skillcompose 契约按新 digest 重签；旧回放记录与旧 checkpoint 不再适用（排空后升级）。codegen、demo 模板、kit 不引用这些名字，生成物不变。
+
+**链接**：[重构记录与完整对照](../../feature/REFACTOR-2026-10-06-skill-process-to-spawn.md)
+
+<a id="skill-26"></a>
+### SKILL-26 衍生物停止入口统一走一套停止 / 待停止状态机（RR-20261006-32）
+
+> 决定链第 3 步。方向判断：根因在实现结构（失败处理散在入口里、靠错误传播到另一个入口“补一刀”），不是“Runtime 负责到底”这个前提错了；把失败处理收进一个函数，用登记表 + 源码守卫固定，以后新增入口不补就红。
+
+**结论**：衍生物的全部停止入口（施法失败、goto / Cancel / Interrupt / 施法收尾、衍生物启动失败清理、召唤事务提交失败、移交时 lifecycle 已失效、施法期间 lifecycle 消失、移交后到期 / 失效、`RemoveProgram`、`Shutdown`）只“请求停止”，经唯一的 `requestSpawnStop` 进入同一个状态机：宿主停了就结束，拒绝就转 `stop_pending` 由 Runtime 退避重试。实施中修 RR-20261006-32（P3：被拒后同一请求再停一次，cancel 回调跑两遍）。首发 v1.23.0（本版，`3fad5b6e`）。[实现](impl-cfg-skill-noncore.md#skill-26)
+
+**背景**：10-06 一天之内这一块出了 RR-21 / 22 / 23 / 30 / 31，各自在入口上加分支：`failCastLocked` 停完补扫、tick 回收两处补分支、`Shutdown` / `RemoveProgram` 把记录留成 running 交调用方重试（之后 Runtime 不管）、施法里的入口靠错误传到 `failCastLocked` 再停一次。
+
+**维护者决定**（DECISIONS-PENDING 第十三轮“停止入口统一”行）：维护者原话“停止入口统一”：施放失败 / tick 到期 / Shutdown / RemoveProgram 四个入口走同一套停止 / 待停止状态机。
+
+**现在的行为**：
+
+- 处理宿主拒绝的位置从 5 处变成 1 处；直接调用 `terminateSpawn` 的位置从 14 处变成 1 处，调用链固定为 `requestSpawnStop` → `terminateSpawn` → `stopSpawn` → 宿主 `StopSpawn`（源码守卫核对）。
+- **`Shutdown` / `RemoveProgram` 的语义**：停不下的衍生物留成 `stop_pending`、写进 checkpoint，之后由 Runtime 在 tick 上接着重试；不在 `Shutdown` 里同步重试（Runtime 按 tick 确定性推进、没有 ctx，墙钟等待会破坏回放并阻塞快池 / 帧线程上的调用方）。调用方仍收到第一个错误；再调一次会立即再请求一次；停不下的衍生物不再出现在 `OwnedSpawns`（之前 running、留在里面）。
+- **RR-32**：Interrupt / Cancel / goto / 收尾 / 移交被拒时 cancel 回调只跑一次（之前两次）；启动失败与召唤事务提交失败的清理被拒时不跑 cancel 回调（之前跑了成功路径从不跑的 cancel）；同一请求里宿主只被打一次，之后在第 `SpawnStopRetryBackoff` 个 tick 重试。
+
+**兼容**：API、checkpoint 格式（版本 4）、wire、指标不变；行为变化见上（依赖“失败后从 `OwnedSpawns` 里找到它再调一次”的调用方改看 `StateSnapshot().Spawns` / `RetentionStats()`，或直接再调一次）。文件 `runtime_spawn_stop_retry.go` 改名为 `runtime_spawn_stop.go`。
+
+**链接**：[方案、状态迁移表与验证](../../feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md) · [RR-32 问题](../../bug/RR-20261006-32.md) · [修复](../../bugfix/RR-20261006-32.md)
+
+<a id="skill-27"></a>
+### SKILL-27 生成宿主单位的效果改名为召唤物（Summon）：`despawn` → `dismiss`，衍生物 kind `summon` → `minion`
+
+> 决定链第 4 步。方向判断：SKILL-25 之后 skill 包里有两套 spawn（宿主真实单位 / 技能驱动的衍生物），按“来源 + 语义”逐个判定，把第 1 类改名为 Summon，消除两类混读。
+
+**结论**：效果 `{"type":"spawn","template":…}`（用单位模板在场景里生成归施法者所有的真实单位）改名为 `{"type":"summon",…}`，移除召唤物的 `despawn` 改为 `dismiss`，宿主事务与相关类型、owned 选择、effect result 类型、MemoryHost 事件一并改名；衍生物里只跟着召唤物活的 kind `summon` 改为 `minion`。行为不变；checkpoint 版本 4 → 5（cast 值里召唤结果的类型 `spawn_result` → `summon_result`）；编译环境 digest 与全部 gameplay / presentation digest 改变。首发 v1.23.0（本版，`509c381f`）。[实现](impl-cfg-skill-noncore.md#skill-27)
+
+**维护者决定**（DECISIONS-PENDING 第十三轮“skill 生成宿主实体改名”行）：维护者“第 1 类改 Summon”；技能驱动对象（第 2 类）保持 Spawn（衍生物）；衍生物 `kind: "summon"` 改为 `kind: "minion"`（维护者“按照推荐处理”）。“版本号与命名”行：维护者“用推荐的”——移除召唤物用 `dismiss`（游戏里解散召唤物 / 宠物的通用词，未用生造的 `unsummon`）。
+
+**主要对照**（完整对照见[重构记录 §3](../../feature/REFACTOR-2026-10-07-skill-summon-rename.md)）：
+
+| 类别 | 旧 | 新 |
+| --- | --- | --- |
+| DSL | 效果 `spawn`、`despawn`；`issue_entity_command` 的 `despawn`；单位模板生命周期策略值 `despawn`；owned 过滤 `spawned_before` / `spawned_after`、排序 `spawn_tick` / `spawn_sequence`；result 类型 `spawn_result` | `summon`、`dismiss`；`dismiss`；`dismiss`；`summoned_before` / `summoned_after`、`summon_tick` / `summon_sequence`；`summon_result` |
+| Host 契约 | `PreviewOwnedSpawn(SpawnCommand)`、`CommitOwnedSpawn` / `RollbackOwnedSpawn(OwnedSpawnTransactionID)`、`SpawnEffectResult` | `PreviewOwnedSummon(SummonCommand)`、`CommitOwnedSummon` / `RollbackOwnedSummon(OwnedSummonTransactionID)`、`SummonEffectResult` |
+| 环境 | `UnitTemplateCatalogEntry.MaximumSpawnCount` | `MaximumSummonCount` |
+| MemoryHost 事件 | `owned_entity_spawned` / `_spawn_rolled_back` / `_despawned` | `owned_entity_summoned` / `_summon_rolled_back` / `_dismissed` |
+| 衍生物 kind | `"spawn":{"kind":"summon"}` | `"spawn":{"kind":"minion"}` |
+
+**不改的**（经核对属于衍生物）：`SpawnCommandMeta`、`OwnedSpawns` / `OwnedSpawnSnapshot`、`MaxOwnedSpawns*`、`HasSpawn`、`SpawnTemplate*`。文件 `runtime_owned_spawn.go` 改名为 `runtime_owned_entity.go`。
+
+**兼容与迁移（破坏性）**：旧定义 Parse 失败（`unsupported effect "spawn"`，T-289）；召唤效果上挂 `kind: "summon"` 的衍生物编译报 `MOTION_INVALID`（不是闭合的 motion kind）；Host 实现按对照表改名；环境与 Program digest 改变，契约重签；旧 checkpoint 排空后升级。
+
+**实施中发现**：source document digest 丢掉接口字段的具体类型与 `json:"-"` 字段——登记为 RR-20261006-33，随 SKILL-28 修复。
+
+**链接**：[重构记录与完整对照](../../feature/REFACTOR-2026-10-07-skill-summon-rename.md)
+
+<a id="skill-28"></a>
+### SKILL-28 衍生物记录按字段分区存放、删掉重复的 owned 表；源文档 digest 逐字段；停止循环判空（RR-20261006-33 / 34）
+
+> 决定链第 5 步。方向判断：状态只由记录字段（`Status` + `handedOff`）表达，分区由字段决定、只有一个函数改字段并换分区；SKILL-26 的方向判断里留的风险点（`spawns` 与 `ownedSpawns` 两张表要同步）在这里消除。
+
+**结论**：Runtime 不再有 `spawns` 与 `ownedSpawns` 两张同步维护的表，改为一个 `spawnTable` 的四个分区（施放中 / 已移交 / 待停止 / 已停止），每条记录恰好在一个分区，由 `setState` 唯一负责改字段并挪分区；每个 tick 入口只扫自己那一个分区；checkpoint 只存一份记录（版本 5 → 6）。同一提交修 RR-20261006-33（P3：源文档 digest 改为逐字段的规范表示）与 RR-20261006-34（P2：`Shutdown` / `RemoveProgram` 遇到同一轮被待停止上限删掉的记录空指针 panic，SKILL-26 引入、未发版）。首发 v1.23.0（本版，`6826eeb2`）。[实现](impl-cfg-skill-noncore.md#skill-28)
+
+**维护者决定**（DECISIONS-PENDING 第十三轮“skill 衍生物两张表”行）：选 A——“移交给谁”只由记录字段（`Owner` + `handedOff`）表达，不再有重复索引；原话“如果为了性能可以给spawns分类map，这样也不用扫全部” → 按类别**分区**存放，checkpoint 只存一份。
+
+**现在的行为**：
+
+- 行为不变（原有测试除名字外不改断言）；`OwnedSpawns(owner)` 扫已移交分区按 `Owner` 过滤；所有有副作用的遍历仍按 ID 排序。
+- checkpoint 版本 6：删掉 `owned_spawns` 与恢复时的逐条比对；恢复额外拒绝未知 `status` 与非 entity 衍生物上的 `handed_off`。
+- **RR-33**：`SourceDocumentDigest` 以前是 `json.Marshal(Definition)` 的摘要，接口值不写具体类型、`json:"-"` 字段被跳过——只差效果类型（`set_memory` / `add_memory`）、消耗数量、cast window 表达式、策略 / 输入 / 形状 / 过滤器类型的两个定义摘要相同。改为按反射逐字段写出（接口写具体类型名、`json:"-"` 字段也写）。**全部定义的 `SourceDocumentDigest` 改变**；gameplay / presentation digest 不经过它、不变；框架内没有用它做身份判断。
+- **RR-34**：两处停止循环取回记录后判空、跳过（SKILL-29 之后循环取回的是已放弃的记录，判空保留作双重保险）。
+
+**兼容**：checkpoint 版本 6（之后到 7）；保存了旧 `SourceDocumentDigest` 做比对的调用方第一次比对会认为全部源文档变了（一次性）。
+
+**链接**：[分区方案 §1～§10](../../feature/REFACTOR-2026-10-07-skill-spawn-partition.md) · [RR-33 问题](../../bug/RR-20261006-33.md) · [修复](../../bugfix/RR-20261006-33.md) · [RR-34 问题](../../bug/RR-20261006-34.md) · [修复](../../bugfix/RR-20261006-34.md)
+
+<a id="skill-29"></a>
+### SKILL-29 待停止到上限不删记录，挪进第五个分区“已放弃”（维护者选 B）
+
+> 决定链第 6 步。方向判断：分区方案 §10 判断根因在“上限删除”这一条——它是这一块唯一“记录在别人手里时消失”的路径（RR-34 就是它）；候选 A 维持判空 / B 放弃分区 / C 去掉上限，维护者选 B，从结构上消除而不是再给新循环判空。
+
+**结论**：待停止条目会超过 `MaxStopPendingSpawns` 时，最早的一条（先选已到重试上限的）不再被删，而是经 `setState` 挪进第五个分区“已放弃”（新状态 `abandoned`）：不再重试、不再推进、不钉住 cast、`Shutdown` / `RemoveProgram` 对它是空操作；已放弃分区有自己的上限 `MaxAbandonedSpawns`（默认 1024），只在 `Advance` 返回前清理。删记录只剩三个登记点。checkpoint 版本 6 → 7。首发 v1.23.0（本版，`f28285ad`）。[实现](impl-cfg-skill-noncore.md#skill-29)
+
+**维护者决定**（DECISIONS-PENDING 第十三轮“待停止上限”行）：“维护者选 B：到 `MaxStopPendingSpawns` 不删记录，改挪进第五个分区‘已放弃’（不再重试、告警），该分区自有上限、只在 tick 末尾统一清理，杜绝循环中途删记录”。
+
+**现在的行为**：
+
+| 时刻 | 客户端看到 | 指标 / 日志 |
+| --- | --- | --- |
+| 放弃 | `spawn_update` / `spawn_upsert`（`status: abandoned`），不发 `spawn_stop` / `spawn_remove`（宿主那边可能仍在运行） | `skill.spawn.abandoned.total`（替换 `skill.spawn.stop_pending_dropped.total`）；Error 日志 `stop-pending spawn abandoned`，点名衍生物、cast、owner、lifecycle 实体与放弃前的重试次数 |
+| 之后（cast 回收、Shutdown 等） | 无；cast 照 RR-23 回收，已放弃的记录不随 cast 删 | 无 |
+| `Advance` 末尾超出 `MaxAbandonedSpawns` | `spawn_remove`（Runtime 不再记得它，不代表宿主已停） | `skill.spawn.abandoned_pruned.total`、Warn 日志 |
+
+`RetentionStats` 加 `AbandonedSpawns`。两次 `Advance` 之间（`Shutdown`、`Start` 失败等入口只放弃、不删）已放弃分区可以暂时超限，下一次 `Advance` 末尾清理。
+
+**兼容与迁移**：告警规则把 `stop_pending_dropped` 换成 `abandoned`（另有 `abandoned_pruned`）；客户端按状态分支时认 `abandoned`；checkpoint 版本 7（加 `max_abandoned_spawns`，已放弃的记录必须带 `direct_program`）。公开 API：新增 `SpawnAbandoned`、`RuntimeOptions.MaxAbandonedSpawns`、`RuntimeRetentionStats.AbandonedSpawns`、`MetricSpawnAbandoned`、`MetricSpawnAbandonedPruned`；删除 `MetricSpawnStopPendingDropped`（10-06 改名时引入，未发版）。宿主侧对已放弃单位的清理靠宿主自己的比赛结束 / 程序移除（`RemoveOwnedEntitiesForMatchEnd` / `ByProgram` 照常调用）。
+
+**链接**：[分区方案 §11](../../feature/REFACTOR-2026-10-07-skill-spawn-partition.md#11-待停止上限改为已放弃分区维护者第十三轮待停止上限选-b2026-10-07)
+
+<a id="skill-30"></a>
+### SKILL-30 Host 取值能力表随编译环境下发，编译器 / Runtime / Host 共用（B3 ③，RR-20261006-37 / 39）
+
+> 方向判断：本主题开头的“编译器认可的写法与 Runtime / Host 真正会执行的写法各自维护”在 Host 一侧的最后一块——三处各自维护“能读什么、支持什么”的集合（NC-151 / 213 / 214 / 215 是直接先例）；做成一张随环境下发的表，三处只查它。
+
+**结论**：Host 能读 / 支持的取值做成能力表（八列：属性、资源、衍生物 kind、motion 步骤、只交给 Host 的衍生物数值字段、资源 operation、修正 operation、召唤物），随 `CompileEnvironment.Host` 下发、算进 authority digest。编译器按表拒绝（`HOST_CAPABILITY_MISSING`，点名缺的项与源路径）；Runtime 在 Program 第一次 Start / RegisterAbility / ActivatePassive / RestoreRuntime 时按 Host 声明的表准入（`ErrHostCapabilityMissing`，不扣费）；MemoryHost / HostAdapter 声明自己的表并对表外属性 / 资源报错；`CheckHostCapabilities` 按声明逐项调用 Host 核对。收尾把能力表并进 `skill.Host` 接口，删掉“未实现则跳过准入”的分支。首发 v1.23.0（本版，`cd8ed341`、`e999f68e`）。[实现](impl-cfg-skill-noncore.md#skill-30)
+
+**背景**：编译时认为能读的属性、资源、运动步骤，到运行期 Host 可能不支持，结果是施法到一半才报错（往往已经扣了费），或 Host 静默返回 0。修前探针（方案 §7.1）：summon 写在不实现 `OwnedEntityRuntimeHost` 的 Host 上、带 collision 的衍生物跑在不接受碰撞步骤的 Host 上，都是“编译通过、Activate 失败、mana 90（原 100）”；MemoryHost 与 HostAdapter 对 catalog 外的属性 / 资源读成 0。
+
+**维护者决定**：第二轮 B3 行“③ 下个大版本”（Host 取值约束做成随环境下发的能力表，改环境格式与 authority digest）；第十三轮“原下个大版本项”行，维护者原话“还有留到下个版本的几项在本机能完成吗？希望本次能完成了” → 本版完成。收尾按第十三轮“交给 review 前不留能绕过检查的分支”：选“能力表并进 `Host` 接口”而不是“接口不变、入口处没实现就拒绝”（改动更小、Runtime 不需要任何“没实现怎么办”的分支、业务漏写在编译期就报）。
+
+**实施中发现**：
+
+- [RR-20261006-37](../../bug/RR-20261006-37.md)（P3）：motion catalog 的 `enabled_slots` 只在定义写了 steering / offsets 时才查，Runtime 却对每个运动衍生物每步都发这两种步骤——关掉槽位的环境照样编译出运动衍生物，扣费之后才失败。修法：槽位并入能力表的 `motion_step` 列，运动衍生物固定需要 frame / steering / offsets / completion。
+- [RR-20261006-39](../../bug/RR-20261006-39.md)（P3）：Host 不声明能力表时 Runtime 跳过准入，包装型 Host（`RecordingHost` / `ReplayHost`）能绕过核对直接施法。修法：`HostCapabilityProvider` 并入 `skill.Host`，包装型 Host 转发被包装者的表并记录这次调用。
+
+**现在的行为**：默认环境（`DefaultCompileEnvironment()`）声明全部能力（`FullHostCapabilityCatalog()`，revision `host-1`），MemoryHost 全部实现——用默认环境与 MemoryHost 的项目编译结果、gameplay / presentation digest、Runtime 行为都不变。业务 Host 至少写两处（[方案 §6](../../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)）：`HostCapabilities()` 声明能力（战斗部分交给 `HostAdapter`、自己负责的运动 / 衍生物 / 召唤物合并进来），装配时环境的 Host 段取自 Host 的表；测试里加一行 `skill.CheckHostCapabilities` 核对声明与行为一致。空表是合法声明（什么都不支持，带需求的 Program 一律在准入处被拒并点名）。
+
+**兼容与迁移（破坏性）**：业务自己的 `skill.Host` 实现必须有 `HostCapabilities()`（否则编译不过；嵌入 `*skill.MemoryHost` 的自动得到）；环境格式变化（新增 `Host`、删 `Motion.EnabledSlots` / `HostFeatures`），所有 authority digest 改变，用旧 digest 的 Program / checkpoint / skillcompose 契约需重新编译、重签；配置了 catalog 的 MemoryHost 与 HostAdapter 对表外属性 / 资源从“返回 0”改为报错；环境收窄后原来能编译的定义报 `HOST_CAPABILITY_MISSING`；录制的 `HostRecord` 多一条 `host_capabilities`，旧记录回放报 `ErrReplayMismatch`，重录即可。
+
+**限制**：能力表能核对“Host 接受这个步骤 / 字段”，但 Host 是否真的使用只交给它的数值字段（`spawn_numeric_field`）、非 minion 的衍生物 kind 从接口上观察不到——声明即承诺（方案 §11 写明的设计边界，不是待验证项）；谎报能力的 Host 仍由施法中途的类型断言（召唤物）或 Host 自己的错误（运动步骤）兜底，业务测试里用 `CheckHostCapabilities` 发现。
+
+**链接**：[B3 ③ 方案与实施（含 §12 收尾）](../../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md) · [RR-37 修复](../../bugfix/RR-20261006-37.md) · [RR-39 修复](../../bugfix/RR-20261006-39.md) · [B3 ①② 方案](../../feature/B3-SKILL-LOWER-FAILFAST-2026-10-06.md)
 
 ## NONCORE：非核心 review（N01～N15）的修复与收尾
 
@@ -1287,9 +1615,9 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 ### N13 container / safemap / goroutine / misc
 
 <a id="noncore-46"></a>
-#### NONCORE-46 遍历回调自锁、跨桶停止、FastMap 幻影键、TaskPool 关闭 panic、拓扑排序判环、KeyMap 遍历删除（RR-20261005-NC-180～185 与复审补修）
+#### NONCORE-46 遍历回调自锁、跨桶停止、FastMap 幻影键、TaskPool 关闭 panic、拓扑排序判环、KeyMap 遍历删除（RR-20261005-NC-180～185 与复审补修）；TaskPool 统计口径（RR-20261006-20）
 
-**结论**：N13 六处，首发 v1.20.2。[实现](impl-cfg-skill-noncore.md#noncore-46)
+**结论**：N13 六处，首发 v1.20.2；加上 TaskPool 统计不再瞬间读到“结束数大于提交数”（RR-20261006-20，`41bdb9e5`），首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#noncore-46)
 
 | 编号 | 以前 | 现在 |
 | --- | --- | --- |
@@ -1299,8 +1627,11 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 | NC-183 | `TaskPool.Submit` 与 `Shutdown` 并发 panic “send on closed channel” | 受理与关闭互斥 |
 | NC-184 | 拓扑排序遇到未单独注册的依赖误报环，未注册节点还会掩盖真正的环 | 按全部节点判环 |
 | NC-185 | `KeyMap.Range` 回调删除当前键漏键、交出零值键 | 每桶先复制再回调 |
+| RR-20261006-20 | `TaskPool.Submit` 先入队后计 total、`GetStats` 先读 total 后读结束数，两个窗口任一都能让一次读到 `completed + failed > total`（P4，统计口径） | `Submit` 先计数再入队、被拒时撤回；`GetStats` 先读结束数再读 total；保证 `completed + failed ≤ total`（三个计数不是同一时刻的快照，注释写明） |
 
-**性能**：`EntityManager.Range` 10 万实体一次约 0.86ms → 4.1ms（每实体两次 CAS），唯一正式调用方是 statslog 的分钟级统计；FastMap Set/Get 无显著差异（p=0.937）。**链接**：[NC-180](../../bugfix/RR-20261005-NC-180.md) … [NC-185](../../bugfix/RR-20261005-NC-185.md) · [N13 记录](../../review/REVIEW-2026-10-05-n13.md)
+**RR-20261006-20 的来历与决定**：N13 O9 后半，[revleft](../../review/REVIEW-2026-10-06-revleft.md) §4 曾以“没有确定性红测试、零调用方”不改；第十三轮维护者决定“NONCORE-46 TaskPool 统计：维护者选 A：修，统计取一致快照，保证 completed ≤ total”。实施选“调整计数与读取顺序”而不是“一把锁包住计数与读取”（每个任务的提交与完成都去抢同一把锁，只为一个零调用方的统计接口）。零调用方 API 按 C8 保留。被拒的提交在“先加后撤回”之间会让 total 瞬时多算一个，不破坏这条关系。
+
+**性能**：`EntityManager.Range` 10 万实体一次约 0.86ms → 4.1ms（每实体两次 CAS），唯一正式调用方是 statslog 的分钟级统计；FastMap Set/Get 无显著差异（p=0.937）。**链接**：[NC-180](../../bugfix/RR-20261005-NC-180.md) … [NC-185](../../bugfix/RR-20261005-NC-185.md) · [N13 记录](../../review/REVIEW-2026-10-05-n13.md) · [RR-20261006-20 问题](../../bug/RR-20261006-20.md) · [修复](../../bugfix/RR-20261006-20.md)
 
 <a id="noncore-47"></a>
 #### NONCORE-47 遍历回调定为仓库级契约（C7）
@@ -1329,7 +1660,7 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 
 **结论**：`mongo mod: connected` 的 `uri` 把 userinfo 口令换成 `***`。首发 v1.20.2。[实现](impl-cfg-skill-noncore.md#noncore-49)
 
-**限制**：无。mongo-driver 自身的错误信息已查：本次重核用 mongo-driver v2.6.0（`e6828e4f` 的依赖）试了 12 种带口令的 URI（解析失败的各种形状、连不上的主机、对隔离环境 Mongo 的认证失败），错误文本都不含口令。**链接**：[NC-191](../../bugfix/RR-20261005-NC-191.md)
+**限制**：无。mongo-driver 自身的错误信息已查：第一次重核用 mongo-driver v2.6.0（`e6828e4f` 的依赖）试了 12 种带口令的 URI（解析失败的各种形状、连不上的主机、对隔离环境 Mongo 的认证失败），错误文本都不含口令。**链接**：[NC-191](../../bugfix/RR-20261005-NC-191.md)
 
 <a id="noncore-50"></a>
 #### NONCORE-50 启动失败先收回 Service 已启动的部分（RR-20261005-NC-193）
@@ -1404,7 +1735,7 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 
 **兼容**：只改 nest 未导出函数；业务代码不受影响。
 
-**验证**：三条新回归先红后绿（无作用域重试时 Guard 被归还 2 次 → 0 次；无作用域 `singleDispatch` 成功执行 → 返回错误）；本次重核在 `e6828e4f` 上做了有界 seed 扫描：`-shuffle` 230 个 seed、`-race` 30 个 seed，260 次全部通过。
+**验证**：三条新回归先红后绿（无作用域重试时 Guard 被归还 2 次 → 0 次；无作用域 `singleDispatch` 成功执行 → 返回错误）；第一次重核在 `e6828e4f` 上做了有界 seed 扫描：`-shuffle` 230 个 seed、`-race` 30 个 seed，260 次全部通过。
 
 **链接**：[RR-20261006-12 问题](../../bug/RR-20261006-12.md) · [修复](../../bugfix/RR-20261006-12.md) · [收尾第 4 批](../../bugfix/CLOSING-BATCH-4-2026-10-06.md) · [WANTED（已转 RR）](../../bug/WANTED.md)
 
@@ -1442,24 +1773,28 @@ O-T3：策略 `Init` 里发起的动作会被 `EndActions` 结束；O-T4：`Shut
 | E26 | Linux 上 CLI 信号与进程树、NC-202 pid 认领 | NONCORE-31、NONCORE-51 |
 | E27 | hotcode 真实插件加载（Linux；Windows 部分暂存，不保证正确） | NONCORE-34、NONCORE-36 |
 
-本机能做的验证在 `e6828e4f` 上都已做完或有既有证据，各条“限制”写了结论。本次重核补跑的：真实 Mongo 副本集上的 `TestRealMongoCoordinatorLeaseTakeover`（NONCORE-12）、Resume 代际持久（NONCORE-16，临时探针）、`TestRealSagaCrossProcessKillRecovers`（NONCORE-18）、Mongo Mod 在已断开的真实客户端上停止（NONCORE-53，临时探针）；mongo-driver 错误信息不带口令（NONCORE-49，临时探针）；nest `-shuffle` 有界 seed 扫描 260 次（NONCORE-54）；GitHub framework-compat 在 `e6828e4f` 上全部通过（CFG-12、NONCORE-31）。临时探针都没有入库。
+本机能做的验证在冻结提交上都已做完或有既有证据，各条“限制”写了结论；2026-10-07 补写的 CFG-14～16、SKILL-23～30、RR-20261006-20 都不依赖外部环境（skill 全部在参考宿主与测试替身上验证，A4 ① 在新生成的 game-demo 与隔离环境上实跑），没有新增外部验证项。第一次重核（`e6828e4f`）补跑的：真实 Mongo 副本集上的 `TestRealMongoCoordinatorLeaseTakeover`（NONCORE-12）、Resume 代际持久（NONCORE-16，临时探针）、`TestRealSagaCrossProcessKillRecovers`（NONCORE-18）、Mongo Mod 在已断开的真实客户端上停止（NONCORE-53，临时探针）；mongo-driver 错误信息不带口令（NONCORE-49，临时探针）；nest `-shuffle` 有界 seed 扫描 260 次（NONCORE-54）；GitHub framework-compat 在 `e6828e4f` 上全部通过（CFG-12、NONCORE-31）。临时探针都没有入库。
 
 ## 仍待决定的事项
 
-- **维护者决定项：无**。[DECISIONS-PENDING](../../review/DECISIONS-PENDING-2026-10-05.md) 文首“当前总状态”：未决事项为零。
+- **维护者决定项：无**。[DECISIONS-PENDING](../../review/DECISIONS-PENDING-2026-10-05.md) 第十三轮与本分册有关的决定（B10 两条管线选 A、NONCORE-46 选 A、skill 撤除重试、改名 Spawn、停止入口统一、改名 Summon 与 `dismiss`、两张表选 A、待停止上限选 B、原下个大版本项本版完成、配置声明形式选 A）全部已实施。
 - **WANTED 未决数：0**。本部分原有的 W-2026-10-06-01（nest 无 Guard 作用域分支）已转 [RR-20261006-12](../../bug/RR-20261006-12.md) 并修复（`b7471ae4`，NONCORE-54）。
-- **明确留到下个大版本**（维护者决定，不在本版）：A4 ① 每个 Mod 声明配置 schema（CFG-2 的后续形态）；B3 ③ Host 取值约束做成随环境下发的能力表（SKILL-13）。
+- **原“下个大版本”项本版已完成**：第十三轮维护者要求本版完成，A4 ① 每个 Mod 声明配置（CFG-14、15）、B3 ③ Host 取值能力表（SKILL-30）都已实施；本分册不再有“留到下个大版本”的项。
 - **保持方向 B、不实现的语义**：NC-151 / NC-213 方向 A（phase 计时、recast、chain 间隔 / 重复、modifier 叠层），B3 ④“保持 B”，第十二轮“NC-151 timeout_ticks：保持 warning”；NC-224 方向 B（冻结施法输入）第五轮“不做”。
-- **列为后续的功能**（不是缺陷、不是待验证项）：tablegen 与 cfggen 两种标签方言合一（B10 方案 §2.4 评估后列为后续）；tablegen 生成期的 ref 数据检查（B10 决定规则由运行时加载层强制、生成期检查只作提前反馈，ref 只在加载时查）。
+- **已定的设计边界**（不是缺陷、不是待验证项）：tablegen 与 cfggen 不合成一套（第十三轮维护者选 A，CFG-16）；tablegen 生成期不做 ref 数据检查（B10 决定规则由运行时加载层强制、生成期检查只作提前反馈，ref 只在加载时查）。
+- **发版必做（打 tag 时，不是未闭环项）**：`codegen/internal/roost/manifest.go:83` 的 `minimumVersions.Core` 与 `.github/workflows/framework-compat.yml` 的 minimum 行升到 v1.23.0（CFG-14 / 15，交接规格“发版必做”）；作者文档 `docs/skill/skill-casting-and-combat.md:114`“（O22、O29，未发版）”与 `:187`“（O2，未发版）”两处标题随发版改为 v1.23.0。
 - **Windows**：维护者第十三轮“windows的问题可以暂存，加一个说明 window问题不保证正确”（`7fec136e`）。本部分提到 Windows 的条目（NONCORE-27、28、31、33、34、36）一律按“暂存，不保证正确”理解。
 
 ## 文档与源码不一致（以源码为准）
 
-下面六项在本次重核时已处理：1～5 改的是源文档本身（同一提交），6 已由 RR-20261005-01 记录末节闭环。
+1～6 在第一次重核（`e6828e4f`）时已处理：1～5 改的是源文档本身，6 已由 RR-20261005-01 记录末节闭环。7～9 是第二次重核（`5e72ca4d`）的结果，都不需要再改源文档。
 
 1. A4 方案（`docs/feature/REFACTOR-2026-10-05-strict-config-reads.md`）写 `frameworkBoolKeys` / `frameworkDurationKeys` / `frameworkIntKeys` 为 16 / 95 / 77 个键；冻结提交上是 17 / 99 / 79，差额来自之后各批登记的新键（`service_metrics.enabled`；`ops.admin_timeout`、`remote_entity.cached_max_staleness`、`remote_entity.mirror.shutdown_timeout`、`remote_entity.snapshot_l2_tombstone_wait_timeout`；`remote_entity.snapshot_interest_per_consumer`、`remote_entity.snapshot_l2_tombstone_wait_replicas`）。**已改**为 17 / 99 / 79 并注明实施当时的数（CFG-2）。
 2. B10 方案 §2.1 的 API 草图写 `rules.Lookup` 是“encoding/json 的键匹配”、§2.2 写规则字段“按 encoding/json 的键匹配”；v1.22.0 起源码是逐字匹配（`configdata/rules/rules.go:276-280`、`configdata/fieldrules.go:91`）。**已改**为逐字匹配并注明来自 CFG-10（CFG-7、CFG-10）。
-3. 作者文档 `docs/skill/skill-casting-and-combat.md` 第 80 行标题原写“（O33，未发版）”；O33 随 v1.21.0 发布（`f6043e44`）。**已改**为“（O33，v1.21.0）”。同文 O22 / O29 / O2 标“未发版”指 v1.23.0 本版内容，发版时一并改（SKILL-16）。
+3. 作者文档 `docs/skill/skill-casting-and-combat.md` 第 80 行（`5e72ca4d` 上为第 82 行）标题原写“（O33，未发版）”；O33 随 v1.21.0 发布（`f6043e44`）。**已改**为“（O33，v1.21.0）”。同文 O22 / O29 / O2 标“未发版”指 v1.23.0 本版内容，发版时一并改（SKILL-16）。
 4. DECISIONS-PENDING 标注提交 `2a7d2a65` 的提交说明写“实施状态（a6e75488）”，`a6e75488` 是 rebase 前的提交号、不在 main 历史上；正确的是 `f6043e44`（表内一直写对）。提交历史不改，**已在** DECISIONS-PENDING 第七轮表下加更正注（SKILL-16）。
 5. NC-220 / NC-224 的 bugfix 记录写修复位置在 `compile_snapshot.go`（`snapshotCapturableWhereRead` / `readsInsideProcessCallbacks`）与 `compile_owned_entity.go`（`validateDetachedProcessFields`）；同一版本（v1.21.0）内求值上下文表把它们收拢到表上，冻结提交上这三个函数已不存在（SKILL-14）。**已在**两份记录末尾加后注，指向现在的位置。
 6. RR-20261005-01 的回归用例 `TestActivityRefusesACandidateListNoWindowCouldOpenWith` 随 C4 删除。`d5682dc4` 复核：承诺仍需要，回归改名为组文件形态的 `TestActivityRefusesAGroupNoWindowCouldOpenWith`，另加守卫 `TestAGroupFitsOneLiveQuery`；逐项对照见 NONCORE-20 与该记录末节。
+7. 第十三轮各实施记录与 DECISIONS-PENDING 的实施状态栏、CHANGELOG 已有条目里用的是当时的名字（`process` / `skill.process.*` / `stop_pending_dropped` / `SpawnCommand` 等）；按两份改名记录 §4“历史记录不改”的约定保留，查新名用 [Spawn 对照](../../feature/REFACTOR-2026-10-06-skill-process-to-spawn.md) 与 [Summon 对照](../../feature/REFACTOR-2026-10-07-skill-summon-rename.md)。本分册正文已统一为新名，引用旧名处注“原名”。
+8. A4 ② 方案（`REFACTOR-2026-10-05-strict-config-reads.md`）正文描述的三份登记表、`ConfigReader` 与正则守卫已被 A4 ① 删除；该方案第 46 行已有“2026-10-07 已实施 A4 ①、三份登记与 `ConfigReader` 删除”的注，CFG-1～5 按“当时的行为 + v1.23.0 起”的形式写。`codegen/internal/roost/manifest.go:67` 的注释里提到 `app.ConfigReader`，说的是 v1.20.2 抬 Core 下限的历史原因，不是现行代码。
+9. 作者文档 `docs/skill/skill-casting-and-combat.md:114`“编译期收紧与诊断文案（O22、O29，未发版）”与 `:187`“属性投影（O2，未发版）”指本版内容，随发版改为 v1.23.0（见“仍待决定的事项”里的发版必做）。
