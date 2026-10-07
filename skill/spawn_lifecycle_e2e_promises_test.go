@@ -150,6 +150,7 @@ func spawnLifecycleScenarios() []spawnLifecycleScenario {
 		return runtime.Interrupt(castID, program.cast.interruptTags[0])
 	}
 	shutdown := func(runtime *Runtime, _ CastID, _ *Program) error { return runtime.Shutdown() }
+	removeProgram := func(runtime *Runtime, _ CastID, program *Program) error { return runtime.RemoveProgram(program.id) }
 	wait := func(ticks int) string {
 		return `{"flow":"wait","ticks":` + intString(ticks) + `,"then":{"flow":"finish"}}`
 	}
@@ -162,6 +163,9 @@ func spawnLifecycleScenarios() []spawnLifecycleScenario {
 		{name: "interrupt while casting", tail: wait(10), actionTick: 2, action: interrupt, stopTick: 2, wantCancel: 1},
 		{name: "shutdown while casting", tail: wait(10), actionTick: 2, action: shutdown, stopTick: 2, wantCancel: 1},
 		{name: "shutdown after handoff", tail: `{"flow":"finish"}`, actionTick: 2, action: shutdown, stopTick: 2, wantCancel: 1},
+		// RemoveProgram 停施放中的 entity 衍生物也跑一次 cancel，和 Shutdown / Cancel / Interrupt 一致（RR-20261006-55 后续二）。
+		{name: "remove program while casting", tail: wait(10), actionTick: 2, action: removeProgram, stopTick: 2, wantCancel: 1},
+		{name: "remove program after handoff", tail: `{"flow":"finish"}`, actionTick: 2, action: removeProgram, stopTick: 2, wantCancel: 1},
 	}
 }
 

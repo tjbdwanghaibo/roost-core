@@ -52,9 +52,18 @@ type RuntimeOptions struct {
 	CompletedCastLimit int
 	// RootEventLimit bounds once-per-root accounting after inactive roots have
 	// been reclaimed. It must exceed MaxActiveCasts + MaxOwnedSpawns +
-	// MaxStopPendingSpawns (the most roots casts and spawns can reference at
-	// once); NewRuntime panics and RestoreRuntime fails otherwise. Default 8192.
+	// MaxStopPendingSpawns + MaxQueuedTasks (the most roots casts, spawns and
+	// queued tasks can reference at once); NewRuntime panics and
+	// RestoreRuntime fails otherwise. Default 8192.
 	RootEventLimit int
+	// MaxQueuedTasks bounds queued tasks that pin a root event: passive
+	// activations not yet executed (routed by PassiveRouter or ActivatePassive)
+	// and external events queued by QueueExternalEvent. At the bound
+	// QueueExternalEvent and ActivatePassive return ErrQueuedTasksFull and a
+	// routed passive candidate is rejected (passive_suppressed with Result
+	// queue_full, skill.passive.dispatch_rejected.total{reason="queue_full"}).
+	// Default 2048.
+	MaxQueuedTasks int
 	// CheckpointMaxBytes and CheckpointMaxRecords bound recovery input before
 	// it can allocate unbounded object graphs.
 	CheckpointMaxBytes   int
@@ -230,6 +239,7 @@ type Runtime struct {
 	nextPassiveActivationID PassiveActivationID
 	procLedger              map[procLedgerKey]struct{}
 	rootEventCounts         map[EventID]int
+	queuedTasks             int // 排程里的排队任务数（被动激活与外部事件，isQueuedTask），不超过 MaxQueuedTasks
 	passiveCountTick        Tick
 	passiveCount            int
 	runtimeEvents           []RuntimeEvent
@@ -265,8 +275,9 @@ type Runtime struct {
 }
 
 // NewRuntime 构造一个从宿主当前事件前沿开始的 Runtime。上限之间的关系不成立时（RootEventLimit 不大于
-// MaxActiveCasts + MaxOwnedSpawns + MaxStopPendingSpawns，见 validateRootEventLimit）以 ErrRuntimeLimitsInvalid panic：
-// 这是装配期的配置错误，错误信息点出相关选项。
+// MaxActiveCasts + MaxOwnedSpawns + MaxStopPendingSpawns + MaxQueuedTasks，见 validateRootEventLimit）以
+// ErrRuntimeLimitsInvalid panic：这是装配期的配置错误，错误信息点出全部相关选项与当前值（维护者 2026-10-07 F08-H+2 ③
+// 决定保持 panic）。
 func NewRuntime(host Host, options RuntimeOptions) *Runtime {
 	runtime := newRuntimeCore(host, options)
 	if err := validateRootEventLimit(runtime.options); err != nil {
@@ -361,6 +372,9 @@ func newRuntimeCore(host Host, options RuntimeOptions) *Runtime {
 	}
 	if options.MaxAbandonedSpawns <= 0 {
 		options.MaxAbandonedSpawns = 1024
+	}
+	if options.MaxQueuedTasks <= 0 {
+		options.MaxQueuedTasks = 2048
 	}
 	runtime := &Runtime{
 		host: host, options: options,

@@ -28,7 +28,9 @@ import (
 // （docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md §11），线上未部署，不兼容版本 6。8：payload 加
 // spawn_event_sequence（衍生物回调事件 ID 的计数，RR-20261006-53），任务删掉 spawn_step 一类与它的 spawn_id 字段
 // （衍生物只由 advanceOwnedSpawns 推进，RR-20261006-51）；施放中衍生物的 next_tick 从此生效。线上未部署，不兼容版本 7。
-const RuntimeCheckpointVersion uint32 = 8
+// 9：payload 加 max_queued_tasks（排队任务上限，计入根事件表上界；恢复时排程里的排队任务数不得超过它），RR-20261006-55
+// 后续二，维护者 2026-10-07 F08-H+2；线上未部署，不兼容版本 8。
+const RuntimeCheckpointVersion uint32 = 9
 const RuntimeCheckpointMaxBytes = 64 << 20
 const RuntimeCheckpointMaxRecords = 1_000_000
 
@@ -96,6 +98,7 @@ type runtimeCheckpointPayload struct {
 	SpawnStopRetryLimit   int                       `json:"spawn_stop_retry_limit"`
 	MaxStopPendingSpawns  int                       `json:"max_stop_pending_spawns"`
 	MaxAbandonedSpawns    int                       `json:"max_abandoned_spawns"`
+	MaxQueuedTasks        int                       `json:"max_queued_tasks"`
 	CurrentTick           Tick                      `json:"current_tick"`
 	EventCursor           EventCursor               `json:"event_cursor"`
 	NextCastID            CastID                    `json:"next_cast_id"`
@@ -429,6 +432,7 @@ func RestoreRuntime(host Host, options RuntimeOptions, checkpoint RuntimeCheckpo
 	options.SpawnStopRetryLimit = payload.SpawnStopRetryLimit
 	options.MaxStopPendingSpawns = payload.MaxStopPendingSpawns
 	options.MaxAbandonedSpawns = payload.MaxAbandonedSpawns
+	options.MaxQueuedTasks = payload.MaxQueuedTasks
 	if err := validateRootEventLimit(options); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrCheckpointCorrupt, err)
 	}
@@ -586,7 +590,7 @@ func (runtime *Runtime) checkpointPayloadLocked() (runtimeCheckpointPayload, err
 	if !runtime.stateMutationReady || !runtimeSnapshotsEqual(runtime.stateMutationBaseline, runtime.stateSnapshotLocked()) {
 		return runtimeCheckpointPayload{}, ErrCheckpointHostMismatch
 	}
-	p := runtimeCheckpointPayload{WorldRevision: runtime.host.CurrentRevision(), Authority: runtime.host.AuthorityIdentity(), MatchSeed: runtime.options.MatchSeed, SemanticsRevision: runtime.options.SupportedCompilerSemanticsRevision, MaxPassivePerTick: runtime.options.MaxPassiveActivationsPerTick, MaxOwned: runtime.options.MaxOwnedSpawns, MaxOwnedPerOwner: runtime.options.MaxOwnedSpawnsPerOwner, MaxOwnedPerProgram: runtime.options.MaxOwnedSpawnsPerProgram, MaxOwnedPerTemplate: runtime.options.MaxOwnedSpawnsPerTemplate, MaxActiveCasts: runtime.options.MaxActiveCasts, MaxAbilities: runtime.options.MaxAbilities, CompletedCastLimit: runtime.options.CompletedCastLimit, RootEventLimit: runtime.options.RootEventLimit, MaxProcLedgerEntries: runtime.options.MaxProcLedgerEntries, SpawnStopRetryBackoff: runtime.options.SpawnStopRetryBackoff, SpawnStopRetryLimit: runtime.options.SpawnStopRetryLimit, MaxStopPendingSpawns: runtime.options.MaxStopPendingSpawns, MaxAbandonedSpawns: runtime.options.MaxAbandonedSpawns, CurrentTick: runtime.currentTick, EventCursor: runtime.eventCursor, NextCastID: runtime.nextCastID, NextTaskSequence: runtime.nextTaskSequence, NextFrameID: runtime.nextFrameID, NextSpawnID: runtime.nextSpawnID, SpawnEventSequence: runtime.spawnEventSequence, NextPassiveActivation: runtime.nextPassiveActivationID, NextAbilityHandle: runtime.nextAbilityHandle, NextAbilityOverlay: runtime.nextAbilityOverlay, PassiveCountTick: runtime.passiveCountTick, PassiveCount: runtime.passiveCount, TraceSequence: runtime.traceSequence, PresentationSequence: runtime.presentationSequence, StateEventSequence: runtime.stateEventSequence, StateEventDropped: runtime.stateEventDropped, StateMutationSequence: runtime.stateMutationSequence, StateMutationDropped: runtime.stateMutationDropped, StateMutationBaseline: runtime.stateMutationBaseline, StateMutationReady: runtime.stateMutationReady}
+	p := runtimeCheckpointPayload{WorldRevision: runtime.host.CurrentRevision(), Authority: runtime.host.AuthorityIdentity(), MatchSeed: runtime.options.MatchSeed, SemanticsRevision: runtime.options.SupportedCompilerSemanticsRevision, MaxPassivePerTick: runtime.options.MaxPassiveActivationsPerTick, MaxOwned: runtime.options.MaxOwnedSpawns, MaxOwnedPerOwner: runtime.options.MaxOwnedSpawnsPerOwner, MaxOwnedPerProgram: runtime.options.MaxOwnedSpawnsPerProgram, MaxOwnedPerTemplate: runtime.options.MaxOwnedSpawnsPerTemplate, MaxActiveCasts: runtime.options.MaxActiveCasts, MaxAbilities: runtime.options.MaxAbilities, CompletedCastLimit: runtime.options.CompletedCastLimit, RootEventLimit: runtime.options.RootEventLimit, MaxProcLedgerEntries: runtime.options.MaxProcLedgerEntries, SpawnStopRetryBackoff: runtime.options.SpawnStopRetryBackoff, SpawnStopRetryLimit: runtime.options.SpawnStopRetryLimit, MaxStopPendingSpawns: runtime.options.MaxStopPendingSpawns, MaxAbandonedSpawns: runtime.options.MaxAbandonedSpawns, MaxQueuedTasks: runtime.options.MaxQueuedTasks, CurrentTick: runtime.currentTick, EventCursor: runtime.eventCursor, NextCastID: runtime.nextCastID, NextTaskSequence: runtime.nextTaskSequence, NextFrameID: runtime.nextFrameID, NextSpawnID: runtime.nextSpawnID, SpawnEventSequence: runtime.spawnEventSequence, NextPassiveActivation: runtime.nextPassiveActivationID, NextAbilityHandle: runtime.nextAbilityHandle, NextAbilityOverlay: runtime.nextAbilityOverlay, PassiveCountTick: runtime.passiveCountTick, PassiveCount: runtime.passiveCount, TraceSequence: runtime.traceSequence, PresentationSequence: runtime.presentationSequence, StateEventSequence: runtime.stateEventSequence, StateEventDropped: runtime.stateEventDropped, StateMutationSequence: runtime.stateMutationSequence, StateMutationDropped: runtime.stateMutationDropped, StateMutationBaseline: runtime.stateMutationBaseline, StateMutationReady: runtime.stateMutationReady}
 	p.CompletedCastOrder = append([]CastID(nil), runtime.completedCastOrder...)
 	castIDs := make([]int, 0, len(runtime.casts))
 	for id := range runtime.casts {
@@ -1032,7 +1036,8 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 	if len(runtime.abilityByProgram) != len(runtime.abilities) {
 		return ErrCheckpointCorrupt
 	}
-	if runtime.activeCastCount > runtime.options.MaxActiveCasts || len(runtime.abilities) > runtime.options.MaxAbilities || !runtime.completedCastOrderWithinLimitLocked() || len(runtime.rootEventCounts) > runtime.options.RootEventLimit || len(runtime.procLedger) > runtime.options.MaxProcLedgerEntries || !runtime.stopPendingRecordsValidLocked() {
+	runtime.queuedTasks = runtime.countQueuedTasksLocked()
+	if runtime.queuedTasks > runtime.options.MaxQueuedTasks || runtime.activeCastCount > runtime.options.MaxActiveCasts || len(runtime.abilities) > runtime.options.MaxAbilities || !runtime.completedCastOrderWithinLimitLocked() || len(runtime.rootEventCounts) > runtime.options.RootEventLimit || len(runtime.procLedger) > runtime.options.MaxProcLedgerEntries || !runtime.stopPendingRecordsValidLocked() {
 		return ErrCheckpointCorrupt
 	}
 	for key, state := range runtime.abilities {
@@ -1073,7 +1078,7 @@ func checkpointRecordCount(payload runtimeCheckpointPayload) int {
 }
 
 func validCheckpointRuntimeLimits(payload runtimeCheckpointPayload) bool {
-	return payload.SemanticsRevision != "" && payload.MaxPassivePerTick > 0 && payload.MaxOwned > 0 && payload.MaxOwnedPerOwner > 0 && payload.MaxOwnedPerProgram > 0 && payload.MaxOwnedPerTemplate > 0 && payload.MaxActiveCasts > 0 && payload.MaxAbilities > 0 && payload.CompletedCastLimit > 0 && payload.RootEventLimit > 0 && payload.MaxProcLedgerEntries > 0 && payload.SpawnStopRetryBackoff > 0 && payload.SpawnStopRetryLimit > 0 && payload.MaxStopPendingSpawns > 0 && payload.MaxAbandonedSpawns > 0
+	return payload.SemanticsRevision != "" && payload.MaxPassivePerTick > 0 && payload.MaxOwned > 0 && payload.MaxOwnedPerOwner > 0 && payload.MaxOwnedPerProgram > 0 && payload.MaxOwnedPerTemplate > 0 && payload.MaxActiveCasts > 0 && payload.MaxAbilities > 0 && payload.CompletedCastLimit > 0 && payload.RootEventLimit > 0 && payload.MaxProcLedgerEntries > 0 && payload.SpawnStopRetryBackoff > 0 && payload.SpawnStopRetryLimit > 0 && payload.MaxStopPendingSpawns > 0 && payload.MaxAbandonedSpawns > 0 && payload.MaxQueuedTasks > 0
 }
 
 // restoreCheckpointSpawns 恢复衍生物记录，按字段放进分区（spawnTable.add）。分区由 status 与 handed_off 决定，

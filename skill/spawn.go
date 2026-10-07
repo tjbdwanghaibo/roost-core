@@ -304,7 +304,7 @@ func (runtime *Runtime) terminateSpawn(cast *castInstance, spawn *SpawnInstance,
 	return errors.Join(detachErr, areaErr, callbackErr, stopErr)
 }
 
-// spawnCancelCallbackEvent 是衍生物被提前停止（Cancel / Interrupt / 施法失败 / goto / Shutdown）时要跑的回调：entity
+// spawnCancelCallbackEvent 是衍生物被提前停止（Cancel / Interrupt / 施法失败 / goto / Shutdown / RemoveProgram）时要跑的回调：entity
 // 衍生物不论施放中还是已移交都跑一次 cancel，phase / cast 作用域的衍生物不跑。Shutdown 之前只给已移交的跑，施放中的
 // 被 Shutdown 停下时一次 cancel 也没有，与 Cancel / Interrupt 停同一个衍生物不一致（RR-20261006-55 后续，维护者选 A）。
 func spawnCancelCallbackEvent(spawn *SpawnInstance) string {

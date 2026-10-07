@@ -1,15 +1,17 @@
 package skill
 
-// 根事件表的结构性保证（RR-20261006-55 后续，维护者 2026-10-07 同意按推荐处理）：RootEventLimit 必须大于同时被
-// 施法 / 衍生物引用的根数上界 MaxActiveCasts + MaxOwnedSpawns + MaxStopPendingSpawns（rootEventReferenceBound），
-// 违反时 NewRuntime 直接 panic、RestoreRuntime 返回错误，并点出这几个选项。兜底分支（排程任务钉住的根没有配置上界）
-// 见 runtime_event_test.go 的 TestCollectHostEventsSkipsEventWhenEveryRootIsPinned。
+// 根事件表的结构性保证（RR-20261006-55 后续，维护者 2026-10-07 同意按推荐处理；后续二加排队任务上限）：RootEventLimit
+// 必须大于同时被引用的根数上界 MaxActiveCasts + MaxOwnedSpawns + MaxStopPendingSpawns + MaxQueuedTasks
+// （rootEventReferenceBound），违反时 NewRuntime 直接 panic（维护者 F08-H+2 ③ 决定保持）、RestoreRuntime 返回错误，并点出
+// 全部选项与当前值。兜底分支只作防御，见 runtime_event_test.go 的 TestCollectHostEventsSkipsEventWhenEveryRootIsPinned；
+// 合法配置下不触发见 runtime_queued_task_bound_promises_test.go。
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -26,10 +28,12 @@ func TestNewRuntimeRejectsRootEventLimitNotAboveReferencedRootBound(t *testing.T
 		reject  bool
 	}{
 		{name: "defaults", options: RuntimeOptions{}},
-		{name: "explicit small but above bound", options: RuntimeOptions{RootEventLimit: 4, MaxActiveCasts: 1, MaxOwnedSpawns: 1, MaxStopPendingSpawns: 1}},
-		{name: "equal to bound", options: RuntimeOptions{RootEventLimit: 3, MaxActiveCasts: 1, MaxOwnedSpawns: 1, MaxStopPendingSpawns: 1}, reject: true},
+		{name: "explicit small but above bound", options: RuntimeOptions{RootEventLimit: 5, MaxActiveCasts: 1, MaxOwnedSpawns: 1, MaxStopPendingSpawns: 1, MaxQueuedTasks: 1}},
+		{name: "equal to bound", options: RuntimeOptions{RootEventLimit: 4, MaxActiveCasts: 1, MaxOwnedSpawns: 1, MaxStopPendingSpawns: 1, MaxQueuedTasks: 1}, reject: true},
+		{name: "above the old bound but not counting the default queue", options: RuntimeOptions{RootEventLimit: 4, MaxActiveCasts: 1, MaxOwnedSpawns: 1, MaxStopPendingSpawns: 1}, reject: true},
 		{name: "small limit with default casts", options: RuntimeOptions{RootEventLimit: 64}, reject: true},
 		{name: "default limit with raised casts", options: RuntimeOptions{MaxActiveCasts: 8192}, reject: true},
+		{name: "default limit with raised queue", options: RuntimeOptions{MaxQueuedTasks: 4096}, reject: true},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -48,9 +52,11 @@ func TestNewRuntimeRejectsRootEventLimitNotAboveReferencedRootBound(t *testing.T
 			if !ok || !errors.Is(err, ErrRuntimeLimitsInvalid) {
 				t.Fatalf("panic value = %#v, want an error wrapping ErrRuntimeLimitsInvalid", recovered)
 			}
-			for _, option := range []string{"RootEventLimit", "MaxActiveCasts", "MaxOwnedSpawns", "MaxStopPendingSpawns"} {
-				if !strings.Contains(err.Error(), option) {
-					t.Errorf("error %q does not name %s", err, option)
+			// 每个选项连同补齐默认值之后的当前值一起出现。
+			effective := newRuntimeCore(nil, testCase.options).options
+			for option, value := range map[string]int{"RootEventLimit": effective.RootEventLimit, "MaxActiveCasts": effective.MaxActiveCasts, "MaxOwnedSpawns": effective.MaxOwnedSpawns, "MaxStopPendingSpawns": effective.MaxStopPendingSpawns, "MaxQueuedTasks": effective.MaxQueuedTasks} {
+				if want := option + " (" + strconv.Itoa(value) + ")"; !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err, want)
 				}
 			}
 		})
@@ -83,7 +89,7 @@ func TestRestoreRuntimeRejectsCheckpointWhoseRootEventLimitIsNotAboveTheBound(t 
 	if !errors.Is(err, ErrRuntimeLimitsInvalid) || !errors.Is(err, ErrCheckpointCorrupt) {
 		t.Fatalf("restore error = %v, want ErrRuntimeLimitsInvalid and ErrCheckpointCorrupt", err)
 	}
-	if !strings.Contains(err.Error(), "RootEventLimit") || !strings.Contains(err.Error(), "MaxActiveCasts") {
+	if !strings.Contains(err.Error(), "RootEventLimit") || !strings.Contains(err.Error(), "MaxActiveCasts") || !strings.Contains(err.Error(), "MaxQueuedTasks") {
 		t.Fatalf("restore error %q does not name the options", err)
 	}
 }

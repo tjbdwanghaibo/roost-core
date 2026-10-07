@@ -224,6 +224,9 @@ func (runtime *Runtime) scheduleSystem(due Tick, payload scheduledTaskPayload) e
 	}
 	runtime.nextTaskSequence++
 	runtime.scheduler.Push(scheduledTask{DueTick: due, Sequence: runtime.nextTaskSequence, Payload: payload})
+	if isQueuedTask(payload) {
+		runtime.queuedTasks++
+	}
 	return nil
 }
 
@@ -376,6 +379,10 @@ func scheduledTaskIdentity(payload scheduledTaskPayload) (CastID, uint64) {
 }
 
 func (runtime *Runtime) executeScheduledTask(task scheduledTask) error {
+	// 排队任务出队即释放名额（admitQueuedTaskLocked）；执行中起的施法计入 MaxActiveCasts。
+	if isQueuedTask(task.Payload) && runtime.queuedTasks > 0 {
+		runtime.queuedTasks--
+	}
 	if recharge, ok := task.Payload.(*ammoRechargeTask); ok {
 		return runtime.executeAmmoRecharge(recharge)
 	}

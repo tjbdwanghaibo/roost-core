@@ -143,34 +143,38 @@ func (runtime *Runtime) castEvictableLocked(cast *castInstance) bool {
 	return !runtime.castHasRunningSpawnLocked(cast.id)
 }
 
-// rootEventReferenceBound 是同一时刻被施法 / 衍生物引用（rootEventReferencedLocked）的不同根数的上界：
+// rootEventReferenceBound 是同一时刻被引用（rootEventReferencedLocked）的不同根数的上界：
 //   - 未结束的施法：每个施法引用一个根，未结束的施法数不超过 MaxActiveCasts（startLocked 准入；每条终态路径都经
 //     markAbilityCastFinished 减计数）；
 //   - entity 衍生物（施放中、已移交、待停止）：不超过 MaxOwnedSpawns（hasOwnedSpawnCapacityExcluding 按全部仍由 Runtime
 //     负责的分区计数）；
 //   - phase / cast 作用域的衍生物：施放中的跟所属施法同一个根，已算在施法里；所属施法结束后只可能留成待停止，
 //     不超过 MaxStopPendingSpawns（makeRoomForStopPendingLocked）；
-//   - 已停止 / 已放弃的记录不引用根，MaxAbandonedSpawns 不进上界。
+//   - 已停止 / 已放弃的记录不引用根，MaxAbandonedSpawns 不进上界；
+//   - 排队任务（未执行的被动激活、QueueExternalEvent 排的外部事件，isQueuedTask）：不超过 MaxQueuedTasks，入口
+//     （QueueExternalEvent、enqueuePassive、ActivatePassive）满了就拒绝（admitQueuedTaskLocked，RR-20261006-55 后续二）；
+//   - 其余排程任务不钉住根（queuedTaskRoot）：施法的任务在施法未结束时与施法同根、已算在施法里，施法结束后残留的任务
+//     执行时是空操作（phase token 已推进或状态是终态，executeScheduledTask），不再在这个根下产生事件；能力覆盖到期只发一条
+//     ability_enabled_changed 运行时事件，不走被动路由、不读写根账本（expireAbilityOverlay）；弹药回复没有根。
 //
-// 排程任务（未执行的被动激活、QueueExternalEvent 排的外部事件、能力覆盖到期、已结束施法残留的任务）也引用根，但它们的
-// 数量没有配置上限，不在上界里；表被它们占满时由 dispatchEvent 的兜底跳过事件（RR-20261006-55 后续）。
+// 于是合法配置下根事件表满时总有一个根不被引用、可以淘汰，dispatchEvent 的兜底分支只作防御。
 func rootEventReferenceBound(options RuntimeOptions) int64 {
-	return int64(options.MaxActiveCasts) + int64(options.MaxOwnedSpawns) + int64(options.MaxStopPendingSpawns)
+	return int64(options.MaxActiveCasts) + int64(options.MaxOwnedSpawns) + int64(options.MaxStopPendingSpawns) + int64(options.MaxQueuedTasks)
 }
 
-// validateRootEventLimit 要求 RootEventLimit 大于 rootEventReferenceBound：表满时至少有一个根不被施法 / 衍生物引用、
-// 可以淘汰，“表满且全部被施法 / 衍生物引用”在合法配置下不会发生。NewRuntime 与 RestoreRuntime 在默认值补齐之后调用。
+// validateRootEventLimit 要求 RootEventLimit 大于 rootEventReferenceBound：表满时至少有一个根不被引用、可以淘汰，
+// “表满且全部被引用”在合法配置下不会发生。NewRuntime 与 RestoreRuntime 在默认值补齐之后调用。
 func validateRootEventLimit(options RuntimeOptions) error {
 	bound := rootEventReferenceBound(options)
 	if int64(options.RootEventLimit) > bound {
 		return nil
 	}
-	return fmt.Errorf("%w: RootEventLimit (%d) must exceed MaxActiveCasts (%d) + MaxOwnedSpawns (%d) + MaxStopPendingSpawns (%d) = %d, the most roots casts and spawns can reference at once; raise RootEventLimit or lower those limits",
-		ErrRuntimeLimitsInvalid, options.RootEventLimit, options.MaxActiveCasts, options.MaxOwnedSpawns, options.MaxStopPendingSpawns, bound)
+	return fmt.Errorf("%w: RootEventLimit (%d) must exceed MaxActiveCasts (%d) + MaxOwnedSpawns (%d) + MaxStopPendingSpawns (%d) + MaxQueuedTasks (%d) = %d, the most roots casts, spawns and queued tasks can reference at once; raise RootEventLimit or lower those limits",
+		ErrRuntimeLimitsInvalid, options.RootEventLimit, options.MaxActiveCasts, options.MaxOwnedSpawns, options.MaxStopPendingSpawns, options.MaxQueuedTasks, bound)
 }
 
 // trackRootEventLocked 把根记进根事件表；表满时淘汰最早一个不再被引用的根（连同它的 proc 账本）。仍然淘汰不出来时
-// 返回 ErrRuntimeCapacityExceeded：validateRootEventLimit 保证施法 / 衍生物占不满，只有排程任务钉住的根能走到这里。
+// 返回 ErrRuntimeCapacityExceeded：validateRootEventLimit 与排队入口的准入保证合法配置下走不到这里，只作防御。
 func (runtime *Runtime) trackRootEventLocked(root EventID) error {
 	if _, exists := runtime.rootEventCounts[root]; exists {
 		runtime.rootEventCounts[root]++
@@ -218,27 +222,66 @@ func (runtime *Runtime) rootEventReferencedLocked(root EventID) bool {
 	if referenced {
 		return true
 	}
+	if runtime.queuedTasks == 0 {
+		return false
+	}
 	for _, task := range runtime.scheduler.tasks {
-		if runtime.scheduledTaskRootLocked(task.Payload) == root {
+		if taskRoot, queued := queuedTaskRoot(task.Payload); queued && taskRoot == root {
 			return true
 		}
 	}
 	return false
 }
 
-func (runtime *Runtime) scheduledTaskRootLocked(payload scheduledTaskPayload) EventID {
+// queuedTaskRoot 返回排队任务钉住的根（与 dispatchEvent / executePassiveActivation 用的根一致：RootEventID，为 0 时取
+// EventID）；第二个返回值报告 payload 是不是排队任务。只有排队任务钉住根，其余排程任务为什么不钉见 rootEventReferenceBound。
+//
+// 之前能力覆盖到期与已结束施法残留的任务也钉住根，而它们的数量没有配置上限，合法配置下也能把根事件表占满
+// （RR-20261006-55 后续二）。
+func queuedTaskRoot(payload scheduledTaskPayload) (EventID, bool) {
 	switch task := payload.(type) {
 	case *passiveActivationTask:
-		return task.Event.RootEventID
+		return eventRootID(task.Event), true
 	case *externalEventTask:
-		return task.Event.RootEventID
-	case *abilityOverlayExpiryTask:
-		return task.Context.RootEventID
+		return eventRootID(task.Event), true
 	default:
-		castID, _ := scheduledTaskIdentity(payload)
-		if cast := runtime.casts[castID]; cast != nil {
-			return cast.eventContext.RootEventID
-		}
-		return 0
+		return 0, false
 	}
+}
+
+func isQueuedTask(payload scheduledTaskPayload) bool {
+	_, queued := queuedTaskRoot(payload)
+	return queued
+}
+
+func eventRootID(event EventContext) EventID {
+	if event.RootEventID != 0 {
+		return event.RootEventID
+	}
+	return event.EventID
+}
+
+// admitQueuedTaskLocked 是排队任务的准入：已有 MaxQueuedTasks 个排队任务时返回 ErrQueuedTasksFull。调用方在任何副作用
+// （记根、排任务）之前调用。
+func (runtime *Runtime) admitQueuedTaskLocked() error {
+	if runtime.queuedTasks >= runtime.options.MaxQueuedTasks {
+		return fmt.Errorf("%w (MaxQueuedTasks %d)", ErrQueuedTasksFull, runtime.options.MaxQueuedTasks)
+	}
+	return nil
+}
+
+// queuedTaskCountLocked 返回排程里的排队任务数。
+func (runtime *Runtime) queuedTaskCountLocked() int {
+	return runtime.queuedTasks
+}
+
+// countQueuedTasksLocked 数排程里的排队任务（checkpoint 恢复时重建 queuedTasks）。
+func (runtime *Runtime) countQueuedTasksLocked() int {
+	count := 0
+	for _, task := range runtime.scheduler.tasks {
+		if isQueuedTask(task.Payload) {
+			count++
+		}
+	}
+	return count
 }

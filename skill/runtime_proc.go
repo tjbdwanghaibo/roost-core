@@ -19,15 +19,17 @@ type procLedgerKey struct {
 	Digest string
 }
 
+// ActivatePassive 由调用方直接排一次被动激活。排队任务已到 MaxQueuedTasks 时返回 ErrQueuedTasksFull（errors.Is），
+// 不记根、不排任务（RR-20261006-55 后续二）。
 func (runtime *Runtime) ActivatePassive(program *Program, event EventContext) (PassiveActivationID, error) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
-	root := event.RootEventID
-	if root == 0 {
-		root = event.EventID
-	}
+	root := eventRootID(event)
 	if root == 0 {
 		return 0, ErrCastInputInvalid
+	}
+	if err := runtime.admitQueuedTaskLocked(); err != nil {
+		return 0, err
 	}
 	if err := runtime.trackRootEventLocked(root); err != nil {
 		return 0, err
@@ -44,6 +46,10 @@ func (runtime *Runtime) enqueuePassive(program *Program, event EventContext, own
 		return 0, ErrCastInputInvalid
 	}
 	if err := runtime.admitHostCapabilitiesLocked(program); err != nil {
+		return 0, err
+	}
+	// 排队任务的准入（RR-20261006-55 后续二）：未执行的被动激活钉住它的根，满了不排，dispatchEvent 按被拒记录。
+	if err := runtime.admitQueuedTaskLocked(); err != nil {
 		return 0, err
 	}
 	runtime.nextPassiveActivationID++
