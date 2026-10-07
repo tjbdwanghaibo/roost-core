@@ -14,7 +14,7 @@
 | F01-8 | 01 | 源码疑点 | `--check-config` 默认路径缺失时只 Warn 并按缺省检查、仍打印 `config ok: <默认路径>`（`app/app.go:100/:140`） | 先红后绿：缺失时明确失败或输出不误导 | 待处理 |
 | F01-9 | 01 | 源码疑点 | 服务专属 Mod 与共享 Mod 同名时 `sortMods` 不拒绝 | 先红后绿：加守卫 | 待处理 |
 | F01-10 | 01 | 源码疑点 | 拿锁后到 `Service.Init` 前不处理 SIGTERM；启动阶段 hook 无期限（单实例锁方案 §3.4 记为现状） | 评估并闭环（修或写明证明） | 待处理 |
-| F03-1 | 03 | **缺陷（探针已证实）** | `durability=memory` 的事务带 `rollback=state|undo` 改了持久字段，不进 WAL 也不报错（`nest/rollback.go:586-600` memory 分支直接返回；探针 err=nil、committer 0 次、PrepareMutation 0 次）；`NEST_TRANSACTION_WAL.md` §3 “禁止修改 persistent 字段”无运行期强制；`rollback.go:587` 注释“经 release hook 持久化”过时 | RR 流程先红后绿：memory 事务改持久字段时拒绝（或编译 / 注册期拒绝） | 待处理 |
+| F03-1 | 03 | **缺陷（探针已证实）** | `durability=memory` 的事务带 `rollback=state|undo` 改了持久字段，不进 WAL 也不报错（`nest/rollback.go:586-600` memory 分支直接返回；探针 err=nil、committer 0 次、PrepareMutation 0 次）；`NEST_TRANSACTION_WAL.md` §3 “禁止修改 persistent 字段”无运行期强制；`rollback.go:587` 注释“经 release hook 持久化”过时 | RR 流程先红后绿：memory 事务改持久字段时拒绝（或编译 / 注册期拒绝） | 已修复（[RR-20261006-41](../bug/RR-20261006-41.md)，`c2616106`，未发版） |
 | F03-2 | 03 | 文档 | `docs/USER_GUIDE.md` §4：async 只等写入不等 fsync（`nestwal/wal.go:337`）；strict 只等 WAL fsync 不等 Mongo 投影 | 改文档 | 待处理 |
 | F03-3 | 03 | 文档 | `docs/USER_GUIDE.md` §5 backlog 超限“触发 runtime failure”不准：WAL 磁盘 / 未确认年龄 → 健康失败；未 ack 达上限 → 准入拒绝（缺省不限）；仅 outbox 硬上限 fence | 改文档 | 待处理 |
 | F03-4 | 03 | 文档 | `docs/INTERNALS.md` §4 状态机把 Mongo 写画在解锁前，实际投影在解锁后（held） | 改文档 | 待处理 |
@@ -26,12 +26,12 @@
 | F03-10 | 03 | 观察 | async 记录可能在 fsync 前被投影进 Mongo（崩溃后 Mongo 有、WAL 无） | 论证是否违反契约；违反则修 | 待处理 |
 | F03-11 | 03 | 观察 | `CommitRecord` digest 为 JSON 序列化，改结构体字段后跨版本重放判身份冲突 | 线上未部署不做兼容；写明升级须排空 WAL，或改 digest 口径 | 待处理 |
 | F03-12 | 03 | 观察 | 事务标记 TTL 必须大于 WAL 最长未确认时间，无启动校验 | 加启动校验（先红后绿） | 待处理 |
-| F02-1 | 02 | **缺陷（同 F03-1，两分区独立证实）** | 生成器会产出 `rollback=state|undo` + `durability=memory`（`codegen/internal/nest/gen.go:202`）；`durableCommit` 在 memory 且无 effect 时直接返回（`nest/rollback.go:589`），持久字段改动不进任何提交记录、不报错，重载后回到旧值；文档（`NEST_RUNTIME.zh-CN.md:80`、`CODEGEN_REFERENCE.zh-CN.md:234`）说 memory handler 不能改持久字段，源码只在 `rollback=none` 时 panic | 维护者 2026-10-07 “handler按照推荐处理” → 选 A：改实现强制契约，memory 事务改持久字段时整笔失败回滚并点名字段；同时改 F02-6 过时注释 | 待处理（随修复批） |
+| F02-1 | 02 | **缺陷（同 F03-1，两分区独立证实）** | 生成器会产出 `rollback=state|undo` + `durability=memory`（`codegen/internal/nest/gen.go:202`）；`durableCommit` 在 memory 且无 effect 时直接返回（`nest/rollback.go:589`），持久字段改动不进任何提交记录、不报错，重载后回到旧值；文档（`NEST_RUNTIME.zh-CN.md:80`、`CODEGEN_REFERENCE.zh-CN.md:234`）说 memory handler 不能改持久字段，源码只在 `rollback=none` 时 panic | 维护者 2026-10-07 “handler按照推荐处理” → 选 A：改实现强制契约，memory 事务改持久字段时整笔失败回滚并点名字段；同时改 F02-6 过时注释 | 已修复（[RR-20261006-41](../bug/RR-20261006-41.md)，`c2616106`，未发版） |
 | F02-2 | 02 | 死配置 / 死代码 | `nest.heartbeat_worker_num` 被读取并传入引擎但 `NewDispatcher` 不用（`kit/nest/nest_mod.go:101`、`nest/dispatcher.go:87`）；`ensureAsyncDispatchAllowed`（`nest/nest.go:699`）无调用方 | 删除死配置键与死代码（A4① schema 同步） | 待处理 |
 | F02-3 | 02 | glsvet 盲区 | handler 并发检查只看包级函数（`cmd/glsvet/main.go:389/:550`），codegen 支持的指针方法 handler 里开 goroutine 不报 | 先红后绿：覆盖方法 handler | 待处理 |
 | F02-4 | 02 | 文档 / 能力 | 生成器不接受 `durability=pipelined`（`codegen/internal/nest/parse.go:177`），`NEST_RUNTIME.zh-CN.md` 升级步骤第 8 条却要求测 pipelined handler；同文“旧 `//roost:nest` 不属于生产协议”与现行标注同名自相矛盾（同 F03-9） | 补 pipelined 支持或写明不支持并改文档 | 待处理 |
 | F02-5 | 02 | 文档 / 注释 | `docs/INTERNALS.md` §3 “worker 哈希串行”过时（现为 ID 依赖链 + 共享 worker），`nest/pipelined_completion.go:284` 注释同；`RUNTIME_EXECUTION_MODEL.md` 仍写独立 roost-codegen 仓与多仓发布顺序 | 改文档与注释 | 待处理 |
-| F02-6 | 02 | 注释 | `nest/rollback.go:587` “Memory-only handlers persist through entity release hooks” 过时（同 F03-1 注释项） | 随 F02-1 一并改 | 待处理 |
+| F02-6 | 02 | 注释 | `nest/rollback.go:587` “Memory-only handlers persist through entity release hooks” 过时（同 F03-1 注释项） | 随 F02-1 一并改 | 已修复（[RR-20261006-41](../bug/RR-20261006-41.md)，`c2616106`，未发版） |
 | F02-7 | 02 | 推断 | `ActionRunner.submit`（`actionflow/action_runner.go:362`）不在 defer 里复位 `executing`（`MissionRunner` 在 defer 里复位）；现所有回调有 recover，路径走不到 | 改为 defer 复位（结构性，消除依赖 recover 的前提）+ 用例 | 待处理 |
 | F06-S1 | 06 | **缺陷（探针已证实）** | 重试退避期间送达的成功永久丢失：同一代际尝试 k 已生效、结果在 k 超时后下次派发前送达（记录 `Pending`、`Attempt≥1`），`Complete` 只接收 `Waiting`（`saga/engine.go:443`）→ `ErrNotWaiting` → Term（`nest_completion_consumer.go:150-159`）；之后若截止 / 人工 Compensate / 定义缺失关闭该操作，这一步已生效却不在 `CompletedSteps`、`LateStep=0`、不补偿不告警（探针 `status=failed completed=0 late=0`，扣款落库 1 次） | RR 流程先红后绿 | 待处理 |
 | F06-S7 | 06 | **缺陷（探针已证实）** | `EmitStart` 允许 Data 到 4 MiB（`saga/nest.go:36`），`StartSaga` 按 `MaxPayloadBytes`（缺省 64 KiB）返回 `ErrInvalidRecord`（`engine.go:224-226`）；`handleNestStart` 对它和 `ErrIdentityConflict` 不标 Permanent（`nest_start_consumer.go:102-107`）→ nak 退避约 8.7 天才 Term，saga 静默不创建 | RR 流程先红后绿（确定性错误 Term + 告警；EmitStart 侧上限对齐） | 待处理 |
