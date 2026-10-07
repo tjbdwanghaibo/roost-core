@@ -11,6 +11,15 @@
 - **codegen：生成器随 `versions.core` 运行，`versions.codegen` 废弃**（RR-20261006-57，F12 G2）。生成的 Makefile 改为 `go run …/codegen/cmd/roost@$(CORE_VERSION)`，取 `versions.core`；`roost.yaml` 里写了 `versions.codegen` 会被拒绝（`roost project upgrade` 删掉它），`-codegen-version` / `-codegen` 参数删除。发版时 core 下限须升到 v1.23.1。[问题](docs/bug/RR-20261006-57.md) · [修复](docs/bugfix/RR-20261006-57.md)
 - **servicerpc：带 affinity 的方法真正按键路由，缺 discovery 启动时拒绝**（RR-20261006-59，F09-R1）。生成的客户端之前一律走队列组，affinity 只是装饰；现在 affinity 方法经 etcd discovery + 按键 picker 落到固定实例，`NewBusClient` 必须传 discovery，`ClientMod` 依赖 etcd Mod。生成工程里托管或调用 match / activity 的进程自动带 etcd Mod。[问题](docs/bug/RR-20261006-59.md) · [修复](docs/bugfix/RR-20261006-59.md)
 
+### 修复（lockstep）
+
+- **lockstep 指标名恢复 `lockstep.` 前缀**（RR-20261006-61，F04-5）。合仓时丢了前缀，`OBSERVABILITY.md` 的 desync 告警一直查不到序列；现在名字是导出常量 `lockstep.Metric*`，守卫用例钉住名字集合并要求 `OBSERVABILITY.md` 列出。按裸名临时配过告警的改回 `lockstep.*`。[问题](docs/bug/RR-20261006-61.md) · [修复](docs/bugfix/RR-20261006-61.md)
+- **lockstep 广播预算按传输的载荷上限做满载校验**（RR-20261006-62，F04-6）。nettransport 新增 `DatagramPayloadLimiter`（KCP / QUIC 返回配置的 `MaxDatagramBytes`，UDP 返回包上限减 `UDPEnvelopeOverhead` 32 字节，`CompositeTransport` 转发），`NewRoom` 不写 `MaxDatagramBytes` 时取发送器声明值，写了超过声明值的拒绝；`DefaultMaxDatagramBytes` 1232 → 1200。**行为收紧**：最坏包落在 1201..1232 的配置之前满载时整房广播被拒，现在 `NewRoom` 即失败。[问题](docs/bug/RR-20261006-62.md) · [修复](docs/bugfix/RR-20261006-62.md)
+- **lockstep 慢的追帧客户端不再卡住 `Tick`**（RR-20261006-63，F04-7）。追帧页在房间 goroutine 之外发送，每会话至多一页在途、每页限时 `CatchupSendTimeout`（缺省 2s），`Tick` 对本 tick 发起的页最多共等 `CatchupSendWait`（缺省 5ms），之后由后续 tick 收取。自定义 `ReliableSender` 须并发安全。[问题](docs/bug/RR-20261006-63.md) · [修复](docs/bugfix/RR-20261006-63.md)
+- **lockstep 2 人房的 desync 能裁出来**（RR-20261006-64，F04-8）。全部座位已上报、有分歧且没有哈希达到 quorum 时裁为 `DesyncVerdict.NoMajority`，全部座位都是离群者（2 人房两人都报），触发 `OnDesync` 并计 `lockstep.desync.total`；业务应按整局分叉处理。[问题](docs/bug/RR-20261006-64.md) · [修复](docs/bugfix/RR-20261006-64.md)
+- **robot：`LockstepBot` 发现缺口即追帧**（RR-20261006-65，F04-9）。之前只在 256 帧乱序缓冲溢出时请求，缺口不够大时局卡住；请求被服务端放弃后也不重发。现在 `Gap()` 为真即请求，`Next` 停住超过 `CatchupRetryPackets`（缺省 64 个包）重发。[问题](docs/bug/RR-20261006-65.md) · [修复](docs/bugfix/RR-20261006-65.md)
+- 端到端门禁 `sync/lockstep/e2e_gate_test.go`：两个真实客户端 + 一个机器人经 KCP 回环连同一房间，满载 3 秒，注入 desync、丢包追帧与卡住的追帧，断言广播不被拒、desync 裁出且有指标、追帧成功不卡局、`Tick` 不被拖垮。
+
 ### 修复（codegen）
 
 - **`generate --changed` 在仓库子目录里的工程也能选中生成器**（RR-20261006-58，F12 G3）。git 路径按工程根换算、不再被引号挡住，rename 两侧都算改动。[问题](docs/bug/RR-20261006-58.md) · [修复](docs/bugfix/RR-20261006-58.md)

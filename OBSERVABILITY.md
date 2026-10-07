@@ -91,7 +91,9 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | `remote_entity.finalize_retry_total` / `release_failure_total` / `quarantine_error_total` / `remote_entity_transaction_tracker_drop_total` | Counter | 收尾/隔离异常（均应为零基线） |
 | `remote_entity.deferred_outcome_not_run_total{outcome}` | Counter | Remote 结果未知的事务拿到持久结论时 Nest 已停机 / 已 fence，提交后工作（AfterCommit、Sync 放行）未执行（RR-20260926-61）；停机窗口外应为零 |
 
-### 帧同步（kit/lockstep）
+### 帧同步（sync/lockstep）
+
+名字是 `sync/lockstep` 的导出常量 `Metric*`，由 `TestRoomPromiseMetricNamesArePinned` 钉住（实际发出的集合、源码不内联、本表列出），改名会让测试失败（RR-20261006-61）。
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
@@ -99,7 +101,7 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | `lockstep.input.late.total` | Counter | 迟到输入折入后续帧的次数（客户端上行 RTT 健康度；占比高应上调 `SubmitWindow` 或降逻辑帧率） |
 | `lockstep.input.rejected.total{reason}` | Counter | 被拒输入/哈希上报（unknown_player/too_early/payload_too_big/hash_*——识别恶意或错版客户端的第一现场） |
 | `lockstep.catchup.frames.total` | Counter | 追帧下发的历史帧数（重连/中途加入压力） |
-| `lockstep.desync.total` | Counter | 关键帧哈希裁决识别的离群玩家数（**非零即事故**：作弊或确定性 bug） |
+| `lockstep.desync.total` | Counter | 关键帧哈希裁决识别的离群玩家数（**非零即事故**：作弊或确定性 bug）。全部座位已报、无哈希达到 quorum 时（2 人房哈希不同、2:2、全不同）裁 `NoMajority`，全部座位都计入（RR-20261006-64） |
 
 ### 机器人 / 压测（core/robot）
 

@@ -386,9 +386,9 @@ room.TrimHistory(keep); room.TrimHashReports(before)   // 历史与哈希表都�
 
 注意：
 
-- `Tick` 同步调用发送器、用调用方的 ctx。`Reliable` 直接接 KCP / QUIC 而 ctx 没有期限时，一个对端停住的追帧客户端会卡住整个房间（见 §7.3）。
-- `NewRoom` 的最坏包预算按 `MaxDatagramBytes`（默认 1232）检查，但 KCP / QUIC 的默认单包上限是 1200、UDP 加密要多 32 字节——接近上限的配置能通过构造却在满载时整房间被拒（见 §7.3）。
-- 2 人房间的默认 quorum 是 2：任何分歧都裁不出结果，没有回调也没有指标。
+- 广播在 `Tick` 里同步发送；追帧页在房间 goroutine 之外发送，每会话至多一页在途、每页限时 `CatchupSendTimeout`（2s），`Tick` 对本 tick 发起的页最多共等 `CatchupSendWait`（5ms）。`Reliable` 直接接 KCP / QUIC、ctx 不带期限也不会被慢客户端卡住；自定义 `ReliableSender` 须并发安全（v1.23.1 起，RR-20261006-63）。
+- `NewRoom` 的最坏包预算是**载荷**上限：不写 `MaxDatagramBytes` 时取发送器声明的值（`nettransport.DatagramPayloadLimiter`：KCP / QUIC 取配置，UDP 取包上限减 32 字节信封），发送器不声明时 1200；写了超过声明值的被拒（v1.23.1 起，RR-20261006-62）。
+- 哈希裁决：有哈希达到 quorum（缺省过半）就按多数裁；全部座位已报、有分歧且无哈希达到 quorum（2 人房哈希不同、2:2、全不同）时裁 `NoMajority`，全部座位都是离群者，应按整局分叉处理（v1.23.1 起，RR-20261006-64）。
 
 ### 4.11 玩家 TCP 接入层
 
@@ -518,7 +518,7 @@ accept ─(全局槽 max_connections、单 IP 上限)─▶ 握手槽(max_handsh
 | `policy.InterestConfig` | `MaxQueuedFacts` 0 → 65536；`SourceProfiles`、`ViewSets`、`Relations`（不能空、不能重复、不能用保留名）、`SelfVisible`（nil 视为 true） | `sync/entitysync/policy/interest.go:23` |
 | `policy.AOIConfig` | `EnterRadius > 0`、`LeaveRadius ∈ [Enter, 2^62)`、`Bands` 严格递增且 > 0、`BlockSize > 0`、`MaxObserverBlocks` 0 → 1024（构造期按最坏格数检查）、`MaxVisible` | `sync/entitysync/policy/aoi.go:47` |
 | `nettransport.AsyncTransportConfig` | `MaxSessions` 4096、`ReliableQueueSize` 256、`MaxReliableBytes` 1MiB、`SendTimeout` 250ms（≤0 取默认、无法关闭）；`MaxQueuedReliableBytes` / `MaxResidentReliableBytes` / `MaxReliableAge` 0 表示关闭、负数拒绝 | `sync/nettransport/channel.go:29` |
-| `lockstep.RoomConfig` | `RedundancyDepth` 3（≤64）、`MaxDatagramBytes` 1232、`HashQuorum` players/2+1、`CatchupBatchFrames` 32（1 被拒、>64 截断）、`CatchupMaxFailures` 8 | `sync/lockstep/room.go:46` |
+| `lockstep.RoomConfig` | `RedundancyDepth` 3（≤64）、`MaxDatagramBytes` 取发送器声明值（否则 1200）、`HashQuorum` players/2+1、`CatchupBatchFrames` 32（1 被拒、>64 截断）、`CatchupMaxFailures` 8、`CatchupSendTimeout` 2s、`CatchupSendWait` 5ms | `sync/lockstep/room.go:46` |
 | `syncstream.HistoryOptions` | `MaxPacketsPerStream` 256、`SchemaVersion` 1、其余 0 不限；`PruneAcknowledged` 会写进 ACK 记录 | `syncstream/syncstream.go:89` |
 
 demo 的常量：scene Interval 50ms、进入 / 离开半径 120 / 150、关系 `team`、地图 1000×1000、BlockSize 100（`demo/internal/service/game/scene.go.tmpl:43`）；战斗 TickRate 30ms、45 帧、关键帧间隔 15、SubmitWindow 2、MaxInputBytes 8、冗余 3、追帧 8（`demo/game/battle/battle.go.tmpl:25`）。
@@ -630,11 +630,11 @@ demo 的常量：scene Interval 50ms、进入 / 离开半径 120 / 150、关系 
 | F04-2 | 排队模式下存在永久被拒的 pair（会话已关、subject 已注销）时 `Drain` 永不完成，kit 停机走不到 `Close` | 会话关闭时同步从政策里移除该观察者 |
 | F04-3 | `Manager.CheckHealth` 没有任何生产注册方，容量满 / 已关闭在 `/readyz` 不可见 | 业务自己 `health.Registry.Register("entitysync", manager)` |
 | F04-4 | `Group` 的成员会话被 Manager 关闭后重开，没有恢复路径 | 重开后对该成员 `Leave` 再 `Join` |
-| F04-5 | lockstep 指标名缺 `lockstep.` 前缀，按 `OBSERVABILITY.md` 配的“desync 非零即事故”告警永远不触发 | 告警改用实际名字 `desync.total` |
-| F04-6 | lockstep 广播预算 1232 字节不扣传输开销（KCP / QUIC 1200、UDP 加密 +32） | `MaxDatagramBytes` 显式设成传输的单包上限 |
-| F04-7 | lockstep `Tick` 被单个慢追帧客户端阻塞（`Reliable` 接 KCP / QUIC 且 ctx 无期限） | 给 `Tick` 的 ctx 加期限，或 `Reliable` 用有界队列 |
-| F04-8 | 2 人房间默认 quorum = 2，desync 永远裁不出 | 2 人房间另行比对哈希 |
-| F04-9 | 机器人遇到不足以溢出缓冲的缺口不主动追帧，局会卡到超时 | 只影响 `robot/lockstep.go` 与压测 |
+| F04-5 | lockstep 指标名缺 `lockstep.` 前缀，按 `OBSERVABILITY.md` 配的“desync 非零即事故”告警永远不触发 | v1.23.1 已修复（RR-20261006-61） |
+| F04-6 | lockstep 广播预算 1232 字节不扣传输开销（KCP / QUIC 1200、UDP 加密 +32） | v1.23.1 已修复（RR-20261006-62） |
+| F04-7 | lockstep `Tick` 被单个慢追帧客户端阻塞（`Reliable` 接 KCP / QUIC 且 ctx 无期限） | v1.23.1 已修复（RR-20261006-63） |
+| F04-8 | 2 人房间默认 quorum = 2，desync 永远裁不出 | v1.23.1 已修复（RR-20261006-64） |
+| F04-9 | 机器人遇到不足以溢出缓冲的缺口不主动追帧，局会卡到超时 | v1.23.1 已修复（RR-20261006-65） |
 | F04-10 | 玩家 TCP：WriteGate 拒绝 / handler panic 断连且只有 Debug 日志、没有栈 | 线上排障临时开 Debug，或在 handler 内自己 recover 并记日志 |
 | F04-11 | 玩家 TCP `shutdown_timeout: 0s` 被 doctor 当 10s 报 OK，实际进程拒绝启动 | 不要写 0 |
 | F04-12 | 玩家 TCP `dispatch_timeout` 被生成器写成显式值，之后不跟随 `nest.request_timeout` | 调 `nest.request_timeout` 时同步改它 |
