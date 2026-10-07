@@ -1,13 +1,20 @@
-# v1.23.0 发版交接（2026-10-06 暂停，2026-10-07 全部完成）
+# v1.23.0 发版交接（2026-10-06 暂停，2026-10-07 已发布 v1.23.0）
 
-## 0. 当前状态（2026-10-07）：发版前工作全部完成，下一步是打 tag
+## 0. 当前状态（2026-10-07）：已发布 v1.23.0，下一步是框架整体双文档
+
+- **已发布 v1.23.0 → `28912cd6`**（代码冻结点 `5e72ca4d`，之后只有文档与版本清单改动）。发版清单提交 `e920c566` 把 `codegen/ci/framework-release.yaml`、`codegen/internal/roost/manifest.go` 的 `minimumVersions.Core`（现在第 87 行）与 `.github/workflows/framework-compat.yml` 的 minimum 行改到 v1.23.0。
+- **发版验证**：`scripts/pretag.sh v1.23.0` 通过；故障矩阵 21/21 PASS（标签 `matrix-v1230-28912cd6`）；对着 tag 用 `GOPROXY=direct` 生成 game-demo，build / vet / test 通过（`project new` 内部第一次解析因代理的 sumdb 还没同步新 tag 失败，按惯例用 direct 重试）。详见 [GUIDE §8.1](../../release/v1.23.0-GUIDE.md#81-发版验证)、[IMPLEMENTATION §7](../../release/v1.23.0-IMPLEMENTATION.md#7-发版验证)。
+- **版本号已回填**：bug / bugfix README、核心交接 §7、发版双文档、DECISIONS-PENDING 文首、bugfix SKILL 里 v1.22.0 之后修复、原写“未发版”的条目改为 v1.23.0（逐条用 `git merge-base --is-ancestor` 确认在 tag 里）。第 3 节第 6 步完成。
+- **下一步：框架整体双文档**，按 [framework-docs-spec.md](framework-docs-spec.md) 以 v1.23.0 tag 源码写（第 3 节第 7 步）。
+
+以下是打 tag 前的状态记录：
 
 - **代码冻结点 `5e72ca4d`**，之后只有文档提交。第 2 节的 WIP 与第 3 节第 1～5 步全部完成。
 - **发版双文档已合成**：[v1.23.0-GUIDE](../../release/v1.23.0-GUIDE.md)（说明总文档：总览、47 行破坏性变化与升级清单、业务 / 运维改动、维护者决定索引、主题导航、外部验证、闭环状态）与 [v1.23.0-IMPLEMENTATION](../../release/v1.23.0-IMPLEMENTATION.md)（实现总文档：review 顺序与复跑、全局守卫、按包索引、四个反复出问题模块的方向判断、按风险排的检查点）；三份分册在 [`docs/release/v1.23.0/`](../../release/v1.23.0/)，共 191 条。
 - **CHANGELOG** 已改为 `## [v1.23.0] - 2026-10-07`，顶部是“破坏性变化与升级清单”精简版；新开空的 `## [Unreleased]`。
 - **共享文件小改已做**：App 锁方案 §3.6（与 §7.2）`app/app.go:125` → `:146`（`5e72ca4d` 上 `loadServiceConfig` 写 `server_type` 的行，原规格写的 `:130` 是 `e6828e4f` 的行号）；D-L3 §3.2 `gift_saga.go.tmpl:353` → `:369`、`playerowner.go.tmpl:119` / `:125` → `:124` / `:130`；DECISIONS-PENDING 文首“当前总状态”与第十三轮“不留 WANTED”“原下个大版本项”两行改为已闭环 / 已实施；skill 作者文档两处“未发版”标题改为 v1.23.0。
 - **WANTED 未决 0，仍未闭环 0，待维护者决定 0。** 外部验证 E01～E28 不阻塞发版。
-- **下一步：打 v1.23.0 tag**，按第 3 节第 6 步做（发版提交改 `codegen/ci/framework-release.yaml`、`codegen/internal/roost/manifest.go:83` 的 Core 下限与 `.github/workflows/framework-compat.yml:50` 的 minimum 行到 v1.23.0；pretag、故障矩阵、tag、对着 tag 生成 game-demo、回填版本号）。之后第 7 步写框架整体双文档。
+- **（已完成）打 v1.23.0 tag**，按第 3 节第 6 步做（发版提交改 `codegen/ci/framework-release.yaml`、`codegen/internal/roost/manifest.go:83` 的 Core 下限与 `.github/workflows/framework-compat.yml:50` 的 minimum 行到 v1.23.0；pretag、故障矩阵、tag、对着 tag 生成 game-demo、回填版本号）。之后第 7 步写框架整体双文档。
 
 ### 汇总时发现的分册之间的差异（2026-10-07 已全部处理，`1b5c5d61`）
 
@@ -54,7 +61,7 @@
 | `wip/sktest`（`5b4d49f5`） | SKILL-1 三条分支（Interrupt 停进程出错、toggle release 回调出错、charge enter 失败后宿主侧残留）与 SKILL-3 reset 里 process 条目的用例 | 只写了 `skill/runtime_cast_terminal_branches_promises_test.go` 草稿 | **已完成**（分支 `sktest2` 合入 main）：Interrupt / toggle 两条一次通过、变异证明能红；charge 那条红 → RR-20261006-21，核对时又发现 RR-20261006-23；SKILL-3 process 条目红 → RR-20261006-22。“补测”节写在 NC-110 / NC-114 修复记录末尾。分册 3 的 SKILL-1 / SKILL-3 条目需按此更新 |
 | `tail`（`2c01e06d`，已合入 main） | 收尾小项：① `activity.groups_file` 改为必填（缺失时协调器 Init 拒绝；删不核对分支）；② `slow_reroute.total` 删除补触发改道的用例；③ B10 两条管线分工写进 B10 §2.4、USER_GUIDE 配置节、codegen 文档（对照表），DECISIONS 第十三轮 B10 行改已实施 | **已完成**：① 见 [RR-20261006-17 修复记录“后续”](../../bugfix/RR-20261006-17.md#后续groups_file-改为必填)；② 见 [RR-20261006-18 修复记录“补测”](../../bugfix/RR-20261006-18.md)（变异可见红）；③ DECISIONS 第十三轮 B10 行已改 | 发版分册需按新代码更新：OWN-5（组文件必填、`OpenActivity` 核对已做）、OPS-2（O3 序列删除已接、`slow_reroute` 补测）、CFG-7（两种标签方言合一不再“列为后续”，维护者选 A） |
 
-## 3. 之后的步骤（恢复后按序；2026-10-07：第 1～5 步已完成，下一步是第 6 步）
+## 3. 之后的步骤（恢复后按序；2026-10-07：第 1～6 步已完成，v1.23.0 → `28912cd6`；下一步是第 7 步）
 
 1. 完成第 2 节四项，全部合入 main。
 2. **重新冻结代码**。

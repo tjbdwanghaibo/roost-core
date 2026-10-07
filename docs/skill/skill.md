@@ -65,7 +65,7 @@ Runtime 持锁调用 Host，因此 Host 必须：
 完整接口约束见 `skill/host.go` 和
 [架构、迁移与同步流程](architecture-and-migration.md)。
 
-## Host 能力表（B3 ③，2026-10-07，未发版）
+## Host 能力表（B3 ③，2026-10-07，v1.23.0）
 
 编译器、Runtime、Host 共用一张“Host 能读什么、支持什么”的表，随 `CompileEnvironment` 下发、算进 authority digest。
 八列：可读属性（catalog 里 `Readable` 的属性）、资源（catalog 全部资源）、衍生物 kind、motion 步骤、只交给 Host 的

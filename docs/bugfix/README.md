@@ -1,153 +1,155 @@
 # Bugfix 记录
 
+**v1.23.0 已发布（2026-10-07，tag → `28912cd6`，代码冻结点 `5e72ca4d`）**：维护者第十～十三轮决定（含 A2 ③ 写令牌、A3 ② 传输层排空、A4 ① Mod 配置声明、B3 ③ Host 能力表、saga 重开可观测、skill 衍生物分区）、收尾四批、真实进程演练与 RR-20261006-02～40 随本版发布；下方 10-06（v1.22.0 之后）～10-07 各段原写“未发版”处已改为“v1.23.0”。
+
 **v1.22.0 已发布（2026-10-06，tag → `9bf690fb`）**：业务时间只许前进、configdata 键大小写敏感、Mirror 第 6 步本机替代与 RR-20261006-01 随本版发布；下方“未发版”指发布前状态。
 
 **v1.21.0 已发布（2026-10-06，tag → `4881f2b7`）**：维护者第四～九轮决定（B4/B6/B9/B10/C2/C5/C9/D1、MissionRunner 延后队列、求值上下文表、O33～O37、D-L1～D-L3、saga 方向 ①②、Mirror 第 1～5 步、O4）、单元留项修复与发版前审查跟进随本版发布；下方“未发版”指发布前状态。
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
-**10-07 B3 ③ / A4 ① 收尾（`gaps`），未发版。** 能力表并入 Host 接口、准入不再有跳过分支；业务服务声明自己读的键，doctor 读回进程声明，生成工程同样守住“读配置只经声明”。
+**10-07 B3 ③ / A4 ① 收尾（`gaps`），v1.23.0。** 能力表并入 Host 接口、准入不再有跳过分支；业务服务声明自己读的键，doctor 读回进程声明，生成工程同样守住“读配置只经声明”。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-40](RR-20261006-40.md) | 业务服务实现 `app.ModConfigSchema`（game-demo 的 `game/settings`）；doctor 编译工程读 `--print-config-schema`、新增 `config-reads`；守卫实现移到 `internal/configschema/guard.go`，codegen 对生成工程同样检查 | 已修复、声明场景验证，未发版 |
-| [RR-20261006-39](RR-20261006-39.md) | `HostCapabilityProvider` 并入 `skill.Host`，`RecordingHost` / `ReplayHost` 转发，Runtime 准入删掉“未实现则跳过” | 已修复、声明场景验证，未发版 |
+| [RR-20261006-40](RR-20261006-40.md) | 业务服务实现 `app.ModConfigSchema`（game-demo 的 `game/settings`）；doctor 编译工程读 `--print-config-schema`、新增 `config-reads`；守卫实现移到 `internal/configschema/guard.go`，codegen 对生成工程同样检查 | 已修复、声明场景验证，v1.23.0 |
+| [RR-20261006-39](RR-20261006-39.md) | `HostCapabilityProvider` 并入 `skill.Host`，`RecordingHost` / `ReplayHost` 转发，Runtime 准入删掉“未实现则跳过” | 已修复、声明场景验证，v1.23.0 |
 
-**10-07 A4 ① 每个 Mod 声明自己的配置（`a4s`），未发版。** 生成器的配置段从 Mod 的声明渲染，生成配置与声明不一致时 codegen 测试变红，[方案](../feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)。
-
-| 编号 | 修复 | 状态 |
-| --- | --- | --- |
-| [RR-20261006-38](RR-20261006-38.md) | 生成的 `shutdown` 段以 `total_timeout` 结尾，不再写没有读取方的 `serve_wait_timeout` | 已修复、声明场景验证，未发版 |
-
-**10-07 B3 ③ Host 取值能力表（`b3cap`），未发版。** 编译器按环境的 Host 能力表拒绝、Runtime 按 Host 声明的表准入、Host 对表外取值报错，[方案](../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)。
+**10-07 A4 ① 每个 Mod 声明自己的配置（`a4s`），v1.23.0。** 生成器的配置段从 Mod 的声明渲染，生成配置与声明不一致时 codegen 测试变红，[方案](../feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-37](RR-20261006-37.md) | `EnabledSlots` / `HostFeatures` 并入能力表的 `motion_step` 列，运动衍生物固定需要 frame / steering / offsets / completion（与 Runtime 发出的步骤一一对应） | 已修复、声明场景验证，未发版 |
+| [RR-20261006-38](RR-20261006-38.md) | 生成的 `shutdown` 段以 `total_timeout` 结尾，不再写没有读取方的 `serve_wait_timeout` | 已修复、声明场景验证，v1.23.0 |
 
-**10-07 A3 ② 排空下沉到传输层（`a3d`），未发版。** 订阅方停止只等传输层的 `Subscription.Unsubscribe(ctx)`，[方案](../feature/A3-2-SYNCBUS-DRAINING-UNSUBSCRIBE-2026-10-07.md)。
-
-| 编号 | 修复 | 状态 |
-| --- | --- | --- |
-| [RR-20261006-36](RR-20261006-36.md) | `PatchSyncer.Stop(ctx)` / `ReplicaSyncer.Stop(ctx)` 等在途回调，`syncstream.Subscribe*` 返回 `*syncbus.Subscription`；不再各自补准入门 | 已修复、声明场景验证，未发版 |
-
-**10-07 A2 ③ versionstore 一次性写令牌（`a2t`），未发版。** 信封 `<version>|<令牌>…\n<payload>`，回复丢失时按令牌核对、`Resume` 续核、`ErrWriteTokenMismatch` 防误用；持久格式改变，升级需清空（[方案](../feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md)）。
+**10-07 B3 ③ Host 取值能力表（`b3cap`），v1.23.0。** 编译器按环境的 Host 能力表拒绝、Runtime 按 Host 声明的表准入、Host 对表外取值报错，[方案](../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-35](RR-20261006-35.md) | `redis.CompareAndSet` 对非删除的 NaN 索引分数发出前返回 `ErrCASInvalidCommand`；替身先改忠实（ZADD 拒绝 NaN 时 SET 已生效） | 已修复、声明场景验证，未发版 |
+| [RR-20261006-37](RR-20261006-37.md) | `EnabledSlots` / `HostFeatures` 并入能力表的 `motion_step` 列，运动衍生物固定需要 frame / steering / offsets / completion（与 Runtime 发出的步骤一一对应） | 已修复、声明场景验证，v1.23.0 |
 
-**10-07 skill 衍生物分区存放（维护者第十三轮“skill 衍生物两张表”，`skpart`），未发版。** 衍生物记录按字段（`Status`、`handedOff`）分进施放中 / 已移交 / 待停止 / 已停止四个分区（`skill/spawn_table.go`），只有 `spawnTable.setState` 改分区字段并挪分区；删掉 `ownedSpawns` 与 checkpoint 的 `owned_spawns` 及恢复比对，checkpoint 版本 5 → 6。go/types 源码守卫 + 操作序列不变量守卫，变异四种都红。[方案](../feature/REFACTOR-2026-10-07-skill-spawn-partition.md)。
-
-| 编号 | 修复 | 状态 |
-| --- | --- | --- |
-| [RR-20261006-34](RR-20261006-34.md) | `Shutdown` / `RemoveProgram` 的循环跳过同一轮里被待停止上限删掉的记录，不再 panic | 已修复、声明场景验证，未发版 |
-| [RR-20261006-33](RR-20261006-33.md) | 源文档 digest 改为逐字段的规范表示：接口值写具体类型名，`json:"-"` 与未导出字段一并写出；全部定义的源文档 digest 改变，gameplay / presentation digest 不变 | 已修复、声明场景验证，未发版 |
-
-**10-07 停止入口统一（RR-20261006-21 后续二，`skstop`），未发版。** 唯一的停止函数 `requestSpawnStop`（`skill/runtime_spawn_stop.go`）：停止中 → 已停止 / 待停止 → 回收，全部入口只请求停止，宿主拒绝后的处理只在这里；删掉 `deferUnstoppedSpawnsLocked`、`deferRefusedStopLocked`、`stopOwnedSpawn` 与各入口的失败分支。`Shutdown` / `RemoveProgram` 停不下的衍生物留成 `stop_pending`、进 checkpoint，由 Runtime 在 tick 上重试（不同步重试）。登记表 + 源码守卫：新增入口不登记即红。[记录](RR-20261006-21.md#后续二停止入口统一维护者-2026-10-07) / [方案](../feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md)。
+**10-07 A3 ② 排空下沉到传输层（`a3d`），v1.23.0。** 订阅方停止只等传输层的 `Subscription.Unsubscribe(ctx)`，[方案](../feature/A3-2-SYNCBUS-DRAINING-UNSUBSCRIBE-2026-10-07.md)。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-32](RR-20261006-32.md) | 被拒的停止在第一次请求时就转入 `stop_pending`，`failCastLocked` / reap 不再重停，回调不再重跑 | 已修复、声明场景验证，未发版 |
+| [RR-20261006-36](RR-20261006-36.md) | `PatchSyncer.Stop(ctx)` / `ReplicaSyncer.Stop(ctx)` 等在途回调，`syncstream.Subscribe*` 返回 `*syncbus.Subscription`；不再各自补准入门 | 已修复、声明场景验证，v1.23.0 |
 
-**10-06 RR-20261006-21 后续：Runtime 负责重试停止（`skretry`），未发版。** 维护者决定技能自己启动的东西由技能自己收尾：`failCastLocked` 停不下的进程标成 `stop_pending`，`advanceHost` 按退避重试（默认 4 tick 起翻倍、10 次上限），到上限计 `skill.process.stop_retry_exhausted.total` 并写日志、记录保留，条目数受 `MaxStopPendingProcesses` 约束，状态进 checkpoint（版本 3）；`Host.StopProcess` 契约写明必须幂等。[记录](RR-20261006-21.md#后续runtime-负责重试停止维护者-2026-10-06)。
-
-| 编号 | 修复 | 状态 |
-| --- | --- | --- |
-| [RR-20261006-31](RR-20261006-31.md) | tick 驱动的停止被宿主拒绝时转为 `stop_pending`、从 owned 表摘掉，错误只返回这一次，Runtime 继续前进 | 已修复、声明场景验证，未发版 |
-| [RR-20261006-30](RR-20261006-30.md) | 恢复按 `pruneCompletedCastsLocked` 的不变量核对完成队列：超出上限的部分必须都仍被引用 | 已修复、声明场景验证，未发版 |
-
-**10-06 真实进程演练追加两项（drill3），未发版。** [演练记录](REAL-PROCESS-DRILLS-2026-10-06.md) ⑤ ⑥：loadtest 的 `rc=1` 查清并修复，Redis Cluster 下重跑单实例锁 / fail-stop / 静态绑定 / 在途 saga 接手全部符合，App 锁方案 §13 的“未验证”改为实测结论。RR-20261006-27：直方图记最小 / 最大观测值，分位数插值收在观测范围内，阈值失败写明哪条阈值、实际值、上限与样本数；RR-20261006-28：生产校验接受 `redis.cluster_addrs`（解析收到 `app.RedisClusterAddrs`），accountctl 加 `-redis-cluster`，dev run.sh 读 `cluster_addrs`；RR-20261006-29：`Contribute` 遇到还没开的窗口自己开窗再记。
+**10-07 A2 ③ versionstore 一次性写令牌（`a2t`），v1.23.0。** 信封 `<version>|<令牌>…\n<payload>`，回复丢失时按令牌核对、`Resume` 续核、`ErrWriteTokenMismatch` 防误用；持久格式改变，升级需清空（[方案](../feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md)）。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-29](RR-20261006-29.md) | `Contribute` 收到 `CodeMissing` 且开关开着时 `openWindow` 后重试一次，关窗截止由循环下一轮装上 | 已修复、声明场景验证，未发版 |
-| [RR-20261006-28](RR-20261006-28.md) | 生产校验 `redis.addr` 或 `redis.cluster_addrs`；`app.RedisClusterAddrs` 一处解析；accountctl `-redis-cluster`；dev run.sh 读 `cluster_addrs` | 已修复、声明场景验证，未发版。**更正（2026-10-07，以 `5e72ca4d` 为准）**：A4①（`d1226825`）之后，检查改在 `kit/redis/redis_mod.go` 第 63-68 行的 `(*Config).ValidateConfig`，按 Redis 配置声明执行，不再按服务类型区分；`app.validateProductionServiceConfig`、`app.RedisClusterAddrs` 和对应的 app 测试都已删除；错误文本改为 `config: production requires redis.addr or redis.cluster_addrs`，不再带服务类型。详见[记录末节](RR-20261006-28.md) |
-| [RR-20261006-27](RR-20261006-27.md) | 直方图 min / max 收窄插值区间（溢出侧插到最大值）；`ThresholdResult.Samples`、阈值失败写 `RunSnapshot.Error`；loadtest 退出行带说明 | 已修复、声明场景验证，未发版 |
+| [RR-20261006-35](RR-20261006-35.md) | `redis.CompareAndSet` 对非删除的 NaN 索引分数发出前返回 `ErrCASInvalidCommand`；替身先改忠实（ZADD 拒绝 NaN 时 SET 已生效） | 已修复、声明场景验证，v1.23.0 |
 
-**10-06 真实进程演练四项（drill2），未发版。** [演练记录](REAL-PROCESS-DRILLS-2026-10-06.md)：App 锁方案 §13、NC-193、NC-231、RR-20261006-10 的“未验证”都已在真实进程 / 真实依赖上实测。RR-20261006-24：关闭后的订阅、JetStream、RPC CallAsync 错误经 `closedError` 同时 `errors.Is` 到 `fnats.ErrClosed` 与 nats.go 原错误；RR-20261006-25：`lifecycle.Registry.EmitAllWatched` 报出正在跑的 hook，停机超时错误点名它；RR-20261006-26：`Client.Connected()` 在 Close 之后一直为 false。
+**10-07 skill 衍生物分区存放（维护者第十三轮“skill 衍生物两张表”，`skpart`），v1.23.0。** 衍生物记录按字段（`Status`、`handedOff`）分进施放中 / 已移交 / 待停止 / 已停止四个分区（`skill/spawn_table.go`），只有 `spawnTable.setState` 改分区字段并挪分区；删掉 `ownedSpawns` 与 checkpoint 的 `owned_spawns` 及恢复比对，checkpoint 版本 5 → 6。go/types 源码守卫 + 操作序列不变量守卫，变异四种都红。[方案](../feature/REFACTOR-2026-10-07-skill-spawn-partition.md)。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-26](RR-20261006-26.md) | `Connected()` 看驱动自己的关闭标记；`DrainWithContext` 硬关走 `Client.Close` | 已修复、声明场景验证，未发版；后续并入 [nats 驱动已关闭状态重构](../feature/REFACTOR-2026-10-06-nats-driver-closed-state.md) |
-| [RR-20261006-25](RR-20261006-25.md) | `EmitAllWatched` + App 记下最后开始的 hook，超时错误 `hook "<名字>" did not return …` | 已修复、声明场景验证，未发版 |
-| [RR-20261006-24](RR-20261006-24.md) | `closedError` 映射 Subscribe / QueueSubscribe / JetStream 三方法 / CallAsync；RPC 停止后的 CallAsync 同时 Is ErrCancelled 与 ErrClosed | 已修复、声明场景验证，未发版；后续并入 [nats 驱动已关闭状态重构](../feature/REFACTOR-2026-10-06-nats-driver-closed-state.md) |
+| [RR-20261006-34](RR-20261006-34.md) | `Shutdown` / `RemoveProgram` 的循环跳过同一轮里被待停止上限删掉的记录，不再 panic | 已修复、声明场景验证，v1.23.0 |
+| [RR-20261006-33](RR-20261006-33.md) | 源文档 digest 改为逐字段的规范表示：接口值写具体类型名，`json:"-"` 与未导出字段一并写出；全部定义的源文档 digest 改变，gameplay / presentation digest 不变 | 已修复、声明场景验证，v1.23.0 |
 
-**10-06 SKILL-1 / SKILL-3 补测（sktest2），未发版。** RR-20261006-21：未提交的失败启动删 cast、还 ID 前删掉它已停进程的记录，有进程停不下来时保留 failed cast、不还 ID；RR-20261006-23：只有运行中的进程钉住 cast，回收 cast 时连它已停的进程记录一起删；RR-20261006-22：`ActivePresentation` 带上增量里的 `PrimaryTarget`（`json:"-"`，不下发），reset 按增量的形状过滤。
-
-| 编号 | 修复 | 状态 |
-| --- | --- | --- |
-| [RR-20261006-23](RR-20261006-23.md) | `castEvictableLocked` 只看运行中的进程；`pruneCompletedCastsLocked` 回收 cast 前删它的进程记录 | 已修复、声明场景验证，未发版 |
-| [RR-20261006-22](RR-20261006-22.md) | `PresentationSnapshot` 按增量来源填 PrimaryTarget（未移交进程取施法目标），`activePresentationEvent` 用它 | 已修复、声明场景验证，未发版 |
-| [RR-20261006-21](RR-20261006-21.md) | `startLocked` 未提交失败：无运行中进程时删记录、删 cast、还 ID；否则保留 failed cast 并返回其 ID；后续：停不下的进程由 Runtime 退避重试；后续二：停止入口统一 | 已修复、声明场景验证，未发版 |
-
-**10-06 NONCORE-46 维护者选 A（tpstat），未发版。** RR-20261006-20：`TaskPool.Submit` 先计提交再入队（被拒撤回），`GetStats` 先读结束数再读 total，保证 `completed + failed ≤ total`；不加锁，热路径只多一次拒绝时的原子减。
+**10-07 停止入口统一（RR-20261006-21 后续二，`skstop`），v1.23.0。** 唯一的停止函数 `requestSpawnStop`（`skill/runtime_spawn_stop.go`）：停止中 → 已停止 / 待停止 → 回收，全部入口只请求停止，宿主拒绝后的处理只在这里；删掉 `deferUnstoppedSpawnsLocked`、`deferRefusedStopLocked`、`stopOwnedSpawn` 与各入口的失败分支。`Shutdown` / `RemoveProgram` 停不下的衍生物留成 `stop_pending`、进 checkpoint，由 Runtime 在 tick 上重试（不同步重试）。登记表 + 源码守卫：新增入口不登记即红。[记录](RR-20261006-21.md#后续二停止入口统一维护者-2026-10-07) / [方案](../feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md)。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-20](RR-20261006-20.md) | TaskPool 计数与读取顺序对齐“结束 ⇒ 已提交” | 已修复、声明场景验证，未发版 |
+| [RR-20261006-32](RR-20261006-32.md) | 被拒的停止在第一次请求时就转入 `stop_pending`，`failCastLocked` / reap 不再重停，回调不再重跑 | 已修复、声明场景验证，v1.23.0 |
 
-**10-06 发版文档 OWN-5 / OPS-2 的“未做”闭环（oa），未发版。** RR-20261006-17：协调器按活动组文件核对开窗（组在文件里、expected ⊆ 组成员，拒绝点名，未设文件不变）；RR-20261006-18：派发器排空后删除自己 dispatcher 标签的序列（同名按计数、超时不删）；RR-20261006-19：method 没有注销，改为有界——被调方只用注册过的方法作标签，调用方每 Bus 至多 256 个。
-
-| 编号 | 修复 | 状态 |
-| --- | --- | --- |
-| [RR-20261006-19](RR-20261006-19.md) | 被调方标签取注册方法（其余 `_unregistered`），调用方每 Bus 至多 256 个方法标签（其余 `_other`），断言测试固定上界 | 已修复、声明场景验证，未发版 |
-| [RR-20261006-18](RR-20261006-18.md) | 派发器 `OnInit` 登记、排空后撤销，同名最后一个撤销时 `DeleteSeries`；上报与删除互斥 | 已修复、声明场景验证，未发版 |
-| [RR-20261006-17](RR-20261006-17.md) | `Config.Groups`（Mod 把已加载的组文件交给 Service），`OpenActivity` 写入前核对，`ErrInvalid` 点名 | 已修复、声明场景验证，未发版 |
-
-**10-06 RR-20261006-15 未验证项闭环（rr15v），未发版。** RR-20261006-16：不带 `outcome` 的旧 claim 单独计数、上限 8192，升级前卡住的操作升级后能执行；RR-15 复核补修：claims 集合加索引 `by_operation_decision`，按操作的查询在服务端只碰有影响的 claim；修前进程实跑混跑验证与 1000～10000 份 claim 的耗时表见 [RR-20261006-15](RR-20261006-15.md#复核后的补修与验证)。
+**10-06 RR-20261006-21 后续：Runtime 负责重试停止（`skretry`），v1.23.0。** 维护者决定技能自己启动的东西由技能自己收尾：`failCastLocked` 停不下的进程标成 `stop_pending`，`advanceHost` 按退避重试（默认 4 tick 起翻倍、10 次上限），到上限计 `skill.process.stop_retry_exhausted.total` 并写日志、记录保留，条目数受 `MaxStopPendingProcesses` 约束，状态进 checkpoint（版本 3）；`Host.StopProcess` 契约写明必须幂等。[记录](RR-20261006-21.md#后续runtime-负责重试停止维护者-2026-10-06)。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-16](RR-20261006-16.md) | 不带 `outcome` 的 claim 与有影响的 claim 分开计数（8192 / 4096） | 已修复、声明场景验证，未发版 |
+| [RR-20261006-31](RR-20261006-31.md) | tick 驱动的停止被宿主拒绝时转为 `stop_pending`、从 owned 表摘掉，错误只返回这一次，Runtime 继续前进 | 已修复、声明场景验证，v1.23.0 |
+| [RR-20261006-30](RR-20261006-30.md) | 恢复按 `pruneCompletedCastsLocked` 的不变量核对完成队列：超出上限的部分必须都仍被引用 | 已修复、声明场景验证，v1.23.0 |
 
-**10-06 未验证项闭环（fixr2），无新 RR，未发版。** 兴趣表加未导出时钟字段 `remoteInterestRegistry.now`，补溢出水位到期用例（[RR-20261006-11](RR-20261006-11.md) §5）；真实 NATS 用例 `TestRealJetStreamInterestHandlerErrorIsAcknowledged` 断言兴趣 handler 出错时 Ack；RR-20261005-01 回归在 C4 后逐项对照、变异证明能红，新增 `TestAGroupFitsOneLiveQuery`（[记录](RR-20261005-01.md)末节）。
-
-**10-06 saga / 驱动疑点闭环（fixs），未发版。** RR-20261006-14：`stepTransition` 改为 Engine 方法、自己调 `Store.Apply`，守卫改为 `go/types` 全包检查（产生 / 改写请求、调用 Apply 都只能在 stepTransition 里）；RR-20261006-15：claim 记 `outcome`，按操作只取有影响的 claim，上限与尝试次数、Resume 次数脱钩。同批 `TestOnlyScriptCommandsOptOutOfTheDriverRetry` 改名 `TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`；Mongo 步骤延迟的 9.0→17.4 与 8.965→18.321 两组数字标明各自的测量轮次。
-
-| 编号 | 修复 | 状态 |
-| --- | --- | --- |
-| [RR-20261006-15](RR-20261006-15.md) | 步骤收件箱 claim 写 `outcome`；Reserve / operationSuccess 只取 pending、成功、本生拒绝与旧 claim，结果集有界 | 已修复（含残余补修，未发版） |
-| [RR-20261006-14](RR-20261006-14.md) | stepTransition 自己调 Store.Apply、重写代际；守卫改为全包类型检查，负对照不留仓库 | 已修复、声明场景验证，未发版 |
-
-**10-06 W-2026-10-06-01 转 RR 与 glsvet A1 跟进（fixn）：RR-20261006-12、-13 已修复、声明场景验证，未发版。** 派发取锁只用 Guard 作用域里的 Guard、没有作用域时取锁前报错，删掉归还 Guard 的分支；glsvet A1 提示跟进一层同包 helper。
+**10-06 真实进程演练追加两项（drill3），v1.23.0。** [演练记录](REAL-PROCESS-DRILLS-2026-10-06.md) ⑤ ⑥：loadtest 的 `rc=1` 查清并修复，Redis Cluster 下重跑单实例锁 / fail-stop / 静态绑定 / 在途 saga 接手全部符合，App 锁方案 §13 的“未验证”改为实测结论。RR-20261006-27：直方图记最小 / 最大观测值，分位数插值收在观测范围内，阈值失败写明哪条阈值、实际值、上限与样本数；RR-20261006-28：生产校验接受 `redis.cluster_addrs`（解析收到 `app.RedisClusterAddrs`），accountctl 加 `-redis-cluster`，dev run.sh 读 `cluster_addrs`；RR-20261006-29：`Contribute` 遇到还没开的窗口自己开窗再记。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-13](RR-20261006-13.md) | glsvet A1 提示跟进一层同包包级 helper 函数（不跟方法调用，只跟一层） | 已修复、声明场景验证，未发版 |
-| [RR-20261006-12](RR-20261006-12.md) | nest 派发取锁要求 Guard 作用域，取锁 / 组迁移重试 / 释放只放实体锁、不归还 Guard | 已修复、声明场景验证，未发版 |
+| [RR-20261006-29](RR-20261006-29.md) | `Contribute` 收到 `CodeMissing` 且开关开着时 `openWindow` 后重试一次，关窗截止由循环下一轮装上 | 已修复、声明场景验证，v1.23.0 |
+| [RR-20261006-28](RR-20261006-28.md) | 生产校验 `redis.addr` 或 `redis.cluster_addrs`；`app.RedisClusterAddrs` 一处解析；accountctl `-redis-cluster`；dev run.sh 读 `cluster_addrs` | 已修复、声明场景验证，v1.23.0。**更正（2026-10-07，以 `5e72ca4d` 为准）**：A4①（`d1226825`）之后，检查改在 `kit/redis/redis_mod.go` 第 63-68 行的 `(*Config).ValidateConfig`，按 Redis 配置声明执行，不再按服务类型区分；`app.validateProductionServiceConfig`、`app.RedisClusterAddrs` 和对应的 app 测试都已删除；错误文本改为 `config: production requires redis.addr or redis.cluster_addrs`，不再带服务类型。详见[记录末节](RR-20261006-28.md) |
+| [RR-20261006-27](RR-20261006-27.md) | 直方图 min / max 收窄插值区间（溢出侧插到最大值）；`ThresholdResult.Samples`、阈值失败写 `RunSnapshot.Error`；loadtest 退出行带说明 | 已修复、声明场景验证，v1.23.0 |
 
-**10-06 REM 疑点闭环（fixr），未发版。** RR-20261006-11：兴趣表满时 release 改记每个 consumer 一个的溢出水位（代际上限 + key 指纹位图），不占表容量；同批加 B2 写入点结构守卫 `TestRemoteSnapshotCacheWritesStayInTheListedFunctions`、durable 名真实 NATS 核对用例，并按源码更正注释与文档。
-
-| 编号 | 修复 | 状态 |
-| --- | --- | --- |
-| [RR-20261006-11](RR-20261006-11.md) | 兴趣表满时 release 改记溢出水位，迟到的旧续租不再复活租约；同批 REM 疑点闭环（写入点守卫、注释与文档更正）；fixr2 补到期与 JetStream 结算实测 | 已修复、声明场景验证，未发版 |
-
-**10-06 驱动 Close 口径统一（wclose）：RR-20261006-10 已修复、声明场景验证，未发版。** 重复 Close 幂等返回 nil、第一次的错误只报一次，并发 Close 串行（后到者在自己的 ctx 内等），Close 之后的调用返回已关闭错误；kit 三个 Mod 停止入口串行化；同批 `skill/README.md` 链接改对、根包加文档相对链接门禁。
+**10-06 真实进程演练四项（drill2），v1.23.0。** [演练记录](REAL-PROCESS-DRILLS-2026-10-06.md)：App 锁方案 §13、NC-193、NC-231、RR-20261006-10 的“未验证”都已在真实进程 / 真实依赖上实测。RR-20261006-24：关闭后的订阅、JetStream、RPC CallAsync 错误经 `closedError` 同时 `errors.Is` 到 `fnats.ErrClosed` 与 nats.go 原错误；RR-20261006-25：`lifecycle.Registry.EmitAllWatched` 报出正在跑的 hook，停机超时错误点名它；RR-20261006-26：`Client.Connected()` 在 Close 之后一直为 false。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-10](RR-20261006-10.md) | 驱动 / Mod Close 统一口径（redis 单机重复 Close 不再返回 ErrClosed；etcd 关闭后快速失败；nats 终态错误只报一次、Publish 返回 ErrClosed；锁遇 ErrClosed 不记未知）；Mod 停止串行化；文档链接门禁 | 已修复、声明场景验证，未发版 |
+| [RR-20261006-26](RR-20261006-26.md) | `Connected()` 看驱动自己的关闭标记；`DrainWithContext` 硬关走 `Client.Close` | 已修复、声明场景验证，v1.23.0；后续并入 [nats 驱动已关闭状态重构](../feature/REFACTOR-2026-10-06-nats-driver-closed-state.md) |
+| [RR-20261006-25](RR-20261006-25.md) | `EmitAllWatched` + App 记下最后开始的 hook，超时错误 `hook "<名字>" did not return …` | 已修复、声明场景验证，v1.23.0 |
+| [RR-20261006-24](RR-20261006-24.md) | `closedError` 映射 Subscribe / QueueSubscribe / JetStream 三方法 / CallAsync；RPC 停止后的 CallAsync 同时 Is ErrCancelled 与 ErrClosed | 已修复、声明场景验证，v1.23.0；后续并入 [nats 驱动已关闭状态重构](../feature/REFACTOR-2026-10-06-nats-driver-closed-state.md) |
 
-**10-06 v1.23.0 发版前补充验证（relprep，[记录](PRERELEASE-VERIFICATION-2026-10-06.md)），未发版。** 示例实跑门禁 `TestExamplesRun`（先红：statusbridge 退回即 panic、examples 模块 go.sum 过期编译不过）；saga `TestAssemblyConsumesNativeNestCompletionEffects` 偶发失败已复现，根因是用例时序假设（协调器立即派发下一步），改断言；global Bind 重试、saga 真实 NATS nak / MaxDeliver、Cluster ASK / MOVED 下的 L2 读写与墓碑 WAIT 在真实依赖上通过；mirror-local Cluster 就绪判定补“副本 online”。均非产品缺陷，不登记 RR。
-
-**10-06 维护者第十二轮 kit / core 批（bkit）：RR-20261006-09 已修复、声明场景验证；另八项决定已实施，未发版。** robot Stage 序号只增不回收（[09](RR-20261006-09.md)）；O-S5-2 回执 TTL 与效果流保留期跨 Mod 校验、metrics 按标签删除（loadtest 运行序列随运行记录删除）、`/readyz` checker 期限、Ops 必须带 `Bearer `、CAS 冲突率在 versionstore 统一计数、O-M6-5 启动期建索引遇选举有界重试、业务时间高水位推进失败计数、game-demo `configdata_rollback_total` 面板见 [第十二轮 kit 批](../feature/DECISIONS-R12-KIT-2026-10-06.md)。
-
-| 编号 | 修复 | 状态 |
-| --- | --- | --- |
-| [RR-20261006-09](RR-20261006-09.md) | robot Stage 先缩后扩：序号只增不回收，新机器人不再复用刚停掉的序号与 PlayerID | 已修复、声明场景验证，未发版 |
-
-**10-06 收尾第 2 批（cb2）：生成形状相关的小项 A8 / A9 / A11 / A15 / A17，未发版。** 生成配置补齐 `remote_entity` 新键（生产化不再改墓碑 WAIT 副本数）、生成 TCP 越界报错逐条点名、full 场景 add 序列收拢到 `codegen/scripts/full-scenario-adds.sh` 且不吞失败、生成 TCP 加“handler 不配合 ctx”用例、game-demo 仪表盘加 `scene_session_reopen_failed_total` 面板。[记录](CLOSING-BATCH-2-2026-10-06.md)
-
-**10-06 收尾第 4 批 kit / core 小修与测试设施（cb4）：RR-20261006-05～08 已修复、声明场景验证，未发版；A2 / A3 修用例。** global `Bind` 同参数重试按幂等成功（[05](RR-20261006-05.md)）；saga 步骤预算遇只差大小写的名字报歧义错误（[06](RR-20261006-06.md)）；`app.run` 关闭文件日志前写出最终错误（[07](RR-20261006-07.md)）；mongotest `$in` 用 reflect 展开具名切片，saga 用例改走 `ClaimDue`（[08](RR-20261006-08.md)）；nest `group_lock_test` 在无 Guard 作用域的 goroutine 里取锁、把同一个 Guard 两次放回池，污染 `-shuffle` 下后续用例，改为建作用域，目标用例失败时快速报出（[记录](CLOSING-BATCH-4-2026-10-06.md)）。
-
-**10-06 收尾第 3 批 skill 小修（cb3）：RR-20261006-02～04 已修复、声明场景验证，未发版。** Runtime 交给 Host 的状态默认值缺省时带 state 声明类型；checkpoint 里的 `phase_timeout` 任务按 corrupt 拒绝并删除该任务类型；文件 outbox 打开时删除确认是自己生成的 `outbox-<数字>.tmp`。
+**10-06 SKILL-1 / SKILL-3 补测（sktest2），v1.23.0。** RR-20261006-21：未提交的失败启动删 cast、还 ID 前删掉它已停进程的记录，有进程停不下来时保留 failed cast、不还 ID；RR-20261006-23：只有运行中的进程钉住 cast，回收 cast 时连它已停的进程记录一起删；RR-20261006-22：`ActivePresentation` 带上增量里的 `PrimaryTarget`（`json:"-"`，不下发），reset 按增量的形状过滤。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-04](RR-20261006-04.md) | 文件 outbox 打开时清理崩溃遗留的临时文件（只删精确匹配的普通文件） | 已修复、声明场景验证，未发版 |
-| [RR-20261006-03](RR-20261006-03.md) | checkpoint 恢复拒绝 `phase_timeout` 任务，删除 `phaseTimeoutTask` | 已修复、声明场景验证，未发版 |
-| [RR-20261006-02](RR-20261006-02.md) | 状态默认值缺省时按声明类型交给 Host，null 默认值的实体状态可以 set | 已修复、声明场景验证，未发版 |
+| [RR-20261006-23](RR-20261006-23.md) | `castEvictableLocked` 只看运行中的进程；`pruneCompletedCastsLocked` 回收 cast 前删它的进程记录 | 已修复、声明场景验证，v1.23.0 |
+| [RR-20261006-22](RR-20261006-22.md) | `PresentationSnapshot` 按增量来源填 PrimaryTarget（未移交进程取施法目标），`activePresentationEvent` 用它 | 已修复、声明场景验证，v1.23.0 |
+| [RR-20261006-21](RR-20261006-21.md) | `startLocked` 未提交失败：无运行中进程时删记录、删 cast、还 ID；否则保留 failed cast 并返回其 ID；后续：停不下的进程由 Runtime 退避重试；后续二：停止入口统一 | 已修复、声明场景验证，v1.23.0 |
+
+**10-06 NONCORE-46 维护者选 A（tpstat），v1.23.0。** RR-20261006-20：`TaskPool.Submit` 先计提交再入队（被拒撤回），`GetStats` 先读结束数再读 total，保证 `completed + failed ≤ total`；不加锁，热路径只多一次拒绝时的原子减。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-20](RR-20261006-20.md) | TaskPool 计数与读取顺序对齐“结束 ⇒ 已提交” | 已修复、声明场景验证，v1.23.0 |
+
+**10-06 发版文档 OWN-5 / OPS-2 的“未做”闭环（oa），v1.23.0。** RR-20261006-17：协调器按活动组文件核对开窗（组在文件里、expected ⊆ 组成员，拒绝点名，未设文件不变）；RR-20261006-18：派发器排空后删除自己 dispatcher 标签的序列（同名按计数、超时不删）；RR-20261006-19：method 没有注销，改为有界——被调方只用注册过的方法作标签，调用方每 Bus 至多 256 个。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-19](RR-20261006-19.md) | 被调方标签取注册方法（其余 `_unregistered`），调用方每 Bus 至多 256 个方法标签（其余 `_other`），断言测试固定上界 | 已修复、声明场景验证，v1.23.0 |
+| [RR-20261006-18](RR-20261006-18.md) | 派发器 `OnInit` 登记、排空后撤销，同名最后一个撤销时 `DeleteSeries`；上报与删除互斥 | 已修复、声明场景验证，v1.23.0 |
+| [RR-20261006-17](RR-20261006-17.md) | `Config.Groups`（Mod 把已加载的组文件交给 Service），`OpenActivity` 写入前核对，`ErrInvalid` 点名 | 已修复、声明场景验证，v1.23.0 |
+
+**10-06 RR-20261006-15 未验证项闭环（rr15v），v1.23.0。** RR-20261006-16：不带 `outcome` 的旧 claim 单独计数、上限 8192，升级前卡住的操作升级后能执行；RR-15 复核补修：claims 集合加索引 `by_operation_decision`，按操作的查询在服务端只碰有影响的 claim；修前进程实跑混跑验证与 1000～10000 份 claim 的耗时表见 [RR-20261006-15](RR-20261006-15.md#复核后的补修与验证)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-16](RR-20261006-16.md) | 不带 `outcome` 的 claim 与有影响的 claim 分开计数（8192 / 4096） | 已修复、声明场景验证，v1.23.0 |
+
+**10-06 未验证项闭环（fixr2），无新 RR，v1.23.0。** 兴趣表加未导出时钟字段 `remoteInterestRegistry.now`，补溢出水位到期用例（[RR-20261006-11](RR-20261006-11.md) §5）；真实 NATS 用例 `TestRealJetStreamInterestHandlerErrorIsAcknowledged` 断言兴趣 handler 出错时 Ack；RR-20261005-01 回归在 C4 后逐项对照、变异证明能红，新增 `TestAGroupFitsOneLiveQuery`（[记录](RR-20261005-01.md)末节）。
+
+**10-06 saga / 驱动疑点闭环（fixs），v1.23.0。** RR-20261006-14：`stepTransition` 改为 Engine 方法、自己调 `Store.Apply`，守卫改为 `go/types` 全包检查（产生 / 改写请求、调用 Apply 都只能在 stepTransition 里）；RR-20261006-15：claim 记 `outcome`，按操作只取有影响的 claim，上限与尝试次数、Resume 次数脱钩。同批 `TestOnlyScriptCommandsOptOutOfTheDriverRetry` 改名 `TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`；Mongo 步骤延迟的 9.0→17.4 与 8.965→18.321 两组数字标明各自的测量轮次。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-15](RR-20261006-15.md) | 步骤收件箱 claim 写 `outcome`；Reserve / operationSuccess 只取 pending、成功、本生拒绝与旧 claim，结果集有界 | 已修复（含残余补修），v1.23.0 |
+| [RR-20261006-14](RR-20261006-14.md) | stepTransition 自己调 Store.Apply、重写代际；守卫改为全包类型检查，负对照不留仓库 | 已修复、声明场景验证，v1.23.0 |
+
+**10-06 W-2026-10-06-01 转 RR 与 glsvet A1 跟进（fixn）：RR-20261006-12、-13 已修复、声明场景验证，v1.23.0。** 派发取锁只用 Guard 作用域里的 Guard、没有作用域时取锁前报错，删掉归还 Guard 的分支；glsvet A1 提示跟进一层同包 helper。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-13](RR-20261006-13.md) | glsvet A1 提示跟进一层同包包级 helper 函数（不跟方法调用，只跟一层） | 已修复、声明场景验证，v1.23.0 |
+| [RR-20261006-12](RR-20261006-12.md) | nest 派发取锁要求 Guard 作用域，取锁 / 组迁移重试 / 释放只放实体锁、不归还 Guard | 已修复、声明场景验证，v1.23.0 |
+
+**10-06 REM 疑点闭环（fixr），v1.23.0。** RR-20261006-11：兴趣表满时 release 改记每个 consumer 一个的溢出水位（代际上限 + key 指纹位图），不占表容量；同批加 B2 写入点结构守卫 `TestRemoteSnapshotCacheWritesStayInTheListedFunctions`、durable 名真实 NATS 核对用例，并按源码更正注释与文档。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-11](RR-20261006-11.md) | 兴趣表满时 release 改记溢出水位，迟到的旧续租不再复活租约；同批 REM 疑点闭环（写入点守卫、注释与文档更正）；fixr2 补到期与 JetStream 结算实测 | 已修复、声明场景验证，v1.23.0 |
+
+**10-06 驱动 Close 口径统一（wclose）：RR-20261006-10 已修复、声明场景验证，v1.23.0。** 重复 Close 幂等返回 nil、第一次的错误只报一次，并发 Close 串行（后到者在自己的 ctx 内等），Close 之后的调用返回已关闭错误；kit 三个 Mod 停止入口串行化；同批 `skill/README.md` 链接改对、根包加文档相对链接门禁。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-10](RR-20261006-10.md) | 驱动 / Mod Close 统一口径（redis 单机重复 Close 不再返回 ErrClosed；etcd 关闭后快速失败；nats 终态错误只报一次、Publish 返回 ErrClosed；锁遇 ErrClosed 不记未知）；Mod 停止串行化；文档链接门禁 | 已修复、声明场景验证，v1.23.0 |
+
+**10-06 v1.23.0 发版前补充验证（relprep，[记录](PRERELEASE-VERIFICATION-2026-10-06.md)），v1.23.0。** 示例实跑门禁 `TestExamplesRun`（先红：statusbridge 退回即 panic、examples 模块 go.sum 过期编译不过）；saga `TestAssemblyConsumesNativeNestCompletionEffects` 偶发失败已复现，根因是用例时序假设（协调器立即派发下一步），改断言；global Bind 重试、saga 真实 NATS nak / MaxDeliver、Cluster ASK / MOVED 下的 L2 读写与墓碑 WAIT 在真实依赖上通过；mirror-local Cluster 就绪判定补“副本 online”。均非产品缺陷，不登记 RR。
+
+**10-06 维护者第十二轮 kit / core 批（bkit）：RR-20261006-09 已修复、声明场景验证；另八项决定已实施，v1.23.0。** robot Stage 序号只增不回收（[09](RR-20261006-09.md)）；O-S5-2 回执 TTL 与效果流保留期跨 Mod 校验、metrics 按标签删除（loadtest 运行序列随运行记录删除）、`/readyz` checker 期限、Ops 必须带 `Bearer `、CAS 冲突率在 versionstore 统一计数、O-M6-5 启动期建索引遇选举有界重试、业务时间高水位推进失败计数、game-demo `configdata_rollback_total` 面板见 [第十二轮 kit 批](../feature/DECISIONS-R12-KIT-2026-10-06.md)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-09](RR-20261006-09.md) | robot Stage 先缩后扩：序号只增不回收，新机器人不再复用刚停掉的序号与 PlayerID | 已修复、声明场景验证，v1.23.0 |
+
+**10-06 收尾第 2 批（cb2）：生成形状相关的小项 A8 / A9 / A11 / A15 / A17，v1.23.0。** 生成配置补齐 `remote_entity` 新键（生产化不再改墓碑 WAIT 副本数）、生成 TCP 越界报错逐条点名、full 场景 add 序列收拢到 `codegen/scripts/full-scenario-adds.sh` 且不吞失败、生成 TCP 加“handler 不配合 ctx”用例、game-demo 仪表盘加 `scene_session_reopen_failed_total` 面板。[记录](CLOSING-BATCH-2-2026-10-06.md)
+
+**10-06 收尾第 4 批 kit / core 小修与测试设施（cb4）：RR-20261006-05～08 已修复、声明场景验证，v1.23.0；A2 / A3 修用例。** global `Bind` 同参数重试按幂等成功（[05](RR-20261006-05.md)）；saga 步骤预算遇只差大小写的名字报歧义错误（[06](RR-20261006-06.md)）；`app.run` 关闭文件日志前写出最终错误（[07](RR-20261006-07.md)）；mongotest `$in` 用 reflect 展开具名切片，saga 用例改走 `ClaimDue`（[08](RR-20261006-08.md)）；nest `group_lock_test` 在无 Guard 作用域的 goroutine 里取锁、把同一个 Guard 两次放回池，污染 `-shuffle` 下后续用例，改为建作用域，目标用例失败时快速报出（[记录](CLOSING-BATCH-4-2026-10-06.md)）。
+
+**10-06 收尾第 3 批 skill 小修（cb3）：RR-20261006-02～04 已修复、声明场景验证，v1.23.0。** Runtime 交给 Host 的状态默认值缺省时带 state 声明类型；checkpoint 里的 `phase_timeout` 任务按 corrupt 拒绝并删除该任务类型；文件 outbox 打开时删除确认是自己生成的 `outbox-<数字>.tmp`。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-04](RR-20261006-04.md) | 文件 outbox 打开时清理崩溃遗留的临时文件（只删精确匹配的普通文件） | 已修复、声明场景验证，v1.23.0 |
+| [RR-20261006-03](RR-20261006-03.md) | checkpoint 恢复拒绝 `phase_timeout` 任务，删除 `phaseTimeoutTask` | 已修复、声明场景验证，v1.23.0 |
+| [RR-20261006-02](RR-20261006-02.md) | 状态默认值缺省时按声明类型交给 Host，null 默认值的实体状态可以 set | 已修复、声明场景验证，v1.23.0 |
 
 **10-06 Mirror 第 6 步本机替代（mirror6）：RR-20261006-01 已修复、声明场景验证，未发版。** `acknowledgeRemoteCommit` 在登记实例的身份已不是该实体（被同一事务删除后清空、或被回收）时摘掉它并视为确认完成，照常发布删除。[修复](RR-20261006-01.md) · [记录](../feature/MIRROR-STEP-6-LOCAL-2026-10-06.md)
 
@@ -392,7 +394,7 @@
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261005-01](RR-20261005-01.md) | activity 启动时拒绝注定开不出窗口的候选集（C4 后由活动组文件兑现，10-06 复核见末节） | 已修复，未发版 |
+| [RR-20261005-01](RR-20261005-01.md) | activity 启动时拒绝注定开不出窗口的候选集（C4 后由活动组文件兑现，10-06 复核见末节） | 已修复，v1.20.1；10-06 复核 v1.23.0 |
 
 **10-05 N02续审：NC-80/81/83已修复、声明场景验证，未发版；合并前复核：NC-80改为Encoder+推迟写状态（不再复制响应体）、NC-81补FlushError透传、NC-82按每主体上限+满表O(1)拒绝修复，NC-83评估为当前最好。** 正式回归在旧产品上7+4+3红、修后全绿；race×3 六包438 pass、生成TCP包race×3 117 pass、根包/build/vet/codegen与game-demo全工程通过。[本轮](../review/REVIEW-2026-10-05-noncore-n02.md) · [证据](evidence/noncore-bugfix-20261005-n02/README.md)。T-242/243/244。已生成工程需重新生成 player TCP 文件。
 

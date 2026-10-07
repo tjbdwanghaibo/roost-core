@@ -82,7 +82,7 @@
 | v1.20.2（2026-10-06） | `c85d4565` | APP-6、APP-9、OWN-5、OPS-1、TOOL-1（origin 不可达）、TOOL-7（无用例记 FAIL、持锁） |
 | v1.21.0（2026-10-06） | `4881f2b7` | APP-4（停机期非零退出）、APP-5（C5）、APP-7（NC-233 / 234）、APP-8、APP-10、APP-13（`clock.business`）、CLK-1、CLK-2、CLK-4 的拆分、CLK-6、OPS-3、TOOL-3 |
 | v1.22.0（2026-10-06） | `9bf690fb` | CLK-3、CLK-4（合并回业务钟）、TOOL-6 |
-| v1.23.0（本版） | 待打 | APP-7（`Serial` 与 `RedisMod` 例外）、APP-8（点名卡住的 hook）、APP-11、APP-12、APP-13（`singleton_incarnation`）、APP-14、APP-15、OWN-4 / OWN-5（组上限守卫、协调器按组核对、`groups_file` 必填；RR-20261005-01 回归去向见 NONCORE-20）、OWN-6、OWN-7、CLK-5、OPS-2（含 RR-18 / RR-19）、OPS-4～8、TOOL-2、TOOL-4、TOOL-5、TOOL-6 扩展、TOOL-7 预跑、TOOL-8、TOOL-9 |
+| v1.23.0（2026-10-07） | `28912cd6`（代码冻结点 `5e72ca4d`） | APP-7（`Serial` 与 `RedisMod` 例外）、APP-8（点名卡住的 hook）、APP-11、APP-12、APP-13（`singleton_incarnation`）、APP-14、APP-15、OWN-4 / OWN-5（组上限守卫、协调器按组核对、`groups_file` 必填；RR-20261005-01 回归去向见 NONCORE-20）、OWN-6、OWN-7、CLK-5、OPS-2（含 RR-18 / RR-19）、OPS-4～8、TOOL-2、TOOL-4、TOOL-5、TOOL-6 扩展、TOOL-7 预跑、TOOL-8、TOOL-9 |
 
 ## 平台支持
 
