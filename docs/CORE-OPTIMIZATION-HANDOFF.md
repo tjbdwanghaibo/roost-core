@@ -667,3 +667,9 @@ N04源文40/40累计复用已读、场景部分完成；另一线三大核心只
 RR-20261007-19～25：持久 outbox 年龄、显式 observer 生命周期与资源上限、carry 解除重试、Host 自检/默认 catalog/付费形状、能力覆盖上限。R7/R8/H8 文档与无效分支同步收敛。checkpoint v10；旧版本拒绝，升级先停旧并清空旧 checkpoint。B2～B4/B6～B8 仍待完成。
 
 B1 最终验收：全仓 build/vet/test（130 包）、6 包 race、独立 sync-e2e race 通过；本批本地提交，未推送/发布。
+
+### B2 收尾（2026-10-07，验收中）
+
+RR-20261007-26～31 修复战斗数值、资源/capability、buff、无变化脏位、路径搜索；C11/C12/C13 明确业务接入前提，C14 首次修改才捕获 undo，C16 依赖守卫。方案及逐项结论见 REFACTOR-2026-10-07-combat-handoff 和 impl/08 追加校正。B1 续批提交 589b0a2b。继续 B3/B4/B6～B8。
+
+B2 验收完成（2026-10-07）：全仓 build/vet/test（130 包）通过；skill 全族/spatial/nest/根包共 8 包 race 通过，独立 statusbridge 示例 go test 通过。RR-20261007-26～31 和 C11～C16 的边界说明、优化与守卫在本批提交。原始日志与快照专项基准已保存主检出 artifacts/perf/remaining-fixes-20261007；未推送/发布。继续 B3/B4/B6～B8。

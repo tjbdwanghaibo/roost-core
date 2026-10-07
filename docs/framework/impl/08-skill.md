@@ -718,3 +718,13 @@ Y5/Y7/Y9：文档更正 presentation 的可靠链、无密钥摘要的信任边�
 以上基于当前工作树源码；CBM 2026-09-30 代际不覆盖这些新增实现。
 
 B1 最终验收：全仓 build/vet/test（130 包）、6 包 race、独立 sync-e2e race 通过；本批本地提交，未推送/发布。
+
+## v1.23.1 B2 校正（未发版）
+
+C1/C2/C3 → RR-20261007-26；C4 → -27；C5/C10 → -28；C6/C7/C8 → -29；C9 → -30；C15 的搜索预算/地形一致视图 → -31。以上行为红测已复现后修复。
+
+C11/C12：补 ChanceRoll 只产事实、持久 vitals 不会自动恢复和 TickBuffs 必须由业务 tick 驱动的说明；示例本次结算后恢复 ForceCritical。不存在框架自动扫描任意业务 DAO 的承诺。C13：正式 Resolver 必须只返回已锁定且已捕获的实体；两种策略 × handler/提交失败回归加强为实际吸血及 AdoptBuff 目的实体回滚，均声明在 RequestMulti。未纳入事务的对象不享有 state 回滚，原疑点属绕开调用前提，不靠隐藏快照/锁修补。
+
+C14：DAO 在 undo 策略首次修改对应字段时才复制；state 不构造无用逆操作。1000 个属性、单事务 100 次写入，3 轮：8.05～8.09 ms/op → 0.430～0.432 ms/op，约 6.42 MB/op → 0.693 MB/op，1093～1094 → 74 allocs/op。只代表此专项，非系统吞吐。
+
+C15 的跨块重复 ID 已排除为 bug：既有 TestBlockIndexRejectsUnsafeAllocationAndDeduplicatesRange 明确允许同 ID 多块登记、RangeBlocks 并集去重；保持 Add/Remove/Move 块级契约并补中文说明。C16：根包新增 import 守卫（combat 仅标准库、skill 根不 import spatial），仅保证静态依赖边界。

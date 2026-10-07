@@ -121,13 +121,14 @@ type Hooks interface {
 // mutating target (health, shield, life state) and, for vamp, source. The
 // source may be nil (world-sourced damage: no penetration, no crit force, no
 // vamp). It returns ok=false without side effects when the target is nil or
-// already dead — the caller decides how to report an invalid target.
+// already dead or has a corrupted negative health value — the caller decides
+// how to report an invalid target.
 //
 // The math is the authoritative "twelve_stage_v1" formula: resistance R
 // mitigates by 10000/(10000+100R), rates compose multiplicatively in basis
 // points, and every step saturates instead of wrapping.
 func ResolveDamage(source, target *Combatant, input DamageInput, hooks Hooks) (DamageOutcome, bool) {
-	if target == nil || !target.Alive {
+	if target == nil || !target.Alive || target.Health < 0 {
 		return DamageOutcome{}, false
 	}
 	outcome := DamageOutcome{Attempted: maxInt64(input.Amount, 0), Result: ResultHit}
@@ -152,8 +153,10 @@ func ResolveDamage(source, target *Combatant, input DamageInput, hooks Hooks) (D
 	}
 	if target.Dodge {
 		outcome.Dodged, amount, outcome.Result = true, 0, ResultDodged
+		return outcome, true
 	} else if target.Parry {
 		outcome.Parried, amount, outcome.Result = true, 0, ResultParried
+		return outcome, true
 	} else if target.Block {
 		outcome.Blocked, amount, outcome.Result = true, amount/2, ResultBlocked
 	}
@@ -247,9 +250,10 @@ func ResolveDamage(source, target *Combatant, input DamageInput, hooks Hooks) (D
 		outcome.Killed = true
 		outcome.Result = ResultKilled
 	}
-	if source != nil && source.VampBP > 0 && outcome.HealthDamage > 0 {
-		outcome.VampHeal = ScaleBasisPoints(outcome.HealthDamage, source.VampBP)
-		source.Health = minInt64(source.MaxHealth, saturatingInt64Add(source.Health, outcome.VampHeal))
+	if source != nil && source.Alive && source.VampBP > 0 && outcome.HealthDamage > 0 {
+		// 吸血遵守普通治疗的存活与缺血约束，结果只报告实际恢复量。
+		heal, _ := ResolveHeal(source, ScaleBasisPoints(outcome.HealthDamage, source.VampBP))
+		outcome.VampHeal = heal.Effective
 	}
 	return outcome, true
 }
@@ -267,7 +271,7 @@ func ResolveHeal(target *Combatant, amount int64) (HealOutcome, bool) {
 		return HealOutcome{}, false
 	}
 	attempted := maxInt64(amount, 0)
-	effective := minInt64(attempted, maxInt64(0, target.MaxHealth-target.Health))
+	effective := minInt64(attempted, maxInt64(0, saturatingInt64Sub(target.MaxHealth, target.Health)))
 	target.Health += effective
 	return HealOutcome{Attempted: attempted, Effective: effective}, true
 }

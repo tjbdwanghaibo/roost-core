@@ -23,7 +23,13 @@ type Terrain interface {
 type PathOptions struct{ MaxVisited int }
 
 // FindPath uses four-direction A* and includes both endpoints.
+// GridTerrain 在整个搜索期间持有读锁；其他 Terrain 实现须由调用方提供稳定视图。
 func FindPath(terrain Terrain, start, goal Point, options PathOptions) ([]Point, error) {
+	if grid, ok := terrain.(*GridTerrain); ok && grid != nil {
+		grid.mu.RLock()
+		defer grid.mu.RUnlock()
+		terrain = gridSearchView{grid}
+	}
 	if terrain == nil || !terrain.InBounds(start) || !terrain.InBounds(goal) {
 		return nil, ErrInvalidPoint
 	}
@@ -40,12 +46,17 @@ func FindPath(terrain Terrain, start, goal Point, options PathOptions) ([]Point,
 	heap.Push(open, &pathNode{point: start, score: manhattan(start, goal)})
 	cameFrom := make(map[Point]Point)
 	cost := map[Point]int64{start: 0}
+	expanded := make(map[Point]struct{})
 	for visited := 0; open.Len() > 0; {
+		current := heap.Pop(open).(*pathNode).point
+		if _, stale := expanded[current]; stale {
+			continue
+		}
 		visited++
 		if visited > options.MaxVisited {
 			return nil, ErrPathBudgetExhausted
 		}
-		current := heap.Pop(open).(*pathNode).point
+		expanded[current] = struct{}{}
 		if current == goal {
 			return rebuildPath(cameFrom, start, goal), nil
 		}
@@ -64,6 +75,17 @@ func FindPath(terrain Terrain, start, goal Point, options PathOptions) ([]Point,
 		}
 	}
 	return nil, ErrNoPath
+}
+
+// 只在 FindPath 持有 GridTerrain.mu 期间使用，避免逐点递归加锁。
+type gridSearchView struct{ *GridTerrain }
+
+func (view gridSearchView) Blocked(point Point) bool {
+	if !view.InBounds(point) {
+		return true
+	}
+	_, blocked := view.obstacles[point]
+	return blocked
 }
 
 func adjacentPoints(point Point) [4]Point {

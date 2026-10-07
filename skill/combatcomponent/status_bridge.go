@@ -168,18 +168,18 @@ func (bridge *StatusBridge) modifyStatusInstance(command skill.ModifyStatusInsta
 		component.RemoveBuff(id)
 		removed = true
 	case "add_stacks":
-		instance, removed = bridge.setStacks(component, id, instance.Stacks+command.Value)
+		instance, removed = bridge.setStacks(component, id, saturatingAttributeAdd(instance.Stacks, command.Value))
 	case "set_stacks":
 		instance, removed = bridge.setStacks(component, id, command.Value)
 	case "add_duration":
 		if !durationAllowed(command.Operation) {
 			return policyFailure()
 		}
-		next := remaining + command.Value
+		next := saturatingAttributeAdd(remaining, command.Value)
 		if next < 1 {
 			next = 1
 		}
-		instance, _ = component.SetBuffDueTick(id, clampDue(now+next))
+		instance, _ = component.SetBuffDueTick(id, clampDue(saturatingAttributeAdd(now, next)))
 	case "set_duration":
 		if !durationAllowed(command.Operation) {
 			return policyFailure()
@@ -188,7 +188,7 @@ func (bridge *StatusBridge) modifyStatusInstance(command skill.ModifyStatusInsta
 		if next < 1 {
 			next = 1
 		}
-		instance, _ = component.SetBuffDueTick(id, clampDue(now+next))
+		instance, _ = component.SetBuffDueTick(id, clampDue(saturatingAttributeAdd(now, next)))
 	case "mul_duration_bp":
 		if !durationAllowed(command.Operation) {
 			return policyFailure()
@@ -197,16 +197,19 @@ func (bridge *StatusBridge) modifyStatusInstance(command skill.ModifyStatusInsta
 		if next < 1 {
 			next = 1
 		}
-		instance, _ = component.SetBuffDueTick(id, clampDue(now+next))
+		instance, _ = component.SetBuffDueTick(id, clampDue(saturatingAttributeAdd(now, next)))
 	case "refresh":
 		if !durationAllowed(command.Operation) {
 			return policyFailure()
 		}
+		if instance.DueTick == 0 {
+			break
+		} // 永久实例刷新仍然永久。
 		total := instance.DueTick - instance.AppliedTick
 		if total < 1 {
 			total = 1
 		}
-		instance, _ = component.SetBuffDueTick(id, clampDue(now+total))
+		instance, _ = component.SetBuffDueTick(id, clampDue(saturatingAttributeAdd(now, total)))
 	case "copy_to", "transfer_to":
 		allowed := command.Operation == "copy_to" && policy.Copyable || command.Operation == "transfer_to" && policy.Transferable
 		destination, alive := bridge.Resolver.CombatComponent(command.Target)

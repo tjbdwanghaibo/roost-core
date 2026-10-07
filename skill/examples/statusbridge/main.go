@@ -95,9 +95,14 @@ func demo() {
 	fmt.Println("crit roll (30%):", crit)
 
 	source := attacker.Combatant()
+	previousCritical := source.ForceCritical
 	source.ForceCritical = crit
 	attacker.InitCombatant(source)
 	outcome, _ := defender.ApplyDamage(attacker, combat.DamageInput{Amount: 120, Type: combat.DamageTypePhysical, CanCritical: true}, nil)
+	// ForceCritical 是持久 vitals，不是一次性事实；示例本次结算后恢复，保留期间发生的吸血等变化。
+	source = attacker.Combatant()
+	source.ForceCritical = previousCritical
+	attacker.InitCombatant(source)
 	fmt.Printf("damage: attempted=%d dealt=%d critical=%v defenderHP=%d\n",
 		outcome.Attempted, outcome.HealthDamage, outcome.Critical, defender.Combatant().Health)
 

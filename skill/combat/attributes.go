@@ -1,6 +1,10 @@
 package combat
 
-import "sort"
+import (
+	"math"
+	"math/big"
+	"sort"
+)
 
 // AttributeID identifies one attribute channel (health, armor, haste, ...).
 // The mapping to gameplay meaning belongs to the host's catalog.
@@ -36,8 +40,8 @@ type AttributeBounds struct {
 // perfectly reversible and the result never depends on application order.
 type AttributeSet struct {
 	base     map[AttributeID]int64
-	flatSum  map[AttributeID]int64
-	rateSum  map[AttributeID]int64
+	flatSum  map[AttributeID]*big.Int
+	rateSum  map[AttributeID]*big.Int
 	bounds   map[AttributeID]AttributeBounds
 	grants   map[ModifierHandle][]Modifier
 	observer func(AttributeID)
@@ -46,8 +50,8 @@ type AttributeSet struct {
 func NewAttributeSet() *AttributeSet {
 	return &AttributeSet{
 		base:    make(map[AttributeID]int64),
-		flatSum: make(map[AttributeID]int64),
-		rateSum: make(map[AttributeID]int64),
+		flatSum: make(map[AttributeID]*big.Int),
+		rateSum: make(map[AttributeID]*big.Int),
 		bounds:  make(map[AttributeID]AttributeBounds),
 		grants:  make(map[ModifierHandle][]Modifier),
 	}
@@ -91,8 +95,8 @@ func (set *AttributeSet) Grant(handle ModifierHandle, modifiers ...Modifier) {
 	stored := append([]Modifier(nil), modifiers...)
 	set.grants[handle] = stored
 	for _, modifier := range stored {
-		set.flatSum[modifier.Attribute] += modifier.Flat
-		set.rateSum[modifier.Attribute] += modifier.RateBP
+		addModifierSum(set.flatSum, modifier.Attribute, modifier.Flat, false)
+		addModifierSum(set.rateSum, modifier.Attribute, modifier.RateBP, false)
 		set.notify(modifier.Attribute)
 	}
 }
@@ -105,16 +109,16 @@ func (set *AttributeSet) Revoke(handle ModifierHandle) {
 	}
 	delete(set.grants, handle)
 	for _, modifier := range modifiers {
-		set.flatSum[modifier.Attribute] -= modifier.Flat
-		set.rateSum[modifier.Attribute] -= modifier.RateBP
+		addModifierSum(set.flatSum, modifier.Attribute, modifier.Flat, true)
+		addModifierSum(set.rateSum, modifier.Attribute, modifier.RateBP, true)
 		set.notify(modifier.Attribute)
 	}
 }
 
 // Current resolves the attribute's effective value.
 func (set *AttributeSet) Current(id AttributeID) int64 {
-	total := saturatingInt64Add(set.base[id], set.flatSum[id])
-	rate := saturatingInt64Add(BasisPointScale, set.rateSum[id])
+	total := clampModifierSum(set.base[id], set.flatSum[id])
+	rate := clampModifierSum(BasisPointScale, set.rateSum[id])
 	if rate < 0 {
 		rate = 0
 	}
@@ -224,4 +228,33 @@ func (set *AttributeSet) RestoreBase(states []AttributeBaseState) {
 	for _, id := range order {
 		set.notify(id)
 	}
+}
+
+// 聚合桶保留精确整数，不能每次加减都饱和，否则撤销不可逆、施加顺序会影响结果。
+// 只在 Current 进入固定点公式时钳到 int64；常规数值仅占一个 big.Int word。
+func addModifierSum(sums map[AttributeID]*big.Int, id AttributeID, value int64, remove bool) {
+	sum := sums[id]
+	if sum == nil {
+		sum = new(big.Int)
+		sums[id] = sum
+	}
+	operand := big.NewInt(value)
+	if remove {
+		sum.Sub(sum, operand)
+	} else {
+		sum.Add(sum, operand)
+	}
+}
+func clampModifierSum(base int64, sum *big.Int) int64 {
+	if sum == nil {
+		return base
+	}
+	total := new(big.Int).Add(big.NewInt(base), sum)
+	if total.IsInt64() {
+		return total.Int64()
+	}
+	if total.Sign() < 0 {
+		return math.MinInt64
+	}
+	return math.MaxInt64
 }

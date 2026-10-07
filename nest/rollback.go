@@ -166,6 +166,16 @@ func (tx *RollbackTx) RecordUndo(owner any, field uint64, fn func() error) error
 	return tx.RecordUndoToken(owner, field, nil, fn)
 }
 
+// HasUndo 查询此 DAO 字段是否已登记首次逆操作，供复制成本较高的手写 DAO 延迟取快照。
+// 与 RecordUndo 一样，owner 必须可比较，调用方必须在同一串行事务内查询后登记。
+func (tx *RollbackTx) HasUndo(owner any, field uint64) bool {
+	if tx == nil {
+		return false
+	}
+	_, found := tx.undoKeys[undoKey{owner: owner, field: field}]
+	return found
+}
+
 // RecordUndoToken records an inverse operation for a field sub-resource. The
 // token lets generated collection setters independently capture multiple map
 // keys while still coalescing repeated writes to the same key.

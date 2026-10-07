@@ -1,6 +1,7 @@
 package roostcore_test
 
 import (
+	"go/build"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -10,6 +11,40 @@ import (
 	"strings"
 	"testing"
 )
+
+// 结构性约束只验证 import 方向，不替代战斗或空间语义回归。
+func TestCombatAndSkillDependencyBoundary(t *testing.T) {
+	for _, dir := range []string{"skill/combat", "skill"} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, spec := range file.Imports {
+				name, err := strconv.Unquote(spec.Path.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if dir == "skill/combat" {
+					pkg, err := build.Default.Import(name, "", build.FindOnly)
+					if err != nil || !pkg.Goroot {
+						t.Errorf("%s: combat requires standard library only: %s", path, name)
+					}
+				} else if name == modulePath+"/spatial" || strings.HasPrefix(name, modulePath+"/spatial/") {
+					t.Errorf("%s: skill delegates spatial queries to Host: %s", path, name)
+				}
+			}
+		}
+	}
+}
 
 // Parse all root-module source files, including tests and inactive build tags.
 // Nested modules are separate consumers, not part of Core's dependency layer.

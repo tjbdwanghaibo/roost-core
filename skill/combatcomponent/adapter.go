@@ -14,6 +14,8 @@ import (
 // Resolver locates the combat component for a skill entity id. The entity
 // must already be locked by the caller (skill.Host methods run under the
 // Runtime lock inside a nest handler, which holds the entity locks).
+// 来源（含吸血）、目标和 buff 迁移目的实体都须在 Nest 声明目标或 Cast 动态纳入的范围内；
+// Resolver 只查已持锁对象，不自动上锁，也不替未 CaptureEntities 的实体建立 state 回滚快照。
 type Resolver interface {
 	CombatComponent(id skill.EntityID) (*CombatComponent, bool)
 }
@@ -124,7 +126,7 @@ func (adapter *HostAdapter) applyResource(command skill.ResourceCommand) (skill.
 	if !ok {
 		return skill.EffectResult{}, fmt.Errorf("combatcomponent: entity %d has no combat component", command.Target)
 	}
-	attribute, mapped := adapter.ResourceAttribute("", command.Resource)
+	attribute, mapped := adapter.resourceAttribute("", command.Resource)
 	if !mapped {
 		return skill.EffectResult{}, fmt.Errorf("combatcomponent: resource handle %d has no attribute mapping", command.Resource)
 	}
@@ -167,8 +169,30 @@ func saturatingAttributeAdd(left, right int64) int64 {
 }
 
 func (adapter *HostAdapter) applyDamage(command skill.DamageCommand) (skill.EffectResult, error) {
+	if policy := adapter.Catalog.Combat.FormulaPolicy; policy != "" && policy != "twelve_stage_v1" {
+		return skill.EffectResult{}, skill.ErrCombatPolicyUnsupported
+	}
+	if types := adapter.Catalog.Combat.DamageTypes; len(types) > 0 {
+		valid := false
+		for _, handle := range types {
+			valid = valid || handle == command.DamageType
+		}
+		if !valid {
+			return skill.EffectResult{}, skill.ErrCombatHandleInvalid
+		}
+	}
+	if entries := adapter.Catalog.Elements.Entries; len(entries) > 0 {
+		valid := false
+		for _, entry := range entries {
+			valid = valid || entry.Handle == command.Element
+		}
+		if !valid {
+			return skill.EffectResult{}, skill.ErrCombatHandleInvalid
+		}
+	}
+
 	target, ok := adapter.Resolver.CombatComponent(command.Target)
-	if !ok || !target.Combatant().Alive {
+	if !ok || !target.Combatant().Alive || target.Combatant().Health < 0 {
 		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: adapter.Revision.CurrentRevision()}, Payload: skill.DamageEffectResult{ResultOutcome: skill.ResultOutcome{FailureReason: skill.ExpectedFailureInvalidTarget}}}, nil
 	}
 	var source *CombatComponent
@@ -305,6 +329,7 @@ func (adapter *HostAdapter) readableAttribute(handle skill.AttributeHandle) bool
 }
 
 // Read answers attribute and resource reads from component state.
+// 资源读返回可支付的 base 池；属性读返回包含修饰的 Current，两者不能混用。
 // handled=false means the payload is not a combat read.
 func (adapter *HostAdapter) Read(request skill.ReadRequest) (skill.ReadResult, bool, error) {
 	switch payload := request.Payload.(type) {
@@ -323,11 +348,11 @@ func (adapter *HostAdapter) Read(request skill.ReadRequest) (skill.ReadResult, b
 		if !ok {
 			return skill.ReadResult{}, true, fmt.Errorf("combatcomponent: entity %d has no combat component", payload.Entity)
 		}
-		attribute, mapped := adapter.ResourceAttribute(payload.Resource, 0)
+		attribute, mapped := adapter.resourceAttribute(payload.Resource, 0)
 		if !mapped {
 			return skill.ReadResult{}, true, fmt.Errorf("combatcomponent: resource %q has no attribute mapping", payload.Resource)
 		}
-		return skill.ReadResult{Meta: skill.QueryResultMeta{Revision: adapter.Revision.CurrentRevision()}, Value: skill.ResourceRuntimeValue(component.AttributeCurrent(attribute))}, true, nil
+		return skill.ReadResult{Meta: skill.QueryResultMeta{Revision: adapter.Revision.CurrentRevision()}, Value: skill.ResourceRuntimeValue(component.AttributeBase(attribute))}, true, nil
 	}
 	return skill.ReadResult{}, false, nil
 }
@@ -354,7 +379,7 @@ func (adapter *HostAdapter) PayCosts(payment skill.CostPayment) (skill.CommitRec
 		if entry.Amount < 0 {
 			return skill.CommitReceipt{}, fmt.Errorf("combatcomponent: negative cost")
 		}
-		attribute, mapped := adapter.ResourceAttribute(entry.Resource, entry.Handle)
+		attribute, mapped := adapter.resourceAttribute(entry.Resource, entry.Handle)
 		if !mapped {
 			return skill.CommitReceipt{}, fmt.Errorf("combatcomponent: resource %q has no attribute mapping", entry.Resource)
 		}
@@ -393,4 +418,12 @@ func containsTagHandle(tags []skill.GameplayTagHandle, want skill.GameplayTagHan
 		}
 	}
 	return false
+}
+
+// 未提供资源映射就不支持资源操作，声明与执行使用同一个边界。
+func (adapter *HostAdapter) resourceAttribute(name string, handle skill.ResourceHandle) (combat.AttributeID, bool) {
+	if adapter.ResourceAttribute == nil {
+		return 0, false
+	}
+	return adapter.ResourceAttribute(name, handle)
 }

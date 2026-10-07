@@ -332,24 +332,28 @@ func (component *CombatComponent) HasBuffTag(tag combat.Tag) bool {
 // covers it and nothing is recorded. Outside a transaction it panics before
 // anything changes.
 func (dao *CombatDao) beginChange(mask uint64) {
-	if nest.CurrentRollbackTx() == nil {
+	tx := nest.CurrentRollbackTx()
+	if tx == nil {
 		panic(fmt.Errorf("combatcomponent: persistence mutation outside transaction: %w", nest.ErrTransactionClosed))
 	}
-	if mask&FieldVitals != 0 {
+	if tx.Policy() != nest.RollbackUndo {
+		return
+	}
+	if mask&FieldVitals != 0 && !tx.HasUndo(dao, FieldVitals) {
 		before := dao.combatant
 		nest.RecordUndo(dao, FieldVitals, func() error {
 			dao.combatant = before
 			return nil
 		})
 	}
-	if mask&FieldAttributes != 0 {
+	if mask&FieldAttributes != 0 && !tx.HasUndo(dao, FieldAttributes) {
 		before := dao.attributes.BaseState()
 		nest.RecordUndo(dao, FieldAttributes, func() error {
 			dao.attributes.RestoreBase(before)
 			return nil
 		})
 	}
-	if mask&FieldBuffs != 0 {
+	if mask&FieldBuffs != 0 && !tx.HasUndo(dao, FieldBuffs) {
 		before := dao.buffs.State()
 		nest.RecordUndo(dao, FieldBuffs, func() error {
 			// Revoke the grants of whatever is active now, then rebuild the
@@ -408,7 +412,7 @@ func (component *CombatComponent) SetAttributeBounds(id combat.AttributeID, boun
 func (component *CombatComponent) ApplyBuff(spec combat.BuffSpec, tick, source int64) (combat.BuffInstanceID, combat.BuffApplyOutcome) {
 	component.dao.beginChange(FieldBuffs)
 	id, outcome := component.dao.buffs.Apply(spec, tick, source)
-	if outcome != combat.BuffBlockedImmune {
+	if outcome != combat.BuffBlockedImmune && outcome != combat.BuffIgnored {
 		component.dao.markChanged(FieldBuffs)
 		component.deriveProjection()
 	}
@@ -469,6 +473,8 @@ func (component *CombatComponent) DispelBuffs(tag combat.Tag, limit int) []comba
 }
 
 // TickBuffs expires due buffs and returns them.
+// 由业务的 Nest 心跳/定时 handler 在实体锁内调用，now 与 StatusBridge.CurrentTick 同源。
+// Runtime.Advance 不自动推进此 DAO 的 buff；重启后首次业务 tick 也需执行以清理过期记录。
 func (component *CombatComponent) TickBuffs(now int64) []combat.BuffInstance {
 	component.dao.beginChange(FieldBuffs)
 	expired := component.dao.buffs.Tick(now)
@@ -486,6 +492,7 @@ func (component *CombatComponent) TickBuffs(now int64) []combat.BuffInstance {
 // nothing is re-projected.
 func (component *CombatComponent) ApplyDamage(source *CombatComponent, input combat.DamageInput, hooks combat.Hooks) (combat.DamageOutcome, bool) {
 	component.dao.beginChange(FieldVitals)
+	before := component.dao.combatant
 	var sourceCombatant *combat.Combatant
 	if source != nil {
 		source.dao.beginChange(FieldVitals)
@@ -495,7 +502,9 @@ func (component *CombatComponent) ApplyDamage(source *CombatComponent, input com
 	if !ok {
 		return outcome, false
 	}
-	component.dao.markChanged(FieldVitals)
+	if after := component.dao.combatant; after.Health != before.Health || after.Shield != before.Shield || after.Alive != before.Alive || after.SpellShield != before.SpellShield {
+		component.dao.markChanged(FieldVitals)
+	}
 	if source != nil && outcome.VampHeal > 0 {
 		source.dao.markChanged(FieldVitals)
 	}

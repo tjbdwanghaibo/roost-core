@@ -156,20 +156,20 @@ func (container *BuffContainer) Apply(spec BuffSpec, tick, source int64) (BuffIn
 		case BuffIgnore:
 			return instance.Instance, BuffIgnored
 		case BuffExtend:
-			if duration > 0 {
-				if instance.DueTick == 0 {
-					instance.DueTick = saturatingInt64Add(tick, duration)
-				} else {
-					instance.DueTick = saturatingInt64Add(instance.DueTick, duration)
-				}
+			if duration == 0 {
+				instance.DueTick = 0
+			} else if instance.DueTick != 0 {
+				instance.DueTick = saturatingInt64Add(instance.DueTick, duration)
 			}
 		default: // BuffRefresh
+			instance.DueTick = 0
 			if duration > 0 {
 				instance.DueTick = saturatingInt64Add(tick, duration)
 			}
 		}
 		outcome := BuffRefreshed
 		maxStacks := maxInt64(spec.MaxStacks, 1)
+		instance.Stacks = minInt64(instance.Stacks, maxStacks)
 		if instance.Stacks < maxStacks {
 			instance.Stacks++
 			outcome = BuffStacked

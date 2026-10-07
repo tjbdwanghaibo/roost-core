@@ -55,7 +55,7 @@ func TestCombatRollbackIsTheDaoRollback(t *testing.T) {
 					defenderEntity.component.InitCombatant(combat.Combatant{Alive: true, Health: 100, MaxHealth: 100, Armor: 30})
 					defenderEntity.component.SetAttributeBase(1, 100)
 					defenderEntity.component.ApplyBuff(combat.BuffSpec{ID: 7, Tags: []combat.Tag{"magic"}, DurationTicks: 50, Modifiers: []combat.Modifier{{Attribute: 1, Flat: 25}}}, 0, attackerID)
-					attackerEntity.component.InitCombatant(combat.Combatant{Alive: true, Health: 80, MaxHealth: 80, VampBP: 5000})
+					attackerEntity.component.InitCombatant(combat.Combatant{Alive: true, Health: 40, MaxHealth: 80, VampBP: 5000})
 					return nil, nil
 				}
 				if _, err := runCombatHandler(t, getter, meta, acceptingCombatCommitter{}, "combat_seed", seed, defenderID, attackerID); err != nil {
@@ -70,9 +70,11 @@ func TestCombatRollbackIsTheDaoRollback(t *testing.T) {
 					defenderEntity := es[0].(*combatTestEntity)
 					attackerEntity := es[1].(*combatTestEntity)
 					outcome, ok := defenderEntity.component.ApplyDamage(attackerEntity.component, combat.DamageInput{Amount: 40, Type: combat.DamageTypePhysical}, nil)
-					if !ok || outcome.HealthDamage == 0 {
+					if !ok || outcome.HealthDamage == 0 || outcome.VampHeal == 0 {
 						return nil, errors.New("damage did not land")
 					}
+					// 迁移/复制的目的实体与吸血来源都在 RequestMulti 的声明目标中。
+					attackerEntity.component.AdoptBuff(defenderEntity.component.ActiveBuffs()[0])
 					defenderEntity.component.SetAttributeBase(1, 5)
 					defenderEntity.component.DispelBuffs("magic", 0)
 					defenderEntity.component.ApplyBuff(combat.BuffSpec{ID: 8, DurationTicks: 10}, 1, 0)

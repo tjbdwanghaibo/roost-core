@@ -95,7 +95,7 @@ func (host *MemoryHost) applyDamageLocked(command DamageCommand) (EffectResult, 
 		return EffectResult{}, ErrCombatHandleInvalid
 	}
 	target, ok := host.entities[command.Target]
-	if !ok || !target.Alive {
+	if !ok || !target.Alive || target.Health < 0 {
 		return EffectResult{Commit: CommitReceipt{Revision: host.revision}, Payload: DamageEffectResult{ResultOutcome: failedResultOutcome(ExpectedFailureInvalidTarget)}}, nil
 	}
 	source := MemoryEntity{}

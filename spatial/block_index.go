@@ -90,6 +90,8 @@ func (i *BlockIndex) BlockRect(index int64) Rect {
 	return rect
 }
 
+// Add 在指定块登记 ID；同一对象可以覆盖多个块，查询会做并集去重。
+// Remove / Move 只操作给定块，点实体的唯一位置由上层 AOI 管理。
 func (i *BlockIndex) Add(id int64, point Point) bool {
 	block := i.blockAt(i.BlockIndex(point))
 	if block == nil || id == 0 {

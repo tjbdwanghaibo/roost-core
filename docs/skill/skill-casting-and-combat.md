@@ -182,7 +182,7 @@ crit := combat.ChanceRoll(matchSeed, "crit", critChanceBP,
 - `CombatDao`：持有全部战斗状态，实现 `entity.DaoInterface` + `dataengine.Tracker` 契约 + `entity.PersistedDaoLoader`（BSON + schema 版本）与 nest 状态回滚接口；undo 策略下由 DAO 自己按字段掩码（vitals / attributes / buffs）登记逆操作并标脏，与生成 DAO 的 setter 同形。
 - `CombatComponent`：只持有 DAO，全部 mutator 经 DAO 改状态，自己不登记 undo（回滚统一走 DAO，[A1](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）——handler 失败或提交被拒后，两种回滚策略下实体字节一致。
 - **Runtime 不在事务里**（维护者决定 B4，见上文“Runtime 不在事务里（B4）”）：Nest 回滚只撤回 DAO；`skill.Runtime` 自己的状态不回退。
-- `HostAdapter`：实现 `skill.Host` 的战斗面（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepSpawn`/空间查询/召唤物仍由业务 Host 实现。`HostAdapter.HostCapabilities()` 声明它负责的那部分 Host 能力表（Catalog 里可读的属性、`ResourceAttribute` 映射到的资源、四种资源 operation，接了 `Status` 再加 add / mul_bp 修正）；业务把自己负责的部分（衍生物 kind、motion 步骤、召唤物）用 `skill.MergeHostCapabilities` 合进来声明。Catalog 外或不可读的属性读取返回 `skill.ErrHostCapabilityMissing`（以前读出 0）。见 [B3 ③ 方案](../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)。
+- `HostAdapter`：提供业务 Host 可委托的战斗面（自身不实现完整 `skill.Host`，Apply/Read 返回 handled 供业务路由）（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepSpawn`/空间查询/召唤物仍由业务 Host 实现。`HostAdapter.HostCapabilities()` 声明它负责的那部分 Host 能力表（Catalog 里可读的属性、`ResourceAttribute` 映射到的资源、四种资源 operation，接了 `Status` 再加 add / mul_bp 修正）；业务把自己负责的部分（衍生物 kind、motion 步骤、召唤物）用 `skill.MergeHostCapabilities` 合进来声明。Catalog 外或不可读的属性读取返回 `skill.ErrHostCapabilityMissing`（以前读出 0）。见 [B3 ③ 方案](../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)。
 
 ### 属性投影（O2，v1.23.0）
 
@@ -213,3 +213,11 @@ component.ProjectAttributes(projectCombat)
 - **投影函数的约束**：纯函数，只读传入的属性、只写由属性决定的字段（Armor、MagicResistance、Penetration、各 `*BP`、`MaxHealth` 等），不要改 `Health` / `Shield` / `Alive` 这类战斗过程状态；被投影的字段以投影为准，`InitCombatant` 里给的值会被覆盖。
 - 完整可运行示例：`skill/examples/statusbridge`（破甲 status 让护甲 40 → 20，伤害随之变化，驱散后恢复）。
 
+
+## B2 接入契约更正（2026-10-07）
+
+- `ChanceRoll` 只返回确定性布尔值，不替 Host 注入本次伤害。Combatant 的 Dodge/ForceCritical 是持久 vitals，写一次会影响后续全部伤害；业务需要每伤害坐标重新计算，在本次结算结束后恢复临时事实，或以本次调用专属 `combat.Hooks` 实现暴击覆盖。statusbridge 示例恢复 ForceCritical 时读取结算后的 vitals，避免覆盖吸血等变化。HostAdapter 本身不提供每次概率注入器。
+- `TickBuffs(now)` 由业务的 Nest 心跳/定时 handler 在实体锁内驱动；now 必须和 StatusBridge.CurrentTick 使用同一业务 tick。Runtime.Advance 不会扫描其他 DAO。掉线/重启后的首次推进也应清理过期 buff；该调用产生的持久和 Sync 脏位跟随本次事务提交。
+- state 回滚只覆盖已声明并由 Nest 捕获的实体。伤害来源（含吸血）、目标、copy/transfer 的目的实体必须一并通过 RequestMulti 的目标或 Cast 动态纳入事务。Resolver 只返回已持锁对象，不是随意获取跨实体对象的入口；绕开这条约束的 DAO 不承诺 state 回滚。正式两种策略 × handler 错误/提交拒绝回归验证了真实吸血和 AdoptBuff 目的实体恢复，不能把该测试解释成未捕获对象也有保护。
+- ResourceRead/PayCosts/ResourceCommand 都使用映射属性的 base 作为可支付资源池；AttributeRead 读取包含 buff 的 Current。资源修饰不会凭空制造可消费余额。
+- 属性修饰聚合使用精确整数桶，撤销可逆、与施加顺序无关；Current 进入固定点公式时钳位。持续时间 0 表示永久，refresh 永久实例不转成 1 tick；重施永久规格清除旧到期，层数按新上限钳位。

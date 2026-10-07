@@ -397,3 +397,5 @@ roost-skill/skill  ←  roost-skill/combat（零依赖，可单独使用）
 ## License
 
 见 [LICENSE](../LICENSE)。
+
+战斗接入边界：TickBuffs 由业务 Nest tick 驱动；ChanceRoll 不自动覆盖 Host 的持久 vitals；资源读取是可消费 base 池。见 [接入契约](../docs/skill/skill-casting-and-combat.md#b2-接入契约更正2026-10-07)。
