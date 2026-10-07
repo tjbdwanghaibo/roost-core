@@ -147,16 +147,15 @@ func (g *Group) releaseSubject(id int64) error {
 
 // Join makes a session a member: it receives every subject in the group. The
 // session must already be open with the manager.
+// 重复 Join 保留成员关系并重新提交订阅，用于 Manager 丢会话后重开。
 func (g *Group) Join(member int64) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed {
 		return ErrGroupClosed
 	}
-	if _, present := g.members[member]; present {
-		return ErrGroupMemberPresent
-	}
-	if g.config.MaxMembers > 0 && len(g.members) >= g.config.MaxMembers {
+	_, present := g.members[member]
+	if !present && g.config.MaxMembers > 0 && len(g.members) >= g.config.MaxMembers {
 		return ErrGroupMemberLimit
 	}
 	session := g.session(member)
@@ -167,8 +166,10 @@ func (g *Group) Join(member int64) error {
 		}
 	}
 	if err := errors.Join(errs...); err != nil {
-		for id := range g.subjects {
-			_ = g.subscriptions.Unsubscribe(session, id)
+		if !present {
+			for id := range g.subjects {
+				_ = g.subscriptions.Unsubscribe(session, id)
+			}
 		}
 		return err
 	}

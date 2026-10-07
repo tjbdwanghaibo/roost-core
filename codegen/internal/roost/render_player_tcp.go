@@ -119,6 +119,8 @@ import (
 	"log/slog"
 	"maps"
 	"net"
+ "math"
+ "golang.org/x/time/rate"
 	"os"
 	"runtime/debug"
 	"sync"
@@ -164,7 +166,8 @@ var (
 
 // Wire format (network byte order): magic[2], version[1], flags[1],
 // message_id[4], sequence[4], payload_length[4], payload. Message ID 0 is the
-// authentication handshake; all business messages require a non-zero ID.
+// authentication handshake before authentication, and an empty heartbeat after it.
+// Heartbeats receive an empty ACK with the same sequence; all business messages require a non-zero ID.
 // flags bit0 is push; bits1..2 select PB=0, Sync=1, Lockstep=2 (reserved).
 // The shared wire codec rejects unsupported kinds before payload allocation.
 type frame struct {
@@ -175,6 +178,9 @@ type frame struct {
 }
 
 type Config struct {
+ HeartbeatEnabled bool
+ RequestRate float64
+ RequestBurst int
 	Enabled bool
 	Addr string
 	MaxConnections int
@@ -207,6 +213,7 @@ const (
 func defaultConfig() Config {
 	return Config{
 		Addr: "0.0.0.0:7000", MaxConnections: 10000,
+ HeartbeatEnabled:true,RequestRate:100,RequestBurst:200,
 		MaxConnectionsPerIP: 128, MaxHandshakes: 1024, MaxHandshakeBytes: 8 << 10,
 		MaxPayloadBytes: 1 << 20, HandshakeTimeout: 5 * time.Second,
 		IdleTimeout: 90 * time.Second, WriteTimeout: 5 * time.Second,
@@ -232,6 +239,7 @@ func configFromViper(cfg *viper.Viper) (Config, error) {
 	tcp := settings.TCP
 	result := Config{
 		Enabled: tcp.Enabled, Addr: tcp.Addr, MaxConnections: tcp.MaxConnections,
+ HeartbeatEnabled:tcp.HeartbeatEnabled,RequestRate:tcp.RequestRate,RequestBurst:tcp.RequestBurst,
 		MaxConnectionsPerIP: tcp.MaxConnectionsPerIP, MaxHandshakes: tcp.MaxHandshakes,
 		MaxHandshakeBytes: tcp.MaxHandshakeBytes, MaxPayloadBytes: tcp.MaxPayloadBytes,
 		HandshakeTimeout: tcp.HandshakeTimeout, IdleTimeout: tcp.IdleTimeout, WriteTimeout: tcp.WriteTimeout,
@@ -268,7 +276,9 @@ func validateConfig(result Config) error {
 	} else if _, _, err := net.SplitHostPort(result.Addr); err != nil {
 		refuse("%%saddr = %%q is not host:port: %%w", key, result.Addr, err)
 	}
-	connectionsValid := result.MaxConnections > 0 && result.MaxConnections <= hardMaxConnections
+	if math.IsNaN(result.RequestRate) || math.IsInf(result.RequestRate,0) || result.RequestRate<0 || result.RequestRate>100000 {refuse("%%srequest_rate must be finite and in [0,100000]",key)}
+ if result.RequestBurst<1 || result.RequestBurst>100000 {refuse("%%srequest_burst must be in [1,100000]",key)}
+ connectionsValid := result.MaxConnections > 0 && result.MaxConnections <= hardMaxConnections
 	if !connectionsValid {
 		refuse("%%smax_connections = %%d is outside 1..%%d", key, result.MaxConnections, hardMaxConnections)
 	}
@@ -838,14 +848,25 @@ func (server *Server) serveConnection(connection net.Conn) {
 	server.registerSession(session)
 	defer server.unregisterSession(session)
 	lastSequence := authFrame.sequence
+ var limiter *rate.Limiter
+ if server.config.RequestRate>0 {limiter=rate.NewLimiter(rate.Limit(server.config.RequestRate),server.config.RequestBurst)}
 	for {
 		if err := connection.SetReadDeadline(time.Now().Add(server.config.IdleTimeout)); err != nil { return }
 		request, releasePayload, err := server.readFrame(connection)
 		if err != nil { if !errors.Is(err, io.EOF) { metrics.IncCounter("player_tcp_frame_error_total", nil, 1) }; return }
-		if request.flags != 0 || request.messageID == 0 || request.sequence == 0 || int32(request.sequence-lastSequence) <= 0 {
+		if request.flags != 0 || request.sequence == 0 || int32(request.sequence-lastSequence) <= 0 {
 			metrics.IncCounter("player_tcp_frame_error_total", nil, 1); releasePayload(); return
 		}
 		lastSequence = request.sequence
+        // 心跳也消耗令牌，防止保活帧绕过每连接限流；同一读循环内保持顺序。
+        if limiter!=nil && !limiter.Allow() {metrics.IncCounter("player_tcp_rate_limited_total",nil,1);releasePayload();return}
+        if request.messageID==0 {
+            valid:=server.config.HeartbeatEnabled && len(request.payload)==0
+            releasePayload()
+            if !valid {metrics.IncCounter("player_tcp_frame_error_total",nil,1);return}
+            if err:=session.writeFrame(connectionCtx,0,0,request.sequence,nil);err!=nil{return}
+            continue
+        }
 		// One request, one deadline (RR-20260926-36). Without it a handler
 		// waiting on something that never finishes — a cold load behind a
 		// projection that keeps failing — held this goroutine, this socket's
@@ -864,7 +885,7 @@ func (server *Server) serveConnection(connection net.Conn) {
 		if overBudget { metrics.IncCounter("player_tcp_dispatch_timeout_total", nil, 1) }
 		if dispatchErr != nil {
 			metrics.IncCounter("player_tcp_dispatch_error_total", nil, 1)
-			slog.Debug("player tcp dispatch failed", "player_id", principal.PlayerID, "message_id", request.messageID, "sequence", request.sequence, "over_budget", overBudget, "err", dispatchErr)
+			slog.Warn("player tcp dispatch failed", "player_id", principal.PlayerID, "message_id", request.messageID, "sequence", request.sequence, "over_budget", overBudget, "err", dispatchErr)
 			return
 		}
 		// The answer goes out on the connection's context, not the request's:
@@ -1169,7 +1190,9 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+ "fmt"
 	"net"
+ "log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -1182,6 +1205,40 @@ import (
 	accessplayer %q
 	%q
 )
+
+func TestHeartbeatKeepsAuthenticatedPushConnectionAlive(t *testing.T){
+ server:=dispatchServer(t,"1s",func(*player_agent.Context,string)(string,error){t.Error("heartbeat entered business handler");return "",nil},func(c *Config){c.IdleTimeout=300*time.Millisecond})
+ conn:=dialAuthenticated(t,server,"heartbeat")
+ client:=&session{connection:conn,writeTimeout:time.Second}
+ for seq:=uint32(2);seq<=5;seq++{
+ time.Sleep(100*time.Millisecond)
+  if err:=client.writeFrame(context.Background(),0,0,seq,nil);err!=nil{t.Fatal(err)}
+  ack,release,err:=server.readFrame(conn);if err!=nil{t.Fatalf("authenticated heartbeat was disconnected: %%v",err)};release()
+  if ack.messageID!=0 || ack.sequence!=seq || len(ack.payload)!=0 {t.Fatalf("heartbeat ack: %%+v",ack)}
+ }
+ if _,release,err:=server.readFrame(conn);err==nil {release();t.Fatal("silent connection survived idle timeout")}
+}
+func TestHandlerPanicHasErrorLevelStack(t *testing.T){
+ var logs bytes.Buffer;old:=slog.Default();slog.SetDefault(slog.New(slog.NewTextHandler(&logs,&slog.HandlerOptions{Level:slog.LevelInfo})));defer slog.SetDefault(old)
+ wrapped:=player_agent.RecoverMiddleware(func(*player_agent.Context,any)(any,error){panic("b6 handler failure")})
+ _,err:=wrapped(&player_agent.Context{PlayerID:7,MsgID:11,Seq:12},nil);if err==nil{t.Fatal("panic not recovered")}
+ got:=logs.String();if !strings.Contains(got,"level=ERROR") || !strings.Contains(got,"stack=") || !strings.Contains(got,"TestHandlerPanicHasErrorLevelStack") {t.Fatalf("panic lacks visible stack: %%s",got)}
+}
+
+func TestPerConnectionTokenBucketIncludesHeartbeats(t *testing.T){
+ for _,enabled:=range []bool{true,false} {t.Run(fmt.Sprint(enabled),func(t *testing.T){
+  server:=dispatchServer(t,"1s",func(*player_agent.Context,string)(string,error){return "ok",nil},func(c *Config){c.RequestRate=0;if enabled{c.RequestRate=0.01};c.RequestBurst=2})
+  for _,token:=range []string{"rate-a","rate-b"}{
+   conn:=dialAuthenticated(t,server,token);client:=&session{connection:conn,writeTimeout:time.Second}
+   for seq:=uint32(2);seq<=4;seq++{
+    if err:=client.writeFrame(context.Background(),0,0,seq,nil);err!=nil{t.Fatal(err)}
+    _,release,err:=server.readFrame(conn);release()
+    if enabled && seq==4 {if err==nil{t.Fatal("third heartbeat exceeded burst but was accepted")}}else if err!=nil{t.Fatalf("new connection or disabled limit refused: %%v",err)}
+   }
+   _=conn.Close()
+  }
+ })}
+}
 
 func TestFrameRoundTrip(t *testing.T) {
 	client, serverConnection := net.Pipe()
@@ -1456,7 +1513,7 @@ func stuckDispatchServer(t *testing.T, dispatchTimeout string) (*Server, <-chan 
 
 // dispatchServer is a started server on loopback whose one request type
 // (stuckRequestID) runs handler under the given dispatch budget.
-func dispatchServer(t *testing.T, dispatchTimeout string, handler func(*player_agent.Context, string) (string, error)) *Server {
+func dispatchServer(t *testing.T, dispatchTimeout string, handler func(*player_agent.Context, string) (string, error), configure ...func(*Config)) *Server {
 	t.Helper()
 	cfg := viper.New()
 	cfg.Set("player_access.tcp.addr", "127.0.0.1:0")
@@ -1470,7 +1527,8 @@ func dispatchServer(t *testing.T, dispatchTimeout string, handler func(*player_a
 		func(value string) ([]byte, error) { return []byte(value), nil },
 		handler); err != nil { t.Fatal(err) }
 	if err := protocols.Seal(); err != nil { t.Fatal(err) }
-	server, err := NewServer(config, &accessplayer.Runtime{Protocols: protocols}, AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
+	for _,option:=range configure {option(&config)}
+ server, err := NewServer(config, &accessplayer.Runtime{Protocols: protocols}, AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
 		return gateway.Principal{PlayerID: 7, SessionID: token}, nil
 	}))
 	if err != nil { t.Fatal(err) }

@@ -689,3 +689,7 @@ B3 验收完成（2026-10-08）：RR-20261008-01～14；全仓 build/vet/test（
 B3 已提交 b01f7e66；远端 RS v2/C# 合并 0dff3676（CHANGELOG 冲突保留双方全部记录并逐行核对）。B4 RR-20261008-15～21 已实施，目标 13 包 race、tablegen 实际生成运行、开关回滚红绿通过；全仓和新的 game-demo 正在验收。所有红日志已保留 /tmp，提交前复制主检出 artifacts。B6/B7/B8 待处理，Remote 唯一 publisher 产品选择仍待回复，不据此阻塞已授权批次。
 
 B4 最终验收：全仓 build/vet/test 131 包通过，生成 game-demo build/vet/test（19 个测试包）通过；13 个目标包 race 和最终 timer race 通过。定时器加载只标记待清理，实际删除在正常 Tick 事务中完成，生成工程覆盖失败回滚和成功提交。B6～B8 继续；未推送/发布。
+
+B6 2026-10-08：RR-20261008-22～24、26～28 已实施；本地 cache/policy/kit-nest race、生成 TCP 与 Game race，以及重新生成工程 build/vet/test 通过。RR-25 候选代码本地 race 通过，配置次数上限因自动审批拒绝而向维护者确认；仍需真实 broker 验证。B7/B8 继续，不标全部完成。
+
+B6 当前树全仓 build/vet/test（131 个测试包）与生成项目 build/vet/test（19 个测试包）通过。RR-25 仍是候选状态，测试通过不替代配置变更授权和真实 broker 证据。

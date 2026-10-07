@@ -97,7 +97,7 @@ func TestLayeredStoreReadsThroughAfterTTL(t *testing.T) {
 
 func TestReplicaSyncerAppliesUpdate(t *testing.T) {
 	bus := newFakeSyncBus()
-	store := NewLocalStore[int64, testItem](testItemConfig())
+	store := NewReplicaLocalStore[int64, testItem](testItemConfig(), func(v testItem) int64 { return v.Version }, 10000)
 	syncer := NewReplicaSyncer[int64, testItem](bus, ReplicaConfig[int64, testItem]{
 		Store:       store,
 		Topic:       "test",

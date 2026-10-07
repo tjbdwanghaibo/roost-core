@@ -223,6 +223,9 @@ func (m *Mod) Provide(registry *app.Registry) error {
 	}
 	if healthRegistry, ok := app.Lookup[*health.Registry](registry, mods.ModHealth); ok && healthRegistry != nil {
 		healthRegistry.Register("nest", health.CheckerFunc(m.checkHealth))
+		if m.entitySync != nil {
+			healthRegistry.Register("entitysync", m.entitySync)
+		}
 	}
 	return nil
 }

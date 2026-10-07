@@ -18,7 +18,7 @@ type blockingItemStore struct {
 	entered, release, returned chan struct{}
 }
 
-func (s blockingItemStore) Set(context.Context, testItem) error {
+func (s blockingItemStore) ApplyReplicaValue(context.Context, int64, testItem, int64, bool) error {
 	close(s.entered)
 	<-s.release
 	close(s.returned)
@@ -28,11 +28,11 @@ func (s blockingItemStore) Set(context.Context, testItem) error {
 func TestReplicaSyncerStopWaitsForInFlightStoreWrite(t *testing.T) {
 	bus := newFakeSyncBus()
 	store := blockingItemStore{entered: make(chan struct{}), release: make(chan struct{}), returned: make(chan struct{})}
-	s := NewReplicaSyncer(bus, ReplicaConfig[int64, testItem]{Store: store, Topic: "items", KeyOf: func(v testItem) int64 { return v.ID }})
+	s := NewReplicaSyncer(bus, ReplicaConfig[int64, testItem]{Store: store, Topic: "items", KeyOf: func(v testItem) int64 { return v.ID }, VersionOf: func(v testItem) int64 { return v.Version }, DeleteKeyOf: func(k int64) int64 { return k }})
 	if err := s.Start(); err != nil {
 		t.Fatal(err)
 	}
-	payload, _ := json.Marshal(testItem{ID: 7})
+	payload, _ := json.Marshal(testItem{ID: 7, Version: 1})
 	raw, _ := json.Marshal(mirror.Envelope{Key: 7, Version: 1, Op: mirror.OpUpsert, Payload: payload})
 	sub := bus.handlers["items"][0]
 	go func() {

@@ -108,3 +108,7 @@ B3 验收完成（2026-10-08）：RR-20261008-01～14；全仓 build/vet/test（
 ### B4 验收完成（2026-10-08）
 
 B3 已提交 b01f7e66；远端 RS v2/C# 合并 0dff3676（CHANGELOG 冲突保留双方全部记录并逐行核对）。B4 RR-20261008-15～21 已实施，目标 13 包 race、tablegen 实际生成运行、开关回滚红绿通过；全仓 build/vet/test（131 包）通过，重新生成 game-demo 的 build/vet/test（19 个测试包）通过，含定时器清理提交/回滚和开关监听回滚。最终 timer race 通过；所有红绿日志已复制主检出 artifacts/perf/remaining-fixes-20261007/。B6/B7/B8 待处理，Remote 唯一 publisher 产品选择仍待回复，不据此阻塞已授权批次。
+
+### B6 进行中（2026-10-08）
+
+B4 提交 50526a2c。B6 RR-22/23/24/26/27/28 已实施，cache/policy/kit-nest 和生成 TCP/Game race 通过，生成完整工程 build/vet/test 通过。RR-25 本地候选修复通过 race；取消消费者投递次数上限的配置整理被自动审批拒绝，已请求维护者确认有延迟、受流保留期/容量限制的空窗重投方案，不改业务错误 ACK 与 RPC/Remote 策略。真实 broker 验证尚未完成。B7 观测缺陷已开始红绿，B8待处理。

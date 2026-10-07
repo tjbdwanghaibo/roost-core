@@ -221,3 +221,5 @@ Grafana 总览面板见 [observability/grafana-roost-overview.json](observabilit
 ### 业务时间高水位
 
 `app.business_time.advance_failed.total`（Prometheus `app_business_time_advance_failed_total`）记录推进协调存储高水位失败，排查连接与协调存储；不能把业务时间守卫故障当作普通时间漂移忽略。
+
+玩家 TCP 接入：`player_tcp_rate_limited_total`（无标签 Counter）记录每连接令牌桶拒绝并断开的次数；默认每秒 100 请求、突发 200，心跳也消耗令牌。`request_rate: 0` 显式关闭限流。鉴权后空载荷 MsgID=0 是心跳，仍受序列检查和 idle_timeout 约束。

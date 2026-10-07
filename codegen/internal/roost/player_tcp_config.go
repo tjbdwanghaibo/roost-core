@@ -43,6 +43,9 @@ func renderPlayerAccessDeclaration() string {
 // (TestPlayerTCPDeclarationAgreesWithKit).
 type playerTCPDeclaration struct {
 	TCP struct {
+		HeartbeatEnabled    bool          `config:"heartbeat_enabled" default:"true" example:"true" help:"鉴权后接受 RS v2 MsgID=0 空载荷心跳并回 ACK；客户端间隔应小于 idle_timeout。"`
+		RequestRate         float64       `config:"request_rate" default:"100" example:"100" min:"0" max:"100000" help:"每连接每秒令牌数，包含心跳；0 显式关闭限流。"`
+		RequestBurst        int           `config:"request_burst" default:"200" example:"200" min:"1" max:"100000" help:"每连接最大突发请求数，超出后断开。"`
 		Enabled             bool          `config:"enabled" example:"false" help:"The listener stays off until auth.go is implemented and roost config enable player-tcp succeeds."`
 		Addr                string        `config:"addr" default:"0.0.0.0:7000" example:"0.0.0.0:7000"`
 		MaxConnections      int           `config:"max_connections" default:"10000" example:"10000"`
@@ -54,8 +57,8 @@ type playerTCPDeclaration struct {
 		IdleTimeout         time.Duration `config:"idle_timeout" default:"90s" example:"90s"`
 		WriteTimeout        time.Duration `config:"write_timeout" default:"5s" example:"5s"`
 		ShutdownTimeout     time.Duration `config:"shutdown_timeout" default:"10s" example:"10s" help:"The generated Mod declares it as its stop budget and the generated shutdown.total_timeout counts it (RR-20260927-05)."`
-		DispatchTimeout     time.Duration `config:"dispatch_timeout" example:"3s" help:"Bound of one request; unset or 0 follows nest.request_timeout (RR-20260926-36)."`
-		LoginTimeout        time.Duration `config:"login_timeout" example:"2s" help:"Share of the dispatch budget a login gives to claim + cold load; unset or 0 is min(2s, dispatch_timeout)."`
+		DispatchTimeout     time.Duration `config:"dispatch_timeout" example:"0s" help:"Bound of one request; unset or 0 follows nest.request_timeout (RR-20260926-36)."`
+		LoginTimeout        time.Duration `config:"login_timeout" example:"0s" help:"Share of the dispatch budget a login gives to claim + cold load; unset or 0 is min(2s, dispatch_timeout)."`
 	} `config:"player_access.tcp"`
 	Nest struct {
 		RequestTimeout time.Duration `config:"request_timeout" min:"0" example:"3s"`
@@ -221,33 +224,9 @@ func mergePlayerTCPConfig(text, name string, enabled bool) (string, error) {
 	return text, nil
 }
 
-// playerTCPDefaultsFor is playerTCPConfigDefaults for one service config: the
-// dispatch budget is written equal to that config's nest.request_timeout when
-// it has one, so a service whose Nest calls were given longer does not get a
-// transport deadline that cuts them off (RR-20260926-36). The login budget
-// stays at its default unless that would exceed the dispatch budget.
-func playerTCPDefaultsFor(document *yaml.Node) []struct{ key, value string } {
-	defaults := playerTCPConfigDefaults()
-	_, nestNode := yamlMappingEntry(document, "nest")
-	_, requestNode := yamlMappingEntry(nestNode, "request_timeout")
-	if requestNode == nil || requestNode.Kind != yaml.ScalarNode {
-		return defaults
-	}
-	request, err := time.ParseDuration(strings.TrimSpace(requestNode.Value))
-	if err != nil || request <= 0 {
-		return defaults
-	}
-	for index := range defaults {
-		switch defaults[index].key {
-		case "dispatch_timeout":
-			defaults[index].value = request.String()
-		case "login_timeout":
-			if login, err := time.ParseDuration(defaults[index].value); err == nil && login > request {
-				defaults[index].value = request.String()
-			}
-		}
-	}
-	return defaults
+// playerTCPDefaultsFor 保留 0 的运行时继承语义，后续调整 Nest 预算无需同步改 TCP。
+func playerTCPDefaultsFor(_ *yaml.Node) []struct{ key, value string } {
+	return playerTCPConfigDefaults()
 }
 
 func playerTCPBlock(indent int, defaults []struct{ key, value string }) string {

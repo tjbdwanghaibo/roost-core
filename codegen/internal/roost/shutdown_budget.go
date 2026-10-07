@@ -574,8 +574,8 @@ type shutdownSettings struct {
 // configuredDeclaredBudgets is the sum of the stop budgets the service's
 // declaring Mods take from one config, read the way each Mod reads its key:
 // dataengine.shutdown_timeout missing or non-positive is kit/dataengine's 30s
-// (RR-20260927-04); player_access.tcp.shutdown_timeout missing or 0 is the
-// generated Mod's 10s, and a negative one stops the Mod from starting
+// (RR-20260927-04); player_access.tcp.shutdown_timeout missing uses the
+// generated Mod's 10s; an explicit non-positive value stops the Mod from starting
 // (validateConfig), reported as an error (RR-20260927-05).
 func configuredDeclaredBudgets(plan serviceShutdown, settings shutdownSettings) (time.Duration, error) {
 	var declared time.Duration
@@ -599,7 +599,7 @@ func configuredDeclaredBudgets(plan serviceShutdown, settings shutdownSettings) 
 			return 0, fmt.Errorf("player_access.tcp.shutdown_timeout: %s is negative; the player tcp Mod refuses to start", value)
 		}
 		if value == 0 {
-			value = generatedPlayerTCPShutdownTimeout
+			return 0, fmt.Errorf("player_access.tcp.shutdown_timeout: explicit zero is invalid; the player tcp Mod refuses to start")
 		}
 		declared += value * time.Duration(plan.playerTCP)
 	}

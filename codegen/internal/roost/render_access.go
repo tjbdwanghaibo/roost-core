@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+ "log/slog"
+ "runtime/debug"
 
 	"github.com/tjbdwanghaibo/roost-core/gateway"
 )
@@ -95,6 +97,9 @@ func RecoverMiddleware(next HandlerFunc) HandlerFunc {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				err = fmt.Errorf("player access: handler panic: %v", recovered)
+ attrs:=[]any{"err",err,"stack",string(debug.Stack())}
+ if ctx!=nil {attrs=append(attrs,"player_id",ctx.PlayerID,"message_id",ctx.MsgID,"sequence",ctx.Seq)}
+ slog.Error("player access handler panic",attrs...)
 			}
 		}()
 		return next(ctx, request)

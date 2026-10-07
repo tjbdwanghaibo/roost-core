@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- B6 RR-20261008-22～24、26～28：接入 entitysync 健康检查、Group 重连恢复；缓存复制强制原子版本/删除水位 Store；TCP 心跳、默认令牌桶、panic 栈与配置预算继承。ReplicaSyncer 调用方须迁移到 ReplicaStore，旧通用 Store 启动拒绝；无线上数据兼容层。RR-25 的 JetStream 配置方向尚待确认，不计完成。
+
 - B4 RR-20261008-15～21：配置表缺省 JSON 名与 runtime 对齐，拒绝错误主键/单例多行；closed/YAML 路径/数值边界和重复诊断修正；热更失败恢复实际开关视图；异步 Nest 每次准入固定最新运行时代际；运维回滚撤回计数。
 - 业务服务缺省业务钟统一 clock.Now，account/chat 系统钟独立 time.Now；进程偏移保留 Duration 精度。非法持久 timer 加载只告警，NeedsCleanup 在正常 Tick 事务清理；World 已接线。新 timer 宿主需遵循此边界。
 

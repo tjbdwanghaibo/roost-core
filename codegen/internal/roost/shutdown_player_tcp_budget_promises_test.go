@@ -73,13 +73,13 @@ func TestDoctorCountsTheConfiguredPlayerTCPStopBudget(t *testing.T) {
 		t.Fatalf("player_access.tcp.shutdown_timeout 30s with total_timeout %s: %s %s, want a WARN with 60s declared and advice %s",
 			seconds(plan.total), item.Status, item.Detail, seconds(want))
 	}
-	// 0s is the Mod's 10s (configFromViper keeps the default for 0).
+	// 显式 0s 与缺失不同：运行时拒绝，doctor 必须同样拒绝。
 	root = newGameDemo(t)
 	for _, rel := range playerTCPConfigs {
 		setPlayerTCPShutdownTimeout(t, root, rel, "0s")
 	}
-	if item := shutdownStatus(t, root)["shutdown:game"]; item.Status != StatusOK {
-		t.Errorf("player_access.tcp.shutdown_timeout 0s (the Mod uses 10s): %s %s, want OK", item.Status, item.Detail)
+	if item := shutdownStatus(t, root)["shutdown:game"]; item.Status != StatusFail {
+		t.Errorf("player_access.tcp.shutdown_timeout 0s: %s %s, want FAIL", item.Status, item.Detail)
 	}
 }
 

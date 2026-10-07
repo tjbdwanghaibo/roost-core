@@ -904,3 +904,17 @@ ROOST_PERF_COUNT=2 ROOST_PERF_LABEL=sync-change-1 ./scripts/perf/sync-aoi.sh -mo
 | `demo/deploy/dev/observability/README.md.tmpl:17` | dispatch error 非零 = 端点把业务错误当 error 返回 | 还包括 WriteGate 拒绝、未知 id、解码失败、panic、ctx 取消 |
 
 → [说明文档](../guide/04-sync.md)对应：§7.3 已知限制、§8 相关文档。
+
+2026-10-08 F04-3：v1.23.1 已修复（未发布），见 [RR-20261008-22](../../bugfix/RR-20261008-22.md)。Nest Mod 在 Provide 注册持有的 Manager；正式生成 Scene 在 Service.Init 注册自己的 Manager 健康检查。
+
+2026-10-08 F04-4：v1.23.1 已修复（未发布），见 [RR-20261008-23](../../bugfix/RR-20261008-23.md)。Join 对已有成员幂等地重新提交订阅，新成员才占容量；重复 Join 失败不撤掉已有关系。
+
+2026-10-08 F04-16：v1.23.1 已修复（未发布），见 [RR-20261008-24](../../bugfix/RR-20261008-24.md)。ReplicaSyncer 启动强制身份提取器与 ReplicaStore 原子能力；ReplicaLocalStore 以一条记录保存值/删除水位，同版本删除优先。默认 10000 键，满时拒绝新键，不淘汰水位。
+
+2026-10-08 F04-14：候选修复，待确认，见 [RR-20261008-25](../../bugfix/RR-20261008-25.md)。每 topic 创建/关闭状态；网络创建不持全局锁，重订等旧 Closed；无接收者返回重投错误，停机取消创建并等待自持在途计数。候选消费者取消次数上限并使用延迟重投。
+
+2026-10-08 F04-11/F04-12：v1.23.1 已修复（未发布），见 [RR-20261008-26](../../bugfix/RR-20261008-26.md)。doctor 区分缺失和显式零；新生成 dispatch_timeout/login_timeout 为0s，由运行时统一继承/限制。
+
+2026-10-08 F04-10：v1.23.1 已修复（未发布），见 [RR-20261008-27](../../bugfix/RR-20261008-27.md)。RecoverMiddleware 在 Error 级记录 stack、player/message/sequence；TCP 派发错误提高到 Warn。内部错误和 WriteGate 拒绝仍断连，不把未知执行结果包装成成功业务包。
+
+2026-10-08 F04-13/D2：v1.23.1 已修复（未发布），见 [RR-20261008-28](../../bugfix/RR-20261008-28.md)。鉴权后 MsgID0+空载荷+flags0 的递增序号帧为心跳，返回同序号空 ACK；默认 heartbeat_enabled=true。令牌桶默认100次/秒、burst200，心跳也扣令牌，request_rate=0显式关闭。
