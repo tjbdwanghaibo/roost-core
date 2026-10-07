@@ -98,8 +98,11 @@ type Interest struct {
 	held map[pair]*hold
 	// retry holds the pairs whose subscribe the manager refused, waiting
 	// for the next Apply to say them again.
-	retry  []pair
-	closed bool
+	retry []pair
+	// refused counts consecutive refusals per held pair; a pair at
+	// retryStallAfter no longer holds Drain open (RR-20261006-49).
+	refused map[pair]int
+	closed  bool
 }
 
 type pair struct{ observer, subject int64 }
@@ -261,10 +264,17 @@ func (in *Interest) Leave(id int64) error {
 		relation.Clear(id)
 		relation.Forget(id)
 	}
+	// 排队事实早于本次 Leave：按实际发生的删除改写它们（RR-20261006-48，见 interest_queue.go）。
+	in.supersedeQueuedRelationsLocked(id, true)
 	if err := in.aoi.RemoveObserver(id); err != nil {
 		return err
 	}
-	return in.aoi.RemoveSubject(id)
+	in.supersedeQueuedMovesLocked(id, false, true)
+	if err := in.aoi.RemoveSubject(id); err != nil {
+		return err
+	}
+	in.supersedeQueuedMovesLocked(id, true, false)
+	return nil
 }
 
 // Show / MoveShown / Hide are for things that are seen but do not see: a
@@ -296,7 +306,12 @@ func (in *Interest) Hide(id int64) error {
 	for _, relation := range in.relations {
 		relation.Forget(id)
 	}
-	return in.aoi.RemoveSubject(id)
+	in.supersedeQueuedRelationsLocked(id, false)
+	if err := in.aoi.RemoveSubject(id); err != nil {
+		return err
+	}
+	in.supersedeQueuedMovesLocked(id, true, false)
+	return nil
 }
 
 // Resubscribe says every pair this observer holds to the manager again on the
@@ -403,6 +418,9 @@ func (in *Interest) Apply() []Refusal {
 	for _, key := range queued {
 		hold := in.held[key]
 		if hold == nil || hold.subscribed {
+			if hold == nil {
+				delete(in.refused, key)
+			}
 			continue
 		}
 		in.subscribe(key, hold, true, &refusals)
@@ -427,6 +445,7 @@ func (in *Interest) applyEvent(source string, event InterestEvent, refusals *[]R
 			return
 		}
 		delete(in.held, key)
+		delete(in.refused, key)
 		err := in.subscriptions.Unsubscribe(in.session(key.observer), key.subject)
 		if err != nil && !errors.Is(err, entitysync.ErrSubscriptionNotFound) && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
 			*refusals = append(*refusals, Refusal{Observer: key.observer, Subject: key.subject, Err: err})
@@ -457,10 +476,12 @@ func (in *Interest) subscribe(key pair, current *hold, retry bool, refusals *[]R
 		err = in.subscriptions.Subscribe(in.session(key.observer), key.subject, current.profile)
 	}
 	if err == nil {
+		delete(in.refused, key)
 		return
 	}
 	current.subscribed = false
 	in.retry = append(in.retry, key)
+	in.noteRefusedLocked(key, err)
 	*refusals = append(*refusals, Refusal{Observer: key.observer, Subject: key.subject, Retry: retry, Err: err})
 }
 
@@ -502,4 +523,5 @@ func (in *Interest) Close() {
 	}
 	in.held = nil
 	in.retry = nil
+	in.refused = nil
 }

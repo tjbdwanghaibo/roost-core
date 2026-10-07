@@ -245,8 +245,9 @@ func (history *History) appendLocked(packet Packet) (Packet, error) {
 		packet.BaseSequence = state.latest
 	}
 	packet = packet.Clone()
+	now := time.Now().UnixNano()
 	if history.journal != nil {
-		if err := history.journal.Record(HistoryMutation{Version: HistoryMutationVersion, Kind: HistoryMutationAppend, Epoch: history.epoch, Packet: packet.Clone()}); err != nil {
+		if err := history.journal.Record(HistoryMutation{Version: HistoryMutationVersion, Kind: HistoryMutationAppend, Epoch: history.epoch, Packet: packet.Clone(), At: now}); err != nil {
 			if created {
 				delete(history.streams, key)
 			}
@@ -258,7 +259,7 @@ func (history *History) appendLocked(packet Packet) (Packet, error) {
 		history.sequenceFloor = packet.Sequence
 	}
 	state.schema = packet.SchemaVersion
-	state.activity = time.Now().UnixNano()
+	state.activity = now
 	state.items = append(state.items, packet)
 	if overflow := len(state.items) - history.options.MaxPacketsPerStream; overflow > 0 {
 		copy(state.items, state.items[overflow:])
@@ -292,8 +293,9 @@ func (history *History) AcknowledgeEpoch(observer Observer, stream Stream, epoch
 		return ErrAckAhead
 	}
 	if sequence > state.acked {
+		now := time.Now().UnixNano()
 		if history.journal != nil {
-			if err := history.journal.Record(HistoryMutation{Version: HistoryMutationVersion, Kind: HistoryMutationAcknowledge, Epoch: history.epoch, Observer: observer, Stream: stream, Sequence: sequence, PruneAcknowledged: history.options.PruneAcknowledged}); err != nil {
+			if err := history.journal.Record(HistoryMutation{Version: HistoryMutationVersion, Kind: HistoryMutationAcknowledge, Epoch: history.epoch, Observer: observer, Stream: stream, Sequence: sequence, PruneAcknowledged: history.options.PruneAcknowledged, At: now}); err != nil {
 				return err
 			}
 		}
@@ -309,7 +311,7 @@ func (history *History) AcknowledgeEpoch(observer Observer, stream Stream, epoch
 				state.pruned += uint64(pruned)
 			}
 		}
-		state.activity = time.Now().UnixNano()
+		state.activity = now
 	}
 	return nil
 }
@@ -375,7 +377,10 @@ func (history *History) Recover(request ResyncRequest, provider SnapshotProvider
 	packet.Observer = request.Observer
 	packet.Stream = request.Stream
 	packet.Full = true
-	if request.SchemaVersion != 0 {
+	// provider 标了版本就以它为准：载荷按它的 schema 编码，标签必须与载荷一致。旧实现用请求方的版本覆盖，
+	// 不看该字段的 provider（skillsync）发出的 Full 标签与载荷不符，随后生产方的 delta 被拒直到下一个 Full
+	// （RR-20261006-50 c）。provider 没标时才用请求方的版本补上。
+	if packet.SchemaVersion == 0 {
 		packet.SchemaVersion = request.SchemaVersion
 	}
 	packet, err = history.appendIfUnchanged(packet, observed)

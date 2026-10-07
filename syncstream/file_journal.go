@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 // FileHistoryJournal stores immutable checkpoint/WAL generations. A
@@ -126,9 +129,13 @@ func (journal *FileHistoryJournal) Load() (HistorySnapshot, error) {
 			if replayErr != nil {
 				return HistorySnapshot{}, replayErr
 			}
-			if valid < info.Size() {
-				journal.truncateTo = valid
+			if valid == 0 {
+				// 一条完整记录也没有：第一条只写了半截（崩溃 / 断电），它的 Record 从未返回成功，
+				// 那个 epoch 也从未被任何包带出去。按空日志打开，用本次的 initialEpoch；旧实现留着
+				// Epoch 0，Import 报 epoch is required，History 永久打不开（RR-20261006-50 a）。
+				snapshot.Epoch = journal.initialEpoch
 			}
+			journal.noteTornTail(journal.walPath(1), valid, info.Size())
 		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return HistorySnapshot{}, statErr
 		}
@@ -141,10 +148,26 @@ func (journal *FileHistoryJournal) Load() (HistorySnapshot, error) {
 		return HistorySnapshot{}, fmt.Errorf("syncstream: newest history generation %d is invalid: %w", generation, err)
 	}
 	journal.generation = generation
-	if info, statErr := os.Stat(journal.walPath(generation)); statErr == nil && valid < info.Size() {
-		journal.truncateTo = valid
+	if info, statErr := os.Stat(journal.walPath(generation)); statErr == nil {
+		journal.noteTornTail(journal.walPath(generation), valid, info.Size())
 	}
 	return snapshot, nil
+}
+
+// noteTornTail 记下回放跳过的未换行半尾（从未确认的写入）：首次续写前在独占所有权下截到 valid（U-0211），
+// 打开时计数并告警，与 nestwal 打开时截断未确认尾部的规则一致（RR-20261006-50 a）。完整行解不开仍是损坏，
+// replayWAL 直接拒绝，不走这里。调用方持有 journal.mutex。
+func (journal *FileHistoryJournal) noteTornTail(path string, valid, size int64) {
+	if valid >= size {
+		return
+	}
+	journal.truncateTo = valid
+	truncated := size - valid
+	labels := metrics.Labels{"reason": "torn_record"}
+	metrics.IncCounter("syncstream.recovery.tail_truncated.total", labels, 1)
+	metrics.IncCounter("syncstream.recovery.tail_truncated.bytes", labels, truncated)
+	slog.Warn("syncstream: unacknowledged WAL tail will be truncated before the next append",
+		"reason", "torn_record", "wal", path, "offset", valid, "bytes", truncated)
 }
 
 func (journal *FileHistoryJournal) checkpointGenerations() ([]uint64, error) {
@@ -520,6 +543,7 @@ func replayHistoryMutation(snapshot *HistorySnapshot, mutation HistoryMutation) 
 		}
 		value.Schema = mutation.Packet.SchemaVersion
 		value.Packets = append(value.Packets, mutation.Packet.Clone())
+		value.LastActivityUnixNano = mutation.At
 	case HistoryMutationAcknowledge:
 		index := find(mutation.Observer, mutation.Stream)
 		if index < 0 || mutation.Sequence > snapshot.Streams[index].Latest {
@@ -528,6 +552,7 @@ func replayHistoryMutation(snapshot *HistorySnapshot, mutation HistoryMutation) 
 		if mutation.Sequence > snapshot.Streams[index].Acked {
 			value := &snapshot.Streams[index]
 			value.Acked = mutation.Sequence
+			value.LastActivityUnixNano = mutation.At
 			if mutation.PruneAcknowledged {
 				pruned := 0
 				for pruned < len(value.Packets) && value.Packets[pruned].Sequence <= mutation.Sequence {
