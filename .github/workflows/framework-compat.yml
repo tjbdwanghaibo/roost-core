@@ -47,7 +47,7 @@ jobs:
         run: |
           version_args=()
           if [ "$SET" = minimum ]; then
-            version_args=(-roost-core-version v1.23.0 -roost-kit-version v1.14.8)
+            version_args=(-roost-core-version v1.23.1 -roost-kit-version v1.14.8)
           fi
           mods=configdata
           services=game
@@ -64,7 +64,7 @@ jobs:
           if [ "$SCENARIO" = full ]; then
             mods=configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga
             services=game,gate
-            # The game template hosts account / mail / match / chat and wires
+            # The game template hosts all nine framework services and wires
             # game to them, so the full scenario compiles kit/service too.
             template_args=(-template game)
           fi
@@ -98,8 +98,8 @@ jobs:
           # at the floor failed while this lane stayed green (it only used the
           # freshly built binary). Run a real make target through the pinned
           # release, and check every generator invocation names that release.
-          if make -n sync generate check-generated doctor id-check 2>/dev/null | grep 'cmd/roost@' | grep -v 'cmd/roost@v1.23.0 '; then
-            echo "::error::the generated Makefile runs a generator other than the pinned core v1.23.0"
+          if make -n sync generate check-generated doctor id-check 2>/dev/null | grep 'cmd/roost@' | grep -v 'cmd/roost@v1.23.1 '; then
+            echo "::error::the generated Makefile runs a generator other than the pinned core v1.23.1"
             exit 1
           fi
           make id-check

@@ -524,3 +524,7 @@ N10 / N13：按维护者 C8 保留公开集成 API。syncstream/skillsync 实例
 N12：readyz 指标数量改用 SeriesCount，不复制/排序全部序列；与原 Snapshot 长度相比不包含合成的 dropped 行。
 
 N15：sync checker 只证明本地已装配，传输连通由 nats checker 负责，不把对象非空当消费者进度保证；JetStream 生命周期专项为 RR-25，仍待确认。HTTP 状态、轮转校验已修；RPC Gauge 名已纠正。
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+当前审计、积压gauge、统计窗口和系统日志时间已修；全部源码可解析指标纳入OBSERVABILITY守卫。ExportMetrics和admin元数据保留边界见B7补充，不声称自动接线/审批。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

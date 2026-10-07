@@ -305,12 +305,15 @@ Runtime 从不回头解析 JSON，Host 之外没有任何世界写入路径，UI
 
 Runtime 拥有：cast 生命周期（windup/commit/recovery、打断、退款）、互斥与 GCD、冷却/弹药/蓄力/引导/光环策略、调度器、memory/persistent state、随机、proc 账本、checkpoint。Host 拥有：实体、属性、位置、空间查询、伤害/治疗/状态落地、过程步进的世界事实。
 
-**Host 并发契约四条**（[host.go](host.go) 的接口文档是全文）：
+**Host 并发契约六条**（[host.go](host.go) 的接口文档是全文）：
 
 1. 所有 Host 方法都在 Runtime 持锁时调用——严格串行，Host 无需自己做并发防护；
 2. **不得重入 Runtime**（`Activate`/`Advance`/`Cancel`/`StateDeltas`……锁不可重入，重入即死锁）；世界对技能效果的反应走 `Events`，由 Runtime 在确定性时点轮询；
 3. **不得阻塞**（channel、他人持有的锁、无界 I/O）——一次阻塞停摆整个 Runtime 上所有施法者；
 4. 结果必须是"给定 revision 下世界状态"的**确定性函数**——墙钟、map 遍历序、goroutine 时序都不许影响结果，因为回放与 checkpoint 恢复会重发同样的调用并要求同样的答案。
+
+5. StopSpawn 必须幂等，结果未知时 Runtime 会重试同一停止请求。
+6. HostCapabilities 必须如实声明；包装 Host 同时转发所有实际支持的可选接口，不能只转能力表。
 
 World revision 是防线：查询/命令携带期望 revision，Host 拒绝失效读写（`ErrRevisionUnavailable`）。
 
@@ -341,7 +344,7 @@ World revision 是防线：查询/命令携带期望 revision，Host 拒绝失�
 2. **HMAC 位点随机与 Host 返回顺序无关**（[runtime_random.go](runtime_random.go)、[runtime_select.go](runtime_select.go)）。随机选择不是"从 Host 给的列表里 roll 一个下标"，而是给**每个候选**算 `HMAC(castKey, randomSite, invocation, stableID)` 分数后按分数排序取样。stableID 来自候选自身（实体 ID 等），所以 Host 用什么顺序返回候选、宿主内部用不用 map，都不影响选中谁——确定性不依赖宿主实现细节。
 3. **`"$gcd"` 哨兵**（[runtime_cast_window.go](runtime_cast_window.go)，`globalCooldownProgramID`）。全局冷却不是一套并行机制，而是以保留程序 id `"$gcd"` 存在的一条**普通冷却条目**：`StateSnapshot().Cooldowns`、增量 mutation、checkpoint、同步协议全部免费复用现有冷却通道，客户端按普通冷却渲染即可。从 commit tick 起算、多次提交取最晚到期。
 4. **表达式钳制保住最坏情形预算**（[wire_cast_window.go](wire_cast_window.go)、[runtime_cast_window.go](runtime_cast_window.go)）。窗口表达式必须声明 `min`/`max`，运行时结果无条件钳入边界。于是编译期以边界做的所有证明在运行时恒成立：budget pass 用 `max` 算最坏时长，`commit_tick <= windup_ticks_min` 保证"先提交后执行"的不变量——表达式再怎么算也破坏不了静态结论。这是"动态数值"与"静态证明"共存的通用手法。
-5. **combat 是单一数学源，MemoryHost 收敛于它**（[combat/damage.go](combat/damage.go)、[skill/memory_host_combat.go](memory_host_combat.go)、[combatcomponent/adapter.go](combatcomponent/adapter.go)）。twelve_stage_v1 十二段管线（`target_validity → immunity → avoidance → damage_type → penetration → element → modifiers → critical → caps → shield → health → aftermath`）只实现一次：参考宿主 `MemoryHost` 与生产集成 `combatcomponent.HostAdapter` 跑的是同一份代码、发同一套事件词表（`damage_resolved`、`combat_hook_*`、`shield_absorbed`……），proc 过滤器在两种宿主上行为一致。status 域命令（Status/Remove/Dispel/AttributeModifier）由 `combatcomponent.StatusBridge` 按 status catalog 落到 buff 容器（唯一的有意差异：mul_bp 修饰加性叠加而非 MemoryHost 的乘性链，见 [docs/skill-casting-and-combat.md](../docs/skill/skill-casting-and-combat.md)）。用 MemoryHost 验证过的数值结论直接适用于生产。
+5. **combat 是单一数学源，MemoryHost 收敛于它**（[combat/damage.go](combat/damage.go)、[skill/memory_host_combat.go](memory_host_combat.go)、[combatcomponent/adapter.go](combatcomponent/adapter.go)）。twelve_stage_v1 十二段管线（`target_validity → immunity → avoidance → damage_type → penetration → element → modifiers → critical → caps → shield → health → aftermath`）只实现一次：参考宿主 `MemoryHost` 与生产集成 `combatcomponent.HostAdapter` 跑的是同一份代码、发同一套事件词表（`damage_resolved`、`combat_hook_*`、`shield_absorbed`……），proc 过滤器在两种宿主上行为一致。status 域命令（Status/Remove/Dispel/AttributeModifier）由 `combatcomponent.StatusBridge` 按 status catalog 落到 buff 容器（唯一的有意差异：mul_bp 修饰加性叠加而非 MemoryHost 的乘性链，见 [docs/skill-casting-and-combat.md](../docs/skill/skill-casting-and-combat.md)）。共享伤害管线的数值结论可复用；涉及属性聚合、状态目录和宿主能力时，仍须使用生产 HostAdapter 与业务包装验证。
 
 ---
 
@@ -364,6 +367,8 @@ go test ./... -count=1
 
 ### 迁移与版本
 
+当前 checkpoint=10，以下版本5/6/8条目是历史演进；旧版本拒绝恢复。单仓同一 tag 发布，先停旧再起新。
+
 - **衍生物“施放 → 移交 → 停止”，checkpoint 版本 8（2026-10-07，未发版）**：施放中的衍生物与移交后一样逐 tick 推进（唯一入口 `advanceOwnedSpawns`，删掉 `spawnStepTask`）；衍生物回调继承施法的事件链，每次结算一个新 EventID（payload 加 `spawn_event_sequence`）；被拒的被动候选只告警、不卡住事件流。见 `docs/bugfix/RR-20261006-51.md`～`-55.md`，旧版本 checkpoint 拒绝恢复。
 - **衍生物记录分区存放，checkpoint 版本 6（2026-10-07）**：Runtime 内部不再有重复的 owned 表，“移交给谁”只看记录字段；checkpoint 删掉 `owned_spawns`、只存一份 `spawns`，版本 5 及更早拒绝恢复（排空后再升级）。API 与行为不变。[方案](../docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md)
 - **源文档 digest 改为逐字段规范表示（2026-10-07，RR-20261006-33）**：`InspectIdentity(...).SourceDocumentDigest` 现在区分效果 / 策略 / 输入 / 形状 / 过滤器的类型，并包含消耗数量与 cast window 表达式；全部定义的源文档 digest 改变一次，gameplay / presentation digest 不变。[记录](../docs/bugfix/RR-20261006-33.md)
@@ -373,7 +378,7 @@ go test ./... -count=1
 - **旧 `/skillv2` → 稳定 `/skill` 的源码升级**：[docs/breaking-upgrade-skill-package.md](../docs/skill/breaking-upgrade-skill-package.md)。wire v2 与 compiler semantics 保持不变。
 - **生产部署与发布门槛**：[docs/production-readiness.md](../docs/skill/production-readiness.md)。
 
-### 与 roost-core / roost-kit 的关系
+### 单仓中的依赖关系
 
 依赖方向固定，任何反向依赖（指向具体游戏、渲染器、网络实现）都是边界违规：
 
@@ -381,16 +386,16 @@ go test ./... -count=1
 roost-core/syncstream            （通用可靠流：Observer/Packet/序号/ACK/恢复）
         ^
         |
-roost-skill/skillsync           roost-kit/syncstream（Packet ↔ NATS/JetStream 编码）
+roost-core/skill/skillsync           roost-core/syncstream（Packet ↔ NATS/JetStream 编码）
         ^
         |
-roost-skill/skill  ←  roost-skill/combat（零依赖，可单独使用）
+roost-core/skill  ←  roost-core/skill/combat（零依赖，可单独使用）
         ^
         |
      game host（实现 skill.Host；combatcomponent 提供 roost-core 实体侧的现成接法）
 ```
 
-`combatcomponent` 依赖 `roost-core`（`entity`/`nest`/`dataengine`），把 combat 状态做成带脏跟踪、可持久化、handler 回滚后字节一致的实体组件；`skill` 与 `combat` 本身不依赖 roost-core 的运行时设施。
+`combatcomponent` 依赖 `roost-core`（`entity`/`nest`/`dataengine`），把 combat 状态做成带脏跟踪、可持久化、handler 回滚后字节一致的实体组件；`skill/combat` 保持独立数学边界；`skill` 会使用 metrics 等基建，但不依赖具体游戏与网络实现。
 
 **Runtime 不在事务里**（维护者决定 B4）：handler 失败或提交被拒回滚的只有 combat DAO；`skill.Runtime` 的冷却、ammo、cast、proc 账本、state mutation 流与 revision 都不回退（这是“事务状态一律进 DAO”的明确例外）。接入时先校验、后推进 Runtime，扣费交给 Runtime 的 commit 路径（`Host.PayCosts`），失败用 Runtime 自己的终态（预期失败结果分支 / `CastFailed`）表达，不要让 handler 在推进 Runtime 之后再失败。细则见 [docs/skill/skill-casting-and-combat.md](../docs/skill/skill-casting-and-combat.md)“Runtime 不在事务里（B4）”。
 

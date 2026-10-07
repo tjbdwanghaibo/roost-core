@@ -201,8 +201,8 @@ func (manager *battleManager) Open(battleID string, members []int64) error {
 		OnDesync: func(verdict lockstep.DesyncVerdict) {
 			// A verdict is the framework telling the game that some seat's
 			// simulation no longer matches the quorum's. A real game kicks
-			// or resyncs; the demo records it, and the robots fail if it
-			// ever happens on a run where every client is honest.
+			// or resyncs; the demo records it. 机器人应另外断言裁决结果；
+			// 一次正常样本没有 desync 不等于覆盖全部分歧情况。
 			slog.Error("battle: desync verdict", "battle_id", battleID, "frame", verdict.Frame, "outliers", verdict.Outliers)
 		},
 	})

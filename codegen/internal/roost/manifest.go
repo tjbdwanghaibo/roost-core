@@ -19,73 +19,13 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
-// minimumVersions is the oldest framework set supported by this generator.
-// "latest" remains the default update policy; these concrete versions are
-// used only as an offline/bootstrap go.mod baseline and as compatibility
-// guards for users that intentionally pin a release.
-//
-// The consolidation (core v1.14.0 / kit v1.13.0) made the framework two
-// modules: roost-skill lives in roost-core/skill and roost-service in
-// roost-kit/service. A project pinning core below v1.14.0 must be upgraded
-// with `roost project upgrade --consolidate`, which rewrites its imports.
-//
-// The floors below are HIGHER than that layout change, and they are not a
-// guess: they are the oldest versions against which the generated code of the
-// minimal and full templates actually compiles. What raised them is what the
-// generators emit today — `entity.ValidateEntityRegistry`,
-// `entity.EntityCategoryOther`, `platform.PendingOrders` — none of which
-// exists at v1.14.0 / v1.13.0. The framework-compat workflow's `minimum` cell
-// generates and compiles at exactly these versions, so a floor that stops
-// being true fails there rather than in someone's first hour.
-//
-// The game-demo template needs more than this (it tracks the current release
-// set) and is excluded from that cell on purpose.
-// minimumVersions is the lowest framework this generator's output compiles
-// against — and since the consolidation it is ONE number.
-//
-// Core rose to v1.16.0 because that is the first release carrying kit/ and
-// codegen/ inside roost-core: everything this generator emits imports
-// roost-core/kit/…, which no earlier tag has. It rose again to v1.17.0 because
-// the output now imports sync/* and kit/syncbus (ARCH-12 layout), which
-// v1.16.x does not contain, and to v1.17.1 because the generated game-demo scene
-// bridge calls entitysync.SessionOpenRetryable, Manager.RegisterAfterRetirement
-// and policy.Interest.Resubscribe (RR-20260926-55/59/72), which v1.17.0 lacks,
-// and to v1.17.2 because the generated game-demo syncbus test calls
-// kit/syncbus.JetStreamStreamFromConfig (RR-20260927-35), which v1.17.1 lacks,
-// and to v1.18.0 because the generated game-demo bodies call the new
-// kit/service/mail CancelClaim signature and kit/service/platform
-// ErrDeliveryNotApplied (RR-20260929-20/23), which v1.17.2 lacks,
-// and to v1.20.0 because the generated bootstrap installs app.Singleton with
-// kitredis.SingletonStore and the game-demo activity reads app.SingletonLiveness
-// (APP-SINGLETON-LOCK-2026-10-05), which v1.19.x lacks,
-// and to v1.20.1 because generated saga definitions no longer spell out step
-// budgets (the kit saga Mod fills them from saga.step_defaults / saga.steps) and
-// the game-demo budget test calls kitsaga.StepBudgetsFromConfig (U-0280), which
-// v1.20.0 lacks,
-// and to v1.20.2 because the generated project calls activity.LoadGroupsFile
-// (C4 activity groups file), servicemetrics.NewMetricsReporter (C6 default
-// service metrics) and app.ConfigReader / app.ConfigDuration (A4 strict reads
-// in the player TCP access layer and the RPC client Mod), none of which
-// v1.20.1 has,
-// and to v1.21.0 because the generated config loader declares its schema rules
-// as []configdata.FieldRule (B10, enforced by configdata on every load and
-// reload), the code generated for a `//roost:mirror` DTO builds an
-// entity.RemoteMirrorSpec and returns an entity.RemoteMirrorReader over an
-// entity.RemoteSnapshotReadOnly source (Mirror step 5; projects bind it with
-// kit/remoteentity.MirrorSource under NewRemoteMirrorMod), and the game-demo
-// reads business time from app.BusinessClock (D-L3) and calls
-// timer.Scheduler.ReportUnhandledTypes (D-L2), none of which v1.20.2 has,
-// and to v1.23.0 because generated Mods and services declare their config with
-// app.SchemaOf / app.LoadConfig (A4① per-Mod config schema), the generated game
-// test builds its activity coordinator with activity.Config.Groups
-// (RR-20261006-17), none of which v1.22.0 has.
-// Kit stays as a field because a project's roost.yaml still carries
-// versions.kit and must keep validating; it no longer names a module of its
-// own, so it stays at the last value that meant something (三仓合一仓 P5).
-// versions.codegen is retired outright (RR-20261006-57): the generator is
-// roost-core, so the generated Makefile runs it at versions.core.
+// minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
+// v1.23.1 生成物使用合仓后的清单形状、Host/Sync/配置等新 API，旧生成器不能安全重写。
+// 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
+// Kit 字段仅识别历史清单，不再指代独立模块；其下限保留最后一个有效历史值。
+// Codegen 字段已废弃，生成 Makefile 直接使用 versions.core（RR-20261006-57）。
 var minimumVersions = VersionSpec{
-	Core: "v1.23.0",
+	Core: "v1.23.1",
 	Kit:  "v1.14.8",
 }
 

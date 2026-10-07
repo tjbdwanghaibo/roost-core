@@ -46,7 +46,7 @@ func (c config) prefix() string {
 }
 
 // SyncBusMod implements app.Mod, providing the service-to-service ISyncBus over NATS or JetStream.
-// Depends on: "nats" (fnats.IClient).
+// Depends on NATS Mod: 普通模式取 fnats.IClient，JetStream 模式取 ModNatsJetStream。
 type SyncBusMod struct {
 	bus       fsyncbus.ISyncBus
 	localSid  int32

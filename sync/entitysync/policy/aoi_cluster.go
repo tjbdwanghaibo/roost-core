@@ -24,7 +24,7 @@ var (
 // subscription replication, and is out of scope here).
 type AreaID int64
 
-// AOICluster stitches per-room InterestManagers into one seamless
+// AOICluster stitches per-region AOI instances into one seamless
 // interest space over a SHARED world coordinate system: rooms are
 // non-overlapping rectangles of the same plane, adjacency follows from the
 // geometry, and ids are cluster-global.

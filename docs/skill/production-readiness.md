@@ -1,5 +1,7 @@
 # 技能系统（roost-core/skill）生产基线
 
+> 当前升级口径（2026-10-08）：单仓单模块，Runtime checkpoint=10；旧版拒绝。旧文中的版本号与三仓发布/可灰度说法仅适用于当时的改名阶段，本轮先停旧再起新。见 [当前架构与迁移](architecture-and-migration.md)。
+
 This document defines the supported production path for `skill`,
 `skillcompose`, and `skillsync`. Legacy checkpoint and packet-only outbox files
 are intentionally rejected; migrate by draining the old runtime/outbox before

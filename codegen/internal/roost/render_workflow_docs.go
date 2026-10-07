@@ -489,16 +489,23 @@ PB继续使用PushPlayer/PushSession，flags=1。未知类型和保留位一律�
 - max_handshake_bytes 单独限制登录票据，不能为了业务大包把鉴权帧也扩大。
 - handshake_timeout 限制慢速鉴权；idle_timeout 限制慢读；write_timeout 给慢客户端施加背压。
 - max_payload_bytes 在分配内存前检查；小 payload 使用有上限的复用池。
-- shutdown_timeout 只是配置示例；App 的总 shutdown timeout 也必须大于它。
+- shutdown_timeout 是 TCP 的 StopBudget，计入 App 总 shutdown.total_timeout，必须为正；显式0会被拒绝。
 - Linux 同时配置合理的 nofile、listen backlog、conntrack 与 LB idle timeout；LB idle 应略大于应用 idle。
 - Docker/Kubernetes 模板会为拥有 player TCP 的 Service 声明 7000；Kubernetes 调用方命名空间必须带
   roost.tjbdwanghaibo.io/player-access=true 标签。修改监听端口时同步修改 Service、LB 和 NetworkPolicy。
 
-server_gen 会设置 TCP keepalive/no-delay、指数退避 accept、跟踪认证前后的全部连接，并在 App 逆序关停
-时先停接入、关闭连接、等待 goroutine。任何畸形帧、倒序 sequence、未知协议、解码或业务错误都会关闭
+server_gen 会设置 TCP keepalive/no-delay、指数退避 accept、跟踪认证前后的全部连接。App 先调用 Service.Shutdown，
+此时 listener 尚在；随后逆序停止 Mod，TCP 关闭 listener/连接并等待 goroutine。任何畸形帧、倒序 sequence、未知协议、解码或业务错误都会关闭
 当前连接；稳定业务错误应在 endpoint 中编码成项目定义的响应 errcode，而不是返回内部错误。
 
-## 6. 上线验证
+## 6. 心跳与限流
+
+鉴权后的心跳使用 MsgID=0、flags=0、空 payload 和递增非0序号，服务端回复相同序号的空 ACK。
+heartbeat_enabled 默认 true；客户端在 idle_timeout 到期前主动发送，纯下行流量不延长读期限。
+心跳和业务请求共用每连接令牌桶：request_rate 默认100次/秒、request_burst默认200；rate=0显式关闭。
+超额请求断连；重连建立新桶。单 EntitySync 包不会按字节截断，传输分帧不改变包内数据。
+
+## 7. 上线验证
 
     roost project doctor --workflow player-tcp
     roost generate --check
@@ -510,7 +517,7 @@ server_gen 会设置 TCP keepalive/no-delay、指数退避 accept、跟踪认证
 一万连接、SIGTERM 关停、LB 断连和重连。观测至少应包含在线连接、鉴权失败、帧错误、dispatch 延迟、
 写超时和拒绝连接。生成层已写入 core obs 的 player_tcp_connections、auth_failure、frame_error、
 dispatch_duration/error、write_error、connection_rejected 与 push/error 指标；项目在
-Authenticator/Protocol middleware 里补业务维度，禁止使用 PlayerID/SessionID 作为 metric label。
+Authenticator 或 endpoint 里补业务维度（没有项目侧 Protocol middleware 注入点），禁止使用 PlayerID/SessionID 作为 metric label。
 `
 }
 

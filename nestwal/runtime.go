@@ -37,7 +37,7 @@ func (r *Runtime) NestOption() corenest.NestOption {
 // DurableWatermark returns the pipelined-commit watermark source for
 // externalization gates:
 //
-//	coordinator.SetDurableWatermark(runtime.DurableWatermark())
+//	config := entitysync.ManagerConfig{DurableWatermark: runtime.DurableWatermark()}
 func (r *Runtime) DurableWatermark() func() uint64 {
 	if r == nil || r.Committer == nil {
 		return func() uint64 { return 0 }

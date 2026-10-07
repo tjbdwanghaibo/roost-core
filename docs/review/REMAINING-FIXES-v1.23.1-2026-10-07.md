@@ -1,5 +1,7 @@
 # v1.23.1 剩余修复：交接给其他 agent（2026-10-07）
 
+> 当前进度（2026-10-08）：B1～B5、B7已提交验收；B6除RR-25已提交，B8文档与独立验收已完成，最终pretag待干净提交后执行。RR-25因取消消费者次数上限的动作被自动审批拒绝，等待明确确认；候选已保存补丁并移出待合并代码。不要因下文历史“进行中”重复实施，也不能把本轮记作全部完成。当前入口见 [v1.23.1实现](../release/v1.23.1-IMPLEMENTATION.md)。
+
 维护者 2026-10-07：“以上需要我定的问题都按照推荐处理，需要把未完成的正在做的做完，剩余的整理成一个文档，我用其他的agent处理”。
 
 本文是**接手入口**。问题的原始证据（条件、后果、`path:line`）都在登记表 [FRAMEWORK-DOCS-FINDINGS-2026-10-07.md](FRAMEWORK-DOCS-FINDINGS-2026-10-07.md) 和各分区实现文档 `docs/framework/impl/NN-*.md` 的“源码疑点”节；本文只做分批、给入口和规则，不重复证据。
@@ -118,3 +120,7 @@ B4 提交 50526a2c。B6 RR-22/23/24/26/27/28 已实施，cache/policy/kit-nest �
 RR-20261008-29～38 已完成目标行为红绿；admin/ops/statslog/log/failurelog/configschema/app/dataengine-engine/bus race 已通过。N8/9/10/12/13/15 的指标、性能和公开 API 保留边界见 impl/11 末节。完整生成器回归进行中，B8 文档继续；RR-25 仍等待确认。尚未全部完成、未推送/发布。
 
 B7 验收：全仓 GOWORK=off build/vet/test 通过（131 个测试包），完整 codegen 测试包含重新生成工程并 build/vet/test。首轮旧断言仍要求 versions.skill=latest 已按本批删除失效字段的规格纠正，第二轮全仓通过。原始日志已持久保存；未推送/发布。
+
+### B8 文档与独立验收完成（2026-10-08）
+
+F00/F04-D/F08-D/F09-D/F12 G5 按 [B8逐项记录](B8-DOCUMENTATION-CLOSURE-2026-10-08.md)收口；当前指南、模板注释和基建包地图已同步，历史framework正文保留并追加当前边界。补齐v1.23.1说明/实现双文档，准备release清单与minimum版本，不打tag。RR-39更正旧Remote验收契约并补真实Mongo后续事务验证，生产代码不变。最终独立game-demo build/vet/test（19包）与TCP/Game race（2包）通过；RR-25候选移出后，私有Remote矩阵21/21通过。日志已持久保存。仍待RR-25明确批准，不计全部完成。

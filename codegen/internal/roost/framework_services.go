@@ -441,7 +441,7 @@ func %[1]s(r *app.Registry) (svc%[2]s.%[4]s, error) {
 }
 
 // applyGameTemplate turns a fresh manifest into the game template: the
-// business service calls account, chat, mail, match and session, each hosted as its own
+// business service calls all nine framework services, each hosted as its own
 // process. It is opt-in (`roost project new … -template game`).
 func applyGameTemplate(m *Manifest, gameService string) error {
 	service, ok := m.Services[gameService]

@@ -111,7 +111,7 @@ type config struct {
 			Workers       int `config:"workers" min:"0" example:"4"`
 			Attempts      int `config:"attempts" min:"0" example:"5"`
 			QueueCapacity int `config:"queue_capacity" min:"0" example:"4096"`
-		} `config:"unload_resync" help:"Reload of unloaded entities that still have Sync subscribers (0 keeps the framework\ndefault). Worst case before the last queued entity falls back to a remove is about\nceil(queue_capacity/workers) * attempts * entity_load_timeout; see the roost-core USER_GUIDE."`
+		} `config:"unload_resync" help:"Reload of unloaded entities that still have Sync subscribers (0 keeps the framework\ndefault). Worst case before the last queued entity falls back to a remove is about\nceil((queue_capacity+workers)/workers) * T_entity (all attempts plus retry backoff); see the roost-core USER_GUIDE."`
 	} `config:"nest"`
 	// EntitySync 只在 NewModWithEntitySync 装配时读：写了就覆盖 EntitySyncSetup.Config 的同名字段。
 	EntitySync struct {

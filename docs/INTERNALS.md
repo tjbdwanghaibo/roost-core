@@ -86,15 +86,15 @@ Saga store 原子保存实例状态与 outbox。Coordinator 通过 lease 获取�
 
 ## 9. 状态同步链路
 
-Entity mutation 先产生 sync dirty；`entitysync.Manager`（进程一个）在 tick 里对每个 pending subject 在实体锁内 `PrepareTick`——给在线会话的 delta 与给新订阅者的快照同一版本、同一 CommitLSN，每个 profile 一次 pack；commit 后才推进版本，发送失败不会把未送达数据错误标为已确认。
+Entity mutation 先产生 sync dirty；`entitysync.Manager`（进程一个）在 tick 里对每个 pending subject 在实体锁内 `PrepareViews`——给在线会话的 delta 与给新订阅者的快照同一版本、同一 CommitLSN，每个 profile 一次 pack；commit 后才推进版本，发送失败不会把未送达数据错误标为已确认。
 
-subject 自己持有订阅者表（session → profile / kind / baseVersion）；`sync/entitysync/flush.go` 将捕获按会话组帧（`sync/frame` 格式，Epoch/Tick 是会话时钟），超过单帧对象上限时分帧。编码修改会话副本，每帧准入成功后采纳对应的时钟和引用；会话的全部帧成功后结算订阅。`ErrRetryLater` 中止内容提交，保留已交付前缀，并要求相关订阅下次用全量恢复基线；其他传输失败关闭该会话并回调 `SessionLost`。持久化门槛按 CommitLSN 挡整个 subject。Group、Interest、Direct 属于 `sync/entitysync/policy`，负责决定订阅关系。每个政策实例持有独立 SubscriptionSource，重复订阅幂等，按 LOD/Key/SchemaVersion 选生效视图；释放不影响其他来源。
+subject 自己持有订阅者表（session → profile / kind / baseVersion）；`sync/entitysync/flush.go` 将捕获按会话组帧（`sync/frame` 格式，Epoch/Tick 是会话时钟），超过单帧对象上限时分帧。编码修改会话副本，每帧准入成功后采纳对应的时钟和引用；会话的全部帧成功后结算订阅。`ErrRetryLater` 中止内容提交，保留已交付前缀，并要求相关订阅下次用全量恢复基线；其他传输失败关闭该会话并回调 `SessionLost`。持久化门槛按 CommitLSN 挡整个 subject。Group、Interest、Direct 属于 `sync/entitysync/policy`，负责决定订阅关系。每个政策实例持有独立 SubscriptionSource，重复订阅幂等，按 ProfilePriorities（缺省 LOD）/LOD/Key/SchemaVersion 选生效视图；释放不影响其他来源。
 
-syncstream 提供服务间的有序版本流、分片重组、checksum、ACK 和 resync，跑在 ISyncBus 上，与客户端方向的实体同步无关。
+syncstream 提供有序版本流、分片重组、checksum、ACK 和 resync；内置 Publisher 跑在 ISyncBus 上。它不等于 entitysync，但 skillsync 可基于它向客户端应用器传递技能流，宿主负责客户端传输适配。
 
 ## 10. Lockstep 链路
 
-Sequencer 收集玩家输入，在 tick 截止时锁定帧并广播最近 N 帧冗余包。历史按容量保存，重连客户端通过可靠通道分页追帧。关键帧 hash 由 quorum 裁决，仅在离群集合变化时触发回调。框架不解释输入 payload，也不运行模拟；确定性、反作弊输入验证和战斗规则属于客户端/业务共享逻辑。
+Sequencer 收集玩家输入，在 tick 截止时锁定帧并广播最近 N 帧冗余包。历史由调用方定期 TrimBefore / Room.TrimHistory 裁剪，未裁剪不会自动按容量清理，重连客户端通过可靠通道分页追帧。关键帧 hash 由 quorum 裁决，仅在离群集合变化时触发回调。框架不解释输入 payload，也不运行模拟；确定性、反作弊输入验证和战斗规则属于客户端/业务共享逻辑。
 
 ## 11. 技能运行时
 

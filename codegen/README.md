@@ -218,7 +218,7 @@ go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgr
 框架维护者发布 codegen 前还要执行发布列车校验：
 
 ```bash
-roost framework verify --manifest ci/framework-release.yaml --expected-codegen v1.10.0 --lock framework-lock.json
+roost framework verify --manifest ci/framework-release.yaml --expected-release v1.23.1 --lock framework-lock.json
 ```
 
 tag 触发的 `framework-release` workflow 会锁定 core/kit/skill 精确版本，拒绝 replace 和框架内部伪版本，

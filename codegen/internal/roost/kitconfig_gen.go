@@ -87,7 +87,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "nest.tick_duration", Kind: "duration", Min: "0", Starter: true, Example: "50ms"},
 		{Name: "nest.request_timeout", Kind: "duration", Min: "0", Starter: true, Example: "3s"},
 		{Name: "nest.entity_load_timeout", Kind: "duration", Min: "0", Help: "Framework cap for one shared cold entity load; a caller's own deadline does not end it.", Starter: true, Example: "30s"},
-		{Name: "nest.unload_resync", Kind: "section", Help: "Reload of unloaded entities that still have Sync subscribers (0 keeps the framework\ndefault). Worst case before the last queued entity falls back to a remove is about\nceil(queue_capacity/workers) * attempts * entity_load_timeout; see the roost-core USER_GUIDE."},
+		{Name: "nest.unload_resync", Kind: "section", Help: "Reload of unloaded entities that still have Sync subscribers (0 keeps the framework\ndefault). Worst case before the last queued entity falls back to a remove is about\nceil((queue_capacity+workers)/workers) * T_entity (all attempts plus retry backoff); see the roost-core USER_GUIDE."},
 		{Name: "nest.unload_resync.workers", Kind: "int", Min: "0", Starter: true, Example: "4"},
 		{Name: "nest.unload_resync.attempts", Kind: "int", Min: "0", Starter: true, Example: "5"},
 		{Name: "nest.unload_resync.queue_capacity", Kind: "int", Min: "0", Starter: true, Example: "4096"},

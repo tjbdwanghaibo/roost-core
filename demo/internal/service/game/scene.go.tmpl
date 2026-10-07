@@ -134,8 +134,8 @@ type sceneMember struct {
 
 // sceneLane is the demo's entitysync.Transport: one frame is one push on the
 // player's TCP connection. The manager's session id IS the player id — the
-// access layer mints it that way and pushes to every connection the player
-// has — so no translation happens here.
+// scene chooses that identity and pushes to every connection the player has.
+// 接入层 SessionID 则每连接独立，不能把两种 ID 的生命周期混为一谈。
 type sceneLane struct {
 	transport scenePusher
 }

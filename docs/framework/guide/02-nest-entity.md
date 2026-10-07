@@ -505,3 +505,7 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 - actionflow：[延后队列方案](../../feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md)
 - 故障：[TROUBLESHOOTING](../../TROUBLESHOOTING.md)
 - 其他分区：[03 dataengine](03-dataengine.md)、[04 sync](04-sync.md)、[05 remote / Mirror](05-remote-mirror.md)、[01 app](01-app-lifecycle.md)、[10 时间](10-time.md)、[12 codegen](12-codegen.md)
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+提交点统一称不可回滚边界：pipelined Enqueue成功后不回滚/重排；持久确认是fsync后票据完成，回复/AfterCommit/Sync仍等待它与解锁。生成标记已支持pipelined。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

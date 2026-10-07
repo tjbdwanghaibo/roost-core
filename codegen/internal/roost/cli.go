@@ -120,7 +120,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		kit := fs.String("roost-kit-version", "", "roost-kit version")
 		skill := fs.String("roost-skill-version", "", "roost-skill version")
 		serviceVersion := fs.String("roost-service-version", "", "roost-service version")
-		template := fs.String("template", "", "opt-in starting shape: game (hosts account, chat, mail, match, session and wires the first service to them), or game-demo (game plus a working Player write path: Profile/Bag components, a DAO, one Nest transaction and a TCP endpoint)")
+		template := fs.String("template", "", "opt-in starting shape: game (hosts all nine framework services and wires the first service to them), or game-demo (game plus a working Player write path: Profile/Bag components, a DAO, one Nest transaction and a TCP endpoint)")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
@@ -300,7 +300,7 @@ func runGenerate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 
 func runAdd(args []string, stdout, stderr io.Writer) error {
 	if len(args) < 2 {
-		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|event|table|dao|webroute|errcode|saga> <name> [flags]")
+		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|event|table|dao|webroute|errcode|saga|rpc> <name> [flags]")
 	}
 	fs := flag.NewFlagSet("add "+args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)

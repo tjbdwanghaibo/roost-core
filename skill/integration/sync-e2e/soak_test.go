@@ -12,10 +12,10 @@ import (
 )
 
 // TestProtocolSoak is opt-in so normal CI remains fast. Production release CI
-// should run it with CUBE_SYNC_SOAK=1 (30 minutes by default).
+// should run it with ROOST_SYNC_SOAK=1 (30 minutes by default).
 func TestProtocolSoak(t *testing.T) {
 	if os.Getenv("ROOST_SYNC_SOAK") != "1" {
-		t.Skip("set CUBE_SYNC_SOAK=1 to run the protocol soak")
+		t.Skip("set ROOST_SYNC_SOAK=1 to run the protocol soak")
 	}
 	duration := 30 * time.Minute
 	if value := os.Getenv("ROOST_SYNC_SOAK_DURATION"); value != "" {

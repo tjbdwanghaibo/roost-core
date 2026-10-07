@@ -1,6 +1,8 @@
 # Skill Visual 与数据同步生产指南
 
-本文描述当前 `roost-skill`、`roost-core`、`roost-kit` 三仓实现的正式边界、接入顺序、
+> 2026-10-08 当前入口：[架构与迁移](architecture-and-migration.md)。下面保留历次详细设计；旧三仓发布段、旧 checkpoint 数字及 Import 周期刷新说法均被本轮单仓/版本10规则取代。新字段隐私由业务 projector 明确实现，CloseObserver 不撤回在飞 Publish，AssemblyTTL 由新分片到达触发清扫。
+
+本文描述单仓 `roost-core` 中 skill/skillsync 与 syncstream 的正式边界、接入顺序、
 恢复语义、运行指标和发布门槛。它既是学习入口，也是生产接入检查表。
 
 ## 1. 最终能力边界
@@ -15,7 +17,7 @@ immutable Program ── InspectPresentationPlan ── VisualAssetResolver ─�
 Runtime ── StateSnapshot / StateDeltas / PresentationSnapshot / PollPresentation
    │
    ▼
-skillsync.Coordinator ── roost-core/syncstream.History ── roost-kit/syncstream
+skillsync.Coordinator ── roost-core/syncstream.History ── roost-core/syncstream
    │                                                        │
    └──────── observer visibility policy                     └── NATS / JetStream
                                                             │
@@ -127,7 +129,7 @@ coordinator, err := skillsync.NewCoordinator(skillsync.CoordinatorOptions{
 3. 每个逻辑 tick 提交 Runtime 后调用 `Flush(observer, key)`；
 4. 客户端处理成功后提交 `Epoch + Packet.Sequence` ACK；
 5. 重连提交 ResyncRequest，调用 `Recover`；
-6. 定期持久化 `History.Export()`，重启时在接收流量前 `Import()`。
+6. 未绑定 journal 时由宿主持久化 Export；已绑定 journal 则从 WAL/checkpoint 恢复，Import 每次建立新 checkpoint generation，不作为周期刷新。
 
 Coordinator 对每个 observer/key 保存独立的 Runtime source cursor。可见性拒绝的事件只
 推进该 observer 的 source cursor，不会进入其 History。Packet 一旦 Append 成功，即使
@@ -148,7 +150,7 @@ VisibilityPolicy：reset 的每条持续表现按它对应的增量事件交给 
 
 `syncstream.History` 为每个 `Observer + Stream` 独立排序。核心不变量：
 
-- delta 的 `BaseSequence` 必须指向前一网络包；
+- 新建流首个 delta 的 `BaseSequence=0`，此后 delta 指向前一网络包；
 - full 的 `BaseSequence` 必须为 0；
 - schema 变化只能由 full 开新链；
 - ACK 单调且不能超过 Latest；
@@ -170,7 +172,7 @@ client ahead 时，自动调用 provider 生成 full、Append 成新恢复锚点
 
 ## 6. roost-kit 传输边界
 
-同步发送使用 `roost-kit/syncstream` 的 `NewPublisherWithOptions` 设置：
+同步发送使用 `roost-core/syncstream` 的 `NewPublisherWithOptions` 设置：
 
 - `ExpectedObserver`：防止服务端路由代码把另一 observer 的包发进当前通道；
 - `MaxPayloadBytes`：在 JSON envelope 前拒绝超大业务 payload；
@@ -232,13 +234,7 @@ sequence、source sequence 和 resync reason，但不要记录完整敏感 paylo
 
 ## 9. 发布、兼容与回滚
 
-发布顺序固定：
-
-1. 发布含新 syncstream 的 `roost-core`；
-2. `roost-skill` 升级到正式 core 版本并移除本地 replace，再发布；
-3. `roost-kit` 升级 core 版本并移除本地 replace，再发布；
-4. 游戏服务接入 Coordinator/visibility/history store；
-5. 客户端先支持新 schema 和 manifest catalog，再启用服务端流量。
+单模块一次发布：先停旧服务、按格式版本清理或离线重建旧数据，升级业务服务与客户端依赖后再开放流量。`skill`、`kit`、`syncstream` 不再分别发版本。当前 checkpoint=10，旧版拒绝。
 
 Schema 或视觉目录升级采用双版本窗口：先部署能读取新旧版本的客户端，再让服务端以 full
 切换 schema/catalog。回滚时停止产生新 schema，恢复旧 producer；客户端收到 mismatch
@@ -298,7 +294,7 @@ go test -race ./syncstream -count=1
    重启恢复；Coordinator 构造时执行一次 crash reconciliation，运维显式修复调用
    `ReconcilePending`。正常 `RetryPending` 只扫描有界 pending，不重复全量 Export History。
 4. 建议启用 `PruneAcknowledged`，在 ACK durable 后释放历史 Packet；`Pruned` 与容量不足
-   导致的 `Dropped` 分开统计。observer 离开调用 `CloseObserver`，定期调用 `SweepIdle`。
+   导致的 `Dropped` 分开统计。observer 离开调用 Coordinator.CloseObserver；空闲清理走 Coordinator.SweepIdle，不能只清 History 而留下 outbox。在飞 Publish 不可撤回。
 5. 生产 Publisher 设置 `RequireConfirmation=true`、`CompressionThreshold`、
    `MaxFrameBytes`。订阅端限制 envelope/chunk/assembly/decoded 大小和 TTL，并强制 checksum。
 6. 新 Epoch 的第一包必须为 full。Schema 用 `SupportedSchema` 协商，跨版本必须配置
@@ -340,7 +336,7 @@ publisher, _ := syncstream.NewPublisherWithOptions(bus, syncstream.PublisherOpti
 ```
 
 必须为 `History.Health`、`Coordinator.Health`（包含 Outbox）和 kit Publisher/Subscriber
-指标接入告警。重点观察：history dropped、outbox pending age/失败、assembly 超限、checksum
+指标接入告警。框架 exporter 可观察 history dropped 和 outbox pending age/失败；订阅端目前没有独立 assembly/checksum 指标，宿主应根据返回错误记录 assembly 超限、checksum
 失败、visibility failure、schema/epoch mismatch 和 snapshot recovery 突增。
 
 ### 11.2 完整测试入口
@@ -356,7 +352,7 @@ go test ./syncstream -run '^$' -bench . -benchmem       # roost-core / roost-kit
 go test ./skill -run '^$' -bench . -benchmem          # roost-skill
 
 # 跨模块：确认失败 -> 重启 -> WAL/outbox 恢复 -> gzip/分片/checksum -> ACK/裁剪
-cd roost-skill/integration/sync-e2e
+cd skill/integration/sync-e2e
 go test ./... -count=1
 
 # 发布前 30 分钟 soak（可先用 5s 验证任务配置）

@@ -15,8 +15,8 @@ Roost 当前进入稳定化阶段。后续主线只接受三类工作：已复�
 
 | 包 | 状态 | 依据（代码位置） | 剩余 |
 | --- | --- | --- | --- |
-| M1 Sync 消息身份 | 已实现（U-0009 回退验证：去掉 MessageID 两条新测试变红） | `core/syncbus.DeliveryIDs` 是唯一身份规则；`PatchSyncer`、`core/mirror.Replicator`、`kit/syncstream.Publisher` 三条发布路径都经它取 `MessageID`；`kit/room.syncMsgID` 优先取 MessageID，元组仅为旧消息兼容 | — |
-| M2 Replica 信封与 Context | 已验证 | `core/mirror` 内外层字段一致性校验、Start 配置不全报错、context-aware publisher | 回退内层 key 校验 → `TestReplicatorRejectsForgedInnerIdentity` 红；回退 context 传递 → `TestReplicatorHonorsCanceledPublishContext` 红 |
+| M1 Sync 消息身份 | 已实现（U-0009 回退验证：去掉 MessageID 两条新测试变红） | `sync/syncbus.DeliveryIDs` 是唯一身份规则；`PatchSyncer`、`sync/syncbus/mirror.Replicator`、`syncstream.Publisher` 三条发布路径都经它取 `MessageID`；`sync/syncbus/driver.syncMsgID` 优先取 MessageID，元组仅为旧消息兼容 | — |
+| M2 Replica 信封与 Context | 已验证 | `sync/syncbus/mirror` 内外层字段一致性校验、Start 配置不全报错、context-aware publisher | 回退内层 key 校验 → `TestReplicatorRejectsForgedInnerIdentity` 红；回退 context 传递 → `TestReplicatorHonorsCanceledPublishContext` 红 |
 | M3 ConfigData 条件回滚 | 已验证 | `core/configdata` 在 `publishMu` 临界区内判定全局槽位所有权并计数冲突 | 回退为无条件恢复全局槽位 → `TestFailedCommitDoesNotRollBackAnotherStorePublication` 红 |
 | M4 Remote 锁代际证明 | 已实现（U-0011 核对：09-04 的"未开始"是关键词误判） | 每次 `TryLock` 新 token、每次 `UnlockWithRetry` 独立 operation ID、Lua 以 `last_unlock` 收据判定幂等重试、旧 unlock 只能读自己的收据（§4.2 第 1–5 项，含测试）；`batch.go` 改用 `redis.IFencedVersionedLock` 公开契约，无 fence 工厂在构造与 `Provide` 时 fail-closed（第 6、7 项，U-0011）；缺失的两条确定性测试已补 | §4.2 要求的第五条测试（高 fence 与低 fence 的 Mongo 提交竞争最多一个成功）需要真实 Mongo，登记为账本 B-10 |
 | M5 Saga/JetStream 终态 | 已验证 | `kit/saga` Stop 先 drain 并等待 `Closed()`；`kit/nats` permanent/Term 分类与 MaxDeliver 指标 | Stop 不等 `Closed()` → `TestDrainSubscriptionsWaitsForConsumerClosure` 红；永不判定 terminal → `TestJetStreamTerminalClassification` 红 |

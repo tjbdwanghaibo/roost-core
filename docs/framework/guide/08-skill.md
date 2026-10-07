@@ -565,3 +565,7 @@ Runtime 的诊断还有 `InspectTrace()` / `FlushTrace()`（`RuntimeOptions.Trac
 - 模块文档（快速参考，与本篇冲突时以本篇与源码为准）：[skill/README.md](../../../skill/README.md)、[docs/skill/README.md](../../skill/README.md)、[skill-casting-and-combat.md](../../skill/skill-casting-and-combat.md)、[skill-implementation-guide.md](../../skill/skill-implementation-guide.md)、[visual-sync-production-guide.md](../../skill/visual-sync-production-guide.md)
 - 设计决定：[B3 lower fail-fast](../../feature/B3-SKILL-LOWER-FAILFAST-2026-10-06.md)、[B3-3 Host 能力表](../../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)、[求值上下文表](../../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)、[停止入口统一](../../feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md)、[衍生物分区](../../feature/REFACTOR-2026-10-07-skill-spawn-partition.md)、[process → Spawn](../../feature/REFACTOR-2026-10-06-skill-process-to-spawn.md)、[Summon 改名](../../feature/REFACTOR-2026-10-07-skill-summon-rename.md)、[ROUND12（投影交业务）](../../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md)
 - 故障：[TROUBLESHOOTING](../../TROUBLESHOOTING.md) T-248、T-258、T-265、T-269、T-271、T-288～T-290
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+当前checkpoint=10、单仓同版本；原正文的5/6/7等为历史基线。F08-D更正与B1/B2处置以B8与篇末RR为准。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

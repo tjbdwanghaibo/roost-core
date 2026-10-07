@@ -471,11 +471,11 @@ game-demo 在 game 服务的三份配置里把 `gift_item.debit.max_attempts` �
 
 ## 8. 实时同步怎么选
 
-状态同步适合 ARPG/MMO/大多数房间服：服务器权威模拟，按 20 Hz 产生全局 snapshot 或 delta，按 AOI/LOD 给不同客户端裁剪字段；可靠通道发基线和关键事件，datagram 发可丢弃最新状态。技能的权威结果进入状态 mutation，施法表现、音效和轨迹进入 presentation event，因此能覆盖技能游戏而不要求把所有表现塞进 Entity snapshot。
+状态同步适合 ARPG/MMO/大多数房间服：服务器权威模拟，默认周期 20 Hz 检查变化，也可配置 on_change 在事务准入时锁内冻结、解锁并确认提交后唤醒发送，按 AOI/LOD 给不同客户端裁剪字段；EntitySync 的基线、增量和 remove 全部走可靠有序通道。技能的权威结果进入状态 mutation，施法表现、音效和轨迹进入 presentation event，因此能覆盖技能游戏而不要求把所有表现塞进 Entity snapshot。
 
 Lockstep 适合客户端确定性模拟的 MOBA/RTS：服务器排序输入帧、保存历史、冗余广播和校验 hash，不运行完整战斗模拟。追帧走可靠通道，实时输入走 datagram。客户端算法、定点数、随机种子、配置 hash 必须一致。
 
-单房间默认上限 100 Entity/订阅者。20 Hz 是调度目标，不代表所有字段每帧发送；用 interest、LOD、dirty delta、量化和 baseline ACK 控制带宽。慢客户端只能影响自己的 session。
+每会话默认 MaxObjects=100，每 subject 默认最多1024个订阅者；Manager 没有单房间模型。20 Hz 是调度目标，不代表所有字段每帧发送；用 interest、LOD、dirty delta、量化和 baseline ACK 控制带宽。慢客户端只能影响自己的 session。
 
 ## 9. 技能系统
 
@@ -554,7 +554,7 @@ map 下没有声明的字段报错。`app.ConfigBool` / `ConfigDuration` / `Conf
 - 声明为 `secret` 的键（`account.session_secret`、`platform.session_secret`、`platform.payment_secret`）不能为空或以 `dev-` 开头。
 - App：`time.logic_offset` 必须为 0（或不写）：偏移只给测试环境前拨业务时间用（D-L3）。
 
-它**不**检查、也不代表已经开启：按请求限流、登录鉴权、WAL 持久级别（持久化由 `dataengine.*` 决定）、实例状态存储。RR-20261005-NC-192 之前这里要求的 `player.login_auth_required`、`player.login_secret`、`player_protocol.rate_limit.enabled`、`save_load.wal.*`、`instance.client_mode` / `state_store_required`、`account.ops_token`、`account.redis_required`、`global` / `match_group.redis_required` 没有任何代码读取，已删除；`admin_gateway.*` 的生产检查（A4 ① 起）同样删除——仓内没有任何代码读这个段。配置里留着这些键也没有影响（doctor 对框架段之外的键不报）。生成的游戏服接入层只有演示凭据（`auth.go`），上线前换成真实校验；需要按请求限流时自己装配 `gateway.RateLimit` 或在接入层限流。
+它**不**检查、也不代表已经开启：按请求限流、登录鉴权、WAL 持久级别（持久化由 `dataengine.*` 决定）、实例状态存储。RR-20261005-NC-192 之前这里要求的 `player.login_auth_required`、`player.login_secret`、`player_protocol.rate_limit.enabled`、`save_load.wal.*`、`instance.client_mode` / `state_store_required`、`account.ops_token`、`account.redis_required`、`global` / `match_group.redis_required` 没有任何代码读取，已删除；`admin_gateway.*` 的生产检查（A4 ① 起）同样删除——仓内没有任何代码读这个段。配置里留着这些键也没有影响（doctor 对框架段之外的键不报）。普通工程 auth.go 默认拒绝；game-demo 通过 account 校验 session 票据，上线需提供真实身份协作者。生成 TCP 自带每连接令牌桶（request_rate=100、request_burst=200，rate=0显式关闭）和鉴权后心跳，不能直接把 gateway.RateLimit 类型套到 ProtocolRegistry。
 
 ### 生成工程切到 Redis Cluster
 
@@ -706,7 +706,7 @@ Projected 是成功投影尝试数，成功但未 ack 的后缀重放后会再�
 
 ## 2026-09-26 提交与生命周期兼容说明
 
-- 正式配置段为 `syncbus:`，旧 `room:` / `sync:` 仍兼容，优先级依次降低。旧段被读取时启动日志告警弃用；被 `syncbus:` 遮住的旧键与不认识的键也会告警；`syncbus.transport` 写错（非 nats / jetstream）启动失败（RR-20260926-12）。
+- 本段历史兼容规则已被 A4 统一声明取代：只读 `syncbus:`，不再从 `room:` / `sync:` 回退；`syncbus.transport` 写错（非 nats / jetstream）启动失败（RR-20260926-12）。
 - `roost project upgrade --consolidate` 遇到 v1.16.x 起已删除或换包的框架符号（如 `spatial.InterestManager`、`statesync.Reassembler`、`room.DecodeRoomWireFrame`）时，先完成 import 改写，再逐条列出 `文件:行` 与迁移指引并以非零退出；按指引修改后重跑（RR-20260926-24）。
 - `EntityRepository` 在正式 Runtime 中冷加载时等待该实体在途投影，冷目标须声明 Slow；自定义 RecoveryGate 需要转发 `WaitEntityProjection`。
 - 多进程按租约交接实体所有权时，交出前（驱逐本地副本之后、释放租约之前）须在慢路径调用 `kit/dataengine` Mod 的 `WaitEntityProjection(ctx, 完整EntityID)`，等待失败则保留租约重试；接手方只读 Mongo，看不到本进程未投影的 WAL。game-demo 的闲置交还已按此实现（RR-20260926-31）。

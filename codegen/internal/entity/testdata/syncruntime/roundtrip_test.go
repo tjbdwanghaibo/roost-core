@@ -7,7 +7,7 @@ package syncruntime
 // — which is how the sync wiring drifted away from Core's API without a
 // single test noticing: the generated file named a struct field and a
 // constant that Core does not have (RR-20260918-01). This file is compiled by
-// scripts/entity-sync-runtime.sh in a throwaway module against the pinned
+// codegen/scripts/entity-sync-runtime.sh in a throwaway module against the pinned
 // roost-core, so "the generated entity builds" and "the generated entity
 // actually gets its Sync state" are both checked.
 

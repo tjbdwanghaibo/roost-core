@@ -1,5 +1,7 @@
 # roost 框架文档
 
+> 当前补充：v1.23.1 尚未发布。原文保留 v1.23.0 证据，更新后的口径见 [本轮文档收口](../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md) 与 [补充基建包](FOUNDATION-PACKAGES.md)。遇冲突先看相应篇末“v1.23.1 补充”，不能把历史疑点当当前未修复结论。
+
 roost 框架整体的说明与实现，按 13 个分区（00 总览 + 01～12）各写两篇。源码基准是 tag `v1.23.0`（`28912cd6`），文中 `path:line` 都以它为准。
 
 内容与旧文档（[USER_GUIDE](../USER_GUIDE.md)、[INTERNALS](../INTERNALS.md) 等）冲突时，**以框架文档与源码为准**。

@@ -403,3 +403,7 @@ singleton: released key=…
 - 方案：[单实例锁](../../feature/APP-SINGLETON-LOCK-2026-10-05.md)、[A4 ① 配置声明](../../feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)、[A3 共用停机类型](../../feature/REFACTOR-2026-10-05-shared-stop-contract.md)、[D1 readyz](../../feature/D1-READYZ-DEGRADED-IS-READY-2026-10-06.md)、[第十二轮决定](../../feature/DECISIONS-R12-KIT-2026-10-06.md)、[静态注册](../../STATIC_REGISTRATION.md)、[业务时间只许前进](../../feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md)
 - 执行契约：[roost-coding](../../agent-skills/roost-coding/SKILL.md)「生命周期与装配的复审要点」「配置只经声明读」
 - 快速参考：[USER_GUIDE](../../USER_GUIDE.md)（§2 单实例锁、§10 配置写法与启动校验）、[INTERNALS](../../INTERNALS.md)、[TROUBLESHOOTING](../../TROUBLESHOOTING.md)
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+catalog及基础设施生命周期列表为14（补入ManagerMod）；它实现StopWithContext。RemoteMirror另行装配，数量口径不混算。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

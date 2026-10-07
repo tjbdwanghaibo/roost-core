@@ -44,10 +44,8 @@ type InterestConfig struct {
 	// Relations are the named relation sources to create ("team",
 	// "friends", …); Relation(name) reaches them. SourceSelf is always there.
 	Relations []string
-	// SelfVisible: an entering observer sees itself (through the self
-	// relation, because the spatial source never lets anything observe
-	// itself). On by default; set to false only through NewInterest's
-	// zero-value semantics being explicit — see below.
+	// SelfVisible 控制观察者是否通过 self 关系看见自己；空间来源不会建立自身订阅。
+	// nil 或 true 启用，只有显式 false 才关闭。
 	SelfVisible *bool
 }
 

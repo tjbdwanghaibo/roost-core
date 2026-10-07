@@ -43,9 +43,11 @@ type ISubscriber interface {
 
 // ILiveSubscriber 是可确认订阅的能力（Mirror 第 4 步，docs/feature/MIRROR-STEP-4-AND-O4-2026-10-06.md）。
 //
-// SubscribeLive 返回 nil 即“订阅已确认”：此后发布到 topic 的每条消息都至少一次交给 handler，不会被静默
-// 丢掉（短暂断线、处理超时由传输补投）。订阅确认之前发布的历史不承诺投递；同一身份重新订阅时可能从上次的
+// SubscribeLive 返回 nil 即“订阅已确认”：在下述有效信封和保留边界内，短暂断线与处理超时由传输补投。订阅确认之前发布的历史不承诺投递；同一身份重新订阅时可能从上次的
 // 游标续投一段，消费方按版本准入处理。传输自己发出的消息照旧不回送。
+//
+// 保证受 broker MaxAge/MaxBytes 保留边界及消费者 MaxDeliver 次数上限约束；坏信封会 ACK，业务 handler 错误也按既有策略 ACK。
+// 退订/停机不再接收，消费者生命周期窗口另见 RR-20261008-25；不能把此接口当无限保留日志。
 //
 // 普通 NATS 是最多一次，不提供这项能力；JetStream 用 DeliverNew 的 durable 消费者提供。需要推送一致性的
 // 调用方先做类型断言，拿不到时显式退化（例如 remoteentity 的快照推送退化为按需读取并记日志）。

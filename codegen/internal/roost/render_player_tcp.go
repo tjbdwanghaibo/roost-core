@@ -1635,7 +1635,8 @@ func TestADispatchThatOutlivesItsBudgetAnswersAndFreesTheSlot(t *testing.T) {
 	waitReleased(t, server, 0)
 }
 
-// RR-20260926-36: closing a session — here the same SessionID logging in on a
+// RR-20260926-36: same-ID replacement (demo auth normally assigns a new ID per connection):
+// closing a session — here the same SessionID logging in on a
 // new connection, which is what a reconnect does — must cancel the request its
 // old connection is still running, so the old goroutine and slot are released
 // now rather than when the server stops.

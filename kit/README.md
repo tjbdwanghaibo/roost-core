@@ -502,7 +502,7 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
 **`SyncBusMod` 只提供 `ISyncBus`（服务间消息面）**；NATS vs JetStream 的持久性不同但 handler 契约一致（`roost-core/sync/syncbus/driver/nats.go`、`jetstream.go`）：
 纯 NATS 至多一次、无确认、故意不实现 `PublishConfirmed`；JetStream 有 durable 与发布确认。
 两种传输的 `Subscribe` 都返回 `*syncbus.Subscription`：`Unsubscribe(ctx)` 返回 nil 之后这个订阅没有在途回调、也不会再有新回调，超时返回 ctx 错误、可重试；handler 收到投递 ctx，在 handler 里退订自己要传它（A3 ②，[方案](../docs/feature/A3-2-SYNCBUS-DRAINING-UNSUBSCRIBE-2026-10-07.md)）。
-配置段为 `syncbus:`（键：transport / prefix / stream / storage / ack_wait / max_deliver / stream_max_age / duplicates / replicas / max_bytes / setup_timeout / publish_timeout）；旧 `room:` / `sync:` 段兼容读取但启动告警弃用，被 `syncbus:` 遮住的旧键、`syncbus:` / `room:` 里不认识的键都告警；`transport` 只接受 nats / jetstream（js），写错直接 Init 失败而不是退回普通 NATS（RR-20260926-12）。启动日志 `syncbus mod: started` 的 `transport` 是实际生效的那个。
+配置段为 `syncbus:`（键：transport / prefix / stream / storage / ack_wait / max_deliver / stream_max_age / duplicates / replicas / max_bytes / setup_timeout / publish_timeout）；A4 起不再读取旧 `room:` / `sync:`；syncbus 段按统一声明校验；`transport` 只接受 nats / jetstream（js），写错直接 Init 失败而不是退回普通 NATS（RR-20260926-12）。启动日志 `syncbus mod: started` 的 `transport` 是实际生效的那个。
 JetStream 流名：显式 `stream` 优先；未写时由 `prefix` 派生（`driver.JetStreamSyncStream`）——生成配置的 `roost.sync` 与未配 prefix 时的缺省 `roost.room`
 仍为 `ROOST_SYNC`（已部署的流与 durable 游标不变），`zz3640.sync` → `ZZ3640_SYNC`，含 `_` / `-` / 大写等的 prefix 追加摘要避免相撞。
 共用一个 NATS 的部署用不同的非兼容 prefix 即各有各的流；**例外是兼容映射**：`roost.room`（含未写 prefix）与 `roost.sync` 都映射到 `ROOST_SYNC`，
@@ -514,11 +514,11 @@ JetStream 流名：显式 `stream` 优先；未写时由 `prefix` 派生（`driv
 
 ### syncstream（roost-core）：observer 维度的包流
 
-与 entitysync 的分工：**syncstream 跑在 `ISyncBus` 上（服务↔服务）；entitysync 跑在 `entitysync.Transport` 上（服务→客户端）**。
+与 entitysync 的分工：**syncstream 内置 Publisher 跑在 ISyncBus 上；skillsync 复用其流语义，宿主可适配到客户端。entitysync 独立跑在 entitysync.Transport 上**。
 
 - **发布确认是构造期硬校验**：`RequireConfirmation=true` 且 bus 未实现 `ConfirmedSyncPublisher` → 构造失败（JetStream 实现该能力，纯 NATS 故意不实现）。
 - **压缩阈值触发**（默认走 gzip BestSpeed，编码器池化，>1MiB 的 buffer 不归还池）；**校验和算在压缩前的 JSON 上**，每个分片带同一 checksum 供重组后整体校验。
-- **分片非原子**：逐片发布，中途失败会留下已发布的前若干片——接收端靠有界重组 + `AssemblyTTL`（默认 30s）自然丢弃残片。重组 key 含 encoding 与 checksum，不同次发布不互相污染。边界默认：MaxChunks 256、MaxAssemblyBytes 8MiB、MaxDecodedBytes 同（防解压炸弹）。
+- **分片非原子**：逐片发布，中途失败会留下已发布的前若干片——接收端靠有界重组 + `AssemblyTTL`（默认 30s）在下一次多片帧到达时清扫过期残片，没有独立清扫定时器。重组 key 含 encoding 与 checksum，不同次发布不互相污染。边界默认：MaxChunks 256、MaxAssemblyBytes 8MiB、MaxDecodedBytes 同（防解压炸弹）。
 - **`BufferedPublisher` 的两个入口语义分离**：`Publish` = 同步 + 重试；`TryEnqueue` = 有界异步，满则 `ErrBackpressure`。**队列准入 ≠ broker 确认**。
 - `roost-core/syncstream/observability_impl.go` 导出 5 个 `roost_sync_*` gauge + `Health()`。
 
@@ -571,7 +571,7 @@ JetStream 流名：显式 `stream` 优先；未写时由 `prefix` 派生（`driv
 - **spatial 的增量兴趣管理**（`roost-core/spatial/interest.go`、`roost-core/spatial/interest_cluster.go`）：`InterestManager` 在 BlockIndex 之上做九宫格订阅——observer 订阅其离开半径覆盖的块，实体移动只重评估受影响邻域；进出用**双半径滞回**（EnterRadius < LeaveRadius，边界震荡零事件）；距离带直接映射 entitysync 的 SyncProfile LOD；MaxVisible 是防广播风暴闸门（近似 top-N 语义）。`InterestCluster` 把多房间拼成一个共享坐标平面：贴边 observer 被**镜像**进邻房（接缝无视野盲区），Flush 输出**净变化**（每 (observer,subject) 维护房间→距离带表，对外只发与上次发射状态的差异）——因此跨界迁移是 make-before-break 且**下游订阅零闪断**。并发定位：Manager 非并发安全（场景私有）、Cluster 单锁并发安全（多房间 handler 并行 tick）；基准 4 房 × 1000 subjects 全移动 + 100 observers ≈ 0.34ms/tick。
 - **ai 的树到执行流闭环**（`roost-core/ai/behavior_strategy.go`、`roost-core/ai/nodes.go`、`roost-core/ai/tree.go` / `tree_parser.go`（原 wire.go））：`BehaviorStrategy` 把行为树装进 Controller（完成的树自动 Reset、动作完成事件缓冲到下一 tick 的上下文）；`TaskflowAction` 叶子发起 taskflow 动作并等待 `OnActionEnd`，被高优先级分支打断时经 `OnInterrupt` 收尾——"树决策、taskflow 执行"成为标准写法。计时节点（cooldown/time_limit）只读注入的 tick 时钟、随机节点只用注入掷点——权威侧决策可复现。`ParseTree` 严格装配 JSON 树（未知字段/节点/元数违规当场拒绝，诊断带 `$.root.children[0]` 式 path），复合节点内建、condition/action 叶子经 `Registry` 注册；配合 `Controller.SetStrategy` 的事务性替换，坏 JSON 永远不会顶掉在跑的策略。两条接线约定（N10 O-T3 / O-T4，维护者第十二轮决定保持）：策略在第一次 Tick 里发起动作，不在 `Init` 里发起（替换时 `EndActions` 在新策略 `Init` 成功后才跑，会把 Init 里发起的动作一并结束）；`Controller.Shutdown` 不调 `EndActions`，要结束在途动作就在策略的 `Stop` 里做，或在 Shutdown 之前自己 `EndCurMission` / `EndAllAction`。
 - **gateway 的定位声明**（包 doc）：中间件集合（限流/鉴权守卫），**不是网关服务器**。
-- **lockstep 的双通道分工**（`roost-core/sync/lockstep/room.go`）：`Room.Tick` 切帧 → 记历史 → `RedundantEncoder` 封包（携带最近 N 帧）→ 对每个附着 session 走 **datagram** 通道（AEAD UDP）——丢包由后继报文的冗余修复，永不重传（重传回来的实时帧已过期）；`StartCatchup` 的重连追帧走 **可靠** 通道（KCP/QUIC），每 tick 最多 `CatchupBatchFrames` 帧分页限速，追上帧头后自动切回实时广播（追帧期间不发实时包，避免双份下行）。可靠通道选型：KCP 默认（高丢包下延迟低 30-40%、CPU 轻），QUIC 备选（连接迁移 + UDP 443 穿透，CPU 较重）——两者都已在 `replication/` 落地，一个 `ReliableSender` 接口互换。迟到输入折入下一帧并计 `lockstep.input.late.total`（针对当前帧的显式输入会覆盖折入的过期输入），非法输入计 `lockstep.input.rejected.total{reason}`；掉线座位不移出比赛（乐观帧锁定天然把缺席当空输入），重连 = `Attach` 换 session（同 session 重复 Attach 幂等且保留追帧游标；session 被其他座位/观战者占用则拒绝）+ `StartCatchup`（追帧连续失败超预算自动放弃并在 Tick 错误中显式说明，历史被 Trim 出缺口时同样放弃）。**构造期预算校验**：`冗余深度 × 座位数 × MaxInputBytes` 超出 datagram 包上限（默认 1232）直接拒绝配置——单个满载客户端永远打不黑整房间下行。哈希裁决按"同意组 ≥ quorum"出结论（默认 quorum = 座位过半，串谋少数抢先上报无法误伤诚实玩家），`OnDesync` 只在离群**集合**变化时回调；`ReportHash` 校验座位与帧号上界，Trim 过的帧墓碑化。观战者走 `AttachSpectator`/`SpectatorCatchup`（只收不发、不占座位）。一个 Room 只服务一局，结束调 `Close()`。
+- **lockstep 的双通道分工**（`roost-core/sync/lockstep/room.go`）：`Room.Tick` 切帧 → 记历史 → `RedundantEncoder` 封包（携带最近 N 帧）→ 对每个附着 session 走 **datagram** 通道（AEAD UDP）——丢包由后继报文的冗余修复，永不重传（重传回来的实时帧已过期）；`StartCatchup` 的重连追帧走 **可靠** 通道（KCP/QUIC），每 tick 最多 `CatchupBatchFrames` 帧分页限速，追上帧头后自动切回实时广播（追帧期间不发实时包，避免双份下行）。可靠通道选型：KCP 与 QUIC 均有适配，延迟和 CPU 应按业务网络实测，不作固定百分比承诺——两者都已在 `sync/nettransport/` 落地，一个 `ReliableSender` 接口互换。迟到输入折入下一帧并计 `lockstep.input.late.total`（针对当前帧的显式输入会覆盖折入的过期输入），非法输入计 `lockstep.input.rejected.total{reason}`；掉线座位不移出比赛（乐观帧锁定天然把缺席当空输入），重连 = `Attach` 换 session（同 session 重复 Attach 幂等且保留追帧游标；session 被其他座位/观战者占用则拒绝）+ `StartCatchup`（追帧连续失败超预算自动放弃并在 Tick 错误中显式说明，历史被 Trim 出缺口时同样放弃）。**构造期预算校验**：`冗余深度 × 座位数 × MaxInputBytes` 超出 datagram 包上限（默认 1232）直接拒绝配置——单个满载客户端永远打不黑整房间下行。哈希裁决按"同意组 ≥ quorum"出结论（默认 quorum = 座位过半，串谋少数抢先上报无法误伤诚实玩家），`OnDesync` 只在离群**集合**变化时回调；`ReportHash` 校验座位与帧号上界，Trim 过的帧墓碑化。观战者走 `AttachSpectator`/`SpectatorCatchup`（只收不发、不占座位）。一个 Room 只服务一局，结束调 `Close()`。
 
 ---
 

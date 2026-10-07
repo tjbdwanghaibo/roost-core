@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**2026-10-08 当前接手入口：**剩余修复B1～B5、B7已提交验收，B6除RR-25已提交，B8文档与独立验收已完成。RR-25受自动审批阻塞，候选已移出待合并代码；不计全部完成。逐项见 [v1.23.1实现与验收](release/v1.23.1-IMPLEMENTATION.md)，下方各日期状态是历史记录。未发版。
+
 **10-07 客户端协议第一批（main，未发版）：**统一公共Go wire、正式生成player TCP/探针、robot与demo loadtest；RS v2类型字段区分PB/raw Sync，Lockstep仅预留并拒绝。C# netstandard2.1提供鉴权/并发请求/有界push与Sync解码，Unity提供主线程消费适配源码。[接入](../client/README.md) · [实施、验证和后续边界](feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)。后续业务packer生成、复制状态应用/恢复、Godot .NET、C++/Unreal/GDExtension与真实引擎验证另做；无应答Notify、心跳/TLS尚未加入此C# API。历史review进度保持原口径。
 
 **10-05 第十三批/N05镜像路由接入**：NC-33/34两个P2已修、声明场景验证，未发版；缓存与interest在写前绑定第三层payload，10副作用反例红→绿，13新增正式叶子。709最终扩大race叶子/8skip、根包14及build/vet/glsvet通过。N05仍部分完成，下一重订阅/回调交错/权威回填组合；Mirror DTO未实施。[范围/证据](review/REVIEW-2026-10-05-noncore-23.md)。
@@ -699,3 +701,11 @@ B6 当前树全仓 build/vet/test（131 个测试包）与生成项目 build/vet
 RR-20261008-29～38 已完成目标行为红绿；admin/ops/statslog/log/failurelog/configschema/app/dataengine-engine/bus race 已通过。N8/9/10/12/13/15 的指标、性能和公开 API 保留边界见 impl/11 末节。完整生成器回归进行中，B8 文档继续；RR-25 仍等待确认。尚未全部完成、未推送/发布。
 
 B7 验收：全仓 GOWORK=off build/vet/test 通过（131 个测试包），完整 codegen 测试包含重新生成工程并 build/vet/test。首轮旧断言仍要求 versions.skill=latest 已按本批删除失效字段的规格纠正，第二轮全仓通过。原始日志已持久保存；未推送/发布。
+
+### 2026-10-08 剩余交接的最终收口入口
+
+B1～B5与B7已提交并全仓验收；B6除RR-25已提交。B8当前口径见docs/review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md；发布准备说明/实现位于docs/release/v1.23.1-*.md，尚未发布。RR-25候选仅保存在主检出artifacts/perf/remaining-fixes-20261007/rr25-pending，等待确认后恢复；它不是已合入逻辑。RR-39修正旧Remote真实依赖验收，首轮20/21、修后21/21，最终可合并版本复跑继续。
+
+### 2026-10-08 B8 最终独立验收
+
+文档收口见 [B8清单](review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)，交付映射见 [v1.23.1实现](release/v1.23.1-IMPLEMENTATION.md)。独立game-demo build/vet/test 19包、TCP/Game race 2包通过；RR-25候选移出后私有Remote故障矩阵21/21通过。RR-39修正旧验收断言并增加后续事务不阻塞证据。全部原始日志已复制主检出artifacts/perf。RR-25仍待批准且未合入，不计本轮全部完成；未发版。

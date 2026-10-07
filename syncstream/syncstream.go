@@ -1,7 +1,7 @@
 // Package syncstream provides domain-neutral ordered state streams. It owns
 // stream sequencing, bounded replay history, acknowledgements, and the decision
-// to fall back to a full snapshot. Payload encoding and transport are left to
-// higher layers.
+// to fall back to a full snapshot. 同包 Publisher 提供 JSON/gzip、分片与 SyncBus 传输；
+// payload 的业务含义和客户端传输适配由宿主负责。
 package syncstream
 
 import (

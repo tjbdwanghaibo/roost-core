@@ -1,5 +1,7 @@
 # `/skillv2` 到稳定 `/skill` 包迁移手册
 
+> 当前升级口径（2026-10-08）：单仓单模块，Runtime checkpoint=10；旧版拒绝。旧文中的版本号与三仓发布/可灰度说法仅适用于当时的改名阶段，本轮先停旧再起新。见 [当前架构与迁移](architecture-and-migration.md)。
+
 本次升级只保留一个核心 Go 包：
 
 ```text

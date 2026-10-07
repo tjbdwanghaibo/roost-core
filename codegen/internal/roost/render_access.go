@@ -381,8 +381,8 @@ const (
 // player — a login has to be able to run, since it is what takes the player
 // into service.
 //
-// Returning an error refuses the request; the error reaches the client
-// through the usual coded-response path.
+// 返回 error 会拒绝派发并关闭当前 TCP 连接。需要稳定业务错误码时，
+// 在 endpoint 构造响应，不用 WriteGate 的内部错误冒充协议响应。
 type WriteGate interface {
 	AdmitMessage(playerID int64, messageID uint32) error
 }

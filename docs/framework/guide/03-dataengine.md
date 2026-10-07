@@ -605,3 +605,7 @@ Projector / Outbox 的计数（Committed、Projected、WALUnacked、FencedEntiti
 | 02 nest、04 sync、05 remote、06 saga、08 skill、09 kit 服务分区 | [guide/02-nest-entity.md](02-nest-entity.md)、[guide/04-sync.md](04-sync.md)、[guide/05-remote-mirror.md](05-remote-mirror.md)、[guide/06-saga.md](06-saga.md)、[guide/08-skill.md](08-skill.md)、[guide/09-kit-services.md](09-kit-services.md) |
 
 [↑ 速览](#速览) · [实现文档](../impl/03-dataengine.md)
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+区分不可回滚边界（pipelined Enqueue接纳）与持久确认边界（fsync票据完成）。async可先投影，Ack前仍fsync；生成标记已支持pipelined。Remote已持久但快照未发由outbox补发，投影不再阻塞（RR-69）。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

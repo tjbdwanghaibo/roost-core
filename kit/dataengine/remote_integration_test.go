@@ -203,11 +203,27 @@ func TestRealDataEngineRemotePublicationAndWALRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	publisher.fail.Store(true)
-	if n, err := p.ReplayPass(fx.context()); n != 0 || !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
-		t.Fatalf("publication failure n=%d err=%v", n, err)
+	// RR-20261006-69：Mongo 已持久、仅快照发布失败，由独立 outbox 补发，
+	// 不再让这条 WAL 堵住后续事务。未知持久结论仍不得按成功确认。
+	if n, err := p.ReplayPass(fx.context()); n != 1 || err != nil {
+		t.Fatalf("persisted publication pending n=%d err=%v", n, err)
 	}
 	verify(1)
-	assertWALReplayCount(t, wal, 1)
+	assertWALReplayCount(t, wal, 0)
+	if publisher.published.Load() != 0 {
+		t.Fatal("failed transport reported published snapshots")
+	}
+	unrelated := realRecord(154, []coredata.Mutation{
+		realPut(t, fx.database, "unrelated_wallet", 9101, 0, 1, bson.M{"value": 1}),
+	})
+	if _, err = wal.Append(fx.context(), unrelated); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := p.ReplayPass(fx.context()); n != 1 || err != nil {
+		t.Fatalf("unrelated transaction blocked behind pending publication: n=%d err=%v", n, err)
+	}
+	assertDocumentVersion(t, fx, "unrelated_wallet", 9101, 1)
+	assertWALReplayCount(t, wal, 0)
 	pending, err := remoteStore.PendingRemoteCommits(fx.context(), 10)
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending=%+v err=%v", pending, err)

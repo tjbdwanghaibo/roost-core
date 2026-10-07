@@ -562,3 +562,7 @@ GOWORK=off go test -count=1 -run StopHints ./cmd/glsvet
 ## v1.23.1 修正（2026-10-07，未发布）
 
 F01-1～7 文档与示例校正；F01-10 见 RR-20261007-06，启动期限与信号统一处理，未结束回调的依赖保留。 目标 race 通过，组合验证进行中；原始 v1.23.0 描述保留，以上为当前更正。
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+catalog及基础设施生命周期列表为14（补入ManagerMod）；它实现StopWithContext。RemoteMirror另行装配，数量口径不混算。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

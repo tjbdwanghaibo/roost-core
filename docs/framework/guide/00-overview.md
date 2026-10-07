@@ -258,3 +258,7 @@ flowchart TB
 - 执行契约：[roost-coding](../../agent-skills/roost-coding/SKILL.md)
 
 [↑ 速览](#速览) · [实现文档](../impl/00-overview.md)
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+F00已按B8统一不可回滚/持久确认、Mod/服务数量、跨块职责及JetStream结算归属；基建补充见FOUNDATION-PACKAGES。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

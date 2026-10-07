@@ -477,3 +477,7 @@ Nest 自己的 fence（事务结果未知）不经 `RuntimeFailure`：引擎立�
 设计演进只在各分区 §9 记录（只列改变了设计的修复）。版本级的改动汇总见 [v1.23.0 说明](../../release/v1.23.0-GUIDE.md) 与 [v1.23.0 实现](../../release/v1.23.0-IMPLEMENTATION.md)。
 
 [↑ 速览](#速览) · [说明文档](../guide/00-overview.md)
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+F00已按B8统一不可回滚/持久确认、Mod/服务数量、跨块职责及JetStream结算归属；基建补充见FOUNDATION-PACKAGES。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

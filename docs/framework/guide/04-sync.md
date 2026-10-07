@@ -663,3 +663,7 @@ demo 的常量：scene Interval 50ms、进入 / 离开半径 120 / 150、关系 
 | [GAME_DEMO_TEMPLATE](../../feature/GAME_DEMO_TEMPLATE.md)、`demo/README.md` | game-demo 的接入层、scene、battle |
 | [01 app 与生命周期](01-app-lifecycle.md) | 三步停机、停机预算、readiness |
 | [02 nest 与实体](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[05 remote 与 Mirror](05-remote-mirror.md)、[08 skill](08-skill.md)、[11 可观测](11-observability.md)、[12 codegen](12-codegen.md) | 跨分区内容 |
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+F04-D逐组更正、TCP心跳/限流、Group重连及健康注册见B8。状态走可靠有序；RR-25仍待确认。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

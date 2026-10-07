@@ -430,3 +430,7 @@ total_timeout = 声明预算之和 + 3s × 未声明预算的 Mod 数 + 5s（Ser
 - 实现：[impl/12-codegen.md](../impl/12-codegen.md)
 - 现有手册（快速参考，内容冲突以本篇 + 源码为准）：[`codegen/README.md`](../../../codegen/README.md)、[`codegen/docs/CODEGEN_REFERENCE.zh-CN.md`](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md)（每个生成器的语法与用例）、[`codegen/docs/PROJECT_GENERATOR.zh-CN.md`](../../../codegen/docs/PROJECT_GENERATOR.zh-CN.md)、[`codegen/docs/CI_CD_IMPLEMENTATION.zh-CN.md`](../../../codegen/docs/CI_CD_IMPLEMENTATION.zh-CN.md)、[`codegen/docs/DATA_FLOW.zh-CN.md`](../../../codegen/docs/DATA_FLOW.zh-CN.md)、[`demo/README.md`](../../../demo/README.md)、[`docs/feature/GAME_DEMO_TEMPLATE.md`](../../feature/GAME_DEMO_TEMPLATE.md)、[`docs/STATIC_REGISTRATION.md`](../../STATIC_REGISTRATION.md)、[`scripts/README.md`](../../../scripts/README.md)、[`docs/TROUBLESHOOTING.md`](../../TROUBLESHOOTING.md)
 - 其他分区：[01 app](01-app-lifecycle.md)、[02 nest](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[04 sync](04-sync.md)、[05 remote 与 Mirror](05-remote-mirror.md)、[06 saga](06-saga.md)、[07 配置](07-config.md)、[08 skill](08-skill.md)、[09 kit 服务](09-kit-services.md)、[10 时间](10-time.md)、[11 可观测](11-observability.md)、[00 总览](00-overview.md)
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+模板全阶段成功后才发布目标；规范生成标记与覆盖权限分离；新清单只写有效版本策略，最低core=v1.23.1。G5文档口径与历史lock删除见B8。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

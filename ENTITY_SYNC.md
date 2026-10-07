@@ -15,7 +15,7 @@ Entity Sync 只有一套实现，四层（ARCH-10 / M-13 / M-14，2026-09-22）�
 
 ## 写入与锁
 
-- 正式 Nest 接入自动消费生成实体的 `TakeEntitySyncChanges()`；客户端与服务间 dirty 独立。手写同步字段使用 `EntityBase.MarkSyncDirty` / `MarkSyncFullDirty`，在正式事务作用域内暂存到成功准入。旧的显式 Publish 接口继续兼容。
+- 正式 Nest 接入自动消费生成实体的 `TakeEntitySyncChanges()`；客户端与服务间 dirty 独立。手写同步字段使用 `EntityBase.MarkSyncDirty` / `MarkSyncFullDirty`，在正式事务作用域内暂存到成功准入。EntityBase 不提供显式 Publish；消息总线发布是独立的 SyncBus 能力。
 - setter 只标脏，不触发逐字段发送。on_change 在成功准入且 Guard 仍持有 Entity 锁时冻结内容；全部 Entity 解锁且提交确认后才允许发送。periodic 在周期 Flush 时捕获。
 - packer 总是在 Entity mutex 内执行（周期捕获或准入冻结），返回 `FrozenSyncPayload`；返回后业务不得再持有可变 payload 引用。
 - Entity 不保存 player/session/observer/history；订阅者表在 Manager 的 subject 对象里，Entity 只有内容。
@@ -36,7 +36,7 @@ Entity Sync 只有一套实现，四层（ARCH-10 / M-13 / M-14，2026-09-22）�
 
 ## 订阅
 
-`Manager.Subscribe(session, subject, profile)` / `Unsubscribe` 操作默认来源。需要叠加政策时，为每个独立所有者保留一个 `manager.NewSubscriptionSource()`，使用其 Subscribe/Unsubscribe。同来源重复订阅幂等，换 profile 替换该来源；不同来源独立释放。按 LOD、Key、SchemaVersion 升序选一个生效 profile，优先级改变才发全量，低优先级变化不出帧。profile 只表达业务已授权的视图，不代替权限判断。
+`Manager.Subscribe(session, subject, profile)` / `Unsubscribe` 操作默认来源。需要叠加政策时，为每个独立所有者保留一个 `manager.NewSubscriptionSource()`，使用其 Subscribe/Unsubscribe。同来源重复订阅幂等，换 profile 替换该来源；不同来源独立释放。先按 ProfilePriorities（缺省取 LOD）排名，再按 LOD、Key、SchemaVersion 升序选一个生效 profile，优先级改变才发全量，低优先级变化不出帧。profile 只表达业务已授权的视图，不代替权限判断。
 
 最后一个来源离开时，对已持有对象或首次 create 在途的会话保留 remove 意图；从未收到且不在途的直接删除。`Unregister` 是实体退役，会释放所有来源，最后一个 remove 后才遗忘 subject。撤订阅不等待网络通知成功。LOD、权限和阵营视图通过有限的 `SyncProfile` 表达，不能把 subscriber ID 放进 Entity packer。
 
@@ -50,7 +50,7 @@ Push 期间若换 profile、撤订或退役，旧捕获只结算匹配的订阅 
 （demo 用 player id，接入层对该玩家的全部连接扇出），只要求稳定、唯一。`Transport` 可选实现 `SessionLifecycle` 以跟随开关。
 旧 Push 仅可采纳到仍匹配的会话状态；Hold/重开后旧帧不覆盖新状态，旧错误也不能关闭新会话。Transport 必须把已开始的 Push 固定到原连接，已准入字节不能撤回。
 
-Manager **不建**"会话 → subjects"反向索引：这份知识归政策（AOI 的可见集）；关闭会话时遍历 subject 是兜底。
+Manager 维护每个 session lifetime 的 subjects 反向索引，Hold/Ready/Close 只遍历相关 subject；政策另行持有可见关系，二者的生命周期和职责不同。
 
 ## Namespace
 
@@ -61,7 +61,7 @@ Manager **不建**"会话 → subjects"反向索引：这份知识归政策（AO
 
 - `Interest`：`AOI`（格索引 + 半径滞回 + band，原 `spatial.InterestManager`，2026-09-23 搬进 policy）+ 任意多个 `RelationSource`（队伍、好友、self）聚合成一个 (observer, subject) 一份订阅——第一个来源订、最后一个来源撤；
   band → profile；`Apply()` 把变化说给 Manager，被拒的 subscribe 每次 Apply 再说，直到被接受或 pair 释放（`Refusal.Retry` 供调用方分日志级别）。
-- `Group`：subject 集合 × 成员集合全互见，各自上限。AddSubject 失败会回滚本组订阅、允许重试；Manager 注册保留。RemoveSubject/Close 只释放本组来源，不再退役实体；实体销毁由应用调用 Manager.Unregister，成员会话也由应用开关。不叫 Room：`lockstep.Room` 是战斗房间，而这里只是一个集合。
+- `Group`：subject 集合 × 成员集合全互见，各自上限。AddSubject 失败会回滚本组订阅、允许重试；Manager 注册保留。RemoveSubject/Close 只释放本组来源，不再退役实体；实体销毁由应用调用 Manager.Unregister，成员会话也由应用开关。同 ID 会话重开后再次 Join 会重新提交已有订阅，不增加成员数量。不叫 Room：`lockstep.Room` 是战斗房间，而这里只是一个集合。
 - `Interest.Close` 释放本实例持有的订阅，不影响其他政策。
 - `Direct`：`Bind / Unbind` 一对；每个 Direct 实例是独立来源，重复 Bind 不累加。
 

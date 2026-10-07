@@ -694,3 +694,7 @@ stats_log Mod 每 `stats_log.interval` 采集一次：goroutine、堆、GC、按
 - 其他分区：[01 app](01-app-lifecycle.md)、[02 nest](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[04 sync](04-sync.md)、[05 remote / mirror](05-remote-mirror.md)、[06 saga](06-saga.md)、[07 配置](07-config.md)、[09 kit 服务](09-kit-services.md)、[10 时间](10-time.md)；[12 代码生成](12-codegen.md)
 
 [↑ 速览](#速览) · [实现文档](../impl/11-observability.md)
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+当前审计、积压gauge、统计窗口和系统日志时间已修；全部源码可解析指标纳入OBSERVABILITY守卫。ExportMetrics和admin元数据保留边界见B7补充，不声称自动接线/审批。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

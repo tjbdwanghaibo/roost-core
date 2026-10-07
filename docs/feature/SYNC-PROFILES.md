@@ -57,7 +57,7 @@ if err != nil { return err }
 - `SyncViewSet` 构造后不可变；Manager 和 Interest 都复制各自配置，调用方后续改 map 不改变运行状态。
 - 未配置优先级时保留旧 LOD、Key、SchemaVersion 升序规则；配置后先比较 Priority（小者优先），相同再走旧规则。Key 是稳定平局规则，不应用来表达业务权限。
 - `SourceProfiles` 中没有指定的来源/档位继续使用原有 `Profile` 回调；没有回调则使用 `DefaultBandProfile`。使用严格白名单 packer 时，应覆盖所有可能产生的 profile；未知视图会拒绝捕获，不回退到 default。
-- `ViewSets` 非空时，Interest 构造会检查空间所有 band、启用的 self、关系 band 0 和显式映射在每个实体类型的集合中均存在，且优先级与 Manager 一致。SchemaVersion 属于视图身份，不能混用。运行时再次检查自定义 Profile 回调的选择，失败在 Subscribe 之前返回 Refusal。集合应与对应实体 packer 共用同一实例；该配置不自动识别任意自定义 packer 的内部定义。
+- `ViewSets` 非空时，Interest 构造会检查空间所有 band、启用的 self、关系 band 0 和显式映射在每个实体类型的集合中均存在，且优先级与 Manager 一致。SchemaVersion 属于视图身份，不能混用。运行时再次检查自定义 Profile 回调的选择，直接 Apply 失败在 Subscribe 前返回 Refusal；排队事实由框架继续重试，调用方不能从 QueueMove 的返回值推断最终 Subscribe 成功。集合应与对应实体 packer 共用同一实例；该配置不自动识别任意自定义 packer 的内部定义。
 - 多实体类型装配 Manager 时，先用 `entity.MergeSyncViewPriorities(playerViews, monsterViews)` 合并，冲突直接返回错误。ViewSets map 在构造时复制；集合本身不可变。可到达某来源的所有类型必须声明相应视图；只对某类型授权 owner 的业务仍需由其政策控制订阅。
 
 Interest 现在按来源解析后的实际 profile 选优。若原自定义 `Profile(band)` 把更大的 band 映射为更小的 LOD，其选择结果可能与旧的“先取最小 band”不同；请按业务意图配置显式 Priority。默认 band→LOD 映射的结果保持不变。
@@ -72,7 +72,7 @@ snapshot 编码该视图的完整白名单；delta 编码 `dirty mask & view.Fie
 
 Manager 使用新的 `PrepareViews` 明确传入需要的视图；无接收者时不打包无用的 default payload，但仍处理版本提交和持久化水位。公开 `Prepare` / `PrepareTick` 的空列表默认视图行为继续兼容。
 
-20Hz 仍是合并检查频率；无内容或订阅变化时不发帧。本次没有实现事件触发发送，也没有给 LOD 添加隐含的降频语义。
+20Hz 仍是合并检查频率；无内容或订阅变化时不发帧。本文最初批次未实现事件发送；现行 ModeOnChange 已由正式 Nest 链接入，setter 仅标脏、Guard 锁内冻结、解锁并确认提交后放行，20Hz 兜底。LOD 没有隐含降频语义。
 
 ## Demo 与兼容性
 

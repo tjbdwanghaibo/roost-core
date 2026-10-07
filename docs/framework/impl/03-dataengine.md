@@ -819,3 +819,7 @@ bash scripts/perf/dataengine.sh                                                #
 ## v1.23.1 修正（2026-10-07，未发布）
 
 F03-2～8/10/11 文档更正，async 先投影符合弱持久承诺，Ack 前仍 fsync；F03-9 见 RR-20261007-04；F03-12 见 RR-20261007-05。 目标 race 通过，组合验证进行中；原始 v1.23.0 描述保留，以上为当前更正。
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+区分不可回滚边界（pipelined Enqueue接纳）与持久确认边界（fsync票据完成）。async可先投影，Ack前仍fsync；生成标记已支持pipelined。Remote已持久但快照未发由outbox补发，投影不再阻塞（RR-69）。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

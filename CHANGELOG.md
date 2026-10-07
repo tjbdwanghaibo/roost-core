@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- B8：统一三大模块和单仓文档，补基建包入口；最低框架与发布清单准备 v1.23.1（尚未发布）。RR-20261008-39 修正 Remote 真实依赖验收的旧发布阻塞断言，并增加发布失败时后续事务落库的验证；生产行为不回退。
+
 - B7 RR-20261008-29～38：管理命令关联审计和 HTTP 错误分类；Lua 裁剪计数、statsz 不消费日志窗口、DataEngine 积压 gauge、统一系统日志时间、生产可选 secret 校验；生成失败不发布半成品、生成文件识别与覆盖权限分离、新清单移除失效 skill/service 版本。RPC Gauge 更名为 bus_rpc_pending_requests，相关查询须同步；所有源码指标纳入文档守卫。
 
 - B6 RR-20261008-22～24、26～28：接入 entitysync 健康检查、Group 重连恢复；缓存复制强制原子版本/删除水位 Store；TCP 心跳、默认令牌桶、panic 栈与配置预算继承。ReplicaSyncer 调用方须迁移到 ReplicaStore，旧通用 Store 启动拒绝；无线上数据兼容层。RR-25 的 JetStream 配置方向尚待确认，不计完成。

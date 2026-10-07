@@ -408,7 +408,7 @@ tick 回调注册表按注册顺序实时生效（引擎启动后注册的回调
 
 ### 10. file journal 的组提交 —— `syncstream/file_journal.go`
 
-生命周期 journal 的 `Record` 保持"返回即持久"，但并发调用会合并为一次 write+fsync（leader-follower 合批，常驻文件句柄），fsync 次数从每条降到每批——观察者频繁进出的场景不再被逐条 fsync 地板限速。
+生命周期 journal 的 `Record` 保持"返回即持久"，但并发调用会合并为一次 write+fsync（leader-follower 合批，常驻文件句柄），直接并发 Append 可以合批；经同一个 History.Record 的调用在 History 写锁内串行，不能宣称这种入口也减少 fsync 次数。
 
 ### 11. 输入帧同步与状态同步：两条通道的取舍 —— `sync/lockstep`、`sync/entitysync`
 

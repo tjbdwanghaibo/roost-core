@@ -8,6 +8,7 @@ import (
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/kit/dataengine"
 	kitetcd "github.com/tjbdwanghaibo/roost-core/kit/etcd"
 	kitlock "github.com/tjbdwanghaibo/roost-core/kit/lock"
+	kitmanager "github.com/tjbdwanghaibo/roost-core/kit/manager"
 	kitmongo "github.com/tjbdwanghaibo/roost-core/kit/mongo"
 	kitnats "github.com/tjbdwanghaibo/roost-core/kit/nats"
 	kitnest "github.com/tjbdwanghaibo/roost-core/kit/nest"
@@ -25,6 +26,7 @@ import (
 func TestBuiltInModsImplementContextStop(t *testing.T) {
 	implementations := []app.ModStopperWithContext{
 		(*kitdataengine.Mod)(nil),
+		(*kitmanager.ManagerMod)(nil),
 		(*kitconfigdata.Mod)(nil),
 		(*kitetcd.EtcdMod)(nil),
 		(*kitlock.LockMod)(nil),
@@ -38,7 +40,7 @@ func TestBuiltInModsImplementContextStop(t *testing.T) {
 		(*kitstatslog.StatsLogMod)(nil),
 		(*kitsyncbus.SyncBusMod)(nil),
 	}
-	if len(implementations) != 13 {
-		t.Fatalf("lifecycle gate list = %d, want 13", len(implementations))
+	if len(implementations) != 14 {
+		t.Fatalf("lifecycle gate list = %d, want 14", len(implementations))
 	}
 }

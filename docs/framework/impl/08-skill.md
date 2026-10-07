@@ -728,3 +728,7 @@ C11/C12：补 ChanceRoll 只产事实、持久 vitals 不会自动恢复和 Tick
 C14：DAO 在 undo 策略首次修改对应字段时才复制；state 不构造无用逆操作。1000 个属性、单事务 100 次写入，3 轮：8.05～8.09 ms/op → 0.430～0.432 ms/op，约 6.42 MB/op → 0.693 MB/op，1093～1094 → 74 allocs/op。只代表此专项，非系统吞吐。
 
 C15 的跨块重复 ID 已排除为 bug：既有 TestBlockIndexRejectsUnsafeAllocationAndDeduplicatesRange 明确允许同 ID 多块登记、RangeBlocks 并集去重；保持 Add/Remove/Move 块级契约并补中文说明。C16：根包新增 import 守卫（combat 仅标准库、skill 根不 import spatial），仅保证静态依赖边界。
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+当前checkpoint=10、单仓同版本；原正文的5/6/7等为历史基线。F08-D更正与B1/B2处置以B8与篇末RR为准。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

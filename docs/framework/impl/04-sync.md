@@ -918,3 +918,7 @@ ROOST_PERF_COUNT=2 ROOST_PERF_LABEL=sync-change-1 ./scripts/perf/sync-aoi.sh -mo
 2026-10-08 F04-10：v1.23.1 已修复（未发布），见 [RR-20261008-27](../../bugfix/RR-20261008-27.md)。RecoverMiddleware 在 Error 级记录 stack、player/message/sequence；TCP 派发错误提高到 Warn。内部错误和 WriteGate 拒绝仍断连，不把未知执行结果包装成成功业务包。
 
 2026-10-08 F04-13/D2：v1.23.1 已修复（未发布），见 [RR-20261008-28](../../bugfix/RR-20261008-28.md)。鉴权后 MsgID0+空载荷+flags0 的递增序号帧为心跳，返回同序号空 ACK；默认 heartbeat_enabled=true。令牌桶默认100次/秒、burst200，心跳也扣令牌，request_rate=0显式关闭。
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+F04-D逐组更正、TCP心跳/限流、Group重连及健康注册见B8。状态走可靠有序；RR-25仍待确认。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

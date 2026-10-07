@@ -1,5 +1,7 @@
 # game-demo：一个能跑起来的参考实现（`roost project new … -template game-demo`）
 
+> 2026-10-08 当前边界：本文保留历次增量设计。现行 auth 只认 session:<id>:<token>，没有 player:<id> 捷径；RS v2 推送序号递增且非0，PB/Sync 分别 flags1/3；两人无多数 hash 也产生 NoMajority，见 RR-20261006-64。旧“实跑无 desync”只说明当时样本。
+
 > 状态：2026-09-16，六批实施完成并全部推送；除 Grafana 一批外每一批都在本地真实基础设施上实跑过。
 > 本文是交接文档：给要继续做、要改、要审查这套 demo 的人（或 agent）。代码在 roost-codegen，
 > 运行时行为在 roost-core / roost-kit；本文不重复代码里的注释，只写代码里看不出来的东西——为什么这样、

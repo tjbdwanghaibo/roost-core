@@ -441,3 +441,7 @@ sequenceDiagram
 - 模块文档（部分过时，见 F09-D）：[kit/service/README.md](../../../kit/service/README.md)、[kit/README.md](../../../kit/README.md)
 - 方案：[静态绑定](../../feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md)、[B9 / C5](../../feature/B9-C5-WINDOW-ENTRIES-ROLE-TABLE-2026-10-06.md)、[C4 活动组](../../feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md)、[C6 服务指标](../../feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md)、[A2-3 写令牌](../../feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md)
 - 登记：[框架文档发现](../../review/FRAMEWORK-DOCS-FINDINGS-2026-10-07.md)、[TROUBLESHOOTING](../../TROUBLESHOOTING.md)
+
+## v1.23.1 当前口径补充（2026-10-08，未发布）
+
+当前10个kit服务包，9个独立托管服务，game-demo共10个进程；directory是嵌入能力。B3现行契约和F09-D更正见B8。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。

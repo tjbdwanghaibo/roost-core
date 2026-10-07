@@ -1,5 +1,7 @@
 # SyncStream：分片、重组和交付语义
 
+> 2026-10-08 当前边界：旧文关于确定时间 TTL、重试耗尽测试的覆盖描述撤回：不能据当前测试确认这些场景。AssemblyTTL 在新多片输入到来时清理，没有定时器。已有有界重组/发布用例不等于时间与全部失败矩阵的穷尽验证。
+
 Core b58e280；[第六轮证据](REVIEW-2026-09-15-06.md)。范围为 syncstream/publisher.go、syncbus/sync.go 和 room/jetstream_syncbus.go 的订阅包装；History/journal 尚未深入。
 
 Publisher 检查 epoch、sequence 上界、期望 observer 和 payload 大小，将 Packet 序列化为 JSON，可选 gzip，然后计算原始 JSON 的 SHA-256。按 MaxFrameBytes 切片，每片携带独立 delivery ID、part/parts、checksum 和业务 topic/key/sequence。RequireConfirmation 只接受支持 PublishConfirmed 的 bus；它证明 broker 接受，不证明业务 handler 成功。
