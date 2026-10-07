@@ -380,6 +380,7 @@ CI 分工：`ci.yml` 跑 `go generate` 漂移、5 个运行期守卫与全部单
 - **后果**：作者要 strict（WAL fsync 后才回复）实际得到 async，崩溃窗口内已回复的事务可能丢失；要按 sid 分库实际写进全局库。都不报错、不告警，生成物看起来正常。
 - **对照**：entity 标记早已改成拒绝未知键，注释写明原因“a typo in a key … used to be read as parameter absent, which silently changes what gets generated”（`codegen/internal/entity/parse.go:286`～`:288`）；webroute 同（`webroute/parse.go:87`～`:90`）。rpc 的同类问题已登记为 F09-R4。
 - **修复方向**：四个解析器统一成“已知键白名单 + 未知键报错”，各补一条拼错用例。
+- **v1.23.1 已修复，见 [RR-20261006-56](../../bug/RR-20261006-56.md)**：15 种带选项的标记收敛到 `codegen/internal/marker` 的 `Spec.Parse` / `CheckFile`，未知键、重复键报错并带 `文件:行`；守卫 `TestEveryMarkerRefusesAMisspeltKey` / `TestEveryMarkerKindHasASpecAndAGuardCase`（G5 里 protocol / `id.go` 的任意前缀正则一并改掉）。
 
 ### G2（缺陷，实测）`versions.codegen` 的下限与 Makefile 的用法在合仓后对不上
 
@@ -389,6 +390,7 @@ CI 分工：`ci.yml` 跑 `go generate` 漂移、5 个运行期守卫与全部单
 - **后果**：钉 `v1.15.x` 时生成工程的 `make sync / generate / check-generated / doctor / config-check-all / id-check / ci` 全部失败，生成的 `.github/workflows/ci.yml` 也跑 `make check-generated`（`render.go:1121`）而红；钉 `v1.16`～`v1.22` 时用比生成工程旧的生成器 `sync`，可能把模板改写回旧形状。
 - **门禁盲区**：framework-compat 的 `minimum` lane 正是 `-codegen-version v1.15.0`（`.github/workflows/framework-compat.yml:50`），但只用当前构建的 `roost` 二进制，不跑 make，所以抓不到。
 - **修复方向**：codegen 下限改为“latest 或 ≥ 当前 core 下限”（或直接让 Makefile 用 `versions.core` 并废弃 `versions.codegen`），文档与 minimum lane 同步；补“生成的 Makefile 在 minimum 版本集上能跑 `make check-generated`”的门禁。
+- **v1.23.1 已修复，见 [RR-20261006-57](../../bug/RR-20261006-57.md)**：Makefile 按 `versions.core` 运行生成器（`CORE_VERSION`），`versions.codegen` 废弃（写了即拒绝，`project upgrade` 删掉）；minimum lane 经钉住的 core 实跑 `make id-check` 并检查每条生成器调用。发版时 core 下限须升到 v1.23.1（v1.23.0 的生成器读不了不带 `versions.codegen` 的清单）。
 
 ### G3（缺陷，读码 + git 行为实测）工程在 git 仓库子目录时 `generate --changed` 一个生成器都不跑
 
@@ -397,6 +399,7 @@ CI 分工：`ci.yml` 跑 `go generate` 漂移、5 个运行期守卫与全部单
 - **后果**：除 `Always` 的 registry 外全部被过滤，命令输出成功，改过的定义没有重新生成；之后 `--check` / CI 才发现。
 - **测试**：`filterChanged` / `gitChanged` 没有任何用例（`codegen/internal/roost/*_test.go` 无引用）。
 - **修复方向**：用 `git status --porcelain -z` 并以 `git rev-parse --show-prefix` 去掉前缀（或改用 `git -C root ls-files -m -o --exclude-standard`），补子目录与带空格路径的用例。
+- **v1.23.1 已修复，见 [RR-20261006-58](../../bug/RR-20261006-58.md)**：`-z` + `--show-prefix` + `-- .`，rename 两侧都算改动；补子目录、带空格、rename 用例。
 
 ### G4（限制，读码）模板脚手架在提交点之后执行，失败留下半成品目录
 

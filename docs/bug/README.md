@@ -8,10 +8,16 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 代码生成器一批（分支 `genfix`，`63573f33`～`8dd984eb`，框架文档发现 F12 G1～G3、F09-R1、F09-R4 marker 一项），未发版。** 标记键名拼错静默取缺省、`versions.codegen` 下限指向不含生成器的 core、`generate --changed` 在仓库子目录里几乎不跑、生成的 RPC 客户端 affinity 不生效。
+
 **10-07 skill 衍生物“施放 → 移交 → 停止”（分支 `skspawn`，`50a0fe88`，框架文档发现 F08-R R1～R4、F08-H+ H1；维护者要求先补端到端用例再修），未发版。** 施放中的衍生物在移交前不推进、启动步被拒时 Host 侧残留、衍生物回调丢事件链与 EventID 每 tick 相同、proc 第 0 号效果撞号、事件派发出错卡住 Runtime 且付费后删 cast（用例 `skill/spawn_lifecycle_e2e_promises_test.go`）。
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
+| [RR-20261006-59](RR-20261006-59.md) | P1 生成的 RPC 客户端固定 `CallChecked(ctx, 0, …)`、不带 discovery，match 7 个 / activity 11 个带 affinity 的方法随机路由（F09-R1） | 已修复（`8dd984eb`），未发版 |
+| [RR-20261006-58](RR-20261006-58.md) | P2 `generate --changed` 拿相对仓库根、带引号的 porcelain 路径比相对工程根的前缀，工程在子目录时只跑 registry 还报成功（F12 G3） | 已修复（`a461ee2f`），未发版 |
+| [RR-20261006-57](RR-20261006-57.md) | P2 `versions.codegen` 下限 v1.15.0（该版 core 无生成器），Makefile 按它跑生成器：钉 v1.15.x 的 make 全失败、钉 v1.16～v1.22 用旧生成器（F12 G2） | 已修复（`410392e0`），未发版；发版时 core 下限升 v1.23.1 |
+| [RR-20261006-56](RR-20261006-56.md) | P1 `//roost:nest` / `dao` / `redisdao` / `attribute` / protocol / table / rpc 标记键名拼错被静默忽略取缺省（`durabilty=strict` → async，`dbscop=sid` → 全局库）（F12 G1、F09-R4） | 已修复（`63573f33`），未发版 |
 | [RR-20261006-55](RR-20261006-55.md) | P2 被动候选入队失败（Program 不在 Host 能力表里）时 `dispatchEvent` 整个返回错误，cursor 不前进、Runtime 永久卡住；`payCostList` 付费后 drain 失败，已付费的启动被删、费用不退（F08-H+ H1） | 已修复（`50a0fe88`），未发版；根事件表满仍原地重试，待维护者定 |
 | [RR-20261006-54](RR-20261006-54.md) | P3 proc 施放的事件 ID 与第 0 号效果事件 ID 相同（F08-R R4） | 已修复（`50a0fe88`），未发版 |
 | [RR-20261006-53](RR-20261006-53.md) | P2 衍生物回调不继承施法的 RootEventID / ProcDepth，回调效果每 tick、每目标同一 EventID；`max_depth` 管不住衍生物链（F08-R R3） | 已修复（`50a0fe88`），未发版 |

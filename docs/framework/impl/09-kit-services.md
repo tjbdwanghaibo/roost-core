@@ -459,10 +459,10 @@ Reserve（`kit/service/directory/store.go:92-158`）：`Update`：不存在或�
 
 | 编号 | 要点 | 本篇位置 |
 | --- | --- | --- |
-| F09-R1 | 生成客户端 affinity 不生效（`codegen/internal/servicerpc/template.go:205`、`servicerpc/client.go:145`） | §3.1 |
+| F09-R1 | 生成客户端 affinity 不生效（`codegen/internal/servicerpc/template.go:205`、`servicerpc/client.go:145`）。v1.23.1 已修复，见 [RR-20261006-59](../../bug/RR-20261006-59.md)：affinity 方法经 discovery + 按键 picker 路由，缺 discovery 启动时拒绝 | §3.1 |
 | F09-R2 | 轻量传输 `call_timeout` > 5s 截到 5s；超时 / 取消错误不带 ctx 语义（`nats/driver/rpc.go:164`） | §3.1 |
 | F09-R3 | JetStream 传输与生成 ClientMod 不兼容（`bus/bus.go:659-666`） | §3.1 |
-| F09-R4 | servicerpc 生成器若干漏洞（`wiresafe.go:60`、`parse.go:204-215`、`validate.go:142` 等） | — |
+| F09-R4 | servicerpc 生成器若干漏洞（`wiresafe.go:60`、`parse.go:204-215`、`validate.go:142` 等）。marker 拼写一项 v1.23.1 已修复，见 [RR-20261006-56](../../bug/RR-20261006-56.md)；其余待处理 | — |
 | F09-V | 服务层零处理 `ErrOutcomeUnknown` / `Resume`；A2-3 方案与源码 5 处不一致；S1～S8 | §6 |
 | F09-K | `player_elsewhere` 丢 `owner_sid`；`everyNamespace` 漏 `:platform:pending`；chat `retention_age=0` → 72h；activity 坏记录整组停摆；WriteGate 启动窗口放行（推断）；SelectRole / PublishSystem 信任模型 | §3.9、§3.13、§7.1 |
 | F09-D | `kit/service/README.md`、`kit/mods/service_name.go:24-27`、`kit/README.md:25`、`USER_GUIDE.md:85` | — |

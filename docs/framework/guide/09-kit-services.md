@@ -8,7 +8,7 @@
 
 - **这一块是什么**：kit 自带的十个“玩家之外”的业务服务——account（账号 / 角色 / 会话令牌）、platform（渠道登录 / 支付回调 / 发货）、session（副本类“一次运行”与资源回收）、global（game 服到全局服的路由绑定）、activity（跨服活动协调）、mail、chat、match、rank、directory（名字唯一）。每个服务是一个 Mod，状态全部放在 Redis 里，经 `versionstore`（带版本的 KV，见 [03 §4.8](03-dataengine.md)）或少量 Lua 读写；跨进程调用走生成的 servicerpc（NATS 总线）。另外一块是 game-demo 模板里的**玩家静态绑定**：玩家建角时定下 sid，之后只由那个 game 进程服务，跨服赠礼按 `FromSID` 转交。
 - **最重要的保证**：同一份业务代码在“服务和 game 同进程”与“服务独立进程”两种部署下一字不差（`app.Lookup[mail.Mail]` 拿到的要么是本地包装，要么是总线客户端）；每个写操作都有自己的幂等依据（请求 ID / 状态比对 / 令牌），重试安全不依赖传输层；业务错误按 errcode 跨进程还原，`errors.Is(err, svc.ErrX)` 在两种部署下都成立。
-- **最容易踩的坑**：① `key_prefix` 必填、没有缺省，Redis Cluster 下 platform / rank / activity 必须带 hash tag。② 总线客户端的 `affinity` 标记**没有生效**（F09-R1）、轻量传输 `call_timeout` 超过 5s 会被截到 5s（F09-R2）、服务端开 `nats.rpc.transport=jetstream` 时生成的 ClientMod 调不通（F09-R3）。③ 存储“回复丢失”（`versionstore.ErrOutcomeUnknown`）在服务层**没有任何处理**，会以 `CodeInternal` 返回；调用方必须用同一个请求 ID 重试（F09-V）。④ session、match、activity、platform 的后台扫描要显式配置（`WithSweepOwners`、`match.sweep_queues`、`activity.groups_file`），不配就什么都不扫。⑤ `player_elsewhere` 的回包里没有 `owner_sid`，客户端只能重新 SelectRole（F09-K ①）。
+- **最容易踩的坑**：① `key_prefix` 必填、没有缺省，Redis Cluster 下 platform / rank / activity 必须带 hash tag。② 总线客户端的 `affinity` 标记在 v1.23.1 前**没有生效**（F09-R1，已修复，见 RR-20261006-59：affinity 方法经 etcd discovery 按键路由，调用方必须装 etcd Mod，缺了启动时拒绝）、轻量传输 `call_timeout` 超过 5s 会被截到 5s（F09-R2）、服务端开 `nats.rpc.transport=jetstream` 时生成的 ClientMod 调不通（F09-R3）。③ 存储“回复丢失”（`versionstore.ErrOutcomeUnknown`）在服务层**没有任何处理**，会以 `CodeInternal` 返回；调用方必须用同一个请求 ID 重试（F09-V）。④ session、match、activity、platform 的后台扫描要显式配置（`WithSweepOwners`、`match.sweep_queues`、`activity.groups_file`），不配就什么都不扫。⑤ `player_elsewhere` 的回包里没有 `owner_sid`，客户端只能重新 SelectRole（F09-K ①）。
 
 ### 本篇覆盖的包
 
@@ -141,7 +141,7 @@ svc, ok := app.Lookup[mail.Mail](r, mail.CapabilityName)
 | 配置 | ClientMod 只读 `<svc>.service_type`（缺省为服务名）和 `<svc>.call_timeout`（`min:"0"`，0 = 3s）；不写单位的数字被 `app.LoadConfig` 拒绝 | `kit/service/mail/mail_rpc_assembly_gen.go:218-240` |
 | 生效位置 | `servicerpc.BusClient.Call` 用 `context.WithTimeout(ctx, c.timeout)` 包住**一次**调用，没有自动重试 | `servicerpc/client.go:119-146` |
 | 路由 | 生成的 `BusClient.call` 固定 `CallChecked(ctx, 0, …)`：按 service type 发到总线队列组，不经 etcd 发现 | `service/mail/mail_rpc_gen.go:360-367` |
-| affinity | 接口上的 `//roost:rpc affinity=...` 标记**没有到达运行时**：生成客户端不带 discovery，`PickServer` / `CallDiscoveredChecked` 在非测试代码里零调用 | F09-R1（缺陷，探针已证实） |
+| affinity | 接口上的 `//roost:rpc affinity=...` 标记在 v1.23.1 前**没有到达运行时**（生成客户端不带 discovery、固定走队列组）；v1.23.1 起 affinity 方法经 discovery + `KeyAffinityPicker` 落到固定 sid，`NewBusClient` 必须传 discovery，`ClientMod` 依赖 etcd Mod | F09-R1，已修复（RR-20261006-59） |
 | 轻量传输上限 | `call_timeout` > 5s 被 NATS 驱动的单次尝试 5s 截断；超时错误不满足 `context.DeadlineExceeded` | F09-R2（缺陷，真实 nats-server 已证实） |
 | JetStream 传输 | 服务端开 `nats.rpc.transport=jetstream` 后只订阅 JetStream，生成的 ClientMod 不读 transport，调用得 `ErrRPCCapturedByJetStream` | F09-R3（缺陷，读码推断） |
 

@@ -6,6 +6,14 @@
 
 ### 行为收紧
 
+- **codegen：标记键名拼错一律报错**（RR-20261006-56，F12 G1 / F09-R4）。`//roost:nest`、`dao`、`redisdao`、`attribute`、`proto` / `protocol` / `msg` / `view`、`table` / `object`、`rpc` 之前只取认识的键，拼错的键按“没写”取缺省（`durabilty=strict` 生成 async，`dbscop=sid` 写进全局库）。现在 15 种带选项的标记都经 `codegen/internal/marker` 的同一词表解析，未知键、重复键、多余的裸词让生成失败并点名键、文件、行。[问题](docs/bug/RR-20261006-56.md) · [修复](docs/bugfix/RR-20261006-56.md)
+- **codegen：生成器随 `versions.core` 运行，`versions.codegen` 废弃**（RR-20261006-57，F12 G2）。生成的 Makefile 改为 `go run …/codegen/cmd/roost@$(CORE_VERSION)`，取 `versions.core`；`roost.yaml` 里写了 `versions.codegen` 会被拒绝（`roost project upgrade` 删掉它），`-codegen-version` / `-codegen` 参数删除。发版时 core 下限须升到 v1.23.1。[问题](docs/bug/RR-20261006-57.md) · [修复](docs/bugfix/RR-20261006-57.md)
+- **servicerpc：带 affinity 的方法真正按键路由，缺 discovery 启动时拒绝**（RR-20261006-59，F09-R1）。生成的客户端之前一律走队列组，affinity 只是装饰；现在 affinity 方法经 etcd discovery + 按键 picker 落到固定实例，`NewBusClient` 必须传 discovery，`ClientMod` 依赖 etcd Mod。生成工程里托管或调用 match / activity 的进程自动带 etcd Mod。[问题](docs/bug/RR-20261006-59.md) · [修复](docs/bugfix/RR-20261006-59.md)
+
+### 修复（codegen）
+
+- **`generate --changed` 在仓库子目录里的工程也能选中生成器**（RR-20261006-58，F12 G3）。git 路径按工程根换算、不再被引号挡住，rename 两侧都算改动。[问题](docs/bug/RR-20261006-58.md) · [修复](docs/bugfix/RR-20261006-58.md)
+
 - **skill：施放中的衍生物也逐 tick 推进**（RR-20261006-51，F08-R R1）。召唤后施法还在 `wait` / `repeat` / policy 等待时，已召出的衍生物之前停在启动那一步、移交后只补走一步，中间的 tick 永久丢失；现在施放中与已移交的衍生物由同一个入口 `advanceOwnedSpawns` 推进、到期与回收，移交与否只决定停止和表现记在谁名下。删掉只能从 checkpoint 解出的 `spawnStepTask`（checkpoint 里出现按 corrupt 拒绝），源码守卫钉住唯一推进入口；施放中 area 回调在之后的 tick `finish` 时结束施法。端到端用例 `skill/spawn_lifecycle_e2e_promises_test.go`。[问题](docs/bug/RR-20261006-51.md) · [修复](docs/bugfix/RR-20261006-51.md)
 - **skill：运动衍生物启动步被 Host 拒绝时停掉 Host 侧已登记的衍生物**（RR-20261006-52，F08-R R2）。记录先入表再跑启动步，失败经统一停止入口 `requestSpawnStop`（拒绝停止时转入待停止、由 Runtime 重试）。[问题](docs/bug/RR-20261006-52.md) · [修复](docs/bugfix/RR-20261006-52.md)
 - **skill：衍生物回调继承施法的事件链**（RR-20261006-53 / 54，F08-R R3 / R4）。回调事件与回调里的效果继承施法的 `RootEventID` / `ProcDepth`，每次结算一个新 `EventID`（`1<<63 | 序号`，随 checkpoint 保存）；`max_depth` 对“被动 → 召唤衍生物 → 回调伤害 → 被动”生效，`once_per_root` / `max_events_per_root` 按施法根统计整条链。proc 施放自己的事件 ID 改为 `castID<<32`，不再与第 0 号效果撞号。**checkpoint 版本 7 → 8**（线上未部署，不兼容 7）。[问题](docs/bug/RR-20261006-53.md) · [修复](docs/bugfix/RR-20261006-53.md)

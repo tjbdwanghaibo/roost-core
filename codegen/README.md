@@ -178,8 +178,8 @@ make codegen-up   # go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/r
 旧项目的 Makefile 尚无 `project-upgrade` 时，先预览并执行一次迁移：
 
 ```bash
-go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . --dry-run -core latest -kit latest -skill latest -codegen latest
-go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . -core latest -kit latest -skill latest -codegen latest
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . --dry-run -core latest -kit latest -skill latest
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . -core latest -kit latest -skill latest
 ```
 
 迁移会把 `roost-up`、`codegen-up` 和其他当前工程指令一起写入 codegen 管理的 Makefile。没有生成标识的自定义 Makefile 会被拒绝，不会被静默覆盖。
@@ -431,7 +431,7 @@ type (
 
     roost project new <name> -module <path> # 脚手架新项目；module 必填
     roost project sync|diff|doctor
-    roost project upgrade [--root dir] [-core version] [-kit version] [-skill version] [-codegen version]
+    roost project upgrade [--root dir] [-core version] [-kit version] [-skill version]
     roost generate                      # 按序执行 roost.yaml 启用的全部生成器
     roost generate --changed            # 只执行受 git 变更影响的生成器
     roost generate --check              # CI 门禁：临时副本中重新生成并比对
