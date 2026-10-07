@@ -59,9 +59,10 @@ tools: "*"
 | --- | --- | --- |
 | roost-coding | `docs/agent-skills/roost-coding/SKILL.md` | 写代码 / review / bugfix 的共同规范、执行契约、风格（写给人读、中文注释写职责与原因、标准库惯用写法、快池内不阻塞） |
 | roost-bugfix | `docs/agent-skills/roost-bugfix/SKILL.md`（本机镜像 `~/.claude/skills/roost-bugfix/`，改仓库后 `cp` 同步） | 一轮 RR 修复：拉代码 → 读规则 → 分析 → 红测试 → 修 → 文档（bug / bugfix 两份记录、两个 README 索引、交接 §7、CHANGELOG、必要时 T 行）→ 提交推送 |
-| roost-review | 本机 `~/.claude/skills/roost-review/` | 只审不改，登记 `docs/bug/RR-*.md` |
+| roost-review | `docs/agent-skills/roost-review/SKILL.md` | 只审不改，登记 `docs/bug/RR-*.md` |
 | roost-optimize | `docs/agent-skills/roost-optimize/` | 性能优化入口（同机同配置前后对照，`scripts/perf/*`） |
-| codebase-memory | 本机 skill + MCP | 见 §2 |
+| codebase-memory | `docs/agent-skills/codebase-memory/SKILL.md` + MCP | 见 §2 |
+| roost-consolidate | `docs/agent-skills/roost-consolidate/SKILL.md` | 历史：三仓合一（已完成），只作方法论参考 |
 
 ## 4. 仓库约定速查
 
