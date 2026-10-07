@@ -8,16 +8,16 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
-**10-07 框架文档发现 F06（saga，分支 `sagafix2`，`SHAFIX`；F06-S5 维护者 2026-10-07 选 A），未发版。** 退避中送达的成功被丢弃、Nest 启动消费者对确定性错误 nak 到 `MaxDeliver`、原生步骤消费者坏信封 nak、坏记录拖累整批、步骤超时与 AckWait 无校验、`Completed` 可被人工补偿；F06-S4 / S6 是文档项，同批改正、不单独编号。
+**10-07 框架文档发现 F06（saga，分支 `sagafix2`，`63bc1d66`；F06-S5 维护者 2026-10-07 选 A），未发版。** 退避中送达的成功被丢弃、Nest 启动消费者对确定性错误 nak 到 `MaxDeliver`、原生步骤消费者坏信封 nak、坏记录拖累整批、步骤超时与 AckWait 无校验、`Completed` 可被人工补偿；F06-S4 / S6 是文档项，同批改正、不单独编号。
 
 | 编号 | 问题 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-47](RR-20261006-47.md) | P3 `Engine.Compensate` 不拒绝 `Completed`，已完成的 saga 被带回补偿、逐步撤销，不计 `reopened_total`（F06-S5） | 已修复（`SHAFIX`），未发版 |
-| [RR-20261006-46](RR-20261006-46.md) | P3 步骤 `Timeout` 与步骤消费者 `AckWait` 无校验，`Timeout ≥ AckWait` 照常启动、处理中被重投（F06-C1） | 已修复（`SHAFIX`），未发版 |
-| [RR-20261006-45](RR-20261006-45.md) | P3 `MongoStore.ClaimDue` 遇一条坏记录返回错误、协调循环整批丢弃；`List` 整次失败（F06-S3） | 已修复（`SHAFIX`），未发版 |
-| [RR-20261006-44](RR-20261006-44.md) | P3 原生步骤消费者对坏信封 nak 到 `MaxDeliver`（约 8.7 天），与其余四个消费者及 SAGA.md 不一致（F06-S2） | 已修复（`SHAFIX`），未发版 |
-| [RR-20261006-43](RR-20261006-43.md) | P2 Nest 启动消费者对 `ErrInvalidRecord`（Data 超过 `MaxPayloadBytes`）/ `ErrIdentityConflict` nak 到 `MaxDeliver`，启动意图静默丢失；`EmitStart` 按 4 MiB 校验（F06-S7） | 已修复（`SHAFIX`），未发版 |
-| [RR-20261006-42](RR-20261006-42.md) | P2 重试退避期间送达的成功按 `ErrNotWaiting` Term；之后截止 / 人工 Compensate / 定义缺失关闭操作，这一步已生效却不计入、不补偿、不告警（F06-S1） | 已修复（`SHAFIX`），未发版 |
+| [RR-20261006-47](RR-20261006-47.md) | P3 `Engine.Compensate` 不拒绝 `Completed`，已完成的 saga 被带回补偿、逐步撤销，不计 `reopened_total`（F06-S5） | 已修复（`63bc1d66`），未发版 |
+| [RR-20261006-46](RR-20261006-46.md) | P3 步骤 `Timeout` 与步骤消费者 `AckWait` 无校验，`Timeout ≥ AckWait` 照常启动、处理中被重投（F06-C1） | 已修复（`63bc1d66`），未发版 |
+| [RR-20261006-45](RR-20261006-45.md) | P3 `MongoStore.ClaimDue` 遇一条坏记录返回错误、协调循环整批丢弃；`List` 整次失败（F06-S3） | 已修复（`63bc1d66`），未发版 |
+| [RR-20261006-44](RR-20261006-44.md) | P3 原生步骤消费者对坏信封 nak 到 `MaxDeliver`（约 8.7 天），与其余四个消费者及 SAGA.md 不一致（F06-S2） | 已修复（`63bc1d66`），未发版 |
+| [RR-20261006-43](RR-20261006-43.md) | P2 Nest 启动消费者对 `ErrInvalidRecord`（Data 超过 `MaxPayloadBytes`）/ `ErrIdentityConflict` nak 到 `MaxDeliver`，启动意图静默丢失；`EmitStart` 按 4 MiB 校验（F06-S7） | 已修复（`63bc1d66`），未发版 |
+| [RR-20261006-42](RR-20261006-42.md) | P2 重试退避期间送达的成功按 `ErrNotWaiting` Term；之后截止 / 人工 Compensate / 定义缺失关闭操作，这一步已生效却不计入、不补偿、不告警（F06-S1） | 已修复（`63bc1d66`），未发版 |
 
 **10-07 框架文档发现 F02-1 / F03-1（分支 `memtx`，`c2616106`，维护者 2026-10-07 选 A），未发版。** `durability=memory` 的事务改持久字段时静默丢失，改为提交点整笔失败回滚、点名实体与字段（[修复](../bugfix/RR-20261006-41.md)）。
 

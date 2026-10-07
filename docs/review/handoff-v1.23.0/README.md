@@ -91,7 +91,7 @@
 
 - **已完成（main）**：`docs/framework/` 01 app、02 nest、03 dataengine、05 remote/Mirror、06 saga 双文档；RR-20261006-41（memory 事务改持久字段失败回滚，`c2616106`）。
 - **待维护者批准合并**：`origin/fw-04`（`dcdc6580`，04 sync 双文档，推 main 被权限规则拦）。
-- **WIP 分支（未验证，恢复时从这里继续，不得直接合入）**：`wip/fw-07`（07 配置）、`wip/fw-08`（08 skill）、`wip/fw-09`（09 kit 服务）；`wip/sagafix` 已续做完并合入 main（`SHAFIX`，RR-20261006-42～47，F06-S4/S6 文档同批），远端分支已删。分支不存在表示该 worktree 尚无改动，按原任务重派。
+- **WIP 分支（未验证，恢复时从这里继续，不得直接合入）**：`wip/fw-07`（07 配置）、`wip/fw-08`（08 skill）、`wip/fw-09`（09 kit 服务）；`wip/sagafix` 已续做完并合入 main（`63bc1d66`，RR-20261006-42～47，F06-S4/S6 文档同批），远端分支已删。分支不存在表示该 worktree 尚无改动，按原任务重派。
 - **未开始**：10 时间、11 可观测、12 codegen、00 总览 + `docs/framework/README.md`、跨分区链接统一；登记表其余问题的修复批次；v1.23.1 发版。
 - **问题登记表**：`docs/review/FRAMEWORK-DOCS-FINDINGS-2026-10-07.md`（01/02/03/04/05/06 共 61 条，F02-1/F03-1 已修）。各分区 agent 的共同要求见 `framework-common.md`（scratchpad 已不可靠，内容同 `framework-docs-spec.md` + 本节）。
 - **待维护者决定**：① 合并 fw-04；② F06-S5 Completed 的 saga 能否手动 Compensate（维护者已选 A 拒绝，已实施 RR-20261006-47）；③ lockstep 方向（推荐 A：修 F04-5～9 五条并补端到端门禁；B：标为实验性）。

@@ -8,16 +8,16 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
-**10-07 saga 框架文档发现 F06（`sagafix2`，`SHAFIX`），未发版。** 退避中送达的成功被接收；五个消费者坏信封一律 Term + `saga.consumer.rejected_total`；启动消费者对确定性拒绝 Term + `saga.start.rejected_total`，`EmitStart` 在 Nest 事务里按本进程协调器的 `MaxPayloadBytes` 拒绝；坏记录单条隔离 + `saga.store.corrupt_record_total`；步骤 `Timeout < DefaultStepAckWait` 启动校验；`Completed` 拒绝人工 `Compensate`。F06-S4（demo 注释）/ S6（SAGA.md、kit/README 旧说法）同批改正。
+**10-07 saga 框架文档发现 F06（`sagafix2`，`63bc1d66`），未发版。** 退避中送达的成功被接收；五个消费者坏信封一律 Term + `saga.consumer.rejected_total`；启动消费者对确定性拒绝 Term + `saga.start.rejected_total`，`EmitStart` 在 Nest 事务里按本进程协调器的 `MaxPayloadBytes` 拒绝；坏记录单条隔离 + `saga.store.corrupt_record_total`；步骤 `Timeout < DefaultStepAckWait` 启动校验；`Completed` 拒绝人工 `Compensate`。F06-S4（demo 注释）/ S6（SAGA.md、kit/README 旧说法）同批改正。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-47](RR-20261006-47.md) | `Compensate` 对 `Completed` 返回 `ErrSagaCompleted`、记录不动（维护者选 A） | 已修复（`SHAFIX`），未发版 |
-| [RR-20261006-46](RR-20261006-46.md) | `kit/saga` `ValidateConfig` 跨键规则 + `Init` 查定义写死的 `Timeout`；`saga.DefaultStepAckWait` | 已修复（`SHAFIX`），未发版 |
-| [RR-20261006-45](RR-20261006-45.md) | `ClaimDue` / `List` 跳过坏记录并告警，不改写坏记录 | 已修复（`SHAFIX`），未发版 |
-| [RR-20261006-44](RR-20261006-44.md) | `rejectEnvelope`：五个消费者坏信封同一口径（Term + 计数 + ERROR） | 已修复（`SHAFIX`），未发版 |
-| [RR-20261006-43](RR-20261006-43.md) | `handleNestStart` 对 `ErrInvalidRecord` / `ErrIdentityConflict` Term + 告警；`NewStartEffect` 按类型的协调器上限校验 | 已修复（`SHAFIX`），未发版 |
-| [RR-20261006-42](RR-20261006-42.md) | `Complete` 同一生、操作在退避时接收成功（带结果关闭操作） | 已修复（`SHAFIX`），未发版 |
+| [RR-20261006-47](RR-20261006-47.md) | `Compensate` 对 `Completed` 返回 `ErrSagaCompleted`、记录不动（维护者选 A） | 已修复（`63bc1d66`），未发版 |
+| [RR-20261006-46](RR-20261006-46.md) | `kit/saga` `ValidateConfig` 跨键规则 + `Init` 查定义写死的 `Timeout`；`saga.DefaultStepAckWait` | 已修复（`63bc1d66`），未发版 |
+| [RR-20261006-45](RR-20261006-45.md) | `ClaimDue` / `List` 跳过坏记录并告警，不改写坏记录 | 已修复（`63bc1d66`），未发版 |
+| [RR-20261006-44](RR-20261006-44.md) | `rejectEnvelope`：五个消费者坏信封同一口径（Term + 计数 + ERROR） | 已修复（`63bc1d66`），未发版 |
+| [RR-20261006-43](RR-20261006-43.md) | `handleNestStart` 对 `ErrInvalidRecord` / `ErrIdentityConflict` Term + 告警；`NewStartEffect` 按类型的协调器上限校验 | 已修复（`63bc1d66`），未发版 |
+| [RR-20261006-42](RR-20261006-42.md) | `Complete` 同一生、操作在退避时接收成功（带结果关闭操作） | 已修复（`63bc1d66`），未发版 |
 
 **10-07 memory 事务改持久字段（`memtx`，`c2616106`），未发版。** 提交点按事务本地的持久登记检查，有就以 `ErrMemoryTransactionPersistentWrite` 整笔拒绝回滚；生成 DAO 带 `PersistFieldNames` 用于点名字段。
 
