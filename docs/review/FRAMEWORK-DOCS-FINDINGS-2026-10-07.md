@@ -91,3 +91,4 @@
 | F02-8 | 02 | 不一致（RR-41 后续发现） | 手写 `nest.HandlerMeta` 不写 `Durability` 时零值为 memory，`//roost:nest` 缺省为 async；维护者 2026-10-07 选 A：`Rollback` 不为 none 时必须显式写 `Durability`，注册时报错 | 已实施：`DurabilityPolicy` 零值表示未声明，注册时 `ErrDurabilityUnset`（v1.23.1 起） | 已修复（[RR-20261006-60](../bug/RR-20261006-60.md)，`2a8b2e64`，未发版） |
 
 > 维护者 2026-10-07：根事件表满按 A（另加结构性上界校验）、施放中 Shutdown 也跑 cancel 回调按 A（`wt-skroot` 实施中）；手写 HandlerMeta 按 A（见 F02-8）。
+| F08-H+2 | 08 | 后续（RR-55 后续两项 + 构造语义） | 维护者 2026-10-07 “选A，都按照推荐处理”：① 排队任务（被动激活、`QueueExternalEvent`、能力覆盖到期）加上限并计入根事件表上界，满了在入口拒绝（`QueueExternalEvent` 返回错误，被动候选按被拒计数告警）；② `RemoveProgram` 停施放中的衍生物也跑一次 cancel 回调；③ 配置违反上界时 `NewRuntime` 保持 panic | 待实施（队列中） | 待处理 |
