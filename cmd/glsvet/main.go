@@ -393,21 +393,24 @@ func reportHandlerConcurrency(fileSet *token.FileSet, file *ast.File) int {
 	workerAliases := workerImportAliases(file)
 	workerPools := collectWorkerPools(file, workerAliases)
 	findings := 0
-	for _, function := range functions {
-		if !isNestHandler(function) {
+	// 方法和包级函数都可能是 handler；按声明遍历，避免不同接收者的同名方法互相覆盖。
+	// functions 只用于解析不带接收者的同文件 helper 调用，不能混入方法。
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || !isNestHandler(function) {
 			continue
 		}
-		findings += inspectHandlerFunction(fileSet, function, function.Name.Name, functions, workerPools, make(map[string]bool))
+		findings += inspectHandlerFunction(fileSet, function, function.Name.Name, functions, workerPools, make(map[*ast.FuncDecl]bool))
 	}
 	return findings
 }
 
-func inspectHandlerFunction(fileSet *token.FileSet, function *ast.FuncDecl, handler string, functions map[string]*ast.FuncDecl, workerPools map[string]bool, visiting map[string]bool) int {
-	if function == nil || function.Body == nil || visiting[function.Name.Name] {
+func inspectHandlerFunction(fileSet *token.FileSet, function *ast.FuncDecl, handler string, functions map[string]*ast.FuncDecl, workerPools map[string]bool, visiting map[*ast.FuncDecl]bool) int {
+	if function == nil || function.Body == nil || visiting[function] {
 		return 0
 	}
-	visiting[function.Name.Name] = true
-	defer delete(visiting, function.Name.Name)
+	visiting[function] = true
+	defer delete(visiting, function)
 	findings := 0
 	outerNames := declaredNames(function)
 	ast.Inspect(function.Body, func(node ast.Node) bool {
@@ -453,6 +456,8 @@ func declaredNames(function *ast.FuncDecl) map[string]bool {
 			}
 		}
 	}
+	// 接收者也是 handler 的外部状态，不能绕过 worker 闭包捕获检查。
+	addFields(function.Recv)
 	addFields(function.Type.Params)
 	addFields(function.Type.Results)
 	ast.Inspect(function.Body, func(node ast.Node) bool {
@@ -547,7 +552,7 @@ func reportWorkerClosureCaptures(fileSet *token.FileSet, call *ast.CallExpr, han
 }
 
 func isNestHandler(function *ast.FuncDecl) bool {
-	if function == nil || function.Recv != nil {
+	if function == nil {
 		return false
 	}
 	if strings.HasPrefix(function.Name.Name, "handler") {

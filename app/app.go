@@ -94,7 +94,7 @@ func (a *App) RegisterServer(serverType ServiceName, svc Service, mods ...Mod) *
 				return a.printConfigSchema(serverType, cmd.OutOrStdout())
 			}
 			if check, _ := cmd.Flags().GetBool("check-config"); check {
-				if _, err := a.loadServiceConfig(serverType); err != nil {
+				if _, err := a.loadServiceConfig(serverType, true); err != nil {
 					return err
 				}
 				_, err := fmt.Fprintf(cmd.OutOrStdout(), "config ok: %s\n", a.cfg.ConfigFileUsed())
@@ -125,7 +125,8 @@ func (a *App) RootCmd() *cobra.Command {
 }
 
 // loadServiceConfig 读配置文件并按 App 与本服务全部 Mod 的声明检查（任何 Mod Init 之前），返回配置文件路径。
-func (a *App) loadServiceConfig(serverType ServiceName) (string, error) {
+// requireFile 用于 --check-config：检查真实文件，不能把开发启动的缺省回退报告成文件检查成功。
+func (a *App) loadServiceConfig(serverType ServiceName, requireFile bool) (string, error) {
 	cfgPath, _ := a.rootCmd.Flags().GetString("config")
 	explicitConfig := a.rootCmd.PersistentFlags().Changed("config")
 	if cfgPath == "" {
@@ -138,7 +139,7 @@ func (a *App) loadServiceConfig(serverType ServiceName) (string, error) {
 	a.cfg.SetDefault("server_type", serverType)
 
 	if err := a.cfg.ReadInConfig(); err != nil {
-		if explicitConfig || !isMissingConfig(err) {
+		if requireFile || explicitConfig || !isMissingConfig(err) {
 			return "", fmt.Errorf("read config %q: %w", cfgPath, err)
 		}
 		slog.Warn("default config file not found, using development defaults", "path", cfgPath, "err", err)
@@ -179,7 +180,7 @@ func (a *App) printConfigSchema(serverType ServiceName, out io.Writer) error {
 
 func (a *App) run(serverType ServiceName) (runErr error) {
 	// --- Load and check config: before any Mod Init ---
-	cfgPath, err := a.loadServiceConfig(serverType)
+	cfgPath, err := a.loadServiceConfig(serverType, false)
 	if err != nil {
 		return err
 	}
@@ -925,6 +926,10 @@ func sortMods(mods []Mod, external map[ModName]struct{}) ([]Mod, error) {
 		}
 		if _, exists := byName[name]; exists {
 			return nil, fmt.Errorf("duplicate mod %q", name)
+		}
+		// 服务专属 Mod 可以依赖已启动的共享 Mod，但不能以同名覆盖它的生命周期身份。
+		if _, exists := external[name]; exists {
+			return nil, fmt.Errorf("duplicate mod %q: already registered as a shared mod", name)
 		}
 		byName[name] = mod
 		order[name] = i

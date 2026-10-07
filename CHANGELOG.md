@@ -6,6 +6,10 @@
 
 ### 行为收紧
 
+- **配置检查把缺失的默认文件报告为成功已修复**（RR-20261007-01，F01-8）。[问题](docs/bug/RR-20261007-01.md) · [修复与兼容](docs/bugfix/RR-20261007-01.md)
+- **服务 Mod 可以与共享 Mod 重名已修复**（RR-20261007-02，F01-9）。[问题](docs/bug/RR-20261007-02.md) · [修复与兼容](docs/bugfix/RR-20261007-02.md)
+- **glsvet 漏查方法 handler 的异步执行已修复**（RR-20261007-03，F02-3）。[问题](docs/bug/RR-20261007-03.md) · [修复与兼容](docs/bugfix/RR-20261007-03.md)
+
 - **saga：`saga.max_payload_bytes` 是发起方与协调器共用的配置键，协调器在别的进程时 `EmitStart` 也在发起事务内按它拒绝**（RR-20261006-66，F06-S7 跨进程）。`kit/nest` 与 `kit/saga` 共用一份声明（`kit/mods.SagaPayloadConfig`，新增上界 4 MiB）；两类进程的配置要写同一个值，生成的配置段不再写这个键（取缺省）。新 API `saga.SetStartDataLimit`。[问题](docs/bug/RR-20261006-66.md) · [修复](docs/bugfix/RR-20261006-66.md)
 - **nest：手写 `HandlerMeta` 的 `Rollback` 不为 none 时必须显式写 `Durability`**（RR-20261006-60，F02-8）。之前 `Durability` 零值即 memory（`//roost:nest` 缺省却是 async），忘写的要到运行期第一次改持久字段才被 RR-20261006-41 拒绝；现在注册时就失败，错误满足 `errors.Is(err, nest.ErrDurabilityUnset)`，点名 handler 并列出可选值。`HandlerMeta{}` 仍是 rollback=none 的 memory 快路径，显式写 `DurabilityMemory` 的照常可用，生成的 handler 不受影响。API：`nest.DurabilityPolicy` 不再是 `dataengine.Durability` 的别名（零值表示未声明，常量名不变）；记录上下文改用 `dataengine.DurabilityX` 或 `nest.DurabilityX.Record()`，`uint8(nest.DurabilityX)` 数值会多 1，须改为 `.Record()`。WAL 字节与远端 outcome 数值不变。[问题](docs/bug/RR-20261006-60.md) · [修复](docs/bugfix/RR-20261006-60.md)
 - **codegen：标记键名拼错一律报错**（RR-20261006-56，F12 G1 / F09-R4）。`//roost:nest`、`dao`、`redisdao`、`attribute`、`proto` / `protocol` / `msg` / `view`、`table` / `object`、`rpc` 之前只取认识的键，拼错的键按“没写”取缺省（`durabilty=strict` 生成 async，`dbscop=sid` 写进全局库）。现在 15 种带选项的标记都经 `codegen/internal/marker` 的同一词表解析，未知键、重复键、多余的裸词让生成失败并点名键、文件、行。[问题](docs/bug/RR-20261006-56.md) · [修复](docs/bugfix/RR-20261006-56.md)

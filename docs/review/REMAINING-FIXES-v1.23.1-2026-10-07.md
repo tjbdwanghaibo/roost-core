@@ -58,3 +58,13 @@
 4. 打 tag、推 tag；对着 tag 用 `GOPROXY=direct` 生成 game-demo 跑 build / vet / test（代理 sumdb 对新 tag 有延迟，`project new` 首次解析失败属正常，direct 重试）。
 5. 回填：bug / bugfix README、交接 §7、登记表、各 `docs/framework/impl` 里的“v1.23.1 已修复”说法改为已发布。
 6. 按维护者要求写 v1.23.1 发版双文档（说明 + 实现，见 `docs/release/v1.23.0-GUIDE.md` 的结构）；交 review 前按当前证据逐项列出已修复、已排除与尚未确认，尚未确认项不能计作已完成。
+
+## 6. 接手进度：B5 第一批（2026-10-07）
+
+基线 `85a13d4c`，隔离分支 `codex/maintainer-rules`。先统一维护者本轮确认的 review 中文注释与疑点证据规则（`47595026`）；Codex 本地 coding / optimize / bugfix / review 已同步，Claude 专属文件保持原样。
+
+- F01-8：[RR-20261007-01](../bugfix/RR-20261007-01.md)，检查缺失配置不能报成功。
+- F01-9：[RR-20261007-02](../bugfix/RR-20261007-02.md)，服务专属 Mod 不能与共享 Mod 重名。
+- F02-3：[RR-20261007-03](../bugfix/RR-20261007-03.md)，方法 handler 进入 glsvet 并发/捕获检查。
+
+三项都有修前行为失败；修后 App/glsvet 三轮 race、全仓 build/vet、根包与三大模块 glsvet 已通过，全量测试通过（130 个包）。B5 其余项保持待处理，本批不代表 B5 全部完成。没有接手 remfix 的范围，没有发版。

@@ -506,7 +506,7 @@ Init 用 `app.LoadConfig` 按声明读；App 在任何 Mod Init 之前把本服�
 查看与检查：
 
 - `<bin> <service> --print-config` 打印这个服务全部 Mod（含业务 Mod）声明的键、缺省值与说明，可以直接当配置模板。
-- `<bin> <service> --check-config [-c 文件]` 只加载并检查配置（与启动前的检查相同），不启动任何 Mod；发布前用它检查真实的生产配置。
+- `<bin> <service> --check-config [-c 文件]` 只加载并按启动规则检查配置，不启动任何 Mod；发布前用它检查真实的生产配置。v1.23.1 起文件必须存在，默认路径缺失也返回错误；正常开发启动的缺省回退不适用于检查命令（[RR-20261007-01](bugfix/RR-20261007-01.md)）。
 - `<bin> <service> --print-config-schema` 把同一份声明打印成 JSON 键表（doctor 读它）。
 - `roost project doctor` 的 `config-schema:<service>` 检查工程里的开发配置、生产示例与 k8s Secret 示例。声明取两处：生成器认识的框架声明，加上
   工程能编译时 doctor `go build` 一次、对每个服务跑 `--print-config-schema` 读回的业务声明（业务服务与业务 Mod 的）。值不合声明、框架段或业务段里

@@ -690,3 +690,7 @@ CI：`.github/workflows/ci.yml:33` 对 core 跑 glsvet；`framework-compat.yml:1
 - G-2 新增带 `dispatcher` 标签的指标是否加进 `dispatcherSeriesNames`，并只在 `reportSeries` 里上报？
 
 [→ 说明文档：8 相关文档](../guide/02-nest-entity.md#8-相关文档)
+
+## v1.23.1 后续修复（2026-10-07，未发布）
+
+F02-3：glsvet 同时检查方法与包级 handler；不同接收者的同名方法分别检查，receiver 捕获同样报错。§10 的方法漏查疑点已修复，见 [RR-20261007-03](../../bugfix/RR-20261007-03.md)。跨文件与动态调用仍需人工复核，未扩大静态分析的保证。

@@ -216,6 +216,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+
+2026-10-07 B5 第一批：[RR-20261007-01](bugfix/RR-20261007-01.md)（F01-8）、[RR-20261007-02](bugfix/RR-20261007-02.md)（F01-9）、[RR-20261007-03](bugfix/RR-20261007-03.md)（F02-3） 已修复，目标 race 通过；全仓 build/vet/test（130 个包）通过。B5 其余条目保持原登记状态，本批不代表 B5 全部完成。
 **v1.23.0 已发布（2026-10-07，tag → `28912cd6`）**：下面 10-06（v1.22.0 之后）～10-07 各条随本版发布，原写“未发版”处已改为版本号；10-06 configdata 键大小写敏感及更早各条的“未发版”指发布前状态。
 
 10-07 remote entity / bus 一组（分支 `remfix`，`a9bb8923`，框架文档发现 F05-1～F05-7、F09-R2、F09-R3）：[RR-20261006-68](bug/RR-20261006-68.md)（P2）兴趣广播移出条带锁；[RR-20261006-69](bug/RR-20261006-69.md)（P1，推断经端到端用例证实）发布失败不再让 WAL 投影队头阻塞，已 Applied 的提交由 Manager 补发循环按 outbox 补发（启动时 `RecoverOutbox` 仍兜底）；[RR-20261006-70](bug/RR-20261006-70.md)（P1，真实 NATS 证实执行 3 次）JetStream RPC handler 期间发 in-progress、只到请求期限；[RR-20261006-71](bug/RR-20261006-71.md)（P3）`Assemble` 校验快照段；[RR-20261006-72](bug/RR-20261006-72.md)（P3）消息标签与死信桶上界 `_unregistered`；[RR-20261006-73](bug/RR-20261006-73.md)（P2，F09-R2）轻量 RPC 按调用方期限；[RR-20261006-74](bug/RR-20261006-74.md)（P1，F09-R3，真实 NATS 证实）生成 ClientMod 读 transport。F05-6 / F05-7：`parse.go` lifetime 文本、T-207 键名、`REMOTE_ENTITY.md` 三处、USER_GUIDE §6 两处、`max_concurrent_writes` help（同源到生成配置）。未发版。
