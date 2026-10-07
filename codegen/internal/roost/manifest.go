@@ -74,13 +74,17 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // entity.RemoteSnapshotReadOnly source (Mirror step 5; projects bind it with
 // kit/remoteentity.MirrorSource under NewRemoteMirrorMod), and the game-demo
 // reads business time from app.BusinessClock (D-L3) and calls
-// timer.Scheduler.ReportUnhandledTypes (D-L2), none of which v1.20.2 has.
+// timer.Scheduler.ReportUnhandledTypes (D-L2), none of which v1.20.2 has,
+// and to v1.23.0 because generated Mods and services declare their config with
+// app.SchemaOf / app.LoadConfig (A4① per-Mod config schema), the generated game
+// test builds its activity coordinator with activity.Config.Groups
+// (RR-20261006-17), none of which v1.22.0 has.
 // Kit and Codegen stay as fields
 // because a project's roost.yaml still carries versions.kit / versions.codegen
 // and must keep validating; they no longer name modules of their own, so they
 // stay at the last values that meant something (三仓合一仓 P5).
 var minimumVersions = VersionSpec{
-	Core:    "v1.21.0",
+	Core:    "v1.23.0",
 	Kit:     "v1.14.8",
 	Codegen: "v1.15.0",
 }
