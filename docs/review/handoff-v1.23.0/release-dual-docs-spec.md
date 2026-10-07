@@ -102,3 +102,14 @@ TOOL（pretag、source-head-check、冲突标记门禁、mirror-local.sh、示�
 - 进行中：nats/driver 自持“已关闭”状态（维护者方向决定 A，`wt-natsstate`）→ DRV-5。待维护者：skill 宿主撤除失败 A/B；生成配置的 key_prefix 默认带 hash tag（便于切 Cluster）是否要做。
 - 维护者：skill 撤除失败由 Runtime 重试（`wt-skretry` 实施中）；skill “进程”全量改名为 Spawn（衍生物），撤除重试合入后实施。分册 3 的 SKILL 全部条目与作者文档要随改名同步。
 - natsstate 已合（`f0de827a`、`e47d0cd6`）：nats/driver 自持关闭状态（`Client.state.closed` + `admit()`），守卫按导出方法表逐个断言；旧实现上守卫抓出 Drain / DrainWithContext / Unsubscribe 漏网。DRV-5 源码表两行过时（assembly.go `closed` 字段、Publish 同时 Is gonats 原错误）；RR-24/26 在分册 2 补条目时按新判据写。
+
+## 最终冻结与分册补写（2026-10-07）
+
+**代码冻结点：`5e72ca4d`**（之后只允许文档改动）。三份分册以它为准重核全部 `path:line`、符号、测试名，并补写冻结前新增的条目。术语统一：召唤物 = Summon（`type: summon`、`dismiss`），衍生物 = Spawn（原 process，kind `minion`）。
+
+新增条目归属（避免重复，跨册只引用编号）：
+- **分册 1（APP/OWN/CLK/OPS/TOOL）**：RR-17（OpenActivity 按组核对）+ groups_file 必填 + `activity.New` 必须带组 → OWN-5；RR-18（派发器序列删除）、RR-19（bus method 标签上界）、RR-27（loadtest 分位数与阈值输出）→ OPS；RR-25（hook 超时点名）、RR-28（生产校验认 cluster_addrs、accountctl、run.sh）、真实进程演练（单机 + Cluster）→ APP；RR-29（Contribute 自开窗）→ OWN；TOOL：示例实跑门禁、文档链接门禁、mirror-local 就绪修正（已有则核对）。
+- **分册 2（SAGA/DRV/DAO/REM）**：saga 方向③④（`a6a902cd`）+ 重开可观测性（`93efc3cc`，维护者选 A 允许重开）→ SAGA；A2③ versionstore 一次性写令牌（`6b3a0eb9`，墓碑维护者选 A 不加）+ RR-35 → DRV；nats/driver 自持关闭状态（`f0de827a`）+ RR-24/26 → DRV-5；A3② ISyncBus 带 ctx 排空退订（`ebf679e1`）+ RR-36 → REM（或新增 SYNC 条目，编号接续）。
+- **分册 3（CFG/SKILL/NONCORE）**：A4① 每 Mod 配置 schema（`d1226825`、`6e0619bb`）+ RR-38/40 + B10 两条管线分工（维护者选 A）→ CFG；skill：衍生物改名（`4451a0a5`）、撤除重试 RR-21 后续（`1ce01e5c`）+ RR-30/31、停止入口统一（`3fad5b6e`）+ RR-32、Summon 改名（`509c381f`）、分区存放（`6826eeb2`）+ RR-33/34、已放弃分区（`f28285ad`）、B3③ 能力表（`cd8ed341`、`e999f68e`）+ RR-37/39、RR-21/22/23（`5c1f4176`）→ SKILL（SKILL-5/13/18/21 等旧条目的 checkpoint 版本口径现为 7）；RR-20 TaskPool → NONCORE-46。
+- 原“下个大版本”项（A2③、A3②、A4①、B3③、saga ③④）都已在本版完成：分册里“留到下个大版本”的说法全部改掉。
+- 每册 `_summary` 更新：条目总表、兼容破坏、业务/运维改动、门禁、按包索引、外部验证、仍未闭环（必须 0）。
