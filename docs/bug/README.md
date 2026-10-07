@@ -8,6 +8,14 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 框架文档发现 F04-1 / F04-2 / F04-15（sync，分支 `syncfix`，`04378f7c`），未发版。** 排队兴趣事实被之后的 Leave / Hide 作废时卡死每次 Flush、永不被接受的 retry pair 让 Drain 永不结束、syncstream 首条 WAL 半截打不开 / 回放不恢复活动时间 / Recover 覆盖 provider 的 schema 版本。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-50](RR-20261006-50.md) | P1 syncstream：(a) 首次 checkpoint 前第一条 WAL 半截，History 永久打不开（`epoch is required`）；(b) 回放不恢复 LastActivity，重启后 SweepIdle 误删活跃流；(c) `Recover` 用请求方 SchemaVersion 覆盖 provider 包的版本（F04-15） | 已修复（`04378f7c`），未发版 |
+| [RR-20261006-49](RR-20261006-49.md) | P2 排队模式下永远不会被接受的 retry pair 让 `Drain` 只能等 ctx 超时，kit 停机走不到 Close；Refusal 无日志（F04-2） | 已修复（`04378f7c`），未发版 |
+| [RR-20261006-48](RR-20261006-48.md) | P1 `Interest` 排队事实就绪后、应用前同 id 被 `Leave` / `Hide`，之后每次 Flush 报 `policy: unknown interest id`，Manager 下所有 subject 停发，Stop / Drain 一直报错（F04-1） | 已修复（`04378f7c`），未发版 |
+
 **10-07 框架文档发现 F06（saga，分支 `sagafix2`，`63bc1d66`；F06-S5 维护者 2026-10-07 选 A），未发版。** 退避中送达的成功被丢弃、Nest 启动消费者对确定性错误 nak 到 `MaxDeliver`、原生步骤消费者坏信封 nak、坏记录拖累整批、步骤超时与 AckWait 无校验、`Completed` 可被人工补偿；F06-S4 / S6 是文档项，同批改正、不单独编号。
 
 | 编号 | 问题 | 状态 |

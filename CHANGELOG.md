@@ -16,6 +16,12 @@
 
 - **`durability=memory` 的事务改持久字段不再静默丢失，而是整笔失败回滚**（RR-20261006-41，框架文档发现 F02-1 / F03-1，维护者选 A）。`rollback=state|undo` 加 `durability=memory`（生成器 `rollback=undo durability=memory` 即产出）的 handler 改了持久字段时，旧实现回复成功、committer 与 `PrepareMutation` 都不调用，内存是新值、库里是旧值，重载后回到旧值。现在提交点按事务本地的持久登记（O(被改实体)）检查：有持久改动（含 `AddMutation` 的本地 mutation、receipt；带 Remote 批次的 memory handler 改本地实体同样适用）就返回 `nest.ErrMemoryTransactionPersistentWrite`（同时带 `ErrCommitRejected`），错误点名 `collection/id` 与字段，按回滚策略撤销内存修改、Remote 批次 Abort；只改 nopersist 字段的照常成功，`rollback=none` 快路径的 setter panic 不变。生成 DAO 新增 `PersistFieldNames(mask)`（实现 `nest.PersistFieldNamer`，用来点名字段；生成代码不引用新类型，v1.23.0 core 仍可编译）。撞上的 handler 把 durability 改成 `async` / `strict`，或把字段声明为 nopersist。[问题](docs/bug/RR-20261006-41.md) / [修复](docs/bugfix/RR-20261006-41.md)
 
+### 修复（sync）
+
+- **entitysync：排队兴趣事实被之后的 `Leave` / `Hide` 作废时不再卡死 Flush**（RR-20261006-48，F04-1）。`Leave` / `Hide` 按“先应用事实、再删除”的等价关系改写排队事实（位置事实作废被删掉的一半，关系事实的成员去掉该 id，Leave 丢掉该 id 作为观察者的关系事实），不丢仍然有效的变更；万一仍有事实应用失败，报告一次后丢弃。之前每次 Flush 报 `sync policy: policy: unknown interest id`，Manager 下所有 subject 停发，Stop / Drain / kit 停机一直报错。[问题](docs/bug/RR-20261006-48.md) / [修复](docs/bugfix/RR-20261006-48.md)
+- **entitysync：永远不会被接受的兴趣订阅不再让 `Drain` 永不结束**（RR-20261006-49，F04-2）。同一 pair 连续被拒 10 次（按 Flush 轮次）判定停滞：计 `entitysync_interest_retry_stalled_total`、Warn 一次，不再计入排队模式的待办；pair 仍照旧重试，会话重开后照常订阅。[问题](docs/bug/RR-20261006-49.md) / [修复](docs/bugfix/RR-20261006-49.md)
+- **syncstream：重启与恢复三处修正**（RR-20261006-50，F04-15）。(a) 首次 checkpoint 前第一条 WAL 只写了半截时按空日志打开（之前 `epoch is required`，History 永久打不开），打开时发现未确认半尾计 `syncstream.recovery.tail_truncated.total` / `.bytes` 并告警；(b) WAL 的 Append / ACK 记录带活动时间（`HistoryMutation.At`），回放恢复 LastActivity，重启后 `SweepIdle` 不再误删活跃流；(c) `Recover` 以 provider 包上的 SchemaVersion 为准，provider 未标时才用请求方的。[问题](docs/bug/RR-20261006-50.md) / [修复](docs/bugfix/RR-20261006-50.md)
+
 ## [v1.23.0] - 2026-10-07
 
 > 次版本（含破坏性变化）：维护者第十～十三轮决定的实施与发版前收口。决定项：saga 收件箱改为每个操作一份状态文档与方向 ③④（迟到生效的步骤由协调器补偿、终态可重开）、原“下个大版本”项本版完成（A2 ③ versionstore 一次性写令牌、A3 ② `ISyncBus` 退订本身排空、A4 ① 每个 Mod 声明配置、B3 ③ skill Host 能力表）、skill 衍生物生命周期七步（撤除重试、停止入口统一、分区存放、已放弃分区）与 Spawn / Summon 改名、nats 驱动自持已关闭状态、交给 review 前不留 WANTED、Windows 不保证正确；另有 Mirror 第 6 步观察（O-M6-1 / 3 / 5 / 6）、收尾第 1～4 批与第十二轮 B 类决定。线上未部署，**不做旧格式 / 旧进程兼容**。代码冻结点 `5e72ca4d`。说明与实现双文档：[v1.23.0-GUIDE](docs/release/v1.23.0-GUIDE.md) · [v1.23.0-IMPLEMENTATION](docs/release/v1.23.0-IMPLEMENTATION.md)。

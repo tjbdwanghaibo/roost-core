@@ -8,6 +8,14 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 sync 框架文档发现 F04-1 / F04-2 / F04-15（`syncfix`，`04378f7c`），未发版。** Leave / Hide 按等价关系改写排队兴趣事实；停滞 retry 计数告警、不再拖住 Drain；syncstream 首条 WAL 半截按空日志打开并计数告警、WAL 带活动时间、Recover 以 provider 的版本为准。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-50](RR-20261006-50.md) | `Load` 空半尾用 `initialEpoch` 打开 + `syncstream.recovery.tail_truncated.*`；`HistoryMutation.At` 回放恢复 LastActivity；`Recover` 只在 provider 未标版本时补请求方的 | 已修复（`04378f7c`），未发版 |
+| [RR-20261006-49](RR-20261006-49.md) | 连续被拒 10 次判定停滞：`entitysync_interest_retry_stalled_total` + Warn 一次，不计入 `queuedPending`，仍照旧重试 | 已修复（`04378f7c`），未发版 |
+| [RR-20261006-48](RR-20261006-48.md) | `Leave` / `Hide` 改写排队事实（位置半边作废、关系成员去 id）；应用失败的事实报告一次后丢弃 | 已修复（`04378f7c`），未发版 |
+
 **10-07 saga 框架文档发现 F06（`sagafix2`，`63bc1d66`），未发版。** 退避中送达的成功被接收；五个消费者坏信封一律 Term + `saga.consumer.rejected_total`；启动消费者对确定性拒绝 Term + `saga.start.rejected_total`，`EmitStart` 在 Nest 事务里按本进程协调器的 `MaxPayloadBytes` 拒绝；坏记录单条隔离 + `saga.store.corrupt_record_total`；步骤 `Timeout < DefaultStepAckWait` 启动校验；`Completed` 拒绝人工 `Compensate`。F06-S4（demo 注释）/ S6（SAGA.md、kit/README 旧说法）同批改正。
 
 | 编号 | 修复 | 状态 |
