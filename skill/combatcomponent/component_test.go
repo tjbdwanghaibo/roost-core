@@ -112,8 +112,12 @@ func TestNestUndoRollbackRestoresCombatStateExactly(t *testing.T) {
 	getter.Add(attacker)
 	getter.Add(defender)
 
+	// The combat DAO's fields are persistent, so the handlers below declare
+	// a durable policy: since RR-20261006-41 a durability=memory transaction
+	// that changes persistent fields is rejected and rolled back.
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(getter),
+		nest.NestOptionWithTransactionCommitter(acceptingCombatCommitter{}),
 		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
 		nest.NestOptionWithTickDuration(100*time.Millisecond),
 	)
@@ -143,8 +147,8 @@ func TestNestUndoRollbackRestoresCombatStateExactly(t *testing.T) {
 		defenderEntity.component.ApplyBuff(combat.BuffSpec{ID: 8, DurationTicks: 10}, 1, 0)
 		return nil, errors.New("boom")
 	}
-	nest.MustRegisterHandlerWithMeta(nest.NewHandlerName("combat_seed"), seed, nest.HandlerMeta{Rollback: nest.RollbackUndo})
-	nest.MustRegisterHandlerWithMeta(nest.NewHandlerName("combat_mutate_fail"), mutate, nest.HandlerMeta{Rollback: nest.RollbackUndo})
+	nest.MustRegisterHandlerWithMeta(nest.NewHandlerName("combat_seed"), seed, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	nest.MustRegisterHandlerWithMeta(nest.NewHandlerName("combat_mutate_fail"), mutate, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 
 	if _, err := engine.RequestMulti(context.Background(), nest.NewHandlerName("combat_seed"), []int64{defenderID, attackerID}, nil); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -218,8 +222,12 @@ func TestNestUndoWorksThroughRealHandlers(t *testing.T) {
 	getter := newTestGetter()
 	target, targetID := newCombatTestEntity(t, 9003)
 	getter.Add(target)
+	// The combat DAO's fields are persistent, so the handlers below declare
+	// a durable policy: since RR-20261006-41 a durability=memory transaction
+	// that changes persistent fields is rejected and rolled back.
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(getter),
+		nest.NestOptionWithTransactionCommitter(acceptingCombatCommitter{}),
 		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
 		nest.NestOptionWithTickDuration(100*time.Millisecond),
 	)
@@ -233,7 +241,7 @@ func TestNestUndoWorksThroughRealHandlers(t *testing.T) {
 		component.Heal(10)
 		component.AddShield(8)
 		return nil, nil
-	}, nest.HandlerMeta{Rollback: nest.RollbackUndo})
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 	if _, err := engine.Request(context.Background(), nest.NewHandlerName("combat_commit"), targetID, nil); err != nil {
 		t.Fatal(err)
 	}
