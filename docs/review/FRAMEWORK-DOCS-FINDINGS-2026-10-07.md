@@ -48,3 +48,20 @@
 | F05-5 | 05 | 缺陷（源码核对） | 异步消息 metrics 标签与死信列表键取自对端未注册的 `(module,msg)`：`bus_dead_letter_total`（`bus/bus.go:849-852/:1045-1048`）、`bus_dispatch_drop_total`（`:801-805`）、死信键（`bus/reliable.go:221-223`），无上界（RR-19 只管 RPC method） | 先红后绿：未注册名归并 `_unregistered`，死信键同理 | 待处理 |
 | F05-6 | 05 | 文本 | `codegen/internal/entity/parse.go:338` 错误文本把 `mirror_cache` 列为合法 lifetime，`:320-321` 实际拒绝 | 改文本 | 待处理 |
 | F05-7 | 05 | 文档 | T-207 `remote_entity.request_timeout` 不存在（实为 `op_timeout`）；`REMOTE_ENTITY.md` 三处过时（MongoCommitter / NewMongoBackend、Monotonic 短暂等待、Redis marker）；`USER_GUIDE.md` §6 “每次 L1 写入先在 L2 上 CAS”不准、Mirror/B2 段仍标“未发版”；`kit/remoteentity/config.go:106` help “0 不限”实际 0 取 `async_finalize_capacity` | 改文档与 help（help 同源到生成配置） | 待处理 |
+| F04-1 | 04 | **缺陷（探针复现，高）** | `Interest` 排队事实就绪后、应用前同 id 被 `Leave` / `Hide`，之后每次 Flush 失败、Manager 下所有 subject 停发，Stop / Drain / kit 停机一直报错走不到 Close（`policy/interest_queue.go:93-109`、`flush.go:93-95`、`manager.go:737`；`Leave` / `Hide` 不清排队事实 `policy/interest.go:251-300`） | RR 先红后绿 | 待处理 |
+| F04-2 | 04 | 缺陷（复现，中高） | 排队模式下一个永不被接受的 pair 留在 retry 里，`Drain` 永不结束（`interest_queue.go:112-116`、`drain.go:22`） | RR 先红后绿 | 待处理 |
+| F04-3 | 04 | 缺陷（高） | `Manager.CheckHealth`（`manager.go:1018`）无生产注册（kit Nest Mod 只注册 nest，demo `Scene.CheckHealth` 未登记），T-267、D1、`readyz_degraded_promises_test.go:18` 却把 entitysync 列为 Degraded 来源 | RR：注册或改文档与用例（对口 01/11） | 待处理 |
+| F04-4 | 04 | 推断（中） | `Group` 成员会话被 Manager 关闭后重开无恢复路径（`policy/group.go:59`） | 实测，成立则修 | 待处理 |
+| F04-5 | 04 | 缺陷（高） | lockstep 指标在合仓 `c8249526` 丢了 `lockstep.` 前缀（`room.go:266` 等），`OBSERVABILITY.md:98-102` desync 告警永不触发 | RR：恢复前缀 + 指标名守卫 | 待处理 |
+| F04-6 | 04 | 缺陷（复现，高） | lockstep 1232 字节预算未扣传输开销（KCP/QUIC 默认 1200，UDP 加密 +32），接近上限的配置过 `NewRoom` 但满载时整房广播被拒 | RR：预算按传输扣减并在 NewRoom 校验 | 待处理 |
+| F04-7 | 04 | 缺陷（中） | `Tick` 被单个慢追帧客户端卡死（Reliable 直连 KCP/QUIC 且 ctx 无期限） | RR | 待处理 |
+| F04-8 | 04 | 缺陷（高） | 2 人房默认 quorum=2，desync 永远裁不出（`room.go:167`） | RR（定裁决规则，必要时问维护者） | 待处理 |
+| F04-9 | 04 | 缺陷（复现，高） | `robot/lockstep.go:150-156` 只在缓冲溢出时追帧，缺口不够大时局卡住 | RR | 待处理 |
+| F04-10 | 04 | 缺陷（高） | 玩家 TCP 中 handler panic 与 WriteGate 拒绝都直接断连，只打 Debug、无栈（`render_player_tcp.go:859`、`render_access.go:93`）；注释与静态绑定方案说回错误码 | RR：panic 记 Error + 栈；WriteGate 拒绝回错误码或改文档（定语义） | 待处理 |
+| F04-11 | 04 | 缺陷（高） | `shutdown_timeout: 0s` 时 doctor 当 10s 报 OK，进程实际拒绝启动（`shutdown_budget.go:577` vs `render_player_tcp.go:311`）；测试注释写死错误认知（`shutdown_player_tcp_budget_promises_test.go:76-83`） | RR | 待处理 |
+| F04-12 | 04 | 缺陷（中） | 生成器把 `dispatch_timeout` 写成显式值，之后不随 `nest.request_timeout`（`player_tcp_config.go:216-238`） | RR | 待处理 |
+| F04-13 | 04 | 能力缺口（高） | 玩家 TCP 协议无心跳、无请求限流；`gateway.RateLimit` 与 `player_agent` 中间件不兼容、无注入点 | 定方案（可能需维护者决定）后实施 | 待处理 |
+| F04-14 | 04 | 缺陷（高 / 中低 / 中） | syncbus JetStream：(a) 最后一个订阅退订时在派发中的消息被 ACK 而未进 handler；(b) 停止窗口内立即 NAK，NumDelivered 到 5 后 Term 永久丢失；(c) release 与并发 Subscribe 在同一 durable 并存两个 Consume（`driver/jetstream.go:259-290/:323-333`） | RR 先红后绿（对口 05） | 待处理 |
+| F04-15 | 04 | 缺陷（复现，高） | syncstream：(a) 首次 checkpoint 前第一条 WAL 半截写入则 History 永久打不开（`file_journal.go:119-124`、`syncstream.go:591`）；(b) 回放不恢复 LastActivity，重启后 SweepIdle 误删活跃流；(c) Recover 用请求方 SchemaVersion 覆盖 provider 包版本（对口 08） | RR 先红后绿 | 待处理 |
+| F04-16 | 04 | 缺陷（高，影响低） | `ReplicaSyncer` 删除不比版本；`KeyOf` / `DeleteKeyOf` 为 nil 时静默不做（`cache/mirror.go:50/:89-97`），无生产调用方 | 修或删（C8 口径对照） | 待处理 |
+| F04-D | 04 | 文档 | 43 行文档不一致，全表见 `docs/framework/impl/04-sync.md` §10.3（ENTITY_SYNC.md、INTERNALS、USER_GUIDE、kit/README、OBSERVABILITY、T-100、生成接入指南、GAME_DEMO_TEMPLATE 等） | 统一改文档 | 待处理 |
