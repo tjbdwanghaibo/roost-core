@@ -3,6 +3,7 @@ package roostcore_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -214,4 +215,37 @@ func TestNetworkCodegenTestsRunInSomeWorkflow(t *testing.T) {
 		}
 	}
 	t.Errorf("no workflow step sets %s=1 and runs %s in ./codegen/internal/roost/ unconditionally; the default go test skips them, so nothing would ever run them", gate, strings.Join(gated, ", "))
+}
+
+// F12 G7（REFACTOR-2026-10-07-structural-guards §4）：pretag 是发版前唯一在打 tag 之前跑的检查，
+// ci.yml 的 generate 漂移检查在 tag 推上去之后才跑、而且没人等它。pretag 必须自己跑一次
+// `go generate ./...` 并在 tree 变脏时失败，且这一步在打印 ready 之前。
+// pretagGenerateCommand matches the command itself, not an echo or a fail message naming it.
+var pretagGenerateCommand = regexp.MustCompile(`^(GOWORK=\S+\s+)?go generate \./\.\.\.`)
+
+func TestPretagRegeneratesAndChecksTheTree(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("scripts", "pretag.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := shellCommands(string(raw))
+	generateAt, checkedAt, readyAt := -1, -1, -1
+	for i, line := range commands {
+		switch {
+		case generateAt < 0 && pretagGenerateCommand.MatchString(line):
+			generateAt = i
+		case generateAt >= 0 && checkedAt < 0 && strings.Contains(line, "git status --porcelain"):
+			checkedAt = i
+		case strings.Contains(line, "is ready to tag"):
+			readyAt = i
+		}
+	}
+	switch {
+	case generateAt < 0:
+		t.Fatal("scripts/pretag.sh never runs `go generate ./...`; a stale *_gen.go builds, vets and tests green and would be tagged (F12 G7)")
+	case checkedAt < 0:
+		t.Fatal("scripts/pretag.sh runs `go generate ./...` but never checks `git status --porcelain` afterwards; the step passes whatever generate changed")
+	case readyAt < 0 || readyAt < checkedAt:
+		t.Fatal("scripts/pretag.sh reports ready before (or without) the go generate drift check")
+	}
 }

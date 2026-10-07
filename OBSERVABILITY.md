@@ -103,6 +103,51 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | `lockstep.catchup.frames.total` | Counter | 追帧下发的历史帧数（重连/中途加入压力） |
 | `lockstep.desync.total` | Counter | 关键帧哈希裁决识别的离群玩家数（**非零即事故**：作弊或确定性 bug）。全部座位已报、无哈希达到 quorum 时（2 人房哈希不同、2:2、全不同）裁 `NoMajority`，全部座位都计入（RR-20261006-64） |
 
+### Saga（core/saga）
+
+标签只有 saga 类型、阶段、原因这类枚举；saga id、业务键、步骤号只进日志。
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `saga.start.rejected_total{saga_type,reason}` | Counter | 永久拒绝的启动意图：发起方的 Nest 事务已经提交，saga 不会创建（**非零要人核对**，ERROR 日志点名业务键） |
+| `saga.consumer.rejected_total{consumer}` | Counter | 五个 saga 消费者拒收、直接 Term 的坏信封（空消息、超长帧、JSON 损坏、未知 WireVersion、内容校验不过；RR-20261006-44） |
+| `saga.reopened_total{saga_type,from_status,reason}` | Counter | saga 重开：`late_success` = 已结束的 Failed / Compensated 收到迟到的正向成功、带回补偿；`resume` / `compensate` = ManualRequired 期间记下的迟到步骤在运维操作时补上。按终态做业务的一方见 [SAGA.md](SAGA.md)「运维观察」 |
+| `saga.completion.stale_incarnation_total{saga_type,phase}` | Counter | 拒收的旧一生结果；Resume 之后的正常现象，只计数、记 WARN |
+| `saga.completion.stale_attempt_total{saga_type,phase}` | Counter | 拒收的同一生较早尝试的可重试失败，协调器在等之后那次尝试 |
+| `saga.completion.late_after_abandon_total{saga_type,phase}` | Counter | 放弃之后才到的结果（含补偿方向）；Resume 后新一生会回放这次成功而不是再执行 |
+| `saga.step.expired_unexecuted_total` | Counter | 过期或被较新尝试接替、没有执行就 ack 的步骤命令 |
+| `saga.step.attempt_replayed_total` | Counter | 同一操作实例已有结果，这次尝试不执行、重发那次的 completion（U-0280） |
+| `saga.step_inbox.superseded_total` | Counter | 步骤收件箱里被较新尝试接管的预留 |
+| `saga.step_inbox.mark_completed_error_total` | Counter | 回执已写、状态文档结算失败（回执是权威，结论不变）；持续增长说明有确定性失败在重跑（RR-20260927-16） |
+| `saga.store.corrupt_record_total{op}` | Counter | 校验不过的 saga 记录（手工改坏、不兼容写者整体 Replace 丢字段）；**非零即查**，ERROR 日志点名记录 |
+
+### 技能运行时（core/skill）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `skill.passive.dispatch_rejected.total{reason}` | Counter | 事件派发时被永久拒绝的被动候选：`host_capability` = 路由给出的被动 Program 不在 Host 能力表里；`rejected` = 其他入队错误 |
+| `skill.root_event.capacity_dropped.total` | Counter | 根事件表满、且表里每个根都还被引用，跳过被动路由的事件 |
+| `skill.spawn.stop_retry_exhausted.total` | Counter | 衍生物 StopSpawn 重试到上限仍未确认 |
+| `skill.spawn.abandoned.total` | Counter | 超过待停止上限、挪进已放弃分区的衍生物（替换旧的 `skill.spawn.stop_pending_dropped.total`） |
+| `skill.spawn.abandoned_pruned.total` | Counter | 已放弃分区超过 `MaxAbandonedSpawns`、在 Advance 末尾删掉的记录 |
+
+### 进程与配置表（kit/statslog、kit/configdata）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `runtime.goroutines` / `heap_alloc_bytes` / `heap_sys_bytes` / `sys_bytes` / `num_gc` | Gauge | 进程运行时读数；`stats_log.enabled` 时按 `stats_log.interval`（默认 1m）刷新 |
+| `entity.count` / `entity.count_by_kind{kind}` / `entity.count_by_category{category}` | Gauge | 已加载实体数；同上由 stats_log 刷新，消失的 kind / category 置 0 |
+| `configdata.version` | Gauge | 正在服务的配置表版本号（单调计数器分配，失败与撤回的 reload 也占号） |
+| `configdata.reload.total{result}` | Counter | reload 结果，`ok` / `failed`（含规则违反） |
+| `configdata.rollback.total{trigger}` | Counter | 回到上一代：`apply_failed`（新一代应用失败自动撤回）/ `operator`（运维撤回） |
+
+### NATS（core/nats）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `nats.jetstream.terminal.total{reason}` | Counter | 消费者终止（Term）的投递：`max_deliver` = 重试到上限仍失败，`permanent` = 处理方返回永久错误；**非零即事故** |
+| `nats.jetstream.settle_failures.total{op}` | Counter | ack / nak / term 本身失败（`op`），broker 会在 ack wait 后重投 |
+
 ### 机器人 / 压测（core/robot）
 
 | 指标 | 类型 | 说明 |

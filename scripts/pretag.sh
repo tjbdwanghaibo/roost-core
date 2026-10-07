@@ -68,6 +68,18 @@ if [[ -n "$(git status --porcelain)" ]]; then
   fail "working tree is not clean"
 fi
 
+# 3b. The committed generated code must be what the generators produce now
+#     (F12 G7). A hand-edited or stale *_gen.go builds, vets and tests green;
+#     only regenerating shows it. ci.yml runs the same check, but CI runs after
+#     the tag is pushed (see the top of this file) and nobody waits for it.
+#     The changed files are left in place so the diff can be read.
+echo "pretag: checking go generate ./... leaves the tree unchanged"
+GOWORK=off go generate ./... >/dev/null
+if [[ -n "$(git status --porcelain)" ]]; then
+  git status --short >&2
+  fail "go generate ./... changed the tree; commit the regenerated files (git diff shows what drifted)"
+fi
+
 # 4. The framework release manifest must name the version being released.
 #    The release workflow verifies it against the tag it was triggered by, so a
 #    manifest that drifts turns the protected gate red AFTER the tag is pushed —

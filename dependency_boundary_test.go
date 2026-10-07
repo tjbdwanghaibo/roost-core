@@ -330,3 +330,186 @@ func TestForbiddenCoreImport(t *testing.T) {
 		}
 	}
 }
+
+// --- core 内三大块之间的依赖方向（F00，REFACTOR-2026-10-07-structural-guards §2）---
+//
+// nest 调度、dataengine、sync 是 core 的三块基础（docs/framework/impl/00-overview.md §1.1 的三个子图）。
+// 块内随意；块与块之间只允许下表登记的这些边，表即 00-overview §1.1 依赖图里跨块的那几条（非测试 import）：
+//
+//	nest 块 → dataengine 块：nest 只认契约根包 dataengine（CommitRecord / Durability），entity 用 cache；
+//	                         不碰 engine、nestwal、versionstore 这些实现。
+//	dataengine 块 → nest 块：engine 与 nestwal 实现 nest 的提交钩子（import nest、entity），契约根包引用 entity 的键。
+//	dataengine 块 → sync 块：只有 cache 经 sync/syncbus 广播失效。
+//	sync 块 → nest 块：只有 entitysync 读 entity 的同步数据；sync 不碰调度（nest、lock、actionflow）。
+//	sync 块 → dataengine 块：无。
+//	nest 块 → sync 块：无。
+//
+// 新增一条跨块 import 时这里变红：确实需要就在 allowedCrossPillarImports 加一行并写明理由，同时改 00-overview §1；
+// 表里某行不再被任何文件用到时也变红，表与现状保持一致。测试文件不受约束——测试本来就跨块装配
+// （nest 的测试用 nestwal，nestwal 的测试用 dataengine/engine）。
+
+const (
+	pillarNest       = "nest 调度"
+	pillarDataEngine = "dataengine"
+	pillarSync       = "sync"
+)
+
+// pillarPackages 把模块内包路径归到三大块；模式写法同 go list：`x` 只指包 x，`x/...` 指 x 及其子包。
+var pillarPackages = []struct{ pattern, pillar string }{
+	{"nest/...", pillarNest},
+	{"entity/...", pillarNest},
+	{"actionflow/...", pillarNest},
+	{"lock/...", pillarNest},
+	{"dataengine/...", pillarDataEngine},
+	{"nestwal/...", pillarDataEngine},
+	{"versionstore/...", pillarDataEngine},
+	{"cache/...", pillarDataEngine},
+	{"sync/...", pillarSync},
+	{"syncstream/...", pillarSync},
+	{"gateway/...", pillarSync},
+}
+
+// allowedCrossPillarImports 是允许的跨块边（from 包 import to 包），模式写法同上。
+var allowedCrossPillarImports = []struct{ from, to, why string }{
+	{"nest", "dataengine", "提交点交给数据引擎契约（CommitRecord / Durability / 提交钩子接口）"},
+	{"entity", "cache", "实体状态层读写缓存"},
+	{"dataengine", "entity", "契约根包的记录类型引用实体键"},
+	{"dataengine/engine", "entity", "引擎按实体键写回"},
+	{"dataengine/engine", "nest", "引擎实现 nest 的提交钩子"},
+	{"nestwal", "entity", "WAL 记录引用实体键"},
+	{"nestwal", "nest", "WAL 实现 nest 的 pipelined 提交"},
+	{"cache", "sync/syncbus/...", "缓存失效经 syncbus 广播"},
+	{"sync/entitysync/...", "entity", "实体同步读实体的同步数据"},
+}
+
+// matchPackagePattern reports whether the module-relative package rel matches
+// pattern (`x` or `x/...`).
+func matchPackagePattern(pattern, rel string) bool {
+	if base, ok := strings.CutSuffix(pattern, "/..."); ok {
+		return rel == base || strings.HasPrefix(rel, base+"/")
+	}
+	return rel == pattern
+}
+
+func pillarOf(rel string) string {
+	for _, entry := range pillarPackages {
+		if matchPackagePattern(entry.pattern, rel) {
+			return entry.pillar
+		}
+	}
+	return ""
+}
+
+// crossPillarViolation reports why package `from` may not import package `to`
+// (both module-relative), or "" if it may. allowed is the index of the
+// allowlist row that permits a cross-pillar edge, or -1.
+func crossPillarViolation(from, to string) (reason string, allowed int) {
+	fromPillar, toPillar := pillarOf(from), pillarOf(to)
+	if fromPillar == "" || toPillar == "" || fromPillar == toPillar {
+		return "", -1
+	}
+	for i, edge := range allowedCrossPillarImports {
+		if matchPackagePattern(edge.from, from) && matchPackagePattern(edge.to, to) {
+			return "", i
+		}
+	}
+	return fromPillar + " 块的 " + from + " 不得 import " + toPillar + " 块的 " + to +
+		"（三大块之间只允许 allowedCrossPillarImports 登记的边，见 docs/framework/impl/00-overview.md §1）", -1
+}
+
+func TestCorePillarDependencyDirection(t *testing.T) {
+	used := make([]bool, len(allowedCrossPillarImports))
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" || entry.Name() == "vendor" || entry.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			if path != "." {
+				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") || moduleLayer(path) != "core" {
+			return nil
+		}
+		from := filepath.ToSlash(filepath.Dir(path))
+		if pillarOf(from) == "" {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, spec := range file.Imports {
+			name, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				return err
+			}
+			to, inModule := strings.CutPrefix(name, modulePath+"/")
+			if !inModule {
+				continue
+			}
+			reason, allowed := crossPillarViolation(from, to)
+			if reason != "" {
+				t.Errorf("%s: %s", path, reason)
+			}
+			if allowed >= 0 {
+				used[allowed] = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, edge := range allowedCrossPillarImports {
+		if !used[i] {
+			t.Errorf("allowedCrossPillarImports 的 %s → %s 已没有任何非测试文件用到；删掉这一行并同步 00-overview §1，表只记现状", edge.from, edge.to)
+		}
+	}
+}
+
+func TestCrossPillarViolation(t *testing.T) {
+	refused := []struct{ from, to string }{
+		{"sync/lockstep", "nest"},     // sync 不碰调度
+		{"sync/entitysync", "lock"},   // entitysync 只许用 entity
+		{"syncstream", "dataengine"},  // sync → dataengine 无边
+		{"nest", "dataengine/engine"}, // nest 只认契约根包
+		{"nest", "nestwal"},           // 同上
+		{"entity", "sync/syncbus"},    // nest 块 → sync 块无边
+		{"versionstore", "nest"},      // dataengine 块里只有 engine / nestwal / 契约根包接 nest 块
+		{"cache", "sync/entitysync"},  // cache 只接 syncbus
+		{"gateway", "entity"},         // gateway 不读实体
+	}
+	for _, item := range refused {
+		if reason, _ := crossPillarViolation(item.from, item.to); reason == "" {
+			t.Errorf("%s was allowed to import %s", item.from, item.to)
+		}
+	}
+	allowed := []struct{ from, to string }{
+		{"nest", "dataengine"},
+		{"sync/entitysync/policy", "entity"},
+		{"cache", "sync/syncbus/mirror"},
+		{"nest", "lock"},             // 块内
+		{"sync/lockstep", "metrics"}, // 不在三块里
+		{"skill", "nest"},            // 建在三块之上的包不受这条约束
+	}
+	for _, item := range allowed {
+		if reason, _ := crossPillarViolation(item.from, item.to); reason != "" {
+			t.Errorf("%s was refused %s: %s", item.from, item.to, reason)
+		}
+	}
+	for path, want := range map[string]string{
+		"nest": pillarNest, "nestwal": pillarDataEngine, "sync/frame": pillarSync, "syncstream": pillarSync,
+		"dataengine/engine": pillarDataEngine, "skill": "", "synctest": "",
+	} {
+		if got := pillarOf(path); got != want {
+			t.Errorf("pillarOf(%q) = %q, want %q", path, got, want)
+		}
+	}
+}

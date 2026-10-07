@@ -258,7 +258,7 @@
           "legendFormat": "durable wait avg ns"
         },
         {
-          "expr": "rate(entitysync_flush_gate_deferred_total[1m])",
+          "expr": "rate(entitysync_durability_gate_deferred_total[1m])",
           "legendFormat": "entitysync gate deferred/s"
         }
       ]

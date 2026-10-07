@@ -132,8 +132,9 @@ flowchart LR
 | 不 import 已合仓的旧模块路径（`roost-kit`、`roost-service`、`roost-skill`、`roost-codegen`、`cube-core`） | `forbiddenCoreImport`（`:245`） | `TestForbiddenCoreImport`（`:313`） |
 | 契约包不链接驱动：除 kit 外没有非测试文件 import `*/driver` | 驱动表 `:74-79` | `TestCoreContractsDoNotLinkDrivers`（`:92`） |
 | `internal/configschema` 与 `configdata/rules` 只依赖标准库（codegen 要 import） | — | `TestSharedConfigRulesStayALeaf`（`:215`） |
+| core 内三大块（nest 调度 / dataengine / sync，即 §1.1 的三个子图）之间只许 §1.1 图里那几条跨块边（非测试 import）：nest → dataengine 契约根包、entity → cache、dataengine 根包 / engine / nestwal → entity、engine / nestwal → nest、cache → sync/syncbus、entitysync → entity；表里某行不再被用到也报 | `pillarPackages`、`allowedCrossPillarImports`、`crossPillarViolation`（`dependency_boundary_test.go`） | `TestCorePillarDependencyDirection`、`TestCrossPillarViolation`（[REFACTOR-2026-10-07-structural-guards](../../feature/REFACTOR-2026-10-07-structural-guards.md) §2） |
 
-**没有守卫的方向**（观察，未在源码里强制）：core 内部的块间方向（例如“sync 不依赖 nest”“dataengine 契约根包不依赖 engine”）只是现状，没有测试拦住新的反向 import。review 新增 import 时人工看（[§6 检查点](#6-全局-review-入口)）。
+**块间方向**（2026-10-07 起有守卫）：core 内三大块之间的方向由上表最后一行的守卫固定，新增跨块 import 会红；确实需要时在 `allowedCrossPillarImports` 加一行写明理由，并同步改 §1.1 的图。块内、以及建在三块之上的包（skill、saga、remoteentity 等）之间的方向仍只是现状，review 新增 import 时人工看（[§6 检查点](#6-全局-review-入口)）。
 
 ### 1.3 重新生成
 
