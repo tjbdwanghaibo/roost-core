@@ -52,11 +52,11 @@
 | F04-2 | 04 | 缺陷（复现，中高） | 排队模式下一个永不被接受的 pair 留在 retry 里，`Drain` 永不结束（`interest_queue.go:112-116`、`drain.go:22`） | RR 先红后绿 | 已修复（`04378f7c`，[RR-20261006-49](../bug/RR-20261006-49.md)），未发版 |
 | F04-3 | 04 | 缺陷（高） | `Manager.CheckHealth`（`manager.go:1018`）无生产注册（kit Nest Mod 只注册 nest，demo `Scene.CheckHealth` 未登记），T-267、D1、`readyz_degraded_promises_test.go:18` 却把 entitysync 列为 Degraded 来源 | RR：注册或改文档与用例（对口 01/11） | 待处理 |
 | F04-4 | 04 | 推断（中） | `Group` 成员会话被 Manager 关闭后重开无恢复路径（`policy/group.go:59`） | 实测，成立则修 | 待处理 |
-| F04-5 | 04 | 缺陷（高） | lockstep 指标在合仓 `c8249526` 丢了 `lockstep.` 前缀（`room.go:266` 等），`OBSERVABILITY.md:98-102` desync 告警永不触发 | 已实施：`Metric*` 常量恢复 `lockstep.` 前缀，守卫钉住名字（v1.23.1 起） | 已修复（[RR-20261006-61](../bug/RR-20261006-61.md)，`99a3e99f`，未发版） |
-| F04-6 | 04 | 缺陷（复现，高） | lockstep 1232 字节预算未扣传输开销（KCP/QUIC 默认 1200，UDP 加密 +32），接近上限的配置过 `NewRoom` 但满载时整房广播被拒 | 已实施：`DatagramPayloadLimiter`，`NewRoom` 按发送器载荷上限满载校验，缺省 1200（v1.23.1 起） | 已修复（[RR-20261006-62](../bug/RR-20261006-62.md)，`99a3e99f`，未发版） |
-| F04-7 | 04 | 缺陷（中） | `Tick` 被单个慢追帧客户端卡死（Reliable 直连 KCP/QUIC 且 ctx 无期限） | 已实施：追帧页异步发送、每会话一页在途、`Tick` 最多等 5ms（v1.23.1 起） | 已修复（[RR-20261006-63](../bug/RR-20261006-63.md)，`99a3e99f`，未发版） |
-| F04-8 | 04 | 缺陷（高） | 2 人房默认 quorum=2，desync 永远裁不出（`room.go:167`） | 已实施：全部座位已报且无多数时裁 `NoMajority`、全部座位为离群者（v1.23.1 起） | 已修复（[RR-20261006-64](../bug/RR-20261006-64.md)，`99a3e99f`，未发版） |
-| F04-9 | 04 | 缺陷（复现，高） | `robot/lockstep.go:150-156` 只在缓冲溢出时追帧，缺口不够大时局卡住 | 已实施：见缺口即追帧，停住 64 包重发（v1.23.1 起） | 已修复（[RR-20261006-65](../bug/RR-20261006-65.md)，`99a3e99f`，未发版） |
+| F04-5 | 04 | 缺陷（高） | lockstep 指标在合仓 `c8249526` 丢了 `lockstep.` 前缀（`room.go:266` 等），`OBSERVABILITY.md:98-102` desync 告警永不触发 | 已实施：`Metric*` 常量恢复 `lockstep.` 前缀，守卫钉住名字（v1.23.1 起） | 已修复（[RR-20261006-61](../bug/RR-20261006-61.md)，`4ce70763`，未发版） |
+| F04-6 | 04 | 缺陷（复现，高） | lockstep 1232 字节预算未扣传输开销（KCP/QUIC 默认 1200，UDP 加密 +32），接近上限的配置过 `NewRoom` 但满载时整房广播被拒 | 已实施：`DatagramPayloadLimiter`，`NewRoom` 按发送器载荷上限满载校验，缺省 1200（v1.23.1 起） | 已修复（[RR-20261006-62](../bug/RR-20261006-62.md)，`4ce70763`，未发版） |
+| F04-7 | 04 | 缺陷（中） | `Tick` 被单个慢追帧客户端卡死（Reliable 直连 KCP/QUIC 且 ctx 无期限） | 已实施：追帧页异步发送、每会话一页在途、`Tick` 最多等 5ms（v1.23.1 起） | 已修复（[RR-20261006-63](../bug/RR-20261006-63.md)，`4ce70763`，未发版） |
+| F04-8 | 04 | 缺陷（高） | 2 人房默认 quorum=2，desync 永远裁不出（`room.go:167`） | 已实施：全部座位已报且无多数时裁 `NoMajority`、全部座位为离群者（v1.23.1 起） | 已修复（[RR-20261006-64](../bug/RR-20261006-64.md)，`4ce70763`，未发版） |
+| F04-9 | 04 | 缺陷（复现，高） | `robot/lockstep.go:150-156` 只在缓冲溢出时追帧，缺口不够大时局卡住 | 已实施：见缺口即追帧，停住 64 包重发（v1.23.1 起） | 已修复（[RR-20261006-65](../bug/RR-20261006-65.md)，`4ce70763`，未发版） |
 | F04-10 | 04 | 缺陷（高） | 玩家 TCP 中 handler panic 与 WriteGate 拒绝都直接断连，只打 Debug、无栈（`render_player_tcp.go:859`、`render_access.go:93`）；注释与静态绑定方案说回错误码 | RR：panic 记 Error + 栈；WriteGate 拒绝回错误码或改文档（定语义） | 待处理 |
 | F04-11 | 04 | 缺陷（高） | `shutdown_timeout: 0s` 时 doctor 当 10s 报 OK，进程实际拒绝启动（`shutdown_budget.go:577` vs `render_player_tcp.go:311`）；测试注释写死错误认知（`shutdown_player_tcp_budget_promises_test.go:76-83`） | RR | 待处理 |
 | F04-12 | 04 | 缺陷（中） | 生成器把 `dispatch_timeout` 写成显式值，之后不随 `nest.request_timeout`（`player_tcp_config.go:216-238`） | RR | 待处理 |

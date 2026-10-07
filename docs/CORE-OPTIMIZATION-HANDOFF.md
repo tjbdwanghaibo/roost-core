@@ -218,7 +218,7 @@ bash scripts/test-remote-matrix.sh
 ## 7. 缺陷记录索引
 **v1.23.0 已发布（2026-10-07，tag → `28912cd6`）**：下面 10-06（v1.22.0 之后）～10-07 各条随本版发布，原写“未发版”处已改为版本号；10-06 configdata 键大小写敏感及更早各条的“未发版”指发布前状态。
 
-10-07 lockstep 五条（分支 `lockstep`，`99a3e99f`，框架文档发现 F04-5～F04-9，维护者选 A）：[RR-20261006-61](bug/RR-20261006-61.md)（P2）指标名恢复 `lockstep.` 前缀、改为导出常量并由守卫钉住；[RR-20261006-62](bug/RR-20261006-62.md)（P1）nettransport `DatagramPayloadLimiter`，`NewRoom` 按发送器声明的载荷上限做满载校验，缺省 1232 → 1200；[RR-20261006-63](bug/RR-20261006-63.md)（P2）追帧页异步发送、每会话一页在途、`Tick` 最多等 5ms；[RR-20261006-64](bug/RR-20261006-64.md)（P1）全部座位已报且无多数时判 `NoMajority`；[RR-20261006-65](bug/RR-20261006-65.md)（P1）机器人见缺口即追帧、停住 64 包重发。端到端门禁 `sync/lockstep/e2e_gate_test.go`（两客户端 + 机器人经 KCP 回环，满载 3 秒，注入 desync、丢包、卡住的追帧）纳入常规测试。未发版。
+10-07 lockstep 五条（分支 `lockstep`，`4ce70763`，框架文档发现 F04-5～F04-9，维护者选 A）：[RR-20261006-61](bug/RR-20261006-61.md)（P2）指标名恢复 `lockstep.` 前缀、改为导出常量并由守卫钉住；[RR-20261006-62](bug/RR-20261006-62.md)（P1）nettransport `DatagramPayloadLimiter`，`NewRoom` 按发送器声明的载荷上限做满载校验，缺省 1232 → 1200；[RR-20261006-63](bug/RR-20261006-63.md)（P2）追帧页异步发送、每会话一页在途、`Tick` 最多等 5ms；[RR-20261006-64](bug/RR-20261006-64.md)（P1）全部座位已报且无多数时判 `NoMajority`；[RR-20261006-65](bug/RR-20261006-65.md)（P1）机器人见缺口即追帧、停住 64 包重发。端到端门禁 `sync/lockstep/e2e_gate_test.go`（两客户端 + 机器人经 KCP 回环，满载 3 秒，注入 desync、丢包、卡住的追帧）纳入常规测试。未发版。
 
 10-07 手写 HandlerMeta 显式 Durability（分支 `hmeta`，框架文档发现 F02-8，RR-20261006-41 后续）：[RR-20261006-60](bug/RR-20261006-60.md)（P3，`2a8b2e64`）`nest.DurabilityPolicy` 改为 nest 自有类型、零值表示未声明，`Rollback` 不为 none 且未写 `Durability` 的注册即报 `ErrDurabilityUnset`（点名 handler、列出可选值），`HandlerMeta{}` 归一为 memory 快路径；事务记录 / WAL / 远端 outcome 仍用 `dataengine.Durability`，经 `Record()` 换算，字节不变。**行为收紧 + API 变化**（`uint8(nest.DurabilityX)` 数值多 1，须 `.Record()`），未发版。
 

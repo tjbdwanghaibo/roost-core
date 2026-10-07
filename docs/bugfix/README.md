@@ -8,15 +8,15 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
-**10-07 lockstep 五条（`lockstep`，`99a3e99f`），未发版。** 指标名改为导出常量并由守卫钉住；nettransport 新增 `DatagramPayloadLimiter`，Room 按发送器声明的载荷上限做满载校验（缺省 1200）；追帧页离开房间 goroutine 发送、每会话一页在途、`Tick` 最多等 5ms；全部座位已报且无多数时判 NoMajority；机器人见缺口即追帧、停住 64 包后重发。端到端门禁 `sync/lockstep/e2e_gate_test.go` 纳入常规测试。
+**10-07 lockstep 五条（`lockstep`，`4ce70763`），未发版。** 指标名改为导出常量并由守卫钉住；nettransport 新增 `DatagramPayloadLimiter`，Room 按发送器声明的载荷上限做满载校验（缺省 1200）；追帧页离开房间 goroutine 发送、每会话一页在途、`Tick` 最多等 5ms；全部座位已报且无多数时判 NoMajority；机器人见缺口即追帧、停住 64 包后重发。端到端门禁 `sync/lockstep/e2e_gate_test.go` 纳入常规测试。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-65](RR-20261006-65.md) | `HandleBroadcast` / `HandleFrames` 统一 `checkGap`：`Gap()` 或 ingest 报错即从 `Next` 请求；`Next` 前进时不重复请求，停住超过 `CatchupRetryPackets`（64）重发 | 已修复（`99a3e99f`），未发版 |
-| [RR-20261006-64](RR-20261006-64.md) | 检测器知道座位数，全部座位已报、有分歧且无哈希达到 quorum 时裁 `NoMajority`，全部座位为离群者 | 已修复（`99a3e99f`），未发版 |
-| [RR-20261006-63](RR-20261006-63.md) | 追帧页异步发送（每会话一页在途、`CatchupSendTimeout` 2s），`Tick` 最多等 `CatchupSendWait` 5ms，剩余由之后的 tick 收取；剩余帧落进本 tick 冗余窗口即转直播；在途期间回退的游标保留 | 已修复（`99a3e99f`），未发版 |
-| [RR-20261006-62](RR-20261006-62.md) | `DatagramPayloadLimiter`（KCP / QUIC 取配置，UDP 取包上限 − 32），`NewRoom` 取发送器声明值、配置超出即拒；`DefaultMaxDatagramBytes` 1232 → 1200 | 已修复（`99a3e99f`），未发版 |
-| [RR-20261006-61](RR-20261006-61.md) | `Metric*` 常量恢复 `lockstep.` 前缀；守卫钉住名字集合、禁止内联名字、要求 `OBSERVABILITY.md` 列出 | 已修复（`99a3e99f`），未发版 |
+| [RR-20261006-65](RR-20261006-65.md) | `HandleBroadcast` / `HandleFrames` 统一 `checkGap`：`Gap()` 或 ingest 报错即从 `Next` 请求；`Next` 前进时不重复请求，停住超过 `CatchupRetryPackets`（64）重发 | 已修复（`4ce70763`），未发版 |
+| [RR-20261006-64](RR-20261006-64.md) | 检测器知道座位数，全部座位已报、有分歧且无哈希达到 quorum 时裁 `NoMajority`，全部座位为离群者 | 已修复（`4ce70763`），未发版 |
+| [RR-20261006-63](RR-20261006-63.md) | 追帧页异步发送（每会话一页在途、`CatchupSendTimeout` 2s），`Tick` 最多等 `CatchupSendWait` 5ms，剩余由之后的 tick 收取；剩余帧落进本 tick 冗余窗口即转直播；在途期间回退的游标保留 | 已修复（`4ce70763`），未发版 |
+| [RR-20261006-62](RR-20261006-62.md) | `DatagramPayloadLimiter`（KCP / QUIC 取配置，UDP 取包上限 − 32），`NewRoom` 取发送器声明值、配置超出即拒；`DefaultMaxDatagramBytes` 1232 → 1200 | 已修复（`4ce70763`），未发版 |
+| [RR-20261006-61](RR-20261006-61.md) | `Metric*` 常量恢复 `lockstep.` 前缀；守卫钉住名字集合、禁止内联名字、要求 `OBSERVABILITY.md` 列出 | 已修复（`4ce70763`），未发版 |
 
 **10-07 代码生成器一批（`genfix`，`63573f33`～`8dd984eb`），未发版。** 标记选项收敛到 `marker.Spec` 并加守卫；生成器随 `versions.core` 运行、`versions.codegen` 废弃；`--changed` 按工程根换算路径；affinity 方法经 discovery + 按键 picker 路由、缺 discovery 启动时拒绝。
 
