@@ -222,7 +222,7 @@ func main() {
 				return nil, errors.New("gold would go negative") // 触发回滚
 			}
 			return h.Dao.Gold, nil
-		}, nest.HandlerMeta{Rollback: nest.RollbackUndo})
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
 
 	// 启动引擎：消息按实体 ID 哈希到固定 worker，同一实体串行执行
 	engine := nest.NewEngine(
@@ -302,7 +302,7 @@ handler(es []entity.IThreadSafeEntity, params []any) (any, error)
 
 ### 事务与回滚策略
 
-每个 handler 注册时声明 `HandlerMeta{Rollback, Durability}` 两个独立维度（`nest/rollback.go`、`nest/transaction.go`）。**Rollback 管 commit point 之前的失败，Durability 管 commit point 何时被确认。**
+每个 handler 注册时声明 `HandlerMeta{Rollback, Durability}` 两个独立维度（`nest/rollback.go`、`nest/transaction.go`）。**Rollback 管 commit point 之前的失败，Durability 管 commit point 何时被确认。** 手写 `HandlerMeta` 时 `Rollback` 不为 none 就必须显式写 `Durability`，没写的注册时报 `nest.ErrDurabilityUnset`（RR-20261006-60，v1.23.1 起；之前零值即 memory）；`HandlerMeta{}`（rollback=none）仍是 memory 快路径，`//roost:nest` 生成的 meta 总是写明 durability。
 
 Rollback 三档：
 

@@ -145,7 +145,7 @@ engine := nest.NewEngine(
     nest.NestOptionWithGetter(getter),               // 正式装配是 *entity.ManagerAccess
     nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
 )
-engine.MustRegisterHandlerWithMeta(name, handler, nest.HandlerMeta{Rollback: nest.RollbackUndo})
+engine.MustRegisterHandlerWithMeta(name, handler, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 _ = engine.Start()                                    // Start 之后不能再实例注册
 ret, err := engine.Request(ctx, name, entityID, nil)  // 同步：等 handler 结束（含提交）
 _ = engine.Shutdown(ctx)                              // 停准入、排空、停 ticker
@@ -180,7 +180,8 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 规则：
 
 - 会修改的每个实体都必须出现在实体参数里；实体参数在普通参数之前；切片参数生成 MultiGroup。
-- `durability` 非 memory 时 rollback 不能是 none：注册即失败（`nest/handler.go:45`）。
+- `durability` 非 memory 时 rollback 不能是 none：注册即失败（`nest/handler.go` `validateHandlerMeta`）。
+- 手写 `HandlerMeta` 时 `Rollback` 不为 none 就必须显式写 `Durability`（`DurabilityMemory` / `DurabilityAsync` / `DurabilityStrict` / `DurabilityPipelined`），没写的注册即失败，错误满足 `errors.Is(err, nest.ErrDurabilityUnset)` 并点名 handler（RR-20261006-60，v1.23.1 起；之前零值即 memory，要到运行期第一次改持久字段才被拒）。`HandlerMeta{}` 仍是 rollback=none + memory；生成的 meta 总是写明 durability，不受影响。
 - 包级函数注册进全局表；引擎构造时快照全局表，查找先实例、后全局（`nest/handler.go:109`）。测试和多引擎进程优先用实例级 `mgr.RegisterHandlerWithMeta`（只能在 `Start` 之前，`nest/handler.go:139`）。
 - 注册的 handler 经 hotcode 解析（`nest/handler.go:98`），热更替换的是函数，不是 `HandlerMeta`。
 

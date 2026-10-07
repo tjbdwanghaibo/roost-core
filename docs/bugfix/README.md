@@ -14,6 +14,7 @@
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
+| [RR-20261006-60](RR-20261006-60.md) | `nest.DurabilityPolicy` 改为 nest 自有类型、零值表示未声明；`validateHandlerMeta` 对 rollback 不为 none 的未声明报 `ErrDurabilityUnset`、none 归一为 memory；记录 / wire 经 `Record()` 换算，字节不变 | 已修复（`2a8b2e64`），未发版 |
 | [RR-20261006-59](RR-20261006-59.md) | 有 affinity 的服务：`NewBusClient` 必须带 discovery，affinity 方法走 `CallDiscoveredChecked`，`ClientMod` 依赖 etcd Mod、缺 discovery 启动时拒绝；生成工程给 match / activity 的 owner 与调用方加 etcd；守卫改为编译生成包 + recording IBus | 已修复（`8dd984eb`），未发版 |
 | [RR-20261006-58](RR-20261006-58.md) | `git status --porcelain=v1 -z -- .` + `rev-parse --show-prefix`，rename 两侧都算改动 | 已修复（`a461ee2f`），未发版 |
 | [RR-20261006-57](RR-20261006-57.md) | Makefile `go run …/cmd/roost@$(CORE_VERSION)` 取 `versions.core`；`versions.codegen` 写了即拒绝、`project upgrade` 删掉；minimum lane 实跑 make 目标 | 已修复（`410392e0`），未发版；发版时 core 下限升 v1.23.1 |

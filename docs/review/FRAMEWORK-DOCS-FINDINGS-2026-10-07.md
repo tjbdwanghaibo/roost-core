@@ -88,6 +88,6 @@
 | F00 | 00 | 分区间矛盾（汇总时发现） | ① pipelined 的“提交点”02（`Enqueue` 接纳）与 03（票据 fsync 完成）口径不同（实质分歧，`impl/00-overview.md` §6.3）；② Mod 数 13 / 14 口径（`kit/manager` 是否实现 `StopWithContext` 未核实）；③ JetStream nak / Term 归属 04 / 05 / 06 指向不一；④ 多包跨分区归属待定（README 暂标主 / 另见）；⑤ 服务数“十个”与“9 个托管”范围不同；另：core 内三大块之间依赖方向无守卫，`index` / `httpclient` 无调用方，17 个包未在任何分区展开 | ① 以源码定义统一口径后改两篇；② 核实；③④⑤ 统一说明；三大块方向加守卫测试 | 待处理 |
 
 > 维护者 2026-10-07：“同意”——saga 完成判定收敛为统一规则（A，并补 S7 跨进程上限为共享配置）；skill 衍生物先补“施放 → 移交 → 停止”端到端用例再修 R1～R3、H1；删除 `wip/fw-09`（已删）；修复顺序：① 丢数据 / 卡住类（skill R1～R3、H1；entitysync F04-1/2、syncstream F04-15；生成器 G1；RPC 亲和 F09-R1；`versions.codegen` G2）→ ② lockstep 五条 + 端到端门禁 → ③ 结构性守卫（指标名一致性、三大块依赖方向、标记拼错一律报错）→ ④ 其余与文档。每批最多 2 路、不派子 agent，修完发 v1.23.1。
-| F02-8 | 02 | 不一致（RR-41 后续发现） | 手写 `nest.HandlerMeta` 不写 `Durability` 时零值为 memory，`//roost:nest` 缺省为 async；维护者 2026-10-07 选 A：`Rollback` 不为 none 时必须显式写 `Durability`，注册时报错 | 待实施（队列中） | 待处理 |
+| F02-8 | 02 | 不一致（RR-41 后续发现） | 手写 `nest.HandlerMeta` 不写 `Durability` 时零值为 memory，`//roost:nest` 缺省为 async；维护者 2026-10-07 选 A：`Rollback` 不为 none 时必须显式写 `Durability`，注册时报错 | 已实施：`DurabilityPolicy` 零值表示未声明，注册时 `ErrDurabilityUnset`（v1.23.1 起） | 已修复（[RR-20261006-60](../bug/RR-20261006-60.md)，`2a8b2e64`，未发版） |
 
 > 维护者 2026-10-07：根事件表满按 A（另加结构性上界校验）、施放中 Shutdown 也跑 cancel 回调按 A（`wt-skroot` 实施中）；手写 HandlerMeta 按 A（见 F02-8）。

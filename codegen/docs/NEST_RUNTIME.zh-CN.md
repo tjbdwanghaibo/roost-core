@@ -85,6 +85,14 @@ dirty。带持久化属性的 setter、map Set/Del 只能在 Nest handler 或 sy
 `collection/id` 与字段；带 Remote 批次的 memory handler 改本地持久字段同样被拒、批次 Abort
 （RR-20261006-41，v1.23.1 起；之前改动静默丢失）。只改 nopersist 字段的 memory 事务不受影响。
 
+手写 `nest.HandlerMeta`（不经 `//roost:nest`，例如 pipelined handler 或测试）时，`Rollback` 不为
+none 就必须显式写 `Durability`：`DurabilityMemory` / `DurabilityAsync` / `DurabilityStrict` /
+`DurabilityPipelined` 选一个。没写的在注册时失败（`RegisterHandlerWithMeta` 与实例级注册都是），
+错误满足 `errors.Is(err, nest.ErrDurabilityUnset)`，点名 handler 并列出可选值（RR-20261006-60，
+v1.23.1 起；之前 `Durability` 零值即 memory，而标记缺省是 async，忘写的要到运行期第一次改持久字段才被上一段的规则拒绝）。
+`HandlerMeta{}`（rollback=none）照旧是 memory 快路径；显式写 `DurabilityMemory` 的照常可用；
+生成的 `HandlerMeta` 总是写明 durability，不受影响。
+
 同一事务对同一 DAO 的改动合并成一个 mutation：新建、migration/replace 和全字段写为
 Put；已存在文档的普通修改为字段级 Patch；删除为带 version 的 Delete/tombstone。Patch
 不携带 full fallback。Entity release 只处理生命周期和 sync，不编码 BSON 或触发落库。

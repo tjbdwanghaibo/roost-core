@@ -268,7 +268,7 @@ nest:
     async: false                                    # Phase 2：异步完成
 ```
 
-handler 侧通过 `HandlerMeta{Durability: corenest.DurabilityStrict}`（或
+handler 侧通过 `HandlerMeta{Rollback: corenest.RollbackUndo, Durability: corenest.DurabilityStrict}`（或
 `DurabilityPipelined`）声明持久化级别；成功回包时事务已进入 Data Engine WAL。Mongo
 projection 完成后推进 WAL ACK，effect 由独立 outbox worker 投递，因此 NATS 故障不会
 阻塞 Entity 落库。旧 Checkpoint 数据导入说明见 roost-core
