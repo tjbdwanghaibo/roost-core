@@ -39,7 +39,7 @@
 | 步骤超时 / 重试预算（配置）、saga 截止、人工 `Resume` / `Compensate` 的 Go API | 运维命令入口（框架不提供 admin 命令；demo 只有只读的 `gm.saga.get` / `gm.saga.list`） |
 | 从 Nest 事务原子地启动 saga、原生步骤与 Nest 事务原子提交 | WAL、投影与 lease fence 的执行（03 dataengine） |
 
-跨分区：Nest 事务与 effect 见 [02 nest 与实体](./02-nest-entity.md)；原生步骤的生效点（投影事务对 fence 文档的条件写）、实体屏障与驱逐见 [03 DataEngine](./03-dataengine.md)；JetStream 驱动的 nak / Term 见 04 sync 分区（<!-- pending: ../guide/04-sync.md -->`guide/04-sync.md`，尚未写出）；配置读取规则见 07 配置（<!-- pending: ../guide/07-config.md -->`guide/07-config.md`）；指标与健康见 11 可观测（<!-- pending: ../guide/11-observability.md -->`guide/11-observability.md`）；`roost add saga` 见 12 codegen（<!-- pending: ../guide/12-codegen.md -->`guide/12-codegen.md`）。
+跨分区：Nest 事务与 effect 见 [02 nest 与实体](./02-nest-entity.md)；原生步骤的生效点（投影事务对 fence 文档的条件写）、实体屏障与驱逐见 [03 DataEngine](./03-dataengine.md)；JetStream 驱动的 nak / Term 见 [04 sync 分区](04-sync.md)；配置读取规则见 [07 配置](07-config.md)；指标与健康见 [11 可观测](11-observability.md)；`roost add saga` 见 [12 codegen](12-codegen.md)。
 
 [↑ 速览](#速览) · [实现文档 §1](../impl/06-saga.md#1-包与文件地图)
 
@@ -468,6 +468,6 @@ demo 的例子：退款只能在发送方绑定的 sid 上执行，那个进程�
 | [方向 ①②](../../feature/SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)、[状态文档](../../feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md)、[B1](../../feature/B1-SAGA-COMPLETION-INCARNATION-2026-10-06.md)、[方向 ③④](../../feature/SAGA-DIRECTION-3-4-2026-10-07.md)、[Mongo 步骤延迟](../../feature/SAGA-MONGO-STEP-LATENCY-2026-10-06.md) | 设计方案、论证与证据 |
 | [v1.23.0 发版说明 SAGA](../../release/v1.23.0/guide-saga-drv-dao-rem.md) | 本版 SAGA-1～17 改动记录 |
 | [02 nest 与实体](./02-nest-entity.md)、[03 DataEngine](./03-dataengine.md) | Nest 事务、effect、投影 fence、实体屏障 |
-| 04 sync、07 配置、11 可观测、12 codegen 分区 | <!-- pending: ../guide/04-sync.md -->`guide/04-sync.md`、<!-- pending: ../guide/07-config.md -->`guide/07-config.md`、<!-- pending: ../guide/11-observability.md -->`guide/11-observability.md`、<!-- pending: ../guide/12-codegen.md -->`guide/12-codegen.md`（尚未写出） |
+| 04 sync、07 配置、11 可观测、12 codegen 分区 | [guide/04-sync.md](04-sync.md)、[guide/07-config.md](07-config.md)、[guide/11-observability.md](11-observability.md)、[guide/12-codegen.md](12-codegen.md) |
 
 [↑ 速览](#速览) · [实现文档](../impl/06-saga.md)

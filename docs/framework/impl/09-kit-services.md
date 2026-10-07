@@ -25,7 +25,7 @@
 | `kit/service/examples/split` | 两种部署的最小示例与测试 |
 | game-demo 模板（`demo/internal/service/game/{playerowner,gift_saga}.go.tmpl`、`demo/game/controllers/player/enter_game.go.tmpl`、`demo/internal/access/player/tcp/auth.go.tmpl`） | 玩家静态绑定、WriteGate、赠礼 FromSID 转交 |
 
-跨分区：versionstore 实现见 [03 实现 §2.5、§3.11、§7.4](03-dataengine.md)；bus / NATS / ownerroute 见 [05 实现](05-remote-mirror.md)；saga 协调器与步骤收件箱见 [06 实现](06-saga.md)；配置声明与 `LoadConfig` 见 [07 实现](07-config.md)；Mod 装配与启动顺序见 [01 实现](01-app-lifecycle.md)；servicerpc 生成器（`codegen/internal/servicerpc`）见 12 代码生成（impl/12-codegen.md）<!-- pending: ../impl/12-codegen.md -->。
+跨分区：versionstore 实现见 [03 实现 §2.5、§3.11、§7.4](03-dataengine.md)；bus / NATS / ownerroute 见 [05 实现](05-remote-mirror.md)；saga 协调器与步骤收件箱见 [06 实现](06-saga.md)；配置声明与 `LoadConfig` 见 [07 实现](07-config.md)；Mod 装配与启动顺序见 [01 实现](01-app-lifecycle.md)；servicerpc 生成器（`codegen/internal/servicerpc`）见 [12 代码生成](12-codegen.md)。
 
 ---
 

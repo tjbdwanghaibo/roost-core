@@ -14,6 +14,7 @@ Remote 正式业务验收：加载隔离环境的 `ROOST_DATAENGINE_IT_MONGO_URI
 | `gapmap.sh [--max N] [pkg...]` | 覆盖率采样：按包回退断言看测试是否真的会红，产出 `gapmap-report.md` | `.github/workflows/nightly-gapmap.yml` |
 | `gapmap/` | 上面那个脚本的 Python 部件（`classscan.py`、`revertsample.py`） | `gapmap.sh` |
 | `perf/` | `nest-msg.sh` 跑 [Nest 消息吞吐](../docs/feature/NEST-MSG-THROUGHPUT-2026-09-24.md)；`nest.sh` 跑 [Nest 调度与诊断微基准](../docs/feature/NEST-COMPLETION-2026-09-24.md)；`sync.sh` 跑微基准；`sync-business.sh` 跑[隔离 demo](../docs/feature/SYNC-BUSINESS-LOAD-2026-09-23.md)；`sync-aoi.sh` 跑[1000/10000 AOI 双进程负载](../docs/feature/SYNC-AOI-1000-10000-2026-09-23.md) | 人工 |
+| `check-doc-anchors.py [路径...]` | Markdown 相对链接 + `#锚点` 核对（GitHub slug 规则），缺省查 `docs/framework`；根包 `TestTrackedMarkdownRelativeLinksResolve` 只查目标文件存在、不查锚点 | 改 [框架文档](../docs/framework/README.md) 后人工跑，须零断链 |
 | `consolidation/` | 合仓期间的搬迁辅助（`merge_kit_pkg.py`、`split_driver.py`） | 已完成的迁移，保留备查 |
 
 另外两处 `scripts/` 是**层内**的，不重复：

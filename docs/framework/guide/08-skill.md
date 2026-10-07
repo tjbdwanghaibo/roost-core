@@ -45,7 +45,7 @@
 
 `attribute/` 与 `spatial/` 是本分区顺带覆盖的两个基础包：`attribute/` 是带脏跟踪的实体属性容器（`roost` 代码生成的属性组件用它），与 `skill/combat` 的 `AttributeSet` 不是同一个东西；`spatial/` 是格子阻挡索引、几何与 A* 寻路工具，skill 不 import 它（skill 不做寻路）。详见 §4.8。
 
-跨分区：Nest 事务与 handler 见 [02 nest 与实体](./02-nest-entity.md)；DAO 统一回滚（A1）、`RunDetachedTransaction` 见 [03 DataEngine](./03-dataengine.md)；`syncstream` / JetStream 驱动见 [04 sync](./04-sync.md)；时钟与 tick 见 10 时间（<!-- pending: ./10-time.md -->`guide/10-time.md`）；指标与日志见 11 可观测（<!-- pending: ./11-observability.md -->`guide/11-observability.md`）；`roost add skill` 与 game-demo 见 12 codegen（<!-- pending: ./12-codegen.md -->`guide/12-codegen.md`）。
+跨分区：Nest 事务与 handler 见 [02 nest 与实体](./02-nest-entity.md)；DAO 统一回滚（A1）、`RunDetachedTransaction` 见 [03 DataEngine](./03-dataengine.md)；`syncstream` / JetStream 驱动见 [04 sync](./04-sync.md)；时钟与 tick 见 [10 时间](10-time.md)；指标与日志见 [11 可观测](11-observability.md)；`roost add skill` 与 game-demo 见 [12 codegen](12-codegen.md)。
 
 [↑ 速览](#速览) · [实现文档 §1](../impl/08-skill.md#1-包与文件地图)
 
@@ -499,7 +499,7 @@ skill 没有 `roost.yaml` 配置键：所有参数都是 Go 结构体，由业�
 | `Coordinator.Health(options)` | 拉取 | `outbox_pending` / `outbox_pending_bytes` / `outbox_pending_age` / `publish_failures` / `visibility_failures`（`skill/skillsync/observability.go:23-37`） | 接 readyz 或告警 |
 | `Coordinator.ExportMetrics(sink, labels)` | 推送 | `skillsync_published`、`skillsync_outbox_pending`、`skillsync_outbox_oldest_pending_seconds` 等（`skill/skillsync/observability.go:39-53`） | 业务提供 sink |
 
-Runtime 的诊断还有 `InspectTrace()` / `FlushTrace()`（`RuntimeOptions.TraceSink`）、`RuntimeEvents()`（`passive_suppressed`、`owned_spawn_callback_*` 等）、`InspectCast(id)`。指标体系见 11 可观测（<!-- pending: ./11-observability.md -->`guide/11-observability.md`）。
+Runtime 的诊断还有 `InspectTrace()` / `FlushTrace()`（`RuntimeOptions.TraceSink`）、`RuntimeEvents()`（`passive_suppressed`、`owned_spawn_callback_*` 等）、`InspectCast(id)`。指标体系见 [11 可观测](11-observability.md)。
 
 ### 6.2 常见故障
 
@@ -561,7 +561,7 @@ Runtime 的诊断还有 `InspectTrace()` / `FlushTrace()`（`RuntimeOptions.Trac
 ## 8. 相关文档
 
 - 实现：[impl/08-skill.md](../impl/08-skill.md)
-- 跨分区：[02 nest 与实体](./02-nest-entity.md)（handler、事务、快慢池）、[03 DataEngine](./03-dataengine.md)（A1 DAO 回滚、`RunDetachedTransaction`）、[04 sync](./04-sync.md)（`syncstream` History / Publisher）；[07 配置](./07-config.md)（cfggen 生成的技能表）、10 时间（<!-- pending: ./10-time.md -->`guide/10-time.md`）、11 可观测（<!-- pending: ./11-observability.md -->`guide/11-observability.md`）、12 codegen（<!-- pending: ./12-codegen.md -->`guide/12-codegen.md`，`roost add skill`、game-demo）
+- 跨分区：[02 nest 与实体](./02-nest-entity.md)（handler、事务、快慢池）、[03 DataEngine](./03-dataengine.md)（A1 DAO 回滚、`RunDetachedTransaction`）、[04 sync](./04-sync.md)（`syncstream` History / Publisher）；[07 配置](./07-config.md)（cfggen 生成的技能表）、[10 时间](10-time.md)、[11 可观测](11-observability.md)、[12 codegen](12-codegen.md)（`roost add skill`、game-demo）
 - 模块文档（快速参考，与本篇冲突时以本篇与源码为准）：[skill/README.md](../../../skill/README.md)、[docs/skill/README.md](../../skill/README.md)、[skill-casting-and-combat.md](../../skill/skill-casting-and-combat.md)、[skill-implementation-guide.md](../../skill/skill-implementation-guide.md)、[visual-sync-production-guide.md](../../skill/visual-sync-production-guide.md)
 - 设计决定：[B3 lower fail-fast](../../feature/B3-SKILL-LOWER-FAILFAST-2026-10-06.md)、[B3-3 Host 能力表](../../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)、[求值上下文表](../../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)、[停止入口统一](../../feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md)、[衍生物分区](../../feature/REFACTOR-2026-10-07-skill-spawn-partition.md)、[process → Spawn](../../feature/REFACTOR-2026-10-06-skill-process-to-spawn.md)、[Summon 改名](../../feature/REFACTOR-2026-10-07-skill-summon-rename.md)、[ROUND12（投影交业务）](../../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md)
 - 故障：[TROUBLESHOOTING](../../TROUBLESHOOTING.md) T-248、T-258、T-265、T-269、T-271、T-288～T-290

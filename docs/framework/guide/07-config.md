@@ -25,7 +25,7 @@
 | `featureflag` | 进程内开关表（名字 → 开 / 关），版本号单调 |
 | `hotcode` | 补丁点注册、替换、还原、Go plugin 补丁包、admin 命令 |
 
-跨分区：App 什么时候读配置、启动检查在启动序列里的位置、`singleton.*` / `shutdown.*` 等 App 自己的键见 [01 app 说明](01-app-lifecycle.md)；Nest 消息怎样携带请求上下文（快照代际随消息传递）见 [02 nest 说明](02-nest-entity.md)；kit 各服务的键见 09 kit 服务（guide/09-kit-services.md）<!-- pending: ../guide/09-kit-services.md -->；指标暴露、admin 端点的 Bearer 鉴权、仪表盘见 11 可观测（guide/11-observability.md）<!-- pending: ../guide/11-observability.md -->；`roost generate` / `project doctor` 的整体、生成工程模板见 12 代码生成（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->。
+跨分区：App 什么时候读配置、启动检查在启动序列里的位置、`singleton.*` / `shutdown.*` 等 App 自己的键见 [01 app 说明](01-app-lifecycle.md)；Nest 消息怎样携带请求上下文（快照代际随消息传递）见 [02 nest 说明](02-nest-entity.md)；kit 各服务的键见 [09 kit 服务](09-kit-services.md)；指标暴露、admin 端点的 Bearer 鉴权、仪表盘见 [11 可观测](11-observability.md)；`roost generate` / `project doctor` 的整体、生成工程模板见 [12 代码生成](12-codegen.md)。
 
 ---
 
@@ -566,5 +566,5 @@ App 自己的键（`sid`、`server_type`、`env`、`log.*`、`time.logic_offset`
 - 方案与决定：[A4 ① 每个 Mod 声明配置](../../feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)、[A4 ② 严格读取](../../feature/REFACTOR-2026-10-05-strict-config-reads.md)、[B10 / C2 规则与热更可见性](../../feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md)、[configdata 键大小写敏感](../../feature/CONFIGDATA-CASE-SENSITIVE-KEYS-2026-10-06.md)、[第十二轮（cfggen globals 规则）](../../feature/ROUND12-SKILL-CFGGEN-2026-10-06.md)、[DECISIONS-PENDING](../../review/DECISIONS-PENDING-2026-10-05.md)。
 - 修复记录：[RR-20261006-38](../../bugfix/RR-20261006-38.md)（生成配置有键无声明）、[RR-20261006-40](../../bugfix/RR-20261006-40.md)（业务键由服务声明、生成工程守卫）。
 - 使用参考：[USER_GUIDE](../../USER_GUIDE.md)（§10“配置数据：规则、热更与可见性”）、[codegen README](../../../codegen/README.md)（“配置管线：该用哪条”）、[CODEGEN_REFERENCE](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md)、[CFGGEN_META](../../../codegen/docs/CFGGEN_META.zh-CN.md)、[TROUBLESHOOTING](../../TROUBLESHOOTING.md)、[静态注册](../../STATIC_REGISTRATION.md)。
-- 其他分区：[01 app](01-app-lifecycle.md)、[02 nest](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[06 saga](06-saga.md)、09 kit 服务（guide/09-kit-services.md）<!-- pending: ../guide/09-kit-services.md -->、11 可观测（guide/11-observability.md）<!-- pending: ../guide/11-observability.md -->、12 代码生成（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->、00 总览（guide/00-overview.md）<!-- pending: ../guide/00-overview.md -->。
+- 其他分区：[01 app](01-app-lifecycle.md)、[02 nest](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[06 saga](06-saga.md)、[09 kit 服务](09-kit-services.md)、[11 可观测](11-observability.md)、[12 代码生成](12-codegen.md)、[00 总览](00-overview.md)。
 - 实现：[impl/07-config.md](../impl/07-config.md)。

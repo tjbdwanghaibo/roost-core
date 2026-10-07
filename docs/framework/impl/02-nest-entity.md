@@ -577,7 +577,7 @@ Nest 自己没有持久状态，也没有跨进程协议；它产出的是交给
 
 - `Msg` 只在进程内流转，池化复用；`ContextSnapshot` 不序列化。
 - 指标名与标签是运维“协议”，变更要同步 `dispatcherSeriesNames`（`nest/dispatcher_series.go:25`），否则序列比派发器活得久。
-- 生成代码与 Nest 的约定：`BaseHandler` 签名、`HandlerMeta`、`NewParam*MismatchError`（`nest/nest.go:159`～`:173`）、`Client` 方法，见 12 codegen 实现（impl/12-codegen.md）<!-- pending: ../impl/12-codegen.md -->。
+- 生成代码与 Nest 的约定：`BaseHandler` 签名、`HandlerMeta`、`NewParam*MismatchError`（`nest/nest.go:159`～`:173`）、`Client` 方法，见 [12 codegen 实现](12-codegen.md)。
 
 ---
 

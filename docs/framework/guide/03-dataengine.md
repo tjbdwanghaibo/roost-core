@@ -42,7 +42,7 @@
 | 驱动层“写不重放、结果未知交给调用方”的契约（Redis / Mongo） | kit 各服务怎么用 versionstore（09 kit 服务） |
 | versionstore、cache 的一致性原语 | 指标面板与告警规则本身（11 可观测） |
 
-跨分区引用：调度与事务边界见 02 nest 分区（<!-- pending: ./02-nest.md -->`guide/02-nest.md`，尚未写出）；同步水位门槛见 04 sync 分区（<!-- pending: ./04-sync.md -->`guide/04-sync.md`）；Remote 与 Mirror 见 05 分区（<!-- pending: ./05-remote-mirror.md -->`guide/05-remote-mirror.md`）；saga 原生步骤见 06 分区（<!-- pending: ./06-saga.md -->`guide/06-saga.md`）。
+跨分区引用：调度与事务边界见 [02 nest 分区](02-nest-entity.md)；同步水位门槛见 [04 sync 分区](04-sync.md)；Remote 与 Mirror 见 [05 分区](05-remote-mirror.md)；saga 原生步骤见 [06 分区](06-saga.md)。
 
 [↑ 速览](#速览) · [实现文档 §1](../impl/03-dataengine.md#1-包与文件地图)
 
@@ -381,7 +381,7 @@ if errors.Is(err, versionstore.ErrOutcomeUnknown) {
 - 每个包一个 `<sha256>.packet` 文件，内容是带 sha256 校验的 JSON 信封；写入走“临时文件 → fsync → rename → fsync 目录”，崩溃后要么是旧文件、要么是新文件（`skill/skillsync/file_outbox.go:188-253`）。
 - 目录归一个 store 独占；打开时删掉崩溃遗留的 `outbox-<数字>.tmp`（RR-20261006-04）。
 - 有记录数与单条字节上限（缺省 100000 / 16MiB），超了返回 `ErrOutboxStoreLimit`。
-- 它与 DataEngine 的 Mongo outbox 无关：不在 WAL 事务里，语义是“包保留到客户端 ACK”。技能侧用法见 08 分区（<!-- pending: ./08-skill.md -->`guide/08-skill.md`）。
+- 它与 DataEngine 的 Mongo outbox 无关：不在 WAL 事务里，语义是“包保留到客户端 ACK”。技能侧用法见 [08 分区](08-skill.md)。
 
 [↑ 速览](#速览) · [实现文档 §3](../impl/03-dataengine.md#3-主流程)
 
@@ -602,6 +602,6 @@ Projector / Outbox 的计数（Committed、Projected、WALUnacked、FencedEntiti
 | [A1 方案](../../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)、[A2 方案](../../feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)、[A2 ③ 方案](../../feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md) | 维护者决定与实施证据 |
 | [DataEngine 重构方案](../../feature/REFACTOR-2026-09-24-dataengine.md)、[恢复验收](../../feature/DATAENGINE-RECOVERY-2026-09-24.md)、[压测](../../feature/DATAENGINE-PRESSURE-2026-09-24.md)、[批量优化](../../feature/DATAENGINE-BATCH-2026-09-24.md) | 历史设计与性能证据（有日期和配置，不是永久保证） |
 | [v1.23.0 发版说明 DRV / DAO](../../release/v1.23.0/guide-saga-drv-dao-rem.md) | 本版驱动与 DAO 的改动记录 |
-| 02 nest、04 sync、05 remote、06 saga、08 skill、09 kit 服务分区 | <!-- pending: ./02-nest.md -->`guide/02-nest.md`、<!-- pending: ./04-sync.md -->`guide/04-sync.md`、<!-- pending: ./05-remote-mirror.md -->`guide/05-remote-mirror.md`、<!-- pending: ./06-saga.md -->`guide/06-saga.md`、<!-- pending: ./08-skill.md -->`guide/08-skill.md`、<!-- pending: ./09-kit-services.md -->`guide/09-kit-services.md`（尚未写出） |
+| 02 nest、04 sync、05 remote、06 saga、08 skill、09 kit 服务分区 | [guide/02-nest-entity.md](02-nest-entity.md)、[guide/04-sync.md](04-sync.md)、[guide/05-remote-mirror.md](05-remote-mirror.md)、[guide/06-saga.md](06-saga.md)、[guide/08-skill.md](08-skill.md)、[guide/09-kit-services.md](09-kit-services.md) |
 
 [↑ 速览](#速览) · [实现文档](../impl/03-dataengine.md)

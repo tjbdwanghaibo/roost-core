@@ -39,7 +39,7 @@
 | Mirror：只读契约、`SnapshotClient`、`RemoteMirrorMod`、`//roost:mirror` DTO | 生成器与 CLI 的整体（12 codegen） |
 | ownerroute、bus（消息 / RPC / 可靠消费）、nats 驱动 | 指标面板、告警规则（11 可观测） |
 
-跨分区引用：App 生命周期、单实例锁与停机预算见 [01 app 与生命周期](./01-app-lifecycle.md)；Nest 事务、Remote 批次在消息生命周期里的位置见 [02 nest 调度与实体](./02-nest-entity.md)；WAL 投影与 Remote 投影窗口见 [03 dataengine](./03-dataengine.md)；同步总线见 04 sync 分区（<!-- pending: ./04-sync.md -->`guide/04-sync.md`，尚未写出）；配置严格读取见 07 配置（<!-- pending: ./07-config.md -->`guide/07-config.md`）；生成器见 12 分区（<!-- pending: ./12-codegen.md -->`guide/12-codegen.md`）。
+跨分区引用：App 生命周期、单实例锁与停机预算见 [01 app 与生命周期](./01-app-lifecycle.md)；Nest 事务、Remote 批次在消息生命周期里的位置见 [02 nest 调度与实体](./02-nest-entity.md)；WAL 投影与 Remote 投影窗口见 [03 dataengine](./03-dataengine.md)；同步总线见 [04 sync 分区](04-sync.md)；配置严格读取见 [07 配置](07-config.md)；生成器见 [12 分区](12-codegen.md)。
 
 [↑ 速览](#速览) · [实现文档 §1](../impl/05-remote-mirror.md#1-包与文件地图)
 
@@ -310,7 +310,7 @@ JetStream 持久 RPC 的 handler **必须幂等**：broker 在 AckWait（缺省 
 
 ## 5. 配置
 
-所有键由 kit 配置声明严格读取（A4 ①），写错一次报全（07 配置分区，<!-- pending: ./07-config.md -->`guide/07-config.md`）。下表“core 缺省”是 `remoteentity.DefaultConfig()`（`remoteentity/config.go:79-114`），kit 对数字与时长键“0 或不配置 = 用 core 缺省”（`kit/remoteentity/config.go:84-88`）；“生成模板”是新生成工程配置里写出的值（kit 声明的 `example`，`codegen/internal/roost/kitconfig_gen.go:262-302`），**两者不同时以部署实际的配置为准**。
+所有键由 kit 配置声明严格读取（A4 ①），写错一次报全（[07 配置分区](07-config.md)）。下表“core 缺省”是 `remoteentity.DefaultConfig()`（`remoteentity/config.go:79-114`），kit 对数字与时长键“0 或不配置 = 用 core 缺省”（`kit/remoteentity/config.go:84-88`）；“生成模板”是新生成工程配置里写出的值（kit 声明的 `example`，`codegen/internal/roost/kitconfig_gen.go:262-302`），**两者不同时以部署实际的配置为准**。
 
 ### 5.1 `remote_entity.*` 写入段（只有 `RemoteEntityMod` 读）
 
@@ -529,7 +529,7 @@ owner 提交后写 L2 失败或结果未知时，L2 最长落后权威 `snapshot
 ## 8. 相关文档
 
 - 本分区实现文档：[impl/05-remote-mirror.md](../impl/05-remote-mirror.md)
-- 其他分区：[01 app 与生命周期](./01-app-lifecycle.md)、[02 nest 调度与实体](./02-nest-entity.md)、[03 dataengine](./03-dataengine.md)、04 sync（<!-- pending: ./04-sync.md -->`guide/04-sync.md`）、06 saga（<!-- pending: ./06-saga.md -->`guide/06-saga.md`）、09 kit 服务（<!-- pending: ./09-kit-services.md -->`guide/09-kit-services.md`，game-demo 赠礼转交）、11 可观测（<!-- pending: ./11-observability.md -->`guide/11-observability.md`）
+- 其他分区：[01 app 与生命周期](./01-app-lifecycle.md)、[02 nest 调度与实体](./02-nest-entity.md)、[03 dataengine](./03-dataengine.md)、[04 sync](04-sync.md)、[06 saga](06-saga.md)、[09 kit 服务](09-kit-services.md)（game-demo 赠礼转交）、[11 可观测](11-observability.md)
 - 快速参考：[USER_GUIDE §6 Remote Entity](../../USER_GUIDE.md)、[REMOTE_ENTITY.md](../../../REMOTE_ENTITY.md)（较旧，部分描述与源码不一致，以本篇为准）、[TROUBLESHOOTING](../../TROUBLESHOOTING.md)
 - 方案与决定：[B2 水位](../../feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md)、[Mirror 1～3](../../feature/MIRROR-STEPS-1-3-2026-10-06.md)、[Mirror 4 与 O4](../../feature/MIRROR-STEP-4-AND-O4-2026-10-06.md)、[Mirror 5](../../feature/MIRROR-STEP-5-2026-10-06.md)、[Mirror 6 本机替代](../../feature/MIRROR-STEP-6-LOCAL-2026-10-06.md)、[M6 观察](../../feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md)、[PLAN-REMOTE-POLICY-MIRROR](../../review/PLAN-REMOTE-POLICY-MIRROR.md)、[DECISIONS-PENDING](../../review/DECISIONS-PENDING-2026-10-05.md)
 - 发版记录：[v1.23.0 说明 REM / DRV 部分](../../release/v1.23.0/guide-saga-drv-dao-rem.md)

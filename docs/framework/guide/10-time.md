@@ -26,9 +26,9 @@
 - 业务时间守卫在启动序列里的位置，以及它和单实例锁共用的存储，见 [01 app 说明](01-app-lifecycle.md)。
 - Nest 请求上下文 `fctx` 怎样钉住一次请求的时间，见 [02 nest 说明](02-nest-entity.md)。
 - 定时器节点写进 DAO 以后随事务统一回滚（A1），见 [03 dataengine 说明](03-dataengine.md)。
-- 每个 kit 服务各自的时间字段，见 09 kit 服务（guide/09-kit-services.md）<!-- pending: ../guide/09-kit-services.md -->。
-- 指标导出名与仪表盘，见 11 可观测（guide/11-observability.md）<!-- pending: ../guide/11-observability.md -->。
-- doctor 和生成工程模板的整体，见 12 代码生成（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->。
+- 每个 kit 服务各自的时间字段，见 [09 kit 服务](09-kit-services.md)。
+- 指标导出名与仪表盘，见 [11 可观测](11-observability.md)。
+- doctor 和生成工程模板的整体，见 [12 代码生成](12-codegen.md)。
 
 ---
 
@@ -45,7 +45,7 @@
 **不负责**
 
 - 帧率与 tick 驱动：nest 的 ticker 是系统时钟（`nest/ticker.go:155`），见 [02](02-nest-entity.md)。
-- 各 kit 服务字段级的时间语义，例如 mail 的过期和领取租约、chat 的保留期，见 09 kit 服务<!-- pending: ../guide/09-kit-services.md -->。本篇只给归属总表（§4.1）。
+- 各 kit 服务字段级的时间语义，例如 mail 的过期和领取租约、chat 的保留期，见 [09 kit 服务](09-kit-services.md)。本篇只给归属总表（§4.1）。
 - 日 / 周重置和赛季切换：框架与 game-demo 都没有实现（[D-L3 方案 §3.1](../../feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md) 末段）。业务实现时读业务时钟。
 - skill / 战斗的“游戏时间”：运行时按帧推进，不读墙钟（同上）。见 [08 skill](08-skill.md)。
 - 跨主机的时钟同步：生产靠 NTP。框架只用 1 分钟容差吸收主机之间的偏差。
@@ -266,6 +266,6 @@ handler 读 `fctx.Now()`。`fctx` 在建上下文时把 `clock.Now()` 钉进 `Co
 - 发版记录：[v1.23.0 app / clk 分册](../../release/v1.23.0/impl-app-own-clk-ops-tool.md)（CLK-1～CLK-6）
 - 快速参考：[USER_GUIDE 业务时钟与系统时钟](../../USER_GUIDE.md#业务时钟与系统时钟)
 - 执行契约：[roost-coding](../../agent-skills/roost-coding/SKILL.md)
-- 其他分区：[01 app](01-app-lifecycle.md)、[02 nest](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[08 skill](08-skill.md)；09 kit 服务（guide/09-kit-services.md）<!-- pending: ../guide/09-kit-services.md -->、11 可观测（guide/11-observability.md）<!-- pending: ../guide/11-observability.md -->、12 代码生成（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->
+- 其他分区：[01 app](01-app-lifecycle.md)、[02 nest](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[08 skill](08-skill.md)；[09 kit 服务](09-kit-services.md)、[11 可观测](11-observability.md)、[12 代码生成](12-codegen.md)
 
 [↑ 速览](#速览) · [实现文档](../impl/10-time.md)

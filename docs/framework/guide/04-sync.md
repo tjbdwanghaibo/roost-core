@@ -29,7 +29,7 @@
 | 生成的玩家接入层 | `codegen/internal/roost/render_player_tcp.go`、`render_access.go`、`player_tcp_config.go` 生成的 `access.player` / `access.player.tcp` 两个 Mod、`player_agent` 协议注册表 |
 | `kit/nest`（entitysync 接线部分） | `NewModWithEntitySync`、`sync.entity.*` 配置、自动水位、卸载后重载接线；Nest 本身归 02 分区 |
 
-跨分区：实体内容层 `entity/subject_sync.go`、提交边界 `entity.SyncMutation` 与 Nest 的 `NestOptionWithEntitySync` 在 [02 nest 与实体](02-nest-entity.md)；`DurableLSN`、pipelined 提交与 WAL 在 [03 dataengine](03-dataengine.md)；`remoteentity` 的快照推送（用 `ILiveSubscriber`）与 Mirror 在 [05 remote 与 Mirror](05-remote-mirror.md)；skillsync（syncstream 的唯一生产消费者）在 08 skill <!-- pending: ../guide/08-skill.md -->；配置规则在 07 配置 <!-- pending: ../guide/07-config.md -->；指标总表与仪表盘在 11 可观测 <!-- pending: ../guide/11-observability.md -->；`roost add access player` / `add transport tcp` 生成器在 12 codegen <!-- pending: ../guide/12-codegen.md -->；App 生命周期与三步停机在 [01 app](01-app-lifecycle.md)。
+跨分区：实体内容层 `entity/subject_sync.go`、提交边界 `entity.SyncMutation` 与 Nest 的 `NestOptionWithEntitySync` 在 [02 nest 与实体](02-nest-entity.md)；`DurableLSN`、pipelined 提交与 WAL 在 [03 dataengine](03-dataengine.md)；`remoteentity` 的快照推送（用 `ILiveSubscriber`）与 Mirror 在 [05 remote 与 Mirror](05-remote-mirror.md)；skillsync（syncstream 的唯一生产消费者）在 [08 skill](08-skill.md)；配置规则在 [07 配置](07-config.md)；指标总表与仪表盘在 [11 可观测](11-observability.md)；`roost add access player` / `add transport tcp` 生成器在 [12 codegen](12-codegen.md)；App 生命周期与三步停机在 [01 app](01-app-lifecycle.md)。
 
 ---
 
@@ -443,7 +443,7 @@ accept ─(全局槽 max_connections、单 IP 上限)─▶ 握手槽(max_handsh
 
 ## 5. 配置
 
-配置键都由读它的 Mod 声明，App 在任何 Mod Init 之前按声明检查类型、枚举、`min`（规则见 07 分区 <!-- pending: ../guide/07-config.md -->）；范围类的业务校验在 Mod Init 里。
+配置键都由读它的 Mod 声明，App 在任何 Mod Init 之前按声明检查类型、枚举、`min`（规则见 [07 分区](07-config.md)）；范围类的业务校验在 Mod Init 里。
 
 ### 5.1 `sync.entity.*`（kit/nest，只在 `NewModWithEntitySync` 装配时生效）
 
@@ -662,4 +662,4 @@ demo 的常量：scene Interval 50ms、进入 / 离开半径 120 / 150、关系 
 | [visual-sync 生产指南](../../skill/visual-sync-production-guide.md) | syncstream 的生产基线（skill 视角） |
 | [GAME_DEMO_TEMPLATE](../../feature/GAME_DEMO_TEMPLATE.md)、`demo/README.md` | game-demo 的接入层、scene、battle |
 | [01 app 与生命周期](01-app-lifecycle.md) | 三步停机、停机预算、readiness |
-| [02 nest 与实体](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[05 remote 与 Mirror](05-remote-mirror.md)、08 skill <!-- pending: ../guide/08-skill.md -->、11 可观测 <!-- pending: ../guide/11-observability.md -->、12 codegen <!-- pending: ../guide/12-codegen.md --> | 跨分区内容 |
+| [02 nest 与实体](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[05 remote 与 Mirror](05-remote-mirror.md)、[08 skill](08-skill.md)、[11 可观测](11-observability.md)、[12 codegen](12-codegen.md) | 跨分区内容 |

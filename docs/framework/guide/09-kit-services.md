@@ -30,7 +30,7 @@
 | `kit/service/examples/split`、`kit/service/integration` | 两种部署的最小示例；真实 Redis 上的跨服务集成测试与键空间守卫 |
 | game-demo 模板（`demo/internal/service/game/playerowner.go.tmpl`、`gift_saga.go.tmpl`、`demo/game/controllers/player/enter_game.go.tmpl`、`demo/internal/access/player/tcp/auth.go.tmpl`） | 玩家静态绑定、登录准入、WriteGate、赠礼按 FromSID 转交 |
 
-跨分区：Mod 生命周期、依赖、静态注册见 [01 app 说明](01-app-lifecycle.md)；versionstore 的写令牌、结论判定、Redis 实现见 [03 dataengine 说明 §4.8](03-dataengine.md) 与 [03 实现 §3.11](../impl/03-dataengine.md)；玩家 TCP 接入层与认证器接口见 [04 sync 说明 §4.11](04-sync.md)；总线、NATS 传输、`ownerroute` 见 [05 说明 §4.6～4.8](05-remote-mirror.md)；赠礼 saga 本身（步骤收件箱、预算）见 [06 saga 说明](06-saga.md)；配置声明与 `LoadConfig` 见 [07 配置说明](07-config.md)；业务时钟见 [10 时间说明](10-time.md)；指标暴露与仪表盘见 11 可观测（guide/11-observability.md）<!-- pending: ../guide/11-observability.md -->；servicerpc 生成器本身见 12 代码生成（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->。
+跨分区：Mod 生命周期、依赖、静态注册见 [01 app 说明](01-app-lifecycle.md)；versionstore 的写令牌、结论判定、Redis 实现见 [03 dataengine 说明 §4.8](03-dataengine.md) 与 [03 实现 §3.11](../impl/03-dataengine.md)；玩家 TCP 接入层与认证器接口见 [04 sync 说明 §4.11](04-sync.md)；总线、NATS 传输、`ownerroute` 见 [05 说明 §4.6～4.8](05-remote-mirror.md)；赠礼 saga 本身（步骤收件箱、预算）见 [06 saga 说明](06-saga.md)；配置声明与 `LoadConfig` 见 [07 配置说明](07-config.md)；业务时钟见 [10 时间说明](10-time.md)；指标暴露与仪表盘见 [11 可观测](11-observability.md)；servicerpc 生成器本身见 [12 代码生成](12-codegen.md)。
 
 ---
 
@@ -437,7 +437,7 @@ sequenceDiagram
 ## 8. 相关文档
 
 - 实现：[impl/09-kit-services.md](../impl/09-kit-services.md)
-- 其他分区：[01 app](01-app-lifecycle.md)、[02 nest](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[04 sync](04-sync.md)、[05 remote 与 Mirror](05-remote-mirror.md)、[06 saga](06-saga.md)、[07 配置](07-config.md)、[08 skill](08-skill.md)、[10 时间](10-time.md)、11 可观测（guide/11-observability.md）<!-- pending: ../guide/11-observability.md -->、12 代码生成（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->、00 总览（guide/00-overview.md）<!-- pending: ../guide/00-overview.md -->
+- 其他分区：[01 app](01-app-lifecycle.md)、[02 nest](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[04 sync](04-sync.md)、[05 remote 与 Mirror](05-remote-mirror.md)、[06 saga](06-saga.md)、[07 配置](07-config.md)、[08 skill](08-skill.md)、[10 时间](10-time.md)、[11 可观测](11-observability.md)、[12 代码生成](12-codegen.md)、[00 总览](00-overview.md)
 - 模块文档（部分过时，见 F09-D）：[kit/service/README.md](../../../kit/service/README.md)、[kit/README.md](../../../kit/README.md)
 - 方案：[静态绑定](../../feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md)、[B9 / C5](../../feature/B9-C5-WINDOW-ENTRIES-ROLE-TABLE-2026-10-06.md)、[C4 活动组](../../feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md)、[C6 服务指标](../../feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md)、[A2-3 写令牌](../../feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md)
 - 登记：[框架文档发现](../../review/FRAMEWORK-DOCS-FINDINGS-2026-10-07.md)、[TROUBLESHOOTING](../../TROUBLESHOOTING.md)

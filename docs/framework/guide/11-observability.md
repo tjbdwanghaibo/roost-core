@@ -30,7 +30,7 @@
 - ops Mod 的就绪位挂在哪两个生命周期 hook、`/readyz` 在启动与停机序列里的位置、单实例锁 checker，见 [01 app 说明 §6.3](01-app-lifecycle.md#63-readiness)。
 - 各来源自己的指标含义（Nest 派发、WAL、entitysync、Remote、saga、kit 服务）在各自分区：[02](02-nest-entity.md)、[03](03-dataengine.md)、[04](04-sync.md)、[05](05-remote-mirror.md)、[06](06-saga.md)、[09](09-kit-services.md)。本篇给全仓总表和统一规则。
 - 业务时间高水位推进失败计数的语义见 [10 时间](10-time.md)。
-- 生成器怎么渲染 ops 配置、仪表盘与 dev-run，见 12 代码生成（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->。
+- 生成器怎么渲染 ops 配置、仪表盘与 dev-run，见 [12 代码生成](12-codegen.md)。
 
 ---
 
@@ -691,6 +691,6 @@ stats_log Mod 每 `stats_log.interval` 采集一次：goroutine、堆、GC、按
 - 方案：[D1 Degraded 算就绪](../../feature/D1-READYZ-DEGRADED-IS-READY-2026-10-06.md)、[R12 kit 批（DeleteSeries、checker 期限、Bearer、CAS 计数、推进失败计数）](../../feature/DECISIONS-R12-KIT-2026-10-06.md)、[C6 默认服务指标](../../feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md)、[Ops admin 期限](../../feature/OPS-ADMIN-TIMEOUT-2026-10-06.md)
 - 发版记录：[v1.23.0 app / ops 分册](../../release/v1.23.0/impl-app-own-clk-ops-tool.md)（APP-10、APP-11、OPS-1～OPS-6）
 - 快速参考：[USER_GUIDE](../../USER_GUIDE.md)、[TROUBLESHOOTING](../../TROUBLESHOOTING.md)
-- 其他分区：[01 app](01-app-lifecycle.md)、[02 nest](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[04 sync](04-sync.md)、[05 remote / mirror](05-remote-mirror.md)、[06 saga](06-saga.md)、[07 配置](07-config.md)、[09 kit 服务](09-kit-services.md)、[10 时间](10-time.md)；12 代码生成（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->
+- 其他分区：[01 app](01-app-lifecycle.md)、[02 nest](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[04 sync](04-sync.md)、[05 remote / mirror](05-remote-mirror.md)、[06 saga](06-saga.md)、[07 配置](07-config.md)、[09 kit 服务](09-kit-services.md)、[10 时间](10-time.md)；[12 代码生成](12-codegen.md)
 
 [↑ 速览](#速览) · [实现文档](../impl/11-observability.md)

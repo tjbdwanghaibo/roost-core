@@ -440,7 +440,7 @@ flowchart TD
 
 **lifecycle 事件**：`PhaseConfigReload`，`Name` 为 `configdata` 或 `configdata.rollback`，`Data` 含 `reason` / `version` / `hash`（Rollback 另有 `from_version`）（`configdata/configdata.go:1073`～`:1085`）。
 
-**指标**：`configdata.reload.total{result}`、`configdata.rollback.total{trigger}`、`configdata.version`（Prometheus 名把 `.` 换成 `_`，细节见 11 可观测（impl/11-observability.md）<!-- pending: ../impl/11-observability.md -->）。
+**指标**：`configdata.reload.total{result}`、`configdata.rollback.total{trigger}`、`configdata.version`（Prometheus 名把 `.` 换成 `_`，细节见 [11 可观测](11-observability.md)）。
 
 **版本兼容**：v1.23.0 起数据键大小写敏感、规则在加载层强制、0 / 负数不再静默取缺省——都是行为变化。维护者 2026-10-06 决定项目未上线不做旧数据兼容（[DECISIONS-PENDING](../../review/DECISIONS-PENDING-2026-10-05.md)）。
 

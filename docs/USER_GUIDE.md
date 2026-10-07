@@ -1,5 +1,7 @@
 # Roost 开发者完整使用说明
 
+> 框架整体的说明与实现见 [框架文档](framework/README.md)（基准 v1.23.0）；内容冲突以框架文档与源码为准。
+
 权威快照加载现要求结果完整 Key 与请求一致，异键在写入前返回错误（NC-35，main未发版）。Monotonic/Linearizable 的成功结果还必须在返回前未过 ExpiresAt、实际 L1 达到 minVersion；epoch准入保留的版本不足返回已有 ErrRemoteSnapshotStale（NC-36），L2发布期间过期返回miss（旧RR-08补修）。接入方修正loader身份/权威版本，不忽略错误或放宽epoch保护；缓存miss与复制返回nil不代表业务持久ACK。[机制/边界](review/IMPLEMENTATION-AUTHORITATIVE-SNAPSHOT-POSTCONDITIONS.md)。
 
 Mirror现有适配器新增payload身份校验（NC-33/34，main未发版）：cache接收端配置的KeyOf/VersionOf必须与发送端规则一致，不一致更新在Store写入前返回错误；未配置提取器不承诺该维度校验。带身份的null更新拒绝。Remote interest正式格式仍为Upsert，信封key包含完整snapshot key与SID，version仍是ExpiresAt，Generation独立负责代际。不要把错误消息盲目重发、校验成功当成发布认证，或普通Delete当成版本墓碑。完整只读DTO Mirror仍按既有方案待实施。[接入机制](review/IMPLEMENTATION-MIRROR-PAYLOAD-IDENTITY-AND-ROUTING.md)。

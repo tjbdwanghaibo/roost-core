@@ -25,7 +25,7 @@
 | `cmd/glsvet` | 全部规则：handler 并发边界、准入结果、goroutine 绑定调用、A1 两种提示、停机提示、业务时钟提示、`roost:nest` 标注 | 业务时钟的语义归 10 |
 | `kit/nest` | 把引擎装配成 `app.Mod`、读 `nest.*` 配置、接 Fence 与健康检查 | Mod 生命周期通用规则归 01 |
 
-跨分区的内容只给出入口：DataEngine 与 DAO 本身见 [03 dataengine 说明](03-dataengine.md)；Sync 见 04 sync 说明（guide/04-sync.md）<!-- pending: ../guide/04-sync.md -->；Remote 见 05 remote / Mirror 说明（guide/05-remote-mirror.md）<!-- pending: ../guide/05-remote-mirror.md -->；App 装配与停机契约见 [01 app 说明](01-app-lifecycle.md)（[实现](../impl/01-app-lifecycle.md)）；生成器见 12 codegen 说明（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->。
+跨分区的内容只给出入口：DataEngine 与 DAO 本身见 [03 dataengine 说明](03-dataengine.md)；Sync 见 [04 sync 说明](04-sync.md)；Remote 见 [05 remote / Mirror 说明](05-remote-mirror.md)；App 装配与停机契约见 [01 app 说明](01-app-lifecycle.md)（[实现](../impl/01-app-lifecycle.md)）；生成器见 [12 codegen 说明](12-codegen.md)。
 
 ---
 
@@ -37,7 +37,7 @@
 | --- | --- |
 | 按声明目标建立同 ID 顺序、背压（队列满即拒绝） | 网络接入、认证、限流（gateway / 接入层） |
 | 快慢两种执行资源：快池跑 handler，慢池跑等待 | 在 handler 里替业务做 I/O：任意阻塞 RPC 不会被自动隔离 |
-| 加载、按全局锁序加锁、引用计数（Touch） | 跨服务的一致性（用 Saga，见 06 saga 说明（guide/06-saga.md）<!-- pending: ../guide/06-saga.md -->） |
+| 加载、按全局锁序加锁、引用计数（Touch） | 跨服务的一致性（用 Saga，见 [06 saga 说明](06-saga.md)） |
 | 事务：回滚、准入、提交、提交后回调、回复 | DAO 的生成与持久化格式、WAL 与投影（03） |
 | 结果未知时 fence 引擎，不猜测性回滚 | 恢复已 fence 的进程（由 App fail-stop + WAL 重放完成） |
 | 静态检查（glsvet）发现 handler 里的并发越界 | 证明业务代码正确：glsvet 只按语法判断 |
@@ -105,7 +105,7 @@
 
 ### 3.6 回滚统一走 DAO（维护者决定 A1）
 
-事务里会改、回滚时要恢复的状态一律放在 DAO（不落库用 `dao:"nopersist,sync"` 或 `dao:"nopersist,nosync"`），由 Nest 的 DAO 回滚统一兜住；组件不维护需要回滚的内存状态，不在组件里调 `RecordUndo` / `RecordUndoToken` / `DeferRollback`。同一缺口此前出过四次（NC-61 / 65 / 140、N09 O1），每次都是组件自己补一份快照、漏一处就是资产错（[方案](../../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）。派生值同样是 DAO 字段，由组件里唯一的 derive 在加载与改源字段的事务里写；**回滚不是重算触发点**。明确例外：`skill.Runtime` 的冷却、ammo 等不进事务（维护者决定 B4，见 08 skill 说明（guide/08-skill.md）<!-- pending: ../guide/08-skill.md -->）。
+事务里会改、回滚时要恢复的状态一律放在 DAO（不落库用 `dao:"nopersist,sync"` 或 `dao:"nopersist,nosync"`），由 Nest 的 DAO 回滚统一兜住；组件不维护需要回滚的内存状态，不在组件里调 `RecordUndo` / `RecordUndoToken` / `DeferRollback`。同一缺口此前出过四次（NC-61 / 65 / 140、N09 O1），每次都是组件自己补一份快照、漏一处就是资产错（[方案](../../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）。派生值同样是 DAO 字段，由组件里唯一的 derive 在加载与改源字段的事务里写；**回滚不是重算触发点**。明确例外：`skill.Runtime` 的冷却、ammo 等不进事务（维护者决定 B4，见 [08 skill 说明](08-skill.md)）。
 
 ### 3.7 越过提交点不重排；不能回滚的 handler 开始后也不重排
 
@@ -503,4 +503,4 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 - A1：[方案](../../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)、[字段写提示](../../feature/A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md)
 - actionflow：[延后队列方案](../../feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md)
 - 故障：[TROUBLESHOOTING](../../TROUBLESHOOTING.md)
-- 其他分区：[03 dataengine](03-dataengine.md)、04 sync（guide/04-sync.md）<!-- pending: ../guide/04-sync.md -->、05 remote / Mirror（guide/05-remote-mirror.md）<!-- pending: ../guide/05-remote-mirror.md -->、[01 app](01-app-lifecycle.md)、10 时间（guide/10-time.md）<!-- pending: ../guide/10-time.md -->、12 codegen（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->
+- 其他分区：[03 dataengine](03-dataengine.md)、[04 sync](04-sync.md)、[05 remote / Mirror](05-remote-mirror.md)、[01 app](01-app-lifecycle.md)、[10 时间](10-time.md)、[12 codegen](12-codegen.md)

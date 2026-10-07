@@ -263,7 +263,7 @@ Tick 中途其他入口的语义（`timer/scheduler.go:191-257`、`:343-354`）�
 
 **World 定时器节点**（`demo/db/def/world.go.tmpl:49-58`）：`type`、`priority`、`param1`、`param2`、`payload`（omitempty）、`end_unix_milli`、`delay_millis`。`timers` 是 `map[int64]*TimerNode`，键是节点 ID（`:22`，`persist,map=fast`）；`timer_seed` 持久化（`:25`）；`timer_next_due` 是 `nopersist,nosync`（`:33`）。`priority` 是 D-L1 之后加的：旧文档没有这个键，解码为 0，不升 schema。End 按毫秒存储。
 
-**指标名**：`app.business_time.advance_failed.total`（无标签）、`timer.unhandled_dropped_total{kind=<类型号>}`。导出时点号换成下划线，见 11 可观测<!-- pending: ../guide/11-observability.md -->。
+**指标名**：`app.business_time.advance_failed.total`（无标签）、`timer.unhandled_dropped_total{kind=<类型号>}`。导出时点号换成下划线，见 [11 可观测](../guide/11-observability.md)。
 
 **进程级时钟精度**：毫秒（`clock/clock.go:122`），由 `TestLogicClockOffsetRoundTripsAtMillisecondResolution`（`clock/clock_test.go:13`）固定。
 

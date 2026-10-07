@@ -25,7 +25,7 @@
 | `internal/stopcontract` | 只给测试用的「三步停机」契约骨架 `Check` |
 | `internal/configschema` | 配置声明（tag → `Schema`）、解码与检查、合并、YAML 输出、源码守卫。本篇只讲 app 侧的装配与检查时机，规则本身见 07 分区 |
 
-跨分区：配置规则（tag 语义、严格读、热更）在 07 配置 <!-- pending: ../guide/07-config.md -->；业务时钟、业务时间高水位在 10 时间 <!-- pending: ../guide/10-time.md -->；指标、日志、admin、仪表盘在 11 可观测 <!-- pending: ../guide/11-observability.md -->；`//roost:register` 生成器、bootstrap 模板、停机预算的生成公式在 12 代码生成 <!-- pending: ../guide/12-codegen.md -->。
+跨分区：配置规则（tag 语义、严格读、热更）在 [07 配置](07-config.md)；业务时钟、业务时间高水位在 [10 时间](10-time.md)；指标、日志、admin、仪表盘在 [11 可观测](11-observability.md)；`//roost:register` 生成器、bootstrap 模板、停机预算的生成公式在 [12 代码生成](12-codegen.md)。
 
 ---
 
@@ -99,7 +99,7 @@
 
 ### 4.1 进程入口：生成的 bootstrap
 
-生成工程的 `cmd/<project>/main.go` 只有三步（`renderMain`，`codegen/internal/roost/render.go:298`）：
+生成工程根目录的 `main.go`（`codegen/internal/roost/render.go:80`）只有三步（`renderMain`，`codegen/internal/roost/render.go:298`）：
 
 ```go
 a, err := bootstrap.New()
@@ -398,8 +398,8 @@ singleton: released key=…
 ## 8. 相关文档
 
 - 实现：[impl/01-app-lifecycle.md](../impl/01-app-lifecycle.md)
-- 总览与术语：00 总览 <!-- pending: ../guide/00-overview.md -->
-- 配置规则：07 配置 <!-- pending: ../guide/07-config.md -->；时间：10 时间 <!-- pending: ../guide/10-time.md -->；可观测与 ops：11 可观测与运维 <!-- pending: ../guide/11-observability.md -->；生成器：12 代码生成与工程 <!-- pending: ../guide/12-codegen.md -->
+- 总览与术语：[00 总览](00-overview.md)
+- 配置规则：[07 配置](07-config.md)；时间：[10 时间](10-time.md)；可观测与 ops：[11 可观测与运维](11-observability.md)；生成器：[12 代码生成与工程](12-codegen.md)
 - 方案：[单实例锁](../../feature/APP-SINGLETON-LOCK-2026-10-05.md)、[A4 ① 配置声明](../../feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)、[A3 共用停机类型](../../feature/REFACTOR-2026-10-05-shared-stop-contract.md)、[D1 readyz](../../feature/D1-READYZ-DEGRADED-IS-READY-2026-10-06.md)、[第十二轮决定](../../feature/DECISIONS-R12-KIT-2026-10-06.md)、[静态注册](../../STATIC_REGISTRATION.md)、[业务时间只许前进](../../feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md)
 - 执行契约：[roost-coding](../../agent-skills/roost-coding/SKILL.md)「生命周期与装配的复审要点」「配置只经声明读」
 - 快速参考：[USER_GUIDE](../../USER_GUIDE.md)（§2 单实例锁、§10 配置写法与启动校验）、[INTERNALS](../../INTERNALS.md)、[TROUBLESHOOTING](../../TROUBLESHOOTING.md)

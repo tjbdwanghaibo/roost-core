@@ -413,7 +413,7 @@ CI 分工：`ci.yml` 跑 `go generate` 漂移、5 个运行期守卫与全部单
 | `.github/workflows/framework-compat.yml:67`～`:68`、`:201`～`:202` | game 模板托管 4 个；demo 起 6 个进程 | 9 个托管服务；`run.sh` 起全部 10 个服务（`render_dev_run.go:36`～`:52`） |
 | `codegen/framework-lock.json` | schema 1，列 codegen v1.13.5、core v1.12.0、roost-skill 等五仓 | 合仓前遗留，无任何代码读取；release 产物是 schema 3 的同名文件（REVIEW-2026-09-08 曾提到“未追完”） |
 | `codegen/README.md:221`、`docs/TROUBLESHOOTING.md` T-164 | `framework verify --expected-codegen`、清单 `codegen:` 字段 | flag 已改为 `--expected-release`（`cli.go:86`），清单只有 `release:`（schema 3） |
-| `docs/framework/guide/01-app-lifecycle.md:102` | 生成工程入口是 `cmd/<project>/main.go` | 工程根 `main.go`（`render.go:80`，实测） |
+| `docs/framework/guide/01-app-lifecycle.md:102` | 生成工程入口是 `cmd/<project>/main.go` | 工程根 `main.go`（`render.go:80`，实测）；已在 00 汇总时改正 |
 | `codegen/internal/marker/marker.go:5`～`:7` | 每个解析器都经 marker 包 | protocol 用自己的正则 `^//[a-z]+:protocol` / `^//[a-z]+:msg`，接受任意小写前缀且不计入旧前缀提示（`codegen/internal/protocol/parse.go:19`～`:20`）；`id.go:16` 同 |
 | `codegen/internal/roost/shutdown_budget.go:30` | 公式注释不含单实例锁 | 代码含（`:148`）；与 F01-4 同源 |
 | `codegen/internal/roost/cli.go:299` | `roost add` 用法列 18 种 kind | `rpc` 也支持（`:328`） |
