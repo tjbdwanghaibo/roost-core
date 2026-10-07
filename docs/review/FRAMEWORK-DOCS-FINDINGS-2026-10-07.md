@@ -33,3 +33,11 @@
 | F02-5 | 02 | 文档 / 注释 | `docs/INTERNALS.md` §3 “worker 哈希串行”过时（现为 ID 依赖链 + 共享 worker），`nest/pipelined_completion.go:284` 注释同；`RUNTIME_EXECUTION_MODEL.md` 仍写独立 roost-codegen 仓与多仓发布顺序 | 改文档与注释 | 待处理 |
 | F02-6 | 02 | 注释 | `nest/rollback.go:587` “Memory-only handlers persist through entity release hooks” 过时（同 F03-1 注释项） | 随 F02-1 一并改 | 待处理 |
 | F02-7 | 02 | 推断 | `ActionRunner.submit`（`actionflow/action_runner.go:362`）不在 defer 里复位 `executing`（`MissionRunner` 在 defer 里复位）；现所有回调有 recover，路径走不到 | 改为 defer 复位（结构性，消除依赖 recover 的前提）+ 用例 | 待处理 |
+| F06-S1 | 06 | **缺陷（探针已证实）** | 重试退避期间送达的成功永久丢失：同一代际尝试 k 已生效、结果在 k 超时后下次派发前送达（记录 `Pending`、`Attempt≥1`），`Complete` 只接收 `Waiting`（`saga/engine.go:443`）→ `ErrNotWaiting` → Term（`nest_completion_consumer.go:150-159`）；之后若截止 / 人工 Compensate / 定义缺失关闭该操作，这一步已生效却不在 `CompletedSteps`、`LateStep=0`、不补偿不告警（探针 `status=failed completed=0 late=0`，扣款落库 1 次） | RR 流程先红后绿 | 待处理 |
+| F06-S7 | 06 | **缺陷（探针已证实）** | `EmitStart` 允许 Data 到 4 MiB（`saga/nest.go:36`），`StartSaga` 按 `MaxPayloadBytes`（缺省 64 KiB）返回 `ErrInvalidRecord`（`engine.go:224-226`）；`handleNestStart` 对它和 `ErrIdentityConflict` 不标 Permanent（`nest_start_consumer.go:102-107`）→ nak 退避约 8.7 天才 Term，saga 静默不创建 | RR 流程先红后绿（确定性错误 Term + 告警；EmitStart 侧上限对齐） | 待处理 |
+| F06-S2 | 06 | 不一致 | 原生步骤消费者对坏信封 nak 到 MaxDeliver（`command_consumer.go:411-414/:518-530`），另外四个消费者直接 Term；`SAGA.md:24-25` 只与原生一致 | 统一口径 + 用例断言 permanent | 待处理 |
+| F06-S3 | 06 | 低 | `ClaimDue` 先领取后校验，一条坏记录导致整批丢弃（`mongo_store.go:226-237`、`engine.go:759-767`），坏记录永不进 ManualRequired；`List` 遇坏记录整次失败（`mongo_store.go:144-151`） | 坏记录隔离（单条进 ManualRequired / 跳过并告警） | 待处理 |
+| F06-S4 | 06 | 文档 | demo 注释说原生步骤遇基础设施错误会“立刻重投重试”（`gift_debit.go.tmpl:25-27`、`gift_saga.go.tmpl:76-77`），实际不交还租约、重投为 Duplicate、等到截止 | 改注释（或改行为，需论证） | 待处理 |
+| F06-S5 | 06 | **待维护者决定** | `Completed` 的 saga 可被人工 `Compensate` 带回补偿（`engine.go:383-388` 只拒绝 waiting 与无可补偿步骤），不计 `reopened_total`，无文档无用例 | 允许 or 拒绝 | 待决定 |
+| F06-S6 | 06 | 文档 | `SAGA.md:71` `sagaKit.ReservationFromContext` 实为 `saga.ReservationFromContext`；`kit/README.md:27/:536/:540` 旧说法（先占位、roost-kit/saga、exactly-once、claim 条件写） | 改文档 | 待处理 |
+| F06-C1 | 06 | 配置缺口 | 未校验 `AckWait` 与步骤 `Timeout` 关系（步骤超时大于 AckWait 时处理中被重投），只校验 `LeaseDuration > AckWait` | 加启动校验（A4① 跨键规则） | 待处理 |
