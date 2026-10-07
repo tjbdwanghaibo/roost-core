@@ -218,7 +218,9 @@ func TestConsolidationMapMatchesTheGeneratorFloor(t *testing.T) {
 	}{
 		{"core", m.Boundary.Core, minimumVersions.Core},
 		{"kit", m.Boundary.Kit, minimumVersions.Kit},
-		{"codegen", m.Boundary.Codegen, minimumVersions.Codegen},
+		// The codegen boundary has no floor of its own any more: the
+		// generator runs at versions.core (RR-20261006-57).
+		{"codegen", m.Boundary.Codegen, minimumVersions.Core},
 	} {
 		major, minor, patch, ok := releaseVersion(pair.boundary)
 		if !ok {

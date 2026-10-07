@@ -188,9 +188,11 @@ func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, module := range []string{"core", "kit", "skill", "codegen"} {
+	for _, module := range []string{"core", "kit", "skill"} {
 		raw = bytes.Replace(raw, []byte("  "+module+": latest"), []byte("  "+module+": v1.0.0"), 1)
 	}
+	// An old manifest still pins the retired versions.codegen; upgrade drops it.
+	raw = bytes.Replace(raw, []byte("kit: v1.0.0\n"), []byte("kit: v1.0.0\n    codegen: v1.0.0\n"), 1)
 	if err := os.WriteFile(manifestPath, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -203,8 +205,11 @@ func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
 		t.Fatal(err)
 	}
 	var preview bytes.Buffer
-	if err := Run([]string{"project", "upgrade", "--root", root, "--dry-run", "-core", "latest", "-kit", "latest", "-codegen", "latest"}, &preview, io.Discard); err != nil {
+	if err := Run([]string{"project", "upgrade", "--root", root, "--dry-run", "-core", "latest", "-kit", "latest"}, &preview, io.Discard); err != nil {
 		t.Fatalf("preview legacy upgrade: %v", err)
+	}
+	if !strings.Contains(preview.String(), "dropped versions.codegen v1.0.0") {
+		t.Fatalf("upgrade preview did not report dropping versions.codegen:\n%s", preview.String())
 	}
 	if !strings.Contains(preview.String(), "roost.yaml") || !strings.Contains(preview.String(), "Makefile") {
 		t.Fatalf("upgrade preview did not report manifest and Makefile:\n%s", preview.String())
@@ -230,7 +235,8 @@ func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
 	if manifest.CICD.Provider != "github" || !contains(manifest.CICD.Deploy, "shell") || !contains(manifest.CICD.Deploy, "docker") || !contains(manifest.CICD.Deploy, "k8s") {
 		t.Fatalf("legacy manifest did not receive production CI/CD defaults: %+v", manifest.CICD)
 	}
-	mergeVersions(&manifest.Versions, VersionSpec{Core: "latest", Kit: "latest", Skill: "latest", Codegen: "latest"})
+	mergeVersions(&manifest.Versions, VersionSpec{Core: "latest", Kit: "latest", Skill: "latest"})
+	manifest.Versions.Codegen = "" // what upgrade does, asserted on the preview above
 	if err := saveManifest(root, manifest); err != nil {
 		t.Fatalf("save upgraded manifest: %v", err)
 	}
@@ -1192,7 +1198,7 @@ func TestProductionRenderingIncludesDurabilityAndTopologyGuards(t *testing.T) {
 	if !strings.Contains(compose, `"-sd", "/data"`) || !strings.Contains(compose, "mongo-data:/data/db") {
 		t.Fatalf("development dependencies are not durable:\n%s", compose)
 	}
-	if m.Versions.Core != "latest" || m.Versions.Kit != "latest" || m.Versions.Skill != "latest" || m.Versions.Codegen != "latest" {
+	if m.Versions.Core != "latest" || m.Versions.Kit != "latest" || m.Versions.Skill != "latest" || m.Versions.Codegen != "" {
 		t.Fatalf("latest version policy defaults = %+v", m.Versions)
 	}
 }
@@ -1348,7 +1354,7 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	}
 	for _, want := range []string{
 		"project-upgrade:",
-		"go run $(CODEGEN_MODULE)/cmd/roost@latest project upgrade --root . -core latest -kit latest -codegen latest",
+		"go run $(CODEGEN_MODULE)/cmd/roost@latest project upgrade --root . -core latest -kit latest",
 		"roost-up:",
 		"GOWORK=off go get -u ./...",
 		"GOWORK=off go mod tidy",
@@ -1495,11 +1501,11 @@ func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
 	manifestGuide := string(plan["docs/ROOST_YAML.zh-CN.md"].Body)
 	for _, want := range []string{
 		"schema", "project.name", "project.module", "versions.core", "versions.kit",
-		"versions.codegen", "shared_mods", "services.<name>.mods",
+		"versions.codegen 已废弃", "shared_mods", "services.<name>.mods",
 		"cicd.provider", "cicd.registry", "cicd.environments", "cicd.deploy",
 		"access.player.service", "features", "sagas", "ids", "groups", "min", "max", "完整示例",
 		"Feature 和 Mod 必须分别理解", "roost id next protocol -group game",
-		minimumVersions.Core, minimumVersions.Kit, minimumVersions.Skill, minimumVersions.Codegen,
+		minimumVersions.Core, minimumVersions.Kit, minimumVersions.Skill,
 	} {
 		if !strings.Contains(manifestGuide, want) {
 			t.Errorf("manifest guide missing %q:\n%s", want, manifestGuide)
@@ -1592,7 +1598,7 @@ func TestSyncRefusesUnmanagedMakefile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest.Versions.Codegen = minimumVersions.Codegen
+	manifest.Versions.Kit = minimumVersions.Kit
 	if err := saveManifest(root, manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -1601,7 +1607,7 @@ func TestSyncRefusesUnmanagedMakefile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Run([]string{"project", "upgrade", "--root", root, "-codegen", "latest"}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "preflight project upgrade") {
+	if err := Run([]string{"project", "upgrade", "--root", root, "-kit", "latest"}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "preflight project upgrade") {
 		t.Fatalf("expected upgrade preflight conflict, got %v", err)
 	}
 	manifestAfter, err := os.ReadFile(manifestPath)

@@ -120,7 +120,6 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		kit := fs.String("roost-kit-version", "", "roost-kit version")
 		skill := fs.String("roost-skill-version", "", "roost-skill version")
 		serviceVersion := fs.String("roost-service-version", "", "roost-service version")
-		codegen := fs.String("codegen-version", "", "roost-codegen version")
 		template := fs.String("template", "", "opt-in starting shape: game (hosts account, chat, mail, match, session and wires the first service to them), or game-demo (game plus a working Player write path: Profile/Bag components, a DAO, one Nest transaction and a TCP endpoint)")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
@@ -131,7 +130,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		if strings.TrimSpace(*module) == "" {
 			return fmt.Errorf("-module is required so generated imports do not use someone else's repository; example: roost project new %s -module github.com/<your-account>/%s", args[1], toSnake(args[1]))
 		}
-		result, target, err := NewProjectContext(ctx, NewOptions{Name: toSnake(args[1]), Module: *module, Out: *out, Services: splitList(*services), Mods: splitList(*mods), Features: splitList(*features), Versions: VersionSpec{Core: *core, Kit: *kit, Skill: *skill, Service: *serviceVersion, Codegen: *codegen}, Template: *template})
+		result, target, err := NewProjectContext(ctx, NewOptions{Name: toSnake(args[1]), Module: *module, Out: *out, Services: splitList(*services), Mods: splitList(*mods), Features: splitList(*features), Versions: VersionSpec{Core: *core, Kit: *kit, Skill: *skill, Service: *serviceVersion}, Template: *template})
 		if err != nil {
 			return err
 		}
@@ -160,7 +159,6 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		kit := fs.String("kit", "", "new kit version")
 		skill := fs.String("skill", "", "removed: skill ships inside roost-core since v1.14.0")
 		serviceVersion := fs.String("service", "", "removed: the services ship inside roost-kit since v1.13.0")
-		codegen := fs.String("codegen", "", "new codegen version")
 		consolidate := fs.Bool("consolidate", false, "rewrite imports from roost-skill / roost-service / roost-kit implementation packages to their consolidated locations (core v1.14.0 / kit v1.13.0), and from roost-kit / roost-codegen into roost-core (core v1.16.0)")
 		// A boundary migration has a window in which the version it rewrites
 		// TO is not published yet: the imports are correct and no proxy can
@@ -237,7 +235,13 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 			if err != nil {
 				return err
 			}
-			mergeVersions(&m.Versions, VersionSpec{Core: *core, Kit: *kit, Codegen: *codegen})
+			mergeVersions(&m.Versions, VersionSpec{Core: *core, Kit: *kit})
+			// versions.codegen is retired (RR-20261006-57): the generator runs
+			// at versions.core. Upgrading is where an old manifest loses it.
+			if m.Versions.Codegen != "" {
+				fmt.Fprintf(stdout, "dropped versions.codegen %s: the generator now runs at versions.core\n", m.Versions.Codegen)
+				m.Versions.Codegen = ""
+			}
 			if err := m.Validate(); err != nil {
 				return fmt.Errorf("validate upgraded manifest: %w", err)
 			}

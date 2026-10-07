@@ -79,14 +79,14 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // app.SchemaOf / app.LoadConfig (A4① per-Mod config schema), the generated game
 // test builds its activity coordinator with activity.Config.Groups
 // (RR-20261006-17), none of which v1.22.0 has.
-// Kit and Codegen stay as fields
-// because a project's roost.yaml still carries versions.kit / versions.codegen
-// and must keep validating; they no longer name modules of their own, so they
-// stay at the last values that meant something (三仓合一仓 P5).
+// Kit stays as a field because a project's roost.yaml still carries
+// versions.kit and must keep validating; it no longer names a module of its
+// own, so it stays at the last value that meant something (三仓合一仓 P5).
+// versions.codegen is retired outright (RR-20261006-57): the generator is
+// roost-core, so the generated Makefile runs it at versions.core.
 var minimumVersions = VersionSpec{
-	Core:    "v1.23.0",
-	Kit:     "v1.14.8",
-	Codegen: "v1.15.0",
+	Core: "v1.23.0",
+	Kit:  "v1.14.8",
 }
 
 type Manifest struct {
@@ -122,7 +122,15 @@ type VersionSpec struct {
 	// drops the fields; the upgrader rewrites the project's imports.
 	Skill   string `yaml:"skill,omitempty"`
 	Service string `yaml:"service,omitempty"`
-	Codegen string `yaml:"codegen"`
+	// Codegen is retired (RR-20261006-57). Since the consolidation the
+	// generator is roost-core/codegen/cmd/roost, so "the codegen version" is a
+	// roost-core version, and a second number for the same module could only
+	// disagree with the first: v1.15.x has no generator at all, v1.16～v1.22
+	// rewrites a project with an older generator than the core it builds
+	// against. The generated Makefile runs the generator at versions.core.
+	// The field is still decoded so that Validate can name it and `project
+	// upgrade` can drop it; nothing writes it.
+	Codegen string `yaml:"codegen,omitempty"`
 }
 
 // consolidated reports whether the manifest still carries pre-consolidation
@@ -200,7 +208,7 @@ func DefaultManifest(name, module string, services, mods, features []string) Man
 	return Manifest{
 		Schema:     1,
 		Project:    ProjectSpec{Name: name, Module: module},
-		Versions:   VersionSpec{Core: "latest", Kit: "latest", Skill: "latest", Service: "latest", Codegen: "latest"},
+		Versions:   VersionSpec{Core: "latest", Kit: "latest", Skill: "latest", Service: "latest"},
 		CICD:       defaultCICDSpec(),
 		SharedMods: shared,
 		Services:   svc,
@@ -295,8 +303,8 @@ func (m Manifest) Marshal() ([]byte, error) {
 	}
 	header := fmt.Sprintf(`# Roost project manifest. Run make sync after editing.
 # versions.* defaults to latest; go.mod records the concrete release resolved
-# for one build. Minimums: core %s, kit %s, codegen %s.
-`, minimumVersions.Core, minimumVersions.Kit, minimumVersions.Codegen)
+# for one build. Minimums: core %s, kit %s. The generator runs at versions.core.
+`, minimumVersions.Core, minimumVersions.Kit)
 	return append([]byte(header), raw...), nil
 }
 
@@ -386,11 +394,13 @@ func (m Manifest) Validate() error {
 	}{
 		{name: "core", value: m.Versions.Core, minimum: minimumVersions.Core},
 		{name: "kit", value: m.Versions.Kit, minimum: minimumVersions.Kit},
-		{name: "codegen", value: m.Versions.Codegen, minimum: minimumVersions.Codegen},
 	} {
 		if err := validateVersionPolicy(version.name, version.value, version.minimum); err != nil {
 			joined = errors.Join(joined, err)
 		}
+	}
+	if strings.TrimSpace(m.Versions.Codegen) != "" {
+		joined = errors.Join(joined, fmt.Errorf("versions.codegen (%s) is retired: the generator ships inside roost-core and the Makefile runs it at versions.core; delete the line, or run roost project upgrade, which drops it", m.Versions.Codegen))
 	}
 	if m.CICD.Provider != "github" {
 		joined = errors.Join(joined, fmt.Errorf("cicd.provider must be github; got %q", m.CICD.Provider))

@@ -110,14 +110,19 @@ func TestFrameworkCompatMinimumSetMatchesTheGeneratorFloor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	re := regexp.MustCompile(`-roost-core-version (\S+) -roost-kit-version (\S+) -codegen-version (\S+)\)`)
+	re := regexp.MustCompile(`-roost-core-version (\S+) -roost-kit-version (\S+)\)`)
 	match := re.FindStringSubmatch(string(raw))
 	if match == nil {
 		t.Fatal("framework-compat.yml has no minimum dependency set")
 	}
-	got := VersionSpec{Core: match[1], Kit: match[2], Codegen: match[3]}
+	got := VersionSpec{Core: match[1], Kit: match[2]}
 	if got != minimumVersions {
 		t.Fatalf("workflow minimum set %+v != generator floor %+v", got, minimumVersions)
+	}
+	// The minimum lane also runs a make target through the pinned generator
+	// and checks every invocation names it (RR-20261006-57).
+	if want := "grep -v 'cmd/roost@" + minimumVersions.Core + " '"; !strings.Contains(string(raw), want) {
+		t.Fatalf("framework-compat.yml minimum lane does not check the Makefile generator against %s (want %q)", minimumVersions.Core, want)
 	}
 }
 

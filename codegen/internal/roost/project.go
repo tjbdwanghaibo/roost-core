@@ -730,9 +730,6 @@ func mergeVersions(target *VersionSpec, override VersionSpec) {
 	if override.Service != "" {
 		target.Service = override.Service
 	}
-	if override.Codegen != "" {
-		target.Codegen = override.Codegen
-	}
 }
 
 func printSyncResult(w io.Writer, result SyncResult) {

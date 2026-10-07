@@ -273,8 +273,6 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
     versions:
       core: latest
       kit: latest
-      skill: latest
-      codegen: latest
     cicd:
       provider: github
       registry: ghcr
@@ -364,7 +362,8 @@ name 是运行与部署身份；module 是 Go import 前缀。仓库目录名可
 | --- | --- | --- | --- |
 | versions.core | roost-core 依赖解析 | %s | latest 或 %s |
 | versions.kit | roost-kit 依赖解析 | %s | latest 或 %s |
-| versions.codegen | Makefile 使用的 roost-codegen | %s | latest 或 %s |
+
+生成器随 roost-core 发布，Makefile 按 versions.core 运行它；versions.codegen 已废弃，写了会被拒绝（roost project upgrade 会删掉它）。
 
 latest 是持续更新策略，不会原样写进 go.mod。project deps 会在同级临时项目联合解析 core、kit，
 只把本次选中的具体版本写入 go.mod/go.sum；失败或并发变化不覆盖原文件，这样一次测试和发布仍然
@@ -534,6 +533,5 @@ make project-upgrade，更新框架依赖使用 make deps-update，更新完整�
 - invalid range / duplicate ID：修正 ids 范围或冲突定义后再生成。
 - saga requires saga mod：使用 roost add saga，不要只手改 sagas/features。
 `, minimumVersions.Core, minimumVersions.Core,
-		minimumVersions.Kit, minimumVersions.Kit,
-		minimumVersions.Codegen, minimumVersions.Codegen)
+		minimumVersions.Kit, minimumVersions.Kit)
 }

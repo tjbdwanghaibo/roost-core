@@ -79,23 +79,21 @@ roost project next
 roost project new planet -module example.com/planet -mods configdata,mongo,nats,dataengine,nest -template game-demo
 
 # 旧项目执行一次，升级后即可使用 make project-upgrade
-go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . --dry-run -core latest -kit latest -codegen latest
-go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . -core latest -kit latest -codegen latest`,
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . --dry-run -core latest -kit latest
+go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . -core latest -kit latest`,
 	},
 	{
 		Name: "versions", Aliases: []string{"deps", "dependency", "dependencies", "project-deps", "roost-up", "codegen-up"},
-		Summary: "持续跟随 core、kit、skill、codegen 最新发布版本",
+		Summary: "持续跟随 core、kit 最新发布版本（生成器随 core）",
 		Usage: `roost project deps [--root dir]
 make deps-update
 make roost-up
 make codegen-up
-roost project upgrade -core latest -kit latest -skill latest -codegen latest`,
-		Configuration: fmt.Sprintf(`roost.yaml 的 versions.* 默认是 latest。deps-update 在临时项目联合解析 core/kit，只提交最终 go.mod/go.sum；失败或并发变化不会覆盖原文件。roost-up 执行 GOWORK=off go get -u ./... 与 go mod tidy，更新所有被项目引用的依赖；codegen-up 执行 go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest，更新本机 CLI。go.mod 保存具体版本，roost.yaml 保存更新策略。兼容下限：core %s、kit %s、codegen %s。明确版本表示 MVS 下限，不是上限。`, minimumVersions.Core, minimumVersions.Kit, minimumVersions.Codegen),
+roost project upgrade -core latest -kit latest`,
+		Configuration: fmt.Sprintf(`roost.yaml 的 versions.* 默认是 latest。deps-update 在临时项目联合解析 core/kit，只提交最终 go.mod/go.sum；失败或并发变化不会覆盖原文件。roost-up 执行 GOWORK=off go get -u ./... 与 go mod tidy，更新所有被项目引用的依赖；codegen-up 执行 go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest，更新本机 CLI。go.mod 保存具体版本，roost.yaml 保存更新策略。生成器是 roost-core 的一部分，Makefile 按 versions.core 运行它（versions.codegen 已废弃）。兼容下限：core %s、kit %s。明确版本表示 MVS 下限，不是上限。`, minimumVersions.Core, minimumVersions.Kit),
 		Example: `versions:
   core: latest
   kit: latest
-  skill: latest
-  codegen: latest
 
 make deps-update
 make roost-up
