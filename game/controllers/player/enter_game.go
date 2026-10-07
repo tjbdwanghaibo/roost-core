@@ -1,0 +1,188 @@
+package player
+
+import (
+	stdcontext "context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+
+	"example.com/planet/game/chatroom"
+	syncsender "example.com/planet/game/handler/syncsender"
+	lifecycle "example.com/planet/game/lifecycle"
+	player_agent "example.com/planet/game/player_agent"
+	apperrors "example.com/planet/internal/errors"
+	"example.com/planet/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/gateway"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/kit/service/account"
+	svcchat "github.com/tjbdwanghaibo/roost-core/kit/service/chat"
+)
+
+// HandleEnterGame makes sure the authenticated player has a Player Entity.
+// A Nest handler addresses an Entity that exists; a first login has none, so
+// this endpoint goes through the lifecycle instead of a Sender. GetOrCreate is
+// safe to race: two logins of the same new player both end holding the one
+// Entity, and only one of them sees Created.
+func (controller *Controller) HandleEnterGame(context *player_agent.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
+	}
+	// 先校验绑定，再装载实体，因为装载正是被把关的那件事。玩家建角时由 account 绑定到一个 game sid
+	// （Role.ServerID），之后不迁移；一个 Player 只能在他绑定的 sid 上驻留，同一 sid 只有一个进程（App
+	// 单实例锁）。所以“这次登录该不该在这里服务”是一个静态判断：会话 Claims 里认证器从 account 取来的
+	// server_id 是否等于本进程的 sid（GAME_DEMO_TEMPLATE §9.11；docs/feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md §3.1）。
+	//
+	// 不是本服的登录按名拒绝（player_elsewhere，带 owner_sid），客户端改连那个服的网关，不要在本服重试。
+	// Claims 里没有 server_id 说明认证器被换掉了、没有记下绑定：fail-closed，同样拒绝（owner_sid=0，
+	// 客户端重新 SelectRole），并记 Error 日志，因为这是部署 / 代码问题，不是客户端连错了服。
+	owners, ownersErr := controller.PlayerOwners()
+	if ownersErr != nil {
+		slog.Error("enter_game: ownership unavailable", "player_id", context.PlayerID, "err", ownersErr)
+		code, reason := errcode.ClientError(ownersErr)
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
+	}
+	boundSID, bound := BoundServerID(context.Session)
+	if !bound {
+		slog.Error("enter_game: the session carries no server_id claim; refusing the login (the authenticator must record the role's server)", "player_id", context.PlayerID)
+		code, reason := errcode.ClientError(errcode.Wrap(apperrors.ErrPlayerElsewhere, nil, "player_id", context.PlayerID, "owner_sid", 0))
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
+	}
+	// Taking the player into service — waiting out an unload of their
+	// previous copy, then the load — runs on its own budget, a share of this
+	// request's dispatch deadline (player_access.tcp.login_timeout,
+	// RR-20260926-36). A cold load waits for this player's projections to
+	// reach the store; if the store is down that wait does not end on its
+	// own, and it must not hold the connection: the client gets login_timeout
+	// and retries. What is left of the dispatch budget covers the answer and
+	// the placement steps below.
+	//
+	// Running out of budget stops the WAITING, nothing else. A load another
+	// login of the same player is sharing goes on for them; nothing admitted
+	// is undone. EnterGame is safe to retry: GetOrCreate finds the Entity a
+	// timed-out attempt may have created.
+	loginCtx, cancelLogin := controller.loginContext(context.Context())
+	defer cancelLogin()
+	if err := owners.Serve(loginCtx, context.PlayerID, boundSID); err != nil {
+		if answer, cutShort := loginCutShort(context.PlayerID, "serve", err); cutShort {
+			return answer, nil
+		}
+		if errors.Is(err, apperrors.ErrPlayerElsewhere) {
+			slog.Warn("enter_game: player is bound to another server", "player_id", context.PlayerID, "owner_sid", boundSID)
+		} else {
+			slog.Error("enter_game: player not taken into service", "player_id", context.PlayerID, "err", err)
+		}
+		code, reason := errcode.ClientError(err)
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
+	}
+	subject, created, err := controller.Players().GetOrCreate(loginCtx, context.PlayerID)
+	cancelLogin()
+	if err != nil {
+		if answer, cutShort := loginCutShort(context.PlayerID, "load", err); cutShort {
+			return answer, nil
+		}
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("enter_game failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
+	}
+	// The World counts the login in its own transaction: a different Entity,
+	// a different lock, a separate Nest call after the Player one completed.
+	if err := syncsender.NewRecordEnterSender(controller.NestClient()).Sync_RecordEnter(context.Context(), controller.WorldID()); err != nil {
+		slog.Warn("enter_game: world did not record the login", "player_id", context.PlayerID, "err", err)
+	}
+	// On the map. The position is the player's own state, so it is written in
+	// a transaction like everything else; the scene only answers "where can
+	// this player stand".
+	spawn := lifecycle.WorldSceneConfig().Spawn
+	at, err := syncsender.NewEnterSceneSender(controller.NestClient()).MultiSync_EnterScene(context.Context(), subject.ID(), controller.WorldSceneID(), spawn.X, spawn.Y)
+	if err != nil {
+		slog.Warn("enter_game: player not placed on the map", "player_id", context.PlayerID, "err", err)
+	} else if scene, sceneErr := controller.Scene(); sceneErr != nil {
+		slog.Warn("enter_game: no scene to join", "player_id", context.PlayerID, "err", sceneErr)
+	} else if joinErr := scene.Join(context.Context(), subject, at); joinErr != nil {
+		// Placed on the map but not replicated: the player can play, they
+		// just do not see the others until the next login.
+		slog.Warn("enter_game: player did not join the replicated scene", "player_id", context.PlayerID, "err", joinErr)
+	}
+	// Anything paid for while this player was offline is settled now. The
+	// platform service recorded the grant durably when the payment landed;
+	// this is the moment the player is in hand, so it is the moment the goods
+	// reach the bag. Best effort — a drain that fails leaves the grants where
+	// they are and the next login takes them.
+	if drain, drainErr := controller.Purchases(); drainErr != nil {
+		slog.Warn("enter_game: paid orders not settled", "player_id", context.PlayerID, "err", drainErr)
+	} else if settled, drainErr := drain.DrainPlayer(context.Context(), context.PlayerID); drainErr != nil {
+		slog.Warn("enter_game: paid orders not settled", "player_id", context.PlayerID, "err", drainErr)
+	} else if len(settled) > 0 {
+		slog.Info("enter_game: settled paid orders on login", "player_id", context.PlayerID, "count", len(settled))
+	}
+	// From here on the player receives world-channel pushes.
+	controller.Presence().Add(context.PlayerID)
+	// The game announces the login on the world channel through the chat
+	// service's privileged path (PublishSystem: no player could have sent
+	// this). Best effort — a missed announcement is not a failed login — and
+	// idempotent per frame, so a retried EnterGame announces once.
+	requestID := fmt.Sprintf("enter:%d:%s:%d", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	message, err := controller.Messaging().PublishSystem(context.Context(), svcchat.SystemPublishRequest{
+		Channel: chatroom.WorldChannel, Actor: chatroom.SystemActor, Type: chatroom.TypeText,
+		Body: []byte(fmt.Sprintf("player %d entered the world", context.PlayerID)), RequestID: requestID,
+	})
+	if err != nil {
+		slog.Warn("enter_game: login not announced on the world channel", "player_id", context.PlayerID, "err", err)
+	} else {
+		controller.deliver(context.Context(), message)
+	}
+	return &pb.EnterGameResponse{PlayerID: context.PlayerID, Created: created}, nil
+}
+
+// loginContext is the login step's share of the request: the configured
+// login budget when the transport publishes one, otherwise the request's own
+// deadline alone.
+func (controller *Controller) loginContext(parent stdcontext.Context) (stdcontext.Context, stdcontext.CancelFunc) {
+	if budget := controller.LoginTimeout(); budget > 0 {
+		return stdcontext.WithTimeout(parent, budget)
+	}
+	return stdcontext.WithCancel(parent)
+}
+
+// loginCutShort answers a serve or load whose wait was cut short: the login
+// budget ran out, or the connection closed under it (a newer login of the
+// same session replaced it, and the answer goes nowhere). Both are named —
+// login_timeout, retry — rather than reported as a server error, and logged
+// as what they are, not in the error log. Any other failure is not its
+// business.
+func loginCutShort(playerID int64, step string, err error) (*pb.EnterGameResponse, bool) {
+	switch {
+	case errors.Is(err, stdcontext.DeadlineExceeded):
+		slog.Warn("enter_game: login budget exhausted", "step", step, "player_id", playerID, "err", err)
+	case errors.Is(err, stdcontext.Canceled):
+		slog.Info("enter_game: login abandoned, its connection closed", "step", step, "player_id", playerID, "err", err)
+	default:
+		return nil, false
+	}
+	code, reason := errcode.ClientError(errcode.Wrap(apperrors.ErrLoginTimeout, err, "player_id", playerID))
+	return &pb.EnterGameResponse{Code: code, Reason: reason}, true
+}
+
+// BoundServerID 读会话里 account 给出的角色绑定 sid：认证器（internal/access/player/tcp/auth.go 的
+// newPrincipal）以 svcaccount.ServerIDClaim 为键写进 Principal.Claims 的那个值。没有会话、没有这个
+// claim、或值不是正整数都回答 false，由调用方 fail-closed。
+//
+// 导出是为了让认证器那一侧的测试（tcp/auth_test.go）用登录端点真正使用的读取函数核对自己写的
+// Principal：认证器归应用所有、可以被改写，两边对不上时登录会一律 fail-closed。
+func BoundServerID(session gateway.Session) (int32, bool) {
+	if session == nil {
+		return 0, false
+	}
+	raw, ok := session.Principal().Claims[svcaccount.ServerIDClaim]
+	if !ok {
+		return 0, false
+	}
+	sid, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil || sid <= 0 {
+		return 0, false
+	}
+	return int32(sid), true
+}

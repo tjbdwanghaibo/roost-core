@@ -1,0 +1,589 @@
+package Game
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"time"
+
+	gameactivity "example.com/planet/game/activity"
+	"example.com/planet/game/effects"
+	"example.com/planet/game/flags"
+	syncsender "example.com/planet/game/handler/syncsender"
+	lifecycle "example.com/planet/game/lifecycle"
+	"example.com/planet/game/rewards"
+	"example.com/planet/game/settings"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	svcglobal "github.com/tjbdwanghaibo/roost-core/kit/service/global"
+	svcactivity "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity"
+	svcmail "github.com/tjbdwanghaibo/roost-core/kit/service/mail"
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/nestwal"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+)
+
+// ActivityCapability is the name the activity runner is published under, so an
+// endpoint can reach it without importing this package.
+const ActivityCapability app.ModName = "game.activity"
+
+const (
+	// worldTickInterval drives the World's timer heap. It is the resolution
+	// of every server-wide deadline, not a load knob: a deadline is late by
+	// at most one tick.
+	worldTickInterval = time.Second
+	// activityLoopInterval is how often this server opens the current window
+	// and looks for a result to apply.
+	activityLoopInterval = 5 * time.Second
+	// activitySettleMailExpiresIn is how long a settlement mail stays
+	// readable.
+	activitySettleMailExpiresIn = 7 * 24 * 60 * 60
+	// activityDrainBatch bounds one pass over what this server is owed. A
+	// server that was down for a day works through its backlog in bounded
+	// steps rather than one unbounded pass.
+	activityDrainBatch = 32
+)
+
+// ActivityRunner is this server's side of the timed server-wide event.
+//
+// Three loops that are really one story:
+//
+//	the World's timers   a deadline that survives a restart (timer_component.go)
+//	the coordinator      "every expected server reached close" (kit activity)
+//	this server's board  who contributed here, and what settlement pays them
+//
+// The split is the point. The coordinator knows nothing about items or
+// players: it aggregates progress under a key and says when the phase is
+// collected. This file is where that fact becomes mail.
+type ActivityRunner struct {
+	coordinator svcactivity.Coordinator
+	routing     svcglobal.Routing
+	// liveness 是 App 单实例锁的只读查询（app.ModSingleton）：同一服务类型下哪些 sid 有进程持有锁。
+	// 协调器的 expected 集合从这里来，activity 不再持有自己的租约（App 单实例锁方案 §7.2）。
+	liveness   app.SingletonLiveness
+	serverType string
+	mailer     svcmail.Mail
+	nest       corenest.Client
+	redis      fredis.IRedis
+	prefix     string
+	worldID    int64
+	gameSID    int32
+	// groupID is the activity group configs/activity_groups.yaml puts this
+	// server in: the coordinator's Key.GroupID for every window it opens,
+	// contributes to and settles.
+	groupID string
+	// candidates is that group's members. The coordinator's expected set is
+	// drawn from the ones whose process holds the App singleton lock, so an
+	// activity does not wait on a server nobody started.
+	candidates []int32
+	// now is the clock every window id, close deadline, World timer tick and
+	// settlement time is read from: the business clock (D-L3, real time +
+	// time.logic_offset), the same one the coordinator runs on, so the two
+	// ends move together under an offset. It is a field so a test can put a
+	// contribution and a lookup on opposite sides of a window boundary —
+	// which is the one case the wall clock makes unreproducible, and the one
+	// that was failing in CI (RR-20260921-01).
+	now func() time.Time
+}
+
+// startActivity builds the runner, binds this server's route and starts the
+// loops. It returns the runner so Init can publish it, and a stop function.
+func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner, func(), error) {
+	// 先查这个：哪些 game 服还活着由 App 单实例锁回答；singleton.enabled=false 时 App 不登记这个能力，这里
+	// fail-closed，而不是退化成“只等自己”悄悄少等别的服。
+	liveness, ok := app.Lookup[app.SingletonLiveness](registry, app.ModSingleton)
+	if !ok || liveness == nil {
+		return nil, nil, fmt.Errorf("activity: capability %q not found; the activity's expected servers come from the App singleton lock, which needs singleton.enabled=true for this service", app.ModSingleton)
+	}
+	// sid、server_type 与活动的两个键都经 game 服务的声明读（game/settings，A4 ①）。
+	identity, activity, err := settings.LoadActivity(registry)
+	if err != nil {
+		return nil, nil, fmt.Errorf("activity: %w", err)
+	}
+	gameSID := identity.Sid
+	if gameSID <= 0 {
+		return nil, nil, fmt.Errorf("activity: sid is %d; a server with no id cannot take part in an activity", gameSID)
+	}
+	// server_type 是 App 写进配置的本进程服务类型（同一部署的 game 进程跑同一个子命令，所以相同）；
+	// 用它查 Live，不写死 "game"——game 服务名由生成参数决定。
+	serverType := identity.ServerType
+	if serverType == "" {
+		return nil, nil, errors.New("activity: server_type is empty; the App writes it before Init")
+	}
+	// 活动组在任何远端调用之前确定：组文件不合格、本服不在任何组里，都在这里点名拒绝（C4，取代
+	// RR-20261005-01 对 activity.game_sids 的检查）。
+	group, err := activityGroup(activity.GroupsFile, gameSID)
+	if err != nil {
+		return nil, nil, err
+	}
+	coordinator, err := Activity(registry)
+	if err != nil {
+		return nil, nil, fmt.Errorf("activity: %w", err)
+	}
+	routing, err := Global(registry)
+	if err != nil {
+		return nil, nil, fmt.Errorf("activity: %w", err)
+	}
+	mailer, err := Mail(registry)
+	if err != nil {
+		return nil, nil, fmt.Errorf("activity: %w", err)
+	}
+	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || nestClient == nil {
+		return nil, nil, errors.New("activity: nest client is unavailable")
+	}
+	redisClient, err := mods.Redis(registry)
+	if err != nil {
+		return nil, nil, fmt.Errorf("activity: %w", err)
+	}
+	worldID, err := lifecycle.WorldID(registry)
+	if err != nil {
+		return nil, nil, fmt.Errorf("activity: %w", err)
+	}
+	runner := &ActivityRunner{
+		coordinator: coordinator, routing: routing, liveness: liveness, serverType: serverType,
+		mailer: mailer, nest: nestClient,
+		redis: redisClient, prefix: activity.KeyPrefix,
+		worldID: worldID, gameSID: gameSID,
+		groupID: group.ID, candidates: group.GameSIDs,
+		now: app.BusinessClock(registry).Now,
+	}
+	if err := runner.bindGroup(ctx); err != nil {
+		return nil, nil, err
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{}, 2)
+	go runner.tickWorld(loopCtx, done)
+	go runner.runActivity(loopCtx, done)
+	return runner, func() {
+		cancel()
+		<-done
+		<-done
+	}, nil
+}
+
+// activityGroup is the group this server takes part in, read from the
+// activity groups file the coordinator reads too (decision C4).
+//
+// svcactivity.LoadGroupsFile refuses a file no window could open with — a
+// group larger than one window's expected set (svcactivity.MaxExpectedGames),
+// a repeated sid, a sid in two groups, a sid that is not a positive int32 —
+// and a server whose sid is in no group is refused here: it would open
+// windows for a group the file does not have. Either way the process stops at
+// start, naming the file, instead of starting and then failing every pass with
+// a warning (RR-20261005-01).
+func activityGroup(path string, gameSID int32) (svcactivity.Group, error) {
+	if path == "" {
+		return svcactivity.Group{}, errors.New("activity: activity.groups_file is empty; it names the activity groups file (configs/activity_groups.yaml) that says which game servers take part together")
+	}
+	groups, err := svcactivity.LoadGroupsFile(path)
+	if err != nil {
+		return svcactivity.Group{}, fmt.Errorf("activity: activity.groups_file: %w", err)
+	}
+	group, ok := groups.Of(gameSID)
+	if !ok {
+		return svcactivity.Group{}, fmt.Errorf("activity: game %d is in no group of %s (groups %v); add it to the group it takes part in", gameSID, path, groups.IDs())
+	}
+	// One Live query answers the whole group. A group is bounded by the
+	// coordinator's window limit, which is far below the query's; this only
+	// fails if one of the two limits is changed without the other.
+	if len(group.GameSIDs) > app.SingletonLiveMaxSIDs {
+		return svcactivity.Group{}, fmt.Errorf("activity: group %q of %s has %d game servers, more than one Live query takes (%d)",
+			group.ID, path, len(group.GameSIDs), app.SingletonLiveMaxSIDs)
+	}
+	return group, nil
+}
+
+// bindGroup establishes this server's route into the activity group. It is
+// group membership, not liveness: whether this server is running is the App
+// singleton lock's answer (expectedGameSIDs).
+func (runner *ActivityRunner) bindGroup(ctx context.Context) error {
+	// Bind is insert-only: a second Bind for a game that already has one is
+	// refused, and that refusal IS the fence — it cannot move a live game. So
+	// "already bound" is the normal answer on every start after the first,
+	// and treating it as a failure would mean the process starts once and
+	// never again.
+	//
+	// The refusal is recognised by its CODE. This call crosses the bus, and a
+	// remote error arrives as errcode.Remote (`remote.570110`) rather than as
+	// the service's own sentinel value; the code is what both forms carry.
+	// (errors.Is against the sentinel also holds — IntError.Is compares
+	// codes; the comparison here says the same thing.)
+	if _, err := runner.routing.Bind(ctx, runner.gameSID, runner.groupID, 1); err != nil && svcglobal.Code(err) != svcglobal.CodeConflict {
+		return fmt.Errorf("activity: bind game %d: %w", runner.gameSID, err)
+	}
+	return nil
+}
+
+// tickWorld drives the World's timer heap through a Nest transaction. How
+// often it ticks is system time (the ticker); the time each tick carries is
+// business time, which is what the World's deadlines are dated in (D-L3).
+func (runner *ActivityRunner) tickWorld(ctx context.Context, done chan<- struct{}) {
+	defer func() { done <- struct{}{} }()
+	ticker := time.NewTicker(worldTickInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		runner.tickWorldOnce(ctx)
+	}
+}
+
+// tickWorldOnce fires whatever the World's timers have due at the business
+// clock's now.
+func (runner *ActivityRunner) tickWorldOnce(ctx context.Context) {
+	if _, err := syncsender.NewTickWorldTimersSender(runner.nest).
+		Sync_TickWorldTimers(ctx, runner.worldID, runner.clock().UnixMilli()); err != nil && ctx.Err() == nil {
+		slog.Warn("activity: world timer tick failed", "err", err)
+	}
+}
+
+// runActivity keeps the current window open and applies whatever the
+// coordinator has decided.
+func (runner *ActivityRunner) runActivity(ctx context.Context, done chan<- struct{}) {
+	defer func() { done <- struct{}{} }()
+	ticker := time.NewTicker(activityLoopInterval)
+	defer ticker.Stop()
+	for {
+		runner.openCurrentWindow(ctx)
+		runner.applyDispatches(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// openCurrentWindow makes sure the window the clock is in exists and has its
+// close deadline armed on the World.
+//
+// Both halves are idempotent and both are attempted every pass, which is what
+// makes a window that opened while this server was down still get closed by
+// it: the id comes from the clock, so there is nothing to have missed.
+func (runner *ActivityRunner) openCurrentWindow(ctx context.Context) {
+	// Off stops OPENING windows. A window already open still closes and
+	// settles: the flag gates the entry point, not the middle of an
+	// operation, and an event that took contributions owes its rewards.
+	if !flags.Enabled(flags.Activity) {
+		return
+	}
+	now := runner.clock()
+	activityID := gameactivity.ID(now.Unix())
+	expected, err := runner.openWindow(ctx, activityID)
+	if err != nil {
+		slog.Warn("activity: window not opened", "activity_id", activityID, "group", runner.groupID, "err", err)
+		return
+	}
+	closeAt, ok := gameactivity.CloseAt(activityID)
+	if !ok {
+		return
+	}
+	armed, err := syncsender.NewArmActivitySender(runner.nest).
+		Sync_ArmActivity(ctx, runner.worldID, activityID, closeAt.Unix(), now.Unix())
+	if err != nil {
+		slog.Warn("activity: close deadline not armed", "activity_id", activityID, "err", err)
+		return
+	}
+	if armed {
+		slog.Info("activity: window open", "activity_id", activityID,
+			"closes_at", closeAt.Unix(), "expected_game_sids", expected)
+	}
+}
+
+// openWindow asks the coordinator to open activityID in this server's group,
+// expecting the group's live members, and returns that expected set. Already
+// open is the normal answer on every pass but the first, and it is
+// recognised by code for the same reason Bind's conflict is.
+func (runner *ActivityRunner) openWindow(ctx context.Context, activityID string) ([]int32, error) {
+	expected, err := runner.expectedGameSIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("live games unavailable: %w", err)
+	}
+	if _, err := runner.coordinator.OpenActivity(ctx, runner.key(activityID), expected); err != nil && svcactivity.Code(err) != svcactivity.CodeExists {
+		return nil, err
+	}
+	return expected, nil
+}
+
+// key is activityID's aggregation key in this server's group.
+func (runner *ActivityRunner) key(activityID string) svcactivity.Key {
+	return gameactivity.Key(runner.groupID, activityID)
+}
+
+// expectedGameSIDs is the candidates whose process holds the App singleton
+// lock (app.SingletonLiveness.Live, queried with this process's own
+// server_type). A server that is not running must not be waited on: the phase
+// would sit collecting until the grace window expired, every window.
+//
+// "Live" covers a process from the moment it takes the lock — before any Mod
+// starts — until every Mod has stopped; a crashed process counts for at most
+// singleton.ttl. A query that fails opens no window this pass (the caller
+// logs it and the next pass asks again).
+func (runner *ActivityRunner) expectedGameSIDs(ctx context.Context) ([]int32, error) {
+	live, err := runner.liveness.Live(ctx, runner.serverType, runner.candidates)
+	if err != nil {
+		return nil, err
+	}
+	if len(live) == 0 {
+		// This server is running, whatever the lock store says. Opening an
+		// activity nobody is expected to notify would complete instantly on
+		// an empty set.
+		live = append(live, runner.gameSID)
+	}
+	return live, nil
+}
+
+// NotifyPhaseDue tells the coordinator this server reached an activity's close
+// phase. It is called by the effect consumer, never from inside a lock.
+func (runner *ActivityRunner) NotifyPhaseDue(ctx context.Context, activityID string) error {
+	activityState, err := runner.coordinator.NotifyPhase(ctx, runner.key(activityID), runner.gameSID)
+	switch svcactivity.Code(err) {
+	case svcactivity.CodeNotifyLate, svcactivity.CodeStatus:
+		// The phase is already closed — an operator closed the window early
+		// (gm.activity.close) and the deadline fired afterwards, or this
+		// effect was redelivered after the notification landed. Both mean
+		// "already reported", which is what this call wanted; returning the
+		// error instead would make the consumer retry until it dead-letters.
+		slog.Info("activity: phase was already reported", "activity_id", activityID)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	slog.Info("activity: phase reported", "activity_id", activityID,
+		"status", activityState.Status, "notified", len(activityState.NotifiedGameSIDs))
+	return nil
+}
+
+// Contribute adds one player's progress to the current window, and says
+// WHICH window it went into.
+//
+// The request id is the dungeon run, so a retried contribution for a run that
+// already counted is refused by the coordinator's reservation rather than
+// counted twice — the same anchor the clear's own reward uses.
+//
+// The returned window id is not a convenience. A window lasts
+// gameactivity.WindowSeconds and both this call and Standing derive their id
+// from the clock at the moment they run, so a contribution at 12:14:59 and a
+// lookup at 12:15:01 are about different windows — and without this value
+// nothing downstream can tell that apart from "the point did not count"
+// (RR-20260921-01). The point is not lost in that case: it stays in the
+// window it landed in and settles with it.
+//
+// A window the coordinator does not know yet is opened here, with the same
+// idempotent call the loop makes, and the progress applied again
+// (RR-20261006-29). runActivity opens the clock's window once every
+// activityLoopInterval, so for up to that long after every boundary the
+// window the clock is in does not exist: a clear then answered "activity: not
+// found", its point was dropped and the endpoint reported no window. The
+// close deadline is still armed by the loop's next pass, which finds the
+// window open. With the Activity switch off nothing is opened, as in the loop.
+func (runner *ActivityRunner) Contribute(ctx context.Context, playerID int64, runID string) (string, svcactivity.Participant, error) {
+	activityID := gameactivity.ID(runner.clock().Unix())
+	apply := func() (svcactivity.Participant, error) {
+		return runner.coordinator.ApplyProgress(ctx,
+			runner.key(activityID), strconv.FormatInt(playerID, 10),
+			gameactivity.ProgressRequestID(runID),
+			svcactivity.ProgressDelta{Score: gameactivity.ProgressPerClear, Progress: gameactivity.ProgressPerClear})
+	}
+	participant, err := apply()
+	if svcactivity.Code(err) == svcactivity.CodeMissing && flags.Enabled(flags.Activity) {
+		if _, openErr := runner.openWindow(ctx, activityID); openErr != nil {
+			err = fmt.Errorf("%w (opening the window: %v)", err, openErr)
+		} else {
+			participant, err = apply()
+		}
+	}
+	if err != nil {
+		// The window is reported even on failure: the caller's log line is
+		// worth more when it says which window refused it.
+		return activityID, svcactivity.Participant{}, err
+	}
+	// The board is this server's own index of its contributors, kept because
+	// the coordinator has no enumeration and settlement needs one. The score
+	// written is the coordinator's, not a local count, so a replay that
+	// changed nothing there changes nothing here.
+	if _, err := runner.redis.ZAdd(ctx, gameactivity.BoardKey(runner.prefix, runner.groupID, activityID),
+		fredis.Z{Score: float64(participant.Score), Member: strconv.FormatInt(playerID, 10)}); err != nil {
+		slog.Warn("activity: contributor not recorded on the board",
+			"activity_id", activityID, "player_id", playerID, "err", err)
+	}
+	return activityID, participant, nil
+}
+
+// clock is runner.now with a default, so a zero-valued runner in a test does
+// not panic before it can be given one. The default is the process business
+// clock, the same one the registry's would be.
+func (runner *ActivityRunner) clock() time.Time {
+	if runner.now == nil {
+		return app.BusinessClock(nil).Now()
+	}
+	return runner.now()
+}
+
+// Standing is one player's place in the current window, for the endpoint.
+func (runner *ActivityRunner) Standing(ctx context.Context, playerID int64) (string, svcactivity.Activity, svcactivity.Participant, error) {
+	activityID := gameactivity.ID(runner.clock().Unix())
+	key := runner.key(activityID)
+	state, _, err := runner.coordinator.LookupActivity(ctx, key)
+	if err != nil {
+		return activityID, svcactivity.Activity{}, svcactivity.Participant{}, err
+	}
+	participant, _, err := runner.coordinator.LookupParticipant(ctx, key, strconv.FormatInt(playerID, 10))
+	if err != nil {
+		return activityID, state, svcactivity.Participant{}, err
+	}
+	return activityID, state, participant, nil
+}
+
+// Settled reports whether this server has paid an activity's settlement. It
+// reads the World rather than a field on this runner, so the answer survives
+// the restart that empties any in-process memory of it.
+func (runner *ActivityRunner) Settled(ctx context.Context, activityID string) (bool, error) {
+	return syncsender.NewActivitySettledSender(runner.nest).Sync_ActivitySettled(ctx, runner.worldID, activityID)
+}
+
+// applyDispatches settles every result this server is owed.
+//
+// What it does NOT do is guess. The first version computed "the window that
+// just closed" and "the current one" from the local clock and looked those two
+// up — which works exactly until this server is down longer than one window,
+// and then the older obligation is still recorded and permanently unreachable
+// (RR-20260919-10). The coordinator keeps a per-game index; this asks it.
+//
+// The order is take → mail → record → ack, and each step is safe to repeat:
+//
+//   - taking the payload (AttemptDispatch) is what spends one delivery
+//     attempt, so the budget measures deliveries that actually happened;
+//   - the mails are idempotent per (activity, player), so a redelivery mails
+//     nothing new;
+//   - the World's record makes the board read happen once in the normal case;
+//   - the ack is last, so a crash anywhere before it leaves the dispatch
+//     pending and the whole sequence runs again.
+//
+// Acking first would be the other order, and the crash that follows it costs
+// every player their reward with no record that anything was owed.
+func (runner *ActivityRunner) applyDispatches(ctx context.Context) {
+	owed, err := runner.coordinator.OwedDispatches(ctx, runner.groupID, runner.gameSID, activityDrainBatch)
+	if err != nil {
+		slog.Warn("activity: could not read what this server is owed", "err", err)
+		return
+	}
+	for _, key := range owed {
+		dispatch, err := runner.coordinator.AttemptDispatch(ctx, key, runner.gameSID)
+		if err != nil {
+			// Held by another attempt, not due yet, or exhausted — all of
+			// which the coordinator decides. Nothing to do here but say so.
+			slog.Warn("activity: could not take a result", "activity_id", key.ActivityID, "err", err)
+			continue
+		}
+		if dispatch.State != svcactivity.DispatchPending {
+			continue
+		}
+		if err := runner.settle(ctx, key.ActivityID, dispatch); err != nil {
+			slog.Error("activity: settlement failed; the dispatch stays pending",
+				"activity_id", key.ActivityID, "err", err)
+		}
+	}
+}
+
+func (runner *ActivityRunner) settle(ctx context.Context, activityID string, dispatch svcactivity.Dispatch) error {
+	board, err := runner.redis.ZRevRangeWithScores(ctx,
+		gameactivity.BoardKey(runner.prefix, runner.groupID, activityID), 0, int64(gameactivity.PaidRanks-1))
+	if err != nil {
+		return fmt.Errorf("read board: %w", err)
+	}
+	for rank, entry := range board {
+		playerID, parseErr := strconv.ParseInt(entry.Member, 10, 64)
+		if parseErr != nil || playerID <= 0 {
+			continue
+		}
+		reward, ok := gameactivity.RewardFor(rank + 1)
+		if !ok {
+			continue
+		}
+		attachment, encodeErr := rewards.Encode(rewards.Reward{ItemID: reward.ItemID, Count: reward.Count})
+		if encodeErr != nil {
+			return fmt.Errorf("encode reward: %w", encodeErr)
+		}
+		if _, sendErr := runner.mailer.Send(ctx, svcmail.SendRequest{
+			Audience: svcmail.AudienceDirect, Recipients: []int64{playerID},
+			Subject:    fmt.Sprintf("Race %s: rank %d", activityID, rank+1),
+			Body:       fmt.Sprintf("You finished rank %d with %d points.", rank+1, int64(entry.Score)),
+			Attachment: attachment, ExpiresInSeconds: activitySettleMailExpiresIn,
+			RequestID: gameactivity.MailRequestID(activityID, playerID),
+		}); sendErr != nil {
+			return fmt.Errorf("mail rank %d: %w", rank+1, sendErr)
+		}
+	}
+	recorded, err := syncsender.NewSettleActivitySender(runner.nest).
+		Sync_SettleActivity(ctx, runner.worldID, activityID, runner.clock().Unix())
+	if err != nil {
+		return fmt.Errorf("record settlement: %w", err)
+	}
+	if _, err := runner.coordinator.AckDispatch(ctx, runner.key(activityID), runner.gameSID, dispatch.Token); err != nil {
+		return fmt.Errorf("ack dispatch: %w", err)
+	}
+	slog.Info("activity: settled", "activity_id", activityID, "paid", len(board),
+		"reason", dispatch.Result.Reason, "first_settlement", recorded)
+	return nil
+}
+
+const (
+	// activityPhaseDurable names the JetStream consumer. Every replica shares
+	// it, so one phase effect is delivered to one of them.
+	activityPhaseDurable = "game-activity-phase"
+	// activityPhaseInbox is the Mongo collection holding consumer receipts.
+	activityPhaseInbox = "_game_activity_inbox"
+)
+
+// startActivityPhaseConsumer turns the World timer's effect into the
+// coordinator call it stands for.
+//
+// This is the half that must not happen under the entity lock: the timer
+// handler recorded an effect and returned, and the notification is made here,
+// after the transaction committed. Two layers make it happen once — the Mongo
+// inbox recognises a redelivered effect, and NotifyPhase is itself idempotent
+// per game sid, which is what covers the gap between the receipt committing
+// and JetStream seeing the ack.
+func startActivityPhaseConsumer(ctx context.Context, registry *app.Registry, runner *ActivityRunner) (fnats.IJetStreamSubscription, error) {
+	jetstream, ok := app.Lookup[fnats.IJetStream](registry, mods.ModNatsJetStream)
+	if !ok || jetstream == nil {
+		return nil, fmt.Errorf("activity phase: capability %q not found", mods.ModNatsJetStream)
+	}
+	mongoClient, ok := app.Lookup[fmongo.IMongo](registry, mods.ModMongo)
+	if !ok || mongoClient == nil {
+		return nil, fmt.Errorf("activity phase: capability %q not found", mods.ModMongo)
+	}
+	database, prefix, stream, err := effectSettings(registry)
+	if err != nil {
+		return nil, fmt.Errorf("activity phase: %w", err)
+	}
+	inbox, err := nestwal.NewMongoEffectInbox(mongoClient, database, activityPhaseInbox)
+	if err != nil {
+		return nil, fmt.Errorf("activity phase: %w", err)
+	}
+	consumer := nestwal.JetStreamEffectConsumerConfig{
+		Stream:        stream,
+		Durable:       activityPhaseDurable,
+		FilterSubject: prefix + "." + effects.TopicActivityPhaseDue,
+		AckWait:       30 * time.Second,
+		MaxDeliver:    20,
+	}
+	return nestwal.SubscribeJetStreamEffects(ctx, jetstream, inbox, consumer, func(ctx context.Context, envelope nestwal.EffectEnvelope) error {
+		var event effects.ActivityPhaseDue
+		if err := json.Unmarshal(envelope.Payload, &event); err != nil {
+			return fmt.Errorf("activity phase: decode effect %s: %w", envelope.EffectID, err)
+		}
+		return runner.NotifyPhaseDue(ctx, event.ActivityID)
+	})
+}

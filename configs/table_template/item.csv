@@ -1,0 +1,4 @@
+id,name,max_stack,attack,hp
+ID,Name,MaxStack,Attack,HP
+int64,string,int32,int64,int64
+required;unique,required,required,,

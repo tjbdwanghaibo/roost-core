@@ -1,0 +1,107 @@
+package Game
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"example.com/planet/game/effects"
+	"example.com/planet/game/rewards"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/kit/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	svcmail "github.com/tjbdwanghaibo/roost-core/kit/service/mail"
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	"github.com/tjbdwanghaibo/roost-core/nestwal"
+)
+
+const (
+	// levelUpMailDurable names the JetStream consumer. Every replica of this
+	// service shares it, so each effect is delivered to one of them.
+	levelUpMailDurable = "game-level-up-mail"
+	// levelUpMailInbox is the Mongo collection holding consumer receipts.
+	levelUpMailInbox = "_game_effect_inbox"
+	// levelUpMailExpiresIn is how long the reward mail stays readable.
+	levelUpMailExpiresIn = 7 * 24 * 60 * 60
+)
+
+// startLevelUpMailer subscribes to player.level_up effects and answers each
+// with a reward mail. It is the consumer half of the outbox the handler
+// wrote to, and two layers make the mail happen once:
+//
+//   - the Mongo inbox commits a receipt per EffectID, so a redelivered effect
+//     is recognised and skipped even after this process restarts;
+//   - the mail service deduplicates by RequestID, and the RequestID is the
+//     EffectID — so if the receipt did commit but this process died before
+//     JetStream saw the ack, the retried Send returns the mail it already
+//     produced instead of a second one.
+//
+// The handler's context is the inbox's Mongo transaction; a Mongo write made
+// through it would commit atomically with the receipt. Mail is a bus call,
+// not a Mongo write, which is why the second layer matters.
+func startLevelUpMailer(ctx context.Context, registry *app.Registry) (fnats.IJetStreamSubscription, error) {
+	jetstream, ok := app.Lookup[fnats.IJetStream](registry, mods.ModNatsJetStream)
+	if !ok || jetstream == nil {
+		return nil, fmt.Errorf("level-up mail: capability %q not found", mods.ModNatsJetStream)
+	}
+	mongoClient, ok := app.Lookup[fmongo.IMongo](registry, mods.ModMongo)
+	if !ok || mongoClient == nil {
+		return nil, fmt.Errorf("level-up mail: capability %q not found", mods.ModMongo)
+	}
+	mail, err := Mail(registry)
+	if err != nil {
+		return nil, fmt.Errorf("level-up mail: %w", err)
+	}
+	database, prefix, stream, err := effectSettings(registry)
+	if err != nil {
+		return nil, fmt.Errorf("level-up mail: %w", err)
+	}
+	inbox, err := nestwal.NewMongoEffectInbox(mongoClient, database, levelUpMailInbox)
+	if err != nil {
+		return nil, fmt.Errorf("level-up mail: %w", err)
+	}
+	consumer := nestwal.JetStreamEffectConsumerConfig{
+		Stream:        stream,
+		Durable:       levelUpMailDurable,
+		FilterSubject: prefix + "." + effects.TopicPlayerLevelUp,
+		AckWait:       30 * time.Second,
+		MaxDeliver:    20,
+	}
+	return nestwal.SubscribeJetStreamEffects(ctx, jetstream, inbox, consumer, func(ctx context.Context, envelope nestwal.EffectEnvelope) error {
+		var event effects.PlayerLevelUp
+		if err := json.Unmarshal(envelope.Payload, &event); err != nil {
+			return fmt.Errorf("level-up mail: decode effect %s: %w", envelope.EffectID, err)
+		}
+		// The reward rides in the attachment; the player claims it through
+		// the ClaimMail endpoint, which grants it into the Bag exactly once
+		// per mail (mail's ReserveClaim / CommitClaim).
+		attachment, err := rewards.Encode(rewards.LevelUpReward(event.Level))
+		if err != nil {
+			return fmt.Errorf("level-up mail: effect %s: %w", envelope.EffectID, err)
+		}
+		_, err = mail.Send(ctx, svcmail.SendRequest{
+			Audience:         svcmail.AudienceDirect,
+			Recipients:       []int64{event.PlayerID},
+			Subject:          fmt.Sprintf("Level %d reached", event.Level),
+			Body:             fmt.Sprintf("Congratulations on reaching level %d. Here is your reward.", event.Level),
+			Attachment:       attachment,
+			ExpiresInSeconds: levelUpMailExpiresIn,
+			RequestID:        envelope.EffectID,
+		})
+		return err
+	})
+}
+
+// effectSettings is where the dataengine Mod publishes effects, read through
+// that Mod's own declaration (kitdataengine.EffectSettings), so producer and
+// consumer cannot disagree about where effects go and the defaults are not
+// copied here.
+func effectSettings(registry *app.Registry) (database, prefix, stream string, err error) {
+	database, prefix, stream, err = kitdataengine.EffectSettings(registry.Config())
+	if err != nil {
+		return "", "", "", fmt.Errorf("effect settings: %w", err)
+	}
+	return database, prefix, stream, nil
+}

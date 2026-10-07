@@ -1,0 +1,59 @@
+package dbdef
+
+// WorldDao is the World's persistent state: two server-wide counters. They
+// are the World's real job in this demo — one place that knows how many
+// players ever entered this server and how many matches it formed — and they
+// move only inside World's Nest lock, through the generated mutators.
+//
+//roost:dao coll=world db=game
+type WorldDao struct {
+	PlayersEntered int64 `bson:"players_entered" dao:"persist,sync"`
+	MatchesFormed  int64 `bson:"matches_formed" dao:"persist,sync"`
+	// ExpGranted moves in the same Nest transaction as a Player's Exp: one
+	// WAL record, two entities, two lock ranks.
+	ExpGranted int64 `bson:"exp_granted" dao:"persist,sync"`
+	// Timers is the World's pending deadlines, persisted: node id -> node.
+	// This map IS the schedule — there is no heap kept beside it. Arming or
+	// firing builds a scheduler from these nodes for that one call and its
+	// change hook writes every add, fire and removal back here, inside the
+	// transaction that did it, so the deadline and the state change it
+	// belongs to are one WAL record and roll back together. A timer survives
+	// a restart because nothing about it lives anywhere else.
+	Timers map[int64]*TimerNode `bson:"timers" dao:"persist,map=fast"`
+	// TimerSeed is the highest node id ever minted. Persisted so a restart
+	// does not hand out an id a stored node already has.
+	TimerSeed int64 `bson:"timer_seed" dao:"persist"`
+	// TimerNextDue is the earliest End among Timers (UnixMilli, 0 for none):
+	// what lets the once-a-second tick decide "nothing is due" without
+	// walking the map. It is derived, so it is `nopersist,nosync` — never
+	// stored, never replicated — and recomputed when the World loads; but it
+	// is a DAO field, so a rolled-back arm or fire takes it back with the
+	// nodes, and no component keeps a copy of the schedule that could
+	// disagree with them (A1: transaction state lives in the DAO).
+	TimerNextDue int64 `bson:"timer_next_due" dao:"nopersist,nosync"`
+	// SettledActivities is activity id -> when this server acked its result
+	// dispatch. It is what makes settlement once-per-activity across
+	// restarts, and it is on the World rather than in the coordinator because
+	// the coordinator says "the phase is collected" — what settlement PAYS is
+	// the game's.
+	SettledActivities map[string]int64 `bson:"settled_activities" dao:"persist,map=fast"`
+}
+
+// TimerNode is one stored timer. It is core/timer's Node minus the parts that
+// only exist in memory (the heap index and the handler): a stored handler
+// would be a function pointer, and the type is what finds it again.
+//
+// The format only grows. Priority was added after nodes were already stored
+// (D-L1, 2026-10-06): a node stored before it has no "priority" key and
+// decodes as 0, the default, so no migration and no schema bump.
+type TimerNode struct {
+	Type int32 `bson:"type"`
+	// Priority orders nodes due at the same moment: lower fires first, equal
+	// priorities fire in the order they were armed (node id).
+	Priority     int32  `bson:"priority"`
+	Param1       int64  `bson:"param1"`
+	Param2       int64  `bson:"param2"`
+	Payload      string `bson:"payload,omitempty"`
+	EndUnixMilli int64  `bson:"end_unix_milli"`
+	DelayMillis  int64  `bson:"delay_millis"`
+}

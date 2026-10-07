@@ -1,0 +1,89 @@
+package Game
+
+import (
+	"context"
+	"testing"
+
+	db "example.com/planet/db"
+	player "example.com/planet/game/entities/player"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	svcmail "github.com/tjbdwanghaibo/roost-core/kit/service/mail"
+	"github.com/tjbdwanghaibo/roost-core/mongo/mongotest"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// RR-20260930-22：deliver 的收件人检查必须读 Player DAO 自己的库和集合。
+//
+// Player 文档落在 DAO 标记 `//roost:dao coll=player db=game` 生成的库里
+// （db.PlayerDaoDBName / db.PlayerDaoCollection），与 `dataengine.database`
+// 无关——后者是 Data Engine 放 WAL 投影、fence 回执的库。旧代码把
+// `dataengine.database` 当作 Player 文档所在库去 FindOne，于是只要把
+// `dataengine.database` 配成非 `game`（README 推荐的隔离做法），每一个进过
+// 游戏的收件人都被当作"从未进过游戏"，saga 以 compensated 结束。这里不配
+// 任何 dataengine 库名：收件人在 DAO 的库里，deliver 就得找到他。
+
+// sendingMailer 记下 deliver 发的邮件；它不是被测对象。
+type sendingMailer struct {
+	svcmail.Mail
+	sent []svcmail.SendRequest
+}
+
+func (m *sendingMailer) Send(_ context.Context, req svcmail.SendRequest) (svcmail.Envelope, error) {
+	m.sent = append(m.sent, req)
+	return svcmail.Envelope{}, nil
+}
+
+func seedRecipient(t *testing.T, mongo *mongotest.Client, playerID int64) int64 {
+	t.Helper()
+	player.RegisterEntity()
+	entityID, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mongo.Collection(db.PlayerDaoDBName, db.PlayerDaoCollection).Seed(bson.M{"_id": entityID}); err != nil {
+		t.Fatal(err)
+	}
+	return entityID
+}
+
+// 收件人进过游戏（Player DAO 的集合里有他的文档）：deliver 必须发邮件并报
+// 成功，不管 dataengine.database 配成什么。
+func TestDeliverFindsTheRecipientInThePlayerDaoDatabase(t *testing.T) {
+	mongo := mongotest.NewClient()
+	command := giftCommand(t, 42, 1000) // To = 43
+	seedRecipient(t, mongo, 43)
+	mailer := &sendingMailer{}
+	steps := giftSteps{mongo: mongo, mailer: mailer}
+
+	completion, err := steps.deliver(context.Background(), command)
+	if err != nil {
+		t.Fatalf("deliver returned an infrastructure error: %v", err)
+	}
+	if !completion.Success {
+		t.Fatalf("deliver refused a recipient who has entered the game: %q", completion.Error)
+	}
+	if len(mailer.sent) != 1 || len(mailer.sent[0].Recipients) != 1 || mailer.sent[0].Recipients[0] != 43 {
+		t.Fatalf("deliver mailed %+v, want one mail to player 43", mailer.sent)
+	}
+}
+
+// 对照：从未进过游戏的收件人仍被拒绝（协调器据此补偿 debit），而且是业务
+// 拒绝、不是基础设施错误——否则投递会一直退避重试到 deadline。
+func TestDeliverStillRefusesARecipientWhoNeverEnteredTheGame(t *testing.T) {
+	mongo := mongotest.NewClient()
+	command := giftCommand(t, 42, 1000)
+	seedRecipient(t, mongo, 42) // 发送方在，收件人 43 不在
+	mailer := &sendingMailer{}
+	steps := giftSteps{mongo: mongo, mailer: mailer}
+
+	completion, err := steps.deliver(context.Background(), command)
+	if err != nil {
+		t.Fatalf("a missing recipient must be a refusal, not an error: %v", err)
+	}
+	if completion.Success || completion.Retryable || completion.Error != giftRecipientNotFound {
+		t.Fatalf("deliver answered %+v, want a non-retryable %q", completion, giftRecipientNotFound)
+	}
+	if len(mailer.sent) != 0 {
+		t.Fatalf("deliver mailed a player who does not exist: %+v", mailer.sent)
+	}
+}

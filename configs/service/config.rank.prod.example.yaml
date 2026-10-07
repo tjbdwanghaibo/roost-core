@@ -1,0 +1,67 @@
+# Generated starter configuration; application-owned after project creation.
+sid: 1000
+log:
+  level: info
+  json: true
+  stdout: true
+  file: false
+  dir: log
+shutdown:
+  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without
+  # a declared stop budget keeps a fixed 3s floor; a Mod that declares one
+  # (dataengine.shutdown_timeout) is granted it from the rest, scaled down with a warning only
+  # when the rest cannot cover it. Generated for this service's 6 Mods: 0s declared + 3s x 6
+  # undeclared + 5s for Service.Shutdown = 23s. roost sync updates this block while it is
+  # unedited when the service's Mods change; roost doctor checks an edited one.
+  # The deployment's termination grace period (k8s terminationGracePeriodSeconds, compose
+  # stop_grace_period, systemd TimeoutStopSec, deploy/dev/run.sh) must be
+  # >= total_timeout + 5s: 28s for this service.
+  total_timeout: 23s
+ops:
+  # 打开 ops 端点（/healthz、/readyz、/metrics、/statsz、/admin）
+  enabled: true
+  # ops 端点监听地址；生产环境绑公网要同时写 ops.allow_public_addr: true
+  addr: 0.0.0.0:9100
+  # 打开 /admin 命令；打开时必须写 ops.admin_token
+  admin_enabled: false
+  # /admin 的令牌；dev- 开头的令牌要同时写 ops.allow_dev_token: true
+  admin_token: ""
+  allow_dev_token: false
+stats_log:
+  # 按 interval 把指标快照写进 stats 日志
+  enabled: true
+  # stats 日志目录（相对进程工作目录，部署要给它可写的挂载）
+  dir: log
+  interval: 1m
+redis:
+  # 单机 Redis 地址
+  addr: CHANGE_ME:6379
+  password: ""
+  db: 0
+  # 连接池大小，0 取驱动默认
+  pool_size: 32
+  # 最少空闲连接，0 取驱动默认
+  min_idle_conns: 4
+nats:
+  url: nats://CHANGE_ME:4222
+  # bus 主题前缀
+  prefix: roost
+  worker_num: 8
+  reliable:
+    # 可靠总线（需要 Redis Mod）
+    enabled: false
+rank:
+  # Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）
+  key_prefix: roost:planet:rank
+singleton:
+  # One process per server type + sid: before any Mod starts, the App takes the Redis key
+  # <key_prefix>:<server_type>:<sid> (connecting with this file's redis.* settings), renews it,
+  # stops the process when it is lost, and releases it after every Mod has stopped.
+  # Off: the generator cannot tell whether this service runs more than one process per sid.
+  # Turning it on needs redis.addr or redis.cluster_addrs in this file.
+  enabled: false
+  key_prefix: roost:planet:singleton
+  ttl: 15s
+  renew_interval: 3s
+  guard: 5s
+  startup_wait: 30s

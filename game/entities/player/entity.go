@@ -1,0 +1,87 @@
+package player
+
+import (
+	db "example.com/planet/db"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+const EntityKindPlayer entity.EntityKind = 1
+
+// SyncNamespacePlayer is the routing key every update of a replicated Player carries on the wire.
+// The marker below repeats the literal because a marker is not Go: syncNamespace
+// takes a topic name or a package-qualified constant, and a bare identifier
+// is refused rather than quoted into the string of its own name
+// (RR-20260918-07).
+const SyncNamespacePlayer = "player"
+
+// IPlayerEntity is the lock-safe business view used by Nest handlers.
+type IPlayerEntity interface{ entity.IThreadSafeEntity }
+
+// IPlayerFullEntity is for a handler that needs several components at once —
+// equipping touches the bag, the equipment and the attribute container, and
+// they have to move in one transaction.
+type IPlayerFullEntity interface {
+	entity.IThreadSafeEntity
+	BagComp() *BagComponent
+	EquipmentComp() *EquipmentComponent
+	AttributeComp() *AttributeComponent
+}
+
+// Category is the kind's lock rank; ranks are acquired lowest first. The
+// demo's AddExp locks a World (rank 2) and a Player (rank 4) in one
+// transaction, so the two kinds must sit in different ranks, in the order the
+// framework is designed around: World before Player. The scaffold's default,
+// EntityCategoryOther, is deliberately the rank from which nothing further
+// can be locked — safe for a kind whose ordering nobody has decided yet.
+//
+// Changing a kind's category changes every one of its entity ids (the rank
+// is encoded in the id), so this is decided once, before the first document
+// is persisted; afterwards it is a data migration.
+//
+// sync=true is what gives this Entity a SubjectSyncState: the framework's
+// server-authoritative replication to clients. The DAO fields tagged
+// `dao:"...,sync"` already record what changed (the generated setters call
+// Tracker.MarkSync); sync=true adds the subject that turns those marks into
+// versioned deltas, and subjectPacker names who serializes them.
+//
+// Nothing about it is automatic on the write side: marking the DAO dirty and
+// marking the SUBJECT dirty are two different facts, and the game decides
+// when the second one happens (PublishSyncDirty below). That split is
+// deliberate — a transaction that changed three fields should produce one
+// delta, not three.
+//
+//roost:entity id=1 entityKind=EntityKindPlayer category=entity.EntityCategoryPlayer sync=true syncNamespace="player" subjectPacker=NewPlayerSyncPacker
+type Player struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	profile *ProfileComponent   `comp:"CompTypeProfile"`
+	bag     *BagComponent       `comp:"CompTypeBag"`
+	attr    *AttributeComponent `comp:"CompTypeAttribute"`
+	mapComp *MapComponent       `comp:"CompTypeMap"`
+	gear    *EquipmentComponent `comp:"CompTypeEquipment"`
+	dao     *db.PlayerDao       `dao:"player"`
+}
+
+// PublishSyncDirty hands whatever the generated DAO recorded as sync-dirty to
+// the subject the scene replicates. Call it at the end of a mutation, not per
+// field: one call is one delta.
+//
+// Two things worth knowing before copying this:
+//
+//   - TakeSyncDirty CONSUMES the mask. In this demo the client is the only
+//     consumer; a project that also mirrors the Entity to another process has
+//     a second reader and must not let one of them steal the other's mask.
+//   - Called inside a transaction that later rolls back, the subject stays
+//     marked while the DAO's own mark is restored. That is safe in the
+//     direction that matters: the next flush packs current state, so the
+//     client gets the truth — just one redundant delta. Marking too little
+//     would be the unsafe direction.
+func (player *Player) PublishSyncDirty() {
+	if player == nil {
+		return
+	}
+	if mask := player.Dao().DirtyTracker().TakeSyncDirty(); mask != 0 {
+		player.MarkSyncDirty(mask)
+	}
+}

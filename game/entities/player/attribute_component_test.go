@@ -1,0 +1,616 @@
+package player
+
+import (
+	"context"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	generated "example.com/planet/configs/generated"
+	"example.com/planet/db"
+	gameattr "example.com/planet/game/gameplay/attribute"
+	coreattr "github.com/tjbdwanghaibo/roost-core/attribute"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/nestwal"
+)
+
+// attributeCommitter keeps nothing: this test is about the container, not
+// about what reaches storage.
+type attributeCommitter struct{}
+
+func (attributeCommitter) Commit(context.Context, nest.CommitRecord) error { return nil }
+
+// rejectingCommitter refuses every record, the way a failed WAL admission
+// does: the handler body already ran, and Nest has to take it all back.
+type rejectingCommitter struct{ err error }
+
+func (c rejectingCommitter) Commit(context.Context, nest.CommitRecord) error { return c.err }
+
+// The attribute system's claim in this project is the composition rule:
+// Final = Base + Gear, with the derived attribute computed once over the
+// composed inputs. These assert that rule and the two storage intents that
+// follow from it — Base is stored, Final is not.
+
+func newAttributePlayer(t *testing.T, uniqueID int64) *Player {
+	t.Helper()
+	RegisterEntity()
+	// The gear layer reads the item table, so a test that touches it needs
+	// the project's own config data.
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatalf("register config data: %v", err)
+	}
+	store := configdata.NewStore(registry, filepath.Join("..", "..", "..", "configs", "data"))
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatalf("load config data: %v", err)
+	}
+	configdata.SetDefaultStore(store)
+
+	id, err := entity.BuildEntityID(uniqueID, EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: EntityKindPlayer, Id: id})
+	if err != nil {
+		t.Fatalf("build player: %v", err)
+	}
+	return built.(*Player)
+}
+
+func TestFinalIsBasePlusGearWithThePowerDerivedOnce(t *testing.T) {
+	subject := newAttributePlayer(t, 7001)
+	component := subject.AttributeComp()
+
+	base, ok := gameattr.CombatLive(component.Container(), coreattr.Base)
+	if !ok {
+		t.Fatal("the base layer was not installed at init")
+	}
+	final, ok := component.Final()
+	if !ok {
+		t.Fatal("the final layer was not composed at init")
+	}
+	// With an empty bag the gear layer contributes nothing, so Final is Base.
+	if final.Attack != base.Attack || final.HP != base.HP {
+		t.Fatalf("final = HP %d attack %d, want the base HP %d attack %d", final.HP, final.Attack, base.HP, base.Attack)
+	}
+
+	// The Iron Sword is the one item the table gives an attack.
+	const ironSword = int64(2001)
+	item, found := generated.ItemByID(ironSword)
+	if !found || item.Attack <= 0 {
+		t.Fatalf("the item table gives %d no attack; this test asserts the gear layer", ironSword)
+	}
+	if _, ok := gameattr.CombatLive(component.Container(), Gear); !ok {
+		t.Fatal("the gear layer was not installed at init")
+	}
+	// Worn, not carried. The gear layer is a projection of the EQUIPMENT, so
+	// a sword in the bag changes nothing — which is the point of moving it
+	// there. Through the real methods in a real transaction, because the
+	// generated persist setters refuse to run outside one.
+	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "carry", func() (any, error) {
+		if _, err := subject.BagComp().AddItem(ironSword, 1); err != nil {
+			return nil, err
+		}
+		// Inside the transaction: RefreshGear writes the attribute maps, and
+		// the generated persist setters refuse to run outside one.
+		subject.AttributeComp().RefreshGear()
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("grant the sword: %v", err)
+	}
+	if carried, _ := gameattr.CombatLive(component.Container(), Gear); carried.Attack != 0 {
+		t.Fatalf("carrying the sword raised the gear layer to attack %d; only wearing it should", carried.Attack)
+	}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "equip", func() (any, error) {
+		if _, err := subject.BagComp().RemoveItem(ironSword, 1); err != nil {
+			return nil, err
+		}
+		if _, _, err := subject.EquipmentComp().Equip(ironSword, 1); err != nil {
+			return nil, err
+		}
+		subject.AttributeComp().RefreshGear()
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("equip the sword: %v", err)
+	}
+
+	// Container is a view built from the DAO for the call, so read it again.
+	if gear, _ := gameattr.CombatLive(component.Container(), Gear); gear.Attack != item.Attack {
+		t.Fatalf("the gear layer holds attack %d, want the item's %d", gear.Attack, item.Attack)
+	}
+	final, _ = component.Final()
+	if want := base.Attack + item.Attack; final.Attack != want {
+		t.Fatalf("composed attack = %d, want base %d + gear %d", final.Attack, base.Attack, item.Attack)
+	}
+	if want := base.HP + item.HP; final.HP != want {
+		t.Fatalf("composed HP = %d, want base %d + gear %d", final.HP, base.HP, item.HP)
+	}
+	// Power is derived. Composing the layers' own Power would add two
+	// ratings each computed from half the inputs; the rule is to compose the
+	// inputs and derive once.
+	if want := final.Attack*2 + final.HP/10; final.Power != want {
+		t.Fatalf("composed power = %d, want %d derived from the composed inputs", final.Power, want)
+	}
+	// A note for whoever changes the formula: with THIS one the sum of the
+	// layers' own ratings happens to equal the composed rating, because the
+	// base HP is always a multiple of the divisor and nothing rounds away.
+	// That is a property of the numbers, not of the design — the rule is
+	// "compose the inputs, derive once", and the moment a formula stops
+	// being linear in its inputs (a cap, a curve, a product) the two answers
+	// diverge and only this one is right. The assertion above is the rule;
+	// this comment is why it is not written as "≠ the sum".
+	if final.Power == base.Power {
+		t.Error("the composed power did not move when the gear layer arrived")
+	}
+}
+
+// 使用真实生成 DAO 校验白名单及字段 delta，避免只测试掩码计算。
+func TestSyncProfilesFilterGeneratedDAOPayload(t *testing.T) {
+	subject := newAttributePlayer(t, 7991)
+	packer := NewPlayerSyncPacker(subject)
+	near := entity.SyncProfile{Key: "near"}
+	full, err := packer.PackSubjectSnapshot(near)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc bson.M
+	if err := bson.Unmarshal(full.BytesCopy(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"gold", "exp", "items", "attr_base", "attr_final"} {
+		if _, exists := doc[name]; exists {
+			t.Fatalf("near view leaked %s", name)
+		}
+	}
+	if _, exists := doc["pos_x"]; !exists {
+		t.Fatal("near view lost position")
+	}
+	position, ok := dataengine.SyncFieldByName(subject.Dao().SyncFields(), "PosX")
+	if !ok {
+		t.Fatal("position metadata missing")
+	}
+	delta, err := packer.PackSubjectDelta(near, position.Bit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc = nil
+	if err := bson.Unmarshal(delta.BytesCopy(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc) != 2 {
+		t.Fatalf("delta sent unchanged fields: %v", doc)
+	}
+	gold, ok := dataengine.SyncFieldByName(subject.Dao().SyncFields(), "Gold")
+	if !ok {
+		t.Fatal("gold metadata missing")
+	}
+	hidden, err := packer.PackSubjectDelta(near, gold.Bit)
+	if err != nil || !hidden.Empty() {
+		t.Fatalf("private change packed: %v", err)
+	}
+	if _, err := packer.PackSubjectSnapshot(entity.SyncProfile{Key: "typo"}); !errors.Is(err, entity.ErrSyncViewUnknown) {
+		t.Fatal(err)
+	}
+}
+
+// RR-20261005-NC-61：属性层是组件内存，不是 DAO 字段。AddExp 升级时先改 Base、重组 Final，再把两层
+// 写回 DAO；之后的步骤失败或提交被拒绝，Nest 只按 undo 记录撤回 DAO（等级、经验、attr_base），
+// 容器里的 Base / Final 却留在升级后的数值上。下一次成功的写回再把这份虚高的 Base 持久化，
+// 等级与属性从此对不上。承诺：事务回滚时属性层随它一起回到事务开始时的样子。
+func TestAttributeLayersRollBackWithTheTransaction(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		uniqueID  int64
+		committer nest.TransactionCommitter
+		failAfter bool
+	}{
+		{name: "a later step fails", uniqueID: 7201, committer: attributeCommitter{}, failAfter: true},
+		{name: "the commit is rejected", uniqueID: 7202, committer: rejectingCommitter{err: errors.New("admission refused")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			subject := newAttributePlayer(t, tc.uniqueID)
+			component := subject.AttributeComp()
+			level := subject.Dao().GetLevel()
+			start := gameattr.ForLevel(level)
+
+			_, err := nest.RunIsolatedTransaction(context.Background(), tc.committer, "level_up_then_fail", func() (any, error) {
+				if _, err := subject.ProfileComp().AddExp(ExpPerLevel); err != nil {
+					return nil, err
+				}
+				if tc.failAfter {
+					return nil, errors.New("a later step of the same handler failed")
+				}
+				return nil, nil
+			})
+			if err == nil {
+				t.Fatal("the transaction was expected to fail")
+			}
+			if got := subject.Dao().GetLevel(); got != level {
+				t.Fatalf("the level was not rolled back: %d, want %d", got, level)
+			}
+			base, ok := gameattr.CombatLive(component.Container(), coreattr.Base)
+			if !ok {
+				t.Fatal("the base layer disappeared on rollback")
+			}
+			if base.HP != start.HP || base.Attack != start.Attack {
+				t.Fatalf("rolled back to level %d but the base layer kept the level-up: HP %d attack %d, want HP %d attack %d",
+					level, base.HP, base.Attack, start.HP, start.Attack)
+			}
+			if final, _ := component.Final(); final.HP != start.HP || final.Power != start.Power {
+				t.Fatalf("rolled back but the final layer kept the level-up: HP %d power %d, want HP %d power %d",
+					final.HP, final.Power, start.HP, start.Power)
+			}
+
+			// The consequence that made this an asset bug: the next level-up that
+			// DOES commit must store the numbers of the level it reached, not one
+			// level-up on top of a rolled-back one.
+			if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "level_up", func() (any, error) {
+				return subject.ProfileComp().AddExp(ExpPerLevel)
+			}); err != nil {
+				t.Fatalf("the retry failed: %v", err)
+			}
+			want := gameattr.ForLevel(subject.Dao().GetLevel())
+			stored := make(map[int32]int64)
+			subject.Dao().RangeAttrBase(func(id int32, value int64) bool {
+				stored[id] = value
+				return true
+			})
+			if got := stored[int32(gameattr.AttrHP)]; got != want.HP {
+				t.Fatalf("level %d stored base HP %d, want %d", subject.Dao().GetLevel(), got, want.HP)
+			}
+		})
+	}
+}
+
+// RR-20261005-NC-65：attr_final 的 DAO 注释承诺“实体加载时重算，并复制给客户端”。之前 OnInitFinish 只装一个
+// 空的 Gear 层再重组，既不按身上穿的装备重建 Gear，也不把重组结果写回 attr_final：穿着铁剑的玩家重新
+// 加载（重启、冷卸载后再访问）后 Final.Attack 从 Base+剑 掉回 Base，复制出去的 attr_final 是空的，直到下一次
+// 换装或升级才恢复。新建玩家的 attr_final 也一样是空的。这里走生成 DAO 的持久化往返（Marshal →
+// RestorePersisted → 非创建构建），断言加载后的 Final 与加载前相同、attr_final 已填好。
+func TestFinalIsRecomputedFromWornGearWhenThePlayerLoads(t *testing.T) {
+	subject := newAttributePlayer(t, 7101)
+	if subject.Dao().AttrFinalLen() == 0 {
+		t.Error("a new player's attr_final is empty: the composed view was never handed to replication")
+	}
+	const ironSword = int64(2001)
+	item, found := generated.ItemByID(ironSword)
+	if !found || item.Attack <= 0 {
+		t.Fatalf("the item table gives %d no attack; this test asserts the gear layer", ironSword)
+	}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "equip", func() (any, error) {
+		if _, err := subject.BagComp().AddItem(ironSword, 1); err != nil {
+			return nil, err
+		}
+		if _, err := subject.BagComp().RemoveItem(ironSword, 1); err != nil {
+			return nil, err
+		}
+		if _, _, err := subject.EquipmentComp().Equip(ironSword, 1); err != nil {
+			return nil, err
+		}
+		subject.AttributeComp().RefreshGear()
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("equip the sword: %v", err)
+	}
+	worn, _ := subject.AttributeComp().Final()
+	base, _ := gameattr.CombatLive(subject.AttributeComp().Container(), coreattr.Base)
+	if worn.Attack != base.Attack+item.Attack {
+		t.Fatalf("worn attack = %d, want base %d + sword %d", worn.Attack, base.Attack, item.Attack)
+	}
+
+	// What storage holds and the loader hands back: attr_final is nopersist,
+	// so it does not survive the round trip and must be recomputed.
+	stored := db.NewPlayerDao()
+	if err := stored.RestorePersisted(subject.Dao().Marshal(), db.PlayerDaoSchemaVersion, 1); err != nil {
+		t.Fatalf("restore the stored document: %v", err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{
+		IsCreate: false, Kind: EntityKindPlayer, Id: subject.ID(),
+		Dao: map[string]entity.DaoInterface{db.PlayerDaoCollection: stored},
+	})
+	if err != nil {
+		t.Fatalf("load the player: %v", err)
+	}
+	loaded := built.(*Player)
+	final, _ := loaded.AttributeComp().Final()
+	if final.Attack != worn.Attack || final.HP != worn.HP || final.Power != worn.Power {
+		t.Fatalf("after load final = attack %d HP %d power %d, want what the worn set gives: attack %d HP %d power %d",
+			final.Attack, final.HP, final.Power, worn.Attack, worn.HP, worn.Power)
+	}
+	attackMeta, ok := final.MetaByName("attack")
+	if !ok {
+		t.Fatal("the combat profile has no attack attribute")
+	}
+	replicated, ok := loaded.Dao().GetAttrFinal(int32(attackMeta.ID))
+	if !ok || replicated != final.Attack {
+		t.Fatalf("after load attr_final[attack] = %d (present %v), want %d: replication would draw the wrong number", replicated, ok, final.Attack)
+	}
+}
+
+// A1（回滚统一走 DAO，docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md）：属性层的回滚就是 DAO 的回滚。
+// 这里经真实 Nest 派发（不是 RunIsolatedTransaction 的捷径），两种回滚策略（undo 逐字段逆操作、state 整个 DAO
+// 快照）× 两条失败路径（handler 返回错误、提交被拒绝），在一笔事务里先升级、再穿上铁剑，然后失败。承诺：
+// 回滚后三层（Container 读到的 Base / Gear、Final 与复制用的 attr_final）都回到事务开始时；之后成功的升级存下
+// 的是它到达的等级应有的数值。组件里没有任何逆操作登记，能通过只因为三层都在 DAO 里。
+func TestAttributeRollbackIsTheDaoRollback(t *testing.T) {
+	const ironSword = int64(2001)
+	policies := []struct {
+		name   string
+		policy nest.RollbackPolicy
+	}{
+		{name: "undo", policy: nest.RollbackUndo},
+		{name: "state", policy: nest.RollbackState},
+	}
+	failures := []struct {
+		name      string
+		committer nest.TransactionCommitter
+		failAfter bool
+	}{
+		{name: "handler fails", committer: attributeCommitter{}, failAfter: true},
+		{name: "commit rejected", committer: rejectingCommitter{err: errors.New("admission refused")}},
+	}
+	uniqueID := int64(7300)
+	for _, policy := range policies {
+		for _, failure := range failures {
+			uniqueID++
+			id := uniqueID
+			t.Run(policy.name+"/"+failure.name, func(t *testing.T) {
+				subject := newAttributePlayer(t, id)
+				if err := runPlayerHandler(t, subject, nest.HandlerMeta{Rollback: policy.policy, Durability: nest.DurabilityStrict}, attributeCommitter{}, func(p *Player) error {
+					_, err := p.BagComp().AddItem(ironSword, 1)
+					return err
+				}); err != nil {
+					t.Fatalf("grant the sword: %v", err)
+				}
+				level := subject.Dao().GetLevel()
+				start := gameattr.ForLevel(level)
+				startFinal := attrFinalOf(subject)
+
+				err := runPlayerHandler(t, subject, nest.HandlerMeta{Rollback: policy.policy, Durability: nest.DurabilityStrict}, failure.committer, func(p *Player) error {
+					if _, err := p.ProfileComp().AddExp(ExpPerLevel); err != nil {
+						return err
+					}
+					if _, err := p.BagComp().RemoveItem(ironSword, 1); err != nil {
+						return err
+					}
+					if _, _, err := p.EquipmentComp().Equip(ironSword, 1); err != nil {
+						return err
+					}
+					p.AttributeComp().RefreshGear()
+					if failure.failAfter {
+						return errors.New("a later step of the same handler failed")
+					}
+					return nil
+				})
+				if err == nil {
+					t.Fatal("the transaction was expected to fail")
+				}
+				if got := subject.Dao().GetLevel(); got != level {
+					t.Fatalf("the level was not rolled back: %d, want %d", got, level)
+				}
+				component := subject.AttributeComp()
+				base, ok := gameattr.CombatLive(component.Container(), coreattr.Base)
+				if !ok || base.HP != start.HP || base.Attack != start.Attack {
+					t.Fatalf("base after rollback = %+v (present %v), want HP %d attack %d", base, ok, start.HP, start.Attack)
+				}
+				if gear, ok := gameattr.CombatLive(component.Container(), Gear); !ok || gear.Attack != 0 || gear.HP != 0 {
+					t.Fatalf("gear after rollback = %+v (present %v), want nothing worn", gear, ok)
+				}
+				if final, _ := component.Final(); final.HP != start.HP || final.Attack != start.Attack || final.Power != start.Power {
+					t.Fatalf("final after rollback = HP %d attack %d power %d, want HP %d attack %d power %d",
+						final.HP, final.Attack, final.Power, start.HP, start.Attack, start.Power)
+				}
+				if got := attrFinalOf(subject); !sameAttrs(got, startFinal) {
+					t.Fatalf("replicated attr_final after rollback = %v, want %v", got, startFinal)
+				}
+
+				if err := runPlayerHandler(t, subject, nest.HandlerMeta{Rollback: policy.policy, Durability: nest.DurabilityStrict}, attributeCommitter{}, func(p *Player) error {
+					_, err := p.ProfileComp().AddExp(ExpPerLevel)
+					return err
+				}); err != nil {
+					t.Fatalf("the retry failed: %v", err)
+				}
+				want := gameattr.ForLevel(subject.Dao().GetLevel())
+				if got, _ := subject.Dao().GetAttrBase(int32(gameattr.AttrHP)); got != want.HP {
+					t.Fatalf("level %d stored base HP %d, want %d", subject.Dao().GetLevel(), got, want.HP)
+				}
+			})
+		}
+	}
+}
+
+// A1：非持久的属性层不进 WAL。经真实文件 WAL 提交一次换装（第一次写，整文档 Put）和一次升级（patch），
+// 关闭后重新打开重放：记录里只有持久字段（attr_base 在，attr_final 与 attr_gear 不在）；用重放出的文档
+// 构建玩家，加载时由身上装备重算出的 Final 与提交前相同。
+func TestNonPersistentAttributeLayersStayOutOfTheWAL(t *testing.T) {
+	const ironSword = int64(2001)
+	subject := newAttributePlayer(t, 7401)
+	dir := t.TempDir()
+	options := nestwal.DefaultOptions(dir)
+	// Patch records (every write after the first) need the v2 record format.
+	options.WriterVersion = nestwal.WriterVersionV2
+	wal, err := nestwal.Open(options)
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	committer := walAppendCommitter{wal: wal}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "equip", func() (any, error) {
+		if _, err := subject.BagComp().AddItem(ironSword, 1); err != nil {
+			return nil, err
+		}
+		if _, err := subject.BagComp().RemoveItem(ironSword, 1); err != nil {
+			return nil, err
+		}
+		if _, _, err := subject.EquipmentComp().Equip(ironSword, 1); err != nil {
+			return nil, err
+		}
+		subject.AttributeComp().RefreshGear()
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("equip: %v", err)
+	}
+	worn, _ := subject.AttributeComp().Final()
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "level_up", func() (any, error) {
+		return subject.ProfileComp().AddExp(ExpPerLevel)
+	}); err != nil {
+		t.Fatalf("level up: %v", err)
+	}
+	if err := wal.Close(context.Background()); err != nil {
+		t.Fatalf("close wal: %v", err)
+	}
+
+	reopened, err := nestwal.Open(options)
+	if err != nil {
+		t.Fatalf("reopen wal: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
+	var put []byte
+	var stored []map[string]bool
+	if err := reopened.Replay(context.Background(), func(_ nest.CommitFence, record nest.CommitRecord) error {
+		for _, mutation := range record.Mutations {
+			if mutation.Key.Resource != db.PlayerDaoCollection {
+				continue
+			}
+			raw := mutation.Data
+			if mutation.Kind == dataengine.MutationPut && put == nil {
+				put = append([]byte(nil), raw...)
+			}
+			if len(raw) == 0 {
+				raw = mutation.Patch.SetBSON
+			}
+			keys := map[string]bool{}
+			if len(raw) > 0 {
+				var doc bson.M
+				if err := bson.Unmarshal(raw, &doc); err != nil {
+					return err
+				}
+				for key := range doc {
+					keys[key] = true
+				}
+			}
+			stored = append(stored, keys)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if len(stored) != 2 || put == nil {
+		t.Fatalf("replayed %d player mutations (put present %v), want the equip Put and the level-up patch", len(stored), put != nil)
+	}
+	// A Put names whole fields; a patch names paths inside them (attr_base.1).
+	carries := func(keys map[string]bool, field string) bool {
+		for key := range keys {
+			if key == field || strings.HasPrefix(key, field+".") {
+				return true
+			}
+		}
+		return false
+	}
+	for index, keys := range stored {
+		for _, transient := range []string{"attr_final", "attr_gear"} {
+			if carries(keys, transient) {
+				t.Fatalf("WAL record %d carries the non-persistent field %s: %v", index, transient, keys)
+			}
+		}
+		if !carries(keys, "attr_base") {
+			t.Fatalf("WAL record %d lost the persistent attr_base: %v", index, keys)
+		}
+	}
+
+	restored := db.NewPlayerDao()
+	if err := restored.RestorePersisted(put, db.PlayerDaoSchemaVersion, 1); err != nil {
+		t.Fatalf("restore the replayed document: %v", err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{
+		IsCreate: false, Kind: EntityKindPlayer, Id: subject.ID(),
+		Dao: map[string]entity.DaoInterface{db.PlayerDaoCollection: restored},
+	})
+	if err != nil {
+		t.Fatalf("load the replayed player: %v", err)
+	}
+	if final, _ := built.(*Player).AttributeComp().Final(); final.Attack != worn.Attack || final.HP != worn.HP || final.Power != worn.Power {
+		t.Fatalf("replayed final = attack %d HP %d power %d, want the worn attack %d HP %d power %d",
+			final.Attack, final.HP, final.Power, worn.Attack, worn.HP, worn.Power)
+	}
+}
+
+// walAppendCommitter hands the record to a real file WAL, which is all a
+// replay needs to see what was written.
+type walAppendCommitter struct{ wal *nestwal.WAL }
+
+func (c walAppendCommitter) Commit(ctx context.Context, record nest.CommitRecord) error {
+	_, err := c.wal.Append(ctx, record)
+	return err
+}
+
+// playerGetter hands Nest the one Player under test.
+type playerGetter struct{ subject *Player }
+
+func (g playerGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if id != g.subject.ID() {
+		return nil, nest.ErrEntityNotFound
+	}
+	return g.subject, nil
+}
+
+func (g playerGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}
+
+// runPlayerHandler runs body as one Nest handler on subject, with the given
+// rollback policy and committer: admission, capture, rollback and commit are
+// the engine's own.
+func runPlayerHandler(t *testing.T, subject *Player, meta nest.HandlerMeta, committer nest.TransactionCommitter, body func(*Player) error) error {
+	t.Helper()
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(playerGetter{subject: subject}),
+		nest.NestOptionWithTransactionCommitter(committer),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+	)
+	name := nest.NewHandlerName("attribute_rollback_probe")
+	if err := engine.RegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, body(es[0].(*Player))
+	}, meta); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	defer func() { _ = engine.Shutdown(context.Background()) }()
+	_, err := engine.Request(context.Background(), name, subject.ID(), nil)
+	return err
+}
+
+func attrFinalOf(subject *Player) map[int32]int64 {
+	out := make(map[int32]int64)
+	subject.Dao().RangeAttrFinal(func(id int32, value int64) bool {
+		out[id] = value
+		return true
+	})
+	return out
+}
+
+func sameAttrs(left, right map[int32]int64) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for id, value := range left {
+		if other, ok := right[id]; !ok || other != value {
+			return false
+		}
+	}
+	return true
+}

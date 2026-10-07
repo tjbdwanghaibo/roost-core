@@ -1,0 +1,387 @@
+syntax = "proto3";
+
+package roost.protocol;
+
+option go_package = "example.com/planet/protocol/pb;pb";
+
+// roost:source=go_def
+message ActivityStandingRequest {
+}
+
+// roost:source=go_def
+message ActivityStandingResponse {
+  int32 code = 1;
+  string reason = 2;
+  string activity_id = 3;
+  string status = 4;
+  int64 closes_at_unix = 5;
+  int64 score = 6;
+  int64 progress = 7;
+  bool settled = 8;
+}
+
+// roost:source=go_def
+message AddExpRequest {
+  int64 amount = 1;
+}
+
+// roost:source=go_def
+message AddExpResponse {
+  int32 code = 1;
+  string reason = 2;
+  int32 levels_gained = 3;
+}
+
+// roost:source=go_def
+message AddItemRequest {
+  int64 item_id = 1;
+  int32 count = 2;
+}
+
+// roost:source=go_def
+message AddItemResponse {
+  int32 code = 1;
+  string reason = 2;
+  int32 count = 3;
+}
+
+// roost:source=go_def
+message BattleFramePush {
+  string battle_id = 1;
+  bytes packet = 2;
+}
+
+// roost:source=go_def
+message BattleInputRequest {
+  string battle_id = 1;
+  uint32 frame = 2;
+  bytes payload = 3;
+  uint32 hash_frame = 4;
+  uint64 hash = 5;
+  uint32 catchup_from = 6;
+}
+
+// roost:source=go_def
+message BattleInputResponse {
+  int32 code = 1;
+  string reason = 2;
+}
+
+// roost:source=go_def
+message ChatHistoryRequest {
+  string kind = 1;
+  int64 target = 2;
+  int64 after_seq = 3;
+  int32 limit = 4;
+}
+
+// roost:source=go_def
+message ChatHistoryResponse {
+  int32 code = 1;
+  string reason = 2;
+  repeated ChatMessagePush messages = 3;
+  int64 next_cursor = 4;
+  bool has_more = 5;
+}
+
+// roost:source=go_def
+message ChatMessagePush {
+  string kind = 1;
+  int64 target = 2;
+  int64 seq = 3;
+  int64 from_id = 4;
+  string from_name = 5;
+  string text = 6;
+  bool system = 7;
+}
+
+// roost:source=go_def
+message ClaimMailRequest {
+  string mail_id = 1;
+}
+
+// roost:source=go_def
+message ClaimMailResponse {
+  int32 code = 1;
+  string reason = 2;
+  int64 item_id = 3;
+  int32 count = 4;
+  int32 bag_count = 5;
+}
+
+// roost:source=go_def
+message EnterDungeonRequest {
+  string kind = 1;
+}
+
+// roost:source=go_def
+message EnterDungeonResponse {
+  int32 code = 1;
+  string reason = 2;
+  string run_id = 3;
+  string state = 4;
+  int64 deadline_unix = 5;
+}
+
+// roost:source=go_def
+message EnterGameRequest {
+  string client_version = 1;
+}
+
+// roost:source=go_def
+message EnterGameResponse {
+  int32 code = 1;
+  string reason = 2;
+  int64 player_id = 3;
+  bool created = 4;
+}
+
+// roost:source=go_def
+message EntitySyncPush {
+  bytes payload = 1;
+}
+
+// roost:source=go_def
+message EquipRequest {
+  int64 item_id = 1;
+}
+
+// roost:source=go_def
+message EquipResponse {
+  int32 code = 1;
+  string reason = 2;
+  int32 slot = 3;
+  int64 replaced = 4;
+}
+
+// roost:source=go_def
+message FinishDungeonRequest {
+  string run_id = 1;
+  bool success = 2;
+}
+
+// roost:source=go_def
+message FinishDungeonResponse {
+  int32 code = 1;
+  string reason = 2;
+  string state = 3;
+  string outcome = 4;
+  int64 exp_granted = 5;
+  int32 levels_gained = 6;
+  string activity_id = 7;
+}
+
+// roost:source=go_def
+message FoundGuildRequest {
+  string name = 1;
+}
+
+// roost:source=go_def
+message GiftStatusRequest {
+  string saga_id = 1;
+}
+
+// roost:source=go_def
+message GiftStatusResponse {
+  int32 code = 1;
+  string reason = 2;
+  string status = 3;
+  int32 step = 4;
+  string last_error = 5;
+}
+
+// roost:source=go_def
+message GuildInfoRequest {
+  int64 guild_id = 1;
+}
+
+// roost:source=go_def
+message GuildResponse {
+  int32 code = 1;
+  string reason = 2;
+  int64 guild_id = 3;
+  string name = 4;
+  int32 members = 5;
+  int32 served_by_sid = 6;
+}
+
+// roost:source=go_def
+message JoinGuildRequest {
+  int64 guild_id = 1;
+}
+
+// roost:source=go_def
+message JoinQueueRequest {
+  string mode = 1;
+}
+
+// roost:source=go_def
+message JoinQueueResponse {
+  int32 code = 1;
+  string reason = 2;
+  string ticket_id = 3;
+  string state = 4;
+}
+
+// roost:source=go_def
+message ListMailRequest {
+  string cursor = 1;
+  int32 limit = 2;
+}
+
+// roost:source=go_def
+message ListMailResponse {
+  int32 code = 1;
+  string reason = 2;
+  repeated MailEntry mails = 3;
+  string next_cursor = 4;
+  int32 unread = 5;
+}
+
+// roost:source=go_def
+message MailEntry {
+  string mail_id = 1;
+  string subject = 2;
+  string body = 3;
+  string status = 4;
+  bool has_attachment = 5;
+  bool claimable = 6;
+  int64 expires_at_unix = 7;
+}
+
+// roost:source=go_def
+message MatchFoundPush {
+  string match_id = 1;
+  repeated int64 members = 2;
+}
+
+// roost:source=go_def
+message MoveRequest {
+  int64 x = 1;
+  int64 y = 2;
+}
+
+// roost:source=go_def
+message MoveResponse {
+  int32 code = 1;
+  string reason = 2;
+  int64 x = 3;
+  int64 y = 4;
+}
+
+// roost:source=go_def
+message PollMatchRequest {
+  string ticket_id = 1;
+  string mode = 2;
+}
+
+// roost:source=go_def
+message PollMatchResponse {
+  int32 code = 1;
+  string reason = 2;
+  string state = 3;
+  string match_id = 4;
+  repeated int64 members = 5;
+}
+
+// roost:source=go_def
+message PurchaseRequest {
+  string product_id = 1;
+}
+
+// roost:source=go_def
+message PurchaseResponse {
+  int32 code = 1;
+  string reason = 2;
+  string order_id = 3;
+  int64 item_id = 4;
+  int32 count = 5;
+  int32 bag_count = 6;
+  bool delivered = 7;
+  bool replayed = 8;
+}
+
+// roost:source=go_def
+message RankTopEntry {
+  int64 rank = 1;
+  int64 player_id = 2;
+  int64 value = 3;
+}
+
+// roost:source=go_def
+message RankTopRequest {
+  int32 limit = 1;
+}
+
+// roost:source=go_def
+message RankTopResponse {
+  int32 code = 1;
+  string reason = 2;
+  repeated RankTopEntry entries = 3;
+  int64 my_rank = 4;
+  int64 total = 5;
+}
+
+// roost:source=go_def
+message SceneReadyRequest {
+}
+
+// roost:source=go_def
+message SceneReadyResponse {
+  int32 code = 1;
+  string reason = 2;
+}
+
+// roost:source=go_def
+message SendChatRequest {
+  string kind = 1;
+  int64 target = 2;
+  string text = 3;
+}
+
+// roost:source=go_def
+message SendChatResponse {
+  int32 code = 1;
+  string reason = 2;
+  int64 seq = 3;
+}
+
+// roost:source=go_def
+message SendGiftRequest {
+  int64 to_player_id = 1;
+  int64 item_id = 2;
+  int32 count = 3;
+}
+
+// roost:source=go_def
+message SendGiftResponse {
+  int32 code = 1;
+  string reason = 2;
+  string saga_id = 3;
+}
+
+// roost:source=go_def
+message SkillCatalogRequest {
+}
+
+// roost:source=go_def
+message SkillCatalogResponse {
+  int32 code = 1;
+  string reason = 2;
+  repeated string skills = 3;
+  int32 warnings = 4;
+}
+
+// roost:source=go_def
+message WorldStatsRequest {
+}
+
+// roost:source=go_def
+message WorldStatsResponse {
+  int32 code = 1;
+  string reason = 2;
+  int64 players_entered = 3;
+  int64 matches_formed = 4;
+  int64 exp_granted = 5;
+}
+

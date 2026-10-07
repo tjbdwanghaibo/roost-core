@@ -1,0 +1,154 @@
+package sceneruntime
+
+import (
+	"sync/atomic"
+	"testing"
+
+	"example.com/planet/game/scene"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+)
+
+type testScene struct{ id int64 }
+
+func (s testScene) ID() int64 { return s.id }
+
+func newTestRuntime(t *testing.T) *Runtime {
+	t.Helper()
+	runtime, err := New(testScene{id: 1}, scene.Config{Width: 20, Height: 20, BlockSize: 5})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("start runtime: %v", err)
+	}
+	t.Cleanup(func() { runtime.Stop(entity.DestroyReasonCommon) })
+	return runtime
+}
+
+// The map's edges are the map's business: a point outside it is not walkable,
+// whatever anybody else thinks.
+func TestTerrainRefusesWhatIsOutsideOrTaken(t *testing.T) {
+	runtime := newTestRuntime(t)
+	terrain := runtime.Terrain()
+
+	if !terrain.Walkable(spatial.Point{X: 0, Y: 0}) {
+		t.Error("the origin is inside a 20x20 map")
+	}
+	if terrain.Walkable(spatial.Point{X: 20, Y: 0}) {
+		t.Error("x=20 is outside a map of width 20")
+	}
+	if terrain.Walkable(spatial.Point{X: -1, Y: 0}) {
+		t.Error("a negative coordinate is outside the map")
+	}
+
+	wall := spatial.Point{X: 5, Y: 5}
+	if err := terrain.Occupy(wall); err != nil {
+		t.Fatalf("occupy: %v", err)
+	}
+	if terrain.Walkable(wall) {
+		t.Error("an occupied point is still walkable")
+	}
+	if err := terrain.Occupy(wall); err == nil {
+		t.Error("the same point was occupied twice")
+	}
+	terrain.Release(wall)
+	if !terrain.Walkable(wall) {
+		t.Error("a released point did not become walkable again")
+	}
+}
+
+// Place is what makes a login survive a map that changed while the player was
+// away: it answers with the NEAREST free point, not merely a free one.
+func TestPlaceFindsTheNearestFreePoint(t *testing.T) {
+	runtime := newTestRuntime(t)
+	terrain, pathFind := runtime.Terrain(), runtime.PathFind()
+
+	preferred := spatial.Point{X: 10, Y: 10}
+	if got, err := pathFind.Place(preferred); err != nil || got != preferred {
+		t.Fatalf("Place on a free point = %v, %v; want the point itself", got, err)
+	}
+	if err := terrain.Occupy(preferred); err != nil {
+		t.Fatal(err)
+	}
+	got, err := pathFind.Place(preferred)
+	if err != nil {
+		t.Fatalf("Place next to a taken point: %v", err)
+	}
+	if got == preferred {
+		t.Fatal("Place returned the point it was told is taken")
+	}
+	if dx, dy := got.X-preferred.X, got.Y-preferred.Y; dx < -1 || dx > 1 || dy < -1 || dy > 1 {
+		t.Errorf("Place returned %v, which is not adjacent to %v", got, preferred)
+	}
+}
+
+// A route exists around an obstacle and does not exist through a wall. The
+// second half is the one worth asserting: a pathfinder that answers "yes"
+// everywhere is a pathfinder nobody notices is broken.
+func TestPathRoutesAroundAndRefusesThrough(t *testing.T) {
+	runtime := newTestRuntime(t)
+	terrain, pathFind := runtime.Terrain(), runtime.PathFind()
+
+	from, to := spatial.Point{X: 0, Y: 10}, spatial.Point{X: 19, Y: 10}
+	if path, err := pathFind.Path(from, to); err != nil || len(path) == 0 {
+		t.Fatalf("open field path = %d points, %v", len(path), err)
+	}
+	// A wall across the whole map, with no gap.
+	for y := int64(0); y < 20; y++ {
+		if err := terrain.Occupy(spatial.Point{X: 10, Y: y}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if path, err := pathFind.Path(from, to); err == nil {
+		t.Fatalf("a path of %d points was found through a solid wall", len(path))
+	}
+}
+
+// Systems stop in reverse order and stay callable afterwards: a request that
+// found the scene a moment before it closed must get an error, not a panic.
+func TestStoppedSystemsAnswerInsteadOfPanicking(t *testing.T) {
+	runtime := newTestRuntime(t)
+	runtime.Stop(entity.DestroyReasonCommon)
+
+	if runtime.Terrain().Walkable(spatial.Point{X: 1, Y: 1}) {
+		t.Error("a stopped terrain reports a walkable point")
+	}
+	if err := runtime.Terrain().Occupy(spatial.Point{X: 1, Y: 1}); err == nil {
+		t.Error("a stopped terrain accepted an occupancy")
+	}
+	if _, err := runtime.PathFind().Place(spatial.Point{X: 1, Y: 1}); err == nil {
+		t.Error("a stopped pathfinder answered")
+	}
+}
+
+// RR-20261005-NC-270（N11 观察 O4）：Scene 的系统访问器“可以从任何地方调用”（Scene 实体注释：endpoint、
+// spawner 的定时器、AOI tick），场景关闭时可能有寻路正在进行。旧 PathFindSystem.Stop 无锁把 terrain 置
+// nil，与并发的 Path / Place 读同一字段是数据竞争（-race 报告），而且 Place 先判 nil 再用，两次读之间被置
+// nil 会解引用空指针。地形系统自带锁、停止后自己回答 “stopped”，寻路系统不需要清空这个指针。
+func TestPathFindingWhileTheSceneStopsIsSafe(t *testing.T) {
+	runtime := newTestRuntime(t)
+	pathFind := runtime.PathFind()
+	var stopped atomic.Bool
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = pathFind.Place(spatial.Point{X: 1, Y: 1})
+		close(started)
+		for {
+			_, _ = pathFind.Place(spatial.Point{X: 1, Y: 1})
+			_, _ = pathFind.Path(spatial.Point{X: 0, Y: 0}, spatial.Point{X: 3, Y: 3})
+			if stopped.Load() {
+				return
+			}
+		}
+	}()
+	<-started
+	runtime.Stop(entity.DestroyReasonCommon)
+	stopped.Store(true)
+	<-done
+	if _, err := pathFind.Place(spatial.Point{X: 1, Y: 1}); err == nil {
+		t.Error("a stopped pathfinder answered")
+	}
+}

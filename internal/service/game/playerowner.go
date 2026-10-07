@@ -1,0 +1,492 @@
+package Game
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	player "example.com/planet/game/entities/player"
+	lifecycle "example.com/planet/game/lifecycle"
+	"example.com/planet/game/settings"
+	apperrors "example.com/planet/internal/errors"
+	"example.com/planet/protocol/msgid"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// PlayerOwnerCapability is the name the ownership table is published under, so
+// an endpoint can reach it without importing this package.
+const PlayerOwnerCapability app.ModName = "game.playerowner"
+
+// PlayerOwners 记录本进程正在为哪些玩家服务（驻留表），并据此回答写准入、做闲置卸载。
+//
+// 前提是静态绑定（docs/feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md）：玩家建角时由 account
+// 绑定到一个 game sid（Role.ServerID），之后不迁移；同一 sid 同一时刻只有一个进程，崩溃重启时的
+// 短暂并存由 App 单实例锁处理（app.Singleton：任何 Mod Init 之前获取，失锁 fail-stop，见
+// docs/feature/APP-SINGLETON-LOCK-2026-10-05.md）。于是“同一玩家至多一个写者”就等于“只在玩家
+// 绑定的 sid 上为他服务”，不再需要按玩家的共享租约。本类型不感知那把锁，也不访问 Redis。
+//
+// 驻留记录只在通过绑定校验之后建立：登录走 Serve（会话 Claims 里 account 给出的 server_id），
+// 后台步骤走 AdmitBound（命令携带的 sid）。WriteGate 的 Admit 只看记录和卸载状态，所以“这个玩家
+// 是不是本服的”由“只有校验通过才会有记录”来保证，网关不需要知道 sid。
+//
+// 闲置卸载只是本地内存管理：没有连接、IdleUnload 内没被使用过的玩家，丢掉内存副本并删掉记录，
+// 不交出任何东西；之后在本进程重新装载，等待的是 DataEngine 冷加载已有的投影屏障。卸载进行中
+// Admit / AdmitBound 拒绝，Serve 等它结束再装载。
+//
+// 锁：mu 保护 residents 与 evictions，从不跨等待持有。Admit 在 Nest 快池上被调用，只做一次加锁读写。
+type PlayerOwners struct {
+	sid    int32
+	fencer sessionFencer
+	evict  residentEvictor
+	// evictWait 是 evictBudget；做成字段，测试不必真等五秒来证明等待有界。
+	evictWait time.Duration
+	now       func() time.Time
+	// onUnloadWait 在 Serve 开始等某个玩家的卸载时被调用。只给测试用：测试没有别的办法看到一个
+	// goroutine 停在等待上；进程里没有人设置它。
+	onUnloadWait func(playerID int64)
+	// afterUnloadDone 在 runEviction 关闭 done（唤醒等这次卸载的 Serve）之后被调用。只给测试用：
+	// 它让测试在“等待者已被唤醒”与“runEviction 返回”之间插入一次登录，钉住“删除记录必须在关闭
+	// done 之前”；进程里没有人设置它，测试在卸载开始之前设置。
+	afterUnloadDone func(playerID int64)
+
+	mu        sync.Mutex
+	residents map[int64]*resident
+	// evictions 是按玩家去重的在途卸载（单航班）：同一玩家同时至多一个，Serve 加入它而不是再起一个。
+	evictions map[int64]*eviction
+
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// resident 是本进程为之服务过的一个玩家：已经通过绑定校验，最近一次被使用是什么时候。
+type resident struct {
+	// lastUsed 是这个玩家最近一次被准入或接入服务的时间（Admit / AdmitBound / Serve）。只读的
+	// 查看（Resident）不算使用，否则被 matchmaker 看过一眼的玩家永远不会闲置。
+	lastUsed time.Time
+}
+
+// eviction 是一次在途卸载，所有等它的人共享同一个结果。
+type eviction struct {
+	done chan struct{}
+	err  error
+}
+
+// sessionFencer 是本进程到某个玩家的连接：有几条，以及怎样断开。
+//
+// 卸载用 ActiveSessions 判断玩家还在不在玩；停机用 CloseSessions 断开全部服务中的玩家。
+type sessionFencer interface {
+	CloseSessions(playerID int64, reason error) int
+	ActiveSessions(playerID int64) int
+}
+
+// residentEvictor 丢掉本进程内存里某个玩家的副本：离开场景、移出实体管理器。
+type residentEvictor interface {
+	// EvictPlayer 把玩家从本进程移除。玩家不在内存里时也必须安全；不能“删一半”，失败要返回错误：
+	// 调用方据此保留驻留记录，玩家继续在本进程服务。
+	EvictPlayer(ctx context.Context, playerID int64) error
+}
+
+// ErrNotServedHere 是写入路径在本进程此刻不为这个玩家服务时得到的错误：没有驻留记录（没登录到
+// 本服、或绑定在别的服），或者他的内存副本正在被卸载。
+var ErrNotServedHere = errors.New("player owners: this process is not serving the player right now")
+
+// IdleUnload 是一个玩家在本进程没有连接、也没有被使用多久之后，内存副本被卸载。
+//
+// 只关系到内存和重新装载的开销，不关系正确性：卸载不交出任何东西，下一次使用在本进程冷加载。
+const IdleUnload = 5 * time.Minute
+
+// unloadScanInterval 是卸载 goroutine 扫一次驻留表的间隔。
+const unloadScanInterval = 30 * time.Second
+
+// evictBudget 是调用方等一次卸载的上限，不是卸载本身的上限。
+//
+// 卸载最终走到 EntityManager.Destroy，它等实体的互斥锁、不看 context：实体上有事务，卸载就等着
+// 它。所以卸载在自己的 goroutine 上跑到结束，这里只限制“等多久”（RR-20260920-12）。等超时的调用方
+// 必须当作副本还在：卸载 goroutine 去处理下一个玩家，Serve 返回可重试的超时；卸载结束之前 Admit
+// 一直拒绝这个玩家（RR-20261004-11）。
+const evictBudget = 5 * time.Second
+
+// NewPlayerOwners 用本进程配置里的 sid 建驻留表。
+func NewPlayerOwners(registry *app.Registry) (*PlayerOwners, error) {
+	identity, err := settings.Identity(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player owners: %w", err)
+	}
+	sid := identity.Sid
+	if sid <= 0 {
+		return nil, fmt.Errorf("player owners: sid is %d; a game process serves the players bound to its sid and needs one", sid)
+	}
+	return newPlayerOwners(sid, nil, time.Now), nil //glsvet:system-clock residency and idle unload are leases (D-L3)
+}
+
+// newPlayerOwners 是测试构造的入口。
+func newPlayerOwners(sid int32, fencer sessionFencer, now func() time.Time) *PlayerOwners {
+	if now == nil {
+		now = time.Now //glsvet:system-clock residency and idle unload are leases (D-L3)
+	}
+	return &PlayerOwners{
+		sid: sid, fencer: fencer, now: now, evictWait: evictBudget,
+		residents: map[int64]*resident{},
+		evictions: map[int64]*eviction{},
+	}
+}
+
+// Evict 设置丢掉玩家副本的实现。和 Fence 一样与构造分开：场景和实体运行时在驻留表之后才起来。
+// 没有它就不卸载任何玩家（内存多占一些，但不会出错）。
+func (owners *PlayerOwners) Evict(evictor residentEvictor) {
+	if owners == nil {
+		return
+	}
+	owners.mu.Lock()
+	owners.evict = evictor
+	owners.mu.Unlock()
+}
+
+// Fence 设置本进程的连接（玩家 TCP Runtime）。与构造分开，因为传输层在驻留表之后才起来。没有它
+// 就不卸载任何玩家：不知道玩家有没有连接，就不能说他闲置。
+func (owners *PlayerOwners) Fence(fencer sessionFencer) {
+	if owners == nil {
+		return
+	}
+	owners.mu.Lock()
+	owners.fencer = fencer
+	owners.mu.Unlock()
+}
+
+// SID 是本进程的 sid，也就是本进程服务的玩家绑定的那个 sid。
+func (owners *PlayerOwners) SID() int32 {
+	if owners == nil {
+		return 0
+	}
+	return owners.sid
+}
+
+// Serve 是登录时把玩家接入本进程服务：boundSID 是 account 校验会话时给出的角色 ServerID。
+//
+// 三种结果：
+//   - boundSID 不是本进程的 sid（含 0，即不知道绑定在哪）：返回 ErrPlayerElsewhere（owner_sid=boundSID），
+//     不建记录、不装载。玩家只能在自己绑定的服上服务，客户端改连那个服，不要在本服重试。
+//   - 这个玩家的内存副本正在被卸载，并且在 evictWait 或 ctx 之内没有结束：返回包着
+//     context.DeadlineExceeded / ctx 错误的错误，登录回 login_timeout，客户端重试；记录不变。
+//   - 否则建立或刷新驻留记录（算一次使用），返回 nil，调用方随后装载实体。
+//
+// 等卸载是因为卸载会把副本连同场景成员关系一起拿走：先装载、再被卸载拿走，玩家就在一条打开的
+// 连接上没有了实体。它在登录连接的 goroutine 上等，不在 Nest worker 上。
+func (owners *PlayerOwners) Serve(ctx context.Context, playerID int64, boundSID int32) error {
+	if owners == nil {
+		return nil
+	}
+	if boundSID != owners.sid {
+		return errcode.Wrap(apperrors.ErrPlayerElsewhere, nil, "player_id", playerID, "owner_sid", boundSID)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	budget := time.NewTimer(owners.evictWait)
+	defer budget.Stop()
+	for {
+		owners.mu.Lock()
+		inFlight, unloading := owners.evictions[playerID]
+		if !unloading {
+			owners.touchLocked(playerID)
+			owners.mu.Unlock()
+			return nil
+		}
+		parked := owners.onUnloadWait
+		owners.mu.Unlock()
+		if parked != nil {
+			parked(playerID)
+		}
+		select {
+		case <-inFlight.done:
+			// 卸载结束（成功时记录已随它删掉，失败时记录还在）；回到循环开头重新判断。
+		case <-budget.C:
+			return fmt.Errorf("player owners: player %d is still being unloaded after %s: %w", playerID, owners.evictWait, context.DeadlineExceeded)
+		case <-ctx.Done():
+			return fmt.Errorf("player owners: waiting for player %d to be unloaded: %w", playerID, ctx.Err())
+		}
+	}
+}
+
+// AdmitBound 是后台工作（赠礼步骤之类）的准入：boundSID 是命令里携带的玩家绑定的 sid。
+//
+// local=false 表示玩家不是本服的，调用方把工作交给 boundSID 那个服；local=true 且 err=nil 表示
+// 已建立或刷新驻留记录（算一次使用），可以在本进程执行；local=true 且 err!=nil 表示玩家是本服的、
+// 但副本正在卸载，调用方拒绝这一次（消息重投），不转交。不阻塞，可以在任何 goroutine 上调用。
+func (owners *PlayerOwners) AdmitBound(playerID int64, boundSID int32) (bool, error) {
+	if owners == nil {
+		return true, nil
+	}
+	if boundSID != owners.sid {
+		return false, nil
+	}
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	if _, unloading := owners.evictions[playerID]; unloading {
+		return true, fmt.Errorf("%w: player %d, the copy is being unloaded", ErrNotServedHere, playerID)
+	}
+	owners.touchLocked(playerID)
+	return true, nil
+}
+
+// touchLocked 建立或刷新玩家的驻留记录，记一次使用。调用方持有 mu，并且已经确认绑定在本服。
+func (owners *PlayerOwners) touchLocked(playerID int64) {
+	state := owners.residents[playerID]
+	if state == nil {
+		state = &resident{}
+		owners.residents[playerID] = state
+	}
+	state.lastUsed = owners.now()
+}
+
+// Admit 是写准入：本进程此刻能不能在这个玩家身上开始一个新事务？
+//
+// 只看本地状态：有驻留记录，并且副本没有在卸载。放行算一次使用，正在干活的玩家因此不会被卸载。
+// 只加一次锁，不阻塞（快池上调用）。
+func (owners *PlayerOwners) Admit(playerID int64) error {
+	if owners == nil {
+		// 没有驻留表：单进程部署，每个玩家都是本进程的。
+		return nil
+	}
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	state := owners.residents[playerID]
+	if state == nil {
+		return fmt.Errorf("%w: player %d has not been taken into service here", ErrNotServedHere, playerID)
+	}
+	if _, unloading := owners.evictions[playerID]; unloading {
+		// 写进去的东西会落在一个马上被销毁的实体上（RR-20261004-11）。卸载结束后：成功则记录已删，
+		// 下一次使用重新接入；失败则记录还在，从那一刻起照常放行。
+		return fmt.Errorf("%w: player %d, the copy is being unloaded", ErrNotServedHere, playerID)
+	}
+	state.lastUsed = owners.now()
+	return nil
+}
+
+// AdmitMessage 是接入边界的闸门（accessplayer.WriteGate）：本进程能不能处理这个请求？
+//
+// 登录豁免：它就是建立驻留记录的那条消息（Serve 在里面做绑定校验）。其余消息一律按 Admit 判，
+// 这样以后新增的端点也被覆盖，检查因此放在这里而不是每个 handler 里。
+func (owners *PlayerOwners) AdmitMessage(playerID int64, messageID uint32) error {
+	if owners == nil {
+		return nil
+	}
+	if messageID == msgid.MsgEnterGame {
+		return nil
+	}
+	return owners.Admit(playerID)
+}
+
+// Resident 只读地回答“这个玩家此刻在本进程服务吗”：有驻留记录，并且副本没有在卸载。
+// 不算使用、不建记录；给只决定要不要处理别人放进共享队列的工作的调用方用（matchmaker）。
+func (owners *PlayerOwners) Resident(playerID int64) bool {
+	if owners == nil {
+		return true
+	}
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	if owners.residents[playerID] == nil {
+		return false
+	}
+	_, unloading := owners.evictions[playerID]
+	return !unloading
+}
+
+// CloseServedSessions 断开本进程服务中的全部玩家的连接，返回断开的条数。
+//
+// 停机（包括失锁、DataEngine fatal 之类的 fail-stop）时由 Service.Shutdown 第一个调用：进程要退出了，
+// 连接不能留在一个已经不再处理请求的进程上，客户端重连到接替的进程（RR-20260930-23 的承诺在
+// App 单实例锁之下的形态）。只有经过 Serve 的玩家能在本进程做事，所以断开有驻留记录的玩家就覆盖了
+// 所有能做事的连接；其余连接随传输层 Mod 停止关闭。连接在锁外关闭：关闭会触发会话关闭事件。
+func (owners *PlayerOwners) CloseServedSessions(reason error) int {
+	if owners == nil {
+		return 0
+	}
+	owners.mu.Lock()
+	fencer := owners.fencer
+	served := make([]int64, 0, len(owners.residents))
+	for playerID := range owners.residents {
+		served = append(served, playerID)
+	}
+	owners.mu.Unlock()
+	if fencer == nil {
+		return 0
+	}
+	closed := 0
+	for _, playerID := range served {
+		closed += fencer.CloseSessions(playerID, reason)
+	}
+	return closed
+}
+
+// Start 启动卸载 goroutine。它只做闲置卸载，别的什么都不做。
+func (owners *PlayerOwners) Start(ctx context.Context) {
+	if owners == nil {
+		return
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	owners.cancel, owners.done = cancel, make(chan struct{})
+	go owners.unloadLoop(loopCtx)
+}
+
+// Stop 停止卸载 goroutine 并等它返回。正在跑的卸载不被打断（它不看 context），只是不再等它。
+func (owners *PlayerOwners) Stop() {
+	if owners == nil || owners.cancel == nil {
+		return
+	}
+	owners.cancel()
+	<-owners.done
+	owners.cancel = nil
+}
+
+func (owners *PlayerOwners) unloadLoop(ctx context.Context) {
+	defer close(owners.done)
+	ticker := time.NewTicker(unloadScanInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		owners.unloadIdle(ctx)
+	}
+}
+
+// unloadIdle 是一轮闲置卸载，单独拆出来，测试可以不等 ticker 直接驱动。
+//
+// 选中的条件：没有连接、IdleUnload 内没被使用、没有在卸载。逐个处理，每个最多等 evictWait；等超时的
+// 卸载在后台继续，这一轮去处理下一个玩家。
+func (owners *PlayerOwners) unloadIdle(ctx context.Context) {
+	owners.mu.Lock()
+	sessions, evictor := owners.fencer, owners.evict
+	now := owners.now()
+	var idle []int64
+	if sessions != nil && evictor != nil {
+		for playerID, state := range owners.residents {
+			if _, unloading := owners.evictions[playerID]; !unloading && now.Sub(state.lastUsed) >= IdleUnload {
+				idle = append(idle, playerID)
+			}
+		}
+	}
+	owners.mu.Unlock()
+	for _, playerID := range idle {
+		if ctx.Err() != nil {
+			return
+		}
+		owners.unloadOne(ctx, sessions, evictor, playerID)
+	}
+}
+
+// unloadOne 卸载一个闲置的玩家。
+//
+// 连接数在锁外问（传输层有自己的锁），并且在标记之前问。标记时在锁内重新确认仍然闲置：在两者之间
+// 登录的玩家，Serve 已经刷新了 lastUsed，这里就放过他；标记之后才到的登录加入这次卸载，结束后重新装载。
+func (owners *PlayerOwners) unloadOne(ctx context.Context, sessions sessionFencer, evictor residentEvictor, playerID int64) {
+	if sessions.ActiveSessions(playerID) > 0 {
+		return
+	}
+	owners.mu.Lock()
+	state := owners.residents[playerID]
+	_, unloading := owners.evictions[playerID]
+	if state == nil || unloading || owners.now().Sub(state.lastUsed) < IdleUnload {
+		owners.mu.Unlock()
+		return
+	}
+	inFlight := &eviction{done: make(chan struct{})}
+	owners.evictions[playerID] = inFlight
+	wait := owners.evictWait
+	owners.mu.Unlock()
+	go owners.runEviction(evictor, playerID, inFlight)
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-inFlight.done:
+		if inFlight.err != nil {
+			slog.Warn("player owners: idle player kept in service because its copy could not be dropped", "player_id", playerID, "err", inFlight.err)
+			return
+		}
+		slog.Info("player owners: idle player unloaded", "player_id", playerID)
+	case <-timer.C:
+		slog.Warn("player owners: unloading an idle player is taking longer than the wait; it continues in the background", "player_id", playerID, "wait", wait)
+	case <-ctx.Done():
+	}
+}
+
+// runEviction 执行一次卸载，并把结果交给所有等它的人。
+//
+// 用 Background context：它最终走到的 Destroy 不看 context（见 evictBudget），传截止时间只是一个
+// 没人兑现的承诺。成功时驻留记录在关闭 done 之前、同一个临界区里删除：卸载进行中没有人能改这条记录
+// （Serve 在等，Admit / AdmitBound 拒绝），而 done 关闭之后醒来的 Serve 建的是一条新记录，不会被这里删掉。
+func (owners *PlayerOwners) runEviction(evictor residentEvictor, playerID int64, in *eviction) {
+	in.err = evictor.EvictPlayer(context.Background(), playerID)
+	owners.mu.Lock()
+	if owners.evictions[playerID] == in {
+		delete(owners.evictions, playerID)
+	}
+	if in.err == nil {
+		delete(owners.residents, playerID)
+	}
+	owners.mu.Unlock()
+	close(in.done)
+	if hook := owners.afterUnloadDone; hook != nil {
+		hook(playerID)
+	}
+}
+
+// playerEvictor is the demo's answer to "drop this process's copy of a
+// player": off the scene, then out of the entity manager.
+//
+// The order matters. The room holds the subject's sync state, so a player
+// destroyed while still registered would leave the room pointing at a dead
+// entity; Scene.Leave unsubscribes the watchers, retires the subject and
+// unregisters it, which is the same path a logout takes.
+//
+// It does NOT delete anything persisted: the document is the authority and is
+// exactly what the next load must read. Evicting is forgetting, not deleting.
+type playerEvictor struct {
+	scene   *Scene
+	players *lifecycle.PlayerLifecycle
+	manager *coreentity.EntityManager
+}
+
+func (evictor playerEvictor) EvictPlayer(ctx context.Context, playerID int64) error {
+	if evictor.players == nil || evictor.manager == nil {
+		return fmt.Errorf("player evictor: not assembled")
+	}
+	subjectID, err := coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return err
+	}
+	if evictor.scene != nil {
+		evictor.scene.Leave(ctx, subjectID)
+	}
+	// Resident only. Asking the lifecycle would LOAD the player in order to
+	// destroy them, which is a database read and a second copy to answer a
+	// question about the first one.
+	resident := evictor.manager.GetWithCategory(subjectID, coreentity.MustEntityCategoryOfKind(player.EntityKindPlayer))
+	if resident == nil {
+		return nil
+	}
+	typed, ok := resident.(*player.Player)
+	if !ok {
+		return fmt.Errorf("player evictor: entity %d is a %T", subjectID, resident)
+	}
+	err = evictor.players.Destroy(ctx, typed, coreentity.DestroyReasonCommon, false)
+	switch {
+	case err == nil, errors.Is(err, coreentity.ErrEntityRemoved), errors.Is(err, coreentity.ErrEntityNotManaged):
+		// Already gone, by this call or by another one. The postcondition —
+		// this process has no copy — holds either way.
+		return nil
+	default:
+		return err
+	}
+}
+
+var _ residentEvictor = playerEvictor{}

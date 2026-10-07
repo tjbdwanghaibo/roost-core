@@ -1,0 +1,261 @@
+package world
+
+import (
+	"fmt"
+	"log/slog"
+	"time"
+
+	db "example.com/planet/db"
+	"example.com/planet/game/effects"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/timer"
+)
+
+//roost:component type=2006
+const CompTypeTimer entity.ComponentType = 2006
+
+// Timer types. The type is what finds the handler again after a restart: a
+// stored node cannot carry a function, so it carries a number that this
+// package maps back to one.
+const (
+	// TimerTypeActivityPhase: the activity window whose id is in Payload has
+	// reached its close phase.
+	TimerTypeActivityPhase int32 = 1
+)
+
+// activityPhaseRetry is how long a phase timer waits before trying again when
+// it could not record its effect.
+const activityPhaseRetry = 30 * time.Second
+
+// overdueDeadlineDelay arms a deadline that is already due. The scheduler
+// refuses a delay that is not positive, so "due now" is armed this far ahead
+// of the transaction's time and fires on the next tick. One millisecond is
+// the resolution the node is stored at.
+const overdueDeadlineDelay = time.Millisecond
+
+// TimerComponent is the World's scheduler: deadlines that belong to the
+// server rather than to a player.
+//
+// Three things make it different from a `time.AfterFunc` in the process:
+//
+//   - **It survives a restart.** The deadlines are the DAO's Timers map and
+//     nothing else, so "close the activity at 20:00" is still due after a
+//     deploy at 19:58. An in-process timer loses every pending deadline with
+//     the process, and loses it silently.
+//   - **It fires inside the transaction.** Tick runs under the World's Nest
+//     lock, so what a handler changes and the removal of the node it fired
+//     are one WAL record. A timer that fired and a state change that did not
+//     is the shape that pays a reward twice after a crash.
+//   - **A handler does no I/O.** It records an EFFECT and returns; the effect
+//     rides the same transaction to the outbox and a consumer makes the bus
+//     call. Calling another service from inside an entity lock is how one
+//     slow service stops a whole process.
+//
+// It keeps no schedule of its own (A1, docs/feature/REFACTOR-2026-10-05-
+// dao-unified-rollback.md: state a transaction changes lives in the DAO).
+// Arming and firing build a timer.Scheduler from the stored nodes for that
+// one call; its change hook writes every add, fire and removal back to the
+// DAO, and the scheduler is dropped. The only derived value, the earliest
+// deadline, is the nopersist DAO field timer_next_due, so the once-a-second
+// tick that finds nothing due reads one number and builds nothing. A handler
+// that fails, or whose commit is refused, rolls the nodes, the seed and that
+// number back together — Nest's rollback of the DAO is the whole of it, and
+// there is no undo to register here. Before this the heap lived in the
+// component and every path had to copy it into the transaction by hand
+// (RR-20261005-NC-140).
+//
+// Order: deadlines due at the same moment fire by priority (lower first,
+// default 0), then in the order they were armed — the node id, which the
+// scheduler compares, not the map order the nodes are rebuilt in (D-L1). A
+// timer type that must fire before or after others at the same moment arms
+// with scheduler.NewTimerWithPriority; the activity phase has no such need
+// and arms at 0.
+//
+// A stored node whose type has no handler in this build (a type that was
+// removed) is reported once per type when the World loads, and dropped with
+// a warning and timer.unhandled_dropped_total{kind} when it comes due (D-L2):
+// keeping it would leave it at the top of the heap forever.
+type TimerComponent struct {
+	entity.ComponentBase
+	owner *World
+}
+
+// ITimerEntity is the narrow lock-safe view for Nest handlers using this
+// component.
+type ITimerEntity interface {
+	entity.IThreadSafeEntity
+	TimerComp() *TimerComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeTimer, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*World)
+		if !ok {
+			return nil, fmt.Errorf("timer component: owner %T is not *World", owner)
+		}
+		return &TimerComponent{owner: typed}, nil
+	})
+}
+
+func (component *TimerComponent) Name() string { return "timer" }
+
+func (component *TimerComponent) Owner() *World { return component.owner }
+
+// OnInitFinish derives timer_next_due from the stored nodes: it is nopersist,
+// so the stored document does not bring it back. It runs after the DAO is
+// attached and before anything can call Tick, which is the only order in
+// which a restored deadline is not briefly invisible. It also warns, once per
+// type, about stored nodes no handler in this build can fire (D-L2).
+//
+// Nothing is armed or fired here, so the scheduler's clock is never read.
+// Building it writes nothing, and writing a nopersist field marks nothing for
+// storage, so a load does not produce a save of state that did not change.
+func (component *TimerComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
+	scheduler := component.scheduler(time.Time{})
+	scheduler.ReportUnhandledTypes()
+	component.settle(scheduler)
+	return nil
+}
+
+// scheduler builds the World's schedule from the DAO for one call, reading
+// the caller's time. Both entry points already carry the moment they act at
+// — the tick carries the tick's time, arming carries the transaction's — and
+// letting the scheduler read time.Now() inside them would date a deadline by
+// when the entity's lock happened to be acquired rather than by the tick that
+// armed it. Pinned, the World's schedule is a function of what it was told,
+// which is also what makes it testable without waiting.
+//
+// Only typed timers can be stored (a closure is not data), so only typed
+// timers are armed here.
+func (component *TimerComponent) scheduler(now time.Time) *timer.Scheduler {
+	dao := component.owner.Dao()
+	saved := make([]timer.Node, 0, dao.TimersLen())
+	dao.RangeTimers(func(id int64, stored *db.TimerNode) bool {
+		if stored == nil {
+			return true
+		}
+		saved = append(saved, timer.Node{
+			ID: id, Type: stored.GetType(), Priority: stored.GetPriority(),
+			Param1: stored.GetParam1(), Param2: stored.GetParam2(),
+			Payload: []byte(stored.GetPayload()),
+			End:     time.UnixMilli(stored.GetEndUnixMilli()),
+			Delay:   time.Duration(stored.GetDelayMillis()) * time.Millisecond,
+		})
+		return true
+	})
+	scheduler := timer.NewScheduler(component.owner.ID(), dao.GetTimerSeed(), saved, component.persist)
+	scheduler.RegisterHandler(TimerTypeActivityPhase, component.onActivityPhase)
+	scheduler.SetClock(func() time.Time { return now })
+	return scheduler
+}
+
+// settle records the earliest deadline the scheduler is left with.
+func (component *TimerComponent) settle(scheduler *timer.Scheduler) {
+	next := int64(0)
+	if due := scheduler.NextTime(); !due.IsZero() {
+		next = due.UnixMilli()
+	}
+	component.owner.Dao().SetTimerNextDue(next)
+}
+
+// persist is the scheduler's change hook: every add, fire and removal comes
+// through here and lands in the DAO. It runs inside whatever transaction
+// moved the scheduler, so there is no separate "save the timers" step that
+// could be skipped.
+func (component *TimerComponent) persist(change timer.ChangeType, node timer.Node) {
+	dao := component.owner.Dao()
+	if change == timer.ChangeDelete {
+		dao.DelTimers(node.ID)
+		return
+	}
+	stored := &db.TimerNode{}
+	stored.SetType(node.Type)
+	stored.SetPriority(node.Priority)
+	stored.SetParam1(node.Param1)
+	stored.SetParam2(node.Param2)
+	stored.SetPayload(string(node.Payload))
+	stored.SetEndUnixMilli(node.End.UnixMilli())
+	stored.SetDelayMillis(node.Delay.Milliseconds())
+	dao.SetTimers(node.ID, stored)
+	// The seed is stored so a restart cannot mint an id a stored node already
+	// holds — two nodes with one id is one deadline silently replacing another.
+	if node.ID > dao.GetTimerSeed() {
+		dao.SetTimerSeed(node.ID)
+	}
+}
+
+// ScheduleActivityPhase arms the close deadline for one activity window, and
+// reports whether this call is the one that armed it.
+//
+// It is idempotent per activity id: every game process that loads this World
+// tries to arm the current window, and a second node for the same window
+// would fire the phase twice. (Firing twice is survivable — NotifyPhase is
+// idempotent per game sid — but a schedule that grows by one node per restart
+// is not.)
+func (component *TimerComponent) ScheduleActivityPhase(activityID string, at time.Time, now time.Time) (int64, bool) {
+	if activityID == "" {
+		return 0, false
+	}
+	if id, armed := component.PendingActivityPhase(activityID); armed {
+		return id, false
+	}
+	delay := at.Sub(now)
+	if delay <= 0 {
+		// Already due: arm it for the next tick rather than refusing, so a
+		// process that starts after the deadline still closes the window.
+		// Not zero: the scheduler refuses a non-positive delay and returns no
+		// node, which used to be reported here as armed (RR-20261005-NC-142).
+		delay = overdueDeadlineDelay
+	}
+	scheduler := component.scheduler(now)
+	id := scheduler.NewTimer(delay, TimerTypeActivityPhase, 0, 0, []byte(activityID))
+	component.settle(scheduler)
+	return id, id != 0
+}
+
+// PendingActivityPhase reports the node armed for an activity, if any.
+func (component *TimerComponent) PendingActivityPhase(activityID string) (int64, bool) {
+	found := int64(0)
+	component.owner.Dao().RangeTimers(func(id int64, stored *db.TimerNode) bool {
+		if stored != nil && stored.GetType() == TimerTypeActivityPhase && stored.GetPayload() == activityID {
+			found = id
+			return false
+		}
+		return true
+	})
+	return found, found != 0
+}
+
+// Tick fires everything due at now and returns how many nodes remain.
+//
+// The tick that finds nothing due — almost every tick — reads
+// timer_next_due and returns: no scheduler is built and nothing is written.
+func (component *TimerComponent) Tick(now time.Time) int {
+	dao := component.owner.Dao()
+	if next := dao.GetTimerNextDue(); next == 0 || now.UnixMilli() < next {
+		return dao.TimersLen()
+	}
+	scheduler := component.scheduler(now)
+	scheduler.Tick(now)
+	component.settle(scheduler)
+	return dao.TimersLen()
+}
+
+// onActivityPhase records the phase effect and retires the node.
+//
+// The return value is the retry: zero means "done, remove me", and a duration
+// means "come back then". That is how a failed Emit is handled — the node
+// stays and the window is closed late — rather than by logging and losing the
+// only thing that would have closed it.
+func (component *TimerComponent) onActivityPhase(ctx timer.Context) time.Duration {
+	activityID := string(ctx.Node.Payload)
+	if activityID == "" {
+		return 0
+	}
+	if err := effects.EmitActivityPhaseDue(activityID); err != nil {
+		slog.Error("world timer: activity phase effect not recorded; retrying",
+			"activity_id", activityID, "retry_in", activityPhaseRetry, "err", err)
+		return activityPhaseRetry
+	}
+	return 0
+}

@@ -1,0 +1,257 @@
+package player
+
+import (
+	"fmt"
+
+	generated "example.com/planet/configs/generated"
+	gameattr "example.com/planet/game/gameplay/attribute"
+	coreattr "github.com/tjbdwanghaibo/roost-core/attribute"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+//roost:component type=2003
+const CompTypeAttribute entity.ComponentType = 2003
+
+// Gear is the layer the bag contributes: every item the player holds adds its
+// configured attack. Base and Final are the framework's two named layers;
+// this is the demo's one game-specific layer, and naming it here is the whole
+// of "deciding what the layers mean".
+var Gear = coreattr.Selector{Layer: "gear"}
+
+// AttributeComponent is the player's attributes, and it holds none of them.
+//
+// The composition rule, which is the part a project has to decide for itself:
+//
+//	Final = Base + Gear, per attribute, then Update()
+//
+// Two things follow from writing it that way. Derived attributes are computed
+// ONCE, on the composed values — composing the layers' own Power would add up
+// two ratings that were each derived from half the inputs, which is not what
+// "power" means. And the composition is a pure function of the layers, so it
+// can be redone at any time: that is why Final is never persisted.
+//
+// Where the layers live is the other decision, and it is the framework's rule
+// rather than this game's: state a transaction changes lives in the DAO
+// (A1, docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md). Base is
+// attr_base (stored and replicated), Gear is attr_gear (nopersist,nosync) and
+// Final is attr_final (nopersist,sync). This component reads them and writes
+// them through the generated mutators, and keeps nothing between calls. So a
+// handler that fails, or whose commit is refused, takes the layers back with
+// the level and the equipment they were computed from — Nest's rollback of
+// the DAO is the whole of it, under rollback=undo and rollback=state alike,
+// and there is no undo to register here. Before this, the layers were a
+// container in this component and each path had to copy it into the
+// transaction by hand (RR-20261005-NC-61) and rebuild it on load
+// (RR-20261005-NC-65).
+//
+// The derived layers (Gear, Final) are written by one function, derive, from
+// two places: when the player is built (they are nopersist, so the stored
+// document does not bring them back) and in the transaction that changes
+// what they are derived from. A config reload that reprices items is the
+// second kind: the next RefreshGear picks it up. A rollback is neither: it
+// restores the derived values with everything else.
+//
+// What the demo does not model: a layer that expires. A real buff layer needs
+// a clock and a sweep, and the honest place for that is a component method
+// called from a tick, not a lazy check inside a getter.
+type AttributeComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+
+// IAttributeEntity is the narrow lock-safe view for Nest handlers.
+type IAttributeEntity interface {
+	entity.IThreadSafeEntity
+	AttributeComp() *AttributeComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeAttribute, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("attribute component: owner %T is not *Player", owner)
+		}
+		return &AttributeComponent{owner: typed}, nil
+	})
+}
+
+func (component *AttributeComponent) Name() string { return "attribute" }
+
+func (component *AttributeComponent) Owner() *Player { return component.owner }
+
+// OnInitFinish derives the layers that are not stored. The generated builder
+// attaches the DAO before it initializes components, so attr_base and the
+// equipment are already here; attr_gear and attr_final are nopersist and are
+// not. Only nopersist fields are written: their setters mark nothing for
+// storage, so a load needs no transaction and produces no save
+// (RR-20261005-NC-65: before, a player wearing a sword came back from a
+// restart with Final = Base).
+func (component *AttributeComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
+	component.derive()
+	return nil
+}
+
+// Container is the layered view, built from the DAO for this call: Base,
+// Gear and Final as copies. Changing it changes nothing; attributes move
+// through LevelUp and RefreshGear.
+func (component *AttributeComponent) Container() *coreattr.Container {
+	dao := component.owner.Dao()
+	container := coreattr.NewContainer()
+	container.Install(coreattr.Base, component.baseAt(dao.GetLevel()))
+	container.Install(Gear, combatFrom(dao.RangeAttrGear))
+	container.Install(coreattr.Final, combatFrom(dao.RangeAttrFinal))
+	return container
+}
+
+// Final is the composed profile, as a copy: safe to read after the lock is
+// released, which a snapshot is exactly for.
+func (component *AttributeComponent) Final() (*gameattr.Combat, bool) {
+	dao := component.owner.Dao()
+	if dao.AttrFinalLen() == 0 {
+		return nil, false
+	}
+	return combatFrom(dao.RangeAttrFinal), true
+}
+
+// LevelUp raises the base layer by levels and recomposes. It is the attribute
+// half of ProfileComponent.AddExp, which has already moved the DAO's level
+// by levels when it calls this: the level is the DAO's, the numbers that
+// follow from it are the attributes'.
+func (component *AttributeComponent) LevelUp(levels int32) {
+	if levels <= 0 {
+		return
+	}
+	dao := component.owner.Dao()
+	base := component.baseAt(dao.GetLevel() - levels)
+	base.LevelUp(levels)
+	writeAttrs(base, dao.RangeAttrBase, dao.SetAttrBase, dao.DelAttrBase)
+	component.recompose()
+	component.owner.PublishSyncDirty()
+}
+
+// RefreshGear recomputes the gear layer from what the player is WEARING.
+// Called after the equipment changes: the layer is a projection of the worn
+// set, so it is rebuilt rather than patched — a patch would need to know what
+// was worn before. It also stores the base layer, so a player whose base was
+// still the bare level curve has it written down from here on.
+func (component *AttributeComponent) RefreshGear() {
+	if !component.writeGear() {
+		return
+	}
+	dao := component.owner.Dao()
+	writeAttrs(component.baseAt(dao.GetLevel()), dao.RangeAttrBase, dao.SetAttrBase, dao.DelAttrBase)
+	component.recompose()
+	component.owner.PublishSyncDirty()
+}
+
+// derive writes the two derived layers from what they are derived from: Gear
+// from the worn set, Final from Base and Gear.
+func (component *AttributeComponent) derive() {
+	component.writeGear()
+	component.recompose()
+}
+
+// writeGear prices the worn set into attr_gear and reports whether it moved.
+func (component *AttributeComponent) writeGear() bool {
+	gear := &gameattr.Combat{}
+	attack, hp := component.wornGear()
+	gear.SetAttack(attack)
+	gear.SetHP(hp)
+	gear.Update()
+	dao := component.owner.Dao()
+	return writeAttrs(gear, dao.RangeAttrGear, dao.SetAttrGear, dao.DelAttrGear)
+}
+
+// wornGear sums what the worn pieces are worth in the item table: from what is
+// WORN, not from the whole bag — carrying a sword in the bag should not make a
+// player stronger, and the earlier version of this counted every stack (there
+// was nowhere else to read equipment from). It reads the config snapshot
+// pinned to the current request, so every piece is priced by the same table.
+func (component *AttributeComponent) wornGear() (attack, hp int64) {
+	component.owner.EquipmentComp().RangeWorn(func(_ int32, itemID int64, level int32) bool {
+		item, found := generated.ItemByID(itemID)
+		if !found {
+			return true
+		}
+		attack += item.Attack * int64(level)
+		hp += item.HP * int64(level)
+		return true
+	})
+	return attack, hp
+}
+
+// baseAt is the base layer: attr_base, or — for a player whose base was
+// never written — the level curve at level.
+func (component *AttributeComponent) baseAt(level int32) *gameattr.Combat {
+	dao := component.owner.Dao()
+	if dao.AttrBaseLen() == 0 {
+		return gameattr.ForLevel(level)
+	}
+	return combatFrom(dao.RangeAttrBase)
+}
+
+// recompose rebuilds Final from Base and Gear and hands it to replication.
+func (component *AttributeComponent) recompose() {
+	dao := component.owner.Dao()
+	sum := make(map[coreattr.AttrID]coreattr.AttrValue)
+	for _, layer := range []*gameattr.Combat{component.baseAt(dao.GetLevel()), combatFrom(dao.RangeAttrGear)} {
+		values := make(map[coreattr.AttrID]coreattr.AttrValue)
+		layer.ExportValues(values)
+		for id, value := range values {
+			// Derived attributes are recomputed below from the composed
+			// inputs, so a layer's own derived value is deliberately ignored.
+			if meta, ok := layer.MetaByID(id); ok && meta.Derived {
+				continue
+			}
+			sum[id] += value
+		}
+	}
+	final := &gameattr.Combat{}
+	final.LoadValues(sum)
+	writeAttrs(final, dao.RangeAttrFinal, dao.SetAttrFinal, dao.DelAttrFinal)
+}
+
+// combatFrom reads one attribute map of the DAO into a profile.
+func combatFrom(rangeFn func(func(int32, int64) bool)) *gameattr.Combat {
+	values := make(map[coreattr.AttrID]coreattr.AttrValue)
+	rangeFn(func(id int32, value int64) bool {
+		values[coreattr.AttrID(id)] = coreattr.AttrValue(value)
+		return true
+	})
+	profile := &gameattr.Combat{}
+	profile.LoadValues(values)
+	return profile
+}
+
+// writeAttrs makes one attribute map of the DAO hold exactly the profile's
+// values and reports whether anything moved. A profile exports only non-zero
+// attributes, so an attribute that dropped to zero is deleted rather than
+// left at its old value; an unchanged one is not written, so it records no
+// undo and marks nothing.
+func writeAttrs(profile *gameattr.Combat, rangeFn func(func(int32, int64) bool), set func(int32, int64), del func(int32)) bool {
+	values := make(map[coreattr.AttrID]coreattr.AttrValue)
+	profile.ExportValues(values)
+	var stale []int32
+	unchanged := make(map[int32]bool, len(values))
+	rangeFn(func(id int32, value int64) bool {
+		want, kept := values[coreattr.AttrID(id)]
+		switch {
+		case !kept:
+			stale = append(stale, id)
+		case int64(want) == value:
+			unchanged[id] = true
+		}
+		return true
+	})
+	moved := len(stale) > 0
+	for _, id := range stale {
+		del(id)
+	}
+	for id, value := range values {
+		if !unchanged[int32(id)] {
+			set(int32(id), int64(value))
+			moved = true
+		}
+	}
+	return moved
+}

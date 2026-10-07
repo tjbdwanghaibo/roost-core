@@ -1,0 +1,122 @@
+// Command accountctl is the operator surface the account service deliberately
+// keeps off the bus: registering a game server, opening or closing it.
+//
+//	go run ./cmd/accountctl -redis 127.0.0.1:6379 upsert-server -sid 1000 -name game-1000 -status open
+//	go run ./cmd/accountctl -redis-cluster 10.0.0.1:7000,10.0.0.2:7000 upsert-server -sid 1000
+//
+// The account RPC interface has Login, CreateRole, SelectRole and friends —
+// player-facing operations any process may call — but not UpsertServer: that
+// changes what every player can log in to, and a game process has no business
+// making that change (see roost-kit service/account/account_rpc.go). So this
+// tool does what an operator would: it opens the account service's own store
+// with Redis credentials and writes the server record there. Without a
+// registered, open server, CreateRole is refused — the load test's real-login
+// mode depends on this having run once.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	accountcollaborators "example.com/planet/internal/service/account"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/kit/service/account"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/redis/driver"
+)
+
+func main() {
+	redisAddr := flag.String("redis", "127.0.0.1:6379", "the account service's Redis (redis.addr in config.account.yaml)")
+	redisPassword := flag.String("redis-password", "", "Redis password, if any")
+	redisDB := flag.Int("redis-db", 0, "Redis database index")
+	// A single-node client against a Cluster only reaches the keys whose slot
+	// that node serves; every other write fails with MOVED (RR-20261006-28).
+	redisCluster := flag.String("redis-cluster", "", "comma-separated Redis Cluster seed addresses (redis.cluster_addrs in config.account.yaml); when set, -redis and -redis-db are ignored")
+	prefix := flag.String("prefix", "roost:planet:account", "account.key_prefix from config.account.yaml; the store is shared with the running service through this prefix")
+	flag.Parse()
+	if flag.NArg() < 1 {
+		fail("usage: accountctl [-redis addr | -redis-cluster addr,addr,...] [-prefix key_prefix] upsert-server -sid N -name NAME [-status open|maintenance|full|closed] [-region R]")
+	}
+	switch flag.Arg(0) {
+	case "upsert-server":
+		cfg := fredis.DefaultConfig(*redisAddr)
+		cfg.Password = *redisPassword
+		cfg.DB = *redisDB
+		for _, addr := range strings.Split(*redisCluster, ",") {
+			if addr = strings.TrimSpace(addr); addr != "" {
+				cfg.ClusterAddrs = append(cfg.ClusterAddrs, addr)
+			}
+		}
+		upsertServer(cfg, *prefix, flag.Args()[1:])
+	default:
+		fail("unknown command %q (commands: upsert-server)", flag.Arg(0))
+	}
+}
+
+func upsertServer(redisCfg *fredis.Config, prefix string, args []string) {
+	fs := flag.NewFlagSet("upsert-server", flag.ExitOnError)
+	sid := fs.Int("sid", 1000, "game server id (the game process's --sid)")
+	name := fs.String("name", "", "display name (default game-<sid>)")
+	status := fs.String("status", string(svcaccount.ServerOpen), "open | maintenance | full | closed")
+	region := fs.String("region", "demo", "region label, opaque to the service")
+	_ = fs.Parse(args)
+	if *name == "" {
+		*name = fmt.Sprintf("game-%d", *sid)
+	}
+	serverStatus := svcaccount.ServerStatus(*status)
+	switch serverStatus {
+	case svcaccount.ServerOpen, svcaccount.ServerMaintenance, svcaccount.ServerFull, svcaccount.ServerClosed:
+	default:
+		fail("invalid -status %q", *status)
+	}
+
+	service, closeStore := openService(redisCfg, prefix)
+	defer closeStore()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	server, err := service.UpsertServer(ctx, svcaccount.GameServer{ID: int32(*sid), Name: *name, Status: serverStatus, Region: *region})
+	if err != nil {
+		fail("upsert server: %v", err)
+	}
+	out, _ := json.MarshalIndent(server, "", "  ")
+	fmt.Println(string(out))
+}
+
+// openService builds the account Service on the same Redis stores the running
+// account process uses. The collaborators are the project's own — the same
+// ones bootstrap passes to the Mod — so name rules and identity policy are
+// identical; the allocator is never exercised by UpsertServer, so its
+// registry binding is not needed here.
+func openService(cfg *fredis.Config, prefix string) (*svcaccount.Service, func()) {
+	assembly, err := redisdriver.Assemble(cfg)
+	if err != nil {
+		fail("redis: %v", err)
+	}
+	stores, err := svcaccount.NewRedisStores(assembly.Client, prefix, svcaccount.DefaultClaimTTL)
+	if err != nil {
+		_ = assembly.Close()
+		fail("account stores: %v", err)
+	}
+	service, err := svcaccount.New(svcaccount.Config{
+		Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers, Slots: stores.Slots, Names: stores.Names,
+		Verifier: accountcollaborators.Verifier(), Allocator: accountcollaborators.Allocator(), NameRules: accountcollaborators.NameRules(),
+		// A secret is required to construct the service; this tool never
+		// mints a session, so the value is irrelevant and must not be the
+		// real one.
+		SessionSecret: "accountctl-does-not-mint-sessions",
+	})
+	if err != nil {
+		_ = assembly.Close()
+		fail("account service: %v", err)
+	}
+	return service, func() { _ = assembly.Close() }
+}
+
+func fail(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "accountctl: "+format+"\n", args...)
+	os.Exit(1)
+}

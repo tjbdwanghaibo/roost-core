@@ -1,0 +1,53 @@
+package tcp
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	controllerplayer "example.com/planet/game/controllers/player"
+	"github.com/tjbdwanghaibo/roost-core/gateway"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/kit/service/account"
+)
+
+// sessionAccounts 是只认一张会话票据的 account 客户端：票据对得上就返回绑定在 serverID 的角色。
+// 其余方法不会被认证器调用，留给嵌入的 nil 接口。
+type sessionAccounts struct {
+	svcaccount.Accounts
+	playerID int64
+	token    string
+	serverID int32
+}
+
+func (accounts sessionAccounts) ValidateSession(_ context.Context, playerID int64, token string) (svcaccount.Role, error) {
+	if playerID != accounts.playerID || token != accounts.token {
+		return svcaccount.Role{}, errors.New("unknown session")
+	}
+	return svcaccount.Role{PlayerID: playerID, ServerID: accounts.serverID}, nil
+}
+
+// principalSession 把认证器产出的 Principal 装成登录端点拿到的会话。
+type principalSession struct{ principal gateway.Principal }
+
+func (session principalSession) Principal() gateway.Principal { return session.principal }
+func (principalSession) Reply(context.Context, any) error     { return nil }
+func (principalSession) Close(error) error                    { return nil }
+
+// 认证器写、登录端点读：角色绑定的 sid 在两边用的键和格式必须一致，否则每一次登录都按“没有记下
+// 绑定”fail-closed（player_elsewhere，owner_sid=0），而两边各自的测试都还是绿的。这里用真实的认证器
+// （只把 account 客户端换成替身）产出 Principal，交给登录端点真正使用的 BoundServerID 去读。
+func TestTheAuthenticatorsPrincipalCarriesTheSidTheLoginReads(t *testing.T) {
+	authenticator := &applicationAuthenticator{}
+	authenticator.accounts.Store(&accountsHandle{accounts: sessionAccounts{playerID: 42, token: "ticket", serverID: 1300}})
+	principal, err := authenticator.Authenticate(context.Background(), sessionTokenPrefix+"42:ticket", nil)
+	if err != nil {
+		t.Fatalf("a valid session ticket was refused: %v", err)
+	}
+	if principal.PlayerID != 42 {
+		t.Fatalf("principal names player %d, want 42", principal.PlayerID)
+	}
+	sid, bound := controllerplayer.BoundServerID(principalSession{principal: principal})
+	if !bound || sid != 1300 {
+		t.Fatalf("the login endpoint read (%d, %v) from the authenticator's claims %v, want the role's server 1300", sid, bound, principal.Claims)
+	}
+}

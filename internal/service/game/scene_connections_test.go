@@ -1,0 +1,557 @@
+package Game
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"net"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	syncsender "example.com/planet/game/handler/syncsender"
+	"example.com/planet/game/player_agent"
+	gamescene "example.com/planet/game/scene"
+	accessplayer "example.com/planet/internal/access/player"
+	accessplayertcp "example.com/planet/internal/access/player/tcp"
+	"example.com/planet/protocol/msgid"
+	"example.com/planet/protocol/pb"
+	playerbind "example.com/planet/protocol/player_bind"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/kit/service/account"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/sync/frame"
+)
+
+// These run the scene on the REAL generated player TCP transport, over
+// loopback sockets, because what they are about is the transport's answer to
+// one connection that cannot take a frame (RR-20260926-52). A recorder that
+// decided that answer itself would be testing its own decision.
+//
+// A connection that "cannot take a frame" is a client that stopped reading:
+// once its socket buffers are full every write waits out write_timeout and
+// fails, which is what a half-dead old connection does in production.
+
+// sceneAccounts is the account service, stood in for: every ticket names the
+// player it claims to be.
+type sceneAccounts struct{ svcaccount.Accounts }
+
+func (sceneAccounts) ValidateSession(_ context.Context, playerID int64, _ string) (svcaccount.Role, error) {
+	return svcaccount.Role{PlayerID: playerID}, nil
+}
+
+// startScenePlayerTransport starts the generated player TCP Mod on a loopback
+// port and returns its Runtime — the same object NewScene looks up.
+func startScenePlayerTransport(t *testing.T) (*accessplayertcp.Runtime, string) {
+	t.Helper()
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	_ = probe.Close()
+	protocols := player_agent.NewProtocolRegistry()
+	if err := playerbind.RegisterEntitySyncEncoder(protocols); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocols.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := viper.New()
+	cfg.Set("player_access.tcp.enabled", true)
+	cfg.Set("player_access.tcp.addr", addr)
+	cfg.Set("player_access.tcp.write_timeout", "100ms")
+	registry := app.NewRegistry(cfg)
+	if err := registry.Register(accessplayer.Name, &accessplayer.Runtime{Protocols: protocols}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(svcaccount.CapabilityName, svcaccount.Accounts(sceneAccounts{})); err != nil {
+		t.Fatal(err)
+	}
+	mod := accessplayertcp.NewMod()
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = mod.StopWithContext(ctx)
+	})
+	runtime, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)
+	if !ok || runtime == nil {
+		t.Fatal("the player tcp runtime was not published")
+	}
+	return runtime, addr
+}
+
+// sceneClient is one authenticated connection. A reading client decodes every
+// entity-sync push it gets; a stalled one never reads.
+type sceneClient struct {
+	connection net.Conn
+	mu         sync.Mutex
+	kinds      []frame.Kind
+	removes    int
+	creates    int
+}
+
+func dialScenePlayer(t *testing.T, addr string, playerID int64, reading bool) *sceneClient {
+	t.Helper()
+	connection, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	if !reading {
+		// A small receive window, so a stalled client fills up quickly.
+		_ = connection.(*net.TCPConn).SetReadBuffer(4 << 10)
+	}
+	token := []byte("session:" + strconv.FormatInt(playerID, 10) + ":ticket")
+	if err := writeSceneFrame(connection, 0, 1, token); err != nil {
+		t.Fatal(err)
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := readSceneFrame(connection); err != nil {
+		t.Fatalf("player %d authentication: %v", playerID, err)
+	}
+	_ = connection.SetReadDeadline(time.Time{})
+	client := &sceneClient{connection: connection}
+	if reading {
+		go client.read()
+	}
+	return client
+}
+
+func (client *sceneClient) read() {
+	for {
+		messageID, payload, err := readSceneFrame(client.connection)
+		if err != nil {
+			return
+		}
+		if messageID != msgid.MsgEntitySync {
+			continue
+		}
+		push, err := pb.UnmarshalEntitySyncPush(payload)
+		if err != nil {
+			continue
+		}
+		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
+		if err != nil {
+			continue // the filler the test uses to stall a connection
+		}
+		client.mu.Lock()
+		client.kinds = append(client.kinds, decoded.Kind)
+		for _, object := range decoded.Objects {
+			switch object.Operation {
+			case frame.ObjectRemove:
+				client.removes++
+			case frame.ObjectCreate:
+				client.creates++
+			}
+		}
+		client.mu.Unlock()
+	}
+}
+
+// created reports how many object creates the client has seen in total (a
+// full snapshot's objects included); unlike take it forgets nothing.
+func (client *sceneClient) created() int {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return client.creates
+}
+
+// take reports the frames received so far (full, delta) and the removes, and
+// forgets them.
+func (client *sceneClient) take() (full, delta, removes int) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	for _, kind := range client.kinds {
+		if kind == frame.Full {
+			full++
+		} else {
+			delta++
+		}
+	}
+	removes = client.removes
+	client.kinds, client.removes = nil, 0
+	return full, delta, removes
+}
+
+func writeSceneFrame(writer io.Writer, messageID, sequence uint32, payload []byte) error {
+	var header [16]byte
+	header[0], header[1], header[2] = 'R', 'S', 1
+	binary.BigEndian.PutUint32(header[4:8], messageID)
+	binary.BigEndian.PutUint32(header[8:12], sequence)
+	binary.BigEndian.PutUint32(header[12:16], uint32(len(payload)))
+	_, err := writer.Write(append(header[:], payload...))
+	return err
+}
+
+func readSceneFrame(reader io.Reader) (uint32, []byte, error) {
+	var header [16]byte
+	if _, err := io.ReadFull(reader, header[:]); err != nil {
+		return 0, nil, err
+	}
+	if header[0] != 'R' || header[1] != 'S' {
+		return 0, nil, fmt.Errorf("bad frame magic %v", header[:2])
+	}
+	payload := make([]byte, binary.BigEndian.Uint32(header[12:16]))
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return 0, nil, err
+	}
+	return binary.BigEndian.Uint32(header[4:8]), payload, nil
+}
+
+// waitActiveSessions waits, bounded, until the player has want registered
+// connections. The transport writes the authentication ack before it
+// registers the session, so a dialed client is not yet one the scene can see:
+// a member without a registered connection is swept out when the next player
+// joins, and a push to it fails (RR-20260928-15).
+func waitActiveSessions(t *testing.T, transport *accessplayertcp.Runtime, playerID int64, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for transport.ActiveSessions(playerID) != want && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := transport.ActiveSessions(playerID); got != want {
+		t.Fatalf("player %d has %d connections, want %d", playerID, got, want)
+	}
+}
+
+// stallPlayer pushes filler to a player until a push to one of its
+// connections has failed. Before the fix that shows up as the push failing;
+// after it, as the stalled connection being gone.
+func stallPlayer(t *testing.T, transport *accessplayertcp.Runtime, playerID int64) error {
+	t.Helper()
+	before := transport.ActiveSessions(playerID)
+	filler := &pb.EntitySyncPush{Payload: bytes.Repeat([]byte{0xFF}, 512<<10)}
+	for range 128 {
+		if err := transport.PushPlayer(context.Background(), playerID, msgid.MsgEntitySync, filler); err != nil {
+			return err
+		}
+		if transport.ActiveSessions(playerID) < before {
+			return nil
+		}
+	}
+	t.Fatalf("64MiB of pushes never stalled player %d's connection", playerID)
+	return nil
+}
+
+// RR-20260926-52 (REPRO-2026-09-26-05 §5, on the real transport): a player who
+// logged in again keeps their old, stalled connection registered until its
+// read loop notices. Every push to the player went to both connections and
+// failed as a whole, so the manager dropped the replication session, the
+// settle saw a live connection and reopened it — and the live client got a
+// full snapshot for every update, forever.
+//
+// The transport now closes the connection that failed and keeps the push a
+// success for the ones that took it, so the live client keeps receiving
+// deltas on its session, the player stays in the scene and nobody is told
+// anything.
+func TestAStalledOldConnectionDoesNotResetTheLiveClient(t *testing.T) {
+	transport, addr := startScenePlayerTransport(t)
+	scene, err := newScene(transport, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.watchSessions(transport)
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	const moverID, reconnectID = int64(9851), int64(9852)
+	mover, re := newScenePlayer(t, moverID), newScenePlayer(t, reconnectID)
+	moverClient := dialScenePlayer(t, addr, moverID, true)
+	dialScenePlayer(t, addr, reconnectID, false) // the old connection: it stops reading
+	waitActiveSessions(t, transport, moverID, 1)
+	waitActiveSessions(t, transport, reconnectID, 1)
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	_ = scene.Flush(ctx)
+
+	live := dialScenePlayer(t, addr, reconnectID, true) // the player logs in again
+	waitActiveSessions(t, transport, reconnectID, 2)
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	_ = scene.Flush(ctx)
+	if err := stallPlayer(t, transport, reconnectID); err != nil {
+		t.Errorf("a push the live connection took was reported as failed: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	live.take()
+	moverClient.take()
+
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{mover.ID(): mover, re.ID(): re, counters.ID(): counters})
+	lostBefore := scene.manager.Stats().SessionsLost
+	const rounds = 6
+	for range rounds {
+		if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, mover.ID(), counters.ID(), 10); err != nil {
+			t.Fatal(err)
+		}
+		_ = scene.Flush(ctx)
+		time.Sleep(150 * time.Millisecond) // a failing write waits out write_timeout (100ms)
+	}
+	full, delta, _ := live.take()
+	_, _, moverRemoves := moverClient.take()
+	lost := scene.manager.Stats().SessionsLost - lostBefore
+	t.Logf("rounds=%d members=%d connections=%d sessionsLost=%d frames to the live connection: full=%d delta=%d",
+		rounds, scene.Members(), transport.ActiveSessions(reconnectID), lost, full, delta)
+	if full > 1 {
+		t.Errorf("the live client was reset with a full snapshot %d times in %d updates while the old connection kept failing", full, rounds)
+	}
+	if delta == 0 {
+		t.Error("the live client received no delta for the mover's updates")
+	}
+	if scene.Members() != 2 || moverRemoves != 0 {
+		t.Errorf("members=%d removes seen by the mover=%d: the reconnected player must stay in the scene", scene.Members(), moverRemoves)
+	}
+	if got := transport.ActiveSessions(reconnectID); got != 1 {
+		t.Errorf("the reconnected player has %d registered connections, want only the live one", got)
+	}
+}
+
+// The other half of RR-20260926-52: when NO connection of a player takes the
+// frame, the player is gone — the push fails, every connection is closed, and
+// the scene removes them (the mover is told).
+func TestAPlayerWhoseEveryConnectionStallsLeavesTheScene(t *testing.T) {
+	transport, addr := startScenePlayerTransport(t)
+	scene, err := newScene(transport, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.watchSessions(transport)
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	const moverID, stalledID = int64(9861), int64(9862)
+	mover, stalled := newScenePlayer(t, moverID), newScenePlayer(t, stalledID)
+	moverClient := dialScenePlayer(t, addr, moverID, true)
+	dialScenePlayer(t, addr, stalledID, false)
+	dialScenePlayer(t, addr, stalledID, false)
+	waitActiveSessions(t, transport, moverID, 1)
+	waitActiveSessions(t, transport, stalledID, 2)
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, stalled, spatial.Point{X: 510, Y: 500})
+	_ = scene.Flush(ctx)
+	moverClient.take()
+
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{mover.ID(): mover, stalled.ID(): stalled, counters.ID(): counters})
+	deadline := time.Now().Add(5 * time.Second)
+	for scene.Members() != 1 && time.Now().Before(deadline) {
+		_ = transport.PushPlayer(ctx, stalledID, msgid.MsgEntitySync, &pb.EntitySyncPush{Payload: bytes.Repeat([]byte{0xFF}, 512<<10)})
+		if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, stalled.ID(), counters.ID(), 10); err != nil {
+			t.Fatal(err)
+		}
+		_ = scene.Flush(ctx)
+	}
+	time.Sleep(100 * time.Millisecond)
+	_ = scene.Flush(ctx)
+	time.Sleep(50 * time.Millisecond)
+	_, _, removes := moverClient.take()
+	t.Logf("members=%d connections=%d removes seen by the mover=%d", scene.Members(), transport.ActiveSessions(stalledID), removes)
+	if scene.Members() != 1 || removes != 1 {
+		t.Fatalf("a player none of whose connections takes a frame is still in the scene: members=%d removes=%d", scene.Members(), removes)
+	}
+	if got := transport.ActiveSessions(stalledID); got != 0 {
+		t.Errorf("the stalled player still has %d registered connections", got)
+	}
+}
+
+// RR-20260926-40 on the real transport (B27 第 3 批): a player logs in again
+// while their first connection is still alive and reading. The second
+// EnterGame resyncs the replication session, so every connection of the
+// player gets a full snapshot and both keep receiving deltas; the mover is
+// never told the player left. When the FIRST connection then closes, the
+// player is still connected (the second one is up), so the scene keeps them
+// and the surviving connection keeps getting deltas — no remove, no reset.
+func TestASecondLiveConnectionKeepsThePlayerInTheSceneWhenTheFirstCloses(t *testing.T) {
+	transport, addr := startScenePlayerTransport(t)
+	scene, err := newScene(transport, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.watchSessions(transport)
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	const moverID, reID = int64(9871), int64(9872)
+	mover, re := newScenePlayer(t, moverID), newScenePlayer(t, reID)
+	moverClient := dialScenePlayer(t, addr, moverID, true)
+	first := dialScenePlayer(t, addr, reID, true)
+	waitActiveSessions(t, transport, moverID, 1)
+	waitActiveSessions(t, transport, reID, 1)
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	_ = scene.Flush(ctx)
+
+	second := dialScenePlayer(t, addr, reID, true) // logs in again; the first connection stays up
+	waitActiveSessions(t, transport, reID, 2)
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	_ = scene.Flush(ctx)
+	time.Sleep(100 * time.Millisecond)
+	first.take()
+	second.take()
+	moverClient.take()
+
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{mover.ID(): mover, re.ID(): re, counters.ID(): counters})
+	update := func(rounds int) {
+		for range rounds {
+			if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, mover.ID(), counters.ID(), 10); err != nil {
+				t.Fatal(err)
+			}
+			_ = scene.Flush(ctx)
+			time.Sleep(60 * time.Millisecond)
+		}
+	}
+	update(4)
+	firstFull, firstDelta, _ := first.take()
+	secondFull, secondDelta, _ := second.take()
+	_, _, moverRemoves := moverClient.take()
+	t.Logf("both connections live: first full=%d delta=%d, second full=%d delta=%d, removes seen by the mover=%d, members=%d",
+		firstFull, firstDelta, secondFull, secondDelta, moverRemoves, scene.Members())
+	if firstDelta == 0 || secondDelta == 0 {
+		t.Errorf("a live connection of the player received no delta: first=%d second=%d", firstDelta, secondDelta)
+	}
+	if moverRemoves != 0 || scene.Members() != 2 {
+		t.Errorf("logging in again on a second connection removed the player: removes=%d members=%d", moverRemoves, scene.Members())
+	}
+
+	_ = first.connection.Close() // the old connection goes away; the player is still here
+	waitActiveSessions(t, transport, reID, 1)
+	time.Sleep(150 * time.Millisecond) // the session-close settle
+	second.take()
+	moverClient.take()
+	update(4)
+	full, delta, _ := second.take()
+	_, _, moverRemoves = moverClient.take()
+	t.Logf("after the first connection closed: second full=%d delta=%d, removes seen by the mover=%d, members=%d connections=%d",
+		full, delta, moverRemoves, scene.Members(), transport.ActiveSessions(reID))
+	if delta == 0 {
+		t.Error("the surviving connection received no delta after the old one closed")
+	}
+	if full != 0 {
+		t.Errorf("the surviving connection was reset with %d full snapshots when the old connection closed", full)
+	}
+	if moverRemoves != 0 || scene.Members() != 2 {
+		t.Errorf("closing the old connection removed a player who still has one: removes=%d members=%d", moverRemoves, scene.Members())
+	}
+}
+
+// RR-20260926-55 on the real transport (B27 第 3 批): the player's connection
+// closes and a new one is dialed, authenticated and joined at once —
+// inside one tick when the machine is fast enough, after the leave settled
+// when it is not (the transport reports the close from its read loop, the
+// scene settles it on its own goroutine). Whichever way a round lands, the
+// new connection must end up with its own subject replicated (one full
+// snapshot), the player must be in the scene, and the mover must see the
+// player present: every remove it was shown is followed by a create. Ten
+// rounds, so both orderings get their chance.
+func TestADisconnectAndReconnectInsideOneTickEndsWithTheNewConnectionReplicated(t *testing.T) {
+	transport, addr := startScenePlayerTransport(t)
+	scene, err := newScene(transport, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.watchSessions(transport)
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	const moverID, reID = int64(9881), int64(9882)
+	mover, re := newScenePlayer(t, moverID), newScenePlayer(t, reID)
+	moverClient := dialScenePlayer(t, addr, moverID, true)
+	current := dialScenePlayer(t, addr, reID, true)
+	waitActiveSessions(t, transport, moverID, 1)
+	waitActiveSessions(t, transport, reID, 1)
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	_ = scene.Flush(ctx)
+	time.Sleep(100 * time.Millisecond)
+	moverClient.take()
+	createsBefore := moverClient.created()
+
+	const rounds = 10
+	joinErrors := 0
+	for round := range rounds {
+		_ = current.connection.Close()
+		fresh := dialScenePlayer(t, addr, reID, true)
+		// The old connection may still be registered for a moment (the
+		// transport learns of the close from its read loop), and the fresh
+		// one is registered after its ack: wait for exactly the fresh one.
+		waitActiveSessions(t, transport, reID, 1)
+		if err := scene.Join(ctx, re, spatial.Point{X: 510, Y: 500}); err != nil {
+			// RR-20260926-40 的已知边界：同一 tick 内 Leave 后立刻 Join 可能撞上
+			// retiring。这里只记数，最后一起判断。
+			joinErrors++
+			t.Logf("round %d: join refused: %v", round, err)
+		} else if err := scene.Ready(reID); err != nil {
+			t.Fatalf("round %d: ready: %v", round, err)
+		}
+		_ = scene.Flush(ctx)
+		deadline := time.Now().Add(2 * time.Second)
+		full, delta := 0, 0
+		for time.Now().Before(deadline) {
+			full, delta, _ = fresh.take()
+			if full > 0 {
+				break
+			}
+			_ = scene.Flush(ctx)
+			time.Sleep(5 * time.Millisecond)
+		}
+		if full == 0 {
+			t.Fatalf("round %d: the new connection never received its full snapshot (delta=%d members=%d)", round, delta, scene.Members())
+		}
+		current = fresh
+	}
+	time.Sleep(150 * time.Millisecond)
+	_ = scene.Flush(ctx)
+	time.Sleep(50 * time.Millisecond)
+	_, _, removes := moverClient.take()
+	creates := moverClient.created() - createsBefore
+	t.Logf("rounds=%d joinErrors=%d members=%d removes seen by the mover=%d creates seen by the mover=%d", rounds, joinErrors, scene.Members(), removes, creates)
+	if joinErrors != 0 {
+		t.Errorf("%d of %d immediate rejoins were refused", joinErrors, rounds)
+	}
+	if scene.Members() != 2 {
+		t.Errorf("members=%d after %d reconnects, want 2", scene.Members(), rounds)
+	}
+	if creates < removes {
+		t.Errorf("the mover was shown %d removes but only %d creates: the reconnected player is missing from its view", removes, creates)
+	}
+}

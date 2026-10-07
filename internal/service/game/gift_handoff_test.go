@@ -1,0 +1,332 @@
+package Game
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+	"time"
+
+	"example.com/planet/game/gift"
+	giftitem "example.com/planet/saga/gift_item"
+	"github.com/tjbdwanghaibo/roost-core/saga"
+)
+
+// A step that runs on a process which does not serve its player writes a
+// second copy of the Player document and takes a process down. These tests
+// pin the decisions that keep it from happening — none of them needs a Mongo
+// or a bus, because the decisions are the point (§9.11, §9.12).
+//
+// 静态绑定（docs/feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md §3.3）：赠礼命令携带发送方绑定的
+// sid（gift.State.FromSID），debit / refund 只在那个 sid 上执行。准入与转交接收方都用真实的驻留表
+// （PlayerOwners.AdmitBound），转交用生产的路由器（giftHandoffRouter），只有传输是替身。
+
+const (
+	handoffLocalSID = int32(1000)
+	handoffOtherSID = int32(1001)
+)
+
+type recordingTransport struct {
+	sent []int32
+	cmds []*giftStepHandoff
+	err  error
+}
+
+func (t *recordingTransport) Send(_ context.Context, sid int32, cmd *giftStepHandoff) error {
+	if t.err != nil {
+		return t.err
+	}
+	t.sent = append(t.sent, sid)
+	t.cmds = append(t.cmds, cmd)
+	return nil
+}
+
+// giftPayload builds the saga state as the coordinator ships it. It does not
+// go through gift.Encode, so a test can build the payload Encode refuses.
+func giftPayload(t *testing.T, state gift.State) []byte {
+	t.Helper()
+	payload, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func giftCommand(t *testing.T, from int64, fromSID int32) saga.Command {
+	t.Helper()
+	now := time.Now()
+	return saga.Command{
+		ID: "cmd-1", IdempotencyKey: "op-1", SagaID: "saga-1", SagaType: "gift_item", DefinitionVersion: 1,
+		BusinessKey: "gift-1", Step: 0, StepName: "debit", Phase: saga.PhaseForward, Attempt: 1,
+		Topic:     "debit",
+		Payload:   giftPayload(t, gift.State{From: from, FromSID: fromSID, To: from + 1, ItemID: 1001, Count: 1}),
+		CreatedAt: now, DeadlineAt: now.Add(time.Minute),
+	}
+}
+
+// giftHandoff is a handoff as admitPhase builds it: the phase is the one of
+// the consumer that took the command, so the command carries that step's topic
+// and direction (the debit consumer only sees TopicDebit, the refund consumer
+// only TopicDebitCompensation).
+func giftHandoff(t *testing.T, from int64, fromSID int32, phase string) *giftStepHandoff {
+	t.Helper()
+	command := giftCommand(t, from, fromSID)
+	if phase == giftHandoffPhaseRefund {
+		command.Topic, command.Phase = giftitem.TopicDebitCompensation, saga.PhaseCompensate
+	} else {
+		command.Topic = giftitem.TopicDebit
+	}
+	return &giftStepHandoff{PlayerID: from, FromSID: fromSID, Phase: phase, Command: command}
+}
+
+// handoffSteps is one game process with sid local: its real ownership table
+// (empty — nobody has logged in) and the production router over a recording
+// transport.
+func handoffSteps(t *testing.T, local int32) (giftSteps, *PlayerOwners, *recordingTransport) {
+	t.Helper()
+	owners := newPlayerOwners(local, nil, nil)
+	transport := &recordingTransport{}
+	steps := giftSteps{owners: owners}
+	steps.handoff = giftHandoffRouter(local, transport, func(context.Context, *giftStepHandoff) error {
+		t.Error("the router executed a handed-over step locally; admission only hands over a step bound elsewhere")
+		return nil
+	})
+	return steps, owners, transport
+}
+
+// reachedTheClaim reports whether runHandoff got as far as the inbox. The test
+// steps have no inbox, so reserving fails with saga.ErrInvalidRecord: that
+// error is the proof the step was taken on, and a nil error the proof it was
+// dropped before anything was claimed.
+func reachedTheClaim(err error) bool { return errors.Is(err, saga.ErrInvalidRecord) }
+
+// A step for a sender this process serves is admitted, and nothing is sent
+// anywhere: the consumer runs it here.
+func TestAdmitRunsTheOwnersOwnStepWithoutForwarding(t *testing.T) {
+	steps, owners, transport := handoffSteps(t, handoffLocalSID)
+	if err := owners.Serve(context.Background(), 42, handoffLocalSID); err != nil {
+		t.Fatal(err)
+	}
+	if err := steps.admitPhase(context.Background(), giftHandoffPhaseDebit, giftCommand(t, 42, handoffLocalSID)); err != nil {
+		t.Fatalf("the owner was refused its own step: %v", err)
+	}
+	if len(transport.sent) != 0 {
+		t.Fatalf("the owner forwarded its own step to %v", transport.sent)
+	}
+}
+
+// The original promise of this test, before the shared lease table existed
+// and again now: the process the sender is bound to runs the step even when
+// the sender is offline and has no copy anywhere — the debit and, above all,
+// the refund must not wait for them to log in. Admission takes them into
+// service here (a resident record, so the idle unload covers the copy Nest
+// loads cold for the step), on this sid and nowhere else.
+func TestAnOfflineSendersStepRunsOnTheSidTheyAreBoundTo(t *testing.T) {
+	for _, phase := range []string{giftHandoffPhaseDebit, giftHandoffPhaseRefund} {
+		t.Run(phase, func(t *testing.T) {
+			steps, owners, transport := handoffSteps(t, handoffLocalSID)
+			if owners.Resident(42) {
+				t.Fatal("precondition: the sender is offline and not resident")
+			}
+			if err := steps.admitPhase(context.Background(), phase, giftCommand(t, 42, handoffLocalSID)); err != nil {
+				t.Fatalf("the %s of an offline sender bound to this sid was refused: %v", phase, err)
+			}
+			if !owners.Resident(42) {
+				t.Fatal("the admitted step left no resident record: the copy Nest loads for it would never be unloaded")
+			}
+			if len(transport.sent) != 0 {
+				t.Fatalf("a step for this sid's own player was forwarded to %v", transport.sent)
+			}
+		})
+	}
+}
+
+// A step for a sender bound to another sid is refused AND handed over to that
+// sid. Both halves matter: the refusal keeps the message until a receipt
+// exists, the handoff starts the work on the owner now.
+func TestAdmitRefusesAndHandsOverAForeignStep(t *testing.T) {
+	steps, _, transport := handoffSteps(t, handoffOtherSID)
+	err := steps.admitPhase(context.Background(), giftHandoffPhaseRefund, giftCommand(t, 42, handoffLocalSID))
+	if err == nil {
+		t.Fatal("a step for a sender bound to another sid was admitted")
+	}
+	if len(transport.sent) != 1 || transport.sent[0] != handoffLocalSID {
+		t.Fatalf("handed over to %v, want the sender's sid %d", transport.sent, handoffLocalSID)
+	}
+	if got := transport.cmds[0]; got.PlayerID != 42 || got.FromSID != handoffLocalSID || got.Phase != giftHandoffPhaseRefund {
+		t.Fatalf("handed over %+v", got)
+	}
+}
+
+// The address is the sender's bound sid from the command, nothing else: two
+// steps from senders on two different sids go to those two sids.
+func TestAHandoffIsAddressedToTheSendersBoundSid(t *testing.T) {
+	steps, _, transport := handoffSteps(t, handoffOtherSID)
+	_ = steps.admitPhase(context.Background(), giftHandoffPhaseDebit, giftCommand(t, 42, 1000))
+	_ = steps.admitPhase(context.Background(), giftHandoffPhaseDebit, giftCommand(t, 43, 1002))
+	if len(transport.sent) != 2 || transport.sent[0] != 1000 || transport.sent[1] != 1002 {
+		t.Fatalf("handed over to %v, want [1000 1002] (each sender's own sid)", transport.sent)
+	}
+}
+
+// Restored from the pre-static-binding test of the same idea: a process does
+// not take a player into service just to have somewhere to run a step. Here
+// the player is bound to another sid, so refusing the step must leave no
+// resident record behind — a record would let this process load the Player
+// and write it while its own sid does too.
+func TestAStepDoesNotClaimASenderBoundElsewhere(t *testing.T) {
+	steps, owners, _ := handoffSteps(t, handoffOtherSID)
+	if err := steps.admitPhase(context.Background(), giftHandoffPhaseDebit, giftCommand(t, 42, handoffLocalSID)); err == nil {
+		t.Fatal("a step for a sender bound to another sid was admitted")
+	}
+	if owners.Resident(42) {
+		t.Fatal("refusing the step took a player bound to another sid into service here")
+	}
+}
+
+// A payload with no sender sid cannot be routed. It is refused and nobody is
+// taken into service — even a sender who happens to be resident here: there
+// is no fallback for payloads written before from_sid existed (maintainer
+// decision 2026-10-05). Encode refuses to write such a gift in the first place.
+func TestAStepThatNamesNoSenderSidIsRefused(t *testing.T) {
+	if _, err := gift.Encode(gift.State{From: 42, To: 43, ItemID: 1001, Count: 1}); err == nil {
+		t.Fatal("gift.Encode wrote a gift with no sender sid")
+	}
+	steps, owners, transport := handoffSteps(t, handoffLocalSID)
+	if err := owners.Serve(context.Background(), 42, handoffLocalSID); err != nil {
+		t.Fatal(err)
+	}
+	if err := steps.admitPhase(context.Background(), giftHandoffPhaseRefund, giftCommand(t, 42, 0)); err == nil {
+		t.Fatal("a step whose payload names no sender sid was admitted")
+	}
+	if len(transport.sent) != 0 {
+		t.Fatalf("a step with no sender sid was forwarded to %v", transport.sent)
+	}
+	quiet, _, _ := handoffSteps(t, handoffLocalSID)
+	if err := quiet.admitPhase(context.Background(), giftHandoffPhaseRefund, giftCommand(t, 77, 0)); err == nil {
+		t.Fatal("a step whose payload names no sender sid was admitted")
+	}
+	if quiet.owners.(*PlayerOwners).Resident(77) {
+		t.Fatal("refusing a payload with no sender sid took the sender into service")
+	}
+}
+
+// A sender bound here whose copy is being unloaded is refused, and the step
+// is NOT handed over: there is nowhere better to send it. The redelivery
+// finds the unload finished.
+func TestAStepForASenderBeingUnloadedIsRefusedWithoutAHandoff(t *testing.T) {
+	steps, owners, transport := handoffSteps(t, handoffLocalSID)
+	if err := owners.Serve(context.Background(), 42, handoffLocalSID); err != nil {
+		t.Fatal(err)
+	}
+	owners.mu.Lock()
+	owners.evictions[42] = &eviction{done: make(chan struct{})}
+	owners.mu.Unlock()
+	if err := steps.admitPhase(context.Background(), giftHandoffPhaseDebit, giftCommand(t, 42, handoffLocalSID)); !errors.Is(err, ErrNotServedHere) {
+		t.Fatalf("a step for a sender being unloaded = %v, want a refusal wrapping ErrNotServedHere", err)
+	}
+	if len(transport.sent) != 0 {
+		t.Fatalf("a step for this sid's own player was forwarded to %v", transport.sent)
+	}
+}
+
+// The receiving half runs a handed-over step for an offline sender bound to
+// this sid: it takes them into service and goes on to claim the command.
+func TestAHandoffForAnOfflineSenderBoundHereIsRun(t *testing.T) {
+	steps, owners, _ := handoffSteps(t, handoffLocalSID)
+	err := steps.runHandoff(context.Background(), giftHandoff(t, 42, handoffLocalSID, giftHandoffPhaseRefund))
+	if !reachedTheClaim(err) {
+		t.Fatalf("a handoff for an offline sender bound here = %v, want it taken on (the reservation reached)", err)
+	}
+	if !owners.Resident(42) {
+		t.Fatal("running the handoff left no resident record")
+	}
+}
+
+// A handoff that names another sid is dropped quietly rather than run: this
+// process is not where that sender is served, and it takes nobody into
+// service. The holder of the message keeps redelivering.
+func TestAHandoffForAPlayerWeDoNotOwnIsDropped(t *testing.T) {
+	steps, owners, _ := handoffSteps(t, handoffOtherSID)
+	if err := owners.Serve(context.Background(), 42, handoffOtherSID); err != nil {
+		t.Fatal(err)
+	}
+	for name, cmd := range map[string]*giftStepHandoff{
+		"bound elsewhere": giftHandoff(t, 43, handoffLocalSID, giftHandoffPhaseDebit),
+		"no sender sid":   giftHandoff(t, 42, 0, giftHandoffPhaseDebit),
+	} {
+		if err := steps.runHandoff(context.Background(), cmd); err != nil {
+			t.Fatalf("%s: a handoff for a sender not served here should be dropped quietly, got %v", name, err)
+		}
+	}
+	if owners.Resident(43) {
+		t.Fatal("a handoff for a sender bound elsewhere took them into service here")
+	}
+}
+
+// The envelope's player and sid are the address; the payload is what runs.
+// A handoff whose two disagree is refused before the claim, or the check of
+// one player would admit work on another.
+func TestAHandoffWhoseEnvelopeDisagreesWithItsPayloadIsRefused(t *testing.T) {
+	steps, _, _ := handoffSteps(t, handoffLocalSID)
+	for name, cmd := range map[string]*giftStepHandoff{
+		"another player": {PlayerID: 42, FromSID: handoffLocalSID, Phase: giftHandoffPhaseDebit, Command: giftCommand(t, 43, handoffLocalSID)},
+		"another sid":    {PlayerID: 42, FromSID: handoffLocalSID, Phase: giftHandoffPhaseDebit, Command: giftCommand(t, 42, handoffOtherSID)},
+	} {
+		err := steps.runHandoff(context.Background(), cmd)
+		if err == nil || reachedTheClaim(err) {
+			t.Fatalf("%s: a handoff whose envelope disagrees with its payload = %v, want a refusal before the claim", name, err)
+		}
+	}
+}
+
+// The phase is part of the envelope too, and it decides which transaction
+// runs: a debit envelope around the refund's command would take the items a
+// second time under the refund's receipt, and the coordinator would read that
+// receipt as "refunded". The command's own topic says which step it is, so a
+// handoff whose phase disagrees with it is refused before anything is recorded
+// or claimed — the same rule as the player and sid above.
+func TestAHandoffWhosePhaseDisagreesWithItsCommandIsRefused(t *testing.T) {
+	for name, swap := range map[string]struct{ envelope, command string }{
+		"debit envelope, refund command": {giftHandoffPhaseDebit, giftHandoffPhaseRefund},
+		"refund envelope, debit command": {giftHandoffPhaseRefund, giftHandoffPhaseDebit},
+	} {
+		t.Run(name, func(t *testing.T) {
+			steps, owners, _ := handoffSteps(t, handoffLocalSID)
+			cmd := giftHandoff(t, 42, handoffLocalSID, swap.command)
+			cmd.Phase = swap.envelope
+			err := steps.runHandoff(context.Background(), cmd)
+			if err == nil || reachedTheClaim(err) {
+				t.Fatalf("a %s handoff carrying the %s command (topic %q) = %v, want a refusal before the claim", swap.envelope, swap.command, cmd.Command.Topic, err)
+			}
+			if owners.Resident(42) {
+				t.Fatal("a handoff refused for its phase still took the sender into service")
+			}
+		})
+	}
+}
+
+// An unknown phase is refused before the claim, for the same reason admission
+// is: a claim taken for work that cannot be done blocks the command until the
+// lease expires.
+func TestAHandoffWithAnUnknownPhaseIsRefusedBeforeTheClaim(t *testing.T) {
+	steps, _, _ := handoffSteps(t, handoffLocalSID)
+	err := steps.runHandoff(context.Background(), giftHandoff(t, 42, handoffLocalSID, "deliver"))
+	if err == nil || reachedTheClaim(err) {
+		t.Fatalf("a handoff naming a phase this process does not run = %v, want a refusal before the claim", err)
+	}
+	if err := steps.runHandoff(context.Background(), nil); err == nil {
+		t.Fatal("an empty handoff was accepted")
+	}
+}
+
+// A command past its deadline belongs to the coordinator's timeout, not to a
+// new attempt here.
+func TestAHandoffPastItsDeadlineIsNotStarted(t *testing.T) {
+	steps, _, _ := handoffSteps(t, handoffLocalSID)
+	cmd := giftHandoff(t, 42, handoffLocalSID, giftHandoffPhaseDebit)
+	cmd.Command.DeadlineAt = time.Now().Add(-time.Second)
+	if err := steps.runHandoff(context.Background(), cmd); err != nil {
+		t.Fatalf("an expired handoff should be dropped quietly, got %v", err)
+	}
+}

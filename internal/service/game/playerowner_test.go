@@ -1,0 +1,689 @@
+package Game
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	apperrors "example.com/planet/internal/errors"
+	"example.com/planet/protocol/msgid"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// 静态绑定下的驻留表（docs/feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md §4）：只有通过绑定校验
+// 才有驻留记录，WriteGate 只看记录与卸载状态；闲置卸载是本地内存管理，卸载进行中不准入、登录等它结束。
+// 按玩家的 Redis 租约、续租、重新认领、跨间断撤离都已删除，同一 sid 的单写者由 App 单实例锁保证，
+// 相应回归在 app 包（见方案 §4.4 与 App 单实例锁方案 §7.3 的去向表）。
+
+const ownSID int32 = 1000
+
+type fakeFencer struct {
+	mu     sync.Mutex
+	closed []int64
+	// online 是本进程还有连接的玩家。零值是“谁都没有”，后台消费者碰到的玩家就是这样。
+	online map[int64]int
+}
+
+func (f *fakeFencer) CloseSessions(playerID int64, _ error) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closed = append(f.closed, playerID)
+	closed := f.online[playerID]
+	delete(f.online, playerID)
+	return closed
+}
+
+func (f *fakeFencer) ActiveSessions(playerID int64) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.online[playerID]
+}
+
+func (f *fakeFencer) connect(playerID int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.online == nil {
+		f.online = map[int64]int{}
+	}
+	f.online[playerID] = 1
+}
+
+func (f *fakeFencer) closedPlayers() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int64(nil), f.closed...)
+}
+
+// evictorStub 记下本进程被要求丢掉的玩家，也可以拒绝。
+type evictorStub struct {
+	mu      sync.Mutex
+	dropped []int64
+	fail    error
+}
+
+func (stub *evictorStub) EvictPlayer(_ context.Context, playerID int64) error {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if stub.fail != nil {
+		return stub.fail
+	}
+	stub.dropped = append(stub.dropped, playerID)
+	return nil
+}
+
+func (stub *evictorStub) taken() []int64 {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	return append([]int64(nil), stub.dropped...)
+}
+
+// evictorFunc adapts a function to residentEvictor.
+type evictorFunc func(context.Context, int64) error
+
+func (fn evictorFunc) EvictPlayer(ctx context.Context, playerID int64) error {
+	return fn(ctx, playerID)
+}
+
+// blockingEvictor 把卸载停住，直到测试放行，就像实体上的事务停住 EntityManager.Destroy——它等实体
+// 的互斥锁、不看 context。
+type blockingEvictor struct {
+	release chan struct{}
+	calls   chan int64
+}
+
+func newBlockingEvictor() *blockingEvictor {
+	return &blockingEvictor{release: make(chan struct{}), calls: make(chan int64, 8)}
+}
+
+func (e *blockingEvictor) EvictPlayer(_ context.Context, playerID int64) error {
+	e.calls <- playerID
+	<-e.release
+	return nil
+}
+
+func ownersUnderTest(t *testing.T) (*PlayerOwners, *fakeFencer, *time.Time) {
+	t.Helper()
+	fencer := &fakeFencer{}
+	clock := time.Unix(1_700_000_000, 0)
+	owners := newPlayerOwners(ownSID, fencer, func() time.Time { return clock })
+	// 装配好的部署都有（service.go 在发布驻留表之前装上）；没有它就不卸载任何玩家。
+	owners.Evict(&evictorStub{})
+	return owners, fencer, &clock
+}
+
+func dropRunning(owners *PlayerOwners, playerID int64) bool {
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	_, running := owners.evictions[playerID]
+	return running
+}
+
+func hasRecord(owners *PlayerOwners, playerID int64) bool {
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	return owners.residents[playerID] != nil
+}
+
+func waitDropEnded(t *testing.T, owners *PlayerOwners, playerID int64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for dropRunning(owners, playerID) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the drop of %d never ended", playerID)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// parkedOnUnload 在某个玩家的 Serve 开始等卸载时关闭。
+func parkedOnUnload(owners *PlayerOwners, playerID int64) <-chan struct{} {
+	parked := make(chan struct{})
+	var once sync.Once
+	owners.onUnloadWait = func(waiting int64) {
+		if waiting == playerID {
+			once.Do(func() { close(parked) })
+		}
+	}
+	return parked
+}
+
+func serveInBackground(ctx context.Context, owners *PlayerOwners, playerID int64) <-chan error {
+	answered := make(chan error, 1)
+	go func() { answered <- owners.Serve(ctx, playerID, ownSID) }()
+	return answered
+}
+
+// unloadStuck 让玩家 playerID 闲置，开始卸载，并让卸载超过 evictWait 还没结束：返回时卸载在后台
+// 继续，endDrop 放行它。
+func unloadStuck(t *testing.T, owners *PlayerOwners, clock *time.Time, playerID int64) (evictor *blockingEvictor, endDrop func()) {
+	t.Helper()
+	owners.evictWait = 50 * time.Millisecond
+	if local, err := owners.AdmitBound(playerID, ownSID); !local || err != nil {
+		t.Fatalf("admit bound: %v %v", local, err)
+	}
+	evictor = newBlockingEvictor()
+	owners.Evict(evictor)
+	var once sync.Once
+	endDrop = func() { once.Do(func() { close(evictor.release) }) }
+	t.Cleanup(endDrop)
+	*clock = clock.Add(IdleUnload + time.Second)
+	owners.unloadIdle(context.Background())
+	select {
+	case <-evictor.calls:
+	default:
+		t.Fatal("the unload pass never started the drop")
+	}
+	if !dropRunning(owners, playerID) || !hasRecord(owners, playerID) {
+		t.Fatalf("precondition: the drop should still be running and the record kept: running=%v record=%v",
+			dropRunning(owners, playerID), hasRecord(owners, playerID))
+	}
+	return evictor, endDrop
+}
+
+// Serve 的三种结果：绑定在别的服 → player_elsewhere，不建记录；绑定在本服 → 建记录、放行；
+// 卸载进行中且超过等待预算 → 可重试的超时（RR-20260920-12：等待有界），记录不变。
+func TestServeAnswersEachOfItsThreeOutcomes(t *testing.T) {
+	t.Run("bound-elsewhere", func(t *testing.T) {
+		owners, _, _ := ownersUnderTest(t)
+		for _, bound := range []int32{2000, 0} {
+			err := owners.Serve(context.Background(), 42, bound)
+			if !errors.Is(err, apperrors.ErrPlayerElsewhere) {
+				t.Fatalf("Serve(bound=%d) = %v, want player_elsewhere", bound, err)
+			}
+			if code, _ := errcode.ClientError(err); code != apperrors.ErrPlayerElsewhere.Code() {
+				t.Fatalf("Serve(bound=%d) reaches the client as code %d, want %d", bound, code, apperrors.ErrPlayerElsewhere.Code())
+			}
+			if hasRecord(owners, 42) || owners.Admit(42) == nil || owners.Resident(42) {
+				t.Fatalf("a player bound to sid %d was taken into service on sid %d", bound, ownSID)
+			}
+		}
+	})
+	t.Run("bound-here", func(t *testing.T) {
+		owners, _, _ := ownersUnderTest(t)
+		if err := owners.Serve(context.Background(), 42, ownSID); err != nil {
+			t.Fatalf("a player bound to this sid was refused: %v", err)
+		}
+		if err := owners.Admit(42); err != nil {
+			t.Fatalf("a served player is not admitted: %v", err)
+		}
+		if !owners.Resident(42) {
+			t.Fatal("a served player is not resident")
+		}
+	})
+	t.Run("unload-outlives-the-wait", func(t *testing.T) {
+		owners, _, clock := ownersUnderTest(t)
+		unloadStuck(t, owners, clock, 42)
+		began := time.Now()
+		err := owners.Serve(context.Background(), 42, ownSID)
+		if elapsed := time.Since(began); elapsed > time.Second {
+			t.Fatalf("Serve waited %s for a budget of %s", elapsed, owners.evictWait)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Serve during an unload that outlived its wait = %v, want a retryable deadline", err)
+		}
+		if owners.Admit(42) == nil {
+			t.Fatal("writes are admitted for a player whose copy is still being dropped")
+		}
+	})
+}
+
+// AdmitBound：命令里的 sid 不是本服 → local=false、不建记录（调用方转交）；是本服 → 建记录、放行。
+func TestAdmitBoundServesOnlyItsOwnSid(t *testing.T) {
+	owners, _, _ := ownersUnderTest(t)
+	local, err := owners.AdmitBound(42, 2000)
+	if local || err != nil {
+		t.Fatalf("AdmitBound for a player bound elsewhere = %v, %v; want not local", local, err)
+	}
+	if hasRecord(owners, 42) || owners.Admit(42) == nil {
+		t.Fatal("background work for a player bound elsewhere left a resident record here")
+	}
+	local, err = owners.AdmitBound(42, ownSID)
+	if !local || err != nil {
+		t.Fatalf("AdmitBound for this sid's player = %v, %v", local, err)
+	}
+	if err := owners.Admit(42); err != nil {
+		t.Fatalf("a player admitted for background work is not admitted: %v", err)
+	}
+}
+
+// 边界上的闸门：登录必须放行（它就是建立驻留记录的那条消息），其余一律按 Admit 判。
+func TestTheWriteGateExemptsLoginAndRefusesEverythingElse(t *testing.T) {
+	owners, _, _ := ownersUnderTest(t)
+
+	if err := owners.AdmitMessage(42, msgid.MsgEnterGame); err != nil {
+		t.Fatalf("login was gated on already serving the player: %v", err)
+	}
+	if err := owners.AdmitMessage(42, msgid.MsgAddItem); !errors.Is(err, ErrNotServedHere) {
+		t.Fatalf("a write was admitted for a player this process does not serve: %v", err)
+	}
+	if err := owners.Serve(context.Background(), 42, ownSID); err != nil {
+		t.Fatal(err)
+	}
+	if err := owners.AdmitMessage(42, msgid.MsgAddItem); err != nil {
+		t.Fatalf("a write was refused for a served player: %v", err)
+	}
+}
+
+// 只读的查看不算使用（原“续租不算使用”，I9）：否则 matchmaker 每轮看一眼的玩家永远不会闲置。
+// 查看也不建记录。
+func TestLookingAtAPlayerIsNotUse(t *testing.T) {
+	owners, _, clock := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	if owners.Resident(77) || hasRecord(owners, 77) {
+		t.Fatal("looking at a player nobody admitted made them resident")
+	}
+	if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+		t.Fatalf("admit bound: %v %v", local, err)
+	}
+	for range 4 {
+		*clock = clock.Add(IdleUnload / 4)
+		if !owners.Resident(77) {
+			t.Fatal("a resident player stopped being resident before anything unloaded them")
+		}
+	}
+	*clock = clock.Add(time.Second)
+	owners.unloadIdle(context.Background())
+	if got := evictor.taken(); len(got) != 1 || got[0] != 77 {
+		t.Fatalf("a player only looked at was kept as if used: dropped=%v", got)
+	}
+}
+
+// RR-20260920-10 转写：后台工作接入的离线玩家，用完、闲置之后被卸载，记录随之删除。
+func TestABackgroundAdmissionIsUnloadedWhenNobodyIsPlaying(t *testing.T) {
+	owners, _, clock := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+		t.Fatalf("a background step could not take an offline player bound here: %v %v", local, err)
+	}
+	*clock = clock.Add(IdleUnload + time.Second)
+	owners.unloadIdle(context.Background())
+
+	if got := evictor.taken(); len(got) != 1 || got[0] != 77 {
+		t.Fatalf("the idle player's copy was kept: %v", got)
+	}
+	if hasRecord(owners, 77) || owners.Admit(77) == nil {
+		t.Fatal("this process still admits writes for a player it unloaded")
+	}
+	// 下一次后台工作在本进程重新接入（冷加载等投影屏障，不在本表里）。
+	if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+		t.Fatalf("the unloaded player could not be taken back into service: %v %v", local, err)
+	}
+}
+
+// 在本进程有连接的玩家不管多安静都不卸载。
+func TestAPlayerWithASessionIsNeverUnloaded(t *testing.T) {
+	owners, fencer, clock := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	if err := owners.Serve(context.Background(), 42, ownSID); err != nil {
+		t.Fatal(err)
+	}
+	fencer.connect(42)
+	for range 5 {
+		*clock = clock.Add(IdleUnload)
+		owners.unloadIdle(context.Background())
+	}
+	if len(evictor.taken()) != 0 {
+		t.Fatalf("a connected player was unloaded: %v", evictor.taken())
+	}
+	if err := owners.Admit(42); err != nil {
+		t.Fatalf("a connected player is no longer admitted: %v", err)
+	}
+}
+
+// 正在干活的玩家不卸载：每次准入都算使用，反复重试的步骤不会在自己脚下被卸载。
+func TestWorkInProgressKeepsThePlayerResident(t *testing.T) {
+	owners, _, clock := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+		t.Fatalf("admit bound: %v %v", local, err)
+	}
+	for range 5 {
+		*clock = clock.Add(IdleUnload - time.Second)
+		if err := owners.Admit(77); err != nil {
+			t.Fatalf("the player lost admission mid-work: %v", err)
+		}
+		owners.unloadIdle(context.Background())
+	}
+	if len(evictor.taken()) != 0 {
+		t.Fatalf("a player doing work was unloaded: %v", evictor.taken())
+	}
+}
+
+// RR-20260920-11 转写：为新工作重新接入（Serve / AdmitBound）算使用，记录旧了也不例外——紧随其后
+// 的卸载轮次不能把刚放行的工作脚下的玩家卸掉。
+func TestAPlayerTakenIntoServiceForNewWorkIsNotIdle(t *testing.T) {
+	for _, entry := range []struct {
+		name  string
+		enter func(*PlayerOwners) error
+	}{
+		{"admit-bound", func(owners *PlayerOwners) error {
+			if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+				return errors.Join(errors.New("not admitted"), err)
+			}
+			return nil
+		}},
+		{"serve", func(owners *PlayerOwners) error { return owners.Serve(context.Background(), 77, ownSID) }},
+	} {
+		t.Run(entry.name, func(t *testing.T) {
+			owners, _, clock := ownersUnderTest(t)
+			evictor := &evictorStub{}
+			owners.Evict(evictor)
+			if err := entry.enter(owners); err != nil {
+				t.Fatal(err)
+			}
+			// 记录闲置到了阈值以上，然后新工作到达。
+			*clock = clock.Add(IdleUnload + time.Second)
+			if err := entry.enter(owners); err != nil {
+				t.Fatalf("the new work was refused: %v", err)
+			}
+			owners.unloadIdle(context.Background())
+			if len(evictor.taken()) != 0 {
+				t.Fatalf("the player was unloaded under the work just admitted: %v", evictor.taken())
+			}
+			if err := owners.Admit(77); err != nil {
+				t.Fatalf("the work lost its admission: %v", err)
+			}
+		})
+	}
+}
+
+// sessionsProbe 是连接数查询里能插入一次动作的 fencer：unloadOne 在锁外问连接数，测试借这个回调把
+// 一次使用精确地放进“问完连接数”与“锁内标记”之间，不靠调度碰运气。
+type sessionsProbe struct{ onActive func(playerID int64) }
+
+func (probe sessionsProbe) CloseSessions(int64, error) int { return 0 }
+
+func (probe sessionsProbe) ActiveSessions(playerID int64) int {
+	probe.onActive(playerID)
+	return 0
+}
+
+// unloadOne 先在锁外问连接数，再在锁内复核“仍然闲置”才标记：两步之间到达的使用（登录的 Serve、后台
+// 步骤的 AdmitBound）已经刷新了 lastUsed，这次卸载必须放过他。没有锁内复核，刚登录的玩家会在自己的
+// 连接下被卸载，刚放行的步骤会落在一个正被销毁的副本上。
+func TestAUseBetweenTheSessionCheckAndTheMarkCancelsTheUnload(t *testing.T) {
+	for _, entry := range []struct {
+		name string
+		use  func(*PlayerOwners) error
+	}{
+		{"serve", func(owners *PlayerOwners) error { return owners.Serve(context.Background(), 77, ownSID) }},
+		{"admit-bound", func(owners *PlayerOwners) error {
+			if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+				return errors.Join(errors.New("not admitted"), err)
+			}
+			return nil
+		}},
+	} {
+		t.Run(entry.name, func(t *testing.T) {
+			clock := time.Unix(1_700_000_000, 0)
+			var owners *PlayerOwners
+			var used error
+			probed := 0
+			owners = newPlayerOwners(ownSID, sessionsProbe{onActive: func(playerID int64) {
+				if playerID == 77 {
+					probed++
+					used = entry.use(owners)
+				}
+			}}, func() time.Time { return clock })
+			evictor := &evictorStub{}
+			owners.Evict(evictor)
+			if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+				t.Fatalf("admit bound: %v %v", local, err)
+			}
+			clock = clock.Add(IdleUnload + time.Second)
+			owners.unloadIdle(context.Background())
+
+			if probed != 1 {
+				t.Fatalf("precondition: the unload pass asked about player 77's sessions %d times, want once", probed)
+			}
+			if used != nil {
+				t.Fatalf("the use between the session check and the mark was refused: %v", used)
+			}
+			if got := evictor.taken(); len(got) != 0 {
+				t.Fatalf("a player used between the session check and the mark was unloaded: dropped=%v", got)
+			}
+			if dropRunning(owners, 77) || owners.Admit(77) != nil {
+				t.Fatalf("the use did not keep player 77 in service: unloading=%v admit=%v", dropRunning(owners, 77), owners.Admit(77))
+			}
+		})
+	}
+}
+
+// 卸载扔不掉副本（实体忙）：记录保留，玩家继续服务，下一轮再试。
+func TestAnUnloadThatCannotDropTheCopyKeepsThePlayerInService(t *testing.T) {
+	owners, _, clock := ownersUnderTest(t)
+	if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+		t.Fatalf("admit bound: %v %v", local, err)
+	}
+	owners.Evict(&evictorStub{fail: errors.New("the entity is busy")})
+	*clock = clock.Add(IdleUnload + time.Second)
+	owners.unloadIdle(context.Background())
+
+	if !hasRecord(owners, 77) {
+		t.Fatal("the record was dropped although the copy is still here")
+	}
+	if err := owners.Admit(77); err != nil {
+		t.Fatalf("the player stayed closed after an unload that did not happen: %v", err)
+	}
+}
+
+// 卸载进行中什么都不放行：Admit、AdmitBound 拒绝，Resident 为假。否则放进来的工作会落在一个正在被
+// 销毁的副本上。
+func TestAnUnloadInFlightAdmitsNothing(t *testing.T) {
+	owners, _, clock := ownersUnderTest(t)
+	var admit, admitBound error
+	var local, resident bool
+	calls := 0
+	owners.Evict(evictorFunc(func(_ context.Context, playerID int64) error {
+		calls++
+		admit = owners.Admit(playerID)
+		local, admitBound = owners.AdmitBound(playerID, ownSID)
+		resident = owners.Resident(playerID)
+		return nil
+	}))
+	if l, err := owners.AdmitBound(77, ownSID); !l || err != nil {
+		t.Fatalf("admit bound: %v %v", l, err)
+	}
+	*clock = clock.Add(IdleUnload + time.Second)
+	owners.unloadIdle(context.Background())
+
+	if calls != 1 {
+		t.Fatalf("the unload did not evict exactly once: %d", calls)
+	}
+	if !errors.Is(admit, ErrNotServedHere) {
+		t.Fatalf("Admit during the unload = %v, want a refusal", admit)
+	}
+	if !local || !errors.Is(admitBound, ErrNotServedHere) {
+		t.Fatalf("AdmitBound during the unload = %v, %v; want local and refused", local, admitBound)
+	}
+	if resident {
+		t.Fatal("Resident answered yes for a player being unloaded")
+	}
+}
+
+// RR-20261004-11 转写：卸载等超时之后仍在后台进行，期间什么都不放行；后台工作在卸载结束后重新接入，
+// 登录加入正在进行的卸载、结束之后再接入。
+func TestAnUnloadWhoseDropOutlivesItsWaitAdmitsNothingUntilTheDropEnds(t *testing.T) {
+	t.Run("background-work", func(t *testing.T) {
+		owners, _, clock := ownersUnderTest(t)
+		_, endDrop := unloadStuck(t, owners, clock, 77)
+		if err := owners.Admit(77); err == nil {
+			t.Fatal("Admit let work start on player 77 while the unload is still destroying the copy")
+		}
+		if local, err := owners.AdmitBound(77, ownSID); !local || err == nil {
+			t.Fatalf("a background step was admitted while the copy is being destroyed: local=%v err=%v", local, err)
+		}
+		endDrop()
+		waitDropEnded(t, owners, 77)
+		if hasRecord(owners, 77) {
+			t.Fatal("the record outlived a drop that succeeded")
+		}
+		if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+			t.Fatalf("player 77 could not be taken back into service after the drop ended: %v %v", local, err)
+		}
+		if err := owners.Admit(77); err != nil {
+			t.Fatalf("player 77 is not admitted after being taken back: %v", err)
+		}
+	})
+
+	t.Run("login", func(t *testing.T) {
+		owners, _, clock := ownersUnderTest(t)
+		_, endDrop := unloadStuck(t, owners, clock, 77)
+		owners.evictWait = 5 * time.Second
+		parked := parkedOnUnload(owners, 77)
+		answered := serveInBackground(context.Background(), owners, 77)
+		select {
+		case <-parked:
+		case err := <-answered:
+			t.Fatalf("a login during the drop answered %v instead of waiting for it", err)
+		}
+		endDrop()
+		if err := <-answered; err != nil {
+			t.Fatalf("the login that waited for the drop was not served: %v", err)
+		}
+		if err := owners.Admit(77); err != nil {
+			t.Fatalf("player 77 is not in service after the login: %v", err)
+		}
+	})
+}
+
+// RR-20260920-12 转写：同一玩家同时至多一次卸载。卸载等超时后再来一轮，不会再起第二次；登录也只
+// 加入它，不自己起一次。
+func TestASecondUnloadJoinsTheOneAlreadyRunning(t *testing.T) {
+	owners, _, clock := ownersUnderTest(t)
+	evictor, endDrop := unloadStuck(t, owners, clock, 42)
+	*clock = clock.Add(IdleUnload + time.Second)
+	owners.unloadIdle(context.Background())
+	if err := owners.Serve(context.Background(), 42, ownSID); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a login during the drop = %v, want the bounded wait to run out", err)
+	}
+	if extra := len(evictor.calls); extra != 0 {
+		t.Fatalf("the drop was started %d more times while one was running", extra)
+	}
+	endDrop()
+	waitDropEnded(t, owners, 42)
+	if err := owners.Serve(context.Background(), 42, ownSID); err != nil {
+		t.Fatalf("the player was not served after the drop ended: %v", err)
+	}
+}
+
+// RR-20260921-03 转写（原四个子测试合并）：卸载进行中到达的登录，结局一定可服务——记录存在、放行；
+// 卸载成功删记录发生在登录醒来之前，不会删掉登录建的那条。登录的等待受调用方 ctx 约束。
+func TestALoginDuringAnUnloadEndsServed(t *testing.T) {
+	t.Run("ends-served", func(t *testing.T) {
+		owners, _, clock := ownersUnderTest(t)
+		owners.evictWait = 50 * time.Millisecond
+		if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+			t.Fatalf("admit bound: %v %v", local, err)
+		}
+		evictor := newBlockingEvictor()
+		owners.Evict(evictor)
+		*clock = clock.Add(IdleUnload + time.Second)
+		unloaded := make(chan struct{})
+		go func() {
+			defer close(unloaded)
+			owners.unloadIdle(context.Background())
+		}()
+		<-evictor.calls
+		owners.evictWait = 5 * time.Second
+		parked := parkedOnUnload(owners, 77)
+		answered := serveInBackground(context.Background(), owners, 77)
+		<-parked
+		close(evictor.release)
+		if err := <-answered; err != nil {
+			t.Fatalf("a login during the unload was not served: %v", err)
+		}
+		<-unloaded
+		if !hasRecord(owners, 77) {
+			t.Fatal("the unload deleted the record the login had just created")
+		}
+		if err := owners.Admit(77); err != nil {
+			t.Fatalf("the login ended with a player this process does not admit: %v", err)
+		}
+	})
+	// runEviction 承诺“成功时删记录与关闭 done 在同一个临界区、删在前”。done 一关，等着的登录就醒来
+	// 建或刷新记录；删除若挪到 close(done) 之后的另一个临界区，它会删掉登录刚刚确认过的那条记录，登录
+	// 回答成功、玩家却不再被准入。afterUnloadDone 把登录精确地放在 close(done) 与 runEviction 返回之间。
+	t.Run("the-record-is-gone-before-the-waiters-wake", func(t *testing.T) {
+		owners, _, _ := ownersUnderTest(t)
+		owners.evictWait = 5 * time.Second
+		if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+			t.Fatalf("admit bound: %v %v", local, err)
+		}
+		// 标记卸载，与 unloadOne 在锁内做的一样；runEviction 由测试在本 goroutine 上调用，它返回时
+		// 卸载的每一步都已经做完。
+		in := &eviction{done: make(chan struct{})}
+		owners.mu.Lock()
+		owners.evictions[77] = in
+		owners.mu.Unlock()
+		parked := parkedOnUnload(owners, 77)
+		answered := serveInBackground(context.Background(), owners, 77)
+		<-parked
+		var served error
+		woke := false
+		owners.afterUnloadDone = func(playerID int64) {
+			if playerID == 77 {
+				woke = true
+				served = <-answered
+			}
+		}
+		owners.runEviction(&evictorStub{}, 77, in)
+		if !woke {
+			t.Fatal("precondition: the hook after close(done) never ran")
+		}
+		if served != nil {
+			t.Fatalf("the login woken by the unload was not served: %v", served)
+		}
+		if !hasRecord(owners, 77) {
+			t.Fatal("the unload deleted the record the login created after it woke")
+		}
+		if err := owners.Admit(77); err != nil {
+			t.Fatalf("the login ended served but the player is not admitted: %v", err)
+		}
+	})
+	t.Run("the-wait-ends-with-the-callers-context", func(t *testing.T) {
+		owners, _, clock := ownersUnderTest(t)
+		_, endDrop := unloadStuck(t, owners, clock, 77)
+		owners.evictWait = 5 * time.Second
+		parked := parkedOnUnload(owners, 77)
+		ctx, cancel := context.WithCancel(context.Background())
+		answered := serveInBackground(ctx, owners, 77)
+		<-parked
+		cancel()
+		if err := <-answered; !errors.Is(err, context.Canceled) {
+			t.Fatalf("a login whose caller gave up waiting answered %v, want the caller's context error", err)
+		}
+		endDrop()
+		waitDropEnded(t, owners, 77)
+		if err := owners.Serve(context.Background(), 77, ownSID); err != nil {
+			t.Fatalf("a later login was not served: %v", err)
+		}
+	})
+}
+
+// 停机时断开本进程服务中的每个玩家（Service.Shutdown 调用；见 service_shutdown_test）。
+func TestCloseServedSessionsClosesEveryServedPlayer(t *testing.T) {
+	owners, fencer, _ := ownersUnderTest(t)
+	for _, playerID := range []int64{42, 43} {
+		if err := owners.Serve(context.Background(), playerID, ownSID); err != nil {
+			t.Fatal(err)
+		}
+		fencer.connect(playerID)
+	}
+	if closed := owners.CloseServedSessions(errors.New("stopping")); closed != 2 {
+		t.Fatalf("closed %d connections, want 2", closed)
+	}
+	got := map[int64]bool{}
+	for _, playerID := range fencer.closedPlayers() {
+		got[playerID] = true
+	}
+	if !got[42] || !got[43] {
+		t.Fatalf("not every served player was disconnected: %v", fencer.closedPlayers())
+	}
+}

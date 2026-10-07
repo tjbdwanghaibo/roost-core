@@ -1,0 +1,53 @@
+package player
+
+import (
+	"context"
+	"testing"
+
+	playerentity "example.com/planet/game/entities/player"
+	player_agent "example.com/planet/game/player_agent"
+	"example.com/planet/protocol/msgid"
+	"example.com/planet/protocol/pb"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+)
+
+// recordingNest is a Nest client that answers every Request and remembers the
+// parameters it was given.
+type recordingNest struct {
+	corenest.Client
+	handler string
+	params  corenest.Params
+}
+
+func (client *recordingNest) Request(_ context.Context, name corenest.HandlerName, _ int64, params corenest.Params, _ ...corenest.SendOpt) (any, error) {
+	client.handler, client.params = name.String(), params
+	return "gift-saga", nil
+}
+
+// sidOwners is the ownership table of a process with sid 1300.
+type sidOwners struct{ recordingOwners }
+
+func (sidOwners) SID() int32 { return 1300 }
+
+// 静态绑定（docs/feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md §3.3）：send_gift 把本进程的 sid
+// 作为发送方绑定的 sid 交给 StartGift，赠礼的 debit / refund 按它路由。能在本进程发起赠礼的玩家一定
+// 经过了 Serve，也就一定绑定在这个 sid 上。
+func TestSendGiftWritesThisProcessSidAsTheSendersSid(t *testing.T) {
+	playerentity.RegisterEntity()
+	nest := &recordingNest{}
+	controller := &Controller{registry: app.NewRegistry(viper.New()), nestClient: nest}
+	var published playerOwners = &sidOwners{}
+	controller.owners.Store(&published)
+	response, err := controller.HandleSendGift(&player_agent.Context{BaseCtx: context.Background(), Session: boundTo(1300), PlayerID: stuckPlayerID, MsgID: msgid.MsgSendGift, Seq: 7}, &pb.SendGiftRequest{ToPlayerID: 43, ItemID: 1001, Count: 2})
+	if err != nil || response.Code != 0 {
+		t.Fatalf("send_gift = %+v, %v", response, err)
+	}
+	if nest.handler != "handlerStartGift" || len(nest.params) < 2 {
+		t.Fatalf("send_gift called %q with %v, want handlerStartGift(from, fromSID, ...)", nest.handler, nest.params)
+	}
+	if from, sid := nest.params[0], nest.params[1]; from != stuckPlayerID || sid != int32(1300) {
+		t.Fatalf("StartGift got sender %v on sid %v, want %d on this process's sid 1300", from, sid, stuckPlayerID)
+	}
+}

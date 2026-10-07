@@ -1,0 +1,74 @@
+package player
+
+import (
+	db "example.com/planet/db"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+// PlayerSyncCodec identifies the payload format on the wire. A client that
+// does not know this number must not guess at the bytes; changing the format
+// means changing this number, and the subject's SchemaVersion decides whether
+// a client gets a resync.
+const PlayerSyncCodec uint16 = 1
+
+// NewPlayerSyncPacker is the factory named by the entity's subjectPacker
+// marker. Its signature is Core's: the framework hands the built Entity in and
+// expects the packer that serializes it.
+func NewPlayerSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
+	owner, _ := value.(*Player)
+	return playerSyncPacker{player: owner}
+}
+
+// 通过生成 DAO 的字段词汇表定义视图，字段位变化不要求业务手工修改掩码。
+// default 保持原有全字段行为；near/far 是业务可显式订阅的示例，不自动扩大授权。
+// packer 在实体锁内执行，不再加锁、不阻塞。
+type playerSyncPacker struct{ player *Player }
+
+var playerViews, playerViewsErr = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
+	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}, Priority: -1},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: []string{"Name", "Level", "PosX", "PosY", "SceneID", "Equipment", "GuildID"}, Priority: 0},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "far", LOD: 1}, Fields: []string{"Name", "Level", "PosX", "PosY", "SceneID"}, Priority: 10},
+)
+
+// A snapshot is what a brand-new subscriber gets, and what a resync produces:
+// every synced field, not only the dirty ones.
+func (packer playerSyncPacker) PackSubjectSnapshot(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+	return packer.pack(profile, dataengine.AllFields)
+}
+
+// A delta carries exactly the fields the mask names. The mask is the one the
+// generated setters accumulated, handed over by Player.PublishSyncDirty.
+func (packer playerSyncPacker) PackSubjectDelta(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	return packer.pack(profile, mask)
+}
+
+func (packer playerSyncPacker) pack(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	if packer.player == nil {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("player sync packer: no entity")
+	}
+	// MarshalSync returns nil when the mask names nothing this DAO syncs. An
+	// empty payload is a legitimate answer (the subject was marked for a
+	// field that is not replicated); returning an error here would fail the
+	// whole prepare for every profile.
+	if playerViewsErr != nil {
+		return entity.FrozenSyncPayload{}, playerViewsErr
+	}
+	view, ok := playerViews.Lookup(profile)
+	if !ok {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("%w: %+v", entity.ErrSyncViewUnknown, profile)
+	}
+	mask &= view.Fields
+	if mask == 0 {
+		return entity.FrozenSyncPayload{}, nil
+	}
+	raw := packer.player.Dao().MarshalSync(mask)
+	if len(raw) == 0 {
+		return entity.FrozenSyncPayload{}, nil
+	}
+	// TakeFrozenSyncPayload transfers ownership: MarshalSync just built these
+	// bytes and nobody else holds them, so there is nothing to copy.
+	return entity.TakeFrozenSyncPayload(PlayerSyncCodec, raw), nil
+}

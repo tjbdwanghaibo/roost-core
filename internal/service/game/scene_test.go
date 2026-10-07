@@ -1,0 +1,1752 @@
+package Game
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"example.com/planet/game/chatroom"
+	player "example.com/planet/game/entities/player"
+	world "example.com/planet/game/entities/world"
+	"example.com/planet/game/handler"
+	syncsender "example.com/planet/game/handler/syncsender"
+	gamescene "example.com/planet/game/scene"
+	accessplayertcp "example.com/planet/internal/access/player/tcp"
+	"example.com/planet/protocol/msgid"
+	"example.com/planet/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
+	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/sync/frame"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// What this asserts is the whole claim of sync=true: a change made on the
+// server, through the ordinary DAO setters, reaches ANOTHER player's client
+// as a decodable delta — without anyone writing a push for it.
+//
+// The only stand-in is the socket. The subject, the room, the wire encoding
+// and the client-side decode are the real framework, which is the point: a
+// test that packed its own payload would prove nothing about the pipeline
+// that carries it.
+
+// sceneRecorder stands in for the player TCP Runtime, keeping what each
+// player would have received.
+type sceneRecorder struct {
+	mu          sync.Mutex
+	pushes      map[int64][]*pb.EntitySyncPush
+	offline     map[int64]bool
+	unreachable map[int64]error // a push to this player fails with this error
+	unavailable bool            // the whole access layer is gone: every push fails
+	closed      []func(accessplayertcp.SessionClosed)
+}
+
+func newSceneRecorder() *sceneRecorder {
+	return &sceneRecorder{pushes: make(map[int64][]*pb.EntitySyncPush)}
+}
+
+func (recorder *sceneRecorder) PushPlayer(_ context.Context, playerID int64, messageID uint32, value any) error {
+	if messageID != msgid.MsgEntitySync {
+		return nil
+	}
+	push, ok := value.(*pb.EntitySyncPush)
+	if !ok {
+		return nil
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.unavailable {
+		return accessplayertcp.ErrTransportUnavailable
+	}
+	if err := recorder.unreachable[playerID]; err != nil {
+		return err
+	}
+	recorder.pushes[playerID] = append(recorder.pushes[playerID], push)
+	return nil
+}
+
+// disconnect makes one player unreachable the way the real access layer
+// reports it: no session, so every push to them fails. Nobody is told —
+// this is the case the session lifecycle source has NOT fired for yet.
+func (recorder *sceneRecorder) disconnect(playerID int64) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.unreachable == nil {
+		recorder.unreachable = make(map[int64]error)
+	}
+	recorder.unreachable[playerID] = fmt.Errorf("%w: player %d", accessplayertcp.ErrSessionNotFound, playerID)
+	if recorder.offline == nil {
+		recorder.offline = make(map[int64]bool)
+	}
+	recorder.offline[playerID] = true
+}
+
+func (recorder *sceneRecorder) setUnavailable(unavailable bool) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.unavailable = unavailable
+}
+
+// Every recorded player counts as connected unless a test says otherwise.
+func (recorder *sceneRecorder) ActiveSessions(playerID int64) int {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.offline[playerID] {
+		return 0
+	}
+	return 1
+}
+
+// OnSessionClosed is the access layer's session lifecycle source, stood in
+// for: the test closes a session by calling the subscriber directly.
+func (recorder *sceneRecorder) OnSessionClosed(fn func(accessplayertcp.SessionClosed)) func() {
+	recorder.mu.Lock()
+	recorder.closed = append(recorder.closed, fn)
+	recorder.mu.Unlock()
+	return func() {}
+}
+
+func (recorder *sceneRecorder) close(playerID int64) {
+	recorder.mu.Lock()
+	if recorder.offline == nil {
+		recorder.offline = make(map[int64]bool)
+	}
+	recorder.offline[playerID] = true
+	subscribers := append([]func(accessplayertcp.SessionClosed){}, recorder.closed...)
+	recorder.mu.Unlock()
+	for _, fn := range subscribers {
+		fn(accessplayertcp.SessionClosed{PlayerID: playerID, SessionID: "gone"})
+	}
+}
+
+// reconnect brings a closed player back: a new connection is up.
+func (recorder *sceneRecorder) reconnect(playerID int64) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	delete(recorder.offline, playerID)
+	delete(recorder.unreachable, playerID)
+}
+
+func (recorder *sceneRecorder) take(playerID int64) []*pb.EntitySyncPush {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	taken := recorder.pushes[playerID]
+	delete(recorder.pushes, playerID)
+	return taken
+}
+
+// decodeSceneFrames turns what one player received into the subject updates
+// it carries: each push is one frame, each object one subject.
+func decodeSceneFrames(t *testing.T, _ int64, pushes []*pb.EntitySyncPush) map[int64]bson.M {
+	t.Helper()
+	out := make(map[int64]bson.M)
+	for _, push := range pushes {
+		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
+		if err != nil {
+			t.Fatalf("decode frame: %v", err)
+		}
+		for _, object := range decoded.Objects {
+			for _, component := range object.Components {
+				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
+				if err != nil {
+					t.Fatalf("decode subject update: %v", err)
+				}
+				payload := update.Payload.BytesCopy()
+				if len(payload) == 0 {
+					continue
+				}
+				var document bson.M
+				if err := bson.Unmarshal(payload, &document); err != nil {
+					t.Fatalf("decode player sync payload: %v", err)
+				}
+				out[update.SubjectID] = document
+			}
+		}
+	}
+	return out
+}
+
+// removesIn counts the ObjectRemoves a player received.
+func removesIn(t *testing.T, pushes []*pb.EntitySyncPush) int {
+	t.Helper()
+	removes := 0
+	for _, push := range pushes {
+		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
+		if err != nil {
+			t.Fatalf("decode frame: %v", err)
+		}
+		for _, object := range decoded.Objects {
+			if object.Operation == frame.ObjectRemove {
+				removes++
+			}
+		}
+	}
+	return removes
+}
+
+// joinReady is what the login path does end to end: Join (session held) and
+// the client's scene_ready (session released).
+func joinReady(t *testing.T, scene *Scene, ctx context.Context, subject *player.Player, at spatial.Point) {
+	t.Helper()
+	if err := scene.Join(ctx, subject, at); err != nil {
+		t.Fatalf("join %d: %v", subject.ID(), err)
+	}
+	if err := scene.Ready(entity.GetUniqueIDFromEntityID(subject.ID())); err != nil {
+		t.Fatalf("ready %d: %v", subject.ID(), err)
+	}
+}
+
+func newScenePlayer(t *testing.T, uniqueID int64) *player.Player {
+	t.Helper()
+	player.RegisterEntity()
+	id, err := entity.BuildEntityID(uniqueID, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: player.EntityKindPlayer, Id: id})
+	if err != nil {
+		t.Fatalf("build player %d: %v", uniqueID, err)
+	}
+	value, ok := built.(*player.Player)
+	if !ok {
+		t.Fatalf("the generated factory produced %T", built)
+	}
+	return value
+}
+
+func newSceneWorld(t *testing.T) *world.World {
+	t.Helper()
+	world.RegisterEntity()
+	id, err := entity.BuildEntityID(1, world.EntityKindWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: world.EntityKindWorld, Id: id})
+	if err != nil {
+		t.Fatalf("build world: %v", err)
+	}
+	return built.(*world.World)
+}
+
+// sceneCommitter keeps what a transaction would have written instead of
+// writing it: this test is about what goes out on the wire, not what lands in
+// Mongo.
+type sceneCommitter struct{}
+
+func (sceneCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+func newSceneNest(t *testing.T, entities map[int64]entity.IThreadSafeEntity) nest.Client {
+	t.Helper()
+	handler.RegisterAddExpNestHandlers()
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(sceneGetter(entities)),
+		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	return engine
+}
+
+type sceneGetter map[int64]entity.IThreadSafeEntity
+
+func (g sceneGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	value, ok := g[id]
+	if !ok {
+		return nil, fmt.Errorf("the harness holds no entity %d", id)
+	}
+	return value, nil
+}
+
+func (g sceneGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}
+
+func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const (
+		watcherID = int64(9001)
+		moverID   = int64(9002)
+	)
+	watcher := newScenePlayer(t, watcherID)
+	mover := newScenePlayer(t, moverID)
+	// Close enough to see each other: the enter radius is 120.
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 520, Y: 500})
+	if scene.Members() != 2 {
+		t.Fatalf("the scene holds %d members, want 2", scene.Members())
+	}
+	// Joining owes snapshots on the next tick; this test is about what a
+	// CHANGE produces, so run that tick and start from a clean slate.
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush after joins: %v", err)
+	}
+	recorder.take(watcherID)
+
+	// An ordinary server-side mutation, through the real AddExp transaction.
+	// It has to be a transaction: the generated persist setters refuse to run
+	// outside one, which is also why replication cannot be a side effect of
+	// "someone called a setter" — it is a side effect of a committed change.
+	// Nothing in the handler knows about replication.
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{
+		watcher.ID(): watcher, mover.ID(): mover, counters.ID(): counters,
+	})
+	gained, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, mover.ID(), counters.ID(), 250)
+	if err != nil {
+		t.Fatalf("add exp: %v", err)
+	}
+	if gained == 0 {
+		t.Fatal("the mutation did not level the player up, so the delta would be exp only")
+	}
+	if !mover.Sync().PendingDirty() {
+		t.Fatal("the subject was not marked dirty; PublishSyncDirty did not reach it")
+	}
+
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	updates := decodeSceneFrames(t, watcherID, recorder.take(watcherID))
+	document, ok := updates[mover.ID()]
+	if !ok {
+		t.Fatalf("the watcher received no update for subject %d; got %v", mover.ID(), updates)
+	}
+	// The delta carries the fields the mask named — the ones AddExp changed.
+	if _, ok := document["level"]; !ok {
+		t.Errorf("the delta does not carry the level that changed: %v", document)
+	}
+	if _, ok := document["exp"]; !ok {
+		t.Errorf("the delta does not carry the exp that changed: %v", document)
+	}
+	// And not the ones it did not: a delta is not a snapshot.
+	if _, ok := document["items"]; ok {
+		t.Errorf("the delta carries a field the mutation never touched: %v", document)
+	}
+}
+
+// A player who leaves stops being replicated, and the others are told the
+// object is gone rather than left with a stale copy of it.
+func TestSceneRetiresASubjectOnLeave(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	watcher := newScenePlayer(t, 9101)
+	leaver := newScenePlayer(t, 9102)
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, leaver, spatial.Point{X: 510, Y: 500})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush after joins: %v", err)
+	}
+	recorder.take(9101)
+
+	scene.Leave(ctx, leaver.ID())
+	if scene.Members() != 1 {
+		t.Fatalf("the scene holds %d members after a leave, want 1", scene.Members())
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush after leave: %v", err)
+	}
+	if removesIn(t, recorder.take(9101)) != 1 {
+		t.Error("the watcher was not told the leaver's object is gone")
+	}
+}
+
+// A player who disconnects while nothing else is happening must leave the
+// scene anyway. Before the access layer published session closes, the only
+// thing that noticed was a failed push — which never happens if nobody is
+// pushing, so an idle world kept its ghosts (RR-20260918-06).
+func TestAClosedSessionLeavesTheSceneWithoutAnyTraffic(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	scene.watchSessions(recorder)
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const goneID = int64(9301)
+	subject := newScenePlayer(t, goneID)
+	joinReady(t, scene, ctx, subject, spatial.Point{X: 500, Y: 500})
+	if scene.Members() != 1 {
+		t.Fatalf("the scene holds %d members after a join, want 1", scene.Members())
+	}
+
+	recorder.close(goneID)
+
+	// The removal runs on its own goroutine so the lifecycle source is never
+	// held by a subscriber.
+	deadline := time.Now().Add(2 * time.Second)
+	for scene.Members() != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if members := scene.Members(); members != 0 {
+		t.Fatalf("the scene still holds %d members two seconds after the session closed, with no traffic to notice it", members)
+	}
+}
+
+// U-0278（W-2026-09-22-03）：一个推不到的玩家不能让同一批里排在它后面的人少收帧。
+//
+// 房间把一次 flush 的帧按观察者 id 升序排成一批交给这条 lane。lane 以前逐个推、第一个
+// 失败就整批返回错误——排在前面的已经推出去了（下一 tick 再收一遍），排在后面的一个
+// 都没推。RR-20260922-01 的实跑里，16 个客户端有 13 个从第一个断线者起再没收到任何帧。
+//
+// 承诺：推不到的那个玩家自己离开场景；其余人这一帧照常到达；批次不报错。
+func TestAnUnreachablePlayerDoesNotStarveTheOthers(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	// Three observers of one change, sorted by id: the one in the middle is
+	// the one whose connection has gone.
+	const (
+		firstID = int64(9401)
+		goneID  = int64(9402)
+		lastID  = int64(9403)
+	)
+	first := newScenePlayer(t, firstID)
+	gone := newScenePlayer(t, goneID)
+	last := newScenePlayer(t, lastID)
+	for i, member := range []*player.Player{first, gone, last} {
+		joinReady(t, scene, ctx, member, spatial.Point{X: 500 + int64(i)*10, Y: 500})
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush after joins: %v", err)
+	}
+	recorder.take(firstID)
+	recorder.take(goneID)
+	recorder.take(lastID)
+	recorder.disconnect(goneID)
+
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{
+		first.ID(): first, gone.ID(): gone, last.ID(): last, counters.ID(): counters,
+	})
+	if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, first.ID(), counters.ID(), 250); err != nil {
+		t.Fatalf("add exp: %v", err)
+	}
+	flushErr := scene.Flush(ctx)
+
+	updates := decodeSceneFrames(t, lastID, recorder.take(lastID))
+	if _, ok := updates[first.ID()]; !ok {
+		t.Fatalf("the observer sorted after the unreachable one received nothing (flush error: %v); got %v", flushErr, updates)
+	}
+	if flushErr != nil {
+		t.Fatalf("one unreachable observer failed the whole batch: %v", flushErr)
+	}
+	// The unreachable player's session was closed by the manager, which
+	// tells the scene; the removal runs on its own goroutine.
+	deadline := time.Now().Add(2 * time.Second)
+	for scene.Members() != 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if members := scene.Members(); members != 2 {
+		t.Fatalf("the scene holds %d members two seconds after a push to one of them failed, want 2", members)
+	}
+}
+
+// The other kind of push failure: the access layer itself is gone (starting,
+// stopping). That is nobody's fault in particular, so the batch must fail so
+// the room keeps the subject dirty and retries — and no player may be thrown
+// out of the scene for it.
+func TestAnUnavailableTransportKeepsTheBatchAndThePlayers(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const (
+		moverID   = int64(9501)
+		watcherID = int64(9502)
+	)
+	mover := newScenePlayer(t, moverID)
+	watcher := newScenePlayer(t, watcherID)
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 510, Y: 500})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush after joins: %v", err)
+	}
+	recorder.setUnavailable(true)
+
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{
+		mover.ID(): mover, watcher.ID(): watcher, counters.ID(): counters,
+	})
+	if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, mover.ID(), counters.ID(), 250); err != nil {
+		t.Fatalf("add exp: %v", err)
+	}
+	if err := scene.Flush(ctx); !errors.Is(err, accessplayertcp.ErrTransportUnavailable) {
+		t.Fatalf("flush with the transport gone: %v, want ErrTransportUnavailable so the room retries", err)
+	}
+	if !mover.Sync().PendingDirty() {
+		t.Fatal("the change was dropped: the subject is no longer dirty although nobody received it")
+	}
+	// Give an (incorrect) asynchronous removal time to happen before asserting
+	// that it did not.
+	time.Sleep(100 * time.Millisecond)
+	if members := scene.Members(); members != 2 {
+		t.Fatalf("a transport outage threw players out of the scene: members=%d, want 2", members)
+	}
+}
+
+// The id-space contract, pinned rather than commented.
+//
+// The interest system and the manager's subjects carry the **full entity
+// id** — the id that is unique across kinds, as opposed to a unique id, which
+// is only unique within one (a Player 42 and a Monster 42 share it). The
+// manager's sessions are whatever the transport addresses; in this demo that
+// is the player id, and sessionFor is the one place that crosses from one
+// space to the other.
+func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const uniqueID = int64(9401)
+	subject := newScenePlayer(t, uniqueID)
+	joinReady(t, scene, ctx, subject, spatial.Point{X: 500, Y: 500})
+
+	// The subject the manager holds is the entity id, not the unique id.
+	if subject.ID() == uniqueID {
+		t.Fatal("this player's entity id equals its unique id, so this test cannot tell the two spaces apart")
+	}
+	subscribers := scene.manager.Subscribers(subject.ID())
+	if len(subscribers) == 0 {
+		t.Fatal("the player is not subscribed to its own subject")
+	}
+	// And the one place that leaves the entity id space is sessionFor, on
+	// its way to a transport session: the session IS the player id.
+	for _, session := range subscribers {
+		if session != entitysync.SessionID(uniqueID) {
+			t.Errorf("a session id is %d; this bridge's sessions are player ids (%d)", session, uniqueID)
+		}
+	}
+	if got := entity.GetUniqueIDFromEntityID(subject.ID()); got != uniqueID {
+		t.Fatalf("the translation gives %d, want the player id %d", got, uniqueID)
+	}
+}
+
+// The other half of the same source: chat presence.
+//
+// The first round of RR-20260918-06 wired the scene and left presence to the
+// lazy path — the chat push removes a player when a push to them fails and
+// they have no sessions left. In a quiet world nothing pushes, so an offline
+// player stayed in the world channel's recipient set indefinitely. The 09-19
+// review called that a partial fix, correctly.
+func TestAClosedSessionLeavesTheWorldChannel(t *testing.T) {
+	recorder := &sceneRecorder{}
+	presence := chatroom.DefaultPresence()
+	const playerID = int64(4242)
+	presence.Add(playerID)
+	t.Cleanup(func() { presence.Remove(playerID) })
+
+	unsubscribe := subscribePresence(recorder, recorder)
+	defer unsubscribe()
+
+	recorder.close(playerID)
+	if presenceHolds(presence, playerID) {
+		t.Fatal("the player is still in the world channel's recipient set after their last session closed")
+	}
+
+	// A player with another connection still up stays: one closed session is
+	// not one offline player.
+	const stillOnline = int64(4243)
+	presence.Add(stillOnline)
+	t.Cleanup(func() { presence.Remove(stillOnline) })
+	recorder.mu.Lock()
+	subscribers := append([]func(accessplayertcp.SessionClosed){}, recorder.closed...)
+	recorder.mu.Unlock()
+	for _, fn := range subscribers {
+		fn(accessplayertcp.SessionClosed{PlayerID: stillOnline, SessionID: "one-of-two"})
+	}
+	if !presenceHolds(presence, stillOnline) {
+		t.Fatal("a player with another live connection was removed from the world channel")
+	}
+}
+
+func presenceHolds(presence *chatroom.Presence, playerID int64) bool {
+	for _, id := range presence.Snapshot() {
+		if id == playerID {
+			return true
+		}
+	}
+	return false
+}
+
+// U-0267 · C5 · RR-20260920-06：房间拒绝的 subscribe 必须重发。
+//
+// The matchmaker forms a team before every member has reached the scene. The
+// team source claims the pair at once, so the subscribe for the member who
+// has not joined yet is sent for a subject the room does not hold, and fails.
+// The interest system marked that pair subscribed BEFORE the room was called
+// and only re-emits on a band change — so once the member does join, nothing
+// mentions the pair again and the teammate stays invisible for the rest of
+// the session.
+func TestSceneRetriesASubscribeTheRoomRefused(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const (
+		watcherID = int64(9101)
+		laterID   = int64(9102)
+	)
+	watcher := newScenePlayer(t, watcherID)
+	later := newScenePlayer(t, laterID)
+
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 100, Y: 100})
+
+	// The team forms while the second member is still loading. The two are
+	// far enough apart that distance never claims the pair: being teammates
+	// is the only reason these two should see each other.
+	scene.SetTeam([]int64{watcherID, laterID})
+	recorder.take(watcherID)
+
+	// The teammate arrives. This is the tick that has to make good on the
+	// subscribe the room refused a moment ago.
+	joinReady(t, scene, ctx, later, spatial.Point{X: 900, Y: 900})
+
+	subscribed := false
+	for _, session := range scene.manager.Subscribers(later.ID()) {
+		if session == entitysync.SessionID(watcherID) {
+			subscribed = true
+		}
+	}
+	if !subscribed {
+		t.Fatalf("the watcher is not subscribed to teammate %d after the teammate joined: %v",
+			later.ID(), scene.manager.Subscribers(later.ID()))
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush after the teammate joined: %v", err)
+	}
+
+	// And what arrives is the teammate's whole state, not the tail of a
+	// stream the watcher missed the beginning of: a retried subscribe takes
+	// the same path as a first one, so it captures a snapshot.
+	updates := decodeSceneFrames(t, watcherID, recorder.take(watcherID))
+	document, ok := updates[later.ID()]
+	if !ok {
+		t.Fatalf("the watcher received nothing for teammate %d; got %v", later.ID(), updates)
+	}
+	for _, field := range []string{"_id", "level", "exp"} {
+		if _, ok := document[field]; !ok {
+			t.Errorf("the retried subscribe delivered %q-less state, so it was not a snapshot: %v", field, document)
+		}
+	}
+}
+
+// RR-20260926-40 (REPRO-2026-09-26-04 §7): during a reconnect the player has
+// two connections, and the push goes to both. Writing to the OLD one fails,
+// the manager closes the player's replication session and reports it lost —
+// while the NEW connection is up. The player must stay: still a member, its
+// subject still registered (nobody is sent an ObjectRemove for it), and its
+// own view restored on the live connection.
+func TestAnOldConnectionsPushFailureKeepsTheReconnectedPlayer(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	const moverID, reconnectID = int64(9701), int64(9702)
+	mover := newScenePlayer(t, moverID)
+	re := newScenePlayer(t, reconnectID)
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recorder.take(moverID)
+	recorder.take(reconnectID)
+	// The new connection logs in: EnterGame joins again and the client says ready.
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	// The old connection is still registered and writing to it fails; the
+	// new one is up (ActiveSessions stays 1).
+	recorder.mu.Lock()
+	recorder.unreachable = map[int64]error{reconnectID: fmt.Errorf("session old: %w", accessplayertcp.ErrSessionNotFound)}
+	recorder.mu.Unlock()
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{mover.ID(): mover, re.ID(): re, counters.ID(): counters})
+	if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, mover.ID(), counters.ID(), 250); err != nil {
+		t.Fatal(err)
+	}
+	_ = scene.Flush(ctx)
+	recorder.mu.Lock()
+	recorder.unreachable = nil
+	recorder.mu.Unlock()
+
+	// The settle runs on its own goroutine: wait until either the player is
+	// gone (the defect) or its view is back (a frame naming the mover).
+	resynced := false
+	moverRemoves := 0
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && scene.Members() == 2 {
+		_ = scene.Flush(ctx)
+		moverRemoves += removesIn(t, recorder.take(moverID))
+		if _, ok := decodeSceneFrames(t, reconnectID, recorder.take(reconnectID))[mover.ID()]; ok {
+			resynced = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_ = scene.Flush(ctx)
+	moverRemoves += removesIn(t, recorder.take(moverID))
+	t.Logf("members=%d ActiveSessions(%d)=%d resynced=%v removes seen by the mover=%d", scene.Members(), reconnectID, recorder.ActiveSessions(reconnectID), resynced, moverRemoves)
+	if scene.Members() != 2 {
+		t.Fatalf("reconnected player %d (still has a live session) was removed from the scene by the old connection's push failure", reconnectID)
+	}
+	if moverRemoves != 0 {
+		t.Errorf("the mover was told the reconnected player's object is gone (%d removes): its subject was unregistered", moverRemoves)
+	}
+	if !resynced {
+		t.Errorf("the reconnected player stayed in the scene but its view was never restored after the manager dropped its session")
+	}
+}
+
+// RR-20260926-40: a disconnect is acted on for the Join it was reported
+// against. A close or a lost session reported for the previous login, whose
+// settle only runs after the player has logged in again, must not remove the
+// new login; a close for the current login still removes the player.
+func TestADisconnectReportedForAnEarlierJoinDoesNotRemoveTheRejoinedPlayer(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.watchSessions(recorder)
+	// Hold every settle until the test says so, to put it after the rejoin.
+	var pendingMu sync.Mutex
+	var pending []func()
+	scene.async = func(fn func()) {
+		pendingMu.Lock()
+		pending = append(pending, fn)
+		pendingMu.Unlock()
+	}
+	runPending := func() int {
+		pendingMu.Lock()
+		queued := pending
+		pending = nil
+		pendingMu.Unlock()
+		for _, fn := range queued {
+			fn()
+		}
+		return len(queued)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	const watcherID, reconnectID = int64(9801), int64(9802)
+	watcher := newScenePlayer(t, watcherID)
+	re := newScenePlayer(t, reconnectID)
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recorder.take(watcherID)
+	recorder.take(reconnectID)
+
+	// 1. The only connection closes (ActiveSessions 0 when reported); the
+	// player logs in again before the removal runs.
+	recorder.close(reconnectID)
+	recorder.reconnect(reconnectID)
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	if ran := runPending(); ran != 1 {
+		t.Fatalf("%d settles were scheduled for one close, want 1", ran)
+	}
+	if members := scene.Members(); members != 2 {
+		t.Fatalf("a close reported for the previous login removed the player who had logged in again: members=%d", members)
+	}
+	// 1b. The generation half of the rule on its own: the same late close,
+	// but by the time its settle runs the transport counts no connection for
+	// the player either (the new one is not counted, or has gone too). "No
+	// active session" holds, the Join the close was reported for is not the
+	// current one, so it is still dropped — only a close reported for the
+	// current Join may remove the player (step 3).
+	recorder.close(reconnectID)
+	recorder.reconnect(reconnectID)
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	recorder.mu.Lock()
+	recorder.offline[reconnectID] = true
+	recorder.mu.Unlock()
+	runPending()
+	if members := scene.Members(); members != 2 {
+		t.Fatalf("a close reported for a superseded join was acted on: members=%d", members)
+	}
+	recorder.reconnect(reconnectID)
+
+	// 2. The manager dropped the session after a failed push; the player logs
+	// in again before the settle runs. The new Join reopens the session and
+	// gets the player's view back by itself; the late settle changes nothing.
+	scene.manager.CloseSession(sessionFor(re.ID()))
+	scene.sessionLost(sessionFor(re.ID()), errors.New("old socket: write timeout"))
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	runPending()
+	if members := scene.Members(); members != 2 {
+		t.Fatalf("a lost session reported for the previous login removed the player: members=%d", members)
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if removes := removesIn(t, recorder.take(watcherID)); removes != 0 {
+		t.Fatalf("the watcher was told the rejoined player is gone (%d removes)", removes)
+	}
+	if _, ok := decodeSceneFrames(t, reconnectID, recorder.take(reconnectID))[watcher.ID()]; !ok {
+		t.Fatal("the rejoin after a dropped session did not restore the player's view of the watcher")
+	}
+
+	// 3. A close for the current login, with no other connection, still
+	// removes the player.
+	recorder.close(reconnectID)
+	runPending()
+	if members := scene.Members(); members != 1 {
+		t.Fatalf("a close for the current login left the player in the scene: members=%d", members)
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if removes := removesIn(t, recorder.take(watcherID)); removes != 1 {
+		t.Fatalf("the watcher was told about %d removes after the player left, want 1", removes)
+	}
+}
+
+// RR-20260926-55 (REPRO-2026-09-26-05 §6): the connection closes, the settle
+// takes the player out — which retires its subject: the watcher is still owed
+// the ObjectRemove, sent on the next tick — and the player logs in again
+// before that tick. Register used to refuse the retiring subject and the Join
+// failed ("player did not join the replicated scene"): a fast reconnect left
+// the player out of replication until its next login.
+//
+// Join now queues the registration behind the retirement. The watcher gets the
+// remove first and then the player as a new object; the player's own session
+// gets the watcher. The manager's tick is not started, so "before the tick"
+// is certain rather than likely.
+func TestAQuickReconnectAfterTheSettleJoinsTheScene(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.watchSessions(recorder)
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	ctx := context.Background()
+	const watcherID, reconnectID = int64(9771), int64(9772)
+	watcher, re := newScenePlayer(t, watcherID), newScenePlayer(t, reconnectID)
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, re, spatial.Point{X: 510, Y: 500})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decodeSceneFrames(t, watcherID, recorder.take(watcherID))[re.ID()]; !ok {
+		t.Fatal("setup: the watcher never saw the player")
+	}
+	recorder.take(reconnectID)
+
+	recorder.close(reconnectID)
+	deadline := time.Now().Add(2 * time.Second)
+	for scene.Members() != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if scene.Members() != 1 {
+		t.Fatal("setup: the close did not take the player out")
+	}
+	recorder.reconnect(reconnectID)
+	if err := scene.Join(ctx, re, spatial.Point{X: 510, Y: 500}); err != nil {
+		t.Fatalf("a reconnect right after the settle's leave failed to join: %v", err)
+	}
+	if err := scene.Ready(reconnectID); err != nil {
+		t.Fatalf("ready after the quick reconnect: %v", err)
+	}
+	if members := scene.Members(); members != 2 {
+		t.Fatalf("members=%d after the quick reconnect, want 2", members)
+	}
+
+	// The remove goes out and completes the retirement; the queued
+	// registration and the pairs refused meanwhile follow.
+	removes, seenByWatcher, sawWatcher := 0, false, false
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !(seenByWatcher && sawWatcher) {
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		toWatcher := recorder.take(watcherID)
+		removes += removesIn(t, toWatcher)
+		if _, ok := decodeSceneFrames(t, watcherID, toWatcher)[re.ID()]; ok {
+			if removes == 0 {
+				t.Fatal("the watcher was sent the player again before the old object's remove (remove-before-create)")
+			}
+			seenByWatcher = true
+		}
+		if _, ok := decodeSceneFrames(t, reconnectID, recorder.take(reconnectID))[watcher.ID()]; ok {
+			sawWatcher = true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Logf("removes seen by the watcher=%d watcher sees the player again=%v player sees the watcher=%v", removes, seenByWatcher, sawWatcher)
+	if removes != 1 || !seenByWatcher {
+		t.Errorf("the watcher got %d removes and saw the rejoined player=%v, want the old object removed once and the player back", removes, seenByWatcher)
+	}
+	if !sawWatcher {
+		t.Error("the rejoined player's own view never came back")
+	}
+}
+
+// closingLane is the scene's lane over a transport with a session lifecycle —
+// the shape of entitysync.AsyncTransport — that is still closing a player's
+// previous session for the next closing[id] opens (entitysync.ErrSessionClosing).
+type closingLane struct {
+	sceneLane
+	mu      sync.Mutex
+	closing map[entitysync.SessionID]int
+	opens   map[entitysync.SessionID]int
+	broken  map[entitysync.SessionID]error // an open of this session fails with this, and not "not yet"
+}
+
+func newClosingLane(transport scenePusher) *closingLane {
+	return &closingLane{sceneLane: sceneLane{transport: transport}, closing: map[entitysync.SessionID]int{}, opens: map[entitysync.SessionID]int{}}
+}
+
+func (lane *closingLane) SessionOpened(id entitysync.SessionID) error {
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	lane.opens[id]++
+	if err := lane.broken[id]; err != nil {
+		return err
+	}
+	if lane.closing[id] > 0 {
+		lane.closing[id]--
+		return fmt.Errorf("previous lifetime still sending: %w", entitysync.ErrSessionClosing)
+	}
+	return nil
+}
+
+func (*closingLane) SessionClosed(entitysync.SessionID) {}
+
+func (lane *closingLane) refuse(id entitysync.SessionID, opens int) {
+	lane.mu.Lock()
+	lane.closing[id] = opens
+	lane.mu.Unlock()
+}
+
+func (lane *closingLane) breakOpens(id entitysync.SessionID, err error) {
+	lane.mu.Lock()
+	if lane.broken == nil {
+		lane.broken = map[entitysync.SessionID]error{}
+	}
+	lane.broken[id] = err
+	lane.mu.Unlock()
+}
+
+// sceneReopenFailures reads the process's count of reopens given up for reason.
+func sceneReopenFailures(reason string) int64 {
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == sceneReopenFailedMetric && metric.Labels["reason"] == reason {
+			return metric.Value
+		}
+	}
+	return 0
+}
+
+func (lane *closingLane) opened(id entitysync.SessionID) int {
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	return lane.opens[id]
+}
+
+// sceneSchedule holds what the scene hands to async and after, so the test
+// decides when a settle or a retry runs.
+type sceneSchedule struct {
+	mu      sync.Mutex
+	settles []func()
+	retries []func()
+	delays  []time.Duration
+}
+
+func (schedule *sceneSchedule) install(scene *Scene) {
+	scene.async = func(fn func()) {
+		schedule.mu.Lock()
+		schedule.settles = append(schedule.settles, fn)
+		schedule.mu.Unlock()
+	}
+	scene.after = func(delay time.Duration, fn func()) {
+		schedule.mu.Lock()
+		schedule.retries = append(schedule.retries, fn)
+		schedule.delays = append(schedule.delays, delay)
+		schedule.mu.Unlock()
+	}
+}
+
+func (schedule *sceneSchedule) runSettles() int {
+	schedule.mu.Lock()
+	queued := schedule.settles
+	schedule.settles = nil
+	schedule.mu.Unlock()
+	for _, fn := range queued {
+		fn()
+	}
+	return len(queued)
+}
+
+// runRetry runs the one scheduled retry and reports its delay; false if none.
+func (schedule *sceneSchedule) runRetry(t *testing.T) (time.Duration, bool) {
+	t.Helper()
+	schedule.mu.Lock()
+	if len(schedule.retries) == 0 {
+		schedule.mu.Unlock()
+		return 0, false
+	}
+	if len(schedule.retries) > 1 {
+		schedule.mu.Unlock()
+		t.Fatalf("%d retries scheduled at once for one player", len(schedule.retries))
+	}
+	fn, delay := schedule.retries[0], schedule.delays[0]
+	schedule.retries, schedule.delays = nil, nil
+	schedule.mu.Unlock()
+	fn()
+	return delay, true
+}
+
+// RR-20260926-55 (second half): over a transport with a session lifecycle a
+// reopen can find the player's previous session still closing — OpenSession
+// answers ErrSessionClosing, which only means "not yet". The resync after a
+// push failure used to log a warning and give up, leaving a connected player
+// with no view until its next login. It is retried with a growing delay, a
+// bounded number of times, for the Join it was for only.
+func TestASessionReopenRefusedWhileTheOldOneClosesIsRetried(t *testing.T) {
+	type harness struct {
+		scene    *Scene
+		lane     *closingLane
+		recorder *sceneRecorder
+		schedule *sceneSchedule
+		mover    *player.Player
+		re       *player.Player
+	}
+	const moverID, reconnectID = int64(9781), int64(9782)
+	setup := func(t *testing.T) harness {
+		t.Helper()
+		recorder := newSceneRecorder()
+		lane := newClosingLane(recorder)
+		scene, err := newSceneOn(lane, recorder, nil, gamescene.DefaultConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		scene.watchSessions(recorder)
+		schedule := &sceneSchedule{}
+		schedule.install(scene)
+		t.Cleanup(func() {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = scene.Close(closeCtx)
+		})
+		ctx := context.Background()
+		h := harness{scene: scene, lane: lane, recorder: recorder, schedule: schedule, mover: newScenePlayer(t, moverID), re: newScenePlayer(t, reconnectID)}
+		joinReady(t, scene, ctx, h.mover, spatial.Point{X: 500, Y: 500})
+		joinReady(t, scene, ctx, h.re, spatial.Point{X: 510, Y: 500})
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		recorder.take(moverID)
+		recorder.take(reconnectID)
+		return h
+	}
+	// losePush fails one push to the player while its connection stays up,
+	// so the manager drops the session and the settle wants to reopen it.
+	losePush := func(t *testing.T, h harness) {
+		t.Helper()
+		ctx := context.Background()
+		h.recorder.mu.Lock()
+		h.recorder.unreachable = map[int64]error{reconnectID: fmt.Errorf("session old: %w", accessplayertcp.ErrSessionNotFound)}
+		h.recorder.mu.Unlock()
+		counters := newSceneWorld(t)
+		client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{h.mover.ID(): h.mover, h.re.ID(): h.re, counters.ID(): counters})
+		if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, h.mover.ID(), counters.ID(), 10); err != nil {
+			t.Fatal(err)
+		}
+		_ = h.scene.Flush(ctx)
+		h.recorder.mu.Lock()
+		h.recorder.unreachable = nil
+		h.recorder.mu.Unlock()
+		if ran := h.schedule.runSettles(); ran != 1 {
+			t.Fatalf("%d settles for one lost session, want 1", ran)
+		}
+	}
+	session := entitysync.SessionID(reconnectID)
+
+	t.Run("retried until the transport lets go", func(t *testing.T) {
+		h := setup(t)
+		opensBefore := h.lane.opened(session)
+		h.lane.refuse(session, 2)
+		losePush(t, h)
+		var delays []time.Duration
+		for {
+			delay, ran := h.schedule.runRetry(t)
+			if !ran {
+				break
+			}
+			delays = append(delays, delay)
+		}
+		t.Logf("opens=%d retry delays=%v", h.lane.opened(session)-opensBefore, delays)
+		if got := h.lane.opened(session) - opensBefore; got != 3 {
+			t.Fatalf("the reopen was tried %d times, want 3 (two refusals, then open)", got)
+		}
+		if len(delays) != 2 || delays[0] != sessionReopenFirstDelay || delays[1] != 2*sessionReopenFirstDelay {
+			t.Fatalf("retry delays %v, want %v then %v", delays, sessionReopenFirstDelay, 2*sessionReopenFirstDelay)
+		}
+		if err := h.scene.Flush(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := decodeSceneFrames(t, reconnectID, h.recorder.take(reconnectID))[h.mover.ID()]; !ok {
+			t.Fatal("the reopened session did not get the player's view back")
+		}
+		if h.scene.Members() != 2 {
+			t.Fatalf("members=%d, want 2", h.scene.Members())
+		}
+	})
+	t.Run("bounded", func(t *testing.T) {
+		h := setup(t)
+		opensBefore := h.lane.opened(session)
+		exhaustedBefore := sceneReopenFailures("exhausted")
+		h.lane.refuse(session, 1000)
+		losePush(t, h)
+		var longest time.Duration
+		for {
+			delay, ran := h.schedule.runRetry(t)
+			if !ran {
+				break
+			}
+			longest = max(longest, delay)
+		}
+		if got := h.lane.opened(session) - opensBefore; got != sessionReopenAttempts {
+			t.Fatalf("a transport that never lets go was asked %d times, want %d", got, sessionReopenAttempts)
+		}
+		if longest > sessionReopenMaxDelay {
+			t.Fatalf("a retry waited %v, more than the %v cap", longest, sessionReopenMaxDelay)
+		}
+		if h.scene.Members() != 2 {
+			t.Fatalf("giving up on the reopen removed the player: members=%d", h.scene.Members())
+		}
+		// RR-20260927-19: giving up is counted once per player, not only logged.
+		if got := sceneReopenFailures("exhausted") - exhaustedBefore; got != 1 {
+			t.Fatalf("a reopen given up after %d attempts counted %d on %s{reason=exhausted}, want 1", sessionReopenAttempts, got, sceneReopenFailedMetric)
+		}
+	})
+	t.Run("a refusal that is not \"not yet\" is counted apart", func(t *testing.T) {
+		h := setup(t)
+		refusedBefore, exhaustedBefore := sceneReopenFailures("refused"), sceneReopenFailures("exhausted")
+		h.lane.breakOpens(session, errors.New("session limit reached"))
+		losePush(t, h)
+		if _, ran := h.schedule.runRetry(t); ran {
+			t.Fatal("a refusal that is not \"not yet\" was retried")
+		}
+		if h.scene.Members() != 2 {
+			t.Fatalf("a refused reopen removed the player: members=%d", h.scene.Members())
+		}
+		if got, other := sceneReopenFailures("refused")-refusedBefore, sceneReopenFailures("exhausted")-exhaustedBefore; got != 1 || other != 0 {
+			t.Fatalf("a refused reopen counted refused=%d exhausted=%d, want 1 and 0", got, other)
+		}
+	})
+	t.Run("cancelled when the player leaves", func(t *testing.T) {
+		h := setup(t)
+		h.lane.refuse(session, 1000)
+		losePush(t, h)
+		h.recorder.close(reconnectID)
+		h.schedule.runSettles()
+		if h.scene.Members() != 1 {
+			t.Fatalf("members=%d after the close, want 1", h.scene.Members())
+		}
+		opens := h.lane.opened(session)
+		if _, ran := h.schedule.runRetry(t); !ran {
+			t.Fatal("setup: no retry was pending")
+		}
+		if got := h.lane.opened(session); got != opens {
+			t.Fatalf("a retry for a player who left opened a session (%d → %d)", opens, got)
+		}
+		if _, ran := h.schedule.runRetry(t); ran {
+			t.Fatal("a retry for a player who left scheduled another")
+		}
+	})
+	t.Run("a join whose session cannot open yet still joins", func(t *testing.T) {
+		h := setup(t)
+		ctx := context.Background()
+		h.recorder.close(reconnectID)
+		h.schedule.runSettles()
+		if err := h.scene.Flush(ctx); err != nil { // the leave's remove goes out
+			t.Fatal(err)
+		}
+		h.recorder.take(moverID)
+		h.recorder.reconnect(reconnectID)
+		h.lane.refuse(session, 1)
+		if err := h.scene.Join(ctx, h.re, spatial.Point{X: 510, Y: 500}); err != nil {
+			t.Fatalf("a join whose session the transport is still closing failed: %v", err)
+		}
+		if err := h.scene.Ready(reconnectID); err != nil {
+			t.Fatalf("ready before the session could open: %v", err)
+		}
+		if _, ran := h.schedule.runRetry(t); !ran {
+			t.Fatal("no retry was scheduled for the join's session")
+		}
+		if err := h.scene.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := decodeSceneFrames(t, reconnectID, h.recorder.take(reconnectID))[h.mover.ID()]; !ok {
+			t.Fatal("the rejoined player's session opened but its view did not arrive (it should open ready)")
+		}
+	})
+}
+
+// sceneAuthority is the Player's authority, stood in for: an unloaded player
+// comes back from it as a fresh instance — without the effect that was
+// skipped or refused — and is published the way the Data Engine's repository
+// publishes a load (entity.RunLocal, back on the Nest fast pool), with the
+// repository's load hooks (OnEntityLoaded) run in the same local step.
+type sceneAuthority struct {
+	t       *testing.T
+	manager *entity.EntityManager
+	loads   atomic.Int32
+
+	hookMu   sync.Mutex
+	hooks    map[int]func(entity.IThreadSafeEntity)
+	nextHook int
+}
+
+// OnEntityLoaded is the Data Engine's load notice (kit/dataengine
+// Mod.OnEntityLoaded), stood in for.
+func (authority *sceneAuthority) OnEntityLoaded(hook func(entity.IThreadSafeEntity)) (func(), error) {
+	authority.hookMu.Lock()
+	defer authority.hookMu.Unlock()
+	if authority.hooks == nil {
+		authority.hooks = make(map[int]func(entity.IThreadSafeEntity))
+	}
+	authority.nextHook++
+	id := authority.nextHook
+	authority.hooks[id] = hook
+	return func() {
+		authority.hookMu.Lock()
+		delete(authority.hooks, id)
+		authority.hookMu.Unlock()
+	}, nil
+}
+
+func (authority *sceneAuthority) hooked() int {
+	authority.hookMu.Lock()
+	defer authority.hookMu.Unlock()
+	return len(authority.hooks)
+}
+
+func (authority *sceneAuthority) runLoadedHooks(loaded entity.IThreadSafeEntity) {
+	authority.hookMu.Lock()
+	hooks := make([]func(entity.IThreadSafeEntity), 0, len(authority.hooks))
+	for _, hook := range authority.hooks {
+		hooks = append(hooks, hook)
+	}
+	authority.hookMu.Unlock()
+	for _, hook := range hooks {
+		hook(loaded)
+	}
+}
+
+func (authority *sceneAuthority) LoadEntity(ctx context.Context, id int64, _ entity.EntityKind) (entity.IThreadSafeEntity, error) {
+	authority.loads.Add(1)
+	fresh := newScenePlayer(authority.t, entity.GetUniqueIDFromEntityID(id))
+	var added error
+	if err := entity.RunLocal(ctx, func() {
+		if added = authority.manager.TryAdd(fresh); added == nil {
+			authority.runLoadedHooks(fresh)
+		}
+	}); err != nil {
+		return nil, err
+	}
+	if errors.Is(added, entity.ErrEntityExists) {
+		if existing := authority.manager.Get(id); existing != nil {
+			return existing, nil
+		}
+	}
+	return fresh, added
+}
+
+// sceneFullUpdates decodes what one player received into the subject updates
+// that were full (a snapshot or a whole-state replacement), by subject.
+func sceneFullUpdates(t *testing.T, pushes []*pb.EntitySyncPush) map[int64]bson.M {
+	t.Helper()
+	out := make(map[int64]bson.M)
+	for _, push := range pushes {
+		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
+		if err != nil {
+			t.Fatalf("decode frame: %v", err)
+		}
+		for _, object := range decoded.Objects {
+			for _, component := range object.Components {
+				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
+				if err != nil {
+					t.Fatalf("decode subject update: %v", err)
+				}
+				if !update.Full {
+					continue
+				}
+				var document bson.M
+				if err := bson.Unmarshal(update.Payload.BytesCopy(), &document); err != nil {
+					t.Fatalf("decode player sync payload: %v", err)
+				}
+				out[update.SubjectID] = document
+			}
+		}
+	}
+	return out
+}
+
+// OPEN-ITEMS B25 / RR-20260927-18: a player in the scene whose instance is
+// unloaded from memory only — the Data Engine evicting it after a skipped
+// native step (RR-20260926-30; the gift debit is one), or a refused Remote
+// write (RR-20260926-39) — has its sync state closed. The scene's manager is
+// the scene's own, so nothing reloaded the player for the others and nothing
+// bound the reloaded instance to the scene: the others stayed on the content
+// they had last received, which may never have become the authority, and saw
+// no change of that player again until it left. The scene now wires the
+// framework's reload (ConfigureUnloadResync), as the kit Mod does for its
+// own manager: the others get the player's authoritative state as a full
+// update, and its later changes as deltas.
+func TestAnUnloadedPlayerIsReloadedForTheSceneObservers(t *testing.T) {
+	ctx := context.Background()
+	entities := entity.NewEntityManager()
+	access := entity.NewManagerAccess(entities)
+	authority := &sceneAuthority{t: t, manager: entities}
+	unhook, err := access.ConfigureLoader(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(unhook)
+	handler.RegisterAddExpNestHandlers()
+	// The Nest binds its fast-pool entry to the entity runtime, so a reload is
+	// published there — the production assembly.
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(access),
+		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	// What NewScene does with the process's entity runtime.
+	scene.unloads = access
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const watcherID, moverID = int64(9851), int64(9852)
+	watcher := newScenePlayer(t, watcherID)
+	mover := newScenePlayer(t, moverID)
+	counters := newSceneWorld(t)
+	// The unloaded instance is cleared (its id reads 0 afterwards): name the
+	// player by its id from here on.
+	moverEntity := mover.ID()
+	for _, resident := range []entity.IThreadSafeEntity{watcher, mover, counters} {
+		entities.Add(resident)
+	}
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 520, Y: 500})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recorder.take(watcherID)
+
+	// The watcher is told of a level-up that will not survive.
+	sender := syncsender.NewAddExpSender(engine)
+	if gained, err := sender.MultiSync_AddExp(ctx, moverEntity, counters.ID(), 250); err != nil || gained == 0 {
+		t.Fatalf("add exp: gained=%d err=%v", gained, err)
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stale, ok := decodeSceneFrames(t, watcherID, recorder.take(watcherID))[moverEntity]
+	if !ok {
+		t.Fatal("setup: the watcher did not receive the level-up")
+	}
+
+	// The Data Engine drops the instance from memory, on the fast pool.
+	var unloadErr error
+	if err := engine.RunLocal(ctx, func() { unloadErr = access.Unload(ctx, mover) }); err != nil || unloadErr != nil {
+		t.Fatalf("unload: run=%v unload=%v", err, unloadErr)
+	}
+
+	var reloaded bson.M
+	deadline := time.Now().Add(3 * time.Second)
+	for reloaded == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("the player was unloaded from memory, but the watcher still holds its last content (level %v): no authoritative full update reached it (loads=%d)", stale["level"], authority.loads.Load())
+		}
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		reloaded = sceneFullUpdates(t, recorder.take(watcherID))[moverEntity]
+		time.Sleep(2 * time.Millisecond)
+	}
+	if reloaded["level"] == stale["level"] {
+		t.Fatalf("the full update after the reload carries the level the authority never had: %v", reloaded)
+	}
+	if got := authority.loads.Load(); got != 1 {
+		t.Fatalf("the unloaded player was loaded %d times, want once", got)
+	}
+
+	// The scene follows the reloaded instance: its next change reaches the watcher.
+	if gained, err := sender.MultiSync_AddExp(ctx, moverEntity, counters.ID(), 250); err != nil || gained == 0 {
+		t.Fatalf("add exp after the reload: gained=%d err=%v", gained, err)
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decodeSceneFrames(t, watcherID, recorder.take(watcherID))[moverEntity]; !ok {
+		t.Fatal("a change on the reloaded player did not reach the watcher: the scene is still bound to the unloaded instance")
+	}
+}
+
+// The scene owns its wiring of the reload for as long as it runs: another
+// wiring on the same entity runtime is refused while it does, and Close
+// stops it (before the manager closes, and before the Nest the service
+// shuts down ahead of), so the runtime can be wired again afterwards.
+func TestTheSceneStopsTheReloadOfUnloadedPlayersWhenItCloses(t *testing.T) {
+	ctx := context.Background()
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	scene, err := newScene(newSceneRecorder(), nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.unloads = access
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	other, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: entitysync.TransportFunc(func(context.Context, entitysync.SessionID, []byte) error { return nil })})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = other.Close(context.Background()) })
+	if stop, err := access.ConfigureUnloadResync(other, entity.UnloadResyncConfig{}); err == nil {
+		_ = stop(ctx)
+		t.Fatal("a second wiring was accepted while the scene runs: the scene did not wire the reload")
+	}
+	closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := scene.Close(closeCtx); err != nil {
+		t.Fatalf("close scene: %v", err)
+	}
+	stop, err := access.ConfigureUnloadResync(other, entity.UnloadResyncConfig{})
+	if err != nil {
+		t.Fatalf("the scene's wiring is still live after Close: %v", err)
+	}
+	_ = stop(ctx)
+}
+
+// RR-20260927-23: the framework reloads an unloaded player only while
+// someone still watches it (RR-20260926-59). A player unloaded while nobody
+// did — its own replication session dropped and not reopened, nobody near —
+// is loaded again by whatever touches it next, and that load is the Data
+// Engine's to report (OnEntityLoaded). The scene did not hook it, as the kit's
+// Nest Mod does for the manager it owns: its subject stayed on the unloaded
+// instance, and a watcher who came into view afterwards never received the
+// player. The scene now rebinds the subject on that load: the newcomer gets
+// the player, and its changes after that.
+func TestAPlayerLoadedAgainAfterAnUnloadNobodyWatchedReachesALaterWatcher(t *testing.T) {
+	ctx := context.Background()
+	entities := entity.NewEntityManager()
+	access := entity.NewManagerAccess(entities)
+	authority := &sceneAuthority{t: t, manager: entities}
+	unhook, err := access.ConfigureLoader(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(unhook)
+	handler.RegisterAddExpNestHandlers()
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(access),
+		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+
+	recorder := newSceneRecorder()
+	lane := newClosingLane(recorder)
+	scene, err := newSceneOn(lane, recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	schedule := &sceneSchedule{}
+	schedule.install(scene)
+	// What NewScene does with the process's entity runtime and Data Engine.
+	scene.unloads, scene.loads = access, authority
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const watcherID, moverID = int64(9861), int64(9862)
+	mover := newScenePlayer(t, moverID)
+	counters := newSceneWorld(t)
+	moverEntity := mover.ID()
+	for _, resident := range []entity.IThreadSafeEntity{mover, counters} {
+		entities.Add(resident)
+	}
+	sender := syncsender.NewAddExpSender(engine)
+	joinReady(t, scene, ctx, mover, spatial.Point{X: 500, Y: 500})
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recorder.take(moverID)
+
+	// The mover's own replication session is lost while its connection stays
+	// up, and the reopen is refused for good: it stays in the scene with
+	// nobody — itself included — subscribed to it.
+	moverSession := sessionFor(moverEntity)
+	recorder.mu.Lock()
+	recorder.unreachable = map[int64]error{moverID: fmt.Errorf("session old: %w", accessplayertcp.ErrSessionNotFound)}
+	recorder.mu.Unlock()
+	lane.breakOpens(moverSession, errors.New("session limit reached"))
+	if _, err := sender.MultiSync_AddExp(ctx, moverEntity, counters.ID(), 10); err != nil {
+		t.Fatalf("add exp: %v", err)
+	}
+	_ = scene.Flush(ctx)
+	recorder.mu.Lock()
+	recorder.unreachable = nil
+	recorder.mu.Unlock()
+	if ran := schedule.runSettles(); ran != 1 {
+		t.Fatalf("premise: %d settles for one lost session, want 1", ran)
+	}
+	if scene.Members() != 1 || len(scene.manager.Subscribers(moverEntity)) != 0 {
+		t.Fatalf("premise: members=%d subscribers=%v, want the mover in the scene with nobody subscribed", scene.Members(), scene.manager.Subscribers(moverEntity))
+	}
+
+	// Unloaded from memory with nobody watching: the framework does not reload it.
+	var unloadErr error
+	if err := engine.RunLocal(ctx, func() { unloadErr = access.Unload(ctx, mover) }); err != nil || unloadErr != nil {
+		t.Fatalf("unload: run=%v unload=%v", err, unloadErr)
+	}
+	if got := authority.loads.Load(); got != 0 {
+		t.Fatalf("premise: an unload nobody watched was reloaded %d times", got)
+	}
+
+	// The business touches the player again: the Data Engine loads it from the authority.
+	reloaded, err := access.Get(ctx, moverEntity, entity.EntityCategoryNone)
+	if err != nil || reloaded == nil {
+		t.Fatalf("load the player again: %v %v", reloaded, err)
+	}
+	if got := authority.loads.Load(); got != 1 {
+		t.Fatalf("premise: the player was loaded %d times, want once", got)
+	}
+
+	// A watcher comes into view.
+	watcher := newScenePlayer(t, watcherID)
+	entities.Add(watcher)
+	joinReady(t, scene, ctx, watcher, spatial.Point{X: 520, Y: 500})
+	var seen bson.M
+	for range 3 {
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if full, ok := sceneFullUpdates(t, recorder.take(watcherID))[moverEntity]; ok {
+			seen = full
+			break
+		}
+	}
+	if seen == nil {
+		t.Fatal("the player was loaded again after an unload nobody watched, but a watcher who came into view later never received it: " +
+			"the scene's subject is still on the unloaded instance")
+	}
+
+	// The scene follows the loaded instance: its next change reaches the watcher.
+	if gained, err := sender.MultiSync_AddExp(ctx, moverEntity, counters.ID(), 250); err != nil || gained == 0 {
+		t.Fatalf("add exp after the load: gained=%d err=%v", gained, err)
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decodeSceneFrames(t, watcherID, recorder.take(watcherID))[moverEntity]; !ok {
+		t.Fatal("a change on the loaded player did not reach the watcher: the scene is not bound to the loaded instance")
+	}
+}
+
+// RR-20260927-23: the scene holds the Data Engine load hook exactly while it
+// runs. Start hooks it before the replication loop; Close releases it after
+// the reload stops and before the manager closes; a Start that fails takes
+// back both wirings.
+func TestTheSceneHooksEntityLoadsOnlyWhileItRuns(t *testing.T) {
+	ctx := context.Background()
+	t.Run("start and close", func(t *testing.T) {
+		authority := &sceneAuthority{t: t, manager: entity.NewEntityManager()}
+		scene, err := newScene(newSceneRecorder(), nil, gamescene.DefaultConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		scene.unloads, scene.loads = entity.NewManagerAccess(entity.NewEntityManager()), authority
+		if err := scene.Start(ctx); err != nil {
+			t.Fatalf("start scene: %v", err)
+		}
+		if got := authority.hooked(); got != 1 {
+			t.Fatalf("a running scene holds %d load hooks, want 1", got)
+		}
+		closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := scene.Close(closeCtx); err != nil {
+			t.Fatalf("close scene: %v", err)
+		}
+		if got := authority.hooked(); got != 0 {
+			t.Fatalf("a closed scene still holds %d load hooks", got)
+		}
+	})
+	t.Run("a start that fails", func(t *testing.T) {
+		authority := &sceneAuthority{t: t, manager: entity.NewEntityManager()}
+		access := entity.NewManagerAccess(entity.NewEntityManager())
+		scene, err := newScene(newSceneRecorder(), nil, gamescene.DefaultConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		scene.unloads, scene.loads = access, authority
+		// The replication loop cannot start on a closed manager.
+		if err := scene.manager.Close(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := scene.Start(ctx); err == nil {
+			t.Fatal("premise: the scene started on a closed manager")
+		}
+		if got := authority.hooked(); got != 0 {
+			t.Fatalf("a scene that did not start left %d load hooks behind", got)
+		}
+		other, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: entitysync.TransportFunc(func(context.Context, entitysync.SessionID, []byte) error { return nil })})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = other.Close(context.Background()) })
+		stop, err := access.ConfigureUnloadResync(other, entity.UnloadResyncConfig{})
+		if err != nil {
+			t.Fatalf("a scene that did not start left the reload wired: %v", err)
+		}
+		_ = stop(ctx)
+	})
+}
