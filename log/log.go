@@ -271,9 +271,7 @@ func (h contextHandler) contextAttrs(pc uintptr) []slog.Attr {
 		attrs = append(attrs, slog.Uint64("frame", frame))
 	}
 	nowMilli := time.Now().UnixMilli()
-	if c != nil && c.NowMilli != 0 {
-		nowMilli = c.NowMilli
-	}
+	// 日志时间统一使用系统钟；请求的业务时间由调用方按业务字段记录。
 	attrs = append(attrs, slog.Int64("server_time_ms", nowMilli))
 	if h.opts.DisableContext || c == nil {
 		if h.opts.Caller {

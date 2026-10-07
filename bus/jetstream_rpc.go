@@ -694,7 +694,7 @@ func (b *Bus) addJetStreamRPCPending(method string, delta int64) {
 		methodValue = 0
 		methodCounter.Store(0)
 	}
-	metrics.SetGauge("bus_rpc_pending_total", metrics.Labels{
+	metrics.SetGauge("bus_rpc_pending_requests", metrics.Labels{
 		"transport": "jetstream",
 	}, total)
 	metrics.SetGauge("bus_rpc_pending", metrics.Labels{

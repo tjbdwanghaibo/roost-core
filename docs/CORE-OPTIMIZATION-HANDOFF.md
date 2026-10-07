@@ -693,3 +693,9 @@ B4 最终验收：全仓 build/vet/test 131 包通过，生成 game-demo build/v
 B6 2026-10-08：RR-20261008-22～24、26～28 已实施；本地 cache/policy/kit-nest race、生成 TCP 与 Game race，以及重新生成工程 build/vet/test 通过。RR-25 候选代码本地 race 通过，配置次数上限因自动审批拒绝而向维护者确认；仍需真实 broker 验证。B7/B8 继续，不标全部完成。
 
 B6 当前树全仓 build/vet/test（131 个测试包）与生成项目 build/vet/test（19 个测试包）通过。RR-25 仍是候选状态，测试通过不替代配置变更授权和真实 broker 证据。
+
+### B7 实施进度（2026-10-08）
+
+RR-20261008-29～38 已完成目标行为红绿；admin/ops/statslog/log/failurelog/configschema/app/dataengine-engine/bus race 已通过。N8/9/10/12/13/15 的指标、性能和公开 API 保留边界见 impl/11 末节。完整生成器回归进行中，B8 文档继续；RR-25 仍等待确认。尚未全部完成、未推送/发布。
+
+B7 验收：全仓 GOWORK=off build/vet/test 通过（131 个测试包），完整 codegen 测试包含重新生成工程并 build/vet/test。首轮旧断言仍要求 versions.skill=latest 已按本批删除失效字段的规格纠正，第二轮全仓通过。原始日志已持久保存；未推送/发布。

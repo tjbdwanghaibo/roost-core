@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -200,6 +201,7 @@ func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOpti
 		tickets: make(map[coredata.TransactionID]*projectionTicket),
 	}
 	go projector.watchWALTerminal()
+	metrics.SetGauge("dataengine.projection.pending", nil, 0)
 	if options.ManualReplay {
 		// 没有后台循环：Close 不需要等待，done 从一开始就处于“循环已退出”。
 		close(projector.done)
@@ -571,7 +573,7 @@ func (projector *Projector) reserve(record coredata.CommitRecord, held bool) err
 		}
 		projector.admitted[id] = struct{}{}
 		projector.trackEntitiesLocked(record)
-		projector.walUnacked.Add(1)
+		metrics.SetGauge("dataengine.projection.pending", nil, int64(projector.walUnacked.Add(1)))
 	}
 	if held {
 		projector.held[id] = struct{}{}
@@ -585,7 +587,7 @@ func (projector *Projector) discard(id coredata.TransactionID) {
 	delete(projector.held, id)
 	if _, ok := projector.admitted[id]; ok {
 		delete(projector.admitted, id)
-		projector.walUnacked.Add(^uint64(0))
+		metrics.SetGauge("dataengine.projection.pending", nil, int64(projector.walUnacked.Add(^uint64(0))))
 	}
 	projector.heldMu.Unlock()
 }

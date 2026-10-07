@@ -5,7 +5,7 @@ package roostcore_test
 // 从源码收集进程会写进 metrics 注册表的全部指标名、类型与标签键，再核对引用它们的四处：
 //
 //	OBSERVABILITY.md                                        指标清单表格与告警基线里写到的名字与标签都存在；
-//	                                                        仪表盘与告警用到的指标都在清单里；lockstep.* / saga.* / skill.* 全部收录
+//	                                                        源码收集到的全部指标都在清单里（F11 N9）
 //	observability/grafana-roost-overview.json              每条查询的指标存在、by / 选择器里的标签存在
 //	demo/deploy/dev/observability/grafana/.../*.json.tmpl  同上（生成工程的 demo 仪表盘）
 //	demo/deploy/dev/observability/README.md.tmpl           表格里写到的名字与标签都存在
@@ -957,18 +957,16 @@ func TestObservabilityDocNamesExistingMetrics(t *testing.T) {
 		t.Fatalf("found only %d alert lines in %s; the section moved, update this test", alerts, observabilityDoc)
 	}
 
-	// lockstep / saga / skill：新增的指标全部收录（范围见 REFACTOR-2026-10-07-structural-guards §1）。
+	// F11 N9：全部可解析的指标必须收录，防止新增观测又落在文档之外。
 	var undocumented []string
 	for name, info := range inv.byName {
-		for _, prefix := range []string{"lockstep.", "saga.", "skill."} {
-			if strings.HasPrefix(name, prefix) && !documented[info] {
-				undocumented = append(undocumented, name+" ("+info.sites[0]+")")
-			}
+		if !documented[info] {
+			undocumented = append(undocumented, name+" ("+info.sites[0]+")")
 		}
 	}
 	sort.Strings(undocumented)
 	for _, name := range undocumented {
-		t.Errorf("%s does not document %s; every lockstep.* / saga.* / skill.* metric belongs in its metric list", observabilityDoc, name)
+		t.Errorf("%s does not document %s; every collected metric belongs in its metric list", observabilityDoc, name)
 	}
 }
 

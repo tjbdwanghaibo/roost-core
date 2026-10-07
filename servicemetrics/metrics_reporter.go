@@ -6,7 +6,7 @@ import "github.com/tjbdwanghaibo/roost-core/metrics"
 //
 // 服务事件写进进程的 metrics 注册表，由 kit ops 的 /metrics 以 Prometheus 文本导出。指标名只有下面
 // 六个，服务、操作、原因与对象都放在标签里——之前队列 key、看板 ID 拼在深度名字里，每个对象就是一个新
-// 指标名（N12 O1）。注册表没有删除序列的入口，所以这里不加按运行 / 请求 / 实体变化的标签。
+// 指标名（N12 O1）。注册表虽能删除序列，但 Reporter 不拥有对象生命周期，无法安全决定删除时点，所以不加按运行 / 请求 / 实体变化的标签。
 const (
 	// MetricAccepted counts Accepted events (labels service, op).
 	MetricAccepted = "service.accepted.total"

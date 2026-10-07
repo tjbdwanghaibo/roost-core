@@ -42,7 +42,7 @@ type Reporter interface {
 //
 // key is the caller's object identity and becomes a label: it must come from a
 // bounded set (configured queues, board ids), never a player, guild or run id.
-// The metrics registry cannot delete a series, so an unbounded key grows until
+// The reporter does not own object lifetimes and cannot safely delete their series; an unbounded key grows until
 // the per-metric series cap drops new ones.
 type KeyedReporter interface {
 	DepthOf(name, key string, value int64)

@@ -160,7 +160,7 @@ func keyLiteral(key configschema.Key) string {
 	for _, flag := range []struct {
 		name string
 		on   bool
-	}{{"Required", key.Required}, {"Secret", key.Secret}, {"Closed", key.Closed}} {
+	}{{"Required", key.Required}, {"Secret", key.Secret}, {"SecretOptional", key.SecretOptional}, {"Closed", key.Closed}} {
 		if flag.on {
 			fmt.Fprintf(&b, ", %s: true", flag.name)
 		}

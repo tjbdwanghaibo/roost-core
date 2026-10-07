@@ -2,13 +2,17 @@ package admin
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
 var (
@@ -55,6 +59,9 @@ const (
 	RiskHigh   RiskLevel = "high"
 )
 
+// CommandMeta 是供外部运维界面使用的描述，不参与 Registry.Execute 的授权。
+// ApprovalRequired / DryRunSupported / Hidden 不会自动改变执行行为；宿主必须自己落实。
+// 按维护者 C8 保留公开接口，不把无执行方的声明当作已实现的审批功能。
 type CommandMeta struct {
 	Name        string    `json:"name"`
 	Title       string    `json:"title,omitempty"`
@@ -131,44 +138,65 @@ func (r *Registry) Register(def CommandDef) error {
 }
 
 func (r *Registry) Execute(ctx context.Context, cmd Command) (result Result, err error) {
-	if r == nil {
-		return Result{}, fmt.Errorf("%w: registry nil", ErrCommandInvalid)
-	}
-	if cmd.Name == "" {
-		return Result{}, fmt.Errorf("%w: name required", ErrCommandInvalid)
-	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if cmd.TraceID == "" {
+		cmd.TraceID = rand.Text()
+	}
+	started := time.Now()
+	if cmd.CreatedAt == 0 {
+		cmd.CreatedAt = started.UnixMilli()
+	}
+	// operator/source 是调用方声明，不等于已认证身份；不记录 payload 或令牌。
+	attrs := []any{"command", cmd.Name, "trace_id", cmd.TraceID, "operator", cmd.Operator, "source", cmd.Source}
+	slog.Info("admin command started", attrs...)
+	registered := false
+	defer func() {
+		outcome := "ok"
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("admin: command %s panic: %v", cmd.Name, recovered)
+			outcome = "panic"
+		}
+		if outcome != "panic" && err != nil {
+			switch {
+			case errors.Is(err, ErrCommandNotFound):
+				outcome = "not_found"
+			case errors.Is(err, ErrCommandInvalid):
+				outcome = "invalid"
+			case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
+				outcome = "unknown"
+			default:
+				outcome = "error"
+			}
+		}
+		result = normalizeResult(cmd, result, started.UnixMilli())
+		result.OK = err == nil
+		if err != nil && result.Message == "" {
+			result.Message = err.Error()
+		}
+		// 错误字符串/返回 Data 可能含命令参数，审计只记录结果分类；业务可另外记录安全细节。
+		slog.Info("admin command finished", append(attrs, "outcome", outcome, "duration_ms", time.Since(started).Milliseconds())...)
+		name := "_unregistered"
+		if registered {
+			name = cmd.Name
+		}
+		metrics.IncCounter("admin.execute.total", metrics.Labels{"command": name, "outcome": outcome}, 1)
+	}()
+	if r == nil {
+		return result, fmt.Errorf("%w: registry nil", ErrCommandInvalid)
+	}
+	if cmd.Name == "" {
+		return result, fmt.Errorf("%w: name required", ErrCommandInvalid)
 	}
 	r.mu.RLock()
 	def, ok := r.commands[cmd.Name]
 	r.mu.RUnlock()
 	if !ok || def.Handler == nil {
-		return Result{}, fmt.Errorf("%w: %s", ErrCommandNotFound, cmd.Name)
+		return result, fmt.Errorf("%w: %s", ErrCommandNotFound, cmd.Name)
 	}
-	started := time.Now().UnixMilli()
-	if cmd.CreatedAt == 0 {
-		cmd.CreatedAt = started
-	}
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("admin: command %s panic: %v", cmd.Name, recovered)
-			result = normalizeResult(cmd, result, started)
-			result.OK = false
-			result.Message = err.Error()
-		}
-	}()
-	result, err = def.Handler(ctx, cmd)
-	result = normalizeResult(cmd, result, started)
-	if err != nil {
-		result.OK = false
-		if result.Message == "" {
-			result.Message = err.Error()
-		}
-		return result, err
-	}
-	result.OK = true
-	return result, nil
+	registered = true
+	return def.Handler(ctx, cmd)
 }
 
 func normalizeResult(cmd Command, result Result, started int64) Result {

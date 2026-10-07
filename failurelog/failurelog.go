@@ -279,6 +279,13 @@ func (l *RedisList) tryAppendWithScript(ctx context.Context, key string, raw []b
 		l.degraded("append")
 		return false, nil
 	}
+	length, err := redisInt64(ret)
+	if err != nil || length < 1 {
+		return false, l.scriptError("append", errUnexpectedScriptResult)
+	}
+	if removed := length - l.cfg.MaxEntries; l.cfg.MaxEntries > 0 && removed > 0 {
+		metrics.IncCounter("failurelog_trim_total", l.labels(""), removed)
+	}
 	return true, nil
 }
 
@@ -415,9 +422,12 @@ func (l *RedisList) trim(ctx context.Context, key string) error {
 	if count <= l.cfg.MaxEntries {
 		return nil
 	}
-	metrics.IncCounter("failurelog_trim_total", l.labels(""), 1)
 	if trimmer, ok := l.redis.(fredis.ListTrimmer); ok {
-		return trimmer.LTrim(ctx, key, -l.cfg.MaxEntries, -1)
+		if err := trimmer.LTrim(ctx, key, -l.cfg.MaxEntries, -1); err != nil {
+			return err
+		}
+		metrics.IncCounter("failurelog_trim_total", l.labels(""), count-l.cfg.MaxEntries)
+		return nil
 	}
 	items, err := l.redis.LRange(ctx, key, count-l.cfg.MaxEntries, -1)
 	if err != nil {
@@ -435,6 +445,7 @@ func (l *RedisList) trim(ctx context.Context, key string) error {
 			return err
 		}
 	}
+	metrics.IncCounter("failurelog_trim_total", l.labels(""), count-l.cfg.MaxEntries)
 	return nil
 }
 

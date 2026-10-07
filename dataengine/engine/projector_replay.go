@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"math/rand/v2"
 	"time"
 
@@ -264,6 +265,7 @@ func (projector *Projector) acknowledge(records []coredata.CommitRecord) {
 		delete(projector.admitted, id)
 		projector.walUnacked.Add(^uint64(0))
 	}
+	metrics.SetGauge("dataengine.projection.pending", nil, int64(projector.walUnacked.Load()))
 	projector.heldMu.Unlock()
 }
 

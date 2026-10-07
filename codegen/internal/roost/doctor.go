@@ -832,12 +832,18 @@ func CheckConfig(path string, production bool) error {
 }
 
 func findForbiddenProductionScalar(node *yaml.Node) (string, string) {
+	return findForbiddenProductionAt(node, "")
+}
+func findForbiddenProductionAt(node *yaml.Node, path string) (string, string) {
 	if node == nil {
 		return "", ""
 	}
 	if node.Kind == yaml.ScalarNode && (node.Tag == "!!str" || node.Tag == "") {
 		value := strings.ToLower(strings.TrimSpace(node.Value))
 		for _, forbidden := range []string{"change_me", "127.0.0.1", "localhost", "dev-"} {
+			if path == "ops.addr" && (forbidden == "127.0.0.1" || forbidden == "localhost") {
+				continue
+			}
 			if strings.Contains(value, forbidden) {
 				return forbidden, node.Value
 			}
@@ -847,7 +853,14 @@ func findForbiddenProductionScalar(node *yaml.Node) (string, string) {
 		if node.Kind == yaml.MappingNode && index%2 == 0 {
 			continue
 		}
-		if forbidden, value := findForbiddenProductionScalar(child); forbidden != "" {
+		next := path
+		if node.Kind == yaml.MappingNode {
+			if next != "" {
+				next += "."
+			}
+			next += node.Content[index-1].Value
+		}
+		if forbidden, value := findForbiddenProductionAt(child, next); forbidden != "" {
 			return forbidden, value
 		}
 	}

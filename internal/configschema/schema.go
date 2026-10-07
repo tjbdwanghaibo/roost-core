@@ -51,8 +51,11 @@ type Key struct {
 	// Enum 是字符串键的可选值（小写）。
 	Enum     []string
 	Required bool
-	// Secret 的键在生产环境必须非空且不以 dev- 开头。
+	// Secret 标记敏感字段；生产环境必须是非空、非 dev- 的值。
 	Secret bool
+	// SecretOptional（secret:"optional"）允许未启用功能时留空；非空值仍执行 secret 校验。
+	// 功能启用后的必填条件由跨键 Validator 检查。
+	SecretOptional bool
 	// Closed 只用于段：段下没有声明的键报错（map 的元素总是 closed）。
 	Closed bool
 	Help   string
@@ -174,8 +177,9 @@ func collectField(typ reflect.Type, full string, tag reflect.StructTag, options 
 	key := Key{
 		Name: full, Kind: kind, Default: tag.Get("default"),
 		Min: tag.Get("min"), Max: tag.Get("max"),
-		Required: tag.Get("required") == "true", Secret: tag.Get("secret") == "true",
-		Help: tag.Get("help"),
+		Required: tag.Get("required") == "true", Secret: tag.Get("secret") == "true" || tag.Get("secret") == "optional",
+		SecretOptional: tag.Get("secret") == "optional",
+		Help:           tag.Get("help"),
 	}
 	key.Example, key.Starter = tag.Lookup("example")
 	if enum := tag.Get("enum"); enum != "" {

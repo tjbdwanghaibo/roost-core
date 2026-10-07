@@ -497,3 +497,30 @@ GOWORK=off go test -count=1 -run 'Markdown|Conflict' .
 → [说明文档](../guide/11-observability.md)对应：§6.3 总表、§6.4 仪表盘、§7 不保证。
 
 [↑ 速览](#速览) · [说明文档](../guide/11-observability.md)
+
+2026-10-08 F11 N4：v1.23.1 已修复（未发布），见 [RR-20261008-29](../../bugfix/RR-20261008-29.md)。用脚本已返回的 RPUSH 长度统计 len-MaxEntries；脚本结果异常返回错误，不降级重放。非 Lua 回退仅在裁剪成功后计数，回退非原子的既有边界不变。
+
+2026-10-08 F11 N5/N15：v1.23.1 已修复（未发布），见 [RR-20261008-30](../../bugfix/RR-20261008-30.md)。Registry 对开始/结束、结果、耗时留日志，缺省 trace_id 在入口生成；HTTP 401 记录来源但不记录 token，404/400/500/504 分别表示未知命令/参数/内部错误/超时。指标只含注册命令名与固定枚举。operator/source 是调用方声明，不是已认证身份。
+
+2026-10-08 F11 N6：v1.23.1 已修复（未发布），见 [RR-20261008-31](../../bugfix/RR-20261008-31.md)。CollectStats 只读基线；FlushOnce 串行采样/写入，文件 Sync 成功才推进窗口。写失败不消费窗口，落盘结果未知后的重复记录不在本次承诺内。
+
+2026-10-08 F11 N7：v1.23.1 已修复（未发布），见 [RR-20261008-32](../../bugfix/RR-20261008-32.md)。准入/撤销/ack 在原有 heldMu 内更新投影 pending；outbox 复用既有采样发布 pending 和 oldest_age_ms。无新轮询器与动态实体标签。
+
+2026-10-08 F11 N11：v1.23.1 已修复（未发布），见 [RR-20261008-33](../../bugfix/RR-20261008-33.md)。server_time_ms 始终取系统时间，业务 fctx 的时间钉住不影响基础日志时间戳。
+
+2026-10-08 F11 N14：v1.23.1 已修复（未发布），见 [RR-20261008-34](../../bugfix/RR-20261008-34.md)。ops.admin_token 声明 secret:optional：关闭时可空，启用由 Validator 要求填写，生产非空值拒绝 dev-；其他 secret:true 保留非空要求。快照生成器同步声明。doctor 仅允许 ops.addr 的回环监听，仍拒绝其他基础设施中的开发地址。容器示例仍全接口监听，使用者须显式声明 allow_public_addr，不自动放宽运行期规则。
+
+2026-10-08 F11 N15：v1.23.1 已修复（未发布），见 [RR-20261008-35](../../bugfix/RR-20261008-35.md)。统一声明对 log.rotate_interval 加 min:0；零仍明确关闭轮转，负值启动拒绝。
+
+
+### B7 观察项的处理（2026-10-08）
+
+N8：Reporter 不是对象生命周期拥有者，不能代替业务删动态序列；注释已更正，不再称 Registry 没有 DeleteSeries。
+
+N9：OBSERVABILITY 补全当前可解析指标，根包检查扩展至全部源码收集项，保留无法静态推断标签的限制。`bus_rpc_pending_total` Gauge 改名 `bus_rpc_pending_requests`；旧查询需改。日志时间、Nest 标签、remote_mirror 健康与配置入口均更正。
+
+N10 / N13：按维护者 C8 保留公开集成 API。syncstream/skillsync 实例由宿主持有，无 App 级统一实例，ExportMetrics / Health 须由实例拥有者采样注册，不能声称默认生产已接线。MetricSink 的 float64 秒数不能直接转 int64 丢掉亚秒。admin 元数据是外部目录描述，保留已有 App 能力以免破坏公共装配；ApprovalRequired/DryRunSupported/Hidden 没有自动执行语义，已补醒目的中文契约注释。此为保留决定，不计作实现了审批/隐藏/试运行。
+
+N12：readyz 指标数量改用 SeriesCount，不复制/排序全部序列；与原 Snapshot 长度相比不包含合成的 dropped 行。
+
+N15：sync checker 只证明本地已装配，传输连通由 nats checker 负责，不把对象非空当消费者进度保证；JetStream 生命周期专项为 RR-25，仍待确认。HTTP 状态、轮转校验已修；RPC Gauge 名已纠正。

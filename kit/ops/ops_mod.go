@@ -2,6 +2,7 @@ package ops
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -70,7 +71,7 @@ type config struct {
 	Addr            string        `config:"ops.addr" default:"127.0.0.1:9100" example:"127.0.0.1:9100" help:"ops 端点监听地址；生产环境绑公网要同时写 ops.allow_public_addr: true"`
 	AllowPublicAddr bool          `config:"ops.allow_public_addr" help:"生产环境允许 ops.addr 不是回环地址（端点放在鉴权代理之后时才写 true）"`
 	AdminEnabled    bool          `config:"ops.admin_enabled" example:"false" help:"打开 /admin 命令；打开时必须写 ops.admin_token"`
-	AdminToken      string        `config:"ops.admin_token" example:"" help:"/admin 的令牌；dev- 开头的令牌要同时写 ops.allow_dev_token: true"`
+	AdminToken      string        `config:"ops.admin_token" secret:"optional" example:"" help:"/admin 的令牌；生产禁止 dev-，开发使用 dev- 时须写 ops.allow_dev_token: true"`
 	AllowDevToken   bool          `config:"ops.allow_dev_token" example:"false"`
 	AdminTimeout    time.Duration `config:"ops.admin_timeout" default:"10s" min:"1ns" help:"/admin/execute 交给命令的期限"`
 }
@@ -85,8 +86,8 @@ func (c *config) ValidateConfig(production bool) error {
 		if c.AdminToken == "" {
 			errs = append(errs, errors.New("config: ops.admin_enabled requires admin_token: ops.admin_token is empty"))
 		}
-		if strings.HasPrefix(c.AdminToken, "dev-") && !c.AllowDevToken {
-			errs = append(errs, errors.New("config: dev ops.admin_token requires ops.allow_dev_token=true"))
+		if strings.HasPrefix(c.AdminToken, "dev-") && (production || !c.AllowDevToken) {
+			errs = append(errs, errors.New("config: dev ops.admin_token is forbidden in production and otherwise requires ops.allow_dev_token=true"))
 		}
 	}
 	if production && c.Enabled && !isLoopbackListenAddr(c.Addr) && !c.AllowPublicAddr {
@@ -363,6 +364,8 @@ func (m *OpsMod) handleAdminExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !m.authorized(r) {
+		slog.Warn("admin execute refused", "outcome", "unauthorized", "remote_addr", r.RemoteAddr)
+		metrics.IncCounter("admin.http_refused.total", metrics.Labels{"reason": "unauthorized"}, 1)
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
 		return
 	}
@@ -386,6 +389,10 @@ func (m *OpsMod) handleAdminExecute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "admin registry unavailable"})
 		return
 	}
+	if cmd.TraceID == "" {
+		cmd.TraceID = rand.Text()
+	}
+	slog.Info("admin execute accepted", "remote_addr", r.RemoteAddr, "command", cmd.Name, "trace_id", cmd.TraceID)
 	// 命令在 ops.admin_timeout 内执行（N02 O1）。到期时命令可能已经做了一部分：回 504 并写明结果未知，
 	// 运维按 trace_id 核对后再决定是否重试。不配合 ctx 的命令 Ops 杀不掉，它跑过写超时后回复写不出去，
 	// 客户端看到传输错误——同样是结果未知，不等于没执行。
@@ -398,7 +405,13 @@ func (m *OpsMod) handleAdminExecute(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusGatewayTimeout, result)
 			return
 		}
-		writeJSON(w, http.StatusBadRequest, result)
+		status := http.StatusInternalServerError
+		if errors.Is(err, admin.ErrCommandNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, admin.ErrCommandInvalid) {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, result)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -408,7 +421,7 @@ func (m *OpsMod) metricCount() int {
 	if m == nil || m.metrics == nil {
 		return 0
 	}
-	return len(m.metrics.Snapshot())
+	return m.metrics.SeriesCount()
 }
 
 // authorized compares the presented admin token in constant time. This

@@ -49,6 +49,7 @@ type EntityStats struct {
 }
 
 type StatsRecord struct {
+	observedAt  time.Time      // 仅给写日志提交窗口使用，不导出到 JSON。
 	Timestamp   string         `json:"timestamp"`
 	TimestampMs int64          `json:"timestamp_ms"`
 	Service     string         `json:"service"`
@@ -96,6 +97,7 @@ type StatsLogMod struct {
 	interval time.Duration
 	metrics  *metrics.Registry
 
+	flushMu        sync.Mutex // 串行写文件及其窗口推进；只读 CollectStats 不改变基线。
 	mu             sync.Mutex
 	file           *os.File
 	providers      map[string]providerEntry
@@ -177,7 +179,7 @@ func (m *StatsLogMod) Provide(r *app.Registry) error {
 }
 
 // CollectStats takes one observation now — the same record a tick writes to
-// the JSONL file — for callers such as ops' /statsz. It is typed any so ops
+// the JSONL file — without advancing its window, for callers such as ops' /statsz. It is typed any so ops
 // need not import this package.
 func (m *StatsLogMod) CollectStats() any {
 	if m == nil {
@@ -356,6 +358,8 @@ func (m *StatsLogMod) FlushOnce() error {
 	if m == nil || !m.enabled {
 		return nil
 	}
+	m.flushMu.Lock()
+	defer m.flushMu.Unlock()
 	record := m.collect()
 	raw, err := json.Marshal(record)
 	if err != nil {
@@ -369,7 +373,13 @@ func (m *StatsLogMod) FlushOnce() error {
 	if _, err := m.file.Write(append(raw, '\n')); err != nil {
 		return err
 	}
-	return m.file.Sync()
+	if err := m.file.Sync(); err != nil {
+		return err
+	}
+	// 只有持久记录成功后才推进累计计数基线，探针和失败写入都不能消耗窗口。
+	m.lastNestWork = nest.DispatcherWorkStats{ProcessedMessages: record.Nest.ProcessedMessagesTotal, Slow200msMessages: record.Nest.Slow200msMessagesTotal}
+	m.lastNestAt = record.observedAt
+	return nil
 }
 
 func (m *StatsLogMod) openFile() error {
@@ -400,6 +410,7 @@ func (m *StatsLogMod) collect() StatsRecord {
 	runtime.ReadMemStats(&ms)
 	now := time.Now()
 	record := StatsRecord{
+		observedAt:  now,
 		Timestamp:   now.Format(time.RFC3339Nano),
 		TimestampMs: now.UnixMilli(),
 		Service:     m.service,
@@ -494,8 +505,6 @@ func (m *StatsLogMod) formatNestStats(stats nest.DispatcherStats, now time.Time)
 	m.mu.Lock()
 	prev := m.lastNestWork
 	prevAt := m.lastNestAt
-	m.lastNestWork = stats.Work
-	m.lastNestAt = now
 	m.mu.Unlock()
 
 	interval := time.Duration(0)

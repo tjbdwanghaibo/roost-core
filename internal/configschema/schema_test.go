@@ -170,3 +170,20 @@ func TestStarterYAML(t *testing.T) {
 		t.Fatalf("StarterYAML =\n%s\nwant\n%s", got, want)
 	}
 }
+
+func TestOptionalSecretKeepsProductionValidation(t *testing.T) {
+	type optional struct {
+		Token string `config:"token" secret:"optional"`
+	}
+	schema := MustOf(optional{})
+	if !schema.Keys[0].Secret || !schema.Keys[0].SecretOptional {
+		t.Fatal("optional secret lost redaction declaration")
+	}
+	for _, value := range []string{"", "secret-value", "dev-value"} {
+		var got optional
+		err := Decode(source(t, map[string]any{"token": value}), &got, true)
+		if (err != nil) != strings.HasPrefix(value, "dev-") {
+			t.Fatalf("optional secret %q: %v", value, err)
+		}
+	}
+}

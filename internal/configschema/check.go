@@ -234,7 +234,8 @@ func (d *decoder) read(key Key) (any, error) {
 		}
 	}
 	if key.Secret && d.production {
-		if text, _ := value.(string); strings.TrimSpace(text) == "" || strings.HasPrefix(strings.ToLower(strings.TrimSpace(text)), "dev-") {
+		text, _ := value.(string)
+		if (!key.SecretOptional && isEmpty(value)) || strings.HasPrefix(strings.ToLower(strings.TrimSpace(text)), "dev-") {
 			return nil, fmt.Errorf("config: production requires non-dev %s", key.Name)
 		}
 	}

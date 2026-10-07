@@ -342,7 +342,7 @@ func snapshotProjectInputs(root string, manifest Manifest) (map[string][sha256.S
 		if readErr != nil {
 			return readErr
 		}
-		if bytes.Contains(raw, []byte("Code generated")) || isGeneratedData(path) || protocol.IsGeneratedArtifact(rel, raw) {
+		if hasGeneratedHeader(path, raw) || isGeneratedData(path) || protocol.IsGeneratedArtifact(rel, raw) {
 			return nil
 		}
 		out[rel] = sha256.Sum256(raw)
@@ -552,7 +552,7 @@ func snapshotGenerated(root string) (map[string][sha256.Size]byte, error) {
 		if err != nil {
 			return err
 		}
-		if !strings.Contains(string(raw), "Code generated") && !isGeneratedData(path) && !protocol.IsGeneratedArtifact(rel, raw) {
+		if !hasGeneratedHeader(path, raw) && !isGeneratedData(path) && !protocol.IsGeneratedArtifact(rel, raw) {
 			return nil
 		}
 		// Newlines are not content: a CRLF checkout of an LF-generated file is

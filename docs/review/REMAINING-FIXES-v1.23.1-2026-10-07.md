@@ -112,3 +112,9 @@ B3 已提交 b01f7e66；远端 RS v2/C# 合并 0dff3676（CHANGELOG 冲突保留
 ### B6 进行中（2026-10-08）
 
 B4 提交 50526a2c。B6 RR-22/23/24/26/27/28 已实施，cache/policy/kit-nest 和生成 TCP/Game race 通过，生成完整工程 build/vet/test 通过。RR-25 本地候选修复通过 race；取消消费者投递次数上限的配置整理被自动审批拒绝，已请求维护者确认有延迟、受流保留期/容量限制的空窗重投方案，不改业务错误 ACK 与 RPC/Remote 策略。真实 broker 验证尚未完成。B7 观测缺陷已开始红绿，B8待处理。
+
+### B7 实施进度（2026-10-08）
+
+RR-20261008-29～38 已完成目标行为红绿；admin/ops/statslog/log/failurelog/configschema/app/dataengine-engine/bus race 已通过。N8/9/10/12/13/15 的指标、性能和公开 API 保留边界见 impl/11 末节。完整生成器回归进行中，B8 文档继续；RR-25 仍等待确认。尚未全部完成、未推送/发布。
+
+B7 验收：全仓 GOWORK=off build/vet/test 通过（131 个测试包），完整 codegen 测试包含重新生成工程并 build/vet/test。首轮旧断言仍要求 versions.skill=latest 已按本批删除失效字段的规格纠正，第二轮全仓通过。原始日志已持久保存；未推送/发布。

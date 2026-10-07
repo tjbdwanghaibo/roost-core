@@ -2,6 +2,9 @@ package skillsync
 
 import "time"
 
+// MetricSink 由拥有 History/Coordinator 的宿主注入并周期采样。
+// 本包没有进程级实例；不会自动注册到 App health 或 metrics。
+// float64 的秒数需由适配器明确换算，不能直接截成 int64 丢掉亚秒精度。
 type MetricSink interface {
 	Gauge(name string, value float64, labels map[string]string)
 }

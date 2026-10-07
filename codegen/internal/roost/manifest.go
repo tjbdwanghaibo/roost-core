@@ -118,8 +118,8 @@ type VersionSpec struct {
 	Kit  string `yaml:"kit"`
 	// Skill and Service are the pre-consolidation module policies. They are
 	// still read so an old roost.yaml loads, but the modules no longer exist:
-	// skill ships inside roost-core and the services inside roost-kit. Sync
-	// drops the fields; the upgrader rewrites the project's imports.
+	// skill and services ship inside roost-core. New manifests omit these
+	// fields; upgrade --consolidate removes them from old manifests.
 	Skill   string `yaml:"skill,omitempty"`
 	Service string `yaml:"service,omitempty"`
 	// Codegen is retired (RR-20261006-57). Since the consolidation the
@@ -208,7 +208,7 @@ func DefaultManifest(name, module string, services, mods, features []string) Man
 	return Manifest{
 		Schema:     1,
 		Project:    ProjectSpec{Name: name, Module: module},
-		Versions:   VersionSpec{Core: "latest", Kit: "latest", Skill: "latest", Service: "latest"},
+		Versions:   VersionSpec{Core: "latest", Kit: "latest"},
 		CICD:       defaultCICDSpec(),
 		SharedMods: shared,
 		Services:   svc,

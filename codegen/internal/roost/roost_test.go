@@ -1198,7 +1198,7 @@ func TestProductionRenderingIncludesDurabilityAndTopologyGuards(t *testing.T) {
 	if !strings.Contains(compose, `"-sd", "/data"`) || !strings.Contains(compose, "mongo-data:/data/db") {
 		t.Fatalf("development dependencies are not durable:\n%s", compose)
 	}
-	if m.Versions.Core != "latest" || m.Versions.Kit != "latest" || m.Versions.Skill != "latest" || m.Versions.Codegen != "" {
+	if m.Versions.Core != "latest" || m.Versions.Kit != "latest" || m.Versions.Skill != "" || m.Versions.Service != "" || m.Versions.Codegen != "" {
 		t.Fatalf("latest version policy defaults = %+v", m.Versions)
 	}
 }

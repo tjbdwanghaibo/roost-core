@@ -219,7 +219,7 @@ type appConfig struct {
 		File             bool          `config:"file" default:"true" example:"true"`
 		Dir              string        `config:"dir" default:"log" example:"log"`
 		Caller           bool          `config:"caller"`
-		RotateInterval   time.Duration `config:"rotate_interval" default:"24h"`
+		RotateInterval   time.Duration `config:"rotate_interval" default:"24h" min:"0"`
 		RotateTimeFormat string        `config:"rotate_time_format"`
 	} `config:"log"`
 	Time    timeConfig    `config:"time"`

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -185,6 +186,8 @@ func (worker *OutboxWorker) refreshBacklog(ctx context.Context, now time.Time) e
 	}
 	worker.pending.Store(backlog.Pending)
 	worker.oldestAgeNanos.Store(int64(backlog.OldestAge))
+	metrics.SetGauge("dataengine.outbox.pending", nil, backlog.Pending)
+	metrics.SetGauge("dataengine.outbox.oldest_age_ms", nil, backlog.OldestAge.Milliseconds())
 	var limitErr error
 	if worker.opts.MaxPending > 0 && backlog.Pending > worker.opts.MaxPending {
 		limitErr = fmt.Errorf("%w: pending=%d max=%d", ErrOutboxHardLimit, backlog.Pending, worker.opts.MaxPending)
