@@ -8,6 +8,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 结构守卫（`guards`，`fe8ef362`），未发版。** 指标名门禁从源码收集全部指标名与标签核对文档、两个仪表盘与 demo README；仪表盘与 README 对齐源码。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-67](RR-20261006-67.md) | 总览仪表盘改查 `entitysync_durability_gate_deferred_total`；demo 仪表盘 / README 按 `reason` 聚合并写明 `max_deliver` / `permanent`；`bus_rpc_*` 开关改为 `nats.rpc.transport: jetstream`；由 `metric_names_gate_test.go` 守住 | 已修复（`fe8ef362`），未发版 |
+
 **10-07 lockstep 五条（`lockstep`，`4ce70763`），未发版。** 指标名改为导出常量并由守卫钉住；nettransport 新增 `DatagramPayloadLimiter`，Room 按发送器声明的载荷上限做满载校验（缺省 1200）；追帧页离开房间 goroutine 发送、每会话一页在途、`Tick` 最多等 5ms；全部座位已报且无多数时判 NoMajority；机器人见缺口即追帧、停住 64 包后重发。端到端门禁 `sync/lockstep/e2e_gate_test.go` 纳入常规测试。
 
 | 编号 | 修复 | 状态 |

@@ -12,6 +12,17 @@
 - **codegen：生成器随 `versions.core` 运行，`versions.codegen` 废弃**（RR-20261006-57，F12 G2）。生成的 Makefile 改为 `go run …/codegen/cmd/roost@$(CORE_VERSION)`，取 `versions.core`；`roost.yaml` 里写了 `versions.codegen` 会被拒绝（`roost project upgrade` 删掉它），`-codegen-version` / `-codegen` 参数删除。发版时 core 下限须升到 v1.23.1。[问题](docs/bug/RR-20261006-57.md) · [修复](docs/bugfix/RR-20261006-57.md)
 - **servicerpc：带 affinity 的方法真正按键路由，缺 discovery 启动时拒绝**（RR-20261006-59，F09-R1）。生成的客户端之前一律走队列组，affinity 只是装饰；现在 affinity 方法经 etcd discovery + 按键 picker 落到固定实例，`NewBusClient` 必须传 discovery，`ClientMod` 依赖 etcd Mod。生成工程里托管或调用 match / activity 的进程自动带 etcd Mod。[问题](docs/bug/RR-20261006-59.md) · [修复](docs/bugfix/RR-20261006-59.md)
 
+### 结构守卫（guards）
+
+- **指标名一致性门禁**（F11 N3）。根包 `metric_names_gate_test.go` 从源码收集全部指标名、类型与标签键，核对 `OBSERVABILITY.md`、`observability/grafana-roost-overview.json`、生成工程的 demo 仪表盘与 README：写到的名字与标签必须存在，仪表盘与告警用到的指标必须在 `OBSERVABILITY.md` 里，`lockstep.*` / `saga.*` / `skill.*` 指标必须全部收录。`OBSERVABILITY.md` 新增 Saga、技能运行时、进程与配置表、NATS 四节。[方案](docs/feature/REFACTOR-2026-10-07-structural-guards.md)
+- **三大块依赖方向守卫**（F00）。`TestCorePillarDependencyDirection` 把 nest / dataengine / sync 之间的跨块 import 固定为 00-overview §1.1 图里的 9 条边，新增反向依赖即红。
+- **生成工程必须能编译**。codegen 测试生成一份 game-demo，replace 到当前检出后跑 `go build ./...` 与 `go vet ./...`（含测试文件）；RR-20261006-60 之后两份 demo 测试模板让 vet 失败、无人发现的那类问题由此拦住。
+- **pretag 生成漂移检查**（F12 G7）。`scripts/pretag.sh` 在树干净之后跑 `go generate ./...`，树变脏即失败。
+
+### 修复（observability）
+
+- **总览仪表盘与 demo 仪表盘查询对齐源码**（RR-20261006-67，F11 N1、N2）。总览仪表盘的外化闸门推迟曲线改查 `entitysync_durability_gate_deferred_total`（原名不存在，曲线永远为空）；demo 仪表盘与 README 按 `reason`（`max_deliver` / `permanent`）而非不存在的 `subject` 聚合 `nats_jetstream_terminal_total`；README 的 `bus_rpc_*` 开关改为 `nats.rpc.transport: jetstream`。已导入的总览仪表盘重新导入；生成工程 `roost project sync` 刷新。[记录](docs/bugfix/RR-20261006-67.md)
+
 ### 修复（lockstep）
 
 - **lockstep 指标名恢复 `lockstep.` 前缀**（RR-20261006-61，F04-5）。合仓时丢了前缀，`OBSERVABILITY.md` 的 desync 告警一直查不到序列；现在名字是导出常量 `lockstep.Metric*`，守卫用例钉住名字集合并要求 `OBSERVABILITY.md` 列出。按裸名临时配过告警的改回 `lockstep.*`。[问题](docs/bug/RR-20261006-61.md) · [修复](docs/bugfix/RR-20261006-61.md)

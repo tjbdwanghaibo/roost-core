@@ -8,6 +8,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 结构守卫（分支 `guards`，`fe8ef362`，框架文档发现 F11 N1～N3、F00 方向守卫、F12 G7），未发版。** 指标名门禁抓到总览仪表盘查不存在的指标、demo 仪表盘与 README 按不存在的标签聚合；另加三大块依赖方向、生成 game-demo build + vet、pretag `go generate` 漂移三项守卫（[REFACTOR-2026-10-07-structural-guards](../feature/REFACTOR-2026-10-07-structural-guards.md)）。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-67](RR-20261006-67.md) | P3 总览仪表盘查不存在的 `entitysync_flush_gate_deferred_total`；demo 仪表盘与 README 按不存在的 `subject` 聚合 `nats_jetstream_terminal_total`、README 的 `bus_rpc_*` 开关写错（F11 N1、N2） | 已修复（`fe8ef362`），未发版 |
+
 **10-07 lockstep 五条（分支 `lockstep`，`4ce70763`，框架文档发现 F04-5～F04-9，维护者选 A），未发版。** 指标名丢前缀致 desync 告警失效、广播预算不扣传输开销致满载整房被拒、慢追帧客户端卡死 `Tick`、2 人房 desync 永不裁决、机器人缺口不够大时不追帧；补端到端门禁 `sync/lockstep/e2e_gate_test.go`（两客户端 + 机器人经 KCP 回环，满载 + desync + 丢包追帧 + 卡住的追帧）。
 
 | 编号 | 问题 | 状态 |

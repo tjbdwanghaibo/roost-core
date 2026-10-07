@@ -1,6 +1,6 @@
 # REFACTOR-2026-10-07：四项结构守卫（指标名、三大块方向、生成工程编译、pretag 漂移）
 
-分支 `guards`，基线 `43a06e44`（rebase 到 `c78d0c34`）。来源：[框架文档发现登记表](../review/FRAMEWORK-DOCS-FINDINGS-2026-10-07.md) F11 N3、F00（三大块方向无守卫）、F12 G7，以及 RR-20261006-60 之后生成工程 `go vet` 失败没人发现这一新情况。顺带修掉守卫抓到的真实问题 [RR-20261006-67](../bug/RR-20261006-67.md)（F11 N1、N2）。
+分支 `guards`，基线 `43a06e44`（rebase 到 `ca173fcb`），提交 `fe8ef362`。来源：[框架文档发现登记表](../review/FRAMEWORK-DOCS-FINDINGS-2026-10-07.md) F11 N3、F00（三大块方向无守卫）、F12 G7，以及 RR-20261006-60 之后生成工程 `go vet` 失败没人发现这一新情况。顺带修掉守卫抓到的真实问题 [RR-20261006-67](../bug/RR-20261006-67.md)（F11 N1、N2）。
 
 ## 目标
 
@@ -162,4 +162,4 @@ pretag: go generate ./... changed the tree; commit the regenerated files (git di
 
 ## 实施状态
 
-已实施。没有未完成项。全量收录 `OBSERVABILITY.md` 留给以后：在前缀表里加前缀即可逐步收紧（见 §1 范围取舍）。
+已实施（`fe8ef362`）。没有未完成项。全量收录 `OBSERVABILITY.md` 留给以后：在前缀表里加前缀即可逐步收紧（见 §1 范围取舍）。
