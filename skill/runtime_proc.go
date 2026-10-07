@@ -24,6 +24,9 @@ type procLedgerKey struct {
 func (runtime *Runtime) ActivatePassive(program *Program, event EventContext) (PassiveActivationID, error) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	if runtime.host == nil {
+		return 0, ErrProgramInvariant
+	}
 	root := eventRootID(event)
 	if root == 0 {
 		return 0, ErrCastInputInvalid

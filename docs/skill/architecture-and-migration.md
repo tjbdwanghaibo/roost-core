@@ -39,7 +39,7 @@ roost-skill/skill        roost-core/syncbus.ISyncBus
 |---|---|---:|---|
 | `roost.skill.manifest` | Program 的视觉表和挂载计划 | 必须可靠 | 重新发送 Full |
 | `roost.skill.state` | Cast 状态全量或业务增量 | 必须可靠 | 历史连续则 replay，否则 Full |
-| `roost.skill.presentation` | cast/effect 播放指令 | 可丢弃、需有序 | 短历史 replay；过期后以状态为准 |
+| `roost.skill.presentation` | cast/effect 播放指令 | 可靠、有序；缺口需恢复 | 短历史 replay；过期后 reset |
 
 玩法修改必须先由 Host 成功提交，再产生 effect PresentationEvent。Cast 表现只在
 cast commit 后产生。因此客户端永远不会先看到一个被权威层拒绝的效果。

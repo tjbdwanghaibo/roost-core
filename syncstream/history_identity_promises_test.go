@@ -28,6 +28,9 @@ func TestHistoryPromiseRecreatedStreamDoesNotReuseSequences(t *testing.T) {
 			case "delete_observer":
 				_, err = h.DeleteObserver(o)
 			case "sweep_idle":
+				if err := h.AcknowledgeEpoch(o, s, old.Epoch, old.Sequence); err != nil {
+					t.Fatal(err)
+				}
 				_, err = h.SweepIdle(time.Now().Add(2 * time.Second))
 			case "rotate_epoch":
 				err = h.RotateEpoch(8)

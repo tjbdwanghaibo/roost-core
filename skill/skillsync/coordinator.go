@@ -59,8 +59,9 @@ type observerKey struct {
 	key      int64
 }
 type sourceCursor struct {
-	state        uint64
-	presentation uint64
+	state             uint64
+	presentation      uint64
+	resetPresentation bool
 }
 
 type viewLockEntry struct {
@@ -77,8 +78,6 @@ type CoordinatorMetrics struct {
 }
 
 type coordinatorCounters struct {
-	published          atomic.Uint64
-	publishFailures    atomic.Uint64
 	filtered           atomic.Uint64
 	visibilityFailures atomic.Uint64
 	snapshotRecoveries atomic.Uint64
@@ -87,7 +86,11 @@ type coordinatorCounters struct {
 // Coordinator serializes preparation per observer/key but never holds its
 // global mutex while invoking VisibilityPolicy, PacketPublisher, or Runtime.
 type Coordinator struct {
-	mutex            sync.RWMutex
+	mutex sync.RWMutex
+	// journalMutex 串行 History/outbox 的交接和修复；不覆盖网络发送。
+	journalMutex     sync.Mutex
+	repairPending    bool
+	historyEpoch     uint64
 	runtime          *skill.Runtime
 	history          *syncstream.History
 	publisher        PacketPublisher
@@ -134,7 +137,7 @@ func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
 	if err := options.Outbox.Reconcile(options.History.Export()); err != nil {
 		return nil, err
 	}
-	return &Coordinator{runtime: options.Runtime, history: options.History, publisher: options.Publisher, projector: options.Projector, visibility: options.Visibility, outbox: options.Outbox, maxPackets: options.MaxPacketsPerFlush, cursors: make(map[observerKey]sourceCursor), plans: make(map[int64]skill.PresentationPlan), viewLocks: make(map[observerKey]*viewLockEntry), closedObservers: make(map[syncstream.Observer]struct{}), closingObservers: make(map[syncstream.Observer]struct{})}, nil
+	return &Coordinator{historyEpoch: options.History.Epoch(), runtime: options.Runtime, history: options.History, publisher: options.Publisher, projector: options.Projector, visibility: options.Visibility, outbox: options.Outbox, maxPackets: options.MaxPacketsPerFlush, cursors: make(map[observerKey]sourceCursor), plans: make(map[int64]skill.PresentationPlan), viewLocks: make(map[observerKey]*viewLockEntry), closedObservers: make(map[syncstream.Observer]struct{}), closingObservers: make(map[syncstream.Observer]struct{})}, nil
 }
 
 func (coordinator *Coordinator) acquireView(key observerKey) (func(), error) {
@@ -237,11 +240,13 @@ func (coordinator *Coordinator) PublishSnapshot(observer syncstream.Observer, ke
 	}
 	packet, err := coordinator.projector.StateSnapshotPacket(observer, key, snapshot)
 	if err == nil {
-		_, err = coordinator.appendPending(packet)
+		packet, err = coordinator.appendPending(packet)
 	}
-	if err == nil {
+	if packet.Sequence != 0 {
 		cursor := coordinator.cursor(view)
 		cursor.state = snapshot.LatestStateMutationSequence
+		cursor.presentation = snapshot.LatestPresentationSequence
+		cursor.resetPresentation = true
 		coordinator.setCursor(view, cursor)
 	}
 	release()
@@ -266,8 +271,34 @@ func (coordinator *Coordinator) Flush(observer syncstream.Observer, key int64) e
 }
 
 func (coordinator *Coordinator) prepareFlush(view observerKey) error {
+	if err := coordinator.repairOutbox(); err != nil {
+		return err
+	}
 	cursor := coordinator.cursor(view)
 	remaining := coordinator.maxPackets
+	if cursor.resetPresentation {
+		snapshot, err := coordinator.presentationReset(view.observer)
+		if err != nil {
+			return err
+		}
+		packet, err := coordinator.projector.PresentationResetPacket(view.observer, view.key, snapshot)
+		if err != nil {
+			return err
+		}
+		accepted, err := coordinator.appendPending(packet)
+		if accepted.Sequence != 0 {
+			cursor.presentation = snapshot.LatestPresentationSequence
+			cursor.resetPresentation = false
+			coordinator.setCursor(view, cursor)
+		}
+		if err != nil {
+			return err
+		}
+		remaining--
+		if remaining == 0 {
+			return nil
+		}
+	}
 	state := coordinator.runtime.StateDeltas(cursor.state, remaining)
 	if state.CursorExpired {
 		snapshot, err := coordinator.visibility.FilterStateSnapshot(view.observer, coordinator.runtime.StateSnapshot())
@@ -279,11 +310,14 @@ func (coordinator *Coordinator) prepareFlush(view observerKey) error {
 		if err != nil {
 			return err
 		}
-		if _, err = coordinator.appendPending(packet); err != nil {
+		accepted, err := coordinator.appendPending(packet)
+		if accepted.Sequence != 0 {
+			cursor.state = snapshot.LatestStateMutationSequence
+			coordinator.setCursor(view, cursor)
+		}
+		if err != nil {
 			return err
 		}
-		cursor.state = snapshot.LatestStateMutationSequence
-		coordinator.setCursor(view, cursor)
 		coordinator.counters.snapshotRecoveries.Add(1)
 		remaining--
 		if remaining == 0 {
@@ -306,11 +340,14 @@ func (coordinator *Coordinator) prepareFlush(view observerKey) error {
 			if err != nil {
 				return err
 			}
-			if _, err = coordinator.appendPending(packet); err != nil {
+			accepted, err := coordinator.appendPending(packet)
+			if accepted.Sequence != 0 {
+				cursor.state = mutation.Sequence
+				coordinator.setCursor(view, cursor)
+			}
+			if err != nil {
 				return err
 			}
-			cursor.state = mutation.Sequence
-			coordinator.setCursor(view, cursor)
 			remaining--
 			if remaining == 0 {
 				return nil
@@ -327,11 +364,14 @@ func (coordinator *Coordinator) prepareFlush(view observerKey) error {
 		if err != nil {
 			return err
 		}
-		if _, err = coordinator.appendPending(packet); err != nil {
+		accepted, err := coordinator.appendPending(packet)
+		if accepted.Sequence != 0 {
+			cursor.presentation = snapshot.LatestPresentationSequence
+			coordinator.setCursor(view, cursor)
+		}
+		if err != nil {
 			return err
 		}
-		cursor.presentation = snapshot.LatestPresentationSequence
-		coordinator.setCursor(view, cursor)
 		coordinator.counters.snapshotRecoveries.Add(1)
 		return nil
 	}
@@ -351,29 +391,60 @@ func (coordinator *Coordinator) prepareFlush(view observerKey) error {
 		if err != nil {
 			return err
 		}
-		if _, err = coordinator.appendPending(packet); err != nil {
+		accepted, err := coordinator.appendPending(packet)
+		if accepted.Sequence != 0 {
+			cursor.presentation = event.Sequence
+			coordinator.setCursor(view, cursor)
+		}
+		if err != nil {
 			return err
 		}
-		cursor.presentation = event.Sequence
-		coordinator.setCursor(view, cursor)
 	}
 	return nil
 }
 
+// appendPending 返回非零 Sequence 就表示 History 已接受。outbox 失败不能撤销这份身份，
+// 调用方必须推进对应源游标；下一次追加前先修复派生 outbox，避免重复记录同一源变化。
 func (coordinator *Coordinator) appendPending(packet syncstream.Packet) (syncstream.Packet, error) {
+	coordinator.journalMutex.Lock()
+	defer coordinator.journalMutex.Unlock()
+	if coordinator.repairPending || coordinator.historyEpoch != coordinator.history.Epoch() {
+		if err := coordinator.reconcileOutboxLocked(); err != nil {
+			return syncstream.Packet{}, err
+		}
+	}
 	packet, err := coordinator.history.Append(packet)
 	if err != nil {
 		return syncstream.Packet{}, err
 	}
 	if err := coordinator.outbox.Put(packet); err != nil {
-		// History is the authoritative WAL. Reconciliation closes the small
-		// history->outbox crash window without generating a duplicate source
-		// mutation on the next flush.
-		if reconcileErr := coordinator.outbox.Reconcile(coordinator.history.Export()); reconcileErr != nil {
-			return syncstream.Packet{}, errors.Join(err, reconcileErr)
+		if repairErr := coordinator.reconcileOutboxLocked(); repairErr != nil {
+			return packet, errors.Join(err, repairErr)
 		}
 	}
 	return packet, nil
+}
+
+func (coordinator *Coordinator) reconcileOutboxLocked() error {
+	snapshot := coordinator.history.Export()
+	err := coordinator.outbox.Reconcile(snapshot)
+	coordinator.repairPending = err != nil
+	if err == nil && coordinator.historyEpoch != snapshot.Epoch {
+		coordinator.historyEpoch = snapshot.Epoch
+		coordinator.mutex.Lock()
+		clear(coordinator.cursors)
+		coordinator.mutex.Unlock()
+	}
+	return err
+}
+
+func (coordinator *Coordinator) repairOutbox() error {
+	coordinator.journalMutex.Lock()
+	defer coordinator.journalMutex.Unlock()
+	if !coordinator.repairPending && coordinator.historyEpoch == coordinator.history.Epoch() {
+		return nil
+	}
+	return coordinator.reconcileOutboxLocked()
 }
 
 func (coordinator *Coordinator) Acknowledge(observer syncstream.Observer, stream syncstream.Stream, epoch, sequence uint64) error {
@@ -385,6 +456,8 @@ func (coordinator *Coordinator) Acknowledge(observer syncstream.Observer, stream
 		return err
 	}
 	defer release()
+	coordinator.journalMutex.Lock()
+	defer coordinator.journalMutex.Unlock()
 	// Validate before deleting the derived copy. latest can only advance while
 	// this view is held, so a valid sequence cannot become invalid here.
 	if epoch != coordinator.history.Epoch() {
@@ -397,12 +470,12 @@ func (coordinator *Coordinator) Acknowledge(observer syncstream.Observer, stream
 	// reconciliation can recreate it. The opposite order can permanently orphan
 	// a stale outbox record after a crash or store failure.
 	if err := coordinator.outbox.Acknowledge(observer, stream, epoch, sequence); err != nil {
-		return errors.Join(err, coordinator.outbox.Reconcile(coordinator.history.Export()))
+		return errors.Join(err, coordinator.reconcileOutboxLocked())
 	}
 	if err := coordinator.history.AcknowledgeEpoch(observer, stream, epoch, sequence); err != nil {
 		// Repair immediately as well as retaining History as the crash-recovery
 		// source. Joining both failures preserves the primary WAL error.
-		return errors.Join(err, coordinator.outbox.Reconcile(coordinator.history.Export()))
+		return errors.Join(err, coordinator.reconcileOutboxLocked())
 	}
 	return nil
 }
@@ -419,15 +492,29 @@ func (coordinator *Coordinator) Recover(request syncstream.ResyncRequest) (syncs
 	if err != nil {
 		return syncstream.ResyncResult{}, err
 	}
-	result, err := coordinator.history.Recover(request, snapshotProviderFunc(coordinator.snapshotPacket))
+	if err := coordinator.repairOutbox(); err != nil {
+		release()
+		return syncstream.ResyncResult{}, err
+	}
+	cursor := coordinator.cursor(view)
+	// 捕获不持交接锁；History 自己核对捕获前后的 revision，拒绝失效快照。
+	result, err := coordinator.history.Recover(request, snapshotProviderFunc(func(request syncstream.ResyncRequest) (syncstream.Packet, error) {
+		return coordinator.snapshotPacketWithCursor(request, &cursor)
+	}))
+	coordinator.journalMutex.Lock()
 	if err == nil {
+		if result.Reason != syncstream.ResyncNone && len(result.Packets) == 1 && result.Packets[0].Full {
+			coordinator.setCursor(view, cursor)
+		}
 		for _, packet := range result.Packets {
 			if putErr := coordinator.outbox.Put(packet); putErr != nil {
+				coordinator.repairPending = true
 				err = putErr
 				break
 			}
 		}
 	}
+	coordinator.journalMutex.Unlock()
 	release()
 	if err != nil {
 		return result, err
@@ -440,6 +527,11 @@ func (coordinator *Coordinator) Recover(request syncstream.ResyncRequest) (syncs
 }
 
 func (coordinator *Coordinator) snapshotPacket(request syncstream.ResyncRequest) (syncstream.Packet, error) {
+	cursor := sourceCursor{}
+	return coordinator.snapshotPacketWithCursor(request, &cursor)
+}
+
+func (coordinator *Coordinator) snapshotPacketWithCursor(request syncstream.ResyncRequest, cursor *sourceCursor) (syncstream.Packet, error) {
 	switch request.Stream.Topic {
 	case TopicManifest:
 		plan, ok := coordinator.plan(request.Stream.Key)
@@ -448,17 +540,21 @@ func (coordinator *Coordinator) snapshotPacket(request syncstream.ResyncRequest)
 		}
 		return coordinator.projector.ManifestPacket(request.Observer, request.Stream.Key, plan)
 	case TopicState:
-		snapshot, err := coordinator.visibility.FilterStateSnapshot(request.Observer, coordinator.runtime.StateSnapshot())
+		source := coordinator.runtime.StateSnapshot()
+		snapshot, err := coordinator.visibility.FilterStateSnapshot(request.Observer, source)
 		if err != nil {
 			coordinator.counters.visibilityFailures.Add(1)
 			return syncstream.Packet{}, err
 		}
+		cursor.state, cursor.presentation = source.LatestStateMutationSequence, source.LatestPresentationSequence
+		cursor.resetPresentation = true
 		return coordinator.projector.StateSnapshotPacket(request.Observer, request.Stream.Key, snapshot)
 	case TopicPresentation:
 		snapshot, err := coordinator.presentationReset(request.Observer)
 		if err != nil {
 			return syncstream.Packet{}, err
 		}
+		cursor.presentation, cursor.resetPresentation = snapshot.LatestPresentationSequence, false
 		return coordinator.projector.PresentationResetPacket(request.Observer, request.Stream.Key, snapshot)
 	default:
 		return syncstream.Packet{}, fmt.Errorf("%w: %s", ErrTopicUnsupported, request.Stream.Topic)
@@ -471,6 +567,12 @@ func (coordinator *Coordinator) snapshotPacket(request syncstream.ResyncRequest)
 // 表现、目标与坐标发给所有 observer（NC-114）。复用 FilterPresentation 而不在接口上加方法，自定义策略无需改动。
 func (coordinator *Coordinator) presentationReset(observer syncstream.Observer) (skill.PresentationRecoverySnapshot, error) {
 	snapshot := coordinator.runtime.PresentationSnapshot()
+	// reset 的包头同样受时钟策略约束，不能只过滤每条持续表现的实体与坐标。
+	clock, err := coordinator.visibility.FilterStateSnapshot(observer, skill.RuntimeStateSnapshot{Tick: snapshot.Tick, WorldRevision: snapshot.WorldRevision})
+	if err != nil {
+		coordinator.counters.visibilityFailures.Add(1)
+		return skill.PresentationRecoverySnapshot{}, err
+	}
 	active := make([]skill.ActivePresentation, 0, len(snapshot.Active))
 	for _, entry := range snapshot.Active {
 		filtered, allowed, err := coordinator.visibility.FilterPresentation(observer, activePresentationEvent(snapshot, entry))
@@ -486,6 +588,7 @@ func (coordinator *Coordinator) presentationReset(observer syncstream.Observer) 
 		active = append(active, entry)
 	}
 	snapshot.Active = active
+	snapshot.Tick, snapshot.WorldRevision = clock.Tick, clock.WorldRevision
 	return snapshot, nil
 }
 
@@ -507,27 +610,31 @@ func activePresentationEvent(snapshot skill.PresentationRecoverySnapshot, entry 
 }
 
 func (coordinator *Coordinator) publishDue(observer syncstream.Observer, stream syncstream.Stream) error {
-	before := coordinator.outbox.Metrics()
+	if err := coordinator.repairOutbox(); err != nil {
+		return err
+	}
 	err := coordinator.outbox.PublishDue(coordinator.publisher, time.Now(), &observer, &stream)
-	coordinator.capturePublishMetrics(before, coordinator.outbox.Metrics())
 	return err
 }
 func (coordinator *Coordinator) publishNow(observer syncstream.Observer, stream syncstream.Stream) error {
-	before := coordinator.outbox.Metrics()
+	if err := coordinator.repairOutbox(); err != nil {
+		return err
+	}
 	err := coordinator.outbox.PublishNow(coordinator.publisher, time.Now(), &observer, &stream)
-	coordinator.capturePublishMetrics(before, coordinator.outbox.Metrics())
 	return err
 }
 func (coordinator *Coordinator) publishObserver(observer syncstream.Observer) error {
-	before := coordinator.outbox.Metrics()
+	if err := coordinator.repairOutbox(); err != nil {
+		return err
+	}
 	err := coordinator.outbox.PublishDue(coordinator.publisher, time.Now(), &observer, nil)
-	coordinator.capturePublishMetrics(before, coordinator.outbox.Metrics())
 	return err
 }
 func (coordinator *Coordinator) RetryPending(now time.Time) error {
-	before := coordinator.outbox.Metrics()
+	if err := coordinator.repairOutbox(); err != nil {
+		return err
+	}
 	err := coordinator.outbox.PublishDue(coordinator.publisher, now, nil, nil)
-	coordinator.capturePublishMetrics(before, coordinator.outbox.Metrics())
 	return err
 }
 
@@ -538,11 +645,9 @@ func (coordinator *Coordinator) ReconcilePending() error {
 	if coordinator == nil || coordinator.outbox == nil || coordinator.history == nil {
 		return ErrCoordinatorInvalid
 	}
-	return coordinator.outbox.Reconcile(coordinator.history.Export())
-}
-func (coordinator *Coordinator) capturePublishMetrics(before, after OutboxMetrics) {
-	coordinator.counters.published.Add(after.PublishSuccesses - before.PublishSuccesses)
-	coordinator.counters.publishFailures.Add(after.PublishFailures - before.PublishFailures)
+	coordinator.journalMutex.Lock()
+	defer coordinator.journalMutex.Unlock()
+	return coordinator.reconcileOutboxLocked()
 }
 
 func (coordinator *Coordinator) CloseObserver(observer syncstream.Observer) error {
@@ -583,8 +688,10 @@ func (coordinator *Coordinator) CloseObserver(observer syncstream.Observer) erro
 		}
 		coordinator.mutex.Unlock()
 	}()
+	coordinator.journalMutex.Lock()
+	defer coordinator.journalMutex.Unlock()
 	if err := coordinator.outbox.DiscardObserver(observer); err != nil {
-		return errors.Join(err, coordinator.outbox.Reconcile(coordinator.history.Export()))
+		return errors.Join(err, coordinator.reconcileOutboxLocked())
 	}
 	// History remains the repair source until every outbox record is durably
 	// removed. A crash after this point is safe: retained History can reconcile.
@@ -602,5 +709,7 @@ func (coordinator *Coordinator) CloseObserver(observer syncstream.Observer) erro
 }
 
 func (coordinator *Coordinator) Metrics() CoordinatorMetrics {
-	return CoordinatorMetrics{Published: coordinator.counters.published.Load(), PublishFailures: coordinator.counters.publishFailures.Load(), Filtered: coordinator.counters.filtered.Load(), VisibilityFailures: coordinator.counters.visibilityFailures.Load(), SnapshotRecoveries: coordinator.counters.snapshotRecoveries.Load()}
+	// 发布计数由 outbox 唯一记账，不能累加可能重叠的前后快照差。
+	outbox := coordinator.outbox.Metrics()
+	return CoordinatorMetrics{Published: outbox.PublishSuccesses, PublishFailures: outbox.PublishFailures, Filtered: coordinator.counters.filtered.Load(), VisibilityFailures: coordinator.counters.visibilityFailures.Load(), SnapshotRecoveries: coordinator.counters.snapshotRecoveries.Load()}
 }

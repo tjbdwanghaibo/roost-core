@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 修复（skillsync B1 首批）
+
+- RecordingHost / ReplayHost 补齐可选世界能力；nil Host 推進返回错误，checkpoint 保留缺能力错误身份，准入缓存有界；组合校验接受已授权的非伤害效果（RR-20261007-14～18）。
+
+- 完整包时钟过滤、未知 mutation 拒绝、唯一发布计数；快照/恢复推进源游标，outbox 失败不重复入账（RR-20261007-07～10）。
+- 空闲清理保留未 ACK 流，过龄不再阻止恢复、重发和 ACK；epoch 变化退休旧 outbox。同流失败不越序；关闭存在在飞发布时返回 `ErrApplyInProgress`，调用方必须重试（RR-20261007-11～13）。
+
 - Nest 标记支持 `durability=pipelined`（RR-20261007-04）；删除无效 heartbeat worker 配置及 API 参数，现为 `NestOptionWithWorkerNumAndMsgCap(workers, capacity)`，调用方需同步升级。
 - DataEngine 事务标记 TTL 按 Mongo 整秒精度必须大于 WAL 未确认年龄告警窗口（RR-20261007-05），默认不变，过短配置拒绝启动。
 - App 统一启动期限 `startup.timeout`（默认 2m）与信号处理；未退出回调的依赖保留到进程退出（RR-20261007-06）。

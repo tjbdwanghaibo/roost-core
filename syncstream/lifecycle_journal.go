@@ -168,8 +168,8 @@ func (history *History) DeleteObserver(observer Observer) (int, error) {
 	return count, nil
 }
 
-// SweepIdle removes streams that have seen neither append nor ACK during the
-// configured IdleTTL. Deletion is journaled per stream before becoming visible.
+// SweepIdle 只回收已全部确认且超过 IdleTTL 的流。未确认流仍是 ACK 与补发的
+// 身份依据，空闲不能等同于放弃交付；业务放弃 observer 应显式关闭并清理 outbox。
 func (history *History) SweepIdle(now time.Time) (int, error) {
 	if history == nil || history.options.IdleTTL <= 0 {
 		return 0, nil
@@ -179,7 +179,7 @@ func (history *History) SweepIdle(now time.Time) (int, error) {
 	defer history.mutex.Unlock()
 	keys := make([]streamKey, 0)
 	for key, state := range history.streams {
-		if state.activity != 0 && state.activity <= cutoff {
+		if state.acked >= state.latest && state.activity != 0 && state.activity <= cutoff {
 			keys = append(keys, key)
 		}
 	}

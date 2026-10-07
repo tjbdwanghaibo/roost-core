@@ -217,6 +217,10 @@ bash scripts/test-remote-matrix.sh
 
 ## 7. 缺陷记录索引
 
+2026-10-07 B1 续进：RR-20261007-14～18 已修复（Host 包装/恢复/nil/缓存、组合效果），skill 全族与 syncstream 6 包 race 通过；仍有 B1 后续及其他批次，未发布。
+
+2026-10-07 B1 第一批：RR-20261007-07～13 已修复，skillsync / syncstream race 通过；完整 B1 尚未完成，B2～B4、B6～B8 继续。尚未推送/发布。
+
 2026-10-07 B5 续批：RR-20261007-04～06 已修复；F02-2 清理无效配置 / 参数，F02-7 结构性加固。目标 race、全仓 build/vet/test（130 个包）、生成 game-demo build/vet/test 与 glsvet 通过；未推送、未发布。完整范围仍为剩余交接 B1～B8。
 
 2026-10-07 B5 第一批：[RR-20261007-01](bugfix/RR-20261007-01.md)（F01-8）、[RR-20261007-02](bugfix/RR-20261007-02.md)（F01-9）、[RR-20261007-03](bugfix/RR-20261007-03.md)（F02-3） 已修复，目标 race 通过；全仓 build/vet/test（130 个包）通过。B5 其余条目保持原登记状态，本批不代表 B5 全部完成。

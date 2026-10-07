@@ -683,3 +683,23 @@ cd skill/integration/sync-e2e && go test ./...
 | `skill/README.md:380-390` | 依赖图写 `roost-skill/skill`、`roost-kit/syncstream` 等旧模块路径 | 单模块 `github.com/tjbdwanghaibo/roost-core` |
 
 [↑ 速览](#速览) · [说明文档 §7](../guide/08-skill.md#7-保证与不保证)
+
+## 2026-10-07 B1 第一批更正（未发布）
+
+- Y4、Y6：已修复，见 [RR-20261007-07](../../bugfix/RR-20261007-07.md)。快照、增量、表现和 reset 的顶层 Tick/WorldRevision 均经过时钟策略；未知 mutation 默认拒绝。嵌套结构仍按字段组整体投影，不声称可自动阻止所有未来嵌套字段。
+- Y10：已修复，见 [RR-20261007-08](../../bugfix/RR-20261007-08.md)。Coordinator 直接读取 outbox 的唯一发布计数。即使 Publish 回调内 ACK 删除了 pending，实际调用仍计数；指标范围为配置的整个 outbox。
+- Y1：已修复，见 [RR-20261007-09](../../bugfix/RR-20261007-09.md)。History 接受快照后推进对应源游标，并安排当前持续表现 reset；全量 Recover 同样推进游标。reset 在下一次 Flush 入账，调用方应继续正常 Flush。见 recover-cursor-red 日志的补充行为失败。
+- Y3：已修复，见 [RR-20261007-10](../../bugfix/RR-20261007-10.md)。appendPending 用非零 Sequence 明确已接受；即使 outbox 失败也推进源游标。下一次接受前先修复派生 outbox，交接锁串行追加、ACK 与修复，不跨网络发布或 Visibility 回调。源游标当前仍为进程内状态，重启应先 PublishSnapshot 建立新基线。
+- Y2：已修复，见 [RR-20261007-11](../../bugfix/RR-20261007-11.md)。SweepIdle 仅回收全部 ACK 的流；过龄只限制同流新增记录，重启/重发/ACK 保留。Reconcile 退休不存在、旧 epoch、已确认身份；Coordinator 检测 epoch 变化后重建派生交付与源游标。外部 RotateEpoch 必须先停止生产/发布，再重建快照；不支持边发布边任意修改 History。
+- Y13：已修复，见 [RR-20261007-12](../../bugfix/RR-20261007-12.md)。同流发布批次互斥，失败跳过本批同流后续包；失败退避阻止后续首次交付。成功包不等待 ACK 才允许下一包，保留流水吞吐；重启保守重发已有记录，不从尝试次数猜测成功。
+- Y11：已修复，见 [RR-20261007-13](../../bugfix/RR-20261007-13.md)。存在已预留/在飞发布时返回 ErrApplyInProgress，调用方稍后重试 CloseObserver；成功关闭才保证没有这批发布仍在飞。不在内部等待可能永不返回的第三方 Publish。
+
+### B1 Host / 组合边界续记（未发布）
+
+- H2：已修复 [RR-20261007-14](../../bugfix/RR-20261007-14.md)，调试 Host 丢失可选能力。
+- H3：已修复 [RR-20261007-15](../../bugfix/RR-20261007-15.md)，checkpoint 丢失缺能力错误身份。
+- H4：已修复 [RR-20261007-16](../../bugfix/RR-20261007-16.md)，nil Host 的推进和被动入口 panic。
+- R6：已修复 [RR-20261007-17](../../bugfix/RR-20261007-17.md)，准入缓存无界持有临时程序。
+- Y8：已修复 [RR-20261007-18](../../bugfix/RR-20261007-18.md)，合法非伤害效果被组合校验拒绝。
+
+Y5/Y7/Y9：文档更正 presentation 的可靠链、无密钥摘要的信任边界、公开扩展 API 的保留；Constraints/Obligations/Packages 只做格式校验。R9：世界与 Runtime 成对恢复；HostEventCompactor 可压缩已消费事件，不能在更新 Host 上用旧 checkpoint 重建世界。Y6 嵌套投影限制已明确，不保证未来嵌套字段自动隐藏。

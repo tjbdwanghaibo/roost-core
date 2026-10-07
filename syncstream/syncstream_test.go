@@ -293,6 +293,9 @@ func TestEpochLifecycleAndIdleSweep(t *testing.T) {
 	if result := history.Resync(ResyncRequest{Observer: observer, Stream: stream, Epoch: 10}); !result.FullRequired || result.Reason != ResyncEpochMismatch {
 		t.Fatalf("epoch mismatch = %#v", result)
 	}
+	if err := history.AcknowledgeEpoch(observer, stream, packet.Epoch, packet.Sequence); err != nil {
+		t.Fatal(err)
+	}
 	if removed, err := history.SweepIdle(time.Now().Add(2 * time.Hour)); err != nil || removed != 1 {
 		t.Fatalf("sweep removed=%d err=%v", removed, err)
 	}

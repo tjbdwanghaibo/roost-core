@@ -72,6 +72,8 @@ type pendingPacket struct {
 	createdAt   time.Time
 	bytes       int64
 	publishing  bool
+	// delivered 只记录本进程曾成功交付；重启后保守重发，不能靠尝试次数推断成功。
+	delivered bool
 }
 
 type pendingStreamID struct {
@@ -225,8 +227,18 @@ func (box *Outbox) capacityError(now time.Time, packet *syncstream.Packet, addit
 			return ErrOutboxCapacityExceeded
 		}
 	}
-	if box.maxAge > 0 && !box.oldestCreatedAt.IsZero() && now.Sub(box.oldestCreatedAt) > box.maxAge {
-		return ErrOutboxPendingTooOld
+	if packet != nil {
+		return box.streamAgeError(now, streamID(*packet))
+	}
+	return nil
+}
+
+// 过龄只限制同流继续入账，不能阻止旧包重发、ACK 或其他 observer 恢复。
+func (box *Outbox) streamAgeError(now time.Time, stream pendingStreamID) error {
+	for _, id := range box.streamPending[stream] {
+		if entry := box.pending[id]; box.maxAge > 0 && now.Sub(entry.createdAt) > box.maxAge {
+			return ErrOutboxPendingTooOld
+		}
 	}
 	return nil
 }
@@ -315,6 +327,9 @@ func (box *Outbox) PutBatch(packets []syncstream.Packet) error {
 		if len(box.streamPending[key])+additional > box.maxPerStream {
 			return ErrOutboxCapacityExceeded
 		}
+		if err := box.streamAgeError(now, key); err != nil {
+			return err
+		}
 	}
 	if batch, ok := box.store.(BatchRecordOutboxStore); ok {
 		if err := batch.PutRecords(records); err != nil {
@@ -342,6 +357,29 @@ func (box *Outbox) PutBatch(packets []syncstream.Packet) error {
 // Reconcile repairs the crash window between a committed History append and
 // outbox persistence. Every retained packet newer than ACK becomes pending.
 func (box *Outbox) Reconcile(snapshot syncstream.HistorySnapshot) error {
+	// History 是身份权威。epoch 切换、删除流或已落盘 ACK 留下的派生记录
+	// 必须退休；不能无限重发客户端已无法确认的身份。
+	streams := make(map[pendingStreamID]uint64, len(snapshot.Streams))
+	for _, stream := range snapshot.Streams {
+		streams[pendingStreamID{observer: stream.Observer, stream: stream.Stream, epoch: snapshot.Epoch}] = stream.Acked
+	}
+	box.mutex.Lock()
+	obsolete := make([]pendingID, 0)
+	for id, entry := range box.pending {
+		acked, exists := streams[streamID(entry.packet)]
+		if !exists || id.sequence <= acked {
+			if entry.publishing {
+				box.mutex.Unlock()
+				return ErrApplyInProgress
+			}
+			obsolete = append(obsolete, id)
+		}
+	}
+	if err := box.deletePendingLocked(obsolete, false); err != nil {
+		box.mutex.Unlock()
+		return err
+	}
+	box.mutex.Unlock()
 	packets := make([]syncstream.Packet, 0)
 	for _, stream := range snapshot.Streams {
 		for _, packet := range stream.Packets {
@@ -377,8 +415,13 @@ func (box *Outbox) DiscardObserver(observer syncstream.Observer) error {
 	box.mutex.Lock()
 	defer box.mutex.Unlock()
 	ids := make([]pendingID, 0)
-	for id := range box.pending {
+	for id, entry := range box.pending {
 		if id.observer == observer {
+			// 不在这里等待未知时长的发布回调。成功删除才是关闭屏障；在飞时
+			// 明确返回可重试错误，调用方不能把关闭请求当成关闭完成。
+			if entry.publishing {
+				return ErrApplyInProgress
+			}
 			ids = append(ids, id)
 		}
 	}
@@ -462,8 +505,26 @@ func (box *Outbox) due(now time.Time, observer *syncstream.Observer, stream *syn
 	box.mutex.Lock()
 	defer box.mutex.Unlock()
 	packets := make(packetMaxHeap, 0, box.maxPublish)
+	// 同流有在飞批次时不能另起一批；失败退避中的包阻挡后面的首次交付。
+	busy := make(map[pendingStreamID]bool)
+	blockedAt := make(map[pendingStreamID]uint64)
+	for _, entry := range box.pending {
+		key := streamID(entry.packet)
+		if entry.publishing {
+			busy[key] = true
+		}
+		if !entry.delivered && entry.nextAttempt.After(now) {
+			if current := blockedAt[key]; current == 0 || entry.packet.Sequence < current {
+				blockedAt[key] = entry.packet.Sequence
+			}
+		}
+	}
 	for _, entry := range box.pending {
 		if observer != nil && entry.packet.Observer != *observer || stream != nil && entry.packet.Stream != *stream {
+			continue
+		}
+		key := streamID(entry.packet)
+		if busy[key] || blockedAt[key] != 0 && entry.packet.Sequence > blockedAt[key] {
 			continue
 		}
 		if entry.publishing || !entry.nextAttempt.IsZero() && entry.nextAttempt.After(now) {
@@ -559,29 +620,37 @@ func (box *Outbox) PublishDue(publisher PacketPublisher, now time.Time, observer
 	if publisher == nil {
 		return ErrPublisherRequired
 	}
-	box.mutex.Lock()
-	capacityErr := box.capacityError(now, nil, 0)
-	box.mutex.Unlock()
-	if capacityErr != nil {
-		return capacityErr
-	}
 	packets := box.due(now, observer, stream)
 	defer box.releasePublishing(packets)
 	var firstError error
+	failed := make(map[pendingStreamID]bool)
 	for _, packet := range packets {
+		if failed[streamID(packet)] {
+			continue
+		}
+		box.mutex.Lock()
+		_, pending := box.pending[packetID(packet)]
+		box.mutex.Unlock()
+		if !pending {
+			continue
+		} // 前一条回调可能已经累计 ACK 了本条。
 		attemptErr := publisher.Publish(packet.Clone())
 		box.mutex.Lock()
+		box.metrics.PublishAttempts++
+		if attemptErr == nil {
+			box.metrics.PublishSuccesses++
+		} else {
+			box.metrics.PublishFailures++
+		}
 		entry := box.pending[packetID(packet)]
 		if entry != nil {
 			entry.publishing = false
 			previousAttempts, previousNextAttempt := entry.attempts, entry.nextAttempt
 			entry.attempts++
-			box.metrics.PublishAttempts++
 			if attemptErr == nil {
-				box.metrics.PublishSuccesses++
+				entry.delivered = true
 				entry.nextAttempt = now.Add(box.ackRetry)
 			} else {
-				box.metrics.PublishFailures++
 				delay := box.failureRetry
 				for attempt := uint32(1); attempt < entry.attempts && delay < box.maxRetry; attempt++ {
 					delay *= 2
@@ -601,6 +670,7 @@ func (box *Outbox) PublishDue(publisher PacketPublisher, now time.Time, observer
 		}
 		box.mutex.Unlock()
 		if attemptErr != nil {
+			failed[streamID(packet)] = true
 			firstError = errors.Join(firstError, attemptErr)
 		}
 	}

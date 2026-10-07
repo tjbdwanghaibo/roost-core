@@ -252,6 +252,9 @@ func (runtime *Runtime) cancelPhaseTasks(cast *castInstance, phaseToken uint64) 
 func (runtime *Runtime) Advance(tick Tick) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	if runtime.host == nil {
+		return ErrProgramInvariant
+	}
 	if tick < runtime.currentTick {
 		return ErrReverseAdvance
 	}

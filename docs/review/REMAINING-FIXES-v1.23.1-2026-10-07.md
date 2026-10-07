@@ -78,3 +78,13 @@
 本批全仓 build / vet / test（130 个包）、三大模块 glsvet、正式生成 game-demo 的 build / vet / test 均通过；App 启动取消新增场景 3 轮 race 通过，7 个目标包 race 通过。全仓 go generate 已执行。 原始证据在主检出 `artifacts/perf/remaining-fixes-20261007/`，生成工程 `/tmp/roost-remaining-b5-demo` 可复查，命令见各 RR。本批未推送、未发布。
 
 继续 B1～B4、B6～B8；Remote 唯一发布者方向仍等待维护者答复，不把 B5 完成当成全部完成。
+
+## 8. B1 进行中（2026-10-07）
+
+B5 续批提交 `56a2006c`，提交后 go generate 跟踪文件无漂移。B1 首批 RR-20261007-07～13 已修复，skillsync / syncstream race 通过，尚未全仓验收。Y5～9 文档/合同、Y12 资源上界、Y15 store 年龄、Y16/17 key 语义与 Host/R/D1 继续；B2～B4、B6～B8 未完成。原始证据已复制主检出 artifacts；不把本节当全部交接完成。
+
+B1 续进：RR-20261007-14～18（H2/H3/H4/R6/Y8）已修复；Y5/Y7/Y9/R9 与 Y6 嵌套字段边界为文档更正。`go test -race ./skill/... ./syncstream` 6 包通过。仍需 Y12/Y15/Y16/17、R5/R7/R8、H5/H6/H7/H8、D1，再继续 B2～B4/B6～B8。各 RR 暂未提交，勿标全部完成。
+
+## 2026-10-07 validation
+
+`GOWORK=off go build ./...`, `go vet ./...`, `go test ./... -count=1`: PASS (130 tested packages). `go test -race ./skill/... ./syncstream -count=1`: PASS (6 packages). Logs: `artifacts/perf/remaining-fixes-20261007/roost-remaining-b1-{build,vet,all-test}.log`. Not pushed or released. CBM generation 2026-09-30 is stale; current worktree source and regressions are the evidence.

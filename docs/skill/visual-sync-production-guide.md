@@ -373,11 +373,11 @@ go test ./... -run TestProtocolSoak -count=1 -timeout 35m
 1. `VisualPlanCache` 在 plan 缓存之下维护全局 asset registry。相同 asset key 跨 plan 共享
    preload/refcount，descriptor 冲突直接失败；catalog invalidation 是全批 preflight 后提交。
 2. `EntityVisibilityPolicy` 支持封闭的字段枚举、handle evaluator、默认拒绝、递归
-   `RuntimeValue` 脱敏以及独立 spatial/opaque 控制。新增 Runtime 字段不会自动泄漏。
+   `RuntimeValue` 脱敏以及独立 spatial/opaque 控制。顶层新增字段和未知 mutation 默认不投影；已允许字段组中的嵌套结构仍需在新增字段时审查。
 3. `OutboxOptions` 必须在生产显式设置 `MaxPendingPackets`、`MaxPendingBytes`、
    `MaxPendingPerStream` 和 `MaxPendingAge`。文件存储使用版本化 checksum envelope，损坏启动
    失败；健康检查同时比较 pending count/bytes/age。
-4. `Coordinator.CloseObserver` 是 observer 生命周期栅栏。关闭后所有 key 均拒绝发布；只有
+4. `Coordinator.CloseObserver` 成功返回才是 observer 生命周期栅栏；有在飞发布时返回 `ErrApplyInProgress`，调用方必须重试。关闭后所有 key 均拒绝发布；只有
    完成新 session 初始化后才调用 `OpenObserver`。短命 key 不会永久占用 view lock registry。
 5. Runtime 写 API 返回前已提交 canonical mutation；外部 Host 扩展状态变化后调用
    `CaptureExternalState`。flush 路径只消费，不承担全量 diff 成本。

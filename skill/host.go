@@ -55,10 +55,10 @@ type Host interface {
 // HostEventCompactor is an optional single-consumer optimization. A Host must
 // implement it only when the Runtime is the exclusive consumer of Events.
 //
-// Retention contract: a compacting host must keep every event emitted since
-// the last successful Checkpoint. RestoreRuntime rewinds the event cursor to
-// the checkpoint's value and replays forward from there; events compacted
-// past that cursor are unrecoverable.
+// CompactEventsThrough 允许删除这个消费游标之前的事件。恢复时 Host 世界、事件
+// 队列和 Runtime checkpoint 必须来自同一份持久边界（revision / authority 相同）；
+// Runtime 不能凭较旧 checkpoint 在更新的 Host 上重放并恢复世界。
+// 若业务需要跨 checkpoint 重演，必须另存成对的世界快照及输入/事件日志。
 type HostEventCompactor interface {
 	CompactEventsThrough(EventCursor)
 }

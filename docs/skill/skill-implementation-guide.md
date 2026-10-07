@@ -237,7 +237,7 @@ Error 日志；宿主侧要靠比赛结束 / 程序移除（`RemoveOwnedEntities
 
 1. `profile_extract.go` 从 Inspector 提取 `SkillProfile`；
 2. `contract_builder.go` 将多个 profile 和 caller policy 收紧为 composition contract；
-3. `validator.go` 验证候选 profile 不会超出已授予的功能、预算和因果连通性；
+3. `validator.go` 核对已授予的功能、预算，并检查操作摘要是否存在有效果的出口；摘要不包含控制流边，不能证明运行时因果可达；
 4. `prompt_view.go` 只派生提示词需要的稳定投影。
 
 阅读 `skillcompose` 时，若发现需要访问 Program 未公开字段，应优先新增一个稳定的
@@ -404,7 +404,7 @@ unload”的窗口。不同 primary key 若最终落到同一个 fallback key，
 ### 11.4 Visibility 是封闭字段集合，不是补丁式过滤
 
 `skillsync/visibility.go` 的 `VisibilityField` 是当前可同步字段的封闭枚举。构造快照时逐组
-拷贝，而不是先浅拷贝再删字段，因此未来新增 Runtime 字段默认不可见。`DefaultDenyFields`
+拷贝，而不是先浅拷贝再删字段，因此顶层新增 Runtime 字段默认不可见；嵌套结构并非逐字段白名单，新增嵌套字段必须同步审查投影。`DefaultDenyFields`
 开启后，调用方必须通过 `FieldVisible(observer, field, handle)` 明确放行。
 
 嵌套 `RuntimeValue` 使用 `RedactRuntimeValue` 递归处理 entity、entity list、hit、ability、
@@ -496,3 +496,10 @@ go test ./... -run TestProtocolSoak -count=1 -timeout 35m
 
 完整生产接入、发布与故障注入流程见
 [Visual 与数据同步生产指南](visual-sync-production-guide.md)。
+
+## 2026-10-07 契约边界补充
+
+- skillcompose 的 SHA-256 digest 只校验内容自洽，不是带密钥签名。合同应由可信服务保存/提供；客户端提交的 Grants、Budgets 即使摘要匹配也不能当授权。Constraints / Obligations / Packages 目前只校验格式，业务策略须另行执行。
+- `GraphFromProfile` 是操作数组摘要；有效果出口的检查不替代正式编译与控制流分析。
+- C8 保留公开扩展 API（`RegisterProgram` / `PublishManifest` / `ExportMetrics`、`DefaultCatalog`、`Metrics.Bounded`）；仓内没有调用不等于对外废弃。manifest 注册/发送属于接入方责任。
+- `Critical=false` 不是丢包许可，presentation 当前仍经过严格 sequence 链、ACK 和 outbox 重发；丢包需 replay/reset。

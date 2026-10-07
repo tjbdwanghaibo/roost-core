@@ -225,9 +225,20 @@ func (policy EntityVisibilityPolicy) FilterStateSnapshot(observer syncstream.Obs
 
 func (policy EntityVisibilityPolicy) FilterStateMutation(observer syncstream.Observer, mutation skill.StateMutation) (skill.StateMutation, bool, error) {
 	field, handle := mutationVisibilityField(mutation)
+	// 新 mutation 必须先定义可见性投影；不能用默认字段策略放行未知载荷。
+	if field == "" {
+		return mutation, false, nil
+	}
 	fieldAllowed, err := policy.fieldVisible(observer, field, handle)
 	if err != nil || !fieldAllowed {
 		return mutation, false, err
+	}
+	clock, err := policy.fieldVisible(observer, VisibilityClock, "")
+	if err != nil {
+		return mutation, false, err
+	}
+	if !clock {
+		mutation.Tick, mutation.WorldRevision = 0, 0
 	}
 	entity := mutation.Caster
 	if entity == 0 {
@@ -320,6 +331,13 @@ func (policy EntityVisibilityPolicy) FilterPresentation(observer syncstream.Obse
 	if err != nil || !fieldAllowed {
 		return event, false, err
 	}
+	clock, err := policy.fieldVisible(observer, VisibilityClock, "")
+	if err != nil {
+		return event, false, err
+	}
+	if !clock {
+		event.Tick, event.WorldRevision = 0, 0
+	}
 	allowedSource, err := policy.visible(observer, event.Source)
 	if err != nil || !allowedSource {
 		return event, false, err
@@ -375,7 +393,7 @@ func mutationVisibilityField(mutation skill.StateMutation) (VisibilityField, str
 		}
 		return VisibilityPersistentState, stateHandleReference(handle)
 	default:
-		return VisibilityField("unknown"), ""
+		return "", ""
 	}
 }
 

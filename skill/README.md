@@ -327,7 +327,7 @@ World revision 是防线：查询/命令携带期望 revision，Host 拒绝失�
 | --- | --- | --- | --- |
 | `roost.skill.manifest` | Program 的 `PresentationPlan`（视觉表与挂载计划），按 PresentationDigest 每身份一次 | 必须可靠 | 重发 Full |
 | `roost.skill.state` | `RuntimeStateSnapshot` 全量 / `StateMutation` 增量 | 必须可靠 | 历史连续则 replay，否则 Full |
-| `roost.skill.presentation` | cast/effect 播放指令 | 可丢弃、需有序 | 短历史 replay；过期后以 state 为准 |
+| `roost.skill.presentation` | cast/effect 播放指令 | 可靠、有序；缺口需恢复 | 短历史 replay；过期后 reset |
 
 玩法修改先由 Host 成功提交，才产生 effect 表现事件；cast 表现只在 commit 后产生——**客户端永远不会看到一个被权威层拒绝的效果**。服务端 `Coordinator` 做可见性过滤（封闭字段集、default-deny 可选）与 durable outbox，客户端 `Applier` 做 epoch/schema/sequence/manifest 校验后事务应用。完整发布/恢复流程见 [docs/architecture-and-migration.md](../docs/skill/architecture-and-migration.md) 与 [docs/visual-sync-production-guide.md](../docs/skill/visual-sync-production-guide.md)。
 
@@ -369,7 +369,7 @@ go test ./... -count=1
 - **源文档 digest 改为逐字段规范表示（2026-10-07，RR-20261006-33）**：`InspectIdentity(...).SourceDocumentDigest` 现在区分效果 / 策略 / 输入 / 形状 / 过滤器的类型，并包含消耗数量与 cast window 表达式；全部定义的源文档 digest 改变一次，gameplay / presentation digest 不变。[记录](../docs/bugfix/RR-20261006-33.md)
 - **生成宿主单位的效果改名为召唤物（Summon），衍生物 `kind: "summon"` 改为 `kind: "minion"`（2026-10-07，破坏性，不留旧名）**：效果 `"type":"spawn"` → `"type":"summon"`、`despawn` → `dismiss`，Host `PreviewOwnedSpawn` / `CommitOwnedSpawn` / `RollbackOwnedSpawn` → `PreviewOwnedSummon` / `CommitOwnedSummon` / `RollbackOwnedSummon`，`SpawnCommand` → `SummonCommand`，owned 选择 `spawn_tick` / `spawned_before` 等 → `summon_tick` / `summoned_before`，checkpoint 版本 5。衍生物（Spawn）那一套名字不变。对照表见 [docs/skill/README.md](../docs/skill/README.md#术语召唤物summon与衍生物spawn) 与[重构记录](../docs/feature/REFACTOR-2026-10-07-skill-summon-rename.md)。
 - **process → Spawn（衍生物）全量改名（2026-10-06，破坏性，不留旧名）**：飞行物、法术场、随从（minion，当时叫 summon）、光束、位移等施放后由技能逐 tick 驱动的东西统一叫 Spawn；DSL `"spawn"` / `modify_spawn` / `$spawn` / `spawn_start`，Host `StepSpawn` / `StopSpawn`，mutation `spawn_upsert` / `spawn_remove`，checkpoint 版本 4。对照表见 [docs/skill/README.md](../docs/skill/README.md#术语召唤物summon与衍生物spawn) 与[重构记录](../docs/feature/REFACTOR-2026-10-06-skill-process-to-spawn.md)。
-- **compiler-2 语义修订（v1.4 → v1.5）**：`concurrent`、`global_cooldown_ticks`、窗口表达式进入 gameplay digest，旧 checkpoint/回放记录/skillcompose 契约在新版本下会得到明确解析错误。迁移动作（全量重编译、排空旧 checkpoint、重签契约）见 [docs/skill-casting-and-combat.md](../docs/skill/skill-casting-and-combat.md) 的迁移说明。
+- **compiler-2 语义修订（v1.4 → v1.5）**：`concurrent`、`global_cooldown_ticks`、窗口表达式进入 gameplay digest，旧 checkpoint/回放记录/skillcompose 契约在新版本下会得到明确解析错误。迁移动作（全量重编译、排空旧 checkpoint、重算契约摘要）见 [docs/skill-casting-and-combat.md](../docs/skill/skill-casting-and-combat.md) 的迁移说明。
 - **旧 `/skillv2` → 稳定 `/skill` 的源码升级**：[docs/breaking-upgrade-skill-package.md](../docs/skill/breaking-upgrade-skill-package.md)。wire v2 与 compiler semantics 保持不变。
 - **生产部署与发布门槛**：[docs/production-readiness.md](../docs/skill/production-readiness.md)。
 

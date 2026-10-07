@@ -436,16 +436,12 @@ func RestoreRuntime(host Host, options RuntimeOptions, checkpoint RuntimeCheckpo
 	if err := validateRootEventLimit(options); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrCheckpointCorrupt, err)
 	}
-	// newRuntimeCore, not NewRuntime: the fresh-runtime path fast-forwards
-	// the event cursor to the host's frontier and compacts everything before
-	// it — which would DELETE the events emitted between the checkpoint and
-	// the crash before restoreCheckpointPayload rewinds the cursor to the
-	// checkpoint value. Those events are exactly what a restored runtime must
-	// replay. HostEventCompactor implementations must therefore retain all
-	// events since the last successful checkpoint.
+	// 恢复使用 checkpoint 的消费游标，不能执行 NewRuntime 的“跳到 Host 当前队尾”
+	// 初始化。Host 世界及尚未消费的事件应先恢复到同一 checkpoint 边界；这里只恢复
+	// Runtime，不负责撤销更新世界的效果，也不要求已消费事件永远保留。
 	runtime := newRuntimeCore(host, options)
 	// 恢复出来的每个 Program 同样要在 Host 声明的能力表里（B3 ③）。
-	if err := runtime.restoreCheckpointPayload(payload, hostCheckedResolver{resolver: resolver, host: host}); err != nil {
+	if err := runtime.restoreCheckpointPayload(payload, resolver); err != nil {
 		return nil, err
 	}
 	if host.CurrentRevision() != payload.WorldRevision || !authorityMatches(payload.Authority, host.AuthorityIdentity()) {
@@ -461,17 +457,24 @@ func programCheckpointRef(program *Program) checkpointProgramRef {
 	return checkpointProgramRef{ID: program.id, GameplayDigest: program.identity.gameplayDigest, PresentationDigest: program.identity.presentationDigest, SemanticsRevision: program.compilerSemanticsRevision, Authority: program.authority}
 }
 
-func resolveCheckpointProgram(ref checkpointProgramRef, resolver ProgramResolver, authority AuthorityIdentity, semantics string) (*Program, error) {
+func resolveCheckpointProgram(ref checkpointProgramRef, resolver ProgramResolver, authority AuthorityIdentity, semantics string, host Host) (*Program, error) {
 	if ref.ID == "" || ref.GameplayDigest == "" {
 		return nil, ErrCheckpointProgram
 	}
 	program, err := resolver.ResolveProgram(ref.ID, ref.GameplayDigest)
-	if err != nil || program == nil {
-		return nil, fmt.Errorf("%w: %s: %v", ErrCheckpointProgram, ref.ID, err)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: %w", ErrCheckpointProgram, ref.ID, err)
+	}
+	if program == nil {
+		return nil, fmt.Errorf("%w: %s", ErrCheckpointProgram, ref.ID)
 	}
 	actual := programCheckpointRef(program)
 	if actual != ref || actual.SemanticsRevision != semantics || !authorityMatches(program.authority, authority) {
 		return nil, fmt.Errorf("%w: identity mismatch for %s", ErrCheckpointProgram, ref.ID)
+	}
+	// 身份先匹配，再核对目标 Host 能力，保留两层错误身份供调用方判断。
+	if err := hostCoversProgram(host, program); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrCheckpointProgram, err)
 	}
 	return program, nil
 }
@@ -873,7 +876,7 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 		if item.ID == 0 || item.ID > p.NextCastID || runtime.casts[item.ID] != nil {
 			return ErrCheckpointCorrupt
 		}
-		program, err := resolveCheckpointProgram(item.Program, resolver, p.Authority, p.SemanticsRevision)
+		program, err := resolveCheckpointProgram(item.Program, resolver, p.Authority, p.SemanticsRevision, runtime.host)
 		if err != nil {
 			return err
 		}
@@ -905,7 +908,7 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 		}
 	}
 	runtime.completedCastOrder = restoreCompletedCastOrder(p.CompletedCastOrder, completed, p.Casts)
-	if err := restoreCheckpointSpawns(&runtime.spawns, p.Spawns, resolver, p.Authority, p.SemanticsRevision, p.NextSpawnID); err != nil {
+	if err := restoreCheckpointSpawns(&runtime.spawns, p.Spawns, resolver, p.Authority, p.SemanticsRevision, p.NextSpawnID, runtime.host); err != nil {
 		return err
 	}
 	for _, frame := range p.Frames {
@@ -1010,7 +1013,7 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 		if item.Owner == 0 || item.Handle == 0 || runtime.abilities[key] != nil {
 			return ErrCheckpointCorrupt
 		}
-		program, err := resolveCheckpointProgram(item.Program, resolver, p.Authority, p.SemanticsRevision)
+		program, err := resolveCheckpointProgram(item.Program, resolver, p.Authority, p.SemanticsRevision, runtime.host)
 		if err != nil {
 			return err
 		}
@@ -1086,12 +1089,12 @@ func validCheckpointRuntimeLimits(payload runtimeCheckpointPayload) bool {
 // 活得久，checkpoint 只能从记录自带的 Program 解析程序，所以它必须带 direct_program（live Runtime 只放弃仍在运行、
 // Program 未释放的 entity 衍生物）。已放弃的条数不按 MaxAbandonedSpawns 核对：两次 Advance 之间可以暂时超限，
 // 恢复后的下一次 Advance 末尾照样清理。
-func restoreCheckpointSpawns(table *spawnTable, values []checkpointSpawn, resolver ProgramResolver, authority AuthorityIdentity, semantics string, nextID SpawnID) error {
+func restoreCheckpointSpawns(table *spawnTable, values []checkpointSpawn, resolver ProgramResolver, authority AuthorityIdentity, semantics string, nextID SpawnID, host Host) error {
 	for _, item := range values {
 		if item.ID == 0 || item.ID > nextID || !validSpawnStatus(item.Status) || item.HandedOff && item.Scope != SpawnScopeEntity || item.Status == SpawnAbandoned && !item.DirectProgram {
 			return ErrCheckpointCorrupt
 		}
-		program, err := resolveCheckpointProgram(item.Program, resolver, authority, semantics)
+		program, err := resolveCheckpointProgram(item.Program, resolver, authority, semantics, host)
 		if err != nil {
 			return err
 		}
@@ -1177,7 +1180,7 @@ func (runtime *Runtime) restoreCheckpointTask(w checkpointTask, resolver Program
 	case "ammo_recharge":
 		payload = &ammoRechargeTask{Caster: w.Caster, Skill: w.Skill, Generation: w.Generation}
 	case "passive_activation":
-		program, err := resolveCheckpointProgram(w.Program, resolver, authority, semantics)
+		program, err := resolveCheckpointProgram(w.Program, resolver, authority, semantics, runtime.host)
 		if err != nil {
 			return scheduledTask{}, err
 		}

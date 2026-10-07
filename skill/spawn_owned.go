@@ -553,6 +553,11 @@ func (runtime *Runtime) terminateOwnedSpawn(id SpawnID, cause StopCause, callbac
 func (runtime *Runtime) RemoveProgram(programID string) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
+	for program := range runtime.hostAdmitted {
+		if program.id == programID {
+			delete(runtime.hostAdmitted, program)
+		}
+	}
 	runtime.beginStateMutationLocked()
 	defer runtime.commitStateMutationsLocked()
 	// 已停止分区的记录，停止请求本来就是空操作，只看仍在宿主侧运行的分区。

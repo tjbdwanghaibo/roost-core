@@ -79,7 +79,7 @@ operation、召唤物（`OwnedEntityRuntimeHost`）。后六列写在 `environme
   frame / steering / offsets / completion 四个步骤（Runtime 每步都发），collision / carry 写了才需要。
 - **Host 实现**：`skill.Host` 接口包含 `HostCapabilities() skill.HostCapabilityTable`（`HostCapabilityProvider` 已并入，漏写编译不过），每个 Host 都声明自己的表，包装别的 Host 的类型转发被包装者的表；
   环境的 Host 段取自它（`environment.Host = host.HostCapabilities().HostCapabilityCatalog`，再
-  `skill.AuthorityDigest` 重签），或手写后在启动时用 `skill.HostSupportsEnvironment(host, environment)` 核对。
+  `skill.AuthorityDigest` 重算摘要），或手写后在启动时用 `skill.HostSupportsEnvironment(host, environment)` 核对。
   Runtime 在 Program 第一次启动 / 注册 / 入队被动 / 从 checkpoint 恢复时核对它的需求都在 Host 的表里，缺了返回
   `skill.ErrHostCapabilityMissing`（也是 `ErrHostContractViolation`），不会到施法中途、扣费之后才失败。对表外的属性
   handle、资源名要返回错误，不能当成 0。测试里用 `skill.CheckHostCapabilities(host, environment.Gameplay, probe)`

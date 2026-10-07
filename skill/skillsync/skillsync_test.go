@@ -436,8 +436,14 @@ func TestOutboxEnforcesHardCapacityAndPersistedAge(t *testing.T) {
 	if err := store.PutRecord(OutboxRecord{Packet: first, CreatedAt: time.Now().Add(-2 * time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewOutbox(OutboxOptions{Store: store, RequireDurable: true, MaxPendingAge: time.Hour}); !errors.Is(err, ErrOutboxPendingTooOld) {
-		t.Fatalf("stale recovery error = %v", err)
+	restored, err := NewOutbox(OutboxOptions{Store: store, RequireDurable: true, MaxPendingAge: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 过龄记录必须能恢复以便重发/ACK，但同流新增记录仍被拒绝，且年龄不能重置。
+	first.Sequence++
+	if err := restored.Put(first); !errors.Is(err, ErrOutboxPendingTooOld) {
+		t.Fatalf("stale admission error = %v", err)
 	}
 }
 
