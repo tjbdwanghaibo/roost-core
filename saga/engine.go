@@ -75,6 +75,11 @@ type Stats struct {
 	// StaleAttempt 计被协调器拒收的同一生较早尝试的可重试失败（saga 方向 ③）：协调器在等之后的一次尝试，较早那次的
 	// 可重试失败只说明那一次没有生效，之后的尝试照常执行，它不能推进记录。只计数、记 WARN。
 	StaleAttempt uint64
+	// Reopened 计 saga 被重开的次数（saga 方向 ④ 的可观测性，维护者第十三轮）：已结束的 Failed / Compensated 因为迟到的
+	// 正向成功被带回补偿（reason=late_success），或 ManualRequired 期间记下的迟到步骤在运维 Resume / Compensate 时被补偿
+	// （reason=resume / compensate）。指标 saga.reopened_total{saga_type,from_status,reason}，每次记 WARN。
+	// 重开的 saga 补偿完会再次到达终态，Completed / Compensated / Failed 按到达终态的次数计，同一 saga 会再计一次。
+	Reopened uint64
 }
 
 type Engine struct {
@@ -94,7 +99,7 @@ type Engine struct {
 	started, dispatched, completed, compensated, failed, manualRequired atomic.Uint64
 	conflicts, duplicates, publishFailures                              atomic.Uint64
 	storeFailures, workerFailures, lateAfterAbandon                     atomic.Uint64
-	staleIncarnation, staleAttempt                                      atomic.Uint64
+	staleIncarnation, staleAttempt, reopened                            atomic.Uint64
 }
 
 func NewEngine(store Store, publisher Publisher, options Options) (*Engine, error) {
@@ -350,6 +355,9 @@ func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, err
 		if err != nil {
 			return Record{}, err
 		}
+		if record.LateStep > 0 {
+			e.reportReopen(record, written, reopenResume)
+		}
 		e.signal(e.dueKick)
 		return written, nil
 	}
@@ -386,6 +394,9 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 		}
 		if err != nil {
 			return Record{}, err
+		}
+		if record.LateStep > 0 {
+			e.reportReopen(record, written, reopenCompensate)
 		}
 		e.signal(e.dueKick)
 		return written, nil
@@ -459,6 +470,11 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 		if outcome == ApplyDuplicate {
 			e.duplicates.Add(1)
 			return e.store.Get(ctx, record.ID)
+		}
+		if completion.Success && compensatingLateStep(record) {
+			// 重开（reportReopen）的另一端：迟到的那一步补偿完，运维按 saga_id 把两条日志对上。
+			slog.Info("saga: compensated the step that took effect after the coordinator abandoned it",
+				"saga_id", record.ID, "saga_type", record.Type, "late_step", record.Step, "status", after.Status.String(), "version", after.Version)
 		}
 		e.countTerminal(after.Status)
 		e.signal(e.dueKick)
@@ -556,8 +572,33 @@ func (e *Engine) compensateLateStep(ctx context.Context, record Record, completi
 		return e.store.Get(ctx, record.ID)
 	}
 	e.reportLateCompensation(record, completion)
+	if record.Status == StatusFailed || record.Status == StatusCompensated {
+		e.reportReopen(record, written, reopenLateSuccess)
+	}
 	e.signal(e.dueKick)
 	return written.Clone(), nil
+}
+
+// saga.reopened_total 的 reason 标签：重开从哪里来。取值固定三个，保持低基数。
+const (
+	// reopenLateSuccess：已结束的 Failed / Compensated 收到放弃后迟到的正向成功，协调器立即把它带回补偿（compensateLateStep）。
+	reopenLateSuccess = "late_success"
+	// reopenResume / reopenCompensate：ManualRequired 期间记下的迟到步骤（只记 LateStep、不自动跑），运维 Resume / Compensate 时先补它。
+	reopenResume     = "resume"
+	reopenCompensate = "compensate"
+)
+
+// reportReopen 记一次 saga 重开（saga 方向 ④ 的可观测性，维护者第十三轮）：before 是重开前的记录（它的状态就是原终态），
+// after 是已写入的记录（正在补偿迟到那一步）。saga 自己没有向业务推送终态的机制，按终态做业务的一方靠 Get / List 读记录，
+// 识别方法见 SAGA.md「运维观察」：记下读到终态时的 Version，之后 Version 变大就是记录被改过（重开或 Resume）。
+// 标签只有 saga 类型、原状态与原因，saga id 与步骤号只进日志。
+func (e *Engine) reportReopen(before, after Record, reason string) {
+	e.reopened.Add(1)
+	from := before.Status.String()
+	metrics.IncCounter("saga.reopened_total", metrics.Labels{"saga_type": before.Type, "from_status": from, "reason": reason}, 1)
+	slog.Warn("saga: reopened to compensate a step that took effect after the coordinator abandoned it",
+		"saga_id", before.ID, "saga_type", before.Type, "from_status", from, "reason", reason,
+		"late_step", after.LateStep-1, "status", after.Status.String(), "version", after.Version)
 }
 
 // nextCompensation 选下一个要补偿的步骤：先补放弃后才生效的那一步（LateStep，saga 方向 ④），再按 CompletedSteps 倒序；
@@ -708,7 +749,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 }
 
 func (e *Engine) Stats() Stats {
-	return Stats{Started: e.started.Load(), Dispatched: e.dispatched.Load(), Completed: e.completed.Load(), Compensated: e.compensated.Load(), Failed: e.failed.Load(), ManualRequired: e.manualRequired.Load(), Conflicts: e.conflicts.Load(), Duplicates: e.duplicates.Load(), PublishFailures: e.publishFailures.Load(), StoreFailures: e.storeFailures.Load(), WorkerFailures: e.workerFailures.Load(), LateAfterAbandon: e.lateAfterAbandon.Load(), StaleIncarnation: e.staleIncarnation.Load(), StaleAttempt: e.staleAttempt.Load()}
+	return Stats{Started: e.started.Load(), Dispatched: e.dispatched.Load(), Completed: e.completed.Load(), Compensated: e.compensated.Load(), Failed: e.failed.Load(), ManualRequired: e.manualRequired.Load(), Conflicts: e.conflicts.Load(), Duplicates: e.duplicates.Load(), PublishFailures: e.publishFailures.Load(), StoreFailures: e.storeFailures.Load(), WorkerFailures: e.workerFailures.Load(), LateAfterAbandon: e.lateAfterAbandon.Load(), StaleIncarnation: e.staleIncarnation.Load(), StaleAttempt: e.staleAttempt.Load(), Reopened: e.reopened.Load()}
 }
 
 func (e *Engine) coordinatorLoop(ctx context.Context) {

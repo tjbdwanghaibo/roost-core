@@ -175,7 +175,8 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
      记录写 `LateStep = s+1` 与 `LateData = Data`；记录在两个补偿之间或已终态（`Failed` / `Compensated`）时立即进入 `Compensating` 补偿第 s 步
      （**终态会被重开**，结束后回到 `Compensated`）；某个补偿正在等结果或重试退避时不打断它，它接收结果后先补第 s 步；`ManualRequired` 只记下，
      运维 `Resume` / `Compensate` 时先补第 s 步。补偿第 s 步的载荷是 `LateData`，它的结果不进入 `Data` 链；之后回到 `CompletedSteps` 的倒序。
-     第 s 步在“下一个边界”补偿，可能排在一个已在途的补偿之后（在途的补偿不能放弃，它可能生效）。计 `late_after_abandon_total{phase="forward"}`、WARN。
+     第 s 步在“下一个边界”补偿，可能排在一个已在途的补偿之后（在途的补偿不能放弃，它可能生效）。计 `late_after_abandon_total{phase="forward"}`、WARN；
+     终态被重开（以及 `ManualRequired` 上 `Resume` / `Compensate` 先补第 s 步）另计 `saga.reopened_total{saga_type,from_status,reason}`，见「运维观察」。
    - **补偿方向：只告警**：记 ERROR、`Stats().LateAfterAbandon` 与 `saga.completion.late_after_abandon_total{phase="compensate"}`，不改记录。
      补偿方向的放弃都停在 `ManualRequired`，运维按 TROUBLESHOOTING T-226 核对后 `Resume`，新一生的同一补偿回放这次成功而不是再执行。
    同一个成功会多次送达（effect 重投、过期投递的回放、JetStream 重投），**按（操作，代际）只计一次**：正向由回执去重，补偿方向由 tombstone 上的
@@ -256,6 +257,7 @@ fence 到 `ManualRequired`（放弃关闭，第 4 条），之后的重投按迟
 - `Resume(ResumeRequest)`：故障修复后继续失败或补偿流程；原 deadline 已过期时必须
   显式提供新的未来 deadline，或设置 `ClearDeadline`；
 - 放弃之后才到的正向成功：自动补偿那一步，`Failed` / `Compensated` 会被重开回 `Compensating`（上文契约第 4 条，saga 方向 ④）；
+  重开计 `saga.reopened_total`、记 WARN，业务识别重开的方法见下面「运维观察」；
 - `Compensate`：仅在没有 in-flight step 时允许人工发起补偿（中止正向、开始补偿）。在补偿方向停下的 `ManualRequired`
   上调用时与 `Resume` 一样进入新一生（`Incarnation+1`）：要重新执行的补偿步骤在这一生里已经派发过，不换代就会复用上一轮
   的 `CommandID`，收件箱只会回放旧的拒绝或报身份冲突（B1）。**补偿方向 `ManualRequired` 修复原因后的正确做法是 `Resume`**
@@ -267,6 +269,48 @@ fence 到 `ManualRequired`（放弃关闭，第 4 条），之后的重投按迟
 
 等待不占用 goroutine，也不依赖持久化进程 timer。`NextRunAt` 由带索引的批量
 worker 扫描；进程内 signal 只用于降低新任务延迟。
+
+## 运维观察
+
+协调器的计数都在 `Engine.Stats()`（kit saga Mod 的健康检查消息里同样列出），指标标签只有 saga 类型与方向 / 原状态 / 原因，保持低基数：
+
+| 指标 | `Stats()` | 含义 | 是否故障 |
+| --- | --- | --- | --- |
+| `saga.reopened_total{saga_type,from_status,reason}` | `Reopened` | saga 被**重开**（下面一节） | 不是故障，是记录被改过的信号；持续增长说明 completion 送达经常晚于步骤截止 |
+| `saga.completion.late_after_abandon_total{saga_type,phase}` | `LateAfterAbandon` | 放弃之后才到的成功（契约第 4 条），按（操作，代际）计一次 | `phase="forward"` 已自动补偿（WARN）；`phase="compensate"` 要运维核对（ERROR，TROUBLESHOOTING T-226） |
+| `saga.completion.stale_attempt_total{saga_type,phase}` | `StaleAttempt` | 同一生较早尝试晚到的可重试失败被忽略（saga 方向 ③） | 正常现象 |
+| `saga.completion.stale_incarnation_total{saga_type,phase}` | `StaleIncarnation` | Resume 之后旧一生的拒绝 / 失败被忽略（B1） | 正常现象 |
+
+`Completed` / `Compensated` / `Failed` / `ManualRequired` 按**到达终态的次数**计：重开的 saga 补偿完再次到达终态时会再计一次，不能当作 saga 个数。
+
+### saga 重开（维护者第十三轮，saga 方向 ④ 的可观测性）
+
+**什么时候发生**：正向步骤 s 在协调器放弃它之后才送达成功（契约第 4 条）。协调器把 saga 带回补偿、只补偿这一步，结束后回到 `Compensated`
+（补偿失败停在 `ManualRequired`）。每次重开计一次 `saga.reopened_total`、写一条 WARN：
+
+| `reason` | `from_status` | 场景 |
+| --- | --- | --- |
+| `late_success` | `failed` / `compensated` | 已结束的 saga 收到迟到的正向成功，立即重开为 `Compensating` 补偿第 s 步 |
+| `resume` / `compensate` | `manual_required` | `ManualRequired` 期间收到的迟到成功只记下（`LateStep`，不自动跑）；运维 `Resume` / `Compensate` 时先补第 s 步 |
+
+迟到成功到达时 saga 还在补偿中（非终态）不算重开，只计 `late_after_abandon_total{phase="forward"}`；没有迟到步骤的普通 `Resume` 也不算。
+
+日志（按 `saga_id` 串起来）：
+
+- 重开：WARN `saga: reopened to compensate a step that took effect after the coordinator abandoned it`，字段 `saga_id`、`saga_type`、`from_status`（原终态）、
+  `reason`、`late_step`（迟到的步骤号）、`status`（重开后的状态）、`version`；同一时刻还有 WARN `saga: step succeeded after the coordinator abandoned it; compensating it`
+  （`command_id`、`operation` 指出是哪次尝试）；
+- 迟到的那一步补偿完：INFO `saga: compensated the step that took effect after the coordinator abandoned it`，`status` 是之后的状态
+  （回到 `compensated`，或前缀还要补时是 `compensating`）。补偿失败照常进 `ManualRequired`，`LateStep` 保留，`Resume` 再补它。
+
+**业务怎样识别重开**：saga 没有向业务推送终态的机制——没有 completion 回调、终态事件流或 hook（`Publisher` 只发步骤命令，结果流是步骤发给协调器的），
+业务只能用 `Get` / `List` 读记录。所以 `Failed` / `Compensated` 不是永远不变的，按终态做业务（给玩家发失败通知、释放预留、写对账）的一方要：
+
+1. 读到终态时记下 `Record.Version`。之后 `Get` 返回更大的 `Version` 就是记录被改过（重开或运维 `Resume`），按新状态重新处理；
+2. 重开期间记录是 `Status=Compensating`、`LateStep>0`（正在补的是 `Step == LateStep-1`），`LastError` 为 `step <s> took effect after the coordinator abandoned it`；
+   `List(Query{Statuses: []Status{StatusCompensating}})` 能列出正在补偿的记录；`ManualRequired` 且 `LateStep>0` 表示有一步等运维 `Resume` 时补偿；
+3. 重开不改变业务结论：`Failed` 被重开后最终是 `Compensated`（第 s 步确实生效过、又被撤销），`Compensated` 被重开后仍回到 `Compensated`。
+   按终态做的业务动作只要按 saga id 幂等，第二次到达终态时重做一次即可；不要假设 `Failed` 的 saga 一定没有任何一步生效过——迟到生效的那一步由协调器补偿掉。
 
 ## 性能原则
 

@@ -201,3 +201,40 @@ Store 接口不变（`ApplyRequest` 不加字段）：回执、tombstone 改带�
 - 顺序：迟到的那一步可能排在一个已在途的补偿之后补偿（第 4.3 节），依赖业务补偿不要求跨步骤严格倒序；SAGA.md 已写明。
 - “重开 Failed / Compensated”按 C 的定义实施（第 4.1 节）；若维护者要求终态不可重开，可把第 4.1 表第一行改为“只记 `LateStep`、`Resume` 时补偿”，其余不变。
 - 时钟偏差仍是契约前提（与契约第 2 条相同），不在本次范围。
+
+## 8. 重开的可观测性（维护者第十三轮选 A，2026-10-07）
+
+**来由**：[DECISIONS-PENDING](../review/DECISIONS-PENDING-2026-10-05.md) 第十三轮“saga 迟到成功重开终态”：维护者同意 A，允许 `Failed` / `Compensated` 因迟到的正向成功被重开补偿，
+补“重开”的指标与日志，让运维和按终态做业务的一方看得到状态被改过。基线 `origin/main` `f18f6f42`，分支 `sagareopen`；`saga/` 在图谱 generation（09-30）之后改过，以当前源码为准。
+
+**终态通知机制**：查过 `saga/`、`kit/saga/` 与仓内调用方（`rg` 终态 / callback / hook / notify / Subscribe），saga 没有向业务推送终态的机制——`Publisher` 只发步骤命令，
+`SubscribeCompletions` / `SubscribeNestCompletions` 是步骤发给协调器的结果流，`SubscribeNestStarts` 是启动入口；业务只能 `Get` / `List` 读记录。所以按要求不新增事件，
+在 SAGA.md「运维观察」写明业务怎样识别重开（读到终态时记下 `Record.Version`，版本变大就按新状态重做；重开期间 `Compensating` 且 `LateStep>0`）。
+
+**实施**：
+
+- `saga.reopened_total{saga_type,from_status,reason}` 与 `Stats().Reopened`（kit saga Mod 健康消息加 `reopened=`）。`reason` 三个取值：
+  - `late_success`：`compensateLateStep` 写入成功、且写之前记录是 `Failed` / `Compensated`（`from_status` 取原状态）。迟到成功到达时 saga 还在补偿中不计（不是重开）；
+    同一成功的重复送达按回执去重，不会再计；
+  - `resume` / `compensate`：`ManualRequired` 期间记下的迟到步骤（`LateStep>0`）在 `Resume` / 人工 `Compensate` 写入成功时计，`from_status=manual_required`。
+    记下 `LateStep` 的那一刻不计（记录仍等运维）；没有迟到步骤的普通 `Resume` 不计。
+- 每次重开一条 WARN `saga: reopened to compensate a step that took effect after the coordinator abandoned it`（`saga_id`、`saga_type`、`from_status`、`reason`、
+  `late_step`、`status`、`version`）；迟到那一步补偿成功时一条 INFO `saga: compensated the step that took effect after the coordinator abandoned it`（之后的 `status`），
+  运维按 `saga_id` 把两端对上。指标只有三个低基数标签，saga id 与步骤号只进日志。
+- 计数与日志都在写入成功之后（与 `reportLateCompensation` 同一位置），冲突重试、重复送达不会多计。不改记录、持久格式与状态机。
+
+**先红后绿**：`saga/saga_reopen_observability_promises_test.go`（原生收件箱 + 投影 + 手动时钟的 `nativeWorld`，按 `saga_type=gift` 与标签过滤全局指标的增量）。
+修前（只加测试）失败文本全文在 [red-before.txt](evidence/sagareopen/red-before.txt)：
+
+- `TestReopeningAFailedSagaIsCountedAndLogged`：`a Failed saga was reopened by a late success of gift-1:1:0, but saga.reopened_total{from_status=failed,reason=late_success} grew by 0, want 1`；
+- `TestReopeningACompensatedSagaIsCountedAndLogged`：`... saga.reopened_total{from_status=compensated,reason=late_success} grew by 0, want 1`；
+- `TestResumeCompensatingALateStepIsCountedAndLogged`：`Resume compensates the late step 1 recorded during ManualRequired, but saga.reopened_total{from_status=manual_required,reason=resume} grew by 0, want 1`；
+- 守卫（修前修后都绿）：`TestLateSuccessDuringCompensationIsNotAReopen`（非终态不计）、`TestPlainResumeIsNotAReopen`（无迟到步骤的 Resume 不计）。
+
+修后全部通过，并断言 WARN 行含 `level=WARN`、`from_status`、`reason`、`late_step`，重复送达不再计，`Stats().Reopened == 1`；
+修后加入新 API 用例 `TestManualCompensateOfALateStepIsCountedAndLogged`（人工 `Compensate` 计 `reason=compensate`）。
+
+**验证**（`GOWORK=off`）：`gofmt -l` 空；`go vet ./saga/... ./kit/saga/...`；`go test -race -count=3 ./saga/... ./kit/saga/...` 通过；根包 `go test -count=1 .` 通过；
+`go build ./... && go vet ./...` 通过。不改 nest / entity / dataengine / sync、生成模板与持久格式：没有跑 glsvet、codegen、真实 Mongo 用例（按影响面）。
+
+**兼容**：公开 API 只增 `Stats.Reopened` 与指标 `saga.reopened_total`；kit saga 健康消息末尾多 `reopened=<n>`。行为不变。

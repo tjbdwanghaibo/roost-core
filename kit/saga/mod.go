@@ -214,7 +214,7 @@ func (m *Mod) checkHealth(ctx context.Context) health.Result {
 		return health.Result{Status: health.StatusFail, Message: "MongoDB unavailable", Err: err}
 	}
 	stats := m.asm.Engine.Stats()
-	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("running conflicts=%d duplicates=%d publish_failures=%d store_failures=%d worker_failures=%d manual_required=%d late_after_abandon=%d", stats.Conflicts, stats.Duplicates, stats.PublishFailures, stats.StoreFailures, stats.WorkerFailures, stats.ManualRequired, stats.LateAfterAbandon)}
+	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("running conflicts=%d duplicates=%d publish_failures=%d store_failures=%d worker_failures=%d manual_required=%d late_after_abandon=%d reopened=%d", stats.Conflicts, stats.Duplicates, stats.PublishFailures, stats.StoreFailures, stats.WorkerFailures, stats.ManualRequired, stats.LateAfterAbandon, stats.Reopened)}
 }
 
 func stringDefault(value, fallback string) string {

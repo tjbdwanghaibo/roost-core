@@ -446,7 +446,8 @@ game-demo 在 game 服务的三份配置里把 `gift_item.debit.max_attempts` �
 
 预算正反两个方向共用；重试次数只决定协调器等多久，不会让同一次操作生效多次：原生步骤（`SubscribeDataEngineStep`）保证同一
 操作实例的所有尝试里最多一次生效，尝试只在命令截止前生效；协调器放弃后才到的正向成功由协调器把 saga 带回补偿、只补偿那一步
-（`Failed` / `Compensated` 会被重开回 `Compensating`，saga 方向 ④），补偿方向的记 `saga.completion.late_after_abandon_total` 告警；
+（`Failed` / `Compensated` 会被重开回 `Compensating`，saga 方向 ④；重开计 `saga.reopened_total{saga_type,from_status,reason}`、记 WARN，
+按终态做业务的一方读到终态时记下 `Record.Version`、之后版本变大就按新状态重做，见 [SAGA.md「运维观察」](../SAGA.md#运维观察)），补偿方向的记 `saga.completion.late_after_abandon_total` 告警；
 同一生较早尝试晚到的可重试失败不再推进记录（saga 方向 ③，计 `saga.completion.stale_attempt_total`）（[SAGA.md「原生步骤执行契约」](../SAGA.md#原生步骤执行契约u-0280维护者-2026-10-05-决定)）。代价：Mongo 投影积压超过步骤
 `timeout` 时步骤停住（每次尝试都在截止后才投影、被跳过），积压消退后才成功，而不是像以前那样重复执行。Mongo 步骤
 （`SubscribeMongoStep`）自 2026-10-06 纳入同一契约（saga 方向 ②）：生效点是 handler 的 Mongo 事务，业务写经 handler 拿到的事务 ctx
