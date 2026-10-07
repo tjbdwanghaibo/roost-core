@@ -114,6 +114,11 @@ func parseFile(path string) ([]*FuncInfo, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	// RR-20261006-56: refuse a misspelt option before any is read; a typo in
+	// `durability=` used to generate the async default without a word.
+	if err := marker.CheckFile(fset, file, marker.Nest); err != nil {
+		return nil, "", err
+	}
 
 	pkg := file.Name.Name
 	remoteStructFields, packageImports, err := collectPackageRemoteStructFields(path, pkg)
@@ -460,14 +465,11 @@ func containsNestMarker(src string) bool {
 	return marker.Has(src, "nest")
 }
 
+// parseMarkerOptions reads the options of a marker parseFile has already
+// validated with marker.CheckFile, so Parse cannot fail here.
 func parseMarkerOptions(raw string) map[string]string {
-	ret := make(map[string]string)
-	for _, part := range strings.Fields(raw) {
-		k, v, ok := strings.Cut(part, "=")
-		if !ok {
-			ret[part] = "true"
-			continue
-		}
+	ret, _ := marker.Nest.Parse(raw)
+	for k, v := range ret {
 		ret[k] = strings.Trim(v, `"`)
 	}
 	return ret

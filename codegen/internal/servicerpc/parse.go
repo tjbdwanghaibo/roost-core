@@ -115,6 +115,11 @@ func ParseDir(dir string) ([]Service, error) {
 		}
 		marked := make([]Service, 0, 1)
 		for _, path := range paths {
+			// RR-20261006-56 / F09-R4: a misspelt option (`afinity=`) used to
+			// be dropped, leaving the method without the affinity it asked for.
+			if err := marker.CheckFile(fset, pkg.Files[path], marker.RPC); err != nil {
+				return nil, err
+			}
 			found, err := parseFile(facts, pkgName, path, pkg.Files[path])
 			if err != nil {
 				return nil, err
@@ -194,24 +199,12 @@ func interfaceMarker(groups ...*ast.CommentGroup) (map[string]string, bool) {
 			if !ok {
 				continue
 			}
-			return parseOptions(rest), true
+			// ParseDir has already refused a bad marker with marker.CheckFile.
+			options, _ := marker.RPC.Parse(rest)
+			return options, true
 		}
 	}
 	return nil, false
-}
-
-// parseOptions reads "key=value" and bare "flag" tokens.
-func parseOptions(text string) map[string]string {
-	options := map[string]string{}
-	for _, token := range strings.Fields(text) {
-		key, value, found := strings.Cut(token, "=")
-		if !found {
-			options[key] = ""
-			continue
-		}
-		options[key] = value
-	}
-	return options
 }
 
 // pkgFacts is what the generator knows about the package a marked interface

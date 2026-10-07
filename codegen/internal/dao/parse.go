@@ -118,6 +118,11 @@ func parseDefDir(dir string) (*Definitions, error) {
 			return nil, fmt.Errorf("parse %s: %w", entry.Name(), err)
 		}
 
+		// RR-20261006-56: a misspelt key (`dbscop=sid`) used to fall back to
+		// the default (the global database) without a word.
+		if err := marker.CheckFile(fset, f, marker.Dao, marker.RedisDao); err != nil {
+			return nil, err
+		}
 		if err := extractDefs(fset, f, defs); err != nil {
 			return nil, fmt.Errorf("%s: %w", entry.Name(), err)
 		}

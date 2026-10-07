@@ -42,6 +42,10 @@ func parseDir(dir string) ([]ProfileDef, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", path, err)
 		}
+		// RR-20261006-56: refuse a misspelt option instead of using the default.
+		if err := marker.CheckFile(fset, f, marker.Attribute); err != nil {
+			return nil, err
+		}
 		if pkg == "" {
 			pkg = f.Name.Name
 		}

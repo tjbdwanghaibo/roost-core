@@ -100,6 +100,11 @@ func scanFile(root, modulePath, path string) ([]Registration, error) {
 		// registrations, so report it.
 		return nil, fmt.Errorf("registry: parse %s: %w", path, err)
 	}
+	// RR-20261006-56: an unknown option used to be reported only after
+	// phase= was found, so `phse=entity` read as "missing phase=".
+	if err := marker.CheckFile(fset, file, marker.Register); err != nil {
+		return nil, fmt.Errorf("registry: %w", err)
+	}
 	importPath, err := packageImportPath(root, modulePath, path)
 	if err != nil {
 		return nil, err
@@ -130,15 +135,8 @@ func markerOptions(doc *ast.CommentGroup) (map[string]string, bool) {
 		if match == nil {
 			continue
 		}
-		options := map[string]string{}
-		for _, field := range strings.Fields(match[2]) {
-			key, value, found := strings.Cut(field, "=")
-			if !found {
-				options[key] = ""
-				continue
-			}
-			options[key] = value
-		}
+		// scanFile has already refused a bad marker with marker.CheckFile.
+		options, _ := marker.Register.Parse(match[2])
 		return options, true
 	}
 	return nil, false
@@ -177,14 +175,6 @@ func build(fnDecl *ast.FuncDecl, options map[string]string, importPath, position
 			return Registration{}, fmt.Errorf("registry: %s: %s has non-integer order %q", position, name, raw)
 		}
 		order = parsed
-	}
-
-	for key := range options {
-		switch key {
-		case "phase", "order":
-		default:
-			return Registration{}, fmt.Errorf("registry: %s: %s has unknown marker option %q; supported: phase, order", position, name, key)
-		}
 	}
 
 	return Registration{

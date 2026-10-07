@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 )
@@ -279,35 +278,12 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 	return entities, nil
 }
 
-// markerKeys is every parameter the entity marker understands. `id` is
-// written by `roost add entity` and consumed by the registry generator.
-var markerKeys = []string{"id", "entityKind", "category", "remote", "noPersist", "lifetime", "sync", "syncNamespace", "syncPacker", "subjectPacker"}
-
-// parseMarkerParams parses key=value pairs and refuses anything else: a typo
-// in a key (`remot=managed`) or a bare flag (`noPersist`) used to be read as
+// parseMarkerParams parses the entity marker's key=value pairs through the
+// shared marker.Entity vocabulary and refuses anything else: a typo in a key
+// (`remot=managed`) or a bare word (`noPersist`) used to be read as
 // "parameter absent", which silently changes what gets generated.
 func parseMarkerParams(s string) (map[string]string, error) {
-	params := make(map[string]string)
-	for _, p := range strings.Fields(s) {
-		kv := strings.SplitN(p, "=", 2)
-		if len(kv) != 2 || kv[0] == "" {
-			return nil, fmt.Errorf("parameter %q must be key=value (known keys: %s)", p, strings.Join(markerKeys, ", "))
-		}
-		if kv[0] == "syncTopic" {
-			// Renamed with ARCH-10: the value is the wire namespace every
-			// update of the subject carries, and "topic" suggested a bus that
-			// does not exist. A silent alias would hide the rename.
-			return nil, fmt.Errorf("parameter %q was renamed: write syncNamespace=%s", p, kv[1])
-		}
-		if !slices.Contains(markerKeys, kv[0]) {
-			return nil, fmt.Errorf("unknown parameter %q (known keys: %s)", kv[0], strings.Join(markerKeys, ", "))
-		}
-		if _, dup := params[kv[0]]; dup {
-			return nil, fmt.Errorf("parameter %q given twice", kv[0])
-		}
-		params[kv[0]] = kv[1]
-	}
-	return params, nil
+	return marker.Entity.Parse(s)
 }
 
 // validateMarkerValues rejects values outside the spellings the parsers

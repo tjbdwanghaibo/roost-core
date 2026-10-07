@@ -42,5 +42,5 @@ func TestGenerateRefusesManagedRemoteWithoutRemoteBase(t *testing.T) {
 // A marker key given twice must be refused rather than last-one-wins.
 func TestParseDirRejectsMarkerParameterGivenTwice(t *testing.T) {
 	dir, _ := writeEntitySource(t, "package game\n\n//roost:entity entityKind=EntityKindPlayer sync=true sync=false\ntype Player struct{}\n")
-	expectParseError(t, dir, `parameter "sync" given twice`)
+	expectParseError(t, dir, `duplicate marker option "sync"`)
 }

@@ -156,7 +156,7 @@ func TestMirrorMarkerValidation(t *testing.T) {
 	cases := []struct{ source, want string }{
 		{"//roost:mirror coll=guild\ntype S struct{}\n", "needs entityKind="},
 		{"//roost:mirror entityKind=EntityKindGuild\ntype S struct{}\n", "needs coll="},
-		{"//roost:mirror entityKind=EntityKindGuild coll=guild sync=true\ntype S struct{}\n", `unknown parameter "sync"`},
+		{"//roost:mirror entityKind=EntityKindGuild coll=guild sync=true\ntype S struct{}\n", `unknown marker option "sync"`},
 		{"//roost:mirror entityKind=EntityKindGuild coll=\"guild\"\ntype S struct{}\n", "without quotes"},
 		{"//roost:mirror entityKind=7 coll=guild\ntype S struct{}\n", "not a constant expression"},
 		{"//roost:mirror entityKind=EntityKindGuild coll=guild\ntype S int\n", "must annotate a struct"},

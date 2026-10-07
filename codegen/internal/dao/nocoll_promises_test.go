@@ -139,7 +139,7 @@ func TestTheNoCollectionMarkerRefusesContradictions(t *testing.T) {
 		{"with dbscope", "//roost:dao nocoll dbscope=sid", []string{"nocoll", "dbscope="}},
 		{"with schema", "//roost:dao nocoll schema=2", []string{"nocoll", "schema="}},
 		{"with a value", "//roost:dao nocoll=true", []string{"nocoll", "bare flag"}},
-		{"neither", "//roost:dao nocol", []string{"requires coll= and db=", "nocoll"}},
+		{"neither", "//roost:dao nocol", []string{`unknown marker option "nocol"`, "nocoll"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

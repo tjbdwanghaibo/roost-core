@@ -15,10 +15,10 @@ import (
 )
 
 var (
-	protoMarkerRe    = regexp.MustCompile(`^//[a-z]+:proto\s+(.+)$`)
-	protocolMarkerRe = regexp.MustCompile(`^//[a-z]+:protocol\s+(.+)$`)
-	msgMarkerRe      = regexp.MustCompile(`^//[a-z]+:msg\s+(.+)$`)
-	viewMarkerRe     = regexp.MustCompile(`^//[a-z]+:view\s+(.+)$`)
+	protoMarkerRe    = marker.Regexp("proto", `\s+(.+)`)
+	protocolMarkerRe = marker.Regexp("protocol", `\s+(.+)`)
+	msgMarkerRe      = marker.Regexp("msg", `\s+(.+)`)
+	viewMarkerRe     = marker.Regexp("view", `\s+(.+)`)
 )
 
 type parsedFile struct {
@@ -64,6 +64,10 @@ func parseDefDir(dir string) (*Definitions, error) {
 		f, err := parser.ParseFile(fset, path, content, parser.ParseComments)
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", path, err)
+		}
+		// RR-20261006-56: refuse a misspelt option instead of using the default.
+		if err := marker.CheckFile(fset, f, marker.Proto, marker.Protocol, marker.Msg, marker.View); err != nil {
+			return err
 		}
 		sourceFile, err := filepath.Rel(dir, path)
 		if err != nil {

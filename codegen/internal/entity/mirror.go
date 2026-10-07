@@ -8,7 +8,6 @@ import (
 	"go/format"
 	"go/token"
 	"os"
-	"slices"
 	"sort"
 	"strings"
 	"text/template"
@@ -33,9 +32,6 @@ import (
 
 // mirrorMarkerRe matches //roost:mirror <params>.
 var mirrorMarkerRe = marker.Regexp("mirror", `(?:\s+(.*))?`)
-
-// mirrorMarkerKeys is every parameter //roost:mirror understands.
-var mirrorMarkerKeys = []string{"entityKind", "coll"}
 
 // MirrorDef is a read-only DTO declared with //roost:mirror.
 type MirrorDef struct {
@@ -126,19 +122,9 @@ func extractMirrors(fset *token.FileSet, f *ast.File, filePath string, importMap
 
 // parseMirrorMarkerParams parses entityKind= and coll=; both are required and nothing else is accepted.
 func parseMirrorMarkerParams(s string) (map[string]string, error) {
-	params := make(map[string]string)
-	for _, p := range strings.Fields(s) {
-		kv := strings.SplitN(p, "=", 2)
-		if len(kv) != 2 || kv[0] == "" {
-			return nil, fmt.Errorf("parameter %q must be key=value (known keys: %s)", p, strings.Join(mirrorMarkerKeys, ", "))
-		}
-		if !slices.Contains(mirrorMarkerKeys, kv[0]) {
-			return nil, fmt.Errorf("unknown parameter %q (known keys: %s)", kv[0], strings.Join(mirrorMarkerKeys, ", "))
-		}
-		if _, dup := params[kv[0]]; dup {
-			return nil, fmt.Errorf("parameter %q given twice", kv[0])
-		}
-		params[kv[0]] = kv[1]
+	params, err := marker.Mirror.Parse(s)
+	if err != nil {
+		return nil, err
 	}
 	kind := params["entityKind"]
 	if kind == "" {

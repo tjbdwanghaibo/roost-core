@@ -198,6 +198,10 @@ func parseMetaFile(root string, module string, path string) ([]Meta, error) {
 	if err != nil {
 		return nil, err
 	}
+	// RR-20261006-56: refuse a misspelt option instead of using the default.
+	if err := marker.CheckFile(fset, file, marker.Table, marker.Object); err != nil {
+		return nil, err
+	}
 
 	markers := make(map[int]map[string]string)
 	kinds := make(map[int]TableKind)

@@ -13,7 +13,7 @@ import (
 	codeerr "github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode"
 )
 
-var markerIDPattern = regexp.MustCompile(`//[a-z]+:(msg|push|entity|component|errcode)[^\n]*\b(id|kind|type|code)=([0-9]+)`)
+var markerIDPattern = regexp.MustCompile(`//(?:roost|cube):(msg|push|entity|component|errcode)[^\n]*\b(id|kind|type|code)=([0-9]+)`)
 
 type IDUse struct {
 	Kind string

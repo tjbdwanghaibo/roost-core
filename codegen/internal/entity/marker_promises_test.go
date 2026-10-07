@@ -49,7 +49,7 @@ func TestParseDirRejectsMarkerAboveNonStruct(t *testing.T) {
 // one. Unknown keys and bare tokens are errors that list the known keys.
 func TestParseDirRejectsUnknownMarkerParameters(t *testing.T) {
 	dir, _ := writeEntitySource(t, "package game\n\n//roost:entity entityKind=EntityKindPlayer remot=managed\ntype Player struct{}\n")
-	expectParseError(t, dir, "remot", "unknown parameter", "remote")
+	expectParseError(t, dir, "remot", "unknown marker option", "remote")
 
 	dir, _ = writeEntitySource(t, "package game\n\n//roost:entity entityKind=EntityKindPlayer noPersist\ntype Player struct{}\n")
 	expectParseError(t, dir, "noPersist", "key=value")
