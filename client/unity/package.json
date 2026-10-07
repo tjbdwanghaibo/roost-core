@@ -1,0 +1,7 @@
+{
+  "name": "com.roost.client",
+  "version": "0.1.0",
+  "displayName": "Roost Client",
+  "description": "RS v2 PB/Sync client main-thread adapter. Import the Roost.Client runtime source or assembly separately.",
+  "unity": "2021.3"
+}

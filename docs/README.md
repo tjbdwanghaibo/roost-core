@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**10-07 客户端协议第一批：**[共享RS v2协议、C#与Unity接入](../client/README.md)，PB/raw Sync已接线，Lockstep编号预留但当前拒绝；无旧包兼容。[实施方案与验证边界](feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)。这是客户端接入新增功能，历史非核心review进度保持原口径。
+
 > 框架整体的说明与实现见 [框架文档](framework/README.md)（基准 v1.23.0）；内容冲突以框架文档与源码为准。
 
 **10-05第27轮及完整接力：** [本轮修复/review](review/REVIEW-2026-10-05-noncore-27.md)、[后续全部review清单](review/REMAINING-REVIEW-HANDOFF-2026-10-05.md)、[进度](review/PROGRESS.md)。NC-41/42及RR-09残余已修、未发版；另一agent下一从N06 global RPC/Mod/App.Live增量接续，外部专项与核心线接口单列。

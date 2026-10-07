@@ -35,12 +35,17 @@ func Run(args []string, stdout io.Writer) error {
 	handlerBootstrap := flags.String("handler-bootstrap", "", "generated aggregate player protocol registration file")
 	robotProtocolFile := flags.String("robot-protocol", "./service/robot/protocol/registry_gen.go", "generated robot protocol registry path")
 	manifestFile := flags.String("manifest", "./protocol/protocol_manifest.json", "generated protocol manifest path")
+	csharpFile := flags.String("csharp", "", "optional generated C# message id file; PB classes use protoc on the generated proto")
 	reverseProtoFile := flags.String("reverse-proto", "", "reverse-generate Go protocol defs from a proto file")
 	reverseOutDir := flags.String("reverse-out", "./protocol/def/imported", "reverse-generated Go def output directory")
 	reversePackage := flags.String("reverse-package", "def", "reverse-generated Go package name")
 	force := flags.Bool("force", false, "force regeneration")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	// 空定义的退役也要约束扩展名，不能让-csharp指向另一个Go生成产物。
+	if *csharpFile != "" && !strings.EqualFold(filepath.Ext(*csharpFile), ".cs") {
+		return fmt.Errorf("C# message id output must end in .cs: %s", *csharpFile)
 	}
 
 	if *reverseProtoFile != "" {
@@ -66,6 +71,7 @@ func Run(args []string, stdout io.Writer) error {
 	}
 	if len(defs.Structs) == 0 {
 		outputs := protocolOutputPaths{
+			csharp:   *csharpFile,
 			proto:    filepath.Join(*protoDir, "protocol.proto"),
 			pb:       filepath.Join(*pbDir, "protocol.pb.go"),
 			msgID:    filepath.Join(*msgIDDir, "msgid_gen.go"),
@@ -110,7 +116,13 @@ func Run(args []string, stdout io.Writer) error {
 	}
 	defs.ModulePath = projectInfo.ModulePath
 	defs.GoPackage = defs.ModulePath + "/protocol/pb;pb"
+	if err := validateCSharpOutput(*csharpFile); err != nil {
+		return err
+	}
 	dirs := []string{*protoDir, *pbDir, *msgIDDir, filepath.Dir(*manifestFile)}
+	if *csharpFile != "" {
+		dirs = append(dirs, filepath.Dir(*csharpFile))
+	}
 	if *bindDir != "" {
 		dirs = append(dirs, *bindDir)
 	}
@@ -139,6 +151,12 @@ func Run(args []string, stdout io.Writer) error {
 			path string
 			fn   func(*Definitions) ([]byte, error)
 		}{filepath.Join(*bindDir, "bind_gen.go"), generateBindGo})
+	}
+	if *csharpFile != "" {
+		writes = append(writes, struct {
+			path string
+			fn   func(*Definitions) ([]byte, error)
+		}{*csharpFile, generateCSharpIDs})
 	}
 	if *robotProtocolFile != "" {
 		writes = append(writes, struct {

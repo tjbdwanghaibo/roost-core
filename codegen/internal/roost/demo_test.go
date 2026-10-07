@@ -256,7 +256,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if dao := read("db/def/player.go"); !strings.Contains(dao, "MailClaims map[string]int64") {
 		t.Errorf("the Player DAO has no ledger for mail attachment claims")
 	}
-	if conn := read("loadtest/playertcp/conn.go"); !strings.Contains(conn, "header[3]&flagServerPush == 0 && wire != 0") {
+	if conn := read("loadtest/playertcp/conn.go"); !strings.Contains(conn, "packet.Flags&wire.FlagPush == 0 && packet.Seq != 0") {
 		t.Errorf("the robot transport does not classify frames by the server-push flag; a push carrying a pending wire sequence would be taken for the response")
 	}
 	// Ten processes on one machine: each config has its own ops port, in

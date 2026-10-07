@@ -51,7 +51,6 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
@@ -59,9 +58,9 @@ import (
 	"net"
 	"os"
 	"time"
-)
 
-const headerSize = 16
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+)
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:7000", "player TCP address")
@@ -84,25 +83,17 @@ func main() {
 }
 
 func writeAuth(writer io.Writer, token []byte) error {
-	if len(token) == 0 || len(token) > 8192 { return fmt.Errorf("ticket size %d is outside 1..8192 bytes", len(token)) }
-	var header [headerSize]byte
-	header[0], header[1], header[2] = 'R', 'S', 1
-	binary.BigEndian.PutUint32(header[8:12], 1)
-	binary.BigEndian.PutUint32(header[12:16], uint32(len(token)))
-	buffers := net.Buffers{header[:], token}
-	_, err := buffers.WriteTo(writer)
-	return err
+ if len(token) == 0 || len(token) > 8192 { return fmt.Errorf("ticket size %d is outside 1..8192 bytes", len(token)) }
+ return wire.Write(writer, []*wire.Packet{{MsgID:0,Seq:1,Payload:token}},8192)
 }
 
 func readAck(reader io.Reader) error {
-	var header [headerSize]byte
-	if _, err := io.ReadFull(reader, header[:]); err != nil { return err }
-	if header[0] != 'R' || header[1] != 'S' || header[2] != 1 || header[3] != 0 ||
-		binary.BigEndian.Uint32(header[4:8]) != 0 || binary.BigEndian.Uint32(header[8:12]) != 1 ||
-		binary.BigEndian.Uint32(header[12:16]) != 0 {
-		return errors.New("invalid authentication acknowledgement")
-	}
-	return nil
+ packet, err := wire.Read(reader,8192)
+ if err != nil { return err }
+ if packet.Flags != 0 || packet.MsgID != 0 || packet.Seq != 1 || len(packet.Payload) != 0 {
+  return errors.New("invalid authentication acknowledgement")
+ }
+ return nil
 }
 
 func fail(format string, args ...any) {
@@ -122,7 +113,6 @@ package tcp
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -137,6 +127,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/gateway"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	accessplayer %q
@@ -145,9 +136,10 @@ import (
 
 const (
 	Name app.ModName = "access.player.tcp"
-	headerSize = 16
-	protocolVersion byte = 1
-	flagServerPush byte = 1
+	headerSize = wire.HeaderSize
+	protocolVersion byte = wire.Version
+	flagServerPush byte = wire.FlagPush
+	flagSync byte = wire.FlagSync
 	maxPooledPayload = 64 << 10
 	hardMaxPayload = 16 << 20
 	hardMaxConnections = 1000000
@@ -173,6 +165,8 @@ var (
 // Wire format (network byte order): magic[2], version[1], flags[1],
 // message_id[4], sequence[4], payload_length[4], payload. Message ID 0 is the
 // authentication handshake; all business messages require a non-zero ID.
+// flags bit0 is push; bits1..2 select PB=0, Sync=1, Lockstep=2 (reserved).
+// The shared wire codec rejects unsupported kinds before payload allocation.
 type frame struct {
 	flags byte
 	messageID uint32
@@ -600,6 +594,18 @@ func (runtime *Runtime) PushPlayer(ctx context.Context, playerID int64, messageI
 	return server.pushPlayer(ctx, playerID, messageID, payload)
 }
 
+// PushSyncPlayer 发送冻结的原始Sync帧，复用PB推送的发送与关闭责任。
+func (runtime *Runtime) PushSyncPlayer(ctx context.Context, playerID int64, messageID uint32, payload []byte) error {
+ if runtime == nil { return ErrTransportUnavailable }; server := runtime.server.Load()
+ if server == nil { return ErrTransportUnavailable }
+ return server.pushPlayerKind(ctx,playerID,messageID,payload,flagSync)
+}
+func (runtime *Runtime) PushSyncSession(ctx context.Context, sessionID string, messageID uint32, payload []byte) error {
+ if runtime == nil { return ErrTransportUnavailable }; server := runtime.server.Load()
+ if server == nil { return ErrTransportUnavailable }
+ return server.pushSessionKind(ctx,sessionID,messageID,payload,flagSync)
+}
+
 func (runtime *Runtime) PushSession(ctx context.Context, sessionID string, messageID uint32, value any) error {
 	if runtime == nil || runtime.protocols == nil { return ErrTransportUnavailable }
 	server := runtime.server.Load()
@@ -877,11 +883,9 @@ func (server *Server) readFrame(reader io.Reader) (frame, func(), error) {
 func (server *Server) readFrameLimit(reader io.Reader, maxPayload uint32) (frame, func(), error) {
 	var header [headerSize]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil { return frame{}, func(){}, err }
-	if header[0] != frameMagic[0] || header[1] != frameMagic[1] || header[2] != protocolVersion || header[3]&^flagServerPush != 0 {
-		return frame{}, func(){}, errInvalidFrame
-	}
-	length := binary.BigEndian.Uint32(header[12:16])
-	if length > maxPayload { return frame{}, func(){}, fmt.Errorf("%%w: payload %%d exceeds %%d", errInvalidFrame, length, maxPayload) }
+	decoded, err := wire.ParseHeader(header[:], int(maxPayload))
+ if err != nil { return frame{}, func(){}, fmt.Errorf("%%w: %%w", errInvalidFrame, err) }
+ length := decoded.PayloadSize
 	var payload []byte
 	pooled := false
 	if length > 0 {
@@ -895,7 +899,7 @@ func (server *Server) readFrameLimit(reader io.Reader, maxPayload uint32) (frame
 	release := func() {
 		if pooled && cap(payload) <= maxPooledPayload { server.payloadPool.Put(payload[:cap(payload)]) }
 	}
-	return frame{flags: header[3], messageID: binary.BigEndian.Uint32(header[4:8]), sequence: binary.BigEndian.Uint32(header[8:12]), payload: payload}, release, nil
+	return frame{flags: decoded.Flags, messageID: decoded.MsgID, sequence: decoded.Seq, payload: payload}, release, nil
 }
 
 func (server *Server) registerSession(current *session) {
@@ -960,6 +964,10 @@ func (server *Server) dropBrokenSession(current *session, cause error) {
 // not the connection's fault, so nothing is
 // closed and the caller learns the frame did not go out everywhere.
 func (server *Server) pushPlayer(ctx context.Context, playerID int64, messageID uint32, payload []byte) error {
+ return server.pushPlayerKind(ctx, playerID, messageID, payload, 0)
+}
+
+func (server *Server) pushPlayerKind(ctx context.Context, playerID int64, messageID uint32, payload []byte, kind byte) error {
 	if messageID == 0 { return fmt.Errorf("%%w: push message id is zero", errInvalidFrame) }
 	server.mu.RLock()
 	byPlayer := server.playerSessions[playerID]
@@ -972,7 +980,7 @@ func (server *Server) pushPlayer(ctx context.Context, playerID int64, messageID 
 	var joined error
 	delivered, refused := 0, false
 	for _, current := range sessions {
-		err := current.push(ctx, messageID, payload)
+		err := current.pushKind(ctx, messageID, payload, kind)
 		switch {
 		case err == nil:
 			delivered++
@@ -992,12 +1000,16 @@ func (server *Server) pushPlayer(ctx context.Context, playerID int64, messageID 
 }
 
 func (server *Server) pushSession(ctx context.Context, sessionID string, messageID uint32, payload []byte) error {
+ return server.pushSessionKind(ctx, sessionID, messageID, payload, 0)
+}
+
+func (server *Server) pushSessionKind(ctx context.Context, sessionID string, messageID uint32, payload []byte, kind byte) error {
 	if messageID == 0 { return fmt.Errorf("%%w: push message id is zero", errInvalidFrame) }
 	server.mu.RLock()
 	current := server.sessions[sessionID]
 	server.mu.RUnlock()
 	if current == nil { metrics.IncCounter("player_tcp_push_no_session_total", nil, 1); return fmt.Errorf("%%w: %%s", ErrSessionNotFound, sessionID) }
-	err := current.push(ctx, messageID, payload)
+	err := current.pushKind(ctx, messageID, payload, kind)
 	if err == nil { metrics.IncCounter("player_tcp_push_total", nil, 1); return nil }
 	metrics.IncCounter("player_tcp_push_error_total", nil, 1)
 	if errors.Is(err, errConnectionBroken) { server.dropBrokenSession(current, err) }
@@ -1064,9 +1076,12 @@ func (session *session) Reply(ctx context.Context, value any) error {
 }
 
 func (session *session) push(ctx context.Context, messageID uint32, payload []byte) error {
+ return session.pushKind(ctx,messageID,payload,0)
+}
+func (session *session) pushKind(ctx context.Context, messageID uint32, payload []byte, kind byte) error {
 	sequence := session.serverSequence.Add(1)
 	if sequence == 0 { sequence = session.serverSequence.Add(1) }
-	return session.writeFrame(ctx, flagServerPush, messageID, sequence, payload)
+	return session.writeFrame(ctx, flagServerPush|kind, messageID, sequence, payload)
 }
 
 func (session *session) writeFrame(ctx context.Context, flags byte, messageID, sequence uint32, payload []byte) error {
@@ -1086,12 +1101,8 @@ func (session *session) writeFrame(ctx context.Context, flags byte, messageID, s
 	callerDeadline := false
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(writeDeadline) { writeDeadline, callerDeadline = contextDeadline, true }
 	if err := session.connection.SetWriteDeadline(writeDeadline); err != nil { return fmt.Errorf("%%w: %%w", errConnectionBroken, err) }
-	var header [headerSize]byte
-	header[0], header[1], header[2] = frameMagic[0], frameMagic[1], protocolVersion
-	header[3] = flags
-	binary.BigEndian.PutUint32(header[4:8], messageID)
-	binary.BigEndian.PutUint32(header[8:12], sequence)
-	binary.BigEndian.PutUint32(header[12:16], uint32(len(payload)))
+	header, err := (wire.Header{Flags:flags,MsgID:messageID,Seq:sequence,PayloadSize:uint32(len(payload))}).Encode(int(limit))
+ if err != nil { return fmt.Errorf("%%w: %%w",errInvalidFrame,err) }
 	buffers := net.Buffers{header[:], payload}
 	written, err := buffers.WriteTo(session.connection)
 	if err == nil { return nil }

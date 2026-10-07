@@ -32,6 +32,10 @@
 - App 统一启动期限 `startup.timeout`（默认 2m）与信号处理；未退出回调的依赖保留到进程退出（RR-20261007-06）。
 - ActionRunner 外层 defer 清理执行标记与残留命令引用（F02-7 结构性加固）。
 
+### 客户端协议（破坏性变更）
+
+- **公共RS v2、PB/Sync分流与C#客户端首批**：新增`client/wire`与纯C# netstandard2.1运行库、Unity主线程适配源码；固定16字节大端头，flags bit0=推送、bits1..2为PB/Sync/Lockstep类型。Lockstep仅预留且当前拒绝；旧12字节robot与RS v1不兼容。正式生成player TCP/探针和demo loadtest共用wire，scene通过`PushSyncPlayer`推送原始frame，去除PB bytes外壳。可选protocol `-csharp`编号输出及归属/退役保护；PB类型仍用同源proto生成。`robot/transport.EncodePackets`改为`([]byte,error)`。应用需重生成托管传输并同步业务scene/client；未发版，真实引擎验证与状态应用/恢复后续实施。[接入](client/README.md) · [方案/验证](docs/feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)
+
 ### 行为收紧
 
 - **配置检查把缺失的默认文件报告为成功已修复**（RR-20261007-01，F01-8）。[问题](docs/bug/RR-20261007-01.md) · [修复与兼容](docs/bugfix/RR-20261007-01.md)

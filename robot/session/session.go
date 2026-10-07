@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
@@ -264,6 +265,9 @@ func (s *Session) dispatch(packet *transport.Packet) {
 	if packet == nil {
 		return
 	}
+	if packet.Flags&wire.FlagPush != 0 {
+		packet.Seq = 0
+	}
 	if packet.Seq != 0 {
 		s.mu.Lock()
 		ch := s.pending[packet.Seq]
@@ -316,7 +320,7 @@ func (s *Session) dispatch(packet *transport.Packet) {
 
 func (s *Session) decode(packet *transport.Packet) *Message {
 	msg := &Message{Packet: packet}
-	if s.protocols == nil {
+	if s.protocols == nil || packet.Flags&wire.FlagSync != 0 {
 		return msg
 	}
 	value, err := s.protocols.Decode(packet.MsgID, packet.Payload)

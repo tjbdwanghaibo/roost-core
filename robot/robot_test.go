@@ -106,7 +106,11 @@ func TestPacketCodecRoundTrip(t *testing.T) {
 		{MsgID: 1, Seq: 42, Payload: []byte("hello")},
 		{MsgID: 2, Seq: 0, Payload: nil},
 	}
-	decoded, err := transport.DecodePackets(transport.EncodePackets(packets), 0)
+	encoded, err := transport.EncodePackets(packets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := transport.DecodePackets(encoded, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
