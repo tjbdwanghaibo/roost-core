@@ -25,31 +25,51 @@ guardrails, not capacity targets: tune them from room-level load tests.
   (RR-20261006-23).
 - `MaxActiveCasts`, `MaxAbilities`, `MaxOwnedSpawns*`, and
   `MaxProcLedgerEntries` provide deterministic backpressure through
-  `ErrRuntimeCapacityExceeded`; `RootEventLimit` does so only for a direct
-  `ActivatePassive` call (event dispatch never stalls on it, see below).
+  `ErrRuntimeCapacityExceeded`. `MaxQueuedTasks` (default 2048) bounds
+  queued tasks that pin a root — passive activations not yet run and events
+  queued by `QueueExternalEvent`: at the bound `QueueExternalEvent` and
+  `ActivatePassive` return `ErrQueuedTasksFull` (which also matches
+  `ErrRuntimeCapacityExceeded` under `errors.Is`), and a routed passive
+  candidate is rejected — a `passive_suppressed` runtime event with Result
+  `queue_full`, `skill.passive.dispatch_rejected.total{reason="queue_full"}`
+  and a warning — while the event itself moves on (RR-20261006-55
+  follow-up 2).
 - Root event accounting is reclaimed only after no active cast, spawn, or
   scheduled task references the root, preserving once-per-root semantics.
-- **`RootEventLimit` must exceed `MaxActiveCasts + MaxOwnedSpawns +
-  MaxStopPendingSpawns`** (RR-20261006-55 follow-up). That sum bounds the
-  distinct roots casts and spawns can reference at once: every unfinished
-  cast pins one root (at most `MaxActiveCasts`); entity spawns — casting,
-  handed off or stop_pending — are at most `MaxOwnedSpawns`; a phase/cast
-  scoped spawn shares its cast's root while casting and can outlive the cast
-  only as stop_pending (at most `MaxStopPendingSpawns`); stopped and abandoned
-  records pin nothing, so `MaxAbandonedSpawns` is not part of it. With the
-  defaults the bound is 4096 + 128 + 256 = 4480 < 8192. `NewRuntime` panics
-  and `RestoreRuntime` fails (`ErrRuntimeLimitsInvalid`, plus
-  `ErrCheckpointCorrupt` on restore) when the relation does not hold; raise
-  `RootEventLimit` together with any of the three. Pending scheduled tasks —
-  passive activations not yet run, events queued by `QueueExternalEvent`,
-  ability overlay expiries — also pin roots and have no configured bound, so
-  a burst of many distinct-root events in one tick can still fill the table.
-  Then the event that cannot be tracked skips passive routing and moves on:
-  `skill.root_event.capacity_dropped.total` is counted and an error is
-  logged (before 2026-10-07 the Runtime stopped on that event and `Advance`
-  kept returning `ErrRuntimeCapacityExceeded`). Alert on that counter; a
-  non-zero value means passive procs were lost for those events.
-- Checkpoints use version 5 (2026-10-07: the unit-creating effect became
+- **`RootEventLimit > MaxActiveCasts + MaxOwnedSpawns +
+  MaxStopPendingSpawns + MaxQueuedTasks`** (RR-20261006-55 follow-ups 1
+  and 2). That sum bounds the distinct roots that can be referenced at once:
+  - every unfinished cast pins one root (at most `MaxActiveCasts`); its
+    scheduled tasks share that root;
+  - entity spawns — casting, handed off or stop_pending — are at most
+    `MaxOwnedSpawns`;
+  - a phase/cast scoped spawn shares its cast's root while casting and can
+    outlive the cast only as stop_pending (at most `MaxStopPendingSpawns`);
+  - queued tasks — passive activations not yet run and `QueueExternalEvent`
+    events — are at most `MaxQueuedTasks`, rejected at the entry when full;
+  - nothing else pins a root: stopped and abandoned spawn records (so
+    `MaxAbandonedSpawns` is not part of the sum), tasks left over by a cast
+    that already ended (they are no-ops when they run), ability overlay
+    expiries (they emit one `ability_enabled_changed` runtime event and never
+    touch passive routing or root accounting) and ammo recharges.
+
+  With the defaults the bound is 4096 + 128 + 256 + 2048 = 6528 < 8192.
+  `NewRuntime` panics and `RestoreRuntime` fails (`ErrRuntimeLimitsInvalid`,
+  plus `ErrCheckpointCorrupt` on restore) when the relation does not hold;
+  the message names all five options with their effective values. Raise
+  `RootEventLimit` together with any of the four. Under a legal
+  configuration the root table therefore always has an unreferenced root to
+  evict. The fallback stays as a defence: an event whose root cannot be
+  tracked skips passive routing and moves on, counting
+  `skill.root_event.capacity_dropped.total` and logging an error (before
+  2026-10-07 the Runtime stopped on that event and `Advance` kept returning
+  `ErrRuntimeCapacityExceeded`). The counter should stay at zero; a non-zero
+  value is a bug — alert on it.
+- Checkpoints use version 9 (2026-10-07: the payload carries
+  `max_queued_tasks`, and a restore whose queued tasks exceed it is corrupt;
+  versions 6–8, also 2026-10-07: one spawn record table, the `abandoned`
+  spawn status with `max_abandoned_spawns`, and `spawn_event_sequence`;
+  version 5, 2026-10-07: the unit-creating effect became
   `summon`, so a stored effect result's type `spawn_result` is now
   `summon_result` — see the
   [summon rename table](../feature/REFACTOR-2026-10-07-skill-summon-rename.md);

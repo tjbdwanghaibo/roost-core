@@ -30,7 +30,7 @@
 | [RR-20261006-58](RR-20261006-58.md) | P2 `generate --changed` 拿相对仓库根、带引号的 porcelain 路径比相对工程根的前缀，工程在子目录时只跑 registry 还报成功（F12 G3） | 已修复（`a461ee2f`），未发版 |
 | [RR-20261006-57](RR-20261006-57.md) | P2 `versions.codegen` 下限 v1.15.0（该版 core 无生成器），Makefile 按它跑生成器：钉 v1.15.x 的 make 全失败、钉 v1.16～v1.22 用旧生成器（F12 G2） | 已修复（`410392e0`），未发版；发版时 core 下限升 v1.23.1 |
 | [RR-20261006-56](RR-20261006-56.md) | P1 `//roost:nest` / `dao` / `redisdao` / `attribute` / protocol / table / rpc 标记键名拼错被静默忽略取缺省（`durabilty=strict` → async，`dbscop=sid` → 全局库）（F12 G1、F09-R4） | 已修复（`63573f33`），未发版 |
-| [RR-20261006-55](RR-20261006-55.md) | P2 被动候选入队失败（Program 不在 Host 能力表里）时 `dispatchEvent` 整个返回错误，cursor 不前进、Runtime 永久卡住；`payCostList` 付费后 drain 失败，已付费的启动被删、费用不退（F08-H+ H1） | 已修复（`50a0fe88`；后续 `b8e39056`：`RootEventLimit` 须大于施法 / 衍生物引用根数上界，表满兜底跳过事件并计数；施放中 Shutdown 跑 cancel 回调），未发版 |
+| [RR-20261006-55](RR-20261006-55.md) | P2 被动候选入队失败（Program 不在 Host 能力表里）时 `dispatchEvent` 整个返回错误，cursor 不前进、Runtime 永久卡住；`payCostList` 付费后 drain 失败，已付费的启动被删、费用不退（F08-H+ H1） | 已修复（`50a0fe88`；后续 `b8e39056`：`RootEventLimit` 须大于施法 / 衍生物引用根数上界，表满兜底跳过事件并计数；施放中 Shutdown 跑 cancel 回调；后续二 `e744704d`：排队任务上限计入上界、满了入口拒绝，`RemoveProgram` 跑 cancel 回调），未发版 |
 | [RR-20261006-54](RR-20261006-54.md) | P3 proc 施放的事件 ID 与第 0 号效果事件 ID 相同（F08-R R4） | 已修复（`50a0fe88`），未发版 |
 | [RR-20261006-53](RR-20261006-53.md) | P2 衍生物回调不继承施法的 RootEventID / ProcDepth，回调效果每 tick、每目标同一 EventID；`max_depth` 管不住衍生物链（F08-R R3） | 已修复（`50a0fe88`），未发版 |
 | [RR-20261006-52](RR-20261006-52.md) | P2 运动衍生物启动步 Frame 之后被 Host 拒绝，Host 侧已登记的衍生物无人停止（F08-R R2） | 已修复（`50a0fe88`），未发版 |
