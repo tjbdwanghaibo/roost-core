@@ -49,6 +49,11 @@ type LockstepBotConfig struct {
 	// rather than growing: a sink that has refused output for hundreds of
 	// frames is not a transient failure (U-0198, RR-20260914-09).
 	MaxPendingApply int
+	// CatchupRetryPackets re-sends a catch-up request when the gap it asked
+	// to fill is still open after this many more broadcasts (<= 0 selects
+	// 64). The server abandons a catch-up whose sends keep failing; without
+	// a retry the bot would wait on it forever (RR-20261006-65).
+	CatchupRetryPackets int
 }
 
 // ErrLockstepBotTerminal marks a bot that must not be used again: its
@@ -100,9 +105,13 @@ type LockstepBot struct {
 	assembler *lockstep.FrameAssembler
 	hasher    *FrameHasher
 	stats     LockstepBotStats
-	// catchupFrom dedups catch-up requests: while one is outstanding for
-	// this frame, further unhealable-gap errors stay quiet.
-	catchupFrom lockstep.FrameID
+	// catchupFrom dedups catch-up requests: while one is outstanding (and
+	// Next is either stuck at or advancing past it), further gap signals
+	// stay quiet — until catchupRetry packets pass with Next stuck, then the
+	// request is repeated. Cleared when the gap closes.
+	catchupFrom  lockstep.FrameID
+	catchupWait  int
+	catchupRetry int
 
 	// pending holds frames the assembler has released but apply has not
 	// finished with, and cursor is where the first of them stopped. The
@@ -132,17 +141,25 @@ func NewLockstepBot(cfg LockstepBotConfig) (*LockstepBot, error) {
 	if maxPending <= 0 {
 		maxPending = 256
 	}
+	retry := cfg.CatchupRetryPackets
+	if retry <= 0 {
+		retry = 64
+	}
 	return &LockstepBot{
-		cfg:        cfg,
-		assembler:  lockstep.NewFrameAssembler(cfg.MaxBuffer),
-		hasher:     NewFrameHasher(),
-		maxPending: maxPending,
+		cfg:          cfg,
+		assembler:    lockstep.NewFrameAssembler(cfg.MaxBuffer),
+		hasher:       NewFrameHasher(),
+		maxPending:   maxPending,
+		catchupRetry: retry,
 	}, nil
 }
 
 // HandleBroadcast ingests one broadcast packet (or catch-up page). Frames
-// that became releasable are applied in order; an unhealable gap triggers
-// one catch-up request per gap instead of failing the bot.
+// that became releasable are applied in order. Any gap still open after the
+// packet — frames buffered ahead of a missing one, which redundancy did not
+// heal — triggers a catch-up request from the missing frame, once per gap
+// (repeated if the gap outlives CatchupRetryPackets more packets), instead
+// of waiting for the out-of-order buffer to overflow (RR-20261006-65).
 func (b *LockstepBot) HandleBroadcast(packet []byte) error {
 	if b.terminal != nil {
 		return b.terminal
@@ -151,10 +168,7 @@ func (b *LockstepBot) HandleBroadcast(packet []byte) error {
 	if applyErr := b.apply(frames); applyErr != nil {
 		return applyErr
 	}
-	if err != nil {
-		return b.requestCatchup(err)
-	}
-	return nil
+	return b.checkGap(err)
 }
 
 // HandleFrames is HandleBroadcast for already-decoded frames.
@@ -166,10 +180,21 @@ func (b *LockstepBot) HandleFrames(frames []lockstep.Frame) error {
 	if applyErr := b.apply(released); applyErr != nil {
 		return applyErr
 	}
-	if err != nil {
-		return b.requestCatchup(err)
+	return b.checkGap(err)
+}
+
+// checkGap asks for a catch-up when the assembler holds frames past a
+// missing one, or reported an ingest error (overflow, undecodable packet).
+func (b *LockstepBot) checkGap(ingestErr error) error {
+	if ingestErr == nil && !b.assembler.Gap() {
+		b.catchupFrom, b.catchupWait = 0, 0
+		return nil
 	}
-	return nil
+	cause := ingestErr
+	if cause == nil {
+		cause = fmt.Errorf("frame gap at %d", b.assembler.Next())
+	}
+	return b.requestCatchup(cause)
 }
 
 // apply drains newly released frames on top of whatever a previous call
@@ -283,13 +308,22 @@ func cloneFrame(frame lockstep.Frame) lockstep.Frame {
 
 func (b *LockstepBot) requestCatchup(cause error) error {
 	from := b.assembler.Next()
+	if b.catchupFrom != 0 && from > b.catchupFrom {
+		// The outstanding catch-up is filling the gap page by page: keep
+		// waiting on it rather than asking again from every new Next.
+		b.catchupFrom, b.catchupWait = from, 0
+		return nil
+	}
 	if b.catchupFrom == from {
-		return nil // already requested for this gap
+		b.catchupWait++
+		if b.catchupWait < b.catchupRetry {
+			return nil // already requested for this gap
+		}
 	}
 	if err := b.cfg.Sink.RequestCatchup(from); err != nil {
 		return fmt.Errorf("robot lockstep: request catch-up from frame %d: %w (cause: %v)", from, err, cause)
 	}
-	b.catchupFrom = from
+	b.catchupFrom, b.catchupWait = from, 0
 	b.stats.CatchupsRequested++
 	return nil
 }

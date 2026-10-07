@@ -53,8 +53,11 @@ const (
 	// receives per tick. Must be > 1: every tick also cuts a new frame, so
 	// a batch of 1 never closes the gap.
 	CatchupBatchFrames = 8
-	// MaxDatagramBytes is the packet bound the room checks its worst case
-	// against (depth × seats × payload + overhead).
+	// MaxDatagramBytes is the datagram PAYLOAD bound the room checks its
+	// worst case against (depth × seats × payload + overhead) — what the
+	// sender accepts after its own envelope. A sender that declares its
+	// bound (nettransport.DatagramPayloadLimiter: KCP / QUIC / UDP) needs
+	// none; this demo pushes frames over the player TCP session.
 	MaxDatagramBytes = lockstep.DefaultMaxDatagramBytes
 )
 

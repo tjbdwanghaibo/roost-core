@@ -7,7 +7,15 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+// testSendWait makes Tick wait for every catch-up page it launches, so
+// in-memory transports behave synchronously and tests can count pages per
+// tick deterministically. The asynchronous path (a page outliving the wait)
+// is covered by TestRoomPromiseSlowCatchupDoesNotStallTick and the
+// end-to-end gate.
+const testSendWait = time.Minute
 
 type recordingTransport struct {
 	datagrams map[nettransport.SessionID][][]byte
@@ -45,6 +53,7 @@ func newTestRoom(t *testing.T, transport *recordingTransport, onDesync func(Desy
 		Sequencer:          SequencerConfig{Players: []PlayerID{1, 2}, MaxInputBytes: 16},
 		RedundancyDepth:    3,
 		CatchupBatchFrames: 10,
+		CatchupSendWait:    testSendWait,
 		Datagrams:          transport,
 		Reliable:           transport,
 		OnDesync:           onDesync,
@@ -366,6 +375,7 @@ func TestRoomCatchupBoundsAndRetryBudget(t *testing.T) {
 		Sequencer:          SequencerConfig{Players: []PlayerID{1}, MaxInputBytes: 16},
 		CatchupBatchFrames: 4,
 		CatchupMaxFailures: 2,
+		CatchupSendWait:    testSendWait,
 		Datagrams:          transport,
 		Reliable:           transport,
 	})

@@ -14,7 +14,13 @@ type DesyncDetector struct {
 	// backing it. Choose quorum > seats/2 (the kit Room derives it that
 	// way) and the majority can never flip afterwards — a minority that
 	// reports first can no longer frame an honest player.
-	quorum        int
+	quorum int
+	// seats is the room's seat count (0 = unknown, standalone use). Once
+	// every seat has reported a frame and no hash reached quorum, more
+	// reports can never come and the frame is ruled with no majority —
+	// otherwise a two-seat room (quorum 2) could never rule a 1:1 split
+	// (RR-20261006-64).
+	seats         int
 	reports       map[FrameID]map[PlayerID]uint64
 	trimmedBefore FrameID
 }
@@ -27,8 +33,15 @@ type DesyncVerdict struct {
 	// the match is unsalvageable regardless of which side is "right".
 	Majority uint64
 	// Outliers are the players whose report disagrees with the majority, in
-	// ascending order.
+	// ascending order. On a NoMajority verdict it is every seat.
 	Outliers []PlayerID
+	// NoMajority marks a frame every seat reported without any hash
+	// reaching quorum (a two-seat room whose hashes differ, a 2:2 split,
+	// all different). Nobody can be singled out: every seat is an outlier,
+	// Majority is zero, and the match should be treated as diverged
+	// (abort, or resync from authoritative state) rather than kicking one
+	// player.
+	NoMajority bool
 }
 
 // NewDesyncDetector builds a detector requiring quorum reports per frame
@@ -44,7 +57,9 @@ func NewDesyncDetector(quorum int) *DesyncDetector {
 // first report per (frame, player) wins — later duplicates are ignored, so
 // a client cannot revise its story. It returns a verdict once some hash is
 // backed by at least quorum agreeing reports; later reports re-judge with
-// the larger set. Frames already trimmed are tombstoned: late reports for
+// the larger set. When the seat count is known (the Room sets it) and every
+// seat reported different hashes with none at quorum, it returns a
+// NoMajority verdict naming every seat. Frames already trimmed are tombstoned: late reports for
 // them are ignored, so a colluding pair cannot rebuild a "majority" on a
 // frame whose honest reports were already reclaimed.
 func (d *DesyncDetector) Report(player PlayerID, frame FrameID, hash uint64) (DesyncVerdict, bool) {
@@ -68,6 +83,9 @@ func (d *DesyncDetector) Report(player PlayerID, frame FrameID, hash uint64) (De
 		}
 	}
 	if best < d.quorum {
+		if d.seats > 0 && len(reports) >= d.seats && len(counts) > 1 {
+			return d.noMajority(frame, reports), true
+		}
 		return DesyncVerdict{}, false
 	}
 	return d.judge(frame, reports), true
@@ -85,6 +103,16 @@ func (d *DesyncDetector) Trim(before FrameID) {
 			delete(d.reports, frame)
 		}
 	}
+}
+
+// noMajority rules a fully reported frame on which no hash reached quorum.
+func (d *DesyncDetector) noMajority(frame FrameID, reports map[PlayerID]uint64) DesyncVerdict {
+	verdict := DesyncVerdict{Frame: frame, NoMajority: true}
+	for player := range reports {
+		verdict.Outliers = append(verdict.Outliers, player)
+	}
+	slices.Sort(verdict.Outliers)
+	return verdict
 }
 
 func (d *DesyncDetector) judge(frame FrameID, reports map[PlayerID]uint64) DesyncVerdict {

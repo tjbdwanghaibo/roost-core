@@ -14,6 +14,11 @@ import (
 
 const udpEnvelopeHeaderSize = 16 // session ID + packet sequence
 
+// UDPEnvelopeOverhead is what the AEAD UDP envelope adds to every payload:
+// the session / sequence header plus the AES-GCM tag (the only AEAD the
+// protector builds).
+const UDPEnvelopeOverhead = udpEnvelopeHeaderSize + 16
+
 // AEADSessionProtector authenticates the UDP routing header, encrypts the
 // replication packet, and rejects duplicate or stale packets with a 64-packet
 // replay window. SendSalt and ReceiveSalt must be exchanged by an authenticated

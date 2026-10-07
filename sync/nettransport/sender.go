@@ -37,6 +37,16 @@ type DatagramSender interface {
 	SendDatagram(context.Context, SessionID, []byte) error
 }
 
+// DatagramPayloadLimiter is implemented by datagram senders that know the
+// largest payload they accept — after their own envelope (AEAD header and
+// tag, FEC / OOB framing). Callers that must size packets up front (the
+// lockstep Room's broadcast budget) read it instead of assuming a constant:
+// the KCP and QUIC transports default to DefaultMaxDatagram, and the AEAD UDP
+// transport's 1232-byte packet leaves 1232-UDPEnvelopeOverhead.
+type DatagramPayloadLimiter interface {
+	MaxDatagramPayload() int
+}
+
 type DatagramBatchSender interface {
 	SendDatagramBatch(context.Context, SessionID, [][]byte) error
 }
@@ -72,6 +82,15 @@ func (transport CompositeTransport) SendDatagramBatch(ctx context.Context, sessi
 		}
 	}
 	return nil
+}
+
+// MaxDatagramPayload forwards the datagram lane's declared bound (0 when it
+// declares none).
+func (transport CompositeTransport) MaxDatagramPayload() int {
+	if limiter, ok := transport.Datagrams.(DatagramPayloadLimiter); ok && !isNilInterface(transport.Datagrams) {
+		return limiter.MaxDatagramPayload()
+	}
+	return 0
 }
 
 func (transport CompositeTransport) SendReliable(ctx context.Context, session SessionID, payload []byte) error {

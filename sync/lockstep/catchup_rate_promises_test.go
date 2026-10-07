@@ -17,7 +17,7 @@ func TestRoomPromiseCatchupBatchMustOutpaceFrameProduction(t *testing.T) {
 			tr := newRecordingTransport()
 			r, err := NewRoom(RoomConfig{
 				Sequencer:          SequencerConfig{Players: []PlayerID{1}, MaxInputBytes: 8},
-				CatchupBatchFrames: batch, Datagrams: tr, Reliable: tr,
+				CatchupBatchFrames: batch, CatchupSendWait: testSendWait, Datagrams: tr, Reliable: tr,
 			})
 			if err != nil {
 				if batch == 1 && errors.Is(err, ErrRoomConfigInvalid) {

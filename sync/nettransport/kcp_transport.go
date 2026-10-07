@@ -275,6 +275,14 @@ func (transport *KCPTransport) SendDatagram(ctx context.Context, sessionID Sessi
 	return nil
 }
 
+// MaxDatagramPayload is the largest datagram payload SendDatagram accepts.
+func (transport *KCPTransport) MaxDatagramPayload() int {
+	if transport == nil {
+		return 0
+	}
+	return transport.config.MaxDatagramBytes
+}
+
 func (transport *KCPTransport) SendDatagramBatch(ctx context.Context, sessionID SessionID, packets [][]byte) error {
 	for _, packet := range packets {
 		if err := transport.SendDatagram(ctx, sessionID, packet); err != nil {

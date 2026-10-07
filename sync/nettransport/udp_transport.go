@@ -177,6 +177,15 @@ func (transport *UDPTransport) SendDatagram(ctx context.Context, session Session
 	return nil
 }
 
+// MaxDatagramPayload is the largest payload SendDatagram accepts: the
+// packet bound minus the AEAD envelope (header + tag) Seal adds.
+func (transport *UDPTransport) MaxDatagramPayload() int {
+	if transport == nil {
+		return 0
+	}
+	return transport.config.MaxPacketBytes - UDPEnvelopeOverhead
+}
+
 func (transport *UDPTransport) SendDatagramBatch(ctx context.Context, session SessionID, packets [][]byte) error {
 	for _, packet := range packets {
 		if err := transport.SendDatagram(ctx, session, packet); err != nil {

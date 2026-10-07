@@ -183,6 +183,14 @@ func (transport *QUICTransport) SendDatagram(ctx context.Context, session Sessio
 	return nil
 }
 
+// MaxDatagramPayload is the largest datagram payload SendDatagram accepts.
+func (transport *QUICTransport) MaxDatagramPayload() int {
+	if transport == nil {
+		return 0
+	}
+	return transport.config.MaxDatagramBytes
+}
+
 func (transport *QUICTransport) SendDatagramBatch(ctx context.Context, session SessionID, packets [][]byte) error {
 	for _, packet := range packets {
 		if err := transport.SendDatagram(ctx, session, packet); err != nil {
