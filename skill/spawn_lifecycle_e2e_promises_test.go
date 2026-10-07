@@ -9,7 +9,8 @@ package skill
 // 每个 tick 断言：
 //
 //   - 效果按 tick 结算：衍生物每一步的 tick 回调在它该跑的每个 tick 恰好跑一次，不丢、不重复，与什么时候移交无关；
-//     停止之后不再结算；到期跑一次 end 回调，Cancel / Interrupt 跑一次 cancel 回调；
+//     停止之后不再结算；到期跑一次 end 回调，Cancel / Interrupt / Shutdown（施放中与移交后）跑一次 cancel 回调
+//     （施放中 Shutdown 这一格是 RR-20261006-55 后续补的断言，修前 0 次）；
 //   - 事件链：衍生物回调里的效果继承施法的 RootEventID / ProcDepth，每次结算的 EventID 互不相同，父事件存在且
 //     不是自己；proc 施放的第 0 号效果不与施法事件撞号；max_depth 与 once_per_root 按“衍生物属于施法的因果链”生效；
 //   - Host 侧状态：MemoryHost 里仍 active 的衍生物，恰好是 Runtime 仍负责的衍生物（running / stop_pending），没有残留。
@@ -159,7 +160,7 @@ func spawnLifecycleScenarios() []spawnLifecycleScenario {
 		{name: "wait past expiry", tail: wait(10), stopTick: -1, wantEnd: 1},
 		{name: "cancel while casting", tail: wait(10), actionTick: 2, action: cancel, stopTick: 2, wantCancel: 1},
 		{name: "interrupt while casting", tail: wait(10), actionTick: 2, action: interrupt, stopTick: 2, wantCancel: 1},
-		{name: "shutdown while casting", tail: wait(10), actionTick: 2, action: shutdown, stopTick: 2, wantCancel: -1},
+		{name: "shutdown while casting", tail: wait(10), actionTick: 2, action: shutdown, stopTick: 2, wantCancel: 1},
 		{name: "shutdown after handoff", tail: `{"flow":"finish"}`, actionTick: 2, action: shutdown, stopTick: 2, wantCancel: 1},
 	}
 }

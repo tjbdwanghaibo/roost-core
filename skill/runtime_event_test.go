@@ -1,7 +1,6 @@
 package skill
 
 import (
-	"errors"
 	"testing"
 )
 
@@ -34,35 +33,45 @@ func TestEventContextCopiesSortsAndDeduplicatesTags(t *testing.T) {
 	}
 }
 
-func TestCollectHostEventsDoesNotAdvanceOrCompactFailedEvent(t *testing.T) {
+// TestCollectHostEventsSkipsEventWhenEveryRootIsPinned 是 TestCollectHostEventsDoesNotAdvanceOrCompactFailedEvent 按
+// 新语义的改写（RR-20261006-55 后续，维护者选 A）。原用例约定：根事件表满且每个根都被引用时，collectHostEvents 报
+// ErrRuntimeCapacityExceeded、cursor 不动、事件不被压缩，等引用结束后原地重试——Runtime 停在这个事件上。现在配置保证
+// 施法 / 衍生物钉住的根放得下（rootEventReferenceBound）；排程任务（这里是 QueueExternalEvent 排在之后 tick 的外部事件）
+// 钉住的根没有配置上界，表仍可能被占满，这时跳过这个事件的被动路由、计 skill.root_event.capacity_dropped.total、写一条
+// Error 日志，事件照常前进、被压缩，后面的事件照常派发。
+func TestCollectHostEventsSkipsEventWhenEveryRootIsPinned(t *testing.T) {
 	host := NewMemoryHostWithOptions(AuthorityIdentity{}, MemoryHostOptions{CompactEvents: true})
-	runtime := NewRuntime(host, RuntimeOptions{RootEventLimit: 1})
-	runtime.rootEventCounts[1] = 1
-	runtime.rootEventOrder = append(runtime.rootEventOrder, 1)
-	runtime.casts[1] = &castInstance{id: 1, status: CastRunning, eventContext: EventContext{RootEventID: 1}}
-
+	// 合法配置：RootEventLimit 4 > MaxActiveCasts 1 + MaxOwnedSpawns 1 + MaxStopPendingSpawns 1。
+	runtime := NewRuntime(host, RuntimeOptions{RootEventLimit: 4, MaxActiveCasts: 1, MaxOwnedSpawns: 1, MaxStopPendingSpawns: 1})
+	for root := EventID(1); root <= 4; root++ {
+		// 之后 tick 的外部事件钉住根 1～4（scheduledTaskRootLocked），宿主事件把它们记进根事件表。
+		if err := runtime.QueueExternalEvent(EventContext{EventID: 100 + root, RootEventID: root, Tick: 50}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	host.mutex.Lock()
-	host.appendContextEventLocked("capacity_probe", 0, 0, EventContext{EventID: 2, RootEventID: 2})
+	for root := EventID(1); root <= 4; root++ {
+		host.appendContextEventLocked("pinned_root", 0, 0, EventContext{EventID: root, RootEventID: root})
+	}
+	host.appendContextEventLocked("capacity_probe", 0, 0, EventContext{EventID: 5, RootEventID: 5})
+	host.appendContextEventLocked("after_probe", 0, 0, EventContext{EventID: 6, RootEventID: 1})
 	host.mutex.Unlock()
+	dropped := counterValue(MetricRootEventCapacityDropped)
 
-	if err := runtime.collectHostEvents(); !errors.Is(err, ErrRuntimeCapacityExceeded) {
-		t.Fatalf("collect error = %v, want capacity error", err)
-	}
-	if runtime.eventCursor != 0 {
-		t.Fatalf("event cursor advanced to %d after failed dispatch", runtime.eventCursor)
-	}
-	if events := host.Events(0); len(events) != 1 || events[0].Cursor != 1 {
-		t.Fatalf("failed event was compacted: %+v", events)
-	}
-
-	delete(runtime.casts, 1)
-	if err := runtime.collectHostEvents(); err != nil {
-		t.Fatalf("retry collect: %v", err)
-	}
-	if runtime.eventCursor != 1 {
-		t.Fatalf("event cursor = %d, want 1", runtime.eventCursor)
+	runtime.collectHostEvents()
+	if runtime.eventCursor != 6 {
+		t.Fatalf("event cursor = %d, want 6 (past the skipped event and the one after it); a full root table must not stall the event stream", runtime.eventCursor)
 	}
 	if events := host.Events(0); len(events) != 0 {
-		t.Fatalf("successful event was not compacted: %+v", events)
+		t.Fatalf("dispatched events were not compacted: %+v", events)
+	}
+	if got := counterValue(MetricRootEventCapacityDropped) - dropped; got != 1 {
+		t.Fatalf("%s grew by %d, want 1", MetricRootEventCapacityDropped, got)
+	}
+	if _, tracked := runtime.rootEventCounts[5]; tracked {
+		t.Fatal("the skipped event's root was tracked")
+	}
+	if got := runtime.rootEventCounts[1]; got != 2 {
+		t.Fatalf("root 1 count = %d, want 2 (the event after the skipped one was dispatched)", got)
 	}
 }

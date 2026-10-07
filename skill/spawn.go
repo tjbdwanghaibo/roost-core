@@ -304,6 +304,16 @@ func (runtime *Runtime) terminateSpawn(cast *castInstance, spawn *SpawnInstance,
 	return errors.Join(detachErr, areaErr, callbackErr, stopErr)
 }
 
+// spawnCancelCallbackEvent 是衍生物被提前停止（Cancel / Interrupt / 施法失败 / goto / Shutdown）时要跑的回调：entity
+// 衍生物不论施放中还是已移交都跑一次 cancel，phase / cast 作用域的衍生物不跑。Shutdown 之前只给已移交的跑，施放中的
+// 被 Shutdown 停下时一次 cancel 也没有，与 Cancel / Interrupt 停同一个衍生物不一致（RR-20261006-55 后续，维护者选 A）。
+func spawnCancelCallbackEvent(spawn *SpawnInstance) string {
+	if spawn.Scope == SpawnScopeEntity {
+		return "cancel"
+	}
+	return ""
+}
+
 func (runtime *Runtime) stopSpawns(cast *castInstance, includeCastScope bool) error {
 	return runtime.stopScopedSpawns(cast, includeCastScope, includeCastScope)
 }
@@ -320,11 +330,7 @@ func (runtime *Runtime) stopScopedSpawns(cast *castInstance, includeCastScope, i
 	var firstErr error
 	for _, spawnID := range spawnIDs {
 		spawn := runtime.spawns.get(spawnID)
-		callbackEvent := ""
-		if spawn.Scope == SpawnScopeEntity {
-			callbackEvent = "cancel"
-		}
-		if err := runtime.requestSpawnStop(cast, spawn, StopCauseCancel, callbackEvent); err != nil {
+		if err := runtime.requestSpawnStop(cast, spawn, StopCauseCancel, spawnCancelCallbackEvent(spawn)); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}

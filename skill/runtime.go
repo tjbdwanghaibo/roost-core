@@ -51,7 +51,9 @@ type RuntimeOptions struct {
 	// with it.
 	CompletedCastLimit int
 	// RootEventLimit bounds once-per-root accounting after inactive roots have
-	// been reclaimed.
+	// been reclaimed. It must exceed MaxActiveCasts + MaxOwnedSpawns +
+	// MaxStopPendingSpawns (the most roots casts and spawns can reference at
+	// once); NewRuntime panics and RestoreRuntime fails otherwise. Default 8192.
 	RootEventLimit int
 	// CheckpointMaxBytes and CheckpointMaxRecords bound recovery input before
 	// it can allocate unbounded object graphs.
@@ -262,8 +264,14 @@ type Runtime struct {
 	hostAdmitted map[*Program]struct{}
 }
 
+// NewRuntime 构造一个从宿主当前事件前沿开始的 Runtime。上限之间的关系不成立时（RootEventLimit 不大于
+// MaxActiveCasts + MaxOwnedSpawns + MaxStopPendingSpawns，见 validateRootEventLimit）以 ErrRuntimeLimitsInvalid panic：
+// 这是装配期的配置错误，错误信息点出相关选项。
 func NewRuntime(host Host, options RuntimeOptions) *Runtime {
 	runtime := newRuntimeCore(host, options)
+	if err := validateRootEventLimit(runtime.options); err != nil {
+		panic(err)
+	}
 	// Fresh runtimes start at the host's current event frontier: everything
 	// already in the queue predates this runtime and is never replayed, so it
 	// may be compacted away. RestoreRuntime must NOT take this path — a

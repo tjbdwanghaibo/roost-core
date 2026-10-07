@@ -20,7 +20,7 @@ func TestParseLimitsRejectWorkBeforeSemanticDecode(t *testing.T) {
 }
 
 func TestRuntimeRetentionIsBounded(t *testing.T) {
-	runtime := NewRuntime(nil, RuntimeOptions{RuntimeEventLimit: 2, CastEventLimit: 2, CompletedCastLimit: 1, RootEventLimit: 2})
+	runtime := NewRuntime(nil, RuntimeOptions{RuntimeEventLimit: 2, CastEventLimit: 2, CompletedCastLimit: 1})
 	runtime.appendRuntimeEvent(RuntimeEvent{Kind: "1"})
 	runtime.appendRuntimeEvent(RuntimeEvent{Kind: "2"})
 	runtime.appendRuntimeEvent(RuntimeEvent{Kind: "3"})

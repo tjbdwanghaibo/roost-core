@@ -18,7 +18,7 @@
 | [RR-20261006-58](RR-20261006-58.md) | `git status --porcelain=v1 -z -- .` + `rev-parse --show-prefix`，rename 两侧都算改动 | 已修复（`a461ee2f`），未发版 |
 | [RR-20261006-57](RR-20261006-57.md) | Makefile `go run …/cmd/roost@$(CORE_VERSION)` 取 `versions.core`；`versions.codegen` 写了即拒绝、`project upgrade` 删掉；minimum lane 实跑 make 目标 | 已修复（`410392e0`），未发版；发版时 core 下限升 v1.23.1 |
 | [RR-20261006-56](RR-20261006-56.md) | `marker.Spec` / `Parse` / `CheckFile`：15 种标记的选项统一拆分，未知 / 重复键报错带 `文件:行`；守卫每种标记喂拼错的键 | 已修复（`63573f33`），未发版 |
-| [RR-20261006-55](RR-20261006-55.md) | 被拒候选记 `passive_suppressed` + `skill.passive.dispatch_rejected.total` + Warn，事件前进；`drainHostEvents` 不返回错误，付费后不会删 cast；根事件表满保持原地重试 | 已修复（`50a0fe88`），未发版 |
+| [RR-20261006-55](RR-20261006-55.md) | 被拒候选记 `passive_suppressed` + `skill.passive.dispatch_rejected.total` + Warn，事件前进；`drainHostEvents` 不返回错误，付费后不会删 cast；后续：`RootEventLimit > MaxActiveCasts + MaxOwnedSpawns + MaxStopPendingSpawns` 构造 / 恢复校验，表满兜底跳过事件、计 `skill.root_event.capacity_dropped.total`；施放中 Shutdown 跑 cancel 回调 | 已修复（`50a0fe88`、`SKROOT_COMMIT`），未发版 |
 | [RR-20261006-54](RR-20261006-54.md) | proc 施放事件 ID 改为 `castID<<32` | 已修复（`50a0fe88`），未发版 |
 | [RR-20261006-53](RR-20261006-53.md) | 衍生物以施法事件为底，回调 / 回调效果用 `1<<63 \| 序号`（随 checkpoint 保存）；活着的衍生物钉住根 | 已修复（`50a0fe88`），未发版 |
 | [RR-20261006-52](RR-20261006-52.md) | `startEntitySpawn` 先入表再跑启动步，失败经 `requestSpawnStop` | 已修复（`50a0fe88`），未发版 |

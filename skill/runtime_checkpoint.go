@@ -429,6 +429,9 @@ func RestoreRuntime(host Host, options RuntimeOptions, checkpoint RuntimeCheckpo
 	options.SpawnStopRetryLimit = payload.SpawnStopRetryLimit
 	options.MaxStopPendingSpawns = payload.MaxStopPendingSpawns
 	options.MaxAbandonedSpawns = payload.MaxAbandonedSpawns
+	if err := validateRootEventLimit(options); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrCheckpointCorrupt, err)
+	}
 	// newRuntimeCore, not NewRuntime: the fresh-runtime path fast-forwards
 	// the event cursor to the host's frontier and compacts everything before
 	// it — which would DELETE the events emitted between the checkpoint and

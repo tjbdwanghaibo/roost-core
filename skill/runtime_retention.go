@@ -1,5 +1,14 @@
 package skill
 
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrRuntimeLimitsInvalid：RuntimeOptions 的上限之间的关系不成立（RootEventLimit 不大于被引用根数的上界），
+// NewRuntime 以它 panic，RestoreRuntime 把它与 ErrCheckpointCorrupt 一起返回。
+var ErrRuntimeLimitsInvalid = errors.New("skill: invalid runtime limits")
+
 // RuntimeRetentionStats exposes bounded-state pressure for production
 // monitoring without leaking mutable runtime internals.
 type RuntimeRetentionStats struct {
@@ -134,6 +143,34 @@ func (runtime *Runtime) castEvictableLocked(cast *castInstance) bool {
 	return !runtime.castHasRunningSpawnLocked(cast.id)
 }
 
+// rootEventReferenceBound 是同一时刻被施法 / 衍生物引用（rootEventReferencedLocked）的不同根数的上界：
+//   - 未结束的施法：每个施法引用一个根，未结束的施法数不超过 MaxActiveCasts（startLocked 准入；每条终态路径都经
+//     markAbilityCastFinished 减计数）；
+//   - entity 衍生物（施放中、已移交、待停止）：不超过 MaxOwnedSpawns（hasOwnedSpawnCapacityExcluding 按全部仍由 Runtime
+//     负责的分区计数）；
+//   - phase / cast 作用域的衍生物：施放中的跟所属施法同一个根，已算在施法里；所属施法结束后只可能留成待停止，
+//     不超过 MaxStopPendingSpawns（makeRoomForStopPendingLocked）；
+//   - 已停止 / 已放弃的记录不引用根，MaxAbandonedSpawns 不进上界。
+//
+// 排程任务（未执行的被动激活、QueueExternalEvent 排的外部事件、能力覆盖到期、已结束施法残留的任务）也引用根，但它们的
+// 数量没有配置上限，不在上界里；表被它们占满时由 dispatchEvent 的兜底跳过事件（RR-20261006-55 后续）。
+func rootEventReferenceBound(options RuntimeOptions) int64 {
+	return int64(options.MaxActiveCasts) + int64(options.MaxOwnedSpawns) + int64(options.MaxStopPendingSpawns)
+}
+
+// validateRootEventLimit 要求 RootEventLimit 大于 rootEventReferenceBound：表满时至少有一个根不被施法 / 衍生物引用、
+// 可以淘汰，“表满且全部被施法 / 衍生物引用”在合法配置下不会发生。NewRuntime 与 RestoreRuntime 在默认值补齐之后调用。
+func validateRootEventLimit(options RuntimeOptions) error {
+	bound := rootEventReferenceBound(options)
+	if int64(options.RootEventLimit) > bound {
+		return nil
+	}
+	return fmt.Errorf("%w: RootEventLimit (%d) must exceed MaxActiveCasts (%d) + MaxOwnedSpawns (%d) + MaxStopPendingSpawns (%d) = %d, the most roots casts and spawns can reference at once; raise RootEventLimit or lower those limits",
+		ErrRuntimeLimitsInvalid, options.RootEventLimit, options.MaxActiveCasts, options.MaxOwnedSpawns, options.MaxStopPendingSpawns, bound)
+}
+
+// trackRootEventLocked 把根记进根事件表；表满时淘汰最早一个不再被引用的根（连同它的 proc 账本）。仍然淘汰不出来时
+// 返回 ErrRuntimeCapacityExceeded：validateRootEventLimit 保证施法 / 衍生物占不满，只有排程任务钉住的根能走到这里。
 func (runtime *Runtime) trackRootEventLocked(root EventID) error {
 	if _, exists := runtime.rootEventCounts[root]; exists {
 		runtime.rootEventCounts[root]++

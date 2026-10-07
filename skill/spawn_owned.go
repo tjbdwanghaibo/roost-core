@@ -360,9 +360,7 @@ func (runtime *Runtime) advanceOwnedSpawns() error {
 		}
 		spawn.NextTick = saturatingTickAdd(runtime.currentTick, interval)
 	}
-	if err := runtime.collectHostEvents(); err != nil {
-		return err
-	}
+	runtime.collectHostEvents()
 	return runtime.reapOwnedSpawns()
 }
 
@@ -585,7 +583,7 @@ func (runtime *Runtime) RemoveProgram(programID string) error {
 	return firstErr
 }
 
-// Shutdown 请求停止全部仍在宿主侧的衍生物（含 stop_pending，已移交的跑 cancel 回调），再让宿主清理比赛的 owned 实体。
+// Shutdown 请求停止全部仍在宿主侧的衍生物（含 stop_pending；entity 衍生物不论施放中还是已移交都跑一次 cancel 回调），再让宿主清理比赛的 owned 实体。
 // 宿主拒绝停止时返回第一个错误（errors.Is 宿主的错误），停不下的衍生物留成 stop_pending 并写进 checkpoint：
 // 继续 Advance、或 Checkpoint 后在新进程 RestoreRuntime 再 Advance，Runtime 都会按原来的重试时刻接着停；再调用一次
 // Shutdown 会立即再请求一次。Shutdown 不在原地同步重试，理由见 runtime_spawn_stop.go。已放弃的衍生物
@@ -605,11 +603,8 @@ func (runtime *Runtime) Shutdown() error {
 			// 那条已放弃的记录，停止请求对它是空操作；删记录只在 spawnDropSites 登记的安全点。
 			continue
 		}
-		callbackEvent := ""
-		if spawn.handedOff {
-			callbackEvent = "cancel"
-		}
-		if err := runtime.requestSpawnStop(nil, spawn, StopCauseCancel, callbackEvent); err != nil && firstErr == nil {
+		// 施放中与已移交的 entity 衍生物一样跑一次 cancel 回调（spawnCancelCallbackEvent）；待停止的不再跑回调（requestSpawnStop）。
+		if err := runtime.requestSpawnStop(nil, spawn, StopCauseCancel, spawnCancelCallbackEvent(spawn)); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

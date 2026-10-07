@@ -317,19 +317,17 @@ func (runtime *Runtime) advanceHost(tick Tick) error {
 		return err
 	}
 	runtime.currentTick = tick
-	if err := runtime.collectHostEvents(); err != nil {
-		return err
-	}
+	runtime.collectHostEvents()
 	runtime.retrySpawnStopsLocked()
 	return runtime.advanceOwnedSpawns()
 }
 
-// collectHostEvents 是 tick 推进时的事件派发（事件记进每个运行中的 cast）。被拒的被动候选只告警、事件照常前进；唯一的错误
-// 是根事件表满，事件留在原处下次重试（dispatchEvent，RR-20261006-55）。
-func (runtime *Runtime) collectHostEvents() error {
+// collectHostEvents 是 tick 推进时的事件派发（事件记进每个运行中的 cast）。派发不返回错误：被拒的被动候选只告警，根事件表
+// 满且都被引用时跳过这个事件的被动路由，事件都照常前进（dispatchEvent，RR-20261006-55 及其后续）。
+func (runtime *Runtime) collectHostEvents() {
 	events := runtime.host.Events(runtime.eventCursor)
 	if len(events) == 0 {
-		return nil
+		return
 	}
 	castIDs := make([]int, 0, len(runtime.casts))
 	for castID := range runtime.casts {
@@ -337,9 +335,7 @@ func (runtime *Runtime) collectHostEvents() error {
 	}
 	sort.Ints(castIDs)
 	for _, event := range events {
-		if err := runtime.dispatchEvent(event.Context); err != nil {
-			return err
-		}
+		runtime.dispatchEvent(event.Context)
 		if event.Cursor > runtime.eventCursor {
 			runtime.eventCursor = event.Cursor
 		}
@@ -354,7 +350,6 @@ func (runtime *Runtime) collectHostEvents() error {
 	if compactor, ok := runtime.host.(HostEventCompactor); ok && runtime.eventCursor != 0 {
 		compactor.CompactEventsThrough(runtime.eventCursor)
 	}
-	return nil
 }
 
 func scheduledTaskIdentity(payload scheduledTaskPayload) (CastID, uint64) {
@@ -388,7 +383,8 @@ func (runtime *Runtime) executeScheduledTask(task scheduledTask) error {
 		return runtime.executePassiveActivation(passive)
 	}
 	if external, ok := task.Payload.(*externalEventTask); ok {
-		return runtime.dispatchEvent(external.Event)
+		runtime.dispatchEvent(external.Event)
+		return nil
 	}
 	if overlay, ok := task.Payload.(*abilityOverlayExpiryTask); ok {
 		return runtime.expireAbilityOverlay(overlay)

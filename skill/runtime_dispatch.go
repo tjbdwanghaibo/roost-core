@@ -10,6 +10,9 @@ import (
 
 var ErrRuntimeCapacityExceeded = errors.New("skill: runtime retention capacity exceeded")
 
+// MetricRootEventCapacityDropped 计因根事件表满、且表里每个根都还被引用而跳过被动路由的事件（RR-20261006-55 后续）。
+const MetricRootEventCapacityDropped = "skill.root_event.capacity_dropped.total"
+
 // MetricPassiveDispatchRejected 计事件派发时被永久拒绝的被动候选（label reason：host_capability = 路由给出的被动
 // Program 不在 Host 能力表里；rejected = 其他入队错误）。
 const MetricPassiveDispatchRejected = "skill.passive.dispatch_rejected.total"
@@ -26,7 +29,7 @@ func (runtime *Runtime) QueueExternalEvent(event EventContext) error {
 	return runtime.scheduleSystem(event.Tick, &externalEventTask{Event: cloneEventContext(event)})
 }
 
-// dispatchEvent 把一个 Host 事件或外部事件交给被动路由。
+// dispatchEvent 把一个 Host 事件或外部事件交给被动路由。它不返回错误：事件总是前进，派发不出去的部分只告警。
 //
 // 候选被拒（路由给出的被动 Program 不在 Host 能力表里，或其他入队错误）是这个候选的永久结果，重试同一个事件不会变好：
 // 记一条 passive_suppressed（Result 是原因）、计 MetricPassiveDispatchRejected、写一条 Warn，其余候选照常入队，事件照常
@@ -34,21 +37,27 @@ func (runtime *Runtime) QueueExternalEvent(event EventContext) error {
 // Advance 都在同一个事件上报同一个错，Runtime 永久卡住，排在前面已入队的候选每次重试再入队一次。被拒的被动 Program
 // 在它自己扣任何费用之前被拒（enqueuePassive 的准入核对），B3 ③ 对它成立。
 //
-// 唯一返回的错误是根事件表满且都被引用（ErrRuntimeCapacityExceeded）：这时还没有候选入队，重试同一个事件不会重复入队；
-// 引用根的施法 / 衍生物结束后表就腾出来，这是容量（RootEventLimit）问题，按原有约定留在原处、由 tick 上的
-// collectHostEvents 重试并报给 Advance 的调用方（runtime_event_test.go 的 TestCollectHostEventsDoesNotAdvanceOrCompactFailedEvent）。
-// 施法路径上的 drainHostEvents 遇到它只停下、不返回错误，见那里。
-func (runtime *Runtime) dispatchEvent(event EventContext) error {
+// 根事件表满、且表里每个根都还被引用（trackRootEventLocked 返回 ErrRuntimeCapacityExceeded）：跳过这个事件的被动路由，
+// 计 MetricRootEventCapacityDropped、写一条 Error，事件照常前进（RR-20261006-55 后续，维护者选 A）。施法与衍生物占不满
+// 这张表（validateRootEventLimit），能占满它的只有排程任务钉住的根（rootEventReferenceBound 的说明），例如同一 tick 里
+// 大量不同根的事件各自排了被动激活。之前这里返回错误、collectHostEvents 停在这个事件上原地重试，而引用根的施法要靠
+// 排程任务推进才能结束、排程任务在同一次 Advance 里排在事件派发之后，Runtime 会一直停到调用方 Cancel / Interrupt /
+// Release / RemoveProgram 腾出表。
+func (runtime *Runtime) dispatchEvent(event EventContext) {
 	root := event.RootEventID
 	if root == 0 {
 		root = event.EventID
 		event.RootEventID = root
 	}
 	if err := runtime.trackRootEventLocked(root); err != nil {
-		return err
+		metrics.IncCounter(MetricRootEventCapacityDropped, nil, 1)
+		slog.Default().Error("skill: root event table is full and every root is still referenced; the event skips passive routing and moves on",
+			"event_id", event.EventID, "root_event_id", root, "source_skill", event.SkillID,
+			"root_event_limit", runtime.options.RootEventLimit, "root_events", len(runtime.rootEventCounts), "error", err)
+		return
 	}
 	if runtime.options.PassiveRouter == nil {
-		return nil
+		return
 	}
 	candidates := append([]PassiveCandidate(nil), runtime.options.PassiveRouter.Candidates(cloneEventContext(event))...)
 	sort.SliceStable(candidates, func(left, right int) bool {
@@ -82,7 +91,6 @@ func (runtime *Runtime) dispatchEvent(event EventContext) error {
 			runtime.rejectPassiveCandidateLocked(event, candidate.Program, owner, "rejected", err)
 		}
 	}
-	return nil
 }
 
 // rejectPassiveCandidateLocked 记录一个被拒的被动候选：passive_suppressed（与 proc 策略的抑制同一种事件，Result 是原因）、

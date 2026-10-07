@@ -23,11 +23,32 @@ guardrails, not capacity targets: tune them from room-level load tests.
   still running, including one handed off to its owner) are never evicted; when
   a cast is evicted, the records of its stopped spawns go with it
   (RR-20261006-23).
-- `MaxActiveCasts`, `MaxAbilities`, `MaxOwnedSpawns*`, `RootEventLimit`, and
-  `MaxProcLedgerEntries`
-  provide deterministic backpressure through `ErrRuntimeCapacityExceeded`.
+- `MaxActiveCasts`, `MaxAbilities`, `MaxOwnedSpawns*`, and
+  `MaxProcLedgerEntries` provide deterministic backpressure through
+  `ErrRuntimeCapacityExceeded`; `RootEventLimit` does so only for a direct
+  `ActivatePassive` call (event dispatch never stalls on it, see below).
 - Root event accounting is reclaimed only after no active cast, spawn, or
   scheduled task references the root, preserving once-per-root semantics.
+- **`RootEventLimit` must exceed `MaxActiveCasts + MaxOwnedSpawns +
+  MaxStopPendingSpawns`** (RR-20261006-55 follow-up). That sum bounds the
+  distinct roots casts and spawns can reference at once: every unfinished
+  cast pins one root (at most `MaxActiveCasts`); entity spawns — casting,
+  handed off or stop_pending — are at most `MaxOwnedSpawns`; a phase/cast
+  scoped spawn shares its cast's root while casting and can outlive the cast
+  only as stop_pending (at most `MaxStopPendingSpawns`); stopped and abandoned
+  records pin nothing, so `MaxAbandonedSpawns` is not part of it. With the
+  defaults the bound is 4096 + 128 + 256 = 4480 < 8192. `NewRuntime` panics
+  and `RestoreRuntime` fails (`ErrRuntimeLimitsInvalid`, plus
+  `ErrCheckpointCorrupt` on restore) when the relation does not hold; raise
+  `RootEventLimit` together with any of the three. Pending scheduled tasks —
+  passive activations not yet run, events queued by `QueueExternalEvent`,
+  ability overlay expiries — also pin roots and have no configured bound, so
+  a burst of many distinct-root events in one tick can still fill the table.
+  Then the event that cannot be tracked skips passive routing and moves on:
+  `skill.root_event.capacity_dropped.total` is counted and an error is
+  logged (before 2026-10-07 the Runtime stopped on that event and `Advance`
+  kept returning `ErrRuntimeCapacityExceeded`). Alert on that counter; a
+  non-zero value means passive procs were lost for those events.
 - Checkpoints use version 5 (2026-10-07: the unit-creating effect became
   `summon`, so a stored effect result's type `spawn_result` is now
   `summon_result` — see the
