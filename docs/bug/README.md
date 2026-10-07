@@ -8,6 +8,18 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 remote entity / bus 一组（分支 `remfix`，`a9bb8923`，框架文档发现 F05-1～F05-7、F09-R2、F09-R3），未发版。** 兴趣广播拖住同条带读、发布失败让 WAL 投影队头阻塞、JetStream RPC 超过 AckWait 重复执行、Assemble 不校验快照段、消息标签与死信桶无上界、轻量 RPC 截到 5s、ClientMod 不读 transport；F05-6 / F05-7 是文本与文档，随同一批修正。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-74](RR-20261006-74.md) | P1 `nats.rpc.transport=jetstream` 的部署里生成的 ClientMod 总走轻量传输，每次调用得 `ErrRPCCapturedByJetStream`（F09-R3） | 已修复（`a9bb8923`），未发版 |
+| [RR-20261006-73](RR-20261006-73.md) | P2 轻量 RPC 每次尝试固定 5s，`call_timeout` > 5s 不生效；超时 / 取消不带 ctx 语义（F09-R2） | 已修复（`a9bb8923`），未发版 |
+| [RR-20261006-72](RR-20261006-72.md) | P3 异步消息的指标标签与死信列表键取对端未注册的 `(module, msg)`，无上界（F05-5） | 已修复（`a9bb8923`），未发版 |
+| [RR-20261006-71](RR-20261006-71.md) | P3 `remoteentity.Assemble` 不校验快照段配置（`SnapshotInterestTTL=0` 被接受）（F05-4） | 已修复（`a9bb8923`），未发版 |
+| [RR-20261006-70](RR-20261006-70.md) | P1 JetStream RPC handler 超过 AckWait 被重投、实例间重复执行（真实 NATS 3 次）（F05-3） | 已修复（`a9bb8923`），未发版 |
+| [RR-20261006-69](RR-20261006-69.md) | P1 Remote 发布失败让 owner 的 WAL 投影队头阻塞，其后普通 DAO 一起停住（F05-2） | 已修复（`a9bb8923`），未发版 |
+| [RR-20261006-68](RR-20261006-68.md) | P2 兴趣续租在条带锁里同步广播，总线一慢同条带 L1 命中也排队（F05-1） | 已修复（`a9bb8923`），未发版 |
+
 **10-07 结构守卫（分支 `guards`，`fe8ef362`，框架文档发现 F11 N1～N3、F00 方向守卫、F12 G7），未发版。** 指标名门禁抓到总览仪表盘查不存在的指标、demo 仪表盘与 README 按不存在的标签聚合；另加三大块依赖方向、生成 game-demo build + vet、pretag `go generate` 漂移三项守卫（[REFACTOR-2026-10-07-structural-guards](../feature/REFACTOR-2026-10-07-structural-guards.md)）。
 
 | 编号 | 问题 | 状态 |

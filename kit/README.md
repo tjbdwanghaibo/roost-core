@@ -22,7 +22,7 @@
 | `nest/` | 装配实例级 core Nest 引擎，并从 Data Engine 取得唯一 transaction committer | 无 | 所有 Nest 服务 |
 | `redis/` | Redis 客户端、pipeline、pub/sub；`EvalDurable`/`EvalBatchDurable` 保留为通用 durable Lua 能力；App 单实例锁的后端 `SingletonStore`。core 的分布式锁（`SetNX`、`AutoExtendLock`）仍在 `roost-core/redis`，Mod 不再以 capability 发布锁工厂 | Redis | 缓存、去重、单实例锁后端 |
 | `mongo/` | MongoDB 客户端、collection、session/事务封装。写关注硬编码 majority+journal、事务读关注 snapshot；**启动预检拒绝无逻辑会话的部署（单机 mongod 起不来），`require_replica_set` 可再收紧**；索引冲突重建需全局与单索引双开关 | MongoDB（副本集或分片集） | 一切持久化 |
-| `nats/` | NATS 连接、RPC（同步 Call 带 jitter 退避 / CallAsync 固定 5s）、JetStream（消费端 Nak 指数退避、Drain 与 Stop 语义分离）、可靠 Bus（inbox 去重 + 死信，**需 redis Mod 且装配顺序在前**）；`nats.rpc.transport=jetstream` 可切 JetStream RPC | NATS/JetStream（Provide 硬依赖 admin registry） | 服务间消息 |
+| `nats/` | NATS 连接、RPC（同步 Call 按调用方期限计时、没有期限时单次 5s，带 jitter 退避，RR-20261006-73 / CallAsync 固定 5s）、JetStream（消费端 Nak 指数退避、Drain 与 Stop 语义分离）、可靠 Bus（inbox 去重 + 死信，**需 redis Mod 且装配顺序在前**）；`nats.rpc.transport=jetstream` 可切 JetStream RPC | NATS/JetStream（Provide 硬依赖 admin registry） | 服务间消息 |
 | `etcd/` | 服务注册/发现（租约丢失自动重注册、停机静默注销）、prefix 本地镜像（一致性快照锚点 + CAS 写 + 订阅隔离：慢订阅者单独踢除、handler panic 容器化）。core 的 `IFencedElection` 选主（CreateRevision 栅栏）仍在 `roost-core/etcd`，Mod 不再以 capability 发布选举工厂 | etcd | 多实例部署的发现与配置镜像 |
 | `saga/` | 跨事务域长事务：Mongo 状态机 + outbox + lease fencing + 按操作实例的步骤收件箱（每个操作一份状态文档 + 租约 + 接替，同一操作的各次尝试至多一次生效）；通过 Data Engine effect outbox 从 Nest 事务拉起 saga | MongoDB + NATS JetStream | 跨服务多步业务流程 |
 | `syncbus/` | 服务间状态同步总线：`SyncBusMod`（只提供 `ISyncBus`，NATS 或 JetStream 二选一；实现在 roost-core `sync/syncbus/driver`）。客户端方向的实体同步在 roost-core `sync/entitysync`（`Manager`：subject 私有订阅者表、按会话组帧、逐帧准入、持久化水位门槛），见下节 | NATS / JetStream | 服务↔服务的同步消息；实体复制见 `entitysync` |

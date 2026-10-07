@@ -127,8 +127,8 @@ sequenceDiagram
 ```
 
 1. 生成的 `BusClient.call` 固定 `CallChecked(ctx, 0, …)`（`service/mail/mail_rpc_gen.go:360-367`；模板 `codegen/internal/servicerpc/template.go:205`）。`serverID=0` 走 `bus.Call` / `CallReliable`（`servicerpc/client.go:137-145`），不经 discovery；affinity 标记生成的 `WithKeyAffinity` 选项因此无处生效（F09-R1）。
-2. 单次超时：`context.WithTimeout(ctx, c.timeout)`（`servicerpc/client.go:125-126`）；`NewBusClient` 把非正数换成 3s（`service/mail/mail_rpc_gen.go:347-358`）。轻量传输底层每次尝试另有 5s 上限（F09-R2，`nats/driver/rpc.go:164`）。
-3. 传输选择：`WithTransport` / `OptionsFromConfig`（`servicerpc/client.go:67-91`）存在，但生成的 ClientMod 不调用它们（F09-R3）。
+2. 单次超时：`context.WithTimeout(ctx, c.timeout)`（`servicerpc/client.go:125-126`）；`NewBusClient` 把非正数换成 3s（`service/mail/mail_rpc_gen.go:347-358`）。轻量传输底层每次尝试另有 5s 上限（F09-R2，`nats/driver/rpc.go:164`）。 **F09-R2 v1.23.1 已修复，见 [RR-20261006-73](../../bugfix/RR-20261006-73.md)**（按调用方期限计时，错误链带 ctx 语义）。
+3. 传输选择：`WithTransport` / `OptionsFromConfig`（`servicerpc/client.go:67-91`）存在，但生成的 ClientMod 不调用它们（F09-R3）。 **F09-R3 v1.23.1 已修复，见 [RR-20261006-74](../../bugfix/RR-20261006-74.md)**（生成的 ClientMod 读 `nats.rpc.transport`）。
 4. 响应：`CallChecked` 先返回总线错误，再 `CheckResponse`（`servicerpc/client.go:148-161`）；`errcode.Remote` 重建 `IntError{Code, Message}`（`errcode/errcode.go:61-80`），`Is` 按 code 比较（`:190-202`）。
 
 `CallDiscoveredChecked`（`servicerpc/client.go:163-182`）让发现、选择、传输共用一份预算（RR-20261004-NC-10），但非测试代码不调用它（F09-R1）。
@@ -460,8 +460,8 @@ Reserve（`kit/service/directory/store.go:92-158`）：`Update`：不存在或�
 | 编号 | 要点 | 本篇位置 |
 | --- | --- | --- |
 | F09-R1 | 生成客户端 affinity 不生效（`codegen/internal/servicerpc/template.go:205`、`servicerpc/client.go:145`）。v1.23.1 已修复，见 [RR-20261006-59](../../bug/RR-20261006-59.md)：affinity 方法经 discovery + 按键 picker 路由，缺 discovery 启动时拒绝 | §3.1 |
-| F09-R2 | 轻量传输 `call_timeout` > 5s 截到 5s；超时 / 取消错误不带 ctx 语义（`nats/driver/rpc.go:164`） | §3.1 |
-| F09-R3 | JetStream 传输与生成 ClientMod 不兼容（`bus/bus.go:659-666`） | §3.1 |
+| F09-R2 | 轻量传输 `call_timeout` > 5s 截到 5s；超时 / 取消错误不带 ctx 语义（`nats/driver/rpc.go:164`） | §3.1 v1.23.1 已修复，见 RR-20261006-73 |
+| F09-R3 | JetStream 传输与生成 ClientMod 不兼容（`bus/bus.go:659-666`） | §3.1 v1.23.1 已修复，见 RR-20261006-74 |
 | F09-R4 | servicerpc 生成器若干漏洞（`wiresafe.go:60`、`parse.go:204-215`、`validate.go:142` 等）。marker 拼写一项 v1.23.1 已修复，见 [RR-20261006-56](../../bug/RR-20261006-56.md)；其余待处理 | — |
 | F09-V | 服务层零处理 `ErrOutcomeUnknown` / `Resume`；A2-3 方案与源码 5 处不一致；S1～S8 | §6 |
 | F09-K | `player_elsewhere` 丢 `owner_sid`；`everyNamespace` 漏 `:platform:pending`；chat `retention_age=0` → 72h；activity 坏记录整组停摆；WriteGate 启动窗口放行（推断）；SelectRole / PublishSystem 信任模型 | §3.9、§3.13、§7.1 |

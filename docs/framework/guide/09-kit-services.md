@@ -142,8 +142,8 @@ svc, ok := app.Lookup[mail.Mail](r, mail.CapabilityName)
 | 生效位置 | `servicerpc.BusClient.Call` 用 `context.WithTimeout(ctx, c.timeout)` 包住**一次**调用，没有自动重试 | `servicerpc/client.go:119-146` |
 | 路由 | 生成的 `BusClient.call` 固定 `CallChecked(ctx, 0, …)`：按 service type 发到总线队列组，不经 etcd 发现 | `service/mail/mail_rpc_gen.go:360-367` |
 | affinity | 接口上的 `//roost:rpc affinity=...` 标记在 v1.23.1 前**没有到达运行时**（生成客户端不带 discovery、固定走队列组）；v1.23.1 起 affinity 方法经 discovery + `KeyAffinityPicker` 落到固定 sid，`NewBusClient` 必须传 discovery，`ClientMod` 依赖 etcd Mod | F09-R1，已修复（RR-20261006-59） |
-| 轻量传输上限 | `call_timeout` > 5s 被 NATS 驱动的单次尝试 5s 截断；超时错误不满足 `context.DeadlineExceeded` | F09-R2（缺陷，真实 nats-server 已证实） |
-| JetStream 传输 | 服务端开 `nats.rpc.transport=jetstream` 后只订阅 JetStream，生成的 ClientMod 不读 transport，调用得 `ErrRPCCapturedByJetStream` | F09-R3（缺陷，读码推断） |
+| 轻量传输上限 | `call_timeout` > 5s 被 NATS 驱动的单次尝试 5s 截断；超时错误不满足 `context.DeadlineExceeded` | F09-R2（缺陷，真实 nats-server 已证实） （v1.23.1 已修复，RR-20261006-73：按调用方期限计时） |
+| JetStream 传输 | 服务端开 `nats.rpc.transport=jetstream` 后只订阅 JetStream，生成的 ClientMod 不读 transport，调用得 `ErrRPCCapturedByJetStream` | F09-R3（缺陷，读码推断） （v1.23.1 已修复，RR-20261006-74：ClientMod 读 `nats.rpc.transport`） |
 
 **实用建议**：在 F09-R1～R3 修好之前，按“随机一个 owner 实例、单次、最多 5s、轻量传输”来理解服务调用；match / activity 的并发正确性本来就靠 CAS 而不是亲和（亲和只影响冲突率）。
 
@@ -332,7 +332,7 @@ sequenceDiagram
 | `directory.reservation_ttl` | 必填，min 1ns | | `:49` |
 | `service_metrics.enabled` | bool，true | false 关掉本进程全部服务指标（C6） | `kit/mods/service_servicemods.go:66-76` |
 | `<svc>.service_type`（ClientMod） | string，缺省服务名 | 调用方寻址的 service type | `kit/service/mail/mail_rpc_assembly_gen.go:218-221` |
-| `<svc>.call_timeout`（ClientMod） | duration，min 0，0 = 3s | 一次调用的超时；轻量传输实际上限 5s（F09-R2） | 同上 |
+| `<svc>.call_timeout`（ClientMod） | duration，min 0，0 = 3s | 一次调用的超时（v1.23.1 起轻量传输也按它计时，之前实际上限 5s，F09-R2 / RR-20261006-73） | 同上 |
 
 非配置项（代码常量）：activity 的 `OpeningGrace` 1 分钟（`kit/service/global/activity/service.go:138`）、platform 的 `PoisonedRetryDelay` 15 分钟（`kit/service/platform/server_run.go:146`）、PlayerOwners 的 `IdleUnload` 5 分钟。
 
@@ -405,7 +405,7 @@ sequenceDiagram
 
 已登记（只列要点，详见[登记表](../../review/FRAMEWORK-DOCS-FINDINGS-2026-10-07.md)）：
 
-- F09-R1：affinity 不生效；F09-R2：轻量传输 5s 截断、错误不带 ctx 语义；F09-R3：JetStream 传输与 ClientMod 不兼容；F09-R4：servicerpc 生成器的若干漏洞。
+- F09-R1：affinity 不生效；F09-R2：轻量传输 5s 截断、错误不带 ctx 语义；F09-R3：JetStream 传输与 ClientMod 不兼容；F09-R4：servicerpc 生成器的若干漏洞。 （R2 / R3 v1.23.1 已修复，见 RR-20261006-73 / 74）
 - F09-V：服务层零处理 `ErrOutcomeUnknown`；global 迁移重试得 `ErrRouteStale`；match Commit 无请求 ID；platform / activity 认领回复丢失后需人工；session 孤儿 run 无 TTL；activity sweep 忽略 `created`；`appendAudit` 非幂等；mutate 内计数在重试中多记。
 - F09-K：`player_elsewhere` 丢 `owner_sid`；`everyNamespace` 漏 `:platform:pending`；chat `retention_age=0` 按 72h 裁剪；activity 一条坏记录令整组 sweep 停摆；启动窗口 WriteGate 未注册时放行（推断）；account SelectRole / chat PublishSystem 的信任模型与文档不符。
 - F09-D：`kit/service/README.md` 多处过时等文档问题。
@@ -430,7 +430,7 @@ sequenceDiagram
 
 ### 7.3 需要外部验证的项
 
-- F09-R3 只有读码推断，需在真实 nats-server 上开 JetStream 传输验证。
+- F09-R3 只有读码推断，需在真实 nats-server 上开 JetStream 传输验证。 （v1.23.1 已在真实 nats-server 上证实并修复，RR-20261006-74）
 - 启动窗口 WriteGate 未注册时直连能否绕过 EnterGame（F09-K，推断）。
 - Redis Cluster 下各服务的多键原子写（platform、rank、activity）已由真实进程演练覆盖（`docs/bugfix/REAL-PROCESS-DRILLS-2026-10-06.md`），其余服务是单键，未单独演练。
 

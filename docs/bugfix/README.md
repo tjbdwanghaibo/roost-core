@@ -8,6 +8,18 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 remote entity / bus 一组（`remfix`，`a9bb8923`），未发版。** 兴趣广播移出条带锁；“已 Applied、发布失败”带 `ErrRemotePublicationPending`，投影器记为已投影、Manager 补发循环按 outbox 补发；JetStream RPC handler 期间发 in-progress（只到请求期限）；`Assemble` 与 `NewSnapshotClient` 共用快照段校验；入站消息标签与死信桶只取注册过的名字；轻量 RPC 按调用方期限计时、错误链带 ctx；生成的 ClientMod 读 `nats.rpc.transport`。F05-6 / F05-7 文本与文档同批修正。共同验证见 [RR-20261006-74 §本批验证](RR-20261006-74.md#本批验证)。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-74](RR-20261006-74.md) | 生成模板 `ClientMod.Init` 读 `nats.rpc.transport`，显式 `WithTransport` 优先；9 个生成文件重生成 | 已修复（`a9bb8923`），未发版 |
+| [RR-20261006-73](RR-20261006-73.md) | `RPCClient.Call` 按调用方期限（无期限时单次 5s），期限 / 取消后不重试；错误同时 `errors.Is` 到 `fnats.ErrTimeout` / `ErrCancelled` 与 ctx 错误 | 已修复（`a9bb8923`），未发版 |
+| [RR-20261006-72](RR-20261006-72.md) | `Bus.incomingLabels`：未注册名与死信桶归并 `_unregistered`；`ReliableStore.DeadLetter` 加 `bucket`，条目保留原名 | 已修复（`a9bb8923`），未发版 |
+| [RR-20261006-71](RR-20261006-71.md) | 拆出 `validateSnapshotConfig`，`Assemble` 构造前校验 | 已修复（`a9bb8923`），未发版 |
+| [RR-20261006-70](RR-20261006-70.md) | `JetStreamMsg.InProgress`；`keepJetStreamRPCInProgress` 每 AckWait/2 续一次，到请求期限为止 | 已修复（`a9bb8923`），未发版 |
+| [RR-20261006-69](RR-20261006-69.md) | `ErrRemotePublicationPending` + 投影器记为已投影 + `scheduleOutboxRepublish` 补发循环；`RecoverOutbox` 同页一条失败不挡其他 | 已修复（`a9bb8923`），未发版 |
+| [RR-20261006-68](RR-20261006-68.md) | `admitInterestRenewal` 锁内分配代际与改表，广播与失败回滚在锁外 | 已修复（`a9bb8923`），未发版 |
+
 **10-07 结构守卫（`guards`，`fe8ef362`），未发版。** 指标名门禁从源码收集全部指标名与标签核对文档、两个仪表盘与 demo README；仪表盘与 README 对齐源码。
 
 | 编号 | 修复 | 状态 |

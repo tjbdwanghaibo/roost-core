@@ -348,7 +348,7 @@ Load 只接受完整聚合快照。迁移函数必须幂等、可测试并携带
 
 Read 模式返回不可变 snapshot：L1 是进程内有界原子缓存，L2 是共享 snapshot store。`Cached` 不回源，`Monotonic` 在版本不足时 singleflight 回源，`Linearizable` 每次读权威存储。高频展示、排行榜引用和 AOI 属性优先 Cached/Monotonic；结算前校验使用 Linearizable 或转成 owner 命令。
 
-共享 L2 是快照水位（已知最新版本 / 是否已删除）的唯一权威，L1 只是它的有界副本（main 未发版，[B2](feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md)）：每次 L1 写入都先在 L2 上以版本 CAS（删除走带版本删除，留与 `snapshot_l2_ttl` 同 TTL 的墓碑）落地，L1 只记 L2 接受或已持有的值并带确认时刻；L2 拒绝时 L1 改取 L2 的较新值。L2 断网或结果未知时写入不失败，L1 照记但标为未确认。
+共享 L2 是快照水位（已知最新版本 / 是否已删除）的唯一权威，L1 只是它的有界副本（v1.20.2 起，[B2](feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md)）：每个**新值**进 L1 之前都先在 L2 上以版本 CAS（删除走带版本删除，留与 `snapshot_l2_ttl` 同 TTL 的墓碑）落地，L1 只记 L2 接受或已持有的值并带确认时刻；另有几处直接写 L1 的点只把 L2 已有的值回填进 L1 或删除 L1 条目，不再做 CAS（`entity/remote_snapshot.go` `RemoteSnapshotCache` 类型注释列出全部写入点）；L2 拒绝时 L1 改取 L2 的较新值。L2 断网或结果未知时写入不失败，L1 照记但标为未确认。
 
 `Cached` / `Monotonic` 的陈旧上限是 `remote_entity.cached_max_staleness`（core `Config.CachedMaxStaleness`，缺省等于 `snapshot_cache_ttl`；必须是带单位的正时长）：交出的快照在交出前这段时间之内被 L2 或权威确认过“没有更新的版本或删除”。超过上限或未确认的 L1 条目先重新确认——读 L2（一次 HGET），L2 落后时把本机的新版本 / 删除补进 L2，L2 回答不了或已没有值时回源权威；都失败时读取返回错误，不交出旧值（行为收紧：之前 L2 断网时写入的条目会一直交出到 L1 TTL）。`Cached` 在 L1 与 L2 都没有该 key 时仍是“未找到”，不回源。不覆盖：owner 提交后写 L2 失败或结果未知时，L2 本身最长落后 `snapshot_l2_ttl`（从旧值最后一次写进 L2 算起），读者在那之后最多再交出 `cached_max_staleness`，即上界 = `snapshot_l2_ttl + cached_max_staleness`：core `DefaultConfig`（L2 TTL 5m、陈旧上限 30s）约 5m30s，生成工程配置模板（`snapshot_l2_ttl: 10m`、`cached_max_staleness: 30s`）约 10m30s；这是维护者定下的上界，不另设后台补写（通常 owner 的下一次读、推送收到的复制更新或下一笔提交会更早把 L2 补齐，见 [B2 §7](feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md)）。复制消息带发布时刻，早于 `snapshot_l2_ttl / 2` 的快照更新（JetStream 同步总线给新 sid 重放的历史）不再被接受（[审查 O5](review/REVIEW-2026-10-05-n05-revn05.md)）。
 
@@ -358,7 +358,7 @@ Read 模式返回不可变 snapshot：L1 是进程内有界原子缓存，L2 是
 
 ### 只读服务（Mirror DTO）
 
-另一个服务只读 owner 发布的摘要（公会摘要、排行快照），接入是**一个 DTO + 一行装配**（main 未发版，[Mirror 第 5 步](feature/MIRROR-STEP-5-2026-10-06.md)）。DTO 放在 `roost generate` 会扫描的 `game/` 下：
+另一个服务只读 owner 发布的摘要（公会摘要、排行快照），接入是**一个 DTO + 一行装配**（v1.21.0 起，[Mirror 第 5 步](feature/MIRROR-STEP-5-2026-10-06.md)）。DTO 放在 `roost generate` 会扫描的 `game/` 下：
 
 ```go
 //roost:mirror entityKind=guild.EntityKindGuild coll=guild

@@ -12,6 +12,17 @@
 - **codegen：生成器随 `versions.core` 运行，`versions.codegen` 废弃**（RR-20261006-57，F12 G2）。生成的 Makefile 改为 `go run …/codegen/cmd/roost@$(CORE_VERSION)`，取 `versions.core`；`roost.yaml` 里写了 `versions.codegen` 会被拒绝（`roost project upgrade` 删掉它），`-codegen-version` / `-codegen` 参数删除。发版时 core 下限须升到 v1.23.1。[问题](docs/bug/RR-20261006-57.md) · [修复](docs/bugfix/RR-20261006-57.md)
 - **servicerpc：带 affinity 的方法真正按键路由，缺 discovery 启动时拒绝**（RR-20261006-59，F09-R1）。生成的客户端之前一律走队列组，affinity 只是装饰；现在 affinity 方法经 etcd discovery + 按键 picker 落到固定实例，`NewBusClient` 必须传 discovery，`ClientMod` 依赖 etcd Mod。生成工程里托管或调用 match / activity 的进程自动带 etcd Mod。[问题](docs/bug/RR-20261006-59.md) · [修复](docs/bugfix/RR-20261006-59.md)
 
+### 修复（remote / bus）
+
+- **remoteentity：兴趣续租的广播移出条带锁**（RR-20261006-68，F05-1）。之前在 `localInterestLocks[EntityID%64]` 里同步发布，总线慢时（最长 `syncbus.publish_timeout`）同条带其他 key 的读——含 L1 命中——都排队。代际仍在锁内分配，接收端按代际收敛；发布失败的回滚不变。[记录](docs/bugfix/RR-20261006-68.md)
+- **remoteentity / dataengine：Remote 发布失败不再让 owner 的 WAL 投影队头阻塞**（RR-20261006-69，F05-2）。提交已 Applied、只是发布（缓存 / 同步总线 / 标记已发布）失败时，`ApplyRemoteCommits` 的错误带新哨兵 `entity.ErrRemotePublicationPending`，投影器把这条记为已投影，后面的记录照常投影；Manager 的补发循环按 `finalize_retry_interval` 起步、最长 5s 退避重扫 outbox 直到发布成功，进程退出则由下次启动的 `RecoverOutbox` 补上。`RecoverOutbox` 一条失败不再挡同页其他提交。新指标 `dataengine.projector.remote_publication_deferred.total`、`remote_entity.remote.republish_total{result}`。[记录](docs/bugfix/RR-20261006-69.md)
+- **bus / nats：JetStream RPC 的 handler 跑得比 `nats.rpc.ack_wait` 久时不再被重复执行**（RR-20261006-70，F05-3）。执行期间每 AckWait/2 发一次 in-progress，只持续到请求期限；真实 NATS 上修前同一请求执行 3 次。`fnats.JetStreamMsg` 新增 `InProgress`。[记录](docs/bugfix/RR-20261006-70.md)
+- **remoteentity：`Assemble` 与 `NewSnapshotClient` 用同一套快照段校验**（RR-20261006-71，F05-4）。直接调 `Assemble` 且 `SnapshotInterestTTL` / `SnapshotL2TTL` 等为 0 的装配现在启动失败（kit 从 `DefaultConfig` 起步不受影响）。[记录](docs/bugfix/RR-20261006-71.md)
+- **bus：入站消息的指标标签与死信桶只取本进程注册过的名字**（RR-20261006-72，F05-5）。对端发来的未注册 `(module, msg)` 统一记为 `_unregistered`（`bus_dead_letter_total`、`bus_dispatch_drop_total`、死信列表键、重投 / 清除计数），死信条目保留原名字，重投按原名发回。`bus.ReliableStore.DeadLetter` 增加 `bucket` 参数。[记录](docs/bugfix/RR-20261006-72.md)
+- **nats：轻量 RPC 按调用方期限计时**（RR-20261006-73，F09-R2）。之前每次尝试固定截到 5s，`call_timeout` 大于 5s 不生效；超时 / 取消的错误现在同时 `errors.Is` 到 `fnats.ErrTimeout` / `ErrCancelled` 与 `context.DeadlineExceeded` / `context.Canceled`，期限到达后不再重试。[记录](docs/bugfix/RR-20261006-73.md)
+- **codegen / kit：生成的 ClientMod 按 `nats.rpc.transport` 选择传输**（RR-20261006-74，F09-R3）。之前总走轻量传输，服务端开 JetStream RPC 时每次调用都被请求流截获（`ErrRPCCapturedByJetStream`）；构造参数里显式的 `WithTransport` 仍优先。重新生成的工程自动获得。[记录](docs/bugfix/RR-20261006-74.md)
+- **文本与文档**（F05-6、F05-7）：`roost generate` 的 lifetime 错误不再把已废弃的 `mirror_cache` 列为合法值；`remote_entity.max_concurrent_writes` 的 help 改为“0 取 `async_finalize_capacity`”（生成配置同步）；T-207 键名改为 `op_timeout`；`REMOTE_ENTITY.md` 与 USER_GUIDE §6 按源码更正。
+
 ### 结构守卫（guards）
 
 - **指标名一致性门禁**（F11 N3）。根包 `metric_names_gate_test.go` 从源码收集全部指标名、类型与标签键，核对 `OBSERVABILITY.md`、`observability/grafana-roost-overview.json`、生成工程的 demo 仪表盘与 README：写到的名字与标签必须存在，仪表盘与告警用到的指标必须在 `OBSERVABILITY.md` 里，`lockstep.*` / `saga.*` / `skill.*` 指标必须全部收录。`OBSERVABILITY.md` 新增 Saga、技能运行时、进程与配置表、NATS 四节。[方案](docs/feature/REFACTOR-2026-10-07-structural-guards.md)

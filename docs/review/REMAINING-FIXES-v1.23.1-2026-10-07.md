@@ -29,7 +29,7 @@
 | 内容 | 登记行 | 状态 |
 | --- | --- | --- |
 | 结构性守卫：指标名与 `OBSERVABILITY.md` / 仪表盘一致性、三大块依赖方向、生成 game-demo 必须 build + vet、pretag 加 `go generate` 漂移检查 | F11（N1～N3）、F00（依赖方向）、F12（G7） | 已完成（`fe8ef362`，[REFACTOR-2026-10-07-structural-guards](../feature/REFACTOR-2026-10-07-structural-guards.md)、[RR-20261006-67](../bug/RR-20261006-67.md)） |
-| remote / bus：F05-1～F05-7，外加 RPC 超时被截 5s、JetStream 传输不兼容 | F05-1～7、F09-R2、F09-R3 | 进行中（分支 `remfix`） |
+| remote / bus：F05-1～F05-7，外加 RPC 超时被截 5s、JetStream 传输不兼容 | F05-1～7、F09-R2、F09-R3 | 已完成（分支 `remfix`，`a9bb8923`，RR-20261006-68～74） |
 
 两路完成后本会话会更新本表与登记表；接手前先 `git pull` 看登记表的最新状态。
 

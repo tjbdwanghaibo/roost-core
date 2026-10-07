@@ -11,7 +11,7 @@ import (
 )
 
 // RR-20261006-74（F09-R3）：生成的 ClientMod 按本进程的 nats.rpc.transport 选择传输；构造参数里显式给的
-// 传输优先于配置。真实 NATS 上的红绿见 client_mod_transport_real_promises_test.go（integration）。
+// 传输优先于配置。真实 NATS 上的红绿见 kit/nats/client_mod_transport_real_promises_test.go（integration）。
 type transportRecordingBus struct {
 	*fakeBus
 	reliable int

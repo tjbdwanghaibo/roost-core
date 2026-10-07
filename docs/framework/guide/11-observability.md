@@ -312,8 +312,8 @@ stats_log Mod 每 `stats_log.interval` 采集一次：goroutine、堆、GC、按
 | --- | --- | --- | --- | --- | --- | --- |
 | `bus_dead_letter_purge_total` | `bus_dead_letter_purge_total` | Counter | `module,msg` | `bus/bus.go:212` | 是 |  |
 | `bus_dead_letter_requeue_total` | `bus_dead_letter_requeue_total` | Counter | `module,msg` | `bus/bus.go:198` | 是 |  |
-| `bus_dead_letter_total` | `bus_dead_letter_total` | Counter | `module,msg` | `bus/bus.go:1045` | 是 | `module,msg` 取自对端未注册名，无上界（F05-5） |
-| `bus_dispatch_drop_total` | `bus_dispatch_drop_total` | Counter | `module,msg,reason` | `bus/bus.go:801` | 是 | 同上（F05-5）；`reason` 只有两种 worker 错误 |
+| `bus_dead_letter_total` | `bus_dead_letter_total` | Counter | `module,msg` | `bus/bus.go:1045` | 是 | `module,msg` 取自对端未注册名，无上界（F05-5） （v1.23.1 已修复，RR-20261006-72：未注册名归并为 `_unregistered`） |
+| `bus_dispatch_drop_total` | `bus_dispatch_drop_total` | Counter | `module,msg,reason` | `bus/bus.go:801` | 是 | 同上（F05-5）；`reason` 只有两种 worker 错误 （v1.23.1 已修复，RR-20261006-72） |
 | `bus_dispatch_duration` | `bus_dispatch_duration_{count,sum_nanos,max_nanos,last_nanos}` | Duration | `module,msg` | `bus/bus.go:859` | 是 |  |
 | `bus_dispatch_total` | `bus_dispatch_total` | Counter | `module,msg` | `bus/bus.go:894` | 是 |  |
 | `bus_duplicate_total` | `bus_duplicate_total` | Counter | `module,msg` | `bus/bus.go:1010` | 是 |  |
