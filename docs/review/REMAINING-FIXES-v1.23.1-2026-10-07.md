@@ -11,7 +11,7 @@
 - **验证底线**：改了跨包行为（nest 提交语义、驱动契约、配置 schema、生成形状等），push 前必须跑一次**全量** `GOWORK=off go test ./...`；改生成模板还要重新生成 game-demo 跑 build / vet / test（结构性守卫批次合入后，codegen 测试会自动做这一步）。
 - **编号**：缺陷按 RR 流程登记，编号从 `docs/bug/README.md` 头部当前最大号往后接（截至本文为 RR-20261006-66，进行中的两路可能再占若干号），push 前 fetch，撞号就顺延。
 - **每修一项都要**：bug / bugfix 两份记录、两个 README 索引、CHANGELOG `[Unreleased]`、交接 `docs/CORE-OPTIMIZATION-HANDOFF.md` §7；登记表对应行改为“已修复（提交号，RR-…）”；对应分区 `docs/framework/impl/NN-*.md` 的疑点条目后追加“v1.23.1 已修复，见 RR-…”。框架文档以 v1.23.0 为基准，只追加说明，不改原描述。
-- **交给 review 前不留 WANTED**（[roost-bugfix §7](../agent-skills/roost-bugfix/SKILL.md)）：写不出红的，要么加结构性守卫，要么写清不可达证明后关闭；真正需要产品决定的，**停下来问维护者**，不自己拍板。
+- **疑点按证据处理**（维护者 2026-10-07 澄清，见 [roost-bugfix §7](../agent-skills/roost-bugfix/SKILL.md)）：确认的 bug 修复，排除的保留依据，证据不足的标记“尚未确认”并写清下一步，不为收尾强行关闭；守卫测试须说明实际保证与限制。真正需要产品决定的提给维护者，不自己拍板。
 - 线上未部署：存储 / 协议改动不做旧版兼容（版本号按规则加 1，旧版本拒绝）。
 - 反复出问题的模块（saga 完成判定、skill 衍生物生命周期、nats driver、skill 编译与执行侧）：如果修复又牵出连锁问题，先停下来向维护者汇报方向判断。
 
@@ -57,4 +57,4 @@
 3. 干净 worktree 跑 `scripts/pretag.sh v1.23.1`（结构性守卫合入后含 `go generate` 漂移检查），再跑 `scripts/test-remote-matrix.sh`（21 格、独占、约 4 分钟；需要共享隔离环境 `~/.roost-it/roost-dataengine-it/env.sh`，含凭据只 source 不打印）。
 4. 打 tag、推 tag；对着 tag 用 `GOPROXY=direct` 生成 game-demo 跑 build / vet / test（代理 sumdb 对新 tag 有延迟，`project new` 首次解析失败属正常，direct 重试）。
 5. 回填：bug / bugfix README、交接 §7、登记表、各 `docs/framework/impl` 里的“v1.23.1 已修复”说法改为已发布。
-6. 按维护者要求写 v1.23.1 发版双文档（说明 + 实现，见 `docs/release/v1.23.0-GUIDE.md` 的结构），交 review 前确认 WANTED 未决 = 0。
+6. 按维护者要求写 v1.23.1 发版双文档（说明 + 实现，见 `docs/release/v1.23.0-GUIDE.md` 的结构）；交 review 前按当前证据逐项列出已修复、已排除与尚未确认，尚未确认项不能计作已完成。

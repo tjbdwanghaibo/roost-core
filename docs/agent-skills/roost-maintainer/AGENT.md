@@ -31,7 +31,7 @@ tools: "*"
 - **配置要好用**：手写的整理 / 校验代码尽量少；规则声明一次（A4① 每个 Mod 的配置 schema：结构体 + tag），运行期加载时强制一次；生成器、doctor、`--check-config` 共用同一份声明。
 - **三大块原则**：core 的基础是 nest 调度 / dataengine / sync 三块，review 最高优先级；改包以“三块各自局部聚集”为准。
 - **反复出问题要上报方向判断**：同一模块 / 机制反复出缺陷、或修复后又出 bug 时，报告里加“方向判断”：缺陷与修复链（编号、提交）、是细节问题还是前提 / 设计问题、可选的方向调整与代价。已知反复模块：saga 完成判定（已收敛为统一规则）、skill 衍生物生命周期（已统一推进 / 存放 / 停止入口）、nats driver（已改为自持关闭状态）、skill 编译与执行侧（已做 Host 能力表）。
-- **交给 review 前不留 WANTED**：实现中发现的疑点本轮闭环——能写红测试就按 RR 修；写不出红就加结构性守卫或写清不可达证明后关闭；产品选择问维护者。review 只用来查新问题。
+- **疑点按证据处理**（维护者 2026-10-07 澄清）：确认的 bug 修复；排除的疑点保留依据；证据不足的标记“尚未确认”并继续定位，不强行关闭。结构性守卫须说明保证与限制，测试通过不代表原疑点已排除；细则见 roost-coding。产品选择问维护者。review 时补必要的中文契约注释，保持业务行为不变。
 - **线上尚未部署（2026-10-06 起）**：改存储格式 / 协议不做旧进程、旧数据兼容，版本号加 1、旧版本拒绝，在 CHANGELOG 写“升级需清空 / 先停旧再起新”。维护者宣布上线后这条作废，改为必须兼容。
 - **Windows 不保证正确**：只保留编译和 CLI 兼容，Windows 相关问题暂存不修。
 - **每轮结束写双文档**：发版前代码冻结后，在 `docs/release/` 写“说明 + 实现”两篇（同一套条目编号互链；说明写变化、原因、维护者原话、兼容与升级；实现写提交、`path:line`、不变量与强制点、红绿证据、测试命令、review 检查点）。框架整体文档 `docs/framework/` 在某块设计变化时同步更新。
@@ -59,7 +59,7 @@ tools: "*"
 | --- | --- | --- |
 | roost-coding | `docs/agent-skills/roost-coding/SKILL.md` | 写代码 / review / bugfix 的共同规范、执行契约、风格（写给人读、中文注释写职责与原因、标准库惯用写法、快池内不阻塞） |
 | roost-bugfix | `docs/agent-skills/roost-bugfix/SKILL.md`（本机镜像 `~/.claude/skills/roost-bugfix/`，改仓库后 `cp` 同步） | 一轮 RR 修复：拉代码 → 读规则 → 分析 → 红测试 → 修 → 文档（bug / bugfix 两份记录、两个 README 索引、交接 §7、CHANGELOG、必要时 T 行）→ 提交推送 |
-| roost-review | `docs/agent-skills/roost-review/SKILL.md` | 只审不改，登记 `docs/bug/RR-*.md` |
+| roost-review | `docs/agent-skills/roost-review/SKILL.md` | 审查行为、补必要中文注释，登记 `docs/bug/RR-*.md`；不改业务行为 |
 | roost-optimize | `docs/agent-skills/roost-optimize/` | 性能优化入口（同机同配置前后对照，`scripts/perf/*`） |
 | codebase-memory | `docs/agent-skills/codebase-memory/SKILL.md` + MCP | 见 §2 |
 | roost-consolidate | `docs/agent-skills/roost-consolidate/SKILL.md` | 历史：三仓合一（已完成），只作方法论参考 |
