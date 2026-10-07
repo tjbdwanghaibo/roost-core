@@ -13,7 +13,6 @@ import (
 	gamescene "{{MODULE}}/game/scene"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	"{{MODULE}}/protocol/msgid"
-	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
@@ -145,7 +144,7 @@ type sceneLane struct {
 // same shape the battle rooms use. It is an interface so a test can watch the
 // frames without a socket.
 type scenePusher interface {
-	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
+	PushSyncPlayer(ctx context.Context, playerID int64, messageID uint32, payload []byte) error
 	ActiveSessions(playerID int64) int
 }
 
@@ -179,7 +178,7 @@ type sessionSource interface {
 // a socket that will not take the frame — is this player's alone: the
 // manager closes the session and tells us through sessionLost.
 func (lane sceneLane) Push(ctx context.Context, session entitysync.SessionID, frame []byte) error {
-	err := lane.transport.PushPlayer(ctx, int64(session), msgid.MsgEntitySync, &pb.EntitySyncPush{Payload: frame})
+	err := lane.transport.PushSyncPlayer(ctx, int64(session), msgid.MsgEntitySync, frame)
 	if errors.Is(err, accessplayertcp.ErrTransportUnavailable) {
 		return fmt.Errorf("%w: %w", entitysync.ErrRetryLater, err)
 	}

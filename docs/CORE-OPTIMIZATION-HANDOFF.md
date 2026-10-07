@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**10-07 客户端协议第一批（main，未发版）：**统一公共Go wire、正式生成player TCP/探针、robot与demo loadtest；RS v2类型字段区分PB/raw Sync，Lockstep仅预留并拒绝。C# netstandard2.1提供鉴权/并发请求/有界push与Sync解码，Unity提供主线程消费适配源码。[接入](../client/README.md) · [实施、验证和后续边界](feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)。后续业务packer生成、复制状态应用/恢复、Godot .NET、C++/Unreal/GDExtension与真实引擎验证另做；无应答Notify、心跳/TLS尚未加入此C# API。历史review进度保持原口径。
+
 **10-05 第十三批/N05镜像路由接入**：NC-33/34两个P2已修、声明场景验证，未发版；缓存与interest在写前绑定第三层payload，10副作用反例红→绿，13新增正式叶子。709最终扩大race叶子/8skip、根包14及build/vet/glsvet通过。N05仍部分完成，下一重订阅/回调交错/权威回填组合；Mirror DTO未实施。[范围/证据](review/REVIEW-2026-10-05-noncore-23.md)。
 
 **10-05 第十二批/N04具名本机缺口收口**：[NC-32](bugfix/RR-20261005-NC-32.md)已修、声明场景验证，未发版；深层更新通知不再绑临时父副本，应用须重生成关联代码。9正式/6消费红转绿，完整金样53、消费28通过，其中11新消费覆盖嵌套迁移与持续CAS预算/恢复。N04全域仍部分完成，下一N05路由/mirror增量；真实Mongo/Cluster/HA/容量等保留。[范围/证据](review/REVIEW-2026-10-05-noncore-22.md)。

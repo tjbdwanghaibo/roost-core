@@ -458,7 +458,7 @@ Handler 不得自行创建异步执行；需要事务提交后可靠执行的工
 
 `robot` 从 cube 的 robot 服务提炼而来（实现拣入 core，业务协议留在业务侧），针对两个痛点重构：**手写太多**、**基建不全**。分层自下而上：
 
-- **transport**：统一包协议 `[4B body_len][4B msg_id][4B seq]`（小端，seq=0 为服务端推送）。TCP/WebSocket 内置；`RegisterDialer` 是扩展点——kit `robot` 包据此注册 KCP（AES-GCM+FEC，流式复用同一帧协议）与 QUIC（单双向 stream 承载）客户端拨号。
+- **transport**：公共RS v2固定16字节大端头（magic/version/flags/msg_id/seq/payload_length），flags bit0识别推送、bits1..2选择PB/Sync/Lockstep（后者当前预留拒绝）；robot内部仍以seq=0分发push。旧12字节格式不兼容；`EncodePackets`返回字节与错误。客户端接入见[client/README.md](client/README.md)。TCP/WebSocket 内置；`RegisterDialer` 是扩展点——kit `robot` 包据此注册 KCP（AES-GCM+FEC，流式复用同一帧协议）与 QUIC（单双向 stream 承载）客户端拨号。
 - **session**：seq 匹配的请求/响应 + push 分发，`Call` 自动埋 `robot.session.call{msg,result}` 直方图（result 枚举 ok/timeout/closed/…）。未注册解码器的推送保留原始字节，不算错误。
 - **action（消灭手写样板的核心）**：`RegisterCall[Req,Resp](reg, protocols, name, msgID, opts...)` 一行注册一个可在场景里引用的调用动作——请求字段按 json tag/snake_case 自动从场景参数与黑板取值填充，响应按 `GetCode() int32/int64` 约定判错，**业务唯一要写的是 `OnResp` 闭包**（把响应写回黑板/断言）。编码器按方向拆分安装（`EnsureEncoder`/`EnsureDecoder`），请求响应共用 msgID 也不冲突。
 - **scenario**：行为树组合子（Sequence/Selector/Parallel/Retry/Timeout/加权 Random——随机数按 robot Seed 确定性），Go 代码是第一公民；YAML spec（`ParseSpec`）是**可选**通道，供无需编译的编排复用已注册动作，解析期全量校验（未知键/一节点多种类/路径定位错误）。

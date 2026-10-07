@@ -2,7 +2,10 @@
 
 package protocoldef
 
-// EntitySyncPush carries one server-authoritative state frame for this
+// EntitySyncPush declares the message ID and generated schema artifact.
+// The scene sends raw frame bytes through PushSyncPlayer (RS v2 Sync flag),
+// without serializing this PB wrapper on the production TCP path.
+// It describes one server-authoritative state frame for this
 // session: the subjects this client is subscribed to, as encoded by
 // roost-core's entitysync manager. One push is one complete frame — a
 // statesync frame whose Epoch/Tick are this session's own clock — and a

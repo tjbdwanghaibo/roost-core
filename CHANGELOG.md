@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 客户端协议（破坏性变更）
+
+- **公共RS v2、PB/Sync分流与C#客户端首批**：新增`client/wire`与纯C# netstandard2.1运行库、Unity主线程适配源码；固定16字节大端头，flags bit0=推送、bits1..2为PB/Sync/Lockstep类型。Lockstep仅预留且当前拒绝；旧12字节robot与RS v1不兼容。正式生成player TCP/探针和demo loadtest共用wire，scene通过`PushSyncPlayer`推送原始frame，去除PB bytes外壳。可选protocol `-csharp`编号输出及归属/退役保护；PB类型仍用同源proto生成。`robot/transport.EncodePackets`改为`([]byte,error)`。应用需重生成托管传输并同步业务scene/client；未发版，真实引擎验证与状态应用/恢复后续实施。[接入](client/README.md) · [方案/验证](docs/feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)
+
 ### 行为收紧
 
 - **saga：`saga.max_payload_bytes` 是发起方与协调器共用的配置键，协调器在别的进程时 `EmitStart` 也在发起事务内按它拒绝**（RR-20261006-66，F06-S7 跨进程）。`kit/nest` 与 `kit/saga` 共用一份声明（`kit/mods.SagaPayloadConfig`，新增上界 4 MiB）；两类进程的配置要写同一个值，生成的配置段不再写这个键（取缺省）。新 API `saga.SetStartDataLimit`。[问题](docs/bug/RR-20261006-66.md) · [修复](docs/bugfix/RR-20261006-66.md)

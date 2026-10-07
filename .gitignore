@@ -24,3 +24,7 @@ gapmap-report.md
 
 # Locally built glsvet binary; the formal entry is `go run ./cmd/glsvet` (OPEN-ITEMS A05).
 /glsvet
+
+# Client SDK local compiler output.
+/client/**/bin/
+/client/**/obj/

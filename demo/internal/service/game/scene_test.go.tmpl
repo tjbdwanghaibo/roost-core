@@ -52,6 +52,10 @@ func newSceneRecorder() *sceneRecorder {
 	return &sceneRecorder{pushes: make(map[int64][]*pb.EntitySyncPush)}
 }
 
+func (recorder *sceneRecorder) PushSyncPlayer(ctx context.Context, playerID int64, messageID uint32, payload []byte) error {
+ return recorder.PushPlayer(ctx,playerID,messageID,&pb.EntitySyncPush{Payload:payload})
+}
+
 func (recorder *sceneRecorder) PushPlayer(_ context.Context, playerID int64, messageID uint32, value any) error {
 	if messageID != msgid.MsgEntitySync {
 		return nil

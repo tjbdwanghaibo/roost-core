@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -72,6 +73,10 @@ func TestExamplesRun(t *testing.T) {
 // runExample 在示例自己的模块里编译（GOWORK=off，和发布后用户看到的一样），然后在示例目录里运行。
 func runExample(t *testing.T, goTool, dir, binary string) {
 	t.Helper()
+	// Windows按可执行扩展名解析路径；无后缀产物能编译但os/exec无法启动。
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
 	moduleRoot := nearestModuleRoot(t, dir)
 	rel, err := filepath.Rel(moduleRoot, dir)
 	if err != nil {

@@ -1,5 +1,5 @@
 // Package transport is the robot client's wire layer: a Packet framing
-// shared by TCP and WebSocket (length-prefixed, little-endian), the Conn
+// shared by TCP and WebSocket (RS v2, big-endian), the Conn
 // abstraction, and pluggable dialers. Ported from the cube robot service and
 // de-coupled from any business protocol: payloads are opaque bytes, codecs
 // live in robot/protocol.
@@ -7,7 +7,6 @@ package transport
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -17,33 +16,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"golang.org/x/net/websocket"
 )
 
-const (
-	defaultMaxPayloadSize = 1 << 20
-	packetHeaderSize      = 12
-	packetBodyHeaderSize  = 8
-)
+const defaultMaxPayloadSize = wire.DefaultMaxPayload
 
 var (
-	ErrInvalidPacket = errors.New("robot transport: invalid packet")
-	ErrPacketTooBig  = errors.New("robot transport: packet too big")
+	ErrInvalidPacket = wire.ErrInvalidPacket
+	ErrPacketTooBig  = wire.ErrPacketTooBig
 )
 
-// Packet is the unified client protocol packet.
-//
-// Wire format:
-//
-//	[4B body_len][4B msg_id][4B seq][payload]
-//
-// body_len is msg_id + seq + payload length, little-endian. Seq 0 marks a
-// server push; non-zero seq correlates a response to its request.
-type Packet struct {
-	MsgID   uint32
-	Seq     uint32
-	Payload []byte
-}
+// Packet 是公共RS v2包，Flags区分服务器推送与PB/Sync载荷。
+type Packet = wire.Packet
 
 // Conn abstracts a client transport. TCP and WebSocket share the same
 // Packet framing above this layer; custom transports (KCP, QUIC — see
@@ -180,105 +165,15 @@ func dialWebSocket(ctx context.Context, cfg Config) (Conn, error) {
 	return NewWebSocketConn(conn, cfg.MaxPayloadSize), nil
 }
 
-// --- Packet codec ---
-
-// DecodePackets decodes one or more concatenated packets from data.
+// DecodePackets 只读公共RS v2包，不猜旧包格式。
 func DecodePackets(data []byte, maxPayloadSize int) ([]*Packet, error) {
-	maxPayloadSize = normalizeMaxPayloadSize(maxPayloadSize)
-	packets := make([]*Packet, 0, 1)
-	for len(data) > 0 {
-		if len(data) < packetHeaderSize {
-			return nil, fmt.Errorf("%w: short header", ErrInvalidPacket)
-		}
-		bodyLen := binary.LittleEndian.Uint32(data[:4])
-		if bodyLen < packetBodyHeaderSize {
-			return nil, fmt.Errorf("%w: body length %d", ErrInvalidPacket, bodyLen)
-		}
-		payloadLen := int(bodyLen) - packetBodyHeaderSize
-		if payloadLen > maxPayloadSize {
-			return nil, fmt.Errorf("%w: payload %d > %d", ErrPacketTooBig, payloadLen, maxPayloadSize)
-		}
-		frameLen := 4 + int(bodyLen)
-		if len(data) < frameLen {
-			return nil, fmt.Errorf("%w: incomplete frame", ErrInvalidPacket)
-		}
-		payload := append([]byte(nil), data[packetHeaderSize:frameLen]...)
-		packets = append(packets, &Packet{
-			MsgID:   binary.LittleEndian.Uint32(data[4:8]),
-			Seq:     binary.LittleEndian.Uint32(data[8:12]),
-			Payload: payload,
-		})
-		data = data[frameLen:]
-	}
-	return packets, nil
+	return wire.Decode(data, maxPayloadSize)
 }
-
-// EncodePackets encodes one or more packets into concatenated wire frames.
-func EncodePackets(packets []*Packet) []byte {
-	totalSize := 0
-	for _, p := range packets {
-		if p != nil {
-			totalSize += packetHeaderSize + len(p.Payload)
-		}
-	}
-	data := make([]byte, 0, totalSize)
-	for _, p := range packets {
-		if p == nil {
-			continue
-		}
-		bodyLen := uint32(packetBodyHeaderSize + len(p.Payload))
-		var header [packetHeaderSize]byte
-		binary.LittleEndian.PutUint32(header[0:4], bodyLen)
-		binary.LittleEndian.PutUint32(header[4:8], p.MsgID)
-		binary.LittleEndian.PutUint32(header[8:12], p.Seq)
-		data = append(data, header[:]...)
-		data = append(data, p.Payload...)
-	}
-	return data
-}
-
-// ReadPacketFrom reads one packet from r.
+func EncodePackets(packets []*Packet) ([]byte, error) { return wire.Encode(packets, 0) }
 func ReadPacketFrom(r io.Reader, maxPayloadSize int) (*Packet, error) {
-	maxPayloadSize = normalizeMaxPayloadSize(maxPayloadSize)
-	var header [packetHeaderSize]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return nil, err
-	}
-	bodyLen := binary.LittleEndian.Uint32(header[0:4])
-	if bodyLen < packetBodyHeaderSize {
-		return nil, fmt.Errorf("%w: body length %d", ErrInvalidPacket, bodyLen)
-	}
-	payloadLen := int(bodyLen) - packetBodyHeaderSize
-	if payloadLen > maxPayloadSize {
-		return nil, fmt.Errorf("%w: payload %d > %d", ErrPacketTooBig, payloadLen, maxPayloadSize)
-	}
-	payload := make([]byte, payloadLen)
-	if _, err := io.ReadFull(r, payload); err != nil {
-		return nil, err
-	}
-	return &Packet{
-		MsgID:   binary.LittleEndian.Uint32(header[4:8]),
-		Seq:     binary.LittleEndian.Uint32(header[8:12]),
-		Payload: payload,
-	}, nil
+	return wire.Read(r, maxPayloadSize)
 }
-
-// WritePacketsTo writes packets to w in the unified packet format.
-func WritePacketsTo(w io.Writer, packets []*Packet) error {
-	data := EncodePackets(packets)
-	for len(data) > 0 {
-		n, err := w.Write(data)
-		if err != nil {
-			return err
-		}
-		if n <= 0 {
-			return io.ErrShortWrite
-		}
-		data = data[n:]
-	}
-	return nil
-}
-
+func WritePacketsTo(w io.Writer, packets []*Packet) error { return wire.Write(w, packets, 0) }
 func normalizeMaxPayloadSize(size int) int {
 	if size <= 0 {
 		return defaultMaxPayloadSize
@@ -306,7 +201,7 @@ func (c *TCPConn) ReadPacket() (*Packet, error) {
 func (c *TCPConn) WritePackets(packets []*Packet) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return WritePacketsTo(c.conn, packets)
+	return wire.Write(c.conn, packets, c.maxPayloadSize)
 }
 
 func (c *TCPConn) Close() error {
@@ -354,7 +249,10 @@ func (c *WebSocketConn) ReadPacket() (*Packet, error) {
 }
 
 func (c *WebSocketConn) WritePackets(packets []*Packet) error {
-	data := EncodePackets(packets)
+	data, err := wire.Encode(packets, c.maxPayloadSize)
+	if err != nil {
+		return err
+	}
 	if len(data) == 0 {
 		return nil
 	}

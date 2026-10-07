@@ -3,7 +3,6 @@ package {{GAME_SERVICE_PKG}}
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -21,6 +20,7 @@ import (
 	"{{MODULE}}/protocol/pb"
 	playerbind "{{MODULE}}/protocol/player_bind"
 	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/kit/service/account"
@@ -142,11 +142,7 @@ func (client *sceneClient) read() {
 		if messageID != msgid.MsgEntitySync {
 			continue
 		}
-		push, err := pb.UnmarshalEntitySyncPush(payload)
-		if err != nil {
-			continue
-		}
-		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
+		decoded, err := entitysync.DecodeFrame(payload, frame.DefaultLimits())
 		if err != nil {
 			continue // the filler the test uses to stall a connection
 		}
@@ -190,28 +186,16 @@ func (client *sceneClient) take() (full, delta, removes int) {
 }
 
 func writeSceneFrame(writer io.Writer, messageID, sequence uint32, payload []byte) error {
-	var header [16]byte
-	header[0], header[1], header[2] = 'R', 'S', 1
-	binary.BigEndian.PutUint32(header[4:8], messageID)
-	binary.BigEndian.PutUint32(header[8:12], sequence)
-	binary.BigEndian.PutUint32(header[12:16], uint32(len(payload)))
-	_, err := writer.Write(append(header[:], payload...))
-	return err
+ return wire.Write(writer, []*wire.Packet{{MsgID:messageID, Seq:sequence, Payload:payload}}, 16<<20)
 }
 
 func readSceneFrame(reader io.Reader) (uint32, []byte, error) {
-	var header [16]byte
-	if _, err := io.ReadFull(reader, header[:]); err != nil {
-		return 0, nil, err
-	}
-	if header[0] != 'R' || header[1] != 'S' {
-		return 0, nil, fmt.Errorf("bad frame magic %v", header[:2])
-	}
-	payload := make([]byte, binary.BigEndian.Uint32(header[12:16]))
-	if _, err := io.ReadFull(reader, payload); err != nil {
-		return 0, nil, err
-	}
-	return binary.BigEndian.Uint32(header[4:8]), payload, nil
+ packet, err := wire.Read(reader, 16<<20)
+ if err != nil { return 0,nil,err }
+ if packet.MsgID == msgid.MsgEntitySync && packet.Flags != wire.FlagPush|wire.FlagSync {
+  return 0,nil,fmt.Errorf("entity sync has flags %d",packet.Flags)
+ }
+ return packet.MsgID,packet.Payload,nil
 }
 
 // waitActiveSessions waits, bounded, until the player has want registered
@@ -238,7 +222,7 @@ func stallPlayer(t *testing.T, transport *accessplayertcp.Runtime, playerID int6
 	before := transport.ActiveSessions(playerID)
 	filler := &pb.EntitySyncPush{Payload: bytes.Repeat([]byte{0xFF}, 512<<10)}
 	for range 128 {
-		if err := transport.PushPlayer(context.Background(), playerID, msgid.MsgEntitySync, filler); err != nil {
+		if err := transport.PushSyncPlayer(context.Background(), playerID, msgid.MsgEntitySync, filler.Payload); err != nil {
 			return err
 		}
 		if transport.ActiveSessions(playerID) < before {
@@ -362,7 +346,7 @@ func TestAPlayerWhoseEveryConnectionStallsLeavesTheScene(t *testing.T) {
 	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{mover.ID(): mover, stalled.ID(): stalled, counters.ID(): counters})
 	deadline := time.Now().Add(5 * time.Second)
 	for scene.Members() != 1 && time.Now().Before(deadline) {
-		_ = transport.PushPlayer(ctx, stalledID, msgid.MsgEntitySync, &pb.EntitySyncPush{Payload: bytes.Repeat([]byte{0xFF}, 512<<10)})
+		_ = transport.PushSyncPlayer(ctx, stalledID, msgid.MsgEntitySync, bytes.Repeat([]byte{0xFF}, 512<<10))
 		if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, stalled.ID(), counters.ID(), 10); err != nil {
 			t.Fatal(err)
 		}

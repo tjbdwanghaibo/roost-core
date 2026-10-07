@@ -1,5 +1,7 @@
 # Roost 开发者完整使用说明
 
+**2026-10-07 客户端协议（main，未发版）：**player TCP、robot和demo loadtest统一RS v2大端16字节头。flags bit0=推送、bits1..2为PB/Sync/Lockstep；Lockstep后续做，当前拒绝。scene改用raw Sync，类型标记不授予客户端修改权威状态的权限；旧包格式不兼容。新增纯C# TCP/解码库及Unity主线程适配源码，真实引擎验证与复制状态应用尚未实施。[客户端接入](../client/README.md) · [方案/验证](feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)。
+
 > 框架整体的说明与实现见 [框架文档](framework/README.md)（基准 v1.23.0）；内容冲突以框架文档与源码为准。
 
 权威快照加载现要求结果完整 Key 与请求一致，异键在写入前返回错误（NC-35，main未发版）。Monotonic/Linearizable 的成功结果还必须在返回前未过 ExpiresAt、实际 L1 达到 minVersion；epoch准入保留的版本不足返回已有 ErrRemoteSnapshotStale（NC-36），L2发布期间过期返回miss（旧RR-08补修）。接入方修正loader身份/权威版本，不忽略错误或放宽epoch保护；缓存miss与复制返回nil不代表业务持久ACK。[机制/边界](review/IMPLEMENTATION-AUTHORITATIVE-SNAPSHOT-POSTCONDITIONS.md)。
