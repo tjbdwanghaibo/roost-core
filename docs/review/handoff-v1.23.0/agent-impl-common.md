@@ -9,3 +9,7 @@
 - **验证**（`GOWORK=off`）：`gofmt -l` 为空；改动包 `go vet`，`go test -race -count=3`；改了 nest / entity / dataengine / sync 的，加跑 `go run ./cmd/glsvet ./nest ./entity ./dataengine/engine ./sync/entitysync`；根包 `go test -count=1 .`；`go build ./... && go vet ./...`；改了生成形状的，跑 `go test -count=1 ./codegen/...`，`go generate ./...` 后检查 porcelain，再生成 game-demo（replace 到 worktree）跑 build / vet / test。
 - **提交**：中文，`git add` 显式列出路径，末尾 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`。完成后在 DECISIONS-PENDING 末表把对应行的实施状态改为“已实施（提交号）”。
 - **报告**：方案要点、实施内容、红绿文本、验证结果、提交号、兼容影响、未完成项。
+
+## 验证底线（2026-10-07 补）
+
+改了 nest 提交语义、驱动契约、配置 schema 等跨包行为时，push 前必须跑一次全量 `GOWORK=off go test ./...`（不只目标包）。RR-20261006-41 只跑了目标包，导致 main 上 `skill/combatcomponent` 红了一段时间。
