@@ -4,6 +4,8 @@
 
 当前优化状态、业务目标、已接受的性能边界、验收与复跑入口见 [核心优化交接](docs/CORE-OPTIMIZATION-HANDOFF.md)。按任务读取相关原始记录，不因历史“待实施”文字重复改造已完成链路。
 
+维护者长期规则、常用 skill、本机环境与发版流程的汇总见 [roost-maintainer agent](docs/agent-skills/roost-maintainer/AGENT.md)（接手 roost-core 实现类任务时先读；本机镜像 `~/.claude/agents/roost-maintainer.md`）。
+
 用户明确请求修复 review/bug 时使用 [roost-bugfix](docs/agent-skills/roost-bugfix/SKILL.md)：先固定问题范围和修前证据，实施根因修复与行为回归，记录 bugfix/进度，再按已有授权提交推送。普通 roost-review 仍只审查和记录。
 
 ## Codebase Memory
