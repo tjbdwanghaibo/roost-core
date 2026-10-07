@@ -150,8 +150,6 @@ type methodView struct {
 	Response string
 	// ParamList is the client method's parameter list after ctx.
 	ParamList string
-	// ResultZeroes is the zero-value list a failed client call returns.
-	ResultZeroes string
 	// CallArgs is how the handler passes decoded fields to the service.
 	CallArgs string
 	// ResultFields assigns the service's results into the response.
@@ -222,11 +220,9 @@ func newView(service Service) (view, error) {
 		mv.ResultTypes = strings.Join(types, ", ")
 		mv.CallArgs = strings.Join(callArgs, ", ")
 
-		zeroes := make([]string, 0, len(method.Results))
 		fields := make([]string, 0, len(method.Results))
 		returns := make([]string, 0, len(method.Results))
 		for _, result := range method.Results {
-			zeroes = append(zeroes, zeroValue(result.Type))
 			fields = append(fields, exportName(result.Name)+": "+result.Name)
 			returns = append(returns, "resp."+exportName(result.Name))
 		}
@@ -238,7 +234,6 @@ func newView(service Service) (view, error) {
 			mv.ResponseFields = append(mv.ResponseFields, fmt.Sprintf("%s %s `json:%q`",
 				exportName(result.Name), result.Type, jsonName(exportName(result.Name))))
 		}
-		mv.ResultZeroes = strings.Join(zeroes, ", ")
 		mv.ResultFields = strings.Join(fields, ", ")
 		mv.ResultReturns = strings.Join(returns, ", ")
 
@@ -289,7 +284,9 @@ func jsonName(name string) string {
 			// playerID becomes player_id rather than player_i_d.
 			previousLower := index > 0 && unicode.IsLower(runes[index-1])
 			nextLower := index+1 < len(runes) && unicode.IsLower(runes[index+1])
-			if index > 0 && (previousLower || nextLower) {
+			// IDs/URLs 的结尾 s 是缩写复数，不在缩写最后一个字母前拆词。
+			pluralAcronym := index > 0 && unicode.IsUpper(runes[index-1]) && index+2 == len(runes) && runes[index+1] == 's'
+			if index > 0 && (previousLower || (nextLower && !pluralAcronym)) {
 				out.WriteByte('_')
 			}
 			out.WriteRune(unicode.ToLower(r))
@@ -298,27 +295,4 @@ func jsonName(name string) string {
 		out.WriteRune(r)
 	}
 	return out.String()
-}
-
-// zeroValue is what a client returns for a result when the call failed.
-//
-// A struct's zero value is written as T{} and a slice's as nil; anything the
-// generator is unsure of gets the explicit var form, which compiles for every
-// type rather than guessing.
-func zeroValue(typeName string) string {
-	switch {
-	case strings.HasPrefix(typeName, "[]"), strings.HasPrefix(typeName, "map["), strings.HasPrefix(typeName, "*"):
-		return "nil"
-	case typeName == "string":
-		return `""`
-	case typeName == "bool":
-		return "false"
-	}
-	switch typeName {
-	case "int", "int8", "int16", "int32", "int64",
-		"uint", "uint8", "uint16", "uint32", "uint64", "byte", "rune",
-		"float32", "float64":
-		return "0"
-	}
-	return typeName + "{}"
 }

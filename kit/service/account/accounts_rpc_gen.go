@@ -336,7 +336,7 @@ func (c *BusClient) CreateRole(ctx context.Context, accountID string, serverID i
 }
 
 // SelectRole mints a session for a role the account owns. Ownership is
-// checked against the stored role rather than taken from the request.
+// checked against the stored role; the trusted caller supplies accountID.
 // SelectRole implements Accounts.
 func (c *BusClient) SelectRole(ctx context.Context, accountID string, playerID int64) (Session, error) {
 	var resp rpcSelectRoleResponse

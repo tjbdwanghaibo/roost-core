@@ -57,7 +57,13 @@ func checkWireSafeDeep(index typeIndex, where, method, path, typeName string, de
 		return fmt.Errorf("%s: method %s field %s nests more than 8 levels deep; a payload that "+
 			"deep is not a payload anyone will debug", where, method, path)
 	}
-	base := strings.TrimPrefix(strings.TrimPrefix(typeName, "[]"), "*")
+	if strings.Contains(typeName, "?") {
+		return fmt.Errorf("%s: method %s field %s has an unsupported wire type (fixed array, nonempty interface or expression)", where, method, path)
+	}
+	base := typeName
+	for strings.HasPrefix(base, "[]") || strings.HasPrefix(base, "*") {
+		base = strings.TrimPrefix(strings.TrimPrefix(base, "[]"), "*")
+	}
 	if reason, bad := wireUnsafe[base]; bad {
 		return fmt.Errorf("%s: method %s field %s is %s, which cannot cross a bus: %s",
 			where, method, path, typeName, reason)

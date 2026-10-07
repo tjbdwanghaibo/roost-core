@@ -31,6 +31,7 @@ type (
 	RunStore        = core.RunStore
 	ClaimStore      = core.ClaimStore
 	RequestLedger   = core.RequestLedger
+	AdmissionSource = core.AdmissionSource
 	OwnerSource     = core.OwnerSource
 	OwnerSourceFunc = core.OwnerSourceFunc
 	Admin           = core.Admin

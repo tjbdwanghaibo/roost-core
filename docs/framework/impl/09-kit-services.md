@@ -542,3 +542,24 @@ Reserve（`kit/service/directory/store.go:92-158`）：`Update`：不存在或�
 | `codegen/internal/roost/demo.go:641` | gift 各步骤 “idempotent per command through the Mongo step inbox” | debit / refund 走 DataEngine 原生 inbox（`gift_saga.go.tmpl:139-145`） |
 
 → [说明文档](../guide/09-kit-services.md)对应：§7 保证与不保证。
+
+## v1.23.1 B3 实施补充（2026-10-08，未发布）
+
+N1～4/N7/N9/N10/N12/N14、F09-K chat/活动扫描、F09-V S6 已修复，见 RR-20261008-01～08。N5 新增 Admin.ExhaustDispatch：仅 owner 进程内，人工提供原因，pending→exhausted，不伪造 ACK/尝试，沿用原 token 可 Reopen；已有 Memory 行为回归。
+
+N6：LookupDispatch 可读 token，总线应为可信内网；token 证明持有投递身份，不证明目标 game 身份。N8 排除为错误重试：外部发货超退避期限后保守进入 exhausted，表示结果待确认；迟到成功仍可 delivered，不能据 exhausted 推断未发货。N11：Releaser 为至少一次尝试，须按 run/resource 幂等；N13 邮件过期与领取租期均业务单调钟；N16 合仓路径更正为 kit/redis。
+
+其余 F09-V/R4/K/D 尚在继续；本节不撤销原始审查证据，不把旧疑点一并关闭。
+
+## B3 完整实现与疑点裁决（2026-10-08，未发布）
+
+- N1～4/N7/N9/N10/N12/N14：RR-20261008-01～07；活动坏记录与 S6：RR-20261008-08。
+- F09-V 的预算/指标：RR-20261008-09；S1/S2：RR-20261008-10；S5：RR-20261008-11。route/Run codec v2 拒绝旧值；自定义 RunStore 若不实现 AdmissionSource，仍须自行枚举未准入记录。
+- F09-R4 / N15：RR-20261008-12；F09-K 转服、WriteGate：RR-20261008-13～14。namespace guard 新增 platform pending 与 session admission，并真实写入索引；共 28 个命名空间。
+- N5：Admin.ExhaustDispatch 为 owner 内运维入口，必须填写原因；只把 pending 改 exhausted，保留 token，可 Reopen，不伪造 ACK。`TestOperatorCanRetirePermanentlyOfflineGameAndReopenSameDelivery` 及 admin 回归验证状态边界（具体名称见 remaining_promises_test.go）。N6/N8/N11/N13/N16：可信总线、保守 exhausted、至少一次资源释放、业务钟命名与 Mod 文案的契约更正。
+- S4 排除“自动重复发货”疑点：platform 认领 CAS 错误立即返回，不调用 Deliver；后续发现 PendingAttempts 走 exhausted，须人工核对。`TestUnknownClaimDoesNotCallOrRepeatExternalGrant` 模拟认领成功丢回复；既有 UnknownGrant 测试覆盖外部已发货丢回复。activity 的 attempt 是发出领取尝试的预算，不是客户端收到次数；丢回复可能耗预算，Lookup/Ack/人工 Reopen 沿原 token 恢复，不能承诺自动无限重试。
+- S7 为契约说明：appendAudit 记录每次拒绝调用；API 没有请求幂等键，同一拒绝重试会再记一条，MaxNotifyAudits 满后累计 Overflowed，不会再次应用玩法进度。既有 `TestEveryRefusedNotifyWritesAnAudit`、`TestAuditsAccumulateAndAreBounded` 验证此边界。
+- S8 在已列调用点排除：global stale、match 拒绝、account banned、activity bad_token 的 mutate 上报后立即返回 save=false/error，不会进入 CAS 重试；成功分支指标在 Update 返回后上报。不能由“mutate 可能重试”推导这些拒绝实际重复计数，也不把结论扩展到所有未来调用方。
+- F09-D：当前服务 README 和源码注释改为单仓路径、可信入口身份、全局名字目录/slot、owner 周期工作与实际命名空间；A2-3 调用表更正追加在其末节。原始 v1.23.0 描述保留作为历史证据。
+
+CBM 仍为 2026-09-30 代际；上述结论以当前工作树源码和行为回归为准，integration/docs 为图谱排除范围。

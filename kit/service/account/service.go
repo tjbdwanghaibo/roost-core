@@ -259,7 +259,7 @@ func sameVerifiedIdentity(account Account, identity Verified) bool {
 // slotKeyFor renders the exclusive-membership key for one account's role
 // allowance on one server.
 //
-// The directory enforces one owner per key, which is exactly "one role per
+// The insert-only slot enforces one role plan per key, exactly "one role per
 // account per server" — the common case and the default. An allowance above
 // one needs one key per slot, which is why RolesPerServer above one is
 // rejected at construction rather than silently enforced as one.
@@ -395,11 +395,16 @@ func (s *Service) MarkLogout(ctx context.Context, accountID string, playerID int
 
 // UpsertServer records a server. Operator-facing.
 func (s *Service) UpsertServer(ctx context.Context, server GameServer) (GameServer, error) {
-	if server.ID == 0 {
-		return GameServer{}, fmt.Errorf("%w: id is zero", ErrServerInvalid)
+	if server.ID <= 0 {
+		return GameServer{}, fmt.Errorf("%w: id is zero or negative", ErrServerInvalid)
 	}
 	if server.Status == "" {
 		server.Status = ServerOpen
+	}
+	switch server.Status {
+	case ServerOpen, ServerFull, ServerClosed, ServerMaintenance:
+	default:
+		return GameServer{}, fmt.Errorf("%w: unsupported status %q", ErrServerInvalid, server.Status)
 	}
 	now := s.cfg.SystemNow() // an operator record, not game time
 	var result GameServer

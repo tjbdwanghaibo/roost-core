@@ -217,6 +217,8 @@ bash scripts/test-remote-matrix.sh
 
 ## 7. 缺陷记录索引
 
+B3 首批 RR-20261008-01～08：session/时长/mail/身份/chat/directory/platform/activity 边界已修复，目标 race 通过；B3 其余与 B4/B6～B8 仍在继续，未推送/发版。
+
 2026-10-07：B1 检查点 `376d848d`（RR-20261007-07～18）已提交；130 包全量与 6 包 race 通过。后续 RR-20261007-19～20 已实施，skillsync / 独立 sync-e2e race 通过，待本批提交与组合验证；全部交接仍未完成。
 
 2026-10-07 B1 续进：RR-20261007-14～18 已修复（Host 包装/恢复/nil/缓存、组合效果），skill 全族与 syncstream 6 包 race 通过；仍有 B1 后续及其他批次，未发布。
@@ -673,3 +675,9 @@ B1 最终验收：全仓 build/vet/test（130 包）、6 包 race、独立 sync-
 RR-20261007-26～31 修复战斗数值、资源/capability、buff、无变化脏位、路径搜索；C11/C12/C13 明确业务接入前提，C14 首次修改才捕获 undo，C16 依赖守卫。方案及逐项结论见 REFACTOR-2026-10-07-combat-handoff 和 impl/08 追加校正。B1 续批提交 589b0a2b。继续 B3/B4/B6～B8。
 
 B2 验收完成（2026-10-07）：全仓 build/vet/test（130 包）通过；skill 全族/spatial/nest/根包共 8 包 race 通过，独立 statusbridge 示例 go test 通过。RR-20261007-26～31 和 C11～C16 的边界说明、优化与守卫在本批提交。原始日志与快照专项基准已保存主检出 artifacts/perf/remaining-fixes-20261007；未推送/发布。继续 B3/B4/B6～B8。
+
+### B3 服务与生成链路续批（2026-10-08）
+
+RR-20261008-09～14 已实施，含 admission 索引和 v2 格式；01～08 同批。目标 race、真实 Redis 跨服务与新 game-demo build/vet/test 已通过，全仓验收进行中；未推送、未发布。疑点 S4/S7/S8 的证据边界见 impl/09 末节，不声称无条件 exactly-once。后续继续 B4、合并 origin/main ba0dd7c2 后 B6、B7、B8。
+
+B3 验收完成（2026-10-08）：RR-20261008-01～14；全仓 build/vet/test（130 包）通过；服务目标 race、私有 Redis 跨服务 race（28 命名空间和 admission 原子回收）通过。正式生成 game-demo 458 文件，最终 build/vet/test 通过；配置声明守卫初次发现 WriteGate 未走统一声明，已按正式声明和缓存配置值修复，完整复验通过。`go generate ./...` 已运行。原始日志在 artifacts/perf/remaining-fixes-20261007，未推送/发布。继续 B4/B6/B7/B8。

@@ -29,11 +29,12 @@ import (
 //
 // The two secrets come from configuration and are refused when empty, at Init.
 type Mod struct {
-	verifier Verifier
-	players  PlayerResolver
-	deliver  Deliverer
-	pending  PendingOrders
-	metrics  servicemetrics.Reporter
+	verifier          Verifier
+	players           PlayerResolver
+	deliver           Deliverer
+	pending           PendingOrders
+	pendingConfigured bool
+	metrics           servicemetrics.Reporter
 
 	prefix        string
 	sessionSecret string
@@ -58,6 +59,7 @@ func NewMod(verifier Verifier, players PlayerResolver, deliver Deliverer, report
 func (m *Mod) WithPendingOrders(pending PendingOrders) *Mod {
 	if m != nil {
 		m.pending = pending
+		m.pendingConfigured = true
 	}
 	return m
 }
@@ -176,7 +178,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 	// still wins: a deployment whose orders live somewhere else, or that wants
 	// retry off, says so explicitly.
 	pending := m.pending
-	if pending == nil {
+	if !m.pendingConfigured {
 		pending = orders
 	}
 	service, err := New(Config{

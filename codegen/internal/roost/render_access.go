@@ -389,12 +389,21 @@ type Runtime struct {
 
 type Mod struct {
 	runtime *Runtime
+	requireWriteGate bool
 }
+
+%s
 
 func NewMod() *Mod { return &Mod{} }
 func (*Mod) Name() app.ModName { return Name }
 func (*Mod) DependsOn() []app.ModName { return []app.ModName{"nest"} }
-func (*Mod) Init(*viper.Viper) error { return nil }
+func (*Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(accessConfig{}) }
+func (mod *Mod) Init(cfg *viper.Viper) error {
+	var settings accessConfig
+	if err := app.LoadConfig(cfg, &settings); err != nil { return err }
+	mod.requireWriteGate = settings.RequireWriteGate
+	return nil
+}
 
 func (mod *Mod) Provide(registry *app.Registry) error {
 	if registry == nil {
@@ -409,7 +418,7 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 	// It is resolved lazily: this Mod provides before the services that
 	// publish a gate have started, and a gate that appears later must still
 	// take effect.
-	if err := protocols.Use(writeGateMiddleware(registry)); err != nil {
+	if err := protocols.Use(writeGateMiddleware(registry, mod.requireWriteGate)); err != nil {
 		return err
 	}
 	if err := protocolbootstrap.RegisterPlayerProtocols(protocols, registry); err != nil {
@@ -429,7 +438,7 @@ func (mod *Mod) Stop() { mod.runtime = nil }
 // handler. The resolved gate is cached once found; until then each request
 // costs one capability lookup, which lasts only until the owning service has
 // started.
-func writeGateMiddleware(registry *app.Registry) player_agent.Middleware {
+func writeGateMiddleware(registry *app.Registry, required bool) player_agent.Middleware {
 	var cached atomic.Pointer[WriteGate]
 	return func(next player_agent.HandlerFunc) player_agent.HandlerFunc {
 		return func(ctx *player_agent.Context, request any) (any, error) {
@@ -444,6 +453,8 @@ func writeGateMiddleware(registry *app.Registry) player_agent.Middleware {
 				if err := (*gate).AdmitMessage(ctx.PlayerID, ctx.MsgID); err != nil {
 					return nil, err
 				}
+			} else if required {
+				return nil, fmt.Errorf("player access: required write gate is not ready")
 			}
 			return next(ctx, request)
 		}
@@ -451,5 +462,5 @@ func writeGateMiddleware(registry *app.Registry) player_agent.Middleware {
 }
 
 var _ app.Mod = (*Mod)(nil)
-`, generatedHeader, manifest.Project.Module+protocol.PlayerAgentImportSuffix, manifest.Project.Module+"/game/protocol_bootstrap")
+`, generatedHeader, manifest.Project.Module+protocol.PlayerAgentImportSuffix, manifest.Project.Module+"/game/protocol_bootstrap", renderPlayerAccessDeclaration())
 }

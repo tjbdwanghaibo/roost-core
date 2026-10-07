@@ -736,10 +736,8 @@ const (
 type Dispatch struct {
 	Key     Key   `json:"key"`
 	GameSID int32 `json:"game_sid"`
-	// Token authorizes the ACK. It is server-minted and unguessable, and it
-	// travels with the payload, which is what makes an ACK evidence that the
-	// delivery arrived rather than a claim anyone could make about a
-	// well-known key.
+	// Token 是服务端生成的投递去重身份，ACK 必须带回它。LookupDispatch 也会返回
+	// token，因此它不证明调用者就是目标 game。总线进程属于可信内网，接入层须鉴权。
 	Token  string        `json:"token"`
 	Result Result        `json:"result"`
 	State  DispatchState `json:"state"`

@@ -48,6 +48,7 @@ const (
 	CodeOwnerMismatch int32 = 530104
 	CodeKeyEmpty      int32 = 530105
 	CodeOwnerEmpty    int32 = 530106
+	CodeConflict      int32 = 530107
 )
 
 var (
@@ -68,6 +69,7 @@ var (
 	// ErrOwnerMismatch reports that the entry belongs to a different owner.
 	ErrOwnerMismatch = errcode.Define(CodeOwnerMismatch, "directory: owner mismatch", "")
 
+	ErrConflict   = errcode.Define(CodeConflict, "directory: conflict", "")
 	ErrKeyEmpty   = errcode.Define(CodeKeyEmpty, "directory: key is empty", "")
 	ErrOwnerEmpty = errcode.Define(CodeOwnerEmpty, "directory: owner is empty", "")
 )
@@ -90,6 +92,9 @@ func Error(err error) (int32, string) {
 	// compare-and-set is an owner mismatch as far as a caller is concerned —
 	// someone else holds the key now — so it is mapped deliberately rather
 	// than arriving as "server error".
+	if errors.Is(err, versionstore.ErrConflict) {
+		return errcode.ClientError(ErrConflict)
+	}
 	if errors.Is(err, versionstore.ErrVersionMismatch) {
 		return errcode.ClientError(ErrOwnerMismatch)
 	}

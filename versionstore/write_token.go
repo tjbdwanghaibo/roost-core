@@ -300,6 +300,12 @@ func replyNotLost(err error) bool {
 // It returns outcomeApplied, outcomeLost, or outcomeFailed with the error to
 // return (an *UnknownOutcomeError when the outcome stays open).
 func (s *RedisStore[K, T]) settle(ctx context.Context, write *pendingWrite, ambiguous bool) (outcome, error) {
+	remaining := s.cfg.MaxAttempts
+	return s.settleWithBudget(ctx, write, ambiguous, &remaining)
+}
+
+// 一次 Update 的竞争重试和原命令重发共用发送预算，不能形成两层相乘的循环。
+func (s *RedisStore[K, T]) settleWithBudget(ctx context.Context, write *pendingWrite, ambiguous bool, remaining *int) (outcome, error) {
 	var transportErr error
 	resolved := func(result string, o outcome) (outcome, error) {
 		if ambiguous {
@@ -329,7 +335,7 @@ func (s *RedisStore[K, T]) settle(ctx context.Context, write *pendingWrite, ambi
 				return unresolved(errors.New("the key's history does not show this write either way"))
 			}
 			// verdictNotRun: send it again.
-			if sends >= s.cfg.MaxAttempts {
+			if *remaining <= 0 {
 				return unresolved(errors.New("the command has not run and the resend budget is spent"))
 			}
 			if err := ctx.Err(); err != nil {
@@ -338,6 +344,7 @@ func (s *RedisStore[K, T]) settle(ctx context.Context, write *pendingWrite, ambi
 			s.backoff(sends)
 		}
 		sends++
+		(*remaining)--
 		applied, err := s.send(ctx, write)
 		switch {
 		case err == nil && applied:

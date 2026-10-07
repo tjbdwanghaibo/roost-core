@@ -52,7 +52,7 @@
 
 - 生成器写的 `collaborators.go` 与 game-demo 自带的四份 collaborators：`func Metrics() servicemetrics.Reporter { return servicemetrics.NewMetricsReporter("<svc>") }`。
 - 关闭有两种：collaborators 里返回 nil（代码，原有契约）；或配置 `service_metrics.enabled: false`（默认 true，严格布尔，登记进 `frameworkBoolKeys`）。
-  后者由 kit 各服务 Mod 在 Init 里经 `mods.ServiceMetrics(cfg, reporter)` 统一处理：关闭时不把 Reporter 交给服务。
+  后者由 kit 各服务 Mod 在 Init 里经 `ServiceMetricsConfig.ApplyServiceMetrics` 统一处理：关闭时不把 Reporter 交给服务。
 - 已生成的工程不改（collaborators 只创建一次）；要用默认 Reporter 时把 `Metrics()` 改成上面那一行。
 
 ## 3. 改动面

@@ -1,4 +1,4 @@
-// Package servicemods holds the app.ModName constants for every service in
+// Package mods holds the app.ModName constants for every service in
 // this repository, and the small helpers their Mods share.
 //
 // The names live in one table rather than one per package for the same reason

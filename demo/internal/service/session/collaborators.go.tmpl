@@ -13,8 +13,8 @@ import (
 
 // Release frees a resource a run attached — a dungeon instance, a seat in a
 // room, a reservation on another service — when the run finishes, is left,
-// or expires. The session service guarantees it is called exactly once per
-// attached resource; what "free" means is this game's business.
+// or expires. 释放成功后才保存持久标记；回复或标记丢失可能重复调用。
+// 实际业务必须按 run.ID/resource 身份幂等，不能假设 exactly once。
 //
 // The demo's dungeon holds nothing outside the session service itself, so
 // releasing is a log line and a nil. A real game frees the instance here and

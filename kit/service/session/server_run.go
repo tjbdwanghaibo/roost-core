@@ -28,11 +28,9 @@ const SweepBatch = 100
 // list, because scanning every owner in the store is the unbounded read this
 // repository exists to remove.
 //
-// That is also why this implementation sweeps nothing by default and says so:
-// a deployment supplies the owner set, and until it does, expired runs are
-// resolved lazily by the next Enter from the same owner (see resolveClaim).
-// Lazy resolution is correct but only fires when that owner comes back, so a
-// deployment that wants prompt release supplies WithSweepOwners to NewMod.
+// Redis 默认按有界 admission 索引回收尚未完成准入、也未挂载资源的孤儿 Run。
+// 已准入 Run 的资源回收仍由 owner 集合驱动；部署方通过 WithSweepOwners 提供集合，
+// 未提供时由同 owner 的下一次 Enter 惰性推进。二者不能混为“默认全量扫描”。
 func (s *Server) run(ctx context.Context) error {
 	ticker := time.NewTicker(SweepInterval)
 	defer ticker.Stop()

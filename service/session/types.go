@@ -246,6 +246,9 @@ type Run struct {
 	RequestID string `json:"request_id"`
 
 	State State `json:"state"`
+	// AdmissionPending 为 true 时还没交给业务，不能挂载外部资源。
+	// 与 Redis 待准入索引原子写入，让 claim 建立前崩溃的 run 也能被回收。
+	AdmissionPending bool `json:"admission_pending"`
 	// Resources are the external allocations this run holds.
 	Resources []Resource `json:"resources,omitempty"`
 	// Context is opaque per-run data the caller evaluates outcomes against.

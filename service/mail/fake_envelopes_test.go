@@ -3,6 +3,7 @@ package mail
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // fakeEnvelopes is an EnvelopeStore for tests. It lives here rather than in
@@ -86,3 +87,12 @@ func (f *fakeEnvelopes) resetCounts() {
 }
 
 var _ EnvelopeStore = (*fakeEnvelopes)(nil)
+
+// deliverMailboxFixture 为容量/淘汰场景建立真实存在的普通信封，避免用损坏 mailID 填邮箱。
+func deliverMailboxFixture(h *harness, ctx context.Context, playerID int64, mailID string, now int64) error {
+	_, err := h.envelopes.Create(ctx, Envelope{ID: mailID, Audience: AudienceDirect, Recipients: []int64{playerID}, Subject: "fixture", CreatedAtUnix: h.clock.Now().Unix(), ExpiresAtUnix: h.clock.Now().Add(30 * 24 * time.Hour).Unix()})
+	if err != nil {
+		return err
+	}
+	return h.service.Deliver(ctx, playerID, mailID, now)
+}

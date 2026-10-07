@@ -723,9 +723,9 @@ var everyNamespace = []string{
 	":activity:owed:",
 	":mail:env:", ":mail:box:", ":mail:send:",
 	":match:queue:",
-	":platform:order:",
+	":platform:order:", ":platform:pending",
 	":rank:z:", ":rank:o:",
-	":session:run:", ":session:claim:", ":session:req:",
+	":session:run:", ":session:claim:", ":session:req:", ":session:admission",
 }
 
 // The per-package constructors contribute no storage logic. Their entire job
@@ -960,6 +960,18 @@ func driveEveryPackage(t *testing.T, c fredis.IRedis, root string) {
 		t.Fatal(err)
 	}
 
+	// 保留一笔待投递订单，才能验证恢复索引的实际键空间；已完成订单会自动移除索引。
+	paid, found, err := orders.Get(ctx, "o1")
+	if err != nil || !found {
+		t.Fatalf("get paid order: %v %v", found, err)
+	}
+	pending := paid.Value
+	pending.OrderID, pending.State = "pending-order", platform.DeliveryReserved
+	pending.DeliveredAtUnix, pending.Attempts = 0, 0
+	if _, created, err := orders.Create(ctx, pending.OrderID, pending); err != nil || !created {
+		t.Fatalf("create pending: %v %v", created, err)
+	}
+
 	// rank: the sorted set and the owner hash.
 	rankStore, err := rank.NewRedisStore(c, rank.RedisConfig{Prefix: root + ":rank"})
 	if err != nil {
@@ -988,6 +1000,10 @@ func driveEveryPackage(t *testing.T, c fredis.IRedis, root string) {
 	}
 	if _, err := sessionSvc.Enter(ctx, 1, session.EnterRequest{Kind: "d7", RequestID: "r1"}); err != nil {
 		t.Fatal(err)
+	}
+	pendingRun := session.Run{ID: "unadmitted", OwnerID: 2, Kind: "d7", RequestID: "r2", State: session.StateOpen, DeadlineUnix: time.Now().Add(time.Hour).Unix(), AdmissionPending: true}
+	if _, created, err := sessionStores.Runs.Create(ctx, pendingRun.ID, pendingRun); err != nil || !created {
+		t.Fatalf("create unadmitted: %v %v", created, err)
 	}
 }
 
@@ -1039,4 +1055,38 @@ return found`, nil, pattern)
 		}
 	}
 	return out
+}
+
+// 创建与准入索引同一 CAS 落地；无 owner claim 的过期记录也必须能被回收。
+func TestSessionAdmissionRecoveryRunsOnRedis(t *testing.T) {
+	stores, err := session.NewRedisStores(client(t), session.RedisConfig{Prefix: prefix(t, "admission"), RequestTTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	now := time.Now()
+	pending := session.Run{ID: "orphan", OwnerID: 42, Kind: "dungeon", State: session.StateOpen, DeadlineUnix: now.Add(-time.Minute).Unix(), AdmissionPending: true}
+	if _, created, err := stores.Runs.Create(ctx, pending.ID, pending); err != nil || !created {
+		t.Fatalf("create: %v %v", created, err)
+	}
+	svc, err := session.New(session.Config{Runs: stores.Runs, Claims: stores.Claims, Requests: stores.Requests, Now: func() time.Time { return now }, Release: session.ReleaserFunc(func(context.Context, session.Run, session.Resource) error {
+		t.Error("unadmitted run released external resource")
+		return nil
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := stores.Runs.(session.AdmissionSource)
+	if ids, err := source.PendingAdmissions(ctx, now.Unix(), 10); err != nil || len(ids) != 1 {
+		t.Fatalf("index: %v %v", ids, err)
+	}
+	if _, err := svc.SweepPending(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := stores.Runs.Get(ctx, pending.ID); err != nil || found {
+		t.Fatalf("orphan: %v %v", found, err)
+	}
+	if ids, err := source.PendingAdmissions(ctx, now.Unix(), 10); err != nil || len(ids) != 0 {
+		t.Fatalf("index not cleared atomically: %v %v", ids, err)
+	}
 }

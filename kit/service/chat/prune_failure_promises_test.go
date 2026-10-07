@@ -29,7 +29,7 @@ func TestPruneFailureIsCountedNotJustReturned(t *testing.T) {
 	recorder := servicemetrics.NewRecorder()
 	wire := errors.New("channel state: connection reset")
 	store, err := NewStore(failingChannelState{Store: versionstore.NewMemoryStore[string, channelState](), err: wire}, Config{
-		Policy: allowAllPolicy{}, Bodies: testRegistry(t), Metrics: recorder,
+		RetentionAge: DefaultRetentionAge, Policy: allowAllPolicy{}, Bodies: testRegistry(t), Metrics: recorder,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestPruneFailureIsCountedNotJustReturned(t *testing.T) {
 
 	// 冲突不算失败；冲突本身由 versionstore 统一计数（第十二轮决定），chat 不再另报 Conflict。
 	conflicting, err := NewStore(failingChannelState{Store: versionstore.NewMemoryStore[string, channelState](), err: versionstore.ErrConflict}, Config{
-		Policy: allowAllPolicy{}, Bodies: testRegistry(t), Metrics: recorder,
+		RetentionAge: DefaultRetentionAge, Policy: allowAllPolicy{}, Bodies: testRegistry(t), Metrics: recorder,
 	})
 	if err != nil {
 		t.Fatal(err)

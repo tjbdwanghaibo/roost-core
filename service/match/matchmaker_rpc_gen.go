@@ -168,7 +168,7 @@ type rpcCandidatesResponse struct {
 // rather than a struct field whose zero value looks valid.
 type rpcCommitRequest struct {
 	Queue     Queue    `json:"queue"`
-	TicketIDs []string `json:"ticket_i_ds"`
+	TicketIDs []string `json:"ticket_ids"`
 }
 
 // rpcCommitResponse is the Commit response on the wire.

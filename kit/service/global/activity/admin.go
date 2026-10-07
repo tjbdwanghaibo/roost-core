@@ -23,8 +23,8 @@ import (
 // platform's exhausted order: a terminal state with nothing on the other side
 // of it.
 //
-// It is reached the same way, too: a game server that is down for longer than
-// DispatchMaxAttempts × the backoff exhausts every dispatch aimed at it.
+// 宕机本身不消耗次数：只有 game 调用 AttemptDispatch 取走 payload 才计一次。
+// 永久下线的 game 由运维显式 ExhaustDispatch；短暂离线继续等待，不伪造失败尝试。
 //
 // # No bus transport, and no enumeration
 //
@@ -41,6 +41,10 @@ import (
 // need an index outside the compare-and-set that sets the terminal state, so it
 // could disagree with the records it indexes.
 type Admin interface {
+	// ExhaustDispatch 放弃给永久下线 game 的投递，并记录原因。它不表示奖励已发放，
+	// 不改 ACK token；恢复服务后可 ReopenDispatch，沿用同一业务去重身份。
+	ExhaustDispatch(ctx context.Context, key Key, gameSID int32, note string) (dispatch Dispatch, err error)
+
 	// ReopenDispatch returns an exhausted dispatch to the retry queue with a
 	// fresh attempt budget. Use it after the receiving game server is back.
 	ReopenDispatch(ctx context.Context, key Key, gameSID int32, note string) (dispatch Dispatch, err error)
@@ -75,6 +79,46 @@ type Admin interface {
 // MaxAdminNoteBytes bounds an operator note. It is stored on the dispatch and
 // read back by whoever looks at it next.
 const MaxAdminNoteBytes = 512
+
+// ExhaustDispatch implements Admin. 仅 owner 进程内暴露，不注册为总线 RPC。
+func (s *Service) ExhaustDispatch(ctx context.Context, key Key, gameSID int32, note string) (Dispatch, error) {
+	if err := key.Validate(); err != nil {
+		return Dispatch{}, err
+	}
+	if gameSID <= 0 {
+		return Dispatch{}, fmt.Errorf("%w: game sid must be positive", ErrInvalid)
+	}
+	note, err := validateAdminNote(note)
+	if err != nil {
+		return Dispatch{}, err
+	}
+	nowUnix := s.cfg.Now().Unix()
+	result, applied, err := s.cfg.Dispatches.Update(ctx, DispatchKey{Activity: key, GameSID: gameSID}, func(current Dispatch, found bool) (Dispatch, bool, error) {
+		if !found {
+			return current, false, ErrDispatchMissing
+		}
+		switch current.State {
+		case DispatchExhausted:
+			return current, false, nil
+		case DispatchPending:
+			next := current.clone()
+			next.State, next.ExhaustedAtUnix = DispatchExhausted, nowUnix
+			next.AdminNote, next.AdminActionAtUnix = note, nowUnix
+			return next, true, nil
+		default:
+			return current, false, ErrNotResolvable
+		}
+	})
+	if err != nil {
+		return Dispatch{}, err
+	}
+	if applied {
+		s.report.Accepted("admin.exhaust_dispatch")
+	} else {
+		s.report.Replayed("admin.exhaust_dispatch")
+	}
+	return result.Value, nil
+}
 
 // ReopenDispatch implements Admin.
 //

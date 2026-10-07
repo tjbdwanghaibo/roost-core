@@ -51,11 +51,11 @@ func TestAMessageStoredBeforeSentAtUnixShowsItsStoredTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	const storedAt = 1_699_000_000
-	legacy := []byte(`{"last_seq":1,"ring":[{"seq":1,"channel":{"kind":"world","target":7},` +
+	missingTimestamp := []byte(`{"last_seq":1,"ring":[{"seq":1,"channel":{"kind":"world","target":7},` +
 		`"from":{"role_id":1,"name":"role-1"},"origin":"role","type":"text","body":"aGk=",` +
-		`"request_id":"old","stored_at_unix":1699000000}],"requests":{"old":1}}`)
+		`"request_id":"old","stored_at_unix":1699000000}],"requests":{"old":{"sequence":1,"origin":"role","role_id":1}}}`)
 	var state channelState
-	if err := json.Unmarshal(legacy, &state); err != nil {
+	if err := json.Unmarshal(missingTimestamp, &state); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := h.state.Update(ctx, ref.key, func(channelState, bool) (channelState, bool, error) {
@@ -69,17 +69,17 @@ func TestAMessageStoredBeforeSentAtUnixShowsItsStoredTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(page.Messages) != 1 || page.Messages[0].SentAtUnix != storedAt {
-		t.Fatalf("History of a legacy message = %+v, want SentAtUnix filled from StoredAtUnix %d", page.Messages, storedAt)
+		t.Fatalf("History of a missingTimestamp message = %+v, want SentAtUnix filled from StoredAtUnix %d", page.Messages, storedAt)
 	}
 	replay := mustPublish(t, h, role(1), text("hi", "old", world()))
 	if replay.Seq != 1 || replay.SentAtUnix != storedAt {
-		t.Fatalf("replay of a legacy message = seq %d SentAtUnix %d, want seq 1 SentAtUnix %d", replay.Seq, replay.SentAtUnix, storedAt)
+		t.Fatalf("replay of a missingTimestamp message = seq %d SentAtUnix %d, want seq 1 SentAtUnix %d", replay.Seq, replay.SentAtUnix, storedAt)
 	}
 	stored, _, err := h.state.Get(ctx, ref.key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stored.Value.Ring[0].SentAtUnix != 0 {
-		t.Fatalf("the stored legacy message was rewritten with SentAtUnix %d; the fallback is a read-side view", stored.Value.Ring[0].SentAtUnix)
+		t.Fatalf("the stored missingTimestamp message was rewritten with SentAtUnix %d; the fallback is a read-side view", stored.Value.Ring[0].SentAtUnix)
 	}
 }

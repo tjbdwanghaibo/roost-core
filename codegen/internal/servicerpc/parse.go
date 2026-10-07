@@ -69,8 +69,6 @@ type Method struct {
 	// turns that bound into cross-replica contention. Affinity is therefore a
 	// per-method transport property, not a default.
 	Affinity string
-	// Reliable requests at-least-once delivery.
-	Reliable bool
 	// Doc is the method's own comment, carried into the generated client so
 	// the generated code reads like the interface rather than like a table.
 	Doc []string
@@ -86,6 +84,10 @@ type Field struct {
 
 // ParseDir finds every //roost:rpc interface under dir.
 func ParseDir(dir string) ([]Service, error) {
+	return parseDir(dir, true)
+}
+
+func parseDir(dir string, checkNames bool) ([]Service, error) {
 	fset := token.NewFileSet()
 	packages, err := parser.ParseDir(fset, dir, func(info fs.FileInfo) bool {
 		name := info.Name()
@@ -109,6 +111,7 @@ func ParseDir(dir string) ([]Service, error) {
 		// resolvable. Checking only the file the interface is in would miss
 		// exactly the split a real package has.
 		facts := pkgFacts{
+			checkNames:        checkNames,
 			types:             buildTypeIndex(pkg.Files),
 			declared:          declaredNames(pkg.Files),
 			hasRequestInvalid: declaresRequestInvalid(pkg.Files),
@@ -217,6 +220,7 @@ func interfaceMarker(groups ...*ast.CommentGroup) (map[string]string, bool) {
 // returned while the check ran inside buildService. Every package-wide fact
 // now travels in one value, so a rule cannot read a zero one by accident.
 type pkgFacts struct {
+	checkNames bool
 	// types are the package's struct declarations, for field-by-field wire
 	// safety checks.
 	types typeIndex

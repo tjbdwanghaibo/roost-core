@@ -138,6 +138,7 @@ func (s *Service) BeginMigration(ctx context.Context, gameSID int32, targetGloba
 		}
 		next := current
 		next.State = RouteMigrating
+		next.CompletedFromEpoch = 0
 		next.TargetGlobalSID = targetGlobalSID
 		next.Epoch = current.Epoch + 1
 		next.UpdatedAtUnix = now.Unix()
@@ -161,6 +162,10 @@ func (s *Service) CompleteMigration(ctx context.Context, gameSID int32, expectEp
 		if !found {
 			return current, false, fmt.Errorf("%w: game %d", ErrRouteMissing, gameSID)
 		}
+		if expectEpoch != 0 && current.State == RouteActive && current.CompletedFromEpoch == expectEpoch {
+			result, replayed = current, true
+			return current, false, nil
+		}
 		if current.Epoch != expectEpoch {
 			s.report.Refused("complete_migration", "stale_epoch")
 			return current, false, fmt.Errorf("%w: game %d is at epoch %d, caller presented %d",
@@ -175,6 +180,7 @@ func (s *Service) CompleteMigration(ctx context.Context, gameSID int32, expectEp
 		}
 		next := current
 		next.GlobalSID = current.TargetGlobalSID
+		next.CompletedFromEpoch = expectEpoch
 		next.TargetGlobalSID = 0
 		next.State = RouteActive
 		next.Epoch = current.Epoch + 1

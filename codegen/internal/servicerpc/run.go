@@ -5,15 +5,68 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
 func Run(args []string, stdout io.Writer) error {
 	return RunIn("", args, stdout)
+}
+
+// 对最终输出包检查名字；源包的 Server 不应阻止另一个包生成 assembly，
+// 输出包里已有的手写 Server 则必须在写任何文件前拒绝。
+func checkOutputNames(dir string, generated []File, orphans []string) error {
+	ignored := make(map[string]bool, len(generated)+len(orphans))
+	for _, file := range generated {
+		ignored[file.Name] = true
+	}
+	for _, name := range orphans {
+		ignored[name] = true
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	fset := token.NewFileSet()
+	existing := make(map[string]*ast.File)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || ignored[name] {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			return err
+		}
+		existing[name] = file
+	}
+	names := declaredNames(existing)
+	for _, file := range generated {
+		parsed, err := parser.ParseFile(fset, file.Name, file.Content, 0)
+		if err != nil {
+			return err
+		}
+		declared := declaredNames(map[string]*ast.File{file.Name: parsed})
+		ordered := make([]string, 0, len(declared))
+		for name := range declared {
+			ordered = append(ordered, name)
+		}
+		slices.Sort(ordered)
+		for _, name := range ordered {
+			if prior, found := names[name]; found {
+				return fmt.Errorf("servicerpc: output package %s already declares %s as %s; generated %s would collide", dir, name, prior, file.Name)
+			}
+			names[name] = "generated declaration in " + file.Name
+		}
+	}
+	return nil
 }
 
 // RunIn is Run with relative -dir and -out taken under base instead of the
@@ -86,7 +139,8 @@ func RunIn(base string, args []string, stdout io.Writer) error {
 		outDir = absDir
 	}
 	regenerate := regenerateCommand(*dir, *out, half)
-	services, err := ParseDir(absDir)
+	// 拆分生成时源包和输出包不同；实际声明冲突在生成后按输出文件检查。
+	services, err := parseDir(absDir, false)
 	if err != nil {
 		return err
 	}
@@ -106,6 +160,9 @@ func RunIn(base string, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := checkOutputNames(outDir, generated, orphans); err != nil {
+		return err
+	}
 	if len(services) == 0 {
 		_, _ = fmt.Fprintf(stdout, "no //roost:rpc interfaces in %s\n", absDir)
 	}
@@ -117,9 +174,6 @@ func RunIn(base string, args []string, stdout io.Writer) error {
 			suffix := ""
 			if method.Affinity != "" {
 				suffix += fmt.Sprintf(" affinity=%s", method.Affinity)
-			}
-			if method.Reliable {
-				suffix += " reliable"
 			}
 			_, _ = fmt.Fprintf(stdout, "  %-14s params=%d results=%d%s\n",
 				method.Name, len(method.Params), len(method.Results), suffix)

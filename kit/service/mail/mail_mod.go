@@ -50,7 +50,7 @@ type config struct {
 	Mail struct {
 		KeyPrefix  string        `config:"key_prefix" required:"true" example:"roost:{project}:mail" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
 		SendTTL    time.Duration `config:"send_ttl" required:"true" min:"1ns" example:"720h" help:"Required, with no default. It must exceed the longest client retry horizon: past it a retried\nsend is indistinguishable from a new one and the recipient gets the mail twice."`
-		ClaimLease time.Duration `config:"claim_lease" default:"30s" min:"1ns" example:"30s"`
+		ClaimLease time.Duration `config:"claim_lease" default:"30s" min:"1s" example:"30s"`
 	} `config:"mail"`
 }
 
@@ -89,8 +89,8 @@ func (m *Mod) Provide(r *app.Registry) error {
 	// about what time it is. They did once, and the result was a mail that
 	// read as live and had already been evicted.
 	//
-	// It is the business clock (D-L3): mail expiry is business time. The
-	// claim lease is system time, so the service also gets time.Now for it.
+	// 邮件过期和领取预约截止都使用业务单调钟（D-L3）；Redis 物理 TTL 按剩余
+	// 时长设置，不能把业务时间戳直接当成系统绝对过期时间。
 	now := app.BusinessClock(r).Now
 	stores, err := NewRedisStores(client, RedisConfig{
 		Prefix: m.prefix, SendTTL: m.sendTTL, Now: now,

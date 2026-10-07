@@ -632,7 +632,7 @@ func TestARetriedSendReachesTheRecipientItMissed(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	for i := 0; i < MaxMailboxEntries; i++ {
-		if err := h.service.Deliver(ctx, 2, fmt.Sprintf("old-%03d", i), 0); err != nil {
+		if err := deliverMailboxFixture(h, ctx, 2, fmt.Sprintf("old-%03d", i), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -861,11 +861,11 @@ func TestAFullMailboxRefusesInsteadOfDroppingUnreadMail(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	for i := 0; i < MaxMailboxEntries; i++ {
-		if err := h.service.Deliver(ctx, 1, fmt.Sprintf("mail-%d", i), 0); err != nil {
+		if err := deliverMailboxFixture(h, ctx, 1, fmt.Sprintf("mail-%d", i), 0); err != nil {
 			t.Fatalf("delivery %d: %v", i, err)
 		}
 	}
-	err := h.service.Deliver(ctx, 1, "one-too-many", 0)
+	err := deliverMailboxFixture(h, ctx, 1, "one-too-many", 0)
 	if !errors.Is(err, ErrMailboxFull) {
 		t.Fatalf("delivery into a full mailbox returned %v, want ErrMailboxFull", err)
 	}
@@ -898,7 +898,7 @@ func TestEvictionNeverDropsUnreadMailWhileTerminalEntriesExist(t *testing.T) {
 
 	const unread = MaxMailboxEntries - 10
 	for i := 0; i < unread; i++ {
-		if err := h.service.Deliver(ctx, 1, fmt.Sprintf("old-unread-%03d", i), 0); err != nil {
+		if err := deliverMailboxFixture(h, ctx, 1, fmt.Sprintf("old-unread-%03d", i), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -908,7 +908,7 @@ func TestEvictionNeverDropsUnreadMailWhileTerminalEntriesExist(t *testing.T) {
 	h.clock.advance(time.Hour)
 	for i := 0; i < 10; i++ {
 		id := fmt.Sprintf("new-deleted-%03d", i)
-		if err := h.service.Deliver(ctx, 1, id, 0); err != nil {
+		if err := deliverMailboxFixture(h, ctx, 1, id, 0); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := h.service.Delete(ctx, 1, id); err != nil {
@@ -918,7 +918,7 @@ func TestEvictionNeverDropsUnreadMailWhileTerminalEntriesExist(t *testing.T) {
 	}
 
 	h.clock.advance(time.Hour)
-	if err := h.service.Deliver(ctx, 1, "fresh", 0); err != nil {
+	if err := deliverMailboxFixture(h, ctx, 1, "fresh", 0); err != nil {
 		t.Fatalf("delivery into an evictable mailbox failed: %v", err)
 	}
 

@@ -60,8 +60,8 @@ func TestCommitRefusesEachInvalidTicketSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("legal commit: %v", err)
 	}
-	if _, err := store.Commit(ctx, q, []string{a.ID, b.ID}); !errors.Is(err, ErrConflict) {
-		t.Fatalf("committing already matched tickets = %v, want ErrConflict", err)
+	if replay, err := store.Commit(ctx, q, []string{a.ID, b.ID}); err != nil || replay.ID != match.ID {
+		t.Fatalf("same tickets must replay the original match: %+v %v", replay, err)
 	}
 	if len(match.Members) != 2 {
 		t.Fatalf("match = %+v", match)

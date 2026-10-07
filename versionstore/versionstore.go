@@ -41,8 +41,8 @@ var (
 	// held a different version than the store.
 	ErrVersionMismatch = errors.New("versionstore: version mismatch")
 
-	// ErrAborted is returned by Update when the mutate function asks not to
-	// save and there was nothing to return.
+	// ErrAborted is retained for source compatibility.
+	// Deprecated: Update returns the current value and nil when mutate declines to save.
 	ErrAborted = errors.New("versionstore: update aborted")
 
 	ErrCodecNil = errors.New("versionstore: codec is nil")

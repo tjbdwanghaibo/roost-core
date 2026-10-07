@@ -349,8 +349,9 @@ func (s *RedisStore[K, T]) Update(ctx context.Context, key K, mutate Mutate[T]) 
 	if err != nil {
 		return Versioned[T]{}, false, err
 	}
+	remaining := s.cfg.MaxAttempts
 	if write := resumedWrite(ctx, redisKey); write != nil {
-		result, done, err := s.resumeUpdate(ctx, write, mutate)
+		result, done, err := s.resumeUpdate(ctx, write, mutate, &remaining)
 		if done || err != nil {
 			return result, done, err
 		}
@@ -361,7 +362,7 @@ func (s *RedisStore[K, T]) Update(ctx context.Context, key K, mutate Mutate[T]) 
 	if err != nil {
 		return Versioned[T]{}, false, err
 	}
-	for attempt := 0; attempt < s.cfg.MaxAttempts; attempt++ {
+	for attempt := 0; remaining > 0; attempt++ {
 		next, save, err := mutate(current.Value, found)
 		if err != nil {
 			return Versioned[T]{}, false, err
@@ -384,13 +385,16 @@ func (s *RedisStore[K, T]) Update(ctx context.Context, key K, mutate Mutate[T]) 
 		// resends only when the key proves the command has not run, so a
 		// reply that went missing is neither applied twice nor mistaken for a
 		// lost race (A2 ③).
-		result, err := s.settle(ctx, write, false)
+		result, err := s.settleWithBudget(ctx, write, false, &remaining)
 		if result == outcomeFailed {
 			return Versioned[T]{}, false, err
 		}
 		CountCompareAndSet(s.cfg.Prefix, result == outcomeApplied)
 		if result == outcomeApplied {
 			return Versioned[T]{Value: next, Version: write.version}, true, nil
+		}
+		if remaining == 0 {
+			break
 		}
 		// Lost the race. Back off, then re-read: the backoff exists so the
 		// writer that won takes its turn, and the value CompareAndSet handed
@@ -413,7 +417,7 @@ func (s *RedisStore[K, T]) Update(ctx context.Context, key K, mutate Mutate[T]) 
 // done reports that the earlier write landed and result is what it wrote;
 // done false with a nil error means it provably did not, and the caller
 // performs the update afresh.
-func (s *RedisStore[K, T]) resumeUpdate(ctx context.Context, write *pendingWrite, mutate Mutate[T]) (result Versioned[T], done bool, err error) {
+func (s *RedisStore[K, T]) resumeUpdate(ctx context.Context, write *pendingWrite, mutate Mutate[T], remaining *int) (result Versioned[T], done bool, err error) {
 	if write.kind != writeUpdate {
 		return Versioned[T]{}, false, tokenMismatch(write, "the earlier write was not an Update")
 	}
@@ -440,11 +444,13 @@ func (s *RedisStore[K, T]) resumeUpdate(ctx context.Context, write *pendingWrite
 	if !same {
 		return Versioned[T]{}, false, tokenMismatch(write, "mutate yields a different value from the same base")
 	}
-	settled, err := s.settle(ctx, write, true)
+	settled, err := s.settleWithBudget(ctx, write, true, remaining)
 	switch settled {
 	case outcomeApplied:
+		CountCompareAndSet(s.cfg.Prefix, true)
 		return Versioned[T]{Value: next, Version: write.version}, true, nil
 	case outcomeLost:
+		CountCompareAndSet(s.cfg.Prefix, false)
 		return Versioned[T]{}, false, nil
 	default:
 		return Versioned[T]{}, false, err

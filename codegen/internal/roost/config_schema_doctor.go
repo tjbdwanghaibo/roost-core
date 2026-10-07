@@ -129,8 +129,11 @@ func serviceConfigSchema(m Manifest, service string) (configschema.Schema, error
 			schemas = append(schemas, schema)
 		}
 	}
-	if access, ok := m.Access["player"]; ok && access.Service == service && contains(access.Transports, "tcp") {
-		schemas = append(schemas, playerTCPSchema())
+	if access, ok := m.Access["player"]; ok && access.Service == service {
+		schemas = append(schemas, playerAccessSchema())
+		if contains(access.Transports, "tcp") {
+			schemas = append(schemas, playerTCPSchema())
+		}
 	}
 	return configschema.Merge(schemas...)
 }
@@ -156,6 +159,7 @@ func allFrameworkConfigSchema() configschema.Schema {
 		add(kitConfigSchemas[name])
 	}
 	add(playerTCPSchema())
+	add(playerAccessSchema())
 	return all
 }
 

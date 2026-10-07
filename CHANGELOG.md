@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+- B3 RR-20261008-09～14：versionstore 共享写预算和 Resume 指标；迁移/匹配重放；Session admission 恢复索引；RPC 类型与输出包校验；转服返回 owner_sid；game-demo 启动必需 WriteGate。
+- **升级需清空** chat 频道、global route、Session run/claim/request/admission 状态及索引（chat/route/run codec v2）；**先停旧再起新**。重新生成 RPC 两端（ticket_ids/urls）和 EnterGame PB。服务进程可靠 RPC 使用 nats.rpc.transport=jetstream，生成器拒绝无效果的每方法 reliable 标记。
+
+
+- B3 首批 RR-20261008-01～08：修复 session 认领竞态、亚秒配置、缺失邮件信封、服务身份校验、directory 预约释放、platform 后台重试开关、活动扫描隔离和创建竞争。活动新增 owner 内 Admin.ExhaustDispatch，记录人工原因、保留投递 token，支持后续 Reopen。
+- **chat 不兼容升级**：频道状态 v2 保存请求发送者身份，拒绝旧版本；先停旧进程、清空旧频道状态再启动新版本。RetentionAge=0 关闭年龄裁剪，若需要原 72h 缺省效果须显式设置 DefaultRetentionAge；条数上限继续生效。
+
 - B2 / RR-20261007-26～31：回避不再消耗暴击钩子，吸血只恢复存活来源的缺血量；属性聚合不回绕且可逆；buff 叠层/永久期限边界修复。战斗 Host 缺映射返回错误、资源读/扣费统一 base、验证 catalog；无变化不标 DAO 脏位。GridTerrain 寻路使用一致视图，访问预算排除重复展开。DAO 每字段首次修改才复制 undo，补正式多实体回滚回归与业务 tick/概率事实接入契约。
 
 

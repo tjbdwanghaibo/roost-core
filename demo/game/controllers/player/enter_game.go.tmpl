@@ -69,6 +69,8 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 		}
 		if errors.Is(err, apperrors.ErrPlayerElsewhere) {
 			slog.Warn("enter_game: player is bound to another server", "player_id", context.PlayerID, "owner_sid", boundSID)
+			code, reason := errcode.ClientError(err)
+			return &pb.EnterGameResponse{Code:code, Reason:reason, OwnerSID:boundSID},nil
 		} else {
 			slog.Error("enter_game: player not taken into service", "player_id", context.PlayerID, "err", err)
 		}

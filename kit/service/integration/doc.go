@@ -2,8 +2,8 @@
 // backends.
 //
 // It exists because of a claim this repository makes and could otherwise not
-// support: that seven of its nine packages need NO storage code of their own,
-// because their state is `versionstore.Store` and roost-kit already ships a
+// support: that the ten service packages reuse versioned storage where applicable,
+// because their state is `versionstore.Store` and roost-core already ships a
 // production Redis implementation of that contract. Each package's own tests
 // run against in-process doubles, so on their own they prove the logic and say
 // nothing about whether the reuse is real.
@@ -23,5 +23,5 @@
 // on every commit without a Redis.
 //
 //	docker run --rm -p 6379:6379 redis:7
-//	REDIS_ADDR=127.0.0.1:6379 go test -tags integration ./integration/
+//	REDIS_ADDR=127.0.0.1:6379 go test -tags integration ./kit/service/integration/
 package integration

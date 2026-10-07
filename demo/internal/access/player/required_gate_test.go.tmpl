@@ -1,0 +1,35 @@
+package player
+
+import (
+	"context"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"testing"
+	player_agent "{{MODULE}}/game/player_agent"
+)
+
+func TestRequiredWriteGateRefusesBeforeServiceInit(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("player_access.require_write_gate", true)
+	mod := NewMod()
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	registry := app.NewRegistry(cfg)
+	called := false
+	handler := writeGateMiddleware(registry, mod.requireWriteGate)(func(*player_agent.Context, any) (any, error) { called = true; return nil, nil })
+	_, err := handler(&player_agent.Context{BaseCtx: context.Background(), PlayerID: 1}, nil)
+	if err == nil || called {
+		t.Fatalf("request entered business before required gate registered: called=%v err=%v", called, err)
+	}
+	if err := registry.Register(WriteGateCapability, readyGate{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handler(&player_agent.Context{BaseCtx: context.Background(), PlayerID: 1}, nil); err != nil || !called {
+		t.Fatalf("registered gate not picked up: called=%v err=%v", called, err)
+	}
+}
+
+type readyGate struct{}
+
+func (readyGate) AdmitMessage(int64, uint32) error { return nil }

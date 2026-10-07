@@ -104,7 +104,7 @@ func statusOf(err error) rpcStatus {
 // rather than a struct field whose zero value looks valid.
 type rpcOpenActivityRequest struct {
 	Key              Key     `json:"key"`
-	ExpectedGameSIDs []int32 `json:"expected_game_si_ds"`
+	ExpectedGameSIDs []int32 `json:"expected_game_sids"`
 }
 
 // rpcOpenActivityResponse is the OpenActivity response on the wire.

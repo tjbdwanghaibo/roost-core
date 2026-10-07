@@ -40,11 +40,8 @@ type LedgerEntry struct {
 
 // Releaser hands a run's external resources back.
 //
-// It is called at most once per resource, and the run records which resources
-// have been released, so a retried release is a no-op rather than a second
-// free. That record is what replaces the hand-written unwind path per failure
-// branch — one of which the service this replaces simply omitted, leaking a
-// scene and a replica together.
+// 释放成功后才写持久标记；成功回复或标记写入丢失时会再次调用。因此这里是
+// 至少一次释放尝试，调用方必须按 run/resource 身份幂等，不能依赖只调用一次。
 //
 // A Releaser that fails is retried: the resource stays unreleased on the run,
 // so a sweep or a later release picks it up. It must therefore tolerate being
@@ -142,6 +139,9 @@ func New(cfg Config) (*Service, error) {
 	}
 	if cfg.TTL == 0 {
 		cfg.TTL = DefaultTTL
+	}
+	if cfg.TTL < time.Second {
+		return nil, fmt.Errorf("TTL must be at least 1s: deadlines use Unix seconds")
 	}
 	if cfg.NewRunID == nil {
 		cfg.NewRunID = randomID
@@ -258,9 +258,10 @@ func (s *Service) Enter(ctx context.Context, ownerID int64, req EnterRequest) (R
 	run := Run{
 		ID: runID, OwnerID: ownerID, Kind: req.Kind, RequestID: req.RequestID,
 		State: StateOpen, Context: cloneContext(req.Context),
-		StartedAtUnix: nowUnix,
-		DeadlineUnix:  now.Add(s.cfg.TTL).Unix(),
-		UpdatedAtUnix: nowUnix,
+		AdmissionPending: true,
+		StartedAtUnix:    nowUnix,
+		DeadlineUnix:     now.Add(s.cfg.TTL).Unix(),
+		UpdatedAtUnix:    nowUnix,
 	}
 	if err := run.Validate(); err != nil {
 		return Run{}, err
@@ -293,21 +294,18 @@ func (s *Service) Enter(ctx context.Context, ownerID int64, req EnterRequest) (R
 		if err != nil {
 			return Run{}, errors.Join(err, s.discard(ctx, stored))
 		}
-		if !found {
-			// It was released between the Create and this read. Retaking is
-			// handled by the retry below.
-			held.Value = Claim{OwnerID: ownerID}
+		// 并发释放后已不存在的 claim 直接重取，不伪造空 RunID 交给损坏数据检查。
+		if found {
+			heldRun, resolved, err := s.resolveClaim(ctx, ownerID, held.Value, nowUnix)
+			if err != nil {
+				return Run{}, errors.Join(err, s.discard(ctx, stored))
+			}
+			if !resolved {
+				s.report.Refused("enter", "already_running")
+				return Run{}, errors.Join(fmt.Errorf("%w: owner %d holds run %s", ErrAlreadyRunning, ownerID, heldRun.ID), s.discard(ctx, stored))
+			}
 		}
-		heldRun, resolved, err := s.resolveClaim(ctx, ownerID, held.Value, nowUnix)
-		if err != nil {
-			return Run{}, errors.Join(err, s.discard(ctx, stored))
-		}
-		if !resolved {
-			s.report.Refused("enter", "already_running")
-			return Run{}, errors.Join(
-				fmt.Errorf("%w: owner %d holds run %s", ErrAlreadyRunning, ownerID, heldRun.ID),
-				s.discard(ctx, stored))
-		}
+
 		// The stale claim is gone; retake it.
 		_, claimed, err = s.cfg.Claims.Create(ctx, ownerID, Claim{
 			OwnerID: ownerID, RunID: runID, CreatedAtUnix: nowUnix,
@@ -324,6 +322,32 @@ func (s *Service) Enter(ctx context.Context, ownerID int64, req EnterRequest) (R
 				s.discard(ctx, stored))
 		}
 	}
+
+	// 取得 claim 后再次检查业务截止，再解除待准入标记。慢 Create 可能已跨过截止，
+	// 后台也可能回收过 run；不能把一个已失效的 run 交给业务。
+	admitNowUnix := s.cfg.Now().Unix()
+	admitted, _, err := s.cfg.Runs.Update(ctx, runID, func(current Run, found bool) (Run, bool, error) {
+		if !found {
+			return current, false, ErrRunMissing
+		}
+		if !current.Live(admitNowUnix) {
+			return current, false, ErrRunExpired
+		}
+		if !current.AdmissionPending {
+			return current, false, nil
+		}
+		next := current.clone()
+		next.AdmissionPending = false
+		return next, true, nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrRunMissing) || errors.Is(err, ErrRunExpired) {
+			return Run{}, errors.Join(err, s.releaseClaim(ctx, ownerID, runID), s.discard(ctx, stored))
+		}
+		// CAS 结果不明时保留 claim：它是后续 owner sweep 的恢复入口。
+		return Run{}, err
+	}
+	stored, run = admitted, admitted.Value
 
 	// The ledger write is the RequestID's only serialization point. The claim
 	// serializes "one live run per owner"; it cannot see another owner using
@@ -495,6 +519,10 @@ func (s *Service) Attach(ctx context.Context, ownerID int64, runID string, resou
 			refusal = "not_owner"
 			return current, false, fmt.Errorf("%w: run %s", ErrNotOwner, runID)
 		}
+		if current.AdmissionPending {
+			refusal = "admission_pending"
+			return current, false, fmt.Errorf("%w: run %s admission is not complete", ErrConflict, runID)
+		}
 		if current.State.Terminal() {
 			refusal = "terminal"
 			return current, false, fmt.Errorf("%w: run %s is %s", ErrRunTerminal, runID, current.State)
@@ -646,8 +674,7 @@ func (s *Service) resolve(ctx context.Context, run Run, state State, outcome str
 //
 // Each resource is marked released in its own compare-and-set, so a failure
 // part-way through leaves the ones already freed marked and the rest pending.
-// A retry then releases only what is left, which is what makes "release
-// exactly once" hold across retries rather than only on the happy path.
+// 重试跳过已持久标记的项。外部释放成功与标记之间没有原子性，Releaser 必须幂等。
 func (s *Service) releasePending(ctx context.Context, run Run, nowUnix int64) (Run, error) {
 	pending := run.Pending()
 	if len(pending) == 0 {

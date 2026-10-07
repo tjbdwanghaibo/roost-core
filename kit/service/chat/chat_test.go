@@ -222,7 +222,7 @@ func newHarness(t *testing.T, options ...option) *harness {
 	t.Helper()
 	h := &harness{clock: newClock(), metrics: newRecorder(), registry: testRegistry(t)}
 	h.policy = allowAllPolicy{}
-	cfg := Config{Policy: h.policy, Bodies: h.registry, Now: h.clock.Now, Metrics: h.metrics}
+	cfg := Config{RetentionAge: DefaultRetentionAge, Policy: h.policy, Bodies: h.registry, Now: h.clock.Now, Metrics: h.metrics}
 	svcCfg := ServiceConfig{System: grantingAuth()}
 	for _, apply := range options {
 		apply(&cfg, &svcCfg, h)
@@ -884,7 +884,7 @@ func TestOrderingComesFromTheSequenceNotTheClock(t *testing.T) {
 
 // --- defect 6: the seam cannot lose the checks ---
 
-func TestTheSeamEvaluatesThePolicyOnEveryPublishAndRead(t *testing.T) {
+func TestTheSeamEvaluatesPolicyOnNewPublishAndEveryRead(t *testing.T) {
 	ctx := context.Background()
 	policy := &recordingPolicy{}
 	h := newHarness(t, withPolicy(policy))
@@ -896,11 +896,10 @@ func TestTheSeamEvaluatesThePolicyOnEveryPublishAndRead(t *testing.T) {
 	if published, read := policy.counts(); published != 1 || read != 1 {
 		t.Fatalf("policy consulted %d times for publish and %d for read, want 1 and 1", published, read)
 	}
-	// A replay still consults the policy: a muted player must not be able to
-	// publish by replaying an old key.
+	// 每次请求仍获取权限结论；重放只回原结果，不受之后的禁言撤销。
 	mustPublish(t, h, role(1), text("hello", "k1", world()))
 	if published, _ := policy.counts(); published != 2 {
-		t.Fatalf("a replay skipped the publish policy (%d calls)", published)
+		t.Fatalf("publish policy calls=%d want=2", published)
 	}
 
 	// A refusal carries the game's own reason and stores nothing.

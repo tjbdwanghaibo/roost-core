@@ -3,6 +3,7 @@ package servicerpc
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"slices"
 	"strings"
 
@@ -94,6 +95,9 @@ func buildService(facts pkgFacts, pkgName, path, name string, options map[string
 	// Refusing here names the collision, what already holds the name, and the
 	// fact that the generated side cannot move.
 	for _, emitted := range emittedNames(service) {
+		if !facts.checkNames {
+			break
+		}
 		kind, taken := facts.declared[emitted]
 		if !taken {
 			continue
@@ -140,7 +144,8 @@ func buildService(facts pkgFacts, pkgName, path, name string, options map[string
 			}
 			continue
 		}
-		if !strings.HasSuffix(call, "()") || strings.ContainsAny(call, " (") != strings.HasSuffix(call, "()") {
+		methodName, hasCall := strings.CutSuffix(call, "()")
+		if !hasCall || !token.IsIdentifier(methodName) || !ast.IsExported(methodName) {
 			return Service{}, fmt.Errorf("%s: method %s declares affinity=%s; the derived form is "+
 				"param.Method() with no arguments, because the key is computed at call time and "+
 				"nothing else is in scope", where, method.Name, method.Affinity)
@@ -186,7 +191,9 @@ func buildMethod(index typeIndex, where string, item *ast.Field, funcType *ast.F
 	method := Method{Name: name, Doc: commentLines(item.Doc)}
 	if options, ok := interfaceMarker(item.Doc, item.Comment); ok {
 		method.Affinity = options["affinity"]
-		_, method.Reliable = options["reliable"]
+		if _, reliable := options["reliable"]; reliable {
+			return Method{}, fmt.Errorf("%s: method %s cannot select reliable per method; configure nats.rpc.transport=jetstream on both owner and client", where, name)
+		}
 	}
 
 	// --- parameters ---

@@ -17,7 +17,7 @@ import (
 func Redis(r *app.Registry) (fredis.IRedis, error) {
 	client, ok := app.Lookup[fredis.IRedis](r, ModRedis)
 	if !ok || client == nil {
-		return nil, fmt.Errorf("servicemods: capability %q not found; add roost-kit/redis.NewRedisMod()", ModRedis)
+		return nil, fmt.Errorf("mods: capability %q not found; add kit/redis.NewRedisMod()", ModRedis)
 	}
 	return client, nil
 }

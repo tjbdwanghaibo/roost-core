@@ -97,6 +97,9 @@ func New(cfg Config) (*Service, error) {
 	if cfg.ClaimLease == 0 {
 		cfg.ClaimLease = DefaultClaimLease
 	}
+	if cfg.ClaimLease < time.Second {
+		return nil, fmt.Errorf("ClaimLease must be at least 1s: deadlines use Unix seconds")
+	}
 	if cfg.NewMailID == nil {
 		cfg.NewMailID = randomID
 	}
@@ -367,11 +370,13 @@ func (s *Service) Deliver(ctx context.Context, playerID int64, mailID string, no
 	if err != nil {
 		return err
 	}
-	expiry := int64(0)
-	if found {
-		expiry = envelope.ExpiresAtUnix
+	if !found {
+		return fmt.Errorf("%w: envelope %s", ErrMailMissing, mailID)
 	}
-	return s.deliver(ctx, playerID, mailID, nowUnix, expiry)
+	if envelope.Expired(nowUnix) {
+		return fmt.Errorf("%w: envelope %s", ErrExpired, mailID)
+	}
+	return s.deliver(ctx, playerID, mailID, nowUnix, envelope.ExpiresAtUnix)
 }
 
 func (s *Service) deliver(ctx context.Context, playerID int64, mailID string, nowUnix, expiry int64) error {

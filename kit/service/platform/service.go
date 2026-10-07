@@ -253,6 +253,9 @@ func (s *Service) AuthSession(ctx context.Context, credential Credential) (Sessi
 
 // ValidateSession verifies a session token.
 func (s *Service) ValidateSession(playerID int64, token string) error {
+	if playerID <= 0 {
+		return fmt.Errorf("platform: player id must be positive")
+	}
 	if _, err := security.VerifySessionToken(token, s.cfg.SessionSecret, playerID, s.cfg.Now()); err != nil {
 		s.report.Refused("validate_session", "bad_token")
 		return fmt.Errorf("platform: session is invalid: %w", err)

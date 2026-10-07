@@ -1,4 +1,4 @@
-# roost-service
+# Roost 通用服务
 
 roost 框架的**通用服务层**：与玩法无关的公共服务，作为库提供给业务仓装配。
 
@@ -12,7 +12,7 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
 的模式）。它们不是风格偏好，每一条都对应一类已确认的缺陷。完整依据见
 [roost-core docs/ROOST_SERVICE_EXTRACTION.md](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/ROOST_SERVICE_EXTRACTION.md)。
 
-1. **状态变更只有版本化路径。** 共享状态走 `roost-kit/versionstore`：契约里没有
+1. **状态变更只有版本化路径。** 共享状态走 `roost-core/versionstore`：契约里没有
    无条件写，因此非 CAS 实现无法存在。不自己手写"读-改-写"。
 2. **生产包不保留内存版 source of truth。** 测试替身放 `_test.go` 或 `servicetest`。
 3. **每个服务定义自己的 errcode 段**，纯客户端错误不返回 `CodeInternal`。
@@ -21,10 +21,10 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
    逐 sentinel 的映射表**——那种表是第二份清单，新增的错误会从上面静默掉下去
    （`chat` 与 `global` 原本各有一张，已删）。反过来，**未分类的错误诚实地报
    `CodeInternal`**：本包没有"存储失败"这类兜底码，因为那是把猜测当成诊断。
-   九个包各有一条测试，把「段内连续、个数精确、外部 sentinel 显式映射、
+   服务包各有测试，把「段内连续、个数精确、外部 sentinel 显式映射、
    未分类即 Internal」钉住。
 4. **至少一次路径必须幂等**，幂等键由服务端生成或经 ledger 预留，不采信客户端。
-5. **身份与权限不来自请求体。** 信任只能来自传输层身份。
+5. **玩家身份由已认证入口绑定。** 服务间总线属于可信进程边界；SelectRole 的 accountID、NotifyPhase 的 gameSID 由调用方传入，不是 RPC 层提供的身份认证。PublishSystem 的令牌只约束进程内调用。
 6. **每个服务必须有 metrics**：队列深度、CAS 冲突率、丢弃计数。静默路径之所以能长期
    存在，就是因为没有信号。上报走 `servicemetrics`：**全仓一套词汇、一个 `Reporter`
    接口**，方法按事件命名（`Accepted`/`Refused`/`Replayed`/`Dropped`/`Conflict`/`Depth`）
@@ -42,7 +42,7 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
    `versionstore.unknown_outcome.total{store,result=applied|lost|unresolved}`；`unresolved`
    持续增长说明后端不答或删除 / 新建遇到回复丢失，服务拿到 `versionstore.ErrOutcomeUnknown`。
 7. **任何列表接口都有上界**，且上界不能被 `0` 绕过。
-8. **测试用求值型替身**（`roost-kit/mongo/mongotest`），并发不变量必须有并发测试。
+8. **测试用求值型替身**（`roost-core/mongo/mongotest`），并发不变量必须有并发测试。
 9. **每个修掉的缺陷都有一条经"回退修复即变红"验证过的回归测试。**
 10. **求值型替身也有边界，要说清楚。** 用 Go 重新实现 Lua 脚本语义的替身，无法发现
     脚本文本自身的缺陷——改脚本字符串对它没有影响。这部分由 `//go:build integration`
@@ -84,7 +84,7 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
 | `platform/` | 渠道边缘：凭证换会话、支付回调换恰好一次发货。**验签是必要而不充分的**，订单是仅插入的持久记录 | 51 | 21 |
 | `session/` | 有界 run 原语：Mod、`Session` RPC 与生成传输、server run；**领域实现（幂等 Enter、每 owner 一个活 run、资源恰好释放一次、Admin 操作面、Redis stores）在 roost-core/service/session**，此处别名（M-08）；`Session` 接口与传输半在 core，kit 只有装配半（M-11） | 6 | 3 |
 | `servicemetrics/` | 全仓共享的上报 seam 与测试用 `Recorder`——**实现已在 roost-core/servicemetrics**，此处是别名包（M-06） | 8 | 3 |
-| `servicemods/` | capability 名字表与各 Mod 共用的配置读取 | 12 | — |
+| `kit/mods/` | capability 名字表与各 Mod 共用的配置读取 | 12 | — |
 | `integration/` | 跨服务的真实后端测试：十个包在一个活 Redis 上装起来跑通、key 命名空间不冲突、以及**整套 Mod 生命周期端到端** | 67 真实 Redis | 30 |
 
 † `global/activity/` 从 `global/` 拆出（见下），拆分前那 13 条变异验证是合并记录的，
@@ -111,7 +111,7 @@ go generate ./...
 不比对生成物，于是永远退出 0——见 roost-codegen CHANGELOG）：
 
 ```bash
-go tool servicerpc -dir ./mail -check
+go run ./codegen/cmd/servicerpc -dir ./service/mail -check
 ```
 发布态 `GOWORK=off` 下 build / vet / test / -race 与集成测试同样全绿。
 

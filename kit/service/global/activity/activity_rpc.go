@@ -9,7 +9,7 @@ import "context"
 // Coordinator is the cross-process contract: what ANOTHER process may ask of
 // the activity coordination service.
 //
-// Five of the Service methods are not here, in two groups.
+// Owner 周期推进与运维诊断入口不开放为 RPC；边界按职责划分，不按方法数量。
 //
 // AdvanceExpired and DueDispatches are the owning process's own periodic work:
 // back-stopping an aggregation whose grace window closed, and enumerating what

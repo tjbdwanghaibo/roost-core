@@ -17,6 +17,8 @@ type EnterGameResponse struct {
 	Reason   string `pb:"2"`
 	PlayerID int64  `pb:"3"`
 	Created  bool   `pb:"4"`
+	// OwnerSID 在 player_elsewhere 时指示应重连的区服；0 表示须重新 SelectRole。
+	OwnerSID int32 `pb:"5"`
 }
 
 //roost:protocol group=game handler=player

@@ -23,7 +23,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "redis.cluster_addrs", Kind: "strings", Help: "Redis Cluster 种子地址（逗号分隔或 YAML 列表）；写了就按 Cluster 连接，redis.addr 不再使用"},
 		{Name: "activity.key_prefix", Kind: "string", Help: "Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）", Starter: true, Example: "roost:{project}:activity", Required: true},
 		{Name: "activity.reservation_ttl", Kind: "duration", Min: "1ns", Help: "Required, with no default. It must exceed the longest client retry horizon: past it a replayed\nprogress request is indistinguishable from a new one and the progress is applied twice.", Starter: true, Example: "30m", Required: true},
-		{Name: "activity.grace_window", Kind: "duration", Default: "60s", Min: "1ns", Starter: true, Example: "60s"},
+		{Name: "activity.grace_window", Kind: "duration", Default: "60s", Min: "1s", Starter: true, Example: "60s"},
 		{Name: "activity.dispatch_attempts", Kind: "int", Default: "5", Min: "1", Starter: true, Example: "5"},
 		{Name: "activity.dispatch_backoff", Kind: "duration", Default: "5s", Min: "1ns", Starter: true, Example: "5s"},
 		{Name: "activity.groups_file", Kind: "string", Help: "活动组文件（C4）：game 服务在这些组里开窗口，本进程启动时校验、清扫它们", Starter: true, Example: "configs/activity_groups.yaml", Required: true},
@@ -168,7 +168,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "service_metrics.enabled", Kind: "bool", Default: "true", Help: "false 关掉本进程全部服务的业务指标"},
 		{Name: "mail.key_prefix", Kind: "string", Help: "Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）", Starter: true, Example: "roost:{project}:mail", Required: true},
 		{Name: "mail.send_ttl", Kind: "duration", Min: "1ns", Help: "Required, with no default. It must exceed the longest client retry horizon: past it a retried\nsend is indistinguishable from a new one and the recipient gets the mail twice.", Starter: true, Example: "720h", Required: true},
-		{Name: "mail.claim_lease", Kind: "duration", Default: "30s", Min: "1ns", Starter: true, Example: "30s"},
+		{Name: "mail.claim_lease", Kind: "duration", Default: "30s", Min: "1s", Starter: true, Example: "30s"},
 	}},
 	"mail.client": {Keys: []configschema.Key{
 		{Name: "mail.service_type", Kind: "string", Default: "mail", Help: "bus service type the calls are addressed to"},
@@ -177,7 +177,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 	"match": {Keys: []configschema.Key{
 		{Name: "service_metrics.enabled", Kind: "bool", Default: "true", Help: "false 关掉本进程全部服务的业务指标"},
 		{Name: "match.key_prefix", Kind: "string", Help: "Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）", Starter: true, Example: "roost:{project}:match", Required: true},
-		{Name: "match.ticket_ttl", Kind: "duration", Default: "5m", Min: "1ns", Starter: true, Example: "60s"},
+		{Name: "match.ticket_ttl", Kind: "duration", Default: "5m", Min: "1s", Starter: true, Example: "60s"},
 		{Name: "match.sweep_queues", Kind: "strings", Starter: true, Example: "[]"},
 	}},
 	"match.client": {Keys: []configschema.Key{
@@ -369,8 +369,9 @@ var kitConfigSchemas = map[string]configschema.Schema{
 	}},
 	"session": {Keys: []configschema.Key{
 		{Name: "service_metrics.enabled", Kind: "bool", Default: "true", Help: "false 关掉本进程全部服务的业务指标"},
+		{Name: "redis.cluster_addrs", Kind: "strings", Help: "Redis Cluster 种子地址（逗号分隔或 YAML 列表）；写了就按 Cluster 连接，redis.addr 不再使用"},
 		{Name: "session.key_prefix", Kind: "string", Help: "Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）", Starter: true, Example: "roost:{project}:session", Required: true},
-		{Name: "session.run_ttl", Kind: "duration", Default: "30m", Min: "1ns", Starter: true, Example: "30m"},
+		{Name: "session.run_ttl", Kind: "duration", Default: "30m", Min: "1s", Starter: true, Example: "30m"},
 		{Name: "session.request_ttl", Kind: "duration", Min: "1ns", Help: "Required, with no default: past the ttl a retried Enter is indistinguishable from a new one,\nand the caller gets a second run.", Starter: true, Example: "1h", Required: true},
 	}},
 	"session.client": {Keys: []configschema.Key{

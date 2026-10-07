@@ -145,6 +145,9 @@ func NewStore(state versionstore.Store[string, queueState], cfg Config) (Store, 
 	if cfg.TicketTTL == 0 {
 		cfg.TicketTTL = DefaultTicketTTL
 	}
+	if cfg.TicketTTL < time.Second {
+		return nil, fmt.Errorf("TicketTTL must be at least 1s: deadlines use Unix seconds")
+	}
 	for _, queue := range cfg.SweepQueues {
 		if err := queue.Validate(); err != nil {
 			return nil, fmt.Errorf("match: sweep queue %s: %w", queue.Key(), err)
@@ -394,12 +397,34 @@ func (s *queueStore) Commit(ctx context.Context, queue Queue, ticketIDs []string
 	}
 
 	var result Match
+	var replayed bool
 	_, _, err = s.state.Update(ctx, queue.Key(), func(current queueState, found bool) (queueState, bool, error) {
+		replayed = false
 		current = current.clone()
 		if !found {
 			return current, false, fmt.Errorf("%w: queue is empty", ErrTicketMissing)
 		}
 		s.expireLocked(&current, now)
+		// 票集合就是提交身份。整组已匹配到同一局时返回原结果，不能再生成第二局，
+		// 也不能把部分重叠的集合当作重放。票/比赛被正常清理后则按缺失拒绝。
+		first := current.Tickets[ticketIDs[0]]
+		if first.State == TicketMatched && first.Queue == queue {
+			previous, ok := current.Matches[first.MatchID]
+			if ok && len(previous.TicketIDs) == len(ticketIDs) {
+				same := true
+				for _, id := range previous.TicketIDs {
+					ticket := current.Tickets[id]
+					if !seen[id] || ticket.State != TicketMatched || ticket.MatchID != previous.ID || ticket.Queue != queue {
+						same = false
+						break
+					}
+				}
+				if same {
+					result, replayed = previous, true
+					return current, false, nil
+				}
+			}
+		}
 
 		// Validate every ticket before mutating anything. Because this whole
 		// function is one compare-and-set, a failure here leaves the queue
@@ -449,7 +474,11 @@ func (s *queueStore) Commit(ctx context.Context, queue Queue, ticketIDs []string
 	if err != nil {
 		return Match{}, err
 	}
-	s.report.Accepted("commit")
+	if replayed {
+		s.report.Replayed("commit")
+	} else {
+		s.report.Accepted("commit")
+	}
 	return result.clone(), nil
 }
 

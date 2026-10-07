@@ -284,6 +284,11 @@ func TestEnterGameServesOnlyThePlayersBoundToThisServer(t *testing.T) {
 	}
 	t.Run("bound-elsewhere", func(t *testing.T) {
 		response, owners := enter(t, boundTo(2000))
+		// 目标 sid 必须进入真正的 PB 响应字段；错误对象的 fields 不会上网线。
+		raw, marshalErr := pb.MarshalEnterGameResponse(response)
+		if marshalErr != nil { t.Fatal(marshalErr) }
+		wire, decodeErr := pb.UnmarshalEnterGameResponse(raw)
+		if decodeErr != nil || wire.OwnerSID != 2000 { t.Fatalf("redirect SID absent after wire roundtrip: %+v %v",wire,decodeErr) }
 		if response.Code != apperrors.ErrPlayerElsewhere.Code() {
 			t.Fatalf("code=%d reason=%q, want player_elsewhere (%d)", response.Code, response.Reason, apperrors.ErrPlayerElsewhere.Code())
 		}

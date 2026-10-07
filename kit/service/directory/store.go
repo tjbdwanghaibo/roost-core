@@ -278,13 +278,16 @@ func (s *store) Release(ctx context.Context, raw string, owner Owner) error {
 	if err != nil {
 		return err
 	}
-	if !found {
+	if !found || current.Value.Expired(s.cfg.Now()) {
 		s.report.Replayed("release")
 		return nil
 	}
 	if current.Value.Owner != owner {
 		s.report.Refused("release", "not_owner")
 		return fmt.Errorf("%w: %q belongs to %q", ErrOwnerMismatch, key, current.Value.Owner)
+	}
+	if current.Value.State != StateCommitted {
+		return fmt.Errorf("%w: reserved entries must be cancelled with their claim token", ErrClaimStale)
 	}
 	if err := s.deleter.DeleteIf(ctx, key, current, func(entry Entry) bool {
 		return entry.Owner == owner && entry.Token == current.Value.Token && entry.State == current.Value.State

@@ -149,7 +149,7 @@ func TestSettledClaimsAreDroppedOnceTheEnvelopeExpires(t *testing.T) {
 			break
 		}
 	}
-	if err := h.service.Deliver(ctx, 1, "after-expiry", 0); err != nil {
+	if err := deliverMailboxFixture(h, ctx, 1, "after-expiry", 0); err != nil {
 		t.Fatal(err)
 	}
 	stored, _, err = h.mailboxes.Get(ctx, 1)
@@ -192,7 +192,7 @@ func evictUntilSettled(h *harness, mailID string) error {
 	ctx := context.Background()
 	for i := 0; i < MaxMailboxEntries*4; i++ {
 		h.clock.advance(time.Second)
-		err := h.service.Deliver(ctx, 1, fmt.Sprintf("filler-%s-%d", mailID, i), 0)
+		err := deliverMailboxFixture(h, ctx, 1, fmt.Sprintf("filler-%s-%d", mailID, i), 0)
 		if errors.Is(err, ErrClaimHistoryFull) {
 			return err
 		}

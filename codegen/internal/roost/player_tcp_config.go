@@ -16,6 +16,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// 接入层的配置声明同时驱动生成代码与 doctor，避免注册前门禁只在某一侧生效。
+type playerAccessDeclaration struct {
+	RequireWriteGate bool `config:"player_access.require_write_gate" default:"false" help:"要求写闸门；未注册期间拒绝请求，避免启动窗口放行"`
+}
+
+func playerAccessSchema() configschema.Schema { return configschema.MustOf(playerAccessDeclaration{}) }
+func renderPlayerAccessDeclaration() string {
+	var b strings.Builder
+	b.WriteString("type accessConfig ")
+	writeGoStructType(&b, reflect.TypeOf(playerAccessDeclaration{}), "")
+	return b.String()
+}
+
 // playerTCPDeclaration is the declaration of what the generated player TCP
 // access Mod reads (maintainer decision A4 ①). It is real Go here so the tags
 // are checked when the generator starts (configschema.MustOf), and it is

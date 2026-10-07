@@ -31,7 +31,7 @@ func TestEvictionKeepsTheClaimIdentityOfAClaimedMail(t *testing.T) {
 
 	// Push the mailbox past its bound so the claimed entry is evicted.
 	for i := 0; i < MaxMailboxEntries; i++ {
-		if err := h.service.Deliver(ctx, 1, fmt.Sprintf("filler-%d", i), 0); err != nil {
+		if err := deliverMailboxFixture(h, ctx, 1, fmt.Sprintf("filler-%d", i), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -83,7 +83,7 @@ func TestEvictionPreservesUnclaimedDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < MaxMailboxEntries; i++ {
-		if err := h.service.Deliver(ctx, 1, fmt.Sprintf("filler-%d", i), 0); err != nil {
+		if err := deliverMailboxFixture(h, ctx, 1, fmt.Sprintf("filler-%d", i), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -126,7 +126,7 @@ func TestCommitClaimReplaysAfterTheEntryWasEvicted(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < MaxMailboxEntries; i++ {
-		if err := h.service.Deliver(ctx, 1, fmt.Sprintf("filler-%d", i), 0); err != nil {
+		if err := deliverMailboxFixture(h, ctx, 1, fmt.Sprintf("filler-%d", i), 0); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -62,7 +62,7 @@ func TestRefusedDeliveryLeavesTheMailboxUntouched(t *testing.T) {
 	// One more delivery that would have to evict a claimed entry and settle a
 	// new claim: it must be refused, and refusing must change nothing.
 	h.clock.advance(time.Second)
-	err = h.service.Deliver(ctx, 1, "one-too-many", 0)
+	err = deliverMailboxFixture(h, ctx, 1, "one-too-many", 0)
 	if !errors.Is(err, ErrClaimHistoryFull) && !errors.Is(err, ErrMailboxFull) {
 		t.Fatalf("control: the extra delivery was not refused: %v", err)
 	}

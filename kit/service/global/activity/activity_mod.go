@@ -55,7 +55,7 @@ type config struct {
 	Activity struct {
 		KeyPrefix        string        `config:"key_prefix" required:"true" example:"roost:{project}:activity" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
 		ReservationTTL   time.Duration `config:"reservation_ttl" required:"true" min:"1ns" example:"30m" help:"Required, with no default. It must exceed the longest client retry horizon: past it a replayed\nprogress request is indistinguishable from a new one and the progress is applied twice."`
-		GraceWindow      time.Duration `config:"grace_window" default:"60s" min:"1ns" example:"60s"`
+		GraceWindow      time.Duration `config:"grace_window" default:"60s" min:"1s" example:"60s"`
 		DispatchAttempts int           `config:"dispatch_attempts" default:"5" min:"1" example:"5"`
 		DispatchBackoff  time.Duration `config:"dispatch_backoff" default:"5s" min:"1ns" example:"5s"`
 		GroupsFile       string        `config:"groups_file" required:"true" example:"configs/activity_groups.yaml" help:"活动组文件（C4）：game 服务在这些组里开窗口，本进程启动时校验、清扫它们"`

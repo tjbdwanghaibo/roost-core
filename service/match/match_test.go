@@ -347,8 +347,8 @@ func TestConcurrentCommitsProduceExactlyOneMatch(t *testing.T) {
 	if len(matches) != 1 {
 		t.Fatalf("%d distinct matches were created, want exactly 1", len(matches))
 	}
-	if conflicts != committers-1 {
-		t.Fatalf("%d committers were refused, want %d", conflicts, committers-1)
+	if conflicts != 0 {
+		t.Fatalf("%d exact ticket-set retries were refused, want 0", conflicts)
 	}
 	if length, _ := store.QueueLength(ctx, ranked()); length != 0 {
 		t.Fatalf("queue holds %d tickets after the race", length)

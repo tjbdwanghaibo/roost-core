@@ -20,7 +20,7 @@ import (
 // value that skipped every check. Any future direct user of that seam would
 // have silently lost the check. Here there is no trust argument to pass: the
 // seam holds the ChannelPolicy and the BodyRegistry and evaluates them on
-// every append and every history read, and the privileged append demands a
+// every new append and every history read, and the privileged append demands a
 // SystemToken, which cannot be constructed outside this package.
 //
 // The retention tradeoff, stated plainly: versionstore has no TTL in its
@@ -38,7 +38,7 @@ import (
 type Store interface {
 	// Append stores a role's message. It validates the channel against its
 	// rule, requires the message type to be registered, bounds the body,
-	// requires an idempotency key, and evaluates the channel policy — always,
+	// requires an idempotency key, and evaluates the channel policy for new messages,
 	// with no way for a caller to ask it not to.
 	//
 	// from is the session's identity, not something the request carried. A
@@ -88,7 +88,17 @@ type Store interface {
 // The type is unexported so nothing outside this package can write chat state
 // and thereby skip the policy, the type registry and the bounds the seam
 // applies. Wire a backend for it with NewRedisStateStore.
+const channelStateVersion = 2
+
+type requestReceipt struct {
+	Sequence uint64 `json:"sequence"`
+	Origin   Origin `json:"origin"`
+	RoleID   int64  `json:"role_id,omitempty"`
+	Actor    string `json:"actor,omitempty"`
+}
+
 type channelState struct {
+	Version uint32 `json:"version"`
 	// LastSeq is the highest sequence ever issued for this channel. It only
 	// increases, and retention never resets it, so a cursor a client is holding
 	// stays comparable even after everything it named has been pruned.
@@ -98,7 +108,7 @@ type channelState struct {
 	Ring []Message `json:"ring"`
 	// Requests maps an idempotency key to the sequence it produced. It is the
 	// deduplication ledger for an at-least-once transport.
-	Requests map[string]uint64 `json:"requests,omitempty"`
+	Requests map[string]requestReceipt `json:"requests,omitempty"`
 	// Evicted counts messages retention has dropped, ever. A drop count that
 	// nobody keeps is a silent path, which is how the absence of retention went
 	// unnoticed in the first place.
@@ -114,14 +124,14 @@ type channelState struct {
 // only way to keep "an aborted mutation changes nothing" true for every
 // implementation of the contract.
 func (s channelState) clone() channelState {
-	next := channelState{LastSeq: s.LastSeq, Evicted: s.Evicted}
+	next := channelState{Version: channelStateVersion, LastSeq: s.LastSeq, Evicted: s.Evicted}
 	if len(s.Ring) > 0 {
 		next.Ring = make([]Message, len(s.Ring))
 		for i, msg := range s.Ring {
 			next.Ring[i] = msg.clone()
 		}
 	}
-	next.Requests = make(map[string]uint64, len(s.Requests)+1)
+	next.Requests = make(map[string]requestReceipt, len(s.Requests)+1)
 	for key, seq := range s.Requests {
 		next.Requests[key] = seq
 	}
@@ -197,7 +207,7 @@ func (s *channelState) trim(retain int) int {
 		}
 		entries := make([]entry, 0, len(s.Requests))
 		for key, seq := range s.Requests {
-			entries = append(entries, entry{key: key, seq: seq})
+			entries = append(entries, entry{key: key, seq: seq.Sequence})
 		}
 		// Oldest sequences go first: the deduplication window follows the ring
 		// forward instead of expiring keys at random.
@@ -238,11 +248,11 @@ func NewRedisStateStore(client versionstore.RedisClient, prefix string) (StateSt
 	return versionstore.NewRedisStore(client, versionstore.RedisConfig[string, channelState]{
 		Prefix: prefix,
 		KeyOf:  func(key string) string { return key },
-		Codec:  versionstore.JSONCodec[channelState]{},
+		Codec:  channelStateCodec{},
 	})
 }
 
-// DefaultRetentionAge is how long Prune keeps a message. Chat is a live feed:
+// DefaultRetentionAge is the recommended opt-in age for Prune. Zero disables age pruning:
 // three days covers a client that was offline for a weekend.
 const DefaultRetentionAge = 72 * time.Hour
 
@@ -263,8 +273,7 @@ type Config struct {
 	// switch.
 	Rules []ChannelRule
 	// RetentionAge is how old a message must be for Prune to drop it; zero
-	// selects DefaultRetentionAge. It must be positive: an age of zero would
-	// make Prune delete the channel.
+	// disables age pruning. Count-based ring retention remains active.
 	RetentionAge time.Duration
 	// Now is the business clock the time shown to players (SentAtUnix) is
 	// read from; nil means time.Now. The chat Mod injects app.BusinessClock
@@ -308,9 +317,6 @@ func NewStore(state StateStore, cfg Config) (Store, error) {
 	}
 	if cfg.RetentionAge < 0 {
 		return nil, fmt.Errorf("chat: retention age must not be negative, got %s", cfg.RetentionAge)
-	}
-	if cfg.RetentionAge == 0 {
-		cfg.RetentionAge = DefaultRetentionAge
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -376,11 +382,6 @@ func (s *channelStore) Append(ctx context.Context, from Sender, req PublishReque
 	if err != nil {
 		return Message{}, err
 	}
-	// The policy runs on every append. There is no argument that skips it.
-	if err := s.policy.CanPublish(ctx, from, req.Channel); err != nil {
-		s.metrics.Refused(publishOp(req.Channel.Kind), "policy")
-		return Message{}, denied(err)
-	}
 
 	return s.store(ctx, ref, rule, Message{
 		Channel:   req.Channel,
@@ -389,7 +390,7 @@ func (s *channelStore) Append(ctx context.Context, from Sender, req PublishReque
 		Type:      req.Type,
 		Body:      req.Body,
 		RequestID: req.RequestID,
-	})
+	}, s.policy.CanPublish(ctx, from, req.Channel))
 }
 
 func (s *channelStore) AppendSystem(ctx context.Context, token SystemToken, req SystemPublishRequest) (Message, error) {
@@ -435,12 +436,12 @@ func (s *channelStore) AppendSystem(ctx context.Context, token SystemToken, req 
 		Type:      req.Type,
 		Body:      req.Body,
 		RequestID: req.RequestID,
-	})
+	}, nil)
 }
 
 // store is the one write path: allocate the sequence, append, record the
 // idempotency key and enforce retention, all inside a single compare-and-set.
-func (s *channelStore) store(ctx context.Context, ref ChannelRef, rule ChannelRule, draft Message) (Message, error) {
+func (s *channelStore) store(ctx context.Context, ref ChannelRef, rule ChannelRule, draft Message, authorizationErr error) (Message, error) {
 	draft = draft.clone()
 	sentAt, storedAt := s.now().Unix(), s.system().Unix()
 
@@ -454,7 +455,13 @@ func (s *channelStore) store(ctx context.Context, ref ChannelRef, rule ChannelRu
 		next := current.clone()
 		replayed, keyReused, evicted = false, false, 0
 
-		if seq, ok := next.Requests[draft.RequestID]; ok {
+		if receipt, ok := next.Requests[draft.RequestID]; ok {
+			identity := Message{Origin: receipt.Origin, From: Sender{RoleID: receipt.RoleID, Name: receipt.Actor}}
+			if !sameSender(identity, draft) {
+				keyReused = true
+				return current, false, fmt.Errorf("%w: idempotency key belongs to another sender", ErrConflict)
+			}
+			seq := receipt.Sequence
 			if existing, found := next.find(seq); found {
 				if !sameSender(existing, draft) {
 					// Keys are scoped per channel and clients mint them on
@@ -477,6 +484,10 @@ func (s *channelStore) store(ctx context.Context, ref ChannelRef, rule ChannelRu
 			return current, false, fmt.Errorf("%w: key %q produced sequence %d", ErrAlreadyPublished, draft.RequestID, seq)
 		}
 
+		// 权限检查在 CAS 外只求一次；重放先返回原结果，只有新写入应用当前权限结论。
+		if authorizationErr != nil {
+			return current, false, denied(authorizationErr)
+		}
 		message := draft
 		// The sequence is derived from the state being written, in the same
 		// compare-and-set. Two publishers cannot get the same number, and a
@@ -486,7 +497,7 @@ func (s *channelStore) store(ctx context.Context, ref ChannelRef, rule ChannelRu
 		message.SentAtUnix = sentAt
 		next.LastSeq = message.Seq
 		next.Ring = append(next.Ring, message)
-		next.Requests[message.RequestID] = message.Seq
+		next.Requests[message.RequestID] = requestReceipt{Sequence: message.Seq, Origin: message.Origin, RoleID: message.From.RoleID, Actor: message.From.Name}
 		evicted = next.trim(rule.Retain)
 		result = message
 		return next, true, nil
@@ -494,6 +505,9 @@ func (s *channelStore) store(ctx context.Context, ref ChannelRef, rule ChannelRu
 	if err != nil {
 		// versionstore.ErrConflict 不在这里计数：compare-and-set 冲突由 versionstore 统一计
 		// （versionstore.cas.total / versionstore.conflict.total，维护者第十二轮决定）。
+		if errors.Is(err, ErrNotPermitted) {
+			s.metrics.Refused(publishOp(ref.Kind), "policy")
+		}
 		if keyReused {
 			s.metrics.Refused(publishOp(ref.Kind), "key_reused")
 		}
@@ -676,6 +690,9 @@ func (s *channelStore) Prune(ctx context.Context, ref ChannelRef, limit int) (in
 	if limit > MaxRetain {
 		return 0, fmt.Errorf("%w: limit %d exceeds %d", ErrRangeInvalid, limit, MaxRetain)
 	}
+	if s.age == 0 {
+		return 0, nil
+	}
 	// System clock: retention is space reclamation by real age (D-L3).
 	cutoff := s.system().Add(-s.age).Unix()
 
@@ -740,3 +757,21 @@ func (s *channelStore) Stats(ctx context.Context, ref ChannelRef) (Stats, error)
 }
 
 var _ Store = (*channelStore)(nil)
+
+// v2 保存去重主体。旧格式没有这份证据，拒绝猜测；上线前升级先清空旧聊天状态。
+type channelStateCodec struct{}
+
+func (channelStateCodec) Encode(value channelState) ([]byte, error) {
+	value.Version = channelStateVersion
+	return (versionstore.JSONCodec[channelState]{}).Encode(value)
+}
+func (channelStateCodec) Decode(data []byte) (channelState, error) {
+	value, err := (versionstore.JSONCodec[channelState]{}).Decode(data)
+	if err != nil {
+		return channelState{}, err
+	}
+	if value.Version != channelStateVersion {
+		return channelState{}, fmt.Errorf("chat: unsupported channel state version %d", value.Version)
+	}
+	return value, nil
+}

@@ -77,7 +77,7 @@ type config struct {
 	mods.ServiceMetricsConfig
 	Match struct {
 		KeyPrefix   string        `config:"key_prefix" required:"true" example:"roost:{project}:match" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
-		TicketTTL   time.Duration `config:"ticket_ttl" default:"5m" min:"1ns" example:"60s"`
+		TicketTTL   time.Duration `config:"ticket_ttl" default:"5m" min:"1s" example:"60s"`
 		SweepQueues []string      `config:"sweep_queues" example:"[]"`
 	} `config:"match"`
 }

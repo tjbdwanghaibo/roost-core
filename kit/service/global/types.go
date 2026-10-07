@@ -108,6 +108,9 @@ type RouteBinding struct {
 	// document forbade.
 	Epoch uint64     `json:"epoch"`
 	State RouteState `json:"state"`
+	// CompletedFromEpoch 保留最近一次完成操作的请求身份；Abort 不写它。
+	// 下一次 Begin 会清除，旧完成请求不能越过新的迁移。
+	CompletedFromEpoch uint64 `json:"completed_from_epoch,omitempty"`
 
 	UpdatedAtUnix int64 `json:"updated_at_unix"`
 }

@@ -30,13 +30,10 @@ import "context"
 // this server" — a question about durable state that only the owner has.
 // platform's validates a MAC and touches nothing, so it stays local.
 //
-// No method carries an affinity key. This package has TWO contention domains
-// with different keys — an account's role list, keyed by account id, and a
-// server's name index, keyed by server id — and CreateRole writes into both.
-// No single routing key makes both contention-free, so routing on one would
-// advertise a guarantee that does not hold for the other. What actually makes
-// concurrent role creation safe is a versioned compare-and-set on the account
-// and an insert-only name reservation, neither of which needs affinity.
+// 不声明 affinity：账号角色列表按 accountID 竞争，全局名字目录按 name 竞争。
+// CreateRole 以 account/server slot 的 insert-only 和名字预留共同保证唯一性。
+// 总线调用方必须可信：accountID/gameSID 等由已认证的入口绑定，服务端校验关联关系，
+// 不能把调用方自行填写的 accountID 当作身份认证。
 //
 //roost:rpc service_type=account capability=service.account
 type Accounts interface {
@@ -51,7 +48,7 @@ type Accounts interface {
 	CreateRole(ctx context.Context, accountID string, serverID int32, name string) (role Role, err error)
 
 	// SelectRole mints a session for a role the account owns. Ownership is
-	// checked against the stored role rather than taken from the request.
+	// checked against the stored role; the trusted caller supplies accountID.
 	SelectRole(ctx context.Context, accountID string, playerID int64) (session Session, err error)
 
 	// ValidateSession checks a session token and returns the role it belongs

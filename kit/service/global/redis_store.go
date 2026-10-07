@@ -1,6 +1,7 @@
 package global
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -41,9 +42,30 @@ func NewRedisStores(client versionstore.RedisClient, prefix string) (RedisStores
 		err    error
 	)
 	if stores.Routes, err = versionstore.NewRedisStore(client, versionstore.RedisConfig[int32, RouteBinding]{
-		Prefix: prefix + ":route:", KeyOf: int32Key, Codec: versionstore.JSONCodec[RouteBinding]{},
+		Prefix: prefix + ":route:", KeyOf: int32Key, Codec: routeCodec{},
 	}); err != nil {
 		return RedisStores{}, fmt.Errorf("global: route store: %w", err)
 	}
 	return stores, nil
+}
+
+// 路由 v2 保存完成回执；没有回执的旧记录不能靠 epoch 猜测完成还是撤销。
+type routeRecord struct {
+	Version int `json:"version"`
+	RouteBinding
+}
+type routeCodec struct{}
+
+func (routeCodec) Encode(binding RouteBinding) ([]byte, error) {
+	return json.Marshal(routeRecord{Version: 2, RouteBinding: binding})
+}
+func (routeCodec) Decode(data []byte) (RouteBinding, error) {
+	var record routeRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return RouteBinding{}, err
+	}
+	if record.Version != 2 {
+		return RouteBinding{}, fmt.Errorf("global: unsupported route version %d; clear old routes before upgrade", record.Version)
+	}
+	return record.RouteBinding, nil
 }

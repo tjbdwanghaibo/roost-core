@@ -1,6 +1,8 @@
 package session
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -64,7 +66,8 @@ func NewRedisStores(client versionstore.RedisClient, cfg RedisConfig) (RedisStor
 	runs, err := versionstore.NewRedisStore(client, versionstore.RedisConfig[string, Run]{
 		Prefix:       cfg.Prefix + ":run:",
 		KeyOf:        func(id string) string { return id },
-		Codec:        versionstore.JSONCodec[Run]{},
+		Codec:        runCodec{},
+		Index:        &versionstore.RedisIndex[Run]{Key: cfg.Prefix + ":admission", Entry: func(run Run) (float64, bool) { return float64(run.DeadlineUnix), run.AdmissionPending }},
 		MaxAttempts:  cfg.MaxAttempts,
 		RetryBackoff: cfg.RetryBackoff,
 	})
@@ -92,5 +95,39 @@ func NewRedisStores(client versionstore.RedisClient, cfg RedisConfig) (RedisStor
 	if err != nil {
 		return RedisStores{}, fmt.Errorf("session: request ledger: %w", err)
 	}
-	return RedisStores{Runs: runs, Claims: claims, Requests: requests}, nil
+	return RedisStores{Runs: &redisRuns{runs}, Claims: claims, Requests: requests}, nil
+}
+
+type redisRuns struct {
+	*versionstore.RedisStore[string, Run]
+}
+
+func (s *redisRuns) PendingAdmissions(ctx context.Context, nowUnix int64, limit int) ([]string, error) {
+	return s.IndexDue(ctx, float64(nowUnix), limit)
+}
+func (s *redisRuns) deferAdmission(ctx context.Context, id string, until int64) error {
+	_, err := s.IndexDefer(ctx, id, float64(until))
+	return err
+}
+func (s *redisRuns) removeAbsentAdmission(ctx context.Context, id string) error {
+	_, err := s.IndexRemoveIfAbsent(ctx, id)
+	return err
+}
+
+type runRecord struct {
+	Version int `json:"version"`
+	Run
+}
+type runCodec struct{}
+
+func (runCodec) Encode(run Run) ([]byte, error) { return json.Marshal(runRecord{Version: 2, Run: run}) }
+func (runCodec) Decode(data []byte) (Run, error) {
+	var record runRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return Run{}, err
+	}
+	if record.Version != 2 {
+		return Run{}, fmt.Errorf("session: unsupported run version %d; clear old sessions before upgrade", record.Version)
+	}
+	return record.Run, nil
 }

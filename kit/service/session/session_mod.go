@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	kitredis "github.com/tjbdwanghaibo/roost-core/kit/redis"
 
 	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 )
@@ -50,9 +51,10 @@ func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 // config 是 session.* 的声明（维护者决定 A4 ①）。
 type config struct {
 	mods.ServiceMetricsConfig
+	kitredis.ClusterConfig
 	Session struct {
 		KeyPrefix  string        `config:"key_prefix" required:"true" example:"roost:{project}:session" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
-		RunTTL     time.Duration `config:"run_ttl" default:"30m" min:"1ns" example:"30m"`
+		RunTTL     time.Duration `config:"run_ttl" default:"30m" min:"1s" example:"30m"`
 		RequestTTL time.Duration `config:"request_ttl" required:"true" min:"1ns" example:"1h" help:"Required, with no default: past the ttl a retried Enter is indistinguishable from a new one,\nand the caller gets a second run."`
 	} `config:"session"`
 }
@@ -83,6 +85,9 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 			"that did nothing would make leaking the out-of-the-box behaviour")
 	}
 	m.prefix, m.ttl, m.requestTTL = c.KeyPrefix, c.RunTTL, c.RequestTTL
+	if err := mods.ValidateClusterKeyPrefix(settings.ClusterAddrs, "session", c.KeyPrefix); err != nil {
+		return err
+	}
 	return nil
 }
 

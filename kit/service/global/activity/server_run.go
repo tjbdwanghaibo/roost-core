@@ -8,7 +8,7 @@ import (
 )
 
 // SweepInterval is how often the activity process back-stops aggregations
-// whose grace window has closed, and retries dispatches that failed.
+// whose grace window has closed, and observes outstanding dispatches.
 //
 // This cadence is what makes the grace window real. The window is the only
 // thing that finishes an activity when a game server never notifies — and this
@@ -38,7 +38,7 @@ func nowUnix(service *Service) int64 { return service.cfg.Now().Unix() }
 // sweepEvery is SweepInterval as a variable so tests can shorten the tick.
 var sweepEvery = SweepInterval
 
-// run advances expired activities and retries due dispatches until the process
+// run advances expired activities and observes due dispatches until the process
 // is shutting down.
 //
 // It works the groups sweepGroups reports. There is no way to enumerate groups
@@ -84,8 +84,7 @@ func (s *Server) run(ctx context.Context) error {
 	}
 }
 
-// sweepGroup advances one group's expired activities and then retries the
-// dispatches they produced.
+// sweepGroup 推进过期活动并观察投递。单条活动失败不阻止已有投递的观察与回收。
 func (s *Server) sweepGroup(ctx context.Context, service *Service, groupID string) {
 	advanced, err := service.AdvanceExpired(ctx, groupID, SweepBatch)
 	if err != nil {
@@ -95,7 +94,6 @@ func (s *Server) sweepGroup(ctx context.Context, service *Service, groupID strin
 		service.report.Dropped("sweep.advance_failed", 1)
 		slog.Error("activity server: advancing expired activities failed",
 			"group_id", groupID, "err", err)
-		return
 	}
 	for _, activity := range advanced {
 		slog.Info("activity server: aggregation finished by grace window",

@@ -630,6 +630,8 @@ type ChannelPolicy interface {
 	// CanPublish reports whether from may publish into ch. The returned error
 	// is wrapped in ErrNotPermitted and travels to the caller, so a game can
 	// carry its own reason without this package knowing any of them.
+	// 在 CAS 外每次请求检查一次；结论只限制新写入，已提交重放仍返回原结果。
+	// 该接口只检查权限，不应承担扣次数或业务写入。
 	CanPublish(ctx context.Context, from Sender, ch Channel) error
 	// CanRead reports whether viewer may read ch's history. It is a separate
 	// decision from CanPublish: a muted player still reads, and a world channel

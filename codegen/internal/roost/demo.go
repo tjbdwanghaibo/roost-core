@@ -194,7 +194,37 @@ func enableDemoAdmin(root, gameService string) error {
 // -workflow player-tcp` would fail on the project it just generated.
 func enableDemoPlayerTCP(root, gameService string) error {
 	_, err := ensurePlayerTCPConfig(root, gameService, "", true)
-	return err
+	if err != nil {
+		return err
+	}
+	// 这个模板依赖 PlayerOwners 闸门。TCP Mod 先启动，Service.Init 后注册闸门；
+	// 三份新工程配置都显式要求它，避免这段启动窗口执行未归属的玩家请求。
+	for _, rel := range []string{
+		"configs/service/config." + gameService + ".yaml",
+		"configs/service/config." + gameService + ".prod.example.yaml",
+		"deploy/k8s/base/secret." + gameService + ".example.yaml",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		raw, err := os.ReadFile(path)
+		if os.IsNotExist(err) && strings.HasPrefix(rel, "deploy/") {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		text := string(raw)
+		at := strings.Index(text, "player_access:\n")
+		if at < 0 {
+			return fmt.Errorf("%s: missing player_access block", rel)
+		}
+		start := strings.LastIndexByte(text[:at], '\n') + 1
+		indent := text[start:at]
+		text = strings.Replace(text, "player_access:\n", "player_access:\n"+indent+"  require_write_gate: true\n", 1)
+		if err := os.WriteFile(path, []byte(text), 0644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // demoGiftRefundBudget gives the gift saga's debit step — whose compensation
@@ -490,6 +520,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "transport", Name: "tcp"}, why: "a transport a client can actually connect to"},
 		{write: "internal/access/player/tcp/auth.go", why: "session tickets validated by the account service, plus a terminal shortcut"},
 		{write: "internal/access/player/tcp/auth_test.go", why: "the authenticator's principal read back by the login endpoint's BoundServerID: the bound sid's claim key cannot drift between the two"},
+		{write: "internal/access/player/required_gate_test.go", why: "required ownership gate refuses startup-window requests until Service.Init registers it"},
 		{run: enableDemoPlayerTCP, why: "a listener that is actually on; doctor's player-tcp workflow passes on the generated project"},
 		{add: &AddOptions{Kind: "protocol", Name: "AddItem", Group: "game", Handler: "player"}, why: "the wire message"},
 		{write: "protocol/def/add_item.go", why: "request fields matching the handler parameters; response with code and count"},

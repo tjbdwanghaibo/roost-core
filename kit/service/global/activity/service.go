@@ -212,6 +212,9 @@ func New(cfg Config) (*Service, error) {
 	if cfg.GraceWindow == 0 {
 		cfg.GraceWindow = DefaultGraceWindow
 	}
+	if cfg.GraceWindow < time.Second {
+		return nil, fmt.Errorf("GraceWindow must be at least 1s: deadlines use Unix seconds")
+	}
 	if cfg.ReservationTTL < 0 {
 		return nil, fmt.Errorf("activity: reservation ttl must not be negative")
 	}
@@ -804,6 +807,7 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		prune   []Key
 		heal    []Activity
 		confirm []Key
+		helpErr error
 	)
 	nowUnix := s.cfg.Now().Unix()
 	snapshot := entries.usable
@@ -837,7 +841,6 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 			// here, because dispatch creation is insert-only and re-running it
 			// cannot duplicate a delivery.
 			heal = append(heal, activity.clone())
-			prune = append(prune, key)
 		case activity.Status == StatusCollecting && activity.GraceExpired(nowUnix):
 			due = append(due, candidate{key: key, deadline: activity.GraceDeadlineUnix})
 		}
@@ -848,7 +851,8 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		}
 		current, exists, err := s.cfg.Activities.Get(ctx, key)
 		if err != nil {
-			return nil, err
+			helpErr = errors.Join(helpErr, fmt.Errorf("read activity %s: %w", key, err))
+			continue
 		}
 		if !exists {
 			// Confirmed entries were added after Create was observed, so a
@@ -887,7 +891,6 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		// always visible) or a plan this code cannot execute (judged below,
 		// only for entries the bounded batch reached).
 		malformedOpening = entries.in(WindowOpening)
-		helpErr          error
 	)
 	for _, entry := range snapshot.Opening {
 		if _, scan := selected[entry.Key]; !scan {
@@ -895,7 +898,8 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		}
 		current, exists, err := s.cfg.Activities.Get(ctx, entry.Key)
 		if err != nil {
-			return nil, err
+			helpErr = errors.Join(helpErr, fmt.Errorf("read opening %s: %w", entry.Key, err))
+			continue
 		}
 		if !exists {
 			if nowUnix-entry.AdmittedAtUnix < openingGraceUnix {
@@ -909,11 +913,17 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 				malformedOpening = append(malformedOpening, MalformedWindowEntry{List: WindowOpening, Key: entry.Key, Reason: reason})
 				continue
 			}
-			current, _, err = s.cfg.Activities.Create(ctx, entry.Key, entry.Intent.clone())
-			if err != nil {
-				if helpErr == nil {
-					helpErr = fmt.Errorf("help opening %s: %w", entry.Key, err)
+			var created bool
+			current, created, err = s.cfg.Activities.Create(ctx, entry.Key, entry.Intent.clone())
+			if err == nil && !created {
+				// Create 输给并发 opener 时不返回赢家的值，必须重新读取后再分类。
+				current, exists, err = s.cfg.Activities.Get(ctx, entry.Key)
+				if err == nil && !exists {
+					continue
 				}
+			}
+			if err != nil {
+				helpErr = errors.Join(helpErr, fmt.Errorf("help opening %s: %w", entry.Key, err))
 				continue
 			}
 		}
@@ -927,7 +937,7 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 	})
 	for _, key := range confirm {
 		if err := s.confirmWindow(ctx, key); err != nil {
-			return nil, err
+			helpErr = errors.Join(helpErr, fmt.Errorf("confirm opening %s: %w", key, err))
 		}
 	}
 	sort.Slice(due, func(i, j int) bool {
@@ -944,7 +954,8 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		}
 		activity, advanced, err := s.completeExpired(ctx, entry.key, nowUnix)
 		if err != nil {
-			return completed, err
+			helpErr = errors.Join(helpErr, fmt.Errorf("complete activity %s: %w", entry.key, err))
+			continue
 		}
 		if !advanced {
 			// Another sweep or a final notify got there first. Not an error:
@@ -954,20 +965,22 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		}
 		completed = append(completed, activity)
 		heal = append(heal, activity)
-		prune = append(prune, entry.key)
 	}
 
 	delivering := make([]Key, 0, len(heal))
 	for _, activity := range heal {
 		if err := s.ensureDispatches(ctx, activity); err != nil {
-			return completed, err
+			helpErr = errors.Join(helpErr, fmt.Errorf("ensure dispatches %s: %w", activity.Key, err))
+			continue
 		}
+		// 只有投递记录已持久化，才把活动从待推进窗口移到投递窗口。
+		prune = append(prune, activity.Key)
 		delivering = append(delivering, activity.Key)
 	}
 	if len(prune)+len(reclaim) > 0 {
 		reclaimed, err := s.retireFromWindow(ctx, groupID, prune, delivering, reclaim)
 		if err != nil {
-			return completed, err
+			return completed, errors.Join(helpErr, err)
 		}
 		if reclaimed > 0 {
 			s.report.Dropped("sweep.opening_legacy_reclaimed", reclaimed)
@@ -1694,11 +1707,8 @@ func (s *Service) dispatchBackoff(attempt int) time.Duration {
 
 // AckDispatch records that a game processed a delivered result.
 //
-// The token is required and compared in constant time. It is the whole
-// authorization: the dispatch key is derivable by anyone who knows the
-// activity and a game sid, so without a token any caller could mark another
-// game's settlement processed and the retry would stop before the game ever
-// saw it.
+// token 必须匹配投递身份并以常量时间比较。LookupDispatch 也可读取它；总线须为
+// 可信内网，调用者身份由接入层保证，此方法不把 token 当成目标 game 的身份证明。
 func (s *Service) AckDispatch(ctx context.Context, key Key, gameSID int32, token string) (Dispatch, error) {
 	if err := key.Validate(); err != nil {
 		return Dispatch{}, err

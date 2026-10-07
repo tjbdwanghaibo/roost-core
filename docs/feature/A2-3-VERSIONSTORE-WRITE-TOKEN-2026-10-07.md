@@ -201,3 +201,11 @@ go test -count=1 .                                                           ok�
 
   没有改 nest / entity / dataengine / sync，没跑 glsvet；生成模板未改，codegen / game-demo 不受影响（模板与生成工程不直接读写信封，`activity_test.go.tmpl` 用 MemoryStore）。
 - 未完成：§8 的墓碑（选项 B）等维护者决定。
+
+## 2026-10-08 实施更正（B3）
+
+- `Update` 的 CAS 竞争与传输重发现在共用 `MaxAttempts` 次写命令预算，原来的最坏平方次数已修正；读回次数不算写命令预算，仍受 context 期限约束。
+- `Resume` 确认 Update applied/lost 也计 CAS 指标；unknown_outcome 每次核对调用计结果，首次 unresolved、稍后显式 Resume applied 是两次核对，并非一个全局唯一故障计数。
+- §6 调用方表更正：directory 的 Redis 存储拒绝 TTL（预留期是值内逻辑期限）；global 和 mail 没有 Delete 调用；activity/platform 的 Store 接口有 Delete，但生产服务没有调用；chat RequestID 回执独立于消息 ring 存放。
+- `ErrAborted` 保留为弃用的公开符号；mutate 不保存时返回当前值和 nil。
+- 跨 RPC 不携带进程内 Resume。global 完成回执、match 相同票集合回执、session admission 恢复分别补齐业务重试/回收边界；不能把服务里未调用 Resume 等同于所有操作都重复生效。
