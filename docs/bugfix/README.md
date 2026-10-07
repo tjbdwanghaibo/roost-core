@@ -8,15 +8,15 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
-**10-07 skill 衍生物“施放 → 移交 → 停止”（`skspawn`），未发版。** 先补端到端用例 `skill/spawn_lifecycle_e2e_promises_test.go`（area / projectile / beam / orbit × 立即 finish / wait / 施放中 checkpoint 恢复 / 施放中到期 / Cancel / Interrupt / Shutdown，每 tick 断言结算、事件链与 Host 侧状态），再在用例上修：衍生物只有 `advanceOwnedSpawns` 一个推进入口（施放中与已移交同一条路，删 `spawnStepTask`，源码守卫）；启动步被拒经 `requestSpawnStop` 停掉；衍生物继承施法事件链、回调与回调效果每次一个新 EventID；proc 施放事件 ID 低 32 位为 0；被拒的被动候选告警后跳过、`drainHostEvents` 不再失败。checkpoint 版本 8。
+**10-07 skill 衍生物“施放 → 移交 → 停止”（`skspawn`，`50a0fe88`），未发版。** 先补端到端用例 `skill/spawn_lifecycle_e2e_promises_test.go`（area / projectile / beam / orbit × 立即 finish / wait / 施放中 checkpoint 恢复 / 施放中到期 / Cancel / Interrupt / Shutdown，每 tick 断言结算、事件链与 Host 侧状态），再在用例上修：衍生物只有 `advanceOwnedSpawns` 一个推进入口（施放中与已移交同一条路，删 `spawnStepTask`，源码守卫）；启动步被拒经 `requestSpawnStop` 停掉；衍生物继承施法事件链、回调与回调效果每次一个新 EventID；proc 施放事件 ID 低 32 位为 0；被拒的被动候选告警后跳过、`drainHostEvents` 不再失败。checkpoint 版本 8。
 
 | 编号 | 修复 | 状态 |
 | --- | --- | --- |
-| [RR-20261006-55](RR-20261006-55.md) | 被拒候选记 `passive_suppressed` + `skill.passive.dispatch_rejected.total` + Warn，事件前进；`drainHostEvents` 不返回错误，付费后不会删 cast；根事件表满保持原地重试 | 已修复（本批），未发版 |
-| [RR-20261006-54](RR-20261006-54.md) | proc 施放事件 ID 改为 `castID<<32` | 已修复（本批），未发版 |
-| [RR-20261006-53](RR-20261006-53.md) | 衍生物以施法事件为底，回调 / 回调效果用 `1<<63 \| 序号`（随 checkpoint 保存）；活着的衍生物钉住根 | 已修复（本批），未发版 |
-| [RR-20261006-52](RR-20261006-52.md) | `startEntitySpawn` 先入表再跑启动步，失败经 `requestSpawnStop` | 已修复（本批），未发版 |
-| [RR-20261006-51](RR-20261006-51.md) | 施放中与已移交同由 `advanceOwnedSpawns` 推进 / 回收；删 `spawnStepTask`；施放中 area finish 结束施法 | 已修复（本批），未发版 |
+| [RR-20261006-55](RR-20261006-55.md) | 被拒候选记 `passive_suppressed` + `skill.passive.dispatch_rejected.total` + Warn，事件前进；`drainHostEvents` 不返回错误，付费后不会删 cast；根事件表满保持原地重试 | 已修复（`50a0fe88`），未发版 |
+| [RR-20261006-54](RR-20261006-54.md) | proc 施放事件 ID 改为 `castID<<32` | 已修复（`50a0fe88`），未发版 |
+| [RR-20261006-53](RR-20261006-53.md) | 衍生物以施法事件为底，回调 / 回调效果用 `1<<63 \| 序号`（随 checkpoint 保存）；活着的衍生物钉住根 | 已修复（`50a0fe88`），未发版 |
+| [RR-20261006-52](RR-20261006-52.md) | `startEntitySpawn` 先入表再跑启动步，失败经 `requestSpawnStop` | 已修复（`50a0fe88`），未发版 |
+| [RR-20261006-51](RR-20261006-51.md) | 施放中与已移交同由 `advanceOwnedSpawns` 推进 / 回收；删 `spawnStepTask`；施放中 area finish 结束施法 | 已修复（`50a0fe88`），未发版 |
 
 **10-07 sync 框架文档发现 F04-1 / F04-2 / F04-15（`syncfix`，`04378f7c`），未发版。** Leave / Hide 按等价关系改写排队兴趣事实；停滞 retry 计数告警、不再拖住 Drain；syncstream 首条 WAL 半截按空日志打开并计数告警、WAL 带活动时间、Recover 以 provider 的版本为准。
 
