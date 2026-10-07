@@ -63,6 +63,7 @@ func TestBusDeadLetterListAndRequeue(t *testing.T) {
 	store := newReliableMemoryStore()
 	client := &captureNatsClient{}
 	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	_ = b.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 	b.deadLetter(&fnats.NatsMsg{
 		ToSid:    2,
@@ -101,6 +102,7 @@ func TestBusDeadLetterRequeueLimitKeepsUnselectedEntries(t *testing.T) {
 	})
 	client := &captureNatsClient{}
 	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	_ = b.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 
 	for _, id := range []string{"dead-1", "dead-2", "dead-3"} {
@@ -132,6 +134,7 @@ func TestBusDeadLetterRequeueUsesStableIDWhenDeleteFails(t *testing.T) {
 	store := newReliableMemoryStore()
 	client := &captureNatsClient{}
 	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	_ = b.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 	b.deadLetter(&fnats.NatsMsg{ToSid: 2, ToModule: "mail", MsgName: "Changed", MsgID: "dead-1"}, "handler failed")
 
@@ -175,6 +178,7 @@ func TestBusDeadLetterAdminCommandsListAndRequeue(t *testing.T) {
 	store := newReliableMemoryStore()
 	client := &captureNatsClient{}
 	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	_ = b.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 	reg := admin.NewRegistry()
 	if err := RegisterAdminCommands(reg, b); err != nil {
@@ -245,10 +249,10 @@ func (s *reliableMemoryStore) FinishConsume(_ context.Context, consumer Reliable
 	return nil
 }
 
-func (s *reliableMemoryStore) DeadLetter(_ context.Context, consumer ReliableConsumer, msg *fnats.NatsMsg, reason string) error {
+func (s *reliableMemoryStore) DeadLetter(_ context.Context, consumer ReliableConsumer, msg *fnats.NatsMsg, bucket DeadLetterBucket, reason string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := DeadLetterKey(msg.ToModule, msg.MsgName)
+	key := DeadLetterKey(bucket.Module, bucket.MsgName)
 	s.dead[key] = append(s.dead[key], DeadLetterEntry{
 		MsgID:    msg.MsgID,
 		ToSid:    msg.ToSid,

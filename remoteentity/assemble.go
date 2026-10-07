@@ -72,6 +72,10 @@ func Assemble(deps AssemblyDeps, cfg *Config, localSid int32, mongoCfg MongoBack
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
+	// 快照段与只读方 NewSnapshotClient 同一套校验（RR-20261006-71）；正式装配总带 Redis L2。
+	if err := validateSnapshotConfig(cfg, true); err != nil {
+		return nil, err
+	}
 	if err := entity.ValidateRemoteManagedDaoScopes(entity.GetAllEntityBuilders()); err != nil {
 		return nil, err
 	}

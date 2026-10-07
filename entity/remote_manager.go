@@ -13,6 +13,11 @@ var (
 	// “不带它 = 明确拒绝”给回复加 nest.ErrRemotePartRejected（判别表第 4 行）。等待 WAL 投影器结论的 Commit（strict）没等到
 	// 结论就失败（等待截止、tracker 重新登记失败等）不说明 Remote 没写入，必须带它（RR-20260928-08）。
 	ErrRemotePersistenceIndeterminate = errors.New("remote entity persistence outcome is indeterminate")
+	// ErrRemotePublicationPending 与 ErrRemotePersistenceIndeterminate 一起返回：Remote 提交已在权威存储里
+	// 持久（Applied），只是提交后的发布（缓存、同步总线、标记已发布）失败了。发布由 owner 的补发循环与
+	// finalizer 按 outbox 补上，WAL 投影器据此把这条记为已投影，不再按它退避重试、挡住后面的记录
+	// （RR-20261006-69）。
+	ErrRemotePublicationPending = errors.New("remote entity commit is persisted; publication is pending")
 	// ErrRemoteReleaseIncomplete means state persistence completed but an
 	// ownership/distributed guard could not be released normally.
 	ErrRemoteReleaseIncomplete = errors.New("remote entity release is incomplete")

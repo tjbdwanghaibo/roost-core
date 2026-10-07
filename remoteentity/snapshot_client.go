@@ -117,13 +117,22 @@ func validateSnapshotClientConfig(cfg *Config, deps SnapshotClientDeps) error {
 		return errors.New("remote_entity: snapshot client needs a non-zero consumer sid")
 	case deps.LinearizableLoader && deps.Loader == nil:
 		return errors.New("remote_entity: a linearizable snapshot client needs a loader")
+	}
+	return validateSnapshotConfig(cfg, deps.L2 != nil)
+}
+
+// validateSnapshotConfig 校验快照段配置。只读方（NewSnapshotClient）与写 owner（Assemble）共用同一套规则
+// （RR-20261006-71）：之前只有只读路径校验，owner 装配静默接受 SnapshotInterestTTL = 0（兴趣一律拒绝、
+// owner 永不推送）、SnapshotL2TTL = 0（墓碑不落地、O5 过滤关闭）这类组合。
+func validateSnapshotConfig(cfg *Config, hasL2 bool) error {
+	switch {
 	case cfg.SnapshotInterestTTL <= 0:
 		return errors.New("remote_entity: snapshot_interest_ttl must be positive")
 	case cfg.SnapshotLoadTimeout <= 0:
 		return errors.New("remote_entity: snapshot_load_timeout must be positive")
 	case cfg.SnapshotCacheTTL < 0 || cfg.CachedMaxStaleness < 0:
 		return errors.New("remote_entity: snapshot cache ttl and cached_max_staleness must not be negative")
-	case deps.L2 != nil && cfg.SnapshotL2TTL <= 0:
+	case hasL2 && cfg.SnapshotL2TTL <= 0:
 		return errors.New("remote_entity: snapshot_l2_ttl must be positive when a shared L2 is configured")
 	case cfg.SnapshotInterestPerConsumer < 0 || (cfg.SnapshotInterestSubs > 0 && cfg.SnapshotInterestPerConsumer > cfg.SnapshotInterestSubs):
 		return fmt.Errorf("remote_entity: snapshot_interest_per_consumer (%d) must be between 0 and snapshot_interest_subs (%d)", cfg.SnapshotInterestPerConsumer, cfg.SnapshotInterestSubs)
@@ -131,7 +140,8 @@ func validateSnapshotClientConfig(cfg *Config, deps SnapshotClientDeps) error {
 	return nil
 }
 
-// newSnapshotClient 是不校验的构造（Manager 内嵌用，保持 NewManager 不返回错误的旧签名）。
+// newSnapshotClient 是不校验的构造（Manager 内嵌用，保持 NewManager 不返回错误的旧签名）；正式的 owner 装配
+// 入口 Assemble 先经 validateSnapshotConfig 校验同一组规则。
 func newSnapshotClient(cfg *Config, deps SnapshotClientDeps) *SnapshotClient {
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	c := &SnapshotClient{
@@ -253,19 +263,43 @@ func (c *SnapshotClient) RenewInterest(ctx context.Context, key entity.RemoteSna
 
 // renewInterest 是续租的唯一入口。refresh 为 true 时是兴趣续租请求触发的重新续租（O-M6-1）：不看“剩余
 // 不足一半”的门槛，但只续本机表里仍然有效的 key——遍历开始之后被 release 或已过期的 key 不归它复活。
-// 其余（条带锁内分配代际、本机兴趣表按同一配额判定、广播、失败回滚）与读时续租完全相同。
+// 其余（条带锁内分配代际、本机兴趣表按同一配额判定、锁外广播、失败回滚）与读时续租完全相同。
 // 返回是否广播了一条续租。
 func (c *SnapshotClient) renewInterest(ctx context.Context, key entity.RemoteSnapshotKey, refresh bool) (bool, error) {
 	if c == nil || !key.Valid() {
 		return false, entity.ErrRemoteRejected
 	}
+	interest, ok, err := c.admitInterestRenewal(key, refresh)
+	if !ok {
+		return false, err
+	}
+	// 广播在条带锁外（RR-20261006-68）：之前在锁内同步发布，总线慢时（最长 syncbus.publish_timeout）同条带
+	// 其他 key 的读——包括不需要续租的 L1 命中——都排队等这一次发布。锁外发布不破坏顺序：线上的 renew /
+	// release 带锁内分配的代际，接收端按代际判新旧（renewIfNeeded 的撤销水位、release 的代际比较），到达
+	// 顺序与分配顺序不同也收敛到同一结果。同一个 key 的其他读在发布期间看到本机表里的新租约，不再重复续租。
+	if err := c.publishInterest(ctx, interest, false); err != nil {
+		// 回滚只撤掉这一次续租（按 ExpiresAt 比对）：发布期间同 key 已被 release 或更新的续租覆盖时不动。
+		c.rollbackLocalInterest(key, interest.ExpiresAt)
+		return false, err
+	}
+	if c.localInterestOps.Add(1)&1023 == 0 {
+		c.localInterestMu.Lock()
+		c.pruneLocalInterestsLocked(time.Now().UnixNano())
+		c.localInterestMu.Unlock()
+	}
+	return true, nil
+}
+
+// admitInterestRenewal 在条带锁内分配代际并更新本机表与本机兴趣表；ok 为 false 时不需要（或不能）广播，
+// err 是被拒的原因。广播由调用方在锁外做。
+func (c *SnapshotClient) admitInterestRenewal(key entity.RemoteSnapshotKey, refresh bool) (entity.RemoteSnapshotInterest, bool, error) {
 	ttl := c.cfg.SnapshotInterestTTL
 	stripe := &c.localInterestLocks[uint64(key.EntityID)%uint64(len(c.localInterestLocks))]
 	stripe.Lock()
 	defer stripe.Unlock()
 	// generation 在条带锁内分配（Mirror 第 4 步）：同一 key 的 renew / release 按锁的顺序拿到递增的代际，
-	// 本机表、兴趣表与线上的消息按同一顺序收敛。之前在锁外分配，并发的 renew(g) 与 release(g+1) 可能
-	// 按相反顺序执行：本机表记着租约，兴趣表与 owner 却按 g+1 撤销了。
+	// 本机表与兴趣表按同一顺序收敛。之前在锁外分配，并发的 renew(g) 与 release(g+1) 可能按相反顺序执行：
+	// 本机表记着租约，兴趣表与 owner 却按 g+1 撤销了。
 	now := time.Now().UnixNano()
 	interest := entity.RemoteSnapshotInterest{ConsumerSID: c.consumerSID, Key: key, ExpiresAt: now + ttl.Nanoseconds(), Generation: c.nextInterestGeneration()}
 	c.localInterestMu.Lock()
@@ -273,17 +307,17 @@ func (c *SnapshotClient) renewInterest(ctx context.Context, key entity.RemoteSna
 	switch {
 	case refresh && (!loaded || current <= now):
 		c.localInterestMu.Unlock()
-		return false, nil
+		return interest, false, nil
 	case !refresh && loaded && current-now > (ttl/2).Nanoseconds():
 		c.localInterestMu.Unlock()
-		return false, nil
+		return interest, false, nil
 	}
 	if !loaded && c.localInterestCapacity > 0 && len(c.localInterests) >= c.localInterestCapacity {
 		c.pruneLocalInterestsLocked(now)
 		if len(c.localInterests) >= c.localInterestCapacity {
 			c.localInterestMu.Unlock()
 			c.noteInterestRejected("local_table_full")
-			return false, entity.ErrRemoteOverloaded
+			return interest, false, entity.ErrRemoteOverloaded
 		}
 	}
 	c.localInterests[key] = interest.ExpiresAt
@@ -294,18 +328,9 @@ func (c *SnapshotClient) renewInterest(ctx context.Context, key entity.RemoteSna
 		if errors.Is(err, entity.ErrRemoteOverloaded) {
 			c.noteInterestRejected("registry")
 		}
-		return false, err
+		return interest, false, err
 	}
-	if err := c.publishInterest(ctx, interest, false); err != nil {
-		c.rollbackLocalInterest(key, interest.ExpiresAt)
-		return false, err
-	}
-	if c.localInterestOps.Add(1)&1023 == 0 {
-		c.localInterestMu.Lock()
-		c.pruneLocalInterestsLocked(now)
-		c.localInterestMu.Unlock()
-	}
-	return true, nil
+	return interest, true, nil
 }
 
 // ReleaseInterest 撤销本机对 key 的兴趣（带新的 generation，只撤销不新于它的租约）。
@@ -315,12 +340,13 @@ func (c *SnapshotClient) ReleaseInterest(ctx context.Context, key entity.RemoteS
 	}
 	stripe := &c.localInterestLocks[uint64(key.EntityID)%uint64(len(c.localInterestLocks))]
 	stripe.Lock()
-	defer stripe.Unlock()
 	interest := entity.RemoteSnapshotInterest{ConsumerSID: c.consumerSID, Key: key, ExpiresAt: time.Now().UnixNano(), Generation: c.nextInterestGeneration()}
 	c.localInterestMu.Lock()
 	delete(c.localInterests, key)
 	c.localInterestMu.Unlock()
 	c.interests.release(key, c.consumerSID, interest.Generation)
+	stripe.Unlock()
+	// 与续租相同，广播在条带锁外（RR-20261006-68）；接收端按代际判新旧。
 	return c.publishInterest(ctx, interest, true)
 }
 

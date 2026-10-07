@@ -45,6 +45,7 @@ func TestRequeueDeadLettersRefusesWithoutAClientAndPartialRequeueOnAPurgeOnlySto
 	ctx := context.Background()
 	store := newReliableMemoryStore()
 	clientless := New(nil, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	_ = clientless.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
 	clientless.EnableReliable(store, ReliableConfig{Enabled: true})
 	deadLetterTwice(clientless)
 	if n, err := clientless.RequeueDeadLetters(ctx, DeadLetterQuery{Module: "mail", MsgName: "Changed"}); err == nil || n != 0 || !strings.Contains(err.Error(), "nats client is nil") {
@@ -57,6 +58,7 @@ func TestRequeueDeadLettersRefusesWithoutAClientAndPartialRequeueOnAPurgeOnlySto
 	purgeOnly := newReliableMemoryStore()
 	client := &captureNatsClient{}
 	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	_ = b.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
 	b.EnableReliable(purgeOnlyStore{ReliableStore: purgeOnly, inner: purgeOnly}, ReliableConfig{Enabled: true})
 	deadLetterTwice(b)
 	n, err := b.RequeueDeadLetters(ctx, DeadLetterQuery{Module: "mail", MsgName: "Changed", Limit: 1})

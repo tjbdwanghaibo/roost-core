@@ -70,7 +70,15 @@ func (c ReliableConfig) normalize() ReliableConfig {
 type ReliableStore interface {
 	BeginConsume(ctx context.Context, consumer ReliableConsumer, msg *nats.NatsMsg) (bool, error)
 	FinishConsume(ctx context.Context, consumer ReliableConsumer, msg *nats.NatsMsg) error
-	DeadLetter(ctx context.Context, consumer ReliableConsumer, msg *nats.NatsMsg, reason string) error
+	// DeadLetter 把 msg 记进 bucket 指定的死信列表（Bus 只给注册过的名字或 "_unregistered"，RR-20261006-72）；
+	// 条目保留 msg 原来的 module / msg，重投按原名字发回。
+	DeadLetter(ctx context.Context, consumer ReliableConsumer, msg *nats.NatsMsg, bucket DeadLetterBucket, reason string) error
+}
+
+// DeadLetterBucket 是死信列表的桶名，也是 DeadLetterQuery 的 Module / MsgName。
+type DeadLetterBucket struct {
+	Module  string
+	MsgName string
 }
 
 type ReliableDeadLetterStore interface {
@@ -132,7 +140,7 @@ func (s *RedisReliableStore) FinishConsume(ctx context.Context, consumer Reliabl
 	return s.redis.Set(ctx, s.inboxKey(consumer, msg.MsgID), "done", s.cfg.InboxTTL)
 }
 
-func (s *RedisReliableStore) DeadLetter(ctx context.Context, consumer ReliableConsumer, msg *nats.NatsMsg, reason string) error {
+func (s *RedisReliableStore) DeadLetter(ctx context.Context, consumer ReliableConsumer, msg *nats.NatsMsg, bucket DeadLetterBucket, reason string) error {
 	if s == nil || s.redis == nil || msg == nil {
 		return nil
 	}
@@ -153,7 +161,7 @@ func (s *RedisReliableStore) DeadLetter(ctx context.Context, consumer ReliableCo
 	if err != nil {
 		return err
 	}
-	key := s.deadLetterKey(msg.ToModule, msg.MsgName)
+	key := s.deadLetterKey(bucket.Module, bucket.MsgName)
 	if err := s.dlq.AppendRaw(ctx, key, raw); err != nil {
 		return err
 	}

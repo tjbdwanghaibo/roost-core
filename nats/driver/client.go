@@ -134,10 +134,10 @@ func (c *Client) requestWithContext(ctx context.Context, subject string, data []
 		switch {
 		case c.state.isClosed():
 			return nil, fnats.ErrClosed
-		case errors.Is(ctx.Err(), context.DeadlineExceeded):
-			return nil, fnats.ErrTimeout
 		case ctx.Err() != nil:
-			return nil, fnats.ErrCancelled
+			// 保留 ctx 语义（RR-20261006-73）：之前只回 fnats.ErrTimeout / ErrCancelled，调用方用
+			// errors.Is(err, context.DeadlineExceeded / Canceled) 判断不到。
+			return nil, contextRPCError(ctx)
 		}
 		return nil, c.wrapError(err)
 	}

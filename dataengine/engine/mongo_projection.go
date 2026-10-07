@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -155,6 +157,15 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 	}
 	if len(remote) > 0 {
 		if _, err := store.remoteApplier.ApplyRemoteCommits(ctx, entity.RemoteTransactionID(record.ID), remote); err != nil {
+			if errors.Is(err, entity.ErrRemotePublicationPending) {
+				// Remote 提交已随上面的 Mongo 事务持久（Applied），失败的只是发布：这条记为已投影，发布交给
+				// Remote 的补发循环与 finalizer 按 outbox 补上（RR-20261006-69）。之前按普通错误退避重试这一条，
+				// 总线不可用期间其后所有记录（含普通 DAO）都排队，strict 写超时成结果未知。
+				metrics.IncCounter("dataengine.projector.remote_publication_deferred.total", nil, 1)
+				slog.Warn("dataengine mongo: remote commit persisted but publication failed; projection continues and the commit outbox republishes it",
+					"transaction", record.ID.String(), "err", err)
+				return false, nil
+			}
 			return false, fmt.Errorf("dataengine mongo: remote publication: %w", err)
 		}
 	}

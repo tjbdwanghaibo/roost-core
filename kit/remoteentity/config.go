@@ -103,7 +103,7 @@ type entityConfig struct {
 		FinalizeRetryInterval     time.Duration `config:"finalize_retry_interval" min:"0" example:"500ms"`
 		FinalizeProjectionTimeout time.Duration `config:"finalize_projection_timeout" min:"0"`
 		MaxWriteBatch             int           `config:"max_write_batch" min:"0" example:"64"`
-		MaxConcurrentWrites       int           `config:"max_concurrent_writes" default:"128" min:"0" help:"同时在途的 Remote 写许可（0 不限）；定容见 kit/README.md remoteentity“独立资源预算”"`
+		MaxConcurrentWrites       int           `config:"max_concurrent_writes" default:"128" min:"0" help:"同时在途的 Remote 写许可；0 取 async_finalize_capacity，大于它时按它封顶；定容见 kit/README.md remoteentity“独立资源预算”"`
 		AsyncFinalizeCapacity     int           `config:"async_finalize_capacity" min:"0" example:"4096"`
 		AsyncFinalizeWorkers      int           `config:"async_finalize_workers" min:"0" example:"16"`
 		TransactionTrackLimit     int           `config:"transaction_track_limit" min:"0" example:"100000"`

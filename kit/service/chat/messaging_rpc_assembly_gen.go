@@ -176,7 +176,8 @@ var _ app.Service = (*Server)(nil)
 // local service and a client to itself with the winner decided by registration
 // order.
 type ClientMod struct {
-	options []servicerpc.Option
+	options   []servicerpc.Option
+	transport []servicerpc.Option
 
 	serviceType string
 	timeout     time.Duration
@@ -185,9 +186,8 @@ type ClientMod struct {
 
 // NewClientMod returns a client Mod.
 //
-// options are passed to servicerpc: a deployment that needs a particular
-// transport supplies it here, because that is a property of how this
-// deployment routes rather than of the service.
+// options are passed to servicerpc after the transport Init reads from
+// nats.rpc.transport, so an option given here wins over the configuration.
 func NewClientMod(options ...servicerpc.Option) *ClientMod {
 	return &ClientMod{options: append([]servicerpc.Option(nil), options...)}
 }
@@ -225,12 +225,20 @@ type clientModConfig struct {
 // ConfigSchema implements app.ModConfigSchema.
 func (m *ClientMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(clientModConfig{}) }
 
-// Init reads chat.service_type and chat.call_timeout.
+// Init reads chat.service_type and chat.call_timeout,
+// and the process's nats.rpc.transport (declared by the NATS Mod this one
+// depends on).
+//
+// The transport has to follow nats.rpc.transport: an owner with
+// transport=jetstream serves RPC over JetStream only, and a client that always
+// used request-reply got bus.ErrRPCCapturedByJetStream for every call although
+// both processes were configured alike (RR-20261006-74).
 func (m *ClientMod) Init(cfg *viper.Viper) error {
 	var settings clientModConfig
 	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return fmt.Errorf("chat client mod: %w", err)
 	}
+	m.transport = servicerpc.OptionsFromConfig(cfg)
 	m.serviceType = settings.Client.ServiceType
 	m.timeout = DefaultCallTimeout
 	if settings.Client.CallTimeout > 0 {
@@ -246,7 +254,7 @@ func (m *ClientMod) Provide(r *app.Registry) error {
 		return fmt.Errorf("chat client mod: capability %q not found; a process that calls "+
 			"Messaging needs a bus", mods.ModBus)
 	}
-	client, err := NewBusClient(busClient, m.serviceType, m.timeout, m.options...)
+	client, err := NewBusClient(busClient, m.serviceType, m.timeout, m.clientOptions()...)
 	if err != nil {
 		return fmt.Errorf("chat client mod: %w", err)
 	}
@@ -255,6 +263,12 @@ func (m *ClientMod) Provide(r *app.Registry) error {
 	// and nothing else. A consumer that asserted on *BusClient would break in
 	// the process that owns this service.
 	return mods.RegisterAll(r, mods.Capability{Name: m.Name(), Value: Capability(client)})
+}
+
+// clientOptions is the configured transport followed by the constructor's
+// options, so an explicit option wins.
+func (m *ClientMod) clientOptions() []servicerpc.Option {
+	return append(append([]servicerpc.Option(nil), m.transport...), m.options...)
 }
 
 // Start implements app.Mod. Nothing to start: the client holds no goroutine

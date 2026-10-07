@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/goroutine"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
@@ -144,6 +145,13 @@ func NewRPCClient(client *Client, policy fnats.RetryPolicy, cbWorkerNum int) *RP
 	return rc
 }
 
+// defaultRPCAttemptTimeout 是调用方没给期限时单次尝试的上限。调用方带期限时按它计时，不再另截（RR-20261006-73）。
+const defaultRPCAttemptTimeout = 5 * time.Second
+
+// Call 发一次请求并等回复。计时以调用方期限为准：之前每次尝试固定截到 5s（缺省只尝试 1 次），
+// call_timeout 大于 5s 的调用 5s 就超时（RR-20261006-73）。调用方期限到达或取消后不再重试；超时错误同时
+// errors.Is 到 fnats.ErrTimeout 与 context.DeadlineExceeded，取消同时 errors.Is 到 fnats.ErrCancelled 与
+// context.Canceled。
 func (r *RPCClient) Call(ctx context.Context, subject string, req []byte) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -154,21 +162,25 @@ func (r *RPCClient) Call(ctx context.Context, subject string, req []byte) ([]byt
 			wait := r.nextInterval(attempt - 1)
 			select {
 			case <-ctx.Done():
-				return nil, fnats.ErrCancelled
+				return nil, contextRPCError(ctx)
 			case <-time.After(wait):
 			}
 		}
 
-		// Bound each transport attempt while still allowing caller cancellation
-		// to interrupt the in-flight NATS request immediately.
-		attemptCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		attemptCtx, cancel := ctx, context.CancelFunc(func() {})
+		if _, ok := ctx.Deadline(); !ok {
+			attemptCtx, cancel = context.WithTimeout(ctx, defaultRPCAttemptTimeout)
+		}
 		resp, err := r.client.requestWithContext(attemptCtx, subject, req)
 		cancel()
 		if err == nil {
 			return resp, nil
 		}
 		lastErr = err
-
+		if ctx.Err() != nil {
+			// 调用方的期限或取消：预算已经用完，不再重试。
+			return nil, err
+		}
 		// Only retry on recoverable errors
 		if !r.isRetryable(err) {
 			return nil, err
@@ -176,6 +188,14 @@ func (r *RPCClient) Call(ctx context.Context, subject string, req []byte) ([]byt
 		slog.Debug("rpc: retrying", "subject", subject, "attempt", attempt+1, "err", err)
 	}
 	return nil, fmt.Errorf("rpc: %s failed after %d attempts: %w", subject, r.policy.MaxAttempts, lastErr)
+}
+
+// contextRPCError 把 ctx 的结束原因映射成驱动错误，同时保留 ctx 的语义（RR-20261006-73）。
+func contextRPCError(ctx context.Context) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %w", fnats.ErrTimeout, ctx.Err())
+	}
+	return fmt.Errorf("%w: %w", fnats.ErrCancelled, ctx.Err())
 }
 
 func (r *RPCClient) CallWithTimeout(subject string, req []byte, timeout time.Duration) ([]byte, error) {
@@ -380,7 +400,7 @@ func (r *RPCClient) dispatchCallback(key int64, task *rpcTask) {
 }
 
 func (r *RPCClient) isRetryable(err error) bool {
-	return err == fnats.ErrTimeout || err == fnats.ErrNoResponders
+	return errors.Is(err, fnats.ErrTimeout) || errors.Is(err, fnats.ErrNoResponders)
 }
 
 func (r *RPCClient) nextInterval(attempt int) time.Duration {

@@ -68,6 +68,10 @@ type JetStreamMsg struct {
 	StreamSeq    uint64
 	ConsumerSeq  uint64
 	NumDelivered uint64
+	// InProgress 告诉 broker 这次投递仍在处理，重置它的 AckWait 计时（JetStream 的 +WPI）。处理时间可能超过
+	// AckWait 的消费者在处理期间定期调用它，否则 broker 会把未确认的消息重投给别的实例并发执行
+	// （RR-20261006-70）。测试替身或不支持的传输为 nil。
+	InProgress func() error
 }
 
 type IJetStreamSubscription interface {

@@ -17,9 +17,12 @@ import (
 var errInjectedPublishMark = errors.New("injected publish mark failure")
 
 // scriptedPublicationStorage 按调用序号控制目标事务的发布路径，让竞态顺序确定：
-//   - MarkRemoteCommitPublished 第 1、3 次失败（投影器首次发布、finalizer 之后的第一次重放）；
-//   - 投影器第 2 次发布（CommitRemote）等到下一写者拿到新 fence 后才继续；
-//   - 投影器第 3 次发布在测试检查 tracker 之后才继续。
+//   - 投影器的回执读回（CommitRemote）第 1、2 次失败（投影器首次发布、finalizer 之后的第一次重放）；
+//   - 投影器第 2 次发布等到下一写者拿到新 fence 后才继续（然后失败）；
+//   - 投影器第 3 次发布在测试检查 tracker 之后才继续，成功并 ack。
+//
+// RR-20261006-69 更正：之前注入的是 MarkRemoteCommitPublished 失败。那是“已 Applied、只是发布失败”，现在投影器把它
+// 记为已投影、交给补发循环，不再重放；要覆盖的“投影失败 → 重放旧回执”改由回执读回失败触发（结果未知，投影器照旧重试）。
 //
 // 除此之外全部走真实 MongoCommitter；非目标事务不受影响。
 type scriptedPublicationStorage struct {
@@ -43,6 +46,9 @@ func (s *scriptedPublicationStorage) CommitRemote(ctx context.Context, commit en
 		s.mu.Unlock()
 		var gate chan struct{}
 		switch n {
+		case 1:
+			close(s.firstMarkFailed)
+			return entity.RemoteCommitReceipt{}, errInjectedPublishMark
 		case 2:
 			gate = s.allowRetry
 		case 3:
@@ -56,6 +62,9 @@ func (s *scriptedPublicationStorage) CommitRemote(ctx context.Context, commit en
 				return entity.RemoteCommitReceipt{}, ctx.Err()
 			}
 		}
+		if n == 2 {
+			return entity.RemoteCommitReceipt{}, errInjectedPublishMark
+		}
 	}
 	return s.MongoCommitter.CommitRemote(ctx, commit)
 }
@@ -64,15 +73,7 @@ func (s *scriptedPublicationStorage) MarkRemoteCommitPublished(ctx context.Conte
 	if id == s.target {
 		s.mu.Lock()
 		s.marks++
-		n := s.marks
 		s.mu.Unlock()
-		switch n {
-		case 1:
-			close(s.firstMarkFailed)
-			return errInjectedPublishMark
-		case 3:
-			return errInjectedPublishMark
-		}
 	}
 	return s.MongoCommitter.MarkRemoteCommitPublished(ctx, id)
 }

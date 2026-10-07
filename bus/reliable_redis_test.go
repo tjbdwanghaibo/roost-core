@@ -23,7 +23,7 @@ func TestRedisReliableStoreDeadLettersKeepNewestMaxEntries(t *testing.T) {
 			ToModule: "mail",
 			MsgName:  "Changed",
 			MsgID:    id,
-		}, "failed"); err != nil {
+		}, DeadLetterBucket{Module: "mail", MsgName: "Changed"}, "failed"); err != nil {
 			t.Fatalf("DeadLetter %q: %v", id, err)
 		}
 	}
@@ -54,7 +54,7 @@ func TestRedisReliableStorePurgeDeadLettersDeletesOnlyQueryRange(t *testing.T) {
 			ToModule: "mail",
 			MsgName:  "Changed",
 			MsgID:    id,
-		}, "failed"); err != nil {
+		}, DeadLetterBucket{Module: "mail", MsgName: "Changed"}, "failed"); err != nil {
 			t.Fatalf("DeadLetter %q: %v", id, err)
 		}
 	}
@@ -89,7 +89,7 @@ func TestRedisReliableStorePurgeWholeBucketReturnsEntryCount(t *testing.T) {
 			ToModule: "mail",
 			MsgName:  "Changed",
 			MsgID:    id,
-		}, "failed"); err != nil {
+		}, DeadLetterBucket{Module: "mail", MsgName: "Changed"}, "failed"); err != nil {
 			t.Fatalf("DeadLetter %q: %v", id, err)
 		}
 	}

@@ -275,7 +275,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "remote_entity.finalize_retry_interval", Kind: "duration", Min: "0", Starter: true, Example: "500ms"},
 		{Name: "remote_entity.finalize_projection_timeout", Kind: "duration", Min: "0"},
 		{Name: "remote_entity.max_write_batch", Kind: "int", Min: "0", Starter: true, Example: "64"},
-		{Name: "remote_entity.max_concurrent_writes", Kind: "int", Default: "128", Min: "0", Help: "同时在途的 Remote 写许可（0 不限）；定容见 kit/README.md remoteentity“独立资源预算”"},
+		{Name: "remote_entity.max_concurrent_writes", Kind: "int", Default: "128", Min: "0", Help: "同时在途的 Remote 写许可；0 取 async_finalize_capacity，大于它时按它封顶；定容见 kit/README.md remoteentity“独立资源预算”"},
 		{Name: "remote_entity.async_finalize_capacity", Kind: "int", Min: "0", Starter: true, Example: "4096"},
 		{Name: "remote_entity.async_finalize_workers", Kind: "int", Min: "0", Starter: true, Example: "16"},
 		{Name: "remote_entity.transaction_track_limit", Kind: "int", Min: "0", Starter: true, Example: "100000"},

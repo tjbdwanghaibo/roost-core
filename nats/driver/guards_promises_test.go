@@ -29,8 +29,8 @@ func TestRequestTranslatesFinishedContextsAndQueueSubscribeRequiresAQueue(t *tes
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := c.requestWithContext(cancelled, "roost.x", nil); !errors.Is(err, fnats.ErrCancelled) {
-		t.Fatalf("request with a cancelled context = %v, want ErrCancelled", err)
+	if _, err := c.requestWithContext(cancelled, "roost.x", nil); !errors.Is(err, fnats.ErrCancelled) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("request with a cancelled context = %v, want ErrCancelled wrapping context.Canceled", err)
 	}
 	handler := func(*fnats.Msg) {}
 	if _, err := c.QueueSubscribe("roost.x", "", handler); err == nil || !strings.Contains(err.Error(), "queue is required") {
@@ -53,12 +53,17 @@ func TestRPCCallDoesNotRetryANonRetryableError(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > policy.BaseInterval {
 		t.Fatalf("a non-retryable error waited for a retry: %v", elapsed)
 	}
-	// 对照：可重试的超时确实会进入下一轮（下一轮看到父上下文已结束 → ErrCancelled）。
+	// 对照（RR-20261006-73 更正）：调用方期限已到时不再进入下一轮，直接回超时，并带 ctx 语义。之前这里
+	// 期望下一轮看到父上下文结束后回 ErrCancelled——期限到达被报成“取消”，正是 F09-R2 的错误链问题。
 	expired, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancel()
 	<-expired.Done()
-	if _, err := r.Call(expired, "roost.x", nil); !errors.Is(err, fnats.ErrCancelled) {
-		t.Fatalf("Call whose retryable attempt ran out of context = %v, want ErrCancelled", err)
+	started = time.Now()
+	if _, err := r.Call(expired, "roost.x", nil); !errors.Is(err, fnats.ErrTimeout) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Call whose caller deadline already passed = %v, want ErrTimeout wrapping context.DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > policy.BaseInterval {
+		t.Fatalf("an expired caller deadline still waited for a retry: %v", elapsed)
 	}
 }
 

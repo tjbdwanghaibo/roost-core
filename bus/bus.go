@@ -195,10 +195,7 @@ func (b *Bus) RequeueDeadLetters(ctx context.Context, query DeadLetterQuery) (in
 			return requeued, err
 		}
 	}
-	metrics.IncCounter("bus_dead_letter_requeue_total", metrics.Labels{
-		"module": query.Module,
-		"msg":    query.MsgName,
-	}, requeued)
+	metrics.IncCounter("bus_dead_letter_requeue_total", b.queryLabels(query), requeued)
 	return requeued, nil
 }
 
@@ -209,10 +206,7 @@ func (b *Bus) PurgeDeadLetters(ctx context.Context, query DeadLetterQuery) (int6
 	}
 	n, err := store.PurgeDeadLetters(ctx, query)
 	if err == nil {
-		metrics.IncCounter("bus_dead_letter_purge_total", metrics.Labels{
-			"module": query.Module,
-			"msg":    query.MsgName,
-		}, n)
+		metrics.IncCounter("bus_dead_letter_purge_total", b.queryLabels(query), n)
 	}
 	return n, err
 }
@@ -798,9 +792,10 @@ func (b *Bus) dispatchTask(key int64, task *incomingTask) {
 			"msg_id", task.natsMsg.MsgID,
 			"err", err,
 		)
+		module, name := b.incomingLabels(task.natsMsg, task.isRpc)
 		metrics.IncCounter("bus_dispatch_drop_total", metrics.Labels{
-			"module": task.natsMsg.ToModule,
-			"msg":    task.natsMsg.MsgName,
+			"module": module,
+			"msg":    name,
 			"reason": err.Error(),
 		}, 1)
 		b.refuseTask(task, "dispatch failed: "+err.Error(), err)
@@ -1032,7 +1027,9 @@ func (b *Bus) deadLetter(msg *nats.NatsMsg, reason string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := b.reliable.DeadLetter(ctx, b.consumer(), msg, reason); err != nil {
+	// 死信桶与指标标签只取本进程注册过的名字（RR-20261006-72）；条目本身保留原名字，重投仍发回原处。
+	module, name := b.incomingLabels(msg, false)
+	if err := b.reliable.DeadLetter(ctx, b.consumer(), msg, DeadLetterBucket{Module: module, MsgName: name}, reason); err != nil {
 		slog.Error("bus: write dead letter failed",
 			"module", msg.ToModule,
 			"msg", msg.MsgName,
@@ -1043,9 +1040,37 @@ func (b *Bus) deadLetter(msg *nats.NatsMsg, reason string) {
 		return
 	}
 	metrics.IncCounter("bus_dead_letter_total", metrics.Labels{
-		"module": msg.ToModule,
-		"msg":    msg.MsgName,
+		"module": module,
+		"msg":    name,
 	}, 1)
+}
+
+// unregisteredMsgLabel 是对端发来、本进程没有注册的消息 / RPC 方法共用的标签与死信桶名（与 JetStream RPC
+// 被调方的 method 标签同一个值，RR-20261006-19）。
+const unregisteredMsgLabel = jetStreamRPCUnregisteredMethod
+
+// incomingLabels 返回入站消息的 module / msg 指标标签，也是死信桶名（RR-20261006-72）。名字来自对端的
+// envelope：版本混跑或错发时可以是任意字符串，之前原样当标签与 Redis 列表键，每个新名字多一组序列、一个
+// 列表。现在只有本进程注册过的 (module, msg)（RPC 看方法）用自己的名字，其余一律归并为 "_unregistered"，
+// 上界是注册数 + 1。RPC 请求不带 module（调用方不填），module 标签固定为空。
+func (b *Bus) incomingLabels(msg *nats.NatsMsg, isRpc bool) (module, name string) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if isRpc {
+		if _, ok := b.rpcHandlers[msg.MsgName]; ok {
+			return "", msg.MsgName
+		}
+	} else if _, ok := b.handlers[msg.ToModule+":"+msg.MsgName]; ok {
+		return msg.ToModule, msg.MsgName
+	}
+	return unregisteredMsgLabel, unregisteredMsgLabel
+}
+
+// queryLabels 是死信管理命令的指标标签：桶名是注册过的名字或 "_unregistered"，其余（运维手输的旧桶名）
+// 同样归并，保持与 incomingLabels 同一上界。
+func (b *Bus) queryLabels(query DeadLetterQuery) metrics.Labels {
+	module, name := b.incomingLabels(&nats.NatsMsg{ToModule: query.Module, MsgName: query.MsgName}, false)
+	return metrics.Labels{"module": module, "msg": name}
 }
 
 // --- incomingTask implements worker.Task ---

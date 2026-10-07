@@ -220,8 +220,9 @@ func toJetStreamDeliverPolicy(policy fnats.JetStreamDeliverPolicy) gojs.DeliverP
 
 func jetStreamMsg(msg gojs.Msg) *fnats.JetStreamMsg {
 	wrapped := &fnats.JetStreamMsg{
-		Subject: msg.Subject(),
-		Data:    append([]byte(nil), msg.Data()...),
+		Subject:    msg.Subject(),
+		Data:       append([]byte(nil), msg.Data()...),
+		InProgress: msg.InProgress,
 	}
 	meta, err := msg.Metadata()
 	if err == nil && meta != nil {

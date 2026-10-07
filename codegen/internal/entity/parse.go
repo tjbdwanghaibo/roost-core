@@ -311,7 +311,7 @@ func validateMarkerValues(params map[string]string) error {
 		}
 	}
 	if v, ok := params["lifetime"]; ok && !validLifetimeParam(v) {
-		return fmt.Errorf(`lifetime=%q is not one of ephemeral|runtime_rebuild|persisted_hot_cold|resident|remote_managed|mirror_cache`, v)
+		return fmt.Errorf(`lifetime=%q is not one of ephemeral|runtime_rebuild|persisted_hot_cold|resident|remote_managed`, v)
 	}
 	for _, key := range []string{"noPersist", "sync"} {
 		if v, ok := params[key]; ok && !validBoolParam(v) {

@@ -47,6 +47,11 @@ type remoteState struct {
 	retryMu        sync.Mutex
 	stopping       bool
 	finalizeOnce   sync.Once
+	// republishMu 保护补发循环的状态（RR-20261006-69）：running 表示循环在跑，dirty 表示它这一轮开始之后
+	// 又有发布失败，需要再扫一轮。
+	republishMu      sync.Mutex
+	republishRunning bool
+	republishDirty   bool
 	// finalizeTrace 是只读观察缝：每次处理完一个延迟收尾项后报告走了哪一步
 	// （released / retry / await_projection / abandoned），供回归按事件顺序同步，不参与决策。
 	// 生产装配为 nil；只能在 finalizer 启动前设置。
@@ -658,21 +663,29 @@ func (m *Manager) ApplyRemoteCommits(ctx context.Context, txID entity.RemoteTran
 		m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitIndeterminate, Cause: err.Error()})
 		return nil, err
 	}
+	// 到这里提交已在权威存储里持久（Applied）。之后的发布失败不改变持久结论：返回值带
+	// ErrRemotePublicationPending，并让补发循环按 outbox 补上（RR-20261006-69）。之前只返回
+	// ErrRemotePersistenceIndeterminate，WAL 投影器按它退避重试同一条记录，其后所有记录（含普通 DAO）都排队等发布。
 	for i := range cloned {
 		if err := m.afterRemoteCommit(ctx, cloned[i], receipts[i]); err != nil {
 			m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitIndeterminate, Receipts: receipts, Cause: err.Error()})
-			return nil, errors.Join(entity.ErrRemotePersistenceIndeterminate, err)
+			m.scheduleOutboxRepublish()
+			return nil, errors.Join(entity.ErrRemotePersistenceIndeterminate, entity.ErrRemotePublicationPending, err)
 		}
 	}
 	if err := m.backend.MarkRemoteCommitPublished(ctx, txID); err != nil {
 		m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitIndeterminate, Receipts: receipts, Commits: cloned, Cause: err.Error()})
-		return nil, errors.Join(entity.ErrRemotePersistenceIndeterminate, err)
+		m.scheduleOutboxRepublish()
+		return nil, errors.Join(entity.ErrRemotePersistenceIndeterminate, entity.ErrRemotePublicationPending, err)
 	}
 	status := entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitCommitted, Receipts: append([]entity.RemoteCommitReceipt(nil), receipts...)}
 	m.completePublishedRemoteTransaction(txID, status)
 	return receipts, nil
 }
 
+// RecoverOutbox 发布 outbox 里全部已持久（Applied）但还没发布的提交。启动时（Assembly.Start）与补发循环
+// （runOutboxRepublish）共用。一条发布失败不挡同一页的其他提交（RR-20261006-69：之前遇到第一条失败就返回，
+// 一条反复失败的提交让排在它后面的都补不上）；有失败时不再翻页（失败的那些还会出现在下一页的开头），返回汇总错误。
 func (m *Manager) RecoverOutbox(ctx context.Context) error {
 	outbox := m.backend
 	for {
@@ -683,13 +696,96 @@ func (m *Manager) RecoverOutbox(ctx context.Context) error {
 		if len(pending) == 0 {
 			return nil
 		}
+		var failed error
 		for _, status := range pending {
+			if err := ctx.Err(); err != nil {
+				return errors.Join(failed, err)
+			}
 			if err := m.publishAppliedRemoteTransaction(ctx, status); err != nil {
-				return fmt.Errorf("remote_entity: recover transaction %s: %w", status.TransactionID, err)
+				failed = errors.Join(failed, fmt.Errorf("remote_entity: recover transaction %s: %w", status.TransactionID, err))
 			}
 		}
-		if len(pending) < 256 {
-			return nil
+		if failed != nil || len(pending) < 256 {
+			return failed
+		}
+	}
+}
+
+// scheduleOutboxRepublish 让补发循环在退避之后扫一遍 outbox（RR-20261006-69）。只在“已 Applied、发布失败”
+// 时调用；循环已在跑时只记 dirty，让它再扫一轮。
+//
+// 为什么能保证“发布最终会补上”：
+//   - 提交在 Mongo 里是 Applied，直到某次发布成功把它标成 Committed（MarkRemoteCommitPublished 只认 Applied）；
+//   - 本进程活着时，补发循环按 FinalizeRetryInterval 起步、翻倍到 5s 的退避反复执行 RecoverOutbox（与启动时同一
+//     路径：PendingRemoteCommits 读出全部 Applied，逐条 afterRemoteCommit + 标记已发布），直到某一轮成功且
+//     这一轮开始后没有新的失败才退出；有写者在等的事务，finalizer 也按持久结论（Applied）自行发布；
+//   - 本进程停机或崩溃时 outbox 仍是 Applied，下次启动 Assembly.Start 先执行 RecoverOutbox 再接受工作。
+//
+// RecoverOutbox 扫的是整个 outbox（不分 owner），与启动时相同：发布是幂等的，确认契约要求并发安全
+// （IRemoteCommitParticipant.AcknowledgeRemoteCommit，RR-20260926-63），同一提交被投影器、finalizer、补发循环
+// 重复发布不改变结果。停机时（StopFinalizer）循环随 finalizeCtx 结束，登记在 retryWG 上，排空规则不变。
+func (m *Manager) scheduleOutboxRepublish() {
+	if m == nil || m.remote == nil || m.backend == nil {
+		return
+	}
+	state := m.remote
+	state.republishMu.Lock()
+	defer state.republishMu.Unlock()
+	if state.republishRunning {
+		state.republishDirty = true
+		return
+	}
+	state.retryMu.Lock()
+	if state.stopping {
+		state.retryMu.Unlock()
+		return
+	}
+	state.retryWG.Add(1)
+	state.retryMu.Unlock()
+	state.republishRunning = true
+	metrics.IncCounter("remote_entity.remote.republish_scheduled_total", nil, 1)
+	go m.runOutboxRepublish(state)
+}
+
+// runOutboxRepublish 是补发循环：退避 → 扫一遍 outbox；成功且期间没有新的失败就退出，否则继续。
+func (m *Manager) runOutboxRepublish(state *remoteState) {
+	defer state.retryWG.Done()
+	base := m.cfg.FinalizeRetryInterval
+	if base <= 0 {
+		base = 100 * time.Millisecond
+	}
+	delay := base
+	for {
+		timer := time.NewTimer(delay)
+		select {
+		case <-state.finalizeCtx.Done():
+			timer.Stop()
+			state.republishMu.Lock()
+			state.republishRunning = false
+			state.republishMu.Unlock()
+			return
+		case <-timer.C:
+		}
+		state.republishMu.Lock()
+		state.republishDirty = false
+		state.republishMu.Unlock()
+		ctx, cancel := context.WithTimeout(state.finalizeCtx, m.cfg.OpTimeout)
+		err := m.RecoverOutbox(ctx)
+		cancel()
+		state.republishMu.Lock()
+		if err == nil && !state.republishDirty {
+			state.republishRunning = false
+			state.republishMu.Unlock()
+			metrics.IncCounter("remote_entity.remote.republish_total", metrics.Labels{"result": "ok"}, 1)
+			return
+		}
+		state.republishMu.Unlock()
+		if err != nil {
+			metrics.IncCounter("remote_entity.remote.republish_total", metrics.Labels{"result": "error"}, 1)
+			slog.Warn("remote_entity: republishing persisted commits failed; retrying", "err", err, "retry_in", delay)
+			delay = min(delay*2, 5*time.Second)
+		} else {
+			delay = base
 		}
 	}
 }

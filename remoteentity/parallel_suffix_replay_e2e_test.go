@@ -228,9 +228,11 @@ type suffixReplayStorage struct {
 	failOnce        sync.Once
 }
 
-func (s *suffixReplayStorage) MarkRemoteCommitPublished(ctx context.Context, id entity.RemoteTransactionID) error {
-	switch id {
-	case s.prefix:
+// CommitRemote 让前缀的第一次回执读回停在注入点、随后失败（结果未知，投影器重试整个窗口）。RR-20261006-69 更正：
+// 之前注入的是前缀的 MarkRemoteCommitPublished 失败；那是“已 Applied、只是发布失败”，现在投影器记为已投影、交给补发
+// 循环，不再触发窗口重试。
+func (s *suffixReplayStorage) CommitRemote(ctx context.Context, commit entity.RemoteCommit) (entity.RemoteCommitReceipt, error) {
+	if commit.TransactionID == s.prefix {
 		s.mu.Lock()
 		s.prefixMarks++
 		first := s.prefixMarks == 1
@@ -240,11 +242,17 @@ func (s *suffixReplayStorage) MarkRemoteCommitPublished(ctx context.Context, id 
 				select {
 				case <-gate:
 				case <-ctx.Done():
-					return ctx.Err()
+					return entity.RemoteCommitReceipt{}, ctx.Err()
 				}
 			}
-			return errInjectedPublishMark
+			return entity.RemoteCommitReceipt{}, errInjectedPublishMark
 		}
+	}
+	return s.MongoCommitter.CommitRemote(ctx, commit)
+}
+
+func (s *suffixReplayStorage) MarkRemoteCommitPublished(ctx context.Context, id entity.RemoteTransactionID) error {
+	switch id {
 	case s.suffix:
 		err := s.MongoCommitter.MarkRemoteCommitPublished(ctx, id)
 		s.mu.Lock()
