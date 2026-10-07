@@ -59,7 +59,7 @@ func TestPreCommitRejectionsCarryErrCommitRejected(t *testing.T) {
 			manager := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) { return batch, nil }}
 			committer := &recordsCommitter{}
 			var mgr *NestMgr
-			mgr = NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+			mgr = NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
 			name := NewHandlerName(fmt.Sprintf("rr20260927_32_%d", i))
 			mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 				e.dao.Value = 77

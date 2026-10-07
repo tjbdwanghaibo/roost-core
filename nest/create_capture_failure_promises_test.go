@@ -44,7 +44,7 @@ func TestCreateCaptureFailureFailsTheTransactionEvenIfSwallowed(t *testing.T) {
 	access := entity.NewManagerAccess(manager)
 	x := mustBuildCastID(t, 38205, entity.EntityCategory(1), captureFailingKind)
 	committer := &countingCommitter{}
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
 	name := NewHandlerName("rr20260927_11_swallowed_capture_failure")
 	var createErr error
 	mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {

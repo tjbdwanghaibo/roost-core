@@ -40,7 +40,7 @@ func TestHostAdapterApplyInMemoryHandlerFencesOnIndeterminateOutcome(t *testing.
 		Revision:  &testRevision{},
 		Committer: committer,
 	}
-	engine := nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	engine := nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithWorkerNumAndMsgCap(1, 16))
 	name := nest.NewHandlerName("b04_combat_apply_in_memory_handler")
 	var attempts atomic.Int64
 	var applyErr, fencedInHandler error

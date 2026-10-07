@@ -477,7 +477,7 @@ func runWorldHandler(t *testing.T, subject *World, meta nest.HandlerMeta, commit
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(worldGetter{subject: subject}),
 		nest.NestOptionWithTransactionCommitter(committer),
-		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
 	)
 	name := nest.NewHandlerName("world_timer_rollback_probe")
 	if err := engine.RegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {

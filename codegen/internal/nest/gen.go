@@ -219,6 +219,9 @@ func rollbackMeta(f *FuncInfo) string {
 		durability = "nest.DurabilityAsync"
 	case "strict":
 		durability = "nest.DurabilityStrict"
+	case "pipelined":
+		// 只声明提交策略；committer 能力与 allowlist 仍由正式 Nest 装配校验。
+		durability = "nest.DurabilityPipelined"
 	}
 	if rollback == "nest.RollbackNone" && durability == "nest.DurabilityMemory" {
 		return "nest.HandlerMeta{}"

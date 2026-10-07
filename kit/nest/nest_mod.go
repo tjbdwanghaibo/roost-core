@@ -61,7 +61,6 @@ type loadTimeoutConfigurer interface {
 type engineConfig struct {
 	fast, slow    corenest.WorkerPoolConfig
 	workerNum     int
-	hbWorkerNum   int
 	remoteWorkers int
 	queueCap      int
 	tick          time.Duration
@@ -98,18 +97,17 @@ type config struct {
 	// saga.max_payload_bytes：EmitStart 在 Nest 事务里按它拒绝超限的启动意图，与协调器（kit/saga）共用一份声明（RR-20261006-66）。
 	mods.SagaPayloadConfig
 	Nest struct {
-		Fast               workerPool    `config:"fast"`
-		Slow               workerPool    `config:"slow"`
-		WorkerNum          int           `config:"worker_num" min:"0" example:"8"`
-		HeartbeatWorkerNum int           `config:"heartbeat_worker_num" min:"0" example:"2"`
-		RemoteWorkers      int           `config:"remote_workers" min:"0"`
-		QueueCapacity      int           `config:"queue_capacity" min:"0" example:"4096"`
-		DelayedCapacity    int           `config:"delayed_capacity" min:"0" example:"4096"`
-		MaxDelay           time.Duration `config:"max_delay" min:"0" example:"24h"`
-		TickDuration       time.Duration `config:"tick_duration" min:"0" example:"50ms"`
-		RequestTimeout     time.Duration `config:"request_timeout" min:"0" example:"3s"`
-		EntityLoadTimeout  time.Duration `config:"entity_load_timeout" min:"0" example:"30s" help:"Framework cap for one shared cold entity load; a caller's own deadline does not end it."`
-		UnloadResync       struct {
+		Fast              workerPool    `config:"fast"`
+		Slow              workerPool    `config:"slow"`
+		WorkerNum         int           `config:"worker_num" min:"0" example:"8"`
+		RemoteWorkers     int           `config:"remote_workers" min:"0"`
+		QueueCapacity     int           `config:"queue_capacity" min:"0" example:"4096"`
+		DelayedCapacity   int           `config:"delayed_capacity" min:"0" example:"4096"`
+		MaxDelay          time.Duration `config:"max_delay" min:"0" example:"24h"`
+		TickDuration      time.Duration `config:"tick_duration" min:"0" example:"50ms"`
+		RequestTimeout    time.Duration `config:"request_timeout" min:"0" example:"3s"`
+		EntityLoadTimeout time.Duration `config:"entity_load_timeout" min:"0" example:"30s" help:"Framework cap for one shared cold entity load; a caller's own deadline does not end it."`
+		UnloadResync      struct {
 			Workers       int `config:"workers" min:"0" example:"4"`
 			Attempts      int `config:"attempts" min:"0" example:"5"`
 			QueueCapacity int `config:"queue_capacity" min:"0" example:"4096"`
@@ -140,7 +138,6 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		fast:          corenest.WorkerPoolConfig{Workers: nest.Fast.Workers, QueueCap: nest.Fast.QueueCapacity},
 		slow:          corenest.WorkerPoolConfig{Workers: nest.Slow.Workers, QueueCap: nest.Slow.QueueCapacity},
 		workerNum:     nest.WorkerNum,
-		hbWorkerNum:   nest.HeartbeatWorkerNum,
 		remoteWorkers: nest.RemoteWorkers,
 		queueCap:      nest.QueueCapacity,
 		tick:          nest.TickDuration,
@@ -183,7 +180,7 @@ func (m *Mod) Provide(registry *app.Registry) error {
 	}
 	opts := []corenest.NestOption{
 		corenest.NestOptionWithGetter(m.getter),
-		corenest.NestOptionWithWorkerNumAndMsgCap(m.config.workerNum, m.config.hbWorkerNum, m.config.queueCap),
+		corenest.NestOptionWithWorkerNumAndMsgCap(m.config.workerNum, m.config.queueCap),
 		corenest.NestOptionWithRemoteWorkers(m.config.remoteWorkers),
 		corenest.NestOptionWithWorkerPools(m.config.fast, m.config.slow),
 		corenest.NestOptionWithTickDuration(m.config.tick),

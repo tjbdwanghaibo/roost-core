@@ -100,7 +100,7 @@ func TestAHandlerReadsOneConfigGenerationAcrossAReload(t *testing.T) {
 	}
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(multiEntityGetter{id: subject}),
-		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
 	)
 	between := make(chan struct{}, 1)
 	resume := make(chan struct{}, 1)

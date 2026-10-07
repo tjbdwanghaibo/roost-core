@@ -10,7 +10,7 @@ import (
 )
 
 func TestDelayedAdmissionIsBounded(t *testing.T) {
-	dispatcher := NewDispatcher("delay_limit", 1, 0, 8, func(*Msg) {})
+	dispatcher := NewDispatcher("delay_limit", 1, 8, func(*Msg) {})
 	dispatcher.ConfigureDelayedAdmission(1, time.Second)
 	dispatcher.OnInit()
 	defer func() { _ = dispatcher.OnDestroyWithContext(context.Background()) }()

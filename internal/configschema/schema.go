@@ -8,7 +8,7 @@
 //   - 生成器与 doctor：生成器按声明写配置段（StarterYAML），doctor 按声明检查工程里的配置文件。
 //
 // 这个包只依赖标准库：生成器（codegen 层）不导入它生成的运行时，只能导入这样的叶子包
-// （与 configdata/rules 同理，根包 TestSharedConfigSchemaStaysALeaf 守住）。
+// （与 configdata/rules 同理，根包 TestSharedConfigRulesStayALeaf 守住）。
 package configschema
 
 import (

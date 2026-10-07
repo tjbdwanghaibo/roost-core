@@ -78,7 +78,7 @@ func BenchmarkCommitLockHold(b *testing.B) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithWorkerNumAndMsgCap(2, 2, 64),
+		NestOptionWithWorkerNumAndMsgCap(2, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	b.Cleanup(StopNest)

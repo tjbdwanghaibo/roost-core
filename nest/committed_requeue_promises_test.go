@@ -45,7 +45,7 @@ func remoteCommitEngine(t *testing.T, unique int64, batch func() entity.RemoteWr
 	getter.Add(newMockEntity(remoteID, entity.EntityCategoryRemote))
 	getter.Add(e)
 	manager := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) { return batch(), nil }}
-	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithWorkerNumAndMsgCap(1, 16))
 	return mgr, remoteID, localID
 }
 
@@ -86,7 +86,7 @@ func TestCommittedLocalReplyIsNotRequeued(t *testing.T) {
 		}
 	})()
 	committer := &countingCommitter{}
-	mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(owner)), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(owner)), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
 	name := NewHandlerName("rr49_local_release_lock_timeout")
 	var runs atomic.Int64
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {

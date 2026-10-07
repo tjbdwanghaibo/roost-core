@@ -185,7 +185,7 @@ func newTradeFixtureFull(t *testing.T, ctx context.Context, client fmongo.IMongo
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = h.runtime.Shutdown(context.Background()) })
-	options := append(h.runtime.NestOptions(), nest.NestOptionWithGetter(h.access), nest.NestOptionWithWorkerNumAndMsgCap(8, 1, 256))
+	options := append(h.runtime.NestOptions(), nest.NestOptionWithGetter(h.access), nest.NestOptionWithWorkerNumAndMsgCap(8, 256))
 	options = append(options, nestOptions...)
 	h.scheduler = nest.NewEngine(options...)
 	meta := nest.HandlerMeta{Rollback: nest.RollbackState, Durability: policy}

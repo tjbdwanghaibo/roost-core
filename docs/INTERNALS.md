@@ -17,9 +17,9 @@
 
 ## 2. 生命周期图
 
-App 先收集 shared Mods 与 Service Mods，分别按硬依赖和“存在时排序”的可选依赖构建 DAG。缺失硬依赖、重复名称和依赖环在初始化前失败。生命周期按拓扑顺序 Init/Provide/Start，停机逆序执行；实现 `StopWithContext` 的 Mod 接收 App 的统一 shutdown deadline。
+App 先收集 shared Mods 与 Service Mods，分别按硬依赖和“存在时排序”的可选依赖构建 DAG。共享 Mod 的依赖先于共享初始化校验；服务专属 Mod 的依赖在共享 Mod 启动后、服务专属初始化前校验。缺失硬依赖、重复名称和依赖环均拒绝。生命周期按拓扑顺序 Init/Provide/Start，停机逆序执行；实现 `StopWithContext` 的 Mod 接收 App 的统一 shutdown deadline。
 
-Service 收到取消后先停止接流量并完成 `Shutdown(ctx)`。如果 Serve 不配合退出，App 不提前销毁依赖，防止仍运行的业务访问已关闭连接。RuntimeFailure 只记录第一个根因并唤醒同一停机流程。
+Service 收到取消后先停止接流量并完成 `Shutdown(ctx)`。如果 Serve 不配合退出，App 不提前销毁依赖，防止仍运行的业务访问已关闭连接。RuntimeFailure 的 Done 投递第一个根因以唤醒停机，Err 合并所有已记录原因。
 
 重要边界：`Stop()` 是兼容 `app.Mod` 的无参入口，生产 App 总是优先调用 `StopWithContext`。任何新 Mod 有 flush/drain 行为时都必须实现后者。
 
@@ -27,7 +27,7 @@ Service 收到取消后先停止接流量并完成 `Shutdown(ctx)`。如果 Serv
 
 EntityManager 维护 ID→Entity 的实例索引和删除 tombstone。创建顺序为构造聚合、绑定组件/DAO、完成 load/migration、获取并初始化锁相关状态、最后原子发布。删除在锁内生成更高版本 tombstone，durable admission 成功后才从索引移除。
 
-Nest 对一个请求将所有 touched Entity ID 去重并按全局稳定顺序加锁，从而避免多实体请求 AB/BA 死锁。业务 handler 运行时已经持锁，生成的 guard 限定引用生命周期。Entity 内部 mutex 是数据 race 的最后保护；worker 哈希串行是调度优化，不能替代 mutex，因为迁移、管理命令或多 key 请求可能跨 worker。
+Nest 对一个请求将所有 touched Entity ID 去重并按全局稳定顺序加锁，从而避免多实体请求 AB/BA 死锁。业务 handler 运行时已经持锁，生成的 guard 限定引用生命周期。Entity 内部 mutex 是数据 race 的最后保护；调度准入按全部声明 ID 建依赖链，由共享快 worker 执行；动态取得而未声明的 ID 只有锁保护，不承诺 FIFO。
 
 ## 4. Nest 事务状态机
 
@@ -38,10 +38,13 @@ admit request
   -> capture state or open undo log
   -> invoke handler
   -> prepare DAO patches + remote participants + effects
-  -> WAL admission / group commit
-  -> Mongo conditional transaction
-  -> publish result/outbox/sync visibility
+  -> WAL admission (strict: wait fsync; pipelined: enqueue ticket)
+  -> freeze Sync data while entity locks are held
   -> unlock
+  -> pipelined: wait durable ticket
+  -> release projection hold / expose eligible Sync / reply
+  -> background Mongo conditional transaction
+  -> persist projection checkpoint and publish outbox
 ```
 
 错误发生在 commit point 前时执行 state/undo 回滚并恢复 dirty snapshot。commit 结果确定失败时可返回错误；结果不确定时不能回滚内存后继续服务，因为 WAL/Mongo 可能已经成功。此时事务进入 indeterminate，实例 fence 并退出，由 replay 使用 transaction ID 和 receipt 决定历史。
@@ -50,13 +53,13 @@ Pipelined commit 把 fsync 摊销到一批事务，但每个事务仍有 admissi
 
 ## 5. WAL 与恢复
 
-kit/nestwal 使用分段 append-only WAL。记录有长度、版本和校验，尾部 torn write 在启动时截断；ack fence 表示已完成外部提交的连续前缀。段轮换、目录 fsync、容量和 replay 并发都有界。
+nestwal/ 使用分段 append-only WAL。记录有长度、版本和校验，尾部 torn write 在启动时截断；ack fence 表示已完成外部提交的连续前缀。段轮换、目录 fsync、容量和 replay 并发都有界。
 
 恢复流程先打开并验证 WAL，重放未确认事务到幂等 Mongo transaction/outbox，再启动 Nest 接流量。WAL 目录只能由一个 writer 使用。文件系统、PVC 或挂载无法提供 write ordering/fsync 语义时，框架不能宣称 strict durability。
 
 ## 6. Data Engine 与 Commit/Load
 
-`dataengine.Tracker` 维护 persisted version 与 sync mask；persist change 只属于当前 Nest transaction。生成 DAO 把变化物化为 Put/Patch/Delete，kit Projector 从 WAL 按序写入带 version/epoch/fence 条件的 Mongo transaction。
+`dataengine.Tracker` 维护 persisted version 与 sync mask；persist change 只属于当前 Nest transaction。生成 DAO 把变化物化为 Put/Patch/Delete，dataengine/engine.Projector 从 WAL 按序写入带 version/epoch/fence 条件的 Mongo transaction。
 
 WAL admission、projection batch、outbox claim 和并发 migration 都有硬上限。主动 `Flush(ctx)` 与后台 projector 走同一条路径，因此不会产生绕开 receipt/version 检查的第二套语义。Stop 在关闭 outbox 前收敛 projection；超时向上返回。
 

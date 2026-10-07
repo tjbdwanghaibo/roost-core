@@ -249,7 +249,7 @@ func newSceneNest(t *testing.T, entities map[int64]entity.IThreadSafeEntity) nes
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(sceneGetter(entities)),
 		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
-		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
 	)
 	if err := engine.Start(); err != nil {
 		t.Fatalf("start nest: %v", err)
@@ -1433,7 +1433,7 @@ func TestAnUnloadedPlayerIsReloadedForTheSceneObservers(t *testing.T) {
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(access),
 		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
-		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
 	)
 	if err := engine.Start(); err != nil {
 		t.Fatalf("start nest: %v", err)
@@ -1582,7 +1582,7 @@ func TestAPlayerLoadedAgainAfterAnUnloadNobodyWatchedReachesALaterWatcher(t *tes
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(access),
 		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
-		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
 	)
 	if err := engine.Start(); err != nil {
 		t.Fatalf("start nest: %v", err)

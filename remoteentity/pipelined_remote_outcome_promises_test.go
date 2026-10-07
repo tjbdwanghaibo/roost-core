@@ -94,7 +94,7 @@ func TestPipelinedRemoteOutcomeMatchesStrict(t *testing.T) {
 				rec := &remoteOutcomeTap{}
 				manager := outcomeTapManager{boundedConfirmManager: boundedConfirmManager{Manager: f.mgr, fixture: f, confirm: confirm, beforeWait: beforeWait}, rec: rec}
 				committer := p.committer()
-				engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+				engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
 					nest.NestOptionWithRemoteEntityManager(manager), nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithEntitySync(syncMgr))
 				name := nest.NewHandlerName("pipelined_remote_outcome_" + p.name + "_" + outcome)
 				afterCommit := make(chan bool, 4)

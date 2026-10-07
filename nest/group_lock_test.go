@@ -286,7 +286,7 @@ func TestEntityLockGroupDispatchRequeuesBusyGroupLock(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -364,7 +364,7 @@ func TestEntityLockGroupDispatchRequeuesBusyExtraEntity(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()

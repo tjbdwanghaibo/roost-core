@@ -70,3 +70,11 @@
 三项都有修前行为失败；修后 App/glsvet 三轮 race、全仓 build/vet、根包与三大模块 glsvet 已通过，全量测试通过（130 个包）。B5 其余项保持待处理，本批不代表 B5 全部完成。没有接手 remfix 的范围，没有发版。
 
 本批实现提交 `aa12460b`，规范提交 `1d6816d8`；已对齐远端 `494fe096` 并再次通过目标 race、全仓 build/vet/test（130 个包）。未推送、未发布。原始日志在主检出 `artifacts/perf/core-b5-20261007/`。
+
+## 7. 接手进度：B5 续批（2026-10-07）
+
+基线 `6f0c1bd8`，工作树 `codex/remaining-fixes`。B5 剩余项已实施 / 核实：RR-20261007-04～06（pipelined 生成、TTL 校验、启动期限与信号）；F02-2 删除无效心跳配置与参数；F02-7 结构性加固；其余文档 / 观察项逐条更正。F03-10 的 async 先投影符合弱持久承诺，Ack 前仍 fsync；F03-8 按 C8 保留公开 API。
+
+本批全仓 build / vet / test（130 个包）、三大模块 glsvet、正式生成 game-demo 的 build / vet / test 均通过；App 启动取消新增场景 3 轮 race 通过，7 个目标包 race 通过。全仓 go generate 已执行。 原始证据在主检出 `artifacts/perf/remaining-fixes-20261007/`，生成工程 `/tmp/roost-remaining-b5-demo` 可复查，命令见各 RR。本批未推送、未发布。
+
+继续 B1～B4、B6～B8；Remote 唯一发布者方向仍等待维护者答复，不把 B5 完成当成全部完成。

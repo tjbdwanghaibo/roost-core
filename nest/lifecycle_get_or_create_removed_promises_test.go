@@ -38,7 +38,7 @@ func TestLifecycleGetOrCreateRetriesWhileRevokeFinishes(t *testing.T) {
 	createdInScopeBuildHook.Store(&hook)
 	t.Cleanup(func() { createdInScopeBuildHook.Store(nil) })
 
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
 	boom := errors.New("boom")
 	name := NewHandlerName("rr57_revoke_then_fail")
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {

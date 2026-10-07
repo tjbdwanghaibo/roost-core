@@ -21,7 +21,7 @@ func TestEntityLockGroupTransitionJoinMoveLeaveUpdatesState(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(2, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(2, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -96,7 +96,7 @@ func TestEntityLockGroupTransitionPendingRequeuesSyncDispatch(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(2, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(2, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -138,7 +138,7 @@ func TestEntityLockGroupTransitionContinuationReturnsSyncResult(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(2, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(2, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -193,7 +193,7 @@ func TestEntityLockGroupTransitionRetriesWhenEntityLockBusy(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -262,7 +262,7 @@ func TestEntityLockGroupTransitionTimeoutClearsPending(t *testing.T) {
 }
 
 func TestRequeueTransientDispatchHandlesGroupChanged(t *testing.T) {
-	dispatcher := NewDispatcher("test_group_changed_requeue", 1, 0, 16, nil)
+	dispatcher := NewDispatcher("test_group_changed_requeue", 1, 16, nil)
 	dispatcher.OnInit()
 	defer dispatcher.OnDestroy()
 

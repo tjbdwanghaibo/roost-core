@@ -164,7 +164,10 @@ func (c *config) ValidateConfig(production bool) error {
 	if c.Projection.MaxUnackedRecords > 0 && c.Projection.WarnUnackedRecords > c.Projection.MaxUnackedRecords {
 		return errors.New("dataengine mod: invalid projection checkpoint or backlog limits: warn_unacked_records exceeds max_unacked_records")
 	}
-	return nil
+	return (engine.AssemblyConfig{
+		Mongo: engine.MongoStoreConfig{TransactionReceiptTTL: c.TransactionReceiptTTL},
+		WAL:   nestwal.Options{MaxUnackedAge: c.WAL.MaxUnackedAge},
+	}).ValidateReceiptRetention()
 }
 
 // ConfigSchema 声明 dataengine.*、nest.pipelined.* 与持久化引擎的选择。

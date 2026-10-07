@@ -32,7 +32,7 @@ func TestRemoteCloseFailureStillConfirmsEntitySync(t *testing.T) {
 				}
 				return &stagedRemoteBatch{}, nil
 			}}
-			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithEntitySync(m), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithEntitySync(m), NestOptionWithWorkerNumAndMsgCap(1, 16))
 			name := NewHandlerName("remote_close_confirmation")
 			mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
 				e.dao.Value++

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
-	"log/slog"
 	"sync"
 	"time"
 )
@@ -291,7 +290,7 @@ type NestOpts struct {
 	RemoteSnapshotResolver RemoteSnapshotResolver
 	RemoteManager          entity.IRemoteEntityManager
 	WorkerNum              int
-	HbWorkerNum            int
+
 	RemoteWorkers          int
 	MsgCap                 int
 	DelayedMsgCap          int
@@ -344,10 +343,9 @@ var (
 			opts.RemoteManager = manager
 		}
 	}
-	NestOptionWithWorkerNumAndMsgCap = func(workerNum, hbWorkerNum, msgCap int) NestOption {
+	NestOptionWithWorkerNumAndMsgCap = func(workerNum, msgCap int) NestOption {
 		return func(opts *NestOpts) {
 			opts.WorkerNum = workerNum
-			opts.HbWorkerNum = hbWorkerNum
 			opts.MsgCap = msgCap
 		}
 	}
@@ -452,7 +450,7 @@ func NewEngine(opts ...NestOption) *NestMgr {
 	if ret.syncTimeout <= 0 {
 		ret.syncTimeout = NestSyncTimeout
 	}
-	ret.dispatcher = NewDispatcher("nest", params.WorkerNum, params.HbWorkerNum, params.MsgCap, func(msg *Msg) {
+	ret.dispatcher = NewDispatcher("nest", params.WorkerNum, params.MsgCap, func(msg *Msg) {
 		if msg.remoteLogic != nil {
 			msg.remoteLogic.run(ret)
 			return
@@ -706,21 +704,4 @@ func asyncMessageContextSnapshot(snapshot fctx.ContextSnapshot) fctx.ContextSnap
 		Meta:   snapshot.Meta,
 		Trace:  snapshot.Trace.Clone(),
 	}
-}
-
-func ensureAsyncDispatchAllowed(api string, name HandlerName) {
-	if !fctx.InNestHandler() {
-		return
-	}
-	c := fctx.CurrentContext()
-	err := fmt.Errorf("%w: api=%s caller=%s target=%s", ErrAsyncInHandler, api, c.Meta.Handler, name.String())
-	slog.Error("nest async dispatch from nest handler rejected",
-		"err", err,
-		"api", api,
-		"caller", c.Meta.Handler,
-		"target", name.String(),
-		"player", c.Meta.PlayerID,
-		"frame", c.Frame,
-	)
-	panic(err)
 }

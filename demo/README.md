@@ -9,10 +9,9 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 能直接读、能 diff、能整段 review，不用在字符串里数 `%q`。
 
 `.tmpl` 后缀让它们不参与 codegen 自身的编译——内容 import roost-core，而 **codegen 对运行时零依赖**
-（见 `go.mod`，只有 `gopkg.in/yaml.v3`）。
+（codegen 已并入根模块；依赖方向由根包 `TestCoreDependencyBoundary` 检查，不再有独立 go.mod）。
 
-正确性不靠在这里编译，而是靠 **CI 生成一个项目再编译它**（`framework-compat.yml` 的 `demo` scenario）。
-roost-core 自己的 `examples/` 模块就是反例：不在任何 CI 里，`go.sum` 过期之后静静地编译不过了。
+正确性由生成工程的 build / vet / test 与 `framework-compat.yml` 的 `demo` scenario 验证；根包 `TestExamplesRun` 还会编译并实际运行独立 examples 模块中的示例。
 
 ## 占位符
 
@@ -23,7 +22,7 @@ roost-core 自己的 `examples/` 模块就是反例：不在任何 CI 里，`go.
 ## 链路
 
 本节是这条写入链的逐层说明；六条路径（同步写、事件链、跨服务、saga、帧同步、配置）横向的对比——
-每层守什么、失败在哪一层处理、重放靠什么幂等——见 codegen 仓的 `docs/DATA_FLOW.zh-CN.md`。
+每层守什么、失败在哪一层处理、重放靠什么幂等——见 `codegen/docs/DATA_FLOW.zh-CN.md`。
 
 ```
 TCP (player access)

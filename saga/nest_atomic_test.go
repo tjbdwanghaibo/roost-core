@@ -99,7 +99,7 @@ func TestNativeSagaStepCommitsMutationReceiptAndCompletionEffectAtomically(t *te
 		completion := saga.Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: true, Data: []byte("reserved"), CompletedAt: now}
 		return nil, saga.EmitCompletion(completion)
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
-	engine := nest.NewEngine(nest.NestOptionWithGetter(sagaNativeGetter{value: value}), nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	engine := nest.NewEngine(nest.NestOptionWithGetter(sagaNativeGetter{value: value}), nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithWorkerNumAndMsgCap(1, 16))
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
 	}

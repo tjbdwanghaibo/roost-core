@@ -16,7 +16,7 @@ import (
 //
 // 入场时被拒的路径一直是给答案的(返回 ErrNestStopped),所以这是同一件事的两条路径判据不同。
 func TestShutdownAnswersDelayedRequestsInsteadOfDroppingThem(t *testing.T) {
-	dispatcher := NewDispatcher("nest", 2, 1, 64, func(*Msg) {
+	dispatcher := NewDispatcher("nest", 2, 64, func(*Msg) {
 		t.Error("a delayed message that never came due must not be dispatched")
 	})
 	dispatcher.OnInit()
@@ -48,7 +48,7 @@ func TestShutdownAnswersDelayedRequestsInsteadOfDroppingThem(t *testing.T) {
 // An asynchronous delayed message has no one waiting, so shutting down must
 // not try to answer it — and must not block or panic on a nil channel.
 func TestShutdownDropsDelayedFireAndForgetQuietly(t *testing.T) {
-	dispatcher := NewDispatcher("nest", 2, 1, 64, func(*Msg) {
+	dispatcher := NewDispatcher("nest", 2, 64, func(*Msg) {
 		t.Error("a delayed message that never came due must not be dispatched")
 	})
 	dispatcher.OnInit()

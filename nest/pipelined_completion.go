@@ -278,10 +278,9 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 	return handoff
 }
 
-// completionEntityID picks the chain/pool key: the first non-nil (primary)
-// entity. Ordering is therefore guaranteed per PRIMARY entity — two
-// multi-entity transactions that share only a secondary entity are not
-// ordered against each other, matching how dispatch itself hashes work.
+// completionEntityID 选择完成链的主实体键：第一个非 nil 实体。
+// 完成链只保证相同主实体的顺序；业务准入则按全部声明 ID 建依赖链，
+// 两者不是同一层约束，也不依赖把 ID 哈希到固定 worker。
 func completionEntityID(es []entity.IThreadSafeEntity, msg *Msg) int64 {
 	for _, e := range es {
 		if e != nil {

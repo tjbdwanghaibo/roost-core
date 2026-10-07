@@ -268,7 +268,7 @@ func TestPipelinedAcceptFailureDoesNotRollbackAndFencesNest(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+		NestOptionWithWorkerNumAndMsgCap(1, 16),
 	)
 	defer StopNest()
 	MustRegisterHandlerWithMeta(NewHandlerName("test_pipelined_accept_failure"), func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {

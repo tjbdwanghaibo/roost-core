@@ -379,7 +379,7 @@ func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis 
 		t.Fatal(err)
 	}
 	options := append(rig.runtime.NestOptions(), nest.NestOptionWithGetter(rig.access), nest.NestOptionWithRemoteEntityManager(assembly.Manager),
-		nest.NestOptionWithEntitySync(rig.sync), nest.NestOptionWithWorkerNumAndMsgCap(4, 1, 256),
+		nest.NestOptionWithEntitySync(rig.sync), nest.NestOptionWithWorkerNumAndMsgCap(4, 256),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 256}, nest.WorkerPoolConfig{Workers: 4, QueueCap: 64}))
 	options = append(options, extra...)
 	rig.scheduler = nest.NewEngine(options...)

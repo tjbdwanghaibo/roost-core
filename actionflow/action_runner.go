@@ -286,6 +286,7 @@ func (r *ActionRunner) Update(group ActionGroup, fn func(Action) error) error {
 		return callUpdate(fn, unit.cur.Action)
 	}
 	r.executing = true
+	defer r.finishExecution()
 	err := callUpdate(fn, unit.cur.Action)
 	return errors.Join(err, r.drain())
 }
@@ -368,22 +369,34 @@ func (r *ActionRunner) submit(cmd runnerCommand) error {
 		return nil
 	}
 	r.executing = true
+	defer r.finishExecution()
 	cmd.outer = true
 	r.applyingOuter = true
 	err := r.apply(cmd)
 	return errors.Join(err, r.drain())
 }
 
-// drain 按序执行延后命令，然后结束本次最外层调用。命令执行中引出的回调再发起的命令排在
+// finishExecution 由最外层入口负责复位，不能依赖 apply 能正常返回到 drain。
+// 这只释放执行标记和命令引用，不吞掉框架内部 panic，也不承诺回滚动作状态。
+func (r *ActionRunner) finishExecution() {
+	for _, cmd := range r.deferred[r.head:] {
+		if cmd.op == opAdvance {
+			if unit := r.groups[cmd.group]; unit != nil {
+				unit.advancing = false
+			}
+		}
+	}
+	clear(r.deferred)
+	r.deferred = r.deferred[:0]
+	r.head = 0
+	r.executing = false
+	r.applyingOuter = false
+	r.runaway = false
+}
+
+// drain 按序执行延后命令。命令执行中引出的回调再发起的命令排在
 // 队尾，同样在这里执行；执行总数超过预算时截停（abortDeferred）。返回属于最外层调用的错误。
 func (r *ActionRunner) drain() (err error) {
-	defer func() {
-		r.deferred = r.deferred[:0]
-		r.head = 0
-		r.executing = false
-		r.applyingOuter = false
-		r.runaway = false
-	}()
 	steps := 0
 	for r.head < len(r.deferred) {
 		if steps >= r.maxDeferredSteps {

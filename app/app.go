@@ -224,16 +224,24 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 		"config", cfgPath,
 	)
 
+	// 从启动开始接收终止信号，后续 Serve 沿用同一个来源，不留信号处理空窗。
+	sigChan, stopSignals := a.exitSignals()
+	defer stopSignals()
+	startupCtx, cancelStartup := context.WithTimeout(context.Background(), a.settings.Startup.Timeout)
+	defer cancelStartup()
+
 	// --- Init registry ---
 	a.registry = NewRegistry(a.cfg)
-	if err := a.emitLifecycle(context.Background(), lifecycle.Event{
-		Phase:   lifecycle.PhaseAppInit,
-		Service: string(serverType),
-		Name:    a.name,
-		Data: map[string]any{
-			"sid":    int(a.settings.Sid),
-			"config": cfgPath,
-		},
+	if _, err := runStartupStep(startupCtx, sigChan, "app.init", func(ctx context.Context) error {
+		return a.emitLifecycle(ctx, lifecycle.Event{
+			Phase:   lifecycle.PhaseAppInit,
+			Service: string(serverType),
+			Name:    a.name,
+			Data: map[string]any{
+				"sid":    int(a.settings.Sid),
+				"config": cfgPath,
+			},
+		})
 	}); err != nil {
 		return err
 	}
@@ -275,14 +283,8 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	var singletonReleaseDeadline time.Time
 	if singleton != nil {
 		defer func() { singleton.finish(singletonReleasable, singletonReleaseDeadline) }()
-		var waitSignals <-chan os.Signal
-		if a.signalSource != nil {
-			signals, stop := a.signalSource()
-			waitSignals = signals
-			defer stop()
-		}
 		slog.Info("singleton: acquiring", "key", singleton.key)
-		if err := singleton.acquire(waitSignals); err != nil {
+		if err := singleton.acquire(sigChan); err != nil {
 			if errors.Is(err, errSingletonWaitInterrupted) {
 				return nil
 			}
@@ -315,13 +317,21 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	// --- Mods lifecycle: Init → Provide → Start ---
 	for _, mod := range sharedMods {
 		slog.Info("mod init", "mod", mod.Name())
-		if err := mod.Init(a.cfg); err != nil {
+		finished, err := runStartupStep(startupCtx, sigChan, "mod init "+string(mod.Name()), func(context.Context) error { return mod.Init(a.cfg) })
+		if !finished {
+			return err
+		}
+		if err != nil {
 			singletonReleasable = true
 			return fmt.Errorf("mod %s init: %w", mod.Name(), err)
 		}
 	}
 	for _, mod := range sharedMods {
-		if err := mod.Provide(a.registry); err != nil {
+		finished, err := runStartupStep(startupCtx, sigChan, "mod provide "+string(mod.Name()), func(context.Context) error { return mod.Provide(a.registry) })
+		if !finished {
+			return err
+		}
+		if err != nil {
 			singletonReleasable = stopModsReverse(append(providedSharedMods, mod), "mod stop after provide error")
 			return fmt.Errorf("mod %s provide: %w", mod.Name(), err)
 		}
@@ -333,7 +343,11 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 			return err
 		}
 		slog.Info("mod start", "mod", mod.Name())
-		if err := mod.Start(); err != nil {
+		finished, err := runStartupStep(startupCtx, sigChan, "mod start "+string(mod.Name()), func(context.Context) error { return mod.Start() })
+		if !finished {
+			return err
+		}
+		if err != nil {
 			singletonReleasable = stopModsReverse(providedSharedMods, "mod stop")
 			return fmt.Errorf("mod %s start: %w", mod.Name(), err)
 		}
@@ -359,13 +373,21 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	// --- Service-specific Mods lifecycle: Init → Provide → Start ---
 	for _, mod := range serviceMods {
 		slog.Info("mod init (service-specific)", "mod", mod.Name())
-		if err := mod.Init(a.cfg); err != nil {
+		finished, err := runStartupStep(startupCtx, sigChan, "mod init "+string(mod.Name()), func(context.Context) error { return mod.Init(a.cfg) })
+		if !finished {
+			return err
+		}
+		if err != nil {
 			singletonReleasable = stopModsReverse(startedSharedMods, "mod stop")
 			return fmt.Errorf("mod %s init: %w", mod.Name(), err)
 		}
 	}
 	for _, mod := range serviceMods {
-		if err := mod.Provide(a.registry); err != nil {
+		finished, err := runStartupStep(startupCtx, sigChan, "mod provide "+string(mod.Name()), func(context.Context) error { return mod.Provide(a.registry) })
+		if !finished {
+			return err
+		}
+		if err != nil {
 			singletonReleasable = allStopped(
 				stopModsReverse(append(providedServiceMods, mod), "mod stop after provide error (service-specific)"),
 				stopModsReverse(startedSharedMods, "mod stop"))
@@ -381,7 +403,11 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 			return err
 		}
 		slog.Info("mod start (service-specific)", "mod", mod.Name())
-		if err := mod.Start(); err != nil {
+		finished, err := runStartupStep(startupCtx, sigChan, "mod start "+string(mod.Name()), func(context.Context) error { return mod.Start() })
+		if !finished {
+			return err
+		}
+		if err != nil {
 			singletonReleasable = allStopped(
 				stopModsReverse(providedServiceMods, "mod stop (service-specific)"),
 				stopModsReverse(startedSharedMods, "mod stop"))
@@ -395,11 +421,17 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 			stopModsReverse(startedSharedMods, "mod stop"))
 		return err
 	}
-	if err := a.emitLifecycle(context.Background(), lifecycle.Event{
-		Phase:   lifecycle.PhaseModsStarted,
-		Service: string(serverType),
-		Name:    a.name,
-	}); err != nil {
+	finished, err := runStartupStep(startupCtx, sigChan, "mods.started", func(ctx context.Context) error {
+		return a.emitLifecycle(ctx, lifecycle.Event{
+			Phase:   lifecycle.PhaseModsStarted,
+			Service: string(serverType),
+			Name:    a.name,
+		})
+	})
+	if !finished {
+		return err
+	}
+	if err != nil {
 		singletonReleasable = allStopped(
 			stopModsReverse(startedServiceMods, "mod stop (service-specific)"),
 			stopModsReverse(startedSharedMods, "mod stop"))
@@ -411,18 +443,26 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	slog.Info("service init", "service", svc.Name())
 	// Init 失败与 Init 之后的启动失败走同一条收尾：先收回 Service 已启动的部分，再停 Mod、释放锁；
 	// Service 在预算内停不下来就保留 Mod 与锁，与正常停机相同（RR-20261005-NC-193）。
-	startErr := svc.Init(a.registry)
+	finished, startErr := runStartupStep(startupCtx, sigChan, "service init "+string(svc.Name()), func(context.Context) error { return svc.Init(a.registry) })
+	if !finished {
+		return startErr
+	}
 	if startErr != nil {
 		startErr = fmt.Errorf("service %s init: %w", svc.Name(), startErr)
 	} else {
 		startErr = startupFailure()
 	}
 	if startErr == nil {
-		startErr = a.emitLifecycle(context.Background(), lifecycle.Event{
-			Phase:   lifecycle.PhaseServiceStarted,
-			Service: string(serverType),
-			Name:    string(svc.Name()),
+		finished, startErr = runStartupStep(startupCtx, sigChan, "service.started", func(ctx context.Context) error {
+			return a.emitLifecycle(ctx, lifecycle.Event{
+				Phase:   lifecycle.PhaseServiceStarted,
+				Service: string(serverType),
+				Name:    string(svc.Name()),
+			})
 		})
+		if !finished {
+			return startErr
+		}
 	}
 	if startErr != nil {
 		stopped, cleanupErr := shutdownAfterStartupFailure(svc)
@@ -440,10 +480,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 		return startErr
 	}
 
-	// Register signal handling before Serve can expose readiness and receive
-	// external termination.
-	sigChan, stopSignals := a.exitSignals()
-	defer stopSignals()
+	cancelStartup()
 
 	// Serve in background, wait for signal.
 	ctx, cancel := context.WithCancel(context.Background())

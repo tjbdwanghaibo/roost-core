@@ -40,7 +40,7 @@ player transport
 - `kit/nestmod` 把 Nest Engine 装配为 `app.Mod`，并通过 `app.Registry` 只向启动层
   暴露 `nest.Client`。
 - `kit/gateway` 放置可复用的认证、限流、幂等及具体网络协议适配。
-- `roost-codegen` 生成 handler adapter、可注入的强类型 Sender 以及 endpoint
+- 根模块中的 `codegen/` 生成 handler adapter、可注入的强类型 Sender 以及 endpoint
   binder。生成代码不得要求业务访问 `nest.Nest` 全局变量。
 
 ## 唯一生产入口
@@ -59,9 +59,6 @@ V1/V2 双实现；异步入队错误必须回到接入层处理。
   多返回值和新旧 marker。
 - Nest 热路径保留基准，变更不得引入无界 goroutine、无界队列或每请求反射。
 
-## 多仓库发布顺序
+## 单仓发布
 
-本模型新增跨模块 API，必须按 `roost-core -> roost-kit -> roost-codegen -> 业务项目`
-发布。Kit 在 Core 新版本发布前只能通过本地 Go workspace 联调；不得把本地
-`replace` 提交到发布版 `go.mod`。Core 和 Kit 发布完成后，再更新项目清单中的版本并
-重新生成代码。
+core、kit、codegen 已并入一个模块，由同一个 roost-core tag 交付。应用升级该版本并重新生成代码；本地联调的 replace 不进入发布清单。生成器与运行时最低版本由清单和兼容测试共同检查。

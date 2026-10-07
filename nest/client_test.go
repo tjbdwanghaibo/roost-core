@@ -19,7 +19,7 @@ func TestClientRequestCarriesContextAndReturnsResult(t *testing.T) {
 
 	engine := NewEngine(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 0, 8),
+		NestOptionWithWorkerNumAndMsgCap(1, 8),
 		NestOptionWithSyncTimeout(time.Second),
 	)
 	if err := engine.Start(); err != nil {
@@ -56,7 +56,7 @@ func TestClientDispatchCarriesOnlyFrameworkEnvelope(t *testing.T) {
 
 	engine := NewEngine(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 0, 8),
+		NestOptionWithWorkerNumAndMsgCap(1, 8),
 	)
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func TestClientAdmissionReportsQueueFull(t *testing.T) {
 	getter.Add(newMockEntity(id, entity.EntityCategory(1)))
 	engine := NewEngine(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 0, 1),
+		NestOptionWithWorkerNumAndMsgCap(1, 1),
 	)
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
@@ -212,7 +212,7 @@ func TestClientRejectsCanceledContextBeforeAdmission(t *testing.T) {
 }
 
 func TestClientFenceRejectsAdmissionWithCause(t *testing.T) {
-	engine := NewEngine(NestOptionWithGetter(newMockGetter()), NestOptionWithWorkerNumAndMsgCap(1, 0, 8))
+	engine := NewEngine(NestOptionWithGetter(newMockGetter()), NestOptionWithWorkerNumAndMsgCap(1, 8))
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func BenchmarkClientRequestSingle(b *testing.B) {
 	getter.Add(newMockEntity(id, entity.EntityCategory(1)))
 	engine := NewEngine(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 0, 1024),
+		NestOptionWithWorkerNumAndMsgCap(1, 1024),
 	)
 	if err := engine.Start(); err != nil {
 		b.Fatal(err)

@@ -155,7 +155,7 @@ func run(c config) (r result, err error) {
 		}
 		entities[i] = ent
 	}
-	engine := nest.NewEngine(nest.NestOptionWithGetter(loadedGetter{manager}), nest.NestOptionWithWorkerNumAndMsgCap(c.Workers, 0, c.Queue))
+	engine := nest.NewEngine(nest.NestOptionWithGetter(loadedGetter{manager}), nest.NestOptionWithWorkerNumAndMsgCap(c.Workers, c.Queue))
 	name := nest.NewHandlerName("perf.message")
 	engine.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
 		es[0].(*loadEntity).value++ // 真实 Entity 锁下的简单业务写入。

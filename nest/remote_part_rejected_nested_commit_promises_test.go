@@ -56,7 +56,7 @@ func TestNestedCommitInRemotePrepareAlongsideCommittedLocalPartKeepsReplyText(t 
 				})
 				return batch, nil
 			}}
-			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(remote), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(remote), NestOptionWithWorkerNumAndMsgCap(1, 16))
 			name := NewHandlerName("rr08_nested_alongside_" + tc.name)
 			mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 				return "ok", nil

@@ -106,7 +106,7 @@ func runCombatHandler(t *testing.T, getter *testGetter, meta nest.HandlerMeta, c
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(getter),
 		nest.NestOptionWithTransactionCommitter(committer),
-		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
 	)
 	handlerName := nest.NewHandlerName(name)
 	if err := engine.RegisterHandlerWithMeta(handlerName, handler, meta); err != nil {

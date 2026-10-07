@@ -25,7 +25,7 @@ func TestSymmetricCrossCreatePairsResolveWithinRequeueBudget(t *testing.T) {
 	manager := entity.NewEntityManager()
 	ids := addPilots(t, manager, 9900, 2*pairs)
 	access := entity.NewManagerAccess(manager)
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordsCommitter{}), NestOptionWithWorkerNumAndMsgCap(2*pairs, 1, 64))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordsCommitter{}), NestOptionWithWorkerNumAndMsgCap(2*pairs, 64))
 	attempts := make([]atomic.Int64, 2*pairs)
 	names := make([]HandlerName, 2*pairs)
 	held := make(chan struct{}, 2*pairs)

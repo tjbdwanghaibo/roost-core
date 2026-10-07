@@ -84,7 +84,7 @@ func (h *delayedMsgHeap) Pop() any {
 	return item
 }
 
-func NewDispatcher(name string, workerNum, hbWorkerNum int, msgCap int, handler func(*Msg)) *Dispatcher {
+func NewDispatcher(name string, workerNum, msgCap int, handler func(*Msg)) *Dispatcher {
 	ret := &Dispatcher{
 		Name:      name,
 		MsgCap:    msgCap,

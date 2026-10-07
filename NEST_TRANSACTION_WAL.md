@@ -15,15 +15,15 @@ Nest handler 在进入业务代码前已经持有所有目标 entity 的 mutex�
 
 ## 2. 职责边界
 
-### roost-core
+### 核心运行时
 
-`core/nest` 只定义框架语义：事务状态机、rollback/durability 策略、commit record、participant、committer 和 entity 解锁通知。core 不依赖文件系统、Mongo、Redis 或消息中间件。
+`nest/` 只定义框架语义：事务状态机、rollback/durability 策略、commit record、participant、committer 和 entity 解锁通知。core 不依赖文件系统、Mongo、Redis 或消息中间件。
 
-### roost-kit
+### 持久化与 Kit 装配
 
-`kit/nestwal` 提供物理日志原语：分段 WAL、CRC、group commit、fsync、ack checkpoint 与 replay。`kit/dataengine` 在其上提供 Mongo projection、aggregate load/migration、Saga/Remote mutation、effect outbox、健康状态和主动 flush；应用只装配 Data Engine Mod。
+`nestwal/` 提供物理日志原语：分段 WAL、CRC、group commit、fsync、ack checkpoint 与 replay。`dataengine/engine` 在其上提供 Mongo projection、aggregate load/migration、Saga/Remote mutation、effect outbox、健康状态和主动 flush；应用只装配 Data Engine Mod。
 
-### roost-codegen
+### 代码生成
 
 生成的 DAO 提供：
 
@@ -124,7 +124,7 @@ WAL 是 at-least-once replay。以下情况会重复执行：mutation 已落库�
 
 因此：
 
-- mutation applier 必须按 `(entity, version)` 做 CAS；“已存在相同或更高 version”视为成功；
+- mutation applier 必须按 `(entity, version)` 做 CAS；仅已存在的版本恰好等于 Next 且 `_last_tx` 等于本事务时视为成功；更高版本不是幂等证明，按冲突失败；
 - `MutationApplier.ApplyMutations` 一次接收整个多 entity transaction；需要对外可见的跨实体原子性时，实现必须使用数据库原生 transaction；
 - publisher 使用 `Effect.ID` 作为 JetStream MsgID；这只是去重优化。Data Engine 先在业务 mutation 的 Mongo transaction 中 staging outbox；消费端仍需持久 receipt，TTL 必须大于 broker 最大保留/重投窗口；
 - 不允许把不可幂等的外部调用放入 `AfterCommit`；应改为 `nest.Emit`；
@@ -182,12 +182,12 @@ if err := dataMod.Flush(ctx); err != nil {
 
 ## 10. 发布与升级
 
-这次新增了 core Nest 契约，发布顺序必须是：
-
-1. 发布包含 transaction API 的 core v1.3.0；
-2. roost-codegen 依赖该 core 版本并重新生成 DAO/Nest handler；
-3. kit 依赖同一 core 版本并发布；
-4. 应用升级生成代码和 kit；
-5. 先以 memory handler 灰度，再逐个把关键命令切换为 async/strict。
+当前为单仓单模块，一个 roost-core tag 包含 core、kit 与 codegen。应用升级同一版本并重新生成 DAO/Nest handler，再运行生成工程验证。
 
 不存在 V1/V2 双写或旧 `rollback=dirty` 兼容链路。升级时必须重新生成 DAO/Nest 代码；生产 durable handler 必须使用无副作用的生成快照，或显式实现 `RollbackSnapshotter`。
+
+### v1.23.1 复核：async 与重放身份
+
+async 接受写入后允许锁外投影先于 WAL fsync；这符合“不保证断电前这批 WAL 已持久”的契约，不保证失败事务未生效。Mongo 已提交时仍保留结果，禁止回滚猜测。`WAL.Ack` 在写 checkpoint 前强制刷覆盖段，刷盘失败则进入 terminal 并停止水位推进。strict / pipelined 的成功持久承诺不变。
+
+当前 CommitRecord digest 来自 JSON。改结构字段可能改变同一记录的 digest；版本升级前须停止旧进程并排空 WAL / outbox，不能用新二进制盲目重放旧格式未确认记录。当前尚未部署，不提供历史 digest 兼容。`nestwal.Committer` 与 `OpenRuntime` 作为公开集成 API 保留（维护者 C8），正式 Kit 使用 Assembly。

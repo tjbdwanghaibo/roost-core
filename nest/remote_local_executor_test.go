@@ -33,7 +33,7 @@ func (m *bindingRemoteManager) localExecutor() func(func()) error {
 // 交给 Remote Manager：从非快 worker 调用时在快池执行并等待，panic 作为错误返回；停机后拒绝投递、不执行 fn。
 func TestNestBindsRunLocalIntoRemoteManager(t *testing.T) {
 	manager := &bindingRemoteManager{}
-	mgr := NewEngine(NestOptionWithGetter(newMockGetter()), NestOptionWithRemoteEntityManager(manager), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	mgr := NewEngine(NestOptionWithGetter(newMockGetter()), NestOptionWithRemoteEntityManager(manager), NestOptionWithWorkerNumAndMsgCap(1, 16))
 	run := manager.localExecutor()
 	if run == nil {
 		t.Fatal("NewEngine did not bind its RunLocal into the remote manager")

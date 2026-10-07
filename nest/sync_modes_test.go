@@ -118,7 +118,7 @@ func TestNestOnChangeRunsWithoutWaitingForInterval(t *testing.T) {
 		e.MarkSyncDirty(1)
 		return nil, nil
 	})
-	engine := NewEngine(NestOptionWithGetter(getter), NestOptionWithEntitySync(m), NestOptionWithWorkerNumAndMsgCap(1, 1, 8))
+	engine := NewEngine(NestOptionWithGetter(getter), NestOptionWithEntitySync(m), NestOptionWithWorkerNumAndMsgCap(1, 8))
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}

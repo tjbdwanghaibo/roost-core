@@ -23,7 +23,7 @@ func TestReleaseCastOfDestroyedInstanceKeepsRecreatedLock(t *testing.T) {
 	if _, err := access.Create(param()); err != nil {
 		t.Fatal(err)
 	}
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
 	name := NewHandlerName("rr26_release_cast_destroyed_instance")
 	type observed struct {
 		oldGUID                   int64

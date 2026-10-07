@@ -1193,7 +1193,7 @@ func renderKubernetesReadme(m Manifest) string {
 - Secret 不加入 kustomization，也不得提交；示例中的 CHANGE_ME 会让应用 fail-closed。
 - 默认 NetworkPolicy 只允许 roost/monitoring 命名空间访问 ops 9100，不把管理端口暴露给公网。
 - 声明 player TCP 时模板会开放 Service 7000，但只允许带 roost.tjbdwanghaibo.io/player-access=true 标签的调用方命名空间；监听端口变化时同步修改 Service、LB 和 NetworkPolicy。
-- /healthz 仅表示进程存活，流量切换必须使用 /readyz；每个 Service 的 shutdown.total_timeout 按它实际注册的 Mod 生成（声明预算之和 + 3s × 未声明 Mod 数 + 5s），terminationGracePeriodSeconds 为 max(它, 配置里实际的 total_timeout) + 5s（见上方列表）；增减 Mod 或调大 total_timeout 后执行 roost project sync 重算宽限期与 systemd TimeoutStopSec；dataengine.shutdown_timeout 与 player_access.tcp.shutdown_timeout 不参与生成（按 30s / 10s 计），调大它们须同时手动调大 total_timeout 再 sync（roost doctor 检查模板宽限期不低于配置 total + 5s）。
+- /healthz 仅表示进程存活，流量切换必须使用 /readyz；每个 Service 的 shutdown.total_timeout 按它实际注册的 Mod 生成（声明预算之和 + 3s × 未声明 Mod 数 + 5s；启用 singleton 再加 3s 释放预算），terminationGracePeriodSeconds 为 max(它, 配置里实际的 total_timeout) + 5s（见上方列表）；增减 Mod 或调大 total_timeout 后执行 roost project sync 重算宽限期与 systemd TimeoutStopSec；dataengine.shutdown_timeout 与 player_access.tcp.shutdown_timeout 不参与生成（按 30s / 10s 计），调大它们须同时手动调大 total_timeout 再 sync（roost doctor 检查模板宽限期不低于配置 total + 5s）。
 %s%s- 上线前补 NetworkPolicy、镜像签名校验、监控抓取权限以及节点/PVC 故障演练。
 `, services.String(), m.Project.Name, m.Project.Name, m.Project.Name, bullet(configDataImageNote(m)), bullet(statsLogKubernetesNote(m)))
 }

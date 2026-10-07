@@ -30,7 +30,7 @@ func BenchmarkHandlerCreateEntity(b *testing.B) {
 				b.Fatal(err)
 			}
 			access := entity.NewManagerAccess(manager)
-			engine := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 1, 1024))
+			engine := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 1024))
 			name := NewHandlerName("bench_handler_create_" + tc.name)
 			next := int64(200000)
 			engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {

@@ -74,7 +74,7 @@ func TestStrictRemoteConfirmTimeoutDefersPostCommitToDurableOutcome(t *testing.T
 					}
 					return &stagedRemoteBatch{}, nil
 				}}}
-				mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithEntitySync(m), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+				mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithEntitySync(m), NestOptionWithWorkerNumAndMsgCap(1, 16))
 				name := NewHandlerName(fmt.Sprintf("strict_confirm_outcome_%d", unique))
 				var hookMu sync.Mutex
 				afterCommit, afterCommitOnFast := 0, 0

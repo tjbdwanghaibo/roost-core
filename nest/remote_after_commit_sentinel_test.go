@@ -40,7 +40,7 @@ func TestRemoteReplyDistinguishesCommittedFromUncommitted(t *testing.T) {
 			getter.Add(e)
 			batch := tc.batch()
 			manager := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) { return batch, nil }}
-			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithWorkerNumAndMsgCap(1, 16))
 			name := NewHandlerName(fmt.Sprintf("remote_sentinel_%d", tc.unique))
 			mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 				if tc.fail {
@@ -94,7 +94,7 @@ func TestRemoteReleaseHookPanicAfterCommitCarriesSentinel(t *testing.T) {
 	batch := &stagedRemoteBatch{}
 	manager := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) { return batch, nil }}
 	committer := &recordingCommitter{}
-	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
 	name := NewHandlerName("remote_sentinel_release_hook")
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 		old := e.dao.Value

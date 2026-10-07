@@ -30,7 +30,7 @@ func TestBroadcastReleasesDestroyedAndRecreatedLocksPerTarget(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
 			name := NewHandlerName("rr14_broadcast_destroy_recreate_" + tc.name)
 			type observed struct {
 				fresh                entity.IThreadSafeEntity
@@ -114,7 +114,7 @@ func TestReleaseCastOnDeclaredRemoteTargetIsNoopUntilMessageEnds(t *testing.T) {
 	getter.Add(e)
 	recording := &recordingRemoteBatch{}
 	manager := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) { return recording, nil }}
-	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(&recordsCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(&recordsCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
 	name := NewHandlerName("rr14_release_cast_declared_remote")
 	type observed struct {
 		heldBefore, heldAfter, freeAfter bool

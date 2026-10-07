@@ -123,7 +123,7 @@ func TestGeneratedDataEngineProcessLifecycle(t *testing.T) {
 					t.Fatalf("phase=%d id=%d loaded value/version=%d/%d want=%d", phase, id, account.state.GetValue(), account.state.DirtyTracker().Version(), wantBefore)
 				}
 			}
-			options := append(runtime.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerNumAndMsgCap(8, 1, 256))
+			options := append(runtime.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerNumAndMsgCap(8, 256))
 			scheduler := nest.NewEngine(options...)
 			scheduler.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 				state := es[0].(*Account).state

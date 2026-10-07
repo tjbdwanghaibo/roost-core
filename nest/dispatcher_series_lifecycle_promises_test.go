@@ -33,7 +33,7 @@ func seriesByDispatcher() map[string]int {
 
 func startObservedDispatcher(t *testing.T, name string) *Dispatcher {
 	t.Helper()
-	d := NewDispatcher(name, 1, 0, 8, func(*Msg) {})
+	d := NewDispatcher(name, 1, 8, func(*Msg) {})
 	d.OnInit()
 	d.OnRun()
 	d.observeStats()
@@ -100,7 +100,7 @@ func TestADispatcherThatDidNotDrainKeepsItsSeriesUntilItDoes(t *testing.T) {
 	name := seriesLifecycleDispatcherPrefix + "stuck"
 	release := make(chan struct{})
 	started := make(chan struct{})
-	d := NewDispatcher(name, 1, 0, 8, func(*Msg) {
+	d := NewDispatcher(name, 1, 8, func(*Msg) {
 		close(started)
 		<-release
 	})

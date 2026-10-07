@@ -37,7 +37,7 @@ func TestRolledBackReleaseHookPanicKeepsBusinessError(t *testing.T) {
 			default:
 				committer = recording
 			}
-			mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(f.owner)), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+			mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(f.owner)), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
 			name := NewHandlerName("rr20_rolled_back_release_hook_" + tc.name)
 			mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 				if tc.meta.Rollback == RollbackUndo {

@@ -94,7 +94,7 @@ func TestDispatcherObserveStatsRecordsQueueGauge(t *testing.T) {
 	metrics.DefaultRegistry().Reset()
 	t.Cleanup(func() { metrics.DefaultRegistry().Reset() })
 
-	dispatcher := NewDispatcher("nest", 2, 1, 64, func(*Msg) {})
+	dispatcher := NewDispatcher("nest", 2, 64, func(*Msg) {})
 	dispatcher.OnInit()
 	defer dispatcher.OnDestroy()
 
@@ -131,7 +131,7 @@ func TestDispatcherObserveStatsRecordsQueueGauge(t *testing.T) {
 }
 
 func TestDispatcherStatsCountsProcessedAndSlowMessages(t *testing.T) {
-	dispatcher := NewDispatcher("nest", 2, 1, 64, func(*Msg) {})
+	dispatcher := NewDispatcher("nest", 2, 64, func(*Msg) {})
 	mgr := &NestMgr{dispatcher: dispatcher}
 
 	mgr.recordDispatch(199 * time.Millisecond)
@@ -148,7 +148,7 @@ func TestDispatcherStatsCountsProcessedAndSlowMessages(t *testing.T) {
 }
 
 func TestDispatcherDelaySendMsgDoesNotCreatePerMessageGoroutines(t *testing.T) {
-	dispatcher := NewDispatcher("nest_delay_test", 1, 0, 64, func(msg *Msg) {
+	dispatcher := NewDispatcher("nest_delay_test", 1, 64, func(msg *Msg) {
 		msg.OnRelease()
 	})
 	dispatcher.OnInit()
@@ -412,7 +412,7 @@ func TestRegisterAndDispatchHandler(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(2, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(2, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -450,7 +450,7 @@ func TestMultiDispatchRequiresFirstEntity(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(2, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(2, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -485,7 +485,7 @@ func TestMultiDispatchAllowsMissingNonFirstEntity(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(2, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(2, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -524,7 +524,7 @@ func TestMultiGroupDispatchRequiresFirstEntity(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(2, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(2, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -599,7 +599,7 @@ func TestNestRemoteAccessPreloadsSnapshotBeforeHandler(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithRemoteSnapshotResolver(resolver),
-		NestOptionWithWorkerNumAndMsgCap(2, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(2, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -663,7 +663,7 @@ func TestNestRemoteKeyAndRemoteAccessTTL(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithRemoteSnapshotResolver(resolver),
-		NestOptionWithWorkerNumAndMsgCap(2, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(2, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -727,7 +727,7 @@ func TestNestHandlerRejectsNestedSyncDispatch(t *testing.T) {
 
 			InitNest(
 				NestOptionWithGetter(getter),
-				NestOptionWithWorkerNumAndMsgCap(1, 0, 64),
+				NestOptionWithWorkerNumAndMsgCap(1, 64),
 				NestOptionWithTickDuration(100*time.Millisecond),
 			)
 			t.Cleanup(StopNest)
@@ -801,7 +801,7 @@ func TestNestHandlerRejectsNestedAsyncDispatch(t *testing.T) {
 
 			InitNest(
 				NestOptionWithGetter(getter),
-				NestOptionWithWorkerNumAndMsgCap(1, 0, 64),
+				NestOptionWithWorkerNumAndMsgCap(1, 64),
 				NestOptionWithTickDuration(100*time.Millisecond),
 			)
 			t.Cleanup(StopNest)
@@ -849,7 +849,7 @@ func TestRollbackStateRestoresDaoAndDirty(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -894,7 +894,7 @@ func TestRollbackAfterCommitRunsOnSuccess(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -935,7 +935,7 @@ func TestRollbackUndoRestoresStateAndDirty(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -979,7 +979,7 @@ func TestStrictCommitFailureRollsBack(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -1026,7 +1026,7 @@ func TestStrictCommitSuccessKeepsState(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -1070,7 +1070,7 @@ func TestIndeterminateCommitDoesNotRollback(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -1144,7 +1144,7 @@ func TestSyncUsesRequestSyncWait(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -1172,7 +1172,7 @@ func TestSyncCarriesCurrentContextIntoHandler(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -1223,7 +1223,7 @@ func TestNestTracePropagatesContextAndRecordsEvents(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -1396,7 +1396,7 @@ func TestWorkerPool(t *testing.T) {
 		results <- msg.Name
 	}
 
-	d := NewDispatcher("test", 2, 1, 32, handler)
+	d := NewDispatcher("test", 2, 32, handler)
 	d.OnInit()
 	d.OnRun()
 	defer d.OnDestroy()
@@ -1417,7 +1417,7 @@ func TestWorkerPool(t *testing.T) {
 }
 
 func TestDispatcherStoppedReturnsErrorForSyncMessage(t *testing.T) {
-	d := NewDispatcher("test_stopped", 1, 0, 8, func(msg *Msg) {})
+	d := NewDispatcher("test_stopped", 1, 8, func(msg *Msg) {})
 	d.OnInit()
 	d.OnRun()
 	d.OnDestroy()
@@ -1492,7 +1492,7 @@ func TestDispatchRecordsLockHoldAndFlagsSlowHandlers(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 		NestOptionWithSlowLockThreshold(time.Millisecond),
 	)
@@ -1564,7 +1564,7 @@ func TestInstanceScopedHandlersDoNotCollideAcrossEngines(t *testing.T) {
 	newEngine := func(reply string) *NestMgr {
 		engine := NewEngine(
 			NestOptionWithGetter(getter),
-			NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+			NestOptionWithWorkerNumAndMsgCap(1, 64),
 			NestOptionWithTickDuration(100*time.Millisecond),
 		)
 		engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
@@ -1590,7 +1590,7 @@ func TestInstanceScopedHandlersDoNotCollideAcrossEngines(t *testing.T) {
 	if err := first.RegisterHandlerWithMeta(NewHandlerName("late"), nil, HandlerMeta{}); err == nil {
 		t.Fatal("post-start registration accepted")
 	}
-	idle := NewEngine(NestOptionWithGetter(getter), NestOptionWithWorkerNumAndMsgCap(1, 1, 64), NestOptionWithTickDuration(time.Second))
+	idle := NewEngine(NestOptionWithGetter(getter), NestOptionWithWorkerNumAndMsgCap(1, 64), NestOptionWithTickDuration(time.Second))
 	if err := idle.RegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) { return nil, nil }, HandlerMeta{}); err != nil {
 		t.Fatal(err)
 	}

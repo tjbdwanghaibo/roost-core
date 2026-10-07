@@ -117,7 +117,7 @@ func TestPipelinedCommitReleasesLocksBeforeDurable(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -200,7 +200,7 @@ func TestPipelinedEnqueueRejectionRollsBack(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -241,7 +241,7 @@ func TestPipelinedIndeterminateAbandonsWithoutRollback(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -289,7 +289,7 @@ func TestPipelinedRequiresCapableCommitter(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -323,7 +323,7 @@ func TestPipelinedAllowlistGatesHandlers(t *testing.T) {
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
 		NestOptionWithPipelinedAllowlist("test_pipelined_allowed"),
-		NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(1, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -377,7 +377,7 @@ func TestPipelinedCascadedReadGatesBothRepliesInOrder(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithWorkerNumAndMsgCap(4, 1, 64),
+		NestOptionWithWorkerNumAndMsgCap(4, 64),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()

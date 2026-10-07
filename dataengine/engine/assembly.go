@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
@@ -25,6 +26,28 @@ type AssemblyConfig struct {
 	EffectPrefix string
 	EffectStream fnats.JetStreamConfig
 	Pipelined    PipelinedRuntimeConfig
+}
+
+// ValidateReceiptRetention 校验事务去重标记的有效 TTL 大于 WAL 未确认年龄告警窗口。
+// Mongo 的 TTL 按整秒存储，必须按相同精度比较。MaxUnackedAge 只是健康阈值，
+// 不是日志失效时间；停机超过 TTL 的旧 WAL 仍须人工核对，不能据此宣称可安全重放。
+func (cfg AssemblyConfig) ValidateReceiptRetention() error {
+	ttl := cfg.Mongo.TransactionReceiptTTL
+	if ttl <= 0 {
+		ttl = defaultReceiptTTL
+	}
+	seconds, err := ttlSeconds(ttl)
+	if err != nil {
+		return fmt.Errorf("dataengine.transaction_receipt_ttl: %w", err)
+	}
+	window := cfg.WAL.MaxUnackedAge
+	if window <= 0 {
+		window = nestwal.DefaultOptions("").MaxUnackedAge
+	}
+	if time.Duration(seconds)*time.Second <= window {
+		return fmt.Errorf("dataengine.transaction_receipt_ttl (%s, whole seconds) must exceed dataengine.wal.max_unacked_age (%s)", time.Duration(seconds)*time.Second, window)
+	}
+	return nil
 }
 
 // AssemblyDeps are the capabilities the data engine consumes. RemoteStore and
@@ -60,6 +83,9 @@ type Assembly struct {
 // Assemble validates the dependencies and builds the Mongo store, binding the
 // remote projection when it is configured. Nothing is opened or written yet.
 func Assemble(deps AssemblyDeps, cfg AssemblyConfig) (*Assembly, error) {
+	if err := cfg.ValidateReceiptRetention(); err != nil {
+		return nil, err
+	}
 	if deps.Access == nil || deps.Access.Manager() == nil {
 		return nil, errors.New("dataengine: service-scoped entity access is required")
 	}

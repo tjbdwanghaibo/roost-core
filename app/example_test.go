@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/app"
+	coremanager "github.com/tjbdwanghaibo/roost-core/manager"
 
 	"github.com/spf13/viper"
 )
@@ -50,38 +51,26 @@ func (g *GateService) Shutdown(ctx context.Context) error { return nil }
 
 type DataLoaderMgr struct{}
 
-func (m *DataLoaderMgr) Name() string                { return "data_loader" }
-func (m *DataLoaderMgr) Start(r *app.Registry) error { return nil }
-func (m *DataLoaderMgr) Stop()                       {}
+func (m *DataLoaderMgr) Name() string                              { return "data_loader" }
+func (m *DataLoaderMgr) Start(r *app.Registry) error               { return nil }
+func (m *DataLoaderMgr) Stop()                                     {}
+func (m *DataLoaderMgr) StopWithContext(ctx context.Context) error { return nil }
 
-type ManagerMod struct {
-	managers []app.IManager
-}
+// ManagerMod 演示与 kit/manager 相同的生命周期，实际应用可直接装配 kit Mod。
+// Provide 只交接能力，启动与排空分别由 Start / StopWithContext 负责。
+type ManagerMod struct{ engine *coremanager.Engine }
 
-func (m *ManagerMod) Name() app.ModName           { return "manager" }
-func (m *ManagerMod) Init(cfg *viper.Viper) error { return nil }
-func (m *ManagerMod) Provide(r *app.Registry) error {
-	for _, mgr := range m.managers {
-		if err := mgr.Start(r); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-func (m *ManagerMod) Start() error { return nil }
-func (m *ManagerMod) Stop() {
-	for i := len(m.managers) - 1; i >= 0; i-- {
-		m.managers[i].Stop()
-	}
-}
-func (m *ManagerMod) Register(mgr app.IManager) {
-	m.managers = append(m.managers, mgr)
-}
+func (m *ManagerMod) Name() app.ModName                         { return "manager" }
+func (m *ManagerMod) Init(*viper.Viper) error                   { return nil }
+func (m *ManagerMod) Provide(r *app.Registry) error             { return m.engine.Provide(r) }
+func (m *ManagerMod) Start() error                              { return m.engine.Start() }
+func (m *ManagerMod) Stop()                                     { _ = m.StopWithContext(context.Background()) }
+func (m *ManagerMod) StopWithContext(ctx context.Context) error { return m.engine.Stop(ctx) }
 
 func Example() {
 	// Game-specific managers
-	gameMgrs := &ManagerMod{}
-	gameMgrs.Register(&DataLoaderMgr{})
+	// 正式 Mod 在 Provide 发布能力、Start 启动 manager，StopWithContext 受 App 预算约束。
+	gameMgrs := &ManagerMod{engine: coremanager.NewEngine(&DataLoaderMgr{})}
 
 	a := app.New("roost", "1.0.0").
 		Mods(&MongoMod{}, &RedisMod{}).                   // shared mods

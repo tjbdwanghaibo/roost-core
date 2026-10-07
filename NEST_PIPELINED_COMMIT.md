@@ -107,7 +107,7 @@ fsync 组提交是毫秒级、同步 tick 是几十毫秒级，闸门延迟在�
 snapshot 抢先落地的第二条路径。`LastCommitLSN` 只用于约束同步等外化行为，不再驱动旧
 Checkpoint Mod。
 
-## 7. kit 侧（nestwal，独立交付）
+## 7. 根模块的 nestwal
 
 - `Enqueue`：持 WAL 缓冲锁做帧编码、大小校验、缓冲背压检查（满则同步拒绝）、分配单调
   LSN、挂 ticket 入等待表后返回。
@@ -119,7 +119,7 @@ Checkpoint Mod。
 ## 8. 测试与验收
 
 全部已实现（core `nest/pipelined_commit_test.go`、`nest/pipelined_bench_test.go`；kit
-`nestwal/pipelined_test.go`、`nestwal/crash_test.go`、`dataengine/projector_test.go`）：
+`nestwal/pipelined_test.go`、`nestwal/crash_test.go`、`dataengine/engine/projector_test.go`）：
 
 1. 单元（fake PipelinedCommitter，可控 resolve 时机/结果）：Enqueue 拒绝→回滚完好；
    indeterminate→abandon 不回滚；早放锁（探针在 ticket 未 resolve 时成功抢到实体锁）；
@@ -139,7 +139,7 @@ Checkpoint Mod。
 - durability 是 per-handler 元数据，逐 handler 灰度；首选高频写、非跨服、AfterCommit 简单的
   handler 试点。
 - prod 配置门禁初期要求 pipelined 显式白名单。
-- 装配接线（kit >= 对应版本）：
+- 装配接线（同一 roost-core 版本中的 kit）：
   - Data Engine Mod 独占 WAL，并在 recovery barrier 完成后提供 committer；
   - entitysync 闸门一行接线：`entitysync.ManagerConfig{DurableWatermark: dataEngineMod.DurableLSN}`；
   - 引擎选项使用 `dataEngineMod.NestOptions()`（committer + 配置驱动的
@@ -157,7 +157,7 @@ Checkpoint Mod。
 异步回包：dispatch 返回 deferred 结果、reply 路径注册 ticket 回调、worker 立即空出。侵入每条
 回包链路，预定立项标准："durable_wait 占 worker 忙时 > 30% 且加 worker 无法缓解"。
 
-试点台架：kit 中已无独立的 pilot 台架，pipelined 路径由 `roost-kit/nestwal` 与 `roost-kit/dataengine` 的常规测试覆盖（需要 core >= v1.5.1 的
+试点台架：kit 中已无独立的 pilot 台架，pipelined 路径由 `nestwal/` 与 `dataengine/engine/` 的常规测试覆盖（需要 core >= v1.5.1 的
 `nest.pipelined.durable_wait` 埋点）。真实 nestwal 磁盘 fsync、真实 Nest worker 池、32 个
 闭环客户端、256 实体 + 25% 流量集中在一个热点实体。Apple M5 / APFS 实测（每场景 5s）：
 

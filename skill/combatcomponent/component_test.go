@@ -118,7 +118,7 @@ func TestNestUndoRollbackRestoresCombatStateExactly(t *testing.T) {
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(getter),
 		nest.NestOptionWithTransactionCommitter(acceptingCombatCommitter{}),
-		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 64),
 		nest.NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	if err := engine.Start(); err != nil {
@@ -228,7 +228,7 @@ func TestNestUndoWorksThroughRealHandlers(t *testing.T) {
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(getter),
 		nest.NestOptionWithTransactionCommitter(acceptingCombatCommitter{}),
-		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 64),
 		nest.NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	if err := engine.Start(); err != nil {
@@ -273,7 +273,7 @@ func TestCombatDaoProducesTransactionLocalMutationAndSyncMask(t *testing.T) {
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(getter),
 		nest.NestOptionWithTransactionCommitter(committer),
-		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 64),
 	)
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)

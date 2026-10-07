@@ -48,6 +48,8 @@ type MongoStoreConfig struct {
 	ReceiptTTL            time.Duration
 }
 
+const defaultReceiptTTL = 30 * 24 * time.Hour
+
 // MongoStore projects canonical WAL mutations with exact version predicates.
 // A single ordinary mutation uses a one-document fast path; every transaction
 // involving multiple documents, effects, or receipts uses one Mongo session.
@@ -84,10 +86,10 @@ func NewMongoStore(client fmongo.IMongo, cfg MongoStoreConfig) (*MongoStore, err
 		return nil, errors.New("dataengine mongo: default database is required")
 	}
 	if cfg.TransactionReceiptTTL <= 0 {
-		cfg.TransactionReceiptTTL = 30 * 24 * time.Hour
+		cfg.TransactionReceiptTTL = defaultReceiptTTL
 	}
 	if cfg.ReceiptTTL <= 0 {
-		cfg.ReceiptTTL = 30 * 24 * time.Hour
+		cfg.ReceiptTTL = defaultReceiptTTL
 	}
 	return &MongoStore{client: client, cfg: cfg, now: time.Now}, nil
 }

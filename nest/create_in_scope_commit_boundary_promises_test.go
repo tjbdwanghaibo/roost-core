@@ -162,7 +162,7 @@ func TestCreateInScopePipelinedWithoutWatermarkWaitsForDurable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newCreateInScopeFixture(t, tc.unique, nil)
 			committer := newPipelinedTestCommitter(false)
-			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerNumAndMsgCap(1, 16))
 			name := NewHandlerName("create_in_scope_pipelined_" + tc.name)
 			var created *rollbackTestEntity
 			mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
@@ -231,7 +231,7 @@ func TestCreateInScopePipelinedWithoutWatermarkWaitsForDurable(t *testing.T) {
 func TestCreateInScopeRevokedWhenHandlerFails(t *testing.T) {
 	f := newCreateInScopeFixture(t, 9720, nil)
 	committer := &recordingCommitter{}
-	mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerNumAndMsgCap(1, 16))
 	name := NewHandlerName("create_in_scope_handler_fails")
 	boom := errors.New("business rejected after create")
 	var created *rollbackTestEntity
@@ -285,7 +285,7 @@ func TestCreateInScopeRevokedWhenHandlerFails(t *testing.T) {
 func TestCreateInScopeRevokedWhenStrictCommitRejected(t *testing.T) {
 	f := newCreateInScopeFixture(t, 9730, func() uint64 { return 0 })
 	committer := &recordingCommitter{err: errors.New("commit rejected")}
-	mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerNumAndMsgCap(1, 16))
 	name := NewHandlerName("create_in_scope_strict_rejected")
 	concurrent := make(chan error, 1)
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
@@ -324,7 +324,7 @@ func TestCreateInScopeRevokedWhenStrictCommitRejected(t *testing.T) {
 func TestCreateInScopeCommittedEntitySyncsAfterCommit(t *testing.T) {
 	f := newCreateInScopeFixture(t, 9740, nil)
 	committer := &recordingCommitter{}
-	mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerNumAndMsgCap(1, 16))
 	name := NewHandlerName("create_in_scope_committed")
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 		_, err := f.createAndPublish(42, false)

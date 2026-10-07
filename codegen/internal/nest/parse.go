@@ -180,7 +180,7 @@ func validateTransactionOptions(rollback string, durability string) error {
 		return fmt.Errorf("unsupported rollback policy %q", rollback)
 	}
 	switch durability {
-	case "", "memory", "async", "strict":
+	case "", "memory", "async", "strict", "pipelined":
 	default:
 		return fmt.Errorf("unsupported durability policy %q", durability)
 	}

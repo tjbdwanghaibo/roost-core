@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- Nest 标记支持 `durability=pipelined`（RR-20261007-04）；删除无效 heartbeat worker 配置及 API 参数，现为 `NestOptionWithWorkerNumAndMsgCap(workers, capacity)`，调用方需同步升级。
+- DataEngine 事务标记 TTL 按 Mongo 整秒精度必须大于 WAL 未确认年龄告警窗口（RR-20261007-05），默认不变，过短配置拒绝启动。
+- App 统一启动期限 `startup.timeout`（默认 2m）与信号处理；未退出回调的依赖保留到进程退出（RR-20261007-06）。
+- ActionRunner 外层 defer 清理执行标记与残留命令引用（F02-7 结构性加固）。
+
 ### 行为收紧
 
 - **配置检查把缺失的默认文件报告为成功已修复**（RR-20261007-01，F01-8）。[问题](docs/bug/RR-20261007-01.md) · [修复与兼容](docs/bugfix/RR-20261007-01.md)

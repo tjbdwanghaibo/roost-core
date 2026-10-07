@@ -45,7 +45,7 @@ baghandler.RegisterHandlerBagNestHandlers(handler)
 同一源文件不能混合包函数和不同 receiver 的方法 Handler。方法 Handler 需要实例，
 因此不会进入无参 bootstrap；启动层必须显式构造并注册，注册时传入 nil 会立即失败。
 
-旧 `//roost:nest` 和 `rollback=dirty` 不属于生产协议；升级项目应先转换标记再重新生成。
+`//roost:nest` 是现行标记；旧 `rollback=dirty` 不属于生产协议，升级项目需改成 `state` 或 `undo` 并重新生成。
 
 ## 注入式 Sender
 
@@ -85,7 +85,7 @@ dirty。带持久化属性的 setter、map Set/Del 只能在 Nest handler 或 sy
 `collection/id` 与字段；带 Remote 批次的 memory handler 改本地持久字段同样被拒、批次 Abort
 （RR-20261006-41，v1.23.1 起；之前改动静默丢失）。只改 nopersist 字段的 memory 事务不受影响。
 
-手写 `nest.HandlerMeta`（不经 `//roost:nest`，例如 pipelined handler 或测试）时，`Rollback` 不为
+手写 `nest.HandlerMeta`（不经 `//roost:nest`，例如动态注册或测试）时，`Rollback` 不为
 none 就必须显式写 `Durability`：`DurabilityMemory` / `DurabilityAsync` / `DurabilityStrict` /
 `DurabilityPipelined` 选一个。没写的在注册时失败（`RegisterHandlerWithMeta` 与实例级注册都是），
 错误满足 `errors.Is(err, nest.ErrDurabilityUnset)`，点名 handler 并列出可选值（RR-20261006-60，
@@ -123,3 +123,5 @@ step 继续使用 `MongoCommandInbox`，不能在其 Mongo transaction 中混写
 6. 删除业务 Runtime、Controller 透传层和全局 Access 获取 Nest 的代码。
 7. 确认目标环境 WAL reader 已兼容 v2、writer 已设为 v2，再重新生成持久化 DAO。
 8. 用严格/异步/pipelined handler 测试 Put、Patch、Delete 和 rollback，并验证只有 Data Engine 一条写路径。
+
+`durability=pipelined` 自 v1.23.1 起可由标记生成；生成代码不绕过 Nest 的 committer 能力检查和 handler allowlist。

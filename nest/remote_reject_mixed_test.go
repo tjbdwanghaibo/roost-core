@@ -35,7 +35,7 @@ func TestRemoteRejectKeepsCommittedLocalEntitySync(t *testing.T) {
 			manager := &bindingRemoteManager{stagedRemoteManager: stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) {
 				return batch, nil
 			}}}
-			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithEntitySync(m), NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithEntitySync(m), NestOptionWithWorkerNumAndMsgCap(1, 16))
 			name := NewHandlerName(fmt.Sprintf("mixed_remote_reject_%d", unique))
 			var localFacts, remoteFacts func() (bool, bool)
 			afterCommit := 0

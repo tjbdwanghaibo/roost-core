@@ -213,8 +213,11 @@ type appConfig struct {
 		RotateInterval   time.Duration `config:"rotate_interval" default:"24h"`
 		RotateTimeFormat string        `config:"rotate_time_format"`
 	} `config:"log"`
-	Time     timeConfig    `config:"time"`
-	Metrics  metricsConfig `config:"metrics"`
+	Time    timeConfig    `config:"time"`
+	Metrics metricsConfig `config:"metrics"`
+	Startup struct {
+		Timeout time.Duration `config:"timeout" default:"2m" min:"1ns" help:"启动阶段总等待预算；较长的恢复需显式调大，超时但回调未退出时保留依赖直到进程退出"`
+	} `config:"startup"`
 	Shutdown struct {
 		TotalTimeout time.Duration `config:"total_timeout" default:"30s" min:"1ns" help:"停机总预算：全部 Mod 停完的时长上限"`
 	} `config:"shutdown"`

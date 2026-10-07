@@ -339,7 +339,7 @@ func TestRejectedWriteUnloadsOnNestFastPoolAndRebindsSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithRemoteEntityManager(f.mgr), nest.NestOptionWithEntitySync(syncMgr), nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16))
+	engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithRemoteEntityManager(f.mgr), nest.NestOptionWithEntitySync(syncMgr), nest.NestOptionWithWorkerNumAndMsgCap(1, 16))
 	if err = engine.Start(); err != nil {
 		t.Fatal(err)
 	}

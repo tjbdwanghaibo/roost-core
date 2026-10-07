@@ -10,35 +10,35 @@ Mirror现有适配器新增payload身份校验（NC-33/34，main未发版）：c
 
 RefHMap Set/Delete 返回 `cache.ErrRefHMapRegistryChanged` 表示读取键登记之后、它又登记了本次清理清单之外的 hash（另一布局发布了新键）、此次Lua明确未写；同布局的并发首次创建、并发删除、记录到期不会返回它（RR-20261004-09，未发版）。先读回当前schema/业务意图再决定重试，不自动以旧全量值覆盖新布局。网络/Eval错误仍可能已应用，不能按明确拒绝处理。Delete也要求adapter支持现有Eval；存储格式保持，历史孤儿不自动清理。[用法和限制](bugfix/RR-20261004-NC-30.md)。
 
-## 2026-10-07 versionstore 写入带一次性令牌（A2 ③，main，未发版）
+## 2026-10-07 versionstore 写入带一次性令牌（A2 ③，v1.23.0）
 
 `versionstore.RedisStore` 的每次写带一个 store 生成的令牌，和值在同一条 SET 里写进信封（`<version>|<令牌>…\n<payload>`，每键保留最近 `RedisConfig.WriteTokenHistory` 个，缺省 8）。写命令回复丢失时 store 自己核对：令牌在就返回那次写的结果（`Update` 不会叠第二次、`Create` 不会把自己建的键报成已占用），键还是原值就原样重发，别人先写了那个版本就当作比输了重跑 mutate。证明不了的返回 `versionstore.ErrOutcomeUnknown`（`*UnknownOutcomeError`，原传输错误仍可 `errors.Is`）：键原本不存在而此刻仍不存在、`Delete` 之后键不存在（删除不留令牌）、令牌被后来的写挤出、后端不答。要在 store 之外再试一次，用 `store.Update(versionstore.Resume(ctx, err), key, mutate)`（`Create` / `Delete` 同理）：先核对上一次的令牌，已生效就返回上一次的结果；重试必须是同一次写（同样的值、同样的 mutate、同样持有的版本），否则 `ErrWriteTokenMismatch`、不写。Resume 只在本进程内有效，跨 RPC 的重试仍靠值里的请求 ID 去重。**持久格式改变，升级需清空 versionstore 的键**（旧信封读出 `ErrMalformedRecord: no write token`，T-291）。另：带索引的写 `Entry` 返回 NaN 分数时改为发出前拒绝（`redis.ErrCASInvalidCommand`），以前会“值写入、索引没动、返回错误”（RR-20261006-35）。[方案](feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md)
 
-## 2026-10-06 业务时间只许前进（main，未发版）
+## 2026-10-06 业务时间只许前进（v1.23.0）
 
 同一套部署的业务时间（真实时间 + `time.logic_offset`）不能往回走：App 在单实例锁之后、任何 Mod Init 之前读部署级高水位（协调存储 `<singleton.key_prefix>:business_time`），按新偏移算出的业务时间低于“高水位 − 1 分钟”就拒绝启动（`app.ErrBusinessTimeMovedBack`，点名偏移与高水位），运行中每 10s 推进高水位。只在非生产检查（生产偏移强制为 0，行为不变）；配了非 0 偏移的进程必须能打开协调存储（bootstrap 装 `App.Singleton`、写 `singleton.key_prefix`，`singleton.enabled` 可以是 false）。测试环境要回到过去只能清库重建。随之删掉了只为“偏移往回调”存在的 API：`activity.Config.SystemNow`、`mail.Config.SystemNow`、`mail.RedisConfig.StorageGrace`（宽限固定为 `mail.EnvelopeStorageGrace` = 24h，原 `DefaultEnvelopeStorageGrace` 改名）——activity 派发退避、进度凭证与 mail 领取租约回到业务时钟；手工装配设置过它们的地方删掉那一行即可。详见 [§10 业务时钟与系统时钟](#业务时钟与系统时钟)。[方案](feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md)
 
-## 2026-10-06 业务时钟与系统时钟（D-L3，main，未发版）
+## 2026-10-06 业务时钟与系统时钟（D-L3，v1.23.0）
 
 时间分两个钟：**业务时钟** = 真实时间 + `time.logic_offset`，活动窗口与协调器、World 定时器、日 / 周重置、冷却、邮件 / 道具业务过期、赛季、排行周期、游戏时间都读它，从 `app.BusinessClock(registry)` 拿（kit 的 activity、mail、rank、session Mod 已注入）；**系统时钟** = 真实时间，帧率、租约与锁、超时、重试、存储 TTL、Ack、日志与 WAL 时间戳，直接用 `time` 包。偏移只在启动时读一次，所有进程写同一个值；`env: production` 时非 0 拒绝启动。mail 信封的 Redis TTL 现在是业务剩余时长 + 24h 宽限（固定 `EnvelopeStorageGrace`；v1.21.0 的 `RedisConfig.StorageGrace` 已删）。`glsvet` 对 `game` 目录下的包直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，系统时间写 `//glsvet:system-clock <理由>` 豁免。第八轮起 match 票据、chat 展示给玩家的时间（新字段 `SentAtUnix`；保留期仍按系统时钟）、account 的创建与登录时间也走业务时钟，`roost project doctor` 检查同一套部署各服务的 `time.logic_offset` 是否一致。详见 [§10 业务时钟与系统时钟](#业务时钟与系统时钟)。[方案](feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md)
 
-## 2026-10-07 每个 Mod 声明自己的配置（A4 ①，main，未发版）
+## 2026-10-07 每个 Mod 声明自己的配置（A4 ①，v1.23.0）
 
 配置键、类型、缺省值、范围 / 枚举、必填与说明写在 Mod 的配置结构体上（`app.SchemaOf` / `app.LoadConfig`），App 启动前、生成器写配置段、`roost project doctor` 检查配置三处用同一份声明；`app.ConfigReader` 删除。以前写 0 或负数静默取默认的键现在按声明的范围拒绝（不写就是缺省）。新增 `<bin> <service> --print-config` / `--check-config` / `--print-config-schema`。业务服务与 Mod 一样声明自己读的键，doctor 编译工程读回这些声明、新增 `config-reads` 检查，新生成的 game-demo 零 WARN（RR-20261006-40）。syncbus 只读 `syncbus.*` 段（`room` / `sync` 回退删除），生成的 `shutdown` 段不再写没人读的 `serve_wait_timeout`（RR-20261006-38）。详见 [§10 配置写法与启动校验](#配置写法与启动校验)。[方案](feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)
 
-## 2026-10-06 配置数据规则在加载层强制、热更失败可见（B10 / C2，main，未发版）
+## 2026-10-06 配置数据规则在加载层强制、热更失败可见（B10 / C2，v1.23.0）
 
 tablegen 标签（`required` / `unique` / `min` / `enum` / `ref`）与 cfggen 的同名选项变成一组 `configdata.FieldRule`，由 configdata 在每次加载与 reload 时对原始 JSON 检查——直接改 `configs/data` 再 `gm.config.reload` 也绕不过，删掉一个 required 列会被点名拒绝（表 / 行 / 字段 / 规则），旧快照保持；`roost generate` 与 `tablegen -check` 用同一个检查器提前反馈。热更失败（含 build 阶段）与撤回都留 Warn 日志并计入 `configdata.reload.total{result=failed}` / `configdata.rollback.total{trigger}`，`reason` 不再作指标标签。新生成的代码需要下一个版本的 core。详见 [§10 配置数据](#配置数据规则热更与可见性)。[方案](feature/B10-C2-CONFIG-RULES-AND-RELOAD-VISIBILITY-2026-10-06.md)
 
-## 2026-10-05 配置严格读取与生产校验范围（A4 / C1，main，未发版）
+## 2026-10-05 配置严格读取与生产校验范围（A4 / C1，v1.23.0）
 
 框架读取的布尔、时长、整数配置一律严格：`on` / `yes`、不带单位的时长（`ttl: 15`）、`8k` / `1.5` / `10s` 这样的整数，App 启动时（`ValidateServiceConfig`，任何 Mod Init 之前）点名报错，不再静默读成 false / 纳秒 / 0（取默认）。自己写 Mod 读配置时用 `app.ConfigBool` / `ConfigDuration` / `ConfigInt`，一次读多个键用 `app.NewConfigReader(cfg)` 读完再看 `Err()`（2026-10-07 A4 ① 起改为配置声明 + `app.LoadConfig`，`ConfigReader` 删除，见上一条）。`env: production` 只校验有读取方的设置，原先要求的 `player.login_auth_required`、`player_protocol.rate_limit.enabled`、`save_load.wal.*` 等开关已删除——它们从来不控制任何行为，生成的游戏服接入层既没有按请求限流也只有演示凭据，上线前要自己接入。详见 [§10 配置写法与启动校验](#配置写法与启动校验)。[A4 方案](feature/REFACTOR-2026-10-05-strict-config-reads.md) · [NC-192](bugfix/RR-20261005-NC-192.md)
 
-## 2026-10-05 驱动重放与超时契约（A2，main，未发版）
+## 2026-10-05 驱动重放与超时契约（A2，v1.23.0）
 
 Redis 写命令（含脚本、含写的 pipeline、DistLock）不再由驱动在回复丢失后重放：错误就是“结果未知”，命令可能已经执行。要重试，先让这次写可以安全重复执行（请求 ID、版本 CAS、值守卫令牌），或者先回读再裁决。只有错误证明命令没执行时（拨号失败、池超时、LOADING 等），驱动才会自己重发；需要在业务里做同样判断时，用 `redis/driver.IsDefinitelyNotExecuted`。读命令照常重试。写命令的返回值（SETNX 的 bool、各种计数）只在没有错误时可信。Mongo `WithTransaction` 返回的错误满足 `errors.Is(err, mongo.ErrCommitResultUnknown)` 时，表示提交已经发出、可能已经生效，要按持久回执裁决；不带这个哨兵的错误都是确定没提交。完整的驱动行为契约（会重放的命令、错误分类、ctx 替换、默认超时）见 [redis/driver/README.md](../redis/driver/README.md) 和 [mongo/driver/README.md](../mongo/driver/README.md)，新增调用点时先对照它们。[方案](feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)
 
-## 2026-10-05 HTTP 响应完整性与 TCP 接入停机（main，未发版）
+## 2026-10-05 HTTP 响应完整性与 TCP 接入停机（v1.23.0）
 
 `httpserver.JSON`（Webroute `WriteResult`、Ops 管理面同一出口）先完整编码再写状态：值里有 NaN/±Inf、channel/func 或 MarshalJSON 报错时回 500 `{"error":"encode response","ok":false}` 并记日志，而不是 2xx 空体（NC-80）。业务此时可能已经执行，客户端按幂等键核对再重试；从源头避免不可编码值（如 0/0 胜率）。Engine 的 recover 只在响应开始之前回 500；写过头/体、Flush 或 Hijack 之后 panic 会中止连接，`panic(http.ErrAbortHandler)` 保持标准库语义（NC-81）。handler 拿到的 `w` 是包装 writer，`http.Flusher`、`http.ResponseController`（Flush 的错误照常返回）和（原 writer 支持时）`http.Hijacker` 照常可用，`http.Pusher` 不透传。
 
@@ -46,23 +46,23 @@ Redis 写命令（含脚本、含写的 pipeline、DistLock）不再由驱动在
 
 Ops `/admin/execute` 给命令的 ctx 带 `ops.admin_timeout`（缺省 10s）的期限，写超时 = max(15s, admin_timeout + 5s)：配合 ctx 的命令到期回 **504**（`its effects are unknown`），按 trace_id 核对后再决定是否重试；不配合 ctx 的命令仍可能跑过写超时、客户端只看到传输错误——同样是“结果未知”，不等于没执行（2026-10-06，[方案](feature/OPS-ADMIN-TIMEOUT-2026-10-06.md)；之前没有期限、写超时固定 15s）。`ops.enabled` 时 Ops 在 Start 里 bind `ops.addr`，端口被占用即启动失败，同机多实例须各配各的端口（[NC-230](bug/RR-20261005-NC-230.md)）。Mod 的停机之外，`service.stopping` / `service.stopped` 的 lifecycle hook 也在 `shutdown.total_timeout` 内等，hook 不配合 ctx 时 App 按停机不完整保留依赖、不释放单实例锁（[NC-231](bug/RR-20261005-NC-231.md)），退出错误点名卡住的 hook（`lifecycle service.stopping hook "<名字>" did not return …`，[RR-20261006-25](bug/RR-20261006-25.md)）；停机期间发生的 fail-stop 让进程非零退出（[NC-232](bug/RR-20261005-NC-232.md)）。`gateway.RateLimit`/`security.RateLimiter` 每个主体最多 `MaxKeysPerOwner`（默认 256）个 key，单个主体变化 MessageID 只会用完自己的名额；共享表（`MaxKeys`）满时陌生 key 立即拒绝，闲置名额最多晚一个 `SweepInterval` 回收；有协议注册表时把“拒绝未注册 MessageID”放在 RateLimit 之前（[NC-82](bug/RR-20261005-NC-82.md)）。[本轮](review/REVIEW-2026-10-05-noncore-n02.md)。
 
-## 2026-10-05 App 单实例锁（main，未发版）
+## 2026-10-05 App 单实例锁（v1.23.0）
 
 `singleton.enabled=true` 的服务在任何 Mod Init 之前先拿 `<key_prefix>:<server_type>:<sid>` 的锁，别人持有就等，失锁即 fail-stop，全部 Mod 停完才释放；`RuntimeFailure.OnFail` 让任何 fail-stop 先围栏 Nest（Remote Entity fatal 从此也会围栏，行为变化）；`app.ModSingleton` 提供只读的 `Live` 活性查询。配置、行为与约束见 [§2 单实例锁](#单实例锁singleton)。codegen 生成装配与配置（方案第 2 笔）：项目有 redis Mod 或带 dataengine 的服务时 bootstrap 安装 `kitredis.SingletonStore`，带 dataengine 的服务默认 `singleton.enabled: true`。
 
-## 2026-10-04 Mongo替身事务与Redis锁接入（main，未发版）
+## 2026-10-04 Mongo替身事务与Redis锁接入（v1.23.0）
 
 NC-26～29现已修：BSON.D dotted路径可读写且保留兄弟字段，unique建立拒绝已有重复，非法bulk Type在写前拒绝。事务ctx使用私有快照，事务外Lookup/Documents/Seed只见已提交数据；集合粒度冲突可重跑callback，callback须幂等并等待自身操作结束。finished ctx不能留给后台继续写，事务内EnsureIndexes明确ErrUnsupported。完整Mongo索引/数组路径、Drop/namespace并发、未知commit/HA不由替身证明。[限制与消费者](bugfix/RR-20261004-NC-29.md)。
 
 Redis普通锁无fencing；uncertain要按token校验清理再复用。AutoExtend生命周期不绑定Acquire请求ctx，长任务保留wrapper并检查Err、最终Release；Err不是下游写权限证明。Subscribe返回不代表就绪或可靠投递，保存并独立Close每个subscription。[14新场景与学习](review/IMPLEMENTATION-REDIS-LOCK-RENEWAL-AND-PUBSUB-LIFETIME.md)；真实弱网/重连/Cluster/长期容量仍未验。
 
-## 2026-10-04 未知Lua写与Mongo替身（main，尚未发版）
+## 2026-10-04 未知Lua写与Mongo替身（v1.23.0）
 
 RefHMap全量Set和Patch遇Eval错误均不自动重放，原始原因保留errors.Is；错误不证明数据未应用。不要无条件DEL补偿或忽略超时，应按业务的权威读回/现有版本能力确认再决定恢复。普通Stale检查仍是建议性，不新增CAS/原子Get。Lua不支持的adapter需实现已有Eval接口；旧write_degraded_total和降级告警已移除，查看Set错误与T-206。[NC-21/正式生成消费](bugfix/RR-20261004-NC-21.md)。
 
 公开mongotest现在隔离嵌套BSON读结果/快照/写工作副本，_id $in每物理文档一次，整数与有限float精确比较，ReturnAfter返回同一更新/插入身份；非有限float明确unsupported。并非服务端Mongo认证：此前[D路径、唯一索引建立、非法bulk Type、并发全库rollback](bug/REVIEW-2026-10-04-noncore-16.md)四个P3已在第九批修复，使用这些场景验证业务时不能把替身成功作为上线证明。[修复矩阵](review/REVIEW-2026-10-04-noncore-15.md)。
 
-## 2026-10-04 RefHMap类型、Patch与名称（main，尚未发版）
+## 2026-10-04 RefHMap类型、Patch与名称（v1.23.0）
 
 RefHMap支持struct/单层指针根（含命名指针），nil根在KeyOf前返ErrRefHMapUnsupported；指针TextMarshaler用于值根和Patch，编码错误不写数据，历史错误编码不会自动迁移。仅scalar本身地址副本，不承诺任意引用对象深拷贝。[16](bugfix/RR-20261004-NC-16.md) · [17](bugfix/RR-20261004-NC-17.md)。
 
@@ -70,37 +70,37 @@ Patch要求已有root，nil嵌套父可原子创建引用；单一同槽Lua先�
 
 内部root物理键碰撞、根__keys、同hash字段重复和冒号/换行存储名称在I/O前拒绝；合法格式保持。旧非法布局读/删也被拒，需导出现有确定键和布局后显式迁移，不自动删/改业务数据。[19](bugfix/RR-20261004-NC-19.md)。公开mongotest分页已统一排序→Skip→Limit，但并非真实Mongo/事务隔离认证，当前[新替身问题](bug/REVIEW-2026-10-04-noncore-16.md)仍需处理。
 
-## 2026-10-04 缓存准入与旧写结果（main，尚未发版）
+## 2026-10-04 缓存准入与旧写结果（v1.23.0）
 
 ReadThrough配置FatalRemoteError后，Get遇fatal不会调用loader/发布L1，Delete遇fatal保留L1并返回原错；普通故障仍按IgnoreRemoteError策略处理，strict删除仍清L1并返回错误。Layered对L1明确stale/conflict拒绝不返回捕获旧值，而读取已准入当前值；stale且miss保持miss，conflict且miss/读回失败明确报错，拒绝不续TTL。正常TTL缓存与普通回填可用性故障保持既有行为。[NC-13](bugfix/RR-20261004-NC-13.md) · [NC-14](bugfix/RR-20261004-NC-14.md)。
 
 Local、Grouped、RedisRawJSON、RedisJSONHash的Stale拒写现在返回ErrStaleWrite，和Atomic/RedisJSON一致；仅当业务有意容忍旧写时用errors.Is显式处理，不忽略所有错误、不无条件重试。正式生成Redis DAO透传该错误。公开接口/存储格式保持；Get→Stale→Set不是Redis原子CAS，正确性依赖版本裁决时使用正式CompareAndSet能力。[NC-15/实测与兼容](bugfix/RR-20261004-NC-15.md)。
 
-## 2026-10-04 etcd setup与关闭责任（main，尚未发版）
+## 2026-10-04 etcd setup与关闭责任（v1.23.0）
 
 Campaign的caller取消/期限覆盖session创建与竞选等待；成功取得领导权后，原caller取消不结束长期session。真正的session loss/Resign仍结束领导权，敏感写必须校验fence。取消停止等待/keepalive不代表服务端租约已即时撤销，未知结果不要自动重试副作用；Resign按caller期限返回：期限先到时返回ctx错误、本地领导权已结束，lease撤销由election持有（自带5s截止，失败则等TTL），下一次Campaign等它结束（[NC-93](bugfix/RR-20261005-NC-93.md)；修复前SDK Revoke可能TTL级等待）。[NC-11](bugfix/RR-20261004-NC-11.md)。
 
 WatchCallback.CloseWithContext取消/超时只结束本次等待，同一subscription继续承担handler和底层watcher收尾；Done关闭才代表它们实际退出，可用新预算再次等待。底层watcher.Close错误现在由完成后的Close/CloseWithContext返回并通过Err保留，handler失败仍通过Err提取；干净显式关闭保持nil。第三方watcher/handler必须最终退出，callback内不无期限等自己的Done，应使用可取消等待，由外部最终排空。[NC-12](bugfix/RR-20261004-NC-12.md)。
 
-## 2026-10-04 RPC 协议与停止预算（main，尚未发版）
+## 2026-10-04 RPC 协议与停止预算（v1.23.0）
 
 JetStream无handler拒绝也使用版本1 response envelope，保持远端错误status，不按本地ErrNoHandler做errors.Is。ServiceRPC.CallDiscoveredChecked的配置timeout覆盖发现、picker与传输，较短父期限保留；独立PickServer仍使用调用方ctx，timeout/未知结果不代表业务未执行，不能自动重试副作用。
 
 RPCClient提供可选StopWithContext；取消仅结束caller等待，同一实例的唯一停止任务继续负责pending、终态callback和pool排空。Assembly.Close与KitNats保留未完成资源，使用新预算再次等待同一对象；例外是连接drain失败或超预算：连接此时已被硬关闭，Assembly.Close返回包裹原错误的终态`natsdriver.ErrClosedUndrained`（仍可`errors.Is`原ctx错误），KitNats报告该错误并释放引用，再次Stop返回nil（[RR-20261004-08](bugfix/RR-20261004-08.md)）。Close之后经nats驱动的调用（以及过了入口检查、Close先完成的调用）一律返回可`errors.Is`到`fnats.ErrClosed`的错误，`Connected()`为false；判据是驱动自己的已关闭状态，不看nats.go的连接状态（[nats/driver README §5](../nats/driver/README.md)）。业务callback必须最终退出；callback内不要用Stop/Background等待自身，采用可取消等待并由外部生命周期最终排空。旧Stop依然无期限，重复Stop现在等待同一收尾任务，不再直接返回。[三项修复与验证限制](review/REVIEW-2026-10-04-noncore-07.md)。
 
-## 2026-10-04 请求边界（main，尚未发版）
+## 2026-10-04 请求边界（v1.23.0）
 
 AllowN 超过实际 burst 的需求直接拒绝，不占 key、刷新 idle 或计作 key 容量拒绝；需要有效需求或显式 GC 维护活性。Gateway Recover 返回固定 ErrEndpointPanic，即使报告回调或失败日志 panic；同步报告仍需业务保证不永久阻塞。
 
 Codegen 与运行期 Registrar 用同一套 chi 模式语法校验（运行期 `webroute.ValidatePath`；生成器不能 import core 运行时包，内部 `validateChiPath` 直接调用 chi，两处是同一解析器的两次调用，见 RR-20261004-NC-07 复核后的补修），坏路径在写生成物前拒绝，旧生成物注册也返回 error。正常参数/正则/通配符及生成形状保留，基础路径错误文本兼容；自定义 installer 半安装后的 error 不代表外部 router 已回滚，应重建。注册用于启动阶段，不与请求并发热改 router。[三项修复与证据](review/REVIEW-2026-10-04-noncore-05.md)。
 
-## 2026-10-04 Manager / Admin / Ops 边界（main，尚未发版）
+## 2026-10-04 Manager / Admin / Ops 边界（v1.23.0）
 
 同一 Manager Engine 在确认 Provide 后只允许一次启动尝试；再次调用、Order/Start 失败后的重试或 Stop 后调用返回 ErrStartState（Kit 的 ErrManagerStartState 同值）。需要新生命周期时新建 Engine，并按业务契约准备 manager；没有 Provide 的前置失败可以补装配后启动。Stop panic 会转换为 error，清理其他对象并保留原因，但出错对象须自行保证资源退出。
 
 MetadataRegistry 在 Register/Get/List 复制 JSON schema 容器；非 JSON 自定义对象须不可变，注册过程中不要并发改输入。Ops Shutdown 取消/超时后保留 server 供再次排空，active/draining 时 Start 返回错误；成功排空后才可启新 server。[四项修复/兼容记录](review/REVIEW-2026-10-04-noncore-03.md)。
 
-## 2026-10-04 App / HTTP 使用边界（main，尚未发版）
+## 2026-10-04 App / HTTP 使用边界（v1.23.0）
 
 只有一个 Mod 时也会执行名称、依赖和环校验；不要依赖单 Mod 跳过缺失依赖检查。HTTP `Clone(WithTimeout(...))` 对库创建的 client 生效，并保留父实例配置；显式 `WithHTTPClient` 的 Timeout 优先，由调用者配置，Clone 不会重配外部 client。Transport 仍可共享连接池。
 
@@ -334,9 +334,9 @@ Guard 锁账本按 ID（REMAINING §3 N27，维护者 2026-09-30 定为契约）
 
 ## 5. Commit、Load 与主动 Flush
 
-Data Engine 是唯一保存入口。字段变化先进入当前 Nest transaction，再作为版本化 Put/Patch/Delete 写入 WAL；Mongo version CAS 防止旧写覆盖新状态。WAL/Projector backlog 有硬容量和年龄上限，超过门禁触发 runtime failure，而不是无限堆内存。
+Data Engine 是唯一保存入口。字段变化先进入当前 Nest transaction，再作为版本化 Put/Patch/Delete 写入 WAL；Mongo version CAS 防止旧写覆盖新状态。WAL 磁盘占用与未确认年龄超限会报告健康失败；投影未 ack 条数达到配置硬上限时拒绝新准入（0 表示不限）；outbox 硬上限触发 fence。三者不能当作同一种 runtime failure。
 
-主动刷盘使用 Registry 中的 Data Engine 能力调用 `Flush(ctx)`。典型时机：停机、迁服、运维检查和版本升级。不要为每个普通请求 Flush，否则会破坏 group commit/批 projection 吞吐；需要强确认的业务选择 Nest strict durability。
+主动刷盘使用 Registry 中的 Data Engine 能力调用 `Flush(ctx)`。典型时机：停机、迁服、运维检查和版本升级。不要为每个普通请求 Flush，否则会破坏 group commit/批 projection 吞吐；需要 WAL 持久确认的业务选择 Nest strict durability；strict 的成功不代表 Mongo 投影或 outbox 投递完成。
 
 Load 只接受完整聚合快照。迁移函数必须幂等、可测试并携带 schema version；加载失败不允许生成“空玩家”覆盖旧数据。
 
@@ -643,7 +643,7 @@ nest.NestOptionWithWorkerPools(
 )
 ```
 
-Kit 对应 `nest.fast.workers`、`nest.fast.queue_capacity`、`nest.slow.workers`、`nest.slow.queue_capacity`。容量是整池等待总数，包括等待 ID 前驱的消息，排除执行中的请求和已预留执行额度的就绪请求；内部快延续单独计数。默认快并发 GOMAXPROCS、容量 10000；慢并发 max(32, 快并发×4)、容量 64。旧 `worker_num/queue_capacity/remote_workers` 仍作为未设置新值时的来源，`heartbeat_worker_num` 不再创建单独池，旧 `SendOptionIsCost()` 等同 `SendOptionSlow()`。冷目标不再需要手工加 Slow：Nest 在统一准入时对 Single/Multi/MultiGroup 的声明目标做一次只读内存判定（Getter 可选实现的 `entity.LoadedChecker.IsLoaded`，`ManagerAccess` 已实现，不调用 `Get`，RR-20260926-47），有未加载且可由 loader 加载的目标就走慢阶段预加载，业务代码和生成 sender 不变；Broadcast 仍按已加载目标尽力扇出，冷目标逐个报告。显式 Slow 仍有效，用于强制慢准备。handler 内部阻塞 RPC 必须显式拆为前置 I/O，无法自动迁移。
+Kit 对应 `nest.fast.workers`、`nest.fast.queue_capacity`、`nest.slow.workers`、`nest.slow.queue_capacity`。容量是整池等待总数，包括等待 ID 前驱的消息，排除执行中的请求和已预留执行额度的就绪请求；内部快延续单独计数。默认快并发 GOMAXPROCS、容量 10000；慢并发 max(32, 快并发×4)、容量 64。旧 `worker_num/queue_capacity/remote_workers` 仍作为未设置新值时的来源，`heartbeat_worker_num` 已删除（v1.23.1 起），心跳走统一快池，旧 `SendOptionIsCost()` 等同 `SendOptionSlow()`。冷目标不再需要手工加 Slow：Nest 在统一准入时对 Single/Multi/MultiGroup 的声明目标做一次只读内存判定（Getter 可选实现的 `entity.LoadedChecker.IsLoaded`，`ManagerAccess` 已实现，不调用 `Get`，RR-20260926-47），有未加载且可由 loader 加载的目标就走慢阶段预加载，业务代码和生成 sender 不变；Broadcast 仍按已加载目标尽力扇出，冷目标逐个报告。显式 Slow 仍有效，用于强制慢准备。handler 内部阻塞 RPC 必须显式拆为前置 I/O，无法自动迁移。
 
 `NestMgr.Stats().Fast/Slow/FastContinuations` 和 statslog 的 `nest.fast/nest.slow` 输出两池及内部延续；旧 `Stats().Remote` 只是 Slow 的源码兼容别名。可选 stage metrics 的 `remote_prepare`、`logic_queue`、`remote_confirm` 分别定位获取、逻辑排队和后置确认。停机关闭外部准入，两池保持运行直到已接受工作和内部延续全部排空；strict 请求仍在确认完成后返回，WAL 持久准入保留锁内契约。
 
@@ -747,3 +747,13 @@ Projected 是成功投影尝试数，成功但未 ack 的后缀重放后会再�
 - entitysync 新增 `Manager.RegisterAfterRetirement(state, done)`：subject 仍在退役（Leave 之后观察者还欠 ObjectRemove）时把登记排到退役完成，不再返回 `ErrSubjectRetiring`；每个 subject 至多一个排队，再次 `Unregister`、被替换、状态关闭或 Manager 关闭时 done 收到取消。`entitysync.SessionOpenRetryable(err)` 判断 OpenSession 的“稍后重试”错误。game-demo 的 scene 用它们让同 tick 内的快速重连进入复制场景，会话打开遇“旧会话仍在关闭”按 25ms 起翻倍、上限 1s、至多 8 次重试（[RR-20260926-55](bugfix/RR-20260926-55.md)）。
 - （2026-09-27）卸载后重载不了、框架退回 remove 的实体（RR-59）重新登记后，`policy.Interest` / `Group` / `Direct` 自动重新提交仍持有的订阅：观察者仍在 AOI / 组内 / 仍绑定时恢复可见（先 remove、再 create），缺席期间已离开或解绑的不恢复；自建政策用 `Manager.NewSubscriptionSourceWithResubmit` 接入，直接 `Manager.Subscribe` 的订阅不恢复（[RR-20260926-70](bugfix/RR-20260926-70.md)）。重新登记后、政策重新提交之前实体又被退回 remove 时，这些订阅在下一次重新登记后照样恢复（[RR-20260926-78](bugfix/RR-20260926-78.md)）。`policy.Direct` 的绑定在会话关闭（含传输失败）或业务 `Unregister` 该实体后随下一次 Flush 删除，不再随历史绑定数增长；会话关闭时实体恰好缺席的绑定不会在实体重新登记后落到同 ID 重开的新连接上（需要继续观看就重新 `Bind`）。自建政策可用 `Manager.NewSubscriptionSourceWithHooks` 的 `Released` 回调得到同样的通知（[RR-20260926-79](bugfix/RR-20260926-79.md)），并用 `SubscribeStamped` 返回的戳与 `ReleasedSubscription.Stamp` 比较、只删除更早的簿记：通知途中在同 ID 重开的会话或重新登记的实体上重新 `Bind`、随后又被退回 remove 的 `Direct` 绑定不再被旧通知删掉，实体重新登记后照常恢复（[RR-20260926-85](bugfix/RR-20260926-85.md)）。卸载退役中调用 `RegisterAfterRetirement` 现在返回 `queued=true` 并由 done 报告结果（[RR-20260926-72](bugfix/RR-20260926-72.md)）。同一状态在退役收尾窗口里重新登记不再丢失脏通知器（[RR-20260926-69](bugfix/RR-20260926-69.md)）。
 - syncbus 的 JetStream 流名缺省由 `syncbus.prefix` 派生：`roost.sync`（生成配置）与未配置 prefix 时仍为 `ROOST_SYNC`，其他 prefix 各得其流（`zz3640.sync` → `ZZ3640_SYNC`），`syncbus.stream` 显式配置优先，启动日志 `syncbus mod: started` 输出 `prefix` 与 `stream`。**升级注意**：写了非默认 prefix 却没写 stream 的 JetStream 部署会换到派生的新流；旧 `ROOST_SYNC` 仍占着该 prefix 的 subjects 时启动报 subjects overlap——要沿用旧流与 durable 游标就写 `syncbus.stream: ROOST_SYNC`，要迁移就先确认旧流已消费完（[RR-20260926-56](bugfix/RR-20260926-56.md)）。
+
+### v1.23.1：生成 pipelined handler 与保留期校验
+
+`//roost:nest ... rollback=undo durability=pipelined` 可直接生成注册元数据，仍须配置 `nest.pipelined.allowlist` 并装配支持 ticket 的 committer。async 只等 WAL 写入，不等 fsync；strict 等 WAL fsync，不等 Mongo 投影；pipelined 准入后先解锁，完成回复与同步可见性再等 durable ticket。
+
+`NestOptionWithWorkerNumAndMsgCap(workers, capacity)` 和 `NewDispatcher(name, workers, capacity, handler)` 删除了无效的心跳 worker 参数；新代码优先使用 `NestOptionWithWorkerPools`。
+
+`dataengine.transaction_receipt_ttl` 按 Mongo 整秒精度必须大于 `dataengine.wal.max_unacked_age`（0 取 24h）。默认 720h 不变。后者只是健康阈值，不会使旧 WAL 失效；超出事务标记保留期的停机 / 积压必须先核对持久状态，禁止盲目重放。
+
+App 的启动回调共用 `startup.timeout`（默认 2m），较长恢复需显式调大。启动信号不再等到 Service.Init 之后才处理。回调超时或被中断但尚未退出时，App 返回错误并保留其依赖，不主动释放单实例锁；调用方应退出进程，不能复用该 App。锁获取本身仍受 `singleton.startup_wait` 控制。
