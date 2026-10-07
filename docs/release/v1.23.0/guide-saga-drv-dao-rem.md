@@ -3,9 +3,9 @@
 v1.19.2 → v1.23.0 双文档的“说明”部分，覆盖四个主题：saga 最终性（SAGA）、Redis / Mongo 驱动契约（DRV）、回滚统一走 DAO（DAO）、remoteentity 快照缓存与 Mirror（REM）。
 写给维护者阅读，也让 review agent 能按编号定位。每条的代码位置、不变量、测试与 review 检查点在实现文档 [impl-saga-drv-dao-rem.md](impl-saga-drv-dao-rem.md) 的同编号条目里。
 
-- **基准**：main `37338490`（初稿基于 `02c8a10d`，曾按冻结提交 `e6828e4f` 重核；之后合入的 `055a15d6`、`41bdb9e5` 不涉及本部分代码，行号按 `37338490` 再核）；“v1.23.0（本版）”指 v1.22.0 之后的提交。
+- **基准**：代码冻结点 `5e72ca4d`（2026-10-07，之后只允许文档改动；初稿基于 `02c8a10d`，曾按 `e6828e4f`、`37338490` 重核）；“v1.23.0（本版）”指 v1.22.0 之后的提交。本轮按冻结点补写 SAGA-16 / 17、DRV-7 / 8、REM-15，nats/driver 自持关闭状态与 RR-20261006-24 / -26 并入 DRV-5。
 - **原话**：维护者原话以 [DECISIONS-PENDING](../../review/DECISIONS-PENDING-2026-10-05.md) 各轮“维护者决定”表为准，feature 记录里有更完整的原话时一并引用。
-- **不在本部分**：App 单实例锁 / 停机 / readyz（APP）、业务时钟（CLK）、严格配置 A4 / B10（CFG）、skill 编译器（SKILL）、N01～N15 非核心修复（NONCORE）、Ops 与指标（OPS）、门禁脚本（TOOL）。
+- **不在本部分**：App 单实例锁 / 停机 / readyz（APP）、业务时钟（CLK）、严格配置 A4 / A4 ① 每 Mod 配置声明 / B10（CFG；本部分的配置键只写键本身，类型与范围的检查方式见 CFG）、skill 编译器（SKILL）、N01～N15 非核心修复（NONCORE）、Ops 与指标（OPS）、门禁脚本（TOOL）。
 
 ## 一页总览
 
@@ -18,7 +18,7 @@ v1.19.2 → v1.23.0 双文档的“说明”部分，覆盖四个主题：saga �
 | v1.20.2 | `c85d4565` | 2026-10-06 | [SAGA-4](#saga-4)、[SAGA-6](#saga-6)、[DRV-3](#drv-3)、[DAO-1](#dao-1)、[REM-1](#rem-1) |
 | v1.21.0 | `4881f2b7` | 2026-10-06 | [SAGA-7](#saga-7)、[SAGA-8](#saga-8)、[SAGA-9](#saga-9)、[SAGA-10](#saga-10)、[DAO-2](#dao-2)、[REM-2](#rem-2)、[REM-3](#rem-3)、[REM-4](#rem-4)、[REM-5](#rem-5)、[REM-6](#rem-6) |
 | v1.22.0 | `9bf690fb` | 2026-10-06 | [REM-7](#rem-7)、[REM-8](#rem-8) |
-| v1.23.0（本版） | `37338490`（main，本文基准；tag 由发版提交打） | 2026-10-06 | [SAGA-5](#saga-5)、[SAGA-11](#saga-11)、[SAGA-12](#saga-12)、[SAGA-13](#saga-13)、[SAGA-14](#saga-14)、[SAGA-15](#saga-15)、[DRV-4](#drv-4)、[DRV-5](#drv-5)、[DRV-6](#drv-6)、[DAO-3](#dao-3)、[DAO-4](#dao-4)、[REM-9](#rem-9)、[REM-10](#rem-10)、[REM-11](#rem-11)、[REM-12](#rem-12)、[REM-13](#rem-13)、[REM-14](#rem-14) |
+| v1.23.0（本版） | `5e72ca4d`（代码冻结点，本文基准；tag 由发版提交打） | 2026-10-07 | [SAGA-5](#saga-5)、[SAGA-11](#saga-11)、[SAGA-12](#saga-12)、[SAGA-13](#saga-13)、[SAGA-14](#saga-14)、[SAGA-15](#saga-15)、[SAGA-16](#saga-16)、[SAGA-17](#saga-17)、[DRV-4](#drv-4)、[DRV-5](#drv-5)、[DRV-6](#drv-6)、[DRV-7](#drv-7)、[DRV-8](#drv-8)、[DAO-3](#dao-3)、[DAO-4](#dao-4)、[REM-9](#rem-9)、[REM-10](#rem-10)、[REM-11](#rem-11)、[REM-12](#rem-12)、[REM-13](#rem-13)、[REM-14](#rem-14)、[REM-15](#rem-15) |
 
 ### 主题地图
 
@@ -30,22 +30,22 @@ flowchart LR
   REM -. 墓碑 WAIT / 选举重试 .-> DRV
 ```
 
-- **DRV** 是底座：驱动不再自动重放写命令，“确定没执行”才重发，提交结果未知用专用哨兵报给调用方。SAGA 的 Mongo 收件箱、REM 的 L2 写入都按这个口径分类错误。
-- **SAGA** 收紧“同一步骤操作最多生效一次”：先是原生步骤（U-0280），再是协调器按代际收 completion（B1），然后把“离开当前步骤”收成一个出口（方向①），再让 Mongo 步骤走同一套收件箱契约（方向②），代价是每次尝试两次落盘提交，维护者接受；发版前把收件箱存储改为每个操作一份状态文档（第十三轮），判定只读一份文档，契约与延迟不变、尝试次数不再影响判定。
+- **DRV** 是底座：驱动不再自动重放写命令，“确定没执行”才重发，提交结果未知用专用哨兵报给调用方。SAGA 的 Mongo 收件箱、REM 的 L2 写入都按这个口径分类错误。本版 versionstore 在 store 内按一次性写令牌把多数“结果未知”核对成确定结果（A2 ③）；驱动的 Close 统一为一套口径，nats 改为驱动自持唯一的已关闭状态。
+- **SAGA** 收紧“同一步骤操作最多生效一次”：先是原生步骤（U-0280），再是协调器按代际收 completion（B1），然后把“离开当前步骤”收成一个出口（方向①），再让 Mongo 步骤走同一套收件箱契约（方向②），代价是每次尝试两次落盘提交，维护者接受；发版前把收件箱存储改为每个操作一份状态文档（第十三轮），判定只读一份文档，契约与延迟不变、尝试次数不再影响判定；最后做了方向 ③④：协调器只接收正在等的那次尝试的可重试失败，放弃之后迟到生效的正向步骤由协调器补偿这一步（`Failed` / `Compensated` 可被重开，维护者选 A，配套重开的指标与日志）。
 - **DAO** 是 Nest 事务回滚的统一口径：组件的可回滚状态一律进 DAO；skill Runtime 是写明的例外；buff 投影经组件入口写进 DAO；glsvet 对组件自己登记 undo 与写非 DAO 字段给提示。
-- **REM** 先定水位权威（共享 L2，B2），再按 Mirror 方案补只读契约、共享 SnapshotClient、可确认订阅、首载缓冲、兴趣代际与配额、kit 装配与 codegen，最后是本机替代实测与三条观察（O-M6-1 / 3 / 6）。
+- **REM** 先定水位权威（共享 L2，B2），再按 Mirror 方案补只读契约、共享 SnapshotClient、可确认订阅、首载缓冲、兴趣代际与配额、kit 装配与 codegen，最后是本机替代实测与三条观察（O-M6-1 / 3 / 6）；本版同步总线的退订本身排空（A3 ②），复制器不再自带准入门。
 
 ### 条目总表
 
 | 编号 | 一句话 | 首发 | 行为变化 / 兼容破坏 | 需业务改动 |
 | --- | --- | --- | --- | --- |
 | [SAGA-1](#saga-1) | 过期且无回执的原生步骤命令直接 ack，不再无限 nak 占满共享 durable（U-0281） | v1.20.1 | 是（nak → ack） | 否 |
-| [SAGA-2](#saga-2) | 原生步骤操作实例收件箱：同一操作最多生效一次、租约封顶到命令截止、放弃后迟到成功告警，含两处复核修复（U-0280） | v1.20.1 | 是（跨尝试回放 / 等待 / 接替；投影积压时步骤停住；收件箱存储本版改为每个操作一份状态文档，见 SAGA-14） | 否（运维按 T-226 处置告警） |
+| [SAGA-2](#saga-2) | 原生步骤操作实例收件箱：同一操作最多生效一次、租约封顶到命令截止、放弃后迟到成功告警，含两处复核修复（U-0280） | v1.20.1 | 是（跨尝试回放 / 等待 / 接替；投影积压时步骤停住；收件箱存储本版改为每个操作一份状态文档，见 SAGA-14；放弃后迟到的正向成功本版改为由协调器补偿，见 SAGA-16） | 否（运维按 T-226 处置补偿方向的告警） |
 | [SAGA-3](#saga-3) | 步骤超时与重试预算由配置 `saga.step_defaults` / `saga.steps` 提供 | v1.20.1 | 是（零值预算由 `Register` 补齐；写错配置 `Init` 失败） | 否（可选配置） |
 | [SAGA-4](#saga-4) | 步骤覆盖原样查不到时按小写回退（RR-20261005-NC-194） | v1.20.2 | 是（无定义时大小写混写的覆盖开始生效） | 否 |
 | [SAGA-5](#saga-5) | 步骤预算拒绝只差大小写的类型 / 步骤名（RR-20261006-06，收尾 A12） | v1.23.0（本版） | 是，收紧（这类命名启动失败） | 仅有这类命名的工程要改名 |
-| [SAGA-6](#saga-6) | 协调器接收 completion 时核对代际、迟到告警去重、补偿方向人工 Compensate 换代（B1） | v1.20.2 | 是，收紧 | 否（运维：补偿方向 `ManualRequired` 用 `Resume`） |
-| [SAGA-7](#saga-7) | 定义缺失 fence 时退避中的步骤同样记为放弃（RR-20261005-NC-250） | v1.21.0 | 是（迟到成功由丢弃改为 ack + 告警） | 否 |
+| [SAGA-6](#saga-6) | 协调器接收 completion 时核对代际、迟到告警去重、补偿方向人工 Compensate 换代（B1） | v1.20.2 | 是，收紧（同一生内的接收规则本版再由 SAGA-16 ③ 收紧） | 否（运维：补偿方向 `ManualRequired` 用 `Resume`） |
+| [SAGA-7](#saga-7) | 定义缺失 fence 时退避中的步骤同样记为放弃（RR-20261005-NC-250） | v1.21.0 | 是（迟到成功由丢弃改为 ack + 告警；本版正向的迟到成功改为补偿，见 SAGA-16） | 否 |
 | [SAGA-8](#saga-8) | 离开当前步骤收成一个转移 `stepTransition` + 守卫测试与补漏（saga 方向 ①） | v1.21.0 | 否（唯一差异在正常不可达路径） | 否 |
 | [SAGA-9](#saga-9) | Mongo 步骤纳入操作实例收件箱（两事务；本版状态文档集合 `<收件箱集合>_operations`，v1.21.0～v1.22.0 是 `_claims`），结果消费者终态分类统一（saga 方向 ②、O-S5-1、O-S5-3） | v1.21.0 | 是（Mongo 步骤延迟约翻倍；新集合；普通结果流 Term 4 种错误） | 业务：事务外副作用仍需按 `IdempotencyKey` 幂等；运维：建议 `transactionLifetimeLimitSeconds=20` |
 | [SAGA-10](#saga-10) | `ErrDefinitionMissing` 改为可重试 nak；回执撞键时回放不交还租约列为观察 | v1.21.0 | 是（Term → nak 退避） | 否 |
@@ -54,12 +54,16 @@ flowchart LR
 | [SAGA-13](#saga-13) | 真实 NATS 上 nak 退避 / `MaxDeliver` 实测，`TestAssemblyConsumesNativeNestCompletionEffects` 偶发失败根因 | v1.23.0（本版） | 否（只改测试） | 否 |
 | [SAGA-14](#saga-14) | 步骤收件箱改为每个操作一份状态文档：判定只读这一份，尝试次数与 Resume 次数不再进入判定（维护者第十三轮决定；取代 RR-20261006-15 / -16 的修法） | v1.23.0（本版） | 是，**不兼容**：存储形状改变，不读旧 claims 集合，不支持与旧步骤进程混跑；契约与延迟不变 | 运维：步骤服务先停旧再起新（原生步骤进程先排空 WAL），丢弃旧 claims 集合；业务无需改 |
 | [SAGA-15](#saga-15) | `stepTransition` 改为 Engine 方法、自己写 Store；守卫改为 `go/types` 全包检查（RR-20261006-14） | v1.23.0（本版） | 否（每个出口写入的请求与之前逐字段相同） | 否 |
+| [SAGA-16](#saga-16) | saga 方向 ③④：协调器只接收正在等的那次尝试的可重试失败（③，O-S5-7）；放弃之后迟到生效的正向步骤由协调器补偿这一步，`Failed` / `Compensated` 可被重开（④，U-0280 方向 C，维护者第十三轮选 A） | v1.23.0（本版） | 是：较早尝试晚到的可重试失败不再推进记录；放弃后迟到的正向成功由“只告警”改为自动补偿，终态可被重开回 `Compensating`；`Record` 多 `LateStep` / `LateData`（Mongo `late_step` / `late_data`） | 业务：按终态做的动作按 saga id 幂等、读到终态记下 `Version`（T-292）；自定义 Store 要持久化两个新字段 |
+| [SAGA-17](#saga-17) | 重开可观测：`saga.reopened_total{saga_type,from_status,reason}`、`Stats().Reopened`、每次重开一条 WARN、迟到那一步补完一条 INFO（维护者第十三轮“允许重开、补指标与日志”的配套） | v1.23.0（本版） | 否（只增指标、日志与健康消息字段 `reopened=`） | 运维：认识新指标与日志（T-292） |
 | [DRV-1](#drv-1) | Redis 脚本（Eval / EvalSha / EvalBatchDurable）回复丢失不再被驱动重放，一次调用至多执行一次（RR-20261005-NC-100） | v1.20.1 | 是（收紧）：脚本回复丢失返回传输错误 | 否 |
 | [DRV-2](#drv-2) | `mongo.transaction_timeout` 端到端约束事务含提交；EndSession 补发的 abort 有 5s 上限；退避中到期保留最后一次事务错误（RR-20261005-NC-101） | v1.20.1 | 是：分区时更早返回错误，该错误可能已提交 | 否 |
 | [DRV-3](#drv-3) | A2：Redis 写 / 含写 pipeline / EvalBatchDurable / DistLock 不经驱动重放，只在 `IsDefinitelyNotExecuted` 时重发；Mongo 提交后失败包 `ErrCommitResultUnknown`；契约表进仓 | v1.20.2 | 是（收紧）：写命令回复丢失返回结果未知；Mongo 错误文本多前缀 | 否（新增调用点按契约表 §6 核对） |
 | [DRV-4](#drv-4) | O-M6-3：L2 墓碑写入后同连接 WAIT 副本（驱动能力 `EvalReplicated`），只计数 / Warn 不回滚；新键 `snapshot_l2_tombstone_wait_replicas` / `_timeout` | v1.23.0（本版） | 是：删除 Remote 实体最多多等 50ms（缺省） | 否（运维可调键） |
-| [DRV-5](#drv-5) | 驱动与 Mod 的 Close 统一口径：重复 Close 返回 nil、并发后到者等第一个、关闭后返回已关闭错误；`operation.Serial`（第十二轮 + RR-20261006-10） | v1.23.0（本版） | 是：单机 Redis 重复 Close 改为 nil；etcd 关闭后立即 `ErrClosed`；DistLock 遇 `ErrClosed` 不再记未知 | 依赖“第二次 Close 报错”的调用方需改判断 |
+| [DRV-5](#drv-5) | 驱动与 Mod 的 Close 统一口径：重复 Close 返回 nil、并发后到者等第一个、关闭后返回已关闭错误；`operation.Serial`；nats/driver 自持唯一的“已关闭”状态（第十二轮 + RR-20261006-10 / -24 / -26 + 第十三轮方向调整） | v1.23.0（本版） | 是：单机 Redis 重复 Close 改为 nil；etcd 关闭后立即 `ErrClosed`；DistLock 遇 `ErrClosed` 不再记未知；nats 关闭后每个导出方法都 `errors.Is(fnats.ErrClosed)`、`Connected()` 为 false | 依赖“第二次 Close 报错”或按 nats.go 原错误判断的调用方需改判断 |
 | [DRV-6](#drv-6) | O-M6-5：启动建索引遇 Mongo 换主错误码有界重试（每个索引 10 次 × 1s） | v1.23.0（本版） | 是：撞上选举时启动变慢而非失败 | 否 |
+| [DRV-7](#drv-7) | A2 ③：versionstore 每次写在信封里带一次性令牌，回复丢失时 store 读一次按令牌核对（已生效返回那次结果 / 没执行原样重发 / 被别人抢先当比输），证明不了返回 `ErrOutcomeUnknown`；`Resume` 续核；墓碑维护者选 A 不加 | v1.23.0（本版） | 是，**不兼容**：信封格式改变，升级需清空 versionstore 的键（T-291）；回复丢失多数变为确定结果，剩下的错误多一层 `ErrOutcomeUnknown` | 运维：先停旧进程、清空 versionstore 键再起新版本；业务无需改代码（可选用 `Resume`） |
+| [DRV-8](#drv-8) | RR-20261006-35：带索引的 compare-and-set 在发出前拒绝 NaN 分数，不再“值写入、索引不动、返回错误” | v1.23.0（本版） | 是，收紧：NaN 分数返回 `ErrCASInvalidCommand`、什么都不写 | 否（仓内分数都由整数时间换算） |
 | [DAO-1](#dao-1) | A1：回滚统一走 DAO，组件不再持有可回滚状态、不再登记 undo；`nopersist,nosync` 字段有 mutator；glsvet A1 提示 | v1.20.2 | 是（规范）：组件写法改变；生成 DAO 只增方法；持久格式不变 | 新组件按规范；已生成工程不迁移 |
 | [DAO-2](#dao-2) | B4：skill Runtime 状态不进事务，写成约束 + 守卫测试 | v1.21.0 | 否（代码行为不变） | 是（设计约束）：先校验后推进 Runtime，扣费交给 Runtime commit |
 | [DAO-3](#dao-3) | combatcomponent 属性投影入口 `ProjectAttributes`：投影写 DAO vitals，随 DAO 回滚 | v1.23.0（本版） | 只新增 API；装了投影后被投影字段以投影为准 | 想让 buff 影响伤害的业务写投影函数 |
@@ -78,6 +82,7 @@ flowchart LR
 | [REM-12](#rem-12) | Redis Cluster 迁槽 ASK / MOVED 下 L2 读写与墓碑 WAIT 实测；mirror-local Cluster 就绪判定补“每个主节点有 online 副本” | v1.23.0（本版） | 否 | 否 |
 | [REM-13](#rem-13) | 生成配置写出 `remote_entity` 五个新键；生产化不再把墓碑 WAIT 副本数改成 3 | v1.23.0（本版） | 否（只影响新生成工程） | 否 |
 | [REM-14](#rem-14) | 兴趣表满时 release 改记每个 consumer 一个的溢出水位，迟到的旧续租不再复活已撤销的租约（RR-20261006-11） | v1.23.0（本版） | 是，收紧（只在表满时：之前会复活的旧续租现在被忽略） | 否 |
+| [REM-15](#rem-15) | A3 ②：排空下沉到同步总线——`Subscribe` / `SubscribeLive` 返回 `*syncbus.Subscription`，`Unsubscribe(ctx)` 本身是三步停机，handler 带投递 ctx；`mirror.Replicator` 删掉自带的准入门；修 RR-20261006-36（`PatchSyncer` / `ReplicaSyncer` / `syncstream` 停止不等在途回调） | v1.23.0（本版） | 是，**API 破坏**：`syncbus.Handler` 加 ctx、订阅返回 `*Subscription`、`PatchSyncer.Stop` / `ReplicaSyncer.Stop` 改为 `Stop(ctx) error`；停止在回调返回前不报完成 | 自己实现 `ISyncBus` 或直接用这些 API 的代码按新签名改（仓内已全部迁移）；handler 里退订自己必须传入它收到的投递 ctx |
 
 ### 行为变化 / 兼容破坏
 
@@ -86,12 +91,12 @@ flowchart LR
 **SAGA**
 
 - [SAGA-1](#saga-1)：运维无需改动；旧版本残留在 durable 里的过期旧尝试，升级后第一次投递即被 ack。
-- [SAGA-2](#saga-2)：运维要认识新告警 `saga.completion.late_after_abandon_total{saga_type,phase}` 与 ERROR `saga: step succeeded after the coordinator abandoned it; the effect is not compensated`，按 TROUBLESHOOTING T-226 核对业务数据（Failed 且无完成步骤可 `Resume`，否则手工撤销）。投影积压超过步骤 `Timeout` 时步骤会停住而不是重复执行：调大 `Timeout` 或解决 Mongo 变慢，不要调大 `LeaseDuration`。本版收件箱存储改为每个操作一份状态文档、不兼容旧格式，升级步骤见 [SAGA-14](#saga-14)。业务（已生成工程）无需改动。
-- [SAGA-3](#saga-3)：生成工程可在服务配置里写 `saga.step_defaults` / `saga.steps.<type>.<step>`；`saga.steps` 写错类型 / 步骤 / 字段、取值越界或时长不带单位时启动失败。已生成工程 `definition.go` 里写死的预算照旧生效，配置覆盖优先。
+- [SAGA-2](#saga-2)：运维要认识告警 `saga.completion.late_after_abandon_total{saga_type,phase}`：v1.20.1～v1.22.0 是 ERROR `saga: step succeeded after the coordinator abandoned it; the effect is not compensated`，按 TROUBLESHOOTING T-226 核对业务数据（Failed 且无完成步骤可 `Resume`，否则手工撤销）；本版起正向的迟到成功由协调器补偿（WARN `...; compensating it`，见 SAGA-16），ERROR 只剩补偿方向（`...; the coordinator cannot account for it`），按 T-226 核对后 `Resume`。投影积压超过步骤 `Timeout` 时步骤会停住而不是重复执行：调大 `Timeout` 或解决 Mongo 变慢，不要调大 `LeaseDuration`。本版收件箱存储改为每个操作一份状态文档、不兼容旧格式，升级步骤见 [SAGA-14](#saga-14)。业务（已生成工程）无需改动。
+- [SAGA-3](#saga-3)：生成工程可在服务配置里写 `saga.step_defaults` / `saga.steps.<type>.<step>`；`saga.steps` 写错类型 / 步骤 / 字段、取值越界或时长不带单位时启动失败（本版 A4 ① 起字段的类型与范围由 saga Mod 的配置声明检查，报错以 `config: <键>` 开头，见 CFG 部分）。已生成工程 `definition.go` 里写死的预算照旧生效，配置覆盖优先。
 - [SAGA-4](#saga-4)：无需改动；以前静默不生效的大小写混写覆盖现在生效（实际预算可能因此改变）。
 - [SAGA-5](#saga-5)：注册了只差大小写的 saga 类型名或步骤名的工程，saga Mod 启动失败，需改名。
-- [SAGA-6](#saga-6)：运维——补偿方向 `ManualRequired` 修复原因后用 `Resume`（`Compensate` 在这种状态下等价，进入新一生）；新指标 `saga.completion.stale_incarnation_total{saga_type,phase}` 是 Resume 之后的正常现象，不是故障。自定义 Store 可选实现 `LateSuccessAlarmStore`，否则每次送达都告警。
-- [SAGA-7](#saga-7)：无需改动。
+- [SAGA-6](#saga-6)：运维——补偿方向 `ManualRequired` 修复原因后用 `Resume`（`Compensate` 在这种状态下等价，进入新一生）；新指标 `saga.completion.stale_incarnation_total{saga_type,phase}` 是 Resume 之后的正常现象，不是故障（本版另有同一生的 `saga.completion.stale_attempt_total`，见 SAGA-16）。自定义 Store 可选实现 `LateSuccessAlarmStore`，否则每次送达都告警。
+- [SAGA-7](#saga-7)：无需改动；本版正向的迟到成功改为补偿（SAGA-16）。
 - [SAGA-8](#saga-8)：无需改动；在 saga 包里新增协调器写记录的出口必须经 `stepTransition`，否则守卫测试失败。
 - [SAGA-9](#saga-9)：业务——Mongo 步骤 handler 的业务写必须经传入的事务 ctx，才享有“同一操作最多一次”；调用别的服务的步骤仍要按 `IdempotencyKey` 幂等。运维——状态文档集合 `<收件箱集合>_operations`（本版；启动时自动建 TTL 索引；v1.21.0～v1.22.0 是 `<收件箱集合>_claims`）；Mongo 服务端建议 `transactionLifetimeLimitSeconds=20`；Mongo 步骤吞吐约为之前的一半，按业务量评估。直接调用 `MongoCommandInbox.Handle` 的代码会多看到 `ErrCommandExpired` 与可重试的在途错误。
 - [SAGA-10](#saga-10)：无需改动；配置错误导致定义永不注册时，结果消息在步骤超时前按 nak 退避重投、占一个 `MaxAckPending` 位。
@@ -100,6 +105,8 @@ flowchart LR
 - [SAGA-13](#saga-13)：无。
 - [SAGA-14](#saga-14)：**不兼容**。收件箱存储形状改变：原生 `_dataengine_step_operations`、Mongo 步骤 `<收件箱集合>_operations`（只有 TTL 索引），旧 `_dataengine_inbox_claims` / `<收件箱集合>_claims` 不再读写；不支持与 v1.22.0 及以前的步骤进程混跑。运维——步骤服务先停旧再起新：停掉全部旧步骤进程（原生步骤进程先排空 WAL），丢弃旧 claims 集合（`db.<name>.drop()`），再起新进程；协调器的升级顺序不受影响。`dataengine.fence.skipped.total` 的 `resource` 标签变为 `_dataengine_step_operations`。契约、延迟与回执格式不变。
 - [SAGA-15](#saga-15)：无（只影响 saga 包内部结构与守卫）。
+- [SAGA-16](#saga-16)：**行为变化**。同一生里较早尝试晚到的可重试失败不再推进记录（计 `saga.completion.stale_attempt_total{saga_type,phase}` / `Stats().StaleAttempt`，WARN，正常现象）。放弃之后迟到生效的**正向**步骤由协调器在同一事务里记回执并补偿这一步：`Failed` / `Compensated` 会被重开回 `Compensating`、补完回到 `Compensated`；某个补偿在途时等它结束再补；`ManualRequired` 只记下、运维 `Resume` / `Compensate` 时先补。补偿方向的迟到成功仍只告警（ERROR）。`saga` 记录在有待补偿的迟到步骤时多 `late_step` / `late_data`（`omitempty`）；自定义 Store 要原样保存 `Record.LateStep` / `LateData`，没实现 `CompletionHistoryStore` 的 Store 迟到步骤不会被补偿。线上未部署，不做兼容。
+- [SAGA-17](#saga-17)：只增：指标 `saga.reopened_total{saga_type,from_status,reason}`、`Stats().Reopened`、kit saga 健康消息末尾 `reopened=<n>`；每次重开一条 WARN、迟到那一步补完一条 INFO。`Stats()` 的终态计数按“到达终态的次数”计，重开的 saga 会再计一次。
 
 **DRV**
 
@@ -107,8 +114,10 @@ flowchart LR
 - [DRV-2](#drv-2)：运维注意网络分区下事务在 `mongo.transaction_timeout`（缺省 30s）内返回错误（回调失败另加至多 5s）；5s 内没送达的 abort 留下的服务端事务持锁到 `transactionLifetimeLimitSeconds`（缺省 60s），期间同文档写入会 WriteConflict 重跑。
 - [DRV-3](#drv-3)：业务 Redis 写命令（计数、入队、SETNX、带写 pipeline、Lua）在网络抖动时会返回 EOF / i/o timeout（TROUBLESHOOTING T-259）；新写的 Redis 调用点必须按 `redis/driver/README.md` §6 核对：写错误按结果未知处理，返回值只在 `err == nil` 时可信，多步写第一步未知时仍补后续保护（如 EXPIRE），只想在确定没执行时重试的用 `driver.IsDefinitelyNotExecuted`。Mongo 调用方见到 `fmongo.ErrCommitResultUnknown` 必须按持久回执裁决；判断是否可能已提交不要再看 `UnknownTransactionCommitResult` 标签或 `DeadlineExceeded`。业务不要经 `Client.Raw()` 发写命令。
 - [DRV-4](#drv-4)：运维可调 `remote_entity.snapshot_l2_tombstone_wait_replicas`（0 关闭）与 `_timeout`（(0, 1s]）；`result=short|error` 增长时查副本延迟（T-277）；要彻底避免删除复活需部署约束 `min-replicas-to-write`。已有工程配置不回写，缺省值生效。
-- [DRV-5](#drv-5)：工具 / 集成测试若靠“第二次 Close 返回 `ErrClosed`”判断已关闭，改用 `errors.Is(<命令错误>, goredis.ErrClosed)`；并发 Close 的后到者现在会等（最长到自己的 ctx）。新写的驱动 / Mod 停止入口按 roost-coding 用 `internal/operation.Serial`。
+- [DRV-5](#drv-5)：工具 / 集成测试若靠“第二次 Close 返回 `ErrClosed`”判断已关闭，改用 `errors.Is(<命令错误>, goredis.ErrClosed)`；并发 Close 的后到者现在会等（最长到自己的 ctx）。新写的驱动 / Mod 停止入口按 roost-coding 用 `internal/operation.Serial`。nats：Close 之后每个导出方法（含订阅、JetStream 三方法、RPC CallAsync、`Drain`、订阅句柄 `Unsubscribe`）都返回可 `errors.Is(fnats.ErrClosed)` 的错误，不再同时 `errors.Is` 到 nats.go 的 `ErrConnectionClosed`（文本不变）；`Connected()` 在 Close 之后一直为 false；RPC 停止时在途的 CallAsync 回 `errRPCStopped`（同时 `errors.Is` 到 `ErrCancelled` 与 `ErrClosed`）；先 `Client.Close` 再 `Assembly.Close` 返回 nil。
 - [DRV-6](#drv-6)：无需改动；运维看到启动慢几秒且 `mongo_ensure_index_election_retries_total` 非零，是启动撞上了选举（T-282）。
+- [DRV-7](#drv-7)：**不兼容**。versionstore 信封改为 `<version>|<令牌>…\n<payload>`，旧信封读出报 `ErrMalformedRecord`（`no write token (old envelope format; clear the store on upgrade)`）；升级先停掉全部旧进程，清空各服务 versionstore 前缀下的键与带索引 store 的索引有序集合（T-291），不支持新旧进程混跑。回复丢失的写多数在 store 内被核对成确定结果（同一次调用里多一次 `GET`、至多 `MaxAttempts` 次原样重发）；剩下的错误多一层 `ErrOutcomeUnknown`（原传输错误仍可 `errors.Is`），其中 `Create` / `Delete` 回复丢失且核对时键不存在的两种情况按维护者选 A 保持结果未知。新增 `Resume`、`ErrWriteTokenMismatch`、`RedisConfig.WriteTokenHistory`（缺省 8）、指标 `versionstore.unknown_outcome.total{store,result}`；`Store` 接口不变，调用方不改代码。
+- [DRV-8](#drv-8)：收紧：带索引写的分数是 NaN 时返回 `ErrCASInvalidCommand`、什么都不写（修前值写入、索引不动、返回 `ERR value is not a valid float`）。仓内分数都由整数时间换算，不受影响。
 
 **DAO**
 
@@ -129,12 +138,13 @@ flowchart LR
 - [REM-10](#rem-10)：开 App 单实例锁时 Remote 锁 token 变长（Redis `owner`、Mongo `_grant_token`）；混跑时新旧都退回 TTL。
 - [REM-13](#rem-13)：新生成工程配置多五个键；已有工程不回写。
 - [REM-14](#rem-14)：只在兴趣表满时变化：撤销之前发出、之后才到的旧续租以前可能复活已撤销的租约，现在被忽略；同一窗口里同一 consumer 另一个 key 的迟到旧续租若指纹碰撞也会被忽略（该 key 暂无推送、按陈旧上限回源）。wire、配置、指标不变。
+- [REM-15](#rem-15)：**API 破坏**（线上未部署，不留兼容期）。`syncbus.Handler` 改为 `func(ctx, msg) error`；`Subscribe` / `SubscribeLive` 返回 `*syncbus.Subscription`，`Unsubscribe(ctx)` 返回 nil 才表示没有在途回调、也不会再有新回调；`cache.ReplicaSyncer.Stop`、`syncbus.PatchSyncer.Stop` 改为 `Stop(ctx) error` 并等在途回调（RR-20261006-36）；`syncstream.Subscribe*` 返回 `*Subscription`。在 handler 里退订自己必须传入 handler 收到的投递 ctx，传 `context.Background()` 会一直等自己。自己实现 `ISyncBus` 的替身要用 `syncbus.NewSubscription` + `Deliver`。wire、持久格式、durable 名、生成形状不变。
 
 ### 需要业务或运维改动的清单
 
 | 编号 | 谁 | 要做什么 | 不做的后果 |
 | --- | --- | --- | --- |
-| [SAGA-2](#saga-2) | 运维 | 认识新告警 `saga.completion.late_after_abandon_total{saga_type,phase}` 与 ERROR“step succeeded after the coordinator abandoned it”，按 TROUBLESHOOTING T-226 核对业务数据；投影积压超过步骤 `Timeout` 时调大 `Timeout` 或处理 Mongo 变慢，不要调大 `LeaseDuration` | 放弃后迟到生效的副作用不会被补偿，只有告警 |
+| [SAGA-2](#saga-2) | 运维 | 认识告警 `saga.completion.late_after_abandon_total{saga_type,phase}`：本版 `phase="forward"` 已由协调器自动补偿（SAGA-16），ERROR“step succeeded after the coordinator abandoned it; the coordinator cannot account for it”只剩补偿方向，按 TROUBLESHOOTING T-226 核对后 `Resume`；投影积压超过步骤 `Timeout` 时调大 `Timeout` 或处理 Mongo 变慢，不要调大 `LeaseDuration` | 补偿方向放弃后迟到生效的副作用只有告警，要运维处理 |
 | [SAGA-3](#saga-3) | 业务（可选） | 需要按环境调步骤预算时写 `saga.step_defaults` / `saga.steps.<type>.<step>`；写错类型 / 步骤 / 字段、取值越界、时长不带单位会启动失败 | 无（不写就用 `definition.go` 里的预算） |
 | [SAGA-5](#saga-5) | 业务 | 注册了只差大小写的 saga 类型名或步骤名（如 `gift_item` 与 `Gift_Item`）的工程改名 | saga Mod 启动失败 |
 | [SAGA-6](#saga-6) | 运维 | 补偿方向停在 `ManualRequired` 的 saga 修复原因后用 `Resume`（`Compensate` 在该状态下等价，进入新一生）；`saga.completion.stale_incarnation_total` 在 Resume 之后增长是正常现象 | 无 |
@@ -142,9 +152,12 @@ flowchart LR
 | [SAGA-9](#saga-9) | 运维 | 状态文档集合 `<收件箱集合>_operations`（启动自动建 TTL 索引）；建议 Mongo 服务端 `transactionLifetimeLimitSeconds=20`（O-S5-3）；Mongo 步骤吞吐约减半，按业务量评估（维护者已接受，见 [SAGA-11](#saga-11)） | kill -9 遗留的事务持锁到服务端上限（缺省 60s） |
 | [SAGA-12](#saga-12) | 运维 | 若调过 `dataengine.effects.max_age` / `saga.completion_receipt_ttl`，保证 `completion_receipt_ttl > effects.max_age`（缺省 720h > 168h） | 启动失败（T-281） |
 | [SAGA-14](#saga-14) | 运维 | 升级 v1.23.0：停掉全部旧步骤进程（原生步骤进程先排空 WAL），丢弃旧 `_dataengine_inbox_claims` / `<收件箱集合>_claims`，再起新进程；不要新旧步骤进程混跑 | 旧进程写的 claim 新进程不读；WAL 里旧记录的 fence 指向旧 claim 文档，投影时被跳过 |
+| [SAGA-16](#saga-16) | 业务 / 运维 | 按终态做业务的一方（失败通知、释放预留、对账）：动作按 saga id 幂等，读到终态时记下 `Record.Version`，版本变大按新状态重做（SAGA.md「运维观察」、T-292）；自定义 Store 原样保存 `Record.LateStep` / `LateData` 并实现 `CompletionHistoryStore` | 把被重开的 saga 当成永远失败 / 已补偿；自定义 Store 下迟到生效的步骤不被补偿 |
+| [SAGA-17](#saga-17) | 运维 | 认识 `saga.reopened_total{saga_type,from_status,reason}` 与 WARN `saga: reopened to compensate a step that took effect after the coordinator abandoned it`（T-292）；持续增长时查结果流积压与投影延迟，或调大该步 `saga.steps.<type>.<step>.timeout` | 看不出终态被改过 |
 | [DRV-3](#drv-3) | 业务 | 新写的 Redis 调用点按 `redis/driver/README.md` §6 核对：写错误按结果未知处理，只想在确定没执行时重试的用 `driver.IsDefinitelyNotExecuted`；Mongo 见到 `fmongo.ErrCommitResultUnknown` 按持久回执裁决；不要经 `Client.Raw()` 发写命令 | 网络抖动时重复执行或误判未提交 |
 | [DRV-4](#drv-4) | 运维（可选） | 按需调 `remote_entity.snapshot_l2_tombstone_wait_replicas`（0 关闭）/ `_timeout`（(0, 1s]）；`result=short|error` 增长时查副本延迟（T-277）；要消除删除复活需部署约束 `min-replicas-to-write` | 无（缺省 1 / 50ms 生效） |
-| [DRV-5](#drv-5) | 工具 / 测试作者 | 靠“第二次 Close 返回 `ErrClosed`”判断已关闭的代码改用命令错误 `errors.Is(err, goredis.ErrClosed)`；新写的驱动 / Mod 停止入口用 `internal/operation.Serial` | 判断失效（单机 Redis 重复 Close 现在返回 nil） |
+| [DRV-5](#drv-5) | 工具 / 测试作者 | 靠“第二次 Close 返回 `ErrClosed`”判断已关闭的代码改用命令错误 `errors.Is(err, goredis.ErrClosed)`；nats 关闭后的错误按 `errors.Is(err, fnats.ErrClosed)` 判断，不要按 nats.go 的 `ErrConnectionClosed`；新写的驱动 / Mod 停止入口用 `internal/operation.Serial` | 判断失效（单机 Redis 重复 Close 现在返回 nil；nats 关闭后的错误不再 `errors.Is` 到 nats.go 原错误） |
+| [DRV-7](#drv-7) | 运维 / 业务（可选） | 升级 v1.23.0：停旧进程、清空各服务 versionstore 前缀下的键与索引有序集合再起新版本（T-291）；在 store 之外再重试写的调用方可用 `versionstore.Resume(ctx, err)` 让下一次调用续核上一次的令牌 | 新版本读旧信封全部报 `ErrMalformedRecord`；不用 `Resume` 时重试照旧要靠值里的请求 ID 去重 |
 | [DAO-1](#dao-1) | 业务 | 新写实体组件时，事务会改的状态放进 DAO（不落库的用 `nopersist,sync` / `nopersist,nosync`），派生值由唯一 derive 写；组件方法里不调 `RecordUndo` / `RecordUndoToken` / `DeferRollback`（glsvet 打 `hint:`）。已生成工程不需迁移 | 回滚后组件内存与 DAO 不一致 |
 | [DAO-2](#dao-2) | 业务 | 在 nest handler 里推进 `skill.Runtime` 时：会失败的检查放在 Runtime 调用之前；扣费交给 Runtime commit 路径；严格一致的玩法在提交确认后再推进 Runtime | handler 失败回滚后冷却 / ammo / cast 状态不回退 |
 | [DAO-3](#dao-3) | 业务（可选） | 要让 buff / 属性修饰影响伤害，写纯投影函数并 `component.ProjectAttributes(fn)`；装了投影后 `InitCombatant` 里给的被投影字段会被覆盖 | buff 对伤害没有效果（与之前相同） |
@@ -154,6 +167,7 @@ flowchart LR
 | [REM-6](#rem-6) | 业务 | `//roost:entity remote=mirror` / `lifetime=mirror_cache` 改为普通 struct 上的 `//roost:mirror entityKind=… coll=…`（仓内无使用方）；生成器 Core 下限 v1.21.0 | 生成报迁移错误 |
 | [REM-6](#rem-6) | 运维 | 装 `RemoteMirrorMod` 的服务手工调大 `shutdown.total_timeout` 与部署宽限期（只读 Mod 的停机预算不计入生成器总预算） | 停机超预算 |
 | [REM-10](#rem-10) | 运维 | 想让同 sid 重启立即接管旧锁，需 `singleton.enabled=true`；开启后 Remote 锁 token 变长，新旧混跑时退回按 TTL | 不开则照旧等 `remote_entity.lock_ttl` |
+| [REM-15](#rem-15) | 业务（自己实现或直接调用这些 API 的） | 按新签名改：`syncbus.Handler` 带 ctx、订阅拿 `*syncbus.Subscription`、`PatchSyncer.Stop(ctx)` / `ReplicaSyncer.Stop(ctx)`；handler 里退订自己传投递 ctx；替身用 `syncbus.NewSubscription` + `Deliver`（仓内已全部迁移） | 编译失败；handler 里用无关 ctx 退订自己会一直等 |
 
 
 ## SAGA：saga 最终性
@@ -216,7 +230,7 @@ Mongo 步骤路径（`SubscribeMongoStep`）本来就对过期无回执命令 ac
 
 | 首发 | 类型 | 行为变化 / 兼容破坏 | 需业务 / 运维改动 | 实现 |
 | --- | --- | --- | --- | --- |
-| v1.20.1 | 缺陷修复（U-0280，T-226；维护者 2026-10-05 决定 A + B + C'；含两处独立复核修复） | 是：原生步骤跨尝试回放 / 等待 / 接替；租约封顶到命令截止；放弃后迟到的成功记 ERROR；原生 handler 返回值不再校验；v1.20.1 时 claim 与 tombstone 持久格式只增，本版收件箱改为每个操作一份状态文档（[SAGA-14](#saga-14)） | 运维：新告警按 T-226 处置；投影积压超过步骤 `Timeout` 时步骤停住而不是重复执行；升级 v1.23.0 按 SAGA-14 先停旧再起新。业务：无需改（已生成工程不迁移） | [SAGA-2](impl-saga-drv-dao-rem.md#saga-2) |
+| v1.20.1 | 缺陷修复（U-0280，T-226；维护者 2026-10-05 决定 A + B + C'；含两处独立复核修复） | 是：原生步骤跨尝试回放 / 等待 / 接替；租约封顶到命令截止；放弃后迟到的成功记 ERROR（本版正向的改为由协调器补偿，[SAGA-16](#saga-16)）；原生 handler 返回值不再校验；v1.20.1 时 claim 与 tombstone 持久格式只增，本版收件箱改为每个操作一份状态文档（[SAGA-14](#saga-14)） | 运维：新告警按 T-226 处置；投影积压超过步骤 `Timeout` 时步骤停住而不是重复执行；升级 v1.23.0 按 SAGA-14 先停旧再起新。业务：无需改（已生成工程不迁移） | [SAGA-2](impl-saga-drv-dao-rem.md#saga-2) |
 
 **结论**：框架把原生 saga 步骤的“最多生效一次”从“同一命令（`CommandID`）”提升到“同一操作实例（`IdempotencyKey` = saga + 方向 + 步骤，跨 Resume 代际）”；每次尝试只可能在协调器等它的窗口内生效；协调器放弃之后才到的成功不再静默，而是 ERROR + 计数。
 
@@ -244,18 +258,18 @@ Mongo 步骤路径（`SubscribeMongoStep`）本来就对过期无回执命令 ac
 | --- | --- | --- |
 | A 收件箱按操作实例互斥并回放 | 采用 | 解决 (a)(b) 与投影积压；承诺在框架里兑现，不靠每个模板自己做对 |
 | B claim 租约封顶到命令截止 | 采用 | 把“放弃后生效”收窄到“截止前已投影、放弃后才送达”；代价是投影积压超过 `Timeout` 时步骤停住（维护者接受） |
-| C' 放弃后迟到的成功只告警 | 采用 | 让剩余窗口可见；不重开终态 |
-| C 自动补偿迟到成功 | 未采用 | 改协调器状态机、要重开 Failed / Compensated，影响所有使用方，另行决定 |
+| C' 放弃后迟到的成功只告警 | 采用（本版只剩补偿方向这样处理） | 让剩余窗口可见；不重开终态 |
+| C 自动补偿迟到成功 | 当时未采用；第十三轮维护者要求本版完成，已实施为 saga 方向 ④（[SAGA-16](#saga-16)） | 改协调器状态机、要重开 Failed / Compensated，影响所有使用方，当时另行决定 |
 | E 模板按 `IdempotencyKey` 做业务幂等 | 未采用 | 原生路径提交点在投影，业务层要理解屏障与跳过才能做对，模板已证明容易做错 |
 | “超时不换 CommandID”简化方向 | 未采用 | 要改 `commandDigest`（摘要含 `DeadlineAt` / `Attempt` / `CreatedAt`，用在回执、claim、`BindCommand`、lease fence 上）、`MaxAttempts` 含义要重定义、Resume 仍会重做 |
-| F 协调器只收当前尝试的结果 | 未采用 | 更糟：k 的真实结果被丢，k+1 照样执行 |
+| F 协调器只收当前尝试的结果 | 未采用 | 更糟：k 的真实结果被丢，k+1 照样执行（本版方向 ③ 只对**可重试失败**这样做，成功与拒绝仍从任何尝试接收，见 [SAGA-16](#saga-16)） |
 
 **现在的行为**（契约正文在 [SAGA.md「原生步骤执行契约」](../../../SAGA.md)）：
 
 1. 最多生效一次的单位是操作实例；一次操作最多 `MaxAttempts` 次尝试（配置，见 [SAGA-3](#saga-3)），跨 Resume 代际仍是同一实例。
 2. 租约 `lease_until = min(now + LeaseDuration, Command.DeadlineAt)`（新建、重新取得、接替都封顶；本版租约记在这个操作的状态文档上，v1.20.1～v1.22.0 记在每次尝试的 claim 上）；截止后才投影的记录 lease fence 不匹配，被跳过。已过截止的命令 `Reserve` 返回 `saga.ErrCommandExpired`。
 3. 新尝试先看同一操作实例的其他尝试：成功（任何一生）或本生的拒绝 → 不执行，把那次 completion 经 saga 结果流重发；可重试失败 → 照常执行；pending 且租约有效 → nak 等待；pending 且租约过期 → 接替（被接替的尝试记进状态文档的 `superseded`，`lease_token+1`），被接替尝试的迟到投递 ack 不执行。
-4. 协调器放弃（重试用尽、saga 截止、人工 `Compensate`、定义缺失）后才到的成功：ERROR + 计数，不重开终态、不自动补偿；以失败关闭（可重试失败用尽、拒绝）也算放弃关闭（复核 1）。
+4. 协调器放弃（重试用尽、saga 截止、人工 `Compensate`、定义缺失）后才到的成功：v1.20.1～v1.22.0 一律 ERROR + 计数，不重开终态、不自动补偿；本版起正向的由协调器补偿这一步（`Failed` / `Compensated` 可被重开），补偿方向的仍只告警（[SAGA-16](#saga-16)）。以失败关闭（可重试失败用尽、拒绝）也算放弃关闭（复核 1）；复核 1 里“较早尝试晚到的可重试失败让协调器在最后一次尝试执行中放弃”这一来源本版由方向 ③ 去掉。
 5. 过了自己截止、不会执行的投递，ack 前把同一操作实例已生效的成功重发（复核 2）。
 
 可见信号：
@@ -268,7 +282,7 @@ Mongo 步骤路径（`SubscribeMongoStep`）本来就对过期无回执命令 ac
 | 指标 | `saga.completion.late_after_abandon_total{saga_type,phase}` | 放弃之后迟到的成功（B1 起按（操作，代际）只计一次，见 [SAGA-6](#saga-6)） |
 | 指标 | `saga.step_inbox.superseded_total` | 接替次数 |
 | 指标 | `saga.step.attempt_replayed_total` | 回放 / 重发同一操作已有结果的次数 |
-| 日志 | ERROR `saga: step succeeded after the coordinator abandoned it; the effect is not compensated` | 需要运维按 T-226 核对业务数据 |
+| 日志 | v1.20.1～v1.22.0：ERROR `saga: step succeeded after the coordinator abandoned it; the effect is not compensated`。本版：正向 WARN `...; compensating it`，补偿方向 ERROR `...; the coordinator cannot account for it`（[SAGA-16](#saga-16)） | ERROR 需要运维按 T-226 核对业务数据 |
 | Stats / 健康 | `Engine.Stats().LateAfterAbandon`；kit saga 健康消息多 `late_after_abandon=` | 同上 |
 
 选项语义变化：`DataEngineStepInboxOptions.LeaseDuration`（缺省 1 分钟）现在只是上限，实际租约不超过命令截止；`LeaseDuration > AckWait` 的订阅校验保留。
@@ -311,9 +325,9 @@ Mongo 步骤路径（`SubscribeMongoStep`）本来就对过期无回执命令 ac
 | `saga.step_defaults.backoff_max` | 5s | 正时长；与 `backoff_min` 合并后上限不得小于下限 | 最大退避 |
 | `saga.steps.<type>.<step>.<字段>` | 无 | 字段只能是上面四个；saga Mod 拿到定义时，`<type>` / `<step>` 必须对应某个注册定义的步骤 | 按步骤覆盖，优先于定义与 `step_defaults`，作用于该类型所有版本 |
 
-`Init` 失败的报错（源码原文）：`saga.steps.%s.%s: no registered saga %q has a step %q`、`%s.%s: unknown step budget field (want timeout, max_attempts, backoff_min, backoff_max)`、`%s: want 1..1000, got %q`、`%s: want a positive duration, got %q`；core 的 `StepBudgets.Validate` 报 `ErrInvalidDefinition`（`step budget <名字> {...}`）。`kitsaga.StepBudgetsFromConfig(cfg, definitions...)` 导出，生成工程测试用它得到与运行时相同的预算。
+`Init` 失败的报错（源码原文）：名字核对 `saga.steps.%s.%s: no registered saga %q has a step %q`（`kit/saga`）；字段的类型、范围与未知字段本版 A4 ① 起由 saga Mod 的配置声明检查（App 启动前与 `Init` 同一份声明，见 CFG 部分），报错以 `config: <键>` 开头，如 `config: <键> must be at most 1000, got …`、`config: <键> must be positive, got …`、`config: <键> = … needs a unit (for example 15s or 500ms); …`、未声明的字段报 `… is not a known key …`（v1.20.1～v1.22.0 是 kit 手写的 `unknown step budget field (want …)`、`want 1..1000`、`want a positive duration`）；core 的 `StepBudgets.Validate` 报 `ErrInvalidDefinition`（`step budget <名字> {...}`）。`kitsaga.StepBudgetsFromConfig(cfg, definitions...)` 导出，生成工程测试用它得到与运行时相同的预算。
 
-生成侧：`roost add saga` 生成的步骤只写名字与 topic，saga Mod 的生成配置带 `step_defaults` 与空的 `steps: {}`；game-demo 改为在 game 服务配置里写 `saga.steps.gift_item.debit.max_attempts: 15`（带理由注释）。
+生成侧：`roost add saga` 生成的步骤只写名字与 topic，saga Mod 的生成配置带 `step_defaults` 与空的 `steps: {}`（本版由 saga Mod 配置声明的 `example` 渲染）；game-demo 改为在 game 服务配置里写 `saga.steps.gift_item.debit.max_attempts: 15`（带理由注释）。
 
 **兼容与迁移**：无需改动。已生成工程 `definition.go` 里写死的预算照旧生效，配置的按步骤覆盖优先于它。收紧点：`saga.steps` 下写错名字或字段、取值越界，启动即失败（以前没有这组键）。大小写相关的两处后续修复见 [SAGA-4](#saga-4)、[SAGA-5](#saga-5)。
 
@@ -409,8 +423,8 @@ step_operation_incarnation_promises_test.go:159: manual Compensate re-dispatched
 | --- | --- | --- |
 | 旧一生（或比记录还新）的拒绝 / 可重试失败 | 任意 | 不接收；`Stats().StaleIncarnation` + `saga.completion.stale_incarnation_total{saga_type,phase}` + WARN `saga: ignored a step result from an earlier incarnation of the saga`；返回 `record, nil`（消费者 ack） |
 | 旧一生的成功 | 正停在这个操作上（在等它；或 Resume 后还没派发 / 新一生在退避） | 接收为该操作的结果，tombstone 由“放弃”升级为“带结果” |
-| 同一生 | `Waiting` 且 `OperationKey` 相同 | 接收（与修前同） |
-| 其余成功 | 已放弃关闭 | 按（操作，代际）第一次告警（ERROR + `late_after_abandon_total`），之后计 `Duplicates` |
+| 同一生 | `Waiting` 且 `OperationKey` 相同 | 接收（与修前同）；本版起较早尝试晚到的可重试失败不接收（方向 ③，[SAGA-16](#saga-16)） |
+| 其余成功 | 已放弃关闭 | 按（操作，代际）第一次告警（ERROR + `late_after_abandon_total`），之后计 `Duplicates`；本版起正向的改为补偿这一步（方向 ④，[SAGA-16](#saga-16)），补偿方向照旧 |
 | 其余 | 无回执、无 tombstone | `ErrNotWaiting` |
 
 人工 `Compensate`：只在记录已处于补偿方向（`ManualRequired`）时进入新一生；从正向发起的补偿保持现有 `CommandID`。
@@ -440,7 +454,7 @@ definition_fence_abandon_promises_test.go:102: a step that took effect after the
 
 **维护者决定**：无决定轮次，按 bugfix 流程修复。修复记录写明先做了方向判断（B1 方案第 8 节“下一个缺陷若落在迟到成功只告警上，不要再给协调器加特例”），修法是减少分叉。没采用：只在定义缺失分支再补一个 `if record.Attempt > 0`（第三份手写判断，下一个新出口还会漏）；在 `completeNotWaiting` 对“已终态、无任何历史”的成功也告警（会把 TTL 之后的重复、Resume 后不相关的结果都算告警）。
 
-**现在的行为**：定义缺失 fence 后，退避中那次操作的迟到成功：ack、ERROR `saga: step succeeded after the coordinator abandoned it; the effect is not compensated`、`Stats().LateAfterAbandon` 与 `saga.completion.late_after_abandon_total` 各 +1，不重开终态；被放弃尝试的排队命令不再发布。修好定义后 `Resume`：没有完成步骤时新一生回放 / 接收它，有完成步骤时按 T-226 手工撤销这一步。
+**现在的行为**：定义缺失 fence 后，被放弃尝试的排队命令不再发布；退避中那次操作的迟到成功 ack，`Stats().LateAfterAbandon` 与 `saga.completion.late_after_abandon_total` 各 +1。v1.21.0～v1.22.0 记 ERROR `saga: step succeeded after the coordinator abandoned it; the effect is not compensated`、不重开终态，修好定义后 `Resume`：没有完成步骤时新一生回放 / 接收它，有完成步骤时按 T-226 手工撤销这一步。本版起正向的迟到成功只在记录（`ManualRequired`）上记下 `LateStep`、WARN，修好定义后 `Resume` 先补这一步再补前缀；补偿方向的仍 ERROR（[SAGA-16](#saga-16)）。
 
 **兼容与迁移**：持久格式不变（多写一份与截止 / 人工 Compensate 同种的 tombstone）。混跑：旧协调器 fence 的记录仍没有 tombstone。
 
@@ -455,13 +469,15 @@ definition_fence_abandon_promises_test.go:102: a step that took effect after the
 | --- | --- | --- | --- | --- |
 | v1.21.0 | 重构（维护者第六轮决定 saga 方向 ①）+ 发版前复审守卫补漏 | 否（唯一差异：正常不可达的“步骤下标越界且已派发”现在按放弃关闭该操作） | 否 | [SAGA-8](impl-saga-drv-dao-rem.md#saga-8) |
 
-**结论**：协调器写记录的 8 个出口（派发、超时、截止、定义缺失、步骤越界、接收结果、人工 Compensate、Resume）都只算出目标状态，由 `stepTransition` 一处决定关闭哪个操作、是否开新一生、带不带协调器租约；守卫测试在源码层面禁止新出口绕过它。
+**结论**：协调器写记录的出口（v1.21.0 时 8 个：派发、超时、截止、定义缺失、步骤越界、接收结果、人工 Compensate、Resume；本版加上放弃后迟到的正向成功，共 9 个，[SAGA-16](#saga-16)）都只算出目标状态，由 `stepTransition` 一处决定关闭哪个操作、是否开新一生、带不带协调器租约；守卫测试在源码层面禁止新出口绕过它。
 
 **背景**：“放弃关闭”这条子规则在截止、人工 Compensate、定义缺失三个出口各漏写过一次（U-0280 补前两个，NC-250 补第三个）；`closedOperation` 与 `abandonedOperation` 是同一个问题（“离开前在哪个操作上”）的两份回答。N06 S5 review 的方向判断把它列为同一不变量“每个操作实例的结果恰好被计入一次，不被计入的有人知道”被反复打破的信号。
 
 **维护者决定**：[DECISIONS-PENDING](../../review/DECISIONS-PENDING-2026-10-05.md) 第六轮“saga 方向”行（原样）：
 
 > 按推荐：① “离开当前步骤”收成一个转移（截止 / 人工 Compensate / 定义缺失 / 正常推进共用）② Mongo 步骤纳入与原生步骤同一套“同一操作最多生效一次”的收件箱契约；③④ 暂不做
+
+③④ 当时暂不做；第十三轮维护者要求原“下个大版本”项本版完成（原样：“还有留到下个版本的几项在本机能完成吗？希望本次能完成了”），已实施，见 [SAGA-16](#saga-16)。
 
 选测试守卫而不是 glsvet：规则只针对一个包、一个函数，放在包内最近处；glsvet 是跨包的执行契约检查（方案原意）。
 
@@ -490,7 +506,7 @@ definition_fence_abandon_promises_test.go:102: a step that took effect after the
         mongo_step_operation_promises_test.go:140: operation gift-1:1:1 took effect 2 time(s), want 1: attempt gift-1:1:1:1 committed after gift-1:1:1:2 took it over (k returned <nil>, executions=map[gift-1:1:1:1:2 gift-1:1:1:2:1])
 ```
 
-**维护者决定**：同 [SAGA-8](#saga-8) 引的第六轮“saga 方向”行（“② Mongo 步骤纳入与原生步骤同一套‘同一操作最多生效一次’的收件箱契约；③④ 暂不做”）。B1 第二轮“Mongo 步骤另写方案”由此落地。没有把 Reserve 与执行合成一个事务：那样在途尝试对别人不可见，只能靠写冲突等待、无法接替，被杀进程遗留的事务还会连守卫一起锁住（方案原意；延迟代价的后续分析与决定见 [SAGA-11](#saga-11)）。O-S5-3 不改默认步骤预算（它约束所有 saga 的失败检测时间，且要到约 12 次才盖住默认 60s）。
+**维护者决定**：同 [SAGA-8](#saga-8) 引的第六轮“saga 方向”行（“② Mongo 步骤纳入与原生步骤同一套‘同一操作最多生效一次’的收件箱契约；③④ 暂不做”；③④ 第十三轮改为本版完成，见 [SAGA-16](#saga-16)）。B1 第二轮“Mongo 步骤另写方案”由此落地。没有把 Reserve 与执行合成一个事务：那样在途尝试对别人不可见，只能靠写冲突等待、无法接替，被杀进程遗留的事务还会连守卫一起锁住（方案原意；延迟代价的后续分析与决定见 [SAGA-11](#saga-11)）。O-S5-3 不改默认步骤预算（它约束所有 saga 的失败检测时间，且要到约 12 次才盖住默认 60s）。
 
 **现在的行为**：
 
@@ -698,7 +714,7 @@ effect_retention_promises_test.go:43: renamed shared stream with 800h retention:
 
 > 不考虑旧进程，完成按照新的处理，线上还没有旧的进程跑
 
-所以本轮直接做、不留到下个大版本：不读旧 claim、不保留兼容写、不支持混跑，RR-15 复核时加的新旧进程混跑用例一并删除。RR-15 / -16 的两个中间修法只在 main 上存在过，不随 v1.23.0 发布；它们的承诺（“跨 Resume 累积的尝试不挡新一生”）由改写后的用例继续守住。
+所以本轮直接做：不读旧 claim、不保留兼容写、不支持混跑，RR-15 复核时加的新旧进程混跑用例一并删除。RR-15 / -16 的两个中间修法只在 main 上存在过，不随 v1.23.0 发布；它们的承诺（“跨 Resume 累积的尝试不挡新一生”）由改写后的用例继续守住。
 
 **现在的行为**：
 
@@ -773,6 +789,119 @@ ok  	github.com/tjbdwanghaibo/roost-core/saga	1.295s
 
 **链接**：[实现](impl-saga-drv-dao-rem.md#saga-15) · [问题](../../bug/RR-20261006-14.md) · [修复](../../bugfix/RR-20261006-14.md) · [SAGA-8](#saga-8) · [CHANGELOG](../../../CHANGELOG.md)（Unreleased 段）
 
+<a id="saga-16"></a>
+### SAGA-16 saga 方向 ③④：只接收正在等的那次尝试的可重试失败；放弃后迟到生效的正向步骤只补偿这一步
+
+| 首发 | 类型 | 行为变化 / 兼容破坏 | 需业务 / 运维改动 | 实现 |
+| --- | --- | --- | --- | --- |
+| v1.23.0（本版） | 维护者决定（第六轮“③④ 暂不做” → 第十三轮“原下个大版本项本版完成”；“重开终态”维护者选 A） | 是：同一生较早尝试晚到的可重试失败不再推进记录；放弃后迟到的正向成功由“只告警”改为协调器补偿这一步，`Failed` / `Compensated` 会被重开回 `Compensating`；`Record` 多 `LateStep` / `LateData`（Mongo `late_step` / `late_data`，`omitempty`）；改写 4 条既有用例的断言 | 业务：按终态做的动作按 saga id 幂等、看 `Version` 变化（[SAGA-17](#saga-17)、T-292）；自定义 Store 持久化两个新字段。运维：迟到的正向成功不再需要手工撤销 | [SAGA-16](impl-saga-drv-dao-rem.md#saga-16) |
+
+**结论**：协调器对同一生的结果按收件箱的同一张表分开处理——成功与本生的拒绝是“操作的结论”，从哪次尝试来都接收；可重试失败是“这一次尝试的结论”，只接收正在等的那一次（③）。协调器放弃一个**正向**步骤之后才到的成功，说明那一步已经生效、却不在 `CompletedSteps` 里，协调器在同一个 Store 事务里记下回执并把 saga 带回补偿、只补偿这一步（④，即 U-0280 候选里的方向 C）；补偿方向的迟到成功仍只告警。
+
+**背景**：N06 S5 review 的方向判断第 3、4 条（[方案 §1](../../feature/SAGA-DIRECTION-3-4-2026-10-07.md)）：
+
+- ③ 对应观察 O-S5-7：协调器在等最后一次尝试 k+1 时，接收了较早尝试 k 晚到的可重试失败，`retryState` 用记录上的 `Attempt`（= k+1）判重试用尽 → 补偿 / `Failed`；而 k+1 在收件箱里只看到 k 是可重试失败，照常执行并生效。这是 SAGA-2 复核 1 告警的来源之一。
+- ④ 是 U-0280 记录里“另行决定”的方向 C。收件箱与租约封顶（SAGA-2）之后，放弃之后不会再有尝试**生效**，剩下的是**送达**晚于放弃：最后一次尝试在截止前生效、completion 在协调器放弃之后才到（outbox 发布 / JetStream 积压、过期投递的回放），以及时钟偏差。送达晚到时第 0 步放弃 → `Failed`、后面的步骤放弃 → `Compensated`，都是终态，所以 C 必须能重开终态。
+
+修前红（原样节选，基线 `66d72a33`，全文 [red-before.txt](../../feature/evidence/saga34/red-before.txt)）：
+
+```text
+saga_direction_3_4_promises_test.go:40: a retryable failure of earlier attempt gift-1:1:0:1 moved the record while the coordinator waits for gift-1:1:0:2: status=failed step=0 command="" last_error="busy"; want still waiting for gift-1:1:0:2
+saga_direction_3_4_promises_test.go:99: step gift-3:1:0 took effect after the saga failed, but the saga was not brought back to compensate it: status=failed phase=forward step=0 completed=0
+saga_direction_3_4_promises_test.go:180: step gift-4:1:1 took effect after it was abandoned, but the compensated saga was not reopened to compensate it: status=compensated step=0
+```
+
+**维护者决定**：第六轮“saga 方向”行（原样）：“按推荐：① …… ② ……；③④ 暂不做”。第十三轮“原‘下个大版本’项”行（原样）：
+
+> 还有留到下个版本的几项在本机能完成吗？希望本次能完成了
+
+同表“saga 方向③④”行写明 ④ 是“方向 C，放弃后迟到生效的正向步骤只补偿这一步（重开 Failed / Compensated）”。实施后方案“未完成 / 风险”留了一问：若要求终态不可重开，可改为只记 `LateStep`、`Resume` 时补偿。维护者在第十三轮“saga 迟到成功重开终态”行**选 A**：
+
+> 维护者同意 A：允许 Failed / Compensated 因迟到的正向成功重开补偿（saga 方向④），补“重开”指标与日志
+
+（DECISIONS-PENDING 的转述；指标与日志见 [SAGA-17](#saga-17)。）③ 没有按原文字面“只接收正在等的那次尝试的失败”一并拒收拒绝：收件箱把本生的拒绝当作操作的结论，下一次尝试回放的正是较早那次的 completion（`CommandID` 是被拒的那次），按字面拒收会让协调器每次尝试都等到超时、拒绝原因也丢了（方案 §3）。没采用：只处理非终态的 C（覆盖不到第 0 步与补偿已结束的情形）；按字面拒收拒绝。
+
+**现在的行为**：
+
+③ 同一生、记录在等这个操作（`Waiting` 且 `OperationKey` 相同）时：
+
+| completion | 来自正在等的尝试 | 来自同一生较早的尝试 |
+| --- | --- | --- |
+| 成功 | 接收 | 接收（不变） |
+| 拒绝（`Retryable=false`） | 接收 | 接收（下一次尝试回放的就是它） |
+| 可重试失败 | 接收 | **不接收**：`Stats().StaleAttempt`、`saga.completion.stale_attempt_total{saga_type,phase}`、WARN `saga: ignored a retryable failure from an earlier attempt; waiting for the current attempt`，返回 nil（消费者 ack） |
+
+④ 放弃关闭之后才到的成功（tombstone 是放弃关闭、这个 `CommandID` 没有回执）：
+
+| 方向 / 记录位置 | 处理 |
+| --- | --- |
+| 补偿方向 | 只告警：ERROR `saga: step succeeded after the coordinator abandoned it; the coordinator cannot account for it`、`late_after_abandon_total{phase="compensate"}`；补偿方向的放弃都停在 `ManualRequired`，运维按 T-226 核对后 `Resume`，新一生回放这次成功 |
+| 正向第 s 步；记录 `Failed`、`Compensated`，或 `Compensating` 且还没派发下一个补偿 | 同一事务记回执、tombstone 改带结果关闭、记录写 `LateStep = s+1` / `LateData`，**立即**进入 `Compensating` 补偿第 s 步（终态被重开），`LastError` = `step <s> took effect after the coordinator abandoned it` |
+| 正向第 s 步；某个补偿在等结果或在重试退避 | 只记 `LateStep`；那个补偿结束后先补第 s 步（在途的补偿不能放弃，它可能生效） |
+| 正向第 s 步；`ManualRequired` | 只记 `LateStep`；运维 `Resume` / `Compensate` 时先补第 s 步（运维的记录不自动跑） |
+
+补偿第 s 步的命令载荷是那一步正向成功的 `Data`；它的补偿结果不进入 `Data` 链，补完清掉 `LateStep` / `LateData`、回到 `CompletedSteps` 的倒序。补偿第 s 步被拒或用尽 → `ManualRequired`（`LateStep` 保留，`Resume` 再补）。同一个迟到成功的重复送达按回执去重、计 `Duplicates`；`late_after_abandon_total` 仍按（操作，代际）计一次，`phase="forward"` 表示已自动补偿，日志是 WARN `saga: step succeeded after the coordinator abandoned it; compensating it`。`Failed` 被重开后最终是 `Compensated`（那一步确实生效过、又被撤销）。
+
+断言被 ③④ 推翻、按维护者决定改写的 4 条既有用例（其余断言不动）：
+
+| 用例 | 原断言 | 改为 |
+| --- | --- | --- |
+| `TestNativeStepSuccessAfterAFailureClosedOperationIsAlarmed`（SAGA-2 复核 1） | 较早尝试晚到的可重试失败被接收、saga `Failed`、迟到成功告警 | 删除，同一时序改写成 ③ 的红绿用例 `TestNativeStepStaleAttemptRetryableFailureDoesNotAbandonTheLastAttempt` |
+| `TestNativeStepTakesEffectAtMostOncePerOperation/c'`（SAGA-2） | 迟到成功后 saga 仍 `Failed` | `Compensating`、只补第 0 步；告警计数 1、生效 1 次不变 |
+| `TestNativeStepOperationInterleavingsWithCoordinatorDecisions` 的 Resume 回放 / saga 截止两个子用例 | 迟到成功后仍 `Failed`，运维 Resume 让新一生回放、继续向前 | 协调器自己补偿这一步，最终 `Compensated`，handler 只执行 1 次；截止子用例告警计数 1 不变 |
+| `TestCoordinatorChecksTheIncarnationOfACompletion/E2`（SAGA-6） | 三次送达后 saga 仍 `Failed` | `Compensating`、`LateStep=1`；“三次送达只计一次”不变 |
+
+这 4 条把被取消的旧行为（较早尝试的失败被接收；迟到的正向成功只告警、终态不变）钉成了承诺，所以按决定改；各用例里其余承诺（生效次数、告警计数、handler 执行次数、代际）原样保留。
+
+**兼容与迁移**（线上未部署，维护者 2026-10-06 决定不做兼容）：
+
+- 公开 API 只增：`Record.LateStep` / `LateData`、`Stats.StaleAttempt`、指标 `saga.completion.stale_attempt_total`；`Store` 接口不变（`ApplyRequest` 不加字段）。
+- 自定义 Store：要在 `Create` / `Get` / `Apply` 中原样保存两个新字段；没实现 `CompletionHistoryStore` 的 Store 一律按重复处理，迟到生效的步骤不会被补偿。
+- `Failed` / `Compensated` 不再是永远不变的终态：按终态做业务的一方见 [SAGA-17](#saga-17)。
+- 补偿顺序：迟到的那一步在“下一个边界”补偿，可能排在一个已在途的补偿之后；正常业务按 `IdempotencyKey` 设计的资源状态不依赖跨步骤的补偿顺序（SAGA.md 写明）。
+- 生成模板、game-demo 不涉及（GM 查询按状态过滤不受影响）。
+
+**已知限制 / 待外部验证**：时钟偏差仍是契约前提（与 SAGA.md 契约第 2 条相同），偏差注入见 [E02](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)；多主机强杀见 [E13](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)。本机：私有三节点副本集上 `-tags integration ./saga/` 全部通过，跨进程强杀 60/60、0 个操作被多次提交，同一迟到成功 8 路并发 × 10 轮每轮恰好一次重开（`TestRealMongoLateSuccessReopensACompensatedSagaOnce`）。
+
+**链接**：[实现](impl-saga-drv-dao-rem.md#saga-16) · [方案与实施](../../feature/SAGA-DIRECTION-3-4-2026-10-07.md) · [SAGA.md「原生步骤执行契约」第 3、4 条](../../../SAGA.md) · [TROUBLESHOOTING](../../TROUBLESHOOTING.md)（T-226、T-292） · [U-0280 记录](../../bugfix/U-0280-saga-step-reexecuted-after-crash.md) · [CHANGELOG](../../../CHANGELOG.md)（Unreleased 段）
+
+<a id="saga-17"></a>
+### SAGA-17 重开的可观测性：`saga.reopened_total`、`Stats().Reopened`、WARN / INFO
+
+| 首发 | 类型 | 行为变化 / 兼容破坏 | 需业务 / 运维改动 | 实现 |
+| --- | --- | --- | --- | --- |
+| v1.23.0（本版） | 维护者决定（第十三轮“saga 迟到成功重开终态”选 A 的配套） | 否：只增指标、`Stats` 字段、日志与健康消息字段；不改记录、持久格式与状态机 | 运维认识新指标与日志；按终态做业务的一方按 `Version` 识别重开 | [SAGA-17](impl-saga-drv-dao-rem.md#saga-17) |
+
+**结论**：saga 每被重开一次，计一次 `saga.reopened_total{saga_type,from_status,reason}`、写一条 WARN；迟到的那一步补完写一条 INFO。saga 没有向业务推送终态的机制，业务靠读记录的 `Version` 识别“终态被改过”。
+
+**背景**：[SAGA-16](#saga-16) 的 ④ 让 `Failed` / `Compensated` 可被重开，维护者选 A 时要求补“重开”的指标与日志，让运维和按终态做业务的一方看得到状态被改过。修前红（原样，基线 `f18f6f42` 只加测试，[red-before.txt](../../feature/evidence/sagareopen/red-before.txt)）：
+
+```text
+saga_reopen_observability_promises_test.go:108: a Failed saga was reopened by a late success of gift-1:1:0, but saga.reopened_total{from_status=failed,reason=late_success} grew by 0, want 1
+saga_reopen_observability_promises_test.go:183: Resume compensates the late step 1 recorded during ManualRequired, but saga.reopened_total{from_status=manual_required,reason=resume} grew by 0, want 1
+```
+
+**维护者决定**：第十三轮“saga 迟到成功重开终态”行：“维护者同意 A：允许 Failed / Compensated 因迟到的正向成功重开补偿（saga 方向④），补“重开”指标与日志”（DECISIONS-PENDING 的转述）。查过 `saga/`、`kit/saga/` 与仓内调用方：没有终态推送（`Publisher` 只发步骤命令，结果流是步骤发给协调器的），所以按要求不新增事件，在 SAGA.md「运维观察」写明识别方法。
+
+**现在的行为**：
+
+| `reason` | `from_status` | 什么时候计 |
+| --- | --- | --- |
+| `late_success` | `failed` / `compensated` | 已结束的 saga 收到迟到的正向成功，立即重开为 `Compensating`（迟到成功到达时 saga 还在补偿中不计——不是重开） |
+| `resume` / `compensate` | `manual_required` | `ManualRequired` 期间记下的迟到步骤在运维 `Resume` / `Compensate` 时先补（记下的那一刻不计；没有迟到步骤的普通 `Resume` 不计） |
+
+- WARN `saga: reopened to compensate a step that took effect after the coordinator abandoned it`（`saga_id`、`saga_type`、`from_status`、`reason`、`late_step`、`status`、`version`）；同一时刻还有 WARN `saga: step succeeded after the coordinator abandoned it; compensating it`（`command_id`、`operation`）。
+- 迟到那一步补完：INFO `saga: compensated the step that took effect after the coordinator abandoned it`（之后的 `status`）。
+- `Stats().Reopened`；kit saga Mod 健康消息末尾多 `reopened=<n>`。计数与日志都在写入成功之后，冲突重试、重复送达不会多计。
+- `Stats()` 的 `Completed` / `Compensated` / `Failed` / `ManualRequired` 按到达终态的**次数**计，重开的 saga 补完再次到达终态会再计一次，不能当作 saga 个数。
+- 业务识别重开（SAGA.md「运维观察」）：读到终态时记下 `Record.Version`，之后 `Get` 返回更大的 `Version` 就是记录被改过（重开或运维 `Resume`），按新状态重做；重开期间记录是 `Compensating` 且 `LateStep > 0`。
+
+**兼容与迁移**：只增，行为不变。`reopened_total` 持续增长说明 completion 送达经常晚于步骤截止：查结果流积压与投影延迟，或调大该步 `saga.steps.<type>.<step>.timeout`（T-292）。
+
+**已知限制 / 待外部验证**：无外部验证项。
+
+**链接**：[实现](impl-saga-drv-dao-rem.md#saga-17) · [实施记录（方案 §8）](../../feature/SAGA-DIRECTION-3-4-2026-10-07.md#8-重开的可观测性维护者第十三轮选-a2026-10-07) · [SAGA.md「运维观察」](../../../SAGA.md#运维观察) · [TROUBLESHOOTING](../../TROUBLESHOOTING.md)（T-292） · [CHANGELOG](../../../CHANGELOG.md)（Unreleased 段）
+
 > 背景（不展开）：v1.20.1 里另有 NC-37～42 的 saga 修复（三消费者健康与持久恢复代际 `47fca740`、持久启动身份与完成路由 `12726715`、原子领取与恢复校验 `10c73e0c`），见 NONCORE 部分。
 
 ## DRV：Redis / Mongo 驱动契约
@@ -804,12 +933,12 @@ script_no_retry_promises_test.go:153: one evalsha call executed the script 2 tim
 
 - 把 `MaxRetries` 改成 -1：也会关掉读命令的透明重试，而且 Cluster 的换节点重试只看 `NoRetry`、不看 `MaxRetries`，解决不了脚本。
 - versionstore 里把“Applied=false 且 Current 等于自己的 Next”判为已应用：另一个写者可能写出字节相同的信封，会把一次丢失的更新报成成功。
-- 信封带一次性写令牌：能把未知结果变成确定结果，但改持久格式，留作方向建议（后来成为 A2 ③，维护者决定留到下个大版本，见 [DRV-3](#drv-3)）。
+- 信封带一次性写令牌：能把未知结果变成确定结果，但改持久格式，留作方向建议（后来成为 A2 ③；第二轮定为暂不做，第十三轮维护者要求本版完成，已实施，见 [DRV-7](#drv-7)）。
 
 **现在的行为**：
 
 - 一次 `Eval` / `EvalSha` / `EvalBatchDurable` 在服务端至多执行一次；回复丢失（EOF、连接重置、读超时）时返回传输错误。
-- `versionstore.Store.Update` 的契约写明：传输错误是结果未知，调用方重试需要幂等的 mutate（通常把请求 ID 记在值里），store 自己不重放。
+- `versionstore.Store.Update` 的契约写明：传输错误是结果未知，store 自己不盲目重放；v1.20.1～v1.22.0 调用方重试需要幂等的 mutate（通常把请求 ID 记在值里）。本版起 store 按一次性写令牌自行核对，多数回复丢失变成确定结果，剩下的返回 `ErrOutcomeUnknown`，`Resume` 续核（[DRV-7](#drv-7)）。
 - 普通读命令的驱动重试不变。
 - v1.20.1 时脚本在“确定没执行”的错误（LOADING、拨号失败等）上也不重发；这部分可用性由 v1.20.2 的 A2 补回（[DRV-3](#drv-3)）。
 - 无新配置键、无 API / 持久格式 / wire 变化。
@@ -885,7 +1014,7 @@ script_no_retry_promises_test.go:153: one evalsha call executed the script 2 tim
 
 > 按推荐：① 驱动行为契约表 ② RedisMod 默认不重放写命令；③ 暂不做
 
-待决定表里 A2 的三个选项是：① 在 `redis/driver`、`mongo/driver` 写驱动行为契约表；② RedisMod 默认不重放写命令，只对“确定未发出”的错误重试；③ versionstore 写入带一次性令牌（改持久格式）。推荐 ① + ②，③ 暂不做。文首“当前总状态”写明 ③ 留到下个大版本。没采用的实现方案（A2 方案“选型”）：go-redis 的 hook 改不了命令的 NoRetry；`MaxRetries = -1` 会让读命令也失去重试，且关不掉 Cluster 的换节点重试。
+待决定表里 A2 的三个选项是：① 在 `redis/driver`、`mongo/driver` 写驱动行为契约表；② RedisMod 默认不重放写命令，只对“确定未发出”的错误重试；③ versionstore 写入带一次性令牌（改持久格式）。推荐 ① + ②，③ 暂不做。③ 第十三轮维护者要求本版完成（原样：“还有留到下个版本的几项在本机能完成吗？希望本次能完成了”），已实施，见 [DRV-7](#drv-7)。没采用的实现方案（A2 方案“选型”）：go-redis 的 hook 改不了命令的 NoRetry；`MaxRetries = -1` 会让读命令也失去重试，且关不掉 Cluster 的换节点重试。
 
 **现在的行为**（契约表要点，全文见 [redis/driver README](../../../redis/driver/README.md)、[mongo/driver README](../../../mongo/driver/README.md)）：
 
@@ -923,7 +1052,7 @@ script_no_retry_promises_test.go:153: one evalsha call executed the script 2 tim
 - `noReplay` 在 `ClusterClient` 里的 MOVED / ASK 跟随与换节点行为只按源码核对过，多机 Cluster 见 E08。
 - 握手阶段失败无法与写出之后的失败区分，保守归为结果未知。
 - 调用方核对里列出的观察与后续：bus `BeginConsume` 的 SETNX 去重（第十二轮决定保持、契约写进 `bus/reliable.go`）；global `Bind` 结果未知后重试误报冲突（RR-20261006-05，`611d5d72`）；L2 快照 DEL 被吞（B2 改为带版本删除重发）。
-- ③ versionstore 一次性写令牌留到下个大版本。
+- ③ versionstore 一次性写令牌：本版已实施（[DRV-7](#drv-7)）。
 
 **链接**：[实现](impl-saga-drv-dao-rem.md#drv-3) · [A2 方案与实施](../../feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md) · [redis/driver 契约表](../../../redis/driver/README.md) · [mongo/driver 契约表](../../../mongo/driver/README.md) · [决定表](../../review/DECISIONS-PENDING-2026-10-05.md) · [NC-100 修复记录 A2 后续](../../bugfix/RR-20261005-NC-100.md) · [CHANGELOG](../../../CHANGELOG.md)（v1.20.2 段）
 
@@ -953,8 +1082,8 @@ script_no_retry_promises_test.go:153: one evalsha call executed the script 2 tim
 
 | 键 | 缺省 | 范围 / 校验 | 含义 |
 | --- | --- | --- | --- |
-| `remote_entity.snapshot_l2_tombstone_wait_replicas` | 1（core `DefaultConfig` 与 kit；core `Config{}` 零值为 0 = 关闭） | 整数，A4 严格读取；负数启动报错 | 墓碑写入后等几个副本确认；0 关闭 |
-| `remote_entity.snapshot_l2_tombstone_wait_timeout` | 50ms | 时长，A4 严格读取；要等副本时必须在 (0, 1s]（`MaxSnapshotL2TombstoneWaitTimeout`） | `WAIT` 的超时；调用方最多多等这么久 |
+| `remote_entity.snapshot_l2_tombstone_wait_replicas` | 1（core `DefaultConfig` 与 kit；core `Config{}` 零值为 0 = 关闭） | 整数（kit 配置声明 `min:"0"`，A4 ①）；负数启动报错 | 墓碑写入后等几个副本确认；0 关闭 |
+| `remote_entity.snapshot_l2_tombstone_wait_timeout` | 50ms | 时长（kit 声明 `min:"1ns" max:"1s"`，A4 ①）；要等副本时必须在 (0, 1s]（core `MaxSnapshotL2TombstoneWaitTimeout`） | `WAIT` 的超时；调用方最多多等这么久 |
 
 - 驱动能力 `fredis.ReplicatedEvaler.EvalReplicated`：脚本与 `ROLE` 一条流水线（一次往返），`ROLE` 报告主节点连着的副本数为 0 时不发 `WAIT`；否则同一连接 `WAIT numReplicas timeout`。Cluster 按脚本第一个键取该槽主节点（`MasterForKey`），`WAIT` 只发往它；脚本回 MOVED / ASK 时改经集群客户端普通发送一次、不 WAIT。脚本不经驱动重放，`WAIT` 从不重放（换了连接的 WAIT 会给出假的确认）。
 - `WAIT` / `ROLE` 出错不改变脚本的分类：脚本属于已执行，副本是否收到属于“复制结果未知”（`ReplicatedEvalResult.WaitErr`）。
@@ -973,13 +1102,13 @@ script_no_retry_promises_test.go:153: one evalsha call executed the script 2 tim
 **链接**：[实现](impl-saga-drv-dao-rem.md#drv-4) · [Mirror 第 6 步观察记录](../../feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md) · [第 6 步本机替代](../../feature/MIRROR-STEP-6-LOCAL-2026-10-06.md) · [redis/driver 契约表 §1–§2](../../../redis/driver/README.md) · [USER_GUIDE](../../USER_GUIDE.md) · [TROUBLESHOOTING](../../TROUBLESHOOTING.md)（T-277） · [CHANGELOG](../../../CHANGELOG.md)（Unreleased 段）
 
 <a id="drv-5"></a>
-### DRV-5 驱动与 Mod 的 Close 统一口径（第十二轮“驱动 Close 契约” + RR-20261006-10）
+### DRV-5 驱动与 Mod 的 Close 统一口径（第十二轮“驱动 Close 契约” + RR-20261006-10 / -24 / -26 + nats 驱动自持关闭状态）
 
 | 首发 | 类型 | 行为变化 / 兼容破坏 | 需业务 / 运维改动 | 实现 |
 | --- | --- | --- | --- | --- |
-| v1.23.0（本版） | 维护者决定（第十二轮，写进契约表）→ 实测不一致登记 WANTED W-2026-10-06-02 → 转缺陷修复 RR-20261006-10（P3） | 是：单机 Redis 重复 Close 返回 nil（原 `ErrClosed`）；etcd / 单实例锁 store 首次出错后再调返回 nil；etcd 关闭后调用立即返回 `fetcd.ErrClosed`；DistLock 遇 `ErrClosed` 不再记成未知；并发 Close 后到者等第一个做完 | 依赖“第二次 Close 报错”判断已关闭的调用方改用 `errors.Is(<命令错误>, goredis.ErrClosed)`（仓内只有 NC-233 用例，已改） | [DRV-5](impl-saga-drv-dao-rem.md#drv-5) |
+| v1.23.0（本版） | 维护者决定（第十二轮，写进契约表）→ 实测不一致登记 WANTED W-2026-10-06-02 → 转缺陷修复 RR-20261006-10（P3）；真实进程演练再修 RR-20261006-24（P3）/ -26（P4）；第十三轮维护者方向调整：nats/driver 自持唯一的“已关闭”状态 | 是：单机 Redis 重复 Close 返回 nil（原 `ErrClosed`）；etcd / 单实例锁 store 首次出错后再调返回 nil；etcd 关闭后调用立即返回 `fetcd.ErrClosed`；DistLock 遇 `ErrClosed` 不再记成未知；并发 Close 后到者等第一个做完；nats 关闭后每个导出方法返回 `fnats.ErrClosed`（不再同时 `errors.Is` 到 nats.go 原错误）、`Connected()` 为 false | 依赖“第二次 Close 报错”判断已关闭的调用方改用 `errors.Is(<命令错误>, goredis.ErrClosed)`（仓内只有 NC-233 用例，已改）；nats 按 `errors.Is(err, fnats.ErrClosed)` 判断（仓内没有按 nats.go 原错误判断的调用方） | [DRV-5](impl-saga-drv-dao-rem.md#drv-5) |
 
-**结论**：全仓驱动与 kit Mod 的 Close 统一为三条：重复 Close 幂等返回 nil，第一次的错误只报给第一次；并发 Close 的后到者等第一个做完（会阻塞的在自己的 ctx 内等）；Close 之后的其他调用返回该驱动可 `errors.Is` 的已关闭错误。
+**结论**：全仓驱动与 kit Mod 的 Close 统一为三条：重复 Close 幂等返回 nil，第一次的错误只报给第一次；并发 Close 的后到者等第一个做完（会阻塞的在自己的 ctx 内等）；Close 之后的其他调用返回该驱动可 `errors.Is` 的已关闭错误。nats 驱动在同一处修了三次之后改为自己持有唯一的“已关闭”状态：Close 一开始就置位，每个导出方法入口先查它，过了入口的失败也先看它，nats.go 的连接状态只在未关闭时作辅助。
 
 **背景**：第十二轮维护者决定把驱动 Close 行为写进 A2 契约表（`88f33776`，收尾第 1 批）。按当时源码实测发现三种口径并存，登记为 WANTED W-2026-10-06-02、代码未改：
 
@@ -1000,9 +1129,23 @@ script_no_retry_promises_test.go:153: one evalsha call executed the script 2 tim
     close_contract_promises_test.go:56: concurrent Close returned <nil> while the first Close was still disconnecting; want it to wait
 ```
 
+nats 后续（本版内）：真实进程演练第 4 项（`0db819b0`）发现 RR-10 只修了 `Publish`——Close 之后的 Subscribe / QueueSubscribe / JetStream 三方法 / RPC CallAsync 原样返回 nats.go 的 `ErrConnectionClosed`，`errors.Is(err, fnats.ErrClosed)` 不成立（RR-20261006-24）；排空被硬关后 nats.go 把状态翻回 `DRAINING_PUBS` 并空等最长 5s 的 Flush，这段时间驱动的 `Connected()` 报 true（RR-20261006-26）。修前红文本（原样节选，出处 [RR-24](../../bug/RR-20261006-24.md) / [RR-26](../../bug/RR-20261006-26.md)）：
+
+```
+close_contract_promises_test.go:119: Subscribe after Close = nats: connection closed, want an error that errors.Is fnats.ErrClosed
+close_contract_promises_test.go:137: RPC.CallAsync after Assembly.Close = nats: request cancelled, want an error that errors.Is both fnats.ErrClosed and fnats.ErrCancelled
+close_contract_real_promises_test.go:229: Assembly.Connected() = true after the undrained close returned (DEBUG status=DRAINING_PUBS closed=false draining=true); the connection was closed hard
+```
+
+当时的修法是逐出口加翻译函数与 `closing` 标记。这是同一不变量（“Close 之后都是已关闭”）第三次被打破，按 roost-coding“反复出问题要上报方向判断”交维护者，改为驱动自持状态（`f0de827a`）；新守卫在 RR-24 / -26 的修法上又找出 `Drain` / `DrainWithContext` / 订阅句柄 `Unsubscribe` 三个漏口。
+
 **维护者决定**（出处 `docs/review/DECISIONS-PENDING-2026-10-05.md` 第十二轮表“驱动 Close 契约”行；该轮总原话为“B 类的都按照推荐即可，mongo 的延迟可以分析下”）：
 
 > 写进 A2 驱动契约表
+
+nats 的方向调整（第十三轮“nats/driver 已关闭状态”行）：
+
+> 维护者方向调整，按推荐 A：nats/driver 自己维护唯一的“已关闭”状态，不再依赖 nats.go 的连接状态
 
 转 RR 的依据是“维护者要求同类行为统一”（`docs/bug/RR-20261006-10.md` 转述，记录未保留原文）。没采用的口径与做法（`docs/bugfix/RR-20261006-10.md`）：
 
@@ -1020,7 +1163,7 @@ script_no_retry_promises_test.go:153: one evalsha call executed the script 2 tim
 | redis `DistLock` / `AutoExtendLock` | （无 Close；第二次 Release 返回 `ErrLockNotHeld`） | Acquire / Release / Extend 每次 `goredis.ErrClosed`，锁状态不变 | — |
 | mongo `Client.Close(ctx)` | nil | `mongo.ErrClientDisconnected` | 后到者在**自己的 ctx** 内等；ctx 先结束返回 ctx 错误，可再调用 |
 | etcd `Client.Close` | nil | Get / Put / Txn / Grant / KeepAlive / Revoke 等立即 `fetcd.ErrClosed`（Watch 本来就立即结束） | 后到者等第一个做完 |
-| nats `Assembly.Close(ctx)` | nil（终态 `ErrClosedUndrained` 只报给那一次，是唯一保留的例外） | `Publish` 立即返回，可 `errors.Is` 到 `fnats.ErrClosed` | 串行，后到者在自己的 ctx 内等 |
+| nats `Assembly.Close(ctx)` / `Client.Close` | nil（终态 `ErrClosedUndrained` 只报给关掉连接的那一次，是唯一保留的例外；先 `Client.Close` 再 `Assembly.Close` 返回 nil） | 每个导出方法（Publish / Request / Subscribe / QueueSubscribe / Drain / JetStream 三方法 / RPC Call / CallAsync / Reply / 订阅句柄 `Unsubscribe`）入口即返回 `fnats.ErrClosed`；与 Close 并发的调用要么在 Close 之前完成，要么返回 `fnats.ErrClosed`；`Connected()` / `IsValid()` 为 false；RPC 停止时在途的 CallAsync 回 `errRPCStopped`（同时 `errors.Is` 到 `ErrCancelled` 与 `ErrClosed`） | 串行，后到者在自己的 ctx 内等 |
 | kit `RedisMod` / `MongoMod` / `NatsMod.StopWithContext` | nil | — | 串行（修掉数据竞争） |
 | kit 单实例锁 `singletonStore.Close` | nil | `goredis.ErrClosed` | 后到者等第一个做完 |
 
@@ -1028,9 +1171,9 @@ script_no_retry_promises_test.go:153: one evalsha call executed the script 2 tim
 
 **兼容与迁移**：见表头“行为变化”。App 停机路径对每个 Mod 只串行调一次，不受影响。依赖“第二次 Close 报错”判断已关闭的代码改用命令错误判断。
 
-**已知限制 / 待外部验证**：Close 契约（幂等、并发等待、关闭后错误）在各驱动的包装层实现（`internal/operation.Serial` 与 closed 标志），用例用不可达地址与私有 redis-server 驱动同一代码路径；与服务端交互的断开动作（Mongo `Disconnect`、etcd / NATS 关连接）是驱动库自身行为。etcd 与 Close 并发的在途调用不被打断；没有静态守卫约束新写的 Close，按 roost-coding 规则自觉套用。无外部验证编号。同提交 `d05a04a1` 里的文档相对链接门禁 `TestTrackedMarkdownRelativeLinksResolve` 与 `skill/README.md` 链接修正属 TOOL 主题，见 TOOL 部分。
+**已知限制 / 待外部验证**：Close 契约（幂等、并发等待、关闭后错误）在各驱动的包装层实现（`internal/operation.Serial` 与 closed 标志），用例用不可达地址与私有 redis-server 驱动同一代码路径；与服务端交互的断开动作（Mongo `Disconnect`、etcd / NATS 关连接）是驱动库自身行为。nats 部分另在真实 NATS（私有 JetStream 3 节点）上实测，包括硬关后 nats.go 翻回 `DRAINING_PUBS` 的窗口。nats 的边界（设计）：nats.go 放弃重连后自己关闭的连接驱动不置位，由错误辅助分类映射为 `fnats.ErrClosed`、`Assembly.Close` 报一次 `ErrClosedUndrained`；JetStream 消费句柄的生命周期是 nats.go 的 ConsumeContext，不在判据内。nats 新加导出方法不登记守卫表就红（`TestEveryExportedDriverMethodHasAClosedStateCheck`）。etcd 与 Close 并发的在途调用不被打断；没有静态守卫约束新写的 Close，按 roost-coding 规则自觉套用。无外部验证编号。同提交 `d05a04a1` 里的文档相对链接门禁 `TestTrackedMarkdownRelativeLinksResolve` 与 `skill/README.md` 链接修正属 TOOL 主题，见 TOOL 部分。
 
-**链接**：[实现](impl-saga-drv-dao-rem.md#drv-5) · [问题记录](../../bug/RR-20261006-10.md) · [修复记录](../../bugfix/RR-20261006-10.md) · [WANTED W-2026-10-06-02](../../bug/WANTED.md) · [redis/driver README §5](../../../redis/driver/README.md) · [mongo/driver README §5](../../../mongo/driver/README.md) · [roost-coding](../../agent-skills/roost-coding/SKILL.md) · [CHANGELOG](../../../CHANGELOG.md)（Unreleased 段）
+**链接**：[实现](impl-saga-drv-dao-rem.md#drv-5) · [问题记录](../../bug/RR-20261006-10.md) · [修复记录](../../bugfix/RR-20261006-10.md) · [RR-20261006-24](../../bug/RR-20261006-24.md) / [修复](../../bugfix/RR-20261006-24.md) · [RR-20261006-26](../../bug/RR-20261006-26.md) / [修复](../../bugfix/RR-20261006-26.md) · [nats 驱动自持关闭状态](../../feature/REFACTOR-2026-10-06-nats-driver-closed-state.md) · [真实进程演练](../../bugfix/REAL-PROCESS-DRILLS-2026-10-06.md) · [WANTED W-2026-10-06-02](../../bug/WANTED.md) · [redis/driver README §5](../../../redis/driver/README.md) · [mongo/driver README §5](../../../mongo/driver/README.md) · [roost-coding](../../agent-skills/roost-coding/SKILL.md) · [CHANGELOG](../../../CHANGELOG.md)（Unreleased 段）
 
 <a id="drv-6"></a>
 ### DRV-6 启动建索引遇 Mongo 选举有界重试（O-M6-5）
@@ -1065,6 +1208,98 @@ owner_startup_election_integration_test.go:86: owner storage init #9 failed duri
 **已知限制 / 待外部验证**：多机副本集与 mongos 上的选举期间行为见 [E11](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)。重试次数按“每个索引”计（源码 `mongo/driver/collection.go:251-252`），一次 `EnsureIndexes` 含 N 个索引且每个都撞上选举时最坏约 N × 10s，由调用方启动 ctx 兜底；CHANGELOG 与第十二轮 kit 批记录 §7 已写清（fixr `155b9f91`）。
 
 **链接**：[实现](impl-saga-drv-dao-rem.md#drv-6) · [第十二轮 kit 批记录 §7](../../feature/DECISIONS-R12-KIT-2026-10-06.md) · [第 6 步本机替代](../../feature/MIRROR-STEP-6-LOCAL-2026-10-06.md) · [TROUBLESHOOTING](../../TROUBLESHOOTING.md)（T-282） · [CHANGELOG](../../../CHANGELOG.md)（Unreleased 段）
+
+<a id="drv-7"></a>
+### DRV-7 A2 ③：versionstore 写入带一次性令牌，回复丢失由 store 核对（墓碑维护者选 A 不加）
+
+| 首发 | 类型 | 行为变化 / 兼容破坏 | 需业务 / 运维改动 | 实现 |
+| --- | --- | --- | --- | --- |
+| v1.23.0（本版） | 维护者决定（第二轮 A2 ③“暂不做” → 第十三轮“原下个大版本项本版完成”；“versionstore 墓碑”选 A） | 是，**不兼容**：信封格式改变（新旧互读都报错，升级需清空 versionstore 的键）；回复丢失的写多数在 store 内变为确定结果，剩下的错误多一层 `ErrOutcomeUnknown`；`Store` 接口不变 | 运维：升级先停旧进程、清空 versionstore 键与索引（T-291）。业务：无需改代码；在 store 之外再重试写的调用方可用 `Resume` | [DRV-7](impl-saga-drv-dao-rem.md#drv-7) |
+
+**结论**：versionstore 每次写（每一条 compare-and-set 命令）都在信封里带一个由 store 生成的一次性令牌，令牌与值同一条 `SET`、同一个脚本里原子写入；写命令回复丢失时，store 读一次键按令牌判定：已生效就返回那次写的结果，确定没执行才原样重发同一条命令，被别人抢先就当作比输；证明不了的返回 `ErrOutcomeUnknown`。`Create` / `Delete` 回复丢失、核对时键已不存在的两种情况，维护者选 A 不加墓碑，保持结果未知。
+
+**背景**：A2 ①②（[DRV-3](#drv-3)）之后驱动不重放写命令，结果未知原样交给调用方。但 versionstore 的调用方手里只有一个传输错误：再调一次 `Update`，mutate 叠在自己那次已生效的写上，**重复生效**（与 NC-100 修前驱动重放后果一样，[DRV-1](#drv-1)）；`Create` 重试时键已被自己建好，返回“没建”，把自己的写**判成冲突**；`Delete` / `DeleteIf` 重试返回 `ErrVersionMismatch`，同样判成冲突。修前红（原样节选，基线 `66d72a33`，出处 [方案 §10](../../feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md)，替身与真实 Redis 单机 / Cluster 都红）：
+
+```text
+--- FAIL: TestAnUpdateWhoseReplyIsLostIsNotAppliedTwiceWhenTheCallerRetries
+    update returned {Value:{Name:a Total:2} Version:3} applied=true err=<nil>; store holds {Value:{Name:a Total:2} Version:3} (want total 1 at v2)
+--- FAIL: TestACreateWhoseReplyIsLostIsNotReportedAsTakenWhenTheCallerRetries
+    a create whose reply was lost was reported as created=false {Value:{Name: Total:0} Version:0} err=<nil>; it is this caller's own write
+--- FAIL: TestRealRedisAWriteWhoseReplyIsLostIsRecognisedByItsToken/update
+    lost reply: update returned [hello msg-1 msg-1] / v3 applied=true err=<nil>; Redis holds [hello msg-1 msg-1] / v3 (want msg-1 once at v2)
+```
+
+**维护者决定**：第二轮 A2 行“按推荐：① 驱动行为契约表 ② RedisMod 默认不重放写命令；③ 暂不做”（[DRV-3](#drv-3)）。第十三轮“A2③：维护者要求本版完成”行（原样）：
+
+> 还有留到下个版本的几项在本机能完成吗？希望本次能完成了
+
+同行写明：改持久格式，不做旧格式兼容，升级需清空。实施时“键不存在 / 删除之后”无法核对，方案 §8 交维护者在 A（保持：这两种返回 `ErrOutcomeUnknown`，由调用方按请求 ID 去重或回读裁决）与 B（删除改写墓碑，带保留期 R）之间选。第十三轮“versionstore 墓碑”行：
+
+> 维护者选 A：不加墓碑；键不存在时 Create / Delete 回复丢失返回 `ErrOutcomeUnknown`，由调用方按请求 ID 去重或回读裁决
+
+（DECISIONS-PENDING 的转述。）没采用 B 的理由（方案 §8）：墓碑保留期 R 是一个无法从现有约束推出的产品选择（`Resume` 的重试间隔由调用方决定、没有上界），保留期内同一键的空间不释放（session claim、directory 条目、activity 参与者等删除频繁的 store 会持续占内存），保留期之后照样无法核对，而且 `Get` / `IndexRemoveIfAbsent` / TTL store 的过期语义都要改。没采用的实现：在 versionstore 里把“比较失败且当前值等于自己的 Next”判为已应用（别的写者可能写出字节相同的信封，NC-100 修复记录已否定）。
+
+**现在的行为**：
+
+- 持久格式：`<version>|<token_v>|<token_v-1>|…\n<payload>`；令牌是 8 字节随机数的 base64url（11 个字符），第 i 个是写出 `version - i` 的那一次；每键只留最近 `WriteTokenHistory` 个（`RedisConfig.WriteTokenHistory`，0 取缺省 8，与单键竞争上限 `DefaultMaxAttempts` 相同，每键约多 96 字节，随键删除 / 过期）。Lua 脚本不变，Redis Cluster 不新增键、槽位不变。
+- 回复丢失时的判定（同一次调用里、用调用方的 ctx；`GET` 失败立即停）：
+
+| 读到的当前值 | 判定 | 动作 |
+| --- | --- | --- |
+| 令牌列表里有这次写的令牌 | 已生效 | 返回那次写的值与版本 |
+| 与这次写的基准字节相同 | 没执行 | 原样重发同一条命令（同一令牌、同一期望值） |
+| 由基准演进而来、但没有这次写的令牌 | 别人写了下一个版本 | `Update` 当作比输、重读重跑 mutate；`Delete` 返回 `ErrVersionMismatch` |
+| 键不存在、不在一条演进链上、令牌已被挤出、这次写没有基准（键原本不存在） | 证明不了 | `ErrOutcomeUnknown` |
+
+- **结果未知的两种情况**（墓碑选 A 之后写明的契约）：① `Create`（或对不存在键的 `Update`）回复丢失、核对时键仍不存在——“键不存在”没有身份，分不清“没执行”与“执行了、随后被别人删掉”，不重发（否则会把别人删掉的东西再建出来）；② `Delete` / `DeleteIf` 回复丢失、核对时键不存在——删除不留下任何东西，分不清是自己删的还是别人删的。两者都返回 `ErrOutcomeUnknown`，由调用方按请求 ID 去重或回读裁决（仓内没有在传输错误上重试 `Create` / `Delete` 的调用方，跨 RPC 的重试已由值里的请求 ID 去重）。
+- 不是回复丢失的错误原样返回、不核对不重发：服务端的错误回复（脚本报错、`WRONGTYPE`、`LOADING` 等）、拨号失败、`ErrCASInvalidCommand`。go-redis 的 `ErrPoolTimeout` / `ErrClosed` versionstore 认不出（不能 import 驱动），保守按回复丢失处理：核对用的 `GET` 同样失败，立即返回结果未知。
+- 新 API：`ErrOutcomeUnknown`、`*UnknownOutcomeError`（`errors.Is` 同时命中 `ErrOutcomeUnknown` 与原传输错误）、`Resume(ctx, err)`（让下一次调用续核上一次的令牌：已生效直接返回上一次的结果，确定没生效才重新执行；同一令牌、不同的值或不同种类的写返回 `ErrWriteTokenMismatch`；只在进程内有效）、`ErrWriteTokenMismatch`、`RedisConfig.WriteTokenHistory`。`MemoryStore` 不会产生结果未知，忽略 `Resume`。
+- 指标 `versionstore.unknown_outcome.total{store, result=applied|lost|unresolved}`（导出名 `versionstore_unknown_outcome_total`）；`versionstore.cas.total` 口径不变。
+
+调用方在 store 之外再重试时的写法（方案 §4）：
+
+```go
+result, applied, err := store.Update(ctx, key, mutate)
+if errors.Is(err, versionstore.ErrOutcomeUnknown) {
+    result, applied, err = store.Update(versionstore.Resume(ctx, err), key, mutate)
+}
+```
+
+**兼容与迁移**（不兼容，线上未部署，维护者决定不做兼容）：
+
+- 新版本读旧信封报 `ErrMalformedRecord`（`no write token (old envelope format; clear the store on upgrade)`），旧版本读新信封同样报错。**升级**：停掉全部旧进程，清空各服务 versionstore 前缀下的键（account、chat、directory、global、activity、platform、mail、match、session），带索引的 store 连同索引有序集合，再启动新版本（T-291）；不支持新旧进程混跑。
+- 调用方不改代码：回复丢失的写多数在 store 内被核对成确定结果；剩下的错误多一层 `ErrOutcomeUnknown`（原来的传输错误仍可 `errors.Is`）。同一次调用里可能多一次 `GET` 和至多 `MaxAttempts` 次重发（受调用方 ctx 约束）。
+- `fredis.CompareAndSet` / `CompareAndDelete`、`app` 单实例锁、rank 的交换脚本不用 versionstore 信封，不受影响；生成模板不直接读写信封，codegen 不受影响。
+
+**已知限制 / 待外部验证**：令牌被挤出保留范围（键上又落了 8 次以上的写）时返回结果未知、不猜（与改前行为相同）。本机：单机 Redis（自建 toxiproxy 丢回复）与私有 Cluster 3 主 3 从（脚本执行后丢回复）红绿；指向私有环境的 `./kit/service/... ./service/...` 15 个包 integration 通过。多机 Cluster 见 [E08](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)，异步复制切主见 [E10](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)。
+
+**链接**：[实现](impl-saga-drv-dao-rem.md#drv-7) · [方案与验证](../../feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md) · [A2 驱动契约](../../feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md) · [决定表](../../review/DECISIONS-PENDING-2026-10-05.md) · [TROUBLESHOOTING](../../TROUBLESHOOTING.md)（T-291） · [CHANGELOG](../../../CHANGELOG.md)（Unreleased 段）
+
+<a id="drv-8"></a>
+### DRV-8 RR-20261006-35：带索引写的 NaN 分数在发出前拒绝
+
+| 首发 | 类型 | 行为变化 / 兼容破坏 | 需业务 / 运维改动 | 实现 |
+| --- | --- | --- | --- | --- |
+| v1.23.0（本版） | 缺陷修复（RR-20261006-35，P3；A2 ③ 实施中发现，同一提交） | 是，收紧：`RedisIndex.Entry` 返回 NaN 的写返回 `ErrCASInvalidCommand`、什么都不写（修前“写入但报错”） | 否：仓内两个带索引的 store（platform 订单、activity dispatch）分数都由整数时间换算 | [DRV-8](impl-saga-drv-dao-rem.md#drv-8) |
+
+**结论**：`redis.CompareAndSet` 带索引时，在发出前拒绝 NaN 分数（`±Inf` 是 Redis 合法分数，不拒绝），守住 RR-20260919-04 的承诺“索引条目当且仅当 compare-and-set 生效时移动”。
+
+**背景**：带索引的 compare-and-set 脚本比较通过后先 `SET` / `PSETEX` 值、再 `ZADD` 索引；分数按 `FormatFloat` 发出，NaN 变成 `"NaN"`，Redis 的 `ZADD` 拒绝它时脚本里的 `SET` 已执行、不回滚——值写入（版本 +1）、索引不动、调用方拿到错误。替身用 Go 的 `ParseFloat` 把 NaN 当合法分数，单测里看不见（roost-bugfix lessons“比被测实现更正确的替身会把缺陷藏起来”）。修前红（原样，真实 Redis，出处 [问题记录](../../bug/RR-20261006-35.md)）：
+
+```text
+    write_token_integration_test.go:219: a NaN index score: update applied=false err=ERR value is not a valid float script: 2deb7cee6d6074b90e0086b5a2a33539849b83d7, on @user_script:21.; Redis holds [hello nan] / v2 (want nothing written)
+--- FAIL: TestRealRedisAnIndexedWriteWithANaNScoreChangesNothing (0.00s)
+```
+
+**维护者决定**：无决定轮次，按 bugfix 流程修复（A2 ③ 同批）。没采用：在 Lua 里先校验分数再 `SET`（要在脚本里复刻 Redis 的浮点解析规则，跨语言更容易不一致）；在 versionstore 里校验（`CompareAndSet` 是带索引写的唯一入口，放在这里所有调用方都受保护）。
+
+**现在的行为**：`Index.Remove == false` 且分数是 NaN 时返回 `fmt.Errorf("%w: index score is NaN", ErrCASInvalidCommand)`，什么都不发；versionstore 把 `ErrCASInvalidCommand` 当“回复到了”的确定错误，不核对不重发（[DRV-7](#drv-7)）。
+
+**兼容与迁移**：无需改动。
+
+**已知限制 / 待外部验证**：无外部验证项。带索引脚本里 `SET` 之后的 `ZADD` / `ZREM` 遇到 `WRONGTYPE`（索引 key 被别的类型占用，属于键空间配置错误）同样会“值已改、报错”，那是部署错误，修复记录写明不处理，A2 ③ 对服务端错误回复原样返回。
+
+**链接**：[实现](impl-saga-drv-dao-rem.md#drv-8) · [问题](../../bug/RR-20261006-35.md) · [修复](../../bugfix/RR-20261006-35.md) · [A2 ③ 方案](../../feature/A2-3-VERSIONSTORE-WRITE-TOKEN-2026-10-07.md) · [CHANGELOG](../../../CHANGELOG.md)（Unreleased 段）
 
 ## DAO：回滚统一走 DAO
 
@@ -1124,7 +1359,7 @@ owner_startup_election_integration_test.go:86: owner storage init #9 failed duri
 
 **结论**：`skill.Runtime` 的状态是 A1“事务内会改的状态一律进 DAO”的明确例外：handler 失败或提交被拒时 DAO 回滚，Runtime 不回退，业务按这个前提设计。
 
-**背景**：N09 O1：Runtime 是自带锁、调度器、进程表和投递缓冲的独立执行引擎，状态散在十几个 map 里。A1 方案 §4.4 列为后续：放进 DAO 只有两条路——每笔事务把 `Checkpoint()` 写进非持久 DAO 字段（每笔一次 JSON + sha256 全量序列化，投递缓冲按设计不进 checkpoint），或把 Runtime 的权威状态拆成 DAO 字段（等于重写 Runtime）。
+**背景**：N09 O1：Runtime 是自带锁、调度器、衍生物表（Spawn，原称“进程”，本版全量改名，见 SKILL 部分）和投递缓冲的独立执行引擎，状态散在十几个 map 里。A1 方案 §4.4 列为后续：放进 DAO 只有两条路——每笔事务把 `Checkpoint()` 写进非持久 DAO 字段（每笔一次 JSON + sha256 全量序列化，投递缓冲按设计不进 checkpoint），或把 Runtime 的权威状态拆成 DAO 字段（等于重写 Runtime）。
 
 **维护者决定**（出处 `docs/review/DECISIONS-PENDING-2026-10-05.md` 第四轮表 B4 行）：
 
@@ -1136,7 +1371,7 @@ owner_startup_election_integration_test.go:86: owner storage init #9 failed duri
 
 | 回退 | 不回退 |
 | --- | --- |
-| 经 `HostAdapter` / `StatusBridge` 改的战斗 DAO：法力等资源（`PayCosts`）、血量、护盾、属性修饰、buff | 冷却与全局冷却、ammo 库存与充能排程、cast 状态与排程任务、owned 进程、ability 状态覆盖、proc 账本与同根事件计数、state mutation 流与 presentation 缓冲、Runtime 观察到的 revision；业务 `RevisionSource.CommitEffect` 推进的 revision 与追加的事件 |
+| 经 `HostAdapter` / `StatusBridge` 改的战斗 DAO：法力等资源（`PayCosts`）、血量、护盾、属性修饰、buff | 冷却与全局冷却、ammo 库存与充能排程、cast 状态与排程任务、衍生物（Spawn，原“进程”）及其归属、ability 状态覆盖、proc 账本与同根事件计数、state mutation 流与 presentation 缓冲、Runtime 观察到的 revision；业务 `RevisionSource.CommitEffect` 推进的 revision 与追加的事件 |
 
 典型后果是“法力已回滚、技能已进冷却”。四条设计约束：
 
@@ -1256,7 +1491,7 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 
 | 键 | 缺省 | 范围 / 校验 | 含义 |
 | --- | --- | --- | --- |
-| `remote_entity.cached_max_staleness` | 不配置 = `snapshot_cache_ttl`（core 缺省 30s；`snapshot_cache_ttl` 也为 0 时 30s） | A4 严格读取（不带单位的数字报错）；设置了必须为正；登记在 `app` 的 `frameworkDurationKeys`，`ValidateServiceConfig` 启动前检查类型；core `NewSnapshotClient` 拒绝负值 | Cached / Monotonic 交出的快照距最近一次被 L2 或权威确认的最长时间 |
+| `remote_entity.cached_max_staleness` | 不配置 = `snapshot_cache_ttl`（core 缺省 30s；`snapshot_cache_ttl` 也为 0 时 30s） | 时长，不带单位的数字报错；设置了必须为正（本版由 kit 配置声明检查，App 启动前一次报全，A4 ①；v1.20.2～v1.22.0 是登记在 `app` 的 `frameworkDurationKeys`）；core `NewSnapshotClient` 拒绝负值 | Cached / Monotonic 交出的快照距最近一次被 L2 或权威确认的最长时间 |
 
 指标：`remote_entity.snapshot_replica_historic_dropped_total`（O5 丢弃的历史快照）。错误：`entity.ErrRemoteVersionConflict`（同版本异值，不可重试，一致性错误）、`cache.ErrStaleWrite`（L2 层拒绝旧写，缓存内部消化，不返回给读者）。
 
@@ -1390,7 +1625,7 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 
 | 键 | 缺省 | 范围 / 校验 | 含义 |
 | --- | --- | --- | --- |
-| `remote_entity.snapshot_interest_per_consumer` | 0 = `snapshot_interest_subs / 16`（core 缺省 262144 / 16 = 16384；生成配置 `snapshot_interest_subs: 100000` 时为 6250） | int；A4 严格读取，登记在 `frameworkIntKeys`；必须在 `[0, snapshot_interest_subs]`，越界 kit `Init` 与 core `NewSnapshotClient` 都拒绝 | 每个 consumer 节点在每个节点兴趣表里的租约配额 |
+| `remote_entity.snapshot_interest_per_consumer` | 0 = `snapshot_interest_subs / 16`（core 缺省 262144 / 16 = 16384；生成配置 `snapshot_interest_subs: 100000` 时为 6250） | int（本版由 kit 配置声明检查，A4 ①；之前登记在 `frameworkIntKeys`）；必须在 `[0, snapshot_interest_subs]`，越界 kit 声明的跨键规则（`ValidateConfig`）与 core `NewSnapshotClient` 都拒绝 | 每个 consumer 节点在每个节点兴趣表里的租约配额 |
 | `remote_entity.snapshot_interest_subs`（语义变化） | 262144（core） | 正整数 | 现在只是每节点兴趣表条目（租约 + 撤销水位）的内存上限 |
 | `remote_entity.snapshot_interest_keys`（不变） | 65536（core） | 正整数 | consumer 本机兴趣表 key 上限 |
 
@@ -1425,10 +1660,10 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 
 | 键 | 缺省 | 范围 / 校验 | 含义 |
 | --- | --- | --- | --- |
-| `remote_entity.mirror.shutdown_timeout` | 5s（kit `defaultMirrorShutdownTimeout`；core `DefaultConfig` 没有这一项） | 设置了必须为正；A4 严格读取；登记在 `frameworkDurationKeys` | `RemoteMirrorMod` 的停机预算（`StopBudget`）；`RemoteEntityMod` 不读 |
+| `remote_entity.mirror.shutdown_timeout` | 5s（kit 配置声明的 `default`，`Stop()` 无预算时同样用 `defaultMirrorShutdownTimeout`；core `DefaultConfig` 没有这一项） | 设置了必须为正（kit 声明 `min:"1ns"`，A4 ①；之前登记在 `frameworkDurationKeys`） | `RemoteMirrorMod` 的停机预算（`StopBudget`）；`RemoteEntityMod` 不读 |
 | `remote_entity.mongo.database`（复用） | `remote_entity` | 字符串 | 只读 Mongo loader 读 `_remote_entity_snapshots` 的库 |
 
-只读服务还读快照段的全部键（与 `RemoteEntityMod` 共用 `readSnapshotConfig`），锁、提交、finalizer 的键不读。Init 错误：`remote_entity mirror mod: non-zero sid is required …`；`MirrorSource` 找不到能力：`remote mirror: capability "remote_entity.mirror" not found: add kit/remoteentity.NewRemoteMirrorMod (read-only service) or RemoteEntityMod (owner process)`。日志：Info `remote_entity mirror mod: started`（带 `snapshot_push`、`cached_max_staleness`、`linearizable`）、Warn `remote_entity mirror mod: stop incomplete` / Info `stopped`。
+只读服务还读快照段的全部键（与 `RemoteEntityMod` 共用同一份快照段配置声明；v1.21.0～v1.22.0 是共用 `readSnapshotConfig`），锁、提交、finalizer 的键不读。Init 错误：`remote_entity mirror mod: non-zero sid is required …`；`MirrorSource` 找不到能力：`remote mirror: capability "remote_entity.mirror" not found: add kit/remoteentity.NewRemoteMirrorMod (read-only service) or RemoteEntityMod (owner process)`。日志：Info `remote_entity mirror mod: started`（带 `snapshot_push`、`cached_max_staleness`、`linearizable`）、Warn `remote_entity mirror mod: stop incomplete` / Info `stopped`。
 
 - codegen：`//roost:mirror entityKind=<owner kind> coll=<owner DAO 集合>` 放在普通 struct 上，生成 `<dto>_gen_wire.go`（spec 的 `Scope` / `Schema` / `Codec=1` 与 Managed 生成的提交快照同一规则；BSON 解码；reader 构造）；不生成 kind / builder / 解码器注册、DAO、提交能力；DTO 带 `dao:` / `comp:` 标签或嵌入字段直接拒绝。`remote=mirror` / `lifetime=mirror_cache` 报 `remote=mirror no longer generates an entity: …`（解析与生成两处）。`remote=bogus` 的报错文本改为 `none|managed (a read-only mirror is a //roost:mirror DTO)`。
 
@@ -1575,7 +1810,7 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 **现在的行为**（USER_GUIDE 已写明）：
 
 - L2 的上界：CAS 与带版本删除每次成功都重设 L2 键的 TTL（同一版本重写也续期）；最后一次写入后 `snapshot_l2_ttl` 键过期，读者重新确认时 L2 没有值，回源权威。
-- 读者看到的上界：`snapshot_l2_ttl + cached_max_staleness`。core `DefaultConfig`：5m + 30s ≈ 5m30s。**生成配置模板写的是 `snapshot_l2_ttl: 10m`、`cached_max_staleness: 30s`，按模板部署时上界约 10m30s**（按 `codegen/internal/roost/catalog.go` 的模板值计算；USER_GUIDE 与 B2 §7 已分开写明，fixr `155b9f91`）。
+- 读者看到的上界：`snapshot_l2_ttl + cached_max_staleness`。core `DefaultConfig`：5m + 30s ≈ 5m30s。**生成配置模板写的是 `snapshot_l2_ttl: 10m`、`cached_max_staleness: 30s`，按模板部署时上界约 10m30s**（按生成配置的取值计算——本版 A4 ① 之后它来自 kit 配置声明的 `example`，之前是 `codegen/internal/roost/catalog.go` 的模板字符串，值相同；USER_GUIDE 与 B2 §7 已分开写明，fixr `155b9f91`）。
 - “最后一次写进 L2”包括同值重写：L2 的 CAS 脚本对同版本同值也续期（`remoteentity/snapshot_l2.go` CAS 脚本末尾 `PEXPIRE`），L1 冷的节点在 O5 窗口内收到旧值的复制消息会把旧值写回并续期；O5 丢弃发布超过 `snapshot_l2_ttl / 2` 的快照更新，所以从旧值发布起算的最坏上界约 1.5 × `snapshot_l2_ttl` + `cached_max_staleness`（源码核对；推送开着时新版本的复制消息会更早修好 L2）。
 - 通常更早修好：owner 的 L1 条目未确认，自己下一次读这个实体时把新版本 CAS 进 L2；推送开着时收到复制更新 / 删除的每个节点都会写 L2；这个实体的下一笔提交也会写 L2。`Linearizable` 不受影响。
 
@@ -1631,9 +1866,11 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 | `snapshot_interest_per_consumer` | `0` | 零值 = `snapshot_interest_subs / 16` |
 | `snapshot_l2_tombstone_wait_replicas` | `1` | `DefaultConfig` 为 1 |
 | `snapshot_l2_tombstone_wait_timeout` | `50ms` | `DefaultConfig` 为 50ms，上限 1s |
-| `mirror.shutdown_timeout` | `5s` | kit `defaultMirrorShutdownTimeout`；只有 `RemoteMirrorMod` 读 |
+| `mirror.shutdown_timeout` | `5s` | kit 声明的缺省 5s；只有 `RemoteMirrorMod` 读 |
 
-**兼容与迁移**：只影响新生成工程；生成器 Core 下限不变（记录写 v1.21.0 / v1.22.0 的 kit 不认识墓碑两键，viper 忽略未知键）。
+本版 A4 ①（`d1226825`，CFG 部分）之后，生成配置段不再是 `catalog.go` 里手写的模板字符串，而是由 kit Mod 配置声明里标了 `example` 的键渲染、`help` 写成注释；上表五个键的取值与依据不变，两条生成用例原样通过。
+
+**兼容与迁移**：只影响新生成工程；这一项本身不要求提高生成器 Core 下限（记录写 v1.21.0 / v1.22.0 的 kit 不认识墓碑两键，viper 忽略未知键）。v1.23.0 整体的 Core 下限要在打 tag 时提到 v1.23.0（A4 ① 与 activity 组必填，见 CFG / OWN 部分）。
 
 **已知限制 / 待外部验证**：无外部验证项。按约定不等 GitHub CI（framework-compat full 场景），本地验证见 [CLOSING-BATCH-2 §A8](../../bugfix/CLOSING-BATCH-2-2026-10-06.md)。v1.21.0 / v1.22.0 的 core 遇到新生成配置里的墓碑两键不报错：两个版本的 `ValidateServiceConfig` 只严格检查登记过的键与 `.call_timeout` 后缀，kit 也不读它们（源码核对）。
 
@@ -1670,6 +1907,43 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 
 **链接**：[实现](impl-saga-drv-dao-rem.md#rem-14) · [问题](../../bug/RR-20261006-11.md) · [修复（含同批 REM 疑点闭环与到期实测）](../../bugfix/RR-20261006-11.md) · [MIRROR-STEP-4 §6.10](../../feature/MIRROR-STEP-4-AND-O4-2026-10-06.md) · [CHANGELOG](../../../CHANGELOG.md)（Unreleased 段）
 
+<a id="rem-15"></a>
+### REM-15 A3 ②：排空下沉到同步总线——`ISyncBus` 退订带 ctx（含 RR-20261006-36）
+
+| 首发 | 类型 | 行为变化 / 兼容破坏 | 需业务 / 运维改动 | 实现 |
+| --- | --- | --- | --- | --- |
+| v1.23.0（本版） | 维护者决定（第二轮 A3 ② 推荐列为下个大版本、有兼容期 → 第十三轮“本版完成，不留兼容期，直接替换”）+ 实施中发现的缺陷 RR-20261006-36（P3） | 是，**API 破坏**：`syncbus.Handler` 加投递 ctx；`Subscribe` / `SubscribeLive` 返回 `*syncbus.Subscription`；`cache.ReplicaSyncer.Stop`、`syncbus.PatchSyncer.Stop` 改为 `Stop(ctx) error`；`syncstream.Subscribe*` 返回 `*Subscription`。行为收紧：退订 / 停止在回调返回前不报告完成。wire、持久格式、durable 名、生成形状不变 | 自己实现 `ISyncBus` 或直接用这些 API 的代码按新签名改（仓内与生成夹具已全部迁移）；在 handler 里退订自己必须传入 handler 收到的 ctx | [REM-15](impl-saga-drv-dao-rem.md#rem-15) |
+
+**结论**：“退订返回 = 回调已静止，可以释放依赖”从每个订阅者各自补的约定，变成同步总线退订本身的承诺：`Subscription.Unsubscribe(ctx)` 是三步停机，返回 nil 时这个订阅没有在途回调、也不会再有新回调。排空只在 `Subscription` 实现一次，JetStream、普通 NATS 驱动与全部测试替身都经 `NewSubscription` + `Deliver` 得到同一份语义；Mirror 的复制器（[REM-2](#rem-2) / [REM-4](#rem-4)）删掉了自带的准入门。
+
+**背景**：旧 `Subscribe(topic, handler) (unsub func(), error)` 的退订函数只发起退订、不等在途回调——普通 NATS 只发 UNSUB，JetStream fanout 只从 map 删 handler，`ConsumeContext.Stop` 也不等回调。于是这个不变量只能由每个订阅者自己补：`mirror.Replicator` 为此自带一层 `operation.Lifetime` 准入门（NC-174），而 `PatchSyncer.Stop`、`ReplicaSyncer.Stop`、`syncstream` 的退订根本不等，返回后 `Apply` / `Store` / handler 仍可能在被释放的依赖上运行（RR-20261006-36）。A3 的来由正是同一不变量被打破了 11 次。修前红（原样，出处 [方案 §9](../../feature/A3-2-SYNCBUS-DRAINING-UNSUBSCRIBE-2026-10-07.md) 与 [RR-20261006-36](../../bug/RR-20261006-36.md)）：
+
+```text
+unsubscribe_drain_promises_test.go:50: unsubscribe returned while the handler was still running: the subscriber would release its dependencies under an in-flight callback   （jetstream / nats 各一次）
+old_unsubscribe_red_integration_test.go:90: unsubscribe returned while the handler was still running (real jetstream)
+old_stop_red_test.go:25: PatchSyncer.Stop returned while Apply was still running
+old_stop_red_test.go:41: ReplicaSyncer.Stop returned while the Store write was still running
+```
+
+**维护者决定**：第二轮 A3 行（原样）“按推荐：① 共用小类型 + 停机契约测试骨架，③ glsvet 只提示”——推荐里 ② 排空下沉列为“下个大版本”（待决定表的推荐列原文“① 现在做；② 下个大版本；③ 只做提示不做门禁”）。第十三轮“A3②：维护者要求本版完成”行（原样）：
+
+> 还有留到下个版本的几项在本机能完成吗？希望本次能完成了
+
+同行写明“线上未部署，不留兼容期，直接替换”。取舍（方案 §2～§4）：`Subscription` 做成具体类型而不是接口，排空语义只实现一次；RR-36 的三处不各加准入门（那正是同一不变量被打破 11 次的写法），而是改为等传输层的 `Unsubscribe(ctx)`；退订**不取消**在途回调的 ctx（旧行为是退订后在途回调照常做完、durable 消费者随后 ACK，取消会让停机窗口里已 ACK 的消息在 Store 里半途放弃）；不新增生产内存总线（各替身各带故障注入，合成一个通用总线不减少代码）。
+
+**现在的行为**：
+
+- `Unsubscribe(ctx)`：①发起（幂等）：关闭投递准入，之后到达的消息不再调用 handler（`Deliver` 返回 `ErrUnsubscribed`）；②在 ctx 内等这次订阅已准入的回调全部返回，ctx 先结束返回 ctx 错误、订阅保持“退订中”，用新 ctx 重试继续等同一批；③返回 nil 之后订阅者可以释放 handler 用到的依赖，再调用（任何 ctx）都返回 nil。
+- **回调里退订自己**：handler 用它收到的投递 ctx（或其派生）调用 `Unsubscribe`，先归还本次调用的准入、只等其他在途回调，不死锁。**必须传入回调收到的 ctx**——Go 没有 goroutine 身份，传输层只能经 ctx 认出“自己”；传入无关的 ctx（如 `context.Background()`）会等自己：带期限的到期返回 ctx 错误（不是永久死锁），`Background` 会一直等。
+- 订阅方：`mirror.Replicator.StopWithContext` 对每个还没确认排空的订阅 `Unsubscribe(ctx)`（`Stop` 只发起）；`cache.ReplicaSyncer.Stop(ctx)`、`PatchSyncer.Stop(ctx)` 在回调返回前不报告完成，超时返回 ctx 错误、可重试；`syncstream` 的重组表随排空后释放的 handler 引用回收。
+- 不变的：`remoteentity.SnapshotClient` 自己的 `work` 准入（守读路径对 L2 / 权威的调用）、`jetStreamSyncBus.StopWithContext` 的总线停机（NC-172）、`bus` 的 JetStream RPC；兴趣主题 handler 出错照旧记 Warn 后 Ack（[REM-5](#rem-5)）。
+
+**兼容与迁移**（API 破坏，线上未部署）：自己实现 `ISyncBus` 的替身改用 `syncbus.NewSubscription` / `Deliver`；handler 签名加 ctx；`PatchSyncer.Stop` / `ReplicaSyncer.Stop` 传入停机预算的 ctx。RR-36 的三处没有生产调用方（`PatchSyncer`、`ReplicaSyncer` 只在测试里用，`syncstream` 只在 skill 集成测试里用）。roost-coding 生命周期一节已改为现行规则：订阅者不再为“退订后回调还在跑”自己包一层 Lifetime 准入门。
+
+**已知限制 / 待外部验证**：本机真实 nats-server（JetStream 与普通 NATS）上排空、回调里退订自己、总线停机都已验证；私有 mirror-local 环境上 remoteentity 真实用例与生成工程脚本通过。多节点 JetStream HA 见 [E06](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)。
+
+**链接**：[实现](impl-saga-drv-dao-rem.md#rem-15) · [方案与验证](../../feature/A3-2-SYNCBUS-DRAINING-UNSUBSCRIBE-2026-10-07.md) · [RR-20261006-36 问题](../../bug/RR-20261006-36.md) / [修复](../../bugfix/RR-20261006-36.md) · [A3 ① 共用停机类型](../../feature/REFACTOR-2026-10-05-shared-stop-contract.md) · [roost-coding](../../agent-skills/roost-coding/SKILL.md) · [CHANGELOG](../../../CHANGELOG.md)（Unreleased 段）
+
 ## 外部验证清单（C 类，本部分相关）
 
 下列项本机做不了或做了不能代表生产，统一登记在 [外部验证清单](../../review/EXTERNAL-VERIFICATION-2026-10-06.md)（E01～E28），**不阻塞发版**。本部分的未验证项只有这些外部环境类，按编号列出：
@@ -1677,13 +1951,13 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 | 编号 | 项 | 相关条目 |
 | --- | --- | --- |
 | E01 | Mirror 七类场景在 Linux 内核网络下 | REM-2、REM-4、REM-8 |
-| E02 | 跨主机真实分区、MTU、时钟偏差 | SAGA-2、SAGA-9、REM-1、REM-2、REM-8、REM-9 |
-| E06 | NATS JetStream 多节点 HA | SAGA-1、SAGA-10、SAGA-13、REM-4 |
-| E08 | 多机 Redis Cluster：驱动（写不重放、MOVED / ASK）、单实例锁、Lua 布局 | DRV-1、DRV-3、DRV-4、REM-1、REM-10、REM-12 |
-| E10 | Redis 异步复制丢写与切主：墓碑、`WAIT`、锁 | DRV-4、REM-1、REM-11、REM-12 |
+| E02 | 跨主机真实分区、MTU、时钟偏差 | SAGA-2、SAGA-9、SAGA-16、REM-1、REM-2、REM-8、REM-9 |
+| E06 | NATS JetStream 多节点 HA | SAGA-1、SAGA-10、SAGA-13、REM-4、REM-15 |
+| E08 | 多机 Redis Cluster：驱动（写不重放、MOVED / ASK）、单实例锁、Lua 布局 | DRV-1、DRV-3、DRV-4、DRV-7、REM-1、REM-10、REM-12 |
+| E10 | Redis 异步复制丢写与切主：墓碑、`WAIT`、锁 | DRV-4、DRV-7、REM-1、REM-11、REM-12 |
 | E11 | Mongo 跨主机副本集、mongos、切主中提交 | DRV-2、DRV-3、DRV-6、SAGA-9、SAGA-14 |
 | E12 | saga Mongo 步骤延迟的生产形态 | SAGA-9、SAGA-11、SAGA-14 |
-| E13 | 多主机强杀：owner / 锁迁移、双实例、旧回调 | SAGA-2、REM-5、REM-9、REM-10、REM-14 |
+| E13 | 多主机强杀：owner / 锁迁移、双实例、旧回调 | SAGA-2、SAGA-16、REM-5、REM-9、REM-10、REM-14 |
 | E14 | Remote outbox“Mongo 已提交、发布前崩溃”精确注入 | REM-8 |
 | E15 / E16 | Mirror 长时间容量 / 大规模扇出（E16 待维护者给目标负载） | REM-2、REM-4、REM-5、REM-8、REM-14 |
 
@@ -1691,18 +1965,20 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 
 - **按维护者决定不在范围**：新旧步骤进程混跑（SAGA-2、SAGA-9、SAGA-14：维护者 2026-10-06“不考虑旧进程，完成按照新的处理，线上还没有旧的进程跑”，升级先停旧再起新）；新旧协调器混跑（SAGA-6、SAGA-7，同一句决定）。
 - **按源码核对后写成事实**（位置见实现条目）：SAGA-3 / 4 / 5 的两条预算行为；REM-3 其他调用方；REM-4 并发加载与缓冲重放；REM-6 生成 spec 不带 Tenant / Policy；REM-7 pipelined 与 Durability 0；REM-11 同值 CAS 续期；REM-12 MIGRATING 时键仍在源上；REM-13 旧 core 读新生成配置；DRV-4 WAIT 超时与客户端读超时。
-- **由已有或新增的实测覆盖**：SAGA-1 返回 nil 之后的 Ack（SAGA-13、REM-5 的真实 JetStream 用例）；SAGA-2 投影积压与“截止前投影、放弃后送达”（确定性用例）；SAGA-10 真实 NATS 退避（SAGA-13）；REM-4 durable 名（`TestRealJetStreamLiveDurableNameShape`）；REM-5 兴趣 handler 出错的结算（`TestRealJetStreamInterestHandlerErrorIsAcknowledged`）；REM-14 溢出水位到期（`d5682dc4`）。
+- **由已有或新增的实测覆盖**：DRV-5 的 nats Close 契约（真实 NATS 私有 JetStream 3 节点，RR-24 / -26 与自持关闭状态的窗口用例，原写“未在真实依赖上测”已闭环）；SAGA-1 返回 nil 之后的 Ack（SAGA-13、REM-5 的真实 JetStream 用例）；SAGA-2 投影积压与“截止前投影、放弃后送达”（确定性用例）；SAGA-10 真实 NATS 退避（SAGA-13）；REM-4 durable 名（`TestRealJetStreamLiveDurableNameShape`）；REM-5 兴趣 handler 出错的结算（`TestRealJetStreamInterestHandlerErrorIsAcknowledged`）；REM-14 溢出水位到期（`d5682dc4`）。
 - **改为实现条目的 review 检查点**（属于“用例强度 / 成本是否可接受”的问题，交给 review 判断）：SAGA-6 去掉 `$exists` 条件的负对照；DRV-3 写方法逐个进“回复丢失只执行一次”表；DAO-3 投影的 `reflect.DeepEqual` 成本。
 
 ## 仍待维护者决定的事项
 
-本部分**没有未决事项**：涉及的决定（第二轮 A1 / A2 / B1、第三轮 B2、第四轮 B4 与 Mirror、第六轮 saga 方向 ①②、第九轮 Mirror 第 4 步与 O4、第十轮 O-M6-1 / O-M6-3、第十一轮 O-M6-6、第十二轮 O-S5-2 / 驱动 Close 契约 / L2 落后上界 / buff 投影 / O-M6-5 / Mongo 步骤延迟、第十三轮“不留 WANTED” / A1 盲区 / saga 收件箱单状态文档）都已定案并实施或“保持”。
+本部分**没有未决事项**：涉及的决定（第二轮 A1 / A2 / B1 / A3、第三轮 B2、第四轮 B4 与 Mirror、第六轮 saga 方向 ①②、第九轮 Mirror 第 4 步与 O4、第十轮 O-M6-1 / O-M6-3、第十一轮 O-M6-6、第十二轮 O-S5-2 / 驱动 Close 契约 / L2 落后上界 / buff 投影 / O-M6-5 / Mongo 步骤延迟、第十三轮“不留 WANTED” / A1 盲区 / saga 收件箱单状态文档 / nats/driver 已关闭状态 / 原“下个大版本”项本版完成 / saga 迟到成功重开终态选 A / versionstore 墓碑选 A）都已定案并实施或“保持”。
 
-留到下个大版本、本轮不做的（维护者已定）：
+原“下个大版本”项中属于本部分的，第十三轮维护者要求本版完成（原样：“还有留到下个版本的几项在本机能完成吗？希望本次能完成了”），都已实施：
 
-- A2 ③ versionstore 写入带一次性令牌（改持久格式），见 [DRV-3](#drv-3)。
-- saga 方向 ③④（第六轮“暂不做”），见 [SAGA-8](#saga-8)。
-- Mongo 步骤延迟的选项 B / C（第十二轮选 A，不实施），见 [SAGA-11](#saga-11)。这是“延迟决定 A”，第十三轮改为状态文档之后仍然成立：每次尝试仍是两次落盘提交，延迟不变。
+- A2 ③ versionstore 写入带一次性令牌（`6b3a0eb9`），见 [DRV-7](#drv-7)；墓碑维护者选 A 不加。
+- A3 ② 排空下沉到 `ISyncBus` 带 ctx 的退订（`ebf679e1`），见 [REM-15](#rem-15)。
+- saga 方向 ③④（`a6a902cd`，重开可观测 `93efc3cc`），见 [SAGA-16](#saga-16)、[SAGA-17](#saga-17)。
+
+保持不做的只有 Mongo 步骤延迟的选项 B / C（第十二轮选 A，不实施），见 [SAGA-11](#saga-11)。这是“延迟决定 A”，第十三轮改为状态文档之后仍然成立：每次尝试仍是两次落盘提交，延迟不变。
 
 ## WANTED
 
@@ -1719,3 +1995,7 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 | A1 盲区：组件普通字段存可变状态不登记 undo | 维护者第十三轮选 A，加字段写提示 | `565f657b` | [DAO-4](#dao-4) |
 | 兴趣 handler 出错时 JetStream 是否重投 | 实测为 Ack（符合设计） | `d5682dc4` | [REM-5](#rem-5) |
 | W-2026-10-06-01 nest 无 Guard 作用域分支 | 不属于本部分；转 RR-20261006-12 并修复 | `b7471ae4` | NONCORE 分册 [NONCORE-54](guide-cfg-skill-noncore.md#noncore-54) |
+| nats Close 同一处修了三次（RR-10 / -24 / -26） | 上报方向判断，维护者选 A：驱动自持唯一的已关闭状态 | `0db819b0` → `f0de827a` | [DRV-5](#drv-5) |
+| versionstore“键不存在 / 删除之后”无法核对（A2 ③ 方案 §8） | 维护者选 A：不加墓碑，保持结果未知、写明契约 | `6b3a0eb9`（决定记录 `5e72ca4d`） | [DRV-7](#drv-7) |
+| saga ④ 是否允许重开 `Failed` / `Compensated`（方案“未完成 / 风险”） | 维护者选 A：允许重开，补指标与日志 | `a6a902cd`、`93efc3cc` | [SAGA-16](#saga-16)、[SAGA-17](#saga-17) |
+| A2 ③ / A3 ② 实施中的缺陷 | 登记并修复 RR-20261006-35、-36 | `6b3a0eb9`、`ebf679e1` | [DRV-8](#drv-8)、[REM-15](#rem-15) |
