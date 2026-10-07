@@ -25,7 +25,7 @@ func crashRecord(sequence uint64) corenest.CommitRecord {
 		Handler:    "crash.handler",
 		RequestID:  "crash",
 		CreatedAt:  time.Now().UnixNano(),
-		Durability: corenest.DurabilityPipelined,
+		Durability: corenest.DurabilityPipelined.Record(),
 		Mutations: []corenest.EntityMutation{{
 			EntityID: int64(sequence),
 			Database: "game",

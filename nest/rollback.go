@@ -137,7 +137,7 @@ type receiptKey struct {
 }
 
 func NewRollbackTx(policy RollbackPolicy) *RollbackTx {
-	return &RollbackTx{id: newTransactionID(), policy: policy}
+	return &RollbackTx{id: newTransactionID(), policy: policy, durability: DurabilityMemory}
 }
 
 func (tx *RollbackTx) ID() TransactionID {
@@ -561,7 +561,7 @@ func (tx *RollbackTx) prepareCommitRecord() (CommitRecord, error) {
 		mutations[i] = canonical
 	}
 	record := CommitRecord{
-		ID: tx.id, Handler: tx.handler, RequestID: requestID, CreatedAt: time.Now().UnixNano(), Durability: tx.durability,
+		ID: tx.id, Handler: tx.handler, RequestID: requestID, CreatedAt: time.Now().UnixNano(), Durability: tx.durability.Record(),
 		Mutations: mutations,
 		Effects:   append([]Effect(nil), tx.effects...),
 		Receipts:  append([]dataengine.Receipt(nil), tx.receipts...),

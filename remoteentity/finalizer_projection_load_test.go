@@ -151,12 +151,12 @@ func TestRemoteAsyncFinalizerProjectionLoad(t *testing.T) {
 				tx[0] = 0x38
 				binary.BigEndian.PutUint64(tx[8:], n)
 				live.dirty.set(true)
-				if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "load", "", true, uint8(nest.DurabilityAsync))); err != nil {
+				if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "load", "", true, uint8(nest.DurabilityAsync.Record()))); err != nil {
 					failures.Add(1)
 					t.Errorf("finalize: %v", err)
 					return
 				}
-				if err = projector.Commit(ctx, remoteCommitRecord(nest.DurabilityAsync, batch.Commits())); err != nil {
+				if err = projector.Commit(ctx, remoteCommitRecord(nest.DurabilityAsync.Record(), batch.Commits())); err != nil {
 					failures.Add(1)
 					t.Errorf("wal: %v", err)
 					return

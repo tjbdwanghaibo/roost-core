@@ -36,7 +36,7 @@ func canonicalRecord(kind dataengine.MutationKind) corenest.CommitRecord {
 		Handler:    "hero.level_up",
 		RequestID:  "request-91",
 		CreatedAt:  123,
-		Durability: corenest.DurabilityPipelined,
+		Durability: corenest.DurabilityPipelined.Record(),
 		Mutations:  []corenest.EntityMutation{mutation},
 		Effects: []corenest.Effect{{
 			ID: "effect-1", Topic: "hero.changed", Key: "7", Payload: []byte{1, 2},

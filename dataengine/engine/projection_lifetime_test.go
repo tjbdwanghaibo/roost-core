@@ -424,7 +424,7 @@ func TestRepositoryReloadDoesNotResurrectPendingTombstone(t *testing.T) {
 	}
 	var tombstone coredata.CommitRecord
 	tombstone.ID[15] = 94
-	tombstone.Durability = corenest.DurabilityStrict
+	tombstone.Durability = corenest.DurabilityStrict.Record()
 	for _, resource := range []string{"repository_profile", "repository_inventory"} {
 		tombstone.Mutations = append(tombstone.Mutations, coredata.Mutation{
 			Key:  coredata.DocumentKey{Database: "game", Resource: resource, ID: id},

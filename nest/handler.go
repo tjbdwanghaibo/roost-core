@@ -35,21 +35,32 @@ func RegisterMemoryHandler(name HandlerName, handler BaseHandler) error {
 	return RegisterHandlerWithMeta(name, handler, HandlerMeta{})
 }
 
-func validateHandlerMeta(name HandlerName, meta HandlerMeta) error {
+// validateHandlerMeta 校验并归一化注册的事务策略。Rollback 不为 none 时必须显式写
+// Durability（RR-20261006-60）；Rollback 为 none 时未声明归一为 memory，
+// 注册表里存的 meta 一律带明确的 durability，执行路径不再看到未声明。
+func validateHandlerMeta(name HandlerName, meta HandlerMeta) (HandlerMeta, error) {
 	if meta.Rollback > RollbackUndo {
-		return fmt.Errorf("nest: invalid rollback policy %d", meta.Rollback)
+		return meta, fmt.Errorf("nest: invalid rollback policy %d", meta.Rollback)
 	}
 	if meta.Durability > DurabilityPipelined {
-		return fmt.Errorf("nest: invalid durability policy %d", meta.Durability)
+		return meta, fmt.Errorf("nest: invalid durability policy %d", meta.Durability)
+	}
+	if meta.Durability == durabilityUnset {
+		if meta.Rollback != RollbackNone {
+			return meta, fmt.Errorf("%w: handler %q declares rollback=%s but no Durability; HandlerMeta.Durability must be set explicitly to one of %s",
+				ErrDurabilityUnset, name.String(), meta.Rollback, durabilityChoices)
+		}
+		meta.Durability = DurabilityMemory
 	}
 	if meta.Durability != DurabilityMemory && meta.Rollback == RollbackNone {
-		return fmt.Errorf("%w: durable handler %q requires rollback", ErrRollbackUnsupported, name.String())
+		return meta, fmt.Errorf("%w: durable handler %q requires rollback", ErrRollbackUnsupported, name.String())
 	}
-	return nil
+	return meta, nil
 }
 
 func RegisterHandlerWithMeta(name HandlerName, handler BaseHandler, meta HandlerMeta) error {
-	if err := validateHandlerMeta(name, meta); err != nil {
+	meta, err := validateHandlerMeta(name, meta)
+	if err != nil {
 		return err
 	}
 	handlerMu.Lock()
@@ -131,7 +142,8 @@ func (mgr *NestMgr) RegisterHandlerWithMeta(name HandlerName, handler BaseHandle
 	if mgr == nil {
 		return fmt.Errorf("nest: nil engine")
 	}
-	if err := validateHandlerMeta(name, meta); err != nil {
+	meta, err := validateHandlerMeta(name, meta)
+	if err != nil {
 		return err
 	}
 	mgr.lifecycleMu.Lock()

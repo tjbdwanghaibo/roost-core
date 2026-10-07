@@ -55,7 +55,7 @@ func benchmarkRecordShape(b *testing.B, kind dataengine.MutationKind, payloadSiz
 	b.Helper()
 	var id dataengine.TransactionID
 	id[15] = 1
-	record := corenest.CommitRecord{ID: id, Durability: corenest.DurabilityAsync}
+	record := corenest.CommitRecord{ID: id, Durability: corenest.DurabilityAsync.Record()}
 	for index := range mutations {
 		mutation := dataengine.Mutation{
 			Key:  dataengine.DocumentKey{Database: "game", Resource: "players", ID: int64(index + 1)},
@@ -97,7 +97,7 @@ func BenchmarkWALAppendAsyncParallel(b *testing.B) {
 				id[15-i] = byte(seq >> (i * 8))
 			}
 			_, err := w.Append(context.Background(), corenest.CommitRecord{
-				ID: id, Durability: corenest.DurabilityAsync,
+				ID: id, Durability: corenest.DurabilityAsync.Record(),
 				Mutations: []corenest.EntityMutation{{
 					EntityID: int64(seq), Database: "game", Resource: "players",
 					Version: seq, Codec: "bson-full-v1", Data: []byte("small-after-image"),
@@ -131,7 +131,7 @@ func BenchmarkWALAppendV2AsyncParallel(b *testing.B) {
 				id[15-i] = byte(seq >> (i * 8))
 			}
 			_, err := w.Append(context.Background(), corenest.CommitRecord{
-				ID: id, Durability: corenest.DurabilityAsync,
+				ID: id, Durability: corenest.DurabilityAsync.Record(),
 				Mutations: []corenest.EntityMutation{{
 					Key:             dataengine.DocumentKey{Database: "game", Resource: "players", ID: int64(seq)},
 					Kind:            dataengine.MutationPut,
@@ -187,7 +187,7 @@ func BenchmarkWALAppendStrictParallel(b *testing.B) {
 				id[15-i] = byte(seq >> (i * 8))
 			}
 			_, err := w.Append(context.Background(), corenest.CommitRecord{
-				ID: id, Durability: corenest.DurabilityStrict,
+				ID: id, Durability: corenest.DurabilityStrict.Record(),
 				Mutations: []corenest.EntityMutation{{
 					EntityID: int64(seq), Database: "game", Resource: "players",
 					Version: seq, Codec: "bson-full-v1", Data: []byte("small-after-image"),

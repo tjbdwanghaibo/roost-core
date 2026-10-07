@@ -94,11 +94,11 @@ func TestParallelWindowReplaysSucceededSuffixUnderNewerFence(t *testing.T) {
 			t.Fatal(err)
 		}
 		live.dirty.set(true)
-		if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "remote-e2e", "", true, uint8(nest.DurabilityAsync))); err != nil {
+		if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "remote-e2e", "", true, uint8(nest.DurabilityAsync.Record()))); err != nil {
 			t.Fatal(err)
 		}
 		commits := batch.Commits()
-		if err = projector.Commit(ctx, remoteCommitRecord(nest.DurabilityAsync, commits)); err != nil {
+		if err = projector.Commit(ctx, remoteCommitRecord(nest.DurabilityAsync.Record(), commits)); err != nil {
 			t.Fatal(err)
 		}
 		if _, err = batch.Commit(ctx); err != nil {
@@ -165,10 +165,10 @@ func TestParallelWindowReplaysSucceededSuffixUnderNewerFence(t *testing.T) {
 
 	// 下一写者在新 fence 下正常提交并投影。
 	y.dirty.set(true)
-	if err = batch3.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx3, "remote-e2e", "", true, uint8(nest.DurabilityAsync))); err != nil {
+	if err = batch3.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx3, "remote-e2e", "", true, uint8(nest.DurabilityAsync.Record()))); err != nil {
 		t.Fatal(err)
 	}
-	if err = projector.Commit(ctx, remoteCommitRecord(nest.DurabilityAsync, batch3.Commits())); err != nil {
+	if err = projector.Commit(ctx, remoteCommitRecord(nest.DurabilityAsync.Record(), batch3.Commits())); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = batch3.Commit(ctx); err != nil {

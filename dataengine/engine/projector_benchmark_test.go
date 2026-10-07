@@ -181,7 +181,7 @@ func benchmarkReplayRecords(b *testing.B, count, specialEvery int) []coredata.Co
 		var transactionID coredata.TransactionID
 		binary.BigEndian.PutUint64(transactionID[8:], uint64(i+1))
 		record := coredata.CommitRecord{
-			ID: transactionID, Handler: "benchmark-wal-replay", Durability: corenest.DurabilityAsync,
+			ID: transactionID, Handler: "benchmark-wal-replay", Durability: corenest.DurabilityAsync.Record(),
 			Mutations: []coredata.Mutation{mutation},
 		}
 		if specialEvery > 0 && (i+1)%specialEvery == 0 {
@@ -231,7 +231,7 @@ func BenchmarkProjectorAdmissionMatrix(b *testing.B) {
 							for index := 0; index < 8; index++ {
 								id[15-index] = byte(value >> (index * 8))
 							}
-							record := coredata.CommitRecord{ID: id, Durability: durability, Mutations: []coredata.Mutation{{
+							record := coredata.CommitRecord{ID: id, Durability: durability.Record(), Mutations: []coredata.Mutation{{
 								Key:  coredata.DocumentKey{Database: "game", Resource: "players", ID: int64(value)},
 								Kind: coredata.MutationPatch, ExpectedVersion: 7, NextVersion: 8, Schema: 1,
 								Patch: coredata.FieldPatch{SetBSON: set},

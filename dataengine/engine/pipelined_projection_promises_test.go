@@ -41,7 +41,7 @@ func newPipelinedProjector(t *testing.T, mutate func(*nestwal.Options)) (*Projec
 
 func pipelinedRecord(sequence byte) corenest.CommitRecord {
 	record := projectorRecord(sequence, false)
-	record.Durability = corenest.DurabilityPipelined
+	record.Durability = corenest.DurabilityPipelined.Record()
 	return record
 }
 

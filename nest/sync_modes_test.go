@@ -149,7 +149,7 @@ func TestNestSyncRollbackPreservesOlderPending(t *testing.T) {
 	defer closeScope()
 	scope.Guard().RequireEntity(e)
 	rejection := errors.New("reject")
-	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo}, []entity.IThreadSafeEntity{e}, nil, "reject", nil, nil, func() (any, error) {
+	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityMemory}, []entity.IThreadSafeEntity{e}, nil, "reject", nil, nil, func() (any, error) {
 		CurrentRollbackTx().DeferRollback(func() error { e.dao.Value = 10; return nil })
 		e.dao.Value = 99
 		e.MarkSyncDirty(1)

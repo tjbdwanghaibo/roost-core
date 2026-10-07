@@ -16,15 +16,24 @@ func (id TransactionID) IsZero() bool { return id == TransactionID{} }
 
 func (id TransactionID) String() string { return fmt.Sprintf("%x", id[:]) }
 
+// Durability 是事务记录（WAL、投影、远端 outcome）上的持久化级别，零值即 memory。
+// handler 声明用的是 nest.DurabilityPolicy（零值表示“未声明”），nest 在建记录时换算过来。
 type Durability uint8
+
+const (
+	DurabilityMemory Durability = iota
+	DurabilityAsync
+	DurabilityStrict
+	DurabilityPipelined
+)
 
 func (durability Durability) String() string {
 	switch durability {
-	case 1:
+	case DurabilityAsync:
 		return "async"
-	case 2:
+	case DurabilityStrict:
 		return "strict"
-	case 3:
+	case DurabilityPipelined:
 		return "pipelined"
 	default:
 		return "memory"

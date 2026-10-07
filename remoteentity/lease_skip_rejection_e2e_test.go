@@ -49,8 +49,8 @@ func TestHistoricalLeaseFencedRemoteRecordRejectsAndReloads(t *testing.T) {
 	})
 
 	tx := remoteTestTxID(0xD1)
-	batch := f.prepareRejected(t, live, tx, uint8(nest.DurabilityAsync))
-	record := remoteCommitRecord(nest.DurabilityAsync, batch.Commits())
+	batch := f.prepareRejected(t, live, tx, uint8(nest.DurabilityAsync.Record()))
+	record := remoteCommitRecord(nest.DurabilityAsync.Record(), batch.Commits())
 	// 指向不存在的 saga 步骤 claim：条件写 matched=0，即租约已失效。
 	fence, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
 		Database: "game", Resource: "_dataengine_inbox_claims", DocumentID: "saga-step/historical",

@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
@@ -334,7 +335,7 @@ func (w *WAL) Append(ctx context.Context, record corenest.CommitRecord) (corenes
 		// 保留两阶段协议（nest/execution.go），Nest 在 Append 返回后就放锁、Confirm Sync、执行 AfterCommit，所以必须与 strict
 		// 一样等 fsync。之前只认 DurabilityStrict，这些记录按 async 在 fsync 之前返回，成功先于持久对外可见（RR-20260928-11）。
 		// 正常 pipelined 记录走 Enqueue（票据在 fsync 后完成），不经这里；encodeRecordVersion 已拒绝大于 pipelined 的取值。
-		requireSync: record.Durability >= corenest.DurabilityStrict,
+		requireSync: record.Durability >= dataengine.DurabilityStrict,
 		done:        make(chan appendResult, 1),
 	}
 

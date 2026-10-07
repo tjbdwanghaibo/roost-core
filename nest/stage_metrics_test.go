@@ -29,7 +29,7 @@ func TestNestStageMetricsFollowExecutionPaths(t *testing.T) {
 			}
 			engine := NewEngine(opts...)
 			name := NewHandlerName("stages_" + mode)
-			meta := HandlerMeta{}
+			meta := HandlerMeta{Durability: DurabilityMemory}
 			if mode == "strict" {
 				meta = HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}
 			}

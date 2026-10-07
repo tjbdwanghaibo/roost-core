@@ -175,11 +175,11 @@ func TestCommittedReplayAfterFinalizerAndNewerFenceAcksWAL(t *testing.T) {
 		t.Fatal(err)
 	}
 	live.dirty.set(true)
-	if err = batch1.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx1, "remote-e2e", "", true, uint8(nest.DurabilityAsync))); err != nil {
+	if err = batch1.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx1, "remote-e2e", "", true, uint8(nest.DurabilityAsync.Record()))); err != nil {
 		t.Fatal(err)
 	}
 	commits1 := batch1.Commits()
-	if err = projector.Commit(ctx, remoteCommitRecord(nest.DurabilityAsync, commits1)); err != nil {
+	if err = projector.Commit(ctx, remoteCommitRecord(nest.DurabilityAsync.Record(), commits1)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = batch1.Commit(ctx); err != nil {
@@ -217,11 +217,11 @@ func TestCommittedReplayAfterFinalizerAndNewerFenceAcksWAL(t *testing.T) {
 	close(storage.allowThird)
 
 	// 新写者正常提交：它的 WAL 记录排在 tx1 之后，tx1 ack 后才会投影。
-	if err = batch2.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx2, "remote-e2e", "", true, uint8(nest.DurabilityAsync))); err != nil {
+	if err = batch2.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx2, "remote-e2e", "", true, uint8(nest.DurabilityAsync.Record()))); err != nil {
 		t.Fatal(err)
 	}
 	commits2 := batch2.Commits()
-	if err = projector.Commit(ctx, remoteCommitRecord(nest.DurabilityAsync, commits2)); err != nil {
+	if err = projector.Commit(ctx, remoteCommitRecord(nest.DurabilityAsync.Record(), commits2)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = batch2.Commit(ctx); err != nil {

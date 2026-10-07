@@ -45,7 +45,7 @@ func (m *Msg) finalizeRemoteWriteBatch(tx *RollbackTx) error {
 		return entity.ErrRemoteCommitNotFinalized
 	}
 	outcome := entity.NewRemoteTransactionOutcome(
-		entity.RemoteTransactionID(tx.ID()), tx.handler, tx.requestID(), true, uint8(tx.durability),
+		entity.RemoteTransactionID(tx.ID()), tx.handler, tx.requestID(), true, uint8(tx.durability.Record()),
 	)
 	outcome.PersistChanges = tx
 	outcome.DeleteIntents = tx

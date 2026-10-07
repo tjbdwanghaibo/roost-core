@@ -50,7 +50,7 @@ func TestRealDataEngineLargeBacklogRecovery(t *testing.T) {
 	for start := 0; start < len(records); start += window {
 		var tickets []corenest.CommitTicket
 		for i := start; i < min(start+window, len(records)); i++ {
-			records[i].Durability = corenest.DurabilityPipelined
+			records[i].Durability = corenest.DurabilityPipelined.Record()
 			ticket, err := wal.Enqueue(fx.context(), records[i])
 			if err != nil {
 				t.Fatal(err)

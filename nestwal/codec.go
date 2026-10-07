@@ -58,7 +58,7 @@ func canonicalizeRecord(record corenest.CommitRecord) (corenest.CommitRecord, er
 	if record.Empty() {
 		return record, errors.New("nestwal: empty commit record")
 	}
-	if record.Durability > corenest.DurabilityPipelined {
+	if record.Durability > dataengine.DurabilityPipelined {
 		return record, errors.New("nestwal: invalid durability policy")
 	}
 	if len(record.Mutations) > maxEntryCount || len(record.Effects) > maxEntryCount || len(record.Receipts) > maxEntryCount {
@@ -274,7 +274,7 @@ func decodeRecordHeader(r *bytes.Reader) (corenest.CommitRecord, error) {
 	if err != nil {
 		return record, err
 	}
-	record.Durability = corenest.DurabilityPolicy(durability)
+	record.Durability = dataengine.Durability(durability)
 	if record.Handler, err = readString(r); err != nil {
 		return record, err
 	}

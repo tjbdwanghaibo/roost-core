@@ -47,7 +47,7 @@ func TestAssemblyRetriedShutdownHandsOverWALWithoutCheckpointRegression(t *testi
 	// 两个 mutation 的本地记录走 Mongo 事务（单 mutation 快路不开事务，停不到闸门上）。
 	asyncRecord := func(sequence byte) coredata.CommitRecord {
 		record := localMultiRecord(sequence)
-		record.Durability = corenest.DurabilityAsync
+		record.Durability = corenest.DurabilityAsync.Record()
 		return record
 	}
 

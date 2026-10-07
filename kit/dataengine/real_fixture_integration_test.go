@@ -189,7 +189,7 @@ func realRecord(seed byte, mutations []coredata.Mutation) coredata.CommitRecord 
 	id[len(id)-1] = seed
 	return coredata.CommitRecord{
 		ID: id, Handler: "real-integration", CreatedAt: time.Now().UnixNano(),
-		Durability: corenest.DurabilityStrict, Mutations: mutations,
+		Durability: corenest.DurabilityStrict.Record(), Mutations: mutations,
 	}
 }
 

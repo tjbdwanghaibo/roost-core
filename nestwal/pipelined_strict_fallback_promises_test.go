@@ -102,9 +102,9 @@ func TestAppendWaitsForFsyncOnStrictPathForStrictAndPipelined(t *testing.T) {
 		durability coredata.Durability
 		waitsSync  bool
 	}{
-		{corenest.DurabilityAsync, false},
-		{corenest.DurabilityStrict, true},
-		{corenest.DurabilityPipelined, true},
+		{corenest.DurabilityAsync.Record(), false},
+		{corenest.DurabilityStrict.Record(), true},
+		{corenest.DurabilityPipelined.Record(), true},
 	} {
 		t.Run(tc.durability.String(), func(t *testing.T) {
 			gate := newFsyncGate()
@@ -169,7 +169,7 @@ func TestAppendWaitsForFsyncOnStrictPathForStrictAndPipelined(t *testing.T) {
 		wal := openGatedWAL(t, gate)
 		defer func() { gate.release(); _ = wal.Close(context.Background()) }()
 		gate.armed.Store(true)
-		ticket, err := wal.Enqueue(context.Background(), fallbackRecord(20, corenest.DurabilityPipelined))
+		ticket, err := wal.Enqueue(context.Background(), fallbackRecord(20, corenest.DurabilityPipelined.Record()))
 		if err != nil {
 			t.Fatal(err)
 		}

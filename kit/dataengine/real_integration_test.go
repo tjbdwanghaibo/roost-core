@@ -478,7 +478,7 @@ func realMixedRatioRecords(t *testing.T, database, resource string, workloadInde
 		binary.BigEndian.PutUint64(transactionID[8:], uint64(i+1))
 		record := coredata.CommitRecord{
 			ID: transactionID, Handler: "real-mixed-ratio", CreatedAt: time.Now().UnixNano(),
-			Durability: corenest.DurabilityAsync, Mutations: []coredata.Mutation{mutation},
+			Durability: corenest.DurabilityAsync.Record(), Mutations: []coredata.Mutation{mutation},
 		}
 		if specialEvery > 0 && (i+1)%specialEvery == 0 {
 			record.Receipts = []coredata.Receipt{{
@@ -517,7 +517,7 @@ func TestRealSagaReceiptTransactionThroughput(t *testing.T) {
 		}
 		record := coredata.CommitRecord{
 			ID: id, Handler: "saga-throughput", CreatedAt: time.Now().UnixNano(),
-			Durability: corenest.DurabilityStrict, Mutations: []coredata.Mutation{mutation},
+			Durability: corenest.DurabilityStrict.Record(), Mutations: []coredata.Mutation{mutation},
 			Receipts: []coredata.Receipt{{Namespace: "saga-throughput", ID: strconv.Itoa(index + 1)}},
 		}
 		if err := fx.runtime.Store.Project(fx.context(), record); err != nil {

@@ -157,7 +157,7 @@ func projectorRecord(sequence byte, withEffect bool) coredata.CommitRecord {
 	id[15] = sequence
 	payload, _ := bson.Marshal(bson.M{"_id": int64(sequence), "value": int32(sequence)})
 	record := coredata.CommitRecord{
-		ID: id, Durability: corenest.DurabilityStrict,
+		ID: id, Durability: corenest.DurabilityStrict.Record(),
 		Mutations: []coredata.Mutation{{
 			Key:  coredata.DocumentKey{Database: "game", Resource: "heroes", ID: int64(sequence)},
 			Kind: coredata.MutationPut, ExpectedVersion: 0, NextVersion: 1, Data: payload,

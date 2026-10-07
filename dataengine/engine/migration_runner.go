@@ -9,7 +9,6 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -90,7 +89,7 @@ func (runner *MigrationRunner) Migrate(ctx context.Context, dao any, doc coredat
 		return false, err
 	}
 	record := coredata.CommitRecord{
-		ID: id, Handler: MigrationHandler, CreatedAt: runner.now().UTC().UnixNano(), Durability: corenest.DurabilityStrict,
+		ID: id, Handler: MigrationHandler, CreatedAt: runner.now().UTC().UnixNano(), Durability: coredata.DurabilityStrict,
 		Mutations: []coredata.Mutation{{
 			Key: doc.Key, Kind: coredata.MutationPut, ExpectedVersion: doc.Version, NextVersion: doc.Version + 1,
 			Mask: coredata.AllFields, Schema: target, Codec: "bson-v2", Data: payload,

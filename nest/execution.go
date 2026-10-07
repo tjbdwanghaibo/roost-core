@@ -112,6 +112,13 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 // claimsMessage 为真只来自 invokeWithTransaction（消息自己的事务入口）；RunIsolatedTransaction / RunDetachedTransaction 新建的
 // 事务传假，任何时刻都不认领当前派发的消息（RR-20260926-84）。
 func runTransaction(claimsMessage bool, meta HandlerMeta, es []entity.IThreadSafeEntity, committer TransactionCommitter, handler string, releaseLocks func(), completions *completionPump, call func() (any, error), observers ...entity.SyncCommitObserver) (ret any, err error) {
+	if meta.Durability == durabilityUnset {
+		// 注册表里的 meta 已在注册时归一（validateHandlerMeta）；这里只兜包内直接传 meta 的调用（RR-20261006-60）。
+		if meta.Rollback != RollbackNone {
+			return nil, fmt.Errorf("%w: handler %q declares rollback=%s but no Durability", ErrDurabilityUnset, handler, meta.Rollback)
+		}
+		meta.Durability = DurabilityMemory
+	}
 	msg := currentNestDispatchMsg()
 	// 消息自己的事务正在执行（txInFlight），或这不是消息自己的事务入口（消息自己的事务结束后的收尾阶段：Guard post-release、
 	// 解锁后回调，此时 txInFlight 已复位而 Remote 批次要到 finishRemoteWriteBatch 才收尾）：都不是消息自己的事务。

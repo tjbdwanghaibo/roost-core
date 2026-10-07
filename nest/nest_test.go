@@ -864,7 +864,7 @@ func TestRollbackStateRestoresDaoAndDirty(t *testing.T) {
 		ent.dao.Tracker.MarkSync(2)
 		AfterCommit(func() { committed = true })
 		return nil, errors.New("boom")
-	}, HandlerMeta{Rollback: RollbackState})
+	}, HandlerMeta{Rollback: RollbackState, Durability: DurabilityMemory})
 
 	_, err := Nest.Request(context.Background(), NewHandlerName("test_rollback_state"), id, nil)
 	if err == nil {
@@ -907,7 +907,7 @@ func TestRollbackAfterCommitRunsOnSuccess(t *testing.T) {
 			return nil, errors.New("missing rollback tx")
 		}
 		return "ok", nil
-	}, HandlerMeta{Rollback: RollbackState})
+	}, HandlerMeta{Rollback: RollbackState, Durability: DurabilityMemory})
 
 	ret, err := Nest.Request(context.Background(), NewHandlerName("test_rollback_commit"), id, nil)
 	if err != nil {
@@ -954,7 +954,7 @@ func TestRollbackUndoRestoresStateAndDirty(t *testing.T) {
 			return nil, err
 		}
 		return nil, errors.New("boom")
-	}, HandlerMeta{Rollback: RollbackUndo})
+	}, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityMemory})
 
 	_, err := Nest.Request(context.Background(), NewHandlerName("test_rollback_undo"), id, nil)
 	if err == nil {
@@ -1500,7 +1500,7 @@ func TestDispatchRecordsLockHoldAndFlagsSlowHandlers(t *testing.T) {
 	MustRegisterHandlerWithMeta(NewHandlerName("test_lock_hold_slow"), func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
 		time.Sleep(3 * time.Millisecond)
 		return nil, nil
-	}, HandlerMeta{Rollback: RollbackUndo})
+	}, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityMemory})
 	if _, err := Nest.Request(context.Background(), NewHandlerName("test_lock_hold_slow"), id, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1569,7 +1569,7 @@ func TestInstanceScopedHandlersDoNotCollideAcrossEngines(t *testing.T) {
 		)
 		engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 			return reply, nil
-		}, HandlerMeta{Rollback: RollbackUndo})
+		}, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityMemory})
 		if err := engine.Start(); err != nil {
 			t.Fatal(err)
 		}

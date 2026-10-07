@@ -137,7 +137,7 @@ func (runtime *Runtime) admitRemoteEntityDelete(ctx context.Context, value entit
 		closeBatch()
 		return entity.DeleteAdmissionImmediate, err
 	}
-	outcome := entity.NewRemoteTransactionOutcome(entity.RemoteTransactionID(id), entityDeleteHandler, "", true, uint8(corenest.DurabilityStrict))
+	outcome := entity.NewRemoteTransactionOutcome(entity.RemoteTransactionID(id), entityDeleteHandler, "", true, uint8(coredata.DurabilityStrict))
 	outcome.DeleteIntents = remoteDeleteIntent{entityID: value.ID()}
 	if err := batch.FinalizeLocked(outcome); err != nil {
 		_ = batch.Abort(ctx, err)
@@ -153,7 +153,7 @@ func (runtime *Runtime) admitRemoteEntityDelete(ctx context.Context, value entit
 	}
 	commit := commits[0].Clone()
 	record := coredata.CommitRecord{
-		ID: id, Handler: entityDeleteHandler, CreatedAt: time.Now().UTC().UnixNano(), Durability: corenest.DurabilityStrict,
+		ID: id, Handler: entityDeleteHandler, CreatedAt: time.Now().UTC().UnixNano(), Durability: coredata.DurabilityStrict,
 		Mutations: []coredata.Mutation{{
 			Key: coredata.DocumentKey{Resource: "remote_entity", ID: commit.EntityID}, Kind: coredata.MutationDelete,
 			ExpectedVersion: commit.BaseVersion, NextVersion: commit.NextVersion, Schema: commit.Schema, Codec: "remote", Remote: &commit,

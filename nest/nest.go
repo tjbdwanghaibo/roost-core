@@ -90,6 +90,11 @@ var (
 	// release changes commit semantics, so production rollout is gated per
 	// handler; see NEST_PIPELINED_COMMIT.md.
 	ErrPipelinedNotAllowed = errors.New("nest: handler is not on the pipelined durability allowlist")
+	// ErrDurabilityUnset 是注册期错误：手写 HandlerMeta 的 Rollback 不为 none，却没有显式写 Durability
+	// （RR-20261006-60，v1.23.1 起）。Durability 零值不再隐含 memory，要在 memory / async / strict / pipelined 里选一个；
+	// //roost:nest 生成的 meta 总是写明 durability，不受影响。
+	//   - 是否可能已提交：否（注册失败，handler 不可用）。能否重试：不能原样重试，补上 Durability 后重新注册。
+	ErrDurabilityUnset = errors.New("nest: handler meta durability not declared")
 	// ErrCommitIndeterminate means the storage device returned an error after
 	// commit bytes may have reached durable media. The process must be fenced
 	// and recovered from WAL; rolling the in-memory state back could create a

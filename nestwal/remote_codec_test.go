@@ -29,7 +29,7 @@ func TestRemoteCommitCodecRoundTrip(t *testing.T) {
 		}},
 		Invalidations: []entity.RemoteSnapshotKey{{EntityID: entityID, Kind: kind, Scope: 3}},
 	}
-	record := corenest.CommitRecord{ID: txID, Durability: corenest.DurabilityStrict, Mutations: []corenest.EntityMutation{{EntityID: entityID, Resource: "remote_entity", Version: 5, Codec: "remote", Remote: &commit}}}
+	record := corenest.CommitRecord{ID: txID, Durability: corenest.DurabilityStrict.Record(), Mutations: []corenest.EntityMutation{{EntityID: entityID, Resource: "remote_entity", Version: 5, Codec: "remote", Remote: &commit}}}
 	raw, err := encodeRecord(record)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestRemoteDeleteCommitCodecRoundTrip(t *testing.T) {
 		Deletes:       []entity.RemoteDataDelete{{Database: "game", DatabaseScope: 1, Collection: "players", ID: entityID}},
 		Invalidations: []entity.RemoteSnapshotKey{{EntityID: entityID, Kind: kind, Scope: 1}},
 	}
-	record := corenest.CommitRecord{ID: txID, Durability: corenest.DurabilityStrict, Mutations: []corenest.EntityMutation{{EntityID: entityID, Resource: "remote_entity", Version: 6, Codec: "remote", Remote: &commit}}}
+	record := corenest.CommitRecord{ID: txID, Durability: corenest.DurabilityStrict.Record(), Mutations: []corenest.EntityMutation{{EntityID: entityID, Resource: "remote_entity", Version: 6, Codec: "remote", Remote: &commit}}}
 	raw, err := encodeRecord(record)
 	if err != nil {
 		t.Fatal(err)

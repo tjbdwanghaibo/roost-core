@@ -238,8 +238,8 @@ func (projector *Projector) CommitSystem(ctx context.Context, record coredata.Co
 	if fatal := projector.fatal(); fatal != nil {
 		return nil, fatal
 	}
-	if record.Durability == corenest.DurabilityMemory {
-		record.Durability = corenest.DurabilityStrict
+	if record.Durability == coredata.DurabilityMemory {
+		record.Durability = coredata.DurabilityStrict
 	}
 	ticket := &projectionTicket{done: make(chan struct{})}
 	projector.ticketMu.Lock()

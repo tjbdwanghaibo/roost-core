@@ -36,7 +36,7 @@ func TestCastTransactionRollbackWithoutSync(t *testing.T) {
 			committer := &recordingCommitter{err: rejection}
 			engine := NewEngine(NestOptionWithGetter(getter), NestOptionWithTransactionCommitter(committer))
 			handler := NewHandlerName("cast_rollback_" + name)
-			meta := HandlerMeta{Rollback: RollbackState}
+			meta := HandlerMeta{Rollback: RollbackState, Durability: DurabilityMemory}
 			if rejectCommit {
 				meta.Durability = DurabilityStrict
 			}

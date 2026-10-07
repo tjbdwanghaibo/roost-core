@@ -14,10 +14,16 @@ import (
 // DurabilityPolicy is independent from rollback policy. Rollback controls
 // failures before the commit point; durability controls when the commit point
 // is acknowledged.
-type DurabilityPolicy = dataengine.Durability
+//
+// 它是 handler 声明用的类型，零值表示“未声明”（RR-20261006-60，v1.23.1 起）：
+// 手写 HandlerMeta 时 Rollback 不为 none 就必须显式写 Durability，注册时校验；
+// Rollback 为 none 时未声明按 memory 处理，HandlerMeta{} 仍走 memory 快路径。
+// 事务记录（WAL、投影、远端 outcome）上的级别是 dataengine.Durability，用 Record 换算。
+type DurabilityPolicy uint8
 
 const (
-	DurabilityMemory DurabilityPolicy = iota
+	durabilityUnset DurabilityPolicy = iota
+	DurabilityMemory
 	DurabilityAsync
 	DurabilityStrict
 	// DurabilityPipelined splits admission: Enqueue (in-lock) is the only
@@ -26,6 +32,28 @@ const (
 	// See NEST_PIPELINED_COMMIT.md for the full contract.
 	DurabilityPipelined
 )
+
+// durabilityChoices 列出 HandlerMeta.Durability 的可选值，用于注册期报错。
+const durabilityChoices = "nest.DurabilityMemory | nest.DurabilityAsync | nest.DurabilityStrict | nest.DurabilityPipelined"
+
+// Record 换算成事务记录上的持久化级别；未声明按 memory。
+func (p DurabilityPolicy) Record() dataengine.Durability {
+	if p == durabilityUnset {
+		return dataengine.DurabilityMemory
+	}
+	return dataengine.Durability(p - 1)
+}
+
+func (p DurabilityPolicy) String() string {
+	switch {
+	case p == durabilityUnset:
+		return "unset"
+	case p > DurabilityPipelined:
+		return "invalid"
+	default:
+		return p.Record().String()
+	}
+}
 
 func ParseDurabilityPolicy(value string) (DurabilityPolicy, error) {
 	switch value {

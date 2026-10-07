@@ -21,7 +21,7 @@ func testRecord(sequence byte, durability corenest.DurabilityPolicy) corenest.Co
 		Handler:    "test.handler",
 		RequestID:  "request",
 		CreatedAt:  123,
-		Durability: durability,
+		Durability: durability.Record(),
 		Mutations: []corenest.EntityMutation{{
 			EntityID: int64(sequence) + 1,
 			Database: "game",
