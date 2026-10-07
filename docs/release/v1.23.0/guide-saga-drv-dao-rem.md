@@ -80,7 +80,7 @@ flowchart LR
 | [REM-10](#rem-10) | O-M6-6：同 sid 重启按进程代际令牌立即接管上一代留下的 Remote 实体锁 | v1.23.0（本版） | 是（开单实例锁时 token 格式变长；只接管同持有者上一代） | 否（需 `singleton.enabled=true` 才受益） |
 | [REM-11](#rem-11) | L2 落后权威的上界：`snapshot_l2_ttl + cached_max_staleness`（core 缺省约 5m30s），保持不加后台补写 | v1.23.0（本版，文档） | 否 | 否 |
 | [REM-12](#rem-12) | Redis Cluster 迁槽 ASK / MOVED 下 L2 读写与墓碑 WAIT 实测；mirror-local Cluster 就绪判定补“每个主节点有 online 副本” | v1.23.0（本版） | 否 | 否 |
-| [REM-13](#rem-13) | 生成配置写出 `remote_entity` 五个新键；生产化不再把墓碑 WAIT 副本数改成 3 | v1.23.0（本版） | 否（只影响新生成工程） | 否 |
+| [REM-13](#rem-13) | 生成配置写出 `remote_entity` 五个新键；生产化不再把墓碑 WAIT 副本数改成 3（索引，以 [CFG-12](guide-cfg-skill-noncore.md#cfg-12) 为准） | v1.23.0（本版） | 否（只影响新生成工程） | 否 |
 | [REM-14](#rem-14) | 兴趣表满时 release 改记每个 consumer 一个的溢出水位，迟到的旧续租不再复活已撤销的租约（RR-20261006-11） | v1.23.0（本版） | 是，收紧（只在表满时：之前会复活的旧续租现在被忽略） | 否 |
 | [REM-15](#rem-15) | A3 ②：排空下沉到同步总线——`Subscribe` / `SubscribeLive` 返回 `*syncbus.Subscription`，`Unsubscribe(ctx)` 本身是三步停机，handler 带投递 ctx；`mirror.Replicator` 删掉自带的准入门；修 RR-20261006-36（`PatchSyncer` / `ReplicaSyncer` / `syncstream` 停止不等在途回调） | v1.23.0（本版） | 是，**API 破坏**：`syncbus.Handler` 加 ctx、订阅返回 `*Subscription`、`PatchSyncer.Stop` / `ReplicaSyncer.Stop` 改为 `Stop(ctx) error`；停止在回调返回前不报完成 | 自己实现 `ISyncBus` 或直接用这些 API 的代码按新签名改（仓内已全部迁移）；handler 里退订自己必须传入它收到的投递 ctx |
 
@@ -1844,37 +1844,9 @@ health damage without / with the +100 armor buff = 100 / 100, want 100 / 50
 <a id="rem-13"></a>
 ### REM-13 生成配置写出 remote_entity 新键（收尾第 2 批 A8）
 
-| 首发 | 类型 | 行为变化 / 兼容破坏 | 需业务 / 运维改动 | 实现 |
-| --- | --- | --- | --- | --- |
-| v1.23.0（本版） | 收尾盘点小项（第十一轮“收尾 · 第 2 批”A8） | 否（只影响新生成工程的配置文件；取值等于缺省） | 否；已有工程的配置不回写，需要时手工加键 | [REM-13](impl-saga-drv-dao-rem.md#rem-13) |
+> 与其他分册重复：以 [CFG-12](guide-cfg-skill-noncore.md#cfg-12) 为准，本条只保留编号与一句话结论（汇总去重）。
 
-**结论**：新生成工程的开发配置、生产示例、k8s Secret 示例的 `remote_entity` 段带上 `cached_max_staleness`、`snapshot_interest_per_consumer`、`snapshot_l2_tombstone_wait_replicas` / `_timeout`、`mirror.shutdown_timeout` 五个键与中文注释；生产化只把独占一行的 `replicas: 1` 改成 3，不再把墓碑 WAIT 的副本数一起改掉。
-
-**背景**：B2 / O4 / O-M6-3 / Mirror 第 5 步新增的键都没写进生成模板，运维只能去 USER_GUIDE 找键名。B2 当时因 A1 正在改 codegen 而有意不加（B2 §5）。
-
-**维护者决定**：
-
-> 收尾 · 第 2 批 | 生成形状相关小项：A8 生成配置补 `remote_entity` 新键、……
-
-（出处：[DECISIONS-PENDING 第十一轮](../../review/DECISIONS-PENDING-2026-10-05.md)；第十一轮“收尾 | 盘点全部未完成问题，处理完后统一发一个版本”。）
-
-**现在的行为**：
-
-| 键 | 模板写入值 | 依据 |
-| --- | --- | --- |
-| `cached_max_staleness` | `30s` | 零值取 `snapshot_cache_ttl`（模板为 30s）；kit 对设置了的值要求为正，所以写同值不能写 0 |
-| `snapshot_interest_per_consumer` | `0` | 零值 = `snapshot_interest_subs / 16` |
-| `snapshot_l2_tombstone_wait_replicas` | `1` | `DefaultConfig` 为 1 |
-| `snapshot_l2_tombstone_wait_timeout` | `50ms` | `DefaultConfig` 为 50ms，上限 1s |
-| `mirror.shutdown_timeout` | `5s` | kit 声明的缺省 5s；只有 `RemoteMirrorMod` 读 |
-
-本版 A4 ①（`d1226825`，CFG 部分）之后，生成配置段不再是 `catalog.go` 里手写的模板字符串，而是由 kit Mod 配置声明里标了 `example` 的键渲染、`help` 写成注释；上表五个键的取值与依据不变，两条生成用例原样通过。
-
-**兼容与迁移**：只影响新生成工程；这一项本身不要求提高生成器 Core 下限（记录写 v1.21.0 / v1.22.0 的 kit 不认识墓碑两键，viper 忽略未知键）。v1.23.0 整体的 Core 下限要在打 tag 时提到 v1.23.0（A4 ① 与 activity 组必填，见 CFG / OWN 部分）。
-
-**已知限制 / 待外部验证**：无外部验证项。按约定不等 GitHub CI（framework-compat full 场景），本地验证见 [CLOSING-BATCH-2 §A8](../../bugfix/CLOSING-BATCH-2-2026-10-06.md)。v1.21.0 / v1.22.0 的 core 遇到新生成配置里的墓碑两键不报错：两个版本的 `ValidateServiceConfig` 只严格检查登记过的键与 `.call_timeout` 后缀，kit 也不读它们（源码核对）。
-
-**链接**：[实现](impl-saga-drv-dao-rem.md#rem-13) · [CLOSING-BATCH-2 §A8](../../bugfix/CLOSING-BATCH-2-2026-10-06.md) · [CHANGELOG](../../../CHANGELOG.md)
+**结论**：新生成工程的开发配置、生产示例与 k8s Secret 示例的 `remote_entity` 段带上五个新键（取值等于缺省，附中文注释），生产化不再把墓碑 WAIT 的副本数一起改成 3；只影响新生成工程，已有工程不回写。首发 v1.23.0（本版）。[实现](impl-saga-drv-dao-rem.md#rem-13)
 
 <a id="rem-14"></a>
 ### REM-14 兴趣表满时 release 改记溢出水位（RR-20261006-11）
@@ -1964,7 +1936,7 @@ old_stop_red_test.go:41: ReplicaSyncer.Stop returned while the Store write was s
 各条目里原写的本机可做项（混跑、源码推断、未实跑的局部用例）在本次重核中按下面的方式处理，条目正文已改：
 
 - **按维护者决定不在范围**：新旧步骤进程混跑（SAGA-2、SAGA-9、SAGA-14：维护者 2026-10-06“不考虑旧进程，完成按照新的处理，线上还没有旧的进程跑”，升级先停旧再起新）；新旧协调器混跑（SAGA-6、SAGA-7，同一句决定）。
-- **按源码核对后写成事实**（位置见实现条目）：SAGA-3 / 4 / 5 的两条预算行为；REM-3 其他调用方；REM-4 并发加载与缓冲重放；REM-6 生成 spec 不带 Tenant / Policy；REM-7 pipelined 与 Durability 0；REM-11 同值 CAS 续期；REM-12 MIGRATING 时键仍在源上；REM-13 旧 core 读新生成配置；DRV-4 WAIT 超时与客户端读超时。
+- **按源码核对后写成事实**（位置见实现条目）：SAGA-3 / 4 / 5 的两条预算行为；REM-3 其他调用方；REM-4 并发加载与缓冲重放；REM-6 生成 spec 不带 Tenant / Policy；REM-7 pipelined 与 Durability 0；REM-11 同值 CAS 续期；REM-12 MIGRATING 时键仍在源上；REM-13 旧 core 读新生成配置（已并入 CFG-12）；DRV-4 WAIT 超时与客户端读超时。
 - **由已有或新增的实测覆盖**：DRV-5 的 nats Close 契约（真实 NATS 私有 JetStream 3 节点，RR-24 / -26 与自持关闭状态的窗口用例，原写“未在真实依赖上测”已闭环）；SAGA-1 返回 nil 之后的 Ack（SAGA-13、REM-5 的真实 JetStream 用例）；SAGA-2 投影积压与“截止前投影、放弃后送达”（确定性用例）；SAGA-10 真实 NATS 退避（SAGA-13）；REM-4 durable 名（`TestRealJetStreamLiveDurableNameShape`）；REM-5 兴趣 handler 出错的结算（`TestRealJetStreamInterestHandlerErrorIsAcknowledged`）；REM-14 溢出水位到期（`d5682dc4`）。
 - **改为实现条目的 review 检查点**（属于“用例强度 / 成本是否可接受”的问题，交给 review 判断）：SAGA-6 去掉 `$exists` 条件的负对照；DRV-3 写方法逐个进“回复丢失只执行一次”表；DAO-3 投影的 `reflect.DeepEqual` 成本。
 

@@ -18,7 +18,7 @@
 ### 2026-10-06，冻结提交 `e6828e4f`（上一版，留作历史）
 
 - 脚本抽出全部 `path:line` 引用（483 处）与相邻的符号名，在 `e6828e4f` 的源码里逐条比对，改 13 处（5 处因 `b7471ae4` / `565f657b` 行号漂移，8 处是初稿写偏）；核对了 158 个测试名与全部提交号。
-- 新增 TOOL-8（`7fec136e`）、TOOL-9（`87d8d91e`）；APP-7 并入 roost-coding 的 `RedisMod` 例外（`b7471ae4`）；APP-9 并入注释挪位（`b7471ae4`）；OWN-4 / OWN-5 并入 RR-20261005-01 回归在 C4 后的去向与 `TestAGroupFitsOneLiveQuery`（`d5682dc4`）；三处方案文档按源码更正（App 锁方案 §3.6 与 §13 obs34、D-L3 方案 §3.2）。
+- 新增 TOOL-8（`7fec136e`）、TOOL-9（`87d8d91e`）；APP-7 并入 roost-coding 的 `RedisMod` 例外（`b7471ae4`）；APP-9 并入注释挪位（`b7471ae4`）；OWN-4 / OWN-5 并入组上限守卫 `TestAGroupFitsOneLiveQuery`（`d5682dc4`；RR-20261005-01 回归在 C4 后的去向以 NONCORE-20 为准）；三处方案文档按源码更正（App 锁方案 §3.6 与 §13 obs34、D-L3 方案 §3.2）。
 
 ## 怎么用这份文档 review
 
@@ -758,21 +758,13 @@ TestSendGiftWritesThisProcessSidAsTheSendersSid: StartGift got sender 4242 on si
 <a id="own-4"></a>
 ### OWN-4 activity 改用 App 的 `Live`；候选校验
 
-**提交与首发**：v1.20.0 `f051e24a`（activity 部分）；v1.20.1 `46c4dfba`（RR-20261005-01）。v1.20.2 起候选来源换成组文件（OWN-5）。v1.23.0 `d5682dc4`：核对 RR-20261005-01 的回归在 C4 后的去向，补守卫 `TestAGroupFitsOneLiveQuery`（只加测试与记录）。
+**提交与首发**：v1.20.0 `f051e24a`（activity 部分）；v1.20.1 `46c4dfba`（RR-20261005-01）。v1.20.2 起候选来源换成组文件（OWN-5）。v1.23.0 `d5682dc4`：补组上限守卫 `TestAGroupFitsOneLiveQuery`（只加测试与记录）；同一提交核对的 RR-20261005-01 回归去向见 [NONCORE-20](impl-cfg-skill-noncore.md#noncore-20)。
 
 **改动文件与关键符号**：`demo/internal/service/game/activity.go.tmpl:66-68`（`liveness app.SingletonLiveness`）、`:96` `startActivity`（`:99-101` 取 `ModSingleton`）、`:331` `expectedGameSIDs`（`Live` 结果为空只等自己；报错本拍不开窗）。已删除：`incarnation`、`lease` / `leaseStanding`、`bindAndLease` 里的 `AcquireLease`、`renewLease`、`leaseNotOurs`、`activity_lease_test.go.tmpl`。
 
 **不变量**：expected 集合 = `Live` 返回的活 sid（用本进程的 `server_type` 查）。守卫：`TestTheExpectedServersAreTheOnesTheAppLockSeesAlive`（`activity_test.go.tmpl:218`）、`TestActivityRefusesToStartWithoutTheAppLockLiveness`（`:261`）。
 
-**RR-20261005-01 的回归在 C4 后的去向**（[修复记录末节](../../bugfix/RR-20261005-01.md)，`d5682dc4` 逐项核对）：C4（`277e1252`）删 `activity.game_sids` 时把 `TestActivityRefusesACandidateListNoWindowCouldOpenWith` 一并删掉；承诺“注定开不出窗口的候选集在启动时、任何远端调用之前按键名拒绝”仍然需要，由组文件兑现：
-
-| 旧子用例 | 现在的覆盖 |
-| --- | --- |
-| `a-repeated-sid` | 模板 `TestActivityRefusesAGroupNoWindowCouldOpenWith/a-repeated-sid`（`activity_test.go.tmpl:309`）；kit `TestAGroupsFileThatCannotBeUsedIsRefusedByName/repeated-sid`（`kit/service/global/activity/groups_promises_test.go:79`） |
-| `a-sid-beyond-int32` | 模板 `…/a-sid-beyond-int32`；kit `…/beyond-int32`、`…/non-positive` |
-| `more-candidates-than-one-live-query`（> 200） | 一组至多 `MaxExpectedGames`（64）个成员、加载时拒绝；64 ≤ `app.SingletonLiveMaxSIDs`（200），一组的 `Live` 查询不会因候选过多失败。模板 `…/more-than-the-coordinator-takes`；kit `TestAGroupLargerThanOneWindowIsRefusedWhenLoaded`（`groups_promises_test.go:44`）、`TestModSweepsTheGroupsInTheGroupsFile/an-unusable-file-stops-init`。新守卫 `TestAGroupFitsOneLiveQuery`（`kit/service/global/activity/groups_live_limit_promises_test.go:15`）：两个常量改一个不改另一个时先红 |
-| `own-sid-and-non-positive-entries-are-skipped` | 不再适用：本服必须在某个组里（否则启动拒绝），非正数从“跳过”收紧为“拒绝” |
-| `exactly-one-live-query-is-accepted` | 恰好 64 个成员的组接受且能开窗：模板 `…/a-full-group-is-accepted`、kit `TestAFullGroupOpensAWindowWithTheCoordinator` |
+**RR-20261005-01 的回归在 C4 后的去向**：原回归 `TestActivityRefusesACandidateListNoWindowCouldOpenWith` 随 C4 删除，承诺改由组文件兑现、回归改名为 `TestActivityRefusesAGroupNoWindowCouldOpenWith`；逐项对照与变异证明以 [NONCORE-20](impl-cfg-skill-noncore.md#noncore-20) 为准。组上限这一项属于本主题：一组至多 `MaxExpectedGames`（64）个成员、加载时拒绝，64 ≤ `app.SingletonLiveMaxSIDs`（200），一组的 `Live` 查询不会因候选过多失败；守卫 `TestAGroupFitsOneLiveQuery`（`kit/service/global/activity/groups_live_limit_promises_test.go:15`），两个常量改一个不改另一个时先红。
 
 **测试**：第 3 笔修前红：`expected [1300], want exactly the live sids [1300 1302]`、`a Live query that failed produced an expected set`、`startActivity error "activity: game: capability \"service.global.activity\" not found; ..." does not name the missing capability`。RR-20261005-01 修前红（[修复记录](../../bugfix/RR-20261005-01.md)原文）：
 
@@ -788,13 +780,11 @@ $ GOWORK=off go test -race -count=1 -run TestActivityRefusesACandidateListNoWind
 FAIL
 ```
 
-`d5682dc4` 的变异证明（临时改源码，记录原文）：把 `MaxExpectedGames` 改成 201 →
+`d5682dc4` 对组上限守卫的变异证明（临时改源码，记录原文；模板侧的变异证明见 NONCORE-20）：把 `MaxExpectedGames` 改成 201 →
 
 ```
 an activity group may hold 201 game servers (MaxExpectedGames) but one App.Live query takes at most 200 (app.SingletonLiveMaxSIDs); ...
 ```
-
-模板侧把 `activityGroup` 挪到协调器能力查找之后，`TestActivityRefusesAGroupNoWindowCouldOpenWith` 的六个拒绝子用例全红（与修前同一形状）；恢复后 `go test -count=1 -race ./internal/service/game/` 通过。
 
 **review 检查点**：
 

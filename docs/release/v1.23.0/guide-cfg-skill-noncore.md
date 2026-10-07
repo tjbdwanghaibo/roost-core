@@ -84,7 +84,7 @@
 | [NONCORE-20](#noncore-20) | `activity.game_sids` 启动校验（RR-20261005-01；C4 后由组文件兑现、回归改名） | v1.20.1（v1.20.2 被 C4 取代） | 已取代 | 否 |
 | [NONCORE-21](#noncore-21) | activity 窗口条目统一入口与修复入口；account 判定表（B9） | v1.21.0 | 坏条目不再交出；新 Admin 入口 | 否（运维可用新入口） |
 | [NONCORE-22](#noncore-22) | account 换名释放未 admitted 计划（第五轮、O37） | v1.21.0 | 行为变化 | 否 |
-| [NONCORE-23](#noncore-23) | saga 定义缺失 fence 时退避中步骤记为放弃（NC-250） | v1.21.0 | 迟到成功告警 | 否 |
+| [NONCORE-23](#noncore-23) | saga 定义缺失 fence 时退避中步骤记为放弃（NC-250） | v1.21.0 | 是（迟到成功由丢弃改为 ack + 告警；本版正向的迟到成功改为补偿这一步，见 SAGA-16） | 否 |
 | [NONCORE-24](#noncore-24) | global `Bind` 同参重试幂等（RR-20261006-05） | v1.23.0（本版） | 放宽 | 否 |
 | [NONCORE-25](#noncore-25) | N07 第一批：快照锁、属性层回滚、attribute 生成器、errcode 扫描（NC-60～63） | v1.20.1 | 收紧：非字面量 errcode 报错 | 常量编号改字面量 |
 | [NONCORE-26](#noncore-26) | demo 开关热更说明、加载时重建 Gear（NC-64 / 65） | v1.20.1 | 模板 | `roost project sync` |
@@ -111,7 +111,7 @@
 | [NONCORE-47](#noncore-47) | 遍历回调仓库级契约（C7） | v1.20.2 | 契约成文 | 否 |
 | [NONCORE-48](#noncore-48) | container / goroutine 零调用方 API（NC-267～269） | v1.21.0 | 无 | 否 |
 | [NONCORE-49](#noncore-49) | Mongo URI 口令脱敏（NC-191） | v1.20.2 | 无 | 否 |
-| [NONCORE-50](#noncore-50) | 启动失败先收回 Service（NC-193） | v1.20.2 | 契约补充 | `Shutdown` 须容忍部分初始化 |
+| [NONCORE-50](#noncore-50) | 启动失败先收回 Service（NC-193） | v1.20.2 | 是（契约收紧） | `Shutdown` 须容忍部分初始化 |
 | [NONCORE-51](#noncore-51) | N15 脚本与门禁（NC-200～208）、A5 | v1.20.2 | 收紧：glsvet 对没检查到的输入退出 2 | 已有工程 `.gitignore` 补 `/data/wal/` |
 | [NONCORE-52](#noncore-52) | 停机三步（NC-170～174） | v1.20.2 | 收紧 | 否 |
 | [NONCORE-53](#noncore-53) | Mongo Mod 停止收敛（NC-260） | v1.21.0 | 重复 Close 返回 nil | 否 |
@@ -449,7 +449,7 @@ NC-75（tablegen ref + -check）──► B10 规则统一到 configdata/rules�
 <a id="cfg-12"></a>
 ### CFG-12 生成配置写出 `remote_entity` 的新键（收尾第 2 批 A8）
 
-> 其他分册对应：REM-13 是同一项。汇总去重：本条保留，REM-13 改为引用本条。
+> 其他分册对应：[REM-13](guide-saga-drv-dao-rem.md#rem-13) 是同一项，已改为只留编号与一句话结论的索引条目，以本条为准（汇总去重）。
 
 **结论**：新生成工程的开发配置、生产示例与 k8s Secret 示例带上 B2 / O4 / O-M6-3 / Mirror 第 5 步新增的五个 `remote_entity` 键，取值等于 core / kit 缺省，并附中文注释。首发 v1.23.0（本版）。[实现](impl-cfg-skill-noncore.md#cfg-12)
 
@@ -1368,7 +1368,7 @@ kit 与生成 game-demo 上都做过变异证明这些用例能红（见修复�
 
 > 与其他分册重复：以 [SAGA-7](guide-saga-drv-dao-rem.md#saga-7) 为准，本条只保留编号与一句话结论（汇总去重）。
 
-**结论**：协调器因缺少定义版本把记录 fence 到 `ManualRequired` 时，若当前步骤正在重试退避，写放弃关闭的 tombstone、删掉它仍排队的命令；之后才到的成功告警（`saga.completion.late_after_abandon_total`）。截止、人工 Compensate、定义缺失三个出口共用一个判断。首发 v1.21.0。边界项（近 SAGA）。[实现](impl-cfg-skill-noncore.md#noncore-23)
+**结论**：协调器因缺少定义版本把记录 fence 到 `ManualRequired` 时，若当前步骤正在重试退避，写放弃关闭的 tombstone、删掉它仍排队的命令；之后才到的成功 v1.21.0～v1.22.0 只告警（`saga.completion.late_after_abandon_total`），本版起正向的迟到成功改为由协调器补偿这一步、补偿方向仍只告警（[SAGA-16](guide-saga-drv-dao-rem.md#saga-16)）。截止、人工 Compensate、定义缺失三个出口共用一个判断。首发 v1.21.0。边界项（近 SAGA）。[实现](impl-cfg-skill-noncore.md#noncore-23)
 
 <a id="noncore-24"></a>
 #### NONCORE-24 global `Bind` 结果未知后用同样参数重试按幂等成功（RR-20261006-05）

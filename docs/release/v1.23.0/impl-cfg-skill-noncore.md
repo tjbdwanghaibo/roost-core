@@ -123,7 +123,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 | [NONCORE-20](#noncore-20) | `activity.game_sids` 启动校验（RR-20261005-01；C4 后由组文件兑现、回归改名） | v1.20.1（v1.20.2 被 C4 取代） | 已取代 | 否 |
 | [NONCORE-21](#noncore-21) | activity 窗口条目统一入口与修复入口；account 判定表（B9） | v1.21.0 | 坏条目不再交出；新 Admin 入口 | 否（运维可用新入口） |
 | [NONCORE-22](#noncore-22) | account 换名释放未 admitted 计划（第五轮、O37） | v1.21.0 | 行为变化 | 否 |
-| [NONCORE-23](#noncore-23) | saga 定义缺失 fence 时退避中步骤记为放弃（NC-250） | v1.21.0 | 迟到成功告警 | 否 |
+| [NONCORE-23](#noncore-23) | saga 定义缺失 fence 时退避中步骤记为放弃（NC-250） | v1.21.0 | 是（迟到成功由丢弃改为 ack + 告警；本版正向的迟到成功改为补偿这一步，见 SAGA-16） | 否 |
 | [NONCORE-24](#noncore-24) | global `Bind` 同参重试幂等（RR-20261006-05） | v1.23.0（本版） | 放宽 | 否 |
 | [NONCORE-25](#noncore-25) | N07 第一批：快照锁、属性层回滚、attribute 生成器、errcode 扫描（NC-60～63） | v1.20.1 | 收紧：非字面量 errcode 报错 | 常量编号改字面量 |
 | [NONCORE-26](#noncore-26) | demo 开关热更说明、加载时重建 Gear（NC-64 / 65） | v1.20.1 | 模板 | `roost project sync` |
@@ -150,7 +150,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 | [NONCORE-47](#noncore-47) | 遍历回调仓库级契约（C7） | v1.20.2 | 契约成文 | 否 |
 | [NONCORE-48](#noncore-48) | container / goroutine 零调用方 API（NC-267～269） | v1.21.0 | 无 | 否 |
 | [NONCORE-49](#noncore-49) | Mongo URI 口令脱敏（NC-191） | v1.20.2 | 无 | 否 |
-| [NONCORE-50](#noncore-50) | 启动失败先收回 Service（NC-193） | v1.20.2 | 契约补充 | `Shutdown` 须容忍部分初始化 |
+| [NONCORE-50](#noncore-50) | 启动失败先收回 Service（NC-193） | v1.20.2 | 是（契约收紧） | `Shutdown` 须容忍部分初始化 |
 | [NONCORE-51](#noncore-51) | N15 脚本与门禁（NC-200～208）、A5 | v1.20.2 | 收紧：glsvet 对没检查到的输入退出 2 | 已有工程 `.gitignore` 补 `/data/wal/` |
 | [NONCORE-52](#noncore-52) | 停机三步（NC-170～174） | v1.20.2 | 收紧 | 否 |
 | [NONCORE-53](#noncore-53) | Mongo Mod 停止收敛（NC-260） | v1.21.0 | 重复 Close 返回 nil | 否 |
@@ -667,7 +667,7 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
 <a id="cfg-12"></a>
 ### CFG-12 生成配置写出 `remote_entity` 新键（A8）
 
-> 其他分册对应：REM-13 是同一项。汇总去重：本条保留，REM-13 改为引用本条。
+> 其他分册对应：[REM-13](impl-saga-drv-dao-rem.md#rem-13) 是同一项，已改为只留编号与一句话结论的索引条目，以本条为准（汇总去重）。
 
 [说明](guide-cfg-skill-noncore.md#cfg-12)
 
@@ -691,8 +691,10 @@ go run ./cmd/glsvet -tests ./nest                 # NONCORE-54 之后应无输�
    - 修后通过；生成的 game 服务带这份配置在隔离环境起来并就绪。
    - 复跑：`GOWORK=off go test -count=1 -run 'RemoteEntitySection|GeneratedConfigsPass' ./codegen/internal/roost`。
 7. **性能**：无。
-8. **未验证**：无。GitHub framework-compat 在 `e6828e4f` 上全部通过（run `37461843085`：minimum / released / source-head × minimal / demo / full 九格与 `codegen-network`）。
-9. **review 检查点**：`streamReplicasLine` 的正则 `(?m)^([ \t]*)replicas: 1$` 是否不会命中 `snapshot_l2_tombstone_wait_replicas: 1`（行首锚定 + 键名恰为 `replicas`）；五个键声明上的 `default` / `example` 是否仍与 `remoteentity.DefaultConfig()` 一致——`TestRemoteEntityDeclaredDefaultsMatchCoreDefaults`（`kit/remoteentity/config_declaration_promises_test.go:14`）守 default，`TestKitConfigSchemasMatchKitDeclarations`（`codegen/internal/roost/config_declarations_promises_test.go:23`）守生成器快照与 kit 声明一致。
+8. **未验证**：无。GitHub framework-compat 在 `e6828e4f` 上全部通过（run `37461843085`：minimum / released / source-head × minimal / demo / full 九格与 `codegen-network`）。以下两点原写在 REM-13，去重时并入本条：
+   - 生成器 Core 下限不因本条提高的依据（源码核对）：v1.21.0 / v1.22.0 的 kit 不读墓碑两键，两个版本的 `app/config_validation.go` 里 `frameworkDurationSuffixes = []string{".call_timeout"}`，`ValidateServiceConfig` 只严格检查登记过的键与 `.call_timeout` 后缀，不按全部键报“未知键”，所以旧 core 遇到新生成配置里的这两个键不报错。
+   - 生成配置的 `snapshot_l2_ttl: 10m`、`snapshot_interest_subs: 100000`（`kit/remoteentity/config.go:26` / `:33` 的 `example`）与 core `DefaultConfig`（5m、262144，`remoteentity/config.go:86` / `:92`）不同，影响 [REM-11](impl-saga-drv-dao-rem.md#rem-11) 上界与 [REM-5](impl-saga-drv-dao-rem.md#rem-5) 缺省配额的实际数值。
+9. **review 检查点**：`streamReplicasLine` 的正则 `(?m)^([ \t]*)replicas: 1$` 是否不会命中 `snapshot_l2_tombstone_wait_replicas: 1`（行首锚定 + 键名恰为 `replicas`）；五个键声明上的 `default` / `example` 是否仍与 `remoteentity.DefaultConfig()` 一致——`TestRemoteEntityDeclaredDefaultsMatchCoreDefaults`（`kit/remoteentity/config_declaration_promises_test.go:14`）守 default，`TestKitConfigSchemasMatchKitDeclarations`（`codegen/internal/roost/config_declarations_promises_test.go:23`）守生成器快照与 kit 声明一致；`cached_max_staleness` 的 `help` 写明“配置了必须为正”（声明 `min:"1ns"`）；`mirror.shutdown_timeout` 写在 `remote_entity:` 下的 `mirror:` 子段，与声明键名 `remote_entity.mirror.shutdown_timeout` 一致；`TestGeneratedConfigsPassStrictAndProductionValidation` 对每份含 `remote_entity:` 的配置都同时跑 `RemoteEntityMod.Init` 与 `RemoteMirrorMod.Init`。
 
 <a id="cfg-13"></a>
 ### CFG-13 生成 TCP 越界报错逐条点名（A9）
@@ -2128,7 +2130,7 @@ go test -count=1 -run TestExamplesRun .               # 根包示例实跑门禁
      | --- | --- |
      | `a-repeated-sid` | 模板 `TestActivityRefusesAGroupNoWindowCouldOpenWith/a-repeated-sid`（`demo/internal/service/game/activity_test.go.tmpl:309`）；kit `TestAGroupsFileThatCannotBeUsedIsRefusedByName/repeated-sid`（`kit/service/global/activity/groups_promises_test.go:79`），另有 `a-sid-in-two-groups` / `sid-in-two-groups` |
      | `a-sid-beyond-int32` | 模板 `…/a-sid-beyond-int32`；kit `…/beyond-int32`、`…/non-positive` |
-     | `more-candidates-than-one-live-query`（> `app.SingletonLiveMaxSIDs` = 200） | 一组至多 64 个成员、加载时拒绝：模板 `…/more-than-the-coordinator-takes`；kit `TestAGroupLargerThanOneWindowIsRefusedWhenLoaded`（`groups_promises_test.go:44`）；**新增**守卫 `TestAGroupFitsOneLiveQuery`（`kit/service/global/activity/groups_live_limit_promises_test.go:15`，`MaxExpectedGames` ≤ `app.SingletonLiveMaxSIDs`，两个常量改一个不改另一个时先红） |
+     | `more-candidates-than-one-live-query`（> `app.SingletonLiveMaxSIDs` = 200） | 一组至多 64 个成员、加载时拒绝：模板 `…/more-than-the-coordinator-takes`；kit `TestAGroupLargerThanOneWindowIsRefusedWhenLoaded`（`groups_promises_test.go:44`）、`TestModSweepsTheGroupsInTheGroupsFile/an-unusable-file-stops-init`；**新增**守卫 `TestAGroupFitsOneLiveQuery`（`kit/service/global/activity/groups_live_limit_promises_test.go:15`，`MaxExpectedGames` ≤ `app.SingletonLiveMaxSIDs`，两个常量改一个不改另一个时先红） |
      | `own-sid-and-non-positive-entries-are-skipped` | 不再适用：组文件里本服必须是成员、非正数从“跳过”收紧为“拒绝”——模板 `…/this-server-in-no-group`、`…/no-groups-file`；kit `…/non-positive` |
      | `exactly-one-live-query-is-accepted` | 恰好 64 个成员的组接受：模板 `…/a-full-group-is-accepted`、`TestAWindowOpensForTheGroupTheFilePutsThisServerIn/a-full-group-all-live`；kit `TestAFullGroupOpensAWindowWithTheCoordinator` |
 

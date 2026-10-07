@@ -14,7 +14,7 @@
 | APP-6 | `operation.Lifetime`、停机契约骨架、glsvet stophints（A3） | v1.20.2 | 极小 | 否 | 否 |
 | APP-7 | `operation.Serial`；kit Mod 停止收敛（NC-233 / 234） | v1.23.0；NC-233 / 234 v1.21.0 | 是 | 小 | 否 |
 | APP-8 | 停机 lifecycle hook 受 `shutdown.total_timeout` 约束（NC-231）；超时错误点名卡住的 hook（RR-20261006-25） | v1.21.0（点名 v1.23.0） | 是 | 否（错误文本变化） | 否 |
-| APP-9 | 启动失败先调 `Service.Shutdown` 收回（NC-193） | v1.20.2 | 是 | 是（契约） | 是 |
+| APP-9 | 启动失败先调 `Service.Shutdown` 收回（NC-193） | v1.20.2 | 是 | 是（契约收紧） | 是 |
 | APP-10 | `/readyz` Degraded 算就绪（D1） | v1.21.0 | 是 | 是（`Snapshot.OK` 含义） | 视情况 |
 | APP-11 | `/readyz` 每个 checker 1.5s 期限 | v1.23.0 | 是 | 否 | 视情况 |
 | APP-12 | 退出原因写进文件日志（RR-20261006-07） | v1.23.0 | 是 | 否 | 否 |
@@ -24,7 +24,7 @@
 | OWN-1 | 租约状态机期三处修复（RR-20261004-10 / 11 / 14），同版本被取代 | v1.20.0 | 否 | 否 | 否 |
 | OWN-2 | game-demo 玩家所有权静态绑定 | v1.20.0 | 是 | 是（模板） | 是 |
 | OWN-3 | 赠礼按 `FromSID` 准入与转交；退款预算 | v1.20.0（预算入配置 v1.20.1） | 是 | 是（模板） | 是 |
-| OWN-4 | activity 改用 `Live`；候选校验（RR-20261005-01，C4 后由组文件兑现） | v1.20.0 / v1.20.1（回归去向核对 v1.23.0） | 是 | 否 | 是 |
+| OWN-4 | activity 改用 `Live`；候选校验（RR-20261005-01，C4 后由组文件兑现，回归去向见 NONCORE-20） | v1.20.0 / v1.20.1 | 是 | 否 | 是 |
 | OWN-5 | 活动组文件，每组 ≤ 64（C4）；守卫组上限 ≤ 一次 `Live` 上限；协调器按组核对 expected（RR-20261006-17）、`groups_file` 必填、`activity.New` 要组 | v1.20.2（守卫、核对、必填 v1.23.0） | 是 | 是 | 是 |
 | OWN-6 | global `Bind` 重试幂等（RR-20261006-05） | v1.23.0 | 是（放宽） | 否 | 否 |
 | OWN-7 | 通关遇到还没开的活动窗口时自己开窗（RR-20261006-29） | v1.23.0 | 是 | 否 | 否（模板） |
@@ -185,7 +185,7 @@ roost-coding 规范同期新增的条款（规则源，不是测试）：“新�
 - **SAGA**：OWN-3 的退款预算由 `saga.steps.gift_item.debit.max_attempts` 配置提供（U-0280）；RR-20261006-06（步骤预算大小写）属 SAGA。
 - **SKILL**：本分册不涉及 skill；术语按冻结口径（召唤物 = Summon，衍生物 = Spawn）由分册 3 统一。本分册里的 “spawner” 是 game-demo 的怪物刷新器，与 skill 衍生物无关。
 - **C9 / B9 的归属**：C9（`TestNetworkCodegenTestsRunInSomeWorkflow`，codegen 联网用例门）由 NONCORE-31 覆盖，B9（activity 窗口条目统一入口、account 建角判定表，`bd6df5e5`）由 NONCORE-21 覆盖；本分册 APP-5 只引用 B9 / C5 方案里的 C5 部分。
-- **与 NONCORE 去重**（以本分册为准）：NONCORE-1 ↔ APP-4 / APP-7 / APP-8 / OPS-3，NONCORE-24 ↔ OWN-6，NONCORE-40 ↔ CLK-6，NONCORE-45 ↔ OPS-7，NONCORE-50 ↔ APP-9，NONCORE-56 ↔ OWN-1。
+- **与 NONCORE 去重**（以本分册为准）：NONCORE-1 ↔ APP-4 / APP-7 / APP-8 / OPS-3，NONCORE-24 ↔ OWN-6，NONCORE-40 ↔ CLK-6，NONCORE-45 ↔ OPS-7，NONCORE-50 ↔ APP-9，NONCORE-56 ↔ OWN-1。反方向：RR-20261005-01 的回归去向（C4 后的逐项对照）以 [NONCORE-20](guide-cfg-skill-noncore.md#noncore-20) 为准，OWN-4 / OWN-5 只留一句话与组上限守卫。
 - **WANTED**：未决数 0。本分册相关的 W-2026-10-06-02 → RR-20261006-10（APP-7）；W-2026-10-06-01 → RR-20261006-12（`b7471ae4`，NONCORE）。
 
 ## 7. 本分册发现的文档与源码不一致（以源码为准）
@@ -195,8 +195,8 @@ roost-coding 规范同期新增的条款（规则源，不是测试）：“新�
 3. **D-L3 方案 §3.2 的豁免描述**：表里写 `playerowner.go.tmpl`（玩家归属租约）；静态绑定后用途是驻留与闲置卸载（`playerowner.go.tmpl:124` / `:130`）。**已处理**：§3.2 改为“驻留与闲置卸载”并注明更正。
 4. **源码注释错位**：`stopModsReverse` 的文档注释错放在 `startupCleanupTimeout` 常量上方。**已处理**：`b7471ae4` 挪回函数上方（现在 `app/app.go:635-637`，函数 `:638`；常量在 `:594-595`）。
 5. **roost-coding 与 kit Redis Mod 的串行方式**：规范写“用 `operation.Serial`（不用 `sync.Mutex`）”，`kit/redis/redis_mod.go:24` 用 `sync.Mutex`。**已处理**：`b7471ae4` 在规范里写明例外。
-6. **RR-20261006-28 的位置（本次新发现）**：修复记录与 `docs/bugfix/README.md` 写生产校验在 `app/config_validation.go`、解析收到 `app.RedisClusterAddrs`、`kit/mods.RedisClusterAddrs` 转调、守卫在 `app/production_redis_cluster_promises_test.go`；A4①（`d1226825`）之后检查在 `kit/redis/redis_mod.go:63-68`，两个 `RedisClusterAddrs` 与该测试文件都已删除，承诺由 `TestProductionRedisNeedsAnAddrOrClusterSeeds` 承担，错误文本不再带服务类型。**本分册处理**：APP-14 两份文档写明“源码与记录不一致”；修复记录是历史记录，不改（不在本分册文件范围，供汇总者决定是否加后注）。
-7. **RR-20261006-17 “后续”的错误文本（本次新发现）**：修复记录写 `activity mod: activity.groups_file is required: set it to …`；A4① 之后由声明的 `required` 报出 `config: activity.groups_file is required (for example configs/activity_groups.yaml)`（仍点名键名与默认路径，守卫断言的子串不变）。**本分册处理**：OWN-5 实现文档写明；修复记录不改（同上）。
+6. **RR-20261006-28 的位置（本次新发现）**：修复记录与 `docs/bugfix/README.md` 写生产校验在 `app/config_validation.go`、解析收到 `app.RedisClusterAddrs`、`kit/mods.RedisClusterAddrs` 转调、守卫在 `app/production_redis_cluster_promises_test.go`；A4①（`d1226825`）之后检查在 `kit/redis/redis_mod.go:63-68`，两个 `RedisClusterAddrs` 与该测试文件都已删除，承诺由 `TestProductionRedisNeedsAnAddrOrClusterSeeds` 承担，错误文本不再带服务类型。**已处理**：APP-14 两份文档写明“源码与记录不一致”；RR-28 / RR-17 修复记录已由 `a3aadb9d` 追加更正（[RR-20261006-28](../../bugfix/RR-20261006-28.md) 末节“更正”）。
+7. **RR-20261006-17 “后续”的错误文本（本次新发现）**：修复记录写 `activity mod: activity.groups_file is required: set it to …`；A4① 之后由声明的 `required` 报出 `config: activity.groups_file is required (for example configs/activity_groups.yaml)`（仍点名键名与默认路径，守卫断言的子串不变）。**已处理**：OWN-5 实现文档写明；RR-28 / RR-17 修复记录已由 `a3aadb9d` 追加更正（[RR-20261006-17](../../bugfix/RR-20261006-17.md) 末节“更正”）。
 
 ## 8. 重核结果（`e6828e4f` → `5e72ca4d`，2026-10-07）
 

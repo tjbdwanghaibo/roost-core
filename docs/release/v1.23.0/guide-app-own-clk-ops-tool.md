@@ -82,7 +82,7 @@
 | v1.20.2（2026-10-06） | `c85d4565` | APP-6、APP-9、OWN-5、OPS-1、TOOL-1（origin 不可达）、TOOL-7（无用例记 FAIL、持锁） |
 | v1.21.0（2026-10-06） | `4881f2b7` | APP-4（停机期非零退出）、APP-5（C5）、APP-7（NC-233 / 234）、APP-8、APP-10、APP-13（`clock.business`）、CLK-1、CLK-2、CLK-4 的拆分、CLK-6、OPS-3、TOOL-3 |
 | v1.22.0（2026-10-06） | `9bf690fb` | CLK-3、CLK-4（合并回业务钟）、TOOL-6 |
-| v1.23.0（本版） | 待打 | APP-7（`Serial` 与 `RedisMod` 例外）、APP-8（点名卡住的 hook）、APP-11、APP-12、APP-13（`singleton_incarnation`）、APP-14、APP-15、OWN-4 / OWN-5（RR-20261005-01 回归去向、组上限守卫、协调器按组核对、`groups_file` 必填）、OWN-6、OWN-7、CLK-5、OPS-2（含 RR-18 / RR-19）、OPS-4～8、TOOL-2、TOOL-4、TOOL-5、TOOL-6 扩展、TOOL-7 预跑、TOOL-8、TOOL-9 |
+| v1.23.0（本版） | 待打 | APP-7（`Serial` 与 `RedisMod` 例外）、APP-8（点名卡住的 hook）、APP-11、APP-12、APP-13（`singleton_incarnation`）、APP-14、APP-15、OWN-4 / OWN-5（组上限守卫、协调器按组核对、`groups_file` 必填；RR-20261005-01 回归去向见 NONCORE-20）、OWN-6、OWN-7、CLK-5、OPS-2（含 RR-18 / RR-19）、OPS-4～8、TOOL-2、TOOL-4、TOOL-5、TOOL-6 扩展、TOOL-7 预跑、TOOL-8、TOOL-9 |
 
 ## 平台支持
 
@@ -504,13 +504,13 @@
 
 **维护者决定**：“走 App 级别，不需要各个模块单独处理”（方案 §7.2）。
 
-**现在的行为**：Live 为空时 expected 只有自己；Live 报错时本拍不开窗；`routing.Bind` 的组绑定保留。RR-20261005-01 修复后 `startActivity` 在任何远端调用之前按键名报错、`Service.Init` 失败。v1.20.2 起候选来源换成组文件（OWN-5），`activity.game_sids` 不再存在；原回归随 C4 改为组文件形态的 `TestActivityRefusesAGroupNoWindowCouldOpenWith`，“候选超过一次 `Live` 上限（200）”这条承诺改由组上限（64）兑现，v1.23.0 加守卫 `TestAGroupFitsOneLiveQuery`（`d5682dc4`，逐项对照见 RR-20261005-01 修复记录末节）。
+**现在的行为**：Live 为空时 expected 只有自己；Live 报错时本拍不开窗；`routing.Bind` 的组绑定保留。RR-20261005-01 修复后 `startActivity` 在任何远端调用之前按键名报错、`Service.Init` 失败。v1.20.2 起候选来源换成组文件（OWN-5），`activity.game_sids` 不再存在；RR-20261005-01 的回归在 C4 后改名为组文件形态，去向与逐项对照以 [NONCORE-20](guide-cfg-skill-noncore.md#noncore-20) 为准（组上限守卫 `TestAGroupFitsOneLiveQuery` 见 OWN-5）。
 
 **兼容与迁移**：game 服务必须 `singleton.enabled: true`（生成默认）。崩溃的进程最多算 15s（原来 30s）。
 
 **已知限制**：开窗是先写者赢——日志里的 `expected_game_sids` 是本进程算的，不一定是协调器记录的那份（方案 §13 第 5 笔观察，已写进 GAME_DEMO_TEMPLATE §9.15.3）。
 
-**链接**：[实现 OWN-4](impl-app-own-clk-ops-tool.md#own-4) · [方案 §7.2](../../feature/APP-SINGLETON-LOCK-2026-10-05.md) · [RR-20261005-01 修复](../../bugfix/RR-20261005-01.md)
+**链接**：[实现 OWN-4](impl-app-own-clk-ops-tool.md#own-4) · [方案 §7.2](../../feature/APP-SINGLETON-LOCK-2026-10-05.md) · [RR-20261005-01 修复](../../bugfix/RR-20261005-01.md) · [回归去向：NONCORE-20](guide-cfg-skill-noncore.md#noncore-20)
 
 <a id="own-5"></a>
 ### OWN-5 活动组由一个配置文件定义，每组至多 64 个 game（C4）

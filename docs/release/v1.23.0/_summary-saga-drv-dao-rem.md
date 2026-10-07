@@ -7,7 +7,7 @@
 - 首发分布：v1.20.0 无；v1.20.1 5 条；v1.20.2 5 条；v1.21.0 10 条；v1.22.0 2 条；v1.23.0（本版）22 条。
 - 原“下个大版本”项中属于本部分的（A2 ③、A3 ②、saga 方向 ③④）都已在本版完成，分册里不再有“留到下个大版本”的说法（只在描述历史决定时出现）。
 - **WANTED 未决数 = 0**；仍待维护者决定的事项 = 0；review 检查点里没有“已知风险待判断”，只有给 review 去查的问题；未验证项只剩外部环境类（见文末）。
-- **仍未闭环 = 1**（不是 0，列出交汇总者，不在本册判定）：共享文档与源码的措辞不一致，不在本册文件范围——TROUBLESHOOTING T-226 现象列 (2) 仍写 ERROR `...; the effect is not compensated`，源码（`a6a902cd` 起）已改为正向 WARN `...; compensating it`、补偿方向 ERROR `...; the coordinator cannot account for it`（见文末“文档与源码不一致”表）。
+- **仍未闭环 = 0**：本册定稿时写 1（TROUBLESHOOTING T-226 现象列 (2) 仍是 v1.20.1～v1.22.0 的 ERROR `...; the effect is not compensated`，源码 `a6a902cd` 起已改为正向 WARN `...; compensating it`、补偿方向 ERROR `...; the coordinator cannot account for it`）；T-226 已由 `34a3585d` 按源码改正，见文末“文档与源码不一致”表。
 
 ## 条目总表
 
@@ -54,7 +54,7 @@
 | [REM-10](guide-saga-drv-dao-rem.md#rem-10) | O-M6-6：同 sid 重启按进程代际令牌立即接管上一代留下的 Remote 实体锁 | v1.23.0（本版） | 是（开单实例锁时 token 格式变长；只接管同持有者上一代） | 否（需 `singleton.enabled=true` 才受益） |
 | [REM-11](guide-saga-drv-dao-rem.md#rem-11) | L2 落后权威的上界：`snapshot_l2_ttl + cached_max_staleness`（core 缺省约 5m30s），保持不加后台补写 | v1.23.0（本版，文档） | 否 | 否 |
 | [REM-12](guide-saga-drv-dao-rem.md#rem-12) | Redis Cluster 迁槽 ASK / MOVED 下 L2 读写与墓碑 WAIT 实测；mirror-local Cluster 就绪判定补“每个主节点有 online 副本” | v1.23.0（本版） | 否 | 否 |
-| [REM-13](guide-saga-drv-dao-rem.md#rem-13) | 生成配置写出 `remote_entity` 五个新键；生产化不再把墓碑 WAIT 副本数改成 3 | v1.23.0（本版） | 否（只影响新生成工程） | 否 |
+| [REM-13](guide-saga-drv-dao-rem.md#rem-13) | 生成配置写出 `remote_entity` 五个新键；生产化不再把墓碑 WAIT 副本数改成 3（索引，以 [CFG-12](guide-cfg-skill-noncore.md#cfg-12) 为准） | v1.23.0（本版） | 否（只影响新生成工程） | 否 |
 | [REM-14](guide-saga-drv-dao-rem.md#rem-14) | 兴趣表满时 release 改记每个 consumer 一个的溢出水位，迟到的旧续租不再复活已撤销的租约（RR-20261006-11） | v1.23.0（本版） | 是，收紧（只在表满时：之前会复活的旧续租现在被忽略） | 否 |
 | [REM-15](guide-saga-drv-dao-rem.md#rem-15) | A3 ②：排空下沉到同步总线——`Subscribe` / `SubscribeLive` 返回 `*syncbus.Subscription`，`Unsubscribe(ctx)` 本身是三步停机，handler 带投递 ctx；`mirror.Replicator` 删掉自带的准入门；修 RR-20261006-36（`PatchSyncer` / `ReplicaSyncer` / `syncstream` 停止不等在途回调） | v1.23.0（本版） | 是，**API 破坏**：`syncbus.Handler` 加 ctx、订阅返回 `*Subscription`、`PatchSyncer.Stop` / `ReplicaSyncer.Stop` 改为 `Stop(ctx) error`；停止在回调返回前不报完成 | 自己实现 `ISyncBus` 或直接用这些 API 的代码按新签名改（仓内已全部迁移）；handler 里退订自己必须传入它收到的投递 ctx |
 
@@ -234,8 +234,8 @@
 | `TestSingletonIncarnationIsTheHeldLocksIdentity` | `app/singleton_incarnation_promises_test.go` | 单实例锁身份登记 | REM-10 |
 | `TestRemoteEntityModPassesTheSingletonIncarnationToTheLocks` | `kit/remoteentity/lock_incarnation_promises_test.go` | kit 传代际的条件 | REM-10 |
 | `TestMirrorLocalClusterSlotMigrationSnapshotReadWriteAndTombstone` | `remoteentity/cluster_slot_migration_integration_test.go` | Cluster ASK / MOVED 下 L2 与墓碑 | REM-12 |
-| `TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys` | `codegen/internal/roost/remote_entity_config_keys_promises_test.go` | 生成配置带五个键 | REM-13 |
-| `TestGeneratedConfigsPassStrictAndProductionValidation` | `codegen/internal/roost/generated_config_validation_promises_test.go` | 生成配置取值等于缺省并通过严格校验 | REM-13 |
+| `TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys` | `codegen/internal/roost/remote_entity_config_keys_promises_test.go` | 生成配置带五个键 | REM-13（以 CFG-12 为准） |
+| `TestGeneratedConfigsPassStrictAndProductionValidation` | `codegen/internal/roost/generated_config_validation_promises_test.go` | 生成配置取值等于缺省并通过严格校验 | REM-13（以 CFG-12 为准） |
 | `TestInterestReleaseOnAFullRegistryStillFencesTheLateRenewal` | `remoteentity/interest_release_full_promises_test.go` | 表满时 release 记溢出水位，迟到的旧续租不复活 | REM-14 |
 | `TestInterestOverflowFenceExpiresOneTTLAfterTheLastRelease`、`TestInterestOverflowFencesAreOnePerConsumerAndReclaimedOnExpiry` | `remoteentity/interest_overflow_expiry_promises_test.go` | 溢出水位到期时刻、每 consumer 一个、过期回收 | REM-14 |
 | `TestSubscriptionUnsubscribeStopContract`、`TestSubscriptionRefusesDeliveriesAfterUnsubscribe`、`TestSubscriptionSelfUnsubscribeWaitsOnlyForOthers`、`TestSubscriptionSelfUnsubscribeInReentrantDelivery`、`TestSubscriptionSelfUnsubscribeWithForeignContextTimesOut`、`TestSubscriptionPanicReleasesAdmission` | `sync/syncbus/subscription_promises_test.go` | `Subscription.Unsubscribe(ctx)` 三步停机、回调里退订自己、无关 ctx 如实超时 | REM-15 |
@@ -286,7 +286,7 @@
 | `app/`（`singleton.go`；`config_validation.go` 的键清单已由 A4 ① 删除） | REM-10 |
 | `nest/` | REM-3 |
 | `codegen/internal/entity/`（含 `testdata/remoteflow`） | REM-6、REM-8 |
-| `codegen/internal/roost/` | REM-13 |
+| `codegen/internal/roost/` | REM-13（以 CFG-12 为准） |
 | `scripts/mirror-local.sh` | REM-8、REM-12 |
 
 ## 未验证 / 外部验证项
@@ -323,7 +323,7 @@
 | REM-4 durable 名（推断） | 实测：`TestRealJetStreamLiveDurableNameShape`（`155b9f91`） |
 | REM-4 表满时 release 不留撤销水位（推断） | 转 RR-20261006-11 修复（`155b9f91`），到期实测（`d5682dc4`），见 REM-14 |
 | REM-5 owner 拒绝时 JetStream 是否重投 | 实测为 Ack（`d5682dc4`，MIRROR-STEP-4 §6.10） |
-| REM-6 生成 spec 不带 Tenant / Policy；REM-7 pipelined / Durability 0；REM-11 同值 CAS 续期；REM-12 MIGRATING 时键在源上；REM-13 旧 core 读新生成配置 | 源码核对后写成事实（位置见实现条目第 8 节） |
+| REM-6 生成 spec 不带 Tenant / Policy；REM-7 pipelined / Durability 0；REM-11 同值 CAS 续期；REM-12 MIGRATING 时键在源上；REM-13 旧 core 读新生成配置（已并入 CFG-12） | 源码核对后写成事实（位置见实现条目第 8 节） |
 
 ## 文档与源码不一致（初稿登记项的处理结果）
 
@@ -359,7 +359,7 @@
 
 | 不一致 | 处理 |
 | --- | --- |
-| `docs/TROUBLESHOOTING.md` T-226 现象列 (2) 写“修复后出现 ERROR `saga: step succeeded after the coordinator abandoned it; the effect is not compensated`” | **未处理（共享文档，不在本册文件范围，交汇总者）**：`a6a902cd` 起源码已没有这句——正向是 WARN `...; compensating it`（`saga/engine.go:639`），补偿方向与防御分支是 ERROR `...; the coordinator cannot account for it`（`:681`）；T-226 处置列末尾“saga 方向 ③④ 之后”一段已写对，只差现象列这一句。本册各条目已按源码写，并注明 v1.20.1～v1.22.0 的旧文本 |
+| `docs/TROUBLESHOOTING.md` T-226 现象列 (2) 写“修复后出现 ERROR `saga: step succeeded after the coordinator abandoned it; the effect is not compensated`” | **已处理**：`34a3585d` 按源码改正 T-226 现象列（正向 WARN `...; compensating it`，`saga/engine.go:639`；补偿方向与防御分支 ERROR `...; the coordinator cannot account for it`，`:681`；v1.20.1～v1.22.0 的旧文本保留为历史）。本册定稿时此项列为“仍未闭环”，现为 0；本册各条目已按源码写，并注明 v1.20.1～v1.22.0 的旧文本 |
 | 本册上一版 DRV-5 源码表两行（`nats/driver/assembly.go` 的 `closed` 字段、`Client.Publish` 关闭后同时 `errors.Is` 到 gonats 原错误） | 本轮按 `f0de827a` 改写（natsstate 方案 §7 点名） |
 | 本册上一版各处“留到下个大版本”（A2 ③、saga ③④）与 SAGA 里“③④ 暂不做” | 本轮改为“第十三轮本版完成”，指向 DRV-7 / SAGA-16 / REM-15 |
 | 本册上一版引用的 `kit/*` 手写配置读取（`readStepBudget`、`readSnapshotConfig`、`read.Err()`）、`app/config_validation.go` 的键清单与 `codegen/internal/roost/catalog.go` 的模板字符串 | A4 ①（`d1226825`）之后都已删除；本轮改指向各 Mod 的配置声明（`kit/saga/config.go`、`kit/remoteentity/config.go`、`kit/dataengine/mod.go` 的 `EffectsConfig`）与生成快照 `codegen/internal/roost/kitconfig_gen.go` |

@@ -80,7 +80,7 @@
 | [NONCORE-20](guide-cfg-skill-noncore.md#noncore-20) | `activity.game_sids` 启动校验（RR-20261005-01；C4 后由组文件兑现、回归改名） | v1.20.1（v1.20.2 被 C4 取代） | 已取代 | 否 |
 | [NONCORE-21](guide-cfg-skill-noncore.md#noncore-21) | activity 窗口条目统一入口与修复入口；account 判定表（B9） | v1.21.0 | 坏条目不再交出；新 Admin 入口 | 否（运维可用新入口） |
 | [NONCORE-22](guide-cfg-skill-noncore.md#noncore-22) | account 换名释放未 admitted 计划（第五轮、O37） | v1.21.0 | 行为变化 | 否 |
-| [NONCORE-23](guide-cfg-skill-noncore.md#noncore-23) | saga 定义缺失 fence 时退避中步骤记为放弃（NC-250） | v1.21.0 | 迟到成功告警 | 否 |
+| [NONCORE-23](guide-cfg-skill-noncore.md#noncore-23) | saga 定义缺失 fence 时退避中步骤记为放弃（NC-250） | v1.21.0 | 是（迟到成功由丢弃改为 ack + 告警；本版正向的迟到成功改为补偿这一步，见 SAGA-16） | 否 |
 | [NONCORE-24](guide-cfg-skill-noncore.md#noncore-24) | global `Bind` 同参重试幂等（RR-20261006-05） | v1.23.0（本版） | 放宽 | 否 |
 | [NONCORE-25](guide-cfg-skill-noncore.md#noncore-25) | N07 第一批：快照锁、属性层回滚、attribute 生成器、errcode 扫描（NC-60～63） | v1.20.1 | 收紧：非字面量 errcode 报错 | 常量编号改字面量 |
 | [NONCORE-26](guide-cfg-skill-noncore.md#noncore-26) | demo 开关热更说明、加载时重建 Gear（NC-64 / 65） | v1.20.1 | 模板 | `roost project sync` |
@@ -107,7 +107,7 @@
 | [NONCORE-47](guide-cfg-skill-noncore.md#noncore-47) | 遍历回调仓库级契约（C7） | v1.20.2 | 契约成文 | 否 |
 | [NONCORE-48](guide-cfg-skill-noncore.md#noncore-48) | container / goroutine 零调用方 API（NC-267～269） | v1.21.0 | 无 | 否 |
 | [NONCORE-49](guide-cfg-skill-noncore.md#noncore-49) | Mongo URI 口令脱敏（NC-191） | v1.20.2 | 无 | 否 |
-| [NONCORE-50](guide-cfg-skill-noncore.md#noncore-50) | 启动失败先收回 Service（NC-193） | v1.20.2 | 契约补充 | `Shutdown` 须容忍部分初始化 |
+| [NONCORE-50](guide-cfg-skill-noncore.md#noncore-50) | 启动失败先收回 Service（NC-193） | v1.20.2 | 是（契约收紧） | `Shutdown` 须容忍部分初始化 |
 | [NONCORE-51](guide-cfg-skill-noncore.md#noncore-51) | N15 脚本与门禁（NC-200～208）、A5 | v1.20.2 | 收紧：glsvet 对没检查到的输入退出 2 | 已有工程 `.gitignore` 补 `/data/wal/` |
 | [NONCORE-52](guide-cfg-skill-noncore.md#noncore-52) | 停机三步（NC-170～174） | v1.20.2 | 收紧 | 否 |
 | [NONCORE-53](guide-cfg-skill-noncore.md#noncore-53) | Mongo Mod 停止收敛（NC-260） | v1.21.0 | 重复 Close 返回 nil | 否 |
@@ -304,7 +304,7 @@ WANTED 未决数：**0**（W-2026-10-06-01 已转 RR-20261006-12 并修复，NON
 
 - **引用**：机器比对全部 `path:line`（正文约 490 处）在 `02c8a10d` 与 `e6828e4f` 上的内容和相邻符号名，再人工看没有符号可比的引用；约 165 个测试名逐个核对。共改 8 处：行号 3 处、NONCORE-54 随重写换 3 处、已删除符号 1 处、已改名测试 1 处。明细：NONCORE-14（`entity/remote_snapshot.go` `:392`→`:396`、`:629`→`:634`）、NONCORE-55（`transientRequeueDelay` 定义 `:411`，原文的 `:399` 是调用点）、NONCORE-54（随 RR-20261006-12 重写，`releaseDispatchLocks` 已删除，改为 `dispatchScopeGuard` / `releaseDispatchEntities` 等现名）、SKILL-2（`undoVitals` 已在 A1 删除，改为 DAO `beginChange`）。其余引用与所述符号一致；修前红文本里的 `文件:行` 是当时原文，不改。测试名逐个在 `e6828e4f` 上核对存在（已删除的 CFG-9 用例与 RR-20261005-01 原回归按“已删除 / 已改名”写明）。
 - **新增或并入的条目**：RR-20261006-12（原 W-2026-10-06-01，`b7471ae4`）并入 NONCORE-54 并写全；RR-20261005-01 回归改名（`d5682dc4`，`TestActivityRefusesAGroupNoWindowCouldOpenWith` + 新守卫 `TestAGroupFitsOneLiveQuery`）并入 NONCORE-20；`skill/README.md` 52 个旧链接修复（`d05a04a1`）以 TOOL-5 为准，本分册在 SKILL 主题开头与 NONCORE“只引用”表里引用。条目总数仍为 91。
-- **去重**：CFG-12 保留，REM-13 改为引用 CFG-12；NONCORE-1、23、24、40、45、50、56 改为只保留编号与一句话结论的索引条目，以 APP-4 / 7 / 8 + OPS-3、SAGA-7、OWN-6、CLK-6、OPS-7、APP-9、OWN-1 为准。
+- **去重**：CFG-12 保留，REM-13 已改为索引条目、以 CFG-12 为准；NONCORE-1、23、24、40、45、50、56 改为只保留编号与一句话结论的索引条目，以 APP-4 / 7 / 8 + OPS-3、SAGA-7、OWN-6、CLK-6、OPS-7、APP-9、OWN-1 为准。
 - **本机补跑**（`e6828e4f`）：真实 Mongo 副本集 `TestRealMongoCoordinatorLeaseTakeover`（NONCORE-12）与 `TestRealSagaCrossProcessKillRecovers`（NONCORE-18）通过；临时探针（未入库）在真实副本集上跑 Resume 代际持久（NONCORE-16）、Mongo Mod 在已断开客户端上停止（NONCORE-53），以及 mongo-driver v2.6.0 的 12 种带口令 URI 错误文本不含口令（NONCORE-49）；nest `-shuffle` 有界扫描 230 个 seed + `-race` 30 个 seed 全部通过（NONCORE-54）；GitHub framework-compat 在 `e6828e4f` 上全部通过（run `37461843085`，CFG-12、NONCORE-31）。
 - **改为说明、不再列为未验证的**（依据都是已有的维护者决定或源码事实，写在各条）：CFG-6（对象不支持 Ref）、CFG-7（B10 分层）、CFG-8（生成工程无 Rollback / 失败的 AfterApply，单测覆盖）、SKILL-5 / 9 / 10 / 19（第十二轮“其余保持”）、SKILL-13（B3 ③ 当时定为下个大版本；第十三轮改为本版完成，见 SKILL-30）、SKILL-14（按上下文判断是表的设计）、SKILL-15（O36）、NONCORE-15（升级兼容说明）、NONCORE-42（bus 去重契约下死信写失败没有重投链）、NONCORE-46（C8 保留；revleft O9 那一条第十三轮改为修复，RR-20261006-20）、NONCORE-51（发版矩阵已在共享隔离环境实跑）。
 - **留给 review 的覆盖缺口**（`e6828e4f` 时写成检查点）：SKILL-1 的 `Interrupt` 停衍生物出错分支、toggle release 回调出错分支、charge enter 失败后衍生物的宿主侧残留；SKILL-3 reset 里的衍生物条目。**已全部由 `5c1f4176` 补测闭环**，查出 RR-20261006-21 / 22 / 23（SKILL-23），之后的决定链见 SKILL-24～29。
@@ -314,7 +314,7 @@ WANTED 未决数：**0**（W-2026-10-06-01 已转 RR-20261006-12 并修复，NON
 | 本分册条目 | 内容 | 其他分册 | 处理 |
 | --- | --- | --- | --- |
 | CFG-1 | NC-190 严格布尔 / 时长 | APP-1 提到 `singleton.enabled` | 本条为主 |
-| CFG-12 | 生成配置写出 `remote_entity` 五个新键（A8） | REM-13 同一项 | **本条保留，REM-13 改为引用本条** |
+| CFG-12 | 生成配置写出 `remote_entity` 五个新键（A8） | REM-13 同一项 | **本条保留，REM-13 已改为索引条目、以本条为准** |
 | NONCORE-1 | NC-230～234、`ops.admin_timeout` | APP-4、APP-7、APP-8、OPS-3 | **以对方为准**，本条只留索引 |
 | NONCORE-15 | NC-130 / 131、RR-20260913-01 残余 | REM-1 只在背景里提到 | 本条为主 |
 | NONCORE-20 | RR-20261005-01 与 C4 后的回归去向 | OWN-5（组文件） | 本条为主（回归对照在本条） |

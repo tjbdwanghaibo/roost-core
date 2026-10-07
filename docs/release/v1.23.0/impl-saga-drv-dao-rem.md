@@ -81,7 +81,7 @@ v1.19.2 → v1.23.0 双文档的“实现”部分，覆盖四个主题：saga �
 | [REM-10](#rem-10) | O-M6-6：同 sid 重启按进程代际令牌立即接管上一代留下的 Remote 实体锁 | v1.23.0（本版） | 是（开单实例锁时 token 格式变长；只接管同持有者上一代） | 否（需 `singleton.enabled=true` 才受益） |
 | [REM-11](#rem-11) | L2 落后权威的上界：`snapshot_l2_ttl + cached_max_staleness`（core 缺省约 5m30s），保持不加后台补写 | v1.23.0（本版，文档） | 否 | 否 |
 | [REM-12](#rem-12) | Redis Cluster 迁槽 ASK / MOVED 下 L2 读写与墓碑 WAIT 实测；mirror-local Cluster 就绪判定补“每个主节点有 online 副本” | v1.23.0（本版） | 否 | 否 |
-| [REM-13](#rem-13) | 生成配置写出 `remote_entity` 五个新键；生产化不再把墓碑 WAIT 副本数改成 3 | v1.23.0（本版） | 否（只影响新生成工程） | 否 |
+| [REM-13](#rem-13) | 生成配置写出 `remote_entity` 五个新键；生产化不再把墓碑 WAIT 副本数改成 3（索引，以 [CFG-12](impl-cfg-skill-noncore.md#cfg-12) 为准） | v1.23.0（本版） | 否（只影响新生成工程） | 否 |
 | [REM-14](#rem-14) | 兴趣表满时 release 改记每个 consumer 一个的溢出水位，迟到的旧续租不再复活已撤销的租约（RR-20261006-11） | v1.23.0（本版） | 是，收紧（只在表满时：之前会复活的旧续租现在被忽略） | 否 |
 | [REM-15](#rem-15) | A3 ②：排空下沉到同步总线——`Subscribe` / `SubscribeLive` 返回 `*syncbus.Subscription`，`Unsubscribe(ctx)` 本身是三步停机，handler 带投递 ctx；`mirror.Replicator` 删掉自带的准入门；修 RR-20261006-36（`PatchSyncer` / `ReplicaSyncer` / `syncstream` 停止不等在途回调） | v1.23.0（本版） | 是，**API 破坏**：`syncbus.Handler` 加 ctx、订阅返回 `*Subscription`、`PatchSyncer.Stop` / `ReplicaSyncer.Stop` 改为 `Stop(ctx) error`；停止在回调返回前不报完成 | 自己实现 `ISyncBus` 或直接用这些 API 的代码按新签名改（仓内已全部迁移）；handler 里退订自己必须传入它收到的投递 ctx |
 
@@ -4410,65 +4410,11 @@ snapshot_l2_tombstone_wait_integration_test.go:319: WAIT calls on 127.0.0.1:3740
 <a id="rem-13"></a>
 ### REM-13 生成配置写出 remote_entity 新键（收尾第 2 批 A8）
 
-> 首发 v1.23.0（本版） · [说明](guide-saga-drv-dao-rem.md#rem-13)
+> 与其他分册重复：以 [CFG-12](impl-cfg-skill-noncore.md#cfg-12) 为准，本条只保留编号与一句话结论（汇总去重）。
 
-**1. 提交**
+[说明](guide-saga-drv-dao-rem.md#rem-13)
 
-| 提交 | 版本 | 内容 |
-| --- | --- | --- |
-| `fcc78ad0` | v1.23.0（本版） | `catalog.go` 模板加五个键与注释；`render.go` 的 `streamReplicasLine` 只替换独占一行的 `replicas: 1`；两条生成用例（同一提交还有 A9 / A11 / A15 / A17，属其他主题） |
-| `94548913` | v1.23.0（本版） | 记录与 DECISIONS-PENDING 标为已实施 |
-| `d1226825` | v1.23.0（本版） | A4 ①：生成配置段改由 kit Mod 的配置声明渲染（属 CFG 主题），五个键的取值与注释改由声明的 `example` / `help` 给出，两条生成用例原样通过 |
-
-**2. 改动文件与关键符号**
-
-| `path:line` | 符号 | 职责 |
-| --- | --- | --- |
-| `kit/remoteentity/config.go:25` / `:29-30` / `:34` / `:142` | 五个键的声明（`example` 与 `help`） | 本版 A4 ①（`d1226825`）之后生成配置段由声明渲染：标了 `example` 的键（`Starter`）写进配置，`help` 写成注释；`fcc78ad0` 当时是在 `catalog.go` 的模板字符串里手写这五个键 |
-| `codegen/internal/roost/kitconfig_gen.go:288-302` | 声明快照 | `go generate ./...` 从 kit 声明生成；`modConfigSection`（`codegen/internal/roost/catalog.go:23-25`）按它渲染 |
-| `codegen/internal/roost/render.go:651` | `streamReplicasLine` | `(?m)^([ \t]*)replicas: 1$` |
-| `codegen/internal/roost/render.go:658` | 生产化替换 | 只把匹配行改成 `replicas: 3` |
-| `codegen/internal/roost/remote_entity_config_keys_promises_test.go` | `TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys` | 开发 / 生产两份配置带五个键 |
-| `codegen/internal/roost/generated_config_validation_promises_test.go` | `TestGeneratedConfigsPassStrictAndProductionValidation` | 生成工程里注入检查：键都设置、取值等于 `DefaultConfig` / kit 缺省、`ValidateServiceConfig` 与两个 Mod 的 `Init` 都接受 |
-
-**3. 不变量与强制点**：生成配置的取值与 core `DefaultConfig` / kit 缺省一致（守卫：`TestGeneratedConfigsPassStrictAndProductionValidation`）；生产化不改墓碑 WAIT 副本数（守卫：同上 + `TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys` 的 production=true 分支）。
-
-**4. 控制流**：`roost project new` / `add` 渲染 Mod 配置段 → 开发配置原样；生产示例与 k8s Secret 示例经 `productionizeConfig` / `appendModConfigSections`，`streamReplicasLine` 只替换整行恰为 `replicas: 1` 的流副本数。
-
-**5. 失败与不确定结果**
-
-| 情形 | 处理 | 结果 |
-| --- | --- | --- |
-| 已有工程 | 不回写配置 | 不配置时用缺省值 |
-| v1.21.0 / v1.22.0 的 kit 读到墓碑两键 | 记录写“viper 忽略未知键” | 生成器 Core 下限不变 |
-
-**6. 测试**：修前红（原样，出处 [CLOSING-BATCH-2 §A8](../../bugfix/CLOSING-BATCH-2-2026-10-06.md)）：
-
-```text
---- FAIL: TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys
-    production=false: config lacks "cached_max_staleness: 30s"   （其余四个键同样，开发 / 生产各一遍）
---- FAIL: TestGeneratedConfigsPassStrictAndProductionValidation
-    a4_config_test.go:92: config.game.yaml does not set remote_entity.cached_max_staleness
-    a4_config_test.go:103: config.game.yaml: snapshot_l2_tombstone_wait_replicas = 0, want DefaultConfig 1
-    （config.game.prod.example.yaml、secret.game.example.yaml 同样）
-```
-
-中间负对照（同出处）：只改模板、不改生产化时 `production=true: config lacks "snapshot_l2_tombstone_wait_replicas: 1"`（被改成了 3）。修后两条用例通过；`go test -count=1 ./codegen/...`、`go generate ./...` 无漂移、生成 game-demo build / vet / test 通过（记录“验证”表）。
-
-**7. 性能证据**：无（不涉及热路径）。
-
-**8. 未验证项与已知风险**
-
-- 生成器 Core 下限不变的依据（源码核对）：v1.21.0 / v1.22.0 的 kit 不读墓碑两键，`app.ValidateServiceConfig` 只严格检查登记过的键与 `.call_timeout` 后缀（两个版本的 `app/config_validation.go` 里 `frameworkDurationSuffixes = []string{".call_timeout"}`，没有按全部键报“未知键”），所以旧 core 遇到新生成配置里的这两个键不会报错。
-- 生成模板的 `snapshot_l2_ttl: 10m`、`snapshot_interest_subs: 100000` 与 core `DefaultConfig`（5m、262144）不同，影响 [REM-11](#rem-11) 上界与 [REM-5](#rem-5) 缺省配额的实际数值。
-- 按约定不等 GitHub CI（framework-compat full 场景）；本地验证见 [CLOSING-BATCH-2 §A8](../../bugfix/CLOSING-BATCH-2-2026-10-06.md)（`TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys`、`TestGeneratedConfigsPassStrictAndProductionValidation`）。
-
-**9. review 检查点**
-
-- [ ] 确认 `streamReplicasLine`（`codegen/internal/roost/render.go:651`）不会匹配 `snapshot_l2_tombstone_wait_replicas: 1`（正则要求行首空白后紧接 `replicas`）。
-- [ ] 确认声明的 `example`：`cached_max_staleness: 30s` 与 `snapshot_cache_ttl: 30s` 同值，`help` 说明“配置了必须为正”（`kit/remoteentity/config.go:24-25`，声明 `min:"1ns"`）。
-- [ ] 确认 `mirror.shutdown_timeout` 写在 `remote_entity:` 下的 `mirror:` 子段，与 kit 声明的键名 `remote_entity.mirror.shutdown_timeout` 一致（`kit/remoteentity/config.go:141-143`；A4 ① 之后生成配置与声明同源，`codegen/internal/roost/kitconfig_gen.go:302`）。
-- [ ] 确认 `TestGeneratedConfigsPassStrictAndProductionValidation` 对每份含 `remote_entity:` 的配置都同时跑 `RemoteEntityMod.Init` 与 `RemoteMirrorMod.Init`。
+**结论**：`fcc78ad0` 让生成配置写出 `remote_entity` 五个新键、`streamReplicasLine` 只替换独占一行的 `replicas: 1`；A4 ①（`d1226825`）之后五个键改由 kit 声明的 `example` / `help` 渲染。首发 v1.23.0（本版）。提交、改动、红绿、未验证项与检查点见 [CFG-12](impl-cfg-skill-noncore.md#cfg-12)。
 
 <a id="rem-14"></a>
 ### REM-14 兴趣表满时 release 改记溢出水位（RR-20261006-11）与到期实测
@@ -4796,8 +4742,8 @@ RR-20261006-36 修前红（原样，出处 [问题记录](../../bug/RR-20261006-
 | `TestSingletonIncarnationIsTheHeldLocksIdentity` | `app/singleton_incarnation_promises_test.go` | 单实例锁身份登记 | REM-10 |
 | `TestRemoteEntityModPassesTheSingletonIncarnationToTheLocks` | `kit/remoteentity/lock_incarnation_promises_test.go` | kit 传代际的条件 | REM-10 |
 | `TestMirrorLocalClusterSlotMigrationSnapshotReadWriteAndTombstone` | `remoteentity/cluster_slot_migration_integration_test.go` | Cluster ASK / MOVED 下 L2 与墓碑 | REM-12 |
-| `TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys` | `codegen/internal/roost/remote_entity_config_keys_promises_test.go` | 生成配置带五个键 | REM-13 |
-| `TestGeneratedConfigsPassStrictAndProductionValidation` | `codegen/internal/roost/generated_config_validation_promises_test.go` | 生成配置取值等于缺省并通过严格校验 | REM-13 |
+| `TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys` | `codegen/internal/roost/remote_entity_config_keys_promises_test.go` | 生成配置带五个键 | REM-13（以 CFG-12 为准） |
+| `TestGeneratedConfigsPassStrictAndProductionValidation` | `codegen/internal/roost/generated_config_validation_promises_test.go` | 生成配置取值等于缺省并通过严格校验 | REM-13（以 CFG-12 为准） |
 | `TestInterestReleaseOnAFullRegistryStillFencesTheLateRenewal` | `remoteentity/interest_release_full_promises_test.go` | 表满时 release 记溢出水位，迟到的旧续租不复活 | REM-14 |
 | `TestInterestOverflowFenceExpiresOneTTLAfterTheLastRelease`、`TestInterestOverflowFencesAreOnePerConsumerAndReclaimedOnExpiry` | `remoteentity/interest_overflow_expiry_promises_test.go` | 溢出水位到期时刻、每 consumer 一个、过期回收 | REM-14 |
 | `TestSubscriptionUnsubscribeStopContract`、`TestSubscriptionRefusesDeliveriesAfterUnsubscribe`、`TestSubscriptionSelfUnsubscribeWaitsOnlyForOthers`、`TestSubscriptionSelfUnsubscribeInReentrantDelivery`、`TestSubscriptionSelfUnsubscribeWithForeignContextTimesOut`、`TestSubscriptionPanicReleasesAdmission` | `sync/syncbus/subscription_promises_test.go` | `Subscription.Unsubscribe(ctx)` 三步停机、回调里退订自己、无关 ctx 如实超时 | REM-15 |
@@ -4848,5 +4794,5 @@ RR-20261006-36 修前红（原样，出处 [问题记录](../../bug/RR-20261006-
 | `app/`（`singleton.go`；`config_validation.go` 的键清单已由 A4 ① 删除） | REM-10 |
 | `nest/` | REM-3 |
 | `codegen/internal/entity/`（含 `testdata/remoteflow`） | REM-6、REM-8 |
-| `codegen/internal/roost/` | REM-13 |
+| `codegen/internal/roost/` | REM-13（以 CFG-12 为准） |
 | `scripts/mirror-local.sh` | REM-8、REM-12 |
