@@ -73,6 +73,13 @@ var (
 	// （ErrNestFenced）——后几种从 RR-20260927-32 起同样带本哨兵，原因仍可 errors.Is。
 	//   - 是否可能已提交：否。可回滚事务已回滚；不能回滚的事务（带 Remote 批次的 memory handler）内存修改不撤销。
 	ErrCommitRejected = errors.New("nest: transaction commit rejected")
+	// ErrMemoryTransactionPersistentWrite 表示 durability=memory 的事务（rollback=state|undo，或带 Remote 批次的 rollback=none）
+	// 改了本地持久字段（或用 AddMutation 加了本地 mutation）：memory 事务不写任何持久记录，这些改动无处可去（RR-20261006-41）。
+	// 提交点整笔拒绝，回复同时带 ErrCommitRejected，错误点名实体（collection/id）与字段；可回滚的事务已按回滚策略撤销内存修改，
+	// rollback=none 的（带 Remote 批次）不撤销内存修改、Remote 批次 Abort。旧实现直接返回成功，改动静默丢失。
+	//   - 是否可能已提交：否。能否重试：不能原样重试——这是 handler 声明与业务写法的矛盾：把 durability 改成 strict / async，
+	//     或把字段声明为 nopersist。
+	ErrMemoryTransactionPersistentWrite = errors.New("nest: memory transaction changed persistent fields")
 	// ErrPipelinedCommitterRequired means a handler declared
 	// DurabilityPipelined but the configured committer does not implement
 	// PipelinedTransactionCommitter. This is a deployment configuration error

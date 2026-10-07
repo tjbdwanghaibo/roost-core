@@ -231,7 +231,7 @@ dao.DelItems(10001)
 
 生成器同时产出字段 mask、undo、事务内 `PersistChange`、字段级 Patch、BSON marshal/unmarshal、schema migration、`MutationParticipant`、`RestorePersisted` 和 `DirtyTracker()`。业务不能访问 `tracker`、存储字段或 map 内部引用。`DirtyTracker()` 返回 `*dataengine.Tracker`，只保存已接受的持久化版本和 sync dirty；持久化变化只属于当前 Nest/system transaction。
 
-持久化 setter/map mutator 不能在事务外调用，`durability=memory` handler 也不能修改 persistent 字段。新建、migration/replace、全字段修改生成 Put；普通字段或安全 map key 修改生成 Patch；删除生成带版本 tombstone 的 Delete。Patch 不携带整文档 fallback。启用这些生成物前必须保证目标集群所有 WAL reader 支持 v2 且 writer 已切到 v2。
+持久化 setter/map mutator 不能在事务外调用，`durability=memory` handler 也不能修改 persistent 字段（运行期强制：`rollback=none` 时 setter panic，`rollback=state|undo` 时事务在提交点以 `nest.ErrMemoryTransactionPersistentWrite` 整笔失败回滚、点名实体与字段，RR-20261006-41，v1.23.1 起；生成 DAO 为此带 `PersistFieldNames(mask)`）。新建、migration/replace、全字段修改生成 Put；普通字段或安全 map key 修改生成 Patch；删除生成带版本 tombstone 的 Delete。Patch 不携带整文档 fallback。启用这些生成物前必须保证目标集群所有 WAL reader 支持 v2 且 writer 已切到 v2。
 
 ### 4.1 无集合 DAO：`//roost:dao nocoll`
 

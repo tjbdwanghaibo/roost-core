@@ -678,6 +678,17 @@ func (d *{{.Dao.Name}}) marshalPersistPatchBSON(change nest.PersistChange) (data
 	}
 	return dataengine.FieldPatch{SetBSON: raw, Unset: append([]string(nil), change.Unset...)}, nil
 }
+
+// PersistFieldNames implements nest.PersistFieldNamer: the stored names of the
+// persistent fields in mask. A durability=memory transaction that changes one
+// of them fails and names them (RR-20261006-41).
+func (d *{{.Dao.Name}}) PersistFieldNames(mask uint64) []string {
+	var names []string
+{{- range persistFields .Dao.Fields}}
+	if mask&{{fieldMaskName $.Dao.Name .Name}} != 0 { names = append(names, "{{bsonKey .Name}}") }
+{{- end}}
+	return names
+}
 {{- end}}
 
 {{- if syncFields .Dao.Fields}}

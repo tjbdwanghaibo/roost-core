@@ -220,7 +220,7 @@ sequenceDiagram
 
 1. memory + RollbackNone 且无 Remote 批次走快路径：没有 `RollbackTx`，直接内存提交（`nest/execution.go:162-175`）。
 2. handler 返回错误或 panic：逆序执行回滚函数（含 tracker 恢复）后返回（`nest/execution.go:220-225`、`nest/rollback.go:370-407`）。
-3. `durableCommit` 的 memory 分支：没有 effect 时直接返回，不准备记录（`nest/rollback.go:586-600`）。这意味着带回滚策略的 memory 事务里登记的持久变化被丢弃（说明文档 §7.2，探针已证实）。
+3. `durableCommit` 的 memory 分支：没有 effect 时直接返回，不准备记录（`nest/rollback.go:586-600`）。这意味着带回滚策略的 memory 事务里登记的持久变化被丢弃（说明文档 §7.2，探针已证实）。（v1.23.1 起运行期强制，见 [RR-20261006-41](../../bug/RR-20261006-41.md)：memory 事务改了持久字段时整笔失败回滚，错误 `ErrMemoryTransactionPersistentWrite` 点名实体与字段。）
 4. committer 返回非未知错误 → `ErrCommitRejected` + 回滚；返回 `ErrCommitIndeterminate` → `abandon`（`nest/execution.go:287-310`）。
 5. 已持久接受后 `AcceptMutation` 失败 → `ErrCommitIndeterminate`（`nest/persist_change.go:312-327`）。
 6. Remote 批次的消息：`TransactionReleased` 改到 `addAfterUnlock`（`nest/execution.go:326-333`），Remote 收尾见 05 分区。
@@ -502,7 +502,7 @@ stateDiagram-v2
 
 **没有守卫的约定**（review 时人工核对）：
 
-- memory durability 的事务不改持久字段：没有运行期检查，见 §6.3 与 §10。
+- memory durability 的事务不改持久字段：没有运行期检查，见 §6.3 与 §10。（v1.23.1 起运行期强制，见 [RR-20261006-41](../../bug/RR-20261006-41.md)。）
 - `AfterCommit` 只放幂等外部动作：靠约定。
 - 投影函数纯度、`//roost:cache` 字段确属缓存：glsvet 只提示。
 
@@ -586,7 +586,7 @@ stateDiagram-v2
 
 ### 6.3 已知的语义缺口（供 review）
 
-- **memory + 回滚策略的事务丢弃持久变化**：`nest/rollback.go:586-600`。本篇写作时用包内探针（`runTransaction` + `HandlerMeta{RollbackUndo, DurabilityMemory}` + `MarkPersist`）确认：err=nil、committer 调用 0 次、`PrepareMutation` 0 次。源码注释“Memory-only handlers persist through entity release hooks”（`nest/rollback.go:587`）与现状不符：仓内 `RegisterOnEntityRelease` 没有生产调用方。是否改为拒绝属维护者决定，本篇不改。
+- **memory + 回滚策略的事务丢弃持久变化**：`nest/rollback.go:586-600`。本篇写作时用包内探针（`runTransaction` + `HandlerMeta{RollbackUndo, DurabilityMemory}` + `MarkPersist`）确认：err=nil、committer 调用 0 次、`PrepareMutation` 0 次。源码注释“Memory-only handlers persist through entity release hooks”（`nest/rollback.go:587`）与现状不符：仓内 `RegisterOnEntityRelease` 没有生产调用方。是否改为拒绝属维护者决定，本篇不改。（v1.23.1 起运行期强制，见 [RR-20261006-41](../../bug/RR-20261006-41.md)。）
 - async 记录可能在 fsync 之前被投影（`ReplayPass` 不调 `Sync`，重放读段文件）——推断，后果是 Mongo 可能领先于断电后的 WAL；结合 async 的契约（成功本来就早于 fsync），未判定为缺陷。
 - 事务标记 TTL（缺省 720h）必须大于记录在 WAL 里未确认的最长时间；WAL 健康上限缺省 24h，配置时不要把两者反过来。没有启动校验。
 
@@ -742,7 +742,7 @@ bash scripts/perf/dataengine.sh                                                #
 | `docs/USER_GUIDE.md` §5 | “WAL/Projector backlog 有硬容量和年龄上限，超过门禁触发 runtime failure” | WAL 磁盘 / 年龄超限是健康失败；未 ack 上限是准入拒绝（缺省不限）；只有 outbox 硬上限触发 `onFatal` |
 | `docs/INTERNALS.md` §4 | 状态机写成“WAL → Mongo conditional transaction → publish → unlock” | Mongo 投影在解锁之后（held 机制） |
 | `docs/INTERNALS.md` §5～§6、`NEST_TRANSACTION_WAL.md` §2 | `kit/nestwal`、“kit Projector”、“kit/dataengine 提供 Mongo projection” | 实现在根包 `nestwal/` 与 `dataengine/engine/`，kit 只剩 Mod |
-| `NEST_TRANSACTION_WAL.md` §3 | “memory：不写 commit WAL，因此禁止修改 persistent 字段” | 带回滚策略的 memory 事务改持久字段不报错、静默丢弃（§6.3） |
+| `NEST_TRANSACTION_WAL.md` §3 | “memory：不写 commit WAL，因此禁止修改 persistent 字段” | 带回滚策略的 memory 事务改持久字段不报错、静默丢弃（§6.3）（v1.23.1 起运行期强制，见 [RR-20261006-41](../../bug/RR-20261006-41.md)。） |
 | `NEST_TRANSACTION_WAL.md` §6 | “mutation applier 必须按 (entity, version) 做 CAS；‘已存在相同或更高 version’视为成功” | `MongoStore` 只把“版本等于本次 Next 且 `_last_tx` 等于本事务”当成功，更高版本是 fatal 冲突（`dataengine/engine/mongo_store.go:258-269`）；该句对通用 `nestwal.MutationApplier` 也未见强制 |
 | `NEST_PIPELINED_COMMIT.md` §8 | 测试路径写 kit `nestwal/pipelined_test.go`、`dataengine/projector_test.go` | 现为 `nestwal/pipelined_test.go`、`dataengine/engine/projector_test.go` |
 | `nest/rollback.go:587` 注释 | “Memory-only handlers persist through entity release hooks” | 没有生产代码经 release hook 持久化 |
@@ -758,7 +758,7 @@ bash scripts/perf/dataengine.sh                                                #
 1. 新增或修改的 committer 方法：已持久接受后是否还可能返回非未知错误？确认 `TransactionCommitter` 契约（`nest/transaction.go:88-93`）与 I30。
 2. 改 `Projector.Enqueue` / `WAL.Enqueue` 的人：Enqueue 之后的失败是否只可能是 `ErrCommitIndeterminate`？看 `processRecords` 对 `reserved` 请求的处理（`nestwal/wal.go:897-931`）有没有新的拒绝分支；守卫 `TestWALEnqueueRejectsSynchronously` 是否覆盖新条件。
 3. 新的提交路径是否经 `WAL.Append` 且 `requireSync` 判定仍是 `>= DurabilityStrict`？（I3，RR-20260928-11）
-4. memory durability：新增业务或模板里，`durability=memory` 且带回滚策略的 handler 是否改了持久字段？目前没有守卫（§6.3）；若维护者决定改为拒绝，看 `durableCommit` memory 分支（`nest/rollback.go:589-600`）。
+4. memory durability：新增业务或模板里，`durability=memory` 且带回滚策略的 handler 是否改了持久字段？目前没有守卫（§6.3）；若维护者决定改为拒绝，看 `durableCommit` memory 分支（`nest/rollback.go:589-600`）。（v1.23.1 起运行期强制，见 [RR-20261006-41](../../bug/RR-20261006-41.md)。）
 5. 新的“等待”入口在快池上会不会被调用？对照 roost-coding 豁免清单；本分区已有的 fail-fast 点见 §5.1。
 
 ### 10.2 WAL

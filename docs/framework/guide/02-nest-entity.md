@@ -289,7 +289,7 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 - 例：`demo/db/def/player.go.tmpl` 的 `AttrFinal`（`nopersist,sync`）与 `AttrGear`（`nopersist,nosync`）；组件 `demo/game/entities/player/attribute_component.go.tmpl` 每次从 DAO 构造属性容器，不持有状态。
 - 手写 DAO 的方法可以自己登记逆操作（与生成 setter 同形），例：`skill/combatcomponent` 的 `CombatDao.beginChange`。
 - 确属缓存、可从 DAO 重建、允许不随事务回滚的组件字段：在声明上一行或行尾写 `//roost:cache`（glsvet 据此不提示）。读它的代码要能容忍它与 DAO 不一致。
-- 持久字段的 setter 只能在事务里调用：事务外调用 `MarkPersist` 返回 `ErrTransactionClosed`，生成 setter 据此 panic（fail fast，`nest/persist_change.go:56`）。memory 快路径（`rollback=none`）没有事务，所以 memory handler 写持久字段会 panic；但 `durability=memory` 搭配 `rollback=state|undo` 时有事务、setter 不报错、修改却不进任何提交记录（§7.2）。
+- 持久字段的 setter 只能在事务里调用：事务外调用 `MarkPersist` 返回 `ErrTransactionClosed`，生成 setter 据此 panic（fail fast，`nest/persist_change.go:56`）。memory 快路径（`rollback=none`）没有事务，所以 memory handler 写持久字段会 panic；但 `durability=memory` 搭配 `rollback=state|undo` 时有事务、setter 不报错、修改却不进任何提交记录（§7.2）。（v1.23.1 起运行期强制，见 [RR-20261006-41](../../bug/RR-20261006-41.md)：memory 事务改了持久字段时整笔失败回滚，错误 `ErrMemoryTransactionPersistentWrite` 点名实体与字段。）
 
 **其他事务 API**：`nest.Emit(effect)`、`nest.AfterCommit(fn)`、`tx.AfterAdmission(fn)`（准入后、解锁前的生命周期变更，外部副作用放 AfterCommit）、`nest.AddReceipt` / `SetReceiptPayload`（幂等回执）、`nest.CurrentRollbackTx()`（框架与 DAO 用）。
 
@@ -486,7 +486,7 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 
 - **业务里的阻塞**：handler 里调一个慢 RPC，框架不会隔离它；它占着快 worker 和实体锁。
 - **Cast 目标不保证 FIFO**。
-- **`durability=memory` + `rollback=state|undo`**：事务存在、持久字段 setter 不报错，但 memory 且无 effect 时 `durableCommit` 直接返回（`nest/rollback.go:589`），这些持久字段的修改不进任何提交记录；内存已变、库里不变：之后别的事务只改其他字段时生成的 Patch 不带它们，直到有事务再改同一字段或实体重载（重载后回到旧值）。USER_GUIDE 对 memory 的说法是“只承诺内存提交”，与此一致；但与生成器文档冲突，见下句。生成器文档说“memory handler 不能修改 persistent 字段”只在 `rollback=none` 时由 panic 强制。（已用临时单测验证 `durableCommit` 不调 `PrepareMutation`、不交 committer、不报错；未在生成工程端到端验证。）这一点已列入报告，待维护者判断是改契约还是改实现。
+- **`durability=memory` + `rollback=state|undo`**：事务存在、持久字段 setter 不报错，但 memory 且无 effect 时 `durableCommit` 直接返回（`nest/rollback.go:589`），这些持久字段的修改不进任何提交记录；内存已变、库里不变：之后别的事务只改其他字段时生成的 Patch 不带它们，直到有事务再改同一字段或实体重载（重载后回到旧值）。USER_GUIDE 对 memory 的说法是“只承诺内存提交”，与此一致；但与生成器文档冲突，见下句。生成器文档说“memory handler 不能修改 persistent 字段”只在 `rollback=none` 时由 panic 强制。（已用临时单测验证 `durableCommit` 不调 `PrepareMutation`、不交 committer、不报错；未在生成工程端到端验证。）这一点已列入报告，待维护者判断是改契约还是改实现。（v1.23.1 起运行期强制，见 [RR-20261006-41](../../bug/RR-20261006-41.md)。）
 - **方法 handler 不受 glsvet 并发检查**：`isNestHandler` 只看包级函数（`cmd/glsvet/main.go:550`），codegen 支持的指针方法 handler 里开 goroutine 不报违例。
 - **glsvet 只跟同文件的函数调用**（handler 并发检查）、只跟一层同包 helper（A1、停机），没有类型信息。
 - **`nest.heartbeat_worker_num` 无效**（见 §5）。

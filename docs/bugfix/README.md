@@ -8,6 +8,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 memory 事务改持久字段（`memtx`），未发版。** 提交点按事务本地的持久登记检查，有就以 `ErrMemoryTransactionPersistentWrite` 整笔拒绝回滚；生成 DAO 带 `PersistFieldNames` 用于点名字段。
+
+| 编号 | 修复 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-41](RR-20261006-41.md) | `durableCommit` memory 分支调 `refuseMemoryPersistentWrite`（DAO 持久改动 / 本地 mutation / receipt，O(被改实体)），错误同时带 `ErrCommitRejected`、按回滚策略撤销；`rollback=none` 快路径 panic 不变 | 已修复、声明场景验证，未发版 |
+
 **10-07 B3 ③ / A4 ① 收尾（`gaps`），v1.23.0。** 能力表并入 Host 接口、准入不再有跳过分支；业务服务声明自己读的键，doctor 读回进程声明，生成工程同样守住“读配置只经声明”。
 
 | 编号 | 修复 | 状态 |

@@ -8,6 +8,12 @@
 
 **v1.20.2 已发布（2026-10-06，tag → `c85d4565`）**：维护者 10-05 第二、三轮决定项（A1～A5、B1、B2、B3、B7、C1、C4、C6、C7）与 v1.20.1 之后的非核心 review 修复（N05、N09 第三 / 四批、N12、N13 含复审、N14、N15、NC-170～174、NC-208 补修等）随本版发布；下方“未发版”指发布前状态。
 
+**10-07 框架文档发现 F02-1 / F03-1（分支 `memtx`，维护者 2026-10-07 选 A），未发版。** `durability=memory` 的事务改持久字段时静默丢失，改为提交点整笔失败回滚、点名实体与字段（[修复](../bugfix/RR-20261006-41.md)）。
+
+| 编号 | 问题 | 状态 |
+| --- | --- | --- |
+| [RR-20261006-41](RR-20261006-41.md) | P2 `rollback=state` / `undo` 加 `durability=memory` 的 handler 改持久字段：`durableCommit` 的 memory 分支直接返回 nil，回复成功、committer 与 `PrepareMutation` 0 次，重载后回到旧值（带 Remote 批次的 memory handler 改本地实体、`AddMutation` / receipt 同根） | 已修复、声明场景验证，未发版 |
+
 **10-07 B3 ③ / A4 ① 收尾（分支 `gaps`，v1.23.0 发版前维护者要求“交给 review 前不留能绕过检查的分支和 WARN”），v1.23.0。** B3 ③ 的能力准入对不声明能力表的 Host 跳过（[方案 §12](../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)）；A4 ① 留下 game-demo 业务键无声明的 doctor WARN 与生成工程无守卫（[方案 §7](../feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md)）。
 
 | 编号 | 问题 | 状态 |

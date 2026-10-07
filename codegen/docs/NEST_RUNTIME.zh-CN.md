@@ -78,7 +78,12 @@ fake Client，生产环境从 `app.Registry` 取得 kit `nest.Mod` 提供的 Cli
 生成 DAO 的持久化变化只记录在当前 Nest transaction 中，不再维护第二套 DAO 级异步快照
 dirty。带持久化属性的 setter、map Set/Del 只能在 Nest handler 或 system transaction
 内调用；事务外修改会 fail fast。`durability=memory` 的 handler 不能修改 persistent
-字段，低隔离但仍需落地的操作应使用 `durability=async`。
+字段，低隔离但仍需落地的操作应使用 `durability=async`。这条是运行期强制的：`rollback=none`
+（memory 快路径）没有事务，持久 setter 直接 panic；`rollback=state|undo` 的 memory 事务在提交点
+发现持久字段改动（或 `AddMutation` / receipt）时整笔失败，按回滚策略撤销内存修改，错误满足
+`errors.Is(err, nest.ErrMemoryTransactionPersistentWrite)` 与 `ErrCommitRejected`，并点名
+`collection/id` 与字段；带 Remote 批次的 memory handler 改本地持久字段同样被拒、批次 Abort
+（RR-20261006-41，v1.23.1 起；之前改动静默丢失）。只改 nopersist 字段的 memory 事务不受影响。
 
 同一事务对同一 DAO 的改动合并成一个 mutation：新建、migration/replace 和全字段写为
 Put；已存在文档的普通修改为字段级 Patch；删除为带 version 的 Delete/tombstone。Patch

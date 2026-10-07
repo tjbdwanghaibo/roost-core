@@ -263,7 +263,7 @@ flowchart TD
 
 `durableCommit`（`nest/rollback.go:586`）的检查顺序是固定的，review 时逐条对照：
 
-1. memory 且没有 effect：带 Remote 批次的先做 fence 检查，然后直接返回 nil——**不准备、不交 committer**（`:589`～`:601`）；
+1. memory 且没有 effect：带 Remote 批次的先做 fence 检查，然后直接返回 nil——**不准备、不交 committer**（`:589`～`:601`）（v1.23.1 起运行期强制，见 [RR-20261006-41](../../bug/RR-20261006-41.md)。）；
 2. `prepareCommitRecord`：提交参与者 `PrepareCommit` → `preparePersistence`（DAO `PrepareMutation`、规范化、`AddMutation`）→ 组装记录 → 校验（`:534`）；
 3. 空记录 → nil；
 4. `refuseWriteUnderEnclosingRollback`（嵌套写外层快照，`:641`）；
@@ -627,7 +627,7 @@ CI：`.github/workflows/ci.yml:33` 对 core 跑 glsvet；`framework-compat.yml:1
 - `docs/INTERNALS.md` §3 说“worker 哈希串行是调度优化”；现行派发队列是统一准入的 ID 依赖链 + 共享 worker（`nest/dispatch_queue.go:54` 注释），没有按 worker 哈希分槽（只有广播分批还按哈希切，`nest/dispatcher.go:556`）。`nest/pipelined_completion.go:284` 的注释“matching how dispatch itself hashes work”同样过时。
 - `RUNTIME_EXECUTION_MODEL.md` 仍写 `roost-codegen` 独立仓与“多仓库发布顺序”，已合成单仓。
 - `codegen/docs/NEST_RUNTIME.zh-CN.md`：“旧 `//roost:nest` 和 `rollback=dirty` 不属于生产协议”与现行标注同名，推断原意是更早的标注写法（未核对历史）；“升级步骤”第 8 条要求测 pipelined handler，但生成器不接受 `durability=pipelined`（`codegen/internal/nest/parse.go:177`）。
-- 同一文件与 `codegen/docs/CODEGEN_REFERENCE.zh-CN.md:234` 写“`durability=memory` 的 handler 不能修改 persistent 字段”，只有 `rollback=none` 时由 panic 强制（§10 C-1）。
+- 同一文件与 `codegen/docs/CODEGEN_REFERENCE.zh-CN.md:234` 写“`durability=memory` 的 handler 不能修改 persistent 字段”，只有 `rollback=none` 时由 panic 强制（§10 C-1）。（v1.23.1 起运行期强制，见 [RR-20261006-41](../../bug/RR-20261006-41.md)。）
 - `nest/rollback.go:587` 注释“Memory-only handlers persist through entity release hooks”与 `NEST_RUNTIME.zh-CN.md`（“Entity release 只处理生命周期和 sync，不编码 BSON 或触发落库”）矛盾，按源码后者成立。
 
 ---
@@ -636,7 +636,7 @@ CI：`.github/workflows/ci.yml:33` 对 core 跑 glsvet；`framework-compat.yml:1
 
 ### 已知出入（需要维护者判断）
 
-- **C-1（已确认的出入，未登记 RR）**：`HandlerMeta{Rollback: state|undo, Durability: memory}`（生成器 `rollback=undo durability=memory` 即得到它，`codegen/internal/nest/gen.go:202`）里修改持久字段：`MarkPersist` 成功，`durableCommit` 在 `nest/rollback.go:589` 直接返回 nil，不调 `PrepareMutation`、不交 committer、不报错；内存已改、持久层不变。2026-10-07 用临时单测在 tag 上验证（`durableCommit` 后 prepared=0、accepted=0、无错误，测试未提交）。需要维护者判断：是让 memory 事务拒绝持久变更（与“memory handler 不能改 persistent 字段”一致），还是改文档。
+- **C-1（已确认的出入，未登记 RR）**：`HandlerMeta{Rollback: state|undo, Durability: memory}`（生成器 `rollback=undo durability=memory` 即得到它，`codegen/internal/nest/gen.go:202`）里修改持久字段：`MarkPersist` 成功，`durableCommit` 在 `nest/rollback.go:589` 直接返回 nil，不调 `PrepareMutation`、不交 committer、不报错；内存已改、持久层不变。2026-10-07 用临时单测在 tag 上验证（`durableCommit` 后 prepared=0、accepted=0、无错误，测试未提交）。需要维护者判断：是让 memory 事务拒绝持久变更（与“memory handler 不能改 persistent 字段”一致），还是改文档。（v1.23.1 起运行期强制，见 [RR-20261006-41](../../bug/RR-20261006-41.md)：memory 事务改了持久字段时整笔失败回滚，错误 `ErrMemoryTransactionPersistentWrite` 点名实体与字段。）
 - C-2 `nest.heartbeat_worker_num` / `NestOpts.HbWorkerNum` 被读取但 `NewDispatcher` 不用（`nest/dispatcher.go:87`）；`ensureAsyncDispatchAllowed`（`nest/nest.go:699`）没有调用方。改配置声明或删代码时注意生成器快照 `kitconfig_gen.go`。
 
 ### 调度与准入

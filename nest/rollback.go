@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
@@ -584,8 +586,9 @@ func (tx *RollbackTx) requestID() string {
 }
 
 func (tx *RollbackTx) durableCommit(ctx context.Context, committer TransactionCommitter) error {
-	// Memory-only handlers persist through entity release hooks. Avoid
-	// materializing after-images when no WAL/outbox admission is involved.
+	// durability=memory 且没有 effect 的事务不写任何持久记录：不准备 after-image、不交给 committer（Emit / RequestEntityDelete
+	// 会把 durability 升到 strict，走不到这里）。本地持久内容在这里无处可去，所以提交点拒绝（RR-20261006-41，见
+	// refuseMemoryPersistentWrite）；旧注释说 memory handler “经 release hook 持久化”，那条路径早已不存在，改动是静默丢失的。
 	if tx.durability == DurabilityMemory && len(tx.effects) == 0 {
 		if tx.dispatch != nil && tx.dispatch.RemoteWriteBatch != nil {
 			// 带 Remote 批次、没有 effect 的 memory handler：没有记录交给 committer，但返回 nil 会让 commitDurable 置
@@ -597,7 +600,7 @@ func (tx *RollbackTx) durableCommit(ctx context.Context, committer TransactionCo
 				return err
 			}
 		}
-		return nil
+		return tx.refuseMemoryPersistentWrite()
 	}
 	record, err := tx.prepareCommitRecord()
 	if err != nil {
@@ -631,6 +634,85 @@ func (tx *RollbackTx) durableCommit(ctx context.Context, committer TransactionCo
 		return errors.Join(ErrCommitRejected, err)
 	}
 	return tx.acceptPersistence()
+}
+
+// PersistFieldNamer 由生成 DAO 实现：按 PersistChange 的位给出持久字段的存储名，用于错误里点名字段（RR-20261006-41）。
+// 没实现的参与方按路径或位掩码描述。
+type PersistFieldNamer interface {
+	PersistFieldNames(mask uint64) []string
+}
+
+// refuseMemoryPersistentWrite 是 memory 事务（没有 effect）的提交点检查（RR-20261006-41，维护者 2026-10-07 选 A）：handler 留下了
+// 本该写进提交记录的本地持久内容——DAO 持久字段的改动（MarkPersist* 登记的参与方，Remote 批次认领的除外）、AddMutation 加的
+// 本地 mutation（Remote 批次 finalize 加的 Remote mutation 除外，它们随批次提交）、AddReceipt 绑定的 receipt——就整笔拒绝，
+// 错误点名实体与字段。调用方 commitDurable 按明确拒绝处理：加 ErrCommitRejected、按回滚策略撤销内存修改，带 Remote 批次的
+// Abort 批次。
+//
+// 之前这里直接返回 nil：回复成功，committer 与 PrepareMutation 都不调用，内存是新值、库里是旧值，此后的 Patch 也不带这些字段
+// （PersistChange 是事务本地的，提交后即丢弃），实体重新加载后回到旧值。
+//
+// 只看事务本地的登记（participantOrder / mutations / receipts），代价是 O(被改实体)，不扫实体全量。只改非持久字段
+// （nopersist，生成 setter 不调用 MarkPersist）的事务没有登记，照常成功。rollback=none 的 memory 快路径没有 RollbackTx，
+// 持久 setter 在 MarkPersist 处以 ErrTransactionClosed panic，不经过这里，行为不变。
+func (tx *RollbackTx) refuseMemoryPersistentWrite() error {
+	var lost []string
+	for _, participant := range tx.participantOrder {
+		if _, remote := tx.remoteParticipants[participant]; remote {
+			continue
+		}
+		lost = append(lost, describePersistChange(participant, tx.participantChanges[participant]))
+	}
+	for i := range tx.mutations {
+		if tx.mutations[i].Remote != nil {
+			continue
+		}
+		key := keyOfMutation(tx.mutations[i])
+		lost = append(lost, fmt.Sprintf("%s/%s/%d (AddMutation)", key.database, key.resource, key.entityID))
+	}
+	for _, receipt := range tx.receipts {
+		lost = append(lost, fmt.Sprintf("receipt %s/%s", receipt.Namespace, receipt.ID))
+	}
+	if len(lost) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: handler %q (rollback=%s, durability=memory) would lose %s; declare a durable policy (strict/async/pipelined) or make the fields nopersist",
+		ErrMemoryTransactionPersistentWrite, tx.handler, tx.policy, strings.Join(lost, "; "))
+}
+
+// describePersistChange 给出 “collection/id fields [a b]” 形式的描述：实体取 DAO 的 CollName / Id，字段优先取
+// PersistFieldNamer，其次取事务里登记的路径，都没有时给位掩码。
+func describePersistChange(participant MutationParticipant, change *PersistChange) string {
+	owner := fmt.Sprintf("%T", participant)
+	if dao, ok := participant.(interface {
+		CollName() string
+		Id() int64
+	}); ok {
+		owner = fmt.Sprintf("%s/%d", dao.CollName(), dao.Id())
+	}
+	if change == nil {
+		return owner
+	}
+	if change.Delete {
+		return owner + " delete"
+	}
+	var fields []string
+	if namer, ok := participant.(PersistFieldNamer); ok {
+		fields = namer.PersistFieldNames(change.Mask)
+	}
+	if len(fields) == 0 {
+		for path := range change.Set {
+			fields = append(fields, path)
+		}
+		fields = append(fields, change.Unset...)
+		for field := range change.FullFields {
+			fields = append(fields, field)
+		}
+		slices.Sort(fields)
+	}
+	if len(fields) == 0 {
+		return fmt.Sprintf("%s fields mask=%#x", owner, change.Mask)
+	}
+	return fmt.Sprintf("%s fields %v", owner, fields)
 }
 
 // refuseWriteUnderEnclosingRollback 在嵌套事务写任何持久记录之前检查（RR-20260926-74）：本事务要持久写的 DAO 若已被外层

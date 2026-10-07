@@ -900,6 +900,44 @@ func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine
 	return dataengine.FieldPatch{SetBSON: raw, Unset: append([]string(nil), change.Unset...)}, nil
 }
 
+// PersistFieldNames implements nest.PersistFieldNamer: the stored names of the
+// persistent fields in mask. A durability=memory transaction that changes one
+// of them fails and names them (RR-20261006-41).
+func (d *HeroDao) PersistFieldNames(mask uint64) []string {
+	var names []string
+	if mask&heroDaoFieldName != 0 {
+		names = append(names, "name")
+	}
+	if mask&heroDaoFieldLevel != 0 {
+		names = append(names, "level")
+	}
+	if mask&heroDaoFieldExp != 0 {
+		names = append(names, "exp")
+	}
+	if mask&heroDaoFieldLoginAt != 0 {
+		names = append(names, "login_at")
+	}
+	if mask&heroDaoFieldItems != 0 {
+		names = append(names, "items")
+	}
+	if mask&heroDaoFieldFriends != 0 {
+		names = append(names, "friends")
+	}
+	if mask&heroDaoFieldPos != 0 {
+		names = append(names, "pos")
+	}
+	if mask&heroDaoFieldEquips != 0 {
+		names = append(names, "equips")
+	}
+	if mask&heroDaoFieldSquad != 0 {
+		names = append(names, "squad")
+	}
+	if mask&heroDaoFieldMount != 0 {
+		names = append(names, "mount")
+	}
+	return names
+}
+
 // HeroDaoSyncFields is the vocabulary for this DAO's dirty masks: which
 // field each bit means, and what it is called on the wire.
 //

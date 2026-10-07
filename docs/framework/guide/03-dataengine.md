@@ -257,7 +257,7 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 | 不写 rollback | memory 时为 `none`（快路径，失败不撤销），否则为 `state`（`codegen/internal/nest/gen.go:202-225`） |
 | `durability=strict` | 交易、付费、唯一奖励、跨实体资产 |
 | `durability=async`（缺省） | 普通写 |
-| `durability=memory` | 只读或可重建；**不要改持久字段**（§7.2） |
+| `durability=memory` | 只读或可重建；**不要改持久字段**（§7.2）（v1.23.1 起运行期强制，见 [RR-20261006-41](../../bug/RR-20261006-41.md)。） |
 | pipelined | 手工注册 + allowlist，见 `NEST_PIPELINED_COMMIT.md` |
 
 durable 的 handler 必须带回滚策略（`nest/handler.go:45-47`）。不确定时先 strict，压测与故障演练后再放宽（`codegen/internal/roost/render_docs.go:223-231` 生成到工程文档的同一建议）。
@@ -577,7 +577,7 @@ Projector / Outbox 的计数（Committed、Projected、WALUnacked、FencedEntiti
 
 ### 7.2 不保证与已知限制
 
-- **memory durability 的 handler 改持久字段**：`rollback=none`（memory 快路径）时没有事务，生成 setter 直接 panic；带 `rollback=state|undo` 的 memory 事务里，持久变化会被登记，但 `durableCommit` 的 memory 分支直接返回、不准备也不提交，**变化不进 WAL、也不报错**，DAO 版本不前进（`nest/rollback.go:586-600`；本篇写作时用包内探针确认：committer 调用 0 次、`PrepareMutation` 0 次、err 为 nil）。`NEST_TRANSACTION_WAL.md` §3 写的“禁止修改 persistent 字段”没有运行期强制。业务不要在 memory handler 里改持久字段。
+- **memory durability 的 handler 改持久字段**：`rollback=none`（memory 快路径）时没有事务，生成 setter 直接 panic；带 `rollback=state|undo` 的 memory 事务里，持久变化会被登记，但 `durableCommit` 的 memory 分支直接返回、不准备也不提交，**变化不进 WAL、也不报错**，DAO 版本不前进（`nest/rollback.go:586-600`；本篇写作时用包内探针确认：committer 调用 0 次、`PrepareMutation` 0 次、err 为 nil）。`NEST_TRANSACTION_WAL.md` §3 写的“禁止修改 persistent 字段”没有运行期强制。业务不要在 memory handler 里改持久字段。（v1.23.1 起运行期强制，见 [RR-20261006-41](../../bug/RR-20261006-41.md)：memory 事务改了持久字段时整笔失败回滚，错误 `ErrMemoryTransactionPersistentWrite` 点名实体与字段。）
 - async 的成功回复可能早于 fsync（§3.2）；async 记录也可能在 fsync 前被投影到 Mongo（重放读的是段文件，推断，未写复现）。
 - 跨 database / 跨部署的原子性不在这里，用 saga。
 - `StaleFunc` 在 Redis 存储上只是建议性的（读写两次往返）。

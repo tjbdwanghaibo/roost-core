@@ -650,6 +650,23 @@ func (d *VarietyDao) marshalPersistPatchBSON(change nest.PersistChange) (dataeng
 	return dataengine.FieldPatch{SetBSON: raw, Unset: append([]string(nil), change.Unset...)}, nil
 }
 
+// PersistFieldNames implements nest.PersistFieldNamer: the stored names of the
+// persistent fields in mask. A durability=memory transaction that changes one
+// of them fails and names them (RR-20261006-41).
+func (d *VarietyDao) PersistFieldNames(mask uint64) []string {
+	var names []string
+	if mask&varietyDaoFieldPersistOnly != 0 {
+		names = append(names, "persist_only")
+	}
+	if mask&varietyDaoFieldFastItems != 0 {
+		names = append(names, "fast_items")
+	}
+	if mask&varietyDaoFieldShardedTags != 0 {
+		names = append(names, "sharded_tags")
+	}
+	return names
+}
+
 // VarietyDaoSyncFields is the vocabulary for this DAO's dirty masks: which
 // field each bit means, and what it is called on the wire.
 //

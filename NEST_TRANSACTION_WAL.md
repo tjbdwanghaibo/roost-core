@@ -51,7 +51,7 @@ Rollback：
 
 Durability：
 
-- `memory`：不写 commit WAL，因此禁止修改 persistent 字段；
+- `memory`：不写 commit WAL，因此禁止修改 persistent 字段（运行期强制，RR-20261006-41：`rollback=none` 时持久 setter panic；`rollback=state|undo` 或带 Remote 批次时，提交点发现本地持久改动 / `AddMutation` / receipt 即以 `ErrMemoryTransactionPersistentWrite` + `ErrCommitRejected` 整笔拒绝并按回滚策略撤销内存修改）；
 - `async`：等待 WAL write，不等待本批 fsync；后台按间隔刷盘；
 - `strict`：等待所在 group commit 完成 fsync 后才返回成功。
 
