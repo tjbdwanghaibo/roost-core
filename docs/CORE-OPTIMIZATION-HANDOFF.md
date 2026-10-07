@@ -1,6 +1,6 @@
 # Roost 核心优化汇总与 agent 交接
 
-**2026-10-08 当前接手入口：**剩余修复B1～B5、B7已提交验收，B6除RR-25已提交，B8文档与独立验收已完成。RR-25受自动审批阻塞，候选已移出待合并代码；不计全部完成。逐项见 [v1.23.1实现与验收](release/v1.23.1-IMPLEMENTATION.md)，下方各日期状态是历史记录。未发版。
+**2026-10-08 当前接手入口：**剩余修复B1～B5、B7已提交验收，B6除RR-25已提交，B8已提交a221d224并通过最终pretag。RR-25受自动审批阻塞，候选已移出待合并代码；不计全部完成。逐项见 [v1.23.1实现与验收](release/v1.23.1-IMPLEMENTATION.md)，下方各日期状态是历史记录。未发版。
 
 **10-07 客户端协议第一批（main，未发版）：**统一公共Go wire、正式生成player TCP/探针、robot与demo loadtest；RS v2类型字段区分PB/raw Sync，Lockstep仅预留并拒绝。C# netstandard2.1提供鉴权/并发请求/有界push与Sync解码，Unity提供主线程消费适配源码。[接入](../client/README.md) · [实施、验证和后续边界](feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)。后续业务packer生成、复制状态应用/恢复、Godot .NET、C++/Unreal/GDExtension与真实引擎验证另做；无应答Notify、心跳/TLS尚未加入此C# API。历史review进度保持原口径。
 
@@ -709,3 +709,5 @@ B1～B5与B7已提交并全仓验收；B6除RR-25已提交。B8当前口径见do
 ### 2026-10-08 B8 最终独立验收
 
 文档收口见 [B8清单](review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)，交付映射见 [v1.23.1实现](release/v1.23.1-IMPLEMENTATION.md)。独立game-demo build/vet/test 19包、TCP/Game race 2包通过；RR-25候选移出后私有Remote故障矩阵21/21通过。RR-39修正旧验收断言并增加后续事务不阻塞证据。全部原始日志已复制主检出artifacts/perf。RR-25仍待批准且未合入，不计本轮全部完成；未发版。
+
+B8最终提交 `a221d224` 在干净工作树通过pretag全部检查；生成game-demo与21格矩阵的最终证据见发布实现文档。此验收不表示RR-25已修复或v1.23.1已发布。
