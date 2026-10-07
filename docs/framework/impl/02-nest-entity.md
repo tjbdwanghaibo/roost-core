@@ -276,7 +276,7 @@ flowchart TD
 
 ### 3.6 A1：DAO 回滚在 Nest 侧的接线
 
-DAO 本身（生成 setter、快照、标注）见 03 dataengine 实现（impl/03-dataengine.md）<!-- pending: ../impl/03-dataengine.md -->。Nest 侧只有四个接点：
+DAO 本身（生成 setter、快照、标注）见 [03 dataengine 实现](03-dataengine.md)。Nest 侧只有四个接点：
 
 | 接点 | 位置 | 行为 |
 | --- | --- | --- |

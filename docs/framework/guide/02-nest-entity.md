@@ -25,7 +25,7 @@
 | `cmd/glsvet` | 全部规则：handler 并发边界、准入结果、goroutine 绑定调用、A1 两种提示、停机提示、业务时钟提示、`roost:nest` 标注 | 业务时钟的语义归 10 |
 | `kit/nest` | 把引擎装配成 `app.Mod`、读 `nest.*` 配置、接 Fence 与健康检查 | Mod 生命周期通用规则归 01 |
 
-跨分区的内容只给出入口：DataEngine 与 DAO 本身见 03 dataengine 说明（guide/03-dataengine.md）<!-- pending: ../guide/03-dataengine.md -->；Sync 见 04 sync 说明（guide/04-sync.md）<!-- pending: ../guide/04-sync.md -->；Remote 见 05 remote / Mirror 说明（guide/05-remote-mirror.md）<!-- pending: ../guide/05-remote-mirror.md -->；App 装配与停机契约见 [01 app 说明](01-app-lifecycle.md)（[实现](../impl/01-app-lifecycle.md)）；生成器见 12 codegen 说明（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->。
+跨分区的内容只给出入口：DataEngine 与 DAO 本身见 [03 dataengine 说明](03-dataengine.md)；Sync 见 04 sync 说明（guide/04-sync.md）<!-- pending: ../guide/04-sync.md -->；Remote 见 05 remote / Mirror 说明（guide/05-remote-mirror.md）<!-- pending: ../guide/05-remote-mirror.md -->；App 装配与停机契约见 [01 app 说明](01-app-lifecycle.md)（[实现](../impl/01-app-lifecycle.md)）；生成器见 12 codegen 说明（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->。
 
 ---
 
@@ -503,4 +503,4 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 - A1：[方案](../../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)、[字段写提示](../../feature/A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md)
 - actionflow：[延后队列方案](../../feature/REFACTOR-2026-10-06-actionflow-deferred-mutations.md)
 - 故障：[TROUBLESHOOTING](../../TROUBLESHOOTING.md)
-- 其他分区：03 dataengine（guide/03-dataengine.md）<!-- pending: ../guide/03-dataengine.md -->、04 sync（guide/04-sync.md）<!-- pending: ../guide/04-sync.md -->、05 remote / Mirror（guide/05-remote-mirror.md）<!-- pending: ../guide/05-remote-mirror.md -->、[01 app](01-app-lifecycle.md)、10 时间（guide/10-time.md）<!-- pending: ../guide/10-time.md -->、12 codegen（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->
+- 其他分区：[03 dataengine](03-dataengine.md)、04 sync（guide/04-sync.md）<!-- pending: ../guide/04-sync.md -->、05 remote / Mirror（guide/05-remote-mirror.md）<!-- pending: ../guide/05-remote-mirror.md -->、[01 app](01-app-lifecycle.md)、10 时间（guide/10-time.md）<!-- pending: ../guide/10-time.md -->、12 codegen（guide/12-codegen.md）<!-- pending: ../guide/12-codegen.md -->
