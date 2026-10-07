@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	businessclock "github.com/tjbdwanghaibo/roost-core/clock"
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 
 	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
@@ -276,14 +277,14 @@ type Config struct {
 	// disables age pruning. Count-based ring retention remains active.
 	RetentionAge time.Duration
 	// Now is the business clock the time shown to players (SentAtUnix) is
-	// read from; nil means time.Now. The chat Mod injects app.BusinessClock
+	// read from; nil means clock.Now. The chat Mod injects app.BusinessClock
 	// (D-L3). Injected because a stored timestamp must come from one place —
 	// and because the ordering test requires a clock that runs backwards.
 	Now func() time.Time
 	// SystemNow is the system clock retention runs on: StoredAtUnix and the
 	// Prune cutoff. Retention reclaims space, so it is real age, never moved
-	// by time.logic_offset. nil means Now, so a test that drives both with one
-	// clock keeps doing so; the chat Mod injects time.Now.
+	// by time.logic_offset. nil means time.Now; tests controlling both clocks
+	// must inject them explicitly.
 	SystemNow func() time.Time
 	// Metrics is optional. Nil means no reporting.
 	Metrics Metrics
@@ -319,10 +320,10 @@ func NewStore(state StateStore, cfg Config) (Store, error) {
 		return nil, fmt.Errorf("chat: retention age must not be negative, got %s", cfg.RetentionAge)
 	}
 	if cfg.Now == nil {
-		cfg.Now = time.Now
+		cfg.Now = businessclock.Now
 	}
 	if cfg.SystemNow == nil {
-		cfg.SystemNow = cfg.Now
+		cfg.SystemNow = time.Now
 	}
 	rules, err := newRuleTable(cfg.Rules)
 	if err != nil {

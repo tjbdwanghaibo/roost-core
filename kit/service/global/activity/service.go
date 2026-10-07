@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	businessclock "github.com/tjbdwanghaibo/roost-core/clock"
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 
 	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
@@ -86,7 +87,7 @@ type Config struct {
 	OpeningGrace time.Duration
 
 	// Now is the business clock (D-L3: real time + time.logic_offset; the Mod
-	// injects app.BusinessClock); nil means time.Now. Every deadline, grace
+	// injects app.BusinessClock); nil means clock.Now. Every deadline, grace
 	// window, dispatch backoff (Dispatch.NextAttemptAtUnix and the owed
 	// index) and record timestamp in this package reads it, and none of them
 	// calls time.Now inline — a service whose expiry cannot be moved by a
@@ -240,7 +241,7 @@ func New(cfg Config) (*Service, error) {
 		cfg.OpeningGrace = DefaultOpeningGrace
 	}
 	if cfg.Now == nil {
-		cfg.Now = time.Now
+		cfg.Now = businessclock.Now
 	}
 	if cfg.NewDispatchToken == nil {
 		cfg.NewDispatchToken = randomDispatchToken

@@ -568,3 +568,9 @@ App 自己的键（`sid`、`server_type`、`env`、`log.*`、`time.logic_offset`
 - 使用参考：[USER_GUIDE](../../USER_GUIDE.md)（§10“配置数据：规则、热更与可见性”）、[codegen README](../../../codegen/README.md)（“配置管线：该用哪条”）、[CODEGEN_REFERENCE](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md)、[CFGGEN_META](../../../codegen/docs/CFGGEN_META.zh-CN.md)、[TROUBLESHOOTING](../../TROUBLESHOOTING.md)、[静态注册](../../STATIC_REGISTRATION.md)。
 - 其他分区：[01 app](01-app-lifecycle.md)、[02 nest](02-nest-entity.md)、[03 dataengine](03-dataengine.md)、[06 saga](06-saga.md)、[09 kit 服务](09-kit-services.md)、[11 可观测](11-observability.md)、[12 代码生成](12-codegen.md)、[00 总览](00-overview.md)。
 - 实现：[impl/07-config.md](../impl/07-config.md)。
+
+## v1.23.1 B4 更正（2026-10-08，未发布）
+
+F1/F5/F6：RR-20261008-15；F2：RR-20261008-16；F3：RR-20261008-17；F7/F8/F9：RR-20261008-18；F4：RR-20261008-19。异步消息每次准入捕获当前 RuntimeConfig，已排队消息仍固定一代，同步调用保持当前代际。featureflag 撤回恢复发布前实际视图（含 GM 覆盖）。
+
+F10：修正 fctx/flags 注释和 schema 守卫名称；ParseInt 注释不再声称 App 自动读取环境变量。guard 对已删除 NewConfigReader 的识别保留为防回归规则，不声称存在此 API。table manifest 的 generated_at 当前未填充，不作更新时间。

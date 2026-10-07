@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	businessclock "github.com/tjbdwanghaibo/roost-core/clock"
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 
 	"github.com/tjbdwanghaibo/roost-core/servicemetrics"
@@ -155,7 +156,7 @@ func NewStore(state versionstore.Store[string, queueState], cfg Config) (Store, 
 	}
 	cfg.SweepQueues = append([]Queue(nil), cfg.SweepQueues...)
 	if cfg.Now == nil {
-		cfg.Now = time.Now
+		cfg.Now = businessclock.Now
 	}
 	if cfg.NewID == nil {
 		cfg.NewID = randomID

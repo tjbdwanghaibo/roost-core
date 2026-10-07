@@ -7,17 +7,16 @@ import (
 )
 
 // N11 C1～C3 的控制用例：逻辑时钟的偏移读写、注入实例的隔离与并发安全。
-// 偏移以毫秒存储（Milliseconds() 向零截断），所以 Set(t) 之后的 Now() 与 t 的差在 1ms 之内而不是 0——
-// 这是现有精度契约（运行记录观察 O10），这里把它固定下来，而不是假定逐纳秒相等。
+// 偏移保存完整 Duration，与 Registry 一致；Set(t) 的观测误差仍包含调用间真实经过时间。
 
-func TestLogicClockOffsetRoundTripsAtMillisecondResolution(t *testing.T) {
+func TestLogicClockOffsetRoundTripsAtDurationResolution(t *testing.T) {
 	c := NewLogicClock()
 	if c.Offset() != 0 {
 		t.Fatalf("a new clock has offset %v", c.Offset())
 	}
 	c.SetOffset(90*time.Minute + 1500*time.Microsecond)
-	if got, want := c.Offset(), 90*time.Minute+time.Millisecond; got != want {
-		t.Fatalf("Offset = %v, want %v (stored at millisecond resolution)", got, want)
+	if got, want := c.Offset(), 90*time.Minute+1500*time.Microsecond; got != want {
+		t.Fatalf("Offset = %v, want %v (configured duration preserved)", got, want)
 	}
 	c.SetOffset(-2 * time.Hour)
 	if got := c.Offset(); got != -2*time.Hour {

@@ -277,7 +277,7 @@ func parseMetaFile(root string, module string, path string) ([]Meta, error) {
 					jsonName = jsonName[:idx]
 				}
 				if jsonName == "" {
-					jsonName = csvName
+					jsonName = name
 				}
 				meta.Fields = append(meta.Fields, Field{
 					Name:     name,
@@ -295,6 +295,15 @@ func parseMetaFile(root string, module string, path string) ([]Meta, error) {
 			}
 			if meta.Kind == KindTable && meta.Key == "" && len(meta.Fields) > 0 {
 				meta.Key = meta.Fields[0].Name
+			}
+			if meta.Kind == KindTable {
+				found := false
+				for _, field := range meta.Fields {
+					found = found || field.Name == meta.Key
+				}
+				if !found {
+					return nil, fmt.Errorf("%s: table %s key %q is not an exported field", path, meta.TypeName, meta.Key)
+				}
 			}
 			metas = append(metas, meta)
 		}
@@ -377,6 +386,9 @@ func convertCSVToJSON(metas []Meta, csvDir string, jsonDir string, force bool, s
 		}
 		var payload any = rows
 		if meta.Kind == KindObject {
+			if len(rows) > 1 {
+				return fmt.Errorf("%s: object %s requires at most one data row, got %d", meta.File, meta.TypeName, len(rows))
+			}
 			if len(rows) > 0 {
 				payload = rows[0]
 			} else {
@@ -876,6 +888,10 @@ func Convert{{.TypeName}}CSV(r io.Reader) ({{if eq .Kind "table"}}[]{{.Alias}}.{
 {{if eq .Kind "table"}}
 	return rows, nil
 {{else}}
+	if len(rows) > 1 {
+		var zero {{.Alias}}.{{.TypeName}}
+		return zero, fmt.Errorf("{{.Name}}: object requires at most one data row, got %d", len(rows))
+	}
 	if len(rows) == 0 {
 		var zero {{.Alias}}.{{.TypeName}}
 		return zero, nil

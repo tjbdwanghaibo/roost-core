@@ -72,7 +72,7 @@ func TestSkewedReplicasPruneAndPageWithHonestGaps(t *testing.T) {
 	skewed := &clock{now: fresh.Now().Add(-2 * time.Hour)}
 	newReplica := func(c *clock) Store {
 		store, err := NewStore(state, Config{Policy: allowAllPolicy{}, Bodies: registry, Rules: []ChannelRule{rule},
-			RetentionAge: time.Hour, Now: c.Now})
+			RetentionAge: time.Hour, Now: c.Now, SystemNow: c.Now})
 		if err != nil {
 			t.Fatal(err)
 		}

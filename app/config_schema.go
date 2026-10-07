@@ -86,11 +86,20 @@ func checkConfig(cfg *viper.Viper, declarations []configDeclaration) (appConfig,
 	var settings appConfig
 	errs := unjoinErrors(LoadConfig(cfg, &settings))
 	schemas := []ConfigSchema{AppConfigSchema()}
+	seen := make(map[string]bool, len(errs))
+	for _, err := range errs {
+		seen[err.Error()] = true
+	}
 	source := viperSource{cfg}
 	production := isProductionServiceConfig(cfg)
 	for _, declaration := range declarations {
 		schemas = append(schemas, declaration.schema)
 		for _, err := range declaration.schema.Check(source, production) {
+			// 共享键只报一次；先去重再附加首次发现它的 owner，保留具体定位。
+			if seen[err.Error()] {
+				continue
+			}
+			seen[err.Error()] = true
 			errs = append(errs, fmt.Errorf("%s: %w", declaration.owner, err))
 		}
 	}

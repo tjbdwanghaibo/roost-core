@@ -24,10 +24,9 @@ type Context struct {
 	fastWorker bool // 当前 goroutine 的执行位置，不进入 Snapshot
 }
 
-// ContextSnapshot is an immutable copy for framework-controlled synchronous
-// handoff boundaries. Async Nest dispatch and worker tasks deliberately do not
-// propagate it: business data must be carried explicitly in Params/Task/Effect
-// fields. It intentionally does not carry Now/NowMilli.
+// ContextSnapshot 用于框架控制的同步交接。异步 Nest 只带 Meta/Trace，并在入队时
+// 固定当前 RuntimeConfig；普通 worker 任务不传执行上下文。业务数据显式放入参数，
+// Now/NowMilli 不传递，每次执行重新固定业务时间。
 type ContextSnapshot struct {
 	Valid    bool
 	Config   any

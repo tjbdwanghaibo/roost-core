@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	businessclock "github.com/tjbdwanghaibo/roost-core/clock"
 	"github.com/tjbdwanghaibo/roost-core/security"
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 
@@ -52,13 +53,13 @@ type Config struct {
 	// Now is the business clock (D-L3 round 8; the account Mod injects
 	// app.BusinessClock, real time + time.logic_offset): the times a game
 	// shows or builds rules on — account creation, role creation, last login
-	// and logout. nil means time.Now.
+	// and logout. nil means clock.Now.
 	Now func() time.Time
 	// SystemNow is the system clock: session token issue and expiry, and the
 	// operator-facing times (UpsertServer, ResolvePendingCreation's audit
 	// stamp). A token's life is a security bound in real time and an audit
 	// says when an operator acted, so neither moves with the business offset.
-	// nil means Now, so a test that drives both with one clock keeps doing so;
+	// nil means time.Now; tests driving both clocks must inject both explicitly;
 	// the account Mod injects time.Now. Name claims during role creation run
 	// on the name directory's own clock, which the Mod leaves on time.Now.
 	SystemNow func() time.Time
@@ -144,10 +145,10 @@ func New(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("account: RolesPerServer above one is not implemented; got %d", cfg.RolesPerServer)
 	}
 	if cfg.Now == nil {
-		cfg.Now = time.Now
+		cfg.Now = businessclock.Now
 	}
 	if cfg.SystemNow == nil {
-		cfg.SystemNow = cfg.Now
+		cfg.SystemNow = time.Now
 	}
 	return &Service{cfg: cfg, report: servicemetrics.Wrap(cfg.Metrics)}, nil
 }

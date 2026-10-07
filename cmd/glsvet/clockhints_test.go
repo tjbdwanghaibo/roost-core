@@ -38,7 +38,7 @@ func Age(t0 time.Time) time.Duration { return time.Since(t0) }
 func Left(t1 time.Time) time.Duration { return time.Until(t1) }
 func New() runner { return runner{now: time.Now} }
 `)
-	if hints := vetClockHints(token.NewFileSet(), dir); hints != 4 {
+	if hints := clockHintsForDirectory(token.NewFileSet(), dir); hints != 4 {
 		t.Fatalf("hints = %d, want 4 (Now, Since, Until and the time.Now function value)", hints)
 	}
 	// 生成工程的服务目录 internal/service/game 同样是业务包；改名导入也认。
@@ -46,7 +46,7 @@ func New() runner { return runner{now: time.Now} }
 import stdtime "time"
 func Died() stdtime.Time { return stdtime.Now() }
 `)
-	if hints := vetClockHints(token.NewFileSet(), service); hints != 1 {
+	if hints := clockHintsForDirectory(token.NewFileSet(), service); hints != 1 {
 		t.Fatalf("hints = %d, want 1 for a renamed time import", hints)
 	}
 }
@@ -69,7 +69,7 @@ func Backoff(t0 time.Time) time.Duration {
 }
 func Business() time.Time { return time.Now() }
 `)
-	if hints := vetClockHints(token.NewFileSet(), dir); hints != 1 {
+	if hints := clockHintsForDirectory(token.NewFileSet(), dir); hints != 1 {
 		t.Fatalf("hints = %d, want 1 (only Business is unmarked)", hints)
 	}
 }
@@ -81,7 +81,7 @@ func TestClockHintsLeaveOtherPackagesAlone(t *testing.T) {
 import "time"
 func Tick() time.Time { return time.Now() }
 `)
-	if hints := vetClockHints(token.NewFileSet(), framework); hints != 0 {
+	if hints := clockHintsForDirectory(token.NewFileSet(), framework); hints != 0 {
 		t.Fatalf("hints = %d in a non-business package, want 0", hints)
 	}
 	// 同名局部变量不是 time 包；测试文件默认跳过。
@@ -94,7 +94,7 @@ func Read() int { time := clock{}; return time.Now() }
 import "time"
 func helper() time.Time { return time.Now() }
 `)
-	if hints := vetClockHints(token.NewFileSet(), dir); hints != 0 {
+	if hints := clockHintsForDirectory(token.NewFileSet(), dir); hints != 0 {
 		t.Fatalf("hints = %d, want 0 for a local variable named time and a skipped test file", hints)
 	}
 	// 关掉开关不提示；-businessdirs 可以换目录名。
@@ -104,13 +104,13 @@ func Read() time.Time { return time.Now() }
 `)
 	*clockHints = false
 	t.Cleanup(func() { *clockHints = true })
-	if hints := vetClockHints(token.NewFileSet(), game); hints != 0 {
+	if hints := clockHintsForDirectory(token.NewFileSet(), game); hints != 0 {
 		t.Fatalf("hints = %d with -clockhints=false, want 0", hints)
 	}
 	*clockHints = true
 	*businessDirs = "gameplay"
 	t.Cleanup(func() { *businessDirs = "game" })
-	if hints := vetClockHints(token.NewFileSet(), game); hints != 0 {
+	if hints := clockHintsForDirectory(token.NewFileSet(), game); hints != 0 {
 		t.Fatalf("hints = %d after -businessdirs dropped game, want 0", hints)
 	}
 }
@@ -124,7 +124,7 @@ func TestClockHintsLookOnlyBelowTheModuleRoot(t *testing.T) {
 import "time"
 func Read() time.Time { return time.Now() }
 `)
-	if hints := vetClockHints(token.NewFileSet(), dir); hints != 0 {
+	if hints := clockHintsForDirectory(token.NewFileSet(), dir); hints != 0 {
 		t.Fatalf("hints = %d for a package whose only game segment is above the module root, want 0", hints)
 	}
 }
@@ -140,4 +140,10 @@ func Open() int64 { return time.Now().Unix() }
 	if err != nil || findings != 0 {
 		t.Fatalf("findings = %d err = %v, want 0: a clock hint must not fail the run", findings, err)
 	}
+}
+
+func clockHintsForDirectory(fileSet *token.FileSet, directory string) int {
+	before := hintCount
+	_, _ = vetDirectory(fileSet, directory)
+	return hintCount - before
 }

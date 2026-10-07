@@ -650,3 +650,7 @@ git diff --check
 ```
 
 代码生成只消除一致性敏感的样板，不代替领域建模。Entity 边界、事务 durability、Remote read level、Saga 补偿和协议兼容仍必须由业务显式决定并经过评审。
+
+### v1.23.1 配置表边界更正
+
+JSON 键以显式 `json` 标签为准，省略标签时沿用 Go 字段名（与 encoding/json 和运行时规则一致）；CSV 默认列名仍为 snake_case。`key=` 必须指向实际导出字段。单例 object 只能有 0 或 1 行数据，多行拒绝。`_manifest.json` 的 generated_at 保留字段当前不填充，不可作为生成时间来源。

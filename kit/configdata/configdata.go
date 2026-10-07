@@ -74,8 +74,9 @@ func (m *Mod) Provide(r *app.Registry) error {
 		case outcome.Rollback && outcome.Err == nil:
 			m.metrics.IncCounter("configdata.rollback.total", metrics.Labels{"trigger": "operator"}, 1)
 		case outcome.Rollback:
-			// A failed operator rollback leaves the live generation alone;
-			// the store logs it.
+			if outcome.Reverted() {
+				m.metrics.IncCounter("configdata.rollback.total", metrics.Labels{"trigger": "apply_failed"}, 1)
+			}
 		case outcome.Err == nil:
 			m.metrics.IncCounter("configdata.reload.total", metrics.Labels{"result": "ok"}, 1)
 		default:

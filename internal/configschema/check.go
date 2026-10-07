@@ -110,7 +110,7 @@ func childNames(typ reflect.Type) []string {
 func (d *decoder) rejectUnknown(prefix string, known map[string]bool) {
 	var unknown []string
 	for _, key := range d.src.Keys() {
-		rest, ok := strings.CutPrefix(key, prefix+".")
+		rest, ok := strings.CutPrefix(key, joinKey(prefix, ""))
 		if !ok {
 			continue
 		}
@@ -171,7 +171,7 @@ func childSegments(keys []string, prefix string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, key := range keys {
-		rest, ok := strings.CutPrefix(key, prefix+".")
+		rest, ok := strings.CutPrefix(key, joinKey(prefix, ""))
 		if !ok {
 			continue
 		}
@@ -307,7 +307,7 @@ func (s Schema) Check(src Source, production bool) []error {
 			if key.Closed && !strings.Contains(key.Name, "*") {
 				known := map[string]bool{}
 				for _, other := range s.Keys {
-					if rest, ok := strings.CutPrefix(other.Name, key.Name+"."); ok {
+					if rest, ok := strings.CutPrefix(other.Name, joinKey(key.Name, "")); ok {
 						first, _, _ := strings.Cut(rest, ".")
 						known[first] = true
 					}
@@ -452,7 +452,11 @@ func (m *mapSource) flatten(prefix string, value any) {
 			m.values[prefix] = nested
 		}
 		for name, child := range nested {
-			m.flatten(joinKey(prefix, strings.ToLower(name)), child)
+			path := strings.ToLower(name)
+			if prefix != "" {
+				path = prefix + "." + path
+			}
+			m.flatten(path, child)
 		}
 		return
 	case map[any]any:

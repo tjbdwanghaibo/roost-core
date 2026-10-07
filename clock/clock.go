@@ -68,7 +68,7 @@ type Clock interface {
 }
 
 type logicClock struct {
-	offsetMilli atomic.Int64
+	offsetNanos atomic.Int64
 }
 
 var global Clock = NewLogicClock()
@@ -119,13 +119,13 @@ func (c *logicClock) Set(now time.Time) {
 }
 
 func (c *logicClock) SetOffset(offset time.Duration) {
-	c.offsetMilli.Store(offset.Milliseconds())
+	c.offsetNanos.Store(int64(offset))
 }
 
 func (c *logicClock) Offset() time.Duration {
-	return time.Duration(c.offsetMilli.Load()) * time.Millisecond
+	return time.Duration(c.offsetNanos.Load())
 }
 
 func (c *logicClock) Reset() {
-	c.offsetMilli.Store(0)
+	c.offsetNanos.Store(0)
 }

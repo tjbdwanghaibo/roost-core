@@ -159,7 +159,7 @@ func vetDirectory(fileSet *token.FileSet, directory string) (int, error) {
 		return *includeTests || !strings.HasSuffix(info.Name(), "_test.go")
 	}, parser.ParseComments)
 	findings := 0
-	hintCount += vetClockHints(fileSet, directory) // D-L3：只提示，不计入 findings
+	checkClock := *clockHints && isBusinessDirectory(directory, businessDirNames())
 	for _, pkg := range packages {
 		// Hints are advice, not findings: they are printed and do not change
 		// the exit status (A1, like the A3 review prompts).
@@ -182,6 +182,9 @@ func vetDirectory(fileSet *token.FileSet, directory string) (int, error) {
 			functions = collectFunctions(files)
 		}
 		for _, file := range pkg.Files {
+			if checkClock {
+				hintCount += reportClockHints(fileSet, file)
+			}
 			findings += reportHandlerConcurrency(fileSet, file)
 			findings += reportIgnoredAdmission(fileSet, file, voidAdmissionMethods, returningAdmissionMethods)
 			if *stopHints {

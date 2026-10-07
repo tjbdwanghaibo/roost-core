@@ -163,6 +163,7 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
+| `timer.invalid_dropped_total` | Counter | 正常 Tick 因 id/type/deadline 非法而删除的存量节点；加载时 Warn 并标记待清理，Tick 才发宿主 ChangeDelete。事务回滚后再次重建可能再计，不是全局唯一记录数 |
 | `timer.unhandled_dropped_total{kind}` | Counter | 到期时因类型（`kind` = 类型号）没有注册 handler 而被删除的定时器节点（维护者决定 D-L2）。**基线应为零**；非零说明存储里还有某种已下线 / 漏注册类型的节点，它们在到期时被丢弃。每次删除另有 Warn `timer: dropped a due timer with no handler registered for its type`；宿主加载时对这类存量类型每种告警一次（`timer: stored timers have no handler registered for their type`）。宿主事务回滚后重试同一次 Tick 会再计一次 |
 
 ### 服务事件（kit/service 与 core/service，维护者决定 C6）
@@ -216,3 +217,7 @@ kit `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册（
 10. `/readyz` 响应体 `degraded: true` 持续数分钟 —— 关注（不会摘流量，见上一节）：按 `degraded_dependencies[].name` 查对应来源。
 
 Grafana 总览面板见 [observability/grafana-roost-overview.json](observability/grafana-roost-overview.json)（按上述四组布局，导入后选择 Prometheus 数据源即可）。
+
+### 业务时间高水位
+
+`app.business_time.advance_failed.total`（Prometheus `app_business_time_advance_failed_total`）记录推进协调存储高水位失败，排查连接与协调存储；不能把业务时间守卫故障当作普通时间漂移忽略。

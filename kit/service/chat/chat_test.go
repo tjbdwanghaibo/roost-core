@@ -222,7 +222,7 @@ func newHarness(t *testing.T, options ...option) *harness {
 	t.Helper()
 	h := &harness{clock: newClock(), metrics: newRecorder(), registry: testRegistry(t)}
 	h.policy = allowAllPolicy{}
-	cfg := Config{RetentionAge: DefaultRetentionAge, Policy: h.policy, Bodies: h.registry, Now: h.clock.Now, Metrics: h.metrics}
+	cfg := Config{RetentionAge: DefaultRetentionAge, Policy: h.policy, Bodies: h.registry, Now: h.clock.Now, SystemNow: h.clock.Now, Metrics: h.metrics}
 	svcCfg := ServiceConfig{System: grantingAuth()}
 	for _, apply := range options {
 		apply(&cfg, &svcCfg, h)
@@ -1101,7 +1101,7 @@ func newHarnessWithRegistry(t *testing.T, registry *BodyRegistry) *harness {
 	t.Helper()
 	h := &harness{clock: newClock(), metrics: newRecorder(), registry: registry}
 	state := versionstore.NewMemoryStore[string, channelState]()
-	store, err := NewStore(state, Config{Policy: allowAllPolicy{}, Bodies: registry, Now: h.clock.Now, Metrics: h.metrics})
+	store, err := NewStore(state, Config{Policy: allowAllPolicy{}, Bodies: registry, Now: h.clock.Now, SystemNow: h.clock.Now, Metrics: h.metrics})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -68,7 +68,7 @@ func ParseDuration(key string, raw any) (time.Duration, error) {
 	return 0, fmt.Errorf("config: %s = %v needs a unit (for example 15s or 500ms); a bare number would be read as nanoseconds", key, raw)
 }
 
-// ParseInt 接受 YAML 整数、没有小数部分的浮点数（YAML 的 1e3）与十进制字符串（环境变量覆盖都是字符串）；
+// ParseInt 接受 YAML 整数、没有小数部分的浮点数（YAML 的 1e3）与十进制字符串（文本输入）；
 // `8k`、`1.5`、`10s`、布尔值与解析不了的值报错。nil 或空串返回 0。
 func ParseInt(key string, raw any) (int64, error) {
 	switch value := raw.(type) {
@@ -104,11 +104,11 @@ func ParseFloat(key string, raw any) (float64, error) {
 		if text == "" {
 			return 0, nil
 		}
-		if parsed, err := strconv.ParseFloat(text, 64); err == nil {
+		if parsed, err := strconv.ParseFloat(text, 64); err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
 			return parsed, nil
 		}
 	default:
-		if n, ok := number(raw); ok {
+		if n, ok := number(raw); ok && !math.IsNaN(n) && !math.IsInf(n, 0) {
 			return n, nil
 		}
 	}
@@ -132,7 +132,7 @@ func ParseString(key string, raw any) (string, error) {
 	return "", fmt.Errorf("config: %s must be a string, got %v", key, raw)
 }
 
-// ParseStrings 接受 YAML 列表与逗号分隔的字符串（环境变量只能写成后者），去掉每项两端空白、丢弃空项。
+// ParseStrings 接受 YAML 列表与逗号分隔的字符串（文本输入可写成后者），去掉每项两端空白、丢弃空项。
 func ParseStrings(key string, raw any) ([]string, error) {
 	var items []string
 	switch value := raw.(type) {
@@ -301,6 +301,9 @@ func integer(raw any) (int64, bool) {
 	case int64:
 		return n, true
 	case uint:
+		if uint64(n) > math.MaxInt64 {
+			return 0, false
+		}
 		return int64(n), true
 	case uint8:
 		return int64(n), true
@@ -309,6 +312,9 @@ func integer(raw any) (int64, bool) {
 	case uint32:
 		return int64(n), true
 	case uint64:
+		if n > math.MaxInt64 {
+			return 0, false
+		}
 		return int64(n), true
 	}
 	return 0, false
@@ -319,6 +325,10 @@ func number(raw any) (float64, bool) {
 		return float64(n), true
 	}
 	switch n := raw.(type) {
+	case uint64:
+		return float64(n), true
+	case uint:
+		return float64(n), true
 	case float32:
 		return float64(n), true
 	case float64:

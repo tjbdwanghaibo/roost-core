@@ -82,6 +82,7 @@ func newService(t *testing.T, mutate ...func(*Config)) (*Service, *clock, Config
 		NameRules:     simpleNameRules(),
 		SessionSecret: "test-secret-please-rotate",
 		Now:           c.Now,
+		SystemNow:     c.Now,
 	}
 	for _, m := range mutate {
 		m(&cfg)

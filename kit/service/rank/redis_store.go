@@ -12,6 +12,7 @@ import (
 
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 
+	businessclock "github.com/tjbdwanghaibo/roost-core/clock"
 	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 )
@@ -37,7 +38,7 @@ type RedisConfig struct {
 	Prefix string
 	// Now supplies the default tiebreak for a submit that leaves Tie zero.
 	// It is the business clock (D-L3; the Mod injects app.BusinessClock).
-	// nil means time.Now.
+	// nil means clock.Now.
 	Now func() time.Time
 	// RetryBackoff is the base delay between lost compare-and-swaps; zero
 	// selects versionstore.DefaultRetryBackoff, negative disables sleeping.
@@ -69,7 +70,7 @@ func NewRedisStore(client RedisClient, cfg RedisConfig) (*RedisStore, error) {
 		return nil, fmt.Errorf("rank: redis prefix is required")
 	}
 	if cfg.Now == nil {
-		cfg.Now = time.Now
+		cfg.Now = businessclock.Now
 	}
 	return &RedisStore{client: client, cfg: cfg, report: servicemetrics.Wrap(cfg.Metrics)}, nil
 }

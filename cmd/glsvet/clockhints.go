@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
@@ -78,24 +77,6 @@ func businessDirNames() []string {
 		}
 	}
 	return names
-}
-
-// vetClockHints 对一个业务包目录打印业务时钟提示，返回提示条数。它自己带注释重新解析：主检查按
-// 不带注释的模式解析，改模式会改变既有检查看到的 AST。
-func vetClockHints(fileSet *token.FileSet, directory string) int {
-	if !*clockHints || !isBusinessDirectory(directory, businessDirNames()) {
-		return 0
-	}
-	packages, _ := parser.ParseDir(fileSet, directory, func(info os.FileInfo) bool {
-		return *includeTests || !strings.HasSuffix(info.Name(), "_test.go")
-	}, parser.ParseComments) // 解析错误由主检查报出
-	hints := 0
-	for _, pkg := range packages {
-		for _, file := range pkg.Files {
-			hints += reportClockHints(fileSet, file)
-		}
-	}
-	return hints
 }
 
 // reportClockHints 打印 file 里对系统时钟的直接读取，返回提示条数。

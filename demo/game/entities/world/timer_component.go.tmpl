@@ -1,3 +1,5 @@
+// 本宿主的持久期限为毫秒。业务按秒构造期限并在 Tick 中固定毫秒钟；
+// 新宿主若允许亚毫秒期限，应在入队前统一存储精度，保证重建前后的排序一致。
 package world
 
 import (
@@ -155,6 +157,7 @@ func (component *TimerComponent) settle(scheduler *timer.Scheduler) {
 	if due := scheduler.NextTime(); !due.IsZero() {
 		next = due.UnixMilli()
 	}
+	if scheduler.NeedsCleanup() { next = -1 } // 正常 Tick 必须清理坏节点，加载时不写持久字段。
 	component.owner.Dao().SetTimerNextDue(next)
 }
 
@@ -232,7 +235,7 @@ func (component *TimerComponent) PendingActivityPhase(activityID string) (int64,
 // timer_next_due and returns: no scheduler is built and nothing is written.
 func (component *TimerComponent) Tick(now time.Time) int {
 	dao := component.owner.Dao()
-	if next := dao.GetTimerNextDue(); next == 0 || now.UnixMilli() < next {
+	if next := dao.GetTimerNextDue(); next == 0 || (next != -1 && now.UnixMilli() < next) {
 		return dao.TimersLen()
 	}
 	scheduler := component.scheduler(now)

@@ -117,3 +117,28 @@ func TestFailedReloadAndRollbackAreCountedAndLogged(t *testing.T) {
 		}
 	}
 }
+
+func TestRevertedOperatorRollbackIsCounted(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set(cfgKeyDir, t.TempDir())
+	mod, registry := newProvidedConfigDataMod(t, cfg)
+	defer mod.Stop()
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mod.Store().ReloadWithReason(context.Background(), "new generation"); err != nil {
+		t.Fatal(err)
+	}
+	live := mod.Store().Current()
+	mod.Store().AddReloadListener(fconfigdata.ReloadHook{HookName: "refuse", AfterApply: func(context.Context, fconfigdata.ReloadEvent) error { return errors.New("late rollback refusal") }})
+	if _, err := mod.Store().Rollback(context.Background(), "operator"); err == nil {
+		t.Fatal("rollback unexpectedly succeeded")
+	}
+	reg := app.MustLookup[*metrics.Registry](registry, app.ModMetrics)
+	if got := counterValue(reg, "configdata.rollback.total", metrics.Labels{"trigger": "apply_failed"}); got != 1 {
+		t.Fatalf("reverted operator rollback count=%d, want 1", got)
+	}
+	if mod.Store().Current() != live {
+		t.Fatal("refused rollback changed active generation")
+	}
+}

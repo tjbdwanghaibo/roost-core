@@ -50,10 +50,22 @@ func installFeatureFlags(registry *app.Registry) (func(), error) {
 	// A reload republishes, on the config store's OWN hook rather than a
 	// generic lifecycle event: AfterApply runs once the new snapshot is
 	// committed and carries the reason, so the log line says why the switches
-	// changed. A rollback needs no handler — the store republishes the
-	// snapshot it rolled back to through the same hook.
+	// changed. 运维 Rollback 也经过 AfterApply；发布失败的撤回则调用 Rollback。
+	// 保留发布前的实际开关视图（含 GM 覆盖），不能用旧配置表替代它。
+	var previous []featureflag.Flag
+	var published bool
 	unsubscribe := store.AddReloadListener(configdata.ReloadHook{
 		HookName: flagsReloadHook,
+		BeforeApply: func(context.Context, configdata.ReloadEvent) error {
+			previous = featureflag.DefaultStore().Snapshot()
+			published = false
+			return nil
+		},
+		Rollback: func(context.Context, configdata.ReloadEvent, error) {
+			if published { featureflag.DefaultStore().Replace(previous) }
+			previous = nil
+			published = false
+		},
 		AfterApply: func(_ context.Context, event configdata.ReloadEvent) error {
 			if err := publishFeatureFlags(store.Current()); err != nil {
 				// Refusing here fails the reload, which is right: a config
@@ -61,6 +73,7 @@ func installFeatureFlags(registry *app.Registry) (func(), error) {
 				// half-applied.
 				return fmt.Errorf("{{GAME_SERVICE}}: feature flags after reload (%s): %w", event.Reason, err)
 			}
+			published = true
 			return nil
 		},
 	})

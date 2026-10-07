@@ -210,8 +210,8 @@ func prepareClientMessage(ctx context.Context, msg *Msg, name HandlerName, param
 		snapshot.Base = ctx
 	} else {
 		// Async admission uses ctx only for its cancellation/deadline check.
-		// Preserve the framework message envelope (config generation, request
-		// identity and trace), but never Base values, arbitrary KV or transaction
+		// Capture the current runtime config generation; preserve request
+		// identity and trace, but never Base values, arbitrary KV or transaction
 		// state. Business data must travel explicitly in Params.
 		snapshot = asyncMessageContextSnapshot(fctx.CaptureSnapshot())
 	}

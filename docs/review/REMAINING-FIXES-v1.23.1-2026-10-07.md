@@ -104,3 +104,7 @@ B2 验收完成（2026-10-07）：全仓 build/vet/test（130 包）通过；ski
 远端新增 ba0dd7c2 客户端 RS v2/C#；尚未合入本工作树，最终验收前须合并并重新验证生成 TCP。
 
 B3 验收完成（2026-10-08）：RR-20261008-01～14；全仓 build/vet/test（130 包）通过；服务目标 race、私有 Redis 跨服务 race（28 命名空间和 admission 原子回收）通过。正式生成 game-demo 458 文件，最终 build/vet/test 通过；配置声明守卫初次发现 WriteGate 未走统一声明，已按正式声明和缓存配置值修复，完整复验通过。`go generate ./...` 已运行。原始日志在 artifacts/perf/remaining-fixes-20261007，未推送/发布。继续 B4/B6/B7/B8。
+
+### B4 验收完成（2026-10-08）
+
+B3 已提交 b01f7e66；远端 RS v2/C# 合并 0dff3676（CHANGELOG 冲突保留双方全部记录并逐行核对）。B4 RR-20261008-15～21 已实施，目标 13 包 race、tablegen 实际生成运行、开关回滚红绿通过；全仓 build/vet/test（131 包）通过，重新生成 game-demo 的 build/vet/test（19 个测试包）通过，含定时器清理提交/回滚和开关监听回滚。最终 timer race 通过；所有红绿日志已复制主检出 artifacts/perf/remaining-fixes-20261007/。B6/B7/B8 待处理，Remote 唯一 publisher 产品选择仍待回复，不据此阻塞已授权批次。

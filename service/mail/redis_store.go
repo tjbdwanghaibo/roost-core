@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	businessclock "github.com/tjbdwanghaibo/roost-core/clock"
 	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 )
@@ -42,7 +43,7 @@ type RedisConfig struct {
 	// Service compares against, and two components disagreeing about the
 	// current time is a mail that reads as live and has already been evicted.
 	// In a deployment it is the business clock (D-L3; the kit Mod injects
-	// app.BusinessClock). nil means time.Now.
+	// app.BusinessClock). nil means clock.Now.
 	Now func() time.Time
 }
 
@@ -147,7 +148,7 @@ type redisEnvelopes struct {
 // the key ttl is derived from the same expiry the Service compares against,
 // and two components disagreeing about the current time is a mail that reads
 // as live and has already been evicted. And a store whose expiry cannot be
-// moved by a test has no test for expiry. nil means time.Now.
+// moved by a test has no test for expiry. nil means clock.Now.
 func NewRedisEnvelopes(client envelopeClient, prefix string, now func() time.Time) (EnvelopeStore, error) {
 	if client == nil {
 		return nil, fmt.Errorf("mail: redis client is nil")
@@ -156,7 +157,7 @@ func NewRedisEnvelopes(client envelopeClient, prefix string, now func() time.Tim
 		return nil, fmt.Errorf("mail: redis key prefix is required")
 	}
 	if now == nil {
-		now = time.Now
+		now = businessclock.Now
 	}
 	return &redisEnvelopes{client: client, prefix: prefix, now: now, grace: EnvelopeStorageGrace}, nil
 }

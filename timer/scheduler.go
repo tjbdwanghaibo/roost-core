@@ -30,6 +30,9 @@ const TypeClosure int32 = 0
 // 宿主的事务回滚后重试同一次 Tick 会再计一次。
 const UnhandledDroppedMetric = "timer.unhandled_dropped_total"
 
+// InvalidDroppedMetric 计正常 Tick 清理的非法持久节点；加载只诊断，不写存储。
+const InvalidDroppedMetric = "timer.invalid_dropped_total"
+
 type ChangeType uint8
 
 const (
@@ -66,6 +69,7 @@ type Scheduler struct {
 	ownerID int64
 	seed    int64
 	nodes   timerHeap
+	invalid []Node
 	byID    map[int64]*Node
 
 	handlers map[int32]Handler
@@ -86,16 +90,32 @@ func NewScheduler(ownerID int64, seed int64, saved []Node, onChange ChangeFunc) 
 	}
 	for i := range saved {
 		node := saved[i].clone()
-		if node.ID <= 0 || node.Type == TypeClosure || node.End.IsZero() {
-			continue
-		}
 		if node.ID > s.seed {
 			s.seed = node.ID
+		}
+		reason := ""
+		switch {
+		case node.ID <= 0:
+			reason = "id"
+		case node.Type == TypeClosure:
+			reason = "type"
+		case node.End.IsZero():
+			reason = "deadline"
+		}
+		if reason != "" {
+			// 实体加载也会构造 scheduler；只暂存清理，不能在构造期改持久状态。
+			s.invalid = append(s.invalid, node)
+			slog.Warn("timer: invalid stored timer pending cleanup", "owner_id", ownerID, "timer_id", node.ID, "reason", reason)
+			continue
 		}
 		s.push(&node)
 	}
 	return s
 }
+
+// NeedsCleanup 表示有非法存量节点等待正常 Tick 删除。宿主即使没有合法到期节点，
+// 也应安排一次事务内 Tick；NewScheduler 本身不触发持久化回调。
+func (s *Scheduler) NeedsCleanup() bool { return s != nil && len(s.invalid) > 0 }
 
 func (s *Scheduler) OwnerID() int64 {
 	if s == nil {
@@ -259,6 +279,12 @@ func (s *Scheduler) ChangeTimer(id int64, now time.Time, delay time.Duration) bo
 func (s *Scheduler) Tick(now time.Time) {
 	if s == nil {
 		return
+	}
+	invalid := s.invalid
+	s.invalid = nil
+	for _, node := range invalid {
+		s.emit(ChangeDelete, node)
+		metrics.IncCounter(InvalidDroppedMetric, nil, 1)
 	}
 	if now.IsZero() {
 		now = s.now()

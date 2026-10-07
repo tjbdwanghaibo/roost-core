@@ -371,3 +371,11 @@ Tick 中途其他入口的语义（`timer/scheduler.go:191-257`、`:343-354`）�
 → [说明文档](../guide/10-time.md)对应：§7 保证与不保证。
 
 [↑ 速览](#速览) · [说明文档](../guide/10-time.md)
+
+## v1.23.1 B4 更正（2026-10-08，未发布）
+
+T1：RR-20261008-21，加载告警，NeedsCleanup 驱动正常事务 Tick 清理，加载阶段不改 DAO 持久字段。T2/T3：RR-20261008-20，业务缺省统一 clock.Now，SystemNow 缺省独立 time.Now；两处偏移均保存完整 Duration。
+
+T4 明确宿主责任：通用 Scheduler 保留纳秒期限，不能替所有宿主截断。World 存储毫秒，当前活动入口按秒武装、Tick 固定毫秒；新宿主在入队前对齐其存储精度，避免重建后同期限优先级发生变化。本次未声称所有自定义宿主有纳秒持久化保证。
+
+T5：glsvet 直接复用主检查带注释 AST，不再二次解析；已有时钟提示回归通过。T6：OBSERVABILITY.md 已补 app.business_time.advance_failed.total 与 timer.invalid_dropped_total。T7：初始偏移允许负值，运行中不能修改；重启仍受持久高水位限制，生产必须为 0。“前拨”不是非负配置约束。

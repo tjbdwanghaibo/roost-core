@@ -759,3 +759,7 @@ Projected 是成功投影尝试数，成功但未 ack 的后缀重放后会再�
 `dataengine.transaction_receipt_ttl` 按 Mongo 整秒精度必须大于 `dataengine.wal.max_unacked_age`（0 取 24h）。默认 720h 不变。后者只是健康阈值，不会使旧 WAL 失效；超出事务标记保留期的停机 / 积压必须先核对持久状态，禁止盲目重放。
 
 App 的启动回调共用 `startup.timeout`（默认 2m），较长恢复需显式调大。启动信号不再等到 Service.Init 之后才处理。回调超时或被中断但尚未退出时，App 返回错误并保留其依赖，不主动释放单实例锁；调用方应退出进程，不能复用该 App。锁获取本身仍受 `singleton.startup_wait` 控制。
+
+### v1.23.1 配置与时间边界
+
+异步 Nest 消息在每次入队时固定当前运行时配置；连续自续发链的下一跳能看到热更。同步派生调用维持当前请求代际。手工装配的业务服务 Config.Now 缺省 clock.Now，account/chat 的 SystemNow 缺省独立 time.Now；测试控制两钟时须分别注入。初始 logic_offset 可为负，重启仍受高水位约束，生产只允许 0。自定义持久定时器宿主应在正常事务内对 NeedsCleanup 执行 Tick，并在入队前对齐持久期限精度。

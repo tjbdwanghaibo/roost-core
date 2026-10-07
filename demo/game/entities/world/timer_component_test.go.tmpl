@@ -686,3 +686,19 @@ func TestTimerPriorityIsStoredAndOrdersAfterARestart(t *testing.T) {
 		}
 	}
 }
+
+func TestInvalidTimerCleanupWaitsForNormalTransaction(t *testing.T) {
+ first:=newWorld(t)
+ if _,err:=nest.RunIsolatedTransaction(context.Background(),&worldCommitter{},"seed_invalid",func()(any,error){
+  bad:=&db.TimerNode{};bad.SetType(0);bad.SetEndUnixMilli(time.Now().UnixMilli())
+  first.Dao().SetTimers(7,bad);return nil,nil
+ });err!=nil{t.Fatal(err)}
+ restored:=restartWorld(t,first)
+ if restored.Dao().TimersLen()!=1||restored.Dao().GetTimerNextDue()!=-1{t.Fatalf("load must retain invalid record and schedule cleanup: count=%d due=%d",restored.Dao().TimersLen(),restored.Dao().GetTimerNextDue())}
+ refused:=errors.New("rollback cleanup")
+ if _,err:=nest.RunIsolatedTransaction(context.Background(),&worldCommitter{},"cleanup_rollback",func()(any,error){restored.TimerComp().Tick(time.Now());return nil,refused});!errors.Is(err,refused){t.Fatal(err)}
+ if restored.Dao().TimersLen()!=1||restored.Dao().GetTimerNextDue()!=-1{t.Fatal("cleanup escaped transaction rollback")}
+ committer:=&worldCommitter{}
+ if _,err:=nest.RunIsolatedTransaction(context.Background(),committer,"cleanup",func()(any,error){restored.TimerComp().Tick(time.Now());return nil,nil});err!=nil{t.Fatal(err)}
+ if restored.Dao().TimersLen()!=0||len(committer.records)!=1{t.Fatalf("cleanup not committed: count=%d commits=%d",restored.Dao().TimersLen(),len(committer.records))}
+}

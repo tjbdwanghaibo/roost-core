@@ -688,19 +688,14 @@ func bindMsgContext(msg *Msg, carryBase bool) {
 	msg.Context = snapshot
 }
 
-// asyncMessageContextSnapshot keeps the immutable framework envelope needed
-// for tracing, request identity and config-generation consistency, while
-// dropping execution-local state. In particular Base values, arbitrary KV
-// (which may contain the active rollback transaction), frame and sync wait
-// never cross the asynchronous boundary.
+// 异步入队是新的配置准入边界：固定当前 RuntimeConfig，后续 reload 不改在队消息。
+// 自续发下一跳重新取当前代际，避免长链永久钉住旧快照；Meta/Trace 可传递，
+// Base、KV、Frame、SyncWait 等执行局部状态（尤其事务）不能跨异步边界。
+
 func asyncMessageContextSnapshot(snapshot fctx.ContextSnapshot) fctx.ContextSnapshot {
-	if !snapshot.Valid {
-		snapshot.Valid = true
-		snapshot.Config = fctx.RuntimeConfig()
-	}
 	return fctx.ContextSnapshot{
 		Valid:  true,
-		Config: snapshot.Config,
+		Config: fctx.RuntimeConfig(),
 		Meta:   snapshot.Meta,
 		Trace:  snapshot.Trace.Clone(),
 	}

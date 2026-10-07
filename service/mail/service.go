@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	businessclock "github.com/tjbdwanghaibo/roost-core/clock"
 	"github.com/tjbdwanghaibo/roost-core/servicemetrics"
 )
 
@@ -50,7 +51,7 @@ type Config struct {
 
 	// Now is the business clock (D-L3): creation, expiry, delivery and read
 	// times, and the claim lease (Entry.ClaimDeadlineUnix). The kit Mod
-	// injects app.BusinessClock. nil means time.Now.
+	// injects app.BusinessClock. nil means clock.Now.
 	//
 	// The claim lease is on it too: it is compared only here, by mail service
 	// instances that all run on the deployment's one offset, and nothing
@@ -107,7 +108,7 @@ func New(cfg Config) (*Service, error) {
 		cfg.NewClaimToken = randomID
 	}
 	if cfg.Now == nil {
-		cfg.Now = time.Now
+		cfg.Now = businessclock.Now
 	}
 	return &Service{cfg: cfg, report: servicemetrics.Wrap(cfg.Metrics)}, nil
 }

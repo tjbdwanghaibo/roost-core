@@ -2,6 +2,10 @@ package {{GAME_SERVICE_PKG}}
 
 import (
 	"context"
+ "errors"
+ "reflect"
+ "github.com/tjbdwanghaibo/roost-core/app"
+ "github.com/tjbdwanghaibo/roost-core/kit/mods"
 	"path/filepath"
 	"testing"
 
@@ -84,4 +88,22 @@ func TestASnapshotWithoutTheTableIsRefused(t *testing.T) {
 	if !flags.Enabled(flags.Purchase) {
 		t.Fatal("the refused publish still changed the store; the previous flags must stay")
 	}
+}
+
+func TestFeatureFlagsRevertWhenLaterListenerRefuses(t *testing.T) {
+ oldFlags:=featureflag.DefaultStore().Snapshot()
+ t.Cleanup(func(){featureflag.DefaultStore().Replace(oldFlags)})
+ registry:=configdata.NewRegistry()
+ if err:=generated.RegisterGeneratedConfigData(registry);err!=nil{t.Fatal(err)}
+ store:=configdata.NewStore(registry,filepath.Join("..","..","..","configs","data"))
+ if _,err:=store.Load(context.Background());err!=nil{t.Fatal(err)}
+ appRegistry:=app.NewRegistry(nil)
+ if err:=appRegistry.Register(mods.ModConfigData,store);err!=nil{t.Fatal(err)}
+ stop,err:=installFeatureFlags(appRegistry);if err!=nil{t.Fatal(err)};defer stop()
+ // GM 覆盖也是当前视图的一部分；失败热更必须恢复它，而非重读旧表覆盖它。
+ featureflag.DefaultStore().Set(featureflag.Flag{Name:flags.Purchase,Enabled:false,Note:"operator override"})
+ before:=featureflag.DefaultStore().Snapshot();old:=store.Current()
+ store.AddReloadListener(configdata.ReloadHook{HookName:"later refusal",AfterApply:func(context.Context,configdata.ReloadEvent)error{return errors.New("refused")}})
+ if _,err:=store.ReloadWithReason(context.Background(),"test");err==nil{t.Fatal("reload should fail")}
+ if got:=featureflag.DefaultStore().Snapshot();!reflect.DeepEqual(got,before)||store.Current()!=old{t.Fatalf("reverted config left changed flags: before=%v after=%v",before,got)}
 }

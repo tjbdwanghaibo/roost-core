@@ -105,6 +105,9 @@ func TestClientDispatchCarriesOnlyFrameworkEnvelope(t *testing.T) {
 		return nil, nil
 	})
 
+	oldConfig := fctx.RuntimeConfig()
+	fctx.SetRuntimeConfig("config-generation-8")
+	t.Cleanup(func() { fctx.SetRuntimeConfig(oldConfig) })
 	base := context.WithValue(context.Background(), key, "must-not-propagate")
 	parent, releaseParent := fctx.NewContext(
 		fctx.WithBase(base),
@@ -132,7 +135,7 @@ func TestClientDispatchCarriesOnlyFrameworkEnvelope(t *testing.T) {
 		if got.playerID != 777 || got.msgID != 11 || got.seq != 12 || got.traceID != "parent-trace" {
 			t.Fatalf("framework message envelope missing: %+v", got)
 		}
-		if got.config != "config-generation-7" {
+		if got.config != "config-generation-8" {
 			t.Fatalf("config generation missing: %+v", got)
 		}
 		if got.source != "nest" || got.handler != name.String() {

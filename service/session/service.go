@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	businessclock "github.com/tjbdwanghaibo/roost-core/clock"
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
 
 	"github.com/tjbdwanghaibo/roost-core/servicemetrics"
@@ -96,7 +97,7 @@ type Config struct {
 	NewRunID func() (string, error)
 
 	// Now is the business clock (D-L3: a run's deadline is game time; the
-	// kit Mod injects app.BusinessClock). nil means time.Now.
+	// kit Mod injects app.BusinessClock). nil means clock.Now.
 	Now func() time.Time
 	// Metrics receives reports. A nil reporter means no reporting and never
 	// fails an operation.
@@ -147,7 +148,7 @@ func New(cfg Config) (*Service, error) {
 		cfg.NewRunID = randomID
 	}
 	if cfg.Now == nil {
-		cfg.Now = time.Now
+		cfg.Now = businessclock.Now
 	}
 	return &Service{cfg: cfg, report: servicemetrics.Wrap(cfg.Metrics)}, nil
 }

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- B4 RR-20261008-15～21：配置表缺省 JSON 名与 runtime 对齐，拒绝错误主键/单例多行；closed/YAML 路径/数值边界和重复诊断修正；热更失败恢复实际开关视图；异步 Nest 每次准入固定最新运行时代际；运维回滚撤回计数。
+- 业务服务缺省业务钟统一 clock.Now，account/chat 系统钟独立 time.Now；进程偏移保留 Duration 精度。非法持久 timer 加载只告警，NeedsCleanup 在正常 Tick 事务清理；World 已接线。新 timer 宿主需遵循此边界。
+
+
 - B3 RR-20261008-09～14：versionstore 共享写预算和 Resume 指标；迁移/匹配重放；Session admission 恢复索引；RPC 类型与输出包校验；转服返回 owner_sid；game-demo 启动必需 WriteGate。
 - **升级需清空** chat 频道、global route、Session run/claim/request/admission 状态及索引（chat/route/run codec v2）；**先停旧再起新**。重新生成 RPC 两端（ticket_ids/urls）和 EnterGame PB。服务进程可靠 RPC 使用 nats.rpc.transport=jetstream，生成器拒绝无效果的每方法 reliable 标记。
 
