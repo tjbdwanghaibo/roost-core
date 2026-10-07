@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 
+## [v1.23.0] - 2026-10-07
+
+> 次版本（含破坏性变化）：维护者第十～十三轮决定的实施与发版前收口。决定项：saga 收件箱改为每个操作一份状态文档与方向 ③④（迟到生效的步骤由协调器补偿、终态可重开）、原“下个大版本”项本版完成（A2 ③ versionstore 一次性写令牌、A3 ② `ISyncBus` 退订本身排空、A4 ① 每个 Mod 声明配置、B3 ③ skill Host 能力表）、skill 衍生物生命周期七步（撤除重试、停止入口统一、分区存放、已放弃分区）与 Spawn / Summon 改名、nats 驱动自持已关闭状态、交给 review 前不留 WANTED、Windows 不保证正确；另有 Mirror 第 6 步观察（O-M6-1 / 3 / 5 / 6）、收尾第 1～4 批与第十二轮 B 类决定。线上未部署，**不做旧格式 / 旧进程兼容**。代码冻结点 `5e72ca4d`。说明与实现双文档：[v1.23.0-GUIDE](docs/release/v1.23.0-GUIDE.md) · [v1.23.0-IMPLEMENTATION](docs/release/v1.23.0-IMPLEMENTATION.md)。
+
+### 破坏性变化与升级清单（升级前必读）
+
+完整总表（47 行：改了什么、谁受影响、要做什么、不做会怎样、对应条目）与推荐的升级顺序见 [v1.23.0 说明总文档 §2](docs/release/v1.23.0-GUIDE.md#2-破坏性变化与升级清单)。下面是精简版，括号里是条目编号。升级先停掉全部旧进程，不混跑。
+
+- **存储格式**
+  - saga 步骤收件箱改为每个操作一份状态文档（`_dataengine_step_operations`、`<收件箱集合>_operations`）：停旧步骤进程（原生步骤进程先排空 WAL），丢弃旧 `_dataengine_inbox_claims` / `<收件箱集合>_claims`（SAGA-14）。
+  - saga 记录新增 `late_step` / `late_data`：自定义 Store 要原样保存并实现 `CompletionHistoryStore`（SAGA-16）。
+  - versionstore 信封带一次性写令牌：清空各服务 versionstore 前缀下的键与索引有序集合（T-291），否则读旧信封报 `ErrMalformedRecord`（DRV-7）。
+  - skill checkpoint 版本 7，旧版本拒绝恢复：升级前排空（SKILL-24～29）。
+  - skill 环境（Host 能力表进 authority digest）与全部 digest 改变：重新编译、重签 skillcompose 契约、旧录制回放重录（SKILL-25 / 27 / 28 / 30）。
+- **接口**
+  - `ISyncBus`：`syncbus.Handler` 带 ctx，`Subscribe` / `SubscribeLive` 返回 `*syncbus.Subscription`，`Unsubscribe(ctx)` 本身排空；`PatchSyncer.Stop` / `cache.ReplicaSyncer.Stop` 改为 `Stop(ctx) error`；handler 里退订自己要传投递 ctx（REM-15）。
+  - `skill.Host` 必须实现 `HostCapabilities()`，表外能力在编译 / 启动 / 注册时拒绝（SKILL-30）。
+  - skill 改名不留别名：进程 → 衍生物 Spawn（`process` → `spawn`、`skill.process.*` → `skill.spawn.*`）；生成宿主单位的效果 → 召唤物 Summon（`summon` / `dismiss`，衍生物 kind `minion`）；新状态 `stop_pending` / `abandoned`，`Host.StopSpawn` 必须幂等（SKILL-24～27、29）。
+  - 读配置改为“配置结构体 + tag”声明 + `app.LoadConfig`，`app.ConfigReader`、`kit/mods.Duration` / `RedisClusterAddrs` 等删除（CFG-14 / 15）；`activity.New` 必须带 `Config.Groups`（OWN-5）。
+  - Close 统一口径：重复 Close 返回 nil；nats 关闭后的错误只 `errors.Is(fnats.ErrClosed)`，`Connected()` 关闭后为 false（DRV-5）。
+- **配置**
+  - 按 Mod 声明检查：写 0、负数、枚举外的值启动即拒绝；syncbus 不再回退读 `room.*` / `sync.*`；用 `<bin> <service> --check-config` 检查生产配置（CFG-14）；生成工程的业务键同样声明，doctor 新增 `config-reads`（CFG-15）。
+  - activity 协调器 `activity.groups_file` 必填，开窗前按组文件核对（OWN-5）。
+  - Ops `Authorization` 只认 `Bearer <token>`（或 `X-Admin-Token`）（OPS-4）。
+  - 生产 Redis 校验认 `redis.cluster_addrs`；整体切 Cluster 按 USER_GUIDE“生成工程切到 Redis Cluster”清单（APP-14）。
+- **指标与日志**：CAS 冲突改查 `versionstore_conflict_total{store}`，chat / rank 自报删除（OPS-5）；`skill.spawn.stop_pending_dropped.total` → `skill.spawn.abandoned.total`（SKILL-29）；`bus_rpc_*{method}` 新增 `_unregistered` / `_other`（OPS-2）；`dataengine.fence.skipped.total` 的 `resource` 变为 `_dataengine_step_operations`（SAGA-14）；saga 正向迟到成功日志由 ERROR 降为 WARN（SAGA-16，T-226）；停机 hook 超时错误点名 hook（APP-8）。
+- **行为**：放弃之后迟到生效的正向 saga 步骤由协调器补偿，`Failed` / `Compensated` 可被重开回 `Compensating`（新指标 `saga.reopened_total`，T-292）；按终态做业务的一方按 saga id 幂等、读到终态记下 `Version`（SAGA-16 / 17）。
+- **平台**：Windows 不保证正确，Windows 问题暂存；生产部署在 Linux（TOOL-8）。
+- **生成器**：Core 下限提到 v1.23.0（新生成代码用 `app.LoadConfig` / `app.SchemaOf`、`activity.Config.Groups` 等）；已生成工程不迁移（CFG-14 / 15、OWN-5）。
+
 ### Changed
 
 - **skill：能力表并入 `skill.Host` 接口，每个 Host 都必须声明；Runtime 的能力准入不再对“没实现 `HostCapabilityProvider`”的 Host 跳过（B3 ③ 收尾，RR-20261006-39）**（v1.23.0 发版前维护者要求“交给 review 前不留能绕过检查的分支”，2026-10-07；线上未部署，不做兼容）：之前 `RecordingHost` / `ReplayHost` 与漏写这个方法的业务 Host 绕过准入，Program 需要的召唤物等能力不在底层 Host 的表里也照样执行，到施法中途、扣费之后才失败。现在 `skill.Host` 嵌入 `HostCapabilityProvider`：业务 Host 必须有 `HostCapabilities() skill.HostCapabilityTable`（漏写编译不过；嵌入 `*skill.MemoryHost` 的自动得到），空表表示什么都不支持；`RecordingHost` 转发被包装 Host 的表并记录一条 `host_capabilities`，`ReplayHost` 回放它（旧录制需重录）。[方案 §12](docs/feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)

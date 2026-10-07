@@ -111,7 +111,7 @@ Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value
 - **restore 的 `on_blocked` 与 profile 策略冲突时必然失败（O27）**：参考宿主 `MemoryHost` 的 temporal restore 里，`on_blocked` 为空时用快照 profile 的 `BlockedPositionPolicy`；写了且与 profile 不同，恢复返回预期失败 `policy_rejected`（走 `result.failure`），不会按 `on_blocked` 覆盖 profile。编译期只检查取值合法——token 可以经持久状态跨施法传递，profile 在编译期不一定可知。所以 `on_blocked` 实际只是“与 profile 一致”的断言：一般不写，写就写成与 profile 相同的值。自己实现 temporal 的 Host 应保持同一口径（`TestTemporalPassBranches` 钉住）。
 - **spawn_start 读取的实体按启动时的事件求值（O28）**：衍生物回调里 `read_attribute` 写 `snapshot: "spawn_start"` 时，整个读取（包括 `entity`）在衍生物启动那一刻求值，那时的 `$event` 是启动事件（`$event.target` 是 lifecycle 实体），不是每次回调的事件。所以 `{"entity":"$event.target","snapshot":"spawn_start"}` 读到的是 lifecycle 实体启动时的值，不是本次回调目标的值。这与 `cast_start` “整个读取在采样点求值”的口径一致。要按回调目标读，用 `snapshot: "current"`。
 
-### 编译期收紧与诊断文案（O22、O29，未发版）
+### 编译期收紧与诊断文案（O22、O29，v1.23.0）
 
 维护者第十二轮决定（2026-10-06）：
 
@@ -184,7 +184,7 @@ crit := combat.ChanceRoll(matchSeed, "crit", critChanceBP,
 - **Runtime 不在事务里**（维护者决定 B4，见上文“Runtime 不在事务里（B4）”）：Nest 回滚只撤回 DAO；`skill.Runtime` 自己的状态不回退。
 - `HostAdapter`：实现 `skill.Host` 的战斗面（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepSpawn`/空间查询/召唤物仍由业务 Host 实现。`HostAdapter.HostCapabilities()` 声明它负责的那部分 Host 能力表（Catalog 里可读的属性、`ResourceAttribute` 映射到的资源、四种资源 operation，接了 `Status` 再加 add / mul_bp 修正）；业务把自己负责的部分（衍生物 kind、motion 步骤、召唤物）用 `skill.MergeHostCapabilities` 合进来声明。Catalog 外或不可读的属性读取返回 `skill.ErrHostCapabilityMissing`（以前读出 0）。见 [B3 ③ 方案](../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)。
 
-### 属性投影（O2，未发版）
+### 属性投影（O2，v1.23.0）
 
 维护者第十二轮决定（2026-10-06）：组件给投影入口，投影逻辑交给业务。以前经 `StatusBridge` / `ApplyBuff` 加的护甲等修饰只对 `HostAdapter.Read`（属性读取）可见，伤害管线读的 `Combatant.Armor` 不变，buff 对伤害没有任何效果。
 

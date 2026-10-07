@@ -191,7 +191,7 @@ type SingletonLiveness interface {
 - 能力名 `app.ModSingleton`，`run` 在 `NewRegistry` 之后、任何 Mod 之前登记，模块用 `app.Lookup[app.SingletonLiveness](registry, app.ModSingleton)` 取得。`enabled=false` 时不登记。
 - “活”的含义是**进程持有锁**：从拿锁（任何 Mod Init 之前）到全部 Mod 停完、Release 为止；崩溃的进程最多再算 `ttl` 秒；卡住的进程键过期后不算。与 activity 原来的租约语义的差异见 §7.2。
 - **停机中的进程仍算活**（维护者决定 C5，2026-10-06，写进 `app/singleton.go` 的 `SingletonLiveness` 注释）：收到停机信号、`Service.Shutdown`、各 Mod Stop 期间键都在、值不变，到 Release 删键为止都算；停机不完整（不 Release）时算到键在 `ttl` 后过期。不引入“停机中”的中间值，活性只有锁这一个事实来源。对 activity 的影响：恰在停机那几秒开的窗口会把这个服算进 expected，它不会再 `NotifyPhase`，该窗口要等到宽限期（`activity.grace_window`）结束才完成。用例 `TestSingletonLiveCountsAStoppingProcessUntilRelease` 钉住（`Service.Shutdown`、服务 Mod Stop、共享 Mod Stop 三处查 `Live` 都得到本 sid，Release 后键不在）。
-- `serverType` 由调用方传入自己的 `server_type`（`run` 写进配置，`app/app.go:125`），所以同一部署里同一子命令的各个 sid 天然对得上；不同服务类型、同一 sid 的键因 `server_type` 段不同而不冲突。
+- `serverType` 由调用方传入自己的 `server_type`（`run` 写进配置：v1.23.0 代码冻结点 `5e72ca4d` 上由 `run` 调用的 `loadServiceConfig` 在读完配置文件后 `a.cfg.Set("server_type", serverType)`，`app/app.go:146`），所以同一部署里同一子命令的各个 sid 天然对得上；不同服务类型、同一 sid 的键因 `server_type` 段不同而不冲突。**更正（2026-10-07，以源码为准）**：原写 `app/app.go:125`，是方案时的行号；A4①（`d1226825`）把读配置挪进 `loadServiceConfig`（`app/app.go:128-156`，`:138` 是同一键的 `SetDefault`）。
 
 ---
 
@@ -312,7 +312,7 @@ singleton:
 
 **改为**：
 
-- `expectedGameSIDs` 调 `app.SingletonLiveness.Live(ctx, serverType, runner.candidates)`，`serverType` 取 `registry.Config().GetString("server_type")`（`run` 写入，`app/app.go:125`）；结果为空时仍回退到“只有自己”（`:306-311` 的现有逻辑保留）。runner 在 `startActivity` 里用 `app.Lookup[app.SingletonLiveness](registry, app.ModSingleton)` 取得，取不到就让 `Init` 报错，写明“需要 singleton.enabled=true”。
+- `expectedGameSIDs` 调 `app.SingletonLiveness.Live(ctx, serverType, runner.candidates)`，`serverType` 取 `registry.Config().GetString("server_type")`（`run` 写入；`5e72ca4d` 上在 `loadServiceConfig`，`app/app.go:146`，原写方案时的 `:125`）；结果为空时仍回退到“只有自己”（`:306-311` 的现有逻辑保留）。runner 在 `startActivity` 里用 `app.Lookup[app.SingletonLiveness](registry, app.ModSingleton)` 取得，取不到就让 `Init` 报错，写明“需要 singleton.enabled=true”。
 - 删除：`incarnation`、`lease` / `leaseStanding` 及其常量、`bindAndLease` 里的 `AcquireLease`（`routing.Bind` 的组绑定与租约无关，**保留**，函数可改名 `bindGroup`）、停机函数里的 `ReleaseLease`、`renewLease` 及 `runActivity` 里对它的调用、`leaseNotOurs`、`activity_lease_test.go.tmpl`（以及 `demo.go:609` 的清单项）。其他测试里实现 `svcglobal.Routing` 的假对象相应去掉租约方法的依赖（接口本身不变）。
 - 崩溃重启时“30s 租约 vs 15s 锁”的冲突随之消失：activity 不再有任何需要“拿到”的东西。
 

@@ -113,3 +113,7 @@ TOOL（pretag、source-head-check、冲突标记门禁、mirror-local.sh、示�
 - **分册 3（CFG/SKILL/NONCORE）**：A4① 每 Mod 配置 schema（`d1226825`、`6e0619bb`）+ RR-38/40 + B10 两条管线分工（维护者选 A）→ CFG；skill：衍生物改名（`4451a0a5`）、撤除重试 RR-21 后续（`1ce01e5c`）+ RR-30/31、停止入口统一（`3fad5b6e`）+ RR-32、Summon 改名（`509c381f`）、分区存放（`6826eeb2`）+ RR-33/34、已放弃分区（`f28285ad`）、B3③ 能力表（`cd8ed341`、`e999f68e`）+ RR-37/39、RR-21/22/23（`5c1f4176`）→ SKILL（SKILL-5/13/18/21 等旧条目的 checkpoint 版本口径现为 7）；RR-20 TaskPool → NONCORE-46。
 - 原“下个大版本”项（A2③、A3②、A4①、B3③、saga ③④）都已在本版完成：分册里“留到下个大版本”的说法全部改掉。
 - 每册 `_summary` 更新：条目总表、兼容破坏、业务/运维改动、门禁、按包索引、外部验证、仍未闭环（必须 0）。
+
+## 汇总完成（2026-10-07）
+
+两份总文档 [v1.23.0-GUIDE](../../release/v1.23.0-GUIDE.md) 与 [v1.23.0-IMPLEMENTATION](../../release/v1.23.0-IMPLEMENTATION.md) 已按本规格合成；上面“共享文件小改”按 `5e72ca4d` 的实际行号做了（`app/app.go:146`、`gift_saga.go.tmpl:369`，不是本规格写的 `:130` / `:360`）。汇总时发现的分册差异列在 [交接 README §0](README.md#0-当前状态2026-10-07发版前工作全部完成下一步是打-tag)，未裁决。

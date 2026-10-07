@@ -88,7 +88,7 @@ skill / 战斗：`skill/` 运行时与 `battle.go.tmpl` 都按帧推进，不读
 | saga | `engine.go` / `command_consumer.go` / `mongo_store.go` / `nest.go` / `record.go` / `dataengine_step_inbox.go`：协调器截止、claim、回执 TTL、迟到告警；saga 在 `wt-sagadir` 改动中，本轮不碰 |
 | codegen | `render_player_tcp.go`（生成 TCP 的读写 deadline、耗时）、`project.go`（工具重试截止）、`shutdown_budget.go`（注释） |
 | kit 服务 | `kit/service/directory`（目录项 TTL 租约）、`kit/service/global` 路由（迁移审计时间）、`kit/service/platform`（订单、支付、投递退避）、`kit/service/chat`（`StoredAtUnix` 与保留期清理，第八轮起）、`kit/service/account`（会话 token、名字预约 TTL、服务器行与运维记录时间，第八轮起）；match 第八轮整体改为业务时钟（§3.1） |
-| game-demo 模板 | `playerowner.go.tmpl:119` / `:125`（驻留与闲置卸载；**更正 2026-10-06**：原写“玩家归属租约”，静态绑定（v1.20.0）之后那里已没有按玩家的租约，豁免注释写的是 “residency and idle unload are leases”）、`gift_saga.go.tmpl:353` 与 `game/handler/start_gift.go.tmpl:48`（saga 截止）、`game/controllers/player/purchase.go.tmpl:63`（支付时间）、`internal/access/player/tcp/auth.go.tmpl`（会话 id）、`cmd/loadtest`；落在 `game` 目录下的几处标 `//glsvet:system-clock` |
+| game-demo 模板 | `playerowner.go.tmpl:124` / `:130`（驻留与闲置卸载；**更正 2026-10-06**：原写“玩家归属租约”，静态绑定（v1.20.0）之后那里已没有按玩家的租约，豁免注释写的是 “residency and idle unload are leases”）、`gift_saga.go.tmpl:369` 与 `game/handler/start_gift.go.tmpl:48`（saga 截止）、`game/controllers/player/purchase.go.tmpl:63`（支付时间）、`internal/access/player/tcp/auth.go.tmpl`（会话 id）、`cmd/loadtest`；落在 `game` 目录下的几处标 `//glsvet:system-clock`（行号按 v1.23.0 代码冻结点 `5e72ca4d` 更正，2026-10-07：原写 `playerowner.go.tmpl:119` / `:125`、`gift_saga.go.tmpl:353`） |
 
 ### 3.3 拿不准、交维护者
 
