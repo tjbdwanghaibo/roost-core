@@ -588,22 +588,48 @@ func diffSnapshot(before, after map[string][sha256.Size]byte) []string {
 }
 
 func gitChanged(root string) ([]string, error) {
-	cmd := exec.Command("git", "status", "--porcelain", "--untracked-files=all")
+	// RR-20261006-58: porcelain paths are relative to the REPOSITORY root and
+	// quoted when they hold a space, while generator prefixes are relative to
+	// the PROJECT root. A project in a subdirectory therefore matched nothing
+	// and `generate --changed` ran only the registry while reporting success.
+	// -z gives raw, unquoted paths; --show-prefix is the project's place in
+	// the repository; "-- ." keeps changes outside the project out.
+	prefixCmd := exec.Command("git", "rev-parse", "--show-prefix")
+	prefixCmd.Dir = root
+	rawPrefix, err := prefixCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git rev-parse --show-prefix: %w", err)
+	}
+	prefix := strings.TrimSpace(string(rawPrefix))
+
+	cmd := exec.Command("git", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".")
 	cmd.Dir = root
 	raw, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git status: %w", err)
 	}
 	var out []string
-	for _, line := range strings.Split(string(raw), "\n") {
-		if len(line) < 4 {
+	add := func(repoPath string) {
+		if path, inProject := strings.CutPrefix(repoPath, prefix); inProject {
+			out = append(out, path)
+		}
+	}
+	// Each entry is "XY <path>"; a rename or copy is followed by one more
+	// field, its source path. Both sides count: moving a definition out of a
+	// generator's input is a change that generator must see.
+	fields := strings.Split(string(raw), "\x00")
+	for i := 0; i < len(fields); i++ {
+		entry := fields[i]
+		if len(entry) < 4 {
 			continue
 		}
-		path := strings.TrimSpace(line[3:])
-		if idx := strings.LastIndex(path, " -> "); idx >= 0 {
-			path = path[idx+4:]
+		add(entry[3:])
+		if entry[0] == 'R' || entry[0] == 'C' {
+			i++
+			if i < len(fields) {
+				add(fields[i])
+			}
 		}
-		out = append(out, filepath.ToSlash(path))
 	}
 	return out, nil
 }
