@@ -6,7 +6,7 @@ package roost
 // 之前它不声明预算，App 只给固定 3s 保底：低于它自己的 shutdown_timeout 10s，与 nest.request_timeout 3s
 // 也没有余量（在途请求用满 3s 时连接排空没有时间）。生成公式按“声明预算之和 + 3s × 未声明数 + 5s”计算，
 // 所以 game 服务的 total 与宽限期各多 10s − 3s = 7s（-mods configdata,mongo,nats,dataengine,nest 时
-// 101s / 106s → 108s / 113s；App 单实例锁的 Release 预留再加 3s，现为 111s / 116s）；doctor 按配置里的 player_access.tcp.shutdown_timeout 判定并给建议值。
+// 101s / 106s → 108s / 113s；App 单实例锁的 Release 预留再加 3s，现为 111s / 116s；RR-20261006-59 后 game 多一个 etcd Mod，为 114s / 119s）；doctor 按配置里的 player_access.tcp.shutdown_timeout 判定并给建议值。
 
 import (
 	"strings"
@@ -40,7 +40,7 @@ func TestGeneratedShutdownCountsThePlayerTCPStopBudget(t *testing.T) {
 	}
 	for _, rel := range gameConfigs {
 		body := readProjectFile(t, root, rel)
-		wants := []string{"40s declared + 3s x 21\n", "3s for the singleton release = 111s", "total_timeout: 111s\n"}
+		wants := []string{"40s declared + 3s x 22\n", "3s for the singleton release = 114s", "total_timeout: 114s\n"}
 		if rel != gameConfigs[2] { // the k8s secret example carries no player_access block: the Mod's default 10s
 			wants = append(wants, "shutdown_timeout: 10s\n")
 		}
@@ -50,7 +50,7 @@ func TestGeneratedShutdownCountsThePlayerTCPStopBudget(t *testing.T) {
 			}
 		}
 	}
-	if item := shutdownStatus(t, root)["shutdown:game"]; item.Status != StatusOK || !strings.Contains(item.Detail, "total_timeout 111s, grace period 116s") {
+	if item := shutdownStatus(t, root)["shutdown:game"]; item.Status != StatusOK || !strings.Contains(item.Detail, "total_timeout 114s, grace period 119s") {
 		t.Errorf("fresh game-demo: %s %s", item.Status, item.Detail)
 	}
 }
@@ -69,7 +69,7 @@ func TestDoctorCountsTheConfiguredPlayerTCPStopBudget(t *testing.T) {
 	}
 	item := shutdownStatus(t, root)["shutdown:game"]
 	want := plan.total + 20*time.Second
-	if item.Status != StatusWarn || !strings.Contains(item.Detail, "(60s declared + 3s x 21 + 3s singleton release = ") || !strings.Contains(item.Detail, "Set it to "+seconds(want)) {
+	if item.Status != StatusWarn || !strings.Contains(item.Detail, "(60s declared + 3s x 22 + 3s singleton release = ") || !strings.Contains(item.Detail, "Set it to "+seconds(want)) {
 		t.Fatalf("player_access.tcp.shutdown_timeout 30s with total_timeout %s: %s %s, want a WARN with 60s declared and advice %s",
 			seconds(plan.total), item.Status, item.Detail, seconds(want))
 	}

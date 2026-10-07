@@ -25,6 +25,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
+	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	"github.com/tjbdwanghaibo/roost-core/servicerpc"
 )
 
@@ -428,11 +429,26 @@ type BusClient struct {
 	rpc *servicerpc.BusClient
 }
 
+// AffinityMethods are the methods that route by an affinity key: every call
+// carrying the same key reaches the same instance.
+const AffinityMethods = "OpenActivity, LookupActivity, PendingActivities, NotifyPhase, ApplyProgress, LookupParticipant, Reservation, OwedDispatches, LookupDispatch, AttemptDispatch, AckDispatch"
+
 // NewBusClient builds a client. serviceType empty means ServiceType; timeout
 // non-positive means DefaultCallTimeout.
-func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
+//
+// discovery is required. AffinityMethods route by key, and reaching "the
+// instance that owns this key" means choosing a sid from the discovered
+// instances; without discovery there is nothing to choose from and the call
+// can only go to the queue group, i.e. to a random instance. That is what the
+// generated client did until RR-20261006-59 (F09-R1) — the marker read as
+// configured and routed at random — so a missing discovery is refused here
+// rather than degraded.
+func NewBusClient(b bus.IBus, discovery fetcd.IDiscovery, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
 	if b == nil {
 		return nil, fmt.Errorf("activity: bus is nil")
+	}
+	if discovery == nil {
+		return nil, fmt.Errorf("activity: discovery is nil; %s route by an affinity key and need service discovery to reach one instance per key", AffinityMethods)
 	}
 	if serviceType == "" {
 		serviceType = ServiceType
@@ -440,27 +456,40 @@ func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ..
 	if timeout <= 0 {
 		timeout = DefaultCallTimeout
 	}
-	// At least one method routes by key, so the picker that reads the key is
-	// installed here rather than left to each deployment to remember. A
-	// caller's own options come after, so it can still override.
+	// The picker that reads the key is installed here rather than left to
+	// each deployment to remember. A caller's own options come after, so it
+	// can still override.
 	//
 	// This matters for a specific reason: a service whose state is partitioned
 	// across instances — a queue kept whole in one key, say — has its
-	// throughput bounded by contention on that key, and round-robin routing
-	// turns that bound into cross-replica contention. Routing by key makes the
+	// throughput bounded by contention on that key, and random routing turns
+	// that bound into cross-replica contention. Routing by key makes the
 	// contention in-process instead. It is the difference between a design
 	// cost and a design defect.
 	options := append([]servicerpc.Option{
 		servicerpc.WithKeyAffinity(servicerpc.AffinityKeyFromContext),
 	}, opts...)
-	return &BusClient{rpc: servicerpc.NewBusClient(b, serviceType, timeout, options...)}, nil
+	return &BusClient{rpc: servicerpc.NewDiscoveredBusClient(b, serviceType, timeout, discovery, options...)}, nil
 }
 
+// call sends a method with no affinity to the queue group: any instance may
+// answer it.
 func (c *BusClient) call(ctx context.Context, method string, req any, resp any) error {
 	if c == nil || c.rpc == nil {
 		return fmt.Errorf("activity: client is not configured")
 	}
 	return c.rpc.CallChecked(ctx, 0, method, req, resp, "activity call failed")
+}
+
+// callByAffinity sends a method with an affinity key to one instance: it
+// discovers the instances, the key picker maps the key in ctx to a sid, and
+// the call goes to that sid. Discovery, picking and the call share one
+// timeout.
+func (c *BusClient) callByAffinity(ctx context.Context, method string, req any, resp any) error {
+	if c == nil || c.rpc == nil {
+		return fmt.Errorf("activity: client is not configured")
+	}
+	return c.rpc.CallDiscoveredChecked(ctx, method, req, resp, "activity call failed")
 }
 
 // OpenActivity opens an activity for a named set of game servers. It is
@@ -473,7 +502,7 @@ func (c *BusClient) OpenActivity(ctx context.Context, key Key, expectedGameSIDs 
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, key.Group())
 	var resp rpcOpenActivityResponse
-	err := c.call(ctx, MethodOpenActivity, rpcOpenActivityRequest{
+	err := c.callByAffinity(ctx, MethodOpenActivity, rpcOpenActivityRequest{
 		Key:              key,
 		ExpectedGameSIDs: expectedGameSIDs,
 	}, &resp)
@@ -488,7 +517,7 @@ func (c *BusClient) LookupActivity(ctx context.Context, key Key) (Activity, bool
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, key.Group())
 	var resp rpcLookupActivityResponse
-	err := c.call(ctx, MethodLookupActivity, rpcLookupActivityRequest{
+	err := c.callByAffinity(ctx, MethodLookupActivity, rpcLookupActivityRequest{
 		Key: key,
 	}, &resp)
 	return resp.Activity, resp.Found, err
@@ -503,7 +532,7 @@ func (c *BusClient) PendingActivities(ctx context.Context, groupID string, limit
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, groupID)
 	var resp rpcPendingActivitiesResponse
-	err := c.call(ctx, MethodPendingActivities, rpcPendingActivitiesRequest{
+	err := c.callByAffinity(ctx, MethodPendingActivities, rpcPendingActivitiesRequest{
 		GroupID: groupID,
 		Limit:   limit,
 	}, &resp)
@@ -520,7 +549,7 @@ func (c *BusClient) NotifyPhase(ctx context.Context, key Key, gameSID int32) (Ac
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, key.Group())
 	var resp rpcNotifyPhaseResponse
-	err := c.call(ctx, MethodNotifyPhase, rpcNotifyPhaseRequest{
+	err := c.callByAffinity(ctx, MethodNotifyPhase, rpcNotifyPhaseRequest{
 		Key:     key,
 		GameSID: gameSID,
 	}, &resp)
@@ -537,7 +566,7 @@ func (c *BusClient) ApplyProgress(ctx context.Context, key Key, participantID st
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, key.Group())
 	var resp rpcApplyProgressResponse
-	err := c.call(ctx, MethodApplyProgress, rpcApplyProgressRequest{
+	err := c.callByAffinity(ctx, MethodApplyProgress, rpcApplyProgressRequest{
 		Key:           key,
 		ParticipantID: participantID,
 		RequestID:     requestID,
@@ -554,7 +583,7 @@ func (c *BusClient) LookupParticipant(ctx context.Context, key Key, participantI
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, key.Group())
 	var resp rpcLookupParticipantResponse
-	err := c.call(ctx, MethodLookupParticipant, rpcLookupParticipantRequest{
+	err := c.callByAffinity(ctx, MethodLookupParticipant, rpcLookupParticipantRequest{
 		Key:           key,
 		ParticipantID: participantID,
 	}, &resp)
@@ -571,7 +600,7 @@ func (c *BusClient) Reservation(ctx context.Context, key Key, participantID stri
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, key.Group())
 	var resp rpcReservationResponse
-	err := c.call(ctx, MethodReservation, rpcReservationRequest{
+	err := c.callByAffinity(ctx, MethodReservation, rpcReservationRequest{
 		Key:           key,
 		ParticipantID: participantID,
 		RequestID:     requestID,
@@ -600,7 +629,7 @@ func (c *BusClient) OwedDispatches(ctx context.Context, groupID string, gameSID 
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, groupID)
 	var resp rpcOwedDispatchesResponse
-	err := c.call(ctx, MethodOwedDispatches, rpcOwedDispatchesRequest{
+	err := c.callByAffinity(ctx, MethodOwedDispatches, rpcOwedDispatchesRequest{
 		GroupID: groupID,
 		GameSID: gameSID,
 		Limit:   limit,
@@ -616,7 +645,7 @@ func (c *BusClient) LookupDispatch(ctx context.Context, key Key, gameSID int32) 
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, key.Group())
 	var resp rpcLookupDispatchResponse
-	err := c.call(ctx, MethodLookupDispatch, rpcLookupDispatchRequest{
+	err := c.callByAffinity(ctx, MethodLookupDispatch, rpcLookupDispatchRequest{
 		Key:     key,
 		GameSID: gameSID,
 	}, &resp)
@@ -637,7 +666,7 @@ func (c *BusClient) AttemptDispatch(ctx context.Context, key Key, gameSID int32)
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, key.Group())
 	var resp rpcAttemptDispatchResponse
-	err := c.call(ctx, MethodAttemptDispatch, rpcAttemptDispatchRequest{
+	err := c.callByAffinity(ctx, MethodAttemptDispatch, rpcAttemptDispatchRequest{
 		Key:     key,
 		GameSID: gameSID,
 	}, &resp)
@@ -654,7 +683,7 @@ func (c *BusClient) AckDispatch(ctx context.Context, key Key, gameSID int32, tok
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, key.Group())
 	var resp rpcAckDispatchResponse
-	err := c.call(ctx, MethodAckDispatch, rpcAckDispatchRequest{
+	err := c.callByAffinity(ctx, MethodAckDispatch, rpcAckDispatchRequest{
 		Key:     key,
 		GameSID: gameSID,
 		Token:   token,

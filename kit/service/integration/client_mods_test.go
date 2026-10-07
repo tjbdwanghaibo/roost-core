@@ -37,10 +37,17 @@ func TestEveryClientModDependsOnTheNATSMod(t *testing.T) {
 		"rank":     rank.NewClientMod(),
 		"session":  session.NewClientMod(),
 	}
+	// match and activity route methods by an affinity key, which needs the
+	// etcd Mod's discovery (RR-20261006-59); the others need only the bus.
+	affinity := map[string]bool{"match": true, "activity": true}
 	for name, client := range clients {
+		want := []app.ModName{kitmods.ModNats}
+		if affinity[name] {
+			want = append(want, kitmods.ModEtcd)
+		}
 		got := client.DependsOn()
-		if !reflect.DeepEqual(got, []app.ModName{kitmods.ModNats}) {
-			t.Errorf("%s ClientMod depends on %v; it must name the NATS mod (%q), not the bus capability", name, got, kitmods.ModNats)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s ClientMod depends on %v; want %v (the NATS mod by name, not the bus capability)", name, got, want)
 		}
 	}
 }

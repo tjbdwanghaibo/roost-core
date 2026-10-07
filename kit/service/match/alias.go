@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/bus"
+	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	core "github.com/tjbdwanghaibo/roost-core/service/match"
 	"github.com/tjbdwanghaibo/roost-core/servicerpc"
 	"github.com/tjbdwanghaibo/roost-core/versionstore"
@@ -113,6 +114,7 @@ const (
 	CapabilityName      = core.CapabilityName
 	LocalCapabilityName = core.LocalCapabilityName
 	DefaultCallTimeout  = core.DefaultCallTimeout
+	AffinityMethods     = core.AffinityMethods
 
 	MethodEnqueue     = core.MethodEnqueue
 	MethodCancel      = core.MethodCancel
@@ -127,8 +129,9 @@ const (
 var Methods = core.Methods
 
 // NewBusClient returns the remote Matchmaker; see roost-core/service/match.NewBusClient.
-func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
-	return core.NewBusClient(b, serviceType, timeout, opts...)
+// Every method routes by queue key, so discovery is required (RR-20261006-59).
+func NewBusClient(b bus.IBus, discovery fetcd.IDiscovery, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
+	return core.NewBusClient(b, discovery, serviceType, timeout, opts...)
 }
 
 // RegisterHandlers publishes the Matchmaker handlers on the bus; see roost-core/service/match.RegisterHandlers.

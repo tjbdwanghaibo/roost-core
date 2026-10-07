@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
+	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	"github.com/tjbdwanghaibo/roost-core/servicerpc"
 )
@@ -203,7 +204,11 @@ func (m *ClientMod) Name() app.ModName { return CapabilityName }
 // never be assembled in a real process: "unknown mod dependency \"bus\"".
 // That shipped in every generated client until a generated game template
 // tried to start (roost-codegen U-0024).
-func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }
+//
+// It also names the etcd Mod: AffinityMethods route by key, which needs the
+// discovery that Mod publishes (RR-20261006-59). A process without it is
+// refused at assembly rather than left to route those calls at random.
+func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats, mods.ModEtcd} }
 
 // clientModConfig is what the client Mod reads (maintainer decision A4 ①):
 // the declaration the App checks before any Mod Init, and Init reads it with
@@ -246,7 +251,15 @@ func (m *ClientMod) Provide(r *app.Registry) error {
 		return fmt.Errorf("shop client mod: capability %q not found; a process that calls "+
 			"Shop needs a bus", mods.ModBus)
 	}
-	client, err := NewBusClient(busClient, m.serviceType, m.timeout, m.options...)
+	// AffinityMethods need discovery to reach one instance per key. Refused
+	// here, at startup, when the process has no etcd Mod: the alternative is
+	// the old silent fallback to random routing (RR-20261006-59).
+	discovery, ok := app.Lookup[fetcd.IDiscovery](r, mods.ModEtcdDiscov)
+	if !ok || discovery == nil {
+		return fmt.Errorf("shop client mod: capability %q not found; %s route by an "+
+			"affinity key and need service discovery — add the etcd Mod to this process", mods.ModEtcdDiscov, AffinityMethods)
+	}
+	client, err := NewBusClient(busClient, discovery, m.serviceType, m.timeout, m.options...)
 	if err != nil {
 		return fmt.Errorf("shop client mod: %w", err)
 	}

@@ -303,6 +303,8 @@ func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ..
 	return &BusClient{rpc: servicerpc.NewBusClient(b, serviceType, timeout, opts...)}, nil
 }
 
+// call sends a method with no affinity to the queue group: any instance may
+// answer it.
 func (c *BusClient) call(ctx context.Context, method string, req any, resp any) error {
 	if c == nil || c.rpc == nil {
 		return fmt.Errorf("rank: client is not configured")

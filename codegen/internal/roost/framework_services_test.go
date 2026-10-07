@@ -264,3 +264,52 @@ func TestDoctorReportsUnimplementedCollaborators(t *testing.T) {
 		t.Error("a project without framework services gets a SERVICES guide")
 	}
 }
+
+// RR-20261006-59: a framework service whose generated client routes by an
+// affinity key needs etcd discovery on both sides — the ClientMod refuses to
+// start without it, and the owner must register for callers to find its sid.
+// The catalog's Affinity flag is what adds the etcd Mod, so it must agree with
+// the generated transports, which declare AffinityMethods exactly when some
+// method routes by key.
+func TestFrameworkCatalogAffinityMatchesTheGeneratedClients(t *testing.T) {
+	repo := filepath.Join("..", "..", "..")
+	for name, spec := range frameworkCatalog {
+		var transports []string
+		for _, dir := range []string{filepath.Join(repo, "kit", "service", spec.ImportPath()), filepath.Join(repo, "service", spec.Package)} {
+			matches, _ := filepath.Glob(filepath.Join(dir, "*_rpc_gen.go"))
+			transports = append(transports, matches...)
+		}
+		if len(transports) == 0 {
+			t.Fatalf("%s: no generated transport found", name)
+		}
+		declares := false
+		for _, path := range transports {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			declares = declares || strings.Contains(string(raw), "\nconst AffinityMethods = ")
+		}
+		if declares != spec.Affinity {
+			t.Errorf("%s: catalog Affinity=%v but the generated client declares AffinityMethods=%v", name, spec.Affinity, declares)
+		}
+	}
+
+	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"configdata", "nest"}, nil)
+	m.Services["match"] = ServiceSpec{Framework: "match"}
+	m.Services["mail"] = ServiceSpec{Framework: "mail"}
+	game := m.Services["game"]
+	game.Uses = []string{"mail"}
+	m.Services["game"] = game
+	if contains(effectiveServiceMods(m, "game"), "etcd") || contains(effectiveServiceMods(m, "mail"), "etcd") {
+		t.Fatal("mail routes nothing by key; neither its owner nor its caller needs etcd")
+	}
+	game.Uses = []string{"mail", "match"}
+	m.Services["game"] = game
+	if !contains(effectiveServiceMods(m, "game"), "etcd") {
+		t.Fatalf("game calls match (affinity) but gets no etcd Mod: %v", effectiveServiceMods(m, "game"))
+	}
+	if !contains(effectiveServiceMods(m, "match"), "etcd") {
+		t.Fatalf("the match owner does not register in etcd: %v", effectiveServiceMods(m, "match"))
+	}
+}

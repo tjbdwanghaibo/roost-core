@@ -3,6 +3,7 @@ package servicerpc
 import (
 	"fmt"
 	"go/ast"
+	"slices"
 	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
@@ -168,6 +169,9 @@ func emittedNames(service Service) []string {
 		"ClientMod", "NewClientMod", "clientModConfig",
 	}
 	for _, method := range service.Methods {
+		if method.Affinity != "" && !slices.Contains(names, "AffinityMethods") {
+			names = append(names, "AffinityMethods")
+		}
 		names = append(names,
 			"Method"+method.Name,
 			"rpc"+method.Name+"Request",

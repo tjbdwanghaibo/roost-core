@@ -124,6 +124,9 @@ type view struct {
 	// change nothing — a marker that reads as configured and is not, which is
 	// worse than no marker.
 	AnyAffinity bool
+	// AffinityMethods names the methods that route by key, for the error a
+	// client without discovery gets (RR-20261006-59).
+	AffinityMethods string
 	// Iface is the interface name, e.g. "Mail".
 	Iface string
 	// Lower is the interface name with a lowercase first letter, for
@@ -241,6 +244,10 @@ func newView(service Service) (view, error) {
 
 		if method.Affinity != "" {
 			v.AnyAffinity = true
+			if v.AffinityMethods != "" {
+				v.AffinityMethods += ", "
+			}
+			v.AffinityMethods += method.Name
 		}
 		v.Methods = append(v.Methods, mv)
 	}

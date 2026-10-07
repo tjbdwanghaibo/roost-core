@@ -25,6 +25,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
+	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
 	"github.com/tjbdwanghaibo/roost-core/servicerpc"
 )
 
@@ -316,11 +317,26 @@ type BusClient struct {
 	rpc *servicerpc.BusClient
 }
 
+// AffinityMethods are the methods that route by an affinity key: every call
+// carrying the same key reaches the same instance.
+const AffinityMethods = "Enqueue, Cancel, Ticket, Candidates, Commit, Match, QueueLength"
+
 // NewBusClient builds a client. serviceType empty means ServiceType; timeout
 // non-positive means DefaultCallTimeout.
-func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
+//
+// discovery is required. AffinityMethods route by key, and reaching "the
+// instance that owns this key" means choosing a sid from the discovered
+// instances; without discovery there is nothing to choose from and the call
+// can only go to the queue group, i.e. to a random instance. That is what the
+// generated client did until RR-20261006-59 (F09-R1) — the marker read as
+// configured and routed at random — so a missing discovery is refused here
+// rather than degraded.
+func NewBusClient(b bus.IBus, discovery fetcd.IDiscovery, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
 	if b == nil {
 		return nil, fmt.Errorf("match: bus is nil")
+	}
+	if discovery == nil {
+		return nil, fmt.Errorf("match: discovery is nil; %s route by an affinity key and need service discovery to reach one instance per key", AffinityMethods)
 	}
 	if serviceType == "" {
 		serviceType = ServiceType
@@ -328,27 +344,40 @@ func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ..
 	if timeout <= 0 {
 		timeout = DefaultCallTimeout
 	}
-	// At least one method routes by key, so the picker that reads the key is
-	// installed here rather than left to each deployment to remember. A
-	// caller's own options come after, so it can still override.
+	// The picker that reads the key is installed here rather than left to
+	// each deployment to remember. A caller's own options come after, so it
+	// can still override.
 	//
 	// This matters for a specific reason: a service whose state is partitioned
 	// across instances — a queue kept whole in one key, say — has its
-	// throughput bounded by contention on that key, and round-robin routing
-	// turns that bound into cross-replica contention. Routing by key makes the
+	// throughput bounded by contention on that key, and random routing turns
+	// that bound into cross-replica contention. Routing by key makes the
 	// contention in-process instead. It is the difference between a design
 	// cost and a design defect.
 	options := append([]servicerpc.Option{
 		servicerpc.WithKeyAffinity(servicerpc.AffinityKeyFromContext),
 	}, opts...)
-	return &BusClient{rpc: servicerpc.NewBusClient(b, serviceType, timeout, options...)}, nil
+	return &BusClient{rpc: servicerpc.NewDiscoveredBusClient(b, serviceType, timeout, discovery, options...)}, nil
 }
 
+// call sends a method with no affinity to the queue group: any instance may
+// answer it.
 func (c *BusClient) call(ctx context.Context, method string, req any, resp any) error {
 	if c == nil || c.rpc == nil {
 		return fmt.Errorf("match: client is not configured")
 	}
 	return c.rpc.CallChecked(ctx, 0, method, req, resp, "match call failed")
+}
+
+// callByAffinity sends a method with an affinity key to one instance: it
+// discovers the instances, the key picker maps the key in ctx to a sid, and
+// the call goes to that sid. Discovery, picking and the call share one
+// timeout.
+func (c *BusClient) callByAffinity(ctx context.Context, method string, req any, resp any) error {
+	if c == nil || c.rpc == nil {
+		return fmt.Errorf("match: client is not configured")
+	}
+	return c.rpc.CallDiscoveredChecked(ctx, method, req, resp, "match call failed")
 }
 
 // Enqueue adds a subject to a queue. Idempotent per requestID.
@@ -359,7 +388,7 @@ func (c *BusClient) Enqueue(ctx context.Context, queue Queue, subject Subject, r
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, queue.Key())
 	var resp rpcEnqueueResponse
-	err := c.call(ctx, MethodEnqueue, rpcEnqueueRequest{
+	err := c.callByAffinity(ctx, MethodEnqueue, rpcEnqueueRequest{
 		Queue:     queue,
 		Subject:   subject,
 		RequestID: requestID,
@@ -377,7 +406,7 @@ func (c *BusClient) Cancel(ctx context.Context, queue Queue, ticketID string, su
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, queue.Key())
 	var resp rpcCancelResponse
-	err := c.call(ctx, MethodCancel, rpcCancelRequest{
+	err := c.callByAffinity(ctx, MethodCancel, rpcCancelRequest{
 		Queue:    queue,
 		TicketID: ticketID,
 		Subject:  subject,
@@ -393,7 +422,7 @@ func (c *BusClient) Ticket(ctx context.Context, queue Queue, ticketID string, su
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, queue.Key())
 	var resp rpcTicketResponse
-	err := c.call(ctx, MethodTicket, rpcTicketRequest{
+	err := c.callByAffinity(ctx, MethodTicket, rpcTicketRequest{
 		Queue:    queue,
 		TicketID: ticketID,
 		Subject:  subject,
@@ -410,7 +439,7 @@ func (c *BusClient) Candidates(ctx context.Context, queue Queue, limit int) ([]T
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, queue.Key())
 	var resp rpcCandidatesResponse
-	err := c.call(ctx, MethodCandidates, rpcCandidatesRequest{
+	err := c.callByAffinity(ctx, MethodCandidates, rpcCandidatesRequest{
 		Queue: queue,
 		Limit: limit,
 	}, &resp)
@@ -427,7 +456,7 @@ func (c *BusClient) Commit(ctx context.Context, queue Queue, ticketIDs []string)
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, queue.Key())
 	var resp rpcCommitResponse
-	err := c.call(ctx, MethodCommit, rpcCommitRequest{
+	err := c.callByAffinity(ctx, MethodCommit, rpcCommitRequest{
 		Queue:     queue,
 		TicketIDs: ticketIDs,
 	}, &resp)
@@ -442,7 +471,7 @@ func (c *BusClient) Match(ctx context.Context, queue Queue, matchID string) (Mat
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, queue.Key())
 	var resp rpcMatchResponse
-	err := c.call(ctx, MethodMatch, rpcMatchRequest{
+	err := c.callByAffinity(ctx, MethodMatch, rpcMatchRequest{
 		Queue:   queue,
 		MatchID: matchID,
 	}, &resp)
@@ -457,7 +486,7 @@ func (c *BusClient) QueueLength(ctx context.Context, queue Queue) (int, error) {
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, queue.Key())
 	var resp rpcQueueLengthResponse
-	err := c.call(ctx, MethodQueueLength, rpcQueueLengthRequest{
+	err := c.callByAffinity(ctx, MethodQueueLength, rpcQueueLengthRequest{
 		Queue: queue,
 	}, &resp)
 	return resp.Length, err

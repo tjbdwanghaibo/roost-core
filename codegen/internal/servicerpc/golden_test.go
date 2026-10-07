@@ -1,13 +1,19 @@
 package servicerpc
 
 import (
+	"context"
 	"flag"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/genutil"
 )
@@ -159,38 +165,175 @@ type Shop interface {
 }
 `
 
-// An affinity marker must change the generated code, in both places it has to.
+// An affinity marker must change where the generated client sends a call.
 //
 // It was parsed and ignored in the first version: the marker validated, a
-// context key was never set, and the picker was never installed — so a service
-// that declared affinity got round-robin routing and read as configured. A
-// marker that does nothing is worse than no marker.
+// context key was never set, and the picker was never installed. The second
+// version set the key and installed the picker, and this test compared the
+// generated TEXT for both — while the generated call still went out as
+// CallChecked(ctx, 0, …), the queue-group call that never consults a picker
+// and has no discovery to pick from (RR-20261006-59, F09-R1: match's 7 and
+// activity's 11 affinity methods were all routed at random). So this test now
+// compiles the generated package and runs it against a recording bus.
 func TestAnAffinityMarkerReachesTheGeneratedClient(t *testing.T) {
 	services, err := ParseDir(writeDir(t, goldenService))
 	if err != nil {
 		t.Fatal(err)
 	}
-	content := generateJoined(t, services[0])
-	source := string(content)
-	// The method attaches the key.
-	if !contains(source, "servicerpc.WithAffinityKey(ctx, shelfID)") {
-		t.Fatal("the affinity method does not attach its key to the context; the call would be " +
-			"routed round-robin and the marker would mean nothing")
+	files, err := Generate(services[0])
+	if err != nil {
+		t.Fatal(err)
 	}
-	// And the constructor installs the picker that reads it. Without this the
-	// key travels and nothing looks at it.
-	if !contains(source, "servicerpc.WithKeyAffinity(servicerpc.AffinityKeyFromContext)") {
-		t.Fatal("the constructor does not install the affinity picker; the key would be set and " +
-			"never read")
+	sources := map[string]string{
+		"shop.go": goldenService,
+		// The two hand-written pieces a service package supplies.
+		"run.go": "package shop\n\nimport \"context\"\n\nfunc (s *Server) run(ctx context.Context) error { <-ctx.Done(); return nil }\n\n" +
+			"func Error(err error) (int32, string) {\n\tif err == nil {\n\t\treturn 0, \"\"\n\t}\n\treturn 1, err.Error()\n}\n",
+		"route_test.go": affinityRoutingTest,
 	}
-	// A method without the marker must not attach anything.
-	buyStart := indexOf(source, "func (c *BusClient) Buy(")
-	buyEnd := indexOf(source[buyStart:], "\n}\n")
-	if buyStart < 0 || buyEnd < 0 {
-		t.Fatal("could not find the Buy client method")
+	for _, file := range files {
+		sources[file.Name] = string(file.Content)
 	}
-	if contains(source[buyStart:buyStart+buyEnd], "WithAffinityKey") {
-		t.Fatal("a method with no affinity marker attaches an affinity key")
+	runGeneratedPackageTests(t, sources)
+}
+
+// affinityRoutingTest runs inside the generated package. Browse carries
+// affinity=shelfID; Buy carries none.
+const affinityRoutingTest = `package shop
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/bus"
+	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
+	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+)
+
+type recordingBus struct {
+	bus.IBus
+	mu     sync.Mutex
+	queued []string
+	sids   map[string][]int32
+}
+
+func (b *recordingBus) Call(_ context.Context, _ string, method string, _ any, _ any) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.queued = append(b.queued, method)
+	return nil
+}
+
+func (b *recordingBus) CallTo(_ context.Context, _ string, sid int32, method string, _ any, _ any) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sids[method] = append(b.sids[method], sid)
+	return nil
+}
+
+type threeInstances struct{ fetcd.IDiscovery }
+
+func (threeInstances) Discover(context.Context, string) ([]*fetcd.ServiceInfo, error) {
+	return []*fetcd.ServiceInfo{{Sid: 11}, {Sid: 12}, {Sid: 13}}, nil
+}
+
+func TestTheSameKeyAlwaysReachesTheSameInstance(t *testing.T) {
+	recorder := &recordingBus{sids: map[string][]int32{}}
+	client, err := ` + newAffinityClient + `
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for i := 0; i < 4; i++ {
+		if _, err := client.Browse(ctx, "shelf-A", 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[int32]bool{}
+	for i := 0; i < 32; i++ {
+		before := len(recorder.sids[MethodBrowse])
+		if _, err := client.Browse(ctx, fmt.Sprintf("shelf-%d", i), 10); err != nil {
+			t.Fatal(err)
+		}
+		if after := recorder.sids[MethodBrowse]; len(after) > before {
+			seen[after[len(after)-1]] = true
+		}
+	}
+	routed := recorder.sids[MethodBrowse]
+	if len(routed) != 36 {
+		t.Fatalf("Browse (affinity=shelfID) went to a named instance %d times out of 36; %d went to the queue group (Call=%d CallTo=%d) — affinity was not applied",
+			len(routed), len(recorder.queued), len(recorder.queued), len(routed))
+	}
+	for _, sid := range routed[:4] {
+		if sid != routed[0] {
+			t.Fatalf("one key reached sids %v; the same key must always reach the same instance", routed[:4])
+		}
+	}
+	if len(seen) < 2 {
+		t.Fatalf("32 keys all reached %v; affinity must spread keys over instances", seen)
+	}
+	if _, err := client.Buy(ctx, 7, BuyRequest{ProductID: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.queued) != 1 || recorder.queued[0] != MethodBuy {
+		t.Fatalf("Buy has no affinity and must stay on the queue group; queued calls %v", recorder.queued)
+	}
+}
+
+// Without discovery an affinity client could only route at random; it is
+// refused instead, by the constructor and by the ClientMod at startup.
+func TestAnAffinityClientWithoutDiscoveryIsRefused(t *testing.T) {
+	if _, err := NewBusClient(&recordingBus{}, nil, "", 0); err == nil || !strings.Contains(err.Error(), "Browse") {
+		t.Fatalf("NewBusClient without discovery = %v, want a refusal naming Browse", err)
+	}
+	registry := app.NewRegistry(viper.New())
+	if err := registry.Register(mods.ModBus, bus.IBus(&recordingBus{})); err != nil {
+		t.Fatal(err)
+	}
+	mod := NewClientMod()
+	if err := mod.Init(viper.New()); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err == nil || !strings.Contains(err.Error(), "etcd") {
+		t.Fatalf("ClientMod.Provide without discovery = %v, want a refusal naming the etcd Mod", err)
+	}
+	if !slices.Contains(mod.DependsOn(), mods.ModEtcd) {
+		t.Fatalf("ClientMod.DependsOn = %v, want the etcd Mod", mod.DependsOn())
+	}
+}
+`
+
+// newAffinityClient is how the routing test builds the client.
+const newAffinityClient = `NewBusClient(recorder, threeInstances{}, "", 0)`
+
+// runGeneratedPackageTests writes sources as one package of a scratch module
+// that replaces roost-core with this checkout, and runs its tests.
+func runGeneratedPackageTests(t *testing.T, sources map[string]string) {
+	t.Helper()
+	repo, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	sources["go.mod"] = "module example.com/shop\n\ngo 1.27.0\n\nrequire github.com/tjbdwanghaibo/roost-core v1.23.0\n\nreplace github.com/tjbdwanghaibo/roost-core => " + strconv.Quote(filepath.ToSlash(repo)) + "\n"
+	for name, body := range sources {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), "test", "-mod=mod", "-count=1", "./...")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generated package: %v\n%s", err, out)
 	}
 }
 
@@ -368,7 +511,9 @@ func TestTheGeneratedClientDependsOnTheModThatPublishesTheBus(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := generateJoined(t, services[0])
-	if !strings.Contains(string(content), "func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }") {
+	// goldenService has an affinity method, so its client also needs the
+	// etcd Mod's discovery (RR-20261006-59).
+	if !strings.Contains(string(content), "func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats, mods.ModEtcd} }") {
 		t.Fatalf("ClientMod.DependsOn does not name the NATS mod:\n%s", content)
 	}
 	if strings.Contains(string(content), "DependsOn() []app.ModName { return []app.ModName{mods.ModBus} }") {

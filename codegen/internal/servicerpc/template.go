@@ -44,7 +44,8 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
-	"github.com/tjbdwanghaibo/roost-core/servicerpc"
+{{if .AnyAffinity}}	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
+{{end}}	"github.com/tjbdwanghaibo/roost-core/servicerpc"
 )
 
 // ServiceType is the bus service type {{.Iface}} answers on. The client and
@@ -169,7 +170,49 @@ type BusClient struct {
 	rpc *servicerpc.BusClient
 }
 
+{{if .AnyAffinity}}// AffinityMethods are the methods that route by an affinity key: every call
+// carrying the same key reaches the same instance.
+const AffinityMethods = "{{.AffinityMethods}}"
+
 // NewBusClient builds a client. serviceType empty means ServiceType; timeout
+// non-positive means DefaultCallTimeout.
+//
+// discovery is required. AffinityMethods route by key, and reaching "the
+// instance that owns this key" means choosing a sid from the discovered
+// instances; without discovery there is nothing to choose from and the call
+// can only go to the queue group, i.e. to a random instance. That is what the
+// generated client did until RR-20261006-59 (F09-R1) — the marker read as
+// configured and routed at random — so a missing discovery is refused here
+// rather than degraded.
+func NewBusClient(b bus.IBus, discovery fetcd.IDiscovery, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
+	if b == nil {
+		return nil, fmt.Errorf("{{.Package}}: bus is nil")
+	}
+	if discovery == nil {
+		return nil, fmt.Errorf("{{.Package}}: discovery is nil; %s route by an affinity key and need service discovery to reach one instance per key", AffinityMethods)
+	}
+	if serviceType == "" {
+		serviceType = ServiceType
+	}
+	if timeout <= 0 {
+		timeout = DefaultCallTimeout
+	}
+	// The picker that reads the key is installed here rather than left to
+	// each deployment to remember. A caller's own options come after, so it
+	// can still override.
+	//
+	// This matters for a specific reason: a service whose state is partitioned
+	// across instances — a queue kept whole in one key, say — has its
+	// throughput bounded by contention on that key, and random routing turns
+	// that bound into cross-replica contention. Routing by key makes the
+	// contention in-process instead. It is the difference between a design
+	// cost and a design defect.
+	options := append([]servicerpc.Option{
+		servicerpc.WithKeyAffinity(servicerpc.AffinityKeyFromContext),
+	}, opts...)
+	return &BusClient{rpc: servicerpc.NewDiscoveredBusClient(b, serviceType, timeout, discovery, options...)}, nil
+}
+{{else}}// NewBusClient builds a client. serviceType empty means ServiceType; timeout
 // non-positive means DefaultCallTimeout.
 func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
 	if b == nil {
@@ -181,30 +224,29 @@ func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ..
 	if timeout <= 0 {
 		timeout = DefaultCallTimeout
 	}
-{{if .AnyAffinity}}	// At least one method routes by key, so the picker that reads the key is
-	// installed here rather than left to each deployment to remember. A
-	// caller's own options come after, so it can still override.
-	//
-	// This matters for a specific reason: a service whose state is partitioned
-	// across instances — a queue kept whole in one key, say — has its
-	// throughput bounded by contention on that key, and round-robin routing
-	// turns that bound into cross-replica contention. Routing by key makes the
-	// contention in-process instead. It is the difference between a design
-	// cost and a design defect.
-	options := append([]servicerpc.Option{
-		servicerpc.WithKeyAffinity(servicerpc.AffinityKeyFromContext),
-	}, opts...)
-	return &BusClient{rpc: servicerpc.NewBusClient(b, serviceType, timeout, options...)}, nil
-{{else}}	return &BusClient{rpc: servicerpc.NewBusClient(b, serviceType, timeout, opts...)}, nil
-{{end}}}
-
+	return &BusClient{rpc: servicerpc.NewBusClient(b, serviceType, timeout, opts...)}, nil
+}
+{{end}}
+// call sends a method with no affinity to the queue group: any instance may
+// answer it.
 func (c *BusClient) call(ctx context.Context, method string, req any, resp any) error {
 	if c == nil || c.rpc == nil {
 		return fmt.Errorf("{{.Package}}: client is not configured")
 	}
 	return c.rpc.CallChecked(ctx, 0, method, req, resp, "{{.ServiceType}} call failed")
 }
-{{range .Methods}}
+{{if .AnyAffinity}}
+// callByAffinity sends a method with an affinity key to one instance: it
+// discovers the instances, the key picker maps the key in ctx to a sid, and
+// the call goes to that sid. Discovery, picking and the call share one
+// timeout.
+func (c *BusClient) callByAffinity(ctx context.Context, method string, req any, resp any) error {
+	if c == nil || c.rpc == nil {
+		return fmt.Errorf("{{.Package}}: client is not configured")
+	}
+	return c.rpc.CallDiscoveredChecked(ctx, method, req, resp, "{{.ServiceType}} call failed")
+}
+{{end}}{{range .Methods}}
 {{range .Doc}}{{.}}
 {{end}}// {{.Name}} implements {{$.Iface}}.
 func (c *BusClient) {{.Name}}(ctx context.Context{{if .ParamList}}, {{.ParamList}}{{end}}) ({{range .Results}}{{.Type}}, {{end}}error) {
@@ -212,7 +254,7 @@ func (c *BusClient) {{.Name}}(ctx context.Context{{if .ParamList}}, {{.ParamList
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, {{.Affinity}})
 {{end}}	var resp {{.Response}}
-	err := c.call(ctx, {{.Const}}, {{.Wire}}{
+	err := c.{{if .Affinity}}callByAffinity{{else}}call{{end}}(ctx, {{.Const}}, {{.Wire}}{
 {{range .Params}}		{{exportName .Name}}: {{.Name}},
 {{end}}	}, &resp)
 	return {{if .HasResults}}{{.ResultReturns}}, {{end}}err
@@ -309,7 +351,8 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
-	"github.com/tjbdwanghaibo/roost-core/servicerpc"
+{{if .AnyAffinity}}	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
+{{end}}	"github.com/tjbdwanghaibo/roost-core/servicerpc"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 )
 
@@ -490,7 +533,13 @@ func (m *ClientMod) Name() app.ModName { return CapabilityName }
 // never be assembled in a real process: "unknown mod dependency \"bus\"".
 // That shipped in every generated client until a generated game template
 // tried to start (roost-codegen U-0024).
-func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }
+{{if .AnyAffinity}}//
+// It also names the etcd Mod: AffinityMethods route by key, which needs the
+// discovery that Mod publishes (RR-20261006-59). A process without it is
+// refused at assembly rather than left to route those calls at random.
+func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats, mods.ModEtcd} }
+{{else}}func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }
+{{end}}
 
 // clientModConfig is what the client Mod reads (maintainer decision A4 ①):
 // the declaration the App checks before any Mod Init, and Init reads it with
@@ -533,8 +582,17 @@ func (m *ClientMod) Provide(r *app.Registry) error {
 		return fmt.Errorf("{{.Package}} client mod: capability %q not found; a process that calls "+
 			"{{.Iface}} needs a bus", mods.ModBus)
 	}
-	client, err := NewBusClient(busClient, m.serviceType, m.timeout, m.options...)
-	if err != nil {
+{{if .AnyAffinity}}	// AffinityMethods need discovery to reach one instance per key. Refused
+	// here, at startup, when the process has no etcd Mod: the alternative is
+	// the old silent fallback to random routing (RR-20261006-59).
+	discovery, ok := app.Lookup[fetcd.IDiscovery](r, mods.ModEtcdDiscov)
+	if !ok || discovery == nil {
+		return fmt.Errorf("{{.Package}} client mod: capability %q not found; %s route by an "+
+			"affinity key and need service discovery — add the etcd Mod to this process", mods.ModEtcdDiscov, AffinityMethods)
+	}
+	client, err := NewBusClient(busClient, discovery, m.serviceType, m.timeout, m.options...)
+{{else}}	client, err := NewBusClient(busClient, m.serviceType, m.timeout, m.options...)
+{{end}}	if err != nil {
 		return fmt.Errorf("{{.Package}} client mod: %w", err)
 	}
 	m.client = client

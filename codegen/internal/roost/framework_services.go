@@ -32,7 +32,15 @@ type frameworkServiceSpec struct {
 	Path      string
 	Interface string
 	Depends   []string
-	ModArgs   []string
+	// Affinity marks a service whose RPC methods route by an affinity key
+	// (//roost:rpc affinity=…): its generated ClientMod reaches one instance
+	// per key through etcd discovery and refuses to start without it, and the
+	// owning process must register in that discovery for callers to find it
+	// (RR-20261006-59). Both sides therefore get the etcd Mod.
+	// TestFrameworkCatalogAffinityMatchesTheGeneratedClients keeps this in
+	// step with the generated transports.
+	Affinity bool
+	ModArgs  []string
 	// ModChain is the optional collaborators a hosted service wires AFTER
 	// NewMod, as chained calls on the returned Mod (kit's own shape for a
 	// collaborator that has a defensible "none" — platform's pending-order
@@ -102,7 +110,8 @@ func Broadcast() mail.Deliverer { return nil }
 	},
 	"match": {
 		Package: "match", Interface: "Matchmaker", Depends: []string{"redis", "nats"},
-		ModArgs: []string{"Metrics()"},
+		Affinity: true,
+		ModArgs:  []string{"Metrics()"},
 		Collabs: `// The match service takes no matchmaking policy: it holds the queue and makes
 // Commit atomic, and deciding which waiting tickets form a match is the game's
 // job — a matchmaker in the game process reads Candidates, applies a
@@ -167,8 +176,9 @@ func Pending() platform.PendingOrders { return nil }
 	},
 	"activity": {
 		Package: "activity", Path: "global/activity", Interface: "Coordinator",
-		Depends: []string{"redis", "nats"},
-		ModArgs: []string{"Metrics()"},
+		Depends:  []string{"redis", "nats"},
+		Affinity: true,
+		ModArgs:  []string{"Metrics()"},
 		Collabs: `// The activity service takes no collaborators: it aggregates what game
 // servers report and says when a phase is collected. What the phase MEANS —
 // which activity, what a point is worth, what the settlement pays — is the
@@ -271,6 +281,19 @@ func effectiveServiceMods(m Manifest, name string) []string {
 	mods := append([]string(nil), service.Mods...)
 	if spec, ok := frameworkCatalog[strings.TrimSpace(service.Framework)]; ok {
 		mods = append(mods, spec.Depends...)
+		if spec.Affinity {
+			// The owner registers in etcd so that callers routing by key
+			// can find its sid.
+			mods = append(mods, "etcd")
+		}
+	}
+	for _, used := range service.Uses {
+		if frameworkCatalog[strings.TrimSpace(m.Services[used].Framework)].Affinity {
+			// The ClientMod routes by key through etcd discovery and refuses
+			// to start without it.
+			mods = append(mods, "etcd")
+			break
+		}
 	}
 	if len(service.Uses) > 0 || len(service.Rpcs) > 0 || len(service.UsesRpcs) > 0 {
 		// The bus: a framework ClientMod, a project rpc's owner Mod (it
