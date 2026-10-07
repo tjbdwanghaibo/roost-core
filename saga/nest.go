@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
@@ -27,13 +28,53 @@ type completionEffectPayload struct {
 	Completion Completion `json:"completion"`
 }
 
+// maxStartWireDataBytes 是启动意图 Data 在线上的硬上限（与 Options.MaxPayloadBytes 的上界相同）。
+const maxStartWireDataBytes = 4 << 20
+
+// startDataLimits 记本进程里注册了某个 saga 类型的协调器接受的 StartRequest.Data 上限（Options.MaxPayloadBytes），
+// 由 Engine.Register 写入、NewStartEffect 读取（RR-20261006-43）。同一类型被多个 Engine 注册时取最小值：本进程任何一个
+// 协调器会拒绝的 Data 都不放进 WAL。条目数以 saga 类型数为界。
+//
+// 为什么是按类型的进程表而不是 Engine 方法：EmitStart 在 Nest handler 里调用，handler 拿不到 Engine（生成的
+// <saga>.EmitStart 也是包级函数）；而按类型查表只是一次内存读，不做 I/O、不等待，可以留在快池的 Nest 事务里。
+var startDataLimits struct {
+	sync.RWMutex
+	byType map[string]int
+}
+
+func registerStartDataLimit(sagaType string, limit int) {
+	startDataLimits.Lock()
+	defer startDataLimits.Unlock()
+	if startDataLimits.byType == nil {
+		startDataLimits.byType = make(map[string]int)
+	}
+	if current, ok := startDataLimits.byType[sagaType]; !ok || limit < current {
+		startDataLimits.byType[sagaType] = limit
+	}
+}
+
+// startDataLimit 返回这个类型的启动 Data 上限：本进程有协调器注册了它时取那份 MaxPayloadBytes，否则只有线上硬上限
+// （协调器在别的进程，或配置不同；那份意图若被协调器拒绝，由启动消费者 Term 并告警）。
+func startDataLimit(sagaType string) int {
+	startDataLimits.RLock()
+	defer startDataLimits.RUnlock()
+	if limit, ok := startDataLimits.byType[sagaType]; ok {
+		return limit
+	}
+	return maxStartWireDataBytes
+}
+
 // NewStartEffect creates a stable Nest transactional outbox intent. The
 // enclosing handler's entity mutations and this intent share one WAL record.
+//
+// Data 的上限是本进程为这个类型注册的协调器的 MaxPayloadBytes（RR-20261006-43）：协调器必定拒绝的意图在 Nest 事务里
+// 就以 ErrInvalidRecord 拒绝，handler 拿到错误，实体修改随事务回滚；之前只按 4 MiB 校验，超过 MaxPayloadBytes 的意图随事务
+// 提交，协调器拒绝后启动消费者 nak 到 MaxDeliver，saga 静默不创建。
 func NewStartEffect(request StartRequest) (nest.Effect, error) {
 	request.Type = strings.TrimSpace(request.Type)
 	request.BusinessKey = strings.TrimSpace(request.BusinessKey)
 	request.ID = strings.TrimSpace(request.ID)
-	if request.Type == "" || len(request.Type) > 128 || request.DefinitionVersion == 0 || request.BusinessKey == "" || len(request.BusinessKey) > 512 || len(request.Data) > 4<<20 || (request.ID != "" && !validSubjectToken(request.ID, 128)) {
+	if request.Type == "" || len(request.Type) > 128 || request.DefinitionVersion == 0 || request.BusinessKey == "" || len(request.BusinessKey) > 512 || len(request.Data) > startDataLimit(request.Type) || (request.ID != "" && !validSubjectToken(request.ID, 128)) {
 		return nest.Effect{}, ErrInvalidRecord
 	}
 	// Now is an in-process test/recovery hook, not part of a durable business
@@ -141,7 +182,7 @@ func DecodeStartEffect(payload []byte) (StartRequest, error) {
 	request.ID = strings.TrimSpace(request.ID)
 	request.Now = time.Time{}
 	request.DeadlineAt = canonicalDeadline(request.DeadlineAt)
-	if request.Type == "" || len(request.Type) > 128 || request.DefinitionVersion == 0 || request.BusinessKey == "" || len(request.BusinessKey) > 512 || len(request.Data) > 4<<20 || (request.ID != "" && !validSubjectToken(request.ID, 128)) {
+	if request.Type == "" || len(request.Type) > 128 || request.DefinitionVersion == 0 || request.BusinessKey == "" || len(request.BusinessKey) > 512 || len(request.Data) > maxStartWireDataBytes || (request.ID != "" && !validSubjectToken(request.ID, 128)) {
 		return StartRequest{}, ErrInvalidRecord
 	}
 	return request, nil

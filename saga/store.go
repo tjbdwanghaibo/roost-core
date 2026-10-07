@@ -52,6 +52,8 @@ type Store interface {
 	Create(context.Context, Record) error
 	Get(context.Context, string) (Record, error)
 	GetByBusinessKey(context.Context, string, string) (Record, error)
+	// List 与 ClaimDue 遇到校验不过的记录只跳过那一条并告警，不让整次调用失败（RR-20261006-45）：协调循环在 ClaimDue
+	// 返回错误时整批丢弃，已领取的正常记录要等租约过期。
 	List(context.Context, Query) ([]Record, error)
 	CompletionRecorded(context.Context, Completion) (bool, error)
 	ClaimDue(context.Context, ClaimRequest) ([]Record, error)

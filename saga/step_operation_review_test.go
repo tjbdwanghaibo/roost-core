@@ -2,7 +2,6 @@ package saga
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 )
@@ -37,7 +36,8 @@ func TestMongoStoreTombstoneOfAFailureCloseIsAbandoned(t *testing.T) {
 	}
 }
 
-// U-0280 复核：较早尝试 k 已生效，它的 completion 在退避期间到达、被协调器以 ErrNotWaiting 丢弃（情形 (b)）；
+// U-0280 复核：较早尝试 k 已生效，它的 completion 没有送达协调器（原来是“退避期间到达、被以 ErrNotWaiting 丢弃”，
+// RR-20261006-42 起退避中送达的成功被接收，这里改为 effect 积压 / 丢失）；
 // 最后一次尝试 k+1 的投递晚于它自己的截止（消费者积压、进程重启），按 U-0281 不执行直接 ack。修前 ack 时不看
 // 同一操作的其他尝试：k 的成功再也没人送达，协调器超时用尽、放弃，扣款不在 CompletedSteps 里、不会被补偿，
 // 也没有告警。过期投递同样要把同一操作已生效的成功经 saga 结果流重发：协调器还在等就接收，已放弃就告警。
@@ -62,10 +62,7 @@ func TestNativeStepExpiredDeliveryStillReplaysTheOperationsSuccess(t *testing.T)
 			if !w.project(recordK) {
 				t.Fatal("attempt k projected within its deadline was skipped")
 			}
-			w.tick(5 * time.Second) // k 超时 → 退避
-			if err := w.complete(w.effectCompletion(recordK)); !errors.Is(err, ErrNotWaiting) {
-				t.Fatalf("completion of attempt %d during backoff = %v, want ErrNotWaiting", k.Attempt, err)
-			}
+			w.tick(5 * time.Second)  // k 超时 → 退避；k 的 completion effect 没有送达
 			w.tick(10 * time.Second) // 最后一次尝试 k+1
 			k1 := w.pendingCommand()
 			w.deliverCommand(w.inboxB, expire(w, k1)) // 过期投递：不执行，ack

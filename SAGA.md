@@ -21,8 +21,12 @@ Saga 用于跨越多个独立事务域的业务流程。单个 Nest handler、�
 - 重复、迟到的 command/result 不会重复推进状态；协调器放弃一个**正向**步骤之后才到达的成功说明它已生效，协调器把 saga 带回补偿、
   只补偿这一步（`Failed` / `Compensated` 会被重开，saga 方向 ④）；补偿方向的只告警（计数 `saga.completion.late_after_abandon_total`、ERROR 日志，U-0280）。
 
-Nest start、command 和 completion 使用严格的 `WireVersion=1` envelope；未知版本直接
-拒绝并进入受退避约束的重新投递，不通过猜测字段做隐式兼容。协议变更必须显式升级版本。
+Nest start、command 和 completion 使用严格的 `WireVersion=1` envelope，不通过猜测字段做隐式兼容。协议变更必须显式升级版本。
+坏信封（空消息、超长帧、JSON 损坏、未知版本、内容校验不过）是确定性错误，五个消费者（Mongo 步骤、原生步骤、普通结果流、原生结果流、
+Nest 启动）一律 Term，计 `saga.consumer.rejected_total{consumer}` 并记 ERROR（RR-20261006-44）；之前原生步骤消费者把它们 nak 到 `MaxDeliver`。
+Nest 启动消费者对 `StartSaga` 的确定性拒绝（`Data` 超过 `saga.max_payload_bytes` 等 `ErrInvalidRecord`、同一业务键另一份意图的
+`ErrIdentityConflict`）同样 Term，计 `saga.start.rejected_total{saga_type,reason}` 并记点名 saga 的 ERROR（RR-20261006-43）；
+`ErrDefinitionMissing` 仍按可重试错误 nak（滚动发布中定义会随新进程上线）。
 
 ## 定义
 
@@ -46,6 +50,10 @@ definition := saga.Definition{
 `BackoffMin..BackoffMax` 退避。`Engine.Register` 按 `Options.StepBudgets` 补齐每个字段：按步骤覆盖 > 定义里写的值 >
 配置默认值 > 框架默认（5s / 5 次 / 100ms..5s）。kit 的 saga Mod 从 `saga.step_defaults.{timeout,max_attempts,backoff_min,backoff_max}`
 与 `saga.steps.<saga type>.<step name>.<字段>` 读取；`saga.steps` 下写了不存在的类型、步骤或字段时 `Init` 失败，不会静默失效。
+**步骤 `Timeout` 必须短于步骤消费者的 `AckWait`**（`saga.DefaultStepAckWait` = 30s，生成的与 demo 的步骤消费者都用它）：一次尝试
+处理到命令截止（派发时刻 + `Timeout`），更长时 JetStream 会在 handler 还在跑时把命令重投给另一个消费者。saga Mod 在 App 启动前按
+A4 ① 的跨键规则（`ValidateConfig`）拒绝 `saga.step_defaults.timeout` / `saga.steps.*.*.timeout` 不短于它的配置，`Init` 再查定义里写死的
+`Timeout`，错误点名键或 `saga "<type>" step "<name>"`（RR-20261006-46）。自己给步骤消费者写更短的 `StepConsumerConfig.AckWait` 时要相应缩短步骤 `Timeout`。
 `roost add saga` 生成的定义不再写预算。生成工程的测试可以用 `kitsaga.StepBudgetsFromConfig(cfg, definitions...)` 与
 `StepBudgets.Resolve(definition)` 得到和运行时相同的预算（game-demo 的 `gift_saga_budget_test.go`）。
 
@@ -58,7 +66,10 @@ definition := saga.Definition{
 
 需要与当前 Nest handler 的 Entity 修改可靠绑定时，不要直接调用 `StartSaga`，而应
 在 handler 内调用 `saga.EmitStart`。启动意图会与 Entity mutation 写入同一个 Nest
-WAL record，再由 kit 的 durable consumer 幂等创建 Saga。直接 `StartSaga` 只用于
+WAL record，再由 kit 的 durable consumer 幂等创建 Saga。`EmitStart` 在事务里就按本进程为这个类型注册的协调器的
+`MaxPayloadBytes`（`saga.max_payload_bytes`，缺省 64 KiB）校验 `Data`，超过时返回 `ErrInvalidRecord`、事务回滚（RR-20261006-43）；
+本进程没有这个类型的协调器时只按线上硬上限 4 MiB 校验，协调器若拒绝，由启动消费者 Term 并计 `saga.start.rejected_total`。
+直接 `StartSaga` 只用于
 本身已经处于可靠消息消费者、运维任务或不需要与另一笔提交原子绑定的入口。
 相同 type/business key 只有在 ID、payload、deadline 表示同一意图时才返回已有记录，
 否则返回 `ErrIdentityConflict`。deadline 会规范到毫秒精度，以适配 MongoDB datetime。
@@ -68,7 +79,7 @@ Native Entity step 使用 Data Engine inbox。Kit consumer 在同步调用 handl
 handler，不能把 handler context 交给异步 goroutine：
 
 ```go
-reservation, ok := sagaKit.ReservationFromContext(ctx)
+reservation, ok := saga.ReservationFromContext(ctx)
 if !ok {
     return saga.Completion{}, errors.New("missing saga reservation")
 }
@@ -153,13 +164,13 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
 3. **新尝试先看同一操作实例的其他尝试**（`DataEngineStepInbox.Reserve`，在一个 Mongo 事务里只读这个操作的状态文档，
    同一操作实例的并发 Reserve 在这份文档上写冲突串行化，见「操作状态文档」）：
    - 已有**成功**回执（任何一生）或**本生的拒绝**（`Success=false, Retryable=false`）→ 不执行，把那次的 completion 经 saga 结果流
-     重发给协调器（它的 completion effect 可能在退避期间被丢弃）；
+     重发给协调器（它的 completion effect 可能还没送达，或已经丢失）；
    - 只有**可重试失败** → 那次尝试已有结论且没有生效，新尝试照常执行；
    - 仍 pending 且租约有效 → 不执行，返回可重试错误（nak 后重投），等它有结论；
    - pending 且租约已过期 → **接替**（新尝试成为当前尝试、`lease_token+1`，被接替的记进 `superseded`），它在 WAL 里未投影的记录随后被 fence 跳过；
      被接替尝试的迟到投递直接 ack、不执行。
    - 过了自己截止的投递（U-0281 的过期 ack、Reserve 的 `ErrCommandExpired`）不执行，但 ack 前同样把同一操作实例已生效的
-     **成功**经 saga 结果流重发：它可能是最后一次尝试，较早尝试的成功又在退避期间被丢弃，不重发就没人再送达（审查 2026-10-05）。
+     **成功**经 saga 结果流重发：它可能是最后一次尝试，较早尝试的成功又没有送达，不重发就没人再送达（审查 2026-10-05）。
    - **协调器用同一张表接收结果**（B1，维护者决定 2026-10-05）：completion 的代际从 `CommandID` 解析（第 0 代 `<key>:<attempt>`，
      第 N 代 `<key>:rN:<attempt>`，与铸造 ID 的 `commandID` 同一处），与记录当前代际（`Record.Incarnation`）比较。
      旧一生的拒绝 / 失败**不接收**，只计 `Stats().StaleIncarnation` 与 `saga.completion.stale_incarnation_total{saga_type,phase}`
@@ -168,6 +179,11 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
    - **可重试失败只接收正在等的那次尝试的**（saga 方向 ③，2026-10-07）：同一生里较早一次尝试晚到的可重试失败只说明那一次没生效，
      正在等的尝试照常执行；协调器不接收它，计 `Stats().StaleAttempt` 与 `saga.completion.stale_attempt_total{saga_type,phase}`（WARN）。
      成功与本生的拒绝是操作的结论，从哪次尝试来都接收——下一次尝试回放的正是较早那次的 completion（`CommandID` 是那次的）。
+   - **退避中送达的成功同样接收**（RR-20261006-42，2026-10-07）：同一生、操作还开着（已派发过、在重试退避，`Attempt≥1`）时送达的成功
+     接收为该操作的结果，与旧一生成功的规则同一理由。之前只在 `Waiting` 时接收，退避中的成功按 `ErrNotWaiting` Term，指望下一次尝试回放；
+     但截止、人工 `Compensate`、定义缺失可以在下一次派发之前关闭这个操作，之后再没有尝试回放它，这一步已生效却不在 `CompletedSteps` 里、
+     不补偿也不告警。退避中送达的拒绝与可重试失败仍不接收：拒绝由下一次尝试回放（操作若先被放弃，拒绝本来没有要补的东西），可重试失败只认
+     正在等的那次尝试。
 4. **放弃之后迟到的成功**：协调器在重试用尽、saga 截止、人工 `Compensate` 或定义缺失时关闭操作，tombstone 记为“放弃关闭”；
    只有接收了**成功**才关闭的记为“带结果关闭”，以失败关闭（可重试失败用尽、拒绝）同样记为放弃关闭。放弃关闭之后才到的成功说明那一步已生效、
    却不在 `CompletedSteps` 里（saga 方向 ③ 之后来源只剩“截止前已生效、completion 在放弃后才送达”与时钟偏差）：
@@ -209,7 +225,7 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
   [方案](docs/feature/SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)、[状态文档方案](docs/feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md)）。
 
 **两个结果消费者的终态分类相同**（O-S5-1）：普通结果流（`SubscribeCompletions`）与原生 effect 流对 `ErrNotWaiting`、`ErrNotFound`、`ErrIdentityConflict`、
-`ErrInvalidRecord` 都 Term，不再 nak 到 `MaxDeliver`。退避中到达、被丢弃的成功由下一次尝试回放或由过期投递重发（上面第 3 条）。
+`ErrInvalidRecord` 都 Term，不再 nak 到 `MaxDeliver`。退避中到达的成功被接收（上面第 3 条，RR-20261006-42）；没有送达的由下一次尝试回放或由过期投递重发。
 `ErrDefinitionMissing` 不是终态（发版前审查更正）：Complete 只在记录正等着这个操作时才查定义，这时缺定义是滚动发布中“派发它的进程已升级、
 处理结果的协调器还没升级”的暂时状态，两条流都按可重试错误 nak 退避；新定义上线后重投被接收。定义一直不来时，步骤超时后没有定义的协调器把记录
 fence 到 `ManualRequired`（放弃关闭，第 4 条），之后的重投按迟到成功 ack 并告警，`MaxDeliver` 兜底。
@@ -258,7 +274,10 @@ fence 到 `ManualRequired`（放弃关闭，第 4 条），之后的重投按迟
   显式提供新的未来 deadline，或设置 `ClearDeadline`；
 - 放弃之后才到的正向成功：自动补偿那一步，`Failed` / `Compensated` 会被重开回 `Compensating`（上文契约第 4 条，saga 方向 ④）；
   重开计 `saga.reopened_total`、记 WARN，业务识别重开的方法见下面「运维观察」；
-- `Compensate`：仅在没有 in-flight step 时允许人工发起补偿（中止正向、开始补偿）。在补偿方向停下的 `ManualRequired`
+- `Compensate`：仅在没有 in-flight step 时允许人工发起补偿（中止正向、开始补偿）。**`Completed` 的 saga 不能再 `Compensate`**，
+  返回 `ErrSagaCompleted`、记录不动（RR-20261006-47，维护者 2026-10-07 选 A）：`Completed` 是业务结论，按终态做业务的一方
+  （发通知、写对账）已经据此行动；撤销已完成的业务走业务自己的冲正流程（例如另起一个反向 saga）。`Compensated` 幂等返回原记录。
+  在补偿方向停下的 `ManualRequired`
   上调用时与 `Resume` 一样进入新一生（`Incarnation+1`）：要重新执行的补偿步骤在这一生里已经派发过，不换代就会复用上一轮
   的 `CommandID`，收件箱只会回放旧的拒绝或报身份冲突（B1）。**补偿方向 `ManualRequired` 修复原因后的正确做法是 `Resume`**
   （它同时处理截止时间）；`Compensate` 在这种状态下与之等价。
@@ -266,6 +285,9 @@ fence 到 `ManualRequired`（放弃关闭，第 4 条），之后的重投按迟
 运维面通过 `Engine.List` 按 `ManualRequired`/`Failed` 和更新时间分页查询，再使用
 `Get` 查看错误与步骤，修复外部原因后调用 `Resume`。单次查询最多返回 1000 条，
 避免管理请求退化成无界全表扫描。
+Mongo 里一条校验不过的 saga 记录（手工改坏、不兼容的写者整体 Replace 丢了字段）不让 `List` 与协调器的领取整批失败：
+那一条被跳过，计 `saga.store.corrupt_record_total{op}`（`op` 为 `list` / `claim`）并记点名 `id` 的 ERROR，其余记录照常返回
+（RR-20261006-45）。坏记录不会被自动改写，运维修好文档前它每个 `lease_duration` 被领取、告警一次。
 
 等待不占用 goroutine，也不依赖持久化进程 timer。`NextRunAt` 由带索引的批量
 worker 扫描；进程内 signal 只用于降低新任务延迟。

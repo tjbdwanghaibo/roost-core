@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -141,13 +143,15 @@ func (s *MongoStore) List(ctx context.Context, query Query) ([]Record, error) {
 	if err := s.sagas().Find(ctx, filter, &docs, fmongo.FindOption{Sort: bson.D{{Key: "updated_at", Value: -1}, {Key: "_id", Value: 1}}, Limit: int64(query.Limit), BatchSize: int32(query.Limit)}); err != nil {
 		return nil, err
 	}
-	out := make([]Record, len(docs))
+	out := make([]Record, 0, len(docs))
 	for i := range docs {
 		record, err := validatedRecord(docs[i])
 		if err != nil {
-			return nil, err
+			// 一条坏记录不让整次查询失败，运维面仍能读出其余记录（RR-20261006-45）；坏记录本身告警。
+			reportCorruptRecord("list", docs[i].ID, err)
+			continue
 		}
-		out[i] = record
+		out = append(out, record)
 	}
 	return out, nil
 }
@@ -233,11 +237,22 @@ func (s *MongoStore) ClaimDue(ctx context.Context, request ClaimRequest) ([]Reco
 		}
 		record, validateErr := validatedRecord(claimed)
 		if validateErr != nil {
-			return out, validateErr
+			// 只隔离这一条（RR-20261006-45）：之前返回 (已领取的, err)，协调循环整批丢弃，同批已领取的正常记录要等租约过期。
+			// 不把它改成 ManualRequired：记录已经读不出可信的状态，改写只会覆盖运维要看的现场；它保留刚领取的租约，
+			// 每个 LeaseDuration 被领取并告警一次，直到运维修好文档。
+			reportCorruptRecord("claim", claimed.ID, validateErr)
+			continue
 		}
 		out = append(out, record)
 	}
 	return out, nil
+}
+
+// reportCorruptRecord 告警一条校验不过的 saga 记录（手工改坏、不兼容的写者整体 Replace 丢了字段）：计
+// saga.store.corrupt_record_total{op}，记点名记录的 ERROR。标签只有操作名，记录 id 只进日志。
+func reportCorruptRecord(op, id string, err error) {
+	metrics.IncCounter("saga.store.corrupt_record_total", metrics.Labels{"op": op}, 1)
+	slog.Error("saga mongo: skipped a corrupt saga record; repair the document", "op", op, "id", id, "err", err)
 }
 
 func (s *MongoStore) Apply(ctx context.Context, request ApplyRequest) (ApplyOutcome, error) {

@@ -6,6 +6,14 @@
 
 ### 行为收紧
 
+- **saga：重试退避期间送达的成功不再丢失**（RR-20261006-42，F06-S1）。同一代际、操作已派发过并在重试退避（`Pending` / `Compensating` 且 `Attempt≥1`）时送达的成功，协调器接收为该操作的结果（写回执、带结果关闭、前进一步）。之前按 `ErrNotWaiting` Term，指望下一次尝试回放；若截止、人工 `Compensate` 或定义缺失先关闭操作，这一步已生效却不在 `CompletedSteps` 里、不补偿、不告警。退避中的拒绝与可重试失败仍不接收。[问题](docs/bug/RR-20261006-42.md) / [修复](docs/bugfix/RR-20261006-42.md)
+- **saga：启动意图被确定性拒绝时 Term 并告警，`EmitStart` 在 Nest 事务里按协调器上限拒绝**（RR-20261006-43，F06-S7）。Nest 启动消费者对 `StartSaga` 的 `ErrInvalidRecord`（如 `Data` 超过 `saga.max_payload_bytes`）与 `ErrIdentityConflict` 不再 nak 到 `MaxDeliver`（约 8.7 天），改为 Term、计 `saga.start.rejected_total{saga_type,reason}`、记点名 saga 的 ERROR；`ErrDefinitionMissing` 仍可重试。`EmitStart` 按本进程为该类型注册的协调器的 `MaxPayloadBytes` 校验（之前 4 MiB），超过返回 `ErrInvalidRecord`、事务回滚。[问题](docs/bug/RR-20261006-43.md) / [修复](docs/bugfix/RR-20261006-43.md)
+- **saga：五个消费者对坏信封同一口径——Term、计数、ERROR**（RR-20261006-44，F06-S2）。原生步骤消费者对超长帧、损坏 JSON、未知版本、校验不过的命令不再 nak 到 `MaxDeliver`；新指标 `saga.consumer.rejected_total{consumer}`。[问题](docs/bug/RR-20261006-44.md) / [修复](docs/bugfix/RR-20261006-44.md)
+- **saga：一条坏记录不再拖累整批**（RR-20261006-45，F06-S3）。`MongoStore.ClaimDue` / `List` 跳过校验不过的记录，计 `saga.store.corrupt_record_total{op}`、记点名 `id` 的 ERROR，其余照常返回；坏记录不被改写。[问题](docs/bug/RR-20261006-45.md) / [修复](docs/bugfix/RR-20261006-45.md)
+- **saga：步骤 `Timeout` 必须短于步骤消费者的 `AckWait`，启动前校验**（RR-20261006-46，F06-C1）。`saga.step_defaults.timeout`、`saga.steps.*.*.timeout`（A4 ① `ValidateConfig`）与定义里写死的 `Timeout`（`Init`）不短于 `saga.DefaultStepAckWait`（30s）时启动失败并点名。[问题](docs/bug/RR-20261006-46.md) / [修复](docs/bugfix/RR-20261006-46.md)
+- **saga：`Completed` 的 saga 不能再人工 `Compensate`**（RR-20261006-47，F06-S5，维护者选 A）。返回新哨兵 `saga.ErrSagaCompleted`、记录不动；撤销已完成的业务走业务自己的冲正流程。[问题](docs/bug/RR-20261006-47.md) / [修复](docs/bugfix/RR-20261006-47.md)
+- saga 文档改正（F06-S4 / S6）：demo 注释写明原生步骤遇基础设施错误不立即重投（除 `ErrFencedEntityPending` 外不交还租约）；`SAGA.md` 的 `saga.ReservationFromContext`，`kit/README.md` 的收件箱、“至多一次生效”、操作状态文档说法。
+
 - **`durability=memory` 的事务改持久字段不再静默丢失，而是整笔失败回滚**（RR-20261006-41，框架文档发现 F02-1 / F03-1，维护者选 A）。`rollback=state|undo` 加 `durability=memory`（生成器 `rollback=undo durability=memory` 即产出）的 handler 改了持久字段时，旧实现回复成功、committer 与 `PrepareMutation` 都不调用，内存是新值、库里是旧值，重载后回到旧值。现在提交点按事务本地的持久登记（O(被改实体)）检查：有持久改动（含 `AddMutation` 的本地 mutation、receipt；带 Remote 批次的 memory handler 改本地实体同样适用）就返回 `nest.ErrMemoryTransactionPersistentWrite`（同时带 `ErrCommitRejected`），错误点名 `collection/id` 与字段，按回滚策略撤销内存修改、Remote 批次 Abort；只改 nopersist 字段的照常成功，`rollback=none` 快路径的 setter panic 不变。生成 DAO 新增 `PersistFieldNames(mask)`（实现 `nest.PersistFieldNamer`，用来点名字段；生成代码不引用新类型，v1.23.0 core 仍可编译）。撞上的 handler 把 durability 改成 `async` / `strict`，或把字段声明为 nopersist。[问题](docs/bug/RR-20261006-41.md) / [修复](docs/bugfix/RR-20261006-41.md)
 
 ## [v1.23.0] - 2026-10-07

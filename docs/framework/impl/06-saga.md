@@ -561,7 +561,7 @@ GOWORK=off go test -tags integration -count=1 ./saga/
 8. **消费者分类**：五个消费者对“坏信封 / 未知版本”的处理不一致（原生步骤 nak，其余 Term），与 `SAGA.md:24-25`（“进入受退避约束的重新投递”）也不一致——定口径（§11 S2）。
 9. **启动消费者**：`ErrIdentityConflict` 与超过 `MaxPayloadBytes` 的 `ErrInvalidRecord` 在 Nest 启动消费者上会 nak 到 `MaxDeliver`（`saga/nest_start_consumer.go:106-107` 未标 Permanent），确认应 Term 并告警；确认 `EmitStart` 的 4 MiB 上限与 `StartSaga` 的 `MaxPayloadBytes` 是否应在提交时统一（§11 S7）。
 10. **原生 handler 错误**：确认“除屏障外都不交还租约”的取舍与 demo 注释一致（§11 S4）。
-11. **配置**：`AckWait` 与步骤 `Timeout` 的关系没有校验（只有 `LeaseDuration > AckWait`），确认是否要加。
+11. **配置**：`AckWait` 与步骤 `Timeout` 的关系没有校验（只有 `LeaseDuration > AckWait`），确认是否要加。v1.23.1 已修复，见 [RR-20261006-46](../../bugfix/RR-20261006-46.md)。
 12. **坏记录**：`ClaimDue` 遇到校验不过的记录返回错误并丢弃已领取的批（§11 S3），确认是否需要 fence 到 `ManualRequired` 或跳过。
 13. **TTL**：确认 `completion_receipt_ttl` 校验覆盖“结果效果流不是 DataEngine 效果流”的部署（现在只比较同流时）。
 14. **时钟**：生效点与 Reserve 用步骤进程时钟，超时判定用协调器时钟；外部验证 E02 前不要放宽 `Timeout`。
@@ -587,25 +587,30 @@ GOWORK=off go test -tags integration -count=1 ./saga/
   `assertEffective(k.IdempotencyKey, 1)` 通过，即扣款确实落库一次。
 - **为什么现有用例没覆盖**：`TestNativeStepExpiredDeliveryStillReplaysTheOperationsSuccess`（`step_operation_review_test.go:44`）覆盖的是“退避中丢弃 + 下一次尝试仍被派发（即使过期）”；方向 ④ 方案只处理“放弃关闭**之后**送达”（[方向 ③④ §2](../../feature/SAGA-DIRECTION-3-4-2026-10-07.md)）。
 - **修复方向（推断，未验证）**：同一生、记录 `positionedAt` 这个操作（退避中）时也接收成功与拒绝（与 B1 对旧一生成功的规则 2 对齐；收件箱已保证之后的尝试只会回放它）。
+- v1.23.1 已修复，见 [RR-20261006-42](../../bugfix/RR-20261006-42.md)。
 
 ### S2（不一致）原生步骤消费者对坏信封 nak 到 `MaxDeliver`，与其余消费者及 SAGA.md 都不同
 
 - `SubscribeDataEngineStep` 的 `decodeStepCommand` 返回普通错误（`saga/command_consumer.go:411-414`、`:518-530`），驱动按非永久错误 nak，直到 `MaxDeliver`（缺省 25000、退避封顶 30s，约 8.7 天，`nats/driver/jetstream.go:130-138`）。`SubscribeMongoStep`（`:279-297`）、两条结果流、Nest 启动都标 `Permanent` 直接 Term。`TestDecodeStepCommandRefusesOversizedForeignAndInvalidEnvelopes`（`promises_impl_test.go:60`）只断言 `ErrInvalidRecord`，不断言 permanence。
 - `SAGA.md:24-25` 写“未知版本直接拒绝并进入受退避约束的重新投递”，只有原生步骤消费者是这样；其余四个 Term。
 - **影响**：一条 JSON 损坏 / 版本不对 / `Command.Validate` 失败的原生步骤命令会被反复投递约 8.7 天，按 U-0281 的描述长期占用该 durable 的 `MaxAckPending` 名额（是否计入未独立验证）。
+- v1.23.1 已修复，见 [RR-20261006-44](../../bugfix/RR-20261006-44.md)。
 
 ### S3（低）`ClaimDue` 遇到校验不过的记录：丢弃已领取的批、坏记录永不 fence
 
 - `MongoStore.ClaimDue` 逐条领取后才 `validatedRecord`，失败时返回 `out, err`（`saga/mongo_store.go:226-237`），`coordinatorLoop` 在 `err != nil` 时整批丢弃（`saga/engine.go:759-767`），已领取的记录要等 `LeaseDuration`（15s）后才被重新领取；坏记录本身每 15s 被领取一次、记一次 ERROR，从不进 `ManualRequired`。`List` 遇到一条坏记录整次失败（`saga/mongo_store.go:144-151`），运维面也读不出别的记录。
 - 触发条件：手工改坏文档或不兼容的写者（例如旧 writer 整体 Replace 丢字段，T-219 一类）。
+- v1.23.1 已修复，见 [RR-20261006-45](../../bugfix/RR-20261006-45.md)。
 
 ### S4（文档）demo 注释说原生步骤基础设施错误“delivery retries”
 
 - `demo/game/handler/gift_debit.go.tmpl:25-27`（“that rolls everything back and lets the delivery retry”）、`demo/internal/service/game/gift_saga.go.tmpl:76-77`（“returned as an error so the delivery is retried with backoff”）。对原生步骤，除 `ErrFencedEntityPending` 外 handler 错误不交还租约（`saga/command_consumer.go:491-501`），重投命中第 7 行 `Duplicate`（`saga/step_operation_inbox.go:218-219`）、`waitReplay` 等到命令截止后才 nak，过期后 ack：这次尝试作废，下一次尝试要等步骤 `Timeout`。`SAGA.md:120-122` 只在 Remote 拒绝一节写了这一行为。对 Mongo 步骤注释是对的（`saga/command_consumer.go:134-141` 交还租约）。
+- v1.23.1 已修复（注释改为实际行为：原生步骤除 `ErrFencedEntityPending` 外不交还租约，下一次尝试来自步骤超时后的协调器），随 RR-20261006-42～47 同批提交（文档项，不单独编号）。
 
 ### S5（文档）`Completed` 可被人工 `Compensate`
 
 - `Engine.Compensate` 只拒绝 `Waiting` 与“无可补偿步骤”（`saga/engine.go:383-388`），`Completed`（`CompletedSteps = 步骤数`）会被带回 `Compensating`，不计 `reopened_total`。探针：`compensate completed: status=compensating step=1 completed=2 err=<nil> reopened=0`。`SAGA.md:261-264` 写“中止正向、开始补偿”，“运维观察”一节只说 `Failed` / `Compensated` 会变；没有用例覆盖。需要定：允许（写进文档与重开口径）还是拒绝。
+- v1.23.1 已修复，见 [RR-20261006-47](../../bugfix/RR-20261006-47.md)。
 
 ### S6（文档）其他过时表述
 
@@ -615,6 +620,8 @@ GOWORK=off go test -tags integration -count=1 ./saga/
 | `kit/README.md:27` | “幂等步骤 inbox（先占位再执行）” | 现为每操作状态文档 + 租约 + 接替 |
 | `kit/README.md:536` | “Mod 在 roost-kit/saga”、“exactly-once 步骤” | 已合仓（`kit/saga`）；契约是“至多一次生效” |
 | `kit/README.md:540` | “Mongo projection 在同一事务中对 claim 做条件写”“claim 租约封顶” | 对象已是操作状态文档 `_dataengine_step_operations` |
+
+v1.23.1 已修复（上表四处改为现状），随 RR-20261006-42～47 同批提交（文档项，不单独编号）。
 
 ### S7（缺陷，探针已证实）Nest 启动消费者对确定性错误 nak 到 `MaxDeliver`，启动意图静默丢失
 
@@ -629,5 +636,6 @@ GOWORK=off go test -tags integration -count=1 ./saga/
   ```
 
 - 对照：两条结果流把 `ErrInvalidRecord`、`ErrIdentityConflict` 归为终态 Term（`saga/nest_completion_consumer.go:150-159`）；`TestHandleNestStartRefusesEachMalformedEnvelopePermanently`（`promises_impl_test.go:93`）只覆盖信封层。`EmitStart` 与 `StartSaga` 的载荷上限不一致是根因之一：业务在提交时就该被拒绝，而不是在消费者里。
+- v1.23.1 已修复，见 [RR-20261006-43](../../bugfix/RR-20261006-43.md)。
 
 [↑ 速览](#速览) · [说明文档](../guide/06-saga.md)

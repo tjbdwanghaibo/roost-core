@@ -23,8 +23,13 @@ import (
 // A business refusal (the sender no longer has the items) also commits: no
 // mutation, just the receipt and a failed completion, because a refusal the
 // coordinator never hears is a saga that waits out its deadline. Only an
-// infrastructure error returns — that rolls everything back and lets the
-// delivery retry.
+// infrastructure error returns — that rolls everything back, but it does not
+// retry the delivery right away: the step consumer keeps this attempt's lease
+// (the commit's outcome may be unknown), a redelivery finds the attempt still
+// in flight and waits for its receipt until the command deadline, and the
+// next attempt comes from the coordinator after the step timeout. Only
+// dataengine.ErrFencedEntityPending hands the lease back for an immediate
+// redelivery (roost-core SAGA.md, 原生步骤执行契约).
 //
 //roost:nest rollback=undo durability=strict
 func handlerGiftDebit(target player.IBagEntity, itemID int64, count int32, step gift.NativeStep) (int32, error) {

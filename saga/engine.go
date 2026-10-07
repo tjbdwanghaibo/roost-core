@@ -209,6 +209,8 @@ func (e *Engine) Register(definition Definition) error {
 	}
 	definition.Steps = append([]Step(nil), definition.Steps...)
 	e.definitions[key] = definition
+	// EmitStart 在 Nest 事务里就按这个上限拒绝（RR-20261006-43）。
+	registerStartDataLimit(definition.Type, e.opts.MaxPayloadBytes)
 	return nil
 }
 
@@ -366,6 +368,7 @@ func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, err
 
 // Compensate requests semantic rollback of every completed step. It is safe to
 // call repeatedly; already compensating or compensated records are returned.
+// A Completed saga is refused with ErrSagaCompleted (RR-20261006-47).
 func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Time) (Record, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -382,6 +385,11 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 		}
 		if record.Status == StatusWaiting {
 			return Record{}, fmt.Errorf("saga: cannot force compensation while a step result is in flight")
+		}
+		if record.Status == StatusCompleted {
+			// Completed 是业务结论，按终态做业务的一方已据此行动；撤销已完成的业务走业务自己的冲正流程
+			// （RR-20261006-47，维护者 2026-10-07 选 A）。之前这里会把它带回 Compensating，逐步撤销全部步骤。
+			return record, ErrSagaCompleted
 		}
 		if record.CompletedSteps == 0 && record.LateStep == 0 {
 			return Record{}, fmt.Errorf("saga: no completed steps to compensate")
@@ -415,7 +423,13 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 //  3. 同一生、记录在等这个操作：成功与拒绝（操作的结论）从哪次尝试来都接收——收件箱不让之后的尝试再执行，下一次尝试
 //     回放的正是较早那次的 completion；可重试失败（尝试的结论）只接收正在等的那次尝试的（saga 方向 ③）：较早尝试的
 //     可重试失败只说明那一次没生效，正在等的尝试照常执行，接收它会用后一次的尝试计数判用尽、放弃正在执行的尝试（O-S5-7）。
-//  4. 其余按回执与 tombstone 判断重复或“放弃后迟到的成功”（completeNotWaiting）。
+//  4. 同一生、这个操作还开着、正在重试退避（Pending / Compensating 且 Attempt>0，openOperation）：成功接收为该操作的
+//     结果（RR-20261006-42）。之前只在 Waiting 时接收，退避中送达的成功被当作 ErrNotWaiting Term，指望下一次尝试经收件箱
+//     回放；但截止、人工 Compensate、定义缺失可以在下一次派发之前关闭这个操作，之后再没有尝试会回放它，这一步已生效却
+//     不在 CompletedSteps 里、不补偿、不告警。接收它与规则 2（旧一生成功在记录停在该操作上时接收）是同一条理由：成功是
+//     操作的结论，收件箱保证之后的尝试只会回放它。拒绝与可重试失败在退避中仍不接收：拒绝会由下一次尝试回放，操作若先被
+//     放弃关闭，拒绝本来就没有生效的东西要补；可重试失败按方向 ③ 只认正在等的那次尝试，退避中没有正在等的尝试。
+//  5. 其余按回执与 tombstone 判断重复或“放弃后迟到的成功”（completeNotWaiting）。
 func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, error) {
 	if completion.Validate() != nil {
 		return Record{}, ErrInvalidRecord
@@ -439,12 +453,15 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 			return record, nil
 		case incarnation != record.Incarnation:
 			accept = positionedAt(record, completion.IdempotencyKey)
-		default:
-			accept = record.Status == StatusWaiting && record.OperationKey == completion.IdempotencyKey
-			if accept && completion.Retryable && completion.CommandID != record.CommandID {
+		case record.Status == StatusWaiting && record.OperationKey == completion.IdempotencyKey:
+			accept = true
+			if completion.Retryable && completion.CommandID != record.CommandID {
 				e.reportStaleAttempt(record, completion)
 				return record, nil
 			}
+		default:
+			// 同一生、操作还开着但在重试退避（RR-20261006-42）：成功照样接收。
+			accept = completion.Success && openOperation(record) == completion.IdempotencyKey
 		}
 		if !accept {
 			written, err := e.completeNotWaiting(ctx, record, completion, incarnation)

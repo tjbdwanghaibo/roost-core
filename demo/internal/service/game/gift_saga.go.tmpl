@@ -74,7 +74,14 @@ import (
 // the items, the recipient's mailbox is full) is a completion with
 // Success=false and Retryable=false — the coordinator then compensates the
 // steps that completed. Anything else (Mongo, bus, Nest unavailable) is
-// returned as an error so the delivery is retried with backoff.
+// returned as an error. For the Mongo steps (deliver and its undo) that rolls
+// the transaction back, hands the lease back and the redelivery retries with
+// backoff. For the native steps (debit and refund) the consumer keeps the
+// attempt's lease — the Nest commit's outcome may be unknown — so a
+// redelivery finds the attempt in flight, waits for its receipt until the
+// command deadline and is then acknowledged; the next attempt comes from the
+// coordinator after the step timeout. Only dataengine.ErrFencedEntityPending
+// hands a native lease back for an immediate redelivery.
 const (
 	giftSagaInbox   = "_{{GAME_SERVICE}}_gift_step_inbox"
 	giftSagaDurable = "{{GAME_SERVICE}}-gift"

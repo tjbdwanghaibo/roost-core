@@ -70,10 +70,7 @@ func TestCoordinatorChecksTheIncarnationOfACompletion(t *testing.T) {
 		if !w.project(recordK) {
 			t.Fatal("attempt k projected within its deadline was skipped")
 		}
-		w.tick(5 * time.Second) // k 超时 → 退避
-		if err := w.complete(w.effectCompletion(recordK)); !errors.Is(err, ErrNotWaiting) {
-			t.Fatalf("completion of attempt %d during backoff = %v, want ErrNotWaiting", k.Attempt, err)
-		}
+		w.tick(5 * time.Second)  // k 超时 → 退避；k 的 completion effect 还没送达（RR-20261006-42 起退避中送达会被接收）
 		w.tick(10 * time.Second) // 最后一次尝试 k+1
 		expired := w.pendingCommand()
 		expired.DeadlineAt = time.Now().UTC().Add(-time.Second) // 投递晚于截止：不执行，回放 k 的成功

@@ -1,9 +1,13 @@
 package saga
 
 import (
+	"errors"
+	"fmt"
+	"sort"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/app"
+	coresaga "github.com/tjbdwanghaibo/roost-core/saga"
 )
 
 // saga.* 的声明（维护者决定 A4 ①）。缺省值与 coresaga.DefaultOptions 相同（TestSagaDeclaredDefaultsMatchCoreDefaults），
@@ -72,4 +76,53 @@ type config struct {
 		ResultEffectDurable string         `config:"result_effect_durable" example:"roost-saga-start-result" help:"不写由 core 推出"`
 		ResultEffect        consumerConfig `config:"result_effect_"`
 	} `config:"saga"`
+}
+
+// ValidateConfig 是 saga.* 的跨键规则（A4 ①）：配置里写的步骤超时必须短于步骤消费者的 AckWait（RR-20261006-46）。
+// 一次尝试的处理以命令截止（派发时刻 + 步骤 Timeout）为界，步骤消费者在 AckWait 之内 ack；Timeout 不短于 AckWait 时
+// JetStream 会在 handler 还在跑时把同一条命令重投给另一个消费者。步骤消费者的 AckWait 不是配置：生成的与 demo 的步骤消费者
+// 都取 coresaga.DefaultStepAckWait，这里与它比较（不另声明一个没人读的 ack_wait 键，RR-20261006-38 的教训）。
+// 定义里写死的 Timeout 不在配置里，由 Init 在解析步骤预算之后用 checkStepTimeouts 查。
+func (c *config) ValidateConfig(bool) error {
+	var errs []error
+	if timeout := c.Saga.StepDefaults.Timeout; timeout >= coresaga.DefaultStepAckWait {
+		errs = append(errs, stepTimeoutError("saga.step_defaults.timeout", timeout))
+	}
+	typeNames := make([]string, 0, len(c.Saga.Steps))
+	for name := range c.Saga.Steps {
+		typeNames = append(typeNames, name)
+	}
+	sort.Strings(typeNames)
+	for _, typeName := range typeNames {
+		stepNames := make([]string, 0, len(c.Saga.Steps[typeName]))
+		for name := range c.Saga.Steps[typeName] {
+			stepNames = append(stepNames, name)
+		}
+		sort.Strings(stepNames)
+		for _, stepName := range stepNames {
+			if timeout := c.Saga.Steps[typeName][stepName].Timeout; timeout >= coresaga.DefaultStepAckWait {
+				errs = append(errs, stepTimeoutError("saga.steps."+typeName+"."+stepName+".timeout", timeout))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// checkStepTimeouts 查解析完预算之后每个定义的每个步骤（包括定义里写死的 Timeout），规则同 ValidateConfig。
+func checkStepTimeouts(budgets coresaga.StepBudgets, definitions []coresaga.Definition) error {
+	var errs []error
+	for _, definition := range definitions {
+		for _, step := range budgets.Resolve(definition).Steps {
+			if step.Timeout >= coresaga.DefaultStepAckWait {
+				errs = append(errs, stepTimeoutError(fmt.Sprintf("saga %q step %q timeout", definition.Type, step.Name), step.Timeout))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func stepTimeoutError(what string, timeout time.Duration) error {
+	return fmt.Errorf("%s (%s) must be shorter than the step consumers' ack wait (%s): an attempt runs until its command deadline "+
+		"(dispatch + step timeout), and a longer one is redelivered to another consumer while it still runs",
+		what, timeout, coresaga.DefaultStepAckWait)
 }

@@ -103,26 +103,26 @@ func SubscribeNestCompletions(ctx context.Context, client fnats.IJetStream, conf
 
 func handleNestCompletion(ctx context.Context, message *fnats.JetStreamMsg, completer Completer) error {
 	if message == nil || completer == nil {
-		return kitnats.Permanent(ErrInvalidRecord)
+		return rejectEnvelope("native_result", ErrInvalidRecord)
 	}
 	if len(message.Data) > maxWireEnvelopeBytes {
-		return kitnats.Permanent(ErrInvalidRecord)
+		return rejectEnvelope("native_result", ErrInvalidRecord)
 	}
 	var envelope nestwal.EffectEnvelope
 	if err := json.Unmarshal(message.Data, &envelope); err != nil {
-		return kitnats.Permanent(err)
+		return rejectEnvelope("native_result", err)
 	}
 	if envelope.EffectID == "" || !strings.HasPrefix(envelope.Topic, CompletionEffectTopicPrefix) {
-		return kitnats.Permanent(ErrInvalidRecord)
+		return rejectEnvelope("native_result", ErrInvalidRecord)
 	}
 	completion, err := DecodeCompletionEffect(envelope.Payload)
 	if err != nil {
-		return kitnats.Permanent(err)
+		return rejectEnvelope("native_result", err)
 	}
 	// RR-20261005-NC-40：宽 subject 订阅不证明信封内路由正确，必须先核对目标 Saga。
 	// 在调用 Complete 前拒绝，避免异键消息推进状态或写入幂等回执。
 	if envelope.Topic != CompletionEffectTopicPrefix+completion.SagaID {
-		return kitnats.Permanent(ErrInvalidRecord)
+		return rejectEnvelope("native_result", ErrInvalidRecord)
 	}
 	_, err = completer.Complete(ctx, completion)
 	if err == nil {

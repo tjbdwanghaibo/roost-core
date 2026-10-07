@@ -115,37 +115,42 @@ func SubscribeCompletions(ctx context.Context, client fnats.IJetStream, config C
 		return nil, fmt.Errorf("saga: unsafe completion consumer limits")
 	}
 	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: config.SubjectPrefix + ".result.>", DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver, MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax}, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
-		if message == nil {
-			return kitnats.Permanent(ErrInvalidRecord)
-		}
-		if len(message.Data) > maxWireEnvelopeBytes {
-			return kitnats.Permanent(ErrInvalidRecord)
-		}
-		var envelope completionEnvelope
-		if err := json.Unmarshal(message.Data, &envelope); err != nil {
+		completion, err := decodeCompletionMessage(message)
+		if err != nil {
 			logConsumerError("completion decode", message, err)
-			return kitnats.Permanent(err)
-		}
-		if envelope.Version != WireVersion {
-			return kitnats.Permanent(ErrInvalidRecord)
-		}
-		completion := envelope.Completion
-		if err := completion.Validate(); err != nil {
-			return kitnats.Permanent(err)
+			return rejectEnvelope("result", err)
 		}
 		processCtx, cancel := context.WithTimeout(messageCtx, config.ProcessTimeout)
-		_, err := engine.Complete(processCtx, completion)
+		_, err = engine.Complete(processCtx, completion)
 		cancel()
 		if err != nil {
 			logConsumerError("completion", message, err)
 		}
 		// 与原生结果消费者同一份终态分类（O-S5-1）：重投不会改变结论的错误 Term，不 nak 到 MaxDeliver。
-		// 退避中到达、被这里丢弃的成功由同一操作实例的下一次尝试（或过期投递）经收件箱回放（SAGA.md「原生步骤执行契约」）。
+		// 退避中到达的成功由 Complete 接收（RR-20261006-42）；没有送达的由同一操作实例的下一次尝试（或过期投递）经收件箱回放（SAGA.md「原生步骤执行契约」）。
 		if isTerminalCompletionError(err) {
 			return kitnats.Permanent(err)
 		}
 		return err
 	})
+}
+
+// decodeCompletionMessage 解开普通结果流上的一条消息；错误都是坏信封（rejectEnvelope）。
+func decodeCompletionMessage(message *fnats.JetStreamMsg) (Completion, error) {
+	if message == nil || len(message.Data) > maxWireEnvelopeBytes {
+		return Completion{}, ErrInvalidRecord
+	}
+	var envelope completionEnvelope
+	if err := json.Unmarshal(message.Data, &envelope); err != nil {
+		return Completion{}, err
+	}
+	if envelope.Version != WireVersion {
+		return Completion{}, ErrInvalidRecord
+	}
+	if err := envelope.Completion.Validate(); err != nil {
+		return Completion{}, err
+	}
+	return envelope.Completion, nil
 }
 
 var _ Publisher = (*JetStreamPublisher)(nil)

@@ -108,6 +108,9 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("saga: %w", err)
 	}
 	m.config.Engine.StepBudgets = budgets
+	if err := checkStepTimeouts(budgets, m.definitions); err != nil {
+		return fmt.Errorf("saga: %w", err)
+	}
 	if m.config.Store.CompletionReceiptTTL <= m.config.Stream.MaxAge {
 		return fmt.Errorf("saga: completion receipt ttl must exceed stream max age")
 	}

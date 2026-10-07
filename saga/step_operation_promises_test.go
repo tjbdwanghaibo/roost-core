@@ -30,8 +30,9 @@ import (
 //
 //   - (a) 尝试 k 已提交、协调器已发出 k+1；k 的结果在 k+1 等待期间到达并被接收，随后 k+1 投递：
 //     k+1 不能再执行，只回放 k 的结果。
-//   - (b) k 的结果在重试退避期间到达，被协调器以 ErrNotWaiting 丢弃；k+1 投递时必须回放 k 的结果，
-//     协调器照常接收并前进，而不是让 k+1 再扣一次。
+//   - (b) k 的结果在 k+1 投递前没有送达协调器（effect 积压或丢失）；k+1 投递时必须回放 k 的结果，
+//     协调器照常接收并前进，而不是让 k+1 再扣一次。原来这里是“退避期间到达、被以 ErrNotWaiting 丢弃”，
+//     RR-20261006-42 起退避中送达的成功被接收（b'）。
 //   - (c) 协调器放弃（重试用尽）之后，k 才由 WAL 重放投影：命令截止已过，租约封顶在截止时间，
 //     记录必须被跳过、不留回执、不改业务；而“截止前已投影、结果在放弃后才送达”的残余窗口
 //     只告警（计数 + ERROR），不重开终态。
@@ -56,7 +57,7 @@ func TestNativeStepTakesEffectAtMostOncePerOperation(t *testing.T) {
 		w.assertEffective(k.IdempotencyKey, 1)
 	})
 
-	t.Run("b: late result dropped during backoff, k+1 replays it", func(t *testing.T) {
+	t.Run("b: late result not delivered before k+1, k+1 replays it", func(t *testing.T) {
 		w := newNativeWorld(t, 15, time.Now().UTC())
 		w.tick(0)
 		k := w.pendingCommand()
@@ -65,15 +66,36 @@ func TestNativeStepTakesEffectAtMostOncePerOperation(t *testing.T) {
 		if !w.project(recordK) {
 			t.Fatal("attempt k committed within its deadline was skipped on replay")
 		}
-		if err := w.complete(w.effectCompletion(recordK)); !errors.Is(err, ErrNotWaiting) {
-			t.Fatalf("completion of attempt %d during backoff = %v, want ErrNotWaiting (the Nest completion consumer drops it as permanent)", k.Attempt, err)
-		}
+		// k 的 completion effect 还没送达协调器（不投递）。
 		w.tick(10 * time.Second)
 		k1 := w.pendingCommand()
 		w.deliverCommand(w.inboxB, k1)
 		w.deliverReplays()
 		if record := w.record(); record.Step != 1 || record.CompletedSteps != 1 {
 			t.Fatalf("attempt %d did not carry the dropped result of attempt %d to the coordinator: %+v", k1.Attempt, k.Attempt, record)
+		}
+		w.assertEffective(k.IdempotencyKey, 1)
+	})
+
+	// RR-20261006-42：k 的结果在退避期间送达 → 接收（操作还开着），saga 前进；k+1 不会再派发。
+	t.Run("b': late result delivered during backoff is accepted", func(t *testing.T) {
+		w := newNativeWorld(t, 15, time.Now().UTC())
+		w.tick(0)
+		k := w.pendingCommand()
+		recordK := w.commitAttempt(w.inboxA, k)
+		w.tick(5 * time.Second) // k 超时 → 退避（pending）
+		if !w.project(recordK) {
+			t.Fatal("attempt k committed within its deadline was skipped on replay")
+		}
+		if err := w.complete(w.effectCompletion(recordK)); err != nil {
+			t.Fatalf("completion of attempt %d during backoff = %v, want accepted", k.Attempt, err)
+		}
+		if record := w.record(); record.Step != 1 || record.CompletedSteps != 1 {
+			t.Fatalf("success of attempt %d during backoff was not taken as the step's result: %+v", k.Attempt, record)
+		}
+		w.deliverEffect(recordK) // 重投：按回执去重
+		if record := w.record(); record.Step != 1 || record.CompletedSteps != 1 {
+			t.Fatalf("redelivery moved the record: %+v", record)
 		}
 		w.assertEffective(k.IdempotencyKey, 1)
 	})
@@ -347,6 +369,13 @@ func newNativeWorld(t *testing.T, attempts uint32, t0 time.Time) *nativeWorld {
 
 func newNativeWorldWithDeadline(t *testing.T, attempts uint32, t0 time.Time, sagaDeadline time.Duration) *nativeWorld {
 	t.Helper()
+	return newNativeWorldWithSteps(t, attempts, t0, sagaDeadline)
+}
+
+// newNativeWorldWithSteps 与 newNativeWorldWithDeadline 相同，extra 追加在 debit / deliver 之后（需要第 1 步完成后
+// saga 仍未结束的用例用它）。
+func newNativeWorldWithSteps(t *testing.T, attempts uint32, t0 time.Time, sagaDeadline time.Duration, extra ...Step) *nativeWorld {
+	t.Helper()
 	w := &nativeWorld{t: t, ctx: context.Background(), store: newMemoryStore(), mongo: mongotest.NewClient(), t0: t0, clock: t0, execByOp: map[string]int{}}
 	w.outcome = func(Command) Completion { return Completion{Success: true} }
 	options := DefaultOptions()
@@ -356,10 +385,10 @@ func newNativeWorldWithDeadline(t *testing.T, attempts uint32, t0 time.Time, sag
 		t.Fatal(err)
 	}
 	w.engine = engine
-	if err := engine.Register(Definition{Type: "gift", Version: 1, Steps: []Step{
+	if err := engine.Register(Definition{Type: "gift", Version: 1, Steps: append([]Step{
 		{Name: "debit", ForwardTopic: "gift.debit", Timeout: 5 * time.Second, MaxAttempts: attempts, BackoffMin: 100 * time.Millisecond, BackoffMax: time.Second},
 		{Name: "deliver", ForwardTopic: "gift.deliver", Timeout: 5 * time.Second, MaxAttempts: 5, BackoffMin: 100 * time.Millisecond, BackoffMax: time.Second},
-	}}); err != nil {
+	}, extra...)}); err != nil {
 		t.Fatal(err)
 	}
 	w.sagaID = fmt.Sprintf("gift-%d", nativeWorldSeq.Add(1))

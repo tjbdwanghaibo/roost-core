@@ -15,7 +15,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-	kitnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -219,13 +218,20 @@ func (i *MongoCommandInbox) Replay(ctx context.Context, command Command) (Comple
 	return i.findReceipt(ctx, command.ID, digest)
 }
 
+// DefaultStepAckWait 是步骤消费者不写 AckWait 时的取值；生成的与 demo 的步骤消费者都用它。一次尝试的处理以命令截止
+// （派发时刻 + 步骤 Timeout）为界，步骤 Timeout 必须短于它，否则 JetStream 会在 handler 还在跑时把命令重投给另一个
+// 消费者；kit 的 saga Mod 在启动前按它校验 saga.step_defaults / saga.steps 与定义里的步骤超时（RR-20261006-46）。
+const DefaultStepAckWait = 30 * time.Second
+
 type StepConsumerConfig struct {
 	Stream, Durable, Topic string
-	AckWait                time.Duration
-	MaxDeliver             int
-	MaxAckPending          int
-	NakBackoffMin          time.Duration
-	NakBackoffMax          time.Duration
+	// AckWait 不写取 DefaultStepAckWait。必须长于路由到这个主题的每个步骤的 Timeout；saga Mod 的启动校验按
+	// DefaultStepAckWait 判，自己写更短的 AckWait 时要相应缩短步骤 Timeout。
+	AckWait       time.Duration
+	MaxDeliver    int
+	MaxAckPending int
+	NakBackoffMin time.Duration
+	NakBackoffMax time.Duration
 
 	// Admit decides whether THIS process may run the command, and it is asked
 	// before the consumer takes anything for it.
@@ -254,7 +260,7 @@ func SubscribeMongoStep(ctx context.Context, client fnats.IJetStream, transport 
 		return nil, fmt.Errorf("saga: invalid step consumer configuration")
 	}
 	if config.AckWait <= 0 {
-		config.AckWait = 30 * time.Second
+		config.AckWait = DefaultStepAckWait
 	}
 	if config.MaxDeliver <= 0 {
 		config.MaxDeliver = 25_000
@@ -276,30 +282,16 @@ func SubscribeMongoStep(ctx context.Context, client fnats.IJetStream, transport 
 	}
 	subject := transport.prefix + ".command." + strings.Trim(config.Topic, ".")
 	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{Stream: config.Stream, Name: config.Durable, Durable: config.Durable, FilterSubject: subject, DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver, MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax}, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
-		if message == nil {
-			return kitnats.Permanent(ErrInvalidRecord)
-		}
-		if len(message.Data) > maxWireEnvelopeBytes {
-			return kitnats.Permanent(ErrInvalidRecord)
-		}
-		var envelope commandEnvelope
-		if err := json.Unmarshal(message.Data, &envelope); err != nil {
+		command, err := decodeStepCommand(message)
+		if err != nil {
 			logConsumerError("step decode", message, err)
-			return kitnats.Permanent(err)
-		}
-		if envelope.Version != WireVersion {
-			return kitnats.Permanent(ErrInvalidRecord)
-		}
-		command := envelope.Command
-		if err := command.Validate(); err != nil {
-			logConsumerError("step command", message, err)
-			return kitnats.Permanent(err)
+			return rejectEnvelope("mongo_step", err)
 		}
 		if !time.Now().Before(command.DeadlineAt) {
 			// The coordinator owns timeout/retry. Do not begin new business work,
 			// but replay a completion which committed before an earlier publish
 			// failed so it is not needlessly re-executed as a new attempt.
-			// 没有自己的回执时，同一操作实例另一次尝试已生效的成功可能在协调器退避期间被丢弃，而这条可能是最后一次
+			// 没有自己的回执时，同一操作实例另一次尝试已生效的成功可能没有送达协调器，而这条可能是最后一次
 			// 尝试：ack 前把那次成功重发（与原生步骤相同，U-0280 复核 2）。
 			replayCtx, cancel := context.WithTimeout(messageCtx, 3*time.Second)
 			defer cancel()
@@ -382,7 +374,7 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 		return nil, fmt.Errorf("saga: invalid dataengine step consumer configuration")
 	}
 	if config.AckWait <= 0 {
-		config.AckWait = 30 * time.Second
+		config.AckWait = DefaultStepAckWait
 	}
 	if config.MaxDeliver <= 0 {
 		config.MaxDeliver = 25_000
@@ -410,7 +402,9 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 	}, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
 		command, err := decodeStepCommand(message)
 		if err != nil {
-			return err
+			// 坏信封与 Mongo 步骤消费者同一口径：Term + 告警（RR-20261006-44）。之前原样返回，nak 到 MaxDeliver。
+			logConsumerError("native step decode", message, err)
+			return rejectEnvelope("native_step", err)
 		}
 		if !time.Now().Before(command.DeadlineAt) {
 			// 过了截止时间：协调器已按超时自行进入下一次尝试或补偿，不再等这次尝试的回答，
@@ -427,7 +421,7 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 				return replayErr
 			}
 			if !found {
-				// 这次尝试不执行，但同一操作实例另一次尝试的成功可能在退避期间被协调器丢弃，而这条可能是
+				// 这次尝试不执行，但同一操作实例另一次尝试的成功可能没有送达协调器，而这条可能是
 				// 最后一次尝试：ack 前把那次成功重发，协调器还在等就接收，已放弃就告警（U-0280 复核）。
 				replayed, err := replayOperationSuccess(messageCtx, &inbox.stepOperationInbox, transport, command)
 				if err != nil {
@@ -476,7 +470,7 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 		if reservation.Duplicate && reservation.Completion.CommandID != "" {
 			if reservation.Completion.CommandID != command.ID {
 				// 同一操作实例较早的一次尝试已经有结果（U-0280）：这次尝试不执行，把那次的 completion 经 saga
-				// 结果流重发给协调器。那次尝试自己的 completion effect 可能在协调器退避期间到达、已被丢弃；
+				// 结果流重发给协调器。那次尝试自己的 completion effect 可能还没送达或已丢失；
 				// 协调器正在等这个操作实例，会按 IdempotencyKey 接收它，已接收过则按回执去重。
 				metrics.IncCounter("saga.step.attempt_replayed_total", nil, 1)
 				return transport.PublishCompletion(processCtx, reservation.Completion)
@@ -515,6 +509,7 @@ func replayOperationSuccess(ctx context.Context, inbox *stepOperationInbox, tran
 	return true, transport.PublishCompletion(ctx, completion)
 }
 
+// decodeStepCommand 解开步骤命令消息；错误都是坏信封，两个步骤消费者都以 rejectEnvelope Term。
 func decodeStepCommand(message *fnats.JetStreamMsg) (Command, error) {
 	if message == nil || len(message.Data) > maxWireEnvelopeBytes {
 		return Command{}, ErrInvalidRecord
