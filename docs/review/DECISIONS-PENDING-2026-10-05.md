@@ -258,4 +258,5 @@
 | saga 迟到成功重开终态 | 维护者同意 A：允许 Failed / Compensated 因迟到的正向成功重开补偿（saga 方向④），补“重开”指标与日志 | 已实施（`93efc3cc`，分支 `sagareopen`，未发版；[实施](../feature/SAGA-DIRECTION-3-4-2026-10-07.md#8-重开的可观测性维护者第十三轮选-a2026-10-07)）：`saga.reopened_total{saga_type,from_status,reason}` / `Stats().Reopened`（`late_success` 重开 Failed / Compensated，`resume` / `compensate` 是 ManualRequired 记下的迟到步骤被补），每次 WARN；saga 无终态推送，SAGA.md「运维观察」写业务识别方法；T-292 |
 | 配置声明形式 | 维护者同意 A：配置结构体 + tag（已实施 `d1226825`） | 已定 |
 | 清理 wt-skabandon | 维护者同意 | 已清理 |
-| versionstore 墓碑 | 维护者询问含义，已解释，待定 | 待定 |
+| versionstore 墓碑 | 维护者选 A：不加墓碑；键不存在时 Create / Delete 回复丢失返回 `ErrOutcomeUnknown`，由调用方按请求 ID 去重或回读裁决 | 已定（即 `6b3a0eb9` 现状） |
+| 合并 sagareopen | 维护者同意 | 已合并（`3f2b4897`） |
