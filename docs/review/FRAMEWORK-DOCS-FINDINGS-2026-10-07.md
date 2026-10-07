@@ -26,3 +26,10 @@
 | F03-10 | 03 | 观察 | async 记录可能在 fsync 前被投影进 Mongo（崩溃后 Mongo 有、WAL 无） | 论证是否违反契约；违反则修 | 待处理 |
 | F03-11 | 03 | 观察 | `CommitRecord` digest 为 JSON 序列化，改结构体字段后跨版本重放判身份冲突 | 线上未部署不做兼容；写明升级须排空 WAL，或改 digest 口径 | 待处理 |
 | F03-12 | 03 | 观察 | 事务标记 TTL 必须大于 WAL 最长未确认时间，无启动校验 | 加启动校验（先红后绿） | 待处理 |
+| F02-1 | 02 | **缺陷（同 F03-1，两分区独立证实）** | 生成器会产出 `rollback=state|undo` + `durability=memory`（`codegen/internal/nest/gen.go:202`）；`durableCommit` 在 memory 且无 effect 时直接返回（`nest/rollback.go:589`），持久字段改动不进任何提交记录、不报错，重载后回到旧值；文档（`NEST_RUNTIME.zh-CN.md:80`、`CODEGEN_REFERENCE.zh-CN.md:234`）说 memory handler 不能改持久字段，源码只在 `rollback=none` 时 panic | **待维护者决定**：改实现强制契约 or 改契约 | 待决定 |
+| F02-2 | 02 | 死配置 / 死代码 | `nest.heartbeat_worker_num` 被读取并传入引擎但 `NewDispatcher` 不用（`kit/nest/nest_mod.go:101`、`nest/dispatcher.go:87`）；`ensureAsyncDispatchAllowed`（`nest/nest.go:699`）无调用方 | 删除死配置键与死代码（A4① schema 同步） | 待处理 |
+| F02-3 | 02 | glsvet 盲区 | handler 并发检查只看包级函数（`cmd/glsvet/main.go:389/:550`），codegen 支持的指针方法 handler 里开 goroutine 不报 | 先红后绿：覆盖方法 handler | 待处理 |
+| F02-4 | 02 | 文档 / 能力 | 生成器不接受 `durability=pipelined`（`codegen/internal/nest/parse.go:177`），`NEST_RUNTIME.zh-CN.md` 升级步骤第 8 条却要求测 pipelined handler；同文“旧 `//roost:nest` 不属于生产协议”与现行标注同名自相矛盾（同 F03-9） | 补 pipelined 支持或写明不支持并改文档 | 待处理 |
+| F02-5 | 02 | 文档 / 注释 | `docs/INTERNALS.md` §3 “worker 哈希串行”过时（现为 ID 依赖链 + 共享 worker），`nest/pipelined_completion.go:284` 注释同；`RUNTIME_EXECUTION_MODEL.md` 仍写独立 roost-codegen 仓与多仓发布顺序 | 改文档与注释 | 待处理 |
+| F02-6 | 02 | 注释 | `nest/rollback.go:587` “Memory-only handlers persist through entity release hooks” 过时（同 F03-1 注释项） | 随 F02-1 一并改 | 待处理 |
+| F02-7 | 02 | 推断 | `ActionRunner.submit`（`actionflow/action_runner.go:362`）不在 defer 里复位 `executing`（`MissionRunner` 在 defer 里复位）；现所有回调有 recover，路径走不到 | 改为 defer 复位（结构性，消除依赖 recover 的前提）+ 用例 | 待处理 |
