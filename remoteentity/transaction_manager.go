@@ -48,7 +48,7 @@ type remoteState struct {
 	retryMu        sync.Mutex
 	stopping       bool
 	finalizeOnce   sync.Once
-	// outboxSerial 让启动恢复和后台发布共用唯一入口；等待受各自 ctx 约束。
+	// outboxSerial 让启动恢复和后台发布共用唯一协调者；独立事务在页内有界并行。
 	outboxSerial operation.Serial
 	// republishMu 保护唤醒状态：扫描期间的新提交让 dirty 为真，结束前必须再扫一轮。
 	republishMu      sync.Mutex
@@ -554,6 +554,8 @@ func (m *Manager) StopFinalizer(ctx context.Context) error {
 }
 
 func (m *Manager) releaseRemoteEntries(parent context.Context, entries []*remoteWriteEntry) error {
+	started := time.Now()
+	defer func() { metrics.ObserveDuration("remote_entity.remote.release_latency", nil, time.Since(started)) }()
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -710,25 +712,22 @@ func (m *Manager) RecoverOutbox(ctx context.Context) error {
 		var pending []entity.RemoteCommitStatus
 		var next entity.RemoteOutboxCursor
 		var err error
+		started := time.Now()
 		if paged {
 			pending, next, err = pager.PendingRemoteCommitPage(ctx, cursor, 256)
 		} else {
 			pending, err = outbox.PendingRemoteCommits(ctx, 256)
 		}
+		metrics.ObserveDuration("remote_entity.outbox.scan", nil, time.Since(started))
 		if err != nil {
 			return errors.Join(failed, fmt.Errorf("remote_entity: load commit outbox: %w", err))
 		}
 		if len(pending) == 0 {
 			return failed
 		}
-		for _, status := range pending {
-			if err := ctx.Err(); err != nil {
-				return errors.Join(failed, err)
-			}
-			if err := m.publishAppliedRemoteTransaction(ctx, status); err != nil {
-				m.completeRemoteTransaction(status.TransactionID, entity.RemoteCommitStatus{TransactionID: status.TransactionID, State: entity.RemoteCommitIndeterminate, Receipts: status.Receipts, Cause: err.Error()})
-				failed = errors.Join(failed, fmt.Errorf("remote_entity: recover transaction %s: %w", status.TransactionID, err))
-			}
+		failed = errors.Join(failed, m.publishOutboxPage(ctx, pending))
+		if err := ctx.Err(); err != nil {
+			return errors.Join(failed, err)
 		}
 		if len(pending) < 256 {
 			return failed
@@ -814,6 +813,8 @@ func (m *Manager) runOutboxRepublish(state *remoteState) {
 }
 
 func (m *Manager) publishAppliedRemoteTransaction(ctx context.Context, status entity.RemoteCommitStatus) error {
+	started := time.Now()
+	defer func() { metrics.ObserveHistogram("remote_entity.outbox.transaction", nil, time.Since(started)) }()
 	if status.State != entity.RemoteCommitApplied || status.TransactionID.IsZero() || len(status.Commits) == 0 || len(status.Commits) != len(status.Receipts) {
 		return fmt.Errorf("remote_entity: corrupt commit outbox transaction %s", status.TransactionID)
 	}
@@ -829,8 +830,11 @@ func (m *Manager) publishAppliedRemoteTransaction(ctx context.Context, status en
 			return err
 		}
 	}
-	if err := m.backend.MarkRemoteCommitPublished(ctx, status.TransactionID); err != nil {
-		return err
+	markStarted := time.Now()
+	markErr := m.backend.MarkRemoteCommitPublished(ctx, status.TransactionID)
+	metrics.ObserveDuration("remote_entity.outbox.mark_published", nil, time.Since(markStarted))
+	if markErr != nil {
+		return markErr
 	}
 	m.completeRemoteTransaction(status.TransactionID, entity.RemoteCommitStatus{
 		TransactionID: status.TransactionID,
@@ -950,7 +954,10 @@ func (m *Manager) afterRemoteCommit(ctx context.Context, commit entity.RemoteCom
 	if err := m.acknowledgeRemoteCommit(commit); err != nil {
 		return err
 	}
-	if err := m.snapshots.publishCommitted(ctx, commit); err != nil {
+	started := time.Now()
+	err := m.snapshots.publishCommitted(ctx, commit)
+	metrics.ObserveDuration("remote_entity.outbox.snapshots", nil, time.Since(started))
+	if err != nil {
 		return err
 	}
 	m.notifyRemoteVersion(commit.EntityID, commit.NextVersion)

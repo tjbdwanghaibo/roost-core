@@ -6,4 +6,5 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../Roost.Client/Roost.Client.csproj" /></ItemGroup>
+  <ItemGroup><Compile Include="../../unity/Runtime/RoostConnection.cs" Link="Unity/RoostConnection.cs" /></ItemGroup>
 </Project>

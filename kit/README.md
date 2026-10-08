@@ -534,6 +534,8 @@ JetStream 流名：显式 `stream` 优先；未写时由 `prefix` 派生（`driv
 
 - **MongoCommitter 的幂等契约**：事务按 `RemoteTransactionID` + 批 digest 判重——同 id 不同 commits 拒绝（"transaction id reused"），同 id 同 digest 直接返回已存储的 receipts。实体 CAS 元数据、DAO 文档、不可变快照、幂等状态在**一个 Mongo 事务**里提交。
 
+- **Outbox发布并发**：`remote_entity.outbox_publish_workers`默认8（0取8），最大64；唯一RecoverOutbox协调者内部按完整事务全部Entity保序、无关事务并行。与慢池、写许可、投影worker数量独立，设1用于串行诊断；不能提前确认Applied或归还写额度来提高吞吐。阶段计时见[指标清单](../OBSERVABILITY.md)，本批尚未重跑性能负载。
+
 ### saga（引擎在 `saga/`，Mod 在 `kit/saga/`）：步骤至多一次生效与 nest 启动通道
 
 - **Mongo store 的 lease fencing**（`roost-core/saga/mongo_store.go`）：任务领取用 `FindOneAndUpdate` 带 `version` + `lease_until <= now` 的 CAS，`$inc lease_token` 使过期实例的后续提交被 owner+token 过滤。状态落库走 `Apply(ctx, ApplyRequest)`：无 outbox/收据时是不开事务的快路径（一次 CAS ReplaceOne）；事务路径在**一个 Mongo 事务**里同落 saga 状态、outbox 命令、completion 收据与 `CloseOperation`（driver 可能重跑事务回调，outcome 在回调开头重置）。重复完成通过收据 digest 幂等判定。

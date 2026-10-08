@@ -1,5 +1,8 @@
 # 03 DataEngine 说明
 
+**2026-10-08更新：** 增加停机WAL只读检查及完整隔离副本，使用`cmd/walinspect`，不自动修尾/跳过/推进checkpoint。 历史条目与验收边界见[本轮收口](../../feature/REFACTOR-2026-10-08-historical-closure.md)。下方旧版本行号保留原时点。
+
+
 > 本篇是框架整体文档 03 分区的**说明文档**，面向业务作者与运维。实现细节、不变量强制点和 review 检查点见 [实现文档](../impl/03-dataengine.md)。
 >
 > 源码基准：tag `v1.23.0`（`28912cd6`）。文中 `path:line` 都按这个 tag。本篇没有依赖 codebase-memory 图谱（图谱可能落后于 tag），全部结论按 tag 源码直接读取。

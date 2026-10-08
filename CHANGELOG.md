@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- 历史A1/A2/A8收口：增加停机WAL只读诊断及完整隔离副本工具`cmd/walinspect`；Go/C# Sync接收器校验基线，Unity正式连接在增量缺口或应用失败后关闭旧流；Destroy等待Entity锁可取消，持久删除已准入后仍完成收尾（RR-20261008-46）。
+- RR-20261008-47：Remote唯一outbox协调者内部按全部Entity依赖有界并行；新增`remote_entity.outbox_publish_workers`（默认8，上限64）及扫描/发布/确认等待/释放计时。没有提前持久确认或归还写额度，未重跑性能验证。
+
 - Remote outbox 统一发布：投影只持久提交并唤醒，finalizer 只确认与释放，memory/strict/pipelined 仍等发布完成；正式 Backend 游标扫描跨过失败页。公开 ApplyRemoteCommits 成功只承诺持久回执，发布完成须 FlushRemoteTransaction。见[方案与验收](docs/feature/REFACTOR-2026-10-08-outbox-single-publisher.md)。
 - RR-20261008-42～44：Layered 准入元数据默认最多65536项、支持可选容量；outbox 失败页后仍有进度；SnapshotClient 读取不再等待兴趣广播，有界后台队列与停止排空保持责任。
 

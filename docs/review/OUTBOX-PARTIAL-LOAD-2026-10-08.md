@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-维护者在 2026-10-08 要求暂停本机长稳，把资源让给其他重任务，可以继续其余轻量工作。本次已终止测试进程，并用私有环境的 `mirror-local.sh down` 停止 Mongo/NATS/Redis/代理，保留数据目录。没有改动共享测试环境。恢复前不自动启动压测、编译、测试、依赖或 CBM 重建。
+维护者在 2026-10-08 要求暂停本机长稳，把资源让给其他重任务，可以继续其余轻量工作。本次已终止测试进程，并用私有环境的 `mirror-local.sh down` 停止 Mongo/NATS/Redis/代理，保留数据目录。没有改动共享测试环境。后续维护者明确授权“除了压测其他的都继续实施”：可以进行编译、功能/并发/集成测试、私有依赖和CBM更新；Remote/Sync压测继续暂停。
 
 代码分支 `codex/outbox-closure`，本轮负载编译基线 `55f2cc20`。main 尚未合入本分支，不能拿 main 的旧性能记录代表此版本。
 
@@ -30,11 +30,15 @@
 
 ## 证据与继续顺序
 
-可携带结论在本文；本地完整副本：`roost-core/artifacts/perf/outbox-closure-20261008/partial-1h-55f2cc20/`，包括 `env.txt`、`preflight.log`、`run.log.gz`、`result.json.jsonl`、`partial-summary.json`。这些产物不提交。原始目录仍在工作树的 `artifacts/perf/remote/outbox-1h-80-w256-55f2cc20/`。私有资源数据在 `/tmp/roost-outbox-it-20261008/roost-dataengine-it`，env文件含凭据，不复制进仓库。
+可携带结论在本文；本地完整副本：`roost-core/artifacts/perf/outbox-closure-20261008/partial-1h-55f2cc20/`，包括 `env.txt`、`preflight.log`、`run.log.gz`、`result.json.jsonl`、`partial-summary.json`。这些产物不提交。分支原`artifacts/perf/remote/outbox-1h-80-w256-55f2cc20/`已另复制到主仓同一证据根下的`worktree-remote/`并核对checksum，随后可以清理工作树。私有资源数据在 `/tmp/roost-outbox-it-20261008/roost-dataengine-it`，env文件含凭据，不复制进仓库。
 
-1. 轻量工作继续：历史条目的源码核对、方案、回归用例准备和文档；不声称未执行测试通过。
-2. 机器可用于测试后，先复现并修复已确认的历史缺口，再完成目标race、根包与跨包全量验证。
+1. 非压测工作继续：历史条目实施、普通/race/功能故障验收、文档及索引更新。
+2. A8锁等待取消与独立事务发布阻塞已取得红证据并修复；完成最终版本的目标race、根包与跨包全量验证。
 3. 单独定位本次80 TPS退化：记录 Applied→发布→Committed→资源释放各阶段，核对唯一发布入口串行范围、网络往返、回源次数与finalizer唤醒；profile与正式延迟测试分开。
-4. 退化处理后用全新label独立重跑1小时，保留本次失败；再做剩余本机HA/Sync与Linux验证，最后刷新CBM。
+4. 退化处理后用全新label独立重跑1小时，保留本次失败；本机HA与Linux功能验证、CBM不再等待压测恢复；Sync负载同样保持暂停。
+
+已完成轻量源码与采样分析：[TPS定位记录](OUTBOX-TPS-ANALYSIS-2026-10-08.md)。已确认重构把独立事务发布收成全局串行，仍需阶段计时确定耗时比例；有界并发已实施，功能反例红转绿；没有重跑负载实验。
 
 统一长稳入口仍是 `scripts/perf/remote.sh`；按上表设置 `ROOST_REMOTE_*`，设置 `ROOST_REMOTE_DURATION=1h`、`ROOST_REMOTE_TIMEOUT=2h`、`ROOST_REMOTE_HEAP_PROFILE_MINUTES=10,30,60`。私有依赖使用 `ROOST_MIRROR_LOCAL_HOME` 与 `ROOST_MIRROR_LOCAL_OFFSET=22000`，需要重新启动时先核对端口和所属进程，不复用未知实例。不部署，不自动打tag。
+
+复跑前还要核对故障实验留下的Redis角色和代理上游，不能只看PING成功：本私有环境的负载基线为38379主、38380从；恢复该拓扑并清理toxic、确认复制链路正常后才开始新label。当前没有自动恢复压测。

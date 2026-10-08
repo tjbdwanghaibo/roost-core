@@ -48,11 +48,14 @@ type Config struct {
 	MaxConcurrentWrites   int
 	AsyncFinalizeCapacity int
 	AsyncFinalizeWorkers  int
+	// OutboxPublishWorkers 是唯一协调者内部发布独立事务的并发度，与Nest慢池和写额度无关。
+	// 零值取8，上限64；设为1可串行诊断。涉及同一Entity的事务按扫描顺序尝试。
+	OutboxPublishWorkers  int
 	TransactionTrackLimit int
 	TransactionTrackTTL   time.Duration
 	FinalizeRetryInterval time.Duration
-	// FinalizeProjectionTimeout 是 Durability 1/2/3（async、strict、带 Remote 批次的 pipelined）的延迟收尾等待 WAL 投影器结论的上限。期限内 finalizer
-	// 不回源、不发布，只等投影器写入 Committed / Rejected / Indeterminate；超期后按回源结论收尾
+	// FinalizeProjectionTimeout 是 Durability 1/2/3（async、strict、带 Remote 批次的 pipelined）的延迟收尾等待事务结论的上限。期限内 finalizer
+	// 不回源、不发布，等投影/唯一outbox推进tracker；超期后按回源结论收尾
 	// （投影器停滞、DataEngine fence 等）。零值取 30s（RR-20260926-38）。
 	FinalizeProjectionTimeout time.Duration
 	WrapperCapacity           int
@@ -96,6 +99,7 @@ func DefaultConfig() *Config {
 		MaxConcurrentWrites:             128,
 		AsyncFinalizeCapacity:           4096,
 		AsyncFinalizeWorkers:            16,
+		OutboxPublishWorkers:            8,
 		TransactionTrackLimit:           65536,
 		TransactionTrackTTL:             10 * time.Minute,
 		FinalizeRetryInterval:           500 * time.Millisecond,

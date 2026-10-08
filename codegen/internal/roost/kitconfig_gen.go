@@ -278,6 +278,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "remote_entity.max_concurrent_writes", Kind: "int", Default: "128", Min: "0", Help: "同时在途的 Remote 写许可；0 取 async_finalize_capacity，大于它时按它封顶；定容见 kit/README.md remoteentity“独立资源预算”"},
 		{Name: "remote_entity.async_finalize_capacity", Kind: "int", Min: "0", Starter: true, Example: "4096"},
 		{Name: "remote_entity.async_finalize_workers", Kind: "int", Min: "0", Starter: true, Example: "16"},
+		{Name: "remote_entity.outbox_publish_workers", Kind: "int", Default: "8", Min: "0", Max: "64", Help: "唯一发布协调者内的独立事务并发；0取8，同Entity保序"},
 		{Name: "remote_entity.transaction_track_limit", Kind: "int", Min: "0", Starter: true, Example: "100000"},
 		{Name: "remote_entity.transaction_track_ttl", Kind: "duration", Min: "0", Starter: true, Example: "10m"},
 		{Name: "remote_entity.wrapper_capacity", Kind: "int", Min: "0", Starter: true, Example: "65536"},

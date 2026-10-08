@@ -189,10 +189,9 @@ func (m *EntityManager) admitDelete(ctx context.Context, e IThreadSafeEntity, re
 	return admitter(ctx, e, reason)
 }
 
-// Destroy durably admits a versioned delete tombstone while holding the entity
-// mutex, then removes the entity from memory. A definitive admission failure
-// leaves the entity live. An indeterminate result removes it defensively so
-// callers cannot serve state that persistence may already have deleted.
+// Destroy 在Entity锁内准入持久删除，再移出内存。等锁和准入前可取消；
+// 已准入或结果未知后仍完成隔离与生命周期收尾，不能用取消撤销可能已持久的删除。
+// 确定拒绝保留活实体；用户OnDestroy回调不支持强制中断。
 func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason EntityDestroyReason, deleteFromDB bool) error {
 	if m == nil || e == nil || e.Base() == nil {
 		return ErrEntityNil
@@ -211,7 +210,10 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 		e.UnTouch()
 		return ErrEntityNil
 	}
-	mu.Lock()
+	if err := lock.LockContext(ctx, mu); err != nil {
+		e.UnTouch()
+		return err
+	}
 	if e.IsRemoved() || e.IsClear() {
 		mu.Unlock()
 		e.UnTouch()
@@ -226,6 +228,11 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 		return ErrEntityNotManaged
 	}
 	var admissionErr error
+	if err := ctx.Err(); err != nil {
+		mu.Unlock()
+		e.UnTouch()
+		return err
+	}
 	if deleteFromDB {
 		admission, err := m.admitDelete(ctx, e, reason)
 		if admission == DeleteAdmissionIndeterminate && err == nil {

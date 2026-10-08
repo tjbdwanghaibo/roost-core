@@ -1,5 +1,8 @@
 # 02 Nest 调度与实体：实现
 
+**2026-10-08更新：** Destroy通过`lock.LockContext`等待；内建channel锁直接感知取消，旧Mutex保持兼容并使用有界LockWithTimeout。持久删除已准入后不因取消撤回。 历史条目与验收边界见[本轮收口](../../feature/REFACTOR-2026-10-08-historical-closure.md)。下方旧版本行号保留原时点。
+
+
 > 配套说明文档：[guide/02-nest-entity.md](../guide/02-nest-entity.md)。
 > 源码基准：tag `v1.23.0`（`28912cd6`），全部 `path:line` 按这个 tag。codebase-memory 图谱的 generation 是 2026-09-23（`check_index_coverage` 对本篇引用的文件报 `metadata_changed`），比 tag 旧，只用来定位；结论全部来自 tag 源码。
 > 读者：review agent 与要改这块代码的人。每条不变量都给出“强制位置 + 守卫测试”，第 10 节是具体的 review 问题。

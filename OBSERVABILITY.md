@@ -305,6 +305,10 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | `remote_entity.finalize_retry_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.finalize_status_read_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.lock_takeover_total` | Counter | `remoteentity/versioned_lock.go:IncCounter` |
+| `remote_entity.outbox.scan` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
+| `remote_entity.outbox.snapshots` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
+| `remote_entity.outbox.mark_published` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
+| `remote_entity.outbox.transaction` | Histogram | `remoteentity/transaction_manager.go:ObserveHistogram` |
 | `remote_entity.quarantine_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.rejected_unload_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.rejected_unload_total` | Counter | `remoteentity/local_runtime.go:IncCounter` |
@@ -312,6 +316,8 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | `remote_entity.release_failure_total` | Counter | `remoteentity/manager.go:IncCounter` |
 | `remote_entity.remote.apply_latency` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
 | `remote_entity.remote.apply_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.remote.confirm_wait` | Duration | `remoteentity/transaction_tracking.go:ObserveDuration` |
+| `remote_entity.remote.release_latency` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
 | `remote_entity.remote.interest_refresh_renewed_total` | Counter | `remoteentity/interest_refresh.go:IncCounter` |
 | `remote_entity.remote.interest_refresh_requests_total` | Counter | `remoteentity/interest_refresh.go:IncCounter` |
 | `remote_entity.remote.interest_refresh_sent_total` | Counter | `remoteentity/interest_refresh.go:IncCounter` |

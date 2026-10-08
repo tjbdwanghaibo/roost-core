@@ -156,6 +156,8 @@ func (m *Manager) waitRemoteTransaction(ctx context.Context, id entity.RemoteTra
 // 单笔等待和 FlushAll 共用指针所有权；缓存淘汰不改变已接受等待的结果。
 func (m *Manager) waitTrackedRemoteTransaction(ctx context.Context, tracker *remoteTransactionTracker) (entity.RemoteCommitStatus, error) {
 	fctx.AssertBlockingAllowed("remoteentity.waitTrackedRemoteTransaction")
+	started := time.Now()
+	defer func() { metrics.ObserveDuration("remote_entity.remote.confirm_wait", nil, time.Since(started)) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}

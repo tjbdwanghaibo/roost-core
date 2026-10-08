@@ -1,11 +1,33 @@
 package lock
 
 import (
+	"context"
 	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/goroutine"
 )
+
+// LockContext 保留同goroutine重入，其他等待者直接选择锁释放或ctx取消。
+func (rm *ReentrantMutex) LockContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	gid := goroutine.GoID()
+	if rm.owner.Load() == gid {
+		rm.recursion++
+		return nil
+	}
+	if err := takeToken(ctx, rm.sem); err != nil {
+		return err
+	}
+	rm.owner.Store(gid)
+	rm.recursion = 1
+	return nil
+}
 
 var _ Mutex = (*ReentrantMutex)(nil)
 

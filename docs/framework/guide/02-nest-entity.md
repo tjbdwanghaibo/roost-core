@@ -1,5 +1,8 @@
 # 02 Nest 调度与实体：说明
 
+**2026-10-08更新：** EntityManager.Destroy在锁等待和删除准入前响应ctx取消，已准入或结果未知后仍完成销毁收尾。 历史条目与验收边界见[本轮收口](../../feature/REFACTOR-2026-10-08-historical-closure.md)。下方旧版本行号保留原时点。
+
+
 > 配套实现文档：[impl/02-nest-entity.md](../impl/02-nest-entity.md)。
 > 源码基准：tag `v1.23.0`（`28912cd6`），文中 `path:line` 都按这个 tag。codebase-memory 图谱停在 2026-09-23 的 generation，比 tag 旧，只用来定位；全部结论按 tag 源码核对。
 > 读者：写业务 handler 的人、做运维的人。要看控制流、不变量与 review 清单，读实现文档。

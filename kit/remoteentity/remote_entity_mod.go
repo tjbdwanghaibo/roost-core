@@ -92,6 +92,7 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	setPositive(&m.cfg.AsyncFinalizeCapacity, re.AsyncFinalizeCapacity)
 	m.cfg.MaxConcurrentWrites = re.MaxConcurrentWrites
 	setPositive(&m.cfg.AsyncFinalizeWorkers, re.AsyncFinalizeWorkers)
+	setPositive(&m.cfg.OutboxPublishWorkers, re.OutboxPublishWorkers)
 	setPositive(&m.cfg.TransactionTrackLimit, re.TransactionTrackLimit)
 	setPositive(&m.cfg.TransactionTrackTTL, re.TransactionTrackTTL)
 	setPositive(&m.cfg.WrapperCapacity, re.WrapperCapacity)

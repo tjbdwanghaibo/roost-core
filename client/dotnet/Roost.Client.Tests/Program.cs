@@ -53,6 +53,8 @@ internal static partial class Program
         Refuses(() => SyncFrame.Decode(RawSync.AsSpan(0, RawSync.Length - 1)), "truncated sync");
         Console.WriteLine("PASS malformed/limits/lockstep");
         TestLockstep();
+        TestSyncReceiver();
+        await TestUnitySyncAdapter();
         if (args.Length == 3)
             await GeneratedServer(args[1], int.Parse(args[2]));
         else

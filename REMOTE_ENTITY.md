@@ -23,7 +23,11 @@ core `remoteentity` 的 `MongoCommitter`（kit 入口是 `kit/remoteentity` 的 
 
 Nest WAL codec v4 持久化完整 RemoteCommit（mutation、delete、snapshot、invalidation）。Async handler 在 WAL admission 后返回，write gate 由 finalizer 持有，直到 backend status 确认。坏事务采用单次检查后退避重排队，不独占 worker。
 
-Mongo transaction 首先标记 `Applied`；snapshot/replica 发布成功后标记 `Committed`。运行期 finalizer 会直接重放发布失败的 `Applied` 事务，模块启动时也会先恢复全部 `Applied` outbox，再绑定业务入口。WAL 投影器遇到“已 Applied、只是发布失败”（`entity.ErrRemotePublicationPending`）时把这条记为已投影，不再按它退避重试挡住后面的记录；发布由 Manager 的补发循环（退避重扫 outbox，与启动时同一路径）补上，进程退出则由下次启动补上（RR-20261006-69）。未发布记录不设置 TTL，只有完成发布的记录才进入过期回收。发布和 ACK 都是幂等的。实体侧的 ACK（`IRemoteCommitParticipant.AcknowledgeRemoteCommit`）还必须**并发安全**：投影器报告结果未知后 finalizer 回源 Applied 自行发布，投影器对同一事务的重试同时也会确认，两者不持实体锁、可能并发；生成实体经 `Tracker.AdvanceVersion` 原子 CAS 满足，手写参与者与测试替身须自行保证（RR-20260926-63）。
+Mongo transaction首先标记`Applied`；唯一的`RecoverOutbox`协调者负责快照/复制发布，成功后标记`Committed`。投影只持久提交并唤醒outbox，finalizer只确认和释放，不自行发布；`ApplyRemoteCommits`成功只代表持久回执，需要发布确认的调用者等待`FlushRemoteTransaction`。memory/strict/pipelined的回复与写额度释放语义保持不变，不能提前到Applied。
+
+协调者共用启动恢复、显式恢复、重试和停止屏障，页内按完整事务有界并行；涉及任意同一Entity的事务按扫描顺序尝试，失败仍保留Applied。正式配置`remote_entity.outbox_publish_workers`默认8（0取8），范围1～64；设1用于串行诊断，不随Nest慢worker数放大。带游标的正式Backend可越过失败页继续扫描，不删除失败记录。页间先排空；停止必须等已派发发布结束。
+
+未发布记录不设置TTL，只有完成发布的记录才进入过期回收。发布与ACK保持幂等。实体侧的`AcknowledgeRemoteCommit`必须并发安全：outbox和Committed回执的本地确认可能交错，生成实体经`Tracker.AdvanceVersion`原子CAS满足。阶段耗时见[指标](OBSERVABILITY.md)，功能验收不能当作新TPS结论。
 
 ## 读取
 

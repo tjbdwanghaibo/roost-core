@@ -62,13 +62,18 @@ using var session = await Roost.Client.TcpSession.ConnectAsync(
 var response = await session.RequestAsync(10001, 10001,
     new byte[] { 0x08, 0x2a }, TimeSpan.FromSeconds(5));
 
-// 在引擎主线程每帧有界消费；此示例只展示类型分流。
+// 与连接同生命周期保存，不能每个包都new；主线程每帧有界消费。
+var syncReceiver = new Roost.Client.SyncReceiver();
 if (session.TryDequeuePush(out var push))
 {
     if (push.Kind == Roost.Client.PayloadKind.Sync)
     {
-        var frame = Roost.Client.SyncFrame.Decode(push.Payload.Span);
-        // Component.Data由对应namespace/profile/encoding的业务packer解码。
+        syncReceiver.Receive(push.Payload.Span, frame =>
+        {
+            // Full先清空旧流的对象/引用，再应用create；后续Delta继续补齐可见对象。
+            // Component.Data由对应namespace/profile/encoding的业务packer解码。
+            // 必须在回调内完成应用，失败抛异常；不要只入队就返回成功。
+        });
     }
     else if (push.Kind == Roost.Client.PayloadKind.Protobuf)
     {
@@ -81,7 +86,11 @@ if (session.TryDequeuePush(out var push))
 
 推送队列满时关闭连接、失败所有等待者并清空不能继续使用的增量，不能静默丢一个delta后继续应用。`Completion`表示接收循环结束，关闭原因读取`CloseReason`。连接关闭后创建新TcpSession实例；重连票据获取、重新订阅及full baseline恢复由业务驱动，本库不声称已提供完整复制状态机。断线检测基于socket I/O和请求预算，未实现独立心跳/空闲超时。
 
-`SyncFrame.Decode`和`SubjectUpdate.Decode`只解码已有Go格式，校验长度、操作和身份；`SubjectId`用`long`，RoomId/版本/掩码用`ulong`，不要转float/double。尚未实现应用packer对应的客户端组件模型、epoch/generation基线应用、可靠恢复或预测回滚。
+`SyncFrame.Decode`和`SubjectUpdate.Decode`只解码已有Go格式，校验长度、操作和身份；`SubjectId`用`long`，RoomId/版本/掩码用`ulong`，不要转float/double。
+
+新增`SyncReceiver`（本工作分支待运行验证）按单连接单流核对epoch、tick、baseTick与schema：首帧必须Full，重复/旧代不再应用，缺口或业务回调失败后拒绝增量，成功应用才推进基线。其内存状态固定，不缓存历史帧或业务实体。Go对应`sync/frame.Receiver`。同一连接串行消费，业务组件的generation、版本、解码及状态应用仍由业务维护；这里不提供预测回滚或所有packer的客户端模型。
+
+接入方捕获缺口/应用错误后关闭旧TcpSession，清理业务状态、经正常票据鉴权重连并恢复订阅；新连接重新创建或Reset接收器，不能把旧连接排队的包送给新基线。已有鉴权控制链的业务也可调用服务端HoldSession/ReadySession得到新epoch；本库不新增客户端任意请求全量的公开协议。Full可能只是恢复的第一包，后续连续Delta/create补齐其余对象，不能等“一个Full含全部可见对象”。Unity的`RoostConnection`已接入缺口关闭与Disconnected通知，Attach前必须安装PacketReceived；Sync回调异常不再仅打印后继续增量。真实Unity运行验证仍未执行。
 
 ## Lockstep接入
 
@@ -129,14 +138,14 @@ await match.ReportHashAsync(lastAppliedFrame, deterministicGame.StateHash);
 
 先构建Release版`Roost.Client.dll`并放到Unity工程`Assets/Plugins`，再把`client/unity`作为本地UPM包加入（`package.json`）。包不附带已编译DLL，须先提供运行库；Unity项目选择支持.NET Standard 2.1的兼容级别。C#业务PB类型及Google.Protobuf依赖由游戏工程管理。
 
-`Roost.Unity.RoostConnection`在Unity主线程Attach会话，`Update`每帧最多拉取配置数量的推送，然后触发`PacketReceived` / `Disconnected`；网络线程不访问Unity对象。Detach/销毁关闭自己的会话，替换时清掉旧连接队列。PB/Sync/Lockstep解码及游戏对象修改由主线程事件处理者实施；Lockstep异步消费必须串行await，不能直接挂并发async void事件。该适配源码尚未在Unity编辑器/IL2CPP平台实测。
+`Roost.Unity.RoostConnection`在Unity主线程Attach会话，`Update`每帧最多拉取配置数量的推送，然后触发`PacketReceived` / `Disconnected`；网络线程不访问Unity对象。Detach/销毁关闭自己的会话，替换时清掉旧连接队列。PB/Sync/Lockstep解码及游戏对象修改由主线程事件处理者实施；Lockstep异步消费必须串行await，不能直接挂并发async void事件。该正式适配源码已在.NET测试中直接链接，并通过真实TCP的缺口/业务异常关闭回归；测试只替代Unity宿主类型，尚未在Unity编辑器/IL2CPP平台实测。
 
 后续Godot .NET复用纯C#库并补主线程适配；Godot GDExtension与Unreal优先使用共享C++实现及同一金样。当前没有C++运行库、Godot/Unreal插件或浏览器传输，不把本机.NET通过等同于引擎验收。Lockstep复用纯C#库；Unreal/GDExtension仍需C++实现，不将.NET验证当C++验收。
 
 ## 本地验证与金样
 
 ```sh
-go test -race ./client/wire ./robot/... ./codegen/internal/protocol -count=1
+go test -race ./client/wire ./sync/frame ./robot/... ./codegen/internal/protocol -count=1
 dotnet run --project client/dotnet/Roost.Client.Tests -- client/spec/packets.json
 go test ./codegen/internal/roost -run '^TestClientSDKAgainstGeneratedPlayerTCP$' -count=1 -v
 ```

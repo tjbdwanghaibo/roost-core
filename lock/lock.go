@@ -1,8 +1,59 @@
 package lock
 
 import (
+	"context"
 	"time"
 )
+
+// LockContext 在原有Mutex契约上增加可取消等待，不为等待者创建goroutine。
+// 内建锁直接等待信号量；外部旧实现沿用其有界LockWithTimeout契约。
+// nil表示已取得一层锁，调用者负责Unlock；取消与取得同时发生时归还这一层。
+func LockContext(ctx context.Context, mu Mutex) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if native, ok := mu.(interface{ LockContext(context.Context) error }); ok {
+		if err := native.LockContext(ctx); err != nil {
+			return err
+		}
+	} else {
+		for !mu.TryLock() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if mu.LockWithTimeout(10 * time.Millisecond) {
+				break
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func takeToken(ctx context.Context, sem chan struct{}) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-sem:
+		if err := ctx.Err(); err != nil {
+			sem <- struct{}{}
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // Mutex is the lock interface used by entity system.
 // Implementations include ReentrantMutex (local) and distributed locks (app-layer).
@@ -32,6 +83,10 @@ type defaultMutex struct {
 
 func (d *defaultMutex) Lock() {
 	<-d.sem
+}
+
+func (d *defaultMutex) LockContext(ctx context.Context) error {
+	return takeToken(ctx, d.sem)
 }
 
 func (d *defaultMutex) Unlock() {

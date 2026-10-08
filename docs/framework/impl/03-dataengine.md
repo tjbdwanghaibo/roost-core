@@ -1,5 +1,8 @@
 # 03 DataEngine 实现
 
+**2026-10-08更新：** `nestwal/inspect.go`只读扫描和校验，`inspect_snapshot.go`完整副本/哈希/INCOMPLETE标记；不调用会自动修尾的Open。 历史条目与验收边界见[本轮收口](../../feature/REFACTOR-2026-10-08-historical-closure.md)。下方旧版本行号保留原时点。
+
+
 > 本篇是框架整体文档 03 分区的**实现文档**，面向 review agent 与维护者。是什么、怎么用、配置与运维见 [说明文档](../guide/03-dataengine.md)。
 >
 > 源码基准：tag `v1.23.0`（`28912cd6`），全部 `path:line` 按这个 tag。本篇没有依赖 codebase-memory 图谱（图谱可能落后于 tag），全部结论按 tag 源码直接读取；引用的测试名都已在 tag 里核对存在。标“推断 / 未验证”的地方没有用测试或探针证实。

@@ -1,5 +1,7 @@
 # 外部验证清单（2026-10-06）
 
+**2026-10-08后续边界：** 本轮选择本机私有集群故障，不要求跨机器或部署。E14已补精确窗口；etcd三节点实际leader强杀已验证Watch/发现/选主，仍不代表E07跨主机网络。新的1h Remote与Sync负载暂停，旧240秒失败保留；此前版本80 TPS结果不作为新outbox版本性能验收。详见[非压测收口](OUTBOX-HISTORICAL-CLOSURE-2026-10-08.md)。
+
 这份清单汇总尚缺的环境与场景证据：Linux 内核网络、跨主机分区、多节点 HA、长时间容量与 soak、多机 Redis Cluster、真实部署（systemd / k8s / 镜像）和真实客户端。大部分需要外部环境，或本机结果不能代表生产；**E14 是本机可补的精确崩溃窗口，不应以缺少外部主机为由搁置**。
 
 2026-10-08 更新：维护者仅保证 macOS/Linux，Windows 专属项排除。两平台全仓 build/vet/test 已通过，见 [后续验收](FOLLOWUP-MAC-LINUX-2026-10-08.md)；Linux 使用 Docker Desktop 内的 Linux/arm64 环境，该结果不关闭本表的内核网络、跨机 HA、真实部署与物理硬件场景。历史清单已被后续证据覆盖的部分见 [当前遗留核对](../bug/CARRYOVER.md#current-20261008)。
@@ -32,7 +34,7 @@
 | E11 | HA | Mongo 跨主机副本集、mongos、切主中提交 | 多机副本集 | 未做 |
 | E12 | 容量 | saga Mongo 步骤延迟的生产形态 | Linux + NVMe 副本集 | 未做 |
 | E13 | HA | 多主机强杀：owner / 锁迁移、双实例、旧回调 | 多主机 | 未做 |
-| E14 | HA | Remote outbox“Mongo 已提交、发布前崩溃”精确注入 | 需要插桩（本机可做） | 未做 |
+| E14 | HA | Remote outbox“Mongo 已提交、发布前崩溃”精确注入 | 本机私有Mongo/Redis/NATS与子进程 | 2026-10-08精确SIGKILL及同sid恢复已通过；[最终版验收](OUTBOX-HISTORICAL-CLOSURE-2026-10-08.md) |
 | E15 | 容量 / soak | Mirror 长时间容量 | 专用 Linux | 未做 |
 | E16 | 容量 | Mirror 大规模扇出与目标负载 | Linux + 目标负载 | 待维护者给目标负载 |
 | E17 | 容量 / soak | Remote / DataEngine 24 小时与稳定容量 | 专用静默 Linux | 未做 |

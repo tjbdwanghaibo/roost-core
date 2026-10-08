@@ -1,5 +1,8 @@
 # 05 Remote Entity 与 Mirror 说明
 
+**2026-10-08现行契约更新：** 下方按v1.23.0行号描述保留历史。当前投影只持久Applied并唤醒outbox，finalizer只等待确认与释放；`RecoverOutbox`是唯一发布协调者，页内按全部Entity依赖有界并行（`outbox_publish_workers`默认8、上限64），失败保留Applied，停止排空在途。`ApplyRemoteCommits`成功不承诺发布，需`FlushRemoteTransaction`确认。兴趣广播改为有界后台队列，不占ReadSnapshot预算。已被本轮实现取代的“投影/ finalizer直接发布”及发布阻塞疑点不再代表当前逻辑。详见[正式契约](../../../REMOTE_ENTITY.md)、[方案](../../feature/REFACTOR-2026-10-08-outbox-single-publisher.md)与[RR-47](../../bugfix/RR-20261008-47.md)。
+
+
 > 本篇是框架整体文档 05 分区的**说明文档**，面向业务作者与运维。实现细节、不变量强制点和 review 检查点见 [实现文档](../impl/05-remote-mirror.md)。
 >
 > 源码基准：tag `v1.23.0`（`28912cd6`）。文中 `path:line` 都按这个 tag。本篇没有依赖 codebase-memory 图谱（图谱可能落后于 tag），结论全部按 tag 源码直接读取；标“推断 / 未验证”的地方没有用测试或探针证实。

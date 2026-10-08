@@ -11,13 +11,13 @@
 ## 发布与确认契约
 
 1. `ApplyRemoteCommits` 校验并持久提交，取得持久状态后登记 Applied、唤醒 outbox；投影器不等待网络发布。已 Committed 的幂等重放只确认本地参与方，不重新发布。
-2. `RecoverOutbox` 是唯一发布入口，启动恢复和后台循环共用，并发扫描串行且等待可取消。只有这里执行快照发布和 `MarkRemoteCommitPublished`。
+2. `RecoverOutbox` 是唯一发布入口，启动恢复和后台循环共用，扫描由一个协调者串行拥有、等待可取消；页内独立事务有界并行，涉及任一相同Entity的事务按扫描顺序尝试，跨页先排空。只有这里执行快照发布和 `MarkRemoteCommitPublished`。
 3. 第一次唤醒立即扫描；失败按既有有界退避重试；循环中的新唤醒记 dirty，保证扫描结束边界不丢通知。持久 outbox 是恢复事实，内存通知不是唯一记录。
 4. finalizer 看到 Applied 只唤醒 outbox 并重试等待；看到 Committed 只做本地确认、释放 gate/fence/写额度及提交后回调；不发快照。保留持久拒绝后的隔离、卸载与回调契约。
 5. memory 模式仍等发布结论再成功回复；strict/pipelined 继续等 tracker。async 只承诺 WAL 准入，保持原有语义。等待超时是结果未知，不回滚可能已经持久的数据。
 6. 发布失败与投影成功独立；停机取消并等待发布循环，不能让回调在释放 SnapshotClient 后继续运行。跨进程仍允许对同一 outbox 幂等补发；“唯一入口”不冒称分布式恰好一次。
 
-公开方法 `ApplyRemoteCommits` 的 nil 只表示取得持久回执；需要发布完成的调用方使用 `FlushRemoteTransaction`。正式 batch/memory 接线同步修改。无 wire、WAL、Mongo 格式与配置变更；不移除 MaxDeliver，不加生产故障开关。旧公开错误哨兵保留兼容调用方。
+公开方法 `ApplyRemoteCommits` 的 nil 只表示取得持久回执；需要发布完成的调用方使用 `FlushRemoteTransaction`。正式 batch/memory 接线同步修改。无wire、WAL、Mongo格式变更；后续RR-47增加正式`outbox_publish_workers`配置（默认8，上限64）；不移除 MaxDeliver，不加生产故障开关。旧公开错误哨兵保留兼容调用方。
 
 ## 分批与验收
 
@@ -37,4 +37,6 @@
 
 macOS 全仓 build/vet/test 通过；Remote/Entity/Kit race ×3 通过。21格私有集群矩阵全部通过（分页与兴趣改动前）；最新 Mirror 全8场景通过（104.164s），最新 E14 精确 SIGKILL/restart 连续3次通过（2.955s）。E14 读取在原 100ms+1.5s 预算内等待负缓存失效，不假定 Start 返回瞬间只读方必已更新。
 
-原始证据根：artifacts/perf/outbox-closure-20261008；矩阵在 artifacts/perf/remote/outbox-closure-20261008-r3。旧失败均保留。正式1h负载在维护者要求下暂停，已采样240秒、完成14423笔、4520错误、约60.1 TPS，未完成最终核验；见 [中断记录](../review/OUTBOX-PARTIAL-LOAD-2026-10-08.md)。私有依赖已停止，不自动恢复重任务。历史轻量工作按 [收口方案](REFACTOR-2026-10-08-historical-closure.md) 继续，不据上述局部验证称整轮已完成。
+原始证据根：artifacts/perf/outbox-closure-20261008；矩阵在 artifacts/perf/remote/outbox-closure-20261008-r3。旧失败均保留。正式1h负载在维护者要求下暂停，已采样240秒、完成14423笔、4520错误、约60.1 TPS，未完成最终核验；见 [中断记录](../review/OUTBOX-PARTIAL-LOAD-2026-10-08.md)。维护者后续授权除压测外全部继续，功能故障环境按需开启并清理。历史工作按 [收口方案](REFACTOR-2026-10-08-historical-closure.md) 继续，不据上述局部验证称整轮已完成。
+
+后续已完成RR-46/47、A1/A2/A8及历史具名收口；最终macOS全仓、双平台定向、矩阵21项（18首轮+3环境补跑）、正式Mirror八场景、E14和三节点etcd结果见[非压测验收](../review/OUTBOX-HISTORICAL-CLOSURE-2026-10-08.md)。新的1h Remote和Sync负载按指示暂停，未宣称性能恢复。
