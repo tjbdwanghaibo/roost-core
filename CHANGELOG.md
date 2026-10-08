@@ -1,5 +1,11 @@
 # Changelog
 
+## 未发布：撤销 DAO 自动迁移与旧兴趣发布端兼容（2026-10-08）
+
+- DAO 加载只接受当前 schema；删除 MigrationRunner、DAORegistry、生成 Migrate 与迁移投影特例。NewEntityRepository 移除 migration 参数，持久 DAO 必须声明 SchemaVersion。
+- Remote 兴趣发布与接收要求非零代际与完整身份，无 payload Delete 明确拒绝；旧发布端不兼容。
+- 正式生成工程需重生成；先停旧再起新，旧程序先落库不等于新程序可读取不同 schema。框架不自动清库或转换。详见[说明与验收](docs/release/RETIRE-DAO-MIGRATION-2026-10-08-NOTES.md)。
+
 ## 未发布：三大模块旧兼容清理（2026-10-08）
 
 - Nest 只保留快慢池配置和统计，旧 worker/remote options 与配置键移除；生成 sender 统一 SendOptionSlow。

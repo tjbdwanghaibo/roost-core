@@ -66,10 +66,7 @@ type PlayerDao struct {
 	// side of that handover exactly-once, because the id lands in the same
 	// WAL record as the items.
 	//
-	// Adding a field needs no migration step: BSON decode gives an absent map
-	// its zero value, so a document written by the previous build loads as a
-	// player who has claimed nothing. What needs a step is a change of SHAPE
-	// (see db/migrations/player.go), which is why schema= is still 2.
+	// 当前 schema 为 2；框架只加载同版本文档，不自动转换历史数据。
 	PurchaseClaims map[string]int64 `bson:"purchase_claims" dao:"persist,map=fast"`
 	// GuildID is the guild this player belongs to, or 0.
 	//

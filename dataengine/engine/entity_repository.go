@@ -39,10 +39,9 @@ type entityLoadFlight struct {
 }
 
 type EntityRepository struct {
-	manager   *entity.EntityManager
-	store     coredata.Store
-	migration *MigrationRunner
-	gate      RecoveryGate
+	manager *entity.EntityManager
+	store   coredata.Store
+	gate    RecoveryGate
 
 	flightMu sync.Mutex
 	flights  map[int64]*entityLoadFlight
@@ -95,21 +94,21 @@ func (repository *EntityRepository) runLoadedHooks(loaded entity.IThreadSafeEnti
 	}
 }
 
-func NewEntityRepository(manager *entity.EntityManager, store coredata.Store, migration *MigrationRunner, gate RecoveryGate) (*EntityRepository, error) {
-	return newEntityRepository(manager, store, migration, gate)
+func NewEntityRepository(manager *entity.EntityManager, store coredata.Store, gate RecoveryGate) (*EntityRepository, error) {
+	return newEntityRepository(manager, store, gate)
 }
 
-func newEntityRepository(manager *entity.EntityManager, store coredata.Store, migration *MigrationRunner, gate RecoveryGate) (*EntityRepository, error) {
+func newEntityRepository(manager *entity.EntityManager, store coredata.Store, gate RecoveryGate) (*EntityRepository, error) {
 	if manager == nil || store == nil {
 		return nil, errors.New("dataengine repository: entity manager and store are required")
 	}
 	return &EntityRepository{
-		manager: manager, store: store, migration: migration, gate: gate,
+		manager: manager, store: store, gate: gate,
 		flights: make(map[int64]*entityLoadFlight),
 	}, nil
 }
 
-// LoadEntity 先复用已加载实体；冷加载等待恢复与投影屏障，迁移后重读完整聚合再发布。
+// LoadEntity 先复用已加载实体；冷加载等待恢复与投影屏障，完整聚合 schema 校验通过后才发布。
 // 同一实体共享首个调用者发起的加载；其他等待者取消只退出自身等待，不取消该次共享加载。
 // 冷加载包含 I/O，不允许从快池进入；初始化和发布经 RunLocal 返回本地执行阶段。
 func (repository *EntityRepository) LoadEntity(ctx context.Context, id int64, kind entity.EntityKind) (entity.IThreadSafeEntity, error) {
@@ -152,7 +151,7 @@ func (repository *EntityRepository) LoadEntity(ctx context.Context, id int64, ki
 
 	// Finishing the flight is a defer for the same reason it is in
 	// entity.ManagerAccess (RR-20260919-08): a panic under loadAggregate —
-	// a decoder, a migration step, an OnInitFinish — would otherwise leave a
+	// a decoder or an OnInitFinish — would otherwise leave a
 	// flight nobody closes, and every later load of that aggregate would wait
 	// on it until its own context expired. The repository is reachable
 	// directly, not only through Nest, so recovering at the Nest boundary
@@ -205,84 +204,66 @@ func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID in
 		return nil, fmt.Errorf("%w: entity kind %d has no persistent DAO", ErrEntityAggregateNotFound, kind)
 	}
 
-	for migrationAttempt := 0; migrationAttempt < 3; migrationAttempt++ {
-		// 每轮重新取得完整聚合的一致性视图；迁移完成后也必须重读，
-		// 不能把迁移前的其他 DAO 与迁移后的版本拼成一个 Entity。
-		loaded, remoteVector, err := repository.readAggregate(ctx, builder, fullID)
-		if err != nil {
-			return nil, err
-		}
-		migrated := false
-		for _, item := range loaded {
-			descriptor, ok := item.dao.(coredata.Descriptor)
-			if !ok || descriptor.SchemaVersion() == item.schema {
-				continue
-			}
-			if migrationAttempt == 2 {
-				return nil, fmt.Errorf("%w: resource=%s entity=%d stored_schema=%d target_schema=%d", coredata.ErrMigrationConflict, item.dao.CollName(), fullID, item.schema, descriptor.SchemaVersion())
-			}
-			if repository.migration == nil {
-				return nil, fmt.Errorf("%w: resource=%s entity=%d", ErrMigrationUnsupported, item.dao.CollName(), fullID)
-			}
-			migrationDoc := item.doc
-			migrationDoc.Schema = item.schema
-			changed, err := repository.migration.Migrate(ctx, item.dao, migrationDoc)
-			if err != nil {
-				return nil, err
-			}
-			migrated = migrated || changed
-		}
-		if migrated {
-			continue
-		}
-
-		daos := make(map[string]entity.DaoInterface, len(loaded))
-		// 所有 DAO 校验并恢复版本后才发布 Entity，避免外部看到半加载状态。
-		for _, item := range loaded {
-			hydrator, ok := item.dao.(entity.PersistedDaoLoader)
-			if !ok {
-				return nil, fmt.Errorf("%w: resource=%s does not implement PersistedDaoLoader", ErrEntityAggregateCorrupt, item.dao.CollName())
-			}
-			if err := hydrator.RestorePersisted(item.payload, item.schema, item.doc.Version); err != nil {
-				return nil, fmt.Errorf("dataengine repository: restore %s/%d: %w", item.dao.CollName(), fullID, err)
-			}
-			if item.dao.Id() != fullID {
-				return nil, fmt.Errorf("%w: resource=%s decoded id=%d want=%d", ErrEntityAggregateCorrupt, item.dao.CollName(), item.dao.Id(), fullID)
-			}
-			daos[item.dao.CollName()] = item.dao
-		}
-		param := &entity.EntityCreateParam{
-			IsCreate: false, Category: builder.Category, Kind: kind, Id: fullID,
-			Dao: daos, Lifetime: builder.Lifetime,
-		}
-		// 是否托管看 kind 在注册表里的实际策略，不看 builder 自带的 RemotePolicy：kind 定义声明 managed、手写 builder 省略
-		// 策略时注册表按“部分重复声明”接受，全部 Remote 路径都按托管处理，这里也必须恢复版本信封（RR-20260926-71，同 RR-60）。
-		if entity.GetEntityKindRemotePolicy(kind).RemoteManaged() {
-			if remoteVector.StateVersion == 0 {
-				return nil, fmt.Errorf("%w: remote entity %d has no version envelope", ErrEntityAggregateCorrupt, fullID)
-			}
-			param.RemoteRestore = &remoteVector
-		}
-		var created entity.IThreadSafeEntity
-		var createErr error
-		// 冷加载 I/O 在慢池；初始化回调和发布 Entity 回到快池。
-		dispatchErr := entity.RunLocal(ctx, func() {
-			if created, createErr = repository.manager.Create(param); createErr == nil {
-				repository.runLoadedHooks(created)
-			}
-		})
-		err = errors.Join(createErr, dispatchErr)
-		if err != nil {
-			if errors.Is(err, entity.ErrEntityExists) {
-				if existing := repository.manager.Get(fullID); existing != nil {
-					return existing, nil
-				}
-			}
-			return nil, err
-		}
-		return created, nil
+	// 先验证完整聚合的 schema，任何不匹配都不能水合、发布或触发写回。
+	loaded, remoteVector, err := repository.readAggregate(ctx, builder, fullID)
+	if err != nil {
+		return nil, err
 	}
-	return nil, coredata.ErrMigrationConflict
+	for _, item := range loaded {
+		descriptor, ok := item.dao.(coredata.Descriptor)
+		if !ok {
+			return nil, fmt.Errorf("%w: resource=%s does not implement Descriptor", ErrEntityAggregateCorrupt, item.dao.CollName())
+		}
+		if descriptor.SchemaVersion() != item.schema {
+			return nil, fmt.Errorf("%w: resource=%s entity=%d stored_schema=%d target_schema=%d", coredata.ErrSchemaMismatch, item.dao.CollName(), fullID, item.schema, descriptor.SchemaVersion())
+		}
+	}
+
+	daos := make(map[string]entity.DaoInterface, len(loaded))
+	// 所有 DAO 校验并恢复版本后才发布 Entity，避免外部看到半加载状态。
+	for _, item := range loaded {
+		hydrator, ok := item.dao.(entity.PersistedDaoLoader)
+		if !ok {
+			return nil, fmt.Errorf("%w: resource=%s does not implement PersistedDaoLoader", ErrEntityAggregateCorrupt, item.dao.CollName())
+		}
+		if err := hydrator.RestorePersisted(item.payload, item.schema, item.doc.Version); err != nil {
+			return nil, fmt.Errorf("dataengine repository: restore %s/%d: %w", item.dao.CollName(), fullID, err)
+		}
+		if item.dao.Id() != fullID {
+			return nil, fmt.Errorf("%w: resource=%s decoded id=%d want=%d", ErrEntityAggregateCorrupt, item.dao.CollName(), item.dao.Id(), fullID)
+		}
+		daos[item.dao.CollName()] = item.dao
+	}
+	param := &entity.EntityCreateParam{
+		IsCreate: false, Category: builder.Category, Kind: kind, Id: fullID,
+		Dao: daos, Lifetime: builder.Lifetime,
+	}
+	// 是否托管看 kind 在注册表里的实际策略，不看 builder 自带的 RemotePolicy：kind 定义声明 managed、手写 builder 省略
+	// 策略时注册表按“部分重复声明”接受，全部 Remote 路径都按托管处理，这里也必须恢复版本信封（RR-20260926-71，同 RR-60）。
+	if entity.GetEntityKindRemotePolicy(kind).RemoteManaged() {
+		if remoteVector.StateVersion == 0 {
+			return nil, fmt.Errorf("%w: remote entity %d has no version envelope", ErrEntityAggregateCorrupt, fullID)
+		}
+		param.RemoteRestore = &remoteVector
+	}
+	var created entity.IThreadSafeEntity
+	var createErr error
+	// 冷加载 I/O 在慢池；初始化回调和发布 Entity 回到快池。
+	dispatchErr := entity.RunLocal(ctx, func() {
+		if created, createErr = repository.manager.Create(param); createErr == nil {
+			repository.runLoadedHooks(created)
+		}
+	})
+	err = errors.Join(createErr, dispatchErr)
+	if err != nil {
+		if errors.Is(err, entity.ErrEntityExists) {
+			if existing := repository.manager.Get(fullID); existing != nil {
+				return existing, nil
+			}
+		}
+		return nil, err
+	}
+	return created, nil
 }
 
 func (repository *EntityRepository) readAggregate(ctx context.Context, builder *entity.EntityBuilderParam, fullID int64) ([]loadedDAO, entity.RemoteVersionVector, error) {
@@ -306,9 +287,7 @@ func (repository *EntityRepository) readAggregate(ctx context.Context, builder *
 			if dao == nil || dao.CollName() == "" {
 				return fmt.Errorf("%w: DAO builder %d returned invalid DAO", ErrEntityAggregateCorrupt, index)
 			}
-			// Builders intentionally return an empty DAO. Bind the aggregate identity
-			// before migration and restore so migrators can emit a valid _id and
-			// loaders can reject a payload that belongs to another entity.
+			// 先绑定聚合身份，恢复时拒绝属于其他 Entity 的 payload。
 			dao.SetId(fullID)
 			for _, existing := range loaded {
 				if existing.dao.CollName() == dao.CollName() {

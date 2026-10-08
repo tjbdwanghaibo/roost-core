@@ -30,10 +30,7 @@ type DaoDef struct {
 	Db      string // logical database name, e.g. "game"
 	DbScope string // global or sid
 	// Schema is the DAO's schema version, from `schema=` (1 when omitted).
-	// Raising it is what lets a project run a migration: the generated
-	// Migrate hands the stored document's version and this one to
-	// migration.MigrateDAO, and with a constant version those two could
-	// never differ.
+	// 加载时必须与持久 schema 相等；框架不转换旧文档。
 	Schema uint32
 	// NoCollection is `//roost:dao nocoll`: an in-memory DAO with no
 	// collection, no database and no storage path. Every field must be
@@ -690,10 +687,7 @@ func exprString(expr ast.Expr) string {
 // parseSchemaParam reads `schema=`. Absent means 1 — the version every
 // definition has always had, so omitting it changes nothing.
 //
-// Zero is refused rather than defaulted: a DAO at version 0 would make every
-// stored document look newer than the code, and the migration runner would
-// have nothing to run toward. A non-number is refused because silently
-// ignoring a typo here means the migration nobody notices is not running.
+// Zero and malformed values are rejected; schema versions must be explicit positive numbers.
 func parseSchemaParam(value string) (uint32, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {

@@ -306,13 +306,9 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if def := read("db/def/player.go"); !strings.Contains(def, "Equipment Equipment") || !strings.Contains(def, "Slots map[int32]*GearPiece") {
 		t.Errorf("the Player DAO has no nested struct field, so the demo never exercises two-level dirty propagation")
 	}
-	// And the schema version it declares, with the step that upgrades the
-	// documents an older build wrote.
+	// 持久 schema 继续声明，用于加载前的严格版本校验。
 	if def := read("db/def/player.go"); !strings.Contains(def, "schema=2") {
-		t.Errorf("the Player DAO does not declare a schema version, so migration.MigrateDAO can never run")
-	}
-	if step := read("db/migrations/player.go"); !strings.Contains(step, "migration.RegisterDAO(") || !strings.Contains(step, "weapon_id") {
-		t.Errorf("the project registers no migration step, so the framework's migration path has no consumer")
+		t.Errorf("the Player DAO does not declare a schema version, so stored data cannot be checked")
 	}
 	// Entity sync: the Player is a replicated subject, the scene is the room
 	// that schedules and fans out its deltas, and the client half decodes

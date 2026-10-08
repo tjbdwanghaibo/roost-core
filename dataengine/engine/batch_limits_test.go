@@ -235,7 +235,6 @@ func TestLocalBatchEligibilityChecksEveryMutation(t *testing.T) {
 		"remote_second": func(r *coredata.CommitRecord) { r.Mutations[1].Remote = &remoteProjectionTestCommit },
 		"receipt":       func(r *coredata.CommitRecord) { r.Receipts = []coredata.Receipt{{Namespace: "n", ID: "1"}} },
 		"effect":        func(r *coredata.CommitRecord) { r.Effects = []coredata.Effect{{ID: "e", Topic: "t"}} },
-		"migration":     func(r *coredata.CommitRecord) { r.Handler = MigrationHandler },
 	} {
 		t.Run(name, func(t *testing.T) {
 			records := []coredata.CommitRecord{localMultiRecord(1), localMultiRecord(2), localMultiRecord(3)}

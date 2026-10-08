@@ -41,10 +41,9 @@ func TestBatchProjectionEligibilityMatchesMongoContract(t *testing.T) {
 		t.Fatal("ordinary record not batchable")
 	}
 	for name, edit := range map[string]func(*coredata.CommitRecord){
-		"migration": func(r *coredata.CommitRecord) { r.Handler = MigrationHandler },
-		"effect":    func(r *coredata.CommitRecord) { r.Effects = []coredata.Effect{{ID: "e", Topic: "t"}} },
-		"receipt":   func(r *coredata.CommitRecord) { r.Receipts = []coredata.Receipt{{Namespace: "n", ID: "r"}} },
-		"remote":    func(r *coredata.CommitRecord) { r.Mutations[0].Remote = &remoteProjectionTestCommit },
+		"effect":  func(r *coredata.CommitRecord) { r.Effects = []coredata.Effect{{ID: "e", Topic: "t"}} },
+		"receipt": func(r *coredata.CommitRecord) { r.Receipts = []coredata.Receipt{{Namespace: "n", ID: "r"}} },
+		"remote":  func(r *coredata.CommitRecord) { r.Mutations[0].Remote = &remoteProjectionTestCommit },
 	} {
 		t.Run(name, func(t *testing.T) {
 			record := projectorRecord(1, false)

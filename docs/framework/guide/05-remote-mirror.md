@@ -539,3 +539,7 @@ owner 提交后写 L2 失败或结果未知时，L2 最长落后权威 `snapshot
 - 执行契约：[roost-coding](../../agent-skills/roost-coding/SKILL.md)
 
 [↑ 速览](#速览)
+
+### 2026-10-08 兴趣协议收敛
+
+兴趣发布与接收必须带非零 Generation、完整 Key 和 ConsumerSID；空 payload Delete 明确拒绝。无代际旧发布端不再兼容。撤销水位和乱序保护继续生效。

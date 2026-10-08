@@ -11,7 +11,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 {{- if not .Dao.NoCollection}}
-	"github.com/tjbdwanghaibo/roost-core/migration"
 {{- end}}
 	"github.com/tjbdwanghaibo/roost-core/nest"
 {{- if .HasMaps}}
@@ -83,7 +82,6 @@ func (d *{{.Dao.Name}}) DbName() string   { return {{daoDBConst .Dao.Name}} }
 func (d *{{.Dao.Name}}) DbScope() dataengine.DatabaseScope { return {{dbScope .Dao}} }
 func (d *{{.Dao.Name}}) CollName() string  { return {{daoCollConst .Dao.Name}} }
 func (d *{{.Dao.Name}}) SchemaVersion() uint32 { return {{.Dao.Name}}SchemaVersion }
-func (d *{{.Dao.Name}}) Migrate(raw []byte, from uint32) ([]byte, error) { return migration.MigrateDAO(d.CollName(), raw, from, {{.Dao.Name}}SchemaVersion) }
 {{- end}}
 func (d *{{.Dao.Name}}) Dirty() entity.IDirty { return &d.tracker }
 func (d *{{.Dao.Name}}) CleanDirty()      { d.tracker.SelfClean() }
@@ -797,18 +795,10 @@ func (d *{{.Dao.Name}}) Unmarshal(raw []byte) error {
 }
 
 // RestorePersisted is the single production hydration path used by the
-// Data Engine aggregate repository. Migration and tracker restoration happen
-// before the DAO is published through its entity.
+// Data Engine aggregate repository. Schema must match before decoding or changing the tracker.
 func (d *{{.Dao.Name}}) RestorePersisted(raw []byte, schemaVersion uint32, version uint64) error {
-	if schemaVersion > {{.Dao.Name}}SchemaVersion {
-		return fmt.Errorf("dao {{.Dao.Name}}: stored schema %d is newer than runtime schema %d", schemaVersion, {{.Dao.Name}}SchemaVersion)
-	}
-	var err error
-	if schemaVersion < {{.Dao.Name}}SchemaVersion {
-		raw, err = d.Migrate(raw, schemaVersion)
-		if err != nil {
-			return fmt.Errorf("dao {{.Dao.Name}}: migrate schema %d to %d: %w", schemaVersion, {{.Dao.Name}}SchemaVersion, err)
-		}
+	if schemaVersion != {{.Dao.Name}}SchemaVersion {
+		return fmt.Errorf("%w: dao {{.Dao.Name}} stored=%d runtime=%d", dataengine.ErrSchemaMismatch, schemaVersion, {{.Dao.Name}}SchemaVersion)
 	}
 	if err := d.Unmarshal(raw); err != nil {
 		return err

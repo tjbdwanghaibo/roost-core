@@ -25,14 +25,14 @@ type dataEngineRepositoryDAO struct {
 	version    uint64
 }
 
-func (dao *dataEngineRepositoryDAO) Id() int64                                { return dao.id }
-func (dao *dataEngineRepositoryDAO) SetId(id int64)                           { dao.id = id }
-func (*dataEngineRepositoryDAO) DbName() string                               { return "game" }
-func (dao *dataEngineRepositoryDAO) CollName() string                         { return dao.collection }
-func (*dataEngineRepositoryDAO) Dirty() entity.IDirty                         { return nil }
-func (*dataEngineRepositoryDAO) CleanDirty()                                  {}
-func (*dataEngineRepositoryDAO) SchemaVersion() uint32                        { return 1 }
-func (*dataEngineRepositoryDAO) Migrate(raw []byte, _ uint32) ([]byte, error) { return raw, nil }
+func (dao *dataEngineRepositoryDAO) Id() int64         { return dao.id }
+func (dao *dataEngineRepositoryDAO) SetId(id int64)    { dao.id = id }
+func (*dataEngineRepositoryDAO) DbName() string        { return "game" }
+func (dao *dataEngineRepositoryDAO) CollName() string  { return dao.collection }
+func (*dataEngineRepositoryDAO) Dirty() entity.IDirty  { return nil }
+func (*dataEngineRepositoryDAO) CleanDirty()           {}
+func (*dataEngineRepositoryDAO) SchemaVersion() uint32 { return 1 }
+
 func (dao *dataEngineRepositoryDAO) RestorePersisted(raw []byte, _ uint32, version uint64) error {
 	var doc struct {
 		ID int64 `bson:"_id"`
@@ -162,20 +162,6 @@ type repositoryGate bool
 
 func (gate repositoryGate) Ready() bool { return bool(gate) }
 
-type repositoryMigrationCommitter struct{ store *repositoryStore }
-
-func (committer repositoryMigrationCommitter) CommitSystem(_ context.Context, record coredata.CommitRecord) (coredata.ProjectionTicket, error) {
-	mutation := record.Mutations[0]
-	committer.store.mu.Lock()
-	committer.store.docs[mutation.Key.Resource] = []coredata.RawDocument{{
-		Key: mutation.Key, Version: mutation.NextVersion, Schema: mutation.Schema, Data: append([]byte(nil), mutation.Data...),
-	}}
-	committer.store.mu.Unlock()
-	done := make(chan struct{})
-	close(done)
-	return projectedSystemTicket{done: done}, nil
-}
-
 func repositoryRaw(t *testing.T, resource string, id int64, version uint64) coredata.RawDocument {
 	t.Helper()
 	raw, err := bson.Marshal(bson.M{"_id": id, "_schema": uint32(1), "name": resource})
@@ -193,7 +179,7 @@ func TestEntityRepositorySingleFlightsCompleteAggregate(t *testing.T) {
 		"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 8)},
 	}}
 	manager := entity.NewEntityManager()
-	repository, err := newEntityRepository(manager, store, nil, repositoryGate(true))
+	repository, err := newEntityRepository(manager, store, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,11 +218,11 @@ func TestEntityRepositoryRecoveryBarrierAndIncompleteAggregate(t *testing.T) {
 	id, _ := entity.BuildEntityID(992, dataEngineRepositoryKind)
 	store := &repositoryStore{docs: map[string][]coredata.RawDocument{"repository_profile": {repositoryRaw(t, "repository_profile", id, 1)}}}
 	manager := entity.NewEntityManager()
-	notReady, _ := newEntityRepository(manager, store, nil, repositoryGate(false))
+	notReady, _ := newEntityRepository(manager, store, repositoryGate(false))
 	if _, err := notReady.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, coredata.ErrRecoveryIncomplete) {
 		t.Fatalf("barrier err=%v", err)
 	}
-	repository, _ := newEntityRepository(manager, store, nil, repositoryGate(true))
+	repository, _ := newEntityRepository(manager, store, repositoryGate(true))
 	if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateCorrupt) {
 		t.Fatalf("missing DAO err=%v", err)
 	}
@@ -253,7 +239,7 @@ func TestEntityRepositoryRejectsTombstone(t *testing.T) {
 	store := &repositoryStore{docs: map[string][]coredata.RawDocument{
 		"repository_profile": {deleted}, "repository_inventory": {repositoryRaw(t, "repository_inventory", id, 2)},
 	}}
-	repository, _ := newEntityRepository(entity.NewEntityManager(), store, nil, repositoryGate(true))
+	repository, _ := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 	if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateCorrupt) {
 		t.Fatalf("tombstone err=%v", err)
 	}
@@ -275,7 +261,7 @@ func TestEntityRepositoryTreatsUniformAbsenceAsNotFound(t *testing.T) {
 		}()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			repository, _ := newEntityRepository(entity.NewEntityManager(), &repositoryStore{docs: test.docs}, nil, repositoryGate(true))
+			repository, _ := newEntityRepository(entity.NewEntityManager(), &repositoryStore{docs: test.docs}, repositoryGate(true))
 			if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateNotFound) {
 				t.Fatalf("err=%v, want not found", err)
 			}
@@ -297,7 +283,7 @@ func TestEntityRepositoryPreservesRemoteVersionVector(t *testing.T) {
 			Version: 12, MarkerEpoch: 3, LockFence: 8, RouteEpoch: 5, Enveloped: true, Data: outer,
 		}},
 	}}
-	repository, _ := newEntityRepository(entity.NewEntityManager(), store, nil, repositoryGate(true))
+	repository, _ := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 	loaded, err := repository.LoadEntity(context.Background(), id, dataEngineRemoteRepositoryKind)
 	if err != nil {
 		t.Fatal(err)
@@ -305,28 +291,6 @@ func TestEntityRepositoryPreservesRemoteVersionVector(t *testing.T) {
 	vector := loaded.(*dataEngineRemoteRepositoryEntity).RemoteVersionVector()
 	if vector != (entity.RemoteVersionVector{StateVersion: 12, MarkerEpoch: 3, LockFence: 8, RouteEpoch: 5}) {
 		t.Fatalf("vector=%+v", vector)
-	}
-}
-
-func TestEntityRepositoryMigratesThenReloadsBeforePublishing(t *testing.T) {
-	ensureDataEngineRepositoryEntity()
-	id, _ := entity.BuildEntityID(995, dataEngineRepositoryKind)
-	oldProfile := repositoryRaw(t, "repository_profile", id, 4)
-	oldProfile.Schema = 0
-	oldProfile.Data, _ = bson.Marshal(bson.M{"_id": id, "_schema": uint32(0), "name": "old"})
-	store := &repositoryStore{docs: map[string][]coredata.RawDocument{
-		"repository_profile":   {oldProfile},
-		"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 4)},
-	}}
-	runner, _ := NewMigrationRunner(repositoryMigrationCommitter{store: store})
-	repository, _ := newEntityRepository(entity.NewEntityManager(), store, runner, repositoryGate(true))
-	loaded, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind)
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile := loaded.(*dataEngineRepositoryEntity).daos["repository_profile"]
-	if profile.version != 5 || store.transactions.Load() != 2 {
-		t.Fatalf("profile version=%d snapshot transactions=%d", profile.version, store.transactions.Load())
 	}
 }
 
@@ -344,7 +308,7 @@ func TestEntityRepositoryLoadIsIdempotentAcrossTransactionRetries(t *testing.T) 
 	}
 	for _, retries := range []int{0, 1, 3} {
 		store := &repositoryStore{docs: docs, transientRetries: retries}
-		repository, err := newEntityRepository(entity.NewEntityManager(), store, nil, repositoryGate(true))
+		repository, err := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -375,7 +339,7 @@ func TestEntityRepositoryRemoteVectorDoesNotLeakAcrossRetries(t *testing.T) {
 		"repository_profile":   {profile},
 		"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 8)},
 	}}
-	repository, err := newEntityRepository(entity.NewEntityManager(), store, nil, repositoryGate(true))
+	repository, err := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +363,7 @@ func TestEntityRepositoryPublishesThroughLocalExecutor(t *testing.T) {
 		"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 8)},
 	}}
 	manager := entity.NewEntityManager()
-	repository, err := newEntityRepository(manager, store, nil, repositoryGate(true))
+	repository, err := newEntityRepository(manager, store, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +406,7 @@ func TestRepositoryRejectsFastColdLoadBeforeJoiningFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &repositoryStore{}
-	repo, err := NewEntityRepository(entity.NewEntityManager(), store, nil, nil)
+	repo, err := NewEntityRepository(entity.NewEntityManager(), store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

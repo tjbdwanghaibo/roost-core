@@ -20,7 +20,7 @@
 | 包路径 | 职责 |
 | --- | --- |
 | `dataengine/` | 持久化数据契约：`Mutation` / `CommitRecord` / `Effect` / `Receipt`、`Tracker`、校验、加载器、lease fence 回执、Sync 视图 |
-| `dataengine/engine/` | 生产实现：`Assembly` → `Runtime`，WAL 准入与投影（`Projector`）、`MongoStore`、聚合仓库（冷加载）、迁移、删除准入、outbox |
+| `dataengine/engine/` | 生产实现：`Assembly` → `Runtime`，WAL 准入与投影（`Projector`）、`MongoStore`、聚合仓库（冷加载及 schema 校验）、删除准入、outbox |
 | `nestwal/` | 物理日志：分段 WAL、组提交、fsync、ack 双槽 checkpoint、尾部恢复、pipelined 票据；effect 发布 / 收件箱；独立的通用 `Committer` |
 | `kit/dataengine/` | Mod 胶水：读 `dataengine.*` / `nest.pipelined.*` 配置、查依赖能力、转发生命周期、fatal 接 fence |
 | `nest/`（提交相关部分） | 持久模式、`RollbackTx`、提交点、`ErrCommitIndeterminate`；调度部分属 02 分区 |
@@ -43,7 +43,7 @@
 | WAL 准入、组提交、fsync、崩溃后的尾部恢复与按序重放 | 客户端同步与 durable 水位门槛的发送侧（04 sync） |
 | 按版本 CAS 投影到 Mongo，同一事务内暂存 receipt 与 effect | Remote 实体所有权、L2 快照水位、Mirror（05 remote）；只在投影时调用 Remote 适配器 |
 | outbox 认领 / 发布 / 退避重试，effect 收件箱去重 | saga 状态机（06 saga）；只提供 lease fence 回执与原生步骤屏障 |
-| 冷加载完整聚合、schema 迁移写回、删除墓碑 | 业务字段语义、跨 database 原子性（用 saga） |
+| 冷加载完整聚合、schema 严格校验、删除墓碑 | 业务字段语义、跨 database 原子性（用 saga） |
 | 驱动层“写不重放、结果未知交给调用方”的契约（Redis / Mongo） | kit 各服务怎么用 versionstore（09 kit 服务） |
 | versionstore、cache 的一致性原语 | 指标面板与告警规则本身（11 可观测） |
 
@@ -237,7 +237,7 @@ type PlayerDao struct {
 | `-` | 不生成 | — | — | — |
 | 只写 `map=fast` 等、没有意图 | 生成期报错 | | | |
 
-“事务外 panic”来自生成的 `mark<Field>Dirty` 调 `nest.MarkPersist`，没有活动事务时返回错误并 panic（`codegen/internal/dao/template_dao.go:100-104`；golden `codegen/internal/dao/testdata/golden/gen_hero_dao.go:84-89`）。只在内存里存在、从不落库的实体用 `//roost:dao nocoll`（全部字段 `nopersist`，[方案](../../feature/DAO-NO-COLLECTION-2026-10-04.md)）。`map=small|fast|sharded` 选容器实现。`schema=N` 提升后需要给 `migration.MigrateDAO` 注册迁移步骤（§4.7）。
+“事务外 panic”来自生成的 `mark<Field>Dirty` 调 `nest.MarkPersist`，没有活动事务时返回错误并 panic（`codegen/internal/dao/template_dao.go:100-104`；golden `codegen/internal/dao/testdata/golden/gen_hero_dao.go:84-89`）。只在内存里存在、从不落库的实体用 `//roost:dao nocoll`（全部字段 `nopersist`，[方案](../../feature/DAO-NO-COLLECTION-2026-10-04.md)）。`map=small|fast|sharded` 选容器实现。`schema=N` 必须与存储版本完全相同（§4.7）。
 
 ### 4.2 选 rollback 与 durability
 
@@ -323,12 +323,11 @@ handler 里 `Destroy(..., true)` 进入 DataEngine 删除准入（`dataengine/en
 - 事务外的 Remote 实体：在快 worker 上直接拒绝（`fctx.ErrBlockingInFastWorker`，RR-20260926-27），慢路径走系统提交并等投影。
 - Mongo 里留墓碑：`_deleted: true` + 更高 `_version`；更旧的 Put 不能复活它（`dataengine/engine/mongo_store.go:199-215`）。
 
-### 4.7 schema 迁移
+### 4.7 schema 校验
 
-1. DAO 标记 `schema=N` 提升版本，`db/migrations` 注册迁移步骤（game-demo 见 `demo/db/migrations`）。
-2. 冷加载读到旧 schema 时，`MigrationRunner` 先在内存迁移并校验 BSON、`_id`、目标 DAO 能解码，再作为系统事务（strict）写 WAL，**等 Mongo 投影完成**，然后重读整个聚合（`dataengine/engine/migration_runner.go:40-108`、`dataengine/engine/entity_repository.go:208-237`）。
-3. 竞争写让迁移记录过时：投影把它当无操作，仓库重读后最多再迁移一轮；三轮不收敛返回 `ErrMigrationConflict`。
-4. 多 DAO 的迁移逐 DAO 提交，不是全有或全无；完整聚合校验通过前不发布实体。Remote 信封不能经这个入口迁移（`ErrRemoteMigrationLeaseRequired`）。
+持久 DAO 必须实现 `dataengine.Descriptor`。`schema=N` 声明当前版本；Repository 读取完整一致性视图后先验证所有 DAO，再恢复与发布。旧、新 schema 都返回 `ErrSchemaMismatch`；生成 `RestorePersisted` 同样在解码前检查，不写回、不迁移、不循环重读。
+
+维护者已撤销 DAO 自动迁移需求。旧数据需要保留时，由旧程序先完成其负责的 WAL 落库；这不等于新程序能读取不同 schema。不同 schema 的保留数据需另行明确离线处理，框架不自动清库或转换。
 
 ### 4.8 versionstore：带版本的 KV
 

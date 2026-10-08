@@ -59,6 +59,8 @@ roost-core 是采用 ECS 编程模式的通用游戏服务器框架。Entity 是
 
 ### DataEngine 与 Remote
 
+- 维护者 2026-10-08 撤销 DAO schema 自动迁移：只接受当前 schema，Repository 在全部 DAO 水合前校验，生成 RestorePersisted 在解码前校验；不得恢复迁移注册表、写回重读或迁移冲突特赦。Remote interest 必须有非零代际和完整身份，不兼容旧发布端。
+
 - 保持 Nest → 正式生成 DAO → 文件 WAL → 投影 → 持久确认/发布的完整链路。区分内存修改、WAL 准入、durable、投影、远端发布/确认；不把其中一个阶段的 TPS 作为整条业务吞吐。
 - async/strict/pipelined 的完成条件必须明确。回放读取、投影批次、未确认 WAL、Remote 在途写各有预算；不能用 Stats 的瞬时读取替代原子准入。
 - 并发投影只用于 Store 明确支持、实体与事务身份独立且无特殊屏障的记录。首次观察失败停止补位，等待已启动任务，checkpoint 只推进连续成功前缀；成功后缀靠持久身份幂等重放。

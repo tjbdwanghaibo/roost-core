@@ -51,7 +51,7 @@ func TestRepositoryRestoresRemoteEnvelopeByKindPolicy(t *testing.T) {
 		Version: 12, MarkerEpoch: 3, LockFence: 8, RouteEpoch: 5, Enveloped: true, Data: outer,
 	}
 	store := &repositoryStore{docs: map[string][]coredata.RawDocument{"rr71_remote": {enveloped}}}
-	repository, err := newEntityRepository(entity.NewEntityManager(), store, nil, repositoryGate(true))
+	repository, err := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestRepositoryRejectsManagedKindRecordWithoutEnvelope(t *testing.T) {
 	registerKindDefManagedRepositoryKind()
 	otherID, _ := entity.BuildEntityID(9972, kindDefManagedRepositoryKind)
 	bare := &repositoryStore{docs: map[string][]coredata.RawDocument{"rr71_remote": {repositoryRaw(t, "rr71_remote", otherID, 4)}}}
-	repository, err := newEntityRepository(entity.NewEntityManager(), bare, nil, repositoryGate(true))
+	repository, err := newEntityRepository(entity.NewEntityManager(), bare, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -52,6 +52,10 @@ func (s *remoteSyncer) PublishRemoteSnapshot(ctx context.Context, update entity.
 }
 
 func (s *remoteSyncer) PublishRemoteInterest(ctx context.Context, interest entity.RemoteSnapshotInterest, release bool) error {
+	// 代际是乱序保护的必需身份，发布端与接收端都不能接受旧的无代际消息。
+	if interest.Generation == 0 || interest.ConsumerSID == 0 || !interest.Key.Valid() {
+		return entity.ErrRemoteRejected
+	}
 	if s == nil || s.interestRep == nil {
 		return nil
 	}

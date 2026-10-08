@@ -352,7 +352,8 @@ flowchart TD
 - `renewInterest(key, refresh)`：取 `localInterestLocks[EntityID % 64]`（读路径每次都取）→ 在锁内分配代际 → 本机表“剩余 > TTL/2”就返回（refresh 时只续本机仍有效的 key）→ 本机表容量 → 本机兴趣表按同一配额 `renew` → `publishInterest`（经 `work` 准入）→ 失败回滚本机表并 `drop`。
 - `ReleaseInterest`：同一条带锁内分配代际、删本机表、`interests.release` 留撤销水位、广播。
 - `renewIfNeeded`（`remoteentity/interest.go:159-214`）：旧代际的 renew 不动现有租约；撤销水位或溢出水位之后、不新于它的 renew 忽略；新租约先按 consumer 配额、再按每节点总上限，拒绝时计数并限频日志。
-- `release`（`:281-307`）：比现有租约旧的不动；代际 0（旧发布者）只撤销；表满放不下水位 → `fenceOverflowLocked`（每 consumer 一个，到期 = 最后一次 release + TTL，位图 256 位）。
+- `release`（`:281-307`）：比现有租约旧的不动；发布与接收入口拒绝代际 0 和不完整身份；表满放不下水位 → `fenceOverflowLocked`（每 consumer 一个，到期 = 最后一次 release + TTL，位图 256 位）。
+- 空 payload 的 Delete 也明确拒绝；当前 renew/release 都用携带完整身份的 Upsert。
 - 广播是同步总线上的普通订阅（不需要可确认）；owner 侧 `ApplyReplica` 拒绝时返回错误，JetStream 上结算为 Ack（实测 `TestRealJetStreamInterestHandlerErrorIsAcknowledged`，`remoteentity/interest_handler_error_jetstream_integration_test.go:35`）。
 - 同步总线不把自己发的消息投回自己（`sync/syncbus/driver/jetstream.go:256`），consumer 自己的续租只经本地 `renew` 进本机表。
 

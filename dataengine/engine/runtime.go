@@ -49,12 +49,8 @@ func NewRuntime(store *MongoStore, wal *nestwal.WAL, projector *Projector, outbo
 	if store == nil || wal == nil || projector == nil || outbox == nil || access == nil || access.Manager() == nil {
 		return nil, errors.New("dataengine runtime: store, WAL, projector, outbox and entity access are required")
 	}
-	migration, err := NewMigrationRunner(projector)
-	if err != nil {
-		return nil, err
-	}
 	runtime := &Runtime{Store: store, WAL: wal, Projector: projector, Outbox: outbox, access: access, remoteManager: remoteManager, onFatal: onFatal, pipelined: pipelined}
-	repository, err := NewEntityRepository(access.Manager(), store, migration, runtime)
+	repository, err := NewEntityRepository(access.Manager(), store, runtime)
 	if err != nil {
 		return nil, err
 	}

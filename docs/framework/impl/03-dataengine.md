@@ -301,9 +301,7 @@ flowchart TD
 flowchart TD
     A[ValidateCommitRecord] --> B{单 mutation、无 effect/receipt/Remote?}
     B -- 是 --> C[applyMutation 版本 CAS 快路径]
-    C --> C1{迁移记录且冲突?}
-    C1 -- 是 --> C2[当作过时，nil]
-    C1 -- 否 --> C3[返回结果]
+    C --> C3[返回结果，冲突不得按 handler 忽略]
     B -- 否 --> D[digest = sha256 JSON record<br/>mutations 按 DocumentKey 排序]
     D --> E[WithTransaction 回调（可能被驱动重跑）]
     E --> F{事务标记已存在?}
@@ -376,8 +374,8 @@ sequenceDiagram
 3. 按完整 ID singleflight；首个调用者执行，其他等待者取消只退出自己的等待（`dataengine/engine/entity_repository.go:139-151`）；加载 panic 也会关闭 flight 并唤醒等待者（`dataengine/engine/entity_repository.go:160-173`）。
 4. `WaitEntityProjection(id)`（`dataengine/engine/entity_repository.go:175-183`）。
 5. `readAggregate` 在 `ReadConsistent`（snapshot 读事务）里读每个 DAO；回调可能被驱动重跑，累加器在回调内重置（`dataengine/engine/entity_repository.go:288-359`，`dataengine/engine/entity_repository.go:298-299`）。全缺失或全墓碑 → `ErrEntityAggregateNotFound`；部分缺失 → `ErrEntityAggregateCorrupt`。
-6. 有旧 schema 的 DAO → `MigrationRunner.Migrate` → 回到 5 重读；第 3 轮仍需迁移 → `ErrMigrationConflict`（`dataengine/engine/entity_repository.go:208-237`）。
-7. 全部 DAO `RestorePersisted`（解码、迁移、`SetVersion`、清 sync 脏）后，Remote 托管 kind 恢复版本向量（`dataengine/engine/entity_repository.go:241-265`）。
+6. 完整聚合全部 DAO 声明 schema，且与持久 schema 相等；否则拒绝，尚未水合或发布。
+7. 全部 DAO `RestorePersisted` 解码、恢复版本、清脏后，Remote 托管 kind 恢复版本向量。
 8. `entity.RunLocal` 回快池 `Create` 并执行加载回调（`dataengine/engine/entity_repository.go:269-273`）。
 
 ### 3.8 删除准入
@@ -469,7 +467,7 @@ stateDiagram-v2
 | I13 | 版本 CAS：无基准的 Put 要求 `_version` 不存在；不匹配时只有 `_version==Next && _last_tx==tx` 算已应用，否则 fatal 冲突；旧 Put 不能复活墓碑 | `dataengine/engine/mongo_store.go:217-222`、`dataengine/engine/mongo_store.go:258-269` | `TestMongoStorePatchExactVersionAndReplay`、`TestMongoStoreOlderPutCannotReviveTombstone`、`TestMongoStoreNewerPutRevivesTombstoneAtHigherVersion`（`mongo_store_test.go`）、`TestRealPatchConflictFencesWithoutFullFallback` |
 | I14 | 多文档事务：先查标记（digest 不同即 fatal），回执 / effect 先快照读后插；快照未命中却撞键是非 fatal 可重试错误 | `dataengine/engine/mongo_projection.go:84-95`；`dataengine/engine/mongo_store.go:297-303`、`dataengine/engine/mongo_store.go:377-406`、`dataengine/engine/mongo_store.go:429-457` | `TestMongoStoreProjectIdentityVerdictsAcrossTransactions`、`TestStageEffectDuplicateAfterSnapshotMissIsRetryable`、`TestRealProjectionIdentityVerdictsAcrossTransactions`、`TestRealMultiDocumentReceiptAndOutboxAreAtomic` |
 | I15 | 批量投影不自行分类“未匹配”，交单条路径判定；延迟信号永不 fence | `dataengine/engine/mongo_projection.go:275-288`；`dataengine/engine/projector.go:396-398` | `TestProjectorFallsBackToPerRecordWhenBatchDefers`、`TestProjectorPerRecordFallbackStillFencesRealConflict`、`TestMongoStoreProjectBatchDefersThenSingleRecordClassifies` |
-| I16 | 只有无 effect / receipt / Remote / 迁移的本地记录进批量；不支持多 mutation 批量的 Store 只批单 mutation 记录 | `dataengine/engine/projection_plan.go:18-33`、`dataengine/engine/projection_plan.go:110-146`；`dataengine/engine/mongo_projection.go:200-202` | `TestBatchProjectionEligibilityMatchesMongoContract`、`TestLocalBatchEligibilityChecksEveryMutation`、`TestMultiBatchCapabilityAndSpecialBoundaries`、`TestMongoStoreProjectBatchRejectsUnsupportedBeforeSessionOrWrites` |
+| I16 | 只有无 effect / receipt / Remote的本地记录进批量；BatchProjectionStore 必须支持多 DAO 原子批量 | `dataengine/engine/projection_plan.go:18-33`、`dataengine/engine/projection_plan.go:110-146`；`dataengine/engine/mongo_projection.go:200-202` | `TestBatchProjectionEligibilityMatchesMongoContract`、`TestLocalBatchEligibilityChecksEveryMutation`、`TestMultiBatchCapabilityAndSpecialBoundaries`、`TestMongoStoreProjectBatchRejectsUnsupportedBeforeSessionOrWrites` |
 | I17 | Remote 并行只给相邻、互不共享实体、无 effect / receipt 的纯 Remote 记录，且两个 Remote 适配器都声明并发安全；首个失败后停止补位，只确认成功前缀 | `dataengine/engine/projector_remote.go:14-114`；`dataengine/engine/mongo_projection.go:169-177` | `TestRemoteProjectionWindowBoundaries`、`TestRemoteProjectionCancellationJoinsWorkers`、`TestRemoteProjectionFatalSuffixIsNotHiddenByEarlierTransientFailure`、`TestMongoStoreParallelCapabilityRequiresBothAdapters`、`TestRemoteProjectionWithoutCapabilityRemainsSerial` |
 | I18 | fatal / WAL terminal：先写错误，再唤醒全部等待方与系统票据；reserve 在 `heldMu` 下复查，唤醒后不会有新等待项；OnFatal 异步 | `dataengine/engine/projector.go:393-423`、`dataengine/engine/projector.go:447-458`、`dataengine/engine/projector.go:557-562` | `TestEntityProjectionFatalWakesEveryPendingWaiter`、`TestProjectorOnFatalMayCloseProjector`（`projection_lifetime_test.go`）、`TestWALTerminalWakesEntityProjectionWaiters`（nestwal）、`TestTerminalAckWakesWaitersOfAPendingEviction` |
 | I19 | Remote 写与 lease fence 回执不能同一次准入（WAL 之前拒绝） | `dataengine/engine/projector.go:542-551` | `TestRemoteLeaseFenceRejectedBeforeWALAdmission` |
@@ -477,7 +475,7 @@ stateDiagram-v2
 | I21 | lease fence 的确认是对协调文档的条件写（不是读），与租约接管写同一文档 | `dataengine/engine/mongo_store.go:305-341`；`dataengine/lease_fence.go:86-94` | `TestRealMongoFencedProjectionSerializesWithLeaseTakeover`（integration） |
 | I22 | 启动恢复屏障：投影完 WAL 后才挂加载器、删除准入、标记 ready；ready 前 committer 拒绝 | `dataengine/engine/runtime.go:86-106`；`kit/dataengine/mod.go:403-417` | `TestDataEngineModRecoversBeforeReadyAndOwnsNestOptions`（`kit/dataengine/mod_test.go`）、`TestEntityRepositoryRecoveryBarrierAndIncompleteAggregate` |
 | I23 | 冷加载：快 worker 拒绝在 join flight 之前；先等在途投影；一致性读；完整聚合；经 RunLocal 发布；panic 不卡死 flight | `dataengine/engine/entity_repository.go:115-286` | `TestRepositoryRejectsFastColdLoadBeforeJoiningFlight`、`TestEntityRepositoryRefusesEachUnloadableAggregate`、`TestEntityRepositoryLoadIsIdempotentAcrossTransactionRetries`、`TestEntityRepositoryPublishesThroughLocalExecutor`、`TestRepositoryReloadDoesNotResurrectPendingTombstone`、`TestARepositoryLoadPanicDoesNotWedgeTheAggregate` |
-| I24 | 迁移先校验（BSON、`_id`、目标 DAO 能解码）后写 WAL，并等投影；Remote 信封拒绝 | `dataengine/engine/migration_runner.go:56-106` | `TestMigrationRunnerValidatesBeforeCommit`、`TestMigrationRunnerRejectsRemoteEnvelopeWithoutOwnershipLease`、`TestEntityRepositoryGivesUpAfterThreeNonConvergingMigrations`、`TestRealLoadAndMigrationRestoresTrackerVersion` |
+| I24 | 所有 DAO schema 必须匹配，拒绝在水合和发布之前；生成 DAO 同样拒绝不同版本 | `dataengine/engine/entity_repository.go`、`codegen/internal/dao/template_dao.go` | `TestEntityRepositoryRejectsSchemaMismatchBeforePublishing`、生成 `TestRestorePersistedRequiresCurrentSchema` |
 | I25 | 删除：事务内准入后才摘内存；快 worker 上 Remote 删除是明确拒绝而非未知；准入 panic 视为未知并 fence | `dataengine/engine/entity_delete.go:27-188` | `TestDataEngineDeleteDefersMemoryRemovalUntilTransactionAdmission`、`TestDataEngineDeleteRollbackLeavesEntityLive`、`TestFastWorkerRemoteDeleteIsDefiniteRejection`、`TestDataEngineDeleteAdmissionPanicFencesAndStopsServingEntity` |
 | I26 | 停机三步：超时返回错误并保留资源；重试只等未停组件；Assembly 停完才忘掉 Runtime；WAL 由 Runtime / Assembly 拥有 | `dataengine/engine/runtime.go:158-200`；`dataengine/engine/assembly.go:191-217` | `TestAssemblyKeepsTheRuntimeUntilShutdownCompletes`、`TestAssemblyOwnsWALWhenProjectorDoesNot`、`TestRuntimeConcurrentShutdownHonorsDeadline`、`TestAssemblyRetriedShutdownHandsOverWALWithoutCheckpointRegression`、`TestAssemblyCanceledRecoveryRetainsCleanupOwnership` |
 | I27 | 可取消等待：生命周期、Flush、Replay 的串行门在调用方 ctx 内等；取消不影响当前持有者 | `dataengine/engine/operation_gate.go:15-33` | `TestProjectorWaitsRespectDeadline`、`TestProjectorShutdownDeadlineBehindBackgroundProjection`（`shutdown_deadline_test.go`） |
@@ -613,7 +611,7 @@ stateDiagram-v2
 | RSWL | ver1 | 0000 | len(u32) | CRC(payload) | CRC(header[0:16]) | payload ... |
 ```
 
-记录 payload（`nestwal/codec.go`）：`codec(u16)` = 5（v1）/ 6（v2）、`ID[16]`、`CreatedAt(i64)`、`Durability(u8)`、`Handler`、`RequestID`；v2 的每个 mutation 写 `ID/Expected/Next/Mask/Schema/Kind/Scope/Database/Resource/Codec/Data/SetBSON/Unset[]/RemoteCommit`，effect 写 `ID/Topic/Key/Payload/AvailableAt/Headers(按 key 排序)`，receipt 写 `Namespace/ID/Digest/Payload/ExpiresAt`（`nestwal/codec.go:143-207`）。v1 只能写 Remote 或 Put、无 receipt、无 `AvailableAt`（`nestwal/codec.go:95-108`）。读端两种都认；未知 codec 返回 `ErrUnsupportedRecordVersion`，回放以 `ErrCorrupt` 失败、不推进 checkpoint。
+记录 payload 仅接受 codec 7 与规范 Mutation 字段（2026-10-08 清理）；旧 codec 拒绝，不能静默跳过或推进 checkpoint。DAO schema 校验不改变 WAL codec；本轮删除的是运行期自动迁移与 handler 特赦。
 
 ### 7.2 Mongo
 
@@ -786,11 +784,11 @@ bash scripts/perf/dataengine.sh                                                #
 18. 事务内是否有“写失败后再读”的路径？Mongo 事务内任一写错误即中止事务（RR-20260926-34）；身份裁决必须在插入前。
 19. 新的协调文档校验是否是条件写（I21）？只读校验与另一事务的接管互不冲突。
 
-### 10.5 加载、迁移、删除
+### 10.5 加载、schema 校验、删除
 
 20. 冷加载新增分支：是否仍在 join flight 之前拒绝快 worker（`dataengine/engine/entity_repository.go:132-134`）？是否仍先 `WaitEntityProjection`？
 21. 新的 DAO 生成形状：`RestorePersisted` 是否设置 tracker 版本并清同步脏（golden `codegen/internal/dao/testdata/golden/gen_hero_dao.go:1139-1157`）？
-22. 迁移：是否仍在写 WAL 之前校验？Remote 信封是否仍被拒？
+22. schema 不匹配是否在所有 DAO 水合前拒绝？是否意外重新引入自动转换或写回？
 23. 删除：事务外 Remote 删除的每个失败分支是否区分了 `Abort`（明确）与 `Indeterminate`（未知）？
 
 ### 10.6 outbox 与效果流

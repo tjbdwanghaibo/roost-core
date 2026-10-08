@@ -6,7 +6,7 @@
 
 - 每个应用实例持有独立的 `EntityManager`、`LockManager`、`ManagerAccess` 和 `NestMgr`。Entity release/remove hook、Remote Entity manager、frame ticker 与 group lock 都属于实例；进程级注册表只允许在启动前登记不可变的 handler/component 定义。
 - Entity 由 `EntityManager.Create/CreateInScope` 创建。框架先构建 Entity、获取 Entity mutex，再发布到全局索引；业务 handler 被调用前，Nest 已完成 `Touch`、确定性排序和加锁。
-- 冷实体通过 `ManagerAccess` 的 `AggregateLoader` 加载。加载器必须一次读取完整聚合、完成 schema migration 和版本向量恢复，再通过 `EntityManager` 原子发布。
+- 冷实体通过 `ManagerAccess` 的 `AggregateLoader` 加载。加载器必须一次读取完整聚合、完成当前 schema 校验和版本向量恢复，再通过 `EntityManager` 原子发布。
 - 删除期间，同一 Entity ID 处于 tombstone 状态；生命周期回调完成前禁止同 ID 重建，避免旧对象清理与新对象复用同一锁或存储身份。
 
 ## 2. Nest 与事务一致性
@@ -19,14 +19,14 @@
 
 生产环境要求 MongoDB 使用支持事务的 replica set/sharded cluster。所有需要原子提交的 collection 必须处于同一 Mongo database scope；跨 database 原子性不被宣称。
 
-## 3. Data Engine：Commit/Load/Migrate/Flush
+## 3. Data Engine：Commit/Load/Flush
 
-- `dataengine.Mod` 是 Registry 中唯一的 Entity 数据引擎，同时提供 lazy Nest committer、aggregate loader、migration runner 和主动 `Flush(ctx)`。
+- `dataengine.Mod` 是 Registry 中唯一的 Entity 数据引擎，同时提供 lazy Nest committer、aggregate loader 和主动 `Flush(ctx)`。
 - 所有持久化字段修改必须位于 Nest transaction；低隔离入口使用 detached transaction，不能在 Entity release 时另走 after-image 保存。
 - WAL admission 有界；磁盘容量、最长 unacked age 或 fsync 不确定错误会使进程 fence，禁止无限堆内存或猜测结果。
 - Projector 将 Put/Patch/Delete、Remote commit、Saga receipt 与 effect staging 按需放入同一个 Mongo transaction；成功后才推进 WAL ack。
 - Mongo projection 使用 expected/next version CAS。删除写版本化 tombstone，旧 Patch 和重复 replay 不能复活已删除 ID；显式重建必须提交更高 version。
-- aggregate load 在一个 snapshot read transaction 中读取完整 DAO 集合，完成 schema migration 与 tracker version 恢复后才发布 Entity。
+- aggregate load 在一个 snapshot read transaction 中读取完整 DAO 集合，完成当前 schema 校验与 tracker version 恢复后才发布 Entity。
 - `Stop(ctx)` 先停止接入并收敛 Projector，再停止 outbox claim；未发布 effect 已经在 Mongo 持久化，下次启动继续投递。
 - Mongo 必须支持 session/transaction；写 concern 为 majority+journal。transaction/effect receipt TTL 必须长于对应 WAL/stream 的重放窗口。
 
@@ -77,6 +77,6 @@ git diff --check
 
 生产压测必须覆盖 20 Hz、单房间 100 Entity、目标房间并发量下的 P95/P99、UDP 丢包/乱序、Redis 重启、Mongo primary 切换和 etcd compaction。CI 负责 race/vet/单元回归；依赖真实基础设施的故障演练必须在 staging release gate 执行，不能用 fake 测试替代。
 
-从历史快照引擎升级前必须停止旧 writer、排空全部 backlog，并按 [docs/DATA_ENGINE_MIGRATION.md](docs/DATA_ENGINE_MIGRATION.md) 执行一次性数据审计。业务销毁统一使用带 context 和 error 的 `ManagerAccess.Destroy`。WAL 目录必须是单写持久卷，滚动升级时不同实例不得共享同一目录。`nestwal` ack checkpoint 与 `syncstream` 文件 checkpoint 只是各自日志的消费 watermark，不构成 Entity 第二写路径。
+从历史快照引擎升级前必须停止旧 writer、排空全部 backlog，并核对[当前 schema 与升级边界](docs/release/RETIRE-DAO-MIGRATION-2026-10-08-NOTES.md)；框架不自动转换旧数据。业务销毁统一使用带 context 和 error 的 `ManagerAccess.Destroy`。WAL 目录必须是单写持久卷，滚动升级时不同实例不得共享同一目录。`nestwal` ack checkpoint 与 `syncstream` 文件 checkpoint 只是各自日志的消费 watermark，不构成 Entity 第二写路径。
 
 第二条 race 命令在 `roost-kit` 仓库执行，并使用包含本次 core/kit 的本地 `go.work`；正式发布验证应再关闭 `go.work`，只使用已发布 module 运行一次全量测试。

@@ -70,10 +70,10 @@ func TestEntityRepositoryRefusesEachUnloadableAggregate(t *testing.T) {
 	ensureLoadGuardKinds()
 	ctx := context.Background()
 
-	if _, err := newEntityRepository(nil, &repositoryStore{}, nil, repositoryGate(true)); err == nil {
+	if _, err := newEntityRepository(nil, &repositoryStore{}, repositoryGate(true)); err == nil {
 		t.Fatal("repository without a manager accepted")
 	}
-	if _, err := newEntityRepository(entity.NewEntityManager(), nil, nil, repositoryGate(true)); err == nil {
+	if _, err := newEntityRepository(entity.NewEntityManager(), nil, repositoryGate(true)); err == nil {
 		t.Fatal("repository without a store accepted")
 	}
 	var nilRepository *EntityRepository
@@ -106,7 +106,7 @@ func TestEntityRepositoryRefusesEachUnloadableAggregate(t *testing.T) {
 				"repository_profile":   {schema2("repository_profile", id)},
 				"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 1)},
 			}
-		}, ErrMigrationUnsupported, "resource=repository_profile"},
+		}, coredata.ErrSchemaMismatch, "resource=repository_profile"},
 	}
 	for index, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,7 +115,7 @@ func TestEntityRepositoryRefusesEachUnloadableAggregate(t *testing.T) {
 				t.Fatal(err)
 			}
 			manager := entity.NewEntityManager()
-			repository, err := newEntityRepository(manager, &repositoryStore{docs: tc.docs(id)}, nil, repositoryGate(true))
+			repository, err := newEntityRepository(manager, &repositoryStore{docs: tc.docs(id)}, repositoryGate(true))
 			if err != nil {
 				t.Fatal(err)
 			}

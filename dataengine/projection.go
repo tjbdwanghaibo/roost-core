@@ -5,19 +5,12 @@ import (
 	"errors"
 )
 
-var ErrMigrationConflict = errors.New("dataengine: migration projection conflict")
+var ErrSchemaMismatch = errors.New("dataengine: persisted schema does not match runtime schema")
 
 // Descriptor is implemented by generated DAOs to declare their current
 // persisted schema.
 type Descriptor interface {
 	SchemaVersion() uint32
-}
-
-// Migrator upgrades one complete persisted DAO document in memory. The
-// returned document is committed as a versioned system transaction before it
-// is exposed as a live Entity.
-type Migrator interface {
-	Migrate([]byte, uint32) ([]byte, error)
 }
 
 type ProjectionTicket interface {

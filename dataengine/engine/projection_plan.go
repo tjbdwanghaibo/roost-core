@@ -15,9 +15,9 @@ type projectionSegment struct {
 	batch   bool
 }
 
-// 本地批量不跨越有外部效果、租约回执或迁移容错语义的事务。
+// 本地批量不跨越有外部效果、租约回执的事务。
 func isLocalBatchRecord(record coredata.CommitRecord) bool {
-	if record.Handler == MigrationHandler || len(record.Mutations) == 0 || len(record.Effects) != 0 || len(record.Receipts) != 0 {
+	if len(record.Mutations) == 0 || len(record.Effects) != 0 || len(record.Receipts) != 0 {
 		return false
 	}
 	for _, mutation := range record.Mutations {

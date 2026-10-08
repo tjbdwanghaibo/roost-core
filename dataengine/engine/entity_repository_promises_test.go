@@ -65,7 +65,7 @@ func TestEntityRepositoryRefusesEachCorruptAggregateShape(t *testing.T) {
 			"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 1)},
 		}}
 		manager := entity.NewEntityManager()
-		repository, _ := newEntityRepository(manager, store, nil, repositoryGate(true))
+		repository, _ := newEntityRepository(manager, store, repositoryGate(true))
 		_, err := repository.LoadEntity(ctx, id, dataEngineRepositoryKind)
 		expectCorrupt(t, err, "resource=repository_profile")
 		expectCorrupt(t, err, "documents=2")
@@ -80,27 +80,27 @@ func TestEntityRepositoryRefusesEachCorruptAggregateShape(t *testing.T) {
 			"repository_profile":   {repositoryRaw(t, "repository_profile", other, 1)},
 			"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 1)},
 		}}
-		repository, _ := newEntityRepository(entity.NewEntityManager(), store, nil, repositoryGate(true))
+		repository, _ := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 		_, err := repository.LoadEntity(ctx, id, dataEngineRepositoryKind)
 		expectCorrupt(t, err, "documents=1")
 	})
 	t.Run("builder declares one resource twice", func(t *testing.T) {
 		id, _ := entity.BuildEntityID(1204, dataEngineDuplicateDAOKind)
 		store := &repositoryStore{docs: map[string][]coredata.RawDocument{"repository_dup": {repositoryRaw(t, "repository_dup", id, 1)}}}
-		repository, _ := newEntityRepository(entity.NewEntityManager(), store, nil, repositoryGate(true))
+		repository, _ := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 		_, err := repository.LoadEntity(ctx, id, dataEngineDuplicateDAOKind)
 		expectCorrupt(t, err, `duplicate DAO resource "repository_dup"`)
 	})
 	t.Run("nil DAO builder", func(t *testing.T) {
 		id, _ := entity.BuildEntityID(1205, dataEngineNilBuilderKind)
-		repository, _ := newEntityRepository(entity.NewEntityManager(), &repositoryStore{docs: map[string][]coredata.RawDocument{}}, nil, repositoryGate(true))
+		repository, _ := newEntityRepository(entity.NewEntityManager(), &repositoryStore{docs: map[string][]coredata.RawDocument{}}, repositoryGate(true))
 		_, err := repository.LoadEntity(ctx, id, dataEngineNilBuilderKind)
 		expectCorrupt(t, err, "DAO builder 0 is nil")
 	})
 	t.Run("remote-managed entity without a version envelope", func(t *testing.T) {
 		id, _ := entity.BuildEntityID(1206, dataEngineRemoteRepositoryKind)
 		store := &repositoryStore{docs: map[string][]coredata.RawDocument{"repository_remote": {repositoryRaw(t, "repository_remote", id, 3)}}}
-		repository, _ := newEntityRepository(entity.NewEntityManager(), store, nil, repositoryGate(true))
+		repository, _ := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 		_, err := repository.LoadEntity(ctx, id, dataEngineRemoteRepositoryKind)
 		expectCorrupt(t, err, "has no version envelope")
 	})

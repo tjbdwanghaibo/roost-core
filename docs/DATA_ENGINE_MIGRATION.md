@@ -1,5 +1,9 @@
 # Data Engine 数据迁移与发布
 
+> 2026-10-08 状态更正：下文保留历史方案，不能作为当前升级操作指南。当前只接受 WAL codec 7 和当前 DAO schema；MigrationRunner、DAO Migrate、schema 自动转换/写回均已撤销。旧程序先完成原 WAL 落库，不代表新程序可读取不同 schema。框架不自动导入、清库或改写历史 WAL。当前规则见 [本轮说明](release/RETIRE-DAO-MIGRATION-2026-10-08-NOTES.md)。
+
+## 历史方案（已被上述决定替代）
+
 本文描述历史 Checkpoint 数据如何一次性进入统一 Data Engine。当前 core/kit 已物理删除旧写
 引擎：运行时只有 `persistence.engine=dataengine`，不存在双写、灰度选择或回切旧引擎。
 `nestwal/checkpoint.go` 中的 checkpoint 只是 WAL ack watermark，不保存 Entity 文档。

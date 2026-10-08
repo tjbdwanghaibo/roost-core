@@ -548,16 +548,16 @@ func TestMongoStoreDeleteWritesVersionedTombstone(t *testing.T) {
 	}
 }
 
-func TestMongoStoreMigrationConflictBecomesObsoleteNoop(t *testing.T) {
+func TestMongoStoreHandlerCannotSuppressProjectionConflict(t *testing.T) {
 	store, _, collection := newMongoStoreTest(t)
 	// A concurrent writer already moved the document past this migration.
 	if err := collection.Seed(bson.M{"_id": int64(7), "_version": int64(12), "_last_tx": "another-transaction"}); err != nil {
 		t.Fatal(err)
 	}
 	record := testMutationRecord(coredata.MutationPut)
-	record.Handler = MigrationHandler
-	if err := store.Project(context.Background(), record); err != nil {
-		t.Fatalf("obsolete migration must be acknowledged for repository reload: %v", err)
+	record.Handler = "__dataengine_migration"
+	if err := store.Project(context.Background(), record); !errors.Is(err, ErrProjectionConflict) {
+		t.Fatalf("handler must not suppress projection conflict: %v", err)
 	}
 	if doc, _ := collection.Lookup(int64(7)); doc["_version"] != int64(12) {
 		t.Fatalf("obsolete migration overwrote newer state: %v", doc)

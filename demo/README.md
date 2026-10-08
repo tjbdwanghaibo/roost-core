@@ -298,18 +298,9 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 - **写入只经 `EquipmentComponent`**，而且整张 `Slots` 重写而不是就地改一个 entry——走 `SetSlots` 才会把离开的件解绑、
   把新来的件绑上。伸手去改 `Range` 里拿到的指针，等于改 DAO 仍然认为自己拥有的东西。
 
-## 数据版本迁移：老文档怎么办
+## 持久 schema
 
-`//roost:dao coll=player db=game schema=2` 声明代码期望的版本，`db/migrations` 说一份旧文档怎么变成它。
-
-- **加字段不需要迁移**（BSON 解码给零值）。需要迁移的是**改形状**：v1 把武器存成 Player 上的扁平 `weapon_id`，
-  v2 存成按槽位键的 `equipment` 子文档，新定义无论如何都找不到那个旧数字。
-- **注册是显式的，不是 `init()`**：一个因为包恰好被链接进来而运行的迁移，是没人决定要运行的迁移。
-  服务 `Init` 的第一件事就注册它——晚于它的注册会让最初几次装载漏掉。
-- **步骤只能读老版本真的有的东西**，并且要接受老文档里数字的各种 Go 类型（驱动与写它的那个 build 决定）。
-- 测试分两半：变换本身，以及**接线**——`RestorePersisted` 在 v1 文档上真的会跑。
-  一个正确但从不被调用的步骤才是这里真正的失败模式。
-- **遗留键不会被清掉**：补丁只写 DAO 认识的字段，所以老文档里的 `weapon_id` 会留着。要清得靠一次性离线脚本。
+`//roost:dao coll=player db=game schema=2` 声明当前 schema。加载只接受相同版本；旧版本和未来版本都返回 `dataengine.ErrSchemaMismatch`，不自动转换或写回。正式生成的 `db/restore_test.go` 验证拒绝前数据及 tracker 不变、当前版本正常恢复。
 
 ## 兴趣：距离是一种来源，关系是另一种
 

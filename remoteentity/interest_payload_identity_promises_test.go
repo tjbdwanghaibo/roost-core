@@ -76,7 +76,7 @@ func TestInterestPayloadIdentityBeforeRegistryMutation(t *testing.T) {
 	}
 }
 
-func TestInterestWireGenerationAndLegacyCompatibility(t *testing.T) {
+func TestInterestWireRejectsLegacyAndPreservesOrdering(t *testing.T) {
 	m := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
 	bus := &interestIdentityBus{}
 	_, rep := m.BindSync(bus)
@@ -86,18 +86,31 @@ func TestInterestWireGenerationAndLegacyCompatibility(t *testing.T) {
 	defer rep.Stop()
 	i := entity.RemoteSnapshotInterest{Key: interestKeyFor(t, 244, 9351), ConsumerSID: 7, ExpiresAt: time.Now().Add(time.Hour).UnixNano()}
 	ctx := context.Background()
-	// Generation=0 的旧发布端仍可正常续租/撤销。
-	if err := m.snapshots.transport.PublishRemoteInterest(ctx, i, false); err != nil {
-		t.Fatal(err)
-	}
-	if !m.snapshots.interests.interested(i.Key) {
-		t.Fatal("legacy renewal missing")
-	}
-	if err := m.snapshots.transport.PublishRemoteInterest(ctx, i, true); err != nil {
-		t.Fatal(err)
+	// 无代际消息必须拒绝，不能修改兴趣表。
+	if err := m.snapshots.transport.PublishRemoteInterest(ctx, i, false); err == nil {
+		t.Fatal("publisher accepted generation zero renewal")
 	}
 	if m.snapshots.interests.interested(i.Key) {
-		t.Fatal("legacy release missing")
+		t.Fatal("legacy renewal accepted")
+	}
+	if err := m.snapshots.transport.PublishRemoteInterest(ctx, i, true); err == nil {
+		t.Fatal("publisher accepted generation zero release")
+	}
+	if m.snapshots.interests.interested(i.Key) {
+		t.Fatal("legacy message created lease")
+	}
+	// 绕过发布端校验，直接传旧线格式，证明接收端也拒绝。
+	for _, release := range []bool{false, true} {
+		raw, err := mirror.MarshalPayload(remoteInterestWire{Interest: i, Release: release})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = mirror.New(bus, SyncTopicInterest, nil).Publish(ctx, mirror.Envelope{
+			Key: remoteInterestReplicaKey(i), Version: i.ExpiresAt, Op: mirror.OpUpsert, Payload: raw,
+		})
+		if err == nil || m.snapshots.interests.total != 0 {
+			t.Fatalf("legacy wire accepted: err=%v total=%d", err, m.snapshots.interests.total)
+		}
 	}
 	i.Generation = 12
 	if err := m.snapshots.transport.PublishRemoteInterest(ctx, i, false); err != nil {
@@ -112,9 +125,9 @@ func TestInterestWireGenerationAndLegacyCompatibility(t *testing.T) {
 	if !m.snapshots.interests.interested(i.Key) {
 		t.Fatal("stale wire release canceled newer lease")
 	}
-	// 通用无 payload Delete 没有完整订阅身份，维持原先的无副作用兼容行为。
-	if err := mirror.New(bus, SyncTopicInterest, nil).PublishDelete(ctx, remoteInterestReplicaKey(i), i.ExpiresAt); err != nil {
-		t.Fatal(err)
+	// 无 payload Delete 没有完整身份，明确拒绝且不影响现有租约。
+	if err := mirror.New(bus, SyncTopicInterest, nil).PublishDelete(ctx, remoteInterestReplicaKey(i), i.ExpiresAt); err == nil {
+		t.Fatal("receiver accepted identity-free delete")
 	}
 	if !m.snapshots.interests.interested(i.Key) {
 		t.Fatal("identity-free delete changed registry")

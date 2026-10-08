@@ -31,31 +31,3 @@ func TestRegistryRun(t *testing.T) {
 		t.Fatalf("data = %+v", data)
 	}
 }
-
-func TestDAORegistryMigratesRawPayloadByCollection(t *testing.T) {
-	reg := NewDAORegistry()
-	reg.MustRegisterDAO(DAOStep{
-		Collection: "players",
-		From:       1,
-		To:         2,
-		Apply: func(_ context.Context, raw []byte) ([]byte, error) {
-			return append(raw, []byte(":v2")...), nil
-		},
-	})
-	reg.MustRegisterDAO(DAOStep{
-		Collection: "players",
-		From:       2,
-		To:         3,
-		Apply: func(_ context.Context, raw []byte) ([]byte, error) {
-			return append(raw, []byte(":v3")...), nil
-		},
-	})
-
-	raw, version, err := reg.MigrateDAO(context.Background(), "players", []byte("doc"), 1, 3)
-	if err != nil {
-		t.Fatalf("MigrateDAO: %v", err)
-	}
-	if string(raw) != "doc:v2:v3" || version != 3 {
-		t.Fatalf("raw=%q version=%d", raw, version)
-	}
-}

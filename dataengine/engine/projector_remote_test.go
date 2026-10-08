@@ -125,7 +125,7 @@ func TestRemoteProjectionFailureOnlyAcknowledgesPrefixAndReplaysSuffix(t *testin
 }
 
 func TestRemoteProjectionWindowBoundaries(t *testing.T) {
-	for _, name := range []string{"independent", "overlap", "transaction", "effect", "receipt", "ordinary", "mixed", "migration", "invalid", "records", "bytes"} {
+	for _, name := range []string{"independent", "overlap", "transaction", "effect", "receipt", "ordinary", "mixed", "invalid", "records", "bytes"} {
 		t.Run(name, func(t *testing.T) {
 			records := []coredata.CommitRecord{remoteProjectionRecord(t, 1), remoteProjectionRecord(t, 2), remoteProjectionRecord(t, 3)}
 			maxRecords, bytes, want := 8, 4<<20, 3
@@ -149,9 +149,6 @@ func TestRemoteProjectionWindowBoundaries(t *testing.T) {
 				want = 1
 			case "mixed":
 				records[1].Mutations = append(records[1].Mutations, projectorRecord(2, false).Mutations[0])
-				want = 1
-			case "migration":
-				records[1].Handler = MigrationHandler
 				want = 1
 			case "invalid":
 				records[1].Mutations[0].Remote.Mutations[0].ID = 999

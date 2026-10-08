@@ -19,9 +19,6 @@ import (
 // 陈旧上限回源。所以 owner 启动（兴趣订阅已确认）后广播一条“请重新续租”，收到的只读方把本机仍有效的
 // 兴趣立即续租一次，推送在一次请求往返内恢复。
 //
-// 这是新主题、新消息：旧版本节点不订阅它，旧只读方按原来的续租周期收敛，旧 owner 不发请求、新只读方
-// 行为不变。快照与兴趣主题的格式都没有变。
-
 // SyncTopicInterestRefresh 是兴趣续租请求的主题。
 const SyncTopicInterestRefresh = "remote_entity_interest_refresh"
 

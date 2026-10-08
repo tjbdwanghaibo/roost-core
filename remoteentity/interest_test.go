@@ -19,7 +19,7 @@ func TestRemoteInterestRegistryIsScopedAndExpires(t *testing.T) {
 	}
 	registry := newRemoteInterestRegistry(remoteInterestLimits{})
 	key := entity.RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 3, Policy: 2}
-	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1001, Key: key, ExpiresAt: time.Now().Add(time.Second).UnixNano()}); err != nil {
+	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1001, Key: key, ExpiresAt: time.Now().Add(time.Second).UnixNano(), Generation: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if !registry.interested(key) {
@@ -34,7 +34,7 @@ func TestRemoteInterestRegistryIsScopedAndExpires(t *testing.T) {
 	if registry.interested(otherPolicy) {
 		t.Fatal("expired interest was retained")
 	}
-	registry.release(key, 1001, 0)
+	registry.release(key, 1001, 2)
 	if registry.interested(key) {
 		t.Fatal("released interest was retained")
 	}
@@ -109,20 +109,30 @@ func TestRemoteInterestRegistryHasHardCapacityLimits(t *testing.T) {
 	key := entity.RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 1}
 	other := key
 	other.Scope++
-	expires := time.Now().Add(time.Second).UnixNano()
+	now := time.Now().UnixNano()
+	registry.now = func() int64 { return now }
+	expires := now + time.Hour.Nanoseconds()
 	for _, sid := range []int32{1, 2, 3} {
-		if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: sid, Key: key, ExpiresAt: expires}); err != nil {
+		if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: sid, Key: key, ExpiresAt: expires, Generation: 1}); err != nil {
 			t.Fatalf("consumer %d within its quota: %v", sid, err)
 		}
 	}
-	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1, Key: other, ExpiresAt: expires}); !errors.Is(err, ErrInterestQuotaExceeded) || !errors.Is(err, entity.ErrRemoteOverloaded) {
+	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1, Key: other, ExpiresAt: expires, Generation: 3}); !errors.Is(err, ErrInterestQuotaExceeded) || !errors.Is(err, entity.ErrRemoteOverloaded) {
 		t.Fatalf("second lease of consumer 1 = %v, want ErrInterestQuotaExceeded (an ErrRemoteOverloaded)", err)
 	}
 	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 4, Key: other, ExpiresAt: expires}); !errors.Is(err, ErrInterestRegistryFull) || !errors.Is(err, entity.ErrRemoteOverloaded) {
 		t.Fatalf("a fourth consumer over the node limit = %v, want ErrInterestRegistryFull", err)
 	}
-	registry.release(key, 1, 0)
-	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1, Key: other, ExpiresAt: expires}); err != nil {
+	registry.release(key, 1, 2)
+	if got := registry.consumerLeases(1); got != 0 {
+		t.Fatalf("released consumer quota=%d", got)
+	}
+	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1, Key: other, ExpiresAt: expires, Generation: 3}); !errors.Is(err, ErrInterestRegistryFull) {
+		t.Fatalf("release watermark must retain its slot: %v", err)
+	}
+	// 撤销水位到期后才能回收表槽；其他 consumer 的有效租约不能被驱逐。
+	now += registry.fence.Nanoseconds() + 1
+	if err := registry.renew(entity.RemoteSnapshotInterest{ConsumerSID: 1, Key: other, ExpiresAt: expires, Generation: 3}); err != nil {
 		t.Fatalf("quota was not released: %v", err)
 	}
 	if got := registry.consumerLeases(1); got != 1 {

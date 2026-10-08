@@ -196,7 +196,7 @@ func TestGenerateDao(t *testing.T) {
 		"return HeroDaoCollection",
 		"func (d *HeroDao) SchemaVersion() uint32",
 		"return HeroDaoSchemaVersion",
-		"func (d *HeroDao) Migrate(raw []byte, from uint32) ([]byte, error)",
+		"dataengine.ErrSchemaMismatch",
 		"func (d *HeroDao) DirtyTracker() *dataengine.Tracker",
 		"var _ nest.RollbackSnapshotter = (*HeroDao)(nil)",
 		"var _ nest.MutationParticipant = (*HeroDao)(nil)",

@@ -31,13 +31,13 @@ type fencedResyncDAO struct {
 	level int32
 }
 
-func (dao *fencedResyncDAO) Id() int64                                { return dao.id }
-func (dao *fencedResyncDAO) SetId(id int64)                           { dao.id = id }
-func (*fencedResyncDAO) DbName() string                               { return testDatabase }
-func (*fencedResyncDAO) CollName() string                             { return fencedResyncCollection }
-func (*fencedResyncDAO) Dirty() entity.IDirty                         { return nil }
-func (*fencedResyncDAO) CleanDirty()                                  {}
-func (*fencedResyncDAO) Migrate(raw []byte, _ uint32) ([]byte, error) { return raw, nil }
+func (dao *fencedResyncDAO) Id() int64         { return dao.id }
+func (dao *fencedResyncDAO) SetId(id int64)    { dao.id = id }
+func (*fencedResyncDAO) DbName() string        { return testDatabase }
+func (*fencedResyncDAO) CollName() string      { return fencedResyncCollection }
+func (*fencedResyncDAO) Dirty() entity.IDirty  { return nil }
+func (*fencedResyncDAO) CleanDirty()           {}
+func (*fencedResyncDAO) SchemaVersion() uint32 { return 1 }
 func (dao *fencedResyncDAO) RestorePersisted(raw []byte, _ uint32, _ uint64) error {
 	var doc struct {
 		Level int32 `bson:"level"`
@@ -121,14 +121,14 @@ func newFencedResyncFixture(t *testing.T, uniqueID int64) *fencedResyncFixture {
 	}
 	store, client, _ := newMongoStoreTest(t)
 	docs := client.Collection(testDatabase, fencedResyncCollection)
-	if err = docs.Seed(bson.M{"_id": id, "_version": uint64(4), "level": int32(1)}); err != nil {
+	if err = docs.Seed(bson.M{"_id": id, "_version": uint64(4), "_schema": uint32(1), "level": int32(1)}); err != nil {
 		t.Fatal(err)
 	}
 	seedClaim(t, client, fencedClaim, "worker-1", 7, fencedDigest, time.Now().UTC().Add(-time.Second)) // 租约已过期：原生步骤会被跳过
 	projector, _ := manualProjector(t, store)
 	f := &fencedResyncFixture{t: t, id: id, store: store, docs: docs, project: projector, manager: entity.NewEntityManager(), frames: make(chan []byte, 16)}
 	f.access = entity.NewManagerAccess(f.manager)
-	repository, err := NewEntityRepository(f.manager, store, nil, projectionGate{projector})
+	repository, err := NewEntityRepository(f.manager, store, projectionGate{projector})
 	if err != nil {
 		t.Fatal(err)
 	}

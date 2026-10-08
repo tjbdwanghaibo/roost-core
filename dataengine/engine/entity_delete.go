@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"time"
@@ -191,4 +192,12 @@ func (runtime *Runtime) fail(err error) {
 	if err != nil && runtime != nil && runtime.onFatal != nil {
 		runtime.onFatal(err)
 	}
+}
+
+func newSystemTransactionID() (coredata.TransactionID, error) {
+	var id coredata.TransactionID
+	if _, err := rand.Read(id[:]); err != nil {
+		return coredata.TransactionID{}, fmt.Errorf("dataengine: transaction id: %w", err)
+	}
+	return id, nil
 }

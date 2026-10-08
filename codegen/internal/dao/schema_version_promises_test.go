@@ -7,12 +7,7 @@ import (
 	"testing"
 )
 
-// game-demo 第十四批：一个工程必须能声明自己 DAO 的 schema 版本。
-//
-// 旧行为：生成的 `<Dao>SchemaVersion` 永远是 1。框架有一整套迁移机制
-// （`migration.RegisterDAO` + 生成的 `Migrate` 调 `MigrateDAO(coll, raw,
-// from, SchemaVersion)`），但 from 与 target 恒等，**没有任何生成的工程能
-// 触发它** —— 一个承诺了却无人能履行的能力。
+// schema 声明进入正式生成代码，加载时按该版本严格校验。
 func TestDaoSchemaVersionComesFromTheMarker(t *testing.T) {
 	dir := t.TempDir()
 	source := `package def

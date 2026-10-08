@@ -8,7 +8,6 @@ import (
 
 	world "{{MODULE}}/game/entities/world"
 	lifecycle "{{MODULE}}/game/lifecycle"
-	migrations "{{MODULE}}/db/migrations"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/skills"
 	accessplayer "{{MODULE}}/internal/access/player"
@@ -58,12 +57,6 @@ func (*Service) ConfigSchema() app.ConfigSchema { return settings.Schema() }
 // served; then the effect consumer subscribes, so a level-up committed while
 // this process was down is delivered as soon as it is back.
 func (s *Service) Init(registry *app.Registry) error {
-	// Migrations before anything can load a document: a Player written by an
-	// older build is upgraded on its way into the Entity, and a step that
-	// registered late would let the first few loads through unmigrated.
-	if err := migrations.Register(); err != nil {
-		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
-	}
 	// The skill catalog first: a definition that does not compile must stop
 	// the process here, not surface as an error on the first client request.
 	// Warnings are kept for the operator to see; a release check can refuse them.

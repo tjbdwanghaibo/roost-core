@@ -133,12 +133,12 @@ func TestRealPatchConflictFencesWithoutFullFallback(t *testing.T) {
 	}
 }
 
-func TestRealLoadAndMigrationRestoresTrackerVersion(t *testing.T) {
+func TestRealLoadRestoresTrackerVersion(t *testing.T) {
 	fx := newRealFixture(t)
 	defer fx.close()
 
 	if err := fx.runtime.Store.Project(fx.context(), realRecord(6, []coredata.Mutation{
-		realPutWithSchema(t, fx.database, "profiles", 404, 0, 1, 1, bson.M{"name": "legacy"}),
+		realPutWithSchema(t, fx.database, "profiles", 404, 0, 1, 1, bson.M{"name": "current"}),
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -146,60 +146,36 @@ func TestRealLoadAndMigrationRestoresTrackerVersion(t *testing.T) {
 	if err != nil || len(docs) != 1 {
 		t.Fatalf("load docs=%d err=%v", len(docs), err)
 	}
-	dao := &realMigrationDAO{}
-	runner, err := engine.NewMigrationRunner(fx.runtime.Projector)
-	if err != nil {
-		t.Fatal(err)
-	}
-	migrated, err := runner.Migrate(fx.context(), dao, docs[0])
-	if err != nil || !migrated {
-		t.Fatalf("migrated=%v err=%v", migrated, err)
-	}
-	docs, err = fx.runtime.Store.Load(fx.context(), coredata.LoadSpec{Database: fx.database, Resource: "profiles", BatchSize: 16})
-	if err != nil || len(docs) != 1 {
-		t.Fatalf("reload docs=%d err=%v", len(docs), err)
-	}
+	dao := &realLoadedDAO{}
 	if err := dao.RestorePersisted(docs[0].Data, docs[0].Schema, docs[0].Version); err != nil {
 		t.Fatal(err)
 	}
-	if dao.tracker.Version() != 2 || dao.schema != 2 || !dao.migrated {
-		t.Fatalf("tracker=%d schema=%d migrated=%v", dao.tracker.Version(), dao.schema, dao.migrated)
+	if dao.tracker.Version() != 1 || dao.schema != 1 {
+		t.Fatalf("tracker=%d schema=%d", dao.tracker.Version(), dao.schema)
 	}
 }
 
-type realMigrationDAO struct {
-	id       int64
-	tracker  coredata.Tracker
-	schema   uint32
-	migrated bool
+type realLoadedDAO struct {
+	id      int64
+	tracker coredata.Tracker
+	schema  uint32
 }
 
-func (dao *realMigrationDAO) Id() int64         { return dao.id }
-func (*realMigrationDAO) SchemaVersion() uint32 { return 2 }
+func (dao *realLoadedDAO) Id() int64         { return dao.id }
+func (*realLoadedDAO) SchemaVersion() uint32 { return 1 }
 
-func (*realMigrationDAO) Migrate(raw []byte, from uint32) ([]byte, error) {
-	if from != 1 {
-		return nil, errors.New("unexpected source schema")
+func (dao *realLoadedDAO) RestorePersisted(raw []byte, schema uint32, version uint64) error {
+	if schema != dao.SchemaVersion() {
+		return coredata.ErrSchemaMismatch
 	}
-	var doc bson.M
-	if err := bson.Unmarshal(raw, &doc); err != nil {
-		return nil, err
-	}
-	doc["migrated"] = true
-	return bson.Marshal(doc)
-}
-
-func (dao *realMigrationDAO) RestorePersisted(raw []byte, schema uint32, version uint64) error {
 	var doc struct {
-		ID       int64 `bson:"_id"`
-		Migrated bool  `bson:"migrated"`
+		ID int64 `bson:"_id"`
 	}
 	if err := bson.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
 	dao.id = doc.ID
 	dao.schema = schema
-	dao.migrated = doc.Migrated
 	dao.tracker.SetVersion(version)
 	dao.tracker.SelfClean()
 	return nil

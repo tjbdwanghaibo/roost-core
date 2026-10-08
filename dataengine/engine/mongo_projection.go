@@ -36,12 +36,6 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 	}
 	if len(record.Mutations) == 1 && len(record.Effects) == 0 && len(record.Receipts) == 0 && record.Mutations[0].Remote == nil {
 		err := store.applyMutation(ctx, record.ID.String(), record.Mutations[0], false)
-		if record.Handler == MigrationHandler && errors.Is(err, ErrProjectionConflict) {
-			// A concurrent writer made this migration record obsolete. It must
-			// still advance the WAL checkpoint; the repository reloads and either
-			// observes the migrated schema or submits one new CAS attempt.
-			return false, nil
-		}
 		return false, err
 	}
 	digest, err := digestRecord(record)
@@ -188,7 +182,7 @@ func (store *MongoStore) SupportsRemoteParallelProjection() bool {
 // Ordered bulk writes preserve each document's WAL version order and remove one round-trip per
 // WAL record, while transaction markers make a committed-but-unacknowledged
 // batch idempotent across restart. Records with effects, receipts, remote
-// mutations, or migrations retain the per-record projection path.
+// mutations retain the per-record projection path.
 func (store *MongoStore) ProjectBatch(ctx context.Context, records []coredata.CommitRecord) error {
 	if store == nil || store.client == nil {
 		return errors.New("dataengine mongo: store is not configured")

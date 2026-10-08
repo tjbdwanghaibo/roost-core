@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/migration"
 	"github.com/tjbdwanghaibo/roost-core/nest"
 	fmap "github.com/tjbdwanghaibo/roost-core/safemap"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -61,9 +60,6 @@ func (d *HeroDao) DbName() string                    { return HeroDaoDBName }
 func (d *HeroDao) DbScope() dataengine.DatabaseScope { return dataengine.DatabaseServer }
 func (d *HeroDao) CollName() string                  { return HeroDaoCollection }
 func (d *HeroDao) SchemaVersion() uint32             { return HeroDaoSchemaVersion }
-func (d *HeroDao) Migrate(raw []byte, from uint32) ([]byte, error) {
-	return migration.MigrateDAO(d.CollName(), raw, from, HeroDaoSchemaVersion)
-}
 func (d *HeroDao) Dirty() entity.IDirty              { return &d.tracker }
 func (d *HeroDao) CleanDirty()                       { d.tracker.SelfClean() }
 func (d *HeroDao) DirtyTracker() *dataengine.Tracker { return &d.tracker }
@@ -1172,18 +1168,10 @@ func (d *HeroDao) Unmarshal(raw []byte) error {
 }
 
 // RestorePersisted is the single production hydration path used by the
-// Data Engine aggregate repository. Migration and tracker restoration happen
-// before the DAO is published through its entity.
+// Data Engine aggregate repository. Schema must match before decoding or changing the tracker.
 func (d *HeroDao) RestorePersisted(raw []byte, schemaVersion uint32, version uint64) error {
-	if schemaVersion > HeroDaoSchemaVersion {
-		return fmt.Errorf("dao HeroDao: stored schema %d is newer than runtime schema %d", schemaVersion, HeroDaoSchemaVersion)
-	}
-	var err error
-	if schemaVersion < HeroDaoSchemaVersion {
-		raw, err = d.Migrate(raw, schemaVersion)
-		if err != nil {
-			return fmt.Errorf("dao HeroDao: migrate schema %d to %d: %w", schemaVersion, HeroDaoSchemaVersion, err)
-		}
+	if schemaVersion != HeroDaoSchemaVersion {
+		return fmt.Errorf("%w: dao HeroDao stored=%d runtime=%d", dataengine.ErrSchemaMismatch, schemaVersion, HeroDaoSchemaVersion)
 	}
 	if err := d.Unmarshal(raw); err != nil {
 		return err

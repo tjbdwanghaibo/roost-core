@@ -23,7 +23,7 @@ func remoteProjectionWindow(segments []projectionSegment, maxRecords, maxBytes i
 			break
 		}
 		record := segment.records[0]
-		if record.Handler == MigrationHandler || len(record.Mutations) == 0 || len(record.Effects) != 0 || len(record.Receipts) != 0 {
+		if len(record.Mutations) == 0 || len(record.Effects) != 0 || len(record.Receipts) != 0 {
 			break
 		}
 		if _, exists := transactions[record.ID]; exists {

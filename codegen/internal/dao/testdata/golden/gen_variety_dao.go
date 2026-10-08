@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/migration"
 	"github.com/tjbdwanghaibo/roost-core/nest"
 	fmap "github.com/tjbdwanghaibo/roost-core/safemap"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -58,9 +57,6 @@ func (d *VarietyDao) DbName() string                    { return VarietyDaoDBNam
 func (d *VarietyDao) DbScope() dataengine.DatabaseScope { return dataengine.DatabaseGlobal }
 func (d *VarietyDao) CollName() string                  { return VarietyDaoCollection }
 func (d *VarietyDao) SchemaVersion() uint32             { return VarietyDaoSchemaVersion }
-func (d *VarietyDao) Migrate(raw []byte, from uint32) ([]byte, error) {
-	return migration.MigrateDAO(d.CollName(), raw, from, VarietyDaoSchemaVersion)
-}
 func (d *VarietyDao) Dirty() entity.IDirty              { return &d.tracker }
 func (d *VarietyDao) CleanDirty()                       { d.tracker.SelfClean() }
 func (d *VarietyDao) DirtyTracker() *dataengine.Tracker { return &d.tracker }
@@ -785,18 +781,10 @@ func (d *VarietyDao) Unmarshal(raw []byte) error {
 }
 
 // RestorePersisted is the single production hydration path used by the
-// Data Engine aggregate repository. Migration and tracker restoration happen
-// before the DAO is published through its entity.
+// Data Engine aggregate repository. Schema must match before decoding or changing the tracker.
 func (d *VarietyDao) RestorePersisted(raw []byte, schemaVersion uint32, version uint64) error {
-	if schemaVersion > VarietyDaoSchemaVersion {
-		return fmt.Errorf("dao VarietyDao: stored schema %d is newer than runtime schema %d", schemaVersion, VarietyDaoSchemaVersion)
-	}
-	var err error
-	if schemaVersion < VarietyDaoSchemaVersion {
-		raw, err = d.Migrate(raw, schemaVersion)
-		if err != nil {
-			return fmt.Errorf("dao VarietyDao: migrate schema %d to %d: %w", schemaVersion, VarietyDaoSchemaVersion, err)
-		}
+	if schemaVersion != VarietyDaoSchemaVersion {
+		return fmt.Errorf("%w: dao VarietyDao stored=%d runtime=%d", dataengine.ErrSchemaMismatch, schemaVersion, VarietyDaoSchemaVersion)
 	}
 	if err := d.Unmarshal(raw); err != nil {
 		return err

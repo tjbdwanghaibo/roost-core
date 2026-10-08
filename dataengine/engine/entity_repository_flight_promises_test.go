@@ -45,7 +45,7 @@ func TestARepositoryLoadPanicDoesNotWedgeTheAggregate(t *testing.T) {
 		}},
 		panics: 1,
 	}
-	repository, err := newEntityRepository(entity.NewEntityManager(), store, nil, repositoryGate(true))
+	repository, err := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestRepositoryWaitersOfAPanickingLoadAreReleased(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	store := &blockingPanicStore{entered: entered, release: release}
-	repository, err := newEntityRepository(entity.NewEntityManager(), store, nil, repositoryGate(true))
+	repository, err := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}

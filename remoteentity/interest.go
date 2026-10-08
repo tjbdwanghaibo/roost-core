@@ -275,7 +275,7 @@ func (r *remoteInterestRegistry) removeLocked(key entity.RemoteSnapshotKey, sid 
 // A release with a generation leaves a watermark (Mirror 第 4 步): before it,
 // a release that overtook an older renewal on the wire found nothing to
 // cancel, and the late renewal then created a lease the consumer had already
-// withdrawn. Generation 0 is the legacy publisher and leaves none. When the
+// withdrawn. When the
 // registry is full and the entry does not exist, the watermark goes to the
 // consumer's overflow fence instead of the table (RR-20261006-11).
 func (r *remoteInterestRegistry) release(key entity.RemoteSnapshotKey, consumerSID int32, generation uint64) {
@@ -287,11 +287,6 @@ func (r *remoteInterestRegistry) release(key entity.RemoteSnapshotKey, consumerS
 	defer r.mu.Unlock()
 	current, exists := r.entries[key][consumerSID]
 	if exists && generation < current.generation {
-		return
-	}
-	if generation == 0 {
-		// 旧发布者没有代际：只撤销（之前的行为）。
-		r.removeLocked(key, consumerSID)
 		return
 	}
 	if !exists && r.total >= r.maxSubs {
@@ -372,7 +367,7 @@ type InterestReplicaStore struct{ client *SnapshotClient }
 
 func (s InterestReplicaStore) ApplyReplica(_ context.Context, env mirror.Envelope) error {
 	if s.client == nil || len(env.Payload) == 0 {
-		return nil
+		return entity.ErrRemoteRejected
 	}
 	var wire remoteInterestWire
 	if err := json.Unmarshal(env.Payload, &wire); err != nil {
@@ -380,7 +375,7 @@ func (s InterestReplicaStore) ApplyReplica(_ context.Context, env mirror.Envelop
 	}
 	// RR-20261005-NC-34：renew/release 都是携带完整身份的 Upsert 消息。
 	// 在改注册表前绑定 payload，不能用一个订阅的信封操作另一个订阅。
-	if env.Op != mirror.OpUpsert || !wire.Interest.Key.Valid() || wire.Interest.ConsumerSID == 0 {
+	if env.Op != mirror.OpUpsert || !wire.Interest.Key.Valid() || wire.Interest.ConsumerSID == 0 || wire.Interest.Generation == 0 {
 		return fmt.Errorf("remote_entity: interest message has invalid operation or identity")
 	}
 	if env.Key != remoteInterestReplicaKey(wire.Interest) || env.Version != wire.Interest.ExpiresAt {

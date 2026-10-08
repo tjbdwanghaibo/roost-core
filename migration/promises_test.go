@@ -57,34 +57,3 @@ func TestRegistryRefusesEachInvalidStepAndRequest(t *testing.T) {
 		t.Fatalf("version after refused overshoot = %d, want 2 (only the first step ran)", partial.version)
 	}
 }
-
-func TestDAORegistryRefusesEachInvalidStepAndRequest(t *testing.T) {
-	r := NewDAORegistry()
-	apply := func(_ context.Context, raw []byte) ([]byte, error) { return append(raw, '+'), nil }
-	expectMigrationErr(t, r.RegisterDAO(DAOStep{From: 1, To: 2, Apply: apply}), ErrStepInvalid, "dao collection empty")
-	expectMigrationErr(t, r.RegisterDAO(DAOStep{Collection: "hero", From: 2, To: 2, Apply: apply}), ErrStepInvalid, "invalid dao version 2 -> 2")
-	expectMigrationErr(t, r.RegisterDAO(DAOStep{Collection: "hero", From: 1, To: 2}), ErrStepInvalid, "dao apply nil hero 1 -> 2")
-	if err := r.RegisterDAO(DAOStep{Collection: "hero", From: 1, To: 2, Apply: apply}); err != nil {
-		t.Fatal(err)
-	}
-	expectMigrationErr(t, r.RegisterDAO(DAOStep{Collection: "hero", From: 1, To: 3, Apply: apply}), ErrStepInvalid, "duplicate dao step hero from 1")
-	if err := r.RegisterDAO(DAOStep{Collection: "hero", From: 2, To: 4, Apply: apply}); err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	_, _, err := r.MigrateDAO(ctx, "", []byte("x"), 1, 2)
-	expectMigrationErr(t, err, ErrStepInvalid, "dao collection empty")
-	_, _, err = r.MigrateDAO(ctx, "hero", []byte("x"), 4, 2)
-	expectMigrationErr(t, err, ErrStepInvalid, "dao downgrade 4 -> 2")
-	_, reached, err := r.MigrateDAO(ctx, "hero", []byte("x"), 1, 3)
-	expectMigrationErr(t, err, ErrPathMissing, "dao step hero_2_to_4 overshoots target 3")
-	if reached != 2 {
-		t.Fatalf("version reached before the refusal = %d, want 2", reached)
-	}
-	_, _, err = r.MigrateDAO(ctx, "guild", []byte("x"), 1, 2)
-	expectMigrationErr(t, err, ErrPathMissing, "dao guild 1 -> 2")
-	out, reached, err := r.MigrateDAO(ctx, "hero", []byte("x"), 1, 4)
-	if err != nil || reached != 4 || string(out) != "x++" {
-		t.Fatalf("legal dao path = %q, %d, %v", out, reached, err)
-	}
-}
