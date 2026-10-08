@@ -20,3 +20,9 @@
 完整平台结果：macOS与Linux/arm64均完成全仓build/vet/test，131个测试包通过（22个无测试包）。macOS相邻4包race×3；两平台目标场景race×30，Linux实际KCP网络race×3。Linux官方镜像digest为`sha256:162be5298a40ed317005c8339c6de4d10d3eef336d66dc8e9259b03ab9d3a6d2`，本轮未安装.NET/真实数据库，Linux中的相关外部集成仍按既有条件跳过；macOS全仓包含既有生成工程验证。本轮未新增生产变更，无需重复v1.23.1已通过的21格依赖故障矩阵。
 
 旧MCP stdio连接在停掉旧CBM会话后已关闭；当前会话用官方CLI验证，后续MCP客户端需重新连接。索引数据库和常驻daemon已恢复；不把当前连接的Transport closed写成索引仍旧或刷新失败。日志保存主检出`artifacts/perf/mac-linux-followup-20261008/`；保留原红测，不复制凭据。历史Windows日志保留，不以本轮覆盖全部外部场景。
+
+## 最终交付
+
+修复提交`f2d3da19`已推送main。两平台131个测试包通过，最终根包-count=1与文档锚点检查通过；Linux源码副本与macOS验收的4个变更Go文件SHA256逐一一致（source-sha256.json）。Windows未运行、未处理。没有新tag，v1.23.1仍指向原发布提交。
+
+main源码刷新成功：generation=`2026-10-08T02:08:14Z`，25200 nodes / 243910 edges，skipped=0，parse_partial=5（模板原有范围）；本轮4个Go文件及RR-25的jetstream.go均为metadata_match、无记录缺口。完整刷新/覆盖JSON在持久证据目录；本节为随后文档回填，不改变已验证源码。
