@@ -125,6 +125,18 @@ ROOST_SAGA_PERF_DURATION=1m GOFLAGS=-p=1 bash scripts/perf/saga.sh
 
 ## Sync 验收口径复核
 
+### handler 提交边界与接收计时
+
+维护者本轮再次明确：`on_change` 指一次 Nest handler 完成后的全部 change 统一同步，setter 只标脏，不逐次发送。当前正式链路由 `SyncMutation.Admit` 在成功准入、Entity 锁释放前收集全部目标的脏字段并冻结视图；全部锁释放且完成提交确认后唤醒 Manager。网络发送在锁外。唤醒可以合并，因此业务提交批次不等于网络帧边界，不承诺每个 handler 恰好一帧；没有可交付变化不会因此制造状态更新。
+
+Sync 夹具使用正式 Nest handler 与 `NestOptionWithEntitySync`。配置中的 20Hz 有两个不同含义：负载按每 50ms 窗口选择 1%/5% Entity 修改，并分成 10 批、约每 5ms 投递；Manager 的 50ms ticker 在 periodic 模式负责周期 Flush，在 on_change 模式只是兜底，收到提交唤醒就可以 Flush，无需等待下一周期。当前夹具每次 handler 修改一个 Entity 的多个字段，不是 setter 调用数对应发送数。
+
+`scripts/perf/sync-aoi/nest.go` 在 handler 锁内修改字段后、标脏前记录 `Changed`，收集变化时记录 `Committed`；后者是夹具的收集时间，不等于通用 WAL/Remote 持久确认时间。`client.go` 的独立接收进程为每个连接读完整帧，完成帧和 Subject 解码、版本链及字段校验，更新客户端对象记录后才记录 `Received`。因此主指标 `Received−Changed` 包含 handler 剩余执行、提交/释放、Sync 调度/编码/排队、loopback TCP 和客户端该对象解码校验；`Received−Planned` 另外包含计划投递迟到。没有包含客户端渲染或公网 RTT。
+
+固定周期可能将累积变化集中为编码、发送队列及带宽峰值；按 handler 完成时机触发有机会分散这些工作，但 Nest/HB 本身集中完成时仍会形成峰值。更频繁交付也可能减少跨 handler 的状态合并，使包数和总字节增加。当前没有细粒度带宽峰值或链路饱和证据，不能把 periodic 的较高延迟或 on_change 的偶发长尾直接归因为带宽。periodic 的周期等待本身已经占用最多约 50ms；两模式的 P99 差异不能作为“网络瓶颈已定位”的证明。
+
+### 两模式的验收区别
+
 初始方案把 periodic/on_change 两模式都列入“每条接收延迟严格≤50ms”的同一门禁。实际 periodic 1% 三轮严格失败，实际变化到接收 P99 分别为 55.959/56.168/57.351ms；该失败记录保留，**没有修改脚本阈值、删除样本或改变周期使门禁变绿**。
 
 源码 `sync/entitysync/manager.go` 的 `Manager.run` 按 `Interval` ticker 串行 Flush；本档 interval=50ms。变化若错过本次捕获，就先等下一个周期，之后仍需捕获/编码/排队/接收。因此周期等待本身可耗尽 50ms 预算；首轮接收准入后 P99 只有 4.799ms，主要时延处于变化到准入阶段。CBM 查询和 coverage 已覆盖 manager/flush，脚本在索引排除范围，按当前源码直接补证；图中 `NewTicker` 的启发式误连不采信，以源码 `time.NewTicker` 为准。
