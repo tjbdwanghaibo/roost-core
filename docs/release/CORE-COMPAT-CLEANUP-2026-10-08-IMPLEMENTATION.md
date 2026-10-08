@@ -35,3 +35,7 @@ Linux 实机、真实 Mongo/NATS/Redis 故障矩阵和长压测不在本轮已�
 1. 在 core 根运行 `go run ./codegen/cmd/roost project new compatverify -module example.com/compatverify -out <临时目录>/game -template game-demo`；进入 game 设置 replace，再依次 `go build -p 1 ./...`、`go vet -p 1 ./...`、`go test -p 1 ./...`。
 2. 分别复制 `codegen/internal/entity/testdata/dataengine` / `remoteflow` 顶层 Go 和 def Go 到独立临时模块（模块名分别 persistflow/remoteflow）。设置 Go 1.27.0、core require v0.0.0 和本地 replace；在 core 根运行 `go run ./codegen/cmd/dao -def <目录>/def -out <目录> -pkg <模块名> -force`，再 `go run ./codegen/cmd/entity -dir <目录> -force`；在临时模块 `go test -p 1 -mod=mod -run '^$' ./...`。这里只编译，不计资源行为验收。
 3. 复制 `codegen/internal/entity/testdata/syncruntime` Go 到临时模块 entitysyncruntime，以相同方式设置 require/replace；执行正式 entity 生成器，然后 `go test -p 1 -mod=mod -tags entitysyncruntime ./...`，实际构造实体并用 PrepareViews 捕获生成 packer 的内容。
+
+## 合入与最终索引
+
+代码已以 `7c9b9d31` 合入 main。CBM 在 main 刷新成功，generation `2026-10-08T06:53:22Z`，25656 nodes / 246459 edges，skipped 0。最终 112 个改动 Go/模板路径中 102 个 metadata_match 且无记录缺口，10 个 testdata/脚本按规则排除；排除路径已经直接读取并通过相应编译/生成验证。全项目另有 5 个既存模板 partial，不在本轮改动路径。原始结果保留在 cbm-final.json；不把索引无缺口当全仓完整性证明。索引之后只补文档，没有更改已验收业务代码。
