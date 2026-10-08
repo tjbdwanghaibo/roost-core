@@ -38,3 +38,5 @@ TCP发送会检查fctx当前执行位置，快worker在resolver/socket前返回E
 | 全仓go test -count=1 ./... | exit1：153包，126通过/22无测试/5失败；根包47.067s通过。基线对照与具体失败见验收记录，不能称全仓绿 |
 
 [日志证据（空白规范化）](evidence/client-lockstep-20261008)。没有运行引擎实机、公网UDP、HA/长期容量或真实确定性游戏。本次只是通用协议/消费能力；业务仍须实现比赛单所有者、Nest命令桥接、Tick驱动和真实状态Hash。无回复Notify不证明业务ACK。没有发版、部署或等待GitHub CI。
+
+收尾索引更新（2026-10-08）：main源码提交e9626354已全量刷新成功，generation=2026-10-08T00:23:20Z，ready，48620 nodes/294215 edges、0 skipped、65 parse_partial；部分解析仍需按范围补读，不能冒认全覆盖。相关18路径coverage无记录缺口但freshness仍报metadata_changed，已读取main源码并与验收工作树逐个比较LF规范化内容一致，SHA见证据目录main-source-sha256.json；状态与coverage见index-snapshot.json。此前9-30旧代际描述保留为工作开始时点，后续使用此新代际及当前源码补证。

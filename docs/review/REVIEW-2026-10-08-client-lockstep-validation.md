@@ -45,3 +45,5 @@
 - 真实游戏确定性、作弊裁决、主线程帧预算和业务输入生产/状态Hash仍由游戏实现；输入链Hasher仅为诊断。
 - 自动追帧重试按收到的包计数；无新包时业务计时器需显式调用Catchup或终止比赛，不能无限假定恢复。
 - 图谱仍为2026-09-30旧代际；Verify查询/coverage后逐个读当前源码补证，不宣称图谱覆盖本轮新增实现。
+
+收尾索引更新（2026-10-08）：main源码提交e9626354已全量刷新成功，generation=2026-10-08T00:23:20Z，ready，48620 nodes/294215 edges、0 skipped、65 parse_partial；部分解析仍需按范围补读，不能冒认全覆盖。相关18路径coverage无记录缺口但freshness仍报metadata_changed，已读取main源码并与验收工作树逐个比较LF规范化内容一致，SHA见证据目录main-source-sha256.json；状态与coverage见index-snapshot.json。此前9-30旧代际描述保留为工作开始时点，后续使用此新代际及当前源码补证。

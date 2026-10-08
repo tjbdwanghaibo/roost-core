@@ -1,6 +1,6 @@
 # Roost 核心优化汇总与 agent 交接
 
-**2026-10-08 Lockstep客户端接线（main未发版）：**RS v2启用类型2（上行4、push5），正式ProtocolRegistry/生成TCP已接线，复用Room/C7广播与历史追帧；C#提供Command、有界Assembler与主线程模拟消费。没有旧包兼容，不代表Unity/Godot/Unreal实机、UDP性能或游戏确定性已验收。[接入说明](../client/README.md) · [实施/验证](feature/IMPLEMENTATION-2026-10-08-CLIENT-LOCKSTEP.md)。[验收/全仓基线失败交接](review/REVIEW-2026-10-08-client-lockstep-validation.md)。下方10-07“预留”保留历史时点。
+**2026-10-08 Lockstep客户端接线（main已推送e9626354，未发版）：**RS v2启用类型2（上行4、push5），正式ProtocolRegistry/生成TCP已接线，复用Room/C7广播与历史追帧；C#提供Command、有界Assembler与主线程模拟消费。没有旧包兼容，不代表Unity/Godot/Unreal实机、UDP性能或游戏确定性已验收。[接入说明](../client/README.md) · [实施/验证](feature/IMPLEMENTATION-2026-10-08-CLIENT-LOCKSTEP.md)。[验收/全仓基线失败交接](review/REVIEW-2026-10-08-client-lockstep-validation.md)。CBM收尾已刷新至10-08新代际（旧9-30阻塞描述保留历史），相关路径仍按coverage补证。下方10-07“预留”保留历史时点。
 
 **2026-10-08 当前接手入口：**剩余修复B1～B5、B7已提交验收，B6除RR-25已提交，B8已提交a221d224并通过最终pretag。RR-25受自动审批阻塞，候选已移出待合并代码；不计全部完成。逐项见 [v1.23.1实现与验收](release/v1.23.1-IMPLEMENTATION.md)，下方各日期状态是历史记录。未发版。
 

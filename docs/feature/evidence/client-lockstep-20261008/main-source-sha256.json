@@ -1,0 +1,74 @@
+[
+  {
+    "path": "sync/lockstep/command.go",
+    "sha256LF": "c46848971eea36cba151befa08a4d8b0f61c201244b64c1ec4d4b6102cffaae5"
+  },
+  {
+    "path": "sync/lockstep/command_test.go",
+    "sha256LF": "4d16c95786bc11fd1e015db0f66083488ad97b868ee2681317bc8cbcbf8f7017"
+  },
+  {
+    "path": "sync/lockstep/tcp.go",
+    "sha256LF": "8d983b110596835860859852e1e4355d86829a0d66c79db26fc83e2d3eb660f2"
+  },
+  {
+    "path": "sync/lockstep/room.go",
+    "sha256LF": "0a773840b671dc74df2e17bbb1f1ab07d0efca5f2c580162422e08b213c9f6f6"
+  },
+  {
+    "path": "sync/lockstep/wire.go",
+    "sha256LF": "99e113a822e3bc5d1b887e96ceb124de07812525242b21cdebd88129b05cf8c6"
+  },
+  {
+    "path": "sync/lockstep/e2e_gate_test.go",
+    "sha256LF": "dd1566bec15a7bdc403d7a85bafe43abf02a482ada6247b002e1634680d00635"
+  },
+  {
+    "path": "client/wire/packet.go",
+    "sha256LF": "12ab2f788349037711804632a7a0b118d95b69e1755031e96959f9dc3d5d130d"
+  },
+  {
+    "path": "client/wire/packet_test.go",
+    "sha256LF": "995b12536a3657502d984ba004cc49e60adff9793b90b1f39741f2fe1453f0c3"
+  },
+  {
+    "path": "client/wire/golden_test.go",
+    "sha256LF": "0caaaa81af72a193f37bbf1439df382b23892ecd9bd2b8f8c07848498693d586"
+  },
+  {
+    "path": "client/dotnet/Roost.Client/LockstepCodec.cs",
+    "sha256LF": "8814060e6c75251eed0c51ca9df0e7947974638ac13b6645cf8a0eebaaf73e3e"
+  },
+  {
+    "path": "client/dotnet/Roost.Client/LockstepClient.cs",
+    "sha256LF": "f56ce6553565006c5e38cc9648182b0d2393fd545103860a5aac2958f561227c"
+  },
+  {
+    "path": "client/dotnet/Roost.Client/Packet.cs",
+    "sha256LF": "b80a6b23e6fdca9aa36799dc8aec0226602f4dfe903394143c83af7b8ebcc218"
+  },
+  {
+    "path": "client/dotnet/Roost.Client/TcpSession.cs",
+    "sha256LF": "52663bbc2cf3f7a9ed7e83dd29b3e71700430d805c9d29df0076da801289632f"
+  },
+  {
+    "path": "client/dotnet/Roost.Client.Tests/Program.cs",
+    "sha256LF": "55b885a45b7ffb8e50cd0e5c82c0c39891720bd08da62907998bb918cd737987"
+  },
+  {
+    "path": "client/dotnet/Roost.Client.Tests/LockstepTests.cs",
+    "sha256LF": "aad8f16e3ef1164ca812bc099d2b47adbf42444bfbf75c0f2e5922c18115820c"
+  },
+  {
+    "path": "codegen/internal/roost/render_access.go",
+    "sha256LF": "cec3204086a38d480ed52de798968523f046742209d2f949891a940fde73cb56"
+  },
+  {
+    "path": "codegen/internal/roost/render_player_tcp.go",
+    "sha256LF": "f75b3c88f44a60d7c08296fd316c866955ce0e03de61e1f4129601559af5b399"
+  },
+  {
+    "path": "codegen/internal/roost/client_sdk_promises_test.go",
+    "sha256LF": "88b800e41dc8c87ebc1514b88875cd421a4e2de3da8f69ffd588ce82c72444af"
+  }
+]
