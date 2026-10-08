@@ -1,36 +1,40 @@
 # Changelog
 
-## 未发布：撤销 DAO 自动迁移与旧兴趣发布端兼容（2026-10-08）
+本文件从 v1.6.2 起维护；更早版本见 git 历史。格式遵循 Keep a Changelog，版本号遵循语义化版本。
+
+## [Unreleased]
+
+### 撤销 DAO 自动迁移与旧兴趣发布端兼容（2026-10-08）
 
 - DAO 加载只接受当前 schema；删除 MigrationRunner、DAORegistry、生成 Migrate 与迁移投影特例。NewEntityRepository 移除 migration 参数，持久 DAO 必须声明 SchemaVersion。
 - Remote 兴趣发布与接收要求非零代际与完整身份，无 payload Delete 明确拒绝；旧发布端不兼容。
 - 正式生成工程需重生成；先停旧再起新，旧程序先落库不等于新程序可读取不同 schema。框架不自动清库或转换。详见[说明与验收](docs/release/RETIRE-DAO-MIGRATION-2026-10-08-NOTES.md)。
 
-## 未发布：三大模块旧兼容清理（2026-10-08）
+### 三大模块旧兼容清理（2026-10-08）
 
 - Nest 只保留快慢池配置和统计，旧 worker/remote options 与配置键移除；生成 sender 统一 SendOptionSlow。
 - Sync 内容捕获统一 PrepareViews（空列表无默认视图），生成 Entity 只接受 subjectPacker；旧 API/标记需更新。
 - DataEngine 批量 Store 统一多 DAO 与持久幂等契约；Remote participant 必须按事务局部变更判断，删除 DAO dirty 兼容回退。
 - 未改变 WAL/Mongo/Sync 数据格式；旧生成工程需重新生成和编译。详见[说明](docs/release/CORE-COMPAT-CLEANUP-2026-10-08-NOTES.md)与[验收](docs/release/CORE-COMPAT-CLEANUP-2026-10-08-IMPLEMENTATION.md)。
 
-## 未发布：WAL 单路径收敛（2026-10-08）
+### WAL 单路径收敛（2026-10-08）
 
 - WAL 仅支持 codec 7，移除 codec 5/6 兼容及 writer_version 配置；Mutation 删除旧身份/版本字段与转换 API。
 - 移除 nestwal.Committer/OpenRuntime 及专属适配接口，业务统一使用 DataEngine Projector/Assembly；保留文件 WAL 与 JetStream effect 发布器。
 - **升级需先停旧再起新**：旧生成工程重新生成并编译；需保留的写入先由旧版本完成落库，新程序使用新 WAL 目录。旧格式明确拒绝，旧目录的备份/清空由维护者安排，程序不会自动删除或跳过旧记录。静态 Player 跨机迁移只以已落库数据为准，不迁移 WAL。
 
 
-本文件从 v1.6.2 起维护；更早版本见 git 历史。格式遵循 Keep a Changelog，版本号遵循语义化版本。
-
-## [Unreleased]
+### 已修复问题与验收
 
 - 历史A1/A2/A8收口：增加停机WAL只读诊断及完整隔离副本工具`cmd/walinspect`；Go/C# Sync接收器校验基线，Unity正式连接在增量缺口或应用失败后关闭旧流；Destroy等待Entity锁可取消，持久删除已准入后仍完成收尾（RR-20261008-46）。
-- RR-20261008-47：Remote唯一outbox协调者内部按全部Entity依赖有界并行；新增`remote_entity.outbox_publish_workers`（默认8，上限64）及扫描/发布/确认等待/释放计时。没有提前持久确认或归还写额度，未重跑性能验证。
+- RR-20261008-47：Remote唯一outbox协调者内部按全部Entity依赖有界并行；新增`remote_entity.outbox_publish_workers`（默认8，上限64）及扫描/发布/确认等待/释放计时。没有提前持久确认或归还写额度；本轮完整 1h/80 TPS 已通过，详见稳定版性能记录。
 
 - Remote outbox 统一发布：投影只持久提交并唤醒，finalizer 只确认与释放，memory/strict/pipelined 仍等发布完成；正式 Backend 游标扫描跨过失败页。公开 ApplyRemoteCommits 成功只承诺持久回执，发布完成须 FlushRemoteTransaction。见[方案与验收](docs/feature/REFACTOR-2026-10-08-outbox-single-publisher.md)。
 - RR-20261008-42～44：Layered 准入元数据默认最多65536项、支持可选容量；outbox 失败页后仍有进度；SnapshotClient 读取不再等待兴趣广播，有界后台队列与停止排空保持责任。
 
 - **macOS/Linux验收收口（RR-20261008-40/41）**：KCP E2E先排空机器人再取消网络；Remote用可控时间分别验证合法缓存命中与过期回源，保留原收敛和业务错误断言。生产语义不变。平台支持范围按维护者要求限定macOS/Linux。见[记录](docs/review/FOLLOWUP-MAC-LINUX-2026-10-08.md)。
+
+- 新增正式生成 Nest 消息/Entity/heartbeat 性能入口及真实 Mongo/JetStream Saga 正向/补偿性能入口；稳定版完整性能与发布验收见 [记录](docs/review/STABLE-PERFORMANCE-2026-10-08.md)。
 
 ## [v1.23.1] - 2026-10-08
 

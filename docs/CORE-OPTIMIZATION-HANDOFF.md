@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**2026-10-08 稳定版候选性能验收（尚未发版）：**独立分支 `codex/stable-performance`，生产逻辑基线 `eac89694`。Remote 80 TPS完整1h（288000笔、零错误/丢弃、数据一致）通过；新增正式生成Nest消息/Entity/HB夹具，10000普通消息/s +10000 Entity×1/10Hz、1%/5%共12轮通过；Entity 100000修改/s与15000 Entity×10Hz+10000消息/s各2m零拒绝。新增Saga真实Mongo/三副本NATS性能入口：正向20/s、全补偿10/s通过，20/s全补偿饱和。Sync on_change初测各一轮有尾延迟超标，随后两档共6轮严格50ms通过；初始250.699ms尖峰尚未唯一归因，不能用复测覆盖失败。periodic20Hz本身含周期等待，不承诺每条≤50ms。完整参数、样本、trace、限制与待发版检查见[本轮报告](review/STABLE-PERFORMANCE-2026-10-08.md)及[v1.24.0候选实施](release/v1.24.0-IMPLEMENTATION.md)。新增内容主要为性能工具/证据；没有改生产队列、同步语义或门槛，未部署。
+
 **2026-10-08 后续兼容需求定案：**DAO schema 自动迁移、Remote interest 旧发布端兼容均撤销，当前实现已删除相关链路并严格拒绝旧输入；下方上一批“待选择/暂保留”已失效。正式生成 game-demo 19 包通过。维护者确认 `/Users/whb/roost/cube` 已废弃，三处旧调用不处理，不列下游适配或迁移待办。全仓 131 包、相关三包 race、根示例实跑、build/vet 与重复生成均通过；实现提交 `605ac914`，CBM generation `2026-10-08T07:31:58Z`；详情见[本轮实现记录](release/RETIRE-DAO-MIGRATION-2026-10-08-IMPLEMENTATION.md)。
 
 三模块旧兼容清理代码已合入 main：`7c9b9d31`。CBM 已刷新到 `2026-10-08T06:53:22Z`，112 个改动 Go/模板路径完成覆盖核对；10 个规则排除路径已源码补证。提交不代表发布。

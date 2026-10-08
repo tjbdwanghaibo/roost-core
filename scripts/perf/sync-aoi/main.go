@@ -39,6 +39,7 @@ type config struct {
 	ReconnectPlayers   int    `json:"reconnect_players"`
 	Async              bool   `json:"async_transport"`
 	Profile            bool   `json:"profile"`
+	RuntimeTrace       bool   `json:"runtime_trace"`
 	Players            int    `json:"players"`
 	Entities           int    `json:"entities"`
 	Ticks              int    `json:"ticks"`
@@ -64,6 +65,7 @@ func parseConfig() config {
 	flag.IntVar(&c.ReconnectPlayers, "reconnect-players", 0, "number of sessions reset; 0 means all")
 	flag.BoolVar(&c.Async, "async", false, "use production reliable queue before loopback TCP")
 	flag.BoolVar(&c.Profile, "profile", false, "capture server-only CPU and allocation profiles; do not compare profiled latency")
+	flag.BoolVar(&c.RuntimeTrace, "runtime-trace", false, "capture server Go execution trace in a separate diagnostic run")
 	flag.IntVar(&c.Players, "players", 1000, "observers, also subjects")
 	flag.IntVar(&c.Entities, "entities", 10000, "total subjects including players")
 	flag.IntVar(&c.Ticks, "ticks", 200, "measured ticks, warmup excluded")
@@ -467,6 +469,11 @@ func runServer(c config) error {
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
+	stopRuntimeTrace, err := openRuntimeTrace(c)
+	if err != nil {
+		return err
+	}
+	defer stopRuntimeTrace()
 	var cpuFile *os.File
 	if c.Profile {
 		cpuFile, err = os.Create(filepath.Join(c.Output, "cpu.out"))

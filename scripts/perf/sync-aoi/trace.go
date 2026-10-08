@@ -2,14 +2,42 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	goTrace "runtime/trace"
+	"strconv"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/sync/frame"
 )
+
+// Go 执行轨迹只用于独立诊断，区分调度等待、GC 与锁/I/O 等待。
+// 墙钟锚点用于对齐客户端 outlier；带轨迹的数据不能冒充无诊断开销的性能样本。
+func openRuntimeTrace(c config) (func(), error) {
+	if !c.RuntimeTrace {
+		return func() {}, nil
+	}
+	f, err := os.Create(filepath.Join(c.Output, "runtime.trace"))
+	if err != nil {
+		return nil, err
+	}
+	if err := goTrace.Start(f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	anchor := func() {
+		goTrace.Log(context.Background(), "wall_unix_ns", strconv.FormatInt(time.Now().UnixNano(), 10))
+	}
+	anchor()
+	return func() {
+		anchor()
+		goTrace.Stop()
+		_ = f.Close()
+	}, nil
+}
 
 // 诊断运行独立于性能门禁运行；有界内存逐批写 JSONL，不累计整轮事件。
 func openSyncTrace(c config) (*entitysync.SyncTrace, func() error, func(), error) {

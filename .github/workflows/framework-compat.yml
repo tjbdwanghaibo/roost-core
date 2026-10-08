@@ -47,7 +47,7 @@ jobs:
         run: |
           version_args=()
           if [ "$SET" = minimum ]; then
-            version_args=(-roost-core-version v1.23.1 -roost-kit-version v1.14.8)
+            version_args=(-roost-core-version v1.24.0 -roost-kit-version v1.14.8)
           fi
           mods=configdata
           services=game
@@ -98,8 +98,8 @@ jobs:
           # at the floor failed while this lane stayed green (it only used the
           # freshly built binary). Run a real make target through the pinned
           # release, and check every generator invocation names that release.
-          if make -n sync generate check-generated doctor id-check 2>/dev/null | grep 'cmd/roost@' | grep -v 'cmd/roost@v1.23.1 '; then
-            echo "::error::the generated Makefile runs a generator other than the pinned core v1.23.1"
+          if make -n sync generate check-generated doctor id-check 2>/dev/null | grep 'cmd/roost@' | grep -v 'cmd/roost@v1.24.0 '; then
+            echo "::error::the generated Makefile runs a generator other than the pinned core v1.24.0"
             exit 1
           fi
           make id-check
