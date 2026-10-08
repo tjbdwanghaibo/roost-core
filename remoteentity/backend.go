@@ -119,3 +119,12 @@ func (b *Backend) RejectUnresolvedRemoteCommits(ctx context.Context, commits []e
 	}
 	return store.RejectUnresolvedRemoteCommits(ctx, commits, cause)
 }
+
+// PendingRemoteCommitPage 转发正式存储的分页能力；旧自定义存储仍按原接口逐页排空。
+func (b *Backend) PendingRemoteCommitPage(ctx context.Context, after entity.RemoteOutboxCursor, limit int) ([]entity.RemoteCommitStatus, entity.RemoteOutboxCursor, error) {
+	if pager, ok := b.storage.(entity.IRemoteCommitOutboxPager); ok {
+		return pager.PendingRemoteCommitPage(ctx, after, limit)
+	}
+	pending, err := b.storage.PendingRemoteCommits(ctx, limit)
+	return pending, entity.RemoteOutboxCursor{}, err
+}

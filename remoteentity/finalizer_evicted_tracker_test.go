@@ -53,6 +53,9 @@ func TestFinalizerQueriesDurableStatusWhenTrackerWasEvicted(t *testing.T) {
 	if _, err = mgr.ApplyRemoteCommits(ctx, tx, commits); err != nil {
 		t.Fatal(err)
 	}
+	if err := mgr.FlushRemoteTransaction(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
 	// 下一笔准入按容量淘汰最旧的已结束记录——目标 tracker。
 	other := remoteTestTxID(0xE2)
 	if err = mgr.trackRemoteTransaction(other); err != nil {

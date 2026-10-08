@@ -84,6 +84,11 @@ type SnapshotClient struct {
 	refreshRunning   bool
 	refreshPending   bool
 	refreshLastStart time.Time
+
+	// 读路径只登记兴趣；有界队列由至多一个 worker 广播，空闲即退出。
+	interestPublishMu      sync.Mutex
+	interestPublishQueue   chan entity.RemoteSnapshotInterest
+	interestPublishRunning bool
 }
 
 // SnapshotClientDeps 是只读客户端的依赖。没有写 backend、锁或 finalizer。
@@ -201,7 +206,10 @@ func (c *SnapshotClient) ReadSnapshot(ctx context.Context, req entity.RemoteSnap
 	}
 	// 续租失败（O4 配额、表满、总线不可用）不影响这次读：这个 key 没有推送刷新确认时刻，读取在陈旧上限
 	// 之后经 L2 / 权威重新确认——按需读取。被拒在 RenewInterest 里计数。
-	_ = c.RenewInterest(ctx, req.Key)
+	if err := ctx.Err(); err != nil {
+		return entity.RemoteSnapshotEnvelope{}, false, err
+	}
+	c.queueReadInterest(req.Key)
 	return c.cache.Read(ctx, req)
 }
 

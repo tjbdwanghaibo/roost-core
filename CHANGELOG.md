@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- Remote outbox 统一发布：投影只持久提交并唤醒，finalizer 只确认与释放，memory/strict/pipelined 仍等发布完成；正式 Backend 游标扫描跨过失败页。公开 ApplyRemoteCommits 成功只承诺持久回执，发布完成须 FlushRemoteTransaction。见[方案与验收](docs/feature/REFACTOR-2026-10-08-outbox-single-publisher.md)。
+- RR-20261008-42～44：Layered 准入元数据默认最多65536项、支持可选容量；outbox 失败页后仍有进度；SnapshotClient 读取不再等待兴趣广播，有界后台队列与停止排空保持责任。
+
 - **macOS/Linux验收收口（RR-20261008-40/41）**：KCP E2E先排空机器人再取消网络；Remote用可控时间分别验证合法缓存命中与过期回源，保留原收敛和业务错误断言。生产语义不变。平台支持范围按维护者要求限定macOS/Linux。见[记录](docs/review/FOLLOWUP-MAC-LINUX-2026-10-08.md)。
 
 ## [v1.23.1] - 2026-10-08

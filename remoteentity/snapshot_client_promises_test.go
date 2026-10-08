@@ -166,6 +166,7 @@ func TestSnapshotClientReadsWhatTheOwnerPublishesInTheSameProcess(t *testing.T) 
 	if _, found, err := reader.Read(ctx, key.EntityID, entity.RemoteReadCached, entity.RemoteObservation{}); err != nil || found {
 		t.Fatalf("first read before any publish: found=%v err=%v", found, err)
 	}
+	waitReadInterests(t, consumer)
 	if !owner.snapshots.interests.interested(key) {
 		t.Fatal("the consumer's read did not reach the owner's interest table")
 	}

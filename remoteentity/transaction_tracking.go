@@ -18,9 +18,6 @@ type remoteTransactionTracker struct {
 	closedAt   time.Time
 	id         entity.RemoteTransactionID
 	nextClosed *remoteTransactionTracker
-	// published 表示本进程已完成这笔事务的快照发布与 MarkRemoteCommitPublished（投影器或 finalizer
-	// 的 Applied 分支）。finalizer 的 Committed 收尾据此只做本地确认，不重复发布（RR-20260926-38）。
-	published bool
 }
 
 func (m *Manager) trackRemoteTransaction(id entity.RemoteTransactionID) error {
@@ -110,6 +107,12 @@ func (m *Manager) completeRemoteTransaction(id entity.RemoteTransactionID, statu
 		if status.State != tracker.status.State {
 			metrics.IncCounter("remote_entity_transaction_final_overwrite_ignored_total", nil, 1)
 		}
+		m.remote.txMu.Unlock()
+		return
+	}
+	// Indeterminate 已唤醒等待者；新的 Applied 只是补发进度，不能把已关闭的
+	// done 配成非终态 Applied（否则 finalizer 会反复等待一个已关闭的通道）。
+	if tracker.closed && status.State == entity.RemoteCommitApplied {
 		m.remote.txMu.Unlock()
 		return
 	}
@@ -235,29 +238,6 @@ func (m *Manager) trackedRemoteOutcome(id entity.RemoteTransactionID) (entity.Re
 		return unknown, nil
 	}
 	return tracker.status.Clone(), tracker.done
-}
-
-// completePublishedRemoteTransaction 记录本进程完成了发布，再写入 Committed。
-func (m *Manager) completePublishedRemoteTransaction(id entity.RemoteTransactionID, status entity.RemoteCommitStatus) {
-	if m == nil || m.remote == nil || id.IsZero() {
-		return
-	}
-	m.remote.txMu.Lock()
-	if tracker := m.remote.txs[id]; tracker != nil {
-		tracker.published = true
-	}
-	m.remote.txMu.Unlock()
-	m.completeRemoteTransaction(id, status)
-}
-
-func (m *Manager) remotePublishedLocally(id entity.RemoteTransactionID) bool {
-	if m == nil || m.remote == nil || id.IsZero() {
-		return false
-	}
-	m.remote.txMu.Lock()
-	defer m.remote.txMu.Unlock()
-	tracker := m.remote.txs[id]
-	return tracker != nil && tracker.published
 }
 
 func (m *Manager) localRemoteCommitState(id entity.RemoteTransactionID) entity.RemoteCommitState {

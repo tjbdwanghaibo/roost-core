@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
@@ -47,8 +48,9 @@ type remoteState struct {
 	retryMu        sync.Mutex
 	stopping       bool
 	finalizeOnce   sync.Once
-	// republishMu 保护补发循环的状态（RR-20261006-69）：running 表示循环在跑，dirty 表示它这一轮开始之后
-	// 又有发布失败，需要再扫一轮。
+	// outboxSerial 让启动恢复和后台发布共用唯一入口；等待受各自 ctx 约束。
+	outboxSerial operation.Serial
+	// republishMu 保护唤醒状态：扫描期间的新提交让 dirty 为真，结束前必须再扫一轮。
 	republishMu      sync.Mutex
 	republishRunning bool
 	republishDirty   bool
@@ -247,11 +249,11 @@ func (m *Manager) abandonDeferredRemoteClose(state *remoteState, item deferredRe
 	state.traceFinalize(item.txID, "abandoned")
 }
 
-// processDeferredRemoteClose 只在拿到持久结论后收尾：Applied 先发布再释放，Committed
+// processDeferredRemoteClose 只在拿到持久结论后收尾：Applied 唤醒 outbox 等待发布，Committed
 // 确认后释放，Rejected 回滚并隔离实体后释放（实体隔离到重新加载）。其余情况保留 gate、
 // fence、写额度并隔离实体，按退避重试。
 //
-// Durability 1/2/3（3 是带 Remote 批次、随 strict 路径提交的 pipelined）有 WAL：投影器在同一 Mongo 事务里提交、随后发布并 ack，结论由它写进 tracker
+// Durability 1/2/3（3 是带 Remote 批次、随 strict 路径提交的 pipelined）有 WAL：投影器在同一 Mongo 事务里提交，outbox 发布并确认后写进 tracker
 // （Committed / Rejected，失败时 Indeterminate）。投影期间 finalizer 不回源、不隔离、不发布，
 // 只等 tracker 结束或 FinalizeProjectionTimeout 到期（RR-20260926-38）；投影器报告未知
 // （Indeterminate）或超期后才按 RR-19 回源取得持久结论。Durability 0 没有 WAL，一律回源。
@@ -279,17 +281,13 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		status, err = m.rejectUnresolvedMemoryTransaction(state.finalizeCtx, item)
 	}
 	if err == nil && status.State == entity.RemoteCommitApplied {
-		err = m.publishAppliedRemoteTransaction(state.finalizeCtx, status)
-		if err == nil {
-			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
-			m.releaseRemoteWriteSlot()
-			m.deliverRemoteOutcome(m.localContext(state.finalizeCtx), item.txID, item.onOutcome, true)
-			state.traceFinalize(item.txID, "released")
-			return
-		}
+		// 已持久但尚未发布：只唤醒唯一发布者，finalizer 不再自己执行网络发布。
+		m.scheduleOutboxRepublish()
+		m.scheduleDeferredRetry(state, item)
+		return
 	}
 	if err == nil && status.State == entity.RemoteCommitCommitted {
-		err = m.reconcileRemoteEntries(state.finalizeCtx, item.entries, status.Receipts, !m.remotePublishedLocally(item.txID))
+		err = m.reconcileRemoteEntries(item.entries, status.Receipts)
 		if err == nil {
 			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
 			m.releaseRemoteWriteSlot()
@@ -517,10 +515,8 @@ func (m *Manager) settleRejectedRemoteEntries(ctx context.Context, entries []*re
 	return nil
 }
 
-// reconcileRemoteEntries 确认已 Committed 事务的本地实体。本进程已完成发布（投影器或 finalizer 的
-// Applied 分支写入 Committed 前已发布快照并 MarkRemoteCommitPublished）时只做本地确认与版本唤醒，
-// 不重复发布快照（RR-20260926-38）；Committed 来自回源、本进程没有发布过时仍完整发布（与旧行为一致）。
-func (m *Manager) reconcileRemoteEntries(ctx context.Context, entries []*remoteWriteEntry, receipts []entity.RemoteCommitReceipt, publish bool) error {
+// reconcileRemoteEntries 只确认已发布事务的本地实体；即使发布由其他进程完成，也不再发快照。
+func (m *Manager) reconcileRemoteEntries(entries []*remoteWriteEntry, receipts []entity.RemoteCommitReceipt) error {
 	byEntity := make(map[int64]entity.RemoteCommitReceipt, len(receipts))
 	for _, receipt := range receipts {
 		byEntity[receipt.EntityID] = receipt
@@ -533,20 +529,9 @@ func (m *Manager) reconcileRemoteEntries(ctx context.Context, entries []*remoteW
 		if !ok {
 			return fmt.Errorf("%w: committed transaction missing receipt for entity %d", entity.ErrRemotePersistenceIndeterminate, entry.commit.EntityID)
 		}
-		commit := entry.commit.Clone()
-		if publish {
-			if err := m.afterRemoteCommit(ctx, commit, receipt); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := validateRemoteReceipt(commit, receipt); err != nil {
+		if err := m.confirmRemoteCommit(entry.commit.Clone(), receipt); err != nil {
 			return err
 		}
-		if err := m.acknowledgeRemoteCommit(commit); err != nil {
-			return err
-		}
-		m.notifyRemoteVersion(commit.EntityID, commit.NextVersion)
 	}
 	return nil
 }
@@ -603,6 +588,7 @@ func (m *Manager) releaseRemoteEntriesObserved(parent context.Context, entries [
 	}
 }
 
+// ApplyRemoteCommits 返回持久回执并唤醒 outbox；nil 不代表已经发布。需要发布完成时等待 FlushRemoteTransaction。
 func (m *Manager) ApplyRemoteCommits(ctx context.Context, txID entity.RemoteTransactionID, commits []entity.RemoteCommit) (receipts []entity.RemoteCommitReceipt, err error) {
 	started := time.Now()
 	defer func() {
@@ -663,67 +649,104 @@ func (m *Manager) ApplyRemoteCommits(ctx context.Context, txID entity.RemoteTran
 		m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitIndeterminate, Cause: err.Error()})
 		return nil, err
 	}
-	// 到这里提交已在权威存储里持久（Applied）。之后的发布失败不改变持久结论：返回值带
-	// ErrRemotePublicationPending，并让补发循环按 outbox 补上（RR-20261006-69）。之前只返回
-	// ErrRemotePersistenceIndeterminate，WAL 投影器按它退避重试同一条记录，其后所有记录（含普通 DAO）都排队等发布。
-	for i := range cloned {
-		if err := m.afterRemoteCommit(ctx, cloned[i], receipts[i]); err != nil {
-			m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitIndeterminate, Receipts: receipts, Cause: err.Error()})
-			m.scheduleOutboxRepublish()
-			return nil, errors.Join(entity.ErrRemotePersistenceIndeterminate, entity.ErrRemotePublicationPending, err)
-		}
-	}
-	if err := m.backend.MarkRemoteCommitPublished(ctx, txID); err != nil {
-		m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitIndeterminate, Receipts: receipts, Commits: cloned, Cause: err.Error()})
+	// 存储回执不代表发布完成。已发布的幂等重放只做本地确认；Applied 交给 outbox，
+	// WAL 投影不等待总线。memory/strict 写者通过 tracker 等待发布结论。
+	status, statusErr := m.backend.CommitStatus(ctx, txID)
+	if statusErr != nil {
+		m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitIndeterminate, Receipts: receipts, Cause: statusErr.Error()})
 		m.scheduleOutboxRepublish()
-		return nil, errors.Join(entity.ErrRemotePersistenceIndeterminate, entity.ErrRemotePublicationPending, err)
+		return nil, errors.Join(entity.ErrRemotePersistenceIndeterminate, entity.ErrRemotePublicationPending, statusErr)
 	}
-	status := entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitCommitted, Receipts: append([]entity.RemoteCommitReceipt(nil), receipts...)}
-	m.completePublishedRemoteTransaction(txID, status)
+	if status.State == entity.RemoteCommitCommitted {
+		for i := range cloned {
+			if err := m.confirmRemoteCommit(cloned[i], receipts[i]); err != nil {
+				return nil, errors.Join(entity.ErrRemotePersistenceIndeterminate, entity.ErrRemotePublicationPending, err)
+			}
+		}
+		m.completeRemoteTransaction(txID, status)
+		return receipts, nil
+	}
+	if status.State != entity.RemoteCommitApplied {
+		err := fmt.Errorf("%w: persisted transaction %s has state %v", entity.ErrRemotePersistenceIndeterminate, txID, status.State)
+		m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitIndeterminate, Receipts: receipts, Cause: err.Error()})
+		m.scheduleOutboxRepublish()
+		return nil, err
+	}
+	m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitApplied, Receipts: receipts})
+	m.scheduleOutboxRepublish()
 	return receipts, nil
 }
 
-// RecoverOutbox 发布 outbox 里全部已持久（Applied）但还没发布的提交。启动时（Assembly.Start）与补发循环
-// （runOutboxRepublish）共用。一条发布失败不挡同一页的其他提交（RR-20261006-69：之前遇到第一条失败就返回，
-// 一条反复失败的提交让排在它后面的都补不上）；有失败时不再翻页（失败的那些还会出现在下一页的开头），返回汇总错误。
+// RecoverOutbox 是唯一发布入口，发布 outbox 里全部已持久（Applied）但还没发布的提交。启动时（Assembly.Start）与补发循环
+// （runOutboxRepublish）共用。正式存储以游标跨过失败项，继续尝试后续页；下一轮从头重试。
+// 旧自定义存储未实现分页时只保证当前页内互不阻塞，不能冒称覆盖后续页。
 func (m *Manager) RecoverOutbox(ctx context.Context) error {
+	if m == nil || m.remote == nil || m.backend == nil {
+		return entity.ErrRemoteWriteCapabilityDisabled
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// 显式恢复也持有发布生命周期；StopFinalizer 关准入后不再接受新恢复，
+	// 已在途的恢复必须结束，SnapshotClient 才能被释放。
+	state := m.remote
+	state.retryMu.Lock()
+	if state.stopping {
+		state.retryMu.Unlock()
+		return ErrAssemblyStopped
+	}
+	state.retryWG.Add(1)
+	state.retryMu.Unlock()
+	defer state.retryWG.Done()
+	if err := m.remote.outboxSerial.Lock(ctx); err != nil {
+		return err
+	}
+	defer m.remote.outboxSerial.Unlock()
 	outbox := m.backend
+	pager, paged := outbox.(entity.IRemoteCommitOutboxPager)
+	var cursor entity.RemoteOutboxCursor
+	var failed error
 	for {
-		pending, err := outbox.PendingRemoteCommits(ctx, 256)
+		var pending []entity.RemoteCommitStatus
+		var next entity.RemoteOutboxCursor
+		var err error
+		if paged {
+			pending, next, err = pager.PendingRemoteCommitPage(ctx, cursor, 256)
+		} else {
+			pending, err = outbox.PendingRemoteCommits(ctx, 256)
+		}
 		if err != nil {
-			return fmt.Errorf("remote_entity: load commit outbox: %w", err)
+			return errors.Join(failed, fmt.Errorf("remote_entity: load commit outbox: %w", err))
 		}
 		if len(pending) == 0 {
-			return nil
+			return failed
 		}
-		var failed error
 		for _, status := range pending {
 			if err := ctx.Err(); err != nil {
 				return errors.Join(failed, err)
 			}
 			if err := m.publishAppliedRemoteTransaction(ctx, status); err != nil {
+				m.completeRemoteTransaction(status.TransactionID, entity.RemoteCommitStatus{TransactionID: status.TransactionID, State: entity.RemoteCommitIndeterminate, Receipts: status.Receipts, Cause: err.Error()})
 				failed = errors.Join(failed, fmt.Errorf("remote_entity: recover transaction %s: %w", status.TransactionID, err))
 			}
 		}
-		if failed != nil || len(pending) < 256 {
+		if len(pending) < 256 {
+			return failed
+		}
+		if next.TransactionID != "" {
+			if next == cursor {
+				return errors.Join(failed, errors.New("remote_entity: outbox cursor did not advance"))
+			}
+			cursor = next
+		} else if failed != nil {
 			return failed
 		}
 	}
 }
 
-// scheduleOutboxRepublish 让补发循环在退避之后扫一遍 outbox（RR-20261006-69）。只在“已 Applied、发布失败”
-// 时调用；循环已在跑时只记 dirty，让它再扫一轮。
-//
-// 为什么能保证“发布最终会补上”：
-//   - 提交在 Mongo 里是 Applied，直到某次发布成功把它标成 Committed（MarkRemoteCommitPublished 只认 Applied）；
-//   - 本进程活着时，补发循环按 FinalizeRetryInterval 起步、翻倍到 5s 的退避反复执行 RecoverOutbox（与启动时同一
-//     路径：PendingRemoteCommits 读出全部 Applied，逐条 afterRemoteCommit + 标记已发布），直到某一轮成功且
-//     这一轮开始后没有新的失败才退出；有写者在等的事务，finalizer 也按持久结论（Applied）自行发布；
-//   - 本进程停机或崩溃时 outbox 仍是 Applied，下次启动 Assembly.Start 先执行 RecoverOutbox 再接受工作。
-//
-// RecoverOutbox 扫的是整个 outbox（不分 owner），与启动时相同：发布是幂等的，确认契约要求并发安全
-// （IRemoteCommitParticipant.AcknowledgeRemoteCommit，RR-20260926-63），同一提交被投影器、finalizer、补发循环
-// 重复发布不改变结果。停机时（StopFinalizer）循环随 finalizeCtx 结束，登记在 retryWG 上，排空规则不变。
+// scheduleOutboxRepublish 唤醒唯一发布循环。首次立即扫描，失败才退避；运行中只记 dirty。
+// Applied 记录在持久 outbox 中不会过期；崩溃后 Assembly.Start 仍经 RecoverOutbox 恢复。
+// retryWG 与停止准入共用屏障，StopFinalizer 返回后不能还有发布在途。
 func (m *Manager) scheduleOutboxRepublish() {
 	if m == nil || m.remote == nil || m.backend == nil {
 		return
@@ -747,14 +770,14 @@ func (m *Manager) scheduleOutboxRepublish() {
 	go m.runOutboxRepublish(state)
 }
 
-// runOutboxRepublish 是补发循环：退避 → 扫一遍 outbox；成功且期间没有新的失败就退出，否则继续。
+// runOutboxRepublish 立即扫描；失败退避，成功且没有新的唤醒才退出。
 func (m *Manager) runOutboxRepublish(state *remoteState) {
 	defer state.retryWG.Done()
 	base := m.cfg.FinalizeRetryInterval
 	if base <= 0 {
 		base = 100 * time.Millisecond
 	}
-	delay := base
+	delay := time.Duration(0)
 	for {
 		timer := time.NewTimer(delay)
 		select {
@@ -782,10 +805,10 @@ func (m *Manager) runOutboxRepublish(state *remoteState) {
 		state.republishMu.Unlock()
 		if err != nil {
 			metrics.IncCounter("remote_entity.remote.republish_total", metrics.Labels{"result": "error"}, 1)
+			delay = min(max(base, delay*2), 5*time.Second)
 			slog.Warn("remote_entity: republishing persisted commits failed; retrying", "err", err, "retry_in", delay)
-			delay = min(delay*2, 5*time.Second)
 		} else {
-			delay = base
+			delay = 0
 		}
 	}
 }
@@ -809,7 +832,7 @@ func (m *Manager) publishAppliedRemoteTransaction(ctx context.Context, status en
 	if err := m.backend.MarkRemoteCommitPublished(ctx, status.TransactionID); err != nil {
 		return err
 	}
-	m.completePublishedRemoteTransaction(status.TransactionID, entity.RemoteCommitStatus{
+	m.completeRemoteTransaction(status.TransactionID, entity.RemoteCommitStatus{
 		TransactionID: status.TransactionID,
 		State:         entity.RemoteCommitCommitted,
 		Receipts:      append([]entity.RemoteCommitReceipt(nil), status.Receipts...),
@@ -905,6 +928,18 @@ func validateRemoteReceipt(commit entity.RemoteCommit, receipt entity.RemoteComm
 	if receipt.TransactionID != commit.TransactionID || receipt.EntityID != commit.EntityID || receipt.StateVersion != commit.NextVersion || receipt.MarkerEpoch != commit.MarkerEpoch || receipt.LockFence != commit.LockFence || receipt.RouteEpoch != commit.RouteEpoch {
 		return fmt.Errorf("remote_entity: invalid commit receipt for %d", commit.EntityID)
 	}
+	return nil
+}
+
+// confirmRemoteCommit 只更新本地参与方和等待者。持久状态已 Committed 时不得再触发网络发布。
+func (m *Manager) confirmRemoteCommit(commit entity.RemoteCommit, receipt entity.RemoteCommitReceipt) error {
+	if err := validateRemoteReceipt(commit, receipt); err != nil {
+		return err
+	}
+	if err := m.acknowledgeRemoteCommit(commit); err != nil {
+		return err
+	}
+	m.notifyRemoteVersion(commit.EntityID, commit.NextVersion)
 	return nil
 }
 
@@ -1058,8 +1093,8 @@ var _ entity.RemoteWriteBatchManager = (*Manager)(nil)
 var _ entity.RemoteCommitApplier = (*Manager)(nil)
 var _ entity.RemoteSnapshotReader = (*Manager)(nil)
 
-// SupportsConcurrentRemoteCommits 声明独立 Entity 的投影/发布可并行。
-// 调用方负责保持同一 Entity 的版本顺序，Manager 继续逐笔确认完整发布。
+// SupportsConcurrentRemoteCommits 声明独立 Entity 的持久投影可并行。
+// 调用方保持同一 Entity 的版本顺序；发布统一交给 outbox。
 func (*Manager) SupportsConcurrentRemoteCommits() bool { return true }
 
 // 持久回执重放仍需发布历史快照，但不得用旧事务覆盖已获得更高许可的本地实体。
@@ -1117,7 +1152,7 @@ func (m *Manager) acknowledgeRemoteCommit(commit entity.RemoteCommit) error {
 		}
 		if remote.RemoteOwnershipState() == entity.RemoteOwnershipQuarantined {
 			if err := thawAcknowledgedRemote(remote, wrapper.isMarked()); err != nil {
-				// 同一事务可能有两个发布者（WAL 投影器与投影器报告未知后回源的 finalizer）。另一方
+				// outbox 发布与已提交回执的本地确认可能交错。另一方
 				// 已经确认并解冻时，上面读到的 Quarantined 已经过期：版本向量正是本提交、状态已是
 				// LocalOwned/Shared，就是同一次确认的结果，视为成功，不能让实体再被隔离重试
 				// （RR-20260926-38）。这里只接受“已解冻”的事实，从不自行解冻（RR-28 复核约束不变）。
@@ -1135,7 +1170,7 @@ func (m *Manager) acknowledgeRemoteCommit(commit entity.RemoteCommit) error {
 		return err
 	}
 	if participant, ok := live.(entity.IRemoteCommitParticipant); ok {
-		// 不持实体锁；投影器重试与 finalizer 回源发布可能并发走到这里，参与者按契约幂等且并发安全（RR-20260926-63）。
+		// 不持实体锁；outbox 与 Committed 回执的本地确认可能并发，参与者保持幂等且并发安全。
 		return participant.AcknowledgeRemoteCommit(commit.Clone())
 	}
 	return nil

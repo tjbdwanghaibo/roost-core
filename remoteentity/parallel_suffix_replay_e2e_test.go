@@ -142,8 +142,14 @@ func TestParallelWindowReplaysSucceededSuffixUnderNewerFence(t *testing.T) {
 	if err = projector.Flush(ctx); err != nil {
 		t.Fatalf("projector flush after the failed window: %v", err)
 	}
-	if got := storage.suffixMarkCount(); got < 2 {
-		t.Fatalf("suffix publication count=%d, want the succeeded suffix to be replayed", got)
+	if got := storage.suffixMarkCount(); got != 1 {
+		t.Fatalf("suffix publication count=%d, want exactly one despite WAL replay", got)
+	}
+	storage.mu.Lock()
+	suffixCalls := storage.suffixCommits
+	storage.mu.Unlock()
+	if suffixCalls < 2 {
+		t.Fatalf("suffix commit calls=%d, WAL replay did not occur", suffixCalls)
 	}
 	if got := y.RemoteVersionVector(); got != newer {
 		t.Fatalf("suffix replay rewound the live vector: %+v -> %+v", newer, got)
@@ -226,12 +232,18 @@ type suffixReplayStorage struct {
 	failPrefix      chan struct{}
 	publishedOnce   sync.Once
 	failOnce        sync.Once
+	suffixCommits   int
 }
 
 // CommitRemote 让前缀的第一次回执读回停在注入点、随后失败（结果未知，投影器重试整个窗口）。RR-20261006-69 更正：
 // 之前注入的是前缀的 MarkRemoteCommitPublished 失败；那是“已 Applied、只是发布失败”，现在投影器记为已投影、交给补发
 // 循环，不再触发窗口重试。
 func (s *suffixReplayStorage) CommitRemote(ctx context.Context, commit entity.RemoteCommit) (entity.RemoteCommitReceipt, error) {
+	if commit.TransactionID == s.suffix {
+		s.mu.Lock()
+		s.suffixCommits++
+		s.mu.Unlock()
+	}
 	if commit.TransactionID == s.prefix {
 		s.mu.Lock()
 		s.prefixMarks++

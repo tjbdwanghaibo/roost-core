@@ -194,6 +194,9 @@ func (env *localEnv) scenario(t *testing.T, raw int64, cluster bool) *localScena
 	}
 	t.Cleanup(func() {
 		for _, child := range s.children {
+			if t.Failed() {
+				t.Logf("child %s diagnostics:\n%s", child.name, child.output())
+			}
 			child.kill()
 		}
 	})
@@ -455,6 +458,7 @@ func localNatsNodeFaults(t *testing.T, env *localEnv) {
 	v, at = s.commit(owner, "e")
 	env.results.add(t, "silent_reader_baseline_push_ms=%d", s.waitVersion(silent, v, at, 30*time.Second))
 	s.fault("nats-stop", "3")
+	t.Cleanup(func() { s.fault("nats-cont", "3") })
 	stoppedAt := time.Now()
 	v, at, attempts = s.commitRetry(owner, "f", 30*time.Second)
 	env.results.add(t, "nats3_sigstop owner_commit %s", attempts)

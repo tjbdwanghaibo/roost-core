@@ -3,6 +3,7 @@ package remoteentity
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,6 +39,7 @@ func (e *pausingRemoteEntity) RemoteOwnershipState() entity.RemoteOwnershipState
 // 发布调用在后端提交处返回瞬时错误（事务状态 Indeterminate，投影器“报告未知”）。
 type steppedStatusStorage struct {
 	*MongoCommitter
+	finalizerCtx   context.Context
 	statusCalls    atomic.Int32
 	polled         chan struct{}
 	answer         chan bool
@@ -45,6 +47,10 @@ type steppedStatusStorage struct {
 }
 
 func (s *steppedStatusStorage) CommitStatus(ctx context.Context, id entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
+	// 这里只控制 finalizer 回源的交错；提交路径现在也会读取持久状态，它不属于此屏障。
+	if ctx != s.finalizerCtx {
+		return s.MongoCommitter.CommitStatus(ctx, id)
+	}
 	s.statusCalls.Add(1)
 	select {
 	case s.polled <- struct{}{}:
@@ -108,6 +114,7 @@ func newProjectionOwnershipFixture(t *testing.T, id int64) projectionOwnershipFi
 	cfg := DefaultConfig()
 	cfg.FinalizeRetryInterval = time.Millisecond
 	mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
+	storage.finalizerCtx = mgr.remote.finalizeCtx
 	mgr.SetBackend(backend)
 	mgr.SetOwnershipStore(store)
 	syncer := &countingSnapshotSyncer{}
@@ -219,69 +226,74 @@ func TestAsyncFinalizerLeavesProjectionToProjector(t *testing.T) {
 	}
 }
 
-// 投影器报告未知后 finalizer 回源（允许的路径）。先让 finalizer 在 Unknown 上隔离实体，
-// 再让投影器的重试发布停在 ack 里（已读到 Quarantined）；finalizer 此时读到 Applied、发布并解冻；
-// 投影器恢复后的 ack 必须把“同一事务已被确认”视为成功，而不是 invalid ownership transition。
-func TestProjectorAckAfterFinalizerPublishedIsIdempotent(t *testing.T) {
+// 原双发布者交错已经取消。保留未知结果后的恢复压力：唯一发布者暂停时，
+// finalizer 只能等待；幂等重放和显式恢复不能绕过它再发布。
+func TestOutboxOwnsPublicationAfterIndeterminateProjection(t *testing.T) {
 	f := newProjectionOwnershipFixture(t, 1892)
 	tx := remoteTestTxID(192)
 	commits := f.asyncWrite(t, tx)
 	f.projectorReportsUnknown(t, tx, commits)
-
-	// 投影器的下一次尝试：Mongo 事务提交（Applied），发布停在 ack 的状态读取处。
 	if _, err := f.store.CommitRemoteBatch(context.Background(), commits); err != nil {
 		t.Fatal(err)
 	}
 	f.live.armed.Store(true)
-	projectorErr := make(chan error, 1)
-	go func() {
-		_, err := f.mgr.ApplyRemoteCommits(context.Background(), tx, commits)
-		projectorErr <- err
-	}()
-	<-f.live.reached
-	// finalizer 的重试回源读到 Applied，自己发布并解冻、收尾。
+	release := sync.OnceFunc(func() { close(f.live.resume) })
+	t.Cleanup(release)
 	f.answerPoll(t, true)
-	f.awaitStep(t, "released")
-	close(f.live.resume)
-	if err := <-projectorErr; err != nil {
-		t.Fatalf("projector publication after the finalizer already published the same transaction: %v", err)
-	}
-	if got := f.live.testRemoteEntity.RemoteOwnershipState(); got != entity.RemoteOwnershipLocalOwned {
-		t.Fatalf("entity state=%v, want local_owned", got)
-	}
-	if slots := len(f.mgr.remote.writeSlots); slots != 0 {
-		t.Fatalf("write slots=%d", slots)
-	}
-}
-
-// 与上一例相反：finalizer 的发布停在 ack 里，投影器先完成发布与解冻；finalizer 恢复后必须直接收尾，
-// 不能把实体重新隔离、继续占着 gate 重试。
-func TestFinalizerAckAfterProjectorPublishedIsIdempotent(t *testing.T) {
-	f := newProjectionOwnershipFixture(t, 1893)
-	tx := remoteTestTxID(193)
-	commits := f.asyncWrite(t, tx)
-	f.projectorReportsUnknown(t, tx, commits)
-
-	if _, err := f.store.CommitRemoteBatch(context.Background(), commits); err != nil {
-		t.Fatal(err)
-	}
-	f.live.armed.Store(true)
-	f.answerPoll(t, true) // finalizer 读到 Applied，发布时停在 ack
 	select {
 	case <-f.live.reached:
 	case <-time.After(3 * time.Second):
-		t.Fatal("finalizer did not reach acknowledge")
+		t.Fatal("outbox never entered acknowledgement")
 	}
 	if _, err := f.mgr.ApplyRemoteCommits(context.Background(), tx, commits); err != nil {
-		t.Fatalf("projector publication: %v", err)
+		t.Fatal(err)
 	}
-	close(f.live.resume)
-	f.awaitStep(t, "released")
-	if got := f.live.testRemoteEntity.RemoteOwnershipState(); got != entity.RemoteOwnershipLocalOwned {
-		t.Fatalf("entity state=%v, want local_owned (finalizer re-quarantined an acknowledged entity)", got)
+	if got := f.syncer.published.Load(); got != 0 {
+		t.Fatalf("another caller published while outbox was paused: %d", got)
 	}
-	if slots := len(f.mgr.remote.writeSlots); slots != 0 {
-		t.Fatalf("write slots=%d", slots)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := f.mgr.RecoverOutbox(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("concurrent recovery bypassed publisher: %v", err)
+	}
+	release()
+	f.finishPublication(t)
+	if got := f.syncer.published.Load(); got != 1 {
+		t.Fatalf("publications=%d want 1", got)
+	}
+	if _, err := f.mgr.ApplyRemoteCommits(context.Background(), tx, commits); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.mgr.RecoverOutbox(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.syncer.published.Load(); got != 1 {
+		t.Fatalf("committed replay republished: %d", got)
+	}
+}
+
+// 补发失败期间 finalizer 可以报告 retry；恢复后仍只释放一次，不能把 retry 次数当失败。
+func (f projectionOwnershipFixture) finishPublication(t *testing.T) {
+	t.Helper()
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case <-f.storage.polled:
+			f.storage.answer <- true
+		case step := <-f.steps:
+			if step == "released" {
+				if len(f.mgr.remote.writeSlots) != 0 || f.live.testRemoteEntity.RemoteOwnershipState() != entity.RemoteOwnershipLocalOwned {
+					t.Fatal("publication did not release and restore the local entity")
+				}
+				return
+			}
+			if step != "retry" && step != "await_projection" {
+				t.Fatalf("unexpected finalizer step %s", step)
+			}
+		case <-timer.C:
+			t.Fatal("publication did not converge")
+		}
 	}
 }
 

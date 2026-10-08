@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -277,35 +278,44 @@ func remoteCommitBatchDigest(commits []entity.RemoteCommit) ([]byte, error) {
 	return digest[:], nil
 }
 
+// PendingRemoteCommits 保留旧接口；正式恢复通过带游标的分页读取。
 func (s *MongoCommitter) PendingRemoteCommits(ctx context.Context, limit int) ([]entity.RemoteCommitStatus, error) {
+	statuses, _, err := s.PendingRemoteCommitPage(ctx, entity.RemoteOutboxCursor{}, limit)
+	return statuses, err
+}
+
+func (s *MongoCommitter) PendingRemoteCommitPage(ctx context.Context, after entity.RemoteOutboxCursor, limit int) ([]entity.RemoteCommitStatus, entity.RemoteOutboxCursor, error) {
 	if s == nil || s.mongo == nil {
-		return nil, entity.ErrRemoteWriteCapabilityDisabled
+		return nil, after, entity.ErrRemoteWriteCapabilityDisabled
 	}
 	if limit <= 0 || limit > 1000 {
 		limit = 1000
 	}
+	filter := bson.M{"state": uint8(entity.RemoteCommitApplied)}
+	if after.TransactionID != "" {
+		filter["$or"] = bson.A{
+			bson.M{"created_at": bson.M{"$gt": after.CreatedAt}},
+			bson.M{"created_at": after.CreatedAt, "_id": bson.M{"$gt": after.TransactionID}},
+		}
+	}
 	var docs []mongoRemoteTransaction
-	err := s.controlDB().Collection(remoteTxCollection).Find(ctx, bson.M{"state": uint8(entity.RemoteCommitApplied)}, &docs, fmongo.FindOption{Sort: bson.D{{Key: "created_at", Value: 1}}, Limit: int64(limit)})
+	err := s.controlDB().Collection(remoteTxCollection).Find(ctx, filter, &docs, fmongo.FindOption{Sort: bson.D{{Key: "created_at", Value: 1}, {Key: "_id", Value: 1}}, Limit: int64(limit)})
 	if err != nil {
-		return nil, err
+		return nil, after, err
 	}
 	statuses := make([]entity.RemoteCommitStatus, 0, len(docs))
+	next := after
 	for _, doc := range docs {
-		if len(doc.Receipts) == 0 {
-			return nil, fmt.Errorf("remote_entity: corrupt outbox transaction %q", doc.ID)
+		// 坏记录由发布器逐条报告；游标仍前进，不能让一条历史坏记录挡住整页。
+		var id entity.RemoteTransactionID
+		raw, err := hex.DecodeString(doc.ID)
+		if err == nil && len(raw) == len(id) {
+			copy(id[:], raw)
 		}
-		status := entity.RemoteCommitStatus{State: entity.RemoteCommitApplied, Cause: doc.Cause}
-		for _, receipt := range doc.Receipts {
-			decoded := decodeMongoReceipt(receipt)
-			status.Receipts = append(status.Receipts, decoded)
-			status.TransactionID = decoded.TransactionID
-		}
-		for i := range doc.Commits {
-			status.Commits = append(status.Commits, doc.Commits[i].Clone())
-		}
-		statuses = append(statuses, status)
+		statuses = append(statuses, remoteStatusFromMongoTransaction(id, doc))
+		next = entity.RemoteOutboxCursor{CreatedAt: doc.CreatedAt, TransactionID: doc.ID}
 	}
-	return statuses, nil
+	return statuses, next, nil
 }
 
 func (s *MongoCommitter) MarkRemoteCommitPublished(ctx context.Context, id entity.RemoteTransactionID) error {

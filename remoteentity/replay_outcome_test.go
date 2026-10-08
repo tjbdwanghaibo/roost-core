@@ -192,11 +192,11 @@ type flakyMarkBackend struct {
 	fail atomic.Bool
 }
 
-func (b *flakyMarkBackend) MarkRemoteCommitPublished(context.Context, entity.RemoteTransactionID) error {
+func (b *flakyMarkBackend) MarkRemoteCommitPublished(ctx context.Context, id entity.RemoteTransactionID) error {
 	if b.fail.Load() {
 		return errors.New("injected publish mark failure")
 	}
-	return nil
+	return b.remoteTestLoader.MarkRemoteCommitPublished(ctx, id)
 }
 
 // RR-20260926-11 复核残留：已 Committed 的事务重放发布失败，不能把 tracker 改回
@@ -231,8 +231,8 @@ func TestCommittedTrackerSurvivesFailedReplayPublication(t *testing.T) {
 	}
 
 	backend.fail.Store(true)
-	if _, err = mgr.ApplyRemoteCommits(context.Background(), tx, commits); !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
-		t.Fatalf("replay publication failure must stay retryable for the caller: %v", err)
+	if _, err = mgr.ApplyRemoteCommits(context.Background(), tx, commits); err != nil {
+		t.Fatalf("committed replay must not attempt publication again: %v", err)
 	}
 	status, err := mgr.waitRemoteTransaction(context.Background(), tx)
 	if err != nil || status.State != entity.RemoteCommitCommitted {

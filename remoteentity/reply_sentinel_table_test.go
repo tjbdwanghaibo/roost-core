@@ -244,6 +244,9 @@ func TestRemoteStrictTrackerEvictedAfterCommitReplyHitsDecisionTableRow2(t *test
 				if _, err := f.mgr.ApplyRemoteCommits(context.Background(), txID, commits); err != nil {
 					t.Errorf("projector apply: %v", err)
 				}
+				if err := f.mgr.FlushRemoteTransaction(context.Background(), txID); err != nil {
+					t.Fatal(err)
+				}
 				// 另一笔 Remote 事务准入：容量满，淘汰最旧的已关闭 tracker（本事务），占住唯一名额。
 				if err := f.mgr.trackRemoteTransaction(remoteTestTxID(251)); err != nil {
 					t.Errorf("second admission: %v", err)

@@ -1,12 +1,25 @@
 package cache
 
 import (
+	"container/list"
 	"context"
 	"errors"
-	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"sync"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
+
+// LayeredOptions 限制 L1 准入元数据；淘汰只增加回源，不删除 L1/L2 数据。
+// MaxExpiryEntries 未设置时最多保留 65536 个键；本地缓存较小时可同步调低。
+type LayeredOptions struct {
+	MaxExpiryEntries int
+}
+
+type layeredExpiry[K comparable] struct {
+	key       K
+	expiresAt time.Time
+}
 
 type LayeredStore[K comparable, V any] struct {
 	cfg    StoreConfig[K, V]
@@ -14,17 +27,26 @@ type LayeredStore[K comparable, V any] struct {
 	remote Store[K, V]
 	ttl    time.Duration
 
-	mu     sync.Mutex
-	expiry map[K]time.Time
+	mu               sync.Mutex
+	expiry           map[K]*list.Element
+	order            list.List
+	maxExpiryEntries int
 }
 
-func NewLayeredStore[K comparable, V any](local Store[K, V], remote Store[K, V], ttl time.Duration, cfg StoreConfig[K, V]) *LayeredStore[K, V] {
+func NewLayeredStore[K comparable, V any](local Store[K, V], remote Store[K, V], ttl time.Duration, cfg StoreConfig[K, V], options ...LayeredOptions) *LayeredStore[K, V] {
+	limit := 65536
+	for _, option := range options {
+		if option.MaxExpiryEntries > 0 {
+			limit = option.MaxExpiryEntries
+		}
+	}
 	return &LayeredStore[K, V]{
-		cfg:    cfg,
-		local:  local,
-		remote: remote,
-		ttl:    ttl,
-		expiry: make(map[K]time.Time),
+		cfg:              cfg,
+		local:            local,
+		remote:           remote,
+		ttl:              ttl,
+		expiry:           make(map[K]*list.Element),
+		maxExpiryEntries: limit,
 	}
 }
 
@@ -189,21 +211,38 @@ func (s *LayeredStore[K, V]) localValid(key K, now time.Time) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	exp, ok := s.expiry[key]
-	if !ok || now.After(exp) {
-		delete(s.expiry, key)
+	entry := s.expiry[key]
+	if entry == nil {
+		return false
+	}
+	if !now.Before(entry.Value.(layeredExpiry[K]).expiresAt) {
+		s.removeExpiry(entry)
 		return false
 	}
 	return true
 }
 
 func (s *LayeredStore[K, V]) setLocalExpiry(key K, now time.Time) {
-	if s == nil || s.ttl <= 0 {
+	if s == nil || s.ttl <= 0 || s.remote == nil {
 		return
 	}
 	s.mu.Lock()
-	s.expiry[key] = now.Add(s.ttl)
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	// 按最近一次准入排列，顺手回收队首过期项；容量上限还覆盖高基数和长 TTL。
+	// 不开常驻清理 goroutine，空闲时最多保留固定容量，下一次准入继续回收。
+	for first := s.order.Front(); first != nil && !now.Before(first.Value.(layeredExpiry[K]).expiresAt); first = s.order.Front() {
+		s.removeExpiry(first)
+	}
+	value := layeredExpiry[K]{key: key, expiresAt: now.Add(s.ttl)}
+	if entry := s.expiry[key]; entry != nil {
+		entry.Value = value
+		s.order.MoveToBack(entry)
+		return
+	}
+	if s.order.Len() >= s.maxExpiryEntries {
+		s.removeExpiry(s.order.Front())
+	}
+	s.expiry[key] = s.order.PushBack(value)
 }
 
 func (s *LayeredStore[K, V]) clearLocalExpiry(key K) {
@@ -211,6 +250,14 @@ func (s *LayeredStore[K, V]) clearLocalExpiry(key K) {
 		return
 	}
 	s.mu.Lock()
-	delete(s.expiry, key)
+	if entry := s.expiry[key]; entry != nil {
+		s.removeExpiry(entry)
+	}
 	s.mu.Unlock()
+}
+
+// removeExpiry 只在 mu 下调用。丢失准入记录的键必须重新向权威读取。
+func (s *LayeredStore[K, V]) removeExpiry(entry *list.Element) {
+	delete(s.expiry, entry.Value.(layeredExpiry[K]).key)
+	s.order.Remove(entry)
 }

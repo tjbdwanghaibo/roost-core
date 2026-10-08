@@ -108,6 +108,7 @@ func TestOwnerRestartWithTheSameSidGetsInterestBackWithoutWaitingForRenewal(t *t
 	if v := cachedVersion(t, reader, key); v != 0 {
 		t.Fatalf("first read found v%d before any publish", v)
 	}
+	waitReadInterests(t, reader)
 	if !first.Manager.snapshots.interests.interested(key) {
 		t.Fatal("the reader's interest did not reach the owner")
 	}
@@ -140,6 +141,7 @@ func TestOwnerRestartWithTheSameSidGetsInterestBackWithoutWaitingForRenewal(t *t
 	reader.localInterests[key] = time.Now().Add(time.Millisecond).UnixNano()
 	reader.localInterestMu.Unlock()
 	_ = cachedVersion(t, reader, key)
+	waitReadInterests(t, reader)
 	if !restarted.Manager.snapshots.interests.interested(key) {
 		t.Fatal("the regular renewal did not reach the restarted owner either")
 	}
@@ -167,6 +169,7 @@ func TestInterestRefreshRenewsOnlyLiveInterests(t *testing.T) {
 	for _, key := range []entity.RemoteSnapshotKey{live, released, expired} {
 		_ = cachedVersion(t, reader, key)
 	}
+	waitReadInterests(t, reader)
 	if err := reader.ReleaseInterest(ctx, released); err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +230,7 @@ func TestInterestRefreshRequestsCoalesceAndAreValidated(t *testing.T) {
 	for _, key := range keys {
 		_ = cachedVersion(t, reader, key)
 	}
+	waitReadInterests(t, reader)
 	store := InterestRefreshStore{client: reader}
 	var mu sync.Mutex
 	renewals := 0

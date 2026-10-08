@@ -427,6 +427,18 @@ type IRemoteCommitOutbox interface {
 	MarkRemoteCommitPublished(context.Context, RemoteTransactionID) error
 }
 
+// RemoteOutboxCursor 是有序 outbox 的扫描位置；零值从头开始，不代表已发布水位。
+type RemoteOutboxCursor struct {
+	CreatedAt     time.Time
+	TransactionID string
+}
+
+// IRemoteCommitOutboxPager 让恢复跨过本轮失败项继续扫描后续页。游标只在一次扫描内使用，
+// 下次仍从头重试；不能以游标推进代替持久发布确认。正式 Mongo Backend 实现此接口。
+type IRemoteCommitOutboxPager interface {
+	PendingRemoteCommitPage(context.Context, RemoteOutboxCursor, int) ([]RemoteCommitStatus, RemoteOutboxCursor, error)
+}
+
 type IRemoteStorageInitializer interface {
 	EnsureRemoteStorage(context.Context) error
 }
@@ -523,6 +535,8 @@ type RemoteSnapshotInterestManager interface {
 	ReleaseRemoteSnapshotInterest(context.Context, RemoteSnapshotKey) error
 }
 
+// RemoteCommitApplier 提交并返回持久回执；成功不代表 outbox 已完成发布。
+// 需要发布完成的写者继续通过 RemoteWriteBatch 的提交/确认契约等待。
 type RemoteCommitApplier interface {
 	ApplyRemoteCommits(context.Context, RemoteTransactionID, []RemoteCommit) ([]RemoteCommitReceipt, error)
 }

@@ -2,6 +2,7 @@ package remoteentity
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,80 +11,50 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 )
 
-// OPEN-ITEMS B14：RR-20260926-38 的“两个发布者同时处于解冻中途”窗口。
-//
-// 投影器报告未知后 finalizer 已把实体隔离（Quarantined）并在重试。投影器的重试发布停在 ack 的状态读取处（读到 Quarantined）；
-// finalizer 回源读到 Applied、自己发布，它的 ack 已做完 Quarantined→Recovering、停在 Recovering→LocalOwned 之前；
-// 此时放行投影器，它拿着过期的 Quarantined 继续解冻。
-//
-// bf-38 的“未验证项”预计后者会报错、靠下一轮收敛。实测不报错：同状态转换合法（ValidRemoteOwnershipTransition 的 from==to），
-// 投影器的 Recovering→Recovering、Recovering→LocalOwned 都成功，finalizer 恢复后 LocalOwned→LocalOwned 同样成功。
-// 断言两边都成功且只收尾一次：投影器发布返回 nil、publisher 失败计数不再增加（只有前置注入的那 1 次）、
-// finalizer 走到 released、实体 LocalOwned、版本向量等于本提交、tracker Committed、写额度归零。
-func TestPublishersMeetingMidThawBothConverge(t *testing.T) {
+// B14：原两个发布者在解冻中途相遇的路径已收敛。唯一 outbox 发布者停在
+// Recovering 时，投影器重放只报告持久结论，不抢着解冻或重新发布；放行后资源完整收尾。
+func TestOutboxMidThawDoesNotAdmitASecondPublisher(t *testing.T) {
 	f, live := newMidThawFixture(t, 1894)
 	tx := remoteTestTxID(194)
 	commits := f.asyncWrite(t, tx)
 	f.projectorReportsUnknown(t, tx, commits)
 	failuresBefore := remoteApplyErrors()
-
-	// 投影器的下一次尝试：Mongo 事务已提交（Applied），发布停在 ack 的状态读取处，读到的是 Quarantined。
 	if _, err := f.store.CommitRemoteBatch(context.Background(), commits); err != nil {
 		t.Fatal(err)
 	}
-	f.live.armed.Store(true)
-	projectorErr := make(chan error, 1)
-	go func() {
-		_, err := f.mgr.ApplyRemoteCommits(context.Background(), tx, commits)
-		projectorErr <- err
-	}()
-	awaitSignal(t, deadline(t), f.live.reached, "the projector's acknowledge to read Quarantined")
-
-	// finalizer 回源读到 Applied 并发布；它的解冻停在 Recovering→LocalOwned 之前。
 	live.holdLocalOwned.Store(true)
+	release := sync.OnceFunc(func() { close(live.localOwnedResume) })
+	t.Cleanup(release)
 	f.answerPoll(t, true)
-	awaitSignal(t, deadline(t), live.localOwnedReached, "the finalizer's thaw to reach Recovering")
+	awaitSignal(t, deadline(t), live.localOwnedReached, "the outbox's thaw to reach Recovering")
 	if got := live.testRemoteEntity.RemoteOwnershipState(); got != entity.RemoteOwnershipRecovering {
-		t.Fatalf("premise: entity state=%v while the finalizer is mid-thaw, want recovering", got)
+		t.Fatalf("state=%v", got)
 	}
-
-	// 投影器拿着过期的 Quarantined 继续解冻。
-	close(f.live.resume)
-	select {
-	case err := <-projectorErr:
-		if err != nil {
-			t.Fatalf("projector publication while the finalizer was mid-thaw: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("projector publication did not return while the finalizer was mid-thaw")
+	if _, err := f.mgr.ApplyRemoteCommits(context.Background(), tx, commits); err != nil {
+		t.Fatal(err)
 	}
-	close(live.localOwnedResume)
-	f.awaitStep(t, "released")
-
-	if got := remoteApplyErrors() - failuresBefore; got != 0 {
-		t.Fatalf("publisher failures during the mid-thaw window=%d, want 0", got)
+	if got := f.syncer.published.Load(); got != 0 {
+		t.Fatalf("published during paused thaw: %d", got)
 	}
-	if got := live.testRemoteEntity.RemoteOwnershipState(); got != entity.RemoteOwnershipLocalOwned {
-		t.Fatalf("entity state=%v, want local_owned", got)
+	release()
+	f.finishPublication(t)
+	if got := remoteApplyErrors(); got != failuresBefore {
+		t.Fatalf("new apply errors: %d -> %d", failuresBefore, got)
 	}
 	want := entity.RemoteVersionVector{StateVersion: commits[0].NextVersion, MarkerEpoch: commits[0].MarkerEpoch, LockFence: commits[0].LockFence, RouteEpoch: commits[0].RouteEpoch}
 	if got := live.RemoteVersionVector(); got != want {
-		t.Fatalf("version vector=%+v, want %+v", got, want)
+		t.Fatalf("version=%+v want=%+v", got, want)
 	}
 	if status, err := f.mgr.RemoteCommitStatus(context.Background(), tx); err != nil || status.State != entity.RemoteCommitCommitted {
-		t.Fatalf("status=%v err=%v, want committed", status.State, err)
-	}
-	if slots := len(f.mgr.remote.writeSlots); slots != 0 {
-		t.Fatalf("write slots=%d", slots)
+		t.Fatalf("status=%+v err=%v", status, err)
 	}
 	select {
 	case step := <-f.steps:
-		t.Fatalf("finalizer continued after released: %s", step)
+		t.Fatalf("continued after release: %s", step)
 	default:
 	}
 }
 
-// midThawRemoteEntity 在 pausingRemoteEntity 之上再加一个停点：holdLocalOwned 之后第一次转换到 LocalOwned 前停住。
 type midThawRemoteEntity struct {
 	*pausingRemoteEntity
 	holdLocalOwned    atomic.Bool
@@ -119,6 +90,7 @@ func newMidThawFixture(t *testing.T, id int64) (projectionOwnershipFixture, *mid
 	cfg := DefaultConfig()
 	cfg.FinalizeRetryInterval = time.Millisecond
 	mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
+	storage.finalizerCtx = mgr.remote.finalizeCtx
 	mgr.SetBackend(backend)
 	mgr.SetOwnershipStore(store)
 	syncer := &countingSnapshotSyncer{}

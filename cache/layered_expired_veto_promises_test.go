@@ -102,6 +102,6 @@ func expireLayeredWindow[K comparable, V any](s *LayeredStore[K, V], key K) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.expiry[key]; ok {
-		s.expiry[key] = time.Now().Add(-time.Nanosecond)
+		s.expiry[key].Value = layeredExpiry[K]{key: key, expiresAt: time.Now().Add(-time.Nanosecond)}
 	}
 }

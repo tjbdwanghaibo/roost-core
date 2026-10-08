@@ -373,6 +373,7 @@ func TestInterestQuotaRefusalIsVisibleAndReadsGoOnDemand(t *testing.T) {
 	if got := consumer.Stats().InterestRejected; got < 2 {
 		t.Fatalf("InterestRejected=%d; the refused renewals were not counted", got)
 	}
+	waitReadInterests(t, consumer)
 	if !owner.interests.interested(within) || owner.interests.interested(over) {
 		t.Fatalf("owner interest within=%v over=%v; want only the key within the quota", owner.interests.interested(within), owner.interests.interested(over))
 	}

@@ -16,6 +16,7 @@ type remoteTestLoader struct {
 	mu       sync.Mutex
 	commits  map[entity.RemoteTransactionID][]entity.RemoteCommitReceipt
 	versions map[int64]uint64
+	outbox   map[entity.RemoteTransactionID]entity.RemoteCommitStatus
 }
 
 type flakySnapshotSyncer struct {
@@ -79,7 +80,7 @@ func (*flakySnapshotSyncer) PublishRemoteInterest(context.Context, entity.Remote
 }
 
 func newRemoteTestLoader() *remoteTestLoader {
-	return &remoteTestLoader{mockLoader: newMockLoader(), commits: make(map[entity.RemoteTransactionID][]entity.RemoteCommitReceipt), versions: make(map[int64]uint64)}
+	return &remoteTestLoader{mockLoader: newMockLoader(), commits: make(map[entity.RemoteTransactionID][]entity.RemoteCommitReceipt), versions: make(map[int64]uint64), outbox: make(map[entity.RemoteTransactionID]entity.RemoteCommitStatus)}
 }
 
 func (e *testRemoteEntity) BuildRemoteCommitLocked(lease entity.RemoteWriteLease, outcome entity.RemoteTransactionOutcome) (entity.RemoteCommit, error) {
@@ -177,29 +178,48 @@ func (l *remoteTestLoader) CommitRemote(_ context.Context, commit entity.RemoteC
 		LockFence: commit.LockFence, RouteEpoch: commit.RouteEpoch, CommittedAt: time.Now().UnixNano(),
 	}
 	l.commits[commit.TransactionID] = []entity.RemoteCommitReceipt{receipt}
+	l.outbox[commit.TransactionID] = entity.RemoteCommitStatus{TransactionID: commit.TransactionID, State: entity.RemoteCommitApplied, Commits: []entity.RemoteCommit{commit.Clone()}, Receipts: []entity.RemoteCommitReceipt{receipt}}
 	return receipt, nil
 }
 
 func (l *remoteTestLoader) CommitStatus(_ context.Context, id entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	receipts := append([]entity.RemoteCommitReceipt(nil), l.commits[id]...)
-	state := entity.RemoteCommitUnknown
-	if len(receipts) > 0 {
-		state = entity.RemoteCommitCommitted
+	if status, ok := l.outbox[id]; ok {
+		return status.Clone(), nil
 	}
-	return entity.RemoteCommitStatus{TransactionID: id, State: state, Receipts: receipts}, nil
+	return entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitUnknown}, nil
 }
 
 func (l *remoteTestLoader) LoadRemoteSnapshot(context.Context, entity.RemoteSnapshotKey, entity.RemoteReadConsistency, uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
 	return entity.RemoteSnapshotEnvelope{}, false, nil
 }
 
-func (l *remoteTestLoader) PendingRemoteCommits(context.Context, int) ([]entity.RemoteCommitStatus, error) {
-	return nil, nil
+// 与正式存储一样，持久保存先为 Applied，只有发布确认后才是 Committed。
+func (l *remoteTestLoader) PendingRemoteCommits(_ context.Context, limit int) ([]entity.RemoteCommitStatus, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var pending []entity.RemoteCommitStatus
+	for _, status := range l.outbox {
+		if status.State == entity.RemoteCommitApplied {
+			pending = append(pending, status.Clone())
+			if len(pending) == limit {
+				break
+			}
+		}
+	}
+	return pending, nil
 }
 
-func (l *remoteTestLoader) MarkRemoteCommitPublished(context.Context, entity.RemoteTransactionID) error {
+func (l *remoteTestLoader) MarkRemoteCommitPublished(_ context.Context, id entity.RemoteTransactionID) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	status, ok := l.outbox[id]
+	if !ok {
+		return entity.ErrRemoteRejected
+	}
+	status.State = entity.RemoteCommitCommitted
+	l.outbox[id] = status
 	return nil
 }
 

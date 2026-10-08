@@ -495,6 +495,13 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 		b.mgr.completeRemoteTransaction(outcome.TransactionID, entity.RemoteCommitStatus{TransactionID: outcome.TransactionID, State: entity.RemoteCommitCommitted})
 	} else if outcome.Durability == 0 {
 		receipts, err = b.mgr.ApplyRemoteCommits(ctx, outcome.TransactionID, commits)
+		if err == nil {
+			// memory 不经过 WAL，但成功回复仍必须等唯一发布者完成确认。
+			var status entity.RemoteCommitStatus
+			status, err = b.mgr.waitRemoteTransaction(ctx, outcome.TransactionID)
+			receipts = status.Receipts
+			err = waitedCommitError(err)
+		}
 	} else if outcome.Durability == 1 {
 		receipts = speculativeReceipts(commits)
 	} else {
