@@ -260,7 +260,6 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 				t.Fatal("production Backend wiring lost parallel projection capability")
 			}
 			opts := nestwal.DefaultOptions(t.TempDir())
-			opts.WriterVersion = nestwal.WriterVersionV2
 			wal, err := nestwal.Open(opts)
 			if err != nil {
 				t.Fatal(err)

@@ -326,7 +326,7 @@ func TestMemoryTransactionOtherLocalPersistenceRefused(t *testing.T) {
 	}
 
 	raw := newTx()
-	if err := raw.AddMutation(EntityMutation{EntityID: 9, Resource: "raw_res", Data: []byte{1}}); err != nil {
+	if err := raw.AddMutation(EntityMutation{Key: dataengine.DocumentKey{ID: 9, Database: "test", Resource: "raw_res"}, Kind: dataengine.MutationPut, ExpectedVersion: 0, NextVersion: 1, Data: []byte{1}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := raw.durableCommit(context.Background(), nil); !errors.Is(err, ErrMemoryTransactionPersistentWrite) || !strings.Contains(err.Error(), "raw_res/9") {
@@ -342,7 +342,10 @@ func TestMemoryTransactionOtherLocalPersistenceRefused(t *testing.T) {
 	}
 
 	remote := newTx()
-	if err := remote.AddMutation(EntityMutation{EntityID: 9, Resource: "remote_entity", Codec: "remote", Remote: &entity.RemoteCommit{EntityID: 9}}); err != nil {
+	if err := remote.AddMutation(EntityMutation{Key: dataengine.DocumentKey{ID: 9, Resource: "remote_entity"}, Kind: dataengine.MutationPut, ExpectedVersion: 0, NextVersion: 1, Codec: "remote", Remote: &entity.RemoteCommit{
+		TransactionID: entity.RemoteTransactionID{1}, EntityID: 9, Kind: 1, NextVersion: 1, MarkerEpoch: 1, RouteEpoch: 1,
+		Mutations: []entity.RemoteDataMutation{{Database: "test", Collection: "remote", ID: 9, Version: 1, Data: []byte{1}}},
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	claimed := &memoryWriteDao{id: 5}

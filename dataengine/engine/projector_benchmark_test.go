@@ -82,7 +82,6 @@ func BenchmarkProjectorWALReplayAckMatrix(b *testing.B) {
 			for range b.N {
 				b.StopTimer()
 				options := nestwal.DefaultOptions(b.TempDir())
-				options.WriterVersion = nestwal.WriterVersionV2
 				options.GroupCommitInterval = time.Millisecond
 				wal, err := nestwal.Open(options)
 				if err != nil {
@@ -200,7 +199,6 @@ func BenchmarkProjectorAdmissionMatrix(b *testing.B) {
 		for _, writers := range []int{1, 8, 32} {
 			b.Run(fmt.Sprintf("%s/writers_%d", durability.String(), writers), func(b *testing.B) {
 				options := nestwal.DefaultOptions(b.TempDir())
-				options.WriterVersion = nestwal.WriterVersionV2
 				options.SegmentBytes = 1 << 30
 				options.GroupCommitInterval = time.Millisecond
 				wal, err := nestwal.Open(options)
@@ -283,7 +281,6 @@ func BenchmarkProjectorReplayIdleOrHeld(b *testing.B) {
 		}
 		b.Run(name, func(b *testing.B) {
 			options := nestwal.DefaultOptions(b.TempDir())
-			options.WriterVersion = nestwal.WriterVersionV2
 			wal, err := nestwal.Open(options)
 			if err != nil {
 				b.Fatal(err)

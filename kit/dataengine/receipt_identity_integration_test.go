@@ -41,7 +41,6 @@ type rr34Outcome struct {
 func projectThroughWAL(t *testing.T, fx *realFixture, record coredata.CommitRecord) rr34Outcome {
 	t.Helper()
 	opts := nestwal.DefaultOptions(t.TempDir())
-	opts.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(opts)
 	if err != nil {
 		t.Fatal(err)

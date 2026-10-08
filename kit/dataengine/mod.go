@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	engine "github.com/tjbdwanghaibo/roost-core/dataengine/engine"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
+	engine "github.com/tjbdwanghaibo/roost-core/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/health"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
@@ -116,7 +116,6 @@ type config struct {
 	ReceiptTTL            time.Duration `config:"dataengine.receipt_ttl" default:"720h" min:"1ns" example:"720h"`
 	WAL                   struct {
 		Dir                 string        `config:"dir" example:"data/wal/dataengine" help:"不写取 data/wal/dataengine/<sid>"`
-		WriterVersion       int           `config:"writer_version" default:"2" min:"1" max:"2" example:"2"`
 		SegmentBytes        int64         `config:"segment_bytes" min:"0" example:"268435456"`
 		MaxDiskBytes        int64         `config:"max_disk_bytes" min:"0" example:"8589934592"`
 		MaxUnackedAge       time.Duration `config:"max_unacked_age" min:"0" example:"24h"`
@@ -184,10 +183,6 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 		dir = filepath.Join("data", "wal", "dataengine", fmt.Sprintf("%d", sid))
 	}
 	wal := nestwal.DefaultOptions(dir)
-	wal.WriterVersion = nestwal.WriterVersionV2
-	if settings.WAL.WriterVersion == 1 {
-		wal.WriterVersion = nestwal.WriterVersionV1
-	}
 	if value := settings.WAL.SegmentBytes; value > 0 {
 		wal.SegmentBytes = value
 	}

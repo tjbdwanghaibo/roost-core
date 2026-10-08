@@ -7,13 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"go.mongodb.org/mongo-driver/v2/bson"
-
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/nestwal"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // RR-20261006-69（F05-2）：Remote 事务的发布失败不能让 owner 的 WAL 投影队头阻塞。
@@ -79,7 +78,6 @@ func TestPublicationFailureDoesNotBlockLaterProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	walOptions := nestwal.DefaultOptions(t.TempDir())
-	walOptions.WriterVersion = nestwal.WriterVersionV2
 	walOptions.GroupCommitInterval = time.Millisecond
 	wal, err := nestwal.Open(walOptions)
 	if err != nil {

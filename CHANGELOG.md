@@ -1,5 +1,12 @@
 # Changelog
 
+## 未发布：WAL 单路径收敛（2026-10-08）
+
+- WAL 仅支持 codec 7，移除 codec 5/6 兼容及 writer_version 配置；Mutation 删除旧身份/版本字段与转换 API。
+- 移除 nestwal.Committer/OpenRuntime 及专属适配接口，业务统一使用 DataEngine Projector/Assembly；保留文件 WAL 与 JetStream effect 发布器。
+- **升级需先停旧再起新**：旧生成工程重新生成并编译；需保留的写入先由旧版本完成落库，新程序使用新 WAL 目录。旧格式明确拒绝，旧目录的备份/清空由维护者安排，程序不会自动删除或跳过旧记录。静态 Player 跨机迁移只以已落库数据为准，不迁移 WAL。
+
+
 本文件从 v1.6.2 起维护；更早版本见 git 历史。格式遵循 Keep a Changelog，版本号遵循语义化版本。
 
 ## [Unreleased]

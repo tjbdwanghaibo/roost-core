@@ -112,7 +112,6 @@ func TestGuildIDsRealMongoWALRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := nestwal.DefaultOptions(t.TempDir())
-	opts.WriterVersion = nestwal.WriterVersionV2
 	seen := map[int64]bool{}
 	var created []coredata.CommitRecord
 	for incarnation := byte(1); incarnation <= 3; incarnation++ {

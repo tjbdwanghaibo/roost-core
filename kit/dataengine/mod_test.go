@@ -51,26 +51,6 @@ func TestDataEngineModReadsProjectionBatchByteLimit(t *testing.T) {
 	}
 }
 
-func TestDataEngineModDefaultsToCanonicalWALWriterV2(t *testing.T) {
-	cfg := viper.New()
-	cfg.Set("persistence.engine", "dataengine")
-	mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
-	if err := mod.Init(cfg); err != nil {
-		t.Fatal(err)
-	}
-	if got := mod.cfg.wal.WriterVersion; got != 2 {
-		t.Fatalf("writer version=%d, want 2", got)
-	}
-
-	cfg.Set("dataengine.wal.writer_version", 1)
-	if err := mod.Init(cfg); err != nil {
-		t.Fatal(err)
-	}
-	if got := mod.cfg.wal.WriterVersion; got != 1 {
-		t.Fatalf("explicit compatibility writer version=%d, want 1", got)
-	}
-}
-
 // 0 取 core 缺省；负数自 A4 ① 起由声明拒绝（以前静默取缺省）。
 func TestDataEngineModKeepsProjectionBatchByteDefaultForZero(t *testing.T) {
 	cfg := viper.New()
@@ -99,7 +79,6 @@ func TestEffectStreamDefaultsMatchTheDeclaration(t *testing.T) {
 func TestDataEngineModRecoversBeforeReadyAndOwnsNestOptions(t *testing.T) {
 	cfg := viper.New()
 	cfg.Set("persistence.engine", "dataengine")
-	cfg.Set("dataengine.wal.writer_version", 2)
 	cfg.Set("dataengine.wal.dir", t.TempDir())
 	mongoClient := mongotest.NewClient()
 	jetStream := &modJetStream{}
@@ -196,7 +175,6 @@ func TestModPublishesEntityProjectionBarrier(t *testing.T) {
 func TestModForwardsNestLocalExecutorAndReloadHook(t *testing.T) {
 	cfg := viper.New()
 	cfg.Set("persistence.engine", "dataengine")
-	cfg.Set("dataengine.wal.writer_version", 2)
 	cfg.Set("dataengine.wal.dir", t.TempDir())
 	registry := app.NewRegistry(cfg)
 	if err := registry.Register(mods.ModMongo, fmongo.IMongo(mongotest.NewClient())); err != nil {

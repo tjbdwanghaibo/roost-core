@@ -28,7 +28,6 @@ func TestPipelinedRemoteBatchLocalRecordIsFsyncedBeforeVisible(t *testing.T) {
 			t.Run(durability.String()+"/"+outcome, func(t *testing.T) {
 				f, live := newReloadFixture(t, 2031+int64(pi*len(outcomes)+oi))
 				opts := nestwal.DefaultOptions(t.TempDir())
-				opts.WriterVersion = nestwal.WriterVersionV2
 				opts.GroupCommitInterval = time.Hour
 				wal, err := nestwal.Open(opts)
 				if err != nil {

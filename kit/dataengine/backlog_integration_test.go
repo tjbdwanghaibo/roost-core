@@ -38,7 +38,6 @@ func TestRealDataEngineLargeBacklogRecovery(t *testing.T) {
 	}
 
 	options := nestwal.DefaultOptions(t.TempDir())
-	options.WriterVersion = nestwal.WriterVersionV2
 	options.SegmentBytes = 1 << 20 // 强制跨段恢复，而不是只检查单一文件。
 	options.MaxRecordBytes = 64 << 10
 	wal, err := nestwal.Open(options)

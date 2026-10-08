@@ -16,57 +16,9 @@ var (
 	ErrInvalidPatch        = errors.New("dataengine: invalid patch mutation")
 	ErrInvalidDelete       = errors.New("dataengine: invalid delete mutation")
 	ErrInvalidPatchPath    = errors.New("dataengine: invalid patch path")
-	ErrMixedMutationForms  = errors.New("dataengine: mixed canonical and legacy mutation fields")
 )
 
-func hasLegacyFields(m Mutation) bool {
-	return m.EntityID != 0 || m.Database != "" || m.DatabaseScope != 0 || m.Resource != "" || m.Version != 0
-}
-
-func hasCanonicalFields(m Mutation) bool {
-	return m.Key != (DocumentKey{}) || m.Kind != 0 || m.ExpectedVersion != 0 || m.NextVersion != 0 || !m.Patch.Empty()
-}
-
-// CanonicalizeMutation upgrades one v1 full after-image to the canonical
-// mutation representation. Mixed forms are rejected so identity/version
-// conflicts cannot be silently resolved.
-func CanonicalizeMutation(m Mutation) (Mutation, error) {
-	m = CloneMutation(m)
-	legacy := hasLegacyFields(m)
-	if legacy && hasCanonicalFields(m) {
-		return Mutation{}, ErrMixedMutationForms
-	}
-	if legacy {
-		m.Key = DocumentKey{
-			Database: m.Database,
-			Scope:    DatabaseScope(m.DatabaseScope),
-			Resource: m.Resource,
-			ID:       m.EntityID,
-		}
-		m.Kind = MutationPut
-		if m.Remote != nil && m.Remote.Delete {
-			m.Kind = MutationDelete
-		}
-		m.NextVersion = m.Version
-		if m.NextVersion > 0 {
-			m.ExpectedVersion = m.NextVersion - 1
-		}
-		m.EntityID = 0
-		m.Database = ""
-		m.DatabaseScope = 0
-		m.Resource = ""
-		m.Version = 0
-	}
-	if err := ValidateMutation(m); err != nil {
-		return Mutation{}, err
-	}
-	return m, nil
-}
-
 func ValidateMutation(m Mutation) error {
-	if hasLegacyFields(m) {
-		return ErrMixedMutationForms
-	}
 	if m.Key.ID == 0 || m.Key.Resource == "" || (m.Key.Database == "" && m.Remote == nil) {
 		return ErrInvalidDocumentKey
 	}

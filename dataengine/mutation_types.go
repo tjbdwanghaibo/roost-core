@@ -73,8 +73,7 @@ func (p FieldPatch) Empty() bool { return len(p.SetBSON) == 0 && len(p.Unset) ==
 
 const AllFields uint64 = ^uint64(0)
 
-// Mutation is canonical when Key, Kind, ExpectedVersion, and NextVersion are
-// populated and all deprecated compatibility fields are zero.
+// Mutation 用唯一的文档身份和预期/目标版本描述变更，不接受旧字段形式。
 type Mutation struct {
 	Key             DocumentKey
 	Kind            MutationKind
@@ -86,14 +85,6 @@ type Mutation struct {
 	Data            []byte
 	Patch           FieldPatch
 	Remote          *entity.RemoteCommit
-
-	// Deprecated compatibility fields for generated v1 callers. WAL v2 must
-	// only encode the canonical fields above.
-	EntityID      int64
-	Database      string
-	DatabaseScope uint8
-	Resource      string
-	Version       uint64
 }
 
 type Effect struct {

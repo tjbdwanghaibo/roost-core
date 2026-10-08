@@ -199,7 +199,7 @@ records after ack: 0 (expect 0)
 ticket lsn=1 durable, watermark DurableLSN=1
 ```
 
-> 生产环境不要直接使用裸 `WAL` 或独立 `nestwal.Runtime`：应用应装配 `dataengine.Mod`，由统一引擎负责 WAL、Mongo projection、outbox 与 ack。
+> 生产环境不要直接使用裸 `WAL`：应用应装配 `dataengine.Mod`，由统一引擎负责 WAL、Mongo projection、outbox 与 ack。
 
 ### 2.2 作为 committer 接入 roost-core Nest（生产装配）
 
@@ -250,7 +250,6 @@ nats:
 dataengine:
   wal:
     dir: "data/wal/dataengine/1" # 缺省为 data/wal/dataengine/<sid>
-    writer_version: 2
     group_commit_interval: 10ms
   projection:
     batch_records: 256             # 每次重放最多记录数

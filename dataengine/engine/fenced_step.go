@@ -51,9 +51,6 @@ func recordEntityIDs(record coredata.CommitRecord) []int64 {
 	ids := make([]int64, 0, len(record.Mutations))
 	for _, mutation := range record.Mutations {
 		id := mutation.Key.ID
-		if id == 0 {
-			id = mutation.EntityID
-		}
 		if id != 0 && !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}

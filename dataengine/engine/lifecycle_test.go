@@ -21,7 +21,6 @@ func lifecycleAssembly(t *testing.T, client fmongo.IMongo, js fnats.IJetStream) 
 		WAL:   nestwal.DefaultOptions(t.TempDir()), Projector: DefaultProjectorOptions(),
 		Outbox: OutboxWorkerOptions{Owner: "lifecycle"},
 	}
-	cfg.WAL.WriterVersion = nestwal.WriterVersionV2
 	a, err := Assemble(AssemblyDeps{Mongo: client, JetStream: js, Access: entity.NewManagerAccess(entity.NewEntityManager())}, cfg)
 	if err != nil {
 		t.Fatal(err)

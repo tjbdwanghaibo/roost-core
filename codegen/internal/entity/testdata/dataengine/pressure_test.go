@@ -179,7 +179,6 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 	}
 	observed := &pressureStore{MongoStore: store, ages: make([]time.Duration, 0, n)}
 	opts := nestwal.DefaultOptions(filepath.Join(root, "pressure"))
-	opts.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(opts)
 	if err != nil {
 		t.Fatal(err)

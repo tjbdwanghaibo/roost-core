@@ -47,7 +47,6 @@ func TestRealLocalMultiBatchOrderIdentityAndLostCheckpoint(t *testing.T) {
 	defer fx.close()
 	records := realLocalMultiRecords(t, fx)
 	opts := nestwal.DefaultOptions(t.TempDir())
-	opts.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(opts)
 	if err != nil {
 		t.Fatal(err)

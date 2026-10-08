@@ -32,14 +32,14 @@ func BenchmarkRecordEncodingMatrix(b *testing.B) {
 				name := fmt.Sprintf("%s/mutations_%d/effects_%d", shape.name, mutationCount, effectCount)
 				b.Run(name, func(b *testing.B) {
 					record := benchmarkRecordShape(b, shape.kind, shape.payloadSize, shape.patchFields, mutationCount, effectCount)
-					encoded, err := encodeRecordVersion(record, WriterVersionV2)
+					encoded, err := encodeRecord(record)
 					if err != nil {
 						b.Fatal(err)
 					}
 					b.ReportAllocs()
 					b.ResetTimer()
 					for range b.N {
-						if _, err := encodeRecordVersion(record, WriterVersionV2); err != nil {
+						if _, err := encodeRecord(record); err != nil {
 							b.Fatal(err)
 						}
 					}
@@ -98,10 +98,7 @@ func BenchmarkWALAppendAsyncParallel(b *testing.B) {
 			}
 			_, err := w.Append(context.Background(), corenest.CommitRecord{
 				ID: id, Durability: corenest.DurabilityAsync.Record(),
-				Mutations: []corenest.EntityMutation{{
-					EntityID: int64(seq), Database: "game", Resource: "players",
-					Version: seq, Codec: "bson-full-v1", Data: []byte("small-after-image"),
-				}},
+				Mutations: []corenest.EntityMutation{{Key: dataengine.DocumentKey{ID: int64(seq), Database: "game", Resource: "players"}, Kind: dataengine.MutationPut, ExpectedVersion: (seq) - 1, NextVersion: seq, Codec: "bson-full-v1", Data: []byte("small-after-image")}},
 			})
 			if err != nil {
 				b.Error(err)
@@ -113,7 +110,6 @@ func BenchmarkWALAppendAsyncParallel(b *testing.B) {
 
 func BenchmarkWALAppendV2AsyncParallel(b *testing.B) {
 	opts := DefaultOptions(b.TempDir())
-	opts.WriterVersion = WriterVersionV2
 	opts.SegmentBytes = 1 << 30
 	w, err := Open(opts)
 	if err != nil {
@@ -188,10 +184,7 @@ func BenchmarkWALAppendStrictParallel(b *testing.B) {
 			}
 			_, err := w.Append(context.Background(), corenest.CommitRecord{
 				ID: id, Durability: corenest.DurabilityStrict.Record(),
-				Mutations: []corenest.EntityMutation{{
-					EntityID: int64(seq), Database: "game", Resource: "players",
-					Version: seq, Codec: "bson-full-v1", Data: []byte("small-after-image"),
-				}},
+				Mutations: []corenest.EntityMutation{{Key: dataengine.DocumentKey{ID: int64(seq), Database: "game", Resource: "players"}, Kind: dataengine.MutationPut, ExpectedVersion: (seq) - 1, NextVersion: seq, Codec: "bson-full-v1", Data: []byte("small-after-image")}},
 			})
 			if err != nil {
 				b.Error(err)

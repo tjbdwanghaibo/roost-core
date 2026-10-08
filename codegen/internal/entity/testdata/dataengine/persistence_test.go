@@ -71,7 +71,6 @@ func TestGeneratedDataEngineProcessLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			opts := nestwal.DefaultOptions(filepath.Join(root, policy.String()))
-			opts.WriterVersion = nestwal.WriterVersionV2
 			wal, err := nestwal.Open(opts)
 			if err != nil {
 				t.Fatal(err)

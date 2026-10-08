@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
@@ -52,7 +53,7 @@ func TestNestedCommitInRemotePrepareAlongsideCommittedLocalPartKeepsReplyText(t 
 			remote := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) {
 				// 批次还没挂上：独立事务照常执行并提交，不认领消息（RR-20260926-84 复核残留，B19）。
 				_, isoErr = RunIsolatedTransaction(context.Background(), iso, "rr08_iso_in_prepare", func() (any, error) {
-					return nil, CurrentRollbackTx().AddMutation(EntityMutation{EntityID: localID, Database: "test", Resource: "rr08_prepare", Version: 1, Data: []byte(`{}`)})
+					return nil, CurrentRollbackTx().AddMutation(EntityMutation{Key: dataengine.DocumentKey{ID: localID, Database: "test", Resource: "rr08_prepare"}, Kind: dataengine.MutationPut, ExpectedVersion: 0, NextVersion: 1, Data: []byte(`{}`)})
 				})
 				return batch, nil
 			}}

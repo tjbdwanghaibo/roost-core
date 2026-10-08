@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/fctx"
 )
@@ -47,7 +48,7 @@ func (o *isolatedInPrepare) run(iso TransactionCommitter, target int64) {
 	o.inMessage, o.inFast = currentNestDispatchMsg() != nil, fctx.InFastWorker()
 	_, o.err = RunIsolatedTransaction(context.Background(), iso, "b19_iso_in_prepare", func() (any, error) {
 		o.callRan = true
-		return nil, CurrentRollbackTx().AddMutation(EntityMutation{EntityID: target, Database: "test", Resource: "b19_prepare", Version: 1, Data: []byte(`{}`)})
+		return nil, CurrentRollbackTx().AddMutation(EntityMutation{Key: dataengine.DocumentKey{ID: target, Database: "test", Resource: "b19_prepare"}, Kind: dataengine.MutationPut, ExpectedVersion: 0, NextVersion: 1, Data: []byte(`{}`)})
 	})
 }
 

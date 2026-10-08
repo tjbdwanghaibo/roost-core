@@ -190,4 +190,6 @@ if err := dataMod.Flush(ctx); err != nil {
 
 async 接受写入后允许锁外投影先于 WAL fsync；这符合“不保证断电前这批 WAL 已持久”的契约，不保证失败事务未生效。Mongo 已提交时仍保留结果，禁止回滚猜测。`WAL.Ack` 在写 checkpoint 前强制刷覆盖段，刷盘失败则进入 terminal 并停止水位推进。strict / pipelined 的成功持久承诺不变。
 
-当前 CommitRecord digest 来自 JSON。改结构字段可能改变同一记录的 digest；版本升级前须停止旧进程并排空 WAL / outbox，不能用新二进制盲目重放旧格式未确认记录。当前尚未部署，不提供历史 digest 兼容。`nestwal.Committer` 与 `OpenRuntime` 作为公开集成 API 保留（维护者 C8），正式 Kit 使用 Assembly。
+当前 CommitRecord digest 来自 JSON。改结构字段可能改变同一记录的 digest；版本升级前须停止旧进程并排空 WAL / outbox，不能用新二进制盲目重放旧格式未确认记录。当前尚未部署，不提供历史 digest 兼容。2026-10-08 维护者授权 WAL 单路径收敛，取代此前对本组 API 的 C8 保留决定：删除 `nestwal.Committer` / `OpenRuntime`，正式提交与投影统一使用 `engine.Projector` / `Assembly`，不扩展删除其他 C8 API。
+
+WAL 只支持 codec 7，旧 codec 5/6 明确拒绝；移除 `writer_version` 配置与 Mutation 旧字段。升级先停旧进程、完成需保留数据的落库，再使用新 WAL 目录；不自动删除旧文件或推进 checkpoint。

@@ -6,18 +6,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	gonats "github.com/nats-io/nats.go"
-	gojs "github.com/nats-io/nats.go/jetstream"
-	engine "github.com/tjbdwanghaibo/roost-core/dataengine/engine"
 	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	gonats "github.com/nats-io/nats.go"
+	gojs "github.com/nats-io/nats.go/jetstream"
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	engine "github.com/tjbdwanghaibo/roost-core/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/kit/mods"
 	kitmongo "github.com/tjbdwanghaibo/roost-core/kit/mongo"
@@ -94,7 +94,6 @@ func newRealFixtureWithNATS(t *testing.T, natsURL string) *realFixture {
 	// ROOST_DATAENGINE_IT_NATS_PROXIED_URL.
 	cfg.Set("nats.ignore_discovered_servers", natsURL != os.Getenv("ROOST_DATAENGINE_IT_NATS_URL"))
 	cfg.Set("dataengine.database", fx.database)
-	cfg.Set("dataengine.wal.writer_version", 2)
 	cfg.Set("dataengine.wal.dir", t.TempDir())
 	cfg.Set("dataengine.effects.stream", fx.stream)
 	cfg.Set("dataengine.effects.subject_prefix", fx.effectSub)

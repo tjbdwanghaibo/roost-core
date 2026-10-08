@@ -128,7 +128,6 @@ func newTradeFixtureFull(t *testing.T, ctx context.Context, client fmongo.IMongo
 		t.Fatal(err)
 	}
 	h.options = nestwal.DefaultOptions(filepath.Join(root, "trade", scenario, policy.String()))
-	h.options.WriterVersion = nestwal.WriterVersionV2
 	h.wal, err = nestwal.Open(h.options)
 	if err != nil {
 		t.Fatal(err)

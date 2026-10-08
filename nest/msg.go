@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	fctx "github.com/tjbdwanghaibo/roost-core/fctx"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
@@ -54,13 +55,18 @@ func (m *Msg) finalizeRemoteWriteBatch(tx *RollbackTx) error {
 	}
 	for _, commit := range m.RemoteWriteBatch.Commits() {
 		commit := commit.Clone()
+		kind := dataengine.MutationPut
+		if commit.Delete {
+			kind = dataengine.MutationDelete
+		}
 		if err := tx.AddMutation(EntityMutation{
-			EntityID: commit.EntityID,
-			Resource: "remote_entity",
-			Version:  commit.NextVersion,
-			Schema:   commit.Schema,
-			Codec:    "remote",
-			Remote:   &commit,
+			Key:             dataengine.DocumentKey{ID: commit.EntityID, Resource: "remote_entity"},
+			Kind:            kind,
+			ExpectedVersion: commit.BaseVersion,
+			NextVersion:     commit.NextVersion,
+			Schema:          commit.Schema,
+			Codec:           "remote",
+			Remote:          &commit,
 		}); err != nil {
 			return err
 		}

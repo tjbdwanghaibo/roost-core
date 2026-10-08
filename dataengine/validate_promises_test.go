@@ -37,7 +37,6 @@ func TestValidateMutationRefusesEachMalformedShape(t *testing.T) {
 		mutate func(*Mutation)
 		want   error
 	}{
-		{"legacy identity fields mixed in", func(m *Mutation) { m.EntityID = 7 }, ErrMixedMutationForms},
 		{"zero document id", func(m *Mutation) { m.Key.ID = 0 }, ErrInvalidDocumentKey},
 		{"empty resource", func(m *Mutation) { m.Key.Resource = "" }, ErrInvalidDocumentKey},
 		{"local mutation without database", func(m *Mutation) { m.Key.Database = "" }, ErrInvalidDocumentKey},

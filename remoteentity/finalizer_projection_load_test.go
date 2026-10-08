@@ -112,7 +112,6 @@ func TestRemoteAsyncFinalizerProjectionLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	walOptions := nestwal.DefaultOptions(t.TempDir())
-	walOptions.WriterVersion = nestwal.WriterVersionV2
 	walOptions.GroupCommitInterval = time.Millisecond
 	wal, err := nestwal.Open(walOptions)
 	if err != nil {

@@ -3,11 +3,11 @@ package engine
 import (
 	"context"
 	"errors"
-	"github.com/tjbdwanghaibo/roost-core/nestwal"
 	"testing"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/nestwal"
 )
 
 func TestReplayReadBudgetRetainsOnlyBoundedPrefix(t *testing.T) {
@@ -62,7 +62,6 @@ func TestReplayBudgetCountsConsumedRecordsAcrossSegments(t *testing.T) {
 	for _, budget := range []string{"records", "bytes"} {
 		t.Run(budget, func(t *testing.T) {
 			opts := nestwal.DefaultOptions(t.TempDir())
-			opts.WriterVersion = nestwal.WriterVersionV2
 			opts.SegmentBytes, opts.MaxRecordBytes = 4096, 2048
 			w, err := nestwal.Open(opts)
 			if err != nil {

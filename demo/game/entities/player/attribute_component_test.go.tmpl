@@ -432,8 +432,7 @@ func TestNonPersistentAttributeLayersStayOutOfTheWAL(t *testing.T) {
 	subject := newAttributePlayer(t, 7401)
 	dir := t.TempDir()
 	options := nestwal.DefaultOptions(dir)
-	// Patch records (every write after the first) need the v2 record format.
-	options.WriterVersion = nestwal.WriterVersionV2
+	// 唯一 WAL 格式默认支持后续写入产生的 Patch。
 	wal, err := nestwal.Open(options)
 	if err != nil {
 		t.Fatalf("open wal: %v", err)

@@ -28,11 +28,13 @@ func rawMutationFor(form rawMutationForm, id int64, data []byte) EntityMutation 
 			Kind: dataengine.MutationPut, NextVersion: 1, Mask: 1, Schema: 1, Codec: "json", Data: data,
 		}
 	}
-	return EntityMutation{EntityID: id, Database: "test", Resource: "rollback_raw", Version: 1, Data: data}
+	return EntityMutation{Key: dataengine.DocumentKey{ID: id, Database: "test", Resource: "rollback_raw"}, Kind: dataengine.MutationPut,
+
+		// runOuterWithNestedRawMutation 注册并执行一个 handler：嵌套独立事务把 target（castTarget 为假时是声明实体）改成 100，
+		// 不经 MarkPersist，直接 AddMutation 一条原始 mutation；随后外层失败。
+		ExpectedVersion: 0, NextVersion: 1, Data: data}
 }
 
-// runOuterWithNestedRawMutation 注册并执行一个 handler：嵌套独立事务把 target（castTarget 为假时是声明实体）改成 100，
-// 不经 MarkPersist，直接 AddMutation 一条原始 mutation；随后外层失败。
 func runOuterWithNestedRawMutation(t *testing.T, meta HandlerMeta, unique int64, castTarget bool, form rawMutationForm) (p, z *rollbackTestEntity, iso *recordsCommitter, obs *nestedSnapshotObservation, reply requestResult) {
 	t.Helper()
 	manager := entity.NewEntityManager()

@@ -27,7 +27,6 @@ func (publisher *recoveringPublisher) Publish(_ context.Context, item OutboxItem
 
 func TestNATSOutageDoesNotBlockProjectionAndBacklogRecoversByEffectID(t *testing.T) {
 	options := nestwal.DefaultOptions(t.TempDir())
-	options.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(options)
 	if err != nil {
 		t.Fatal(err)

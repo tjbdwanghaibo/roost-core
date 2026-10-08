@@ -177,7 +177,6 @@ func (publisher failingOutboxPublisher) Publish(context.Context, OutboxItem) err
 
 func TestProjectorAckNotBlockedByPublisherFailure(t *testing.T) {
 	opts := nestwal.DefaultOptions(t.TempDir())
-	opts.WriterVersion = nestwal.WriterVersionV2
 	opts.GroupCommitInterval = time.Millisecond
 	wal, err := nestwal.Open(opts)
 	if err != nil {
@@ -236,7 +235,6 @@ func TestProjectorAckNotBlockedByPublisherFailure(t *testing.T) {
 
 func TestProjectorFatalConflictInvokesFence(t *testing.T) {
 	opts := nestwal.DefaultOptions(t.TempDir())
-	opts.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +267,6 @@ func TestProjectorFatalConflictInvokesFence(t *testing.T) {
 
 func TestProjectorCommitSystemTicketCompletesAfterProjection(t *testing.T) {
 	opts := nestwal.DefaultOptions(t.TempDir())
-	opts.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -302,7 +299,6 @@ func TestProjectorCommitSystemTicketCompletesAfterProjection(t *testing.T) {
 
 func TestProjectorUsesAtomicBatchStoreForBacklog(t *testing.T) {
 	options := nestwal.DefaultOptions(t.TempDir())
-	options.WriterVersion = nestwal.WriterVersionV2
 	w, err := nestwal.Open(options)
 	if err != nil {
 		t.Fatal(err)
@@ -328,7 +324,6 @@ func TestProjectorUsesAtomicBatchStoreForBacklog(t *testing.T) {
 
 func TestProjectorAcknowledgesSuccessfulPrefixBeforeLaterSegmentFailure(t *testing.T) {
 	options := nestwal.DefaultOptions(t.TempDir())
-	options.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(options)
 	if err != nil {
 		t.Fatal(err)
@@ -377,7 +372,6 @@ func TestProjectorAcknowledgesSuccessfulPrefixBeforeLaterSegmentFailure(t *testi
 func stoppedProjectorWithRecords(t *testing.T, store ProjectionStore, records []coredata.CommitRecord, batchBytes int) (*Projector, *nestwal.WAL) {
 	t.Helper()
 	options := nestwal.DefaultOptions(t.TempDir())
-	options.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(options)
 	if err != nil {
 		t.Fatal(err)

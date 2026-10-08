@@ -7,13 +7,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	engine "github.com/tjbdwanghaibo/roost-core/dataengine/engine"
 	"slices"
 	"strconv"
 	"testing"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
+	engine "github.com/tjbdwanghaibo/roost-core/dataengine/engine"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/nestwal"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -246,7 +246,6 @@ func TestRealMixedProjectionSegmentsPreserveOrder(t *testing.T) {
 	}})
 
 	options := nestwal.DefaultOptions(t.TempDir())
-	options.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(options)
 	if err != nil {
 		t.Fatal(err)
@@ -303,7 +302,6 @@ func TestRealProjectionOnlyMongoAckFailureRestartPreservesSameEntityOrder(t *tes
 
 	walDir := t.TempDir()
 	options := nestwal.DefaultOptions(walDir)
-	options.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(options)
 	if err != nil {
 		t.Fatal(err)
@@ -396,7 +394,6 @@ func TestRealMongoMixedRatioWALReplayAckThroughput(t *testing.T) {
 			resource := fmt.Sprintf("mixed_ratio_%d", workloadIndex)
 			records, specialCount := realMixedRatioRecords(t, fx.database, resource, workloadIndex, recordCount, entityCount, workload.specialEvery)
 			options := nestwal.DefaultOptions(t.TempDir())
-			options.WriterVersion = nestwal.WriterVersionV2
 			wal, err := nestwal.Open(options)
 			if err != nil {
 				t.Fatal(err)

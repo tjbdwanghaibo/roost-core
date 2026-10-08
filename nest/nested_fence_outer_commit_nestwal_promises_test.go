@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/nestwal"
@@ -107,19 +108,18 @@ func addFenceOuterEntity(t *testing.T, manager *entity.EntityManager, unique int
 
 type discardApplier struct{}
 
-func (discardApplier) ApplyMutations(context.Context, nest.TransactionID, []nest.EntityMutation) error {
+func (discardApplier) Project(context.Context, dataengine.CommitRecord) error {
 	return nil
 }
 
-func openFenceOuterCommitter(t *testing.T) (*nestwal.WAL, *nestwal.Committer) {
+func openFenceOuterCommitter(t *testing.T) (*nestwal.WAL, *engine.Projector) {
 	t.Helper()
 	options := nestwal.DefaultOptions(t.TempDir())
-	options.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	committer, err := nestwal.NewCommitter(wal, discardApplier{}, nil, nestwal.CommitterOptions{CloseWAL: true})
+	committer, err := engine.NewProjector(wal, discardApplier{}, engine.ProjectorOptions{CloseWAL: true})
 	if err != nil {
 		_ = wal.Close(context.Background())
 		t.Fatal(err)

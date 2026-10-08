@@ -58,7 +58,6 @@ func TestProjectorCloseWaitsForExternalProjection(t *testing.T) {
 func manualProjector(t *testing.T, store ProjectionStore) (*Projector, *nestwal.WAL) {
 	t.Helper()
 	options := nestwal.DefaultOptions(t.TempDir())
-	options.WriterVersion = nestwal.WriterVersionV2
 	w, err := nestwal.Open(options)
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +177,6 @@ func TestProjectorOnFatalMayCloseProjector(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			options := nestwal.DefaultOptions(t.TempDir())
-			options.WriterVersion = nestwal.WriterVersionV2
 			w, err := nestwal.Open(options)
 			if err != nil {
 				t.Fatal(err)
@@ -350,7 +348,6 @@ func TestRemoteLeaseFenceRejectedBeforeWALAdmission(t *testing.T) {
 // Close 之后仍按 RR-17 拒绝 ReplayPass / Flush。
 func TestManualReplayProjectorRunsOnlyExplicitPasses(t *testing.T) {
 	options := nestwal.DefaultOptions(t.TempDir())
-	options.WriterVersion = nestwal.WriterVersionV2
 	w, err := nestwal.Open(options)
 	if err != nil {
 		t.Fatal(err)

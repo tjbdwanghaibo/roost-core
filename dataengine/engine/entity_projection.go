@@ -30,9 +30,6 @@ func (p *Projector) trackEntitiesLocked(record coredata.CommitRecord) {
 	for _, mutation := range record.Mutations {
 		id := mutation.Key.ID
 		if id == 0 {
-			id = mutation.EntityID
-		}
-		if id == 0 {
 			continue
 		}
 		group := p.pendingEntities[id]

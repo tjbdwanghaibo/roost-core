@@ -123,7 +123,7 @@ func TestEngineStartRefusesAfterShutdownAndWithoutGetter(t *testing.T) {
 
 // A committed or rolled-back transaction accepts nothing more; undo owners,
 // tokens and participants must be comparable because they key a map; a
-// mutation may not mix the canonical and the legacy identity forms.
+// mutation must have a complete document identity.
 func TestRollbackTxRefusesLateAndUncomparableRegistrations(t *testing.T) {
 	tx := NewRollbackTx(RollbackUndo)
 	owner := &rollbackTestDao{}
@@ -139,8 +139,8 @@ func TestRollbackTxRefusesLateAndUncomparableRegistrations(t *testing.T) {
 	if err := tx.RecordUndo(nil, 1, func() error { return nil }); err == nil || !strings.Contains(err.Error(), "invalid undo operation") {
 		t.Fatalf("nil owner = %v", err)
 	}
-	if err := tx.AddMutation(EntityMutation{Key: dataengine.DocumentKey{Database: "g", Resource: "r", ID: 1}, EntityID: 1, Kind: dataengine.MutationPut, NextVersion: 1, Data: []byte("x")}); !errors.Is(err, dataengine.ErrMixedMutationForms) {
-		t.Fatalf("mixed mutation forms = %v", err)
+	if err := tx.AddMutation(EntityMutation{Key: dataengine.DocumentKey{Database: "g", Resource: "r", ID: 0}, Kind: dataengine.MutationPut, NextVersion: 1, Data: []byte("x")}); !errors.Is(err, dataengine.ErrInvalidDocumentKey) {
+		t.Fatalf("missing mutation identity = %v", err)
 	}
 	participant := &promiseParticipant{}
 	if err := tx.RegisterCommitParticipant(participant); err != nil {

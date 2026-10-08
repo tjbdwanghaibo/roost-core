@@ -42,10 +42,7 @@ var (
 )
 
 type Options struct {
-	Dir string
-	// WriterVersion controls record encoding only. Readers always accept both
-	// deployed v1 and Data Engine v2 records. Zero defaults to v1 for rollout.
-	WriterVersion       WriterVersion
+	Dir                 string
 	SegmentBytes        int64
 	MaxRecordBytes      int
 	QueueCapacity       int
@@ -76,7 +73,6 @@ type Options struct {
 func DefaultOptions(dir string) Options {
 	return Options{
 		Dir:                 dir,
-		WriterVersion:       WriterVersionV1,
 		SegmentBytes:        256 << 20,
 		MaxRecordBytes:      16 << 20,
 		QueueCapacity:       8192,
@@ -269,12 +265,6 @@ func normalizeOptions(opts Options) (Options, error) {
 	if opts.SegmentBytes <= 0 {
 		opts.SegmentBytes = defaults.SegmentBytes
 	}
-	if opts.WriterVersion == 0 {
-		opts.WriterVersion = defaults.WriterVersion
-	}
-	if opts.WriterVersion != WriterVersionV1 && opts.WriterVersion != WriterVersionV2 {
-		return opts, fmt.Errorf("nestwal: unsupported writer version %d", opts.WriterVersion)
-	}
 	if opts.MaxRecordBytes <= 0 {
 		opts.MaxRecordBytes = defaults.MaxRecordBytes
 	}
@@ -314,13 +304,13 @@ func normalizeOptions(opts Options) (Options, error) {
 	return opts, nil
 }
 
-// Append 是阻塞式提交入口（Committer.Commit、Projector.Commit / CommitSystem）：记录写入所在批后返回 fence。
+// Append 是阻塞式提交入口（Projector.Commit / CommitSystem）：记录写入所在批后返回 fence。
 // async 只等写入，由组提交 ticker 周期刷盘；strict 与 pipelined 等所在批 fsync 成功后才返回。
 func (w *WAL) Append(ctx context.Context, record corenest.CommitRecord) (corenest.CommitFence, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	payload, err := encodeRecordVersion(record, w.opts.WriterVersion)
+	payload, err := encodeRecord(record)
 	if err != nil {
 		return corenest.CommitFence{}, err
 	}
@@ -334,7 +324,7 @@ func (w *WAL) Append(ctx context.Context, record corenest.CommitRecord) (corenes
 		// 经 Append 到达的 pipelined（Durability 3）记录来自回退到 strict 路径的事务：broadcast 没有提前放锁、带 Remote 批次
 		// 保留两阶段协议（nest/execution.go），Nest 在 Append 返回后就放锁、Confirm Sync、执行 AfterCommit，所以必须与 strict
 		// 一样等 fsync。之前只认 DurabilityStrict，这些记录按 async 在 fsync 之前返回，成功先于持久对外可见（RR-20260928-11）。
-		// 正常 pipelined 记录走 Enqueue（票据在 fsync 后完成），不经这里；encodeRecordVersion 已拒绝大于 pipelined 的取值。
+		// 正常 pipelined 记录走 Enqueue（票据在 fsync 后完成），不经这里；encodeRecord 已拒绝大于 pipelined 的取值。
 		requireSync: record.Durability >= dataengine.DurabilityStrict,
 		done:        make(chan appendResult, 1),
 	}
@@ -372,7 +362,7 @@ func (w *WAL) Enqueue(ctx context.Context, record corenest.CommitRecord) (corene
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	payload, err := encodeRecordVersion(record, w.opts.WriterVersion)
+	payload, err := encodeRecord(record)
 	if err != nil {
 		return nil, err
 	}

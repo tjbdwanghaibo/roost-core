@@ -314,15 +314,8 @@ func (tx *RollbackTx) AddMutation(mutation EntityMutation) error {
 	if tx == nil || tx.state != rollbackTxOpen {
 		return ErrTransactionClosed
 	}
-	if mutation.Key != (dataengine.DocumentKey{}) {
-		if mutation.EntityID != 0 || mutation.Database != "" || mutation.DatabaseScope != 0 || mutation.Resource != "" || mutation.Version != 0 {
-			return dataengine.ErrMixedMutationForms
-		}
-		if err := dataengine.ValidateMutation(mutation); err != nil {
-			return err
-		}
-	} else if mutation.EntityID == 0 || mutation.Resource == "" || (len(mutation.Data) == 0 && mutation.Remote == nil) {
-		return errors.New("nest: invalid entity mutation")
+	if err := dataengine.ValidateMutation(mutation); err != nil {
+		return err
 	}
 	if tx.mutationKeys == nil {
 		tx.mutationKeys = make(map[mutationKey]struct{}, 4)
@@ -336,12 +329,9 @@ func (tx *RollbackTx) AddMutation(mutation EntityMutation) error {
 	return nil
 }
 
-// keyOfMutation 是 AddMutation 去重用的身份：DocumentKey 形式取 Key，旧形式取 EntityID / Database / Resource。
+// keyOfMutation 使用唯一文档身份对同一事务内的 mutation 去重。
 func keyOfMutation(mutation EntityMutation) mutationKey {
-	if mutation.Key != (dataengine.DocumentKey{}) {
-		return mutationKey{database: mutation.Key.Database, resource: mutation.Key.Resource, entityID: mutation.Key.ID}
-	}
-	return mutationKey{database: mutation.Database, resource: mutation.Resource, entityID: mutation.EntityID}
+	return mutationKey{database: mutation.Key.Database, resource: mutation.Key.Resource, entityID: mutation.Key.ID}
 }
 
 func (tx *RollbackTx) Emit(effect Effect) error {
@@ -564,11 +554,7 @@ func (tx *RollbackTx) prepareCommitRecord() (CommitRecord, error) {
 	requestID := tx.requestID()
 	mutations := make([]EntityMutation, len(tx.mutations))
 	for i := range tx.mutations {
-		canonical, err := dataengine.CanonicalizeMutation(tx.mutations[i])
-		if err != nil {
-			return CommitRecord{}, fmt.Errorf("nest: canonicalize mutation %d: %w", i, err)
-		}
-		mutations[i] = canonical
+		mutations[i] = dataengine.CloneMutation(tx.mutations[i])
 	}
 	record := CommitRecord{
 		ID: tx.id, Handler: tx.handler, RequestID: requestID, CreatedAt: time.Now().UnixNano(), Durability: tx.durability.Record(),

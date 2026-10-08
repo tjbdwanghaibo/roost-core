@@ -102,7 +102,6 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "dataengine.transaction_receipt_ttl", Kind: "duration", Default: "720h", Min: "1ns", Starter: true, Example: "720h"},
 		{Name: "dataengine.receipt_ttl", Kind: "duration", Default: "720h", Min: "1ns", Starter: true, Example: "720h"},
 		{Name: "dataengine.wal.dir", Kind: "string", Help: "不写取 data/wal/dataengine/<sid>", Starter: true, Example: "data/wal/dataengine"},
-		{Name: "dataengine.wal.writer_version", Kind: "int", Default: "2", Min: "1", Max: "2", Starter: true, Example: "2"},
 		{Name: "dataengine.wal.segment_bytes", Kind: "int", Min: "0", Starter: true, Example: "268435456"},
 		{Name: "dataengine.wal.max_disk_bytes", Kind: "int", Min: "0", Starter: true, Example: "8589934592"},
 		{Name: "dataengine.wal.max_unacked_age", Kind: "duration", Min: "0", Starter: true, Example: "24h"},

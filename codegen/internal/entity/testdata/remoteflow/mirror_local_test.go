@@ -36,7 +36,6 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
-
 	"github.com/tjbdwanghaibo/roost-core/app"
 	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/dataengine/engine"
@@ -1010,7 +1009,6 @@ func runLocalOwner(t *testing.T) {
 	}
 	holding := &holdingStore{MongoStore: store, held: make(chan struct{}, 1)}
 	opts := nestwal.DefaultOptions(os.Getenv("ROOST_MIRROR_WAL"))
-	opts.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(opts)
 	if err != nil {
 		t.Fatal(err)

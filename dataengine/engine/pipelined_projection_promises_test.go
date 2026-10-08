@@ -21,7 +21,6 @@ import (
 func newPipelinedProjector(t *testing.T, mutate func(*nestwal.Options)) (*Projector, *projectorOutboxFake) {
 	t.Helper()
 	opts := nestwal.DefaultOptions(t.TempDir())
-	opts.WriterVersion = nestwal.WriterVersionV2
 	if mutate != nil {
 		mutate(&opts)
 	}

@@ -1,5 +1,7 @@
 # 03 DataEngine 实现
 
+**2026-10-08 WAL 单路径更新：**维护者授权去掉旧逻辑/格式兼容。当前仅支持 codec 7；无 writer_version 开关；Mutation 只有 Key/Kind/ExpectedVersion/NextVersion 等正式字段；删除 nestwal.Committer/OpenRuntime，统一由 engine.Projector/Assembly 提交和恢复。旧 codec 5/6 明确拒绝，不自动修改旧文件；升级及测试对应关系见 [收敛方案](../../feature/REFACTOR-2026-10-08-wal-single-path.md)。下方 tag 基线的历史结构/行号不能作为当前接口使用。
+
 **2026-10-08更新：** `nestwal/inspect.go`只读扫描和校验，`inspect_snapshot.go`完整副本/哈希/INCOMPLETE标记；不调用会自动修尾的Open。 历史条目与验收边界见[本轮收口](../../feature/REFACTOR-2026-10-08-historical-closure.md)。下方旧版本行号保留原时点。
 
 
@@ -20,7 +22,7 @@
 | --- | --- |
 | `dataengine/` | 契约：mutation / record / tracker / 校验 / 加载器 / lease fence |
 | `dataengine/engine/` | 实现：Assembly、Runtime、Projector、MongoStore、EntityRepository、MigrationRunner、删除准入、Outbox |
-| `nestwal/` | WAL、checkpoint、codec、pipelined 票据、effect 发布与收件箱、通用 Committer |
+| `nestwal/` | WAL、checkpoint、codec、pipelined 票据、effect 发布与收件箱 |
 | `kit/dataengine/` | Mod：配置、依赖、生命周期转发、fatal → fence |
 | `nest/`（`transaction.go`、`rollback.go`、`persist_change.go`、`execution.go`） | 持久模式、提交点、回滚事务、持久变化登记 |
 | `codegen/internal/dao/`、`cmd/glsvet`（A1 部分） | 生成 DAO 的持久化参与者形状；A1 静态提示 |
@@ -39,7 +41,7 @@
 | --- | --- |
 | `doc.go` | 包说明：DAO 只登记变化，Nest 锁内冻结，engine 负责 WAL 与投影 |
 | `mutation_types.go` | `TransactionID`、`Durability`、`MutationKind`、`DocumentKey`、`FieldPatch`、`Mutation`、`Effect`、`Receipt`、`CommitRecord`、克隆函数、`SyncFieldMeta` |
-| `validate.go` | `CanonicalizeMutation`（v1 全量 → 规范形式）、`ValidateMutation`、`ValidateCommitRecord`、patch 路径校验 |
+| `validate.go` | `ValidateMutation`、`ValidateCommitRecord`、patch 路径校验 |
 | `tracker.go` | `Tracker`：已接受持久版本 + 服务间 / 客户端同步脏掩码；快照与恢复 |
 | `load.go` | `Store` 读接口、`RawDocument`、按依赖分层并发的 `Loader`（启动批量加载模板） |
 | `lease_fence.go` | lease fence 回执编码 / 解码、协调文档谓词与确认写、`ErrFencedEntityPending` |
@@ -78,14 +80,12 @@
 | --- | --- |
 | `wal.go` | `WAL`：Open / Append / Enqueue / Ack / Replay / Sync / Close，writer loop、组提交、轮转、尾部恢复、terminal |
 | `checkpoint.go` | 双槽 ack checkpoint 文件 |
-| `codec.go` | 记录编解码 v1（codec 5）/ v2（codec 6）、规范化 |
-| `committer.go` | 通用 `Committer`（`MutationApplier` + `EffectPublisher`），可取消的 flush / replay 槽 |
-| `runtime.go` | `OpenRuntime`：WAL + Committer 一体装配 |
+| `codec.go` | 唯一 codec 7 编解码与校验，拒绝旧 codec 5/6 |
 | `jetstream_publisher.go` | `EffectEnvelope`、按 effect ID 作 MsgID 的发布器 |
 | `effect_inbox.go` | Mongo 效果收件箱与 JetStream 消费者装配 |
 | `lock_*.go`、`dirsync_*.go` | 目录文件锁、目录元数据 fsync（平台相关） |
 
-`nestwal.Committer` / `OpenRuntime` 在仓内**没有生产调用方**（只有测试），生产路径是 `engine.Projector`。它保留为不依赖 Mongo 的独立 committer。
+2026-10-08 删除独立 `nestwal.Committer` / `OpenRuntime`。提交与投影统一走 `engine.Projector`，装配由 `engine.Assembly` 负责。
 
 ### 1.4 其余
 
@@ -116,7 +116,7 @@
 
 | 类型 | 位置 | 要点 |
 | --- | --- | --- |
-| `Mutation` | `dataengine/mutation_types.go:69-88` | 规范字段 `Key/Kind/ExpectedVersion/NextVersion/Mask/Schema/Codec/Data/Patch/Remote`；旧字段（`EntityID`…`Version`）只为 v1 兼容，与规范字段混用即 `ErrMixedMutationForms`（`dataengine/validate.go:33-38`） |
+| `Mutation` | `dataengine/mutation_types.go:69-88` | 规范字段 `Key/Kind/ExpectedVersion/NextVersion/Mask/Schema/Codec/Data/Patch/Remote`；旧字段与转换入口已删除 |
 | `ValidateMutation` | `dataengine/validate.go:66-106` | `NextVersion == ExpectedVersion+1`；Put 有 Data 无 Patch；Patch 需 `ExpectedVersion > 0`；Delete 无 Data 无 Patch；Remote 时与 `RemoteCommit` 头交叉校验 |
 | `CommitRecord` | `dataengine/mutation_types.go:108-117` | 一条 WAL 记录；`Empty()` 含 receipt（`dataengine/mutation_types.go:119-121`） |
 | `Tracker` | `dataengine/tracker.go:7-12` | `version` 只经 `AcceptVersion`（`dataengine/tracker.go:25-30`，CAS expected→expected+1）或 `AdvanceVersion`（`dataengine/tracker.go:35-51`，Remote 跳号）前进 |
@@ -154,12 +154,11 @@
 
 | 类型 | 位置 | 要点 |
 | --- | --- | --- |
-| `Options` / 缺省 | `nestwal/wal.go:43-91` | 段 256MiB、记录 16MiB、队列 8192、批 256 条 / 4MiB / 500µs、组提交 10ms、保留 2 段、磁盘 8GiB、未确认 24h；`WriterVersion` 缺省 v1（kit 改成 v2，`kit/dataengine/mod.go:183-187`） |
+| `Options` / 缺省 | `nestwal/wal.go:43-91` | 段 256MiB、记录 16MiB、队列 8192、批 256 条 / 4MiB / 500µs、组提交 10ms、保留 2 段、磁盘 8GiB、未确认 24h；格式固定为 codec 7，不再配置 WriterVersion |
 | `WAL` | `nestwal/wal.go:113-170` | 锁序 `stateMu → ticketMu`（`nestwal/wal.go:148-153`）；`terminalErr` 是 CAS 一次写入的原子指针 |
 | `appendRequest` | `nestwal/wal.go:174-185` | `reserved` 表示容量已在 Enqueue 预留、此后不得拒绝；`barrier` 是 Sync 屏障 |
 | `walTicket` | `nestwal/wal.go:189-204` | err 先写、后关 done |
 | `checkpointState` | `nestwal/checkpoint.go:20-23` | `generation` 决定写哪个槽 |
-| `Committer` | `nestwal/committer.go:101-146` | `flushSem` / `replaySem` 是单槽信号量（可取消等待） |
 | `EffectEnvelope` | `nestwal/jetstream_publisher.go:18-25` | effect 的线上 JSON |
 
 ### 2.5 驱动、versionstore、cache
@@ -464,7 +463,7 @@ stateDiagram-v2
 | I7 | `Sync` 返回 nil 时，调用前已返回的每张票据都 durable；关闭中不提前返回 | `nestwal/wal.go:629-692` | `TestWALSyncPromiseCoversAdmittedTickets`、`TestWALSyncPromiseDoesNotBlockAfterClose`（`sync_barrier_promises_test.go`）、`TestWALSyncPromiseWaitsForDrainWhileClosing`、`TestWALSyncPromiseAfterCompletedClose`（`sync_closing_promises_test.go`） |
 | I8 | 尾部只在最后一段、坏点 ≥ checkpoint、形态为撕裂尾帧或全零时截断；否则 `ErrCorrupt` 且不改文件 | `nestwal/wal.go:1099-1144` | `TestOpenTruncatesZeroFilledTailOfLastSegment` 等 6 项（`zero_tail_promises_test.go`）、`TestOpenRefusesFrameWhosePayloadPageWasNotWrittenBack`（`torn_page_tail_promises_test.go`）、`TestWALRecoversTornTail`、`TestOpenRefusesSegmentGapsAndUnacknowledgedTruncation`（`corruption_promises_test.go`） |
 | I9 | WAL 目录单写者；Close 等在途 Replay / Ack 退出才交出目录锁 | `nestwal/wal.go:222-229`、`nestwal/wal.go:1027-1030` | `TestWALDirectoryLock`（`wal_test.go`）、`TestCloseRetainsDirectoryUntilExternalReplayReturns`（`close_replay_test.go`） |
-| I10 | 投影不越过仍持实体锁的事务；held 只在全部锁释放后清除 | `dataengine/engine/projector_replay.go:37-39`；`nest/execution.go:326-333`、`nest/execution.go:355-358` | `TestMultiCheckpointFlushesBeforeHeldAndOnCancel`（`batch_limits_test.go`）、`TestPipelinedCommitIsProjectedOnceDurableWithoutWaitingForIdlePoll`、`TestCommitterWaitsForEntityRelease`、`TestCommitterEnqueueHoldsReplayUntilReleased`（nestwal） |
+| I10 | 投影不越过仍持实体锁的事务；held 只在全部锁释放后清除 | `dataengine/engine/projector_replay.go:37-39`；`nest/execution.go:326-333`、`nest/execution.go:355-358` | `TestMultiCheckpointFlushesBeforeHeldAndOnCancel`（`batch_limits_test.go`）、`TestPipelinedCommitIsProjectedOnceDurableWithoutWaitingForIdlePoll`、`TestProjectorSinglePathHoldsRetriesAndSerializesReplay` |
 | I11 | ack 只推进连续成功前缀；ack 失败后本轮停止、不被 held 哨兵掩盖 | `dataengine/engine/projector_replay.go:72-101`、`dataengine/engine/projector_replay.go:160-161` | `TestProjectorAcknowledgesSuccessfulPrefixBeforeLaterSegmentFailure`、`TestProjectorStopsAfterSegmentAckFailure`、`TestProjectorAckFailureOverridesHeldReplaySentinel`（`projector_test.go`）、`TestMultiCheckpointLossKeepsEntireSuccessfulPrefix`、`TestMultiCheckpointCancellationConfirmsOnlySuccessfulPrefix`、`TestRemoteProjectionFailureOnlyAcknowledgesPrefixAndReplaysSuffix` |
 | I12 | 单文档快路径（没有事务标记）的记录投影后立即 ack | `dataengine/engine/projector_replay.go:171-179` | `TestMarkerlessSingleRecordStillCheckpointsImmediately`、`TestRealProjectionOnlyMongoAckFailureRestartPreservesSameEntityOrder`（kit integration） |
 | I13 | 版本 CAS：无基准的 Put 要求 `_version` 不存在；不匹配时只有 `_version==Next && _last_tx==tx` 算已应用，否则 fatal 冲突；旧 Put 不能复活墓碑 | `dataengine/engine/mongo_store.go:217-222`、`dataengine/engine/mongo_store.go:258-269` | `TestMongoStorePatchExactVersionAndReplay`、`TestMongoStoreOlderPutCannotReviveTombstone`、`TestMongoStoreNewerPutRevivesTombstoneAtHigherVersion`（`mongo_store_test.go`）、`TestRealPatchConflictFencesWithoutFullFallback` |
@@ -481,13 +480,13 @@ stateDiagram-v2
 | I24 | 迁移先校验（BSON、`_id`、目标 DAO 能解码）后写 WAL，并等投影；Remote 信封拒绝 | `dataengine/engine/migration_runner.go:56-106` | `TestMigrationRunnerValidatesBeforeCommit`、`TestMigrationRunnerRejectsRemoteEnvelopeWithoutOwnershipLease`、`TestEntityRepositoryGivesUpAfterThreeNonConvergingMigrations`、`TestRealLoadAndMigrationRestoresTrackerVersion` |
 | I25 | 删除：事务内准入后才摘内存；快 worker 上 Remote 删除是明确拒绝而非未知；准入 panic 视为未知并 fence | `dataengine/engine/entity_delete.go:27-188` | `TestDataEngineDeleteDefersMemoryRemovalUntilTransactionAdmission`、`TestDataEngineDeleteRollbackLeavesEntityLive`、`TestFastWorkerRemoteDeleteIsDefiniteRejection`、`TestDataEngineDeleteAdmissionPanicFencesAndStopsServingEntity` |
 | I26 | 停机三步：超时返回错误并保留资源；重试只等未停组件；Assembly 停完才忘掉 Runtime；WAL 由 Runtime / Assembly 拥有 | `dataengine/engine/runtime.go:158-200`；`dataengine/engine/assembly.go:191-217` | `TestAssemblyKeepsTheRuntimeUntilShutdownCompletes`、`TestAssemblyOwnsWALWhenProjectorDoesNot`、`TestRuntimeConcurrentShutdownHonorsDeadline`、`TestAssemblyRetriedShutdownHandsOverWALWithoutCheckpointRegression`、`TestAssemblyCanceledRecoveryRetainsCleanupOwnership` |
-| I27 | 可取消等待：生命周期、Flush、Replay 的串行门在调用方 ctx 内等；取消不影响当前持有者 | `dataengine/engine/operation_gate.go:15-33`；`nestwal/committer.go:554-563` | `TestProjectorWaitsRespectDeadline`、`TestProjectorShutdownDeadlineBehindBackgroundProjection`（`shutdown_deadline_test.go`）、`TestCommitterShutdownPromiseHonoursDeadlineWhileReplayBusy`、`TestCommitterFlushPromiseHonoursDeadlineBehindAnotherFlush` |
+| I27 | 可取消等待：生命周期、Flush、Replay 的串行门在调用方 ctx 内等；取消不影响当前持有者 | `dataengine/engine/operation_gate.go:15-33` | `TestProjectorWaitsRespectDeadline`、`TestProjectorShutdownDeadlineBehindBackgroundProjection`（`shutdown_deadline_test.go`） |
 | I28 | outbox：认领按 lease_token CAS；ack / nack 须持有当前租约；发布失败不阻塞投影与 WAL ack | `dataengine/engine/outbox_store.go:57-128`；`dataengine/engine/projector.go:95-97`（outbox 不在 ack 路径） | `TestMongoOutboxStoreClaimTakesLeaseByTokenCAS`、`TestMongoOutboxStoreAckRequiresMatchingLease`、`TestProjectorAckNotBlockedByPublisherFailure`、`TestNATSOutageDoesNotBlockProjectionAndBacklogRecoversByEffectID`、`TestToxicNATSConnectionResetDeliversTheEffectExactlyOnce` |
 | I29 | effect 收件箱：回执与业务写同一事务；digest 不同即冲突；handler 失败不留回执 | `nestwal/effect_inbox.go:78-114` | `TestMongoEffectInboxDeduplicatesAndRejectsIdentityConflict`、`TestMongoEffectInboxHandlerFailureLeavesNoReceipt`、`TestMongoEffectInboxSurvivesTransactionRetry` |
 | I30 | 结果未知不回滚、fence 引擎；准入后 Accept 失败同属未知 | `nest/execution.go:45-47`、`nest/execution.go:289-305`、`nest/execution.go:344-348`、`nest/execution.go:386-389`；`nest/persist_change.go:321-323`；`kit/dataengine/mod.go:460-479` | `TestPipelinedIndeterminateAbandonsWithoutRollback`、`TestAcceptFailureAfterAdmissionIsIndeterminate`、`TestPipelinedAcceptFailureDoesNotRollbackAndFencesNest`（`nest/persist_change_test.go`）、`TestModFatalFencesNestAndSignalsApplication`（`kit/dataengine/fatal_fence_test.go`） |
 | I31 | `Emit` 与删除意图把 memory 事务升为 strict | `nest/rollback.go:355-357`、`nest/rollback.go:247-249` | `TestEmitUpgradesTransactionToStrictDurability`（`nest/nest_test.go:1125`） |
 | I32 | 回滚恢复 DAO 的 tracker（版本与同步掩码）；`AcceptVersion` 只接受 expected+1 | `nest/persist_change.go:71-78`；`nest/rollback.go:980-1013`；`dataengine/tracker.go:25-30` | `TestRollbackRestoresDataEngineTracker`、`TestTrackerAcceptVersionIsConsecutiveAndCompareAndSwap`、`TestTrackerSnapshotRestoreCoversVersionAndSyncState` |
-| I33 | mutation / record 进 WAL 前规范化并校验；WAL v1 写不出 v2 特性；kit 缺省写 v2 | `nestwal/codec.go:57-79`、`nestwal/codec.go:95-108`；`kit/dataengine/mod.go:183-187` | `TestValidateMutationRefusesEachMalformedShape`、`TestValidateCommitRecordRefusesEachMalformedPart`、`TestWriterV1RefusesEveryV2OnlyFeature`、`TestDataEngineModDefaultsToCanonicalWALWriterV2` |
+| I33 | mutation / record 入 WAL 前校验；只有 codec 7，拒绝旧格式且保留原件 | `nestwal/codec.go`、`dataengine/validate.go` | `TestValidateMutationRefusesEachMalformedShape`、`TestValidateCommitRecordRefusesEachMalformedPart`、`TestRetiredFormatsLeaveWALUntouched`、`TestWALDefaultWriterReplaysPatch` |
 | I34 | A1：组件不登记 undo、不写非 DAO 字段（`hint:`，不计失败）；skill 各包零提示 | `cmd/glsvet/main.go:687-740`；`cmd/glsvet/componentfields.go:30`、`cmd/glsvet/componentfields.go:275-290` | `TestComponentRecordingItsOwnUndoIsHinted`、`TestComponentRecordingUndoThroughHelperIsHinted`、`TestSkillPackagesGetNoComponentUndoHint`（`cmd/glsvet/main_test.go`）、`TestComponentFieldWritesOutsideTheDaoAreHinted`、`TestSkillPackagesGetNoComponentFieldHint` |
 | I35 | `nopersist,nosync` 字段参与 undo 与快照，不进提交记录与同步 | `codegen/internal/dao/template_dao.go:100-106`（mark 为空）、`:510-` 快照 | `TestATransientFieldRollsBackWithTheTransaction`、`TestATransientFieldNeverReachesTheCommitRecordOrSync`、`TestATransientFieldIsInTheStateSnapshot`（`codegen/internal/dao/testdata/runtime/transient_test.go`） |
 | I36 | Redis 写 / 脚本 / 含写 pipeline / DistLock 不经驱动重放；只在确定没执行时重发；读命令保留驱动重试 | `redis/driver/replay.go:36-149`；`redis/driver/client.go:355`、`redis/driver/client.go:384-420`；`redis/driver/pipeline.go:115-124`；`redis/driver/lock.go:111` | `TestAWriteWhoseReplyIsLostIsNotReplayedByTheDriver`、`TestNotExecutedErrorsAreStillResent`、`TestAPipelineWithAnExecutedCommandIsNotResent`、`TestReadsKeepTheDriverRetry`、`TestIsDefinitelyNotExecuted`（`write_no_replay_promises_test.go`）、`TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver`、`TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`、`TestRealRedisAWriteWhoseReplyIsLostRunsOnce` |
@@ -549,7 +548,7 @@ stateDiagram-v2
 | Outbox `lifecycleMu` | Start / Close | 短临界区，不等在途工作（等待在 `done` 上，受 ctx 约束） |
 | Repository `flightMu` / `hookMu` | flight 表、回调表 | 回调在锁外执行 |
 
-`operation.Lifetime`（Projector、WAL、Committer 都有一个）负责“停止准入 + 等在途调用退出”，`Close` 先 `Stop()` 再等 `drained`，受调用方 ctx 约束（`dataengine/engine/projector.go:508-514`）。
+`operation.Lifetime`（Projector、WAL 各有一个）负责“停止准入 + 等在途调用退出”，`Close` 先 `Stop()` 再等 `drained`，受调用方 ctx 约束（`dataengine/engine/projector.go:508-514`）。
 
 ### 5.3 与 Nest 的交界
 

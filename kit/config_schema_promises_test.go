@@ -119,7 +119,6 @@ func TestKitModsRefuseOutOfRangeValuesAtLoadAndAtStartup(t *testing.T) {
 	}{
 		{"outbox_workers_negative", "dataengine:\n  outbox:\n    workers: -1\n", "dataengine.outbox.workers must be positive", func() declaredMod { return kitdataengine.NewMod() }},
 		{"effects_replicas_negative", "dataengine:\n  effects:\n    replicas: -3\n", "dataengine.effects.replicas must be positive", func() declaredMod { return kitdataengine.NewMod() }},
-		{"wal_writer_version", "dataengine:\n  wal:\n    writer_version: 3\n", "dataengine.wal.writer_version must be at most 2", func() declaredMod { return kitdataengine.NewMod() }},
 		{"redis_pool_negative", "redis:\n  pool_size: -1\n", "redis.pool_size must not be negative", func() declaredMod { return kitredis.NewRedisMod() }},
 		{"saga_workers_negative", "saga:\n  coordinator_workers: -4\n", "saga.coordinator_workers must be positive", func() declaredMod { return kitsaga.NewMod() }},
 		{"syncbus_storage_typo", "syncbus:\n  storage: flie\n", "syncbus.storage must be one of file, memory", func() declaredMod { return kitsyncbus.NewSyncBusMod(1000) }},

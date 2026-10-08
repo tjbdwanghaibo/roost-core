@@ -6,16 +6,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 )
 
-func TestPrepareCommitRecordCanonicalizesLegacyMutation(t *testing.T) {
+func TestPrepareCommitRecordPreservesMutationIdentity(t *testing.T) {
 	tx := NewRollbackTx(RollbackUndo)
 	tx.durability = DurabilityAsync
-	if err := tx.AddMutation(EntityMutation{
-		EntityID: 7,
-		Database: "game",
-		Resource: "hero",
-		Version:  5,
-		Data:     []byte{1},
-	}); err != nil {
+	if err := tx.AddMutation(EntityMutation{Key: dataengine.DocumentKey{ID: 7, Database: "game", Resource: "hero"}, Kind: dataengine.MutationPut, ExpectedVersion: 4, NextVersion: 5, Data: []byte{1}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -31,9 +25,6 @@ func TestPrepareCommitRecordCanonicalizesLegacyMutation(t *testing.T) {
 	}
 	mutation := record.Mutations[0]
 	if mutation.Kind != dataengine.MutationPut || mutation.Key.ID != 7 || mutation.ExpectedVersion != 4 || mutation.NextVersion != 5 {
-		t.Fatalf("mutation was not canonicalized: %+v", mutation)
-	}
-	if mutation.EntityID != 0 || mutation.Resource != "" || mutation.Version != 0 {
-		t.Fatalf("legacy mutation fields escaped prepare: %+v", mutation)
+		t.Fatalf("mutation identity changed: %+v", mutation)
 	}
 }

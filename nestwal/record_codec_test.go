@@ -46,30 +46,9 @@ func canonicalRecord(kind dataengine.MutationKind) corenest.CommitRecord {
 	}
 }
 
-func TestCodecV1DecodesLegacyFullAsCanonicalPut(t *testing.T) {
-	record := canonicalRecord(dataengine.MutationPut)
-	record.Effects[0].AvailableAt = 0
-	record.Receipts = nil
-	raw, err := encodeRecordVersion(record, WriterVersionV1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := decodeRecord(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mutation := got.Mutations[0]
-	if mutation.Kind != dataengine.MutationPut || mutation.Key != record.Mutations[0].Key || mutation.ExpectedVersion != 4 || mutation.NextVersion != 5 {
-		t.Fatalf("decoded v1 mutation=%+v", mutation)
-	}
-	if mutation.EntityID != 0 || mutation.Resource != "" || mutation.Version != 0 {
-		t.Fatalf("v1 compatibility fields escaped reader: %+v", mutation)
-	}
-}
-
-func TestCodecV2PatchRoundTrip(t *testing.T) {
+func TestCodecPatchRoundTrip(t *testing.T) {
 	want := canonicalRecord(dataengine.MutationPatch)
-	raw, err := encodeRecordVersion(want, WriterVersionV2)
+	raw, err := encodeRecord(want)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,11 +67,11 @@ func TestCodecV2PatchRoundTrip(t *testing.T) {
 	}
 }
 
-func TestCodecV2DeleteCarriesNoPayload(t *testing.T) {
+func TestCodecDeleteCarriesNoPayload(t *testing.T) {
 	want := canonicalRecord(dataengine.MutationDelete)
 	want.Effects = nil
 	want.Receipts = nil
-	raw, err := encodeRecordVersion(want, WriterVersionV2)
+	raw, err := encodeRecord(want)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,14 +85,8 @@ func TestCodecV2DeleteCarriesNoPayload(t *testing.T) {
 	}
 }
 
-func TestCodecV1RejectsV2OnlyRecord(t *testing.T) {
-	if _, err := encodeRecordVersion(canonicalRecord(dataengine.MutationPatch), WriterVersionV1); !errors.Is(err, ErrWriterVersionUnsupported) {
-		t.Fatalf("err=%v, want ErrWriterVersionUnsupported", err)
-	}
-}
-
 func TestCodecRejectsUnknownRecordVersion(t *testing.T) {
-	raw, err := encodeRecordVersion(canonicalRecord(dataengine.MutationPatch), WriterVersionV2)
+	raw, err := encodeRecord(canonicalRecord(dataengine.MutationPatch))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,9 +96,8 @@ func TestCodecRejectsUnknownRecordVersion(t *testing.T) {
 	}
 }
 
-func TestWALWriterVersionV2ReplaysPatch(t *testing.T) {
+func TestWALDefaultWriterReplaysPatch(t *testing.T) {
 	opts := testOptions(t.TempDir())
-	opts.WriterVersion = WriterVersionV2
 	w, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)

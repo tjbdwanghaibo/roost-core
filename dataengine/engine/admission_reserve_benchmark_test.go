@@ -14,7 +14,6 @@ import (
 // RR-20260926-30 在这里加了原生步骤的实体屏障检查，用它做同机前后对照。
 func BenchmarkProjectorReserveDiscard(b *testing.B) {
 	options := nestwal.DefaultOptions(b.TempDir())
-	options.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(options)
 	if err != nil {
 		b.Fatal(err)

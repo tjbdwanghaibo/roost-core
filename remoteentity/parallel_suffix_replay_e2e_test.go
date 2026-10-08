@@ -66,7 +66,6 @@ func TestParallelWindowReplaysSucceededSuffixUnderNewerFence(t *testing.T) {
 		t.Fatal("premise: formal MongoStore + Backend must enable parallel Remote projection")
 	}
 	walOptions := nestwal.DefaultOptions(t.TempDir())
-	walOptions.WriterVersion = nestwal.WriterVersionV2
 	walOptions.GroupCommitInterval = time.Millisecond
 	wal, err := nestwal.Open(walOptions)
 	if err != nil {

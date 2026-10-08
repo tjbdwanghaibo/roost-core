@@ -3,6 +3,7 @@ package nestwal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,9 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
+var ErrEffectPublisherRequired = errors.New("nestwal: effect publisher is required")
+
+// JetStreamEffectPublisher 供正式 DataEngine outbox 使用，以 effect ID 去重发布。
 type JetStreamEffectPublisher struct {
 	client fnats.IJetStream
 	prefix string
@@ -47,5 +51,3 @@ func (p *JetStreamEffectPublisher) PublishEffect(ctx context.Context, txID coren
 	_, err = p.client.Publish(ctx, subject, payload, fnats.JetStreamPublishOptions{MsgID: effect.ID})
 	return err
 }
-
-var _ EffectPublisher = (*JetStreamEffectPublisher)(nil)

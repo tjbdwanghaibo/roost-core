@@ -33,7 +33,6 @@ func TestOpenRefusesEachInvalidOption(t *testing.T) {
 		want   string
 	}{
 		{"blank directory", func(o *Options) { o.Dir = "  " }, "directory is required"},
-		{"unknown writer version", func(o *Options) { o.WriterVersion = 9 }, "unsupported writer version 9"},
 		{"negative retain", func(o *Options) { o.RetainSegments = -1 }, "retain segments cannot be negative"},
 		{"segment smaller than a record", func(o *Options) { o.SegmentBytes = 512; o.MaxRecordBytes = 600 }, "segment must be larger than maximum record"},
 		{"segment too small for a frame header", func(o *Options) { o.SegmentBytes = frameHeaderSize; o.MaxRecordBytes = 1 }, "segment must be larger than maximum record"},
@@ -75,10 +74,8 @@ func TestAppendRefusesRecordsTheLogCannotHold(t *testing.T) {
 
 	many := testRecord(3, corenest.DurabilityStrict)
 	many.Effects = make([]corenest.Effect, maxEntryCount+1)
-	_, err = encodeRecordVersion(many, WriterVersionV2)
+	_, err = encodeRecord(many)
 	expectErr(t, err, "too many entries in commit record")
-	_, err = encodeRecordVersion(testRecord(4, corenest.DurabilityStrict), 7)
-	expectErr(t, err, "invalid writer version 7")
 }
 
 // Acknowledgements move the replay checkpoint; a fence that names nothing or

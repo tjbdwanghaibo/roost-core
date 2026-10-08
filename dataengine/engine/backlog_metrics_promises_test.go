@@ -2,10 +2,11 @@ package engine
 
 import (
 	"context"
-	"github.com/tjbdwanghaibo/roost-core/metrics"
-	"github.com/tjbdwanghaibo/roost-core/nestwal"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/nestwal"
 )
 
 func requireBacklogGauge(t *testing.T, name string, want int64) {
@@ -20,7 +21,6 @@ func requireBacklogGauge(t *testing.T, name string, want int64) {
 func TestProjectionAdmissionAndAckPublishBacklogGauge(t *testing.T) {
 	metrics.DefaultRegistry().Reset()
 	opts := nestwal.DefaultOptions(t.TempDir())
-	opts.WriterVersion = nestwal.WriterVersionV2
 	w, err := nestwal.Open(opts)
 	if err != nil {
 		t.Fatal(err)

@@ -318,7 +318,6 @@ func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis 
 	}
 	rig.projector = &rejectingProjection{MongoStore: store, client: mongo, backend: backend, manager: assembly.Manager}
 	opts := nestwal.DefaultOptions(t.TempDir())
-	opts.WriterVersion = nestwal.WriterVersionV2
 	if walOptions != nil {
 		walOptions(&opts)
 	}

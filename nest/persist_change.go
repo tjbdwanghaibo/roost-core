@@ -297,8 +297,8 @@ func (tx *RollbackTx) preparePersistence() error {
 		if err != nil {
 			return err
 		}
-		canonical, err := dataengine.CanonicalizeMutation(mutation)
-		if err != nil {
+		canonical := dataengine.CloneMutation(mutation)
+		if err := dataengine.ValidateMutation(canonical); err != nil {
 			return err
 		}
 		if err := tx.AddMutation(canonical); err != nil {

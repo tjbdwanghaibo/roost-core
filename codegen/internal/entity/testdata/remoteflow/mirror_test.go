@@ -29,7 +29,6 @@ import (
 	gonats "github.com/nats-io/nats.go"
 	gojs "github.com/nats-io/nats.go/jetstream"
 	"github.com/spf13/viper"
-
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -140,7 +139,6 @@ func newGuildOwner(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis
 		t.Fatal(err)
 	}
 	opts := nestwal.DefaultOptions(t.TempDir())
-	opts.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(opts)
 	if err != nil {
 		t.Fatal(err)

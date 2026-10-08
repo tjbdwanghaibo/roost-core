@@ -6,10 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
@@ -22,15 +22,10 @@ func testRecord(sequence byte, durability corenest.DurabilityPolicy) corenest.Co
 		RequestID:  "request",
 		CreatedAt:  123,
 		Durability: durability.Record(),
-		Mutations: []corenest.EntityMutation{{
-			EntityID: int64(sequence) + 1,
-			Database: "game",
-			Resource: "players",
-			Version:  uint64(sequence),
-			Mask:     3,
-			Schema:   2,
-			Codec:    "bson",
-			Data:     []byte{sequence, 1, 2, 3},
+		Mutations: []corenest.EntityMutation{{Key: dataengine.DocumentKey{ID: int64(sequence) + 1, Database: "game", Resource: "players"}, Kind: dataengine.MutationPut, ExpectedVersion: (uint64(sequence)) - 1, NextVersion: uint64(sequence), Mask: 3,
+			Schema: 2,
+			Codec:  "bson",
+			Data:   []byte{sequence, 1, 2, 3},
 		}},
 		Effects: []corenest.Effect{{
 			ID:      id.String() + ":1",
@@ -341,100 +336,6 @@ func TestWALCloseDrainsAdmittedAppends(t *testing.T) {
 	}
 	if w.Stats().Appended != total {
 		t.Fatalf("appended=%d want=%d", w.Stats().Appended, total)
-	}
-}
-
-func TestCommitterRetriesAndFlushesOutbox(t *testing.T) {
-	w, err := Open(testOptions(t.TempDir()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var applyCalls atomic.Int32
-	var publishCalls atomic.Int32
-	applier := MutationApplyFunc(func(context.Context, corenest.TransactionID, corenest.EntityMutation) error {
-		applyCalls.Add(1)
-		return nil
-	})
-	publisher := EffectPublishFunc(func(context.Context, corenest.TransactionID, corenest.Effect) error {
-		if publishCalls.Add(1) == 1 {
-			return errors.New("temporary publish failure")
-		}
-		return nil
-	})
-	opts := DefaultCommitterOptions()
-	opts.RetryMin = time.Millisecond
-	opts.RetryMax = 5 * time.Millisecond
-	committer, err := NewCommitter(w, applier, publisher, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer committer.Close(context.Background())
-	record := testRecord(9, corenest.DurabilityStrict)
-	if err := committer.Commit(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
-	committer.TransactionReleased(record.ID)
-	deadline, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	for {
-		err = committer.Flush(deadline)
-		if err == nil {
-			break
-		}
-		if deadline.Err() != nil {
-			t.Fatalf("flush: %v", err)
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if applyCalls.Load() < 2 || publishCalls.Load() < 2 {
-		t.Fatalf("apply=%d publish=%d, expected at-least-once retry", applyCalls.Load(), publishCalls.Load())
-	}
-	count := 0
-	if err := w.Replay(context.Background(), func(corenest.CommitFence, corenest.CommitRecord) error {
-		count++
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Fatalf("unacknowledged records=%d", count)
-	}
-}
-
-func TestCommitterWaitsForEntityRelease(t *testing.T) {
-	w, err := Open(testOptions(t.TempDir()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var calls atomic.Int32
-	applier := MutationApplyFunc(func(context.Context, corenest.TransactionID, corenest.EntityMutation) error {
-		calls.Add(1)
-		return nil
-	})
-	publisher := EffectPublishFunc(func(context.Context, corenest.TransactionID, corenest.Effect) error { return nil })
-	opts := DefaultCommitterOptions()
-	opts.RetryMin = time.Millisecond
-	committer, err := NewCommitter(w, applier, publisher, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer committer.Close(context.Background())
-	record := testRecord(10, corenest.DurabilityStrict)
-	if err := committer.Commit(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(20 * time.Millisecond)
-	if calls.Load() != 0 {
-		t.Fatalf("mutation applied %d times while entity was still locked", calls.Load())
-	}
-	committer.TransactionReleased(record.ID)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := committer.Flush(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if calls.Load() != 1 {
-		t.Fatalf("mutation apply calls=%d, want 1", calls.Load())
 	}
 }
 

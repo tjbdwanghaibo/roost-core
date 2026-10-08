@@ -100,7 +100,6 @@ func BenchmarkBroadcastPipelinedCommit(b *testing.B) {
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			opts := nestwal.DefaultOptions(b.TempDir())
-			opts.WriterVersion = nestwal.WriterVersionV2
 			opts.SegmentBytes = 1 << 30
 			wal, err := nestwal.Open(opts)
 			if err != nil {

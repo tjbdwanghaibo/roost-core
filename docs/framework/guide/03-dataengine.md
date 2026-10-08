@@ -1,5 +1,7 @@
 # 03 DataEngine 说明
 
+**2026-10-08 WAL 单路径更新：**维护者授权去掉旧逻辑/格式兼容。当前仅支持 codec 7；无 writer_version 开关；Mutation 只有 Key/Kind/ExpectedVersion/NextVersion 等正式字段；删除 nestwal.Committer/OpenRuntime，统一由 engine.Projector/Assembly 提交和恢复。旧 codec 5/6 明确拒绝，不自动修改旧文件；升级及测试对应关系见 [收敛方案](../../feature/REFACTOR-2026-10-08-wal-single-path.md)。下方 tag 基线的历史结构/行号不能作为当前接口使用。
+
 **2026-10-08更新：** 增加停机WAL只读检查及完整隔离副本，使用`cmd/walinspect`，不自动修尾/跳过/推进checkpoint。 历史条目与验收边界见[本轮收口](../../feature/REFACTOR-2026-10-08-historical-closure.md)。下方旧版本行号保留原时点。
 
 
@@ -405,7 +407,6 @@ if errors.Is(err, versionstore.ErrOutcomeUnknown) {
 | `dataengine.transaction_receipt_ttl` | 720h | > 0 | `_dataengine_transactions` 标记的 TTL；必须远大于 WAL 最长未确认时间 |
 | `dataengine.receipt_ttl` | 720h | > 0 | 业务 receipt 未自带过期时的 TTL |
 | `dataengine.wal.dir` | `data/wal/dataengine/<sid>` | | WAL 目录；一个目录同时只能一个进程写（OS 文件锁） |
-| `dataengine.wal.writer_version` | 2 | 1～2 | 写格式；v1 写不出 Patch / Delete / receipt，生产用 2 |
 | `dataengine.wal.segment_bytes` | 256MiB | ≥ 0 | 段大小 |
 | `dataengine.wal.max_disk_bytes` | 8GiB | ≥ 0 | 磁盘上限：超过时 async / strict 准入拒绝、pipelined 同步拒绝；健康检查失败 |
 | `dataengine.wal.max_unacked_age` | 24h | ≥ 0 | 最老未确认记录的年龄上限，超过健康检查失败 |

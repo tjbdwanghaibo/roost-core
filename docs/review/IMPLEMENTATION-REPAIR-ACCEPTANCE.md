@@ -10,7 +10,7 @@ Superseded 的资源锁序为缓存分片锁到 tombMu；应避免逆向持锁�
 
 ## WAL：先等记录，再同步文件
 
-[wal.go](../../nestwal/wal.go) 的 Sync 先将 barrier 放入写队列，收到 writer 回答后才 syncActive。屏障结束 BatchDelay 收集，使已准入记录不能留在内存而 Sync 返回成功。Flush/Shutdown 在 [committer.go](../../nestwal/committer.go) 使用可取消的 semaphore 等待；超时是停止等待，不保证用户 applier 已退出。原真实文件和截止复现均通过，磁盘卡死与并发 Close 仍需另验。
+[wal.go](../../nestwal/wal.go) 的 Sync 先将 barrier 放入写队列，收到 writer 回答后才 syncActive。屏障结束 BatchDelay 收集，使已准入记录不能留在内存而 Sync 返回成功。Flush/Shutdown 在 `nestwal/committer.go`（历史实现，2026-10-08 已由[正式 Projector 路径](../feature/REFACTOR-2026-10-08-wal-single-path.md)取代） 使用可取消的 semaphore 等待；超时是停止等待，不保证用户 applier 已退出。原真实文件和截止复现均通过，磁盘卡死与并发 Close 仍需另验。
 
 ## 完成回调：事务已提交与后处理失败分开报告
 

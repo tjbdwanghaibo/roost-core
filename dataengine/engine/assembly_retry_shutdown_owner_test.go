@@ -29,7 +29,6 @@ func TestAssemblyRetriedShutdownHandsOverWALWithoutCheckpointRegression(t *testi
 	t.Cleanup(mongo.open)
 	cfg := AssemblyConfig{Mongo: MongoStoreConfig{DefaultDatabase: "game", ServerID: 1}}
 	cfg.WAL = nestwal.DefaultOptions(t.TempDir())
-	cfg.WAL.WriterVersion = nestwal.WriterVersionV2
 	cfg.WAL.GroupCommitInterval = time.Millisecond
 	cfg.Projector = ProjectorOptions{ManualReplay: true, CloseWAL: true}
 	cfg.Outbox = OutboxWorkerOptions{Owner: "b10"}

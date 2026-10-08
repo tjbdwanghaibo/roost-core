@@ -266,7 +266,6 @@ func TestFencedStepSkippedDuringStartupRecoveryNeedsNoEviction(t *testing.T) {
 	seedHero(t, collection, 4)
 	seedClaim(t, client, fencedClaim, "worker-1", 7, fencedDigest, time.Now().UTC().Add(-time.Second))
 	options := nestwal.DefaultOptions(t.TempDir())
-	options.WriterVersion = nestwal.WriterVersionV2
 	wal, err := nestwal.Open(options)
 	if err != nil {
 		t.Fatal(err)

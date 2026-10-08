@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
@@ -26,13 +27,8 @@ func crashRecord(sequence uint64) corenest.CommitRecord {
 		RequestID:  "crash",
 		CreatedAt:  time.Now().UnixNano(),
 		Durability: corenest.DurabilityPipelined.Record(),
-		Mutations: []corenest.EntityMutation{{
-			EntityID: int64(sequence),
-			Database: "game",
-			Resource: "players",
-			Version:  sequence,
-			Codec:    "bson",
-			Data:     []byte{byte(sequence), 1, 2, 3},
+		Mutations: []corenest.EntityMutation{{Key: dataengine.DocumentKey{ID: int64(sequence), Database: "game", Resource: "players"}, Kind: dataengine.MutationPut, ExpectedVersion: (sequence) - 1, NextVersion: sequence, Codec: "bson",
+			Data: []byte{byte(sequence), 1, 2, 3},
 		}},
 	}
 }

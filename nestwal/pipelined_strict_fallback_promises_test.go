@@ -1,7 +1,7 @@
 package nestwal_test
 
 // RR-20260928-11：pipelined handler 在 broadcast（没有提前放锁的闭包）或带 Remote 批次时不走 Enqueue，回退到 strict 提交路径，
-// 经 committer.Commit（kit 装配为 Projector.Commit，另有 nestwal.Committer.Commit）进入 WAL.Append，记录的 Durability 仍是 3。
+// 经 committer.Commit（正式装配为 Projector.Commit）进入 WAL.Append，记录的 Durability 仍是 3。
 // 修前 Append 只对 DurabilityStrict 置 requireSync：Durability 3 的记录与 async 一样在 fsync 之前返回，于是锁释放、Sync Confirm、
 // AfterCommit 都可能先于 fsync 对外可见，违反 pipelined “成功只在持久之后对外可见”的契约（NEST_PIPELINED_COMMIT.md §5 写明这些路径
 // “表现等同 Strict（锁内等待 durable）”）。承诺：
@@ -64,7 +64,6 @@ func (g *fsyncGate) release() { g.released.Do(func() { close(g.proceed) }) }
 func openGatedWAL(t *testing.T, gate *fsyncGate) *nestwal.WAL {
 	t.Helper()
 	opts := nestwal.DefaultOptions(t.TempDir())
-	opts.WriterVersion = nestwal.WriterVersionV2
 	// 关掉后台组提交刷盘：只剩 requireSync 的批次会 fsync，Syncs 的变化只来自被测的提交。
 	opts.GroupCommitInterval = time.Hour
 	nestwal.SetSyncFileForTest(&opts, gate.sync)

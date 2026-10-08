@@ -52,7 +52,6 @@ func projectionRecord(sequence byte, entityID int64, durability coredata.Durabil
 func TestWALTerminalWakesEntityProjectionWaiters(t *testing.T) {
 	failing := make(chan struct{})
 	opts := nestwal.DefaultOptions(t.TempDir())
-	opts.WriterVersion = nestwal.WriterVersionV2
 	opts.GroupCommitInterval = time.Hour
 	nestwal.SetSyncFileForTest(&opts, func(file *os.File) error {
 		select {
