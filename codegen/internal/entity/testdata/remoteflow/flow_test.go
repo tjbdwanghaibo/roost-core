@@ -166,6 +166,11 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 				t.Fatal(err)
 			}
 			cfg := remoteentity.DefaultConfig()
+			// 一个负载观察节点订阅每个实体的两个 DAO scope；这是实际建模容量，
+			// 不能沿用只容纳 16384 个 scope 的缺省 consumer 配额验收 10000×2。
+			cfg.SnapshotInterestKeys = max(cfg.SnapshotInterestKeys, len(ids)*2)
+			cfg.SnapshotInterestPerConsumer = max(cfg.SnapshotInterestSubs/16, len(ids)*2)
+			cfg.SnapshotInterestSubs = max(cfg.SnapshotInterestSubs, cfg.SnapshotInterestPerConsumer*2)
 			if os.Getenv("ROOST_REMOTE_WRITE_LIMIT") != "" {
 				cfg.MaxConcurrentWrites = remoteInt("ROOST_REMOTE_WRITE_LIMIT", 128)
 			}
