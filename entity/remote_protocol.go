@@ -389,16 +389,11 @@ func (s RemoteCommitStatus) Clone() RemoteCommitStatus {
 // 生成实现经 dataengine.Tracker.AdvanceVersion（原子 CAS，版本已相等时直接成功）满足该契约；手写实现与测试替身须自行
 // 保证（重复确认同一版本返回 nil、共享状态加锁或原子化）。
 type IRemoteCommitParticipant interface {
+	// HasRemoteCommitLocked 只读取本次事务的持久变更，不能使用跨事务的 Sync 脏位。
+	HasRemoteCommitLocked(RemoteTransactionOutcome) bool
 	BuildRemoteCommitLocked(RemoteWriteLease, RemoteTransactionOutcome) (RemoteCommit, error)
 	AcknowledgeRemoteCommit(RemoteCommit) error
 	RollbackRemoteCommit(RemoteCommit)
-}
-
-// IRemoteCommitChangeParticipant lets generated remote entities decide from
-// transaction-local changes whether a commit is necessary. Older generated
-// participants continue to use the legacy dirty check during rollout.
-type IRemoteCommitChangeParticipant interface {
-	HasRemoteCommitLocked(RemoteTransactionOutcome) bool
 }
 
 // IRemoteCommitter applies immutable commits with storage-side version and

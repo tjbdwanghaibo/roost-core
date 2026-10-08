@@ -239,7 +239,7 @@ Scene 实体 ─ OnInitFinish ─▶ sceneruntime.Runtime{ terrain, path_find } 
 ```
 Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶ 主体标脏 ─▶ Manager 记 pending
                                                                              │  每 50ms 一 tick
-主体 ─ PrepareTick(packer：delta 给在线者、快照给新订阅者) ─▶ 按会话聚合成一帧 ─▶ sceneLane.Push ─▶ TCP 推送 10103
+主体 ─ PrepareViews(packer：delta 给在线者、快照给新订阅者) ─▶ 按会话聚合成一帧 ─▶ sceneLane.Push ─▶ TCP 推送 10103
 客户端：scene_watch 装解码器 → scene_ready（服务端此前 held，不出帧）→ entitysync.DecodeFrame → DecodeSubjectUpdate → 合并进本地视图
 ```
 

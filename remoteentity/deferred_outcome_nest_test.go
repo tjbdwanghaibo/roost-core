@@ -50,7 +50,7 @@ func newDeferredOutcomeNestRig(t *testing.T, rawID int64, name string) *deferred
 	if err = syncMgr.Register(live.Sync()); err != nil {
 		t.Fatal(err)
 	}
-	rig.engine = nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithRemoteEntityManager(f.mgr), nest.NestOptionWithEntitySync(syncMgr), nest.NestOptionWithWorkerNumAndMsgCap(1, 16))
+	rig.engine = nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithRemoteEntityManager(f.mgr), nest.NestOptionWithEntitySync(syncMgr), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}))
 	rig.name = nest.NewHandlerName(name)
 	rig.engine.MustRegisterHandlerWithMeta(rig.name, func(_ []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		live.set("rejected", "")

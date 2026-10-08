@@ -1035,7 +1035,6 @@ func runLocalOwner(t *testing.T) {
 	defer func() { _ = runtime.Shutdown(context.Background()) }()
 	rename, remove := nest.NewHandlerName("mirror_local_rename"), nest.NewHandlerName("mirror_local_delete")
 	scheduler := nest.NewEngine(append(runtime.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithRemoteEntityManager(assembly.Manager),
-		nest.NestOptionWithWorkerNumAndMsgCap(2, 64),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}))...)
 	scheduler.MustRegisterHandlerWithMeta(rename, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
 		guild := es[0].(*Guild)

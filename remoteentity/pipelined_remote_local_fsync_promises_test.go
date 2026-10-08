@@ -65,7 +65,7 @@ func TestPipelinedRemoteBatchLocalRecordIsFsyncedBeforeVisible(t *testing.T) {
 					_, _ = f.mgr.ApplyRemoteCommits(context.Background(), commits[0].TransactionID, commits)
 				}
 				manager := boundedConfirmManager{Manager: f.mgr, fixture: f, confirm: 3 * time.Second, beforeWait: beforeWait}
-				engineMgr := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
+				engineMgr := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}),
 					nest.NestOptionWithRemoteEntityManager(manager), nest.NestOptionWithTransactionCommitter(projector))
 				name := nest.NewHandlerName("rr11_remote_local_fsync_" + durability.String() + "_" + outcome)
 				afterCommit := make(chan uint64, 2)

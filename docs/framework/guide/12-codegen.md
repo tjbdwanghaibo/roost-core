@@ -222,7 +222,7 @@ roost generate --force    # 内容不变也重写（缺省按内容哈希短路�
 
 | 标记 | 生成器 | 未知键 | 关键键（值都有校验） |
 | --- | --- | --- | --- |
-| `//roost:entity` | entity | **拒绝** | `id entityKind category remote(none\|managed) noPersist lifetime sync syncNamespace syncPacker subjectPacker`（`entity/parse.go:284`） |
+| `//roost:entity` | entity | **拒绝** | `id entityKind category remote(none\|managed) noPersist lifetime sync syncNamespace subjectPacker`（`entity/parse.go:284`） |
 | `//roost:mirror` | entity | **拒绝** | `entityKind coll`（`entity/mirror.go:38`） |
 | `//roost:web` | webroute | **拒绝** | `method path body`，三者必填（`webroute/parse.go:73`～`:99`） |
 | `//roost:register` | registry | **拒绝** | `phase order` |

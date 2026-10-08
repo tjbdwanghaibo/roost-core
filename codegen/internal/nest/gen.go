@@ -640,19 +640,19 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 	func (s *{{$.SenderType}}) Delay_{{trimHandler .Name}}(ctx context.Context, delay time.Duration, id int64{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
-		return client.Dispatch(ctx, handlerName{{trimHandler .Name}}, id, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}), nest.SendOptionWithDelay(delay){{if .IsCost}}, nest.SendOptionIsCost(){{end}})
+		return client.Dispatch(ctx, handlerName{{trimHandler .Name}}, id, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}), nest.SendOptionWithDelay(delay){{if .IsCost}}, nest.SendOptionSlow(){{end}})
 	}
 
 	func (s *{{$.SenderType}}) Send_{{trimHandler .Name}}(ctx context.Context, id int64{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
-		return client.Dispatch(ctx, handlerName{{trimHandler .Name}}, id, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIsCost(){{end}})
+		return client.Dispatch(ctx, handlerName{{trimHandler .Name}}, id, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionSlow(){{end}})
 	}
 
 	func (s *{{$.SenderType}}) Broadcast_{{trimHandler .Name}}(ctx context.Context, ids []int64{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
-		return client.DispatchBroadcast(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIsCost(){{end}})
+		return client.DispatchBroadcast(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionSlow(){{end}})
 	}
 
 	{{end}}
@@ -660,7 +660,7 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 	func (s *{{$.SenderType}}) Sync_{{trimHandler .Name}}(ctx context.Context, id int64{{range .Params}}, {{.Name}} {{.Type}}{{end}}) ({{if gt (len .Returns) 1}}{{range $i, $r := .Returns}}ret{{$i}} {{$r.Type}}, {{end}}{{else if .Ret.Have}}ret {{.Ret.Type}}, {{end}}err error) {
 		client, clientErr := s.nestClient()
 		if clientErr != nil { err = clientErr; return }
-		{{if gt (len .Returns) 0}}retXXX, errXXX{{else}}_, errXXX{{end}} := client.Request(ctx, handlerName{{trimHandler .Name}}, id, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIsCost(){{end}})
+		{{if gt (len .Returns) 0}}retXXX, errXXX{{else}}_, errXXX{{end}} := client.Request(ctx, handlerName{{trimHandler .Name}}, id, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionSlow(){{end}})
 		err = errXXX
 		if err != nil { return }
 		{{- if gt (len .Returns) 1}}
@@ -689,14 +689,14 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 		client, err := s.nestClient()
 		if err != nil { return err }
 		ids := []int64{ {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{end}} }
-		return client.DispatchMulti(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}), nest.SendOptionWithDelay(delay){{if .IsCost}}, nest.SendOptionIsCost(){{end}})
+		return client.DispatchMulti(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}), nest.SendOptionWithDelay(delay){{if .IsCost}}, nest.SendOptionSlow(){{end}})
 	}
 
 	func (s *{{$.SenderType}}) MultiSend_{{trimHandler .Name}}(ctx context.Context, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}} int64{{end}}{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
 		ids := []int64{ {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{end}} }
-		return client.DispatchMulti(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIsCost(){{end}})
+		return client.DispatchMulti(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionSlow(){{end}})
 	}
 
 	{{end}}
@@ -705,7 +705,7 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 		client, clientErr := s.nestClient()
 		if clientErr != nil { err = clientErr; return }
 		ids := []int64{ {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{end}} }
-		{{if gt (len .Returns) 0}}retXXX, errXXX{{else}}_, errXXX{{end}} := client.RequestMulti(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIsCost(){{end}})
+		{{if gt (len .Returns) 0}}retXXX, errXXX{{else}}_, errXXX{{end}} := client.RequestMulti(ctx, handlerName{{trimHandler .Name}}, ids, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionSlow(){{end}})
 		err = errXXX
 		if err != nil { return }
 		{{- if gt (len .Returns) 1}}
@@ -734,14 +734,14 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 		client, err := s.nestClient()
 		if err != nil { return err }
 		groupIDs := [][]int64{ {{joinEntityIds .Entities}} }
-		return client.DispatchMultiGroup(ctx, handlerName{{trimHandler .Name}}, groupIDs, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}), nest.SendOptionWithDelay(delay){{if .IsCost}}, nest.SendOptionIsCost(){{end}})
+		return client.DispatchMultiGroup(ctx, handlerName{{trimHandler .Name}}, groupIDs, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}), nest.SendOptionWithDelay(delay){{if .IsCost}}, nest.SendOptionSlow(){{end}})
 	}
 
 	func (s *{{$.SenderType}}) MultiGroupSend_{{trimHandler .Name}}(ctx context.Context, {{range $i, $p := .Entities}}{{if $i}}, {{end}}{{$p.Name}}{{if $p.IsGroup}} []int64{{else}} int64{{end}}{{end}}{{range .Params}}, {{.Name}} {{.Type}}{{end}}) error {
 		client, err := s.nestClient()
 		if err != nil { return err }
 		groupIDs := [][]int64{ {{joinEntityIds .Entities}} }
-		return client.DispatchMultiGroup(ctx, handlerName{{trimHandler .Name}}, groupIDs, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIsCost(){{end}})
+		return client.DispatchMultiGroup(ctx, handlerName{{trimHandler .Name}}, groupIDs, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionSlow(){{end}})
 	}
 
 	{{end}}
@@ -750,7 +750,7 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 		client, clientErr := s.nestClient()
 		if clientErr != nil { err = clientErr; return }
 		groupIDs := [][]int64{ {{joinEntityIds .Entities}} }
-		{{if gt (len .Returns) 0}}retXXX, errXXX{{else}}_, errXXX{{end}} := client.RequestMultiGroup(ctx, handlerName{{trimHandler .Name}}, groupIDs, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionIsCost(){{end}})
+		{{if gt (len .Returns) 0}}retXXX, errXXX{{else}}_, errXXX{{end}} := client.RequestMultiGroup(ctx, handlerName{{trimHandler .Name}}, groupIDs, nest.NewParams({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.Name}}{{end}}){{if .IsCost}}, nest.SendOptionSlow(){{end}})
 		err = errXXX
 		if err != nil { return }
 		{{- if gt (len .Returns) 1}}

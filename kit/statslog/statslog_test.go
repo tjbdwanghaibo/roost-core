@@ -173,25 +173,18 @@ func TestStatsLogStopWithContextReturnsWhenFlushIsBlocked(t *testing.T) {
 
 func TestFormatNestStatsUsesReadableQueueNames(t *testing.T) {
 	stats := formatNestStats(nest.DispatcherStats{
-		Main: worker.PoolStats{
+		Fast: worker.PoolStats{
 			Name:      "nest",
 			WorkerNum: 8,
 			QueueCap:  1024,
 			QueueLen:  4,
 			Started:   true,
 		},
-		Heart: worker.PoolStats{
+		Slow: worker.PoolStats{
 			Name:      "nest_hb",
 			WorkerNum: 4,
 			QueueCap:  1024,
 			QueueLen:  1,
-			Started:   true,
-		},
-		Cost: worker.PoolStats{
-			Name:      "nest_cost",
-			WorkerNum: 8,
-			QueueCap:  1024,
-			QueueLen:  0,
 			Started:   true,
 		},
 		Delayed: 3,
@@ -203,13 +196,13 @@ func TestFormatNestStatsUsesReadableQueueNames(t *testing.T) {
 		ProcessedMessages: 13,
 		Slow200msMessages: 2,
 	}, 5*time.Second)
-	if stats.Main.Workers != 8 || stats.Main.QueueUsage != "4/1024" || !stats.Main.Running {
-		t.Fatalf("main stats mismatch: %+v", stats.Main)
+	if stats.Fast.Workers != 8 || stats.Fast.QueueUsage != "4/1024" || !stats.Fast.Running {
+		t.Fatalf("main stats mismatch: %+v", stats.Fast)
 	}
-	if stats.Broadcast.Workers != 4 || stats.Broadcast.QueueUsage != "1/1024" {
-		t.Fatalf("broadcast stats mismatch: %+v", stats.Broadcast)
+	if stats.Slow.Workers != 4 || stats.Slow.QueueUsage != "1/1024" {
+		t.Fatalf("broadcast stats mismatch: %+v", stats.Slow)
 	}
-	if stats.Cost.Name != "nest_cost" || stats.DelayedMessages != 3 {
+	if stats.DelayedMessages != 3 {
 		t.Fatalf("nest stats mismatch: %+v", stats)
 	}
 	if stats.ProcessedMessages != 13 || stats.Slow200msMessages != 2 || stats.WindowSeconds != 5 {

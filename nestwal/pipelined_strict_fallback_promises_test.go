@@ -310,7 +310,7 @@ func newFallbackFixture(t *testing.T, unique int64, handler string, meta corenes
 	}
 
 	f.mgr = corenest.NewEngine(corenest.NestOptionWithGetter(entity.NewManagerAccess(manager)), corenest.NestOptionWithTransactionCommitter(projector),
-		corenest.NestOptionWithWorkerNumAndMsgCap(1, 16), corenest.NestOptionWithEntitySync(syncMgr))
+		corenest.NestOptionWithWorkerPools(corenest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, corenest.WorkerPoolConfig{}), corenest.NestOptionWithEntitySync(syncMgr))
 	f.name = corenest.NewHandlerName(handler)
 	f.mgr.MustRegisterHandlerWithMeta(f.name, func(es []entity.IThreadSafeEntity, _ []any, _ ...corenest.HandlerOption) (any, error) {
 		e := es[0].(*fallbackEntity)

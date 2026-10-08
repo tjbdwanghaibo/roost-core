@@ -299,7 +299,7 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 					t.Errorf("runtime shutdown: %v", err)
 				}
 			})
-			options := append(runtime.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithRemoteEntityManager(assembly.Manager), nest.NestOptionWithWorkerNumAndMsgCap(remoteNestWorkers(), 4096))
+			options := append(runtime.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithRemoteEntityManager(assembly.Manager))
 			options = append(options, nest.NestOptionWithWorkerPools(
 				nest.WorkerPoolConfig{Workers: remoteNestWorkers(), QueueCap: remoteInt("ROOST_REMOTE_FAST_QUEUE", 4096)},
 				nest.WorkerPoolConfig{Workers: remoteInt("ROOST_REMOTE_IO_WORKERS", remoteNestWorkers()), QueueCap: remoteInt("ROOST_REMOTE_SLOW_QUEUE", 64)},

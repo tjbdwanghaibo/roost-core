@@ -250,17 +250,3 @@ func (w *remoteEntityWrapper) isLocalOwner() bool {
 	owner := w.leaseOwner()
 	return owner != 0 && owner == w.mgr.localSid
 }
-
-func hasEntityDirty(e entity.IThreadSafeRemoteEntity) bool {
-	guardable, ok := e.(entity.Guardable)
-	if !ok || e == nil {
-		return false
-	}
-	dirty := false
-	guardable.RangeDao(func(dao entity.DaoInterface) {
-		if !dirty {
-			dirty = dao.Dirty() != nil && dao.Dirty().Dirty()
-		}
-	})
-	return dirty
-}

@@ -21,7 +21,7 @@ func TestEntityLockGroupTransitionJoinMoveLeaveUpdatesState(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(2, 64),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 64}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -96,7 +96,7 @@ func TestEntityLockGroupTransitionPendingRequeuesSyncDispatch(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(2, 64),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 64}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -138,7 +138,7 @@ func TestEntityLockGroupTransitionContinuationReturnsSyncResult(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(2, 64),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 64}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -193,7 +193,7 @@ func TestEntityLockGroupTransitionRetriesWhenEntityLockBusy(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerNumAndMsgCap(1, 64),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()

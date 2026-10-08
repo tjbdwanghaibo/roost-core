@@ -170,7 +170,6 @@ func newGuildOwner(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis
 		}
 	})
 	options := append(runtime.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithRemoteEntityManager(assembly.Manager),
-		nest.NestOptionWithWorkerNumAndMsgCap(2, 64),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}))
 	owner.scheduler = nest.NewEngine(options...)
 	owner.scheduler.MustRegisterHandlerWithMeta(owner.rename, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {

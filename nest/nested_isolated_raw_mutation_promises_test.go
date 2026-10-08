@@ -49,7 +49,7 @@ func runOuterWithNestedRawMutation(t *testing.T, meta HandlerMeta, unique int64,
 	}
 	iso = &recordsCommitter{}
 	obs = &nestedSnapshotObservation{}
-	mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(manager)), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(manager)), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("rr0927_07_nested_raw_mutation")
 	mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
 		obs.attempts++

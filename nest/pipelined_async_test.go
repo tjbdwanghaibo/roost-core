@@ -58,7 +58,7 @@ func TestAsyncCompletionFreesWorkerDuringDurableWait(t *testing.T) {
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
 		NestOptionWithPipelinedAsyncCompletion(0, 0),
-		NestOptionWithWorkerNumAndMsgCap(1, 64),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -136,7 +136,7 @@ func TestAsyncCompletionKeepsSameEntityCommitOrder(t *testing.T) {
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
 		NestOptionWithPipelinedAsyncCompletion(0, 0),
-		NestOptionWithWorkerNumAndMsgCap(2, 64),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 64}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -207,7 +207,7 @@ func TestAsyncCompletionIndeterminateRepliesErrorWithoutRollback(t *testing.T) {
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
 		NestOptionWithPipelinedAsyncCompletion(0, 0),
-		NestOptionWithWorkerNumAndMsgCap(1, 64),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -250,7 +250,7 @@ func TestAsyncCompletionShutdownDeliversPendingReplies(t *testing.T) {
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
 		NestOptionWithPipelinedAsyncCompletion(0, 0),
-		NestOptionWithWorkerNumAndMsgCap(1, 64),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	stopped := false
@@ -316,7 +316,7 @@ func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
 		// Queue capacity 1: the pump holds one entry in flight and one in the
 		// queue, so the third transaction is forced onto the fallback path.
 		NestOptionWithPipelinedAsyncCompletion(1, 1),
-		NestOptionWithWorkerNumAndMsgCap(2, 64),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 64}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()

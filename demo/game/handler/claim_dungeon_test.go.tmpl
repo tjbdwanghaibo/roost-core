@@ -78,7 +78,7 @@ func newDungeonClaimHarness(t *testing.T) (*player.Player, *world.World, nest.Cl
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(multiEntityGetter{playerID: builtPlayer, worldID: builtWorld}),
 		nest.NestOptionWithTransactionCommitter(&recordingCommitter{}),
-		nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}),
 	)
 	if err := engine.Start(); err != nil {
 		t.Fatalf("start nest: %v", err)

@@ -58,7 +58,6 @@ func generateInPackage(ent EntityDef, siblings []string, pkg string, outFile str
 		"ctor":               constructorName,
 		"quote":              quoteString,
 		"syncNamespace":      syncNamespaceExpr,
-		"syncPackerFactory":  syncPackerFactoryExpr,
 		"daoCollectionConst": daoCollectionConstExpr,
 		"daoKey":             daoKeyExpr,
 		"hasMethod":          hasMethod,
@@ -210,20 +209,6 @@ func constructorName(typeName string) string {
 
 func quoteString(s string) string {
 	return fmt.Sprintf("%q", s)
-}
-
-// syncPackerFactoryExpr resolves the one packer factory Core's
-// EntitySyncBuilderParam takes. Two marker spellings reach it: `subjectPacker`
-// (current) and `syncPacker` (kept working for projects written before the
-// two collapsed into one). They name the same thing — a
-// `func(entity.IThreadSafeEntity) entity.SubjectSyncPacker` — so a marker
-// that sets both is refused at parse time rather than silently picking one
-// (RR-20260918-01).
-func syncPackerFactoryExpr(e EntityDef) string {
-	if e.SubjectPacker != "" {
-		return e.SubjectPacker
-	}
-	return e.SyncPacker
 }
 
 // syncNamespaceExpr renders the marker's value. Three spellings reach here,
@@ -411,8 +396,8 @@ func register{{.Entity.Name}}Entity() {
 			Sync: entity.EntitySyncBuilderParam{
 				Enabled: true,
 				Namespace: {{syncNamespace .Entity.SyncNamespace}},
-{{- if syncPackerFactory .Entity}}
-				PackerFactory: {{syncPackerFactory .Entity}},
+{{- if .Entity.SubjectPacker}}
+				PackerFactory: {{.Entity.SubjectPacker}},
 {{- end}}
 			},
 {{- end}}
@@ -563,7 +548,6 @@ func (e *{{.Entity.Name}}) generatedOnDestroy(reason entity.EntityDestroyReason)
 {{- if .RemoteV2}}
 
 var _ entity.IRemoteCommitParticipant = (*{{.Entity.Name}})(nil)
-var _ entity.IRemoteCommitChangeParticipant = (*{{.Entity.Name}})(nil)
 
 // HasRemoteCommitLocked consults only the active Nest transaction. Sync dirty
 // state is intentionally unrelated to persistence admission.

@@ -26,17 +26,11 @@ type ProjectionStore interface {
 	Project(context.Context, coredata.CommitRecord) error
 }
 
+// BatchProjectionStore 支持本地多 DAO 事务批量投影；必须保留每笔事务的持久身份，
+// 保证后续版本写入后仍能重放已成功的批次和多 mutation 事务。
 type BatchProjectionStore interface {
 	ProjectionStore
 	ProjectBatch(context.Context, []coredata.CommitRecord) error
-}
-
-// MultiMutationBatchProjectionStore 显式扩展旧 Store 的单 mutation 批量契约。
-// 未声明该能力的 Store 仍逐笔接收多 DAO 事务。
-// 实现方须持久记录批次中每笔事务及单笔多 mutation 的身份，支持后续版本落库后的重放。
-type MultiMutationBatchProjectionStore interface {
-	BatchProjectionStore
-	SupportsMultiMutationBatch() bool
 }
 
 // RemoteParallelProjectionStore 承诺互不重叠的纯 Remote 事务可以并发执行，

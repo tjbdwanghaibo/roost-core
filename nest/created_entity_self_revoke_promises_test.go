@@ -34,7 +34,7 @@ func TestOuterCreateAfterNestedRevokeInSameGuardFailsDeterministically(t *testin
 			access := entity.NewManagerAccess(manager)
 			x := mustBuildCastID(t, 38125+int64(i)*10, entity.EntityCategory(1), createdInScopeKind)
 			committer := &recordingCommitter{}
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			nestedBoom := errors.New("nested transaction failed after creating X")
 			var runs int
 			var isoErr, outerErr error
@@ -104,7 +104,7 @@ func TestCreateInOtherManagerAfterSameIDRevokeKeepsRemovalWindowConflict(t *test
 			defer window.finish(t)
 
 			committer := &recordingCommitter{}
-			mgr := NewEngine(NestOptionWithGetter(accessA), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(accessA), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			nestedBoom := errors.New("nested transaction failed after creating X in A")
 			var isoErr, crossErr error
 			var runs int

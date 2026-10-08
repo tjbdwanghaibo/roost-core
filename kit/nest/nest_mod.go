@@ -59,14 +59,11 @@ type loadTimeoutConfigurer interface {
 }
 
 type engineConfig struct {
-	fast, slow    corenest.WorkerPoolConfig
-	workerNum     int
-	remoteWorkers int
-	queueCap      int
-	tick          time.Duration
-	timeout       time.Duration
-	delayedCap    int
-	maxDelay      time.Duration
+	fast, slow corenest.WorkerPoolConfig
+	tick       time.Duration
+	timeout    time.Duration
+	delayedCap int
+	maxDelay   time.Duration
 	// unloadResync 来自 nest.unload_resync.*，零值字段取 entity 的默认（Workers 4、Attempts 5、QueueCapacity 4096）。
 	unloadResync entity.UnloadResyncConfig
 }
@@ -87,8 +84,8 @@ func (m *Mod) OptionalDependsOn() []app.ModName {
 
 // workerPool 是 nest.fast / nest.slow 的声明：0 取框架缺省。
 type workerPool struct {
-	Workers       int `config:"workers" min:"0"`
-	QueueCapacity int `config:"queue_capacity" min:"0"`
+	Workers       int `config:"workers" min:"0" example:"0"`
+	QueueCapacity int `config:"queue_capacity" min:"0" example:"0"`
 }
 
 // config 是 kit/nest 读的键（维护者决定 A4 ①）。数字与时长写 0 取框架缺省（core nest / entity 的默认值）。
@@ -99,9 +96,6 @@ type config struct {
 	Nest struct {
 		Fast              workerPool    `config:"fast"`
 		Slow              workerPool    `config:"slow"`
-		WorkerNum         int           `config:"worker_num" min:"0" example:"8"`
-		RemoteWorkers     int           `config:"remote_workers" min:"0"`
-		QueueCapacity     int           `config:"queue_capacity" min:"0" example:"4096"`
 		DelayedCapacity   int           `config:"delayed_capacity" min:"0" example:"4096"`
 		MaxDelay          time.Duration `config:"max_delay" min:"0" example:"24h"`
 		TickDuration      time.Duration `config:"tick_duration" min:"0" example:"50ms"`
@@ -135,15 +129,12 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	coresaga.SetStartDataLimit(settings.SagaPayloadLimit())
 	nest := settings.Nest
 	m.config = engineConfig{
-		fast:          corenest.WorkerPoolConfig{Workers: nest.Fast.Workers, QueueCap: nest.Fast.QueueCapacity},
-		slow:          corenest.WorkerPoolConfig{Workers: nest.Slow.Workers, QueueCap: nest.Slow.QueueCapacity},
-		workerNum:     nest.WorkerNum,
-		remoteWorkers: nest.RemoteWorkers,
-		queueCap:      nest.QueueCapacity,
-		tick:          nest.TickDuration,
-		timeout:       nest.RequestTimeout,
-		delayedCap:    nest.DelayedCapacity,
-		maxDelay:      nest.MaxDelay,
+		fast:       corenest.WorkerPoolConfig{Workers: nest.Fast.Workers, QueueCap: nest.Fast.QueueCapacity},
+		slow:       corenest.WorkerPoolConfig{Workers: nest.Slow.Workers, QueueCap: nest.Slow.QueueCapacity},
+		tick:       nest.TickDuration,
+		timeout:    nest.RequestTimeout,
+		delayedCap: nest.DelayedCapacity,
+		maxDelay:   nest.MaxDelay,
 		unloadResync: entity.UnloadResyncConfig{
 			Workers:       nest.UnloadResync.Workers,
 			Attempts:      nest.UnloadResync.Attempts,
@@ -180,8 +171,6 @@ func (m *Mod) Provide(registry *app.Registry) error {
 	}
 	opts := []corenest.NestOption{
 		corenest.NestOptionWithGetter(m.getter),
-		corenest.NestOptionWithWorkerNumAndMsgCap(m.config.workerNum, m.config.queueCap),
-		corenest.NestOptionWithRemoteWorkers(m.config.remoteWorkers),
 		corenest.NestOptionWithWorkerPools(m.config.fast, m.config.slow),
 		corenest.NestOptionWithTickDuration(m.config.tick),
 		corenest.NestOptionWithSyncTimeout(m.config.timeout),

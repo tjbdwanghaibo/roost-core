@@ -487,7 +487,7 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
 - **传输只有两种失败**（`entitysync.Transport`）：`ErrRetryLater` = 整体不可用，tick 作废、脏位保留、无人受罚；其他 = 该会话关闭（`SessionLost` 通知政策）。
   这就是慢消费者策略——不再有 Evict / FailBatch 两套。`AsyncTransport` 适配 nettransport 的可靠通道。
 - **持久化水位**（`ManagerConfig.DurableWatermark`）：按 `CommitLSN` 挡**整个 subject**（快照与 delta 一起），水位过了一起走。
-- **一次锁内捕获**（`PrepareTick`）：给在线者的 delta 与给新订阅者的快照在同一把实体锁内、同一版本上产生；每个不同 profile 只 pack 一次。
+- **一次锁内捕获**（`PrepareViews`）：给在线者的 delta 与给新订阅者的快照在同一把实体锁内、同一版本上产生；每个不同 profile 只 pack 一次。
 - **编码在副本上**：每帧准入后采纳对应的会话时钟与 ObjectRef 表，部分交付后的重试以全量恢复基线；旧交付不覆盖重置后的会话。
 - **没有反向索引**：`session → subjects` 归政策（AOI 的 `observer.visible`）；会话关闭时遍历 subject 删条目。
 - **held / ready**（`OpenHeldSession / ReadySession`）：会话可订阅不出帧，Ready 后首帧是新 epoch 的 FrameFull；demo 用 `scene_ready` 消息触发，消掉"快照抢在客户端解码器之前"的竞态。

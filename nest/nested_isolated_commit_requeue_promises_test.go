@@ -107,7 +107,7 @@ func TestIsolatedCommitThenOuterLockTimeoutIsNotRequeued(t *testing.T) {
 			if tc.pipelined {
 				outer = newPipelinedTestCommitter(true)
 			}
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			run := &isolatedRun{iso: &isolatedCountingCommitter{}, value: target}
 			name := NewHandlerName("rr65_iso_then_lock_timeout_" + tc.name)
 			registerIsolatedThenFail(t, mgr, name, tc.meta, run, fmt.Errorf("%w: simulated lock conflict after the isolated commit", ErrLockTimeout))
@@ -140,7 +140,7 @@ func TestIsolatedCommitThenOuterFailureCarriesSentinel(t *testing.T) {
 	ids := addPilots(t, manager, 36560, 1)
 	target := addIsolatedTarget(t, manager, 36565)
 	access := entity.NewManagerAccess(manager)
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&isolatedCountingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&isolatedCountingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	run := &isolatedRun{iso: &isolatedCountingCommitter{}, value: target}
 	boom := errors.New("business failed after the isolated commit")
 	name := NewHandlerName("rr65_iso_then_boom")
@@ -161,7 +161,7 @@ func TestIsolatedRejectedThenOuterLockTimeoutStillRequeues(t *testing.T) {
 	ids := addPilots(t, manager, 36570, 1)
 	target := addIsolatedTarget(t, manager, 36575)
 	access := entity.NewManagerAccess(manager)
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&isolatedCountingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&isolatedCountingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	run := &isolatedRun{iso: &isolatedCountingCommitter{rejectN: 1}, value: target}
 	name := NewHandlerName("rr65_iso_rejected_then_lock_timeout")
 	registerIsolatedThenFail(t, mgr, name, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, run, fmt.Errorf("%w: simulated", ErrLockTimeout))

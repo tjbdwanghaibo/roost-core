@@ -1,5 +1,12 @@
 # Changelog
 
+## 未发布：三大模块旧兼容清理（2026-10-08）
+
+- Nest 只保留快慢池配置和统计，旧 worker/remote options 与配置键移除；生成 sender 统一 SendOptionSlow。
+- Sync 内容捕获统一 PrepareViews（空列表无默认视图），生成 Entity 只接受 subjectPacker；旧 API/标记需更新。
+- DataEngine 批量 Store 统一多 DAO 与持久幂等契约；Remote participant 必须按事务局部变更判断，删除 DAO dirty 兼容回退。
+- 未改变 WAL/Mongo/Sync 数据格式；旧生成工程需重新生成和编译。详见[说明](docs/release/CORE-COMPAT-CLEANUP-2026-10-08-NOTES.md)与[验收](docs/release/CORE-COMPAT-CLEANUP-2026-10-08-IMPLEMENTATION.md)。
+
 ## 未发布：WAL 单路径收敛（2026-10-08）
 
 - WAL 仅支持 codec 7，移除 codec 5/6 兼容及 writer_version 配置；Mutation 删除旧身份/版本字段与转换 API。

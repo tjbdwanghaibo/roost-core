@@ -647,7 +647,7 @@ nest.NestOptionWithWorkerPools(
 )
 ```
 
-Kit 对应 `nest.fast.workers`、`nest.fast.queue_capacity`、`nest.slow.workers`、`nest.slow.queue_capacity`。容量是整池等待总数，包括等待 ID 前驱的消息，排除执行中的请求和已预留执行额度的就绪请求；内部快延续单独计数。默认快并发 GOMAXPROCS、容量 10000；慢并发 max(32, 快并发×4)、容量 64。旧 `worker_num/queue_capacity/remote_workers` 仍作为未设置新值时的来源，`heartbeat_worker_num` 已删除（v1.23.1 起），心跳走统一快池，旧 `SendOptionIsCost()` 等同 `SendOptionSlow()`。冷目标不再需要手工加 Slow：Nest 在统一准入时对 Single/Multi/MultiGroup 的声明目标做一次只读内存判定（Getter 可选实现的 `entity.LoadedChecker.IsLoaded`，`ManagerAccess` 已实现，不调用 `Get`，RR-20260926-47），有未加载且可由 loader 加载的目标就走慢阶段预加载，业务代码和生成 sender 不变；Broadcast 仍按已加载目标尽力扇出，冷目标逐个报告。显式 Slow 仍有效，用于强制慢准备。handler 内部阻塞 RPC 必须显式拆为前置 I/O，无法自动迁移。
+Kit 对应 `nest.fast.workers`、`nest.fast.queue_capacity`、`nest.slow.workers`、`nest.slow.queue_capacity`。容量是整池等待总数，包括等待 ID 前驱的消息，排除执行中的请求和已预留执行额度的就绪请求；内部快延续单独计数。默认快并发 GOMAXPROCS、容量 10000；慢并发 max(32, 快并发×4)、容量 64。只接受快慢池配置，心跳走统一快池；旧 worker_num/queue_capacity/remote_workers 与 SendOptionIsCost 已删除。冷目标不再需要手工加 Slow：Nest 在统一准入时对 Single/Multi/MultiGroup 的声明目标做一次只读内存判定（Getter 可选实现的 `entity.LoadedChecker.IsLoaded`，`ManagerAccess` 已实现，不调用 `Get`，RR-20260926-47），有未加载且可由 loader 加载的目标就走慢阶段预加载，业务代码和生成 sender 不变；Broadcast 仍按已加载目标尽力扇出，冷目标逐个报告。显式 Slow 仍有效，用于强制慢准备。handler 内部阻塞 RPC 必须显式拆为前置 I/O，无法自动迁移。
 
 `NestMgr.Stats().Fast/Slow/FastContinuations` 和 statslog 的 `nest.fast/nest.slow` 输出两池及内部延续；旧 `Stats().Remote` 只是 Slow 的源码兼容别名。可选 stage metrics 的 `remote_prepare`、`logic_queue`、`remote_confirm` 分别定位获取、逻辑排队和后置确认。停机关闭外部准入，两池保持运行直到已接受工作和内部延续全部排空；strict 请求仍在确认完成后返回，WAL 持久准入保留锁内契约。
 
@@ -756,7 +756,7 @@ Projected 是成功投影尝试数，成功但未 ack 的后缀重放后会再�
 
 `//roost:nest ... rollback=undo durability=pipelined` 可直接生成注册元数据，仍须配置 `nest.pipelined.allowlist` 并装配支持 ticket 的 committer。async 只等 WAL 写入，不等 fsync；strict 等 WAL fsync，不等 Mongo 投影；pipelined 准入后先解锁，完成回复与同步可见性再等 durable ticket。
 
-`NestOptionWithWorkerNumAndMsgCap(workers, capacity)` 和 `NewDispatcher(name, workers, capacity, handler)` 删除了无效的心跳 worker 参数；新代码优先使用 `NestOptionWithWorkerPools`。
+引擎通过 `NestOptionWithWorkerPools(fast, slow)` 配置两个池。低层 `NewDispatcher(name, workers, capacity, handler)` 配置自身快池，不接收心跳 worker 参数。
 
 `dataengine.transaction_receipt_ttl` 按 Mongo 整秒精度必须大于 `dataengine.wal.max_unacked_age`（0 取 24h）。默认 720h 不变。后者只是健康阈值，不会使旧 WAL 失效；超出事务标记保留期的停机 / 积压必须先核对持久状态，禁止盲目重放。
 

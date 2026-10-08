@@ -22,7 +22,6 @@ type Dispatcher struct {
 	MaxDelay      time.Duration
 	queue         *dispatchQueue
 	slowConfig    WorkerPoolConfig
-	remoteWorkers int
 	remoteHandler func(*Msg)
 	workerNum     int
 	handler       func(*Msg)
@@ -127,9 +126,6 @@ func (m *Dispatcher) OnInit() {
 	go m.delayLoop()
 
 	slow := m.slowConfig
-	if slow.Workers <= 0 {
-		slow.Workers = m.remoteWorkers
-	}
 	if slow.Workers <= 0 {
 		slow.Workers = max(32, m.workerNum*4)
 	}

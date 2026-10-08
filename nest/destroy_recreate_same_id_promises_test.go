@@ -59,7 +59,7 @@ func TestDestroyThenRecreateSameIDInHandlerLocksNewInstance(t *testing.T) {
 				t.Fatal(err)
 			}
 			committer := &recordingCommitter{}
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			name := NewHandlerName("rr67_destroy_recreate_" + tc.name)
 			registerDestroyThenRecreate(t, mgr, access, name, tc.meta, x, run, nil)
 			if err := mgr.Start(); err != nil {
@@ -101,7 +101,7 @@ func TestDestroyThenRecreateSameIDInHandlerRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	committer := &recordingCommitter{}
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("rr67_destroy_recreate_rollback")
 	boom := errors.New("business failed after re-creating")
 	registerDestroyThenRecreate(t, mgr, access, name, HandlerMeta{Rollback: RollbackState, Durability: DurabilityStrict}, x, run, boom)
@@ -139,7 +139,7 @@ func TestCastAfterDestroyDoesNotReturnUnlockedRecreatedInstance(t *testing.T) {
 	if _, err := access.Create(createParam(x)); err != nil {
 		t.Fatal(err)
 	}
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("rr67_cast_after_destroy")
 	var castErr error
 	var castLockableElsewhere bool
@@ -217,7 +217,7 @@ func TestDestroyThenRecreateSameIDRemoteEntityLocksNewInstance(t *testing.T) {
 	var batchCommits atomic.Int32
 	batch := &stagedRemoteBatch{commit: func() { batchCommits.Add(1) }}
 	remote := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) { return batch, nil }}
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithRemoteEntityManager(remote), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithRemoteEntityManager(remote), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("b17_remote_destroy_recreate")
 	var remoteBatch bool
 	mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {

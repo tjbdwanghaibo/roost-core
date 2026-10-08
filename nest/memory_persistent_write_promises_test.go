@@ -142,7 +142,7 @@ func newMemoryWriteEngine(t *testing.T, unique int64) (*NestMgr, int64, *memoryW
 	dao.tracker.SetVersion(1)
 	getter.Add(&memoryWriteEntity{EntityBase: entity.NewEntityBase(id, 1, false, nestLocalKind), dao: dao})
 	committer := &storeCommitter{store: map[int64][]byte{id: dao.persisted()}}
-	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	return mgr, id, dao, committer
 }
 
@@ -237,7 +237,7 @@ func TestMemoryTransactionCreatedEntityPersistentWriteFails(t *testing.T) {
 			unique := int64(41200 + 10*i)
 			f := newCreateInScopeFixture(t, unique, nil)
 			committer := &recordingCommitter{}
-			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			name := NewHandlerName("rr20261006_41_memory_create_" + entry)
 			mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 				if _, err := f.createViaLifecycle(entry, unique+1, 5); err != nil {
@@ -277,7 +277,7 @@ func TestMemoryRemoteBatchLocalPersistentWriteRefused(t *testing.T) {
 	recording := &recordingRemoteBatch{}
 	manager := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) { return recording, nil }}
 	committer := &recordsCommitter{}
-	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("rr20261006_41_memory_remote_local_persist")
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 		e.dao.Value = 77

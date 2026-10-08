@@ -15,10 +15,6 @@ type projectionSegment struct {
 	batch   bool
 }
 
-func isBatchProjectionRecord(record coredata.CommitRecord) bool {
-	return len(record.Mutations) == 1 && isLocalBatchRecord(record)
-}
-
 // 本地批量不跨越有外部效果、租约回执或迁移容错语义的事务。
 func isLocalBatchRecord(record coredata.CommitRecord) bool {
 	if record.Handler == MigrationHandler || len(record.Mutations) == 0 || len(record.Effects) != 0 || len(record.Receipts) != 0 {
@@ -107,7 +103,7 @@ func projectionRecordLogicalBytes(record coredata.CommitRecord) int {
 	return n
 }
 
-func planProjectionSegments(records []coredata.CommitRecord, fences []corenest.CommitFence, maxRecords, maxBytes int, multi bool) ([]projectionSegment, error) {
+func planProjectionSegments(records []coredata.CommitRecord, fences []corenest.CommitFence, maxRecords, maxBytes int) ([]projectionSegment, error) {
 	if len(records) != len(fences) {
 		return nil, errors.New("dataengine: records and fences length mismatch")
 	}
@@ -115,18 +111,14 @@ func planProjectionSegments(records []coredata.CommitRecord, fences []corenest.C
 		return nil, errors.New("dataengine: projection limits must be positive")
 	}
 	segments := make([]projectionSegment, 0)
-	batchable := isBatchProjectionRecord
-	if multi {
-		batchable = isLocalBatchRecord
-	}
 	for i := 0; i < len(records); {
-		if !batchable(records[i]) {
+		if !isLocalBatchRecord(records[i]) {
 			segments = append(segments, projectionSegment{records: records[i : i+1 : i+1], fences: fences[i : i+1 : i+1]})
 			i++
 			continue
 		}
 		start, bytes := i, 0
-		for i < len(records) && batchable(records[i]) {
+		for i < len(records) && isLocalBatchRecord(records[i]) {
 			sz := projectionRecordLogicalBytes(records[i])
 			if i > start && (i-start >= maxRecords || bytes > maxBytes-sz) {
 				break

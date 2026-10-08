@@ -54,7 +54,7 @@ func BenchmarkProjectionSegmentPlanner(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				if _, err := planProjectionSegments(records, fences, 1024, 4<<20, false); err != nil {
+				if _, err := planProjectionSegments(records, fences, 1024, 4<<20); err != nil {
 					b.Fatal(err)
 				}
 			}

@@ -354,14 +354,8 @@ func (b *remoteWriteBatch) FinalizeLocked(outcome entity.RemoteTransactionOutcom
 			return fmt.Errorf("%w: entity %d has no generated remote commit participant", entity.ErrRemoteWriteCapabilityDisabled, entry.lease.EntityID)
 		}
 		deleteRequested := outcome.DeleteIntents != nil && outcome.DeleteIntents.RemoteDeleteRequested(entry.lease.EntityID)
-		if !deleteRequested {
-			if transactional, ok := participant.(entity.IRemoteCommitChangeParticipant); ok {
-				if !transactional.HasRemoteCommitLocked(outcome) {
-					continue
-				}
-			} else if !hasEntityDirty(entry.entity) {
-				continue
-			}
+		if !deleteRequested && !participant.HasRemoteCommitLocked(outcome) {
+			continue
 		}
 		commit, err := participant.BuildRemoteCommitLocked(entry.lease, outcome)
 		if err != nil {

@@ -17,7 +17,7 @@ func TestRevokedCreationIsDestroyedWithCreateRevokedReason(t *testing.T) {
 	pilots := addPilots(t, manager, 38300, 1)
 	access := entity.NewManagerAccess(manager)
 	x := mustBuildCastID(t, 38305, entity.EntityCategory(1), createdInScopeKind)
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("rr20260927_12_revoke_reason")
 	boom := errors.New("business failed after creating X")
 	var reasons []entity.EntityDestroyReason

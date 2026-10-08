@@ -39,7 +39,7 @@ func TestNestedIsolatedIndeterminateFencesBeforeReturning(t *testing.T) {
 			inner := addIsolatedTarget(t, manager, 43001+int64(i)*10)
 			access := entity.NewManagerAccess(manager)
 			iso := &indeterminateCommitter{}
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordsCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordsCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			name := NewHandlerName("rr76_iso_unknown_" + tc.name)
 			var attempts atomic.Int64
 			var isoErr, fencedInHandler error
@@ -94,7 +94,7 @@ func TestNestedIsolatedIndeterminatePropagatedKeepsSentinels(t *testing.T) {
 	manager := entity.NewEntityManager()
 	ids := addPilots(t, manager, 43100, 1)
 	access := entity.NewManagerAccess(manager)
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("rr76_iso_unknown_propagated")
 	var attempts atomic.Int64
 	mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {

@@ -128,7 +128,7 @@ func TestLifecycleCreateInHandlerWaitsForDurable(t *testing.T) {
 			unique := int64(9760 + 10*i)
 			f := newCreateInScopeFixture(t, unique, nil)
 			committer := newPipelinedTestCommitter(false)
-			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			name := NewHandlerName("lifecycle_pipelined_" + entry)
 			var created *rollbackTestEntity
 			mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
@@ -185,7 +185,7 @@ func TestLifecycleCreateInHandlerRevokedWhenHandlerFails(t *testing.T) {
 			unique := int64(9780 + 10*i)
 			f := newCreateInScopeFixture(t, unique, nil)
 			committer := &recordingCommitter{}
-			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			name := NewHandlerName("lifecycle_fails_" + entry)
 			boom := errors.New("business rejected after create")
 			mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
@@ -224,7 +224,7 @@ func TestLifecycleCreateInHandlerRevokedWhenStrictCommitRejected(t *testing.T) {
 			unique := int64(9800 + 10*i)
 			f := newCreateInScopeFixture(t, unique, func() uint64 { return 0 })
 			committer := &recordingCommitter{err: errors.New("commit rejected")}
-			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(committer), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			name := NewHandlerName("lifecycle_rejected_" + entry)
 			concurrent := make(chan error, 1)
 			mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {

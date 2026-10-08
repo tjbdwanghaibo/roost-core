@@ -74,7 +74,6 @@ func (gate *tradeProjectionGate) ProjectFenced(ctx context.Context, record cored
 	}
 	return gate.store.ProjectFenced(ctx, record)
 }
-func (*tradeProjectionGate) SupportsMultiMutationBatch() bool { return true }
 func (gate *tradeProjectionGate) ProjectBatch(ctx context.Context, records []coredata.CommitRecord) error {
 	if err := gate.wait(ctx, records[0]); err != nil {
 		return err
@@ -184,7 +183,7 @@ func newTradeFixtureFull(t *testing.T, ctx context.Context, client fmongo.IMongo
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = h.runtime.Shutdown(context.Background()) })
-	options := append(h.runtime.NestOptions(), nest.NestOptionWithGetter(h.access), nest.NestOptionWithWorkerNumAndMsgCap(8, 256))
+	options := append(h.runtime.NestOptions(), nest.NestOptionWithGetter(h.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 8, QueueCap: 256}, nest.WorkerPoolConfig{}))
 	options = append(options, nestOptions...)
 	h.scheduler = nest.NewEngine(options...)
 	meta := nest.HandlerMeta{Rollback: nest.RollbackState, Durability: policy}

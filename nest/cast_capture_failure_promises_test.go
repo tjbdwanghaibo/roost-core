@@ -53,7 +53,7 @@ func TestCastCaptureFailureFailsTheTransactionEvenIfSwallowed(t *testing.T) {
 				t.Fatal(err)
 			}
 			committer := &countingCommitter{}
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			handler := NewHandlerName("rr20260927_31_cast_capture_failure_" + name)
 			var castErr error
 			mgr.MustRegisterHandlerWithMeta(handler, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {

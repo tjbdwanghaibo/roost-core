@@ -60,7 +60,7 @@ func runOuterWithNestedWrite(t *testing.T, meta HandlerMeta, unique int64, castT
 	}
 	iso = &recordsCommitter{}
 	obs = &nestedSnapshotObservation{}
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("rr74_nested_write")
 	mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
 		obs.attempts++

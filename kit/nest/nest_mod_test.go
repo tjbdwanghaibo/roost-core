@@ -36,9 +36,7 @@ func (emptyGetter) GetMany(context.Context, []int64, []entity.EntityCategory) ([
 
 func TestModProvidesInstanceClientAndHealth(t *testing.T) {
 	cfg := viper.New()
-	cfg.Set("nest.worker_num", 1)
-	cfg.Set("nest.remote_workers", 3)
-	cfg.Set("nest.queue_capacity", 8)
+	cfg.Set("nest.fast.queue_capacity", 8)
 	cfg.Set("nest.fast.workers", 2)
 	cfg.Set("nest.slow.workers", 4)
 	cfg.Set("nest.slow.queue_capacity", 7)

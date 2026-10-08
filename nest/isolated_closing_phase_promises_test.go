@@ -68,7 +68,7 @@ func TestIsolatedInClosingPhaseOfRemoteMessageIsRefused(t *testing.T) {
 			if tc.afterUnlock {
 				outer.onReleased = isolated
 			}
-			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			name := NewHandlerName(fmt.Sprintf("rr84_remote_closing_%d", i))
 			mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 				if !tc.afterUnlock {
@@ -149,7 +149,7 @@ func TestIsolatedInClosingPhaseOfLocalMessageDoesNotClaimIt(t *testing.T) {
 			}
 			access := entity.NewManagerAccess(manager)
 			outer := &recordsCommitter{}
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			hookCommits := &recordsCommitter{}
 			var hookCommitter TransactionCommitter = hookCommits
 			if tc.indeterminate {

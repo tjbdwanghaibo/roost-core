@@ -84,7 +84,7 @@ func newLoadNest(states []*subject, c config, m *entitysync.Manager, in *policy.
 		s.tracker.MarkSync(1)
 		return nil, in.QueueMove(s, at, change.observer)
 	})
-	engine := nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithEntitySync(m), nest.NestOptionWithWorkerNumAndMsgCap(4, 4096))
+	engine := nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithEntitySync(m), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 4096}, nest.WorkerPoolConfig{}))
 	if err := engine.Start(); err != nil {
 		return nil, err
 	}

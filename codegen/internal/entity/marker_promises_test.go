@@ -78,10 +78,9 @@ func TestParseDirAcceptsEveryDocumentedMarkerForm(t *testing.T) {
 		"//roost:entity id=1 entityKind=EntityKindPlayer",
 		"//roost:entity entityKind=EntityKindPlayer remote=managed sync=true",
 		"//roost:entity entityKind=EntityKindPlayer noPersist=true lifetime=ephemeral",
-		// The two packer spellings are alternatives, never both at once: they
-		// name one field (RR-20260918-01).
+		// subjectPacker 是唯一工厂标记。
 		"//roost:entity entityKind=EntityKindPlayer sync=on syncNamespace=\"player\" subjectPacker=clientsync.PlayerSubjectPacker",
-		"//roost:entity entityKind=EntityKindPlayer sync=on syncNamespace=\"player\" syncPacker=clientsync.PlayerPacker",
+		"//roost:entity entityKind=EntityKindPlayer sync=on syncNamespace=\"player\" subjectPacker=clientsync.PlayerPacker",
 		"//roost:entity entityKind=EntityKindPlayer remote=no lifetime=hot_cold",
 	} {
 		dir, _ := writeEntitySource(t, "package game\n\n"+marker+"\ntype Player struct{}\n")

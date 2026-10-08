@@ -27,7 +27,6 @@ type EntityDef struct {
 	NoPersist       bool   // EntityBase AutoPersist returns false
 	Sync            bool   // enable entity base sync by default
 	SyncNamespace   string // optional sync namespace (the wire routing key) for the generated builder
-	SyncPacker      string // optional entity.EntitySyncBuilderParam.PackerFactory expression
 	SubjectPacker   string // optional observer-free SubjectSyncPacker factory expression
 	Components      []ComponentField
 	Daos            []DaoField
@@ -236,20 +235,9 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 					ent.Lifetime = parseLifetimeParam(m.params["lifetime"], ent.NoPersist, ent.RemotePolicy)
 					ent.Sync = parseBoolParam(m.params["sync"])
 					ent.SyncNamespace = m.params["syncNamespace"]
-					ent.SyncPacker = m.params["syncPacker"]
 					ent.SubjectPacker = m.params["subjectPacker"]
-					// Core takes exactly one packer factory
-					// (EntitySyncBuilderParam.PackerFactory). `subjectPacker`
-					// is the current spelling and `syncPacker` still works
-					// for projects written before the two collapsed into one;
-					// setting both would mean two values for one field, so it
-					// is refused here rather than resolved by a coin flip
-					// (RR-20260918-01).
-					if ent.SyncPacker != "" && ent.SubjectPacker != "" {
-						return nil, fmt.Errorf("%s:%d: //roost:entity sets both syncPacker=%s and subjectPacker=%s; they name the same factory (entity.EntitySyncBuilderParam.PackerFactory) — keep subjectPacker", filePath, m.line, ent.SyncPacker, ent.SubjectPacker)
-					}
-					if ent.SyncPacker != "" && !ent.Sync {
-						return nil, fmt.Errorf("%s:%d: //roost:entity has syncPacker=%s but sync is not true", filePath, m.line, ent.SyncPacker)
+					if _, retired := m.params["syncPacker"]; retired {
+						return nil, fmt.Errorf("%s:%d: //roost:entity syncPacker is unsupported; use subjectPacker", filePath, m.line)
 					}
 					if ent.SubjectPacker != "" && !ent.Sync {
 						return nil, fmt.Errorf("%s:%d: //roost:entity has subjectPacker=%s but sync is not true", filePath, m.line, ent.SubjectPacker)
@@ -417,7 +405,6 @@ func collectEntityImports(ent EntityDef, importMap map[string]ImportDef) []Impor
 	// file that used the package without importing it (RR-20260910-05).
 	add(ent.Category)
 	add(ent.SyncNamespace)
-	add(ent.SyncPacker)
 	add(ent.SubjectPacker)
 	for _, comp := range ent.Components {
 		add(comp.CompType)

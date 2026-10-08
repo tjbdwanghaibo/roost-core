@@ -408,36 +408,9 @@ func entitySyncLockedInCurrentGuard(entityID int64) bool {
 	return ok
 }
 
-// Prepare captures one content version for every requested profile. It takes
-// the Entity mutex before the prepare serialization lock, so calls made from an
-// EntityGuard cannot deadlock with an asynchronous prepare waiting for Entity.
-// Prepare captures a delta (or, when the subject is marked fully dirty, a
-// snapshot) for each profile. It is PrepareTick without new subscribers.
-func (s *SubjectSyncState) Prepare(profiles []SyncProfile) (*PreparedSubjectSync, error) {
-	return s.PrepareTick(profiles, nil)
-}
-
-// PrepareTick captures everything one replication tick needs from this
-// subject, under ONE entity lock so version, mask, CommitLSN and every payload
-// describe the same moment: a delta for each of deltaProfiles when the subject
-// is dirty, and a full snapshot for each of snapshotProfiles (the subscribers
-// who have nothing yet). When the subject is dirty the version advances and
-// the snapshots carry the new version — they already contain the dirty
-// changes, so labelling them with the old one would make the next delta's
-// base disagree with what those subscribers hold (ARCH-10). When it is not
-// dirty the snapshots carry the current version and Commit leaves it alone.
-// Nothing to capture at all is ErrSubjectSyncNotDirty.
-func (s *SubjectSyncState) PrepareTick(deltaProfiles, snapshotProfiles []SyncProfile) (*PreparedSubjectSync, error) {
-	if s == nil {
-		return nil, ErrSubjectSyncClosed
-	}
-	deltaProfiles = normalizeSyncProfiles(deltaProfiles)
-	snapshotProfiles = uniqueSyncProfiles(snapshotProfiles)
-	return s.prepareProfiles(deltaProfiles, snapshotProfiles)
-}
-
 // PrepareViews 捕获明确指定的视图：空列表表示无人需要该类内容。
-// 即使没有接收者，也允许提交脏版本；与兼容的 PrepareTick 的默认 delta 视图区别明确。
+// 即使没有接收者，也允许提交脏版本；需要默认视图时显式传入 SyncProfile{}。
+// 在一次 Entity 锁内捕获全部增量与全量，确保版本、提交水位和内容来自同一时刻。
 func (s *SubjectSyncState) PrepareViews(deltaProfiles, snapshotProfiles []SyncProfile) (*PreparedSubjectSync, error) {
 	if s == nil {
 		return nil, ErrSubjectSyncClosed
@@ -680,7 +653,7 @@ func (p *PreparedSubjectSync) Updates() []SubjectSyncUpdate {
 	return append([]SubjectSyncUpdate(nil), p.updates...)
 }
 
-// Snapshots are the full captures PrepareTick made for new subscribers, one
+// Snapshots are the full captures PrepareViews made for new subscribers, one
 // per snapshot profile, at the same version as Updates.
 func (p *PreparedSubjectSync) Snapshots() []SubjectSyncUpdate {
 	if p == nil {
@@ -855,20 +828,4 @@ func (b *PreparedSubjectSyncBatch) abortLocked(cause error) {
 		}
 		item.finished.Store(preparedSubjectSyncFinished)
 	}
-}
-
-// uniqueSyncProfiles is normalizeSyncProfiles without the "empty means
-// default" rule: an empty list stays empty.
-func uniqueSyncProfiles(profiles []SyncProfile) []SyncProfile {
-	if len(profiles) == 0 {
-		return nil
-	}
-	return normalizeSyncProfiles(profiles)
-}
-
-func normalizeSyncProfiles(profiles []SyncProfile) []SyncProfile {
-	if len(profiles) == 0 {
-		return []SyncProfile{{Key: "default"}}
-	}
-	return NormalizeSyncProfiles(profiles)
 }

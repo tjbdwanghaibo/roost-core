@@ -56,7 +56,7 @@ func TestRemoteUnknownOutcomeRepliesHitDecisionTableRow2(t *testing.T) {
 				tc.setup(f)
 			}
 			var manager entity.IRemoteEntityManager = f.mgr
-			options := []nest.NestOption{nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerNumAndMsgCap(1, 16)}
+			options := []nest.NestOption{nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{})}
 			rollback := nest.RollbackNone
 			if tc.durability != nest.DurabilityMemory {
 				manager = boundedConfirmManager{Manager: f.mgr, fixture: f, confirm: tc.confirm, beforeWait: tc.beforeWait}
@@ -110,7 +110,7 @@ func TestRemoteFinalizeRejectionReplyHitsDecisionTableRow12(t *testing.T) {
 	live.scope = uint8(entity.DatabaseServer)
 	live.mu.Unlock()
 	committer := &countingLocalCommitter{}
-	engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
+	engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}),
 		nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithRemoteEntityManager(f.mgr))
 	name := nest.NewHandlerName("reply_sentinels_finalize_rejected")
 	engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
@@ -167,7 +167,7 @@ func TestRemoteRejectedAfterLocalCommitReplyHitsDecisionTableRow4(t *testing.T) 
 			f, live := newReloadFixture(t, tc.rawID)
 			committer := &countingLocalCommitter{}
 			manager := boundedConfirmManager{Manager: f.mgr, fixture: f, confirm: 3 * time.Second, beforeWait: tc.beforeWait}
-			options := []nest.NestOption{nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
+			options := []nest.NestOption{nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}),
 				nest.NestOptionWithRemoteEntityManager(manager)}
 			if tc.durability != nest.DurabilityMemory {
 				options = append(options, nest.NestOptionWithTransactionCommitter(committer))
@@ -253,7 +253,7 @@ func TestRemoteStrictTrackerEvictedAfterCommitReplyHitsDecisionTableRow2(t *test
 				}
 			}
 			manager := boundedConfirmManager{Manager: f.mgr, fixture: f, confirm: 3 * time.Second, beforeWait: beforeWait}
-			engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
+			engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}),
 				nest.NestOptionWithRemoteEntityManager(manager), nest.NestOptionWithTransactionCommitter(tc.committer))
 			name := nest.NewHandlerName("reply_sentinels_tracker_evicted_" + tc.name)
 			engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
@@ -328,7 +328,7 @@ func TestCallerWaitEndedReplyHitsDecisionTableRow14(t *testing.T) {
 			committer := &countingLocalCommitter{}
 			// Remote 确认等待比调用方的等待长：调用方先截止，回复送达时批次仍在等 Remote 结论。
 			manager := boundedConfirmManager{Manager: f.mgr, fixture: f, confirm: time.Second}
-			engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
+			engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}),
 				nest.NestOptionWithRemoteEntityManager(manager), nest.NestOptionWithTransactionCommitter(committer),
 				nest.NestOptionWithSyncTimeout(tc.syncWait))
 			name := nest.NewHandlerName("reply_sentinels_row14_" + tc.name)

@@ -289,10 +289,7 @@ type NestOpts struct {
 	Getter                 entity.Getter
 	RemoteSnapshotResolver RemoteSnapshotResolver
 	RemoteManager          entity.IRemoteEntityManager
-	WorkerNum              int
 
-	RemoteWorkers          int
-	MsgCap                 int
 	DelayedMsgCap          int
 	MaxDelay               time.Duration
 	TickDuration           time.Duration
@@ -311,14 +308,9 @@ type NestOpts struct {
 type NestOption func(*NestOpts)
 
 var (
-	// NestOptionWithWorkerPools 设置快慢两个执行池；非正数字段沿用默认或旧配置。
+	// NestOptionWithWorkerPools 设置快慢两个执行池；非正数字段使用框架默认值。
 	NestOptionWithWorkerPools = func(fast, slow WorkerPoolConfig) NestOption {
 		return func(opts *NestOpts) { opts.FastPool, opts.SlowPool = fast, slow }
-	}
-	// NestOptionWithRemoteWorkers 兼容旧配置，设置慢池并发。
-	// Deprecated: 使用 NestOptionWithWorkerPools。
-	NestOptionWithRemoteWorkers = func(workers int) NestOption {
-		return func(opts *NestOpts) { opts.RemoteWorkers = workers }
 	}
 	// NestOptionWithStageMetrics 启用按 handler/stage 的耗时指标，默认关闭。
 	// 旧 dispatch.cost 与 lock_hold 指标保持原口径。
@@ -341,12 +333,6 @@ var (
 	NestOptionWithRemoteEntityManager = func(manager entity.IRemoteEntityManager) NestOption {
 		return func(opts *NestOpts) {
 			opts.RemoteManager = manager
-		}
-	}
-	NestOptionWithWorkerNumAndMsgCap = func(workerNum, msgCap int) NestOption {
-		return func(opts *NestOpts) {
-			opts.WorkerNum = workerNum
-			opts.MsgCap = msgCap
 		}
 	}
 	NestOptionWithDelayedAdmission = func(capacity int, maxDelay time.Duration) NestOption {
@@ -450,22 +436,14 @@ func NewEngine(opts ...NestOption) *NestMgr {
 	if ret.syncTimeout <= 0 {
 		ret.syncTimeout = NestSyncTimeout
 	}
-	ret.dispatcher = NewDispatcher("nest", params.WorkerNum, params.MsgCap, func(msg *Msg) {
+	ret.dispatcher = NewDispatcher("nest", params.FastPool.Workers, params.FastPool.QueueCap, func(msg *Msg) {
 		if msg.remoteLogic != nil {
 			msg.remoteLogic.run(ret)
 			return
 		}
 		NestDispatch(ret, msg)
 	})
-	if params.FastPool.Workers > 0 {
-		ret.dispatcher.workerNum = params.FastPool.Workers
-	}
-	if params.FastPool.QueueCap > 0 {
-		ret.dispatcher.MsgCap = params.FastPool.QueueCap
-		ret.dispatcher.DelayedMsgCap = params.FastPool.QueueCap
-	}
 	ret.dispatcher.slowConfig = params.SlowPool
-	ret.dispatcher.remoteWorkers = params.RemoteWorkers
 	ret.dispatcher.remoteHandler = func(msg *Msg) { dispatchNest(ret, msg, true) }
 	if checker, ok := params.Getter.(entity.LoadedChecker); ok && checker != nil {
 		ret.loadedChecker = checker
@@ -622,12 +600,6 @@ var (
 	// 自定义 Getter 预加载冷目标的方式。
 	SendOptionSlow = func() SendOpt {
 		return func(opt *sendOptParam) { opt.Cost = true }
-	}
-	// Deprecated: 使用 SendOptionSlow；不再把业务 handler 放入独立 Cost 池。
-	SendOptionIsCost = func() SendOpt {
-		return func(opt *sendOptParam) {
-			opt.Cost = true
-		}
 	}
 )
 

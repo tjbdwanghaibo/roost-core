@@ -92,7 +92,7 @@ func TestNonRollbackHandlerCastTargetRemovedWhileWaiting(t *testing.T) {
 				t.Fatal(err)
 			}
 			access := entity.NewManagerAccess(manager)
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(2, 16))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
 			holding, proceed := make(chan struct{}), make(chan struct{})
 			holder, follower := NewHandlerName("rr73_holder_"+tc.name), NewHandlerName("rr73_follower_"+tc.name)
 			mgr.MustRegisterHandlerWithMeta(holder, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
@@ -168,7 +168,7 @@ func TestNonRollbackHandlerTransientFailureIsNotRequeued(t *testing.T) {
 			manager := entity.NewEntityManager()
 			ids := addPilots(t, manager, 41100+int64(i)*10, 1)
 			access := entity.NewManagerAccess(manager)
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			var attempts atomic.Int64
 			var declared *rollbackTestEntity
 			name := NewHandlerName(fmt.Sprintf("rr73_memory_transient_%d", i))
@@ -211,7 +211,7 @@ func TestRemoteNonRollbackHandlerTransientFailureIsNotRequeued(t *testing.T) {
 		batchesMu.Unlock()
 		return b, nil
 	}}
-	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("rr73_remote_memory_transient")
 	var attempts atomic.Int64
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
@@ -251,7 +251,7 @@ func TestRollbackHandlerTransientFailureStillRequeues(t *testing.T) {
 	manager := entity.NewEntityManager()
 	ids := addPilots(t, manager, 41300, 1)
 	access := entity.NewManagerAccess(manager)
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&isolatedCountingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&isolatedCountingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	var attempts atomic.Int64
 	var declared *rollbackTestEntity
 	name := NewHandlerName("rr73_undo_transient_requeues")
@@ -297,7 +297,7 @@ func TestRemoteNonRollbackHandlerCreateConflictIsNotRequeued(t *testing.T) {
 	committer := newBlockingCommitter()
 	batch := &recordingRemoteBatch{}
 	rm := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) { return batch, nil }}
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithRemoteEntityManager(rm), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(2, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithRemoteEntityManager(rm), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
 	creator, follower := NewHandlerName("rr73_rm_creator"), NewHandlerName("rr73_rm_follower")
 	mgr.MustRegisterHandlerWithMeta(creator, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 		v, err := access.Create(createParam(x))

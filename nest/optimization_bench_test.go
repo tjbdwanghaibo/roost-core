@@ -55,7 +55,7 @@ func benchmarkClientRequest(b *testing.B, entityCount int, stages bool) {
 		getter.Add(newMockEntity(id, entity.EntityCategory(1)))
 		ids = append(ids, id)
 	}
-	engine := NewEngine(NestOptionWithGetter(getter), NestOptionWithWorkerNumAndMsgCap(1, 1024), NestOptionWithStageMetrics(stages))
+	engine := NewEngine(NestOptionWithGetter(getter), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 1024}, WorkerPoolConfig{}), NestOptionWithStageMetrics(stages))
 	name := NewHandlerName("bench_multi")
 	engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) { return 1, nil }, HandlerMeta{})
 	if err := engine.Start(); err != nil {

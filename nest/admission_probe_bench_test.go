@@ -68,7 +68,7 @@ func BenchmarkClientRequestManagerAccess(b *testing.B) {
 	if err := manager.TryAdd(newMockEntityWithKind(id, entity.EntityCategory(1), nestLocalKind)); err != nil {
 		b.Fatal(err)
 	}
-	engine := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerNumAndMsgCap(1, 1024))
+	engine := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 1024}, WorkerPoolConfig{}))
 	if err := engine.Start(); err != nil {
 		b.Fatal(err)
 	}

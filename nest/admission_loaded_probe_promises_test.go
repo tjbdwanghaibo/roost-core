@@ -35,7 +35,7 @@ func TestAdmissionNeverRunsCustomGetterOnSender(t *testing.T) {
 	base := newMockGetter()
 	base.Add(e)
 	g := &probeIOGetter{Getter: base}
-	mgr := NewEngine(NestOptionWithGetter(g), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(g), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("admission_custom_getter")
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) { return "ok", nil }, HandlerMeta{})
 	if err := mgr.Start(); err != nil {
@@ -63,7 +63,7 @@ func TestDelayedAdmissionIsNotSerializedByCustomGetter(t *testing.T) {
 	base := newMockGetter()
 	base.Add(e)
 	g := &probeIOGetter{Getter: base}
-	mgr := NewEngine(NestOptionWithGetter(g), NestOptionWithWorkerNumAndMsgCap(4, 16))
+	mgr := NewEngine(NestOptionWithGetter(g), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 4, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("admission_custom_getter_delayed")
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) { return "ok", nil }, HandlerMeta{})
 	if err := mgr.Start(); err != nil {

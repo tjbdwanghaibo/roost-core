@@ -172,9 +172,6 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 	return false, nil
 }
 
-// SupportsMultiMutationBatch 保留旧 BatchProjectionStore 实现的兼容边界。
-func (*MongoStore) SupportsMultiMutationBatch() bool { return true }
-
 // 只有两个 Remote 适配器都声明并发安全，正式 Store 才开放独立实体并行。
 // 自定义适配器未声明时保留其原有串行调用契约。
 func (store *MongoStore) SupportsRemoteParallelProjection() bool {

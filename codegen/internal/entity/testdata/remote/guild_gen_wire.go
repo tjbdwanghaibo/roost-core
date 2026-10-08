@@ -92,7 +92,6 @@ func (e *Guild) generatedOnDestroy(reason entity.EntityDestroyReason) {
 }
 
 var _ entity.IRemoteCommitParticipant = (*Guild)(nil)
-var _ entity.IRemoteCommitChangeParticipant = (*Guild)(nil)
 
 // HasRemoteCommitLocked consults only the active Nest transaction. Sync dirty
 // state is intentionally unrelated to persistence admission.

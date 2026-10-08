@@ -39,7 +39,7 @@ func newLocalHookFixture(t *testing.T, unique int64) *localHookFixture {
 func TestLocalReleaseHookPanicAfterStrictCommitCarriesSentinel(t *testing.T) {
 	f := newLocalHookFixture(t, 9980)
 	committer := &recordingCommitter{}
-	mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(f.owner)), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(f.owner)), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("rr53_local_release_hook")
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 		old := f.e.dao.Value
@@ -66,7 +66,7 @@ func TestLocalReleaseHookPanicAfterStrictCommitCarriesSentinel(t *testing.T) {
 // memory 快路径 handler 成功即已提交（内存）；随后的 release hook 失败同样带哨兵。
 func TestMemoryHandlerReleaseHookPanicCarriesSentinel(t *testing.T) {
 	f := newLocalHookFixture(t, 9983)
-	mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(f.owner)), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(f.owner)), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("rr53_memory_release_hook")
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 		f.e.dao.Value++
@@ -96,7 +96,7 @@ func TestUncommittedLocalReleaseHookPanicHasNoSentinel(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newLocalHookFixture(t, 9986+int64(i))
 			committer := &recordingCommitter{err: tc.commitErr}
-			mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(f.owner)), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(f.owner)), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			name := NewHandlerName("rr53_uncommitted_" + tc.name)
 			mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 				old := f.e.dao.Value

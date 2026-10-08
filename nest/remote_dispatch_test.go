@@ -52,7 +52,7 @@ func stagedEngine(t *testing.T, manager entity.IRemoteEntityManager) (*NestMgr, 
 	localID := mustBuildCastID(t, 9012, entity.EntityCategory(1), nestLocalKind)
 	getter.Add(newMockEntity(remoteID, entity.EntityCategoryRemote))
 	getter.Add(newMockEntity(localID, entity.EntityCategory(1)))
-	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	mgr.MustRegisterHandlerWithMeta(NewHandlerName("staged"), func(_ []entity.IThreadSafeEntity, params []any, _ ...HandlerOption) (any, error) {
 		if len(params) > 0 {
 			if fn, ok := params[0].(func()); ok {

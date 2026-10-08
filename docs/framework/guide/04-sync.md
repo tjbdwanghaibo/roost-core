@@ -213,7 +213,7 @@ interest, err := policy.NewInterest(policy.InterestConfig{
 
 - `sync=true` 让生成器给 builder 写 `Sync: entity.EntitySyncBuilderParam{Enabled: true, Namespace: ..., PackerFactory: ...}`（`codegen/internal/entity/gen.go:410`），并在业务没手写时生成 `TakeEntitySyncChanges()`（`:530`）：Nest 成功准入时自动消费 DAO 的客户端脏位，业务不用在末尾 Publish / Flush。
 - `syncNamespace` 只接受字符串字面量或带包名的常量；裸标识符被拒（RR-20260918-07，`codegen/internal/entity/parse.go:767`）。
-- 两种 packer 标记（`subjectPacker` / 旧拼写 `syncPacker`）互斥；没写 `sync=true` 写 packer 报错（`codegen/internal/entity/parse.go:249`）。
+- 只接受 `subjectPacker`，旧 `syncPacker` 明确拒绝；没写 `sync=true` 写 packer 报错（`codegen/internal/entity/parse.go:249`）。
 - DAO 字段 `dao:"sync"` 进入 `MarshalSync(mask)`（只含 mask 命中的字段，BSON）/ `ApplySync`（`codegen/internal/dao/template_dao.go:709`）。字段位只在本次生成的 schema 内稳定，不是 ABI。
 - 多 DAO 实体：实现 `entity.SyncChangeMapper` 显式映射字段位；否则发 Full，避免两个 DAO 的 bit 0 被合并（`entity/sync_commit.go:291`）。
 - 手写同步字段：`EntityBase.MarkSyncDirty(mask)` / `MarkSyncFullDirty(reason)`（`entity/entity_base.go:214`），在正式事务作用域内暂存到成功准入。

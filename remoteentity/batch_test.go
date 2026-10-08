@@ -3,6 +3,7 @@ package remoteentity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -32,10 +33,11 @@ type appliedOutboxLoader struct {
 
 type transactionLocalRemoteEntity struct {
 	*testRemoteEntity
+	unchanged bool
 }
 
-func (*transactionLocalRemoteEntity) HasRemoteCommitLocked(entity.RemoteTransactionOutcome) bool {
-	return true
+func (e *transactionLocalRemoteEntity) HasRemoteCommitLocked(entity.RemoteTransactionOutcome) bool {
+	return !e.unchanged
 }
 
 func (l *appliedOutboxLoader) CommitStatus(context.Context, entity.RemoteTransactionID) (entity.RemoteCommitStatus, error) {
@@ -81,6 +83,10 @@ func (*flakySnapshotSyncer) PublishRemoteInterest(context.Context, entity.Remote
 
 func newRemoteTestLoader() *remoteTestLoader {
 	return &remoteTestLoader{mockLoader: newMockLoader(), commits: make(map[entity.RemoteTransactionID][]entity.RemoteCommitReceipt), versions: make(map[int64]uint64), outbox: make(map[entity.RemoteTransactionID]entity.RemoteCommitStatus)}
+}
+
+func (e *testRemoteEntity) HasRemoteCommitLocked(entity.RemoteTransactionOutcome) bool {
+	return e.dirty.Dirty()
 }
 
 func (e *testRemoteEntity) BuildRemoteCommitLocked(lease entity.RemoteWriteLease, outcome entity.RemoteTransactionOutcome) (entity.RemoteCommit, error) {
@@ -229,26 +235,35 @@ func remoteTestTxID(value byte) entity.RemoteTransactionID {
 	return id
 }
 
-func TestRemoteWriteBatchUsesTransactionLocalChangeParticipantWithoutDirtyState(t *testing.T) {
-	const kind entity.EntityKind = 120
+// 本次事务是否有持久变更与 Sync 脏位独立，两种相反组合都必须成立。
+func TestRemoteWriteBatchUsesOnlyTransactionLocalChanges(t *testing.T) {
+	const kind entity.EntityKind = 120 // 沿用本组 Remote 提交夹具专用 kind。
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
-	loader := newRemoteTestLoader()
-	mgr.SetBackend(loader)
-	mgr.SetOwnershipStore(newMockMarkerStore())
-	live := &transactionLocalRemoteEntity{testRemoteEntity: newTestRemoteEntity(1400, 1, kind)}
-	loader.add(live)
-
-	batch, err := mgr.PrepareRemoteWriteBatch(context.Background(), []int64{live.GUId()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = batch.Close(context.Background()) })
-	if err := batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(remoteTestTxID(10), "test", "request", true, 0)); err != nil {
-		t.Fatal(err)
-	}
-	if commits := batch.Commits(); len(commits) != 1 {
-		t.Fatalf("commits=%d, want transaction-local commit despite clean sync tracker", len(commits))
+	for _, unchanged := range []bool{false, true} {
+		t.Run(fmt.Sprint("unchanged=", unchanged), func(t *testing.T) {
+			mgr := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+			loader := newRemoteTestLoader()
+			mgr.SetBackend(loader)
+			mgr.SetOwnershipStore(newMockMarkerStore())
+			live := &transactionLocalRemoteEntity{testRemoteEntity: newTestRemoteEntity(1400, 1, kind), unchanged: unchanged}
+			live.dirty.set(unchanged)
+			loader.add(live)
+			batch, err := mgr.PrepareRemoteWriteBatch(context.Background(), []int64{live.GUId()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = batch.Close(context.Background()) })
+			if err := batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(remoteTestTxID(10), "test", "request", true, 0)); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if unchanged {
+				want = 0
+			}
+			if got := len(batch.Commits()); got != want {
+				t.Fatalf("commits=%d want=%d; Sync dirty must not decide persistence", got, want)
+			}
+		})
 	}
 }
 

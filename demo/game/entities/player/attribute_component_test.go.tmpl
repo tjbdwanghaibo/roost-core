@@ -577,7 +577,7 @@ func runPlayerHandler(t *testing.T, subject *Player, meta nest.HandlerMeta, comm
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(playerGetter{subject: subject}),
 		nest.NestOptionWithTransactionCommitter(committer),
-		nest.NestOptionWithWorkerNumAndMsgCap(1, 16),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}),
 	)
 	name := nest.NewHandlerName("attribute_rollback_probe")
 	if err := engine.RegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {

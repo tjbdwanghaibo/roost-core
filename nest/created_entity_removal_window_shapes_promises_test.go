@@ -88,7 +88,7 @@ func TestHandlerCreateInsideDestroyWindowIsTreatedAsLockConflict(t *testing.T) {
 		pilots := addPilots(t, manager, 38100, 1)
 		access := entity.NewManagerAccess(manager)
 		x := mustBuildCastID(t, 38105, entity.EntityCategory(1), createdInScopeKind)
-		mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
+		mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 		attempts := &createAttempts{first: make(chan struct{})}
 		name := NewHandlerName("b18_destroy_window_strict")
 		mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
@@ -137,7 +137,7 @@ func TestHandlerCreateInsideDestroyWindowIsTreatedAsLockConflict(t *testing.T) {
 		pilots := addPilots(t, manager, 38110, 1)
 		access := entity.NewManagerAccess(manager)
 		x := mustBuildCastID(t, 38115, entity.EntityCategory(1), createdInScopeKind)
-		mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
+		mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 		attempts := &createAttempts{first: make(chan struct{})}
 		name := NewHandlerName("b18_destroy_window_memory")
 		mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {

@@ -33,12 +33,8 @@ func TestParseDir(t *testing.T) {
 	if ent.EntityKind != "EntityKindPlayer" {
 		t.Fatalf("expected entityKind 'EntityKindPlayer', got %q", ent.EntityKind)
 	}
-	// One packer factory, one marker: Core's EntitySyncBuilderParam has a
-	// single PackerFactory, so subjectPacker is the spelling and syncPacker
-	// is its legacy alias. Setting both is refused at parse time
-	// (RR-20260918-01, sync_packer_markers_promises_test.go).
-	if !ent.Sync || ent.SyncNamespace != `"player"` || ent.SubjectPacker != "clientsync.PlayerSubjectPacker" || ent.SyncPacker != "" {
-		t.Fatalf("sync config = enabled:%v topic:%q packer:%q subject:%q", ent.Sync, ent.SyncNamespace, ent.SyncPacker, ent.SubjectPacker)
+	if !ent.Sync || ent.SyncNamespace != `"player"` || ent.SubjectPacker != "clientsync.PlayerSubjectPacker" {
+		t.Fatalf("sync config = enabled:%v topic:%q subject:%q", ent.Sync, ent.SyncNamespace, ent.SubjectPacker)
 	}
 
 	if len(ent.Components) != 2 {
@@ -177,7 +173,6 @@ func TestGenerateRemoteManagedV2Participant(t *testing.T) {
 	for _, required := range []string{
 		"entity.NewRemoteEntityBaseWithMutex(",
 		"var _ entity.IRemoteCommitParticipant",
-		"var _ entity.IRemoteCommitChangeParticipant",
 		"HasRemoteCommitLocked(",
 		"BuildRemoteCommitLocked(",
 		"outcome.PersistChanges.RemotePersistChangeFor(",

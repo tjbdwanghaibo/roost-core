@@ -33,7 +33,7 @@ func TestSubjectSyncPrepareCommitProfiles(t *testing.T) {
 		}},
 	})
 	state.MarkDirty(3)
-	prepared, err := state.Prepare([]SyncProfile{{Key: "near", LOD: 1}, {Key: "far", LOD: 2}, {Key: "near", LOD: 1}})
+	prepared, err := state.PrepareViews([]SyncProfile{{Key: "near", LOD: 1}, {Key: "far", LOD: 2}, {Key: "near", LOD: 1}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,12 +67,12 @@ func TestSubjectSyncReclaimsAbandonedPrepare(t *testing.T) {
 		}},
 	})
 	state.MarkDirty(1)
-	abandoned, err := state.Prepare(nil)
+	abandoned, err := state.PrepareViews([]SyncProfile{{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A fresh in-flight prepare still blocks new prepares.
-	if _, err := state.Prepare(nil); !errors.Is(err, ErrSubjectSyncInFlight) {
+	if _, err := state.PrepareViews([]SyncProfile{{}}, nil); !errors.Is(err, ErrSubjectSyncInFlight) {
 		t.Fatalf("fresh in-flight token must block: %v", err)
 	}
 	// Simulate the abandoned prepare aging past the stale threshold.
@@ -80,7 +80,7 @@ func TestSubjectSyncReclaimsAbandonedPrepare(t *testing.T) {
 	state.inflightSince = time.Now().Add(-subjectSyncInFlightStaleAfter - time.Second)
 	state.mu.Unlock()
 
-	reclaimed, err := state.Prepare(nil)
+	reclaimed, err := state.PrepareViews([]SyncProfile{{}}, nil)
 	if err != nil {
 		t.Fatalf("stale in-flight token was not reclaimed: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestSubjectSyncAbortAndConcurrentDirty(t *testing.T) {
 		}},
 	})
 	state.MarkDirty(1)
-	prepared, err := state.Prepare(nil)
+	prepared, err := state.PrepareViews([]SyncProfile{{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestSubjectSyncAbortAndConcurrentDirty(t *testing.T) {
 	if state.Version() != 1 || !state.PendingDirty() {
 		t.Fatalf("new dirty was lost: version=%d dirty=%v", state.Version(), state.PendingDirty())
 	}
-	second, err := state.Prepare(nil)
+	second, err := state.PrepareViews([]SyncProfile{{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestSubjectSyncSnapshotDoesNotAdvanceVersion(t *testing.T) {
 		},
 	})
 	state.MarkDirty(1)
-	prepared, err := state.Prepare(nil)
+	prepared, err := state.PrepareViews([]SyncProfile{{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestSubjectSyncSnapshotDoesNotAdvanceVersion(t *testing.T) {
 	}
 	// A snapshot for a new subscriber on a clean subject: captured at the
 	// current version, and committing it leaves the version alone.
-	snapshotOnly, err := state.PrepareTick(nil, []SyncProfile{{Key: "near"}})
+	snapshotOnly, err := state.PrepareViews(nil, []SyncProfile{{Key: "near"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestSubjectSyncEntityLockOrderAvoidsGuardInversion(t *testing.T) {
 	var asyncErr error
 	go func() {
 		close(asyncStarted)
-		prepared, err := state.Prepare(nil)
+		prepared, err := state.PrepareViews([]SyncProfile{{}}, nil)
 		asyncErr = err
 		if err == nil {
 			_ = prepared.Abort()
@@ -244,7 +244,7 @@ func TestSubjectSyncConcurrentMarkDirtyRace(t *testing.T) {
 		}(uint(i))
 	}
 	wg.Wait()
-	prepared, err := state.Prepare(nil)
+	prepared, err := state.PrepareViews([]SyncProfile{{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,11 +291,11 @@ func TestPreparedSubjectSyncBatchOwnsCompletionAndCommitsAll(t *testing.T) {
 	first, second := newState(9011), newState(9012)
 	first.MarkDirty(1)
 	second.MarkDirty(2)
-	firstPrepared, err := first.Prepare(nil)
+	firstPrepared, err := first.PrepareViews([]SyncProfile{{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondPrepared, err := second.Prepare(nil)
+	secondPrepared, err := second.PrepareViews([]SyncProfile{{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestPreparedSubjectSyncBatchSurvivesCloseAfterReservation(t *testing.T) {
 		}},
 	})
 	state.MarkDirty(1)
-	prepared, err := state.Prepare(nil)
+	prepared, err := state.PrepareViews([]SyncProfile{{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

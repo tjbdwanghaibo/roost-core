@@ -63,9 +63,7 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 	if errors.Is(replayErr, errProjectorBatchComplete) {
 		replayErr = nil
 	}
-	multiStore, multi := projector.store.(MultiMutationBatchProjectionStore)
-	multi = multi && multiStore.SupportsMultiMutationBatch()
-	segments, err := planProjectionSegments(records, fences, projector.opts.ReplayBatchRecords, projector.opts.ReplayBatchBytes, multi)
+	segments, err := planProjectionSegments(records, fences, projector.opts.ReplayBatchRecords, projector.opts.ReplayBatchBytes)
 	if err != nil {
 		return 0, err
 	}
@@ -170,8 +168,8 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 			projector.projected.Add(uint64(len(unit.records)))
 			processed += len(unit.records)
 			// 单 mutation 的 Project 快路只保存文档末次事务 ID。若后续版本
-			// 覆盖它，旧记录便无法判定幂等，因此仍立即 ack；未知 Store 也保留旧契约。
-			replaySafe := multi && (len(unit.records) > 1 || len(unit.records[0].Mutations) > 1)
+			// 覆盖它，旧记录便无法判定幂等，因此仍立即 ack；非批量 Store 也逐笔确认。
+			replaySafe := batchCapable && (len(unit.records) > 1 || len(unit.records[0].Mutations) > 1)
 			if special || !replaySafe || processed-acked >= projector.opts.CheckpointRecords || projector.now().Sub(lastAck) >= projector.opts.CheckpointInterval {
 				if err := checkpoint(); err != nil {
 					ackFailed = true

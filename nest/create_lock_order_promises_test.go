@@ -73,7 +73,7 @@ func TestHandlerCreateCrossOrderResolvesWithoutDeadlock(t *testing.T) {
 	access := entity.NewManagerAccess(manager)
 	x := mustBuildCastID(t, 9860, entity.EntityCategory(1), createdInScopeKind)
 	y := mustBuildCastID(t, 9861, entity.EntityCategory(1), createdInScopeKind)
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(2, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
 	first := make(chan struct{}, 2)
 	proceed := make(chan struct{})
 	var attempts [2]atomic.Int64
@@ -173,7 +173,7 @@ func TestHandlerCreateThenHigherGroupCastDoesNotFormCycle(t *testing.T) {
 	}
 	access := entity.NewManagerAccess(manager)
 	x := mustBuildCastID(t, 9932, entity.EntityCategory(1), createdInScopeKind)
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(2, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
 	h1Created := make(chan struct{})
 	h2Holding := make(chan struct{})
 	proceed := make(chan struct{})
@@ -254,7 +254,7 @@ func TestSameIDCreateDoesNotOccupyFastPool(t *testing.T) {
 			access := entity.NewManagerAccess(manager)
 			x := mustBuildCastID(t, 9890, entity.EntityCategory(1), createdInScopeKind)
 			committer := newBlockingCommitter()
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(workers, 64))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: workers, QueueCap: 64}, WorkerPoolConfig{}))
 			creator := NewHandlerName("rr48_same_id_creator_" + tc.name)
 			mgr.MustRegisterHandlerWithMeta(creator, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 				value, err := access.Create(createParam(x))
@@ -360,7 +360,7 @@ func TestSwallowedCreateLockConflictStillRollsBack(t *testing.T) {
 	access := entity.NewManagerAccess(manager)
 	x := mustBuildCastID(t, 9945, entity.EntityCategory(1), createdInScopeKind)
 	committer := newBlockingCommitter()
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(2, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
 	creator := NewHandlerName("rr48_swallow_creator")
 	mgr.MustRegisterHandlerWithMeta(creator, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 		value, err := access.Create(createParam(x))
@@ -436,7 +436,7 @@ func TestMemoryHandlerCreateHoldsLockUntilHandlerEnds(t *testing.T) {
 	for i, via := range []string{"access.Create", "CreateInScope"} {
 		t.Run(via, func(t *testing.T) {
 			f := newCreateInScopeFixture(t, 9990+int64(i)*4, nil)
-			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			name := NewHandlerName("rr48_memory_create_" + via)
 			var created entity.IThreadSafeEntity
 			var lockedByOther, readyMidHandler bool

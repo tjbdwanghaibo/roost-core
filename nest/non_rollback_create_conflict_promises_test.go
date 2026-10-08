@@ -50,7 +50,7 @@ func TestNonRollbackHandlerCreateConflictIsNotRequeued(t *testing.T) {
 			access := entity.NewManagerAccess(manager)
 			x := mustBuildCastID(t, 36005+int64(i)*10, entity.EntityCategory(1), createdInScopeKind)
 			committer := newBlockingCommitter()
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(2, 16))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
 			creator := NewHandlerName("rr64_creator_" + tc.name)
 			mgr.MustRegisterHandlerWithMeta(creator, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 				v, err := access.Create(createParam(x))
@@ -122,7 +122,7 @@ func TestNonRollbackHandlerCreateConflictSuppressesLaterLockTimeoutRequeue(t *te
 	access := entity.NewManagerAccess(manager)
 	x := mustBuildCastID(t, 36105, entity.EntityCategory(1), createdInScopeKind)
 	committer := newBlockingCommitter()
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(2, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
 	creator := NewHandlerName("rr64_retag_creator")
 	mgr.MustRegisterHandlerWithMeta(creator, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 		v, err := access.Create(createParam(x))
@@ -177,7 +177,7 @@ func TestNonRollbackHandlerCreateInLockOrderStillWaits(t *testing.T) {
 		t.Fatal("fixture: the created kind must rank above the pilot group")
 	}
 	committer := newBlockingCommitter()
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerNumAndMsgCap(2, 16))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
 	zParam := func() *entity.EntityCreateParam {
 		return &entity.EntityCreateParam{IsCreate: true, Id: z, Category: castOtherCategory, Kind: higherGroupCreatedKind}
 	}

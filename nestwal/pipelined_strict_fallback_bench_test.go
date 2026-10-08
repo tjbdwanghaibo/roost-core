@@ -125,7 +125,7 @@ func BenchmarkBroadcastPipelinedCommit(b *testing.B) {
 				ids[i] = id
 			}
 			mgr := corenest.NewEngine(corenest.NestOptionWithGetter(entity.NewManagerAccess(manager)), corenest.NestOptionWithTransactionCommitter(projector),
-				corenest.NestOptionWithWorkerNumAndMsgCap(8, 1024))
+				corenest.NestOptionWithWorkerPools(corenest.WorkerPoolConfig{Workers: 8, QueueCap: 1024}, corenest.WorkerPoolConfig{}))
 			name := corenest.NewHandlerName(fmt.Sprintf("rr11_bench_%s_%d", tc.name, fallbackBenchUnique.Add(1)))
 			mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, params []any, _ ...corenest.HandlerOption) (any, error) {
 				e := es[0].(*fallbackBenchEntity)

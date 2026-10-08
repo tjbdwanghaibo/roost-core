@@ -11,8 +11,7 @@ import (
 // EntitySyncBuilderParam 真有的字段（Enabled / Topic / PackerFactory）。旧行为：
 // 还写了 FlushPolicy（字段与常量都已不存在）和 SubjectPackerFactory（从未存在），
 // 于是任何 sync=true 的工程编译不过，而本包只比对文本，一直全绿。
-// 两种 packer 标记（subjectPacker 现行、syncPacker 旧写法）指的是同一个字段，
-// 同时给两个要当场报错，而不是任选其一。
+// 只接受 subjectPacker，旧 syncPacker 明确拒绝。
 
 func writeSyncMarkerSource(t *testing.T, dir, name, body string) {
 	t.Helper()
@@ -24,7 +23,6 @@ func writeSyncMarkerSource(t *testing.T, dir, name, body string) {
 func TestGeneratedSyncBlockOnlyNamesFieldsCoreHas(t *testing.T) {
 	for name, marker := range map[string]string{
 		"current spelling": "//roost:entity entityKind=EntityKindAvatar sync=true syncNamespace=\"avatar\" subjectPacker=AvatarPacker",
-		"legacy spelling":  "//roost:entity entityKind=EntityKindAvatar sync=true syncNamespace=\"avatar\" syncPacker=AvatarPacker",
 		"no packer":        "//roost:entity entityKind=EntityKindAvatar sync=true syncNamespace=\"avatar\"",
 	} {
 		dir := t.TempDir()
@@ -70,9 +68,8 @@ type Avatar struct {
 	}
 }
 
-// One field, one value: a marker naming both spellings is a contradiction, so
-// it is refused with the actionable message rather than resolved silently.
-func TestBothPackerMarkersAreRefused(t *testing.T) {
+// 旧标记不能被静默忽略，否则生成实体会丢失业务 packer。
+func TestRetiredPackerMarkerIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	writeSyncMarkerSource(t, dir, "avatar.go", `package avatar
 
@@ -82,7 +79,7 @@ const EntityKindAvatar entity.EntityKind = 141
 
 func AvatarPacker(entity.IThreadSafeEntity) entity.SubjectSyncPacker { return nil }
 
-//roost:entity entityKind=EntityKindAvatar sync=true syncPacker=AvatarPacker subjectPacker=AvatarPacker
+//roost:entity entityKind=EntityKindAvatar sync=true syncPacker=AvatarPacker
 type Avatar struct {
 	*entity.EntityBase
 	entity.ComponentManager
@@ -91,9 +88,9 @@ type Avatar struct {
 `)
 	err := Run([]string{"-dir", dir, "-force"}, os.Stdout)
 	if err == nil {
-		t.Fatal("generating an entity that sets both packer markers was accepted")
+		t.Fatal("retired packer marker was accepted")
 	}
-	if !strings.Contains(err.Error(), "they name the same factory") {
+	if !strings.Contains(err.Error(), "use subjectPacker") {
 		t.Errorf("refusal does not say what to do: %v", err)
 	}
 }

@@ -864,7 +864,7 @@ ROOST_PERF_COUNT=2 ROOST_PERF_LABEL=sync-change-1 ./scripts/perf/sync-aoi.sh -mo
 | `ENTITY_SYNC.md:53` | Manager **不建**“会话 → subjects”反向索引 | `sessionLifetime.subjects` 就是这份反向索引（`sync/entitysync/session.go:47-51`），Hold / Ready / Close 用它（`sync/entitysync/subscriptions.go:118`、`:162`、`:207`）；`sync/README.md:68` 写的是现状 |
 | `ENTITY_SYNC.md:39`、`docs/INTERNALS.md:86`、`docs/feature/SYNC-COMPLETION-2026-09-23.md:17` | 按 LOD、Key、SchemaVersion 升序选生效视图 | 先比 `ProfilePriorities` 的排名（未配置用 LOD），再比 LOD、Key、SchemaVersion（`sync/entitysync/subject.go:162-174`） |
 | `ENTITY_SYNC.md:18` | “旧的显式 Publish 接口继续兼容” | `EntityBase` 只有 `EnableSync` / `SetSyncState` / `Sync` / `SyncEnabled` / `MarkSyncDirty` / `MarkSyncFullDirty`（`entity/entity_base.go:148-220`），找不到对应的 Publish 接口（推断过时） |
-| `docs/INTERNALS.md:84` | tick 里对 pending subject 调 `PrepareTick` | Flush 调 `PrepareViews`（`sync/entitysync/flush.go:185`）；`PrepareTick` 是兼容入口 |
+| `docs/INTERNALS.md:84` | tick 里对 pending subject 调 `PrepareTick` | Flush 调 `PrepareViews`（`sync/entitysync/flush.go:185`）；旧 `PrepareTick` 已删除，只保留显式视图入口 |
 | `docs/INTERNALS.md:92` | lockstep “历史按容量保存” | History 无界，必须调用方 `TrimBefore` / `Room.TrimHistory`（`sync/lockstep/history.go:26-33`、`:57`） |
 | `docs/INTERNALS.md:88`、`kit/README.md:516` vs `skill/README.md:32` | syncstream 是服务间、与客户端方向无关 / skillsync 是客户端同步协议、构建于 syncstream 之上 | 两处定位需统一（skillsync 的 `Applier` 是客户端） |
 | `docs/USER_GUIDE.md:466` | 状态同步“datagram 发可丢弃最新状态” | M-18 后状态帧只走可靠通道（`sync/nettransport/channel.go:60-63`；`ENTITY_SYNC.md:72`） |

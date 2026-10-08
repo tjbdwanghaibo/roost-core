@@ -29,14 +29,9 @@ type DispatcherStats struct {
 	Queue             DispatchQueueStats
 	Fast, Slow        worker.PoolStats
 	FastContinuations int
-	// Deprecated: Main=Fast、Remote=Slow；Heart/Cost 不再创建池。
-	Main    worker.PoolStats `json:"-"`
-	Heart   worker.PoolStats `json:"-"`
-	Cost    worker.PoolStats `json:"-"`
-	Remote  worker.PoolStats `json:"-"`
-	Delayed int
-	Stopped bool
-	Work    DispatcherWorkStats
+	Delayed           int
+	Stopped           bool
+	Work              DispatcherWorkStats
 }
 
 func (m *Dispatcher) Stats() DispatcherStats {
@@ -56,7 +51,6 @@ func (m *Dispatcher) Stats() DispatcherStats {
 		},
 	}
 	stats.Fast, stats.Slow, stats.FastContinuations, stats.Queue = m.queue.snapshotStats()
-	stats.Main, stats.Remote = stats.Fast, stats.Slow
 	return stats
 }
 

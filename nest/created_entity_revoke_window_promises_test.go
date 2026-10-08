@@ -48,7 +48,7 @@ func newRevokeWindowFixture(t *testing.T, unique int64) *revokeWindowFixture {
 	f.access = entity.NewManagerAccess(f.manager)
 	f.x = mustBuildCastID(t, unique+5, entity.EntityCategory(1), createdInScopeKind)
 	// A 停在 post-release 里占一个快 worker（测试同步点），B 需要另一个。
-	f.mgr = NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerNumAndMsgCap(2, 16))
+	f.mgr = NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
 	f.aName = NewHandlerName("rr81_create_then_fail")
 	f.mgr.MustRegisterHandlerWithMeta(f.aName, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 		if _, err := f.access.Create(createParam(f.x)); err != nil {

@@ -13,10 +13,6 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
-type multiSegmentStore struct{ recordingSegmentStore }
-
-func (*multiSegmentStore) SupportsMultiMutationBatch() bool { return true }
-
 func localMultiRecord(id byte) coredata.CommitRecord {
 	r := projectorRecord(id, false)
 	second := r.Mutations[0]
@@ -28,15 +24,12 @@ func localMultiRecord(id byte) coredata.CommitRecord {
 func TestMultiBatchCapabilityAndSpecialBoundaries(t *testing.T) {
 	records := []coredata.CommitRecord{localMultiRecord(1), localMultiRecord(2), projectorRecord(3, true), localMultiRecord(4)}
 	for _, capable := range []bool{false, true} {
-		var store ProjectionStore = &recordingSegmentStore{}
-		var events *[]string
-		if capable {
-			s := &multiSegmentStore{}
-			store = s
-			events = &s.events
-		} else {
-			events = &store.(*recordingSegmentStore).events
+		recorder := &recordingSegmentStore{}
+		var store ProjectionStore = recorder
+		if !capable {
+			store = struct{ ProjectionStore }{recorder}
 		}
+		events := &recorder.events
 		p, w := stoppedProjectorWithRecords(t, store, records, 4<<20)
 		p.opts.CheckpointInterval = time.Hour
 		p.ack = func(ctx context.Context, fence corenest.CommitFence) error {
@@ -65,12 +58,12 @@ func TestMultiCheckpointThresholdsAndFailurePrefix(t *testing.T) {
 		wantAcks, wantProcessed int
 	}{
 		{"end", 256, time.Hour, false, 1, 3}, {"count", 2, time.Hour, false, 2, 3},
-		{"time", 256, 20 * time.Millisecond, false, 3, 3}, {"legacy", 1, time.Hour, false, 3, 3},
+		{"time", 256, 20 * time.Millisecond, false, 3, 3}, {"per-unit", 1, time.Hour, false, 3, 3},
 		{"failure", 256, time.Hour, true, 1, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			records := []coredata.CommitRecord{localMultiRecord(1), localMultiRecord(2), localMultiRecord(3)}
-			store := &multiSegmentStore{}
+			store := &recordingSegmentStore{}
 			if tc.fail {
 				store.failID = records[2].ID
 			}
@@ -93,7 +86,7 @@ func TestMultiCheckpointThresholdsAndFailurePrefix(t *testing.T) {
 
 func TestMultiCheckpointLossKeepsEntireSuccessfulPrefix(t *testing.T) {
 	records := []coredata.CommitRecord{localMultiRecord(1), localMultiRecord(2), localMultiRecord(3)}
-	p, w := stoppedProjectorWithRecords(t, &multiSegmentStore{}, records, 1)
+	p, w := stoppedProjectorWithRecords(t, &recordingSegmentStore{}, records, 1)
 	p.opts.CheckpointInterval = time.Hour
 	ackErr := errors.New("lost checkpoint")
 	p.ack = func(context.Context, corenest.CommitFence) error { return ackErr }
@@ -110,7 +103,7 @@ func TestMultiCheckpointLossKeepsEntireSuccessfulPrefix(t *testing.T) {
 
 func TestMultiCheckpointFlushesBeforeHeldAndOnCancel(t *testing.T) {
 	records := []coredata.CommitRecord{localMultiRecord(1), localMultiRecord(2), localMultiRecord(3)}
-	p, w := stoppedProjectorWithRecords(t, &multiSegmentStore{}, records, 1)
+	p, w := stoppedProjectorWithRecords(t, &recordingSegmentStore{}, records, 1)
 	p.opts.CheckpointInterval = time.Hour
 	p.admit(records[2].ID)
 	n, err := p.ReplayPass(context.Background())
@@ -129,7 +122,7 @@ func TestMultiCheckpointFlushesBeforeHeldAndOnCancel(t *testing.T) {
 
 func TestMarkerlessSingleRecordStillCheckpointsImmediately(t *testing.T) {
 	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, false)}
-	s := &multiSegmentStore{}
+	s := &recordingSegmentStore{}
 	p, w := stoppedProjectorWithRecords(t, s, records, 1)
 	p.opts.CheckpointInterval = time.Hour
 	p.ack = func(ctx context.Context, f corenest.CommitFence) error {
@@ -146,7 +139,7 @@ func TestMarkerlessSingleRecordStillCheckpointsImmediately(t *testing.T) {
 }
 
 func TestProjectionAdmissionConcurrentLimitAndRecovery(t *testing.T) {
-	p, w := stoppedProjectorWithRecords(t, &multiSegmentStore{}, nil, 4<<20)
+	p, w := stoppedProjectorWithRecords(t, &recordingSegmentStore{}, nil, 4<<20)
 	p.opts.MaxUnackedRecords = 8
 	p.opts.WarnUnackedRecords = 4
 	var accepted atomic.Int64
@@ -192,7 +185,7 @@ func TestProjectionAdmissionConcurrentLimitAndRecovery(t *testing.T) {
 }
 
 func TestProjectionAdmissionReturnsCapacityOnAppendFailure(t *testing.T) {
-	p, _ := stoppedProjectorWithRecords(t, &multiSegmentStore{}, nil, 4<<20)
+	p, _ := stoppedProjectorWithRecords(t, &recordingSegmentStore{}, nil, 4<<20)
 	p.opts.MaxUnackedRecords = 1
 	invalid := localMultiRecord(1)
 	invalid.Mutations[0].Key.Resource = ""
@@ -211,7 +204,7 @@ func TestProjectionAdmissionReturnsCapacityOnAppendFailure(t *testing.T) {
 }
 
 type cancelAfterMultiStore struct {
-	multiSegmentStore
+	recordingSegmentStore
 	cancel context.CancelFunc
 }
 
@@ -219,7 +212,7 @@ func (s *cancelAfterMultiStore) Project(ctx context.Context, r coredata.CommitRe
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := s.multiSegmentStore.Project(ctx, r); err != nil {
+	if err := s.recordingSegmentStore.Project(ctx, r); err != nil {
 		return err
 	}
 	s.cancel()
@@ -247,7 +240,7 @@ func TestLocalBatchEligibilityChecksEveryMutation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			records := []coredata.CommitRecord{localMultiRecord(1), localMultiRecord(2), localMultiRecord(3)}
 			edit(&records[1])
-			segments, err := planProjectionSegments(records, projectionTestFences(records), 16, 4<<20, true)
+			segments, err := planProjectionSegments(records, projectionTestFences(records), 16, 4<<20)
 			if err != nil || len(segments) != 3 || segments[1].batch {
 				t.Fatalf("segments=%+v err=%v", segments, err)
 			}

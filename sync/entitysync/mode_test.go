@@ -68,7 +68,7 @@ func TestFrozenContentCoalescesAndRetainsBudgetUntilSettlement(t *testing.T) {
 	if err := s.FreezeSyncViews([]entity.SyncProfile{{}}, nil, reserve); err != nil {
 		t.Fatal(err)
 	}
-	first, err := s.Prepare(nil)
+	first, err := s.PrepareViews([]entity.SyncProfile{{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestFrozenContentCoalescesAndRetainsBudgetUntilSettlement(t *testing.T) {
 	if err = first.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Prepare(nil)
+	next, err := s.PrepareViews([]entity.SyncProfile{{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestFrozenCapacityFailureLeavesDirtyForRecovery(t *testing.T) {
 	if !errors.Is(err, entity.ErrSyncFrozenCapacity) || !s.PendingDirty() {
 		t.Fatalf("capacity=%v dirty=%v", err, s.PendingDirty())
 	}
-	p, err := s.Prepare(nil)
+	p, err := s.PrepareViews([]entity.SyncProfile{{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

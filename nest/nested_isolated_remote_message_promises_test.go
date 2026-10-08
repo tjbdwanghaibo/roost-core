@@ -34,7 +34,7 @@ func TestNestedIsolatedInRemoteMessageIsRefused(t *testing.T) {
 			batch := &recordingRemoteBatch{}
 			manager := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) { return batch, nil }}
 			outer, iso := &recordsCommitter{}, &recordsCommitter{}
-			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerNumAndMsgCap(1, 16))
+			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 			name := NewHandlerName(fmt.Sprintf("rr75_outer_%d", i))
 			var isoErr error
 			var isoRuns atomic.Int64

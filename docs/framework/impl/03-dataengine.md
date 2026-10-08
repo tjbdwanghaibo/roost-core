@@ -144,7 +144,7 @@
 | `Runtime` | `dataengine/engine/runtime.go:17-39` | `stopping` 终态；`drainAttempted/projectorClosed/walClosed/outboxClosed` 记住哪些已停 |
 | `Projector` | `dataengine/engine/projector.go:98-149` | `held`/`admitted`/`pendingEntities`/`pendingTransactions`/`fencedEntities` 都在 `heldMu` 下；`tickets` 在 `ticketMu` 下；`fatalErr`/`walTerminalErr`/`lastErr` 在 `errMu` 下 |
 | `ProjectorOptions` | `dataengine/engine/projector.go:48-77` | 缺省 256 条 / 4MiB / 4MiB 读、ack 每 256 条或 20ms、Remote 并行 8 |
-| 存储能力接口 | `dataengine/engine/projector.go:24-46`、`dataengine/engine/fenced_step.go:36-39` | `BatchProjectionStore`、`MultiMutationBatchProjectionStore`、`RemoteParallelProjectionStore`、`FenceOutcomeProjectionStore`：未声明的能力一律按保守路径（逐条、串行、按“可能跳过”驱逐） |
+| 存储能力接口 | `dataengine/engine/projector.go:24-46`、`dataengine/engine/fenced_step.go:36-39` | `BatchProjectionStore`（包含多 DAO 事务与持久幂等身份）、`RemoteParallelProjectionStore`、`FenceOutcomeProjectionStore`：未声明的能力一律按保守路径（逐条、串行、按“可能跳过”驱逐） |
 | `entityProjection` | `dataengine/engine/entity_projection.go:12-21` | 一条在途记录涉及的实体、完成通道、`fenced`、`evicting` |
 | `MongoStore` | `dataengine/engine/mongo_store.go:54-64` | `afterLeaseFence` 是测试缝，生产为 nil |
 | `EntityRepository` | `dataengine/engine/entity_repository.go:41-53` | `flights` 按完整 ID 合并冷加载；`loadedHooks` 供 Sync 重绑 |

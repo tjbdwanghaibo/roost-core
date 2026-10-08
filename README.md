@@ -227,7 +227,7 @@ func main() {
 	// 启动引擎：消息按实体 ID 哈希到固定 worker，同一实体串行执行
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(getter),
-		nest.NestOptionWithWorkerNumAndMsgCap(2, 1, 64),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}),
 	)
 	if err := engine.Start(); err != nil {
 		panic(err)
@@ -487,7 +487,7 @@ Handler 不得自行创建异步执行；需要事务提交后可靠执行的工
 6. **Guard 与实体管理**：`entity/entity_guard.go`（锁序、guard 作用域、release hook）→ `entity/entity_manager.go`、`entity/manager_access.go` + 对应测试。
 7. **Data Engine 契约**：`dataengine/tracker.go` → `dataengine/mutation.go` → `dataengine/store.go`，再到 kit `dataengine/projector.go`、`mongo_store.go`、`entity_repository.go` 与 `migration.go`。
 8. **跨实体与跨服**：`nest/cast.go` + `nest/cast_test.go`（锁序预检）→ `entity/entity_remote.go`、`entity/remote_manager.go`、`nest/remote_access.go` → 文档 `REMOTE_ENTITY.md` → `ownerroute/`。
-9. **状态同步**：`entity/subject_sync.go`（`PrepareTick`，prepare/commit 两阶段）→ `sync/entitysync/manager.go`（注册与生命周期）→ `subscriptions.go`（会话与订阅）→ `flush.go`（tick、门槛、逐帧准入与提交）→ `sync/entitysync/session.go` + `wire.go`（ObjectRef、frame 帧）→ 文档 `ENTITY_SYNC.md`；服务间的有序状态流另见 `syncstream/`。
+9. **状态同步**：`entity/subject_sync.go`（`PrepareViews`，prepare/commit 两阶段）→ `sync/entitysync/manager.go`（注册与生命周期）→ `subscriptions.go`（会话与订阅）→ `flush.go`（tick、门槛、逐帧准入与提交）→ `sync/entitysync/session.go` + `wire.go`（ObjectRef、frame 帧）→ 文档 `ENTITY_SYNC.md`；服务间的有序状态流另见 `syncstream/`。
 10. **帧同步（输入帧）**：`sync/lockstep/sequencer.go`（乐观帧锁定）→ `sync/lockstep/wire.go`（冗余广播编码）→ `sync/lockstep/history.go`、`sync/lockstep/desync.go` → `sync/lockstep/lockstep_test.go`（丢包仿真与确定性验证就是用法文档）→ `sync/lockstep/room.go`（房间与传输接线）。
 11. **编排与装配**：`saga/engine.go` + `SAGA.md`（`saga/engine_test.go` 开头的 `memoryStore` 与 `TestStoreContract*` 是 Store 实现者的必读规格）→ `bus/bus.go` + `bus/bus_lifecycle_test.go`（生命周期与 subject 布局的权威文档）→ `app/app.go`、`app/registry.go` + `app/example_test.go`（shared/service-specific mod 分层的完整装配样例）。
 12. **语义即测试的推荐清单**：`worker/worker_test.go`（"接纳即执行"不变量的回归，注释写明了原缺陷）、`webroute/route_test.go`（生成路由运行时的完整用法说明书）、`configdata/configdata_test.go`（reload/DryRun/Rollback/listener 回滚）、`etcd/watch_callback_test.go`（无损背压 vs LocalMirror 订阅隔离的选型依据）、`bus/reliable_test.go`（去重按 consumer、DLQ requeue 语义）。

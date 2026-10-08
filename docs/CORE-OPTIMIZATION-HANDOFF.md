@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**2026-10-08 三大模块旧兼容清理（未发版）：**Nest 只保留快慢池配置/统计；Sync 只保留 PrepareViews 与 subjectPacker；DataEngine 批量 Store 统一多 DAO 契约；Remote participant 必须按事务局部变更判断，不回退 DAO dirty。生产 Go 净减 178 行。全仓 131 包、相关七包 race、build/vet、生成 game-demo 19 包与生成 Sync 实体实跑均通过；资源夹具仅生成编译，Linux 仅交叉构建。DAO schema 自动迁移暂保留，是否整体撤销仍待维护者选择；Remote interest Generation=0 旧发布端分支另列，不宣称全仓兼容层已清空。已知 cube 三处旧 worker option 调用未改，升级需适配。无压测/部署/tag。[说明与仓外影响](release/CORE-COMPAT-CLEANUP-2026-10-08-NOTES.md) · [验收与复跑](release/CORE-COMPAT-CLEANUP-2026-10-08-IMPLEMENTATION.md)。
+
 WAL 本批 CBM 已刷新到 `2026-10-08T06:26:11Z`（25615 nodes / 246197 edges）。最终 70 个现存改动 Go/模板路径中 61 个无记录缺口、7 个 testdata 排除、2 个模板部分解析；后两类已用源码补证，具体见本批实现记录。索引刷新后只有文档变更，业务代码仍为已验收的 `53686c05`。
 
 **2026-10-08 WAL 单路径已实施并合入 main（`53686c05`，未发版）：**roost-coding 与本地 Codex skill 已明确未上线阶段不兼容旧逻辑/格式。WAL 固定 codec 7，删除 V1/V2 开关、Mutation 旧字段与独立 nestwal.Committer/Runtime，统一正式 Projector/Assembly；生产 Go 净减 925 行。macOS 全仓 131 包、七目标包 race、生成 game-demo 19 包通过；两套资源夹具生成编译、Linux/arm64 交叉 build 通过。未重跑 Linux 实机、真实资源矩阵或压测。旧 codec 5/6 WAL 明确拒绝，升级先停旧进程并完成需保留数据落库，再用新目录；不会自动清空数据。[说明](release/WAL-SINGLE-PATH-2026-10-08-NOTES.md) · [实现与验收](release/WAL-SINGLE-PATH-2026-10-08-IMPLEMENTATION.md)。下方为此前批次状态。

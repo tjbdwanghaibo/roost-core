@@ -146,7 +146,7 @@ handler 开 goroutine、准入结果被丢弃会直接破坏正确性，算违�
 ```go
 engine := nest.NewEngine(
     nest.NestOptionWithGetter(getter),               // 正式装配是 *entity.ManagerAccess
-    nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 64),
+    nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 64}, nest.WorkerPoolConfig{}),
 )
 engine.MustRegisterHandlerWithMeta(name, handler, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 _ = engine.Start()                                    // Start 之后不能再实例注册
@@ -203,7 +203,7 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 - **异步准入成功之后**，参数归 Nest 所有，调用方不能再改；异步消息只带框架信封（配置代、请求身份、trace），不带调用方 ctx 的值、KV 与事务状态，业务数据一律放 Params（`nest/client.go:211`、`nest/nest.go:686`）。
 - **同步请求**带完整快照，handler 看到的 `Base` 就是调用方 ctx：ctx 已取消的消息在 handler 前被拒（`nest/nest_dispatch.go:153`）。等待上限是请求的 `SyncWait`，否则引擎的 `SyncTimeout`（kit 的 `nest.request_timeout`，缺省 5s，`nest/client.go:255`）。**等待先结束只说明没等到回复，不说明结果**（见 §6.4 第 14 行）。
 - `DispatchBroadcast` 按目标分批独立准入：返回错误时之前已准入的批次仍会执行；需要全有或全无用 `DispatchMulti`（`nest/client.go:28`）。带 Remote 目标的广播被拒绝（`ErrRemoteBroadcastUnsupported`）。
-- 发送选项：`SendOptionWithDelay(d)` 进延迟堆（上限 `nest.max_delay`，缺省 24h，超出 `ErrDelayTooLong`）；`SendOptionSlow()` 强制慢准备（`SendOptionIsCost` 是它的旧名，已弃用，`nest/nest.go:609`～`:621`）。
+- 发送选项：`SendOptionWithDelay(d)` 进延迟堆（上限 `nest.max_delay`，缺省 24h，超出 `ErrDelayTooLong`）；`SendOptionSlow()` 强制慢准备。
 - 准入失败的错误：`ErrQueueFull`（预算满）、`ErrNestStopped`（未启动 / 已停）、`ErrNestFenced`（已 fence，带原因），都在返回前完成，消息不会执行。
 
 ### 4.4 handler 里能做什么、不能做什么
@@ -365,11 +365,10 @@ func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amoun
 
 | 键 | 缺省（不写 / 0） | 作用 |
 | --- | --- | --- |
-| `nest.fast.workers` | 用 `nest.worker_num`；再缺省 `GOMAXPROCS` | 快池 worker 数（`nest/nest.go:450`、`nest/dispatcher.go:94`） |
-| `nest.fast.queue_capacity` | 用 `nest.queue_capacity`；再缺省 10000 | 快池等待预算（整池，不按 worker 倍增）；同时作为延迟堆容量的缺省（`nest/nest.go:453`） |
-| `nest.slow.workers` | 用 `nest.remote_workers`；再缺省 `max(32, 快池×4)` | 慢池 worker 数（`nest/dispatcher.go:129`） |
+| `nest.fast.workers` | `GOMAXPROCS` | 快池 worker 数（`nest/nest.go:450`、`nest/dispatcher.go:94`） |
+| `nest.fast.queue_capacity` | 10000 | 快池等待预算（整池，不按 worker 倍增）；同时作为延迟堆容量的缺省（`nest/nest.go:453`） |
+| `nest.slow.workers` | `max(32, 快池×4)` | 慢池 worker 数（`nest/dispatcher.go:129`） |
 | `nest.slow.queue_capacity` | 64 | 慢池等待预算 |
-| `nest.worker_num` / `nest.queue_capacity` / `nest.remote_workers` | — | 旧键，被上面的新键覆盖 |
 | `nest.heartbeat_worker_num` | — | **无效**：会被读取并传进引擎，但派发器不再创建心跳池（`nest/dispatcher.go:87` 不使用这个参数，§7.2） |
 | `nest.delayed_capacity` | 等于快池等待预算 | 延迟消息（`SendOptionWithDelay` 与暂时性错误重排）的容量，满了 `ErrQueueFull` |
 | `nest.max_delay` | 24h | 单条延迟上限，超出 `ErrDelayTooLong` |

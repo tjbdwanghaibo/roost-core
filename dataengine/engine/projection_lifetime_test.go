@@ -102,7 +102,7 @@ func (c *selectEntryContext) Done() <-chan struct{} {
 // 运行中的 projector 上，截止时间内投影未完成就返回截止错误；投影成功后释放；
 // Close 唤醒仍在等待的调用方。
 func TestEntityProjectionBarrierTracksAllDAOsAndReleasesOnFailure(t *testing.T) {
-	p, _ := manualProjector(t, &multiSegmentStore{})
+	p, _ := manualProjector(t, &recordingSegmentStore{})
 	record := localMultiRecord(1)
 	record.Mutations[1].Key.ID = 999
 	ids := []int64{record.Mutations[0].Key.ID, 999}
@@ -283,7 +283,7 @@ func (ticket failedCommitTicket) Err() error            { return ticket.err }
 // 本进程不会投影它；该实体的等待方要立即拿到 WAL 错误。真实 WAL 没有可从本包注入 fsync
 // 失败的缝，这里降到内部入口：登记在途记录后直接把失败票据交给 signalWhenDurable。
 func TestEntityProjectionWaiterSeesFailedPipelinedDurability(t *testing.T) {
-	p, _ := manualProjector(t, &multiSegmentStore{})
+	p, _ := manualProjector(t, &recordingSegmentStore{})
 	record := projectorRecord(5, false)
 	if err := p.reserve(record, true); err != nil {
 		t.Fatal(err)
@@ -306,7 +306,7 @@ func TestEntityProjectionWaiterSeesFailedPipelinedDurability(t *testing.T) {
 // 合法 Remote 写与合法 lease-fence receipt（先用 ValidateCommitRecord 证明），修前三个
 // 入口都准入并写进 WAL；每个入口用独立事务，逐个报告。
 func TestRemoteLeaseFenceRejectedBeforeWALAdmission(t *testing.T) {
-	p, w := stoppedProjectorWithRecords(t, &multiSegmentStore{}, nil, 4<<20)
+	p, w := stoppedProjectorWithRecords(t, &recordingSegmentStore{}, nil, 4<<20)
 	fence, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
 		Database: "saga", Resource: "saga_steps", DocumentID: "step-1", Owner: "sid-1", Token: 7, Digest: make([]byte, sha256.Size),
 	})

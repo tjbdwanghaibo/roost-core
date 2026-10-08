@@ -6,7 +6,7 @@ Entity Sync 只有一套实现，四层（ARCH-10 / M-13 / M-14，2026-09-22）�
 
 | 层 | 包 | 职责 |
 | --- | --- | --- |
-| 内容 | `entity` | `SubjectSyncState`：版本、脏位、packer、CommitLSN、Namespace；`PrepareTick` 一次锁内捕获 |
+| 内容 | `entity` | `SubjectSyncState`：版本、脏位、packer、CommitLSN、Namespace；`PrepareViews` 一次锁内捕获 |
 | 机制 | `sync/entitysync` | `Manager`：全部 subject 与会话，subject 自己持有订阅者表，每 tick 给每个会话一到多帧，门槛，held/ready，两种失败 |
 | 组织 | `sync/entitysync/policy` | 谁订谁：`Interest`（距离 + 关系源）、`Group`（成员全互见）、`Direct`（显式绑定）；各实例通过独立 `SubscriptionSource` 持有订阅 |
 | 应用 | 业务启动与接入层 | `Transport` 适配、会话生命周期（进场 held → ready → 离场）、地图尺寸 / 半径 / 关系这类只有游戏知道的事 |

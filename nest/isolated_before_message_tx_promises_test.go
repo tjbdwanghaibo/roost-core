@@ -102,7 +102,7 @@ func TestIsolatedInSlowPrepareOfRemoteMessageIsRefused(t *testing.T) {
 	var batchCommits atomic.Int32
 	batch := &stagedRemoteBatch{commit: func() { batchCommits.Add(1) }}
 	remote := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) { return batch, nil }}
-	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(remote), NestOptionWithTransactionCommitter(&recordsCommitter{}), NestOptionWithWorkerNumAndMsgCap(1, 16))
+	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(remote), NestOptionWithTransactionCommitter(&recordsCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
 	name := NewHandlerName("b19_remote_after_prepare")
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 		return "ok", nil

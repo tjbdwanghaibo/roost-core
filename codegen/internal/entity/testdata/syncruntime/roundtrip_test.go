@@ -57,7 +57,7 @@ func TestSyncEntityBuildsAndCarriesItsSyncState(t *testing.T) {
 	if !state.PendingDirty() {
 		t.Fatal("marking the subject dirty left nothing pending")
 	}
-	prepared, err := state.Prepare(nil)
+	prepared, err := state.PrepareViews([]entity.SyncProfile{{}}, nil)
 	if err != nil {
 		t.Fatalf("prepare through the generated packer: %v", err)
 	}

@@ -206,7 +206,7 @@ func TestInitEntitySyncInstallsContentState(t *testing.T) {
 	if state == nil || state.SubjectID() != e.ID() || state.Namespace() != "factory.subject" || state.SubjectKind() != uint32(testEntityKind) {
 		t.Fatalf("subject sync state mismatch: %+v", state)
 	}
-	prepared, err := state.PrepareTick(nil, []SyncProfile{{}})
+	prepared, err := state.PrepareViews(nil, []SyncProfile{{}})
 	if err != nil {
 		t.Fatalf("subject snapshot: %v", err)
 	}
