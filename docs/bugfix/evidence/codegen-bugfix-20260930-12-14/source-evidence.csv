@@ -1,6 +1,0 @@
-"path","sha256","source_head","evidence"
-"codegen/internal/cfggen/main.go","bd51a41a7c632d96fe07466a8c886ca08c0540718537394186d2443a56efeaef","05f0dc3b","current CG identifiers; behavior tested by initial and final integration logs"
-"codegen/internal/cfggen/consumer_promises_test.go","cd93c38820a723b4d1efdc2c833f7ea1cbcca224f1eae6b8ce22836f6a1e4ecf","05f0dc3b","current CG identifiers; behavior tested by initial and final integration logs"
-"codegen/internal/cfggen/namespace_promises_test.go","e7d1cc29fa93cc95d5d337475ad687406a1d7ec1ab6b773f03a9933a32f19060","05f0dc3b","current CG identifiers; behavior tested by initial and final integration logs"
-"codegen/internal/roost/dependencies.go","d503e747fb12fe0564a49da9a5915fbd579fd0e1ad2130a1cba37339757cae9a","05f0dc3b","current CG identifiers; behavior tested by initial and final integration logs"
-"codegen/internal/roost/dependencies_consolidation_promises_test.go","cddb97db208df509bab86da91e9686c625535ed88ce4ec517ad9d2f7567bbdf4","05f0dc3b","current CG identifiers; behavior tested by initial and final integration logs"

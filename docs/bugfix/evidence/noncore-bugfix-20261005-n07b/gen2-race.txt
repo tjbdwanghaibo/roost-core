@@ -1,4 +1,0 @@
-ok  	example.com/n07bgd2/game/entities/player	1.873s
-ok  	example.com/n07bgd2/game/handler	2.578s
-ok  	example.com/n07bgd2/game/gameplay/attribute	2.841s
-ok  	example.com/n07bgd2/internal/service/game	33.033s

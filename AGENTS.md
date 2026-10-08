@@ -1,12 +1,8 @@
-# Roost agent 工作入口
+# 仓库维护入口
 
-编写、优化或审查本仓库代码前，读取 [roost 写代码基本要求](docs/agent-skills/roost-coding/SKILL.md)。这是可随仓库交接的规则源，不依赖某台机器的 skill 安装；这里的 skill 是 agent 开发规范，和 `skill/` 游戏技能模块无关。
+当前运行时稳定基线v1.24.0。修改前阅读 [维护手册](docs/maintenance/README.md)、[模块目录](docs/framework/README.md) 和 [已知限制](docs/maintenance/KNOWN-LIMITS.md)。设计与实现的现行说明在docs/framework；开发过程资料已迁入Git历史，不再要求读取已删除的docs/agent-skills。
 
-当前优化状态、业务目标、已接受的性能边界、验收与复跑入口见 [核心优化交接](docs/CORE-OPTIMIZATION-HANDOFF.md)。按任务读取相关原始记录，不因历史“待实施”文字重复改造已完成链路。
-
-维护者长期规则、常用 skill、本机环境与发版流程的汇总见 [roost-maintainer agent](docs/agent-skills/roost-maintainer/AGENT.md)（接手 roost-core 实现类任务时先读；本机镜像 `~/.claude/agents/roost-maintainer.md`）。
-
-用户明确请求修复 review/bug 时使用 [roost-bugfix](docs/agent-skills/roost-bugfix/SKILL.md)：先固定问题范围和修前证据，实施根因修复与行为回归，记录 bugfix/进度，再按已有授权提交推送。普通 roost-review 仍只审查和记录。
+业务代码修改应补必要中文契约注释、按影响范围测试、更新对应现行文档。文档补丁不得混入行为重构。不等待GitHub CI，不能把未运行检查记成通过。
 
 ## Codebase Memory
 

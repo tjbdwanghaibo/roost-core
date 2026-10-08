@@ -1,7 +1,0 @@
-# TestRealMongoOperationClaimsQueryExaminesOnlyDecisiveClaims，补修后的查询、删掉 by_operation_decision（即只有 RR-15 提交时的索引）
-    step_operation_claims_cost_real_mongo_integration_test.go:269: reserve, life 2 over 2000 accumulated claims: examined 1336 keys and 1337 documents to return 2 (plan LIMIT<-FETCH<-OR<-[FETCH<-IXSCAN(claim_expired),IXSCAN(claim_expired)]), want only the decisive claims touched
-    step_operation_claims_cost_real_mongo_integration_test.go:269: reserve, life 0 over 2000 accumulated claims: examined 1336 keys and 1336 documents to return 1 (plan LIMIT<-FETCH<-OR<-[FETCH<-IXSCAN(claim_expired),IXSCAN(claim_expired)]), want only the decisive claims touched
-    step_operation_claims_cost_real_mongo_integration_test.go:269: operationSuccess over 2000 accumulated claims: examined 1336 keys and 1336 documents to return 1 (plan LIMIT<-FETCH<-OR<-[FETCH<-IXSCAN(claim_expired),IXSCAN(claim_expired)]), want only the decisive claims touched
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/saga	0.944s
-FAIL

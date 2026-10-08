@@ -1,7 +1,0 @@
-before: bystander toxics=["someone-elses-latency"] proxies=["bystander-n15","nats-1","nats-2","nats-3","redis"]
-ok  	github.com/tjbdwanghaibo/roost-core/redis/driver	1.236s
-after redis/driver: bystander toxics=["someone-elses-latency"] proxies=["bystander-n15","nats-1","nats-2","nats-3","redis"]
-ok  	github.com/tjbdwanghaibo/roost-core/kit/nats	2.173s
-after kit/nats: bystander toxics=["someone-elses-latency"] proxies=["bystander-n15","nats-1","nats-2","nats-3","redis"]
-jq: error (at <stdin>:1): Cannot index string with string "name"
-cleanup: bystander toxics= proxies=[]

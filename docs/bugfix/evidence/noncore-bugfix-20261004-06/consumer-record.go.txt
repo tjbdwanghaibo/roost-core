@@ -1,7 +1,0 @@
-package db
-
-type Record struct {
-	ID int64
-	Version int64
-	Payload string
-}

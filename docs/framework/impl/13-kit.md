@@ -1,25 +1,24 @@
-# 次核心：Service 领域能力：实现与维护
+# 次核心：Kit 装配：实现与维护
 
-运行时代码基准：v1.24.0（2fa1c7877b14c77b52e062bedcb3455cef8db0fb）。[设计与使用](../guide/09-kit-services.md)
+运行时代码基准：v1.24.0（2fa1c7877b14c77b52e062bedcb3455cef8db0fb）。[设计与使用](../guide/13-kit.md)
 
 ## 1. 实现边界
 
-`service`、`servicerpc`、`servicemetrics`、`kit/service`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`kit`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
-1. 公开接口与 .local 管理接口分开。
-2. 幂等身份跨重试保持，未知结果不当作未执行。
-3. account 身份、玩家号和名字规则是必需协作者。
-4. kit/service 尚有七个领域实现，文档不能写成纯装配已完成。
+1. 资源所有权随创建关系唯一，借用者不重复关闭。
+2. 依赖写 Mod 名，Registry 查询 capability 接口。
+3. StopBudget 与 StopWithContext 的真实完成条件一致。
 
-## 2A. 一个服务的两层实现
+## 2A. Mod实现核对方式
 
-以mail为例，[service.go](../../../service/mail/service.go)的New/Send/deliverAndRecord承担领域输入、请求身份、信封和投递结果；存储能力由store/redis_store提供。[mail_mod.go](../../../kit/service/mail/mail_mod.go)从配置和Registry接线，生成mail_rpc_assembly_gen.go发布能力、注册Server/ClientMod，不能在Mod里另发一份绕过Send幂等的邮件。
+沿NewMod → ConfigSchema/Init → Provide → Start → StopWithContext逐段读。配置结构只负责本Mod读取的键；Provide发布接口，不应为了取一个接口再创建第二个后台实例。DependsOn指定生产者Mod名称；可选依赖仅在实际装配时进入排序。
 
-account是当前分层例外：[account_mod.go](../../../kit/service/account/account_mod.go)的NewMod要求IdentityVerifier、PlayerIDAllocator、NameValidator及Reporter；[service.go](../../../kit/service/account/service.go)仍在同一kit包承担领域逻辑。prefix通过声明必填，不能静默共用所有项目的默认键。
+验证所有启动失败分支：连接已创建但下一项校验失败、Provide失败、Start失败、Service启动失败。排空超时应保留仍在用的对象，成功Stop后才释放；同一个借用的Redis/NATS客户端不由每个服务分别关闭。
 
-接口层的参数身份属于可信服务调用边界；外部玩家接入必须把认证连接身份映射到参数。RPC信封还原业务错误不等于自动校验终端玩家权限。
+kit/service与基础设施Mod共用这些生命周期规则，但其当前领域实现分布仍按09篇统计，不能把目录名当作“纯装配”证明。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -28,6 +27,129 @@ account是当前分层例外：[account_mod.go](../../../kit/service/account/acc
 若修复并发问题，用可控 barrier/时钟构造修前失败，不能用 sleep 概率通过代替因果证据。停机测试要检查在途回调和依赖释放；持久测试要检查恢复后数据与重复输入。外部系统的真实故障证据单列。
 
 ## 4. 文件、类型与职责定位
+
+### kit/configdata
+
+1 个实现文件、3 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [configdata.go](../../../kit/configdata/configdata.go) | `Mod` |
+
+### kit/dataengine
+
+1 个实现文件、13 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [mod.go](../../../kit/dataengine/mod.go) | `Mod`、`ModOption`、`EffectsConfig` |
+
+### kit/etcd
+
+1 个实现文件、0 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [etcd_mod.go](../../../kit/etcd/etcd_mod.go) | `EtcdMod` |
+
+### kit/internal/configschemagen
+
+1 个实现文件、0 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [main.go](../../../kit/internal/configschemagen/main.go) | 函数/方法或内部实现；见源码 |
+
+### kit/lock
+
+1 个实现文件、1 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [lock_mod.go](../../../kit/lock/lock_mod.go) | `LockMod` |
+
+### kit/manager
+
+1 个实现文件、1 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [manager_mod.go](../../../kit/manager/manager_mod.go) | `ManagerMod` |
+
+### kit/mods
+
+6 个实现文件、5 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [name.go](../../../kit/mods/name.go) | 函数/方法或内部实现；见源码 |
+| [persistence.go](../../../kit/mods/persistence.go) | `PersistenceConfig` |
+| [registry.go](../../../kit/mods/registry.go) | `Capability` |
+| [saga_payload.go](../../../kit/mods/saga_payload.go) | `SagaPayloadConfig` |
+| [service_name.go](../../../kit/mods/service_name.go) | 函数/方法或内部实现；见源码 |
+| [service_servicemods.go](../../../kit/mods/service_servicemods.go) | `ServiceMetricsConfig` |
+
+### kit/mongo
+
+1 个实现文件、4 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [mongo_mod.go](../../../kit/mongo/mongo_mod.go) | `MongoMod` |
+
+### kit/nats
+
+1 个实现文件、12 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [nats_mod.go](../../../kit/nats/nats_mod.go) | `NatsMod` |
+
+### kit/nest
+
+2 个实现文件、10 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [entity_sync.go](../../../kit/nest/entity_sync.go) | `EntitySyncSetup` |
+| [nest_mod.go](../../../kit/nest/nest_mod.go) | `Mod` |
+
+### kit/ops
+
+1 个实现文件、11 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [ops_mod.go](../../../kit/ops/ops_mod.go) | `OpsMod` |
+
+### kit/redis
+
+2 个实现文件、6 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [redis_mod.go](../../../kit/redis/redis_mod.go) | `RedisMod`、`ClusterConfig`、`Config` |
+| [singleton.go](../../../kit/redis/singleton.go) | 函数/方法或内部实现；见源码 |
+
+### kit/remoteentity
+
+3 个实现文件、11 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [config.go](../../../kit/remoteentity/config.go) | 函数/方法或内部实现；见源码 |
+| [remote_entity_mod.go](../../../kit/remoteentity/remote_entity_mod.go) | `RemoteEntityMod`、`ModOption` |
+| [remote_mirror_mod.go](../../../kit/remoteentity/remote_mirror_mod.go) | `RemoteMirrorMod`、`MirrorOption` |
+
+### kit/saga
+
+3 个实现文件、7 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [config.go](../../../kit/saga/config.go) | 函数/方法或内部实现；见源码 |
+| [mod.go](../../../kit/saga/mod.go) | `Mod` |
+| [step_budgets.go](../../../kit/saga/step_budgets.go) | 函数/方法或内部实现；见源码 |
 
 ### kit/service/account
 
@@ -202,72 +324,154 @@ account是当前分层例外：[account_mod.go](../../../kit/service/account/acc
 | [session_mod.go](../../../kit/service/session/session_mod.go) | `Mod` |
 | [session_rpc_assembly_gen.go](../../../kit/service/session/session_rpc_assembly_gen.go) | `Server`、`ClientMod` |
 
-### service/mail
+### kit/statslog
 
-8 个实现文件、25 个测试文件。
-
-| 源码 | 导出类型（定位用） |
-| --- | --- |
-| [mail.go](../../../service/mail/mail.go) | `Mail` |
-| [mail_rpc_gen.go](../../../service/mail/mail_rpc_gen.go) | `BusClient` |
-| [mailbox.go](../../../service/mail/mailbox.go) | `Mailbox`、`Entry`、`SettledClaim` |
-| [redis_store.go](../../../service/mail/redis_store.go) | `RedisStores`、`RedisConfig` |
-| [send_intent.go](../../../service/mail/send_intent.go) | 函数/方法或内部实现；见源码 |
-| [service.go](../../../service/mail/service.go) | `Config`、`Service`、`SendRequest`、`Page`、`Item`、`Claim`、`Summary` |
-| [store.go](../../../service/mail/store.go) | `EnvelopeStore`、`MailboxStore`、`SendLedger`、`SentRecord`、`Deliverer`、`DelivererFunc` |
-| [types.go](../../../service/mail/types.go) | `Status`、`Audience`、`Envelope` |
-
-### service/match
-
-7 个实现文件、12 个测试文件。
+1 个实现文件、5 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [grouping.go](../../../service/match/grouping.go) | `Grouping`、`FirstComeGrouping`、`ScoreWindowGrouping` |
-| [match_rpc.go](../../../service/match/match_rpc.go) | `Matchmaker` |
-| [matchmaker_rpc_gen.go](../../../service/match/matchmaker_rpc_gen.go) | `BusClient` |
-| [queue_store.go](../../../service/match/queue_store.go) | `Config` |
-| [redis_store.go](../../../service/match/redis_store.go) | 函数/方法或内部实现；见源码 |
-| [store.go](../../../service/match/store.go) | `Store` |
-| [types.go](../../../service/match/types.go) | `SubjectKind`、`Subject`、`Queue`、`TicketState`、`Ticket`、`Match` |
+| [statslog.go](../../../kit/statslog/statslog.go) | `ProviderFunc`、`RuntimeStats`、`EntityStats`、`StatsRecord`、`NestStats`、`NestQueueStats`、`StatsLogMod` |
 
-### service/session
+### kit/syncbus
 
-7 个实现文件、12 个测试文件。
+1 个实现文件、7 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [admin.go](../../../service/session/admin.go) | `Admin` |
-| [redis_store.go](../../../service/session/redis_store.go) | `RedisStores`、`RedisConfig` |
-| [service.go](../../../service/session/service.go) | `RunStore`、`ClaimStore`、`RequestLedger`、`LedgerEntry`、`Releaser`、`OwnerSource`、`OwnerSourceFunc`、`ReleaserFunc`、`Config`、`Service`、`EnterRequest` |
-| [session_rpc.go](../../../service/session/session_rpc.go) | `Session` |
-| [session_rpc_gen.go](../../../service/session/session_rpc_gen.go) | `BusClient` |
-| [sweep_source.go](../../../service/session/sweep_source.go) | `AdmissionSource` |
-| [types.go](../../../service/session/types.go) | `State`、`Resource`、`Run`、`Claim` |
-
-### servicemetrics
-
-3 个实现文件、2 个测试文件。
-
-| 源码 | 导出类型（定位用） |
-| --- | --- |
-| [metrics_reporter.go](../../../servicemetrics/metrics_reporter.go) | `MetricsReporter` |
-| [recorder.go](../../../servicemetrics/recorder.go) | `Recorder` |
-| [servicemetrics.go](../../../servicemetrics/servicemetrics.go) | `Reporter`、`KeyedReporter`、`Sink` |
-
-### servicerpc
-
-3 个实现文件、3 个测试文件。
-
-| 源码 | 导出类型（定位用） |
-| --- | --- |
-| [affinity.go](../../../servicerpc/affinity.go) | `KeyAffinityPicker` |
-| [client.go](../../../servicerpc/client.go) | `BusClient`、`DiscoveryPicker`、`Transport`、`Option`、`TransportConfig`、`ReliableBus`、`ResponseStatusProvider`、`RoundRobinPicker` |
-| [status.go](../../../servicerpc/status.go) | 函数/方法或内部实现；见源码 |
+| [mod.go](../../../kit/syncbus/mod.go) | `SyncBusMod` |
 
 ## 5. 回归入口
 
-下列名字由当前测试源码提取，仅证明存在对应回归入口。执行时以 go test 的实际 PASS/FAIL/SKIP 为准；未启用的真实资源测试不能算通过。常用筛选方向：`Test.*Idempot`、`Test.*Request`、`Test.*TTL`、`Test.*Affinity`。
+下列名字由当前测试源码提取，仅证明存在对应回归入口。执行时以 go test 的实际 PASS/FAIL/SKIP 为准；未启用的真实资源测试不能算通过。常用筛选方向：`Test.*Mod`、`Test.*Stop`、`Test.*Config`、`Test.*Dependency`。
+
+### kit
+
+- [assembly_boundary_test.go](../../../kit/assembly_boundary_test.go)：`TestKitModsDoNotReachForRawDriverHandles`、`TestRawHandleCallsDetector`
+- [config_schema_promises_test.go](../../../kit/config_schema_promises_test.go)：`TestEveryKitModLoadsWhatItDeclares`、`TestKitModsRefuseOutOfRangeValuesAtLoadAndAtStartup`、`TestStartupCheckRefusesJetStreamRPCWithoutPositiveTimeouts`、`TestStartupCheckRefusesOpsAdminWithoutAToken`、`TestProductionRefusesDevSecrets`；其余 3 项见文件
+- [dependency_boundary_test.go](../../../kit/dependency_boundary_test.go)：`TestKitDependencyBoundary`、`TestForbiddenKitImport`
+- [lifecycle_gate_test.go](../../../kit/lifecycle_gate_test.go)：`TestBuiltInModsImplementContextStop`
+- [mod_dependencies_test.go](../../../kit/mod_dependencies_test.go)：`TestEveryModDependencyNamesAKitMod`
+- [strict_config_promises_test.go](../../../kit/strict_config_promises_test.go)：`TestKitModsRefuseConfigValuesOfTheWrongType`
+
+### kit/configdata
+
+- [configdata_test.go](../../../kit/configdata/configdata_test.go)：`TestConfigDataStopStillReleasesHooksAfterDeadline`、`TestConfigDataModInitHonorsConfiguredDir`、`TestConfigDataModProvidesStoreAndStopUnregistersHooks`
+- [mod_guards_promises_test.go](../../../kit/configdata/mod_guards_promises_test.go)：`TestConfigDataModRefusesBareRegistriesAndStartWithoutStore`
+- [reload_visibility_promises_test.go](../../../kit/configdata/reload_visibility_promises_test.go)：`TestFailedReloadAndRollbackAreCountedAndLogged`、`TestRevertedOperatorRollbackIsCounted`
+
+### kit/dataengine
+
+- [backlog_integration_test.go](../../../kit/dataengine/backlog_integration_test.go)：`TestRealDataEngineLargeBacklogRecovery`
+- [failover_integration_test.go](../../../kit/dataengine/failover_integration_test.go)：`TestRealMongoPrimaryFailoverContinuesProjection`、`TestRealNATSOutageDoesNotBlockProjectionAndRecoversOutbox`、`TestRealJetStreamLeaderFailoverPreservesDedupAndOrder`
+- [fatal_fence_test.go](../../../kit/dataengine/fatal_fence_test.go)：`TestModFatalFencesNestAndSignalsApplication`
+- [mod_promises_test.go](../../../kit/dataengine/mod_promises_test.go)：`TestModProvideRefusesEachMissingCapability`、`TestModRefusesLifecycleCallsBeforeProvideAndStart`
+- [mod_test.go](../../../kit/dataengine/mod_test.go)：`TestDataEngineModReadsProjectionBatchByteLimit`、`TestDataEngineModKeepsProjectionBatchByteDefaultForZero`、`TestEffectStreamDefaultsMatchTheDeclaration`、`TestDataEngineModRecoversBeforeReadyAndOwnsNestOptions`、`TestDataEngineProjectionCheckpointAndBacklogConfig`；其余 3 项见文件
+- [multi_batch_integration_test.go](../../../kit/dataengine/multi_batch_integration_test.go)：`TestRealLocalMultiBatchOrderIdentityAndLostCheckpoint`、`TestRealLocalMultiBatchLateConflictRollsBackThenAcknowledgesPrefix`
+- [real_fixture_integration_test.go](../../../kit/dataengine/real_fixture_integration_test.go)
+- [real_integration_test.go](../../../kit/dataengine/real_integration_test.go)：`TestRealMultiDocumentReceiptAndOutboxAreAtomic`、`TestRealMultiDocumentFailureRollsBackEarlierMutation`、`TestRealPatchConflictFencesWithoutFullFallback`、`TestRealLoadRestoresTrackerVersion`、`TestRealIntegrationDeadlineIsBounded`；其余 4 项见文件
+- [receipt_identity_integration_test.go](../../../kit/dataengine/receipt_identity_integration_test.go)：`TestRealProjectionIdentityVerdictsAcrossTransactions`
+- [receipt_retention_promises_test.go](../../../kit/dataengine/receipt_retention_promises_test.go)：`TestTransactionReceiptRetentionExceedsWALWindow`
+- [remote_integration_test.go](../../../kit/dataengine/remote_integration_test.go)：`TestRealDataEngineRemotePublicationAndWALRecovery`
+- [stop_budget_test.go](../../../kit/dataengine/stop_budget_test.go)：`TestDataEngineModDeclaresShutdownTimeoutAsStopBudget`
+- [toxic_integration_test.go](../../../kit/dataengine/toxic_integration_test.go)：`TestToxicNATSLatencyKeepsTheCommitOnTheDurablePath`、`TestToxicNATSConnectionResetDeliversTheEffectExactlyOnce`、`TestToxicNATSHalfOpenAckLossIsBoundedAndDeliversExactlyOnce`
+
+### kit/lock
+
+- [lock_mod_test.go](../../../kit/lock/lock_mod_test.go)：`TestLockModProvidesReentrantLockManager`
+
+### kit/manager
+
+- [manager_mod_test.go](../../../kit/manager/manager_mod_test.go)：`TestManagerModPublishesItselfUnderTheManagerModName`、`TestManagerModForwardsTheLifecycleToTheEngine`
+
+### kit/mods
+
+- [guards_promises_test.go](../../../kit/mods/guards_promises_test.go)：`TestRegisterAllAndLookupsRefuseMissingInputs`
+- [persistence_test.go](../../../kit/mods/persistence_test.go)：`TestPersistenceConfigDefaultsToDataEngine`、`TestPersistenceConfigRejectsOtherOrDisabledEngines`
+- [registry_test.go](../../../kit/mods/registry_test.go)：`TestRegisterAllPreflightPreventsPartialPublication`
+- [service_metrics_promises_test.go](../../../kit/mods/service_metrics_promises_test.go)：`TestServiceMetricsSwitch`
+- [service_servicemods_test.go](../../../kit/mods/service_servicemods_test.go)：`TestEveryCapabilityNameIsUnique`、`TestEveryCapabilityNameIsNamespaced`、`TestKeyPrefixRejectsWhitespace`、`TestClusterKeyPrefixUsesFirstRedisHashTag`
+
+### kit/mongo
+
+- [close_contract_promises_test.go](../../../kit/mongo/close_contract_promises_test.go)：`TestMongoModConcurrentStopIsSafe`
+- [close_contract_real_promises_test.go](../../../kit/mongo/close_contract_real_promises_test.go)：`TestRealMongoModCloseContract`
+- [stop_retry_promises_test.go](../../../kit/mongo/stop_retry_promises_test.go)：`TestMongoModStopConvergesWhenTheClientIsAlreadyDisconnected`、`TestMongoModStopTwiceReturnsNil`
+- [uri_log_promises_test.go](../../../kit/mongo/uri_log_promises_test.go)：`TestStartDoesNotLogTheMongoPassword`、`TestRedactedURIKeepsEverythingButThePassword`
+
+### kit/nats
+
+- [client_mod_transport_real_promises_test.go](../../../kit/nats/client_mod_transport_real_promises_test.go)：`TestRealGeneratedClientModCallsAJetStreamDeployment`
+- [close_contract_promises_test.go](../../../kit/nats/close_contract_promises_test.go)：`TestNatsModConcurrentStopIsSafe`
+- [close_contract_real_promises_test.go](../../../kit/nats/close_contract_real_promises_test.go)：`TestRealNatsModCloseContract`、`TestRealNatsModUndrainedCloseIsReportedOnce`
+- [jetstream_capture_real_promises_test.go](../../../kit/nats/jetstream_capture_real_promises_test.go)：`TestRealLightweightCallIntoJetStreamDeploymentIsRefused`
+- [jetstream_rpc_ackwait_real_promises_test.go](../../../kit/nats/jetstream_rpc_ackwait_real_promises_test.go)：`TestRealJetStreamRPCLongerThanAckWaitRunsOnce`
+- [jetstream_rpc_toxic_integration_test.go](../../../kit/nats/jetstream_rpc_toxic_integration_test.go)：`TestToxicJetStreamRPCCallHonoursItsDeadlineWhileHalfOpen`
+- [jetstream_stop_real_promises_test.go](../../../kit/nats/jetstream_stop_real_promises_test.go)：`TestRealJetStreamStopWaitsForInFlightHandler`
+- [nats_mod_drain_budget_promises_test.go](../../../kit/nats/nats_mod_drain_budget_promises_test.go)：`TestNatsModStopAfterConnectionDrainBudgetConverges`、`TestNatsModStopReleasesAssemblyWhoseConnectionIsAlreadyClosed`
+- [nats_mod_drain_budget_real_promises_test.go](../../../kit/nats/nats_mod_drain_budget_real_promises_test.go)：`TestRealNatsModStopAfterConnectionDrainBudgetConverges`
+- [nats_mod_real_promises_test.go](../../../kit/nats/nats_mod_real_promises_test.go)：`TestRealNatsModProvideRefusesBareRegistriesAndReliableWithoutRedis`
+- [nats_mod_stop_retry_promises_test.go](../../../kit/nats/nats_mod_stop_retry_promises_test.go)：`TestNatsModStopRetryAfterBusBudgetClosesAssembly`、`TestNatsModStopClosesAssemblyAfterTerminalBusError`
+- [nats_mod_test.go](../../../kit/nats/nats_mod_test.go)：`TestJetStreamRPCConfigFromViper`、`TestJetStreamRPCConfigFromViperDisabledByDefault`
+
+### kit/nest
+
+- [durable_watermark_promises_test.go](../../../kit/nest/durable_watermark_promises_test.go)：`TestEntitySyncModWiresPipelinedDurableWatermark`
+- [entity_sync_resync_test.go](../../../kit/nest/entity_sync_resync_test.go)：`TestEntitySyncModResyncsSubscribersAfterUnload`
+- [entity_sync_test.go](../../../kit/nest/entity_sync_test.go)：`TestEntitySyncModConfigurationAndLifecycle`、`TestEntitySyncModRejectsInvalidInterval`、`TestEntitySyncModRebindsReloadedEntities`
+- [entitysync_health_promises_test.go](../../../kit/nest/entitysync_health_promises_test.go)：`TestProvidedEntitySyncHealthIsRegistered`
+- [mod_guards_promises_test.go](../../../kit/nest/mod_guards_promises_test.go)：`TestModRefusesMissingGetterRegistryAndDataEngine`
+- [nest_mod_test.go](../../../kit/nest/nest_mod_test.go)：`TestModProvidesInstanceClientAndHealth`、`TestModSelectsDataEngineCommitterWithoutLegacyWALRuntime`、`TestRuntimeFailureFencesNestDispatch`
+- [saga_start_limit_promises_test.go](../../../kit/nest/saga_start_limit_promises_test.go)：`TestEmitStartRefusesOverTheSharedLimitWithoutALocalCoordinator`
+- [stop_contract_test.go](../../../kit/nest/stop_contract_test.go)：`TestNestModStopContract`
+- [unload_resync_config_promises_test.go](../../../kit/nest/unload_resync_config_promises_test.go)：`TestNestModWiresUnloadResyncAndLoadTimeoutConfig`
+- [unload_resync_stop_retry_promises_test.go](../../../kit/nest/unload_resync_stop_retry_promises_test.go)：`TestNestModStopRetryKeepsUnloadResyncUntilItDrains`
+
+### kit/ops
+
+- [admin_audit_promises_test.go](../../../kit/ops/admin_audit_promises_test.go)：`TestAdminRefusalIsAuditedWithoutToken`、`TestAdminSeparatesUnknownCommandFromHandlerFailure`
+- [admin_deadline_promises_test.go](../../../kit/ops/admin_deadline_promises_test.go)：`TestOpsAdminCommandRunsUnderTheConfiguredDeadline`
+- [listen_promises_test.go](../../../kit/ops/listen_promises_test.go)：`TestOpsStartFailsWhenTheAddressIsTaken`
+- [mod_guards_promises_test.go](../../../kit/ops/mod_guards_promises_test.go)：`TestOpsModRefusesTokenlessAdminAndBareRegistries`、`TestOpsAdminTimeoutDefaultMatchesTheDeclaration`
+- [ops_mod_test.go](../../../kit/ops/ops_mod_test.go)：`TestOpsAdminRequiresExplicitSecureToken`、`TestOpsAdminEndpointIsHiddenWhenDisabled`、`TestOpsReadyReflectsLifecycleState`、`TestOpsReadyIncludesDependencyHealth`、`TestOpsModStopWithContextUsesCallerContext`；其余 3 项见文件
+- [production_secret_promises_test.go](../../../kit/ops/production_secret_promises_test.go)：`TestProductionRejectsExplicitlyAllowedDevToken`、`TestAdminTokenIsDeclaredSecret`、`TestDisabledProductionAdminDoesNotRequireUnusedToken`
+- [readyz_checker_deadline_promises_test.go](../../../kit/ops/readyz_checker_deadline_promises_test.go)：`TestReadyzReportsAStuckCheckerAsFailInsteadOfHanging`
+- [readyz_degraded_promises_test.go](../../../kit/ops/readyz_degraded_promises_test.go)：`TestReadyzTreatsDegradedAsReadyAndNamesTheDegradedChecker`、`TestReadyzStillFailsOnFailOrNotReady`
+- [response_encoding_promises_test.go](../../../kit/ops/response_encoding_promises_test.go)：`TestAdminResultThatCannotBeEncodedIsNotReportedAsSuccess`、`TestNonCooperativeAdminCommandStopRetryDrains`
+- [shutdown_ownership_promises_test.go](../../../kit/ops/shutdown_ownership_promises_test.go)：`TestInterruptedShutdownKeepsServerOwnership`、`TestIdleShutdownAndReadinessControls`、`TestShutdownDeadlineRetainsServerUntilRetryDrains`、`TestConcurrentShutdownCallersKeepTheirContexts`、`TestConcurrentOpsStartStopUsesCapturedServer`
+- [stop_contract_test.go](../../../kit/ops/stop_contract_test.go)：`TestOpsStartServesOnTheBoundAddress`、`TestOpsStopContract`
+
+### kit/redis
+
+- [business_time_integration_test.go](../../../kit/redis/business_time_integration_test.go)：`TestBusinessTimeHighWaterMarkOnRealRedis`
+- [close_contract_promises_test.go](../../../kit/redis/close_contract_promises_test.go)：`TestSingletonStoreCloseErrorIsReportedOnce`、`TestRedisModConcurrentStopIsSafe`
+- [config_types_promises_test.go](../../../kit/redis/config_types_promises_test.go)：`TestClusterAddrsAcceptAYAMLListAndTrimEntries`、`TestRedisIntegerKeysAreReadStrictly`、`TestProductionRedisNeedsAnAddrOrClusterSeeds`
+- [singleton_integration_test.go](../../../kit/redis/singleton_integration_test.go)：`TestSingletonStoreAcquireRenewRelease`、`TestSingletonStoreRenewAfterTheKeyExpiredIsNotHeld`、`TestSingletonStoreDoesNotTouchAnotherHoldersKey`、`TestSingletonStoreGetReadsEveryKeyInOrder`、`TestSingletonStoreGetAcrossClusterSlots`；其余 1 项见文件
+- [singleton_test.go](../../../kit/redis/singleton_test.go)：`TestSingletonStoreRequiresAnExplicitRedisAddress`、`TestRedisModKeepsTheLocalhostDefault`、`TestSingletonStoreCloseIsIdempotent`
+- [stop_retry_promises_test.go](../../../kit/redis/stop_retry_promises_test.go)：`TestRedisModStopConvergesAfterACloseError`
+
+### kit/remoteentity
+
+- [cached_max_staleness_test.go](../../../kit/remoteentity/cached_max_staleness_test.go)：`TestCachedMaxStalenessConfiguration`
+- [cluster_config_test.go](../../../kit/remoteentity/cluster_config_test.go)：`TestClusterRequiresNonEmptyLockHashTag`
+- [config_declaration_promises_test.go](../../../kit/remoteentity/config_declaration_promises_test.go)：`TestRemoteEntityDeclaredDefaultsMatchCoreDefaults`
+- [interest_health_promises_test.go](../../../kit/remoteentity/interest_health_promises_test.go)：`TestExpiredLocalInterestsDoNotKeepHealthFailing`
+- [interest_quota_config_test.go](../../../kit/remoteentity/interest_quota_config_test.go)：`TestInterestPerConsumerConfiguration`
+- [lock_incarnation_promises_test.go](../../../kit/remoteentity/lock_incarnation_promises_test.go)：`TestRemoteEntityModPassesTheSingletonIncarnationToTheLocks`
+- [remote_mirror_mod_promises_test.go](../../../kit/remoteentity/remote_mirror_mod_promises_test.go)：`TestRemoteMirrorModRegistersOnlyReadCapability`、`TestRemoteMirrorModRefusesASecondClientBesideTheOwner`、`TestRemoteMirrorModConfiguration`、`TestRemoteMirrorModStopContract`、`TestRemoteMirrorModStopCancelsInFlightReads`；其余 1 项见文件
+- [snapshot_l2_key_prefix_test.go](../../../kit/remoteentity/snapshot_l2_key_prefix_test.go)：`TestSnapshotL2KeyPrefixConfiguration`
+- [stop_log_promises_test.go](../../../kit/remoteentity/stop_log_promises_test.go)：`TestRemoteEntityModDoesNotLogStoppedWhenStopFails`
+- [tombstone_wait_config_test.go](../../../kit/remoteentity/tombstone_wait_config_test.go)：`TestTombstoneWaitConfiguration`
+- [write_budget_test.go](../../../kit/remoteentity/write_budget_test.go)：`TestWriteBudgetConfiguration`
+
+### kit/saga
+
+- [config_declaration_promises_test.go](../../../kit/saga/config_declaration_promises_test.go)：`TestSagaDeclaredDefaultsMatchCoreDefaults`、`TestSagaPayloadLimitIsOneDeclarationSharedWithNest`
+- [config_types_promises_test.go](../../../kit/saga/config_types_promises_test.go)：`TestStepBudgetDurationsRefuseValuesWithoutAUnit`
+- [effect_retention_promises_test.go](../../../kit/saga/effect_retention_promises_test.go)：`TestModRefusesAnEffectStreamThatOutlivesTheCompletionReceipts`、`TestModChecksEffectRetentionOnlyAgainstTheStreamItReadsResultsFrom`
+- [health_promises_test.go](../../../kit/saga/health_promises_test.go)：`TestSagaModHealthDetectsEveryConsumerAndRecovers`
+- [step_ack_wait_promises_test.go](../../../kit/saga/step_ack_wait_promises_test.go)：`TestStepTimeoutMustBeShorterThanTheStepConsumersAckWait`
+- [step_budgets_test.go](../../../kit/saga/step_budgets_test.go)：`TestStepBudgetsComeFromConfigWithPerStepOverrides`、`TestStepBudgetConfigRejectsTyposAndImpossibleValues`、`TestStepBudgetConfigRejectsNamesThatDifferOnlyInCase`
+- [step_override_case_promises_test.go](../../../kit/saga/step_override_case_promises_test.go)：`TestPerStepOverrideAppliesToMixedCaseNamesWithoutDefinitions`、`TestExactOverrideWinsOverTheLowercaseFallback`
 
 ### kit/service/account
 
@@ -433,74 +637,23 @@ account是当前分层例外：[account_mod.go](../../../kit/service/account/acc
 - [options_test.go](../../../kit/service/session/options_test.go)：`TestWithSweepOwnersCarriesDeploymentRoster`
 - [session_mod_test.go](../../../kit/service/session/session_mod_test.go)：`TestModRefusesWithoutAReleaser`、`TestModRequiresARequestTTL`、`TestModInitAndProvideContract`
 
-### service/mail
+### kit/statslog
 
-- [atomic_refusal_promises_test.go](../../../service/mail/atomic_refusal_promises_test.go)：`TestRefusedDeliveryLeavesTheMailboxUntouched`
-- [batch_pipeline_integration_test.go](../../../service/mail/batch_pipeline_integration_test.go)：`TestIntegrationEnvelopeBatchAcrossSlots`
-- [bugfix_deleted_identity_test.go](../../../service/mail/bugfix_deleted_identity_test.go)：`TestBugfix4DeletedUnclaimedMailMustNotResurrect`、`TestDeletedTombstonesAreBoundedWithoutForgettingUnknownExpiry`
-- [business_clock_promises_test.go](../../../service/mail/business_clock_promises_test.go)：`TestMailExpiryAndTheClaimLeaseRunOnTheMonotonicBusinessClock`
-- [claim_expiry_promises_test.go](../../../service/mail/claim_expiry_promises_test.go)：`TestReserveClaimReportsWhenTheMailStopsBeingClaimable`
-- [claim_identity_promises_test.go](../../../service/mail/claim_identity_promises_test.go)：`TestEvictionKeepsTheClaimIdentityOfAClaimedMail`、`TestEvictionPreservesUnclaimedDeletion`、`TestCommitClaimReplaysAfterTheEntryWasEvicted`、`TestSettledClaimsAgeOutWithTheirEnvelope`
-- [default_clock_promises_test.go](../../../service/mail/default_clock_promises_test.go)：`TestMissingBusinessClockUsesProcessOffset`、`TestRedisEnvelopeDefaultClockMatchesBusinessExpiry`
-- [entry_guards_promises_test.go](../../../service/mail/entry_guards_promises_test.go)：`TestNewRedisStoresRefusesEachMissingPrerequisite`、`TestServiceEntryPointsRefuseInvalidIdentifiers`
-- [errcode_test.go](../../../service/mail/errcode_test.go)：`TestEverySentinelCarriesItsOwnCode`、`TestNoTwoSentinelsShareACode`、`TestTheCodeSegmentIsContiguousFromItsFirstCode`、`TestTheCodeSurvivesWrapping`、`TestErrorsFromRealCallPathsCarryTheirCodes`；其余 1 项见文件
-- [fake_envelopes_test.go](../../../service/mail/fake_envelopes_test.go)
-- [get_consistency_promises_test.go](../../../service/mail/get_consistency_promises_test.go)：`TestGetAndGetManyAgreeOnEveryStoredShape`
-- [mail_test.go](../../../service/mail/mail_test.go)：`TestAReReservationReturnsTheSameTokenAfterTheLeaseLapses`、`TestAnInFlightReservationBlocksAnotherOne`、`TestACommitWithTheWrongTokenIsRefused`、`TestARetriedCommitIsANoOp`、`TestTheClaimTokenSurvivesTheCommit`；其余 28 项见文件
-- [redis_guards_promises_test.go](../../../service/mail/redis_guards_promises_test.go)：`TestRedisStoresRefuseInvalidConfigAndEmptyIDs`
-- [redis_integration_test.go](../../../service/mail/redis_integration_test.go)：`TestIntegrationBatchReadReturnsOneValuePerKey`、`TestIntegrationAnEmptyBatchIsNotSentToRedis`、`TestIntegrationConcurrentCreatesOfOneIDProduceOneEnvelope`、`TestIntegrationAnEnvelopeExpiresOnItsOwnDeadline`、`TestIntegrationTheServiceRunsEndToEndOnRedis`
-- [redis_store_test.go](../../../service/mail/redis_store_test.go)：`TestRedisCreateRefusesAnExistingID`、`TestRedisCreateRefusesAnAlreadyExpiredEnvelope`、`TestRedisGetManyIsOneBoundedBatch`、`TestRedisGetManyReportsMissingEnvelopesAsAbsent`、`TestRedisGetManyRefusesAnOversizedBatch`；其余 6 项见文件
-- [remaining_promises_test.go](../../../service/mail/remaining_promises_test.go)：`TestClaimLeaseRejectsSubsecond`、`TestDeliverRefusesMissingEnvelope`
-- [rpc_test.go](../../../service/mail/rpc_test.go)：`TestMethodsCoversTheInterfaceExactly`、`TestRegisterHandlersPublishesExactlyTheDeclaredMethods`、`TestRegisterHandlersRefusesANilBusOrService`、`TestBothImplementationsBehaveTheSame`、`TestErrorCodesSurviveBothTransports`；其余 2 项见文件
-- [rr_20260929_round1_test.go](../../../service/mail/rr_20260929_round1_test.go)：`TestReviewExpiredMailboxMakesRoom`
-- [rr_20260929_round2_test.go](../../../service/mail/rr_20260929_round2_test.go)：`TestReviewTransientEnvelopeFailureCanRetrySameRequest`
-- [rr_20260929_round3_test.go](../../../service/mail/rr_20260929_round3_test.go)：`TestReview3OldCancelCannotReleaseNewClaimAttempt`、`TestReview3ObserveExpiredCancelledClaimsRetainCapacity`、`TestCancelClaimGenerationCrossesLocalAndBusTransports`、`TestCancelClaimLegacyWireIsRejected`、`TestClaimAttemptGenerationNeverWraps`
-- [rr_20261001_02_test.go](../../../service/mail/rr_20261001_02_test.go)：`TestSameRequestRecoveryToleratesEmptyVsNilSlices`、`TestSameRequestRecoveryStillRejectsSubstitutedEnvelope`、`TestSameSendIntentFieldwise`
-- [send_race_promises_test.go](../../../service/mail/send_race_promises_test.go)：`TestSendReportsEachLedgerRaceAsConflict`
-- [send_recovery_integration_test.go](../../../service/mail/send_recovery_integration_test.go)：`TestIntegrationSendRecoveryOnRealEnvelopes`
-- [settled_claim_retention_promises_test.go](../../../service/mail/settled_claim_retention_promises_test.go)：`TestMailboxSnapshotDoesNotShareTheSettledClaims`、`TestSettledClaimsOutliveTheEnvelopeTheyProtect`、`TestSettledClaimsAreDroppedOnceTheEnvelopeExpires`
-- [validate_promises_test.go](../../../service/mail/validate_promises_test.go)：`TestEnvelopeValidateRefusesEachBrokenField`
+- [gauge_lifecycle_promises_test.go](../../../kit/statslog/gauge_lifecycle_promises_test.go)：`TestEntityGaugesReturnToZeroWhenAKindEmpties`
+- [gauges_test.go](../../../kit/statslog/gauges_test.go)：`TestEachCollectionPublishesRuntimeAndEntityGauges`
+- [readonly_snapshot_promises_test.go](../../../kit/statslog/readonly_snapshot_promises_test.go)：`TestStatsEndpointDoesNotConsumeFileWindow`
+- [statslog_test.go](../../../kit/statslog/statslog_test.go)：`TestStatsLogModWritesSeparateJSONLFile`、`TestStatsLogModDisabledDoesNotCreateFile`、`TestStatsLogProviderUnregisterDoesNotRemoveReplacement`、`TestStatsLogProviderPanicIsCaptured`、`TestStatsLogStopWithContextReturnsWhenFlushIsBlocked`；其余 1 项见文件
+- [write_failure_promises_test.go](../../../kit/statslog/write_failure_promises_test.go)：`TestStatsLogStartReportsAnUnwritableDirectory`、`TestStatsLogPeriodicFailuresAreCountedWarnedOnceAndRecoveryIsLogged`
 
-### service/match
+### kit/syncbus
 
-- [bugfix_grouping_boundary_test.go](../../../service/match/bugfix_grouping_boundary_test.go)：`TestBugfix5GroupingValidatesBeforeReadingCandidates`
-- [commit_promises_test.go](../../../service/match/commit_promises_test.go)：`TestCommitRefusesEachInvalidTicketSet`、`TestCancelRefusesBlankAndUnknownTickets`
-- [default_clock_promises_test.go](../../../service/match/default_clock_promises_test.go)：`TestMissingBusinessClockUsesProcessOffset`
-- [enqueue_request_owner_promises_test.go](../../../service/match/enqueue_request_owner_promises_test.go)：`TestEnqueueReplayRefusesARequestIDFromAnotherSubject`
-- [errcode_test.go](../../../service/match/errcode_test.go)：`TestEverySentinelCarriesItsOwnCode`、`TestTheCodeSegmentIsExactlyAsAllocated`、`TestTheCodeSurvivesWrapping`、`TestAnUnclassifiedFailureReadsAsInternal`、`TestAForeignSentinelIsMappedIntoThisSegment`
-- [match_test.go](../../../service/match/match_test.go)：`TestSubjectMayHoldOnlyOneLiveTicket`、`TestTicketIDsAreServerMintedAndDistinct`、`TestEnqueueIsIdempotentPerRequest`、`TestTicketOperationsRequireOwnership`、`TestTicketDeadlineIsEnforcedOnReadAndBySweep`；其余 20 项见文件
-- [queue_key_collision_promises_test.go](../../../service/match/queue_key_collision_promises_test.go)：`TestDistinctQueuesNeverShareAKey`、`TestACommitCannotTakeTicketsFromAnotherQueue`
-- [read_guards_promises_test.go](../../../service/match/read_guards_promises_test.go)：`TestReadsOfAnUnknownQueueMissCleanlyAndStoreErrorsPropagate`、`TestCancelRefusesUnknownQueuesAndTickets`、`TestCommitRefusesACorruptedQueueWhereOneSubjectHoldsTwoTickets`、`TestNewRedisStoreRequiresAKeyPrefix`
-- [remaining_promises_test.go](../../../service/match/remaining_promises_test.go)：`TestTicketTTLRejectsSubsecond`、`TestCommitReplayReturnsOriginalMatchForSameTicketSet`
-- [result_ownership_promises_test.go](../../../service/match/result_ownership_promises_test.go)：`TestReturnedAndInputSlicesDoNotAliasTheStore`
-- [score_window_overflow_promises_test.go](../../../service/match/score_window_overflow_promises_test.go)：`TestScoreWindowArithmeticDoesNotOverflow`、`TestScoreWindowOrdersByTrueDistance`、`TestScoreWindowRefusesNegativeConfiguration`
-- [sweep_failure_promises_test.go](../../../service/match/sweep_failure_promises_test.go)：`TestSweepFailureIsCountedNotJustReturned`
-
-### service/session
-
-- [admin_test.go](../../../service/session/admin_test.go)：`TestAResourceTheReleaserCanNeverFreeCanBeForced`、`TestForcedReleasesAccumulateAcrossResources`、`TestAForcedReleaseIsDistinguishableFromARealOne`、`TestForcingAnAlreadyReleasedResourceIsRefused`、`TestForcingSomethingThatIsNotThereIsRefused`；其余 4 项见文件
-- [default_clock_promises_test.go](../../../service/session/default_clock_promises_test.go)：`TestMissingBusinessClockUsesProcessOffset`
-- [enter_collision_cleanup_promises_test.go](../../../service/session/enter_collision_cleanup_promises_test.go)：`TestEnterCollisionCleanupNeverRemovesAReacquiredClaim`
-- [enter_ledger_collision_promises_test.go](../../../service/session/enter_ledger_collision_promises_test.go)：`TestEnterRefusesTheLoserOfARequestIDRaceAndUndoesItsRun`
-- [errcode_test.go](../../../service/session/errcode_test.go)：`TestEverySentinelCarriesItsOwnCode`、`TestTheCodeSegmentIsExactlyAsAllocated`、`TestTheCodeSurvivesWrapping`、`TestAnUnclassifiedFailureReadsAsInternal`、`TestAForeignSentinelIsMappedIntoThisSegment`
-- [guards_promises_test.go](../../../service/session/guards_promises_test.go)：`TestEnterAndForceReleaseRejectInvalidIdentifiers`、`TestRedisStoresRequirePrefixAndRequestTTL`、`TestLedgerNamingAMissingRunIsAConflictNotANewRun`、`TestOperationsOnMissingRunsAreRunMissing`、`TestRunVanishingBetweenGetAndUpdateIsRunMissing`
-- [ledger_failure_test.go](../../../service/session/ledger_failure_test.go)：`TestEnterReportsALostLedgerWriteInsteadOfSuccess`
-- [remaining_promises_test.go](../../../service/session/remaining_promises_test.go)：`TestLostRunCreateReplyCanBeReclaimedWithoutOwnerClaim`、`TestSlowClaimCannotAdmitExpiredRun`、`TestEnterRetakesClaimReleasedBeforeRead`、`TestRunTTLRejectsSubsecond`、`TestRunCodecRequiresAdmissionFormat`；其余 1 项见文件
-- [rr_20260929_round2_test.go](../../../service/session/rr_20260929_round2_test.go)：`TestReviewAttachCannotAssertAlreadyReleased`、`TestReviewSuccessfulFinishRetryFreesClaim`、`TestReviewTerminalFinishCannotDeleteReacquiredClaim`
-- [session_test.go](../../../service/session/session_test.go)：`TestAnEnterWithoutAnIdempotencyKeyIsRefused`、`TestEnterIsIdempotentPerRequestID`、`TestAFreshRequestIDDoesNotBuyASecondRun`、`TestAnOwnerRacingItselfGetsOneRun`、`TestOneRequestIDCannotServeTwoOwners`；其余 21 项见文件
-- [sweep_source_test.go](../../../service/session/sweep_source_test.go)：`TestConfiguredOwnerSourceReleasesExpiredRun`、`TestOwnerSourceIsBoundedAndFailuresAreRetryable`
-- [validate_promises_test.go](../../../service/session/validate_promises_test.go)：`TestRunValidateRefusesEachBrokenField`、`TestEnterRequestValidateRefusesEachBrokenField`
-
-### servicemetrics
-
-- [metrics_reporter_promises_test.go](../../../servicemetrics/metrics_reporter_promises_test.go)：`TestMetricsReporterExportsEveryEventUnderAFixedName`、`TestDepthOfFallsBackToTheOldNameForAReporterWithoutKeys`
-- [servicemetrics_test.go](../../../servicemetrics/servicemetrics_test.go)：`TestANilReporterIsSafeOnEveryMethod`、`TestEveryEventReachesTheReporter`、`TestAZeroDropCountIsNotReported`、`TestASinkIsSafeToShareAcrossGoroutines`、`TestRecorderTreatsDepthAsAGauge`；其余 3 项见文件
-
-### servicerpc
-
-- [discovery_budget_promises_test.go](../../../servicerpc/discovery_budget_promises_test.go)：`TestRPCBudgetDiscoveredCallTimeoutIncludesDiscovery`、`TestRPCBudgetDiscoveredCallPreservesCallerDeadline`、`TestRPCBudgetDiscoveryWaitUsesConfiguredBudget`、`TestRPCBudgetDiscoveryFiltersAndTransportRefuses`、`TestRPCBudgetDiscoveryPickerTransportShareDeadline`；其余 1 项见文件
-- [guards_promises_test.go](../../../servicerpc/guards_promises_test.go)：`TestPickersAndReliableTransportRefuseWhatIsMissing`
-- [servicerpc_test.go](../../../servicerpc/servicerpc_test.go)：`TestCheckResponseSurfacesTheEnvelopeStatus`、`TestBusClientRoutesToDiscoveredInstanceAndHonoursTransport`、`TestPickServerReportsAnEmptyDiscoverySet`、`TestRoundRobinSpreadsWhileKeyAffinityPins`、`TestKeyAffinityFallsBackWithoutAKey`；其余 2 项见文件
+- [config_test.go](../../../kit/syncbus/config_test.go)：`TestSyncBusReadsTheSyncbusSection`、`TestSyncBusRefusesAnUnknownTransport`
+- [mod_guards_promises_test.go](../../../kit/syncbus/mod_guards_promises_test.go)：`TestSyncBusModRefusesRegistriesWithoutHealthOrNats`
+- [mod_stop_test.go](../../../kit/syncbus/mod_stop_test.go)：`TestSyncModStopWithContextPrefersContextStopper`、`TestSyncModStopTimeoutKeepsTheBusForRetry`
+- [stop_drain_integration_test.go](../../../kit/syncbus/stop_drain_integration_test.go)：`TestRealJetStreamSyncBusStopDrainsAnInFlightHandler`
+- [stream_migration_integration_test.go](../../../kit/syncbus/stream_migration_integration_test.go)：`TestNonDefaultPrefixUpgradeFailsOnOverlapAndResumesOnTheLegacyStream`
+- [stream_name_test.go](../../../kit/syncbus/stream_name_test.go)：`TestSyncBusStreamIsDerivedFromThePrefix`
+- [unsubscribe_drain_integration_test.go](../../../kit/syncbus/unsubscribe_drain_integration_test.go)：`TestRealSyncBusUnsubscribeDrainsTheSubscription`、`TestRealSyncBusUnsubscribeFromOwnHandler`
 
 ## 6. 验收与运维
 

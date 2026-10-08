@@ -1,6 +1,6 @@
 # Skill Visual 与数据同步生产指南
 
-> 2026-10-08 当前入口：[架构与迁移](architecture-and-migration.md)。下面保留历次详细设计；旧三仓发布段、旧 checkpoint 数字及 Import 周期刷新说法均被本轮单仓/版本10规则取代。新字段隐私由业务 projector 明确实现，CloseObserver 不撤回在飞 Publish，AssemblyTTL 由新分片到达触发清扫。
+> 2026-10-08 当前入口：[架构与迁移](../framework/guide/08-skill.md)。下面保留历次详细设计；旧三仓发布段、旧 checkpoint 数字及 Import 周期刷新说法均被本轮单仓/版本10规则取代。新字段隐私由业务 projector 明确实现，CloseObserver 不撤回在飞 Publish，AssemblyTTL 由新分片到达触发清扫。
 
 本文描述单仓 `roost-core` 中 skill/skillsync 与 syncstream 的正式边界、接入顺序、
 恢复语义、运行指标和发布门槛。它既是学习入口，也是生产接入检查表。
@@ -407,5 +407,5 @@ outbox, err := skillsync.NewOutbox(skillsync.OutboxOptions{
 
 v2 不读取 v1 checkpoint、旧 packet-only outbox 或 v1 composition contract，也删除了旧的
 Trace/Process/Status 兼容 API。生产升级必须按
-[稳定包迁移手册](breaking-upgrade-skill-package.md) 更换 Go 导入路径；不能把网络 schema 的
+[稳定包迁移手册](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/skill/breaking-upgrade-skill-package.md) 更换 Go 导入路径；不能把网络 schema 的
 双版本窗口误用于本地持久化格式。

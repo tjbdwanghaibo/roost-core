@@ -1,4 +1,0 @@
-toxiproxy_running=true
-toxiproxy_down exit=0
-pid file removed
-RESULT: own toxiproxy stopped

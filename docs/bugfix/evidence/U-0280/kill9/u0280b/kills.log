@@ -1,3 +1,0 @@
-killed pid=36895 at=2026-10-05T11:22:28.205184Z command=gift-100001-demo-100001-1791-17:1:0:1 wal_grew=true receipt_at_kill=false
-killed pid=37231 at=2026-10-05T11:22:48.887345Z command=gift-100002-demo-100002-1791-5:1:0:1 wal_grew=false receipt_at_kill=false
-killed pid=38465 at=2026-10-05T11:23:12.200606Z command=gift-100002-demo-100002-1791-46:1:0:1 wal_grew=true receipt_at_kill=false

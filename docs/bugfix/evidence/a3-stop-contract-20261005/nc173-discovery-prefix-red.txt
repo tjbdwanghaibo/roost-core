@@ -1,7 +1,0 @@
-# 骨架套到修前实现（c99a687d^ 版本的 etcd/driver/discovery.go）：预期红
-$ GOWORK=off go test -count=1 -run TestDiscoveryDeregisterStopContract ./etcd/driver/
---- FAIL: TestDiscoveryDeregisterStopContract (5.05s)
-    stop_contract_test.go:44: stopcontract: first Stop did not return within 5.05s (budget 50ms): the stop ignored its context
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/etcd/driver	5.589s
-FAIL

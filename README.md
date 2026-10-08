@@ -1,15 +1,17 @@
 # roost-core
 
+> 当前稳定运行时：v1.24.0；文档维护版：v1.24.1。[现行文档目录](docs/README.md)按Nest/DataEngine/Sync、Service/Codegen/Kit及其他包组织；历史方案不作为当前实现承诺。
+
 `roost-core`（Go 模块路径 `github.com/tjbdwanghaibo/roost-core`，当前版本 v1.10.0）是一个通用游戏服务器运行时框架：它把"实体串行调度 + 内存事务 + WAL 持久化 + 状态同步"做成可复用的基础设施，让业务代码只写 handler 和 DAO，不碰锁、WAL 与回滚。
 
 ## 三级文档入口
 
-- **Agent / 维护者接手**：[历轮核心优化、最新验收与边界](docs/CORE-OPTIMIZATION-HANDOFF.md)；遵循 [roost 写代码基本要求](docs/agent-skills/roost-coding/SKILL.md)。
+- **Agent / 维护者接手**：[历轮核心优化、最新验收与边界](docs/maintenance/README.md)；遵循 [roost 写代码基本要求](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/agent-skills/roost-coding/SKILL.md)。
 
-- **完全新手**：从 [五分钟快速开始](docs/QUICKSTART.md) 生成并运行第一个项目。
-- **有经验的开发者**：阅读 [开发者完整使用说明](docs/USER_GUIDE.md)，按场景选择 Entity/Nest、Remote Entity、Saga、状态同步或帧同步。
-- **Nest 优化验收**：[职责整理、事务边界、阶段指标与性能数据](docs/feature/NEST-COMPLETION-2026-09-24.md)。
-- **框架维护者/生产负责人**：阅读 [实现原理与不变量](docs/INTERNALS.md)、[生产部署手册](docs/DEPLOYMENT.md) 和 [薄弱点与路线图](docs/ROADMAP.md)。完整索引见 [文档中心](docs/README.md)。
+- **完全新手**：从 [五分钟快速开始](docs/framework/guide/12-codegen.md) 生成并运行第一个项目。
+- **有经验的开发者**：阅读 [开发者完整使用说明](docs/framework/README.md)，按场景选择 Entity/Nest、Remote Entity、Saga、状态同步或帧同步。
+- **Nest 优化验收**：[职责整理、事务边界、阶段指标与性能数据](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/NEST-COMPLETION-2026-09-24.md)。
+- **框架维护者/生产负责人**：阅读 [实现原理与不变量](docs/framework/README.md)、[生产部署手册](docs/maintenance/README.md) 和 [薄弱点与路线图](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/ROADMAP.md)。完整索引见 [文档中心](docs/README.md)。
 
 本 README 保留能力总览和可独立运行的 core 最小示例。
 
@@ -314,7 +316,7 @@ Rollback 三档：
 
 两种策略都会自动快照并恢复 `dataengine.Tracker` 的同步掩码与版本，回滚后实体回到事务前。
 
-两种策略都只回滚 DAO，这也是唯一的回滚（维护者决定 A1，[方案](docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）：事务内会改的状态一律放进 DAO——不该落库的用 `dao:"nopersist,sync"` / `dao:"nopersist,nosync"` 字段，派生值也一样；组件不持有需要回滚的内存状态，不自己登记 undo。上面 `AddGold` 那样由 DAO 自己的方法登记逆操作是允许的。
+两种策略都只回滚 DAO，这也是唯一的回滚（维护者决定 A1，[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）：事务内会改的状态一律放进 DAO——不该落库的用 `dao:"nopersist,sync"` / `dao:"nopersist,nosync"` 字段，派生值也一样；组件不持有需要回滚的内存状态，不自己登记 undo。上面 `AddGold` 那样由 DAO 自己的方法登记逆操作是允许的。
 
 Durability 四档：
 
@@ -400,7 +402,7 @@ Put/Patch/Delete 都携带 `ExpectedVersion` 与 `NextVersion`。Mongo projectio
 
 ### 8. 冷加载合并与缓存写入结果 —— `entity/manager_access.go`、`cache/ref_hmap.go`
 
-`ManagerAccess.Get` 的冷路径做 single-flight：并发请求同一实体只发一次 `LoadEntity`（错误共享、失败航班立即移除以便重试、等待者可被自身 ctx 取消），消除热实体冷启动惊群。RefHMap 从 v1.19.0 起在 Redis Eval 失败时保留原始错误，不再降级为非原子 DEL+HSET，也不自动重放（RR-20261004-NC-21）；失败可能是结果未知，不能直接判未写入或回滚。旧 `cache.refhmap.write_degraded_total` 指标已移除，应按业务权威值/版本和错误分类恢复，见 [使用说明](docs/USER_GUIDE.md)。
+`ManagerAccess.Get` 的冷路径做 single-flight：并发请求同一实体只发一次 `LoadEntity`（错误共享、失败航班立即移除以便重试、等待者可被自身 ctx 取消），消除热实体冷启动惊群。RefHMap 从 v1.19.0 起在 Redis Eval 失败时保留原始错误，不再降级为非原子 DEL+HSET，也不自动重放（RR-20261004-NC-21）；失败可能是结果未知，不能直接判未写入或回滚。旧 `cache.refhmap.write_degraded_total` 指标已移除，应按业务权威值/版本和错误分类恢复，见 [使用说明](docs/framework/README.md)。
 
 ### 9. tick 回调与 handler 注册的作用域 —— `nest/ticker.go`、`nest/nest_dispatch.go`
 
@@ -512,8 +514,8 @@ kit 可以用 core；codegen 独立于它生成的那个运行时。合仓前这
 > **2026-09 两步收敛**：先五仓合三仓（roost-skill / roost-service 并入，core v1.14.0），
 > 再三仓合一仓（roost-kit / roost-codegen 并入，**core v1.16.0**）。两个旧仓库已归档，旧 tag 仍可 pin。
 > 跨任一边界的工程用 `roost project upgrade --consolidate` 一次改写 import；
-> 方案见 [三仓合一仓](docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)、
-> [五仓合三仓](docs/ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md)。
+> 方案见 [三仓合一仓](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)、
+> [五仓合三仓](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md)。
 
 安装 CLI：
 
@@ -521,7 +523,7 @@ kit 可以用 core；codegen 独立于它生成的那个运行时。合仓前这
 go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest
 ```
 
-当前开发、发布隔离和版本收口规则见 [多仓研发与发布](docs/DEVELOPMENT_WORKSPACE.md)。
+当前开发、发布隔离和版本收口规则见 [多仓研发与发布](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/DEVELOPMENT_WORKSPACE.md)。
 
 ## 开发与验证
 

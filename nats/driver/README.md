@@ -4,9 +4,9 @@ nats-io/nats.go v1.53.1 之上的驱动：核心连接 `Client`、同连接上�
 
 ## 5. Close：重复调用与出错后再调用
 
-口径与其他驱动相同（[RR-20261006-10](../../docs/bug/RR-20261006-10.md)）：**重复 Close 幂等返回 nil，第一次的错误只报一次；并发 Close 的后到者等第一个做完；Close 之后的其他调用返回已关闭错误**。nats 的已关闭错误是 `fnats.ErrClosed`（`github.com/tjbdwanghaibo/roost-core/nats`），唯一例外是 `Assembly.Close` 排空失败时的终态 `ErrClosedUndrained`，只报一次。
+口径与其他驱动相同（[RR-20261006-10](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bug/RR-20261006-10.md)）：**重复 Close 幂等返回 nil，第一次的错误只报一次；并发 Close 的后到者等第一个做完；Close 之后的其他调用返回已关闭错误**。nats 的已关闭错误是 `fnats.ErrClosed`（`github.com/tjbdwanghaibo/roost-core/nats`），唯一例外是 `Assembly.Close` 排空失败时的终态 `ErrClosedUndrained`，只报一次。
 
-**判据（[REFACTOR-2026-10-06-nats-driver-closed-state](../../docs/feature/REFACTOR-2026-10-06-nats-driver-closed-state.md)）**：驱动自己持有唯一的“已关闭”状态（`Client` 上的原子标记），`Close` 一开始就置位、排空正常结束时置位。每个公开方法入口先查它，已关闭直接返回 `fnats.ErrClosed`、不碰 nats.go；调用过了入口、在 nats.go 里失败时同样先看它。所以与 Close 并发的调用**要么在 Close 之前完成，要么返回 `fnats.ErrClosed`**。nats.go 的连接状态只在未关闭时作辅助（排空进行中、nats.go 放弃重连后自己关闭）——硬关打断排空后 nats.go 会把状态翻回 `DRAINING_PUBS`、约 5s 内 `IsConnected` 为 true（[RR-20261006-26](../../docs/bug/RR-20261006-26.md)），驱动不看它。
+**判据（[REFACTOR-2026-10-06-nats-driver-closed-state](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-10-06-nats-driver-closed-state.md)）**：驱动自己持有唯一的“已关闭”状态（`Client` 上的原子标记），`Close` 一开始就置位、排空正常结束时置位。每个公开方法入口先查它，已关闭直接返回 `fnats.ErrClosed`、不碰 nats.go；调用过了入口、在 nats.go 里失败时同样先看它。所以与 Close 并发的调用**要么在 Close 之前完成，要么返回 `fnats.ErrClosed`**。nats.go 的连接状态只在未关闭时作辅助（排空进行中、nats.go 放弃重连后自己关闭）——硬关打断排空后 nats.go 会把状态翻回 `DRAINING_PUBS`、约 5s 内 `IsConnected` 为 true（[RR-20261006-26](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bug/RR-20261006-26.md)），驱动不看它。
 
 | 对象 | 第二次 Close | 第一次 Close 出错后再调用 | Close 之后的操作 | 并发 Close |
 | --- | --- | --- | --- | --- |

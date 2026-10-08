@@ -1,7 +1,0 @@
-{
-  "port": 11288,
-  "mode": "RemoteIntegration",
-  "owned_pid": 5712,
-  "test_exit": 0,
-  "vet_exit": null
-}

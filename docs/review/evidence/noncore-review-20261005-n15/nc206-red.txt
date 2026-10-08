@@ -1,6 +1,0 @@
---- FAIL: TestGeneratedGitignoreIgnoresTheRuntimeOutputGenerationSkips (0.38s)
-    gitignore_runtime_promises_test.go:48: generated .gitignore does not ignore data/wal/dataengine/000001.wal, which generation itself treats as runtime output
-    gitignore_runtime_promises_test.go:48: generated .gitignore does not ignore data/wal/dataengine-2/000001.wal, which generation itself treats as runtime output
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	0.944s
-FAIL

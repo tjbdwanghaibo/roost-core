@@ -1,9 +1,0 @@
-    runtime_dirs_promises_test.go:83: generate while the project runs: project inputs changed while code generation was running: .dev/game.log, data/wal/dataengine/000001.wal; rerun the command
-    runtime_dirs_promises_test.go:93: sync while the project runs: project inputs changed while code generation was running: .dev/game.log, data/wal/dataengine/000001.wal; rerun the command
---- FAIL: TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput (2.37s)
-    --- FAIL: TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput/generate_while_dev-run_writes_logs_and_WAL (1.18s)
-    --- FAIL: TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput/sync_while_dev-run_writes_logs_and_WAL (0.37s)
-    --- PASS: TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput/an_application_input_edited_during_generate_is_still_refused (0.81s)
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	3.406s
-FAIL

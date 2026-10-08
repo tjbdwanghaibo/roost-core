@@ -1,6 +1,6 @@
 # mongo/driver 驱动行为契约
 
-`mongo/driver` 在 mongo-driver v2.6.0 之上实现 `fmongo.IMongo`（`mongo/`），kit 的 MongoMod（`kit/mongo/mongo_mod.go`）用的就是它。框架的约定是：**结果未知时交给调用方处理**。本页说明驱动在哪里自动重试、哪些错误表示“确定没提交”或“结果未知”、在哪里替换了 ctx、默认超时是多少。新增调用点时先对照本页（A2 决定，2026-10-05；Redis 侧见 [redis/driver/README.md](../../redis/driver/README.md)，方案见 [A2 方案](../../docs/feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)）。
+`mongo/driver` 在 mongo-driver v2.6.0 之上实现 `fmongo.IMongo`（`mongo/`），kit 的 MongoMod（`kit/mongo/mongo_mod.go`）用的就是它。框架的约定是：**结果未知时交给调用方处理**。本页说明驱动在哪里自动重试、哪些错误表示“确定没提交”或“结果未知”、在哪里替换了 ctx、默认超时是多少。新增调用点时先对照本页（A2 决定，2026-10-05；Redis 侧见 [redis/driver/README.md](../../redis/driver/README.md)，方案见 [A2 方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)）。
 
 升级驱动时，要对照驱动 `mongo.Session.WithTransaction` 的规则重新核对 `session.go` 里自己实现的重试循环（RR-20261005-NC-101）。
 
@@ -42,7 +42,7 @@
 
 ## 5. Close：重复调用与出错后再调用
 
-维护者第十二轮决定把 Close 的行为写进契约表。2026-10-06 先按当时源码实测登记，随后与 Redis 等驱动统一为同一口径（[RR-20261006-10](../../docs/bug/RR-20261006-10.md)，来源 [WANTED W-2026-10-06-02](../../docs/bug/WANTED.md)）：**重复 Close 幂等返回 nil，第一次的错误只报一次；并发 Close 的后到者等第一个做完；Close 之后的其他调用返回已关闭错误**。下表是统一后的行为（mongo-driver v2.6.0，不可达地址实测；kit `MongoMod` 接真实副本集的并发 / 重复 Stop 与关闭后各类调用另由 `kit/mongo/close_contract_real_promises_test.go` 实测，[真实进程演练 2026-10-06](../../docs/bugfix/REAL-PROCESS-DRILLS-2026-10-06.md) ④）。
+维护者第十二轮决定把 Close 的行为写进契约表。2026-10-06 先按当时源码实测登记，随后与 Redis 等驱动统一为同一口径（[RR-20261006-10](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bug/RR-20261006-10.md)，来源 [WANTED W-2026-10-06-02](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bug/WANTED.md)）：**重复 Close 幂等返回 nil，第一次的错误只报一次；并发 Close 的后到者等第一个做完；Close 之后的其他调用返回已关闭错误**。下表是统一后的行为（mongo-driver v2.6.0，不可达地址实测；kit `MongoMod` 接真实副本集的并发 / 重复 Stop 与关闭后各类调用另由 `kit/mongo/close_contract_real_promises_test.go` 实测，[真实进程演练 2026-10-06](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/REAL-PROCESS-DRILLS-2026-10-06.md) ④）。
 
 | 对象 | 第二次 Close | 第一次 Close 出错后再调用 | Close 之后的操作 | 并发 Close |
 | --- | --- | --- | --- | --- |

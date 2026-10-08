@@ -1,5 +1,0 @@
---- FAIL: TestCoalescerCloseReturnsAfterTheFinalFlush (0.00s)
-    coalescer_close_promises_test.go:39: Close returned while the final flush had not finished (the batch is still being sent)
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/robot	0.258s
-FAIL

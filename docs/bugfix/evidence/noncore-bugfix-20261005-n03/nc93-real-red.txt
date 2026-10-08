@@ -1,7 +1,0 @@
-    real_etcd_resign_budget_promises_test.go:76: Resign(500ms) against a frozen etcd still blocked after 5s
---- FAIL: TestRealEtcdResignHonoursTheCallerBudget (5.96s)
-    real_etcd_resign_budget_promises_test.go:102: healthy Resign: err=<nil> lease_ttl=-1 keys=0
---- PASS: TestRealEtcdResignRevokesItsLease (0.72s)
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/etcd/driver	7.237s
-FAIL

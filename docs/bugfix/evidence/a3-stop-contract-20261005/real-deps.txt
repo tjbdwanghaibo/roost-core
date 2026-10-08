@@ -1,9 +1,0 @@
-# 真实依赖（迁移影响面）：syncbus / etcd 用例自起私有 nats-server / etcd；bus NC-90 用隔离环境 NATS（env.sh 只 source 不输出），remote-acceptance.lock 不存在
-$ GOWORK=off go test -tags integration -count=1 -run TestRealJetStreamSyncBusStopDrainsAnInFlightHandler ./kit/syncbus/
-ok  	github.com/tjbdwanghaibo/roost-core/kit/syncbus	1.030s
-$ GOWORK=off go test -tags integration -count=1 -run TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget ./etcd/driver/
-ok  	github.com/tjbdwanghaibo/roost-core/etcd/driver	1.627s
-$ (source env.sh) GOWORK=off go test -tags integration -count=1 -run TestRealJetStreamStopWaitsForInFlightHandler -v ./kit/nats/
---- PASS: TestRealJetStreamStopWaitsForInFlightHandler (0.42s)
-PASS
-ok  	github.com/tjbdwanghaibo/roost-core/kit/nats	0.968s

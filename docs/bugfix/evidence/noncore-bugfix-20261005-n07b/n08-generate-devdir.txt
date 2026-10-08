@@ -1,2 +1,0 @@
-2026/10/05 19:12:36 project inputs changed while code generation was running: .dev/game.log; rerun the command
-exit status 1

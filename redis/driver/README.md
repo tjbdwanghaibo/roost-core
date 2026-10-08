@@ -1,6 +1,6 @@
 # redis/driver 驱动行为契约
 
-`redis/driver` 是 `fredis.IRedis`（`redis/client.go`）在 go-redis v9.22.0 上的实现，kit 的 RedisMod（`kit/redis/redis_mod.go`）、`SingletonStore` 和 `NewClient` 都用它。框架的约定是：**结果未知时交给调用方处理**。下面几张表写明驱动在哪些情况下会自己重放命令、哪些错误可以安全重试、在哪里替换了 ctx，以及各项默认值。新增 Redis 调用点时先对照这几张表（A2 决定，2026-10-05；[方案与实施记录](../../docs/feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)）。
+`redis/driver` 是 `fredis.IRedis`（`redis/client.go`）在 go-redis v9.22.0 上的实现，kit 的 RedisMod（`kit/redis/redis_mod.go`）、`SingletonStore` 和 `NewClient` 都用它。框架的约定是：**结果未知时交给调用方处理**。下面几张表写明驱动在哪些情况下会自己重放命令、哪些错误可以安全重试、在哪里替换了 ctx，以及各项默认值。新增 Redis 调用点时先对照这几张表（A2 决定，2026-10-05；[方案与实施记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)）。
 
 升级 go-redis 时要按源码重新核对本页：`error.go`（`shouldRetry`、`isBadConn`）、`redis.go`（`processWithRetry`、`generalProcessPipeline`）、`osscluster.go`（`process`）、`internal/pool`。
 
@@ -62,7 +62,7 @@ pipeline 只有在每条命令的错误都满足本函数时，才算整条没�
 
 ## 5. Close：重复调用与出错后再调用
 
-维护者第十二轮决定把 Close 的行为写进契约表。2026-10-06 先按当时源码实测登记（[WANTED W-2026-10-06-02](../../docs/bug/WANTED.md)，单机与 Cluster 不一致等），随后转为 [RR-20261006-10](../../docs/bug/RR-20261006-10.md) 统一口径：**重复 Close 幂等返回 nil，第一次的错误只报一次；并发 Close 的后到者等第一个做完；Close 之后的其他调用返回已关闭错误**。下表是统一后的行为（go-redis v9.22.0，不可达地址与私有 Redis 实测）。全仓各驱动与 Mod 的同一口径见 [RR-20261006-10 修复记录](../../docs/bugfix/RR-20261006-10.md)。
+维护者第十二轮决定把 Close 的行为写进契约表。2026-10-06 先按当时源码实测登记（[WANTED W-2026-10-06-02](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bug/WANTED.md)，单机与 Cluster 不一致等），随后转为 [RR-20261006-10](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bug/RR-20261006-10.md) 统一口径：**重复 Close 幂等返回 nil，第一次的错误只报一次；并发 Close 的后到者等第一个做完；Close 之后的其他调用返回已关闭错误**。下表是统一后的行为（go-redis v9.22.0，不可达地址与私有 Redis 实测）。全仓各驱动与 Mod 的同一口径见 [RR-20261006-10 修复记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/RR-20261006-10.md)。
 
 | 对象 | 第二次 Close | 第一次 Close 出错后再调用 | Close 之后的操作 | 并发 Close |
 | --- | --- | --- | --- | --- |

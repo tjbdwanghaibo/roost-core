@@ -67,7 +67,7 @@ Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value
 
 ## 引用在哪里能读（求值上下文）
 
-一个值写在定义的哪里，决定它在哪个**求值上下文**里求值、能读哪些引用。完整的表在 [`skill/eval_contexts.go`](../../skill/eval_contexts.go)（每格一句语义；编译诊断原样带出这句话，诊断里会点名上下文与表项，能替代的写“改用 …”），设计见[方案](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。写技能时记住这五行就够：
+一个值写在定义的哪里，决定它在哪个**求值上下文**里求值、能读哪些引用。完整的表在 [`skill/eval_contexts.go`](../../skill/eval_contexts.go)（每格一句语义；编译诊断原样带出这句话，诊断里会点名上下文与表项，能替代的写“改用 …”），设计见[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。写技能时记住这五行就够：
 
 | 写在哪里 | 上下文 | 能读 | 不能读 |
 | --- | --- | --- | --- |
@@ -146,7 +146,7 @@ Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value
 
 ## Runtime 不在事务里（B4）
 
-维护者 2026-10-06 决定（B4）：`skill.Runtime` 的状态**不进** Nest 事务，保持现状。这是“事务内会改的状态一律进 DAO”（[A1](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）的明确例外：Runtime 是自带锁、调度器和投递缓冲的独立执行引擎，逐笔事务做 checkpoint 或把它拆成 DAO 字段的代价都远大于收益。
+维护者 2026-10-06 决定（B4）：`skill.Runtime` 的状态**不进** Nest 事务，保持现状。这是“事务内会改的状态一律进 DAO”（[A1](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）的明确例外：Runtime 是自带锁、调度器和投递缓冲的独立执行引擎，逐笔事务做 checkpoint 或把它拆成 DAO 字段的代价都远大于收益。
 
 **约束**：在 nest handler 里推进 Runtime（`Start` / `Activate` / `Advance` / `Cancel` / `Release` / `ActivatePassive` …）之后，handler 失败或提交被拒，DAO 回滚，Runtime 不回退：
 
@@ -161,7 +161,7 @@ Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value
 3. **失败用 Runtime 自己的终态表达**。Host 命令的“预期失败”（目标无效、被免疫等）返回带失败结果的 `EffectResult`，走定义里的 `result.failure` 分支；Host 返回 error 时 Runtime 把 cast 记为 `CastFailed`（`failCastLocked`），冷却按已提交处理。两种情况 DAO 与 Runtime 对“这次施法发生过、结果如何”的看法一致，不需要 handler 失败来表达。
 4. **提交被拒 / 结果未知**（WAL 或 Remote 拒绝）只能由业务处理：必须严格一致的玩法，可以在提交确认后再推进 Runtime（handler 外的 `HostAdapter` 每条命令走 `RunDetachedTransaction`，彼此不原子，见 N09 O4），或在失败时用 `Checkpoint` / `RestoreRuntime` 恢复（全量序列化，成本高，投递缓冲不进 checkpoint）。业务的 `RevisionSource` 若把事件写进需要与 DAO 一致的流，应在提交确认后再发布。
 
-glsvet 的 A1 提示只看组件方法里的 undo 登记与组件自身字段的写，Runtime 不是组件，不会命中，无需豁免。`CombatComponent` 的字段只有 DAO 句柄与投影函数（`ProjectAttributes` 装上的行为），两者都不提示；自己写组件时，事务会改的状态放进 DAO，确属缓存的字段标 `//roost:cache`（见 [A1 字段写提示](../feature/A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md)）。
+glsvet 的 A1 提示只看组件方法里的 undo 登记与组件自身字段的写，Runtime 不是组件，不会命中，无需豁免。`CombatComponent` 的字段只有 DAO 句柄与投影函数（`ProjectAttributes` 装上的行为），两者都不提示；自己写组件时，事务会改的状态放进 DAO，确属缓存的字段标 `//roost:cache`（见 [A1 字段写提示](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/A1-COMPONENT-FIELD-WRITE-HINT-2026-10-06.md)）。
 
 ## 确定性掷点（暴击/闪避概率 → 事实）
 
@@ -180,9 +180,9 @@ crit := combat.ChanceRoll(matchSeed, "crit", critChanceBP,
 `combatcomponent` 把 combat 电池接入 roost-core 实体模型：
 
 - `CombatDao`：持有全部战斗状态，实现 `entity.DaoInterface` + `dataengine.Tracker` 契约 + `entity.PersistedDaoLoader`（BSON + schema 版本）与 nest 状态回滚接口；undo 策略下由 DAO 自己按字段掩码（vitals / attributes / buffs）登记逆操作并标脏，与生成 DAO 的 setter 同形。
-- `CombatComponent`：只持有 DAO，全部 mutator 经 DAO 改状态，自己不登记 undo（回滚统一走 DAO，[A1](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）——handler 失败或提交被拒后，两种回滚策略下实体字节一致。
+- `CombatComponent`：只持有 DAO，全部 mutator 经 DAO 改状态，自己不登记 undo（回滚统一走 DAO，[A1](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md)）——handler 失败或提交被拒后，两种回滚策略下实体字节一致。
 - **Runtime 不在事务里**（维护者决定 B4，见上文“Runtime 不在事务里（B4）”）：Nest 回滚只撤回 DAO；`skill.Runtime` 自己的状态不回退。
-- `HostAdapter`：提供业务 Host 可委托的战斗面（自身不实现完整 `skill.Host`，Apply/Read 返回 handled 供业务路由）（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepSpawn`/空间查询/召唤物仍由业务 Host 实现。`HostAdapter.HostCapabilities()` 声明它负责的那部分 Host 能力表（Catalog 里可读的属性、`ResourceAttribute` 映射到的资源、四种资源 operation，接了 `Status` 再加 add / mul_bp 修正）；业务把自己负责的部分（衍生物 kind、motion 步骤、召唤物）用 `skill.MergeHostCapabilities` 合进来声明。Catalog 外或不可读的属性读取返回 `skill.ErrHostCapabilityMissing`（以前读出 0）。见 [B3 ③ 方案](../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)。
+- `HostAdapter`：提供业务 Host 可委托的战斗面（自身不实现完整 `skill.Host`，Apply/Read 返回 handled 供业务路由）（damage/heal/shield 命令、attribute/resource 读取、原子 PayCosts），事件词表与 MemoryHost 一致（`damage_resolved`、`combat_hook_*`、`shield_absorbed`…），proc 过滤器在两种宿主上行为相同。`Select`/`StepSpawn`/空间查询/召唤物仍由业务 Host 实现。`HostAdapter.HostCapabilities()` 声明它负责的那部分 Host 能力表（Catalog 里可读的属性、`ResourceAttribute` 映射到的资源、四种资源 operation，接了 `Status` 再加 add / mul_bp 修正）；业务把自己负责的部分（衍生物 kind、motion 步骤、召唤物）用 `skill.MergeHostCapabilities` 合进来声明。Catalog 外或不可读的属性读取返回 `skill.ErrHostCapabilityMissing`（以前读出 0）。见 [B3 ③ 方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)。
 
 ### 属性投影（O2，v1.23.0）
 
@@ -209,7 +209,7 @@ component.ProjectAttributes(projectCombat)
 ```
 
 - **什么时候投影**：装上时一次；实体建好（新建或从存储加载，`OnInitFinish`）一次；之后每个改属性来源的 mutator（`InitCombatant`、`SetAttributeBase` / `SetAttributeBounds`、`ApplyBuff`、`RemoveBuff`、`SetBuffStacks`、`AdoptBuff`、`DispelBuffs`、`TickBuffs`，以及经它们落地的 `StatusBridge` 命令和资源命令）末尾、在同一事务里再投影一次。伤害读到的字段总是当前属性的结果。
-- **回滚**：投影写的是 DAO 的 vitals（`FieldVitals`），与源字段同一笔逆操作 / 快照（[A1](../feature/REFACTOR-2026-10-05-dao-unified-rollback.md) 的派生值规则）；handler 失败或提交被拒时随 DAO 回到事务开始时的值，不需要业务写任何回滚代码。加载与构造时不在事务里，直接写内存、不产生持久写；投影结果与现值相同时什么都不做。
+- **回滚**：投影写的是 DAO 的 vitals（`FieldVitals`），与源字段同一笔逆操作 / 快照（[A1](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md) 的派生值规则）；handler 失败或提交被拒时随 DAO 回到事务开始时的值，不需要业务写任何回滚代码。加载与构造时不在事务里，直接写内存、不产生持久写；投影结果与现值相同时什么都不做。
 - **投影函数的约束**：纯函数，只读传入的属性、只写由属性决定的字段（Armor、MagicResistance、Penetration、各 `*BP`、`MaxHealth` 等），不要改 `Health` / `Shield` / `Alive` 这类战斗过程状态；被投影的字段以投影为准，`InitCombatant` 里给的值会被覆盖。
 - 完整可运行示例：`skill/examples/statusbridge`（破甲 status 让护甲 40 → 20，伤害随之变化，驱散后恢复）。
 

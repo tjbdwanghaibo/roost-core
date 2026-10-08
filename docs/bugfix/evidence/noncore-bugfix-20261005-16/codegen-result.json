@@ -1,5 +1,0 @@
-{
-  "command": "go test -count=1 -json ./codegen/internal/roost",
-  "exit": 0,
-  "environment": "existing Git Bash/Go in PATH; owned TEMP; Windows/amd64"
-}

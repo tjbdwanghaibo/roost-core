@@ -1,7 +1,0 @@
-    plugin_load_test.go:117: LoadPlugin = hotcode: PatchBundle in <tmp>/hotcode-plugintest-N/bundle.so does not implement hotcode.Bundle
---- FAIL: TestLoadPluginAppliesARealSharedObject (4.95s)
-    plugin_load_test.go:157: LoadPlugin error = hotcode: PatchBundle in <tmp>/hotcode-plugintest-N/bundle.so does not implement hotcode.Bundle, want the bundle's ErrTypeMismatch
---- FAIL: TestLoadPluginRollsBackAPartiallyAppliedBundle (0.00s)
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/hotcode/plugintest	5.404s
-FAIL

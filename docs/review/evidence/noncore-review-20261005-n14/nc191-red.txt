@@ -1,6 +1,0 @@
-# 基线 f6245613，修复前；GOWORK=off go test -count=1 -run TestStartDoesNotLogTheMongoPassword ./kit/mongo
---- FAIL: TestStartDoesNotLogTheMongoPassword (0.00s)
-    uri_log_promises_test.go:63: Start logged the Mongo password: "time=2026-10-05T20:53:02.535+08:00 level=INFO msg=\"mongo mod: connected\" uri=\"mongodb://roost:s3cret-pw@db1:27017,db2:27017/?replicaSet=rs0\"\n"
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/kit/mongo	0.585s
-FAIL

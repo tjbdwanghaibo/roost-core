@@ -1,6 +1,0 @@
-bash <scratch>/wt-revn15/kit/scripts/integration/dataengine-env.sh fault nats-all exit=2  [roost-it] refuse: <scratch>/n15-lock.wTEqkV/roost-dataengine
-bash <scratch>/wt-revn15/kit/scripts/integration/dataengine-env.sh down exit=2  [roost-it] refuse: <scratch>/n15-lock.wTEqkV/roost-dataengine
-bash <scratch>/wt-revn15/scripts/remote-fault.sh nats-all exit=2  [roost-it] refuse: <scratch>/n15-lock.wTEqkV/roost-dataengine
-bash <scratch>/wt-revn15/kit/scripts/integration/dataengine-env.sh reset exit=2  [roost-it] refuse: <scratch>/n15-lock.wTEqkV/roost-dataengine
-RESULT: lock dir still present
-bash <scratch>/wt-revn15/kit/scripts/integration/dataengine-env.sh status exit=1  [roost-it] Mongo replica set is not ready [roost-it] NATS JetStream cluster is not ready [roost-it] redis=DOWN [roost-it] toxiproxy=absent

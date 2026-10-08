@@ -1,8 +1,0 @@
-# RR-20261006-26 修前：-count=20 全部红（真实 NATS）；首次在 -count=3 的 -race 循环里偶发（2/150，断言只看 Stop 返回瞬间）
-FAIL count: 20
---- FAIL: TestRealNatsModUndrainedCloseIsReportedOnce (0.21s)
-    close_contract_real_promises_test.go:221: first Stop = nats: connection closed before drain finished: context deadline exceeded
-    close_contract_real_promises_test.go:229: Assembly.Connected() = true after the undrained close returned (DEBUG status=DRAINING_PUBS closed=false draining=true); the connection was closed hard
-# 首次偶发时的状态（临时调试输出）
-    close_contract_real_promises_test.go:221: first Stop = nats: connection closed before drain finished: context deadline exceeded
-    close_contract_real_promises_test.go:226: connection still up after the drain budget ran out; not the hard-close path (DEBUG status=DRAINING_PUBS closed=false draining=true)

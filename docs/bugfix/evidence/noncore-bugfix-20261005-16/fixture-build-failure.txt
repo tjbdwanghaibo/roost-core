@@ -1,3 +1,0 @@
-# github.com/tjbdwanghaibo/roost-core/saga [github.com/tjbdwanghaibo/roost-core/saga.test]
-saga\transaction_cancel_review_test.go:123:24: backend.TransactionAttempts undefined (type *mongotest.Client has no field or method TransactionAttempts)
-saga\transaction_cancel_review_test.go:130:44: backend.TransactionAttempts undefined (type *mongotest.Client has no field or method TransactionAttempts)

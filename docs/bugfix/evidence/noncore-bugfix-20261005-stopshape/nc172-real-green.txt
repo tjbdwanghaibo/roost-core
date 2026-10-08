@@ -1,6 +1,0 @@
-=== RUN   TestRealJetStreamSyncBusStopDrainsAnInFlightHandler
-    stop_drain_integration_test.go:61: budgeted stop with the handler in flight: err=context deadline exceeded bus_retained=true nats_closed=false
-    stop_drain_integration_test.go:97: retry stop: err=<nil>; consumer ack_pending=0 ack_floor=1 consumers=1
---- PASS: TestRealJetStreamSyncBusStopDrainsAnInFlightHandler (0.48s)
-PASS
-ok  	github.com/tjbdwanghaibo/roost-core/kit/syncbus	1.045s

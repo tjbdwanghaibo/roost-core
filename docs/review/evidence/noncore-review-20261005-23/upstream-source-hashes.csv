@@ -1,7 +1,0 @@
-"path","sha256_utf8_lf","coverage","freshness"
-"app/app.go","fd70541496138bd5973a21057c59d2044913f0e2c74aee11247959f092cf989e","no_recorded_issue","metadata_changed"
-"app/runtime_failure.go","ae974594e1b972e839b8879099793d301df30a2ffcb75f35b66d76bec0c24b03","no_recorded_issue","metadata_changed"
-"app/singleton.go","fd8e6d06102fe36d6f4a43589d1b932e6b8468a1c5d8f20d3712ad85053899b1","no_recorded_issue","not_tracked"
-"app/singleton_test.go","0bbb9890845cc87c404fd596f2b4c4085f7be7dd5f8aecf290c139b0d0dbd483","no_recorded_issue","not_tracked"
-"kit/nest/nest_mod.go","c937244ebe86a3c0cd7da2b90d51a0dc7d2aefbaa6e2be3b517589bae4e896e5","no_recorded_issue","metadata_changed"
-"kit/redis/singleton.go","8ecb776f466f455690749192de063094e5e8aefe68b8ee8d91f56f36a484a6a5","no_recorded_issue","not_tracked"

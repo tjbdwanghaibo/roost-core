@@ -1,4 +1,0 @@
-{
-  "command": "go vet ./codegen/internal/roost",
-  "exit": 0
-}

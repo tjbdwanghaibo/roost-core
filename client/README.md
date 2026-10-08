@@ -132,7 +132,7 @@ await match.ReportHashAsync(lastAppliedFrame, deterministicGame.StateHash);
 
 同连接混合推送先按Kind+MessageId分流；其他类型不能丢弃。缺口从Next自动请求历史，连续缺口默认64个包重试；若没有新包，调用方按自己的有界计时器调用RequestCatchupAsync((uint)match.Next)。无包计时重试/比赛超时不内置，避免伪造主动恢复保证。已有追帧允许向后修正起点；历史被裁剪时须业务恢复，不能跳过缺帧继续模拟。
 
-实例从帧1开始，一实例一场比赛。原C7不含match/epoch；应用须在握手/订阅/路由生命周期隔离比赛，跨比赛复用同一路由且仍有旧包时不能仅新建Assembler。重连不提供游戏快照或自动跳帧；业务恢复/重放准备后再消费。游戏定点计算、随机种子、配置一致性和作弊裁决仍由业务实现，FrameHasher不证明游戏状态一致。[本轮方案与验收](../docs/feature/IMPLEMENTATION-2026-10-08-CLIENT-LOCKSTEP.md)。
+实例从帧1开始，一实例一场比赛。原C7不含match/epoch；应用须在握手/订阅/路由生命周期隔离比赛，跨比赛复用同一路由且仍有旧包时不能仅新建Assembler。重连不提供游戏快照或自动跳帧；业务恢复/重放准备后再消费。游戏定点计算、随机种子、配置一致性和作弊裁决仍由业务实现，FrameHasher不证明游戏状态一致。[本轮方案与验收](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/IMPLEMENTATION-2026-10-08-CLIENT-LOCKSTEP.md)。
 
 ## Unity接入与其他引擎
 
@@ -152,6 +152,6 @@ go test ./codegen/internal/roost -run '^TestClientSDKAgainstGeneratedPlayerTCP$'
 
 正式生成工程测试需要.NET 10 SDK（测试程序target net10.0，运行库仍netstandard2.1）；缺SDK时明确skip，不能当C#验收。测试在私有生成工程执行真实TCP鉴权→生成PB编解码→并发请求→raw Sync推送，以及Room→TCPSender→C#输入/Hash/主动制造缺口→可靠追帧，并运行现有TCP/Scene race场景，重生成托管目录必须字节不变。
 
-`client/spec/packets.json`由Go正式wire、frame、entitysync和lockstep编码器生成，C#消费并验证64位身份、frame/SubjectUpdate、Command/C7、与robot一致的输入链hash和重新封包。只有协议有意变化时才执行`go test ./client/wire -run TestClientProtocolGolden -update`并检查差异，普通回归不能自动更新期望。[设计与当前验证边界](../docs/feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)。
+`client/spec/packets.json`由Go正式wire、frame、entitysync和lockstep编码器生成，C#消费并验证64位身份、frame/SubjectUpdate、Command/C7、与robot一致的输入链hash和重新封包。只有协议有意变化时才执行`go test ./client/wire -run TestClientProtocolGolden -update`并检查差异，普通回归不能自动更新期望。[设计与当前验证边界](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)。
 
 TCP发送会检查fctx当前执行位置，快worker在resolver/socket前返回ErrBlockingInFastWorker。Room.Tick含同步网络I/O，必须由Entity锁外的比赛单所有者驱动；不能放进Nest快handler等待socket，也不能临时换goroutine绕过标记却并发访问Room。Nest边界只转交命令/调用已配置的比赛单所有者；本轮真实TCP夹具用独立串行owner channel，证明协议/Room消费，未声称具体业务比赛Nest实体及持久化装配已验收。

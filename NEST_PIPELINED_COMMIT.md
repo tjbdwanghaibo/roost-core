@@ -90,7 +90,7 @@ type PipelinedTransactionCommitter interface {
   路径上表现等同 Strict（锁内等待 durable），语义仍正确。
 - 这两条路径经 `committer.Commit` → `WAL.Append` 提交，记录的 Durability 仍是 pipelined；`Append` 对 strict 与 pipelined
   都等所在批 fsync 后返回。RR-20260928-11 之前 `Append` 只对 strict 等 fsync，这两条路径实际得到 async 语义（锁释放、
-  Sync Confirm、AfterCommit 先于 fsync），见 [修复记录](docs/bugfix/RR-20260928-11.md)。
+  Sync Confirm、AfterCommit 先于 fsync），见 [修复记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/RR-20260928-11.md)。
 
 ## 6. 外化闸门
 

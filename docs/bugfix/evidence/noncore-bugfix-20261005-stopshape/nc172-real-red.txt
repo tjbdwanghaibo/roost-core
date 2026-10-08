@@ -1,8 +1,0 @@
-=== RUN   TestRealJetStreamSyncBusStopDrainsAnInFlightHandler
-    stop_drain_integration_test.go:61: budgeted stop with the handler in flight: err=<nil> bus_retained=false nats_closed=true
-    stop_drain_integration_test.go:97: retry stop: err=<nil>; consumer ack_pending=1 ack_floor=0 consumers=1
-    stop_drain_integration_test.go:99: the stop reported success with the handler in flight, so the connection was closed under it
---- FAIL: TestRealJetStreamSyncBusStopDrainsAnInFlightHandler (0.17s)
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/kit/syncbus	0.737s
-FAIL

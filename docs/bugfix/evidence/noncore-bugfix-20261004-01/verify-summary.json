@@ -1,8 +1,0 @@
-{
-  "source_baseline": "183b0bddc5b46f6d3b50c5edda2d08da45150a69",
-  "original_review_pass_events": 35,
-  "regression_package_pass": 11,
-  "regression_test_pass_events": 194,
-  "regression_fail": 0,
-  "regression_skip": 0
-}

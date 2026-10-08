@@ -73,10 +73,10 @@ go test -race ./dataengine ./remote_entity ./nestwal ./nest ./replication ./sync
 git diff --check
 ```
 
-生成项目还必须校验 `deploy/shell/*.sh` 可通过 `sh -n`、全部 Kubernetes YAML 可解析、镜像不包含环境配置与密钥（configdata 数据表随镜像，RR-20260927-34）、生产 Secret 示例不被 kustomization 自动应用。正式流程见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
+生成项目还必须校验 `deploy/shell/*.sh` 可通过 `sh -n`、全部 Kubernetes YAML 可解析、镜像不包含环境配置与密钥（configdata 数据表随镜像，RR-20260927-34）、生产 Secret 示例不被 kustomization 自动应用。正式流程见 [docs/DEPLOYMENT.md](docs/maintenance/README.md)。
 
 生产压测必须覆盖 20 Hz、单房间 100 Entity、目标房间并发量下的 P95/P99、UDP 丢包/乱序、Redis 重启、Mongo primary 切换和 etcd compaction。CI 负责 race/vet/单元回归；依赖真实基础设施的故障演练必须在 staging release gate 执行，不能用 fake 测试替代。
 
-从历史快照引擎升级前必须停止旧 writer、排空全部 backlog，并核对[当前 schema 与升级边界](docs/release/RETIRE-DAO-MIGRATION-2026-10-08-NOTES.md)；框架不自动转换旧数据。业务销毁统一使用带 context 和 error 的 `ManagerAccess.Destroy`。WAL 目录必须是单写持久卷，滚动升级时不同实例不得共享同一目录。`nestwal` ack checkpoint 与 `syncstream` 文件 checkpoint 只是各自日志的消费 watermark，不构成 Entity 第二写路径。
+从历史快照引擎升级前必须停止旧 writer、排空全部 backlog，并核对[当前 schema 与升级边界](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/release/RETIRE-DAO-MIGRATION-2026-10-08-NOTES.md)；框架不自动转换旧数据。业务销毁统一使用带 context 和 error 的 `ManagerAccess.Destroy`。WAL 目录必须是单写持久卷，滚动升级时不同实例不得共享同一目录。`nestwal` ack checkpoint 与 `syncstream` 文件 checkpoint 只是各自日志的消费 watermark，不构成 Entity 第二写路径。
 
 第二条 race 命令在 `roost-kit` 仓库执行，并使用包含本次 core/kit 的本地 `go.work`；正式发布验证应再关闭 `go.work`，只使用已发布 module 运行一次全量测试。

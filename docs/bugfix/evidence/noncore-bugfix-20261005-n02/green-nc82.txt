@@ -1,6 +1,0 @@
---- PASS: TestOneOwnerCannotFillTheKeyTableForOthers (0.00s)
---- PASS: TestOwnerKeyLimitIsCountedAndReleasedByIdleSweep (0.00s)
---- PASS: TestFullTableRejectionDoesNotSweepBeforeTheSweepInterval (0.00s)
-ok  	github.com/tjbdwanghaibo/roost-core/security	0.489s
---- PASS: TestOnePlayerSprayingMessageIDsDoesNotRateLimitOthers (0.00s)
-ok  	github.com/tjbdwanghaibo/roost-core/gateway	0.697s

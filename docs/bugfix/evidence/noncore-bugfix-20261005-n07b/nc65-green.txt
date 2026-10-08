@@ -1,4 +1,0 @@
-=== RUN   TestFinalIsRecomputedFromWornGearWhenThePlayerLoads
---- PASS: TestFinalIsRecomputedFromWornGearWhenThePlayerLoads (0.00s)
-PASS
-ok  	example.com/n07bgd/game/entities/player	0.832s

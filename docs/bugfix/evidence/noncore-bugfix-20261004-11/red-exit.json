@@ -1,5 +1,0 @@
-{
-  "test_exit": 1,
-  "excluded": "Initial int32_id negative assumption corrected; int32 is a positive control",
-  "baseline": "3127d37ce113b887038366f9289218c32729dbbc"
-}

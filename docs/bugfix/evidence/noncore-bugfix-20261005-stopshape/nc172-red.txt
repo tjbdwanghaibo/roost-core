@@ -1,5 +1,0 @@
---- FAIL: TestJetStreamSyncBusStopWaitsForAnInFlightHandler (0.00s)
-    jetstream_stop_drain_promises_test.go:82: Stop returned while a handler was still running on the subscription
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/sync/syncbus/driver	0.482s
-FAIL

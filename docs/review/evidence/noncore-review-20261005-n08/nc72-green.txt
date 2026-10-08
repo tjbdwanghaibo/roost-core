@@ -1,2 +1,0 @@
---- PASS: TestCfggenHelpUsageCoexistsWithTheProjectGenerators (0.36s)
-ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	1.090s

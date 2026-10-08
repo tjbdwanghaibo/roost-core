@@ -1,5 +1,0 @@
-    step_operation_real_mongo_integration_test.go:95: round 1: 6 attempts of one operation reserved a live lease at the same time, want exactly 1 (results=[<nil> <nil> <nil> <nil> <nil> <nil>])
---- FAIL: TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce (0.28s)
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/saga	3.463s
-FAIL

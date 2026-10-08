@@ -173,7 +173,7 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
      被接替尝试的迟到投递直接 ack、不执行。
    - 过了自己截止的投递（U-0281 的过期 ack、Reserve 的 `ErrCommandExpired`）不执行，但 ack 前同样把同一操作实例已生效的
      **成功**经 saga 结果流重发：它可能是最后一次尝试，较早尝试的成功又没有送达，不重发就没人再送达（审查 2026-10-05）。
-   - **协调器接收结果的统一规则**（v1.23.1 起，维护者 2026-10-07 选 A，[方案](docs/feature/SAGA-COMPLETION-RULE-UNIFIED-2026-10-07.md)）：
+   - **协调器接收结果的统一规则**（v1.23.1 起，维护者 2026-10-07 选 A，[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SAGA-COMPLETION-RULE-UNIFIED-2026-10-07.md)）：
      **成功是操作的结论，只要这个操作开过、还没有带结果关闭，就接收**——记录还停在这个操作上就接收为它的结果，记录已离开（放弃关闭）
      就补偿这一步（第 4 条），已带结果关闭是重复；**拒绝是本生这个操作的结论、可重试失败是一次尝试的结论**，只在协调器正等着时接收。
      判定只在 `judgeCompletion` 一处（守卫 `saga/completion_rule_guard_test.go`）；下面三段是这条规则在代际、尝试、退避上的展开（B1、方向 ③、RR-20261006-42）。
@@ -228,7 +228,7 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
 - 状态文档集合是 `<收件箱集合>_operations`（缺省 `_saga_step_inbox_operations`），回执集合不变。已生成工程不迁移（维护者决定），仓库模板与
   `roost add saga` 生成物已同步注释。
 - 代价：每次执行多一个 Reserve 事务（读回执、读状态文档、写状态文档），执行事务多一次条件更新（测量见
-  [方案](docs/feature/SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)、[状态文档方案](docs/feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md)）。
+  [方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SAGA-DIRECTION-STEP-TRANSITION-AND-MONGO-INBOX-2026-10-06.md)、[状态文档方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md)）。
 
 **两个结果消费者的终态分类相同**（O-S5-1）：普通结果流（`SubscribeCompletions`）与原生 effect 流对 `ErrNotWaiting`、`ErrNotFound`、`ErrIdentityConflict`、
 `ErrInvalidRecord` 都 Term，不再 nak 到 `MaxDeliver`。退避中到达的成功被接收（上面第 3 条，RR-20261006-42）；没有送达的由下一次尝试回放或由过期投递重发。
@@ -253,7 +253,7 @@ fence 到 `ManualRequired`（放弃关闭，第 4 条），之后的重投按迟
 
 #### 操作状态文档（2026-10-06，维护者决定“直接改成一份状态文档”）
 
-两种收件箱对每个操作实例（`Command.IdempotencyKey`）只写一份状态文档，判定只读它（[方案](docs/feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md)）：
+两种收件箱对每个操作实例（`Command.IdempotencyKey`）只写一份状态文档，判定只读它（[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md)）：
 
 - **集合**：原生 `_dataengine_step_operations`；Mongo 步骤 `<收件箱集合>_operations`（缺省 `_saga_step_inbox_operations`）。`_id = IdempotencyKey`，
   索引只有 `ttl_expires_at`（`expires_at` 每次写入刷新为 `now + receiptTTL`，缺省 30 天）。`EnsureInfrastructure` / 订阅时自动建立。

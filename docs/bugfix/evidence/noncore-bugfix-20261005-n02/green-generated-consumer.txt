@@ -1,4 +1,0 @@
-    consumer_test.go:31: calls=2 err=http client: status 500 Internal Server Error out={WinRate:0}
---- PASS: TestGeneratedRouteUnencodableResult (0.00s)
-PASS
-ok  	example.com/n02consumer/web	0.537s

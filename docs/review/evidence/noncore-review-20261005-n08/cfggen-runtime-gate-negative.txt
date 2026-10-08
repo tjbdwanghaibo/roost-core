@@ -1,7 +1,0 @@
-cfggen: wrote <scratch>/cfggen-golden-runtime.pmLSva/cfg/cfg_gen.go (4 tables, 1 globals, 1 beans)
---- FAIL: TestIndexOptionsAndStringRefsRoundTrip (0.04s)
-    roundtrip_test.go:193: skipempty indexed zone 0: [2]
-FAIL
-FAIL	cfggenruntime/cfg	0.750s
-FAIL
-exit=1

@@ -1,3 +1,0 @@
-framework dependencies: staging import consolidation before resolving modules
-consolidate: rewrote 1 Go file(s), go.mod, roost.yaml
-  business.go

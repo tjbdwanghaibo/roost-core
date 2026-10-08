@@ -1,4 +1,0 @@
-package db
-
-type Record struct { ID int64; Meta *Meta }
-type Meta struct { Label string }

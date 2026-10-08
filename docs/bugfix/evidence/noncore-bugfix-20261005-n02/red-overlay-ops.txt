@@ -1,9 +1,0 @@
-2026/10/05 18:41:30 INFO ops: serving addr=127.0.0.1:64243 admin_enabled=true
-    zz_review_n02_test.go:88: executed=1 status=200 body=""
-    zz_review_n02_test.go:93: executed command with unencodable result answered 200 body ""
---- FAIL: TestReviewN02OpsAdminUnencodableResultIsNot2xx (0.00s)
-2026/10/05 18:41:30 INFO ops: serving addr=127.0.0.1:64246 admin_enabled=true
---- PASS: TestReviewN02OpsNonCooperativeCommandStopRetry (0.10s)
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/kit/ops	0.809s
-FAIL

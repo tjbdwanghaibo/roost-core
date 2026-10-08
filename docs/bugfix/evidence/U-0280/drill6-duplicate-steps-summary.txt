@@ -1,6 +1,0 @@
-normal(0-6c) sagas=124 status={"4":64,"5":60} debit_receipts>1=0 refund_receipts>1=2 failed_with_debit_receipt=0 manual_required=0
-6b-A sagas=65 status={"4":35,"5":30} debit_receipts>1=0 refund_receipts>1=0 failed_with_debit_receipt=0 manual_required=0
-6b-A2 sagas=73 status={"4":18,"5":11,"6":44} debit_receipts>1=1 refund_receipts>1=0 failed_with_debit_receipt=4 manual_required=0
-probe sagas=18 status={"4":8,"5":8,"6":2} debit_receipts>1=0 refund_receipts>1=0 failed_with_debit_receipt=0 manual_required=0
-6b-A3 sagas=20 status={"4":10,"5":10} debit_receipts>1=3 refund_receipts>1=2 failed_with_debit_receipt=0 manual_required=0
-6b-B sagas=20 status={"4":10,"5":9,"6":1} debit_receipts>1=3 refund_receipts>1=2 failed_with_debit_receipt=1 manual_required=0

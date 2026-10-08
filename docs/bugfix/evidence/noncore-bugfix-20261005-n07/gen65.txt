@@ -1,1 +1,0 @@
-generated: <scratch>/n07probe/combat/gen_wide_attribute.go

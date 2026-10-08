@@ -50,7 +50,7 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | completion_queue / completion_unlock / completion_order | 已完成 ticket 等完成 worker / 等本事务解锁 / 等同主实体前序完成 |
 | completion / rollback / remote_confirm | 异步完成回调与回复 / 失败回滚 / 已存在远端写批次的最终收尾 |
 
-阶段只在实际经过的路径上产生；广播按实体采样。并发阶段可能重叠，嵌套事务、动态实体提前释放等成本也可能包含在外层阶段，不能直接相加视为端到端延迟。Duration 用于次数、总耗时和平均值诊断，不提供 p99；客户端延迟分位数仍由业务压测统计。详细成本和复跑命令见 [Nest 收尾验收](docs/feature/NEST-COMPLETION-2026-09-24.md)。
+阶段只在实际经过的路径上产生；广播按实体采样。并发阶段可能重叠，嵌套事务、动态实体提前释放等成本也可能包含在外层阶段，不能直接相加视为端到端延迟。Duration 用于次数、总耗时和平均值诊断，不提供 p99；客户端延迟分位数仍由业务压测统计。详细成本和复跑命令见 [Nest 收尾验收](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/NEST-COMPLETION-2026-09-24.md)。
 
 ### Durability 管线（kit/dataengine + kit/nestwal）
 
@@ -168,7 +168,7 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 
 ### 服务事件（kit/service 与 core/service，维护者决定 C6）
 
-生成工程的每个托管服务默认用 `servicemetrics.NewMetricsReporter("<服务名>")`（`internal/service/<svc>/collaborators.go` 的 `Metrics()`），事件写进进程的 metrics 注册表、经 ops `/metrics` 导出。关闭：配置 `service_metrics.enabled: false`（所有 kit 服务 Mod 在 Init 时不再把 Reporter 交给服务），或在 collaborators 里返回 nil。[方案](docs/feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md)
+生成工程的每个托管服务默认用 `servicemetrics.NewMetricsReporter("<服务名>")`（`internal/service/<svc>/collaborators.go` 的 `Metrics()`），事件写进进程的 metrics 注册表、经 ops `/metrics` 导出。关闭：配置 `service_metrics.enabled: false`（所有 kit 服务 Mod 在 Init 时不再把 Reporter 交给服务），或在 collaborators 里返回 nil。[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md)
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
@@ -431,4 +431,4 @@ Grafana 总览面板见 [observability/grafana-roost-overview.json](observabilit
 
 ### SyncBus 有限重投与恢复（RR-25）
 
-MaxDeliver仍为总投递次数上限。终止查看 `nats.jetstream.terminal.total{reason="max_deliver"}` 及日志的stream/consumer/stream_sequence；broker ACK超时到限可能不经过本地结算，另观察MAX_DELIVERIES与MSG_TERMINATED advisory。通知是普通NATS消息，不是持久失败台账；停止/重订期间的错误必须区别于业务成功。恢复边界见 [RR-25方案](docs/feature/REFACTOR-2026-10-08-rr25-bounded-delivery.md)。
+MaxDeliver仍为总投递次数上限。终止查看 `nats.jetstream.terminal.total{reason="max_deliver"}` 及日志的stream/consumer/stream_sequence；broker ACK超时到限可能不经过本地结算，另观察MAX_DELIVERIES与MSG_TERMINATED advisory。通知是普通NATS消息，不是持久失败台账；停止/重订期间的错误必须区别于业务成功。恢复边界见 [RR-25方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-10-08-rr25-bounded-delivery.md)。

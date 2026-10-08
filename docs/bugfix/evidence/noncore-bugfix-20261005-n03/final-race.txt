@@ -1,7 +1,0 @@
-ok  	github.com/tjbdwanghaibo/roost-core/bus	1.987s
-ok  	github.com/tjbdwanghaibo/roost-core/kit/nats	3.130s
-ok  	github.com/tjbdwanghaibo/roost-core/nats	1.790s
-ok  	github.com/tjbdwanghaibo/roost-core/nats/driver	5.756s
-ok  	github.com/tjbdwanghaibo/roost-core/etcd	1.365s
-ok  	github.com/tjbdwanghaibo/roost-core/etcd/driver	6.102s
-ok  	github.com/tjbdwanghaibo/roost-core/servicerpc	3.463s

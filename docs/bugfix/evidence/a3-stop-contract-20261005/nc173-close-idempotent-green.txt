@@ -1,3 +1,0 @@
-# 修后：Client.Close 只关一次
-$ GOWORK=off go test -race -count=3 -run StopContract ./etcd/driver/
-ok  	github.com/tjbdwanghaibo/roost-core/etcd/driver	2.206s

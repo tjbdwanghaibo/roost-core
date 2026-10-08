@@ -1,6 +1,0 @@
-=== RUN   TestPushCaptureIsReinstalledOnTheSessionAfterReconnect
-    capture_reconnect_promises_test.go:74: a push on the reconnected session reached the capture 0 times; want 1 (EnsurePushCapture after reconnect must register on the new session)
---- FAIL: TestPushCaptureIsReinstalledOnTheSessionAfterReconnect (2.00s)
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/robot	2.536s
-FAIL

@@ -1,5 +1,0 @@
-# 演练窗口（2026-10-05T11:10Z 起）local.oplog.rs 按库统计（顶层 ns 与事务 applyOps 内层 ns），
-# 演练只写了 u0280a_* / u0280b_* / u0280c_*；n07b_* / revn04_* 是同机另一会话的库。
-applyOps inner dbs: [{"_id":"revn04_probe_1791199003470352000","n":1},{"_id":"revn04_probe_1791199043562567000","n":1},{"_id":"u0280a_game","n":3399},{"_id":"u0280a_saga","n":3578},{"_id":"u0280b_game","n":3723},{"_id":"u0280b_saga","n":3992},{"_id":"u0280c_game","n":3397},{"_id":"u0280c_saga","n":3412}]
-top-level dbs: [{"_id":"","n":155},{"_id":"admin","n":9970},{"_id":"config","n":265},{"_id":"n07b_game","n":7},{"_id":"n07b_remote_entity","n":2},{"_id":"n07b_saga","n":6},{"_id":"revn04_probe_1791199003470352000","n":4},{"_id":"revn04_probe_1791199043562567000","n":4},{"_id":"revn04_probe_1791199109431805000","n":4},{"_id":"u0280a_game","n":2017},{"_id":"u0280a_remote","n":3},{"_id":"u0280a_saga","n":3958},{"_id":"u0280b_game","n":1598},{"_id":"u0280b_remote","n":3},{"_id":"u0280b_saga","n":4672},{"_id":"u0280c_game","n":1979},{"_id":"u0280c_remote","n":3},{"_id":"u0280c_saga","n":3544}]
-writes to shared game/saga/remote_entity since 11:10Z: 0

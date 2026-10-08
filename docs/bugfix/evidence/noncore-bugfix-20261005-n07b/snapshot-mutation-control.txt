@@ -1,5 +1,0 @@
---- FAIL: TestAHandlerReadsOneConfigGenerationAcrossAReload (0.00s)
-    config_snapshot_test.go:166: a reload between two reads of one handler was seen: {first:15 second:99 firstGen:1 secondGen:1}; both reads must come from the pinned generation
-FAIL
-FAIL	example.com/n07bgd/game/handler	0.516s
-FAIL

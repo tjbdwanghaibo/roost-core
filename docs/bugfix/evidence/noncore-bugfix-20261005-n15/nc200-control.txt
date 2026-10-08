@@ -1,5 +1,0 @@
-# 控制：干净树（没有未提交修改），NOTES.txt 本来就是 v1；RESULT 行的措辞只对红用例有意义。gapmap 正常跑完、exit 0。
-gapmap exit=0
-NOTES.txt now: notes v1
-RESULT: uncommitted work LOST
-gapmap: note — untracked files present (left alone):

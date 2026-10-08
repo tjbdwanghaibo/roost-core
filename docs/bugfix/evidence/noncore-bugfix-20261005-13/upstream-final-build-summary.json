@@ -1,9 +1,0 @@
-{
-  "check": "build",
-  "command": "go build ./...",
-  "exit": 0,
-  "passedTestEvents": 0,
-  "passedLeaves": 0,
-  "skipped": [],
-  "failed": []
-}

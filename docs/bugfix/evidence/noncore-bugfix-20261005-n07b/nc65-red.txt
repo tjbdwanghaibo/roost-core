@@ -1,6 +1,0 @@
-    attribute_component_test.go:276: a new player's attr_final is empty: the composed view was never handed to replication
-    attribute_component_test.go:320: after load final = attack 10 HP 100 power 30, want what the worn set gives: attack 25 HP 105 power 60
---- FAIL: TestFinalIsRecomputedFromWornGearWhenThePlayerLoads (0.00s)
-FAIL
-FAIL	example.com/n07bgd/game/entities/player	0.512s
-FAIL

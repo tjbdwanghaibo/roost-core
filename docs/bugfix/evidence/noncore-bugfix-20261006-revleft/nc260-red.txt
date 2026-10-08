@@ -1,8 +1,0 @@
---- FAIL: TestMongoModStopConvergesWhenTheClientIsAlreadyDisconnected (0.00s)
-    stop_retry_promises_test.go:31: Stop #1 on an already disconnected client = client is disconnected, want nil: the connection is released and a retry can never succeed
-2026/10/06 07:48:58 INFO mongo mod: closed
---- FAIL: TestMongoModStopTwiceReturnsNil (0.00s)
-    stop_retry_promises_test.go:53: Close on the released client = client is disconnected, want nil
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/kit/mongo	0.316s
-FAIL

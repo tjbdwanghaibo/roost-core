@@ -1,8 +1,0 @@
-# 故意写错的停机对象（清空字段当成已停）直接套骨架：预期红
-$ GOWORK=off go test -count=1 -run TestRedDemoFieldClearingStopper ./internal/stopcontract/
---- FAIL: TestRedDemoFieldClearingStopper (0.05s)
-    zz_red_tmp_test.go:8: stopcontract: retry Stop while the work is still in flight = <nil>, want the ctx error (a retry must wait again, not trust state cleared by the first attempt)
-    zz_red_tmp_test.go:8: stopcontract: Stop returned without releasing the resource after the work drained
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/internal/stopcontract	0.500s
-FAIL

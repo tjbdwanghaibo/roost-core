@@ -1,4 +1,0 @@
-interface:
-  display_name: "Roost Bugfix"
-  short_description: "Fix Roost review bugs with regression evidence"
-  default_prompt: "使用 $roost-bugfix 修复指定 Roost review 问题，完成验证、记录和提交推送。"

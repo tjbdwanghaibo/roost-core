@@ -74,9 +74,9 @@ durability 非 `memory` 时必须配置 rollback。调用 `nest.Emit` 会自动�
 
 ### 动态 Cast 的事务边界
 
-handler 通过 `CastOne` / `CastMulti` 新取得的本地实体也参与当前事务的回滚与持久化准备，无需启用客户端 Sync。事务内调用 `ReleaseCast` 不会立即解锁；框架必须持锁完成回滚或成功准入，再统一释放。无事务、无正式 Sync 作用域时仍可提前释放；提前释放按实例，只放传入实例自己的锁——handler 内 Destroy 后又新建了同 ID 的实体时，`ReleaseCast(旧实例)` 不会放掉新实例的锁（[RR-20260927-26](docs/bugfix/RR-20260927-26.md)）。
+handler 通过 `CastOne` / `CastMulti` 新取得的本地实体也参与当前事务的回滚与持久化准备，无需启用客户端 Sync。事务内调用 `ReleaseCast` 不会立即解锁；框架必须持锁完成回滚或成功准入，再统一释放。无事务、无正式 Sync 作用域时仍可提前释放；提前释放按实例，只放传入实例自己的锁——handler 内 Destroy 后又新建了同 ID 的实体时，`ReleaseCast(旧实例)` 不会放掉新实例的锁（[RR-20260927-26](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/RR-20260927-26.md)）。
 
-pipelined 在准入后为动态实体写入 CommitLSN，并在等待 WAL 前释放其锁。若业务必须先放锁再执行另一项操作，应拆成独立业务调用，不能依赖 `ReleaseCast` 在事务中途放锁。[修复与验证](docs/bugfix/RR-20260924-03.md)。
+pipelined 在准入后为动态实体写入 CommitLSN，并在等待 WAL 前释放其锁。若业务必须先放锁再执行另一项操作，应拆成独立业务调用，不能依赖 `ReleaseCast` 在事务中途放锁。[修复与验证](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/RR-20260924-03.md)。
 
 ## 5. WAL 格式与恢复
 
@@ -85,7 +85,7 @@ pipelined 在准入后为动态实体写入 CommitLSN，并在等待 WAL 前释�
 - record 默认上限 16 MiB；
 - frame 包含 magic、格式版本、payload 长度、header CRC、payload CRC；
 - payload 为确定性二进制编码，header map 按 key 排序；
-- strict 请求在 batch 中合并为一次 fsync；经阻塞式 `Append` 提交的 pipelined 记录（broadcast、带 Remote 批次时回退到 strict 路径）同样等这次 fsync（[RR-20260928-11](docs/bugfix/RR-20260928-11.md)）；
+- strict 请求在 batch 中合并为一次 fsync；经阻塞式 `Append` 提交的 pipelined 记录（broadcast、带 Remote 批次时回退到 strict 路径）同样等这次 fsync（[RR-20260928-11](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/RR-20260928-11.md)）；
 - async 默认每 10 ms 刷盘；
 - 启动时只截断最后 segment 的不完整尾 frame 或零填充尾部，判据见下文“尾部截断判据”；
 - 完整 frame CRC 错误、segment 缺口、ack 越界均拒绝启动，不静默跳过；

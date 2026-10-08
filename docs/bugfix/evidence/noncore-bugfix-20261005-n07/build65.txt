@@ -1,2 +1,0 @@
-# n07probe/combat
-vet: combat/gen_wide_attribute.go:139:23: cannot use 1 << 64 (untyped int constant 18446744073709551616) as uint64 value in constant declaration (overflows)

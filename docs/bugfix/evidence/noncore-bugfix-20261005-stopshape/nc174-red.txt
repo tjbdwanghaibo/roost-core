@@ -1,5 +1,0 @@
---- FAIL: TestRemoteAssemblyStopWaitsForAnInFlightReplicaHandler (0.00s)
-    assembly_replica_drain_promises_test.go:133: Stop reported success while a replica handler was still applying
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/remoteentity	0.563s
-FAIL

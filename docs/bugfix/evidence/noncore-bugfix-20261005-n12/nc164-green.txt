@@ -1,2 +1,0 @@
---- PASS: TestEntityGaugesReturnToZeroWhenAKindEmpties (0.01s)
-ok  	github.com/tjbdwanghaibo/roost-core/kit/statslog	0.554s

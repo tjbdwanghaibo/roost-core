@@ -1,6 +1,6 @@
 # Skill 当前实现学习手册
 
-> 当前升级口径（2026-10-08）：单仓单模块，Runtime checkpoint=10；旧版拒绝。旧文中的版本号与三仓发布/可灰度说法仅适用于当时的改名阶段，本轮先停旧再起新。见 [当前架构与迁移](architecture-and-migration.md)。
+> 当前升级口径（2026-10-08）：单仓单模块，Runtime checkpoint=10；旧版拒绝。旧文中的版本号与三仓发布/可灰度说法仅适用于当时的改名阶段，本轮先停旧再起新。见 [当前架构与迁移](../framework/guide/08-skill.md)。
 
 本文对应当前稳定 `skill` 包实现。目标是帮助新读者从一份
 JSON 技能定义，顺着真实调用链走到确定性的世界交互，而不是先被大量
@@ -84,7 +84,7 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
 按表生成每个位点的作用域，Runtime 求值时查同一张表，表外引用报 `ErrReferenceOutOfContext`。给定义加新的值位点或新的
 求值上下文时先改表，`eval_contexts_table_test.go` 会要求每个格子补正例 / 反例（引用表与快照点表都逐格守）。
 格子只有“可用”与“不可用”两种：值会随衍生物移交或读写位置变化的格子一律不可用（O33，维护者第七轮决定），不可用格的说明写原因与“改用 …”，诊断原样带出。作者侧的规则与改写对照见 [施法语义 · 引用在哪里能读](skill-casting-and-combat.md#引用在哪里能读求值上下文)。
-[方案](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。
+[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。
 
 建议配合阅读：
 
@@ -175,14 +175,14 @@ owner、source、target（以及需要时的 `Result: "kill"`），主动 fixtur
 World revision 是关键防线：Runtime 的 query/command 会携带期望 revision，Host 负责
 拒绝已失效读取或提交。因而不要缓存 Host 返回的可变对象，再在后续 tick 假设其仍然有效。
 
-**Host 能力表**（B3 ③，2026-10-07，[方案](../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)）：Host 用
+**Host 能力表**（B3 ③，2026-10-07，[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)）：Host 用
 `HostCapabilityProvider` 声明能读 / 支持的取值（属性、资源、衍生物 kind、motion 步骤、只交给 Host 的数值字段、资源与
 修正 operation、召唤物），环境的 `Host` 段与它对齐。三处各管一件事：
 
 - 编译器（`compile_host_capability.go`）从 IR 收集需求，只经 `HostCapabilityTableOf` 读表，表外报
   `HOST_CAPABILITY_MISSING`；需求排序去重后写进 `Program.hostRequirements`。新增会向 Host 要新取值的 DSL 构造时，
   在这里加收集、在 `hostCapabilityColumns` 加列（封闭集合只登记在那里）。
-- Runtime（`runtime_host_capability.go`）在 Program 第一次使用时核对需求在 Host 的表里。能力表是 `skill.Host` 接口的一部分（`HostCapabilities()`，收尾时并入，[RR-20261006-39](../bugfix/RR-20261006-39.md)）：每个 Host 都必须声明，没有“没实现就跳过”的分支；包装别的 Host 的类型（`RecordingHost` / `ReplayHost` 的做法）转发被包装者的表，不要自己另写一份。空表表示什么都不支持。
+- Runtime（`runtime_host_capability.go`）在 Program 第一次使用时核对需求在 Host 的表里。能力表是 `skill.Host` 接口的一部分（`HostCapabilities()`，收尾时并入，[RR-20261006-39](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/RR-20261006-39.md)）：每个 Host 都必须声明，没有“没实现就跳过”的分支；包装别的 Host 的类型（`RecordingHost` / `ReplayHost` 的做法）转发被包装者的表，不要自己另写一份。空表表示什么都不支持。
 - Host 对表外的属性 / 资源报错；`CheckHostCapabilities` 按声明逐项调用 Host。`MemoryHost` 声明全部能力（属性 /
   资源两列取配置的 catalog）；`combatcomponent.HostAdapter` 声明战斗那部分（可读属性、有映射的资源、资源
   operation，接了 `StatusBridge` 再加修正），运动 / 衍生物 / 召唤物由业务声明后 `MergeHostCapabilities`。
@@ -206,7 +206,7 @@ Error 日志；宿主侧要靠比赛结束 / 程序移除（`RemoveOwnedEntities
 收掉这类衍生物。记录保留到 `Advance` 末尾超出 `MaxAbandonedSpawns`（默认 1024）时才删（`skill.spawn.abandoned_pruned.total`）。
 细节见
 [施法语义](skill-casting-and-combat.md) 的“失败终态”、`skill/runtime_spawn_stop.go`（状态迁移表与停止入口清单）与
-[停止入口统一方案](../feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md)。
+[停止入口统一方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md)。
 
 ## 5. 过程与高级能力的阅读地图
 
@@ -266,7 +266,7 @@ Inspector 视图，而不是打破包边界。
 
 ### Prompt
 
-系统提示词位于 [ai-skill-system-prompt.md](ai-skill-system-prompt.md)。
+系统提示词位于 [ai-skill-system-prompt.md](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/skill/ai-skill-system-prompt.md)。
 其中 fenced JSON 示例由 `prompt_test.go` 解析并编译。修改 prompt 中的 DSL 示例时，
 必须一并运行该测试，避免文档说法与实际 wire contract 漂移。
 

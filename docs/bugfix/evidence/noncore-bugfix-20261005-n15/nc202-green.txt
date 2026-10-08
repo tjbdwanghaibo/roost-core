@@ -1,5 +1,0 @@
-toxiproxy_running=false
-[roost-it] refuse foreign pid 63918 from <scratch>/n15-toxipid.G6JQyR/roost-dataengine-it/toxiproxy/toxiproxy.pid: sleep 300
-toxiproxy_down exit=2
-RESULT: bystander pid 63918 alive
-<scratch>/n15-red/toxipid_red.sh: line 19: 63918 Terminated: 15          sleep 300

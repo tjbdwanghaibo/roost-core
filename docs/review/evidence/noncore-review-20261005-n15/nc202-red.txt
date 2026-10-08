@@ -1,4 +1,0 @@
-toxiproxy_running=true (pid 57408 is: sleep 300)
-toxiproxy_down exit=0
-<scratch>/n15-red/toxipid_red.sh: line 16: 57408 Terminated: 15          sleep 300
-RESULT: bystander pid 57408 KILLED

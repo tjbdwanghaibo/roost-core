@@ -1,5 +1,0 @@
-{
-  "exit": 0,
-  "reason": "Windows PATH has no sh; retained failed original run",
-  "excluded": "TestDeployScriptsCarryNoKnownShellcheckFindings"
-}

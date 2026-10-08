@@ -1,1 +1,0 @@
-2026/10/04 09:18:43 handleJSON: webroute: invalid route path "/broken/*/tail": chi: wildcard '*' must be the last value in a route. trim trailing text or use a '{param}' instead

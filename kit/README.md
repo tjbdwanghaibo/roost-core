@@ -1,6 +1,6 @@
 # roost-kit
 
-> **这里已经是 roost-core 的一部分**（装配层，模块路径 `github.com/tjbdwanghaibo/roost-core/kit/…`）。独立的 roost-kit 仓库已归档；下文里说"本仓库"的地方指的是这个目录。方案见 [三仓合一仓](../docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)。
+> **这里已经是 roost-core 的一部分**（装配层，模块路径 `github.com/tjbdwanghaibo/roost-core/kit/…`）。独立的 roost-kit 仓库已归档；下文里说"本仓库"的地方指的是这个目录。方案见 [三仓合一仓](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)。
 
 `roost-kit`（仓库目录名 `roost-kit`，Go 模块 `github.com/tjbdwanghaibo/roost-kit`）是 roost 框架的**装配层**：核心实现在 `roost-core`（引擎、契约、领域算法、基础设施客户端），`roost-kit` 负责把它们装成 `app.Mod`——读配置、取依赖、注册 capability、接生命周期与健康 / 日志——并提供通用服务（account / mail / match / chat / session / global）的服务器与客户端接入。三层的分工是：**Core 核心实现，Kit 装配与使用便利，Codegen 代码生成**；Kit 里目前仍持有的领域实现（通用服务的状态机与存储）正按 roost-core `docs/bug/REVIEW-2026-09-16-04.md` 第 7 节的 ARCH-01..04 分批下沉，本 README 的组件表以当前目录为准。
 
@@ -500,7 +500,7 @@ room / AOI / 直接绑定只是"谁订谁"的政策，调 `Subscribe / Unsubscri
 
 **`SyncBusMod` 只提供 `ISyncBus`（服务间消息面）**；NATS vs JetStream 的持久性不同但 handler 契约一致（`roost-core/sync/syncbus/driver/nats.go`、`jetstream.go`）：
 纯 NATS 至多一次、无确认、故意不实现 `PublishConfirmed`；JetStream 有 durable 与发布确认。
-两种传输的 `Subscribe` 都返回 `*syncbus.Subscription`：`Unsubscribe(ctx)` 返回 nil 之后这个订阅没有在途回调、也不会再有新回调，超时返回 ctx 错误、可重试；handler 收到投递 ctx，在 handler 里退订自己要传它（A3 ②，[方案](../docs/feature/A3-2-SYNCBUS-DRAINING-UNSUBSCRIBE-2026-10-07.md)）。
+两种传输的 `Subscribe` 都返回 `*syncbus.Subscription`：`Unsubscribe(ctx)` 返回 nil 之后这个订阅没有在途回调、也不会再有新回调，超时返回 ctx 错误、可重试；handler 收到投递 ctx，在 handler 里退订自己要传它（A3 ②，[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/A3-2-SYNCBUS-DRAINING-UNSUBSCRIBE-2026-10-07.md)）。
 配置段为 `syncbus:`（键：transport / prefix / stream / storage / ack_wait / max_deliver / stream_max_age / duplicates / replicas / max_bytes / setup_timeout / publish_timeout）；A4 起不再读取旧 `room:` / `sync:`；syncbus 段按统一声明校验；`transport` 只接受 nats / jetstream（js），写错直接 Init 失败而不是退回普通 NATS（RR-20260926-12）。启动日志 `syncbus mod: started` 的 `transport` 是实际生效的那个。
 JetStream 流名：显式 `stream` 优先；未写时由 `prefix` 派生（`driver.JetStreamSyncStream`）——生成配置的 `roost.sync` 与未配 prefix 时的缺省 `roost.room`
 仍为 `ROOST_SYNC`（已部署的流与 durable 游标不变），`zz3640.sync` → `ZZ3640_SYNC`，含 `_` / `-` / 大写等的 prefix 追加摘要避免相撞。
@@ -524,11 +524,11 @@ JetStream 流名：显式 `stream` 优先；未写时由 `prefix` 派生（`driv
 ### remoteentity：跨服实体（Mod 在 roost-kit/remoteentity，所有权实现在 roost-core/remoteentity）
 
 - **Mod 注册四个 capability**：`ModRemoteEntity`、`ModRemoteEntityAtomicStore`（nestwal 消费）、**`ModRedisVLock`（全应用的 versioned lock 工厂出自这里，不是 redis Mod）**、`ModRemoteMirror`（`Manager.SnapshotClient()` 的只读能力，与只读服务同一个名字）。
-- **只读服务用 `RemoteMirrorMod`**（Mirror 第 5 步）：只建 `SnapshotClient`（共享 L2 + 同步总线 + 只读 Mongo loader），不要求原子 backend、锁或 finalizer，注册表里只有 `ModRemoteMirror`；业务用 `//roost:mirror` DTO 生成的 `New<DTO>Reader(MirrorSource(registry))` 读。与 `RemoteEntityMod` 同进程会撞能力名、启动即失败。停机预算 `remote_entity.mirror.shutdown_timeout`（手写 Mod，不计入生成的 `shutdown.total_timeout`）。[说明](../docs/USER_GUIDE.md#只读服务mirror-dto)硬前置：sid 非 0（所有权 fencing 的前提）。`Start` 序列：绑 sync 双 replicator（snapshot + interest 两个 topic）→ 封存依赖 → 建存储 → **启动期重放未发布的已提交事务（outbox 恢复）** → 启动 finalizer；任一步失败回滚已启动的 replicator。health 在容量耗尽（interest 键/活跃事务达上限）时也报 fail。
+- **只读服务用 `RemoteMirrorMod`**（Mirror 第 5 步）：只建 `SnapshotClient`（共享 L2 + 同步总线 + 只读 Mongo loader），不要求原子 backend、锁或 finalizer，注册表里只有 `ModRemoteMirror`；业务用 `//roost:mirror` DTO 生成的 `New<DTO>Reader(MirrorSource(registry))` 读。与 `RemoteEntityMod` 同进程会撞能力名、启动即失败。停机预算 `remote_entity.mirror.shutdown_timeout`（手写 Mod，不计入生成的 `shutdown.total_timeout`）。[说明](../docs/framework/README.md)硬前置：sid 非 0（所有权 fencing 的前提）。`Start` 序列：绑 sync 双 replicator（snapshot + interest 两个 topic）→ 封存依赖 → 建存储 → **启动期重放未发布的已提交事务（outbox 恢复）** → 启动 finalizer；任一步失败回滚已启动的 replicator。health 在容量耗尽（interest 键/活跃事务达上限）时也报 fail。
 - **所有权状态机**（`roost-core/remoteentity/marker.go`）：一个 Redis hash + 5 段 Lua CAS，租约编码 `mode:owner:marker:route`，mode ∈ {local, shared}；enter/leave shared 与 transfer 都递增 marker（transfer 还递增 route）。**关键契约：ownership 缺失永远不被解释为本地租约**——Redis 数据丢失不会被误读成"我拥有它"。
 - **Redis 键与部署隔离**（RR-20260927-17 / RR-20260930-19）：Mod 写到 Redis 的只有两类键，缺省都不带部署前缀，共用一个 Redis db 的部署要逐项配置：`remote_entity.snapshot_l2_key_prefix`（缺省空 = `remote_entity:snapshot:*` 不变；非空 → `<prefix>:remote_entity:snapshot:*`，不能带 hash tag）与 `remote_entity.lock_key`（缺省 `e` → `lock:e:<id>` / `:fence`；各部署配不同值，Cluster 下必须带非空闭合 hash tag，如 `{roost:game-a}`；不自动改写、改锁身份要整体重启）。`remote_entity:marks` 只有自行 `SetOwnershipStore(NewRedisMarker…)` 的非 authority 兼容装配才写，Mod 的所有权存储是 Mongo 权威，所以 Mod 没有它的配置项；兼容装配用 core 的 `NewRedisMarkerWithKeyPrefix(redis, prefix)`（→ `<prefix>:remote_entity:marks`，空值不变）。
 - **两级快照缓存**：进程内 L1 + Redis L2；L2 的 CAS 顺序是 **(marker, route, version) 三元组 + checksum**——延迟的发布者不能覆盖更新的所有权 epoch 或状态版本；同 epoch 同 version 但 checksum 不同返回分歧信号。
-- **独立资源预算**：`remote_entity.max_concurrent_writes` 默认 128，控制 Prepare 到实际释放的 Remote 写批次数；每批可能包含多个 Entity/DAO，结果不确定转后台后仍占额度。显式 0 沿用 `async_finalize_capacity`，有效值不会超过收尾容量。满额立即返回 `entity.ErrRemoteOverloaded`，不阻塞慢 worker 等额度。**定容规则**：写许可覆盖 Prepare → 投影确认 → finalizer 释放的整段生命周期，依赖（Mongo 投影 / 确认）停顿期间在途事务不会释放许可，所以按 `max_concurrent_writes ≥ 目标写 TPS × 可容忍的依赖停顿秒数 + 基线在途（p50 延迟 × TPS，约 15）` 设定——默认 128 在 80 TPS 下只容忍约 1.6s 停顿；本机同机三副本 Mongo 长跑中出现 1.2～2.0s 停顿时 128 会被占满（[B30 复测](../docs/review/REVIEW-2026-09-29-b30.md)），80 TPS 按 256（容忍约 3s）验收。`Stats` 的 `WritesInFlight / WriteLimit / WriteRejected` 及 health 可观测压力；满写额度为 degraded，已有 fatal/capacity fail 优先。
+- **独立资源预算**：`remote_entity.max_concurrent_writes` 默认 128，控制 Prepare 到实际释放的 Remote 写批次数；每批可能包含多个 Entity/DAO，结果不确定转后台后仍占额度。显式 0 沿用 `async_finalize_capacity`，有效值不会超过收尾容量。满额立即返回 `entity.ErrRemoteOverloaded`，不阻塞慢 worker 等额度。**定容规则**：写许可覆盖 Prepare → 投影确认 → finalizer 释放的整段生命周期，依赖（Mongo 投影 / 确认）停顿期间在途事务不会释放许可，所以按 `max_concurrent_writes ≥ 目标写 TPS × 可容忍的依赖停顿秒数 + 基线在途（p50 延迟 × TPS，约 15）` 设定——默认 128 在 80 TPS 下只容忍约 1.6s 停顿；本机同机三副本 Mongo 长跑中出现 1.2～2.0s 停顿时 128 会被占满（[B30 复测](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/review/REVIEW-2026-09-29-b30.md)），80 TPS 按 256（容忍约 3s）验收。`Stats` 的 `WritesInFlight / WriteLimit / WriteRejected` 及 health 可观测压力；满写额度为 degraded，已有 fatal/capacity fail 优先。
 - **与 Nest、WAL 配合**：慢池可为其他慢 I/O 保留较大并发，但 Remote 写预算需按存储能力独立设定；已有 `dataengine.projection.max_unacked_records` 在 WAL 准入处原子限制所有未确认事务。两层额度不同，不自动互相推导，也不把采样值当原子预留；例如 Remote 128、WAL 512 是可测试起点，不保证给本地事务预留 384。过载是明确拒绝，框架不自行重试写请求。预算按进程生效，多进程部署须分配各自的额度。
 
 - **MongoCommitter 的幂等契约**：事务按 `RemoteTransactionID` + 批 digest 判重——同 id 不同 commits 拒绝（"transaction id reused"），同 id 同 digest 直接返回已存储的 receipts。实体 CAS 元数据、DAO 文档、不可变快照、幂等状态在**一个 Mongo 事务**里提交。
@@ -627,4 +627,4 @@ JetStream 流名：显式 `stream` 优先；未写时由 `prefix` 派生（`driv
 
 本仓库以 [MIT License](LICENSE) 发布。
 
-正式实体同步可使用 `kit/nest.NewModWithEntitySync`，通过 `sync.entity.mode` 在周期与变化触发之间选择；默认周期。`Init` 后从 `EntitySync()` 安装业务 Interest 与会话，启动及停机排空由 Mod 管理。详见[双模式接入](../docs/feature/IMPLEMENTATION-2026-09-24-sync-modes.md)。
+正式实体同步可使用 `kit/nest.NewModWithEntitySync`，通过 `sync.entity.mode` 在周期与变化触发之间选择；默认周期。`Init` 后从 `EntitySync()` 安装业务 Interest 与会话，启动及停机排空由 Mod 管理。详见[双模式接入](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/IMPLEMENTATION-2026-09-24-sync-modes.md)。

@@ -1,6 +1,0 @@
-"path","sha256","source_head","evidence"
-"codegen/internal/cfggen/main.go","46a1c3514f7aad55ac19e6c9f741f4b4c6db41da506f6855f1925b0193e6f937","56d4b805","final integrated source; full codegen race; native generated consumers"
-"codegen/internal/cfggen/consumer_promises_test.go","dfea3b9d3570ff2bf1e989095c902de91681e5ef784518b199556effa646f84e","56d4b805","final integrated source; full codegen race; native generated consumers"
-"codegen/internal/cfggen/namespace_promises_test.go","12c16fd625423bd5649561c0050db54bc9baf36d9e26a0805a83fdbb8314e39b","56d4b805","final integrated source; full codegen race; native generated consumers"
-"codegen/internal/roost/dependencies.go","ed0359b96091cadf4c95674b012568765f2ef9051d5f48ad4a3586d9a0e2caa9","56d4b805","final integrated source; full codegen race; native generated consumers"
-"codegen/internal/roost/dependencies_consolidation_promises_test.go","ac6c1a0aa9339509f1e09cc0322d5000462f70cef61a55ad6bda8a4947773cbd","56d4b805","final integrated source; full codegen race; native generated consumers"

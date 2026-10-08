@@ -1,3 +1,0 @@
---- PASS: TestThresholdsWithoutSamplesFailTheRun (0.02s)
---- PASS: TestQuantileThresholdFailsWhenTheHistogramSeriesWasDropped (0.01s)
-ok  	github.com/tjbdwanghaibo/roost-core/robot/loadtest	0.288s

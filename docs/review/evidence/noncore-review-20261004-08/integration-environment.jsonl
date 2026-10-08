@@ -1,9 +1,0 @@
-{"Time":"2026-10-04T10:03:15.2760988+08:00","Action":"start","Package":"github.com/tjbdwanghaibo/roost-core/etcd/driver"}
-{"Time":"2026-10-04T10:03:15.4962017+08:00","Action":"run","Package":"github.com/tjbdwanghaibo/roost-core/etcd/driver","Test":"TestRealEtcdGetOfAMissingKeyIsNotFound"}
-{"Time":"2026-10-04T10:03:15.4962017+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core/etcd/driver","Test":"TestRealEtcdGetOfAMissingKeyIsNotFound","Output":"=== RUN   TestRealEtcdGetOfAMissingKeyIsNotFound\n","OutputType":"frame"}
-{"Time":"2026-10-04T10:03:15.6201051+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core/etcd/driver","Test":"TestRealEtcdGetOfAMissingKeyIsNotFound","Output":"    real_etcd_promises_test.go:62: etcd binary not on PATH; the real-etcd guard test is skipped (install etcd to run it)\n"}
-{"Time":"2026-10-04T10:03:15.6201051+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core/etcd/driver","Test":"TestRealEtcdGetOfAMissingKeyIsNotFound","Output":"--- SKIP: TestRealEtcdGetOfAMissingKeyIsNotFound (0.12s)\n","OutputType":"frame"}
-{"Time":"2026-10-04T10:03:15.6201051+08:00","Action":"skip","Package":"github.com/tjbdwanghaibo/roost-core/etcd/driver","Test":"TestRealEtcdGetOfAMissingKeyIsNotFound","Elapsed":0.12}
-{"Time":"2026-10-04T10:03:15.6206877+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core/etcd/driver","Output":"PASS\n","OutputType":"frame"}
-{"Time":"2026-10-04T10:03:16.6458283+08:00","Action":"output","Package":"github.com/tjbdwanghaibo/roost-core/etcd/driver","Output":"ok  \tgithub.com/tjbdwanghaibo/roost-core/etcd/driver\t1.370s\n"}
-{"Time":"2026-10-04T10:03:16.6458283+08:00","Action":"pass","Package":"github.com/tjbdwanghaibo/roost-core/etcd/driver","Elapsed":1.37}

@@ -1,6 +1,0 @@
-=== RUN   TestEngineStopRetryWaitsForTheManagerTheFirstStopCouldNotDrain
---- PASS: TestEngineStopRetryWaitsForTheManagerTheFirstStopCouldNotDrain (0.00s)
-=== RUN   TestEngineConcurrentStopWaitsWithinItsOwnContext
---- PASS: TestEngineConcurrentStopWaitsWithinItsOwnContext (0.00s)
-PASS
-ok  	github.com/tjbdwanghaibo/roost-core/manager	0.297s

@@ -1,8 +1,0 @@
-=== RUN   TestIntegrationLostScriptReplyDoesNotAppendTwice
-2026/10/05 20:24:58 WARN failurelog: atomic script failed, falling back to non-atomic commands op=append namespace=bus_dlq err=EOF
-    unknown_result_integration_test.go:151: AppendRaw err=<nil>; real list now holds 2 entries
-    unknown_result_integration_test.go:153: one AppendRaw stored 2 copies in real Redis [{"msg_id":"m-1","reason":"handler failed"} {"msg_id":"m-1","reason":"handler failed"}] (err=<nil>); want 1
---- FAIL: TestIntegrationLostScriptReplyDoesNotAppendTwice (0.00s)
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/failurelog	0.812s
-FAIL

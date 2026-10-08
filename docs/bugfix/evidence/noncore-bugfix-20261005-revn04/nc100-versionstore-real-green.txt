@@ -1,5 +1,0 @@
-=== RUN   TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice
-    lost_reply_integration_test.go:163: lost reply surfaced as EOF; Redis holds [hello msg-1] / v2
---- PASS: TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice (0.03s)
-PASS
-ok  	github.com/tjbdwanghaibo/roost-core/versionstore	0.578s

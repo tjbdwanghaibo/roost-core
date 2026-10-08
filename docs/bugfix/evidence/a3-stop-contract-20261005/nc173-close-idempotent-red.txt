@@ -1,8 +1,0 @@
-# A3 契约骨架套到 etcd Assembly.Close：第 4 步（已停完再调用）红——第二次 Close 关闭已关闭的 clientv3，返回 context canceled
-# 基线 origin/main d346b45c + 本分支迁移（etcd/driver 未改）
-$ GOWORK=off go test -count=1 -run TestAssemblyCloseStopContract ./etcd/driver/
---- FAIL: TestAssemblyCloseStopContract (0.10s)
-    stop_contract_test.go:99: stopcontract: Stop after a completed stop = context canceled, want nil
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/etcd/driver	0.654s
-FAIL

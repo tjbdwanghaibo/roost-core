@@ -63,7 +63,7 @@ Runtime 持锁调用 Host，因此 Host 必须：
 5. 把可预期的玩法失败编码为类型化结果，把基础设施失败作为 error 返回。
 
 完整接口约束见 `skill/host.go` 和
-[架构、迁移与同步流程](architecture-and-migration.md)。
+[架构、迁移与同步流程](../framework/guide/08-skill.md)。
 
 ## Host 能力表（B3 ③，2026-10-07，v1.23.0）
 
@@ -83,7 +83,7 @@ operation、召唤物（`OwnedEntityRuntimeHost`）。后六列写在 `environme
   Runtime 在 Program 第一次启动 / 注册 / 入队被动 / 从 checkpoint 恢复时核对它的需求都在 Host 的表里，缺了返回
   `skill.ErrHostCapabilityMissing`（也是 `ErrHostContractViolation`），不会到施法中途、扣费之后才失败。对表外的属性
   handle、资源名要返回错误，不能当成 0。测试里用 `skill.CheckHostCapabilities(host, environment.Gameplay, probe)`
-  按声明逐项调用 Host 核对。细节与业务最少要写的代码见[方案](../feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md) §6。
+  按声明逐项调用 Host 核对。细节与业务最少要写的代码见[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md) §6。
 
 ## 数据与升级边界
 
@@ -91,12 +91,12 @@ operation、召唤物（`OwnedEntityRuntimeHost`）。后六列写在 `environme
 - `Program` 不应跨版本自行序列化；持久化源定义、环境 identity 和 gameplay digest。
 - checkpoint 恢复必须匹配 Program resolver、Host authority、world revision 和 checksum。
 - 客户端同步使用 `skillsync` 的 manifest/state/presentation 三流，不直接发送 Runtime 私有结构。
-- 从 `/skillv2` 升级使用[稳定包迁移手册](breaking-upgrade-skill-package.md)。
+- 从 `/skillv2` 升级使用[稳定包迁移手册](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/skill/breaking-upgrade-skill-package.md)。
 
 ## 下一步
 
-- 技能作者：[README 的完整火球示例](../README.md#b-完整链路火球术-json--compile--memoryhost--runtime)
+- 技能作者：[README 的完整火球示例](../README.md)
 - Host 开发：[施法语义与战斗接入](skill-casting-and-combat.md)
 - 同步开发：[Visual 与数据同步生产指南](visual-sync-production-guide.md)
 - 框架维护：[实现学习手册](skill-implementation-guide.md)
-- 发布人员：[生产门槛](production-readiness.md)
+- 发布人员：[生产门槛](../maintenance/KNOWN-LIMITS.md)

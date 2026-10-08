@@ -1,9 +1,0 @@
-{
-  "check": "vet",
-  "command": "go vet ./cache ./remoteentity ./sync/syncbus/... ./ownerroute ./kit/remoteentity ./entity",
-  "exit": 0,
-  "passedTestEvents": 0,
-  "passedLeaves": 0,
-  "skipped": [],
-  "failed": []
-}

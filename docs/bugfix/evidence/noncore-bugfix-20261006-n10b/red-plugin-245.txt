@@ -1,6 +1,0 @@
---- PASS: TestLoadPluginAcceptsABundleExportedAsAnInterfaceVariable (1.07s)
-    plugin_load_test.go:164: after the failed load first(1) = 101, want 11: the partially applied patch was left in place (101) or rolled back past the previous generation (2)
---- FAIL: TestLoadPluginRollsBackAPartiallyAppliedBundle (0.00s)
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/hotcode/plugintest	1.519s
-FAIL

@@ -1,6 +1,6 @@
 # Entity Sync 生产契约
 
-[双模式正式接入](docs/feature/IMPLEMENTATION-2026-09-24-sync-modes.md)已实施：默认周期同步，`ModeOnChange` 提供锁内冻结、解锁/确认后唤醒、50ms 兜底。两者共用下述交付契约；正式启动注入 `NestOptionWithEntitySync`，生成 DAO 的变化由框架收集。
+[双模式正式接入](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/IMPLEMENTATION-2026-09-24-sync-modes.md)已实施：默认周期同步，`ModeOnChange` 提供锁内冻结、解锁/确认后唤醒、50ms 兜底。两者共用下述交付契约；正式启动注入 `NestOptionWithEntitySync`，生成 DAO 的变化由框架收集。
 
 Entity Sync 只有一套实现，四层（ARCH-10 / M-13 / M-14，2026-09-22）：
 
@@ -75,7 +75,7 @@ Manager 维护每个 session lifetime 的 subjects 反向索引，Hold/Ready/Clo
 
 `ManagerConfig.SnapshotBudget` 可设置每 Flush 的全量对象数、实体包字节数和每会话全量对象数。只延后尚待建立/恢复基线的快照，增量（包括 full-dirty 更新）和 remove 不限流；未发快照不结算订阅，下次捕获最新内容。会话和实体均轮转。字节预算不计外层帧头，单实体超软预算允许独占一次额度以保证进度，硬上限始终有效。数量额度先于捕获筛选；字节额度在捕获后按实际包长检查。这是快照调度与准入预算，不是严格 CPU 时间上限；默认关闭。
 
-`AsyncTransportConfig.MaxResidentReliableBytes` 限制全会话排队与在途字节总和，`MaxReliableAge` 从入队开始限制总年龄，默认均关闭。超限拒绝属于会话背压；过期终止该会话发送并清理剩余队列，通过 OnError 通知业务。异步失败应与业务的会话关闭/重建流程对接。不能丢弃旧增量后直接发送新增量。[完整实施记录](docs/feature/REFACTOR-2026-09-24-sync-six-items.md)。
+`AsyncTransportConfig.MaxResidentReliableBytes` 限制全会话排队与在途字节总和，`MaxReliableAge` 从入队开始限制总年龄，默认均关闭。超限拒绝属于会话背压；过期终止该会话发送并清理剩余队列，通过 OnError 通知业务。异步失败应与业务的会话关闭/重建流程对接。不能丢弃旧增量后直接发送新增量。[完整实施记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-24-sync-six-items.md)。
 
 ## 容量与观测
 
@@ -87,8 +87,8 @@ Manager 维护每个 session lifetime 的 subjects 反向索引，Hold/Ready/Clo
 
 `Start(ctx)` 的 context 取消会取消周期 Push；`Stop(ctx)` 取消周期循环，退出后以本次 context 做最后一次 Flush。停止未完成时 Start 返回 `ErrManagerStopping`，不会启动第二个循环。等待 Flush 的门闩可取消；Stop 超时不代表后台传输已经退出。`Close(ctx)` 超时后保留 closing，拒绝新注册、开会话与 Start，允许再次 Close 完成清理。Transport 必须响应 Push context。
 
-性能基准入口见 [Sync 基准说明](docs/feature/SYNC-BENCHMARKS.md)，本轮实现与验收见[收尾记录](docs/feature/SYNC-COMPLETION-2026-09-23.md)。
+性能基准入口见 [Sync 基准说明](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SYNC-BENCHMARKS.md)，本轮实现与验收见[收尾记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SYNC-COMPLETION-2026-09-23.md)。
 
 ## Profile 配置补充（2026-09-23）
 
-字段白名单、显式优先级、Interest 来源视图及兼容说明见 [Sync 视图配置](docs/feature/SYNC-PROFILES.md)。旧 SyncProfile 线格式和 20Hz 调度保留；新的配置可逐项接入。
+字段白名单、显式优先级、Interest 来源视图及兼容说明见 [Sync 视图配置](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SYNC-PROFILES.md)。旧 SyncProfile 线格式和 20Hz 调度保留；新的配置可逐项接入。

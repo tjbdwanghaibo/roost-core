@@ -1,3 +1,0 @@
-tag=u0280b sagas=164 status={"5":164} (4=completed 5=compensated 6=failed 7=manual)
-success receipts: debit=164 refund=164; sagas with debit>1=0 refund>1=0 failed_with_debit=0 compensated_debit!=refund=0
-players=3 bag(1001) total=90 per player=[["102401028",30],["102402052",30],["102403076",30]] (each robot run adds 30; conserved when every player has 30)

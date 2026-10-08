@@ -1,7 +1,0 @@
-package def
-
-//roost:dao coll=roost_review_20261004_20 db=review schema=3
-type MigratingDao struct {
-	Name string
-	Score int64
-}

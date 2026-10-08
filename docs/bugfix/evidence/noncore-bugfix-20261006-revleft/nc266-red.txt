@@ -1,5 +1,0 @@
---- FAIL: TestARunCutByItsDurationStopsWithReasonDuration (0.11s)
-    duration_stop_reason_promises_test.go:37: a run cut by its 100ms Duration ended finished/completed; want stop_reason=duration
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/robot/loadtest	0.363s
-FAIL

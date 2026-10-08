@@ -1,7 +1,0 @@
---- FAIL: TestOpsAdminCommandRunsUnderTheConfiguredDeadline (0.00s)
-    admin_deadline_promises_test.go:57: admin command deadline remaining = -1ns, want ≤ ops.admin_timeout (100ms); -1 means the command ran without a deadline
---- FAIL: TestOpsStartFailsWhenTheAddressIsTaken (0.00s)
-    listen_promises_test.go:31: Start on 127.0.0.1:59850 (already in use) = nil, want the bind error: the process would run without its probe endpoints
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/kit/ops	0.514s
-FAIL

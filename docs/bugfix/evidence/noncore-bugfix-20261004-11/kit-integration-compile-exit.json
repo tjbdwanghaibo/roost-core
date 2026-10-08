@@ -1,4 +1,0 @@
-{
-  "integration_compile_exit": 0,
-  "run": "^$ (compile only; no external acceptance)"
-}

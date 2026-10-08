@@ -1,4 +1,0 @@
-=== RUN   TestNestModStopRetryKeepsUnloadResyncUntilItDrains
---- PASS: TestNestModStopRetryKeepsUnloadResyncUntilItDrains (0.00s)
-PASS
-ok  	github.com/tjbdwanghaibo/roost-core/kit/nest	0.389s

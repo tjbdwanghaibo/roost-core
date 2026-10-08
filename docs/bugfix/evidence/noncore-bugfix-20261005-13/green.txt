@@ -1,2 +1,0 @@
-ok  	github.com/tjbdwanghaibo/roost-core/cache	0.226s
-ok  	github.com/tjbdwanghaibo/roost-core/remoteentity	0.758s

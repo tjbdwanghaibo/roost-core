@@ -1,6 +1,0 @@
---- FAIL: TestAClearInTheFirstSecondsOfAWindowStillCounts (0.00s)
-    --- FAIL: TestAClearInTheFirstSecondsOfAWindowStillCounts/activity-on (0.00s)
-        activity_test.go:168: a clear 1s into window race-1791299400 was refused: activity: not found
-FAIL
-FAIL	example.com/rpd/internal/service/game	0.710s
-FAIL

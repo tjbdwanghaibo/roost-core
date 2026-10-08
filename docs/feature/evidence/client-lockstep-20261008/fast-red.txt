@@ -1,7 +1,0 @@
---- FAIL: TestTCPSenderRejectsFastWorkerBeforeResolverOrSocket (0.00s)
-    command_test.go:55: fast worker accepted: <nil>
-    command_test.go:55: fast worker accepted: <nil>
-    command_test.go:60: fast refusal already touched resolver/socket: 4
-FAIL
-FAIL    github.com/tjbdwanghaibo/roost-core/sync/lockstep    0.852s
-FAIL

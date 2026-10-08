@@ -1,5 +1,0 @@
-gapmap exit=2
-NOTES.txt now: notes v2 (uncommitted work)
-RESULT: uncommitted work kept
-gapmap: tracked files have uncommitted changes; commit or stash them first (the sampler edits sources in place and restores tracked files with git checkout when it finishes):
- M NOTES.txt

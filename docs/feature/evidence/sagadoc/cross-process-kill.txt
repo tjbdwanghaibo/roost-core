@@ -1,6 +1,0 @@
-=== RUN   TestRealSagaCrossProcessKillRecovers
-    cross_process_real_integration_test.go:308: SIGKILL coordinator-a with 15/60 sagas completed, 0 saga leases held by it
-    cross_process_real_integration_test.go:384: recovered in 1m5.191s: 60 sagas completed, 120 operations, 120 committed step executions (99 by coordinator-b), 0 operations committed by more than one attempt (want 0), 120 coordinator receipts
---- PASS: TestRealSagaCrossProcessKillRecovers (68.58s)
-PASS
-ok  	github.com/tjbdwanghaibo/roost-core/saga	69.070s

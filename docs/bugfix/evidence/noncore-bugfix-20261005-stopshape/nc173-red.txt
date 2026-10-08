@@ -1,9 +1,0 @@
---- FAIL: TestDiscoveryDeregisterWaitsForTheRegistrationLoopWithinItsContext (2.00s)
-    deregister_budget_promises_test.go:68: Deregister ignored its context while waiting for the registration loop
---- FAIL: TestAssemblyCloseKeepsTheClientUntilDeregisterSucceeds (0.00s)
-    deregister_budget_promises_test.go:118: Close closed the etcd client although the lease was not revoked
-    deregister_budget_promises_test.go:121: retry Close = etcd Discovery: revoke: grpc: the client connection is closing
-        context canceled (calls=1)
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/etcd/driver	2.911s
-FAIL
