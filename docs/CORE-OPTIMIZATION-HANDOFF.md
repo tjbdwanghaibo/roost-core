@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**2026-10-08阶段发布完成：v1.23.1 → d367b893。**B1～B8确认缺陷含RR-25已修复、验收并发布，含最新main Lockstep接线。全仓pretag、21/21矩阵、真实tag生成工程通过；历史观察与未验边界见[阶段清单](review/STAGE-v1.23.1-CLOSURE-2026-10-08.md)。下方旧“待实施/未发版/待批准”为历史时点，不再应用无限重投候选。
+
 **当前接手（RR-25有界方案）**：已保留MaxDeliver完成最后确认缺陷并通过真实NATS/race；进入v1.23.1阶段发布验收。下方旧候选/审批阻塞文字保留历史时点；以 [阶段清单](review/STAGE-v1.23.1-CLOSURE-2026-10-08.md) 和发布实现文档为准。
 
 **2026-10-08 Lockstep客户端接线（main已推送e9626354，未发版）：**RS v2启用类型2（上行4、push5），正式ProtocolRegistry/生成TCP已接线，复用Room/C7广播与历史追帧；C#提供Command、有界Assembler与主线程模拟消费。没有旧包兼容，不代表Unity/Godot/Unreal实机、UDP性能或游戏确定性已验收。[接入说明](../client/README.md) · [实施/验证](feature/IMPLEMENTATION-2026-10-08-CLIENT-LOCKSTEP.md)。[验收/全仓基线失败交接](review/REVIEW-2026-10-08-client-lockstep-validation.md)。CBM收尾已刷新至10-08新代际（旧9-30阻塞描述保留历史），相关路径仍按coverage补证。下方10-07“预留”保留历史时点。
@@ -224,6 +226,8 @@ bash scripts/test-remote-matrix.sh
 提交前检查 diff、生成物、链接和适用回归；不要将 artifacts 的源码备份/二进制纳入 `go test ./...` 后把发现的重复包当成框架错误。功能变化必须有可追踪的issue或方案，当前待办与接受决定更新此文；不要强行刷新旧测试数字。后续agent汇报要区分当前实测与引用历史。
 
 ## 7. 缺陷记录索引
+
+2026-10-08：RR-20261008-25保留总投递上限修复66692aad，随B1～B8发布v1.23.1；验收和保留观察见顶部阶段清单。
 
 B3 首批 RR-20261008-01～08：session/时长/mail/身份/chat/directory/platform/activity 边界已修复，目标 race 通过；B3 其余与 B4/B6～B8 仍在继续，未推送/发版。
 
