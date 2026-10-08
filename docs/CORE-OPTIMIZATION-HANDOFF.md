@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**2026-10-08 v1.24.0稳定版已发布：**annotated tag `v1.24.0` → `2fa1c787`，main与tag均已推送。pretag、根包、Linux/arm64交叉构建、真实资源故障矩阵21/21通过；远端真实tag生成工程无replace，66包build/vet/test通过（19包执行测试）。Sync业务验收为维护者明确的on_change P99≤50ms，偶发250.699ms长尾仍跟踪，不声明根因已修复；Saga正向20/s、全补偿10/s为已测档。CBM main已刷新至`2026-10-08T11:31:15Z`（31930节点/254670边），覆盖边界见[最终验收](release/v1.24.0-IMPLEMENTATION.md)。全部原始性能/失败/profile证据留在主检出`artifacts/perf/stable-v1.24.0-20261008/`，私有依赖已停止，未部署。下方候选状态保留执行时点。
+
 **2026-10-08 v1.24.0发布准备（待tag及真实消费者验证）：**生产逻辑基线`eac89694`，性能工具/配置`702316ea`，文档收口`e6728981`。Remote 80 TPS完整1h（288000笔、零错误/丢弃、数据一致）通过；Nest 10000普通消息/s +10000 Entity×1/10Hz、1%/5%共12轮通过；Entity 100000修改/s与15000 Entity×10Hz+10000消息/s各2m零拒绝。Saga正向20/s、全补偿10/s为已测档，20/s全补偿饱和。维护者查看Sync超标数量与最大值后明确按on_change P99≤50ms验收、继续跟踪长尾；全部普通初测/复测满足此指标，初始250.699ms尖峰未唯一归因，原严格门禁失败保留。on_change以handler成功提交为边界汇总，setter只标脏，20Hz兜底；periodic用于延迟不敏感场景。pretag、根包、Linux/arm64交叉构建与私有资源矩阵21/21通过。详见[性能报告](review/STABLE-PERFORMANCE-2026-10-08.md)及[v1.24.0实施](release/v1.24.0-IMPLEMENTATION.md)。没有修改生产同步/持久语义，未部署。
 
 **2026-10-08 后续兼容需求定案：**DAO schema 自动迁移、Remote interest 旧发布端兼容均撤销，当前实现已删除相关链路并严格拒绝旧输入；下方上一批“待选择/暂保留”已失效。正式生成 game-demo 19 包通过。维护者确认 `/Users/whb/roost/cube` 已废弃，三处旧调用不处理，不列下游适配或迁移待办。全仓 131 包、相关三包 race、根示例实跑、build/vet 与重复生成均通过；实现提交 `605ac914`，CBM generation `2026-10-08T07:31:58Z`；详情见[本轮实现记录](release/RETIRE-DAO-MIGRATION-2026-10-08-IMPLEMENTATION.md)。
