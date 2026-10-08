@@ -1,5 +1,32 @@
 # 遗留清单：修完之后剩下的东西
 
+<a id="current-20261008"></a>
+## 2026-10-08 当前核对
+
+基线 `db95814e`。本节核对历史清单与后续验收记录，不是全仓新一轮逐函数审计，也没有重跑下列历史实验。已确认的 v1.23.1 B1～B8 缺陷已发布；发布后 RR-40/41 的测试契约修复已进入 main，macOS/Linux 结果见 [后续验收](../review/FOLLOWUP-MAC-LINUX-2026-10-08.md)。Windows 专属问题按维护者决定排除。
+
+| 旧留项 | 已有的后续证据 | 仍需区分的边界 |
+| --- | --- | --- |
+| W-2026-10-04-02 / connected Assembly 停止 | [RR-20261004-08](../bugfix/RR-20261004-08.md) 已在真实 NATS 验证 drain 超预算后的终态与再次停止；[NC-90](../bugfix/RR-20261005-NC-90.md) 补齐 JetStream 在途 handler 的停止和恢复 | 这些具名场景不能继续列为“待真实 NATS 复现”；不等于长期容量与跨机 HA 已验 |
+| NC-08 / NC-09 的真实 JetStream 往返、重投、重连 | [N03 记录](../review/REVIEW-2026-10-05-noncore-n03.md) P2/P3/P5/P6/P7：ACK、有限重投、Term、业务重复执行和 broker 重启；NC-90～92 的真实资源反例已修复转绿 | 重复执行的观测不是业务幂等验收；跨机集群和实际业务仍由 [E06](../review/EXTERNAL-VERIFICATION-2026-10-06.md#e06-nats-jetstream-多节点-ha) 跟踪 |
+| NC-10 的真实发现预算 | 同一 N03 记录 P10：真实 etcd 注册 + NATS，800ms 调用预算内 handler 看到约 796ms 剩余期限 | 这是具名 ServiceRPC 探针，不扩称全部生成服务的跨进程部署验收 |
+| NC-11 / NC-12 的真实 etcd 恢复 | 同一 N03 记录 E1b/E2/E4/E5：正常 Resign 服务端清理、Deregister 超时后重试、lease 重注册、Mirror 断网压缩后重载；[NC-93](../bugfix/RR-20261005-NC-93.md) 补齐 Resign 预算 | 不能继续写“缺本机 etcd binary”；Grant/Resign 服务端结果未知、非协作依赖长期容量和多机 HA 不由这些场景证明，见 E07 |
+| N04 Redis 重连 / RefHMap TTL | [N04 真实资源记录](../review/REVIEW-2026-10-05-n04-revn04.md)：私有 AOF Redis 强杀、重启及版本延续；4 个 hash 的 TTL 同步刷新与过期无残留 | 不是所有 RefHMap schema / 并发组合的穷尽验证，也不替代多机 Cluster / HA（E08/E10） |
+| NC-31 迁移正式消费、嵌套迁移 / 持续 CAS / 进程恢复 | 同一 N04 记录：正式 DAO → Repository → MigrationRunner → 文件 WAL → Projector → 真实 Mongo 副本集，28/28 消费叶子通过，包含 strict 持久后强杀恢复、嵌套类型迁移、持续 CAS 预算 | 不再把这些具名场景统一列为“真实 Mongo / 正式消费未验”；任意断电点、mongos、跨机切主仍未由这组实验证明（E11/E19） |
+| N04 Mongo 唯一索引 / 未知提交 | 同一 N04 记录及 NC-101/102：真实事务提交黑洞的未知结果、9 组唯一索引对照，确认问题已修复 | 不是完整 Mongo 语义对照，也不是生产容量验收 |
+| C01 长稳 | [核心交接 §5](../CORE-OPTIMIZATION-HANDOFF.md) 已有 1 小时 80 TPS、288000 笔、Errors=0、全量核验通过；此前两次 24 小时的内存平台和错误原样保留 | 不能写成“从未做长稳”，也不能把旧基线结果当作当前版专用 Linux 24 小时验收（E17） |
+
+继续实施时先按以下入口定位，勿重开已完成批次：
+
+- **本机可补的证据**：Remote outbox 在“Mongo 已提交、发布前”强杀的精确窗口仍未验（E14）。现有 `RecoverOutbox` 与发布失败补发证明了恢复机制存在，不能代替这个进程级场景；它不依赖“唯一发布者”重构的产品决定。
+- **需要外部环境的验证**：以 [外部验证清单](../review/EXTERNAL-VERIFICATION-2026-10-06.md) 的具名场景为准；Linux 容器 build/vet/test 通过不等于跨主机网络、HA、物理断电、systemd/k8s 或生产业务验收。
+- **待产品决定的方向**：Remote outbox 是否收成唯一发布者仍按 [原交接 §3.1](../review/REMAINING-FIXES-v1.23.1-2026-10-07.md#31-待维护者决定接手者不要自己拍板) 处理，不把候选重构记成已确认 bug。
+- 本节没有逐项关闭所有 A 类历史 feature 或 Layered 长期容量候选；未被具名证据覆盖的条目继续保留，不从“未复现”推出“已排除”。
+
+CBM：本轮以官方 CLI 核对 core 项目，generation `2026-10-08T02:08:14Z`；Remote 补发实现、发布失败验收和进程锁验收 3 个文件均为 `metadata_match`，remoteentity scope 无记录缺口。此为 best-effort 证据，不是全部崩溃路径已覆盖的证明。旧 MCP stdio 会话关闭时可用官方 CLI；不应再把旧连接错误写成索引未刷新。
+
+## 历史记录（保留原始时点）
+
 **10-05 更新**：[NC-31已修](../bugfix/RR-20261004-NC-31.md)，12新正式/17消费通过；多DAO、单次并发CAS和strict持久后投影前的本机子进程强杀/WAL恢复已补证。后端mongotest不验收真实Mongo、HA、任意掉电点或网络未知结果；嵌套类型迁移/持续竞争、原17外部skip与长期容量仍留项。[当前范围/停点](../review/REVIEW-2026-10-05-noncore-21.md)。下方10-04“未修/多DAO与进程未验”保留历史时点，以本条具名场景为准。
 
 **10-04 正式迁移消费更新**：[NC-31 P2未修](RR-20261004-NC-31.md)确认目标输出未在提交前校验；生成DAO→真实文件WAL/Projector→MongoStore（mongotest后端）11叶子3fail/8控制。成功写回、新Manager重载与取消后晚投影已补证；真实Mongo、多DAO/CAS、进程重启/HA仍待验。[当前范围与停点](../review/REVIEW-2026-10-04-noncore-20.md)。下方旧“Repository消费未验”改为这些具名边界，不视作全部收敛。

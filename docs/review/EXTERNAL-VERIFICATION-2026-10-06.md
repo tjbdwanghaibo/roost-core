@@ -1,6 +1,8 @@
 # 外部验证清单（2026-10-06）
 
-这份清单汇总**只能在外部环境做**的验证：Linux 内核网络、跨主机分区、多节点 HA、长时间容量与 soak、多机 Redis Cluster、Windows、真实部署（systemd / k8s / 镜像）和真实客户端。它们在本机（macOS 单机、回环网络、私有依赖进程）做不了，或者做了也不能代表生产。
+这份清单汇总尚缺的环境与场景证据：Linux 内核网络、跨主机分区、多节点 HA、长时间容量与 soak、多机 Redis Cluster、真实部署（systemd / k8s / 镜像）和真实客户端。大部分需要外部环境，或本机结果不能代表生产；**E14 是本机可补的精确崩溃窗口，不应以缺少外部主机为由搁置**。
+
+2026-10-08 更新：维护者仅保证 macOS/Linux，Windows 专属项排除。两平台全仓 build/vet/test 已通过，见 [后续验收](FOLLOWUP-MAC-LINUX-2026-10-08.md)；Linux 使用 Docker Desktop 内的 Linux/arm64 环境，该结果不关闭本表的内核网络、跨机 HA、真实部署与物理硬件场景。历史清单已被后续证据覆盖的部分见 [当前遗留核对](../bug/CARRYOVER.md#current-20261008)。
 
 写于 v1.23.0 发版前，基线 main `d6a677e0`。每项写清来源、要验证什么、怎么做、通过标准。通过标准里，来源文档有口径的照抄；来源没有口径的，给出可判定的建议并标“（建议）”。
 
@@ -41,9 +43,9 @@
 | E22 | 部署 | k8s 滚动停机与部署物 | k8s 集群 | 未做 |
 | E23 | 部署 | distroless 镜像与多阶段构建 | 可拉镜像的环境 | 未做 |
 | E24 | 部署 | 仓库外生产配置的 doctor 检查 | 部署方 | 未做 |
-| E25 | Windows | CLI 信号与进程树、暂存树、autocrlf、偶发项 | Windows | **暂存**：Windows 不保证正确（维护者 2026-10-06） |
+| E25 | Windows | CLI 信号与进程树、暂存树、autocrlf、偶发项 | Windows | **排除**：Windows 专属问题不处理、不作为验收门槛（维护者 2026-10-08） |
 | E26 | 部署 | Linux 上 CLI 信号、强杀 / 磁盘故障、离线代理 | Linux | 未做 |
-| E27 | 部署 / Windows | hotcode 真实插件加载 | Linux / Windows | 未做 |
+| E27 | 部署 | hotcode 真实插件加载 | Linux | Linux 未做；Windows 专属范围排除 |
 | E28 | 容量 | 生产流量下竞态窗口的实际频率 | 准生产流量 | 未做 |
 
 ## 一、网络与分区
@@ -225,7 +227,7 @@
 
 ### E25 Windows
 
-> **暂存**（维护者 2026-10-06：“windows的问题可以暂存，加一个说明 window问题不保证正确”）。Windows 正确性不在保证范围内，README / DEPLOYMENT 已写明；本项不阻塞发版，有需要时再做。
+> **当前排除**（维护者 2026-10-08）：Windows 专属问题不处理，不作为 macOS/Linux 验收门槛。下面保留 10-06 的历史验证设想，不是当前执行清单；跨平台也成立的缺陷不能因此跳过。
 
 - **来源**：清单 N08 行（taskkill 进程树与暂存树清理）；[B6](../feature/B6-CLI-SIGNAL-OWNERSHIP-2026-10-06.md)（Windows 不接管信号，只做了 `GOOS=windows go vet`）；清单外部验证表（未编入 Windows 的 Unix 用例另验）；REMAINING-2026-09-28 §2 N14（真实 `core.autocrlf=true` 检出）；核心优化交接 §7 RR-20261004-13（Windows 未实跑）；ARCHIVE-2026-09-30 §5 P3（windows-compatibility 上 `TestPipelinedCommitIsProjectedOnceDurableWithoutWaitingForIdlePoll` 偶发）。
 - **验证什么**：Ctrl-C 与 taskkill 进程树、暂存树清理不遗留进程；真实 autocrlf 检出上 `add transport tcp` / `add mod` / `project sync` 编辑 Secret 示例且行尾保持 CRLF；上述偶发项再现时改成确定性屏障或按平台放宽预算。
@@ -242,9 +244,9 @@
 ### E27 hotcode 真实插件加载
 
 - **来源**：清单 N10 行（Linux / Windows 真实插件加载）。
-- **验证什么**：hotcode 注册 / 替换的真实 `.so` 加载（macOS 已跑 H9～H13）在 Linux 上的并发可见性、旧请求生命周期、回滚。Go 的 `plugin` 包不支持 Windows，Windows 上要确认的是报错方式。
-- **怎么做**：Linux 与 Windows 机器，复用 [N10 第二批](REVIEW-2026-10-06-noncore-n10b.md) 的 H9～H13 用例。
-- **通过标准**：（建议）Linux 与 macOS 行为一致；Windows 部分**暂存**（Windows 不保证正确，维护者 2026-10-06）。
+- **验证什么**：hotcode 注册 / 替换的真实 `.so` 加载（macOS 已跑 H9～H13）在 Linux 上的并发可见性、旧请求生命周期、回滚。Windows 专属报错验证按维护者 2026-10-08 决定排除。
+- **怎么做**：Linux 机器，复用 [N10 第二批](REVIEW-2026-10-06-noncore-n10b.md) 的 H9～H13 用例。
+- **通过标准**：（建议）Linux 与 macOS 行为一致。
 
 ### E28 生产流量下竞态窗口的实际频率
 

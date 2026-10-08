@@ -26,3 +26,9 @@
 修复提交`f2d3da19`已推送main。两平台131个测试包通过，最终根包-count=1与文档锚点检查通过；Linux源码副本与macOS验收的4个变更Go文件SHA256逐一一致（source-sha256.json）。Windows未运行、未处理。没有新tag，v1.23.1仍指向原发布提交。
 
 main源码刷新成功：generation=`2026-10-08T02:08:14Z`，25200 nodes / 243910 edges，skipped=0，parse_partial=5（模板原有范围）；本轮4个Go文件及RR-25的jetstream.go均为metadata_match、无记录缺口。完整刷新/覆盖JSON在持久证据目录；本节为随后文档回填，不改变已验证源码。
+
+## 交接清单接续核对
+
+基线 `db95814e`。将旧 CARRYOVER 中 N03/N04 的“未验”与 10-05 后续真实资源记录逐项对照，补当前状态表；保留各次实验的原始条件与失败记录。WANTED 首页改为现行 skill 的“主动调查、确认后按授权修复”，不再阻止实现侧处理历史疑点。RR-25 首页不再写“尚未实施 / 等待确认”。外部清单明确 E14 可在本机补证，Windows 专属范围排除，Linux 容器通过不等同于外部生产验收。
+
+本次仅改文档，没有新确认的业务缺陷，没有修改生产实现或测试口径；没有重跑历史真实资源 / 性能实验。新增本地链接和锚点检查通过，隔离 worktree `GOWORK=off go test -count=1 .` 通过（6.070s），`git diff --check` 通过。CBM 官方 CLI 确认 main 与索引对应；原始状态、coverage 与本次根包日志保存在主检出 `artifacts/perf/handoff-reconcile-20261008/`。不修改 v1.23.1 tag，不部署。
