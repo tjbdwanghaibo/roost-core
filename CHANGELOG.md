@@ -2,7 +2,9 @@
 
 本文件从 v1.6.2 起维护；更早版本见 git 历史。格式遵循 Keep a Changelog，版本号遵循语义化版本。
 
-## [Unreleased]
+## [v1.24.0] - 2026-10-08
+
+稳定版验收：Remote 80 TPS连续1h、Nest普通业务与heartbeat四组负载、on_change P99≤50ms均满足本轮业务指标；pretag与真实资源故障矩阵21/21通过。Sync偶发长尾及Saga全补偿20/s饱和如实保留，范围见[性能报告](docs/review/STABLE-PERFORMANCE-2026-10-08.md)。
 
 ### 撤销 DAO 自动迁移与旧兴趣发布端兼容（2026-10-08）
 
