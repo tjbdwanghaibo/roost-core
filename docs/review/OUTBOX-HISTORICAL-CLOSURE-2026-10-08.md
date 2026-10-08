@@ -42,4 +42,6 @@ Windows、真实部署、跨主机网络与物理断电不在本轮验收范围�
 
 本轮约定的非压测实现与具名验收已完成。复跑入口均随仓库保留：`go generate ./...`、`go build ./...`、`go vet ./...`、`go test ./...`、六目标包`-race`、C#命令、etcd具名integration测试、`scripts/test-remote-matrix.sh`、`scripts/mirror-local.sh test`及`test-core`、`cmd/walinspect`。真实资源必须使用自己的私有根目录/端口；启动、故障用例和停止放在同一持续执行会话，验收后down并保留证据。不能把这些功能入口改成启动负载的理由。
 
-提交/推送及CBM刷新状态由最终Git记录与工具结果确认；未发新版本。
+实现提交`95c89dde`已快进合入并推送main，包含前序36ce227c/55f2cc20/42eb95e8；未发新版本。
+
+CBM已按main刷新：项目`Users-whb-roost-roost-core`，generation `2026-10-08T05:39:49Z`，25613 nodes / 246778 edges。50个变更Go/C#路径中48个`metadata_match`且无记录缺口；两个`codegen/internal/entity/testdata/remoteflow`文件按目录规则排除，已直接读取变更并通过正式生成消费验证。全库另有5个既有demo模板的部分解析提示，未伪称图谱完整；后续仍按coverage和当前源码补证。原始输出`cbm-index.json`、`cbm-coverage.json`随本轮证据保留。

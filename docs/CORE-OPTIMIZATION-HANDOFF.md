@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+**本轮已合入并推送main：`95c89dde`；CBM已刷新至`2026-10-08T05:39:49Z`。** 非压测收口结果及索引边界见[最终验收](review/OUTBOX-HISTORICAL-CLOSURE-2026-10-08.md)。新的Remote/Sync负载仍暂停，未发新tag。
+
 **2026-10-08 outbox与历史非压测收口：** `codex/outbox-closure`承接唯一发布入口、RR-42～45；新增RR-46销毁锁等待可取消、RR-47按全部Entity依赖有界发布、A1 WAL只读诊断完整副本、A2 Go/C#/Unity Sync基线恢复。维护者最新授权除压测外全部继续；macOS全仓、双平台目标race、C#/Unity正式源码TCP、本机三节点etcd及资源故障验收均通过，具名结果见[收口验收](review/OUTBOX-HISTORICAL-CLOSURE-2026-10-08.md)。本批合入提交由Git记录确认；未发新tag。新的1h Remote和Sync负载仍暂停；旧240秒约60.1 TPS、4520错误保留为未通过，不宣称并行版已恢复性能。[数据](review/OUTBOX-PARTIAL-LOAD-2026-10-08.md) · [TPS分析](review/OUTBOX-TPS-ANALYSIS-2026-10-08.md)。
 
 **2026-10-08 遗留清单核对：**[CARRYOVER 当前状态](bug/CARRYOVER.md#current-20261008)逐项关联 N03/N04 后续真实资源证据，修正旧“未测”口径；WANTED 首页已按现行 skill 允许实现侧确认后修复。剩余验证、产品决定与 Windows 排除范围分列，不能从下方历史“未实施”推导当前任务。此次只整理交接，没有新增业务代码或性能结论。
