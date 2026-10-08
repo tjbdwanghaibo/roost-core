@@ -1,5 +1,7 @@
 # v1.23.1 阶段清单核对
 
+**后续更新：**维护者只保证macOS/Linux；Remote/KCP观察已按可控时序收敛为RR-40/41的验收缺陷，CBM孤儿socket阻塞已恢复。当前结果见[后续记录](FOLLOWUP-MAC-LINUX-2026-10-08.md)，下方是v1.23.1发布时点。
+
 核对范围：REMAINING-FIXES-v1.23.1-2026-10-07的B1～B8，FRAMEWORK-DOCS-FINDINGS登记行、bug/bugfix索引、WANTED/CARRYOVER与CORE-OPTIMIZATION-HANDOFF。按最新记录覆盖旧日期状态，未做全仓新一轮逐函数审计。
 
 | 范围 | 当前判断 |

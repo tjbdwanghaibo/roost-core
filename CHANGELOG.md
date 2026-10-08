@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **macOS/Linux验收收口（RR-20261008-40/41）**：KCP E2E先排空机器人再取消网络；Remote用可控时间分别验证合法缓存命中与过期回源，保留原收敛和业务错误断言。生产语义不变。平台支持范围按维护者要求限定macOS/Linux。见[记录](docs/review/FOLLOWUP-MAC-LINUX-2026-10-08.md)。
+
 ## [v1.23.1] - 2026-10-08
 
 阶段tag：d367b893；pretag与私有Remote矩阵21/21通过，实际tag生成工程build/vet/test通过。验收边界见[阶段清单](docs/review/STAGE-v1.23.1-CLOSURE-2026-10-08.md)。

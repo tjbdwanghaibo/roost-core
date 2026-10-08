@@ -339,6 +339,8 @@ func TestLockstepEndToEndGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	botLoopCtx, stopBot := context.WithCancel(context.Background())
+	defer stopBot()
 	botStats := make(chan robot.LockstepBotStats, 1)
 	go func() {
 		defer func() { botStats <- bot.Stats() }()
@@ -349,7 +351,7 @@ func TestLockstepEndToEndGate(t *testing.T) {
 					botErr.Store(err)
 				}
 				botEnd.next.Store(uint32(bot.Next()))
-			case <-ctx.Done():
+			case <-botLoopCtx.Done():
 				return
 			}
 		}
@@ -528,8 +530,7 @@ func TestLockstepEndToEndGate(t *testing.T) {
 	if clientA.catchups.Load() == 0 {
 		t.Error("client A never requested a catch-up for its lost frames")
 	}
-	cancel()
-	stats := <-botStats
+	stats := finishE2EBot(cancel, stopBot, botStats)
 	if stats.CatchupsRequested == 0 {
 		t.Error("the robot never requested a catch-up for its lost frames")
 	}
@@ -584,4 +585,12 @@ func firstErr(errs []error) error {
 		return nil
 	}
 	return errs[0]
+}
+
+// finishE2EBot 汇合机器人所有者，再结束其网络依赖。
+func finishE2EBot(cancelTransport, stopLoop context.CancelFunc, stats <-chan robot.LockstepBotStats) robot.LockstepBotStats {
+	stopLoop()
+	result := <-stats
+	cancelTransport()
+	return result
 }

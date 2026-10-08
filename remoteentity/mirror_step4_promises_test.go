@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -393,51 +394,64 @@ func (b plainBus) Subscribe(topic string, h fsyncbus.Handler) (*fsyncbus.Subscri
 // 推送依赖可确认订阅：总线不能确认时显式退化——不订阅快照主题、记 Warn、Stats().PushEnabled=false；
 // 读取按陈旧上限经共享 L2 回源，看到 owner 的新提交而不需要推送。
 func TestSnapshotClientWithoutConfirmedSubscriptionsReadsOnDemand(t *testing.T) {
-	ctx := context.Background()
-	var logs bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		var logs bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+		t.Cleanup(func() { slog.SetDefault(previous) })
 
-	redis := newSnapshotRedisFake()
-	cfg := DefaultConfig()
-	cfg.CachedMaxStaleness = time.Nanosecond // 每次读都重新确认：不依赖推送就能看到新提交
-	owner := NewManager(newMockVersionedLockFactory(), cfg, 2415, NewSnapshotL2Store(redis, cfg.SnapshotL2TTL))
-	loop := newLoopbackBus()
-	consumer, err := NewSnapshotClient(cfg, SnapshotClientDeps{ConsumerSID: 2416, L2: NewSnapshotL2Store(redis, cfg.SnapshotL2TTL)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := consumer.Start(plainBus{inner: loop}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = consumer.Stop(context.Background()) })
-	if consumer.Stats().PushEnabled || loop.active(SyncTopicSnapshot) != 0 || loop.active(SyncTopicInterest) != 1 {
-		t.Fatalf("push=%v snapshot subscriptions=%d interest subscriptions=%d; want push off, no snapshot subscription, the interest one kept",
-			consumer.Stats().PushEnabled, loop.active(SyncTopicSnapshot), loop.active(SyncTopicInterest))
-	}
-	if !strings.Contains(logs.String(), "snapshot push disabled") {
-		t.Fatalf("the degraded mode was not logged: %q", logs.String())
-	}
-	key := staleBackfillKey(t, b2WatermarkKind, 9843)
-	for v := uint64(1); v <= 2; v++ {
-		if err := owner.snapshots.publishCommitted(ctx, clientCommit(key, v, fmt.Sprintf("v%d", v))); err != nil {
+		redis := newSnapshotRedisFake()
+		cfg := DefaultConfig()
+		cfg.CachedMaxStaleness = 10 * time.Millisecond // RR-20261008-41：用虚拟时间跨过陈旧上限，不猜测真实时钟的分辨率。
+		owner := NewManager(newMockVersionedLockFactory(), cfg, 2415, NewSnapshotL2Store(redis, cfg.SnapshotL2TTL))
+		loop := newLoopbackBus()
+		consumer, err := NewSnapshotClient(cfg, SnapshotClientDeps{ConsumerSID: 2416, L2: NewSnapshotL2Store(redis, cfg.SnapshotL2TTL)})
+		if err != nil {
 			t.Fatal(err)
 		}
-		got, found, err := consumer.ReadSnapshot(ctx, entity.RemoteSnapshotRead{Key: key, Consistency: entity.RemoteReadCached})
-		if err != nil || !found || got.StateVersion != v {
-			t.Fatalf("on-demand Cached read after commit v%d: version=%d found=%v err=%v", v, got.StateVersion, found, err)
+		if err := consumer.Start(plainBus{inner: loop}); err != nil {
+			t.Fatal(err)
 		}
-	}
-	live, err := NewSnapshotClient(cfg, SnapshotClientDeps{ConsumerSID: 2417})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := live.Start(loop); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = live.Stop(context.Background()) })
-	if !live.Stats().PushEnabled || loop.active(SyncTopicSnapshot) != 1 {
-		t.Fatalf("on a bus that confirms subscriptions: push=%v snapshot subscriptions=%d", live.Stats().PushEnabled, loop.active(SyncTopicSnapshot))
-	}
+		t.Cleanup(func() { _ = consumer.Stop(context.Background()) })
+		if consumer.Stats().PushEnabled || loop.active(SyncTopicSnapshot) != 0 || loop.active(SyncTopicInterest) != 1 {
+			t.Fatalf("push=%v snapshot subscriptions=%d interest subscriptions=%d; want push off, no snapshot subscription, the interest one kept",
+				consumer.Stats().PushEnabled, loop.active(SyncTopicSnapshot), loop.active(SyncTopicInterest))
+		}
+		if !strings.Contains(logs.String(), "snapshot push disabled") {
+			t.Fatalf("the degraded mode was not logged: %q", logs.String())
+		}
+		key := staleBackfillKey(t, b2WatermarkKind, 9843)
+		for v := uint64(1); v <= 2; v++ {
+			if err := owner.snapshots.publishCommitted(ctx, clientCommit(key, v, fmt.Sprintf("v%d", v))); err != nil {
+				t.Fatal(err)
+			}
+			if v == 2 {
+				// 陈旧上限内（含边界）允许命中已确认的 v1；跨过上限后才必须回源取 v2。
+				for _, advance := range []time.Duration{0, cfg.CachedMaxStaleness} {
+					time.Sleep(advance)
+					got, found, err := consumer.ReadSnapshot(ctx, entity.RemoteSnapshotRead{Key: key, Consistency: entity.RemoteReadCached})
+					if err != nil || !found || got.StateVersion != 1 {
+						t.Fatalf("within staleness bound: version=%d found=%v err=%v, want v1", got.StateVersion, found, err)
+					}
+				}
+				time.Sleep(time.Nanosecond)
+			}
+			got, found, err := consumer.ReadSnapshot(ctx, entity.RemoteSnapshotRead{Key: key, Consistency: entity.RemoteReadCached})
+			if err != nil || !found || got.StateVersion != v {
+				t.Fatalf("on-demand Cached read after commit v%d: version=%d found=%v err=%v", v, got.StateVersion, found, err)
+			}
+		}
+		live, err := NewSnapshotClient(cfg, SnapshotClientDeps{ConsumerSID: 2417})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := live.Start(loop); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = live.Stop(context.Background()) })
+		if !live.Stats().PushEnabled || loop.active(SyncTopicSnapshot) != 1 {
+			t.Fatalf("on a bus that confirms subscriptions: push=%v snapshot subscriptions=%d", live.Stats().PushEnabled, loop.active(SyncTopicSnapshot))
+		}
+	})
 }

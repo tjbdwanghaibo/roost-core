@@ -288,15 +288,16 @@ func TestB2HistoricReplicaPastL2MemoryIsNotAdmitted(t *testing.T) {
 }
 
 // 并发组合：两个节点共用一个 L2，四个写者乱序发布 v1～v60（经 Publish 与复制两条入口），另有读者以 1ns 的
-// 陈旧上限反复读取（每次都走重新确认），中途一次带版本删除 @30。收敛后两个节点与 L2 都停在 v60：L1 从不
+// 陈旧上限反复读取，中途一次带版本删除 @30。全部写入后显式跨过陈旧上限，再验两个节点与 L2 都停在 v60：L1 从不
 // 超过 L2 已确认的版本，也不会因乱序把 L2 拉回旧版本。
 func TestB2ConcurrentWritersAndReconfirmingReadersConvergeOnL2(t *testing.T) {
 	ctx := context.Background()
+	clock := newB2Clock()
 	redis := newSnapshotRedisFake()
 	l2 := NewSnapshotL2Store(redis, time.Hour)
 	key := staleBackfillKey(t, b2WatermarkKind, 9510)
 	newNode := func() *entity.RemoteSnapshotCache {
-		return entity.NewRemoteSnapshotCache(entity.RemoteSnapshotCacheConfig{TTL: time.Hour, MaxStaleness: time.Nanosecond, LoadTimeout: time.Second}, l2, nil)
+		return entity.NewRemoteSnapshotCache(entity.RemoteSnapshotCacheConfig{TTL: time.Hour, MaxStaleness: time.Nanosecond, LoadTimeout: time.Second, Now: clock.Now}, l2, nil)
 	}
 	nodes := []*entity.RemoteSnapshotCache{newNode(), newNode()}
 	const top = 60
@@ -339,6 +340,7 @@ func TestB2ConcurrentWritersAndReconfirmingReadersConvergeOnL2(t *testing.T) {
 					return
 				default:
 				}
+				clock.Advance(2 * time.Nanosecond)
 				if _, _, err := node.Get(ctx, key, entity.RemoteReadCached, 0); err != nil && !errors.Is(err, entity.ErrRemoteSnapshotStale) {
 					t.Errorf("read: %v", err)
 					return
@@ -353,6 +355,8 @@ func TestB2ConcurrentWritersAndReconfirmingReadersConvergeOnL2(t *testing.T) {
 	if err != nil || !held || stored.StateVersion != top {
 		t.Fatalf("L2 after the race: version=%d held=%v err=%v, want v%d", stored.StateVersion, held, err, top)
 	}
+	// RR-20261008-41：等待写者/读者结束后再推进，最终读取确定超过最近确认时间。
+	clock.Advance(2 * time.Nanosecond)
 	for i, node := range nodes {
 		got, found, err := node.Get(ctx, key, entity.RemoteReadCached, 0)
 		if err != nil || !found || got.StateVersion != top {
