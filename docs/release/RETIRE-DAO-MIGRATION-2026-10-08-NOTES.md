@@ -12,9 +12,9 @@
 
 发布端和接收端要求非零 Generation 与完整订阅身份；空 payload 的 Delete 返回失败。删除无代际旧发布端的撤销分支，保留当前协议的迟到续租/撤销水位及表满保护。消息字段和当前序列化格式未改变，接收校验收紧。
 
-## R3 · Cube 范围
+## R3 · Cube 已废弃，不处理
 
-Cube HEAD c68a2f5 仍使用 cube-core v1.1.0、cube-kit v1.0.4；812 个 Go 文件导入旧框架。三处三参数 NestOptionWithWorkerNumAndMsgCap 不能直接换成 Roost 双池 API 而保留旧框架实体类型。已向维护者提出整体迁移/另轮实施的范围选择，本轮尚未修改 Cube，不能宣称三处已完成。
+维护者最终确认：这里指 `/Users/whb/roost/cube` 仓库，该仓库已经废弃，不需要修改。其旧 cube-core/cube-kit 依赖及三处旧 Nest API 不属于当前 Roost 下游验收，不再列迁移待办。本轮未改 Cube。
 
 ## 升级边界
 

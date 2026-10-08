@@ -8,7 +8,7 @@
 | R1 | 删除 MigrationRunner、DAORegistry、生成 Migrate；mongo_projection.go 不再按 handler 忽略版本冲突 | TestMongoStoreHandlerCannotSuppressProjectionConflict；原批量/Remote 窗口/投影失败回归保留 |
 | R1 | 系统事务 ID helper 移至 entity_delete.go；ProjectionTicket/SystemCommitter/WaitProjection 保留于 projection.go | 原删除与系统投影测试；根示例实跑 |
 | R2 | remoteentity/syncer.go 与 interest.go 双端拒绝旧发布端；删除 generation=0 撤销分支 | TestInterestWireRejectsLegacyAndPreservesOrdering：正式发布拒绝、绕过发布直传旧格式仍拒绝、空 Delete 拒绝、乱序撤销和当前撤销 |
-| R3 | Cube 仍未改，等待确认整体迁移范围 | 不声称 Cube 编译/迁移通过 |
+| R3 | 维护者确认 Cube 仓库已废弃，不处理三处旧 API | 未改 Cube；不列验收或迁移待办 |
 
 ## 验证与复跑
 
@@ -31,4 +31,4 @@ CBM 基线 generation 2026-10-08T06:53:22Z；变更路径与范围已校验。�
 
 实现提交 `605ac914` 已快进合并 main。CBM 已对 main 重建，generation `2026-10-08T07:31:58Z`，25669 nodes / 246054 edges。54 个存续变更路径中 41 个覆盖无已知缺口且 metadata_match；13 个为按规则排除的文档/金样，已源码核对。索引全局仍有 5 个既有模板局部解析缺口（本轮未改），不宣称全图完整。原始覆盖报告见 `artifacts/core-retire-20261008/cbm-final.json`。
 
-Core 本轮无未完成验收；Cube 未实施，保持原仓干净，待整体迁移范围确认。无 tag、部署或压测。
+Core 本轮无未完成验收；Cube 按维护者最终决定不处理（仓库已废弃），本轮无剩余迁移待办。无 tag、部署或压测。

@@ -7,6 +7,8 @@ description: roost-core 的代码开发、优化、重构、review 和 bugfix �
 
 ## 开始工作与接手
 
+- 维护者 2026-10-08 确认 `/Users/whb/roost/cube` 仓库已废弃，不再维护；其旧 API/导入不属于 Roost 下游适配或验收，不能仅因索引搜到旧调用而扩成迁移任务。
+
 roost-core 是采用 ECS 编程模式的通用游戏服务器框架。Entity 是数据与业务逻辑的组织中心，Nest 调度业务，DataEngine 落地数据，Sync 同步实体；Remote 协作维护跨进程权限与事务。不要把所有框架职责堆入 Entity。
 
 1. 定位包含 `go.mod` 的 roost-core 根目录，读取适用 AGENTS.md、Git 分支/工作树、go.mod、go.work 与实际工具链；不要覆盖前序或用户未提交的工作。
