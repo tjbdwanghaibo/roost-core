@@ -1,6 +1,6 @@
 # Roost 核心优化汇总与 agent 交接
 
-**2026-10-08 后续兼容需求定案：**DAO schema 自动迁移、Remote interest 旧发布端兼容均撤销，当前实现已删除相关链路并严格拒绝旧输入；下方上一批“待选择/暂保留”已失效。正式生成 game-demo 19 包通过。Cube 实际依赖整套 cube-core/cube-kit，整体迁移范围待确认，三处旧调用尚未修改。全仓 131 包、相关三包 race、根示例实跑、build/vet 与重复生成均通过；提交与索引结果见[本轮实现记录](release/RETIRE-DAO-MIGRATION-2026-10-08-IMPLEMENTATION.md)。
+**2026-10-08 后续兼容需求定案：**DAO schema 自动迁移、Remote interest 旧发布端兼容均撤销，当前实现已删除相关链路并严格拒绝旧输入；下方上一批“待选择/暂保留”已失效。正式生成 game-demo 19 包通过。Cube 实际依赖整套 cube-core/cube-kit，整体迁移范围待确认，三处旧调用尚未修改。全仓 131 包、相关三包 race、根示例实跑、build/vet 与重复生成均通过；实现提交 `605ac914`，CBM generation `2026-10-08T07:31:58Z`；详情见[本轮实现记录](release/RETIRE-DAO-MIGRATION-2026-10-08-IMPLEMENTATION.md)。
 
 三模块旧兼容清理代码已合入 main：`7c9b9d31`。CBM 已刷新到 `2026-10-08T06:53:22Z`，112 个改动 Go/模板路径完成覆盖核对；10 个规则排除路径已源码补证。提交不代表发布。
 
