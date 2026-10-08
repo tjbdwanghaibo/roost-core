@@ -9,7 +9,7 @@
 | OC3 | Destroy等锁可取消，已持久准入/未知删除继续收尾 | Mutex接口不新增必选方法，旧自定义实现沿用有界LockWithTimeout契约 |
 | OC4 | 停机WAL只读检查与完整隔离副本，保留坏记录及后缀 | 新命令walinspect；不能用于活跃writer，不自动修复业务数据或跳过记录 |
 | OC5 | Go/C# Sync接收器防增量缺口；Unity适配应用失败关闭旧连接 | 每接收器一个流，切连接Reset；应用Full先清旧状态，后续Delta可继续create，正常鉴权重连恢复 |
-| OC6 | 历史A6/A7旧租约路线按静态绑定/App锁收敛，A14保留kit；补本机HA/E14证据 | 不恢复旧handBackIdle，不宣称跨机WAL热迁移或真实引擎已验 |
+| OC6 | 历史A6/A7旧租约路线按静态绑定/App锁收敛，A14保留kit；补本机HA/E14证据 | 不恢复旧handBackIdle；静态Player跨机迁移以已落库数据为准，WAL只保证落库，跨机WAL热迁移无需求；真实引擎未验 |
 
 无WAL、Mongo存储或wire格式变更，不需要本批专属数据清空。改变公开ApplyRemoteCommits成功语义的自定义调用方须按OC1迁移；框架正式batch/投影/finalizer已同步。回退须回退整个实现及调用方，禁止删除Applied记录、强置Committed或提早归还额度。
 

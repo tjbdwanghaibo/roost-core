@@ -1,5 +1,9 @@
 # Roost 核心优化汇总与 agent 交接
 
+**2026-10-08 WAL 单路径已实施并合入 main（`53686c05`，未发版）：**roost-coding 与本地 Codex skill 已明确未上线阶段不兼容旧逻辑/格式。WAL 固定 codec 7，删除 V1/V2 开关、Mutation 旧字段与独立 nestwal.Committer/Runtime，统一正式 Projector/Assembly；生产 Go 净减 925 行。macOS 全仓 131 包、七目标包 race、生成 game-demo 19 包通过；两套资源夹具生成编译、Linux/arm64 交叉 build 通过。未重跑 Linux 实机、真实资源矩阵或压测。旧 codec 5/6 WAL 明确拒绝，升级先停旧进程并完成需保留数据落库，再用新目录；不会自动清空数据。[说明](release/WAL-SINGLE-PATH-2026-10-08-NOTES.md) · [实现与验收](release/WAL-SINGLE-PATH-2026-10-08-IMPLEMENTATION.md)。下方为此前批次状态。
+
+**2026-10-08 静态 Player 迁移范围定案：**维护者明确跨机迁移全部以已落库数据为准；WAL 只负责保证落库，不参与跨机迁移。跨机本地 WAL 热迁移没有业务需求，不列为未完成项或后续能力建设，不据此扩展实现与验收范围。这是业务范围决定，不改变既有 WAL 落库与恢复职责。
+
 **本轮已合入并推送main：`95c89dde`；CBM已刷新至`2026-10-08T05:39:49Z`。** 非压测收口结果及索引边界见[最终验收](review/OUTBOX-HISTORICAL-CLOSURE-2026-10-08.md)。新的Remote/Sync负载仍暂停，未发新tag。
 
 **2026-10-08 outbox与历史非压测收口：** `codex/outbox-closure`承接唯一发布入口、RR-42～45；新增RR-46销毁锁等待可取消、RR-47按全部Entity依赖有界发布、A1 WAL只读诊断完整副本、A2 Go/C#/Unity Sync基线恢复。维护者最新授权除压测外全部继续；macOS全仓、双平台目标race、C#/Unity正式源码TCP、本机三节点etcd及资源故障验收均通过，具名结果见[收口验收](review/OUTBOX-HISTORICAL-CLOSURE-2026-10-08.md)。本批合入提交由Git记录确认；未发新tag。新的1h Remote和Sync负载仍暂停；旧240秒约60.1 TPS、4520错误保留为未通过，不宣称并行版已恢复性能。[数据](review/OUTBOX-PARTIAL-LOAD-2026-10-08.md) · [TPS分析](review/OUTBOX-TPS-ANALYSIS-2026-10-08.md)。
