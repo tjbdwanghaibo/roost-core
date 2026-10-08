@@ -3,9 +3,12 @@ package driver
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"
@@ -153,8 +156,18 @@ func TestJetStreamSyncBusPromiseConcurrentFirstSubscribersShareOneConsumer(t *te
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := bus.Subscribe("state", func(context.Context, *fsyncbus.SyncMsg) error { return nil }); err != nil {
-				t.Error(err)
+			// RR-25：创建中的同 topic 返回 Busy；重试仍必须复用唯一 consumer。
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				_, err := bus.Subscribe("state", func(context.Context, *fsyncbus.SyncMsg) error { return nil })
+				if err == nil {
+					return
+				}
+				if !errors.Is(err, fsyncbus.ErrSubscriptionBusy) || time.Now().After(deadline) {
+					t.Error(err)
+					return
+				}
+				runtime.Gosched()
 			}
 		}()
 	}

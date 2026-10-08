@@ -1,6 +1,6 @@
 # RR-25 新方案：保留投递上限，修复消费者生命周期
 
-状态：方案，尚未实施、未运行新方案测试。维护者明确要求“RR-25不能取消投递次数上限”。本方案替代此前无限重投候选；不直接恢复旧 candidate.patch。
+状态：已按本方案实施，目标race与真实NATS验证通过；最终阶段发布验收见docs/review/STAGE-v1.23.1-CLOSURE-2026-10-08.md。维护者明确要求“RR-25不能取消投递次数上限”。本方案替代此前无限重投候选；不直接恢复旧 candidate.patch。
 
 ## 目标与证据
 
@@ -68,7 +68,7 @@
 6. 预算未耗尽时短暂退订/重订最终收到消息；耗尽时明确终止且可观测，不能只检查“最终收到”而漏掉次数越界。另验证 ACK 丢失、进程退出前未确认的恢复边界。
 7. 定向 race 覆盖 SyncBus/Subscription/NATS driver/kit 装配；全仓 build/vet/test 与根包门禁。共享 RPC/Remote 原结算策略回归保持通过。
 
-主要改动集中于 sync/syncbus/driver/jetstream.go、Subscription 准入结果入口及对应回归；配置 help、OBSERVABILITY、bug/bugfix 与交接随实施更新。不新拆包，不引入第二套持久投递系统。方案阶段未改业务代码。
+主要改动集中于 sync/syncbus/driver/jetstream.go、Subscription 准入结果入口及对应回归；配置 help、OBSERVABILITY、bug/bugfix 与交接随实施更新。不新拆包，不引入第二套持久投递系统。已实施以上业务代码与回归。
 
 ## 参考
 

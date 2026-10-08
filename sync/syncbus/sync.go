@@ -1,6 +1,9 @@
 package syncbus
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // SyncMsg is the wire format for a sync message.
 type SyncMsg struct {
@@ -60,3 +63,7 @@ type ISyncBus interface {
 	IPublisher
 	ISubscriber
 }
+
+// ErrSubscriptionBusy 表示同一 topic 的消费者正在创建或退役；调用方稍后重试。
+// 不在订阅回调中等待旧消费者退出，避免自退订后重订时等待自己。
+var ErrSubscriptionBusy = errors.New("syncbus: consumer is creating or retiring; retry subscription")

@@ -1,5 +1,9 @@
 # Roost Review 跨轮进度
 
+## 2026-10-08 RR-25与v1.23.1阶段收口
+
+B1～B8当前已确认缺陷全部已实施；RR-25保留MaxDeliver，修复消费者创建/退役空窗，不沿用旧无限重试候选。真实NATS 5场景、目标5包race、Remote Live重订回归通过；阶段发布以[阶段清单](STAGE-v1.23.1-CLOSURE-2026-10-08.md)的最终验收为准。独立产品决定与历史外部验证范围没有被当作缺陷修复完成。
+
 ## 2026-10-06 N09 skill 第六批（维护者第五轮决定：求值上下文表；ability / input / state / tags / optional 逐分支；account 换名释放）
 
 基线 `0aeb5ab6`，分支 `revn09f`，NC 段 280～289（用 280～283）；图谱 generation 2026-09-30 落后，全部以当前源码与探针补证。[本轮/矩阵](REVIEW-2026-10-06-n09-batch6.md) · [表方案](../feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。NC-280～283（P2）已修复、声明场景验证，未发版。

@@ -4,6 +4,7 @@ package remoteentity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -207,9 +208,17 @@ func TestRealJetStreamLiveSubscriptionConfirmsAndResumes(t *testing.T) {
 		t.Fatal(err)
 	}
 	publish(3) // 退订期间
-	unsub, err = live.SubscribeLive(topic, handler)
-	if err != nil {
-		t.Fatal(err)
+	// RR-25：退订关闭本地准入，传输 Closed 可能稍晚；不得把 Busy 当订阅成功。
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		unsub, err = live.SubscribeLive(topic, handler)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, fsyncbus.ErrSubscriptionBusy) || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	defer func() { _ = unsub.Unsubscribe(context.Background()) }()
 	publish(4)

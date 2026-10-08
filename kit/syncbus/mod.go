@@ -29,7 +29,7 @@ type config struct {
 	Stream         string        `config:"syncbus.stream" help:"JetStream 流名。不写由 prefix 推出（roost.sync -> ROOST_SYNC，zz.sync -> ZZ_SYNC），共用一个 NATS 的部署 prefix 不同流就不同；只在要沿用已有的流与 consumer 游标时写"`
 	Storage        string        `config:"syncbus.storage" enum:"file|memory" example:"file"`
 	AckWait        time.Duration `config:"syncbus.ack_wait" min:"0"`
-	MaxDeliver     int           `config:"syncbus.max_deliver" min:"0"`
+	MaxDeliver     int           `config:"syncbus.max_deliver" min:"0" help:"每消息总投递次数（含首次），0取默认5；到限终止，不因重订重置"`
 	StreamMaxAge   time.Duration `config:"syncbus.stream_max_age" min:"0"`
 	Duplicates     time.Duration `config:"syncbus.duplicates" min:"0"`
 	Replicas       int           `config:"syncbus.replicas" min:"0" example:"1"`

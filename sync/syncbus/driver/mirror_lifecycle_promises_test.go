@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -50,7 +51,7 @@ func TestMirrorStopAndRestartWithOldDeliveryInFlight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer b.Stop()
+	t.Cleanup(b.Stop)
 	s := &lifecycleMirrorStore{entered: make(chan struct{}), release: make(chan struct{})}
 	r := mirror.New(b, "state", s)
 	if err := r.Start(); err != nil {
@@ -81,6 +82,18 @@ func TestMirrorStopAndRestartWithOldDeliveryInFlight(t *testing.T) {
 	if js.subs[0].stops.Load() != 1 {
 		t.Fatal("last subscriber did not release underlying consumer")
 	}
+	// RR-25：退役代还在执行时重订必须明确失败，不能把新 consumer 开在旧回调旁边。
+	if err := r.Start(); !errors.Is(err, fsyncbus.ErrSubscriptionBusy) {
+		t.Fatalf("restart during retirement = %v", err)
+	}
+	if len(js.subs) != 1 {
+		t.Fatal("retirement started another consumer")
+	}
+	releaseOnce.Do(func() { close(s.release) })
+	if err := <-oldDone; err != nil {
+		t.Fatal(err)
+	}
+	waitRetired(t, b, "state")
 	for range 2 {
 		if err := r.Start(); err != nil {
 			t.Fatal(err)
@@ -89,20 +102,8 @@ func TestMirrorStopAndRestartWithOldDeliveryInFlight(t *testing.T) {
 	if len(js.subs) != 2 {
 		t.Fatalf("restart not idempotent: subscriptions=%d", len(js.subs))
 	}
-	// 保留旧 transport 回调与新回调的不同身份；新版消息先到仍须由 Store 保持版本准入。
-	// FromSid 显式为远端，避免自回环过滤；正式 Replicator 检查内外身份。
-	data := lifecycleMirrorMessage(t, 2)
-	if err := js.deliver("roost.sync.state", data); err != nil {
+	if err := js.deliver("roost.sync.state", lifecycleMirrorMessage(t, 2)); err != nil {
 		t.Fatal(err)
-	}
-	releaseOnce.Do(func() { close(s.release) })
-	select {
-	case err := <-oldDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("old callback did not finish")
 	}
 	s.mu.Lock()
 	version := s.version

@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **SyncBus 有限投递生命周期收口（RR-20261008-25）**：保留MaxDeliver默认5，退订空窗不误ACK，旧consumer与回调全部结束前不重建；创建/退役中返回可重试ErrSubscriptionBusy。空窗重投使用1秒起的指数退避，到限保持终止；不改变RPC/Remote策略。真实NATS的1/2/5次、预算内恢复及ACK前断线验证通过。见 [修复与恢复](docs/bugfix/RR-20261008-25.md)。
+
+
 - B8：统一三大模块和单仓文档，补基建包入口；最低框架与发布清单准备 v1.23.1（尚未发布）。RR-20261008-39 修正 Remote 真实依赖验收的旧发布阻塞断言，并增加发布失败时后续事务落库的验证；生产行为不回退。
 
 - B7 RR-20261008-29～38：管理命令关联审计和 HTTP 错误分类；Lua 裁剪计数、statsz 不消费日志窗口、DataEngine 积压 gauge、统一系统日志时间、生产可选 secret 校验；生成失败不发布半成品、生成文件识别与覆盖权限分离、新清单移除失效 skill/service 版本。RPC Gauge 更名为 bus_rpc_pending_requests，相关查询须同步；所有源码指标纳入文档守卫。

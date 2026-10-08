@@ -394,7 +394,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "syncbus.stream", Kind: "string", Help: "JetStream 流名。不写由 prefix 推出（roost.sync -> ROOST_SYNC，zz.sync -> ZZ_SYNC），共用一个 NATS 的部署 prefix 不同流就不同；只在要沿用已有的流与 consumer 游标时写"},
 		{Name: "syncbus.storage", Kind: "string", Starter: true, Example: "file", Enum: []string{"file", "memory"}},
 		{Name: "syncbus.ack_wait", Kind: "duration", Min: "0"},
-		{Name: "syncbus.max_deliver", Kind: "int", Min: "0"},
+		{Name: "syncbus.max_deliver", Kind: "int", Min: "0", Help: "每消息总投递次数（含首次），0取默认5；到限终止，不因重订重置"},
 		{Name: "syncbus.stream_max_age", Kind: "duration", Min: "0"},
 		{Name: "syncbus.duplicates", Kind: "duration", Min: "0"},
 		{Name: "syncbus.replicas", Kind: "int", Min: "0", Starter: true, Example: "1"},

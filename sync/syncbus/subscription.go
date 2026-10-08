@@ -63,8 +63,16 @@ func (s *Subscription) end(mark *deliveryMark) {
 // ErrUnsubscribed。ctx 是传输给出的投递 ctx（nil 按 Background），交给 handler 时加上本订阅的标记。
 // handler panic 时照样归还准入，panic 继续向上传给传输。
 func (s *Subscription) Deliver(ctx context.Context, msg *SyncMsg) error {
+	_, err := s.TryDeliver(ctx, msg)
+	return err
+}
+
+// TryDeliver 供传输区分“退订拒绝准入”和“handler 已执行但返回错误”。
+// true 不表示业务成功；handler 自己返回 ErrUnsubscribed 仍为 true。
+// panic 与 Deliver 一样归还准入后向上传播，由传输保持既有隔离策略。
+func (s *Subscription) TryDeliver(ctx context.Context, msg *SyncMsg) (bool, error) {
 	if s == nil || !s.calls.Begin() {
-		return ErrUnsubscribed
+		return false, ErrUnsubscribed
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -73,7 +81,7 @@ func (s *Subscription) Deliver(ctx context.Context, msg *SyncMsg) error {
 	mark := &deliveryMark{}
 	mark.outer, _ = ctx.Value(key).(*deliveryMark)
 	defer s.end(mark)
-	return s.handler(context.WithValue(ctx, key, mark), msg)
+	return true, s.handler(context.WithValue(ctx, key, mark), msg)
 }
 
 // Unsubscribe 按三步停机退订（roost-coding；契约骨架 internal/stopcontract）：

@@ -922,3 +922,7 @@ ROOST_PERF_COUNT=2 ROOST_PERF_LABEL=sync-change-1 ./scripts/perf/sync-aoi.sh -mo
 ## v1.23.1 当前口径补充（2026-10-08，未发布）
 
 F04-D逐组更正、TCP心跳/限流、Group重连及健康注册见B8。状态走可靠有序；RR-25仍待确认。 原正文保留v1.23.0证据。完整对应表见 [B8文档收口](../../review/B8-DOCUMENTATION-CLOSURE-2026-10-08.md)。
+
+## RR-25 有限投递收口
+
+同topic创建/退役中返回ErrSubscriptionBusy；旧consumer Closed与在途回调结束后才能重订。默认总投递次数5，1/2/4/8秒退避；无handler准入不ACK，业务错误策略保持。到限可终止，状态快照或事件对账由所属业务恢复；详见 [有界方案](../../feature/REFACTOR-2026-10-08-rr25-bounded-delivery.md)。

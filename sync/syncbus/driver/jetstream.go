@@ -82,16 +82,17 @@ type jetStreamSyncBus struct {
 	js  fnats.IJetStream
 	cfg JetStreamSyncConfig
 
-	// mu guards topics and is held across the underlying Subscribe of a
-	// topic's first subscriber, so concurrent first subscribers cannot both
-	// create the consumer and Stop cannot race a creation in flight.
+	// mu 只保护 topic 登记和代次；创建、停止与等待不持全局锁。
 	mu     sync.Mutex
 	topics map[string]*topicFanout
 
 	// RR-20261005-NC-172：consume 回调（及其中的本地 handler）在 nats.go 的回调 goroutine 上执行，
 	// ConsumeContext.Stop 不等它们。deliveries 是总线自己的准入与在途计数（共用的 operation.Lifetime，A3）：
 	// 停止先关准入、停订阅，再在调用方 ctx 内等在途归零；归零之前总线与连接都不能交还。
-	deliveries operation.Lifetime
+	deliveries  operation.Lifetime
+	consumers   operation.Lifetime
+	setupCtx    context.Context
+	cancelSetup context.CancelFunc
 }
 
 // errJetStreamSyncStopping 让停止开始后才到达的投递回到 broker（driver 据此 NAK），由下一次
@@ -108,6 +109,10 @@ type topicFanout struct {
 	sub    fnats.IJetStreamSubscription
 	locals map[uint64]*fsyncbus.Subscription
 	nextID uint64
+	// ready 在网络创建结束后关闭；retiring 在锁内唯一地移交退役责任。
+	ready    chan struct{}
+	retiring bool
+	calls    operation.Lifetime
 }
 
 func (f *topicFanout) snapshot() []*fsyncbus.Subscription {
@@ -144,7 +149,8 @@ func NewJetStreamSyncBus(ctx context.Context, js fnats.IJetStream, cfg JetStream
 	}); err != nil {
 		return nil, fmt.Errorf("jetstream sync: ensure stream %s for %s.>: %w", cfg.Stream, cfg.Prefix, err)
 	}
-	return &jetStreamSyncBus{js: js, cfg: cfg, topics: make(map[string]*topicFanout)}, nil
+	lifetimeCtx, cancelSetup := context.WithCancel(context.Background())
+	return &jetStreamSyncBus{js: js, cfg: cfg, topics: make(map[string]*topicFanout), setupCtx: lifetimeCtx, cancelSetup: cancelSetup}, nil
 }
 
 func (b *jetStreamSyncBus) Publish(msg *fsyncbus.SyncMsg) error {
@@ -212,100 +218,187 @@ func (b *jetStreamSyncBus) subscribe(topic string, handler fsyncbus.Handler, liv
 	if handler == nil {
 		return nil, fmt.Errorf("jetstream sync: handler is nil")
 	}
-	cfg := b.cfg
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	// 停止开始后不再建消费者：它的投递都会被准入拒绝、一轮轮 NAK 到 MaxDeliver。
-	if b.deliveries.Stopping() {
-		return nil, fmt.Errorf("jetstream sync: bus is stopping or stopped")
-	}
 	fanoutKey, durableTopic, policy := topic, topic, fnats.JetStreamDeliverAll
 	if live {
 		fanoutKey, durableTopic, policy = topic+"\x00live", topic+".live", fnats.JetStreamDeliverNew
 	}
-	fanout := b.topics[fanoutKey]
-	if fanout == nil {
-		// First local subscriber: create the topic's one durable consumer.
-		// Its handler dispatches to whatever local subscriptions are registered
-		// at delivery time, so later subscribers only need to register.
-		fanout = &topicFanout{locals: make(map[uint64]*fsyncbus.Subscription)}
-		name := durableSyncName(cfg.Prefix, durableTopic, cfg.LocalSid)
-		ctx, cancel := context.WithTimeout(fctx.BaseContext(), cfg.SetupTimeout)
-		defer cancel()
-		sub, err := b.js.Subscribe(ctx, fnats.JetStreamConsumerConfig{
-			Stream:        cfg.Stream,
-			Name:          name,
-			Durable:       name,
-			FilterSubject: b.subject(topic),
-			DeliverPolicy: policy,
-			AckWait:       cfg.AckWait,
-			MaxDeliver:    cfg.MaxDeliver,
-		}, func(_ context.Context, raw *fnats.JetStreamMsg) error {
-			if raw == nil {
-				return nil
-			}
-			if !b.deliveries.Begin() {
-				return errJetStreamSyncStopping
-			}
-			defer b.deliveries.End()
-			var msg fsyncbus.SyncMsg
-			if err := json.Unmarshal(raw.Data, &msg); err != nil {
-				slog.Warn("jetstream sync: unmarshal failed", "topic", topic, "err", err)
-				return nil
-			}
-			if msg.FromSid == cfg.LocalSid {
-				return nil
-			}
-			b.mu.Lock()
-			locals := fanout.snapshot()
+	b.mu.Lock()
+	if b.deliveries.Stopping() {
+		b.mu.Unlock()
+		return nil, errJetStreamSyncStopping
+	}
+	f := b.topics[fanoutKey]
+	create := f == nil
+	if create {
+		if !b.consumers.Begin() {
 			b.mu.Unlock()
-			for _, local := range locals {
-				// Each handler owns its copy: the plain bus hands every
-				// subscriber its own message and a handler may mutate it.
-				own := msg
-				own.Data = append([]byte(nil), msg.Data...)
-				b.invoke(local, &own)
-			}
-			return nil
-		})
+			return nil, errJetStreamSyncStopping
+		}
+		f = &topicFanout{locals: make(map[uint64]*fsyncbus.Subscription), ready: make(chan struct{})}
+		b.topics[fanoutKey] = f
+	} else {
+		if f.retiring {
+			b.mu.Unlock()
+			return nil, fsyncbus.ErrSubscriptionBusy
+		}
+		select {
+		case <-f.ready:
+		default:
+			b.mu.Unlock()
+			return nil, fsyncbus.ErrSubscriptionBusy
+		}
+	}
+	// 先登记接收者，再开启消费；Subscribe 返回前到达的回调也有明确的准入目标。
+	f.nextID++
+	id := f.nextID
+	local := fsyncbus.NewSubscription(topic, handler, func() {
+		b.mu.Lock()
+		delete(f.locals, id)
+		retire := len(f.locals) == 0 && !f.retiring
+		if retire {
+			f.retiring = true
+			f.calls.Stop()
+		}
+		b.mu.Unlock()
+		if retire {
+			b.retire(fanoutKey, f)
+		}
+	})
+	f.locals[id] = local
+	b.mu.Unlock()
+	if !create {
+		return local, nil
+	}
+	cfg := b.cfg
+	name := durableSyncName(cfg.Prefix, durableTopic, cfg.LocalSid)
+	ctx, cancel := context.WithTimeout(b.setupCtx, cfg.SetupTimeout)
+	defer cancel()
+	sub, err := b.js.Subscribe(ctx, fnats.JetStreamConsumerConfig{
+		Stream: cfg.Stream, Name: name, Durable: name, FilterSubject: b.subject(topic), DeliverPolicy: policy,
+		AckWait: cfg.AckWait, MaxDeliver: cfg.MaxDeliver,
+		// RR-25：保留总次数上限，空窗在飞消息退避；不改变 RPC/Remote 的重试策略。
+		NakBackoffMin: time.Second, NakBackoffMax: max(time.Second, cfg.AckWait),
+	}, func(_ context.Context, raw *fnats.JetStreamMsg) error { return b.deliver(f, topic, raw) })
+	if err == nil && sub == nil {
+		err = errors.New("jetstream sync: transport returned a nil subscription")
+	}
+	b.mu.Lock()
+	f.sub = sub
+	close(f.ready)
+	retire := (err != nil || b.deliveries.Stopping()) && !f.retiring
+	if retire {
+		f.retiring = true
+		f.calls.Stop()
+	}
+	stopped := f.retiring
+	b.mu.Unlock()
+	if retire {
+		b.retire(fanoutKey, f)
+	}
+	if err != nil || stopped {
+		_ = local.Unsubscribe(ctx)
 		if err != nil {
 			return nil, err
 		}
-		fanout.sub = sub
-		b.topics[fanoutKey] = fanout
+		return nil, errJetStreamSyncStopping
 	}
-	fanout.nextID++
-	id := fanout.nextID
-	local := fsyncbus.NewSubscription(topic, handler, func() {
-		b.mu.Lock()
-		delete(fanout.locals, id)
-		var stop fnats.IJetStreamSubscription
-		if len(fanout.locals) == 0 && b.topics[fanoutKey] == fanout {
-			delete(b.topics, fanoutKey)
-			stop = fanout.sub
-		}
-		b.mu.Unlock()
-		if stop != nil {
-			stop.Stop() // the last local subscriber releases the shared consumer
-		}
-	})
-	fanout.locals[id] = local
 	return local, nil
 }
 
-// invoke runs one local subscription with the bus's existing error contract
-// (log and continue) plus panic isolation, so one subscriber cannot take the
-// delivery away from its siblings. A subscription that is unsubscribing
-// skips the message (fsyncbus.ErrUnsubscribed).
-func (b *jetStreamSyncBus) invoke(local *fsyncbus.Subscription, msg *fsyncbus.SyncMsg) {
+// retire 每代只发起一次。release 不能等待自身 handler；若尚未排空，由一个退役者接续。
+// Closed 之外还等自己的回调计数，避免替身或底层提前报告 Closed 时与下一代重叠。
+func (b *jetStreamSyncBus) retire(key string, f *topicFanout) {
+	finish := func() {
+		b.mu.Lock()
+		if b.topics[key] == f {
+			delete(b.topics, key)
+		}
+		b.mu.Unlock()
+		b.consumers.End()
+	}
+	stop := func() {
+		if f.sub != nil {
+			f.sub.Stop()
+		}
+		idle := f.calls.Stop()
+		var closed <-chan struct{}
+		if f.sub != nil {
+			closed = f.sub.Closed()
+		} else {
+			closed = idle
+		}
+		select {
+		case <-closed:
+			select {
+			case <-idle:
+				finish()
+				return
+			default:
+			}
+		default:
+		}
+		go func() { <-closed; <-idle; finish() }()
+	}
+	select {
+	case <-f.ready:
+		stop()
+	default:
+		go func() { <-f.ready; stop() }()
+	}
+}
+
+func (b *jetStreamSyncBus) deliver(f *topicFanout, topic string, raw *fnats.JetStreamMsg) error {
+	if raw == nil {
+		return nil
+	}
+	if !b.deliveries.Begin() {
+		return errJetStreamSyncStopping
+	}
+	defer b.deliveries.End()
+	b.mu.Lock()
+	if !f.calls.Begin() {
+		b.mu.Unlock()
+		return errJetStreamSyncStopping
+	}
+	locals := f.snapshot()
+	b.mu.Unlock()
+	defer f.calls.End()
+	var msg fsyncbus.SyncMsg
+	if err := json.Unmarshal(raw.Data, &msg); err != nil {
+		slog.Warn("jetstream sync: unmarshal failed", "topic", topic, "err", err)
+		return nil
+	}
+	if msg.FromSid == b.cfg.LocalSid {
+		return nil
+	}
+	accepted := false
+	for _, local := range locals {
+		own := msg
+		own.Data = append([]byte(nil), msg.Data...)
+		if b.invoke(local, &own) {
+			accepted = true
+		}
+	}
+	if !accepted {
+		return errJetStreamSyncStopping
+	}
+	return nil
+}
+
+// invoke 返回实际准入结果；业务错误和 panic 沿用记录后继续的策略，不能据此重投给兄弟订阅。
+func (b *jetStreamSyncBus) invoke(local *fsyncbus.Subscription, msg *fsyncbus.SyncMsg) (accepted bool) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			accepted = true // TryDeliver 只在进入 handler 后传播其 panic，仍沿用记录并 ACK 的策略。
 			slog.Error("jetstream sync: handler panic", "topic", local.Topic(), "key", msg.Key, "version", msg.Version, "panic", recovered)
 		}
 	}()
-	if err := local.Deliver(fctx.BaseContext(), msg); err != nil && !errors.Is(err, fsyncbus.ErrUnsubscribed) {
+	var err error
+	accepted, err = local.TryDeliver(fctx.BaseContext(), msg)
+	if accepted && err != nil {
 		slog.Warn("jetstream sync: handler error", "topic", local.Topic(), "key", msg.Key, "version", msg.Version, "err", err)
 	}
+	return accepted
 }
 
 // Stop 是不限时的 StopWithContext，给没有停机预算的调用方。
@@ -315,7 +408,7 @@ func (b *jetStreamSyncBus) Stop() {
 
 // StopWithContext 按三步停机（RR-20261005-NC-172）：
 //  1. 关闭投递准入并停掉全部订阅（幂等；之后到达的投递返回 errJetStreamSyncStopping，由 broker 重投）；
-//  2. 在 ctx 内等已准入的 consume 回调返回，超时返回 ctx 错误，重试再等同一批；
+//  2. 在 ctx 内等创建收尾、consumer Closed 和已准入回调，超时保留旧代，重试继续等同一批；
 //  3. 返回 nil 之后调用方才能释放总线与它下面的 NATS 连接（kit SyncBusMod 出错时保留总线）。
 //
 // 不配合的 handler 不会被终止。这里等的是传输自己的 consume 回调（交还连接的前提）；单个订阅的排空
@@ -328,22 +421,27 @@ func (b *jetStreamSyncBus) StopWithContext(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	b.deliveries.Stop()
+	b.cancelSetup()
 	b.stopSubscriptions()
+	if err := b.consumers.Wait(ctx); err != nil {
+		return err
+	}
 	return b.deliveries.Wait(ctx)
 }
 
 func (b *jetStreamSyncBus) stopSubscriptions() {
 	b.mu.Lock()
-	subs := make([]fnats.IJetStreamSubscription, 0, len(b.topics))
-	for _, fanout := range b.topics {
-		if fanout != nil && fanout.sub != nil {
-			subs = append(subs, fanout.sub)
+	retiring := make(map[string]*topicFanout)
+	for key, f := range b.topics {
+		if !f.retiring {
+			f.retiring = true
+			f.calls.Stop()
+			retiring[key] = f
 		}
 	}
-	b.topics = make(map[string]*topicFanout)
 	b.mu.Unlock()
-	for _, sub := range subs {
-		sub.Stop()
+	for key, f := range retiring {
+		b.retire(key, f)
 	}
 }
 

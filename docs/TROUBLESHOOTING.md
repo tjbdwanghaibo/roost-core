@@ -2,6 +2,7 @@
 
 | 编号 | 现象 | 原因 | 看哪里 | 处置 |
 | --- | --- | --- | --- | --- |
+| T-309 | JetStream SyncBus退订重订时暂时返回ErrSubscriptionBusy，或消息达到投递上限后停止重投 | v1.23.1起旧consumer真实Closed与在途回调排空前不允许新代重叠；MaxDeliver仍包含首次投递，默认5 | 查consumer的投递次数、MSG_TERMINATED advisory与对应stream sequence，核对是否有长期阻塞handler | 在旧代退出后重试订阅，不在Nest快池忙等；到限按所属业务快照/账本恢复，不删durable或重发绕过次数。见[RR-25恢复入口](bugfix/RR-20261008-25.md) |
 | T-308 | 直接调 `remoteentity.Assemble` 的进程启动失败：`remote_entity: snapshot_interest_ttl must be positive`（或 `snapshot_load_timeout` / `snapshot_l2_ttl` / `snapshot cache ttl` / `snapshot_interest_per_consumer`） | v1.23.1 起 owner 装配与只读装配用同一套快照段校验（RR-20261006-71）；之前 `SnapshotInterestTTL=0` 被静默接受，兴趣一律被拒、owner 永不推送 | 错误点名的 `Config` 字段；是否从 `DefaultConfig()` 起步 | 从 `remoteentity.DefaultConfig()` 起步再改需要的字段；kit 装配不受影响 |
 | T-307 | 死信按 `module` / `msg` 查不到，`bus_dead_letter_total` / `bus_dispatch_drop_total` 出现 `module="_unregistered"` | v1.23.1 起对端发来本进程没注册的 `(module, msg)` 统一记为 `_unregistered`，死信也进 `_unregistered:_unregistered` 桶（RR-20261006-72）；之前每个陌生名字一组指标序列、一个 Redis 列表 | `bus.dlq.list module=_unregistered msg=_unregistered`，条目里的 `ToModule` / `MsgName` 是原名 | 查发送方版本 / 错发；部署对应 handler 后可从 `_unregistered` 桶重投（按原名发回） |
 | T-306 | 两端都配 `nats.rpc.transport: jetstream`，经生成的 ClientMod 调用服务仍报 `bus: lightweight rpc was stored by a jetstream stream` | core ≤ v1.23.0 生成的 ClientMod 不读 transport，总走轻量传输（RR-20261006-74） | 调用方进程的生成文件 `*_rpc_assembly_gen.go` 里 `ClientMod.Init` 有没有 `OptionsFromConfig` | 升级 core 并重新生成；临时可在 `NewClientMod(servicerpc.WithTransport(servicerpc.TransportJetStream))` 显式指定 |
