@@ -40,7 +40,7 @@ func TestPacketKindsAndGolden(t *testing.T) {
 func TestPacketRefusesBadHeaderBeforeReadingPayload(t *testing.T) {
 	header, _ := (Header{MsgID: 42, Seq: 1, PayloadSize: 4}).Encode(4)
 	for name, change := range map[string]func([]byte){
-		"old_version": func(b []byte) { b[2] = 1 }, "lockstep": func(b []byte) { b[3] = FlagLockstep },
+		"old_version": func(b []byte) { b[2] = 1 }, "control_lockstep": func(b []byte) { clear(b[4:8]); b[3] = FlagLockstep },
 		"reserved_kind": func(b []byte) { b[3] = 6 }, "unknown_flag": func(b []byte) { b[3] = 0x80 },
 		"control_sync": func(b []byte) { clear(b[4:8]); b[3] = FlagSync },
 		"oversized":    func(b []byte) { b[15] = 5 },

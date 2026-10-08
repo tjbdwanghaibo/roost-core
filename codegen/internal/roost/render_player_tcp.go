@@ -142,6 +142,7 @@ const (
 	protocolVersion byte = wire.Version
 	flagServerPush byte = wire.FlagPush
 	flagSync byte = wire.FlagSync
+ flagLockstep byte = wire.FlagLockstep
 	maxPooledPayload = 64 << 10
 	hardMaxPayload = 16 << 20
 	hardMaxConnections = 1000000
@@ -168,7 +169,7 @@ var (
 // message_id[4], sequence[4], payload_length[4], payload. Message ID 0 is the
 // authentication handshake before authentication, and an empty heartbeat after it.
 // Heartbeats receive an empty ACK with the same sequence; all business messages require a non-zero ID.
-// flags bit0 is push; bits1..2 select PB=0, Sync=1, Lockstep=2 (reserved).
+// flags bit0 is push; bits1..2 select PB=0, Sync=1, Lockstep=2.
 // The shared wire codec rejects unsupported kinds before payload allocation.
 type frame struct {
 	flags byte
@@ -616,6 +617,18 @@ func (runtime *Runtime) PushSyncSession(ctx context.Context, sessionID string, m
  return server.pushSessionKind(ctx,sessionID,messageID,payload,flagSync)
 }
 
+// PushLockstepSession发送既有C7广播或追帧页，不能与PB encoder混用。
+func (runtime *Runtime) PushLockstepSession(ctx context.Context, sessionID string, messageID uint32, payload []byte) error {
+ if runtime == nil {return ErrTransportUnavailable}; server:=runtime.server.Load()
+ if server == nil {return ErrTransportUnavailable}
+ return server.pushSessionKind(ctx,sessionID,messageID,payload,flagLockstep)
+}
+func (runtime *Runtime) PushLockstepPlayer(ctx context.Context, playerID int64, messageID uint32, payload []byte) error {
+ if runtime == nil {return ErrTransportUnavailable}; server:=runtime.server.Load()
+ if server == nil {return ErrTransportUnavailable}
+ return server.pushPlayerKind(ctx,playerID,messageID,payload,flagLockstep)
+}
+
 func (runtime *Runtime) PushSession(ctx context.Context, sessionID string, messageID uint32, value any) error {
 	if runtime == nil || runtime.protocols == nil { return ErrTransportUnavailable }
 	server := runtime.server.Load()
@@ -854,14 +867,14 @@ func (server *Server) serveConnection(connection net.Conn) {
 		if err := connection.SetReadDeadline(time.Now().Add(server.config.IdleTimeout)); err != nil { return }
 		request, releasePayload, err := server.readFrame(connection)
 		if err != nil { if !errors.Is(err, io.EOF) { metrics.IncCounter("player_tcp_frame_error_total", nil, 1) }; return }
-		if request.flags != 0 || request.sequence == 0 || int32(request.sequence-lastSequence) <= 0 {
+		if (request.flags != 0 && request.flags != flagLockstep) || request.sequence == 0 || int32(request.sequence-lastSequence) <= 0 {
 			metrics.IncCounter("player_tcp_frame_error_total", nil, 1); releasePayload(); return
 		}
 		lastSequence = request.sequence
         // 心跳也消耗令牌，防止保活帧绕过每连接限流；同一读循环内保持顺序。
         if limiter!=nil && !limiter.Allow() {metrics.IncCounter("player_tcp_rate_limited_total",nil,1);releasePayload();return}
         if request.messageID==0 {
-            valid:=server.config.HeartbeatEnabled && len(request.payload)==0
+            valid:=request.flags==0 && server.config.HeartbeatEnabled && len(request.payload)==0
             releasePayload()
             if !valid {metrics.IncCounter("player_tcp_frame_error_total",nil,1);return}
             if err:=session.writeFrame(connectionCtx,0,0,request.sequence,nil);err!=nil{return}
@@ -877,7 +890,7 @@ func (server *Server) serveConnection(connection net.Conn) {
 		// admitted is not undone by it.
 		dispatchStarted := time.Now()
 		dispatchCtx, cancelDispatch := context.WithTimeout(connectionCtx, server.config.DispatchTimeout)
-		response, dispatchErr := server.runtime.Protocols.Dispatch(dispatchCtx, session, request.messageID, request.sequence, request.payload)
+		response, dispatchErr := server.runtime.Protocols.DispatchPayload(dispatchCtx, session, request.messageID, request.sequence, wire.PayloadKind((request.flags>>1)&3), request.payload)
 		overBudget := errors.Is(dispatchCtx.Err(), context.DeadlineExceeded)
 		cancelDispatch()
 		metrics.ObserveDuration("player_tcp_dispatch_duration", nil, time.Since(dispatchStarted))

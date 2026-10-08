@@ -1,0 +1,55 @@
+{
+  "normalization": "CRLF to LF, tabs to four spaces, trim line-end whitespace; preserve all result/message text",
+  "records": [
+    {
+      "file": "baseline-kcp.txt",
+      "rawSHA256": "5f4cb693b1e145d4141e008d2968428b384e5388164baf70eea5f386392dff12",
+      "normalizedSHA256": "06abb1d0832bb8dca970d3ec6bef73341cc391f8b4206f0c6a9f531d47080739"
+    },
+    {
+      "file": "baseline-kitconfig.txt",
+      "rawSHA256": "824ac9b3f3bc42784f8226d6884519d788af07e0aec672ed1cd0208708ffd35c",
+      "normalizedSHA256": "373fc96ee36d435291ec3f740a9d4341bd8bbbf3d90280ecd79e3aafb8e93bfb"
+    },
+    {
+      "file": "baseline-mirror.txt",
+      "rawSHA256": "68b26d06676590abb81dfeb143fbb77a9465d3a13a0a8ecb042b09a5c1411433",
+      "normalizedSHA256": "7fd5c6f54a9e785d2f6b45fa198e269f66a09142c8b51f5eae10488ea96a85d9"
+    },
+    {
+      "file": "baseline-other.txt",
+      "rawSHA256": "b3bad686b708802229b201c5f71cf2e57a964259d7653c82d0e298aeceeecd72",
+      "normalizedSHA256": "a1e8830d2c3bced1d4589492126754c3f4933ae27afec50326c923ed24b1c2a6"
+    },
+    {
+      "file": "command-green.txt",
+      "rawSHA256": "dcd16cc37e5773c80fd762880c1e2874754d370da15e75ac6e8991bd3d9525db",
+      "normalizedSHA256": "a62de5ae9f245e816372a2c92ac3dd5ef19fdc3e7d8e3750d83862144af5c4de"
+    },
+    {
+      "file": "fast-red.txt",
+      "rawSHA256": "ab0b0dfc57f93299654752b787b8728d32bea45da4ce01b816b0f9c8895feb2a",
+      "normalizedSHA256": "c2bc4b4aea5f792a2264c69b677edbc89285c8efc65e77cee2d836528da3d603"
+    },
+    {
+      "file": "full-final.txt",
+      "rawSHA256": "5d5d808be731a6d47186f3ad631fa0c2a3f030ecc03efc54abf749904bb394c6",
+      "normalizedSHA256": "e92cd395388e14b187970bea2fe294188f8ce93b02ca33426136898af1df4189"
+    },
+    {
+      "file": "generated-accepted.txt",
+      "rawSHA256": "d0f7200271e26444275f38bfe7e54e7f4418df650159201f542006603804a5de",
+      "normalizedSHA256": "d36313c7ccf4e3d47fe1e514a3bf9ba4656ade65f6b10cc137ce00ce6222c8d6"
+    },
+    {
+      "file": "race-cancel-observed.txt",
+      "rawSHA256": "9d0dac7736516efb7bcd29b805c86b87652d1b426b8d26bd21bea4d1807d10e3",
+      "normalizedSHA256": "7f7021b549cec19056836a60412e026aeba1a2ed7fddb491cf3aa0c68f19f730"
+    },
+    {
+      "file": "race-repeat.txt",
+      "rawSHA256": "ce80563ced81cac7da77b60f568990da2eedfdb465aadaac9143cc5b5cd024c6",
+      "normalizedSHA256": "00bd7784774969015356408a5a1dc78c5aebdb3e8081a7b8fea407f3900e077a"
+    }
+  ]
+}

@@ -73,8 +73,22 @@ namespace Roost.Client
         public async Task<Packet> RequestAsync(uint messageId, uint responseId, ReadOnlyMemory<byte> payload,
             TimeSpan timeout, CancellationToken cancellation = default)
         {
+            return (await SendAsync(messageId, PayloadKind.Protobuf, payload, timeout, cancellation, new Pending(responseId)).ConfigureAwait(false))!;
+        }
+
+        // Notify完成只表示写出；与Request共享序列、发送锁和容量，禁止自动重试输入。
+        public async Task NotifyAsync(uint messageId, PayloadKind kind, ReadOnlyMemory<byte> payload,
+            TimeSpan timeout, CancellationToken cancellation = default)
+        {
+            if (messageId == 0 || (kind != PayloadKind.Protobuf && kind != PayloadKind.Lockstep))
+                throw new ArgumentException("Notify requires a PB/Lockstep business route.");
+            await SendAsync(messageId, kind, payload, timeout, cancellation, null).ConfigureAwait(false);
+        }
+
+        private async Task<Packet?> SendAsync(uint messageId, PayloadKind kind, ReadOnlyMemory<byte> payload,
+            TimeSpan timeout, CancellationToken cancellation, Pending? item)
+        {
             ValidateTimeout(timeout);
-            Pending item = new Pending(responseId);
             uint sequence = 0;
             lock (gate)
             {
@@ -88,7 +102,7 @@ namespace Roost.Client
                 try
                 {
                     // 先编码，坏输入不会写出半包或关闭健康连接。
-                    byte[] data = PacketCodec.Encode(new Packet(messageId, 0, payload), maxPayload);
+                    byte[] data = PacketCodec.Encode(new Packet(messageId, 0, payload, kind), maxPayload);
                     await send.WaitAsync(budget.Token).ConfigureAwait(false);
                     bool writing = false;
                     try
@@ -99,7 +113,7 @@ namespace Roost.Client
                             if (closed != null) throw new IOException("Session closed.", closed);
                             // 序列在发送锁内分配，顺序就是线上顺序；并发调用不能先发seq2再发seq1。
                             do { sequence = ++nextSequence; } while (sequence == 0 || pending.ContainsKey(sequence));
-                            pending.Add(sequence, item);
+                            if (item != null) pending.Add(sequence, item);
                         }
                         System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(8, 4), sequence);
                         // 写期间取消可能留下半包，保守关闭整个连接；等待应答期间取消不关连接。
@@ -109,6 +123,7 @@ namespace Roost.Client
                     }
                     catch (Exception error) { if (writing) Close(error); throw; }
                     finally { send.Release(); }
+                    if (item == null) return null;
                     using (budget.Token.Register(() => item.Result.TrySetCanceled()))
                         return await item.Result.Task.ConfigureAwait(false);
                 }
@@ -116,7 +131,7 @@ namespace Roost.Client
                 {
                     lock (gate) { if (sequence != 0) pending.Remove(sequence); inFlight--; }
                     // 发送失败已经抛给调用者；关闭同时失败的TCS也要观察，避免遗留未观察任务异常。
-                    if (item.Result.Task.IsFaulted) _ = item.Result.Task.Exception;
+                    if (item != null && item.Result.Task.IsFaulted) _ = item.Result.Task.Exception;
                 }
             }
         }

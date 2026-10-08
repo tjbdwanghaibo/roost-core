@@ -1,0 +1,8 @@
+--- FAIL: TestLockstepEndToEndGate (3.03s)
+    e2e_gate_test.go:499: payload 367B, max broadcast 1116B, main run 3.0002847s, max Tick 5.3895ms, stalls 2, A drops 7 catchups 1, bot drops 5
+    e2e_gate_test.go:537: robot: robot lockstep: submit input for frame 302: context canceled
+FAIL
+FAIL    github.com/tjbdwanghaibo/roost-core/sync/lockstep    4.557s
+ok      github.com/tjbdwanghaibo/roost-core/client/wire    1.737s
+ok      github.com/tjbdwanghaibo/roost-core/robot    3.027s
+FAIL

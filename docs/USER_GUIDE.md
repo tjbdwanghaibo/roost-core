@@ -1,5 +1,7 @@
 # Roost 开发者完整使用说明
 
+**2026-10-08 Lockstep客户端接线（main未发版）：**RS v2启用类型2（上行4、push5），正式ProtocolRegistry/生成TCP已接线，复用Room/C7广播与历史追帧；C#提供Command、有界Assembler与主线程模拟消费。没有旧包兼容，不代表Unity/Godot/Unreal实机、UDP性能或游戏确定性已验收。[接入说明](../client/README.md) · [实施/验证](feature/IMPLEMENTATION-2026-10-08-CLIENT-LOCKSTEP.md)。下方10-07“预留”保留历史时点。
+
 **2026-10-07 客户端协议（main，未发版）：**player TCP、robot和demo loadtest统一RS v2大端16字节头。flags bit0=推送、bits1..2为PB/Sync/Lockstep；Lockstep后续做，当前拒绝。scene改用raw Sync，类型标记不授予客户端修改权威状态的权限；旧包格式不兼容。新增纯C# TCP/解码库及Unity主线程适配源码，真实引擎验证与复制状态应用尚未实施。[客户端接入](../client/README.md) · [方案/验证](feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)。
 
 > 框架整体的说明与实现见 [框架文档](framework/README.md)（基准 v1.23.0）；内容冲突以框架文档与源码为准。
@@ -473,7 +475,7 @@ game-demo 在 game 服务的三份配置里把 `gift_item.debit.max_attempts` �
 
 状态同步适合 ARPG/MMO/大多数房间服：服务器权威模拟，默认周期 20 Hz 检查变化，也可配置 on_change 在事务准入时锁内冻结、解锁并确认提交后唤醒发送，按 AOI/LOD 给不同客户端裁剪字段；EntitySync 的基线、增量和 remove 全部走可靠有序通道。技能的权威结果进入状态 mutation，施法表现、音效和轨迹进入 presentation event，因此能覆盖技能游戏而不要求把所有表现塞进 Entity snapshot。
 
-Lockstep 适合客户端确定性模拟的 MOBA/RTS：服务器排序输入帧、保存历史、冗余广播和校验 hash，不运行完整战斗模拟。追帧走可靠通道，实时输入走 datagram。客户端算法、定点数、随机种子、配置 hash 必须一致。
+Lockstep 适合客户端确定性模拟的 MOBA/RTS：服务器排序输入帧、保存历史、冗余广播和校验 hash，不运行完整战斗模拟。原实时广播走 datagram、历史追帧走可靠通道；客户端RS v2接入可用TCPSender将两者发送为原始Lockstep push，这一可靠TCP回退有队头阻塞，不是UDP性能保证。客户端算法、定点数、随机种子、配置 hash 必须一致。
 
 每会话默认 MaxObjects=100，每 subject 默认最多1024个订阅者；Manager 没有单房间模型。20 Hz 是调度目标，不代表所有字段每帧发送；用 interest、LOD、dirty delta、量化和 baseline ACK 控制带宽。慢客户端只能影响自己的 session。
 

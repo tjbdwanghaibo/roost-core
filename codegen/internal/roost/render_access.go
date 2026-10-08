@@ -20,6 +20,7 @@ import (
  "runtime/debug"
 
 	"github.com/tjbdwanghaibo/roost-core/gateway"
+ "github.com/tjbdwanghaibo/roost-core/client/wire"
 )
 
 var (
@@ -60,6 +61,7 @@ type HandlerFunc func(*Context, any) (any, error)
 type Middleware func(HandlerFunc) HandlerFunc
 
 type ProtocolDef struct {
+ PayloadKind wire.PayloadKind
 	ReqID      uint32
 	RespID     uint32
 	DecodeReq  Decoder
@@ -165,7 +167,11 @@ func (registry *ProtocolRegistry) Register(definition ProtocolDef) error {
 	if registry == nil {
 		return errors.New("player access: protocol registry is nil")
 	}
-	if definition.ReqID == 0 || definition.DecodeReq == nil || definition.Handler == nil {
+	// Lockstep使用Notify；Sync上行仍无客户端写权。PB的零值保持原注册行为。
+ if definition.PayloadKind != wire.PayloadProtobuf && definition.PayloadKind != wire.PayloadLockstep || definition.PayloadKind == wire.PayloadLockstep && definition.RespID != 0 {
+  return fmt.Errorf("player access: unsupported payload kind/response")
+ }
+ if definition.ReqID == 0 || definition.DecodeReq == nil || definition.Handler == nil {
 		return fmt.Errorf("player access: protocol %d requires request id, decoder and handler", definition.ReqID)
 	}
 	if definition.RespID != 0 && definition.EncodeResp == nil {
@@ -227,6 +233,11 @@ func (registry *ProtocolRegistry) Encode(messageID uint32, value any) ([]byte, e
 // Dispatch runs one authenticated request. It returns encoded bytes instead
 // of writing a socket so transports remain application-owned and testable.
 func (registry *ProtocolRegistry) Dispatch(ctx context.Context, session gateway.Session, messageID, sequence uint32, payload []byte) (*Response, error) {
+ return registry.DispatchPayload(ctx,session,messageID,sequence,wire.PayloadProtobuf,payload)
+}
+
+// DispatchPayload在decoder和业务handler之前检查路由类型；沿用鉴权、Seal与middleware。
+func (registry *ProtocolRegistry) DispatchPayload(ctx context.Context, session gateway.Session, messageID, sequence uint32, kind wire.PayloadKind, payload []byte) (*Response, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("%w: registry is nil", ErrProtocolNotFound)
 	}
@@ -257,7 +268,8 @@ func (registry *ProtocolRegistry) Dispatch(ctx context.Context, session gateway.
 	if !exists {
 		return nil, fmt.Errorf("%w: %d", ErrProtocolNotFound, messageID)
 	}
-	request, err := definition.DecodeReq(payload)
+	if kind != definition.PayloadKind {return nil,fmt.Errorf("player access: payload kind mismatch for %d",messageID)}
+ request, err := definition.DecodeReq(payload)
 	if err != nil {
 		return nil, fmt.Errorf("player access: decode request %d: %w", messageID, err)
 	}
@@ -314,11 +326,16 @@ func RegisterProtocol[Request any, ResponseValue any](
 }
 
 func RegisterNotify[Request any](registry *ProtocolRegistry, requestID uint32, decode func([]byte) (Request, error), handler func(*Context, Request) error) error {
+ return RegisterPayloadNotify(registry,requestID,wire.PayloadProtobuf,decode,handler)
+}
+
+// RegisterPayloadNotify注册原始业务载荷；通过业务Sender转交比赛单所有者。
+func RegisterPayloadNotify[Request any](registry *ProtocolRegistry, requestID uint32, kind wire.PayloadKind, decode func([]byte) (Request, error), handler func(*Context, Request) error) error {
 	if decode == nil || handler == nil {
 		return fmt.Errorf("player access: incomplete typed notify %d", requestID)
 	}
 	return registry.Register(ProtocolDef{
-		ReqID: requestID,
+		ReqID: requestID, PayloadKind: kind,
 		DecodeReq: func(payload []byte) (any, error) { return decode(payload) },
 		Handler: func(ctx *Context, value any) (any, error) {
 			typed, ok := value.(Request)
@@ -392,14 +409,18 @@ type Runtime struct {
 	Nest      corenest.Client
 }
 
+// ProtocolRegistrar在PB bootstrap之后、Seal之前接入原始Notify；错误中止启动。
+type ProtocolRegistrar func(*player_agent.ProtocolRegistry,*app.Registry) error
+
 type Mod struct {
+ registrars []ProtocolRegistrar
 	runtime *Runtime
 	requireWriteGate bool
 }
 
 %s
 
-func NewMod() *Mod { return &Mod{} }
+func NewMod(registrars ...ProtocolRegistrar) *Mod { return &Mod{registrars:append([]ProtocolRegistrar(nil),registrars...)} }
 func (*Mod) Name() app.ModName { return Name }
 func (*Mod) DependsOn() []app.ModName { return []app.ModName{"nest"} }
 func (*Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(accessConfig{}) }
@@ -429,6 +450,7 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 	if err := protocolbootstrap.RegisterPlayerProtocols(protocols, registry); err != nil {
 		return err
 	}
+ for _,register:=range mod.registrars {if register!=nil {if err:=register(protocols,registry);err!=nil{return err}}}
 	if err := protocols.Seal(); err != nil {
 		return err
 	}

@@ -10,8 +10,11 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/sync/lockstep"
+	"strconv"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite shared Go/C# packet golden")
@@ -32,18 +35,37 @@ func TestClientProtocolGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	frames := []lockstep.Frame{{ID: 1, Inputs: []lockstep.Input{{Player: 7, Payload: []byte{8, 42}}, {Player: -1, Payload: []byte{255}}}}, {ID: 2}}
+	hasher := robot.NewFrameHasher()
+	for _, f := range frames {
+		hasher.Fold(f)
+	}
+	commands := []lockstep.Command{{Operation: lockstep.OpInput, Frame: 1, Payload: []byte{8, 42}}, {Operation: lockstep.OpHash, Frame: 2, Hash: ^uint64(0)}, {Operation: lockstep.OpCatchup, Frame: 1}}
 	packets := []*wire.Packet{{MsgID: 42, Seq: 7, Payload: []byte{8, 150, 1}}, {Flags: wire.FlagPush | wire.FlagSync, MsgID: 10103, Seq: 9, Payload: state}, {MsgID: 0, Seq: 1, Payload: []byte("ticket")}}
+	packets = append(packets, &wire.Packet{Flags: wire.FlagPush | wire.FlagLockstep, MsgID: 50002, Seq: 10, Payload: lockstep.EncodeBroadcast(frames)})
+	for _, c := range commands {
+		data, err := lockstep.EncodeCommand(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		packets = append(packets, &wire.Packet{Flags: wire.FlagLockstep, MsgID: 50001, Seq: 11, Payload: data})
+	}
 	type golden struct {
 		Name string `json:"name"`
 		Hex  string `json:"hex"`
+		Hash string `json:"hash,omitempty"`
 	}
 	want := []golden{}
-	for i, name := range []string{"pb", "sync", "auth"} {
+	for i, name := range []string{"pb", "sync", "auth", "lockstep", "lockstep_input", "lockstep_hash", "lockstep_catchup"} {
 		raw, err := wire.Encode([]*wire.Packet{packets[i]}, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		want = append(want, golden{Name: name, Hex: hex.EncodeToString(raw)})
+		entry := golden{Name: name, Hex: hex.EncodeToString(raw)}
+		if name == "lockstep" {
+			entry.Hash = strconv.FormatUint(hasher.Sum(), 10)
+		}
+		want = append(want, entry)
 	}
 	content, err := json.MarshalIndent(want, "", "  ")
 	if err != nil {

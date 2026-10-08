@@ -8,7 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Roost.Client;
 
-internal static class Program
+internal static partial class Program
 {
     private static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
     private static byte[] RawSync = Array.Empty<byte>();
@@ -28,8 +28,20 @@ internal static class Program
                 var subject = SubjectUpdate.Decode(frame.Objects[0].Components[0].Data);
                 Check(subject.SubjectId == 9007199254740993L && subject.Full && subject.Version == 3 && subject.Namespace == "avatar" && subject.Profile == "owner", "subject 64-bit identity");
             }
+            if (item.GetProperty("name").GetString() == "lockstep")
+            {
+                var frames = LockstepCodec.DecodeBroadcast(packet.Payload.Span);
+                var hash = new LockstepInputHasher(); foreach (var f in frames) hash.Apply(f);
+                Check(hash.Value == ulong.Parse(item.GetProperty("hash").GetString()!), "Go/C# input chain hash");
+                Check(frames.Count == 2 && frames[0].Inputs[1].Player == -1, "Go/C# signed seat");
+            }
+            if (item.GetProperty("name").GetString()!.StartsWith("lockstep_"))
+            {
+                var command = LockstepCommand.Decode(packet.Payload.Span);
+                Check(Convert.ToHexString(command.Encode()) == Convert.ToHexString(packet.Payload.Span), "Go/C# command");
+            }
             Console.WriteLine("PASS golden " + item.GetProperty("name").GetString());
-            foreach (byte flags in new byte[] { 4, 6, 8, 128 })
+            foreach (byte flags in new byte[] { 6, 7, 8, 128 })
             {
                 byte[] bad = (byte[])data.Clone(); bad[3] = flags;
                 Refuses(() => PacketCodec.Decode(bad), "unsupported flags");
@@ -37,13 +49,14 @@ internal static class Program
         }
         Refuses(() => PacketCodec.Decode(new byte[15]), "short header");
         Refuses(() => PacketCodec.Encode(new Packet(1, 1, new byte[5]), 4), "oversized payload");
-        Refuses(() => PacketCodec.Encode(new Packet(1, 1, new byte[0], PayloadKind.Lockstep)), "lockstep deferred");
+        Refuses(() => PacketCodec.Encode(new Packet(1, 1, new byte[0], (PayloadKind)3)), "reserved kind");
         Refuses(() => SyncFrame.Decode(RawSync.AsSpan(0, RawSync.Length - 1)), "truncated sync");
         Console.WriteLine("PASS malformed/limits/lockstep");
+        TestLockstep();
         if (args.Length == 3)
             await GeneratedServer(args[1], int.Parse(args[2]));
         else
-            { await LocalSession(); await Capacity(); }
+            { await LocalSession(); await Capacity(); await LockstepGapRetry(); }
     }
     private static void Refuses(Action run, string why)
     {
@@ -77,6 +90,7 @@ internal static class Program
             await Task.Yield();
         }
         Console.WriteLine("PASS generated TCP auth/PB/concurrent sequence/raw Sync");
+        await GeneratedLockstep(session);
     }
 
     private static async Task LocalSession()
@@ -95,7 +109,10 @@ internal static class Program
             // 同一seq的Sync push不能冒充PB response。
             await Send(stream, new Packet(10103, first.Sequence, RawSync, PayloadKind.Sync, true));
             await Send(stream, new Packet(43, first.Sequence, new byte[] { 8, 7 }));
-            var late = await Read(stream); lateRead.SetResult(true);
+            var notify = await Read(stream);
+            Check(notify.Kind == PayloadKind.Lockstep && notify.Sequence == 3 &&
+                LockstepCommand.Decode(notify.Payload.Span).Operation == LockstepOperation.Input, "Notify type/sequence");
+            var late = await Read(stream); Check(late.Sequence == 4, "PB sequence after Notify"); lateRead.SetResult(true);
             var next = await Read(stream); nextRead.SetResult(true);
             await release.Task; // 由客户端确认取消后才回晚应答，不靠sleep制造时序。
             await Send(stream, new Packet(43, late.Sequence, new byte[] { 8, 9 }));
@@ -109,6 +126,15 @@ internal static class Program
             var reply = await session.RequestAsync(42, 43, new byte[] { 8, 7 }, TimeSpan.FromSeconds(5));
             Check(reply.Sequence == 2 && reply.Payload.Span[1] == 7, "PB reply");
             Check(session.TryDequeuePush(out var push) && push!.Kind == PayloadKind.Sync && push.IsPush, "separate Sync push");
+            using (var alreadyCanceled = new CancellationTokenSource())
+            {
+                alreadyCanceled.Cancel();
+                try { await session.NotifyAsync(50001, PayloadKind.Lockstep, new byte[] { 0xc8, 1, 3, 1 }, TimeSpan.FromSeconds(5), alreadyCanceled.Token); throw new Exception("canceled Notify accepted"); }
+                catch (OperationCanceledException) { }
+                Check(session.CloseReason == null, "prewrite Notify cancellation keeps connection");
+            }
+            await session.NotifyAsync(50001, PayloadKind.Lockstep,
+                new LockstepCommand(LockstepOperation.Input, 1, new byte[] { 42 }).Encode(), TimeSpan.FromSeconds(5));
             using var canceled = new CancellationTokenSource();
             Task<Packet> late = session.RequestAsync(42, 43, new byte[] { 8, 9 }, TimeSpan.FromSeconds(5), canceled.Token);
             await lateRead.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -150,6 +176,8 @@ internal static class Program
             var call = session.RequestAsync(42,43,Array.Empty<byte>(),TimeSpan.FromSeconds(5));
             await firstRead.Task.WaitAsync(TimeSpan.FromSeconds(5));
             try { await session.RequestAsync(42,43,Array.Empty<byte>(),TimeSpan.FromSeconds(5)); throw new Exception("capacity accepted"); }
+            catch (InvalidOperationException) { }
+            try { await session.NotifyAsync(50001,PayloadKind.Lockstep,new byte[]{0xc8,1,3,1},TimeSpan.FromSeconds(5)); throw new Exception("Notify bypassed shared capacity"); }
             catch (InvalidOperationException) { }
             overflow.SetResult(true);
             await session.Completion.WaitAsync(TimeSpan.FromSeconds(5));

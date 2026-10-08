@@ -2,6 +2,8 @@
 
 **当前接手（RR-25有界方案）**：已保留MaxDeliver完成最后确认缺陷并通过真实NATS/race；进入v1.23.1阶段发布验收。下方旧候选/审批阻塞文字保留历史时点；以 [阶段清单](review/STAGE-v1.23.1-CLOSURE-2026-10-08.md) 和发布实现文档为准。
 
+**2026-10-08 Lockstep客户端接线（main已推送e9626354，未发版）：**RS v2启用类型2（上行4、push5），正式ProtocolRegistry/生成TCP已接线，复用Room/C7广播与历史追帧；C#提供Command、有界Assembler与主线程模拟消费。没有旧包兼容，不代表Unity/Godot/Unreal实机、UDP性能或游戏确定性已验收。[接入说明](../client/README.md) · [实施/验证](feature/IMPLEMENTATION-2026-10-08-CLIENT-LOCKSTEP.md)。[验收/全仓基线失败交接](review/REVIEW-2026-10-08-client-lockstep-validation.md)。CBM收尾已刷新至10-08新代际（旧9-30阻塞描述保留历史），相关路径仍按coverage补证。下方10-07“预留”保留历史时点。
+
 **2026-10-08 当前接手入口：**剩余修复B1～B5、B7已提交验收，B6除RR-25已提交，B8已提交a221d224并通过最终pretag。RR-25受自动审批阻塞，候选已移出待合并代码；不计全部完成。逐项见 [v1.23.1实现与验收](release/v1.23.1-IMPLEMENTATION.md)，下方各日期状态是历史记录。未发版。
 
 **10-07 客户端协议第一批（main，未发版）：**统一公共Go wire、正式生成player TCP/探针、robot与demo loadtest；RS v2类型字段区分PB/raw Sync，Lockstep仅预留并拒绝。C# netstandard2.1提供鉴权/并发请求/有界push与Sync解码，Unity提供主线程消费适配源码。[接入](../client/README.md) · [实施、验证和后续边界](feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)。后续业务packer生成、复制状态应用/恢复、Godot .NET、C++/Unreal/GDExtension与真实引擎验证另做；无应答Notify、心跳/TLS尚未加入此C# API。历史review进度保持原口径。
