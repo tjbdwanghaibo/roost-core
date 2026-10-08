@@ -1,5 +1,7 @@
 # Roost 核心优化汇总与 agent 交接
 
+WAL 本批 CBM 已刷新到 `2026-10-08T06:26:11Z`（25615 nodes / 246197 edges）。最终 70 个现存改动 Go/模板路径中 61 个无记录缺口、7 个 testdata 排除、2 个模板部分解析；后两类已用源码补证，具体见本批实现记录。索引刷新后只有文档变更，业务代码仍为已验收的 `53686c05`。
+
 **2026-10-08 WAL 单路径已实施并合入 main（`53686c05`，未发版）：**roost-coding 与本地 Codex skill 已明确未上线阶段不兼容旧逻辑/格式。WAL 固定 codec 7，删除 V1/V2 开关、Mutation 旧字段与独立 nestwal.Committer/Runtime，统一正式 Projector/Assembly；生产 Go 净减 925 行。macOS 全仓 131 包、七目标包 race、生成 game-demo 19 包通过；两套资源夹具生成编译、Linux/arm64 交叉 build 通过。未重跑 Linux 实机、真实资源矩阵或压测。旧 codec 5/6 WAL 明确拒绝，升级先停旧进程并完成需保留数据落库，再用新目录；不会自动清空数据。[说明](release/WAL-SINGLE-PATH-2026-10-08-NOTES.md) · [实现与验收](release/WAL-SINGLE-PATH-2026-10-08-IMPLEMENTATION.md)。下方为此前批次状态。
 
 **2026-10-08 静态 Player 迁移范围定案：**维护者明确跨机迁移全部以已落库数据为准；WAL 只负责保证落库，不参与跨机迁移。跨机本地 WAL 热迁移没有业务需求，不列为未完成项或后续能力建设，不据此扩展实现与验收范围。这是业务范围决定，不改变既有 WAL 落库与恢复职责。

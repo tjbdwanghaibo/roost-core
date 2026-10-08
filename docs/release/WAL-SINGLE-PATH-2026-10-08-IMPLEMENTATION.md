@@ -38,3 +38,7 @@ CBM 基线 2026-10-08T05:39:49Z；72 个已修改 Go/模板路径核对覆盖，
 独立 game-demo 生成 458 文件，replace 到本次检出后 build/vet/test 通过（19 个有测试包，generated-*.log）。另按正式 DAO/Entity 命令生成 DataEngine 和 Remote 两套资源夹具，均编译通过（dataengine-compile.log / remoteflow-compile.log，-run '^$'，不计资源行为通过）。Linux/arm64 全仓交叉 build 通过（linux-build.log）；本轮没有 Linux 实机运行，不以交叉编译冒充运行验收。全仓 go generate 后工作树与已暂存源码完全一致、无新增文件（generate-final.log / generate-diff.log）。最终根包 -count=1 通过 5.919s（root-final.log）。性能测试继续暂停；本次未运行真实资源故障矩阵/跨机/部署，未自动处理旧数据。
 
 新增关键回归：`nestwal/single_format_test.go:17`、`dataengine/engine/single_path_test.go:27`。提交状态以 Git 及核心交接顶部为准，本批不发版。
+
+## 最终索引回填
+
+已合入 main，代码提交 `53686c05`，其后文档提交不改 Go/模板。CBM 项目 `Users-whb-roost-roost-core` 在 main 强制刷新成功，generation `2026-10-08T06:26:11Z`，25615 nodes / 246197 edges，skipped 0，全项目 parse_partial 5。最终检查 70 个现存改动 Go/模板路径：61 个 metadata_match 且无记录缺口、7 个 testdata 按规则排除、2 个模板部分解析（enter_game_test 第127行；guild_ids_test 第169、175行），排除改动与缺口范围均再次直接读取。索引信号不代表全仓完整性证明，原始结果保留在 `artifacts/wal-single-path-20261008/cbm-final.json`。未重启共享 CBM 服务。
