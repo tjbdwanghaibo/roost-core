@@ -37,4 +37,4 @@
 
 macOS 全仓 build/vet/test 通过；Remote/Entity/Kit race ×3 通过。21格私有集群矩阵全部通过（分页与兴趣改动前）；最新 Mirror 全8场景通过（104.164s），最新 E14 精确 SIGKILL/restart 连续3次通过（2.955s）。E14 读取在原 100ms+1.5s 预算内等待负缓存失效，不假定 Start 返回瞬间只读方必已更新。
 
-原始证据根：artifacts/perf/outbox-closure-20261008；矩阵在 artifacts/perf/remote/outbox-closure-20261008-r3。旧失败均保留。正式1h负载和历史逐项收敛仍进行中，不据上述局部验证称整轮已完成。
+原始证据根：artifacts/perf/outbox-closure-20261008；矩阵在 artifacts/perf/remote/outbox-closure-20261008-r3。旧失败均保留。正式1h负载在维护者要求下暂停，已采样240秒、完成14423笔、4520错误、约60.1 TPS，未完成最终核验；见 [中断记录](../review/OUTBOX-PARTIAL-LOAD-2026-10-08.md)。私有依赖已停止，不自动恢复重任务。历史轻量工作按 [收口方案](REFACTOR-2026-10-08-historical-closure.md) 继续，不据上述局部验证称整轮已完成。
