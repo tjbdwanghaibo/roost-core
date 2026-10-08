@@ -8,6 +8,8 @@
 
 结构发现使用codebase-memory项目roost-core；本机generation=2026-10-08T00:23:20Z，落后于发布。对2325个Go路径执行coverage：2297为metadata_changed，28为not_tracked。没有记录缺口不代表完整。图谱旧行号已发生漂移，因此文档不引用其旧行号作当前证据；源码/类型/测试索引全部直接读取当前跟踪文件建立。
 
+文档合入 main 后，已请求对同一路径刷新索引。该次 MCP 调用等待 300 秒后超时，尚未确认新索引完成；不能用发出刷新请求代替完成证据。本文核对结论依赖上面说明的当前源码补证。
+
 核对分三层：版本和目录清点；下表明确契约逐项对照；逐包源码与测试声明定位。第二层是有界关键契约核对，第三层是定位覆盖，均不代表逐函数语义review完成。文档删改不改变程序行为。
 
 ## 2. 已纠正和核实的具体条目
@@ -30,8 +32,8 @@
 | C14 | Codegen最低版 | 最低core仍为v1.23.1 | minimumVersions.Core=v1.24.0；补丁不新增API | [codegen/internal/roost/manifest.go](../../codegen/internal/roost/manifest.go) |
 | C15 | 发布门禁 | pretag没有生成漂移检查 | 脚本包含go generate及干净树检查 | [scripts/pretag.sh](../../scripts/pretag.sh) |
 | C16 | 性能状态 | Remote/Sync仍暂停、旧性能失败作为当前结论 | v1.24.0已补一小时与声明负载；失败样本仍保留 | [docs/maintenance/PERFORMANCE.md](PERFORMANCE.md) |
-| C18 | Skill模块名 | 使用手册把skill包路径写成Go module | Go module为roost-core；skill是其中的包 | [go.mod](../../go.mod)、[修正后的手册](../skill/skill.md) |
 | C17 | 未验证边界 | 需保留本机与跨机/引擎的验收边界 | 环境、平台、时长、模拟范围分别列出 | [docs/maintenance/KNOWN-LIMITS.md](KNOWN-LIMITS.md) |
+| C18 | Skill模块名 | 使用手册把skill包路径写成Go module | Go module为roost-core；skill是其中的包 | [go.mod](../../go.mod)、[修正后的手册](../skill/skill.md) |
 
 ## 3. 各模块结论
 
@@ -57,7 +59,7 @@
 
 可以确认：本轮列出的旧版本状态、关键API/格式、服务目录归属、能力已实现/未验证状态已统一到v1.24.0；当前源码及测试入口可直接跳转。不能确认：整个框架所有行为与全部说明已经由新一轮运行测试穷尽证明。专项Skill/Codegen/客户端手册保留详细使用信息，新增业务接入仍须编译与场景验收。
 
-历史证据保留固定提交链接，正文不再靠“后面补充推翻前面”阅读。性能数据沿用既有发布记录，未重新运行的真实资源与长期验证如实列在KNOWN-LIMITS。v1.24.1实际执行命令及结果在发布实现文档回填。
+历史证据保留固定提交链接，正文不再靠“后面补充推翻前面”阅读。性能数据沿用既有发布记录，未重新运行的真实资源与长期验证如实列在KNOWN-LIMITS。v1.24.1 实际执行的命令及结果见[本版验收记录](../release/v1.24.1-IMPLEMENTATION.md)。
 
 ## 5. 文档清理后的测试接线
 
