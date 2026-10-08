@@ -1,5 +1,7 @@
 # 文档与代码一致性核对
 
+这张表回答“文档中的说法是否有代码依据”。初次学习请先看[入门手册](../GETTING-STARTED.md)；审查某条结论时，再沿表中的链接查看实现。
+
 ## 1. 基准与方法
 
 运行时tag：v1.24.0 = 2fa1c7877b14c77b52e062bedcb3455cef8db0fb。清理前HEAD：9d955fb0df35f082dfc9be24c2f3a4524d437067。清理开始前的git diff v1.24.0 9d955fb0仅包含6份文档的发布回填，没有运行时差异。
@@ -28,6 +30,7 @@
 | C14 | Codegen最低版 | 最低core仍为v1.23.1 | minimumVersions.Core=v1.24.0；补丁不新增API | [codegen/internal/roost/manifest.go](../../codegen/internal/roost/manifest.go) |
 | C15 | 发布门禁 | pretag没有生成漂移检查 | 脚本包含go generate及干净树检查 | [scripts/pretag.sh](../../scripts/pretag.sh) |
 | C16 | 性能状态 | Remote/Sync仍暂停、旧性能失败作为当前结论 | v1.24.0已补一小时与声明负载；失败样本仍保留 | [docs/maintenance/PERFORMANCE.md](PERFORMANCE.md) |
+| C18 | Skill模块名 | 使用手册把skill包路径写成Go module | Go module为roost-core；skill是其中的包 | [go.mod](../../go.mod)、[修正后的手册](../skill/skill.md) |
 | C17 | 未验证边界 | 需保留本机与跨机/引擎的验收边界 | 环境、平台、时长、模拟范围分别列出 | [docs/maintenance/KNOWN-LIMITS.md](KNOWN-LIMITS.md) |
 
 ## 3. 各模块结论
@@ -55,3 +58,7 @@
 可以确认：本轮列出的旧版本状态、关键API/格式、服务目录归属、能力已实现/未验证状态已统一到v1.24.0；当前源码及测试入口可直接跳转。不能确认：整个框架所有行为与全部说明已经由新一轮运行测试穷尽证明。专项Skill/Codegen/客户端手册保留详细使用信息，新增业务接入仍须编译与场景验收。
 
 历史证据保留固定提交链接，正文不再靠“后面补充推翻前面”阅读。性能数据沿用既有发布记录，未重新运行的真实资源与长期验证如实列在KNOWN-LIMITS。v1.24.1实际执行命令及结果在发布实现文档回填。
+
+## 5. 文档清理后的测试接线
+
+删除AI提示词后，原skill/prompt_test.go不能再要求提示词存在。现在由[documentation_test.go](../../skill/documentation_test.go)校验保留的技能手册：至少包含一个完整JSON示例，且实际Parse/Compile通过。这是文档回归测试的迁移，没有修改Skill运行时。

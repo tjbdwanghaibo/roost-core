@@ -2,6 +2,12 @@
 
 运行时代码基准：v1.24.0（2fa1c7877b14c77b52e062bedcb3455cef8db0fb）。[设计与使用](../guide/14-foundation.md)
 
+## 如何阅读
+
+除了核心链路，框架还有集合、索引、网络驱动和游戏AI等工具包。它们各自解决较小的问题。
+
+第一次接入先读本页顶部的“设计与使用”。准备修改代码时，先看下面的约束与流程，再展开源码目录；测试清单用于找到已有用例，不要求从头读完。
+
 ## 1. 实现边界
 
 `ai`、`container`、`etcd`、`index`、`migration`、`misc`、`safemap`、`nats`、`internal/operation`、`internal/rangecontract`、`ownerroute`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
@@ -19,6 +25,9 @@
 若修复并发问题，用可控 barrier/时钟构造修前失败，不能用 sleep 概率通过代替因果证据。停机测试要检查在途回调和依赖释放；持久测试要检查恢复后数据与重复输入。外部系统的真实故障证据单列。
 
 ## 4. 文件、类型与职责定位
+
+<details>
+<summary>需要定位代码时，展开源码文件与类型目录</summary>
 
 ### ai
 
@@ -164,9 +173,14 @@
 | [sharded.go](../../../safemap/sharded.go) | `ShardedSafeMap` |
 | [small.go](../../../safemap/small.go) | `SmallSafeMap` |
 
+</details>
+
 ## 5. 回归入口
 
 下列名字由当前测试源码提取，仅证明存在对应回归入口。执行时以 go test 的实际 PASS/FAIL/SKIP 为准；未启用的真实资源测试不能算通过。常用筛选方向：`Test.*Range`、`Test.*Close`、`Test.*Cancel`、`Test.*Replay`。
+
+<details>
+<summary>准备验证改动时，展开测试目录</summary>
 
 ### ai
 
@@ -272,6 +286,8 @@
 - [fastmap_range_promises_test.go](../../../safemap/fastmap_range_promises_test.go)：`TestFastMapRangeToleratesWritesFromTheCallback`
 - [map_test.go](../../../safemap/map_test.go)：`TestSmallSafeMapContract`、`TestSmallSafeMapBSONV2RoundTrip`、`TestShardedSafeMapContract`、`TestFastMapContract`、`TestFastMapGrowthAndTombstoneReuse`；其余 4 项见文件
 - [range_contract_promises_test.go](../../../safemap/range_contract_promises_test.go)：`TestSafemapRangeContract`
+
+</details>
 
 ## 6. 验收与运维
 

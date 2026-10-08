@@ -1,5 +1,7 @@
 # Skill 阅读与测试指南
 
+阅读准备：先了解 [Skill 的职责与例子](../framework/guide/08-skill.md)；不熟悉DAO、事务、Host等概念时，从 [入门手册](../GETTING-STARTED.md) 开始。本篇保留具体接口与示例，适合在接入或定位问题时查阅。
+
 需要按实现细节学习时，先阅读
 [Skill 当前实现学习手册](skill-implementation-guide.md)；本文件保留为
 日常开发时的快速阅读和测试清单。

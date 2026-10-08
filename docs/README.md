@@ -2,6 +2,8 @@
 
 维护基线：**v1.24.0**；文档整理版：**v1.24.1**。
 
+先读 [第一次认识和使用 Roost](GETTING-STARTED.md)：用一次购买道具解释三大核心，并运行一个不需要数据库的示例。
+
 1. [最终剩余文档清单](maintenance/DOCUMENTS.md)：本目录只保留维护、设计、实现和必要使用参考。
 2. [框架分区目录](framework/README.md)：核心 Nest/DataEngine/Sync，次核心 Service/Codegen/Kit，以及其他包。
 3. [代码一致性核对](maintenance/CONSISTENCY.md)：具体纠正项、源码证据与核对限制。

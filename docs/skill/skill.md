@@ -1,5 +1,7 @@
 # 稳定 Skill API 与最小接入
 
+阅读准备：先了解 [Skill 的职责与例子](../framework/guide/08-skill.md)；不熟悉DAO、事务、Host等概念时，从 [入门手册](../GETTING-STARTED.md) 开始。本篇保留具体接口与示例，适合在接入或定位问题时查阅。
+
 技能系统（roost-core/skill）对业务暴露唯一稳定核心包：
 
 ```go
@@ -13,9 +15,54 @@ import "github.com/tjbdwanghaibo/roost-core/skill"
 | Go import | `github.com/tjbdwanghaibo/roost-core/skill` | 业务编译期依赖，保持稳定 |
 | JSON schema | `roost.skill/v2` | 技能定义 wire 格式，必须写入定义 |
 | compiler semantics | `skillv2-compiler-2` | gameplay digest、checkpoint、回放和契约校验 |
-| module | `github.com/tjbdwanghaibo/roost-core/skill` | Go module，沿 v1.x tag 发布 |
+| module | `github.com/tjbdwanghaibo/roost-core` | Go module，沿 v1.x tag 发布 |
 
 不要根据 import path 推断 schema，也不要自行改写 compiler semantics。
+
+## 一个完整的技能定义
+
+下面定义一个需要短暂准备的火球：提交后消耗法力，对目标造成伤害，随后结束施法。`activation`描述如何开始，`input_schema`说明输入是实体目标，`phases`描述执行步骤。`tick`是离散逻辑步，不直接等同于毫秒；实际频率由游戏推进方式决定。
+
+这段JSON来自可运行火球示例，并由文档测试使用实际Parse/Compile校验。可以先照着运行，再逐项调整参数。
+
+```json
+{
+  "schema": "roost.skill/v2",
+  "id": "skill.demo.fireball",
+  "name": "Fireball",
+  "description": "Windup, commit, then burn the target.",
+  "activation": {
+    "type": "active",
+    "policy": {"mode": "tap"},
+    "cast_window": {
+      "windup_ticks": 3,
+      "commit_tick": 2,
+      "recovery_ticks": 2,
+      "movement": "locked",
+      "turning": "allowed",
+      "interrupt_tags": [],
+      "refund_before_commit": true
+    }
+  },
+  "input_schema": {"type": "entity"},
+  "cooldown_ticks": 20,
+  "global_cooldown_ticks": 8,
+  "costs": [{"resource": "mana", "amount": 5}],
+  "memory": {},
+  "initial_phase": "cast",
+  "phases": [{
+    "id": "cast",
+    "timeout_ticks": 0,
+    "on": {"enter": {"flow": "sequence", "steps": [
+      {"flow": "effect", "effect": {
+        "type": "damage", "target": "$input.target",
+        "amount": 25, "damage_type": "magic", "element": "fire"
+      }},
+      {"flow": "finish", "reason": "done"}
+    ]}}
+  }]
+}
+```
 
 ## 最小工作流
 
@@ -41,7 +88,7 @@ runtime := skill.NewRuntime(host, skill.RuntimeOptions{MatchSeed: matchSeed})
 _, err = runtime.Activate(program, skill.CastInput{Caster: caster, Target: target})
 ```
 
-完整可运行版本位于 `examples/fireball`。`MemoryHost` 只适合示例、编译验收和
+完整可运行版本位于 [skill/examples/fireball](../../skill/examples/fireball/main.go)。`MemoryHost` 只适合示例、编译验收和
 确定性参考测试；生产游戏应实现 `Host`，并让世界查询、效果提交、revision 和权限判断
 全部经过该边界。
 
@@ -65,7 +112,7 @@ Runtime 持锁调用 Host，因此 Host 必须：
 完整接口约束见 `skill/host.go` 和
 [架构、迁移与同步流程](../framework/guide/08-skill.md)。
 
-## Host 能力表（B3 ③，2026-10-07，v1.23.0）
+## Host 能力表
 
 编译器、Runtime、Host 共用一张“Host 能读什么、支持什么”的表，随 `CompileEnvironment` 下发、算进 authority digest。
 八列：可读属性（catalog 里 `Readable` 的属性）、资源（catalog 全部资源）、衍生物 kind、motion 步骤、只交给 Host 的
@@ -95,7 +142,7 @@ operation、召唤物（`OwnedEntityRuntimeHost`）。后六列写在 `environme
 
 ## 下一步
 
-- 技能作者：[README 的完整火球示例](../README.md)
+- 技能作者：[README 的完整火球示例](../../skill/README.md)
 - Host 开发：[施法语义与战斗接入](skill-casting-and-combat.md)
 - 同步开发：[Visual 与数据同步生产指南](visual-sync-production-guide.md)
 - 框架维护：[实现学习手册](skill-implementation-guide.md)

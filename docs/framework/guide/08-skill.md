@@ -2,6 +2,13 @@
 
 适用运行时：v1.24.0；文档维护版：v1.24.1。[实现与维护入口](../impl/08-skill.md) · [模块总目录](../README.md)
 
+## 先理解这一块
+
+这里的Skill指游戏中的火球、治疗、召唤等技能。框架把技能定义编译成执行计划，游戏世界通过Host接口提供实际能力。
+
+先跑火球示例，再阅读Host。需要区分“描述技能的JSON”“编译后的计划”和“正在进行的施法”。
+
+不熟悉框架名词时，先读 [入门与术语](../../GETTING-STARTED.md)。
 
 ## 1. 包的职责
 
@@ -30,7 +37,6 @@ Skill Runtime 不在 Nest DAO 回滚域内；handler 失败不会自动回退 co
 skillsync/skillcompose 组织状态与表现流。表现也遵守可靠有序与基线恢复契约；隐私字段由业务 projector 裁剪。关闭 observer 不撤回已经在飞的 Publish。journal 恢复优先，Import 产生新 checkpoint 代际；空闲清理由 Coordinator 统一控制。
 
 当前 Runtime checkpoint 格式为10，旧格式拒绝；JSON wire schema、编译器语义版本和 Go 模块版本是三种概念。现行接入按同一个 roost-core tag，不使用旧三仓发布图。详细 DSL、效果与 Host 参数见 docs/skill 的专项手册。
-
 
 ## 源码与核对范围
 

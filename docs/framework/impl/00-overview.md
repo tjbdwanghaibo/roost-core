@@ -2,6 +2,12 @@
 
 运行时代码基准：v1.24.0（2fa1c7877b14c77b52e062bedcb3455cef8db0fb）。[设计与使用](../guide/00-overview.md)
 
+## 如何阅读
+
+你可以把Roost看作游戏服务器的基础设施。你编写玩法规则，它帮助安排执行、保存数据和把变化告诉客户端。
+
+第一次接入先读本页顶部的“设计与使用”。准备修改代码时，先看下面的约束与流程，再展开源码目录；测试清单用于找到已有用例，不要求从头读完。
+
 ## 1. 实现边界
 
 本篇为全局索引；逐模块定位见其他分区。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
@@ -37,9 +43,19 @@ flowchart LR
 
 ## 4. 文件、类型与职责定位
 
+<details>
+<summary>需要定位代码时，展开源码文件与类型目录</summary>
+
+</details>
+
 ## 5. 回归入口
 
 下列名字由当前测试源码提取，仅证明存在对应回归入口。执行时以 go test 的实际 PASS/FAIL/SKIP 为准；未启用的真实资源测试不能算通过。常用筛选方向：`TestCoreDependencyBoundary`、`TestTrackedMarkdownRelativeLinksResolve`。
+
+<details>
+<summary>准备验证改动时，展开测试目录</summary>
+
+</details>
 
 ## 6. 验收与运维
 

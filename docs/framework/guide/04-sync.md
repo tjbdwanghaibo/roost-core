@@ -2,6 +2,13 @@
 
 适用运行时：v1.24.0；文档维护版：v1.24.1。[实现与维护入口](../impl/04-sync.md) · [模块总目录](../README.md)
 
+## 先理解这一块
+
+服务器的数据改变后，客户端需要知道哪些变化；对局也可能需要把玩家输入按帧转发。Sync提供这些同步能力。
+
+背包和位置通常看状态同步，按输入推进同一场战斗看Lockstep。两种方式解决不同问题，不能直接互换。
+
+不熟悉框架名词时，先读 [入门与术语](../../GETTING-STARTED.md)。
 
 ## 1. 子系统分工
 
@@ -38,7 +45,6 @@ syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。File
 RS v2 的 16 字节头保留 MsgID、Seq、PayloadSize；Flags bit0 是 push，bits1..2 区分 PB=0、Sync=1、Lockstep=2，值3及保留位拒绝。Lockstep 上行 flags=4，push=5。MsgID 0 的心跳不能携带业务类型标记。
 
 C# 客户端提供 TCP、Sync receiver、Lockstep codec/assembler，Unity 提供主线程适配源码。Go wire 与生成 TCP 共享头验证；业务载荷类型须与注册路由一致。正式 Go/C# 及 Unity 源码测试不代表 Unity/Godot/Unreal 实机已验收；原生 C++ 客户端不在本版交付范围。
-
 
 ## 源码与核对范围
 

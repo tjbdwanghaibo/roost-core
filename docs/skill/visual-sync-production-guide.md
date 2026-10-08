@@ -1,5 +1,7 @@
 # Skill Visual 与数据同步生产指南
 
+阅读准备：先了解 [Skill 的职责与例子](../framework/guide/08-skill.md)；不熟悉DAO、事务、Host等概念时，从 [入门手册](../GETTING-STARTED.md) 开始。本篇保留具体接口与示例，适合在接入或定位问题时查阅。
+
 > 2026-10-08 当前入口：[架构与迁移](../framework/guide/08-skill.md)。下面保留历次详细设计；旧三仓发布段、旧 checkpoint 数字及 Import 周期刷新说法均被本轮单仓/版本10规则取代。新字段隐私由业务 projector 明确实现，CloseObserver 不撤回在飞 Publish，AssemblyTTL 由新分片到达触发清扫。
 
 本文描述单仓 `roost-core` 中 skill/skillsync 与 syncstream 的正式边界、接入顺序、

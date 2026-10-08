@@ -18,6 +18,6 @@
 | policy Drain | 等待retry和已承担事实；永久拒绝需修关系或ctx超时 | 拒绝、关闭和排空组合 |
 | Skill Runtime | 不参与Nest回滚；Host副作用和确定性由业务契约保证 | Host能力、重入、阻塞、恢复和回放测试 |
 | 观测接线 | ExportMetrics/admin元数据不是自动外部监控或审批系统 | 部署实际接线与鉴权审计 |
-| Windows | 非框架保证平台 | 本机测试结果不改变macOS/Linux支持范围 |
+| Windows | 非框架保证平台；本次6个既有测试失败已在稳定基线复现，详见发布验收 | 本机测试结果不改变macOS/Linux支持范围 |
 
 [外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据。[性能基线](PERFORMANCE.md)保留失败样本、统计和参数。本次核对是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零bug或100%行为覆盖。

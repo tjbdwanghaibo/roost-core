@@ -2,6 +2,11 @@
 
 范围：Git 跟踪的 Go 文件，排除 docs、testdata；包含示例/工具/平台文件，不是 go list 的平台构建包数，也不是语义 review 覆盖率。测试列为文件数量，不是已运行测试数。每包实现文件、导出类型和回归名字在所属实现篇。
 
+这是一张查询表，不是建议的学习顺序。初次阅读请回到 [入门手册](../GETTING-STARTED.md)。
+
+<details>
+<summary>展开159个包目录的职责映射</summary>
+
 | 包路径 | 主说明 | 实现文件 | 测试文件 |
 | --- | --- | ---: | ---: |
 | [actionflow](../../actionflow) | [核心：Nest 调度与实体](impl/02-nest-entity.md) | 6 | 12 |
@@ -163,3 +168,5 @@
 | [versionstore](../../versionstore) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 5 | 14 |
 | [webroute](../../webroute) | [观测、安全与运维](impl/11-observability.md) | 1 | 5 |
 | [worker](../../worker) | [核心：Nest 调度与实体](impl/02-nest-entity.md) | 2 | 4 |
+
+</details>
