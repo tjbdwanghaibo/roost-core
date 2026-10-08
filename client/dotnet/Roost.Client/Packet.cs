@@ -34,8 +34,8 @@ namespace Roost.Client
         {
             if (packet == null) throw new ArgumentNullException(nameof(packet));
             if (maxPayload <= 0) throw new ArgumentOutOfRangeException(nameof(maxPayload));
-            if (packet.Kind != PayloadKind.Protobuf && packet.Kind != PayloadKind.Sync)
-                throw new InvalidDataException("Lockstep/unknown payload kind is not implemented.");
+            if (packet.Kind != PayloadKind.Protobuf && packet.Kind != PayloadKind.Sync && packet.Kind != PayloadKind.Lockstep)
+                throw new InvalidDataException("Unknown payload kind.");
             if (packet.MessageId == 0 && (packet.IsPush || packet.Kind != PayloadKind.Protobuf))
                 throw new InvalidDataException("Authentication control frame has business flags.");
             if (packet.Payload.Length > maxPayload) throw new InvalidDataException("Payload exceeds limit.");
@@ -52,8 +52,8 @@ namespace Roost.Client
         private static int CheckHeader(byte[] data, int maxPayload)
         {
             if (maxPayload <= 0) throw new ArgumentOutOfRangeException(nameof(maxPayload));
-            if (data[0] != 'R' || data[1] != 'S' || data[2] != Version || (data[3] & ~3) != 0)
-                throw new InvalidDataException("Invalid RS version/flags (Lockstep is not implemented).");
+            if (data[0] != 'R' || data[1] != 'S' || data[2] != Version || (data[3] & ~7) != 0 || (data[3] & 6) == 6)
+                throw new InvalidDataException("Invalid RS version/flags.");
             if (BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(4, 4)) == 0 && data[3] != 0)
                 throw new InvalidDataException("Authentication control frame has business flags.");
             uint size = BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(12, 4));

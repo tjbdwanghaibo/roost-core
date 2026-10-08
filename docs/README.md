@@ -1,5 +1,7 @@
 # Roost 文档中心
 
+**2026-10-08 Lockstep客户端接线（main未发版）：**RS v2启用类型2（上行4、push5），正式ProtocolRegistry/生成TCP已接线，复用Room/C7广播与历史追帧；C#提供Command、有界Assembler与主线程模拟消费。没有旧包兼容，不代表Unity/Godot/Unreal实机、UDP性能或游戏确定性已验收。[接入说明](../client/README.md) · [实施/验证](feature/IMPLEMENTATION-2026-10-08-CLIENT-LOCKSTEP.md)。[验收/全仓基线失败交接](review/REVIEW-2026-10-08-client-lockstep-validation.md)。下方10-07“预留”保留历史时点。
+
 **10-07 客户端协议第一批：**[共享RS v2协议、C#与Unity接入](../client/README.md)，PB/raw Sync已接线，Lockstep编号预留但当前拒绝；无旧包兼容。[实施方案与验证边界](feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)。这是客户端接入新增功能，历史非核心review进度保持原口径。
 
 > 框架整体的说明与实现见 [框架文档](framework/README.md)（基准 v1.23.0）；内容冲突以框架文档与源码为准。

@@ -1,5 +1,5 @@
 // Package wire 定义客户端公共包头；TCP、WebSocket 和客户端 SDK 使用同一格式。
-// 它不解释 PB/Sync 业务载荷，不负责鉴权、请求排序或服务器权威状态。
+// 它不解释 PB/Sync/Lockstep 业务载荷，不负责鉴权、请求排序或服务器权威状态。
 package wire
 
 import (
@@ -14,7 +14,7 @@ const (
 	Version    byte = 2
 	FlagPush   byte = 1 << 0
 	FlagSync   byte = 1 << 1
-	// bits1..2为载荷类型：00=PB、01=Sync、10=Lockstep（后续实现，当前拒绝）。
+	// bits1..2为载荷类型：00=PB、01=Sync、10=Lockstep。
 	FlagLockstep      byte = 1 << 2
 	DefaultMaxPayload      = 1 << 20
 )
@@ -23,6 +23,17 @@ var (
 	ErrInvalidPacket = errors.New("client wire: invalid packet")
 	ErrPacketTooBig  = errors.New("client wire: packet too big")
 )
+
+// PayloadKind 是业务载荷类型，与推送位独立。
+type PayloadKind byte
+
+const (
+	PayloadProtobuf PayloadKind = iota
+	PayloadSync
+	PayloadLockstep
+)
+
+func (h Header) Kind() PayloadKind { return PayloadKind((h.Flags >> 1) & 3) }
 
 // Header 使用网络大端：RS、版本、flags、消息ID、序列号、载荷长度。
 // flags 的其余位必须为零；消息ID为零的控制握手不得设置业务或推送标志。
@@ -42,7 +53,7 @@ type Packet struct {
 }
 
 func (h Header) Validate(maxPayload int) error {
-	if h.Flags & ^(FlagPush|FlagSync) != 0 || (h.MsgID == 0 && h.Flags != 0) {
+	if h.Flags & ^(FlagPush|FlagSync|FlagLockstep) != 0 || h.Flags&(FlagSync|FlagLockstep) == (FlagSync|FlagLockstep) || (h.MsgID == 0 && h.Flags != 0) {
 		return ErrInvalidPacket
 	}
 	if maxPayload <= 0 {

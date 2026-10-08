@@ -1,0 +1,3 @@
+ok      github.com/tjbdwanghaibo/roost-core/sync/lockstep    12.020s
+ok      github.com/tjbdwanghaibo/roost-core/client/wire    2.162s
+ok      github.com/tjbdwanghaibo/roost-core/robot    4.394s

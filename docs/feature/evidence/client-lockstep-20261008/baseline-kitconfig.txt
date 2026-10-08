@@ -1,0 +1,7 @@
+--- FAIL: TestKitConfigSchemasMatchKitDeclarations (13.05s)
+    config_declarations_promises_test.go:36: kitconfig_gen.go is not the kit Mods' current declarations: exit status 1
+        configschemagen: kitconfig_gen.go is not generated from the current kit declarations; run go generate ./codegen/internal/roost
+        exit status 1
+FAIL
+FAIL    github.com/tjbdwanghaibo/roost-core/codegen/internal/roost    13.263s
+FAIL
