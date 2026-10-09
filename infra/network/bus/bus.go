@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"log/slog"
 	"runtime/debug"
 	"strings"
@@ -115,7 +115,7 @@ func New(client nats.IClient, rpc nats.IRpc, codec Codec, cfg Config) *Bus {
 		cfg.Prefix = "roost"
 	}
 	if codec == nil {
-		codec = JSONCodec{}
+		codec = MessagePackCodec{}
 	}
 	return &Bus{
 		cfg:         cfg,

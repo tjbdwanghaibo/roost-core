@@ -8,16 +8,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
-	"github.com/tjbdwanghaibo/roost-core/internal/operation"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 
 	"github.com/spf13/viper"
 )
@@ -46,6 +46,8 @@ type config struct {
 	Prefix                  string `config:"nats.prefix" default:"roost" example:"roost" help:"bus 主题前缀"`
 	WorkerNum               int    `config:"nats.worker_num" default:"8" min:"1" example:"8"`
 	IgnoreDiscoveredServers bool   `config:"nats.ignore_discovered_servers" help:"只连配置的地址，不跟随集群 gossip 发现的节点（代理、NAT、故障注入时用）"`
+	InboxPrefix             string `config:"nats.inbox_prefix" help:"请求回信的服务命名空间；需配套 NATS ACL"`
+	ReconnectBufferBytes    int    `config:"nats.reconnect_buffer_bytes" min:"-1" help:"断线发布缓冲字节上限，-1禁用，0使用库默认"`
 	Reliable                struct {
 		Enabled  bool          `config:"enabled" example:"false" help:"可靠总线（需要 Redis Mod）"`
 		Prefix   string        `config:"prefix"`
@@ -82,7 +84,7 @@ func (c config) jetStreamRPC() (bus.JetStreamRPCConfig, bool) {
 }
 
 // NewNatsMod creates a NatsMod with an optional codec.
-// If codec is nil, a JSON codec will be used by default.
+// If codec is nil, the current MessagePack codec is used.
 func NewNatsMod(codec bus.Codec) *NatsMod {
 	return &NatsMod{codec: codec}
 }
@@ -102,7 +104,7 @@ func (m *NatsMod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("nats mod: %w", err)
 	}
 	m.cfg = fnats.DefaultConfig(m.settings.URL)
-	m.extra = natsdriver.ClientOptions{IgnoreDiscoveredServers: m.settings.IgnoreDiscoveredServers}
+	m.extra = natsdriver.ClientOptions{IgnoreDiscoveredServers: m.settings.IgnoreDiscoveredServers, InboxPrefix: m.settings.InboxPrefix, ReconnectBufferBytes: m.settings.ReconnectBufferBytes}
 	return nil
 }
 
@@ -173,6 +175,7 @@ func (m *NatsMod) Provide(r *app.Registry) error {
 
 	return mods.RegisterAll(r,
 		mods.Capability{Name: mods.ModNats, Value: fnats.IClient(m.asm.Client)},
+		mods.Capability{Name: mods.ModNatsRaw, Value: fnats.RawClient(m.asm.Client)},
 		mods.Capability{Name: mods.ModNatsJetStream, Value: fnats.IJetStream(m.asm.JetStream)},
 		mods.Capability{Name: mods.ModNatsRpc, Value: fnats.IRpc(m.asm.RPC)},
 		mods.Capability{Name: mods.ModBus, Value: bus.IBus(m.bus)},

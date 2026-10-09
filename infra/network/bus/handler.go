@@ -36,7 +36,7 @@ type RpcContext struct {
 
 func NewRPCContext(base context.Context, method string, payload []byte, codec Codec) *RpcContext {
 	if codec == nil {
-		codec = JSONCodec{}
+		codec = MessagePackCodec{}
 	}
 	return &RpcContext{
 		MsgContext: MsgContext{

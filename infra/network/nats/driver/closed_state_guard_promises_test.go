@@ -60,6 +60,19 @@ var closedStateHandler = func(*fnats.Msg) {}
 
 // closedStateChecks 以“接收者类型.方法”为键，覆盖本包每个导出方法。
 var closedStateChecks = map[string]closedStateCheck{
+	"Client.PublishOnce": {want: wantErrClosed, call: func(e *closedStateEnv) error { return e.asm.Client.PublishOnce("roost.closed", nil) }},
+	"Client.RequestContext": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.asm.Client.RequestContext(e.ctx, "roost.closed", nil)
+		return err
+	}},
+	"Client.MaxPayload":   {want: wantErrClosed, call: func(e *closedStateEnv) error { _, err := e.asm.Client.MaxPayload(); return err }},
+	"Client.FlushContext": {want: wantErrClosed, call: func(e *closedStateEnv) error { return e.asm.Client.FlushContext(e.ctx) }},
+	"Client.SubscribeBounded": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := e.asm.Client.SubscribeBounded("roost.closed", fnats.PendingLimits{Messages: 1, Bytes: 1024}, closedStateHandler)
+		return err
+	}},
+	"rawSubscription.Unsubscribe":  {want: wantErrClosed, call: func(e *closedStateEnv) error { return (&rawSubscription{subscription: e.sub}).Unsubscribe() }},
+	"rawSubscription.DrainContext": {want: notConnectionCall, reason: "句柄等待已接纳回调实际结束，即使共享连接已关闭；真实 raw 排空回归另验 Close/超时/重试"},
 	"Client.Publish": {want: wantErrClosed, call: func(e *closedStateEnv) error {
 		return e.asm.Client.Publish("roost.closed", []byte("x"))
 	}},

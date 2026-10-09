@@ -14,7 +14,7 @@ import (
 // future version, a failure without an error body, a success without a
 // payload. Only "decode failed" was exercised before.
 func TestDecodeRPCResponseRefusesEveryMalformedEnvelope(t *testing.T) {
-	codec := JSONCodec{}
+	codec := MessagePackCodec{}
 	encode := func(t *testing.T, envelope rpcResponseEnvelope) []byte {
 		t.Helper()
 		raw, err := codec.Marshal(envelope)
@@ -68,7 +68,7 @@ func TestDecodeRPCResponseRefusesEveryMalformedEnvelope(t *testing.T) {
 // Stop is final. Start on a stopped bus must refuse, not silently build a new
 // worker pool on top of released subscriptions.
 func TestBusRefusesToRestartAfterStop(t *testing.T) {
-	b := New(&lifecycleClient{}, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game"})
+	b := New(&lifecycleClient{}, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game"})
 	if err := b.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestBusRefusesToRestartAfterStop(t *testing.T) {
 // Registration on a stopped bus would subscribe on a client that is being
 // drained; both registration paths refuse.
 func TestBusRefusesHandlerRegistrationAfterStop(t *testing.T) {
-	b := New(&lifecycleClient{}, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game"})
+	b := New(&lifecycleClient{}, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game"})
 	if err := b.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestBusRefusesHandlerRegistrationAfterStop(t *testing.T) {
 // Calls on a bus without the corresponding transport must fail loudly with
 // the reason, not panic or hang.
 func TestBusCallsWithoutTransportNameTheMissingPiece(t *testing.T) {
-	b := New(&lifecycleClient{}, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game"})
+	b := New(&lifecycleClient{}, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game"})
 	var resp struct{}
 	if err := b.callSubject(context.Background(), "roost.rpc.game.Ping", "Ping", 0, struct{}{}, &resp); err == nil || !strings.Contains(err.Error(), "rpc client is nil") {
 		t.Fatalf("callSubject without rpc = %v", err)
@@ -129,7 +129,7 @@ func TestBusCallsWithoutTransportNameTheMissingPiece(t *testing.T) {
 // Dead-letter operations need a reliable store that implements them; without
 // one they must say so rather than report "0 requeued" as if they had run.
 func TestBusDeadLetterOperationsRefuseWithoutACapableStore(t *testing.T) {
-	b := New(&lifecycleClient{}, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game"})
+	b := New(&lifecycleClient{}, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game"})
 	ctx := context.Background()
 	if _, err := b.DeadLetters(ctx, DeadLetterQuery{Module: "game"}); err == nil || !strings.Contains(err.Error(), "does not support dead letter queries") {
 		t.Fatalf("DeadLetters = %v", err)

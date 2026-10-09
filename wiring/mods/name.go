@@ -22,6 +22,7 @@ const (
 	ModRedisVLock app.ModName = "redis.versioned_lock"
 
 	ModNats          app.ModName = "nats"
+	ModNatsRaw       app.ModName = "nats.raw"
 	ModNatsRpc       app.ModName = "nats.rpc"
 	ModNatsJetStream app.ModName = "nats.jetstream"
 	ModBus           app.ModName = "bus"

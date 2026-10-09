@@ -197,6 +197,8 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "nats.prefix", Kind: "string", Default: "roost", Help: "bus 主题前缀", Starter: true, Example: "roost"},
 		{Name: "nats.worker_num", Kind: "int", Default: "8", Min: "1", Starter: true, Example: "8"},
 		{Name: "nats.ignore_discovered_servers", Kind: "bool", Help: "只连配置的地址，不跟随集群 gossip 发现的节点（代理、NAT、故障注入时用）"},
+		{Name: "nats.inbox_prefix", Kind: "string", Help: "请求回信的服务命名空间；需配套 NATS ACL"},
+		{Name: "nats.reconnect_buffer_bytes", Kind: "int", Min: "-1", Help: "断线发布缓冲字节上限，-1禁用，0使用库默认"},
 		{Name: "nats.reliable.enabled", Kind: "bool", Help: "可靠总线（需要 Redis Mod）", Starter: true, Example: "false"},
 		{Name: "nats.reliable.prefix", Kind: "string"},
 		{Name: "nats.reliable.inbox_ttl", Kind: "duration", Min: "1ns"},

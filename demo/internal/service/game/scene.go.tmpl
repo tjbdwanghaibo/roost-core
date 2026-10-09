@@ -1,6 +1,7 @@
 package {{GAME_SERVICE_PKG}}
 
 import (
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"context"
 	"errors"
 	"fmt"
@@ -169,7 +170,7 @@ type entityLoadNotifier interface {
 // separate from scenePusher because a deployment could plausibly have one
 // without the other.
 type sessionSource interface {
-	OnSessionClosed(func(accessplayertcp.SessionClosed)) func()
+	OnSessionClosed(func(gateway.TCPSessionClosed)) func()
 }
 
 // Push classifies the only two failures a push can have. The access layer
@@ -179,7 +180,7 @@ type sessionSource interface {
 // manager closes the session and tells us through sessionLost.
 func (lane sceneLane) Push(ctx context.Context, session entitysync.SessionID, frame []byte) error {
 	err := lane.transport.PushSyncPlayer(ctx, int64(session), msgid.MsgEntitySync, frame)
-	if errors.Is(err, accessplayertcp.ErrTransportUnavailable) {
+	if errors.Is(err, gateway.ErrTransportUnavailable) {
 		return fmt.Errorf("%w: %w", entitysync.ErrRetryLater, err)
 	}
 	return err
@@ -231,7 +232,7 @@ func (bridge *Scene) watchSessions(source sessionSource) {
 	if bridge == nil || source == nil {
 		return
 	}
-	bridge.unsubscribe = source.OnSessionClosed(func(event accessplayertcp.SessionClosed) {
+	bridge.unsubscribe = source.OnSessionClosed(func(event gateway.TCPSessionClosed) {
 		if bridge.sessions.ActiveSessions(event.PlayerID) > 0 {
 			// Another connection of the same player is still up; the player
 			// is still here.

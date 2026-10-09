@@ -16,6 +16,10 @@ type ClientOptions struct {
 	// right in a flat network and wrong behind a proxy, NAT, or a fault
 	// injector: the client silently escapes the path the operator configured.
 	IgnoreDiscoveredServers bool
+	// InboxPrefix 让部署 ACL 能限制本服务自己的回信命名空间。
+	InboxPrefix string
+	// ReconnectBufferBytes 是断线期间的本地发布字节上限；-1 禁止缓冲，0 采用库默认。
+	ReconnectBufferBytes int
 }
 
 func buildNatsOptions(cfg *fnats.Config, state *natsLifecycleState, extra ClientOptions) []gonats.Option {
@@ -36,6 +40,9 @@ func buildNatsOptions(cfg *fnats.Config, state *natsLifecycleState, extra Client
 			slog.Info("nats: connection closed")
 		}),
 		gonats.ErrorHandler(func(c *gonats.Conn, sub *gonats.Subscription, err error) {
+			if state != nil {
+				state.rawError(sub, err)
+			}
 			subject := ""
 			if sub != nil {
 				subject = sub.Subject
@@ -45,6 +52,12 @@ func buildNatsOptions(cfg *fnats.Config, state *natsLifecycleState, extra Client
 	}
 	if extra.IgnoreDiscoveredServers {
 		opts = append(opts, gonats.IgnoreDiscoveredServers())
+	}
+	if extra.InboxPrefix != "" {
+		opts = append(opts, gonats.CustomInboxPrefix(extra.InboxPrefix))
+	}
+	if extra.ReconnectBufferBytes != 0 {
+		opts = append(opts, gonats.ReconnectBufSize(extra.ReconnectBufferBytes))
 	}
 	return opts
 }

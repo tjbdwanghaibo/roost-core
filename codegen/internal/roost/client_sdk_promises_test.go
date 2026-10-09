@@ -36,7 +36,7 @@ import (
 )
 func TestClientSDKRealGeneratedTCP(t *testing.T) {
  registry:=player_agent.NewProtocolRegistry()
- transport:=&Runtime{protocols:registry}
+ transport:=NewRuntime(registry,defaultLoginTimeout)
  sender,err:=lockstep.NewTCPSender(50002,wire.DefaultMaxPayload,func(id nettransport.SessionID)(string,bool){return "sdk",id==7},func(ctx context.Context,id string,msg uint32,data []byte)error{
   frames,err:=lockstep.DecodeBroadcast(data);if err!=nil{return err}
   // 仅测试夹具隐藏live帧；生产TCPSender不会丢帧。
@@ -78,29 +78,27 @@ func TestClientSDKRealGeneratedTCP(t *testing.T) {
  server,err:=NewServer(cfg,&accessplayer.Runtime{Protocols:registry},AuthenticatorFunc(func(_ context.Context,token string,_ net.Addr)(gateway.Principal,error){
   if token!="ticket"{return gateway.Principal{},gateway.ErrUnauthenticated};return gateway.Principal{PlayerID:7,SessionID:"sdk"},nil
  }))
- if err!=nil{t.Fatal(err)};transport.server.Store(server);if err:=server.Start();err!=nil{t.Fatal(err)}
+ if err!=nil{t.Fatal(err)};if err:=server.ConnectRuntime(transport.TCPRuntime);err!=nil{t.Fatal(err)};if err:=server.Start();err!=nil{t.Fatal(err)}
  defer func(){ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second);defer cancel();if err:=server.Stop(ctx);err!=nil{t.Error(err)}}()
- host,port,err:=net.SplitHostPort(server.listener.Addr().String());if err!=nil{t.Fatal(err)}
+ host,port,err:=net.SplitHostPort(server.Addr().String());if err!=nil{t.Fatal(err)}
  ctx,cancel:=context.WithTimeout(context.Background(),time.Minute);defer cancel()
  cmd:=exec.CommandContext(ctx,"dotnet",os.Getenv("ROOST_CLIENT_TEST_DLL"),os.Getenv("ROOST_CLIENT_GOLDEN"),host,port)
  out,err:=cmd.CombinedOutput();if err!=nil{t.Fatalf("C# real TCP: %v\n%s",err,out)};t.Log(string(out))
  // 错误kind不能到达任何decoder，包括使用已知合法Command/PB载荷。
- for _,tc:=range []struct{flags byte;id uint32;payload []byte}{{0,50001,[]byte{0xc8,1,3,1}},{flagLockstep,42,[]byte{8,1}},{6,42,nil}} {
+ for _,tc:=range []struct{flags byte;id uint32;payload []byte}{{0,50001,[]byte{0xc8,1,3,1}},{wire.FlagLockstep,42,[]byte{8,1}},{6,42,nil}} {
   beforeLS,beforePB:=lockstepDecoded.Load(),pbDecoded.Load()
   connection:=dialAuthenticated(t,server,"ticket")
-  client:=&session{connection:connection,writeTimeout:time.Second}
   // kind11无法由合法writer封包，直接修改有效头用于负面网络验收。
-  if tc.flags==6 {data,err:=wire.Encode([]*wire.Packet{{MsgID:tc.id,Seq:2}},0);if err!=nil{t.Fatal(err)};data[3]=6;if _,err:=connection.Write(data);err!=nil{t.Fatal(err)}} else if err:=client.writeFrame(context.Background(),tc.flags,tc.id,2,tc.payload);err!=nil{t.Fatal(err)}
-  _=connection.SetReadDeadline(time.Now().Add(time.Second));if _,_,err:=server.readFrame(connection);err==nil{t.Fatal("wrong kind accepted")}
+  if tc.flags==6 {data,err:=wire.Encode([]*wire.Packet{{MsgID:tc.id,Seq:2}},0);if err!=nil{t.Fatal(err)};data[3]=6;if _,err:=connection.Write(data);err!=nil{t.Fatal(err)}} else if err:=wire.Write(connection,[]*wire.Packet{{Flags:tc.flags,MsgID:tc.id,Seq:2,Payload:tc.payload}},wire.DefaultMaxPayload);err!=nil{t.Fatal(err)}
+  _=connection.SetReadDeadline(time.Now().Add(time.Second));if _,err:=wire.Read(connection,wire.DefaultMaxPayload);err==nil{t.Fatal("wrong kind accepted")}
   if lockstepDecoded.Load()!=beforeLS || pbDecoded.Load()!=beforePB {t.Fatal("kind mismatch reached decoder")}
   connection.Close()
  }
  // Sync请求在解码/Dispatch前拒绝；合法头不赋予客户端写权威状态的能力。
  connection:=dialAuthenticated(t,server,"ticket")
- client:=&session{connection:connection,writeTimeout:time.Second}
- if err:=client.writeFrame(context.Background(),flagSync,42,2,[]byte{8,1});err!=nil{t.Fatal(err)}
+ if err:=wire.Write(connection,[]*wire.Packet{{Flags:wire.FlagSync,MsgID:42,Seq:2,Payload:[]byte{8,1}}},wire.DefaultMaxPayload);err!=nil{t.Fatal(err)}
  _=connection.SetReadDeadline(time.Now().Add(time.Second))
- if _,_,err:=server.readFrame(connection);err==nil{t.Fatal("client Sync request accepted")}
+ if _,err:=wire.Read(connection,wire.DefaultMaxPayload);err==nil{t.Fatal("client Sync request accepted")}
 }
 `
 

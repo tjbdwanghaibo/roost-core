@@ -29,7 +29,7 @@ func labelValues(name, label string) map[string]bool {
 
 func TestAsyncMessageLabelsAndDeadLetterKeysAreBoundedByRegistration(t *testing.T) {
 	store := newReliableMemoryStore()
-	b := New(nil, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	b := New(nil, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 	if err := b.Handle("mail71", "Changed", func(*MsgContext) { panic("handler failed") }); err != nil {
 		t.Fatal(err)

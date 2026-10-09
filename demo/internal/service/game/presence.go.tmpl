@@ -1,6 +1,7 @@
 package {{GAME_SERVICE_PKG}}
 
 import (
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"log/slog"
 
 	"{{MODULE}}/game/chatroom"
@@ -43,7 +44,7 @@ func subscribePresence(source sessionSource, sessions presenceSessions) func() {
 		return func() {}
 	}
 	presence := chatroom.DefaultPresence()
-	return source.OnSessionClosed(func(event accessplayertcp.SessionClosed) {
+	return source.OnSessionClosed(func(event gateway.TCPSessionClosed) {
 		if sessions != nil && sessions.ActiveSessions(event.PlayerID) > 0 {
 			// Another connection of the same player is still up.
 			return

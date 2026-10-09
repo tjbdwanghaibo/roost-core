@@ -190,7 +190,7 @@ func (r *lifecycleRpc) Call(_ context.Context, subject string, request []byte) (
 	if r.callErr != nil || r.response != nil {
 		return r.response, r.callErr
 	}
-	return encodeRPCSuccess(JSONCodec{}, struct{}{})
+	return encodeRPCSuccess(MessagePackCodec{}, struct{}{})
 }
 
 func (r *lifecycleRpc) CallWithTimeout(string, []byte, time.Duration) ([]byte, error) {

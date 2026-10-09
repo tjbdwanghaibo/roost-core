@@ -1,5 +1,5 @@
-// Package gateway defines transport-neutral request boundary contracts. It
-// deliberately contains no codec, socket or business protocol implementation.
+// Package gateway 提供可信会话、请求边界和共用 TCP 接入。业务协议解码、
+// Nest 与 Entity 由调用方接线；接入运行实现不依赖 Framework 或 Wiring。
 package gateway
 
 import (

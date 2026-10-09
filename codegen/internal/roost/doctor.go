@@ -679,11 +679,11 @@ func checkPlayerTCPWorkflow(root string, manifest Manifest) ([]CheckItem, error)
 	add("player-access", accessOK, "access.player is configured", "roost add access player --service "+service)
 	transportOK := accessOK && contains(access.Transports, "tcp")
 	add("tcp-transport", transportOK, "the TCP transport is declared", "roost add transport tcp")
-	serverOK, err := anyFileContains(root, "internal/access/player/tcp/server_gen.go", "type Server struct")
+	serverOK, err := anyFileContains(root, "internal/access/player/tcp/server_gen.go", "gateway.NewTCPServer(")
 	if err != nil {
 		return nil, err
 	}
-	add("tcp-runtime", serverOK, "the generated TCP runtime exists", "roost project sync")
+	add("tcp-runtime", serverOK, "the generated TCP adapter connects the shared runtime", "roost project sync")
 
 	authPath := filepath.Join(root, "internal", "access", "player", "tcp", "auth.go")
 	authRaw, authErr := os.ReadFile(authPath)

@@ -658,8 +658,8 @@ func TestAddPlayerTCPTransportIsExplicitAndProductionGuarded(t *testing.T) {
 	}
 	for path, fragments := range map[string][]string{
 		"roost.yaml": {"transports:", "- tcp"},
-		"internal/access/player/tcp/server_gen.go":      {"max_connections_per_ip", "MaxHandshakes", "MaxHandshakeBytes", "readFrameLimit", "handshakeSlots", "PushPlayer", "PushSession", "outbound payload", "RegistryBound", "bind authenticator"},
-		"internal/access/player/tcp/server_gen_test.go": {"TestFrameRoundTrip", "TestHandshakeFrameUsesIndependentSmallLimit", "TestWriteFrameRejectsOversizedServerPayload", "TestASubscriberPanicIsIsolated"},
+		"internal/access/player/tcp/server_gen.go":      {"max_connections_per_ip", "MaxHandshakes", "MaxHandshakeBytes", "gateway.NewTCPServer", "gateway.NewTCPRuntime", "RegistryBound", "bind authenticator"},
+		"internal/access/player/tcp/server_gen_test.go": {"TestDeclaredDefaultsAreDefaultConfig", "TestDispatchBudgetFollowsTheNestRequestTimeout", "TestAModStopRetryKeepsTheServerUntilItDrains"},
 		"internal/access/player/tcp/auth.go":            {"gateway.ErrUnauthenticated", "newApplicationAuthenticator"},
 		"cmd/playerprobe/main.go":                       {"ROOST_PLAYER_TOKEN", "writeAuth", "readAck"},
 		"internal/bootstrap/generated.go":               {"accessplayertcp.NewMod()"},

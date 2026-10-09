@@ -3,8 +3,8 @@ package bus
 import (
 	"context"
 	"errors"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"strings"
 	"sync"
 	"testing"
@@ -48,7 +48,7 @@ func TestJetStreamRPCPublishesRequestAndDeliversResponse(t *testing.T) {
 		if handler := js.handlerForFilter("roost.rpc_resp.2001.>"); handler != nil {
 			_ = handler(context.Background(), &fnats.JetStreamMsg{
 				Subject: req.ReplySubject,
-				Data:    rpcTestSuccessBytes(b, map[string]int{"code": 0}),
+				Data:    rpcTestSuccessBytes(b, map[string]int{"Code": 0}),
 			})
 		}
 	}
@@ -58,7 +58,7 @@ func TestJetStreamRPCPublishesRequestAndDeliversResponse(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := b.CallReliable(ctx, "mail", "mail.List", map[string]int64{"player_id": 1001}, &resp); err != nil {
+	if err := b.CallReliable(ctx, "mail", "mail.List", map[string]int64{"PlayerID": 1001}, &resp); err != nil {
 		t.Fatalf("CallReliable: %v", err)
 	}
 	if resp.Code != 0 {
@@ -82,7 +82,7 @@ func TestJetStreamRPCRecordsTimeoutAndClearsPendingGauge(t *testing.T) {
 	}
 
 	var resp struct{}
-	err := b.CallReliable(context.Background(), "mail", "mail.List", map[string]int64{"player_id": 1001}, &resp)
+	err := b.CallReliable(context.Background(), "mail", "mail.List", map[string]int64{"PlayerID": 1001}, &resp)
 
 	if !errors.Is(err, fnats.ErrTimeout) {
 		t.Fatalf("Call error = %v, want %v", err, fnats.ErrTimeout)
@@ -119,14 +119,14 @@ func TestJetStreamRPCPendingGaugeIsPerMethod(t *testing.T) {
 			if handler := js.handlerForFilter("roost.rpc_resp.2001.>"); handler != nil {
 				_ = handler(context.Background(), &fnats.JetStreamMsg{
 					Subject: req.ReplySubject,
-					Data:    rpcTestSuccessBytes(b, map[string]int{"code": 0}),
+					Data:    rpcTestSuccessBytes(b, map[string]int{"Code": 0}),
 				})
 			}
 		case "mail.Summary":
 			if handler := js.handlerForFilter("roost.rpc_resp.2001.>"); handler != nil {
 				_ = handler(context.Background(), &fnats.JetStreamMsg{
 					Subject: req.ReplySubject,
-					Data:    rpcTestSuccessBytes(b, map[string]int{"code": 0}),
+					Data:    rpcTestSuccessBytes(b, map[string]int{"Code": 0}),
 				})
 			}
 		}
@@ -136,12 +136,12 @@ func TestJetStreamRPCPendingGaugeIsPerMethod(t *testing.T) {
 	blockingDone := make(chan error, 1)
 	go func() {
 		var resp struct{}
-		blockingDone <- b.CallReliable(context.Background(), "rank", "rank.GetTop", map[string]int64{"player_id": 1001}, &resp)
+		blockingDone <- b.CallReliable(context.Background(), "rank", "rank.GetTop", map[string]int64{"PlayerID": 1001}, &resp)
 	}()
 	awaitChan(t, blockingPublished, "the blocking call to publish")
 
 	var resp struct{}
-	if err := b.CallReliable(context.Background(), "mail", "mail.Summary", map[string]int64{"player_id": 1001}, &resp); err != nil {
+	if err := b.CallReliable(context.Background(), "mail", "mail.Summary", map[string]int64{"PlayerID": 1001}, &resp); err != nil {
 		t.Fatalf("mail CallReliable: %v", err)
 	}
 	if got := busMetricValue("bus_rpc_pending", map[string]string{"transport": "jetstream", "method": "mail.Summary"}); got != 0 {
@@ -176,7 +176,7 @@ func TestJetStreamRPCHandleRpcPublishesResponseAfterHandler(t *testing.T) {
 		if req.PlayerID != 1001 || ctx.Method != "mail.List" || ctx.MsgID != "req-1" {
 			t.Fatalf("rpc context = %+v req=%+v", ctx, req)
 		}
-		return map[string]int{"code": 0}, nil
+		return map[string]int{"Code": 0}, nil
 	}); err != nil {
 		t.Fatalf("HandleRpc: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestJetStreamRPCHandleRpcPublishesResponseAfterHandler(t *testing.T) {
 	if handler == nil {
 		t.Fatalf("service rpc subscription was not registered: %+v", js.consumers)
 	}
-	payload, err := b.codec.Marshal(map[string]int64{"player_id": 1001})
+	payload, err := b.codec.Marshal(map[string]int64{"PlayerID": 1001})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestBusCallStaysLightweightWhenJetStreamRPCEnabled(t *testing.T) {
 	}
 
 	var resp struct{}
-	if err := b.Call(context.Background(), "mail", "mail.List", map[string]int64{"player_id": 1001}, &resp); err != nil {
+	if err := b.Call(context.Background(), "mail", "mail.List", map[string]int64{"PlayerID": 1001}, &resp); err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 	if rpc.subject != "roost.rpc.mail.mail.List" {
@@ -252,7 +252,7 @@ func TestHandleRpcRegistersOnlyJetStreamTransportWhenEnabled(t *testing.T) {
 	}
 
 	if err := b.HandleRpc("mail.List", func(ctx *RpcContext) (any, error) {
-		return map[string]int{"code": 0}, nil
+		return map[string]int{"Code": 0}, nil
 	}); err != nil {
 		t.Fatalf("HandleRpc: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestJetStreamRPCDropsExpiredRequestWithoutCallingHandler(t *testing.T) {
 	called := false
 	if err := b.HandleRpc("mail.List", func(ctx *RpcContext) (any, error) {
 		called = true
-		return map[string]int{"code": 0}, nil
+		return map[string]int{"Code": 0}, nil
 	}); err != nil {
 		t.Fatalf("HandleRpc: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestJetStreamRPCRequestIgnoresCanceledSubscribeContext(t *testing.T) {
 		t.Fatalf("EnableJetStreamRPC: %v", err)
 	}
 	if err := b.HandleRpc("mail.List", func(ctx *RpcContext) (any, error) {
-		return map[string]int{"code": 0}, nil
+		return map[string]int{"Code": 0}, nil
 	}); err != nil {
 		t.Fatalf("HandleRpc: %v", err)
 	}

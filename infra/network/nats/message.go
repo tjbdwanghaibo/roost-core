@@ -2,20 +2,19 @@ package nats
 
 // NatsMsg is the wire format for inter-service communication.
 type NatsMsg struct {
-	FromSid   int32         `json:"from_sid"`
-	ToSid     int32         `json:"to_sid"` // 0 = broadcast
-	ToModule  string        `json:"to_module"`
-	MsgName   string        `json:"msg_name"`
-	Payload   []byte        `json:"payload"` // encoded by application (protobuf/bson/json)
-	Broadcast BroadcastType `json:"broadcast"`
-	SessionId string        `json:"session_id"` // for RPC correlation
-	MsgID     string        `json:"msg_id,omitempty"`
-	Attempt   int32         `json:"attempt,omitempty"`
-	CreatedAt int64         `json:"created_at,omitempty"`
-	// ReplySubject and DeadlineAt are used by JetStream-backed RPC. They are
-	// optional so existing core NATS messages remain wire-compatible.
-	ReplySubject string `json:"reply_subject,omitempty"`
-	DeadlineAt   int64  `json:"deadline_at,omitempty"`
+	FromSid   int32
+	ToSid     int32 // 0 = broadcast
+	ToModule  string
+	MsgName   string
+	Payload   []byte // encoded by the shared Bus MessagePack codec
+	Broadcast BroadcastType
+	SessionId string // for RPC correlation
+	MsgID     string
+	Attempt   int32
+	CreatedAt int64
+	// ReplySubject 和 DeadlineAt 用于 JetStream RPC；普通消息保持零值。
+	ReplySubject string
+	DeadlineAt   int64
 }
 
 // BroadcastType determines message routing scope.

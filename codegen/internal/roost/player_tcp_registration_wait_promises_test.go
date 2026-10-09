@@ -55,11 +55,9 @@ func firstIndex(body string, needles ...string) int {
 
 func TestGeneratedPlayerTCPTestsWaitForTheSessionsTheyUse(t *testing.T) {
 	t.Parallel()
-	root, err := generatedProjectFixture("game-demo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rel := "internal/access/player/tcp/server_gen_test.go"
+	// 通用运行测试随实现迁到 gateway；保持相同等待契约，不能靠生成物复制测试。
+	root := "../../.."
+	rel := "infra/network/gateway/tcp_test.go"
 	bodies := generatedTestBodies(t, root, rel)
 
 	// 助手缺失时照样往下查每个用例，失败信息落在“哪个用例没等”上。

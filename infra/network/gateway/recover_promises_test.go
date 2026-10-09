@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"log"
 	"log/slog"
 	"testing"
 )
@@ -36,8 +37,11 @@ func (panicDiagnosticWriter) Write([]byte) (int, error) { panic("diagnostic sink
 
 func TestRecoverIsolatesDiagnosticFailure(t *testing.T) {
 	previous := slog.Default()
+	previousOutput := log.Default().Writer()
 	slog.SetDefault(slog.New(slog.NewTextHandler(panicDiagnosticWriter{}, nil)))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	// slog.SetDefault 同时替换标准 log 的 writer，恢复旧 defaultHandler 时不会自动恢复它。
+	// 恶意诊断 sink 只属于本回归，不能泄漏给后续 TCP 启动与生命周期测试。
+	t.Cleanup(func() { slog.SetDefault(previous); log.SetOutput(previousOutput) })
 	endpoint := Recover(func(context.Context, any) { panic("report failed") })(EndpointFunc(func(context.Context, Session, Request) (any, error) { panic("endpoint") }))
 	_, err := endpoint.Handle(context.Background(), nil, Request{})
 	if !errors.Is(err, ErrEndpointPanic) {

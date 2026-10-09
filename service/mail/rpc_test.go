@@ -452,7 +452,7 @@ func (f *fakeBus) Call(ctx context.Context, _ string, method string, req any, re
 	f.calls++
 	f.mu.Unlock()
 
-	codec := bus.JSONCodec{}
+	codec := bus.MessagePackCodec{}
 	payload, err := codec.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("fakeBus: encode %s request: %w", method, err)
@@ -492,7 +492,7 @@ func (f *fakeBus) CallAsync(svcType string, method string, req any, cb func([]by
 			cb(nil, err)
 			return
 		}
-		encoded, encErr := bus.JSONCodec{}.Marshal(raw)
+		encoded, encErr := bus.MessagePackCodec{}.Marshal(raw)
 		cb(encoded, encErr)
 	}()
 }
@@ -525,7 +525,7 @@ var _ bus.IBus = (*fakeBus)(nil)
 // and hand back the response value.
 func invoke(t *testing.T, handler bus.RpcHandlerFunc, method string, req any) (any, error) {
 	t.Helper()
-	codec := bus.JSONCodec{}
+	codec := bus.MessagePackCodec{}
 	payload, err := codec.Marshal(req)
 	if err != nil {
 		t.Fatal(err)

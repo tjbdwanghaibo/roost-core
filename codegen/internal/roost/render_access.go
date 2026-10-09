@@ -55,6 +55,12 @@ type Response struct {
 	Payload   []byte
 }
 
+// TCPResponse 只转换已编码结果，PB 编码仍由 ProtocolRegistry 持有。
+func (response *Response) TCPResponse() *gateway.TCPResponse {
+ if response == nil { return nil }
+ return &gateway.TCPResponse{MessageID:response.MessageID,Sequence:response.Sequence,Payload:response.Payload}
+}
+
 type Decoder func([]byte) (any, error)
 type Encoder func(any) ([]byte, error)
 type HandlerFunc func(*Context, any) (any, error)

@@ -8,7 +8,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
-const rpcWireVersion uint8 = 1
+const rpcWireVersion uint8 = 2
 
 // ErrRPCCapturedByJetStream reports that a lightweight RPC was answered by a
 // JetStream PubAck: the target serves RPC over JetStream, whose request stream

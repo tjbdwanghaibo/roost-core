@@ -21,14 +21,14 @@ func TestReliableBroadcastDedupIsPerConsumer(t *testing.T) {
 	}
 
 	var handled1 int
-	b1 := New(nil, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game"})
+	b1 := New(nil, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game"})
 	b1.EnableReliable(store, ReliableConfig{Enabled: true})
 	b1.Handle("mail", "Changed", func(*MsgContext) { handled1++ })
 	b1.dispatchMsg(&incomingTask{natsMsg: msg})
 	b1.dispatchMsg(&incomingTask{natsMsg: msg})
 
 	var handled2 int
-	b2 := New(nil, nil, JSONCodec{}, Config{Sid: 2, SvcType: "game"})
+	b2 := New(nil, nil, MessagePackCodec{}, Config{Sid: 2, SvcType: "game"})
 	b2.EnableReliable(store, ReliableConfig{Enabled: true})
 	b2.Handle("mail", "Changed", func(*MsgContext) { handled2++ })
 	b2.dispatchMsg(&incomingTask{natsMsg: msg})
@@ -46,7 +46,7 @@ func TestReliableBroadcastDedupIsPerConsumer(t *testing.T) {
 
 func TestReliableDispatchDropGoesToDeadLetter(t *testing.T) {
 	store := newReliableMemoryStore()
-	b := New(nil, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game"})
+	b := New(nil, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game"})
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 	b.dispatchTask(0, &incomingTask{natsMsg: &fnats.NatsMsg{
 		ToModule: "map",
@@ -62,7 +62,7 @@ func TestReliableDispatchDropGoesToDeadLetter(t *testing.T) {
 func TestBusDeadLetterListAndRequeue(t *testing.T) {
 	store := newReliableMemoryStore()
 	client := &captureNatsClient{}
-	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	b := New(client, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
 	_ = b.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 	b.deadLetter(&fnats.NatsMsg{
@@ -101,7 +101,7 @@ func TestBusDeadLetterRequeueLimitKeepsUnselectedEntries(t *testing.T) {
 		MaxDLQEntries: 10,
 	})
 	client := &captureNatsClient{}
-	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	b := New(client, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
 	_ = b.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 
@@ -133,7 +133,7 @@ func TestBusDeadLetterRequeueLimitKeepsUnselectedEntries(t *testing.T) {
 func TestBusDeadLetterRequeueUsesStableIDWhenDeleteFails(t *testing.T) {
 	store := newReliableMemoryStore()
 	client := &captureNatsClient{}
-	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	b := New(client, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
 	_ = b.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 	b.deadLetter(&fnats.NatsMsg{ToSid: 2, ToModule: "mail", MsgName: "Changed", MsgID: "dead-1"}, "handler failed")
@@ -156,7 +156,7 @@ func TestBusDeadLetterRequeueUsesStableIDWhenDeleteFails(t *testing.T) {
 
 func TestBusRpcNoHandlerRepliesWithErrorEnvelope(t *testing.T) {
 	rpc := &lifecycleRpc{replies: make(chan []byte, 1)}
-	b := New(&lifecycleClient{}, rpc, JSONCodec{}, Config{Sid: 5001, SvcType: "mail"})
+	b := New(&lifecycleClient{}, rpc, MessagePackCodec{}, Config{Sid: 5001, SvcType: "mail"})
 
 	b.dispatchRpc(&incomingTask{
 		natsMsg:      &fnats.NatsMsg{MsgName: "mail.Missing"},
@@ -177,7 +177,7 @@ func TestBusRpcNoHandlerRepliesWithErrorEnvelope(t *testing.T) {
 func TestBusDeadLetterAdminCommandsListAndRequeue(t *testing.T) {
 	store := newReliableMemoryStore()
 	client := &captureNatsClient{}
-	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	b := New(client, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
 	_ = b.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 	reg := admin.NewRegistry()

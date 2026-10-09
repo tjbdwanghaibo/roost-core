@@ -28,11 +28,12 @@ import (
 	"testing"
 
 	"example.com/planet/internal/stopcontract"
+ "github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 )
 
 // Server.Stop 自己不持有排空之后要释放的依赖：App 只在它返回 nil 之后继续停后面的 Mod。
 func TestA3GeneratedServerStopContract(t *testing.T) {
-	var server *Server
+	var server *gateway.TCPServer
 	var release chan struct{}
 	var returned <-chan struct{}
 	var stop func(context.Context) error
@@ -57,24 +58,17 @@ func TestA3GeneratedServerStopContract(t *testing.T) {
 func TestA3GeneratedModStopContract(t *testing.T) {
 	var mod *Mod
 	var release chan struct{}
-	runtime := &Runtime{}
+	runtime := NewRuntime(nil,defaultLoginTimeout)
 	stopcontract.Check(t, stopcontract.Hooks{
 		Start: func(testing.TB) {
-			var server *Server
+			var server *gateway.TCPServer
 			server, release, _, _ = stalledAuthServer(t)
-			runtime.startLifecycle()
-			runtime.server.Store(server)
-			mod = &Mod{config: server.config, server: server, transportRuntime: runtime}
+			mod = &Mod{config: defaultConfig(), server: server, transportRuntime: runtime}
 		},
 		Stop:    func(ctx context.Context) error { return mod.StopWithContext(ctx) },
 		Release: func() { close(release) },
 		Released: func() bool {
-			select {
-			case <-runtime.lifecycleDone:
-				return true
-			default:
-				return false
-			}
+			return mod.server == nil
 		},
 	})
 }

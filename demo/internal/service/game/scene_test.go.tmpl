@@ -1,6 +1,7 @@
 package {{GAME_SERVICE_PKG}}
 
 import (
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"context"
 	"errors"
 	"fmt"
@@ -11,7 +12,6 @@ import (
 
 	"{{MODULE}}/game/chatroom"
 	player "{{MODULE}}/game/entities/player"
-	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	gamescene "{{MODULE}}/game/scene"
 	world "{{MODULE}}/game/entities/world"
 	"{{MODULE}}/game/handler"
@@ -45,7 +45,7 @@ type sceneRecorder struct {
 	offline     map[int64]bool
 	unreachable map[int64]error // a push to this player fails with this error
 	unavailable bool            // the whole access layer is gone: every push fails
-	closed      []func(accessplayertcp.SessionClosed)
+	closed      []func(gateway.TCPSessionClosed)
 }
 
 func newSceneRecorder() *sceneRecorder {
@@ -67,7 +67,7 @@ func (recorder *sceneRecorder) PushPlayer(_ context.Context, playerID int64, mes
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
 	if recorder.unavailable {
-		return accessplayertcp.ErrTransportUnavailable
+		return gateway.ErrTransportUnavailable
 	}
 	if err := recorder.unreachable[playerID]; err != nil {
 		return err
@@ -85,7 +85,7 @@ func (recorder *sceneRecorder) disconnect(playerID int64) {
 	if recorder.unreachable == nil {
 		recorder.unreachable = make(map[int64]error)
 	}
-	recorder.unreachable[playerID] = fmt.Errorf("%w: player %d", accessplayertcp.ErrSessionNotFound, playerID)
+	recorder.unreachable[playerID] = fmt.Errorf("%w: player %d", gateway.ErrSessionNotFound, playerID)
 	if recorder.offline == nil {
 		recorder.offline = make(map[int64]bool)
 	}
@@ -110,7 +110,7 @@ func (recorder *sceneRecorder) ActiveSessions(playerID int64) int {
 
 // OnSessionClosed is the access layer's session lifecycle source, stood in
 // for: the test closes a session by calling the subscriber directly.
-func (recorder *sceneRecorder) OnSessionClosed(fn func(accessplayertcp.SessionClosed)) func() {
+func (recorder *sceneRecorder) OnSessionClosed(fn func(gateway.TCPSessionClosed)) func() {
 	recorder.mu.Lock()
 	recorder.closed = append(recorder.closed, fn)
 	recorder.mu.Unlock()
@@ -123,10 +123,10 @@ func (recorder *sceneRecorder) close(playerID int64) {
 		recorder.offline = make(map[int64]bool)
 	}
 	recorder.offline[playerID] = true
-	subscribers := append([]func(accessplayertcp.SessionClosed){}, recorder.closed...)
+	subscribers := append([]func(gateway.TCPSessionClosed){}, recorder.closed...)
 	recorder.mu.Unlock()
 	for _, fn := range subscribers {
-		fn(accessplayertcp.SessionClosed{PlayerID: playerID, SessionID: "gone"})
+		fn(gateway.TCPSessionClosed{PlayerID: playerID, SessionID: "gone"})
 	}
 }
 
@@ -551,7 +551,7 @@ func TestAnUnavailableTransportKeepsTheBatchAndThePlayers(t *testing.T) {
 	if _, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, mover.ID(), counters.ID(), 250); err != nil {
 		t.Fatalf("add exp: %v", err)
 	}
-	if err := scene.Flush(ctx); !errors.Is(err, accessplayertcp.ErrTransportUnavailable) {
+	if err := scene.Flush(ctx); !errors.Is(err, gateway.ErrTransportUnavailable) {
 		t.Fatalf("flush with the transport gone: %v, want ErrTransportUnavailable so the room retries", err)
 	}
 	if !mover.Sync().PendingDirty() {
@@ -641,10 +641,10 @@ func TestAClosedSessionLeavesTheWorldChannel(t *testing.T) {
 	presence.Add(stillOnline)
 	t.Cleanup(func() { presence.Remove(stillOnline) })
 	recorder.mu.Lock()
-	subscribers := append([]func(accessplayertcp.SessionClosed){}, recorder.closed...)
+	subscribers := append([]func(gateway.TCPSessionClosed){}, recorder.closed...)
 	recorder.mu.Unlock()
 	for _, fn := range subscribers {
-		fn(accessplayertcp.SessionClosed{PlayerID: stillOnline, SessionID: "one-of-two"})
+		fn(gateway.TCPSessionClosed{PlayerID: stillOnline, SessionID: "one-of-two"})
 	}
 	if !presenceHolds(presence, stillOnline) {
 		t.Fatal("a player with another live connection was removed from the world channel")
@@ -769,7 +769,7 @@ func TestAnOldConnectionsPushFailureKeepsTheReconnectedPlayer(t *testing.T) {
 	// The old connection is still registered and writing to it fails; the
 	// new one is up (ActiveSessions stays 1).
 	recorder.mu.Lock()
-	recorder.unreachable = map[int64]error{reconnectID: fmt.Errorf("session old: %w", accessplayertcp.ErrSessionNotFound)}
+	recorder.unreachable = map[int64]error{reconnectID: fmt.Errorf("session old: %w", gateway.ErrSessionNotFound)}
 	recorder.mu.Unlock()
 	counters := newSceneWorld(t)
 	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{mover.ID(): mover, re.ID(): re, counters.ID(): counters})
@@ -1171,7 +1171,7 @@ func TestASessionReopenRefusedWhileTheOldOneClosesIsRetried(t *testing.T) {
 		t.Helper()
 		ctx := context.Background()
 		h.recorder.mu.Lock()
-		h.recorder.unreachable = map[int64]error{reconnectID: fmt.Errorf("session old: %w", accessplayertcp.ErrSessionNotFound)}
+		h.recorder.unreachable = map[int64]error{reconnectID: fmt.Errorf("session old: %w", gateway.ErrSessionNotFound)}
 		h.recorder.mu.Unlock()
 		counters := newSceneWorld(t)
 		client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{h.mover.ID(): h.mover, h.re.ID(): h.re, counters.ID(): counters})
@@ -1631,7 +1631,7 @@ func TestAPlayerLoadedAgainAfterAnUnloadNobodyWatchedReachesALaterWatcher(t *tes
 	// nobody — itself included — subscribed to it.
 	moverSession := sessionFor(moverEntity)
 	recorder.mu.Lock()
-	recorder.unreachable = map[int64]error{moverID: fmt.Errorf("session old: %w", accessplayertcp.ErrSessionNotFound)}
+	recorder.unreachable = map[int64]error{moverID: fmt.Errorf("session old: %w", gateway.ErrSessionNotFound)}
 	recorder.mu.Unlock()
 	lane.breakOpens(moverSession, errors.New("session limit reached"))
 	if _, err := sender.MultiSync_AddExp(ctx, moverEntity, counters.ID(), 10); err != nil {

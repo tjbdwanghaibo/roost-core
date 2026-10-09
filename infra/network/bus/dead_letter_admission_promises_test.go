@@ -44,7 +44,7 @@ func deadLetterTwice(b *Bus) {
 func TestRequeueDeadLettersRefusesWithoutAClientAndPartialRequeueOnAPurgeOnlyStore(t *testing.T) {
 	ctx := context.Background()
 	store := newReliableMemoryStore()
-	clientless := New(nil, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	clientless := New(nil, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
 	_ = clientless.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
 	clientless.EnableReliable(store, ReliableConfig{Enabled: true})
 	deadLetterTwice(clientless)
@@ -57,7 +57,7 @@ func TestRequeueDeadLettersRefusesWithoutAClientAndPartialRequeueOnAPurgeOnlySto
 
 	purgeOnly := newReliableMemoryStore()
 	client := &captureNatsClient{}
-	b := New(client, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	b := New(client, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
 	_ = b.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
 	b.EnableReliable(purgeOnlyStore{ReliableStore: purgeOnly, inner: purgeOnly}, ReliableConfig{Enabled: true})
 	deadLetterTwice(b)
@@ -79,7 +79,7 @@ func TestRequeueDeadLettersRefusesWithoutAClientAndPartialRequeueOnAPurgeOnlySto
 }
 
 func TestAdminRegistrationAndNilBusEntryPointsRefuse(t *testing.T) {
-	b := New(&lifecycleClient{}, nil, JSONCodec{}, Config{Sid: 1, SvcType: "game"})
+	b := New(&lifecycleClient{}, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game"})
 	reg := admin.NewRegistry()
 	if err := RegisterAdminCommands(nil, b); err == nil || !strings.Contains(err.Error(), "admin registry nil") {
 		t.Fatalf("RegisterAdminCommands(nil registry) = %v", err)

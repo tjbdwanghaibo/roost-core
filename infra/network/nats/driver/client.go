@@ -7,6 +7,7 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,6 +45,8 @@ type Client struct {
 type natsLifecycleState struct {
 	draining atomic.Bool
 	closed   atomic.Bool
+	rawMu    sync.Mutex
+	raw      map[*gonats.Subscription]*rawSubscription
 }
 
 func (s *natsLifecycleState) isClosed() bool {

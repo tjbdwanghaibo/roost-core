@@ -10,6 +10,7 @@ require (
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
+	github.com/vmihailenco/msgpack/v5 v5.4.1
 	github.com/xtaci/kcp-go/v5 v5.6.72
 	go.etcd.io/etcd/api/v3 v3.7.1
 	go.etcd.io/etcd/client/v3 v3.7.1
@@ -45,6 +46,7 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tjfoc/gmsm v1.4.1 // indirect
+	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
