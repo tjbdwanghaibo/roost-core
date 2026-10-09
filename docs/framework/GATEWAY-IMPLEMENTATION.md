@@ -1,6 +1,6 @@
 # 独立 Gate：设计评审与实施方案
 
-状态：**目录重构已提交，Gate 实施中**。日期：2026-10-09；起始基准 `ef640e6e`，目录提交 `1b09cfb0`。TCP 共用运行实现、MessagePack、原始 NATS 能力已落码；完整独立 Gate 尚未交付。分阶段实际结果见 [实施验收](../maintenance/DIRECTORY-GATE-VALIDATION.md)。本轮先目录后 Gate，具体分类见 [目录方案](PACKAGE-REORGANIZATION.md)。
+状态：**目录重构已提交，Gate 实施中**。日期：2026-10-09；起始基准 `ef640e6e`，目录提交 `1b09cfb0`。TCP、MessagePack、Gate/Game 运行实现、广播与 Sync/Lockstep 接线已落码。本机功能回归通过；性能、独立多进程及跨机完整验收尚未收口。分阶段实际结果见 [实施验收](../maintenance/DIRECTORY-GATE-VALIDATION.md)。本轮先目录后 Gate，具体分类见 [目录方案](PACKAGE-REORGANIZATION.md)。
 
 ## 1. 评审结论
 
@@ -49,7 +49,7 @@ Nest 快慢池保持现有契约：快池执行 handler；慢池只做允许的�
 
 Wiring 延续 Wiring 的便捷接入初衷，业务声明 Mod/option 后由 App 接好初始化与关闭；模块自己拥有运行状态。Gate runtime 的认证、发现、incarnation 核对和业务分发依赖显式注入，不能为了取得 Registry 能力反向 import framework/app 或 wiring。此轮不另建 service/gate 领域包；连接会话仍归 gateway，service/session 管理的是副本/试炼等运行记录。
 
-先完成 TCP 提取，保留嵌入 Game 与独立 Gate 两种正式部署方式；它们共用同一 TCP 核心，分别接本地 dispatcher 和远端 forwarder。这是部署选择，不是旧实现兼容分支。新的可配置部署枚举拟为 `embedded` / `gate`，默认保持当前 embedded；Game 的 ingress 单独显式声明。具体配置位置沿用现有 player access 声明，生成器拒绝冲突组合。
+先完成 TCP 提取，保留嵌入 Game 与独立 Gate 两种正式部署方式；它们共用同一 TCP 核心，分别接本地 dispatcher 和远端 forwarder。这是部署选择，不是旧实现兼容分支。最终采用启动 option：嵌入 Game 声明原 player TCP Mod；独立 Gate 声明 `wiring/gate.NewGateMod`，Game 声明生成的 `player/tcp.NewIngressMod` 并禁用本地 TCP。两种正式部署复用同一 TCP 核心，生成接线拒绝重复 capability 和启用嵌入监听的冲突组合。
 
 通用 TCP 的 dispatcher 输入和输出均使用原始 payload、MsgID、Seq、PayloadKind。业务 PB 编码和 Response 类型保留在生成接线中；Response 通过 TCPReply 显式交付已编码字节；不能为了提取 TCP，把生成的 ProtocolRegistry 反向引用进 gateway。
 
@@ -225,7 +225,7 @@ P1 固定以下配置的合法范围、默认值和内存计算；P2 实现保�
 
 性能沿用实际业务基线：1000 玩家、10000 Entity、每玩家约 50 个可见实体、每玩家每秒 10 条普通消息；全部 Entity 挂 heartbeat，分别验证 1Hz/10Hz，变化率 1%/5%，on_change + 20Hz 兜底。Saga 代表占比约 0.2%，Remote 80TPS 作为独立已够用负载，不用 Remote/Saga 的 TPS 替代普通消息吞吐。
 
-先做各档短预检，再完成一档具名代表负载 1h 稳定性；同时跑具名故障矩阵和独立吞吐上限测试。比较同环境 embedded 与 Gate 链路的新增成本，不把以前的 80TPS/50ms 结果直接当 Gate 结果。
+先做各档短预检，再完成一档具名代表负载 15 分钟稳定性（维护者 2026-10-09 将本轮时长由 1h 调整为 15 分钟，负载与验收指标不变）；同时跑具名故障矩阵和独立吞吐上限测试。比较同环境 embedded 与 Gate 链路的新增成本，不把以前的 80TPS/50ms 结果直接当 Gate 结果。
 
 广播额外验证 1000 连接的全在线突发、跨两个 Gate 的指定区服/玩家、多会话、断线替换、同 ID 重复、ACK 丢失和一部分客户端不读。基准记录受众规模、PB 大小、广播频率、实际 accepted/received 数及广播期间普通消息/Sync P99；具体频率和大小作为具名测试参数，不把一轮全服公告吞吐当成持续广播容量。
 
@@ -251,3 +251,24 @@ Sync 的 P99≤50ms 从业务计划输入/handler 完成等起点分别记录，
 CBM 当前工作树项目为 `roost-core-gate-design-plan`，Tier 2，当前 generation `2026-10-09T08:17:42Z`，已刷新 Gate 新增文件；绑定、TCP、原始 NATS 与 Codec 材料路径 coverage 为 metadata_match，无记录缺口。图谱不是完整性证明，生成模板缺口仍按源码补证。docs 被策略排除，直接阅读。macOS 本机真实 NATS 和生成客户端证据见实施验收，不冒充独立 Gate 集群、Linux 实机或跨机性能验收。
 
 MessagePack 选型依据：[库说明](https://github.com/vmihailenco/msgpack)、[编码选项](https://github.com/vmihailenco/msgpack/blob/v5/encode.go)。支持普通结构体、可选 tag、数组模式及紧凑整数配置；本文未引用第三方性能数字作为 roost 容量承诺。
+
+## 9. 已实施接口与默认预算
+
+运行入口为 `gateway.NewGate`、`NewGameIngress`；便捷接入为 `wiring/gate.NewGateMod` 和生成的 `player/tcp.NewIngressMod`。`wiring/gate.Options` 接上 Authenticator、Ready、固定 SID resolver、OnActive/OnClosed 和依赖；RegisterDiscovery 配合 `etcd.WithoutServiceRegistration`，避免重复登记。
+
+| 配置 | 默认值 | 含义 |
+| --- | --- | --- |
+| MaxBindings / MaxPayloadBytes | 4096 / 512KiB | 绑定数与完整业务载荷；启动按真实编码验证完整内部信封 |
+| ForwardWorkers / PerGameInFlight | 256 / 128 | Gate 网络执行并发与单 Game 份额；不是 Nest worker |
+| MaxForwardRequests / MaxForwardBytes / PerBindingRequests | 4096 / 64MiB / 8 | 等待和执行中的总驻留预算 |
+| ControlWorkers / MaxControlRequests / MaxControlBytes | 64 / 4096 / 16MiB | Game 控制固定 worker 与含执行中的条目/字节预算；排队不刷新期限 |
+| RequestTimeout / ClockSkew | 3s / 5ms | 接入预算及跨进程保守期限余量 |
+| Lease / RenewInterval | 15s / 5s | 绑定租期与续期调度 |
+| MaxTombstones / TombstoneTTL | 8192 / 30s | 保留有效终态，满时拒绝新 Bind |
+| Outbound.QueueEntries / PerSessionBytes / ResidentBytes | 32 / 2MiB / 128MiB | 既有 AsyncTransport 唯一维护的条目/字节预算 |
+| Outbound.MaxAge / SendTimeout | 250ms / 250ms | 从原准入时间计算，发送持续失败关闭对应 binding |
+| BroadcastWorkers / MaxBroadcastRecords / BroadcastTTL | 8 / 4096 / 30s | 有界广播准入、去重容量和窗口 |
+
+共享 NATS 的 `ForInbox` 按 namespace/role/SID/incarnation 创建命名句柄，每个前缀一个有界回信订阅（4096 条/16MiB），每前缀最多 65536 个 waiter，一个 Client 最多 16 个前缀。句柄与订阅由共享 Client 生命周期唯一拥有，Mod Stop 不抢占关闭其他能力的 NATS 连接。取消删除 waiter，迟到回信丢弃；无每次 Request 新建订阅、无自动重投。
+
+真实 ACL 测试按 NATS 的 [subject 授权规则](https://docs.nats.io/learn/security/authorization) 限制来源与自身 inbox；`allow_responses` 使用有限一次回信权限。生产还需给现有 Bus/账户 RPC 等声明其实际服务权限，不能把测试 broker 配置照抄为完整生产配置。

@@ -41,10 +41,9 @@ type AreaID int64
 //     events when visibility is in fact unchanged — downstream subscriptions
 //     never blink across a border crossing.
 //
-// Concurrency: rooms tick from their own scene handlers concurrently, so the
-// cluster serializes all access behind one mutex (room ticks are 10–30Hz and
-// operations are microsecond-scale; see the package benchmark before
-// sharding this lock).
+// Concurrency: cluster membership and boundary mirroring are serialized by mu.
+// 区域共用 AOI 的块索引实现；cluster 跨区域迁移仍是单一协调操作，
+// 不以区域数量承诺并行写吞吐。正式 Interest 事实准入不经过这把锁。
 type AOICluster struct {
 	mu     sync.Mutex
 	config AOIConfig

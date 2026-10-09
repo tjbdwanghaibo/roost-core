@@ -505,3 +505,32 @@ func TestRoomCloseRejectsFurtherUse(t *testing.T) {
 		t.Fatalf("attach after close: %v", err)
 	}
 }
+
+func TestRoomLateDisconnectCannotDetachReplacement(t *testing.T) {
+	room := newTestRoom(t, newRecordingTransport(), nil)
+	if err := room.Attach(1, 101); err != nil {
+		t.Fatal(err)
+	}
+	if err := room.Attach(1, 202); err != nil {
+		t.Fatal(err)
+	}
+	if room.DetachSession(1, 101) {
+		t.Fatal("old disconnect removed replacement")
+	}
+	command := Command{Operation: OpInput, Frame: 1, Payload: []byte{7}}
+	if err := room.HandleCommand(101, command); !errors.Is(err, ErrPlayerDetached) {
+		t.Fatalf("old input=%v", err)
+	}
+	if err := room.HandleCommand(202, command); err != nil {
+		t.Fatal(err)
+	}
+	if !room.DetachSession(1, 202) {
+		t.Fatal("current disconnect did not detach")
+	}
+	if room.DetachSession(1, 202) {
+		t.Fatal("disconnect not idempotent")
+	}
+	if err := room.HandleCommand(202, command); !errors.Is(err, ErrPlayerDetached) {
+		t.Fatalf("detached input=%v", err)
+	}
+}

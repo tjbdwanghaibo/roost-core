@@ -4,8 +4,11 @@ package def
 //
 //roost:dao coll=states db=roost_nest_game dbscope=global
 type StateDao struct {
-	Messages   int64 `dao:"nopersist,nosync"`
-	Heartbeats int64 `dao:"nopersist,nosync"`
-	X          int64 `dao:"nopersist,sync"`
-	HP         int64 `dao:"nopersist,sync"`
+	Messages    int64 `dao:"nopersist,nosync"`
+	Heartbeats  int64 `dao:"nopersist,nosync"`
+	PlannedNS   int64 `dao:"nopersist,sync"`
+	ChangedNS   int64 `dao:"nopersist,sync"`
+	CommittedNS int64 `dao:"nopersist,sync"`
+	X           int64 `dao:"nopersist,sync"`
+	HP          int64 `dao:"nopersist,sync"`
 }

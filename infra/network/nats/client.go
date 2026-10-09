@@ -28,6 +28,8 @@ type MsgHandler func(msg *Msg)
 
 // Msg represents an incoming NATS message.
 type Msg struct {
+	// Status 保留 NATS 控制回信（例如 503 No Responders），不进入业务 payload。
+	Status  string
 	Subject string
 	Reply   string // non-empty for request/reply pattern
 	Data    []byte

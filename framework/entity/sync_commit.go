@@ -3,6 +3,7 @@ package entity
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 )
 
@@ -371,4 +372,18 @@ func (b *SyncMutation) SetLastCommitLSN(lsn uint64) {
 			entry.base.SetLastCommitLSN(lsn)
 		}
 	}
+}
+
+// HoldSyncPublication 由政策在持 Entity 锁登记事实时调用，阻止 PrepareViews
+// 发布该实体的新内容，直到事实已应用或作废。它不阻止 Admit 冻结，也不改变
+// SyncConditionFor 的提交/回滚结论，避免政策等自身完成形成循环。
+// 返回的释放函数幂等；政策必须在应用、拒绝、角色撤销和关闭时全部释放。
+func (s *SubjectSyncState) HoldSyncPublication() func() {
+	if s == nil {
+		return func() {}
+	}
+	s.mu.Lock()
+	s.policyHolds++
+	s.mu.Unlock()
+	return sync.OnceFunc(func() { s.mu.Lock(); s.policyHolds--; s.mu.Unlock() })
 }

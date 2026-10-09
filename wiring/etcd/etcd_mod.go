@@ -21,15 +21,31 @@ import (
 // publishes them as capabilities and forwards lifecycle calls; it holds no
 // raw clientv3 handle (P3b).
 type EtcdMod struct {
-	asm *etcddriver.Assembly
-	cfg *fetcd.Config
+	registerService bool
+	asm             *etcddriver.Assembly
+	cfg             *fetcd.Config
 
 	// service info for auto-registration
 	serviceInfo *fetcd.ServiceInfo
 }
 
-func NewEtcdMod() *EtcdMod {
-	return &EtcdMod{}
+// Option 只控制装配；连接、租约与注册循环仍由 etcd driver 持有。
+type Option func(*EtcdMod)
+
+// WithoutServiceRegistration 让接入 Mod 在监听/订阅启动后登记真实 incarnation。
+// 一个 Discovery 只有一个注册所有者，不能与 EtcdMod 的自动登记同时使用。
+func WithoutServiceRegistration() Option {
+	return func(mod *EtcdMod) { mod.registerService = false }
+}
+
+func NewEtcdMod(options ...Option) *EtcdMod {
+	mod := &EtcdMod{registerService: true}
+	for _, option := range options {
+		if option != nil {
+			option(mod)
+		}
+	}
+	return mod
 }
 
 func (m *EtcdMod) Name() app.ModName { return mods.ModEtcd }
@@ -80,6 +96,9 @@ func (m *EtcdMod) Init(cfg *viper.Viper) error {
 	}
 	if settings.AdvertiseAddr != "" {
 		m.serviceInfo.Metadata = map[string]string{"addr": settings.AdvertiseAddr}
+	}
+	if !m.registerService {
+		m.serviceInfo = nil
 	}
 	return nil
 }

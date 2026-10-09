@@ -1,28 +1,32 @@
 package policy
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"slices"
 	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// SourceSpatial and SourceSelf are the two sources every Interest carries:
-// distance, and "you always see yourself". A game adds its relationships by
-// name through Relation.
+// Interest 内建距离、额外块覆盖与自身来源；业务关系通过 Relation 添加。
 const (
 	SourceSpatial = "spatial"
 	SourceSelf    = "self"
+	SourceBlock   = "block"
 )
 
 // InterestConfig shapes an Interest.
 type InterestConfig struct {
 	// MaxQueuedFacts 限制正式提交事实队列；零值为 65536。
 	MaxQueuedFacts int
+	// BatchSize 是每批就绪事实的软上限，零值1024；不切开同一Nest提交。
+	BatchSize int
+	// Workers 限制同一批次并行观察者计算数；零值取GOMAXPROCS。
+	Workers int
 	// Manager receives the subscriptions. Required.
 	Manager *entitysync.Manager
 	// AOI 配置空间网格、进入/离开半径和距离分档；由 NewAOI 校验。
@@ -70,9 +74,16 @@ type Refusal struct {
 // and only the LAST source to drop it unsubscribes. Without that, a teammate
 // walking out of view would take the team subscription with them.
 //
-// AOI is not safe for concurrent use; Interest carries the
-// lock that makes it so. Every method is callable from any goroutine.
+// Interest.mu 串行化政策批次、生命周期和订阅归并；批次内按 observer 并行计算。
+// Queue* 只持独立 queueMu，不等待空间计算。两个锁仅按 mu→queueMu 获取。
 type Interest struct {
+	// queueMu 只保护事实准入和角色登记；不能包住空间计算或订阅操作。
+	queueMu          sync.Mutex
+	queueClosed      bool
+	roles            map[int64]interestRole
+	inflight         int
+	batchSize        int
+	workers          int
 	queueActive      bool
 	facts            []queuedInterestFact
 	maxQueuedFacts   int
@@ -127,7 +138,11 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 	if profile == nil {
 		profile = DefaultBandProfile
 	}
+	if config.BatchSize < 0 || config.Workers < 0 {
+		return nil, ErrInterestConfig
+	}
 	in := &Interest{
+		roles: make(map[int64]interestRole), batchSize: config.BatchSize, workers: config.Workers,
 		aoi: manager, session: session, profile: profile,
 		relations: make(map[string]*RelationSource), held: make(map[pair]*hold),
 	}
@@ -143,7 +158,7 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 	}
 	in.sourceProfiles = make(map[string]map[int]entity.SyncProfile, len(config.SourceProfiles))
 	for source, bands := range config.SourceProfiles {
-		if source != SourceSpatial && source != SourceSelf && !slices.Contains(config.Relations, source) {
+		if source != SourceSpatial && source != SourceSelf && source != SourceBlock && !slices.Contains(config.Relations, source) {
 			return nil, fmt.Errorf("policy: unknown profile source %q", source)
 		}
 		copy := make(map[int]entity.SyncProfile, len(bands))
@@ -155,13 +170,13 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		}
 		in.sourceProfiles[source] = copy
 	}
-	in.sources = []Source{aoiSource{manager: manager}}
+	in.sources = []Source{aoiSource{manager: manager}, blockSource{manager: manager}}
 	if config.SelfVisible == nil || *config.SelfVisible {
 		in.self = NewRelationSource(SourceSelf)
 		in.sources = append(in.sources, in.self)
 	}
 	for _, name := range config.Relations {
-		if name == "" || name == SourceSpatial || name == SourceSelf {
+		if name == "" || name == SourceSpatial || name == SourceSelf || name == SourceBlock {
 			return nil, fmt.Errorf("policy: relation name %q is reserved or empty", name)
 		}
 		if _, dup := in.relations[name]; dup {
@@ -180,6 +195,9 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 	in.maxQueuedFacts = config.MaxQueuedFacts
 	if in.maxQueuedFacts == 0 {
 		in.maxQueuedFacts = 65536
+	}
+	if in.batchSize == 0 {
+		in.batchSize = 1024
 	}
 	in.wake = config.Manager.WakeSync
 	in.cancelQueue = config.Manager.RegisterPolicy(in.applyQueued, in.queuedPending)
@@ -227,6 +245,7 @@ func (in *Interest) Enter(id int64, at spatial.Point) error {
 	if err := in.aoi.AddObserver(id, at); err != nil {
 		return err
 	}
+	in.setRole(id, interestRole{subject: true, observer: true})
 	if in.self != nil {
 		in.self.Set(id, []int64{id})
 	}
@@ -262,8 +281,9 @@ func (in *Interest) Leave(id int64) error {
 		relation.Clear(id)
 		relation.Forget(id)
 	}
-	// 排队事实早于本次 Leave：按实际发生的删除改写它们（RR-20261006-48，见 interest_queue.go）。
-	in.supersedeQueuedRelationsLocked(id, true)
+	// 退出期间 Queue* 仍可入队；最后一次短队列锁统一作废退出前的关系事实。
+	// 空间事实按实际移除的角色分别作废，不把 Hide 当成观察者也退出。
+	defer in.supersedeQueuedRelationsLocked(id, true)
 	if err := in.aoi.RemoveObserver(id); err != nil {
 		return err
 	}
@@ -283,7 +303,15 @@ func (in *Interest) Show(id int64, at spatial.Point) error {
 	if in.closed {
 		return errors.New("policy: interest is closed")
 	}
-	return in.aoi.AddSubject(id, at)
+	if err := in.aoi.AddSubject(id, at); err != nil {
+		return err
+	}
+	in.queueMu.Lock()
+	r := in.roles[id]
+	r.subject = true
+	in.roles[id] = r
+	in.queueMu.Unlock()
+	return nil
 }
 
 func (in *Interest) MoveShown(id int64, to spatial.Point) error {
@@ -304,7 +332,7 @@ func (in *Interest) Hide(id int64) error {
 	for _, relation := range in.relations {
 		relation.Forget(id)
 	}
-	in.supersedeQueuedRelationsLocked(id, false)
+	defer in.supersedeQueuedRelationsLocked(id, false)
 	if err := in.aoi.RemoveSubject(id); err != nil {
 		return err
 	}
@@ -392,6 +420,10 @@ func (in *Interest) Visible(observer int64) []int64 {
 func (in *Interest) Apply() []Refusal {
 	in.mu.Lock()
 	defer in.mu.Unlock()
+	return in.applyLocked()
+}
+
+func (in *Interest) applyLocked() []Refusal {
 	if in.closed {
 		return nil
 	}
@@ -400,16 +432,33 @@ func (in *Interest) Apply() []Refusal {
 	// for the NEXT one, not for a second attempt a few lines further down.
 	queued := in.retry
 	in.retry = nil
+	touched := make(map[pair]struct{})
 	for _, source := range in.sources {
 		name := source.Name()
 		events := source.Flush()
 		for _, event := range events {
-			in.applyEvent(name, event, &refusals)
+			key := pair{observer: event.Observer, subject: event.Subject}
+			touched[key] = struct{}{}
+			in.recordEvent(name, event)
 		}
 		// 仅内部 AOI 返回的本批事件由 Interest 独占；公开 Flush 的所有权不变。
 		if name == SourceSpatial && len(events) > 0 && cap(events) <= 4096 {
 			in.aoi.pending = events[:0]
 		}
+	}
+	keys := make([]pair, 0, len(touched))
+	for key := range touched {
+		keys = append(keys, key)
+	}
+	slices.SortFunc(keys, func(a, b pair) int {
+		if order := cmp.Compare(a.observer, b.observer); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.subject, b.subject)
+	})
+
+	for _, key := range keys {
+		in.settlePair(key, &refusals)
 	}
 	// Retries after the events, so that a pair a source event already spoke
 	// for in this Apply is not said twice.
@@ -426,39 +475,40 @@ func (in *Interest) Apply() []Refusal {
 	return refusals
 }
 
-// applyEvent folds one source's event into the pair's held set and says the
-// change it caused, if any.
-func (in *Interest) applyEvent(source string, event InterestEvent, refusals *[]Refusal) {
+// 先收齐所有来源的最终状态，再向 Manager 发布；spatial 转为 block/team
+// 可见时不能先退订后重建，否则会打断对象基线并产生闪烁。
+func (in *Interest) recordEvent(source string, event InterestEvent) {
 	key := pair{observer: event.Observer, subject: event.Subject}
 	current := in.held[key]
-	switch event.Kind {
-	case InterestLeave:
-		if current == nil {
-			return
+	if event.Kind == InterestLeave {
+		if current != nil {
+			delete(current.bands, source)
 		}
-		delete(current.bands, source)
-		if len(current.bands) > 0 {
-			// 其他来源仍持有；重新选择其视图，必要时触发全量恢复。
-			in.reband(key, current, refusals)
-			return
-		}
+		return
+	}
+	if current == nil {
+		current = &hold{bands: make(map[string]int, 2)}
+		in.held[key] = current
+	}
+	current.bands[source] = max(event.Band, 0)
+}
+func (in *Interest) settlePair(key pair, refusals *[]Refusal) {
+	current := in.held[key]
+	if current == nil {
+		return
+	}
+	if len(current.bands) == 0 {
 		delete(in.held, key)
 		delete(in.refused, key)
 		err := in.subscriptions.Unsubscribe(in.session(key.observer), key.subject)
 		if err != nil && !errors.Is(err, entitysync.ErrSubscriptionNotFound) && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
 			*refusals = append(*refusals, Refusal{Observer: key.observer, Subject: key.subject, Err: err})
 		}
-	default:
-		band := max(event.Band, 0)
-		if current == nil {
-			current = &hold{bands: make(map[string]int, 2)}
-			in.held[key] = current
-		}
-		current.bands[source] = band
-		if !current.subscribed {
-			in.subscribe(key, current, false, refusals)
-			return
-		}
+		return
+	}
+	if !current.subscribed {
+		in.subscribe(key, current, false, refusals)
+	} else {
 		in.reband(key, current, refusals)
 	}
 }
@@ -515,7 +565,14 @@ func (in *Interest) Close() {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	in.closed = true
+	in.queueMu.Lock()
+	in.queueClosed = true
+	for _, fact := range in.facts {
+		fact.finish()
+	}
 	in.facts = nil
+	clear(in.roles)
+	in.queueMu.Unlock()
 	for key := range in.held {
 		_ = in.subscriptions.Unsubscribe(in.session(key.observer), key.subject)
 	}

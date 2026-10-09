@@ -16,6 +16,8 @@ Nest 接收带目标实体声明的消息，负责队列准入、同 ID 顺序�
 
 快 worker 内禁止同步等待网络、磁盘、数据库、另一个 Nest Request，禁止自开 goroutine 并发访问 Entity/Component/DAO。LoadedEntitiesOnly 表示只能取已加载实体；发现冷目标必须走调度器的冷加载流程，不能在 getter 里悄悄 I/O。
 
+工作分支的快池默认等待容量为65536，整个池共享；配置 `nest.fast.queue_capacity` 或显式构造参数可以覆盖，0取默认。前驱关系由调度器按声明 ID 维护，worker 只领取前驱完成的任务，没有固定 ID→worker 队列。容量增加不代表吞吐提高，应同时观察最老等待时间与拒绝数；延时任务的独立缺省预算仍为10000。
+
 ## 2. 锁与实体
 
 声明目标参与同 ID 保序及冷热判断；handler 内动态 Cast 仍须遵守 category 与 ID 锁序。GuardScope 独占锁账本，作用域退出统一释放；共享锁组的加入、退出、迁移由正式组消息协调。可重入锁不能消除跨实体锁序要求。

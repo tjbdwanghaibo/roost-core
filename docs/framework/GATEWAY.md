@@ -1,200 +1,56 @@
-# 网关现状与独立 Gate 设计
+# Gate 与 Game 接入
 
-**当前可以运行嵌入 Game 的 TCP 接入服务器；独立 Gate 服务仍待实施。** 本文先说明已有能力，再给出后续开发顺序。出现“建议”“拟定”“待实施”的内容均不是 v1.24.1 已提供的 API。
+v1.25.0已实现嵌入 Game 的 TCP 与独立 Gate 两种正式接入。两者共用 [TCPServer](../../infra/network/gateway/tcp.go)，业务都进入生成的 ProtocolRegistry → Nest Sender → Nest → Entity/DataEngine。新增独立接入随v1.25.0交付；本机性能和跨机验收边界见[实施验收](../maintenance/DIRECTORY-GATE-VALIDATION.md)。
 
-核对日期：2026-10-09。源码基准：`82b16ace`，运行时代码与 v1.24.1 标签相同。本次提交只整理方案并纠正文档，不实现 Gate、不修改运行时、不发布新版本。
+## 1. 职责与目录
 
-[设计评审与具体实施方案](GATEWAY-IMPLEMENTATION.md)以 `ef640e6e` 为基准，细化转发通道、绑定权威、统一发送、客户端广播、预算与阶段验收。首期传输已确定使用 Core NATS，内部 Gate 信封与 Bus RPC 编码统一计划使用 MessagePack；Lockstep 与客户端广播均在本轮范围内。该方案仍待实施；当前 Bus 默认仍是 JSON，其中 P2 已要求最小资源限额，P4 再进行完整故障验收。
-
-用户确认 Gate 与[目录/Wiring 重构](PACKAGE-REORGANIZATION.md)同轮推进。目标运行位置为 `infra/network/gateway`，便捷接入位置为 `wiring/gate`；绑定、续期、队列和 NATS 收发属于运行实现，Wiring 只接配置、依赖及生命周期。先验收目录重构，再按 Gate 阶段交付，当前源码路径和已发布能力保持原状。
-
-## 1. 先理解 Gate 和 Game 的区别
-
-可以把 Gate 理解为游戏服的接待处：维护玩家连接、检查登录身份、把请求交给正确的游戏服，并把结果送回玩家。Game 执行购买、背包、战斗等游戏规则，Nest 负责调度，DataEngine 负责保存，Sync 负责状态同步。
-
-`infra/network/gateway` 是一组请求边界接口和中间件。`access.player` 是生成的协议分发层；生成的 TCP 模块才实际监听端口、收发网络包。这三个名字代表不同的层，不能因为有 `infra/network/gateway` 包就认为已有完整的独立网关。
-
-本文中的 PB 指 Protobuf 业务消息，RPC 指一个服务调用另一个服务；“回推”指 Game 主动把消息送回玩家连接。“会话”是一次经过认证的连接关系；“代次”用来区分重启或重连前后的关系，防止旧消息误送给新连接。
-
-这里的连接会话与 `service/session` 的副本/试炼运行会话不同：后者记录 Run 和外部资源释放，不管理 socket、Gate Binding 或 Sync SessionID。具体含义见 [Service 运行会话](guide/09-services.md#1a-session-运行会话)。
-
-当前默认链路：
-
-```text
-客户端
-  → Game 进程中的 TCP 监听与鉴权
-  → ProtocolRegistry 按消息号找到处理函数
-  → 生成的 Nest Sender → Nest → 游戏实体
-```
-
-目标链路：
-
-```text
-客户端 → Gate 进程 → 玩家所属的 Game 进程 → Nest → 游戏实体
-客户端 ← Gate 连接 ← Game 的响应、状态同步、帧同步
-```
-
-第一阶段继续采用玩家绑定固定区服的方式。把网络连接放进独立进程，不意味着同时实现玩家跨区迁移或 Game 热迁移。
-
-## 2. 已经完成的能力
-
-| 能力 | 当前实现 | 使用时的边界 |
-| --- | --- | --- |
-| 请求边界 | `gateway.Principal/Session/Endpoint`，鉴权守卫、限流、超时和 panic 保护 | 提供可组合工具；不会自动变成独立服务器 |
-| TCP 监听 | 监听端口、连接准入、关闭和资源释放 | 正式 `access.player` 生成入口目前只接受 TCP |
-| RS v2 协议 | 16 字节头，长度、版本、标志和序列检查 | PB、Sync、Lockstep 共用消息号空间；不兼容旧 RS v1 |
-| 票据鉴权 | 通用 Authenticator；game-demo 调用 Account.ValidateSession | 普通骨架默认拒绝登录；业务仍负责真实账号渠道和票据策略 |
-| 心跳 | 鉴权后接受消息号 0 的空心跳，回复同序号 ACK | 客户端主动发送；纯下行推送不会延长服务端读期限 |
-| 资源限制 | 总连接、单 IP 连接、握手并发、鉴权包和业务包大小上限 | 配置上限是保护阈值，不是实际容量承诺 |
-| 请求限流 | TCP 每连接令牌桶，心跳也消耗令牌 | 默认每秒 100、突发 200；重连建立新桶，不是集群级玩家限流 |
-| 本地会话 | 按 PlayerID/SessionID 查连接、关闭连接、替换相同 SessionID | 仅限当前进程；不同 SessionID 可属于同一玩家，不是全局单点登录 |
-| 分发与超时 | 校验载荷类型后解码，调用注册的处理函数，设置请求预算 | 顺序保证是每连接；同玩家多连接并发仍需 Nest 和业务规则约束 |
-| 主动推送 | PB、原始 Sync、Lockstep 按玩家或 Session 推送 | 当前查询本地会话；不是任意 Game 到任意 Gate 的跨进程推送 |
-| 慢连接处理 | 串行写锁、写期限、失败关闭 | 同步背压仍会占用调用方时间；没有独立的有界异步发送调度器 |
-| 停机 | 停监听、关闭连接、取消连接上下文、等待退出 | 不是连接无感迁移，也不是先保留老连接再逐步退出的发布流程 |
-| 观测 | 连接数、鉴权/帧/分发/写入/推送错误及耗时指标 | 仍需部署监控和压测，不能用“已有指标”代替容量验收 |
-
-断线通知使用容量为 256 的异步事件队列，拥塞时允许丢弃事件并计数。订阅方需要核对实际在线状态，不能把通知当作绝不丢失的会话账本。
-
-主要依据：[边界接口](../../infra/network/gateway/gateway.go)、[中间件](../../infra/network/gateway/middleware.go)、[TCP 模板](../../codegen/internal/roost/render_player_tcp.go)、[配置声明](../../codegen/internal/roost/player_tcp_config.go)、[协议分发](../../codegen/internal/roost/render_access.go)、[公共包头](../../client/wire/packet.go)、[Demo 鉴权](../../demo/internal/access/player/tcp/auth.go.tmpl)。
-
-## 3. 距离独立 Gate 还差什么
-
-| 待完成项 | 为什么必须做 | 完成后的可观察结果 |
-| --- | --- | --- |
-| 独立服务装配 | 当前服务目录没有 Gate；接入层仍依赖本地 Nest Client 和业务注册 | 可以只启动 Gate 接入进程，Game 单独启动 |
-| Gate → Game 转发 | 当前分发是本地调用，没有正式的跨进程玩家请求协议 | 已认证请求只到达玩家所属区服，不随机落到其他 Game |
-| Game → Gate 回推 | 当前 Push 查的是本地连接表 | Game 可通过连接绑定把响应、Sync、Lockstep 送回正确连接 |
-| 集群连接身份 | SessionID 本地查找不足以区分 Gate 重启和重连 | 旧进程、旧连接的响应和踢线不会影响新连接 |
-| 故障与恢复 | 网络断开、转发超时与业务失败不是同一状态 | 客户端能够重连、重新绑定、恢复订阅；不会自动重复扣费 |
-| 有界负载与隔离 | 跨进程增加等待点和排队内存 | Game 不可用或某连接很慢时，其他玩家仍能获得服务 |
-| 发布与运维 | 现有停机会直接关闭连接 | 停止新准入、限时处理在途、通知重连及最终关闭有明确步骤 |
-| 跨机验收 | 本地生成工程通过不代表 Gate 集群可用 | 两 Gate、两 Game 下完成路由、故障、背压和重连测试 |
-
-正式服务名单见 [frameworkCatalog](../../codegen/internal/roost/framework_services.go)。Player 接入可配置到一个 Service，但改服务名字本身不会实现上述转发和恢复协议。
-
-## 4. 首期方案：复用现有框架，补齐一条完整链路
-
-### 4.1 各层负责什么
-
-| 层 | 建议责任 | 应复用的基础 |
-| --- | --- | --- |
-| Gate | 连接、鉴权、连接绑定、包校验、转发、回推、限流 | 当前 TCP 实现、`infra/network/gateway`、`client/wire`、App 生命周期 |
-| Game 接入 | 验证内部调用身份和绑定代次、解码业务协议、调用本地 Sender | 当前 ProtocolRegistry、协议注册、Nest Sender |
-| 服务间传输 | 带期限的请求响应，以及回推/断线通知 | 优先评估现有 bus、servicerpc、NATS 接线，避免另建 RPC 系统 |
-| 路由与发现 | 找到固定区服的有效 Game 实例、校验进程代次 | 复用现有服务发现和区服信息；发现结果不替代写权限 |
-| 业务和持久化 | 保持现有实体、事务、DAO、持久策略 | Nest、DataEngine、Sync、Lockstep |
-| Wiring / Codegen（目标） | 配置、Mod 接线、服务模板、生成注册与使用说明 | 沿用现有 Service/Mod 模型，Wiring 接线迁为 Wiring |
-
-这些是实施时的复用方向，不代表现有 RPC 已能直接接收一个通用 Gate 数据包。P1 必须核实载荷上限、取消、认证、顺序与错误语义，缺少的接线需要显式实现。
-
-按已确认方案，把已有 `infra/network/gateway` 搬入 `infra/network/gateway`，再把通用 TCP 提取到该包的少量内聚文件。生成器保留业务注册、PB 编解码和配置接线，embedded 与独立 Gate 共用 TCP runtime。提取必须独立验收当前行为，并保持目录方案的依赖边界。
-
-Gate 首期只处理协议包头和原始业务字节，业务 PB 的解码与处理保留在 Game。Sync、Lockstep 继续使用现有编码；内部转发可以封装字节，但不要再设计另一份业务同步格式。
-
-### 4.2 建立连接与选择 Game
-
-1. 客户端连接 Gate，发送现有票据。Gate 通过 Account 或业务鉴权器确认 PlayerID 和角色绑定的 ServerID。
-2. Gate 用可信 ServerID 找到对应 Game。客户端提交的区服或玩家字段不能覆盖鉴权结果。
-3. Gate 与 Game 建立一份连接绑定，记录当前 Gate 进程、Game 进程和连接身份。Game 确认可以接收后才允许业务请求进入。
-4. Game 不存在、未就绪或绑定失败时，结束这次准入并返回明确的失败结果。已经发出外部鉴权 ACK 的实现仍必须在绑定完成前拒绝业务，不能留下“已连接但错误放行”的窗口。
-
-内部连接身份建议至少包含：Gate 实例 ID、Gate 启动代次、SessionID、绑定代次，以及 Game 实例/启动代次。启动代次指“这次进程启动的身份”，用于区分同名进程重启。实际字段和握手协议在 P1 固定；这些不是当前已存在的结构体。
-
-首次绑定和重新绑定还需要明确哪个 Game 接受新代次。不能只接收一个任意数值更大的客户端代次，也不能因为服务发现切到另一台机器就认为新机器获得了实体写权限。
-
-### 4.3 请求、响应和主动推送
-
-请求内部封装至少携带可信玩家身份、连接绑定、消息号、载荷类型、请求关联 ID、剩余时间预算和业务字节。外部 sequence 只在该连接内关联响应，不能直接作为跨重连的业务幂等键。
-
-Gate 和 Game 都限制封装总大小。内部传输的限制必须容纳业务包加封装开销，不能对外允许 1 MiB，却在转发层只能发送更小的数据且没有明确错误。
-
-Game 校验 Gate 来源和当前绑定，再进入现有协议分发与 Nest；不能让公网客户端伪造内部转发包。内部通道必须设置相应认证与权限，不能只相信包里写了 GateID。
-
-响应、主动推送和踢线都携带相同绑定身份。Gate 只向匹配当前代次的连接写出；迟到的响应、旧 Game 的推送和旧断线事件均不能作用到新连接。首期可由 Game 保持已绑定会话的 Gate 回推地址，避免为每个消息增加一次中央在线目录查询。
-
-首期还提供 PB 客户端广播：应用命名空间内全在线、指定固定区服、指定玩家集合。业务决定受众，Gate 只按可信活动绑定筛选并有界扇出；跨 Gate 每个目标接收一次编码后的包，再复用本地连接发送队列。广播准入、部分失败和结果未知分别反馈，不承诺客户端必收。Sync/Lockstep 仍走各自的订阅/房间身份和恢复通路；具体广播契约见[实施方案](GATEWAY-IMPLEMENTATION.md#51-面向客户端的广播)。
-
-如以后需要“任意服务仅凭 PlayerID 查全局在线连接”，再增加有条件更新、续期和核对的在线目录。可以评估现有 versionstore/Redis 能力，但目录是连接位置记录，不是实体所有权，也不是消息已经被客户端接收的凭据。
-
-### 4.4 超时、失败与重复执行
-
-| 状态 | 处理约定 |
+| 位置 | 责任 |
 | --- | --- |
-| 转发前明确拒绝 | 返回未接纳结果，不进入 Game；允许业务按规则重试 |
-| 转发后失去响应 | 结果可能已生效；标记未知，不能自动换 Game 重放写请求 |
-| Game 已准入 | Gate 断线或等待超时不撤销已有事务 |
-| 响应未送达客户端 | 业务按原幂等身份查询或重试；连接序号不能代替业务请求 ID |
-| 推送失败 | 保留现有 Sync/Lockstep 交付失败与恢复语义；不能丢增量后继续宣称基线正确 |
+| `infra/network/gateway` | TCP、鉴权边界、绑定、续期、有界转发/出站、广播、排空；不依赖 Nest/Entity/Service/Wiring |
+| `wiring/gate` | App singleton、Account、发现、正式 dispatcher、Sync/Lockstep 的便捷接线 |
+| `codegen/internal/roost` | 生成协议和配置、嵌入 TCP Mod、Game `NewIngressMod`；不生成另一份 TCP 运行循环 |
+| `service/session` | 副本/试炼等运行记录，与 socket、Gate Binding、Sync SessionID 无关 |
 
-一个总预算覆盖 Gate 排队、转发和 Game 等待，后续阶段只能消耗或缩短剩余预算。不要每经过一层重新获得完整超时。取消只表示停止等待，不能证明远端没有执行；传输层也不能强行终止忽略 context 的处理函数。
+独立部署的链路是客户端 RS v2 → Gate TCP → Core NATS → Game Ingress → 正式业务 handler。内部信封和默认 Bus/RPC 使用 MessagePack；PB、Sync、Lockstep 的客户端格式保持原样。Gate 不处理 Entity 业务，也不获取 Entity local 锁。
 
-### 4.5 有界队列和恢复
+## 2. 正式接入方式
 
-保留每连接请求顺序，明确跨多连接由谁协调。为连接、Gate 总体、每个 Game 分别限制在途请求数、排队条目和排队字节；队列满时明确拒绝或关闭连接，不创建无界 goroutine。
+嵌入部署继续声明生成的 player TCP Mod。独立部署中，Gate 声明 `wiring/gate.NewGateMod(options)`；Game 声明生成的 `player/tcp.NewIngressMod(options)`，关闭该 Game 的本地 player TCP listener。两个 Mod 使用同一 capability 名，生成接线拒绝重复提供，不能在同一个 Game 同时装配两种入口。
 
-跨 Game 故障隔离不能只有连接总上限：一个区服阻塞时，不应吃掉其他区服全部转发名额。PB 回复、Sync 增量和 Lockstep 输入的丢弃/重试规则不同，不能统一采用“只保留最新包”。
+`DefaultOptions()` 提供资源默认值。Gate 要明确设置 `TCP.Enabled=true`、监听地址及业务 `Ready`；Game 提供业务 `Ready`。Ready 只快速读取已维护的准入状态，不能每包执行 I/O。两端必须启用 App singleton，并依赖同一应用命名空间下的 NATS。
 
-重连创建新连接代次，重新鉴权和绑定，再按已有 Sync 全量基线或 Lockstep 追帧流程恢复。Gate 无须保存游戏实体副本，也不迁移正在使用的 TCP socket。首期不承诺透明恢复所有在途请求。
+未提供 Authenticator 时，接线使用正式 Accounts.ValidateSession 校验签名 session 票据、PlayerID 与固定 Game SID。自定义 Authenticator 也必须返回可信固定路由；不是依据客户端自报 SID 随机选 Game。绑定阶段 Gate/Game 各自验证，后续数据包不重复查 Account。
 
-断线事件只作及时提示；绑定续期、超时和状态核对负责兜底。发布流程先拒绝新准入，再按预算处理在途业务，最终关闭连接并由客户端重连。不能把关闭连接当作已接纳业务全部取消。
+使用发现时，两端设置 `RegisterDiscovery=true`，并装配 `etcd.NewEtcdMod(etcd.WithoutServiceRegistration())`。接入监听/订阅启动及 NATS Flush 完成后才登记候选；一个 Discovery 只有一个登记拥有者。Game 候选必须带 `access.incarnation` 与 `access.ingress_ready=true`。Gate 默认用 FixedGameResolver 只查固定 SID；也可以显式注入 ResolveGame。发现只是候选，真正的身份由 SingletonIdentityChecker 核对。
 
-## 5. 实施顺序与完成条件
+NATS ACL 必须限制每个进程的来源前缀和自己的 reply inbox。应用 payload 自报 GateID 不构成认证。正式权限配置和已测边界见[具体契约](GATEWAY-IMPLEMENTATION.md)；测试用私有 broker 和临时测试用户，不要求修改共享业务 broker。
 
-以下阶段均为待实施。先完成一条真实端到端链路，再扩大传输和部署范围；不以新增文件数计算进度。
+## 3. 绑定与请求结果
 
-| 阶段 | 工作范围 | 完成条件 |
-| --- | --- | --- |
-| P1：固定契约 | 明确目录、TCP 复用方式、内部包、绑定代次、路由与错误语义 | 能明确回答每个状态由谁持有、失败由谁清理；所有新配置和限制有定义 |
-| P2：单 Gate + 单 Game | 独立装配、Account 鉴权、双向 PB 转发、主动推送 | 独立进程跑通登录、读请求和一次持久写；原本机接入回归通过 |
-| P3：会话与恢复 | 多 Gate/多 Game、定向路由、代次隔离、断线核对、Sync/Lockstep | 旧连接不会影响新连接；不重复业务写；恢复后客户端状态一致 |
-| P4：资源与故障 | 在途/字节预算、慢连接隔离、Game 不可用、发布退出、监控 | 限额真实生效；故障期间资源有界；无静默丢增量和错误成功 |
-| P5：支持环境验收 | Linux/macOS、本地与跨机、声明容量和持续负载 | 记录硬件、连接数、包大小、吞吐、延迟和失败数，达到约定目标再声明完成 |
+完整绑定含 PlayerID、SessionID、Gate/Game SID 与 incarnation、连接 nonce、Game 签发 BindID。先 Bind，再物理写出 AuthACK，最后 Activate。OnActive/OnClosed 用 Game 分配的不复用数值 receiver 建立和关闭 Sync/Room 生命周期；旧关闭、旧出站失败不会解绑新连接。不同 SessionID 可属于同一玩家，没有框架隐式全局单点登录。
 
-P2 完成可以称为“独立网关最小链路可用”；P3/P4/P5 完成后，才能对具名部署条件声明生产可用。当前没有据此给出工期或容量数字，因为尚未实现和测量。
+Gate Forward 只有一次传输尝试。预算包含 Gate 等待、NATS、Game 等待与正式 dispatcher；控制请求也有条目/字节上限和固定 worker，排队消耗原预算。
 
-公网 TLS 可优先由现有 LB/代理终止；若产品要求 Gate 原生处理 TLS，再实现证书和轮换配置。WebSocket、KCP、QUIC、动态 Game 迁移和全局在线目录属于后续独立范围，不阻塞首期固定区服 TCP 链路。
+- `NotAdmitted`：确认未交给 dispatcher。
+- `Completed`：内部执行及本地出站已准入；不是落库确认或客户端业务处理确认。
+- `Unknown`：已交给 dispatcher 后的失败/超时，或者丢失回执；不能自动重放扣款/发奖等写请求。
 
-## 6. 后续实现必须验证的场景
+## 4. Sync、Lockstep 与广播
 
-| 场景 | 必须得到的结果 |
-| --- | --- |
-| 伪造玩家/区服、错误票据、伪造内部包 | 进入业务前拒绝，不因为载荷字段可信外观而放行 |
-| 两个 Game、同消息号 | 请求只进入绑定的目标，不能按普通负载均衡随机发写请求 |
-| 断线、重连后迟到的旧响应/踢线 | 新连接不接收旧响应、不被旧事件关闭 |
-| Gate/Game 重启、绑定续期中断 | 旧代次失效；不把过期发现结果当有效写权限 |
-| 转发超时但 Game 已成功提交 | 客户端看到失败或未知后，仍可通过业务幂等协议确定结果，不能重复扣费 |
-| 大包、半包、心跳滥用、错误载荷类别 | 分配前或业务前拒绝；心跳不能绕过限流 |
-| 客户端不读、Game 长期阻塞、队列满 | 内存/在途有上限，其他连接和区服继续服务 |
-| PB、Sync、Lockstep 混合推送 | 类型、顺序、上限正确；慢连接失败进入各自恢复流程 |
-| 退出期间存在已准入业务 | 业务提交与连接关闭分别记录，禁止伪造取消或成功 |
-| 两 Gate、两 Game 跨机故障 | 单机与跨机结果分别记录；覆盖实际内部传输、认证和部署配置 |
+`wiring/gate.Transport` 把 Entity Sync 和 Lockstep 接到 Game 同一个有序出站口。数值 receiver 发送时冻结完整 binding。Sync 保持原 profile/AOI/epoch/版本与 handler 完成后的 on_change + 20Hz 兜底；setter 只标脏。Push 成功只表示本地准入，异步下游失败关闭对应完整旧 binding 和 Sync lifetime。
 
-这些是待执行的验收清单。本次没有启动 Gate 集群，也没有运行新增网关容量测试。
+Room 的 Attach/Detach/Input/Hash/Tick/Catchup 仍走业务的单一 Room owner。迟到断线使用 `Room.DetachSession(player, receiver)` 条件解绑；不能在 NATS callback 直接修改 Room 或 Entity。首期两种 Lockstep 发送接口最终都经 Gate TCP，不提供 UDP/KCP 承诺。
 
-## 7. 本次发现并纠正的文档问题
+`gateway.BroadcastSender` 支持指定玩家、指定 Game 在线连接，以及由 system 身份发起 AllOnline。Game 只能广播自己拥有的连接；通用广播仅为 PB push，不把不同客户端的 Sync delta 当通用广播。每 Gate 返回准入统计与 completed/not_admitted/unknown；同 BroadcastID 在有限窗口内返回首次结果，不重复投递，换内容复用 ID 会被拒绝。统计按连接，包含同玩家多会话，不构成精确全局在线玩家数。
 
-| 位置 | 原问题 | 本次处理 |
-| --- | --- | --- |
-| 仓库 TCP 手册 | 仍写 RS v1，flags 只区分请求与推送 | 改为 RS v2，解释业务类型位及合法方向 |
-| 仓库及生成 TCP 手册 | 消息号 0 只用于鉴权 | 补充鉴权后空载荷心跳和同序号 ACK |
-| 仓库 TCP 配置示例 | 缺少心跳和每连接限流参数 | 补齐默认值、重连新桶和纯下行不续读期限的边界 |
-| 生成 TCP 手册 | Lockstep 写成预留/拒绝，客户端请求只接受 PB | 改为 PB 请求及显式注册的 Lockstep Notify；Sync 上行仍拒绝 |
-| 仓库及生成 TCP 手册 | 主动推送统一写 flags=1 | 分别说明 PB=1、Sync=3、Lockstep=5 |
-| 仓库及生成 TCP 手册 | 把每连接串行概括为同玩家命令有序 | 明确多连接并发仍依赖 Nest 与业务契约 |
+PB、Sync、Lockstep 共用每绑定 OutSeq 和有界出站，Gate 检查连续序号并复用唯一 socket writer。按完整协议包发送，不按字节截断 Sync 帧。重复只确认已准入前缀；缺口或持续发送失败关闭连接，重连后恢复全量/追帧。
 
-修改位置：[仓库 TCP 手册](../../codegen/docs/PLAYER_ACCESS_TCP.zh-CN.md)、[生成文档模板](../../codegen/internal/roost/render_workflow_docs.go)。只改输出说明，不改 TCP、协议或生成的业务逻辑。
+## 5. 停机、指标与验证
 
-文档遗漏的原因是同一协议说明同时存在于公共包头、仓库手册和生成手册，之前的修改未覆盖全部说明入口。后续修改包头、载荷类型或控制帧时，应同时核对这三个入口，并查看实际生成工程中的文档；只搜索版本号不足以发现“类型仍写预留”等语义遗漏。
+停止先关闭准入，再等已接纳 dispatcher、回调与出站真实排空，随后注销发现和关闭 TCP。超时保留实例及依赖，新 context 可继续等待；不把取消等待当事务已经停止。
 
-已有 v1.24.1 标签保持不变。本次提交修正 main；已经使用旧标签生成的项目，其手册不会自动更新，应在采用包含本次修改的生成器版本后重新生成。
+`gate.channel.result_total` 与 `gate.channel.failure_total` 使用有限 role/phase/result 标签；Stats 返回当前绑定和驻留预算。不要把 PlayerID、SessionID、incarnation 或票据加入指标标签。
 
-## 8. 证据与阅读入口
+已验证正式生成 PB/Nest/双实体 DAO/文件 WAL/Sync、实际 NATS 双 Gate 双 Game、Lockstep 输入/追帧/重连、旧事件隔离、ACK 丢失、广播去重、控制容量与预算、真实 ACL、Stop 重试。测试使用本机隔离资源，鉴权权威、存储和进程范围按[验收记录](../maintenance/DIRECTORY-GATE-VALIDATION.md)逐项说明；不声称已完成独立多进程、真实 Mongo、Linux 实机或跨机完整矩阵。
 
-结构定位使用 codebase-memory 的 `roost-core` 项目，索引代际为 `2026-10-08T23:53:39Z`。相关证据路径均做过覆盖检查，返回元数据变化，因此最终结论以当前跟踪源码及模板补证。这里的完成状态是有界静态核对，不是逐函数或全部故障组合的正确性证明。
-
-本次在 Windows、Go 1.27.0、`GOWORK=off` 下执行：文档相对链接检查 `TestTrackedMarkdownRelativeLinksResolve` 通过（1.736 秒）；TCP 生成流程 `TestAddPlayerTCPTransportIsExplicitAndProductionGuarded` 通过（27.537 秒，包含生成后无漂移检查）；`go build ./...` 和 `git diff --check` 通过。没有重跑全仓测试、真实外部资源或容量测试，不等待 GitHub CI。
-
-前一轮真实标签消费者测试见 [v1.24.1 验收](../release/v1.24.1-IMPLEMENTATION.md)，不能把它当作未来独立 Gate 的验收。
-
-[返回框架目录](README.md) · [Service 能力](guide/09-services.md) · [Sync 与客户端](guide/04-sync.md) · [维护手册](../maintenance/README.md)
+完整配置、协议、阶段验收和未验收项见[设计与实施契约](GATEWAY-IMPLEMENTATION.md)。目录升级没有旧 import alias，旧工程必须重新生成并编译；稳定基线历史性能不能替代新增 Gate 的结果。

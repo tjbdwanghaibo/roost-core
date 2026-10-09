@@ -1,6 +1,18 @@
 package nestgame
 
-import "github.com/tjbdwanghaibo/roost-core/framework/entity"
+import (
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// 此夹具的客户端、Gate、Game 在同一进程；测试包中的测量字段保存同一单调时钟
+// 原点的偏移，解码时还原单调时间。UnixNano 序列化会丢失单调分量，长测中
+// 系统墙钟调整会让按计划生成的时间与接收时间失配。跨进程不能复用此口径。
+var loadClockOrigin = time.Now()
+
+func loadTimestamp(t time.Time) int64 { return int64(t.Sub(loadClockOrigin)) }
+func loadTime(ns int64) time.Time     { return loadClockOrigin.Add(time.Duration(ns)) }
 
 // 独立生成模块使用的 kind，不写入其他压测的进程级注册表。
 const kindUnit entity.EntityKind = 194
@@ -50,4 +62,14 @@ func (e *Unit) HandleMessage(change bool) {
 		e.state.SetMessages(e.state.GetMessages() + 1)
 		e.state.SetX(e.state.GetX() + 1)
 	}
+}
+
+// 手写同步取脏入口只用于这个正式生成负载夹具，数据仍由生成 DAO setter 管理。
+func (e *Unit) TakeEntitySyncChanges() uint64 {
+	mask := e.state.DirtyTracker().TakeEntitySyncDirty()
+	if mask != 0 && e.Sync() != nil {
+		e.state.SetCommittedNS(loadTimestamp(time.Now()))
+		mask |= e.state.DirtyTracker().TakeEntitySyncDirty()
+	}
+	return mask
 }

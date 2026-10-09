@@ -29,6 +29,12 @@
 
 [packet.go](../../../client/wire/packet.go)从flags解释Kind并在Header.Validate拒绝保留组合、超长载荷和非法心跳标记。头解码不解释业务payload，注册路由与Lockstep/Sync解码器仍各自校验。
 
+## 2B. 工作分支的空间组件与政策发布顺序
+
+[Block AOI实现说明](../INTEREST-BLOCK-AOI.md)给出锁与作用域。`policy.SpatialComponent`用手写writer写DAO，Queue*复用`SyncConditionFor`。`queueMu`不包住AOI计算；每批先写空间、再并行observer、最后归并所有来源，防止来源切换重建基线。
+
+`SubjectSyncState.HoldSyncPublication`阻止内容越过尚未应用的政策事实；它只约束PrepareViews，不改变提交确认条件、不阻止锁内冻结。事实应用、丢弃、退出与关闭都必须释放，不能只在成功路径释放。
+
 ## 3. 并发、失败与恢复的修改检查
 
 修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。

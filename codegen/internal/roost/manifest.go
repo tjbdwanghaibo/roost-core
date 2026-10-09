@@ -20,12 +20,12 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
-// v1.24.0 生成物使用唯一快慢池、subjectPacker 与无自动迁移的 DAO API，不能接入旧 core。
+// v1.25.0 生成物使用分类后的包路径和 Gate 接入 API，不能接入旧 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
 // Kit 字段仅识别历史清单，不再指代独立模块；其下限保留最后一个有效历史值。
 // Codegen 字段已废弃，生成 Makefile 直接使用 versions.core（RR-20261006-57）。
 var minimumVersions = VersionSpec{
-	Core: "v1.24.0",
+	Core: "v1.25.0",
 	Kit:  "v1.14.8",
 }
 

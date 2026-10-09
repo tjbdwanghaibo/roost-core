@@ -68,6 +68,8 @@ type AOIConfig struct {
 	// done to find them. A small view over a fine grid is cheap by the first
 	// measure and expensive by this one.
 	MaxObserverBlocks int
+	// MaxObservedBlocks 限制单个实体额外覆盖块数；零值取1024。
+	MaxObservedBlocks int
 	// MaxVisible, when positive, caps an observer's visible set: an entering
 	// subject closer than the current farthest evicts it, a farther one is
 	// ignored. This is a broadcast-storm gate with approximate semantics —
@@ -87,6 +89,9 @@ const maxInterestRadius = int64(1) << 62
 const DefaultMaxObserverBlocks = 1024
 
 func (c AOIConfig) validate() error {
+	if c.MaxObservedBlocks < 0 {
+		return ErrInterestConfig
+	}
 	if c.EnterRadius <= 0 || c.LeaveRadius < c.EnterRadius || c.LeaveRadius >= maxInterestRadius {
 		return ErrInterestConfig
 	}
@@ -146,10 +151,13 @@ func (c AOIConfig) boundedSides(blockSize int64) int64 {
 }
 
 type interestObserver struct {
-	id      int64
-	at      spatial.Point
-	blocks  map[int64]struct{}
-	visible map[int64]int // subject id -> current band
+	id           int64
+	at           spatial.Point
+	blocks       map[int64]struct{}
+	visible      map[int64]int // subject id -> current band
+	blockVisible map[int64]int
+	pending      []InterestEvent
+	blockPending []InterestEvent
 }
 
 // AOI is the incremental interest (AOI) layer over spatial.BlockIndex:
@@ -157,23 +165,20 @@ type interestObserver struct {
 // observer movement re-evaluates only the affected neighborhood, and Flush
 // drains the resulting Enter/Leave/BandChanged events deterministically.
 //
-// Concurrency: unlike spatial.BlockIndex, an AOI is NOT safe for
-// concurrent use. It is scene-private state, owned and ticked serially by
-// the scene's handler; paying for locks here would buy nothing. For multiple
-// concurrently ticking rooms use AOICluster, which adds its own lock.
+// 并发边界：公开写方法由 Interest 或 AOICluster 协调，不能由外部并发调用。
+// 物理成员索引复用 BlockIndex 的块级读写锁；扩展块保存观察关系与额外覆盖。
+// 批次写入结束后，不同 observer 可以并行计算，各自拥有可见集和事件缓冲。
 type AOI struct {
-	config    AOIConfig
-	index     *spatial.BlockIndex
-	subjects  map[int64]spatial.Point
-	observers map[int64]*interestObserver
-	// blockObservers is the nine-grid subscription table: block index ->
-	// observers whose leave-radius box covers it.
-	blockObservers    map[int64]map[int64]*interestObserver
-	pending           []InterestEvent
-	blocksScratch     []int64
-	queryScratch      []int64
-	candidatesScratch []entryCandidate
-	seenScratch       map[int64]struct{}
+	config       AOIConfig
+	index        *spatial.BlockIndex
+	subjects     map[int64]spatial.Point
+	observers    map[int64]*interestObserver
+	blocks       map[int64]*aoiBlock
+	observed     map[int64][]int64
+	pending      []InterestEvent
+	blockPending []InterestEvent
+	batching     bool
+	dirty        map[int64]*interestObserver
 }
 
 func NewAOI(config AOIConfig) (*AOI, error) {
@@ -184,12 +189,17 @@ func NewAOI(config AOIConfig) (*AOI, error) {
 	if err != nil {
 		return nil, err
 	}
+	config.Bounds = index.Bounds()
+	config.Bands = slices.Clone(config.Bands)
+	if config.MaxObservedBlocks == 0 {
+		config.MaxObservedBlocks = 1024
+	}
 	return &AOI{
-		config:         config,
-		index:          index,
-		subjects:       make(map[int64]spatial.Point),
-		observers:      make(map[int64]*interestObserver),
-		blockObservers: make(map[int64]map[int64]*interestObserver),
+		config:    config,
+		index:     index,
+		subjects:  make(map[int64]spatial.Point),
+		observers: make(map[int64]*interestObserver),
+		blocks:    make(map[int64]*aoiBlock), observed: make(map[int64][]int64), dirty: make(map[int64]*interestObserver),
 	}, nil
 }
 
@@ -206,7 +216,12 @@ func (m *AOI) band(distanceFrom, to spatial.Point) int {
 }
 
 func (m *AOI) emit(observer, subject int64, kind InterestEventKind, band int) {
-	m.pending = append(m.pending, InterestEvent{Observer: observer, Subject: subject, Kind: kind, Band: band})
+	event := InterestEvent{Observer: observer, Subject: subject, Kind: kind, Band: band}
+	if o := m.observers[observer]; o != nil {
+		o.pending = append(o.pending, event)
+	} else {
+		m.pending = append(m.pending, event)
+	}
 }
 
 // AddSubject indexes a subject and evaluates it against the neighborhood's
@@ -252,6 +267,7 @@ func (m *AOI) RemoveSubject(id int64) error {
 	if !exists {
 		return ErrInterestUnknown
 	}
+	_ = m.SetObservedBlocks(id, nil)
 	m.index.Remove(id, at)
 	delete(m.subjects, id)
 	m.evaluateSubjectFor(m.observersAt(at), id, at, true)
@@ -281,7 +297,11 @@ func (m *AOI) addObserverUnbounded(id int64, at spatial.Point) error {
 	observer := &interestObserver{id: id, at: at, blocks: make(map[int64]struct{}), visible: make(map[int64]int)}
 	m.observers[id] = observer
 	m.resubscribe(observer)
-	m.evaluateObserver(observer)
+	if m.batching {
+		m.dirty[observer.id] = observer
+	} else {
+		m.evaluateObserver(observer)
+	}
 	return nil
 }
 
@@ -303,7 +323,11 @@ func (m *AOI) moveObserverUnbounded(id int64, to spatial.Point) error {
 	}
 	observer.at = to
 	m.resubscribe(observer)
-	m.evaluateObserver(observer)
+	if m.batching {
+		m.dirty[observer.id] = observer
+	} else {
+		m.evaluateObserver(observer)
+	}
 	return nil
 }
 
@@ -320,6 +344,12 @@ func (m *AOI) RemoveObserver(id int64) error {
 	for _, subject := range subjects {
 		m.emit(observer.id, subject, InterestLeave, -1)
 	}
+	m.pending = append(m.pending, observer.pending...)
+	m.blockPending = append(m.blockPending, observer.blockPending...)
+	for subject := range observer.blockVisible {
+		m.blockPending = append(m.blockPending, InterestEvent{Observer: id, Subject: subject, Kind: InterestLeave, Band: -1})
+	}
+	delete(m.dirty, id)
 	delete(m.observers, id)
 	return nil
 }
@@ -338,6 +368,10 @@ func (m *AOI) Visible(observer int64) []int64 {
 // Subject) with same-pair events keeping their occurrence order, so the
 // output is a deterministic function of the operation sequence.
 func (m *AOI) Flush() []InterestEvent {
+	for _, o := range m.observers {
+		m.pending = append(m.pending, o.pending...)
+		o.pending = nil
+	}
 	if len(m.pending) == 0 {
 		return nil
 	}
@@ -370,43 +404,39 @@ func (m *AOI) resubscribe(observer *interestObserver) {
 	for block := range next {
 		if _, subscribed := observer.blocks[block]; !subscribed {
 			observer.blocks[block] = struct{}{}
-			table := m.blockObservers[block]
-			if table == nil {
-				table = make(map[int64]*interestObserver)
-				m.blockObservers[block] = table
-			}
-			table[observer.id] = observer
+			b := m.block(block)
+			b.mu.Lock()
+			b.observers[observer.id] = observer
+			b.mu.Unlock()
 		}
 	}
 }
 
 func (m *AOI) unsubscribeBlock(observer *interestObserver, block int64) {
 	delete(observer.blocks, block)
-	if table := m.blockObservers[block]; table != nil {
-		delete(table, observer.id)
-		if len(table) == 0 {
-			delete(m.blockObservers, block)
-		}
+	if b := m.blocks[block]; b != nil {
+		b.mu.Lock()
+		delete(b.observers, observer.id)
+		b.mu.Unlock()
 	}
 }
 
 // observersAt 合并旧、新格子的观察者，只排序一次。同格移动仍需评估距离变化。
 func (m *AOI) observersAt(at spatial.Point, other ...spatial.Point) []*interestObserver {
-	first := m.index.BlockIndex(at)
-	table := m.blockObservers[first]
-	result := make([]*interestObserver, 0, len(table))
-	for _, observer := range table {
-		result = append(result, observer)
-	}
-	if len(other) > 0 {
-		second := m.index.BlockIndex(other[0])
-		if second != first {
-			for id, observer := range m.blockObservers[second] {
-				if _, exists := table[id]; !exists {
-					result = append(result, observer)
-				}
+	seen := make(map[int64]*interestObserver)
+	positions := append([]spatial.Point{at}, other...)
+	for _, p := range positions {
+		if b := m.blocks[m.index.BlockIndex(p)]; b != nil {
+			b.mu.RLock()
+			for id, o := range b.observers {
+				seen[id] = o
 			}
+			b.mu.RUnlock()
 		}
+	}
+	result := make([]*interestObserver, 0, len(seen))
+	for _, o := range seen {
+		result = append(result, o)
 	}
 	slices.SortFunc(result, func(a, b *interestObserver) int { return cmp.Compare(a.id, b.id) })
 	return result
@@ -416,7 +446,11 @@ func (m *AOI) observersAt(at spatial.Point, other ...spatial.Point) []*interestO
 // against each candidate observer.
 func (m *AOI) evaluateSubjectFor(observers []*interestObserver, subject int64, at spatial.Point, removed bool) {
 	for _, observer := range observers {
-		m.evaluatePair(observer, subject, at, removed)
+		if m.batching {
+			m.dirty[observer.id] = observer
+		} else {
+			m.evaluatePair(observer, subject, at, removed)
+		}
 	}
 }
 
@@ -430,11 +464,12 @@ type entryCandidate struct {
 // members against the leave radius, subscription-neighborhood subjects
 // against the enter radius.
 func (m *AOI) evaluateObserver(observer *interestObserver) {
+	m.evaluateObserved(observer)
 	for _, subject := range sortedVisible(observer.visible) {
 		at, exists := m.subjects[subject]
 		m.evaluatePair(observer, subject, at, !exists)
 	}
-	blocks := m.blocksScratch[:0]
+	blocks := make([]int64, 0, len(observer.blocks))
 	for block := range observer.blocks {
 		blocks = append(blocks, block)
 	}
@@ -442,35 +477,12 @@ func (m *AOI) evaluateObserver(observer *interestObserver) {
 	// Admit new candidates nearest-first: block-order admission could let a
 	// farther subject enter and be evicted by a nearer one within the same
 	// evaluation, emitting a transient Enter+Leave pair downstream.
-	candidates := m.candidatesScratch[:0]
-	seen := m.seenScratch
-	if seen == nil {
-		seen = make(map[int64]struct{})
-	}
-	defer func() {
-		if cap(m.queryScratch) > 4096 {
-			m.queryScratch = nil
-		}
-		if cap(blocks) <= 4096 {
-			m.blocksScratch = blocks[:0]
-		} else {
-			m.blocksScratch = nil
-		}
-		if cap(candidates) <= 4096 {
-			m.candidatesScratch = candidates[:0]
-		} else {
-			m.candidatesScratch = nil
-		}
-		if len(seen) <= 4096 {
-			clear(seen)
-			m.seenScratch = seen
-		} else {
-			m.seenScratch = nil
-		}
-	}()
+	candidates := make([]entryCandidate, 0)
+	seen := make(map[int64]struct{})
+	var query []int64
 	for _, block := range blocks {
-		m.queryScratch = m.index.AppendBlockIDs(m.queryScratch[:0], block)
-		for _, subject := range m.queryScratch {
+		query = m.index.AppendBlockIDs(query[:0], block)
+		for _, subject := range query {
 			if _, alreadyVisible := observer.visible[subject]; alreadyVisible {
 				continue
 			}

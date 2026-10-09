@@ -185,3 +185,92 @@ func TestRealRawCancellationDoesNotReplayAnAdmittedRequest(t *testing.T) {
 		t.Fatal("canceled request was replayed")
 	}
 }
+
+func TestRealScopedInboxReusesSubscriptionAndCancelsOnlyItsWaiter(t *testing.T) {
+	client := rawTestClient(t)
+	prefix := fmt.Sprintf("roost.raw.scoped.n%d", time.Now().UnixNano())
+	scoped, err := client.ForInbox(prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := client.ForInbox(prefix)
+	if err != nil || scoped != again {
+		t.Fatalf("inbox not reused: %v", err)
+	}
+	responder, err := client.SubscribeBounded(prefix+".request", fnats.PendingLimits{Messages: 4096, Bytes: 1 << 20}, func(msg *fnats.Msg) { _ = client.PublishOnce(msg.Reply, msg.Data) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawTestFlush(t, client)
+	var wait sync.WaitGroup
+	for index := range 256 {
+		wait.Go(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			payload := []byte(fmt.Sprintf("request-%d", index))
+			data, err := scoped.RequestContext(ctx, prefix+".request", payload)
+			if err != nil || string(data) != string(payload) {
+				t.Errorf("data=%q err=%v", data, err)
+			}
+		})
+	}
+	wait.Wait()
+	inbox := scoped.(*inboxClient)
+	inbox.mu.Lock()
+	pending := len(inbox.pending)
+	inbox.mu.Unlock()
+	if pending != 0 {
+		t.Fatalf("pending=%d", pending)
+	}
+	// 取消一个已发出请求只移除它的 waiter；迟到回信不能串到后面的请求。
+	requests := make(chan *fnats.Msg, 2)
+	delayed, err := client.SubscribeBounded(prefix+".service.delayed", fnats.PendingLimits{Messages: 8, Bytes: 4096}, func(msg *fnats.Msg) { requests <- msg })
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawTestFlush(t, client)
+	cancelCtx, cancelWait := context.WithCancel(context.Background())
+	canceled := make(chan error, 1)
+	go func() {
+		_, err := scoped.RequestContext(cancelCtx, prefix+".service.delayed", []byte("cancel"))
+		canceled <- err
+	}()
+	var late *fnats.Msg
+	select {
+	case late = <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("delayed request not sent")
+	}
+	cancelWait()
+	select {
+	case err := <-canceled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancel did not release scoped waiter")
+	}
+	if err := client.PublishOnce(late.Reply, []byte("late")); err != nil {
+		t.Fatal(err)
+	}
+	rawTestFlush(t, client)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	data, err := scoped.RequestContext(ctx, prefix+".request", []byte("after cancel"))
+	if err != nil || string(data) != "after cancel" {
+		t.Fatalf("late ACK contaminated next request: %q %v", data, err)
+	}
+	if err := delayed.DrainContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scoped.RequestContext(ctx, prefix+".service.absent", nil); !errors.Is(err, fnats.ErrNoResponders) {
+		t.Fatalf("no responder=%v", err)
+	}
+	if err := responder.DrainContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	client.Close()
+	if _, err := scoped.RequestContext(ctx, prefix+".request", nil); !errors.Is(err, fnats.ErrClosed) {
+		t.Fatalf("closed=%v", err)
+	}
+}

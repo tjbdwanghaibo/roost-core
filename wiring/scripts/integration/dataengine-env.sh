@@ -161,7 +161,7 @@ environment_test() {
 	(
 		cd "$module_root"
 		GOCACHE="${GOCACHE:-$ROOST_IT_GO_CACHE_DEFAULT}" \
-			go test -tags=integration -p 1 ./framework/dataengine/engine ./infra/observe/failurelog ./wiring/dataengine ./wiring/mongo ./wiring/nats ./wiring/syncbus ./framework/sync/syncbus/driver ./infra/network/bus ./infra/network/nats/driver ./framework/remoteentity ./framework/saga ./infra/storage/redis/... ./infra/storage/versionstore ./infra/network/etcd/driver ./infra/storage/mongo/driver -count=1
+			go test -tags=integration -p 1 ./framework/dataengine/engine ./infra/observe/failurelog ./wiring/dataengine ./wiring/mongo ./wiring/nats ./wiring/syncbus ./framework/sync/syncbus/driver ./wiring/gate ./infra/network/bus ./infra/network/nats/driver ./framework/remoteentity ./framework/saga ./infra/storage/redis/... ./infra/storage/versionstore ./infra/network/etcd/driver ./infra/storage/mongo/driver -count=1
 	)
 }
 

@@ -1,6 +1,6 @@
 # 仓库维护入口
 
-当前运行时稳定基线v1.24.0。修改前阅读 [维护手册](docs/maintenance/README.md)、[模块目录](docs/framework/README.md) 和 [已知限制](docs/maintenance/KNOWN-LIMITS.md)。设计与实现的现行说明在docs/framework；开发过程资料已迁入Git历史，不再要求读取已删除的docs/agent-skills。
+当前版本v1.25.0；重档性能限制见发布说明。修改前阅读 [维护手册](docs/maintenance/README.md)、[模块目录](docs/framework/README.md) 和 [已知限制](docs/maintenance/KNOWN-LIMITS.md)。设计与实现的现行说明在docs/framework；开发过程资料已迁入Git历史，不再要求读取已删除的docs/agent-skills。
 
 业务代码修改应补必要中文契约注释、按影响范围测试、更新对应现行文档。文档补丁不得混入行为重构。不等待GitHub CI，不能把未运行检查记成通过。
 

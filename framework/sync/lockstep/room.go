@@ -24,8 +24,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 var (
@@ -343,6 +343,18 @@ func (r *Room) Detach(player PlayerID) {
 		delete(r.sessionOwners, session)
 		delete(r.sessions, player)
 	}
+}
+
+// DetachSession 在 Room 的串行 owner 中处理断线通知，仅移除通知所属的生命周期。
+// Gate 的 receiver ID 在进程内不复用；旧连接的迟到关闭不能拆掉已经重绑的新连接。
+// 完整 Gate/Game/BindID 校验仍由接入层完成，Room 不重复持有连接身份表。
+func (r *Room) DetachSession(player PlayerID, session nettransport.SessionID) bool {
+	current, attached := r.sessions[player]
+	if !attached || current != session {
+		return false
+	}
+	r.Detach(player)
+	return true
 }
 
 // AttachSpectator binds a receive-only session: it gets live broadcasts and

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -19,6 +20,38 @@ import (
 // TCPDispatch 由本地 ProtocolRegistry 或 Gate forwarder 注入。它只接原始完整包；
 // 业务解码和 Entity local 锁仍属于 Game 的正式 Sender/Nest 调用链。
 type TCPDispatch func(context.Context, Session, uint32, uint32, wire.PayloadKind, []byte) (any, error)
+
+// ConnectionSession 仅供接入基础设施使用，业务端点仍使用最小的 Session。
+// 每连接随机 nonce 不来自客户端。写入只接受完整包，复用唯一的 socket 写临界区。
+type ConnectionSession interface {
+	Session
+	ConnectionID() string
+	WritePacket(context.Context, uint32, uint32, wire.PayloadKind, bool, []byte) error
+}
+
+// TCPHandshake 让独立 Gate 在同一个握手预算内完成 Bind → ACK → Activate。
+// Closed 必须快速返回，通知丢失由绑定租期兜底，不能阻塞连接排空。
+type TCPHandshake interface {
+	BeforeACK(context.Context, ConnectionSession, string) error
+	AfterACK(context.Context, ConnectionSession) error
+	Closed(ConnectionSession)
+}
+
+func (server *TCPServer) ConnectHandshake(hooks TCPHandshake) error {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.started {
+		return errors.New("player tcp: handshake connected after start")
+	}
+	if server.handshake != nil {
+		return errors.New("player tcp: handshake already connected")
+	}
+	if hooks == nil {
+		return errors.New("player tcp: handshake is nil")
+	}
+	server.handshake = hooks
+	return nil
+}
 
 // TCPResponse 是已经编码的外部 PB 响应；业务类型通过 TCPReply 显式转换。
 type TCPResponse struct {
@@ -79,6 +112,7 @@ type TCPServer struct {
 	// accepting, and nil in a test that builds a TCPServer directly.
 	transport     *TCPRuntime
 	authenticator Authenticator
+	handshake     TCPHandshake
 
 	mu              sync.RWMutex
 	listener        net.Listener
@@ -251,6 +285,14 @@ func (server *TCPServer) acceptLoop(listener net.Listener) {
 }
 
 func (server *TCPServer) serveConnection(connection net.Conn) {
+	defer func() {
+		if value := recover(); value != nil {
+			_ = connection.Close()
+			reportBoundaryPanic(func(context.Context, any) {
+				slog.Error("player tcp callback panicked", "panic", value, "stack", string(debug.Stack()))
+			}, context.Background(), value)
+		}
+	}()
 	defer server.wait.Done()
 	defer func() { <-server.connectionSlots }()
 	metrics.AddGauge("player_tcp_connections", nil, 1)
@@ -312,24 +354,39 @@ func (server *TCPServer) serveConnection(connection net.Conn) {
 		return
 	}
 	principal, err := server.authenticator.Authenticate(handshakeCtx, string(authFrame.payload), connection.RemoteAddr())
-	handshakeCancel()
-	release()
-	<-server.handshakeSlots
-	handshakeHeld = false
-	if err != nil || !principal.Authenticated() {
+	if err != nil || !principal.Authenticated() || handshakeCtx.Err() != nil {
 		metrics.IncCounter("player_tcp_auth_failure_total", nil, 1)
 		_ = connection.Close()
+		release()
 		return
 	}
-	session := &tcpSession{connection: connection, principal: clonePrincipal(principal), writeTimeout: server.config.WriteTimeout, maxPayloadBytes: server.config.MaxPayloadBytes, cancel: cancel}
+	session := &tcpSession{connection: connection, principal: clonePrincipal(principal), nonce: newBindingToken(), writeTimeout: server.config.WriteTimeout, maxPayloadBytes: server.config.MaxPayloadBytes, cancel: cancel}
 	defer func() {
 		_ = session.Close(ErrSessionClosed)
+		if server.handshake != nil {
+			server.handshake.Closed(session)
+		}
 	}()
-	if err := session.writeFrame(connectionCtx, 0, 0, authFrame.sequence, nil); err != nil {
+	if server.handshake != nil {
+		err = server.handshake.BeforeACK(handshakeCtx, session, string(authFrame.payload))
+	}
+	release()
+	if err != nil || handshakeCtx.Err() != nil {
+		return
+	}
+	if err := session.writeFrame(handshakeCtx, 0, 0, authFrame.sequence, nil); err != nil {
 		return
 	}
 	server.registerSession(session)
 	defer server.unregisterSession(session)
+	if server.handshake != nil {
+		if err := server.handshake.AfterACK(handshakeCtx, session); err != nil || handshakeCtx.Err() != nil {
+			return
+		}
+	}
+	handshakeCancel()
+	<-server.handshakeSlots
+	handshakeHeld = false
 	lastSequence := authFrame.sequence
 	var limiter *rate.Limiter
 	if server.config.RequestRate > 0 {

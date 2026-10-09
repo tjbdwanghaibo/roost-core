@@ -8,9 +8,12 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/goroutine"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
+
+// DefaultFastQueueCapacity 是快池共享等待容量的缺省值，不随 worker 数倍增。
+const DefaultFastQueueCapacity = 65536
 
 // WorkerPoolConfig 配置整个池的等待预算，QueueCap 不再按 worker 倍增。
 type WorkerPoolConfig struct{ Workers, QueueCap int }

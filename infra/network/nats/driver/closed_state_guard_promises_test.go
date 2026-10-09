@@ -60,6 +60,11 @@ var closedStateHandler = func(*fnats.Msg) {}
 
 // closedStateChecks 以“接收者类型.方法”为键，覆盖本包每个导出方法。
 var closedStateChecks = map[string]closedStateCheck{
+	"Client.ForInbox": {want: wantErrClosed, call: func(e *closedStateEnv) error { _, err := e.asm.Client.ForInbox("roost.closed.reply"); return err }},
+	"inboxClient.RequestContext": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		_, err := (&inboxClient{Client: e.asm.Client, prefix: "roost.closed.reply", pending: make(map[string]chan inboxResult), done: make(chan struct{})}).RequestContext(e.ctx, "roost.closed", nil)
+		return err
+	}},
 	"Client.PublishOnce": {want: wantErrClosed, call: func(e *closedStateEnv) error { return e.asm.Client.PublishOnce("roost.closed", nil) }},
 	"Client.RequestContext": {want: wantErrClosed, call: func(e *closedStateEnv) error {
 		_, err := e.asm.Client.RequestContext(e.ctx, "roost.closed", nil)

@@ -43,6 +43,8 @@ type Client struct {
 // natsLifecycleState 是驱动自己的连接生命周期状态，与 nats.go 的回调共享（回调在 Client 之前创建）。
 // closed 是唯一的已关闭判据；draining 只用来把排空 / 关闭引起的断开记成 Info 日志。
 type natsLifecycleState struct {
+	inboxMu  sync.Mutex
+	inboxes  map[string]*inboxClient
 	draining atomic.Bool
 	closed   atomic.Bool
 	rawMu    sync.Mutex
@@ -55,7 +57,18 @@ func (s *natsLifecycleState) isClosed() bool {
 
 // markClosed 置已关闭，返回是否由这次调用置位（nil 状态只在测试里出现，按置位成功处理）。
 func (s *natsLifecycleState) markClosed() bool {
-	return s == nil || s.closed.CompareAndSwap(false, true)
+	if s == nil {
+		return true
+	}
+	if !s.closed.CompareAndSwap(false, true) {
+		return false
+	}
+	s.inboxMu.Lock()
+	for _, inbox := range s.inboxes {
+		inbox.fail(fnats.ErrClosed)
+	}
+	s.inboxMu.Unlock()
+	return true
 }
 
 func (s *natsLifecycleState) expectedDisconnect() bool {

@@ -8,6 +8,8 @@
 
 先确定本清单，再迁移现行设计/维护知识、核对代码、清理旧文件与修复引用。不会删除游戏ai代码或游戏Skill文档，也不删除本地安装skill。
 
+工作分支另新增 [Interest Block AOI 方案](../framework/INTEREST-BLOCK-AOI.md)，随v1.25.0交付；常规性能通过、重档失败。新增[v1.25.0发布说明](../release/v1.25.0-NOTES.md)与[实现验收](../release/v1.25.0-IMPLEMENTATION.md)，上述数量仅为历史清理基线。
+
 ## 2. 全部剩余文件
 
 | 文件 | 用途 |

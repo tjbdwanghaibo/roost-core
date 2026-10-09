@@ -1,6 +1,6 @@
-# Roost v1.24 文档
+# Roost v1.25 文档
 
-运行时稳定基线为 v1.24.0；v1.24.1 整理文档和发布清单，业务代码与 v1.24.0 一致。设计篇写职责、使用、状态与限制；实现篇给出契约、逐包源码和回归入口。
+当前版本v1.25.0，包含目录分类、Gate与Block AOI；重档性能失败为已接受的发布限制。设计篇写职责、使用、状态与限制；实现篇给出契约、逐包源码和回归入口。
 
 第一次接触框架，请先读 [入门手册](../GETTING-STARTED.md)。下面每组先读“设计与使用”；只有需要定位或修改代码时才打开实现篇的源码/测试目录。
 
@@ -12,11 +12,13 @@
 | 核心：DataEngine 持久化 | [设计与使用](guide/03-dataengine.md) | [实现与源码](impl/03-dataengine.md) |
 | 核心：Sync、Lockstep 与客户端 | [设计与使用](guide/04-sync.md) | [实现与源码](impl/04-sync.md) |
 
+[Interest 的 Block AOI 与手写空间组件](INTEREST-BLOCK-AOI.md)：已接入正式提交门，支持多块被观察、有界事实队列、并行观察者计算与内容发布屏障；无Guard业务回调/生成器改动。功能通过，15分钟常规通过、重档失败。
+
 ## 次核心模块
 
-[网关现状与独立 Gate 设计](GATEWAY.md)：已有 TCP 接入能力、尚未完成的独立服务，以及分阶段实施和验收方案。独立 Gate 标注为待实施，不属于当前已发布能力。
+[网关现状与独立 Gate 设计](GATEWAY.md)：嵌入与独立 Gate 的正式接入、已实施 API 与验证边界；新增能力随v1.25.0交付。
 
-[Gate 设计评审与实施方案](GATEWAY-IMPLEMENTATION.md)：具体目录、绑定身份、NATS 转发、统一发送、Nest/Sync 接线及验收条件，TCP 共用运行实现、MessagePack 与原始 NATS 能力已开始实施；独立绑定、集群与性能验收尚未完成。
+[Gate 设计评审与实施方案](GATEWAY-IMPLEMENTATION.md)：具体目录、绑定身份、NATS 转发、统一发送、Nest/Sync 接线及验收条件，Gate/Game、MessagePack、广播与Sync/Lockstep已实施；本机功能通过，性能及多进程/跨机完整验收未收口。
 
 [包目录分类、Wiring 与 Service 收敛方案](PACKAGE-REORGANIZATION.md)：Framework/Infra/Gameplay/Service/Wiring 分类、Session 含义、运行实现迁出接线、便捷接入和同轮 Gate；目录与 Service/Wiring 拆分已实施并通过全仓验证；Gate 分阶段实施中。
 

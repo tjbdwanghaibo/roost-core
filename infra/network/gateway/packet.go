@@ -84,7 +84,7 @@ func BudgetFromContext(ctx context.Context) (Budget, error) {
 }
 
 func (budget Budget) Context(parent context.Context, maxWait, clockSkew time.Duration) (context.Context, context.CancelFunc, error) {
-	if parent == nil || maxWait <= 0 || clockSkew < 0 || budget.RemainingNanos <= 0 || budget.DeadlineUnixNano <= 0 {
+	if parent == nil || maxWait <= 0 || clockSkew < 0 || clockSkew > time.Second || budget.RemainingNanos <= 0 || budget.DeadlineUnixNano <= 0 {
 		return nil, nil, ErrInvalidRequest
 	}
 	remaining := min(time.Duration(budget.RemainingNanos), maxWait, time.Until(time.Unix(0, budget.DeadlineUnixNano))-clockSkew)
@@ -107,6 +107,15 @@ const (
 type ExecutionResult struct {
 	Version uint16
 	Outcome Outcome
+	Reason  string
+	// OutSeq 是 Completed 时已进入 Game 出站队列的水位，不代表客户端收到。
+	OutSeq uint64
+}
+
+type CloseRequest struct {
+	Version uint16
+	Binding Binding
+	Budget  Budget
 	Reason  string
 }
 

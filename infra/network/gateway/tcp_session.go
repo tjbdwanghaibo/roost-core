@@ -19,6 +19,7 @@ import (
 type tcpSession struct {
 	connection      net.Conn
 	principal       Principal
+	nonce           string
 	writeTimeout    time.Duration
 	maxPayloadBytes uint32
 	writeMu         sync.Mutex
@@ -37,6 +38,18 @@ func clonePrincipal(principal Principal) Principal {
 }
 
 func (session *tcpSession) Principal() Principal { return clonePrincipal(session.principal) }
+
+func (session *tcpSession) ConnectionID() string { return session.nonce }
+
+func (session *tcpSession) WritePacket(ctx context.Context, messageID, sequence uint32, kind wire.PayloadKind, push bool, payload []byte) error {
+	if messageID == 0 || kind > wire.PayloadLockstep || (!push && (kind != wire.PayloadProtobuf || sequence == 0)) {
+		return ErrInvalidRequest
+	}
+	if push {
+		return session.pushKind(ctx, messageID, payload, byte(kind)<<1)
+	}
+	return session.writeFrame(ctx, 0, messageID, sequence, payload)
+}
 
 func (session *tcpSession) Reply(ctx context.Context, value any) error {
 	reply, ok := value.(TCPReply)
@@ -58,11 +71,7 @@ func (session *tcpSession) push(ctx context.Context, messageID uint32, payload [
 }
 
 func (session *tcpSession) pushKind(ctx context.Context, messageID uint32, payload []byte, kind byte) error {
-	sequence := session.serverSequence.Add(1)
-	if sequence == 0 {
-		sequence = session.serverSequence.Add(1)
-	}
-	return session.writeFrame(ctx, flagServerPush|kind, messageID, sequence, payload)
+	return session.writeFrame(ctx, flagServerPush|kind, messageID, 0, payload)
 }
 
 func (session *tcpSession) writeFrame(ctx context.Context, flags byte, messageID, sequence uint32, payload []byte) error {
@@ -97,6 +106,13 @@ func (session *tcpSession) writeFrame(ctx context.Context, flags byte, messageID
 	}
 	if err := session.connection.SetWriteDeadline(writeDeadline); err != nil {
 		return fmt.Errorf("%w: %w", errConnectionBroken, err)
+	}
+	// 服务推送的外部序号与实际 socket 写顺序在同一临界区分配。
+	if flags&flagServerPush != 0 {
+		sequence = session.serverSequence.Add(1)
+		if sequence == 0 {
+			sequence = session.serverSequence.Add(1)
+		}
 	}
 	header, err := (wire.Header{Flags: flags, MsgID: messageID, Seq: sequence, PayloadSize: uint32(len(payload))}).Encode(int(limit))
 	if err != nil {
@@ -138,9 +154,11 @@ func (session *tcpSession) close(reason error) (first bool) {
 		if reason == nil {
 			reason = ErrSessionClosed
 		}
+		// net.Conn 支持与 Write 并发 Close。先关闭 socket 打断阻塞写，
+		// 再取得状态锁；否则关闭通知会被慢客户端占住整个写期限。
+		closeErr := session.connection.Close()
 		session.writeMu.Lock()
-		session.closeErr = reason
-		session.closeErr = errors.Join(reason, session.connection.Close())
+		session.closeErr = errors.Join(reason, closeErr)
 		session.writeMu.Unlock()
 		if session.cancel != nil {
 			session.cancel(reason)

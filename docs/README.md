@@ -1,6 +1,6 @@
 # Roost 稳定版文档入口
 
-维护基线：**v1.24.0**；文档整理版：**v1.24.1**。
+当前版本：**v1.25.0**；[发布说明](release/v1.25.0-NOTES.md)与[验收记录](release/v1.25.0-IMPLEMENTATION.md)。
 
 先读 [第一次认识和使用 Roost](GETTING-STARTED.md)：用一次购买道具解释三大核心，并运行一个不需要数据库的示例。
 

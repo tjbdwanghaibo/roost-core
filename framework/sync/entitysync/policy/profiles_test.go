@@ -66,7 +66,8 @@ func TestProfileAssemblyCopiesSetsAndRejectsDynamicUnknownView(t *testing.T) {
 	player(t, m, 1)
 	dynamic = entity.SyncProfile{Key: "not-declared"}
 	var refusals []Refusal
-	in.applyEvent(SourceSpatial, InterestEvent{Observer: 1, Subject: 1, Kind: InterestEnter}, &refusals)
+	in.recordEvent(SourceSpatial, InterestEvent{Observer: 1, Subject: 1, Kind: InterestEnter})
+	in.settlePair(pair{observer: 1, subject: 1}, &refusals)
 	if len(refusals) != 1 || !errors.Is(refusals[0].Err, entity.ErrSyncViewUnknown) {
 		t.Fatalf("refusals: %+v", refusals)
 	}

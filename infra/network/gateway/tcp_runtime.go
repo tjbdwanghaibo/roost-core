@@ -42,8 +42,11 @@ type TCPRuntime struct {
 // subscriber that needs more looks it up, and a lifecycle event that carried
 // state would be a second copy of it.
 type TCPSessionClosed struct {
-	PlayerID  int64
-	SessionID string
+	// 独立 Gate 携带完整旧绑定和数值 lifetime，退订不能只按可复用 SessionID。
+	Binding    Binding
+	ReceiverID uint64
+	PlayerID   int64
+	SessionID  string
 }
 
 // sessionClosedQueue is how many closes may be in flight before the oldest are

@@ -204,6 +204,8 @@ type SubjectSyncState struct {
 	dirtyNotifier   SubjectSyncDirtyNotifier
 	mutation        *syncMutationEntry
 	commitGate      *syncCommitGate
+	// policyHolds 阻止内容越过尚未应用的空间/关系事实，不参与提交确认条件。
+	policyHolds     int
 	frozen          *frozenSubjectSync
 	nextToken       uint64
 	inflightToken   uint64
@@ -432,7 +434,7 @@ func (s *SubjectSyncState) prepareProfiles(deltaProfiles, snapshotProfiles []Syn
 
 func (s *SubjectSyncState) prepareLocked(deltaProfiles, snapshotProfiles []SyncProfile) (*PreparedSubjectSync, error) {
 	s.mu.Lock()
-	if !s.commitGate.ready() {
+	if s.policyHolds != 0 || !s.commitGate.ready() {
 		s.mu.Unlock()
 		return nil, ErrSyncCommitPending
 	}

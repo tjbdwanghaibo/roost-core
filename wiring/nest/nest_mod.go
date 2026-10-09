@@ -13,10 +13,10 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // Mod owns one instance-scoped Nest engine. It intentionally does not install
@@ -83,6 +83,7 @@ func (m *Mod) OptionalDependsOn() []app.ModName {
 }
 
 // workerPool 是 nest.fast / nest.slow 的声明：0 取框架缺省。
+// 快池等待缺省为65536（全池共享），慢池为64；显式值仍按独立预算生效。
 type workerPool struct {
 	Workers       int `config:"workers" min:"0" example:"0"`
 	QueueCapacity int `config:"queue_capacity" min:"0" example:"0"`

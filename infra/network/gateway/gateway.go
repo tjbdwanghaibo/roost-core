@@ -15,7 +15,9 @@ var (
 
 // Principal is the authenticated identity attached to a session.
 type Principal struct {
-	PlayerID  int64
+	PlayerID int64
+	// ServerID 来自鉴权结果，固定该连接的区服路由；不能从普通客户端请求取得。
+	ServerID  int32
 	SessionID string
 	DeviceID  string
 	Claims    map[string]string

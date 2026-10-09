@@ -122,6 +122,7 @@ import (
  "github.com/tjbdwanghaibo/roost-core/client/wire"
  "github.com/tjbdwanghaibo/roost-core/framework/app"
  "github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+ gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
  accessplayer %q
  %q
 )
@@ -275,11 +276,12 @@ func (mod *Mod) StopWithContext(ctx context.Context) error {
 
 // Runtime 是业务接线 capability：把 ProtocolRegistry 的编码器接到唯一 TCP runtime。
 // 连接表、通知、监听和收发都由 gateway 持有，生成物不复制运行状态机。
-type Runtime struct { *gateway.TCPRuntime }
+type Runtime struct { gateway.PlayerRuntime; TCPRuntime *gateway.TCPRuntime }
 func NewRuntime(protocols *player_agent.ProtocolRegistry, loginTimeout time.Duration) *Runtime {
  var encode gateway.TCPEncoder
  if protocols != nil { encode = protocols.Encode }
- return &Runtime{TCPRuntime: gateway.NewTCPRuntime(encode,loginTimeout)}
+ native := gateway.NewTCPRuntime(encode,loginTimeout)
+ return &Runtime{PlayerRuntime:native,TCPRuntime:native}
 }
 
 // NewServer 是本地 Game 的协议适配；独立 Gate 接入同一个 gateway.NewTCPServer。
@@ -291,6 +293,41 @@ func NewServer(config gateway.TCPConfig,runtime *accessplayer.Runtime,authentica
   if response == nil { return nil,err }; return response,err
  },authenticator)
 }
+
+// NewIngressMod 是部署启动 option：Game 只开放内部接入，不同时开启本地 TCP。
+// dispatcher 仍调用当前 ProtocolRegistry → 生成 Sender → Nest；接线不复制网络循环。
+func NewIngressMod(options gatewiring.Options) *IngressMod { return &IngressMod{options:options} }
+type IngressMod struct { options gatewiring.Options; inner *gatewiring.GameIngressMod }
+func (*IngressMod) Name() app.ModName { return Name }
+func (mod *IngressMod) DependsOn() []app.ModName {
+ names:=append([]app.ModName{accessplayer.Name,"nats"},mod.options.DependsOn...)
+ if mod.options.Authenticator==nil { names=append(names,"service.account") };if mod.options.RegisterDiscovery { names=append(names,"etcd") };return names
+}
+func (mod *IngressMod) Init(cfg *viper.Viper) error {
+ parsed,err:=configFromViper(cfg);if err!=nil{return err}
+ if parsed.Enabled { return errors.New("game ingress: embedded TCP listener must be disabled") }
+ return mod.options.Config.Validate()
+}
+func (mod *IngressMod) Provide(registry *app.Registry) error {
+ if _,exists:=registry.Get(Name);exists{return errors.New("game ingress: player TCP capability already provided")}
+ runtime,ok:=app.Lookup[*accessplayer.Runtime](registry,accessplayer.Name)
+ if !ok||runtime==nil||runtime.Protocols==nil{return errors.New("game ingress: player access runtime unavailable")}
+ dispatch:=func(ctx context.Context,session gateway.Session,id,seq uint32,kind wire.PayloadKind,payload []byte)(any,error){
+  response,err:=runtime.Protocols.DispatchPayload(ctx,session,id,seq,kind,payload)
+  if response==nil{return nil,err};return response,err
+ }
+ mod.inner=gatewiring.NewGameIngressMod(dispatch,runtime.Protocols.Encode,mod.options)
+ if err:=mod.inner.Provide(registry);err!=nil{return err}
+ ingress,ok:=app.Lookup[*gateway.GameIngress](registry,gatewiring.GameIngressName)
+ if !ok{return errors.New("game ingress: capability missing")}
+ return registry.Register(Name,&Runtime{PlayerRuntime:ingress})
+}
+func (mod *IngressMod) Start()error { if mod.inner==nil{return errors.New("game ingress: not provided")};return mod.inner.Start() }
+func (mod *IngressMod) Stop(){if mod.inner!=nil{mod.inner.Stop()}}
+func (mod *IngressMod) StopBudget()time.Duration {return max(10*time.Second,mod.options.Config.RequestTimeout+mod.options.Config.Outbound.MaxAge)}
+func (mod *IngressMod) StopWithContext(ctx context.Context)error{if mod.inner==nil{return nil};return mod.inner.StopWithContext(ctx)}
+func (*IngressMod) ConfigSchema()app.ConfigSchema{return app.SchemaOf(tcpConfig{})}
+var _ app.Mod = (*IngressMod)(nil)
 
 var _ app.Mod = (*Mod)(nil)
 var _ app.ModStopperWithContext = (*Mod)(nil)

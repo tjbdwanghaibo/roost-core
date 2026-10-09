@@ -393,6 +393,16 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 
 `bus_rpc_pending_requests{transport}` 是 RPC 全部在途数量 Gauge；原来的 bus_rpc_pending_total 名称已移除，面板迁移到新名。按方法的 bus_rpc_pending 保持原样。
 
+### 独立 Gate 接入
+
+| 指标 | 含义与标签 |
+| --- | --- |
+| `gate.channel.result_total` | 按 `role`、`phase`、`result` 统计控制/转发/出站/广播；completed 为内部准入，不是客户端收到或落库确认 |
+| `gate.channel.failure_total` | 按 `role`、`phase` 统计回信发布和异步出站失败；不包含票据、PlayerID、SessionID 或 incarnation 标签 |
+
+Gate/Game `Stats()` 提供当前绑定、驻留请求数和字节；Game 另返回控制通道驻留请求及字节。下游超时/回信丢失归未知，发送失败结束完整旧绑定及对应 Sync lifetime。
+
+
 ## 健康与就绪（`/healthz`、`/readyz`）
 
 kit `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册（`app.ModHealth`），每项结果是 `ok` / `degraded` / `fail`：

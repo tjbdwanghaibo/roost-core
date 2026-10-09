@@ -1,6 +1,6 @@
 # 包目录分类、Wiring 与 Service 收敛方案
 
-状态：**目录、Service/Wiring 拆分已实施；全仓回归与 CBM 刷新已完成；Gate 尚待实施**。日期：2026-10-09；起始基准：`ef640e6e`。当前源码采用 `framework / infra / gameplay / service / wiring`，原 Kit 接线迁为 Wiring，领域和周期运行归 Service，Ops 与 StatsLog 运行归所属模块。下文第 2 节及迁移表记录改前位置，当前源码见 [全包索引](PACKAGES.md)。验证结果见 [实施验收](../maintenance/DIRECTORY-GATE-VALIDATION.md)。
+状态：**目录、Service/Wiring 拆分已实施；全仓回归与 CBM 刷新已完成；Gate 已落码，性能验收暂停**。日期：2026-10-09；起始基准：`ef640e6e`。当前源码采用 `framework / infra / gameplay / service / wiring`，原 Kit 接线迁为 Wiring，领域和周期运行归 Service，Ops 与 StatsLog 运行归所属模块。下文第 2 节及迁移表记录改前位置，当前源码见 [全包索引](PACKAGES.md)。验证结果见 [实施验收](../maintenance/DIRECTORY-GATE-VALIDATION.md)。
 
 ## 1. 结论与范围
 

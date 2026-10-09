@@ -36,14 +36,18 @@ func envInt(t *testing.T, key string, fallback int) int {
 
 // 延迟直方图固定容量，每 16 次按序采样；超 50ms 的数量和最大值覆盖全部完成事件。
 type timings struct {
-	mu      sync.Mutex
-	buckets [10001]uint64 // 10us 一个桶，量化向上取整，最后一桶包含触顶及溢出样本。
-	samples uint64
-	over50  atomic.Uint64
-	max     atomic.Int64
+	mu       sync.Mutex
+	buckets  [10001]uint64 // 10us 一个桶，量化向上取整，最后一桶包含触顶及溢出样本。
+	samples  uint64
+	over50   atomic.Uint64
+	negative atomic.Uint64
+	max      atomic.Int64
 }
 
 func (h *timings) add(d time.Duration, sample bool) {
+	if d < 0 {
+		h.negative.Add(1)
+	}
 	for old := h.max.Load(); int64(d) > old; old = h.max.Load() {
 		if h.max.CompareAndSwap(old, int64(d)) {
 			break
@@ -63,9 +67,9 @@ func (h *timings) add(d time.Duration, sample bool) {
 }
 
 type latencyResult struct {
-	Samples, Over50MS          uint64
-	P50MS, P95MS, P99MS, MaxMS float64
-	SamplesAtCeiling           uint64
+	Samples, Over50MS, NegativeDurations uint64
+	P50MS, P95MS, P99MS, MaxMS           float64
+	SamplesAtCeiling                     uint64
 }
 
 func (h *timings) result() latencyResult {
@@ -83,7 +87,7 @@ func (h *timings) result() latencyResult {
 		return 100
 	}
 	return latencyResult{
-		Samples: h.samples, Over50MS: h.over50.Load(),
+		Samples: h.samples, Over50MS: h.over50.Load(), NegativeDurations: h.negative.Load(),
 		P50MS: q(.5), P95MS: q(.95), P99MS: q(.99), MaxMS: float64(h.max.Load()) / float64(time.Millisecond),
 		SamplesAtCeiling: h.buckets[len(h.buckets)-1],
 	}
@@ -123,7 +127,12 @@ type gameSample struct {
 	Nest                 nest.DispatcherStats
 }
 type gameResult struct {
+	SyncReport                                          *syncLoadReport
+	GateEnabled                                         bool
+	GateCompleted                                       uint64
+	GateRoundTrip                                       latencyResult
 	Config                                              gameConfig
+	ClockWallDriftNS                                    int64
 	GoVersion, Platform                                 string
 	GOMAXPROCS                                          int
 	ElapsedSeconds                                      float64
@@ -150,7 +159,7 @@ func TestNestGameLoad(t *testing.T) {
 	c := gameConfig{
 		Entities: envInt(t, "ROOST_NEST_GAME_ENTITIES", 10000), Players: envInt(t, "ROOST_NEST_GAME_PLAYERS", 1000),
 		MessagesPerPlayer: envInt(t, "ROOST_NEST_GAME_MESSAGES_PER_PLAYER", 10), HeartbeatHz: envInt(t, "ROOST_NEST_GAME_HZ", 1),
-		DirtyPercent: envInt(t, "ROOST_NEST_GAME_DIRTY", 1), Workers: envInt(t, "ROOST_NEST_GAME_WORKERS", 4), Queue: envInt(t, "ROOST_NEST_GAME_QUEUE", 4096),
+		DirtyPercent: envInt(t, "ROOST_NEST_GAME_DIRTY", 1), Workers: envInt(t, "ROOST_NEST_GAME_WORKERS", 4), Queue: envInt(t, "ROOST_NEST_GAME_QUEUE", nest.DefaultFastQueueCapacity),
 	}
 	c.MessageTargets = envInt(t, "ROOST_NEST_GAME_MESSAGE_TARGETS", c.Players)
 	var err error
@@ -182,8 +191,18 @@ func TestNestGameLoad(t *testing.T) {
 			t.Fatal("generated component/DAO missing")
 		}
 	}
-	engine := nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: c.Workers, QueueCap: c.Queue}, nest.WorkerPoolConfig{}), nest.NestOptionWithTickDuration(10*time.Millisecond))
+	var stateSync *syncGameLoad
+	options := []nest.NestOption{nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: c.Workers, QueueCap: c.Queue}, nest.WorkerPoolConfig{}), nest.NestOptionWithTickDuration(10 * time.Millisecond)}
+	if os.Getenv("ROOST_NEST_GAME_SYNC") == "1" {
+		if os.Getenv("ROOST_NEST_GAME_GATE") != "1" {
+			t.Fatal("Sync mixed load requires real Gate")
+		}
+		stateSync = newSyncGameLoad(t, units, c)
+		options = append(options, nest.NestOptionWithEntitySync(stateSync.manager))
+	}
+	engine := nest.NewEngine(options...)
 	var messages, heartbeats loadCounters
+	var network *gateFrontend
 	name := nest.NewHandlerName("perf.game.business")
 	engine.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
 		in := params[0].(invocation)
@@ -197,6 +216,12 @@ func TestNestGameLoad(t *testing.T) {
 			u.heartbeat.Tick(in.change)
 		} else {
 			u.HandleMessage(in.change)
+		}
+
+		if in.change && stateSync != nil {
+			if err := stateSync.changed(u, in); err != nil {
+				return nil, err
+			}
 		}
 		ended := time.Now()
 		entity.CurrentGuardScope().Guard().AppendPostRelease(func() {
@@ -253,10 +278,23 @@ func TestNestGameLoad(t *testing.T) {
 			change := (uint64(index)+round)%100 < uint64(c.DirtyPercent)
 			planned := start.Add(eventOffset(sequence+1, rates[k]))
 			in := invocation{planned: planned, admitted: time.Now(), change: change, sample: sequence%16 == 0, heartbeat: k == 1}
-			if err := engine.Dispatch(ctx, name, units[index].ID(), nest.NewParams(in)); err != nil {
+			var dispatchErr error
+			if k == 0 && network != nil {
+				dispatchErr = network.dispatch(index, in)
+			} else {
+				dispatchErr = engine.Dispatch(ctx, name, units[index].ID(), nest.NewParams(in))
+			}
+			if err := dispatchErr; err != nil {
 				counter.rejected++
 				if counter.firstError == "" {
 					counter.firstError = err.Error()
+					// 只在首个已发生的拒绝后采诊断，不能给健康样本持续加栈采样开销。
+					t.Logf("first admission failure: heartbeat=%v elapsed=%s planned_lag=%s due=%v planned=[%d %d] completed=[%d %d] nest=%+v err=%v", k == 1, now.Sub(start), time.Since(planned), due, messages.planned, heartbeats.planned, messages.completed.Load(), heartbeats.completed.Load(), engine.Stats(), err)
+					stack := make([]byte, 16<<20)
+					n := runtime.Stack(stack, true)
+					if saveErr := os.WriteFile(fmt.Sprintf("%s.failure-%d.stack", output, k), stack[:n], 0600); saveErr != nil {
+						t.Logf("save first failure stack: %v", saveErr)
+					}
 				}
 			} else {
 				counter.accepted++
@@ -282,6 +320,15 @@ func TestNestGameLoad(t *testing.T) {
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
+	if os.Getenv("ROOST_NEST_GAME_GATE") == "1" {
+		if c.MessageTargets != c.Players {
+			t.Fatal("Gate load requires one declared player target per connection")
+		}
+		network = newGateFrontend(t, engine, name, units, c, stateSync)
+		if stateSync != nil {
+			stateSync.start(t, network)
+		}
+	}
 	start = time.Now().Add(100 * time.Millisecond)
 	end = start.Add(c.Duration)
 	if err := engine.Start(); err != nil {
@@ -297,12 +344,21 @@ func TestNestGameLoad(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
+	if network != nil {
+		if err := network.drain(); err != nil {
+			t.Error(err)
+		}
+	}
 	stop, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stopCancel()
 	if err := engine.Shutdown(stop); err != nil {
 		t.Fatal(err)
 	}
 	elapsed := time.Since(start).Seconds()
+	var syncReport *syncLoadReport
+	if stateSync != nil {
+		syncReport = stateSync.finish(t, network)
+	}
 	runtime.ReadMemStats(&after)
 	r := gameResult{
 		Config: c, GoVersion: runtime.Version(), Platform: runtime.GOOS + "/" + runtime.GOARCH, GOMAXPROCS: runtime.GOMAXPROCS(0),
@@ -310,6 +366,24 @@ func TestNestGameLoad(t *testing.T) {
 		EntityValuesVerified: true, CountsVerified: true, LatencyPassed: true, Samples: samples, FinalNest: engine.Stats(),
 		AllocBytes: after.TotalAlloc - before.TotalAlloc, Allocs: after.Mallocs - before.Mallocs,
 		GCs: after.NumGC - before.NumGC, GCPauseMS: float64(after.PauseTotalNs-before.PauseTotalNs) / 1e6,
+	}
+	clockNow := time.Now()
+	r.ClockWallDriftNS = clockNow.UnixNano() - loadClockOrigin.UnixNano() - loadTimestamp(clockNow)
+	r.SyncReport = syncReport
+	if syncReport != nil {
+		r.EntityValuesVerified = r.EntityValuesVerified && syncReport.ValuesVerified
+		r.LatencyPassed = r.LatencyPassed && syncReport.LatencyPassed
+	}
+	if network != nil {
+		r.GateEnabled = true
+		r.GateCompleted = network.completed.Load()
+		r.GateRoundTrip = network.roundTrip.result()
+		if r.GateCompleted != r.Messages.Completed {
+			r.CountsVerified = false
+		}
+		if r.GateRoundTrip.P99MS > 50 {
+			r.LatencyPassed = false
+		}
 	}
 	for i, u := range units {
 		if u.state.GetMessages() != expected[i][0] || u.state.GetHeartbeats() != expected[i][1] || u.state.GetX() != expected[i][0] || u.state.GetHP() != expected[i][1]%100 {
@@ -321,7 +395,7 @@ func TestNestGameLoad(t *testing.T) {
 		if stream.Planned != want || stream.Accepted != want || stream.Completed != want || stream.Rejected != 0 {
 			r.CountsVerified = false
 		}
-		if stream.Completed > 0 && (stream.Completion.P99MS > 50 || stream.ChangedEntityCompletion.P99MS > 50) {
+		if stream.Completed > 0 && (stream.Completion.P99MS > 50 || stream.ChangedEntityCompletion.P99MS > 50 || stream.Completion.NegativeDurations > 0 || stream.ChangedEntityCompletion.NegativeDurations > 0 || stream.QueueWait.NegativeDurations > 0) {
 			r.LatencyPassed = false
 		}
 	}

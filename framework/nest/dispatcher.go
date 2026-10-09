@@ -5,10 +5,10 @@ import (
 	"context"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/misc"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
+	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -93,10 +93,14 @@ func NewDispatcher(name string, workerNum, msgCap int, handler func(*Msg)) *Disp
 	if ret.workerNum <= 0 {
 		ret.workerNum = runtime.GOMAXPROCS(0)
 	}
-	if ret.MsgCap <= 0 {
-		ret.MsgCap = 10000
-	}
+	// 即时快池预算与延时任务预算分开；提高快池缺省不连带扩大延时驻留。
 	ret.DelayedMsgCap = ret.MsgCap
+	if ret.DelayedMsgCap <= 0 {
+		ret.DelayedMsgCap = 10000
+	}
+	if ret.MsgCap <= 0 {
+		ret.MsgCap = DefaultFastQueueCapacity
+	}
 	ret.MaxDelay = 24 * time.Hour
 	return ret
 }

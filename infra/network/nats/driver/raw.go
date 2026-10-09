@@ -76,7 +76,7 @@ func (c *Client) SubscribeBounded(subject string, limits fnats.PendingLimits, ha
 		owned.wait.Add(1)
 		owned.mu.Unlock()
 		defer owned.wait.Done()
-		invokeNatsHandler(handler, &fnats.Msg{Subject: msg.Subject, Reply: msg.Reply, Data: append([]byte(nil), msg.Data...)})
+		invokeNatsHandler(handler, &fnats.Msg{Subject: msg.Subject, Reply: msg.Reply, Status: msg.Header.Get("Status"), Data: append([]byte(nil), msg.Data...)})
 	})
 	if err != nil {
 		return nil, c.wrapError(err)

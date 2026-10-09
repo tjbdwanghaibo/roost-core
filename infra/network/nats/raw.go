@@ -25,3 +25,8 @@ type DrainSubscription interface {
 	ISubscription
 	DrainContext(context.Context) error
 }
+
+// InboxClientFactory 给独立接入通道命名回信，不另建连接或改变 Bus RPC 的 inbox。
+type InboxClientFactory interface {
+	ForInbox(string) (RawClient, error)
+}

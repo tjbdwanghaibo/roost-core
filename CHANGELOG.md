@@ -4,8 +4,14 @@
 
 ## [Unreleased]
 
-- 新增[网关现状与独立 Gate 设计](docs/framework/GATEWAY.md)，说明复用范围、待实施阶段和验收条件。
-- 对齐仓库及生成的 TCP 手册：RS v2、Lockstep、心跳、限流、推送类型与每连接顺序；仅修正文档输出，不改运行时行为。
+## [v1.25.0] - 2026-10-09
+
+- 按Framework/Infra/Gameplay/Service/Wiring收敛目录；移除旧kit路径与领域alias，消费者需要重新生成、修改导入并编译。
+- 独立Gate/Game使用Core NATS与MessagePack；接入正式Nest、Sync、Lockstep和广播，补齐身份隔离、有界准入、停机重试与TCP关闭。
+- Interest采用Block AOI，支持唯一物理位置、多块被观察、手写空间组件与提交发布屏障；Nest默认共享等待容量65536。
+- 生成器最低core提升到v1.25.0。没有新增旧格式兼容或自动数据迁移。
+- 常规15分钟负载通过；10Hz/5%重档在802.919秒Gate准入耗尽、随后Nest队列满，最终值校验失败。维护者明确接受此已知限制先发布，重档验收仍是失败，后续分析根因。
+- [发布说明](docs/release/v1.25.0-NOTES.md)与[验收记录](docs/release/v1.25.0-IMPLEMENTATION.md)。
 
 ## [v1.24.1] — 文档维护
 

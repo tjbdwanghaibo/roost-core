@@ -1,12 +1,12 @@
-# v1.24 维护手册
+# v1.25 维护手册
 
 如果这是第一次维护Roost，先读[入门手册](../GETTING-STARTED.md)。本篇按日常修改、升级、故障和发布组织；先找到你的场景，再执行对应步骤。
 
-运行时代码冻结于 v1.24.0；v1.24.1 为文档及发布元数据补丁。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
+当前版本v1.25.0，目录/Gate/Block AOI已交付；重档性能限制见发布说明。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
 
 ## 1. 版本与兼容
 
-单模块发布，kit、codegen、demo 随 core 同一 tag。新业务固定 core 与工具版本，重新生成并编译工程。v1.24.0 最低生成物运行依赖是 core v1.24.0。文档补丁不改变最低版本和业务 API。
+单模块发布，kit、codegen、demo 随 core 同一 tag。新业务固定 core 与工具版本，重新生成并编译工程。v1.25.0 最低生成物运行依赖是 core v1.25.0。文档补丁不改变最低版本和业务 API。
 
 当前没有旧 WAL/schema/interest/客户端包的透明兼容。WAL只支持codec7；DAO只接受当前schema；Remote interest要求非零代际及完整身份；客户端RS v2区分PB、Sync、Lockstep。不要把单模块版本号与这些各自的线/存储格式号混为一谈。
 

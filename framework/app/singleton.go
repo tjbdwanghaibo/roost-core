@@ -629,6 +629,10 @@ func (a *App) openSingleton(serverType ServiceName) (*singletonLock, error) {
 		_ = store.Close()
 		return nil, err
 	}
+	if err := a.registry.Register(ModSingletonIdentityChecker, SingletonIdentityChecker(singletonLiveness{store: store, prefix: settings.KeyPrefix})); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	// 本次启动的身份（O-M6-6）：Mod 在锁拿到之后才 Init / Provide，读到它时锁已持有。
 	token, _, _ := bytes.Cut(value, []byte("|"))
 	incarnation := SingletonIncarnation{Key: lock.key, Sid: a.settings.Sid, Token: string(token)}
