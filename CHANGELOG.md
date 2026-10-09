@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 - 新增 Nest 单 ID 共享调度与固定 worker 分片的独立 benchmark，覆盖空 handler、1ms/200ms CPU/等待、慢任务混合及热点/碰撞；只增加测试和性能文档，不改生产调度策略。
+- 将 dispatchQueue 的快慢通道并列数组聚合为一个 dispatchLane 数组，明确字段归属；共享锁、跨通道 ID 顺序、容量和生命周期保持原契约。
 
 ## [v1.25.0] - 2026-10-09
 

@@ -239,7 +239,7 @@ func TestQueueStatsSeparateDependencyAndWorkerWait(t *testing.T) {
 	rejected.OnRelease()
 	// 直接建立可测量的排队时长，不依赖 Windows 的真实时钟分辨率。
 	q.mu.Lock()
-	for job := q.waiting[0].head; job != nil; job = job.waitingNext {
+	for job := q.lanes[dispatchFastLane].waiting.head; job != nil; job = job.waitingNext {
 		job.admittedAt = time.Now().Add(-time.Second)
 		if !job.readyAt.IsZero() {
 			job.readyAt = job.admittedAt

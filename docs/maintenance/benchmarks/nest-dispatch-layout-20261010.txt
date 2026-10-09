@@ -1,0 +1,87 @@
+before=8ec1f667, production queue identical to cae44d8d
+after-queue-sha256=9FCC5E4EBA192F8D3EB0EBFA788CC5D2F17A4841C520CEE0DFFE61F3543947F2
+Go1.27.0 Windows amd64 Ryzen 7 5800H GOMAXPROCS=4
+3 paired repetitions, alternated old/new order; benchtime=2s each; no profile/race
+benchmarks=BenchmarkDispatchCompareProducers/p4/nest and BenchmarkMixedFastSlow (1%/5%)
+
+BEFORE:
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkDispatchCompareProducers/p4/nest-4         	 1897932	      1174 ns/op	    851778 completed/s	         0.0000085 handler-avg-ms	         0 iterations/1ms	         0 rejected	         2.050 total-max-ms	         1.003 total-p99-ms	         1.003 wait-p99-ms	        93.92 zero-duration-pct	     209 B/op	       4 allocs/op
+PASS
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkMixedFastSlow/slow_1_percent-4         	 1624044	      1455 ns/op	     328 B/op	       5 allocs/op
+BenchmarkMixedFastSlow/slow_5_percent-4         	 1566423	      1557 ns/op	     351 B/op	       5 allocs/op
+PASS
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkDispatchCompareProducers/p4/nest-4         	 2067469	      1169 ns/op	    855282 completed/s	         0.0000097 handler-avg-ms	         0 iterations/1ms	         0 rejected	         1.872 total-max-ms	         1.002 total-p99-ms	         1.002 wait-p99-ms	        93.42 zero-duration-pct	     209 B/op	       4 allocs/op
+PASS
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkMixedFastSlow/slow_1_percent-4         	 1645269	      1453 ns/op	     328 B/op	       5 allocs/op
+BenchmarkMixedFastSlow/slow_5_percent-4         	 1473324	      1579 ns/op	     351 B/op	       5 allocs/op
+PASS
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkDispatchCompareProducers/p4/nest-4         	 2072258	      1182 ns/op	    845746 completed/s	         0.0000071 handler-avg-ms	         0 iterations/1ms	         0 rejected	         4.510 total-max-ms	         1.002 total-p99-ms	         1.002 wait-p99-ms	        93.97 zero-duration-pct	     209 B/op	       4 allocs/op
+PASS
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkMixedFastSlow/slow_1_percent-4         	 1729202	      1445 ns/op	     328 B/op	       5 allocs/op
+BenchmarkMixedFastSlow/slow_5_percent-4         	 1560474	      1539 ns/op	     351 B/op	       5 allocs/op
+PASS
+
+AFTER:
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkDispatchCompareProducers/p4/nest-4         	 1886091	      1243 ns/op	    804712 completed/s	         0.0000105 handler-avg-ms	         0 iterations/1ms	         0 rejected	         3.001 total-max-ms	         1.002 total-p99-ms	         1.002 wait-p99-ms	        93.40 zero-duration-pct	     209 B/op	       4 allocs/op
+PASS
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkMixedFastSlow/slow_1_percent-4         	 1679835	      1496 ns/op	     328 B/op	       5 allocs/op
+BenchmarkMixedFastSlow/slow_5_percent-4         	 1479808	      1782 ns/op	     351 B/op	       5 allocs/op
+PASS
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkDispatchCompareProducers/p4/nest-4         	 2037660	      1188 ns/op	    841683 completed/s	         0.0000084 handler-avg-ms	         0 iterations/1ms	         0 rejected	         1.525 total-max-ms	         1.002 total-p99-ms	         1.002 wait-p99-ms	        92.96 zero-duration-pct	     209 B/op	       4 allocs/op
+PASS
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkMixedFastSlow/slow_1_percent-4         	 1552837	      1471 ns/op	     328 B/op	       5 allocs/op
+BenchmarkMixedFastSlow/slow_5_percent-4         	 1551603	      1563 ns/op	     351 B/op	       5 allocs/op
+PASS
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkDispatchCompareProducers/p4/nest-4         	 2025586	      1161 ns/op	    861269 completed/s	         0.0000063 handler-avg-ms	         0 iterations/1ms	         0 rejected	         1.994 total-max-ms	         1.002 total-p99-ms	         1.002 wait-p99-ms	        93.80 zero-duration-pct	     209 B/op	       4 allocs/op
+PASS
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkMixedFastSlow/slow_1_percent-4         	 1497084	      1502 ns/op	     328 B/op	       5 allocs/op
+BenchmarkMixedFastSlow/slow_5_percent-4         	 1568290	      1524 ns/op	     351 B/op	       5 allocs/op
+PASS
