@@ -1,0 +1,82 @@
+package account
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+)
+
+func TestReviewVerifiedIdentityEncodingIsInjective(t *testing.T) {
+	s, _, _ := newService(t, func(c *Config) {
+		c.Verifier = VerifierFunc(func(_ context.Context, i Identity) (Verified, error) {
+			switch i.Credential {
+			case "one":
+				return Verified{Channel: "vendor:a", OpenID: "b"}, nil
+			case "two":
+				return Verified{Channel: "vendor", OpenID: "a:b"}, nil
+			}
+			return Verified{}, fmt.Errorf("invalid credential")
+		})
+	})
+	ctx := context.Background()
+	first, err := s.Login(ctx, Identity{Channel: "submitted", OpenID: "one", Credential: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.Login(ctx, Identity{Channel: "submitted", OpenID: "two", Credential: "two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID {
+		t.Fatalf("distinct verified identities merged: first=%s/%s second returned=%s/%s account=%s", first.Channel, first.OpenID, second.Channel, second.OpenID, first.ID)
+	}
+}
+
+type reviewSlotAppliedError struct {
+	versionstore.Store[string, Slot]
+	failed bool
+}
+
+func (s *reviewSlotAppliedError) Update(ctx context.Context, k string, m versionstore.Mutate[Slot]) (versionstore.Versioned[Slot], bool, error) {
+	v, saved, err := s.Store.Update(ctx, k, m)
+	if err == nil && saved && v.Value.PlayerID != 0 && !s.failed {
+		s.failed = true
+		return versionstore.Versioned[Slot]{}, false, fmt.Errorf("injected reply lost after slot commit")
+	}
+	return v, saved, err
+}
+func TestReviewLostSlotReplyCannotDeleteCommittedRole(t *testing.T) {
+	s, _, cfg := newService(t, func(c *Config) { c.Slots = &reviewSlotAppliedError{Store: c.Slots} })
+	ctx := context.Background()
+	a, err := s.Login(ctx, Identity{Channel: "test", OpenID: "slot", Credential: "good"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A repair may reconcile the applied write and return success. Either
+	// outcome must preserve a committed slot's referenced role.
+	created, createErr := s.CreateRole(ctx, a.ID, 1, "hero")
+	if createErr != nil || created.PlayerID == 0 {
+		t.Fatalf("applied slot was not reconciled: %+v %v", created, createErr)
+	}
+	slot, found, err := cfg.Slots.Get(ctx, slotKeyFor(a.ID, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || slot.Value.PlayerID == 0 {
+		t.Fatal("committed slot is missing")
+	}
+	_, roleFound, err := cfg.Roles.Get(ctx, slot.Value.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retried, retryErr := s.CreateRole(ctx, a.ID, 1, "hero")
+	if !roleFound || retryErr != nil || retried.PlayerID != created.PlayerID {
+		t.Fatalf("committed slot v%d refers to deleted role %d; retry=%v", slot.Version, slot.Value.PlayerID, retryErr)
+	}
+}
+
+func (s *reviewSlotAppliedError) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Slot], match func(Slot) bool) error {
+	return s.Store.(versionstore.ConditionalDeleter[string, Slot]).DeleteIf(ctx, key, expect, match)
+}

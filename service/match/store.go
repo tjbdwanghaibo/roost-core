@@ -3,7 +3,7 @@ package match
 import (
 	"context"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
 // Store is matchmaking persistence.

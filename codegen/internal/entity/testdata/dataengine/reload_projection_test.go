@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/dataengine/engine"
-	"github.com/tjbdwanghaibo/roost-core/entity"
-	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
-	"github.com/tjbdwanghaibo/roost-core/mongo/driver"
-	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

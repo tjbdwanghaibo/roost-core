@@ -8,8 +8,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"math"
 	"net"
 	"os"
@@ -21,10 +21,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/spatial"
-	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
-	"github.com/tjbdwanghaibo/roost-core/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

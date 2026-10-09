@@ -96,7 +96,7 @@
 
 - **来源**：[A2 驱动契约](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)“未完成 / 观察”（`noReplay` 在 `ClusterClient` 里的 MOVED / ASK 只按源码核对）；清单 N01、N04、N14 行（Cluster 两客户端 integration、跨 slot、`cluster_addrs` 列表写法起服）；App 单实例锁方案（Cluster 下真实进程演练未验）。
 - **验证什么**：kit 单实例锁 store（CAS 与 Live 两个客户端）、写命令不重放、Lua 跨 slot 布局在多机 Cluster 切主与 MOVED / ASK 期间的行为；go-redis 写路由缓存旧主的刷新（RR-20260924-24）；`cluster_addrs` 起服。
-- **怎么做**：多台主机组 Cluster，重跑 `kit/scripts/integration/redis-cluster-suites.sh`（`ROOST_REMOTE_CLUSTER_IT=1`，本机已在同机 3 主 3 从上跑过），再按 App 单实例锁 §13 的步骤做两个 sid 的真实进程演练。
+- **怎么做**：多台主机组 Cluster，重跑 `wiring/scripts/integration/redis-cluster-suites.sh`（`ROOST_REMOTE_CLUSTER_IT=1`，本机已在同机 3 主 3 从上跑过），再按 App 单实例锁 §13 的步骤做两个 sid 的真实进程演练。
 - **通过标准**：不误放权、不永久残留、合法新 ctx / 新实例可恢复（清单外部验证表口径）。（建议）切主期间没有重复执行的写，MOVED / ASK 后不重放写命令。
 
 ### E09 Cluster 下的业务服务组合
@@ -124,7 +124,7 @@
 
 - **来源**：[SAGA-MONGO-STEP-LATENCY](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SAGA-MONGO-STEP-LATENCY-2026-10-06.md)“未完成”与“复跑”。
 - **验证什么**：本机 macOS 单盘上 Mongo 步骤每次尝试约 18.3ms、两次落盘提交；在 Linux + NVMe + 跨主机副本集上一次落盘提交是否约 1～5ms（文档推断，未测）；64 个以上协程的吞吐（单个 durable 的 `MaxAckPending` 缺省 256）；选项 C（乐观单事务）的实测。
-- **怎么做**：在 Linux 跨主机副本集上复跑 `BenchmarkRealMongoStepThroughput`、`BenchmarkRealMongoStepLatencyBreakdown`、`BenchmarkRealMongoCommitWriteConcern`（`GOWORK=off go test -tags integration -bench ... ./saga/`）。
+- **怎么做**：在 Linux 跨主机副本集上复跑 `BenchmarkRealMongoStepThroughput`、`BenchmarkRealMongoStepLatencyBreakdown`、`BenchmarkRealMongoCommitWriteConcern`（`GOWORK=off go test -tags integration -bench ... ./framework/saga/`）。
 - **通过标准**：维护者已选 A，接受“55 tps 足够”。（建议）生产形态下 8 与 32 协程的 ops/s ≥ 55，提交耗时与 p99 有记录；与本机数值并列，注明 Linux 与 macOS 不可比。
 
 ### E13 多主机强杀：owner / 锁迁移、双实例、旧回调
@@ -169,7 +169,7 @@
 
 - **来源**：[REMAINING-2026-09-28](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/review/REMAINING-2026-09-28.md) §1.2 C03“可做部分”；OPEN-ITEMS C03；RR-20260926-16、RR-20260928-11 的“未验证项”；[DATAENGINE-BATCH](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/DATAENGINE-BATCH-2026-09-24.md)（Linux 目标硬件）；核心优化交接 §5 B29 条（“Linux 对照仍不做”是当时的决定，物理 Linux 环境到位时补）。
 - **验证什么**：RR-16（async + Ack 多出的 fsync）与 RR-20260928-11（pipelined 回退 strict 等 fsync）只有 macOS `F_FULLFSYNC` 的数据（group-commit 2ms 时慢 4～9%，fsync 次数 +12～25%）。
-- **怎么做**：Linux 物理机跑 `nestwal` 的 `BenchmarkWALAppendStrict`、`BenchmarkWALAppendAsyncParallel`、`BenchmarkBroadcastPipelinedCommit` 与 `dataengine/engine` 的 `BenchmarkProjectorAdmissionMatrix`、`BenchmarkProjectorWALReplayAckMatrix`；修前修后按 B29 的 D / E 组选，benchstat n ≥ 10 交替。
+- **怎么做**：Linux 物理机跑 `framework/nestwal` 的 `BenchmarkWALAppendStrict`、`BenchmarkWALAppendAsyncParallel`、`BenchmarkBroadcastPipelinedCommit` 与 `dataengine/engine` 的 `BenchmarkProjectorAdmissionMatrix`、`BenchmarkProjectorWALReplayAckMatrix`；修前修后按 B29 的 D / E 组选，benchstat n ≥ 10 交替。
 - **通过标准**：得到 Linux 上的 fsync 次数（`Stats().Syncs`）与吞吐对照，写进两条 RR 的修复记录（REMAINING 口径）。（建议）延迟与 allocs 无新退化，代价与 macOS 同向。
 
 ### E19 物理断电与 dm-flakey
@@ -207,7 +207,7 @@
 - **来源**：REMAINING-2026-09-28 §2 N11；ARCHIVE-2026-09-30 §5 P3；RR-20260927-34、RR-20260928-04 的“未验证项”。
 - **验证什么**：真实 distroless 基础镜像与多阶段 `golang` 构建没跑过（本机按规则不拉镜像，只执行过运行阶段的 `COPY`）。
 - **怎么做**：允许拉镜像的环境（CI 或维护者许可的机器），用生成的 Dockerfile `docker build`，compose 起 10 个服务。**拉基础镜像属于下载，先取得维护者许可。**
-- **通过标准**：10 个服务 healthy，`configs/data` 与 `log` 目录正确。
+- **通过标准**：10 个服务 healthy，`configs/data` 与 `infra/observe/log` 目录正确。
 
 ### E24 仓库外生产配置的 doctor 检查
 

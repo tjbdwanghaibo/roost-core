@@ -34,7 +34,7 @@ jobs:
         # integration-tagged tests (redis toxiproxy suites) are excluded from
         # `go test ./...`; vetting them keeps the build-tagged files compiling.
       - run: go vet -tags integration ./...
-      - run: go test -run '^$' -bench BenchmarkRemoteSnapshotCacheL1Get4K -benchtime=1s ./entity
+      - run: go test -run '^$' -bench BenchmarkRemoteSnapshotCacheL1Get4K -benchtime=1s ./framework/entity
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
   # RR-20260921-05: what this repository generates, and the guards that run
@@ -161,7 +161,7 @@ jobs:
       - name: integration-tagged service tests on Redis
         run: |
           set -o pipefail
-          go test -tags integration -count=1 -p 1 -json ./kit/redis/ ./kit/service/... ./service/... | tee test.json \
+          go test -tags integration -count=1 -p 1 -json ./wiring/redis/ ./wiring/... ./service/... | tee test.json \
             | jq -r 'select(.Test==null and (.Action=="pass" or .Action=="fail")) | .Action + "\t" + .Package'
       - name: failing test output (on failure)
         if: failure()
@@ -175,7 +175,7 @@ jobs:
             exit 1
           fi
       - name: race on the Redis-backed service suites
-        run: go test -tags integration -count=1 -p 1 -race ./kit/service/integration/ ./kit/service/mail/ ./kit/service/rank/ ./service/mail/
+        run: go test -tags integration -count=1 -p 1 -race ./wiring/integration/ ./wiring/mail/ ./wiring/rank/ ./service/mail/
 
   windows-compatibility:
     runs-on: windows-latest

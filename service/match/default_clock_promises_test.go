@@ -1,7 +1,7 @@
 package match
 
 import (
-	businessclock "github.com/tjbdwanghaibo/roost-core/clock"
+	businessclock "github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"testing"
 	"time"
 )

@@ -36,8 +36,8 @@ func TestConsolidateSplitsASingleLineImportIntoAValidSecondDeclaration(t *testin
 	text := string(rewritten)
 	for _, want := range []string{
 		// The Mod glue stays in kit, and kit is now a directory inside core.
-		`"github.com/tjbdwanghaibo/roost-core/kit/redis"`,
-		`coreredis "github.com/tjbdwanghaibo/roost-core/redis/driver"`,
+		`"github.com/tjbdwanghaibo/roost-core/wiring/redis"`,
+		`coreredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"`,
 		"redis.NewRedisMod",
 		"coreredis.NewClient",
 	} {

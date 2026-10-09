@@ -42,10 +42,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-core/bus"
-{{if .AnyAffinity}}	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
-{{end}}	"github.com/tjbdwanghaibo/roost-core/servicerpc"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+{{if .AnyAffinity}}	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
+{{end}}	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
 )
 
 // ServiceType is the bus service type {{.Iface}} answers on. The client and
@@ -349,11 +349,11 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-core/bus"
-{{if .AnyAffinity}}	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
-{{end}}	"github.com/tjbdwanghaibo/roost-core/servicerpc"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+{{if .AnyAffinity}}	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
+{{end}}	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // OwnerCapabilities is what the owning Mod registers: the interface every
@@ -412,6 +412,8 @@ func OwnerCapabilities(service {{.Iface}}) []mods.Capability {
 type Server struct {
 	service {{.Iface}}
 	bus     bus.IBus
+{{if .Runtime}}	runtime *domain.Server
+{{end}}
 }
 
 // NewServer returns this service's app.Service.
@@ -457,6 +459,8 @@ func (s *Server) Init(r *app.Registry) error {
 		return fmt.Errorf("{{.Package}} server: %w", err)
 	}
 	slog.Info("{{.Package}} server: handlers registered", "methods", len(Methods))
+{{if .Runtime}}	s.runtime = domain.NewServer(service)
+{{end}}
 	return nil
 }
 
@@ -478,7 +482,7 @@ func (s *Server) Init(r *app.Registry) error {
 //
 // states "nothing periodic" in three lines. A generated default would answer
 // the question by not asking it.
-func (s *Server) Serve(ctx context.Context) error { return s.run(ctx) }
+func (s *Server) Serve(ctx context.Context) error { {{if .Runtime}}return s.runtime.Serve(ctx){{else}}return s.run(ctx){{end}} }
 
 // Shutdown implements app.Service.
 //
@@ -486,7 +490,7 @@ func (s *Server) Serve(ctx context.Context) error { return s.run(ctx) }
 // synchronous, and the stores belong to the Mod that built them. A service
 // that needs to drain should do it at the end of run, where the context that
 // asked it to stop is in scope.
-func (s *Server) Shutdown(context.Context) error { return nil }
+func (s *Server) Shutdown(ctx context.Context) error { {{if .Runtime}}if s.runtime == nil { return nil }; return s.runtime.Shutdown(ctx){{else}}return nil{{end}} }
 
 var _ app.Service = (*Server)(nil)
 

@@ -11,7 +11,7 @@ const webRouteSource = `package web
 
 import (
     "context"
-    "github.com/tjbdwanghaibo/roost-core/webroute"
+    "github.com/tjbdwanghaibo/roost-core/infra/network/webroute"
 )
 
 type Service struct{}

@@ -1,4 +1,4 @@
-// cfggen generates roost-core/configdata bindings from a schema meta file —
+// cfggen generates roost-core/framework/configdata bindings from a schema meta file —
 // a deliberately small, Luban-like pipeline: the meta file is the single
 // hand-written artifact, everything Go (row structs, registration, typed
 // snapshot accessors) is generated.
@@ -51,7 +51,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/tjbdwanghaibo/roost-core/configdata/rules"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata/rules"
 )
 
 const generatedFileName = "cfg_gen.go"
@@ -706,9 +706,9 @@ func generate(meta *Meta, pkg string) ([]byte, error) {
 	b.WriteString("//\n//\tcfggen -meta <schema> -out <this directory>\n")
 	fmt.Fprintf(&b, "package %s\n\n", pkg)
 	if usesStrconv(meta) {
-		b.WriteString("import (\n\t\"strconv\"\n\n\t\"github.com/tjbdwanghaibo/roost-core/configdata\"\n)\n\n")
+		b.WriteString("import (\n\t\"strconv\"\n\n\t\"github.com/tjbdwanghaibo/roost-core/framework/configdata\"\n)\n\n")
 	} else {
-		b.WriteString("import (\n\t\"github.com/tjbdwanghaibo/roost-core/configdata\"\n)\n\n")
+		b.WriteString("import (\n\t\"github.com/tjbdwanghaibo/roost-core/framework/configdata\"\n)\n\n")
 	}
 
 	for _, bean := range meta.Beans {

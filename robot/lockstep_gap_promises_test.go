@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
 )
 
 // RR-20261006-65 (F04-9): the bot asked for a catch-up only when the

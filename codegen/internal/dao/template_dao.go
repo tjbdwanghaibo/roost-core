@@ -8,13 +8,13 @@ import (
 {{- if not .Dao.NoCollection}}
 	"sort"
 {{- end}}
-	"github.com/tjbdwanghaibo/roost-core/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 {{- if not .Dao.NoCollection}}
 {{- end}}
-	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 {{- if .HasMaps}}
-	fmap "github.com/tjbdwanghaibo/roost-core/safemap"
+	fmap "github.com/tjbdwanghaibo/roost-core/infra/base/safemap"
 {{- end}}
 	"go.mongodb.org/mongo-driver/v2/bson"
 )

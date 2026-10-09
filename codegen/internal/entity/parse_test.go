@@ -227,7 +227,7 @@ func (e *Player) OnDataChange(_ []byte, _ int64) {}
 	if contains(generated, "func (e *Player) ApplyRemoteSync(") {
 		t.Fatal("generator must not emit the removed V1 remote sync protocol")
 	}
-	if !contains(generated, `"github.com/tjbdwanghaibo/roost-core/nest"`) || contains(generated, "func (e *Player) RemoveSnapshot(") {
+	if !contains(generated, `"github.com/tjbdwanghaibo/roost-core/framework/nest"`) || contains(generated, "func (e *Player) RemoveSnapshot(") {
 		t.Fatal("persistent entity must use transactional delete without generated RemoveSnapshot")
 	}
 }

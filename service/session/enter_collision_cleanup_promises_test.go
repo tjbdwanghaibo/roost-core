@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
 // deleteHook runs after the first version-checked Delete on either store

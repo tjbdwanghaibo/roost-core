@@ -12,6 +12,9 @@ import (
 func writeDir(t *testing.T, source string) string {
 	t.Helper()
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/rpcfixture\n\ngo 1.27.0\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "svc.go"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)
 	}

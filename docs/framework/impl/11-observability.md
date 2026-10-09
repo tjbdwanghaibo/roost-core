@@ -10,7 +10,7 @@
 
 ## 1. 实现边界
 
-`metrics`、`health`、`log`、`failurelog`、`admin`、`security`、`httpclient`、`httpserver`、`webroute`、`errcode`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`infra/observe/metrics`、`infra/observe/health`、`infra/observe/log`、`infra/observe/failurelog`、`infra/observe/admin`、`infra/base/security`、`infra/network/httpclient`、`infra/network/httpserver`、`infra/network/webroute`、`infra/base/errcode`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
@@ -35,7 +35,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [admin.go](../../../admin/admin.go) | `Command`、`Result`、`Handler`、`CommandDef`、`RiskLevel`、`CommandMeta`、`Registry`、`MetadataRegistry` |
+| [admin.go](../../../infra/observe/admin/admin.go) | `Command`、`Result`、`Handler`、`CommandDef`、`RiskLevel`、`CommandMeta`、`Registry`、`MetadataRegistry` |
 
 ### errcode
 
@@ -43,7 +43,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [errcode.go](../../../errcode/errcode.go) | `Definition`、`IntError` |
+| [errcode.go](../../../infra/base/errcode/errcode.go) | `Definition`、`IntError` |
 
 ### failurelog
 
@@ -51,7 +51,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [failurelog.go](../../../failurelog/failurelog.go) | `Config`、`RedisList` |
+| [failurelog.go](../../../infra/observe/failurelog/failurelog.go) | `Config`、`RedisList` |
 
 ### health
 
@@ -59,7 +59,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [health.go](../../../health/health.go) | `Status`、`Result`、`Snapshot`、`Checker`、`CheckerFunc`、`Registry` |
+| [health.go](../../../infra/observe/health/health.go) | `Status`、`Result`、`Snapshot`、`Checker`、`CheckerFunc`、`Registry` |
 
 ### httpclient
 
@@ -67,7 +67,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [client.go](../../../httpclient/client.go) | `Option`、`Client`、`StatusError` |
+| [client.go](../../../infra/network/httpclient/client.go) | `Option`、`Client`、`StatusError` |
 
 ### httpserver
 
@@ -75,7 +75,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [server.go](../../../httpserver/server.go) | `Config`、`Option`、`Engine`、`RouteRegistrar`、`Group` |
+| [server.go](../../../infra/network/httpserver/server.go) | `Config`、`Option`、`Engine`、`RouteRegistrar`、`Group` |
 
 ### log
 
@@ -83,10 +83,10 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [elog.go](../../../log/elog.go) | `IDProvider`、`ELog`、`ELogOption` |
-| [log.go](../../../log/log.go) | `Options` |
-| [ordered_text_handler.go](../../../log/ordered_text_handler.go) | 函数/方法或内部实现；见源码 |
-| [rotation.go](../../../log/rotation.go) | 函数/方法或内部实现；见源码 |
+| [elog.go](../../../infra/observe/log/elog.go) | `IDProvider`、`ELog`、`ELogOption` |
+| [log.go](../../../infra/observe/log/log.go) | `Options` |
+| [ordered_text_handler.go](../../../infra/observe/log/ordered_text_handler.go) | 函数/方法或内部实现；见源码 |
+| [rotation.go](../../../infra/observe/log/rotation.go) | 函数/方法或内部实现；见源码 |
 
 ### metrics
 
@@ -94,8 +94,8 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [metrics.go](../../../metrics/metrics.go) | `Kind`、`Labels`、`Metric`、`Registry`、`RegistryOption` |
-| [prometheus.go](../../../metrics/prometheus.go) | 函数/方法或内部实现；见源码 |
+| [metrics.go](../../../infra/observe/metrics/metrics.go) | `Kind`、`Labels`、`Metric`、`Registry`、`RegistryOption` |
+| [prometheus.go](../../../infra/observe/metrics/prometheus.go) | 函数/方法或内部实现；见源码 |
 
 ### security
 
@@ -103,9 +103,9 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [payload_signature.go](../../../security/payload_signature.go) | 函数/方法或内部实现；见源码 |
-| [ratelimit.go](../../../security/ratelimit.go) | `RateLimitKey`、`RateLimitConfig`、`RateLimitStats`、`RateLimiter` |
-| [session_token.go](../../../security/session_token.go) | `SessionClaims` |
+| [payload_signature.go](../../../infra/base/security/payload_signature.go) | 函数/方法或内部实现；见源码 |
+| [ratelimit.go](../../../infra/base/security/ratelimit.go) | `RateLimitKey`、`RateLimitConfig`、`RateLimitStats`、`RateLimiter` |
+| [session_token.go](../../../infra/base/security/session_token.go) | `SessionClaims` |
 
 ### webroute
 
@@ -113,7 +113,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [route.go](../../../webroute/route.go) | `Registerer`、`Module`、`Registrar`、`RawRequest`、`ErrorMapper` |
+| [route.go](../../../infra/network/webroute/route.go) | `Registerer`、`Module`、`Registrar`、`RawRequest`、`ErrorMapper` |
 
 </details>
 
@@ -126,73 +126,73 @@
 
 ### admin
 
-- [admin_test.go](../../../admin/admin_test.go)：`TestRegistryExecute`、`TestRegistryRegisterReplacesExistingCommand`、`TestRegistryExecuteRecoversHandlerPanic`、`TestMetadataRegistryRegistersAndListsSortedCommands`
-- [audit_promises_test.go](../../../admin/audit_promises_test.go)：`TestAdminExecutionWritesCorrelatedAuditWithoutPayload`
-- [guards_promises_test.go](../../../admin/guards_promises_test.go)：`TestRegistriesRefuseNilReceiversAndUnknownCommands`
-- [promises_test.go](../../../admin/promises_test.go)：`TestAdminRegistriesRefuseNamelessAndHandlerlessCommands`
-- [schema_ownership_promises_test.go](../../../admin/schema_ownership_promises_test.go)：`TestMetadataOwnership`、`TestSchemaPreservesNilAndEmptyContainers`、`TestSchemaNestedArraysAndStringsHaveIndependentOwnership`、`TestConcurrentMetadataConsumersOnlyMutateTheirCopies`
+- [admin_test.go](../../../infra/observe/admin/admin_test.go)：`TestRegistryExecute`、`TestRegistryRegisterReplacesExistingCommand`、`TestRegistryExecuteRecoversHandlerPanic`、`TestMetadataRegistryRegistersAndListsSortedCommands`
+- [audit_promises_test.go](../../../infra/observe/admin/audit_promises_test.go)：`TestAdminExecutionWritesCorrelatedAuditWithoutPayload`
+- [guards_promises_test.go](../../../infra/observe/admin/guards_promises_test.go)：`TestRegistriesRefuseNilReceiversAndUnknownCommands`
+- [promises_test.go](../../../infra/observe/admin/promises_test.go)：`TestAdminRegistriesRefuseNamelessAndHandlerlessCommands`
+- [schema_ownership_promises_test.go](../../../infra/observe/admin/schema_ownership_promises_test.go)：`TestMetadataOwnership`、`TestSchemaPreservesNilAndEmptyContainers`、`TestSchemaNestedArraysAndStringsHaveIndependentOwnership`、`TestConcurrentMetadataConsumersOnlyMutateTheirCopies`
 
 ### errcode
 
-- [errcode_test.go](../../../errcode/errcode_test.go)：`TestIntErrorMapsClientCodeAndPreservesCause`、`TestClientErrorFallsBackForPlainError`、`TestRemoteErrorPreservesClientCode`
+- [errcode_test.go](../../../infra/base/errcode/errcode_test.go)：`TestIntErrorMapsClientCodeAndPreservesCause`、`TestClientErrorFallsBackForPlainError`、`TestRemoteErrorPreservesClientCode`
 
 ### failurelog
 
-- [failurelog_fix_test.go](../../../failurelog/failurelog_fix_test.go)：`TestTrimUsesInPlaceLTrimWithoutDelete`、`TestDeleteRawUsesInPlaceLRemWithoutDelete`、`TestScriptFallbackIsCountedAsDegraded`
-- [failurelog_test.go](../../../failurelog/failurelog_test.go)：`TestRedisListAppendRawKeepsNewestEntries`、`TestRedisListListRawSupportsSingleElementRange`、`TestRedisListPurgeDeletesKey`、`TestRedisListPurgeReturnsEntryCount`、`TestRedisListCountRawReturnsListLength`；其余 2 项见文件
-- [key_guards_promises_test.go](../../../failurelog/key_guards_promises_test.go)：`TestRedisListRefusesAnEmptyKeyOnEveryOperation`
-- [trim_metrics_promises_test.go](../../../failurelog/trim_metrics_promises_test.go)：`TestLuaAppendCountsTrimmedRecords`
-- [unknown_result_integration_test.go](../../../failurelog/unknown_result_integration_test.go)：`TestIntegrationLostScriptReplyDoesNotAppendTwice`
-- [unknown_result_promises_test.go](../../../failurelog/unknown_result_promises_test.go)：`TestUnknownScriptResultIsReturnedWithoutReplayingTheWrite`、`TestAdapterWithoutLuaStillUsesTheFallback`
+- [failurelog_fix_test.go](../../../infra/observe/failurelog/failurelog_fix_test.go)：`TestTrimUsesInPlaceLTrimWithoutDelete`、`TestDeleteRawUsesInPlaceLRemWithoutDelete`、`TestScriptFallbackIsCountedAsDegraded`
+- [failurelog_test.go](../../../infra/observe/failurelog/failurelog_test.go)：`TestRedisListAppendRawKeepsNewestEntries`、`TestRedisListListRawSupportsSingleElementRange`、`TestRedisListPurgeDeletesKey`、`TestRedisListPurgeReturnsEntryCount`、`TestRedisListCountRawReturnsListLength`；其余 2 项见文件
+- [key_guards_promises_test.go](../../../infra/observe/failurelog/key_guards_promises_test.go)：`TestRedisListRefusesAnEmptyKeyOnEveryOperation`
+- [trim_metrics_promises_test.go](../../../infra/observe/failurelog/trim_metrics_promises_test.go)：`TestLuaAppendCountsTrimmedRecords`
+- [unknown_result_integration_test.go](../../../infra/observe/failurelog/unknown_result_integration_test.go)：`TestIntegrationLostScriptReplyDoesNotAppendTwice`
+- [unknown_result_promises_test.go](../../../infra/observe/failurelog/unknown_result_promises_test.go)：`TestUnknownScriptResultIsReturnedWithoutReplayingTheWrite`、`TestAdapterWithoutLuaStillUsesTheFallback`
 
 ### health
 
-- [checker_deadline_promises_test.go](../../../health/checker_deadline_promises_test.go)：`TestSnapshotBoundsEveryCheckerByOneDeadline`
-- [health_test.go](../../../health/health_test.go)：`TestRegistrySnapshotAggregatesDependencyHealth`、`TestRegistrySnapshotRecoversCheckerPanic`、`TestRegistrySnapshotCountsDegradedAsAvailable`
+- [checker_deadline_promises_test.go](../../../infra/observe/health/checker_deadline_promises_test.go)：`TestSnapshotBoundsEveryCheckerByOneDeadline`
+- [health_test.go](../../../infra/observe/health/health_test.go)：`TestRegistrySnapshotAggregatesDependencyHealth`、`TestRegistrySnapshotRecoversCheckerPanic`、`TestRegistrySnapshotCountsDegradedAsAvailable`
 
 ### httpclient
 
-- [client_boundaries_promises_test.go](../../../httpclient/client_boundaries_promises_test.go)：`TestClientDeadlines`、`TestCloneHeaderIsolation`、`TestStatusErrorClassification`、`TestCloneTimeoutPreservesParentAndCustomClient`、`TestCloneTimeoutConcurrentRequestsKeepParentDeadline`；其余 1 项见文件
-- [guards_promises_test.go](../../../httpclient/guards_promises_test.go)：`TestDoJSONOnANilClientFails`
-- [httpclient_test.go](../../../httpclient/httpclient_test.go)：`TestClientPostJSONSendsSignatureHeadersAndDecodesResponse`、`TestClientPostJSONDecodesErrorBodyAndReturnsStatusError`、`TestClientClonePreservesBaseURLAndAddsHeaders`
+- [client_boundaries_promises_test.go](../../../infra/network/httpclient/client_boundaries_promises_test.go)：`TestClientDeadlines`、`TestCloneHeaderIsolation`、`TestStatusErrorClassification`、`TestCloneTimeoutPreservesParentAndCustomClient`、`TestCloneTimeoutConcurrentRequestsKeepParentDeadline`；其余 1 项见文件
+- [guards_promises_test.go](../../../infra/network/httpclient/guards_promises_test.go)：`TestDoJSONOnANilClientFails`
+- [httpclient_test.go](../../../infra/network/httpclient/httpclient_test.go)：`TestClientPostJSONSendsSignatureHeadersAndDecodesResponse`、`TestClientPostJSONDecodesErrorBodyAndReturnsStatusError`、`TestClientClonePreservesBaseURLAndAddsHeaders`
 
 ### httpserver
 
-- [httpserver_test.go](../../../httpserver/httpserver_test.go)：`TestEngineRoutesGroupsAndJSONHandlersWithRequestID`、`TestEngineRejectsTooLargeJSONBody`、`TestReadBodyUsesEngineBodyLimit`、`TestEngineRecoversPanicAsJSON`、`TestNewServerAppliesProductionTimeouts`
-- [json_boundary_promises_test.go](../../../httpserver/json_boundary_promises_test.go)：`TestJSONRequestBoundary`
-- [response_buffering_promises_test.go](../../../httpserver/response_buffering_promises_test.go)：`TestJSONDoesNotCopyTheEncodedBodyPerResponse`
-- [response_integrity_promises_test.go](../../../httpserver/response_integrity_promises_test.go)：`TestJSONEncodeFailureAnswers500InsteadOfAnEmptySuccess`、`TestJSONSuccessKeepsTheEncoderByteShape`、`TestPanicAfterTheResponseStartedAbortsTheConnection`、`TestErrAbortHandlerIsPropagatedNotAnswered`、`TestEarlyHintsDoNotCountAsAStartedResponse`；其余 3 项见文件
+- [httpserver_test.go](../../../infra/network/httpserver/httpserver_test.go)：`TestEngineRoutesGroupsAndJSONHandlersWithRequestID`、`TestEngineRejectsTooLargeJSONBody`、`TestReadBodyUsesEngineBodyLimit`、`TestEngineRecoversPanicAsJSON`、`TestNewServerAppliesProductionTimeouts`
+- [json_boundary_promises_test.go](../../../infra/network/httpserver/json_boundary_promises_test.go)：`TestJSONRequestBoundary`
+- [response_buffering_promises_test.go](../../../infra/network/httpserver/response_buffering_promises_test.go)：`TestJSONDoesNotCopyTheEncodedBodyPerResponse`
+- [response_integrity_promises_test.go](../../../infra/network/httpserver/response_integrity_promises_test.go)：`TestJSONEncodeFailureAnswers500InsteadOfAnEmptySuccess`、`TestJSONSuccessKeepsTheEncoderByteShape`、`TestPanicAfterTheResponseStartedAbortsTheConnection`、`TestErrAbortHandlerIsPropagatedNotAnswered`、`TestEarlyHintsDoNotCountAsAStartedResponse`；其余 3 项见文件
 
 ### log
 
-- [close_fallback_promises_test.go](../../../log/close_fallback_promises_test.go)：`TestLogsAfterCloseOfAFileOnlySinkReachStderr`、`TestLogsAfterCloseKeepTheConsoleWriter`
-- [log_test.go](../../../log/log_test.go)：`TestContextAttrsArePrepended`、`TestRuntimeAttrsAreWrittenBetweenLevelAndMessage`、`TestCallerAttrsIncludeFileLineAndFunction`、`TestELogCallerAttrsIncludeUserFunction`、`TestGoIDKey`；其余 4 项见文件
-- [rotation_guards_promises_test.go](../../../log/rotation_guards_promises_test.go)：`TestRotatingWriterRefusesNonPositiveIntervalsAndWritesAfterClose`
-- [system_time_promises_test.go](../../../log/system_time_promises_test.go)：`TestServerTimeUsesSystemClockInsideBusinessContext`
-- [write_failure_promises_test.go](../../../log/write_failure_promises_test.go)：`TestRotationFailureKeepsWritingTheCurrentSlice`、`TestAFailingConsoleDoesNotStopTheFileSink`
+- [close_fallback_promises_test.go](../../../infra/observe/log/close_fallback_promises_test.go)：`TestLogsAfterCloseOfAFileOnlySinkReachStderr`、`TestLogsAfterCloseKeepTheConsoleWriter`
+- [log_test.go](../../../infra/observe/log/log_test.go)：`TestContextAttrsArePrepended`、`TestRuntimeAttrsAreWrittenBetweenLevelAndMessage`、`TestCallerAttrsIncludeFileLineAndFunction`、`TestELogCallerAttrsIncludeUserFunction`、`TestGoIDKey`；其余 4 项见文件
+- [rotation_guards_promises_test.go](../../../infra/observe/log/rotation_guards_promises_test.go)：`TestRotatingWriterRefusesNonPositiveIntervalsAndWritesAfterClose`
+- [system_time_promises_test.go](../../../infra/observe/log/system_time_promises_test.go)：`TestServerTimeUsesSystemClockInsideBusinessContext`
+- [write_failure_promises_test.go](../../../infra/observe/log/write_failure_promises_test.go)：`TestRotationFailureKeepsWritingTheCurrentSlice`、`TestAFailingConsoleDoesNotStopTheFileSink`
 
 ### metrics
 
-- [delete_series_promises_test.go](../../../metrics/delete_series_promises_test.go)：`TestDeleteSeriesRemovesEveryKindByLabelAndReturnsTheQuota`
-- [histogram_quantile_bounds_promises_test.go](../../../metrics/histogram_quantile_bounds_promises_test.go)：`TestHistogramQuantileNeverExceedsTheSlowestObservation`、`TestHistogramQuantileInTheOverflowIsNotUnderstated`、`TestHistogramQuantileOfIdenticalSamplesIsThatSample`
-- [metrics_test.go](../../../metrics/metrics_test.go)：`TestRegistrySnapshot`、`TestPrometheusTextDoesNotDoubleTotalSuffix`、`TestRegistryLimitsMetricSeriesCardinality`、`TestSeriesLimitDropIsVisible`、`TestHistogramObserveQuantileAndExport`；其余 1 项见文件
-- [prometheus_escape_promises_test.go](../../../metrics/prometheus_escape_promises_test.go)：`TestPrometheusLabelValuesUseTheExpositionEscapes`
+- [delete_series_promises_test.go](../../../infra/observe/metrics/delete_series_promises_test.go)：`TestDeleteSeriesRemovesEveryKindByLabelAndReturnsTheQuota`
+- [histogram_quantile_bounds_promises_test.go](../../../infra/observe/metrics/histogram_quantile_bounds_promises_test.go)：`TestHistogramQuantileNeverExceedsTheSlowestObservation`、`TestHistogramQuantileInTheOverflowIsNotUnderstated`、`TestHistogramQuantileOfIdenticalSamplesIsThatSample`
+- [metrics_test.go](../../../infra/observe/metrics/metrics_test.go)：`TestRegistrySnapshot`、`TestPrometheusTextDoesNotDoubleTotalSuffix`、`TestRegistryLimitsMetricSeriesCardinality`、`TestSeriesLimitDropIsVisible`、`TestHistogramObserveQuantileAndExport`；其余 1 项见文件
+- [prometheus_escape_promises_test.go](../../../infra/observe/metrics/prometheus_escape_promises_test.go)：`TestPrometheusLabelValuesUseTheExpositionEscapes`
 
 ### security
 
-- [admission_promises_test.go](../../../security/admission_promises_test.go)：`TestOversizedDemandHasNoKeySideEffects`
-- [owner_capacity_promises_test.go](../../../security/owner_capacity_promises_test.go)：`TestOneOwnerCannotFillTheKeyTableForOthers`、`TestOwnerKeyLimitIsCountedAndReleasedByIdleSweep`、`TestFullTableRejectionDoesNotSweepBeforeTheSweepInterval`
-- [ratelimit_test.go](../../../security/ratelimit_test.go)：`TestRateLimiter`、`TestRateLimiterBoundsKeyCardinality`、`TestRateLimiterAutomaticallyReclaimsIdleKeys`、`TestRateLimiterActivityExtendsIdleLifetime`、`TestRateLimiterRefillsContinuously`；其余 1 项见文件
-- [session_token_promises_test.go](../../../security/session_token_promises_test.go)：`TestSessionTokenRefusesEachMalformedOrForgedToken`
-- [session_token_test.go](../../../security/session_token_test.go)：`TestSessionTokenRoundTrip`、`TestSessionTokenRejectsWrongPlayerAndExpired`
+- [admission_promises_test.go](../../../infra/base/security/admission_promises_test.go)：`TestOversizedDemandHasNoKeySideEffects`
+- [owner_capacity_promises_test.go](../../../infra/base/security/owner_capacity_promises_test.go)：`TestOneOwnerCannotFillTheKeyTableForOthers`、`TestOwnerKeyLimitIsCountedAndReleasedByIdleSweep`、`TestFullTableRejectionDoesNotSweepBeforeTheSweepInterval`
+- [ratelimit_test.go](../../../infra/base/security/ratelimit_test.go)：`TestRateLimiter`、`TestRateLimiterBoundsKeyCardinality`、`TestRateLimiterAutomaticallyReclaimsIdleKeys`、`TestRateLimiterActivityExtendsIdleLifetime`、`TestRateLimiterRefillsContinuously`；其余 1 项见文件
+- [session_token_promises_test.go](../../../infra/base/security/session_token_promises_test.go)：`TestSessionTokenRefusesEachMalformedOrForgedToken`
+- [session_token_test.go](../../../infra/base/security/session_token_test.go)：`TestSessionTokenRoundTrip`、`TestSessionTokenRejectsWrongPlayerAndExpired`
 
 ### webroute
 
-- [guards_promises_test.go](../../../webroute/guards_promises_test.go)：`TestRegisterModulesRefusesANilModule`
-- [pattern_promises_test.go](../../../webroute/pattern_promises_test.go)：`TestRegisterRejectsMalformedPatternsBeforeInstallation`、`TestRegisterInstallationPanicDoesNotReservePair`、`TestRegisterAcceptsChiPatterns`
-- [promises_test.go](../../../webroute/promises_test.go)：`TestRegistrarRefusesEachInvalidRouteByMessage`
-- [result_encoding_promises_test.go](../../../webroute/result_encoding_promises_test.go)：`TestUnencodableRouteResultReachesTheClientAs500`
-- [route_test.go](../../../webroute/route_test.go)：`TestRegisterRejectsDuplicateMethodPath`、`TestDecodeJSONRejectsMalformedBody`、`TestDecodeJSONAndWriteResult`、`TestReadRawCopiesRequestData`、`TestRegisterModulesStopsOnFirstError`
+- [guards_promises_test.go](../../../infra/network/webroute/guards_promises_test.go)：`TestRegisterModulesRefusesANilModule`
+- [pattern_promises_test.go](../../../infra/network/webroute/pattern_promises_test.go)：`TestRegisterRejectsMalformedPatternsBeforeInstallation`、`TestRegisterInstallationPanicDoesNotReservePair`、`TestRegisterAcceptsChiPatterns`
+- [promises_test.go](../../../infra/network/webroute/promises_test.go)：`TestRegistrarRefusesEachInvalidRouteByMessage`
+- [result_encoding_promises_test.go](../../../infra/network/webroute/result_encoding_promises_test.go)：`TestUnencodableRouteResultReachesTheClientAs500`
+- [route_test.go](../../../infra/network/webroute/route_test.go)：`TestRegisterRejectsDuplicateMethodPath`、`TestDecodeJSONRejectsMalformedBody`、`TestDecodeJSONAndWriteResult`、`TestReadRawCopiesRequestData`、`TestRegisterModulesStopsOnFirstError`
 
 </details>
 

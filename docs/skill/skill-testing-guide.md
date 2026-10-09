@@ -27,17 +27,17 @@
 先运行被改动能力的聚焦测试，例如：
 
 ```powershell
-go test ./skill -run 'Test(Parse|Prompt|Trace|Recording)' -count=1
+go test ./gameplay/skill -run 'Test(Parse|Prompt|Trace|Recording)' -count=1
 go test ./skillcompose -count=1
 ```
 
 随后运行完整 Skill 验收、静态检查和并发检查：
 
 ```powershell
-go test ./skill ./skillcompose -count=1
-go vet ./skill ./skillcompose
-go test -race ./skill ./skillcompose -count=1
-go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=10s ./skill
+go test ./gameplay/skill ./skillcompose -count=1
+go vet ./gameplay/skill ./skillcompose
+go test -race ./gameplay/skill ./skillcompose -count=1
+go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=10s ./gameplay/skill
 go test ./combat ./combatcomponent ./skillsync -count=1
 git diff --check
 ```

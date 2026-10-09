@@ -1,0 +1,658 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+)
+
+var (
+	errProjectorTransactionHeld    = errors.New("dataengine projector: transaction is still under entity lock")
+	errProjectorBatchComplete      = errors.New("dataengine projector: replay batch complete")
+	ErrRemoteLeaseFenceUnsupported = errors.New("dataengine: remote writes and lease-fence receipts cannot share an admission")
+	ErrProjectionBackpressure      = errors.New("dataengine projector: unacknowledged transaction limit reached")
+)
+
+type ProjectionStore interface {
+	Project(context.Context, coredata.CommitRecord) error
+}
+
+// BatchProjectionStore 支持本地多 DAO 事务批量投影；必须保留每笔事务的持久身份，
+// 保证后续版本写入后仍能重放已成功的批次和多 mutation 事务。
+type BatchProjectionStore interface {
+	ProjectionStore
+	ProjectBatch(context.Context, []coredata.CommitRecord) error
+}
+
+// RemoteParallelProjectionStore 承诺互不重叠的纯 Remote 事务可以并发执行，
+// 且已成功的事务可在后续 WAL 重放中通过持久身份识别。未知 Store 保持串行。
+type RemoteParallelProjectionStore interface {
+	ProjectionStore
+	SupportsRemoteParallelProjection() bool
+}
+
+type ProjectorOptions struct {
+	RetryMin                time.Duration
+	RetryMax                time.Duration
+	IdlePoll                time.Duration
+	ReplayBatchRecords      int
+	ReplayBatchBytes        int
+	ReplayReadBytes         int           // 一轮回放保留的逻辑字节上限；首条超大记录允许独占。
+	RemoteProjectionWorkers int           // 0 使用默认值 8；1 关闭 Remote 并行投影。
+	CheckpointRecords       int           // 连续成功记录的 ack 阈值；1 保留逐单元确认。
+	CheckpointInterval      time.Duration // 投影单元之间检查，阻塞的存储调用仍由其 context 控制。
+	MaxUnackedRecords       uint64        // 0 不限制；拒绝发生于 WAL 准入前。
+	WarnUnackedRecords      uint64        // 0 不设独立预警；达到准入上限也会报告预警。
+	CloseWAL                bool
+	// OnFatal 在首次确定性投影冲突后异步调用一次（独立 goroutine，panic 被吞掉）。
+	// 调用前 fatal 已对准入、Flush 与实体等待方可见；回调里可以同步调用 Close / Shutdown。
+	OnFatal func(error)
+	// ManualReplay 不启动后台回放循环，回放只由调用方的 Flush / ReplayPass 驱动。
+	// 供需要逐步控制回放与 ack 的外部夹具使用（例如注入“投影成功、checkpoint 丢失”后
+	// 检查中间状态）；Close 后这些入口同样返回 ErrRuntimeStopped。生产装配不设置。
+	ManualReplay bool
+}
+
+func DefaultProjectorOptions() ProjectorOptions {
+	return ProjectorOptions{
+		RetryMin: 10 * time.Millisecond, RetryMax: 5 * time.Second,
+		IdlePoll: time.Second, ReplayBatchRecords: 256, ReplayBatchBytes: 4 << 20, ReplayReadBytes: 4 << 20, CloseWAL: true,
+		CheckpointRecords: 256, CheckpointInterval: 20 * time.Millisecond,
+		RemoteProjectionWorkers: 8,
+	}
+}
+
+type ProjectorStats struct {
+	Committed                uint64
+	Projected                uint64 // 成功投影次数，含幂等重放；不能与 Committed 相等代替数据一致性校验
+	WALUnacked               uint64
+	ProjectionFailures       uint64
+	FatalProjectionConflicts uint64
+	LastError                string
+	AdmissionRejected        uint64
+	BacklogWarning           bool
+	// FencedEntities 是当前被原生步骤屏障挡住写入的实体数；FencedAdmissionRejected 是因此
+	// 以 ErrFencedEntityPending 拒绝的准入次数；StaleEvictions 是跳过后完成的驱逐次数（RR-20260926-30）。
+	FencedEntities          uint64
+	FencedAdmissionRejected uint64
+	StaleEvictions          uint64
+}
+
+// Projector owns durable admission and WAL -> Mongo projection. Effects are
+// only staged by ProjectionStore; broker delivery is owned by OutboxWorker and
+// is deliberately absent from the WAL acknowledgement path.
+type Projector struct {
+	operations operation.Lifetime
+	wal        *nestwal.WAL
+	store      ProjectionStore
+	opts       ProjectorOptions
+	ack        func(context.Context, corenest.CommitFence) error
+	now        func() time.Time
+
+	ctx        context.Context
+	cancel     context.CancelFunc
+	kick       chan struct{}
+	done       chan struct{}
+	closeOnce  sync.Once
+	flushGate  operationGate
+	replayGate operationGate
+
+	heldMu              sync.RWMutex
+	held                map[coredata.TransactionID]struct{}
+	admitted            map[coredata.TransactionID]struct{}
+	pendingEntities     map[int64]map[coredata.TransactionID]*entityProjection
+	pendingTransactions map[coredata.TransactionID]*entityProjection
+	errMu               sync.RWMutex
+	lastErr             error
+	fatalErr            error
+	fatalOnce           sync.Once
+	// walTerminalErr：WAL 已 terminal（RR-20260926-50），本进程不会再确认任何记录；errMu 保护，
+	// 与 fatalErr 一样先写入、再唤醒全部等待方，reserve 在 heldMu 下复查。
+	walTerminalErr  error
+	walTerminalOnce sync.Once
+	ticketMu        sync.Mutex
+	tickets         map[coredata.TransactionID]*projectionTicket
+	// fencedEntities：实体 → 持有屏障的原生步骤记录（fenced_step.go）。heldMu 保护，
+	// 与 pendingTransactions 中该记录的 entityProjection 同时登记、同时解除。
+	fencedEntities map[int64]coredata.TransactionID
+
+	// 被跳过的原生步骤的驱逐队列；evictEntities 由 Runtime 注入，localExecutor 由 Nest 绑定。
+	evictMu       sync.Mutex
+	evictQueue    []staleEviction
+	evictRunning  bool
+	evictWG       sync.WaitGroup
+	evictEntities func(context.Context, []int64) error
+	localExecutor atomic.Pointer[func(func()) error]
+
+	committed         atomic.Uint64
+	projected         atomic.Uint64
+	walUnacked        atomic.Uint64
+	failures          atomic.Uint64
+	fatalConflicts    atomic.Uint64
+	admissionRejected atomic.Uint64
+	fencedRejected    atomic.Uint64
+	staleEvictions    atomic.Uint64
+}
+
+func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOptions) (*Projector, error) {
+	if wal == nil || store == nil {
+		return nil, errors.New("dataengine projector: WAL and store are required")
+	}
+	defaults := DefaultProjectorOptions()
+	if options.ReplayReadBytes < 0 {
+		return nil, errors.New("dataengine projector: replay read bytes must not be negative")
+	}
+	if options.ReplayReadBytes == 0 {
+		options.ReplayReadBytes = defaults.ReplayReadBytes
+	}
+	if options.RemoteProjectionWorkers < 0 || options.RemoteProjectionWorkers > 64 {
+		return nil, errors.New("dataengine projector: remote projection workers must be between 0 and 64")
+	}
+	if options.RemoteProjectionWorkers == 0 {
+		options.RemoteProjectionWorkers = defaults.RemoteProjectionWorkers
+	}
+	if options.CheckpointRecords < 0 || options.CheckpointInterval < 0 ||
+		(options.MaxUnackedRecords > 0 && options.WarnUnackedRecords > options.MaxUnackedRecords) {
+		return nil, errors.New("dataengine projector: invalid checkpoint or backlog limits")
+	}
+	if options.CheckpointRecords == 0 {
+		options.CheckpointRecords = defaults.CheckpointRecords
+	}
+	if options.CheckpointInterval == 0 {
+		options.CheckpointInterval = defaults.CheckpointInterval
+	}
+	if options.RetryMin <= 0 {
+		options.RetryMin = defaults.RetryMin
+	}
+	if options.RetryMax <= 0 {
+		options.RetryMax = defaults.RetryMax
+	}
+	if options.RetryMax < options.RetryMin {
+		return nil, errors.New("dataengine projector: retry max is smaller than retry min")
+	}
+	if options.IdlePoll <= 0 {
+		options.IdlePoll = defaults.IdlePoll
+	}
+	if options.ReplayBatchRecords <= 0 {
+		options.ReplayBatchRecords = defaults.ReplayBatchRecords
+	}
+	if options.ReplayBatchBytes <= 0 {
+		options.ReplayBatchBytes = defaults.ReplayBatchBytes
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	projector := &Projector{
+		wal: wal, store: store, opts: options, ack: wal.Ack, now: time.Now, ctx: ctx, cancel: cancel,
+		kick: make(chan struct{}, 1), done: make(chan struct{}), held: make(map[coredata.TransactionID]struct{}), admitted: make(map[coredata.TransactionID]struct{}),
+		tickets: make(map[coredata.TransactionID]*projectionTicket),
+	}
+	go projector.watchWALTerminal()
+	metrics.SetGauge("dataengine.projection.pending", nil, 0)
+	if options.ManualReplay {
+		// 没有后台循环：Close 不需要等待，done 从一开始就处于“循环已退出”。
+		close(projector.done)
+		return projector, nil
+	}
+	go projector.run()
+	projector.signal()
+	return projector, nil
+}
+
+type projectionTicket struct {
+	done chan struct{}
+	err  error
+}
+
+func (ticket *projectionTicket) Done() <-chan struct{} { return ticket.done }
+func (ticket *projectionTicket) Err() error {
+	select {
+	case <-ticket.done:
+		return ticket.err
+	default:
+		return nil
+	}
+}
+
+// CommitSystem durably admits an infrastructure mutation and returns a ticket
+// that resolves only after Mongo projection, not merely after WAL fsync.
+func (projector *Projector) CommitSystem(ctx context.Context, record coredata.CommitRecord) (coredata.ProjectionTicket, error) {
+	if projector == nil || projector.wal == nil {
+		return nil, errors.New("dataengine projector: not initialized")
+	}
+	if !projector.operations.Begin() {
+		return nil, ErrRuntimeStopped
+	}
+	defer projector.operations.End()
+	if fatal := projector.fatal(); fatal != nil {
+		return nil, fatal
+	}
+	if record.Durability == coredata.DurabilityMemory {
+		record.Durability = coredata.DurabilityStrict
+	}
+	ticket := &projectionTicket{done: make(chan struct{})}
+	projector.ticketMu.Lock()
+	if _, duplicate := projector.tickets[record.ID]; duplicate {
+		projector.ticketMu.Unlock()
+		return nil, fmt.Errorf("dataengine projector: duplicate system transaction %s", record.ID.String())
+	}
+	projector.tickets[record.ID] = ticket
+	projector.ticketMu.Unlock()
+	if err := projector.reserve(record, false); err != nil {
+		projector.removeTicket(record.ID)
+		return nil, err
+	}
+	if _, err := projector.wal.Append(ctx, record); err != nil {
+		projector.discard(record.ID)
+		projector.removeTicket(record.ID)
+		return nil, err
+	}
+	projector.committed.Add(1)
+	projector.signal()
+	return ticket, nil
+}
+
+func (projector *Projector) Commit(ctx context.Context, record corenest.CommitRecord) error {
+	if projector == nil || projector.wal == nil {
+		return errors.New("dataengine projector: not initialized")
+	}
+	if !projector.operations.Begin() {
+		return ErrRuntimeStopped
+	}
+	defer projector.operations.End()
+	if fatal := projector.fatal(); fatal != nil {
+		return fatal
+	}
+	if err := projector.reserve(record, true); err != nil {
+		return err
+	}
+	if _, err := projector.wal.Append(ctx, record); err != nil {
+		projector.discard(record.ID)
+		return err
+	}
+	projector.committed.Add(1)
+	projector.signal()
+	return nil
+}
+
+func (projector *Projector) Enqueue(ctx context.Context, record corenest.CommitRecord) (corenest.CommitTicket, error) {
+	if projector == nil || projector.wal == nil {
+		return nil, errors.New("dataengine projector: not initialized")
+	}
+	if !projector.operations.Begin() {
+		return nil, ErrRuntimeStopped
+	}
+	defer projector.operations.End()
+	if fatal := projector.fatal(); fatal != nil {
+		return nil, fatal
+	}
+	if err := projector.reserve(record, true); err != nil {
+		return nil, err
+	}
+	ticket, err := projector.wal.Enqueue(ctx, record)
+	if err != nil {
+		projector.discard(record.ID)
+		return nil, err
+	}
+	projector.committed.Add(1)
+	// Commit kicks the replay loop right after its synchronous append. A
+	// pipelined record becomes durable later, so the kick has to wait for the
+	// ticket: the transaction's release usually arrives before the fsync, and
+	// a loop woken then finds nothing to replay and sleeps for IdlePoll.
+	go projector.signalWhenDurable(record.ID, ticket)
+	return ticket, nil
+}
+
+func (projector *Projector) signalWhenDurable(id coredata.TransactionID, ticket corenest.CommitTicket) {
+	select {
+	case <-ticket.Done():
+		// 写入结果未知（WAL 已 terminal）时本进程不会再投影这条记录；等它的冷加载
+		// 立即拿到 WAL 错误，而不是等到各自截止时间（RR-20260926-10 复核残留）。
+		if err := ticket.Err(); err != nil {
+			projector.finishEntities(id, err)
+		}
+		projector.signal()
+	case <-projector.ctx.Done():
+	}
+}
+
+func (projector *Projector) DurableLSN() uint64 {
+	if projector == nil || projector.wal == nil {
+		return 0
+	}
+	return projector.wal.DurableLSN()
+}
+
+func (projector *Projector) TransactionReleased(id corenest.TransactionID) {
+	projector.release(id)
+	projector.signal()
+}
+
+func (projector *Projector) Flush(ctx context.Context) error {
+	if projector == nil || projector.wal == nil {
+		return nil
+	}
+	if !projector.operations.Begin() {
+		return ErrRuntimeStopped
+	}
+	defer projector.operations.End()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := projector.flushGate.acquire(ctx); err != nil {
+		return err
+	}
+	defer projector.flushGate.release()
+	if fatal := projector.fatal(); fatal != nil {
+		return fatal
+	}
+	if err := projector.wal.Sync(ctx); err != nil {
+		return err
+	}
+	for {
+		processed, err := projector.ReplayPass(ctx)
+		if err != nil {
+			projector.recordFailure(err)
+			return err
+		}
+		if processed == 0 {
+			projector.setLastError(nil)
+			return nil
+		}
+	}
+}
+
+// OverrideAck replaces the checkpoint acknowledgement hook. It exists for
+// integration harnesses that inject a failure after the Mongo write succeeded
+// (the "projection landed, checkpoint lost" restart scenario); production
+// assembly never calls it.
+func (projector *Projector) OverrideAck(ack func(context.Context, corenest.CommitFence) error) {
+	if projector == nil || ack == nil {
+		return
+	}
+	projector.ack = ack
+}
+
+func (projector *Projector) recordFailure(err error) {
+	projector.failures.Add(1)
+	projector.setLastError(err)
+	projector.isFatalProjection(err)
+}
+
+func (projector *Projector) isFatalProjection(err error) bool {
+	// A deferral is a routing signal, not a verdict: it must never fence the
+	// projector, whatever path it arrives through.
+	if errors.Is(err, ErrProjectionBatchNeedsPerRecord) {
+		return false
+	}
+	if !errors.Is(err, ErrProjectionConflict) && !errors.Is(err, ErrTransactionIdentity) && !errors.Is(err, ErrReceiptIdentity) {
+		return false
+	}
+	projector.fatalOnce.Do(func() {
+		projector.fatalConflicts.Add(1)
+		projector.errMu.Lock()
+		projector.fatalErr = err
+		projector.errMu.Unlock()
+		// fatal 之后本进程不再投影 fatal 记录及其后的任何记录，所以唤醒全部待投影
+		// 等待方（不只本批次），让冷加载与系统票据立即拿到可判别的 fatal。fatalErr
+		// 已先于唤醒写入，reserve 在同一把 heldMu 下复查，唤醒之后不会再有新的等待项。
+		projector.completeAllTickets(err)
+		if onFatal := projector.opts.OnFatal; onFatal != nil {
+			// 异步投递（与 nestwal.Options.OnFatal 相同）：这里可能在 ReplayPass/Flush 持有
+			// operation、或后台循环尚未退出时被调用，同步回调里 Close 会等自己（RR-20260926-17
+			// 复核残留）。fatalErr 与等待方唤醒已在上面完成，所以回调开始前准入已被拒绝、
+			// 等待方已拿到 fatal；回调只负责进程级 fence，允许在其中同步 Close。
+			go func() {
+				defer func() { _ = recover() }()
+				onFatal(err)
+			}()
+		}
+	})
+	return true
+}
+
+// watchWALTerminal 在 WAL 进入 terminal 时立即唤醒全部待投影等待方（RR-20260926-50）。WAL terminal 之后
+// Ack 恒失败、准入恒失败，本进程不会再推进任何记录；只在等待前后检查 Healthy 的等待方要等到自己的截止
+// 时间或 Close。Projector 关闭时退出。
+func (projector *Projector) watchWALTerminal() {
+	select {
+	case <-projector.wal.Terminated():
+		projector.walTerminated(projector.wal.Healthy())
+	case <-projector.ctx.Done():
+	}
+}
+
+// observeAckError 把 checkpoint 失败里的 WAL terminal 当作同一个信号：nestwal.Ack 只在 WAL 已 terminal
+// （或本次 fsync 失败、随即粘滞为 terminal）时返回 ErrCommitIndeterminate。
+func (projector *Projector) observeAckError(err error) {
+	if errors.Is(err, corenest.ErrCommitIndeterminate) {
+		projector.walTerminated(err)
+	}
+}
+
+// walTerminated 与 fatal 同一不变量：先写 walTerminalErr，再唤醒全部待投影等待方与系统票据；reserve 在
+// heldMu 下复查，唤醒之后不会再登记新的等待项。错误保留 errors.Is(corenest.ErrCommitIndeterminate)：
+// 已准入记录的投影结果对本进程是未知的（可能已落库、ack 丢失），不是明确失败。
+func (projector *Projector) walTerminated(cause error) {
+	if cause == nil {
+		return
+	}
+	projector.walTerminalOnce.Do(func() {
+		err := fmt.Errorf("dataengine projector: WAL is terminal, this process will not confirm pending projections: %w", cause)
+		projector.errMu.Lock()
+		projector.walTerminalErr = err
+		projector.errMu.Unlock()
+		projector.completeAllTickets(err)
+	})
+}
+
+func (projector *Projector) walTerminal() error {
+	projector.errMu.RLock()
+	err := projector.walTerminalErr
+	projector.errMu.RUnlock()
+	return err
+}
+
+func (projector *Projector) Stats() ProjectorStats {
+	stats := ProjectorStats{
+		Committed: projector.committed.Load(), Projected: projector.projected.Load(),
+		WALUnacked:         projector.walUnacked.Load(),
+		AdmissionRejected:  projector.admissionRejected.Load(),
+		ProjectionFailures: projector.failures.Load(), FatalProjectionConflicts: projector.fatalConflicts.Load(),
+		FencedAdmissionRejected: projector.fencedRejected.Load(), StaleEvictions: projector.staleEvictions.Load(),
+	}
+	projector.heldMu.RLock()
+	stats.FencedEntities = uint64(len(projector.fencedEntities))
+	projector.heldMu.RUnlock()
+	warning := projector.opts.WarnUnackedRecords
+	if warning == 0 {
+		warning = projector.opts.MaxUnackedRecords
+	}
+	stats.BacklogWarning = warning > 0 && stats.WALUnacked >= warning
+	projector.errMu.RLock()
+	if projector.lastErr != nil {
+		stats.LastError = projector.lastErr.Error()
+	}
+	projector.errMu.RUnlock()
+	return stats
+}
+
+func (projector *Projector) Healthy() error {
+	if projector == nil || projector.wal == nil {
+		return errors.New("dataengine projector: not initialized")
+	}
+	projector.errMu.RLock()
+	err := errors.Join(projector.lastErr, projector.fatalErr, projector.walTerminalErr)
+	projector.errMu.RUnlock()
+	return errors.Join(projector.wal.Healthy(), err)
+}
+
+func (projector *Projector) Close(ctx context.Context) error {
+	if projector == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	drained := projector.operations.Stop()
+	projector.closeOnce.Do(projector.cancel)
+	select {
+	case <-drained:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-projector.done:
+		// 驱逐 worker 在 ctx 取消后不再重试；等它退出，之后才统一解除剩余屏障与等待方。
+		if err := projector.waitEvictions(ctx); err != nil {
+			return err
+		}
+		projector.completeAllTickets(context.Canceled)
+		if projector.opts.CloseWAL {
+			return projector.wal.Close(ctx)
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (projector *Projector) Shutdown(ctx context.Context) error {
+	if projector != nil && projector.ctx.Err() != nil {
+		return projector.Close(ctx)
+	}
+	return errors.Join(projector.Flush(ctx), projector.Close(ctx))
+}
+
+// reserve 在同一锁内检查与预留额度，不能让并发 Commit 越过上限。
+func (projector *Projector) reserve(record coredata.CommitRecord, held bool) error {
+	// 租约在投影时失效会跳过整笔记录；生成 Entity 无法在准入后撤销多实体内存修改。
+	// 在 WAL 前明确拒绝，让 Nest 仍在 Guard 内执行完整回滚；历史 WAL 回放不经过这里。
+	for _, receipt := range record.Receipts {
+		if receipt.Namespace != coredata.LeaseFenceReceiptNamespace {
+			continue
+		}
+		for _, mutation := range record.Mutations {
+			if mutation.Remote != nil {
+				return ErrRemoteLeaseFenceUnsupported
+			}
+		}
+	}
+	id := record.ID
+	projector.heldMu.Lock()
+	defer projector.heldMu.Unlock()
+	// 调用方在准入前已查过 fatal；这里在 heldMu 下复查，关闭“查过之后才 fatal”的窗口：
+	// fatal 唤醒扫描也持 heldMu，之后登记的等待项将无人唤醒。
+	if fatal := projector.fatal(); fatal != nil {
+		return fatal
+	}
+	if terminal := projector.walTerminal(); terminal != nil {
+		return terminal
+	}
+	if _, exists := projector.admitted[id]; !exists {
+		// 原生步骤的实体屏障（RR-20260926-30）：与下面的登记同一临界区，不用瞬时统计判断。
+		if err := projector.checkFencedEntitiesLocked(record); err != nil {
+			return err
+		}
+		if limit := projector.opts.MaxUnackedRecords; limit > 0 && uint64(len(projector.admitted)) >= limit {
+			projector.admissionRejected.Add(1)
+			return ErrProjectionBackpressure
+		}
+		projector.admitted[id] = struct{}{}
+		projector.trackEntitiesLocked(record)
+		metrics.SetGauge("dataengine.projection.pending", nil, int64(projector.walUnacked.Add(1)))
+	}
+	if held {
+		projector.held[id] = struct{}{}
+	}
+	return nil
+}
+
+func (projector *Projector) discard(id coredata.TransactionID) {
+	projector.finishEntities(id, nil)
+	projector.heldMu.Lock()
+	delete(projector.held, id)
+	if _, ok := projector.admitted[id]; ok {
+		delete(projector.admitted, id)
+		metrics.SetGauge("dataengine.projection.pending", nil, int64(projector.walUnacked.Add(^uint64(0))))
+	}
+	projector.heldMu.Unlock()
+}
+
+func (projector *Projector) release(id coredata.TransactionID) {
+	projector.heldMu.Lock()
+	delete(projector.held, id)
+	projector.heldMu.Unlock()
+}
+
+func (projector *Projector) isHeld(id coredata.TransactionID) bool {
+	projector.heldMu.RLock()
+	_, held := projector.held[id]
+	projector.heldMu.RUnlock()
+	return held
+}
+
+func (projector *Projector) signal() {
+	select {
+	case projector.kick <- struct{}{}:
+	default:
+	}
+}
+
+func (projector *Projector) setLastError(err error) {
+	projector.errMu.Lock()
+	projector.lastErr = err
+	projector.errMu.Unlock()
+}
+
+func (projector *Projector) fatal() error {
+	projector.errMu.RLock()
+	err := projector.fatalErr
+	projector.errMu.RUnlock()
+	return err
+}
+
+func (projector *Projector) completeProjection(id coredata.TransactionID, err error) {
+	projector.finishEntities(id, err)
+	projector.ticketMu.Lock()
+	ticket := projector.tickets[id]
+	if ticket != nil {
+		delete(projector.tickets, id)
+		ticket.err = err
+		close(ticket.done)
+	}
+	projector.ticketMu.Unlock()
+}
+
+func (projector *Projector) removeTicket(id coredata.TransactionID) {
+	projector.ticketMu.Lock()
+	delete(projector.tickets, id)
+	projector.ticketMu.Unlock()
+}
+
+func (projector *Projector) completeAllTickets(err error) {
+	projector.heldMu.Lock()
+	for id := range projector.pendingTransactions {
+		projector.finishEntitiesLocked(id, err)
+	}
+	projector.heldMu.Unlock()
+	projector.ticketMu.Lock()
+	for id, ticket := range projector.tickets {
+		delete(projector.tickets, id)
+		ticket.err = err
+		close(ticket.done)
+	}
+	projector.ticketMu.Unlock()
+}
+
+var _ corenest.TransactionCommitter = (*Projector)(nil)
+var _ corenest.TransactionReleaseNotifier = (*Projector)(nil)
+var _ corenest.PipelinedTransactionCommitter = (*Projector)(nil)
+var _ coredata.SystemCommitter = (*Projector)(nil)

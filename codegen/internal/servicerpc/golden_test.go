@@ -210,10 +210,10 @@ import (
 	"testing"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-core/bus"
-	fetcd "github.com/tjbdwanghaibo/roost-core/etcd"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 type recordingBus struct {

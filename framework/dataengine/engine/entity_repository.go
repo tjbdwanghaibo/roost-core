@@ -1,0 +1,340 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+var (
+	// ErrEntityAggregateNotFound 同时满足 errors.Is(err, entity.ErrAuthorityEntityNotFound)：卸载后重载据此
+	// 立即向订阅者退回 remove，而不是当作可重试的读取失败（RR-20260926-59）。
+	ErrEntityAggregateNotFound error = aggregateNotFoundError{}
+	ErrEntityAggregateCorrupt        = errors.New("dataengine repository: entity aggregate is incomplete or corrupt")
+)
+
+type aggregateNotFoundError struct{}
+
+func (aggregateNotFoundError) Error() string {
+	return "dataengine repository: entity aggregate not found"
+}
+func (aggregateNotFoundError) Is(target error) bool {
+	return target == entity.ErrAuthorityEntityNotFound
+}
+
+type RecoveryGate interface {
+	Ready() bool
+}
+
+type entityLoadFlight struct {
+	done  chan struct{}
+	value entity.IThreadSafeEntity
+	err   error
+}
+
+type EntityRepository struct {
+	manager *entity.EntityManager
+	store   coredata.Store
+	gate    RecoveryGate
+
+	flightMu sync.Mutex
+	flights  map[int64]*entityLoadFlight
+
+	hookMu      sync.RWMutex
+	nextHookID  uint64
+	loadedHooks map[uint64]func(entity.IThreadSafeEntity)
+}
+
+// OnEntityLoaded 注册在聚合从 Mongo 加载并发布之后调用的回调，与发布在同一次本地执行里
+// （Nest 慢阶段下即快池续行）。用途是让依附在旧对象上的协作者接上重载出来的新对象：
+// 被跳过的原生步骤驱逐实体后，Sync 用它把原订阅者重新绑定到新对象并强制全量（RR-20260926-30）。
+// 回调不能阻塞、不能做 I/O；返回的函数注销回调。
+func (repository *EntityRepository) OnEntityLoaded(hook func(entity.IThreadSafeEntity)) func() {
+	if repository == nil || hook == nil {
+		return func() {}
+	}
+	repository.hookMu.Lock()
+	defer repository.hookMu.Unlock()
+	if repository.loadedHooks == nil {
+		repository.loadedHooks = make(map[uint64]func(entity.IThreadSafeEntity))
+	}
+	repository.nextHookID++
+	id := repository.nextHookID
+	repository.loadedHooks[id] = hook
+	return func() {
+		repository.hookMu.Lock()
+		delete(repository.loadedHooks, id)
+		repository.hookMu.Unlock()
+	}
+}
+
+func (repository *EntityRepository) runLoadedHooks(loaded entity.IThreadSafeEntity) {
+	repository.hookMu.RLock()
+	hooks := make([]func(entity.IThreadSafeEntity), 0, len(repository.loadedHooks))
+	for _, hook := range repository.loadedHooks {
+		hooks = append(hooks, hook)
+	}
+	repository.hookMu.RUnlock()
+	for _, hook := range hooks {
+		// 实体已经发布；回调失败只影响它自己的协作者，不能把一次成功的加载变成失败。
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					slog.Error("dataengine repository: entity loaded hook panicked", "entity", loaded.ID(), "panic", recovered)
+				}
+			}()
+			hook(loaded)
+		}()
+	}
+}
+
+func NewEntityRepository(manager *entity.EntityManager, store coredata.Store, gate RecoveryGate) (*EntityRepository, error) {
+	return newEntityRepository(manager, store, gate)
+}
+
+func newEntityRepository(manager *entity.EntityManager, store coredata.Store, gate RecoveryGate) (*EntityRepository, error) {
+	if manager == nil || store == nil {
+		return nil, errors.New("dataengine repository: entity manager and store are required")
+	}
+	return &EntityRepository{
+		manager: manager, store: store, gate: gate,
+		flights: make(map[int64]*entityLoadFlight),
+	}, nil
+}
+
+// LoadEntity 先复用已加载实体；冷加载等待恢复与投影屏障，完整聚合 schema 校验通过后才发布。
+// 同一实体共享首个调用者发起的加载；其他等待者取消只退出自身等待，不取消该次共享加载。
+// 冷加载包含 I/O，不允许从快池进入；初始化和发布经 RunLocal 返回本地执行阶段。
+func (repository *EntityRepository) LoadEntity(ctx context.Context, id int64, kind entity.EntityKind) (entity.IThreadSafeEntity, error) {
+	if repository == nil || repository.manager == nil || repository.store == nil {
+		return nil, coredata.ErrStoreRequired
+	}
+	if repository.gate != nil && !repository.gate.Ready() {
+		return nil, coredata.ErrRecoveryIncomplete
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	fullID, err := entity.NormalizeFullID(id, kind)
+	if err != nil {
+		return nil, err
+	}
+	if loaded := repository.manager.Get(fullID); loaded != nil {
+		return loaded, nil
+	}
+	if err := fctx.BlockingError("dataengine.EntityRepository.LoadEntity"); err != nil {
+		panic(fmt.Errorf("%w: entity %d: %w", entity.ErrColdLoadInLogic, fullID, err))
+	}
+	if entity.LoadedEntitiesOnly(ctx) {
+		return nil, fmt.Errorf("%w: entity %d", entity.ErrColdLoadInLogic, fullID)
+	}
+
+	repository.flightMu.Lock()
+	if flight := repository.flights[fullID]; flight != nil {
+		repository.flightMu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.value, flight.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	flight := &entityLoadFlight{done: make(chan struct{})}
+	repository.flights[fullID] = flight
+	repository.flightMu.Unlock()
+
+	// Finishing the flight is a defer for the same reason it is in
+	// entity.ManagerAccess (RR-20260919-08): a panic under loadAggregate —
+	// a decoder or an OnInitFinish — would otherwise leave a
+	// flight nobody closes, and every later load of that aggregate would wait
+	// on it until its own context expired. The repository is reachable
+	// directly, not only through Nest, so recovering at the Nest boundary
+	// does not cover this.
+	settled := false
+	defer func() {
+		if !settled {
+			flight.value, flight.err = nil, fmt.Errorf(
+				"entity repository: loading aggregate %d panicked: %v", fullID, recover())
+		}
+		repository.flightMu.Lock()
+		delete(repository.flights, fullID)
+		close(flight.done)
+		repository.flightMu.Unlock()
+		if !settled {
+			panic(flight.err)
+		}
+	}()
+
+	if gate, ok := repository.gate.(interface {
+		WaitEntityProjection(context.Context, int64) error
+	}); ok {
+		if err := gate.WaitEntityProjection(ctx, fullID); err != nil {
+			flight.err = err
+			settled = true
+			return nil, err
+		}
+	}
+	flight.value, flight.err = repository.loadAggregate(ctx, fullID, kind)
+	settled = true
+	return flight.value, flight.err
+}
+
+type loadedDAO struct {
+	dao     entity.DaoInterface
+	doc     coredata.RawDocument
+	payload []byte
+	schema  uint32
+}
+
+func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID int64, kind entity.EntityKind) (entity.IThreadSafeEntity, error) {
+	if loaded := repository.manager.Get(fullID); loaded != nil {
+		return loaded, nil
+	}
+	builder := entity.GetEntityBuilderParam(kind)
+	if builder == nil {
+		return nil, fmt.Errorf("dataengine repository: no builder for entity kind %d", kind)
+	}
+	if builder.NoPersist || len(builder.DaoBuilders) == 0 {
+		return nil, fmt.Errorf("%w: entity kind %d has no persistent DAO", ErrEntityAggregateNotFound, kind)
+	}
+
+	// 先验证完整聚合的 schema，任何不匹配都不能水合、发布或触发写回。
+	loaded, remoteVector, err := repository.readAggregate(ctx, builder, fullID)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range loaded {
+		descriptor, ok := item.dao.(coredata.Descriptor)
+		if !ok {
+			return nil, fmt.Errorf("%w: resource=%s does not implement Descriptor", ErrEntityAggregateCorrupt, item.dao.CollName())
+		}
+		if descriptor.SchemaVersion() != item.schema {
+			return nil, fmt.Errorf("%w: resource=%s entity=%d stored_schema=%d target_schema=%d", coredata.ErrSchemaMismatch, item.dao.CollName(), fullID, item.schema, descriptor.SchemaVersion())
+		}
+	}
+
+	daos := make(map[string]entity.DaoInterface, len(loaded))
+	// 所有 DAO 校验并恢复版本后才发布 Entity，避免外部看到半加载状态。
+	for _, item := range loaded {
+		hydrator, ok := item.dao.(entity.PersistedDaoLoader)
+		if !ok {
+			return nil, fmt.Errorf("%w: resource=%s does not implement PersistedDaoLoader", ErrEntityAggregateCorrupt, item.dao.CollName())
+		}
+		if err := hydrator.RestorePersisted(item.payload, item.schema, item.doc.Version); err != nil {
+			return nil, fmt.Errorf("dataengine repository: restore %s/%d: %w", item.dao.CollName(), fullID, err)
+		}
+		if item.dao.Id() != fullID {
+			return nil, fmt.Errorf("%w: resource=%s decoded id=%d want=%d", ErrEntityAggregateCorrupt, item.dao.CollName(), item.dao.Id(), fullID)
+		}
+		daos[item.dao.CollName()] = item.dao
+	}
+	param := &entity.EntityCreateParam{
+		IsCreate: false, Category: builder.Category, Kind: kind, Id: fullID,
+		Dao: daos, Lifetime: builder.Lifetime,
+	}
+	// 是否托管看 kind 在注册表里的实际策略，不看 builder 自带的 RemotePolicy：kind 定义声明 managed、手写 builder 省略
+	// 策略时注册表按“部分重复声明”接受，全部 Remote 路径都按托管处理，这里也必须恢复版本信封（RR-20260926-71，同 RR-60）。
+	if entity.GetEntityKindRemotePolicy(kind).RemoteManaged() {
+		if remoteVector.StateVersion == 0 {
+			return nil, fmt.Errorf("%w: remote entity %d has no version envelope", ErrEntityAggregateCorrupt, fullID)
+		}
+		param.RemoteRestore = &remoteVector
+	}
+	var created entity.IThreadSafeEntity
+	var createErr error
+	// 冷加载 I/O 在慢池；初始化回调和发布 Entity 回到快池。
+	dispatchErr := entity.RunLocal(ctx, func() {
+		if created, createErr = repository.manager.Create(param); createErr == nil {
+			repository.runLoadedHooks(created)
+		}
+	})
+	err = errors.Join(createErr, dispatchErr)
+	if err != nil {
+		if errors.Is(err, entity.ErrEntityExists) {
+			if existing := repository.manager.Get(fullID); existing != nil {
+				return existing, nil
+			}
+		}
+		return nil, err
+	}
+	return created, nil
+}
+
+func (repository *EntityRepository) readAggregate(ctx context.Context, builder *entity.EntityBuilderParam, fullID int64) ([]loadedDAO, entity.RemoteVersionVector, error) {
+	var loaded []loadedDAO
+	var remoteVector entity.RemoteVersionVector
+	err := repository.store.ReadConsistent(ctx, func(readCtx context.Context) error {
+		// ReadConsistent runs inside ISession.WithTransaction, which is
+		// documented to retry its callback (the driver re-invokes it on a
+		// TransientTransactionError or an unknown commit result). Every
+		// accumulator therefore has to be reset here, not outside: keeping
+		// `loaded` across attempts made a second attempt trip the duplicate
+		// resource guard and report healthy data as a corrupt aggregate.
+		loaded = make([]loadedDAO, 0, len(builder.DaoBuilders))
+		remoteVector = entity.RemoteVersionVector{}
+		missing, tombstones := 0, 0
+		for index, buildDAO := range builder.DaoBuilders {
+			if buildDAO == nil {
+				return fmt.Errorf("%w: DAO builder %d is nil", ErrEntityAggregateCorrupt, index)
+			}
+			dao := buildDAO()
+			if dao == nil || dao.CollName() == "" {
+				return fmt.Errorf("%w: DAO builder %d returned invalid DAO", ErrEntityAggregateCorrupt, index)
+			}
+			// 先绑定聚合身份，恢复时拒绝属于其他 Entity 的 payload。
+			dao.SetId(fullID)
+			for _, existing := range loaded {
+				if existing.dao.CollName() == dao.CollName() {
+					return fmt.Errorf("%w: duplicate DAO resource %q", ErrEntityAggregateCorrupt, dao.CollName())
+				}
+			}
+			scope := coredata.ResolveDatabaseScope(dao)
+			docs, err := repository.store.Load(readCtx, coredata.LoadSpec{
+				Database: dao.DbName(), Scope: scope, Resource: dao.CollName(), Filter: map[string]any{"_id": fullID}, BatchSize: 1,
+			})
+			if err != nil {
+				return fmt.Errorf("dataengine repository: load %s/%d: %w", dao.CollName(), fullID, err)
+			}
+			if len(docs) == 0 {
+				missing++
+				continue
+			}
+			if len(docs) != 1 || docs[0].Key.ID != fullID {
+				return fmt.Errorf("%w: resource=%s entity=%d documents=%d", ErrEntityAggregateCorrupt, dao.CollName(), fullID, len(docs))
+			}
+			doc := docs[0]
+			if doc.Deleted {
+				tombstones++
+				continue
+			}
+			payload, schema, err := persistedPayload(doc)
+			if err != nil {
+				return fmt.Errorf("%w: resource=%s entity=%d: %v", ErrEntityAggregateCorrupt, dao.CollName(), fullID, err)
+			}
+			loaded = append(loaded, loadedDAO{dao: dao, doc: doc, payload: payload, schema: schema})
+			if doc.Enveloped && doc.Version >= remoteVector.StateVersion {
+				remoteVector = entity.RemoteVersionVector{
+					StateVersion: doc.Version, MarkerEpoch: doc.MarkerEpoch,
+					LockFence: doc.LockFence, RouteEpoch: doc.RouteEpoch,
+				}
+			}
+		}
+		total := len(builder.DaoBuilders)
+		switch {
+		case missing == total || tombstones == total:
+			return fmt.Errorf("%w: entity=%d", ErrEntityAggregateNotFound, fullID)
+		case len(loaded) != total:
+			return fmt.Errorf("%w: entity=%d live=%d missing=%d tombstones=%d", ErrEntityAggregateCorrupt, fullID, len(loaded), missing, tombstones)
+		}
+		return nil
+	})
+	return loaded, remoteVector, err
+}
+
+var _ entity.AggregateLoader = (*EntityRepository)(nil)

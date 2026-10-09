@@ -1,0 +1,265 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+)
+
+// AssemblyConfig is everything the data engine needs to build itself once the
+// process has parsed its configuration. The kit Mod fills it from viper; tests
+// fill it directly.
+type AssemblyConfig struct {
+	Mongo        MongoStoreConfig
+	WAL          nestwal.Options
+	Projector    ProjectorOptions
+	Outbox       OutboxWorkerOptions
+	EffectPrefix string
+	EffectStream fnats.JetStreamConfig
+	Pipelined    PipelinedRuntimeConfig
+}
+
+// ValidateReceiptRetention 校验事务去重标记的有效 TTL 大于 WAL 未确认年龄告警窗口。
+// Mongo 的 TTL 按整秒存储，必须按相同精度比较。MaxUnackedAge 只是健康阈值，
+// 不是日志失效时间；停机超过 TTL 的旧 WAL 仍须人工核对，不能据此宣称可安全重放。
+func (cfg AssemblyConfig) ValidateReceiptRetention() error {
+	ttl := cfg.Mongo.TransactionReceiptTTL
+	if ttl <= 0 {
+		ttl = defaultReceiptTTL
+	}
+	seconds, err := ttlSeconds(ttl)
+	if err != nil {
+		return fmt.Errorf("dataengine.transaction_receipt_ttl: %w", err)
+	}
+	window := cfg.WAL.MaxUnackedAge
+	if window <= 0 {
+		window = nestwal.DefaultOptions("").MaxUnackedAge
+	}
+	if time.Duration(seconds)*time.Second <= window {
+		return fmt.Errorf("dataengine.transaction_receipt_ttl (%s, whole seconds) must exceed dataengine.wal.max_unacked_age (%s)", time.Duration(seconds)*time.Second, window)
+	}
+	return nil
+}
+
+// AssemblyDeps are the capabilities the data engine consumes. RemoteStore and
+// RemoteManager are set together when remote projection is enabled; the
+// manager must then implement entity.RemoteCommitApplier.
+type AssemblyDeps struct {
+	Mongo         fmongo.IMongo
+	JetStream     fnats.IJetStream
+	Access        *entity.ManagerAccess
+	RemoteStore   RemoteProjectionStore
+	RemoteManager entity.IRemoteEntityManager
+	OnFatal       func(error)
+	// LocalExecutor 把需要 Entity 锁的框架步骤交给快池（kit 转发 Nest 绑定的 RunLocal）。
+	// 为 nil 时驱逐等本地步骤按 entity.RunLocal 的约定就地执行。
+	LocalExecutor func(func()) error
+}
+
+// Assembly owns the construction order and the failure rollback of the data
+// engine: store at Provide time; WAL, projector, outbox and runtime at Start,
+// each earlier component closed when a later one fails. The kit Mod only
+// forwards lifecycle calls and reads Runtime() (P3b).
+type Assembly struct {
+	Store *MongoStore
+
+	deps AssemblyDeps
+	cfg  AssemblyConfig
+
+	lifecycleGate operationGate
+	runtimeMu     sync.RWMutex
+	runtime       *Runtime
+}
+
+// Assemble validates the dependencies and builds the Mongo store, binding the
+// remote projection when it is configured. Nothing is opened or written yet.
+func Assemble(deps AssemblyDeps, cfg AssemblyConfig) (*Assembly, error) {
+	if err := cfg.ValidateReceiptRetention(); err != nil {
+		return nil, err
+	}
+	if deps.Access == nil || deps.Access.Manager() == nil {
+		return nil, errors.New("dataengine: service-scoped entity access is required")
+	}
+	if deps.Mongo == nil {
+		return nil, errors.New("dataengine: mongo client is required")
+	}
+	if deps.JetStream == nil {
+		return nil, errors.New("dataengine: jetstream client is required")
+	}
+	if (deps.RemoteStore == nil) != (deps.RemoteManager == nil) {
+		return nil, errors.New("dataengine: remote projection needs both the remote manager and its atomic store")
+	}
+	store, err := NewMongoStore(deps.Mongo, cfg.Mongo)
+	if err != nil {
+		return nil, err
+	}
+	if deps.RemoteManager != nil {
+		applier, ok := deps.RemoteManager.(entity.RemoteCommitApplier)
+		if !ok {
+			return nil, errors.New("dataengine: remote manager has no commit applier")
+		}
+		if err := store.SetRemoteProjection(deps.RemoteStore, applier); err != nil {
+			return nil, err
+		}
+	}
+	return &Assembly{Store: store, deps: deps, cfg: cfg}, nil
+}
+
+// Start ensures the Mongo infrastructure and the effect stream, opens the WAL
+// and brings up projector, outbox and runtime in dependency order. When a step
+// fails, all opened components are stopped. If ctx expires during cleanup,
+// Runtime retains the remaining resources for a later Shutdown call.
+// ctx bounds both startup and its cleanup attempt.
+func (a *Assembly) Start(ctx context.Context) (err error) {
+	if a == nil || a.Store == nil {
+		return errors.New("dataengine: not assembled")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := a.lifecycleGate.acquire(ctx); err != nil {
+		return err
+	}
+	defer a.lifecycleGate.release()
+	if current := a.Runtime(); current != nil {
+		if current.Ready() {
+			return nil
+		}
+		return fmt.Errorf("%w: complete Assembly.Shutdown before restarting", ErrRuntimeStopped)
+	}
+	if err := a.Store.EnsureInfrastructure(ctx); err != nil {
+		return fmt.Errorf("dataengine: ensure mongo infrastructure: %w", err)
+	}
+	if err := a.deps.JetStream.EnsureStream(ctx, a.cfg.EffectStream); err != nil {
+		return fmt.Errorf("dataengine: ensure effect stream: %w", err)
+	}
+	wal, err := nestwal.Open(a.cfg.WAL)
+	if err != nil {
+		return err
+	}
+	// 先登记本次尝试拥有的资源。失败清理同样受 ctx 限制；未完成时保留
+	// Runtime 给 Shutdown 重试，不能在 deadline 到期后丢失 WAL 的所有权。
+	owned := &Runtime{WAL: wal}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if cleanupErr := owned.stop(ctx, false); cleanupErr != nil {
+			a.runtimeMu.Lock()
+			a.runtime = owned
+			a.runtimeMu.Unlock()
+			err = errors.Join(err, fmt.Errorf("dataengine: startup cleanup incomplete: %w", cleanupErr))
+		}
+	}()
+	projector, err := NewProjector(wal, a.Store, a.cfg.Projector)
+	if err != nil {
+		return err
+	}
+	owned.Projector = projector
+	if a.deps.LocalExecutor != nil {
+		projector.BindLocalExecutor(a.deps.LocalExecutor)
+	}
+	outboxStore, err := NewMongoOutboxStore(a.Store)
+	if err != nil {
+		return err
+	}
+	publisher := &jetStreamOutboxPublisher{client: a.deps.JetStream, prefix: a.cfg.EffectPrefix}
+	outbox, err := NewOutboxWorker(outboxStore, publisher, a.cfg.Outbox)
+	if err != nil {
+		return err
+	}
+	owned.Outbox = outbox
+	runtime, err := NewRuntime(a.Store, wal, projector, outbox, a.deps.Access, a.deps.RemoteManager, a.deps.OnFatal, a.cfg.Pipelined)
+	if err != nil {
+		return err
+	}
+	owned = runtime
+	if err := runtime.Start(ctx); err != nil {
+		return err
+	}
+	a.runtimeMu.Lock()
+	a.runtime = runtime
+	a.runtimeMu.Unlock()
+	return nil
+}
+
+// Runtime is the running runtime, or an unready runtime awaiting failed-start
+// cleanup. It is nil before Start and after successful Shutdown.
+func (a *Assembly) Runtime() *Runtime {
+	if a == nil {
+		return nil
+	}
+	a.runtimeMu.RLock()
+	defer a.runtimeMu.RUnlock()
+	return a.runtime
+}
+
+// Shutdown stops the runtime (projector first, then outbox) and, once that
+// has completed, forgets it. A call before Start, or after a completed
+// shutdown, does nothing.
+//
+// "Completed" is the point: when ctx runs out while a worker is still
+// draining, Shutdown reports the error and KEEPS the runtime, so a retry waits
+// on the same components. Forgetting it on any outcome let the retry find nil
+// and answer success while the outbox worker was still active — a caller that
+// then released the underlying connections would pull them from under a live
+// worker (RR-20260909-03). Runtime.Shutdown remembers which components have
+// stopped, so the retry does not re-flush or re-close what is already down.
+func (a *Assembly) Shutdown(ctx context.Context) error {
+	if a == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := a.lifecycleGate.acquire(ctx); err != nil {
+		return err
+	}
+	defer a.lifecycleGate.release()
+	a.runtimeMu.RLock()
+	runtime := a.runtime
+	a.runtimeMu.RUnlock()
+	if runtime == nil {
+		return nil
+	}
+	if err := runtime.Shutdown(ctx); err != nil {
+		return err
+	}
+	a.runtimeMu.Lock()
+	if a.runtime == runtime {
+		a.runtime = nil
+	}
+	a.runtimeMu.Unlock()
+	return nil
+}
+
+// jetStreamOutboxPublisher publishes staged effects to JetStream under the
+// effect prefix, with the effect ID as the broker deduplication key.
+type jetStreamOutboxPublisher struct {
+	client fnats.IJetStream
+	prefix string
+}
+
+func (publisher *jetStreamOutboxPublisher) Publish(ctx context.Context, item OutboxItem) error {
+	if publisher == nil || publisher.client == nil || item.Effect.ID == "" || item.Effect.Topic == "" {
+		return errors.New("dataengine outbox: invalid JetStream publish")
+	}
+	payload, err := json.Marshal(nestwal.EffectEnvelope{
+		TransactionID: item.TransactionID, EffectID: item.Effect.ID, Topic: item.Effect.Topic,
+		Key: item.Effect.Key, Headers: item.Effect.Headers, Payload: item.Effect.Payload,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = publisher.client.Publish(ctx, publisher.prefix+"."+strings.Trim(item.Effect.Topic, "."), payload, fnats.JetStreamPublishOptions{MsgID: item.Effect.ID})
+	return err
+}

@@ -77,7 +77,7 @@ func Business() time.Time { return time.Now() }
 func TestClockHintsLeaveOtherPackagesAlone(t *testing.T) {
 	root := newModule(t)
 	// 框架 / 基础设施包：不提示。
-	framework := writeModuleFile(t, root, "nest/ticker.go", `package nest
+	framework := writeModuleFile(t, root, "framework/nest/ticker.go", `package nest
 import "time"
 func Tick() time.Time { return time.Now() }
 `)

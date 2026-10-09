@@ -25,7 +25,7 @@ cd "${repo_dir}"
   printf 'count=%s benchtime=%s cpu=%s bench=%s\n' "${count}" "${benchtime}" "${cpu}" "${bench}"
 } > "${output_dir}/${label}.env.txt"
 
-go test ./sync/... -run '^$' -bench "${bench}" -benchmem \
+go test ./framework/sync/... -run '^$' -bench "${bench}" -benchmem \
   -benchtime="${benchtime}" -count="${count}" -cpu="${cpu}" -timeout=20m \
   | tee "${output_dir}/${label}.txt"
 printf 'Benchmark output: %s/%s.txt\n' "${output_dir}" "${label}"

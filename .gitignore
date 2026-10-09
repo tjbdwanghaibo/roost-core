@@ -28,3 +28,6 @@ gapmap-report.md
 # Client SDK local compiler output.
 /client/**/bin/
 /client/**/obj/
+
+# Local directory-migration baselines and source snapshots.
+/artifacts/reorganization/

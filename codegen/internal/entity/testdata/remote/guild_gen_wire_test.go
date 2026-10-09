@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 // guildDeleteChangeSource reports a DAO-level delete for every

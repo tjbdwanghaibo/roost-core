@@ -12,7 +12,7 @@ import (
 // 都被悄悄跳过——既不进导出表，也逃过重复检查（`roost id check` 用同样的字面量正则，也看不见）；
 // 两个不同编号用同一个名字也照常导出。承诺：这些情形生成期失败并指出文件；字面量定义照常导出。
 func TestExtractDefinitionsRefusesWhatItCannotRead(t *testing.T) {
-	const imp = "import \"github.com/tjbdwanghaibo/roost-core/errcode\"\n\n"
+	const imp = "import \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\n"
 	cases := []struct {
 		label string
 		files map[string]string
@@ -30,13 +30,13 @@ func TestExtractDefinitionsRefusesWhatItCannotRead(t *testing.T) {
 		},
 		{
 			label: "aliased import with a constant code",
-			files: map[string]string{"game/shop/errors.go": "package shop\n\nimport ec \"github.com/tjbdwanghaibo/roost-core/errcode\"\n\nconst CodeSoldOut = 500102\n\nvar ErrSoldOut = ec.Define(CodeSoldOut, \"shop.sold_out\", \"sold out\")\n"},
+			files: map[string]string{"game/shop/errors.go": "package shop\n\nimport ec \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nconst CodeSoldOut = 500102\n\nvar ErrSoldOut = ec.Define(CodeSoldOut, \"shop.sold_out\", \"sold out\")\n"},
 			want:  []string{"game/shop/errors.go", "integer and string literals"},
 		},
 		{
 			label: "aliased import duplicating a code",
 			files: map[string]string{
-				"game/shop/errors.go":  "package shop\n\nimport ec \"github.com/tjbdwanghaibo/roost-core/errcode\"\n\nvar ErrA = ec.Define(500101, \"shop.a\", \"a\")\n",
+				"game/shop/errors.go":  "package shop\n\nimport ec \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nvar ErrA = ec.Define(500101, \"shop.a\", \"a\")\n",
 				"game/guild/errors.go": "package guild\n\n" + imp + "var ErrB = errcode.Define(500101, \"guild.b\", \"b\")\n",
 			},
 			want: []string{"duplicate errcode 500101"},
@@ -69,9 +69,9 @@ func TestExtractDefinitionsRefusesWhatItCannotRead(t *testing.T) {
 	// The literal form is still read, through an alias or a dot import too.
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{
-		"game/shop/errors.go":  "package shop\n\nimport ec \"github.com/tjbdwanghaibo/roost-core/errcode\"\n\nvar ErrA = ec.Define(500101, \"shop.a\", \"a\")\n",
+		"game/shop/errors.go":  "package shop\n\nimport ec \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nvar ErrA = ec.Define(500101, \"shop.a\", \"a\")\n",
 		"game/guild/errors.go": "package guild\n\n" + imp + "var ErrB = errcode.Define(500102, \"guild.b\", \"b\")\n",
-		"game/dot/errors.go":   "package dot\n\nimport . \"github.com/tjbdwanghaibo/roost-core/errcode\"\n\nvar ErrC = Define(500103, \"dot.c\", \"c\")\n",
+		"game/dot/errors.go":   "package dot\n\nimport . \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nvar ErrC = Define(500103, \"dot.c\", \"c\")\n",
 	})
 	defs, err := extractDefinitions(root)
 	if err != nil {

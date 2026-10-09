@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
 // fakeRedisEnvelopes evaluates the operations the envelope store uses, rather

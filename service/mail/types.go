@@ -41,8 +41,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tjbdwanghaibo/roost-core/errcode"
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
 // Error codes.

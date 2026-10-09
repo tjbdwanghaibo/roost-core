@@ -54,10 +54,10 @@ var (
 	text := string(rewritten)
 	for _, want := range []string{
 		// 第一阶段搬进 core 本体的，第二阶段不许再动它
-		`"github.com/tjbdwanghaibo/roost-core/dataengine/engine"`,
+		`"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"`,
 		// 第一阶段留在 kit 的，第二阶段搬到 core/kit
-		`kitmods "github.com/tjbdwanghaibo/roost-core/kit/mods"`,
-		`svcmail "github.com/tjbdwanghaibo/roost-core/kit/service/mail"`,
+		`kitmods "github.com/tjbdwanghaibo/roost-core/wiring/mods"`,
+		`svcmail "github.com/tjbdwanghaibo/roost-core/wiring/mail"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("rewritten file lacks %q:\n%s", want, text)
@@ -94,9 +94,9 @@ func TestSingleModulePathRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	moved := map[string]string{
-		"github.com/tjbdwanghaibo/roost-kit":                    "github.com/tjbdwanghaibo/roost-core/kit",
-		"github.com/tjbdwanghaibo/roost-kit/mods":               "github.com/tjbdwanghaibo/roost-core/kit/mods",
-		"github.com/tjbdwanghaibo/roost-kit/service/mail":       "github.com/tjbdwanghaibo/roost-core/kit/service/mail",
+		"github.com/tjbdwanghaibo/roost-kit":                    "github.com/tjbdwanghaibo/roost-core/wiring",
+		"github.com/tjbdwanghaibo/roost-kit/mods":               "github.com/tjbdwanghaibo/roost-core/wiring/mods",
+		"github.com/tjbdwanghaibo/roost-kit/service/mail":       "github.com/tjbdwanghaibo/roost-core/wiring/mail",
 		"github.com/tjbdwanghaibo/roost-codegen/internal/roost": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
 		"github.com/tjbdwanghaibo/roost-codegen/cmd/roost":      "github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost",
 	}
@@ -108,8 +108,8 @@ func TestSingleModulePathRules(t *testing.T) {
 	}
 	for _, untouched := range []string{
 		"context",
-		"github.com/tjbdwanghaibo/roost-core/entity",
-		"github.com/tjbdwanghaibo/roost-core/kit/mods", // already there
+		"github.com/tjbdwanghaibo/roost-core/framework/entity",
+		"github.com/tjbdwanghaibo/roost-core/wiring/mods", // already there
 		"github.com/tjbdwanghaibo/roost-kitchen/sink",  // 前缀相同但不是那个模块
 	} {
 		if got, ok := singleModulePath(untouched, m); ok || got != untouched {

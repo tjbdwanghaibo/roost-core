@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	redis "github.com/tjbdwanghaibo/roost-core/redis"
-	"github.com/tjbdwanghaibo/roost-core/redis/driver"
+	redis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 )
 
 // RR-20260929-33: real standalone and Cluster reads, including a missing

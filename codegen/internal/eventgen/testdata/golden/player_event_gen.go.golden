@@ -3,7 +3,7 @@ package player
 
 import (
 	"github.com/tjbdwanghaibo/cube/event"
-	frameworkEvent "github.com/tjbdwanghaibo/roost-core/event"
+	frameworkEvent "github.com/tjbdwanghaibo/roost-core/framework/event"
 )
 
 func (p *Player) InitSub() {

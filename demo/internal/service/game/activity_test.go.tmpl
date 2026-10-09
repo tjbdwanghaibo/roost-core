@@ -15,12 +15,12 @@ import (
 	gameactivity "{{MODULE}}/game/activity"
 	"{{MODULE}}/game/flags"
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-core/featureflag"
-	corenest "github.com/tjbdwanghaibo/roost-core/nest"
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
-	svcactivity "github.com/tjbdwanghaibo/roost-core/kit/service/global/activity"
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/featureflag"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	svcactivity "github.com/tjbdwanghaibo/roost-core/service/activity"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
 // windowCoordinator is the coordinator as this test needs it: a score per

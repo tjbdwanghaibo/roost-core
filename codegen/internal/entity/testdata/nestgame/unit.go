@@ -1,6 +1,6 @@
 package nestgame
 
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 // 独立生成模块使用的 kind，不写入其他压测的进程级注册表。
 const kindUnit entity.EntityKind = 194

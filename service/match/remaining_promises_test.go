@@ -2,7 +2,7 @@ package match
 
 import (
 	"context"
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	"testing"
 	"time"
 )

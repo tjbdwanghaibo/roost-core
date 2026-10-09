@@ -1018,7 +1018,7 @@ func TestAddSkillUsesStablePackageAndNeutralDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(catalog, []byte("github.com/tjbdwanghaibo/roost-core/skill")) || bytes.Contains(catalog, []byte("skillv2")) {
+	if !bytes.Contains(catalog, []byte("github.com/tjbdwanghaibo/roost-core/gameplay/skill")) || bytes.Contains(catalog, []byte("skillv2")) {
 		t.Fatalf("Skill catalog must use the stable package:\n%s", catalog)
 	}
 }
@@ -1287,9 +1287,9 @@ func TestBootstrapImportsTransitiveDataEngineDependencies(t *testing.T) {
 	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"nest"}, []string{"nest"})
 	bootstrap := renderBootstrap(m)
 	for _, want := range []string{
-		`kitdataengine "github.com/tjbdwanghaibo/roost-core/kit/dataengine"`,
-		`kitmongo "github.com/tjbdwanghaibo/roost-core/kit/mongo"`,
-		`kitnats "github.com/tjbdwanghaibo/roost-core/kit/nats"`,
+		`kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"`,
+		`kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"`,
+		`kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"`,
 		"kitdataengine.NewMod(kitdataengine.WithEntityAccess(EntityAccess))",
 	} {
 		if !strings.Contains(bootstrap, want) {
@@ -1307,9 +1307,9 @@ func TestBootstrapWiresDataEngineWithEntityAccess(t *testing.T) {
 	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"dataengine", "nest"}, []string{"entity", "nest", "dao"})
 	bootstrap := renderBootstrap(m)
 	for _, want := range []string{
-		`kitdataengine "github.com/tjbdwanghaibo/roost-core/kit/dataengine"`,
-		`kitmongo "github.com/tjbdwanghaibo/roost-core/kit/mongo"`,
-		`kitnats "github.com/tjbdwanghaibo/roost-core/kit/nats"`,
+		`kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"`,
+		`kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"`,
+		`kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"`,
 		"kitdataengine.NewMod(kitdataengine.WithEntityAccess(EntityAccess))",
 		"kitnest.NewMod(EntityAccess)",
 	} {
@@ -1345,7 +1345,7 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 	deps, ok := plan["internal/frameworkdeps/generated.go"]
-	if !ok || !strings.Contains(string(deps.Body), "github.com/tjbdwanghaibo/roost-core/skill") || strings.Contains(string(deps.Body), "roost-skill") {
+	if !ok || !strings.Contains(string(deps.Body), "github.com/tjbdwanghaibo/roost-core/gameplay/skill") || strings.Contains(string(deps.Body), "roost-skill") {
 		t.Fatalf("generated project does not pin the skill module: %q", deps.Body)
 	}
 	makefile := string(plan["Makefile"].Body)
@@ -1581,7 +1581,7 @@ func TestSyncUpgradesLegacyGeneratedMakefile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(upgradedFrameworkDeps, []byte("github.com/tjbdwanghaibo/roost-core/skill")) || bytes.Contains(upgradedFrameworkDeps, []byte("skillv2")) {
+	if !bytes.Contains(upgradedFrameworkDeps, []byte("github.com/tjbdwanghaibo/roost-core/gameplay/skill")) || bytes.Contains(upgradedFrameworkDeps, []byte("skillv2")) {
 		t.Fatalf("legacy skillv2 dependency was not migrated:\n%s", upgradedFrameworkDeps)
 	}
 }

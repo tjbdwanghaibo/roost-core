@@ -13,7 +13,7 @@ package {{.Package}}
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 )
 
 // daoMapDocs maps conv over src; nil stays nil so an absent map is not

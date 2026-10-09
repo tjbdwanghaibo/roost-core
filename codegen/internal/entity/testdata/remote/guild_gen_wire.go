@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/tjbdwanghaibo/roost-core/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 var registerGuildEntityOnce sync.Once

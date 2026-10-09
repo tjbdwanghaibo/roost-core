@@ -10,7 +10,7 @@
 
 ## 1. 实现边界
 
-`configdata`、`featureflag`、`hotcode`、`internal/configschema`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`framework/configdata`、`infra/base/featureflag`、`framework/hotcode`、`internal/configschema`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
@@ -35,12 +35,12 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [auto.go](../../../configdata/auto.go) | `AutoOption` |
-| [configdata.go](../../../configdata/configdata.go) | `Name`、`Snapshot`、`Table`、`BuildContext`、`IndexDef`、`TableDef`、`ObjectDef`、`CustomDef`、`Registry`、`ReloadEvent`、`ReloadListener`、`ReloadHook`、`Store`、`ReloadStage`、`ReloadOutcome` |
-| [doc.go](../../../configdata/doc.go) | 函数/方法或内部实现；见源码 |
-| [external.go](../../../configdata/external.go) | `ExternalOption` |
-| [fieldrules.go](../../../configdata/fieldrules.go) | `FieldRule`、`RuleError` |
-| [keyspelling.go](../../../configdata/keyspelling.go) | 函数/方法或内部实现；见源码 |
+| [auto.go](../../../framework/configdata/auto.go) | `AutoOption` |
+| [configdata.go](../../../framework/configdata/configdata.go) | `Name`、`Snapshot`、`Table`、`BuildContext`、`IndexDef`、`TableDef`、`ObjectDef`、`CustomDef`、`Registry`、`ReloadEvent`、`ReloadListener`、`ReloadHook`、`Store`、`ReloadStage`、`ReloadOutcome` |
+| [doc.go](../../../framework/configdata/doc.go) | 函数/方法或内部实现；见源码 |
+| [external.go](../../../framework/configdata/external.go) | `ExternalOption` |
+| [fieldrules.go](../../../framework/configdata/fieldrules.go) | `FieldRule`、`RuleError` |
+| [keyspelling.go](../../../framework/configdata/keyspelling.go) | 函数/方法或内部实现；见源码 |
 
 ### configdata/rules
 
@@ -48,7 +48,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [rules.go](../../../configdata/rules/rules.go) | `Rule`、`Error` |
+| [rules.go](../../../framework/configdata/rules/rules.go) | `Rule`、`Error` |
 
 ### featureflag
 
@@ -56,7 +56,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [flags.go](../../../featureflag/flags.go) | `Flag`、`Store` |
+| [flags.go](../../../infra/base/featureflag/flags.go) | `Flag`、`Store` |
 
 ### hotcode
 
@@ -64,10 +64,10 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [admin.go](../../../hotcode/admin.go) | `RevertCommand`、`LoadPluginCommand` |
-| [plugin.go](../../../hotcode/plugin.go) | `Bundle` |
-| [plugin_stub.go](../../../hotcode/plugin_stub.go) | `Bundle` |
-| [registry.go](../../../hotcode/registry.go) | `Meta`、`PointInfo`、`Registry` |
+| [admin.go](../../../framework/hotcode/admin.go) | `RevertCommand`、`LoadPluginCommand` |
+| [plugin.go](../../../framework/hotcode/plugin.go) | `Bundle` |
+| [plugin_stub.go](../../../framework/hotcode/plugin_stub.go) | `Bundle` |
+| [registry.go](../../../framework/hotcode/registry.go) | `Meta`、`PointInfo`、`Registry` |
 
 ### internal/configschema
 
@@ -92,41 +92,41 @@
 
 ### configdata
 
-- [auto_hardening_test.go](../../../configdata/auto_hardening_test.go)：`TestAutoTablePromotesEmbeddedFields`、`TestAutoTableRefTargetCheckedEvenWhenColumnIsZero`、`TestAutoTableRefTypeMismatchIsSchemaError`、`TestAutoTableNamedAliasRefIsCompatible`、`TestAutoTableRegistrationRejectsBadRefAndIndexShapes`；其余 6 项见文件
-- [auto_tag_guards_promises_test.go](../../../configdata/auto_tag_guards_promises_test.go)：`TestAutoTableRefusesTaggedTiesAndSkipEmptyWithoutIndex`
-- [auto_test.go](../../../configdata/auto_test.go)：`TestRegisterAutoTableDerivesMappingFromTags`、`TestRegisterAutoTableRefValidation`、`TestRegisterAutoTableUserValidateRunsAfterRefs`、`TestRegisterAutoTableTagMistakesFailAtRegistration`、`TestInferTableName`；其余 2 项见文件
-- [configdata_test.go](../../../configdata/configdata_test.go)：`TestStoreLoadReloadAndActiveSnapshot`、`TestReloadFailureKeepsOldSnapshot`、`TestDryRunBuildsSnapshotWithoutPublishing`、`TestRollbackRestoresPreviousPublishedSnapshot`、`TestReloadListenerRollbackKeepsOldSnapshot`；其余 2 项见文件
-- [field_rules_promises_test.go](../../../configdata/field_rules_promises_test.go)：`TestDeclaredRulesRejectReloadAndNameTheViolation`、`TestRuleDeclarationsAreCheckedAtRegistration`、`TestAutoTableTagRulesUseTheSharedCheck`、`TestEveryReloadReportsOneOutcome`
-- [key_case_promises_test.go](../../../configdata/key_case_promises_test.go)：`TestMisspelledKeysRejectLoad`、`TestMisspelledKeysRejectReloadAndDryRun`、`TestUndeclaredKeysKeepTheirBehaviour`、`TestRuleFieldMustMatchTheJSONNameExactly`
-- [promises_test.go](../../../configdata/promises_test.go)：`TestTableLoadRefusesDuplicateKeys`、`TestDefinitionsRefuseIncompleteShapes`、`TestRegisterAutoTableRefusesEachTagMistakeByMessage`
-- [reload_commit_test.go](../../../configdata/reload_commit_test.go)：`TestFailedCommitDoesNotRollBackAnotherStorePublication`、`TestListenerPanicFailsReloadAndKeepsStateConsistent`、`TestBeforeApplyFailureRollsBackOnlyPreparedListeners`、`TestAfterApplyFailureRollsBackAllPreparedInReverse`、`TestFirstLoadFailureSkipsRollbackCallbacks`；其余 5 项见文件
-- [review_round2_test.go](../../../configdata/review_round2_test.go)：`TestBeforeApplyPanicRollsBackOnlyPrepared`、`TestRevertRestoresAllGlobalSlots`、`TestFirstLoadFailureLeavesNoTypedNilInRuntimeConfig`、`TestRollbackTwiceIsRejected`、`TestWrapperDocumentsHappyPathAndGuards`；其余 9 项见文件
+- [auto_hardening_test.go](../../../framework/configdata/auto_hardening_test.go)：`TestAutoTablePromotesEmbeddedFields`、`TestAutoTableRefTargetCheckedEvenWhenColumnIsZero`、`TestAutoTableRefTypeMismatchIsSchemaError`、`TestAutoTableNamedAliasRefIsCompatible`、`TestAutoTableRegistrationRejectsBadRefAndIndexShapes`；其余 6 项见文件
+- [auto_tag_guards_promises_test.go](../../../framework/configdata/auto_tag_guards_promises_test.go)：`TestAutoTableRefusesTaggedTiesAndSkipEmptyWithoutIndex`
+- [auto_test.go](../../../framework/configdata/auto_test.go)：`TestRegisterAutoTableDerivesMappingFromTags`、`TestRegisterAutoTableRefValidation`、`TestRegisterAutoTableUserValidateRunsAfterRefs`、`TestRegisterAutoTableTagMistakesFailAtRegistration`、`TestInferTableName`；其余 2 项见文件
+- [configdata_test.go](../../../framework/configdata/configdata_test.go)：`TestStoreLoadReloadAndActiveSnapshot`、`TestReloadFailureKeepsOldSnapshot`、`TestDryRunBuildsSnapshotWithoutPublishing`、`TestRollbackRestoresPreviousPublishedSnapshot`、`TestReloadListenerRollbackKeepsOldSnapshot`；其余 2 项见文件
+- [field_rules_promises_test.go](../../../framework/configdata/field_rules_promises_test.go)：`TestDeclaredRulesRejectReloadAndNameTheViolation`、`TestRuleDeclarationsAreCheckedAtRegistration`、`TestAutoTableTagRulesUseTheSharedCheck`、`TestEveryReloadReportsOneOutcome`
+- [key_case_promises_test.go](../../../framework/configdata/key_case_promises_test.go)：`TestMisspelledKeysRejectLoad`、`TestMisspelledKeysRejectReloadAndDryRun`、`TestUndeclaredKeysKeepTheirBehaviour`、`TestRuleFieldMustMatchTheJSONNameExactly`
+- [promises_test.go](../../../framework/configdata/promises_test.go)：`TestTableLoadRefusesDuplicateKeys`、`TestDefinitionsRefuseIncompleteShapes`、`TestRegisterAutoTableRefusesEachTagMistakeByMessage`
+- [reload_commit_test.go](../../../framework/configdata/reload_commit_test.go)：`TestFailedCommitDoesNotRollBackAnotherStorePublication`、`TestListenerPanicFailsReloadAndKeepsStateConsistent`、`TestBeforeApplyFailureRollsBackOnlyPreparedListeners`、`TestAfterApplyFailureRollsBackAllPreparedInReverse`、`TestFirstLoadFailureSkipsRollbackCallbacks`；其余 5 项见文件
+- [review_round2_test.go](../../../framework/configdata/review_round2_test.go)：`TestBeforeApplyPanicRollsBackOnlyPrepared`、`TestRevertRestoresAllGlobalSlots`、`TestFirstLoadFailureLeavesNoTypedNilInRuntimeConfig`、`TestRollbackTwiceIsRejected`、`TestWrapperDocumentsHappyPathAndGuards`；其余 9 项见文件
 
 ### configdata/rules
 
-- [key_spelling_promises_test.go](../../../configdata/rules/key_spelling_promises_test.go)：`TestCheckKeysRejectsCaseVariants`、`TestCheckObjectKeysNamesTheSpelling`、`TestLookupIsExact`
-- [rules_test.go](../../../configdata/rules/rules_test.go)：`TestCheckNamesTableRowKeyFieldAndRule`、`TestCheckObjectHasNoRowNumber`、`TestDocumentRefusesVanishingAndAmbiguousData`、`TestRuleValidateRejectsBadDeclarations`
+- [key_spelling_promises_test.go](../../../framework/configdata/rules/key_spelling_promises_test.go)：`TestCheckKeysRejectsCaseVariants`、`TestCheckObjectKeysNamesTheSpelling`、`TestLookupIsExact`
+- [rules_test.go](../../../framework/configdata/rules/rules_test.go)：`TestCheckNamesTableRowKeyFieldAndRule`、`TestCheckObjectHasNoRowNumber`、`TestDocumentRefusesVanishingAndAmbiguousData`、`TestRuleValidateRejectsBadDeclarations`
 
 ### featureflag
 
-- [flags_test.go](../../../featureflag/flags_test.go)：`TestStore`、`TestReplaceBumpsVersionWithData`、`TestReplaceVersionIsConsistentUnderConcurrentReads`、`TestSetAdvancesVersionAndSnapshotIsSorted`、`TestNilStoreAndDefaultStoreAreSafe`
+- [flags_test.go](../../../infra/base/featureflag/flags_test.go)：`TestStore`、`TestReplaceBumpsVersionWithData`、`TestReplaceVersionIsConsistentUnderConcurrentReads`、`TestSetAdvancesVersionAndSnapshotIsSorted`、`TestNilStoreAndDefaultStoreAreSafe`
 
 ### hotcode
 
-- [admin_test.go](../../../hotcode/admin_test.go)：`TestRegisterAdminCommandsTargetsInstanceRegistry`
-- [concurrent_patch_promises_test.go](../../../hotcode/concurrent_patch_promises_test.go)：`TestConcurrentReplaceAndRevertLeaveAConsistentPoint`
-- [guards_promises_test.go](../../../hotcode/guards_promises_test.go)：`TestHotcodeEntryPointsRefuseMissingRegistryPathsAndPoints`
-- [patch_visibility_promises_test.go](../../../hotcode/patch_visibility_promises_test.go)：`TestListReportsAClosurePatchFromTheSameFactoryAsPatched`、`TestResolveConvertsAnIdenticalSignatureAndCountsRealMismatches`、`TestApplyBundleRollsBackWhenApplyPanics`
-- [plugin_guards_promises_test.go](../../../hotcode/plugin_guards_promises_test.go)：`TestLoadPluginRefusesEmptyAndNonSharedObjectPaths`
-- [plugin_stub_guards_promises_test.go](../../../hotcode/plugin_stub_guards_promises_test.go)：`TestLoadPluginReportsUnsupportedPlatforms`
-- [promises_test.go](../../../hotcode/promises_test.go)：`TestRegistryRefusesNamelessNonFunctionAndDuplicatePoints`
-- [registry_test.go](../../../hotcode/registry_test.go)：`TestRegistryReplaceResolveAndRevert`、`TestRegistryRejectsSignatureMismatch`
+- [admin_test.go](../../../framework/hotcode/admin_test.go)：`TestRegisterAdminCommandsTargetsInstanceRegistry`
+- [concurrent_patch_promises_test.go](../../../framework/hotcode/concurrent_patch_promises_test.go)：`TestConcurrentReplaceAndRevertLeaveAConsistentPoint`
+- [guards_promises_test.go](../../../framework/hotcode/guards_promises_test.go)：`TestHotcodeEntryPointsRefuseMissingRegistryPathsAndPoints`
+- [patch_visibility_promises_test.go](../../../framework/hotcode/patch_visibility_promises_test.go)：`TestListReportsAClosurePatchFromTheSameFactoryAsPatched`、`TestResolveConvertsAnIdenticalSignatureAndCountsRealMismatches`、`TestApplyBundleRollsBackWhenApplyPanics`
+- [plugin_guards_promises_test.go](../../../framework/hotcode/plugin_guards_promises_test.go)：`TestLoadPluginRefusesEmptyAndNonSharedObjectPaths`
+- [plugin_stub_guards_promises_test.go](../../../framework/hotcode/plugin_stub_guards_promises_test.go)：`TestLoadPluginReportsUnsupportedPlatforms`
+- [promises_test.go](../../../framework/hotcode/promises_test.go)：`TestRegistryRefusesNamelessNonFunctionAndDuplicatePoints`
+- [registry_test.go](../../../framework/hotcode/registry_test.go)：`TestRegistryReplaceResolveAndRevert`、`TestRegistryRejectsSignatureMismatch`
 
 ### hotcode/plugintest
 
-- [plugin_load_test.go](../../../hotcode/plugintest/plugin_load_test.go)：`TestMain`、`TestLoadPluginAcceptsABundleExportedAsAnInterfaceVariable`、`TestLoadPluginRollsBackAPartiallyAppliedBundle`
-- [race_off_test.go](../../../hotcode/plugintest/race_off_test.go)
-- [race_on_test.go](../../../hotcode/plugintest/race_on_test.go)
+- [plugin_load_test.go](../../../framework/hotcode/plugintest/plugin_load_test.go)：`TestMain`、`TestLoadPluginAcceptsABundleExportedAsAnInterfaceVariable`、`TestLoadPluginRollsBackAPartiallyAppliedBundle`
+- [race_off_test.go](../../../framework/hotcode/plugintest/race_off_test.go)
+- [race_on_test.go](../../../framework/hotcode/plugintest/race_on_test.go)
 
 ### internal/configschema
 

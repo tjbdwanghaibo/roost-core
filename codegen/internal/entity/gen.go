@@ -158,7 +158,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 // {{firstToLower .Entity.Name}}DeleteChangeSource reports a DAO-level delete for every
@@ -310,12 +310,12 @@ func buildImportBlock(ent EntityDef, needsFmt, needsDataEngine, needsNest bool) 
 		}
 	}
 	if needsDataEngine {
-		local = append(local, `"github.com/tjbdwanghaibo/roost-core/dataengine"`)
+		local = append(local, `"github.com/tjbdwanghaibo/roost-core/framework/dataengine"`)
 	}
 	if needsNest {
-		local = append(local, `"github.com/tjbdwanghaibo/roost-core/nest"`)
+		local = append(local, `"github.com/tjbdwanghaibo/roost-core/framework/nest"`)
 	}
-	local = append(local, `"github.com/tjbdwanghaibo/roost-core/entity"`)
+	local = append(local, `"github.com/tjbdwanghaibo/roost-core/framework/entity"`)
 	groups = append(groups, local)
 
 	var b strings.Builder

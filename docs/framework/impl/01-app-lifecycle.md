@@ -10,7 +10,7 @@
 
 ## 1. 实现边界
 
-`app`、`lifecycle`、`manager`、`internal/stopcontract`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`framework/app`、`infra/base/lifecycle`、`framework/manager`、`internal/stopcontract`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
@@ -35,20 +35,20 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [app.go](../../../app/app.go) | `App` |
-| [business_clock.go](../../../app/business_clock.go) | 函数/方法或内部实现；见源码 |
-| [business_time.go](../../../app/business_time.go) | 函数/方法或内部实现；见源码 |
-| [config_schema.go](../../../app/config_schema.go) | `ConfigSchema`、`ModConfigSchema`、`ServiceIdentity` |
-| [config_validation.go](../../../app/config_validation.go) | 函数/方法或内部实现；见源码 |
-| [config_values.go](../../../app/config_values.go) | 函数/方法或内部实现；见源码 |
-| [manager.go](../../../app/manager.go) | `IManager`、`IManagerStopperWithContext`、`ManagerDependencyProvider` |
-| [mod.go](../../../app/mod.go) | `Mod`、`ModStopperWithContext`、`ModStopBudgetProvider`、`ModDependencyProvider`、`ModOptionalDependencyProvider` |
-| [name.go](../../../app/name.go) | `ModName`、`ServiceName` |
-| [registry.go](../../../app/registry.go) | `Registry`、`Capability` |
-| [runtime_failure.go](../../../app/runtime_failure.go) | `RuntimeFailure` |
-| [service.go](../../../app/service.go) | `Service` |
-| [singleton.go](../../../app/singleton.go) | `SingletonStore`、`SingletonOpener`、`SingletonLiveness`、`SingletonIncarnation` |
-| [startup.go](../../../app/startup.go) | 函数/方法或内部实现；见源码 |
+| [app.go](../../../framework/app/app.go) | `App` |
+| [business_clock.go](../../../framework/app/business_clock.go) | 函数/方法或内部实现；见源码 |
+| [business_time.go](../../../framework/app/business_time.go) | 函数/方法或内部实现；见源码 |
+| [config_schema.go](../../../framework/app/config_schema.go) | `ConfigSchema`、`ModConfigSchema`、`ServiceIdentity` |
+| [config_validation.go](../../../framework/app/config_validation.go) | 函数/方法或内部实现；见源码 |
+| [config_values.go](../../../framework/app/config_values.go) | 函数/方法或内部实现；见源码 |
+| [manager.go](../../../framework/app/manager.go) | `IManager`、`IManagerStopperWithContext`、`ManagerDependencyProvider` |
+| [mod.go](../../../framework/app/mod.go) | `Mod`、`ModStopperWithContext`、`ModStopBudgetProvider`、`ModDependencyProvider`、`ModOptionalDependencyProvider` |
+| [name.go](../../../framework/app/name.go) | `ModName`、`ServiceName` |
+| [registry.go](../../../framework/app/registry.go) | `Registry`、`Capability` |
+| [runtime_failure.go](../../../framework/app/runtime_failure.go) | `RuntimeFailure` |
+| [service.go](../../../framework/app/service.go) | `Service` |
+| [singleton.go](../../../framework/app/singleton.go) | `SingletonStore`、`SingletonOpener`、`SingletonLiveness`、`SingletonIncarnation` |
+| [startup.go](../../../framework/app/startup.go) | 函数/方法或内部实现；见源码 |
 
 ### app/buildinfo
 
@@ -56,7 +56,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [buildinfo.go](../../../app/buildinfo/buildinfo.go) | `BuildInfo` |
+| [buildinfo.go](../../../framework/app/buildinfo/buildinfo.go) | `BuildInfo` |
 
 ### internal/stopcontract
 
@@ -72,8 +72,8 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [lifecycle.go](../../../lifecycle/lifecycle.go) | `Phase`、`Event`、`Handler`、`Hook`、`Registry` |
-| [manager_group.go](../../../lifecycle/manager_group.go) | `Manager`、`ManagerGroupState`、`ManagerGroup` |
+| [lifecycle.go](../../../infra/base/lifecycle/lifecycle.go) | `Phase`、`Event`、`Handler`、`Hook`、`Registry` |
+| [manager_group.go](../../../infra/base/lifecycle/manager_group.go) | `Manager`、`ManagerGroupState`、`ManagerGroup` |
 
 ### manager
 
@@ -81,8 +81,8 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [engine.go](../../../manager/engine.go) | `Engine` |
-| [order.go](../../../manager/order.go) | 函数/方法或内部实现；见源码 |
+| [engine.go](../../../framework/manager/engine.go) | `Engine` |
+| [order.go](../../../framework/manager/order.go) | 函数/方法或内部实现；见源码 |
 
 </details>
 
@@ -95,36 +95,36 @@
 
 ### app
 
-- [app_test.go](../../../app/app_test.go)：`TestAppReturnsServeError`、`TestAppExplicitConfigPathFailsClosed`、`TestAppInvalidDefaultConfigFailsClosed`、`TestAppReturnsShutdownError`、`TestAppReturnsServiceStoppingLifecycleError`；其余 9 项见文件
-- [business_clock_promises_test.go](../../../app/business_clock_promises_test.go)：`TestBusinessClockFollowsTheConfiguredOffset`、`TestOffsetMovesBusinessTimeButNotTheSingletonLease`
-- [business_time_promises_test.go](../../../app/business_time_promises_test.go)：`TestBusinessTimeMovingBackRefusesToStart`、`TestBusinessTimeMayMoveForwardOrStay`、`TestTheHighWaterMarkAdvancesWhileRunning`、`TestAnUnreadableHighWaterMarkRefusesToStart`、`TestAnOffsetWithoutTheSingletonStillGuardsBusinessTime`；其余 2 项见文件
-- [config_check_promises_test.go](../../../app/config_check_promises_test.go)：`TestCheckConfigRequiresAnExistingFile`、`TestCheckConfigAcceptsExistingDefaultFileWithoutStartingService`、`TestSortModsRejectsNameAlreadyOwnedBySharedMod`
-- [config_declarations_promises_test.go](../../../app/config_declarations_promises_test.go)：`TestConfigIntAcceptsWholeNumbersOnly`、`TestCheckConfigReportsEveryModsErrorsAtOnce`、`TestLoadConfigFillsDefaultsAndRefusesOutOfRangeValues`、`TestServiceDeclarationsAreCheckedAndPrintedWithTheMods`、`TestFrameworkModsReadConfigOnlyThroughDeclarations`；其余 2 项见文件
-- [config_types_promises_test.go](../../../app/config_types_promises_test.go)：`TestValidateServiceConfigRejectsABoolSwitchThatIsNotABool`、`TestValidateServiceConfigAcceptsTheBoolSpellingsItAlwaysAccepted`、`TestValidateServiceConfigRejectsADurationWithoutAUnit`、`TestValidateServiceConfigAcceptsDurationsWithUnits`
-- [config_validation_test.go](../../../app/config_validation_test.go)：`TestValidateServiceConfigAcceptsMinimalConfig`、`TestProductionServiceConfigBaselineIsValid`
-- [example_test.go](../../../app/example_test.go)
-- [exit_reason_log_promises_test.go](../../../app/exit_reason_log_promises_test.go)：`TestRunWritesTheExitReasonToTheFileLog`
-- [guards_promises_test.go](../../../app/guards_promises_test.go)：`TestStopModsReverseStopsNothingOnceTheContextIsDone`、`TestEmitLifecycleRequiresARegistryWithTheLifecycleCapability`、`TestSortModsRefusesNilUnnamedAndDuplicateMods`、`TestValidateServiceConfigAndRegisterBatchRefuseMissingInputs`
-- [late_runtime_failure_promises_test.go](../../../app/late_runtime_failure_promises_test.go)：`TestRuntimeFailureDuringShutdownIsReturned`、`TestRuntimeFailureThatStartsTheShutdownIsReturnedOnce`
-- [log_rotation_promises_test.go](../../../app/log_rotation_promises_test.go)：`TestNegativeLogRotationIsRejected`
-- [logic_offset_production_promises_test.go](../../../app/logic_offset_production_promises_test.go)：`TestProductionRefusesANonZeroLogicOffset`
-- [mod_order_test.go](../../../app/mod_order_test.go)：`TestSortModsOrdersPresentOptionalDependencies`、`TestSortModsIgnoresAbsentOptionalDependencies`、`TestSortModsDetectsOptionalDependencyCycle`
-- [mod_validation_promises_test.go](../../../app/mod_validation_promises_test.go)：`TestSingleModValidation`、`TestSingleModExecuteFailsBeforeInit`
-- [registry_test.go](../../../app/registry_test.go)：`TestNewRegistryInstallsRuntimeObsRegistry`、`TestRegistryRegisterBatchIsAtomic`
-- [remaining_config_promises_test.go](../../../app/remaining_config_promises_test.go)：`TestSharedKeyErrorIsReportedOnceAcrossOwners`
-- [runtime_failure_test.go](../../../app/runtime_failure_test.go)：`TestRuntimeFailureFirstReportWakesShutdown`
-- [shutdown_hooks_promises_test.go](../../../app/shutdown_hooks_promises_test.go)：`TestShutdownLifecycleHooksStayWithinTheShutdownBudget`
-- [singleton_incarnation_promises_test.go](../../../app/singleton_incarnation_promises_test.go)：`TestSingletonIncarnationIsTheHeldLocksIdentity`
-- [singleton_test.go](../../../app/singleton_test.go)：`TestSingletonWaitsForTheHolderBeforeAnyModInit`、`TestSingletonGivesUpAtStartupWaitWithoutTakingTheKey`、`TestSingletonTakesOverAfterTheHolderExpires`、`TestSingletonReportsAnUnavailableStoreAtStartupWait`、`TestSingletonClaimsItsOwnValueAfterALostAcquireReply`；其余 21 项见文件
-- [startup_budget_promises_test.go](../../../app/startup_budget_promises_test.go)：`TestStartupHookCancellationPreservesDependencies`、`TestSignalDuringModStartNeverReachesServiceInit`
-- [startup_cleanup_promises_test.go](../../../app/startup_cleanup_promises_test.go)：`TestServiceInitFailureStopsWhatInitStartedBeforeTheMods`、`TestStartupCleanupThatDoesNotFinishKeepsTheModsAndTheLock`
-- [stop_budget_floor_test.go](../../../app/stop_budget_floor_test.go)：`TestDeclaredStopBudgetIsGrantedWhenTotalCoversItAndTheFloors`、`TestLargeDeclaredStopBudgetKeepsTheFloorOfEarlierMods`、`TestGeneratedDefaultShutdownBudgetsCoverEveryMod`、`TestStopBudgetsSplitEvenlyWhenTotalCannotCoverTheFloors`、`TestUndeclaredStopBudgetsKeepTheEvenSplit`
-- [stop_budget_generated_test.go](../../../app/stop_budget_generated_test.go)：`TestGeneratedGameServiceTotalCoversEveryModFloorAndTheDeclaredBudget`、`TestGeneratedGameServiceStopsWithoutBudgetWarnings`
-- [stop_budget_test.go](../../../app/stop_budget_test.go)：`TestDeclaredStopBudgetIsHonoredWithinTotalTimeout`、`TestStopBudgetsScaleProportionallyWhenTotalIsInsufficient`、`TestGeneratedDefaultsGrantDataEngineItsScaledDeclaredBudget`、`TestServiceModStopPlansAroundLaterSharedDeclaredBudget`、`TestDeclaredStopBudgetAppliesWithoutTotalDeadline`；其余 1 项见文件
+- [app_test.go](../../../framework/app/app_test.go)：`TestAppReturnsServeError`、`TestAppExplicitConfigPathFailsClosed`、`TestAppInvalidDefaultConfigFailsClosed`、`TestAppReturnsShutdownError`、`TestAppReturnsServiceStoppingLifecycleError`；其余 9 项见文件
+- [business_clock_promises_test.go](../../../framework/app/business_clock_promises_test.go)：`TestBusinessClockFollowsTheConfiguredOffset`、`TestOffsetMovesBusinessTimeButNotTheSingletonLease`
+- [business_time_promises_test.go](../../../framework/app/business_time_promises_test.go)：`TestBusinessTimeMovingBackRefusesToStart`、`TestBusinessTimeMayMoveForwardOrStay`、`TestTheHighWaterMarkAdvancesWhileRunning`、`TestAnUnreadableHighWaterMarkRefusesToStart`、`TestAnOffsetWithoutTheSingletonStillGuardsBusinessTime`；其余 2 项见文件
+- [config_check_promises_test.go](../../../framework/app/config_check_promises_test.go)：`TestCheckConfigRequiresAnExistingFile`、`TestCheckConfigAcceptsExistingDefaultFileWithoutStartingService`、`TestSortModsRejectsNameAlreadyOwnedBySharedMod`
+- [config_declarations_promises_test.go](../../../framework/app/config_declarations_promises_test.go)：`TestConfigIntAcceptsWholeNumbersOnly`、`TestCheckConfigReportsEveryModsErrorsAtOnce`、`TestLoadConfigFillsDefaultsAndRefusesOutOfRangeValues`、`TestServiceDeclarationsAreCheckedAndPrintedWithTheMods`、`TestFrameworkModsReadConfigOnlyThroughDeclarations`；其余 2 项见文件
+- [config_types_promises_test.go](../../../framework/app/config_types_promises_test.go)：`TestValidateServiceConfigRejectsABoolSwitchThatIsNotABool`、`TestValidateServiceConfigAcceptsTheBoolSpellingsItAlwaysAccepted`、`TestValidateServiceConfigRejectsADurationWithoutAUnit`、`TestValidateServiceConfigAcceptsDurationsWithUnits`
+- [config_validation_test.go](../../../framework/app/config_validation_test.go)：`TestValidateServiceConfigAcceptsMinimalConfig`、`TestProductionServiceConfigBaselineIsValid`
+- [example_test.go](../../../framework/app/example_test.go)
+- [exit_reason_log_promises_test.go](../../../framework/app/exit_reason_log_promises_test.go)：`TestRunWritesTheExitReasonToTheFileLog`
+- [guards_promises_test.go](../../../framework/app/guards_promises_test.go)：`TestStopModsReverseStopsNothingOnceTheContextIsDone`、`TestEmitLifecycleRequiresARegistryWithTheLifecycleCapability`、`TestSortModsRefusesNilUnnamedAndDuplicateMods`、`TestValidateServiceConfigAndRegisterBatchRefuseMissingInputs`
+- [late_runtime_failure_promises_test.go](../../../framework/app/late_runtime_failure_promises_test.go)：`TestRuntimeFailureDuringShutdownIsReturned`、`TestRuntimeFailureThatStartsTheShutdownIsReturnedOnce`
+- [log_rotation_promises_test.go](../../../framework/app/log_rotation_promises_test.go)：`TestNegativeLogRotationIsRejected`
+- [logic_offset_production_promises_test.go](../../../framework/app/logic_offset_production_promises_test.go)：`TestProductionRefusesANonZeroLogicOffset`
+- [mod_order_test.go](../../../framework/app/mod_order_test.go)：`TestSortModsOrdersPresentOptionalDependencies`、`TestSortModsIgnoresAbsentOptionalDependencies`、`TestSortModsDetectsOptionalDependencyCycle`
+- [mod_validation_promises_test.go](../../../framework/app/mod_validation_promises_test.go)：`TestSingleModValidation`、`TestSingleModExecuteFailsBeforeInit`
+- [registry_test.go](../../../framework/app/registry_test.go)：`TestNewRegistryInstallsRuntimeObsRegistry`、`TestRegistryRegisterBatchIsAtomic`
+- [remaining_config_promises_test.go](../../../framework/app/remaining_config_promises_test.go)：`TestSharedKeyErrorIsReportedOnceAcrossOwners`
+- [runtime_failure_test.go](../../../framework/app/runtime_failure_test.go)：`TestRuntimeFailureFirstReportWakesShutdown`
+- [shutdown_hooks_promises_test.go](../../../framework/app/shutdown_hooks_promises_test.go)：`TestShutdownLifecycleHooksStayWithinTheShutdownBudget`
+- [singleton_incarnation_promises_test.go](../../../framework/app/singleton_incarnation_promises_test.go)：`TestSingletonIncarnationIsTheHeldLocksIdentity`
+- [singleton_test.go](../../../framework/app/singleton_test.go)：`TestSingletonWaitsForTheHolderBeforeAnyModInit`、`TestSingletonGivesUpAtStartupWaitWithoutTakingTheKey`、`TestSingletonTakesOverAfterTheHolderExpires`、`TestSingletonReportsAnUnavailableStoreAtStartupWait`、`TestSingletonClaimsItsOwnValueAfterALostAcquireReply`；其余 21 项见文件
+- [startup_budget_promises_test.go](../../../framework/app/startup_budget_promises_test.go)：`TestStartupHookCancellationPreservesDependencies`、`TestSignalDuringModStartNeverReachesServiceInit`
+- [startup_cleanup_promises_test.go](../../../framework/app/startup_cleanup_promises_test.go)：`TestServiceInitFailureStopsWhatInitStartedBeforeTheMods`、`TestStartupCleanupThatDoesNotFinishKeepsTheModsAndTheLock`
+- [stop_budget_floor_test.go](../../../framework/app/stop_budget_floor_test.go)：`TestDeclaredStopBudgetIsGrantedWhenTotalCoversItAndTheFloors`、`TestLargeDeclaredStopBudgetKeepsTheFloorOfEarlierMods`、`TestGeneratedDefaultShutdownBudgetsCoverEveryMod`、`TestStopBudgetsSplitEvenlyWhenTotalCannotCoverTheFloors`、`TestUndeclaredStopBudgetsKeepTheEvenSplit`
+- [stop_budget_generated_test.go](../../../framework/app/stop_budget_generated_test.go)：`TestGeneratedGameServiceTotalCoversEveryModFloorAndTheDeclaredBudget`、`TestGeneratedGameServiceStopsWithoutBudgetWarnings`
+- [stop_budget_test.go](../../../framework/app/stop_budget_test.go)：`TestDeclaredStopBudgetIsHonoredWithinTotalTimeout`、`TestStopBudgetsScaleProportionallyWhenTotalIsInsufficient`、`TestGeneratedDefaultsGrantDataEngineItsScaledDeclaredBudget`、`TestServiceModStopPlansAroundLaterSharedDeclaredBudget`、`TestDeclaredStopBudgetAppliesWithoutTotalDeadline`；其余 1 项见文件
 
 ### app/buildinfo
 
-- [buildinfo_test.go](../../../app/buildinfo/buildinfo_test.go)：`TestInfoDefaultsToDevVersion`、`TestInfoStringIncludesLinkedMetadata`
+- [buildinfo_test.go](../../../framework/app/buildinfo/buildinfo_test.go)：`TestInfoDefaultsToDevVersion`、`TestInfoStringIncludesLinkedMetadata`
 
 ### internal/stopcontract
 
@@ -132,21 +132,21 @@
 
 ### lifecycle
 
-- [guards_promises_test.go](../../../lifecycle/guards_promises_test.go)：`TestRegistryAndManagerGroupRefuseInvalidRegistrationsAndTransitions`
-- [lifecycle_test.go](../../../lifecycle/lifecycle_test.go)：`TestEmitOrder`、`TestEmitAllContinuesAfterFailure`、`TestRegisterReplacesSamePhaseAndName`、`TestEmitRecoversHookPanic`、`TestEmitAllWatchedReportsEachHookBeforeItRuns`
-- [manager_group_test.go](../../../lifecycle/manager_group_test.go)：`TestManagerGroupLifecycleAndIdempotentStop`、`TestManagerGroupInitFailureRollsBackInitializedOnly`、`TestManagerGroupStartFailureContainsPanicAndContinuesCleanup`、`TestNewManagerGroupRejectsInvalidNames`
+- [guards_promises_test.go](../../../infra/base/lifecycle/guards_promises_test.go)：`TestRegistryAndManagerGroupRefuseInvalidRegistrationsAndTransitions`
+- [lifecycle_test.go](../../../infra/base/lifecycle/lifecycle_test.go)：`TestEmitOrder`、`TestEmitAllContinuesAfterFailure`、`TestRegisterReplacesSamePhaseAndName`、`TestEmitRecoversHookPanic`、`TestEmitAllWatchedReportsEachHookBeforeItRuns`
+- [manager_group_test.go](../../../infra/base/lifecycle/manager_group_test.go)：`TestManagerGroupLifecycleAndIdempotentStop`、`TestManagerGroupInitFailureRollsBackInitializedOnly`、`TestManagerGroupStartFailureContainsPanicAndContinuesCleanup`、`TestNewManagerGroupRejectsInvalidNames`
 
 ### manager
 
-- [abort_promises_test.go](../../../manager/abort_promises_test.go)：`TestStartAbortedByShutdownReportsARollbackFailure`
-- [engine_lifecycle_promises_test.go](../../../manager/engine_lifecycle_promises_test.go)：`TestConcurrentStartHasOneOwner`、`TestSingleAttemptAfterFailureOrStop`、`TestProvidePreconditionDoesNotConsumeStartup`、`TestLastStartupHandoverAlsoContainsStopPanic`、`TestStopPanicPreservesCauseAndContinues`；其余 4 项见文件
-- [engine_test.go](../../../manager/engine_test.go)：`TestEngineStartsInRegistrationOrderAndStopsInReverse`、`TestEngineStartsDependenciesFirstAndTearsDownAfterDependents`、`TestEngineOrderIsStableAcrossRunsForIndependentManagers`、`TestEngineRollsBackStartedManagersWhenOneFails`、`TestEngineStopPrefersBoundedHookAndPassesContext`；其余 8 项见文件
-- [guards_promises_test.go](../../../manager/guards_promises_test.go)：`TestEngineReportsRollbackFailuresAndRefusesCycles`
-- [order_test.go](../../../manager/order_test.go)：`TestOrderRejectsCyclesByName`、`TestOrderRejectsMissingDependencyNamingBothSides`、`TestOrderRejectsDuplicateAndInvalidEntries`、`TestOrderHandlesDiamondDependencies`、`TestOrderIgnoresDependsOnListingOrder`；其余 2 项见文件
-- [register_during_start_promises_test.go](../../../manager/register_during_start_promises_test.go)：`TestRegisterDuringTheFirstStartIsRefused`
-- [stop_contract_test.go](../../../manager/stop_contract_test.go)：`TestEngineStopContract`
-- [stop_during_last_start_promises_test.go](../../../manager/stop_during_last_start_promises_test.go)：`TestStopDuringTheLastStartStillStopsWhatStarted`
-- [stop_retry_promises_test.go](../../../manager/stop_retry_promises_test.go)：`TestEngineStopRetryWaitsForTheManagerTheFirstStopCouldNotDrain`、`TestEngineConcurrentStopWaitsWithinItsOwnContext`
+- [abort_promises_test.go](../../../framework/manager/abort_promises_test.go)：`TestStartAbortedByShutdownReportsARollbackFailure`
+- [engine_lifecycle_promises_test.go](../../../framework/manager/engine_lifecycle_promises_test.go)：`TestConcurrentStartHasOneOwner`、`TestSingleAttemptAfterFailureOrStop`、`TestProvidePreconditionDoesNotConsumeStartup`、`TestLastStartupHandoverAlsoContainsStopPanic`、`TestStopPanicPreservesCauseAndContinues`；其余 4 项见文件
+- [engine_test.go](../../../framework/manager/engine_test.go)：`TestEngineStartsInRegistrationOrderAndStopsInReverse`、`TestEngineStartsDependenciesFirstAndTearsDownAfterDependents`、`TestEngineOrderIsStableAcrossRunsForIndependentManagers`、`TestEngineRollsBackStartedManagersWhenOneFails`、`TestEngineStopPrefersBoundedHookAndPassesContext`；其余 8 项见文件
+- [guards_promises_test.go](../../../framework/manager/guards_promises_test.go)：`TestEngineReportsRollbackFailuresAndRefusesCycles`
+- [order_test.go](../../../framework/manager/order_test.go)：`TestOrderRejectsCyclesByName`、`TestOrderRejectsMissingDependencyNamingBothSides`、`TestOrderRejectsDuplicateAndInvalidEntries`、`TestOrderHandlesDiamondDependencies`、`TestOrderIgnoresDependsOnListingOrder`；其余 2 项见文件
+- [register_during_start_promises_test.go](../../../framework/manager/register_during_start_promises_test.go)：`TestRegisterDuringTheFirstStartIsRefused`
+- [stop_contract_test.go](../../../framework/manager/stop_contract_test.go)：`TestEngineStopContract`
+- [stop_during_last_start_promises_test.go](../../../framework/manager/stop_during_last_start_promises_test.go)：`TestStopDuringTheLastStartStillStopsWhatStarted`
+- [stop_retry_promises_test.go](../../../framework/manager/stop_retry_promises_test.go)：`TestEngineStopRetryWaitsForTheManagerTheFirstStopCouldNotDrain`、`TestEngineConcurrentStopWaitsWithinItsOwnContext`
 
 </details>
 

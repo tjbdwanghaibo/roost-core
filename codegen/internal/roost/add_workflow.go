@@ -36,7 +36,7 @@ func addEntityLifecycle(root string, manifest Manifest, options AddOptions) ([]s
 		return nil, fmt.Errorf("Entity lifecycle requires the instance Entity runtime published by Nest; run: roost add mod nest -service %s", service)
 	}
 	persistenceAlias := "engine"
-	persistenceImport := "github.com/tjbdwanghaibo/roost-core/dataengine/engine"
+	persistenceImport := "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	path := filepath.Join(root, "game", "lifecycle", entityName+".go")
 	if _, err := os.Stat(path); err == nil {
 		return nil, fmt.Errorf("%s already exists", relativeSlash(root, path))
@@ -50,10 +50,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	{{PERSISTENCE_IMPORT}}
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	%s %q
 )
 
@@ -275,7 +275,7 @@ import (
 	%s %q
 	player_agent %q
 	%ssyncsender %q
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	%q
 )
 
@@ -330,8 +330,8 @@ func renderNestController(domain string) string {
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/roost-core/app"
-	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
 type Controller struct {

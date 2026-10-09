@@ -6,8 +6,8 @@ import (
 
 	giftitem "{{MODULE}}/saga/gift_item"
 	"github.com/spf13/viper"
-	kitsaga "github.com/tjbdwanghaibo/roost-core/kit/saga"
-	"github.com/tjbdwanghaibo/roost-core/saga"
+	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 )
 
 // senderRestartAllowance 是补偿预算里留给“崩溃的发送方进程被重新拉起、跑完 Init、步骤消费者重新

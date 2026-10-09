@@ -1,7 +1,7 @@
 package remoteflow
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

@@ -79,7 +79,7 @@ var (
 	staged := writeProjectFile(t, root, "internal/fresh/fresh.go", `package fresh
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/skill"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 	kitmods "github.com/tjbdwanghaibo/roost-kit/mods"
 )
 
@@ -99,16 +99,16 @@ var (
 	}
 	rewritten, _ := os.ReadFile(mixed)
 	for _, want := range []string{
-		`dataengine "github.com/tjbdwanghaibo/roost-core/dataengine/engine"`, // package name changes: keep the identifier
-		`kitredis "github.com/tjbdwanghaibo/roost-core/kit/redis"`,           // Mod glue stays in kit — and kit itself moved
-		`coreredis "github.com/tjbdwanghaibo/roost-core/redis/driver"`,       // moved symbols get a second import (driver subpackage)
+		`dataengine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"`, // package name changes: keep the identifier
+		`kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"`,           // Mod glue stays in kit — and kit itself moved
+		`coreredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"`,       // moved symbols get a second import (driver subpackage)
 		`_ = coreredis.NewClient`,
 		`_ = kitredis.NewRedisMod`,
-		`"github.com/tjbdwanghaibo/roost-core/syncstream"`,
+		`"github.com/tjbdwanghaibo/roost-core/framework/sync/syncstream"`,
 		`syncstream.HealthOptions{}`,                                 // no symbol table: the compiler reports the new name
-		`servicemods "github.com/tjbdwanghaibo/roost-core/kit/mods"`, // folded package: keep the identifier
-		`"github.com/tjbdwanghaibo/roost-core/skill"`,
-		`kitnats "github.com/tjbdwanghaibo/roost-core/nats/driver"`, // whole import moves to the driver
+		`servicemods "github.com/tjbdwanghaibo/roost-core/wiring/mods"`, // folded package: keep the identifier
+		`"github.com/tjbdwanghaibo/roost-core/gameplay/skill"`,
+		`kitnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"`, // whole import moves to the driver
 		`_ = kitnats.Permanent`,                                     // contract symbol: left for the compiler, no second import is invented
 		`_ = kitnats.NewClient`,
 	} {
@@ -126,10 +126,10 @@ var (
 	// Stage two moved this one: its only pre-consolidation import was the Mod
 	// glue package, which stage one left in kit.
 	staged4, _ := os.ReadFile(staged)
-	if !strings.Contains(string(staged4), `kitmods "github.com/tjbdwanghaibo/roost-core/kit/mods"`) {
+	if !strings.Contains(string(staged4), `kitmods "github.com/tjbdwanghaibo/roost-core/wiring/mods"`) {
 		t.Errorf("the kit-only file was not moved to the single module:\n%s", staged4)
 	}
-	if !strings.Contains(string(staged4), `"github.com/tjbdwanghaibo/roost-core/skill"`) {
+	if !strings.Contains(string(staged4), `"github.com/tjbdwanghaibo/roost-core/gameplay/skill"`) {
 		t.Errorf("a path already on the final layout was disturbed:\n%s", staged4)
 	}
 	goMod, _ := os.ReadFile(filepath.Join(root, "go.mod"))

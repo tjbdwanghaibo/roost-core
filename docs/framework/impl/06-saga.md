@@ -10,7 +10,7 @@
 
 ## 1. 实现边界
 
-`saga`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`framework/saga`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
@@ -35,20 +35,20 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [assembly.go](../../../saga/assembly.go) | `AssemblyConfig`、`Assembly` |
-| [command_consumer.go](../../../saga/command_consumer.go) | `StepHandler`、`MongoCommandInbox`、`CommandInboxOptions`、`StepConsumerConfig` |
-| [dataengine_step_inbox.go](../../../saga/dataengine_step_inbox.go) | `DataEngineStepInboxOptions`、`DataEngineStepInbox` |
-| [engine.go](../../../saga/engine.go) | `Options`、`StartRequest`、`ResumeRequest`、`Stats`、`Engine` |
-| [errors.go](../../../saga/errors.go) | 函数/方法或内部实现；见源码 |
-| [jetstream.go](../../../saga/jetstream.go) | `JetStreamPublisher`、`CompletionConsumerConfig` |
-| [mongo_store.go](../../../saga/mongo_store.go) | `MongoStoreOptions`、`MongoStore` |
-| [nest.go](../../../saga/nest.go) | 函数/方法或内部实现；见源码 |
-| [nest_completion_consumer.go](../../../saga/nest_completion_consumer.go) | `NestCompletionConsumerConfig`、`Completer` |
-| [nest_start_consumer.go](../../../saga/nest_start_consumer.go) | `NestStartConsumerConfig`、`Starter` |
-| [record.go](../../../saga/record.go) | `Status`、`Phase`、`Step`、`StepBudget`、`StepKey`、`StepBudgets`、`Definition`、`Lease`、`Record`、`Command`、`Completion`、`OutboxRecord` |
-| [step_operation_inbox.go](../../../saga/step_operation_inbox.go) | `Reservation` |
-| [step_transition.go](../../../saga/step_transition.go) | 函数/方法或内部实现；见源码 |
-| [store.go](../../../saga/store.go) | `ClaimRequest`、`Query`、`ApplyRequest`、`ApplyOutcome`、`Store`、`OperationClosure`、`CompletionHistory`、`CompletionHistoryStore`、`LateSuccessAlarmStore`、`Publisher`、`PublishFunc` |
+| [assembly.go](../../../framework/saga/assembly.go) | `AssemblyConfig`、`Assembly` |
+| [command_consumer.go](../../../framework/saga/command_consumer.go) | `StepHandler`、`MongoCommandInbox`、`CommandInboxOptions`、`StepConsumerConfig` |
+| [dataengine_step_inbox.go](../../../framework/saga/dataengine_step_inbox.go) | `DataEngineStepInboxOptions`、`DataEngineStepInbox` |
+| [engine.go](../../../framework/saga/engine.go) | `Options`、`StartRequest`、`ResumeRequest`、`Stats`、`Engine` |
+| [errors.go](../../../framework/saga/errors.go) | 函数/方法或内部实现；见源码 |
+| [jetstream.go](../../../framework/saga/jetstream.go) | `JetStreamPublisher`、`CompletionConsumerConfig` |
+| [mongo_store.go](../../../framework/saga/mongo_store.go) | `MongoStoreOptions`、`MongoStore` |
+| [nest.go](../../../framework/saga/nest.go) | 函数/方法或内部实现；见源码 |
+| [nest_completion_consumer.go](../../../framework/saga/nest_completion_consumer.go) | `NestCompletionConsumerConfig`、`Completer` |
+| [nest_start_consumer.go](../../../framework/saga/nest_start_consumer.go) | `NestStartConsumerConfig`、`Starter` |
+| [record.go](../../../framework/saga/record.go) | `Status`、`Phase`、`Step`、`StepBudget`、`StepKey`、`StepBudgets`、`Definition`、`Lease`、`Record`、`Command`、`Completion`、`OutboxRecord` |
+| [step_operation_inbox.go](../../../framework/saga/step_operation_inbox.go) | `Reservation` |
+| [step_transition.go](../../../framework/saga/step_transition.go) | 函数/方法或内部实现；见源码 |
+| [store.go](../../../framework/saga/store.go) | `ClaimRequest`、`Query`、`ApplyRequest`、`ApplyOutcome`、`Store`、`OperationClosure`、`CompletionHistory`、`CompletionHistoryStore`、`LateSuccessAlarmStore`、`Publisher`、`PublishFunc` |
 
 </details>
 
@@ -61,68 +61,68 @@
 
 ### saga
 
-- [assembly_health_promises_test.go](../../../saga/assembly_health_promises_test.go)：`TestAssemblyHealthIncludesEveryRequiredConsumer`、`TestAssemblyNativeConsumerClosureIsVisibleAfterFormalStart`
-- [assembly_shutdown_review_test.go](../../../saga/assembly_shutdown_review_test.go)：`TestSagaPartialSubscriptionsCleanUpAndRetry`、`TestSagaThirdConsumerDrainTimeoutCanFinishOnRetry`
-- [assembly_test.go](../../../saga/assembly_test.go)：`TestDrainSubscriptionsWaitsForConsumerClosure`、`TestAssembleBuildsEngineAndRegistersDefinitions`
-- [command_consumer_test.go](../../../saga/command_consumer_test.go)：`TestMongoCommandInboxExecutesStepOnceForMessageRedelivery`、`TestMongoCommandInboxAllowsNewSagaAttempt`、`TestMongoCommandInboxRejectsCommandIDReuse`、`TestStorageDigestsUseStableOperationIdentity`
-- [compensate_completed_promises_test.go](../../../saga/compensate_completed_promises_test.go)：`TestManualCompensateRefusesACompletedSaga`
-- [compensation_version_promises_test.go](../../../saga/compensation_version_promises_test.go)：`TestStepRefusalMovesSagaIntoCompensationOnMongoStore`、`TestRetryOrCompensateAdvancesVersionByOne`、`TestApplyCompletionAdvancesVersionByOne`
-- [completion_consumer_terminal_promises_test.go](../../../saga/completion_consumer_terminal_promises_test.go)：`TestCompletionConsumersTermTheSameTerminalErrors`
-- [completion_definition_rollout_promises_test.go](../../../saga/completion_definition_rollout_promises_test.go)：`TestACompletionBeforeItsDefinitionIsRegisteredIsRetriedNotTerminated`、`TestADefinitionThatNeverArrivesEndsInTheCoordinatorFence`
-- [completion_rule_guard_test.go](../../../saga/completion_rule_guard_test.go)：`TestJudgeCompletionIsTheUnifiedRule`、`TestCompleteJudgesOnlyThroughJudgeCompletion`
-- [consumer_bad_envelope_promises_test.go](../../../saga/consumer_bad_envelope_promises_test.go)：`TestSagaConsumersTermEveryBadEnvelopeAndAlarm`
-- [consumer_nak_maxdeliver_real_integration_test.go](../../../saga/consumer_nak_maxdeliver_real_integration_test.go)：`TestRealNatsCompletionNakBackoffAndMaxDeliver`
-- [coordinator_takeover_review_test.go](../../../saga/coordinator_takeover_review_test.go)：`TestCoordinatorLeaseTakeoverFencesTheLateApply`、`TestOutboxSupersedeAndUnknownAckOnMongoStore`
-- [cross_process_real_integration_test.go](../../../saga/cross_process_real_integration_test.go)：`TestRealMongoCoordinatorLeaseTakeover`、`TestRealSagaCrossProcessChild`、`TestRealSagaCrossProcessKillRecovers`
-- [dataengine_step_benchmark_test.go](../../../saga/dataengine_step_benchmark_test.go)
-- [dataengine_step_inbox_mark_completed_promises_test.go](../../../saga/dataengine_step_inbox_mark_completed_promises_test.go)：`TestReserveReportsSwallowedMarkCompletedFailure`
-- [dataengine_step_inbox_real_mongo_integration_test.go](../../../saga/dataengine_step_inbox_real_mongo_integration_test.go)：`TestRealMongoReserveDeterministicMarkCompletedFailureIsReportedNotSilent`
-- [dataengine_step_inbox_test.go](../../../saga/dataengine_step_inbox_test.go)：`TestDataEngineStepBindCarriesExplicitReservationFence`、`TestDataEngineStepBindRejectsReservationFromAnotherCommand`、`TestDataEngineStepInboxReservesCommandIdentityAndAllowsNewAttempt`、`TestDataEngineStepInboxReplaysAuthoritativeReceiptAndCompletesClaim`、`TestDataEngineStepInboxUsesAbsoluteOperationExpiry`；其余 1 项见文件
-- [definition_fence_abandon_promises_test.go](../../../saga/definition_fence_abandon_promises_test.go)：`TestDefinitionFenceDuringBackoffAbandonsTheOperation`
-- [digest_promises_test.go](../../../saga/digest_promises_test.go)：`TestCommandDigestReportsUnmarshalableCommands`、`TestMongoCommandInboxRefusesCommandsWhoseIdentityCannotBeDigested`、`TestCompletionDigestIsStableForMarshalableReceipts`
-- [engine_promises_test.go](../../../saga/engine_promises_test.go)：`TestEngineRegisterAndStartRefuseUnknownOrDuplicateDefinitions`、`TestEngineResumeRefusesEachIllegalRequest`、`TestEngineCompensateRefusesInFlightAndNothingToUndo`
-- [engine_test.go](../../../saga/engine_test.go)：`TestEngineCompletesForwardSteps`、`TestEngineCompensatesInReverseOrder`、`TestStartSagaIsIdempotentByBusinessKey`、`TestStartSagaRejectsBusinessKeyWithDifferentIntent`、`TestDefinitionVersionsRunSideBySideAndArePartOfIdentity`；其余 18 项见文件
-- [fenced_entity_promises_test.go](../../../saga/fenced_entity_promises_test.go)：`TestDataEngineStepHandsBackTheLeaseWhenTheEntityIsFenced`
-- [guards_promises_test.go](../../../saga/guards_promises_test.go)：`TestAssembleAndStepConsumerRefuseMissingPartsAndForeignEnvelopes`
-- [late_alarm_real_mongo_integration_test.go](../../../saga/late_alarm_real_mongo_integration_test.go)：`TestRealMongoLateSuccessAlarmIsMarkedOnce`
-- [late_step_real_mongo_integration_test.go](../../../saga/late_step_real_mongo_integration_test.go)：`TestRealMongoLateSuccessReopensACompensatedSagaOnce`
-- [mongo_resume_incarnation_promises_test.go](../../../saga/mongo_resume_incarnation_promises_test.go)：`TestMongoResumePersistsGenerationAndAcceptsFreshCompletion`、`TestMongoIncarnationSurvivesEveryRecordReadAndReplace`
-- [mongo_step_benchmark_real_mongo_integration_test.go](../../../saga/mongo_step_benchmark_real_mongo_integration_test.go)
-- [mongo_step_benchmark_test.go](../../../saga/mongo_step_benchmark_test.go)
-- [mongo_step_consumer_promises_test.go](../../../saga/mongo_step_consumer_promises_test.go)：`TestMongoStepConsumerFollowsTheOperationInbox`
-- [mongo_step_latency_real_mongo_integration_test.go](../../../saga/mongo_step_latency_real_mongo_integration_test.go)
-- [mongo_step_multiprocess_real_mongo_integration_test.go](../../../saga/mongo_step_multiprocess_real_mongo_integration_test.go)：`TestStepProcessRole`、`TestRealMongoStepProcessesFenceAttemptsInFlightAcrossProcesses`、`TestRealMongoStepProcessesConcurrentAttemptsTakeEffectOnce`
-- [mongo_step_operation_promises_test.go](../../../saga/mongo_step_operation_promises_test.go)：`TestMongoStepAttemptsOfOneOperationTakeEffectOnce`
-- [mongo_step_operation_real_mongo_integration_test.go](../../../saga/mongo_step_operation_real_mongo_integration_test.go)：`TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce`、`TestRealMongoOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife`
-- [mongo_store_corrupt_record_promises_test.go](../../../saga/mongo_store_corrupt_record_promises_test.go)：`TestMongoStoreSkipsACorruptRecordWithoutFailingTheBatch`
-- [native_cancel_review_test.go](../../../saga/native_cancel_review_test.go)：`TestNativeStepCancellationAndFenceRecovery`
-- [nest_atomic_test.go](../../../saga/nest_atomic_test.go)：`TestNativeSagaStepCommitsMutationReceiptAndCompletionEffectAtomically`
-- [nest_completion_identity_promises_test.go](../../../saga/nest_completion_identity_promises_test.go)：`TestNestCompletionRejectsForeignSagaRouteBeforeMutation`
-- [nest_completion_promises_test.go](../../../saga/nest_completion_promises_test.go)：`TestAssemblyConsumesNativeNestCompletionEffects`、`TestAssemblyKeepsItsExistingConsumerSubjects`
-- [nest_start_consumer_test.go](../../../saga/nest_start_consumer_test.go)：`TestSubscribeNestStartsUsesSharedDurableAndDecodesIntent`、`TestNestStartRejectsWrongEffectTopic`、`TestJetStreamPublisherUsesVersionedEnvelope`
-- [outbox_backoff_promises_test.go](../../../saga/outbox_backoff_promises_test.go)：`TestOutboxClaimRechecksDueAfterAnotherPublisher`
-- [performance_real_integration_test.go](../../../saga/performance_real_integration_test.go)：`TestRealSagaPerformance`
-- [promises_impl_test.go](../../../saga/promises_impl_test.go)：`TestSubscribeNestStartsRefusesEachUnsafeConfig`、`TestDecodeStepCommandRefusesOversizedForeignAndInvalidEnvelopes`、`TestHandleNestStartRefusesEachMalformedEnvelopePermanently`、`TestMongoCommandInboxRefusesUnrepresentableReceiptTTL`
-- [promises_test.go](../../../saga/promises_test.go)：`TestNewEngineRefusesEachUnsafeOption`、`TestCommandValidateRefusesEachBrokenField`、`TestCompletionValidateRefusesEachBrokenField`、`TestNestEffectCodecsRefuseEachMalformedPayload`
-- [saga_direction_3_4_promises_test.go](../../../saga/saga_direction_3_4_promises_test.go)：`TestNativeStepStaleAttemptRetryableFailureDoesNotAbandonTheLastAttempt`、`TestNativeStepReplayedRefusalOfAnEarlierAttemptIsAccepted`、`TestNativeStepLateSuccessReopensAFailedSagaToCompensateTheStep`、`TestNativeStepLateSuccessAfterCompensatedCompensatesOnlyThatStep`、`TestNativeStepLateSuccessDuringAnInFlightCompensationIsCompensatedNext`；其余 4 项见文件
-- [saga_reopen_observability_promises_test.go](../../../saga/saga_reopen_observability_promises_test.go)：`TestReopeningAFailedSagaIsCountedAndLogged`、`TestReopeningACompensatedSagaIsCountedAndLogged`、`TestLateSuccessDuringCompensationIsNotAReopen`、`TestResumeCompensatingALateStepIsCountedAndLogged`、`TestPlainResumeIsNotAReopen`；其余 1 项见文件
-- [sagafix_real_mongo_integration_test.go](../../../saga/sagafix_real_mongo_integration_test.go)：`TestRealMongoSuccessDuringBackoffRacesTheNextDispatch`、`TestRealMongoClaimDueAndListSkipACorruptRecord`
-- [start_identity_compatibility_promises_test.go](../../../saga/start_identity_compatibility_promises_test.go)：`TestStartIdentityCompatibilityAndForeignIntents`
-- [start_identity_promises_test.go](../../../saga/start_identity_promises_test.go)：`TestStartIdentitySurvivesProgressAndResume`
-- [start_rejection_promises_test.go](../../../saga/start_rejection_promises_test.go)：`TestHandleNestStartTermsDeterministicStartRefusalsAndAlarms`、`TestEmitStartRefusesDataTheCoordinatorWouldRefuse`
-- [step_admission_promises_test.go](../../../saga/step_admission_promises_test.go)：`TestStepConsumersAdmitBeforeTakingTheClaim`
-- [step_consumer_promises_test.go](../../../saga/step_consumer_promises_test.go)：`TestSubscribeMongoStepRefusesEachUnsafeConfig`、`TestSubscribeDataEngineStepRefusesEachUnsafeConfig`、`TestMongoCommandInboxReplayRefusesForeignReceipt`
-- [step_expired_promises_test.go](../../../saga/step_expired_promises_test.go)：`TestExpiredStepCommandWithoutReceiptIsAcknowledgedNotRedelivered`
-- [step_operation_attempt_cap_promises_test.go](../../../saga/step_operation_attempt_cap_promises_test.go)：`TestOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife`
-- [step_operation_benchmark_real_mongo_integration_test.go](../../../saga/step_operation_benchmark_real_mongo_integration_test.go)
-- [step_operation_incarnation_promises_test.go](../../../saga/step_operation_incarnation_promises_test.go)：`TestCoordinatorChecksTheIncarnationOfACompletion`、`TestMongoStoreMarksALateSuccessAlarmOncePerLife`、`TestCommandIDIncarnationInvertsCommandID`
-- [step_operation_promises_test.go](../../../saga/step_operation_promises_test.go)：`TestNativeStepTakesEffectAtMostOncePerOperation`、`TestNativeStepOperationInterleavingsWithCoordinatorDecisions`、`TestNativeStepLeaseNeverOutlivesTheCommandDeadline`、`TestNativeStepConsumerHandlesOperationOutcomes`、`TestMongoStoreTombstoneTellsAbandonedFromResolved`
-- [step_operation_real_mongo_integration_test.go](../../../saga/step_operation_real_mongo_integration_test.go)：`TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce`、`TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize`、`TestRealMongoTakeoverFencesTheEarlierAttemptsProjection`
-- [step_operation_review_test.go](../../../saga/step_operation_review_test.go)：`TestMongoStoreTombstoneOfAFailureCloseIsAbandoned`、`TestNativeStepExpiredDeliveryStillReplaysTheOperationsSuccess`
-- [step_operation_state_promises_test.go](../../../saga/step_operation_state_promises_test.go)：`TestOperationStateKeepsTheRefusalsOfTheTwoNewestLives`、`TestOperationStateRemembersTheLatestSupersededAttempts`
-- [step_success_in_backoff_promises_test.go](../../../saga/step_success_in_backoff_promises_test.go)：`TestNativeStepSuccessDeliveredDuringBackoffIsNotLostWhenTheOperationIsClosed`、`TestMongoStoreSuccessDuringBackoffClosesTheOperationWithItsResult`
-- [step_transition_guard_test.go](../../../saga/step_transition_guard_test.go)：`TestEveryCoordinatorWriteGoesThroughStepTransition`、`TestStepTransitionAloneDecidesTheIncarnation`
-- [transaction_cancel_review_test.go](../../../saga/transaction_cancel_review_test.go)：`TestSagaCompletionTransactionCancellationAndRetry`、`TestMongoCommandInboxCancelledBusinessWriteCanRetryAtomically`
+- [assembly_health_promises_test.go](../../../framework/saga/assembly_health_promises_test.go)：`TestAssemblyHealthIncludesEveryRequiredConsumer`、`TestAssemblyNativeConsumerClosureIsVisibleAfterFormalStart`
+- [assembly_shutdown_review_test.go](../../../framework/saga/assembly_shutdown_review_test.go)：`TestSagaPartialSubscriptionsCleanUpAndRetry`、`TestSagaThirdConsumerDrainTimeoutCanFinishOnRetry`
+- [assembly_test.go](../../../framework/saga/assembly_test.go)：`TestDrainSubscriptionsWaitsForConsumerClosure`、`TestAssembleBuildsEngineAndRegistersDefinitions`
+- [command_consumer_test.go](../../../framework/saga/command_consumer_test.go)：`TestMongoCommandInboxExecutesStepOnceForMessageRedelivery`、`TestMongoCommandInboxAllowsNewSagaAttempt`、`TestMongoCommandInboxRejectsCommandIDReuse`、`TestStorageDigestsUseStableOperationIdentity`
+- [compensate_completed_promises_test.go](../../../framework/saga/compensate_completed_promises_test.go)：`TestManualCompensateRefusesACompletedSaga`
+- [compensation_version_promises_test.go](../../../framework/saga/compensation_version_promises_test.go)：`TestStepRefusalMovesSagaIntoCompensationOnMongoStore`、`TestRetryOrCompensateAdvancesVersionByOne`、`TestApplyCompletionAdvancesVersionByOne`
+- [completion_consumer_terminal_promises_test.go](../../../framework/saga/completion_consumer_terminal_promises_test.go)：`TestCompletionConsumersTermTheSameTerminalErrors`
+- [completion_definition_rollout_promises_test.go](../../../framework/saga/completion_definition_rollout_promises_test.go)：`TestACompletionBeforeItsDefinitionIsRegisteredIsRetriedNotTerminated`、`TestADefinitionThatNeverArrivesEndsInTheCoordinatorFence`
+- [completion_rule_guard_test.go](../../../framework/saga/completion_rule_guard_test.go)：`TestJudgeCompletionIsTheUnifiedRule`、`TestCompleteJudgesOnlyThroughJudgeCompletion`
+- [consumer_bad_envelope_promises_test.go](../../../framework/saga/consumer_bad_envelope_promises_test.go)：`TestSagaConsumersTermEveryBadEnvelopeAndAlarm`
+- [consumer_nak_maxdeliver_real_integration_test.go](../../../framework/saga/consumer_nak_maxdeliver_real_integration_test.go)：`TestRealNatsCompletionNakBackoffAndMaxDeliver`
+- [coordinator_takeover_review_test.go](../../../framework/saga/coordinator_takeover_review_test.go)：`TestCoordinatorLeaseTakeoverFencesTheLateApply`、`TestOutboxSupersedeAndUnknownAckOnMongoStore`
+- [cross_process_real_integration_test.go](../../../framework/saga/cross_process_real_integration_test.go)：`TestRealMongoCoordinatorLeaseTakeover`、`TestRealSagaCrossProcessChild`、`TestRealSagaCrossProcessKillRecovers`
+- [dataengine_step_benchmark_test.go](../../../framework/saga/dataengine_step_benchmark_test.go)
+- [dataengine_step_inbox_mark_completed_promises_test.go](../../../framework/saga/dataengine_step_inbox_mark_completed_promises_test.go)：`TestReserveReportsSwallowedMarkCompletedFailure`
+- [dataengine_step_inbox_real_mongo_integration_test.go](../../../framework/saga/dataengine_step_inbox_real_mongo_integration_test.go)：`TestRealMongoReserveDeterministicMarkCompletedFailureIsReportedNotSilent`
+- [dataengine_step_inbox_test.go](../../../framework/saga/dataengine_step_inbox_test.go)：`TestDataEngineStepBindCarriesExplicitReservationFence`、`TestDataEngineStepBindRejectsReservationFromAnotherCommand`、`TestDataEngineStepInboxReservesCommandIdentityAndAllowsNewAttempt`、`TestDataEngineStepInboxReplaysAuthoritativeReceiptAndCompletesClaim`、`TestDataEngineStepInboxUsesAbsoluteOperationExpiry`；其余 1 项见文件
+- [definition_fence_abandon_promises_test.go](../../../framework/saga/definition_fence_abandon_promises_test.go)：`TestDefinitionFenceDuringBackoffAbandonsTheOperation`
+- [digest_promises_test.go](../../../framework/saga/digest_promises_test.go)：`TestCommandDigestReportsUnmarshalableCommands`、`TestMongoCommandInboxRefusesCommandsWhoseIdentityCannotBeDigested`、`TestCompletionDigestIsStableForMarshalableReceipts`
+- [engine_promises_test.go](../../../framework/saga/engine_promises_test.go)：`TestEngineRegisterAndStartRefuseUnknownOrDuplicateDefinitions`、`TestEngineResumeRefusesEachIllegalRequest`、`TestEngineCompensateRefusesInFlightAndNothingToUndo`
+- [engine_test.go](../../../framework/saga/engine_test.go)：`TestEngineCompletesForwardSteps`、`TestEngineCompensatesInReverseOrder`、`TestStartSagaIsIdempotentByBusinessKey`、`TestStartSagaRejectsBusinessKeyWithDifferentIntent`、`TestDefinitionVersionsRunSideBySideAndArePartOfIdentity`；其余 18 项见文件
+- [fenced_entity_promises_test.go](../../../framework/saga/fenced_entity_promises_test.go)：`TestDataEngineStepHandsBackTheLeaseWhenTheEntityIsFenced`
+- [guards_promises_test.go](../../../framework/saga/guards_promises_test.go)：`TestAssembleAndStepConsumerRefuseMissingPartsAndForeignEnvelopes`
+- [late_alarm_real_mongo_integration_test.go](../../../framework/saga/late_alarm_real_mongo_integration_test.go)：`TestRealMongoLateSuccessAlarmIsMarkedOnce`
+- [late_step_real_mongo_integration_test.go](../../../framework/saga/late_step_real_mongo_integration_test.go)：`TestRealMongoLateSuccessReopensACompensatedSagaOnce`
+- [mongo_resume_incarnation_promises_test.go](../../../framework/saga/mongo_resume_incarnation_promises_test.go)：`TestMongoResumePersistsGenerationAndAcceptsFreshCompletion`、`TestMongoIncarnationSurvivesEveryRecordReadAndReplace`
+- [mongo_step_benchmark_real_mongo_integration_test.go](../../../framework/saga/mongo_step_benchmark_real_mongo_integration_test.go)
+- [mongo_step_benchmark_test.go](../../../framework/saga/mongo_step_benchmark_test.go)
+- [mongo_step_consumer_promises_test.go](../../../framework/saga/mongo_step_consumer_promises_test.go)：`TestMongoStepConsumerFollowsTheOperationInbox`
+- [mongo_step_latency_real_mongo_integration_test.go](../../../framework/saga/mongo_step_latency_real_mongo_integration_test.go)
+- [mongo_step_multiprocess_real_mongo_integration_test.go](../../../framework/saga/mongo_step_multiprocess_real_mongo_integration_test.go)：`TestStepProcessRole`、`TestRealMongoStepProcessesFenceAttemptsInFlightAcrossProcesses`、`TestRealMongoStepProcessesConcurrentAttemptsTakeEffectOnce`
+- [mongo_step_operation_promises_test.go](../../../framework/saga/mongo_step_operation_promises_test.go)：`TestMongoStepAttemptsOfOneOperationTakeEffectOnce`
+- [mongo_step_operation_real_mongo_integration_test.go](../../../framework/saga/mongo_step_operation_real_mongo_integration_test.go)：`TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce`、`TestRealMongoOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife`
+- [mongo_store_corrupt_record_promises_test.go](../../../framework/saga/mongo_store_corrupt_record_promises_test.go)：`TestMongoStoreSkipsACorruptRecordWithoutFailingTheBatch`
+- [native_cancel_review_test.go](../../../framework/saga/native_cancel_review_test.go)：`TestNativeStepCancellationAndFenceRecovery`
+- [nest_atomic_test.go](../../../framework/saga/nest_atomic_test.go)：`TestNativeSagaStepCommitsMutationReceiptAndCompletionEffectAtomically`
+- [nest_completion_identity_promises_test.go](../../../framework/saga/nest_completion_identity_promises_test.go)：`TestNestCompletionRejectsForeignSagaRouteBeforeMutation`
+- [nest_completion_promises_test.go](../../../framework/saga/nest_completion_promises_test.go)：`TestAssemblyConsumesNativeNestCompletionEffects`、`TestAssemblyKeepsItsExistingConsumerSubjects`
+- [nest_start_consumer_test.go](../../../framework/saga/nest_start_consumer_test.go)：`TestSubscribeNestStartsUsesSharedDurableAndDecodesIntent`、`TestNestStartRejectsWrongEffectTopic`、`TestJetStreamPublisherUsesVersionedEnvelope`
+- [outbox_backoff_promises_test.go](../../../framework/saga/outbox_backoff_promises_test.go)：`TestOutboxClaimRechecksDueAfterAnotherPublisher`
+- [performance_real_integration_test.go](../../../framework/saga/performance_real_integration_test.go)：`TestRealSagaPerformance`
+- [promises_impl_test.go](../../../framework/saga/promises_impl_test.go)：`TestSubscribeNestStartsRefusesEachUnsafeConfig`、`TestDecodeStepCommandRefusesOversizedForeignAndInvalidEnvelopes`、`TestHandleNestStartRefusesEachMalformedEnvelopePermanently`、`TestMongoCommandInboxRefusesUnrepresentableReceiptTTL`
+- [promises_test.go](../../../framework/saga/promises_test.go)：`TestNewEngineRefusesEachUnsafeOption`、`TestCommandValidateRefusesEachBrokenField`、`TestCompletionValidateRefusesEachBrokenField`、`TestNestEffectCodecsRefuseEachMalformedPayload`
+- [saga_direction_3_4_promises_test.go](../../../framework/saga/saga_direction_3_4_promises_test.go)：`TestNativeStepStaleAttemptRetryableFailureDoesNotAbandonTheLastAttempt`、`TestNativeStepReplayedRefusalOfAnEarlierAttemptIsAccepted`、`TestNativeStepLateSuccessReopensAFailedSagaToCompensateTheStep`、`TestNativeStepLateSuccessAfterCompensatedCompensatesOnlyThatStep`、`TestNativeStepLateSuccessDuringAnInFlightCompensationIsCompensatedNext`；其余 4 项见文件
+- [saga_reopen_observability_promises_test.go](../../../framework/saga/saga_reopen_observability_promises_test.go)：`TestReopeningAFailedSagaIsCountedAndLogged`、`TestReopeningACompensatedSagaIsCountedAndLogged`、`TestLateSuccessDuringCompensationIsNotAReopen`、`TestResumeCompensatingALateStepIsCountedAndLogged`、`TestPlainResumeIsNotAReopen`；其余 1 项见文件
+- [sagafix_real_mongo_integration_test.go](../../../framework/saga/sagafix_real_mongo_integration_test.go)：`TestRealMongoSuccessDuringBackoffRacesTheNextDispatch`、`TestRealMongoClaimDueAndListSkipACorruptRecord`
+- [start_identity_compatibility_promises_test.go](../../../framework/saga/start_identity_compatibility_promises_test.go)：`TestStartIdentityCompatibilityAndForeignIntents`
+- [start_identity_promises_test.go](../../../framework/saga/start_identity_promises_test.go)：`TestStartIdentitySurvivesProgressAndResume`
+- [start_rejection_promises_test.go](../../../framework/saga/start_rejection_promises_test.go)：`TestHandleNestStartTermsDeterministicStartRefusalsAndAlarms`、`TestEmitStartRefusesDataTheCoordinatorWouldRefuse`
+- [step_admission_promises_test.go](../../../framework/saga/step_admission_promises_test.go)：`TestStepConsumersAdmitBeforeTakingTheClaim`
+- [step_consumer_promises_test.go](../../../framework/saga/step_consumer_promises_test.go)：`TestSubscribeMongoStepRefusesEachUnsafeConfig`、`TestSubscribeDataEngineStepRefusesEachUnsafeConfig`、`TestMongoCommandInboxReplayRefusesForeignReceipt`
+- [step_expired_promises_test.go](../../../framework/saga/step_expired_promises_test.go)：`TestExpiredStepCommandWithoutReceiptIsAcknowledgedNotRedelivered`
+- [step_operation_attempt_cap_promises_test.go](../../../framework/saga/step_operation_attempt_cap_promises_test.go)：`TestOperationAttemptsAccumulatedOverResumesDoNotBlockANewLife`
+- [step_operation_benchmark_real_mongo_integration_test.go](../../../framework/saga/step_operation_benchmark_real_mongo_integration_test.go)
+- [step_operation_incarnation_promises_test.go](../../../framework/saga/step_operation_incarnation_promises_test.go)：`TestCoordinatorChecksTheIncarnationOfACompletion`、`TestMongoStoreMarksALateSuccessAlarmOncePerLife`、`TestCommandIDIncarnationInvertsCommandID`
+- [step_operation_promises_test.go](../../../framework/saga/step_operation_promises_test.go)：`TestNativeStepTakesEffectAtMostOncePerOperation`、`TestNativeStepOperationInterleavingsWithCoordinatorDecisions`、`TestNativeStepLeaseNeverOutlivesTheCommandDeadline`、`TestNativeStepConsumerHandlesOperationOutcomes`、`TestMongoStoreTombstoneTellsAbandonedFromResolved`
+- [step_operation_real_mongo_integration_test.go](../../../framework/saga/step_operation_real_mongo_integration_test.go)：`TestRealMongoConcurrentAttemptsOfOneOperationReserveOnce`、`TestRealMongoSupersedeAndProjectionOfTheSameAttemptSerialize`、`TestRealMongoTakeoverFencesTheEarlierAttemptsProjection`
+- [step_operation_review_test.go](../../../framework/saga/step_operation_review_test.go)：`TestMongoStoreTombstoneOfAFailureCloseIsAbandoned`、`TestNativeStepExpiredDeliveryStillReplaysTheOperationsSuccess`
+- [step_operation_state_promises_test.go](../../../framework/saga/step_operation_state_promises_test.go)：`TestOperationStateKeepsTheRefusalsOfTheTwoNewestLives`、`TestOperationStateRemembersTheLatestSupersededAttempts`
+- [step_success_in_backoff_promises_test.go](../../../framework/saga/step_success_in_backoff_promises_test.go)：`TestNativeStepSuccessDeliveredDuringBackoffIsNotLostWhenTheOperationIsClosed`、`TestMongoStoreSuccessDuringBackoffClosesTheOperationWithItsResult`
+- [step_transition_guard_test.go](../../../framework/saga/step_transition_guard_test.go)：`TestEveryCoordinatorWriteGoesThroughStepTransition`、`TestStepTransitionAloneDecidesTheIncarnation`
+- [transaction_cancel_review_test.go](../../../framework/saga/transaction_cancel_review_test.go)：`TestSagaCompletionTransactionCancellationAndRetry`、`TestMongoCommandInboxCancelledBusinessWriteCanRetryAtomically`
 
 </details>
 

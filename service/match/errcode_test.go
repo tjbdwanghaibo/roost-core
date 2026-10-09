@@ -6,8 +6,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/errcode"
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
 // The segment this package is allocated, and how much of it is paired.

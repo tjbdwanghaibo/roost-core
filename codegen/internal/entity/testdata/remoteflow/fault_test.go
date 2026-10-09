@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 func remoteNatsURL() string {

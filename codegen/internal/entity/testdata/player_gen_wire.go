@@ -6,8 +6,8 @@ import (
 	"sync"
 
 	"github.com/tjbdwanghaibo/cube/game/clientsync"
-	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
 var registerPlayerEntityOnce sync.Once

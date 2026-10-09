@@ -13,10 +13,10 @@ import (
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	player_agent "{{MODULE}}/game/player_agent"
 	"{{MODULE}}/protocol/pb"
-	"github.com/tjbdwanghaibo/roost-core/errcode"
-	"github.com/tjbdwanghaibo/roost-core/gateway"
-	svcaccount "github.com/tjbdwanghaibo/roost-core/kit/service/account"
-	svcchat "github.com/tjbdwanghaibo/roost-core/kit/service/chat"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
 )
 
 // HandleEnterGame makes sure the authenticated player has a Player Entity.

@@ -34,7 +34,7 @@ package PACKAGE
 // The generator writes through ` + "`dirtyMask`" + `; a profile without it does not
 // compile, and the generator says so rather than leaving you to guess.
 
-import coreattribute "github.com/tjbdwanghaibo/roost-core/attribute"
+import coreattribute "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
 
 type (
 	// AttrID identifies one attribute inside a profile.

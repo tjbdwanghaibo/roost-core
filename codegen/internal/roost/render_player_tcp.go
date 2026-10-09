@@ -24,7 +24,7 @@ import (
 	"net"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 )
 
 // applicationAuthenticator is application-owned. Validate a signed, expiring
@@ -128,10 +128,10 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
-	"github.com/tjbdwanghaibo/roost-core/gateway"
-	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	accessplayer %q
 	%q
 )
@@ -1214,7 +1214,7 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	accessplayer %q
 	%q
 )

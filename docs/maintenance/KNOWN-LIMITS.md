@@ -10,7 +10,7 @@
 | 跨机HA与Linux物理故障 | 本机集群/loopback不证明跨机器分区、掉电、真实网卡 | EXTERNAL-VERIFICATION E01～E28具名清单 |
 | 客户端引擎 | 有Go/C#及Unity适配源码与测试，未声明真实Unity/Godot/Unreal全矩阵 | 各引擎实机、线程、断线与跨平台确定性 |
 | 原生C++接入 | 本版无完整C++/Unreal/GDExtension SDK承诺 | 独立设计和协议一致性验收 |
-| Kit分层 | 七个service领域实现仍在kit/service | 未来迁移应单独评估，不由文档清理暗改 |
+| 目录升级 | 分类与 Service/Wiring 拆分已实施；旧 kit 与领域 alias 不保留 | [方案与升级要求](../framework/PACKAGE-REORGANIZATION.md)，重新生成并编译消费者；尚未发布新版本 |
 | 独立 Gate | 已有嵌入 Game 的 TCP 接入，跨 Gate/Game 转发和集群会话闭环待实施 | [设计与分阶段验收](../framework/GATEWAY.md)；现有接入测试不等于独立网关验收 |
 | schema升级 | DAO自动迁移已撤销；显式通用migration工具仍在 | 业务明确离线转换和保留数据范围 |
 | Player跨机 | 以已落库数据为准，不要求本地WAL热迁移 | 应用的停写/排空/切换方案 |

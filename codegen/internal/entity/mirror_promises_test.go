@@ -172,7 +172,7 @@ func TestMirrorMarkerValidation(t *testing.T) {
 		}
 	}
 	// 实体与 DTO 生成同一个文件名：生成前拒绝，不写任何文件。
-	dir, _ := writeEntitySource(t, "package game\n\nimport \"github.com/tjbdwanghaibo/roost-core/entity\"\n\n//roost:entity entityKind=EntityKindGuild\ntype Guild struct{ *entity.EntityBase }\n\n//roost:mirror entityKind=EntityKindGuild coll=guild\ntype guild struct{}\n")
+	dir, _ := writeEntitySource(t, "package game\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n\n//roost:entity entityKind=EntityKindGuild\ntype Guild struct{ *entity.EntityBase }\n\n//roost:mirror entityKind=EntityKindGuild coll=guild\ntype guild struct{}\n")
 	if err := Run([]string{"-dir", dir}, io.Discard); err == nil || !strings.Contains(err.Error(), "would both generate") {
 		t.Fatalf("entity and mirror with one output name: %v", err)
 	}

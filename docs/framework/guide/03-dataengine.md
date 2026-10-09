@@ -12,7 +12,7 @@
 
 ## 1. 唯一正式持久链路
 
-DAO 变更 → Nest CommitRecord → nestwal.WAL → dataengine/engine.Projector → Store/Mongo → outbox。dataengine 定义契约，engine 实现 Assembly、Runtime、Repository 和投影；kit/dataengine 负责依赖、配置与生命周期装配。旧独立 nestwal.Committer/Runtime 不作为现行入口。
+DAO 变更 → Nest CommitRecord → nestwal.WAL → dataengine/engine.Projector → Store/Mongo → outbox。dataengine 定义契约，engine 实现 Assembly、Runtime、Repository 和投影；wiring/dataengine 负责依赖、配置与生命周期装配。旧独立 nestwal.Committer/Runtime 不作为现行入口。
 
 一条 CommitRecord 原子准入包含本事务 mutation、effect 与 receipt。Tracker 的同步脏状态与本事务持久变更不是同一份数据。Mutation 表达 Put/Patch/Delete，并携带版本和事务身份；多 DAO 是正式批量契约，不能假定一实体只有一文档。
 

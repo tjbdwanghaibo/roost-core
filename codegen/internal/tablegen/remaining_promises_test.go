@@ -85,7 +85,7 @@ func TestGeneratedLoaderAndObjectConverterMatchSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTablegenTestFile(t, filepath.Join(root, "main.go"), `package main
-import("context";"strings";"example.com/tablecheck/generated";"github.com/tjbdwanghaibo/roost-core/configdata")
+import("context";"strings";"example.com/tablecheck/generated";"github.com/tjbdwanghaibo/roost-core/framework/configdata")
 func main(){
  r:=configdata.NewRegistry();if err:=generated.RegisterGeneratedConfigData(r);err!=nil{panic(err)}
  snap,err:=configdata.NewStore(r,"data").Load(context.Background());if err!=nil{panic(err)}

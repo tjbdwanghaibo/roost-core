@@ -10,7 +10,7 @@
 
 ## 1. 实现边界
 
-`ai`、`container`、`etcd`、`index`、`migration`、`misc`、`safemap`、`nats`、`internal/operation`、`internal/rangecontract`、`ownerroute`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`gameplay/ai`、`infra/base/container`、`infra/network/etcd`、`infra/base/index`、`infra/storage/migration`、`infra/base/misc`、`infra/base/safemap`、`infra/network/nats`、`internal/operation`、`internal/rangecontract`、`infra/network/ownerroute`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
@@ -35,13 +35,13 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [behavior_strategy.go](../../../ai/behavior_strategy.go) | `ActionEnd`、`BehaviorContext`、`BehaviorStrategyOptions`、`BehaviorStrategy`、`TaskflowAction` |
-| [blackboard.go](../../../ai/blackboard.go) | `Blackboard` |
-| [controller.go](../../../ai/controller.go) | `ControllerHooks`、`Controller` |
-| [nodes.go](../../../ai/nodes.go) | `ParallelPolicy`、`Parallel`、`Repeat`、`UntilSuccess`、`Succeeder`、`Condition`、`Guard`、`Cooldown`、`TimeLimit`、`RandomSelector` |
-| [strategy.go](../../../ai/strategy.go) | `Context`、`Strategy`、`StoppableStrategy` |
-| [tree.go](../../../ai/tree.go) | `Status`、`Node`、`FuncNode`、`Sequence`、`Selector`、`Inverter` |
-| [tree_parser.go](../../../ai/tree_parser.go) | `Registry` |
+| [behavior_strategy.go](../../../gameplay/ai/behavior_strategy.go) | `ActionEnd`、`BehaviorContext`、`BehaviorStrategyOptions`、`BehaviorStrategy`、`TaskflowAction` |
+| [blackboard.go](../../../gameplay/ai/blackboard.go) | `Blackboard` |
+| [controller.go](../../../gameplay/ai/controller.go) | `ControllerHooks`、`Controller` |
+| [nodes.go](../../../gameplay/ai/nodes.go) | `ParallelPolicy`、`Parallel`、`Repeat`、`UntilSuccess`、`Succeeder`、`Condition`、`Guard`、`Cooldown`、`TimeLimit`、`RandomSelector` |
+| [strategy.go](../../../gameplay/ai/strategy.go) | `Context`、`Strategy`、`StoppableStrategy` |
+| [tree.go](../../../gameplay/ai/tree.go) | `Status`、`Node`、`FuncNode`、`Sequence`、`Selector`、`Inverter` |
+| [tree_parser.go](../../../gameplay/ai/tree_parser.go) | `Registry` |
 
 ### container
 
@@ -49,10 +49,10 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [bucket.go](../../../container/bucket.go) | `BucketHolder`、`Bucket` |
-| [keymap.go](../../../container/keymap.go) | `Key`、`KeyMap` |
-| [object_pool.go](../../../container/object_pool.go) | `ObjectPool` |
-| [topologic_sort.go](../../../container/topologic_sort.go) | `TopologicalSortCache` |
+| [bucket.go](../../../infra/base/container/bucket.go) | `BucketHolder`、`Bucket` |
+| [keymap.go](../../../infra/base/container/keymap.go) | `Key`、`KeyMap` |
+| [object_pool.go](../../../infra/base/container/object_pool.go) | `ObjectPool` |
+| [topologic_sort.go](../../../infra/base/container/topologic_sort.go) | `TopologicalSortCache` |
 
 ### etcd
 
@@ -60,14 +60,14 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [client.go](../../../etcd/client.go) | `IEtcd`、`KV`、`Cmp`、`CmpTarget`、`CmpOp`、`Op`、`OpType`、`TxnResponse` |
-| [config.go](../../../etcd/config.go) | `Config` |
-| [discovery.go](../../../etcd/discovery.go) | `IDiscovery`、`ServiceInfo`、`IServiceWatcher`、`IServiceWatcherStatus`、`ServiceEvent` |
-| [election.go](../../../etcd/election.go) | `IElection`、`IFencedElection`、`IElectionFactory` |
-| [errors.go](../../../etcd/errors.go) | 函数/方法或内部实现；见源码 |
-| [local_mirror.go](../../../etcd/local_mirror.go) | `PrefixSnapshot`、`IPrefixSnapshotReader`、`LocalMirrorConfig`、`LocalMirrorPublishOptions`、`LocalMirrorEntry`、`LocalMirrorStatus`、`LocalMirrorChangeType`、`LocalMirrorChange`、`LocalMirrorHandler`、`LocalMirrorSubscribeOptions`、`ILocalMirror`、`ILocalMirrorSubscriber` |
-| [watch_callback.go](../../../etcd/watch_callback.go) | 函数/方法或内部实现；见源码 |
-| [watcher.go](../../../etcd/watcher.go) | `IWatcher`、`IWatcherError`、`IWatcherReady`、`WatchHandler`、`IWatchSubscription`、`WatchEvent`、`EventType`、`WatchOption` |
+| [client.go](../../../infra/network/etcd/client.go) | `IEtcd`、`KV`、`Cmp`、`CmpTarget`、`CmpOp`、`Op`、`OpType`、`TxnResponse` |
+| [config.go](../../../infra/network/etcd/config.go) | `Config` |
+| [discovery.go](../../../infra/network/etcd/discovery.go) | `IDiscovery`、`ServiceInfo`、`IServiceWatcher`、`IServiceWatcherStatus`、`ServiceEvent` |
+| [election.go](../../../infra/network/etcd/election.go) | `IElection`、`IFencedElection`、`IElectionFactory` |
+| [errors.go](../../../infra/network/etcd/errors.go) | 函数/方法或内部实现；见源码 |
+| [local_mirror.go](../../../infra/network/etcd/local_mirror.go) | `PrefixSnapshot`、`IPrefixSnapshotReader`、`LocalMirrorConfig`、`LocalMirrorPublishOptions`、`LocalMirrorEntry`、`LocalMirrorStatus`、`LocalMirrorChangeType`、`LocalMirrorChange`、`LocalMirrorHandler`、`LocalMirrorSubscribeOptions`、`ILocalMirror`、`ILocalMirrorSubscriber` |
+| [watch_callback.go](../../../infra/network/etcd/watch_callback.go) | 函数/方法或内部实现；见源码 |
+| [watcher.go](../../../infra/network/etcd/watcher.go) | `IWatcher`、`IWatcherError`、`IWatcherReady`、`WatchHandler`、`IWatchSubscription`、`WatchEvent`、`EventType`、`WatchOption` |
 
 ### etcd/driver
 
@@ -75,13 +75,13 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [assembly.go](../../../etcd/driver/assembly.go) | `Assembly` |
-| [client.go](../../../etcd/driver/client.go) | `Client` |
-| [discovery.go](../../../etcd/driver/discovery.go) | `Discovery` |
-| [election.go](../../../etcd/driver/election.go) | `ElectionFactory` |
-| [local_mirror.go](../../../etcd/driver/local_mirror.go) | 函数/方法或内部实现；见源码 |
-| [local_mirror_subscription.go](../../../etcd/driver/local_mirror_subscription.go) | 函数/方法或内部实现；见源码 |
-| [watcher.go](../../../etcd/driver/watcher.go) | 函数/方法或内部实现；见源码 |
+| [assembly.go](../../../infra/network/etcd/driver/assembly.go) | `Assembly` |
+| [client.go](../../../infra/network/etcd/driver/client.go) | `Client` |
+| [discovery.go](../../../infra/network/etcd/driver/discovery.go) | `Discovery` |
+| [election.go](../../../infra/network/etcd/driver/election.go) | `ElectionFactory` |
+| [local_mirror.go](../../../infra/network/etcd/driver/local_mirror.go) | 函数/方法或内部实现；见源码 |
+| [local_mirror_subscription.go](../../../infra/network/etcd/driver/local_mirror_subscription.go) | 函数/方法或内部实现；见源码 |
+| [watcher.go](../../../infra/network/etcd/driver/watcher.go) | 函数/方法或内部实现；见源码 |
 
 ### index
 
@@ -89,7 +89,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [index.go](../../../index/index.go) | `Index`、`OrderedIndex` |
+| [index.go](../../../infra/base/index/index.go) | `Index`、`OrderedIndex` |
 
 ### internal/operation
 
@@ -114,7 +114,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [migration.go](../../../migration/migration.go) | `Versioned`、`Step`、`Registry` |
+| [migration.go](../../../infra/storage/migration/migration.go) | `Versioned`、`Step`、`Registry` |
 
 ### misc
 
@@ -122,8 +122,8 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [hash.go](../../../misc/hash.go) | 函数/方法或内部实现；见源码 |
-| [integer.go](../../../misc/integer.go) | `Integer` |
+| [hash.go](../../../infra/base/misc/hash.go) | 函数/方法或内部实现；见源码 |
+| [integer.go](../../../infra/base/misc/integer.go) | `Integer` |
 
 ### nats
 
@@ -131,13 +131,13 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [client.go](../../../nats/client.go) | `IClient`、`MsgHandler`、`Msg`、`ISubscription` |
-| [config.go](../../../nats/config.go) | `Config` |
-| [errors.go](../../../nats/errors.go) | 函数/方法或内部实现；见源码 |
-| [jetstream.go](../../../nats/jetstream.go) | `JetStreamStorage`、`JetStreamDeliverPolicy`、`IJetStream`、`JetStreamConfig`、`JetStreamPublishOptions`、`JetStreamPublishAck`、`JetStreamConsumerConfig`、`JetStreamHandler`、`JetStreamMsg`、`IJetStreamSubscription` |
-| [message.go](../../../nats/message.go) | `NatsMsg`、`BroadcastType` |
-| [rpc.go](../../../nats/rpc.go) | `IRpc`、`RpcCallback`、`RetryPolicy` |
-| [subject.go](../../../nats/subject.go) | `SubjectBuilder` |
+| [client.go](../../../infra/network/nats/client.go) | `IClient`、`MsgHandler`、`Msg`、`ISubscription` |
+| [config.go](../../../infra/network/nats/config.go) | `Config` |
+| [errors.go](../../../infra/network/nats/errors.go) | 函数/方法或内部实现；见源码 |
+| [jetstream.go](../../../infra/network/nats/jetstream.go) | `JetStreamStorage`、`JetStreamDeliverPolicy`、`IJetStream`、`JetStreamConfig`、`JetStreamPublishOptions`、`JetStreamPublishAck`、`JetStreamConsumerConfig`、`JetStreamHandler`、`JetStreamMsg`、`IJetStreamSubscription` |
+| [message.go](../../../infra/network/nats/message.go) | `NatsMsg`、`BroadcastType` |
+| [rpc.go](../../../infra/network/nats/rpc.go) | `IRpc`、`RpcCallback`、`RetryPolicy` |
+| [subject.go](../../../infra/network/nats/subject.go) | `SubjectBuilder` |
 
 ### nats/driver
 
@@ -145,12 +145,12 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [assembly.go](../../../nats/driver/assembly.go) | `Assembly` |
-| [client.go](../../../nats/driver/client.go) | `Client` |
-| [jetstream.go](../../../nats/driver/jetstream.go) | `JetStreamClient` |
-| [options.go](../../../nats/driver/options.go) | `ClientOptions` |
-| [rpc.go](../../../nats/driver/rpc.go) | `RPCClient` |
-| [subscription.go](../../../nats/driver/subscription.go) | 函数/方法或内部实现；见源码 |
+| [assembly.go](../../../infra/network/nats/driver/assembly.go) | `Assembly` |
+| [client.go](../../../infra/network/nats/driver/client.go) | `Client` |
+| [jetstream.go](../../../infra/network/nats/driver/jetstream.go) | `JetStreamClient` |
+| [options.go](../../../infra/network/nats/driver/options.go) | `ClientOptions` |
+| [rpc.go](../../../infra/network/nats/driver/rpc.go) | `RPCClient` |
+| [subscription.go](../../../infra/network/nats/driver/subscription.go) | 函数/方法或内部实现；见源码 |
 
 ### ownerroute
 
@@ -158,8 +158,8 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [bus.go](../../../ownerroute/bus.go) | `BusTransport` |
-| [route.go](../../../ownerroute/route.go) | `OwnerRoute`、`Resolver`、`Transport`、`Router` |
+| [bus.go](../../../infra/network/ownerroute/bus.go) | `BusTransport` |
+| [route.go](../../../infra/network/ownerroute/route.go) | `OwnerRoute`、`Resolver`、`Transport`、`Router` |
 
 ### safemap
 
@@ -167,11 +167,11 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [fast.go](../../../safemap/fast.go) | `FastMap` |
-| [hash.go](../../../safemap/hash.go) | `Integer` |
-| [map.go](../../../safemap/map.go) | `IMap`、`Entry`、`HashFunc`、`ComputeFunc` |
-| [sharded.go](../../../safemap/sharded.go) | `ShardedSafeMap` |
-| [small.go](../../../safemap/small.go) | `SmallSafeMap` |
+| [fast.go](../../../infra/base/safemap/fast.go) | `FastMap` |
+| [hash.go](../../../infra/base/safemap/hash.go) | `Integer` |
+| [map.go](../../../infra/base/safemap/map.go) | `IMap`、`Entry`、`HashFunc`、`ComputeFunc` |
+| [sharded.go](../../../infra/base/safemap/sharded.go) | `ShardedSafeMap` |
+| [small.go](../../../infra/base/safemap/small.go) | `SmallSafeMap` |
 
 </details>
 
@@ -184,55 +184,55 @@
 
 ### ai
 
-- [behavior_test.go](../../../ai/behavior_test.go)：`TestNodesGuardCooldownRepeatParallel`、`TestBehaviorStrategyDrivesTreeThroughController`、`TestTaskflowActionInterruptHook`、`TestParseTreeAssemblesAndRuns`、`TestParseTreeFailFast`；其余 3 项见文件
-- [controller_test.go](../../../ai/controller_test.go)：`TestControllerFailedInitKeepsPreviousStrategy`、`TestBehaviorTreeReadyDoesNotAdvanceSequence`、`TestBlackboardConcurrentAccessKeepsEveryWorkersWrite`
-- [deferred_launch_promises_test.go](../../../ai/deferred_launch_promises_test.go)：`TestTaskflowActionLaunchedInsideARunnerCallbackStillCompletes`
-- [frozen_completion_promises_test.go](../../../ai/frozen_completion_promises_test.go)：`TestAFrozenControllerStillDeliversTheCompletionATreeIsWaitingFor`、`TestAFrozenControllerStillDeliversMissionEndsButNotTicks`
-- [guards_promises_test.go](../../../ai/guards_promises_test.go)：`TestSetStrategyRefusesNilReentrantAndRejectedSwitches`、`TestParseTreeRefusesMissingRegistryClockAndMalformedPredicates`
-- [parallel_decision_promises_test.go](../../../ai/parallel_decision_promises_test.go)：`TestParallelStopsTickingChildrenOnceTheOutcomeIsDecided`、`TestParallelStillInterruptsRunningChildrenWhenItCompletes`
-- [switch_in_callback_promises_test.go](../../../ai/switch_in_callback_promises_test.go)：`TestSwitchRequestedInsideATickRunsAfterTheTickReturns`、`TestDeferredSwitchFailureIsReportedAndKeepsTheCurrentStrategy`
-- [tree_parser_promises_test.go](../../../ai/tree_parser_promises_test.go)：`TestTreeRegistryRefusesNamelessAndDuplicateFactories`、`TestParseTreeRefusesEachDefectByMessageAndPath`
+- [behavior_test.go](../../../gameplay/ai/behavior_test.go)：`TestNodesGuardCooldownRepeatParallel`、`TestBehaviorStrategyDrivesTreeThroughController`、`TestTaskflowActionInterruptHook`、`TestParseTreeAssemblesAndRuns`、`TestParseTreeFailFast`；其余 3 项见文件
+- [controller_test.go](../../../gameplay/ai/controller_test.go)：`TestControllerFailedInitKeepsPreviousStrategy`、`TestBehaviorTreeReadyDoesNotAdvanceSequence`、`TestBlackboardConcurrentAccessKeepsEveryWorkersWrite`
+- [deferred_launch_promises_test.go](../../../gameplay/ai/deferred_launch_promises_test.go)：`TestTaskflowActionLaunchedInsideARunnerCallbackStillCompletes`
+- [frozen_completion_promises_test.go](../../../gameplay/ai/frozen_completion_promises_test.go)：`TestAFrozenControllerStillDeliversTheCompletionATreeIsWaitingFor`、`TestAFrozenControllerStillDeliversMissionEndsButNotTicks`
+- [guards_promises_test.go](../../../gameplay/ai/guards_promises_test.go)：`TestSetStrategyRefusesNilReentrantAndRejectedSwitches`、`TestParseTreeRefusesMissingRegistryClockAndMalformedPredicates`
+- [parallel_decision_promises_test.go](../../../gameplay/ai/parallel_decision_promises_test.go)：`TestParallelStopsTickingChildrenOnceTheOutcomeIsDecided`、`TestParallelStillInterruptsRunningChildrenWhenItCompletes`
+- [switch_in_callback_promises_test.go](../../../gameplay/ai/switch_in_callback_promises_test.go)：`TestSwitchRequestedInsideATickRunsAfterTheTickReturns`、`TestDeferredSwitchFailureIsReportedAndKeepsTheCurrentStrategy`
+- [tree_parser_promises_test.go](../../../gameplay/ai/tree_parser_promises_test.go)：`TestTreeRegistryRefusesNamelessAndDuplicateFactories`、`TestParseTreeRefusesEachDefectByMessageAndPath`
 
 ### container
 
-- [bucket_range_promises_test.go](../../../container/bucket_range_promises_test.go)：`TestBucketRangeCallbackMayChangeTheHolder`、`TestRangeAllStopsAtTheFirstFalse`
-- [container_test.go](../../../container/container_test.go)：`TestBucketHolder`、`TestKeyMap`、`TestTopologicalSort`、`TestObjectPoolReusesFreelistObjectsWithoutReset`、`TestObjectPoolPutMovesObjectBetweenLists`；其余 2 项见文件
-- [keymap_topo_promises_test.go](../../../container/keymap_topo_promises_test.go)：`TestTopologicalSortHandlesUnregisteredDependencies`、`TestKeyMapRangeWithRemoveOfTheCurrentKey`
-- [pool_topo_aliasing_promises_test.go](../../../container/pool_topo_aliasing_promises_test.go)：`TestObjectPoolIgnoresASecondPutOfTheSameObject`、`TestTopologicalSortCacheDoesNotShareSlicesWithCallers`
-- [range_contract_promises_test.go](../../../container/range_contract_promises_test.go)：`TestContainerRangeContract`
+- [bucket_range_promises_test.go](../../../infra/base/container/bucket_range_promises_test.go)：`TestBucketRangeCallbackMayChangeTheHolder`、`TestRangeAllStopsAtTheFirstFalse`
+- [container_test.go](../../../infra/base/container/container_test.go)：`TestBucketHolder`、`TestKeyMap`、`TestTopologicalSort`、`TestObjectPoolReusesFreelistObjectsWithoutReset`、`TestObjectPoolPutMovesObjectBetweenLists`；其余 2 项见文件
+- [keymap_topo_promises_test.go](../../../infra/base/container/keymap_topo_promises_test.go)：`TestTopologicalSortHandlesUnregisteredDependencies`、`TestKeyMapRangeWithRemoveOfTheCurrentKey`
+- [pool_topo_aliasing_promises_test.go](../../../infra/base/container/pool_topo_aliasing_promises_test.go)：`TestObjectPoolIgnoresASecondPutOfTheSameObject`、`TestTopologicalSortCacheDoesNotShareSlicesWithCallers`
+- [range_contract_promises_test.go](../../../infra/base/container/range_contract_promises_test.go)：`TestContainerRangeContract`
 
 ### etcd/driver
 
-- [assembly_test.go](../../../etcd/driver/assembly_test.go)：`TestAssembleBuildsDiscoveryAndElectionsOnOneConnection`
-- [close_contract_promises_test.go](../../../etcd/driver/close_contract_promises_test.go)：`TestClientCloseErrorIsReportedOnceThenNil`、`TestClientConcurrentCloseAllReturnNil`、`TestClientCallsAfterCloseFailFastWithErrClosed`
-- [cluster_failover_integration_test.go](../../../etcd/driver/cluster_failover_integration_test.go)：`TestRealEtcdThreeNodeLeaderLossPreservesWatchDiscoveryAndElection`
-- [deregister_budget_promises_test.go](../../../etcd/driver/deregister_budget_promises_test.go)：`TestDiscoveryDeregisterWaitsForTheRegistrationLoopWithinItsContext`、`TestAssemblyCloseKeepsTheClientUntilDeregisterSucceeds`
-- [discovery_shutdown_test.go](../../../etcd/driver/discovery_shutdown_test.go)：`TestDiscoverySuppressesLeaseLostWarningAfterDeregister`、`TestDiscoveryWarnsWhenLeaseLostUnexpectedly`、`TestDiscoveryReregistersAfterUnexpectedLeaseLoss`、`TestDiscoveryDoesNotReregisterAfterDeregister`、`TestDiscoveryRejectsDuplicateRegisterWithoutLeakingFirstRegistration`；其余 5 项见文件
-- [election_lifetime_promises_test.go](../../../etcd/driver/election_lifetime_promises_test.go)：`TestEtcdLifetimeSuccessfulCampaignDetachesCallerAndReleasesSessionContext`、`TestEtcdLifetimeCancellationBeforeLeadershipPublication`、`TestEtcdLifetimeCanceledCampaignNeverStartsSetup`、`TestEtcdLifetimeNormalResignDoesNotCancelRevoke`、`TestEtcdLifetimeCampaignCancellationReachesSessionGrant`；其余 4 项见文件
-- [election_resign_budget_promises_test.go](../../../etcd/driver/election_resign_budget_promises_test.go)：`TestElectionResignHonoursTheCallerBudget`、`TestElectionResignWaitsForTheRevokeWhenEtcdAnswers`
-- [election_revoke_promises_test.go](../../../etcd/driver/election_revoke_promises_test.go)：`TestElectionRevokeFailedCampaignRevokesBeforeReturning`、`TestElectionRevokeCanceledCampaignOwnsOneBoundedRevoke`、`TestElectionRevokeAbandonedRevokeEndsWithClient`
-- [election_test.go](../../../etcd/driver/election_test.go)：`TestElectionFirstCampaignKeepsPreCampaignLeaderChannel`、`TestElectionLeaderPreservesBackendError`、`TestElectionCampaignContextCancellationAfterElectionDoesNotLoseLeadership`、`TestElectionFenceTracksLeadershipTerm`、`TestElectionResignClearsLifecycleBeforeReturning`
-- [guards_promises_test.go](../../../etcd/driver/guards_promises_test.go)：`TestElectionResignAndLeaderRefuseWithoutALeadership`、`TestNewLocalMirrorRefusesClientsWithoutRevisionedSnapshots`、`TestLocalMirrorWritesRefuseInvalidArgumentsBeforeReachingEtcd`、`TestLocalMirrorRecordsAClosedWatchAsItsLastError`
-- [local_mirror_promises_test.go](../../../etcd/driver/local_mirror_promises_test.go)：`TestNewLocalMirrorRefusesEachInvalidConfig`
-- [local_mirror_test.go](../../../etcd/driver/local_mirror_test.go)：`TestLocalMirrorAppliesWatchEventsAndReturnsIndependentValues`、`TestLocalMirrorWaitsForServerWatchReadiness`、`TestLocalMirrorResnapshotsAfterWatchCloses`、`TestLocalMirrorPublishesAndUsesRevisionCAS`、`TestLocalMirrorUsesNativeEtcdPrefixSemantics`；其余 8 项见文件
-- [real_etcd_deregister_budget_promises_test.go](../../../etcd/driver/real_etcd_deregister_budget_promises_test.go)：`TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget`
-- [real_etcd_election_promises_test.go](../../../etcd/driver/real_etcd_election_promises_test.go)：`TestRealEtcdFailedCampaignRevokesItsLease`、`TestRealEtcdCanceledWinningCampaignLeavesNoPhantomLeader`、`TestRealEtcdCanceledWaitingCampaignRevokesItsLease`
-- [real_etcd_promises_test.go](../../../etcd/driver/real_etcd_promises_test.go)：`TestRealEtcdGetOfAMissingKeyIsNotFound`、`TestRealEtcdCloseAfterLeaseVanishedIsClean`
-- [real_etcd_resign_budget_promises_test.go](../../../etcd/driver/real_etcd_resign_budget_promises_test.go)：`TestRealEtcdResignHonoursTheCallerBudget`、`TestRealEtcdResignRevokesItsLease`
-- [stop_contract_test.go](../../../etcd/driver/stop_contract_test.go)：`TestDiscoveryDeregisterStopContract`、`TestAssemblyCloseStopContract`
-- [watcher_ready_test.go](../../../etcd/driver/watcher_ready_test.go)：`TestWatcherReadyWaitsForServerResponse`、`TestWatcherReadyReportsCompactedStartRevision`、`TestWatcherReadyReportsUnexpectedChannelClose`
-- [watcher_status_test.go](../../../etcd/driver/watcher_status_test.go)：`TestServiceWatcherReportsUnexpectedChannelClosure`、`TestServiceWatcherCloseIsNotReportedAsFailure`
+- [assembly_test.go](../../../infra/network/etcd/driver/assembly_test.go)：`TestAssembleBuildsDiscoveryAndElectionsOnOneConnection`
+- [close_contract_promises_test.go](../../../infra/network/etcd/driver/close_contract_promises_test.go)：`TestClientCloseErrorIsReportedOnceThenNil`、`TestClientConcurrentCloseAllReturnNil`、`TestClientCallsAfterCloseFailFastWithErrClosed`
+- [cluster_failover_integration_test.go](../../../infra/network/etcd/driver/cluster_failover_integration_test.go)：`TestRealEtcdThreeNodeLeaderLossPreservesWatchDiscoveryAndElection`
+- [deregister_budget_promises_test.go](../../../infra/network/etcd/driver/deregister_budget_promises_test.go)：`TestDiscoveryDeregisterWaitsForTheRegistrationLoopWithinItsContext`、`TestAssemblyCloseKeepsTheClientUntilDeregisterSucceeds`
+- [discovery_shutdown_test.go](../../../infra/network/etcd/driver/discovery_shutdown_test.go)：`TestDiscoverySuppressesLeaseLostWarningAfterDeregister`、`TestDiscoveryWarnsWhenLeaseLostUnexpectedly`、`TestDiscoveryReregistersAfterUnexpectedLeaseLoss`、`TestDiscoveryDoesNotReregisterAfterDeregister`、`TestDiscoveryRejectsDuplicateRegisterWithoutLeakingFirstRegistration`；其余 5 项见文件
+- [election_lifetime_promises_test.go](../../../infra/network/etcd/driver/election_lifetime_promises_test.go)：`TestEtcdLifetimeSuccessfulCampaignDetachesCallerAndReleasesSessionContext`、`TestEtcdLifetimeCancellationBeforeLeadershipPublication`、`TestEtcdLifetimeCanceledCampaignNeverStartsSetup`、`TestEtcdLifetimeNormalResignDoesNotCancelRevoke`、`TestEtcdLifetimeCampaignCancellationReachesSessionGrant`；其余 4 项见文件
+- [election_resign_budget_promises_test.go](../../../infra/network/etcd/driver/election_resign_budget_promises_test.go)：`TestElectionResignHonoursTheCallerBudget`、`TestElectionResignWaitsForTheRevokeWhenEtcdAnswers`
+- [election_revoke_promises_test.go](../../../infra/network/etcd/driver/election_revoke_promises_test.go)：`TestElectionRevokeFailedCampaignRevokesBeforeReturning`、`TestElectionRevokeCanceledCampaignOwnsOneBoundedRevoke`、`TestElectionRevokeAbandonedRevokeEndsWithClient`
+- [election_test.go](../../../infra/network/etcd/driver/election_test.go)：`TestElectionFirstCampaignKeepsPreCampaignLeaderChannel`、`TestElectionLeaderPreservesBackendError`、`TestElectionCampaignContextCancellationAfterElectionDoesNotLoseLeadership`、`TestElectionFenceTracksLeadershipTerm`、`TestElectionResignClearsLifecycleBeforeReturning`
+- [guards_promises_test.go](../../../infra/network/etcd/driver/guards_promises_test.go)：`TestElectionResignAndLeaderRefuseWithoutALeadership`、`TestNewLocalMirrorRefusesClientsWithoutRevisionedSnapshots`、`TestLocalMirrorWritesRefuseInvalidArgumentsBeforeReachingEtcd`、`TestLocalMirrorRecordsAClosedWatchAsItsLastError`
+- [local_mirror_promises_test.go](../../../infra/network/etcd/driver/local_mirror_promises_test.go)：`TestNewLocalMirrorRefusesEachInvalidConfig`
+- [local_mirror_test.go](../../../infra/network/etcd/driver/local_mirror_test.go)：`TestLocalMirrorAppliesWatchEventsAndReturnsIndependentValues`、`TestLocalMirrorWaitsForServerWatchReadiness`、`TestLocalMirrorResnapshotsAfterWatchCloses`、`TestLocalMirrorPublishesAndUsesRevisionCAS`、`TestLocalMirrorUsesNativeEtcdPrefixSemantics`；其余 8 项见文件
+- [real_etcd_deregister_budget_promises_test.go](../../../infra/network/etcd/driver/real_etcd_deregister_budget_promises_test.go)：`TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget`
+- [real_etcd_election_promises_test.go](../../../infra/network/etcd/driver/real_etcd_election_promises_test.go)：`TestRealEtcdFailedCampaignRevokesItsLease`、`TestRealEtcdCanceledWinningCampaignLeavesNoPhantomLeader`、`TestRealEtcdCanceledWaitingCampaignRevokesItsLease`
+- [real_etcd_promises_test.go](../../../infra/network/etcd/driver/real_etcd_promises_test.go)：`TestRealEtcdGetOfAMissingKeyIsNotFound`、`TestRealEtcdCloseAfterLeaseVanishedIsClean`
+- [real_etcd_resign_budget_promises_test.go](../../../infra/network/etcd/driver/real_etcd_resign_budget_promises_test.go)：`TestRealEtcdResignHonoursTheCallerBudget`、`TestRealEtcdResignRevokesItsLease`
+- [stop_contract_test.go](../../../infra/network/etcd/driver/stop_contract_test.go)：`TestDiscoveryDeregisterStopContract`、`TestAssemblyCloseStopContract`
+- [watcher_ready_test.go](../../../infra/network/etcd/driver/watcher_ready_test.go)：`TestWatcherReadyWaitsForServerResponse`、`TestWatcherReadyReportsCompactedStartRevision`、`TestWatcherReadyReportsUnexpectedChannelClose`
+- [watcher_status_test.go](../../../infra/network/etcd/driver/watcher_status_test.go)：`TestServiceWatcherReportsUnexpectedChannelClosure`、`TestServiceWatcherCloseIsNotReportedAsFailure`
 
 ### etcd
 
-- [guards_promises_test.go](../../../etcd/guards_promises_test.go)：`TestSubscribeAndWatchCallbackRefuseMissingParts`
-- [watch_callback_test.go](../../../etcd/watch_callback_test.go)：`TestWatchCallbackDeliversInOrderAndReportsHandlerError`、`TestWatchCallbackRecoversPanicAndExplicitCloseIsClean`、`TestWatchCallbackReportsWatcherAndContextTermination`、`TestSubscribeLocalMirrorRejectsUnsupportedMirror`
-- [watch_lifetime_promises_test.go](../../../etcd/watch_lifetime_promises_test.go)：`TestEtcdLifetimeConcurrentCloseWaitsForHandlerAndWatcherAndPreservesError`、`TestEtcdLifetimeParentCancellationStartsCleanupBeforeHandlerReturns`、`TestEtcdLifetimeCallbackCloseBudgetIncludesOwnedWatcher`、`TestEtcdLifetimeCallbackErrorAndExplicitCloseOwnership`
+- [guards_promises_test.go](../../../infra/network/etcd/guards_promises_test.go)：`TestSubscribeAndWatchCallbackRefuseMissingParts`
+- [watch_callback_test.go](../../../infra/network/etcd/watch_callback_test.go)：`TestWatchCallbackDeliversInOrderAndReportsHandlerError`、`TestWatchCallbackRecoversPanicAndExplicitCloseIsClean`、`TestWatchCallbackReportsWatcherAndContextTermination`、`TestSubscribeLocalMirrorRejectsUnsupportedMirror`
+- [watch_lifetime_promises_test.go](../../../infra/network/etcd/watch_lifetime_promises_test.go)：`TestEtcdLifetimeConcurrentCloseWaitsForHandlerAndWatcherAndPreservesError`、`TestEtcdLifetimeParentCancellationStartsCleanupBeforeHandlerReturns`、`TestEtcdLifetimeCallbackCloseBudgetIncludesOwnedWatcher`、`TestEtcdLifetimeCallbackErrorAndExplicitCloseOwnership`
 
 ### index
 
-- [index_promises_test.go](../../../index/index_promises_test.go)：`TestUpsertAcceptsAValueThatIsNotEqualToItself`、`TestDefaultOrderHandlesKeysOfDifferentDynamicTypes`、`TestZeroOrderedIndexIsUsable`
-- [index_test.go](../../../index/index_test.go)：`TestIndexQuery`、`TestOrderedIndexDefaultOrdersIntegersNumerically`、`TestOrderedIndexCustomLessWins`
+- [index_promises_test.go](../../../infra/base/index/index_promises_test.go)：`TestUpsertAcceptsAValueThatIsNotEqualToItself`、`TestDefaultOrderHandlesKeysOfDifferentDynamicTypes`、`TestZeroOrderedIndexIsUsable`
+- [index_test.go](../../../infra/base/index/index_test.go)：`TestIndexQuery`、`TestOrderedIndexDefaultOrdersIntegersNumerically`、`TestOrderedIndexCustomLessWins`
 
 ### internal/operation
 
@@ -241,51 +241,51 @@
 
 ### migration
 
-- [guards_promises_test.go](../../../migration/guards_promises_test.go)：`TestRegistriesRefuseNilReceiversAndNilData`
-- [migration_test.go](../../../migration/migration_test.go)：`TestRegistryRun`
-- [promises_test.go](../../../migration/promises_test.go)：`TestRegistryRefusesEachInvalidStepAndRequest`
+- [guards_promises_test.go](../../../infra/storage/migration/guards_promises_test.go)：`TestRegistriesRefuseNilReceiversAndNilData`
+- [migration_test.go](../../../infra/storage/migration/migration_test.go)：`TestRegistryRun`
+- [promises_test.go](../../../infra/storage/migration/promises_test.go)：`TestRegistryRefusesEachInvalidStepAndRequest`
 
 ### misc
 
-- [misc_test.go](../../../misc/misc_test.go)：`TestHash64IsDeterministicAndSpreads`
+- [misc_test.go](../../../infra/base/misc/misc_test.go)：`TestHash64IsDeterministicAndSpreads`
 
 ### nats/driver
 
-- [assembly_test.go](../../../nats/driver/assembly_test.go)：`TestAssembleRefusesConfigurationWithoutURL`
-- [client_boundary_test.go](../../../nats/driver/client_boundary_test.go)：`TestNatsClientNilBoundaryFailsClosed`、`TestInvokeNatsHandlerContainsAndReportsPanic`、`TestSubscriptionValidationRejectsANilHandler`
-- [client_promises_test.go](../../../nats/driver/client_promises_test.go)：`TestClientTranslatesEachTransportErrorToItsSentinel`、`TestClientRefusesInvalidSubjectsQueuesAndHandlers`
-- [close_contract_promises_test.go](../../../nats/driver/close_contract_promises_test.go)：`TestAssemblyTerminalCloseErrorIsReportedOnce`、`TestAssemblyConcurrentCloseReportsTheTerminalErrorOnce`、`TestClientPublishAfterCloseReportsErrClosed`、`TestClientSubscribeAndJetStreamAfterCloseReportErrClosed`、`TestRPCCallAsyncAfterAssemblyCloseReportsErrClosed`
-- [closed_state_guard_promises_test.go](../../../nats/driver/closed_state_guard_promises_test.go)：`TestEveryExportedDriverMethodHasAClosedStateCheck`、`TestEveryExportedDriverMethodReportsErrClosedAfterClose`、`TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed`、`TestInFlightCallAsyncExpiresAsErrClosedAfterClientClose`、`TestCallsRacingCloseEitherCompleteOrReportErrClosed`
-- [closed_state_guard_real_promises_test.go](../../../nats/driver/closed_state_guard_real_promises_test.go)：`TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose`
-- [guards_promises_test.go](../../../nats/driver/guards_promises_test.go)：`TestRequestTranslatesFinishedContextsAndQueueSubscribeRequiresAQueue`、`TestRPCCallDoesNotRetryANonRetryableError`、`TestJetStreamClientRefusesMissingClientAndHandler`
-- [jetstream_settle_test.go](../../../nats/driver/jetstream_settle_test.go)：`TestJetStreamSettleFailureIsCountedPerOperation`、`TestJetStreamSettleSuccessLeavesFailureCounterUntouched`
-- [jetstream_test.go](../../../nats/driver/jetstream_test.go)：`TestJetStreamTerminalClassification`、`TestInvokeJetStreamHandlerContainsPanic`、`TestJetStreamStreamConfigMapping`、`TestJetStreamConsumerConfigMappingDefaults`、`TestJetStreamNakBackoffIsBounded`；其余 2 项见文件
-- [options_discovered_test.go](../../../nats/driver/options_discovered_test.go)：`TestIgnoreDiscoveredServersIsAnOptInThatReachesTheConnection`
-- [options_test.go](../../../nats/driver/options_test.go)：`TestHandleNatsDisconnectLogsExpectedCloseAsInfo`、`TestHandleNatsDisconnectLogsUnexpectedErrorAsError`
-- [rpc_deadline_real_promises_test.go](../../../nats/driver/rpc_deadline_real_promises_test.go)：`TestRealNatsRPCHonoursTheCallerDeadlineBeyondFiveSeconds`
-- [rpc_stop_budget_promises_test.go](../../../nats/driver/rpc_stop_budget_promises_test.go)：`TestRPCBudgetAssemblyCloseBoundsCallbackDrain`、`TestRPCBudgetPendingTerminalRacesCompleteOnce`、`TestRPCBudgetAssemblyClosesCompletedPool`、`TestRPCBudgetStopRetainsFullQueueFallbackAndAllowsRetry`、`TestRPCBudgetCallbackCanCancelItsOwnStopWait`；其余 2 项见文件
-- [rpc_stop_reentry_promises_test.go](../../../nats/driver/rpc_stop_reentry_promises_test.go)：`TestRPCStopInsideCallbackAfterStopRequestedReturns`、`TestRPCStopWaitsForTerminalClaimSkippedByDrainRange`
-- [rpc_test.go](../../../nats/driver/rpc_test.go)：`TestRpcClientStopCancelsPendingCalls`、`TestRpcClientDispatchCallbackCompletesWhenPoolRejects`、`TestRpcClientCallAsyncAfterStopCancelsImmediately`、`TestRpcClientPendingHasSingleTerminalWinner`、`TestRpcClientCancelsOneHundredThousandPendingExactlyOnce`；其余 1 项见文件
+- [assembly_test.go](../../../infra/network/nats/driver/assembly_test.go)：`TestAssembleRefusesConfigurationWithoutURL`
+- [client_boundary_test.go](../../../infra/network/nats/driver/client_boundary_test.go)：`TestNatsClientNilBoundaryFailsClosed`、`TestInvokeNatsHandlerContainsAndReportsPanic`、`TestSubscriptionValidationRejectsANilHandler`
+- [client_promises_test.go](../../../infra/network/nats/driver/client_promises_test.go)：`TestClientTranslatesEachTransportErrorToItsSentinel`、`TestClientRefusesInvalidSubjectsQueuesAndHandlers`
+- [close_contract_promises_test.go](../../../infra/network/nats/driver/close_contract_promises_test.go)：`TestAssemblyTerminalCloseErrorIsReportedOnce`、`TestAssemblyConcurrentCloseReportsTheTerminalErrorOnce`、`TestClientPublishAfterCloseReportsErrClosed`、`TestClientSubscribeAndJetStreamAfterCloseReportErrClosed`、`TestRPCCallAsyncAfterAssemblyCloseReportsErrClosed`
+- [closed_state_guard_promises_test.go](../../../infra/network/nats/driver/closed_state_guard_promises_test.go)：`TestEveryExportedDriverMethodHasAClosedStateCheck`、`TestEveryExportedDriverMethodReportsErrClosedAfterClose`、`TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed`、`TestInFlightCallAsyncExpiresAsErrClosedAfterClientClose`、`TestCallsRacingCloseEitherCompleteOrReportErrClosed`
+- [closed_state_guard_real_promises_test.go](../../../infra/network/nats/driver/closed_state_guard_real_promises_test.go)：`TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose`
+- [guards_promises_test.go](../../../infra/network/nats/driver/guards_promises_test.go)：`TestRequestTranslatesFinishedContextsAndQueueSubscribeRequiresAQueue`、`TestRPCCallDoesNotRetryANonRetryableError`、`TestJetStreamClientRefusesMissingClientAndHandler`
+- [jetstream_settle_test.go](../../../infra/network/nats/driver/jetstream_settle_test.go)：`TestJetStreamSettleFailureIsCountedPerOperation`、`TestJetStreamSettleSuccessLeavesFailureCounterUntouched`
+- [jetstream_test.go](../../../infra/network/nats/driver/jetstream_test.go)：`TestJetStreamTerminalClassification`、`TestInvokeJetStreamHandlerContainsPanic`、`TestJetStreamStreamConfigMapping`、`TestJetStreamConsumerConfigMappingDefaults`、`TestJetStreamNakBackoffIsBounded`；其余 2 项见文件
+- [options_discovered_test.go](../../../infra/network/nats/driver/options_discovered_test.go)：`TestIgnoreDiscoveredServersIsAnOptInThatReachesTheConnection`
+- [options_test.go](../../../infra/network/nats/driver/options_test.go)：`TestHandleNatsDisconnectLogsExpectedCloseAsInfo`、`TestHandleNatsDisconnectLogsUnexpectedErrorAsError`
+- [rpc_deadline_real_promises_test.go](../../../infra/network/nats/driver/rpc_deadline_real_promises_test.go)：`TestRealNatsRPCHonoursTheCallerDeadlineBeyondFiveSeconds`
+- [rpc_stop_budget_promises_test.go](../../../infra/network/nats/driver/rpc_stop_budget_promises_test.go)：`TestRPCBudgetAssemblyCloseBoundsCallbackDrain`、`TestRPCBudgetPendingTerminalRacesCompleteOnce`、`TestRPCBudgetAssemblyClosesCompletedPool`、`TestRPCBudgetStopRetainsFullQueueFallbackAndAllowsRetry`、`TestRPCBudgetCallbackCanCancelItsOwnStopWait`；其余 2 项见文件
+- [rpc_stop_reentry_promises_test.go](../../../infra/network/nats/driver/rpc_stop_reentry_promises_test.go)：`TestRPCStopInsideCallbackAfterStopRequestedReturns`、`TestRPCStopWaitsForTerminalClaimSkippedByDrainRange`
+- [rpc_test.go](../../../infra/network/nats/driver/rpc_test.go)：`TestRpcClientStopCancelsPendingCalls`、`TestRpcClientDispatchCallbackCompletesWhenPoolRejects`、`TestRpcClientCallAsyncAfterStopCancelsImmediately`、`TestRpcClientPendingHasSingleTerminalWinner`、`TestRpcClientCancelsOneHundredThousandPendingExactlyOnce`；其余 1 项见文件
 
 ### nats
 
-- [errors_test.go](../../../nats/errors_test.go)：`TestPermanentPreservesCauseAndMarker`
-- [permanent_guards_promises_test.go](../../../nats/permanent_guards_promises_test.go)：`TestPermanentIsIdempotentAndNilSafe`
-- [rpc_test.go](../../../nats/rpc_test.go)：`TestDefaultRetryPolicyDoesNotRetryNonIdempotentRPC`
+- [errors_test.go](../../../infra/network/nats/errors_test.go)：`TestPermanentPreservesCauseAndMarker`
+- [permanent_guards_promises_test.go](../../../infra/network/nats/permanent_guards_promises_test.go)：`TestPermanentIsIdempotentAndNilSafe`
+- [rpc_test.go](../../../infra/network/nats/rpc_test.go)：`TestDefaultRetryPolicyDoesNotRetryNonIdempotentRPC`
 
 ### ownerroute
 
-- [guards_promises_test.go](../../../ownerroute/guards_promises_test.go)：`TestTransportAndRouterRefuseMissingParts`
-- [promises_test.go](../../../ownerroute/promises_test.go)：`TestRouterRefusesInvalidKeysAndOwnerlessRoutes`
-- [route_test.go](../../../ownerroute/route_test.go)：`TestRouterExecutesLocalCommand`、`TestRouterSendsRemoteCommand`
+- [guards_promises_test.go](../../../infra/network/ownerroute/guards_promises_test.go)：`TestTransportAndRouterRefuseMissingParts`
+- [promises_test.go](../../../infra/network/ownerroute/promises_test.go)：`TestRouterRefusesInvalidKeysAndOwnerlessRoutes`
+- [route_test.go](../../../infra/network/ownerroute/route_test.go)：`TestRouterExecutesLocalCommand`、`TestRouterSendsRemoteCommand`
 
 ### safemap
 
-- [bench_test.go](../../../safemap/bench_test.go)
-- [bson_promises_test.go](../../../safemap/bson_promises_test.go)：`TestSmallSafeMapSurvivesABSONRoundTrip`、`TestSmallSafeMapEncodesItsContentsNotItsFields`
-- [fastmap_range_promises_test.go](../../../safemap/fastmap_range_promises_test.go)：`TestFastMapRangeToleratesWritesFromTheCallback`
-- [map_test.go](../../../safemap/map_test.go)：`TestSmallSafeMapContract`、`TestSmallSafeMapBSONV2RoundTrip`、`TestShardedSafeMapContract`、`TestFastMapContract`、`TestFastMapGrowthAndTombstoneReuse`；其余 4 项见文件
-- [range_contract_promises_test.go](../../../safemap/range_contract_promises_test.go)：`TestSafemapRangeContract`
+- [bench_test.go](../../../infra/base/safemap/bench_test.go)
+- [bson_promises_test.go](../../../infra/base/safemap/bson_promises_test.go)：`TestSmallSafeMapSurvivesABSONRoundTrip`、`TestSmallSafeMapEncodesItsContentsNotItsFields`
+- [fastmap_range_promises_test.go](../../../infra/base/safemap/fastmap_range_promises_test.go)：`TestFastMapRangeToleratesWritesFromTheCallback`
+- [map_test.go](../../../infra/base/safemap/map_test.go)：`TestSmallSafeMapContract`、`TestSmallSafeMapBSONV2RoundTrip`、`TestShardedSafeMapContract`、`TestFastMapContract`、`TestFastMapGrowthAndTombstoneReuse`；其余 4 项见文件
+- [range_contract_promises_test.go](../../../infra/base/safemap/range_contract_promises_test.go)：`TestSafemapRangeContract`
 
 </details>
 

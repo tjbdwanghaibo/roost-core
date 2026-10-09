@@ -288,7 +288,7 @@ go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/entity@latest \
 ```go
 package player
 
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 const (
     EntityCategoryPlayer entity.EntityCategory = 1
@@ -318,7 +318,7 @@ type Player struct {
 
 DAO 必须实现 codegen 生成的标准方法，尤其是 `PrepareMutation(nest.PersistChange)`、`AcceptMutation(dataengine.Mutation)` 和 `DirtyTracker() *dataengine.Tracker`。Entity 不直接访问 `dao.tracker` 字段。不要为普通 Entity 手写 Snapshot、RemoveSnapshot 或在 release hook 中落库；历史数据迁移通过 Data Engine migration/import 工具完成。
 
-新生成的 map 字段从 `github.com/tjbdwanghaibo/roost-core/safemap` 导入容器（默认 alias
+新生成的 map 字段从 `github.com/tjbdwanghaibo/roost-core/infra/base/safemap` 导入容器（默认 alias
 仍为 `fmap`）。从旧 source-head 升级后应重新运行 DAO 生成器；手写代码若仍导入
 `roost-core/map`，同步改为 `roost-core/safemap`。不会生成两套并行容器实现。
 
@@ -507,7 +507,7 @@ func (p *Player) DealEventPlayerLevelUp(e *event.EventPlayerLevelUp) {}
 
 ```bash
 go run .../cmd/eventgen@latest \
-  -def ./event/def -out ./event -pkg event \
+  -def ./framework/event/def -out ./framework/event -pkg event \
   -game ./game -eventpkg example.com/planet/event
 ```
 

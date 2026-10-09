@@ -10,7 +10,7 @@
 
 ## 1. 实现边界
 
-`clock`、`timer`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`infra/base/clock`、`infra/base/timer`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
@@ -35,7 +35,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [clock.go](../../../clock/clock.go) | `Business`、`BusinessFunc`、`Clock` |
+| [clock.go](../../../infra/base/clock/clock.go) | `Business`、`BusinessFunc`、`Clock` |
 
 ### timer
 
@@ -43,7 +43,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [scheduler.go](../../../timer/scheduler.go) | `ChangeType`、`Node`、`Context`、`Handler`、`ChangeFunc`、`Scheduler` |
+| [scheduler.go](../../../infra/base/timer/scheduler.go) | `ChangeType`、`Node`、`Context`、`Handler`、`ChangeFunc`、`Scheduler` |
 
 </details>
 
@@ -56,15 +56,15 @@
 
 ### clock
 
-- [clock_test.go](../../../clock/clock_test.go)：`TestLogicClockOffsetRoundTripsAtDurationResolution`、`TestLogicClockSetLandsWithinOneMillisecond`、`TestInjectedClocksAreIndependentOfTheGlobalOne`、`TestLogicClockIsSafeForConcurrentUse`
-- [remaining_promises_test.go](../../../clock/remaining_promises_test.go)：`TestProcessClockKeepsConfiguredSubmillisecondOffset`
+- [clock_test.go](../../../infra/base/clock/clock_test.go)：`TestLogicClockOffsetRoundTripsAtDurationResolution`、`TestLogicClockSetLandsWithinOneMillisecond`、`TestInjectedClocksAreIndependentOfTheGlobalOne`、`TestLogicClockIsSafeForConcurrentUse`
+- [remaining_promises_test.go](../../../infra/base/clock/remaining_promises_test.go)：`TestProcessClockKeepsConfiguredSubmillisecondOffset`
 
 ### timer
 
-- [order_and_unhandled_promises_test.go](../../../timer/order_and_unhandled_promises_test.go)：`TestTimersWithTheSameDeadlineFireInRegistrationOrder`、`TestPriorityOrdersTimersWithTheSameDeadline`、`TestPriorityIsKeptThroughStorageAndRescheduling`、`TestADueTimerWithoutAHandlerIsDroppedWithAWarningAndACount`、`TestStoredTypesWithoutAHandlerAreReportedOncePerType`
-- [remaining_promises_test.go](../../../timer/remaining_promises_test.go)：`TestInvalidSavedNodesEmitPersistenceDeletion`
-- [scheduler_promises_test.go](../../../timer/scheduler_promises_test.go)：`TestRemoveFromAHandlerStopsATimerDueInTheSameTick`、`TestChangeFromAHandlerPostponesATimerDueInTheSameTick`、`TestDeferredOperationsDuringTickKeepTheirMeaning`、`TestChangesSeenByTheHookDuringATickMatchTheFinalState`、`TestReentrantTickKeepsTheOuterTickSemantics`；其余 1 项见文件
-- [scheduler_test.go](../../../timer/scheduler_test.go)：`TestSchedulerFiresAndPersistsChanges`、`TestSchedulerReschedulesFromHandler`、`TestSchedulerSetClockStampsNewTimers`
+- [order_and_unhandled_promises_test.go](../../../infra/base/timer/order_and_unhandled_promises_test.go)：`TestTimersWithTheSameDeadlineFireInRegistrationOrder`、`TestPriorityOrdersTimersWithTheSameDeadline`、`TestPriorityIsKeptThroughStorageAndRescheduling`、`TestADueTimerWithoutAHandlerIsDroppedWithAWarningAndACount`、`TestStoredTypesWithoutAHandlerAreReportedOncePerType`
+- [remaining_promises_test.go](../../../infra/base/timer/remaining_promises_test.go)：`TestInvalidSavedNodesEmitPersistenceDeletion`
+- [scheduler_promises_test.go](../../../infra/base/timer/scheduler_promises_test.go)：`TestRemoveFromAHandlerStopsATimerDueInTheSameTick`、`TestChangeFromAHandlerPostponesATimerDueInTheSameTick`、`TestDeferredOperationsDuringTickKeepTheirMeaning`、`TestChangesSeenByTheHookDuringATickMatchTheFinalState`、`TestReentrantTickKeepsTheOuterTickSemantics`；其余 1 项见文件
+- [scheduler_test.go](../../../infra/base/timer/scheduler_test.go)：`TestSchedulerFiresAndPersistsChanges`、`TestSchedulerReschedulesFromHandler`、`TestSchedulerSetClockStampsNewTimers`
 
 </details>
 

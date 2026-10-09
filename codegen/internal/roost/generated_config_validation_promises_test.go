@@ -35,10 +35,10 @@ import (
 	"testing"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"{{MODULE}}/internal/bootstrap"
-	kitremoteentity "github.com/tjbdwanghaibo/roost-core/kit/remoteentity"
-	coreremote "github.com/tjbdwanghaibo/roost-core/remoteentity"
+	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
+	coreremote "github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
 	"gopkg.in/yaml.v3"
 )
 

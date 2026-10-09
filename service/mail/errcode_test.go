@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 // The segment mail is allocated. Written out here rather than derived, because

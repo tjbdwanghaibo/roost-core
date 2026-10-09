@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
 // RedisStores are the three stores this package needs, over Redis.

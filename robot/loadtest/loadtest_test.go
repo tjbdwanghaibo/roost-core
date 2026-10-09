@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/admin"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/robot/loadtest"
 	"github.com/tjbdwanghaibo/roost-core/robot/runner"
 )

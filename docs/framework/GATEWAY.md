@@ -4,13 +4,19 @@
 
 核对日期：2026-10-09。源码基准：`82b16ace`，运行时代码与 v1.24.1 标签相同。本次提交只整理方案并纠正文档，不实现 Gate、不修改运行时、不发布新版本。
 
+[设计评审与具体实施方案](GATEWAY-IMPLEMENTATION.md)以 `ef640e6e` 为基准，细化转发通道、绑定权威、统一发送、客户端广播、预算与阶段验收。首期传输已确定使用 Core NATS，内部 Gate 信封与 Bus RPC 编码统一计划使用 MessagePack；Lockstep 与客户端广播均在本轮范围内。该方案仍待实施；当前 Bus 默认仍是 JSON，其中 P2 已要求最小资源限额，P4 再进行完整故障验收。
+
+用户确认 Gate 与[目录/Wiring 重构](PACKAGE-REORGANIZATION.md)同轮推进。目标运行位置为 `infra/network/gateway`，便捷接入位置为 `wiring/gate`；绑定、续期、队列和 NATS 收发属于运行实现，Wiring 只接配置、依赖及生命周期。先验收目录重构，再按 Gate 阶段交付，当前源码路径和已发布能力保持原状。
+
 ## 1. 先理解 Gate 和 Game 的区别
 
 可以把 Gate 理解为游戏服的接待处：维护玩家连接、检查登录身份、把请求交给正确的游戏服，并把结果送回玩家。Game 执行购买、背包、战斗等游戏规则，Nest 负责调度，DataEngine 负责保存，Sync 负责状态同步。
 
-`gateway` 是一组请求边界接口和中间件。`access.player` 是生成的协议分发层；生成的 TCP 模块才实际监听端口、收发网络包。这三个名字代表不同的层，不能因为有 `gateway` 包就认为已有完整的独立网关。
+`infra/network/gateway` 是一组请求边界接口和中间件。`access.player` 是生成的协议分发层；生成的 TCP 模块才实际监听端口、收发网络包。这三个名字代表不同的层，不能因为有 `infra/network/gateway` 包就认为已有完整的独立网关。
 
 本文中的 PB 指 Protobuf 业务消息，RPC 指一个服务调用另一个服务；“回推”指 Game 主动把消息送回玩家连接。“会话”是一次经过认证的连接关系；“代次”用来区分重启或重连前后的关系，防止旧消息误送给新连接。
+
+这里的连接会话与 `service/session` 的副本/试炼运行会话不同：后者记录 Run 和外部资源释放，不管理 socket、Gate Binding 或 Sync SessionID。具体含义见 [Service 运行会话](guide/09-services.md#1a-session-运行会话)。
 
 当前默认链路：
 
@@ -50,7 +56,7 @@
 
 断线通知使用容量为 256 的异步事件队列，拥塞时允许丢弃事件并计数。订阅方需要核对实际在线状态，不能把通知当作绝不丢失的会话账本。
 
-主要依据：[边界接口](../../gateway/gateway.go)、[中间件](../../gateway/middleware.go)、[TCP 模板](../../codegen/internal/roost/render_player_tcp.go)、[配置声明](../../codegen/internal/roost/player_tcp_config.go)、[协议分发](../../codegen/internal/roost/render_access.go)、[公共包头](../../client/wire/packet.go)、[Demo 鉴权](../../demo/internal/access/player/tcp/auth.go.tmpl)。
+主要依据：[边界接口](../../infra/network/gateway/gateway.go)、[中间件](../../infra/network/gateway/middleware.go)、[TCP 模板](../../codegen/internal/roost/render_player_tcp.go)、[配置声明](../../codegen/internal/roost/player_tcp_config.go)、[协议分发](../../codegen/internal/roost/render_access.go)、[公共包头](../../client/wire/packet.go)、[Demo 鉴权](../../demo/internal/access/player/tcp/auth.go.tmpl)。
 
 ## 3. 距离独立 Gate 还差什么
 
@@ -73,16 +79,16 @@
 
 | 层 | 建议责任 | 应复用的基础 |
 | --- | --- | --- |
-| Gate | 连接、鉴权、连接绑定、包校验、转发、回推、限流 | 当前 TCP 实现、`gateway`、`client/wire`、App 生命周期 |
+| Gate | 连接、鉴权、连接绑定、包校验、转发、回推、限流 | 当前 TCP 实现、`infra/network/gateway`、`client/wire`、App 生命周期 |
 | Game 接入 | 验证内部调用身份和绑定代次、解码业务协议、调用本地 Sender | 当前 ProtocolRegistry、协议注册、Nest Sender |
 | 服务间传输 | 带期限的请求响应，以及回推/断线通知 | 优先评估现有 bus、servicerpc、NATS 接线，避免另建 RPC 系统 |
 | 路由与发现 | 找到固定区服的有效 Game 实例、校验进程代次 | 复用现有服务发现和区服信息；发现结果不替代写权限 |
 | 业务和持久化 | 保持现有实体、事务、DAO、持久策略 | Nest、DataEngine、Sync、Lockstep |
-| Kit / Codegen | 配置、Mod 装配、服务模板、生成注册与使用说明 | 现有 Service/Mod 模型 |
+| Wiring / Codegen（目标） | 配置、Mod 接线、服务模板、生成注册与使用说明 | 沿用现有 Service/Mod 模型，Wiring 接线迁为 Wiring |
 
 这些是实施时的复用方向，不代表现有 RPC 已能直接接收一个通用 Gate 数据包。P1 必须核实载荷上限、取消、认证、顺序与错误语义，缺少的接线需要显式实现。
 
-优先评估把现有通用 TCP 运行逻辑提取到 `gateway` 下少量内聚文件，让生成器保留业务注册和配置接线，避免复制两套 TCP Server。提取必须独立验收现有行为；如果不能保持边界，先形成具体目录和依赖方案，不为本方案提前增加多层抽象。
+按已确认方案，把已有 `infra/network/gateway` 搬入 `infra/network/gateway`，再把通用 TCP 提取到该包的少量内聚文件。生成器保留业务注册、PB 编解码和配置接线，embedded 与独立 Gate 共用 TCP runtime。提取必须独立验收当前行为，并保持目录方案的依赖边界。
 
 Gate 首期只处理协议包头和原始业务字节，业务 PB 的解码与处理保留在 Game。Sync、Lockstep 继续使用现有编码；内部转发可以封装字节，但不要再设计另一份业务同步格式。
 
@@ -106,6 +112,8 @@ Gate 和 Game 都限制封装总大小。内部传输的限制必须容纳业务
 Game 校验 Gate 来源和当前绑定，再进入现有协议分发与 Nest；不能让公网客户端伪造内部转发包。内部通道必须设置相应认证与权限，不能只相信包里写了 GateID。
 
 响应、主动推送和踢线都携带相同绑定身份。Gate 只向匹配当前代次的连接写出；迟到的响应、旧 Game 的推送和旧断线事件均不能作用到新连接。首期可由 Game 保持已绑定会话的 Gate 回推地址，避免为每个消息增加一次中央在线目录查询。
+
+首期还提供 PB 客户端广播：应用命名空间内全在线、指定固定区服、指定玩家集合。业务决定受众，Gate 只按可信活动绑定筛选并有界扇出；跨 Gate 每个目标接收一次编码后的包，再复用本地连接发送队列。广播准入、部分失败和结果未知分别反馈，不承诺客户端必收。Sync/Lockstep 仍走各自的订阅/房间身份和恢复通路；具体广播契约见[实施方案](GATEWAY-IMPLEMENTATION.md#51-面向客户端的广播)。
 
 如以后需要“任意服务仅凭 PlayerID 查全局在线连接”，再增加有条件更新、续期和核对的在线目录。可以评估现有 versionstore/Redis 能力，但目录是连接位置记录，不是实体所有权，也不是消息已经被客户端接收的凭据。
 
@@ -189,4 +197,4 @@ P2 完成可以称为“独立网关最小链路可用”；P3/P4/P5 完成后�
 
 前一轮真实标签消费者测试见 [v1.24.1 验收](../release/v1.24.1-IMPLEMENTATION.md)，不能把它当作未来独立 Gate 的验收。
 
-[返回框架目录](README.md) · [Service 能力](guide/09-kit-services.md) · [Sync 与客户端](guide/04-sync.md) · [维护手册](../maintenance/README.md)
+[返回框架目录](README.md) · [Service 能力](guide/09-services.md) · [Sync 与客户端](guide/04-sync.md) · [维护手册](../maintenance/README.md)

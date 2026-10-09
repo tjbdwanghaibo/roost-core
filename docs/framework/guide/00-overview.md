@@ -36,7 +36,7 @@ Remote 同时连接调度、持久化和复制；Saga 处理跨事务域步骤�
 
 ## 4. 分层
 
-core 不依赖 kit/codegen。kit 装配驱动和生命周期；但 v1.24.0 的 kit/service 中仍有七个服务的领域实现，详见 service 篇。codegen 生成业务入口、DAO、路由及项目文件；生成目录和运行时包不能互相替代。
+core 不依赖 wiring/codegen。kit 装配驱动和生命周期；但 v1.24.0 的 wiring/service 中仍有七个服务的领域实现，详见 service 篇。codegen 生成业务入口、DAO、路由及项目文件；生成目录和运行时包不能互相替代。
 
 业务时钟用于玩法期限，系统时钟用于租约、超时、网络和持久过程。公开能力通过实例 Registry 获取；不要使用另一 App 的全局对象代替本实例。
 

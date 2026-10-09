@@ -485,14 +485,14 @@ package {{.Package}}
 
 import (
 {{- if not .SenderOnly}}
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"errors"
 	"sync"
 	{{- end}}
 	{{- if .SenderOnly}}
 		"context"
 	{{- end}}
-		"github.com/tjbdwanghaibo/roost-core/nest"
+		"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	{{- if .AsyncSenderOnly}}
 		"time"
 	{{- end}}
@@ -840,7 +840,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
 // Test{{.SenderType}}RefusesCallsWithoutAClient pins that a sender constructed without a

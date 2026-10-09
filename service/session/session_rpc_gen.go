@@ -23,9 +23,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-core/bus"
-	"github.com/tjbdwanghaibo/roost-core/servicerpc"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
 )
 
 // ServiceType is the bus service type Session answers on. The client and

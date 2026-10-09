@@ -68,8 +68,8 @@ lease fencing、幂等 completion receipt 的持久化 Store；完整语义见 [
 ```text
 go test ./...
 go vet ./...
-go test -race ./dataengine ./entity ./nest ./entitysync ./replication ./sync ./syncstream ./ownerroute ./etcd ./cache ./saga
-go test -race ./dataengine ./remote_entity ./nestwal ./nest ./replication ./sync ./saga
+go test -race ./framework/dataengine ./framework/entity ./framework/nest ./entitysync ./replication ./framework/sync ./framework/sync/syncstream ./infra/network/ownerroute ./infra/network/etcd ./framework/cache ./framework/saga
+go test -race ./framework/dataengine ./remote_entity ./framework/nestwal ./framework/nest ./replication ./framework/sync ./framework/saga
 git diff --check
 ```
 

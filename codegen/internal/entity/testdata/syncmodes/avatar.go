@@ -2,7 +2,7 @@ package syncmodes
 
 import (
 	"encoding/binary"
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 const EntityKindAvatar entity.EntityKind = 191

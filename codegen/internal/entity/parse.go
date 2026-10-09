@@ -423,7 +423,7 @@ func collectEntityImports(ent EntityDef, importMap map[string]ImportDef) []Impor
 		if !ok {
 			continue
 		}
-		if imp.Path == "github.com/tjbdwanghaibo/roost-core/entity" {
+		if imp.Path == "github.com/tjbdwanghaibo/roost-core/framework/entity" {
 			continue
 		}
 		out = append(out, imp)

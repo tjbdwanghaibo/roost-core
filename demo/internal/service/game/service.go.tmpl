@@ -12,12 +12,12 @@ import (
 	"{{MODULE}}/game/skills"
 	accessplayer "{{MODULE}}/internal/access/player"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
-	"github.com/tjbdwanghaibo/roost-core/app"
- "github.com/tjbdwanghaibo/roost-core/health"
-	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-	"github.com/tjbdwanghaibo/roost-core/skill"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+ "github.com/tjbdwanghaibo/roost-core/infra/observe/health"
+	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // Service is the game server. It owns this process's World, the consumers

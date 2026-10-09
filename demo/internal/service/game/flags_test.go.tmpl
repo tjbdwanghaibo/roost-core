@@ -4,15 +4,15 @@ import (
 	"context"
  "errors"
  "reflect"
- "github.com/tjbdwanghaibo/roost-core/app"
- "github.com/tjbdwanghaibo/roost-core/kit/mods"
+ "github.com/tjbdwanghaibo/roost-core/framework/app"
+ "github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"path/filepath"
 	"testing"
 
 	generated "{{MODULE}}/configs/generated"
 	"{{MODULE}}/game/flags"
-	"github.com/tjbdwanghaibo/roost-core/configdata"
-	"github.com/tjbdwanghaibo/roost-core/featureflag"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/featureflag"
 )
 
 // 开关来自配置表，而且**每次 reload 都重新发布**。

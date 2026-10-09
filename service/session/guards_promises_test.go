@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
 // U-0114 · C2（空洞测试）· nightly gap map kit `service/session` 10/20。

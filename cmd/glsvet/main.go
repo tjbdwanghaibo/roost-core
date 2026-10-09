@@ -574,7 +574,7 @@ func isNestHandler(function *ast.FuncDecl) bool {
 func workerImportAliases(file *ast.File) map[string]bool {
 	aliases := make(map[string]bool)
 	for _, spec := range file.Imports {
-		if strings.Trim(spec.Path.Value, "\"") != "github.com/tjbdwanghaibo/roost-core/worker" {
+		if strings.Trim(spec.Path.Value, "\"") != "github.com/tjbdwanghaibo/roost-core/infra/base/worker" {
 			continue
 		}
 		name := "worker"

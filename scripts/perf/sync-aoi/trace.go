@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
-	"github.com/tjbdwanghaibo/roost-core/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 )
 
 // Go 执行轨迹只用于独立诊断，区分调度等待、GC 与锁/I/O 等待。

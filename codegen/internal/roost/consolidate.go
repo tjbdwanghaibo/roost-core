@@ -435,7 +435,7 @@ func rewriteImports(p string, src []byte, table map[string]relocation, m consoli
 				return true
 			}
 			// Room 模块的正式改名只作用于已确认的 kit import，不触碰同名业务符号。
-			if rel.to == "github.com/tjbdwanghaibo/roost-core/kit/syncbus" || (rel.kitKeeps[sel.Sel.Name] && keptPath == "github.com/tjbdwanghaibo/roost-core/kit/syncbus") {
+			if rel.to == "github.com/tjbdwanghaibo/roost-core/wiring/syncbus" || (rel.kitKeeps[sel.Sel.Name] && keptPath == "github.com/tjbdwanghaibo/roost-core/wiring/syncbus") {
 				renamed := map[string]string{"RoomMod": "SyncBusMod", "NewRoomMod": "NewSyncBusMod"}[sel.Sel.Name]
 				if renamed != "" {
 					edits = append(edits, edit{fset.Position(sel.Sel.Pos()).Offset, fset.Position(sel.Sel.End()).Offset, renamed})

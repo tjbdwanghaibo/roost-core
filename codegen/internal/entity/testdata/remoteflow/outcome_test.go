@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/fctx"
-	"github.com/tjbdwanghaibo/roost-core/metrics"
-	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
 // RR-20260926-37 / RR-20260927-24：strict 等 Remote 确认到截止（投影器被拖住）后，提交后工作交给 finalizer；投影器随后照常

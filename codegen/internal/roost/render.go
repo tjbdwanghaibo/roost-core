@@ -158,7 +158,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	}
 	featurePackages := map[string]string{
 		"protocol": "protocol/def/doc.go", "entity": "game/entities/doc.go", "nest": "game/handler/doc.go",
-		"event": "event/def/doc.go", "dao": "db/def/doc.go", "attribute": "game/gameplay/attribute/doc.go",
+		"event": "framework/event/def/doc.go", "dao": "db/def/doc.go", "attribute": "game/gameplay/attribute/doc.go",
 		"webroute": "service/web/doc.go",
 	}
 	for feature, path := range featurePackages {
@@ -200,7 +200,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		}
 	}
 	if hasFeature(m, "event") {
-		if err := addGo("event/doc.go", "package event\n", false); err != nil {
+		if err := addGo("framework/event/doc.go", "package event\n", false); err != nil {
 			return nil, err
 		}
 	}
@@ -218,8 +218,8 @@ func renderSyncTransport(m Manifest) string {
 	if hasFeature(m, "nettransport-udp") {
 		b.WriteString("\t\"net\"\n")
 	}
-	b.WriteString("\t\"github.com/tjbdwanghaibo/roost-core/sync/entitysync\"\n")
-	b.WriteString("\t\"github.com/tjbdwanghaibo/roost-core/sync/nettransport\"\n)\n\n")
+	b.WriteString("\t\"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync\"\n")
+	b.WriteString("\t\"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport\"\n)\n\n")
 	b.WriteString("func AsyncConfig() nettransport.AsyncTransportConfig { return nettransport.DefaultAsyncTransportConfig() }\n\n")
 	b.WriteString("// NewSyncTransport is the entity sync manager's lane over the async transport's reliable channel:\n")
 	b.WriteString("// one frame per session per tick, backpressure closes the session (entitysync.ManagerConfig.Transport).\n")
@@ -270,7 +270,7 @@ func renderFrameworkDeps(m Manifest) string {
 		return generatedHeader + `
 package frameworkdeps
 
-import "github.com/tjbdwanghaibo/roost-core/skill"
+import "github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 
 // SkillProgram retains the skill runtime selected by roost.yaml without adding
 // runtime initialization or requiring business code to import it immediately.
@@ -281,8 +281,8 @@ type SkillProgram = skill.Program
 package frameworkdeps
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/skill"
-	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 )
 
 // SkillProgram retains the skill runtime selected by roost.yaml without adding
@@ -318,8 +318,8 @@ func main() {
 
 func renderBootstrap(m Manifest) string {
 	imports := map[string]string{
-		"github.com/tjbdwanghaibo/roost-core/app":           "",
-		"github.com/tjbdwanghaibo/roost-core/app/buildinfo": "",
+		"github.com/tjbdwanghaibo/roost-core/framework/app":           "",
+		"github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo": "",
 	}
 	allMods := allProjectMods(m)
 	// Persistence and Remote Entity constructors require instance-scoped
@@ -328,7 +328,7 @@ func renderBootstrap(m Manifest) string {
 	// without generating Nest handlers.
 	instanceRuntime := contains(allMods, "dataengine") || contains(allMods, "nest") || contains(allMods, "remote_entity")
 	if instanceRuntime {
-		imports["github.com/tjbdwanghaibo/roost-core/entity"] = ""
+		imports["github.com/tjbdwanghaibo/roost-core/framework/entity"] = ""
 	}
 	for _, name := range allMods {
 		spec := modCatalog[name]
@@ -343,6 +343,7 @@ func renderBootstrap(m Manifest) string {
 		imports[m.Project.Module+"/internal/service/"+name] = "service" + safeIdent(name)
 		if spec, ok := frameworkCatalog[m.Services[name].Framework]; ok {
 			imports[frameworkServiceModule+"/"+spec.ImportPath()] = "svc" + spec.Package
+			imports[frameworkDomainModule+"/"+spec.ImportPath()] = "domain" + spec.Package
 		}
 		for _, used := range m.Services[name].Uses {
 			if spec, ok := frameworkCatalog[m.Services[used].Framework]; ok {
@@ -410,7 +411,7 @@ func renderBootstrap(m Manifest) string {
 		if spec, hosted := frameworkCatalog[m.Services[name].Framework]; hosted {
 			// The roost-service Server is the process's Service; the owner Mod
 			// is built from the project's collaborators file.
-			fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(svc%s.ServiceType), svc%s.NewServer()", spec.Package, spec.Package)
+			fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(domain%s.ServiceType), svc%s.NewServer()", spec.Package, spec.Package)
 		} else {
 			fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(%q), service%s.New()", name, safeIdent(name))
 		}
@@ -511,7 +512,7 @@ func renderService(name string) string {
 import (
 	"context"
 
-	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
 
 type Service struct{}
@@ -534,7 +535,7 @@ var _ app.Service = (*Service)(nil)
 func renderServiceManagers(name string) string {
 	return fmt.Sprintf(`package %s
 
-import "github.com/tjbdwanghaibo/roost-core/app"
+import "github.com/tjbdwanghaibo/roost-core/framework/app"
 
 // Managers returns the in-memory singleton managers this service starts.
 //
@@ -890,7 +891,7 @@ WORKLOAD ?=
 COMMIT := $(shell git rev-parse --short HEAD)
 BUILD_TIME := $(shell git show -s --format=%%cI HEAD)
 DIRTY := $(shell git status --porcelain)
-LDFLAGS := -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.Version=$(VERSION) -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.Commit=$(COMMIT) -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.BuildTime=$(BUILD_TIME) -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.Dirty=$(DIRTY)
+LDFLAGS := -X github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo.Version=$(VERSION) -X github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo.Commit=$(COMMIT) -X github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo.BuildTime=$(BUILD_TIME) -X github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo.Dirty=$(DIRTY)
 
 LOADTEST_ENDPOINT ?= 127.0.0.1:7000
 LOADTEST_COUNT ?= 10
@@ -1240,7 +1241,7 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_TIME=unknown
 RUN CGO_ENABLED=0 go build -trimpath \
-    -ldflags "-s -w -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.Version=${VERSION} -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.Commit=${COMMIT} -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.BuildTime=${BUILD_TIME}" \
+    -ldflags "-s -w -X github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo.Version=${VERSION} -X github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo.Commit=${COMMIT} -X github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo.BuildTime=${BUILD_TIME}" \
     -o /out/%s . && \
     CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/healthprobe ./cmd/healthprobe
 %s

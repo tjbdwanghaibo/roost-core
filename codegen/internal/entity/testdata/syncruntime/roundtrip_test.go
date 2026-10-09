@@ -14,7 +14,7 @@ package syncruntime
 import (
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 // The generated package-level registration is what a project calls once at

@@ -1,0 +1,61 @@
+package mongotest
+
+// RR-20261004-NC-20：公开替身的Find/StreamFind应在排序后按skip、limit分页。
+
+import (
+	"context"
+	"reflect"
+	"testing"
+
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+func TestPaginationPromises(t *testing.T) {
+	for _, method := range []string{"find", "stream"} {
+		for _, skip := range []int64{0, 1, 2, 3} {
+			t.Run(method+"/skip"+string(rune('0'+skip)), func(t *testing.T) {
+				client := NewClient()
+				coll := client.Collection("pagination", "records")
+				for _, id := range []int64{1, 2} {
+					if err := coll.Seed(bson.M{"_id": id}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var ids []int64
+				opts := fmongo.FindOption{Sort: bson.D{{Key: "_id", Value: 1}}, Skip: skip}
+				if method == "find" {
+					var rows []bson.M
+					if err := coll.Find(context.Background(), bson.M{}, &rows, opts); err != nil {
+						t.Fatal(err)
+					}
+					for _, row := range rows {
+						ids = append(ids, row["_id"].(int64))
+					}
+				} else {
+					if err := coll.StreamFind(context.Background(), bson.M{}, func(raw []byte) error {
+						var row bson.M
+						if err := bson.Unmarshal(raw, &row); err != nil {
+							return err
+						}
+						ids = append(ids, row["_id"].(int64))
+						return nil
+					}, opts); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var want []int64
+				if skip == 0 {
+					want = []int64{1, 2}
+				}
+				if skip == 1 {
+					want = []int64{2}
+				}
+				t.Logf("method=%s skip=%d got=%v want=%v", method, skip, ids, want)
+				if !reflect.DeepEqual(ids, want) {
+					t.Fatal("exported Mongo double ignored pagination contract")
+				}
+			})
+		}
+	}
+}

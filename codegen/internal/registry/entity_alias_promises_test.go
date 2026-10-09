@@ -44,7 +44,7 @@ func TestAggregateReservesItsFixedImportNames(t *testing.T) {
 		}
 		byName[name] = path
 	}
-	if got := byName["entity"]; got != "github.com/tjbdwanghaibo/roost-core/entity" {
+	if got := byName["entity"]; got != "github.com/tjbdwanghaibo/roost-core/framework/entity" {
 		t.Errorf("the name entity resolves to %q, not the core package the template calls", got)
 	}
 	for _, reserved := range []string{"fmt", "sync"} {

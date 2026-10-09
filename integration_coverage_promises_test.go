@@ -12,8 +12,8 @@ import (
 // U-0275 · C2 · RR-20260922-03 / U-0276 · C2 · RR-20260922-02：带 integration tag 的测试文件，
 // 每一个都要有人跑。
 //
-// 旧行为：ci.yml 的 Redis job 只跑 `./kit/service/...`，`service/mail` 的五个 Redis 用例在 glob 之外，
-// 而"no Redis test was skipped"守卫只看那个 glob 的输出；故障矩阵脚本跑 `./saga ./remoteentity`
+// 旧行为：ci.yml 的 Redis job 只跑 `./wiring/service/...`，`service/mail` 的五个 Redis 用例在 glob 之外，
+// 而"no Redis test was skipped"守卫只看那个 glob 的输出；故障矩阵脚本跑 `./framework/saga ./framework/remoteentity`
 // （两个目录已经没有测试文件）、core 侧四个套件因 `../roost-core` 不存在被跳过且退出码 0，
 // 并且没有任何 workflow 调用它。两处的共同点：**"要跑什么"是手写的列表，而真相是文件系统里
 // 有哪些 `//go:build integration` 的测试文件。** 这条测试让列表以真相为准。
@@ -170,7 +170,22 @@ var redisGateVariable = regexp.MustCompile(`os\.Getenv\("((?:[A-Z0-9_]*REDIS[A-Z
 
 func TestCIRedisJobSetsEveryRedisGateVariable(t *testing.T) {
 	wanted := map[string][]string{}
-	for _, root := range []string{filepath.Join("kit", "service"), "service"} {
+	// 接线服务已从 wiring/service 平铺到 wiring；仅按实际 service 域查找对应接线，
+	// DataEngine 等基础框架的集成环境由故障矩阵负责，不属于这个 Redis 服务 job。
+	roots := []string{"service"}
+	domains, err := os.ReadDir("service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, domain := range domains {
+		if domain.IsDir() {
+			wire := filepath.Join("wiring", domain.Name())
+			if info, err := os.Stat(wire); err == nil && info.IsDir() {
+				roots = append(roots, wire)
+			}
+		}
+	}
+	for _, root := range roots {
 		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, "_test.go") {
 				return walkErr
@@ -215,7 +230,7 @@ func TestCIRedisJobSetsEveryRedisGateVariable(t *testing.T) {
 // nothing).
 func TestFaultMatrixScriptNamesEveryFullEnvironmentSuite(t *testing.T) {
 	_, fullEnv, _ := integrationTestPackages(t)
-	script := filepath.Join("kit", "scripts", "integration", "dataengine-env.sh")
+	script := filepath.Join("wiring", "scripts", "integration", "dataengine-env.sh")
 	raw, err := os.ReadFile(script)
 	if err != nil {
 		t.Fatal(err)
@@ -248,13 +263,13 @@ func TestFaultMatrixScriptNamesEveryFullEnvironmentSuite(t *testing.T) {
 
 // Suites keyed on ROOST_REVIEW_CLUSTER need a real Redis Cluster, which
 // neither the Redis job nor the isolated environment provides, so they skip
-// everywhere in CI. The manual entry kit/scripts/integration/redis-cluster-suites.sh
+// everywhere in CI. The manual entry wiring/scripts/integration/redis-cluster-suites.sh
 // must name every package that has such a file — a package it leaves out is
 // run by nobody, and a package it names without one is a `[no test files]`
 // or all-skip cell that reports green for nothing.
 func TestRedisClusterScriptNamesEveryClusterKeyedSuite(t *testing.T) {
 	_, _, cluster := integrationTestPackages(t)
-	script := filepath.Join("kit", "scripts", "integration", "redis-cluster-suites.sh")
+	script := filepath.Join("wiring", "scripts", "integration", "redis-cluster-suites.sh")
 	raw, err := os.ReadFile(script)
 	if err != nil {
 		t.Fatal(err)
@@ -292,11 +307,11 @@ func TestSomeWorkflowRunsTheFaultMatrix(t *testing.T) {
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		if strings.Contains(trimmed, "kit/scripts/integration/dataengine-env.sh test") {
+		if strings.Contains(trimmed, "wiring/scripts/integration/dataengine-env.sh test") {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("no workflow runs `kit/scripts/integration/dataengine-env.sh test`; the fault matrix (Mongo primary failover, NATS outage, JetStream leader failover, toxiproxy half-open) has no CI home since the consolidation")
+		t.Error("no workflow runs `wiring/scripts/integration/dataengine-env.sh test`; the fault matrix (Mongo primary failover, NATS outage, JetStream leader failover, toxiproxy half-open) has no CI home since the consolidation")
 	}
 }

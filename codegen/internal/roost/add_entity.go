@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-const coreEntityImport = "github.com/tjbdwanghaibo/roost-core/entity"
+const coreEntityImport = "github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 // addEntityComponent creates a component in its owning Entity package and
 // updates the Entity aggregate in one operation. A component generated in an
@@ -315,7 +315,7 @@ func renderEntityComponent(pkg, entityType, name, componentType string, id int64
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 //roost:component type=%d

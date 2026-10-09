@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 )
 
 func load(t *testing.T) (*configdata.Store, *configdata.Snapshot, string) {

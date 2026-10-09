@@ -25,12 +25,12 @@ cd "${repo_dir}"
   printf 'count=%s benchtime=%s GOMAXPROCS=%s bench=%s\n' "${count}" "${benchtime}" "${GOMAXPROCS}" "${bench}"
 } > "${output_dir}/${label}.env.txt"
 
-go test ./nest -run '^$' -bench "${bench}" -benchmem \
+go test ./framework/nest -run '^$' -bench "${bench}" -benchmem \
   -benchtime="${benchtime}" -count="${count}" -timeout=10m \
   | tee "${output_dir}/${label}.txt"
 
 if [[ "${ROOST_PERF_PROFILE:-0}" == 1 ]]; then
-  go test ./nest -run '^$' -bench '^BenchmarkClientRequestSingle$' -benchtime=2s \
+  go test ./framework/nest -run '^$' -bench '^BenchmarkClientRequestSingle$' -benchtime=2s \
     -cpuprofile="${output_dir}/${label}.cpu" -memprofile="${output_dir}/${label}.mem" \
     -o "${output_dir}/${label}.test" > "${output_dir}/${label}-profile.txt"
   go tool pprof -top -nodecount=15 "${output_dir}/${label}.test" "${output_dir}/${label}.cpu" \

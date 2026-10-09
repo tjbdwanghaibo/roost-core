@@ -17,7 +17,7 @@ func TestConsolidationMapSyncBusLegacyPaths(t *testing.T) {
 	writeProjectFile(t, root, "go.mod", legacyGoMod)
 	file := writeProjectFile(t, root, "wiring.go", `package wiring
 import (
- oldkit "github.com/tjbdwanghaibo/roost-core/kit/room"
+ oldkit "github.com/tjbdwanghaibo/roost-core/wiring/room"
  olddriver "github.com/tjbdwanghaibo/roost-core/room"
 )
 var _ = oldkit.NewRoomMod
@@ -32,7 +32,7 @@ var _ = olddriver.NewNatsSyncBus
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"roost-core/kit/syncbus", "roost-core/sync/syncbus/driver", "oldkit.NewSyncBusMod", "oldkit.SyncBusMod"} {
+	for _, want := range []string{"roost-core/wiring/syncbus", "roost-core/framework/sync/syncbus/driver", "oldkit.NewSyncBusMod", "oldkit.SyncBusMod"} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("missing %s: %s", want, raw)
 		}
@@ -52,7 +52,7 @@ func TestConsolidationKeepsTheFilesNameForARenamedKitPackage(t *testing.T) {
 import "github.com/tjbdwanghaibo/roost-kit/room"
 var _ = room.NewRoomMod(0)
 `,
-			want: []string{`room "github.com/tjbdwanghaibo/roost-core/kit/syncbus"`, "room.NewSyncBusMod(0)"},
+			want: []string{`room "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"`, "room.NewSyncBusMod(0)"},
 		},
 		"oldkit-mixed-unaliased": {
 			src: `package wiring
@@ -62,14 +62,14 @@ import (
 var _ = room.NewRoomMod(0)
 var _ = room.NewNatsSyncBus
 `,
-			want: []string{`room "github.com/tjbdwanghaibo/roost-core/kit/syncbus"`, "room.NewSyncBusMod(0)", `"github.com/tjbdwanghaibo/roost-core/sync/syncbus/driver"`},
+			want: []string{`room "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"`, "room.NewSyncBusMod(0)", `"github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver"`},
 		},
 		"corekitroom-unaliased": {
 			src: `package wiring
-import "github.com/tjbdwanghaibo/roost-core/kit/room"
+import "github.com/tjbdwanghaibo/roost-core/wiring/room"
 var _ = room.NewRoomMod(0)
 `,
-			want: []string{`room "github.com/tjbdwanghaibo/roost-core/kit/syncbus"`, "room.NewSyncBusMod(0)"},
+			want: []string{`room "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"`, "room.NewSyncBusMod(0)"},
 		},
 	}
 	for name, tc := range cases {
@@ -145,7 +145,7 @@ func TestConsolidationReportsRemovedSymbolsInsteadOfSucceeding(t *testing.T) {
 	writeProjectFile(t, root, "go.mod", "module example.com/planet\n\ngo 1.27.0\n\nrequire github.com/tjbdwanghaibo/roost-core v1.16.1\n")
 	writeProjectFile(t, root, "game/scene/scene.go", `package scene
 
-import "github.com/tjbdwanghaibo/roost-core/spatial"
+import "github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 
 type Scene struct {
 	events []spatial.InterestEvent
@@ -192,21 +192,21 @@ func main() { _, _ = room.DecodeRoomWireFrame(nil) }
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"github.com/tjbdwanghaibo/roost-core/sync/frame"`) {
+	if !strings.Contains(string(raw), `"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"`) {
 		t.Fatalf("imports were not rewritten:\n%s", raw)
 	}
 	// The user follows the guide; the next run succeeds.
 	writeProjectFile(t, root, "cmd/loadtest/main.go", `package main
 
-import "github.com/tjbdwanghaibo/roost-core/sync/entitysync"
+import "github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 
 func main() { _ = entitysync.DecodeFrame }
 `)
 	writeProjectFile(t, root, "game/scene/scene.go", `package scene
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/spatial"
-	"github.com/tjbdwanghaibo/roost-core/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 )
 
 type Scene struct {

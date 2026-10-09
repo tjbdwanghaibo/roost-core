@@ -34,7 +34,7 @@ func (*first) Move() { go func(){}() }
 func (*second) Move() { go func(){}() }
 `, 2},
 		{"receiver capture", `package p
-import "github.com/tjbdwanghaibo/roost-core/worker"
+import "github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 type task struct{}
 func (task) OnRelease() {}
 var pool *worker.Pool[task]
@@ -43,7 +43,7 @@ type controller struct { value int }
 func (c *controller) Move() { pool.Go(task{}, func(task){ _ = c.value }) }
 `, 1},
 		{"explicit worker parameters", `package p
-import "github.com/tjbdwanghaibo/roost-core/worker"
+import "github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 type task struct{}
 func (task) OnRelease() {}
 var pool *worker.Pool[task]

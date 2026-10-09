@@ -34,9 +34,9 @@ var exampleRuns = map[string]string{
 	"examples/configgen":          "",
 	"examples/lubanreal":          "",
 	"examples/robotdemo":          "", // 自带回环 TCP echo 服务器，不连外部服务
-	"skill/examples/combat":       "",
-	"skill/examples/fireball":     "",
-	"skill/examples/statusbridge": "",
+	"gameplay/skill/examples/combat":       "",
+	"gameplay/skill/examples/fireball":     "",
+	"gameplay/skill/examples/statusbridge": "",
 }
 
 const (

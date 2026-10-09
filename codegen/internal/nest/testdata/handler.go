@@ -2,7 +2,7 @@ package testdata
 
 import (
 	"github.com/tjbdwanghaibo/cube/game/view"
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 var _ view.EntityKind = view.EntityKindPlayer

@@ -13,9 +13,9 @@ import (
 	"errors"
 	"testing"
 
-	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/nest"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

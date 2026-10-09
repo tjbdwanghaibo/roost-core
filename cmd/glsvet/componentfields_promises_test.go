@@ -48,7 +48,7 @@ func TestComponentFieldWritesOutsideTheDaoAreHinted(t *testing.T) {
 // ProjectAttributes 装上（业务的属性投影，不是事务状态），不提示；它的状态全在 CombatDao 里。
 // 规则只按字段类型名认 DAO 句柄（dao *CombatDao），这里同时钉住这一点。
 func TestSkillPackagesGetNoComponentFieldHint(t *testing.T) {
-	for _, directory := range []string{"../../skill", "../../skill/combatcomponent", "../../skill/combat", "../../skill/skillsync"} {
+	for _, directory := range []string{"../../gameplay/skill", "../../gameplay/skill/combatcomponent", "../../gameplay/skill/combat", "../../gameplay/skill/skillsync"} {
 		fileSet := token.NewFileSet()
 		packages, err := parser.ParseDir(fileSet, directory, func(info os.FileInfo) bool {
 			return !strings.HasSuffix(info.Name(), "_test.go")

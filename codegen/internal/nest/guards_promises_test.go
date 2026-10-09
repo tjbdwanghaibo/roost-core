@@ -15,7 +15,7 @@ import (
 // 各自报错，而不是生成一个 import 路径错误的 bootstrap。
 
 func TestParseFileRejectsDuplicateRemoteAliasesWithinAndAcrossFiles(t *testing.T) {
-	const head = "package invalid\nimport \"github.com/tjbdwanghaibo/roost-core/entity\"\ntype IPlayerEntity interface{ ID() int64 }\n"
+	const head = "package invalid\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\ntype IPlayerEntity interface{ ID() int64 }\n"
 	dir := t.TempDir()
 	write := func(name, src string) string {
 		path := filepath.Join(dir, name)

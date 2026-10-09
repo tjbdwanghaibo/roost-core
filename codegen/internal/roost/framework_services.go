@@ -51,7 +51,7 @@ type frameworkServiceSpec struct {
 	Collabs  string
 }
 
-// ImportPath is the package's path under roost-kit/service/.
+// ImportPath 是服务域和接线模块各自根目录下的路径。
 func (spec frameworkServiceSpec) ImportPath() string {
 	if strings.TrimSpace(spec.Path) != "" {
 		return spec.Path
@@ -59,9 +59,10 @@ func (spec frameworkServiceSpec) ImportPath() string {
 	return spec.Package
 }
 
-// frameworkServiceModule is the import root of the hosted services; since the
-// consolidation they live in roost-kit/service/<name>.
-const frameworkServiceModule = "github.com/tjbdwanghaibo/roost-core/kit/service"
+// 领域接口来自 service，NewMod 等启动接线来自 wiring；生成器不可用别名混淆两者。
+const frameworkDomainModule = "github.com/tjbdwanghaibo/roost-core/service"
+
+const frameworkServiceModule = "github.com/tjbdwanghaibo/roost-core/wiring"
 
 var frameworkCatalog = map[string]frameworkServiceSpec{
 	"account": {
@@ -175,7 +176,7 @@ func Pending() platform.PendingOrders { return nil }
 `,
 	},
 	"activity": {
-		Package: "activity", Path: "global/activity", Interface: "Coordinator",
+		Package: "activity", Path: "activity", Interface: "Coordinator",
 		Depends:  []string{"redis", "nats"},
 		Affinity: true,
 		ModArgs:  []string{"Metrics()"},
@@ -353,14 +354,14 @@ func renderFrameworkCollaborators(m Manifest, name string) string {
 	if needsStrings {
 		imports = append(imports, `"strings"`)
 	}
-	imports = append(imports, "", `"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"`)
+	imports = append(imports, "", `"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"`)
 	// The service package is imported only when the collaborators body
 	// references it. A body that supplies nothing but Metrics() — match, since
 	// U-0217 removed its Grouping() — would otherwise ship an unused import,
 	// and the generated project would not compile (U-0218). Comments that
 	// mention `match.Grouping` do not count: the check is on the AST.
 	if bodyUsesPackage(body, spec.Package) {
-		imports = append(imports, fmt.Sprintf("%q", frameworkServiceModule+"/"+spec.ImportPath()))
+		imports = append(imports, fmt.Sprintf("%q", frameworkDomainModule+"/"+spec.ImportPath()))
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "// Package %s supplies the collaborators the %s service needs from this\n// project. roost-codegen created this file once and will not overwrite it.\n", safeIdent(name), spec.Package)
@@ -417,10 +418,10 @@ func renderFrameworkClients(m Manifest, name string) string {
 	sort.Strings(used)
 	var b strings.Builder
 	b.WriteString(generatedHeader + "\n")
-	fmt.Fprintf(&b, "package %s\n\nimport (\n\t\"fmt\"\n\n\t\"github.com/tjbdwanghaibo/roost-core/app\"\n", safeIdent(name))
+	fmt.Fprintf(&b, "package %s\n\nimport (\n\t\"fmt\"\n\n\t\"github.com/tjbdwanghaibo/roost-core/framework/app\"\n", safeIdent(name))
 	for _, target := range used {
 		spec := frameworkCatalog[m.Services[target].Framework]
-		fmt.Fprintf(&b, "\tsvc%s %q\n", spec.Package, frameworkServiceModule+"/"+spec.ImportPath())
+		fmt.Fprintf(&b, "\tsvc%s %q\n", spec.Package, frameworkDomainModule+"/"+spec.ImportPath())
 	}
 	b.WriteString(")\n")
 	for _, target := range used {
@@ -522,8 +523,8 @@ import (
 	"fmt"
 
 	world %q
-	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 // WorldUniqueID is the unique id of a server's one World: its sid. There is
@@ -590,7 +591,7 @@ import (
 
 	world %q
 	lifecycle %q
-	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
 
 // Service is the %s server. It owns this process's World.

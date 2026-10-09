@@ -1,0 +1,1184 @@
+package remoteentity
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+)
+
+type remoteVersionWaiter struct {
+	version uint64
+	done    chan struct{}
+}
+
+type remoteState struct {
+	txMu sync.Mutex
+	txs  map[entity.RemoteTransactionID]*remoteTransactionTracker
+	// 终态按首次完成顺序链接，和 txs 共用 txMu；等待者单独持有 tracker。
+	closedHead  *remoteTransactionTracker
+	closedTail  *remoteTransactionTracker
+	closedCount int
+
+	versionMu    sync.Mutex
+	versions     map[int64]uint64
+	versionOrder []int64
+	maxVersions  int
+	waiters      map[int64][]remoteVersionWaiter
+	waiterCount  int
+	maxWaiters   int
+	txCapacity   int
+	txTTL        time.Duration
+
+	finalizeCtx    context.Context
+	finalizeCancel context.CancelFunc
+	finalizeQueue  chan deferredRemoteClose
+	writeSlots     chan struct{}
+	writeRejected  atomic.Uint64
+	finalizeDone   chan struct{}
+	finalizeWG     sync.WaitGroup
+	retryWG        sync.WaitGroup
+	retryMu        sync.Mutex
+	stopping       bool
+	finalizeOnce   sync.Once
+	// outboxSerial 让启动恢复和后台发布共用唯一协调者；独立事务在页内有界并行。
+	outboxSerial operation.Serial
+	// republishMu 保护唤醒状态：扫描期间的新提交让 dirty 为真，结束前必须再扫一轮。
+	republishMu      sync.Mutex
+	republishRunning bool
+	republishDirty   bool
+	// finalizeTrace 是只读观察缝：每次处理完一个延迟收尾项后报告走了哪一步
+	// （released / retry / await_projection / abandoned），供回归按事件顺序同步，不参与决策。
+	// 生产装配为 nil；只能在 finalizer 启动前设置。
+	finalizeTrace func(entity.RemoteTransactionID, string)
+}
+
+func (state *remoteState) traceFinalize(id entity.RemoteTransactionID, step string) {
+	if state != nil && state.finalizeTrace != nil {
+		state.finalizeTrace(id, step)
+	}
+}
+
+type deferredRemoteClose struct {
+	txID entity.RemoteTransactionID
+	// durability 决定 Unknown 由谁收敛：1/2 有 WAL，投影会写出 Applied 或持久拒绝；
+	// 0 没有 WAL，只能由 finalizer 自己写下持久拒绝（rejectUnresolvedMemoryTransaction）。
+	durability uint8
+	entries    []*remoteWriteEntry
+	attempt    int
+	// projectionDeadline 是 Durability 1/2/3 等待投影器结论的截止时间，首次处理时设定（RR-20260926-38）。
+	projectionDeadline time.Time
+	// settled 表示持久拒绝已收尾（回滚、隔离、gate/fence/写额度已交还），这一项只剩仅内存卸载
+	// 需要完成或重试（RR-20260926-39）；排空与重试都不能再次释放。
+	settled bool
+	// onOutcome 是 Nest 交来的提交后工作（Sync Confirm、AfterCommit；RR-20260926-37），只在拿到持久结论后
+	// 经 Nest 快池调用至多一次：Applied/Committed 为 true，Rejected（卸载完成后）为 false。停机排空时不调用；
+	// 快池拒绝投递时也不调用，只计数告警（RR-20260926-61，见 deliverRemoteOutcome）。
+	onOutcome func(bool)
+}
+
+// remoteUnresolvedRejecter 以事务 _id 持久写入拒绝，撞键时返回已有事务的真实状态。
+// MongoCommitter 与正式 Backend 实现它；其他存储没有这项能力时 Durability 0 的未知结果
+// 保持隔离重试，不能在无持久结论时释放。
+type remoteUnresolvedRejecter interface {
+	RejectUnresolvedRemoteCommits(context.Context, []entity.RemoteCommit, string) (entity.RemoteCommitStatus, error)
+}
+
+const unresolvedMemoryRejectCause = "memory durability outcome unresolved; rejected by finalizer"
+
+func newRemoteState(cfg *Config) *remoteState {
+	finalizeCtx, finalizeCancel := context.WithCancel(context.Background())
+	capacity := cfg.AsyncFinalizeCapacity
+	if capacity <= 0 {
+		capacity = 4096
+	}
+	// 一个写批次只预留一次，转入后台收尾也不归还。
+	// 上限不能超过收尾容量，否则释放路径可能反过来卡住慢 worker。
+	writeLimit := capacity
+	if cfg.MaxConcurrentWrites > 0 {
+		writeLimit = min(writeLimit, cfg.MaxConcurrentWrites)
+	}
+	state := &remoteState{
+		txs:         make(map[entity.RemoteTransactionID]*remoteTransactionTracker),
+		txCapacity:  cfg.TransactionTrackLimit,
+		txTTL:       cfg.TransactionTrackTTL,
+		versions:    make(map[int64]uint64),
+		maxVersions: cfg.SnapshotCacheEntries,
+		waiters:     make(map[int64][]remoteVersionWaiter),
+		maxWaiters:  cfg.SnapshotMaxWaiters,
+		finalizeCtx: finalizeCtx, finalizeCancel: finalizeCancel,
+		finalizeQueue: make(chan deferredRemoteClose, capacity),
+		writeSlots:    make(chan struct{}, writeLimit), finalizeDone: make(chan struct{}),
+	}
+	return state
+}
+
+func (m *Manager) StartFinalizer() {
+	if m == nil || m.remote == nil {
+		return
+	}
+	workers := m.cfg.AsyncFinalizeWorkers
+	if workers <= 0 {
+		workers = 16
+	}
+	m.remote.finalizeOnce.Do(func() { go m.runRemoteFinalizers(m.remote, workers) })
+}
+
+func (m *Manager) reserveRemoteWriteSlot() bool {
+	if m == nil || m.remote == nil {
+		return false
+	}
+	select {
+	case m.remote.writeSlots <- struct{}{}:
+		return true
+	default:
+		m.remote.writeRejected.Add(1)
+		metrics.IncCounter("remote_entity.write_admission_rejected_total", nil, 1)
+		return false
+	}
+}
+
+func (m *Manager) releaseRemoteWriteSlot() {
+	if m == nil || m.remote == nil {
+		return
+	}
+	select {
+	case <-m.remote.writeSlots:
+	default:
+	}
+}
+
+// deferRemoteClose hands one deferred close to the finalizers, or refuses so
+// the caller cleans up synchronously. Exactly one of the two, ever.
+//
+// The refusal has to be decided under the SAME barrier the stop uses, not by a
+// select race. finalizeCtx.Done being ready does not stop the select from
+// picking a queue that still has room, so after the stop had completed a
+// handoff could still be accepted into a queue nobody drains any more — and
+// batch.Close, told the handoff succeeded, dropped its entries, writeGate,
+// ownership read lock and finalize slot on the floor, with finalizeOnce
+// preventing any restart that might have collected them (RR-20260911-03).
+//
+// Registering on retryWG before releasing retryMu is what makes it safe:
+// runRemoteFinalizers waits on retryWG before its final drain, so a sender
+// admitted here is always drained, and StopFinalizer sets stopping under the
+// same lock, so no sender is admitted after it.
+func (m *Manager) deferRemoteClose(item deferredRemoteClose) error {
+	state := m.remote
+	state.retryMu.Lock()
+	if state.stopping {
+		state.retryMu.Unlock()
+		if err := state.finalizeCtx.Err(); err != nil {
+			return err
+		}
+		return context.Canceled
+	}
+	state.retryWG.Add(1)
+	state.retryMu.Unlock()
+	defer state.retryWG.Done()
+
+	select {
+	case state.finalizeQueue <- item:
+		return nil
+	case <-state.finalizeCtx.Done():
+		return state.finalizeCtx.Err()
+	}
+}
+
+func (m *Manager) runRemoteFinalizers(state *remoteState, workers int) {
+	state.finalizeWG.Add(workers)
+	for range workers {
+		go m.runRemoteFinalizerWorker(state)
+	}
+	state.finalizeWG.Wait()
+	state.retryWG.Wait()
+	// Retry goroutines send without holding a lock, so one may race the
+	// workers' final drain and land an item after they exited. All senders
+	// are done here (retryWG), so one last drain guarantees every deferred
+	// close releases its entries and slot before finalizeDone is published.
+	for {
+		select {
+		case item := <-state.finalizeQueue:
+			m.abandonDeferredRemoteClose(state, item)
+		default:
+			close(state.finalizeDone)
+			return
+		}
+	}
+}
+
+func (m *Manager) runRemoteFinalizerWorker(state *remoteState) {
+	defer state.finalizeWG.Done()
+	for {
+		select {
+		case item := <-state.finalizeQueue:
+			m.processDeferredRemoteClose(state, item)
+		case <-state.finalizeCtx.Done():
+			for {
+				select {
+				case item := <-state.finalizeQueue:
+					m.abandonDeferredRemoteClose(state, item)
+				default:
+					return
+				}
+			}
+		}
+	}
+}
+
+// abandonDeferredRemoteClose 是停机排空：拿不到持久结论也要交还 gate、fence 与写额度，
+// 但实体保持隔离（结果未知不能当作已提交或已回滚）。
+func (m *Manager) abandonDeferredRemoteClose(state *remoteState, item deferredRemoteClose) {
+	if item.settled {
+		// 资源早已交还；未完成的卸载放弃，实例保持隔离。
+		state.traceFinalize(item.txID, "abandoned")
+		return
+	}
+	if quarantineErr := m.quarantineEntries(item.entries, state.finalizeCtx.Err()); quarantineErr != nil {
+		metrics.IncCounter("remote_entity.quarantine_error_total", nil, 1)
+	}
+	m.releaseRemoteEntriesObserved(context.Background(), item.entries)
+	m.releaseRemoteWriteSlot()
+	state.traceFinalize(item.txID, "abandoned")
+}
+
+// processDeferredRemoteClose 只在拿到持久结论后收尾：Applied 唤醒 outbox 等待发布，Committed
+// 确认后释放，Rejected 回滚并隔离实体后释放（实体隔离到重新加载）。其余情况保留 gate、
+// fence、写额度并隔离实体，按退避重试。
+//
+// Durability 1/2/3（3 是带 Remote 批次、随 strict 路径提交的 pipelined）有 WAL：投影器在同一 Mongo 事务里提交，outbox 发布并确认后写进 tracker
+// （Committed / Rejected，失败时 Indeterminate）。投影期间 finalizer 不回源、不隔离、不发布，
+// 只等 tracker 结束或 FinalizeProjectionTimeout 到期（RR-20260926-38）；投影器报告未知
+// （Indeterminate）或超期后才按 RR-19 回源取得持久结论。Durability 0 没有 WAL，一律回源。
+func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRemoteClose) {
+	if item.settled {
+		m.finishRejectedRemoteClose(state, item)
+		return
+	}
+	if item.durability != 0 {
+		if item.projectionDeadline.IsZero() {
+			item.projectionDeadline = time.Now().Add(m.finalizeProjectionTimeout())
+		}
+		tracked, done := m.trackedRemoteOutcome(item.txID)
+		// tracker 不存在（done 为 nil）只会是已结束的记录被容量/TTL 淘汰：结论已经有了，直接回源。
+		if done != nil && !projectorReported(tracked.State) && time.Now().Before(item.projectionDeadline) {
+			m.awaitRemoteProjection(state, item, done)
+			return
+		}
+	}
+	if !remoteCommitFinal(m.localRemoteCommitState(item.txID)) {
+		metrics.IncCounter("remote_entity.finalize_status_read_total", nil, 1)
+	}
+	status, err := m.RemoteCommitStatus(state.finalizeCtx, item.txID)
+	if err == nil && status.State == entity.RemoteCommitUnknown && item.durability == 0 {
+		status, err = m.rejectUnresolvedMemoryTransaction(state.finalizeCtx, item)
+	}
+	if err == nil && status.State == entity.RemoteCommitApplied {
+		// 已持久但尚未发布：只唤醒唯一发布者，finalizer 不再自己执行网络发布。
+		m.scheduleOutboxRepublish()
+		m.scheduleDeferredRetry(state, item)
+		return
+	}
+	if err == nil && status.State == entity.RemoteCommitCommitted {
+		err = m.reconcileRemoteEntries(item.entries, status.Receipts)
+		if err == nil {
+			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
+			m.releaseRemoteWriteSlot()
+			m.deliverRemoteOutcome(m.localContext(state.finalizeCtx), item.txID, item.onOutcome, true)
+			state.traceFinalize(item.txID, "released")
+			return
+		}
+	}
+	if status.State == entity.RemoteCommitRejected {
+		err = m.settleRejectedRemoteEntries(state.finalizeCtx, item.entries)
+		if err == nil {
+			m.releaseRemoteEntriesObserved(context.Background(), item.entries)
+			m.releaseRemoteWriteSlot()
+			item.settled = true
+			m.finishRejectedRemoteClose(state, item)
+			return
+		}
+	}
+	// One failed/pending transaction must not monopolize a finalizer worker.
+	// Keep its write gate and fence, quarantine the live object, and retry with
+	// bounded exponential backoff on a timer.
+	if quarantineErr := m.quarantineEntries(item.entries, err); quarantineErr != nil {
+		metrics.IncCounter("remote_entity.quarantine_error_total", nil, 1)
+	}
+	m.scheduleDeferredRetry(state, item)
+}
+
+// finishRejectedRemoteClose 完成持久拒绝后的仅内存卸载（RR-20260926-39）：gate 已释放，旧实例经
+// 本地执行入口卸载，下一次访问从权威重载。卸载失败时实例保持隔离、按退避重试；loader 不支持卸载时
+// 维持旧行为（隔离到业务重新加载）。
+func (m *Manager) finishRejectedRemoteClose(state *remoteState, item deferredRemoteClose) {
+	ctx := m.localContext(state.finalizeCtx)
+	err := m.unloadRejectedEntities(ctx, item.entries)
+	if err == nil {
+		// 被拒绝实例已卸载、同步状态已关闭：丢弃 Sync 门，不执行 AfterCommit（RR-20260926-37）。
+		m.deliverRemoteOutcome(ctx, item.txID, item.onOutcome, false)
+		state.traceFinalize(item.txID, "released")
+		return
+	}
+	if errors.Is(err, entity.ErrRemoteUnloadUnsupported) {
+		// loader 不能卸载：旧实例仍持有被拒绝的冻结内容，丢弃门会把它交付给客户端。
+		// 门保持冻结，直到业务自行重新加载（与修复前相同）。
+		metrics.IncCounter("remote_entity.rejected_unload_unsupported_total", nil, 1)
+		state.traceFinalize(item.txID, "released")
+		return
+	}
+	metrics.IncCounter("remote_entity.rejected_unload_error_total", nil, 1)
+	m.scheduleDeferredRetry(state, item)
+}
+
+// deliverRemoteOutcome 把持久结论交给 Nest 的提交后工作，至多一次：调用方只在终态分支、资源释放之后调用，
+// 调用后收尾项不再入队。经 ctx 的本地执行入口（Nest 快池）执行；fn 自己隔离每个回调的 panic，
+// 这里只兜底记录执行入口的错误。
+//
+// NestMgr.RunLocal 拒绝投递（Nest 未启动、停机中或已 fence）时 fn 不执行（RR-20260926-61，维护者批准：不离池执行，
+// 计数告警）：提交后工作里有业务 AfterCommit，不能在 finalizer goroutine 上就地运行——那会与已 fence 的快池里仍在
+// 执行的 handler 并发，或在 Nest Shutdown 返回之后才执行；框架的 Sync Confirm / Reject 与业务回调同在 fn 里，
+// 也不单独执行，Sync 门保持冻结（进程正在退出或已被隔离，重启后从权威重载）。持久结论本身不受影响。
+// 未执行的次数按结论计入 remote_entity.deferred_outcome_not_run_total{outcome}，并记一条告警日志。
+func (m *Manager) deliverRemoteOutcome(ctx context.Context, txID entity.RemoteTransactionID, fn func(bool), committed bool) {
+	if fn == nil {
+		return
+	}
+	outcome := "committed"
+	if !committed {
+		outcome = "rejected"
+	}
+	ran, err := runLocalStep(ctx, func() { fn(committed) })
+	if !ran {
+		metrics.IncCounter("remote_entity.deferred_outcome_not_run_total", metrics.Labels{"outcome": outcome}, 1)
+		slog.Warn("remote_entity: fast pool refused the deferred post-commit work; AfterCommit not run and the Sync gate stays frozen",
+			"tx", txID.String(), "outcome", outcome, "err", err)
+		return
+	}
+	if err != nil {
+		metrics.IncCounter("remote_entity.deferred_outcome_error_total", nil, 1)
+		slog.Error("remote_entity: deferred post-commit work failed", "tx", txID.String(), "outcome", outcome, "err", err)
+	}
+}
+
+// scheduleDeferredRetry 以有界指数退避把收尾项重新入队，不占 finalizer worker。
+func (m *Manager) scheduleDeferredRetry(state *remoteState, item deferredRemoteClose) {
+	metrics.IncCounter("remote_entity.finalize_retry_total", nil, 1)
+	item.attempt++
+	delay := m.cfg.FinalizeRetryInterval
+	if delay <= 0 {
+		delay = 100 * time.Millisecond
+	}
+	for i := 1; i < item.attempt && delay < 5*time.Second; i++ {
+		delay *= 2
+	}
+	if delay > 5*time.Second {
+		delay = 5 * time.Second
+	}
+	state.retryWG.Add(1)
+	state.traceFinalize(item.txID, "retry")
+	go m.requeueDeferredRemoteClose(state, item, nil, time.NewTimer(delay))
+}
+
+// awaitRemoteProjection 把收尾项挂到投影器的结论上：tracker 结束（Committed / Rejected /
+// Indeterminate）或投影期限到期时重新入队，不占 finalizer worker、不做回源读取。gate、fence、
+// 写额度照旧由这一项持有；实体不隔离——投影期间它仍由 gate 独占，投影器 ack 时也不必解冻。
+func (m *Manager) awaitRemoteProjection(state *remoteState, item deferredRemoteClose, done <-chan struct{}) {
+	state.retryWG.Add(1)
+	state.traceFinalize(item.txID, "await_projection")
+	go m.requeueDeferredRemoteClose(state, item, done, time.NewTimer(time.Until(item.projectionDeadline)))
+}
+
+// requeueDeferredRemoteClose 等 done 关闭或 timer 到期后把收尾项送回 finalizer 队列；调用方已登记
+// retryWG。done 为 nil 时只等 timer（select 对 nil channel 永不就绪）。停机时按排空规则交还资源
+// （runRemoteFinalizers 在最终排空前等待 retryWG）。
+func (m *Manager) requeueDeferredRemoteClose(state *remoteState, item deferredRemoteClose, done <-chan struct{}, timer *time.Timer) {
+	defer state.retryWG.Done()
+	defer timer.Stop()
+	select {
+	case <-state.finalizeCtx.Done():
+		m.abandonDeferredRemoteClose(state, item)
+		return
+	case <-done:
+	case <-timer.C:
+	}
+	state.retryMu.Lock()
+	stopping := state.stopping
+	state.retryMu.Unlock()
+	if stopping {
+		m.abandonDeferredRemoteClose(state, item)
+		return
+	}
+	// Send outside the lock: holding retryMu across a bounded-queue send
+	// stalls Stop behind a full queue. The Done branch and the final
+	// drain in runRemoteFinalizers together guarantee the item is always
+	// consumed or released, whichever side wins the race.
+	select {
+	case state.finalizeQueue <- item:
+	case <-state.finalizeCtx.Done():
+		m.abandonDeferredRemoteClose(state, item)
+	}
+}
+
+// projectorReported 表示 WAL 投影器已给出本进程可见的结论：Committed / Rejected 是持久结论，
+// Indeterminate 是投影器报告的“结果未知”，此时 finalizer 才需要回源。
+func projectorReported(state entity.RemoteCommitState) bool {
+	return remoteCommitFinal(state) || state == entity.RemoteCommitIndeterminate
+}
+
+func (m *Manager) finalizeProjectionTimeout() time.Duration {
+	if m.cfg != nil && m.cfg.FinalizeProjectionTimeout > 0 {
+		return m.cfg.FinalizeProjectionTimeout
+	}
+	return 30 * time.Second
+}
+
+// rejectUnresolvedMemoryTransaction 为回源读不到的 Durability 0 事务写下持久结论。
+//
+// 这类事务只有 ApplyRemoteCommits 那一次提交尝试，没有 WAL 会重放它；后端返回瞬时
+// 错误时事务可能根本没有到达 Mongo，CommitStatus 永远是 Unknown（RR-20260926-28）。
+// 调用时本次提交尝试已经返回（batch.Close 在 Commit 之后才转交 finalizer），但服务端
+// 仍可能有在途的提交，所以不能直接当成未提交：用同一事务 _id 写入拒绝，由唯一索引
+// 在“拒绝”和“迟到提交”之间裁决。插入成功即 Rejected；撞键则返回事务的真实状态
+// （Applied/Committed 走发布与确认，不回滚）。任何错误都意味着仍无结论，交回调用方重试。
+func (m *Manager) rejectUnresolvedMemoryTransaction(ctx context.Context, item deferredRemoteClose) (entity.RemoteCommitStatus, error) {
+	unknown := entity.RemoteCommitStatus{TransactionID: item.txID, State: entity.RemoteCommitUnknown}
+	rejecter, ok := m.backend.(remoteUnresolvedRejecter)
+	if !ok {
+		return unknown, fmt.Errorf("%w: backend cannot persist a rejection for unresolved transaction %s", entity.ErrRemotePersistenceIndeterminate, item.txID)
+	}
+	commits := finalizedRemoteCommits(item.entries)
+	if len(commits) == 0 {
+		return unknown, fmt.Errorf("%w: unresolved transaction %s has no finalized commits", entity.ErrRemotePersistenceIndeterminate, item.txID)
+	}
+	status, err := rejecter.RejectUnresolvedRemoteCommits(ctx, commits, unresolvedMemoryRejectCause)
+	if err != nil {
+		metrics.IncCounter("remote_entity.unresolved_reject_error_total", nil, 1)
+		return unknown, fmt.Errorf("remote_entity: persist rejection for transaction %s: %w", item.txID, err)
+	}
+	if status.TransactionID.IsZero() {
+		status.TransactionID = item.txID
+	}
+	if status.State == entity.RemoteCommitRejected || status.State == entity.RemoteCommitCommitted {
+		m.completeRemoteTransaction(item.txID, status)
+	}
+	metrics.IncCounter("remote_entity.unresolved_resolved_total", metrics.Labels{"state": remoteCommitStateLabel(status.State)}, 1)
+	return status, nil
+}
+
+func remoteCommitStateLabel(state entity.RemoteCommitState) string {
+	switch state {
+	case entity.RemoteCommitRejected:
+		return "rejected"
+	case entity.RemoteCommitApplied:
+		return "applied"
+	case entity.RemoteCommitCommitted:
+		return "committed"
+	default:
+		return "other"
+	}
+}
+
+// settleRejectedRemoteEntries 在持久拒绝后回滚本事务的定稿提交，并让批次内实体保持隔离。
+//
+// 回滚经 entity.RunLocal 的本地执行路径：finalizer 不是 Nest 快 worker，也拿不到已结束
+// 消息的快池续行，finalizeCtx 未注入执行器时就地执行，在每个实体自己的本地锁内调用
+// RollbackRemoteCommit（与快池 handler 经 Guard 取得的是同一把锁，hook panic 也会解锁）。
+// 回滚后清除定稿标记，释放时按 BaseVersion 解锁，与 Abort 一致，也保证重试不会重复回滚。
+//
+// 拒绝后不能解冻：生成实体的 RollbackRemoteCommit 是 no-op，被拒绝事务的内存修改仍在实体
+// 里，而下一次提交按整份 DAO 编码（MarshalPersist 忽略 mask、写入是 ReplaceOne），会把被拒绝
+// 的修改一并 CAS 进 Mongo。框架无法证明内存已回到权威状态，因此批次内实体一律隔离到重新
+// 加载为止（RR-20260926-28 复核）；隔离失败时返回错误，调用方保留 gate 重试，不释放。
+func (m *Manager) settleRejectedRemoteEntries(ctx context.Context, entries []*remoteWriteEntry) error {
+	runErr := entity.RunLocal(m.localContext(ctx), func() {
+		m.rollbackRemoteEntries(entries)
+		for _, entry := range entries {
+			if entry != nil {
+				entry.finalized = false
+				entry.commit = entity.RemoteCommit{}
+			}
+		}
+	})
+	if err := errors.Join(runErr, m.quarantineEntries(entries, entity.ErrRemoteRejected)); err != nil {
+		return err
+	}
+	// gate 释放之后框架会卸载这些实例、下一次访问从权威重载；其间下一写者得到可重试的重载哨兵（RR-20260926-62）。
+	m.markRejectedReloadPending(entries)
+	return nil
+}
+
+// reconcileRemoteEntries 只确认已发布事务的本地实体；即使发布由其他进程完成，也不再发快照。
+func (m *Manager) reconcileRemoteEntries(entries []*remoteWriteEntry, receipts []entity.RemoteCommitReceipt) error {
+	byEntity := make(map[int64]entity.RemoteCommitReceipt, len(receipts))
+	for _, receipt := range receipts {
+		byEntity[receipt.EntityID] = receipt
+	}
+	for _, entry := range entries {
+		if entry == nil || !entry.finalized {
+			continue
+		}
+		receipt, ok := byEntity[entry.commit.EntityID]
+		if !ok {
+			return fmt.Errorf("%w: committed transaction missing receipt for entity %d", entity.ErrRemotePersistenceIndeterminate, entry.commit.EntityID)
+		}
+		if err := m.confirmRemoteCommit(entry.commit.Clone(), receipt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manager) StopFinalizer(ctx context.Context) error {
+	if m == nil || m.remote == nil {
+		return nil
+	}
+	m.StartFinalizer()
+	m.remote.retryMu.Lock()
+	m.remote.stopping = true
+	m.remote.finalizeCancel()
+	m.remote.retryMu.Unlock()
+	select {
+	case <-m.remote.finalizeDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *Manager) releaseRemoteEntries(parent context.Context, entries []*remoteWriteEntry) error {
+	started := time.Now()
+	defer func() { metrics.ObserveDuration("remote_entity.remote.release_latency", nil, time.Since(started)) }()
+	if parent == nil {
+		parent = context.Background()
+	}
+	var joined error
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		if entry == nil || entry.wrapper == nil {
+			continue
+		}
+		if entry.distLock && entry.wrapper.rMu.IsAcquired() {
+			version := int64(entry.lease.BaseVersion)
+			if entry.finalized {
+				version = int64(entry.commit.NextVersion)
+			}
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), m.cfg.OpTimeout)
+			err := entry.wrapper.rMu.UnlockWithRetry(ctx, version, m.cfg.VersionTTL, m.cfg.UnlockRetryCount, m.cfg.UnlockRetryInterval)
+			cancel()
+			if err != nil {
+				joined = errors.Join(joined, entity.ErrRemoteReleaseIncomplete, err)
+			}
+		}
+		entry.wrapper.ownershipMu.RUnlock()
+		<-entry.wrapper.writeGate
+		entry.wrapper.release()
+	}
+	return joined
+}
+
+func (m *Manager) releaseRemoteEntriesObserved(parent context.Context, entries []*remoteWriteEntry) {
+	if err := m.releaseRemoteEntries(parent, entries); err != nil {
+		m.recordReleaseFailure(err)
+	}
+}
+
+// ApplyRemoteCommits 返回持久回执并唤醒 outbox；nil 不代表已经发布。需要发布完成时等待 FlushRemoteTransaction。
+func (m *Manager) ApplyRemoteCommits(ctx context.Context, txID entity.RemoteTransactionID, commits []entity.RemoteCommit) (receipts []entity.RemoteCommitReceipt, err error) {
+	started := time.Now()
+	defer func() {
+		result := "ok"
+		if err != nil {
+			result = "error"
+		}
+		labels := metrics.Labels{"result": result}
+		metrics.IncCounter("remote_entity.remote.apply_total", labels, 1)
+		metrics.ObserveDuration("remote_entity.remote.apply_latency", labels, time.Since(started))
+	}()
+	if m == nil || m.backend == nil {
+		return nil, entity.ErrRemoteWriteCapabilityDisabled
+	}
+	if txID.IsZero() {
+		return nil, entity.ErrRemoteRejected
+	}
+	if len(commits) == 0 {
+		return nil, fmt.Errorf("%w: empty commit batch", entity.ErrRemoteRejected)
+	}
+	cloned := make([]entity.RemoteCommit, len(commits))
+	for i, commit := range commits {
+		if commit.TransactionID != txID {
+			return nil, fmt.Errorf("%w: transaction mismatch", entity.ErrRemoteRejected)
+		}
+		if err := commit.Validate(); err != nil {
+			return nil, err
+		}
+		if err := validateRemoteCommitEncodable(commit); err != nil {
+			return nil, err
+		}
+		cloned[i] = commit.Clone()
+	}
+	// 校验失败不能留下无法完成的 pending tracker；已存在的事务也不应被坏输入覆盖。
+	if err := m.trackRemoteTransaction(txID); err != nil {
+		return nil, err
+	}
+	if len(cloned) > 1 {
+		receipts, err = m.backend.CommitRemoteBatch(ctx, cloned)
+	} else if len(cloned) == 1 {
+		var receipt entity.RemoteCommitReceipt
+		receipt, err = m.backend.CommitRemote(ctx, cloned[0])
+		receipts = []entity.RemoteCommitReceipt{receipt}
+	}
+	if err != nil {
+		state := entity.RemoteCommitIndeterminate
+		if errors.Is(err, entity.ErrRemoteFenced) || errors.Is(err, entity.ErrRemoteVersionConflict) || errors.Is(err, entity.ErrRemoteRejected) {
+			state = entity.RemoteCommitRejected
+		}
+		m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: state, Cause: err.Error()})
+		if state == entity.RemoteCommitIndeterminate {
+			err = errors.Join(entity.ErrRemotePersistenceIndeterminate, err)
+		}
+		return nil, err
+	}
+	if len(receipts) != len(cloned) {
+		err = fmt.Errorf("%w: receipt count=%d commits=%d", entity.ErrRemotePersistenceIndeterminate, len(receipts), len(cloned))
+		m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitIndeterminate, Cause: err.Error()})
+		return nil, err
+	}
+	// 存储回执不代表发布完成。已发布的幂等重放只做本地确认；Applied 交给 outbox，
+	// WAL 投影不等待总线。memory/strict 写者通过 tracker 等待发布结论。
+	status, statusErr := m.backend.CommitStatus(ctx, txID)
+	if statusErr != nil {
+		m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitIndeterminate, Receipts: receipts, Cause: statusErr.Error()})
+		m.scheduleOutboxRepublish()
+		return nil, errors.Join(entity.ErrRemotePersistenceIndeterminate, entity.ErrRemotePublicationPending, statusErr)
+	}
+	if status.State == entity.RemoteCommitCommitted {
+		for i := range cloned {
+			if err := m.confirmRemoteCommit(cloned[i], receipts[i]); err != nil {
+				return nil, errors.Join(entity.ErrRemotePersistenceIndeterminate, entity.ErrRemotePublicationPending, err)
+			}
+		}
+		m.completeRemoteTransaction(txID, status)
+		return receipts, nil
+	}
+	if status.State != entity.RemoteCommitApplied {
+		err := fmt.Errorf("%w: persisted transaction %s has state %v", entity.ErrRemotePersistenceIndeterminate, txID, status.State)
+		m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitIndeterminate, Receipts: receipts, Cause: err.Error()})
+		m.scheduleOutboxRepublish()
+		return nil, err
+	}
+	m.completeRemoteTransaction(txID, entity.RemoteCommitStatus{TransactionID: txID, State: entity.RemoteCommitApplied, Receipts: receipts})
+	m.scheduleOutboxRepublish()
+	return receipts, nil
+}
+
+// RecoverOutbox 是唯一发布入口，发布 outbox 里全部已持久（Applied）但还没发布的提交。启动时（Assembly.Start）与补发循环
+// （runOutboxRepublish）共用。正式存储以游标跨过失败项，继续尝试后续页；下一轮从头重试。
+// 旧自定义存储未实现分页时只保证当前页内互不阻塞，不能冒称覆盖后续页。
+func (m *Manager) RecoverOutbox(ctx context.Context) error {
+	if m == nil || m.remote == nil || m.backend == nil {
+		return entity.ErrRemoteWriteCapabilityDisabled
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// 显式恢复也持有发布生命周期；StopFinalizer 关准入后不再接受新恢复，
+	// 已在途的恢复必须结束，SnapshotClient 才能被释放。
+	state := m.remote
+	state.retryMu.Lock()
+	if state.stopping {
+		state.retryMu.Unlock()
+		return ErrAssemblyStopped
+	}
+	state.retryWG.Add(1)
+	state.retryMu.Unlock()
+	defer state.retryWG.Done()
+	if err := m.remote.outboxSerial.Lock(ctx); err != nil {
+		return err
+	}
+	defer m.remote.outboxSerial.Unlock()
+	outbox := m.backend
+	pager, paged := outbox.(entity.IRemoteCommitOutboxPager)
+	var cursor entity.RemoteOutboxCursor
+	var failed error
+	for {
+		var pending []entity.RemoteCommitStatus
+		var next entity.RemoteOutboxCursor
+		var err error
+		started := time.Now()
+		if paged {
+			pending, next, err = pager.PendingRemoteCommitPage(ctx, cursor, 256)
+		} else {
+			pending, err = outbox.PendingRemoteCommits(ctx, 256)
+		}
+		metrics.ObserveDuration("remote_entity.outbox.scan", nil, time.Since(started))
+		if err != nil {
+			return errors.Join(failed, fmt.Errorf("remote_entity: load commit outbox: %w", err))
+		}
+		if len(pending) == 0 {
+			return failed
+		}
+		failed = errors.Join(failed, m.publishOutboxPage(ctx, pending))
+		if err := ctx.Err(); err != nil {
+			return errors.Join(failed, err)
+		}
+		if len(pending) < 256 {
+			return failed
+		}
+		if next.TransactionID != "" {
+			if next == cursor {
+				return errors.Join(failed, errors.New("remote_entity: outbox cursor did not advance"))
+			}
+			cursor = next
+		} else if failed != nil {
+			return failed
+		}
+	}
+}
+
+// scheduleOutboxRepublish 唤醒唯一发布循环。首次立即扫描，失败才退避；运行中只记 dirty。
+// Applied 记录在持久 outbox 中不会过期；崩溃后 Assembly.Start 仍经 RecoverOutbox 恢复。
+// retryWG 与停止准入共用屏障，StopFinalizer 返回后不能还有发布在途。
+func (m *Manager) scheduleOutboxRepublish() {
+	if m == nil || m.remote == nil || m.backend == nil {
+		return
+	}
+	state := m.remote
+	state.republishMu.Lock()
+	defer state.republishMu.Unlock()
+	if state.republishRunning {
+		state.republishDirty = true
+		return
+	}
+	state.retryMu.Lock()
+	if state.stopping {
+		state.retryMu.Unlock()
+		return
+	}
+	state.retryWG.Add(1)
+	state.retryMu.Unlock()
+	state.republishRunning = true
+	metrics.IncCounter("remote_entity.remote.republish_scheduled_total", nil, 1)
+	go m.runOutboxRepublish(state)
+}
+
+// runOutboxRepublish 立即扫描；失败退避，成功且没有新的唤醒才退出。
+func (m *Manager) runOutboxRepublish(state *remoteState) {
+	defer state.retryWG.Done()
+	base := m.cfg.FinalizeRetryInterval
+	if base <= 0 {
+		base = 100 * time.Millisecond
+	}
+	delay := time.Duration(0)
+	for {
+		timer := time.NewTimer(delay)
+		select {
+		case <-state.finalizeCtx.Done():
+			timer.Stop()
+			state.republishMu.Lock()
+			state.republishRunning = false
+			state.republishMu.Unlock()
+			return
+		case <-timer.C:
+		}
+		state.republishMu.Lock()
+		state.republishDirty = false
+		state.republishMu.Unlock()
+		ctx, cancel := context.WithTimeout(state.finalizeCtx, m.cfg.OpTimeout)
+		err := m.RecoverOutbox(ctx)
+		cancel()
+		state.republishMu.Lock()
+		if err == nil && !state.republishDirty {
+			state.republishRunning = false
+			state.republishMu.Unlock()
+			metrics.IncCounter("remote_entity.remote.republish_total", metrics.Labels{"result": "ok"}, 1)
+			return
+		}
+		state.republishMu.Unlock()
+		if err != nil {
+			metrics.IncCounter("remote_entity.remote.republish_total", metrics.Labels{"result": "error"}, 1)
+			delay = min(max(base, delay*2), 5*time.Second)
+			slog.Warn("remote_entity: republishing persisted commits failed; retrying", "err", err, "retry_in", delay)
+		} else {
+			delay = 0
+		}
+	}
+}
+
+func (m *Manager) publishAppliedRemoteTransaction(ctx context.Context, status entity.RemoteCommitStatus) error {
+	started := time.Now()
+	defer func() { metrics.ObserveHistogram("remote_entity.outbox.transaction", nil, time.Since(started)) }()
+	if status.State != entity.RemoteCommitApplied || status.TransactionID.IsZero() || len(status.Commits) == 0 || len(status.Commits) != len(status.Receipts) {
+		return fmt.Errorf("remote_entity: corrupt commit outbox transaction %s", status.TransactionID)
+	}
+	if m.backend == nil {
+		return entity.ErrRemoteWriteCapabilityDisabled
+	}
+	for i := range status.Commits {
+		commit := status.Commits[i].Clone()
+		if commit.TransactionID != status.TransactionID {
+			return fmt.Errorf("remote_entity: outbox transaction mismatch %s", status.TransactionID)
+		}
+		if err := m.afterRemoteCommit(ctx, commit, status.Receipts[i]); err != nil {
+			return err
+		}
+	}
+	markStarted := time.Now()
+	markErr := m.backend.MarkRemoteCommitPublished(ctx, status.TransactionID)
+	metrics.ObserveDuration("remote_entity.outbox.mark_published", nil, time.Since(markStarted))
+	if markErr != nil {
+		return markErr
+	}
+	m.completeRemoteTransaction(status.TransactionID, entity.RemoteCommitStatus{
+		TransactionID: status.TransactionID,
+		State:         entity.RemoteCommitCommitted,
+		Receipts:      append([]entity.RemoteCommitReceipt(nil), status.Receipts...),
+	})
+	return nil
+}
+
+// ReadRemoteSnapshot 委托 SnapshotClient（Mirror 方案第 3 步：全仓只有一份读 / 兴趣 / 接收协议）。
+func (m *Manager) ReadRemoteSnapshot(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
+	if m == nil || m.snapshots == nil {
+		return entity.RemoteSnapshotEnvelope{}, false, entity.ErrRemoteRejected
+	}
+	return m.snapshots.ReadRemoteSnapshot(ctx, key, consistency, minVersion)
+}
+
+// ReadSnapshot 是只读能力（entity.RemoteSnapshotReadOnly），同进程的只读方可以直接用 Manager 或
+// SnapshotClient()，不必再注册身份。
+func (m *Manager) ReadSnapshot(ctx context.Context, req entity.RemoteSnapshotRead) (entity.RemoteSnapshotEnvelope, bool, error) {
+	if m == nil || m.snapshots == nil {
+		return entity.RemoteSnapshotEnvelope{}, false, entity.ErrRemoteRejected
+	}
+	return m.snapshots.ReadSnapshot(ctx, req)
+}
+
+// SnapshotClient 返回 Manager 组合的快照客户端。同进程的只读方（同一 kind 的 consumer）用它构造
+// entity.RemoteMirrorReader，不另建订阅、不重复注册身份。
+func (m *Manager) SnapshotClient() *SnapshotClient {
+	if m == nil {
+		return nil
+	}
+	return m.snapshots
+}
+
+var _ entity.RemoteSnapshotInterestManager = (*Manager)(nil)
+var _ entity.RemoteSnapshotReadOnly = (*Manager)(nil)
+
+type remoteInterestPublisher interface {
+	PublishRemoteInterest(context.Context, entity.RemoteSnapshotInterest, bool) error
+}
+
+func (m *Manager) RenewRemoteSnapshotInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
+	if m == nil || m.snapshots == nil {
+		return entity.ErrRemoteRejected
+	}
+	return m.snapshots.RenewInterest(ctx, key)
+}
+
+// interestGenerationClock is the process-wide high-water mark of every
+// interest generation issued by any Manager in this process. A Manager seeds
+// strictly above it, so two instances created within the same clock tick (a
+// restart harness, coarse clocks on Windows — RR-20260913-02 复核) cannot
+// both start at the same UnixNano and re-issue each other's generations. It
+// does not survive the process; across restarts the clock is the guarantee.
+var interestGenerationClock atomic.Uint64
+
+// interestGenerationNow is the clock behind the seed; a variable so tests can
+// freeze it and prove the ordering does not depend on nanosecond resolution.
+var interestGenerationNow = func() uint64 { return uint64(time.Now().UnixNano()) }
+
+// seedInterestGeneration returns a seed above both now and every generation
+// already issued in this process, and records it as issued.
+func seedInterestGeneration(now uint64) uint64 {
+	for {
+		last := interestGenerationClock.Load()
+		next := now
+		if next <= last {
+			next = last + 1
+		}
+		if interestGenerationClock.CompareAndSwap(last, next) {
+			return next
+		}
+	}
+}
+
+// noteInterestGenerationIssued raises the process-wide high-water mark.
+func noteInterestGenerationIssued(generation uint64) {
+	for {
+		last := interestGenerationClock.Load()
+		if generation <= last || interestGenerationClock.CompareAndSwap(last, generation) {
+			return
+		}
+	}
+}
+
+func (m *Manager) ReleaseRemoteSnapshotInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
+	if m == nil || m.snapshots == nil {
+		return entity.ErrRemoteRejected
+	}
+	return m.snapshots.ReleaseInterest(ctx, key)
+}
+
+func validateRemoteReceipt(commit entity.RemoteCommit, receipt entity.RemoteCommitReceipt) error {
+	if receipt.TransactionID != commit.TransactionID || receipt.EntityID != commit.EntityID || receipt.StateVersion != commit.NextVersion || receipt.MarkerEpoch != commit.MarkerEpoch || receipt.LockFence != commit.LockFence || receipt.RouteEpoch != commit.RouteEpoch {
+		return fmt.Errorf("remote_entity: invalid commit receipt for %d", commit.EntityID)
+	}
+	return nil
+}
+
+// confirmRemoteCommit 只更新本地参与方和等待者。持久状态已 Committed 时不得再触发网络发布。
+func (m *Manager) confirmRemoteCommit(commit entity.RemoteCommit, receipt entity.RemoteCommitReceipt) error {
+	if err := validateRemoteReceipt(commit, receipt); err != nil {
+		return err
+	}
+	if err := m.acknowledgeRemoteCommit(commit); err != nil {
+		return err
+	}
+	m.notifyRemoteVersion(commit.EntityID, commit.NextVersion)
+	return nil
+}
+
+func (m *Manager) afterRemoteCommit(ctx context.Context, commit entity.RemoteCommit, receipt entity.RemoteCommitReceipt) error {
+	if err := validateRemoteReceipt(commit, receipt); err != nil {
+		return err
+	}
+	if err := m.acknowledgeRemoteCommit(commit); err != nil {
+		return err
+	}
+	started := time.Now()
+	err := m.snapshots.publishCommitted(ctx, commit)
+	metrics.ObserveDuration("remote_entity.outbox.snapshots", nil, time.Since(started))
+	if err != nil {
+		return err
+	}
+	m.notifyRemoteVersion(commit.EntityID, commit.NextVersion)
+	return nil
+}
+
+func (m *Manager) FlushRemoteEntity(ctx context.Context, id int64, minVersion uint64) error {
+	if minVersion == 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.remote.versionMu.Lock()
+	if m.remote.versions[id] >= minVersion {
+		m.remote.versionMu.Unlock()
+		return nil
+	}
+	waiter := remoteVersionWaiter{version: minVersion, done: make(chan struct{})}
+	if m.remote.maxWaiters > 0 && m.remote.waiterCount >= m.remote.maxWaiters {
+		m.remote.versionMu.Unlock()
+		return entity.ErrRemoteOverloaded
+	}
+	m.remote.waiters[id] = append(m.remote.waiters[id], waiter)
+	m.remote.waiterCount++
+	m.remote.versionMu.Unlock()
+	select {
+	case <-waiter.done:
+		return nil
+	case <-ctx.Done():
+		m.removeRemoteVersionWaiter(id, waiter.done)
+		return ctx.Err()
+	}
+}
+
+func (m *Manager) notifyRemoteVersion(id int64, version uint64) {
+	m.remote.versionMu.Lock()
+	if _, exists := m.remote.versions[id]; !exists {
+		m.remote.versionOrder = append(m.remote.versionOrder, id)
+	}
+	if version > m.remote.versions[id] {
+		m.remote.versions[id] = version
+	}
+	waiters := m.remote.waiters[id]
+	remaining := waiters[:0]
+	for _, waiter := range waiters {
+		if version >= waiter.version {
+			close(waiter.done)
+			m.remote.waiterCount--
+		} else {
+			remaining = append(remaining, waiter)
+		}
+	}
+	if len(remaining) == 0 {
+		delete(m.remote.waiters, id)
+	} else {
+		m.remote.waiters[id] = remaining
+	}
+	for m.remote.maxVersions > 0 && len(m.remote.versions) > m.remote.maxVersions && len(m.remote.versionOrder) > 0 {
+		oldest := m.remote.versionOrder[0]
+		m.remote.versionOrder = m.remote.versionOrder[1:]
+		if len(m.remote.waiters[oldest]) == 0 {
+			delete(m.remote.versions, oldest)
+		} else {
+			m.remote.versionOrder = append(m.remote.versionOrder, oldest)
+			break
+		}
+	}
+	m.remote.versionMu.Unlock()
+}
+
+func (m *Manager) removeRemoteVersionWaiter(id int64, done chan struct{}) {
+	m.remote.versionMu.Lock()
+	waiters := m.remote.waiters[id]
+	for i := range waiters {
+		if waiters[i].done == done {
+			waiters = append(waiters[:i], waiters[i+1:]...)
+			m.remote.waiterCount--
+			break
+		}
+	}
+	if len(waiters) == 0 {
+		delete(m.remote.waiters, id)
+	} else {
+		m.remote.waiters[id] = waiters
+	}
+	m.remote.versionMu.Unlock()
+}
+
+func (m *Manager) quarantineEntries(entries []*remoteWriteEntry, cause error) error {
+	var joined error
+	for _, entry := range entries {
+		if entry == nil || entry.entity == nil {
+			continue
+		}
+		if remote, ok := entry.entity.(entity.IThreadSafeRemoteEntity); ok {
+			transitions := []entity.RemoteOwnershipState{entity.RemoteOwnershipFenced, entity.RemoteOwnershipRecovering, entity.RemoteOwnershipQuarantined}
+			switch remote.RemoteOwnershipState() {
+			case entity.RemoteOwnershipUnknown:
+				transitions = transitions[1:]
+			case entity.RemoteOwnershipFenced:
+				transitions = transitions[1:]
+			case entity.RemoteOwnershipRecovering:
+				transitions = transitions[2:]
+			case entity.RemoteOwnershipQuarantined:
+				continue
+			}
+			for _, target := range transitions {
+				if err := remote.TransitionRemoteOwnership(target); err != nil {
+					joined = errors.Join(joined, fmt.Errorf("remote_entity: quarantine entity %d at %s: %w", entry.entity.ID(), target, err))
+					break
+				}
+			}
+		}
+	}
+	if joined != nil {
+		return errors.Join(cause, joined)
+	}
+	return nil
+}
+
+func (m *Manager) rollbackRemoteEntries(entries []*remoteWriteEntry) {
+	for _, entry := range entries {
+		if entry == nil || entry.entity == nil || !entry.finalized || entry.entity.GetMutex() == nil {
+			continue
+		}
+		func() {
+			mu := entry.entity.GetMutex()
+			mu.Lock()
+			// 自定义回滚 hook panic 也必须解锁，不能把后续快 worker 永久卡住。
+			defer mu.Unlock()
+			if participant, ok := entry.entity.(entity.IRemoteCommitParticipant); ok {
+				participant.RollbackRemoteCommit(entry.commit.Clone())
+			}
+		}()
+	}
+}
+
+var _ entity.RemoteWriteBatchManager = (*Manager)(nil)
+var _ entity.RemoteCommitApplier = (*Manager)(nil)
+var _ entity.RemoteSnapshotReader = (*Manager)(nil)
+
+// SupportsConcurrentRemoteCommits 声明独立 Entity 的持久投影可并行。
+// 调用方保持同一 Entity 的版本顺序；发布统一交给 outbox。
+func (*Manager) SupportsConcurrentRemoteCommits() bool { return true }
+
+// 持久回执重放仍需发布历史快照，但不得用旧事务覆盖已获得更高许可的本地实体。
+// 只在已验证回执的路径使用此判断；新写入的 fence 校验保持严格。
+func remoteReceiptObsolete(live entity.IThreadSafeEntity, commit entity.RemoteCommit) bool {
+	remote, ok := live.(entity.IThreadSafeRemoteEntity)
+	if !ok {
+		return false
+	}
+	v := remote.RemoteVersionVector()
+	return v.StateVersion >= commit.NextVersion && v.MarkerEpoch >= commit.MarkerEpoch && v.RouteEpoch >= commit.RouteEpoch && v.LockFence >= commit.LockFence &&
+		(v.StateVersion > commit.NextVersion || v.LockFence > commit.LockFence || v.MarkerEpoch > commit.MarkerEpoch || v.RouteEpoch > commit.RouteEpoch)
+}
+func thawAcknowledgedRemote(remote entity.IThreadSafeRemoteEntity, marked bool) error {
+	if err := remote.TransitionRemoteOwnership(entity.RemoteOwnershipRecovering); err != nil {
+		return err
+	}
+	target := entity.RemoteOwnershipLocalOwned
+	if marked {
+		target = entity.RemoteOwnershipShared
+	}
+	return remote.TransitionRemoteOwnership(target)
+}
+
+func remoteCommitAlreadyAcknowledged(remote entity.IThreadSafeRemoteEntity, vector entity.RemoteVersionVector) bool {
+	state := remote.RemoteOwnershipState()
+	return remote.RemoteVersionVector() == vector && (state == entity.RemoteOwnershipLocalOwned || state == entity.RemoteOwnershipShared)
+}
+
+func (m *Manager) acknowledgeRemoteCommit(commit entity.RemoteCommit) error {
+	wrapper, ok := m.get(commit.EntityID)
+	if !ok || wrapper == nil {
+		return nil
+	}
+	live := wrapper.attachedEntity()
+	if live == nil || remoteReceiptObsolete(live, commit) {
+		return nil
+	}
+	// RR-20261006-01：登记里挂着的实例已经不是这个实体——同一事务的删除在准入后就把它从内存删掉，实体管理器
+	// ClearBase 把 ID 归零（strict / pipelined 的确认在投影器里稍后才到），或实例已被回收。没有内存状态可推进：
+	// 摘掉它，确认视为完成，调用方照常发布（删除提交即 L2 墓碑与推送）。回执已由调用方核对（validateRemoteReceipt）。
+	// 之前把删除提交交给被清空的实例，生成代码按身份拒绝，发布被整段跳过：Mongo 已删除，L2 仍是删除前的快照。
+	if live.ID() != commit.EntityID {
+		wrapper.detachEntity(live)
+		return nil
+	}
+	if remote, ok := live.(entity.IThreadSafeRemoteEntity); ok {
+		vector := entity.RemoteVersionVector{StateVersion: commit.NextVersion, MarkerEpoch: commit.MarkerEpoch, LockFence: commit.LockFence, RouteEpoch: commit.RouteEpoch}
+		if err := remote.SetRemoteVersionVector(vector); err != nil {
+			// 并发取得新许可可能发生在上面的读取之后；再次核对完整向量。
+			if remoteReceiptObsolete(live, commit) {
+				return nil
+			}
+			return err
+		}
+		if remote.RemoteOwnershipState() == entity.RemoteOwnershipQuarantined {
+			if err := thawAcknowledgedRemote(remote, wrapper.isMarked()); err != nil {
+				// outbox 发布与已提交回执的本地确认可能交错。另一方
+				// 已经确认并解冻时，上面读到的 Quarantined 已经过期：版本向量正是本提交、状态已是
+				// LocalOwned/Shared，就是同一次确认的结果，视为成功，不能让实体再被隔离重试
+				// （RR-20260926-38）。这里只接受“已解冻”的事实，从不自行解冻（RR-28 复核约束不变）。
+				if remoteCommitAlreadyAcknowledged(remote, vector) {
+					return nil
+				}
+				return err
+			}
+		}
+	} else if err := live.SetEntityVersion(int64(commit.NextVersion)); err != nil {
+		// 同 fence 回退被拒（RR-20260930-13）：与上面的向量分支相同，再次核对是否已是过期回执。
+		if remoteReceiptObsolete(live, commit) {
+			return nil
+		}
+		return err
+	}
+	if participant, ok := live.(entity.IRemoteCommitParticipant); ok {
+		// 不持实体锁；outbox 与 Committed 回执的本地确认可能并发，参与者保持幂等且并发安全。
+		return participant.AcknowledgeRemoteCommit(commit.Clone())
+	}
+	return nil
+}

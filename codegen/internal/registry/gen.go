@@ -82,7 +82,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 {{- if .Imports}}
 {{range .Imports}}
 	{{.Alias}} "{{.Path}}"

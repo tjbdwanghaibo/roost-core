@@ -6,10 +6,10 @@ package {{.Package}}
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/roost-core/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 {{- if hasMaps .Nested.Fields}}
-	fmap "github.com/tjbdwanghaibo/roost-core/safemap"
+	fmap "github.com/tjbdwanghaibo/roost-core/infra/base/safemap"
 {{- end}}
 	"go.mongodb.org/mongo-driver/v2/bson"
 )

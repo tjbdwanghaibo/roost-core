@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	coredata "github.com/tjbdwanghaibo/roost-core/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/dataengine/engine"
-	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/nest"
-	"github.com/tjbdwanghaibo/roost-core/saga"
-	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
-	"github.com/tjbdwanghaibo/roost-core/sync/frame"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

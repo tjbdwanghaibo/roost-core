@@ -145,7 +145,7 @@ await match.ReportHashAsync(lastAppliedFrame, deterministicGame.StateHash);
 ## 本地验证与金样
 
 ```sh
-go test -race ./client/wire ./sync/frame ./robot/... ./codegen/internal/protocol -count=1
+go test -race ./client/wire ./framework/sync/frame ./robot/... ./codegen/internal/protocol -count=1
 dotnet run --project client/dotnet/Roost.Client.Tests -- client/spec/packets.json
 go test ./codegen/internal/roost -run '^TestClientSDKAgainstGeneratedPlayerTCP$' -count=1 -v
 ```

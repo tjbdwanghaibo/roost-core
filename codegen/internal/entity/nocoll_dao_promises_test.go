@@ -17,7 +17,7 @@ const noCollectionDaoSource = "package db\n\ntype GhostDao struct{}\n\nconst Gho
 const collectionDaoSource = "package db\n\ntype GhostDao struct{}\n\nconst (\n\tGhostDaoDBName     = \"game\"\n\tGhostDaoCollection = \"ghosts\"\n)\n"
 
 func ghostEntitySource(markerTail string, base string) string {
-	return "package ghost\n\nimport (\n\t\"example.com/game/db\"\n\t\"github.com/tjbdwanghaibo/roost-core/entity\"\n)\n\n" +
+	return "package ghost\n\nimport (\n\t\"example.com/game/db\"\n\t\"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n)\n\n" +
 		"const EntityKindGhost entity.EntityKind = 6\n\n" +
 		"//roost:entity entityKind=EntityKindGhost " + markerTail + "\n" +
 		"type Ghost struct {\n\t" + base + "\n\tentity.DaoManager\n\tdao *db.GhostDao `dao:\"ghost\"`\n}\n"

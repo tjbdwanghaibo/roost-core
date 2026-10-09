@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
-	"github.com/tjbdwanghaibo/roost-core/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

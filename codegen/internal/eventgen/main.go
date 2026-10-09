@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	go run ./tool/eventgen -def ./event/def -out ./event -pkg event -game ./game
+//	go run ./tool/eventgen -def ./framework/event/def -out ./framework/event -pkg event -game ./game
 //
 // Phase 1: Scans -def for structs prefixed with "Event", generates into -out:
 //   - event_def_gen.go   — copied runtime event structs
@@ -27,8 +27,8 @@ import (
 // Default locations of the event definitions and the generated package inside a
 // business project; `roost generate` refers to these (U-0118).
 const (
-	DefaultDefDir = "./event/def"
-	DefaultOutDir = "./event"
+	DefaultDefDir = "./framework/event/def"
+	DefaultOutDir = "./framework/event"
 )
 
 func run(args []string, stdout io.Writer) error {

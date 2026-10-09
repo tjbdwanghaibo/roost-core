@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
-	driver "github.com/tjbdwanghaibo/roost-core/redis/driver"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	driver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 )
 
 func review3MailHarness(t *testing.T) *harness {

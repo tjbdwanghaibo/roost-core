@@ -5,14 +5,14 @@
 技能系统（roost-core/skill）对业务暴露唯一稳定核心包：
 
 ```go
-import "github.com/tjbdwanghaibo/roost-core/skill"
+import "github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 ```
 
 不再提供 `/skillv2` Go 包或兼容别名。Go API 名称与持久协议版本解耦：
 
 | 身份 | 当前值 | 用途 |
 | --- | --- | --- |
-| Go import | `github.com/tjbdwanghaibo/roost-core/skill` | 业务编译期依赖，保持稳定 |
+| Go import | `github.com/tjbdwanghaibo/roost-core/gameplay/skill` | 业务编译期依赖，保持稳定 |
 | JSON schema | `roost.skill/v2` | 技能定义 wire 格式，必须写入定义 |
 | compiler semantics | `skillv2-compiler-2` | gameplay digest、checkpoint、回放和契约校验 |
 | module | `github.com/tjbdwanghaibo/roost-core` | Go module，沿 v1.x tag 发布 |
@@ -88,7 +88,7 @@ runtime := skill.NewRuntime(host, skill.RuntimeOptions{MatchSeed: matchSeed})
 _, err = runtime.Activate(program, skill.CastInput{Caster: caster, Target: target})
 ```
 
-完整可运行版本位于 [skill/examples/fireball](../../skill/examples/fireball/main.go)。`MemoryHost` 只适合示例、编译验收和
+完整可运行版本位于 [skill/examples/fireball](../../gameplay/skill/examples/fireball/main.go)。`MemoryHost` 只适合示例、编译验收和
 确定性参考测试；生产游戏应实现 `Host`，并让世界查询、效果提交、revision 和权限判断
 全部经过该边界。
 
@@ -142,7 +142,7 @@ operation、召唤物（`OwnedEntityRuntimeHost`）。后六列写在 `environme
 
 ## 下一步
 
-- 技能作者：[README 的完整火球示例](../../skill/README.md)
+- 技能作者：[README 的完整火球示例](../../gameplay/skill/README.md)
 - Host 开发：[施法语义与战斗接入](skill-casting-and-combat.md)
 - 同步开发：[Visual 与数据同步生产指南](visual-sync-production-guide.md)
 - 框架维护：[实现学习手册](skill-implementation-guide.md)

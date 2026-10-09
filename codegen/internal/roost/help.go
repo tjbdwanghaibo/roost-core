@@ -278,7 +278,7 @@ type Monster struct {
 	{
 		Name: "eventgen", Aliases: []string{"event", "events"},
 		Summary:       "生成事件类型、Type 方法以及接收者订阅/分发代码",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/eventgen@latest -def ./event/def -out ./event -pkg event -game ./game -eventpkg <module>/event [-force]`,
+		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/eventgen@latest -def ./framework/event/def -out ./framework/event -pkg event -game ./game -eventpkg <module>/event [-force]`,
 		Configuration: `定义目录中 Event 前缀 struct 会进入生成。业务接收者实现 DealEventXxx(*event.EventXxx)；签名不匹配在生成期失败。`,
 		Example: `type EventPlayerLevelUp struct { PlayerID int64; Level int32 }
 

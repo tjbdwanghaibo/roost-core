@@ -154,7 +154,7 @@ func ScanDefinitions(root string) ([]Definition, error) {
 	return defs, nil
 }
 
-const errcodeImportPath = "github.com/tjbdwanghaibo/roost-core/errcode"
+const errcodeImportPath = "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
 // errcodeLocalName reports the name roost-core's errcode package goes by in
 // this file ("errcode", an alias, or "." for a dot import). A file that does

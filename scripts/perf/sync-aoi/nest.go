@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/nest"
-	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
-	"github.com/tjbdwanghaibo/roost-core/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 )
 
 const loadEntityKind entity.EntityKind = 190

@@ -80,10 +80,10 @@ jobs:
           sudo install -m 0755 toxiproxy-server /usr/local/bin/toxiproxy-server
           toxiproxy-server -version
       - name: fault matrix (integration suites with toxiproxy required)
-        run: kit/scripts/integration/dataengine-env.sh test
+        run: wiring/scripts/integration/dataengine-env.sh test
       - name: node status (on failure)
         if: failure()
-        run: kit/scripts/integration/dataengine-env.sh status || true
+        run: wiring/scripts/integration/dataengine-env.sh status || true
       - name: tear down
         if: always()
-        run: kit/scripts/integration/dataengine-env.sh down || true
+        run: wiring/scripts/integration/dataengine-env.sh down || true

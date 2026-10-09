@@ -14,15 +14,15 @@ import (
 // 两边不一致会让实体在跨服写或迁移后读到旧版本 / 缺失，从而永久不可写。生成时直接拒绝，
 // 并给出改 dbscope=global 的指引；不落任何 wire 文件。
 func TestRemoteManagedEntityRejectsServerScopedDao(t *testing.T) {
-	const daoSid = "package db\n\nimport \"github.com/tjbdwanghaibo/roost-core/dataengine\"\n\ntype GuildDao struct{}\n\nfunc (d *GuildDao) DbScope() dataengine.DatabaseScope { return dataengine.DatabaseServer }\n"
-	const daoGlobal = "package db\n\nimport \"github.com/tjbdwanghaibo/roost-core/dataengine\"\n\ntype GuildDao struct{}\n\nfunc (d *GuildDao) DbScope() dataengine.DatabaseScope { return dataengine.DatabaseGlobal }\n"
+	const daoSid = "package db\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/dataengine\"\n\ntype GuildDao struct{}\n\nfunc (d *GuildDao) DbScope() dataengine.DatabaseScope { return dataengine.DatabaseServer }\n"
+	const daoGlobal = "package db\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/dataengine\"\n\ntype GuildDao struct{}\n\nfunc (d *GuildDao) DbScope() dataengine.DatabaseScope { return dataengine.DatabaseGlobal }\n"
 	entitySource := func(remote string, daoType string, imports ...string) string {
 		var b strings.Builder
 		b.WriteString("package guild\n\nimport (\n")
 		for _, imp := range imports {
 			b.WriteString("\t\"" + imp + "\"\n")
 		}
-		b.WriteString("\t\"github.com/tjbdwanghaibo/roost-core/entity\"\n)\n\nconst EntityKindGuild entity.EntityKind = 5\n\n")
+		b.WriteString("\t\"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n)\n\nconst EntityKindGuild entity.EntityKind = 5\n\n")
 		base := "*entity.EntityBase"
 		marker := "//roost:entity entityKind=EntityKindGuild"
 		if remote != "" {

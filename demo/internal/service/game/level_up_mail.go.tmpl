@@ -8,13 +8,13 @@ import (
 
 	"{{MODULE}}/game/effects"
 	"{{MODULE}}/game/rewards"
-	"github.com/tjbdwanghaibo/roost-core/app"
-	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-	"github.com/tjbdwanghaibo/roost-core/nestwal"
-	kitdataengine "github.com/tjbdwanghaibo/roost-core/kit/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
-	svcmail "github.com/tjbdwanghaibo/roost-core/kit/service/mail"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
 const (

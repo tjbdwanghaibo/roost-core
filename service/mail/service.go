@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	businessclock "github.com/tjbdwanghaibo/roost-core/clock"
-	"github.com/tjbdwanghaibo/roost-core/servicemetrics"
+	businessclock "github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 )
 
 // Config wires a Service.

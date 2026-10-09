@@ -2,8 +2,8 @@ package testdata
 
 import (
 	"github.com/tjbdwanghaibo/cube/game/clientsync"
-	"github.com/tjbdwanghaibo/roost-core/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 var _ clientsync.SyncPacker

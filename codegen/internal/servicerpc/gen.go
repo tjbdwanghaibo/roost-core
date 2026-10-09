@@ -3,7 +3,12 @@ package servicerpc
 import (
 	"bytes"
 	"fmt"
+	"go/ast"
 	"go/format"
+	"go/parser"
+	"go/token"
+	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 	"unicode"
@@ -47,6 +52,11 @@ const DefaultRegenerate = "go run github.com/tjbdwanghaibo/roost-core/codegen/cm
 // Options steers Generate; the zero value is HalfAll with DefaultRegenerate.
 type Options struct {
 	Half Half
+	// SourceImport 在跨包生成 assembly 时直接引用领域包，不依赖类型别名。
+	SourceImport  string
+	OutputPackage string
+	// Runtime 委托领域包的 NewServer/Serve/Shutdown；仅用于已提供正式运行对象的领域。
+	Runtime bool
 	// Regenerate is the command the generated header tells a reader to run.
 	// It is recorded rather than derived so a package generated from another
 	// package's interface says how it was produced.
@@ -73,6 +83,8 @@ func GenerateWith(service Service, opts Options) ([]File, error) {
 	if opts.Regenerate != "" {
 		view.Regenerate = opts.Regenerate
 	}
+	view.SourceImport = opts.SourceImport
+	view.Runtime = opts.Runtime
 	half := opts.Half
 	if half == "" {
 		half = HalfAll
@@ -86,9 +98,19 @@ func GenerateWith(service Service, opts Options) ([]File, error) {
 		files = append(files, File{Name: TransportFileName(service.Interface), Content: transport})
 	}
 	if half == HalfAll || half == HalfAssembly {
-		assembly, err := render(assemblyTemplate, "assembly", service, view)
+		assemblyView := view
+		if opts.OutputPackage != "" {
+			assemblyView.Package = opts.OutputPackage
+		}
+		assembly, err := render(assemblyTemplate, "assembly", service, assemblyView)
 		if err != nil {
 			return nil, err
+		}
+		if opts.SourceImport != "" {
+			assembly, err = qualifyAssembly(assembly, opts.SourceImport, service.Interface)
+			if err != nil {
+				return nil, err
+			}
 		}
 		files = append(files, File{Name: AssemblyFileName(service.Interface), Content: assembly})
 	}
@@ -117,6 +139,8 @@ func render(tmpl *template.Template, half string, service Service, view view) ([
 // would otherwise have to compute inline.
 type view struct {
 	Service
+	SourceImport string
+	Runtime      bool
 	// AnyAffinity is true when at least one method routes by key.
 	//
 	// It drives whether the generated constructor installs the picker option.
@@ -139,6 +163,47 @@ type view struct {
 	Regenerate string
 	// Methods carries the derived per-method names.
 	Methods []methodView
+}
+
+// qualifyAssembly 只限定传输半部的公开符号。声明、选择器字段和局部变量不改写。
+// 源接口留在领域包，生成的 Wiring 不再复制 wire/model 或借 alias 隐藏依赖。
+func qualifyAssembly(source []byte, importPath, iface string) ([]byte, error) {
+	fs := token.NewFileSet()
+	f, err := parser.ParseFile(fs, "assembly.go", source, 0)
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]bool{iface: true, "CapabilityName": true, "LocalCapabilityName": true,
+		"ServiceType": true, "Capability": true, "RegisterHandlers": true, "Methods": true,
+		"BusClient": true, "NewBusClient": true, "DefaultCallTimeout": true, "AffinityMethods": true}
+	skip := map[*ast.Ident]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if s, ok := n.(*ast.SelectorExpr); ok {
+			skip[s.Sel] = true
+		}
+		return true
+	})
+	type edit struct {
+		start, end int
+		text       string
+	}
+	var edits []edit
+	ast.Inspect(f, func(n ast.Node) bool {
+		id, ok := n.(*ast.Ident)
+		if !ok || skip[id] || id.Obj != nil || !names[id.Name] {
+			return true
+		}
+		edits = append(edits, edit{fs.Position(id.Pos()).Offset, fs.Position(id.End()).Offset, "domain." + id.Name})
+		return true
+	})
+	sort.Slice(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
+	out := string(source)
+	for _, e := range edits {
+		out = out[:e.start] + e.text + out[e.end:]
+	}
+	end := fs.Position(f.Name.End()).Offset
+	out = out[:end] + "\n\nimport domain " + strconv.Quote(importPath) + out[end:]
+	return format.Source([]byte(out))
 }
 
 type methodView struct {

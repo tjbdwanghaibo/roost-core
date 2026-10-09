@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/dataengine/engine"
-	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/metrics"
-	"github.com/tjbdwanghaibo/roost-core/nest"
-	"github.com/tjbdwanghaibo/roost-core/nestwal"
-	"github.com/tjbdwanghaibo/roost-core/remoteentity"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
 )
 
 func remoteNestWorkers() int {

@@ -75,7 +75,7 @@ mkdir -p "$OUTPUT_DIR"
 cd "$ROOT"
 GOWORK=off go mod verify
 CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath \
-  -ldflags "-s -w -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.Version=$VERSION -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.Commit=$COMMIT -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.BuildTime=$BUILD_TIME" \
+  -ldflags "-s -w -X github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo.Version=$VERSION -X github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo.Commit=$COMMIT -X github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo.BuildTime=$BUILD_TIME" \
   -o "$OUTPUT_DIR/{{APP}}" .
 printf 'built %s\n' "$OUTPUT_DIR/{{APP}}"
 `, m)

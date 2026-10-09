@@ -1,6 +1,6 @@
 package remoteflow
 
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 const EntityKindVault entity.EntityKind = 235
 

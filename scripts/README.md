@@ -19,7 +19,7 @@ Remote 正式业务验收：加载隔离环境的 `ROOST_DATAENGINE_IT_MONGO_URI
 
 另外两处 `scripts/` 是**层内**的，不重复：
 
-- `kit/scripts/integration/` — kit 服务的集成环境（brew 起的 Redis / Mongo 副本集 / NATS，见 `dataengine-env.sh`；根目录与端口偏移用 `ROOST_IT_HOME` / `ROOST_IT_PORT_OFFSET` 配置，长期环境不要放 /tmp，见[该目录 README](../kit/scripts/integration/README.md)）。
+- `kit/scripts/integration/` — kit 服务的集成环境（brew 起的 Redis / Mongo 副本集 / NATS，见 `dataengine-env.sh`；根目录与端口偏移用 `ROOST_IT_HOME` / `ROOST_IT_PORT_OFFSET` 配置，长期环境不要放 /tmp，见[该目录 README](../wiring/scripts/integration/README.md)）。
 - `codegen/scripts/` — 生成器自己的运行时校验（`*-runtime.sh` 把生成物编译进真运行时跑一遍）、
   `source-head-check.sh`（本地版 framework-compat）、`install-windows.ps1`。
 

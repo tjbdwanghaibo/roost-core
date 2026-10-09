@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"time"
 
-	businessclock "github.com/tjbdwanghaibo/roost-core/clock"
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	businessclock "github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 
-	"github.com/tjbdwanghaibo/roost-core/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 )
 
 // queueState is one queue's entire mutable state, held as a single versioned

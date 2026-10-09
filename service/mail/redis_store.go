@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	businessclock "github.com/tjbdwanghaibo/roost-core/clock"
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	businessclock "github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
 // RedisStores are the three stores this package needs, over Redis.

@@ -3,6 +3,8 @@
 // will not overwrite it.
 package Platform
 
+import platformdomain "github.com/tjbdwanghaibo/roost-core/service/platform"
+
 import (
 	"context"
 	"errors"
@@ -11,11 +13,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
-	"github.com/tjbdwanghaibo/roost-core/kit/service/platform"
-	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
-	redis "github.com/tjbdwanghaibo/roost-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"github.com/tjbdwanghaibo/roost-core/wiring/platform"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	redis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"{{MODULE}}/game/purchase"
 )
 
@@ -28,21 +30,21 @@ const demoCredentialPrefix = "demo:"
 // Verify checks a channel credential.
 //
 // THIS IS NOT VERIFICATION. A real one calls the store's session endpoint and
-// fails closed when it cannot reach it (platform.ErrVerifierDown), so an
+// fails closed when it cannot reach it (platformdomain.ErrVerifierDown), so an
 // outage is not reported to players as a bad credential. What this does keep
 // is the shape that matters: it refuses every channel it does not know, and
 // it returns the identity it confirmed rather than the one it was handed.
-func Verify() platform.Verifier {
-	return platform.VerifierFunc(func(_ context.Context, credential platform.Credential) (platform.Verified, error) {
+func Verify() platformdomain.Verifier {
+	return platformdomain.VerifierFunc(func(_ context.Context, credential platformdomain.Credential) (platformdomain.Verified, error) {
 		if credential.Channel != purchase.Channel {
-			return platform.Verified{}, fmt.Errorf("%w: channel %q is not a payment channel of this demo (only %q is)",
-				platform.ErrIdentityDenied, credential.Channel, purchase.Channel)
+			return platformdomain.Verified{}, fmt.Errorf("%w: channel %q is not a payment channel of this demo (only %q is)",
+				platformdomain.ErrIdentityDenied, credential.Channel, purchase.Channel)
 		}
 		openID := strings.TrimSpace(credential.OpenID)
 		if openID == "" || credential.Secret != demoCredentialPrefix+openID {
-			return platform.Verified{}, fmt.Errorf("%w: credential does not match open id %q", platform.ErrIdentityDenied, openID)
+			return platformdomain.Verified{}, fmt.Errorf("%w: credential does not match open id %q", platformdomain.ErrIdentityDenied, openID)
 		}
-		return platform.Verified{Channel: credential.Channel, OpenID: openID}, nil
+		return platformdomain.Verified{Channel: credential.Channel, OpenID: openID}, nil
 	})
 }
 
@@ -54,11 +56,11 @@ func Verify() platform.Verifier {
 // first sight if that is its policy; what it must not do is read the player
 // id out of the request, which is what makes this a resolver rather than a
 // parameter.
-func Players() platform.PlayerResolver {
-	return platform.PlayerResolverFunc(func(_ context.Context, verified platform.Verified) (int64, error) {
+func Players() platformdomain.PlayerResolver {
+	return platformdomain.PlayerResolverFunc(func(_ context.Context, verified platformdomain.Verified) (int64, error) {
 		playerID, err := strconv.ParseInt(verified.OpenID, 10, 64)
 		if err != nil || playerID <= 0 {
-			return 0, fmt.Errorf("%w: open id %q is not a player id of this demo", platform.ErrIdentityDenied, verified.OpenID)
+			return 0, fmt.Errorf("%w: open id %q is not a player id of this demo", platformdomain.ErrIdentityDenied, verified.OpenID)
 		}
 		return playerID, nil
 	})
@@ -128,11 +130,11 @@ func (deliverer *grantDeliverer) handle() (grantStore, string) {
 	return deliverer.client, deliverer.prefix
 }
 
-// Deliver implements platform.Deliverer.
-func (deliverer *grantDeliverer) Deliver(ctx context.Context, order platform.Order) error {
+// Deliver implements platformdomain.Deliverer.
+func (deliverer *grantDeliverer) Deliver(ctx context.Context, order platformdomain.Order) error {
 	client, prefix := deliverer.handle()
 	if client == nil {
-		return fmt.Errorf("%w: purchase delivery: not bound to a registry", platform.ErrDeliveryNotApplied)
+		return fmt.Errorf("%w: purchase delivery: not bound to a registry", platformdomain.ErrDeliveryNotApplied)
 	}
 	key := purchase.GrantsKey(prefix, order.PlayerID)
 	existing, err := client.HGet(ctx, key, order.OrderID)
@@ -149,14 +151,14 @@ func (deliverer *grantDeliverer) Deliver(ctx context.Context, order platform.Ord
 		// the only honest answer: the order stays undelivered and visible,
 		// and someone has to either ship the product or settle the order by
 		// hand. Succeeding would close a paid order having granted nothing.
-		return fmt.Errorf("%w: purchase delivery: order %s bought unknown product %q", platform.ErrDeliveryNotApplied, order.OrderID, order.ProductID)
+		return fmt.Errorf("%w: purchase delivery: order %s bought unknown product %q", platformdomain.ErrDeliveryNotApplied, order.OrderID, order.ProductID)
 	}
 	grant, err := purchase.Encode(purchase.Grant{
 		OrderID: order.OrderID, PlayerID: order.PlayerID, ProductID: product.ID,
 		ItemID: product.ItemID, Count: product.Count, PaidAtUnix: order.PaidAtUnix,
 	})
 	if err != nil {
-		return fmt.Errorf("%w: %w", platform.ErrDeliveryNotApplied, err)
+		return fmt.Errorf("%w: %w", platformdomain.ErrDeliveryNotApplied, err)
 	}
 	stored, err := client.Eval(ctx, recordGrantScript, []string{key}, order.OrderID, grant)
 	if err != nil {
@@ -172,7 +174,7 @@ func (deliverer *grantDeliverer) Deliver(ctx context.Context, order platform.Ord
 	}
 }
 
-func validateStoredGrant(raw string, order platform.Order) error {
+func validateStoredGrant(raw string, order platformdomain.Order) error {
 	grant, err := purchase.Decode(raw)
 	if err != nil {
 		return err
@@ -186,7 +188,7 @@ func validateStoredGrant(raw string, order platform.Order) error {
 }
 
 // Deliver is the collaborator the Mod takes.
-func Deliver() platform.Deliverer { return grants }
+func Deliver() platformdomain.Deliverer { return grants }
 
 // Pending is where the background retry loop gets its candidates.
 //
@@ -200,7 +202,7 @@ func Deliver() platform.Deliverer { return grants }
 // What a deployment supplies one FOR, still: orders that live somewhere other
 // than this Redis, or a deliberate "no background retry" (which the Server
 // then says at start rather than miming).
-func Pending() platform.PendingOrders { return nil }
+func Pending() platformdomain.PendingOrders { return nil }
 
 // Metrics receives the service's counters. The default writes them into the
 // process's metrics registry, served as service_* series on the ops /metrics
@@ -210,6 +212,6 @@ func Pending() platform.PendingOrders { return nil }
 func Metrics() servicemetrics.Reporter { return servicemetrics.NewMetricsReporter("platform") }
 
 var (
-	_ platform.Deliverer     = (*grantDeliverer)(nil)
+	_ platformdomain.Deliverer     = (*grantDeliverer)(nil)
 	_ platform.RegistryBound = (*grantDeliverer)(nil)
 )

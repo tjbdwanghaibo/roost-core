@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	businessclock "github.com/tjbdwanghaibo/roost-core/clock"
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	businessclock "github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 
-	"github.com/tjbdwanghaibo/roost-core/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 )
 
 // RunStore holds runs. Versioned, so there is no unconditional write — the

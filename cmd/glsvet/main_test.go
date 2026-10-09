@@ -54,7 +54,7 @@ func handlerMove(g *group) { g.Go(func(){}) }
 
 func TestHandlerCoreWorkerPoolGoIsAllowed(t *testing.T) {
 	if findings := vetSource(t, `package handler
-import "github.com/tjbdwanghaibo/roost-core/worker"
+import "github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 type task struct{}
 func (task) OnRelease() {}
 var pool *worker.Pool[task]
@@ -67,7 +67,7 @@ func handlerMove() { pool.Go(task{}, func(task){}) }
 
 func TestHandlerCoreWorkerPoolFieldGoIsAllowed(t *testing.T) {
 	if findings := vetSource(t, `package handler
-import "github.com/tjbdwanghaibo/roost-core/worker"
+import "github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 type task struct{}
 func (task) OnRelease() {}
 type runtime struct { pool *worker.Pool[task] }
@@ -80,7 +80,7 @@ func handlerMove(r *runtime) { r.pool.Go(task{}, func(task){}) }
 
 func TestHandlerCoreWorkerPoolTryGoIsAllowedWhenAdmissionHandled(t *testing.T) {
 	if findings := vetSource(t, `package handler
-import "github.com/tjbdwanghaibo/roost-core/worker"
+import "github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 type task struct{}
 func (task) OnRelease() {}
 var pool *worker.Pool[task]
@@ -132,7 +132,7 @@ func run(p publisher) { p.Publish() }
 
 func TestFrameworkTypedAdmissionResultIsRejected(t *testing.T) {
 	if findings := vetSource(t, `package service
-import corebus "github.com/tjbdwanghaibo/roost-core/bus"
+import corebus "github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 func run(p corebus.Bus) { p.Publish() }
 `); findings != 1 {
 		t.Fatalf("findings = %d, want 1", findings)
@@ -141,7 +141,7 @@ func run(p corebus.Bus) { p.Publish() }
 
 func TestHandlerWorkerClosureCannotCaptureOuterState(t *testing.T) {
 	if findings := vetSource(t, `package handler
-import "github.com/tjbdwanghaibo/roost-core/worker"
+import "github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 type task struct{ id int }
 func (task) OnRelease() {}
 var pool *worker.Pool[task]
@@ -167,8 +167,8 @@ func TestComponentRecordingItsOwnUndoIsHinted(t *testing.T) {
 	dir := t.TempDir()
 	source := `package player
 import (
-	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 type AttributeComponent struct {
 	entity.ComponentBase
@@ -222,8 +222,8 @@ func (d *PlayerDao) SetLevel(v int32) {
 func TestComponentRecordingUndoThroughHelperIsHinted(t *testing.T) {
 	source := `package player
 import (
-	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 type BuffComponent struct {
 	entity.ComponentBase
@@ -269,7 +269,7 @@ func (d *PlayerDao) SetLevel(v int32) {
 // 组件方法里的 undo 登记，skill 各包（含手写 CombatDao 自己登记逆操作的 combatcomponent）都不应
 // 命中；命中说明提示的判定变了，需要先确认是否误报再决定豁免。
 func TestSkillPackagesGetNoComponentUndoHint(t *testing.T) {
-	for _, directory := range []string{"../../skill", "../../skill/combatcomponent", "../../skill/combat", "../../skill/skillsync"} {
+	for _, directory := range []string{"../../gameplay/skill", "../../gameplay/skill/combatcomponent", "../../gameplay/skill/combat", "../../gameplay/skill/skillsync"} {
 		fileSet := token.NewFileSet()
 		packages, err := parser.ParseDir(fileSet, directory, func(info os.FileInfo) bool {
 			return !strings.HasSuffix(info.Name(), "_test.go")

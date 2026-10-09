@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
-	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )

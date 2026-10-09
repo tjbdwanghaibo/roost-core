@@ -2,7 +2,7 @@
 // 事务里会改的任务状态放在普通字段里，也不登记 undo——handler 失败或提交被拒时这些字段不回滚。
 package player
 
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 type Player struct{}
 

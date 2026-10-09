@@ -44,14 +44,14 @@ for fault in mongo-primary mongo-majority nats-node nats-all; do
   run_case "business-$fault-$policy" env ROOST_REMOTE_FAULT="$fault" ROOST_REMOTE_POLICY="$policy" ROOST_REMOTE_TIMEOUT=240s bash scripts/test-remote-generated.sh
  done
 done
-run_case lease-process go test -race -tags=integration ./remoteentity -run '^TestRealRemote(ProcessKillRecoversLease|ProcessPartitionFencesOldOwner|ColdAdmissionDeadlineUnderLatency)$' -count=1 -timeout=90s -v
-run_case redis-cluster env ROOST_REMOTE_CLUSTER_IT=1 go test -race -tags=integration ./remoteentity -run '^TestRealRemoteRedisClusterFailover$' -count=1 -timeout=150s -v
-run_case redis-unreplicated-fence env ROOST_REMOTE_CLUSTER_IT=1 go test -race -tags=integration ./remoteentity -run '^TestRealRemoteRedisClusterUnreplicatedFence$' -count=1 -timeout=120s -v
-run_case durable-process go test -race -tags=integration ./remoteentity -run '^TestRealRemoteDurableAuthorityProcessPartition$' -count=1 -timeout=90s -v
-run_case ownership-counters go test -race -tags=integration ./remoteentity -run '^TestReal(VersionedLock|RemoteOwnershipClaim)' -count=1 -timeout=90s -v
-run_case mongo-wal-recovery go test -race -tags=integration ./kit/dataengine -run '^TestRealDataEngineRemotePublicationAndWALRecovery$' -count=1 -timeout=120s -v
-run_case broker-failover go test -race -tags=integration ./kit/dataengine -run '^TestReal(MongoPrimaryFailover|NATSOutage|JetStreamLeaderFailover)' -count=1 -timeout=240s -v
-run_case broker-network go test -race -tags=integration ./kit/dataengine -run '^TestToxicNATS' -count=1 -timeout=180s -v
+run_case lease-process go test -race -tags=integration ./framework/remoteentity -run '^TestRealRemote(ProcessKillRecoversLease|ProcessPartitionFencesOldOwner|ColdAdmissionDeadlineUnderLatency)$' -count=1 -timeout=90s -v
+run_case redis-cluster env ROOST_REMOTE_CLUSTER_IT=1 go test -race -tags=integration ./framework/remoteentity -run '^TestRealRemoteRedisClusterFailover$' -count=1 -timeout=150s -v
+run_case redis-unreplicated-fence env ROOST_REMOTE_CLUSTER_IT=1 go test -race -tags=integration ./framework/remoteentity -run '^TestRealRemoteRedisClusterUnreplicatedFence$' -count=1 -timeout=120s -v
+run_case durable-process go test -race -tags=integration ./framework/remoteentity -run '^TestRealRemoteDurableAuthorityProcessPartition$' -count=1 -timeout=90s -v
+run_case ownership-counters go test -race -tags=integration ./framework/remoteentity -run '^TestReal(VersionedLock|RemoteOwnershipClaim)' -count=1 -timeout=90s -v
+run_case mongo-wal-recovery go test -race -tags=integration ./wiring/dataengine -run '^TestRealDataEngineRemotePublicationAndWALRecovery$' -count=1 -timeout=120s -v
+run_case broker-failover go test -race -tags=integration ./wiring/dataengine -run '^TestReal(MongoPrimaryFailover|NATSOutage|JetStreamLeaderFailover)' -count=1 -timeout=240s -v
+run_case broker-network go test -race -tags=integration ./wiring/dataengine -run '^TestToxicNATS' -count=1 -timeout=180s -v
 run_case final-health bash kit/scripts/integration/dataengine-env.sh status
 printf 'Matrix results: %s\n' "$output"
 exit "$status"

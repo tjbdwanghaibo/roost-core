@@ -19,7 +19,7 @@ import (
  "log/slog"
  "runtime/debug"
 
-	"github.com/tjbdwanghaibo/roost-core/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
  "github.com/tjbdwanghaibo/roost-core/client/wire"
 )
 
@@ -371,8 +371,8 @@ import (
 	"sync/atomic"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/app"
-	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	%q
 	protocolbootstrap %q
 )

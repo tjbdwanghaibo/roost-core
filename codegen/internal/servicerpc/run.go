@@ -107,6 +107,7 @@ func RunIn(base string, args []string, stdout io.Writer) error {
 	// types through its own aliases.
 	emit := flags.String("emit", string(HalfAll), "which half to emit: transport, assembly or all")
 	out := flags.String("out", "", "directory to write into (default: -dir)")
+	runtime := flags.Bool("runtime", false, "assembly delegates to the domain NewServer/Serve/Shutdown")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -146,8 +147,36 @@ func RunIn(base string, args []string, stdout io.Writer) error {
 	}
 	expected := make(map[string]bool)
 	var generated []File
+	opts := Options{Half: half, Regenerate: regenerate, Runtime: *runtime}
+	if *runtime {
+		opts.Regenerate += " -runtime"
+	}
+	if half == HalfAssembly && absDir != outDir {
+		opts.SourceImport, err = sourceImport(absDir)
+		if err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(outDir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+				continue
+			}
+			f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(outDir, entry.Name()), nil, parser.PackageClauseOnly)
+			if err != nil {
+				return err
+			}
+			opts.OutputPackage = f.Name.Name
+			break
+		}
+	}
+	if *runtime && opts.SourceImport == "" {
+		return fmt.Errorf("-runtime requires assembly with a separate domain directory")
+	}
 	for _, service := range services {
-		files, err := GenerateWith(service, Options{Half: half, Regenerate: regenerate})
+		files, err := GenerateWith(service, opts)
 		if err != nil {
 			return err
 		}
@@ -227,6 +256,35 @@ func RunIn(base string, args []string, stdout io.Writer) error {
 			outDir, strings.Join(stale, ", "))
 	}
 	return nil
+}
+
+// sourceImport 根据源包所属 go.mod 得到完整 import path，生成不依赖输出包的别名声明。
+func sourceImport(dir string) (string, error) {
+	for root := dir; ; root = filepath.Dir(root) {
+		content, err := os.ReadFile(filepath.Join(root, "go.mod"))
+		if err == nil {
+			for _, line := range strings.Split(string(content), "\n") {
+				fields := strings.Fields(line)
+				if len(fields) == 2 && fields[0] == "module" {
+					rel, err := filepath.Rel(root, dir)
+					if err != nil {
+						return "", err
+					}
+					if rel == "." {
+						return fields[1], nil
+					}
+					return fields[1] + "/" + filepath.ToSlash(rel), nil
+				}
+			}
+			return "", fmt.Errorf("%s: module declaration not found", root)
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		if filepath.Dir(root) == root {
+			return "", fmt.Errorf("%s: go.mod not found", dir)
+		}
+	}
 }
 
 // orphanGeneratedFiles only owns the selected half made by this exact

@@ -5,7 +5,7 @@ package syncruntime
 // no component — the point is the generated Sync wiring, not the payload.
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
 const EntityKindAvatar entity.EntityKind = 141

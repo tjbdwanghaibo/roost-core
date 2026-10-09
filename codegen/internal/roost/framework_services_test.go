@@ -83,7 +83,7 @@ func TestGameTemplateRendersHostingAndClientWiring(t *testing.T) {
 	}
 	bootstrap := string(plan["internal/bootstrap/generated.go"].Body)
 	for _, want := range []string{
-		`a.RegisterServer(app.ServiceName(svcmail.ServiceType), svcmail.NewServer()`,
+		`a.RegisterServer(app.ServiceName(domainmail.ServiceType), svcmail.NewServer()`,
 		`svcmail.NewMod(serviceMail.Broadcast(), serviceMail.Metrics())`,
 		`svcaccount.NewMod(serviceAccount.Verifier(), serviceAccount.Allocator(), serviceAccount.NameRules(), serviceAccount.Metrics())`,
 		`svcchat.NewMod(serviceChat.Policy(), serviceChat.Bodies(), serviceChat.System(), serviceChat.Rules(), serviceChat.Metrics())`,
@@ -120,8 +120,8 @@ func TestGameTemplateRendersHostingAndClientWiring(t *testing.T) {
 	if gomod := string(plan["go.mod"].Body); strings.Contains(gomod, "roost-service") {
 		t.Errorf("go.mod must not require the folded-in roost-service module:\n%s", gomod)
 	}
-	if deps := string(plan["internal/frameworkdeps/generated.go"].Body); !strings.Contains(deps, "roost-core/kit/service/servicemetrics") {
-		t.Errorf("frameworkdeps does not retain the kit services:\n%s", deps)
+	if deps := string(plan["internal/frameworkdeps/generated.go"].Body); !strings.Contains(deps, "roost-core/infra/observe/servicemetrics") {
+		t.Errorf("frameworkdeps does not retain service metrics:\n%s", deps)
 	}
 	mailConfig := string(plan["configs/service/config.mail.yaml"].Body)
 	for _, want := range []string{"mail:\n", "  key_prefix: roost:planet:mail\n", "send_ttl: 720h", "redis:\n", "nats:\n"} {
@@ -275,7 +275,7 @@ func TestFrameworkCatalogAffinityMatchesTheGeneratedClients(t *testing.T) {
 	repo := filepath.Join("..", "..", "..")
 	for name, spec := range frameworkCatalog {
 		var transports []string
-		for _, dir := range []string{filepath.Join(repo, "kit", "service", spec.ImportPath()), filepath.Join(repo, "service", spec.Package)} {
+		for _, dir := range []string{filepath.Join(repo, "wiring", spec.ImportPath()), filepath.Join(repo, "service", spec.Package)} {
 			matches, _ := filepath.Glob(filepath.Join(dir, "*_rpc_gen.go"))
 			transports = append(transports, matches...)
 		}

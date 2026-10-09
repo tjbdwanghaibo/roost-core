@@ -563,10 +563,10 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if readme := read("deploy/dev/observability/README.md"); !strings.Contains(readme, "configdata_rollback_total{trigger") {
 		t.Errorf("the observability README no longer lists configdata_rollback_total{trigger}; keep the panel and the README together")
 	}
-	if source, err := os.ReadFile(filepath.Join("..", "..", "..", "kit", "configdata", "configdata.go")); err != nil {
+	if source, err := os.ReadFile(filepath.Join("..", "..", "..", "wiring", "configdata", "configdata.go")); err != nil {
 		t.Errorf("read kit/configdata: %v", err)
 	} else if !strings.Contains(string(source), `IncCounter("configdata.rollback.total", metrics.Labels{"trigger": `) {
-		t.Errorf("kit/configdata no longer counts configdata.rollback.total{trigger}; update the dashboard panel with it")
+		t.Errorf("wiring/configdata no longer counts configdata.rollback.total{trigger}; update the dashboard panel with it")
 	}
 	if scrape := read("deploy/dev/observability/prometheus.yml"); !strings.Contains(scrape, "job_name: game") || !strings.Contains(scrape, ":9300") {
 		t.Errorf("prometheus.yml does not scrape the game process and the load test:\n%s", scrape)

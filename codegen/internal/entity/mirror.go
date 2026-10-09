@@ -103,7 +103,7 @@ func extractMirrors(fset *token.FileSet, f *ast.File, filePath string, importMap
 					if !ok {
 						return nil, fmt.Errorf("%s:%d: //roost:mirror entityKind=%s: package %q is not imported by this file", filePath, m.line, def.EntityKind, alias)
 					}
-					if imp.Path != "github.com/tjbdwanghaibo/roost-core/entity" {
+					if imp.Path != "github.com/tjbdwanghaibo/roost-core/framework/entity" {
 						def.Imports = append(def.Imports, imp)
 					}
 				}
@@ -194,7 +194,7 @@ type mirrorTemplateData struct {
 }
 
 func mirrorImportBlock(def MirrorDef) string {
-	lines := []string{`"fmt"`, "", `"github.com/tjbdwanghaibo/roost-core/entity"`, `"go.mongodb.org/mongo-driver/v2/bson"`}
+	lines := []string{`"fmt"`, "", `"github.com/tjbdwanghaibo/roost-core/framework/entity"`, `"go.mongodb.org/mongo-driver/v2/bson"`}
 	extra := make([]string, 0, len(def.Imports))
 	for _, imp := range def.Imports {
 		if imp.Explicit {

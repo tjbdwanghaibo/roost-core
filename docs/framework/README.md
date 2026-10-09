@@ -16,11 +16,15 @@
 
 [网关现状与独立 Gate 设计](GATEWAY.md)：已有 TCP 接入能力、尚未完成的独立服务，以及分阶段实施和验收方案。独立 Gate 标注为待实施，不属于当前已发布能力。
 
+[Gate 设计评审与实施方案](GATEWAY-IMPLEMENTATION.md)：具体目录、绑定身份、NATS 转发、统一发送、Nest/Sync 接线及验收条件，仍未实施。
+
+[包目录分类、Wiring 与 Service 收敛方案](PACKAGE-REORGANIZATION.md)：Framework/Infra/Gameplay/Service/Wiring 分类、Session 含义、运行实现迁出接线、便捷接入和同轮 Gate；方案已确认，分阶段实施，尚未迁移源码。
+
 | 模块 | 说明 | 实现 |
 | --- | --- | --- |
-| 次核心：Service 领域能力 | [设计与使用](guide/09-kit-services.md) | [实现与源码](impl/09-kit-services.md) |
+| 次核心：Service 领域能力 | [设计与使用](guide/09-services.md) | [实现与源码](impl/09-services.md) |
 | 次核心：Codegen 与工程工具 | [设计与使用](guide/12-codegen.md) | [实现与源码](impl/12-codegen.md) |
-| 次核心：Kit 装配 | [设计与使用](guide/13-kit.md) | [实现与源码](impl/13-kit.md) |
+| 次核心：Wiring 装配 | [设计与使用](guide/13-wiring.md) | [实现与源码](impl/13-wiring.md) |
 
 ## 总览、扩展与其他包
 

@@ -4,7 +4,7 @@
 
 清理前 docs 跟踪文件 **3070** 个；v1.24.1 整理时保留/新建 **50** 个，删除旧路径 **3034** 个。其余同路径内容按现行版本重写或保留。运行时基线 v1.24.0，文档维护版 v1.24.1。
 
-当前 main 在该清单上新增一份独立 Gate 设计，合计 **51** 份。该设计明确区分已有能力与待实施部分，不改变已发布版本的实现状态。
+当前文档在该清单上新增独立 Gate 设计、其评审/实施方案及包目录分类方案，合计 **53** 份。三份文档明确区分已有能力与待实施部分，不改变已发布版本的实现状态。
 
 先确定本清单，再迁移现行设计/维护知识、核对代码、清理旧文件与修复引用。不会删除游戏ai代码或游戏Skill文档，也不删除本地安装skill。
 
@@ -17,6 +17,8 @@
 | [docs/framework/README.md](../framework/README.md) | 维护入口、清单、证据或全包映射 |
 | [docs/framework/PACKAGES.md](../framework/PACKAGES.md) | 维护入口、清单、证据或全包映射 |
 | [docs/framework/GATEWAY.md](../framework/GATEWAY.md) | 网关现有能力、独立 Gate 待实施设计、分阶段验收及 TCP 文档纠正 |
+| [docs/framework/GATEWAY-IMPLEMENTATION.md](../framework/GATEWAY-IMPLEMENTATION.md) | Gate 设计评审、具体接线、绑定与发送契约、资源限制及实施验收 |
+| [docs/framework/PACKAGE-REORGANIZATION.md](../framework/PACKAGE-REORGANIZATION.md) | 包目录分类、Wiring/运行边界、Session 含义、同轮 Gate、迁移和验收 |
 | [docs/framework/guide/00-overview.md](../framework/guide/00-overview.md) | 现行设计、职责、使用与限制 |
 | [docs/framework/impl/00-overview.md](../framework/impl/00-overview.md) | 实现边界、不变量、源码类型与回归入口 |
 | [docs/framework/guide/01-app-lifecycle.md](../framework/guide/01-app-lifecycle.md) | 现行设计、职责、使用与限制 |
@@ -35,16 +37,16 @@
 | [docs/framework/impl/07-config.md](../framework/impl/07-config.md) | 实现边界、不变量、源码类型与回归入口 |
 | [docs/framework/guide/08-skill.md](../framework/guide/08-skill.md) | 现行设计、职责、使用与限制 |
 | [docs/framework/impl/08-skill.md](../framework/impl/08-skill.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/09-kit-services.md](../framework/guide/09-kit-services.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/09-kit-services.md](../framework/impl/09-kit-services.md) | 实现边界、不变量、源码类型与回归入口 |
+| [docs/framework/guide/09-services.md](../framework/guide/09-services.md) | 现行设计、职责、使用与限制 |
+| [docs/framework/impl/09-services.md](../framework/impl/09-services.md) | 实现边界、不变量、源码类型与回归入口 |
 | [docs/framework/guide/10-time.md](../framework/guide/10-time.md) | 现行设计、职责、使用与限制 |
 | [docs/framework/impl/10-time.md](../framework/impl/10-time.md) | 实现边界、不变量、源码类型与回归入口 |
 | [docs/framework/guide/11-observability.md](../framework/guide/11-observability.md) | 现行设计、职责、使用与限制 |
 | [docs/framework/impl/11-observability.md](../framework/impl/11-observability.md) | 实现边界、不变量、源码类型与回归入口 |
 | [docs/framework/guide/12-codegen.md](../framework/guide/12-codegen.md) | 现行设计、职责、使用与限制 |
 | [docs/framework/impl/12-codegen.md](../framework/impl/12-codegen.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/13-kit.md](../framework/guide/13-kit.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/13-kit.md](../framework/impl/13-kit.md) | 实现边界、不变量、源码类型与回归入口 |
+| [docs/framework/guide/13-wiring.md](../framework/guide/13-wiring.md) | 现行设计、职责、使用与限制 |
+| [docs/framework/impl/13-wiring.md](../framework/impl/13-wiring.md) | 实现边界、不变量、源码类型与回归入口 |
 | [docs/framework/guide/14-foundation.md](../framework/guide/14-foundation.md) | 现行设计、职责、使用与限制 |
 | [docs/framework/impl/14-foundation.md](../framework/impl/14-foundation.md) | 实现边界、不变量、源码类型与回归入口 |
 | [docs/skill/skill.md](../skill/skill.md) | 游戏Skill专项使用/实现参考 |

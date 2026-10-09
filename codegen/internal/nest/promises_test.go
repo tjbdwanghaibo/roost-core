@@ -20,7 +20,7 @@ func writePromiseSource(t *testing.T, src string) string {
 // their own: a temporary revert of each left the suite green (U-0035). The
 // fixture is the valid remote-tag handler with exactly one thing broken.
 func TestParseFileRejectsRemainingRemoteTagViolations(t *testing.T) {
-	const head = "package invalid\nimport \"github.com/tjbdwanghaibo/roost-core/entity\"\ntype IPlayerEntity interface{ ID() int64 }\n"
+	const head = "package invalid\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\ntype IPlayerEntity interface{ ID() int64 }\n"
 	cases := []struct{ label, tag, want string }{
 		{"missing snapshot type", "cached", "missing snapshot type"},
 		{"unknown k=v option", "mode=lazy,view.PlayerViewMapSnapshot", "unknown remote tag option \"mode\""},

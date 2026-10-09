@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 
-	"github.com/tjbdwanghaibo/roost-core/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 )
 
 type clock struct {

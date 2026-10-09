@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 
-	"github.com/tjbdwanghaibo/roost-core/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
 )
 
 // LockstepSink carries the bot's outbound lockstep traffic. The wire that

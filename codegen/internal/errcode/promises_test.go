@@ -13,8 +13,8 @@ import (
 func TestExtractDefinitionsRejectsADuplicateCode(t *testing.T) {
 	root := t.TempDir()
 	for rel, body := range map[string]string{
-		"game/shop/errors.go":  "package shop\n\nimport \"github.com/tjbdwanghaibo/roost-core/errcode\"\n\nvar ErrA = errcode.Define(500101, \"shop.a\", \"a\")\n",
-		"game/guild/errors.go": "package guild\n\nimport \"github.com/tjbdwanghaibo/roost-core/errcode\"\n\nvar ErrB = errcode.Define(500101, \"guild.b\", \"b\")\n",
+		"game/shop/errors.go":  "package shop\n\nimport \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nvar ErrA = errcode.Define(500101, \"shop.a\", \"a\")\n",
+		"game/guild/errors.go": "package guild\n\nimport \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nvar ErrB = errcode.Define(500101, \"guild.b\", \"b\")\n",
 	} {
 		path := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

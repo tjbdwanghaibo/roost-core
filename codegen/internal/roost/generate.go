@@ -87,7 +87,7 @@ func generatorsFor(m Manifest, force bool) []generator {
 		{Feature: "dao", Name: "dao", Prefixes: []string{"db/def/"}, Run: func(root string, w io.Writer) error {
 			return dao.Run(forceArg([]string{"-def", under(root, dao.DefaultDefDir), "-out", under(root, dao.DefaultOutDir)}, force), w)
 		}},
-		{Feature: "event", Name: "event", Prefixes: []string{"event/def/"}, Run: func(root string, w io.Writer) error {
+		{Feature: "event", Name: "event", Prefixes: []string{"framework/event/def/"}, Run: func(root string, w io.Writer) error {
 			args := forceArg([]string{"-def", under(root, eventgen.DefaultDefDir), "-out", under(root, eventgen.DefaultOutDir)}, force)
 			if info, err := os.Stat(under(root, "game")); err == nil && info.IsDir() {
 				args = append(args, "-game", under(root, "game"))

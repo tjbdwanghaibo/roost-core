@@ -7,7 +7,7 @@
 ## 迁移说明（必读）
 
 - **编译器语义修订升级为 `skillv2-compiler-2`。** 新增的 `concurrent`、`global_cooldown_ticks`、窗口表达式字段进入 gameplay digest，同一定义在新旧版本编译出的 digest 不同。v1.2.x 产生的 checkpoint、回放记录与 skillcompose 契约在新版本下**无法解析**（会得到明确错误而非静默失败）：升级时需要全量重编译技能定义、丢弃旧 checkpoint（或先在旧版本完成排空）并重算契约摘要。
-- **Go 模块路径已改为 `github.com/tjbdwanghaibo/roost-core/skill`**（与仓库名一致，不再使用 `/v2` major 路径）。自 `v1.5.0` tag 起可直接 `go get`；wire schema 仍是 `roost.skill/v2`，技能定义 JSON 不受影响。
+- **Go 模块路径已改为 `github.com/tjbdwanghaibo/roost-core/gameplay/skill`**（与仓库名一致，不再使用 `/v2` major 路径）。自 `v1.5.0` tag 起可直接 `go get`；wire schema 仍是 `roost.skill/v2`，技能定义 JSON 不受影响。
 
 ## 施法互斥与全局冷却
 
@@ -69,7 +69,7 @@ Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value
 
 ## 引用在哪里能读（求值上下文）
 
-一个值写在定义的哪里，决定它在哪个**求值上下文**里求值、能读哪些引用。完整的表在 [`skill/eval_contexts.go`](../../skill/eval_contexts.go)（每格一句语义；编译诊断原样带出这句话，诊断里会点名上下文与表项，能替代的写“改用 …”），设计见[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。写技能时记住这五行就够：
+一个值写在定义的哪里，决定它在哪个**求值上下文**里求值、能读哪些引用。完整的表在 [`skill/eval_contexts.go`](../../gameplay/skill/eval_contexts.go)（每格一句语义；编译诊断原样带出这句话，诊断里会点名上下文与表项，能替代的写“改用 …”），设计见[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。写技能时记住这五行就够：
 
 | 写在哪里 | 上下文 | 能读 | 不能读 |
 | --- | --- | --- | --- |
@@ -111,7 +111,7 @@ Host 的 `Read` 返回值用 `skill.AttributeRuntimeValue(catalog, handle, value
 - **`max_reflects: N` 实际反弹 N−1 次（O16）**：N 是**碰撞预算**，不是反弹次数。每次碰撞消耗 1；预算没用完时翻转方向、发 transition 并继续飞；第 N 次碰撞同样翻转方向、发 transition，然后在同一 tick 结束运动。所以 `max_reflects: 1` 是“碰到就结束”，想要弹 k 次再结束写 `k+1`。`max_pierces: N` 同理：穿过前 N−1 个，第 N 次碰撞时结束。
 - **Host 拿到的 numeric 快照与运动实际取值不同源（O17）**：`SpawnStepCommand.Numeric` 里，被 numeric track 绑定到衍生物数值属性的字段是衍生物当前值；**没有绑定**的字段报告的是衍生物启动时求一次的值，而运动每一步按 `spawn_step` 列重新求值表达式（见上文求值上下文表）。速度等字段写成随时间变化的表达式时，Host 在快照里看到的速度与实际位移用的速度可能不同。parabola 的 speed、tracking 的转向速率、boomerang 的回程速度、碰撞力在快照里的基值恒为 0（由 Host 自己管理）。Host 需要“这一步实际用的值”时，让技能用 numeric track 绑定该字段，或从运动步骤命令本身取位置 / 位移，不要依赖未绑定字段的快照。
 - **restore 的 `on_blocked` 与 profile 策略冲突时必然失败（O27）**：参考宿主 `MemoryHost` 的 temporal restore 里，`on_blocked` 为空时用快照 profile 的 `BlockedPositionPolicy`；写了且与 profile 不同，恢复返回预期失败 `policy_rejected`（走 `result.failure`），不会按 `on_blocked` 覆盖 profile。编译期只检查取值合法——token 可以经持久状态跨施法传递，profile 在编译期不一定可知。所以 `on_blocked` 实际只是“与 profile 一致”的断言：一般不写，写就写成与 profile 相同的值。自己实现 temporal 的 Host 应保持同一口径（`TestTemporalPassBranches` 钉住）。
-- **spawn_start 读取的实体按启动时的事件求值（O28）**：衍生物回调里 `read_attribute` 写 `snapshot: "spawn_start"` 时，整个读取（包括 `entity`）在衍生物启动那一刻求值，那时的 `$event` 是启动事件（`$event.target` 是 lifecycle 实体），不是每次回调的事件。所以 `{"entity":"$event.target","snapshot":"spawn_start"}` 读到的是 lifecycle 实体启动时的值，不是本次回调目标的值。这与 `cast_start` “整个读取在采样点求值”的口径一致。要按回调目标读，用 `snapshot: "current"`。
+- **spawn_start 读取的实体按启动时的事件求值（O28）**：衍生物回调里 `read_attribute` 写 `snapshot: "spawn_start"` 时，整个读取（包括 `framework/entity`）在衍生物启动那一刻求值，那时的 `$event` 是启动事件（`$event.target` 是 lifecycle 实体），不是每次回调的事件。所以 `{"entity":"$event.target","snapshot":"spawn_start"}` 读到的是 lifecycle 实体启动时的值，不是本次回调目标的值。这与 `cast_start` “整个读取在采样点求值”的口径一致。要按回调目标读，用 `snapshot: "current"`。
 
 ### 编译期收紧与诊断文案（O22、O29，v1.23.0）
 

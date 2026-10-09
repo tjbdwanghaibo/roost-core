@@ -249,13 +249,13 @@ func collectMetricInventory(t *testing.T) *metricInventory {
 			}
 			params := funcParams(fn)
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				if lit, ok := n.(*ast.CompositeLit); ok && f.dir == "metrics" {
+				if lit, ok := n.(*ast.CompositeLit); ok && f.dir == "infra/observe/metrics" {
 					// 注册表在 Snapshot 里自己合成的序列（obs.series.dropped）。
 					addSnapshotLiteral(inv, lit, f, consts, fn)
 					return true
 				}
 				call, ok := n.(*ast.CallExpr)
-				if !ok || f.dir == "metrics" {
+				if !ok || f.dir == "infra/observe/metrics" {
 					return true // metrics 包里的写入调用是注册表 API 的转发，名字来自调用方
 				}
 				sel, ok := call.Fun.(*ast.SelectorExpr)

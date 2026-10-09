@@ -13,8 +13,8 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
-	kitredis "github.com/tjbdwanghaibo/roost-core/redis/driver"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	kitredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 )
 
 // These tests run bounded pipeline reads and key TTL against a real Redis.

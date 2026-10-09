@@ -32,7 +32,7 @@ func TestBootstrapInstallsTheSingletonStoreWhenAConfigCanTurnItOn(t *testing.T) 
 	bootstrap := func(root string) string { return readProjectFile(t, root, "internal/bootstrap/generated.go") }
 
 	plain := copyOfNewProject(t, "configdata")
-	if body := bootstrap(plain); strings.Contains(body, "a.Singleton(") || strings.Contains(body, "kit/redis") {
+	if body := bootstrap(plain); strings.Contains(body, "a.Singleton(") || strings.Contains(body, "wiring/redis") {
 		t.Errorf("a project with neither redis nor dataengine installs a singleton store:\n%s", body)
 	}
 
@@ -48,7 +48,7 @@ func TestBootstrapInstallsTheSingletonStoreWhenAConfigCanTurnItOn(t *testing.T) 
 			t.Fatal(err)
 		}
 		body := bootstrap(root)
-		if !strings.Contains(body, "\t"+singletonBootstrapCall+"\n") || !strings.Contains(body, `kitredis "github.com/tjbdwanghaibo/roost-core/kit/redis"`) {
+		if !strings.Contains(body, "\t"+singletonBootstrapCall+"\n") || !strings.Contains(body, `kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"`) {
 			t.Errorf("%s: bootstrap does not install %s:\n%s", shape.name, singletonBootstrapCall, body)
 		}
 		// The store is installed before any server is registered: App.Singleton is an App option.

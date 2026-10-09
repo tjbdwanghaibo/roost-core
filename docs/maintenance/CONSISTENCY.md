@@ -18,17 +18,17 @@
 | --- | --- | --- | --- | --- |
 | C01 | 发布状态 | 框架文档仍写v1.23.1未发布 | v1.24.0 tag固定2fa1c787；main仅回填验收 | [v1.24.0发布记录](../release/v1.24.0-NOTES.md) |
 | C02 | Nest提交 | pipelined只能手动注册/提交点混称 | 生成标记支持pipelined；准入与持久确认分开 | [codegen/internal/nest/parse.go](../../codegen/internal/nest/parse.go) |
-| C03 | memory持久写 | 旧段落称静默忽略且不报错 | refuseMemoryPersistentWrite拒绝本地持久写 | [nest/rollback.go](../../nest/rollback.go) |
-| C04 | WAL | 旧格式/旧独立运行路径混用 | codecVersion=7，解码拒绝其他版本 | [nestwal/codec.go](../../nestwal/codec.go) |
-| C05 | DAO schema | 保留自动迁移流程 | 聚合所有DAO先校验当前schema再水合；自动迁移撤销 | [dataengine/engine/entity_repository.go](../../dataengine/engine/entity_repository.go) |
-| C06 | Sync模式 | setter立即发或没有变化驱动 | setter标脏，handler锁内冻结、确认后唤醒；保留periodic | [sync/entitysync/mode.go](../../sync/entitysync/mode.go) |
-| C07 | Sync水位 | SetDurableWatermark旧API | ManagerConfig.DurableWatermark，整subject门控 | [sync/entitysync/manager.go](../../sync/entitysync/manager.go) |
+| C03 | memory持久写 | 旧段落称静默忽略且不报错 | refuseMemoryPersistentWrite拒绝本地持久写 | [nest/rollback.go](../../framework/nest/rollback.go) |
+| C04 | WAL | 旧格式/旧独立运行路径混用 | codecVersion=7，解码拒绝其他版本 | [nestwal/codec.go](../../framework/nestwal/codec.go) |
+| C05 | DAO schema | 保留自动迁移流程 | 聚合所有DAO先校验当前schema再水合；自动迁移撤销 | [dataengine/engine/entity_repository.go](../../framework/dataengine/engine/entity_repository.go) |
+| C06 | Sync模式 | setter立即发或没有变化驱动 | setter标脏，handler锁内冻结、确认后唤醒；保留periodic | [sync/entitysync/mode.go](../../framework/sync/entitysync/mode.go) |
+| C07 | Sync水位 | SetDurableWatermark旧API | ManagerConfig.DurableWatermark，整subject门控 | [sync/entitysync/manager.go](../../framework/sync/entitysync/manager.go) |
 | C08 | 客户端载荷 | Lockstep只预留/旧协议兼容 | RS v2已有PB/Sync/Lockstep类型和保留位验证 | [client/wire/packet.go](../../client/wire/packet.go) |
-| C09 | Lockstep权限 | 客户端命令与身份来源需明确 | Command不携带seat，由当前session映射 | [sync/lockstep/command.go](../../sync/lockstep/command.go) |
-| C10 | 总线投递 | 无限重投/等待RR-25确认 | 默认MaxDeliver=5，生命周期退役/创建有互斥 | [sync/syncbus/driver/jetstream.go](../../sync/syncbus/driver/jetstream.go) |
-| C11 | Remote发布 | 唯一outbox发布者仍是方案 | 已随v1.24.0完成；正式路径按全部实体依赖调度 | [outbox_publish.go](../../remoteentity/outbox_publish.go) |
-| C12 | Service归属 | 需核实kit是否已全部只装配 | mail/match/session在service；其余七个领域仍在kit/service | [kit/service/account/service.go](../../kit/service/account/service.go) |
-| C13 | 通用迁移 | 自动DAO迁移与通用migration包需区分 | 通用Registry仍提供显式步骤；不等于Repository自动迁移 | [migration/migration.go](../../migration/migration.go) |
+| C09 | Lockstep权限 | 客户端命令与身份来源需明确 | Command不携带seat，由当前session映射 | [sync/lockstep/command.go](../../framework/sync/lockstep/command.go) |
+| C10 | 总线投递 | 无限重投/等待RR-25确认 | 默认MaxDeliver=5，生命周期退役/创建有互斥 | [sync/syncbus/driver/jetstream.go](../../framework/sync/syncbus/driver/jetstream.go) |
+| C11 | Remote发布 | 唯一outbox发布者仍是方案 | 已随v1.24.0完成；正式路径按全部实体依赖调度 | [outbox_publish.go](../../framework/remoteentity/outbox_publish.go) |
+| C12 | Service归属 | 需核实kit是否已全部只装配 | mail/match/session在service；其余七个领域仍在wiring/service | [wiring/account/service.go](../../service/account/service.go) |
+| C13 | 通用迁移 | 自动DAO迁移与通用migration包需区分 | 通用Registry仍提供显式步骤；不等于Repository自动迁移 | [migration/migration.go](../../infra/storage/migration/migration.go) |
 | C14 | Codegen最低版 | 最低core仍为v1.23.1 | minimumVersions.Core=v1.24.0；补丁不新增API | [codegen/internal/roost/manifest.go](../../codegen/internal/roost/manifest.go) |
 | C15 | 发布门禁 | pretag没有生成漂移检查 | 脚本包含go generate及干净树检查 | [scripts/pretag.sh](../../scripts/pretag.sh) |
 | C16 | 性能状态 | Remote/Sync仍暂停、旧性能失败作为当前结论 | v1.24.0已补一小时与声明负载；失败样本仍保留 | [docs/maintenance/PERFORMANCE.md](PERFORMANCE.md) |
@@ -50,11 +50,11 @@
 | [Saga 长事务](../framework/guide/06-saga.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
 | [配置、数据表与热更](../framework/guide/07-config.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
 | [游戏技能、战斗与空间](../framework/guide/08-skill.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
-| [次核心：Service 领域能力](../framework/guide/09-kit-services.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
+| [次核心：Service 领域能力](../framework/guide/09-services.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
 | [时间与定时器](../framework/guide/10-time.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
 | [观测、安全与运维](../framework/guide/11-observability.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
 | [次核心：Codegen 与工程工具](../framework/guide/12-codegen.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
-| [次核心：Kit 装配](../framework/guide/13-kit.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
+| [次核心：Wiring 装配](../framework/guide/13-wiring.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
 | [其他包与公共基础设施](../framework/guide/14-foundation.md) | 职责、正式入口、现行契约及源码/测试定位已整理 | 未对所有函数、故障组合和外部部署重新逐项验收 |
 
 ## 4. 结论的边界
@@ -65,4 +65,4 @@
 
 ## 5. 文档清理后的测试接线
 
-删除AI提示词后，原skill/prompt_test.go不能再要求提示词存在。现在由[documentation_test.go](../../skill/documentation_test.go)校验保留的技能手册：至少包含一个完整JSON示例，且实际Parse/Compile通过。这是文档回归测试的迁移，没有修改Skill运行时。
+删除AI提示词后，原skill/prompt_test.go不能再要求提示词存在。现在由[documentation_test.go](../../gameplay/skill/documentation_test.go)校验保留的技能手册：至少包含一个完整JSON示例，且实际Parse/Compile通过。这是文档回归测试的迁移，没有修改Skill运行时。

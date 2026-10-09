@@ -10,7 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/tjbdwanghaibo/roost-core/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 )
 
 func main() {

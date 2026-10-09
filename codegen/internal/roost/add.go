@@ -403,7 +403,7 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		// the implicit "that line must run before any RegisterEntity" ordering.
 		// Other is the safe default; a scaffold must never mint a per-entity
 		// "= 1", which is the rank reserved for remote-managed kinds.
-		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/entity\"\n\nconst EntityKind%s entity.EntityKind = %d\n\n// I%sEntity is the lock-safe business view used by Nest handlers.\ntype I%sEntity interface { entity.IThreadSafeEntity }\n\n// category is this kind's lock rank, acquired lowest first. Other is the safe\n// default: holding it permits acquiring nothing further. Move the kind to\n// EntityCategoryWorld / PlayerScoped / Player once its ordering is known, and\n// to EntityCategoryRemote if it becomes remote=managed.\n//roost:entity id=%d entityKind=EntityKind%s category=entity.EntityCategoryOther\ntype %s struct {\n\t*entity.EntityBase\n\tentity.ComponentManager\n\tentity.DaoManager\n}\n", snake, pascal, o.ID, pascal, pascal, o.ID, pascal, pascal)
+		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n\nconst EntityKind%s entity.EntityKind = %d\n\n// I%sEntity is the lock-safe business view used by Nest handlers.\ntype I%sEntity interface { entity.IThreadSafeEntity }\n\n// category is this kind's lock rank, acquired lowest first. Other is the safe\n// default: holding it permits acquiring nothing further. Move the kind to\n// EntityCategoryWorld / PlayerScoped / Player once its ordering is known, and\n// to EntityCategoryRemote if it becomes remote=managed.\n//roost:entity id=%d entityKind=EntityKind%s category=entity.EntityCategoryOther\ntype %s struct {\n\t*entity.EntityBase\n\tentity.ComponentManager\n\tentity.DaoManager\n}\n", snake, pascal, o.ID, pascal, pascal, o.ID, pascal, pascal)
 	case "component":
 		return addEntityComponent(root, m, o)
 	case "handler":
@@ -439,7 +439,7 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 	case "endpoint":
 		return addProtocolEndpoint(root, m, o)
 	case "event":
-		path = "event/def/" + snake + ".go"
+		path = "framework/event/def/" + snake + ".go"
 		body = fmt.Sprintf("package eventdef\n\ntype Event%s struct{}\n", pascal)
 	case "table":
 		path = "configs/schema/" + snake + ".go"
@@ -452,13 +452,13 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		body = renderDAODefinition(snake, pascal+"Dao")
 	case "webroute":
 		path = "service/web/" + snake + ".go"
-		body = fmt.Sprintf("package web\n\nimport (\n\t\"context\"\n\t\"github.com/tjbdwanghaibo/roost-core/webroute\"\n)\n\ntype %sResponse struct{}\n\n//roost:web method=GET path=/%s body=raw\nfunc %s(context.Context, *Service, webroute.RawRequest) (%sResponse, error) { return %sResponse{}, nil }\n", pascal, snake, pascal, pascal, pascal)
+		body = fmt.Sprintf("package web\n\nimport (\n\t\"context\"\n\t\"github.com/tjbdwanghaibo/roost-core/infra/network/webroute\"\n)\n\ntype %sResponse struct{}\n\n//roost:web method=GET path=/%s body=raw\nfunc %s(context.Context, *Service, webroute.RawRequest) (%sResponse, error) { return %sResponse{}, nil }\n", pascal, snake, pascal, pascal, pascal)
 	case "errcode":
 		path = "internal/errors/" + snake + ".go"
-		body = fmt.Sprintf("package errors\n\nimport \"github.com/tjbdwanghaibo/roost-core/errcode\"\n\nvar Err%s = errcode.Define(%d, %q, %q)\n", pascal, o.ID, snake, "TODO")
+		body = fmt.Sprintf("package errors\n\nimport \"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n\nvar Err%s = errcode.Define(%d, %q, %q)\n", pascal, o.ID, snake, "TODO")
 	case "module":
 		path = "game/controllers/" + snake + "/controller.go"
-		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/app\"\n\ntype Controller struct{}\nfunc FromRegistry(*app.Registry) (Controller, error) { return Controller{}, nil }\n", snake)
+		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/app\"\n\ntype Controller struct{}\nfunc FromRegistry(*app.Registry) (Controller, error) { return Controller{}, nil }\n", snake)
 	case "saga":
 		if len(o.Steps) == 0 {
 			return nil, fmt.Errorf("saga %s requires -steps", o.Name)
@@ -493,8 +493,8 @@ import (
 	"context"
 	"time"
 
-	fnats "github.com/tjbdwanghaibo/roost-core/nats"
-	"github.com/tjbdwanghaibo/roost-core/saga"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 )
 
 const (

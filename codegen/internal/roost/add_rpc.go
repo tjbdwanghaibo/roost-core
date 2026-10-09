@@ -135,7 +135,7 @@ package %[1]s
 import (
 	"context"
 
-	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 //go:generate go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir .
@@ -205,9 +205,9 @@ import (
 	"fmt"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-core/bus"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // Mod is the owner side of this rpc inside a business process. It publishes

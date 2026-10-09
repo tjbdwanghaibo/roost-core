@@ -24,7 +24,7 @@ fi
 { go version; git rev-parse HEAD; git status --short; shasum -a 256 saga/*.go; env | sort | sed -n '/^ROOST_SAGA_PERF_/p'; } > "$output/env.txt"
 status=0
 for mode in "${modes[@]}";do
- ROOST_SAGA_PERF_OUTPUT="$output/$mode.json" ROOST_SAGA_PERF_MODE="$mode" go test -tags=integration ./saga -run '^TestRealSagaPerformance$' -count=1 -timeout=15m -v > "$output/$mode.log" 2>&1 || status=1
+ ROOST_SAGA_PERF_OUTPUT="$output/$mode.json" ROOST_SAGA_PERF_MODE="$mode" go test -tags=integration ./framework/saga -run '^TestRealSagaPerformance$' -count=1 -timeout=15m -v > "$output/$mode.log" 2>&1 || status=1
  tail -n 8 "$output/$mode.log"
 done
 printf 'Results: %s\n' "$output"

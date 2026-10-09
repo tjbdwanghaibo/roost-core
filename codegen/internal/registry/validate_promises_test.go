@@ -23,7 +23,7 @@ func TestGeneratedAggregateValidatesTheEntityRegistry(t *testing.T) {
 	if !strings.Contains(body, "entity.ValidateEntityRegistry()") {
 		t.Fatalf("the aggregate does not validate the entity registry:\n%s", body)
 	}
-	if !strings.Contains(body, `"github.com/tjbdwanghaibo/roost-core/entity"`) {
+	if !strings.Contains(body, `"github.com/tjbdwanghaibo/roost-core/framework/entity"`) {
 		t.Errorf("the aggregate does not import the entity package:\n%s", body)
 	}
 

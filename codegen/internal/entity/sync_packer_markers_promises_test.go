@@ -28,7 +28,7 @@ func TestGeneratedSyncBlockOnlyNamesFieldsCoreHas(t *testing.T) {
 		dir := t.TempDir()
 		writeSyncMarkerSource(t, dir, "avatar.go", `package avatar
 
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 const EntityKindAvatar entity.EntityKind = 141
 const SyncNamespaceAvatar = "avatar"
@@ -73,7 +73,7 @@ func TestRetiredPackerMarkerIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	writeSyncMarkerSource(t, dir, "avatar.go", `package avatar
 
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 const EntityKindAvatar entity.EntityKind = 141
 
@@ -101,7 +101,7 @@ func TestPackerWithoutSyncIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	writeSyncMarkerSource(t, dir, "avatar.go", `package avatar
 
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 const EntityKindAvatar entity.EntityKind = 141
 

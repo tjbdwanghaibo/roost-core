@@ -21,12 +21,12 @@ import (
 	playerbind "{{MODULE}}/protocol/player_bind"
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
-	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-core/entity"
-	svcaccount "github.com/tjbdwanghaibo/roost-core/kit/service/account"
-	"github.com/tjbdwanghaibo/roost-core/spatial"
-	"github.com/tjbdwanghaibo/roost-core/sync/entitysync"
-	"github.com/tjbdwanghaibo/roost-core/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 )
 
 // These run the scene on the REAL generated player TCP transport, over

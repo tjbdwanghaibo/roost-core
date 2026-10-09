@@ -9,12 +9,12 @@ import (
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/purchase"
 	"{{MODULE}}/game/settings"
-	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-core/clock"
-	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
-	corenest "github.com/tjbdwanghaibo/roost-core/nest"
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // PurchaseCapability is the name the drain is published under, so an endpoint

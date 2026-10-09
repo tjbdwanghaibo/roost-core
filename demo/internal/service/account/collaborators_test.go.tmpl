@@ -1,5 +1,7 @@
 package Account
 
+import accountdomain "github.com/tjbdwanghaibo/roost-core/service/account"
+
 import (
 	"context"
 	"errors"
@@ -9,10 +11,10 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
-	"github.com/tjbdwanghaibo/roost-core/kit/service/account"
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"github.com/tjbdwanghaibo/roost-core/wiring/account"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
 // RR-20260927-03（OPEN-ITEMS A04）：demo 的玩家 id 计数器归属 account 服务的数据，和它的账号、角色、服务器
@@ -92,7 +94,7 @@ func parseInt(value any) (int64, error) {
 
 // boundAllocator is the demo allocator bound the way the account Mod binds it:
 // a registry carrying the config (account.key_prefix) and the Redis client.
-func boundAllocator(t *testing.T, client fredis.IRedis, prefix string) account.PlayerIDAllocator {
+func boundAllocator(t *testing.T, client fredis.IRedis, prefix string) accountdomain.PlayerIDAllocator {
 	t.Helper()
 	cfg := viper.New()
 	cfg.Set("account.key_prefix", prefix)
@@ -111,7 +113,7 @@ func boundAllocator(t *testing.T, client fredis.IRedis, prefix string) account.P
 	return allocator
 }
 
-func allocate(t *testing.T, allocator account.PlayerIDAllocator) int64 {
+func allocate(t *testing.T, allocator accountdomain.PlayerIDAllocator) int64 {
 	t.Helper()
 	id, err := allocator.Allocate(context.Background(), 1000)
 	if err != nil {

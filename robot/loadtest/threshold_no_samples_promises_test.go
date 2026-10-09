@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/loadtest"
 	"github.com/tjbdwanghaibo/roost-core/robot/runner"

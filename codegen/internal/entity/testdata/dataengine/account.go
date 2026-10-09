@@ -1,6 +1,6 @@
 package persistflow
 
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 const EntityKindAccount entity.EntityKind = 192
 

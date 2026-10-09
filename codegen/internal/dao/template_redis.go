@@ -11,8 +11,8 @@ import (
 	{{- end }}
 	"time"
 
-	fcache "github.com/tjbdwanghaibo/roost-core/cache"
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	fcache "github.com/tjbdwanghaibo/roost-core/framework/cache"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
 const (

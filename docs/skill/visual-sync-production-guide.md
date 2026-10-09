@@ -236,7 +236,7 @@ sequence、source sequence 和 resync reason，但不要记录完整敏感 paylo
 
 ## 9. 发布、兼容与回滚
 
-单模块一次发布：先停旧服务、按格式版本清理或离线重建旧数据，升级业务服务与客户端依赖后再开放流量。`skill`、`kit`、`syncstream` 不再分别发版本。当前 checkpoint=10，旧版拒绝。
+单模块一次发布：先停旧服务、按格式版本清理或离线重建旧数据，升级业务服务与客户端依赖后再开放流量。`gameplay/skill`、`kit`、`framework/sync/syncstream` 不再分别发版本。当前 checkpoint=10，旧版拒绝。
 
 Schema 或视觉目录升级采用双版本窗口：先部署能读取新旧版本的客户端，再让服务端以 full
 切换 schema/catalog。回滚时停止产生新 schema，恢复旧 producer；客户端收到 mismatch
@@ -249,21 +249,21 @@ Schema 或视觉目录升级采用双版本窗口：先部署能读取新旧版�
 
 ```powershell
 # roost-core
-go test ./syncstream -count=1
-go vet ./syncstream
-go test -race ./syncstream -count=1
+go test ./framework/sync/syncstream -count=1
+go vet ./framework/sync/syncstream
+go test -race ./framework/sync/syncstream -count=1
 
 # roost-skill
-go test ./skill ./skillcompose ./skillsync -count=1
-go vet ./skill ./skillcompose ./skillsync
-go test -race ./skill ./skillcompose ./skillsync -count=1
-go test ./skill -run TestAllFixturesParseCompileInspectAndRun -count=1
-go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=10s ./skill
+go test ./gameplay/skill ./skillcompose ./skillsync -count=1
+go vet ./gameplay/skill ./skillcompose ./skillsync
+go test -race ./gameplay/skill ./skillcompose ./skillsync -count=1
+go test ./gameplay/skill -run TestAllFixturesParseCompileInspectAndRun -count=1
+go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=10s ./gameplay/skill
 
 # roost-kit
-go test ./syncstream -count=1
-go vet ./syncstream
-go test -race ./syncstream -count=1
+go test ./framework/sync/syncstream -count=1
+go vet ./framework/sync/syncstream
+go test -race ./framework/sync/syncstream -count=1
 ```
 
 发布环境还必须做端到端故障注入：
@@ -350,8 +350,8 @@ go vet ./...
 go test -race ./... -count=1
 
 # 基准
-go test ./syncstream -run '^$' -bench . -benchmem       # roost-core / roost-kit
-go test ./skill -run '^$' -bench . -benchmem          # roost-skill
+go test ./framework/sync/syncstream -run '^$' -bench . -benchmem       # roost-core / roost-kit
+go test ./gameplay/skill -run '^$' -bench . -benchmem          # roost-skill
 
 # 跨模块：确认失败 -> 重启 -> WAL/outbox 恢复 -> gzip/分片/checksum -> ACK/裁剪
 cd skill/integration/sync-e2e
@@ -364,7 +364,7 @@ go test ./... -run TestProtocolSoak -count=1 -timeout 35m
 ```
 
 发布顺序为 `roost-core`（当时 v1.10.0）→ `roost-skill` → `roost-kit`（当时 v1.10.0）→ 业务服务/客户端。
-`roost-skill` 的模块路径是 `github.com/tjbdwanghaibo/roost-core/skill`。生产模块只依赖
+`roost-skill` 的模块路径是 `github.com/tjbdwanghaibo/roost-core/gameplay/skill`。生产模块只依赖
 语义版本；相对 `replace` 仅存在于 `integration/sync-e2e` 测试模块。正式发布 tag 前应先用
 临时 workspace 执行三仓全量测试，然后在无 workspace 环境验证已发布版本可解析。
 

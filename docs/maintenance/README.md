@@ -33,7 +33,7 @@ GOWORK=off go test -count=1 .
 # 改动包的定向测试；跨包行为修改再跑全仓
 GOWORK=off go test ./...
 # 并发相关改动在支持 race 的环境运行受影响包
-GOWORK=off go test -race ./nest ./sync/entitysync
+GOWORK=off go test -race ./framework/nest ./framework/sync/entitysync
 # 改生成器或模板：重生成，确认无漂移，再编译真实消费工程
 GOWORK=off go generate ./...
 git diff --exit-code

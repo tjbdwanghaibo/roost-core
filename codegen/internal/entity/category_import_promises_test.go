@@ -33,8 +33,8 @@ func TestGeneratedWiringImportsEveryPackageItQualifies(t *testing.T) {
 		t.Fatal("fixture marker not found")
 	}
 	body = strings.Replace(body,
-		`"github.com/tjbdwanghaibo/roost-core/entity"`,
-		"\"github.com/tjbdwanghaibo/roost-core/entity\"\n\tview \"github.com/tjbdwanghaibo/cube/game/view\"", 1)
+		`"github.com/tjbdwanghaibo/roost-core/framework/entity"`,
+		"\"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n\tview \"github.com/tjbdwanghaibo/cube/game/view\"", 1)
 	body += "\nvar _ = view.EntityCategoryPlayer\n"
 	if err := os.WriteFile(filepath.Join(dir, "player.go"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)

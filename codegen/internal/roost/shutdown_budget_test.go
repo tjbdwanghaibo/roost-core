@@ -52,8 +52,8 @@ func bootstrapModCounts(t *testing.T, root string) (map[string]int, map[string]d
 	register := regexp.MustCompile(`(?m)^\ta\.RegisterServer\(app\.ServiceName\(([^)]*)\)`)
 	for _, match := range register.FindAllStringSubmatchIndex(body, -1) {
 		name := strings.Trim(body[match[2]:match[3]], `"`)
-		if strings.HasPrefix(name, "svc") && strings.HasSuffix(name, ".ServiceType") {
-			name = strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(name, "svc"), ".ServiceType"))
+		if strings.HasPrefix(name, "domain") && strings.HasSuffix(name, ".ServiceType") {
+			name = strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(name, "domain"), ".ServiceType"))
 		}
 		rest := body[match[0]:]
 		end := strings.Index(rest, "\n\ta.")

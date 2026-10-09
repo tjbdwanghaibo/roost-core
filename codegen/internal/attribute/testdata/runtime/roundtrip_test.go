@@ -14,7 +14,7 @@ package combat
 import (
 	"testing"
 
-	coreattr "github.com/tjbdwanghaibo/roost-core/attribute"
+	coreattr "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
 )
 
 func TestGeneratedProfileCarriesIDsMetadataAndDerivedFormula(t *testing.T) {

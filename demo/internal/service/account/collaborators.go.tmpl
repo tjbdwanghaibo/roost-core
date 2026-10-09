@@ -3,6 +3,8 @@
 // will not overwrite it.
 package Account
 
+import accountdomain "github.com/tjbdwanghaibo/roost-core/service/account"
+
 import (
 	"context"
 	"errors"
@@ -11,17 +13,17 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/tjbdwanghaibo/roost-core/app"
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
-	"github.com/tjbdwanghaibo/roost-core/kit/mods"
-	"github.com/tjbdwanghaibo/roost-core/kit/service/account"
-	"github.com/tjbdwanghaibo/roost-core/kit/service/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"github.com/tjbdwanghaibo/roost-core/wiring/account"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
 )
 
 // DemoChannel is the one login channel this demo accepts. A real project has
 // one Channel per platform (an app store, a device attestation service, …)
 // and a verifier that calls that platform.
-const DemoChannel account.Channel = "demo"
+const DemoChannel accountdomain.Channel = "demo"
 
 // demoCredentialPrefix: the credential that "proves" open id X is "demo:X".
 const demoCredentialPrefix = "demo:"
@@ -34,16 +36,16 @@ const demoCredentialPrefix = "demo:"
 // does not know, and it returns the identity it confirmed rather than the one
 // submitted — and nothing else. Replace the body with a call to the platform
 // before this project takes outside traffic.
-func Verifier() account.IdentityVerifier {
-	return account.VerifierFunc(func(_ context.Context, identity account.Identity) (account.Verified, error) {
+func Verifier() accountdomain.IdentityVerifier {
+	return accountdomain.VerifierFunc(func(_ context.Context, identity accountdomain.Identity) (accountdomain.Verified, error) {
 		if identity.Channel != DemoChannel {
-			return account.Verified{}, fmt.Errorf("%w: channel %q is not a login channel of this demo (only %q is)", account.ErrIdentityDenied, identity.Channel, DemoChannel)
+			return accountdomain.Verified{}, fmt.Errorf("%w: channel %q is not a login channel of this demo (only %q is)", accountdomain.ErrIdentityDenied, identity.Channel, DemoChannel)
 		}
 		openID, ok := strings.CutPrefix(identity.Credential, demoCredentialPrefix)
 		if !ok || openID == "" || openID != identity.OpenID {
-			return account.Verified{}, fmt.Errorf("%w: demo credential does not match the open id", account.ErrIdentityDenied)
+			return accountdomain.Verified{}, fmt.Errorf("%w: demo credential does not match the open id", accountdomain.ErrIdentityDenied)
 		}
-		return account.Verified{Channel: DemoChannel, OpenID: openID}, nil
+		return accountdomain.Verified{Channel: DemoChannel, OpenID: openID}, nil
 	})
 }
 
@@ -152,19 +154,19 @@ func (allocator *redisAllocator) Allocate(ctx context.Context, _ int32) (int64, 
 }
 
 var (
-	_ account.PlayerIDAllocator = (*redisAllocator)(nil)
+	_ accountdomain.PlayerIDAllocator = (*redisAllocator)(nil)
 	_ account.RegistryBound     = (*redisAllocator)(nil)
 )
 
 // Allocator mints player ids per game server.
-func Allocator() account.PlayerIDAllocator {
+func Allocator() accountdomain.PlayerIDAllocator {
 	return &redisAllocator{}
 }
 
 // NameRules validates role names. The default bounds length and refuses
 // whitespace; replace it with the project's own rules.
-func NameRules() account.NameValidator {
-	return account.NameValidatorFunc(func(raw string) error {
+func NameRules() accountdomain.NameValidator {
+	return accountdomain.NameValidatorFunc(func(raw string) error {
 		trimmed := strings.TrimSpace(raw)
 		if trimmed == "" || len(trimmed) > 32 {
 			return errors.New("name must be 1–32 characters")

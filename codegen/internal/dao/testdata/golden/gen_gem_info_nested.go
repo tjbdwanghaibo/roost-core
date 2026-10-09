@@ -4,8 +4,8 @@ package testdata
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/roost-core/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

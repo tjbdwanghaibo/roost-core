@@ -1,0 +1,308 @@
+package remoteentity
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/cache"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	redis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+)
+
+type remoteSyncTransport interface {
+	entity.IRemoteSnapshotPublisher
+	PublishRemoteInterest(context.Context, entity.RemoteSnapshotInterest, bool) error
+}
+
+// Manager is the single transaction/snapshot implementation.
+// Wrappers are private coordination cells and are not exposed as an alternate
+// persistence API.
+type Manager struct {
+	mu          sync.RWMutex
+	wrappers    map[int64]*remoteEntityWrapper
+	creating    map[int64]*remoteWrapperCreate
+	lockFactory redis.IVersionedLockFactory
+	// lockFactoryErr is set when the factory hands out locks without a fence;
+	// see NewManager. A manager carrying it creates no wrappers.
+	lockFactoryErr  error
+	lockFactoryWarn sync.Once
+	backend         entity.IRemoteEntityBackend
+	ownershipStore  entity.IRemoteEntityOwnershipStore
+	cfg             *Config
+	localSid        int32
+	remote          *remoteState
+	// snapshots 是快照读、兴趣、复制接收与它们的生命周期（Mirror 方案第 3 步）。Manager 只组合并委托它，
+	// owner 的提交后发布经它的包内入口 publishCommitted。
+	snapshots *SnapshotClient
+	sealed    bool
+	fatalMu   sync.RWMutex
+	fatalErr  error
+	onFatal   func(error)
+	// localExecutor 是 Nest 注入的本地执行入口（BindLocalExecutor → NestMgr.RunLocal），后台收尾据此回到快池。
+	localExecutor atomic.Pointer[func(func()) error]
+}
+
+func (m *Manager) SetFatalHandler(handler func(error)) {
+	if m == nil {
+		return
+	}
+	m.fatalMu.Lock()
+	m.onFatal = handler
+	m.fatalMu.Unlock()
+}
+
+func (m *Manager) recordReleaseFailure(err error) {
+	if m == nil || err == nil {
+		return
+	}
+	m.fatalMu.Lock()
+	first := m.fatalErr == nil
+	m.fatalErr = errors.Join(m.fatalErr, err)
+	handler := m.onFatal
+	m.fatalMu.Unlock()
+	metrics.IncCounter("remote_entity.release_failure_total", nil, 1)
+	if first && handler != nil {
+		handler(err)
+	}
+}
+
+func (m *Manager) FatalError() error {
+	if m == nil {
+		return entity.ErrRemoteWriteCapabilityDisabled
+	}
+	m.fatalMu.RLock()
+	defer m.fatalMu.RUnlock()
+	return m.fatalErr
+}
+
+func (m *Manager) WrapperCount() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.wrappers)
+}
+
+type remoteWrapperCreate struct {
+	done    chan struct{}
+	wrapper *remoteEntityWrapper
+}
+
+var _ entity.IRemoteEntityManager = (*Manager)(nil)
+
+func NewManager(lockFactory redis.IVersionedLockFactory, cfg *Config, localSid int32, snapshotL2 ...cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]) *Manager {
+	mgr := &Manager{
+		wrappers:    make(map[int64]*remoteEntityWrapper),
+		creating:    make(map[int64]*remoteWrapperCreate),
+		lockFactory: lockFactory,
+		cfg:         cfg,
+		localSid:    localSid,
+	}
+	// Fail closed at construction, once, where the wiring is. Remote Entity's
+	// write gate needs the fence a lock allocates on acquisition
+	// (redis.IFencedVersionedLock). A factory of plain versioned locks would
+	// have every shared operation refused at run time with ErrRemoteFenced —
+	// correct, but late, noisy, and indistinguishable from a real fence
+	// conflict in the metrics. Constructing a probe lock performs no I/O.
+	if lockFactory != nil {
+		probeKey, probeTTL := "e", time.Hour
+		if cfg != nil {
+			probeKey, probeTTL = cfg.LockKey, cfg.LockTTL
+		}
+		if _, ok := lockFactory.NewVersionedLock(1, redis.VersionedLockOptions{Key: probeKey, TTL: probeTTL}).(redis.IFencedVersionedLock); !ok {
+			mgr.lockFactoryErr = fmt.Errorf("remote_entity: lock factory %T does not provide fenced locks (redis.IFencedVersionedLock); shared entities cannot be served", lockFactory)
+		}
+	}
+	mgr.remote = newRemoteState(cfg)
+	var l2 cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]
+	if len(snapshotL2) > 0 {
+		l2 = snapshotL2[0]
+	}
+	// 权威 loader 晚绑定：backend 在 SetBackend 之后才有。Manager 的 backend 是写 owner 的权威存储，
+	// 沿用它一直提供的 Linearizable 读。
+	mgr.snapshots = newSnapshotClient(cfg, SnapshotClientDeps{
+		L2: l2, ConsumerSID: localSid, LinearizableLoader: true,
+		Loader: func(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
+			if mgr.backend == nil {
+				return entity.RemoteSnapshotEnvelope{}, false, nil
+			}
+			return mgr.backend.LoadRemoteSnapshot(ctx, key, consistency, minVersion)
+		},
+	})
+	return mgr
+}
+
+// LockFactoryError reports why this manager will create no wrappers, or nil.
+// The Mod turns it into a Provide failure so a misconfigured deployment stops
+// at startup instead of refusing every shared operation.
+func (m *Manager) LockFactoryError() error {
+	if m == nil {
+		return nil
+	}
+	return m.lockFactoryErr
+}
+
+func (m *Manager) getOrCreate(id int64, category entity.EntityCategory, kind entity.EntityKind) *remoteEntityWrapper {
+	meta := resolveRemoteWrapperID(id, category, kind)
+	if meta.FullID == 0 || m == nil || m.lockFactory == nil || m.cfg == nil {
+		return nil
+	}
+	if m.lockFactoryErr != nil {
+		m.lockFactoryWarn.Do(func() { slog.Error("remote_entity: refusing to create wrappers", "err", m.lockFactoryErr) })
+		return nil
+	}
+
+	m.mu.RLock()
+	w := m.wrappers[meta.FullID]
+	if w != nil {
+		w.retain()
+		m.mu.RUnlock()
+		return w
+	}
+	m.mu.RUnlock()
+
+	m.mu.Lock()
+	if existing := m.wrappers[meta.FullID]; existing != nil {
+		existing.retain()
+		m.mu.Unlock()
+		return existing
+	}
+	if call := m.creating[meta.FullID]; call != nil {
+		m.mu.Unlock()
+		<-call.done
+		m.mu.RLock()
+		created := m.wrappers[meta.FullID]
+		if created != nil {
+			created.retain()
+		}
+		m.mu.RUnlock()
+		return created
+	}
+	m.pruneWrappersLocked(time.Now())
+	if m.cfg.WrapperCapacity > 0 && len(m.wrappers)+len(m.creating) >= m.cfg.WrapperCapacity {
+		m.mu.Unlock()
+		return nil
+	}
+	call := &remoteWrapperCreate{done: make(chan struct{})}
+	m.creating[meta.FullID] = call
+	m.mu.Unlock()
+
+	opts := redis.VersionedLockOptions{
+		Key:                m.cfg.LockKey,
+		TTL:                m.cfg.LockTTL,
+		RetryInterval:      m.cfg.RetryDelay,
+		RetryCount:         m.cfg.RetryCount,
+		AutoAsyncTouch:     true,
+		AsyncTouchInterval: m.cfg.LockTTL / 3,
+		AsyncTouchExtend:   m.cfg.LockTTL / 2,
+	}
+	created := newRemoteEntityWrapper(meta.FullID, meta.Category, meta.Kind, m.lockFactory.NewVersionedLock(meta.FullID, opts), m)
+	created.retain()
+	// 构造只建立本地协调状态；权威读取留给写入/所有权入口，使用本次调用的预算。
+	// markerUnknown 让首次准入必须查询 Redis，不能把未读取误当成本地所有权。
+
+	m.mu.Lock()
+	m.wrappers[meta.FullID] = created
+	call.wrapper = created
+	delete(m.creating, meta.FullID)
+	close(call.done)
+	m.mu.Unlock()
+	return created
+}
+
+func (m *Manager) pruneWrappersLocked(now time.Time) {
+	if m == nil || m.cfg == nil || len(m.wrappers) == 0 {
+		return
+	}
+	cutoff := now.Add(-m.cfg.WrapperIdleTTL).UnixNano()
+	for id, wrapper := range m.wrappers {
+		if wrapper != nil && wrapper.refs.Load() == 0 && len(wrapper.writeGate) == 0 && wrapper.lastUsed.Load() <= cutoff {
+			delete(m.wrappers, id)
+		}
+	}
+	if m.cfg.WrapperCapacity <= 0 || len(m.wrappers)+len(m.creating) < m.cfg.WrapperCapacity {
+		return
+	}
+	var oldestID int64
+	oldestAt := int64(^uint64(0) >> 1)
+	for id, wrapper := range m.wrappers {
+		if wrapper != nil && wrapper.refs.Load() == 0 && len(wrapper.writeGate) == 0 && wrapper.lastUsed.Load() < oldestAt {
+			oldestID, oldestAt = id, wrapper.lastUsed.Load()
+		}
+	}
+	if oldestID != 0 {
+		delete(m.wrappers, oldestID)
+	}
+}
+
+func resolveRemoteWrapperID(id int64, category entity.EntityCategory, kind entity.EntityKind) entity.EntityIDMeta {
+	fullID, err := entity.NormalizeFullID(id, kind)
+	if err != nil {
+		return entity.EntityIDMeta{}
+	}
+	meta := entity.ResolveEntityID(fullID)
+	if category != entity.EntityCategoryNone && meta.Category != category {
+		return entity.EntityIDMeta{}
+	}
+	return meta
+}
+
+func (m *Manager) get(id int64) (*remoteEntityWrapper, bool) {
+	m.mu.RLock()
+	w, ok := m.wrappers[id]
+	m.mu.RUnlock()
+	return w, ok
+}
+
+func (m *Manager) SetBackend(backend entity.IRemoteEntityBackend) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sealed {
+		panic("remote_entity: dependencies are sealed")
+	}
+	m.backend = backend
+}
+
+func (m *Manager) SetOwnershipStore(store entity.IRemoteEntityOwnershipStore) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sealed {
+		panic("remote_entity: dependencies are sealed")
+	}
+	m.ownershipStore = store
+}
+
+func (m *Manager) SetSyncer(syncer remoteSyncTransport) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sealed {
+		panic("remote_entity: dependencies are sealed")
+	}
+	m.snapshots.transport = syncer
+}
+
+func (m *Manager) SealDependencies() {
+	m.mu.Lock()
+	m.sealed = true
+	m.mu.Unlock()
+}
+
+func (m *Manager) ValidateDependencies() error {
+	if m == nil || m.cfg == nil || m.lockFactory == nil {
+		return fmt.Errorf("remote_entity: manager is not initialized")
+	}
+	if m.backend == nil {
+		return fmt.Errorf("remote_entity: authoritative backend is required")
+	}
+	if m.ownershipStore == nil {
+		return fmt.Errorf("remote_entity: ownership store is required")
+	}
+	return nil
+}

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
 // U-0140 · C2（空洞测试）· nightly gap map kit `service/mail` 9/20。

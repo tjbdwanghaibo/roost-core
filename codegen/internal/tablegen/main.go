@@ -30,7 +30,7 @@ import (
 	"text/template"
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/project"
-	"github.com/tjbdwanghaibo/roost-core/configdata/rules"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata/rules"
 )
 
 const ()
@@ -785,7 +785,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 {{- range .Metas}}
 	{{.Alias}} "{{.ImportPath}}"
 {{- end}}

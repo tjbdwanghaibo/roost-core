@@ -127,7 +127,7 @@ func handlerRemoteView(p IPlayerEntity, req RemoteViewRequest) {}
 	}
 	if err := os.WriteFile(requestPath, []byte(`package splitreq
 
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 type RemoteViewRequest struct {
 	TargetPlayerViewRef entity.RemoteViewRef `+"`remote:\"view.PlayerViewMapSnapshot,required\"`"+`
@@ -480,7 +480,7 @@ func handlerInvalid(p IPlayerEntity) `+signature+` { panic("unused") }
 
 func TestGenerateRejectsUnknownRemoteSnapshotTypePackage(t *testing.T) {
 	path := writeTempGoFile(t, `package invalid
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 type IPlayerEntity interface{ ID() int64 }
 type Req struct { TargetPlayerViewRef entity.RemoteViewRef `+"`remote:\"unknownpkg.PlayerViewMapSnapshot\"`"+` }
 //roost:nest
@@ -509,7 +509,7 @@ func TestParseFileRejectsInvalidRemoteTags(t *testing.T) {
 		{
 			name: "write mode",
 			src: `package invalid
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 type IPlayerEntity interface{ ID() int64 }
 type Req struct { TargetPlayerViewRef entity.RemoteViewRef ` + "`remote:\"write,view.PlayerViewMapSnapshot\"`" + ` }
 //roost:nest
@@ -530,7 +530,7 @@ func handlerBad(p IPlayerEntity, req Req) {}
 		{
 			name: "duplicate alias",
 			src: `package invalid
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 type IPlayerEntity interface{ ID() int64 }
 type Req struct {
 	TargetPlayerViewRef entity.RemoteViewRef ` + "`remote:\"view.PlayerViewMapSnapshot\"`" + `
@@ -544,7 +544,7 @@ func handlerBad(p IPlayerEntity, req Req) {}
 		{
 			name: "unknown option",
 			src: `package invalid
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 type IPlayerEntity interface{ ID() int64 }
 type Req struct { TargetPlayerViewRef entity.RemoteViewRef ` + "`remote:\"view.PlayerViewMapSnapshot,requried\"`" + ` }
 //roost:nest

@@ -45,7 +45,7 @@ unset ROOST_DATAENGINE_IT_ROOT ROOST_REMOTE_ACCEPTANCE_LOCK_HELD ROOST_DATAENGIN
 export ROOST_IT_HOME="$home" ROOST_IT_PORT_OFFSET="$offset" ROOST_IT_TOXIPROXY=1
 export ROOST_IT_MONGO_CACHE_GB="${ROOST_IT_MONGO_CACHE_GB:-0.5}"
 
-# shellcheck source=../kit/scripts/integration/lib/common.sh
+# shellcheck source=../wiring/scripts/integration/lib/common.sh
 source "$lib_dir/common.sh"
 source "$lib_dir/mongo.sh"
 source "$lib_dir/nats.sh"
@@ -384,7 +384,7 @@ run_core_tests() {
 		source "$ROOST_IT_ROOT/env.sh"
 		export ROOST_MIRROR_LOCAL=1
 		cd "$repo_dir"
-		GOWORK=off go test -tags integration -count=1 -run "${ROOST_MIRROR_LOCAL_CORE_RUN:-^TestMirrorLocal}" -v -timeout 10m ./remoteentity
+		GOWORK=off go test -tags integration -count=1 -run "${ROOST_MIRROR_LOCAL_CORE_RUN:-^TestMirrorLocal}" -v -timeout 10m ./framework/remoteentity
 	)
 }
 
@@ -397,7 +397,7 @@ run_bench() {
 		export ROOST_MIRROR_LOCAL=1
 		cd "$source_dir"
 		GOWORK=off go test -tags integration -run '^$' -bench "${ROOST_MIRROR_LOCAL_BENCH:-^BenchmarkMirrorLocal}" \
-			-benchtime 1x -count 1 -timeout 60m ./remoteentity
+			-benchtime 1x -count 1 -timeout 60m ./framework/remoteentity
 	) | tee -a "$out"
 }
 

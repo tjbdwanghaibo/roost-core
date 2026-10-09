@@ -13,7 +13,7 @@ type modSpec struct {
 	DevService  string
 }
 
-//go:generate go run ../../../kit/internal/configschemagen -out kitconfig_gen.go
+//go:generate go run ../../../wiring/internal/configschemagen -out kitconfig_gen.go
 
 // modConfigSection is the configuration section a catalog Mod writes into a
 // service config: the keys its declaration marks with an example (the starter
@@ -44,50 +44,50 @@ const defaultStatsLogDir = "log"
 
 var modCatalog = map[string]modSpec{
 	"lock": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/lock", Alias: "kitlock", Constructor: "kitlock.NewLockMod()",
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/lock", Alias: "kitlock", Constructor: "kitlock.NewLockMod()",
 	},
 	"ops": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/ops", Alias: "kitops", Constructor: "kitops.NewOpsMod()",
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/ops", Alias: "kitops", Constructor: "kitops.NewOpsMod()",
 	},
 	"statslog": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/statslog", Alias: "kitstatslog", Constructor: "kitstatslog.NewStatsLogMod()",
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/statslog", Alias: "kitstatslog", Constructor: "kitstatslog.NewStatsLogMod()",
 	},
 	"configdata": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/configdata", Alias: "kitconfigdata", Constructor: "kitconfigdata.NewConfigDataMod()",
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/configdata", Alias: "kitconfigdata", Constructor: "kitconfigdata.NewConfigDataMod()",
 	},
 	"etcd": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/etcd", Alias: "kitetcd", Constructor: "kitetcd.NewEtcdMod()",
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/etcd", Alias: "kitetcd", Constructor: "kitetcd.NewEtcdMod()",
 		DevService: "etcd",
 	},
 	"redis": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/redis", Alias: "kitredis", Constructor: "kitredis.NewRedisMod()",
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/redis", Alias: "kitredis", Constructor: "kitredis.NewRedisMod()",
 		DevService: "redis",
 	},
 	"mongo": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/mongo", Alias: "kitmongo", Constructor: "kitmongo.NewMongoMod()",
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/mongo", Alias: "kitmongo", Constructor: "kitmongo.NewMongoMod()",
 		DevService: "mongo",
 	},
 	"nats": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/nats", Alias: "kitnats", Constructor: "kitnats.NewNatsMod(nil)",
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/nats", Alias: "kitnats", Constructor: "kitnats.NewNatsMod(nil)",
 		DevService: "nats",
 	},
 	"syncbus": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/syncbus", Alias: "kitsyncbus", Constructor: "kitsyncbus.NewSyncBusMod(0)", Depends: []string{"nats"},
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/syncbus", Alias: "kitsyncbus", Constructor: "kitsyncbus.NewSyncBusMod(0)", Depends: []string{"nats"},
 	},
 	"remote_entity": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/remoteentity", Alias: "kitremoteentity", Depends: []string{"redis", "mongo", "syncbus"},
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity", Alias: "kitremoteentity", Depends: []string{"redis", "mongo", "syncbus"},
 	},
 	"dataengine": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/dataengine", Alias: "kitdataengine", Depends: []string{"mongo", "nats"},
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/dataengine", Alias: "kitdataengine", Depends: []string{"mongo", "nats"},
 	},
 	"manager": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/manager", Alias: "kitmanager",
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/manager", Alias: "kitmanager",
 	},
 	"nest": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/nest", Alias: "kitnest",
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/nest", Alias: "kitnest",
 	},
 	"saga": {
-		ImportPath: "github.com/tjbdwanghaibo/roost-core/kit/saga", Alias: "kitsaga", Constructor: "kitsaga.NewMod()", Depends: []string{"mongo", "nats"},
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/saga", Alias: "kitsaga", Constructor: "kitsaga.NewMod()", Depends: []string{"mongo", "nats"},
 	},
 }
 

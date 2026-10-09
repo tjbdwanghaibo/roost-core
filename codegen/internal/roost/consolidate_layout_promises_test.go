@@ -31,7 +31,7 @@ func TestLayoutStageMovesTheSyncBlock(t *testing.T) {
 	if err := os.WriteFile(source, []byte(`package wiring
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/lockstep"
@@ -68,16 +68,16 @@ var (
 	}
 	text := string(rewritten)
 	for _, want := range []string{
-		`"github.com/tjbdwanghaibo/roost-core/entity"`, // 不在块内，不动
-		`"github.com/tjbdwanghaibo/roost-core/sync/entitysync"`,
-		`"github.com/tjbdwanghaibo/roost-core/sync/entitysync/policy"`,
-		`"github.com/tjbdwanghaibo/roost-core/sync/lockstep"`,
-		`"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror"`,
-		`kitnet "github.com/tjbdwanghaibo/roost-core/sync/nettransport"`,
+		`"github.com/tjbdwanghaibo/roost-core/framework/entity"`, // 不在块内，不动
+		`"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"`,
+		`"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"`,
+		`"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"`,
+		`"github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/mirror"`,
+		`kitnet "github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"`,
 		// 包名变了：文件里仍叫 statesync，所以补显式别名
-		`statesync "github.com/tjbdwanghaibo/roost-core/sync/frame"`,
-		`fsyncbus "github.com/tjbdwanghaibo/roost-core/sync/syncbus"`,
-		`"github.com/tjbdwanghaibo/roost-core/sync/syncbus/driver"`,
+		`statesync "github.com/tjbdwanghaibo/roost-core/framework/sync/frame"`,
+		`fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"`,
+		`"github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("rewritten file lacks %q:\n%s", want, text)
@@ -109,14 +109,14 @@ func TestLayoutPathRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	moved := map[string][2]string{
-		"github.com/tjbdwanghaibo/roost-core/entitysync":        {"github.com/tjbdwanghaibo/roost-core/sync/entitysync", ""},
-		"github.com/tjbdwanghaibo/roost-core/entitysync/policy": {"github.com/tjbdwanghaibo/roost-core/sync/entitysync/policy", ""},
-		"github.com/tjbdwanghaibo/roost-core/statesync":         {"github.com/tjbdwanghaibo/roost-core/sync/frame", "frame"},
-		"github.com/tjbdwanghaibo/roost-core/nettransport":      {"github.com/tjbdwanghaibo/roost-core/sync/nettransport", ""},
-		"github.com/tjbdwanghaibo/roost-core/lockstep":          {"github.com/tjbdwanghaibo/roost-core/sync/lockstep", ""},
-		"github.com/tjbdwanghaibo/roost-core/syncbus":           {"github.com/tjbdwanghaibo/roost-core/sync/syncbus", ""},
-		"github.com/tjbdwanghaibo/roost-core/syncbus/driver":    {"github.com/tjbdwanghaibo/roost-core/sync/syncbus/driver", ""},
-		"github.com/tjbdwanghaibo/roost-core/mirror":            {"github.com/tjbdwanghaibo/roost-core/sync/syncbus/mirror", ""},
+		"github.com/tjbdwanghaibo/roost-core/entitysync":        {"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync", ""},
+		"github.com/tjbdwanghaibo/roost-core/entitysync/policy": {"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy", ""},
+		"github.com/tjbdwanghaibo/roost-core/statesync":         {"github.com/tjbdwanghaibo/roost-core/framework/sync/frame", "frame"},
+		"github.com/tjbdwanghaibo/roost-core/nettransport":      {"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport", ""},
+		"github.com/tjbdwanghaibo/roost-core/lockstep":          {"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep", ""},
+		"github.com/tjbdwanghaibo/roost-core/syncbus":           {"github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus", ""},
+		"github.com/tjbdwanghaibo/roost-core/syncbus/driver":    {"github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver", ""},
+		"github.com/tjbdwanghaibo/roost-core/mirror":            {"github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/mirror", ""},
 	}
 	for from, want := range moved {
 		got, pkg, ok := layoutPath(from, m)
@@ -126,11 +126,11 @@ func TestLayoutPathRules(t *testing.T) {
 	}
 	for _, untouched := range []string{
 		"context",
-		"github.com/tjbdwanghaibo/roost-core/entity",
-		"github.com/tjbdwanghaibo/roost-core/syncstream", // 基建，不在块内
-		"github.com/tjbdwanghaibo/roost-core/spatial",
-		"github.com/tjbdwanghaibo/roost-core/sync/entitysync", // 已在新位置
-		"github.com/tjbdwanghaibo/roost-core/kit/syncbus",     // kit 胶水不动
+		"github.com/tjbdwanghaibo/roost-core/framework/entity",
+		"github.com/tjbdwanghaibo/roost-core/framework/sync/syncstream", // 基建，不在块内
+		"github.com/tjbdwanghaibo/roost-core/infra/base/spatial",
+		"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync", // 已在新位置
+		"github.com/tjbdwanghaibo/roost-core/wiring/syncbus",     // kit 胶水不动
 	} {
 		if got, _, ok := layoutPath(untouched, m); ok || got != untouched {
 			t.Errorf("layoutPath(%q) = %q (moved=%v), want it left alone", untouched, got, ok)

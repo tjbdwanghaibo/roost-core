@@ -46,7 +46,7 @@ func TestFrameworkDependencyConsolidationCommitsOnlyPlannedMigration(t *testing.
 		if err != nil {
 			return err
 		}
-		if !bytes.Contains(migratedSource, []byte("roost-core/kit/mods")) {
+		if !bytes.Contains(migratedSource, []byte("roost-core/wiring/mods")) {
 			t.Fatal("resolver saw unmigrated imports")
 		}
 		if err := os.WriteFile(filepath.Join(stage, "go.mod"), []byte("module example.com/planet\n\ngo 1.27.0\n\nrequire github.com/tjbdwanghaibo/roost-core v1.18.0\n"), 0o644); err != nil {

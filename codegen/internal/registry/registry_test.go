@@ -184,7 +184,7 @@ func TestGeneratedAggregateParsesAndImportsWhatItUses(t *testing.T) {
 		for _, spec := range file.Imports {
 			imported[strings.Trim(spec.Path.Value, `"`)] = true
 		}
-		for _, always := range []string{"fmt", "sync", "github.com/tjbdwanghaibo/roost-core/entity"} {
+		for _, always := range []string{"fmt", "sync", "github.com/tjbdwanghaibo/roost-core/framework/entity"} {
 			if !imported[always] {
 				t.Fatalf("%s: %s is always used by RegisterAll but was not imported\n%s", testCase.label, always, content)
 			}

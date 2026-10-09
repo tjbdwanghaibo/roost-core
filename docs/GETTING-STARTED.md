@@ -84,7 +84,7 @@ reloaded: monster#1=dire wolf version=3 ...
 
 如果出现找不到 Go 命令，先检查 Go 安装；如果是下载失败，检查网络和模块源；如果找不到配置文件，检查当前目录是否为 `examples/configgen`。不要为了让示例运行而删除数据库或修改框架业务逻辑。
 
-源码入口：[configgen 示例](../examples/configgen/main.go)。另一个不依赖外部服务器的游戏示例是 [技能火球](../skill/examples/fireball/main.go)。
+源码入口：[configgen 示例](../examples/configgen/main.go)。另一个不依赖外部服务器的游戏示例是 [技能火球](../gameplay/skill/examples/fireball/main.go)。
 
 ## 5. 准备建立自己的游戏工程
 
@@ -103,8 +103,8 @@ reloaded: monster#1=dire wolf version=3 ...
 | 怎样同步背包、位置或对局输入 | [Sync 与 Lockstep](framework/guide/04-sync.md) |
 | 多个服务器要读写同一个共享实体 | [Remote 与 Mirror](framework/guide/05-remote-mirror.md) |
 | 一个业务要跨多个服务分步骤完成 | [Saga](framework/guide/06-saga.md) |
-| 接账号、邮件、聊天、排行 | [Service](framework/guide/09-kit-services.md) |
-| 把数据库、总线等能力装进进程 | [Kit](framework/guide/13-kit.md) |
+| 接账号、邮件、聊天、排行 | [Service](framework/guide/09-services.md) |
+| 把数据库、总线等能力装进进程 | [Wiring](framework/guide/13-wiring.md) |
 | 写技能效果或接战斗世界 | [游戏 Skill](framework/guide/08-skill.md) |
 | 升级、停止服务、排查故障 | [维护手册](maintenance/README.md) |
 

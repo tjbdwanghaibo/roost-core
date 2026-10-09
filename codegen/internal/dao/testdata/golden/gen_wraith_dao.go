@@ -3,10 +3,10 @@ package testdata
 
 import (
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/nest"
-	fmap "github.com/tjbdwanghaibo/roost-core/safemap"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	fmap "github.com/tjbdwanghaibo/roost-core/infra/base/safemap"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

@@ -1,6 +1,6 @@
 package remoteflow
 
-import "github.com/tjbdwanghaibo/roost-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/framework/entity"
 
 // EntityKindGuild 是 Mirror 第 5 步公会摘要样例的 owner（mirror_test.go）。本包已用 235（Vault）、236（SyncedVault）、
 // 237（Clerk），这里取 238。

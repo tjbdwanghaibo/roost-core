@@ -30,7 +30,7 @@ func TestKitConfigSchemasMatchKitDeclarations(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", goName), "run", "../../../kit/internal/configschemagen", "-out", "kitconfig_gen.go", "-check")
+	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", goName), "run", "../../../wiring/internal/configschemagen", "-out", "kitconfig_gen.go", "-check")
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("kitconfig_gen.go is not the kit Mods' current declarations: %v\n%s", err, out)

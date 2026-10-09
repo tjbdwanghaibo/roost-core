@@ -14,7 +14,7 @@ import (
 
 // 结构性约束只验证 import 方向，不替代战斗或空间语义回归。
 func TestCombatAndSkillDependencyBoundary(t *testing.T) {
-	for _, dir := range []string{"skill/combat", "skill"} {
+	for _, dir := range []string{"gameplay/skill/combat", "gameplay/skill"} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			t.Fatal(err)
@@ -33,12 +33,12 @@ func TestCombatAndSkillDependencyBoundary(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if dir == "skill/combat" {
+				if dir == "gameplay/skill/combat" {
 					pkg, err := build.Default.Import(name, "", build.FindOnly)
 					if err != nil || !pkg.Goroot {
 						t.Errorf("%s: combat requires standard library only: %s", path, name)
 					}
-				} else if name == modulePath+"/spatial" || strings.HasPrefix(name, modulePath+"/spatial/") {
+				} else if name == modulePath+"/infra/base/spatial" || strings.HasPrefix(name, modulePath+"/infra/base/spatial/") {
 					t.Errorf("%s: skill delegates spatial queries to Host: %s", path, name)
 				}
 			}
@@ -94,6 +94,16 @@ func TestCoreDependencyBoundary(t *testing.T) {
 			if reason := layerViolation(layer, name); reason != "" {
 				t.Errorf("%s (%s layer): %s: %s", path, layer, reason, name)
 			}
+			// 测试可以装配真实调用方；运行实现必须保持分类方案的单向依赖。
+			if !strings.HasSuffix(path, "_test.go") && strings.HasPrefix(name, modulePath+"/") {
+				target := strings.TrimPrefix(name, modulePath+"/")
+				if strings.HasPrefix(path, "infra/") && (strings.HasPrefix(target, "framework/") || strings.HasPrefix(target, "gameplay/") || strings.HasPrefix(target, "service/") || strings.HasPrefix(target, "wiring/")) {
+					t.Errorf("%s: Infra 运行实现不得反向依赖 %s", path, name)
+				}
+				if strings.HasPrefix(path, "framework/") && (strings.HasPrefix(target, "gameplay/") || strings.HasPrefix(target, "service/") || strings.HasPrefix(target, "wiring/")) {
+					t.Errorf("%s: Framework 运行实现不得反向依赖 %s", path, name)
+				}
+			}
 		}
 		return nil
 	})
@@ -107,10 +117,10 @@ func TestCoreDependencyBoundary(t *testing.T) {
 // dependencies only if nothing inside Core links a driver: assembly happens
 // in kit's Mods. Tests may use them freely.
 var driverPackages = []string{
-	"github.com/tjbdwanghaibo/roost-core/mongo/driver",
-	"github.com/tjbdwanghaibo/roost-core/nats/driver",
-	"github.com/tjbdwanghaibo/roost-core/redis/driver",
-	"github.com/tjbdwanghaibo/roost-core/etcd/driver",
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver",
+	"github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver",
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver",
+	"github.com/tjbdwanghaibo/roost-core/infra/network/etcd/driver",
 }
 
 // TestCoreContractsDoNotLinkDrivers walks every non-test Go file outside the
@@ -143,7 +153,7 @@ func TestCoreContractsDoNotLinkDrivers(t *testing.T) {
 		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		if moduleLayer(path) == "kit" {
+		if moduleLayer(path) == "wiring" {
 			// Assembly links drivers. That is what it is for.
 			return nil
 		}
@@ -189,7 +199,7 @@ func moduleLayer(rel string) string {
 		first = rel[:index]
 	}
 	switch first {
-	case "kit", "codegen", "demo":
+	case "wiring", "codegen", "demo":
 		return first
 	default:
 		return "core"
@@ -218,7 +228,7 @@ func layerViolation(layer, name string) string {
 	switch layer {
 	case "core":
 		return "core 的包不得 import " + target + " 层（它们是 core 的消费者，不是它的依赖）"
-	case "kit":
+	case "wiring":
 		if target == "core" {
 			return ""
 		}
@@ -237,7 +247,7 @@ func layerViolation(layer, name string) string {
 // sharedConfigRules is the one core package the generators may import: the
 // config rule declaration and check that configdata enforces on every load
 // and tablegen runs early (B10). The exception holds only while it is a leaf.
-const sharedConfigRules = modulePath + "/configdata/rules"
+const sharedConfigRules = modulePath + "/framework/configdata/rules"
 
 // sharedConfigSchema is the other one: the service-config declarations every
 // Mod writes, which the App checks, the generator renders config sections from
@@ -294,14 +304,14 @@ func TestLayerViolation(t *testing.T) {
 	const core = modulePath
 	refused := []struct{ layer, imported string }{
 		// 反向依赖：这四条是这条测试存在的全部理由。
-		{"core", core + "/kit/service/mail"},
+		{"core", core + "/wiring/mail"},
 		{"core", core + "/codegen/internal/roost"},
 		{"core", core + "/demo"},
-		{"kit", core + "/codegen/internal/roost"},
+		{"wiring", core + "/codegen/internal/roost"},
 		// 生成器不依赖它生成的那个运行时。
-		{"codegen", core + "/entity"},
-		{"codegen", core + "/kit/mods"},
-		{"codegen", core + "/configdata"}, // only configdata/rules is shared
+		{"codegen", core + "/framework/entity"},
+		{"codegen", core + "/wiring/mods"},
+		{"codegen", core + "/framework/configdata"}, // only configdata/rules is shared
 	}
 	for _, item := range refused {
 		if layerViolation(item.layer, item.imported) == "" {
@@ -309,17 +319,17 @@ func TestLayerViolation(t *testing.T) {
 		}
 	}
 	allowed := []struct{ layer, imported string }{
-		{"core", core + "/entity"},
+		{"core", core + "/framework/entity"},
 		{"core", "context"},
 		{"core", "go.mongodb.org/mongo-driver/v2/mongo"},
-		{"kit", core + "/entity"},
-		{"kit", core + "/dataengine/engine"},
-		{"kit", core + "/kit/service/mail"},
+		{"wiring", core + "/framework/entity"},
+		{"wiring", core + "/framework/dataengine/engine"},
+		{"wiring", core + "/wiring/mail"},
 		{"codegen", core + "/demo"},
 		{"codegen", core + "/codegen/internal/roost"},
-		{"codegen", core + "/configdata/rules"},
+		{"codegen", core + "/framework/configdata/rules"},
 		{"codegen", "gopkg.in/yaml.v3"},
-		{"demo", core + "/entity"},
+		{"demo", core + "/framework/entity"},
 	}
 	for _, item := range allowed {
 		if reason := layerViolation(item.layer, item.imported); reason != "" {
@@ -330,14 +340,14 @@ func TestLayerViolation(t *testing.T) {
 
 func TestModuleLayer(t *testing.T) {
 	for path, want := range map[string]string{
-		"entity/entity_base.go":          "core",
-		"./dataengine/engine/runtime.go": "core",
-		"kit/service/mail/mail.go":       "kit",
-		"kit":                            "kit",
-		"codegen/cmd/roost/main.go":      "codegen",
-		"demo/embed.go":                  "demo",
-		"dependency_boundary_test.go":    "core",
-		"kitchen/sink.go":                "core", // 前缀相同但不是那个目录
+		"framework/entity/entity_base.go":          "core",
+		"./framework/dataengine/engine/runtime.go": "core",
+		"wiring/mail/mail.go":                      "wiring",
+		"wiring":                                   "wiring",
+		"codegen/cmd/roost/main.go":                "codegen",
+		"demo/embed.go":                            "demo",
+		"dependency_boundary_test.go":              "core",
+		"kitchen/sink.go":                          "core", // 前缀相同但不是那个目录
 	} {
 		if got := moduleLayer(path); got != want {
 			t.Errorf("moduleLayer(%q) = %q, want %q", path, got, want)
@@ -348,7 +358,7 @@ func TestModuleLayer(t *testing.T) {
 func TestForbiddenCoreImport(t *testing.T) {
 	for _, name := range []string{
 		// 旧模块路径仍然要被拒绝：合仓之后它是"某个文件漏改了 import"的信号。
-		// 新位置 github.com/tjbdwanghaibo/roost-core/kit/... 由 layerViolation 管。
+		// 新位置 github.com/tjbdwanghaibo/roost-core/wiring/... 由 layerViolation 管。
 		"github.com/tjbdwanghaibo/roost-kit/mongo/mongotest",
 		"github.com/tjbdwanghaibo/roost-service",
 		"github.com/tjbdwanghaibo/roost-skill/skill",
@@ -359,7 +369,7 @@ func TestForbiddenCoreImport(t *testing.T) {
 			t.Errorf("accepted forbidden import %s", name)
 		}
 	}
-	for _, name := range []string{"context", "github.com/tjbdwanghaibo/roost-core/entity", "go.mongodb.org/mongo-driver/v2/mongo"} {
+	for _, name := range []string{"context", "github.com/tjbdwanghaibo/roost-core/framework/entity", "go.mongodb.org/mongo-driver/v2/mongo"} {
 		if forbiddenCoreImport(name) {
 			t.Errorf("rejected allowed import %s", name)
 		}
@@ -385,36 +395,36 @@ func TestForbiddenCoreImport(t *testing.T) {
 
 const (
 	pillarNest       = "nest 调度"
-	pillarDataEngine = "dataengine"
-	pillarSync       = "sync"
+	pillarDataEngine = "framework/dataengine"
+	pillarSync       = "framework/sync"
 )
 
 // pillarPackages 把模块内包路径归到三大块；模式写法同 go list：`x` 只指包 x，`x/...` 指 x 及其子包。
 var pillarPackages = []struct{ pattern, pillar string }{
-	{"nest/...", pillarNest},
-	{"entity/...", pillarNest},
-	{"actionflow/...", pillarNest},
-	{"lock/...", pillarNest},
-	{"dataengine/...", pillarDataEngine},
-	{"nestwal/...", pillarDataEngine},
-	{"versionstore/...", pillarDataEngine},
-	{"cache/...", pillarDataEngine},
-	{"sync/...", pillarSync},
-	{"syncstream/...", pillarSync},
-	{"gateway/...", pillarSync},
+	{"framework/nest/...", pillarNest},
+	{"framework/entity/...", pillarNest},
+	{"gameplay/actionflow/...", pillarNest},
+	{"infra/base/lock/...", pillarNest},
+	{"framework/dataengine/...", pillarDataEngine},
+	{"framework/nestwal/...", pillarDataEngine},
+	{"infra/storage/versionstore/...", pillarDataEngine},
+	{"framework/cache/...", pillarDataEngine},
+	{"framework/sync/...", pillarSync},
+	{"framework/sync/syncstream/...", pillarSync},
+	{"infra/network/gateway/...", pillarSync},
 }
 
 // allowedCrossPillarImports 是允许的跨块边（from 包 import to 包），模式写法同上。
 var allowedCrossPillarImports = []struct{ from, to, why string }{
-	{"nest", "dataengine", "提交点交给数据引擎契约（CommitRecord / Durability / 提交钩子接口）"},
-	{"entity", "cache", "实体状态层读写缓存"},
-	{"dataengine", "entity", "契约根包的记录类型引用实体键"},
-	{"dataengine/engine", "entity", "引擎按实体键写回"},
-	{"dataengine/engine", "nest", "引擎实现 nest 的提交钩子"},
-	{"nestwal", "entity", "WAL 记录引用实体键"},
-	{"nestwal", "nest", "WAL 实现 nest 的 pipelined 提交"},
-	{"cache", "sync/syncbus/...", "缓存失效经 syncbus 广播"},
-	{"sync/entitysync/...", "entity", "实体同步读实体的同步数据"},
+	{"framework/nest", "framework/dataengine", "提交点交给数据引擎契约（CommitRecord / Durability / 提交钩子接口）"},
+	{"framework/entity", "framework/cache", "实体状态层读写缓存"},
+	{"framework/dataengine", "framework/entity", "契约根包的记录类型引用实体键"},
+	{"framework/dataengine/engine", "framework/entity", "引擎按实体键写回"},
+	{"framework/dataengine/engine", "framework/nest", "引擎实现 nest 的提交钩子"},
+	{"framework/nestwal", "framework/entity", "WAL 记录引用实体键"},
+	{"framework/nestwal", "framework/nest", "WAL 实现 nest 的 pipelined 提交"},
+	{"framework/cache", "framework/sync/syncbus/...", "缓存失效经 syncbus 广播"},
+	{"framework/sync/entitysync/...", "framework/entity", "实体同步读实体的同步数据"},
 }
 
 // matchPackagePattern reports whether the module-relative package rel matches
@@ -511,15 +521,15 @@ func TestCorePillarDependencyDirection(t *testing.T) {
 
 func TestCrossPillarViolation(t *testing.T) {
 	refused := []struct{ from, to string }{
-		{"sync/lockstep", "nest"},     // sync 不碰调度
-		{"sync/entitysync", "lock"},   // entitysync 只许用 entity
-		{"syncstream", "dataengine"},  // sync → dataengine 无边
-		{"nest", "dataengine/engine"}, // nest 只认契约根包
-		{"nest", "nestwal"},           // 同上
-		{"entity", "sync/syncbus"},    // nest 块 → sync 块无边
-		{"versionstore", "nest"},      // dataengine 块里只有 engine / nestwal / 契约根包接 nest 块
-		{"cache", "sync/entitysync"},  // cache 只接 syncbus
-		{"gateway", "entity"},         // gateway 不读实体
+		{"framework/sync/lockstep", "framework/nest"},         // sync 不碰调度
+		{"framework/sync/entitysync", "infra/base/lock"},      // entitysync 只许用 entity
+		{"framework/sync/syncstream", "framework/dataengine"}, // sync → dataengine 无边
+		{"framework/nest", "framework/dataengine/engine"},     // nest 只认契约根包
+		{"framework/nest", "framework/nestwal"},               // 同上
+		{"framework/entity", "framework/sync/syncbus"},        // nest 块 → sync 块无边
+		{"infra/storage/versionstore", "framework/nest"},      // dataengine 块里只有 engine / nestwal / 契约根包接 nest 块
+		{"framework/cache", "framework/sync/entitysync"},      // cache 只接 syncbus
+		{"infra/network/gateway", "framework/entity"},         // gateway 不读实体
 	}
 	for _, item := range refused {
 		if reason, _ := crossPillarViolation(item.from, item.to); reason == "" {
@@ -527,12 +537,12 @@ func TestCrossPillarViolation(t *testing.T) {
 		}
 	}
 	allowed := []struct{ from, to string }{
-		{"nest", "dataengine"},
-		{"sync/entitysync/policy", "entity"},
-		{"cache", "sync/syncbus/mirror"},
-		{"nest", "lock"},             // 块内
-		{"sync/lockstep", "metrics"}, // 不在三块里
-		{"skill", "nest"},            // 建在三块之上的包不受这条约束
+		{"framework/nest", "framework/dataengine"},
+		{"framework/sync/entitysync/policy", "framework/entity"},
+		{"framework/cache", "framework/sync/syncbus/mirror"},
+		{"framework/nest", "infra/base/lock"},                // 块内
+		{"framework/sync/lockstep", "infra/observe/metrics"}, // 不在三块里
+		{"gameplay/skill", "framework/nest"},                 // 建在三块之上的包不受这条约束
 	}
 	for _, item := range allowed {
 		if reason, _ := crossPillarViolation(item.from, item.to); reason != "" {
@@ -540,8 +550,8 @@ func TestCrossPillarViolation(t *testing.T) {
 		}
 	}
 	for path, want := range map[string]string{
-		"nest": pillarNest, "nestwal": pillarDataEngine, "sync/frame": pillarSync, "syncstream": pillarSync,
-		"dataengine/engine": pillarDataEngine, "skill": "", "synctest": "",
+		"framework/nest": pillarNest, "framework/nestwal": pillarDataEngine, "framework/sync/frame": pillarSync, "framework/sync/syncstream": pillarSync,
+		"framework/dataengine/engine": pillarDataEngine, "gameplay/skill": "", "synctest": "",
 	} {
 		if got := pillarOf(path); got != want {
 			t.Errorf("pillarOf(%q) = %q, want %q", path, got, want)

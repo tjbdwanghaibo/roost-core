@@ -4,7 +4,7 @@
 
 > 当前升级口径（2026-10-08）：单仓单模块，Runtime checkpoint=10；旧版拒绝。旧文中的版本号与三仓发布/可灰度说法仅适用于当时的改名阶段，本轮先停旧再起新。见 [当前架构与迁移](../framework/guide/08-skill.md)。
 
-本文对应当前稳定 `skill` 包实现。目标是帮助新读者从一份
+本文对应当前稳定 `gameplay/skill` 包实现。目标是帮助新读者从一份
 JSON 技能定义，顺着真实调用链走到确定性的世界交互，而不是先被大量
 `wire_*`、`ir_*`、`program_*` 文件淹没。
 
@@ -40,17 +40,17 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
 
 ### 第一轮：一次最小施放（30 分钟）
 
-从 [simple_damage.json](../../skill/testdata/simple_damage.json) 开始，只做一件事：
+从 [simple_damage.json](../../gameplay/skill/testdata/simple_damage.json) 开始，只做一件事：
 输入目标，对目标造成物理伤害，然后结束。
 
 按以下顺序跳转：
 
-1. [parse.go](../../skill/parse.go) 的 `Parse`：确认 schema、严格对象解码与顶层定义。
-2. [lower.go](../../skill/lower.go) 的 `Compile`：它是公开的编译入口。
-3. [runtime.go](../../skill/runtime.go) 的 `NewRuntime`、`Activate` 和 `startLocked`：理解 Cast 的创建。
-4. [executor.go](../../skill/executor.go)：查看一个 Program operation 如何被执行。
-5. [memory_host_effect.go](../../skill/memory_host_effect.go)：以 `MemoryHost` 为例观察伤害如何真正提交。
-6. [acceptance_test.go](../../skill/acceptance_test.go)：该测试把 fixture 走完
+1. [parse.go](../../gameplay/skill/parse.go) 的 `Parse`：确认 schema、严格对象解码与顶层定义。
+2. [lower.go](../../gameplay/skill/lower.go) 的 `Compile`：它是公开的编译入口。
+3. [runtime.go](../../gameplay/skill/runtime.go) 的 `NewRuntime`、`Activate` 和 `startLocked`：理解 Cast 的创建。
+4. [executor.go](../../gameplay/skill/executor.go)：查看一个 Program operation 如何被执行。
+5. [memory_host_effect.go](../../gameplay/skill/memory_host_effect.go)：以 `MemoryHost` 为例观察伤害如何真正提交。
+6. [acceptance_test.go](../../gameplay/skill/acceptance_test.go)：该测试把 fixture 走完
    Parse → Compile → Inspect → Activate → Advance → 终态检查。
 
 完成这一轮后，应能回答：伤害量从 JSON 中何时成为强类型值？为什么 Runtime 不需要
@@ -58,7 +58,7 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
 
 ### 第二轮：编译器如何拒绝不安全定义（60 分钟）
 
-阅读 [compile.go](../../skill/compile.go)。`compileToArtifactsInternal`
+阅读 [compile.go](../../gameplay/skill/compile.go)。`compileToArtifactsInternal`
 列出的 Pass 顺序就是当前编译语义的主目录：
 
 1. `normalize`：Wire Definition 转为封闭 IR，并记录源路径。
@@ -80,7 +80,7 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
 类型和作用域收窄，例如 `motion` 依赖已解析的能力和类型信息，`budget` 依赖图与过程
 调用边界。
 
-引用在哪里能读，不在各个 Pass 里各写一份：[eval_contexts.go](../../skill/eval_contexts.go) 的求值上下文表
+引用在哪里能读，不在各个 Pass 里各写一份：[eval_contexts.go](../../gameplay/skill/eval_contexts.go) 的求值上下文表
 （施法流程、memory 默认值、cast_start / phase_start / spawn_start 采样、衍生物（Spawn）每一步、衍生物回调、状态默认值 ×
 `$input.*` / `$memory.*` / `$local.*` / `$caster` / `$cast.*` / `$owner` / `$event.*` …）是唯一来源：`type_snapshot`
 按表生成每个位点的作用域，Runtime 求值时查同一张表，表外引用报 `ErrReferenceOutOfContext`。给定义加新的值位点或新的
@@ -91,9 +91,9 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
 建议配合阅读：
 
 - `compile_*_test.go`：静态拒绝用例；
-- [compile_environment.go](../../skill/compile_environment.go)：默认目录和限制；
-- [canonical_definition.go](../../skill/canonical_definition.go)：源定义的稳定摘要；
-- [diagnostic.go](../../skill/diagnostic.go)：诊断代码和稳定排序约定。
+- [compile_environment.go](../../gameplay/skill/compile_environment.go)：默认目录和限制；
+- [canonical_definition.go](../../gameplay/skill/canonical_definition.go)：源定义的稳定摘要；
+- [diagnostic.go](../../gameplay/skill/diagnostic.go)：诊断代码和稳定排序约定。
 
 练习：把 `simple_damage.json` 的 `damage_type` 改成不存在的键，再运行对应测试或
 验收测试，观察诊断产生在 authority/capability 边界，而不是在运行时。
@@ -107,10 +107,10 @@ Wire 层与 IR 层回答“用户写了什么”；Program 层回答“Runtime �
 1. `wire_*.go`：JSON 允许的封闭语法。尤其是 `wire_definition.go`、
    `wire_flow.go`、`wire_effect.go`、`wire_input.go`。
 2. `ir*.go` 和 `compile_normalize.go`：标准化后的强类型中间表示。
-3. [lower.go](../../skill/lower.go)：把名称解析成 Handle、MemoryIndex、
+3. [lower.go](../../gameplay/skill/lower.go)：把名称解析成 Handle、MemoryIndex、
    LocalIndex、OperationIndex，并收集 snapshots、random sites、event plans。
 4. `program_*.go`：Program 内部的执行指令和索引布局。
-5. [inspect.go](../../skill/inspect.go)：唯一推荐给外部消费者的 Program
+5. [inspect.go](../../gameplay/skill/inspect.go)：唯一推荐给外部消费者的 Program
    观察面。
 
 关键不变量：Program 是编译结果，Runtime 不应重新解析 DSL 字段或回头查询源 JSON。
@@ -118,7 +118,7 @@ Wire 层与 IR 层回答“用户写了什么”；Program 层回答“Runtime �
 
 ## 3. Runtime：把 Program 变成确定性行为
 
-Runtime 的核心类型位于 [runtime.go](../../skill/runtime.go)：
+Runtime 的核心类型位于 [runtime.go](../../gameplay/skill/runtime.go)：
 
 - `RuntimeOptions`：匹配种子、任务/trace 限制等运行时配置；
 - `CastInput`：主动施放输入的统一载体；
@@ -140,11 +140,11 @@ Activate
 重点文件：
 
 - `runtime_input.go`：位置、目标、双点、拖拽、路径输入的运行时校验与归一化；
-- [runtime_cast_window.go](../../skill/runtime_cast_window.go)：windup、
+- [runtime_cast_window.go](../../gameplay/skill/runtime_cast_window.go)：windup、
   commit、recovery、`Cancel` 和 `Release`；
-- [scheduler.go](../../skill/scheduler.go)：`Advance`、稳定排序和任务执行；
+- [scheduler.go](../../gameplay/skill/scheduler.go)：`Advance`、稳定排序和任务执行；
 - `runtime_dispatch.go`、`runtime_event.go`：phase 事件与 spawn 信号如何进入 flow；
-- [runtime_proc.go](../../skill/runtime_proc.go)：`ActivatePassive` 与
+- [runtime_proc.go](../../gameplay/skill/runtime_proc.go)：`ActivatePassive` 与
   递归/同根事件保护；
 - `runtime_state.go`、`runtime_ability.go`、`runtime_temporal.go`：状态、能力控制、
   快照等专用操作的运行时桥接。
@@ -170,7 +170,7 @@ owner、source、target（以及需要时的 `Result: "kill"`），主动 fixtur
 - 读写持久或共享 State；
 - 读取事件流和世界 revision。
 
-建议先读 [host.go](../../skill/host.go)，再读 `host_*.go` 中的命令和
+建议先读 [host.go](../../gameplay/skill/host.go)，再读 `host_*.go` 中的命令和
 结果类型，最后读 `memory_host*.go`。`MemoryHost` 是可重复的参考实现和测试世界，
 不是生产服务器的替代品。
 
@@ -227,7 +227,7 @@ Error 日志；宿主侧要靠比赛结束 / 程序移除（`RemoveOwnedEntities
 | Temporal/Result | `temporal_rewind`、`effect_result_kill_branch` | `compile_temporal.go`、`runtime_temporal.go`、`runtime_effect_result.go` |
 | Passive proc | `passive_counter`、`passive_proc_guard`、`ammo_on_kill` | `compile_proc.go`、`runtime_proc.go` |
 
-所有 36 个 fixture 位于 [testdata](../../skill/testdata)。
+所有 36 个 fixture 位于 [testdata](../../gameplay/skill/testdata)。
 `acceptance_test.go` 使用目录发现机制：新增 JSON 若没有明确的输入、推进 tick、release
 或 passive 配置，测试会失败。因此 fixture 既是可运行示例，也是变更清单。
 
@@ -237,7 +237,7 @@ Error 日志；宿主侧要靠比赛结束 / 程序移除（`RemoveOwnedEntities
 `Inspect`、`InspectMetrics`、`InspectInputLayout`、`InspectSelections`、
 `InspectEffectResults` 等只读视图消费 Program。
 
-[skillcompose](../../skill/skillcompose) 展示了这一原则：
+[skillcompose](../../gameplay/skill/skillcompose) 展示了这一原则：
 
 1. `profile_extract.go` 从 Inspector 提取 `SkillProfile`；
 2. `contract_builder.go` 将多个 profile 和 caller policy 收紧为 composition contract；
@@ -251,13 +251,13 @@ Inspector 视图，而不是打破包边界。
 
 ### Trace
 
-[trace.go](../../skill/trace.go) 维护有界、被动的 `TraceEvent` 缓冲。
+[trace.go](../../gameplay/skill/trace.go) 维护有界、被动的 `TraceEvent` 缓冲。
 执行路径只记录事件；调用方在安全的外部时机调用 `FlushTrace`，才把缓冲发送给
 `TraceSink`。sink 失败不会反向影响游戏逻辑，也不会丢弃尚未成功发送的事件。
 
 ### Record / Replay
 
-[replay.go](../../skill/replay.go) 提供测试与排障适配器：
+[replay.go](../../gameplay/skill/replay.go) 提供测试与排障适配器：
 
 - `RecordingHost` 保存 Host 调用的顺序、请求调试键、类型化结果、错误和 revision；
 - `ReplayHost` 仅在下一次调用的种类与请求一致时返回已录制结果；
@@ -297,17 +297,17 @@ Inspector 视图，而不是打破包边界。
 $env:GOCACHE = 'D:\whb_s\cube\.tmp-skill-gocache'
 
 # 先验证所有 fixture 的 Parse -> Compile -> Inspect -> Run 路径。
-go test ./skill -run TestAllFixturesParseCompileInspectAndRun -count=1
+go test ./gameplay/skill -run TestAllFixturesParseCompileInspectAndRun -count=1
 
 # 再做包级回归和静态检查。
-go test ./skill ./skillcompose -count=1
-go vet ./skill ./skillcompose
+go test ./gameplay/skill ./skillcompose -count=1
+go vet ./gameplay/skill ./skillcompose
 
 # 改动 Runtime、Scheduler、Trace 或 Host 并发边界时必须执行。
-go test -race ./skill ./skillcompose -count=1
+go test -race ./gameplay/skill ./skillcompose -count=1
 
 # 修改 parser 或 Wire decode 时执行短时 fuzz。
-go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=10s ./skill
+go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=10s ./gameplay/skill
 
 # 扩大到 gameplay 子树，并检查补丁空白错误。
 go test ./game/gameplay/... -count=1
@@ -447,14 +447,14 @@ observer 标为 closed，再按稳定顺序取得其所有 view 锁，先清理 
 
 ```powershell
 # 修改 checkpoint/runtime
-go test ./skill -run 'TestRuntimeCheckpoint|TestStateMutations' -count=1
+go test ./gameplay/skill -run 'TestRuntimeCheckpoint|TestStateMutations' -count=1
 
 # 修改 visibility/outbox/schema/coordinator
 go test ./skillsync -run 'Test(RuntimeVisibility|Outbox|FileOutbox|SchemaRegistry|CoordinatorReclaims)' -count=1
 
 # 包级回归
-go test ./skill ./skillcompose ./skillsync -count=1
-go vet ./skill ./skillcompose ./skillsync
+go test ./gameplay/skill ./skillcompose ./skillsync -count=1
+go vet ./gameplay/skill ./skillcompose ./skillsync
 ```
 
 ### 12.2 恢复与故障注入
@@ -483,8 +483,8 @@ go vet ./skill ./skillcompose ./skillsync
 go test ./... -count=1
 go vet ./...
 go test -race ./... -count=1
-go test ./skill -run TestAllFixturesParseCompileInspectAndRun -count=1
-go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=30s ./skill
+go test ./gameplay/skill -run TestAllFixturesParseCompileInspectAndRun -count=1
+go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=30s ./gameplay/skill
 
 cd integration/sync-e2e
 go test ./... -count=1
