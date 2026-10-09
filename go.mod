@@ -3,7 +3,7 @@ module github.com/tjbdwanghaibo/roost-core
 go 1.27.0
 
 require (
-	github.com/go-chi/chi/v5 v5.3.0
+	github.com/go-chi/chi/v5 v5.3.2
 	github.com/modern-go/gls v0.0.0-20250215024828-78308f6bb19d
 	github.com/nats-io/nats.go v1.53.1
 	github.com/quic-go/quic-go v0.62.0
