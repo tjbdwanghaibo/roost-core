@@ -31,3 +31,6 @@ gapmap-report.md
 
 # Local directory-migration baselines and source snapshots.
 /artifacts/reorganization/
+
+# Local release verification logs and downloaded consumer workspaces.
+/artifacts/release/
