@@ -12,6 +12,8 @@
 
 ## 2. 全部剩余文件
 
+v1.25.0 后另增 [Nest 调度对照基准](NEST-DISPATCH-BENCHMARK.md)，保留可复跑的模拟方式、当前测量结果和适用边界；历史清理数量不随每次补充追改。
+
 | 文件 | 用途 |
 | --- | --- |
 | [docs/GETTING-STARTED.md](../GETTING-STARTED.md) | 从购买道具的例子认识框架、术语、运行第一个示例与学习顺序 |

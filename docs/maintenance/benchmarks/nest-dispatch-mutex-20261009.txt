@@ -1,0 +1,45 @@
+Independent diagnostic; profile overhead excluded from throughput results.
+Baseline cae44d8d, Windows amd64 / Ryzen 7 5800H / Go1.27.0 / GOMAXPROCS=4.
+Benchmark: noop/uniform, benchtime=3s, mutexprofilefraction=1, blockprofilerate=1.
+Nest mutex profile:
+File: nest.test.exe
+Build ID: D:\whb_s\worktrees\roost-nest-dispatch-20261009\artifacts\perf\nest\dispatch-compare\nest.test.exe2026-10-09 23:38:36.0529915 +0800 CST
+Type: delay
+Time: 2026-10-09 23:45:49 CST
+Showing nodes accounting for 18.11s, 99.63% of 18.18s total
+Dropped 112 nodes (cum <= 0.09s)
+      flat  flat%   sum%        cum   cum%
+    18.11s 99.63% 99.63%     18.13s 99.75%  sync.(*Mutex).Unlock
+         0     0% 99.63%      8.43s 46.39%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).admit
+         0     0% 99.63%      9.69s 53.31%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).start.gowrap2
+         0     0% 99.63%      9.72s 53.45%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*dispatchQueue).work
+         0     0% 99.63%      8.43s 46.39%  github.com/tjbdwanghaibo/roost-core/framework/nest.newDispatchComparisonPool.func1
+         0     0% 99.63%      8.44s 46.41%  github.com/tjbdwanghaibo/roost-core/framework/nest.runDispatchComparison.func2
+         0     0% 99.63%      8.43s 46.39%  github.com/tjbdwanghaibo/roost-core/framework/nest.runDispatchComparison.func2.1
+         0     0% 99.63%      8.42s 46.32%  github.com/tjbdwanghaibo/roost-core/framework/nest.runDispatchComparison.gowrap1
+         0     0% 99.63%      0.09s   0.5%  sync.(*Cond).Wait
+
+ID-shard mutex profile:
+File: nest.test.exe
+Build ID: D:\whb_s\worktrees\roost-nest-dispatch-20261009\artifacts\perf\nest\dispatch-compare\nest.test.exe2026-10-09 23:38:36.0529915 +0800 CST
+Type: delay
+Time: 2026-10-09 23:45:53 CST
+Showing nodes accounting for 12.67ms, 100% of 12.67ms total
+Dropped 21 nodes (cum <= 0.06ms)
+Showing top 15 nodes out of 79
+      flat  flat%   sum%        cum   cum%
+   10.55ms 83.23% 83.23%    10.55ms 83.23%  runtime.unlock (inline)
+    2.12ms 16.72%   100%     2.12ms 16.72%  runtime._LostContendedRuntimeLock
+         0     0%   100%     0.49ms  3.85%  _.goready.func1
+         0     0%   100%     0.10ms   0.8%  github.com/tjbdwanghaibo/roost-core/framework/nest.BenchmarkDispatchCompare.func1
+         0     0%   100%     3.73ms 29.44%  github.com/tjbdwanghaibo/roost-core/framework/nest.newDispatchComparisonPool.func2
+         0     0%   100%     0.99ms  7.80%  github.com/tjbdwanghaibo/roost-core/framework/nest.newDispatchComparisonPool.func2.1
+         0     0%   100%     0.51ms  4.06%  github.com/tjbdwanghaibo/roost-core/framework/nest.newDispatchComparisonPool.func3
+         0     0%   100%     0.10ms   0.8%  github.com/tjbdwanghaibo/roost-core/framework/nest.runDispatchComparison
+         0     0%   100%     0.68ms  5.34%  github.com/tjbdwanghaibo/roost-core/framework/nest.runDispatchComparison.func1
+         0     0%   100%     4.04ms 31.85%  github.com/tjbdwanghaibo/roost-core/framework/nest.runDispatchComparison.func2
+         0     0%   100%     0.86ms  6.82%  github.com/tjbdwanghaibo/roost-core/framework/nest.runDispatchComparison.func2.1
+         0     0%   100%     0.31ms  2.45%  github.com/tjbdwanghaibo/roost-core/infra/base/fctx.NewContext
+         0     0%   100%     0.99ms  7.80%  github.com/tjbdwanghaibo/roost-core/infra/base/goroutine.SafeFunc
+         0     0%   100%     0.42ms  3.32%  runtime.(*mcache).nextFree
+         0     0%   100%     0.42ms  3.32%  runtime.(*mcache).refill

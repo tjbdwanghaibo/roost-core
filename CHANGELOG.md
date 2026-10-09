@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- 新增 Nest 单 ID 共享调度与固定 worker 分片的独立 benchmark，覆盖空 handler、1ms/200ms CPU/等待、慢任务混合及热点/碰撞；只增加测试和性能文档，不改生产调度策略。
+
 ## [v1.25.0] - 2026-10-09
 
 - 按Framework/Infra/Gameplay/Service/Wiring收敛目录；移除旧kit路径与领域alias，消费者需要重新生成、修改导入并编译。
