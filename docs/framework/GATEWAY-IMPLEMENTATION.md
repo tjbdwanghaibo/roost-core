@@ -1,6 +1,6 @@
 # 独立 Gate：设计评审与实施方案
 
-状态：**方案已确认，尚未实施**。核对日期：2026-10-09；代码和设计基准：`ef640e6e`，已与 `origin/main` 对齐。本文细化 [Gate 设计](GATEWAY.md)，不改变 v1.24.1 的已交付能力。用户确认本轮包括目录重构与 Gate 开发；[目录分类、Wiring 与 Service 收敛方案](PACKAGE-REORGANIZATION.md)规定前置重构、接线/运行边界和同轮验收，仍待实施。
+状态：**目录重构已提交，Gate 实施中**。日期：2026-10-09；起始基准 `ef640e6e`，目录提交 `1b09cfb0`。TCP 共用运行实现、MessagePack、原始 NATS 能力已落码；完整独立 Gate 尚未交付。分阶段实际结果见 [实施验收](../maintenance/DIRECTORY-GATE-VALIDATION.md)。本轮先目录后 Gate，具体分类见 [目录方案](PACKAGE-REORGANIZATION.md)。
 
 ## 1. 评审结论
 
@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | 转发并发 | Bus RPC 按方法名散列到 worker，handler 在该 worker 内执行 | 玩家数据通道不直接包装成一个阻塞的 Bus `Forward` 方法；使用现有 NATS 连接上的专用、有界字节通道 |
 | 预算传递 | servicerpc 保留调用方 deadline；Bus 接收端 context 来自本进程生命周期，未恢复调用方期限 | 新信封显式携带期限和剩余预算，Game 入队时开始计时，不能出队后重新获得完整预算 |
-| 封装和大小 | Bus 默认 JSON，请求和 NatsMsg 分别编码；原始字节会增加编码开销 | Gate 内部信封与 Bus RPC 统一采用 MessagePack；启动检查实际 NATS 载荷上限，计算完整包大小 |
+| 封装和大小 | Bus 原默认 JSON；本轮已迁为 MessagePack，正文和信封保留分层 | Gate 内部信封与 Bus RPC 统一采用 MessagePack；启动检查实际 NATS 载荷上限，计算完整包大小 |
 | 绑定代次 | Principal 有 PlayerID/SessionID/Claims；进程身份可复用 App SingletonIncarnation | Game 签发随机 BindID，完整匹配 Gate/Game incarnation；不使用客户端递增值获得接管权 |
 | 发送承诺 | Entity Sync 的 Push 成功表示已准入；AsyncTransport 后续发送失败使队列失败 | Game 本地准入、Gate 准入、socket 写出分别计量；后续失败关闭对应绑定与 Sync lifetime，不能继续发增量 |
 | 阶段顺序 | 原 P4 才集中处理资源限制 | P2 就提供最小的条目、字节、在途限额和发送期限；P4 做故障矩阵与调优，不能先上线无界原型 |
@@ -45,13 +45,13 @@ Nest 快慢池保持现有契约：快池执行 handler；慢池只做允许的�
 | `codegen/internal/roost/` | 服务目录、配置声明、Gate/Game 装配和 TCP 生成接线 | 生成器保留业务注册、编码器和配置映射，通用 TCP 只保留一份运行实现 |
 | `framework/sync/` | 接线既有 Transport、SessionLifecycle、错误回调及帧大小上限 | 原帧、profile、AOI、on_change 和 Lockstep 恢复协议继续复用 |
 
-表中使用已确认目录方案的目标路径，当前源码尚在原位置；后文源码证据沿用当前路径。已有 gateway 搬迁与新 Gate 均纳入本轮，先验收目录/领域/Wiring 重构，再实施 Gate 新行为；目录完成不代替本文 P1～P5 的 Gate 验收。
+表中为当前源码位置，目录分类已实施。已有 gateway 搬迁与新 Gate 均纳入本轮，先验收目录/领域/Wiring 重构，再实施 Gate 新行为；目录完成不代替本文 P1～P5 的 Gate 验收。
 
 Wiring 延续 Wiring 的便捷接入初衷，业务声明 Mod/option 后由 App 接好初始化与关闭；模块自己拥有运行状态。Gate runtime 的认证、发现、incarnation 核对和业务分发依赖显式注入，不能为了取得 Registry 能力反向 import framework/app 或 wiring。此轮不另建 service/gate 领域包；连接会话仍归 gateway，service/session 管理的是副本/试炼等运行记录。
 
 先完成 TCP 提取，保留嵌入 Game 与独立 Gate 两种正式部署方式；它们共用同一 TCP 核心，分别接本地 dispatcher 和远端 forwarder。这是部署选择，不是旧实现兼容分支。新的可配置部署枚举拟为 `embedded` / `gate`，默认保持当前 embedded；Game 的 ingress 单独显式声明。具体配置位置沿用现有 player access 声明，生成器拒绝冲突组合。
 
-通用 TCP 的 dispatcher 输入和输出均使用原始 payload、MsgID、Seq、PayloadKind。业务 `Reply(any)` 和 PB 编码保留在生成接线中；不能为了提取 TCP，把生成的 ProtocolRegistry 反向引用进 gateway。
+通用 TCP 的 dispatcher 输入和输出均使用原始 payload、MsgID、Seq、PayloadKind。业务 PB 编码和 Response 类型保留在生成接线中；Response 通过 TCPReply 显式交付已编码字节；不能为了提取 TCP，把生成的 ProtocolRegistry 反向引用进 gateway。
 
 ## 3. 绑定：拥有者、身份和生命周期
 
@@ -138,7 +138,7 @@ Game 每绑定使用一个有界有序出站口，所有 PB 响应/主动推送�
 
 Gate 每连接只有一个 writer，鉴权 ACK、心跳 ACK 和 Game 出站包共用它。Game 返回的 OutSeq 不作为 RS 外部序列：PB 响应保留请求 Seq，推送序列由 Gate writer 在写出顺序中分配。任何一包写出部分字节后失败都关闭 socket，不按字节截断 Sync entity 包继续发。
 
-复用 `nettransport.AsyncTransport` 的可靠队列、字节预算、最大年龄和失败回调，按需补足 typed envelope 接线，不复制其容量与生命周期状态机。Game 本地队列成功准入后，Sync 可以按现有规则推进帧状态；后台发送必须得到 Gate 有界队列准入 ACK。NATS Publish 返回 nil 只说明本地发布调用成功，不能直接作为 Sync Push 的可靠交付结论。
+复用 `nettransport.AsyncTransport` 的可靠队列、字节预算、最大年龄和失败回调。Wiring 通过显式队列接口注入现有实现并转换 SessionID；gateway 不反向 import Framework，适配器不另持队列或复制容量/生命周期状态机。Game 本地队列成功准入后，Sync 可以按现有规则推进帧状态；后台发送必须得到 Gate 有界队列准入 ACK。NATS Publish 返回 nil 只说明本地发布调用成功，不能直接作为 Sync Push 的可靠交付结论。
 
 Game→Gate ACK 丢失可能已入队：不自动重放写 socket 的包，关闭旧绑定并通过新 epoch 恢复。Gate 入队后 writer 失败、队列过龄、进程退出时通知 Game 关闭该 lifetime；通知失败由租期/核对兜底。旧失败回调不能关闭新 lifetime。Manager 的错误和 SessionLifecycle 接线必须实测，不只增加一个日志回调。
 
@@ -239,17 +239,15 @@ Sync 的 P99≤50ms 从业务计划输入/handler 完成等起点分别记录，
 | --- | --- |
 | [gateway.go](../../infra/network/gateway/gateway.go) | 可信 principal 与 transport-neutral Session；Endpoint 后必须接 Sender |
 | [render_access.go](../../codegen/internal/roost/render_access.go) | DispatchPayload 接受 gateway.Session；类型检查先于解码；输出已编码 Response |
-| [render_player_tcp.go](../../codegen/internal/roost/render_player_tcp.go) | 当前读取/dispatch 每连接串行；同步写锁与期限；本地连接表和通知 |
+| [TCP](../../infra/network/gateway/tcp.go)、[会话](../../infra/network/gateway/tcp_session.go)、[Runtime](../../infra/network/gateway/tcp_runtime.go)、[生成接线](../../codegen/internal/roost/render_player_tcp.go) | 共用运行实现；读取/dispatch 每连接串行；同步写锁与期限；生成物仅配置、协议和 Mod 接线 |
 | [Bus](../../infra/network/bus/bus.go)、[servicerpc](../../infra/network/servicerpc/client.go) | 方法名散列、同步 handler、接收 context、定向与轻量/JetStream 选择 |
-| [当前 JSON Codec](../../infra/network/bus/json_codec.go)、[RPC 信封](../../infra/network/bus/rpc_error.go)、[NATS Mod](../../wiring/nats/nats_mod.go) | 当前默认仍是 JSON；请求/响应分层使用 Codec，PubAck 的 JSON 是基础设施协议例外；MessagePack 迁移尚未实施 |
+| [MessagePack Codec](../../infra/network/bus/msgpack_codec.go)、[RPC 信封](../../infra/network/bus/rpc_error.go)、[NATS Mod](../../wiring/nats/nats_mod.go) | 当前默认 MessagePack，RM v1 / RPC v2；拒绝旧 JSON 及未知格式；PubAck 的 JSON 是 NATS 官方控制协议 |
 | [NATS RPC](../../infra/network/nats/driver/rpc.go)、[重试策略](../../infra/network/nats/rpc.go)、[Assembly](../../infra/network/nats/driver/assembly.go) | 默认单次尝试、复用连接、关闭所有权；不是自动提供 Gate 身份校验 |
 | [服务发现](../../infra/network/etcd/discovery.go)、[App singleton](../../framework/app/singleton.go) | Metadata、sid 活性与本进程 incarnation 的能力边界 |
 | [Entity Sync Transport](../../framework/sync/entitysync/transport.go)、[Flush](../../framework/sync/entitysync/flush.go)、[异步发送](../../framework/sync/nettransport/channel.go) | 成功准入推进帧状态、失败恢复、队列和字节上限 |
 | [Lockstep 输入](../../framework/sync/lockstep/command.go)、[Room](../../framework/sync/lockstep/room.go)、[TCP sender](../../framework/sync/lockstep/tcp.go)、[既有端到端测试](../../framework/sync/lockstep/e2e_gate_test.go) | 现有串行 Room、认证 session、嵌入式发送与 KCP 测试；跨 NATS Gate 接线仍待实施 |
 | [当前设计](GATEWAY.md)、[性能基线](../maintenance/PERFORMANCE.md) | 当前已交付边界与真实业务规模 |
 
-CBM 使用项目 `Users-whb-roost-roost-core`、Tier 2，generation `2026-10-08T11:31:15Z`。材料代码路径 coverage 均无记录缺口且 metadata_match，并直接读取了相关实现；这不等于穷尽审计。docs 被索引策略排除，已直接阅读。此轮仅形成方案，没有启动独立 Gate、运行新增 Gate 集群或测得 Gate 容量；runtime 与稳定版保持相同。
-
-文档验证：`git diff --check` 通过；`python3 scripts/check-doc-anchors.py docs/framework docs/README.md docs/maintenance/DOCUMENTS.md` 检查 36 份文档、零断链；`GOWORK=off go test -run '^TestTrackedMarkdownRelativeLinksResolve$' -count=1 .` 通过。未运行 runtime 全量或 Gate 性能测试。
+CBM 当前工作树项目为 `roost-core-gate-design-plan`，Tier 2，当前 generation `2026-10-09T08:17:42Z`，已刷新 Gate 新增文件；绑定、TCP、原始 NATS 与 Codec 材料路径 coverage 为 metadata_match，无记录缺口。图谱不是完整性证明，生成模板缺口仍按源码补证。docs 被策略排除，直接阅读。macOS 本机真实 NATS 和生成客户端证据见实施验收，不冒充独立 Gate 集群、Linux 实机或跨机性能验收。
 
 MessagePack 选型依据：[库说明](https://github.com/vmihailenco/msgpack)、[编码选项](https://github.com/vmihailenco/msgpack/blob/v5/encode.go)。支持普通结构体、可选 tag、数组模式及紧凑整数配置；本文未引用第三方性能数字作为 roost 容量承诺。

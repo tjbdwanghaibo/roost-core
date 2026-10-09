@@ -16,9 +16,9 @@
 
 [网关现状与独立 Gate 设计](GATEWAY.md)：已有 TCP 接入能力、尚未完成的独立服务，以及分阶段实施和验收方案。独立 Gate 标注为待实施，不属于当前已发布能力。
 
-[Gate 设计评审与实施方案](GATEWAY-IMPLEMENTATION.md)：具体目录、绑定身份、NATS 转发、统一发送、Nest/Sync 接线及验收条件，仍未实施。
+[Gate 设计评审与实施方案](GATEWAY-IMPLEMENTATION.md)：具体目录、绑定身份、NATS 转发、统一发送、Nest/Sync 接线及验收条件，TCP 共用运行实现、MessagePack 与原始 NATS 能力已开始实施；独立绑定、集群与性能验收尚未完成。
 
-[包目录分类、Wiring 与 Service 收敛方案](PACKAGE-REORGANIZATION.md)：Framework/Infra/Gameplay/Service/Wiring 分类、Session 含义、运行实现迁出接线、便捷接入和同轮 Gate；方案已确认，分阶段实施，尚未迁移源码。
+[包目录分类、Wiring 与 Service 收敛方案](PACKAGE-REORGANIZATION.md)：Framework/Infra/Gameplay/Service/Wiring 分类、Session 含义、运行实现迁出接线、便捷接入和同轮 Gate；目录与 Service/Wiring 拆分已实施并通过全仓验证；Gate 分阶段实施中。
 
 | 模块 | 说明 | 实现 |
 | --- | --- | --- |

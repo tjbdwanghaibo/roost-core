@@ -49,7 +49,7 @@
 | [codec.go](../../../infra/network/bus/codec.go) | `Codec` |
 | [handler.go](../../../infra/network/bus/handler.go) | `MsgContext`、`RpcContext`、`HandlerFunc`、`RpcHandlerFunc` |
 | [jetstream_rpc.go](../../../infra/network/bus/jetstream_rpc.go) | `JetStreamRPCConfig` |
-| [json_codec.go](../../../infra/network/bus/json_codec.go) | `JSONCodec` |
+| [msgpack_codec.go](../../../infra/network/bus/msgpack_codec.go) | `MessagePackCodec` |
 | [reliable.go](../../../infra/network/bus/reliable.go) | `ReliableConfig`、`ReliableStore`、`DeadLetterBucket`、`ReliableDeadLetterStore`、`ReliableDeadLetterEntryDeleter`、`ReliableConsumer`、`RedisReliableStore`、`DeadLetterQuery`、`DeadLetterEntry` |
 | [rpc_error.go](../../../infra/network/bus/rpc_error.go) | 函数/方法或内部实现；见源码 |
 

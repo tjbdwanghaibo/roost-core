@@ -23,4 +23,21 @@ Framework、Infra、Gameplay、Service、Wiring 分类已实施。十个领域�
 
 ## Gate 阶段
 
-尚未实施。完整范围按 [Gate P1～P5](../framework/GATEWAY-IMPLEMENTATION.md)：MessagePack/TCP 提取、PB 绑定与广播、Sync/Lockstep、故障与排空、性能。未运行的阶段不得标记通过；跨机和 Linux 实机验证与本机 loopback 分开记录。
+前置运行实现与编码提交 `634ae6ce`；独立 Gate 实施中。完整范围按 [Gate P1～P5](../framework/GATEWAY-IMPLEMENTATION.md)。已完成部分如下，不能据此标记 P2～P5 已通过：
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 共用 TCP | 网络、完整帧、期限、连接失败和停止重试回归通过 race；Runtime 在监听前也只能归属一个 Server |
+| 生成消费者 | 真实生成工程 build/vet、停止契约通过；C# 真实 TCP 的 PB、Sync、Lockstep 与错误类别拒绝通过 |
+| MessagePack | 默认 Bus / RPC / 异步信封已迁为 RM v1，RPC 信封 v2；无 JSON 双读；自定义类型、int64、nil/empty、时间、尺寸/深度/尾值拒绝及并发测试通过 |
+| 真实 NATS | 私有 loopback Core RPC 成功/业务错误/异步消息与 JetStream ClientMod/超过 AckWait 不重执通过；不用共享业务资源 |
+| 原始 NATS | 单次传输、context 取消、实际 MaxPayload、条目/字节 pending 上限、慢消费者通知通过；Drain 超时与 Close 后仍等待真实回调通过 race |
+| 全仓 | `go test ./...`、build、vet 通过；Linux amd64 交叉构建通过，未执行 Linux 测试 |
+| 索引 | CBM 已刷新到 `2026-10-09T08:17:42Z`；Gate 材料路径 coverage 已核对 |
+| 配置 | 原始能力以 nats.raw 发布；Inbox 前缀与 reconnect 缓冲可配置，声明与生成 schema 回归通过 |
+
+TCP 提取发现并修复两项具体问题：Notify 的 typed nil 在返回 any 时必须转成 nil，避免错误关闭真实 Lockstep 连接（C# 消费用例先失败后通过）；恶意日志 writer 的测试清理同时恢复 slog 与标准 log，避免污染后续网络测试。TCP 运行逻辑已按 config/frame/runtime/session 分文件，仍在同一个 gateway 包；生成器仅保留配置、协议和启停接线。
+
+编码短基准为 Apple M5、Go 1.27.0、macOS arm64，同一代表类型含 int64/enum/raw bytes/map/time/嵌套结构。MessagePack 完整内部包 105B，JSON 194B；三轮约 encode 443～446ns/op、decode 793～841ns/op，JSON encode 519～538ns/op、decode 997～1008ns/op。MessagePack 分配为 536B/9 次与 962B/16 次；JSON 为 504B/5 次与 624B/9 次。编码更小更快不代表分配更少，也不是 Gate 吞吐。补录字节数一轮时延有抖动，原始日志保留，不混成严格前后对比。
+
+本机原始日志 `/private/tmp/roost-tcp-*.log`、`roost-msgpack-*.log`、`roost-gate-raw-*.log`。未运行的独立 Gate 绑定/广播/Sync/Lockstep 集群、故障、1h 性能、跨机和 Linux 实机阶段继续待验收。
