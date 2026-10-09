@@ -34,6 +34,8 @@
 | C16 | 性能状态 | Remote/Sync仍暂停、旧性能失败作为当前结论 | v1.24.0已补一小时与声明负载；失败样本仍保留 | [docs/maintenance/PERFORMANCE.md](PERFORMANCE.md) |
 | C17 | 未验证边界 | 需保留本机与跨机/引擎的验收边界 | 环境、平台、时长、模拟范围分别列出 | [docs/maintenance/KNOWN-LIMITS.md](KNOWN-LIMITS.md) |
 | C18 | Skill模块名 | 使用手册把skill包路径写成Go module | Go module为roost-core；skill是其中的包 | [go.mod](../../go.mod)、[修正后的手册](../skill/skill.md) |
+| C19 | TCP 手册补充核对 | 仓库手册写 RS v1，生成手册把 Lockstep 写成预留；消息号 0 仅用于鉴权 | 当前为 RS v2；PB/Sync/Lockstep 分类型；消息号 0 还用于鉴权后心跳。本次在 main 修正文档，不移动旧标签 | [公共包头](../../client/wire/packet.go)、[TCP 模板](../../codegen/internal/roost/render_player_tcp.go)、[说明与纠正清单](../framework/GATEWAY.md) |
+| C20 | Gate 能力边界 | gateway 包与独立网关服务容易混称 | 已有嵌入式 TCP 接入；独立 Gate 路由、回推和集群会话方案仍待实施 | [现状与待实施设计](../framework/GATEWAY.md)、[服务目录](../../codegen/internal/roost/framework_services.go) |
 
 ## 3. 各模块结论
 

@@ -27,6 +27,8 @@
 
 只有 mail/match/session 的领域实现已独立到 service，kit 对它们提供别名和装配。其余七个仍在 kit/service 中有服务/存储逻辑；本版文档明确此事实，不通过文档清理搬动代码。十个服务包中 directory 是嵌入能力；game-demo 托管九个框架服务，加 game 共十个进程。
 
+Gate 尚未成为上述目录中的独立服务。当前已提供 `gateway` 边界工具和嵌入 Game 的 TCP 接入实现；后续的跨进程路由、回推和会话恢复见[网关现状与独立 Gate 设计](../GATEWAY.md)。
+
 ## 2. owner 与调用方
 
 owner Mod 持有存储并发布公开接口与 .local；Server 注册总线 handler 并运行周期工作。调用方使用 ClientMod/BusClient，只依赖公开契约。同进程也通过同一能力接口；业务不要依赖把公开接口断言成具体 Service。

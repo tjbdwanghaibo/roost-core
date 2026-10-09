@@ -453,24 +453,25 @@ LB 或 sidecar 终止 TLS，或把 listener 放在受保护的内网。临时停
 | --- | ---: | --- | --- |
 | 0 | 2 | magic | ASCII RS |
 | 2 | 1 | version | 当前为 2，旧格式直接拒绝 |
-| 3 | 1 | flags | bit0=推送；bits1..2为载荷类型：0=PB、1=Sync、2=Lockstep预留（当前拒绝） |
-| 4 | 4 | message_id | 0 仅用于首帧鉴权，业务协议必须非零 |
+| 3 | 1 | flags | bit0=推送；bits1..2为载荷类型：0=PB、1=Sync、2=Lockstep；其余位及类型3拒绝 |
+| 4 | 4 | message_id | 0 用于首帧鉴权及鉴权后空心跳，业务协议必须非零 |
 | 8 | 4 | sequence | 非零且单连接严格递增，支持 uint32 回绕 |
 | 12 | 4 | payload_length | 不得超过 max_payload_bytes |
-| 16 | N | payload | 鉴权帧为原始 token；业务按类型为 PB 或 raw Sync frame |
+| 16 | N | payload | 鉴权帧为非空原始 token，心跳为空；业务按类型为 PB、raw Sync 或 Lockstep |
 
 服务端鉴权成功后回 message_id=0、相同 sequence、空 payload；失败直接断开，不泄露鉴权细节。
-随后每个业务响应沿用请求 sequence。TCP 单连接串行 dispatch，天然保持同玩家命令顺序；跨玩家由
-Nest 的 Entity 锁并行执行。
+随后每个业务响应沿用请求 sequence。TCP 单连接串行 dispatch；同玩家多连接仍可能并发，
+由 Nest 与业务契约协调，不能将单连接顺序当作全局玩家顺序。
 
-客户端请求当前只接受PB，Sync类型在Dispatch前拒绝；类型标记不授予客户端修改权威状态的权限。
+客户端上行接受PB（flags=0）及显式注册的Lockstep Notify（flags=4），后者没有成功ACK；
+Sync类型在Dispatch前拒绝。类型必须与消息号注册一致，类型标记不授予客户端修改权威状态的权限。
 Go头部实现统一在roost-core/client/wire，C# SDK与Unity接入见roost-core/client/README.md。
 
 ## 4. 主动推送
 
 从 App Registry 获取 tcp.Runtime，调用 PushPlayer 向该玩家全部已认证会话发布，或用 PushSession
 只投递一个登录会话。Runtime 复用 ProtocolRegistry 的 typed encoder，同一玩家多会话只编码一次；
-推送帧 flags=1，并使用每个 Session 独立的服务端递增 sequence，不占用请求/响应 sequence 空间。
+PB推送帧 flags=1，并使用每个 Session 独立的服务端递增 sequence，不占用请求/响应 sequence 空间。
 
     transport, ok := app.Lookup[*playertcp.Runtime](registry, playertcp.Name)
     if !ok { return playertcp.ErrTransportUnavailable }
@@ -478,6 +479,8 @@ Go头部实现统一在roost-core/client/wire，C# SDK与Unity接入见roost-cor
 
 Sync使用PushSyncPlayer/PushSyncSession传已有frame字节，flags=3，不额外套PB bytes。
 PB继续使用PushPlayer/PushSession，flags=1。未知类型和保留位一律拒绝。
+Lockstep使用PushLockstepPlayer/PushLockstepSession传既有广播或追帧字节，flags=5。
+这些接口只查本进程的连接；没有自动提供跨Gate推送或全局在线目录。
 
 离线玩家返回 ErrSessionNotFound，listener 未启动/正在关闭返回 ErrTransportUnavailable，业务据此选择
 忽略、持久化通知或进入可靠 outbox，不能把内存推送当成交易成功凭据。

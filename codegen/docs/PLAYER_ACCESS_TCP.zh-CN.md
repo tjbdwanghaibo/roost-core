@@ -3,6 +3,8 @@
 `access.player` 是 transport-neutral 的协议分发层；TCP 是显式、可组合的接入实现。它们分开声明，
 因此测试可以绕过 socket，未来也能增加其他 transport，而 Entity/Component/Nest handler 不受影响。
 
+本文描述当前嵌入业务进程的 TCP 接入能力。独立 Gate 的现状、待补能力和实施顺序见[网关设计](../../docs/framework/GATEWAY.md)。当前正式生成的玩家接入传输仅支持 TCP。
+
 ## 1. 生成与所有权
 
 ```bash
@@ -30,14 +32,18 @@ roost add transport tcp
 | 偏移 | 长度 | 字段 | 规则 |
 | --- | ---: | --- | --- |
 | 0 | 2 | magic | ASCII `RS` |
-| 2 | 1 | version | 当前为 1 |
-| 3 | 1 | flags | 请求/响应为 0；服务端主动推送为 1 |
-| 4 | 4 | message_id | 0 仅用于首帧鉴权 |
+| 2 | 1 | version | 当前为 2；旧格式直接拒绝 |
+| 3 | 1 | flags | bit0 为推送；bits1..2 为载荷类型：0=PB、1=Sync、2=Lockstep |
+| 4 | 4 | message_id | 0 用于首帧鉴权及鉴权后的心跳；业务消息必须非零 |
 | 8 | 4 | sequence | 非零；客户端命令按单连接递增 |
 | 12 | 4 | payload_length | 分配内存前检查配置上限 |
-| 16 | N | payload | 鉴权 token 或生成的协议 PB |
+| 16 | N | payload | 鉴权 token、空心跳，或按类型编码的 PB/Sync/Lockstep 字节 |
 
-连接后的第一帧必须是 `message_id=0` 的鉴权帧。服务端成功时返回相同 sequence 的空鉴权响应；
+类型值 3 和其余保留位必须拒绝。当前 TCP 上行接受 flags=0 的 PB 请求及 flags=4 的 Lockstep Notify，
+后者必须在 ProtocolRegistry 显式注册，且不返回成功 ACK。Sync 上行在分发前拒绝。
+载荷类别必须与消息号注册一致，不能通过修改类型位获得更多业务权限。
+
+连接后的第一帧必须是 `message_id=0`、flags=0、非空 token 的鉴权帧。服务端成功时返回相同 sequence 的空鉴权响应；
 失败直接断开。业务请求按连接串行 Dispatch，响应沿用请求 sequence。倒序、重复 sequence、保留 flag、
 未知协议、解码失败或内部业务错误都关闭连接；稳定业务错误应由项目 endpoint 编码为明确 errcode。
 
@@ -48,8 +54,12 @@ roost add transport tcp
 受 `write_timeout` 约束）。截止依赖 handler 遵守 ctx；不遵守 ctx 的阻塞调用不会被传输层抢占
 （读循环不为每个请求起 goroutine）。超过预算的请求计入 `player_tcp_dispatch_timeout_total`。
 
-服务端主动推送使用 flag 1 和每个 Session 独立递增的服务端 sequence，不占用请求/响应 sequence 空间。
+服务端主动推送的 flags 分别为 PB=1、Sync=3、Lockstep=5，使用每个 Session 独立递增的服务端 sequence，不占用请求/响应 sequence 空间。
 客户端必须分别维护两个方向的序列语义。
+
+鉴权后的心跳使用 `message_id=0`、flags=0、空 payload，并占用正常递增的客户端 sequence。
+开启心跳时，服务端返回相同序号的空 ACK。客户端应在 `idle_timeout` 到期前发送心跳或正常请求；
+服务端单纯向客户端推送不会延长读期限。心跳服务端支持不代表每种客户端 SDK 已自动定时发送心跳。
 
 ## 3. 鉴权
 
@@ -69,6 +79,9 @@ player_access:
   tcp:
     enabled: false
     addr: 0.0.0.0:7000
+    heartbeat_enabled: true
+    request_rate: 100
+    request_burst: 200
     max_connections: 10000
     max_connections_per_ip: 128
     max_handshakes: 1024
@@ -82,6 +95,9 @@ player_access:
     login_timeout: 2s
 ```
 
+- `heartbeat_enabled`：是否接受鉴权后的空心跳，默认 true。关闭后收到消息号 0 的帧会断连。
+- `request_rate/request_burst`：每连接令牌桶的持续速率和突发额度，默认每秒 100、突发 200。
+  心跳与业务请求共用额度，超额断连；rate=0 显式关闭限流。重连建立新桶，不提供跨连接或集群限流保证。
 - `dispatch_timeout`：单个请求的总预算。应与 `nest.request_timeout` 一致（handler 内一次 Nest 调用已有这个
   预算）；键缺省时取同一配置里的 `nest.request_timeout`，再缺省为 3s。`add transport tcp` 补键时按该服务配置
   已有的 `nest.request_timeout` 写入。上限 5m。
@@ -138,9 +154,14 @@ if err := transport.PushPlayer(ctx, playerID, msgid.PlayerNotice, notice); err !
   且在第一个字节写出前到期的推送同样是写前拒绝，返回 `context.DeadlineExceeded`、不关闭连接；写出部分字节，
   或 `write_timeout` 本身到期（即便一个字节都没写进），仍视为连接损坏并关闭（RR-20260926-68）；
 - `PushSession`：只投递指定 SessionID，写失败同样关闭该会话；
+- `PushSyncPlayer/PushSyncSession`：发送已经编码的原始 Sync 帧，flags=3，不经过 PB encoder；
+- `PushLockstepPlayer/PushLockstepSession`：发送既有 Lockstep 广播或追帧字节，flags=5；
 - `ActiveSessions`：返回当前玩家在线会话数；
 - `ErrSessionNotFound`：玩家/会话离线；
 - `ErrTransportUnavailable`：listener 未启动或正在关闭。
+
+这些 Runtime 接口查找的是当前进程的连接，尚不是跨 Gate 的全局推送服务。PB 推送使用注册的 encoder；
+Sync/Lockstep 调用方负责提供对应格式的合法字节，传输层继续检查外层包大小。
 
 内存推送不是可靠事务。必须送达的奖励、交易、邮件或跨服事件应先写持久化记录/outbox，再把在线推送
 作为低延迟提示；客户端重连后从权威状态补齐。
@@ -148,7 +169,7 @@ if err := transport.PushPlayer(ctx, playerID, msgid.PlayerNotice, notice); err !
 ## 6. 性能与鲁棒性
 
 - `ProtocolRegistry` Seal 后通过 atomic immutable snapshot 无锁分发；
-- 每连接一个顺序读循环，同玩家命令不额外并行争锁，跨玩家由 Nest 并行；
+- 每连接一个顺序读循环；同玩家多连接之间仍可能并发，由 Nest 和业务契约协调，不能把连接顺序当作全局玩家顺序；
 - payload 在读取长度后才分配，小于 64 KiB 的 buffer 有界复用；
 - 写操作受 Session mutex 和 deadline 保护，慢客户端产生同步背压，不创建无界写队列；写满 `write_timeout` 仍写不进的连接被关闭，不再拖住后续推送；
 - accept 错误指数退避，满连接立即拒绝；TCP 开启 keepalive 与 no-delay；

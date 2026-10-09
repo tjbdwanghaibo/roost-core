@@ -2,7 +2,9 @@
 
 ## 1. 基线和数量
 
-清理前docs跟踪文件 **3070** 个；最终保留/新建 **50** 个。删除旧路径 **3034** 个；其余同路径内容按现行版本重写或保留。运行时基线v1.24.0，文档维护版v1.24.1。
+清理前 docs 跟踪文件 **3070** 个；v1.24.1 整理时保留/新建 **50** 个，删除旧路径 **3034** 个。其余同路径内容按现行版本重写或保留。运行时基线 v1.24.0，文档维护版 v1.24.1。
+
+当前 main 在该清单上新增一份独立 Gate 设计，合计 **51** 份。该设计明确区分已有能力与待实施部分，不改变已发布版本的实现状态。
 
 先确定本清单，再迁移现行设计/维护知识、核对代码、清理旧文件与修复引用。不会删除游戏ai代码或游戏Skill文档，也不删除本地安装skill。
 
@@ -14,6 +16,7 @@
 | [docs/README.md](../README.md) | 维护入口、清单、证据或全包映射 |
 | [docs/framework/README.md](../framework/README.md) | 维护入口、清单、证据或全包映射 |
 | [docs/framework/PACKAGES.md](../framework/PACKAGES.md) | 维护入口、清单、证据或全包映射 |
+| [docs/framework/GATEWAY.md](../framework/GATEWAY.md) | 网关现有能力、独立 Gate 待实施设计、分阶段验收及 TCP 文档纠正 |
 | [docs/framework/guide/00-overview.md](../framework/guide/00-overview.md) | 现行设计、职责、使用与限制 |
 | [docs/framework/impl/00-overview.md](../framework/impl/00-overview.md) | 实现边界、不变量、源码类型与回归入口 |
 | [docs/framework/guide/01-app-lifecycle.md](../framework/guide/01-app-lifecycle.md) | 现行设计、职责、使用与限制 |
