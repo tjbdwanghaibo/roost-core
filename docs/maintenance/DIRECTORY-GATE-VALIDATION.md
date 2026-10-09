@@ -155,3 +155,5 @@ Stop 收尾修复（已实施）：原有 WaitGroup 的准入/完成责任不变
 复跑使用前述脚本，固定 `ROOST_PERF_COUNT=1 ROOST_PERF_CPU=4 ROOST_NEST_GAME_WORKERS=4 ROOST_NEST_GAME_QUEUE=65536 ROOST_NEST_GAME_PLAYERS=1000 ROOST_NEST_GAME_ENTITIES=10000 ROOST_NEST_GAME_MESSAGES_PER_PLAYER=10 ROOST_NEST_GAME_GATE=1 ROOST_NEST_GAME_SYNC=1 ROOST_NEST_GAME_DURATION=15m ROOST_NEST_GAME_RACE=0 ROOST_NEST_GAME_PROFILE=0`，HZ/DIRTY分别1/1与10/5；为每轮指定全新ROOST_PERF_LABEL和私有ROOST_DATAENGINE_IT_NATS_URL。
 
 两轮负载与本轮私有NATS/监控均已退出；没有操作共享服务。本次只补性能证据和现行说明，未改生产逻辑、提交、推送、合并或发布。
+
+发布状态（2026-10-09）：维护者接受重档失败，v1.25.0已发布，tag提交487052dd；pretag与远端真实tag的game-demo消费工程build/vet/test全部通过。main已包含本轮实现。按维护者最新要求，本轮不继续分析重档原因。发布验收见[记录](../release/v1.25.0-IMPLEMENTATION.md)；上文未提交/未发布为当时历史状态。
