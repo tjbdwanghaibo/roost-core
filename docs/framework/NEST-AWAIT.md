@@ -126,6 +126,6 @@ go run ./cmd/glsvet ./codegen/internal/entity/testdata/awaitflow
 - 原动态 Cast 锁序/回滚/销毁竞态测试通过测试专用目标声明适配器保留底层防御覆盖；它不是合法生产用法，也不证明 tail 顺序。正式目标拒绝和三池 tail 由新调度回归覆盖。
 - Mirror 生成文件比较曾在未修改基线上失败；确认 Git autocrlf 的 CRLF 与 go/format 的 LF 差异后，仅在测试比较时规范换行，重新通过。
 - 全仓 `go test ./... -count=1 -timeout=120s` **失败**。根目录契约/示例包通过，其余失败包括文件原子替换 Access is denied、缺少 sh、占用文件清理失败及网络/包测试超时。本轮未逐项归因这些全仓失败，不能宣称整仓无回归。完整输出保留在本机 D:/whb_s/await-full.txt，可按该命令复跑；无需依赖该文件理解验收范围。
-- 图谱当前可用项目 D-whb_s 的 coverage generation 为 2026-09-08T14:39:26Z，本工作树路径均 not_tracked，另两路 MCP transport closed。本轮结论以当前精确源码、生成和实跑补证，不使用过期图谱行号。
+- 图谱核对开始时，可用项目 D-whb_s 的 coverage generation 为 2026-09-08T14:39:26Z，本工作树路径均 not_tracked，另两路 MCP transport closed。本轮结论以当前精确源码、生成和实跑补证，不使用过期图谱行号。提交后已对 D:/whb_s/cube-core 刷新 roost-core 项目，工具返回 indexed（29722 节点、277054 边）；但后续 coverage 对核心路径仍报告 metadata_changed，因此不把刷新成功等同于覆盖验证通过。
 
 性能收益未经测量；没有重跑真实排行榜网络、生产持久发奖、跨机或长期重档，不宣称提高容量或消除所有死锁。
