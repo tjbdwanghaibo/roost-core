@@ -108,7 +108,7 @@ func TestNonRollbackHandlerCastTargetRemovedWhileWaiting(t *testing.T) {
 				old := e.dao.Value
 				RecordUndo(e.dao, 1, func() error { e.dao.Value = old; return nil })
 				e.dao.Value++ // memory：失败也不撤销
-				if _, err := CastOne[*rollbackTestEntity](zID); err != nil {
+				if _, err := guardFixtureCastOne[*rollbackTestEntity](zID); err != nil {
 					if n == 1 {
 						firstCastErr.Store(&err)
 					}

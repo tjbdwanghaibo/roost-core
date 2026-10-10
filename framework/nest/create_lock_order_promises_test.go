@@ -185,7 +185,7 @@ func TestHandlerCreateThenHigherGroupCastDoesNotFormCycle(t *testing.T) {
 		}
 		close(h1Created)
 		<-proceed
-		if _, err := CastOne[*rollbackTestEntity](zID); err != nil {
+		if _, err := guardFixtureCastOne[*rollbackTestEntity](zID); err != nil {
 			return nil, err
 		}
 		return "ok", nil

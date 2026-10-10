@@ -79,6 +79,8 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "nest.fast.queue_capacity", Kind: "int", Min: "0", Starter: true, Example: "0"},
 		{Name: "nest.slow.workers", Kind: "int", Min: "0", Starter: true, Example: "0"},
 		{Name: "nest.slow.queue_capacity", Kind: "int", Min: "0", Starter: true, Example: "0"},
+		{Name: "nest.long.workers", Kind: "int", Min: "0", Starter: true, Example: "0"},
+		{Name: "nest.long.queue_capacity", Kind: "int", Min: "0", Starter: true, Example: "0"},
 		{Name: "nest.delayed_capacity", Kind: "int", Min: "0", Starter: true, Example: "4096"},
 		{Name: "nest.max_delay", Kind: "duration", Min: "0", Starter: true, Example: "24h"},
 		{Name: "nest.tick_duration", Kind: "duration", Min: "0", Starter: true, Example: "50ms"},

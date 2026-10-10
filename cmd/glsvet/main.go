@@ -415,6 +415,7 @@ func inspectHandlerFunction(fileSet *token.FileSet, function *ast.FuncDecl, hand
 	visiting[function] = true
 	defer delete(visiting, function)
 	findings := 0
+	findings += inspectBusinessWaits(fileSet, function.Body, handler)
 	outerNames := declaredNames(function)
 	ast.Inspect(function.Body, func(node ast.Node) bool {
 		switch typed := node.(type) {

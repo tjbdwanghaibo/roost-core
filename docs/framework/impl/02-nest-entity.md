@@ -1,6 +1,6 @@
 # 核心：Nest 调度与实体：实现与维护
 
-运行时代码基准：v1.24.0（2fa1c7877b14c77b52e062bedcb3455cef8db0fb）。[设计与使用](../guide/02-nest-entity.md)
+运行时代码基准：当前工作树，包含 v1.25.0 后的三池/Await 更新。[设计与使用](../guide/02-nest-entity.md)
 
 ## 如何阅读
 
@@ -17,7 +17,8 @@
 1. 同 ID 消息准入顺序和冷目标改道不能丢位置。
 2. memory 本地持久写拒绝，rollback=none 不承诺恢复。
 3. pipelined 不可回滚边界早于持久确认，外化必须等确认。
-4. 快池不能阻塞 I/O；同一 GuardScope 持有并释放锁。
+4. 长短业务池不能阻塞等待池任务或 I/O；同一 GuardScope 持有并释放锁。I/O 池禁止取得 Guard。
+5. Await 先预留 I/O 容量，段结束释放 Guard 和 tail 后执行查询；恢复段按完整目标重新准入。首版只支持无回滚的 memory handler。
 
 ## 2A. 事务实现走读
 
@@ -33,15 +34,13 @@
 
 若修复并发问题，用可控 barrier/时钟构造修前失败，不能用 sleep 概率通过代替因果证据。停机测试要检查在途回调和依赖释放；持久测试要检查恢复后数据与重复输入。外部系统的真实故障证据单列。
 
-### 调度通道状态聚合（2026-10-10）
+### 三池调度与续行
 
-此次整理只涉及 `framework/nest/dispatch_queue.go` 及直接访问其内部字段的测试，原目录不变。旧实现把快、慢通道分别放在 `config[2]`、`ready[2]`、`queued[2]` 等多个数组中，读者必须自己确保所有下标都对应同一通道。现已改成一个 `lanes [dispatchLaneCount]dispatchLane`，每项聚合配置、就绪/等待链、运行/排队数量、处理函数、唤醒条件和观测统计。`dispatchFastLane`/`dispatchSlowLane` 明确下标含义，当前仍只有两条通道。
+[dispatch_queue.go](../../../framework/nest/dispatch_queue.go) 使用一个 lanes 数组，每项聚合配置、等待/就绪链、运行数量、内部续行、唤醒条件和统计。短业务、I/O、长业务三条通道共用 mutex、tails、依赖链、pending；不能各建一套 ID 顺序。
 
-全局的 mutex、同 ID 的 tails/依赖链、pending、生命周期及快阶段 continuation 队列继续属于 dispatchQueue，因为同 ID 依赖跨快慢通道，不能顺便拆成两套锁或两套顺序。两个 Cond 仍绑定同一把 mutex。此变更没有公开 API、协议、持久格式或生成物变化，也不改任何容量、快慢池路由和唤醒策略。
+[await.go](../../../framework/nest/await.go) 在当前 memory 段内预留 I/O 名额。pending 包含尚未启动的预留，保证 Shutdown 不会提前退出；普通 I/O 与 Await 共用容量，预算包含正在运行的 I/O。前段失败归还预留；成功则在队列释放 tail 后启动 work。resume 使用匿名 handlerEntry，复用正式加载、Guard、同步与回复链路，不把旧实体指针带到 I/O。
 
-实施时先保存原实现的[调度对照基准](../../performance/NEST-DISPATCH-BENCHMARK.md)，再聚合字段并用快/慢通道常量替代魔法下标。Nest 整包测试、整包 race、vet 与全仓编译已通过，覆盖双池、冷目标转慢、内部续行、排队统计和停机排空；空 handler 与双池基准的前后样本单独保留在性能记录中。需要回退时仅回退字段聚合及对应测试访问，基准夹具和原始数据可保留。
-
-最初引入多个数组的是 `646ce63f` 的双池统一调度实现；该提交说明聚焦同 ID 顺序与 I/O 隔离，未给出数组字段布局的对比数据。多个数组不是当前正确性契约，也不能仅凭这种写法断言有性能优势。本次目的为可读性，性能是否变化以同机测量为准。
+新目标和旧目标没有跨段原子性。当前实现只允许无回滚 memory handler，动态目标错误、取消、停机及过载均有明确终态。具体用法、旧 Cast 迁移、验证命令和限制见 [三池与 Await](../NEST-AWAIT.md)。早期两通道字段聚合的性能样本保留在 [调度对照基准](../../performance/NEST-DISPATCH-BENCHMARK.md)，不能拿它证明三池或反射恢复的性能。
 
 ## 4. 文件、类型与职责定位
 

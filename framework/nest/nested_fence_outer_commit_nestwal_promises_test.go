@@ -155,7 +155,7 @@ func TestOuterCommitAfterNestedAcceptFailureIsRefusedBeforeWAL(t *testing.T) {
 			mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 				declared := es[0].(*fenceOuterEntity)
 				_, isoErr = nest.RunIsolatedTransaction(context.Background(), committer, "b03_iso", func() (any, error) {
-					casted, err := nest.CastOne[*fenceOuterEntity](inner.GUId())
+					casted, err := nest.GuardFixtureCastOneForTest[*fenceOuterEntity](inner.GUId())
 					if err != nil {
 						return nil, err
 					}

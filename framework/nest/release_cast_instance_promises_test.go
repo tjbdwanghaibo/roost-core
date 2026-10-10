@@ -36,7 +36,7 @@ func TestReleaseCastOfDestroyedInstanceKeepsRecreatedLock(t *testing.T) {
 	var got observed
 	var fresh entity.IThreadSafeEntity
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
-		old, err := CastOne[*rollbackTestEntity](x)
+		old, err := guardFixtureCastOne[*rollbackTestEntity](x)
 		if err != nil {
 			return nil, err
 		}

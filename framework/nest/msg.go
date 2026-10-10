@@ -344,6 +344,13 @@ func (t MsgType) String() string {
 
 // Msg is the internal message routed through the nest worker pool.
 type Msg struct {
+	// Await 只持有本段的调度数据；afterQueue 在释放 tail 后调用，不进入快照。
+	awaitPlan       *awaitPlan
+	resumeEntry     *handlerEntry
+	handlerEntities []entity.IThreadSafeEntity
+	ioWork          func()
+	afterQueue      func()
+
 	RetChan             chan any
 	RemoteWriteBatch    entity.RemoteWriteBatch
 	Name                string

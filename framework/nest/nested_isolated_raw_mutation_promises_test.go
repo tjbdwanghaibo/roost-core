@@ -56,7 +56,7 @@ func runOuterWithNestedRawMutation(t *testing.T, meta HandlerMeta, unique int64,
 		target := es[0].(*rollbackTestEntity)
 		_, obs.isoErr = RunIsolatedTransaction(context.Background(), iso, "rr0927_07_iso", func() (any, error) {
 			if castTarget {
-				casted, err := CastOne[*rollbackTestEntity](other.GUId()) // 嵌套事务自己取得，外层没有它的快照
+				casted, err := guardFixtureCastOne[*rollbackTestEntity](other.GUId()) // 嵌套事务自己取得，外层没有它的快照
 				if err != nil {
 					return nil, err
 				}

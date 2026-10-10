@@ -51,7 +51,7 @@ func TestCastTargetRemovedWhileWaitingNamesTheTarget(t *testing.T) {
 			}, HandlerMeta{})
 			var castErr error
 			mgr.MustRegisterHandlerWithMeta(follower, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
-				if _, err := CastOne[*rollbackTestEntity](zID); err != nil {
+				if _, err := guardFixtureCastOne[*rollbackTestEntity](zID); err != nil {
 					castErr = err
 					return nil, err
 				}

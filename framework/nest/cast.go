@@ -3,16 +3,19 @@ package nest
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 var (
-	ErrCastGetterNotSet  = errors.New("nest: cast getter not set")
-	ErrCastNoContext     = errors.New("nest: cast requires entity context")
-	ErrCastInvalidTarget = errors.New("nest: invalid cast target")
-	ErrCastDeadlockRisk  = errors.New("nest: cast deadlock risk")
-	ErrCastTypeMismatch  = errors.New("nest: cast type mismatch")
+	ErrCastUndeclaredTarget = errors.New("nest: cast target not declared in this execution segment")
+	ErrCastGetterNotSet     = errors.New("nest: cast getter not set")
+	ErrCastNoContext        = errors.New("nest: cast requires entity context")
+	ErrCastInvalidTarget    = errors.New("nest: invalid cast target")
+	ErrCastDeadlockRisk     = errors.New("nest: cast deadlock risk")
+	ErrCastTypeMismatch     = errors.New("nest: cast type mismatch")
 )
 
 // CastTarget describes an entity to lock in the current entity context.
@@ -97,6 +100,9 @@ func CastThree[E1, E2, E3 entity.IThreadSafeEntity](t1, t2, t3 CastTarget) (E1, 
 // CastMulti retrieves and locks targets in the current entity guard scope.
 // 目标不存在、或在等锁期间被 Destroy / 仅内存卸载时返回满足 errors.Is(err, ErrEntityNotFound) 的错误（RR-20260926-73）。
 func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
+	if fctx.InIOWorker() {
+		return nil, fctx.ErrGuardInIOWorker
+	}
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("%w: empty targets", ErrCastInvalidTarget)
 	}
@@ -113,6 +119,7 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 	}
 
 	guard := entity.GetEntityGuard()
+	declaredIDs := dispatchIDs(current)
 	metas := make([]entity.EntityIDMeta, len(targets))
 	ids := make([]int64, len(targets))
 	categories := make([]entity.EntityCategory, len(targets))
@@ -125,6 +132,10 @@ func CastMulti(targets ...CastTarget) ([]entity.IThreadSafeEntity, error) {
 			return nil, fmt.Errorf("%w: index=%d id=%d: %v", ErrCastInvalidTarget, i, target.ID, err)
 		}
 		meta := entity.ResolveEntityID(fullID)
+		// 当前段的全部访问目标必须事先登记 tail，不能持锁扩张依赖。
+		if !slices.Contains(declaredIDs, meta.FullID) {
+			return nil, fmt.Errorf("%w: id=%d", ErrCastUndeclaredTarget, meta.FullID)
+		}
 		metas[i] = meta
 		ids[i] = meta.FullID
 		categories[i] = meta.Category

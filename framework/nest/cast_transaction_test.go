@@ -41,7 +41,7 @@ func TestCastTransactionRollbackWithoutSync(t *testing.T) {
 				meta.Durability = DurabilityStrict
 			}
 			engine.MustRegisterHandlerWithMeta(handler, func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
-				cast, err := CastOne[*rollbackTestEntity](other.ID())
+				cast, err := guardFixtureCastOne[*rollbackTestEntity](other.ID())
 				if err != nil {
 					return nil, err
 				}
@@ -125,7 +125,7 @@ func TestCastPipelinedReleasesAndStampsWithoutSync(t *testing.T) {
 	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackState, Durability: DurabilityPipelined},
 		[]entity.IThreadSafeEntity{primary}, committer, "cast-pipelined",
 		func() { scope.Guard().ReleaseEntity(primary.GUId()) }, nil, func() (any, error) {
-			cast, err := CastOne[*rollbackTestEntity](other.ID())
+			cast, err := guardFixtureCastOne[*rollbackTestEntity](other.ID())
 			if err != nil {
 				return nil, err
 			}

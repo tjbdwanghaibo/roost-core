@@ -77,7 +77,7 @@ func TestCastPlayerCanCastAllianceAndOtherByCategoryOrder(t *testing.T) {
 		t.Fatal("lock player")
 	}
 
-	got, err := CastMulti(NewCastTarget(allianceID), NewCastTarget(otherID))
+	got, err := guardFixtureCastMulti(NewCastTarget(allianceID), NewCastTarget(otherID))
 	if err != nil {
 		t.Fatalf("CastMulti alliance/other: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestCastAllianceCanCastOtherByCategoryOrder(t *testing.T) {
 		t.Fatal("lock alliance")
 	}
 
-	got, err := CastTargetOne[*mockEntity](NewCastTarget(otherID))
+	got, err := guardFixtureCastTargetOne[*mockEntity](NewCastTarget(otherID))
 	if err != nil {
 		t.Fatalf("CastTargetOne other: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestCastRejectsReverseCategoryOrder(t *testing.T) {
 			if !entity.GetEntityGuard().RequireEntity(tc.locked) {
 				t.Fatalf("lock %s", tc.name)
 			}
-			_, err := CastTargetOne[*mockEntity](NewCastTarget(tc.targetID))
+			_, err := guardFixtureCastTargetOne[*mockEntity](NewCastTarget(tc.targetID))
 			if !errors.Is(err, ErrCastDeadlockRisk) {
 				t.Fatalf("err = %v, want ErrCastDeadlockRisk", err)
 			}
@@ -178,7 +178,7 @@ func TestCastRejectsRemoteAfterLocalBeforePreparingDistributedLock(t *testing.T)
 	if !entity.GetEntityGuard().RequireEntity(player) {
 		t.Fatal("lock player")
 	}
-	_, err := CastTargetOne[*mockEntity](NewCastTarget(remoteID))
+	_, err := guardFixtureCastTargetOne[*mockEntity](NewCastTarget(remoteID))
 	if !errors.Is(err, ErrCastDeadlockRisk) {
 		t.Fatalf("err = %v, want ErrCastDeadlockRisk", err)
 	}
@@ -191,7 +191,7 @@ func TestCastRejectsInvalidTargetID(t *testing.T) {
 	_, release := entity.NewGuardScope("cast_test")
 	defer release()
 
-	_, err := CastTargetOne[*mockEntity](NewCastTarget(102))
+	_, err := guardFixtureCastTargetOne[*mockEntity](NewCastTarget(102))
 	if !errors.Is(err, ErrCastInvalidTarget) {
 		t.Fatalf("err = %v, want ErrCastInvalidTarget", err)
 	}
@@ -215,7 +215,7 @@ func TestCastReusesARemoteManagedEntityDeclaredBeforeDispatch(t *testing.T) {
 	if !entity.GetEntityGuard().RequireEntity(remote) {
 		t.Fatal("lock the declared remote entity")
 	}
-	got, err := CastTargetOne[*mockEntity](NewCastTarget(remoteID))
+	got, err := guardFixtureCastTargetOne[*mockEntity](NewCastTarget(remoteID))
 	if err != nil {
 		t.Fatalf("cast to a declared remote entity = %v, want nil", err)
 	}
@@ -234,14 +234,14 @@ func TestCastRejectsDynamicRemoteManagedEntity(t *testing.T) {
 	defer releaseCurrent()
 	_, releaseGuard := entity.NewGuardScope("cast_test")
 	defer releaseGuard()
-	_, err := CastTargetOne[*mockEntity](NewCastTarget(remoteID))
+	_, err := guardFixtureCastTargetOne[*mockEntity](NewCastTarget(remoteID))
 	if !errors.Is(err, entity.ErrRemoteWriteCapabilityDisabled) {
 		t.Fatalf("dynamic remote cast error=%v", err)
 	}
 }
 
 func TestCastRequiresContext(t *testing.T) {
-	_, err := CastTargetOne[*mockEntity](NewCastTarget(1))
+	_, err := guardFixtureCastTargetOne[*mockEntity](NewCastTarget(1))
 	if !errors.Is(err, ErrCastNoContext) {
 		t.Fatalf("err = %v, want ErrCastNoContext", err)
 	}

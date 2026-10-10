@@ -21,6 +21,8 @@ type Context struct {
 	Trace      TraceMeta
 	SyncWait   time.Duration
 	keyValue   map[any]any
+	longWorker bool
+	ioWorker   bool
 	fastWorker bool // 当前 goroutine 的执行位置，不进入 Snapshot
 }
 
@@ -102,6 +104,8 @@ func NewContext(opts ...Option) (*Context, func()) {
 	c := contextPool.Get().(*Context)
 	c.init()
 	c.fastWorker = prev != nil && prev.fastWorker
+	c.longWorker = prev != nil && prev.longWorker
+	c.ioWorker = prev != nil && prev.ioWorker
 	for _, opt := range opts {
 		if opt != nil {
 			opt(c)
@@ -153,6 +157,8 @@ func NowMilli() int64 {
 // Clear clears request-scoped state before the context is returned to pool.
 func (c *Context) Clear() {
 	c.fastWorker = false
+	c.longWorker = false
+	c.ioWorker = false
 	c.Config = nil
 	c.Base = nil
 	c.Frame = 0

@@ -56,7 +56,9 @@ func TestMirrorDTOGeneratesReadOnlyView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
+	// Git autocrlf 在 Windows 把 fixture 检出为 CRLF；生成器使用 go/format 的 LF。
+	// 只规范换行，仍逐字节检查所有生成内容。
+	if !bytes.Equal(got, bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n"))) {
 		t.Errorf("generated guild_summary_gen_wire.go differs from the committed fixture; regenerate testdata/remote:\n%s", got)
 	}
 	generated := string(got)

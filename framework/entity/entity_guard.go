@@ -2,6 +2,7 @@ package entity
 
 import (
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"log/slog"
 	"reflect"
 	"slices"
@@ -122,6 +123,9 @@ var guardPool = sync.Pool{
 var guardScopes sync.Map // map[int64]*GuardScope
 
 func NewGuardScope(name string) (*GuardScope, func()) {
+	if fctx.InIOWorker() {
+		panic(fctx.ErrGuardInIOWorker)
+	}
 	prev := CurrentGuardScope()
 	scope := &GuardScope{
 		name:  name,
@@ -269,6 +273,9 @@ func (e *EntityGuard) SwapCreatedEntityCapturer(capturer CreatedEntityCapturer) 
 
 // RequireEntity acquires the entity lock. Returns true on success.
 func (e *EntityGuard) RequireEntity(ent IThreadSafeEntity) bool {
+	if fctx.InIOWorker() {
+		panic(fctx.ErrGuardInIOWorker)
+	}
 	if ent == nil {
 		return false
 	}
@@ -294,6 +301,9 @@ func (e *EntityGuard) RequireEntity(ent IThreadSafeEntity) bool {
 
 // TryRequireEntity 不等待地取得实体锁：锁被占用、实体已清理或已摘除时返回 false。
 func (e *EntityGuard) TryRequireEntity(ent IThreadSafeEntity) bool {
+	if fctx.InIOWorker() {
+		panic(fctx.ErrGuardInIOWorker)
+	}
 	if ent == nil {
 		return false
 	}

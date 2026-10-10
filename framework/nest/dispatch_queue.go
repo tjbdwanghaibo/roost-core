@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/goroutine"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
@@ -21,6 +22,7 @@ type WorkerPoolConfig struct{ Workers, QueueCap int }
 const (
 	dispatchFastLane = iota
 	dispatchSlowLane
+	dispatchLongLane
 	dispatchLaneCount
 )
 
@@ -36,6 +38,7 @@ type dispatchJob struct {
 	inlineID                 [1]int64 // 单目标直接存在job内；ids只读引用，不交给外部函数填充。
 	admittedAt, readyAt      time.Duration
 	predecessors             int
+	lane                     int
 	slow                     bool
 	continuation             bool
 	waitedForPredecessor     bool
@@ -67,38 +70,38 @@ func (q *readyJobs) pop() *dispatchJob {
 // 可变状态由所属 dispatchQueue.mu 保护；wake 也绑定这把共享锁。
 // 不得按值复制正在使用的通道，修改时通过 q.lanes 中的原项访问。
 type dispatchLane struct {
-	wake        *sync.Cond
-	config      WorkerPoolConfig
-	handler     func(*Msg)
-	ready       readyJobs
-	waiting     readyWaiting
-	queued      int // 尚未开始执行的外部请求，包括 ID 前驱等待。
-	readyCount  int // 其中已经满足 ID 依赖的请求。
-	running     int // 正在执行的外部请求；内部延续单独预算。
-	observation DispatchLaneStats
+	continuations                          readyJobs
+	continuationCount, continuationRunning int
+	preferContinuation                     bool
+	wake                                   *sync.Cond
+	config                                 WorkerPoolConfig
+	handler                                func(*Msg)
+	ready                                  readyJobs
+	waiting                                readyWaiting
+	queued                                 int // 尚未开始执行的外部请求，包括 ID 前驱等待。
+	readyCount                             int // 其中已经满足 ID 依赖的请求。
+	running                                int // 正在执行的外部请求；内部延续单独预算。
+	observation                            DispatchLaneStats
 }
 
-// dispatchQueue 先登记 ID 顺序，再交给两种执行资源。慢池没有 ID 分槽；
-// 等待前驱只占准入预算，不占任何 worker。内部快阶段继承父请求的顺序位置。
+// dispatchQueue 先登记 ID 顺序，再交给三种执行资源。慢池没有 ID 分槽；
+// 等待前驱只占准入预算，不占任何 worker。内部业务阶段继承父请求的顺序位置。
 // ID 依赖和 pending 跨通道共享，不能随 lane 拆成两套独立顺序或锁。
 type dispatchQueue struct {
-	mu                  sync.Mutex
-	lanes               [dispatchLaneCount]dispatchLane
-	continuations       readyJobs
-	continuationCount   int
-	tails               map[int64]*dispatchJob
-	pending             int
-	done                chan struct{}
-	wg                  sync.WaitGroup
-	name                string
-	continuationRunning int
+	mu            sync.Mutex
+	lanes         [dispatchLaneCount]dispatchLane
+	tails         map[int64]*dispatchJob
+	pending       int
+	awaitReserved int
+	done          chan struct{}
+	wg            sync.WaitGroup
+	name          string
 	// 原点在构造时固定，转慢、续行及停机重试均不重置；保留 time.Now 的单调分量。
-	clockOrigin        time.Time
-	preferContinuation bool
-	started, stopping  bool
+	clockOrigin       time.Time
+	started, stopping bool
 }
 
-func newDispatchQueue(name string, fast, slow WorkerPoolConfig, handler, slowHandler func(*Msg)) *dispatchQueue {
+func newDispatchQueue(name string, fast, slow WorkerPoolConfig, handler, slowHandler func(*Msg), longConfig ...WorkerPoolConfig) *dispatchQueue {
 	q := &dispatchQueue{
 		name:        name,
 		clockOrigin: time.Now(),
@@ -108,6 +111,10 @@ func newDispatchQueue(name string, fast, slow WorkerPoolConfig, handler, slowHan
 		},
 		tails: make(map[int64]*dispatchJob),
 		done:  make(chan struct{}),
+	}
+	if len(longConfig) > 0 {
+		q.lanes[dispatchLongLane].config = longConfig[0]
+		q.lanes[dispatchLongLane].handler = handler
 	}
 	for i := range q.lanes {
 		q.lanes[i].wake = sync.NewCond(&q.mu)
@@ -174,12 +181,13 @@ func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 	if q == nil {
 		return worker.ErrWorkerClosed
 	}
-	lane := dispatchFastLane
+	lane := businessLane(msg)
 	if slow {
 		lane = dispatchSlowLane
 	}
 	state := &q.lanes[lane]
 	j := newDispatchJob(msg, slow)
+	j.lane = lane
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if !q.started || q.stopping {
@@ -192,7 +200,12 @@ func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 	}
 	// 先使用尚未占用的外部执行额度。否则 1024 worker / 16 等待位
 	// 会在 worker 尚未被调度时，仅准入 16 条就误报满队列。
-	hasExecutionSlot := j.predecessors == 0 && q.busyWorkers(lane)+state.readyCount < state.config.Workers
+	// Await 的预留与普通 I/O 准入共享容量，不能在段结束前被其他生产者占走。
+	reserved := 0
+	if lane == dispatchSlowLane {
+		reserved = q.awaitReserved
+	}
+	hasExecutionSlot := j.predecessors == 0 && q.busyWorkers(lane)+state.readyCount+reserved < state.config.Workers
 	if !hasExecutionSlot && q.waitingCount(lane) >= state.config.QueueCap {
 		state.observation.Rejected++
 		return worker.ErrWorkerQueueFull
@@ -218,37 +231,39 @@ func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 // continueFast 只供占有一个慢 worker 的已准入请求同步调用。每个慢 worker
 // 同时最多一个信封，所以容量天然不超过慢 worker 数；外部满队列不阻断收尾。
 func (q *dispatchQueue) continueFast(msg *Msg) {
+	lane := businessLane(msg)
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.continuations.push(&dispatchJob{msg: msg, continuation: true})
-	q.continuationCount++
+	q.lanes[lane].continuations.push(&dispatchJob{msg: msg, continuation: true, lane: lane})
+	q.lanes[lane].continuationCount++
 	q.pending++
-	q.lanes[dispatchFastLane].wake.Signal()
+	q.lanes[lane].wake.Signal()
 }
 
 // tryContinueFast 是 continueFast 给框架外部入口（NestMgr.RunLocal）用的版本：队列未启动或已开始
 // 停止时拒绝，避免信封落在一个不会再有 worker 取走的队列里、调用方永远等不到。
 func (q *dispatchQueue) tryContinueFast(msg *Msg) bool {
+	lane := businessLane(msg)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if !q.started || q.stopping {
 		return false
 	}
-	q.continuations.push(&dispatchJob{msg: msg, continuation: true})
-	q.continuationCount++
+	q.lanes[lane].continuations.push(&dispatchJob{msg: msg, continuation: true, lane: lane})
+	q.lanes[lane].continuationCount++
 	q.pending++
-	q.lanes[dispatchFastLane].wake.Signal()
+	q.lanes[lane].wake.Signal()
 	return true
 }
 
 func (q *dispatchQueue) take(lane int) *dispatchJob {
 	state := &q.lanes[lane]
-	if lane == dispatchFastLane && q.continuations.head != nil && (q.preferContinuation || state.ready.head == nil) {
-		q.preferContinuation = false
-		q.continuationCount--
-		q.continuationRunning++
+	if lane != dispatchSlowLane && q.lanes[lane].continuations.head != nil && (q.lanes[lane].preferContinuation || state.ready.head == nil) {
+		q.lanes[lane].preferContinuation = false
+		q.lanes[lane].continuationCount--
+		q.lanes[lane].continuationRunning++
 		state.observation.PeakWaiting = max(state.observation.PeakWaiting, q.waitingCount(lane))
-		return q.continuations.pop()
+		return q.lanes[lane].continuations.pop()
 	}
 	if j := state.ready.pop(); j != nil {
 		state.queued--
@@ -260,8 +275,8 @@ func (q *dispatchQueue) take(lane int) *dispatchJob {
 		waited := time.Since(q.clockOrigin) - j.readyAt
 		stats.WorkerWait += waited
 		stats.MaxWorkerWait = max(stats.MaxWorkerWait, waited)
-		if lane == dispatchFastLane {
-			q.preferContinuation = true
+		if lane != dispatchSlowLane {
+			q.lanes[lane].preferContinuation = true
 		}
 		return j
 	}
@@ -282,10 +297,14 @@ func (q *dispatchQueue) work(lane int) {
 			return
 		}
 		rerouted := false
+		var after func()
 		goroutine.SafeFunc(func() {
-			var phase fctx.Option
-			if lane == dispatchFastLane {
+			phase := fctx.WithIOWorker()
+			if lane != dispatchSlowLane {
 				phase = fctx.WithFastWorker()
+				if lane == dispatchLongLane {
+					phase = fctx.WithLongWorker()
+				}
 			}
 			_, release := fctx.NewContext(fctx.WithSource("worker"), fctx.WithHandler(q.name), phase)
 			defer release()
@@ -295,10 +314,13 @@ func (q *dispatchQueue) work(lane int) {
 					j.msg.OnRelease()
 				}
 			}()
-			if handler := state.handler; handler != nil {
+			if j.msg.ioWork != nil {
+				j.msg.ioWork()
+			} else if handler := state.handler; handler != nil {
 				handler(j.msg)
 			}
-			rerouted = lane == dispatchFastLane && !j.continuation && j.msg.slowReroute
+			after = j.msg.afterQueue
+			rerouted = lane != dispatchSlowLane && !j.continuation && j.msg.slowReroute
 		})
 		q.mu.Lock()
 		if rerouted {
@@ -309,7 +331,7 @@ func (q *dispatchQueue) work(lane int) {
 		if !j.continuation {
 			state.running--
 		} else {
-			q.continuationRunning--
+			q.lanes[lane].continuationRunning--
 		}
 		for _, id := range j.ids {
 			if q.tails[id] == j {
@@ -319,10 +341,7 @@ func (q *dispatchQueue) work(lane int) {
 		for _, next := range j.successors {
 			next.predecessors--
 			if next.predecessors == 0 {
-				target := dispatchFastLane
-				if next.slow {
-					target = dispatchSlowLane
-				}
+				target := next.lane
 				q.enqueueReady(target, next)
 			}
 		}
@@ -333,6 +352,9 @@ func (q *dispatchQueue) work(lane int) {
 			}
 		}
 		q.mu.Unlock()
+		if after != nil {
+			after()
+		}
 	}
 }
 
@@ -343,7 +365,8 @@ func (q *dispatchQueue) work(lane int) {
 // 调用方持有 q.mu。
 func (q *dispatchQueue) rerouteToSlow(j *dispatchJob) {
 	slow := &q.lanes[dispatchSlowLane]
-	q.lanes[dispatchFastLane].running--
+	q.lanes[j.lane].running--
+	j.lane = dispatchSlowLane
 	j.msg.slowReroute = false
 	j.slow = true
 	j.waitedForPredecessor = false
@@ -388,7 +411,7 @@ func (q *dispatchQueue) snapshotStats() (fast, slow worker.PoolStats, continuati
 	pools := [dispatchLaneCount]worker.PoolStats{}
 	observed := [dispatchLaneCount]DispatchLaneStats{}
 	now := time.Since(q.clockOrigin)
-	for i, name := range []string{"fast", "slow"} {
+	for i, name := range []string{"fast", "slow", "long"} {
 		state := &q.lanes[i]
 		pools[i] = worker.PoolStats{Name: q.name + "_" + name, WorkerNum: state.config.Workers, QueueCap: state.config.QueueCap, QueueLen: q.waitingCount(i), Started: q.started, Stopped: q.stopping}
 		observed[i] = state.observation
@@ -399,23 +422,27 @@ func (q *dispatchQueue) snapshotStats() (fast, slow worker.PoolStats, continuati
 			observed[i].OldestWaiting = now - head.admittedAt
 		}
 	}
-	return pools[dispatchFastLane], pools[dispatchSlowLane], q.continuationCount, DispatchQueueStats{Fast: observed[dispatchFastLane], Slow: observed[dispatchSlowLane], ContinuationRunning: q.continuationRunning}
+	return pools[dispatchFastLane], pools[dispatchSlowLane], q.lanes[dispatchFastLane].continuationCount, DispatchQueueStats{Fast: observed[dispatchFastLane], Slow: observed[dispatchSlowLane], Long: observed[dispatchLongLane], LongPool: pools[dispatchLongLane], LongContinuations: q.lanes[dispatchLongLane].continuationCount, ContinuationRunning: q.lanes[dispatchFastLane].continuationRunning + q.lanes[dispatchLongLane].continuationRunning}
 }
 
 // waitingCount 排除已预留外部执行额度的就绪消息。前驱未完成的消息
 // 始终算等待，不能用空闲 worker 数掩盖同 ID 的积压。调用方持有 q.mu。
 func (q *dispatchQueue) waitingCount(lane int) int {
 	state := &q.lanes[lane]
-	reserved := min(state.readyCount, max(0, state.config.Workers-q.busyWorkers(lane)))
-	return state.queued - reserved
+	await := 0
+	if lane == dispatchSlowLane {
+		await = q.awaitReserved
+	}
+	reserved := min(state.readyCount+await, max(0, state.config.Workers-q.busyWorkers(lane)))
+	return state.queued + await - reserved
 }
 
 // 续行也占实际快 worker；准入和观测必须使用同一执行容量。调用方持有 q.mu。
 func (q *dispatchQueue) busyWorkers(lane int) int {
 	state := &q.lanes[lane]
 	busy := state.running
-	if lane == dispatchFastLane {
-		busy += q.continuationRunning
+	if lane != dispatchSlowLane {
+		busy += q.lanes[lane].continuationRunning
 	}
 	return busy
 }
@@ -456,4 +483,33 @@ func (w *readyWaiting) remove(j *dispatchJob) {
 		w.tail = j.waitingPrev
 	}
 	j.waitingPrev, j.waitingNext = nil, nil
+}
+
+// businessLane 只读取初始化时注册的 Kind 元数据，不受发送方的 worker 身份影响。
+func businessLane(msg *Msg) int {
+	if msg == nil {
+		return dispatchFastLane
+	}
+	if msg.remoteLogic != nil {
+		return businessLane(msg.remoteLogic.msg)
+	}
+	long := func(id int64) bool {
+		return id != 0 && entity.EntityBusinessPoolOfKind(entity.ResolveEntityID(id).Kind) == entity.BusinessPoolLong
+	}
+	if long(msg.Tid) {
+		return dispatchLongLane
+	}
+	for _, id := range msg.Tids {
+		if long(id) {
+			return dispatchLongLane
+		}
+	}
+	for _, group := range msg.GroupTIds {
+		for _, id := range group {
+			if long(id) {
+				return dispatchLongLane
+			}
+		}
+	}
+	return dispatchFastLane
 }

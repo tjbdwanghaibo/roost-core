@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 func syncTestManager(t *testing.T, e *rollbackTestEntity, mode entitysync.SyncMode) (*entitysync.Manager, chan []byte, *atomic.Int32) {
@@ -268,7 +268,7 @@ func TestNestSyncTracksCastEntityUntilAdmission(t *testing.T) {
 	getter.Add(b)
 	name := NewHandlerName("sync_modes_cast")
 	MustRegisterMemoryHandler(name, func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
-		values, err := CastMulti(CastTarget{ID: bid})
+		values, err := guardFixtureCastMulti(CastTarget{ID: bid})
 		if err != nil {
 			return nil, err
 		}

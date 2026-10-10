@@ -62,7 +62,7 @@ func TestCastCaptureFailureFailsTheTransactionEvenIfSwallowed(t *testing.T) {
 				if err := MarkPersist(pilot.dao, 1); err != nil {
 					return nil, err
 				}
-				_, castErr = CastOne[*castCaptureFailingEntity](x)
+				_, castErr = guardFixtureCastOne[*castCaptureFailingEntity](x)
 				if returnIt {
 					return nil, castErr
 				}

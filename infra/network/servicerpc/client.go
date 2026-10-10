@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
 )
@@ -117,6 +118,10 @@ func (c *BusClient) SetDiscoveryPicker(picker DiscoveryPicker) {
 }
 
 func (c *BusClient) Call(ctx context.Context, serverID int32, method string, req any, resp any) error {
+	// 排行榜等服务 RPC 必须在 I/O 段执行，不能占住长短业务 worker 等网络。
+	if err := fctx.BlockingError("servicerpc.Call"); err != nil {
+		return err
+	}
 	if c == nil || c.bus == nil {
 		return ErrBusNil
 	}
@@ -182,6 +187,9 @@ func (c *BusClient) CallDiscoveredChecked(ctx context.Context, method string, re
 }
 
 func (c *BusClient) PickServer(ctx context.Context) (int32, error) {
+	if err := fctx.BlockingError("servicerpc.PickServer"); err != nil {
+		return 0, err
+	}
 	if c == nil || c.discovery == nil {
 		return 0, nil
 	}

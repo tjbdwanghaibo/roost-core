@@ -49,7 +49,7 @@ func TestNestedIsolatedIndeterminateFencesBeforeReturning(t *testing.T) {
 				_, isoErr = RunIsolatedTransaction(context.Background(), iso, "rr76_iso", func() (any, error) {
 					target := e
 					if tc.castInner {
-						casted, err := CastOne[*rollbackTestEntity](inner.GUId())
+						casted, err := guardFixtureCastOne[*rollbackTestEntity](inner.GUId())
 						if err != nil {
 							return nil, err
 						}

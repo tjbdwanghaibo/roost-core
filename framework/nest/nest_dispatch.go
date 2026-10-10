@@ -125,6 +125,16 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 				err = fmt.Errorf("%w: %w", ErrNonRollbackNotRequeued, err)
 			}
 		}
+		if msg.awaitPlan != nil {
+			plan := msg.awaitPlan
+			msg.awaitPlan = nil
+			if err != nil {
+				plan.cancel()
+			} else {
+				msg.afterQueue = plan.start
+				msg.RetChan = nil // 最终回复已经转交给 plan，当前段不提前回复。
+			}
+		}
 		if msg.deferredCompletion {
 			// The completion pump owns the reply: it sends RetChan (or logs
 			// the failure) once the commit ticket resolves. Sending here
@@ -215,6 +225,9 @@ func runNestLogic(mgr *NestMgr, msg *Msg) (ret any, err error) {
 	}
 	if cause := nestBaseContext().Err(); cause != nil {
 		return nil, errors.Join(ErrNestCanceled, cause)
+	}
+	if msg.resumeEntry != nil {
+		return mgr.dispatchMany(*msg.resumeEntry, msg.Name, msg.Tids, nil)
 	}
 	switch msg.Type {
 	case MsgTypeSingle:
@@ -410,6 +423,11 @@ func (mgr *NestMgr) dispatchLoadedEntities(entry handlerEntry, name string, es, 
 		}
 	}()
 	return mgr.invokeHandlerTransaction(entry.meta, es, name, release, func() (any, error) {
+		msg := currentNestDispatchMsg()
+		if msg != nil {
+			msg.handlerEntities = es
+			defer func() { msg.handlerEntities = nil }()
+		}
 		return entry.handler(es, params, opts...)
 	})
 }

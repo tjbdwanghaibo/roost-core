@@ -22,12 +22,14 @@ type DispatchLaneStats struct {
 	MaxDependencyWait, MaxWorkerWait, OldestWaiting        time.Duration
 }
 type DispatchQueueStats struct {
-	Fast, Slow          DispatchLaneStats
+	Fast, Slow, Long    DispatchLaneStats
+	LongPool            worker.PoolStats
+	LongContinuations   int
 	ContinuationRunning int
 }
 type DispatcherStats struct {
 	Queue             DispatchQueueStats
-	Fast, Slow        worker.PoolStats
+	Fast, Slow, Long  worker.PoolStats
 	FastContinuations int
 	Delayed           int
 	Stopped           bool
@@ -51,6 +53,7 @@ func (m *Dispatcher) Stats() DispatcherStats {
 		},
 	}
 	stats.Fast, stats.Slow, stats.FastContinuations, stats.Queue = m.queue.snapshotStats()
+	stats.Long = stats.Queue.LongPool
 	return stats
 }
 

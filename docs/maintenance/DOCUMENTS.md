@@ -14,6 +14,8 @@
 
 ### framework
 
+- [framework/NEST-AWAIT.md](../framework/NEST-AWAIT.md)：Nest 三池、匿名异步恢复、使用与验证
+
 - [framework/ENTITY_SYNC.md](../framework/ENTITY_SYNC.md)：Entity Sync 生产契约
 - [framework/GATEWAY-IMPLEMENTATION.md](../framework/GATEWAY-IMPLEMENTATION.md)：独立 Gate：设计评审与实施方案
 - [framework/GATEWAY.md](../framework/GATEWAY.md)：Gate 与 Game 接入

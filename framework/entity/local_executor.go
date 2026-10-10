@@ -22,8 +22,8 @@ func WithLocalExecutor(ctx context.Context, run func(func()) error) context.Cont
 // RunLocal 将需要 Entity 本地锁或业务回调的步骤交回本地执行池。
 // 连接、缓存和租约元数据的内部互斥不属于这个边界。
 func RunLocal(ctx context.Context, fn func()) error {
-	// 已在快池时就地执行；即使调用方保存了慢阶段的 ctx，也不能再次投递并自等。
-	if fctx.InFastWorker() {
+	// 已在长短业务池时就地执行；即使调用方保存了 I/O 阶段的 ctx，也不能再次投递并自等。
+	if fctx.InBusinessWorker() {
 		fn()
 		return nil
 	}
@@ -55,5 +55,5 @@ func WithLoadedEntitiesOnly(ctx context.Context) context.Context {
 	return context.WithValue(ctx, loadedEntitiesOnlyKey{}, true)
 }
 func LoadedEntitiesOnly(ctx context.Context) bool {
-	return fctx.InFastWorker() || (ctx != nil && ctx.Value(loadedEntitiesOnlyKey{}) == true)
+	return fctx.InBusinessWorker() || (ctx != nil && ctx.Value(loadedEntitiesOnlyKey{}) == true)
 }

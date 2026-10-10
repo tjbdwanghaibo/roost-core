@@ -22,6 +22,7 @@ type Dispatcher struct {
 	MaxDelay      time.Duration
 	queue         *dispatchQueue
 	slowConfig    WorkerPoolConfig
+	longConfig    WorkerPoolConfig
 	remoteHandler func(*Msg)
 	workerNum     int
 	handler       func(*Msg)
@@ -136,7 +137,14 @@ func (m *Dispatcher) OnInit() {
 	if slow.QueueCap <= 0 {
 		slow.QueueCap = 64
 	}
-	m.queue = newDispatchQueue(m.Name, WorkerPoolConfig{Workers: m.workerNum, QueueCap: m.MsgCap}, slow, m.handler, m.remoteHandler)
+	long := m.longConfig
+	if long.Workers <= 0 {
+		long.Workers = max(1, m.workerNum)
+	}
+	if long.QueueCap <= 0 {
+		long.QueueCap = 4096
+	}
+	m.queue = newDispatchQueue(m.Name, WorkerPoolConfig{Workers: m.workerNum, QueueCap: m.MsgCap}, slow, m.handler, m.remoteHandler, long)
 	m.holdSeries()
 
 }
@@ -310,13 +318,14 @@ func (m *Dispatcher) observeStats() {
 	if m == nil {
 		return
 	}
-	fast, slow, continuations := m.queue.stats()
+	fast, slow, continuations, details := m.queue.snapshotStats()
 	delayed := m.delayedCount()
 	// Only while the series are held: a report racing the release must not
 	// recreate what the release deleted (RR-20261006-18).
 	m.reportSeries(func(name string) {
 		observePoolStats(name, "fast", fast)
 		observePoolStats(name, "slow", slow)
+		observePoolStats(name, "long", details.LongPool)
 		metrics.SetGauge("nest.dispatch.fast_continuations", metrics.Labels{"dispatcher": name}, int64(continuations))
 		metrics.SetGauge("nest.dispatch.delayed_messages", metrics.Labels{"dispatcher": name}, int64(delayed))
 	})

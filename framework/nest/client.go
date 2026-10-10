@@ -188,7 +188,7 @@ func validateClientDispatch(mgr *NestMgr, ctx context.Context, api string, name 
 	if err := ctx.Err(); err != nil {
 		return errors.Join(ErrNestCanceled, err)
 	}
-	if fctx.InNestHandler() {
+	if fctx.InNestHandler() || fctx.InBusinessWorker() {
 		current := fctx.CurrentContext()
 		return fmt.Errorf("%w: api=%s caller=%s target=%s", nestedError, api, current.Meta.Handler, name.String())
 	}

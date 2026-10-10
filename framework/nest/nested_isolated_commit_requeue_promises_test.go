@@ -54,7 +54,7 @@ func registerIsolatedThenFail(t *testing.T, mgr *NestMgr, name HandlerName, meta
 		n := run.attempts.Add(1)
 		if _, err := RunIsolatedTransaction(context.Background(), run.iso, "rr65_iso", func() (any, error) {
 			run.isoRuns.Add(1)
-			e, err := CastOne[*rollbackTestEntity](targetID)
+			e, err := guardFixtureCastOne[*rollbackTestEntity](targetID)
 			if err != nil {
 				return nil, err
 			}

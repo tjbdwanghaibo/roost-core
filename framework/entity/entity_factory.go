@@ -15,6 +15,7 @@ type DaoBuilderFunc func() DaoInterface
 
 // EntityBuilderParam holds the builder configuration for a concrete entity kind.
 type EntityBuilderParam struct {
+	BusinessPool BusinessPool      // 启动时注册，运行时不变
 	Category     EntityCategory    // ownership/access category
 	Kind         EntityKind        // concrete entity definition
 	Builder      EntityBuilderFunc // entity constructor (generated NewXxx)
@@ -33,9 +34,10 @@ type EntityBuilderParam struct {
 // reader always observes one self-consistent record instead of three maps that
 // could be read between two writes.
 type entityKindEntry struct {
-	category EntityCategory
-	policy   RemotePolicy
-	builder  *EntityBuilderParam // nil until RegisterEntityBuilder runs
+	category     EntityCategory
+	businessPool BusinessPool
+	policy       RemotePolicy
+	builder      *EntityBuilderParam // nil until RegisterEntityBuilder runs
 }
 
 // The registry is keyed by EntityKind, which is a uint8, so it is a fixed
@@ -67,6 +69,7 @@ func RegisterEntityBuilder(param *EntityBuilderParam) {
 	normalizeBuilderPolicy(param)
 	if err := registerEntityKindDefinitionLocked(EntityKindDef{
 		Kind:         param.Kind,
+		BusinessPool: param.BusinessPool,
 		Category:     param.Category,
 		RemotePolicy: param.RemotePolicy,
 	}); err != nil {
@@ -204,8 +207,19 @@ func resolveEntityKindDefinition(existing *entityKindEntry, def EntityKindDef) (
 	if category == EntityCategoryNone {
 		return nil, fmt.Errorf("entity category must not be none for kind %d", kind)
 	}
+	if def.BusinessPool > BusinessPoolLong {
+		return nil, fmt.Errorf("invalid business pool %d", def.BusinessPool)
+	}
 	if existing == nil {
-		return &entityKindEntry{category: category, policy: def.RemotePolicy}, nil
+		return &entityKindEntry{category: category, policy: def.RemotePolicy, businessPool: def.BusinessPool}, nil
+	}
+	if def.BusinessPool != BusinessPoolDefault && existing.businessPool != def.BusinessPool {
+		if existing.businessPool != BusinessPoolDefault || existing.builder != nil {
+			return nil, fmt.Errorf("entity kind %d business pool cannot change", kind)
+		}
+		next := *existing
+		next.businessPool = def.BusinessPool
+		existing = &next
 	}
 	if existing.category != category {
 		return nil, fmt.Errorf("entity kind %d category mismatch: registered=%d new=%d", kind, existing.category, category)
@@ -453,4 +467,25 @@ func initEntitySync(e IThreadSafeEntity, param *EntityCreateParam, bp *EntityBui
 	}
 	syncParam := bp.Sync.toCreateParam(e)
 	e.Base().EnableSync(syncParam)
+}
+
+// EntityBusinessPoolOfKind 无锁读取；未声明保持短业务默认。
+func EntityBusinessPoolOfKind(kind EntityKind) BusinessPool {
+	if e := kindEntryOf(kind); e != nil && e.businessPool == BusinessPoolLong {
+		return BusinessPoolLong
+	}
+	return BusinessPoolShort
+}
+
+// FreezeBusinessPools 固化已注册 Kind 的默认值，防止运行时更改执行位置。
+func FreezeBusinessPools() {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	for i := range kindEntries {
+		if e := kindEntries[i].Load(); e != nil && e.businessPool == BusinessPoolDefault {
+			n := *e
+			n.businessPool = BusinessPoolShort
+			kindEntries[i].Store(&n)
+		}
+	}
 }

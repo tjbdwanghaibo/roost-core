@@ -22,6 +22,7 @@ type EntityDef struct {
 	Name            string // struct name, e.g. "Player"
 	EntityKind      string // concrete entity kind constant, e.g. "EntityKindPlayer"
 	Category        string // optional category constant expression from the marker
+	BusinessPool    string
 	RemotePolicy    string // entity.RemotePolicy constant expression
 	Lifetime        string // entity.EntityLifetime constant expression
 	NoPersist       bool   // EntityBase AutoPersist returns false
@@ -231,6 +232,15 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 						return nil, fmt.Errorf("%s:%d: //roost:entity %w", filePath, m.line, err)
 					}
 					ent.RemotePolicy = parseRemoteParam(m.params["remote"])
+					if pool := m.params["businessPool"]; pool != "" {
+						if pool != "short" && pool != "long" {
+							return nil, fmt.Errorf("invalid businessPool %q: want short or long", pool)
+						}
+						ent.BusinessPool = "entity.BusinessPoolShort"
+						if pool == "long" {
+							ent.BusinessPool = "entity.BusinessPoolLong"
+						}
+					}
 					ent.NoPersist = parseBoolParam(m.params["noPersist"])
 					ent.Lifetime = parseLifetimeParam(m.params["lifetime"], ent.NoPersist, ent.RemotePolicy)
 					ent.Sync = parseBoolParam(m.params["sync"])

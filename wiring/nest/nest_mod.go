@@ -59,11 +59,11 @@ type loadTimeoutConfigurer interface {
 }
 
 type engineConfig struct {
-	fast, slow corenest.WorkerPoolConfig
-	tick       time.Duration
-	timeout    time.Duration
-	delayedCap int
-	maxDelay   time.Duration
+	fast, slow, long corenest.WorkerPoolConfig
+	tick             time.Duration
+	timeout          time.Duration
+	delayedCap       int
+	maxDelay         time.Duration
 	// unloadResync 来自 nest.unload_resync.*，零值字段取 entity 的默认（Workers 4、Attempts 5、QueueCapacity 4096）。
 	unloadResync entity.UnloadResyncConfig
 }
@@ -97,6 +97,7 @@ type config struct {
 	Nest struct {
 		Fast              workerPool    `config:"fast"`
 		Slow              workerPool    `config:"slow"`
+		Long              workerPool    `config:"long"`
 		DelayedCapacity   int           `config:"delayed_capacity" min:"0" example:"4096"`
 		MaxDelay          time.Duration `config:"max_delay" min:"0" example:"24h"`
 		TickDuration      time.Duration `config:"tick_duration" min:"0" example:"50ms"`
@@ -132,6 +133,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	m.config = engineConfig{
 		fast:       corenest.WorkerPoolConfig{Workers: nest.Fast.Workers, QueueCap: nest.Fast.QueueCapacity},
 		slow:       corenest.WorkerPoolConfig{Workers: nest.Slow.Workers, QueueCap: nest.Slow.QueueCapacity},
+		long:       corenest.WorkerPoolConfig{Workers: nest.Long.Workers, QueueCap: nest.Long.QueueCapacity},
 		tick:       nest.TickDuration,
 		timeout:    nest.RequestTimeout,
 		delayedCap: nest.DelayedCapacity,
@@ -172,7 +174,7 @@ func (m *Mod) Provide(registry *app.Registry) error {
 	}
 	opts := []corenest.NestOption{
 		corenest.NestOptionWithGetter(m.getter),
-		corenest.NestOptionWithWorkerPools(m.config.fast, m.config.slow),
+		corenest.NestOptionWithBusinessPools(m.config.fast, m.config.long, m.config.slow),
 		corenest.NestOptionWithTickDuration(m.config.tick),
 		corenest.NestOptionWithSyncTimeout(m.config.timeout),
 		corenest.NestOptionWithDelayedAdmission(m.config.delayedCap, m.config.maxDelay),

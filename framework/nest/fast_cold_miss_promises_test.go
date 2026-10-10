@@ -32,7 +32,7 @@ func TestFastCastColdTargetLetsBusinessFallBack(t *testing.T) {
 	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{1, 8}))
 	fallback := false
 	mgr.MustRegisterHandlerWithMeta(NewHandlerName("optional_friend"), func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
-		if _, err := CastOne[entity.IThreadSafeEntity](cold); err != nil {
+		if _, err := guardFixtureCastOne[entity.IThreadSafeEntity](cold); err != nil {
 			if errors.Is(err, entity.ErrColdLoadInLogic) {
 				fallback = true
 				return "friend offline", nil

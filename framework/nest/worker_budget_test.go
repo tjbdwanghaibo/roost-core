@@ -22,7 +22,7 @@ func TestWorkerBudgetAdmitsBurstBeforeWorkersRun(t *testing.T) {
 				}
 			}()
 			for i := range 1040 {
-				msg := queueMessage(int64(i + 1))
+				msg := queueMessage(mustBuildCastID(t, int64(i+1), 1, nestLocalKind))
 				if err := q.admit(msg, slow); err != nil {
 					msg.OnRelease()
 					t.Fatalf("burst %d rejected with unused worker capacity: %v", i+1, err)

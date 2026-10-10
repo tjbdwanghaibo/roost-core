@@ -60,24 +60,24 @@ func TestTypedCastsRefuseTheWrongEntityType(t *testing.T) {
 		t.Fatal("lock player")
 	}
 
-	if _, err := CastTargetOne[*otherKindEntity](NewCastTarget(allianceID)); !errors.Is(err, ErrCastTypeMismatch) || !strings.Contains(err.Error(), "*nest.mockEntity") {
+	if _, err := guardFixtureCastTargetOne[*otherKindEntity](NewCastTarget(allianceID)); !errors.Is(err, ErrCastTypeMismatch) || !strings.Contains(err.Error(), "*nest.mockEntity") {
 		t.Fatalf("CastTargetOne wrong type = %v", err)
 	}
-	if _, _, err := CastTwo[*mockEntity, *otherKindEntity](NewCastTarget(allianceID), NewCastTarget(otherID)); !errors.Is(err, ErrCastTypeMismatch) {
+	if _, _, err := guardFixtureCastTwo[*mockEntity, *otherKindEntity](NewCastTarget(allianceID), NewCastTarget(otherID)); !errors.Is(err, ErrCastTypeMismatch) {
 		t.Fatalf("CastTwo second wrong = %v", err)
 	}
-	if _, _, err := CastTwo[*otherKindEntity, *mockEntity](NewCastTarget(allianceID), NewCastTarget(otherID)); !errors.Is(err, ErrCastTypeMismatch) {
+	if _, _, err := guardFixtureCastTwo[*otherKindEntity, *mockEntity](NewCastTarget(allianceID), NewCastTarget(otherID)); !errors.Is(err, ErrCastTypeMismatch) {
 		t.Fatalf("CastTwo first wrong = %v", err)
 	}
 	// CastThree needs a third same-order target; reuse other twice is a
 	// deadlock-risk shape, so only the first-position mismatch is exercised.
-	if _, _, _, err := CastThree[*otherKindEntity, *mockEntity, *mockEntity](NewCastTarget(allianceID), NewCastTarget(otherID), NewCastTarget(otherID)); err == nil {
+	if _, _, _, err := guardFixtureCastThree[*otherKindEntity, *mockEntity, *mockEntity](NewCastTarget(allianceID), NewCastTarget(otherID), NewCastTarget(otherID)); err == nil {
 		t.Fatal("CastThree with a wrong first type must not succeed")
 	}
-	if _, err := CastMulti(); !errors.Is(err, ErrCastInvalidTarget) || !strings.Contains(err.Error(), "empty targets") {
-		t.Fatalf("CastMulti() = %v", err)
+	if _, err := guardFixtureCastMulti(); !errors.Is(err, ErrCastInvalidTarget) || !strings.Contains(err.Error(), "empty targets") {
+		t.Fatalf("guardFixtureCastMulti() = %v", err)
 	}
-	if _, err := CastMulti(NewCastTarget(allianceID), CastTarget{}); !errors.Is(err, ErrCastInvalidTarget) || !strings.Contains(err.Error(), "index=1 id=0") {
+	if _, err := guardFixtureCastMulti(NewCastTarget(allianceID), CastTarget{}); !errors.Is(err, ErrCastInvalidTarget) || !strings.Contains(err.Error(), "index=1 id=0") {
 		t.Fatalf("CastMulti with a zero id = %v", err)
 	}
 }
@@ -97,7 +97,7 @@ func TestCastMultiRefusesAGetterThatReturnsTheWrongCount(t *testing.T) {
 	if !entity.GetEntityGuard().RequireEntity(player) {
 		t.Fatal("lock player")
 	}
-	_, err := CastMulti(NewCastTarget(allianceID), NewCastTarget(otherID))
+	_, err := guardFixtureCastMulti(NewCastTarget(allianceID), NewCastTarget(otherID))
 	if !errors.Is(err, ErrCastInvalidTarget) || !strings.Contains(err.Error(), "returned 1 entities for 2") {
 		t.Fatalf("CastMulti with a short getter = %v", err)
 	}

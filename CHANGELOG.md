@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Nest 增加按 Entity Kind 选择的长业务池；长短业务与 I/O 共用 ID tails。新增 `Await(work, resume)` 和可选 `WithResumeTargets`，支持无回滚 memory handler 的锁外查询与匿名恢复。Cast 拒绝未声明目标；长短业务池禁止同步等待，I/O 禁止 Guard。新增 `nest.long` 配置和实体生成标记 `businessPool=long`，使用及迁移见 docs/framework/NEST-AWAIT.md。
+
 - 全仓按功能主题合并202份零散测试为80份，净减少122份；4687个测试/基准/示例/fuzz入口及全部测试声明语法保持一致，更新对应实现文档引用。
 
 - Nest显式构造job目标存储，移除可变输出缓冲区接口；整理生成器签名/handler回归和Saga行为测试，删除历史符号扫描及内部组织门禁，改善生成handler局部命名与中文说明。

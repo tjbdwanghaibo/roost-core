@@ -14,6 +14,8 @@
 
 [Interest 的 Block AOI 与手写空间组件](INTEREST-BLOCK-AOI.md)：已接入正式提交门，支持多块被观察、有界事实队列、并行观察者计算与内容发布屏障；无Guard业务回调/生成器改动。功能通过；不同参数下的15分钟性能结果见[性能报告](../performance/GATE-AOI.md)。
 
+[Nest 三池与 Await](NEST-AWAIT.md)：Kind 选择长短业务池、共享目标顺序、I/O 查询与匿名恢复、配置和迁移；当前工作树新增，尚未发版。
+
 ## 次核心模块
 
 [网关现状与独立 Gate 设计](GATEWAY.md)：嵌入与独立 Gate 的正式接入、已实施 API 与验证边界；新增能力随v1.25.0交付。

@@ -285,10 +285,10 @@ func (mgr *NestMgr) TickDuration() time.Duration {
 }
 
 type NestOpts struct {
-	FastPool, SlowPool     WorkerPoolConfig
-	Getter                 entity.Getter
-	RemoteSnapshotResolver RemoteSnapshotResolver
-	RemoteManager          entity.IRemoteEntityManager
+	FastPool, SlowPool, LongPool WorkerPoolConfig
+	Getter                       entity.Getter
+	RemoteSnapshotResolver       RemoteSnapshotResolver
+	RemoteManager                entity.IRemoteEntityManager
 
 	DelayedMsgCap          int
 	MaxDelay               time.Duration
@@ -398,6 +398,7 @@ var (
 // Client into generated senders. An engine is single-use and cannot be
 // restarted after Shutdown.
 func NewEngine(opts ...NestOption) *NestMgr {
+	entity.FreezeBusinessPools()
 	params := &NestOpts{}
 	for _, opt := range opts {
 		if opt != nil {
@@ -444,6 +445,7 @@ func NewEngine(opts ...NestOption) *NestMgr {
 		NestDispatch(ret, msg)
 	})
 	ret.dispatcher.slowConfig = params.SlowPool
+	ret.dispatcher.longConfig = params.LongPool
 	ret.dispatcher.remoteHandler = func(msg *Msg) { dispatchNest(ret, msg, true) }
 	if checker, ok := params.Getter.(entity.LoadedChecker); ok && checker != nil {
 		ret.loadedChecker = checker
@@ -671,4 +673,10 @@ func asyncMessageContextSnapshot(snapshot fctx.ContextSnapshot) fctx.ContextSnap
 		Meta:   snapshot.Meta,
 		Trace:  snapshot.Trace.Clone(),
 	}
+}
+
+// NestOptionWithBusinessPools 分别配置短业务、长业务和 I/O 池；三者共用 ID 顺序。
+// 原 WithWorkerPools 仍配置短业务和 I/O，长业务使用默认值。
+func NestOptionWithBusinessPools(short, long, io WorkerPoolConfig) NestOption {
+	return func(o *NestOpts) { o.FastPool = short; o.LongPool = long; o.SlowPool = io }
 }

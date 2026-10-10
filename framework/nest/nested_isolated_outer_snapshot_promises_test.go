@@ -68,7 +68,7 @@ func runOuterWithNestedWrite(t *testing.T, meta HandlerMeta, unique int64, castT
 		target := declared
 		_, obs.isoErr = RunIsolatedTransaction(context.Background(), iso, "rr74_iso", func() (any, error) {
 			if castTarget {
-				casted, err := CastOne[*rollbackTestEntity](zID) // 嵌套事务自己取得、自己捕获，外层没有它的快照
+				casted, err := guardFixtureCastOne[*rollbackTestEntity](zID) // 嵌套事务自己取得、自己捕获，外层没有它的快照
 				if err != nil {
 					return nil, err
 				}

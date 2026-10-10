@@ -30,14 +30,14 @@ func TestCastMultiRejectsEveryMissingPrecondition(t *testing.T) {
 
 	t.Run("dispatch message without guard scope", func(t *testing.T) {
 		bindCastGetter(t, getter)
-		if _, err := CastMulti(target); !errors.Is(err, ErrCastNoContext) {
+		if _, err := guardFixtureCastMulti(target); !errors.Is(err, ErrCastNoContext) {
 			t.Fatalf("err=%v, want ErrCastNoContext", err)
 		}
 	})
 	t.Run("guard scope without dispatch message", func(t *testing.T) {
 		_, release := entity.NewGuardScope("cast_test")
 		defer release()
-		if _, err := CastMulti(target); !errors.Is(err, ErrCastNoContext) {
+		if _, err := guardFixtureCastMulti(target); !errors.Is(err, ErrCastNoContext) {
 			t.Fatalf("err=%v, want ErrCastNoContext", err)
 		}
 	})
@@ -46,7 +46,7 @@ func TestCastMultiRejectsEveryMissingPrecondition(t *testing.T) {
 		defer release()
 		_, releaseGuard := entity.NewGuardScope("cast_test")
 		defer releaseGuard()
-		if _, err := CastMulti(target); !errors.Is(err, ErrCastGetterNotSet) {
+		if _, err := guardFixtureCastMulti(target); !errors.Is(err, ErrCastGetterNotSet) {
 			t.Fatalf("err=%v, want ErrCastGetterNotSet", err)
 		}
 	})
@@ -54,7 +54,7 @@ func TestCastMultiRejectsEveryMissingPrecondition(t *testing.T) {
 		bindCastGetter(t, getter)
 		_, release := entity.NewGuardScope("cast_test")
 		defer release()
-		_, err := CastMulti(NewCastTarget(0))
+		_, err := guardFixtureCastMulti(NewCastTarget(0))
 		// 门口的守卫给出干净的 "index=0 id=0"；越过它会撞上 NormalizeFullID，
 		// 文案带上归一化错误——那是另一条守卫的话。
 		if !errors.Is(err, ErrCastInvalidTarget) || !strings.HasSuffix(err.Error(), "index=0 id=0") {
@@ -66,7 +66,7 @@ func TestCastMultiRejectsEveryMissingPrecondition(t *testing.T) {
 		_, release := entity.NewGuardScope("cast_test")
 		defer release()
 		missingID := mustBuildCastID(t, 311, castOtherCategory, castOtherKind)
-		_, err := CastMulti(NewCastTarget(missingID))
+		_, err := guardFixtureCastMulti(NewCastTarget(missingID))
 		if !errors.Is(err, ErrEntityNotFound) || !strings.Contains(err.Error(), "index=0") {
 			t.Fatalf("err=%v, want ErrEntityNotFound naming the index", err)
 		}
@@ -89,7 +89,7 @@ func TestCastMultiRejectsEveryMissingPrecondition(t *testing.T) {
 		if !entity.GetEntityGuard().RequireEntity(alliance) {
 			t.Fatal("lock alliance")
 		}
-		if _, err := CastMulti(NewCastTarget(requestedID)); !errors.Is(err, ErrCastDeadlockRisk) {
+		if _, err := guardFixtureCastMulti(NewCastTarget(requestedID)); !errors.Is(err, ErrCastDeadlockRisk) {
 			t.Fatalf("err=%v, want ErrCastDeadlockRisk", err)
 		}
 	})
@@ -134,16 +134,16 @@ func TestCastThreeReportsTypeMismatchOnEveryPosition(t *testing.T) {
 	}
 	a, o1, o2 := NewCastTarget(allianceID), NewCastTarget(otherID), NewCastTarget(other2ID)
 
-	if _, _, _, err := CastThree[*mockEntity, *mockEntity, *mockEntity](a, o1, o2); err != nil {
+	if _, _, _, err := guardFixtureCastThree[*mockEntity, *mockEntity, *mockEntity](a, o1, o2); err != nil {
 		t.Fatalf("baseline CastThree = %v", err)
 	}
-	if _, e2, _, err := CastThree[*mockEntity, *otherMockEntity, *mockEntity](a, o1, o2); !errors.Is(err, ErrCastTypeMismatch) || e2 != nil {
+	if _, e2, _, err := guardFixtureCastThree[*mockEntity, *otherMockEntity, *mockEntity](a, o1, o2); !errors.Is(err, ErrCastTypeMismatch) || e2 != nil {
 		t.Fatalf("second position: err=%v e2=%v, want ErrCastTypeMismatch", err, e2)
 	}
-	if _, _, e3, err := CastThree[*mockEntity, *mockEntity, *otherMockEntity](a, o1, o2); !errors.Is(err, ErrCastTypeMismatch) || e3 != nil {
+	if _, _, e3, err := guardFixtureCastThree[*mockEntity, *mockEntity, *otherMockEntity](a, o1, o2); !errors.Is(err, ErrCastTypeMismatch) || e3 != nil {
 		t.Fatalf("third position: err=%v e3=%v, want ErrCastTypeMismatch", err, e3)
 	}
-	if _, e2, err := CastTwo[*mockEntity, *otherMockEntity](a, o1); !errors.Is(err, ErrCastTypeMismatch) || e2 != nil {
+	if _, e2, err := guardFixtureCastTwo[*mockEntity, *otherMockEntity](a, o1); !errors.Is(err, ErrCastTypeMismatch) || e2 != nil {
 		t.Fatalf("CastTwo second position: err=%v e2=%v", err, e2)
 	}
 }

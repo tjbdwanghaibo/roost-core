@@ -386,6 +386,9 @@ func register{{.Entity.Name}}Entity() {
 			},
 {{- end}}
 			NoPersist: {{.Entity.NoPersist}},
+{{- if .Entity.BusinessPool}}
+            BusinessPool: {{.Entity.BusinessPool}},
+{{- end}}
 {{- if .Entity.RemotePolicy}}
 			RemotePolicy: {{.Entity.RemotePolicy}},
 {{- end}}

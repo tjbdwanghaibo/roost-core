@@ -156,7 +156,7 @@ func TestCastAfterDestroyDoesNotReturnUnlockedRecreatedInstance(t *testing.T) {
 			return nil, err
 		}
 		var cast *rollbackTestEntity
-		cast, castErr = CastOne[*rollbackTestEntity](x)
+		cast, castErr = guardFixtureCastOne[*rollbackTestEntity](x)
 		if castErr == nil {
 			castLockableElsewhere = tryLockElsewhere(cast)
 		}

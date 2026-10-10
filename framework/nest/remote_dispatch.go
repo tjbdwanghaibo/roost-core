@@ -36,7 +36,11 @@ func needsRemoteStage(msg *Msg) bool {
 }
 
 func (call *remoteLogicCall) run(mgr *NestMgr) {
-	current, release := fctx.NewContext(fctx.WithSnapshot(call.snapshot), fctx.WithFastWorker())
+	phase := fctx.WithFastWorker()
+	if businessLane(call.msg) == dispatchLongLane {
+		phase = fctx.WithLongWorker()
+	}
+	current, release := fctx.NewContext(fctx.WithSnapshot(call.snapshot), phase)
 	defer release()
 	base := current.Base
 	current.Base = entity.WithLocalExecutor(base, nil)

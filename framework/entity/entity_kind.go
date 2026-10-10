@@ -22,10 +22,20 @@ type EntityKindCategory struct {
 	Category EntityCategory
 }
 
+// BusinessPool 决定业务执行资源；任一目标为 Long，整条消息走长业务池。
+type BusinessPool uint8
+
+const (
+	BusinessPoolDefault BusinessPool = iota
+	BusinessPoolShort
+	BusinessPoolLong
+)
+
 // EntityKindDef declares all global ID-visible properties for one concrete
 // entity kind. Every server should register the same definition before it
 // builds, validates, or routes EntityIDs.
 type EntityKindDef struct {
+	BusinessPool BusinessPool
 	Kind         EntityKind
 	Category     EntityCategory
 	RemotePolicy RemotePolicy
