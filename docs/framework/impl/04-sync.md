@@ -247,16 +247,12 @@
 
 ### sync/entitysync/policy
 
-- [aoi_budget_promises_test.go](../../../framework/sync/entitysync/policy/aoi_budget_promises_test.go)：`TestObserverBlockBudgetRefusesARatioThatSubscribesTheWholeMap`、`TestObserverBlockBudgetIsConfigurable`、`TestTheNineBlockShapeFitsTheDefaultBudget`、`TestObserverBlockBudgetSaturatesInsteadOfWrapping`
-- [aoi_guards_promises_test.go](../../../framework/sync/entitysync/policy/aoi_guards_promises_test.go)：`TestInterestRefusesUnknownObserversAndZeroBlocks`
+- [aoi_contract_test.go](../../../framework/sync/entitysync/policy/aoi_contract_test.go)：`TestObserverBlockBudgetRefusesARatioThatSubscribesTheWholeMap`、`TestObserverBlockBudgetIsConfigurable`、`TestTheNineBlockShapeFitsTheDefaultBudget`、`TestObserverBlockBudgetSaturatesInsteadOfWrapping`、`TestInterestRefusesUnknownObserversAndZeroBlocks`
 - [aoi_promises_test.go](../../../framework/sync/entitysync/policy/aoi_promises_test.go)：`TestNewInterestManagerRefusesEachInvalidConfig`、`TestInterestManagerRefusesOutOfBoundsAndUnknownIDs`
 - [aoi_test.go](../../../framework/sync/entitysync/policy/aoi_test.go)：`TestInterestEnterLeaveWithHysteresis`、`TestInterestBandsAndObserverMovement`、`TestInterestMaxVisibleEvictsFarthest`、`TestInterestObserverIsAlsoSubjectSymmetry`、`TestInterestDeterministicEventStream`；其余 8 项见文件
-- [direct_bindings_promises_test.go](../../../framework/sync/entitysync/policy/direct_bindings_promises_test.go)：`TestDirectForgetsBindingsOfClosedSessionsAndUnregisteredSubjects`、`TestDirectKeepsABindingMadeAgainBeforeTheReleaseArrives`、`TestDirectDropsTheBindingOfARetractedSubjectWhenItsSessionCloses`
-- [direct_release_lifetime_promises_test.go](../../../framework/sync/entitysync/policy/direct_release_lifetime_promises_test.go)：`TestAStaleReleaseKeepsARebindingThatIsThenRetracted`
-- [group_ownership_promises_test.go](../../../framework/sync/entitysync/policy/group_ownership_promises_test.go)：`TestGroupAddFailureCanBeRetriedWithoutPartialMembership`、`TestPoliciesReleaseOnlyTheirOwnSubscriptions`
-- [group_reconnect_promises_test.go](../../../framework/sync/entitysync/policy/group_reconnect_promises_test.go)：`TestGroupRejoinRestoresReopenedSession`
-- [interest_queue_retry_drain_promises_test.go](../../../framework/sync/entitysync/policy/interest_queue_retry_drain_promises_test.go)：`TestQueuedRetryThatIsNeverAcceptedDoesNotHoldDrainOpen`
-- [interest_queue_stale_promises_test.go](../../../framework/sync/entitysync/policy/interest_queue_stale_promises_test.go)：`TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush`、`TestQueuedFactThatCannotApplyFailsOneFlushOnly`
+- [direct_contract_test.go](../../../framework/sync/entitysync/policy/direct_contract_test.go)：`TestDirectForgetsBindingsOfClosedSessionsAndUnregisteredSubjects`、`TestDirectKeepsABindingMadeAgainBeforeTheReleaseArrives`、`TestDirectDropsTheBindingOfARetractedSubjectWhenItsSessionCloses`、`TestAStaleReleaseKeepsARebindingThatIsThenRetracted`
+- [group_contract_test.go](../../../framework/sync/entitysync/policy/group_contract_test.go)：`TestGroupAddFailureCanBeRetriedWithoutPartialMembership`、`TestPoliciesReleaseOnlyTheirOwnSubscriptions`、`TestGroupRejoinRestoresReopenedSession`
+- [interest_contract_test.go](../../../framework/sync/entitysync/policy/interest_contract_test.go)：`TestQueuedRetryThatIsNeverAcceptedDoesNotHoldDrainOpen`、`TestQueuedFactsInvalidatedByLeaveOrHideDoNotWedgeFlush`、`TestQueuedFactThatCannotApplyFailsOneFlushOnly`
 - [interest_queue_test.go](../../../framework/sync/entitysync/policy/interest_queue_test.go)：`TestQueuedInterestFactsFollowCommitAndRollback`
 - [interest_remote_reject_test.go](../../../framework/sync/entitysync/policy/interest_remote_reject_test.go)：`TestRemoteRejectKeepsCommittedLocalInterestFact`、`TestRejectEntitiesJudgesEntitiesWithoutSyncStateByID`、`TestPureRemoteRejectDiscardsItsInterestFacts`
 - [optimization_test.go](../../../framework/sync/entitysync/policy/optimization_test.go)：`TestFarthestTieKeepsDeterministicEviction`、`TestInterestSelectsSourceViewsBeforeComparingPriority`
@@ -300,19 +296,14 @@
 ### sync/syncbus
 
 - [delivery_id_test.go](../../../framework/sync/syncbus/delivery_id_test.go)：`TestDeliveryIDsAreUniquePerMinterAndMonotonic`、`TestDeliveryIDsAreSafeForConcurrentUse`
-- [patch_syncer_guards_promises_test.go](../../../framework/sync/syncbus/patch_syncer_guards_promises_test.go)：`TestPatchSyncerRefusesIncompleteConfigurationAndZeroKeys`
-- [patch_syncer_stop_promises_test.go](../../../framework/sync/syncbus/patch_syncer_stop_promises_test.go)：`TestPatchSyncerStopWaitsForInFlightApply`
+- [patch_syncer_contract_test.go](../../../framework/sync/syncbus/patch_syncer_contract_test.go)：`TestPatchSyncerRefusesIncompleteConfigurationAndZeroKeys`、`TestPatchSyncerStopWaitsForInFlightApply`
 - [patch_syncer_test.go](../../../framework/sync/syncbus/patch_syncer_test.go)：`TestPatchSyncerPublishesAndAppliesRemotePatch`、`TestPatchSyncerRejectsMismatchedKey`、`TestPatchSyncerSkipsEmptyPatch`
 - [subscription_promises_test.go](../../../framework/sync/syncbus/subscription_promises_test.go)：`TestSubscriptionUnsubscribeStopContract`、`TestSubscriptionRefusesDeliveriesAfterUnsubscribe`、`TestSubscriptionSelfUnsubscribeWaitsOnlyForOthers`、`TestSubscriptionSelfUnsubscribeInReentrantDelivery`、`TestSubscriptionSelfUnsubscribeWithForeignContextTimesOut`；其余 1 项见文件
 
 ### sync/syncbus/driver
 
 - [guards_promises_test.go](../../../framework/sync/syncbus/driver/guards_promises_test.go)：`TestSyncBusesRefuseEachInvalidArgumentBeforeTheWire`
-- [jetstream_durable_identity_promises_test.go](../../../framework/sync/syncbus/driver/jetstream_durable_identity_promises_test.go)：`TestDurableSyncNamePromiseDistinguishesPrefixes`、`TestDurableSyncNamePromiseKeepsTheDefaultPrefixNameStable`
-- [jetstream_fanout_promises_test.go](../../../framework/sync/syncbus/driver/jetstream_fanout_promises_test.go)：`TestJetStreamSyncBusPromiseSameTopicSubscribersAllReceive`、`TestJetStreamSyncBusPromiseHandlerPanicIsIsolated`、`TestJetStreamSyncBusPromiseConcurrentFirstSubscribersShareOneConsumer`
-- [jetstream_live_promises_test.go](../../../framework/sync/syncbus/driver/jetstream_live_promises_test.go)：`TestJetStreamSubscribeLiveUsesASeparateDeliverNewDurable`
-- [jetstream_stop_drain_promises_test.go](../../../framework/sync/syncbus/driver/jetstream_stop_drain_promises_test.go)：`TestJetStreamSyncBusStopWaitsForAnInFlightHandler`
-- [jetstream_stop_retry_promises_test.go](../../../framework/sync/syncbus/driver/jetstream_stop_retry_promises_test.go)：`TestJetStreamSyncBusStopWithContextIsBoundedAndRetryable`
+- [jetstream_contract_test.go](../../../framework/sync/syncbus/driver/jetstream_contract_test.go)：`TestDurableSyncNamePromiseDistinguishesPrefixes`、`TestDurableSyncNamePromiseKeepsTheDefaultPrefixNameStable`、`TestJetStreamSyncBusPromiseSameTopicSubscribersAllReceive`、`TestJetStreamSyncBusPromiseHandlerPanicIsIsolated`、`TestJetStreamSyncBusPromiseConcurrentFirstSubscribersShareOneConsumer`、`TestJetStreamSubscribeLiveUsesASeparateDeliverNewDurable`、`TestJetStreamSyncBusStopWaitsForAnInFlightHandler`、`TestJetStreamSyncBusStopWithContextIsBoundedAndRetryable`
 - [jetstream_stream_name_test.go](../../../framework/sync/syncbus/driver/jetstream_stream_name_test.go)：`TestJetStreamSyncStreamFollowsThePrefix`
 - [jetstream_test.go](../../../framework/sync/syncbus/driver/jetstream_test.go)：`TestJetStreamSyncBusPublishesAndAcknowledgesHandlerError`、`TestJetStreamSyncBusSkipsSelfMessages`、`TestJetStreamSyncPublishHonorsCanceledContext`、`TestJetStreamSyncUnsubscribeRemovesTrackedSubscription`、`TestDurableSyncNameAvoidsSanitizationCollision`；其余 1 项见文件
 - [mirror_lifecycle_promises_test.go](../../../framework/sync/syncbus/driver/mirror_lifecycle_promises_test.go)：`TestMirrorStopAndRestartWithOldDeliveryInFlight`
@@ -333,20 +324,16 @@
 
 - [adapter_test.go](../../../framework/sync/syncstream/adapter_test.go)：`TestPublisherAndSubscriberRoundTrip`、`TestSubscriberRejectsEnvelopeMismatch`、`TestEnqueueReportsPublishErrors`、`TestObserverAndPayloadGuards`、`TestBufferedPublisherSignalsBackpressureAndDrains`；其余 4 项见文件
 - [file_journal_promises_test.go](../../../framework/sync/syncstream/file_journal_promises_test.go)：`TestFileHistoryJournalLoadFailsClosedOnEachIntegrityDefect`、`TestFileHistoryJournalRefusesRecordsAfterCloseAndFromOtherVersions`
-- [history_identity_promises_test.go](../../../framework/sync/syncstream/history_identity_promises_test.go)：`TestHistoryPromiseRecreatedStreamDoesNotReuseSequences`、`TestHistoryPromiseRecreatedStreamSurvivesJournalReplay`
-- [history_restart_promises_test.go](../../../framework/sync/syncstream/history_restart_promises_test.go)：`TestHistoryOpensWhenTheFirstWALRecordIsTornBeforeAnyCheckpoint`、`TestHistoryReplayRestoresLastActivity`、`TestRecoverKeepsTheProvidersSchemaVersion`
-- [import_durability_promises_test.go](../../../framework/sync/syncstream/import_durability_promises_test.go)：`TestHistoryPromiseImportOnAJournaledHistoryIsDurable`
-- [import_guards_promises_test.go](../../../framework/sync/syncstream/import_guards_promises_test.go)：`TestImportRefusesEveryInconsistentSnapshotAndLeavesTheHistoryUntouched`、`TestHistoryEntryPointsRefuseMissingOrMismatchedInputs`、`TestBufferedPublisherRefusesWithoutAPublisherAndAfterClose`、`TestSubscriberRefusesAnEnvelopeWithTrailingContent`
+- [history_contract_test.go](../../../framework/sync/syncstream/history_contract_test.go)：`TestHistoryPromiseRecreatedStreamDoesNotReuseSequences`、`TestHistoryPromiseRecreatedStreamSurvivesJournalReplay`、`TestHistoryOpensWhenTheFirstWALRecordIsTornBeforeAnyCheckpoint`、`TestHistoryReplayRestoresLastActivity`、`TestRecoverKeepsTheProvidersSchemaVersion`
+- [import_contract_test.go](../../../framework/sync/syncstream/import_contract_test.go)：`TestHistoryPromiseImportOnAJournaledHistoryIsDurable`、`TestImportRefusesEveryInconsistentSnapshotAndLeavesTheHistoryUntouched`、`TestHistoryEntryPointsRefuseMissingOrMismatchedInputs`、`TestBufferedPublisherRefusesWithoutAPublisherAndAfterClose`、`TestSubscriberRefusesAnEnvelopeWithTrailingContent`
 - [journal_failstop_promises_test.go](../../../framework/sync/syncstream/journal_failstop_promises_test.go)：`TestJournalPromiseIndeterminateSyncStopsTheJournal`、`TestJournalPromiseIndeterminatePublishStopsTheJournal`、`TestJournalPromisePreSideEffectFailureIsRetryable`
-- [recover_replacement_promises_test.go](../../../framework/sync/syncstream/recover_replacement_promises_test.go)：`TestRecoverPromiseRejectsReplacementAtTheSamePosition`
-- [recover_validation_promises_test.go](../../../framework/sync/syncstream/recover_validation_promises_test.go)：`TestRecoverPromiseDoesNotCommitAStaleCapture`
+- [recover_contract_test.go](../../../framework/sync/syncstream/recover_contract_test.go)：`TestRecoverPromiseRejectsReplacementAtTheSamePosition`、`TestRecoverPromiseDoesNotCommitAStaleCapture`
 - [subscribe_promises_test.go](../../../framework/sync/syncstream/subscribe_promises_test.go)：`TestSubscribeRefusesEachOversizedOrMalformedEnvelope`
 - [syncstream_test.go](../../../framework/sync/syncstream/syncstream_test.go)：`TestHistoryAppendReplayAndAck`、`TestHistoryDetectsGapSchemaMismatchAndClientAhead`、`TestFullPacketRepairsTruncatedHistory`、`TestObserverStreamsAreIsolated`、`TestRecoverAutomaticallyAppendsFullSnapshot`；其余 10 项见文件
-- [wal_replay_promises_test.go](../../../framework/sync/syncstream/wal_replay_promises_test.go)：`TestWALReplayRefusesMutationsThatDoNotContinueTheCheckpoint`、`TestEntryPointsRefuseMissingDependencies`
-- [wal_tail_truncate_promises_test.go](../../../framework/sync/syncstream/wal_tail_truncate_promises_test.go)：`TestJournalPromiseTruncatesAnUnterminatedTailBeforeAppending`、`TestJournalPromiseStillRejectsACorruptCompleteLine`
+- [wal_contract_test.go](../../../framework/sync/syncstream/wal_contract_test.go)：`TestWALReplayRefusesMutationsThatDoNotContinueTheCheckpoint`、`TestEntryPointsRefuseMissingDependencies`、`TestJournalPromiseTruncatesAnUnterminatedTailBeforeAppending`、`TestJournalPromiseStillRejectsACorruptCompleteLine`
 
 </details>
 
 ## 6. 验收与运维
 
-改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。命令与发布记录见 [维护手册](../../maintenance/README.md)。本次文档补丁的实际执行结果见 [发布验收](../../release/v1.24.1-IMPLEMENTATION.md)；性能沿用 [v1.24.0 基线](../../maintenance/PERFORMANCE.md)，没有新测量则不能改容量承诺。
+改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。命令与发布记录见 [维护手册](../../maintenance/README.md)。本次文档补丁的实际执行结果见 [发布验收](../../release/v1.24.1-IMPLEMENTATION.md)；性能沿用 [v1.24.0 基线](../../performance/STABLE-v1.24.0.md)，没有新测量则不能改容量承诺。

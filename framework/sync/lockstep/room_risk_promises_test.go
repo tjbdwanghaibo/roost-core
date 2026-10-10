@@ -108,7 +108,7 @@ func TestRoomPromiseMetricNamesArePinned(t *testing.T) {
 			t.Errorf("%s: metrics call with an inline name at byte %d; use a Metric* constant", source, loc[0])
 		}
 	}
-	doc, err := os.ReadFile(filepath.Join("..", "..", "..", "OBSERVABILITY.md"))
+	doc, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "framework", "OBSERVABILITY.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -240,8 +241,8 @@ func TestQueueStatsSeparateDependencyAndWorkerWait(t *testing.T) {
 	// 直接建立可测量的排队时长，不依赖 Windows 的真实时钟分辨率。
 	q.mu.Lock()
 	for job := q.lanes[dispatchFastLane].waiting.head; job != nil; job = job.waitingNext {
-		job.admittedAt = time.Now().Add(-time.Second)
-		if !job.readyAt.IsZero() {
+		job.admittedAt = time.Since(q.clockOrigin) - time.Second
+		if job.predecessors == 0 {
 			job.readyAt = job.admittedAt
 		}
 	}
@@ -348,5 +349,42 @@ func TestQueueStatsAndAdmissionCountRunningContinuation(t *testing.T) {
 	fast, _, pending, stats := q.snapshotStats()
 	if fast.QueueLen != 0 || pending != 0 || stats.ContinuationRunning != 0 || stats.Fast.WaitingForWorker != 0 {
 		t.Fatalf("not drained: %+v %+v", fast, stats)
+	}
+}
+
+// 目标副本必须在消息切片后续被改写时仍保持稳定，否则完成时会释放错误的ID链。
+func TestDispatchJobOwnsTargetIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		msg  Msg
+		want []int64
+	}{
+		{"empty", Msg{}, []int64{0}},
+		{"single", Msg{Tid: 7}, []int64{7}},
+		{"single slice", Msg{Tids: []int64{7}}, []int64{7}},
+		{"multiple", Msg{Tid: 3, Tids: []int64{9, 3}, GroupTIds: [][]int64{{7, 9}, {1}}}, []int64{1, 3, 7, 9}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := slices.Clone(tc.msg.Tids)
+			job := newDispatchJob(&tc.msg, false)
+			if !slices.Equal(job.ids, tc.want) || !slices.Equal(tc.msg.Tids, original) {
+				t.Fatalf("ids=%v, message=%v", job.ids, tc.msg.Tids)
+			}
+			if len(tc.msg.GroupTIds) > 0 && !slices.Equal(tc.msg.GroupTIds[0], []int64{7, 9}) {
+				t.Fatal("input group changed")
+			}
+			for i := range tc.msg.Tids {
+				tc.msg.Tids[i] = 99
+			}
+			for _, group := range tc.msg.GroupTIds {
+				for i := range group {
+					group[i] = 99
+				}
+			}
+			tc.msg.Tid = 99
+			if !slices.Equal(job.ids, tc.want) {
+				t.Fatalf("job aliases message targets: %v", job.ids)
+			}
+		})
 	}
 }

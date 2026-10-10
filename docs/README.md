@@ -9,8 +9,10 @@
 3. [代码一致性核对](maintenance/CONSISTENCY.md)：具体纠正项、源码证据与核对限制。
 4. [维护手册](maintenance/README.md)：升级、生成、测试、停机、故障定位和发布。
 5. [已知边界](maintenance/KNOWN-LIMITS.md)：未验证不等于缺陷，也不计作已验收。
-6. [独立 Gate 设计](framework/GATEWAY.md)：当前网关能力、待实施方案、验收条件及 TCP 文档纠正项。
-7. [Gate 设计评审与实施方案](framework/GATEWAY-IMPLEMENTATION.md)：基于当前源码的具体接线、绑定与发送契约、资源限制和开发顺序，尚未实施。
+6. [独立 Gate 设计](framework/GATEWAY.md)：已交付的网关能力、协议契约与验收边界。
+7. [Gate 设计评审与实施方案](framework/GATEWAY-IMPLEMENTATION.md)：基于当前源码的具体接线、绑定与发送契约、资源限制和实施记录，随v1.25.0交付。
 8. [包目录分类、Wiring 与 Service 收敛方案](framework/PACKAGE-REORGANIZATION.md)：Kit 接线已迁为 Wiring，领域与运行实现归所属模块；包含改前映射、当前目录和 Gate 的前置验收。
 
 [v1.24.0 发布说明](release/v1.24.0-NOTES.md) · [v1.24.1 发布说明](release/v1.24.1-NOTES.md)
+
+[性能报告与复跑](performance/README.md)：历史基线、Gate/AOI混合负载、Nest调度对照及随仓样本。

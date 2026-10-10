@@ -882,7 +882,7 @@ func readDashboardExprsRaw(t *testing.T, path string) []string {
 }
 
 const (
-	observabilityDoc     = "OBSERVABILITY.md"
+	observabilityDoc     = "docs/framework/OBSERVABILITY.md"
 	overviewDashboard    = "observability/grafana-roost-overview.json"
 	demoDashboard        = "demo/deploy/dev/observability/grafana/dashboards/roost-demo.json.tmpl"
 	demoObservabilityDoc = "demo/deploy/dev/observability/README.md.tmpl"

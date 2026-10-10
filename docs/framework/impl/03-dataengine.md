@@ -216,26 +216,18 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 - [guards_promises_test.go](../../../framework/cache/guards_promises_test.go)：`TestLayeredGetPropagatesRemoteErrorsAndDoesNotBackfillMisses`、`TestReadThroughStopsAtLocalErrorsLoaderMissesAndStrictRemoteWriteFailures`、`TestRedisStoresRefuseWritesWithoutUsableKeys`、`TestRefHMapStoreRefusesStaleWrites`
 - [layered_capacity_test.go](../../../framework/cache/layered_capacity_test.go)：`TestLayeredColdKeysHaveBoundedMetadata`、`TestLayeredExpiryEvictionRevalidatesAuthority`、`TestLayeredExpiryChurnAndColdExpiration`
 - [layered_expired_veto_promises_test.go](../../../framework/cache/layered_expired_veto_promises_test.go)：`TestLayeredExpiredLocalCopyDoesNotVetoAuthority`、`TestLayeredExpiredLocalCopyDoesNotVetoAuthorityRealRedis`
-- [read_through_loader_fill_promises_test.go](../../../framework/cache/read_through_loader_fill_promises_test.go)：`TestReadThroughLoaderFillRefusalIsNotReadFailure`
-- [read_through_promises_test.go](../../../framework/cache/read_through_promises_test.go)：`TestReadThroughRemoteFailurePolicyIsHonouredOnGetAndSet`
-- [read_through_waiters_promises_test.go](../../../framework/cache/read_through_waiters_promises_test.go)：`TestReadThroughReturnsACanceledWaitersSlot`
+- [read_through_contract_test.go](../../../framework/cache/read_through_contract_test.go)：`TestReadThroughLoaderFillRefusalIsNotReadFailure`、`TestReadThroughRemoteFailurePolicyIsHonouredOnGetAndSet`、`TestReadThroughReturnsACanceledWaitersSlot`
 - [redis_lost_write_ttl_promises_test.go](../../../framework/cache/redis_lost_write_ttl_promises_test.go)：`TestAWriteWhoseReplyIsLostStillGetsItsTTL`
 - [ref_hmap_boundary_test.go](../../../framework/cache/ref_hmap_boundary_test.go)：`TestRefHMapBoundaryContractsRealRedis`、`TestRefHMapLayoutRejectsAliasesBeforeIO`
 - [ref_hmap_contracts_test.go](../../../framework/cache/ref_hmap_contracts_test.go)：`TestRefHMapContractsRealRedis`
-- [ref_hmap_patch_promises_test.go](../../../framework/cache/ref_hmap_patch_promises_test.go)：`TestRefHMapPatchPathRefusesEachShapeItCannotAddress`、`TestRefHMapLayoutRefusesTypesDeeperThanTheLimit`、`TestRedisJSONStoreRefusesStaleWritesAndMissingKeyFunc`
-- [ref_hmap_patch_ttl_promises_test.go](../../../framework/cache/ref_hmap_patch_ttl_promises_test.go)：`TestRefHMapPatchKeepsTheWholeRecordAliveRealRedis`、`TestRefHMapGetTreatsAMissingReferencedHashAsMiss`
-- [ref_hmap_registry_coverage_promises_test.go](../../../framework/cache/ref_hmap_registry_coverage_promises_test.go)：`TestRefHMapRegistryGuardAcceptsSameLayoutConcurrencyRealRedis`、`TestLayeredDeleteDropsL1WhenRemoteDeleteFails`
-- [ref_hmap_schema_promises_test.go](../../../framework/cache/ref_hmap_schema_promises_test.go)：`TestRefHMapSchemaRegistryPromises`
+- [ref_hmap_contract_test.go](../../../framework/cache/ref_hmap_contract_test.go)：`TestRefHMapPatchPathRefusesEachShapeItCannotAddress`、`TestRefHMapLayoutRefusesTypesDeeperThanTheLimit`、`TestRedisJSONStoreRefusesStaleWritesAndMissingKeyFunc`、`TestRefHMapPatchKeepsTheWholeRecordAliveRealRedis`、`TestRefHMapGetTreatsAMissingReferencedHashAsMiss`、`TestRefHMapRegistryGuardAcceptsSameLayoutConcurrencyRealRedis`、`TestLayeredDeleteDropsL1WhenRemoteDeleteFails`、`TestRefHMapSchemaRegistryPromises`
 - [ref_hmap_test.go](../../../framework/cache/ref_hmap_test.go)：`TestRedisRefHMapStoreStoresNestedStructsAsSameSlotKeyRefs`、`TestRedisRefHMapStoreSetDeletesPreviouslyRegisteredKeys`、`TestRedisRefHMapStoreDeleteUsesRegisteredKeys`、`TestRedisRefHMapStorePatchUpdatesOnlyTargetScalar`、`TestRedisRefHMapStoreTreatsTimeAsScalar`；其余 2 项见文件
 - [ref_hmap_unknown_write_test.go](../../../framework/cache/ref_hmap_unknown_write_test.go)：`TestRefHMapWriteErrorBoundaries`、`TestRefHMapUnknownWrite`
-- [replica_order_promises_test.go](../../../framework/cache/replica_order_promises_test.go)：`TestReplicaDeleteAndUpsertShareVersionOrder`、`TestReplicaRejectsMissingIdentityExtractors`、`TestReplicaLocalStoreRetainsDeleteWatermarkAtCapacity`、`TestReplicaLocalStoreConcurrentDeletesAndWrites`
-- [replica_payload_identity_promises_test.go](../../../framework/cache/replica_payload_identity_promises_test.go)：`TestReplicaPayloadIdentityBeforeStoreMutation`、`TestReplicaNullPointerRefusedBeforeIdentityCallback`
-- [replica_stop_promises_test.go](../../../framework/cache/replica_stop_promises_test.go)：`TestReplicaSyncerStopWaitsForInFlightStoreWrite`
+- [replica_contract_test.go](../../../framework/cache/replica_contract_test.go)：`TestReplicaDeleteAndUpsertShareVersionOrder`、`TestReplicaRejectsMissingIdentityExtractors`、`TestReplicaLocalStoreRetainsDeleteWatermarkAtCapacity`、`TestReplicaLocalStoreConcurrentDeletesAndWrites`、`TestReplicaPayloadIdentityBeforeStoreMutation`、`TestReplicaNullPointerRefusedBeforeIdentityCallback`、`TestReplicaSyncerStopWaitsForInFlightStoreWrite`
 - [stale_write_test.go](../../../framework/cache/stale_write_test.go)：`TestStaleSetIsReportedNotSwallowed`、`TestStaleSetAcceptsFirstWrite`、`TestLayeredStoreWithoutTTLAlwaysRevalidates`、`TestLayeredStoreServesFromL1WithinTTL`、`TestLayeredStoreWithoutRemoteStillServesLocal`
 
 ### dataengine
 
-- [architecture_test.go](../../../framework/dataengine/architecture_test.go)：`TestLegacyCheckpointWritePathIsAbsent`
 - [guards_promises_test.go](../../../framework/dataengine/guards_promises_test.go)：`TestLeaseFenceLoaderAndTrackerGuards`
 - [lease_fence_test.go](../../../framework/dataengine/lease_fence_test.go)：`TestLeaseFenceReceiptRejectsIdentityAndPayloadTampering`
 - [load_test.go](../../../framework/dataengine/load_test.go)：`TestLoaderRespectsDependenciesAndSkipsLoadedOrDeletedDocuments`、`TestLoaderRejectsUnknownCircularAndStrictCallbackFailures`、`TestLoaderNonStrictSkipIsCountedAndStrictStillFails`
@@ -254,13 +246,8 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 - [assembly_shutdown_promises_test.go](../../../framework/dataengine/engine/assembly_shutdown_promises_test.go)：`TestAssemblyKeepsTheRuntimeUntilShutdownCompletes`
 - [backlog_metrics_promises_test.go](../../../framework/dataengine/engine/backlog_metrics_promises_test.go)：`TestProjectionAdmissionAndAckPublishBacklogGauge`、`TestOutboxSamplingPublishesBacklogAndAge`
 - [batch_limits_test.go](../../../framework/dataengine/engine/batch_limits_test.go)：`TestMultiBatchCapabilityAndSpecialBoundaries`、`TestMultiCheckpointThresholdsAndFailurePrefix`、`TestMultiCheckpointLossKeepsEntireSuccessfulPrefix`、`TestMultiCheckpointFlushesBeforeHeldAndOnCancel`、`TestMarkerlessSingleRecordStillCheckpointsImmediately`；其余 4 项见文件
-- [entity_delete_fast_worker_promises_test.go](../../../framework/dataengine/engine/entity_delete_fast_worker_promises_test.go)：`TestFastWorkerRemoteDeleteIsDefiniteRejection`、`TestDeleteAdmissionOtherPanicStaysIndeterminate`
-- [entity_delete_promises_test.go](../../../framework/dataengine/engine/entity_delete_promises_test.go)：`TestDeleteAdmissionRejectsUnconfiguredRuntime`、`TestDeleteAdmissionInsideTransactionRequiresPreparerAndDeclaredRemoteTarget`、`TestRemoteDeleteAdmissionRequiresRemoteWriteCapability`、`TestLocalDeleteAdmissionRequiresPreparer`
+- [entity_contract_test.go](../../../framework/dataengine/engine/entity_contract_test.go)：`TestFastWorkerRemoteDeleteIsDefiniteRejection`、`TestDeleteAdmissionOtherPanicStaysIndeterminate`、`TestDeleteAdmissionRejectsUnconfiguredRuntime`、`TestDeleteAdmissionInsideTransactionRequiresPreparerAndDeclaredRemoteTarget`、`TestRemoteDeleteAdmissionRequiresRemoteWriteCapability`、`TestLocalDeleteAdmissionRequiresPreparer`、`TestARepositoryLoadPanicDoesNotWedgeTheAggregate`、`TestRepositoryWaitersOfAPanickingLoadAreReleased`、`TestRepositoryRestoresRemoteEnvelopeByKindPolicy`、`TestRepositoryRejectsManagedKindRecordWithoutEnvelope`、`TestEntityRepositoryRefusesEachUnloadableAggregate`、`TestEntityRepositoryRefusesEachCorruptAggregateShape`
 - [entity_delete_test.go](../../../framework/dataengine/engine/entity_delete_test.go)：`TestDataEngineDeleteDefersMemoryRemovalUntilTransactionAdmission`、`TestDataEngineDeleteRollbackLeavesEntityLive`、`TestDataEngineDeleteAdmissionPanicFencesAndStopsServingEntity`
-- [entity_repository_flight_promises_test.go](../../../framework/dataengine/engine/entity_repository_flight_promises_test.go)：`TestARepositoryLoadPanicDoesNotWedgeTheAggregate`、`TestRepositoryWaitersOfAPanickingLoadAreReleased`
-- [entity_repository_kind_policy_promises_test.go](../../../framework/dataengine/engine/entity_repository_kind_policy_promises_test.go)：`TestRepositoryRestoresRemoteEnvelopeByKindPolicy`、`TestRepositoryRejectsManagedKindRecordWithoutEnvelope`
-- [entity_repository_load_promises_test.go](../../../framework/dataengine/engine/entity_repository_load_promises_test.go)：`TestEntityRepositoryRefusesEachUnloadableAggregate`
-- [entity_repository_promises_test.go](../../../framework/dataengine/engine/entity_repository_promises_test.go)：`TestEntityRepositoryRefusesEachCorruptAggregateShape`
 - [entity_repository_schema_test.go](../../../framework/dataengine/engine/entity_repository_schema_test.go)：`TestEntityRepositoryRejectsSchemaMismatchBeforePublishing`
 - [entity_repository_test.go](../../../framework/dataengine/engine/entity_repository_test.go)：`TestEntityRepositorySingleFlightsCompleteAggregate`、`TestEntityRepositoryRecoveryBarrierAndIncompleteAggregate`、`TestEntityRepositoryRejectsTombstone`、`TestEntityRepositoryTreatsUniformAbsenceAsNotFound`、`TestEntityRepositoryPreservesRemoteVersionVector`；其余 4 项见文件
 - [failure_integration_test.go](../../../framework/dataengine/engine/failure_integration_test.go)：`TestNATSOutageDoesNotBlockProjectionAndBacklogRecoversByEffectID`
@@ -316,8 +303,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 - [pagination_promises_test.go](../../../infra/storage/mongo/mongotest/pagination_promises_test.go)：`TestPaginationPromises`
 - [transaction_abort_test.go](../../../infra/storage/mongo/mongotest/transaction_abort_test.go)：`TestTransactionWriteErrorAbortsLikeTheServer`、`TestTransactionCommitAfterSwallowedWriteErrorIsRetried`、`TestTransactionNotFoundDoesNotAbortAndPlainErrorsAreNotRetried`
 - [transaction_promises_test.go](../../../infra/storage/mongo/mongotest/transaction_promises_test.go)：`TestTransactionSnapshotPromises`
-- [unique_array_promises_test.go](../../../infra/storage/mongo/mongotest/unique_array_promises_test.go)：`TestUniqueIndexOverAnArrayIsRefusedNotGuessed`
-- [unique_null_promises_test.go](../../../infra/storage/mongo/mongotest/unique_null_promises_test.go)：`TestUniqueIndexMissingFieldPromises`
+- [unique_contract_test.go](../../../infra/storage/mongo/mongotest/unique_contract_test.go)：`TestUniqueIndexOverAnArrayIsRefusedNotGuessed`、`TestUniqueIndexMissingFieldPromises`
 
 ### nestwal
 
@@ -336,8 +322,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 - [record_codec_test.go](../../../framework/nestwal/record_codec_test.go)：`TestCodecPatchRoundTrip`、`TestCodecDeleteCarriesNoPayload`、`TestCodecRejectsUnknownRecordVersion`、`TestWALDefaultWriterReplaysPatch`、`TestCodecUnknownVersionDoesNotAdvanceCheckpoint`
 - [remote_codec_test.go](../../../framework/nestwal/remote_codec_test.go)：`TestRemoteCommitCodecRoundTrip`、`TestRemoteDeleteCommitCodecRoundTrip`
 - [single_format_test.go](../../../framework/nestwal/single_format_test.go)：`TestRetiredFormatsLeaveWALUntouched`
-- [sync_barrier_promises_test.go](../../../framework/nestwal/sync_barrier_promises_test.go)：`TestWALSyncPromiseCoversAdmittedTickets`、`TestWALSyncPromiseDoesNotBlockAfterClose`
-- [sync_closing_promises_test.go](../../../framework/nestwal/sync_closing_promises_test.go)：`TestWALSyncPromiseWaitsForDrainWhileClosing`、`TestWALSyncPromiseAfterCompletedClose`
+- [sync_contract_test.go](../../../framework/nestwal/sync_contract_test.go)：`TestWALSyncPromiseCoversAdmittedTickets`、`TestWALSyncPromiseDoesNotBlockAfterClose`、`TestWALSyncPromiseWaitsForDrainWhileClosing`、`TestWALSyncPromiseAfterCompletedClose`
 - [terminal_projection_wait_test.go](../../../framework/nestwal/terminal_projection_wait_test.go)：`TestWALTerminalWakesEntityProjectionWaiters`
 - [torn_page_tail_promises_test.go](../../../framework/nestwal/torn_page_tail_promises_test.go)：`TestOpenRefusesFrameWhosePayloadPageWasNotWrittenBack`
 - [wal_benchmark_test.go](../../../framework/nestwal/wal_benchmark_test.go)
@@ -346,8 +331,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### redis
 
-- [cas_delete_promises_test.go](../../../infra/storage/redis/cas_delete_promises_test.go)：`TestCompareAndDeleteOnlyRemovesTheValueItWasShownIntegration`、`TestCompareAndDeleteRefusesACommandItCannotHonour`
-- [cas_index_promises_test.go](../../../infra/storage/redis/cas_index_promises_test.go)：`TestCompareAndSetRefusesAnIncompleteIndex`、`TestIndexIsMaintainedInTheSameWriteIntegration`、`TestIndexScorePrecisionSurvivesLuaIntegration`
+- [cas_contract_test.go](../../../infra/storage/redis/cas_contract_test.go)：`TestCompareAndDeleteOnlyRemovesTheValueItWasShownIntegration`、`TestCompareAndDeleteRefusesACommandItCannotHonour`、`TestCompareAndSetRefusesAnIncompleteIndex`、`TestIndexIsMaintainedInTheSameWriteIntegration`、`TestIndexScorePrecisionSurvivesLuaIntegration`
 - [cas_promises_test.go](../../../infra/storage/redis/cas_promises_test.go)：`TestCompareAndSetRejectsIncompleteCommandsBeforeIO`、`TestCompareAndSetRejectsMalformedScriptReply`
 - [cas_test.go](../../../infra/storage/redis/cas_test.go)：`TestCompareAndSetAppliesWhenExpectedValueMatches`、`TestCompareAndSetReturnsCurrentWhenExpectedValueDiffers`、`TestCompareAndSetCanRequireMissingKey`
 
@@ -394,4 +378,4 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ## 6. 验收与运维
 
-改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。命令与发布记录见 [维护手册](../../maintenance/README.md)。本次文档补丁的实际执行结果见 [发布验收](../../release/v1.24.1-IMPLEMENTATION.md)；性能沿用 [v1.24.0 基线](../../maintenance/PERFORMANCE.md)，没有新测量则不能改容量承诺。
+改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。命令与发布记录见 [维护手册](../../maintenance/README.md)。本次文档补丁的实际执行结果见 [发布验收](../../release/v1.24.1-IMPLEMENTATION.md)；性能沿用 [v1.24.0 基线](../../performance/STABLE-v1.24.0.md)，没有新测量则不能改容量承诺。

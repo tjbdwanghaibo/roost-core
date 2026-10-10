@@ -12,7 +12,7 @@
 | 核心：DataEngine 持久化 | [设计与使用](guide/03-dataengine.md) | [实现与源码](impl/03-dataengine.md) |
 | 核心：Sync、Lockstep 与客户端 | [设计与使用](guide/04-sync.md) | [实现与源码](impl/04-sync.md) |
 
-[Interest 的 Block AOI 与手写空间组件](INTEREST-BLOCK-AOI.md)：已接入正式提交门，支持多块被观察、有界事实队列、并行观察者计算与内容发布屏障；无Guard业务回调/生成器改动。功能通过，15分钟常规通过、重档失败。
+[Interest 的 Block AOI 与手写空间组件](INTEREST-BLOCK-AOI.md)：已接入正式提交门，支持多块被观察、有界事实队列、并行观察者计算与内容发布屏障；无Guard业务回调/生成器改动。功能通过；不同参数下的15分钟性能结果见[性能报告](../performance/GATE-AOI.md)。
 
 ## 次核心模块
 
@@ -20,7 +20,7 @@
 
 [Gate 设计评审与实施方案](GATEWAY-IMPLEMENTATION.md)：具体目录、绑定身份、NATS 转发、统一发送、Nest/Sync 接线及验收条件，Gate/Game、MessagePack、广播与Sync/Lockstep已实施；本机功能通过，性能及多进程/跨机完整验收未收口。
 
-[包目录分类、Wiring 与 Service 收敛方案](PACKAGE-REORGANIZATION.md)：Framework/Infra/Gameplay/Service/Wiring 分类、Session 含义、运行实现迁出接线、便捷接入和同轮 Gate；目录与 Service/Wiring 拆分已实施并通过全仓验证；Gate 分阶段实施中。
+[包目录分类、Wiring 与 Service 收敛方案](PACKAGE-REORGANIZATION.md)：Framework/Infra/Gameplay/Service/Wiring 分类、Session 含义、运行实现迁出接线、便捷接入和同轮 Gate；目录与 Service/Wiring 拆分已实施并通过全仓验证；Gate 已随v1.25.0交付。
 
 | 模块 | 说明 | 实现 |
 | --- | --- | --- |
@@ -48,8 +48,18 @@
 - [最终保留文档完整清单](../maintenance/DOCUMENTS.md)
 - [文档与代码一致性核对](../maintenance/CONSISTENCY.md)
 - [已知限制与待验证能力](../maintenance/KNOWN-LIMITS.md)
-- [性能基线](../maintenance/PERFORMANCE.md)
+- [性能报告与复跑](../performance/README.md)
 - [全部 Go 包映射](PACKAGES.md)
 - [游戏 Skill 专项手册](../skill/README.md)
 - [客户端接入](../../client/README.md)
 - [Codegen 参数与语法手册](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md)
+
+## 专项契约参考
+
+- [业务执行模型](RUNTIME_EXECUTION_MODEL.md)
+- [Nest 事务与 WAL](NEST_TRANSACTION_WAL.md)
+- [Pipelined 提交](NEST_PIPELINED_COMMIT.md)
+- [Entity Sync](ENTITY_SYNC.md)
+- [Remote Entity](REMOTE_ENTITY.md)
+- [Saga](SAGA.md)
+- [指标与告警清单](OBSERVABILITY.md)

@@ -420,14 +420,7 @@ func generatedTypeRefs(funcs []*FuncInfo, senderOnly bool, syncSenderOnly bool) 
 		for _, p := range f.Params {
 			track(p.Type)
 		}
-		// Only the sync sender writes a return type's name (its Sync_* /
-		// MultiSync_* signatures declare it). The handler-side file assigns
-		// the call's result to an `any`, so collecting the return types'
-		// packages there produced an import nothing referenced — a handler
-		// answering with a type from a third package made its own package
-		// fail to compile with "imported and not used" (U-0227). Existing
-		// handlers were unaffected only because their result types came from
-		// builtins or from a package an entity parameter already imported.
+		// 只有同步Sender在签名中声明返回类型；handler适配器把结果存入any。
 		if syncSenderOnly {
 			for _, ret := range f.Returns {
 				track(ret.Type)
@@ -520,7 +513,7 @@ var {{firstToLower .RegisterFunc}}Once sync.Once
 {{end}}
 {{if .SenderOnly}}
 // {{.SenderType}} is an instance-scoped, strongly typed Nest client. Construct
-// it once at the access boundary and inject it instead of using nest.Nest.
+// it once at the access boundary and inject it into callers.
 type {{.SenderType}} struct {
 	client nest.Client
 }
@@ -539,6 +532,7 @@ func (s *{{.SenderType}}) nestClient() (nest.Client, error) {
 {{range .Funcs}}
 {{$func := .}}
 {{if not $.SenderOnly}}
+// invoke{{trimHandler .Name}} 校验目标分组和参数类型，再调用业务handler；实体锁由Nest持有。
 func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}}, {{end}}es []entity.IThreadSafeEntity, params []any, opts ...nest.HandlerOption) (ret any, err error) {
 {{- $rawName := .RawName}}
 {{- $handlerName := trimHandler .Name}}
@@ -556,27 +550,27 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 		return
 	}
 
-	checkELen := 0
-	for _, l := range optParams.GroupLen {
-		checkELen += l
+	expectedEntityCount := 0
+	for _, groupSize := range optParams.GroupLen {
+		expectedEntityCount += groupSize
 	}
-	if len(es) != checkELen {
-		err = nest.NewEntityCountMismatchError(handlerName{{trimHandler .Name}}.String(), len(es), checkELen)
+	if len(es) != expectedEntityCount {
+		err = nest.NewEntityCountMismatchError(handlerName{{trimHandler .Name}}.String(), len(es), expectedEntityCount)
 		return
 	}
 
 	index := 0
 {{- range $i, $p := .Entities}}
-	gL{{$p.Index}} := optParams.GroupLen[{{$p.Index}}]
+	groupSize{{$p.Index}} := optParams.GroupLen[{{$p.Index}}]
 {{- if $p.IsGroup}}
-	e{{$p.Index}} := make([]{{$p.Type}}, gL{{$p.Index}})
-	for i := 0; i < gL{{$p.Index}}; i++ {
-		gei, ok := es[i+index].({{$p.Type}})
+	e{{$p.Index}} := make([]{{$p.Type}}, groupSize{{$p.Index}})
+	for i := 0; i < groupSize{{$p.Index}}; i++ {
+		groupEntity, ok := es[i+index].({{$p.Type}})
 		if !ok {
 			err = nest.ErrEntityTypeMismatch
 			return
 		}
-		e{{$p.Index}}[i] = gei
+		e{{$p.Index}}[i] = groupEntity
 	}
 {{- else}}
 	e{{$p.Index}}, ok := es[index].({{$p.Type}})
@@ -585,7 +579,7 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 		return
 	}
 {{- end}}
-	index += gL{{$p.Index}}
+	index += groupSize{{$p.Index}}
 {{- end}}
 {{- else}}
 	if len(es) != {{len .Entities}} {

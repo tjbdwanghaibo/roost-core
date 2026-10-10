@@ -1,0 +1,444 @@
+# roost 可观测性规范与指标清单
+
+所有指标经 `roost-core/infra/observe/metrics` 注册表（Counter / Gauge / Duration / Histogram 四类），`metrics.Snapshot()` 导出快照、`metrics.PrometheusText(metrics.Snapshot())` 输出 Prometheus 文本格式。宿主服务暴露一个抓取端点即可：
+
+```go
+http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+    _, _ = w.Write(metrics.PrometheusText(metrics.Snapshot()))
+})
+```
+
+## 命名规范
+
+- **新指标一律点号分层**：`<子系统>.<对象>.<动作>`，计数器以 `_total` 结尾（Prometheus 导出时点号自动转下划线）。示例：`nest.handler.lock_hold.slow.total`、`nestwal.reject.total`。
+- **存量下划线命名（`bus_*`、`failurelog_*`、`entitysync_*`）保持不变**——改名会打断既有采集，规范只约束新增。
+- **label 基数必须有界**：handler 名、result 枚举、reason 枚举可以；实体 ID、玩家 ID、技能 ID 一律禁止（`metrics.Registry` 有 series 上限兜底，但打到上限本身就是事故）。
+- Duration 一律用 `metrics.ObserveDuration`，不要把毫秒塞进 Counter。
+- **需要分位数的时长用 `metrics.ObserveHistogram`**：17 个固定指数桶（1ms 起逐桶翻倍到 ~65s，`metrics.HistogramBounds()` 可查），`metrics.HistogramQuantile(name, labels, q)` 桶内线性插值取分位数；Prometheus 导出为标准累积 `_bucket{le}` + `_sum_nanos` + `_count`，可直接喂 `histogram_quantile()`。桶固定意味着无采样窗口——它是进程生命期累积分布，压测类"单场分布"要在场景开始前 `metrics.Reset()` 或用 label 区分场次。
+- `skill` 直接记录衍生物和被动派发指标；`skill/combat` 的业务观测由宿主提供。`syncstream` / `skillsync` 的 ExportMetrics 是宿主显式调用的接口，不会随 App 自动注册。
+
+## 指标清单（按面板分组）
+
+### 调度与事务（core/nest）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `nest.dispatch.total` / `nest.dispatch.remote.total` | Counter | 分发量（labels: handler/result/type） |
+| `nest.dispatch.cost` | Duration | 单次分发耗时 |
+| `nest.dispatch.slow_trace_suppressed` | Counter | 被进程级采样窗口抑制的重复全堆栈诊断，无实体 ID 标签 |
+| `nest.dispatch.queue_len` / `worker_num` / `delayed_messages` | Gauge | 队列和 worker 为 dispatcher/pool，delayed_messages 只有 dispatcher；派发器排空停止后删除，同名派发器还有活着的不删（RR-20261006-18） |
+| `nest.dispatch.requeue.total` | Counter | 锁冲突重排队 |
+| `nest.handler.lock_hold` | Duration | 从进入事务执行到调用 release 前或事务返回；不含等锁及完整 release hook 成本，保留旧口径 |
+| `nest.handler.lock_hold.slow.total` | Counter | 超阈值持锁（默认 100ms，`NestOptionWithSlowLockThreshold`） |
+| `nest.pipelined.durable_wait` | Duration | 内联时为 ticket 等待；异步时从建立完成任务至解锁/前序完成后，不能当成纯 fsync 耗时 |
+| `nest.pipelined.async_total` | Counter | Phase 2 完成结果（labels.result: ok/degraded/completion_failed/indeterminate——**indeterminate 非零即事故**） |
+| `nest.entity_group.transition.total` | Counter | 锁组迁移 |
+
+Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈按进程每 5 秒至多采样一次。下一次堆栈日志中的 `suppressed_since_last_trace` 表示跳过的重复诊断数，避免依赖变慢时日志和运行时抓栈放大压力。
+
+`NestOptionWithStageMetrics(true)` 开启 `nest.stage.duration{handler,stage}`（Duration，默认关闭）。
+
+| stage | 计时边界 |
+| --- | --- |
+| queue | 本次消息进入 worker 准入前 → 开始 dispatch；主动延迟不计入，重排队重新起算 |
+| load / lock | 普通路由和广播的实体加载 / 初始实体及组锁获取；动态 Cast 成本包含在 handler 中 |
+| capture / handler | 事务初始实体捕获 / 业务调用（包含内部动态 Cast） |
+| prepare / enqueue / durable_commit | 构建提交记录 / pipelined Enqueue / strict Commit 调用；不是磁盘层 fsync 分解 |
+| admission | 成功准入回调与 Sync 锁内冻结；不重复统计后续 Commit 的幂等准入 |
+| durable_wait / commit_queue | 当前执行者等待 ticket / ticket 进入异步等待队列后至被取出 |
+| release / cleanup | 路由实体释放（含 hook）/ 外层 Guard 剩余清理与 after-unlock 回调 |
+| completion_queue / completion_unlock / completion_order | 已完成 ticket 等完成 worker / 等本事务解锁 / 等同主实体前序完成 |
+| completion / rollback / remote_confirm | 异步完成回调与回复 / 失败回滚 / 已存在远端写批次的最终收尾 |
+
+阶段只在实际经过的路径上产生；广播按实体采样。并发阶段可能重叠，嵌套事务、动态实体提前释放等成本也可能包含在外层阶段，不能直接相加视为端到端延迟。Duration 用于次数、总耗时和平均值诊断，不提供 p99；客户端延迟分位数仍由业务压测统计。详细成本和复跑命令见 [Nest 收尾验收](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/NEST-COMPLETION-2026-09-24.md)。
+
+### Durability 管线（framework/dataengine + framework/nestwal）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `nestwal.batch.total` / `nestwal.append.total` | Counter | 组提交批数 / 记录数（比值 = 合批放大率） |
+| `nestwal.bytes.total` | Counter | 写入字节 |
+| `nestwal.fsync.duration` | Duration | 每批 fsync 时延（strict 锁内成本的直接来源） |
+| `nestwal.pending.tickets` | Gauge | 未 durable 的 pipelined ticket 数（durable lag 的实体侧读数） |
+| `nestwal.disk.bytes` | Gauge | 段文件占用（回收压力） |
+| `nestwal.reject.total` | Counter | 容量拒绝（labels.reason: queue_full/disk_cap） |
+| `entitysync_durability_gate_deferred_total` | Counter | 被 durable watermark 推迟的 subject 捕获次数（整个 subject 本 tick 不发） |
+| `entitysync_frames_admitted_total` | Counter | 传输层接受的会话帧数 |
+| `entitysync_sessions_lost_total` | Counter | 因推送失败被 Manager 关闭的会话数（`SessionLost` 回调政策） |
+
+### 缓存与总线（core）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| ~~`cache.refhmap.write_degraded_total`~~ | — | **v1.19.0 起已移除**（RR-20261004-NC-21）：RefHMap Eval 失败不再降级为非原子写，而是保留原始错误返回调用方；按业务判别结果未知（USER_GUIDE §4）。旧面板 / 告警请删除这一项 |
+| `bus_dispatch_total` / `bus_dispatch_drop_total` / `bus_dispatch_duration` | C/C/D | 总线吞吐与丢弃 |
+| `bus_dead_letter_total` / `_requeue_total` / `_purge_total` | Counter | 死信生命周期 |
+| `bus_duplicate_total`、`bus_rpc_*` | Counter/Gauge | 去重与 RPC 水位。可靠 RPC 的 `method` 标签有界（RR-20261006-19）：被调方只用注册过的方法，其余 `_unregistered`；调用方每个 Bus 至多 256 个方法，其余 `_other` |
+| `failurelog_*_total` | Counter | 失败日志生命周期（append/delete/purge/trim 均带 namespace label） |
+| `failurelog_degraded_total{namespace,op}` | Counter | 适配器没有 Lua（Eval 返回空结果）时走了非原子回退；生产驱动不应出现，非零说明接了不支持脚本的 IRedis。脚本报错（结果未知）不降级，计入 `failurelog_append_total{result="error"}` 等并返回错误（RR-20261005-NC-160） |
+| `obs.series.dropped{metric}` | Counter | 指标基数打满后被丢弃的写入数（**非零即告警**：该 metric 的新 label 组合已静默失效） |
+| `log.rotate_failures` | Counter | 日志轮转打不开新分片的次数（EMFILE / ENOSPC / 权限）。失败期间继续写上一分片、1s 后重试（RR-20261005-NC-263）；**非零即查磁盘与日志目录** |
+| `log.write_errors{sink}` | Counter | 日志写失败的行数，`sink` 为 `console` / `file`；一个 sink 出错不影响另一个（NC-263）。slog 吞掉写错误，这是唯一能看到日志在丢的地方 |
+
+### 跨服实体（framework/remoteentity）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `remote_entity.remote.{read,prepare,apply}_total` / `_latency` | Counter/Duration | 远程实体三段操作 |
+| `remote_entity.write_admission_rejected_total` | Counter | Remote 完整写生命周期预算耗尽；Stats 同时公开 WritesInFlight / WriteLimit / WriteRejected |
+| `remote_entity.remote.write_gate_wait` | Duration | 写闸门等待 |
+| `remote_entity.remote.interest_rejected_total` | Counter | interest 拒绝 |
+| `remote_entity.finalize_retry_total` / `release_failure_total` / `quarantine_error_total` / `remote_entity_transaction_tracker_drop_total` | Counter | 收尾/隔离异常（均应为零基线） |
+| `remote_entity.deferred_outcome_not_run_total{outcome}` | Counter | Remote 结果未知的事务拿到持久结论时 Nest 已停机 / 已 fence，提交后工作（AfterCommit、Sync 放行）未执行（RR-20260926-61）；停机窗口外应为零 |
+
+### 帧同步（sync/lockstep）
+
+名字是 `sync/lockstep` 的导出常量 `Metric*`，由 `TestRoomPromiseMetricNamesArePinned` 钉住（实际发出的集合、源码不内联、本表列出），改名会让测试失败（RR-20261006-61）。
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `lockstep.frame.total` | Counter | 切帧数（速率 ≈ 房间数 × 逻辑帧率，掉速 = tick 驱动异常） |
+| `lockstep.input.late.total` | Counter | 迟到输入折入后续帧的次数（客户端上行 RTT 健康度；占比高应上调 `SubmitWindow` 或降逻辑帧率） |
+| `lockstep.input.rejected.total{reason}` | Counter | 被拒输入/哈希上报（unknown_player/too_early/payload_too_big/hash_*——识别恶意或错版客户端的第一现场） |
+| `lockstep.catchup.frames.total` | Counter | 追帧下发的历史帧数（重连/中途加入压力） |
+| `lockstep.desync.total` | Counter | 关键帧哈希裁决识别的离群玩家数（**非零即事故**：作弊或确定性 bug）。全部座位已报、无哈希达到 quorum 时（2 人房哈希不同、2:2、全不同）裁 `NoMajority`，全部座位都计入（RR-20261006-64） |
+
+### Saga（core/saga）
+
+标签只有 saga 类型、阶段、原因这类枚举；saga id、业务键、步骤号只进日志。
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `saga.start.rejected_total{saga_type,reason}` | Counter | 永久拒绝的启动意图：发起方的 Nest 事务已经提交，saga 不会创建（**非零要人核对**，ERROR 日志点名业务键） |
+| `saga.consumer.rejected_total{consumer}` | Counter | 五个 saga 消费者拒收、直接 Term 的坏信封（空消息、超长帧、JSON 损坏、未知 WireVersion、内容校验不过；RR-20261006-44） |
+| `saga.reopened_total{saga_type,from_status,reason}` | Counter | saga 重开：`late_success` = 已结束的 Failed / Compensated 收到迟到的正向成功、带回补偿；`resume` / `compensate` = ManualRequired 期间记下的迟到步骤在运维操作时补上。按终态做业务的一方见 [SAGA.md](SAGA.md)「运维观察」 |
+| `saga.completion.stale_incarnation_total{saga_type,phase}` | Counter | 拒收的旧一生结果；Resume 之后的正常现象，只计数、记 WARN |
+| `saga.completion.stale_attempt_total{saga_type,phase}` | Counter | 拒收的同一生较早尝试的可重试失败，协调器在等之后那次尝试 |
+| `saga.completion.late_after_abandon_total{saga_type,phase}` | Counter | 放弃之后才到的结果（含补偿方向）；Resume 后新一生会回放这次成功而不是再执行 |
+| `saga.step.expired_unexecuted_total` | Counter | 过期或被较新尝试接替、没有执行就 ack 的步骤命令 |
+| `saga.step.attempt_replayed_total` | Counter | 同一操作实例已有结果，这次尝试不执行、重发那次的 completion（U-0280） |
+| `saga.step_inbox.superseded_total` | Counter | 步骤收件箱里被较新尝试接管的预留 |
+| `saga.step_inbox.mark_completed_error_total` | Counter | 回执已写、状态文档结算失败（回执是权威，结论不变）；持续增长说明有确定性失败在重跑（RR-20260927-16） |
+| `saga.store.corrupt_record_total{op}` | Counter | 校验不过的 saga 记录（手工改坏、不兼容写者整体 Replace 丢字段）；**非零即查**，ERROR 日志点名记录 |
+
+### 技能运行时（core/skill）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `skill.passive.dispatch_rejected.total{reason}` | Counter | 事件派发时被永久拒绝的被动候选：`host_capability` = 路由给出的被动 Program 不在 Host 能力表里；`rejected` = 其他入队错误 |
+| `skill.root_event.capacity_dropped.total` | Counter | 根事件表满、且表里每个根都还被引用，跳过被动路由的事件 |
+| `skill.spawn.stop_retry_exhausted.total` | Counter | 衍生物 StopSpawn 重试到上限仍未确认 |
+| `skill.spawn.abandoned.total` | Counter | 超过待停止上限、挪进已放弃分区的衍生物（替换旧的 `skill.spawn.stop_pending_dropped.total`） |
+| `skill.spawn.abandoned_pruned.total` | Counter | 已放弃分区超过 `MaxAbandonedSpawns`、在 Advance 末尾删掉的记录 |
+
+### 进程与配置表（framework/statslog、framework/configdata）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `runtime.goroutines` / `heap_alloc_bytes` / `heap_sys_bytes` / `sys_bytes` / `num_gc` | Gauge | 进程运行时读数；`stats_log.enabled` 时按 `stats_log.interval`（默认 1m）刷新 |
+| `entity.count` / `entity.count_by_kind{kind}` / `entity.count_by_category{category}` | Gauge | 已加载实体数；同上由 stats_log 刷新，消失的 kind / category 置 0 |
+| `configdata.version` | Gauge | 正在服务的配置表版本号（单调计数器分配，失败与撤回的 reload 也占号） |
+| `configdata.reload.total{result}` | Counter | reload 结果，`ok` / `failed`（含规则违反） |
+| `configdata.rollback.total{trigger}` | Counter | 回到上一代：`apply_failed`（新一代应用失败自动撤回）/ `operator`（运维撤回） |
+
+### NATS（core/nats）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `nats.jetstream.terminal.total{reason}` | Counter | 消费者终止（Term）的投递：`max_deliver` = 重试到上限仍失败，`permanent` = 处理方返回永久错误；**非零即事故** |
+| `nats.jetstream.settle_failures.total{op}` | Counter | ack / nak / term 本身失败（`op`），broker 会在 ack wait 后重投 |
+
+### 机器人 / 压测（core/robot）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `robot.session.call{msg,result}` | Histogram | 每次请求/响应调用的时延分布；result 枚举 ok/timeout/closed/error/encode_error/send_error/mismatch/decode_error——非 ok 占比是被测服务的第一告警面 |
+| `robot.session.late_response{msg}` | Counter | Call 已超时 / 放弃之后才到的应答（seq 非 0 且没有等待者），直接丢弃、不当推送分发（RR-20261005-NC-262）；持续增长说明被测服务的应答慢于剧本超时 |
+| `robot.runner.scenario.cost{profile,run,scenario,result}` | Histogram | 一次场景执行的全程耗时（ok/error/canceled）；loadtest 阈值裁决从它取 p50–p99。`run` label 每场压测唯一——同 profile 连跑两场分布互不污染（series 随场次增长，靠 series 上限兜底，长驻进程注意场次频率） |
+| `robot.runner.scenario.total{profile,run,scenario,result}` | Counter | 场景执行结果计数（error_rate 的分母/分子） |
+| `robot.runner.target` / `robot.runner.online{profile,run,scenario}` | Gauge | 目标并发 vs 实际在线机器人（Stages 升降是否按预期跟随） |
+| `robot.loadtest.active{profile}` | Gauge | 该 profile 是否有活跃 run（单活跃约束的可视化） |
+
+### 实体定时器（core/timer）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `timer.invalid_dropped_total` | Counter | 正常 Tick 因 id/type/deadline 非法而删除的存量节点；加载时 Warn 并标记待清理，Tick 才发宿主 ChangeDelete。事务回滚后再次重建可能再计，不是全局唯一记录数 |
+| `timer.unhandled_dropped_total{kind}` | Counter | 到期时因类型（`kind` = 类型号）没有注册 handler 而被删除的定时器节点（维护者决定 D-L2）。**基线应为零**；非零说明存储里还有某种已下线 / 漏注册类型的节点，它们在到期时被丢弃。每次删除另有 Warn `timer: dropped a due timer with no handler registered for its type`；宿主加载时对这类存量类型每种告警一次（`timer: stored timers have no handler registered for their type`）。宿主事务回滚后重试同一次 Tick 会再计一次 |
+
+### 服务事件（wiring/service 与 service，维护者决定 C6）
+
+生成工程的每个托管服务默认用 `servicemetrics.NewMetricsReporter("<服务名>")`（`internal/service/<svc>/collaborators.go` 的 `Metrics()`），事件写进进程的 metrics 注册表、经 ops `/metrics` 导出。关闭：配置 `service_metrics.enabled: false`（所有 Wiring 服务 Mod 在 Init 时不再把 Reporter 交给服务），或在 collaborators 里返回 nil。[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md)
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `service.accepted.total{service,op}` | Counter | 完成并改了状态的操作 |
+| `service.refused.total{service,op,reason}` | Counter | 业务原因拒绝（限额、权限、过期令牌），不是基础设施故障 |
+| `service.replayed.total{service,op}` | Counter | 由幂等记录直接回答、没有再执行的请求；上升说明传输在重投 |
+| `service.dropped.total{service,op}` | Counter | 按保留期 / 上限丢弃、清扫掉的条数（按条数累加）。session 的 `op="run.swept"` 是每次清扫处理的 run 数（以前是 gauge `session.swept`，只剩最后一次的读数） |
+| `service.conflict.total{service,op}` | Counter | CAS 重试耗尽；同一逻辑键争用的信号 |
+| `service.depth{service,name[,key]}` | Gauge | 当前大小。match 的队列长度是 `name="queue",key="<Mode:GroupSize:Partition>"`，rank 的看板大小是 `name="board",key="<Board.ID>"`（以前队列 key、看板 ID 拼在名字里） |
+
+基数：`service` / `op` / `reason` / `name` 都是代码里的常量或枚举。`key` 是调用方给的对象标识：**队列的 Partition 与看板 ID 必须是有限枚举**（区服、模式、看板种类），不能把玩家 / 公会 / 场次 ID 拼进去——默认 Reporter 不会替你删序列（注册表从第十二轮起有 `metrics.DeleteSeries(name, labels)`，由对象的拥有者在销毁时调用，loadtest 的 `run` 序列就是这样随运行记录删除的），`service.depth` 到每指标 2048 条后新组合被丢弃并计 `obs.series.dropped{metric="service.depth"}`。看板的 scope / season 不进 key，同一种看板的不同 scope 共用一条序列（读到的是最近一次 Page 的那个）。默认 Reporter 不加按运行、按请求、按实体变化的标签。项目自写的 Reporter 不实现 `servicemetrics.KeyedReporter` 时，深度事件仍以旧形状 `Depth("queue.<key>")` 到达，由它自己决定怎么拆。
+
+### 持久化与 fence（framework/dataengine）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `dataengine.load.skipped.total{resource}` | Counter | 非 strict 载入模板无法解码而跳过的行数。**基线应为零**；持续增长意味着字段改名/编解码变更正在让整表静默加载不全（strict 模板会直接失败，非 strict 只跳过，所以这条曲线是它唯一的信号） |
+| `dataengine.fence.skipped.total{resource}` | Counter | 被 lease fence 拦下、整笔标记为 skipped 的事务数。**陈旧 saga worker 偶发是正常的**；但"所有被 fence 的事务同时开始跳过"意味着 fence 谓词已不可满足（claim schema 漂移），而这两种情况从进程内部无法区分——只能靠曲线形状判断：稳定低速率 = 正常，阶跃到与事务量同阶 = 事故 |
+
+### 全部源码指标索引（v1.23.1）
+
+下表补齐上面按场景解释的清单。名字按注册表写法；点号在 Prometheus 中变成下划线，Counter 会补 `_total`。类型未知表示公开常量由宿主选择导出方式。来源列便于查量纲和具体条件，不能用 Gauge 做 `rate`。有界标签见对应写入点。
+
+| 指标 | 类型 | 来源 |
+| --- | --- | --- |
+| `admin.execute.total` | Counter | `admin/admin.go:IncCounter` |
+| `admin.http_refused.total` | Counter | [Ops接线与实现](impl/11-observability.md) |
+| `app.business_time.advance_failed.total` | Counter | `app/business_time.go:IncCounter` |
+| `bus_dead_letter_purge_total` | Counter | `bus/bus.go:IncCounter` |
+| `bus_dead_letter_requeue_total` | Counter | `bus/bus.go:IncCounter` |
+| `bus_dead_letter_total` | Counter | `bus/bus.go:IncCounter` |
+| `bus_dispatch_drop_total` | Counter | `bus/bus.go:IncCounter` |
+| `bus_dispatch_duration` | Duration | `bus/bus.go:ObserveDuration` |
+| `bus_dispatch_total` | Counter | `bus/bus.go:IncCounter` |
+| `bus_duplicate_total` | Counter | `bus/bus.go:IncCounter` |
+| `bus_rpc_call_total` | Counter | `bus/jetstream_rpc.go:IncCounter` |
+| `bus_rpc_consumer_delivery` | Gauge | `bus/jetstream_rpc.go:SetGauge` |
+| `bus_rpc_in_progress_failures_total` | Counter | `bus/jetstream_rpc.go:IncCounter` |
+| `bus_rpc_pending` | Gauge | `bus/jetstream_rpc.go:SetGauge` |
+| `bus_rpc_pending_requests` | Gauge | `bus/jetstream_rpc.go:SetGauge` |
+| `bus_rpc_request_total` | Counter | `bus/jetstream_rpc.go:IncCounter` |
+| `cache.layered.backfill_failed.total` | Counter | `cache/layered.go:IncCounter` |
+| `configdata.reload.total` | Counter | `framework/configdata/configdata.go:IncCounter` |
+| `configdata.rollback.total` | Counter | `framework/configdata/configdata.go:IncCounter` |
+| `configdata.version` | Gauge | `framework/configdata/configdata.go:SetGauge` |
+| `dataengine.fence.evictions.failed.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
+| `dataengine.fence.evictions.started.total` | Counter | `dataengine/engine/fenced_step.go:IncCounter` |
+| `dataengine.fence.skipped.total` | Counter | `dataengine/engine/mongo_store.go:IncCounter` |
+| `dataengine.load.skipped.total` | Counter | `dataengine/load.go:IncCounter` |
+| `dataengine.outbox.oldest_age_ms` | Gauge | `dataengine/engine/outbox_worker.go:SetGauge` |
+| `dataengine.outbox.pending` | Gauge | `dataengine/engine/outbox_worker.go:SetGauge` |
+| `dataengine.projection.pending` | Gauge | `dataengine/engine/projector.go:SetGauge` |
+| `dataengine.projector.remote_publication_deferred.total` | Counter | `dataengine/engine/mongo_projection.go:IncCounter` |
+| `entity.count` | Gauge | `framework/statslog/statslog.go:SetGauge` |
+| `entity.count_by_category` | Gauge | `framework/statslog/statslog.go:publishCounts` |
+| `entity.count_by_kind` | Gauge | `framework/statslog/statslog.go:publishCounts` |
+| `entity.unload_resync.backlog` | Gauge | `entity/unload_resync.go:SetGauge` |
+| `entitysync_durability_gate_deferred_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
+| `entitysync_flush_duration` | Histogram | `sync/entitysync/flush.go:ObserveHistogram` |
+| `entitysync_frames_admitted_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
+| `entitysync_full_captures_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
+| `entitysync_interest_retry_stalled_total` | Counter | `sync/entitysync/policy/interest_queue.go:IncCounter` |
+| `entitysync_sessions_lost_total` | Counter | `sync/entitysync/subscriptions.go:IncCounter` |
+| `failurelog_append_total` | Counter | `failurelog/failurelog.go:IncCounter` |
+| `failurelog_degraded_total` | Counter | `failurelog/failurelog.go:IncCounter` |
+| `failurelog_delete_total` | Counter | `failurelog/failurelog.go:IncCounter` |
+| `failurelog_purge_total` | Counter | `failurelog/failurelog.go:IncCounter` |
+| `failurelog_trim_total` | Counter | `failurelog/failurelog.go:IncCounter` |
+| `lockstep.catchup.frames.total` | Counter | `sync/lockstep/room.go:IncCounter` |
+| `lockstep.desync.total` | Counter | `sync/lockstep/room.go:IncCounter` |
+| `lockstep.frame.total` | Counter | `sync/lockstep/room.go:IncCounter` |
+| `lockstep.input.late.total` | Counter | `sync/lockstep/room.go:IncCounter` |
+| `lockstep.input.rejected.total` | Counter | `sync/lockstep/room.go:IncCounter` |
+| `log.rotate_failures` | Counter | `log/rotation.go:IncCounter` |
+| `log.write_errors` | Counter | `log/log.go:IncCounter` |
+| `manager.start.duration` | Histogram | `manager/engine.go:ObserveHistogram` |
+| `manager.started` | Gauge | `manager/engine.go:SetGauge` |
+| `mongo.ensure_index.election_retries.total` | Counter | `mongo/driver/collection.go:IncCounter` |
+| `nats.jetstream.settle_failures.total` | Counter | `nats/driver/jetstream.go:IncCounter` |
+| `nats.jetstream.terminal.total` | Counter | `nats/driver/jetstream.go:IncCounter` |
+| `nats.rpc.callback.latency` | Histogram | `nats/driver/rpc.go:ObserveHistogram` |
+| `nats.rpc.completed.total` | Counter | `nats/driver/rpc.go:IncCounter` |
+| `nats.rpc.pending` | Gauge | `nats/driver/rpc.go:AddGauge` |
+| `nats.rpc.queue_rejected.total` | Counter | `nats/driver/rpc.go:IncCounter` |
+| `nats.rpc.started.total` | Counter | `nats/driver/rpc.go:IncCounter` |
+| `nats.subscription.handler_panic.total` | Counter | `nats/driver/client.go:IncCounter` |
+| `nest.dispatch.cost` | Duration | `nest/trace.go:ObserveDuration` |
+| `nest.dispatch.delayed_messages` | Gauge | `nest/dispatcher.go:SetGauge` |
+| `nest.dispatch.fast_continuations` | Gauge | `nest/dispatcher.go:SetGauge` |
+| `nest.dispatch.queue_len` | Gauge | `nest/dispatcher.go:SetGauge` |
+| `nest.dispatch.remote.total` | Counter | `nest/trace.go:IncCounter` |
+| `nest.dispatch.requeue.total` | Counter | `nest/group_transition.go:IncCounter` |
+| `nest.dispatch.slow_reroute.total` | Counter | `nest/dispatch_queue.go:IncCounter` |
+| `nest.dispatch.slow_trace_suppressed` | Counter | `nest/trace.go:IncCounter` |
+| `nest.dispatch.total` | Counter | `nest/trace.go:IncCounter` |
+| `nest.dispatch.worker_num` | Gauge | `nest/dispatcher.go:SetGauge` |
+| `nest.entity_group.transition.total` | Counter | `nest/group_transition.go:IncCounter` |
+| `nest.handler.lock_hold` | Duration | `nest/trace.go:ObserveDuration` |
+| `nest.handler.lock_hold.slow.total` | Counter | `nest/trace.go:IncCounter` |
+| `nest.pipelined.async_total` | Counter | `nest/pipelined_completion.go:IncCounter` |
+| `nest.pipelined.durable_wait` | Duration | `nest/execution.go:ObserveDuration` |
+| `nest.remote.deferred_after_commit_error_total` | Counter | `nest/msg.go:IncCounter` |
+| `nest.remote.post_commit_without_outcome_total` | Counter | `nest/msg.go:IncCounter` |
+| `nest.stage.duration` | Duration | `nest/trace.go:ObserveDuration` |
+| `nest.trace.cost` | Duration | `nest/trace.go:ObserveDuration` |
+| `nest.trace.events.total` | Counter | `nest/trace.go:IncCounter` |
+| `nestwal.append.total` | Counter | `nestwal/wal.go:IncCounter` |
+| `nestwal.batch.total` | Counter | `nestwal/wal.go:IncCounter` |
+| `nestwal.bytes.total` | Counter | `nestwal/wal.go:IncCounter` |
+| `nestwal.disk.bytes` | Gauge | `nestwal/wal.go:SetGauge` |
+| `nestwal.fsync.duration` | Duration | `nestwal/wal.go:ObserveDuration` |
+| `nestwal.pending.tickets` | Gauge | `nestwal/wal.go:SetGauge` |
+| `nestwal.recovery.tail_truncated.bytes` | Counter | `nestwal/wal.go:IncCounter` |
+| `nestwal.recovery.tail_truncated.total` | Counter | `nestwal/wal.go:IncCounter` |
+| `nestwal.reject.total` | Counter | `nestwal/wal.go:IncCounter` |
+| `obs.series.dropped` | Counter | `metrics/metrics.go: Metric literal` |
+| `player_tcp_auth_failure_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_connection_rejected_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_connections` | Gauge | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_dispatch_duration` | Duration | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_dispatch_error_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_dispatch_timeout_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_frame_error_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_push_closed_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_push_error_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_push_no_session_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_push_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_rate_limited_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_session_closed_callback_panics_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_session_closed_dropped_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `player_tcp_write_error_total` | Counter | `codegen/internal/roost/render_player_tcp.go (template)` |
+| `remote_entity.deferred_outcome_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.deferred_outcome_not_run_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.finalize_retry_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.finalize_status_read_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.lock_takeover_total` | Counter | `remoteentity/versioned_lock.go:IncCounter` |
+| `remote_entity.outbox.scan` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
+| `remote_entity.outbox.snapshots` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
+| `remote_entity.outbox.mark_published` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
+| `remote_entity.outbox.transaction` | Histogram | `remoteentity/transaction_manager.go:ObserveHistogram` |
+| `remote_entity.quarantine_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.rejected_unload_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.rejected_unload_total` | Counter | `remoteentity/local_runtime.go:IncCounter` |
+| `remote_entity.rejected_unload_unsupported_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.release_failure_total` | Counter | `remoteentity/manager.go:IncCounter` |
+| `remote_entity.remote.apply_latency` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
+| `remote_entity.remote.apply_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.remote.confirm_wait` | Duration | `remoteentity/transaction_tracking.go:ObserveDuration` |
+| `remote_entity.remote.release_latency` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
+| `remote_entity.remote.interest_refresh_renewed_total` | Counter | `remoteentity/interest_refresh.go:IncCounter` |
+| `remote_entity.remote.interest_refresh_requests_total` | Counter | `remoteentity/interest_refresh.go:IncCounter` |
+| `remote_entity.remote.interest_refresh_sent_total` | Counter | `remoteentity/interest_refresh.go:IncCounter` |
+| `remote_entity.remote.interest_rejected_total` | Counter | `remoteentity/interest.go:IncCounter` |
+| `remote_entity.remote.interest_renew_refused_total` | Counter | `remoteentity/snapshot_client.go:IncCounter` |
+| `remote_entity.remote.prepare_latency` | Duration | `remoteentity/batch.go:ObserveDuration` |
+| `remote_entity.remote.prepare_total` | Counter | `remoteentity/batch.go:IncCounter` |
+| `remote_entity.remote.read_latency` | Duration | `remoteentity/snapshot_client.go:ObserveDuration` |
+| `remote_entity.remote.read_total` | Counter | `remoteentity/snapshot_client.go:IncCounter` |
+| `remote_entity.remote.republish_scheduled_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.remote.republish_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.remote.write_gate_wait` | Duration | `remoteentity/batch.go:ObserveDuration` |
+| `remote_entity.snapshot_bootstrap_overflow_total` | Counter | `entity/remote_snapshot.go:IncCounter` |
+| `remote_entity.snapshot_bootstrap_replay_failed_total` | Counter | `entity/remote_snapshot.go:IncCounter` |
+| `remote_entity.snapshot_l2_tombstone_wait_total` | Counter | `remoteentity/snapshot_l2.go:IncCounter` |
+| `remote_entity.snapshot_push_enabled` | Gauge | `remoteentity/snapshot_client.go:SetGauge` |
+| `remote_entity.snapshot_replica_historic_dropped_total` | Counter | `remoteentity/syncer.go:IncCounter` |
+| `remote_entity.unresolved_reject_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.unresolved_resolved_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.write_admission_rejected_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity_transaction_final_overwrite_ignored_total` | Counter | `remoteentity/transaction_tracking.go:IncCounter` |
+| `remote_entity_transaction_tracker_drop_total` | Counter | `remoteentity/transaction_tracking.go:IncCounter` |
+| `remote_entity_write_gate_timeout_total` | Counter | `remoteentity/batch.go:IncCounter` |
+| `robot.loadtest.active` | Gauge | `robot/loadtest/manager.go:SetGauge` |
+| `robot.loadtest.run.duration` | Duration | `robot/loadtest/manager.go:ObserveDuration` |
+| `robot.loadtest.run.total` | Counter | `robot/loadtest/manager.go:IncCounter` |
+| `robot.runner.online` | Gauge | `robot/runner/runner.go:AddGauge` |
+| `robot.runner.scenario.cost` | Histogram | `robot/runner/runner.go:ObserveHistogram` |
+| `robot.runner.scenario.total` | Counter | `robot/runner/runner.go:IncCounter` |
+| `robot.runner.target` | Gauge | `robot/runner/runner.go:SetGauge` |
+| `robot.session.call` | Histogram | `robot/session/session.go:ObserveHistogram` |
+| `robot.session.late_response` | Counter | `robot/session/session.go:IncCounter` |
+| `runtime.goroutines` | Gauge | `framework/statslog/statslog.go:SetGauge` |
+| `runtime.heap_alloc_bytes` | Gauge | `framework/statslog/statslog.go:SetGauge` |
+| `runtime.heap_sys_bytes` | Gauge | `framework/statslog/statslog.go:SetGauge` |
+| `runtime.num_gc` | Gauge | `framework/statslog/statslog.go:SetGauge` |
+| `runtime.sys_bytes` | Gauge | `framework/statslog/statslog.go:SetGauge` |
+| `saga.completion.late_after_abandon_total` | Counter | `saga/engine.go:IncCounter` |
+| `saga.completion.stale_attempt_total` | Counter | `saga/engine.go:IncCounter` |
+| `saga.completion.stale_incarnation_total` | Counter | `saga/engine.go:IncCounter` |
+| `saga.consumer.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
+| `saga.reopened_total` | Counter | `saga/engine.go:IncCounter` |
+| `saga.start.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
+| `saga.step.attempt_replayed_total` | Counter | `saga/command_consumer.go:IncCounter` |
+| `saga.step.expired_unexecuted_total` | Counter | `saga/command_consumer.go:IncCounter` |
+| `saga.step_inbox.mark_completed_error_total` | Counter | `saga/step_operation_inbox.go:IncCounter` |
+| `saga.step_inbox.superseded_total` | Counter | `saga/step_operation_inbox.go:IncCounter` |
+| `saga.store.corrupt_record_total` | Counter | `saga/mongo_store.go:IncCounter` |
+| `scene_session_reopen_failed_total` | Counter | `demo/internal/service/game/scene.go.tmpl (template)` |
+| `service.accepted.total` | Counter | `servicemetrics/metrics_reporter.go:IncCounter` |
+| `service.conflict.total` | Counter | `servicemetrics/metrics_reporter.go:IncCounter` |
+| `service.depth` | Gauge | `servicemetrics/metrics_reporter.go:SetGauge` |
+| `service.dropped.total` | Counter | `servicemetrics/metrics_reporter.go:IncCounter` |
+| `service.refused.total` | Counter | `servicemetrics/metrics_reporter.go:IncCounter` |
+| `service.replayed.total` | Counter | `servicemetrics/metrics_reporter.go:IncCounter` |
+| `skill.passive.dispatch_rejected.total` | Counter | `skill/runtime_dispatch.go:IncCounter` |
+| `skill.root_event.capacity_dropped.total` | Counter | `skill/runtime_dispatch.go:IncCounter` |
+| `skill.spawn.abandoned.total` | Counter | `skill/runtime_spawn_stop.go:IncCounter` |
+| `skill.spawn.abandoned_pruned.total` | Counter | `skill/runtime_spawn_stop.go:IncCounter` |
+| `skill.spawn.stop_retry_exhausted.total` | Counter | `skill/runtime_spawn_stop.go:IncCounter` |
+| `stats_log.write_failures` | Counter | `framework/statslog/statslog.go:IncCounter` |
+| `syncstream.recovery.tail_truncated.bytes` | Counter | `syncstream/file_journal.go:IncCounter` |
+| `syncstream.recovery.tail_truncated.total` | Counter | `syncstream/file_journal.go:IncCounter` |
+| `timer.invalid_dropped_total` | Counter | `timer/scheduler.go:IncCounter` |
+| `timer.unhandled_dropped_total` | Counter | `timer/scheduler.go:IncCounter` |
+| `versionstore.cas.total` | Counter | `versionstore/versionstore.go:IncCounter` |
+| `versionstore.conflict.total` | Counter | `versionstore/versionstore.go:IncCounter` |
+| `versionstore.unknown_outcome.total` | Counter | `versionstore/write_token.go:IncCounter` |
+
+`dataengine.projection.pending` 在准入与确认/撤销时更新；outbox.pending / oldest_age_ms 随既有后台采样和健康采样更新，单位分别是条、毫秒。正式装配每进程一个 Engine；自行创建多个 Engine 必须另行提供实例聚合，不能把进程 gauge 当多实例总和。
+
+`admin.execute.total` 标签为已注册命令名（未知名归 `_unregistered`）和固定 outcome；`admin.http_refused.total` 记录鉴权拒绝。审计日志包含开始/结束、trace_id、调用方声明的 operator/source 与耗时，不记录 payload、token、返回 Data。operator/source 不是已验证身份。超时结果为 unknown，长时间不配合 ctx 的 handler 可能只有开始记录。
+
+`bus_rpc_pending_requests{transport}` 是 RPC 全部在途数量 Gauge；原来的 bus_rpc_pending_total 名称已移除，面板迁移到新名。按方法的 bus_rpc_pending 保持原样。
+
+### 独立 Gate 接入
+
+| 指标 | 含义与标签 |
+| --- | --- |
+| `gate.channel.result_total` | 按 `role`、`phase`、`result` 统计控制/转发/出站/广播；completed 为内部准入，不是客户端收到或落库确认 |
+| `gate.channel.failure_total` | 按 `role`、`phase` 统计回信发布和异步出站失败；不包含票据、PlayerID、SessionID 或 incarnation 标签 |
+
+Gate/Game `Stats()` 提供当前绑定、驻留请求数和字节；Game 另返回控制通道驻留请求及字节。下游超时/回信丢失归未知，发送失败结束完整旧绑定及对应 Sync lifetime。
+
+
+## 健康与就绪（`/healthz`、`/readyz`）
+
+Wiring `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册（`app.ModHealth`），每项结果是 `ok` / `degraded` / `fail`：
+
+| 端点 | 200 的条件 | 503 的条件 | 探针 |
+| --- | --- | --- | --- |
+| `/healthz` | 进程的 HTTP 在答就 200 | — | startup / liveness |
+| `/readyz` | 就绪位为真（`service.started` 之后、`service.stopping` 之前），且没有 checker 为 `fail` | 就绪位为假，或任一 checker 为 `fail`（未知状态按 `fail` 算） | readiness、compose healthcheck、shell `healthcheck.sh`、`make dev-run` |
+
+**每个 checker 有期限**（维护者第十二轮决定）：checker 并发调用，各自最多等 1.5s（`health.DefaultCheckTimeout`），到期未返回记 `fail`（`message: check timed out`，`error` 写明期限与已跑时长），不再拖住整个 `/readyz`；同一个 checker 同一时刻只有一次调用，卡住的不会每次探针多一个。
+
+**Degraded 算就绪**（维护者决定 D1，2026-10-06）：有 `degraded` 时 `/readyz` 仍返回 200、`ok: true`，响应体 `degraded: true`，`degraded_dependencies` 列出每个降级项的 `name` / `status` / `message` / `error`；`dependencies` 照样列出全部 checker。之前 Degraded 与 Fail 一样返回 503。现有的 Degraded 来源都是“还能服务、需要关注”：单实例锁续期结果未知（`singleton`，≤ `singleton.renew_interval` 的窗口）、entitysync 主体 / 会话 ≥ 80% 容量、remoteentity 写许可用满、remote_mirror 兴趣表容量告警、DataEngine 投影积压告警。`fail` 是“不能再安全工作”：fenced、Projector / Outbox 不健康、容量用尽、已关闭、失锁或未持有单实例锁。
+
+部署侧的探针都只看 HTTP 状态码，Degraded 不再让 k8s 摘掉 endpoint，也不会让 compose / shell 部署判为未就绪；要对降级告警，抓 `/readyz` 响应体的 `degraded`，或看各来源自己的指标（`entitysync_*`、`remote_entity.*`、`dataengine_*`）。
+
+## 告警基线建议
+
+1. `nest.pipelined.async_total{result="indeterminate"} > 0` —— 立即告警（fence 事故）。
+2. ~~`cache.refhmap.write_degraded_total` 增长~~ —— v1.19.0 起该指标已移除（RR-20261004-NC-21，Eval 失败直接返回错误，不再有非原子降级窗口）。
+3. `nestwal.reject.total` 增长 —— 容量预算不足。
+4. `nestwal.pending.tickets` 持续爬升 —— durable 落后于提交，检查磁盘。
+5. `nest.handler.lock_hold.slow.total` 新增 handler label —— 该 handler 是下一个 pipelined 灰度对象（见 NEST_PIPELINED_COMMIT.md §9）。
+6. `remote_entity.release_failure_total` / `quarantine_error_total` 非零 —— 所有权收尾异常。
+7. `lockstep.desync.total` 非零 —— 立即告警（确定性被破坏：作弊或模拟 bug，两者都必须查）。
+8. `dataengine_fence_skipped_total` 速率阶跃到与被 fence 事务量同阶 —— 立即告警（claim schema 漂移：事务正在静默变成 no-op，既无错误也无失败测试）。
+9. `obs_series_dropped_total` 非零 —— 某 metric 的 label 基数打满，新组合的观测在静默丢失；排查 label 来源或调整配置 `metrics.max_series_per_metric`。
+10. `/readyz` 响应体 `degraded: true` 持续数分钟 —— 关注（不会摘流量，见上一节）：按 `degraded_dependencies[].name` 查对应来源。
+
+Grafana 总览面板见 [observability/grafana-roost-overview.json](../../observability/grafana-roost-overview.json)（按上述四组布局，导入后选择 Prometheus 数据源即可）。
+
+### 业务时间高水位
+
+`app.business_time.advance_failed.total`（Prometheus `app_business_time_advance_failed_total`）记录推进协调存储高水位失败，排查连接与协调存储；不能把业务时间守卫故障当作普通时间漂移忽略。
+
+玩家 TCP 接入：`player_tcp_rate_limited_total`（无标签 Counter）记录每连接令牌桶拒绝并断开的次数；默认每秒 100 请求、突发 200，心跳也消耗令牌。`request_rate: 0` 显式关闭限流。鉴权后空载荷 MsgID=0 是心跳，仍受序列检查和 idle_timeout 约束。
+
+### SyncBus 有限重投与恢复（RR-25）
+
+MaxDeliver仍为总投递次数上限。终止查看 `nats.jetstream.terminal.total{reason="max_deliver"}` 及日志的stream/consumer/stream_sequence；broker ACK超时到限可能不经过本地结算，另观察MAX_DELIVERIES与MSG_TERMINATED advisory。通知是普通NATS消息，不是持久失败台账；停止/重订期间的错误必须区别于业务成功。恢复边界见 [RR-25方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-10-08-rr25-bounded-delivery.md)。

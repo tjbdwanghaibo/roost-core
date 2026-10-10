@@ -18,8 +18,8 @@ import (
 )
 
 type gameConfig struct {
-	Entities, Players, MessageTargets, MessagesPerPlayer, HeartbeatHz, DirtyPercent, Workers, Queue int
-	Duration                                                                                        time.Duration
+	Entities, Players, MessageTargets, MessagesPerPlayer, HeartbeatHz, DirtyPercent, Workers, SlowWorkers, Queue int
+	Duration                                                                                                     time.Duration
 }
 
 func envInt(t *testing.T, key string, fallback int) int {
@@ -161,6 +161,7 @@ func TestNestGameLoad(t *testing.T) {
 		MessagesPerPlayer: envInt(t, "ROOST_NEST_GAME_MESSAGES_PER_PLAYER", 10), HeartbeatHz: envInt(t, "ROOST_NEST_GAME_HZ", 1),
 		DirtyPercent: envInt(t, "ROOST_NEST_GAME_DIRTY", 1), Workers: envInt(t, "ROOST_NEST_GAME_WORKERS", 4), Queue: envInt(t, "ROOST_NEST_GAME_QUEUE", nest.DefaultFastQueueCapacity),
 	}
+	c.SlowWorkers = envInt(t, "ROOST_NEST_GAME_SLOW_WORKERS", 32)
 	c.MessageTargets = envInt(t, "ROOST_NEST_GAME_MESSAGE_TARGETS", c.Players)
 	var err error
 	duration := os.Getenv("ROOST_NEST_GAME_DURATION")
@@ -171,7 +172,7 @@ func TestNestGameLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Entities < 1 || c.Entities > 100000 || c.Players < 1 || c.Players > c.Entities || c.MessageTargets < 1 || c.MessageTargets > c.Entities || c.MessagesPerPlayer < 0 || c.MessagesPerPlayer > 1000 || c.HeartbeatHz < 0 || c.HeartbeatHz > 1000 || c.DirtyPercent < 0 || c.DirtyPercent > 100 || c.Workers < 1 || c.Queue < 1 || c.Duration < time.Second || c.Duration > time.Hour || c.Duration%time.Second != 0 {
+	if c.Entities < 1 || c.Entities > 100000 || c.Players < 1 || c.Players > c.Entities || c.MessageTargets < 1 || c.MessageTargets > c.Entities || c.MessagesPerPlayer < 0 || c.MessagesPerPlayer > 1000 || c.HeartbeatHz < 0 || c.HeartbeatHz > 1000 || c.DirtyPercent < 0 || c.DirtyPercent > 100 || c.Workers < 1 || c.SlowWorkers < 1 || c.Queue < 1 || c.Duration < time.Second || c.Duration > time.Hour || c.Duration%time.Second != 0 {
 		t.Fatal("invalid load configuration")
 	}
 	RegisterEntity()
@@ -192,7 +193,7 @@ func TestNestGameLoad(t *testing.T) {
 		}
 	}
 	var stateSync *syncGameLoad
-	options := []nest.NestOption{nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: c.Workers, QueueCap: c.Queue}, nest.WorkerPoolConfig{}), nest.NestOptionWithTickDuration(10 * time.Millisecond)}
+	options := []nest.NestOption{nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: c.Workers, QueueCap: c.Queue}, nest.WorkerPoolConfig{Workers: c.SlowWorkers}), nest.NestOptionWithTickDuration(10 * time.Millisecond)}
 	if os.Getenv("ROOST_NEST_GAME_SYNC") == "1" {
 		if os.Getenv("ROOST_NEST_GAME_GATE") != "1" {
 			t.Fatal("Sync mixed load requires real Gate")

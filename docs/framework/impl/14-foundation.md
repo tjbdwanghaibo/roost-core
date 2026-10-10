@@ -208,9 +208,7 @@
 - [cluster_failover_integration_test.go](../../../infra/network/etcd/driver/cluster_failover_integration_test.go)：`TestRealEtcdThreeNodeLeaderLossPreservesWatchDiscoveryAndElection`
 - [deregister_budget_promises_test.go](../../../infra/network/etcd/driver/deregister_budget_promises_test.go)：`TestDiscoveryDeregisterWaitsForTheRegistrationLoopWithinItsContext`、`TestAssemblyCloseKeepsTheClientUntilDeregisterSucceeds`
 - [discovery_shutdown_test.go](../../../infra/network/etcd/driver/discovery_shutdown_test.go)：`TestDiscoverySuppressesLeaseLostWarningAfterDeregister`、`TestDiscoveryWarnsWhenLeaseLostUnexpectedly`、`TestDiscoveryReregistersAfterUnexpectedLeaseLoss`、`TestDiscoveryDoesNotReregisterAfterDeregister`、`TestDiscoveryRejectsDuplicateRegisterWithoutLeakingFirstRegistration`；其余 5 项见文件
-- [election_lifetime_promises_test.go](../../../infra/network/etcd/driver/election_lifetime_promises_test.go)：`TestEtcdLifetimeSuccessfulCampaignDetachesCallerAndReleasesSessionContext`、`TestEtcdLifetimeCancellationBeforeLeadershipPublication`、`TestEtcdLifetimeCanceledCampaignNeverStartsSetup`、`TestEtcdLifetimeNormalResignDoesNotCancelRevoke`、`TestEtcdLifetimeCampaignCancellationReachesSessionGrant`；其余 4 项见文件
-- [election_resign_budget_promises_test.go](../../../infra/network/etcd/driver/election_resign_budget_promises_test.go)：`TestElectionResignHonoursTheCallerBudget`、`TestElectionResignWaitsForTheRevokeWhenEtcdAnswers`
-- [election_revoke_promises_test.go](../../../infra/network/etcd/driver/election_revoke_promises_test.go)：`TestElectionRevokeFailedCampaignRevokesBeforeReturning`、`TestElectionRevokeCanceledCampaignOwnsOneBoundedRevoke`、`TestElectionRevokeAbandonedRevokeEndsWithClient`
+- [election_contract_test.go](../../../infra/network/etcd/driver/election_contract_test.go)：`TestEtcdLifetimeSuccessfulCampaignDetachesCallerAndReleasesSessionContext`、`TestEtcdLifetimeCancellationBeforeLeadershipPublication`、`TestEtcdLifetimeCanceledCampaignNeverStartsSetup`、`TestEtcdLifetimeNormalResignDoesNotCancelRevoke`、`TestEtcdLifetimeCampaignCancellationReachesSessionGrant`；其余 4 项见文件、`TestElectionResignHonoursTheCallerBudget`、`TestElectionResignWaitsForTheRevokeWhenEtcdAnswers`、`TestElectionRevokeFailedCampaignRevokesBeforeReturning`、`TestElectionRevokeCanceledCampaignOwnsOneBoundedRevoke`、`TestElectionRevokeAbandonedRevokeEndsWithClient`
 - [election_test.go](../../../infra/network/etcd/driver/election_test.go)：`TestElectionFirstCampaignKeepsPreCampaignLeaderChannel`、`TestElectionLeaderPreservesBackendError`、`TestElectionCampaignContextCancellationAfterElectionDoesNotLoseLeadership`、`TestElectionFenceTracksLeadershipTerm`、`TestElectionResignClearsLifecycleBeforeReturning`
 - [guards_promises_test.go](../../../infra/network/etcd/driver/guards_promises_test.go)：`TestElectionResignAndLeaderRefuseWithoutALeadership`、`TestNewLocalMirrorRefusesClientsWithoutRevisionedSnapshots`、`TestLocalMirrorWritesRefuseInvalidArgumentsBeforeReachingEtcd`、`TestLocalMirrorRecordsAClosedWatchAsItsLastError`
 - [local_mirror_promises_test.go](../../../infra/network/etcd/driver/local_mirror_promises_test.go)：`TestNewLocalMirrorRefusesEachInvalidConfig`
@@ -263,8 +261,7 @@
 - [options_discovered_test.go](../../../infra/network/nats/driver/options_discovered_test.go)：`TestIgnoreDiscoveredServersIsAnOptInThatReachesTheConnection`
 - [options_test.go](../../../infra/network/nats/driver/options_test.go)：`TestHandleNatsDisconnectLogsExpectedCloseAsInfo`、`TestHandleNatsDisconnectLogsUnexpectedErrorAsError`
 - [rpc_deadline_real_promises_test.go](../../../infra/network/nats/driver/rpc_deadline_real_promises_test.go)：`TestRealNatsRPCHonoursTheCallerDeadlineBeyondFiveSeconds`
-- [rpc_stop_budget_promises_test.go](../../../infra/network/nats/driver/rpc_stop_budget_promises_test.go)：`TestRPCBudgetAssemblyCloseBoundsCallbackDrain`、`TestRPCBudgetPendingTerminalRacesCompleteOnce`、`TestRPCBudgetAssemblyClosesCompletedPool`、`TestRPCBudgetStopRetainsFullQueueFallbackAndAllowsRetry`、`TestRPCBudgetCallbackCanCancelItsOwnStopWait`；其余 2 项见文件
-- [rpc_stop_reentry_promises_test.go](../../../infra/network/nats/driver/rpc_stop_reentry_promises_test.go)：`TestRPCStopInsideCallbackAfterStopRequestedReturns`、`TestRPCStopWaitsForTerminalClaimSkippedByDrainRange`
+- [rpc_contract_test.go](../../../infra/network/nats/driver/rpc_contract_test.go)：`TestRPCBudgetAssemblyCloseBoundsCallbackDrain`、`TestRPCBudgetPendingTerminalRacesCompleteOnce`、`TestRPCBudgetAssemblyClosesCompletedPool`、`TestRPCBudgetStopRetainsFullQueueFallbackAndAllowsRetry`、`TestRPCBudgetCallbackCanCancelItsOwnStopWait`；其余 2 项见文件、`TestRPCStopInsideCallbackAfterStopRequestedReturns`、`TestRPCStopWaitsForTerminalClaimSkippedByDrainRange`
 - [rpc_test.go](../../../infra/network/nats/driver/rpc_test.go)：`TestRpcClientStopCancelsPendingCalls`、`TestRpcClientDispatchCallbackCompletesWhenPoolRejects`、`TestRpcClientCallAsyncAfterStopCancelsImmediately`、`TestRpcClientPendingHasSingleTerminalWinner`、`TestRpcClientCancelsOneHundredThousandPendingExactlyOnce`；其余 1 项见文件
 
 ### nats
@@ -291,7 +288,7 @@
 
 ## 6. 验收与运维
 
-改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。命令与发布记录见 [维护手册](../../maintenance/README.md)。本次文档补丁的实际执行结果见 [发布验收](../../release/v1.24.1-IMPLEMENTATION.md)；性能沿用 [v1.24.0 基线](../../maintenance/PERFORMANCE.md)，没有新测量则不能改容量承诺。
+改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。命令与发布记录见 [维护手册](../../maintenance/README.md)。本次文档补丁的实际执行结果见 [发布验收](../../release/v1.24.1-IMPLEMENTATION.md)；性能沿用 [v1.24.0 基线](../../performance/STABLE-v1.24.0.md)，没有新测量则不能改容量承诺。
 
 ## 7. 示例与工具源码补充
 

@@ -506,8 +506,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/entity
 
-- [category_import_promises_test.go](../../../codegen/internal/entity/category_import_promises_test.go)：`TestGeneratedWiringImportsEveryPackageItQualifies`
-- [category_marker_promises_test.go](../../../codegen/internal/entity/category_marker_promises_test.go)：`TestEntityMarkerCategoryIsGeneratedDirectly`、`TestEntityMarkerWithoutCategoryKeepsTheRuntimeLookup`、`TestEntityMarkerRefusesAMalformedCategory`
+- [category_contract_test.go](../../../codegen/internal/entity/category_contract_test.go)：`TestGeneratedWiringImportsEveryPackageItQualifies`、`TestEntityMarkerCategoryIsGeneratedDirectly`、`TestEntityMarkerWithoutCategoryKeepsTheRuntimeLookup`、`TestEntityMarkerRefusesAMalformedCategory`
 - [gen_promises_test.go](../../../codegen/internal/entity/gen_promises_test.go)：`TestGenerateRefusesManagedRemoteWithoutRemoteBase`、`TestParseDirRejectsMarkerParameterGivenTwice`
 - [guard_tests_promises_test.go](../../../codegen/internal/entity/guard_tests_promises_test.go)：`TestGenerateEmitsAndReconcilesRemoteGuardTests`
 - [marker_promises_test.go](../../../codegen/internal/entity/marker_promises_test.go)：`TestParseDirRejectsMarkerNotAttachedToStruct`、`TestParseDirRejectsMarkerAboveNonStruct`、`TestParseDirRejectsUnknownMarkerParameters`、`TestParseDirRejectsInvalidMarkerValues`、`TestParseDirAcceptsEveryDocumentedMarkerForm`
@@ -516,12 +515,10 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 - [nocoll_dao_promises_test.go](../../../codegen/internal/entity/nocoll_dao_promises_test.go)：`TestANoPersistEntityWiresANoCollectionDaoByItsRegistryKey`、`TestACollectionDaoIsStillWiredByItsCollection`、`TestAStoredEntityCannotUseANoCollectionDao`
 - [output_multi_entity_promises_test.go](../../../codegen/internal/entity/output_multi_entity_promises_test.go)：`TestExplicitOutputRefusesMoreThanOneEntityInAPackage`
 - [parse_test.go](../../../codegen/internal/entity/parse_test.go)：`TestParseDir`、`TestGenerate`、`TestGenerateRemoteManagedV2Participant`、`TestGeneratePreservesManualSyncMethods`、`TestToSnake`
-- [remote_capable_removed_promises_test.go](../../../codegen/internal/entity/remote_capable_removed_promises_test.go)：`TestRemoteCapableMarkerIsRejectedWithTheCategoryReplacement`
-- [remote_dao_scope_promises_test.go](../../../codegen/internal/entity/remote_dao_scope_promises_test.go)：`TestRemoteManagedEntityRejectsServerScopedDao`
+- [remote_contract_test.go](../../../codegen/internal/entity/remote_contract_test.go)：`TestRemoteCapableMarkerIsRejectedWithTheCategoryReplacement`、`TestRemoteManagedEntityRejectsServerScopedDao`
 - [retirement_test.go](../../../codegen/internal/entity/retirement_test.go)：`TestRunRetiresEntityWireAfterLastMarkerRemoved`、`TestRunMovesRegistrationWhenFirstSiblingIsRetired`
 - [run_test.go](../../../codegen/internal/entity/run_test.go)：`TestRunReturnsFlagErrors`
-- [sync_namespace_promises_test.go](../../../codegen/internal/entity/sync_namespace_promises_test.go)：`TestSyncNamespaceRejectsABareIdentifier`、`TestSyncNamespaceAcceptsLiteralsAndQualifiedConstants`
-- [sync_packer_markers_promises_test.go](../../../codegen/internal/entity/sync_packer_markers_promises_test.go)：`TestGeneratedSyncBlockOnlyNamesFieldsCoreHas`、`TestRetiredPackerMarkerIsRefused`、`TestPackerWithoutSyncIsRefused`
+- [sync_contract_test.go](../../../codegen/internal/entity/sync_contract_test.go)：`TestSyncNamespaceRejectsABareIdentifier`、`TestSyncNamespaceAcceptsLiteralsAndQualifiedConstants`、`TestGeneratedSyncBlockOnlyNamesFieldsCoreHas`、`TestRetiredPackerMarkerIsRefused`、`TestPackerWithoutSyncIsRefused`
 
 ### codegen/internal/errcode
 
@@ -547,14 +544,12 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/nest
 
-- [blank_param_promises_test.go](../../../codegen/internal/nest/blank_param_promises_test.go)：`TestABlankParameterNameGeneratesUsableCode`
-- [guards_promises_test.go](../../../codegen/internal/nest/guards_promises_test.go)：`TestParseFileRejectsDuplicateRemoteAliasesWithinAndAcrossFiles`、`TestModuleDiscoveryRejectsBrokenOrMissingGoMod`
-- [handler_promises_test.go](../../../codegen/internal/nest/handler_promises_test.go)：`TestParseFileRefusesValueReceiversAndBadTargetDeclarations`
+- [generated_signatures_test.go](../../../codegen/internal/nest/generated_signatures_test.go)：`TestABlankParameterNameGeneratesUsableCode`
+- [handler_contract_test.go](../../../codegen/internal/nest/handler_contract_test.go)：`TestParseFileRejectsDuplicateRemoteAliasesWithinAndAcrossFiles`、`TestModuleDiscoveryRejectsBrokenOrMissingGoMod`、`TestParseFileRefusesValueReceiversAndBadTargetDeclarations`、`TestGeneratePipelinedHandlerMeta`
 - [nest_test.go](../../../codegen/internal/nest/nest_test.go)：`TestParseFile`、`TestValidateTransactionOptionsRejectsLegacyDirty`、`TestParseFileReadsRemoteRequestTagsFromPackageFiles`、`TestGenerate`、`TestGenerateMultipleNonErrorReturns`；其余 7 项见文件
-- [pipelined_marker_promises_test.go](../../../codegen/internal/nest/pipelined_marker_promises_test.go)：`TestGeneratePipelinedHandlerMeta`
 - [promises_test.go](../../../codegen/internal/nest/promises_test.go)：`TestParseFileRejectsRemainingRemoteTagViolations`、`TestOneSourceFileCannotMixHandlerReceivers`
 - [retirement_test.go](../../../codegen/internal/nest/retirement_test.go)：`TestRunRetiresNestOutputsAfterLastMarkerRemoved`、`TestRunWithoutSenderRetiresOnlySenderOutputs`
-- [return_type_imports_promises_test.go](../../../codegen/internal/nest/return_type_imports_promises_test.go)：`TestHandlerSideGenerationDoesNotImportReturnOnlyPackages`
+- [generated_signatures_test.go](../../../codegen/internal/nest/generated_signatures_test.go)：`TestHandlerSideGenerationDoesNotImportReturnOnlyPackages`
 - [run_test.go](../../../codegen/internal/nest/run_test.go)：`TestRunReturnsFlagErrors`
 - [sender_guard_test_promises_test.go](../../../codegen/internal/nest/sender_guard_test_promises_test.go)：`TestGenerateSenderGuardTest`
 
@@ -583,22 +578,15 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 ### codegen/internal/roost
 
 - [activity_groups_promises_test.go](../../../codegen/internal/roost/activity_groups_promises_test.go)：`TestGameDemoActivityGroupsFileIsTheOneDefinition`、`TestNoActivityGroupsFileWithoutTheCoordinator`
-- [add_entity_category_promises_test.go](../../../codegen/internal/roost/add_entity_category_promises_test.go)：`TestAddEntityScaffoldsTheOtherCategoryInsteadOfMintingOne`
-- [add_mod_config_promises_test.go](../../../codegen/internal/roost/add_mod_config_promises_test.go)：`TestAddModAppendsItsConfigSectionToExistingServiceConfigs`
+- [add_contract_test.go](../../../codegen/internal/roost/add_contract_test.go)：`TestAddEntityScaffoldsTheOtherCategoryInsteadOfMintingOne`、`TestAddModAppendsItsConfigSectionToExistingServiceConfigs`、`TestAddRPCScaffoldsOwnerAndWiresCaller`
 - [add_promises_test.go](../../../codegen/internal/roost/add_promises_test.go)：`TestAddRefusesEachInvalidKindParameter`、`TestAddHandlerRequiresNestFeature`
-- [add_rpc_promises_test.go](../../../codegen/internal/roost/add_rpc_promises_test.go)：`TestAddRPCScaffoldsOwnerAndWiresCaller`
 - [attribute_runtime_promises_test.go](../../../codegen/internal/roost/attribute_runtime_promises_test.go)：`TestAttributeRuntimeFileIsMarkedGenerated`、`TestGeneratedAttributeProjectPassesTheTemplateCheck`
 - [cfggen_help_promises_test.go](../../../codegen/internal/roost/cfggen_help_promises_test.go)：`TestCfggenHelpUsageCoexistsWithTheProjectGenerators`
 - [client_sdk_promises_test.go](../../../codegen/internal/roost/client_sdk_promises_test.go)：`TestClientSDKRealGeneratedTCP`、`TestClientSDKAgainstGeneratedPlayerTCP`、`TestClientSDKRegistrationHook`、`TestClientSDKRegistrationHook`
 - [collaborators_imports_promises_test.go](../../../codegen/internal/roost/collaborators_imports_promises_test.go)：`TestFrameworkCollaboratorsImportOnlyWhatTheyUse`
-- [compose_shape_check_promises_test.go](../../../codegen/internal/roost/compose_shape_check_promises_test.go)：`TestGeneratedProjectCarriesAComposeShapeCheckAndRunsItInCI`、`TestGeneratedComposeShapeCheckCatchesTheTmpfsShapeComposeUpRefuses`
-- [compose_tmpfs_promises_test.go](../../../codegen/internal/roost/compose_tmpfs_promises_test.go)：`TestProductionComposeTmpfsIsOneAbsoluteMountPerService`
-- [config_declarations_promises_test.go](../../../codegen/internal/roost/config_declarations_promises_test.go)：`TestWiringConfigSchemasMatchWiringDeclarations`、`TestGeneratedConfigsMatchDeclarations`、`TestGeneratedConfigCheckCatchesDrift`、`TestGeneratorConstantsMatchTheDeclaredExamples`、`TestPlayerTCPDeclarationAgreesWithWiring`；其余 1 项见文件
-- [config_reads_promises_test.go](../../../codegen/internal/roost/config_reads_promises_test.go)：`TestGeneratedProjectsReadConfigOnlyThroughDeclarations`、`TestGeneratedProjectConfigGuardCatchesDrift`、`TestDoctorReadsBusinessDeclarationsFromTheProcess`
-- [config_section_line_endings_promises_test.go](../../../codegen/internal/roost/config_section_line_endings_promises_test.go)：`TestAddedConfigSectionsFollowTheFilesLineEndings`
-- [consolidate_layout_promises_test.go](../../../codegen/internal/roost/consolidate_layout_promises_test.go)：`TestLayoutStageMovesTheSyncBlock`、`TestLayoutPathRules`
-- [consolidate_single_import_promises_test.go](../../../codegen/internal/roost/consolidate_single_import_promises_test.go)：`TestConsolidateSplitsASingleLineImportIntoAValidSecondDeclaration`
-- [consolidate_single_module_promises_test.go](../../../codegen/internal/roost/consolidate_single_module_promises_test.go)：`TestSingleModuleStageRunsAfterThePackageTable`、`TestSingleModulePathRules`
+- [compose_contract_test.go](../../../codegen/internal/roost/compose_contract_test.go)：`TestGeneratedProjectCarriesAComposeShapeCheckAndRunsItInCI`、`TestGeneratedComposeShapeCheckCatchesTheTmpfsShapeComposeUpRefuses`、`TestProductionComposeTmpfsIsOneAbsoluteMountPerService`
+- [config_contract_test.go](../../../codegen/internal/roost/config_contract_test.go)：`TestWiringConfigSchemasMatchWiringDeclarations`、`TestGeneratedConfigsMatchDeclarations`、`TestGeneratedConfigCheckCatchesDrift`、`TestGeneratorConstantsMatchTheDeclaredExamples`、`TestPlayerTCPDeclarationAgreesWithWiring`；其余 1 项见文件、`TestGeneratedProjectsReadConfigOnlyThroughDeclarations`、`TestGeneratedProjectConfigGuardCatchesDrift`、`TestDoctorReadsBusinessDeclarationsFromTheProcess`、`TestAddedConfigSectionsFollowTheFilesLineEndings`
+- [consolidate_contract_test.go](../../../codegen/internal/roost/consolidate_contract_test.go)：`TestLayoutStageMovesTheSyncBlock`、`TestLayoutPathRules`、`TestConsolidateSplitsASingleLineImportIntoAValidSecondDeclaration`、`TestSingleModuleStageRunsAfterThePackageTable`、`TestSingleModulePathRules`
 - [consolidate_test.go](../../../codegen/internal/roost/consolidate_test.go)：`TestConsolidateProjectRewritesImportsGoModAndManifest`、`TestConsolidateProjectDryRunWritesNothing`、`TestConsolidateProjectRefusesUnmappedRemovedImports`、`TestConsolidationMapMatchesTheGeneratorFloor`
 - [core_pin_script_promises_test.go](../../../codegen/internal/roost/core_pin_script_promises_test.go)：`TestCorePinScriptPrintsTheGeneratorMinimum`
 - [demo_prod_config_promises_test.go](../../../codegen/internal/roost/demo_prod_config_promises_test.go)：`TestGameDemoProductionConfigsPassTheGameInitChecks`
@@ -614,10 +602,8 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 - [framework_release_test.go](../../../codegen/internal/roost/framework_release_test.go)：`TestFrameworkReleaseManifestStrictValidation`、`TestPublishedFrameworkGoModRejectsLocalOrPseudoDependencies`、`TestFrameworkGitHubOutputAndBuildVersion`
 - [framework_services_test.go](../../../codegen/internal/roost/framework_services_test.go)：`TestGameTemplateHostsEveryFrameworkServiceAndWiresTheGame`、`TestFrameworkServiceManifestValidation`、`TestGameTemplateRendersHostingAndClientWiring`、`TestAProjectWithoutFrameworkServicesDoesNotDependOnRoostService`、`TestGameTemplateScaffoldsWorldAndPlayer`；其余 2 项见文件
 - [generate_changed_promises_test.go](../../../codegen/internal/roost/generate_changed_promises_test.go)：`TestGenerateChangedSeesChangesOfAProjectInARepositorySubdirectory`、`TestGenerateChangedCountsBothSidesOfARename`
-- [generated_config_validation_promises_test.go](../../../codegen/internal/roost/generated_config_validation_promises_test.go)：`TestA4GeneratedConfigsPassValidation`、`TestGeneratedConfigsPassStrictAndProductionValidation`
-- [generated_project_compiles_promises_test.go](../../../codegen/internal/roost/generated_project_compiles_promises_test.go)：`TestGeneratedGameDemoBuildsAndVetsAgainstThisCheckout`
-- [generator_cwd_promises_test.go](../../../codegen/internal/roost/generator_cwd_promises_test.go)：`TestGeneratorsDoNotMoveTheProcessIntoTheTreeTheyGenerate`、`TestSyncProjectStagesNeverBecomeAChildsWorkingDirectory`
-- [generator_version_promises_test.go](../../../codegen/internal/roost/generator_version_promises_test.go)：`TestVersionsCodegenIsRefused`、`TestTheMakefileRunsTheGeneratorAtTheCoreVersion`
+- [generated_contract_test.go](../../../codegen/internal/roost/generated_contract_test.go)：`TestA4GeneratedConfigsPassValidation`、`TestGeneratedConfigsPassStrictAndProductionValidation`、`TestGeneratedGameDemoBuildsAndVetsAgainstThisCheckout`
+- [generator_contract_test.go](../../../codegen/internal/roost/generator_contract_test.go)：`TestGeneratorsDoNotMoveTheProcessIntoTheTreeTheyGenerate`、`TestSyncProjectStagesNeverBecomeAChildsWorkingDirectory`、`TestVersionsCodegenIsRefused`、`TestTheMakefileRunsTheGeneratorAtTheCoreVersion`
 - [gitignore_runtime_promises_test.go](../../../codegen/internal/roost/gitignore_runtime_promises_test.go)：`TestGeneratedGitignoreIgnoresTheRuntimeOutputGenerationSkips`
 - [go_command_tree_promises_test.go](../../../codegen/internal/roost/go_command_tree_promises_test.go)：`TestDoctorGoCommandTimeoutReturnsAndLeavesNoGrandchild`、`TestDoctorGoCommandTimeoutIsItsOwnDeadline`、`TestDependencyCommandCancelWithBufferedOutputReturnsAndLeavesNoGrandchild`、`TestDependencyCommandCancelWithFileOutputLeavesNoGrandchild`、`TestDependencyCommandInterruptKillsTheGoTreeAndStillKillsRoost`
 - [help_test.go](../../../codegen/internal/roost/help_test.go)：`TestHelpCatalogIsCompleteAndUnique`、`TestHelpOverviewListsCapabilities`、`TestEveryCapabilityHelpContainsConfigurationAndExample`、`TestHelpAliasesAndContextCommands`、`TestUnknownHelpCapabilityFailsWithDiscoveryHint`；其余 2 项见文件
@@ -625,15 +611,13 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 - [image_configdata_promises_test.go](../../../codegen/internal/roost/image_configdata_promises_test.go)：`TestProductionImageCarriesConfigDataWhereConfigDataDirResolves`
 - [interrupt_phases_promises_test.go](../../../codegen/internal/roost/interrupt_phases_promises_test.go)：`TestInterruptInEveryStagePhaseRemovesTheStageAndDiesOfTheSignal`
 - [interrupt_stage_promises_test.go](../../../codegen/internal/roost/interrupt_stage_promises_test.go)：`TestInterruptedCommandRemovesItsStagingTree`
-- [k8s_secret_config_promises_test.go](../../../codegen/internal/roost/k8s_secret_config_promises_test.go)：`TestGameDemoKubernetesSecretExamplesMirrorTheProductionExamples`、`TestAddedConfigSectionsReachTheKubernetesSecretExample`
-- [k8s_secret_crlf_promises_test.go](../../../codegen/internal/roost/k8s_secret_crlf_promises_test.go)：`TestCRLFKubernetesSecretExampleGetsTheSameEditsAsLF`、`TestUnrecognizedKubernetesSecretExampleIsAVisibleWarningForEveryCommand`
+- [k8s_contract_test.go](../../../codegen/internal/roost/k8s_contract_test.go)：`TestGameDemoKubernetesSecretExamplesMirrorTheProductionExamples`、`TestAddedConfigSectionsReachTheKubernetesSecretExample`、`TestCRLFKubernetesSecretExampleGetsTheSameEditsAsLF`、`TestUnrecognizedKubernetesSecretExampleIsAVisibleWarningForEveryCommand`
 - [literal_coupling_test.go](../../../codegen/internal/roost/literal_coupling_test.go)：`TestOrchestratorDoesNotRepeatGeneratorDefaultPaths`
 - [logic_offset_doctor_promises_test.go](../../../codegen/internal/roost/logic_offset_doctor_promises_test.go)：`TestDoctorNamesTheServicesWhoseLogicOffsetDisagrees`
 - [manager_mod_test.go](../../../codegen/internal/roost/manager_mod_test.go)：`TestValidateRejectsManagerModInSharedMods`、`TestDefaultManifestIncludesManagerModAndValidates`、`TestBootstrapWiresManagerModPerService`、`TestServiceManagersHookMatchesServicePackageClause`
 - [manifest_legacy_test.go](../../../codegen/internal/roost/manifest_legacy_test.go)：`TestValidateCanonicalizesLegacyModAndFeatureNames`、`TestValidateStillRejectsUnknownModAndFeature`
 - [next_optional_promises_test.go](../../../codegen/internal/roost/next_optional_promises_test.go)：`TestOptionalHintsNameWhatTheProjectHasNotUsedYet`、`TestGenerateCheckToleratesCRLFCheckouts`
-- [player_tcp_registration_wait_promises_test.go](../../../codegen/internal/roost/player_tcp_registration_wait_promises_test.go)：`TestGeneratedPlayerTCPTestsWaitForTheSessionsTheyUse`、`TestGeneratedSceneConnectionTestsWaitForEveryDialedPlayer`
-- [player_tcp_stop_contract_promises_test.go](../../../codegen/internal/roost/player_tcp_stop_contract_promises_test.go)：`TestA3GeneratedServerStopContract`、`TestA3GeneratedModStopContract`、`TestGeneratedPlayerTCPStopContract`
+- [player_contract_test.go](../../../codegen/internal/roost/player_contract_test.go)：`TestGeneratedPlayerTCPTestsWaitForTheSessionsTheyUse`、`TestGeneratedSceneConnectionTestsWaitForEveryDialedPlayer`、`TestA3GeneratedServerStopContract`、`TestA3GeneratedModStopContract`、`TestGeneratedPlayerTCPStopContract`
 - [project_boundary_promises_test.go](../../../codegen/internal/roost/project_boundary_promises_test.go)：`TestTemplateFailureDoesNotPublishPartialProject`、`TestOrdinaryMentionOfGeneratedTextRemainsBusinessInput`、`TestNewManifestDoesNotAdvertiseRetiredModules`、`TestProductionConfigAllowsLoopbackOpsAddress`、`TestForeignGeneratedFileIsNotOwnedByRoost`
 - [project_fixture_test.go](../../../codegen/internal/roost/project_fixture_test.go)：`TestMain`、`TestProjectFixtureCopiesMatchAFreshNewProject`
 - [protocol_retirement_test.go](../../../codegen/internal/roost/protocol_retirement_test.go)：`TestSyncCommitsProtocolRetirement`、`TestGenerateCheckDetectsMarkerlessProtocolDrift`
@@ -642,14 +626,9 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 - [roost_test.go](../../../codegen/internal/roost/roost_test.go)：`TestResolveModsAddsRequiredDependencies`、`TestResolveModsDefaultsNestAndSagaToDataEngine`、`TestResolveModsRejectsRemovedPersistenceMods`、`TestDefaultManifestUsesOnlyDataEnginePersistence`、`TestNewProjectSyncPreservesBusinessFiles`；其余 49 项见文件
 - [runtime_dirs_promises_test.go](../../../codegen/internal/roost/runtime_dirs_promises_test.go)：`TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput`
 - [service_metrics_promises_test.go](../../../codegen/internal/roost/service_metrics_promises_test.go)：`TestGeneratedServicesReportIntoTheMetricsRegistryByDefault`
-- [shell_install_configdata_promises_test.go](../../../codegen/internal/roost/shell_install_configdata_promises_test.go)：`TestShellInstallPutsConfigDataWhereConfigDataDirResolves`
-- [shell_rollback_stop_promises_test.go](../../../codegen/internal/roost/shell_rollback_stop_promises_test.go)：`TestShellReleaseSwitchStopsTheRunningProcessUnderItsOwnUnit`、`TestShellReleaseSwitchRestoresCurrentAndUnitWhenTheUnitCannotBeInstalled`、`TestShellRollbackRejectsDotVersions`
-- [shell_rollback_unit_promises_test.go](../../../codegen/internal/roost/shell_rollback_unit_promises_test.go)：`TestShellRollbackRunsThePreviousReleaseUnderItsOwnUnit`
-- [shutdown_budget_promises_test.go](../../../codegen/internal/roost/shutdown_budget_promises_test.go)：`TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors`、`TestOneSyncConvergesAfterAServiceLosesAMod`、`TestOneSyncConvergesAfterAServiceGainsAMod`、`TestDoctorShowsTheGracePeriodTheTemplatesOnDiskSet`、`TestSyncWritesNothingWhenTheShutdownRefreshCannotBeWritten`；其余 2 项见文件
+- [shell_contract_test.go](../../../codegen/internal/roost/shell_contract_test.go)：`TestShellInstallPutsConfigDataWhereConfigDataDirResolves`、`TestShellReleaseSwitchStopsTheRunningProcessUnderItsOwnUnit`、`TestShellReleaseSwitchRestoresCurrentAndUnitWhenTheUnitCannotBeInstalled`、`TestShellRollbackRejectsDotVersions`、`TestShellRollbackRunsThePreviousReleaseUnderItsOwnUnit`
+- [shutdown_contract_test.go](../../../codegen/internal/roost/shutdown_contract_test.go)：`TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors`、`TestOneSyncConvergesAfterAServiceLosesAMod`、`TestOneSyncConvergesAfterAServiceGainsAMod`、`TestDoctorShowsTheGracePeriodTheTemplatesOnDiskSet`、`TestSyncWritesNothingWhenTheShutdownRefreshCannotBeWritten`；其余 2 项见文件、`TestDoctorJudgesANonPositiveTotalAsTheAppsFallback`、`TestDoctorReportsTheAppsFallbackWhenItCannotCoverTheMods`、`TestDoctorJudgesANonPositiveDataEngineBudgetAsItsFallback`、`TestDoctorAdviceFollowsTheConfiguredDataEngineBudget`、`TestDoctorAdvicePerFileWhenTheConfigsDiffer`、`TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse`、`TestDoctorKeepsTheAdviceForARealShortfallNextToAParseFailure`、`TestDoctorStillFailsOnAnInvalidDurationInTheDevConfig`、`TestGeneratedShutdownCountsThePlayerTCPStopBudget`、`TestDoctorCountsTheConfiguredPlayerTCPStopBudget`、`TestDoctorRejectsANegativePlayerTCPShutdownTimeout`、`TestSyncMovesAnUneditedBlockWrittenBeforeThePlayerTCPBudget`
 - [shutdown_budget_test.go](../../../codegen/internal/roost/shutdown_budget_test.go)：`TestGeneratedShutdownTimeoutFollowsEachServicesMods`、`TestGeneratedShutdownTimeoutIsSmallerForAServiceWithFewMods`、`TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods`、`TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal`、`TestDoctorChecksEachServicesShutdownWindow`
-- [shutdown_doctor_config_promises_test.go](../../../codegen/internal/roost/shutdown_doctor_config_promises_test.go)：`TestDoctorJudgesANonPositiveTotalAsTheAppsFallback`、`TestDoctorReportsTheAppsFallbackWhenItCannotCoverTheMods`、`TestDoctorJudgesANonPositiveDataEngineBudgetAsItsFallback`、`TestDoctorAdviceFollowsTheConfiguredDataEngineBudget`、`TestDoctorAdvicePerFileWhenTheConfigsDiffer`
-- [shutdown_example_parse_promises_test.go](../../../codegen/internal/roost/shutdown_example_parse_promises_test.go)：`TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse`、`TestDoctorKeepsTheAdviceForARealShortfallNextToAParseFailure`、`TestDoctorStillFailsOnAnInvalidDurationInTheDevConfig`
-- [shutdown_player_tcp_budget_promises_test.go](../../../codegen/internal/roost/shutdown_player_tcp_budget_promises_test.go)：`TestGeneratedShutdownCountsThePlayerTCPStopBudget`、`TestDoctorCountsTheConfiguredPlayerTCPStopBudget`、`TestDoctorRejectsANegativePlayerTCPShutdownTimeout`、`TestSyncMovesAnUneditedBlockWrittenBeforeThePlayerTCPBudget`
 - [singleton_promises_test.go](../../../codegen/internal/roost/singleton_promises_test.go)：`TestBootstrapInstallsTheSingletonStoreWhenAConfigCanTurnItOn`、`TestServiceConfigsTurnTheSingletonOnOnlyForDataEngineServices`、`TestAddingTheDataEngineLaterTurnsTheGeneratedSingletonOn`、`TestSingletonReleaseIsPartOfTheGeneratedShutdownBlock`、`TestDoctorCountsTheSingletonReleaseForAConfigThatTurnsItOn`；其余 1 项见文件
 - [stage_error_messages_promises_test.go](../../../codegen/internal/roost/stage_error_messages_promises_test.go)：`TestStagedGeneratorErrorsNameTheProjectPath`、`TestDependencyFailureAfterUpgradeOrSyncPointsAtProjectDeps`
 - [statslog_writable_promises_test.go](../../../codegen/internal/roost/statslog_writable_promises_test.go)：`TestGeneratedDeploymentsGiveStatsLogAWritableDirectory`
@@ -700,8 +679,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 - [capture_reconnect_promises_test.go](../../../robot/capture_reconnect_promises_test.go)：`TestPushCaptureIsReinstalledOnTheSessionAfterReconnect`
 - [coalescer_close_promises_test.go](../../../robot/coalescer_close_promises_test.go)：`TestCoalescerCloseReturnsAfterTheFinalFlush`
 - [context_guards_promises_test.go](../../../robot/context_guards_promises_test.go)：`TestContextRefusesMissingRunnerSessionAndCaptureArguments`
-- [lockstep_apply_promises_test.go](../../../robot/lockstep_apply_promises_test.go)：`TestLockstepBotPromiseTransientSinkFailureKeepsTheBatchTail`、`TestLockstepBotPromiseSimulateFailureIsTerminal`、`TestLockstepBotPromisePendingApplyIsBounded`、`TestLockstepBotPromiseRetainedFramesDoNotAliasCallerPayloads`
-- [lockstep_gap_promises_test.go](../../../robot/lockstep_gap_promises_test.go)：`TestLockstepBotPromiseRequestsCatchupOnAnyUnhealedGap`、`TestLockstepBotPromiseReRequestsAnAbandonedCatchup`
+- [lockstep_contract_test.go](../../../robot/lockstep_contract_test.go)：`TestLockstepBotPromiseTransientSinkFailureKeepsTheBatchTail`、`TestLockstepBotPromiseSimulateFailureIsTerminal`、`TestLockstepBotPromisePendingApplyIsBounded`、`TestLockstepBotPromiseRetainedFramesDoNotAliasCallerPayloads`、`TestLockstepBotPromiseRequestsCatchupOnAnyUnhealedGap`、`TestLockstepBotPromiseReRequestsAnAbandonedCatchup`
 - [robot_impl_test.go](../../../robot/robot_impl_test.go)：`TestKCPDialerEndToEnd`、`TestQUICDialerEndToEnd`、`TestQUICDialerRequiresALPN`、`TestLockstepBotsSurviveThirtyPercentLoss`、`TestLockstepBotRequestsCatchupOncePerGap`；其余 1 项见文件
 - [robot_test.go](../../../robot/robot_test.go)：`TestPacketCodecRoundTrip`、`TestSessionCallEchoAndPush`、`TestSessionCloseFansOutToPendingAndWaiters`、`TestTypedKeyAndBlackboard`、`TestCoalescerDedupsAndFlushes`；其余 3 项见文件
 
@@ -711,8 +689,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 - [guards_promises_test.go](../../../robot/loadtest/guards_promises_test.go)：`TestManagerEntryPointsRefuseMissingPartsAndUnknownRuns`
 - [loadtest_test.go](../../../robot/loadtest/loadtest_test.go)：`TestManagerLifecycleAndSingleActiveRun`、`TestThresholdViolationFailsRun`、`TestAdminCommandsAndReport`、`TestAdminStartGate`
 - [run_series_lifecycle_promises_test.go](../../../robot/loadtest/run_series_lifecycle_promises_test.go)：`TestRunSeriesLeaveTheRegistryWithTheRunRecord`
-- [threshold_no_samples_promises_test.go](../../../robot/loadtest/threshold_no_samples_promises_test.go)：`TestThresholdsWithoutSamplesFailTheRun`、`TestQuantileThresholdFailsWhenTheHistogramSeriesWasDropped`
-- [threshold_verdict_promises_test.go](../../../robot/loadtest/threshold_verdict_promises_test.go)：`TestQuantileThresholdJudgesTheObservedCostsNotABucketBound`、`TestThresholdFailureNamesTheThresholdAndTheActualValue`
+- [threshold_contract_test.go](../../../robot/loadtest/threshold_contract_test.go)：`TestThresholdsWithoutSamplesFailTheRun`、`TestQuantileThresholdFailsWhenTheHistogramSeriesWasDropped`、`TestQuantileThresholdJudgesTheObservedCostsNotABucketBound`、`TestThresholdFailureNamesTheThresholdAndTheActualValue`
 
 ### robot/runner
 
@@ -737,4 +714,4 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ## 6. 验收与运维
 
-改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。命令与发布记录见 [维护手册](../../maintenance/README.md)。本次文档补丁的实际执行结果见 [发布验收](../../release/v1.24.1-IMPLEMENTATION.md)；性能沿用 [v1.24.0 基线](../../maintenance/PERFORMANCE.md)，没有新测量则不能改容量承诺。
+改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。命令与发布记录见 [维护手册](../../maintenance/README.md)。本次文档补丁的实际执行结果见 [发布验收](../../release/v1.24.1-IMPLEMENTATION.md)；性能沿用 [v1.24.0 基线](../../performance/STABLE-v1.24.0.md)，没有新测量则不能改容量承诺。

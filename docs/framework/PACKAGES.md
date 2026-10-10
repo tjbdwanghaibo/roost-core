@@ -9,7 +9,7 @@
 
 | 包路径 | 主说明 | 实现文件 | 测试文件 |
 | --- | --- | ---: | ---: |
-| [.](../../.) | [公共基础设施](impl/14-foundation.md) | 0 | 11 |
+| [.](../..) | [公共基础设施](impl/14-foundation.md) | 0 | 11 |
 | [client/wire](../../client/wire) | [核心：Sync、Lockstep 与客户端](impl/04-sync.md) | 1 | 2 |
 | [cmd/glsvet](../../cmd/glsvet) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 4 | 6 |
 | [cmd/walinspect](../../cmd/walinspect) | [其他包与公共基础设施](impl/14-foundation.md) | 1 | 0 |

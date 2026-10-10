@@ -10,7 +10,7 @@ Roost 是通用游戏服务器框架。业务采用 ECS：Entity 组合组件与
 - [模块设计与实现](docs/framework/README.md)：Nest、Entity、DataEngine、Sync、Remote 与周边能力。
 - [全包源码索引](docs/framework/PACKAGES.md)：当前目录与职责。
 - [维护手册](docs/maintenance/README.md)：修改、验证、升级、故障与发布。
-- [已知限制](docs/maintenance/KNOWN-LIMITS.md)与 [性能证据](docs/maintenance/PERFORMANCE.md)：区分已验证行为和待验收项。
+- [已知限制](docs/maintenance/KNOWN-LIMITS.md)与 [性能证据](docs/performance/STABLE-v1.24.0.md)：区分已验证行为和待验收项。
 
 ## 目录
 

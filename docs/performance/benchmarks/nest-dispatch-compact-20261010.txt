@@ -1,0 +1,161 @@
+基线 f25527db；Apple M5 macOS arm64 Go1.27；4worker/window64；before/after交替三轮，每样本1s。
+
+before-layout.txt
+=== RUN   TestDispatchLayoutProbe
+    dispatch_layout_probe_test.go:4: dispatchJob size=160 align=8
+    dispatch_layout_probe_test.go:4:   singleID offset=0 size=8
+    dispatch_layout_probe_test.go:4:   admittedAt offset=8 size=24
+    dispatch_layout_probe_test.go:4:   readyAt offset=32 size=24
+    dispatch_layout_probe_test.go:4:   waitingPrev offset=56 size=8
+    dispatch_layout_probe_test.go:4:   waitingNext offset=64 size=8
+    dispatch_layout_probe_test.go:4:   msg offset=72 size=8
+    dispatch_layout_probe_test.go:4:   ids offset=80 size=24
+    dispatch_layout_probe_test.go:4:   slow offset=104 size=1
+    dispatch_layout_probe_test.go:4:   continuation offset=105 size=1
+    dispatch_layout_probe_test.go:4:   predecessors offset=112 size=8
+    dispatch_layout_probe_test.go:4:   waitedForPredecessor offset=120 size=1
+    dispatch_layout_probe_test.go:4:   successors offset=128 size=24
+    dispatch_layout_probe_test.go:4:   next offset=152 size=8
+    dispatch_layout_probe_test.go:4: dispatchLane size=184 align=8
+    dispatch_layout_probe_test.go:4:   wake offset=0 size=8
+    dispatch_layout_probe_test.go:4:   config offset=8 size=16
+    dispatch_layout_probe_test.go:4:   handler offset=24 size=8
+    dispatch_layout_probe_test.go:4:   ready offset=32 size=16
+    dispatch_layout_probe_test.go:4:   waiting offset=48 size=16
+    dispatch_layout_probe_test.go:4:   queued offset=64 size=8
+    dispatch_layout_probe_test.go:4:   readyCount offset=72 size=8
+    dispatch_layout_probe_test.go:4:   running offset=80 size=8
+    dispatch_layout_probe_test.go:4:   observation offset=88 size=96
+    dispatch_layout_probe_test.go:4: dispatchQueue size=480 align=8
+    dispatch_layout_probe_test.go:4:   mu offset=0 size=8
+    dispatch_layout_probe_test.go:4:   lanes offset=8 size=368
+    dispatch_layout_probe_test.go:4:   continuations offset=376 size=16
+    dispatch_layout_probe_test.go:4:   preferContinuation offset=392 size=1
+    dispatch_layout_probe_test.go:4:   continuationCount offset=400 size=8
+    dispatch_layout_probe_test.go:4:   tails offset=408 size=8
+    dispatch_layout_probe_test.go:4:   pending offset=416 size=8
+    dispatch_layout_probe_test.go:4:   started offset=424 size=1
+    dispatch_layout_probe_test.go:4:   stopping offset=425 size=1
+    dispatch_layout_probe_test.go:4:   done offset=432 size=8
+    dispatch_layout_probe_test.go:4:   wg offset=440 size=16
+    dispatch_layout_probe_test.go:4:   name offset=456 size=16
+    dispatch_layout_probe_test.go:4:   continuationRunning offset=472 size=8
+--- PASS: TestDispatchLayoutProbe (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	0.631s
+
+after-layout.txt
+=== RUN   TestDispatchLayoutProbe
+    dispatch_layout_probe_test.go:11: dispatchJob size=120 align=8
+    dispatch_layout_probe_test.go:14:   waitingPrev offset=0 size=8
+    dispatch_layout_probe_test.go:14:   waitingNext offset=8 size=8
+    dispatch_layout_probe_test.go:14:   msg offset=16 size=8
+    dispatch_layout_probe_test.go:14:   ids offset=24 size=24
+    dispatch_layout_probe_test.go:14:   successors offset=48 size=24
+    dispatch_layout_probe_test.go:14:   next offset=72 size=8
+    dispatch_layout_probe_test.go:14:   singleID offset=80 size=8
+    dispatch_layout_probe_test.go:14:   admittedAt offset=88 size=8
+    dispatch_layout_probe_test.go:14:   readyAt offset=96 size=8
+    dispatch_layout_probe_test.go:14:   predecessors offset=104 size=8
+    dispatch_layout_probe_test.go:14:   slow offset=112 size=1
+    dispatch_layout_probe_test.go:14:   continuation offset=113 size=1
+    dispatch_layout_probe_test.go:14:   waitedForPredecessor offset=114 size=1
+    dispatch_layout_probe_test.go:11: dispatchLane size=184 align=8
+    dispatch_layout_probe_test.go:14:   wake offset=0 size=8
+    dispatch_layout_probe_test.go:14:   config offset=8 size=16
+    dispatch_layout_probe_test.go:14:   handler offset=24 size=8
+    dispatch_layout_probe_test.go:14:   ready offset=32 size=16
+    dispatch_layout_probe_test.go:14:   waiting offset=48 size=16
+    dispatch_layout_probe_test.go:14:   queued offset=64 size=8
+    dispatch_layout_probe_test.go:14:   readyCount offset=72 size=8
+    dispatch_layout_probe_test.go:14:   running offset=80 size=8
+    dispatch_layout_probe_test.go:14:   observation offset=88 size=96
+    dispatch_layout_probe_test.go:11: dispatchQueue size=496 align=8
+    dispatch_layout_probe_test.go:14:   mu offset=0 size=8
+    dispatch_layout_probe_test.go:14:   lanes offset=8 size=368
+    dispatch_layout_probe_test.go:14:   continuations offset=376 size=16
+    dispatch_layout_probe_test.go:14:   continuationCount offset=392 size=8
+    dispatch_layout_probe_test.go:14:   tails offset=400 size=8
+    dispatch_layout_probe_test.go:14:   pending offset=408 size=8
+    dispatch_layout_probe_test.go:14:   done offset=416 size=8
+    dispatch_layout_probe_test.go:14:   wg offset=424 size=16
+    dispatch_layout_probe_test.go:14:   name offset=440 size=16
+    dispatch_layout_probe_test.go:14:   continuationRunning offset=456 size=8
+    dispatch_layout_probe_test.go:14:   clockOrigin offset=464 size=24
+    dispatch_layout_probe_test.go:14:   preferContinuation offset=488 size=1
+    dispatch_layout_probe_test.go:14:   started offset=489 size=1
+    dispatch_layout_probe_test.go:14:   stopping offset=490 size=1
+--- PASS: TestDispatchLayoutProbe (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	0.625s
+
+race.txt
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	3.573s
+
+vet.txt
+
+before-1.txt
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompare/noop/uniform/nest-4         	 1618526	       735.2 ns/op	   1360261 completed/s	         0.0000296 handler-avg-ms	    753821 iterations/1ms	         0 rejected	         0.1803 total-max-ms	         0.05229 total-p99-ms	         0.05225 wait-p99-ms	         0 zero-duration-pct	     209 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-4         	  403200	      2953 ns/op	    338677 completed/s	         0.01076 handler-avg-ms	    753821 iterations/1ms	         0 rejected	         1.284 total-max-ms	         0.1903 total-p99-ms	         0.1786 wait-p99-ms	         0 zero-duration-pct	     209 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_100us/uniform/nest-4        	   44113	     27175 ns/op	     36798 completed/s	         0.1078 handler-avg-ms	    753821 iterations/1ms	         0 rejected	        30.69 total-max-ms	         1.578 total-p99-ms	         1.471 wait-p99-ms	         0 zero-duration-pct	     210 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-4        	    8822	    135219 ns/op	      7395 completed/s	         0.5399 handler-avg-ms	    753821 iterations/1ms	         0 rejected	        25.73 total-max-ms	         8.247 total-p99-ms	         7.713 wait-p99-ms	         0 zero-duration-pct	     211 B/op	       4 allocs/op
+PASS
+
+after-1.txt
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompare/noop/uniform/nest-4         	 1707748	       702.7 ns/op	   1423089 completed/s	         0.0000293 handler-avg-ms	    756102 iterations/1ms	         0 rejected	         0.1500 total-max-ms	         0.05067 total-p99-ms	         0.05063 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-4         	  399852	      2954 ns/op	    338561 completed/s	         0.01080 handler-avg-ms	    756102 iterations/1ms	         0 rejected	         1.472 total-max-ms	         0.1894 total-p99-ms	         0.1775 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_100us/uniform/nest-4        	   44042	     27468 ns/op	     36406 completed/s	         0.1090 handler-avg-ms	    756102 iterations/1ms	         0 rejected	        15.20 total-max-ms	         1.536 total-p99-ms	         1.425 wait-p99-ms	         0 zero-duration-pct	     178 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-4        	    8362	    142658 ns/op	      7010 completed/s	         0.5695 handler-avg-ms	    756102 iterations/1ms	         0 rejected	        23.36 total-max-ms	         9.626 total-p99-ms	         8.474 wait-p99-ms	         0 zero-duration-pct	     179 B/op	       4 allocs/op
+PASS
+
+after-2.txt
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompare/noop/uniform/nest-4         	 1732816	       757.4 ns/op	   1320317 completed/s	         0.0000350 handler-avg-ms	    756047 iterations/1ms	         0 rejected	         8.858 total-max-ms	         0.06763 total-p99-ms	         0.06754 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-4         	  382717	      2980 ns/op	    335580 completed/s	         0.01086 handler-avg-ms	    756047 iterations/1ms	         0 rejected	         1.411 total-max-ms	         0.1977 total-p99-ms	         0.1856 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_100us/uniform/nest-4        	   44094	     27279 ns/op	     36659 completed/s	         0.1082 handler-avg-ms	    756047 iterations/1ms	         0 rejected	        19.01 total-max-ms	         1.579 total-p99-ms	         1.470 wait-p99-ms	         0 zero-duration-pct	     178 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-4        	    8703	    135305 ns/op	      7391 completed/s	         0.5403 handler-avg-ms	    756047 iterations/1ms	         0 rejected	        20.50 total-max-ms	         8.316 total-p99-ms	         7.770 wait-p99-ms	         0 zero-duration-pct	     179 B/op	       4 allocs/op
+PASS
+
+before-2.txt
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompare/noop/uniform/nest-4         	 1589824	       752.8 ns/op	   1328335 completed/s	         0.0000307 handler-avg-ms	    756646 iterations/1ms	         0 rejected	         2.316 total-max-ms	         0.05421 total-p99-ms	         0.05417 wait-p99-ms	         0 zero-duration-pct	     209 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-4         	  401703	      2977 ns/op	    335949 completed/s	         0.01084 handler-avg-ms	    756646 iterations/1ms	         0 rejected	         3.042 total-max-ms	         0.1987 total-p99-ms	         0.1866 wait-p99-ms	         0 zero-duration-pct	     209 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_100us/uniform/nest-4        	   44048	     27313 ns/op	     36613 completed/s	         0.1083 handler-avg-ms	    756646 iterations/1ms	         0 rejected	        28.27 total-max-ms	         1.600 total-p99-ms	         1.493 wait-p99-ms	         0 zero-duration-pct	     210 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-4        	    8890	    135378 ns/op	      7387 completed/s	         0.5406 handler-avg-ms	    756646 iterations/1ms	         0 rejected	        23.04 total-max-ms	         8.303 total-p99-ms	         7.765 wait-p99-ms	         0 zero-duration-pct	     211 B/op	       4 allocs/op
+PASS
+
+before-3.txt
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompare/noop/uniform/nest-4         	 1617626	       736.2 ns/op	   1358286 completed/s	         0.0000295 handler-avg-ms	    750572 iterations/1ms	         0 rejected	         0.1536 total-max-ms	         0.05242 total-p99-ms	         0.05237 wait-p99-ms	         0 zero-duration-pct	     209 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-4         	  405686	      2940 ns/op	    340089 completed/s	         0.01073 handler-avg-ms	    750572 iterations/1ms	         0 rejected	         1.353 total-max-ms	         0.1889 total-p99-ms	         0.1770 wait-p99-ms	         0 zero-duration-pct	     209 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_100us/uniform/nest-4        	   42259	     29293 ns/op	     34138 completed/s	         0.1159 handler-avg-ms	    750572 iterations/1ms	         0 rejected	         8.384 total-max-ms	         1.730 total-p99-ms	         1.607 wait-p99-ms	         0 zero-duration-pct	     210 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-4        	    8881	    134488 ns/op	      7436 completed/s	         0.5370 handler-avg-ms	    750572 iterations/1ms	         0 rejected	        25.78 total-max-ms	         8.274 total-p99-ms	         7.744 wait-p99-ms	         0 zero-duration-pct	     211 B/op	       4 allocs/op
+PASS
+
+after-3.txt
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompare/noop/uniform/nest-4         	 1708797	       699.2 ns/op	   1430162 completed/s	         0.0000296 handler-avg-ms	    733324 iterations/1ms	         0 rejected	         0.1834 total-max-ms	         0.05013 total-p99-ms	         0.05013 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-4         	  406330	      2873 ns/op	    348047 completed/s	         0.01048 handler-avg-ms	    733324 iterations/1ms	         0 rejected	         1.671 total-max-ms	         0.1879 total-p99-ms	         0.1765 wait-p99-ms	         0 zero-duration-pct	     177 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_100us/uniform/nest-4        	   45350	     26695 ns/op	     37461 completed/s	         0.1059 handler-avg-ms	    733324 iterations/1ms	         0 rejected	        21.64 total-max-ms	         1.480 total-p99-ms	         1.373 wait-p99-ms	         0 zero-duration-pct	     178 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-4        	    8568	    131300 ns/op	      7616 completed/s	         0.5243 handler-avg-ms	    733324 iterations/1ms	         0 rejected	        16.82 total-max-ms	         7.967 total-p99-ms	         7.449 wait-p99-ms	         0 zero-duration-pct	     179 B/op	       4 allocs/op
+PASS

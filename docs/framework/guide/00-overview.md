@@ -1,6 +1,6 @@
 # 总览与端到端设计：设计与使用
 
-适用运行时：v1.24.0；文档维护版：v1.24.1。[实现与维护入口](../impl/00-overview.md) · [模块总目录](../README.md)
+目录与执行模型：v1.25.0。[实现与维护入口](../impl/00-overview.md) · [模块总目录](../README.md)
 
 ## 先理解这一块
 
@@ -12,7 +12,7 @@
 
 ## 1. 定位与结构
 
-Roost 是单一 Go 模块 github.com/tjbdwanghaibo/roost-core；运行时、kit、codegen、demo 随同一个 tag 发布。三个基础模块分别回答：Nest 决定何时在什么锁下修改实体，DataEngine 决定修改如何落盘与恢复，Sync 决定哪些已提交状态可以被哪些接收者看见。
+Roost 是单一 Go 模块 github.com/tjbdwanghaibo/roost-core；运行时、wiring、codegen、demo 随同一个 tag 发布。三个基础模块分别回答：Nest 决定何时在什么锁下修改实体，DataEngine 决定修改如何落盘与恢复，Sync 决定哪些已提交状态可以被哪些接收者看见。
 
 Remote 同时连接调度、持久化和复制；Saga 处理跨事务域步骤与补偿。其余包提供进程生命周期、配置、时间、连接、观测或游戏通用能力。目录在同一模块，不代表职责已经全部归并到三个顶层目录。
 
@@ -36,15 +36,15 @@ Remote 同时连接调度、持久化和复制；Saga 处理跨事务域步骤�
 
 ## 4. 分层
 
-core 不依赖 wiring/codegen。kit 装配驱动和生命周期；但 v1.24.0 的 wiring/service 中仍有七个服务的领域实现，详见 service 篇。codegen 生成业务入口、DAO、路由及项目文件；生成目录和运行时包不能互相替代。
+Framework / Infra / Gameplay / Service 承载运行实现，Wiring 负责配置、依赖和生命周期接线；运行层不依赖 Wiring / Codegen。领域模型、存储、RPC与周期运行已归 Service，详见 service 篇。codegen 生成业务入口、DAO、路由及项目文件；生成目录和运行时包不能互相替代。
 
 业务时钟用于玩法期限，系统时钟用于租约、超时、网络和持久过程。公开能力通过实例 Registry 获取；不要使用另一 App 的全局对象代替本实例。
 
 ## 5. 阅读顺序
 
-先读 02 Nest → 03 DataEngine → 04 Sync，再读 05 Remote、06 Saga。业务接入看 09 service、12 codegen、13 kit。01/07/10/11 是进程、配置、时钟和运维约束；08 是游戏技能，14 是其他包目录。
+先读 02 Nest → 03 DataEngine → 04 Sync，再读 05 Remote、06 Saga。业务接入看 09 service、12 codegen、13 wiring。01/07/10/11 是进程、配置、时钟和运维约束；08 是游戏技能，14 是其他包目录。
 
-性能、已知边界及升级步骤归维护目录。源码表是定位入口；表内测试存在不等于本次运行过，也不等于已经证明所有故障组合。
+性能归 performance，已知边界及升级步骤归 maintenance。源码表是定位入口；表内测试存在不等于本次运行过，也不等于已经证明所有故障组合。
 
 ## 源码与核对范围
 

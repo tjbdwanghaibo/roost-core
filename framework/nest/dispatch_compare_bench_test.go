@@ -158,6 +158,21 @@ func BenchmarkDispatchCompare(b *testing.B) {
 	}
 }
 
+// BenchmarkDispatchCompareMicro 覆盖游戏短 handler 的固定 CPU 工作量。
+// 校准与原矩阵相同；标签是名义耗时，实际耗时以 handler-avg-ms 为准。
+func BenchmarkDispatchCompareMicro(b *testing.B) {
+	iterations := dispatchComparisonIterations()
+	for _, micros := range []int{10, 20, 50, 100, 200, 500} {
+		for _, distribution := range []string{"uniform", "colliding_ids", "hot_id"} {
+			for _, kind := range []string{"nest", "id"} {
+				b.Run(fmt.Sprintf("cpu_%dus/%s/%s", micros, distribution, kind), func(b *testing.B) {
+					runDispatchComparison(b, kind, fmt.Sprintf("cpu_%dus", micros), distribution, 4, iterations)
+				})
+			}
+		}
+	}
+}
+
 // 单生产者/多生产者配对，用于检查空 handler 时的准入竞争。
 func BenchmarkDispatchCompareProducers(b *testing.B) {
 	for _, producers := range []int{1, 4, 16} {
@@ -172,12 +187,20 @@ func BenchmarkDispatchCompareProducers(b *testing.B) {
 func runDispatchComparison(b *testing.B, kind, workload, distribution string, producers, iterations int) {
 	b.StopTimer()
 	workers := runtime.GOMAXPROCS(0)
+	// 在计时外解析短任务工作量，两种调度器使用同一校准运算数。
+	var micros int
+	if _, err := fmt.Sscanf(workload, "cpu_%dus", &micros); err != nil {
+		micros = 0
+	}
+	microIterations := max(1, iterations*micros/1000)
 	samples := make([]dispatchComparisonSample, b.N)
 	var rejected atomic.Int64
 	pool := newDispatchComparisonPool(kind, workers, func(m *Msg) {
 		job := m.Params[0].(*dispatchComparisonJob)
 		start := time.Now()
 		switch workload {
+		case "cpu_10us", "cpu_20us", "cpu_50us", "cpu_100us", "cpu_200us", "cpu_500us":
+			job.checksum = dispatchComparisonBurn(microIterations)
 		case "cpu_1ms":
 			job.checksum = dispatchComparisonBurn(iterations)
 		case "cpu_200ms":

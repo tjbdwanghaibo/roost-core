@@ -24,18 +24,21 @@ const (
 	dispatchLaneCount
 )
 
+// dispatchJob 的时间是相对所属队列 clockOrigin 的单调偏移，不存储墙钟时间。
+// 指针、切片集中在前部，标志集中在末尾，减少填充及每个排队对象的体积。
+// ID 和依赖计数保持原类型，不以窄整数限制多实体请求。
 type dispatchJob struct {
-	singleID                 [1]int64
-	admittedAt, readyAt      time.Time
 	waitingPrev, waitingNext *dispatchJob
 	msg                      *Msg
 	ids                      []int64
-	slow                     bool
-	continuation             bool
-	predecessors             int
-	waitedForPredecessor     bool
 	successors               []*dispatchJob
 	next                     *dispatchJob
+	inlineID                 [1]int64 // 单目标直接存在job内；ids只读引用，不交给外部函数填充。
+	admittedAt, readyAt      time.Duration
+	predecessors             int
+	slow                     bool
+	continuation             bool
+	waitedForPredecessor     bool
 }
 
 type readyJobs struct{ head, tail *dispatchJob }
@@ -82,20 +85,23 @@ type dispatchQueue struct {
 	mu                  sync.Mutex
 	lanes               [dispatchLaneCount]dispatchLane
 	continuations       readyJobs
-	preferContinuation  bool
 	continuationCount   int
 	tails               map[int64]*dispatchJob
 	pending             int
-	started, stopping   bool
 	done                chan struct{}
 	wg                  sync.WaitGroup
 	name                string
 	continuationRunning int
+	// 原点在构造时固定，转慢、续行及停机重试均不重置；保留 time.Now 的单调分量。
+	clockOrigin        time.Time
+	preferContinuation bool
+	started, stopping  bool
 }
 
 func newDispatchQueue(name string, fast, slow WorkerPoolConfig, handler, slowHandler func(*Msg)) *dispatchQueue {
 	q := &dispatchQueue{
-		name: name,
+		name:        name,
+		clockOrigin: time.Now(),
 		lanes: [dispatchLaneCount]dispatchLane{
 			dispatchFastLane: {config: fast, handler: handler},
 			dispatchSlowLane: {config: slow, handler: slowHandler},
@@ -122,9 +128,9 @@ func (q *dispatchQueue) start() {
 		}
 	}
 }
-func dispatchIDs(msg *Msg) []int64 { return dispatchIDsInto(nil, msg) }
 
-func dispatchIDsInto(ids []int64, msg *Msg) []int64 {
+// dispatchIDs 复制消息目标后排序去重；返回值独立拥有存储，不修改消息中的切片。
+func dispatchIDs(msg *Msg) []int64 {
 	size := len(msg.Tids)
 	if msg.Tid != 0 {
 		size++
@@ -132,9 +138,7 @@ func dispatchIDsInto(ids []int64, msg *Msg) []int64 {
 	for _, group := range msg.GroupTIds {
 		size += len(group)
 	}
-	if cap(ids) < max(1, size) {
-		ids = make([]int64, 0, max(1, size))
-	}
+	ids := make([]int64, 0, max(1, size))
 	if msg.Tid != 0 {
 		ids = append(ids, msg.Tid)
 	}
@@ -149,6 +153,23 @@ func dispatchIDsInto(ids []int64, msg *Msg) []int64 {
 	return slices.Compact(ids)
 }
 
+// newDispatchJob 在发布到队列前固定目标集合，之后直到完成都不再修改。
+func newDispatchJob(msg *Msg, slow bool) *dispatchJob {
+	j := &dispatchJob{msg: msg, slow: slow}
+	switch {
+	case len(msg.Tids) == 0 && len(msg.GroupTIds) == 0:
+		// 没有目标时仍用ID 0保持原来的顺序域。
+		j.inlineID[0] = msg.Tid
+		j.ids = j.inlineID[:]
+	case msg.Tid == 0 && len(msg.Tids) == 1 && len(msg.GroupTIds) == 0:
+		j.inlineID[0] = msg.Tids[0]
+		j.ids = j.inlineID[:]
+	default:
+		j.ids = dispatchIDs(msg)
+	}
+	return j
+}
+
 func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 	if q == nil {
 		return worker.ErrWorkerClosed
@@ -158,8 +179,7 @@ func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 		lane = dispatchSlowLane
 	}
 	state := &q.lanes[lane]
-	j := &dispatchJob{msg: msg, slow: slow}
-	j.ids = dispatchIDsInto(j.singleID[:0], msg)
+	j := newDispatchJob(msg, slow)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if !q.started || q.stopping {
@@ -186,7 +206,7 @@ func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 	j.waitedForPredecessor = j.predecessors > 0
 	q.pending++
 	state.queued++
-	j.admittedAt = time.Now()
+	j.admittedAt = time.Since(q.clockOrigin)
 	state.waiting.push(j)
 	if j.predecessors == 0 {
 		q.enqueueReady(lane, j)
@@ -237,7 +257,7 @@ func (q *dispatchQueue) take(lane int) *dispatchJob {
 		state.waiting.remove(j)
 		stats := &state.observation
 		stats.Started++
-		waited := time.Since(j.readyAt)
+		waited := time.Since(q.clockOrigin) - j.readyAt
 		stats.WorkerWait += waited
 		stats.MaxWorkerWait = max(stats.MaxWorkerWait, waited)
 		if lane == dispatchFastLane {
@@ -367,7 +387,7 @@ func (q *dispatchQueue) snapshotStats() (fast, slow worker.PoolStats, continuati
 	defer q.mu.Unlock()
 	pools := [dispatchLaneCount]worker.PoolStats{}
 	observed := [dispatchLaneCount]DispatchLaneStats{}
-	now := time.Now()
+	now := time.Since(q.clockOrigin)
 	for i, name := range []string{"fast", "slow"} {
 		state := &q.lanes[i]
 		pools[i] = worker.PoolStats{Name: q.name + "_" + name, WorkerNum: state.config.Workers, QueueCap: state.config.QueueCap, QueueLen: q.waitingCount(i), Started: q.started, Stopped: q.stopping}
@@ -376,7 +396,7 @@ func (q *dispatchQueue) snapshotStats() (fast, slow worker.PoolStats, continuati
 		observed[i].BlockedOnPredecessor = state.queued - state.readyCount
 		observed[i].WaitingForWorker = max(0, state.readyCount-max(0, state.config.Workers-q.busyWorkers(i)))
 		if head := state.waiting.head; head != nil {
-			observed[i].OldestWaiting = now.Sub(head.admittedAt)
+			observed[i].OldestWaiting = now - head.admittedAt
 		}
 	}
 	return pools[dispatchFastLane], pools[dispatchSlowLane], q.continuationCount, DispatchQueueStats{Fast: observed[dispatchFastLane], Slow: observed[dispatchSlowLane], ContinuationRunning: q.continuationRunning}
@@ -401,9 +421,9 @@ func (q *dispatchQueue) busyWorkers(lane int) int {
 }
 func (q *dispatchQueue) enqueueReady(lane int, j *dispatchJob) {
 	state := &q.lanes[lane]
-	j.readyAt = time.Now()
+	j.readyAt = time.Since(q.clockOrigin)
 	if j.waitedForPredecessor {
-		waited := j.readyAt.Sub(j.admittedAt)
+		waited := j.readyAt - j.admittedAt
 		state.observation.DependencyWait += waited
 		state.observation.MaxDependencyWait = max(state.observation.MaxDependencyWait, waited)
 	}

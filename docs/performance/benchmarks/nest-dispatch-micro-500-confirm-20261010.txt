@@ -1,0 +1,30 @@
+go version go1.27.0 darwin/arm64
+darwin
+arm64
+off
+Darwin haibowangdeMacBook-Pro.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:17 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T8142 arm64
+Apple M5
+f25527db2f036b1a790ad4577ad865c1396666be
+ M framework/nest/dispatch_compare_bench_test.go
+?? artifacts/
+4ce2f2c8150b605bf72abb85d0a844297f055f86
+25b90ea34c86d48e33254ac1a1b1e27916076fad
+count=5 benchtime=2s workers=GOMAXPROCS=4 window=64 queue=65536 bench=^BenchmarkDispatchCompareMicro$/cpu_500us/uniform
+
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-4         	   17632	    136404 ns/op	      7331 completed/s	         0.5447 handler-avg-ms	    760038 iterations/1ms	         0 rejected	        21.66 total-max-ms	         8.374 total-p99-ms	         7.833 wait-p99-ms	         0 zero-duration-pct	     210 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-4         	   16654	    138742 ns/op	      7208 completed/s	         0.5540 handler-avg-ms	    760038 iterations/1ms	         0 rejected	        18.95 total-max-ms	         8.550 total-p99-ms	         7.982 wait-p99-ms	         0 zero-duration-pct	     210 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-4         	   17631	    136249 ns/op	      7340 completed/s	         0.5441 handler-avg-ms	    760038 iterations/1ms	         0 rejected	        26.63 total-max-ms	         8.380 total-p99-ms	         7.838 wait-p99-ms	         0 zero-duration-pct	     210 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-4         	   17568	    142172 ns/op	      7034 completed/s	         0.5676 handler-avg-ms	    760038 iterations/1ms	         0 rejected	         9.775 total-max-ms	         8.276 total-p99-ms	         7.722 wait-p99-ms	         0 zero-duration-pct	     210 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-4         	   17031	    141325 ns/op	      7076 completed/s	         0.5643 handler-avg-ms	    760038 iterations/1ms	         0 rejected	        30.37 total-max-ms	         8.570 total-p99-ms	         7.994 wait-p99-ms	         0 zero-duration-pct	     211 B/op	       4 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/id-4           	   17626	    136525 ns/op	      7325 completed/s	         0.5449 handler-avg-ms	    760038 iterations/1ms	         0 rejected	        11.40 total-max-ms	         8.795 total-p99-ms	         8.233 wait-p99-ms	         0 zero-duration-pct	      49 B/op	       3 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/id-4           	   17618	    136328 ns/op	      7335 completed/s	         0.5443 handler-avg-ms	    760038 iterations/1ms	         0 rejected	        11.14 total-max-ms	         8.768 total-p99-ms	         8.220 wait-p99-ms	         0 zero-duration-pct	      49 B/op	       3 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/id-4           	   17455	    135975 ns/op	      7354 completed/s	         0.5432 handler-avg-ms	    760038 iterations/1ms	         0 rejected	         9.665 total-max-ms	         8.746 total-p99-ms	         8.200 wait-p99-ms	         0 zero-duration-pct	      49 B/op	       3 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/id-4           	   17482	    138294 ns/op	      7231 completed/s	         0.5520 handler-avg-ms	    760038 iterations/1ms	         0 rejected	        38.05 total-max-ms	         8.909 total-p99-ms	         8.341 wait-p99-ms	         0 zero-duration-pct	      49 B/op	       3 allocs/op
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/id-4           	   17637	    147125 ns/op	      6797 completed/s	         0.5870 handler-avg-ms	    760038 iterations/1ms	         0 rejected	        26.06 total-max-ms	        13.03 total-p99-ms	        12.06 wait-p99-ms	         0 zero-duration-pct	      49 B/op	       3 allocs/op
+PASS

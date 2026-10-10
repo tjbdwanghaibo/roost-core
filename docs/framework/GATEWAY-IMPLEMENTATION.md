@@ -1,6 +1,6 @@
 # 独立 Gate：设计评审与实施方案
 
-状态：**目录重构已提交，Gate 实施中**。日期：2026-10-09；起始基准 `ef640e6e`，目录提交 `1b09cfb0`。TCP、MessagePack、Gate/Game 运行实现、广播与 Sync/Lockstep 接线已落码。本机功能回归通过；性能、独立多进程及跨机完整验收尚未收口。分阶段实际结果见 [实施验收](../maintenance/DIRECTORY-GATE-VALIDATION.md)。本轮先目录后 Gate，具体分类见 [目录方案](PACKAGE-REORGANIZATION.md)。
+状态：**目录重构与Gate已随v1.25.0发布**。日期：2026-10-09；起始基准 `ef640e6e`，目录提交 `1b09cfb0`。TCP、MessagePack、Gate/Game 运行实现、广播与 Sync/Lockstep 接线已落码。本机功能回归通过；性能、独立多进程及跨机完整验收尚未收口。分阶段实际结果见 [功能验收](../release/v1.25.0-VALIDATION.md)与[性能报告](../performance/GATE-AOI.md)。本轮先目录后 Gate，具体分类见 [目录方案](PACKAGE-REORGANIZATION.md)。
 
 ## 1. 评审结论
 
@@ -246,7 +246,7 @@ Sync 的 P99≤50ms 从业务计划输入/handler 完成等起点分别记录，
 | [服务发现](../../infra/network/etcd/discovery.go)、[App singleton](../../framework/app/singleton.go) | Metadata、sid 活性与本进程 incarnation 的能力边界 |
 | [Entity Sync Transport](../../framework/sync/entitysync/transport.go)、[Flush](../../framework/sync/entitysync/flush.go)、[异步发送](../../framework/sync/nettransport/channel.go) | 成功准入推进帧状态、失败恢复、队列和字节上限 |
 | [Lockstep 输入](../../framework/sync/lockstep/command.go)、[Room](../../framework/sync/lockstep/room.go)、[TCP sender](../../framework/sync/lockstep/tcp.go)、[既有端到端测试](../../framework/sync/lockstep/e2e_gate_test.go) | 现有串行 Room、认证 session、嵌入式发送与 KCP 测试；跨 NATS Gate 接线仍待实施 |
-| [当前设计](GATEWAY.md)、[性能基线](../maintenance/PERFORMANCE.md) | 当前已交付边界与真实业务规模 |
+| [当前设计](GATEWAY.md)、[性能基线](../performance/STABLE-v1.24.0.md) | 当前已交付边界与真实业务规模 |
 
 CBM 当前工作树项目为 `roost-core-gate-design-plan`，Tier 2，当前 generation `2026-10-09T08:17:42Z`，已刷新 Gate 新增文件；绑定、TCP、原始 NATS 与 Codec 材料路径 coverage 为 metadata_match，无记录缺口。图谱不是完整性证明，生成模板缺口仍按源码补证。docs 被策略排除，直接阅读。macOS 本机真实 NATS 和生成客户端证据见实施验收，不冒充独立 Gate 集群、Linux 实机或跨机性能验收。
 

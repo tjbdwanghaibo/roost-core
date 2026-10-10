@@ -39,7 +39,7 @@
 
 全局的 mutex、同 ID 的 tails/依赖链、pending、生命周期及快阶段 continuation 队列继续属于 dispatchQueue，因为同 ID 依赖跨快慢通道，不能顺便拆成两套锁或两套顺序。两个 Cond 仍绑定同一把 mutex。此变更没有公开 API、协议、持久格式或生成物变化，也不改任何容量、快慢池路由和唤醒策略。
 
-实施时先保存原实现的[调度对照基准](../../maintenance/NEST-DISPATCH-BENCHMARK.md)，再聚合字段并用快/慢通道常量替代魔法下标。Nest 整包测试、整包 race、vet 与全仓编译已通过，覆盖双池、冷目标转慢、内部续行、排队统计和停机排空；空 handler 与双池基准的前后样本单独保留在性能记录中。需要回退时仅回退字段聚合及对应测试访问，基准夹具和原始数据可保留。
+实施时先保存原实现的[调度对照基准](../../performance/NEST-DISPATCH-BENCHMARK.md)，再聚合字段并用快/慢通道常量替代魔法下标。Nest 整包测试、整包 race、vet 与全仓编译已通过，覆盖双池、冷目标转慢、内部续行、排队统计和停机排空；空 handler 与双池基准的前后样本单独保留在性能记录中。需要回退时仅回退字段聚合及对应测试访问，基准夹具和原始数据可保留。
 
 最初引入多个数组的是 `646ce63f` 的双池统一调度实现；该提交说明聚焦同 ID 顺序与 I/O 隔离，未给出数组字段布局的对比数据。多个数组不是当前正确性契约，也不能仅凭这种写法断言有性能优势。本次目的为可读性，性能是否变化以同机测量为准。
 
@@ -204,28 +204,20 @@
 
 ### entity
 
-- [category_lock_order_promises_test.go](../../../framework/entity/category_lock_order_promises_test.go)：`TestRegisteredCategoriesMakeTheCategoryValueTheLockOrder`
-- [category_taxonomy_promises_test.go](../../../framework/entity/category_taxonomy_promises_test.go)：`TestEntityCategoriesBeyondTheIDMaskAreAllowed`
+- [category_contract_test.go](../../../framework/entity/category_contract_test.go)：`TestRegisteredCategoriesMakeTheCategoryValueTheLockOrder`、`TestEntityCategoriesBeyondTheIDMaskAreAllowed`
 - [destroy_cancel_promises_test.go](../../../framework/entity/destroy_cancel_promises_test.go)：`TestEntityManagerDestroyCancelsWhileEntityLockIsHeld`、`TestEntityManagerDestroyCancellationAfterAdmissionStillFinalizes`、`TestEntityManagerDestroyPreservesReentrantLockOwnership`
 - [entity_base_test.go](../../../framework/entity/entity_base_test.go)：`TestTouchUnTouch`、`TestUnTouchPanicsOnReferenceUnderflow`、`TestTouchAfterRemoved`、`TestClearCompletesAfterCleanupHookPanic`、`TestConcurrentTouch`；其余 18 项见文件
 - [entity_factory_test.go](../../../framework/entity/entity_factory_test.go)：`TestNewEntity_Create`、`TestEntityManagerCreateUsesInstanceDependencies`、`TestEntityManagerCreateInScopeLocksBeforePublication`、`TestInitEntitySyncInstallsContentState`、`TestBuildEntity_RemoteManagedRequiresRemoteInterface`；其余 4 项见文件
 - [entity_group_test.go](../../../framework/entity/entity_group_test.go)：`TestEntityGroupBaseDefaultsAndMutation`、`TestEntityGroupManagerIndexTracksAddUpdateRemove`、`TestEntityGroupManagerLifecycleEdges`
-- [entity_guard_instance_promises_test.go](../../../framework/entity/entity_guard_instance_promises_test.go)：`TestGuardLocksNewInstanceWithDifferentMutex`、`TestGuardTreatsInstanceSharingTheHeldMutexAsHeld`、`TestGuardLockOrderCheckUsesInstance`、`TestGuardReleaseEntityKeepsSupersededLockAccounted`、`TestGuardUncomparableCustomMutexValueDoesNotPanic`；其余 2 项见文件
-- [entity_manager_range_promises_test.go](../../../framework/entity/entity_manager_range_promises_test.go)：`TestManagerRangeCallbackMayDestroyAndStopsAtFalse`、`TestManagerRangeNeverHandsOutAClearedEntity`
+- [entity_contract_test.go](../../../framework/entity/entity_contract_test.go)：`TestGuardLocksNewInstanceWithDifferentMutex`、`TestGuardTreatsInstanceSharingTheHeldMutexAsHeld`、`TestGuardLockOrderCheckUsesInstance`、`TestGuardReleaseEntityKeepsSupersededLockAccounted`、`TestGuardUncomparableCustomMutexValueDoesNotPanic`；其余 2 项见文件、`TestManagerRangeCallbackMayDestroyAndStopsAtFalse`、`TestManagerRangeNeverHandsOutAClearedEntity`、`TestValueTypeEntityIsRejectedAtRegistrationAndPublish`
 - [entity_manager_test.go](../../../framework/entity/entity_manager_test.go)：`TestEntityManager_AddGet`、`TestEntityManager_GetWithCategory`、`TestEntityManager_DuplicatePanics`、`TestEntityManager_Remove`、`TestEntityManagerDestroyRequiresDurableAdmissionBeforeRemoval`；其余 11 项见文件
-- [entity_pointer_contract_promises_test.go](../../../framework/entity/entity_pointer_contract_promises_test.go)：`TestValueTypeEntityIsRejectedAtRegistrationAndPublish`
 - [entity_remote_test.go](../../../framework/entity/entity_remote_test.go)：`TestRemoteEntityBase_Interface`、`TestRemoteEntityBase_VersionVectorIsCoherent`、`TestRemoteEntityBase_IsRemoteCapable`、`TestRemoteEntityBase_TouchUnTouch`、`TestRemoteEntityBase_GUId`；其余 1 项见文件
 - [example_gen_test.go](../../../framework/entity/example_gen_test.go)
 - [fast_cold_miss_promises_test.go](../../../framework/entity/fast_cold_miss_promises_test.go)：`TestFastWorkerColdMissReturnsErrorInsteadOfPanicking`
 - [guards_promises_test.go](../../../framework/entity/guards_promises_test.go)：`TestEntityGuardsRefuseNoneKindMissingFactoriesAndLateGeneratorChanges`
-- [kind_defs_batch_atomic_promises_test.go](../../../framework/entity/kind_defs_batch_atomic_promises_test.go)：`TestRegisterEntityKindDefsLeavesNoHalfBatch`
-- [kind_policy_builder_promises_test.go](../../../framework/entity/kind_policy_builder_promises_test.go)：`TestBuiltEntityPolicyUsesKindPolicy`、`TestBuilderDefaultLifetimeFollowsKindPolicy`、`TestLateKindPolicyUpgradeConflictingWithBuilderIsRefused`
-- [kind_registration_promises_test.go](../../../framework/entity/kind_registration_promises_test.go)：`TestRegisterEntityKindCategoryRefusesEachInvalidPair`、`TestResolveEntityKindCategoryRefusesNoneAndUnregistered`、`TestEntityCreateParamNormalizeIDRefusesEachInconsistency`、`TestResolveEntityBuilderRefusesMissingKindAndBuilder`
-- [kind_registry_promises_test.go](../../../framework/entity/kind_registry_promises_test.go)：`TestKindRegistryReadsDoNotBlockOnRegistrationWrites`、`TestKindRegistryKeepsItsRegistrationRules`
+- [kind_contract_test.go](../../../framework/entity/kind_contract_test.go)：`TestRegisterEntityKindDefsLeavesNoHalfBatch`、`TestBuiltEntityPolicyUsesKindPolicy`、`TestBuilderDefaultLifetimeFollowsKindPolicy`、`TestLateKindPolicyUpgradeConflictingWithBuilderIsRefused`、`TestRegisterEntityKindCategoryRefusesEachInvalidPair`、`TestResolveEntityKindCategoryRefusesNoneAndUnregistered`、`TestEntityCreateParamNormalizeIDRefusesEachInconsistency`、`TestResolveEntityBuilderRefusesMissingKindAndBuilder`、`TestKindRegistryReadsDoNotBlockOnRegistrationWrites`、`TestKindRegistryKeepsItsRegistrationRules`
 - [load_flight_detach_test.go](../../../framework/entity/load_flight_detach_test.go)：`TestSharedLoadOutlivesTheLeadersBudget`、`TestLastWaiterLeavingDoesNotCancelTheLoad`、`TestUnregisteringTheLoaderCancelsInFlightLoads`、`TestSharedLoadIsBoundedByTheFrameworkLoadTimeout`、`TestLoaderStopCauseReachesWaiters`
-- [load_flight_late_local_step_promises_test.go](../../../framework/entity/load_flight_late_local_step_promises_test.go)：`TestLateRunLocalAfterNonNestLeaderLoadCompletedDoesNotBlock`
-- [load_flight_non_nest_leader_promises_test.go](../../../framework/entity/load_flight_non_nest_leader_promises_test.go)：`TestNonNestLeaderHoldingAnotherLockColdLoadsWithoutDeadlock`、`TestNonNestLeaderHoldingLockNeededByPublishDoesNotDeadlock`
-- [load_flight_promises_test.go](../../../framework/entity/load_flight_promises_test.go)：`TestALoaderPanicDoesNotWedgeTheEntity`、`TestWaitersOfAPanickingLoadAreReleased`
+- [load_contract_test.go](../../../framework/entity/load_contract_test.go)：`TestLateRunLocalAfterNonNestLeaderLoadCompletedDoesNotBlock`、`TestNonNestLeaderHoldingAnotherLockColdLoadsWithoutDeadlock`、`TestNonNestLeaderHoldingLockNeededByPublishDoesNotDeadlock`、`TestALoaderPanicDoesNotWedgeTheEntity`、`TestWaitersOfAPanickingLoadAreReleased`
 - [loaded_checker_promises_test.go](../../../framework/entity/loaded_checker_promises_test.go)：`TestManagerAccessIsLoadedNeverLoads`
 - [lock_order_no_hook_promises_test.go](../../../framework/entity/lock_order_no_hook_promises_test.go)：`TestLockOrderIsTheCategoryWithNoApplicationHook`
 - [manager_access_test.go](../../../framework/entity/manager_access_test.go)：`TestManagerAccessPreservesOrderAndMissingEntries`、`TestManagerAccessGetManyLoadsColdEntitiesConcurrently`、`TestManagerAccessColdLoadIsSingleFlight`、`TestManagerAccessFlightWaiterHonorsOwnContext`、`TestLoadedOnlyLookupNeverStartsOrJoinsColdLoad`
@@ -239,13 +231,7 @@
 - [remote_version_vector_promises_test.go](../../../framework/entity/remote_version_vector_promises_test.go)：`TestSetRemoteVersionVectorRejectsSameFenceRegression`
 - [remote_view_test.go](../../../framework/entity/remote_view_test.go)：`TestRemoteViewRefValidatesEntityIDAndKind`、`TestRemoteReadOptionDefaultsRequireFreshData`、`TestRemoteSnapshotAcceptsVersionAndPreservesImmutableData`
 - [set_entity_version_no_rewind_promises_test.go](../../../framework/entity/set_entity_version_no_rewind_promises_test.go)：`TestSetEntityVersionRejectsRewindUnderSameFence`
-- [snapshot_authoritative_admission_promises_test.go](../../../framework/entity/snapshot_authoritative_admission_promises_test.go)：`TestAuthoritativeLoaderRejectsForeignKeyBeforePublish`、`TestAuthoritativeReadChecksStoredMinimumVersion`、`TestAuthoritativeReadRechecksExpiryAfterL2Publish`
-- [snapshot_delete_l2_promises_test.go](../../../framework/entity/snapshot_delete_l2_promises_test.go)：`TestDeleteFenceCoversInflightL2Refill`、`TestColdL1DeletePreservesNewerL2`、`TestPublishConflictAfterPreflight`
-- [snapshot_delete_version_promises_test.go](../../../framework/entity/snapshot_delete_version_promises_test.go)：`TestRemoteSnapshotDeleteAtVersionPromiseKeepsNewerSnapshot`、`TestRemoteSnapshotDeleteAtVersionPromiseFencesOlderSnapshot`、`TestRemoteSnapshotDeleteAtVersionPromiseTombstoneExpires`
-- [snapshot_expiry_authoritative_promises_test.go](../../../framework/entity/snapshot_expiry_authoritative_promises_test.go)：`TestAuthoritativeReadsNeverReturnAnExpiredSnapshot`
-- [snapshot_expiry_promises_test.go](../../../framework/entity/snapshot_expiry_promises_test.go)：`TestExpiredSnapshotIsNotServedFromCache`
-- [snapshot_l2_conflict_promises_test.go](../../../framework/entity/snapshot_l2_conflict_promises_test.go)：`TestPublishSurfacesAnL2VersionConflictAndKeepsItOutOfL1`、`TestL2BackfillCannotOverwriteAPublishedSameVersionValue`
-- [snapshot_load_waiters_promises_test.go](../../../framework/entity/snapshot_load_waiters_promises_test.go)：`TestSnapshotLoadReturnsACanceledWaitersSlot`
+- [snapshot_contract_test.go](../../../framework/entity/snapshot_contract_test.go)：`TestAuthoritativeLoaderRejectsForeignKeyBeforePublish`、`TestAuthoritativeReadChecksStoredMinimumVersion`、`TestAuthoritativeReadRechecksExpiryAfterL2Publish`、`TestDeleteFenceCoversInflightL2Refill`、`TestColdL1DeletePreservesNewerL2`、`TestPublishConflictAfterPreflight`、`TestRemoteSnapshotDeleteAtVersionPromiseKeepsNewerSnapshot`、`TestRemoteSnapshotDeleteAtVersionPromiseFencesOlderSnapshot`、`TestRemoteSnapshotDeleteAtVersionPromiseTombstoneExpires`、`TestAuthoritativeReadsNeverReturnAnExpiredSnapshot`、`TestExpiredSnapshotIsNotServedFromCache`、`TestPublishSurfacesAnL2VersionConflictAndKeepsItOutOfL1`、`TestL2BackfillCannotOverwriteAPublishedSameVersionValue`、`TestSnapshotLoadReturnsACanceledWaitersSlot`
 - [subject_sync_test.go](../../../framework/entity/subject_sync_test.go)：`TestFrozenSyncPayloadOwnership`、`TestSubjectSyncPrepareCommitProfiles`、`TestSubjectSyncReclaimsAbandonedPrepare`、`TestSubjectSyncAbortAndConcurrentDirty`、`TestSubjectSyncSnapshotDoesNotAdvanceVersion`；其余 6 项见文件
 - [sync_view_test.go](../../../framework/entity/sync_view_test.go)：`TestFullDirtyReusesSnapshotAndEmptyViewsStillCommit`
 - [unload_resync_backlog_promises_test.go](../../../framework/entity/unload_resync_backlog_promises_test.go)：`TestUnloadResyncBacklogIsObservable`、`TestUnloadResyncBacklogIsZeroAfterStop`、`TestUnloadResyncBacklogSumsAcrossManagerAccesses`
@@ -265,10 +251,7 @@
 - [goroutine_test.go](../../../infra/base/goroutine/goroutine_test.go)：`TestParallelSlice`、`TestParallelSliceCollect`
 - [mpsc_queue_test.go](../../../infra/base/goroutine/mpsc_queue_test.go)：`TestMPSCQueue_Basic`、`TestMPSCQueue_Full`、`TestMPSCQueue_MPSC`、`TestMPSCQueue_PowerOfTwo`
 - [safe_func_test.go](../../../infra/base/goroutine/safe_func_test.go)：`TestSafeFuncWithTryCountWrapsLastError`、`TestSafeFuncWithTryCountRecoversPanic`、`TestSafeFuncWithTryCountZeroCountStillRunsOnce`
-- [task_pool_guards_promises_test.go](../../../infra/base/goroutine/task_pool_guards_promises_test.go)：`TestSubmitRefusesAPoolThatIsNotRunningAndAClosedWorker`
-- [task_pool_restart_promises_test.go](../../../infra/base/goroutine/task_pool_restart_promises_test.go)：`TestTaskPoolStartAfterShutdownIsRefused`、`TestTaskPoolShutdownBeforeStartStillStopsALaterStart`
-- [task_pool_shutdown_promises_test.go](../../../infra/base/goroutine/task_pool_shutdown_promises_test.go)：`TestSubmitRacingShutdownNeverPanics`
-- [task_pool_stats_promises_test.go](../../../infra/base/goroutine/task_pool_stats_promises_test.go)：`TestTaskPoolStatsCountSubmitBeforeTheTaskCanFinish`、`TestTaskPoolStatsReadFinishedBeforeSubmitted`、`TestTaskPoolRejectedSubmitIsNotCounted`
+- [task_pool_contract_test.go](../../../infra/base/goroutine/task_pool_contract_test.go)：`TestSubmitRefusesAPoolThatIsNotRunningAndAClosedWorker`、`TestTaskPoolStartAfterShutdownIsRefused`、`TestTaskPoolShutdownBeforeStartStillStopsALaterStart`、`TestSubmitRacingShutdownNeverPanics`、`TestTaskPoolStatsCountSubmitBeforeTheTaskCanFinish`、`TestTaskPoolStatsReadFinishedBeforeSubmitted`、`TestTaskPoolRejectedSubmitIsNotCounted`
 - [task_pool_test.go](../../../infra/base/goroutine/task_pool_test.go)：`TestTaskPoolNormalizesZeroWorkerCount`
 
 ### lock
@@ -292,8 +275,7 @@
 - [cast_transaction_test.go](../../../framework/nest/cast_transaction_test.go)：`TestCastTransactionRollbackWithoutSync`、`TestCastPipelinedReleasesAndStampsWithoutSync`
 - [client_test.go](../../../framework/nest/client_test.go)：`TestClientRequestCarriesContextAndReturnsResult`、`TestClientDispatchCarriesOnlyFrameworkEnvelope`、`TestClientAdmissionReportsQueueFull`、`TestClientRejectsCanceledContextBeforeAdmission`、`TestClientFenceRejectsAdmissionWithCause`；其余 1 项见文件
 - [cold_target_admission_promises_test.go](../../../framework/nest/cold_target_admission_promises_test.go)：`TestDefaultSenderPreparesColdDeclaredTargetsOnSlowWorker`、`TestDeclaredTargetEvictedAfterAdmissionMovesToSlowKeepingOrder`
-- [commit_callback_panic_promises_test.go](../../../framework/nest/commit_callback_panic_promises_test.go)：`TestCommitRunsEveryCallbackAndReportsAPanickingOne`、`TestCommitIsIdempotent`
-- [commit_rejected_sentinel_promises_test.go](../../../framework/nest/commit_rejected_sentinel_promises_test.go)：`TestPreCommitRejectionsCarryErrCommitRejected`
+- [commit_contract_test.go](../../../framework/nest/commit_contract_test.go)：`TestCommitRunsEveryCallbackAndReportsAPanickingOne`、`TestCommitIsIdempotent`、`TestPreCommitRejectionsCarryErrCommitRejected`
 - [committed_requeue_promises_test.go](../../../framework/nest/committed_requeue_promises_test.go)：`TestCommittedRemoteReplyIsNotRequeued`、`TestCommittedLocalReplyIsNotRequeued`、`TestAfterCommitPanicKeepsCauseChain`
 - [completion_release_panic_test.go](../../../framework/nest/completion_release_panic_test.go)：`TestPipelinedReleasePanicStillCompletesAndReplies`、`TestPipelinedInlineCompletionReportsCallbackFailure`
 - [completion_unlock_test.go](../../../framework/nest/completion_unlock_test.go)：`TestAsyncCompletionWaitsForEntityRelease`、`TestTickerConcurrentStartStopAlwaysClosesStartedRun`
@@ -302,9 +284,7 @@
 - [create_lock_bench_test.go](../../../framework/nest/create_lock_bench_test.go)
 - [create_lock_order_promises_test.go](../../../framework/nest/create_lock_order_promises_test.go)：`TestHandlerCreateCrossOrderResolvesWithoutDeadlock`、`TestHandlerCreateThenHigherGroupCastDoesNotFormCycle`、`TestSameIDCreateDoesNotOccupyFastPool`、`TestSwallowedCreateLockConflictStillRollsBack`、`TestMemoryHandlerCreateHoldsLockUntilHandlerEnds`
 - [create_revoke_destroy_reason_promises_test.go](../../../framework/nest/create_revoke_destroy_reason_promises_test.go)：`TestRevokedCreationIsDestroyedWithCreateRevokedReason`
-- [created_entity_removal_window_shapes_promises_test.go](../../../framework/nest/created_entity_removal_window_shapes_promises_test.go)：`TestHandlerCreateInsideDestroyWindowIsTreatedAsLockConflict`
-- [created_entity_revoke_window_promises_test.go](../../../framework/nest/created_entity_revoke_window_promises_test.go)：`TestHandlerCreateInsideRevokeWindowIsTreatedAsLockConflict`
-- [created_entity_self_revoke_promises_test.go](../../../framework/nest/created_entity_self_revoke_promises_test.go)：`TestOuterCreateAfterNestedRevokeInSameGuardFailsDeterministically`、`TestCreateInOtherManagerAfterSameIDRevokeKeepsRemovalWindowConflict`
+- [created_contract_test.go](../../../framework/nest/created_contract_test.go)：`TestHandlerCreateInsideDestroyWindowIsTreatedAsLockConflict`、`TestHandlerCreateInsideRevokeWindowIsTreatedAsLockConflict`、`TestOuterCreateAfterNestedRevokeInSameGuardFailsDeterministically`、`TestCreateInOtherManagerAfterSameIDRevokeKeepsRemovalWindowConflict`
 - [cross_create_requeue_budget_promises_test.go](../../../framework/nest/cross_create_requeue_budget_promises_test.go)：`TestSymmetricCrossCreatePairsResolveWithinRequeueBudget`
 - [dataengine_record_test.go](../../../framework/nest/dataengine_record_test.go)：`TestPrepareCommitRecordPreservesMutationIdentity`
 - [delayed_shutdown_promises_test.go](../../../framework/nest/delayed_shutdown_promises_test.go)：`TestShutdownAnswersDelayedRequestsInsteadOfDroppingThem`、`TestShutdownDropsDelayedFireAndForgetQuietly`
@@ -321,11 +301,9 @@
 - [group_transition_promises_test.go](../../../framework/nest/group_transition_promises_test.go)：`TestGroupTransitionRequestsRefuseZeroGroupsUnknownEntitiesAndOverlaps`
 - [group_transition_test.go](../../../framework/nest/group_transition_test.go)：`TestEntityLockGroupTransitionJoinMoveLeaveUpdatesState`、`TestEntityLockGroupTransitionPendingGatesNormalDispatch`、`TestEntityLockGroupTransitionPendingRequeuesSyncDispatch`、`TestEntityLockGroupTransitionContinuationReturnsSyncResult`、`TestEntityLockGroupTransitionRetriesWhenEntityLockBusy`；其余 2 项见文件
 - [handler_meta_durability_promises_test.go](../../../framework/nest/handler_meta_durability_promises_test.go)：`TestHandlerMetaRollbackRequiresExplicitDurability`
-- [isolated_before_message_tx_promises_test.go](../../../framework/nest/isolated_before_message_tx_promises_test.go)：`TestIsolatedInSlowPrepareOfLocalMessageDoesNotClaimIt`、`TestIsolatedInSlowPrepareOfRemoteMessageIsRefused`
-- [isolated_closing_phase_promises_test.go](../../../framework/nest/isolated_closing_phase_promises_test.go)：`TestIsolatedInClosingPhaseOfRemoteMessageIsRefused`、`TestIsolatedInClosingPhaseOfLocalMessageDoesNotClaimIt`
+- [isolated_contract_test.go](../../../framework/nest/isolated_contract_test.go)：`TestIsolatedInSlowPrepareOfLocalMessageDoesNotClaimIt`、`TestIsolatedInSlowPrepareOfRemoteMessageIsRefused`、`TestIsolatedInClosingPhaseOfRemoteMessageIsRefused`、`TestIsolatedInClosingPhaseOfLocalMessageDoesNotClaimIt`
 - [legacy_engine_test.go](../../../framework/nest/legacy_engine_test.go)
-- [lifecycle_create_commit_boundary_promises_test.go](../../../framework/nest/lifecycle_create_commit_boundary_promises_test.go)：`TestLifecycleCreateInHandlerWaitsForDurable`、`TestLifecycleCreateInHandlerRevokedWhenHandlerFails`、`TestLifecycleCreateInHandlerRevokedWhenStrictCommitRejected`、`TestLifecycleCreateOutsideNestUnchanged`
-- [lifecycle_get_or_create_removed_promises_test.go](../../../framework/nest/lifecycle_get_or_create_removed_promises_test.go)：`TestLifecycleGetOrCreateRetriesWhileRevokeFinishes`
+- [lifecycle_contract_test.go](../../../framework/nest/lifecycle_contract_test.go)：`TestLifecycleCreateInHandlerWaitsForDurable`、`TestLifecycleCreateInHandlerRevokedWhenHandlerFails`、`TestLifecycleCreateInHandlerRevokedWhenStrictCommitRejected`、`TestLifecycleCreateOutsideNestUnchanged`、`TestLifecycleGetOrCreateRetriesWhileRevokeFinishes`
 - [local_after_commit_sentinel_promises_test.go](../../../framework/nest/local_after_commit_sentinel_promises_test.go)：`TestLocalReleaseHookPanicAfterStrictCommitCarriesSentinel`、`TestMemoryHandlerReleaseHookPanicCarriesSentinel`、`TestUncommittedLocalReleaseHookPanicHasNoSentinel`、`TestPipelinedReleasePanicAfterDurableCarriesSentinel`
 - [memory_persistent_write_promises_test.go](../../../framework/nest/memory_persistent_write_promises_test.go)：`TestMemoryTransactionPersistentWriteFailsAndRollsBack`、`TestMemoryTransactionNonPersistentWriteSucceeds`、`TestMemoryFastPathPersistentSetterStillPanics`、`TestMemoryTransactionCreatedEntityPersistentWriteFails`、`TestMemoryRemoteBatchLocalPersistentWriteRefused`；其余 1 项见文件
 - [missing_entity_promises_test.go](../../../framework/nest/missing_entity_promises_test.go)：`TestASingleDispatchToAMissingEntitySaysNotFound`、`TestABroadcastSkipsMissingEntitiesAndKeepsGoing`
@@ -349,15 +327,13 @@
 - [remaining_config_promises_test.go](../../../framework/nest/remaining_config_promises_test.go)：`TestAsyncContinuationCapturesCurrentRuntimeGeneration`
 - [remote_after_commit_sentinel_test.go](../../../framework/nest/remote_after_commit_sentinel_test.go)：`TestRemoteReplyDistinguishesCommittedFromUncommitted`、`TestRemoteReleaseHookPanicAfterCommitCarriesSentinel`
 - [remote_budget_test.go](../../../framework/nest/remote_budget_test.go)：`TestRemoteBudgetRejectionReleasesIDAndWorkers`
-- [remote_cached_allow_stale_promises_test.go](../../../framework/nest/remote_cached_allow_stale_promises_test.go)：`TestCachedRemoteAccessWithAllowStaleStillAcceptsAnOlderSnapshot`
+- [remote_contract_test.go](../../../framework/nest/remote_contract_test.go)：`TestCachedRemoteAccessWithAllowStaleStillAcceptsAnOlderSnapshot`、`TestNestedCommitInRemotePrepareAlongsideCommittedLocalPartKeepsReplyText`、`TestRemoteReleaseHookPanicAfterDurableCommitStillCommits`
 - [remote_close_confirmation_test.go](../../../framework/nest/remote_close_confirmation_test.go)：`TestRemoteCloseFailureStillConfirmsEntitySync`
 - [remote_committed_hook_test.go](../../../framework/nest/remote_committed_hook_test.go)：`TestRemoteAfterAdmissionPanicDoesNotAbortDurableCommit`、`TestPostRemoteCommitRunsAllCallbacksAfterPanic`
 - [remote_deferred_outcome_test.go](../../../framework/nest/remote_deferred_outcome_test.go)：`TestStrictRemoteConfirmTimeoutDefersPostCommitToDurableOutcome`、`TestSyncMutationRejectReleasesLaterCommits`
 - [remote_dispatch_test.go](../../../framework/nest/remote_dispatch_test.go)：`TestRemoteStagesDoNotBlockCostLogicWorker`、`TestRemoteStagesPreserveOrderAndDrainBeforeShutdown`、`TestRemoteStagesCancelAndFenceAfterPrepareCloseBatch`、`TestRemoteStagesFullFastQueueReservesContinuation`、`TestRemoteStagesReturnContextAndConfirmAfterGuardRelease`
 - [remote_local_executor_test.go](../../../framework/nest/remote_local_executor_test.go)：`TestNestBindsRunLocalIntoRemoteManager`
-- [remote_part_rejected_nested_commit_promises_test.go](../../../framework/nest/remote_part_rejected_nested_commit_promises_test.go)：`TestNestedCommitInRemotePrepareAlongsideCommittedLocalPartKeepsReplyText`
 - [remote_reject_mixed_test.go](../../../framework/nest/remote_reject_mixed_test.go)：`TestRemoteRejectKeepsCommittedLocalEntitySync`
-- [remote_release_hook_promises_test.go](../../../framework/nest/remote_release_hook_promises_test.go)：`TestRemoteReleaseHookPanicAfterDurableCommitStillCommits`
 - [remote_transaction_test.go](../../../framework/nest/remote_transaction_test.go)：`TestRemoteManagedDispatchRejectsBroadcast`、`TestFinalizeRemoteWriteBatchProducesValidWALMutation`、`TestCommitRecordAcceptsMixedRemoteAndOrdinaryMutations`、`TestRemoteTransactionUsesNestOutbox`、`TestIndeterminateRemoteBatchIsNotAborted`
 - [requeue_jitter_promises_test.go](../../../framework/nest/requeue_jitter_promises_test.go)：`TestSymmetricTransientRequeuesAreNotReadmittedInLockstep`
 - [rolled_back_release_hook_promises_test.go](../../../framework/nest/rolled_back_release_hook_promises_test.go)：`TestRolledBackReleaseHookPanicKeepsBusinessError`
@@ -380,4 +356,13 @@
 
 ## 6. 验收与运维
 
-改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。命令与发布记录见 [维护手册](../../maintenance/README.md)。本次文档补丁的实际执行结果见 [发布验收](../../release/v1.24.1-IMPLEMENTATION.md)；性能沿用 [v1.24.0 基线](../../maintenance/PERFORMANCE.md)，没有新测量则不能改容量承诺。
+改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。命令与发布记录见 [维护手册](../../maintenance/README.md)。本次文档补丁的实际执行结果见 [发布验收](../../release/v1.24.1-IMPLEMENTATION.md)；性能沿用 [v1.24.0 基线](../../performance/STABLE-v1.24.0.md)，没有新测量则不能改容量承诺。
+
+
+### 排队对象的紧凑布局
+
+`dispatchJob`保留ID tail和多ID依赖计数；三个布尔标志集中，指针/切片放在前部。准入和就绪时刻存为相对`dispatchQueue.clockOrigin`的单调偏移，等待统计用偏移差计算。原点在构造时固定，不随转慢或停机重试改变；不能改用UnixNano，以免墙钟调整破坏等待时间。ID和计数器不缩窄。64位对象与基准结果见[调度性能记录](../../performance/NEST-DISPATCH-BENCHMARK.md)。
+
+### 调度目标的存储所有权
+
+`newDispatchJob`直接初始化单目标的内嵌数组并建立只读切片视图；多个目标由`dispatchIDs`复制、排序和去重。不再向通用函数传入job的可变缓冲区。队列发布后目标集合直到收尾都保持不变；消息中的目标切片变化不影响队列的依赖登记和释放。ID tail顺序和快慢池容量契约不变。

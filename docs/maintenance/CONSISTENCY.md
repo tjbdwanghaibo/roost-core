@@ -31,7 +31,7 @@
 | C13 | 通用迁移 | 自动DAO迁移与通用migration包需区分 | 通用Registry仍提供显式步骤；不等于Repository自动迁移 | [migration/migration.go](../../infra/storage/migration/migration.go) |
 | C14 | Codegen最低版 | 最低core仍为v1.23.1 | minimumVersions.Core=v1.24.0；补丁不新增API | [codegen/internal/roost/manifest.go](../../codegen/internal/roost/manifest.go) |
 | C15 | 发布门禁 | pretag没有生成漂移检查 | 脚本包含go generate及干净树检查 | [scripts/pretag.sh](../../scripts/pretag.sh) |
-| C16 | 性能状态 | Remote/Sync仍暂停、旧性能失败作为当前结论 | v1.24.0已补一小时与声明负载；失败样本仍保留 | [docs/maintenance/PERFORMANCE.md](PERFORMANCE.md) |
+| C16 | 性能状态 | Remote/Sync仍暂停、旧性能失败作为当前结论 | v1.24.0已补一小时与声明负载；失败样本仍保留 | [稳定版性能基线](../performance/STABLE-v1.24.0.md) |
 | C17 | 未验证边界 | 需保留本机与跨机/引擎的验收边界 | 环境、平台、时长、模拟范围分别列出 | [docs/maintenance/KNOWN-LIMITS.md](KNOWN-LIMITS.md) |
 | C18 | Skill模块名 | 使用手册把skill包路径写成Go module | Go module为roost-core；skill是其中的包 | [go.mod](../../go.mod)、[修正后的手册](../skill/skill.md) |
 | C19 | TCP 手册补充核对 | 仓库手册写 RS v1，生成手册把 Lockstep 写成预留；消息号 0 仅用于鉴权 | 当前为 RS v2；PB/Sync/Lockstep 分类型；消息号 0 还用于鉴权后心跳。本次在 main 修正文档，不移动旧标签 | [公共包头](../../client/wire/packet.go)、[TCP 模板](../../codegen/internal/roost/render_player_tcp.go)、[说明与纠正清单](../framework/GATEWAY.md) |

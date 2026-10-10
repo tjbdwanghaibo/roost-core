@@ -26,7 +26,7 @@ entity（内容层，在块外）← entitysync        spatial（基建）← po
 
 不在块内、但常被一起提起的：`entity/subject_sync.go`（内容层归实体）、`spatial`（几何基建）、`syncstream`（有序持久流，给 skill 用）、`remoteentity`（跨服实体协议，dataengine 块的消费者）。
 
-文档：[ENTITY_SYNC.md](../../ENTITY_SYNC.md)（怎么用）、[ARCH-10](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/ARCH-10-sync-manager.md)（为什么是这个形状）、[ARCH-12](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/ARCH-12-sync-package-layout.md)（为什么是这个目录）。
+文档：[ENTITY_SYNC.md](../../docs/framework/ENTITY_SYNC.md)（怎么用）、[ARCH-10](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/ARCH-10-sync-manager.md)（为什么是这个形状）、[ARCH-12](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/ARCH-12-sync-package-layout.md)（为什么是这个目录）。
 
 [2026-09-23 优化审查与重构方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-23-sync-readability.md)：八包职责核对、三个已修缺陷，以及已实施的同包职责整理与 Go API 更新。
 

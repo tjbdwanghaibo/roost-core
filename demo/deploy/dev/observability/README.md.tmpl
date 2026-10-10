@@ -24,7 +24,7 @@ open http://127.0.0.1:3000        # admin / admin，仪表盘 "Roost game-demo" 
 | game → match / mail | `bus_rpc_call_total`（发出）、`bus_rpc_request_total`（服务端答）、`bus_rpc_pending`、`bus_dispatch_duration_*` | 三个进程各自的 job 标签把发起方和应答方分开；**`bus_rpc_*` 只在 JetStream 可靠 RPC 路径（`nats.rpc.transport: jetstream`）上计数**，默认轻量 request/reply 下该面板 No data 是正常的 |
 | 机器人 | `robot_runner_scenario_total{result}`、`robot_runner_scenario_cost_bucket`、`robot_session_call_bucket{msg}`、`robot_runner_online` | 只有这里有真正的直方图；单次调用 p95 按消息 id 区分 |
 
-## 几条规则（来自 roost-core `OBSERVABILITY.md`）
+## 几条规则（来自 roost-core `docs/framework/OBSERVABILITY.md`）
 
 - 点号分层的名字导出时点号变下划线，计数器自动带 `_total`；Duration 类导出 `_count / _sum_nanos / _max_nanos / _last_nanos`，
   平均时延 = `rate(_sum_nanos) / rate(_count) / 1e6` 毫秒——Duration **没有分位数**，要分位数用 Histogram（机器人那组就是）。

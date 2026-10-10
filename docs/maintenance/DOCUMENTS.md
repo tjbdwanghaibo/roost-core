@@ -1,104 +1,107 @@
-# 最终保留文档清单
+# 文档清单与整理规则
 
-## 1. 基线和数量
+根目录保留 README、CHANGELOG、AGENTS 和 LICENSE；正文按下表归类。功能契约、性能证据和发布状态分别维护，避免把过期计划当现行要求。当前入口以[文档首页](../README.md)为准。
 
-清理前 docs 跟踪文件 **3070** 个；v1.24.1 整理时保留/新建 **50** 个，删除旧路径 **3034** 个。其余同路径内容按现行版本重写或保留。运行时基线 v1.24.0，文档维护版 v1.24.1。
-
-当前文档在该清单上新增独立 Gate 设计、其评审/实施方案及包目录分类方案，合计 **53** 份。三份文档明确区分已有能力与待实施部分，不改变已发布版本的实现状态。
-
-先确定本清单，再迁移现行设计/维护知识、核对代码、清理旧文件与修复引用。不会删除游戏ai代码或游戏Skill文档，也不删除本地安装skill。
-
-工作分支另新增 [Interest Block AOI 方案](../framework/INTEREST-BLOCK-AOI.md)，随v1.25.0交付；常规性能通过、重档失败。新增[v1.25.0发布说明](../release/v1.25.0-NOTES.md)与[实现验收](../release/v1.25.0-IMPLEMENTATION.md)，上述数量仅为历史清理基线。
-
-## 2. 全部剩余文件
-
-v1.25.0 后另增 [Nest 调度对照基准](NEST-DISPATCH-BENCHMARK.md)，保留可复跑的模拟方式、当前测量结果和适用边界；历史清理数量不随每次补充追改。
-
-| 文件 | 用途 |
+| 目录 | 内容 |
 | --- | --- |
-| [docs/GETTING-STARTED.md](../GETTING-STARTED.md) | 从购买道具的例子认识框架、术语、运行第一个示例与学习顺序 |
-| [docs/README.md](../README.md) | 维护入口、清单、证据或全包映射 |
-| [docs/framework/README.md](../framework/README.md) | 维护入口、清单、证据或全包映射 |
-| [docs/framework/PACKAGES.md](../framework/PACKAGES.md) | 维护入口、清单、证据或全包映射 |
-| [docs/framework/GATEWAY.md](../framework/GATEWAY.md) | 网关现有能力、独立 Gate 待实施设计、分阶段验收及 TCP 文档纠正 |
-| [docs/framework/GATEWAY-IMPLEMENTATION.md](../framework/GATEWAY-IMPLEMENTATION.md) | Gate 设计评审、具体接线、绑定与发送契约、资源限制及实施验收 |
-| [docs/framework/PACKAGE-REORGANIZATION.md](../framework/PACKAGE-REORGANIZATION.md) | 包目录分类、Wiring/运行边界、Session 含义、同轮 Gate、迁移和验收 |
-| [docs/framework/guide/00-overview.md](../framework/guide/00-overview.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/00-overview.md](../framework/impl/00-overview.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/01-app-lifecycle.md](../framework/guide/01-app-lifecycle.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/01-app-lifecycle.md](../framework/impl/01-app-lifecycle.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/02-nest-entity.md](../framework/guide/02-nest-entity.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/02-nest-entity.md](../framework/impl/02-nest-entity.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/03-dataengine.md](../framework/guide/03-dataengine.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/03-dataengine.md](../framework/impl/03-dataengine.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/04-sync.md](../framework/guide/04-sync.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/04-sync.md](../framework/impl/04-sync.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/05-remote-mirror.md](../framework/guide/05-remote-mirror.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/05-remote-mirror.md](../framework/impl/05-remote-mirror.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/06-saga.md](../framework/guide/06-saga.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/06-saga.md](../framework/impl/06-saga.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/07-config.md](../framework/guide/07-config.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/07-config.md](../framework/impl/07-config.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/08-skill.md](../framework/guide/08-skill.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/08-skill.md](../framework/impl/08-skill.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/09-services.md](../framework/guide/09-services.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/09-services.md](../framework/impl/09-services.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/10-time.md](../framework/guide/10-time.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/10-time.md](../framework/impl/10-time.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/11-observability.md](../framework/guide/11-observability.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/11-observability.md](../framework/impl/11-observability.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/12-codegen.md](../framework/guide/12-codegen.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/12-codegen.md](../framework/impl/12-codegen.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/13-wiring.md](../framework/guide/13-wiring.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/13-wiring.md](../framework/impl/13-wiring.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/framework/guide/14-foundation.md](../framework/guide/14-foundation.md) | 现行设计、职责、使用与限制 |
-| [docs/framework/impl/14-foundation.md](../framework/impl/14-foundation.md) | 实现边界、不变量、源码类型与回归入口 |
-| [docs/skill/skill.md](../skill/skill.md) | 游戏Skill专项使用/实现参考 |
-| [docs/skill/skill-casting-and-combat.md](../skill/skill-casting-and-combat.md) | 游戏Skill专项使用/实现参考 |
-| [docs/skill/skill-implementation-guide.md](../skill/skill-implementation-guide.md) | 游戏Skill专项使用/实现参考 |
-| [docs/skill/skill-testing-guide.md](../skill/skill-testing-guide.md) | 游戏Skill专项使用/实现参考 |
-| [docs/skill/visual-sync-production-guide.md](../skill/visual-sync-production-guide.md) | 游戏Skill专项使用/实现参考 |
-| [docs/skill/README.md](../skill/README.md) | 游戏Skill专项使用/实现参考 |
-| [docs/maintenance/README.md](README.md) | 维护入口、清单、证据或全包映射 |
-| [docs/maintenance/DOCUMENTS.md](DOCUMENTS.md) | 维护入口、清单、证据或全包映射 |
-| [docs/maintenance/CONSISTENCY.md](CONSISTENCY.md) | 维护入口、清单、证据或全包映射 |
-| [docs/maintenance/KNOWN-LIMITS.md](KNOWN-LIMITS.md) | 维护入口、清单、证据或全包映射 |
-| [docs/maintenance/PERFORMANCE.md](PERFORMANCE.md) | 维护入口、清单、证据或全包映射 |
-| [docs/maintenance/EXTERNAL-VERIFICATION.md](EXTERNAL-VERIFICATION.md) | 维护入口、清单、证据或全包映射 |
-| [docs/release/v1.24.0-NOTES.md](../release/v1.24.0-NOTES.md) | 已发布基线或本版说明/验收 |
-| [docs/release/v1.24.0-IMPLEMENTATION.md](../release/v1.24.0-IMPLEMENTATION.md) | 已发布基线或本版说明/验收 |
-| [docs/release/v1.24.1-NOTES.md](../release/v1.24.1-NOTES.md) | 已发布基线或本版说明/验收 |
-| [docs/release/v1.24.1-IMPLEMENTATION.md](../release/v1.24.1-IMPLEMENTATION.md) | 已发布基线或本版说明/验收 |
+| framework | 设计、实现、专项契约与包映射 |
+| performance | 性能报告、复跑条件及可移植样本 |
+| maintenance | 升级、故障、已知限制、外部验收和文档治理 |
+| release | 按版本固定的发布说明与功能验收 |
+| skill | 游戏内Skill使用与实现参考，不是agent规范 |
 
-## 3. 移除类别
+## 当前docs文件
 
-| 类别 | 删除旧文件数 | 当前知识去向 |
-| --- | ---: | --- |
-| 根目录旧指南/方案 | 16 | 现行契约进入framework/maintenance；历史过程仅Git追溯 |
-| agent-skills | 13 | 现行契约进入framework/maintenance；历史过程仅Git追溯 |
-| bug | 664 | 现行契约进入framework/maintenance；历史过程仅Git追溯 |
-| bugfix | 1446 | 现行契约进入framework/maintenance；历史过程仅Git追溯 |
-| feature | 137 | 现行契约进入framework/maintenance；历史过程仅Git追溯 |
-| framework | 1 | 现行契约进入framework/maintenance；历史过程仅Git追溯 |
-| history | 22 | 现行契约进入framework/maintenance；历史过程仅Git追溯 |
-| release | 21 | 现行契约进入framework/maintenance；历史过程仅Git追溯 |
-| review | 709 | 现行契约进入framework/maintenance；历史过程仅Git追溯 |
-| skill | 5 | 现行契约进入framework/maintenance；历史过程仅Git追溯 |
+### framework
 
-## 4. 历史证据访问
+- [framework/ENTITY_SYNC.md](../framework/ENTITY_SYNC.md)：Entity Sync 生产契约
+- [framework/GATEWAY-IMPLEMENTATION.md](../framework/GATEWAY-IMPLEMENTATION.md)：独立 Gate：设计评审与实施方案
+- [framework/GATEWAY.md](../framework/GATEWAY.md)：Gate 与 Game 接入
+- [framework/INTEREST-BLOCK-AOI.md](../framework/INTEREST-BLOCK-AOI.md)：Interest 的 Block AOI 与手写空间组件
+- [framework/NEST_PIPELINED_COMMIT.md](../framework/NEST_PIPELINED_COMMIT.md)：Nest Pipelined Commit（DurabilityPipelined）设计与实施
+- [framework/NEST_TRANSACTION_WAL.md](../framework/NEST_TRANSACTION_WAL.md)：Nest Transaction、WAL 与 Outbox 生产方案
+- [framework/OBSERVABILITY.md](../framework/OBSERVABILITY.md)：roost 可观测性规范与指标清单
+- [framework/PACKAGE-REORGANIZATION.md](../framework/PACKAGE-REORGANIZATION.md)：包目录分类、Wiring 与 Service 收敛方案
+- [framework/PACKAGES.md](../framework/PACKAGES.md)：全包源码索引
+- [framework/README.md](../framework/README.md)：Roost v1.25 文档
+- [framework/REMOTE_ENTITY.md](../framework/REMOTE_ENTITY.md)：Remote Entity 生产协议
+- [framework/RUNTIME_EXECUTION_MODEL.md](../framework/RUNTIME_EXECUTION_MODEL.md)：Roost 业务执行模型
+- [framework/SAGA.md](../framework/SAGA.md)：Roost Saga
+- [framework/guide/00-overview.md](../framework/guide/00-overview.md)：总览与端到端设计：设计与使用
+- [framework/guide/01-app-lifecycle.md](../framework/guide/01-app-lifecycle.md)：App 与生命周期：设计与使用
+- [framework/guide/02-nest-entity.md](../framework/guide/02-nest-entity.md)：核心：Nest 调度与实体：设计与使用
+- [framework/guide/03-dataengine.md](../framework/guide/03-dataengine.md)：核心：DataEngine 持久化：设计与使用
+- [framework/guide/04-sync.md](../framework/guide/04-sync.md)：核心：Sync、Lockstep 与客户端：设计与使用
+- [framework/guide/05-remote-mirror.md](../framework/guide/05-remote-mirror.md)：Remote Entity 与 Mirror：设计与使用
+- [framework/guide/06-saga.md](../framework/guide/06-saga.md)：Saga 长事务：设计与使用
+- [framework/guide/07-config.md](../framework/guide/07-config.md)：配置、数据表与热更：设计与使用
+- [framework/guide/08-skill.md](../framework/guide/08-skill.md)：游戏技能、战斗与空间：设计与使用
+- [framework/guide/09-services.md](../framework/guide/09-services.md)：次核心：Service 领域能力：设计与使用
+- [framework/guide/10-time.md](../framework/guide/10-time.md)：时间与定时器：设计与使用
+- [framework/guide/11-observability.md](../framework/guide/11-observability.md)：观测、安全与运维：设计与使用
+- [framework/guide/12-codegen.md](../framework/guide/12-codegen.md)：次核心：Codegen 与工程工具：设计与使用
+- [framework/guide/13-wiring.md](../framework/guide/13-wiring.md)：次核心：Wiring 装配：设计与使用
+- [framework/guide/14-foundation.md](../framework/guide/14-foundation.md)：其他包与公共基础设施：设计与使用
+- [framework/impl/00-overview.md](../framework/impl/00-overview.md)：总览与端到端设计：实现与维护
+- [framework/impl/01-app-lifecycle.md](../framework/impl/01-app-lifecycle.md)：App 与生命周期：实现与维护
+- [framework/impl/02-nest-entity.md](../framework/impl/02-nest-entity.md)：核心：Nest 调度与实体：实现与维护
+- [framework/impl/03-dataengine.md](../framework/impl/03-dataengine.md)：核心：DataEngine 持久化：实现与维护
+- [framework/impl/04-sync.md](../framework/impl/04-sync.md)：核心：Sync、Lockstep 与客户端：实现与维护
+- [framework/impl/05-remote-mirror.md](../framework/impl/05-remote-mirror.md)：Remote Entity 与 Mirror：实现与维护
+- [framework/impl/06-saga.md](../framework/impl/06-saga.md)：Saga 长事务：实现与维护
+- [framework/impl/07-config.md](../framework/impl/07-config.md)：配置、数据表与热更：实现与维护
+- [framework/impl/08-skill.md](../framework/impl/08-skill.md)：游戏技能、战斗与空间：实现与维护
+- [framework/impl/09-services.md](../framework/impl/09-services.md)：次核心：Service 领域能力：实现与维护
+- [framework/impl/10-time.md](../framework/impl/10-time.md)：时间与定时器：实现与维护
+- [framework/impl/11-observability.md](../framework/impl/11-observability.md)：观测、安全与运维：实现与维护
+- [framework/impl/12-codegen.md](../framework/impl/12-codegen.md)：次核心：Codegen 与工程工具：实现与维护
+- [framework/impl/13-wiring.md](../framework/impl/13-wiring.md)：次核心：Wiring 装配：实现与维护
+- [framework/impl/14-foundation.md](../framework/impl/14-foundation.md)：其他包与公共基础设施：实现与维护
 
-清理前完整docs固定在 [9d955fb0](https://github.com/tjbdwanghaibo/roost-core/tree/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs)。旧RR、feature、review及AI开发规范不再混在当前规范中；有必要引用时使用固定commit链接，不能用main旧路径。
+### performance
 
-```sh
-git show 9d955fb0df35f082dfc9be24c2f3a4524d437067:docs/bug/README.md
-git show 9d955fb0df35f082dfc9be24c2f3a4524d437067:docs/feature/IMPLEMENTATION-2026-10-08-CLIENT-LOCKSTEP.md
-# 需要某个旧文件时先查看内容，再决定恢复到何处；不要整目录覆盖现行文档。
-```
+- [performance/GATE-AOI.md](../performance/GATE-AOI.md)：Gate、Nest 与 Block AOI 性能验证
+- [performance/NEST-DISPATCH-BENCHMARK.md](../performance/NEST-DISPATCH-BENCHMARK.md)：Nest 共享调度与按 ID 分片的对照基准
+- [performance/README.md](../performance/README.md)：性能验证与复跑
+- [performance/STABLE-v1.24.0.md](../performance/STABLE-v1.24.0.md)：v1.24.0 稳定版性能验收
 
-## 5. docs外资料
+### maintenance
 
-根README、CHANGELOG、各包README、codegen/docs、client/README以及脚本运维手册继续保留，必要的指向旧docs链接改到现行入口或固定历史证据。它们不计入上述docs文件数。源码里的RR编号/旧路径注释仍可按Git历史查找，本轮不为清理注释修改生产代码。
+- [maintenance/CONSISTENCY.md](CONSISTENCY.md)：文档与代码一致性核对
+- [maintenance/DOCUMENTS.md](DOCUMENTS.md)：最终保留文档清单
+- [maintenance/EXTERNAL-VERIFICATION.md](EXTERNAL-VERIFICATION.md)：外部验证操作清单
+- [maintenance/KNOWN-LIMITS.md](KNOWN-LIMITS.md)：当前已知限制与验证边界
+- [maintenance/README.md](README.md)：v1.25 维护手册
 
-## 6. 空目录
+### release
 
-Git不跟踪空目录。本次同时删除工作树中因文档移除而留下的空目录，以及仓库其他普通空目录；从子目录向上逐个确认空后删除，不递归删除有文件的目录，不操作.git或目录链接。全新克隆不会重新出现这些空目录。
+- [release/v1.24.0-IMPLEMENTATION.md](../release/v1.24.0-IMPLEMENTATION.md)：v1.24.0 实现与验收
+- [release/v1.24.0-NOTES.md](../release/v1.24.0-NOTES.md)：v1.24.0 稳定基线说明
+- [release/v1.24.1-IMPLEMENTATION.md](../release/v1.24.1-IMPLEMENTATION.md)：v1.24.1 实现与验收
+- [release/v1.24.1-NOTES.md](../release/v1.24.1-NOTES.md)：v1.24.1 文档维护版
+- [release/v1.25.0-IMPLEMENTATION.md](../release/v1.25.0-IMPLEMENTATION.md)：v1.25.0 实现与验证
+- [release/v1.25.0-NOTES.md](../release/v1.25.0-NOTES.md)：v1.25.0：目录分类、Gate 与 Block AOI
+- [release/v1.25.0-VALIDATION.md](../release/v1.25.0-VALIDATION.md)：v1.25.0 目录、Gate 与 Block AOI 功能验收
+
+### skill
+
+- [skill/README.md](../skill/README.md)：游戏 Skill 专项手册
+- [skill/skill-casting-and-combat.md](../skill/skill-casting-and-combat.md)：施法语义与战斗内容电池（v1.4+）
+- [skill/skill-implementation-guide.md](../skill/skill-implementation-guide.md)：Skill 当前实现学习手册
+- [skill/skill-testing-guide.md](../skill/skill-testing-guide.md)：Skill 阅读与测试指南
+- [skill/skill.md](../skill/skill.md)：稳定 Skill API 与最小接入
+- [skill/visual-sync-production-guide.md](../skill/visual-sync-production-guide.md)：Skill Visual 与数据同步生产指南
+
+入口另含 [README](../README.md) 与 [GETTING-STARTED](../GETTING-STARTED.md)。随仓性能原始数据见 [benchmarks](../performance/benchmarks/)，大型本地产物归忽略的 artifacts，不混入本清单。
+
+## 删除与历史追溯
+
+本轮删除根目录 `PRODUCTION_READINESS.md` 与 `ROOST_FRAMEWORK_ASSESSMENT.md`：前者包含旧多仓发布顺序、旧Remote权威/Sync口径，现行要求已归维护手册和各模块契约；后者是2026-08-27的历史比较，不作为当前架构依据。
+
+- [旧生产就绪清单](https://github.com/tjbdwanghaibo/roost-core/blob/f25527db2f036b1a790ad4577ad865c1396666be/PRODUCTION_READINESS.md)
+- [历史框架评估](https://github.com/tjbdwanghaibo/roost-core/blob/f25527db2f036b1a790ad4577ad865c1396666be/ROOST_FRAMEWORK_ASSESSMENT.md)
+- [v1.24.1清理前完整docs](https://github.com/tjbdwanghaibo/roost-core/tree/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs)：旧RR、bugfix、review、feature与agent规范按固定提交追溯，不能用main旧路径。
+
+v1.24.1历史清理基线：原docs跟踪3070个文件，整理时保留/新建50个、删除旧路径3034个；这是当时统计，不是当前文件数。本轮保留全部已有性能样本及失败结果。
+
+各包README、codegen/docs、client/README和脚本运维手册继续就近维护。源码历史RR编号可从Git追溯，不为文档搬迁改动生产逻辑。删除文件留下的空目录只按确认为空后清理，不递归删除本地资料。
