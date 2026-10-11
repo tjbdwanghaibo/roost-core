@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Sync AOI 在候选排序前排除自身和半径外实体，满额且剩余候选无法替换时提前结束扫描；保留等距选择与事件顺序。修复合法负数 ID 无法被满额淘汰的问题，补优化前算法对照与同机基准，详见 docs/framework/SYNC-OPTIMIZATION.md。
+
 - Sync 第二批优化：AOI 按空间/额外覆盖变化分类重算，并复用有上限的串行/worker 工作区；Flush 复用编码临时结构，发送字节仍独立。补齐批量移动、集中布局、覆盖切换基准和事件/载荷所有权回归。修正统计回归中两次采样跨时钟刻度的误报，详见 docs/framework/SYNC-OPTIMIZATION.md。
 
 - player access 工程在生成协议时自动补齐 Controller 业务骨架，参数为 player_agent.Context 与 PB 请求；已有业务不覆盖，支持事务生成和缺失检查。说明主动回包与返回响应的使用边界。

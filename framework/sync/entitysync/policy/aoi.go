@@ -506,7 +506,8 @@ func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, r
 				continue
 			}
 			seen[subject] = struct{}{}
-			if at, exists := m.subjects[subject]; exists {
+			// 自身和进入半径外的实体不会入场，排序前排除；距离判断保留溢出安全语义。
+			if at, exists := m.subjects[subject]; exists && subject != observer.id && spatial.WithinDistance(observer.at, at, m.config.EnterRadius) {
 				candidates = append(candidates, entryCandidate{subject: subject, at: at, distance: spatial.DistanceSquared(observer.at, at)})
 			}
 		}
@@ -520,6 +521,11 @@ func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, r
 		return cmp.Compare(a.subject, b.subject)
 	})
 	for _, candidate := range candidates {
+		// 候选已按距离递增。最近的剩余候选都无法替换时，后续候选也不会改变可见集。
+		// 等距离仍保留原成员；成功腾出位置后 evaluatePair 不会再次淘汰。
+		if m.config.MaxVisible > 0 && len(observer.visible) >= m.config.MaxVisible && !m.evictFarther(observer, candidate.at) {
+			break
+		}
 		m.evaluatePair(observer, candidate.subject, candidate.at, false)
 	}
 }
@@ -566,6 +572,7 @@ func (m *AOI) evaluatePair(observer *interestObserver, subject int64, at spatial
 // incumbent; the farthest scan breaks distance ties by id for determinism).
 func (m *AOI) evictFarther(observer *interestObserver, at spatial.Point) bool {
 	farthest, farthestDistance := int64(-1), int64(-1)
+	found := false // 非零负数也是合法 ID，不能用 ID 的符号表示是否找到成员。
 	for subject := range observer.visible {
 		position, exists := m.subjects[subject]
 		if !exists {
@@ -574,9 +581,10 @@ func (m *AOI) evictFarther(observer *interestObserver, at spatial.Point) bool {
 		distance := spatial.DistanceSquared(observer.at, position)
 		if distance > farthestDistance || (distance == farthestDistance && subject < farthest) {
 			farthest, farthestDistance = subject, distance
+			found = true
 		}
 	}
-	if farthest < 0 || spatial.DistanceSquared(observer.at, at) >= farthestDistance {
+	if !found || spatial.DistanceSquared(observer.at, at) >= farthestDistance {
 		return false
 	}
 	delete(observer.visible, farthest)

@@ -1,0 +1,5 @@
+--- FAIL: TestAOIMaxVisibleEvictsNegativeID (0.00s)
+    aoi_signed_id_test.go:17: closer subject must replace negative ID: got [-2]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.923s
+FAIL

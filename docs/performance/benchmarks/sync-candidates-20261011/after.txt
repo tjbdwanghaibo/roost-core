@@ -1,0 +1,30 @@
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-4         	    6014	     65157 ns/op	    2961 B/op	      70 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-4         	    5929	     67917 ns/op	    2960 B/op	      70 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=1-4         	    4849	     68450 ns/op	    2960 B/op	      70 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-4         	    3583	     98965 ns/op	    4470 B/op	      94 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-4         	    3619	     91969 ns/op	    4449 B/op	      94 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4-4         	    3447	     91438 ns/op	    4450 B/op	      94 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=1-4          	    7146	     51614 ns/op	   11521 B/op	      63 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=1-4          	    7773	     50734 ns/op	   11521 B/op	      63 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=1-4          	    7298	     49984 ns/op	   11521 B/op	      63 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=4-4          	    3812	     83330 ns/op	   21555 B/op	     160 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=4-4          	    4341	     80478 ns/op	   21555 B/op	     160 allocs/op
+BenchmarkAOIBatchRecompute/dense=false/coverage=true/workers=4-4          	    4467	     76628 ns/op	   21555 B/op	     160 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=1-4          	      40	   8144050 ns/op	  323455 B/op	     401 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=1-4          	      38	   8365971 ns/op	  323337 B/op	     401 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=1-4          	      48	   8639258 ns/op	  323829 B/op	     401 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=4-4          	      72	   4346451 ns/op	  365371 B/op	     610 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=4-4          	      84	   4185681 ns/op	  365218 B/op	     610 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=false/workers=4-4          	      79	   3814027 ns/op	  365276 B/op	     610 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=1-4           	     264	   1473156 ns/op	  884677 B/op	     971 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=1-4           	     177	   1871503 ns/op	  885421 B/op	     974 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=1-4           	     253	   1446683 ns/op	  885178 B/op	     973 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=4-4           	     250	   1407922 ns/op	 1058851 B/op	    1743 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=4-4           	     255	   1394911 ns/op	 1059344 B/op	    1745 allocs/op
+BenchmarkAOIBatchRecompute/dense=true/coverage=true/workers=4-4           	     247	   1441660 ns/op	 1059364 B/op	    1745 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	9.290s
