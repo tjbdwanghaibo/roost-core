@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+ "reflect"
  "log/slog"
  "runtime/debug"
 
@@ -286,6 +287,15 @@ func (registry *ProtocolRegistry) DispatchPayload(ctx context.Context, session g
 	response, err := handler(&Context{BaseCtx: ctx, Session: session, PlayerID: principal.PlayerID, MsgID: messageID, Seq: sequence}, request)
 	if err != nil {
 		return nil, err
+	}
+	// 泛型 Controller 返回的 nil 指针装入 any 后不等于 nil。
+	// 手动/异步回包返回 nil 表示不自动回复，必须在编码前还原该语义。
+	if response != nil {
+		value := reflect.ValueOf(response)
+		switch value.Kind() {
+		case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+			if value.IsNil() { response = nil }
+		}
 	}
 	if definition.RespID == 0 || response == nil {
 		return nil, nil

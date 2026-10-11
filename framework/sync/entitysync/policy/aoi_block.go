@@ -112,12 +112,12 @@ func (m *AOI) evaluateObserved(o *interestObserver) {
 	}
 	for id := range o.blockVisible {
 		if _, ok := next[id]; !ok {
-			o.blockPending = append(o.blockPending, InterestEvent{Observer: o.id, Subject: id, Kind: InterestLeave, Band: -1})
+			m.emitBlock(o, InterestEvent{Observer: o.id, Subject: id, Kind: InterestLeave, Band: -1})
 		}
 	}
 	for id := range next {
 		if _, ok := o.blockVisible[id]; !ok {
-			o.blockPending = append(o.blockPending, InterestEvent{Observer: o.id, Subject: id, Kind: InterestEnter})
+			m.emitBlock(o, InterestEvent{Observer: o.id, Subject: id, Kind: InterestEnter})
 		}
 	}
 	o.blockVisible = next
@@ -125,15 +125,19 @@ func (m *AOI) evaluateObserved(o *interestObserver) {
 
 type blockSource struct{ manager *AOI }
 
+func (m *AOI) emitBlock(o *interestObserver, event InterestEvent) {
+	if m.parallelEvents {
+		o.blockPending = append(o.blockPending, event)
+	} else {
+		m.blockPending = append(m.blockPending, event)
+	}
+}
+
 func (blockSource) Name() string { return SourceBlock }
 func (s blockSource) Flush() []InterestEvent {
 	m := s.manager
 	events := m.blockPending
 	m.blockPending = nil
-	for _, o := range m.observers {
-		events = append(events, o.blockPending...)
-		o.blockPending = nil
-	}
 	sortInterestEvents(events)
 	return events
 }
@@ -170,6 +174,7 @@ func (m *AOI) endBatch(workers int) {
 		return
 	}
 	var wg sync.WaitGroup
+	m.parallelEvents = true
 	// 每批最多 Workers 个短任务，无第二层排队；任务结束后才允许下一批写入。
 	for worker := 0; worker < workers; worker++ {
 		wg.Go(func() {
@@ -179,4 +184,11 @@ func (m *AOI) endBatch(workers int) {
 		})
 	}
 	wg.Wait()
+	m.parallelEvents = false
+	// 只归集本批参与计算的观察者；阶段屏障后没有 worker 再写这些缓冲。
+	for _, o := range observers {
+		m.pending = append(m.pending, o.pending...)
+		m.blockPending = append(m.blockPending, o.blockPending...)
+		o.pending, o.blockPending = nil, nil
+	}
 }

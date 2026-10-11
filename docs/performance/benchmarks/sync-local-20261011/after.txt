@@ -1,0 +1,60 @@
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-4         	    3656	     54911 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   50136 B/op	     245 allocs/op
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-4         	    4921	     53715 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   50137 B/op	     245 allocs/op
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-4         	    3109	     65912 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   50136 B/op	     245 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-4        	     150	   1596767 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	 1017203 B/op	     763 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-4        	     152	   1540149 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	 1017200 B/op	     763 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-4        	     147	   1573727 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	 1017203 B/op	     763 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-4        	     147	   1638951 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	 1114768 B/op	     861 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-4        	     148	   1632973 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	 1114770 B/op	     861 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-4        	     144	   1658609 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	 1114772 B/op	     861 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-4       	      43	   5472228 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3965372 B/op	    2305 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-4       	      45	   5535216 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3965370 B/op	    2305 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-4       	      40	   5726300 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3965372 B/op	    2305 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-4       	      36	   5858103 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 4063040 B/op	    2405 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-4       	      39	   6042710 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 4063026 B/op	    2405 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-4       	      40	   5655210 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 4063024 B/op	    2405 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	4.139s
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkAOIEventCollection/observers=1000/move=false-4         	23124283	         9.724 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=false-4         	18111429	        11.32 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=false-4         	19391744	        11.17 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=true-4          	  496327	       485.3 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=true-4          	  463681	       518.1 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=1000/move=true-4          	  499747	       443.7 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=false-4        	26381163	        10.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=false-4        	20177442	        11.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=false-4        	23729013	         9.729 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=true-4         	  485738	       501.6 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=true-4         	  434230	       478.9 ns/op	      72 B/op	       3 allocs/op
+BenchmarkAOIEventCollection/observers=10000/move=true-4         	  450720	       506.9 ns/op	      72 B/op	       3 allocs/op
+BenchmarkRelationUpdates/observers=10/forget=false-4            	  812402	       271.3 ns/op	     192 B/op	       2 allocs/op
+BenchmarkRelationUpdates/observers=10/forget=false-4            	 1000000	       291.7 ns/op	     192 B/op	       2 allocs/op
+BenchmarkRelationUpdates/observers=10/forget=false-4            	  926454	       262.9 ns/op	     192 B/op	       2 allocs/op
+BenchmarkRelationUpdates/observers=10/forget=true-4             	  441752	       655.0 ns/op	     480 B/op	       6 allocs/op
+BenchmarkRelationUpdates/observers=10/forget=true-4             	  323637	       648.5 ns/op	     480 B/op	       6 allocs/op
+BenchmarkRelationUpdates/observers=10/forget=true-4             	  396366	       625.3 ns/op	     480 B/op	       6 allocs/op
+BenchmarkRelationUpdates/observers=10000/forget=false-4         	  786033	       280.5 ns/op	     192 B/op	       2 allocs/op
+BenchmarkRelationUpdates/observers=10000/forget=false-4         	  762218	       270.1 ns/op	     192 B/op	       2 allocs/op
+BenchmarkRelationUpdates/observers=10000/forget=false-4         	  913303	       261.2 ns/op	     192 B/op	       2 allocs/op
+BenchmarkRelationUpdates/observers=10000/forget=true-4          	  416542	       676.9 ns/op	     480 B/op	       6 allocs/op
+BenchmarkRelationUpdates/observers=10000/forget=true-4          	  387790	       611.1 ns/op	     480 B/op	       6 allocs/op
+BenchmarkRelationUpdates/observers=10000/forget=true-4          	  351540	       659.3 ns/op	     480 B/op	       6 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	7.063s
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkMatchTickTenPlayers-4   	   60225	      3680 ns/op	    2416 B/op	      18 allocs/op
+BenchmarkMatchTickTenPlayers-4   	   61359	      3631 ns/op	    2413 B/op	      18 allocs/op
+BenchmarkMatchTickTenPlayers-4   	   68353	      3656 ns/op	    2394 B/op	      18 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	1.821s

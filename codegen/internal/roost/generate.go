@@ -110,6 +110,7 @@ func generatorsFor(m Manifest, force bool) []generator {
 				args = append(args,
 					"-bind", under(root, protocol.DefaultBindDir),
 					"-handlers", under(root, protocol.DefaultHandlerDir),
+					"-controllers", under(root, "game/controllers"),
 					"-handler-bootstrap", under(root, "game/protocol_bootstrap/protocol_gen.go"),
 				)
 			} else {
@@ -208,8 +209,8 @@ func generate(ctx context.Context, root string, options GenerateOptions) error {
 }
 
 // GenerateTransactional runs every selected generator and go mod tidy in a
-// sibling staging tree. Only generated artifacts and dependency metadata are
-// committed, as one rollback-capable batch, after the whole pipeline succeeds.
+// sibling staging tree. Generated artifacts, new Controller scaffolds and dependency
+// metadata are committed as one rollback-capable batch after the pipeline succeeds.
 // When ctx ends before the commit, nothing is committed and the staging tree is
 // removed; a commit that started is finished.
 func GenerateTransactional(ctx context.Context, root string, options GenerateOptions, stderr io.Writer) error {
@@ -552,7 +553,7 @@ func snapshotGenerated(root string) (map[string][sha256.Size]byte, error) {
 		if err != nil {
 			return err
 		}
-		if !hasGeneratedHeader(path, raw) && !isGeneratedData(path) && !protocol.IsGeneratedArtifact(rel, raw) {
+		if !hasGeneratedHeader(path, raw) && !isGeneratedData(path) && !protocol.IsGeneratedArtifact(rel, raw) && !protocol.IsControllerScaffold(rel, bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))) {
 			return nil
 		}
 		// Newlines are not content: a CRLF checkout of an LF-generated file is

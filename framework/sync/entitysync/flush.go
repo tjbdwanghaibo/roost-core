@@ -124,6 +124,8 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 		selectedSnapshots = plan.selected
 	}
 	// 捕获：按 subject 获取同一版本的快照与增量，归入各会话待交付内容。
+	// 修订快照只服务当前 subject；同轮复用，不按每个 subject 重建哈希表。
+	revisions := make(map[*subscription]uint64)
 	for _, id := range ids {
 		subj := m.subject(id)
 		if subj == nil {
@@ -177,7 +179,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 		wantsCapture := len(snapshotProfiles) > 0 || dirty
 		if wantsCapture {
 			// 无接收者也捕获并提交脏版本，但不为无人需要的默认视图打包。
-			revisions := make(map[*subscription]uint64, len(subj.subscribers))
+			clear(revisions)
 			for _, sub := range subj.subscribers {
 				revisions[sub] = sub.revision
 			}

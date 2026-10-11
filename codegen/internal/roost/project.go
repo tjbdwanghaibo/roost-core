@@ -280,8 +280,8 @@ func SyncProjectContext(ctx context.Context, root string) (SyncResult, error) {
 var syncProjectBeforeCommit func()
 
 // planStagedProjectCommit commits only codegen-owned templates and generated
-// outputs. Application-owned source was copied into the staging tree solely so
-// generators could parse it; it is never copied back implicitly.
+// outputs, plus newly created Controller scaffolds. Existing application-owned
+// source is copied into staging for parsing and is never copied back implicitly.
 func planStagedProjectCommit(root, stage string, manifest Manifest) ([]syncChange, error) {
 	plan, err := renderProject(manifest.withConfiguredShutdown(stage))
 	if err != nil {
@@ -307,7 +307,15 @@ func planStagedProjectCommit(root, stage string, manifest Manifest) ([]syncChang
 			return relErr
 		}
 		if !hasGeneratedHeader(path, raw) && !isGeneratedData(path) && !protocol.IsGeneratedArtifact(rel, raw) {
-			return nil
+			// 业务骨架只允许首次复制；已有文件始终归业务所有。
+			if !protocol.IsControllerScaffold(rel, raw) {
+				return nil
+			}
+			if _, err := os.Lstat(filepath.Join(root, rel)); err == nil {
+				return nil
+			} else if !os.IsNotExist(err) {
+				return err
+			}
 		}
 		paths[filepath.ToSlash(rel)] = true
 		return nil

@@ -32,6 +32,7 @@ func Run(args []string, stdout io.Writer) error {
 	msgIDDir := flags.String("msgid", "./protocol/msgid", "generated msg id directory")
 	bindDir := flags.String("bind", DefaultBindDir, "generated player_agent binding directory")
 	handlerDir := flags.String("handlers", DefaultHandlerDir, "generated player protocol handler directory")
+	controllerDir := flags.String("controllers", "", "create missing application-owned controller scaffolds")
 	handlerBootstrap := flags.String("handler-bootstrap", "", "generated aggregate player protocol registration file")
 	robotProtocolFile := flags.String("robot-protocol", "./service/robot/protocol/registry_gen.go", "generated robot protocol registry path")
 	manifestFile := flags.String("manifest", "./protocol/protocol_manifest.json", "generated protocol manifest path")
@@ -189,6 +190,11 @@ func Run(args []string, stdout io.Writer) error {
 		}
 		printChange(stdout, *handlerBootstrap, changed)
 		return nil
+	}
+	if *controllerDir != "" {
+		if err := generateControllers(*controllerDir, defs, stdout); err != nil {
+			return err
+		}
 	}
 	files, err := generateProtocolHandlerFiles(defs)
 	if err != nil {

@@ -45,6 +45,12 @@ type EquipProtocol interface {
 
 在生成工程执行 `go generate ./...`，生成 PB 类型、编解码、消息号和注册代码。启动接线通过 `RegisterPlayerProtocols` 注册 Controller，再封存注册表。框架负责解码和回包，Controller 不要再手动写 socket，否则可能重复响应。
 
+启用 player access 后，生成器还会按 `handler=player` 在 `game/controllers/player` 自动补齐 `Controller`、`FromRegistry` 和缺少的 `HandleXxx`。请求参数是 `*player_agent.Context` 与对应 PB 请求；有响应的协议返回 `(*pb.XxxResponse, error)`，单向请求只返回 `error`。新方法先返回“not implemented”错误，必须补业务才能提供服务；该错误会进入接入层的错误处理，不是成功响应。
+
+这些骨架生成后属于业务代码：重复生成、`--force`、项目同步都不覆盖或删除已有实现。方法可以移动到同包其他 Go 文件；生成器按 Controller 的方法声明查重。已有类型与 `FromRegistry` 必须配套；同名文件占用但缺少对应方法时会明确报冲突。协议删除或签名变更后，业务方法由开发者调整，编译负责校验类型是否仍匹配。`roost generate --check` 会报告缺失的骨架。
+
+此过程不要求先写 Nest handler，也不会自动替你调用 Nest。首次生成的 Controller 提供 `NestClient()`，你可按下一节调用 Sender。已有 `roost add endpoint` 仍适合显式生成连接到 Nest handler 的方法；已自动生成骨架后，直接编辑该方法即可。
+
 ## 3. Controller：把协议转换成业务调用
 
 以下方法与 demo 的真实接口一致，放在业务工程 `game/controllers/player` 包中。依赖已有 Controller 的 `NestClient()`；`player` 指业务工程的 `game/entities/player`，`syncsender` 指 `game/handler/syncsender`，`player_agent` 指 `game/player_agent`，`pb` 指 `protocol/pb`。完整 imports 见 [Controller 源码](../../demo/game/controllers/player/equip.go.tmpl)。
@@ -111,7 +117,28 @@ func handlerEquipItem(
 
 业务在 handler 中操作组件，不手动获取 Entity 锁。移出背包、装备替换、旧装备放回和属性刷新共用事务；`strict` 等待 WAL 持久化，不等于 Mongo 投影已经完成。生成 Sender 的参数是实体 ID，handler 收到的是对应实体接口；多个实体的例子见 [AddExp Controller](../../demo/game/controllers/player/add_exp.go.tmpl) 和 [handler](../../demo/game/handler/add_exp.go.tmpl)。
 
-## 5. 并发与慢操作边界
+## 5. Agent 能否发送响应
+
+能。常规写法就是在 Controller 中返回 `&pb.EquipResponse{...}, nil`，生成的注册链负责编码，并带原请求序号回给当前连接。`player_agent.Context` 本身没有接收任意 PB 对象的 `SendResponse` 方法。
+
+需要手动回包时，现有 `ctx.Session.Reply` 接收 `player_agent.Response`，不是原始 PB 对象。例如在 `HandleEquip` 内：
+
+```go
+payload, err := pb.MarshalEquipResponse(&pb.EquipResponse{Slot: 1})
+if err != nil {
+    return nil, err
+}
+err = ctx.Session.Reply(ctx.Context(), &player_agent.Response{
+    MessageID: msgid.MsgEquip,
+    Sequence:  ctx.Seq,
+    Payload:   payload,
+})
+return nil, err // 已手动回包，不能再返回一个响应对象。
+```
+
+`msgid` 是业务工程的 `protocol/msgid` 包。响应沿原连接发送，连接关闭后可能失败；它不是发给该玩家所有连接的 Push。异步任务还要自行管理上下文取消、连接生命周期和只响应一次。本轮保留现有回包接口，没有新增隐式协程或自动去重机制。
+
+## 6. 并发与慢操作边界
 
 Controller 可能并发执行，不是每个玩家一个 Actor，不要在 Controller 字段里无保护地存可变玩家状态。Nest handler 则按声明的目标实体保护业务执行；长短业务池都不能同步等待另一条业务消息，也不能等待 I/O。适用的无回滚 memory handler 可用 [Await](NEST-AWAIT.md) 拆分锁外查询与恢复；本篇的 undo 事务 handler 不能直接套用 Await。
 

@@ -38,11 +38,13 @@ type RelationSource struct {
 
 	mu      sync.Mutex
 	members map[int64]map[int64]struct{} // observer -> subjects
-	pending []InterestEvent
+	// 正反索引在同一 mu 下更新；退出只访问持有该 subject 的观察者。
+	observers map[int64]map[int64]struct{} // subject -> observers
+	pending   []InterestEvent
 }
 
 func NewRelationSource(name string) *RelationSource {
-	return &RelationSource{name: name, members: make(map[int64]map[int64]struct{})}
+	return &RelationSource{name: name, members: make(map[int64]map[int64]struct{}), observers: make(map[int64]map[int64]struct{})}
 }
 
 func (s *RelationSource) Name() string { return s.name }
@@ -68,11 +70,19 @@ func (s *RelationSource) Set(observer int64, subjects []int64) {
 	previous := s.members[observer]
 	for subject := range previous {
 		if _, kept := next[subject]; !kept {
+			delete(s.observers[subject], observer)
+			if len(s.observers[subject]) == 0 {
+				delete(s.observers, subject)
+			}
 			s.pending = append(s.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestLeave, Band: -1})
 		}
 	}
 	for subject := range next {
 		if _, had := previous[subject]; !had {
+			if s.observers[subject] == nil {
+				s.observers[subject] = make(map[int64]struct{})
+			}
+			s.observers[subject][observer] = struct{}{}
 			s.pending = append(s.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestEnter})
 		}
 	}
@@ -92,16 +102,15 @@ func (s *RelationSource) Clear(observer int64) { s.Set(observer, nil) }
 func (s *RelationSource) Forget(subject int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for observer, subjects := range s.members {
-		if _, held := subjects[subject]; !held {
-			continue
-		}
+	for observer := range s.observers[subject] {
+		subjects := s.members[observer]
 		delete(subjects, subject)
 		s.pending = append(s.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestLeave, Band: -1})
 		if len(subjects) == 0 {
 			delete(s.members, observer)
 		}
 	}
+	delete(s.observers, subject)
 }
 
 // Flush drains the events, ordered like the spatial source's so the aggregator

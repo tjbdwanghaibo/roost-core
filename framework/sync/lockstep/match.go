@@ -189,6 +189,8 @@ type Match struct {
 	sendTimeout  time.Duration
 	sendWait     time.Duration
 	closed       bool
+	// 广播名单由串行 owner 管理，只在连接成员变化后重新排序。
+	broadcastReceivers []broadcastReceiver
 	// sessions binds attached seats to their transport session.
 	sessions map[PlayerID]nettransport.SessionID
 	// spectators are receive-only sessions: they get live broadcasts and
@@ -329,6 +331,7 @@ func (r *Match) Attach(player PlayerID, session nettransport.SessionID) error {
 		delete(r.sessionOwners, previous)
 	}
 	r.sessions[player] = session
+	r.broadcastReceivers = nil
 	r.sessionOwners[session] = player
 	return nil
 }
@@ -341,6 +344,7 @@ func (r *Match) Detach(player PlayerID) {
 		r.dropCatchup(session)
 		delete(r.sessionOwners, session)
 		delete(r.sessions, player)
+		r.broadcastReceivers = nil
 	}
 }
 
@@ -366,6 +370,7 @@ func (r *Match) AttachSpectator(session nettransport.SessionID) error {
 		return ErrSessionInUse
 	}
 	r.spectators[session] = struct{}{}
+	r.broadcastReceivers = nil
 	r.sessionOwners[session] = ownerSpectator
 	return nil
 }
@@ -374,6 +379,7 @@ func (r *Match) AttachSpectator(session nettransport.SessionID) error {
 func (r *Match) DetachSpectator(session nettransport.SessionID) {
 	if _, ok := r.spectators[session]; ok {
 		delete(r.spectators, session)
+		r.broadcastReceivers = nil
 		delete(r.sessionOwners, session)
 		r.dropCatchup(session)
 	}
@@ -473,6 +479,9 @@ type broadcastReceiver struct {
 // ascending session): deterministic iteration keeps error text and delivery
 // order reproducible.
 func (r *Match) broadcastOrder() []broadcastReceiver {
+	if r.broadcastReceivers != nil {
+		return r.broadcastReceivers
+	}
 	receivers := make([]broadcastReceiver, 0, len(r.sessions)+len(r.spectators))
 	players := make([]PlayerID, 0, len(r.sessions))
 	for player := range r.sessions {
@@ -490,6 +499,7 @@ func (r *Match) broadcastOrder() []broadcastReceiver {
 	for _, session := range specs {
 		receivers = append(receivers, broadcastReceiver{owner: ownerSpectator, session: session})
 	}
+	r.broadcastReceivers = receivers
 	return receivers
 }
 
@@ -768,6 +778,7 @@ func (r *Match) Close() {
 		state.drop()
 	}
 	r.closed = true
+	r.broadcastReceivers = nil
 	r.sessions = make(map[PlayerID]nettransport.SessionID)
 	r.spectators = make(map[nettransport.SessionID]struct{})
 	r.sessionOwners = make(map[nettransport.SessionID]PlayerID)

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- player access 工程在生成协议时自动补齐 Controller 业务骨架，参数为 player_agent.Context 与 PB 请求；已有业务不覆盖，支持事务生成和缺失检查。说明主动回包与返回响应的使用边界。
+- 修复 player_agent 将 typed nil 响应误当非空的问题：Controller 手动回包后返回 nil 不再触发额外的自动编码/响应；已有业务工程需同步生成模板后重新生成。
+- Sync 减少 Flush 修订表分配、AOI 全观察者事件扫描和 Lockstep 每帧名单排序；Relation 增加退出反向索引。契约、内存代价与同机基准见 docs/framework/SYNC-OPTIMIZATION.md。
+
 - Sync 命名按职责收敛：帧元数据 `RoomID` / C# `RoomId` 改为 `StreamID` / `StreamId`；Lockstep `Room`、`RoomConfig`、`NewRoom` 和对应错误改为 `Match` 系列；AOICluster 内部统一使用 area。源码 API 不保留旧别名，消费者须更新并重新生成；帧二进制格式、指标与业务行为不变。新增玩家协议处理教程，见 docs/framework/PLAYER-ACCESS.md。
 
 - Nest 增加按 Entity Kind 选择的长业务池；长短业务与 I/O 共用 ID tails。新增 `Await(work, resume)` 和可选 `WithResumeTargets`，支持无回滚 memory handler 的锁外查询与匿名恢复。Cast 拒绝未声明目标；长短业务池禁止同步等待，I/O 禁止 Guard。新增 `nest.long` 配置和实体生成标记 `businessPool=long`，使用及迁移见 docs/framework/NEST-AWAIT.md。

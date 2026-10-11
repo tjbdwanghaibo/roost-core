@@ -178,7 +178,9 @@ type AOI struct {
 	pending      []InterestEvent
 	blockPending []InterestEvent
 	batching     bool
-	dirty        map[int64]*interestObserver
+	// 仅 endBatch 的并行读阶段为 true；worker 只写自己的 observer 缓冲。
+	parallelEvents bool
+	dirty          map[int64]*interestObserver
 }
 
 func NewAOI(config AOIConfig) (*AOI, error) {
@@ -217,7 +219,7 @@ func (m *AOI) band(distanceFrom, to spatial.Point) int {
 
 func (m *AOI) emit(observer, subject int64, kind InterestEventKind, band int) {
 	event := InterestEvent{Observer: observer, Subject: subject, Kind: kind, Band: band}
-	if o := m.observers[observer]; o != nil {
+	if o := m.observers[observer]; m.parallelEvents && o != nil {
 		o.pending = append(o.pending, event)
 	} else {
 		m.pending = append(m.pending, event)
@@ -368,10 +370,7 @@ func (m *AOI) Visible(observer int64) []int64 {
 // Subject) with same-pair events keeping their occurrence order, so the
 // output is a deterministic function of the operation sequence.
 func (m *AOI) Flush() []InterestEvent {
-	for _, o := range m.observers {
-		m.pending = append(m.pending, o.pending...)
-		o.pending = nil
-	}
+	// 并行批次已在 endBatch 归集；空闲 Flush 不遍历全部观察者。
 	if len(m.pending) == 0 {
 		return nil
 	}
