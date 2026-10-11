@@ -1,5 +1,14 @@
 package entitysync
 
+import "github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+
+// encodeWorkspace 只缓存编码前的临时结构。frame.Encode 返回独立字节，
+// 编码返回后即清除这里的组件与载荷引用，不改变 Transport 的所有权。
+type encodeWorkspace struct {
+	objects    []frame.ObjectDelta
+	components []frame.ComponentDelta
+}
+
 // Flush 工作区由 flushGate 独占。保留容量有界，回收前清空全部业务引用；
 // 不缓存最终帧字节，Transport 可在 Push 返回后继续持有它们。
 func (m *Manager) takeFlushSession(sess *session) *flushSession {

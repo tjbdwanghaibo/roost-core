@@ -88,11 +88,7 @@ func (m *AOI) SetObservedBlocks(id int64, blocks []int64) error {
 		m.observed[id] = next
 	}
 	for _, o := range affected {
-		if m.batching {
-			m.dirty[o.id] = o
-		} else {
-			m.evaluateObserved(o)
-		}
+		m.refreshObserver(o, dirtyCoverage)
 	}
 	return nil
 }
@@ -169,9 +165,14 @@ func (m *AOI) endBatch(workers int) {
 	workers = min(workers, len(observers))
 	if workers <= 1 {
 		for _, o := range observers {
-			m.evaluateObserver(o)
+			m.evaluateObserver(o, &m.serialWork, o.dirty)
+			o.dirty = 0
 		}
+		m.serialWork.release()
 		return
+	}
+	if len(m.workerWork) < workers {
+		m.workerWork = make([]aoiWorkspace, workers)
 	}
 	var wg sync.WaitGroup
 	m.parallelEvents = true
@@ -179,12 +180,20 @@ func (m *AOI) endBatch(workers int) {
 	for worker := 0; worker < workers; worker++ {
 		wg.Go(func() {
 			for i := worker; i < len(observers); i += workers {
-				m.evaluateObserver(observers[i])
+				o := observers[i]
+				m.evaluateObserver(o, &m.workerWork[worker], o.dirty)
+				o.dirty = 0
 			}
 		})
 	}
 	wg.Wait()
 	m.parallelEvents = false
+	for i := range m.workerWork {
+		m.workerWork[i].release()
+	}
+	if len(m.workerWork) > aoiCachedWorkers {
+		m.workerWork = nil
+	}
 	// 只归集本批参与计算的观察者；阶段屏障后没有 worker 再写这些缓冲。
 	for _, o := range observers {
 		m.pending = append(m.pending, o.pending...)

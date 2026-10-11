@@ -10,9 +10,16 @@ import (
 
 func assertStatsAudited(t *testing.T, m *Manager) {
 	t.Helper()
+	started := time.Now()
 	fast, audit := m.Stats(), m.AuditStats()
-	if fast.Subjects != audit.Subjects || fast.Sessions != audit.Sessions || fast.HeldSessions != audit.HeldSessions || fast.Subscriptions != audit.Subscriptions || fast.PendingSnapshots != audit.PendingSnapshots || fast.Pending != audit.Pending || fast.WaitingSnapshotSubjects != audit.WaitingSnapshotSubjects || (fast.OldestSnapshotWait == 0) != (audit.OldestSnapshotWait == 0) {
+	elapsed := time.Since(started)
+	if fast.Subjects != audit.Subjects || fast.Sessions != audit.Sessions || fast.HeldSessions != audit.HeldSessions || fast.Subscriptions != audit.Subscriptions || fast.PendingSnapshots != audit.PendingSnapshots || fast.Pending != audit.Pending || fast.WaitingSnapshotSubjects != audit.WaitingSnapshotSubjects {
 		t.Fatalf("incremental=%+v audit=%+v", fast, audit)
+	}
+	// 两次采样时间不同：刚入队时第一次可能为 0，第二次已跨系统时钟刻度。
+	// 同一最老请求的年龄只能增加，且增量不超过本次两次读取的真实耗时。
+	if growth := audit.OldestSnapshotWait - fast.OldestSnapshotWait; growth < 0 || growth > elapsed {
+		t.Fatalf("wait age drift: fast=%v audit=%v elapsed=%v", fast.OldestSnapshotWait, audit.OldestSnapshotWait, elapsed)
 	}
 	m.snapshotRequests.mu.Lock()
 	defer m.snapshotRequests.mu.Unlock()

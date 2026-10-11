@@ -1,0 +1,6 @@
+"name","before","after","pct","beforeB","afterB","beforeAlloc","afterAlloc"
+"BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-4","68459","62434","-8.8","50136","47832","245","243"
+"BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-4","5417149","5188204","-4.2","3965370","3375547","2305","1793"
+"BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-4","5621565","5503607","-2.1","4063034","3473192","2405","1893"
+"BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-4","1619017","1489827","-8","1017202","869744","763","635"
+"BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-4","1566169","1690499","7.9","1114775","967312","861","733"

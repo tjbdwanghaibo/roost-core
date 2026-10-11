@@ -1,0 +1,45 @@
+File: entitysync.test.exe
+Type: alloc_objects
+Time: 2026-10-11 20:23:06 CST
+Showing nodes accounting for 473604, 99.93% of 473950 total
+Dropped 11 nodes (cum <= 2369)
+      flat  flat%   sum%        cum   cum%
+    149819 31.61% 31.61%     149819 31.61%  github.com/tjbdwanghaibo/roost-core/framework/sync/frame.validateFrame
+    112078 23.65% 55.26%     343859 72.55%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*session).encode
+     51542 10.87% 66.13%     201361 42.49%  github.com/tjbdwanghaibo/roost-core/framework/sync/frame.Encode
+     51498 10.87% 77.00%      51498 10.87%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*session).clone (inline)
+     33024  6.97% 83.97%      33024  6.97%  runtime.mallocgc
+     16384  3.46% 87.42%     217745 45.94%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*session).encode.func2 (inline)
+     11333  2.39% 89.81%      11679  2.46%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).subscribe
+     10923  2.30% 92.12%      10923  2.30%  github.com/modern-go/reflect2.loadGoTypes
+      8939  1.89% 94.01%       8939  1.89%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.EncodeSubjectUpdate
+      7051  1.49% 95.49%     413643 87.28%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Flush
+      6554  1.38% 96.88%      11235  2.37%  github.com/tjbdwanghaibo/roost-core/framework/entity.(*SubjectSyncState).prepareProfiles
+      5097  1.08% 97.95%       5097  1.08%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*session).allocate
+      4681  0.99% 98.94%       4681  0.99%  github.com/tjbdwanghaibo/roost-core/framework/entity.(*SubjectSyncState).prepareLocked
+      4681  0.99% 99.93%       4681  0.99%  time.NewTimer
+         0     0% 99.93%      10923  2.30%  github.com/modern-go/gls.init.1
+         0     0% 99.93%      10923  2.30%  github.com/modern-go/reflect2.TypeByName
+         0     0% 99.93%      10923  2.30%  github.com/modern-go/reflect2.discoverTypes
+         0     0% 99.93%      11235  2.37%  github.com/tjbdwanghaibo/roost-core/framework/entity.(*SubjectSyncState).PrepareViews
+         0     0% 99.93%       4681  0.99%  github.com/tjbdwanghaibo/roost-core/framework/entity.(*SubjectSyncState).prepareProfiles.func1
+         0     0% 99.93%       4681  0.99%  github.com/tjbdwanghaibo/roost-core/framework/entity.(*SubjectSyncState).withEntityLock
+         0     0% 99.93%      11679  2.46%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Subscribe (inline)
+         0     0% 99.93%       8939  1.89%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*capturedUpdate).encode (inline)
+         0     0% 99.93%       5097  1.08%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*session).objectFor
+         0     0% 99.93%     425322 89.74%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.BenchmarkManagerFlush.func1
+         0     0% 99.93%       4681  0.99%  github.com/xtaci/kcp-go/v5.(*TimedSched).sched
+         0     0% 99.93%      32768  6.91%  runtime.(*scavengerState).sleep
+         0     0% 99.93%      32768  6.91%  runtime.(*timer).maybeAdd
+         0     0% 99.93%      32768  6.91%  runtime.(*timer).modify
+         0     0% 99.93%      32768  6.91%  runtime.(*timer).reset (inline)
+         0     0% 99.93%      32768  6.91%  runtime.(*timers).addHeap
+         0     0% 99.93%      32768  6.91%  runtime.bgscavenge
+         0     0% 99.93%      10923  2.30%  runtime.doInit (inline)
+         0     0% 99.93%      10923  2.30%  runtime.doInit1
+         0     0% 99.93%      32768  6.91%  runtime.growslice
+         0     0% 99.93%      10923  2.30%  runtime.main
+         0     0% 99.93%      10923  2.30%  sync.(*Once).Do (inline)
+         0     0% 99.93%      10923  2.30%  sync.(*Once).doSlow
+         0     0% 99.93%     425322 89.74%  testing.(*B).run1.func1
+         0     0% 99.93%     425322 89.74%  testing.(*B).runN

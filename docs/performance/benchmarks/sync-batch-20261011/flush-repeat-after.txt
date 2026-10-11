@@ -1,0 +1,11 @@
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-4         	     769	   1597641 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967294 B/op	     733 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-4         	     748	   1687191 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967283 B/op	     733 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-4         	     760	   1560152 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967284 B/op	     733 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-4         	     613	   1822117 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967294 B/op	     733 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-4         	     826	   1436974 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967282 B/op	     733 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	6.777s

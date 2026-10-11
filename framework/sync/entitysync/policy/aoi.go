@@ -151,6 +151,7 @@ func (c AOIConfig) boundedSides(blockSize int64) int64 {
 }
 
 type interestObserver struct {
+	dirty        observerDirty
 	id           int64
 	at           spatial.Point
 	blocks       map[int64]struct{}
@@ -181,6 +182,8 @@ type AOI struct {
 	// 仅 endBatch 的并行读阶段为 true；worker 只写自己的 observer 缓冲。
 	parallelEvents bool
 	dirty          map[int64]*interestObserver
+	serialWork     aoiWorkspace
+	workerWork     []aoiWorkspace
 }
 
 func NewAOI(config AOIConfig) (*AOI, error) {
@@ -299,11 +302,7 @@ func (m *AOI) addObserverUnbounded(id int64, at spatial.Point) error {
 	observer := &interestObserver{id: id, at: at, blocks: make(map[int64]struct{}), visible: make(map[int64]int)}
 	m.observers[id] = observer
 	m.resubscribe(observer)
-	if m.batching {
-		m.dirty[observer.id] = observer
-	} else {
-		m.evaluateObserver(observer)
-	}
+	m.refreshObserver(observer, dirtySpatial|dirtyCoverage)
 	return nil
 }
 
@@ -324,12 +323,11 @@ func (m *AOI) moveObserverUnbounded(id int64, to spatial.Point) error {
 		return ErrInterestUnknown
 	}
 	observer.at = to
-	m.resubscribe(observer)
-	if m.batching {
-		m.dirty[observer.id] = observer
-	} else {
-		m.evaluateObserver(observer)
+	reason := dirtySpatial
+	if m.resubscribe(observer) {
+		reason |= dirtyCoverage
 	}
+	m.refreshObserver(observer, reason)
 	return nil
 }
 
@@ -388,7 +386,7 @@ func (m *AOI) Flush() []InterestEvent {
 
 // resubscribe diffs the observer's block subscriptions against the blocks
 // its leave-radius box currently covers.
-func (m *AOI) resubscribe(observer *interestObserver) {
+func (m *AOI) resubscribe(observer *interestObserver) (changed bool) {
 	reach := spatial.SaturatingAdd(m.config.LeaveRadius, 1)
 	box := spatial.Rect{
 		Min: spatial.Point{X: spatial.SaturatingSub(observer.at.X, m.config.LeaveRadius), Y: spatial.SaturatingSub(observer.at.Y, m.config.LeaveRadius)},
@@ -397,11 +395,13 @@ func (m *AOI) resubscribe(observer *interestObserver) {
 	next, _ := m.index.BlockRects(box)
 	for block := range observer.blocks {
 		if _, keep := next[block]; !keep {
+			changed = true
 			m.unsubscribeBlock(observer, block)
 		}
 	}
 	for block := range next {
 		if _, subscribed := observer.blocks[block]; !subscribed {
+			changed = true
 			observer.blocks[block] = struct{}{}
 			b := m.block(block)
 			b.mu.Lock()
@@ -409,6 +409,7 @@ func (m *AOI) resubscribe(observer *interestObserver) {
 			b.mu.Unlock()
 		}
 	}
+	return changed
 }
 
 func (m *AOI) unsubscribeBlock(observer *interestObserver, block int64) {
@@ -446,6 +447,7 @@ func (m *AOI) observersAt(at spatial.Point, other ...spatial.Point) []*interestO
 func (m *AOI) evaluateSubjectFor(observers []*interestObserver, subject int64, at spatial.Point, removed bool) {
 	for _, observer := range observers {
 		if m.batching {
+			observer.dirty |= dirtySpatial
 			m.dirty[observer.id] = observer
 		} else {
 			m.evaluatePair(observer, subject, at, removed)
@@ -462,23 +464,38 @@ type entryCandidate struct {
 // evaluateObserver re-evaluates an observer's entire visible set: current
 // members against the leave radius, subscription-neighborhood subjects
 // against the enter radius.
-func (m *AOI) evaluateObserver(observer *interestObserver) {
-	m.evaluateObserved(observer)
-	for _, subject := range sortedVisible(observer.visible) {
+func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, reason observerDirty) {
+	if reason&dirtyCoverage != 0 {
+		m.evaluateObserved(observer)
+	}
+	if reason&dirtySpatial == 0 {
+		return
+	}
+	work.visible = work.visible[:0]
+	for id := range observer.visible {
+		work.visible = append(work.visible, id)
+	}
+	slices.Sort(work.visible)
+	for _, subject := range work.visible {
 		at, exists := m.subjects[subject]
 		m.evaluatePair(observer, subject, at, !exists)
 	}
-	blocks := make([]int64, 0, len(observer.blocks))
+	blocks := work.blocks[:0]
 	for block := range observer.blocks {
 		blocks = append(blocks, block)
 	}
 	slices.Sort(blocks)
+	work.blocks = blocks
 	// Admit new candidates nearest-first: block-order admission could let a
 	// farther subject enter and be evicted by a nearer one within the same
 	// evaluation, emitting a transient Enter+Leave pair downstream.
-	candidates := make([]entryCandidate, 0)
-	seen := make(map[int64]struct{})
-	var query []int64
+	candidates := work.candidates[:0]
+	if work.seen == nil {
+		work.seen = make(map[int64]struct{})
+	}
+	seen := work.seen
+	clear(seen)
+	query := work.query[:0]
 	for _, block := range blocks {
 		query = m.index.AppendBlockIDs(query[:0], block)
 		for _, subject := range query {
@@ -494,6 +511,8 @@ func (m *AOI) evaluateObserver(observer *interestObserver) {
 			}
 		}
 	}
+	work.query, work.candidates = query, candidates
+	work.seenPeak = max(work.seenPeak, len(seen))
 	slices.SortFunc(candidates, func(a, b entryCandidate) int {
 		if order := cmp.Compare(a.distance, b.distance); order != 0 {
 			return order

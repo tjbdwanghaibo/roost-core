@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 )
 
 // DefaultInterval 是脏数据的合并检查周期；不包含执行、网络或重试耗时，
@@ -174,9 +174,10 @@ type Manager struct {
 	lastError         error
 	flushWork         map[SessionID]*flushSession
 	flushPool         []*flushSession
-	snapshotCursor    [2]SessionID  // flushGate；两类分别保留会话轮转位置
-	windowByteBlocked bool          // 本窗口已遇到放不下的冷对象，留到下一窗口首位竞争
-	snapshotNextClass snapshotClass // 小额度跨窗口仍轮流服务两类
+	encodeWork        encodeWorkspace // flushGate 独占，只有临时结构，不保存发送字节。
+	snapshotCursor    [2]SessionID    // flushGate；两类分别保留会话轮转位置
+	windowByteBlocked bool            // 本窗口已遇到放不下的冷对象，留到下一窗口首位竞争
+	snapshotNextClass snapshotClass   // 小额度跨窗口仍轮流服务两类
 	snapshotsDeferred atomic.Uint64
 
 	// resubmitMu 保护框架撤销的订阅记录（policy_queue.go，RR-20260926-70）；叶子锁。

@@ -1,0 +1,17 @@
+File: entitysync.test.exe
+Type: alloc_space
+Time: 2026-10-11 20:23:06 CST
+Showing nodes accounting for 767.70MB, 98.83% of 776.76MB total
+Dropped 39 nodes (cum <= 3.88MB)
+      flat  flat%   sum%        cum   cum%
+  604.02MB 77.76% 77.76%   627.53MB 80.79%  github.com/tjbdwanghaibo/roost-core/framework/sync/frame.Encode
+  123.14MB 15.85% 93.61%   755.67MB 97.28%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*session).encode
+   23.51MB  3.03% 96.64%    23.51MB  3.03%  github.com/tjbdwanghaibo/roost-core/framework/sync/frame.validateFrame
+    8.03MB  1.03% 97.67%   770.20MB 99.16%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Flush
+    5.50MB  0.71% 98.38%     5.50MB  0.71%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*session).clone (inline)
+    2.50MB  0.32% 98.70%     4.56MB  0.59%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).subscribe
+       1MB  0.13% 98.83%   628.53MB 80.92%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*session).encode.func2 (inline)
+         0     0% 98.83%     4.56MB  0.59%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.(*Manager).Subscribe (inline)
+         0     0% 98.83%   774.76MB 99.74%  github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync.BenchmarkManagerFlush.func1
+         0     0% 98.83%   774.76MB 99.74%  testing.(*B).run1.func1
+         0     0% 98.83%   774.76MB 99.74%  testing.(*B).runN

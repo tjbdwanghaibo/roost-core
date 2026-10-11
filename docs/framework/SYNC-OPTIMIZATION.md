@@ -74,3 +74,55 @@ go test ./framework/sync/entitysync ./framework/sync/entitysync/policy ./framewo
 生成工程验证覆盖自动创建、已有业务逐字节保留、方法移到其他文件后不重复创建、文件冲突拒绝、事务生成落盘、缺失骨架 `--check`、生成工程实际编译，以及 typed nil 的修前失败/修后通过。既有显式 endpoint 工作流和完整 demo 模板也通过。Go/C# TCP 消费测试覆盖真实生成服务器的协议回包与生成工程 build/vet；不等待 GitHub CI，也没有发布新版本。
 
 结构定位使用 codebase-memory 后以当前源码补证：图谱基线仍为 2026-10-10T16:08:17Z，相关路径报告 metadata_changed，新文件不在该索引中，不能把旧图谱当作本次源码的完整索引。
+
+## 第二批：实际重算与编码工作区
+
+基线 57a1eada。保持原包、公开 API、协议与调度语义，实施三项内部优化：
+
+1. 为串行阶段和每个 AOI worker 提供独占工作区，复用可见 ID、块 ID、查询结果、候选切片和去重表。单容器保留上限 4096 项，最多缓存 32 个并行工作区；超额仍正常计算，只在批次结束释放临时容量。工作区不持有对外事件，不引入常驻 worker。
+2. 将 observer 的 dirty 原因分成距离和额外块覆盖。主体物理移动只标记距离；额外覆盖修改只标记覆盖；观察者移动始终重算距离、订阅块集合改变才标记覆盖；首次添加两者都标记。同批原因按位合并，移除并重建使用新实例。
+3. 先采样 Flush 分配，再决定复用边界。样本中 frame.Encode 自身占分配字节约 77.76%，session.encode 自身约 15.85%。最终帧已经按精确长度分配，Transport 可能继续持有，不池化这部分；只复用串行 Flush 内会话编码的 ObjectDelta/ComponentDelta 临时切片，归还前清除引用、超过 256 项不保留。每个 Manager 仅一份，逐帧状态与发送字节仍独立。
+
+本批基准覆盖 512 subjects、128 observers、稀疏/集中布局、每批 32 次物理移动或额外覆盖切换、1/4 workers。混合行为测试对照强制全量重算，覆盖同批多原因、主体和观察者退出/重建、距离分档与 MaxVisible。本批不宣称端到端重档通过。
+
+### 第二批测量结果
+
+环境仍为 Windows/amd64、Go 1.27.0、Ryzen 7 5800H、GOMAXPROCS=4。以下是每档 200ms × 3 的耗时中位数与对应样本分配值；计时与 build/race/profile 分开。稀疏布局间距 100，集中布局间距 10；块边长 100、进入/离开半径 120/150、MaxVisible=64。空间档每批前 32 个主体来回移动 80；覆盖档切换两个额外块与空集合。两者均经 beginBatch/endBatch 后收集空间和覆盖事件，不包含网络发送。
+
+| AOI 场景 | worker | 前 → 后 µs/批 | 前 → 后 B/批 | 前 → 后分配次数/批 |
+| --- | ---: | ---: | ---: | ---: |
+| 稀疏、物理移动 | 1 | 136.94 → 82.74 | 23,963 → 2,960 | 260 → 70 |
+| 稀疏、物理移动 | 4 | 128.88 → 95.27 | 25,451 → 4,453 | 284 → 94 |
+| 稀疏、覆盖切换 | 1 | 135.29 → 55.64 | 29,526 → 11,522 | 222 → 63 |
+| 稀疏、覆盖切换 | 4 | 142.93 → 89.82 | 39,559 → 21,557 | 319 → 160 |
+| 集中、物理移动 | 1 | 58,108.85 → 51,212.40 | 6,727,622 → 303,278 | 4,590 → 400 |
+| 集中、物理移动 | 4 | 26,942.96 → 21,226.84 | 6,773,013 → 373,604 | 4,777 → 607 |
+| 集中、覆盖切换 | 1 | 57,167.90 → 1,558.29 | 7,307,360 → 885,585 | 5,045 → 974 |
+| 集中、覆盖切换 | 4 | 26,079.85 → 1,502.70 | 7,479,410 → 1,059,686 | 5,812 → 1,746 |
+
+覆盖切换收益很大，是因为不再触发距离候选排序与 MaxVisible 淘汰；不代表所有移动都能提升同样比例。集中物理移动仍很昂贵，单 worker 一批约 51ms，下一步应分析候选排序与满额淘汰扫描。稀疏档 4 worker 比 1 worker 慢，说明 goroutine 调度开销可能超过小批次的并行收益；本次没有改默认 worker 配置。
+
+| Flush 场景（32 实体，每实体载荷 256 B） | 前 → 后 µs/轮 | 前 → 后 B/轮 | 前 → 后分配次数/轮 |
+| --- | ---: | ---: | ---: |
+| 1 会话，1 profile | 68.46 → 62.43 | 50,136 → 47,832 | 245 → 243 |
+| 64 会话，1 profile | 1,619.02 → 1,489.83 | 1,017,202 → 869,744 | 763 → 635 |
+| 64 会话，4 profiles | 1,566.17 → 1,690.50 | 1,114,775 → 967,312 | 861 → 733 |
+| 256 会话，1 profile | 5,417.15 → 5,188.20 | 3,965,370 → 3,375,547 | 2,305 → 1,793 |
+| 256 会话，4 profiles | 5,621.57 → 5,503.61 | 4,063,034 → 3,473,192 | 2,405 → 1,893 |
+
+Flush 每个会话稳定减少两次临时切片分配，256 会话档每轮节省约 590 KB。帧数、打包次数、wire-B/op 前后一致。首轮 64 会话/4 profiles 的耗时中位数反而上升 7.9%，原始样本完整保留，不能将分配收益表述为所有场景吞吐都提高。
+
+针对该档另做 1s × 5 的串行前后对照，中位数从 1,632.88µs 到 1,597.64µs（约 -2.2%），样本区间明显重叠；861 → 733 次分配、约 147 KB/轮的节省保持一致。因此保留这项优化的依据是稳定减少临时分配，不声称该档已有稳定耗时提升。复测原文：[before](../performance/benchmarks/sync-batch-20261011/flush-repeat-before.txt)、[after](../performance/benchmarks/sync-batch-20261011/flush-repeat-after.txt)。
+
+原始证据：[AOI before](../performance/benchmarks/sync-batch-20261011/before.txt)、[AOI after](../performance/benchmarks/sync-batch-20261011/after.txt)、[AOI 汇总](../performance/benchmarks/sync-batch-20261011/medians.csv)、[Flush before](../performance/benchmarks/sync-batch-20261011/flush-before.txt)、[Flush after](../performance/benchmarks/sync-batch-20261011/flush-after.txt)、[Flush 汇总](../performance/benchmarks/sync-batch-20261011/flush-medians.csv)、[分配字节 profile](../performance/benchmarks/sync-batch-20261011/flush-alloc-space.txt)、[分配数量 profile](../performance/benchmarks/sync-batch-20261011/flush-alloc-objects.txt)。profile 是采样估计，包含测试初始化；样本只去除行尾空格和机器本地 Build ID，不删除性能样本。
+
+复跑 AOI：使用上一节相同环境变量，运行 `go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkAOIBatchRecompute$' -benchmem -benchtime=200ms -count=3`。Flush 使用已有 BenchmarkManagerFlush。做基线对照时将本批新 benchmark 文件带回 57a1eada；不要把生产优化文件一并复制回基线。
+
+### 回归与测试误报处理
+
+- Sync 全包回归通过。AOI 分类重算在 1/4 worker、80 个混合批次中，与强制全量重算比较空间事件、覆盖事件、可见集合；既有独立距离模型、AOICluster、提交事实门与策略回归均在 policy 整包执行。
+- 新增传输保留原始切片的测试：多会话、多帧、连续 Flush 后，每一帧仍与当时副本逐字节相等且可解码；工作区清除组件与载荷引用。entitysync/policy 两包 race 重复两次通过。
+- 根模块 `go build ./...`、Sync 全包 vet、真实生成工程的 Go/C# TCP 消费测试通过；后者同时 build/vet 生成工程并运行接入层与 Game 的实际测试。没有改变协议字节格式或要求业务增加配置。
+- 首次 race 中 `TestSnapshotIndexAndStatsFollowLifecycle` 失败，前后计数相同，但 OldestSnapshotWait 从 0 增至约 1ms。未修改的 main 基线按 `-race -count=100` 同样复现。旧断言错误地要求两次独立采样的“是否为零”一致；现在验证年龄不倒退，且增量不超过包住两次读取的真实耗时，不加 sleep、不设任意容差、不改运行时统计。修后定向 race 100 次通过。
+
+后续仍可做候选过滤/选择算法、Relation 增量 API、可配置 OnChange 合批与长局 Lockstep 测量；这些不在本批实现中。真实 Gate/Nest/Sync 的重档、P99、跨机及长期容量需要独立验收，不由本批微基准替代。

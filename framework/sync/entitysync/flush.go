@@ -298,7 +298,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 		// 后一帧或另一会话失败时，已成功交付的前缀不能回滚。
 		next := sess.clone()
 		next.snapshotAfter = batch.snapshotAfter
-		payloads, err := next.encode(batch.entries, m.wire)
+		payloads, err := next.encodeWithWorkspace(batch.entries, m.wire, &m.encodeWork)
 		if m.config.Trace != nil {
 			if err != nil {
 				m.config.Trace.Record(SyncTraceEvent{Stage: "encode_failed", Session: sid, Lifetime: sess.lifetime.traceID, Epoch: sess.epoch, Duration: time.Since(encodeStarted)})

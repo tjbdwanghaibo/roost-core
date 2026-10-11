@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Sync 第二批优化：AOI 按空间/额外覆盖变化分类重算，并复用有上限的串行/worker 工作区；Flush 复用编码临时结构，发送字节仍独立。补齐批量移动、集中布局、覆盖切换基准和事件/载荷所有权回归。修正统计回归中两次采样跨时钟刻度的误报，详见 docs/framework/SYNC-OPTIMIZATION.md。
+
 - player access 工程在生成协议时自动补齐 Controller 业务骨架，参数为 player_agent.Context 与 PB 请求；已有业务不覆盖，支持事务生成和缺失检查。说明主动回包与返回响应的使用边界。
 - 修复 player_agent 将 typed nil 响应误当非空的问题：Controller 手动回包后返回 nil 不再触发额外的自动编码/响应；已有业务工程需同步生成模板后重新生成。
 - Sync 减少 Flush 修订表分配、AOI 全观察者事件扫描和 Lockstep 每帧名单排序；Relation 增加退出反向索引。契约、内存代价与同机基准见 docs/framework/SYNC-OPTIMIZATION.md。

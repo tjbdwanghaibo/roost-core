@@ -1,0 +1,21 @@
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-4         	    3938	     62012 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   47833 B/op	     243 allocs/op
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-4         	    3372	     62434 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   47832 B/op	     243 allocs/op
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-4         	    5451	     68525 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   47832 B/op	     243 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-4        	     156	   1597274 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  869746 B/op	     635 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-4        	     162	   1489827 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  869744 B/op	     635 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-4        	     177	   1403220 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  869744 B/op	     635 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-4        	     129	   1842829 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967321 B/op	     733 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-4        	     153	   1690499 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967312 B/op	     733 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-4        	     163	   1466861 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967307 B/op	     733 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-4       	      45	   5107176 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3375545 B/op	    1793 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-4       	      44	   5290323 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3375552 B/op	    1793 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-4       	      45	   5188204 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3375547 B/op	    1793 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-4       	      42	   5589490 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473196 B/op	    1893 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-4       	      43	   5503607 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473192 B/op	    1893 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-4       	      43	   5402488 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473191 B/op	    1893 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	4.670s

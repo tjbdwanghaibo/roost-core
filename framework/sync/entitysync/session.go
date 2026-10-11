@@ -140,6 +140,10 @@ func (s *session) release(subjectID int64) {
 // 编码失败可能是引用表不一致或单实体包超硬上限；关闭受影响会话，
 // 由业务修正配置/数据并重新订阅，不能截断内容继续发送。
 func (s *session) encode(entries []frameEntry, cfg wireConfig) ([]encodedFrame, error) {
+	return s.encodeWithWorkspace(entries, cfg, &encodeWorkspace{})
+}
+
+func (s *session) encodeWithWorkspace(entries []frameEntry, cfg wireConfig, work *encodeWorkspace) ([]encodedFrame, error) {
 	// 先释放退出视野的对象，再为新对象分配引用。MaxObjects 限制持有量，
 	// 不能让同一 tick 的合法替换因为新对象 ID 更小而暂时超额。
 	slices.SortFunc(entries, func(a, b frameEntry) int {
@@ -159,10 +163,30 @@ func (s *session) encode(entries []frameEntry, cfg wireConfig) ([]encodedFrame, 
 	if maxBytes <= 0 {
 		maxBytes = frame.DefaultLimits().MaxFrameBytes
 	}
-	// 工作区只在本次 encode 内复用；Encode 返回的字节和逐帧会话状态独立。
+	// 同一 Flush 内各会话串行借用工作区；返回字节和逐帧会话状态独立。
 	capacity := min(len(entries), perFrame)
-	objects := make([]frame.ObjectDelta, 0, capacity)
-	components := make([]frame.ComponentDelta, capacity)
+	objects := work.objects[:0]
+	if cap(objects) < capacity {
+		objects = make([]frame.ObjectDelta, 0, capacity)
+	}
+	components := work.components
+	if cap(components) < capacity {
+		components = make([]frame.ComponentDelta, capacity)
+	} else {
+		components = components[:capacity]
+	}
+	defer func() {
+		// 所有退出路径都清引用，后续会话不能覆盖仍在传输中的帧字节。
+		clear(objects)
+		clear(components)
+		work.objects, work.components = objects[:0], components[:0]
+		if cap(objects) > 256 {
+			work.objects = nil
+		}
+		if cap(components) > 256 {
+			work.components = nil
+		}
+	}()
 	var frames []encodedFrame
 	counts := encodedFrame{}
 	size := 32 // frame 协议头
