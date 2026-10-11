@@ -69,6 +69,7 @@
 
 ### maintenance
 
+- [maintenance/ACCESS-SYNC-FOLLOWUPS.md](ACCESS-SYNC-FOLLOWUPS.md)：玩家接入现状、运行服务可选化与 Sync 命名后续建议
 - [maintenance/CONSISTENCY.md](CONSISTENCY.md)：文档与代码一致性核对
 - [maintenance/DOCUMENTS.md](DOCUMENTS.md)：最终保留文档清单
 - [maintenance/EXTERNAL-VERIFICATION.md](EXTERNAL-VERIFICATION.md)：外部验证操作清单
