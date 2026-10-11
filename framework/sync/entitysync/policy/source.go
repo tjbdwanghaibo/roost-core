@@ -41,7 +41,11 @@ type RelationSource struct {
 	// 正反索引在同一 mu 下更新；退出只访问持有该 subject 的观察者。
 	observers map[int64]map[int64]struct{} // subject -> observers
 	pending   []InterestEvent
+	// 仅供小集合构表，受 mu 保护；一旦成为 members 的正式集合便移交所有权。
+	scratch map[int64]struct{}
 }
+
+const relationScratchLimit = 1024
 
 func NewRelationSource(name string) *RelationSource {
 	return &RelationSource{name: name, members: make(map[int64]map[int64]struct{}), observers: make(map[int64]map[int64]struct{})}
@@ -56,20 +60,22 @@ func (s *RelationSource) Set(observer int64, subjects []int64) {
 	if observer == 0 {
 		return
 	}
-	next := make(map[int64]struct{}, len(subjects))
-	for _, subject := range subjects {
-		// A relation to oneself is legitimate here — "self" is exactly the
-		// degenerate relationship — so unlike the spatial source this does
-		// not exclude observer == subject.
-		if subject != 0 {
-			next[subject] = struct{}{}
-		}
+	var next map[int64]struct{}
+	reuse := len(subjects) <= relationScratchLimit
+	if reuse {
+		s.mu.Lock()
+		next = relationMembers(s.scratch, subjects)
+	} else {
+		// 大集合沿用锁外构表，避免扩大其他观察者、Forget 和 Flush 的等待。
+		next = relationMembers(nil, subjects)
+		s.mu.Lock()
 	}
-	s.mu.Lock()
 	defer s.mu.Unlock()
 	previous := s.members[observer]
+	changed := false
 	for subject := range previous {
 		if _, kept := next[subject]; !kept {
+			changed = true
 			delete(s.observers[subject], observer)
 			if len(s.observers[subject]) == 0 {
 				delete(s.observers, subject)
@@ -79,6 +85,7 @@ func (s *RelationSource) Set(observer int64, subjects []int64) {
 	}
 	for subject := range next {
 		if _, had := previous[subject]; !had {
+			changed = true
 			if s.observers[subject] == nil {
 				s.observers[subject] = make(map[int64]struct{})
 			}
@@ -88,9 +95,30 @@ func (s *RelationSource) Set(observer int64, subjects []int64) {
 	}
 	if len(next) == 0 {
 		delete(s.members, observer)
-		return
+	} else if changed {
+		s.members[observer] = next
+		if reuse {
+			s.scratch = nil
+		}
+		return // next 已被正式成员持有，不能清空或再次作为工作区写入。
 	}
-	s.members[observer] = next
+	if reuse {
+		clear(next)
+		s.scratch = next
+	}
+}
+
+// relationMembers 复制并去重；零 ID 忽略，自关系和负数 ID 保留。
+func relationMembers(next map[int64]struct{}, subjects []int64) map[int64]struct{} {
+	if next == nil {
+		next = make(map[int64]struct{}, len(subjects))
+	}
+	for _, subject := range subjects {
+		if subject != 0 {
+			next[subject] = struct{}{}
+		}
+	}
+	return next
 }
 
 // Clear drops an observer and leaves everything it held.

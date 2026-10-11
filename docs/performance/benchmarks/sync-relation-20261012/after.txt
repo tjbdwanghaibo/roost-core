@@ -1,0 +1,36 @@
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkRelationUpdates/observers=10/forget=false-4         	 3771054	       166.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRelationUpdates/observers=10/forget=false-4         	 3831637	       167.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRelationUpdates/observers=10/forget=false-4         	 3860514	       160.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRelationUpdates/observers=10/forget=true-4          	  893815	       660.1 ns/op	     480 B/op	       6 allocs/op
+BenchmarkRelationUpdates/observers=10/forget=true-4          	  835269	       668.6 ns/op	     480 B/op	       6 allocs/op
+BenchmarkRelationUpdates/observers=10/forget=true-4          	 1000000	       686.2 ns/op	     480 B/op	       6 allocs/op
+BenchmarkRelationUpdates/observers=10000/forget=false-4      	 3113300	       170.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRelationUpdates/observers=10000/forget=false-4      	 4119370	       145.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRelationUpdates/observers=10000/forget=false-4      	 4116522	       145.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRelationUpdates/observers=10000/forget=true-4       	  911592	       665.6 ns/op	     480 B/op	       6 allocs/op
+BenchmarkRelationUpdates/observers=10000/forget=true-4       	 1012759	       593.2 ns/op	     480 B/op	       6 allocs/op
+BenchmarkRelationUpdates/observers=10000/forget=true-4       	  893907	       637.7 ns/op	     480 B/op	       6 allocs/op
+BenchmarkRelationSetSize/size=32/parallel=false-4            	  333057	      1791 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRelationSetSize/size=32/parallel=false-4            	  348051	      1785 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRelationSetSize/size=32/parallel=false-4            	  347217	      1761 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRelationSetSize/size=32/parallel=true-4             	  204780	      2497 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRelationSetSize/size=32/parallel=true-4             	  204639	      2525 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRelationSetSize/size=32/parallel=true-4             	  215514	      2443 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRelationSetSize/size=1024/parallel=false-4          	   10000	     61355 ns/op	       3 B/op	       0 allocs/op
+BenchmarkRelationSetSize/size=1024/parallel=false-4          	   10000	     58228 ns/op	       3 B/op	       0 allocs/op
+BenchmarkRelationSetSize/size=1024/parallel=false-4          	   10000	     59887 ns/op	       3 B/op	       0 allocs/op
+BenchmarkRelationSetSize/size=1024/parallel=true-4           	    8005	     67959 ns/op	       5 B/op	       0 allocs/op
+BenchmarkRelationSetSize/size=1024/parallel=true-4           	    7753	     66638 ns/op	       5 B/op	       0 allocs/op
+BenchmarkRelationSetSize/size=1024/parallel=true-4           	    8622	     68282 ns/op	       5 B/op	       0 allocs/op
+BenchmarkRelationSetSize/size=8192/parallel=false-4          	     903	    670608 ns/op	  295600 B/op	      34 allocs/op
+BenchmarkRelationSetSize/size=8192/parallel=false-4          	     836	    660533 ns/op	  295600 B/op	      34 allocs/op
+BenchmarkRelationSetSize/size=8192/parallel=false-4          	     888	    684228 ns/op	  295600 B/op	      34 allocs/op
+BenchmarkRelationSetSize/size=8192/parallel=true-4           	    1070	    607568 ns/op	  295600 B/op	      34 allocs/op
+BenchmarkRelationSetSize/size=8192/parallel=true-4           	     980	    628271 ns/op	  295600 B/op	      34 allocs/op
+BenchmarkRelationSetSize/size=8192/parallel=true-4           	     990	    613724 ns/op	  295603 B/op	      34 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	19.359s

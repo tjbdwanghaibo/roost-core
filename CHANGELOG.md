@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Sync Relation 为不超过 1024 个输入成员的重复 Set 复用有界候选表，关系变化时移交所有权，大集合保留锁外构表；补集合模型、并发生命周期和规模基准。重复 Set 分配降低，退出重加档约 5% 的实测耗时代价见 docs/framework/SYNC-OPTIMIZATION.md。
+
 - Sync AOI 在候选排序前排除自身和半径外实体，满额且剩余候选无法替换时提前结束扫描；保留等距选择与事件顺序。修复合法负数 ID 无法被满额淘汰的问题，补优化前算法对照与同机基准，详见 docs/framework/SYNC-OPTIMIZATION.md。
 
 - Sync 第二批优化：AOI 按空间/额外覆盖变化分类重算，并复用有上限的串行/worker 工作区；Flush 复用编码临时结构，发送字节仍独立。补齐批量移动、集中布局、覆盖切换基准和事件/载荷所有权回归。修正统计回归中两次采样跨时钟刻度的误报，详见 docs/framework/SYNC-OPTIMIZATION.md。

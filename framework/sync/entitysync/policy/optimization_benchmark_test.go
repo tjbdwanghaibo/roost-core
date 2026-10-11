@@ -66,3 +66,33 @@ func BenchmarkRelationUpdates(b *testing.B) {
 		}
 	}
 }
+
+// 集合规模与并发调用单独测量，避免只用单成员重复 Set 掩盖锁内构表成本。
+func BenchmarkRelationSetSize(b *testing.B) {
+	for _, size := range []int{32, 1024, 8192} {
+		for _, parallel := range []bool{false, true} {
+			b.Run(fmt.Sprintf("size=%d/parallel=%v", size, parallel), func(b *testing.B) {
+				s := NewRelationSource("friends")
+				ids := make([]int64, size)
+				for i := range ids {
+					ids[i] = int64(i + 1)
+				}
+				s.Set(1, ids)
+				s.Flush()
+				b.ReportAllocs()
+				b.ResetTimer()
+				if parallel {
+					b.RunParallel(func(pb *testing.PB) {
+						for pb.Next() {
+							s.Set(1, ids)
+						}
+					})
+				} else {
+					for range b.N {
+						s.Set(1, ids)
+					}
+				}
+			})
+		}
+	}
+}

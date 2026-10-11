@@ -167,3 +167,52 @@ Windows/amd64，Go 1.27.0，Ryzen 7 5800H，GOWORK=off，GOMAXPROCS=4。使用�
 本批实际通过：`go test ./framework/sync/... -count=1 -timeout=3m`、`go test -race ./framework/sync/entitysync/policy -count=2 -timeout=4m`、最终候选/等距/负数 ID 定向 race 两次、`go build ./...`、`go vet ./framework/sync/...`、根包文档相对链接检查及 `git diff --check`。本批没有修改协议或生成器；上一批真实生成工程 Go/C# TCP 验证结果见上一节，本批未重复该链路。没有执行上述生产环境容量与故障测试。
 
 图谱项目 roost-core 仍为 2026-10-10T16:08:17Z 代际，相关路径显示 metadata_changed、新测试未索引；本批结论已用工作树当前源码与实际测试补证，不把旧索引当成新实现证据。
+
+## Relation 重复更新优化方案（2026-10-12）
+
+基线 9e064702。此前三批局部优化已交付，但不代表全部可选优化或上线验收完成。本轮针对重复 Set 每次构建新关系表的分配：在 RelationSource 锁保护下复用一份有上限的候选集合，仅在成员确实变化时转交为正式集合；不变时清空后复用。候选表不得与存量成员表同时共享，不保留超大输入的临时容量。保留零 ID 过滤、自关系、重复 ID 去重、负数 ID、正反索引和同 pair 事件顺序。
+
+复用会把候选构表放入锁内，因此除单成员外，必须测量 32/1024/8192 成员与并发 Set；如锁竞争或大表成本明显退化则调整或撤回。不会修改 QueueRelation 的提交门和生命周期，也不通过新增直接更新接口绕开它。
+
+### 实测结果与取舍
+
+最终采用 1024 个输入成员的工作区上限，大集合仍锁外构表。输入含重复成员时也按输入长度选择路径，避免大量重复 ID 延长锁占用。工作区只有一份，属于 RelationSource，不属于每个 observer；成员发生变化时工作区转交正式集合，下次按需重新分配。因此收益集中在关系不变的重复推送，不能理解成所有关系更新都零分配。仍是 O(n) 全量差分，没有新增增量 API。
+
+环境：Windows/amd64，Go 1.27.0，Ryzen 7 5800H，GOMAXPROCS=4、GOWORK=off；基线 9e064702，新增规模基准同样在修前运行。RelationUpdates 为 500ms × 3，SetSize 为 300ms × 3。表中为三次中位数，单位 ns/op；parallel 是同一个 source 的并发调用吞吐摊销，不是请求 P99。
+
+| 场景 | 修前 → 修后 ns/op | B/op | allocs/op |
+| --- | ---: | ---: | ---: |
+| 10 观察者，单成员重复 Set | 280.0 → 166.5 | 192 → 0 | 2 → 0 |
+| 10,000 观察者，单成员重复 Set | 261.7 → 145.1 | 192 → 0 | 2 → 0 |
+| 32 成员，串行重复 Set | 2,741 → 2,052 | 1,240 → 0 | 4 → 0 |
+| 32 成员，并发重复 Set | 3,067 → 2,819 | 1,240 → 0 | 4 → 0 |
+| 1024 成员，串行重复 Set | 75,891 → 67,375 | 36,992 → 6 | 6 → 0 |
+| 1024 成员，并发重复 Set | 78,226 → 66,821 | 36,992 → 8 | 6 → 0 |
+| 8192 成员，串行重复 Set | 718,757 → 693,220 | 295,600 → 295,600 | 34 → 34 |
+| 8192 成员，并发重复 Set | 624,855 → 594,969 | 295,601 → 295,601 | 34 → 34 |
+| 10 观察者，退出重加 | 624.7 → 668.6 | 480 → 480 | 6 → 6 |
+| 10,000 观察者，退出重加 | 618.3 → 637.7 | 480 → 480 | 6 → 6 |
+
+1024 成员的少量摊销字节来自首次构表，不代表逐次持续分配。8192 档没有工作区复用，不把短测差异归因于大表优化。
+
+退出重加首轮约慢 7%/3.1%，因此对 10 观察者档单独做 1s × 5，修前中位数 622.5ns，修后 653.0ns，仍约慢 4.9%（约 31ns/次），分配保持 480 B/6 次。这是分支和所有权处理增加后的明确代价；保留本优化的依据是重复 Set 明显减少分配和耗时，而非所有操作都变快。高频退出重建业务不能套用重复 Set 的收益，需要按自己的变化率测量。
+
+完整证据：[原始基线](../performance/benchmarks/sync-relation-20261012/before.txt)、[修后及额外500ms样本](../performance/benchmarks/sync-relation-20261012/after.txt)、[规模基线](../performance/benchmarks/sync-relation-20261012/size-before.txt)、[同口径规模结果](../performance/benchmarks/sync-relation-20261012/size-after.txt)、[汇总](../performance/benchmarks/sync-relation-20261012/medians.csv)、[退出重加长测前](../performance/benchmarks/sync-relation-20261012/repeat-before.txt)、[长测后](../performance/benchmarks/sync-relation-20261012/repeat-after.txt)。另有一次长测启动时构建进程尚未确认退出，该[重叠样本](../performance/benchmarks/sync-relation-20261012/repeat-before-overlap-excluded.txt)完整保留并排除，不参与任何前后结论；正式长测在构建结束后串行重跑。
+
+复跑：`go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkRelationUpdates$' -benchmem -benchtime=500ms -count=3`；规模组替换为 `-bench '^BenchmarkRelationSetSize$' -benchtime=300ms`。旧版本对照只复制新增 benchmark，不复制实现。
+
+### 本轮验证与剩余任务
+
+已通过 Sync 全包测试、policy 全包 race 两次、根模块 `go build ./...`、Sync 全包 vet。独立集合模型连续执行 1500 次操作，核对成员、正反索引和批次事件；并发回归覆盖 Set/Forget/Clear/Flush，另覆盖大表换小表、重复 ID、零/负数/自关系、输入切片修改。协议、生成器和提交事实队列未修改，不要求业务更换 API。图谱仍为 2026-10-10T16:08:17Z，相关路径标记过期，已按当前源码补证。
+
+| 项目 | 当前状态 | 下一步依据 |
+| --- | --- | --- |
+| Flush 临时表和编码工作区 | 已完成并本地验证 | 后续按真实负载 profile 决定，不池化发送中的字节 |
+| AOI 事件归集、分类重算、工作区、候选提前结束 | 已完成并本地验证 | 真实集中热点与 Gate/Nest 联合压测 |
+| Relation 反向索引、重复 Set 工作区 | 已完成并本地验证 | 高频变化和大关系集合另测；退出重加代价如上 |
+| Relation 增量 API | 尚未实施，可选 | 需要在正式 QueueRelation 提交门、退出事实改写和重放语义中设计，不能仅增加直接 Add/Remove |
+| OnChange 可配置合批 | 尚未实施，可选 | 先证明唤醒/Flush 频率是实际瓶颈，再确定允许的额外延迟；默认时延不变 |
+| Lockstep 广播名单缓存 | 已完成 | 长局历史 Trim、追帧与慢客户端容量尚未重新验证 |
+| 真实业务端到端、长期容量和跨机故障 | 尚未完成 | 按本篇上线前清单及维护目录外部验收执行 |
+
+因此“已完成”指已选定的局部代码优化，不代表所有可选方向都已实现，更不代表生产验收完成。优先下一步是部署环境的真实负载测试；不能只继续减少微基准分配而跳过上线容量证据。
