@@ -1,6 +1,6 @@
 # 核心：Sync、Lockstep 与客户端：设计与使用
 
-适用运行时：v1.24.0；文档维护版：v1.24.1。[实现与维护入口](../impl/04-sync.md) · [模块总目录](../README.md)
+适用版本：v1.25.0 与其后的当前主线；未发版 API 在对应章节注明。[实现与维护入口](../impl/04-sync.md) · [模块总目录](../README.md)
 
 ## 先理解这一块
 
@@ -23,6 +23,25 @@ entitysync 维护 subject、session、subscription、profile 与每会话帧；p
 注册 subject → OpenSession（可 held）→ Subscribe → ReadySession → Flush/运行循环。held 会话可以建立订阅但不出帧；ready 后从新 epoch 全量开始。多个来源订阅同一 subject，各自持有引用，最后一个离开才真正取消。subject 保存订阅真相，session 保存其对象生命周期关系。
 
 PrepareViews 汇总所需 profile；优先级配置先参与选择，再按确定顺序选择视图。视图必须限制字段可见范围，不能因空视图或缓存复用扩大权限。快照预算限制尚未持有对象的冷创建；增量、remove 和已持有对象的全量不能被当成同一种冷创建计费。
+
+### 好友、队伍等关系如何更新
+
+关系源必须先通过 Interest 配置声明，subject 和接收 session 也需要完成注册。已掌握完整成员表时用 `QueueRelation` 全量替换；只知道哪些成员加入、退出时，用当前主线新增、尚未发版的 `QueueRelationDelta`。例如好友列表有 1000 人，只增删 1 人时，不必再发送整张列表。
+
+业务在已有 Nest handler 中先修改自己的关系 DAO，再调用以下入口；调用失败必须向 handler 返回错误。框架只维护同步可见关系，不替业务保存好友或队伍数据。
+
+```go
+// 已处于保护 player 的 Nest handler 内；team 是初始化时声明的关系源名。
+if err := interest.QueueRelationDelta(player, "team", joinedIDs, leftIDs); err != nil {
+    return err
+}
+```
+
+两个 ID 切片在入队时复制，返回后可复用；空切片表示该方向无变化，两个都为空也仍走正常准入检查。单次调用中同一 ID 同时出现在两边时，退出优先；重复 ID 不重复发事件，零 ID 忽略。多次调用按同一实体的事实顺序执行，后一次全量替换会覆盖前面的增量结果。
+
+只有提交确认且政策事实应用后才发布内容；回滚丢弃增量。Leave 会作废观察者自己的旧事实，Hide 只撤销被观察身份；退出 ID 会从尚未应用的增量中剔除，防止同 ID 重建时被旧新增/移除影响。移除 team 来源不会取消其他来源仍持有的订阅。
+
+底层 `RelationSource.ApplyDelta` 是立即更新的政策 API，不参与事务确认；普通业务 handler 应用上面的排队入口。增量与全量对照、边界测试和剩余优化项见 [Sync 优化说明](../SYNC-OPTIMIZATION.md)。
 
 ## 3. periodic 与 on_change
 

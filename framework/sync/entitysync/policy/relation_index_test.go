@@ -7,6 +7,55 @@ import (
 	"testing"
 )
 
+func TestRelationDeltaMatchesFullReplacement(t *testing.T) {
+	actual, reference := NewRelationSource("team"), NewRelationSource("team")
+	rng := rand.New(rand.NewPCG(71, 89))
+	model := map[int64]map[int64]struct{}{}
+	for step := range 1200 {
+		observer := int64(rng.IntN(6) - 2)
+		added, removed := make([]int64, rng.IntN(12)), make([]int64, rng.IntN(12))
+		for i := range added {
+			added[i] = int64(rng.IntN(16) - 7)
+		}
+		for i := range removed {
+			removed[i] = int64(rng.IntN(16) - 7)
+		}
+		if observer != 0 {
+			if model[observer] == nil {
+				model[observer] = map[int64]struct{}{}
+			}
+			for _, id := range added {
+				if id != 0 {
+					model[observer][id] = struct{}{}
+				}
+			}
+			for _, id := range removed {
+				delete(model[observer], id)
+			}
+		}
+		ids := []int64{}
+		for id := range model[observer] {
+			ids = append(ids, id)
+		}
+		reference.Set(observer, ids)
+		actual.ApplyDelta(observer, added, removed)
+		if !reflect.DeepEqual(actual.members, reference.members) || !reflect.DeepEqual(actual.observers, reference.observers) {
+			t.Fatalf("step %d indexes differ", step)
+		}
+		if a, r := actual.Flush(), reference.Flush(); !reflect.DeepEqual(a, r) {
+			t.Fatalf("step %d events differ: %v / %v", step, a, r)
+		}
+		// 交错全量替换与退出后重建，检查增量不持有过期成员表。
+		if step%13 == 0 {
+			actual.Clear(observer)
+			reference.Clear(observer)
+			delete(model, observer)
+			actual.Flush()
+			reference.Flush()
+		}
+	}
+}
+
 func TestRelationForgetAfterReplacementClearAndReadd(t *testing.T) {
 	s := NewRelationSource("friends")
 	s.Set(1, []int64{0, 1, 10, 10, 20})
@@ -136,6 +185,8 @@ func TestRelationSetWorkspaceConcurrentLifecycle(t *testing.T) {
 			for range 100 {
 				s.Set(id, []int64{id, id, 0})
 				s.Set(id, []int64{id, id})
+				s.ApplyDelta(id, []int64{-id, -id}, []int64{id})
+				s.ApplyDelta(id, []int64{id}, []int64{-id})
 				s.Forget(id)
 				s.Clear(id)
 				s.Flush()

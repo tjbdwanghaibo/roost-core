@@ -33,9 +33,11 @@ type queuedInterestFact struct {
 	at                 spatial.Point
 	observer           bool
 	// subjectGone：Hide 在事实应用前移走了被观察方（RR-20261006-48），只剩观察者那一半要移动。
-	subjectGone bool
-	relation    string
-	subjects    []int64
+	subjectGone     bool
+	relation        string
+	subjects        []int64
+	relationDelta   bool
+	removedSubjects []int64
 }
 
 // ---- Leave / Hide 与排队事实（RR-20261006-48） ----
@@ -63,6 +65,8 @@ func (in *Interest) supersedeQueuedRelationsLocked(id int64, clear bool) {
 			return false
 		}
 		fact.subjects = slices.DeleteFunc(fact.subjects, func(subject int64) bool { return subject == id })
+		// 增量同样不能在退出后重放旧新增；旧移除已由 Forget 完成。
+		fact.removedSubjects = slices.DeleteFunc(fact.removedSubjects, func(subject int64) bool { return subject == id })
 		return true
 	})
 }
@@ -128,6 +132,16 @@ func (in *Interest) QueueRelation(e entity.IThreadSafeEntity, source string, sub
 		return errors.New("policy: relation source required")
 	}
 	return in.queueFact(e, queuedInterestFact{relation: source, subjects: slices.Clone(subjects)})
+}
+
+// QueueRelationDelta 在 Entity 锁内记录关系增量，提交确认后按同 ID 顺序应用。
+// 输入立即复制；同一调用中 removed 优先，重复 ID 幂等，零 ID 忽略。
+// 错误必须由 handler 返回。它不替代业务关系 DAO 的修改和回滚。
+func (in *Interest) QueueRelationDelta(e entity.IThreadSafeEntity, source string, added, removed []int64) error {
+	if source == "" {
+		return errors.New("policy: relation source required")
+	}
+	return in.queueFact(e, queuedInterestFact{relation: source, relationDelta: true, subjects: slices.Clone(added), removedSubjects: slices.Clone(removed)})
 }
 func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFact) error {
 	if e == nil || e.Base() == nil {
@@ -222,7 +236,11 @@ func (in *Interest) applyQueued() error {
 		completed = append(completed, fact)
 		var err error
 		if fact.relation != "" {
-			in.relations[fact.relation].Set(fact.id, fact.subjects)
+			if fact.relationDelta {
+				in.relations[fact.relation].ApplyDelta(fact.id, fact.subjects, fact.removedSubjects)
+			} else {
+				in.relations[fact.relation].Set(fact.id, fact.subjects)
+			}
 		} else {
 			if !fact.subjectGone {
 				if fact.replaceCoverage {

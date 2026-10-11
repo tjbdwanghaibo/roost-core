@@ -210,9 +210,42 @@ Windows/amd64，Go 1.27.0，Ryzen 7 5800H，GOWORK=off，GOMAXPROCS=4。使用�
 | Flush 临时表和编码工作区 | 已完成并本地验证 | 后续按真实负载 profile 决定，不池化发送中的字节 |
 | AOI 事件归集、分类重算、工作区、候选提前结束 | 已完成并本地验证 | 真实集中热点与 Gate/Nest 联合压测 |
 | Relation 反向索引、重复 Set 工作区 | 已完成并本地验证 | 高频变化和大关系集合另测；退出重加代价如上 |
-| Relation 增量 API | 尚未实施，可选 | 需要在正式 QueueRelation 提交门、退出事实改写和重放语义中设计，不能仅增加直接 Add/Remove |
+| Relation 增量 API | 已实施并本地验证（本篇增量更新章节） | QueueRelationDelta 共用提交门、退出事实改写和顺序语义；业务按需接入 |
 | OnChange 可配置合批 | 尚未实施，可选 | 先证明唤醒/Flush 频率是实际瓶颈，再确定允许的额外延迟；默认时延不变 |
 | Lockstep 广播名单缓存 | 已完成 | 长局历史 Trim、追帧与慢客户端容量尚未重新验证 |
 | 真实业务端到端、长期容量和跨机故障 | 尚未完成 | 按本篇上线前清单及维护目录外部验收执行 |
 
 因此“已完成”指已选定的局部代码优化，不代表所有可选方向都已实现，更不代表生产验收完成。优先下一步是部署环境的真实负载测试；不能只继续减少微基准分配而跳过上线容量证据。
+
+## Relation 增量更新（2026-10-12，基线 9a34d1d2）
+
+本批实施 QueueRelationDelta(entity, source, added, removed)，只复制变化的 ID，经现有事实队列的确认、回滚、顺序、预算和发布屏障后应用。底层 RelationSource.ApplyDelta 只访问变化成员并同时维护正反索引；普通业务 handler 使用 QueueRelationDelta，不能绕过提交门直接修改 source。
+
+语义为 next = (previous ∪ added) − removed，同一批删除优先，零 ID 忽略，重复 ID 幂等，自关系和负数 ID 合法。多次调用仍按队列顺序生效；Set 是全量替换，不与增量跨调用合并。Leave 清除观察者的旧事实；Hide/Leave 将退出 ID 从待应用的新增和移除集合中剔除，防止旧新增在同 ID 重建后复活。不增加消息格式、持久化格式或默认延迟。
+
+### 全量与增量的等价负载测量
+
+Windows/amd64、Go 1.27.0、Ryzen 7 5800H，GOWORK=off、GOMAXPROCS=4，500ms × 3，中位数。两条路径在同一构建中运行，已有 Set 实现未修改。每轮从固定规模的存量集合中移除一人、加入一人，Flush 必须恰好产生两个事件，最后核对完整成员表；初始化不计时。计时期间未并跑本任务的测试、race、构建或索引重建。
+
+| 存量成员 | 全量 Set ns/op | 增量 ApplyDelta ns/op | B/op 全量 → 增量 | 分配次数 全量 → 增量 |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 597.7 | 480.9 | 480 → 288 | 6 → 4 |
+| 32 | 2,760 | 450.8 | 1,528 → 288 | 8 → 4 |
+| 1024 | 72,695 | 455.8 | 37,280 → 288 | 10 → 4 |
+| 8192 | 652,090 | 476.0 | 295,889 → 288 | 38 → 4 |
+
+增量避免随存量大小扫描、构建全表，处理成本主要随变化量增长。该测量仅含关系源及其事件收集，不含 Queue 的切片复制、政策聚合、订阅调整、DAO、网络和业务 handler；不能把表中比例当整服 TPS 提升。新 API 是显式接入，不会自动优化仍调用全量 QueueRelation 的业务。此次没有改变上一批 Set 的行为或退出重加代价。
+
+[全部原始样本](../performance/benchmarks/sync-delta-20261012/benchmark.txt)、[中位数汇总](../performance/benchmarks/sync-delta-20261012/medians.csv)。复跑：`go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkRelationMemberChange$' -benchmem -benchtime=500ms -count=3`。
+
+### 正式链路与验证边界
+
+新增增量与 Set 共用 queueFact，继续检查 entity/source、队列关闭和容量；输入切片复制，不保存业务切片引用。applyQueued 的 ready/discarded 判断、同 ID 未确认前缀和同提交整体应用规则不变。发布屏障统一在应用、丢弃或关闭时释放；没有新增异步任务或持久化格式。
+
+回归覆盖：1200 次随机增量与全量集合模型比较事件和正反索引；零/负数/自关系、重复与新增移除重叠；Set/Delta 混合、未确认提交、回滚、同 ID 顺序、批次额度小于同提交事实数；其他来源保留；Leave/Hide、退出再进入、待删除 ID 重建；非法参数、预算拒绝、Close、发布屏障及并发 Set/Delta/Forget/Clear/Flush。
+
+业务示例见[使用指南](guide/04-sync.md)。Relation 增量已从待办转为已实施。OnChange 可配置合批尚未实施，默认唤醒语义不变；Lockstep 长局和生产环境真实业务/跨机/长期容量仍需验证，不以本批微基准代替这些结论。图谱仍为旧代际 2026-10-10T16:08:17Z，调用关系存在漏报及误连，本批以相关当前源码与实际回归补证。
+
+本批实际通过：`go test ./framework/sync/... -count=1 -timeout=3m`、`go test -race ./framework/sync/entitysync/policy -count=2 -timeout=4m`、最终增量/并发生命周期定向 race 三次、`go build ./...`、`go vet ./framework/sync/...`、根包文档链接检查和 diff 检查。未运行新增真实网络、跨机或长期容量负载。
+
+内存取舍：增量原地修改活动成员表，删除部分成员不保证 Go map 立即释放历史峰值容量；删除最后一个成员时移除整张表。事实结构新增增量元数据，队列仍按原事实条数限额，本基准没有测量队列常驻内存变化。上线前需将关系峰值和变化率纳入长时间容量测试。

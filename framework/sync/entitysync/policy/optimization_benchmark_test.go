@@ -96,3 +96,47 @@ func BenchmarkRelationSetSize(b *testing.B) {
 		}
 	}
 }
+
+// 相同存量与相同事件：每轮替换一个成员，比较全量 Set 和增量 ApplyDelta。
+// 不包含事实队列、网络或业务 DAO；不能据此推断端到端吞吐。
+func BenchmarkRelationMemberChange(b *testing.B) {
+	for _, size := range []int{1, 32, 1024, 8192} {
+		for _, delta := range []bool{false, true} {
+			b.Run(fmt.Sprintf("size=%d/delta=%v", size, delta), func(b *testing.B) {
+				s := NewRelationSource("team")
+				ids := make([]int64, size)
+				for i := range ids {
+					ids[i] = int64(i + 1)
+				}
+				s.Set(10001, ids)
+				s.Flush()
+				b.ReportAllocs()
+				for b.Loop() {
+					previous := ids[0]
+					if previous == 1 {
+						ids[0] = int64(size + 1)
+					} else {
+						ids[0] = 1
+					}
+					if delta {
+						s.ApplyDelta(10001, []int64{ids[0]}, []int64{previous})
+					} else {
+						s.Set(10001, ids)
+					}
+					events := s.Flush()
+					if len(events) != 2 {
+						b.Fatalf("expected enter/leave, got %v", events)
+					}
+				}
+				if len(s.members[10001]) != size {
+					b.Fatal("membership count changed")
+				}
+				for _, id := range ids {
+					if _, ok := s.members[10001][id]; !ok {
+						b.Fatal("incorrect final membership")
+					}
+				}
+			})
+		}
+	}
+}

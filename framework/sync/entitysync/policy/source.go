@@ -124,6 +124,54 @@ func relationMembers(next map[int64]struct{}, subjects []int64) map[int64]struct
 // Clear drops an observer and leaves everything it held.
 func (s *RelationSource) Clear(observer int64) { s.Set(observer, nil) }
 
+// ApplyDelta 原子应用 (旧成员 ∪ added) − removed，只遍历变化成员。
+// 重复 ID 幂等，同次移除优先；不产生先进入再离开的中间事件。
+// 此方法直接改政策状态；事务内业务应使用 Interest.QueueRelationDelta。
+func (s *RelationSource) ApplyDelta(observer int64, added, removed []int64) {
+	if observer == 0 || len(added)+len(removed) == 0 {
+		return
+	}
+	excluded := relationMembers(nil, removed)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	members := s.members[observer]
+	for subject := range excluded {
+		if _, exists := members[subject]; !exists {
+			continue
+		}
+		delete(members, subject)
+		delete(s.observers[subject], observer)
+		if len(s.observers[subject]) == 0 {
+			delete(s.observers, subject)
+		}
+		s.pending = append(s.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestLeave, Band: -1})
+	}
+	for _, subject := range added {
+		if subject == 0 {
+			continue
+		}
+		if _, remove := excluded[subject]; remove {
+			continue
+		}
+		if _, exists := members[subject]; exists {
+			continue
+		}
+		if members == nil {
+			members = make(map[int64]struct{})
+			s.members[observer] = members
+		}
+		members[subject] = struct{}{}
+		if s.observers[subject] == nil {
+			s.observers[subject] = make(map[int64]struct{})
+		}
+		s.observers[subject][observer] = struct{}{}
+		s.pending = append(s.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestEnter})
+	}
+	if len(members) == 0 {
+		delete(s.members, observer)
+	}
+}
+
 // Forget removes a subject from every observer's set. It is what a departing
 // player needs: the relation is gone in both directions, and the observers
 // that held it must be told.

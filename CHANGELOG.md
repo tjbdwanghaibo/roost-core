@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Sync 新增 `Interest.QueueRelationDelta`，按变化成员提交关系增量，复用提交确认、回滚、同 ID 顺序和发布屏障；底层 `RelationSource.ApplyDelta` 原子维护正反索引。移除优先、退出事实改写与重建隔离已覆盖回归，接入方式见 docs/framework/guide/04-sync.md。
+
 - Sync Relation 为不超过 1024 个输入成员的重复 Set 复用有界候选表，关系变化时移交所有权，大集合保留锁外构表；补集合模型、并发生命周期和规模基准。重复 Set 分配降低，退出重加档约 5% 的实测耗时代价见 docs/framework/SYNC-OPTIMIZATION.md。
 
 - Sync AOI 在候选排序前排除自身和半径外实体，满额且剩余候选无法替换时提前结束扫描；保留等距选择与事件顺序。修复合法负数 ID 无法被满额淘汰的问题，补优化前算法对照与同机基准，详见 docs/framework/SYNC-OPTIMIZATION.md。
