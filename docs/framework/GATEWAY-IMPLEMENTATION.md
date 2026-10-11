@@ -172,7 +172,7 @@ BroadcastID 由来源进程代次和唯一请求身份组成，同 ID 的重试�
 
 通用 Broadcast 首期只接受 **PB push**，与其他输出共用 socket writer。它在 Gate 准入时确定与其他包的先后，不参与 Game 的 OutSeq 计数，也不承诺不同广播来源之间的全局顺序；有业务顺序要求的消息由 Game 通过原每绑定有序出站口提交。
 
-Sync 的 profile/AOI/基线和每绑定 epoch 不同，不能把同一份 delta 广播给任意客户端。Lockstep 的房间帧可复用同一份 C7 payload，并按房间当前 binding 合并 Gate 批次投递，但必须保留每接收者的绑定身份、连续 OutSeq、准入反馈和追帧责任。该优化属于 P3 的 Lockstep 出站接线，不走通用 PB Broadcast；Gate 无须持有 Room 成员真相。
+Sync 的 profile/AOI/基线和每绑定 epoch 不同，不能把同一份 delta 广播给任意客户端。Lockstep 的房间帧可复用同一份 C7 payload，并按房间当前 binding 合并 Gate 批次投递，但必须保留每接收者的绑定身份、连续 OutSeq、准入反馈和追帧责任。该优化属于 P3 的 Lockstep 出站接线，不走通用 PB Broadcast；Gate 无须持有 Match 成员真相。
 
 ### 5.2 Lockstep 的具体接入位置
 
@@ -180,18 +180,18 @@ Lockstep 与 PB/Entity Sync 共用 Gate、Core NATS 和 MessagePack 信封，不
 
 | 当前位置 | 当前责任 | 独立 Gate 的接线 |
 | --- | --- | --- |
-| [command.go](../../framework/sync/lockstep/command.go) | 原始 Command 编解码；HandleCommand 根据认证 session 处理 Input/Hash/Catchup | Gate 原样转发 flags=4 的字节；Game 校验 PayloadKind 后解码，完整 BindID 映射到当前数值 session，再进入 Room 的串行入口 |
-| [room.go](../../framework/sync/lockstep/room.go) | 席位/旁观者绑定、输入收集、C7 广播、历史追帧 | Room 和成员真相保留在 Game；连接换代通过 Attach/旁观者入口更新，追帧复用当前 History/Catchup |
+| [command.go](../../framework/sync/lockstep/command.go) | 原始 Command 编解码；HandleCommand 根据认证 session 处理 Input/Hash/Catchup | Gate 原样转发 flags=4 的字节；Game 校验 PayloadKind 后解码，完整 BindID 映射到当前数值 session，再进入 Match 的串行入口 |
+| [match.go](../../framework/sync/lockstep/match.go) | 席位/旁观者绑定、输入收集、C7 广播、历史追帧 | Match 和成员真相保留在 Game；连接换代通过 Attach/旁观者入口更新，追帧复用当前 History/Catchup |
 | [tcp.go](../../framework/sync/lockstep/tcp.go) | TCPSender 将实时和可靠通道接到 PushLockstepSession | 复用 sender 的 resolver/包大小/禁止快 worker 阻塞契约，将 push 接到 Game 的有序 Gate 出站；复用共同逻辑，不复制一份 TCP sender |
 | [生成 TCP](../../codegen/internal/roost/render_player_tcp.go)、[ProtocolRegistry](../../codegen/internal/roost/render_access.go) | flags=4 上行和 flags=5 推送；显式注册 Lockstep Notify | Gate 保留 RS 头与类型校验；Game 保留路由注册；Gate writer 写出原始 C7/追帧字节 |
 
-MessagePack 只编码内部 envelope，不重新编码 Command、C7 或追帧页。实时帧和追帧页首期最终均走 Gate TCP，有界发送且不采用只保留最新帧；不能因为 Room 的实时接口名叫 SendDatagram，就宣称 Gate 首期提供 UDP/KCP。
+MessagePack 只编码内部 envelope，不重新编码 Command、C7 或追帧页。实时帧和追帧页首期最终均走 Gate TCP，有界发送且不采用只保留最新帧；不能因为 Match 的实时接口名叫 SendDatagram，就宣称 Gate 首期提供 UDP/KCP。
 
-输入、Attach/Detach、Tick 按 Room 的现有串行拥有者调度；仅每玩家/每连接串行不足以保护多人共享 Room。Tick 驱动保持在快 worker/Entity 锁之外，出站对本地有界队列准入，后台任务承担 NATS/socket 等待；单个追帧者或慢客户端不能卡住全 Room 的帧推进。
+输入、Attach/Detach、Tick 按 Match 的现有串行拥有者调度；仅每玩家/每连接串行不足以保护多人共享 Match。Tick 驱动保持在快 worker/Entity 锁之外，出站对本地有界队列准入，后台任务承担 NATS/socket 等待；单个追帧者或慢客户端不能卡住全 Match 的帧推进。
 
-断线处理先在同一个 Room 串行作用域内核对当前 session 是否仍对应待关闭的 BindID，再执行 Detach；现有 Detach 接受 player，直接用迟到旧断线调用会错误解绑重连后的新 session。重连后的输入、hash 和追帧也必须用新绑定身份，旁观者仍只具有追帧权限。
+断线处理先在同一个 Match 串行作用域内核对当前 session 是否仍对应待关闭的 BindID，再执行 Detach；现有 Detach 接受 player，直接用迟到旧断线调用会错误解绑重连后的新 session。重连后的输入、hash 和追帧也必须用新绑定身份，旁观者仍只具有追帧权限。
 
-新增真实客户端 → Gate → NATS → Game Room 的集成测试，覆盖两 Gate/两 Game、实时帧、Input/Hash/Catchup、旁观者、慢追帧、重连与旧事件、发送故障后的缺口恢复。现有 [e2e_gate_test.go](../../framework/sync/lockstep/e2e_gate_test.go) 是 KCP loopback 的端到端验收测试；文件名中的 gate 不代表独立 Gate service，不能代替这次通路验收。
+新增真实客户端 → Gate → NATS → Game Match 的集成测试，覆盖两 Gate/两 Game、实时帧、Input/Hash/Catchup、旁观者、慢追帧、重连与旧事件、发送故障后的缺口恢复。现有 [e2e_gate_test.go](../../framework/sync/lockstep/e2e_gate_test.go) 是 KCP loopback 的端到端验收测试；文件名中的 gate 不代表独立 Gate service，不能代替这次通路验收。
 
 ## 6. 资源、配置和停机
 
@@ -245,7 +245,7 @@ Sync 的 P99≤50ms 从业务计划输入/handler 完成等起点分别记录，
 | [NATS RPC](../../infra/network/nats/driver/rpc.go)、[重试策略](../../infra/network/nats/rpc.go)、[Assembly](../../infra/network/nats/driver/assembly.go) | 默认单次尝试、复用连接、关闭所有权；不是自动提供 Gate 身份校验 |
 | [服务发现](../../infra/network/etcd/discovery.go)、[App singleton](../../framework/app/singleton.go) | Metadata、sid 活性与本进程 incarnation 的能力边界 |
 | [Entity Sync Transport](../../framework/sync/entitysync/transport.go)、[Flush](../../framework/sync/entitysync/flush.go)、[异步发送](../../framework/sync/nettransport/channel.go) | 成功准入推进帧状态、失败恢复、队列和字节上限 |
-| [Lockstep 输入](../../framework/sync/lockstep/command.go)、[Room](../../framework/sync/lockstep/room.go)、[TCP sender](../../framework/sync/lockstep/tcp.go)、[既有端到端测试](../../framework/sync/lockstep/e2e_gate_test.go) | 现有串行 Room、认证 session、嵌入式发送与 KCP 测试；跨 NATS Gate 接线仍待实施 |
+| [Lockstep 输入](../../framework/sync/lockstep/command.go)、[Match](../../framework/sync/lockstep/match.go)、[TCP sender](../../framework/sync/lockstep/tcp.go)、[既有端到端测试](../../framework/sync/lockstep/e2e_gate_test.go) | 现有串行 Match、认证 session、嵌入式发送与 KCP 测试；跨 NATS Gate 接线仍待实施 |
 | [当前设计](GATEWAY.md)、[性能基线](../performance/STABLE-v1.24.0.md) | 当前已交付边界与真实业务规模 |
 
 CBM 当前工作树项目为 `roost-core-gate-design-plan`，Tier 2，当前 generation `2026-10-09T08:17:42Z`，已刷新 Gate 新增文件；绑定、TCP、原始 NATS 与 Codec 材料路径 coverage 为 metadata_match，无记录缺口。图谱不是完整性证明，生成模板缺口仍按源码补证。docs 被策略排除，直接阅读。macOS 本机真实 NATS 和生成客户端证据见实施验收，不冒充独立 Gate 集群、Linux 实机或跨机性能验收。

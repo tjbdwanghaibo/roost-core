@@ -11,16 +11,16 @@ import (
 // 客户端持续收到固定落后的历史,CatchingUp 不结束,live datagram 一直被跳过。承诺:补帧净速度
 // 必须大于产帧速度,batch=1 在创建时拒绝;batch=2 从落后 5 帧起有限轮内收敛。
 
-func TestRoomPromiseCatchupBatchMustOutpaceFrameProduction(t *testing.T) {
+func TestMatchPromiseCatchupBatchMustOutpaceFrameProduction(t *testing.T) {
 	for _, batch := range []int{1, 2} {
 		t.Run(string(rune('0'+batch)), func(t *testing.T) {
 			tr := newRecordingTransport()
-			r, err := NewRoom(RoomConfig{
+			r, err := NewMatch(MatchConfig{
 				Sequencer:          SequencerConfig{Players: []PlayerID{1}, MaxInputBytes: 8},
 				CatchupBatchFrames: batch, CatchupSendWait: testSendWait, Datagrams: tr, Reliable: tr,
 			})
 			if err != nil {
-				if batch == 1 && errors.Is(err, ErrRoomConfigInvalid) {
+				if batch == 1 && errors.Is(err, ErrMatchConfigInvalid) {
 					return // refusing the non-converging configuration is the contract
 				}
 				t.Fatal(err)

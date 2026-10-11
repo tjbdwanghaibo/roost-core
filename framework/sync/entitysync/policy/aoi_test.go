@@ -168,7 +168,7 @@ func clusterFixture(t *testing.T) *AOICluster {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Two rooms sharing the x=10000 seam on one world plane.
+	// Two areas sharing the x=10000 seam on one world plane.
 	if err := cluster.AddArea(1, spatial.Rect{Min: spatial.Point{X: 0, Y: 0}, Max: spatial.Point{X: 10000, Y: 10000}}); err != nil {
 		t.Fatal(err)
 	}
@@ -180,15 +180,15 @@ func clusterFixture(t *testing.T) *AOICluster {
 
 func TestClusterBoundaryVisibilityIsSeamless(t *testing.T) {
 	cluster := clusterFixture(t)
-	// Observer in room 1 near the seam sees a subject in room 2's border strip.
+	// Observer in area 1 near the seam sees a subject in area 2's border strip.
 	if err := cluster.AddObserver(1, spatial.Point{X: 9800, Y: 5000}); err != nil {
 		t.Fatal(err)
 	}
-	if err := cluster.AddSubject(2, spatial.Point{X: 10200, Y: 5000}); err != nil { // room 2, distance 400
+	if err := cluster.AddSubject(2, spatial.Point{X: 10200, Y: 5000}); err != nil { // area 2, distance 400
 		t.Fatal(err)
 	}
 	requireEvents(t, cluster.Flush(), []InterestEvent{{Observer: 1, Subject: 2, Kind: InterestEnter, Band: 1}})
-	// And symmetrically: an observer in room 2 sees into room 1.
+	// And symmetrically: an observer in area 2 sees into area 1.
 	if err := cluster.AddObserver(3, spatial.Point{X: 10100, Y: 5000}); err != nil {
 		t.Fatal(err)
 	}
@@ -217,9 +217,9 @@ func TestClusterMigrationDoesNotBlink(t *testing.T) {
 	// The subject shuttles across the seam 100 times while staying inside the
 	// observer's radii: not a single event may surface.
 	for i := 0; i < 100; i++ {
-		target := spatial.Point{X: 10200, Y: 5000} // room 2
+		target := spatial.Point{X: 10200, Y: 5000} // area 2
 		if i%2 == 1 {
-			target = spatial.Point{X: 9700, Y: 5000} // room 1
+			target = spatial.Point{X: 9700, Y: 5000} // area 1
 		}
 		if err := cluster.MoveSubject(2, target); err != nil {
 			t.Fatal(err)
@@ -236,7 +236,7 @@ func TestClusterMigrationDoesNotBlink(t *testing.T) {
 			t.Fatalf("observer migration blinked: %+v", events)
 		}
 	}
-	// Walking far away in room 2 finally leaves.
+	// Walking far away in area 2 finally leaves.
 	if err := cluster.MoveObserver(1, spatial.Point{X: 15000, Y: 5000}); err != nil {
 		t.Fatal(err)
 	}
@@ -246,13 +246,13 @@ func TestClusterMigrationDoesNotBlink(t *testing.T) {
 func TestClusterRejectsOverlapAndOrphanPoints(t *testing.T) {
 	cluster := clusterFixture(t)
 	if err := cluster.AddArea(3, spatial.Rect{Min: spatial.Point{X: 9000, Y: 0}, Max: spatial.Point{X: 11000, Y: 10000}}); err == nil {
-		t.Fatal("overlapping room accepted")
+		t.Fatal("overlapping area accepted")
 	}
 	if err := cluster.AddSubject(5, spatial.Point{X: 30000, Y: 5000}); err == nil {
 		t.Fatal("orphan point accepted")
 	}
 	if err := cluster.AddArea(1, spatial.Rect{Min: spatial.Point{X: 20000, Y: 0}, Max: spatial.Point{X: 21000, Y: 1000}}); err == nil {
-		t.Fatal("duplicate room id accepted")
+		t.Fatal("duplicate area id accepted")
 	}
 }
 
@@ -286,8 +286,8 @@ func BenchmarkClusterFlushRandomWalk(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	for room := int64(0); room < 4; room++ {
-		if err := cluster.AddArea(AreaID(room+1), spatial.Rect{Min: spatial.Point{X: room * 10000, Y: 0}, Max: spatial.Point{X: (room + 1) * 10000, Y: 10000}}); err != nil {
+	for area := int64(0); area < 4; area++ {
+		if err := cluster.AddArea(AreaID(area+1), spatial.Rect{Min: spatial.Point{X: area * 10000, Y: 0}, Max: spatial.Point{X: (area + 1) * 10000, Y: 10000}}); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -309,8 +309,8 @@ func BenchmarkClusterFlushRandomWalk(b *testing.B) {
 	}
 }
 
-// Regression (review): per-room MaxVisible multiplied a border observer's
-// budget by the number of touched rooms; the cap is now enforced globally at
+// Regression (review): per-area MaxVisible multiplied a border observer's
+// budget by the number of touched areas; the cap is now enforced globally at
 // the cluster level.
 func TestClusterMaxVisibleHoldsAcrossSeams(t *testing.T) {
 	cluster, err := NewAOICluster(AOIConfig{BlockSize: 500, EnterRadius: 600, LeaveRadius: 800, MaxVisible: 1})
@@ -326,8 +326,8 @@ func TestClusterMaxVisibleHoldsAcrossSeams(t *testing.T) {
 	if err := cluster.AddObserver(1, spatial.Point{X: 9900, Y: 5000}); err != nil {
 		t.Fatal(err)
 	}
-	cluster.AddSubject(2, spatial.Point{X: 9800, Y: 5000})  // room 1, distance 100
-	cluster.AddSubject(3, spatial.Point{X: 10100, Y: 5000}) // room 2, distance 200
+	cluster.AddSubject(2, spatial.Point{X: 9800, Y: 5000})  // area 1, distance 100
+	cluster.AddSubject(3, spatial.Point{X: 10100, Y: 5000}) // area 2, distance 200
 	cluster.Flush()
 	if got := cluster.Visible(1); !reflect.DeepEqual(got, []int64{2}) {
 		t.Fatalf("cap leaked across the seam: visible = %v, want [2]", got)
@@ -347,10 +347,10 @@ func TestClusterMaxVisibleHoldsAcrossSeams(t *testing.T) {
 	}
 }
 
-// Regression (review): a room added after observers existed left stationary
+// Regression (review): a area added after observers existed left stationary
 // border observers with a permanent visibility hole into it (mirrors were
 // only rebuilt on observer movement). AddArea now retrofits mirrors.
-func TestClusterAddRoomBackfillsStationaryObservers(t *testing.T) {
+func TestClusterAddAreaBackfillsStationaryObservers(t *testing.T) {
 	cluster, err := NewAOICluster(AOIConfig{BlockSize: 500, EnterRadius: 600, LeaveRadius: 800})
 	if err != nil {
 		t.Fatal(err)
@@ -364,12 +364,12 @@ func TestClusterAddRoomBackfillsStationaryObservers(t *testing.T) {
 	if err := cluster.AddArea(2, spatial.Rect{Min: spatial.Point{X: 10000, Y: 0}, Max: spatial.Point{X: 20000, Y: 10000}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := cluster.AddSubject(2, spatial.Point{X: 10200, Y: 5000}); err != nil { // room 2, distance 300
+	if err := cluster.AddSubject(2, spatial.Point{X: 10200, Y: 5000}); err != nil { // area 2, distance 300
 		t.Fatal(err)
 	}
 	events := cluster.Flush()
 	if len(events) != 1 || events[0].Kind != InterestEnter || events[0].Subject != 2 {
-		t.Fatalf("stationary observer blind to the new room: %+v", events)
+		t.Fatalf("stationary observer blind to the new area: %+v", events)
 	}
 }
 

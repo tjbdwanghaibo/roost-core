@@ -40,7 +40,7 @@ type DatagramSender interface {
 // DatagramPayloadLimiter is implemented by datagram senders that know the
 // largest payload they accept — after their own envelope (AEAD header and
 // tag, FEC / OOB framing). Callers that must size packets up front (the
-// lockstep Room's broadcast budget) read it instead of assuming a constant:
+// lockstep Match's broadcast budget) read it instead of assuming a constant:
 // the KCP and QUIC transports default to DefaultMaxDatagram, and the AEAD UDP
 // transport's 1232-byte packet leaves 1232-UDPEnvelopeOverhead.
 type DatagramPayloadLimiter interface {

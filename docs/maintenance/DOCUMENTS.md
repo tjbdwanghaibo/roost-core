@@ -14,6 +14,8 @@
 
 ### framework
 
+- [framework/PLAYER-ACCESS.md](../framework/PLAYER-ACCESS.md)：玩家协议、Controller、生成 Sender 与 Nest handler 实例
+
 - [framework/NEST-AWAIT.md](../framework/NEST-AWAIT.md)：Nest 三池、匿名异步恢复、使用与验证
 
 - [framework/ENTITY_SYNC.md](../framework/ENTITY_SYNC.md)：Entity Sync 生产契约

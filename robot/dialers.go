@@ -2,7 +2,7 @@
 // into the roost-core robot framework: KCP/QUIC dialers registered through
 // transport.RegisterDialer, and a LockstepBot that consumes redundant frame
 // broadcasts, submits inputs, and reports keyframe hashes — the client half
-// of the kit lockstep Room, usable both for desync regression tests and for
+// of the kit lockstep Match, usable both for desync regression tests and for
 // lockstep load testing.
 package robot
 

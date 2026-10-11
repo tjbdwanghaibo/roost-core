@@ -24,7 +24,7 @@ internal static partial class Program
             {
                 RawSync = packet.Payload.ToArray();
                 var frame = SyncFrame.Decode(packet.Payload.Span);
-                Check(packet.Kind == PayloadKind.Sync && packet.IsPush && frame.Epoch == 2 && frame.Tick == 3, "sync routing");
+                Check(packet.Kind == PayloadKind.Sync && packet.IsPush && frame.StreamId == 1 && frame.Epoch == 2 && frame.Tick == 3, "sync routing and stream identity");
                 var subject = SubjectUpdate.Decode(frame.Objects[0].Components[0].Data);
                 Check(subject.SubjectId == 9007199254740993L && subject.Full && subject.Version == 3 && subject.Namespace == "avatar" && subject.Profile == "owner", "subject 64-bit identity");
             }

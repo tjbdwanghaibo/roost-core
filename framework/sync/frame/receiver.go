@@ -49,8 +49,8 @@ func (r *Receiver) Receive(raw []byte, apply func(Frame) error) (applied bool, e
 		r.needsFull = true
 		return false, err
 	}
-	if r.meta.RoomID != 0 {
-		if f.RoomID != r.meta.RoomID {
+	if r.meta.StreamID != 0 {
+		if f.StreamID != r.meta.StreamID {
 			r.needsFull = true
 			return false, fmt.Errorf("%w: stream changed without reset", ErrBaselineMismatch)
 		}

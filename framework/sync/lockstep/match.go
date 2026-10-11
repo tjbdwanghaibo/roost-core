@@ -1,15 +1,14 @@
 // Package lockstep is deterministic input-frame synchronization bound to
-// rooms and transports: a Room owns one match's
+// matches and transports: a Match owns one match's
 // sequencer, frame history, redundant broadcast encoder and desync detector,
 // broadcasts cut frames to attached sessions over the datagram lane (loss is
 // healed by frame redundancy, never by retransmission), and pages catch-up
 // frames to reconnecting sessions over the reliable lane (KCP, QUIC or the
 // AEAD UDP transport via nettransport's senders).
 //
-// A Room is single-owner state, like the sequencer it wraps: the room
-// entity's serial handler drives Attach/SubmitInput/Tick — no locks, in line
-// with the nest execution model. One Room serves exactly one match; call
-// Close when the match ends.
+// Match 由单一所有者串行驱动，没有内部锁。一实例只服务一场对局，结束时调用 Close。
+// Tick 包含同步传输调用，必须在 Nest 业务池及 Entity 锁外驱动；
+// Nest handler 可提交命令，但不能等待对局所有者或并发访问 Match。
 //
 // Transport note: wire Datagrams to a raw transport sender (UDP/KCP/QUIC).
 // nettransport.AsyncTransport is reliable-only and is the wrong place for
@@ -29,14 +28,14 @@ import (
 )
 
 var (
-	ErrRoomConfigInvalid  = errors.New("lockstep room: invalid config")
-	ErrRoomClosed         = errors.New("lockstep room: room is closed")
-	ErrPlayerDetached     = errors.New("lockstep room: player has no attached session")
-	ErrSessionInUse       = errors.New("lockstep room: session already bound to another receiver")
-	ErrCatchupUnavailable = errors.New("lockstep room: no reliable sender for catch-up")
-	ErrCatchupFuture      = errors.New("lockstep room: catch-up start beyond the next frame")
-	ErrCatchupUnservable  = errors.New("lockstep room: catch-up range trimmed from history")
-	ErrHashFrameInvalid   = errors.New("lockstep room: hash report for an uncut or invalid frame")
+	ErrMatchConfigInvalid = errors.New("lockstep match: invalid config")
+	ErrMatchClosed        = errors.New("lockstep match: match is closed")
+	ErrPlayerDetached     = errors.New("lockstep match: player has no attached session")
+	ErrSessionInUse       = errors.New("lockstep match: session already bound to another receiver")
+	ErrCatchupUnavailable = errors.New("lockstep match: no reliable sender for catch-up")
+	ErrCatchupFuture      = errors.New("lockstep match: catch-up start beyond the next frame")
+	ErrCatchupUnservable  = errors.New("lockstep match: catch-up range trimmed from history")
+	ErrHashFrameInvalid   = errors.New("lockstep match: hash report for an uncut or invalid frame")
 )
 
 // Metric names. They are part of the package contract: the alert rules in
@@ -57,14 +56,14 @@ const (
 // AEAD UDP transport's 1232-byte packet minus its 32-byte envelope).
 const DefaultMaxDatagramBytes = nettransport.DefaultMaxDatagram
 
-// Catch-up send defaults (see RoomConfig.CatchupSendTimeout / CatchupSendWait).
+// Catch-up send defaults (see MatchConfig.CatchupSendTimeout / CatchupSendWait).
 const (
 	DefaultCatchupSendTimeout = 2 * time.Second
 	DefaultCatchupSendWait    = 5 * time.Millisecond
 )
 
-// RoomConfig shapes one match's lockstep room.
-type RoomConfig struct {
+// MatchConfig 配置一场对局的输入序列、发送通道、追帧预算与分歧回调。
+type MatchConfig struct {
 	// Sequencer fixes the seat set, submit window and per-input payload cap
 	// (see the Sequencer in this package).
 	Sequencer SequencerConfig
@@ -73,22 +72,22 @@ type RoomConfig struct {
 	// selects 3, MaxBroadcastFrames is the ceiling). Depth N heals up to
 	// N-1 consecutive lost datagrams without retransmission.
 	RedundancyDepth int
-	// MaxDatagramBytes is the datagram PAYLOAD bound the room's broadcast
+	// MaxDatagramBytes is the datagram PAYLOAD bound the match's broadcast
 	// must fit — what the sender accepts, after its own envelope (AEAD
 	// header and tag, framing). Zero takes the bound the Datagrams sender
 	// declares (nettransport.DatagramPayloadLimiter: the KCP, QUIC and UDP
 	// transports do), else DefaultMaxDatagramBytes; a value above the
-	// sender's declared bound is refused. NewRoom refuses configurations
+	// sender's declared bound is refused. NewMatch refuses configurations
 	// whose worst-case packet — depth × players × max payload plus wire
 	// overhead, i.e. every seat at full payload — exceeds it: a single
-	// full-payload client must never be able to push the room's broadcast
+	// full-payload client must never be able to push the match's broadcast
 	// past what the transport can send (RR-20261006-62).
 	MaxDatagramBytes int
 	// HashQuorum is the minimum number of AGREEING hash reports before a
 	// keyframe is judged (<= 0 derives majority-of-seats: len(players)/2+1
 	// — with that choice a colluding minority reporting first can never
 	// convict an honest player). When every seat has reported and no hash
-	// reaches the quorum — a two-seat room with different hashes, a 2:2
+	// reaches the quorum — a two-seat match with different hashes, a 2:2
 	// split, all different — the frame is ruled with no majority: every
 	// seat is an outlier and the verdict has NoMajority set
 	// (RR-20261006-64).
@@ -113,10 +112,10 @@ type RoomConfig struct {
 	CatchupSendTimeout time.Duration
 	// CatchupSendWait is how long Tick waits for the pages it launched in
 	// this tick (<= 0 selects DefaultCatchupSendWait). Pages are sent off
-	// the room's goroutine, at most one in flight per session; a page that
+	// the match's goroutine, at most one in flight per session; a page that
 	// does not finish within the wait stays in flight and is collected on
 	// a later Tick, so a slow client delays only its own catch-up, never
-	// the room (RR-20261006-63). Tick never waits on a page launched by an
+	// the match (RR-20261006-63). Tick never waits on a page launched by an
 	// earlier tick.
 	CatchupSendWait time.Duration
 	// Datagrams broadcasts cut frames (required). Loss-tolerant lane: the
@@ -124,7 +123,7 @@ type RoomConfig struct {
 	Datagrams nettransport.DatagramSender
 	// Reliable pages catch-up frames to reconnecting sessions (optional;
 	// StartCatchup fails without it). KCP or QUIC transports fit here: the
-	// Room bounds every page send with CatchupSendTimeout and never blocks
+	// Match bounds every page send with CatchupSendTimeout and never blocks
 	// Tick on it, so the caller's context needs no deadline.
 	Reliable nettransport.ReliableSender
 	// OnDesync is invoked whenever a keyframe ruling gains outliers that
@@ -142,8 +141,8 @@ type catchupState struct {
 	inflight *catchupSend
 }
 
-// catchupSend is one page handed to the reliable lane off the room's
-// goroutine. done is buffered so the sender never blocks on a room that
+// catchupSend is one page handed to the reliable lane off the match's
+// goroutine. done is buffered so the sender never blocks on a match that
 // stopped caring (detach, close).
 type catchupSend struct {
 	start    FrameID // cursor when the page was read
@@ -175,8 +174,8 @@ func (s *catchupState) drop() {
 	}
 }
 
-// Room is one match's server-side lockstep state.
-type Room struct {
+// Match 是一场对局的服务端帧同步状态，不是大厅房间或匹配服务。
+type Match struct {
 	sequencer    *Sequencer
 	history      *History
 	encoder      *RedundantEncoder
@@ -208,10 +207,10 @@ type Room struct {
 // ownerSpectator marks a session owned by a spectator in sessionOwners.
 const ownerSpectator PlayerID = -1
 
-// NewRoom builds a lockstep room for one match.
-func NewRoom(config RoomConfig) (*Room, error) {
+// NewMatch 创建一场对局的帧同步协调器；调用方负责串行驱动和结束时关闭。
+func NewMatch(config MatchConfig) (*Match, error) {
 	if config.Datagrams == nil {
-		return nil, fmt.Errorf("%w: datagram sender is required", ErrRoomConfigInvalid)
+		return nil, fmt.Errorf("%w: datagram sender is required", ErrMatchConfigInvalid)
 	}
 	sequencer, err := NewSequencer(config.Sequencer)
 	if err != nil {
@@ -225,7 +224,7 @@ func NewRoom(config RoomConfig) (*Room, error) {
 	// Worst-case broadcast packet: header + depth frames, each carrying
 	// every seat at the full payload cap plus varint overhead. Refusing the
 	// configuration here is what keeps a single full-payload client from
-	// blacking out the whole room's downlink at runtime. The bound is the
+	// blacking out the whole match's downlink at runtime. The bound is the
 	// sender's PAYLOAD bound — its own envelope is already taken off.
 	const packetHeader = 2 + 5  // magic+version + frame count varint
 	const frameOverhead = 5 + 5 // frame id + input count varints
@@ -233,14 +232,14 @@ func NewRoom(config RoomConfig) (*Room, error) {
 	players := len(config.Sequencer.Players)
 	worst := packetHeader + depth*(frameOverhead+players*(inputOverhead+sequencer.MaxInputBytes()))
 	if worst > maxDatagram {
-		return nil, fmt.Errorf("%w: worst-case packet %dB (depth %d × %d players × %dB payload) exceeds datagram bound %dB — lower Sequencer.MaxInputBytes or RedundancyDepth", ErrRoomConfigInvalid, worst, depth, players, sequencer.MaxInputBytes(), maxDatagram)
+		return nil, fmt.Errorf("%w: worst-case packet %dB (depth %d × %d players × %dB payload) exceeds datagram bound %dB — lower Sequencer.MaxInputBytes or RedundancyDepth", ErrMatchConfigInvalid, worst, depth, players, sequencer.MaxInputBytes(), maxDatagram)
 	}
 	batch := config.CatchupBatchFrames
 	if batch <= 0 {
 		batch = 32
 	}
 	if batch == 1 {
-		return nil, fmt.Errorf("%w: catch-up batch of 1 frame per tick can never overtake the head (one frame is cut per tick); use >= 2", ErrRoomConfigInvalid)
+		return nil, fmt.Errorf("%w: catch-up batch of 1 frame per tick can never overtake the head (one frame is cut per tick); use >= 2", ErrMatchConfigInvalid)
 	}
 	if batch > MaxBroadcastFrames {
 		batch = MaxBroadcastFrames
@@ -263,7 +262,7 @@ func NewRoom(config RoomConfig) (*Room, error) {
 	if sendWait <= 0 {
 		sendWait = DefaultCatchupSendWait
 	}
-	return &Room{
+	return &Match{
 		sequencer:     sequencer,
 		history:       NewHistory(),
 		encoder:       NewRedundantEncoder(depth),
@@ -284,7 +283,7 @@ func NewRoom(config RoomConfig) (*Room, error) {
 	}, nil
 }
 
-// datagramBudget resolves the payload bound the room's worst-case broadcast
+// datagramBudget resolves the payload bound the match's worst-case broadcast
 // must fit: the sender's declared bound unless the config narrows it, and
 // never more than the sender can carry.
 func datagramBudget(configured int, sender nettransport.DatagramSender) (int, error) {
@@ -294,13 +293,13 @@ func datagramBudget(configured int, sender nettransport.DatagramSender) (int, er
 	}
 	switch {
 	case configured < 0:
-		return 0, fmt.Errorf("%w: MaxDatagramBytes %d is negative", ErrRoomConfigInvalid, configured)
+		return 0, fmt.Errorf("%w: MaxDatagramBytes %d is negative", ErrMatchConfigInvalid, configured)
 	case configured == 0 && declared > 0:
 		return declared, nil
 	case configured == 0:
 		return DefaultMaxDatagramBytes, nil
 	case declared > 0 && configured > declared:
-		return 0, fmt.Errorf("%w: MaxDatagramBytes %dB exceeds the datagram sender's payload bound %dB", ErrRoomConfigInvalid, configured, declared)
+		return 0, fmt.Errorf("%w: MaxDatagramBytes %dB exceeds the datagram sender's payload bound %dB", ErrMatchConfigInvalid, configured, declared)
 	default:
 		return configured, nil
 	}
@@ -312,9 +311,9 @@ func datagramBudget(configured int, sender nettransport.DatagramSender) (int, er
 // (reconnect) replaces the previous one and drops its catch-up. A session
 // already serving another seat or a spectator is refused — two receivers on
 // one session would double-send and cross-cancel each other's catch-up.
-func (r *Room) Attach(player PlayerID, session nettransport.SessionID) error {
+func (r *Match) Attach(player PlayerID, session nettransport.SessionID) error {
 	if r.closed {
-		return ErrRoomClosed
+		return ErrMatchClosed
 	}
 	if !r.sequencer.KnownPlayer(player) {
 		return ErrPlayerUnknown
@@ -337,7 +336,7 @@ func (r *Room) Attach(player PlayerID, session nettransport.SessionID) error {
 // Detach unbinds a seat (disconnect). The seat stays in the match — its
 // inputs simply stop arriving, which optimistic frame locking already
 // tolerates as empty inputs.
-func (r *Room) Detach(player PlayerID) {
+func (r *Match) Detach(player PlayerID) {
 	if session, attached := r.sessions[player]; attached {
 		r.dropCatchup(session)
 		delete(r.sessionOwners, session)
@@ -345,10 +344,10 @@ func (r *Room) Detach(player PlayerID) {
 	}
 }
 
-// DetachSession 在 Room 的串行 owner 中处理断线通知，仅移除通知所属的生命周期。
+// DetachSession 在 Match 的串行 owner 中处理断线通知，仅移除通知所属的生命周期。
 // Gate 的 receiver ID 在进程内不复用；旧连接的迟到关闭不能拆掉已经重绑的新连接。
-// 完整 Gate/Game/BindID 校验仍由接入层完成，Room 不重复持有连接身份表。
-func (r *Room) DetachSession(player PlayerID, session nettransport.SessionID) bool {
+// 完整 Gate/Game/BindID 校验仍由接入层完成，Match 不重复持有连接身份表。
+func (r *Match) DetachSession(player PlayerID, session nettransport.SessionID) bool {
 	current, attached := r.sessions[player]
 	if !attached || current != session {
 		return false
@@ -359,9 +358,9 @@ func (r *Room) DetachSession(player PlayerID, session nettransport.SessionID) bo
 
 // AttachSpectator binds a receive-only session: it gets live broadcasts and
 // may catch up via SpectatorCatchup, but holds no seat.
-func (r *Room) AttachSpectator(session nettransport.SessionID) error {
+func (r *Match) AttachSpectator(session nettransport.SessionID) error {
 	if r.closed {
-		return ErrRoomClosed
+		return ErrMatchClosed
 	}
 	if owner, bound := r.sessionOwners[session]; bound && owner != ownerSpectator {
 		return ErrSessionInUse
@@ -372,7 +371,7 @@ func (r *Room) AttachSpectator(session nettransport.SessionID) error {
 }
 
 // DetachSpectator unbinds a spectator session.
-func (r *Room) DetachSpectator(session nettransport.SessionID) {
+func (r *Match) DetachSpectator(session nettransport.SessionID) {
 	if _, ok := r.spectators[session]; ok {
 		delete(r.spectators, session)
 		delete(r.sessionOwners, session)
@@ -381,7 +380,7 @@ func (r *Room) DetachSpectator(session nettransport.SessionID) {
 }
 
 // dropCatchup ends a session's catch-up and cancels its in-flight page.
-func (r *Room) dropCatchup(session nettransport.SessionID) {
+func (r *Match) dropCatchup(session nettransport.SessionID) {
 	if state, ok := r.catchups[session]; ok {
 		state.drop()
 		delete(r.catchups, session)
@@ -389,16 +388,16 @@ func (r *Room) dropCatchup(session nettransport.SessionID) {
 }
 
 // NextFrame is the id the next Tick will cut.
-func (r *Room) NextFrame() FrameID { return r.sequencer.NextFrame() }
+func (r *Match) NextFrame() FrameID { return r.sequencer.NextFrame() }
 
 // SubmitInput feeds one player's input into the sequencer and returns the
 // frame it was folded into. Late inputs (frame already cut) are folded
 // forward and metered as lockstep.input.late.total; rejected inputs are
 // metered as lockstep.input.rejected.total{reason} — the first signal of a
 // malicious or version-skewed client.
-func (r *Room) SubmitInput(player PlayerID, frame FrameID, payload []byte) (FrameID, error) {
+func (r *Match) SubmitInput(player PlayerID, frame FrameID, payload []byte) (FrameID, error) {
 	if r.closed {
-		return 0, ErrRoomClosed
+		return 0, ErrMatchClosed
 	}
 	late := frame != 0 && frame < r.sequencer.NextFrame()
 	folded, err := r.sequencer.SubmitInput(player, frame, payload)
@@ -432,13 +431,13 @@ func rejectReason(err error) string {
 // history is authoritative regardless of delivery — but they are joined and
 // returned so the caller can drop dead sessions.
 //
-// Catch-up pages are sent off the room's goroutine (one in flight per
+// Catch-up pages are sent off the match's goroutine (one in flight per
 // session, each bounded by CatchupSendTimeout) and Tick waits at most
 // CatchupSendWait for the pages it launched: a client whose reliable lane
-// stalls slows only its own catch-up, never the room (RR-20261006-63).
-func (r *Room) Tick(ctx context.Context) (Frame, error) {
+// stalls slows only its own catch-up, never the match (RR-20261006-63).
+func (r *Match) Tick(ctx context.Context) (Frame, error) {
 	if r.closed {
-		return Frame{}, ErrRoomClosed
+		return Frame{}, ErrMatchClosed
 	}
 	frame := r.sequencer.Advance()
 	r.history.Append(frame)
@@ -473,7 +472,7 @@ type broadcastReceiver struct {
 // broadcastOrder returns seats (by ascending player) then spectators (by
 // ascending session): deterministic iteration keeps error text and delivery
 // order reproducible.
-func (r *Room) broadcastOrder() []broadcastReceiver {
+func (r *Match) broadcastOrder() []broadcastReceiver {
 	receivers := make([]broadcastReceiver, 0, len(r.sessions)+len(r.spectators))
 	players := make([]PlayerID, 0, len(r.sessions))
 	for player := range r.sessions {
@@ -501,7 +500,7 @@ func (r *Room) broadcastOrder() []broadcastReceiver {
 // switches back to live datagram broadcasts. Calling again while already
 // catching up moves the cursor to min(current, from) — it never re-pages
 // forward past history the client is still missing.
-func (r *Room) StartCatchup(player PlayerID, from FrameID) error {
+func (r *Match) StartCatchup(player PlayerID, from FrameID) error {
 	session, attached := r.sessions[player]
 	if !attached {
 		return ErrPlayerDetached
@@ -510,16 +509,16 @@ func (r *Room) StartCatchup(player PlayerID, from FrameID) error {
 }
 
 // SpectatorCatchup begins paging history to an attached spectator session.
-func (r *Room) SpectatorCatchup(session nettransport.SessionID, from FrameID) error {
+func (r *Match) SpectatorCatchup(session nettransport.SessionID, from FrameID) error {
 	if _, ok := r.spectators[session]; !ok {
 		return ErrPlayerDetached
 	}
 	return r.startCatchup(session, from)
 }
 
-func (r *Room) startCatchup(session nettransport.SessionID, from FrameID) error {
+func (r *Match) startCatchup(session nettransport.SessionID, from FrameID) error {
 	if r.closed {
-		return ErrRoomClosed
+		return ErrMatchClosed
 	}
 	if r.reliable == nil {
 		return ErrCatchupUnavailable
@@ -538,7 +537,7 @@ func (r *Room) startCatchup(session nettransport.SessionID, from FrameID) error 
 }
 
 // CatchingUp reports whether the player's session is still paging history.
-func (r *Room) CatchingUp(player PlayerID) bool {
+func (r *Match) CatchingUp(player PlayerID) bool {
 	session, attached := r.sessions[player]
 	if !attached {
 		return false
@@ -549,7 +548,7 @@ func (r *Room) CatchingUp(player PlayerID) bool {
 
 // catchupSessions lists catching-up sessions in ascending order, so error
 // text and send order are reproducible.
-func (r *Room) catchupSessions() []nettransport.SessionID {
+func (r *Match) catchupSessions() []nettransport.SessionID {
 	sessions := make([]nettransport.SessionID, 0, len(r.catchups))
 	for session := range r.catchups {
 		sessions = append(sessions, session)
@@ -563,7 +562,7 @@ func (r *Room) catchupSessions() []nettransport.SessionID {
 // frames from Latest-depth+1 on) is caught up: the broadcast that follows
 // carries the rest. Without this a page that always outlives the wait
 // would trail the head by one frame forever.
-func (r *Room) collectCatchups() error {
+func (r *Match) collectCatchups() error {
 	if len(r.catchups) == 0 {
 		return nil
 	}
@@ -587,7 +586,7 @@ func (r *Room) collectCatchups() error {
 // settleCatchup applies a finished page's result: success moves the cursor
 // (and ends the catch-up once it passes the head); failure keeps the cursor
 // and counts toward CatchupMaxFailures.
-func (r *Room) settleCatchup(session nettransport.SessionID, state *catchupState) error {
+func (r *Match) settleCatchup(session nettransport.SessionID, state *catchupState) error {
 	send := state.inflight
 	state.inflight = nil
 	send.cancel()
@@ -614,7 +613,7 @@ func (r *Room) settleCatchup(session nettransport.SessionID, state *catchupState
 // none in flight, then waits up to CatchupSendWait for those pages. A page
 // still in flight after the wait is collected by a later Tick; Tick never
 // waits on it again.
-func (r *Room) pumpCatchup(ctx context.Context) error {
+func (r *Match) pumpCatchup(ctx context.Context) error {
 	if len(r.catchups) == 0 {
 		return nil
 	}
@@ -672,7 +671,7 @@ func (r *Room) pumpCatchup(ctx context.Context) error {
 // caller's context values but not its cancellation (it may outlive the
 // Tick), and is bounded by CatchupSendTimeout; dropping the catch-up
 // cancels it.
-func (r *Room) launchPage(ctx context.Context, session nettransport.SessionID, start FrameID, page []Frame) *catchupSend {
+func (r *Match) launchPage(ctx context.Context, session nettransport.SessionID, start FrameID, page []Frame) *catchupSend {
 	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.sendTimeout)
 	send := &catchupSend{
 		start:  start,
@@ -695,9 +694,9 @@ func (r *Room) launchPage(ctx context.Context, session nettransport.SessionID, s
 // hash gains quorum agreeing reports the ruling runs; OnDesync fires
 // whenever the outlier SET changes (new members counted in
 // lockstep.desync.total), not merely when it grows in size.
-func (r *Room) ReportHash(player PlayerID, frame FrameID, hash uint64) error {
+func (r *Match) ReportHash(player PlayerID, frame FrameID, hash uint64) error {
 	if r.closed {
-		return ErrRoomClosed
+		return ErrMatchClosed
 	}
 	if !r.sequencer.KnownPlayer(player) {
 		metrics.IncCounter(MetricInputRejected, metrics.Labels{"reason": "hash_unknown_player"}, 1)
@@ -740,7 +739,7 @@ func (r *Room) ReportHash(player PlayerID, frame FrameID, hash uint64) error {
 // TrimHashReports drops hash-report state for frames before the given id
 // (already judged and acted on). Trimmed frames are tombstoned in the
 // detector: late reports cannot rebuild a forgeable report set for them.
-func (r *Room) TrimHashReports(before FrameID) {
+func (r *Match) TrimHashReports(before FrameID) {
 	r.detector.Trim(before)
 	for frame := range r.ruled {
 		if frame < before {
@@ -752,19 +751,19 @@ func (r *Room) TrimHashReports(before FrameID) {
 // TrimHistory drops stored frames before keep, bounding memory for long
 // matches that do not need the full replay. Catch-ups older than keep are
 // abandoned on their next pump with ErrCatchupUnservable.
-func (r *Room) TrimHistory(keep FrameID) {
+func (r *Match) TrimHistory(keep FrameID) {
 	r.history.TrimBefore(keep)
 }
 
 // History exposes the match's frame history (catch-up source and replay
 // artifact). The returned structure is single-owner state: use it only from
-// the same serial handler that drives the Room, and do not mutate frames.
-func (r *Room) History() *History { return r.history }
+// the same serial handler that drives the Match, and do not mutate frames.
+func (r *Match) History() *History { return r.history }
 
 // Close ends the match: all receivers and pending catch-ups are released
-// and every subsequent operation fails with ErrRoomClosed. One Room serves
+// and every subsequent operation fails with ErrMatchClosed. One Match serves
 // exactly one match — do not reuse it.
-func (r *Room) Close() {
+func (r *Match) Close() {
 	for _, state := range r.catchups {
 		state.drop()
 	}

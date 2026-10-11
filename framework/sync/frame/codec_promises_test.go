@@ -9,7 +9,7 @@ import (
 
 func validDelta() Frame {
 	return Frame{
-		SnapshotMeta: SnapshotMeta{RoomID: 7, Epoch: 1, Tick: 5, SchemaVersion: 1}, Kind: Delta, BaseTick: 4,
+		SnapshotMeta: SnapshotMeta{StreamID: 7, Epoch: 1, Tick: 5, SchemaVersion: 1}, Kind: Delta, BaseTick: 4,
 		Objects: []ObjectDelta{
 			{Operation: ObjectCreate, Ref: ObjectRef{ID: 1, Generation: 1}, Archetype: 10, Components: []ComponentDelta{{Operation: ComponentSet, TypeID: 1, SchemaVersion: 1, Data: []byte("pos")}}},
 			{Operation: ObjectUpdate, Ref: ObjectRef{ID: 2, Generation: 1}, Components: []ComponentDelta{{Operation: ComponentRemove, TypeID: 3}}},
@@ -25,7 +25,7 @@ func expectFrameErr(t *testing.T, err error, sentinel error, text string) {
 	}
 }
 
-// The delta frame is the wire format between the room and every replica.
+// The delta frame is the wire format between the stream and every replica.
 // validateFrame runs on both encode and decode; every structural rule is
 // pinned here by sentinel and message. Only round trips had tests.
 func TestEncodeFrameRefusesEachMalformedDelta(t *testing.T) {
@@ -39,7 +39,7 @@ func TestEncodeFrameRefusesEachMalformedDelta(t *testing.T) {
 		sentinel error
 		text     string
 	}{
-		{"zero room", func(f *Frame) { f.RoomID = 0 }, ErrInvalidFrame, "invalid snapshot metadata"},
+		{"zero stream", func(f *Frame) { f.StreamID = 0 }, ErrInvalidFrame, "invalid snapshot metadata"},
 		{"zero schema", func(f *Frame) { f.SchemaVersion = 0 }, ErrInvalidFrame, "invalid snapshot metadata"},
 		{"unknown kind", func(f *Frame) { f.Kind = Kind(9) }, ErrInvalidFrame, "unknown frame kind 9"},
 		{"full frame with baseline", func(f *Frame) { f.Kind = Full; f.Objects = f.Objects[:1] }, ErrInvalidFrame, "full frame has baseline"},

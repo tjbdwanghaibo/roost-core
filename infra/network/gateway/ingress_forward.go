@@ -131,7 +131,7 @@ func (game *GameIngress) retire(record *bindingRecord) {
 				game.healthy.Store(false)
 			}
 		}()
-		// 激活回调可能正在建 Sync/Room lifetime；先等其真实返回，再执行唯一旧代退出。
+		// 激活回调可能正在建 Sync/Match lifetime；先等其真实返回，再执行唯一旧代退出。
 		if done != nil {
 			<-done
 		}

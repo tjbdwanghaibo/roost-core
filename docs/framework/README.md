@@ -18,6 +18,8 @@
 
 ## 次核心模块
 
+[玩家协议处理教程](PLAYER-ACCESS.md)：用 demo 穿戴装备说明协议定义、Controller、生成 Sender 和 Nest handler，区分网络会话与 Session 运行服务。
+
 [网关现状与独立 Gate 设计](GATEWAY.md)：嵌入与独立 Gate 的正式接入、已实施 API 与验证边界；新增能力随v1.25.0交付。
 
 [Gate 设计评审与实施方案](GATEWAY-IMPLEMENTATION.md)：具体目录、绑定身份、NATS 转发、统一发送、Nest/Sync 接线及验收条件，Gate/Game、MessagePack、广播与Sync/Lockstep已实施；本机功能通过，性能及多进程/跨机完整验收未收口。

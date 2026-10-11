@@ -171,7 +171,7 @@ func (s *session) encode(entries []frameEntry, cfg wireConfig) ([]encodedFrame, 
 			return nil
 		}
 		out := frame.Frame{
-			SnapshotMeta: frame.SnapshotMeta{RoomID: wireStream, Epoch: s.epoch, Tick: s.tick + 1, SchemaVersion: cfg.schemaVersion},
+			SnapshotMeta: frame.SnapshotMeta{StreamID: wireStream, Epoch: s.epoch, Tick: s.tick + 1, SchemaVersion: cfg.schemaVersion},
 			Kind:         frame.Delta, BaseTick: s.tick, Objects: objects,
 		}
 		if s.tick == 0 {

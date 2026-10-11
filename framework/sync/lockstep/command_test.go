@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 func TestCommandCodecAndOwnership(t *testing.T) {
@@ -64,9 +64,9 @@ func TestTCPSenderRejectsFastWorkerBeforeResolverOrSocket(t *testing.T) {
 	}
 }
 
-func TestRoomCommandUsesCurrentAuthenticatedBinding(t *testing.T) {
+func TestMatchCommandUsesCurrentAuthenticatedBinding(t *testing.T) {
 	transport := newRecordingTransport()
-	r := newTestRoom(t, transport, nil)
+	r := newTestMatch(t, transport, nil)
 	defer r.Close()
 	if err := r.Attach(1, 101); err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestRoomCommandUsesCurrentAuthenticatedBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Close()
-	if err := r.HandleCommand(103, input); !errors.Is(err, ErrRoomClosed) {
+	if err := r.HandleCommand(103, input); !errors.Is(err, ErrMatchClosed) {
 		t.Fatal(err)
 	}
 }

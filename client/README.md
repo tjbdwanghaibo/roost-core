@@ -86,7 +86,7 @@ if (session.TryDequeuePush(out var push))
 
 推送队列满时关闭连接、失败所有等待者并清空不能继续使用的增量，不能静默丢一个delta后继续应用。`Completion`表示接收循环结束，关闭原因读取`CloseReason`。连接关闭后创建新TcpSession实例；重连票据获取、重新订阅及full baseline恢复由业务驱动，本库不声称已提供完整复制状态机。断线检测基于socket I/O和请求预算，未实现独立心跳/空闲超时。
 
-`SyncFrame.Decode`和`SubjectUpdate.Decode`只解码已有Go格式，校验长度、操作和身份；`SubjectId`用`long`，RoomId/版本/掩码用`ulong`，不要转float/double。
+`SyncFrame.Decode`和`SubjectUpdate.Decode`只解码已有Go格式，校验长度、操作和身份；`SubjectId`用`long`，StreamId/版本/掩码用`ulong`，不要转float/double。
 
 新增`SyncReceiver`（本工作分支待运行验证）按单连接单流核对epoch、tick、baseTick与schema：首帧必须Full，重复/旧代不再应用，缺口或业务回调失败后拒绝增量，成功应用才推进基线。其内存状态固定，不缓存历史帧或业务实体。Go对应`sync/frame.Receiver`。同一连接串行消费，业务组件的generation、版本、解码及状态应用仍由业务维护；这里不提供预测回滚或所有packer的客户端模型。
 
@@ -94,9 +94,9 @@ if (session.TryDequeuePush(out var push))
 
 ## Lockstep接入
 
-服务端保留原Sequencer/Room/History/RedundantEncoder/DesyncDetector。TCP是可靠回退通道，有队头阻塞，Tick的同步广播可能等待socket写预算；没有将TCP包装成UDP性能保证。NewTCPSender的maxPayload应等于生成TCP/C#单包上限；按玩家数、MaxInputBytes、RedundancyDepth和CatchupBatchFrames计算每包预算，历史页也不能超过此上限。
+服务端保留原Sequencer/Match/History/RedundantEncoder/DesyncDetector。TCP是可靠回退通道，有队头阻塞，Tick的同步广播可能等待socket写预算；没有将TCP包装成UDP性能保证。NewTCPSender的maxPayload应等于生成TCP/C#单包上限；按玩家数、MaxInputBytes、RedundancyDepth和CatchupBatchFrames计算每包预算，历史页也不能超过此上限。
 
-生成access/player.NewMod可接收ProtocolRegistrar；在已有PB注册之后、Seal之前执行，注册冲突或失败会中止启动。业务在自己的app装配中使用player.NewMod(registerMatch)，原无参调用保持PB行为。注册函数通过RegisterPayloadNotify(...wire.PayloadLockstep, lockstep.DecodeCommand, handler)接线，handler只将认证PlayerID/Session.Principal().SessionID和Command交给业务Nest Sender，不能从网络handler并发操作Room。示意：
+生成access/player.NewMod可接收ProtocolRegistrar；在已有PB注册之后、Seal之前执行，注册冲突或失败会中止启动。业务在自己的app装配中使用player.NewMod(registerMatch)，原无参调用保持PB行为。注册函数通过RegisterPayloadNotify(...wire.PayloadLockstep, lockstep.DecodeCommand, handler)接线，handler只将认证PlayerID/Session.Principal().SessionID和Command交给业务Nest Sender，不能从网络handler并发操作Match。示意：
 
 ```go
 func registerMatch(protocols *player_agent.ProtocolRegistry, registry *app.Registry) error {
@@ -108,14 +108,14 @@ func registerMatch(protocols *player_agent.ProtocolRegistry, registry *app.Regis
         })
 }
 // 初始化时：player.NewMod(registerMatch)。matchSender由业务启动装配注入。
-// 比赛单所有者中：room.HandleCommand(authenticatedNumericSessionID, command)。
-// RoomConfig.Datagrams和Reliable均可使用：
+// 比赛单所有者中：match.HandleCommand(authenticatedNumericSessionID, command)。
+// MatchConfig.Datagrams和Reliable均可使用：
 // lockstep.NewTCPSender(frameMessageID,maxPayload,concurrentSafeResolve,tcpRuntime.PushLockstepSession)
 ```
 
-座位由服务器Attach赋予，Command不传player。会话映射须使用唯一连接生命周期ID，旧连接重绑后从Room移除；旧close事件不得Detach新连接，业务应核对绑定。旁观者只允许Catchup；Hash必须对应已切帧。Room所有Attach/Detach/HandleCommand/Tick/ReportHash/Close在比赛单所有者内串行执行；可靠页的resolver须并发安全，不能访问无锁Room map。每Tick应检查返回错误，发送错误不会撤回已经切出的权威帧。
+座位由服务器Attach赋予，Command不传player。会话映射须使用唯一连接生命周期ID，旧连接重绑后从Match移除；旧close事件不得Detach新连接，业务应核对绑定。旁观者只允许Catchup；Hash必须对应已切帧。Match所有Attach/Detach/HandleCommand/Tick/ReportHash/Close在比赛单所有者内串行执行；可靠页的resolver须并发安全，不能访问无锁Match map。每Tick应检查返回错误，发送错误不会撤回已经切出的权威帧。
 
-Command格式为C8 01 + operation[1] + frame(uvarint32非零)：Input=1再带length+bytes（最多1024，Room通常配置更小）；Hash=2再带uvarint64；Catchup=3无尾部。拒绝未知操作、零帧、溢出、截断、尾字节和多余字段。Notify不返回服务器成功ACK；如业务需要可观察的拒绝结果，应另外定义PB业务响应。禁止SDK自动重传输入，原Sequencer只在有界ReplayHorizon内去重。
+Command格式为C8 01 + operation[1] + frame(uvarint32非零)：Input=1再带length+bytes（最多1024，Match通常配置更小）；Hash=2再带uvarint64；Catchup=3无尾部。拒绝未知操作、零帧、溢出、截断、尾字节和多余字段。Notify不返回服务器成功ACK；如业务需要可观察的拒绝结果，应另外定义PB业务响应。禁止SDK自动重传输入，原Sequencer只在有界ReplayHorizon内去重。
 
 C#广播与历史页同用C7 v1，最多64帧、每帧256输入、每输入1024字节，严格递增并复制载荷。LockstepAssembler对每个包事务式组装：乱序最多默认256帧，坏包/溢出不提交部分释放结果；这与Go原Assembler可能返回已释放帧+error的契约不同。LockstepClient将坏包、容量溢出和模拟回调失败视为终止，应用新建比赛实例并恢复；不重复可能已部分执行的模拟。
 
@@ -150,8 +150,8 @@ dotnet run --project client/dotnet/Roost.Client.Tests -- client/spec/packets.jso
 go test ./codegen/internal/roost -run '^TestClientSDKAgainstGeneratedPlayerTCP$' -count=1 -v
 ```
 
-正式生成工程测试需要.NET 10 SDK（测试程序target net10.0，运行库仍netstandard2.1）；缺SDK时明确skip，不能当C#验收。测试在私有生成工程执行真实TCP鉴权→生成PB编解码→并发请求→raw Sync推送，以及Room→TCPSender→C#输入/Hash/主动制造缺口→可靠追帧，并运行现有TCP/Scene race场景，重生成托管目录必须字节不变。
+正式生成工程测试需要.NET 10 SDK（测试程序target net10.0，运行库仍netstandard2.1）；缺SDK时明确skip，不能当C#验收。测试在私有生成工程执行真实TCP鉴权→生成PB编解码→并发请求→raw Sync推送，以及Match→TCPSender→C#输入/Hash/主动制造缺口→可靠追帧，并运行现有TCP/Scene race场景，重生成托管目录必须字节不变。
 
 `client/spec/packets.json`由Go正式wire、frame、entitysync和lockstep编码器生成，C#消费并验证64位身份、frame/SubjectUpdate、Command/C7、与robot一致的输入链hash和重新封包。只有协议有意变化时才执行`go test ./client/wire -run TestClientProtocolGolden -update`并检查差异，普通回归不能自动更新期望。[设计与当前验证边界](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)。
 
-TCP发送会检查fctx当前执行位置，快worker在resolver/socket前返回ErrBlockingInFastWorker。Room.Tick含同步网络I/O，必须由Entity锁外的比赛单所有者驱动；不能放进Nest快handler等待socket，也不能临时换goroutine绕过标记却并发访问Room。Nest边界只转交命令/调用已配置的比赛单所有者；本轮真实TCP夹具用独立串行owner channel，证明协议/Room消费，未声称具体业务比赛Nest实体及持久化装配已验收。
+TCP发送会检查fctx当前执行位置，快worker在resolver/socket前返回ErrBlockingInFastWorker。Match.Tick含同步网络I/O，必须由Entity锁外的比赛单所有者驱动；不能放进Nest快handler等待socket，也不能临时换goroutine绕过标记却并发访问Match。Nest边界只转交命令/调用已配置的比赛单所有者；本轮真实TCP夹具用独立串行owner channel，证明协议/Match消费，未声称具体业务比赛Nest实体及持久化装配已验收。

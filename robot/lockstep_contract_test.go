@@ -179,7 +179,7 @@ func (s *gapSink) RequestCatchup(from lockstep.FrameID) error {
 	return nil
 }
 
-// broadcastPackets encodes frames 1..count the way the Room does: each
+// broadcastPackets encodes frames 1..count the way the Match does: each
 // packet carries its frame plus depth-1 predecessors.
 func broadcastPackets(count int, depth int) [][]byte {
 	encoder := lockstep.NewRedundantEncoder(depth)

@@ -9,7 +9,7 @@ import (
 //
 // P1(32 位平台上的 panic):环的定位是 `int(original) % replayWindowSize`,而 `original` 是 uint32
 // 且完全由客户端控制。`int` 为 32 位的平台(GOARCH=386 / arm)上 int(4_000_000_000) 溢出成
-// -294967296,取模得 -24,`ring[-24]` 直接 panic;Room 是单 goroutine 驱动的,会带走整个房间。
+// -294967296,取模得 -24,`ring[-24]` 直接 panic;Match 是单 goroutine 驱动的,会带走整个对局。
 // P2(顺序):身份查找连同环的惰性分配排在窗口检查之前,于是一个会被 ErrFrameTooEarly 拒绝的
 // 垃圾帧号照样给这个座位分配了 129 槽的环——校验之前就先按客户端给的数去索引了。
 //

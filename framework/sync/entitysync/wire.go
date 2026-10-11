@@ -10,11 +10,11 @@ import (
 // WireVersion is the subject-update encoding version. It changed when ARCH-10
 // made frames per session: the outer room header (room frame number, room
 // session sequence) is gone, a frame is a plain frame.Frame whose
-// Epoch/Tick are the session's own clock, and RoomID carries nothing but the
+// Epoch/Tick are the session's own clock, and StreamID carries nothing but the
 // stream constant below.
 const WireVersion uint16 = 2
 
-// wireStream is what goes into SnapshotMeta.RoomID. frame requires it to
+// wireStream is what goes into SnapshotMeta.StreamID. frame requires it to
 // be non-zero and equal between a delta and its base; a session has exactly
 // one stream, so a constant does.
 const wireStream uint64 = 1

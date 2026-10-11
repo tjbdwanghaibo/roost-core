@@ -28,7 +28,7 @@ func (identity ProcessIdentity) Validate() error {
 }
 
 // Binding 是连接的完整代次。SID 相同不等于同一进程，SessionID 相同不等于同一连接。
-// Close、Unbind、发送失败和 Room Detach 都必须匹配整份身份。
+// Close、Unbind、发送失败和 Match Detach 都必须匹配整份身份。
 type Binding struct {
 	PlayerID        int64
 	SessionID       string

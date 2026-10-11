@@ -44,7 +44,7 @@ var (
 	_ = entity.EntityKindNone
 	_ = entitysync.NewManager
 	_ = policy.NewGroup
-	_ = lockstep.NewRoom
+	_ = lockstep.NewMatch
 	_ = mirror.New
 	_ = kitnet.NewAsyncTransport
 	_ = statesync.DefaultLimits

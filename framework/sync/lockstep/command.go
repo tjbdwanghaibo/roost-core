@@ -107,11 +107,11 @@ func DecodeCommand(data []byte) (Command, error) {
 	return c, c.Validate()
 }
 
-// HandleCommand 必须在Room的串行handler内调用；传入由鉴权层映射的会话。
+// HandleCommand 必须在Match的串行handler内调用；传入由鉴权层映射的会话。
 // 重绑后旧会话无法提交；旁观者只有追帧权限。没有发送成功即业务ACK的约定。
-func (r *Room) HandleCommand(session nettransport.SessionID, c Command) error {
+func (r *Match) HandleCommand(session nettransport.SessionID, c Command) error {
 	if r.closed {
-		return ErrRoomClosed
+		return ErrMatchClosed
 	}
 	if err := c.Validate(); err != nil {
 		return err

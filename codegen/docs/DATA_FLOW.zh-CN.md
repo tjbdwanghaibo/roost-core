@@ -123,13 +123,13 @@ handler 里 saga.EmitStart(...)          start 意图，与本次事务同一条
 
 ```
 客户端输入 → BattleInput 请求 → 端点 → 房间的串行 goroutine
-  → lockstep.Room.SubmitInput（提交窗口内）
+  → lockstep.Match.SubmitInput（提交窗口内）
   → Tick 切帧 → 编码（带最近几帧冗余）→ 广播给每个座位
 客户端 ← BattleFrame 推送 → 组装器按序释放 → 应用到本地模拟 → 下一帧输入 + 关键帧哈希
 ```
 
 - **不落库、没有事务**。帧不是状态，是"所有人将要重放的输入"。
-- **房间是单所有者状态**：`lockstep.Room` 内部没有锁，所有调用必须在一条 goroutine 上；端点把命令
+- **房间是单所有者状态**：`lockstep.Match` 内部没有锁，所有调用必须在一条 goroutine 上；端点把命令
   投进 channel。
 - **丢包靠冗余自愈**：每个广播包带最近 N 帧，丢一个由后续包补上，不重传、不加延迟；缺口太大才请求
   补发历史（走可靠通道分页）。

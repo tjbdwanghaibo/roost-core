@@ -15,7 +15,7 @@ import (
 	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
 )
 
-// Room 的唯一 owner 独立于 NATS callback；Input/Attach/Detach/Tick 都进入该作用域。
+// Match 的唯一 owner 独立于 NATS callback；Input/Attach/Detach/Tick 都进入该作用域。
 // 此测试验证原始 LS 协议/生命周期；生成 PB→Nest→DAO/WAL 另由生成消费者覆盖。
 func TestRealGateLockstepInputFramesCatchupAndOldDisconnect(t *testing.T) {
 	type roomJob struct {
@@ -32,7 +32,7 @@ func TestRealGateLockstepInputFramesCatchupAndOldDisconnect(t *testing.T) {
 	}()
 	t.Cleanup(func() { close(jobs); <-ownerDone })
 	run := func(fn func() error) error { done := make(chan error, 1); jobs <- roomJob{fn, done}; return <-done }
-	var room *lockstep.Room
+	var room *lockstep.Match
 	var h *gateHarness
 	h = realGateHarness(t, func(ctx context.Context, s gateway.Session, id, seq uint32, kind wire.PayloadKind, payload []byte) (any, error) {
 		if id != 301 || kind != wire.PayloadLockstep {
@@ -65,7 +65,7 @@ func TestRealGateLockstepInputFramesCatchupAndOldDisconnect(t *testing.T) {
 	})
 	transport := gatewiring.Transport{Game: h.game, LockstepMessageID: 302}
 	var err error
-	room, err = lockstep.NewRoom(lockstep.RoomConfig{Sequencer: lockstep.SequencerConfig{Players: []lockstep.PlayerID{123}, MaxInputBytes: 16}, RedundancyDepth: 1, Datagrams: transport, Reliable: transport, CatchupSendWait: time.Second})
+	room, err = lockstep.NewMatch(lockstep.MatchConfig{Sequencer: lockstep.SequencerConfig{Players: []lockstep.PlayerID{123}, MaxInputBytes: 16}, RedundancyDepth: 1, Datagrams: transport, Reliable: transport, CatchupSendWait: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}

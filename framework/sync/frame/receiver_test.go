@@ -11,7 +11,7 @@ func receiverPacket(t *testing.T, epoch, tick, base uint32) []byte {
 	if base == 0 {
 		kind = Full
 	}
-	raw, err := Encode(Frame{SnapshotMeta: SnapshotMeta{RoomID: 1, Epoch: epoch, Tick: tick, SchemaVersion: 1}, Kind: kind, BaseTick: base}, DefaultLimits())
+	raw, err := Encode(Frame{SnapshotMeta: SnapshotMeta{StreamID: 1, Epoch: epoch, Tick: tick, SchemaVersion: 1}, Kind: kind, BaseTick: base}, DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,9 +112,9 @@ func TestReceiverRejectsStreamAndSchemaSwitchAndMalformedFrame(t *testing.T) {
 			if _, err := r.Receive(receiverPacket(t, 1, 1, 0), accept); err != nil {
 				t.Fatal(err)
 			}
-			f := Frame{SnapshotMeta: SnapshotMeta{RoomID: 1, Epoch: 1, Tick: 2, SchemaVersion: 1}, Kind: Delta, BaseTick: 1}
+			f := Frame{SnapshotMeta: SnapshotMeta{StreamID: 1, Epoch: 1, Tick: 2, SchemaVersion: 1}, Kind: Delta, BaseTick: 1}
 			if what == "stream" {
-				f.RoomID = 2
+				f.StreamID = 2
 			}
 			if what == "schema" {
 				f.SchemaVersion = 2

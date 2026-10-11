@@ -12,6 +12,8 @@
 
 ## 1. 子系统分工
 
+当前主线将同步流、对局和空间区域分别命名为 `StreamID`、`lockstep.Match`、`AreaID`。这是 v1.25.0 之后尚未发版的源码 API 调整，升级映射与验证见[维护记录](../../maintenance/ACCESS-SYNC-FOLLOWUPS.md)。流标识只在连接/同步上下文内有意义，Entity Sync 当前填入 1；不要把它当地图或副本 ID。
+
 entitysync 维护 subject、session、subscription、profile 与每会话帧；policy 提供 Direct/Group/Interest/AOI 的可见关系。frame 定义帧格式，nettransport 负责发送能力与背压。syncbus/mirror 是服务间复制，syncstream 是带基线/增量与 journal 的流。lockstep 传输输入、帧与校验，不替业务保证跨引擎确定性。
 
 工作分支已实现 [Block AOI 与手写 SpatialComponent](../INTEREST-BLOCK-AOI.md)：事实入队使用独立短锁，批次更新空间后并行计算observer；同一实体可在多个块被观察，实际位置仍唯一。内容发布必须同时满足提交门和政策事实已处理。接入不改Guard回调或生成器；完整重档性能尚待复验。
@@ -40,7 +42,7 @@ syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。File
 
 ## 6. Lockstep
 
-客户端 Command 提供 Input/Hash/Catchup；Room 根据当前 session 映射席位，不信任客户端自报 seat。Room 汇集输入、广播 C7 帧和历史追帧；历史需宿主主动 TrimBefore/TrimHistory，不能假定自动无限期有界。输入校验、hash 判定、重连追帧与游戏模拟分开。两人不形成多数时 NoMajority 不等于已经识别作弊者。
+客户端 Command 提供 Input/Hash/Catchup；Match 根据当前 session 映射席位，不信任客户端自报 seat。Match 汇集输入、广播 C7 帧和历史追帧；历史需宿主主动 TrimBefore/TrimHistory，不能假定自动无限期有界。输入校验、hash 判定、重连追帧与游戏模拟分开。两人不形成多数时 NoMajority 不等于已经识别作弊者。
 
 ## 7. 公共客户端协议
 

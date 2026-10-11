@@ -10,10 +10,10 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/robot"
 	"strconv"
 )
 
@@ -28,7 +28,7 @@ func TestClientProtocolGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := frame.Encode(frame.Frame{SnapshotMeta: frame.SnapshotMeta{RoomID: 1, Epoch: 2, Tick: 3, SchemaVersion: 1}, Kind: frame.Full,
+	state, err := frame.Encode(frame.Frame{SnapshotMeta: frame.SnapshotMeta{StreamID: 1, Epoch: 2, Tick: 3, SchemaVersion: 1}, Kind: frame.Full,
 		Objects: []frame.ObjectDelta{{Operation: frame.ObjectCreate, Ref: frame.ObjectRef{ID: 1, Generation: 2}, Archetype: 1,
 			Components: []frame.ComponentDelta{{Operation: frame.ComponentSet, TypeID: 1, SchemaVersion: 1, Data: update}}}},
 	}, frame.DefaultLimits())

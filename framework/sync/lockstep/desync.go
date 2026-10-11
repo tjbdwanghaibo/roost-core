@@ -11,14 +11,14 @@ import "slices"
 type DesyncDetector struct {
 	// quorum is the minimum size of the AGREEING group before a frame can
 	// be judged: a verdict exists only once some hash has quorum reports
-	// backing it. Choose quorum > seats/2 (the kit Room derives it that
+	// backing it. Choose quorum > seats/2 (the kit Match derives it that
 	// way) and the majority can never flip afterwards — a minority that
 	// reports first can no longer frame an honest player.
 	quorum int
-	// seats is the room's seat count (0 = unknown, standalone use). Once
+	// seats is the match's seat count (0 = unknown, standalone use). Once
 	// every seat has reported a frame and no hash reached quorum, more
 	// reports can never come and the frame is ruled with no majority —
-	// otherwise a two-seat room (quorum 2) could never rule a 1:1 split
+	// otherwise a two-seat match (quorum 2) could never rule a 1:1 split
 	// (RR-20261006-64).
 	seats         int
 	reports       map[FrameID]map[PlayerID]uint64
@@ -36,7 +36,7 @@ type DesyncVerdict struct {
 	// ascending order. On a NoMajority verdict it is every seat.
 	Outliers []PlayerID
 	// NoMajority marks a frame every seat reported without any hash
-	// reaching quorum (a two-seat room whose hashes differ, a 2:2 split,
+	// reaching quorum (a two-seat match whose hashes differ, a 2:2 split,
 	// all different). Nobody can be singled out: every seat is an outlier,
 	// Majority is zero, and the match should be treated as diverged
 	// (abort, or resync from authoritative state) rather than kicking one
@@ -57,7 +57,7 @@ func NewDesyncDetector(quorum int) *DesyncDetector {
 // first report per (frame, player) wins — later duplicates are ignored, so
 // a client cannot revise its story. It returns a verdict once some hash is
 // backed by at least quorum agreeing reports; later reports re-judge with
-// the larger set. When the seat count is known (the Room sets it) and every
+// the larger set. When the seat count is known (the Match sets it) and every
 // seat reported different hashes with none at quorum, it returns a
 // NoMajority verdict naming every seat. Frames already trimmed are tombstoned: late reports for
 // them are ignored, so a colluding pair cannot rebuild a "majority" on a

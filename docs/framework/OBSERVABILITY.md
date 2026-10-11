@@ -93,7 +93,7 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 
 ### 帧同步（sync/lockstep）
 
-名字是 `sync/lockstep` 的导出常量 `Metric*`，由 `TestRoomPromiseMetricNamesArePinned` 钉住（实际发出的集合、源码不内联、本表列出），改名会让测试失败（RR-20261006-61）。
+名字是 `sync/lockstep` 的导出常量 `Metric*`，由 `TestMatchPromiseMetricNamesArePinned` 钉住（实际发出的集合、源码不内联、本表列出），改名会让测试失败（RR-20261006-61）。
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
@@ -237,11 +237,11 @@ Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈�
 | `failurelog_delete_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `failurelog_purge_total` | Counter | `failurelog/failurelog.go:IncCounter` |
 | `failurelog_trim_total` | Counter | `failurelog/failurelog.go:IncCounter` |
-| `lockstep.catchup.frames.total` | Counter | `sync/lockstep/room.go:IncCounter` |
-| `lockstep.desync.total` | Counter | `sync/lockstep/room.go:IncCounter` |
-| `lockstep.frame.total` | Counter | `sync/lockstep/room.go:IncCounter` |
-| `lockstep.input.late.total` | Counter | `sync/lockstep/room.go:IncCounter` |
-| `lockstep.input.rejected.total` | Counter | `sync/lockstep/room.go:IncCounter` |
+| `lockstep.catchup.frames.total` | Counter | `sync/lockstep/match.go:IncCounter` |
+| `lockstep.desync.total` | Counter | `sync/lockstep/match.go:IncCounter` |
+| `lockstep.frame.total` | Counter | `sync/lockstep/match.go:IncCounter` |
+| `lockstep.input.late.total` | Counter | `sync/lockstep/match.go:IncCounter` |
+| `lockstep.input.rejected.total` | Counter | `sync/lockstep/match.go:IncCounter` |
 | `log.rotate_failures` | Counter | `log/rotation.go:IncCounter` |
 | `log.write_errors` | Counter | `log/log.go:IncCounter` |
 | `manager.start.duration` | Histogram | `manager/engine.go:ObserveHistogram` |

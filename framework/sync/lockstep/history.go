@@ -53,7 +53,7 @@ func (h *History) FirstID() FrameID {
 
 // TrimBefore drops all frames with id < keep, bounding memory for hosts
 // that do not need the full replay. Catch-up requests older than keep
-// become unservable (the room abandons them with an explicit error).
+// become unservable (the match abandons them with an explicit error).
 func (h *History) TrimBefore(keep FrameID) {
 	if len(h.frames) == 0 || keep <= h.first {
 		return

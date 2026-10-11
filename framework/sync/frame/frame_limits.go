@@ -65,14 +65,15 @@ func (r ObjectRef) Less(other ObjectRef) bool {
 }
 
 type SnapshotMeta struct {
-	RoomID        uint64
+	// StreamID 标识当前连接/同步上下文内的流，不是房间、玩家或全局唯一 ID。
+	StreamID      uint64
 	Epoch         uint32
 	Tick          uint32
 	SchemaVersion uint16
 }
 
 func (m SnapshotMeta) validate() error {
-	if m.RoomID == 0 || m.Epoch == 0 || m.Tick == 0 || m.SchemaVersion == 0 {
+	if m.StreamID == 0 || m.Epoch == 0 || m.Tick == 0 || m.SchemaVersion == 0 {
 		return fmt.Errorf("%w: invalid snapshot metadata", ErrInvalidFrame)
 	}
 	return nil

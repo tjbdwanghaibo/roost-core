@@ -288,8 +288,8 @@ func (m *AOI) AddObserver(id int64, at spatial.Point) error {
 
 // addObserverUnbounded registers an observer whose position may lie outside
 // this manager's bounds: AOICluster mirrors border observers into
-// neighboring rooms at their true world position, and block subscription
-// clamps to this room's bounds on its own.
+// neighboring areas at their true world position, and block subscription
+// clamps to this area's bounds on its own.
 func (m *AOI) addObserverUnbounded(id int64, at spatial.Point) error {
 	if _, exists := m.observers[id]; exists {
 		return m.moveObserverUnbounded(id, at)

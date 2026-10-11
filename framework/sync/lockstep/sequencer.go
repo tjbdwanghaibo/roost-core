@@ -14,7 +14,7 @@
 // host's clock, never waiting for slow clients — a missing input is an empty
 // input, and late inputs are folded into the next uncut frame.
 //
-// Sequencer 只负责输入排序；同包 Room 负责会话、广播与追帧，并通过
+// Sequencer 只负责输入排序；同包 Match 负责会话、广播与追帧，并通过
 // sync/nettransport 接入传输。实时冗余广播走 datagram，历史追帧走可靠通道；
 // 游戏模拟和输入含义由业务决定，不在排序器中实现。
 package lockstep
@@ -59,7 +59,7 @@ type Frame struct {
 // MaxInputPayloadBytes is the absolute upper bound for one input payload;
 // real lockstep inputs are a few bytes, so anything near this limit is a
 // protocol bug. Matches must usually configure a much tighter
-// SequencerConfig.MaxInputBytes — the kit Room refuses configurations whose
+// SequencerConfig.MaxInputBytes — the kit Match refuses configurations whose
 // redundancy × players × payload budget exceeds one datagram.
 const MaxInputPayloadBytes = 1024
 
@@ -106,7 +106,7 @@ type SequencerConfig struct {
 }
 
 // Sequencer turns submitted inputs into sequenced frames. It is
-// single-owner state: the room's serial handler drives it — no locks, in
+// single-owner state: the match's serial handler drives it — no locks, in
 // line with the nest execution model.
 type Sequencer struct {
 	players  map[PlayerID]struct{}
@@ -157,15 +157,15 @@ func NewSequencer(config SequencerConfig) (*Sequencer, error) {
 	}
 	if len(config.Players) > MaxFrameInputs {
 		// A frame can carry at most MaxFrameInputs inputs on the wire; a
-		// room with more seats than that emits frames its own decoder
-		// rejects (RR-20260914-07). The byte budget in NewRoom does not
+		// match with more seats than that emits frames its own decoder
+		// rejects (RR-20260914-07). The byte budget in NewMatch does not
 		// cover this — tiny payloads fit any number of seats.
 		return nil, fmt.Errorf("%w: %d players exceeds the wire limit of %d inputs per frame", ErrConfigInvalid, len(config.Players), MaxFrameInputs)
 	}
 	players := make(map[PlayerID]struct{}, len(config.Players))
 	for _, player := range config.Players {
 		if player < 0 {
-			// Negative ids are not seats: the room keeps a reserved
+			// Negative ids are not seats: the match keeps a reserved
 			// negative value for spectator ownership, and a seat there
 			// would let one session be both (RR-20260914-06).
 			return nil, fmt.Errorf("%w: player id %d is negative", ErrConfigInvalid, player)
@@ -272,7 +272,7 @@ func (s *Sequencer) replayFloor() FrameID {
 // runs in the FrameID domain on purpose: FrameID is uint32 and the id comes
 // straight from the client, so converting to int first would wrap to a
 // NEGATIVE index on a platform whose int is 32 bits (GOARCH=386/arm) and
-// panic on the indexing — taking the room's goroutine with it (U-0199).
+// panic on the indexing — taking the match's goroutine with it (U-0199).
 func replaySlotIndex(original FrameID) int {
 	return int(original % FrameID(replayWindowSize))
 }

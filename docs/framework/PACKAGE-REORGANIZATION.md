@@ -213,7 +213,7 @@ import 别名只解决使用处的同名，不复制领域类型。领域测试�
 | TCP、RS 包头、连接、writer、绑定、预算、续期、广播、NATS adapter、Game Ingress runtime | infra/network/gateway，同包分文件，embedded 与独立 Gate 共用 |
 | Account 鉴权、固定路由发现、incarnation 校验、App 配置及两个部署端的初始化接线 | wiring/gate，通过明确依赖注入 runtime |
 | 业务 ProtocolRegistry、Nest Sender、PB 编解码、业务/Room 拥有者操作 | codegen 生成接线与业务 Game；仍进入正式调度 |
-| Sync 交付/生命周期与 Lockstep Room/恢复 | framework/sync；接入统一 Gate 出站，保留原语义 |
+| Sync 交付/生命周期与 Lockstep Match/恢复 | framework/sync；接入统一 Gate 出站，保留原语义 |
 
 Gate 是接入运行能力，本轮不新建 service/gate 领域包，也不把连接表、控制协议或 NATS callback 放进 Wiring。infra/network/gateway 不 import Wiring、Nest、Entity 或业务生成物；鉴权、发现、绑定身份核对和业务 dispatch 通过显式注入，适配函数只连接已有能力。
 

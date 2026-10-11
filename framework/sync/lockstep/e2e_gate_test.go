@@ -12,17 +12,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
-	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/robot"
 )
 
-// End-to-end gate for the lockstep room (RR-20261006-61..65): two real
+// End-to-end gate for the lockstep match (RR-20261006-61..65): two real
 // lockstep clients (FrameAssembler + frame hasher, the production client
-// shape) and one robot.LockstepBot connect to one Room over KCP on the
+// shape) and one robot.LockstepBot connect to one Match over KCP on the
 // loopback interface. Every seat submits a full-size input every frame, so
-// broadcasts sit at the largest size the Room admits for the transport. During
+// broadcasts sit at the largest size the Match admits for the transport. During
 // the run client B reports a corrupted keyframe hash, client A and the robot
 // each lose a run of broadcasts beyond the redundancy depth, and a
 // spectator's catch-up stalls on the reliable lane. The gate requires:
@@ -70,7 +70,7 @@ type uplinkMessage struct {
 	payload []byte
 }
 
-// watchedDatagrams records every broadcast the Room hands the transport.
+// watchedDatagrams records every broadcast the Match hands the transport.
 type watchedDatagrams struct {
 	inner   nettransport.DatagramSender
 	mu      sync.Mutex
@@ -160,7 +160,7 @@ func TestLockstepEndToEndGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	// A path MTU below the protocol default (VPN / tunnel): the Room must
+	// A path MTU below the protocol default (VPN / tunnel): the Match must
 	// size its budget from what the transport declares, not from a constant.
 	serverConfig := nettransport.DefaultKCPTransportConfig()
 	serverConfig.MaxDatagramBytes = e2eDatagramBound
@@ -249,7 +249,7 @@ func TestLockstepEndToEndGate(t *testing.T) {
 	spectator := connect(e2eSpectator, nil)
 	_ = spectator
 
-	// Full load: the largest per-input payload the Room admits on this
+	// Full load: the largest per-input payload the Match admits on this
 	// transport, with every seat submitting it every frame.
 	datagrams := &watchedDatagrams{inner: server}
 	reliable := &stallingReliable{inner: server, stalled: e2eSpectator, release: make(chan struct{})}
@@ -257,8 +257,8 @@ func TestLockstepEndToEndGate(t *testing.T) {
 	seats := []lockstep.PlayerID{e2eSeatA, e2eSeatB, e2eSeatBot}
 	var verdictMu sync.Mutex
 	var verdicts []lockstep.DesyncVerdict
-	newRoom := func(maxInput int) (*lockstep.Room, error) {
-		return lockstep.NewRoom(lockstep.RoomConfig{
+	newMatch := func(maxInput int) (*lockstep.Match, error) {
+		return lockstep.NewMatch(lockstep.MatchConfig{
 			Sequencer:       lockstep.SequencerConfig{Players: seats, MaxInputBytes: maxInput},
 			RedundancyDepth: e2eDepth,
 			Datagrams:       datagrams,
@@ -271,22 +271,22 @@ func TestLockstepEndToEndGate(t *testing.T) {
 		})
 	}
 	payloadSize := 1024
-	var room *lockstep.Room
+	var match *lockstep.Match
 	for ; payloadSize > 0; payloadSize-- {
-		if room, err = newRoom(payloadSize); err == nil {
+		if match, err = newMatch(payloadSize); err == nil {
 			break
 		}
 	}
-	if room == nil {
+	if match == nil {
 		t.Fatal("no payload size fits the transport")
 	}
 	full := bytes.Repeat([]byte{0x5A}, payloadSize)
 	for _, seat := range seats {
-		if err := room.Attach(seat, nettransport.SessionID(seat)); err != nil {
+		if err := match.Attach(seat, nettransport.SessionID(seat)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := room.AttachSpectator(e2eSpectator); err != nil {
+	if err := match.AttachSpectator(e2eSpectator); err != nil {
 		t.Fatal(err)
 	}
 	desyncBefore := counterValue("lockstep.desync.total")
@@ -357,7 +357,7 @@ func TestLockstepEndToEndGate(t *testing.T) {
 		}
 	}()
 
-	// Server: one goroutine owns the Room. Uplink messages are applied
+	// Server: one goroutine owns the Match. Uplink messages are applied
 	// between ticks; Tick always gets a context without a deadline.
 	uplink := make(chan uplinkMessage, 8192)
 	for _, seat := range seats {
@@ -396,12 +396,12 @@ func TestLockstepEndToEndGate(t *testing.T) {
 		data := message.payload[5:]
 		switch message.payload[0] {
 		case upInput:
-			_, err := room.SubmitInput(player, frame, data)
+			_, err := match.SubmitInput(player, frame, data)
 			return err
 		case upHash:
-			return room.ReportHash(player, frame, binary.BigEndian.Uint64(data))
+			return match.ReportHash(player, frame, binary.BigEndian.Uint64(data))
 		case upCatchup:
-			return room.StartCatchup(player, frame)
+			return match.StartCatchup(player, frame)
 		}
 		return fmt.Errorf("unknown uplink kind %d", message.payload[0])
 	}
@@ -430,14 +430,14 @@ func TestLockstepEndToEndGate(t *testing.T) {
 				}
 			}
 			if tick == e2eSpectateTick {
-				if err := room.SpectatorCatchup(e2eSpectator, 1); err != nil {
+				if err := match.SpectatorCatchup(e2eSpectator, 1); err != nil {
 					serverMu.Lock()
 					applyErrors = append(applyErrors, err)
 					serverMu.Unlock()
 				}
 			}
 			began := time.Now()
-			frame, err := room.Tick(context.Background())
+			frame, err := match.Tick(context.Background())
 			took := time.Since(began)
 			serverMu.Lock()
 			if took > maxTick {
@@ -471,10 +471,10 @@ func TestLockstepEndToEndGate(t *testing.T) {
 	select {
 	case <-mainDone:
 	case <-time.After(budget):
-		t.Fatalf("the room did not cut %d frames within %v: Tick stalled (spectator catch-up stalls=%d)", e2eFrames, budget, reliable.stalls.Load())
+		t.Fatalf("the match did not cut %d frames within %v: Tick stalled (spectator catch-up stalls=%d)", e2eFrames, budget, reliable.stalls.Load())
 	}
 
-	// Convergence: every client reaches the main-run head while the room
+	// Convergence: every client reaches the main-run head while the match
 	// keeps ticking (late losses are detected by later packets).
 	converged := func() bool {
 		serverMu.Lock()
@@ -542,12 +542,12 @@ func TestLockstepEndToEndGate(t *testing.T) {
 			t.Errorf("client %s stuck at frame %d, head %d", name, next, mainHead)
 		}
 	}
-	// 4. The stalled catch-up never stalled the room.
+	// 4. The stalled catch-up never stalled the match.
 	if reliable.stalls.Load() == 0 {
 		t.Error("the spectator's catch-up never reached the stalled lane")
 	}
 	if maxTick > 100*time.Millisecond {
-		t.Errorf("slowest Tick %v: a stalled catch-up send is holding the room", maxTick)
+		t.Errorf("slowest Tick %v: a stalled catch-up send is holding the match", maxTick)
 	}
 }
 

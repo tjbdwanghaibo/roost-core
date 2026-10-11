@@ -39,7 +39,7 @@ func Encode(frame Frame, limits Limits) ([]byte, error) {
 	buffer = binary.BigEndian.AppendUint32(buffer, frameMagic)
 	buffer = binary.BigEndian.AppendUint16(buffer, ProtocolVersion)
 	buffer = append(buffer, uint8(frame.Kind), 0)
-	buffer = binary.BigEndian.AppendUint64(buffer, frame.RoomID)
+	buffer = binary.BigEndian.AppendUint64(buffer, frame.StreamID)
 	buffer = binary.BigEndian.AppendUint32(buffer, frame.Epoch)
 	buffer = binary.BigEndian.AppendUint32(buffer, frame.Tick)
 	buffer = binary.BigEndian.AppendUint32(buffer, frame.BaseTick)
@@ -86,7 +86,7 @@ func Decode(data []byte, limits Limits) (Frame, error) {
 	var objectCount uint16
 	frame := Frame{}
 	for _, value := range []any{
-		&magic, &protocol, &kind, &reserved, &frame.RoomID, &frame.Epoch,
+		&magic, &protocol, &kind, &reserved, &frame.StreamID, &frame.Epoch,
 		&frame.Tick, &frame.BaseTick, &frame.SchemaVersion, &objectCount,
 	} {
 		if err := read(value); err != nil {

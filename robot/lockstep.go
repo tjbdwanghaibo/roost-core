@@ -10,7 +10,7 @@ import (
 
 // LockstepSink carries the bot's outbound lockstep traffic. The wire that
 // moves it is business-defined (a robot session call, a datagram lane, an
-// in-process Room in tests) — the bot only decides what to send and when.
+// in-process Match in tests) — the bot only decides what to send and when.
 type LockstepSink interface {
 	// SubmitInput sends this player's input for an upcoming frame.
 	SubmitInput(frame lockstep.FrameID, payload []byte) error
@@ -95,7 +95,7 @@ type LockstepBotStats struct {
 	DuplicatesDropped uint64
 }
 
-// LockstepBot is the client half of the kit lockstep Room: it ingests
+// LockstepBot is the client half of the kit lockstep Match: it ingests
 // redundant broadcasts through a core FrameAssembler (dedup + strict frame
 // order), applies frames to the simulation, submits inputs, and reports
 // keyframe hashes. Single-owner like the server side: one goroutine (the

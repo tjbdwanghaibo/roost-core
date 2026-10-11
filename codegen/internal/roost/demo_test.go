@@ -333,7 +333,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// reach the battle after a match and the load test must register the
 	// per-frame message's codec entries (it is sent by an action, not by a
 	// registered call).
-	if manager := read("internal/service/game/battle.go"); !strings.Contains(manager, "lockstep.NewRoom(") || !strings.Contains(manager, "room.Tick(ctx)") || !strings.Contains(manager, "battleDrainWindow") {
+	if manager := read("internal/service/game/battle.go"); !strings.Contains(manager, "lockstep.NewMatch(") || !strings.Contains(manager, "room.Tick(ctx)") || !strings.Contains(manager, "battleDrainWindow") {
 		t.Errorf("battle.go does not open a lockstep room, drive it or keep a drain window for the last keyframe's hash reports")
 	}
 	// The start grace is its own timer: waiting for a first command instead

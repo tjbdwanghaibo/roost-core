@@ -1,6 +1,6 @@
 # 玩家接入、运行服务与同步命名后续事项
 
-记录日期：2026-10-11；源码基线：`8a42926f`。本篇记录当前职责和后续建议。Session 服务调整暂缓实施；接入层与 Sync 命名是建议，尚未改动代码、生成物、部署或协议。
+记录日期：2026-10-11；源码基线：`8a42926f`。本篇记录当前职责和后续建议。Session 服务调整暂缓实施，player_agent 改名仍为建议；Sync 命名已按下文实施，尚未发版。玩家协议业务示例见 [接入教程](../framework/PLAYER-ACCESS.md)。
 
 ## 1. Session 运行服务：保留能力，后续评估可选化
 
@@ -48,25 +48,41 @@
 
 后续建议：继续复用现有层。如果需要更直观的命名，可将生成目录改为 `game/playeraccess`，表达“玩家接入”；这是可选命名提案，届时同步修改生成器导入、绑定、模板和消费工程。无需为处理玩家连接再建立一个名叫 session 的独立服务。
 
-## 3. Sync 的 room 按实际语义分别命名
+## 3. Sync 命名：已实施，尚未发版
 
-最优先处理的是帧头的 RoomID，它已经与实际用途不符：
+本次以 c04b7629 为改动基线，保持原包目录和业务行为，按实际语义完成以下源码 API 迁移：
 
-| 当前名称 | 当前实际用途 | 建议名称 |
+| 旧名称（升级查找用） | 实际用途 | 当前名称 |
 | --- | --- | --- |
 | `frame.SnapshotMeta.RoomID` | 区分同步流；Entity Sync 填入固定 `wireStream=1`，不是地图或副本 ID | `StreamID` |
-| 客户端对应的 `RoomId` | 读取相同帧头字段 | `StreamId`，随服务端一起核对与迁移 |
+| 客户端对应的 `RoomId` | 读取相同帧头字段 | `StreamId` |
 | `lockstep.Room` / `RoomConfig` / `NewRoom` | 一场对局的帧序列、玩家席位、观战、历史追帧与哈希分歧检测 | `lockstep.Match` / `MatchConfig` / `NewMatch` |
-| AOICluster 内部的 `rooms`、room 变量和注释 | 同一个世界坐标平面中的区域 | `areas`、`area`；沿用已有 `AreaID`、`AddArea` |
+| AOICluster 内部的 `rooms`、room 变量和注释 | 同一个世界坐标平面中的区域 | `areas`、`area`；保留已有 `AreaID`、`AddArea` |
 
-证据：[Entity Sync 流说明](../../framework/sync/entitysync/wire.go)、[帧元数据](../../framework/sync/frame/frame_limits.go)、[Lockstep 对局协调](../../framework/sync/lockstep/room.go)、[AOI 区域组合](../../framework/sync/entitysync/policy/aoi_cluster.go)。
+证据：[Entity Sync 流说明](../../framework/sync/entitysync/wire.go)、[帧元数据](../../framework/sync/frame/frame_limits.go)、[Lockstep 对局协调](../../framework/sync/lockstep/match.go)、[AOI 区域组合](../../framework/sync/entitysync/policy/aoi_cluster.go)。
 
 `StreamID` 只表示所在连接/同步上下文内的流身份；本建议不要求它全局唯一，也不把它改为 PlayerID 或 GameID。`Epoch` 表示流的代际，`Tick` 表示帧进度，三者职责继续分开。Lockstep 的 Match 表示对局执行对象，`service/match` 仍表示匹配服务，文档需要明确“匹配”和“对局”的区别。业务确实有大厅房间时，可以继续使用业务 Room，避免全仓机械替换。
 
-实施顺序建议：先改最有歧义的 StreamID，再清理 AOI 内部术语，最后改 Lockstep 对外 API。改名时同步检查 Go/C# 客户端、生成器、模板、文档、测试、日志和指标。二进制帧目前按固定顺序编码数值；单纯字段重命名可以保持字节布局，但必须以实际编码和跨语言样本验证，不能直接宣称没有协议影响。指标名称是否跟着改需要单独列出迁移项。
+迁移还包括 `ErrRoomConfigInvalid → ErrMatchConfigInvalid`、`ErrRoomClosed → ErrMatchClosed`；Lockstep 实现文件及两份测试文件从 `room*.go` 改为 `match*.go`。构造参数、方法行为、锁与生命周期均不变，指标名称保持不变。错误文本使用 match/area，业务判断应使用 errors.Is，不匹配完整字符串。AOICluster 的拓扑和边界镜像不变，仍是同一平面的区域，不代表跨进程分片已经实现。
 
-状态：**命名建议待选择和实施；本次只留档。**
+这是源码 API 变更，不保留旧别名：Go 消费者更新字段、类型、构造函数和错误名，C# 更新 StreamId，再重新生成、编译业务工程。Demo 模板、生成器消费测试、客户端和现行文档已同步。历史 CHANGELOG、旧迁移诊断表保留旧名称，业务大厅/聊天等真正的 Room 不受影响。
+
+帧头数值宽度、位置、端序及版本不变；Entity Sync 仍写入流常量 1。C7/C8 和 RS 格式不变，不修改协议金样以适配改名。升级不新增 WAL/schema/客户端自动迁移能力。若需回退，应成套恢复 core、生成工程与客户端源码，不能混用新旧源码 API。
+
+状态：**已完成代码迁移；本地验证结果见下一节，尚未发布新版本。**
 
 ## 4. 核对与验证范围
 
-本轮为静态职责核对和文档记录，未运行网络、性能或故障测试。使用 codebase-memory 的 roost-core 项目（coverage generation `2026-10-10T16:08:17Z`）；相关路径报告 metadata_changed，因此以当前源码及模板补证，不能用图谱未找到某调用证明没有调用方。文档检查相对链接与 Git 空白错误，不修改运行时。
+上一轮为静态职责核对，本轮新增命名实施和本地回归。使用 codebase-memory 的 roost-core 项目（coverage generation `2026-10-10T16:08:17Z`）；相关路径报告 metadata_changed，因此以当前源码及模板补证，不能用图谱未找到某调用证明没有调用方。本轮以隔离 worktree 的源码、全仓旧符号搜索及现有测试补证；图谱不覆盖新 worktree，不能据此声称索引已经更新。
+
+2026-10-11 本机 Windows 验证，全部 Go 命令使用 `GOWORK=off`：
+
+| 检查 | 结果与边界 |
+| --- | --- |
+| `go build ./...`、`go vet ./...` | 通过；build 曾打印模块 stat cache 写入被拒警告，但最终退出码为 0 |
+| `go test ./framework/sync/... ./client/wire ./wiring/gate -count=1 -timeout=180s` | 正常本机权限下全部通过，包含 Lockstep 端到端和帧金样 |
+| `go test ./codegen/internal/roost -run '^(TestDemoTemplateGeneratesABuildableWritePath\|TestClientSDKAgainstGeneratedPlayerTCP)$' -count=1 -v -timeout=10m` | 通过，232.832s；正式生成 game-demo，执行 build/vet、重生成无漂移以及 TCP/Game 的 race 测试 |
+| 上述 SDK 用例内的 C# 验证 | .NET 构建与原金样消费通过；真实 TCP 鉴权、PB、并发序号、Sync、Lockstep input/hash/gap/catchup 通过；Unity 适配源码测试通过，不等于 Unity 引擎实机验收 |
+| `go test . -run '^TestTrackedMarkdownRelativeLinksResolve$' -count=1 -timeout=45s`、`git diff --cached --check` | 通过 |
+
+首次沙箱运行的生成工程测试被临时文件原子重命名权限拒绝；Sync 全量测试中的文件日志测试同样报 Access is denied，Lockstep 网络端到端在 120s 超时。相同代码在正常本机权限下复跑，全部 Sync 包用时约 0.6～5.9s，通过上述验证；没有删除或放宽断言。本次不宣称新性能收益、跨机故障验证或所有客户端引擎验收。

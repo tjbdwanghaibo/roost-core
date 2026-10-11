@@ -23,7 +23,8 @@ namespace Roost.Client
     }
     public sealed class SyncFrame
     {
-        public ulong RoomId { get; private set; }
+        // 当前连接/同步上下文内的流标识，不是业务房间 ID。
+        public ulong StreamId { get; private set; }
         public uint Epoch { get; private set; }
         public uint Tick { get; private set; }
         public uint BaseTick { get; private set; }
@@ -39,9 +40,9 @@ namespace Roost.Client
                 throw new InvalidDataException("Invalid Sync size/limits.");
             if (U32(data, 0) != 0x43525031 || U16(data, 4) != 1 || data[7] != 0 || (data[6] != 1 && data[6] != 2))
                 throw new InvalidDataException("Unknown Sync frame header.");
-            var frame = new SyncFrame { Full = data[6] == 1, RoomId = U64(data, 8), Epoch = U32(data, 16),
+            var frame = new SyncFrame { Full = data[6] == 1, StreamId = U64(data, 8), Epoch = U32(data, 16),
                 Tick = U32(data, 20), BaseTick = U32(data, 24), SchemaVersion = U16(data, 28) };
-            if (frame.RoomId == 0 || frame.Epoch == 0 || frame.Tick == 0 || frame.SchemaVersion == 0 ||
+            if (frame.StreamId == 0 || frame.Epoch == 0 || frame.Tick == 0 || frame.SchemaVersion == 0 ||
                 (frame.Full ? frame.BaseTick != 0 : frame.BaseTick == 0 || frame.BaseTick >= frame.Tick))
                 throw new InvalidDataException("Invalid Sync baseline/metadata.");
             int count = U16(data, 30), offset = 32;

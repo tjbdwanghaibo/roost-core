@@ -32,7 +32,7 @@ import (
 // and judging keyframe hash reports into a desync verdict.
 //
 // What this file owns: the room's lifetime, the serial loop that drives it,
-// and the wire. `lockstep.Room` is single-owner state — no locks inside —
+// and the wire. `lockstep.Match` is single-owner state — no locks inside —
 // so every call into it happens on one goroutine here; endpoints hand work
 // over through a channel instead of calling the room directly.
 //
@@ -187,7 +187,7 @@ func (manager *battleManager) Open(battleID string, members []int64) error {
 	for index, member := range members {
 		seats[member] = battle.Seat(index)
 	}
-	room, err := lockstep.NewRoom(lockstep.RoomConfig{
+	room, err := lockstep.NewMatch(lockstep.MatchConfig{
 		Sequencer: lockstep.SequencerConfig{
 			Players:      battle.Seats(len(members)),
 			SubmitWindow: battle.SubmitWindow,
@@ -230,7 +230,7 @@ func (manager *battleManager) Open(battleID string, members []int64) error {
 
 // run is the room's single owner. Everything that touches the lockstep room
 // happens here: commands from endpoints, and one Tick per interval.
-func (manager *battleManager) run(managed *battleRoom, room *lockstep.Room) {
+func (manager *battleManager) run(managed *battleRoom, room *lockstep.Match) {
 	defer manager.wg.Done()
 	defer close(managed.done)
 	defer room.Close()
@@ -301,7 +301,7 @@ func (manager *battleManager) run(managed *battleRoom, room *lockstep.Room) {
 }
 
 // apply runs one command against the room. It is only ever called from run.
-func (manager *battleManager) apply(ctx context.Context, room *lockstep.Room, command battleCommand) error {
+func (manager *battleManager) apply(ctx context.Context, room *lockstep.Match, command battleCommand) error {
 	if command.catchup {
 		return room.StartCatchup(command.seat, command.catchupFrom)
 	}

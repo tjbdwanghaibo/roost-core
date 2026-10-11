@@ -19,7 +19,7 @@ func TestEncodeFrameRefusesCountsAndSizesTheWireFormatCannotCarry(t *testing.T) 
 	// 65536 个对象：uint16 计数会回绕成 0。放宽 MaxObjects 让校验器放行。
 	wide := DefaultLimits()
 	wide.MaxObjects = 40000
-	frame := Frame{SnapshotMeta: SnapshotMeta{RoomID: 7, Epoch: 1, Tick: 5, SchemaVersion: 1}, Kind: Delta, BaseTick: 4}
+	frame := Frame{SnapshotMeta: SnapshotMeta{StreamID: 7, Epoch: 1, Tick: 5, SchemaVersion: 1}, Kind: Delta, BaseTick: 4}
 	frame.Objects = make([]ObjectDelta, 0, 65536)
 	for id := 1; id <= 65535; id++ {
 		frame.Objects = append(frame.Objects, ObjectDelta{Operation: ObjectRemove, Ref: ObjectRef{ID: uint16(id), Generation: 1}})
@@ -30,7 +30,7 @@ func TestEncodeFrameRefusesCountsAndSizesTheWireFormatCannotCarry(t *testing.T) 
 	}
 
 	// 只有对象头、没有组件：帧大小上限也要在对象头处生效。
-	headersOnly := Frame{SnapshotMeta: SnapshotMeta{RoomID: 7, Epoch: 1, Tick: 5, SchemaVersion: 1}, Kind: Delta, BaseTick: 4,
+	headersOnly := Frame{SnapshotMeta: SnapshotMeta{StreamID: 7, Epoch: 1, Tick: 5, SchemaVersion: 1}, Kind: Delta, BaseTick: 4,
 		Objects: []ObjectDelta{{Operation: ObjectRemove, Ref: ObjectRef{ID: 1, Generation: 1}}, {Operation: ObjectRemove, Ref: ObjectRef{ID: 2, Generation: 1}}}}
 	tiny := DefaultLimits()
 	tiny.MaxFrameBytes = 40 // 32 字节头 + 一个 9 字节对象头就越界
@@ -39,7 +39,7 @@ func TestEncodeFrameRefusesCountsAndSizesTheWireFormatCannotCarry(t *testing.T) 
 	}
 
 	// 对象头放得下、加上组件就越界：组件级的大小检查。
-	oneComponent := Frame{SnapshotMeta: SnapshotMeta{RoomID: 7, Epoch: 1, Tick: 5, SchemaVersion: 1}, Kind: Delta, BaseTick: 4,
+	oneComponent := Frame{SnapshotMeta: SnapshotMeta{StreamID: 7, Epoch: 1, Tick: 5, SchemaVersion: 1}, Kind: Delta, BaseTick: 4,
 		Objects: []ObjectDelta{{Operation: ObjectCreate, Ref: ObjectRef{ID: 1, Generation: 1}, Archetype: 10,
 			Components: []ComponentDelta{{Operation: ComponentSet, TypeID: 1, SchemaVersion: 1, Data: []byte("pos")}}}}}
 	snug := DefaultLimits()

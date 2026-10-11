@@ -12,12 +12,12 @@ import (
 
 // Cluster errors.
 var (
-	ErrAreaOverlap   = errors.New("policy: room bounds overlap")
-	ErrAreaUnknown   = errors.New("policy: point outside every room")
-	ErrAreaDuplicate = errors.New("policy: duplicate room id")
+	ErrAreaOverlap   = errors.New("policy: area bounds overlap")
+	ErrAreaUnknown   = errors.New("policy: point outside every area")
+	ErrAreaDuplicate = errors.New("policy: duplicate area id")
 )
 
-// AreaID identifies one room (world-plane shard) inside a cluster. The id is
+// AreaID identifies one area (world-plane shard) inside a cluster. The id is
 // semantic only — it deliberately does not encode process placement, so a
 // future cross-process handover can reuse the same topology (that migration
 // path additionally needs remote-entity ownership fences and cross-process
@@ -25,18 +25,18 @@ var (
 type AreaID int64
 
 // AOICluster stitches per-region AOI instances into one seamless
-// interest space over a SHARED world coordinate system: rooms are
+// interest space over a SHARED world coordinate system: areas are
 // non-overlapping rectangles of the same plane, adjacency follows from the
 // geometry, and ids are cluster-global.
 //
 // Seamlessness rests on two mechanisms:
 //
 //   - Boundary mirroring: an observer whose leave-radius box crosses into a
-//     neighboring room is transparently registered there too, so entities in
-//     the neighbor's border strip are visible — room seams cast no shadow.
-//   - Net-change flushing: per-room events update a per-pair room->band table
+//     neighboring area is transparently registered there too, so entities in
+//     the neighbor's border strip are visible — area seams cast no shadow.
+//   - Net-change flushing: per-area events update a per-pair area->band table
 //     and Flush emits only the difference against the last emitted state. A
-//     make-before-break migration (add to the destination room, then remove
+//     make-before-break migration (add to the destination area, then remove
 //     from the source, inside one MoveSubject call) therefore produces zero
 //     events when visibility is in fact unchanged — downstream subscriptions
 //     never blink across a border crossing.
@@ -47,13 +47,13 @@ type AreaID int64
 type AOICluster struct {
 	mu     sync.Mutex
 	config AOIConfig
-	rooms  map[AreaID]*clusterArea
-	// order keeps deterministic room iteration (ascending AreaID).
+	areas  map[AreaID]*clusterArea
+	// order keeps deterministic area iteration (ascending AreaID).
 	order     []AreaID
 	subjects  map[int64]clusterPlacement
 	observers map[int64]clusterPlacement
 	// visible tracks, per (observer, subject) pair, the band contributed by
-	// each room and the state last emitted downstream.
+	// each area and the state last emitted downstream.
 	visible map[interestPair]*clusterVisibility
 	// observerPairs indexes visible by observer for capacity settlement.
 	observerPairs map[int64]map[int64]*clusterVisibility
@@ -68,8 +68,8 @@ type clusterArea struct {
 
 type clusterPlacement struct {
 	at spatial.Point
-	// home is the room containing the position; observers are additionally
-	// mirrored into every room their leave radius touches.
+	// home is the area containing the position; observers are additionally
+	// mirrored into every area their leave radius touches.
 	home AreaID
 }
 
@@ -83,7 +83,7 @@ type clusterVisibility struct {
 	emitted     bool
 	emittedBand int
 	// suppressed marks a pair held back by the cluster-level MaxVisible cap:
-	// visible to some room manager, but not surfaced downstream.
+	// visible to some area manager, but not surfaced downstream.
 	suppressed bool
 }
 
@@ -96,7 +96,7 @@ func NewAOICluster(config AOIConfig) (*AOICluster, error) {
 	}
 	return &AOICluster{
 		config:        config,
-		rooms:         make(map[AreaID]*clusterArea),
+		areas:         make(map[AreaID]*clusterArea),
 		subjects:      make(map[int64]clusterPlacement),
 		observers:     make(map[int64]clusterPlacement),
 		visible:       make(map[interestPair]*clusterVisibility),
@@ -104,35 +104,35 @@ func NewAOICluster(config AOIConfig) (*AOICluster, error) {
 	}, nil
 }
 
-// AddArea registers a world-plane rectangle as a room. Bounds must not
-// overlap any existing room. Adding a room after observers exist retrofits
+// AddArea registers a world-plane rectangle as an area. Bounds must not
+// overlap any existing area. Adding an area after observers exist retrofits
 // their boundary mirrors immediately — without that, a stationary observer
 // near the new seam would have an unbounded visibility hole into the new
-// room (its mirrors are otherwise only rebuilt when it moves).
+// area (its mirrors are otherwise only rebuilt when it moves).
 func (c *AOICluster) AddArea(id AreaID, bounds spatial.Rect) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, exists := c.rooms[id]; exists {
+	if _, exists := c.areas[id]; exists {
 		return ErrAreaDuplicate
 	}
 	bounds = spatial.NormalizeRect(bounds)
-	for _, room := range c.rooms {
-		if rectsOverlap(room.bounds, bounds) {
-			return fmt.Errorf("%w: %d and %d", ErrAreaOverlap, room.id, id)
+	for _, area := range c.areas {
+		if rectsOverlap(area.bounds, bounds) {
+			return fmt.Errorf("%w: %d and %d", ErrAreaOverlap, area.id, id)
 		}
 	}
-	roomConfig := c.config
-	roomConfig.Bounds = bounds
-	// Rooms run uncapped: a border observer is mirrored into several rooms,
-	// and per-room caps would multiply its budget by the number of touched
-	// rooms exactly where entities are densest. The cluster enforces
+	areaConfig := c.config
+	areaConfig.Bounds = bounds
+	// Areas run uncapped: a border observer is mirrored into several areas,
+	// and per-area caps would multiply its budget by the number of touched
+	// areas exactly where entities are densest. The cluster enforces
 	// MaxVisible globally in collect instead.
-	roomConfig.MaxVisible = 0
-	manager, err := NewAOI(roomConfig)
+	areaConfig.MaxVisible = 0
+	manager, err := NewAOI(areaConfig)
 	if err != nil {
 		return err
 	}
-	c.rooms[id] = &clusterArea{id: id, bounds: bounds, manager: manager}
+	c.areas[id] = &clusterArea{id: id, bounds: bounds, manager: manager}
 	c.order = append(c.order, id)
 	slices.Sort(c.order)
 	observers := make([]int64, 0, len(c.observers))
@@ -154,28 +154,28 @@ func rectsOverlap(a, b spatial.Rect) bool {
 
 func (c *AOICluster) areaAt(at spatial.Point) (*clusterArea, bool) {
 	for _, id := range c.order {
-		if room := c.rooms[id]; room.bounds.Contains(at) {
-			return room, true
+		if area := c.areas[id]; area.bounds.Contains(at) {
+			return area, true
 		}
 	}
 	return nil, false
 }
 
-// AddSubject indexes a subject in the room containing its position.
+// AddSubject indexes a subject in the area containing its position.
 func (c *AOICluster) AddSubject(id int64, at spatial.Point) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, exists := c.subjects[id]; exists {
 		return c.moveSubjectLocked(id, at)
 	}
-	room, ok := c.areaAt(at)
+	area, ok := c.areaAt(at)
 	if !ok {
 		return ErrAreaUnknown
 	}
-	if err := room.manager.AddSubject(id, at); err != nil {
+	if err := area.manager.AddSubject(id, at); err != nil {
 		return err
 	}
-	c.subjects[id] = clusterPlacement{at: at, home: room.id}
+	c.subjects[id] = clusterPlacement{at: at, home: area.id}
 	c.collect()
 	return nil
 }
@@ -207,7 +207,7 @@ func (c *AOICluster) moveSubjectLocked(id int64, to spatial.Point) error {
 		if err := destination.manager.AddSubject(id, to); err != nil {
 			return err
 		}
-		if err := c.rooms[placement.home].manager.RemoveSubject(id); err != nil {
+		if err := c.areas[placement.home].manager.RemoveSubject(id); err != nil {
 			return err
 		}
 	}
@@ -216,7 +216,7 @@ func (c *AOICluster) moveSubjectLocked(id int64, to spatial.Point) error {
 	return nil
 }
 
-// RemoveSubject drops a subject from its room.
+// RemoveSubject drops a subject from its area.
 func (c *AOICluster) RemoveSubject(id int64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -224,7 +224,7 @@ func (c *AOICluster) RemoveSubject(id int64) error {
 	if !exists {
 		return ErrInterestUnknown
 	}
-	if err := c.rooms[placement.home].manager.RemoveSubject(id); err != nil {
+	if err := c.areas[placement.home].manager.RemoveSubject(id); err != nil {
 		return err
 	}
 	delete(c.subjects, id)
@@ -232,8 +232,8 @@ func (c *AOICluster) RemoveSubject(id int64) error {
 	return nil
 }
 
-// AddObserver registers an observer in its home room and mirrors it into
-// every neighboring room its leave radius touches.
+// AddObserver registers an observer in its home area and mirrors it into
+// every neighboring area its leave radius touches.
 func (c *AOICluster) AddObserver(id int64, at spatial.Point) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -260,23 +260,23 @@ func (c *AOICluster) placeObserverLocked(id int64, at spatial.Point) error {
 		Min: spatial.Point{X: spatial.SaturatingSub(at.X, c.config.LeaveRadius), Y: spatial.SaturatingSub(at.Y, c.config.LeaveRadius)},
 		Max: spatial.Point{X: spatial.SaturatingAdd(at.X, span), Y: spatial.SaturatingAdd(at.Y, span)},
 	}
-	for _, roomID := range c.order {
-		room := c.rooms[roomID]
-		inReach := rectsOverlap(room.bounds, reach)
-		_, registered := room.manager.observers[id]
+	for _, areaID := range c.order {
+		area := c.areas[areaID]
+		inReach := rectsOverlap(area.bounds, reach)
+		_, registered := area.manager.observers[id]
 		switch {
 		case inReach && registered:
 			// The manager clamps evaluation to its own bounds; the mirror
 			// keeps the observer's true position even when outside them.
-			if err := room.manager.moveObserverUnbounded(id, at); err != nil {
+			if err := area.manager.moveObserverUnbounded(id, at); err != nil {
 				return err
 			}
 		case inReach && !registered:
-			if err := room.manager.addObserverUnbounded(id, at); err != nil {
+			if err := area.manager.addObserverUnbounded(id, at); err != nil {
 				return err
 			}
 		case !inReach && registered:
-			if err := room.manager.RemoveObserver(id); err != nil {
+			if err := area.manager.RemoveObserver(id); err != nil {
 				return err
 			}
 		}
@@ -293,10 +293,10 @@ func (c *AOICluster) RemoveObserver(id int64) error {
 	if _, exists := c.observers[id]; !exists {
 		return ErrInterestUnknown
 	}
-	for _, roomID := range c.order {
-		room := c.rooms[roomID]
-		if _, registered := room.manager.observers[id]; registered {
-			if err := room.manager.RemoveObserver(id); err != nil {
+	for _, areaID := range c.order {
+		area := c.areas[areaID]
+		if _, registered := area.manager.observers[id]; registered {
+			if err := area.manager.RemoveObserver(id); err != nil {
 				return err
 			}
 		}
@@ -341,16 +341,16 @@ func (c *AOICluster) Flush() []InterestEvent {
 	return events
 }
 
-// collect folds the rooms' raw events into per-pair room/band tables, then
+// collect folds the areas' raw events into per-pair area/band tables, then
 // settles each touched observer: cluster-level MaxVisible (nearest-N across
-// ALL rooms — per-room caps would multiply a border observer's budget) picks
+// ALL areas — per-area caps would multiply a border observer's budget) picks
 // the surfaced set, and only net changes against the previously emitted
 // state are appended to pending.
 func (c *AOICluster) collect() {
 	touchedObservers := make(map[int64]struct{})
-	for _, roomID := range c.order {
-		room := c.rooms[roomID]
-		for _, event := range room.manager.Flush() {
+	for _, areaID := range c.order {
+		area := c.areas[areaID]
+		for _, event := range area.manager.Flush() {
 			pair := interestPair{observer: event.Observer, subject: event.Subject}
 			state := c.visible[pair]
 			if state == nil {
@@ -365,9 +365,9 @@ func (c *AOICluster) collect() {
 			}
 			switch event.Kind {
 			case InterestEnter, InterestBandChanged:
-				state.bands[roomID] = event.Band
+				state.bands[areaID] = event.Band
 			case InterestLeave:
-				delete(state.bands, roomID)
+				delete(state.bands, areaID)
 			}
 			touchedObservers[pair.observer] = struct{}{}
 		}
@@ -383,7 +383,7 @@ func (c *AOICluster) collect() {
 }
 
 // settleObserverLocked reconciles one observer's emitted set with its
-// room-visible set under the cluster-level MaxVisible cap.
+// area-visible set under the cluster-level MaxVisible cap.
 func (c *AOICluster) settleObserverLocked(observer int64) {
 	pairs := c.observerPairs[observer]
 	subjects := make([]int64, 0, len(pairs))
@@ -391,7 +391,7 @@ func (c *AOICluster) settleObserverLocked(observer int64) {
 		subjects = append(subjects, subject)
 	}
 	slices.Sort(subjects)
-	// Capacity: keep the nearest MaxVisible of the room-visible subjects
+	// Capacity: keep the nearest MaxVisible of the area-visible subjects
 	// (distance ties break by id — deterministic).
 	if c.config.MaxVisible > 0 {
 		type candidate struct {
@@ -444,7 +444,7 @@ func (c *AOICluster) settleObserverLocked(observer int64) {
 	}
 }
 
-// effectiveBand is the closest (smallest) band any room reports.
+// effectiveBand is the closest (smallest) band any area reports.
 func effectiveBand(bands map[AreaID]int) int {
 	best := -1
 	for _, band := range bands {

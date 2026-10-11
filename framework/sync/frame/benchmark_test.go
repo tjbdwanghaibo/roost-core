@@ -7,7 +7,7 @@ import (
 
 func BenchmarkFrameCodec(b *testing.B) {
 	for _, objects := range []int{1, 32, 256} {
-		value := Frame{SnapshotMeta: SnapshotMeta{RoomID: 1, Epoch: 1, Tick: 1, SchemaVersion: 1}, Kind: Full}
+		value := Frame{SnapshotMeta: SnapshotMeta{StreamID: 1, Epoch: 1, Tick: 1, SchemaVersion: 1}, Kind: Full}
 		for id := 1; id <= objects; id++ {
 			value.Objects = append(value.Objects, ObjectDelta{Operation: ObjectCreate, Ref: ObjectRef{ID: uint16(id), Generation: 1}, Archetype: 1,
 				Components: []ComponentDelta{{Operation: ComponentSet, TypeID: 1, SchemaVersion: 1, Data: make([]byte, 256)}},

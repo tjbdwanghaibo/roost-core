@@ -54,20 +54,20 @@ Manager 维护每个 session lifetime 的 subjects 反向索引，Hold/Ready/Clo
 
 ## Namespace
 
-`EntitySyncBuilderParam.Namespace`（codegen 标记 `syncNamespace=`）随该 subject 的每个组件下发，是客户端唯一的分流键——帧头的 RoomID 恒为常量，
+`EntitySyncBuilderParam.Namespace`（codegen 标记 `syncNamespace=`）随该 subject 的每个组件下发，是客户端唯一的分流键——帧头的 StreamID 恒为常量，
 房间与区域是政策不是标签。服务间的同步总线是另一条轴：契约 `framework/sync/syncbus`，实现 `framework/sync/syncbus/driver`，Wiring 的 `SyncBusMod`。裸标识符会被 codegen 拒绝（RR-20260918-07）。
 
 ## 组织方式（`framework/sync/entitysync/policy`）
 
 - `Interest`：`AOI`（格索引 + 半径滞回 + band，原 `spatial.InterestManager`，2026-09-23 搬进 policy）+ 任意多个 `RelationSource`（队伍、好友、self）聚合成一个 (observer, subject) 一份订阅——第一个来源订、最后一个来源撤；
   band → profile；`Apply()` 把变化说给 Manager，被拒的 subscribe 每次 Apply 再说，直到被接受或 pair 释放（`Refusal.Retry` 供调用方分日志级别）。
-- `Group`：subject 集合 × 成员集合全互见，各自上限。AddSubject 失败会回滚本组订阅、允许重试；Manager 注册保留。RemoveSubject/Close 只释放本组来源，不再退役实体；实体销毁由应用调用 Manager.Unregister，成员会话也由应用开关。同 ID 会话重开后再次 Join 会重新提交已有订阅，不增加成员数量。不叫 Room：`lockstep.Room` 是战斗房间，而这里只是一个集合。
+- `Group`：subject 集合 × 成员集合全互见，各自上限。AddSubject 失败会回滚本组订阅、允许重试；Manager 注册保留。RemoveSubject/Close 只释放本组来源，不再退役实体；实体销毁由应用调用 Manager.Unregister，成员会话也由应用开关。同 ID 会话重开后再次 Join 会重新提交已有订阅，不增加成员数量。不叫 Room：`lockstep.Match` 是对局执行对象，而这里只是一个集合。
 - `Interest.Close` 释放本实例持有的订阅，不影响其他政策。
 - `Direct`：`Bind / Unbind` 一对；每个 Direct 实例是独立来源，重复 Bind 不累加。
 
 ## 线格式（v2）
 
-一帧就是一个 `framework/sync/frame.Frame`：`Epoch/Tick` 是该会话的时钟，`RoomID` 恒为流常量 1，`SchemaVersion` 来自 `ManagerConfig.FrameSchemaVersion`；
+一帧就是一个 `framework/sync/frame.Frame`：`Epoch/Tick` 是该会话的时钟，`StreamID` 恒为流常量 1，`SchemaVersion` 来自 `ManagerConfig.FrameSchemaVersion`；
 每个对象一个组件，数据是 `EncodeSubjectUpdate`（subject id、namespace、profile、version/base、mask、payload）。
 客户端 `entitysync.DecodeFrame` → 每组件 `DecodeSubjectUpdate`。全部走可靠通道；datagram 分片不再用于实体同步。
 

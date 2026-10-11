@@ -25,7 +25,7 @@
 
 [flush.go](../../../framework/sync/entitysync/flush.go)负责取pending、准备subject视图、按会话构建帧、传输准入后结算；capturedAbove检查CommitLSN水位，requireSnapshotsAfterRetry处理部分会话已经接纳后的恢复。必须在实际Push结果之后结算基线，不能先标clean再尝试发送。
 
-[command.go](../../../framework/sync/lockstep/command.go)的HandleCommand须在Room串行handler中运行：先拒绝closed/非法command，再查sessionOwners；旁观者只走SpectatorCatchup，普通玩家分别走StartCatchup/ReportHash/SubmitInput。没有seat字段让客户端覆盖服务端绑定，也没有把发送成功当模拟已执行的业务ACK。
+[command.go](../../../framework/sync/lockstep/command.go)的HandleCommand须在Match串行handler中运行：先拒绝closed/非法command，再查sessionOwners；旁观者只走SpectatorCatchup，普通玩家分别走StartCatchup/ReportHash/SubmitInput。没有seat字段让客户端覆盖服务端绑定，也没有把发送成功当模拟已执行的业务ACK。
 
 [packet.go](../../../client/wire/packet.go)从flags解释Kind并在Header.Validate拒绝保留组合、超长载荷和非法心跳标记。头解码不解释业务payload，注册路由与Lockstep/Sync解码器仍各自校验。
 
@@ -121,7 +121,7 @@
 | [command.go](../../../framework/sync/lockstep/command.go) | `Operation`、`Command` |
 | [desync.go](../../../framework/sync/lockstep/desync.go) | `DesyncDetector`、`DesyncVerdict` |
 | [history.go](../../../framework/sync/lockstep/history.go) | `History` |
-| [room.go](../../../framework/sync/lockstep/room.go) | `RoomConfig`、`Room` |
+| [match.go](../../../framework/sync/lockstep/match.go) | `MatchConfig`、`Match` |
 | [sequencer.go](../../../framework/sync/lockstep/sequencer.go) | `PlayerID`、`FrameID`、`Input`、`Frame`、`SequencerConfig`、`Sequencer` |
 | [tcp.go](../../../framework/sync/lockstep/tcp.go) | `TCPSender` |
 | [wire.go](../../../framework/sync/lockstep/wire.go) | `RedundantEncoder` |
@@ -271,17 +271,17 @@
 
 ### sync/lockstep
 
-- [catchup_rate_promises_test.go](../../../framework/sync/lockstep/catchup_rate_promises_test.go)：`TestRoomPromiseCatchupBatchMustOutpaceFrameProduction`
-- [command_test.go](../../../framework/sync/lockstep/command_test.go)：`TestCommandCodecAndOwnership`、`TestTCPSenderRejectsFastWorkerBeforeResolverOrSocket`、`TestRoomCommandUsesCurrentAuthenticatedBinding`、`TestTCPSenderBothLanesUseSameRouteAndBudget`
+- [catchup_rate_promises_test.go](../../../framework/sync/lockstep/catchup_rate_promises_test.go)：`TestMatchPromiseCatchupBatchMustOutpaceFrameProduction`
+- [command_test.go](../../../framework/sync/lockstep/command_test.go)：`TestCommandCodecAndOwnership`、`TestTCPSenderRejectsFastWorkerBeforeResolverOrSocket`、`TestMatchCommandUsesCurrentAuthenticatedBinding`、`TestTCPSenderBothLanesUseSameRouteAndBudget`
 - [e2e_gate_test.go](../../../framework/sync/lockstep/e2e_gate_test.go)：`TestLockstepEndToEndGate`
 - [e2e_shutdown_promises_test.go](../../../framework/sync/lockstep/e2e_shutdown_promises_test.go)：`TestE2EBotShutdownWaitsForInFlightOutput`
-- [guards_promises_test.go](../../../framework/sync/lockstep/guards_promises_test.go)：`TestRoomAndSequencerRefuseInvalidConfiguration`、`TestSpectatorSessionsAreExclusiveAndMustBeAttachedToCatchUp`、`TestClosedRoomRefusesSpectatorsAndHashReports`
+- [guards_promises_test.go](../../../framework/sync/lockstep/guards_promises_test.go)：`TestMatchAndSequencerRefuseInvalidConfiguration`、`TestSpectatorSessionsAreExclusiveAndMustBeAttachedToCatchUp`、`TestClosedMatchRefusesSpectatorsAndHashReports`
 - [input_replay_promises_test.go](../../../framework/sync/lockstep/input_replay_promises_test.go)：`TestSubmitInputPromiseReplayAfterCutIsIdempotent`、`TestSubmitInputPromiseOutOfOrderFutureFramesAreKept`、`TestSubmitInputPromiseExplicitInputStillOverridesFoldedPlaceholder`
 - [lockstep_test.go](../../../framework/sync/lockstep/lockstep_test.go)：`TestSequencerOptimisticLockingAndLateFolding`、`TestSequencerDeterministicFrameBytes`、`TestRedundancySurvivesPacketLoss`、`TestBroadcastCodecRoundTripAndFailFast`、`TestHistoryCatchupPagingAndSequenceGuard`；其余 7 项见文件
 - [replay_window_promises_test.go](../../../framework/sync/lockstep/replay_window_promises_test.go)：`TestSubmitInputPromiseIdentityMemoryIsBoundedBetweenTicks`、`TestSubmitInputPromiseOutOfHorizonSubmissionDoesNotEvictAnIdentity`、`TestSubmitInputPromiseOutOfHorizonReplayStillFolds`
-- [room_risk_promises_test.go](../../../framework/sync/lockstep/room_risk_promises_test.go)：`TestRoomPromiseMetricNamesArePinned`、`TestRoomPromiseBudgetCountsTransportOverhead`、`TestRoomPromiseBudgetFollowsTheSender`、`TestRoomPromiseSlowCatchupDoesNotStallTick`、`TestRoomPromiseTwoSeatDesyncIsRuled`；其余 3 项见文件
-- [room_test.go](../../../framework/sync/lockstep/room_test.go)：`TestRoomTickBroadcastsRedundantFrames`、`TestRoomCatchupPagesHistoryThenGoesLive`、`TestRoomCatchupRequiresReliableLane`、`TestRoomDesyncVerdictSetSemantics`、`TestRoomTickSurvivesDeadSession`；其余 6 项见文件
-- [seat_identity_promises_test.go](../../../framework/sync/lockstep/seat_identity_promises_test.go)：`TestRoomPromiseNegativeSeatIsRefused`、`TestRoomPromiseSeatCountIsBoundByTheWireDecoder`
+- [match_risk_promises_test.go](../../../framework/sync/lockstep/match_risk_promises_test.go)：`TestMatchPromiseMetricNamesArePinned`、`TestMatchPromiseBudgetCountsTransportOverhead`、`TestMatchPromiseBudgetFollowsTheSender`、`TestMatchPromiseSlowCatchupDoesNotStallTick`、`TestMatchPromiseTwoSeatDesyncIsRuled`；其余 3 项见文件
+- [match_test.go](../../../framework/sync/lockstep/match_test.go)：`TestMatchTickBroadcastsRedundantFrames`、`TestMatchCatchupPagesHistoryThenGoesLive`、`TestMatchCatchupRequiresReliableLane`、`TestMatchDesyncVerdictSetSemantics`、`TestMatchTickSurvivesDeadSession`；其余 6 项见文件
+- [seat_identity_promises_test.go](../../../framework/sync/lockstep/seat_identity_promises_test.go)：`TestMatchPromiseNegativeSeatIsRefused`、`TestMatchPromiseSeatCountIsBoundByTheWireDecoder`
 - [submit_validation_promises_test.go](../../../framework/sync/lockstep/submit_validation_promises_test.go)：`TestSubmitInputPromiseRejectedFrameNeverTouchesTheIdentityRing`、`TestReplaySlotIndexPromiseStaysInRangeForEveryFrameID`
 
 ### sync/nettransport

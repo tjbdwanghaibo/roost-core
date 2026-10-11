@@ -43,7 +43,7 @@ func TestClientSDKRealGeneratedTCP(t *testing.T) {
   if last:=frames[len(frames)-1].ID;last>1 && last<10 {return nil}
   return transport.PushLockstepSession(ctx,id,msg,data)
  });if err!=nil{t.Fatal(err)}
- room,err:=lockstep.NewRoom(lockstep.RoomConfig{Sequencer:lockstep.SequencerConfig{Players:[]lockstep.PlayerID{7},MaxInputBytes:16},Datagrams:sender,Reliable:sender,RedundancyDepth:1,CatchupBatchFrames:16,CatchupSendWait:time.Second})
+ room,err:=lockstep.NewMatch(lockstep.MatchConfig{Sequencer:lockstep.SequencerConfig{Players:[]lockstep.PlayerID{7},MaxInputBytes:16},Datagrams:sender,Reliable:sender,RedundancyDepth:1,CatchupBatchFrames:16,CatchupSendWait:time.Second})
  if err!=nil{t.Fatal(err)};if err:=room.Attach(7,7);err!=nil{t.Fatal(err)}
  type action struct {ctx context.Context; command *lockstep.Command;ticks int; done chan error}
  actions:=make(chan action);ownerDone:=make(chan struct{})

@@ -29,16 +29,16 @@ var lockstepMetricNames = []string{
 	"lockstep.input.rejected.total",
 }
 
-// TestRoomPromiseMetricNamesArePinned drives every metered path of the Room
+// TestMatchPromiseMetricNamesArePinned drives every metered path of the Match
 // and requires the emitted names to be exactly the pinned set, each listed
 // in OBSERVABILITY.md (RR-20261006-61).
-func TestRoomPromiseMetricNamesArePinned(t *testing.T) {
+func TestMatchPromiseMetricNamesArePinned(t *testing.T) {
 	previous := metrics.DefaultRegistry()
 	metrics.SetDefaultRegistry(metrics.NewRegistry())
 	t.Cleanup(func() { metrics.SetDefaultRegistry(previous) })
 
 	transport := newRecordingTransport()
-	room, err := NewRoom(RoomConfig{
+	match, err := NewMatch(MatchConfig{
 		Sequencer:          SequencerConfig{Players: []PlayerID{1, 2, 3}, MaxInputBytes: 8},
 		RedundancyDepth:    2,
 		CatchupBatchFrames: 4,
@@ -50,31 +50,31 @@ func TestRoomPromiseMetricNamesArePinned(t *testing.T) {
 		t.Fatal(err)
 	}
 	for player := PlayerID(1); player <= 3; player++ {
-		if err := room.Attach(player, nettransport.SessionID(100+player)); err != nil {
+		if err := match.Attach(player, nettransport.SessionID(100+player)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
-		if _, err := room.Tick(ctx); err != nil {
+		if _, err := match.Tick(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := room.SubmitInput(1, 1, []byte{1}); err != nil { // late
+	if _, err := match.SubmitInput(1, 1, []byte{1}); err != nil { // late
 		t.Fatal(err)
 	}
-	if _, err := room.SubmitInput(9, 0, []byte{1}); err == nil { // rejected
+	if _, err := match.SubmitInput(9, 0, []byte{1}); err == nil { // rejected
 		t.Fatal("unknown seat accepted")
 	}
-	if err := room.StartCatchup(2, 1); err != nil {
+	if err := match.StartCatchup(2, 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := room.Tick(ctx); err != nil {
+	if _, err := match.Tick(ctx); err != nil {
 		t.Fatal(err)
 	}
-	_ = room.ReportHash(1, 2, 7)
-	_ = room.ReportHash(2, 2, 7)
-	_ = room.ReportHash(3, 2, 8) // desync: seat 3 is the outlier
+	_ = match.ReportHash(1, 2, 7)
+	_ = match.ReportHash(2, 2, 7)
+	_ = match.ReportHash(3, 2, 8) // desync: seat 3 is the outlier
 
 	var emitted []string
 	for _, metric := range metrics.Snapshot() {
@@ -137,46 +137,46 @@ func (d *limitedDatagrams) SendDatagram(_ context.Context, _ nettransport.Sessio
 
 func (d *limitedDatagrams) MaxDatagramPayload() int { return d.limit }
 
-// TestRoomPromiseBudgetCountsTransportOverhead: a configuration NewRoom
+// TestMatchPromiseBudgetCountsTransportOverhead: a configuration NewMatch
 // accepts must never produce a full-load broadcast the transport refuses —
-// the whole room's downlink would black out at once (RR-20261006-62).
-func TestRoomPromiseBudgetCountsTransportOverhead(t *testing.T) {
+// the whole match's downlink would black out at once (RR-20261006-62).
+func TestMatchPromiseBudgetCountsTransportOverhead(t *testing.T) {
 	sender := &limitedDatagrams{limit: nettransport.DefaultMaxDatagram}
-	room, err := NewRoom(RoomConfig{
+	match, err := NewMatch(MatchConfig{
 		Sequencer:       SequencerConfig{Players: []PlayerID{1, 2}, MaxInputBytes: 595},
 		RedundancyDepth: 1,
 		Datagrams:       sender,
 	})
 	if err != nil {
-		if !errors.Is(err, ErrRoomConfigInvalid) {
-			t.Fatalf("NewRoom error = %v, want ErrRoomConfigInvalid", err)
+		if !errors.Is(err, ErrMatchConfigInvalid) {
+			t.Fatalf("NewMatch error = %v, want ErrMatchConfigInvalid", err)
 		}
 		return // refused up front: the promise holds
 	}
 	for player := PlayerID(1); player <= 2; player++ {
-		if err := room.Attach(player, nettransport.SessionID(player)); err != nil {
+		if err := match.Attach(player, nettransport.SessionID(player)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	fullLoadTicks(t, room)
+	fullLoadTicks(t, match)
 }
 
-// TestRoomPromiseBudgetFollowsTheSender: the budget is the sender's declared
+// TestMatchPromiseBudgetFollowsTheSender: the budget is the sender's declared
 // payload bound; a configured bound above it is refused, and the AEAD UDP
 // transport declares its packet bound minus the envelope Seal adds.
-func TestRoomPromiseBudgetFollowsTheSender(t *testing.T) {
+func TestMatchPromiseBudgetFollowsTheSender(t *testing.T) {
 	sender := &limitedDatagrams{limit: 1200}
-	if _, err := NewRoom(RoomConfig{
+	if _, err := NewMatch(MatchConfig{
 		Sequencer:        SequencerConfig{Players: []PlayerID{1, 2}, MaxInputBytes: 8},
 		MaxDatagramBytes: 1232,
 		Datagrams:        sender,
-	}); !errors.Is(err, ErrRoomConfigInvalid) {
-		t.Fatalf("MaxDatagramBytes above the sender's bound: err = %v, want ErrRoomConfigInvalid", err)
+	}); !errors.Is(err, ErrMatchConfigInvalid) {
+		t.Fatalf("MaxDatagramBytes above the sender's bound: err = %v, want ErrMatchConfigInvalid", err)
 	}
 	// Largest payload admitted for 2 seats at depth 1 fits the sender.
 	accepted := 0
 	for size := 1024; size > 0; size-- {
-		if _, err := NewRoom(RoomConfig{Sequencer: SequencerConfig{Players: []PlayerID{1, 2}, MaxInputBytes: size}, RedundancyDepth: 1, Datagrams: sender}); err == nil {
+		if _, err := NewMatch(MatchConfig{Sequencer: SequencerConfig{Players: []PlayerID{1, 2}, MaxInputBytes: size}, RedundancyDepth: 1, Datagrams: sender}); err == nil {
 			accepted = size
 			break
 		}
@@ -208,17 +208,17 @@ func TestRoomPromiseBudgetFollowsTheSender(t *testing.T) {
 
 // fullLoadTicks submits a full-size input for every seat and ticks: no
 // broadcast may be refused.
-func fullLoadTicks(t *testing.T, room *Room) {
+func fullLoadTicks(t *testing.T, match *Match) {
 	t.Helper()
 	full := make([]byte, 595)
 	for i := 0; i < 3; i++ {
 		for player := PlayerID(1); player <= 2; player++ {
-			if _, err := room.SubmitInput(player, room.NextFrame(), full); err != nil {
+			if _, err := match.SubmitInput(player, match.NextFrame(), full); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if _, err := room.Tick(context.Background()); err != nil {
-			t.Fatalf("NewRoom accepted the config but the full-load broadcast of frame %d was refused: %v", i+1, err)
+		if _, err := match.Tick(context.Background()); err != nil {
+			t.Fatalf("NewMatch accepted the config but the full-load broadcast of frame %d was refused: %v", i+1, err)
 		}
 	}
 }
@@ -243,15 +243,15 @@ func (b *blockingReliable) SendReliable(ctx context.Context, _ nettransport.Sess
 	}
 }
 
-// TestRoomPromiseSlowCatchupDoesNotStallTick: one catching-up client whose
-// reliable lane stalls must not stop the room — Tick keeps cutting and
+// TestMatchPromiseSlowCatchupDoesNotStallTick: one catching-up client whose
+// reliable lane stalls must not stop the match — Tick keeps cutting and
 // broadcasting to everyone else, with no deadline on the caller's context
 // (RR-20261006-63).
-func TestRoomPromiseSlowCatchupDoesNotStallTick(t *testing.T) {
+func TestMatchPromiseSlowCatchupDoesNotStallTick(t *testing.T) {
 	datagrams := newRecordingTransport()
 	reliable := &blockingReliable{release: make(chan struct{})}
 	t.Cleanup(func() { close(reliable.release) })
-	room, err := NewRoom(RoomConfig{
+	match, err := NewMatch(MatchConfig{
 		Sequencer: SequencerConfig{Players: []PlayerID{1, 2}, MaxInputBytes: 8},
 		Datagrams: datagrams,
 		Reliable:  reliable,
@@ -259,25 +259,25 @@ func TestRoomPromiseSlowCatchupDoesNotStallTick(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(room.Close)
+	t.Cleanup(match.Close)
 	for player := PlayerID(1); player <= 2; player++ {
-		if err := room.Attach(player, nettransport.SessionID(player)); err != nil {
+		if err := match.Attach(player, nettransport.SessionID(player)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for i := 0; i < 5; i++ {
-		if _, err := room.Tick(context.Background()); err != nil {
+		if _, err := match.Tick(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := room.StartCatchup(2, 1); err != nil {
+	if err := match.StartCatchup(2, 1); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan time.Duration, 1)
 	go func() {
 		start := time.Now()
 		for i := 0; i < 20; i++ {
-			_, _ = room.Tick(context.Background())
+			_, _ = match.Tick(context.Background())
 		}
 		done <- time.Since(start)
 	}()
@@ -294,12 +294,12 @@ func TestRoomPromiseSlowCatchupDoesNotStallTick(t *testing.T) {
 	}
 }
 
-// TestRoomPromiseTwoSeatDesyncIsRuled: in a two-seat room any hash
+// TestMatchPromiseTwoSeatDesyncIsRuled: in a two-seat match any hash
 // disagreement must produce a verdict — the default majority quorum (2)
 // can never be met by a 1:1 split (RR-20261006-64).
-func TestRoomPromiseTwoSeatDesyncIsRuled(t *testing.T) {
+func TestMatchPromiseTwoSeatDesyncIsRuled(t *testing.T) {
 	var verdicts []DesyncVerdict
-	room, err := NewRoom(RoomConfig{
+	match, err := NewMatch(MatchConfig{
 		Sequencer: SequencerConfig{Players: []PlayerID{1, 2}, MaxInputBytes: 8},
 		Datagrams: newRecordingTransport(),
 		OnDesync:  func(v DesyncVerdict) { verdicts = append(verdicts, v) },
@@ -307,13 +307,13 @@ func TestRoomPromiseTwoSeatDesyncIsRuled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := room.Tick(context.Background()); err != nil {
+	if _, err := match.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := room.ReportHash(1, 1, 0xA); err != nil {
+	if err := match.ReportHash(1, 1, 0xA); err != nil {
 		t.Fatal(err)
 	}
-	if err := room.ReportHash(2, 1, 0xB); err != nil {
+	if err := match.ReportHash(2, 1, 0xB); err != nil {
 		t.Fatal(err)
 	}
 	if len(verdicts) != 1 {
@@ -325,23 +325,23 @@ func TestRoomPromiseTwoSeatDesyncIsRuled(t *testing.T) {
 	if !verdicts[0].NoMajority || verdicts[0].Majority != 0 {
 		t.Fatalf("verdict = %+v, want NoMajority with no majority hash", verdicts[0])
 	}
-	// Agreement in a two-seat room stays silent.
-	if _, err := room.Tick(context.Background()); err != nil {
+	// Agreement in a two-seat match stays silent.
+	if _, err := match.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	_ = room.ReportHash(1, 2, 0xC)
-	_ = room.ReportHash(2, 2, 0xC)
+	_ = match.ReportHash(1, 2, 0xC)
+	_ = match.ReportHash(2, 2, 0xC)
 	if len(verdicts) != 1 {
 		t.Fatalf("agreeing two-seat hashes produced a verdict: %+v", verdicts[1:])
 	}
 }
 
-// TestRoomPromiseNoMajorityNeedsEverySeat: with more seats the no-majority
+// TestMatchPromiseNoMajorityNeedsEverySeat: with more seats the no-majority
 // ruling waits for every seat — a 1:1 split among the first two reports of
-// a three-seat room is not a verdict yet, and the third report decides.
-func TestRoomPromiseNoMajorityNeedsEverySeat(t *testing.T) {
+// a three-seat match is not a verdict yet, and the third report decides.
+func TestMatchPromiseNoMajorityNeedsEverySeat(t *testing.T) {
 	var verdicts []DesyncVerdict
-	room, err := NewRoom(RoomConfig{
+	match, err := NewMatch(MatchConfig{
 		Sequencer: SequencerConfig{Players: []PlayerID{1, 2, 3, 4}, MaxInputBytes: 8},
 		Datagrams: newRecordingTransport(),
 		OnDesync:  func(v DesyncVerdict) { verdicts = append(verdicts, v) },
@@ -349,23 +349,23 @@ func TestRoomPromiseNoMajorityNeedsEverySeat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := room.Tick(context.Background()); err != nil {
+	if _, err := match.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	_ = room.ReportHash(1, 1, 0xA)
-	_ = room.ReportHash(2, 1, 0xB)
-	_ = room.ReportHash(3, 1, 0xA)
+	_ = match.ReportHash(1, 1, 0xA)
+	_ = match.ReportHash(2, 1, 0xB)
+	_ = match.ReportHash(3, 1, 0xA)
 	if len(verdicts) != 0 {
 		t.Fatalf("verdict before quorum or every seat: %+v", verdicts)
 	}
-	_ = room.ReportHash(4, 1, 0xB) // 2:2, quorum 3 unreachable
+	_ = match.ReportHash(4, 1, 0xB) // 2:2, quorum 3 unreachable
 	if len(verdicts) != 1 || !verdicts[0].NoMajority || !slices.Equal(verdicts[0].Outliers, []PlayerID{1, 2, 3, 4}) {
 		t.Fatalf("2:2 split verdicts = %+v, want one NoMajority naming all four seats", verdicts)
 	}
 }
 
 // delayedReliable completes every send after a fixed delay — longer than
-// the Room's default send wait, so every page finishes on a later Tick.
+// the Match's default send wait, so every page finishes on a later Tick.
 type delayedReliable struct {
 	delay time.Duration
 	mu    sync.Mutex
@@ -384,13 +384,13 @@ func (d *delayedReliable) SendReliable(ctx context.Context, session nettransport
 	return nil
 }
 
-// TestRoomPromiseSlowButLiveCatchupConverges: when every page outlives
+// TestMatchPromiseSlowButLiveCatchupConverges: when every page outlives
 // Tick's wait, the catch-up still reaches the head and hands over to live
 // broadcasts with no frame missing (RR-20261006-63).
-func TestRoomPromiseSlowButLiveCatchupConverges(t *testing.T) {
+func TestMatchPromiseSlowButLiveCatchupConverges(t *testing.T) {
 	datagrams := newRecordingTransport()
 	reliable := &delayedReliable{delay: 20 * time.Millisecond, pages: make(map[nettransport.SessionID][][]byte)}
-	room, err := NewRoom(RoomConfig{
+	match, err := NewMatch(MatchConfig{
 		Sequencer:          SequencerConfig{Players: []PlayerID{1, 2}, MaxInputBytes: 8},
 		RedundancyDepth:    3,
 		CatchupBatchFrames: 8,
@@ -400,32 +400,32 @@ func TestRoomPromiseSlowButLiveCatchupConverges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(room.Close)
-	if err := room.Attach(1, 1); err != nil {
+	t.Cleanup(match.Close)
+	if err := match.Attach(1, 1); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 40; i++ {
-		if _, err := room.Tick(context.Background()); err != nil {
+		if _, err := match.Tick(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := room.Attach(2, 2); err != nil {
+	if err := match.Attach(2, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := room.StartCatchup(2, 1); err != nil {
+	if err := match.StartCatchup(2, 1); err != nil {
 		t.Fatal(err)
 	}
 	ticks := 0
-	for ; room.CatchingUp(2) && ticks < 200; ticks++ {
-		if _, err := room.Tick(context.Background()); err != nil {
+	for ; match.CatchingUp(2) && ticks < 200; ticks++ {
+		if _, err := match.Tick(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if room.CatchingUp(2) {
+	if match.CatchingUp(2) {
 		t.Fatalf("catch-up with 20ms pages still running after %d ticks", ticks)
 	}
-	final, err := room.Tick(context.Background())
+	final, err := match.Tick(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,12 +461,12 @@ func (g *gatedReliable) SendReliable(ctx context.Context, _ nettransport.Session
 	return nil
 }
 
-// TestRoomPromiseCatchupRewindWhileInFlightIsKept: StartCatchup moving the
+// TestMatchPromiseCatchupRewindWhileInFlightIsKept: StartCatchup moving the
 // cursor back while a page is in flight must survive that page's success —
 // the earlier frames are paged next, not skipped.
-func TestRoomPromiseCatchupRewindWhileInFlightIsKept(t *testing.T) {
+func TestMatchPromiseCatchupRewindWhileInFlightIsKept(t *testing.T) {
 	reliable := &gatedReliable{gate: make(chan struct{})}
-	room, err := NewRoom(RoomConfig{
+	match, err := NewMatch(MatchConfig{
 		Sequencer:          SequencerConfig{Players: []PlayerID{1}, MaxInputBytes: 8},
 		CatchupBatchFrames: 64,
 		CatchupSendWait:    time.Millisecond,
@@ -476,36 +476,36 @@ func TestRoomPromiseCatchupRewindWhileInFlightIsKept(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(room.Close)
-	if err := room.Attach(1, 1); err != nil {
+	t.Cleanup(match.Close)
+	if err := match.Attach(1, 1); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
 	for i := 0; i < 10; i++ {
-		if _, err := room.Tick(ctx); err != nil {
+		if _, err := match.Tick(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := room.StartCatchup(1, 6); err != nil {
+	if err := match.StartCatchup(1, 6); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := room.Tick(ctx); err != nil { // page 6..11 launched, held at the gate
+	if _, err := match.Tick(ctx); err != nil { // page 6..11 launched, held at the gate
 		t.Fatal(err)
 	}
-	if err := room.StartCatchup(1, 2); err != nil { // rewind while in flight
+	if err := match.StartCatchup(1, 2); err != nil { // rewind while in flight
 		t.Fatal(err)
 	}
-	for i := 0; room.CatchingUp(1) && i < 50; i++ {
+	for i := 0; match.CatchingUp(1) && i < 50; i++ {
 		select {
 		case reliable.gate <- struct{}{}:
 		case <-time.After(time.Second):
 		}
 		time.Sleep(5 * time.Millisecond)
-		if _, err := room.Tick(ctx); err != nil {
+		if _, err := match.Tick(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if room.CatchingUp(1) {
+	if match.CatchingUp(1) {
 		t.Fatal("catch-up did not finish")
 	}
 	reliable.mu.Lock()

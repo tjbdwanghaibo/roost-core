@@ -7,7 +7,7 @@ namespace Roost.Client
     // 应用Full先清空旧流状态。Full可只是恢复的第一包，后续Delta继续create。
     public sealed class SyncReceiver
     {
-        private ulong room;
+        private ulong streamId;
         private uint epoch, tick;
         private ushort schema;
         private bool needsFull = true, applying;
@@ -17,7 +17,7 @@ namespace Roost.Client
         public void Reset()
         {
             generation++;
-            room = 0; epoch = 0; tick = 0; schema = 0;
+            streamId = 0; epoch = 0; tick = 0; schema = 0;
             needsFull = true;
         }
 
@@ -30,9 +30,9 @@ namespace Roost.Client
             SyncFrame frame;
             try { frame = SyncFrame.Decode(raw); }
             catch { needsFull = true; throw; }
-            if (room != 0)
+            if (streamId != 0)
             {
-                if (frame.RoomId != room)
+                if (frame.StreamId != streamId)
                 {
                     needsFull = true;
                     throw new InvalidDataException("Sync stream changed without reset.");
@@ -51,7 +51,7 @@ namespace Roost.Client
             {
                 apply(frame);
                 if (generation != current) throw new InvalidOperationException("Sync receiver reset during application.");
-                room = frame.RoomId; epoch = frame.Epoch; tick = frame.Tick; schema = frame.SchemaVersion;
+                streamId = frame.StreamId; epoch = frame.Epoch; tick = frame.Tick; schema = frame.SchemaVersion;
                 needsFull = false;
                 return true;
             }

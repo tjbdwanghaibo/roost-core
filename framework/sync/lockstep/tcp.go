@@ -5,13 +5,13 @@ import (
 	"fmt"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// TCPSender将Room两条发送通道接到生成Runtime.PushLockstepSession。
+// TCPSender将Match两条发送通道接到生成Runtime.PushLockstepSession。
 // TCP有队头阻塞；同步发送，不使用会合并/丢帧的异步Sync队列。
-// Resolve必须并发安全：可靠追帧页由Room后台发送；会话ID不得跨连接生命周期复用。
+// Resolve必须并发安全：可靠追帧页由Match后台发送；会话ID不得跨连接生命周期复用。
 // 比赛Tick驱动须在快worker/Entity锁之外；快worker发送会在副作用前明确拒绝。
 type TCPSender struct {
 	push       func(context.Context, string, uint32, []byte) error
@@ -24,7 +24,7 @@ func NewTCPSender(messageID uint32, maxPayload int,
 	resolve func(nettransport.SessionID) (string, bool),
 	push func(context.Context, string, uint32, []byte) error) (*TCPSender, error) {
 	if messageID == 0 || resolve == nil || push == nil || maxPayload < 0 {
-		return nil, fmt.Errorf("%w: TCP sender requires route, resolver, push and nonnegative limit", ErrRoomConfigInvalid)
+		return nil, fmt.Errorf("%w: TCP sender requires route, resolver, push and nonnegative limit", ErrMatchConfigInvalid)
 	}
 	if maxPayload == 0 {
 		maxPayload = wire.DefaultMaxPayload

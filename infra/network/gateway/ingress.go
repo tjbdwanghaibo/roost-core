@@ -273,7 +273,7 @@ func (game *GameIngress) handleControl(ctx context.Context, request ControlReque
 			game.retire(record)
 		}
 		if request.Operation == Activate {
-			// OnActive 幂等由资源记录守护，不重复建立 Sync/Room 生命周期。
+			// OnActive 幂等由资源记录守护，不重复建立 Sync/Match 生命周期。
 			if err := game.activate(ctx, record); err != nil {
 				response.Outcome = Unknown
 				return response
