@@ -129,3 +129,41 @@ go run ./cmd/glsvet ./codegen/internal/entity/testdata/awaitflow
 - 图谱核对开始时，可用项目 D-whb_s 的 coverage generation 为 2026-09-08T14:39:26Z，本工作树路径均 not_tracked，另两路 MCP transport closed。本轮结论以当前精确源码、生成和实跑补证，不使用过期图谱行号。提交后已对 D:/whb_s/cube-core 刷新 roost-core 项目，工具返回 indexed（29722 节点、277054 边）；但后续 coverage 对核心路径仍报告 metadata_changed，因此不把刷新成功等同于覆盖验证通过。
 
 性能收益未经测量；没有重跑真实排行榜网络、生产持久发奖、跨机或长期重档，不宣称提高容量或消除所有死锁。
+
+## Msg 状态与目标存储（2026-10-13）
+
+本次以 6c36e0df 为基线，只整理 Msg 字段职责和目标存储。所有字段及类型保留，按请求、Remote 批次、自身事务、执行资源、Await、观测分组；没有把“已接纳”和“确定提交”合并，也没有删除提交后失败、部分提交、结果未知或不可回滚禁止重排的状态。字段注释说明当前契约，历史缺陷仍可在方法注释和 Git 历史追溯。未新增分组指针对象。Windows/amd64 实测结构体大小由 536 降至 528 字节，这是字段对齐变化，不等于每条消息实际堆分配减少 8 字节。
+
+### 三种队列分别负责什么
+
+- ready：ID 依赖已经满足、可以交给 worker 的普通请求。
+- waiting：所有尚未开始执行的普通请求，包含等待前驱和等待 worker；双向链表支持 O(1) 删除和读取 OldestWaiting，不负责 ID 顺序。
+- continuations：Remote/I/O 借用业务 worker 执行本地逻辑及收尾。原请求仍占 tail，续行不能再次排在它后面，否则会自等；内部信封完成后通过 done 将原消息交回 I/O。与普通 ready 交替取用，运行时占业务 worker，并参与停机排空。RunLocal 也使用该入口，其实体访问仍需 Guard；不能将内部队列当业务绕过 ID 顺序的入口。
+
+Await resume 与上述内部续行不同：原段先释放 tail，再由 I/O 将恢复段作为普通消息准入。此次保留 waiting、continuations 和调度实现，不代为提交主工作树中维护者的 dispatch_queue.go 整理。
+
+### 目标切片的所有权
+
+Tid 保留单目标标量快路径。Tids 与 GroupTIds 继续保存业务参数顺序、重复成员和组边界；调度 ID 集合另行排序去重，不与业务切片原地共用。
+
+DispatchMulti/RequestMulti 直接接管 normalizeClientIDs 已创建的独立切片，去掉第二次复制。分组入口仍接受 [][]int64，内部标准化结果由外层切片加一块连续 ID 数组构成；每组使用三下标切片限定 cap，因此对一组 append 不会覆盖下一组。源切片修改不影响消息。单组没有分配次数收益，多组由每组分配改为共享消息所有权；保留任意一组会保留整块数组，因此不把内部目标切片作为长期业务缓存。
+
+没有改成公开的“扁平 IDs＋组长度”API。执行时的展平、Guard 排序和加载标准化继续保留，减少后续复制需单独验证参数顺序、重复实体引用和调用方修改隔离。
+
+### 本地测量与验证
+
+Go 1.27.0，Windows/amd64，Ryzen 7 5800H，GOMAXPROCS=4；每组 4 个 ID，前后使用相同 benchmark。先运行 300ms×3，再串行运行 1s×3；测试、race 和编译未与测量并跑。下表耗时为长样本中位数：
+
+| 组数 | ns/op 前 → 后 | B/op 前 → 后 | allocs/op 前 → 后 |
+| --- | ---: | ---: | ---: |
+| 1 | 141.5 → 149.1 | 56 → 56 | 2 → 2 |
+| 8 | 1023 → 878.5 | 448 → 448 | 9 → 2 |
+| 32 | 3840 → 3692 | 1920 → 1920 | 33 → 2 |
+
+单组中位数约慢 5.4%，短样本约慢 7.9%；新增总长度遍历存在成本，样本也有明显波动，不能宣称所有场景变快。保留此实现的依据是多组分配次数稳定减少，分配总字节不变。首轮 32 组短样本也有耗时上升，全部保留，不以该微基准推断调度或整服吞吐。
+
+原始样本：[短测前](../performance/benchmarks/nest-message-targets-20261013/before.txt)、[短测后](../performance/benchmarks/nest-message-targets-20261013/after.txt)、[长测前](../performance/benchmarks/nest-message-targets-20261013/before-repeat.txt)、[长测后](../performance/benchmarks/nest-message-targets-20261013/after-repeat.txt)。复跑：`go test ./framework/nest -run '^$' -bench '^BenchmarkClientGroupTargets$' -benchmem -benchtime=1s -count=3`，旧版对照只带回相同测试文件。
+
+新增所有权回归覆盖顺序、重复 ID、空组、调用方修改隔离、组 append 隔离，以及错误中的组号/成员位置。图谱代际 2026-10-10T16:08:17Z 已过期，本次用当前源码核对写入、读取、回收及调用链，未把旧索引当完整证明。
+
+本次实际通过：`go test -race ./framework/nest ./wiring/nest -count=2 -timeout=4m`、`go build ./...`、`go vet ./framework/nest ./wiring/nest` 和根包 Markdown 链接检查。AST 对比确认 Msg 的 43 个字段名称和类型完全保留。未运行新增真实资源、跨机或长期容量测试，不宣称生产吞吐提升。

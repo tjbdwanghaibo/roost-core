@@ -1,0 +1,15 @@
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkClientGroupTargets/1-4 	 3119802	       122.5 ns/op	       536.0 Msg-B	      56 B/op	       2 allocs/op
+BenchmarkClientGroupTargets/1-4 	 2758178	       133.1 ns/op	       536.0 Msg-B	      56 B/op	       2 allocs/op
+BenchmarkClientGroupTargets/1-4 	 2805896	       126.8 ns/op	       536.0 Msg-B	      56 B/op	       2 allocs/op
+BenchmarkClientGroupTargets/8-4 	  434121	       841.7 ns/op	       536.0 Msg-B	     448 B/op	       9 allocs/op
+BenchmarkClientGroupTargets/8-4 	  399759	       887.7 ns/op	       536.0 Msg-B	     448 B/op	       9 allocs/op
+BenchmarkClientGroupTargets/8-4 	  348475	       870.8 ns/op	       536.0 Msg-B	     448 B/op	       9 allocs/op
+BenchmarkClientGroupTargets/32-4         	  114843	      3269 ns/op	       536.0 Msg-B	    1920 B/op	      33 allocs/op
+BenchmarkClientGroupTargets/32-4         	   95182	      3425 ns/op	       536.0 Msg-B	    1920 B/op	      33 allocs/op
+BenchmarkClientGroupTargets/32-4         	  116887	      3252 ns/op	       536.0 Msg-B	    1920 B/op	      33 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	4.070s

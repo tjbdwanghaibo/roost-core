@@ -342,90 +342,65 @@ func (t MsgType) String() string {
 	}
 }
 
-// Msg is the internal message routed through the nest worker pool.
+// Msg 承载请求数据和一次派发的运行状态。池归还时 clean 整体清零；Clone 只复制可重排的请求数据。
+// 原消息跨 I/O 与业务池串行交接：I/O 等续行 done 后才重新访问，不依靠字段原子化并发共享。
 type Msg struct {
-	// Await 只持有本段的调度数据；afterQueue 在释放 tail 后调用，不进入快照。
+	// 请求与目标。单目标直接存 Tid；多目标保留调用顺序、重复项和组边界。
+	// 调度器另建排序去重的 ID 集合，不能原地改写这里的业务参数。
+	Name            string
+	Tids            []int64
+	GroupTIds       [][]int64
+	Params          []any
+	Context         fctx.ContextSnapshot
+	RetChan         chan any
+	GroupTransition *GroupTransitionRequest
+	Tid             int64
+	RefCount        int
+	PendingRequeues int
+	Type            MsgType
+	Cost            bool
+	HasRemote       bool
+
+	// Remote 批次与发布责任。FinalizeLocked 在业务锁内生成提交内容；
+	// I/O 阶段确认/关闭批次，未决结果连同 Sync 门和回调移交持久结论处理者。
+	RemoteWriteBatch    entity.RemoteWriteBatch
+	remoteSyncMutation  *entity.SyncMutation
+	postRemoteCommit    []func()
+	remoteFinalized     bool // 已完成批次内容归集，不能重复 Finalize。
+	remoteIndeterminate bool // 本地持久结果未知，收尾不能推断为 Abort。
+	remoteCommitted     bool // 本地持久提交成功，Remote 收尾须 Commit，不能因释放错误 Abort。
+	remoteConfirmed     bool // Remote Commit 也成功；其后的错误归为提交后失败。
+	remotePartRejected  bool // 本地已提交，Remote 明确拒绝；与 confirmed 互斥，未知不置位。
+
+	// 消息自身事务。handler goroutine 写，派发收尾在 handler/续行结束后读取。
+	txInFlight                   bool // 自身事务正在执行；识别嵌套事务还必须检查入口的 claimsMessage。
+	txAdmitted                   bool // 已越过准入点，不能重排；pipelined 尚可能没有持久结论。
+	txCommitted                  bool // 自身事务已确定提交；Remote 消息的完整成功仍以 remoteConfirmed 为准。
+	txNoRollback                 bool // 自身事务不回滚；与“handler 已经执行”是两件事。
+	noRollbackHandlerStarted     bool // 不可回滚 handler 已开始，暂时性错误也不能整段重排。
+	createLockConflictNoRollback bool // 保留创建锁冲突事实，即使业务替换错误，仍能正确分类回复。
+	nestedTxCommitted            bool // 独立嵌套事务已提交或结果未知；外层失败也不能重排整段。
+	deferredCompletion           bool // 回复已交完成泵；派发路径不得再次发送 RetChan。
+
+	// 执行资源与引用。getter 可临时包装为仅加载态访问；prepared 独立负责 Touch 引用归还。
+	getter        entity.Getter
+	prepared      *preparedGetter
+	engine        *NestMgr           // Await 调度，以及独立事务结果未知时 fence 引擎。
+	localExecutor func(func()) error // I/O 收尾借用业务 worker 运行需要实体锁的步骤。
+	remoteLogic   *remoteLogicCall   // 内部续行信封；不是重新准入的业务请求。
+	afterUnlock   []func()           // Guard 释放后执行，不能与 Remote 确认后的回调合并。
+
+	// Await 只持有当前业务段的数据；恢复段正常入队，不复用原段的 ID tail。
 	awaitPlan       *awaitPlan
 	resumeEntry     *handlerEntry
 	handlerEntities []entity.IThreadSafeEntity
 	ioWork          func()
-	afterQueue      func()
+	afterQueue      func() // 原段释放 tail 后启动 I/O，不进入上下文快照。
 
-	RetChan             chan any
-	RemoteWriteBatch    entity.RemoteWriteBatch
-	Name                string
-	Tids                []int64
-	GroupTIds           [][]int64
-	Params              []any
-	Tid                 int64
-	RefCount            int
-	PendingRequeues     int
-	Type                MsgType
-	Cost                bool
-	HasRemote           bool // message involves remote entities
-	Context             fctx.ContextSnapshot
-	GroupTransition     *GroupTransitionRequest
-	remoteFinalized     bool
-	remoteIndeterminate bool
-	// remoteCommitted 在本地事务持久提交成功（commitDurable 的 durableCommit 返回 nil）
-	// 时由执行 handler 的 goroutine 设置，慢阶段在续行返回后读取（done channel 建立
-	// happens-before）。finishRemoteWriteBatch 只凭它决定 Commit / Abort（RR-20260926-32）。
-	remoteCommitted bool
-	// remoteConfirmed 表示 Remote 批次也已确认提交（finishRemoteWriteBatch 中 Commit 成功）。
-	// 此后回复里的任何错误都是提交后的释放/回调失败，由 dispatchNest 统一包 ErrAfterCommitFailed；
-	// 结果未知（确认超时）、拒绝与 Abort 都不置位，回复不得带该哨兵（RR-20260926-46）。
-	remoteConfirmed bool
-	// remotePartRejected 表示本地已提交（remoteCommitted）而 Remote Commit 被明确拒绝（错误不带
-	// ErrRemotePersistenceIndeterminate）；dispatchNest 据此给回复加 ErrRemotePartRejected（RR-20260928-03）。
-	// 与 remoteConfirmed 互斥，由 finishRemoteWriteBatch 在慢阶段（或无慢阶段时的派发 goroutine）写、同一 goroutine 读。
-	remotePartRejected bool
-	// remoteSyncMutation 是本地已持久提交的 Remote 事务的 Sync 提交门。Remote 确认没有结论时，
-	// deferPostRemoteCommit 把它连同 postRemoteCommit 交给批次：拒绝时 Reject（RR-20260926-37）。
-	remoteSyncMutation *entity.SyncMutation
-	// txInFlight 在本条消息自己的事务执行期间为真，用来区分 handler 内嵌套的独立事务；事务结束后的收尾阶段它已复位，
-	// 独立事务靠入口（runTransaction 的 claimsMessage）区分，不能只看它（RR-20260926-84）。
-	// txAdmitted 表示本条消息自己的事务已越过提交点：strict / memory 持久提交成功、pipelined 记录已被 WAL 接纳、
-	// memory 快路径已准入。之后回复里的任何错误（即使链上有锁超时类错误）都不能让它重新准入（RR-20260926-49）。
-	// 两者都由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回（或慢阶段续行结束）后读。
-	txInFlight bool
-	txAdmitted bool
-	// txCommitted 表示本条消息自己的事务已确定提交（strict / memory 持久提交成功、pipelined ticket 已持久、memory 快路径
-	// 已准入）。纯本地事务此后的释放 / 回调错误由 dispatchNest 包 ErrAfterCommitFailed（RR-20260926-53）；带 Remote 批次的
-	// 消息仍以 remoteConfirmed 为准。pipelined ticket 结果未知只置 txAdmitted，不置它。
-	txCommitted bool
-	// txNoRollback 表示本条消息自己的事务是 RollbackNone（memory 快路径，或带 Remote 批次的 memory handler）：
-	// handler 失败时已做的内存修改不撤销。createLockConflictNoRollback 表示这样的消息里 handler 内新建实体遇到了
-	// 按锁序不能等待的锁冲突；dispatchNest 据此不重排、回复带 ErrCreatedEntityLockConflict（RR-20260926-64）。
-	// 两者都由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回后读（与 txAdmitted 相同）。
-	txNoRollback                 bool
-	createLockConflictNoRollback bool
-	// noRollbackHandlerStarted 表示本条消息自己的事务不能回滚（txNoRollback）且业务 handler 已开始执行：此后任何锁超时 /
-	// 组迁移类错误都不再重排，回复带 ErrNonRollbackNotRequeued（RR-20260926-73）。取锁、组迁移检查等 handler 之前的准入失败
-	// 不置位，照常重排。由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回后读。
-	noRollbackHandlerStarted bool
-	// nestedTxCommitted 表示 handler 内嵌套的独立事务（不认领消息的 RunIsolatedTransaction 等，含收尾阶段调用的，RR-20260926-84）已持久提交或结果未知：
-	// 消息按已越过提交点处理，不重排；自己的事务没有提交时回复带 ErrNestedTransactionCommitted（RR-20260926-65）。
-	// 由执行 handler 的 goroutine 写，dispatchNest 在 handler 返回后读。
-	nestedTxCommitted bool
-	// deferredCompletion marks a pipelined transaction whose reply and
-	// AfterCommit hooks were handed to the completion pump: the dispatch
-	// path must not send RetChan itself. Reset by clean().
-	deferredCompletion bool
-	afterUnlock        []func()
-	postRemoteCommit   []func()
-	getter             entity.Getter
-	prepared           *preparedGetter
-	localExecutor      func(func()) error
-	stageMetrics       bool
-	queuedAt           time.Time
-	remoteLogic        *remoteLogicCall
-
-	// slowReroute 由快池首跑的 dispatchNest 设置：声明目标在 handler 取 Guard 之前变冷，
-	// 派发队列应把同一个作业原位转到慢池准备，而不是回复或释放消息（RR-20260926-25）。
-	slowReroute bool
-
-	// engine 是执行这条消息的 Nest 引擎，dispatchNest 设置；handler 内嵌套独立事务结果未知时据此 fence（RR-20260926-76）。
-	engine *NestMgr
+	// 观测与调度标志。转 I/O 保留作业身份和 tail，不重复准入或释放消息。
+	queuedAt     time.Time
+	stageMetrics bool
+	slowReroute  bool // 声明目标在取 Guard 前变冷，需要原位转 I/O 准备。
 }
 
 func (m *Msg) Key() int64 {
