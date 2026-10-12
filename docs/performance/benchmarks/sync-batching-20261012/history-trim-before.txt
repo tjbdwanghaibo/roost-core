@@ -1,0 +1,6 @@
+--- FAIL: TestHistoryExtremeRangeAndTrim (0.00s)
+    --- FAIL: TestHistoryExtremeRangeAndTrim/frame-id (0.00s)
+        history_long_test.go:17: trim near maximum frame ID failed
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	0.686s
+FAIL

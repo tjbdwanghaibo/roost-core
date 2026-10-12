@@ -1,0 +1,10 @@
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	2.294s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	3.344s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/frame	0.464s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	6.010s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport	2.310s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus	0.917s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver	1.582s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/mirror	1.011s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/syncstream	2.691s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/nest	2.006s

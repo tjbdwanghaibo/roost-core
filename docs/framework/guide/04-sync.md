@@ -49,6 +49,24 @@ periodic 按 Interval 合并检查；on_change 在正式 handler 提交边界汇
 
 配置 DurableWatermark 时，冻结状态的 CommitLSN 超出水位则暂不发送。不要把 MarkDirty 的时刻当成客户端可见时刻，也不要把 on_change 描述成每个 setter 都立即发包。
 
+### 可配置合批窗口（当前主线新增，尚未发版）
+
+希望将短时间内多次已提交更新集中处理，可以设置：
+
+```yaml
+sync:
+  entity:
+    mode: on_change
+    interval: 50ms
+    on_change_batch_window: 5ms
+```
+
+代码配置对应 `entitysync.ManagerConfig.OnChangeBatchWindow`。缺省为 0，保持原来的立即处理唤醒；正值从循环收到第一次唤醒时开始计时，后续通知不延长这次窗口。周期检查可提前触发，因此持续写入不会一直等下去。5ms 是示例取舍，不是端到端延迟保证：Flush 执行、队列、提交确认、网络和重试仍需要时间。
+
+只有 on_change 能设置非零窗口；负值或 periodic 搭配非零值会拒绝启动。配置文件显式写 0 可覆盖代码中的非零窗口，`EntitySyncSetup.Configure` 最后执行，仍有最终覆盖权。启动日志会打印实际窗口。
+
+手动 `Flush`、`Drain` 和 `Stop` 的最后一次 Flush 不等窗口；周期 Interval 继续作为兜底与原有快照预算窗口，不能把合批配置当成提高冷创建额度。该选项只改变发送循环时机，不减少 handler 的捕获次数，也不改变提交水位或可靠增量规则；冻结数据可能保留更久，应按实际内容测量峰值内存和延迟。单独执行 Flush 不会取消循环中已经安排的计时器，之后可能多一次空 Flush。
+
 ## 4. 背压与恢复
 
 状态全量、增量、remove 走可靠有序通道。Push 返回 nil 仅表示传输接纳；ErrRetryLater 保持脏状态等待重试。基线缺口、epoch 切换或未知对象必须请求/等待全量恢复，客户端不继续在错误基线上应用 delta。会话替换与旧异步回调必须按代际核对。
@@ -62,6 +80,24 @@ syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。File
 ## 6. Lockstep
 
 客户端 Command 提供 Input/Hash/Catchup；Match 根据当前 session 映射席位，不信任客户端自报 seat。Match 汇集输入、广播 C7 帧和历史追帧；历史需宿主主动 TrimBefore/TrimHistory，不能假定自动无限期有界。输入校验、hash 判定、重连追帧与游戏模拟分开。两人不形成多数时 NoMajority 不等于已经识别作弊者。
+
+### 长局如何控制内存
+
+先按允许的断线时长确定保留帧数。例如 30Hz 保留最近一分钟，就是 1800 帧。宿主在驱动 Match 的同一串行 handler 内按以下方式裁剪；不需要另起 goroutine：
+
+```go
+// frame 是本次 match.Tick 返回的帧；需要更长重连窗口时提高 keepFrames。
+const keepFrames lockstep.FrameID = 1800
+if frame.ID >= keepFrames {
+    match.TrimHistory(frame.ID - keepFrames + 1)
+}
+// 如果业务上报了模拟状态 hash，也应定期在同一串行 handler 中调用
+// match.TrimHashReports(保留起点)，避免只裁历史而遗留 hash 报告。
+```
+
+当前主线裁剪会立即清除丢弃帧的引用，通常只推进切片；大幅裁剪才收缩数组。这样频繁裁掉一帧不再复制整个保留窗口。`History.ReadRange` 和 `Replay` 返回只读视图，仅在下一次 Append/TrimBefore 前有效；需要长期保存回放时自行复制并持久化，不能留着内部切片当独立回放文件。异步追帧已在启动发送前编码成独立字节，不依赖后续可变历史。
+
+早于保留起点的追帧会以 `ErrCatchupUnservable` 明确失败，业务应选择完整状态恢复、重新入场或其他产品策略。保留窗口越短越省内存，也越容易使慢追帧失效。框架不会静默补齐被裁掉的历史。本机已验证一小时逻辑帧和滚动追帧；这不是一小时真实网络运行或跨引擎确定性的证明，测量见[优化说明](../SYNC-OPTIMIZATION.md)。
 
 ## 7. 公共客户端协议
 

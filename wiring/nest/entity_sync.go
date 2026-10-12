@@ -22,7 +22,7 @@ func NewModWithEntitySync(getter entity.Getter, setup EntitySyncSetup, opts ...c
 	return m
 }
 
-func (m *Mod) initEntitySync(settings config) error {
+func (m *Mod) initEntitySync(settings config, batchWindowSet bool) error {
 	if m.syncSetup == nil {
 		return nil
 	}
@@ -36,6 +36,10 @@ func (m *Mod) initEntitySync(settings config) error {
 	}
 	if settings.EntitySync.Interval > 0 {
 		config.Interval = settings.EntitySync.Interval
+	}
+	// 显式 0 也覆盖代码配置，以便部署时关闭合批；Configure 仍拥有最终覆盖权。
+	if batchWindowSet {
+		config.OnChangeBatchWindow = settings.EntitySync.OnChangeBatchWindow
 	}
 	if settings.EntitySync.MaxFrozenBytes > 0 {
 		config.MaxFrozenBytes = settings.EntitySync.MaxFrozenBytes

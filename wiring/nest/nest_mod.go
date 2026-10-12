@@ -111,9 +111,10 @@ type config struct {
 	} `config:"nest"`
 	// EntitySync 只在 NewModWithEntitySync 装配时读：写了就覆盖 EntitySyncSetup.Config 的同名字段。
 	EntitySync struct {
-		Mode           string        `config:"mode" enum:"periodic|on_change" help:"periodic（正式缺省）或 on_change"`
-		Interval       time.Duration `config:"interval" min:"0"`
-		MaxFrozenBytes int64         `config:"max_frozen_bytes" min:"0"`
+		Mode                string        `config:"mode" enum:"periodic|on_change" help:"periodic（正式缺省）或 on_change"`
+		Interval            time.Duration `config:"interval" min:"0"`
+		OnChangeBatchWindow time.Duration `config:"on_change_batch_window" min:"0" help:"on_change 首次唤醒后的固定合批窗口；0 为立即处理"`
+		MaxFrozenBytes      int64         `config:"max_frozen_bytes" min:"0"`
 	} `config:"sync.entity"`
 }
 
@@ -147,7 +148,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if err := m.initEntityLoadConfig(nest.EntityLoadTimeout); err != nil {
 		return err
 	}
-	return m.initEntitySync(settings)
+	return m.initEntitySync(settings, cfg != nil && cfg.IsSet("sync.entity.on_change_batch_window"))
 }
 
 // initEntityLoadConfig 接上 ManagerAccess 的共享冷加载上限 nest.entity_load_timeout（RR-54，缺省
@@ -230,7 +231,7 @@ func (m *Mod) Start() error {
 		if err := m.entitySync.Start(context.Background()); err != nil {
 			return err
 		}
-		slog.Info("entity sync started", "mode", m.entitySync.Mode().String(), "interval", m.entitySync.Interval())
+		slog.Info("entity sync started", "mode", m.entitySync.Mode().String(), "interval", m.entitySync.Interval(), "on_change_batch_window", m.entitySync.OnChangeBatchWindow())
 		// DataEngine 驱逐实体（例如原生步骤被 lease fence 跳过，RR-20260926-30）会关闭它的同步状态；
 		// 重新加载后把仍登记着的 subject 接到新对象上，原订阅者收到全量而不是续发增量。
 		if loads, ok := m.dataEngine.(entityLoadNotifier); ok && m.unhookLoaded == nil {

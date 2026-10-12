@@ -37,6 +37,9 @@ func (mode SyncMode) String() string {
 func (m *Manager) Mode() SyncMode          { return m.config.Mode }
 func (m *Manager) Interval() time.Duration { return m.config.Interval }
 
+// OnChangeBatchWindow 返回实际配置的唤醒合批窗口。
+func (m *Manager) OnChangeBatchWindow() time.Duration { return m.config.OnChangeBatchWindow }
+
 // BindSyncProducer 由正式 Nest option 或实现同一提交协议的执行器在启动前调用。
 func (m *Manager) BindSyncProducer() { m.producerBound.Store(true) }
 

@@ -1,0 +1,21 @@
+--- FAIL: TestHistoryExtremeRangeAndTrim (0.00s)
+    --- FAIL: TestHistoryExtremeRangeAndTrim/limit (0.00s)
+panic: runtime error: slice bounds out of range [:-9223372036854775808] [recovered, repanicked]
+
+goroutine 27 [running]:
+testing.tRunner.func1.2({0x7ff676c939f8, 0x7087f6005d0})
+	<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.windows-amd64/src/testing/testing.go:2123 +0x239
+testing.tRunner.func1()
+	<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.windows-amd64/src/testing/testing.go:2126 +0x329
+panic({0x7ff676c939f8?, 0x7087f6005d0?})
+	<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.windows-amd64/src/runtime/panic.go:859 +0x125
+github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep.(*History).ReadRange(...)
+	<worktree>/framework/sync/lockstep/history.go:89
+github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep.TestHistoryExtremeRangeAndTrim.func1(0x7087f5e4800)
+	<worktree>/framework/sync/lockstep/history_long_test.go:12 +0x225
+testing.tRunner(0x7087f5e4800, 0x7ff676cb1980)
+	<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.windows-amd64/src/testing/testing.go:2193 +0xc3
+created by testing.(*T).Run in goroutine 26
+	<user>/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.windows-amd64/src/testing/testing.go:2258 +0x4b4
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	0.713s
+FAIL

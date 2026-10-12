@@ -1,0 +1,12 @@
+goos: windows
+goarch: amd64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep
+cpu: AMD Ryzen 7 5800H with Radeon Graphics
+BenchmarkHistoryRollingWindow/300-4         	13189422	        35.60 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/300-4         	 9576486	        37.64 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/300-4         	12068508	        37.93 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-4       	 4230376	        84.39 ns/op	     152 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-4       	 4229168	        78.22 ns/op	     152 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-4       	 4900399	        70.60 ns/op	     152 B/op	       0 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	3.036s

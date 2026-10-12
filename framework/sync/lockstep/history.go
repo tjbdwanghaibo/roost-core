@@ -11,11 +11,13 @@ package lockstep
 //
 // History is single-owner state like the rest of the package: Replay and
 // ReadRange return views that are only valid inside the owning serial
-// handler — Append may reallocate the backing array under a concurrent
-// reader.
+// handler, until the next Append or TrimBefore. Callers retaining a replay
+// beyond that point must copy it. Concurrent reads and mutations are unsupported.
 type History struct {
 	first  FrameID
 	frames []Frame
+	// allocated 包含已裁掉前缀仍占用的底层数组容量，不能只看当前切片的 cap。
+	allocated int
 }
 
 func NewHistory() *History { return &History{} }
@@ -29,7 +31,11 @@ func (h *History) Append(frame Frame) {
 	} else if expected := h.first + FrameID(len(h.frames)); frame.ID != expected {
 		panic("lockstep: history append out of sequence")
 	}
+	grows := len(h.frames) == cap(h.frames)
 	h.frames = append(h.frames, frame)
+	if grows {
+		h.allocated = cap(h.frames)
+	}
 }
 
 // Latest is the newest stored frame id (0 when empty).
@@ -58,14 +64,22 @@ func (h *History) TrimBefore(keep FrameID) {
 	if len(h.frames) == 0 || keep <= h.first {
 		return
 	}
-	if keep > h.first+FrameID(len(h.frames)) {
-		keep = h.first + FrameID(len(h.frames))
+	// 使用差值避免 first+len 在 FrameID 上界溢出；逐帧裁剪不复制整段历史。
+	offset := int(min(uint64(keep-h.first), uint64(len(h.frames))))
+	clear(h.frames[:offset]) // 立即解除丢弃帧的 Inputs/Payload 引用。
+	remaining := h.frames[offset:]
+	switch {
+	case len(remaining) == 0:
+		h.frames = nil
+		h.allocated = 0
+	case h.allocated > max(256, 2*len(remaining)):
+		// 大幅裁剪才收缩，避免很短的尾部长期持有大数组。
+		h.frames = append([]Frame(nil), remaining...)
+		h.allocated = cap(h.frames)
+	default:
+		h.frames = remaining
 	}
-	offset := int(keep - h.first)
-	remaining := make([]Frame, len(h.frames)-offset)
-	copy(remaining, h.frames[offset:])
-	h.frames = remaining // fresh backing array: trimmed payloads become collectable
-	h.first = keep
+	h.first += FrameID(offset)
 }
 
 // ReadRange returns up to limit frames starting at from, for catch-up
@@ -82,10 +96,7 @@ func (h *History) ReadRange(from FrameID, limit int) []Frame {
 	if offset >= len(h.frames) {
 		return nil
 	}
-	end := offset + limit
-	if end > len(h.frames) {
-		end = len(h.frames)
-	}
+	end := offset + min(limit, len(h.frames)-offset)
 	return h.frames[offset:end]
 }
 

@@ -29,6 +29,9 @@ type ManagerConfig struct {
 	Transport Transport
 	// Interval is the tick period for Start. Zero takes DefaultInterval.
 	Interval time.Duration
+	// OnChangeBatchWindow 从首次唤醒起合批，后续通知不续期；零值保持立即处理。
+	// 仅用于 on_change。周期 tick 可提前触发，显式 Flush/Drain/Stop 不等待它。
+	OnChangeBatchWindow time.Duration
 	// ProfilePriorities 越小越优先；未配置的视图按 LOD 排序。构造时复制配置。
 	// 只在已授权来源之间选一个视图，不合并字段或扩大授权。
 	ProfilePriorities map[entity.SyncProfile]int
@@ -211,6 +214,9 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 	}
 	if config.Interval < 0 || config.MaxFrozenBytes < 0 {
 		return nil, fmt.Errorf("entitysync: negative interval or frozen capacity")
+	}
+	if config.OnChangeBatchWindow < 0 || config.Mode != ModeOnChange && config.OnChangeBatchWindow != 0 {
+		return nil, fmt.Errorf("entitysync: on-change batch window must be nonnegative and requires on_change mode")
 	}
 	if config.MaxFrozenBytes == 0 {
 		config.MaxFrozenBytes = 64 << 20
@@ -730,13 +736,36 @@ func (m *Manager) run(ctx context.Context, state *managerRun) {
 	defer state.cancel()
 	ticker := time.NewTicker(m.config.Interval)
 	defer ticker.Stop()
+	var timer *time.Timer
+	var batch <-chan time.Time
+	stopBatch := func() {
+		if timer != nil {
+			timer.Stop()
+		}
+		batch = nil
+	}
+	defer stopBatch()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			stopBatch()
 			_ = m.Flush(ctx)
 		case <-m.wake:
+			if m.config.OnChangeBatchWindow == 0 {
+				_ = m.Flush(ctx)
+			} else if batch == nil {
+				// 固定截止时间而非不断续期的 debounce，持续写入也能得到处理机会。
+				if timer == nil {
+					timer = time.NewTimer(m.config.OnChangeBatchWindow)
+				} else {
+					timer.Reset(m.config.OnChangeBatchWindow)
+				}
+				batch = timer.C
+			}
+		case <-batch:
+			batch = nil
 			_ = m.Flush(ctx)
 		}
 	}

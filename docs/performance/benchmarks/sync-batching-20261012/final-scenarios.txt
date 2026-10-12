@@ -1,0 +1,100 @@
+=== RUN   TestOnChangeBatchWindowDoesNotSlide
+--- PASS: TestOnChangeBatchWindowDoesNotSlide (0.00s)
+=== RUN   TestOnChangeBatchWindowTickAndExplicitFlush
+--- PASS: TestOnChangeBatchWindowTickAndExplicitFlush (0.00s)
+=== RUN   TestOnChangeZeroWindowAndConfiguration
+--- PASS: TestOnChangeZeroWindowAndConfiguration (0.00s)
+=== RUN   TestOnChangeBatchWindowCancelAndRestart
+--- PASS: TestOnChangeBatchWindowCancelAndRestart (0.00s)
+=== RUN   TestOnChangeBatchWindowPreservesDelivery
+--- PASS: TestOnChangeBatchWindowPreservesDelivery (0.00s)
+=== RUN   TestOnChangeBatchWindowBurstComparison
+=== RUN   TestOnChangeBatchWindowBurstComparison/0s
+    batch_window_test.go:251: 20 captures spaced 1ms, window=0s, delivered frames=20
+=== RUN   TestOnChangeBatchWindowBurstComparison/5ms
+    batch_window_test.go:251: 20 captures spaced 1ms, window=5ms, delivered frames=4
+=== RUN   TestOnChangeBatchWindowBurstComparison/10ms
+    batch_window_test.go:251: 20 captures spaced 1ms, window=10ms, delivered frames=2
+--- PASS: TestOnChangeBatchWindowBurstComparison (0.01s)
+    --- PASS: TestOnChangeBatchWindowBurstComparison/0s (0.00s)
+    --- PASS: TestOnChangeBatchWindowBurstComparison/5ms (0.00s)
+    --- PASS: TestOnChangeBatchWindowBurstComparison/10ms (0.00s)
+=== RUN   TestOnChangeBatchWindowDoesNotSlide
+--- PASS: TestOnChangeBatchWindowDoesNotSlide (0.00s)
+=== RUN   TestOnChangeBatchWindowTickAndExplicitFlush
+--- PASS: TestOnChangeBatchWindowTickAndExplicitFlush (0.00s)
+=== RUN   TestOnChangeZeroWindowAndConfiguration
+--- PASS: TestOnChangeZeroWindowAndConfiguration (0.00s)
+=== RUN   TestOnChangeBatchWindowCancelAndRestart
+--- PASS: TestOnChangeBatchWindowCancelAndRestart (0.00s)
+=== RUN   TestOnChangeBatchWindowPreservesDelivery
+--- PASS: TestOnChangeBatchWindowPreservesDelivery (0.00s)
+=== RUN   TestOnChangeBatchWindowBurstComparison
+=== RUN   TestOnChangeBatchWindowBurstComparison/0s
+    batch_window_test.go:251: 20 captures spaced 1ms, window=0s, delivered frames=20
+=== RUN   TestOnChangeBatchWindowBurstComparison/5ms
+    batch_window_test.go:251: 20 captures spaced 1ms, window=5ms, delivered frames=4
+=== RUN   TestOnChangeBatchWindowBurstComparison/10ms
+    batch_window_test.go:251: 20 captures spaced 1ms, window=10ms, delivered frames=2
+--- PASS: TestOnChangeBatchWindowBurstComparison (0.01s)
+    --- PASS: TestOnChangeBatchWindowBurstComparison/0s (0.00s)
+    --- PASS: TestOnChangeBatchWindowBurstComparison/5ms (0.00s)
+    --- PASS: TestOnChangeBatchWindowBurstComparison/10ms (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	2.068s
+=== RUN   TestMatchLongRunCatchupAfterRollingTrim
+    history_long_test.go:109: 108000 ticks, 10 players, rolling window 1800, peak capacity 2559, hash report frames 60, catchup pages 29
+--- PASS: TestMatchLongRunCatchupAfterRollingTrim (2.28s)
+=== RUN   TestHistoryExtremeRangeAndTrim
+=== RUN   TestHistoryExtremeRangeAndTrim/limit
+=== RUN   TestHistoryExtremeRangeAndTrim/frame-id
+--- PASS: TestHistoryExtremeRangeAndTrim (0.00s)
+    --- PASS: TestHistoryExtremeRangeAndTrim/limit (0.00s)
+    --- PASS: TestHistoryExtremeRangeAndTrim/frame-id (0.00s)
+=== RUN   TestHistoryLongRollingWindow
+    history_long_test.go:194: 108000 frames, retained window=1800, peak frame capacity=2559
+--- PASS: TestHistoryLongRollingWindow (0.14s)
+=== RUN   TestMatchLongRunCatchupAfterRollingTrim
+    history_long_test.go:109: 108000 ticks, 10 players, rolling window 1800, peak capacity 2559, hash report frames 60, catchup pages 29
+--- PASS: TestMatchLongRunCatchupAfterRollingTrim (2.14s)
+=== RUN   TestHistoryExtremeRangeAndTrim
+=== RUN   TestHistoryExtremeRangeAndTrim/limit
+=== RUN   TestHistoryExtremeRangeAndTrim/frame-id
+--- PASS: TestHistoryExtremeRangeAndTrim (0.00s)
+    --- PASS: TestHistoryExtremeRangeAndTrim/limit (0.00s)
+    --- PASS: TestHistoryExtremeRangeAndTrim/frame-id (0.00s)
+=== RUN   TestHistoryLongRollingWindow
+    history_long_test.go:194: 108000 frames, retained window=1800, peak frame capacity=2559
+--- PASS: TestHistoryLongRollingWindow (0.14s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	6.609s
+=== RUN   TestEntitySyncBatchWindowConfiguration
+=== RUN   TestEntitySyncBatchWindowConfiguration/configured
+=== RUN   TestEntitySyncBatchWindowConfiguration/explicit-zero
+=== RUN   TestEntitySyncBatchWindowConfiguration/code-default
+=== RUN   TestEntitySyncBatchWindowConfiguration/configure-wins
+=== RUN   TestEntitySyncBatchWindowConfiguration/negative
+=== RUN   TestEntitySyncBatchWindowConfiguration/malformed
+--- PASS: TestEntitySyncBatchWindowConfiguration (0.01s)
+    --- PASS: TestEntitySyncBatchWindowConfiguration/configured (0.00s)
+    --- PASS: TestEntitySyncBatchWindowConfiguration/explicit-zero (0.00s)
+    --- PASS: TestEntitySyncBatchWindowConfiguration/code-default (0.00s)
+    --- PASS: TestEntitySyncBatchWindowConfiguration/configure-wins (0.00s)
+    --- PASS: TestEntitySyncBatchWindowConfiguration/negative (0.00s)
+    --- PASS: TestEntitySyncBatchWindowConfiguration/malformed (0.00s)
+=== RUN   TestEntitySyncBatchWindowConfiguration
+=== RUN   TestEntitySyncBatchWindowConfiguration/configured
+=== RUN   TestEntitySyncBatchWindowConfiguration/explicit-zero
+=== RUN   TestEntitySyncBatchWindowConfiguration/code-default
+=== RUN   TestEntitySyncBatchWindowConfiguration/configure-wins
+=== RUN   TestEntitySyncBatchWindowConfiguration/negative
+=== RUN   TestEntitySyncBatchWindowConfiguration/malformed
+--- PASS: TestEntitySyncBatchWindowConfiguration (0.00s)
+    --- PASS: TestEntitySyncBatchWindowConfiguration/configured (0.00s)
+    --- PASS: TestEntitySyncBatchWindowConfiguration/explicit-zero (0.00s)
+    --- PASS: TestEntitySyncBatchWindowConfiguration/code-default (0.00s)
+    --- PASS: TestEntitySyncBatchWindowConfiguration/configure-wins (0.00s)
+    --- PASS: TestEntitySyncBatchWindowConfiguration/negative (0.00s)
+    --- PASS: TestEntitySyncBatchWindowConfiguration/malformed (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/nest	1.728s

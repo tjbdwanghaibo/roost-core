@@ -6,8 +6,8 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"testing"
 	"time"
 )
@@ -50,6 +50,48 @@ func TestEntitySyncModRejectsInvalidInterval(t *testing.T) {
 	mod := NewModWithEntitySync(emptyGetter{}, EntitySyncSetup{})
 	if err := mod.Init(cfg); err == nil {
 		t.Fatal("malformed interval became default")
+	}
+}
+
+func TestEntitySyncBatchWindowConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name, value             string
+		initial, override, want time.Duration
+		invalid                 bool
+	}{
+		{name: "configured", value: "5ms", want: 5 * time.Millisecond},
+		{name: "explicit-zero", value: "0s", initial: time.Second},
+		{name: "code-default", initial: time.Second, want: time.Second},
+		{name: "configure-wins", value: "5ms", override: 2 * time.Millisecond, want: 2 * time.Millisecond},
+		{name: "negative", value: "-1ms", invalid: true},
+		{name: "malformed", value: "wrong", invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.Set("sync.entity.mode", "on_change")
+			if tc.value != "" {
+				cfg.Set("sync.entity.on_change_batch_window", tc.value)
+			}
+			setup := EntitySyncSetup{Config: entitysync.ManagerConfig{Mode: entitysync.ModeOnChange, OnChangeBatchWindow: tc.initial, Transport: entitysync.TransportFunc(func(context.Context, entitysync.SessionID, []byte) error { return nil })}}
+			if tc.override > 0 {
+				setup.Configure = func(c *entitysync.ManagerConfig) { c.OnChangeBatchWindow = tc.override }
+			}
+			mod := NewModWithEntitySync(emptyGetter{}, setup)
+			err := mod.Init(cfg)
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("invalid setting accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer mod.EntitySync().Close(context.Background())
+			if got := mod.EntitySync().OnChangeBatchWindow(); got != tc.want {
+				t.Fatalf("window %v want %v", got, tc.want)
+			}
+		})
 	}
 }
 

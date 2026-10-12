@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- Sync OnChange 新增固定合批窗口 `OnChangeBatchWindow` / `sync.entity.on_change_batch_window`，默认 0 保持原行为；支持配置显式关闭和最终 Configure 覆盖，周期与停机仍可提前 Flush。
+- Lockstep 历史裁剪清除旧引用后复用连续窗口，避免逐帧复制整段历史；修复超大 ReadRange 长度及 FrameID 上界裁剪溢出。补一小时逻辑帧、hash 裁剪和滚动追帧验证，结果及使用边界见 docs/framework/SYNC-OPTIMIZATION.md。
+
 - Sync 新增 `Interest.QueueRelationDelta`，按变化成员提交关系增量，复用提交确认、回滚、同 ID 顺序和发布屏障；底层 `RelationSource.ApplyDelta` 原子维护正反索引。移除优先、退出事实改写与重建隔离已覆盖回归，接入方式见 docs/framework/guide/04-sync.md。
 
 - Sync Relation 为不超过 1024 个输入成员的重复 Set 复用有界候选表，关系变化时移交所有权，大集合保留锁外构表；补集合模型、并发生命周期和规模基准。重复 Set 分配降低，退出重加档约 5% 的实测耗时代价见 docs/framework/SYNC-OPTIMIZATION.md。

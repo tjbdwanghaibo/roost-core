@@ -211,8 +211,8 @@ Windows/amd64，Go 1.27.0，Ryzen 7 5800H，GOWORK=off，GOMAXPROCS=4。使用�
 | AOI 事件归集、分类重算、工作区、候选提前结束 | 已完成并本地验证 | 真实集中热点与 Gate/Nest 联合压测 |
 | Relation 反向索引、重复 Set 工作区 | 已完成并本地验证 | 高频变化和大关系集合另测；退出重加代价如上 |
 | Relation 增量 API | 已实施并本地验证（本篇增量更新章节） | QueueRelationDelta 共用提交门、退出事实改写和顺序语义；业务按需接入 |
-| OnChange 可配置合批 | 尚未实施，可选 | 先证明唤醒/Flush 频率是实际瓶颈，再确定允许的额外延迟；默认时延不变 |
-| Lockstep 广播名单缓存 | 已完成 | 长局历史 Trim、追帧与慢客户端容量尚未重新验证 |
+| OnChange 可配置合批 | 已实施，零值保持原行为 | 配置及固定窗口验证见后文；业务按可接受延迟启用 |
+| Lockstep 广播名单缓存、滚动历史 | 已完成，本机逻辑长局与追帧已验证 | 真实长时间网络与生产慢客户端容量仍需部署环境验证 |
 | 真实业务端到端、长期容量和跨机故障 | 尚未完成 | 按本篇上线前清单及维护目录外部验收执行 |
 
 因此“已完成”指已选定的局部代码优化，不代表所有可选方向都已实现，更不代表生产验收完成。优先下一步是部署环境的真实负载测试；不能只继续减少微基准分配而跳过上线容量证据。
@@ -244,8 +244,45 @@ Windows/amd64、Go 1.27.0、Ryzen 7 5800H，GOWORK=off、GOMAXPROCS=4，500ms ×
 
 回归覆盖：1200 次随机增量与全量集合模型比较事件和正反索引；零/负数/自关系、重复与新增移除重叠；Set/Delta 混合、未确认提交、回滚、同 ID 顺序、批次额度小于同提交事实数；其他来源保留；Leave/Hide、退出再进入、待删除 ID 重建；非法参数、预算拒绝、Close、发布屏障及并发 Set/Delta/Forget/Clear/Flush。
 
-业务示例见[使用指南](guide/04-sync.md)。Relation 增量已从待办转为已实施。OnChange 可配置合批尚未实施，默认唤醒语义不变；Lockstep 长局和生产环境真实业务/跨机/长期容量仍需验证，不以本批微基准代替这些结论。图谱仍为旧代际 2026-10-10T16:08:17Z，调用关系存在漏报及误连，本批以相关当前源码与实际回归补证。
+业务示例见[使用指南](guide/04-sync.md)。Relation 增量已实施。OnChange 合批及 Lockstep 本地长局验证见下节；生产环境真实业务、跨机和长期容量仍需验证。图谱仍为旧代际 2026-10-10T16:08:17Z，调用关系存在漏报及误连，以相关当前源码与实际回归补证。
 
 本批实际通过：`go test ./framework/sync/... -count=1 -timeout=3m`、`go test -race ./framework/sync/entitysync/policy -count=2 -timeout=4m`、最终增量/并发生命周期定向 race 三次、`go build ./...`、`go vet ./framework/sync/...`、根包文档链接检查和 diff 检查。未运行新增真实网络、跨机或长期容量负载。
 
 内存取舍：增量原地修改活动成员表，删除部分成员不保证 Go map 立即释放历史峰值容量；删除最后一个成员时移除整张表。事实结构新增增量元数据，队列仍按原事实条数限额，本基准没有测量队列常驻内存变化。上线前需将关系峰值和变化率纳入长时间容量测试。
+
+## OnChange 合批与 Lockstep 长局实现（2026-10-12）
+
+基线 b1ec31a3。OnChange 新增 OnChangeBatchWindow，零值保持立即处理唤醒；正值从首次唤醒起计时，后续唤醒不续期，周期 tick 可提前触发。显式 Flush、Drain 与 Stop 的最终 Flush 不等待窗口。只延迟同步循环的唤醒处理，不改变冻结、提交水位、可靠增量或快照预算。接入 sync.entity.on_change_batch_window，拒绝负值及 periodic 模式下非零配置。
+
+Lockstep History.TrimBefore 当前每次分配并复制剩余帧；改为清除已丢弃引用、推进连续视图，大幅缩容时才复制。空历史释放数组，持续裁剪保持容量与保留窗口同阶。ReadRange 仍返回连续只读页，跨 Append/Trim 不允许继续持有旧视图；发送追帧继续使用编码后的独立载荷。默认不自动丢弃历史，宿主按重连需求选择保留窗口。长局测试覆盖持续推进、裁剪、页读取、序号和慢追帧隔离；模拟长局不冒充真实多小时网络验收。
+
+### 使用方式与实现取舍
+
+正式配置与业务保留窗口示例见[Sync 使用指南](guide/04-sync.md)。合批采用首次通知起算的固定窗口，持续更新不会让截止时间不断后移；它减少的是 Flush/发送批次，不减少提交时捕获变化的工作，也不保证网络延迟。默认窗口为零，现有应用不主动开启就保持即时唤醒。周期 tick 可以提前处理积压，显式 Flush、Drain、Stop 不等待窗口。
+
+History 不再每裁掉一帧就复制剩余历史。通常只清除丢弃部分的引用并移动切片起点；需要缩容时才复制剩余帧。额外记录完整底层数组容量，因为仅看移动后的切片 cap 会漏掉仍被保留的旧前缀。逐步缩小和一次大幅缩小均有回归；清空历史释放数组。返回页是只读临时视图，下一次 Append/TrimBefore 后不可继续持有；长期保存回放必须复制需要保留的数据。追帧先编码为独立字节再异步发送，沿用原有发送所有权。
+
+### 本地结果
+
+基线为 b1ec31a3，Go 1.27.0，Windows/amd64，Ryzen 7 5800H，GOMAXPROCS=4。基准每组 300ms、三次，表内为中位数；测试、race、编译与性能测量串行执行。微基准只含追加、裁掉一帧、读取 32 帧页，不含业务、网络和载荷分配。
+
+| 保留窗口 | 原耗时 ns/op | 最终耗时 ns/op | 原 B/op | 最终 B/op |
+| --- | ---: | ---: | ---: | ---: |
+| 300 帧 | 7086 | 40.37 | 28159 | 67 |
+| 18000 帧 | 346829 | 74.49 | 1309985 | 152 |
+
+最终输出的 0 allocs/op 是摊销后取整，仍存在偶发扩容/缩容分配。保留[原始基准](../performance/benchmarks/sync-batching-20261012/history-before.txt)、[最终基准](../performance/benchmarks/sync-batching-20261012/history-after.txt)以及[容量修正前样本](../performance/benchmarks/sync-batching-20261012/history-after-initial.txt)，不把该微基准改善倍数当成整服吞吐提升。
+
+OnChange 使用确定性虚拟时间：每 1ms 提交一次，共 20 次，零/5ms/10ms 窗口分别发送 20/4/2 个更新帧；检查版本、增量基线衔接、最终值为 20、冻结内存排空。覆盖固定截止时间、周期提前处理、显式 Flush、Stop、取消后重启、零值及装配覆盖规则。这是行为测试，不是端到端延迟测量。
+
+Lockstep 推进 108000 次 Tick，10 位玩家每帧提交 8 字节输入，相当于 30Hz 一小时的逻辑帧量。保留 1800 帧时底层帧数组峰值为 2560 个槽位；每 30 帧报告 hash，裁剪后最多保留 60 个报告帧。随后继续推进与裁剪，29 页追帧接回直播，核对序号无缺口及输入载荷；过期历史明确返回 ErrCatchupUnservable。这里的峰值是帧数组容量，不是整个进程的 RSS。已有慢追帧不阻塞 Tick 的回归也随 Lockstep 整包通过。
+
+### 边界缺陷及修复证据
+
+同一轮复现并修复两处 History 边界问题：ReadRange 从第二帧读取且 limit=math.MaxInt 时，旧 offset+limit 溢出导致 panic；现在先按剩余长度限制 limit。TrimBefore 在历史接近 uint32 最大帧号时，旧 first+len 溢出导致错误裁空；现在按差值限制裁剪数量。分别保存[修前读取失败](../performance/benchmarks/sync-batching-20261012/history-boundary-before.txt)与[修前裁剪失败](../performance/benchmarks/sync-batching-20261012/history-trim-before.txt)，最终整包回归包含这两个边界用例。该修复不代表 Match 支持帧号回绕。
+
+最终实际通过：Sync 全部子包与 wiring/nest 测试；entitysync、lockstep、wiring/nest 的 race 两次；长局/渐进缩容定向测试；go build ./...；Sync 与 wiring/nest 的 go vet。正式生成工程的 TestClientSDKAgainstGeneratedPlayerTCP 也通过，包含 Go/C# TCP 消费链路。日志见[普通回归](../performance/benchmarks/sync-batching-20261012/tests-final.txt)、[race](../performance/benchmarks/sync-batching-20261012/race-final.txt)、[长局](../performance/benchmarks/sync-batching-20261012/long-final.txt)、[合批场景](../performance/benchmarks/sync-batching-20261012/final-scenarios.txt)与[生成消费者](../performance/benchmarks/sync-batching-20261012/generated-client.txt)。
+
+复跑入口：`go test ./framework/sync/... ./wiring/nest -count=1`；`go test -race ./framework/sync/entitysync ./framework/sync/lockstep ./wiring/nest -count=2`；`go test ./framework/sync/lockstep -run '^$' -bench '^BenchmarkHistoryRollingWindow$' -benchmem -benchtime=300ms -count=3`。基准对照需要把当前 history_long_test.go 放回基线 worktree，仅运行 benchmark，不能用不同测试负载比较。
+
+尚未验收真实一小时网络运行、跨机丢包/断线、生产负载与进程长期内存曲线。宿主仍须根据重连窗口主动调用 TrimHistory 和 TrimHashReports；不裁剪仍会按对局长度增长。Windows 本地结果不扩大仓库正式平台支持范围，也不替代上线前在目标环境的容量验收。图谱仍是旧代际，当前修改和新增测试均已读取源码补证。

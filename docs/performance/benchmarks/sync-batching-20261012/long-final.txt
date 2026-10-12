@@ -1,0 +1,10 @@
+=== RUN   TestMatchLongRunCatchupAfterRollingTrim
+    history_long_test.go:109: 108000 ticks, 10 players, rolling window 1800, peak capacity 2560, hash report frames 60, catchup pages 29
+--- PASS: TestMatchLongRunCatchupAfterRollingTrim (0.42s)
+=== RUN   TestHistoryLongRollingWindow
+    history_long_test.go:194: 108000 frames, retained window=1800, peak frame capacity=2560
+--- PASS: TestHistoryLongRollingWindow (0.02s)
+=== RUN   TestHistoryGradualShrinkReleasesBackingArray
+--- PASS: TestHistoryGradualShrinkReleasesBackingArray (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	1.134s
