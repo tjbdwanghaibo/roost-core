@@ -25,7 +25,7 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | --- | --- | --- |
 | `nest.dispatch.total` / `nest.dispatch.remote.total` | Counter | 分发量（labels: handler/result/type） |
 | `nest.dispatch.cost` | Duration | 单次分发耗时 |
-| `nest.dispatch.slow_trace_suppressed` | Counter | 被进程级采样窗口抑制的重复全堆栈诊断，无实体 ID 标签 |
+| `nest.dispatch.slow_trace_suppressed` | Counter | 被进程级采样窗口抑制的重复详细慢日志，无实体 ID 标签 |
 | `nest.dispatch.queue_len` / `worker_num` / `delayed_messages` | Gauge | 队列和 worker 为 dispatcher/pool，delayed_messages 只有 dispatcher；派发器排空停止后删除，同名派发器还有活着的不删（RR-20261006-18） |
 | `nest.dispatch.requeue.total` | Counter | 锁冲突重排队 |
 | `nest.handler.lock_hold` | Duration | 从进入事务执行到调用 release 前或事务返回；不含等锁及完整 release hook 成本，保留旧口径 |
@@ -34,7 +34,7 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 | `nest.pipelined.async_total` | Counter | Phase 2 完成结果（labels.result: ok/degraded/completion_failed/indeterminate——**indeterminate 非零即事故**） |
 | `nest.entity_group.transition.total` | Counter | 锁组迁移 |
 
-Nest 200ms 慢请求继续逐请求记录日志和耗时；全 goroutine 堆栈按进程每 5 秒至多采样一次。下一次堆栈日志中的 `suppressed_since_last_trace` 表示跳过的重复诊断数，避免依赖变慢时日志和运行时抓栈放大压力。
+Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身份与上下文的详细慢日志按进程每5秒至多记录一次，`suppressed_since_last_trace` 表示跳过的重复诊断数。自动慢诊断不采集全 goroutine 堆栈，避免抓栈 STW 将短暂延迟放大为网络超时。全栈由运维在需要时显式通过已启用的 pprof/admin 诊断入口采集，并评估暂停开销；没有开启入口的服务不自动提供该能力。
 
 `NestOptionWithStageMetrics(true)` 开启 `nest.stage.duration{handler,stage}`（Duration，默认关闭）。
 

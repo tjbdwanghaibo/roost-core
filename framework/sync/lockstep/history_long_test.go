@@ -52,7 +52,7 @@ func TestMatchLongRunCatchupAfterRollingTrim(t *testing.T) {
 				t.Fatal("hash reports grew beyond retention window")
 			}
 		}
-		peak = max(peak, m.history.allocated)
+		peak = max(peak, m.history.retainedCapacity)
 	}
 	if m.history.Len() != window || peak > 4*window {
 		t.Fatal("long match history not bounded")
@@ -161,7 +161,7 @@ func TestHistoryLongRollingWindow(t *testing.T) {
 		if id > window {
 			h.TrimBefore(id - window + 1)
 		}
-		peak = max(peak, h.allocated)
+		peak = max(peak, h.retainedCapacity)
 		if h.Len() != min(int(id), window) || h.Latest() != id {
 			t.Fatalf("frame %d range mismatch", id)
 		}
@@ -184,7 +184,7 @@ func TestHistoryLongRollingWindow(t *testing.T) {
 			t.Fatal("trim retained payload reference")
 		}
 	}
-	if h.allocated > 256 {
+	if h.retainedCapacity > 256 {
 		t.Fatal("large trim retained oversized array")
 	}
 	h.TrimBefore(h.Latest() + 1)
@@ -203,11 +203,11 @@ func TestHistoryGradualShrinkReleasesBackingArray(t *testing.T) {
 	for keep := FrameID(2); keep < 10000; keep++ {
 		h.TrimBefore(keep)
 	}
-	if h.Len() != 2 || h.allocated > 256 {
-		t.Fatalf("small tail retained backing allocation: len=%d allocated=%d", h.Len(), h.allocated)
+	if h.Len() != 2 || h.retainedCapacity > 256 {
+		t.Fatalf("small tail retained backing allocation: len=%d retained_capacity=%d", h.Len(), h.retainedCapacity)
 	}
 	h.TrimBefore(10001)
-	if h.allocated != 0 {
+	if h.retainedCapacity != 0 {
 		t.Fatal("empty history retained backing allocation")
 	}
 }

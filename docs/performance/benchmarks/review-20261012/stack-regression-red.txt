@@ -1,0 +1,5 @@
+--- FAIL: TestNestDispatchLogsSlowTraceWithMsgInfoWithoutGlobalStack (0.22s)
+    nest_test.go:234: automatic slow diagnostics must not dump global goroutine stacks
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.859s
+FAIL

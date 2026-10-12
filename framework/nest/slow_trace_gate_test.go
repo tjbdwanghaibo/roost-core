@@ -21,15 +21,15 @@ func TestSlowTraceGateBoundsConcurrentDiagnostics(t *testing.T) {
 	}
 	wg.Wait()
 	if got := accepted.Load(); got != 1 {
-		t.Fatalf("stack captures for one burst=%d", got)
+		t.Fatalf("detailed logs for one burst=%d", got)
 	}
-	if ok, _ := gate.take(now.Add(nestSlowDispatchStackInterval - time.Nanosecond)); ok {
+	if ok, _ := gate.take(now.Add(nestSlowDispatchLogInterval - time.Nanosecond)); ok {
 		t.Fatal("window reopened early")
 	}
-	if ok, skipped := gate.take(now.Add(nestSlowDispatchStackInterval)); !ok || skipped != 128 {
+	if ok, skipped := gate.take(now.Add(nestSlowDispatchLogInterval)); !ok || skipped != 128 {
 		t.Fatalf("next window allowed=%v suppressed=%d", ok, skipped)
 	}
-	if ok, skipped := gate.take(now.Add(2 * nestSlowDispatchStackInterval)); !ok || skipped != 0 {
+	if ok, skipped := gate.take(now.Add(2 * nestSlowDispatchLogInterval)); !ok || skipped != 0 {
 		t.Fatalf("idle next window allowed=%v suppressed=%d", ok, skipped)
 	}
 }

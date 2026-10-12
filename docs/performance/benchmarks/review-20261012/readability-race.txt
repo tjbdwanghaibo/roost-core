@@ -1,0 +1,4 @@
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	1.716s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	5.092s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	7.146s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	3.756s

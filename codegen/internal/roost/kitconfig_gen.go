@@ -92,6 +92,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "nest.unload_resync.queue_capacity", Kind: "int", Min: "0", Starter: true, Example: "4096"},
 		{Name: "sync.entity.mode", Kind: "string", Help: "periodic（正式缺省）或 on_change", Enum: []string{"periodic", "on_change"}},
 		{Name: "sync.entity.interval", Kind: "duration", Min: "0"},
+		{Name: "sync.entity.on_change_batch_window", Kind: "duration", Min: "0", Help: "on_change 首次唤醒后的固定合批窗口；0 为立即处理"},
 		{Name: "sync.entity.max_frozen_bytes", Kind: "int", Min: "0"},
 		{Name: "server_type", Kind: "string", Help: "服务类型，App 按启动的子命令写入"},
 		{Name: "sid", Kind: "int", Help: "服务实例号（正整数），同一服务类型内唯一；也可以用 --sid 覆盖"},

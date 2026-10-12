@@ -26,13 +26,9 @@ type Source interface {
 	Flush() []InterestEvent
 }
 
-// RelationSource is a set-driven Source: whoever owns a relationship pushes
-// the membership in, and the source turns the difference into Enter/Leave.
-//
-// It is the same shape for every relationship a game has — a team, a friends
-// list, an alliance are the same type with a different feed, which is why it
-// is not called TeamSource. Band 0 always: a relationship has no distance, so
-// it asks for the best fidelity the aggregator will give.
+// RelationSource 将队伍、好友等业务关系转为订阅进入/离开事件。
+// members 按观察者保存成员，observers 按实体反查观察者；两者在同一锁下更新。
+// 关系没有距离分档，进入事件始终使用 band 0。
 type RelationSource struct {
 	name string
 
@@ -48,7 +44,11 @@ type RelationSource struct {
 const relationScratchLimit = 1024
 
 func NewRelationSource(name string) *RelationSource {
-	return &RelationSource{name: name, members: make(map[int64]map[int64]struct{}), observers: make(map[int64]map[int64]struct{})}
+	return &RelationSource{
+		name:      name,
+		members:   make(map[int64]map[int64]struct{}),
+		observers: make(map[int64]map[int64]struct{}),
+	}
 }
 
 func (s *RelationSource) Name() string { return s.name }
@@ -61,8 +61,8 @@ func (s *RelationSource) Set(observer int64, subjects []int64) {
 		return
 	}
 	var next map[int64]struct{}
-	reuse := len(subjects) <= relationScratchLimit
-	if reuse {
+	useScratch := len(subjects) <= relationScratchLimit
+	if useScratch {
 		s.mu.Lock()
 		next = relationMembers(s.scratch, subjects)
 	} else {
@@ -76,33 +76,26 @@ func (s *RelationSource) Set(observer int64, subjects []int64) {
 	for subject := range previous {
 		if _, kept := next[subject]; !kept {
 			changed = true
-			delete(s.observers[subject], observer)
-			if len(s.observers[subject]) == 0 {
-				delete(s.observers, subject)
-			}
-			s.pending = append(s.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestLeave, Band: -1})
+			s.recordLeaveLocked(observer, subject)
 		}
 	}
 	for subject := range next {
 		if _, had := previous[subject]; !had {
 			changed = true
-			if s.observers[subject] == nil {
-				s.observers[subject] = make(map[int64]struct{})
-			}
-			s.observers[subject][observer] = struct{}{}
-			s.pending = append(s.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestEnter})
+			s.recordEnterLocked(observer, subject)
 		}
 	}
+	// 没有变化时保留原成员表；有变化时移交 next，不能再清空或复用它。
 	if len(next) == 0 {
 		delete(s.members, observer)
 	} else if changed {
 		s.members[observer] = next
-		if reuse {
+		if useScratch {
 			s.scratch = nil
 		}
 		return // next 已被正式成员持有，不能清空或再次作为工作区写入。
 	}
-	if reuse {
+	if useScratch {
 		clear(next)
 		s.scratch = next
 	}
@@ -140,11 +133,7 @@ func (s *RelationSource) ApplyDelta(observer int64, added, removed []int64) {
 			continue
 		}
 		delete(members, subject)
-		delete(s.observers[subject], observer)
-		if len(s.observers[subject]) == 0 {
-			delete(s.observers, subject)
-		}
-		s.pending = append(s.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestLeave, Band: -1})
+		s.recordLeaveLocked(observer, subject)
 	}
 	for _, subject := range added {
 		if subject == 0 {
@@ -161,15 +150,33 @@ func (s *RelationSource) ApplyDelta(observer int64, added, removed []int64) {
 			s.members[observer] = members
 		}
 		members[subject] = struct{}{}
-		if s.observers[subject] == nil {
-			s.observers[subject] = make(map[int64]struct{})
-		}
-		s.observers[subject][observer] = struct{}{}
-		s.pending = append(s.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestEnter})
+		s.recordEnterLocked(observer, subject)
 	}
 	if len(members) == 0 {
 		delete(s.members, observer)
 	}
+}
+
+// recordEnterLocked 登记反向关系并产生进入事件。
+// 调用方持有 mu，负责正向成员表，并已确认关系确实发生变化。
+func (s *RelationSource) recordEnterLocked(observer, subject int64) {
+	observers := s.observers[subject]
+	if observers == nil {
+		observers = make(map[int64]struct{})
+		s.observers[subject] = observers
+	}
+	observers[observer] = struct{}{}
+	s.pending = append(s.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestEnter})
+}
+
+// recordLeaveLocked 删除反向关系并产生离开事件；调用契约同 recordEnterLocked。
+func (s *RelationSource) recordLeaveLocked(observer, subject int64) {
+	observers := s.observers[subject]
+	delete(observers, observer)
+	if len(observers) == 0 {
+		delete(s.observers, subject)
+	}
+	s.pending = append(s.pending, InterestEvent{Observer: observer, Subject: subject, Kind: InterestLeave, Band: -1})
 }
 
 // Forget removes a subject from every observer's set. It is what a departing

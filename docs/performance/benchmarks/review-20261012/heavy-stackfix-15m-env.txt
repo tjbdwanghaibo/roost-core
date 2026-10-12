@@ -1,0 +1,35 @@
+go version go1.27.0 darwin/arm64
+6c36e0dff8234d58eeeaf2a8a00860827ead23ea
+ M CHANGELOG.md
+ M codegen/internal/roost/kitconfig_gen.go
+ M docs/framework/OBSERVABILITY.md
+ M docs/maintenance/KNOWN-LIMITS.md
+ M docs/maintenance/README.md
+ M docs/performance/GATE-AOI.md
+ M docs/performance/README.md
+ M framework/nest/dispatch_compare_bench_test.go
+ M framework/nest/nest_test.go
+ M framework/nest/slow_trace_gate_test.go
+ M framework/nest/trace.go
+?? docs/performance/REVIEW-20261012.md
+?? docs/performance/benchmarks/review-20261012/
+c26b7bbd45914eab8307042921a225b0d908a4412b6b0dfa216b4bf4c0e895ec  codegen/internal/entity/testdata/nestgame/gate_load_test.go
+463364a4323216efffbb69829b64361d6f57439690b41cccfdf05d7a5f7cbda5  codegen/internal/entity/testdata/nestgame/load_test.go
+e0c902d36d1c618b4e2613ff2a4fd3e1962ae55173d08aa591d517c86944332f  codegen/internal/entity/testdata/nestgame/spatial_component_test.go
+8ca6ee4a3e404ad0347c5fb7413a4503d22cadb7a7b9776c3e5522487f2abd8f  codegen/internal/entity/testdata/nestgame/sync_load_test.go
+3444270a6e8f7bcb707f775ea986340d10a42ef6a6b93ad01caa3e813b2169cc  codegen/internal/entity/testdata/nestgame/unit.go
+2266609228bf8c271509103b687ea2cdf04ff23eaa48140de20d79cb90f1f691  codegen/internal/entity/testdata/nestgame/def/state.go
+ROOST_NEST_GAME_DIRTY=5
+ROOST_NEST_GAME_DURATION=15m
+ROOST_NEST_GAME_ENTITIES=10000
+ROOST_NEST_GAME_GATE=1
+ROOST_NEST_GAME_HZ=10
+ROOST_NEST_GAME_MESSAGES_PER_PLAYER=10
+ROOST_NEST_GAME_PLAYERS=1000
+ROOST_NEST_GAME_PROFILE=0
+ROOST_NEST_GAME_QUEUE=65536
+ROOST_NEST_GAME_RACE=0
+ROOST_NEST_GAME_SLOW_WORKERS=8
+ROOST_NEST_GAME_SYNC=1
+ROOST_NEST_GAME_WORKERS=8
+GOMAXPROCS=0

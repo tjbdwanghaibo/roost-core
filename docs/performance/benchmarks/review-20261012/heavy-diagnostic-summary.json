@@ -1,0 +1,905 @@
+{
+  "label": "diagnostic-heavy-15m-20261012",
+  "target_seconds": 900,
+  "completed": false,
+  "first_send_error": {
+    "context_remaining_ms_at_start": 249.977083,
+    "decode_ok": false,
+    "elapsed_ms": 571.922958,
+    "error": "context deadline exceeded",
+    "payload_bytes": 337,
+    "receiver": 728,
+    "role": "game",
+    "started_seconds": 745.618592459,
+    "wall_drift_ms": 51.087583,
+    "decode_note": "Packet decoding failed; packet budget and out_seq are invalid and excluded."
+  },
+  "stack_stw": {
+    "start_trace_ns": 692758026222848,
+    "end_trace_ns": 692758356383168,
+    "duration_ms": 330.16032,
+    "all_other_processors_idle_to_resume_ms": 303.832384,
+    "caller": "framework/nest/trace.go:395 captureSlowDispatchStack"
+  },
+  "runtime_window": [
+    {
+      "allocated": 614745620056,
+      "elapsed": 739.734844417,
+      "gc_count": 4748,
+      "gc_pause_total_ns": 950279704,
+      "goroutines": 5444,
+      "heap": 162146112,
+      "nest": {
+        "Queue": {
+          "Fast": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 8553,
+            "Started": 81057919,
+            "Rejected": 0,
+            "DependencyWait": 55026871858,
+            "WorkerWait": 45786277116869,
+            "MaxDependencyWait": 32704625,
+            "MaxWorkerWait": 141157167,
+            "OldestWaiting": 0
+          },
+          "Slow": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "Long": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "LongPool": {
+            "Name": "nest_long",
+            "WorkerNum": 8,
+            "QueueCap": 4096,
+            "QueueLen": 0,
+            "Started": true,
+            "Stopped": false
+          },
+          "LongContinuations": 0,
+          "ContinuationRunning": 0
+        },
+        "Fast": {
+          "Name": "nest_fast",
+          "WorkerNum": 8,
+          "QueueCap": 65536,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Slow": {
+          "Name": "nest_slow",
+          "WorkerNum": 8,
+          "QueueCap": 64,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Long": {
+          "Name": "nest_long",
+          "WorkerNum": 8,
+          "QueueCap": 4096,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "FastContinuations": 0,
+        "Delayed": 0,
+        "Stopped": false,
+        "Work": {
+          "ProcessedMessages": 81057919,
+          "Slow200msMessages": 0
+        }
+      },
+      "tick_lag_ms": 0.344292,
+      "wall_drift_ms": 51.011583
+    },
+    {
+      "allocated": 615575834440,
+      "elapsed": 740.734778709,
+      "gc_count": 4754,
+      "gc_pause_total_ns": 951439038,
+      "goroutines": 5444,
+      "heap": 205121400,
+      "nest": {
+        "Queue": {
+          "Fast": {
+            "Running": 1,
+            "Ready": 26,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 19,
+            "PeakWaiting": 8553,
+            "Started": 81167984,
+            "Rejected": 0,
+            "DependencyWait": 55037723527,
+            "WorkerWait": 45856057735667,
+            "MaxDependencyWait": 32704625,
+            "MaxWorkerWait": 141157167,
+            "OldestWaiting": 114208
+          },
+          "Slow": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "Long": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "LongPool": {
+            "Name": "nest_long",
+            "WorkerNum": 8,
+            "QueueCap": 4096,
+            "QueueLen": 0,
+            "Started": true,
+            "Stopped": false
+          },
+          "LongContinuations": 0,
+          "ContinuationRunning": 0
+        },
+        "Fast": {
+          "Name": "nest_fast",
+          "WorkerNum": 8,
+          "QueueCap": 65536,
+          "QueueLen": 19,
+          "Started": true,
+          "Stopped": false
+        },
+        "Slow": {
+          "Name": "nest_slow",
+          "WorkerNum": 8,
+          "QueueCap": 64,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Long": {
+          "Name": "nest_long",
+          "WorkerNum": 8,
+          "QueueCap": 4096,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "FastContinuations": 0,
+        "Delayed": 0,
+        "Stopped": false,
+        "Work": {
+          "ProcessedMessages": 81167983,
+          "Slow200msMessages": 0
+        }
+      },
+      "tick_lag_ms": 0.293292,
+      "wall_drift_ms": 51.023291
+    },
+    {
+      "allocated": 616401500784,
+      "elapsed": 741.735112625,
+      "gc_count": 4760,
+      "gc_pause_total_ns": 952633371,
+      "goroutines": 5444,
+      "heap": 249219672,
+      "nest": {
+        "Queue": {
+          "Fast": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 8553,
+            "Started": 81277980,
+            "Rejected": 0,
+            "DependencyWait": 55044435948,
+            "WorkerWait": 45917302475009,
+            "MaxDependencyWait": 32704625,
+            "MaxWorkerWait": 141157167,
+            "OldestWaiting": 0
+          },
+          "Slow": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "Long": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "LongPool": {
+            "Name": "nest_long",
+            "WorkerNum": 8,
+            "QueueCap": 4096,
+            "QueueLen": 0,
+            "Started": true,
+            "Stopped": false
+          },
+          "LongContinuations": 0,
+          "ContinuationRunning": 0
+        },
+        "Fast": {
+          "Name": "nest_fast",
+          "WorkerNum": 8,
+          "QueueCap": 65536,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Slow": {
+          "Name": "nest_slow",
+          "WorkerNum": 8,
+          "QueueCap": 64,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Long": {
+          "Name": "nest_long",
+          "WorkerNum": 8,
+          "QueueCap": 4096,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "FastContinuations": 0,
+        "Delayed": 0,
+        "Stopped": false,
+        "Work": {
+          "ProcessedMessages": 81277980,
+          "Slow200msMessages": 0
+        }
+      },
+      "tick_lag_ms": 0.612333,
+      "wall_drift_ms": 51.035375
+    },
+    {
+      "allocated": 617234360816,
+      "elapsed": 742.734891625,
+      "gc_count": 4767,
+      "gc_pause_total_ns": 954631412,
+      "goroutines": 5444,
+      "heap": 165351152,
+      "nest": {
+        "Queue": {
+          "Fast": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 8553,
+            "Started": 81387969,
+            "Rejected": 0,
+            "DependencyWait": 55120362155,
+            "WorkerWait": 46207899704340,
+            "MaxDependencyWait": 32704625,
+            "MaxWorkerWait": 141157167,
+            "OldestWaiting": 0
+          },
+          "Slow": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "Long": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "LongPool": {
+            "Name": "nest_long",
+            "WorkerNum": 8,
+            "QueueCap": 4096,
+            "QueueLen": 0,
+            "Started": true,
+            "Stopped": false
+          },
+          "LongContinuations": 0,
+          "ContinuationRunning": 0
+        },
+        "Fast": {
+          "Name": "nest_fast",
+          "WorkerNum": 8,
+          "QueueCap": 65536,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Slow": {
+          "Name": "nest_slow",
+          "WorkerNum": 8,
+          "QueueCap": 64,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Long": {
+          "Name": "nest_long",
+          "WorkerNum": 8,
+          "QueueCap": 4096,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "FastContinuations": 0,
+        "Delayed": 0,
+        "Stopped": false,
+        "Work": {
+          "ProcessedMessages": 81387969,
+          "Slow200msMessages": 0
+        }
+      },
+      "tick_lag_ms": 0.392958,
+      "wall_drift_ms": 51.047375
+    },
+    {
+      "allocated": 618039376680,
+      "elapsed": 743.734891334,
+      "gc_count": 4773,
+      "gc_pause_total_ns": 955857870,
+      "goroutines": 5444,
+      "heap": 212481280,
+      "nest": {
+        "Queue": {
+          "Fast": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 8553,
+            "Started": 81497967,
+            "Rejected": 0,
+            "DependencyWait": 55131221572,
+            "WorkerWait": 46252416784176,
+            "MaxDependencyWait": 32704625,
+            "MaxWorkerWait": 141157167,
+            "OldestWaiting": 0
+          },
+          "Slow": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "Long": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "LongPool": {
+            "Name": "nest_long",
+            "WorkerNum": 8,
+            "QueueCap": 4096,
+            "QueueLen": 0,
+            "Started": true,
+            "Stopped": false
+          },
+          "LongContinuations": 0,
+          "ContinuationRunning": 0
+        },
+        "Fast": {
+          "Name": "nest_fast",
+          "WorkerNum": 8,
+          "QueueCap": 65536,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Slow": {
+          "Name": "nest_slow",
+          "WorkerNum": 8,
+          "QueueCap": 64,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Long": {
+          "Name": "nest_long",
+          "WorkerNum": 8,
+          "QueueCap": 4096,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "FastContinuations": 0,
+        "Delayed": 0,
+        "Stopped": false,
+        "Work": {
+          "ProcessedMessages": 81497967,
+          "Slow200msMessages": 0
+        }
+      },
+      "tick_lag_ms": 0.388042,
+      "wall_drift_ms": 51.058666
+    },
+    {
+      "allocated": 618881294072,
+      "elapsed": 744.734825959,
+      "gc_count": 4779,
+      "gc_pause_total_ns": 957205827,
+      "goroutines": 5444,
+      "heap": 251290824,
+      "nest": {
+        "Queue": {
+          "Fast": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 8553,
+            "Started": 81607946,
+            "Rejected": 0,
+            "DependencyWait": 55141105698,
+            "WorkerWait": 46309571683434,
+            "MaxDependencyWait": 32704625,
+            "MaxWorkerWait": 141157167,
+            "OldestWaiting": 0
+          },
+          "Slow": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "Long": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "LongPool": {
+            "Name": "nest_long",
+            "WorkerNum": 8,
+            "QueueCap": 4096,
+            "QueueLen": 0,
+            "Started": true,
+            "Stopped": false
+          },
+          "LongContinuations": 0,
+          "ContinuationRunning": 0
+        },
+        "Fast": {
+          "Name": "nest_fast",
+          "WorkerNum": 8,
+          "QueueCap": 65536,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Slow": {
+          "Name": "nest_slow",
+          "WorkerNum": 8,
+          "QueueCap": 64,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Long": {
+          "Name": "nest_long",
+          "WorkerNum": 8,
+          "QueueCap": 4096,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "FastContinuations": 0,
+        "Delayed": 0,
+        "Stopped": false,
+        "Work": {
+          "ProcessedMessages": 81607946,
+          "Slow200msMessages": 0
+        }
+      },
+      "tick_lag_ms": 0.326209,
+      "wall_drift_ms": 51.071041
+    },
+    {
+      "allocated": 619622989464,
+      "elapsed": 746.193169625,
+      "gc_count": 4785,
+      "gc_pause_total_ns": 958372867,
+      "goroutines": 5454,
+      "heap": 175419536,
+      "nest": {
+        "Queue": {
+          "Fast": {
+            "Running": 5,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 8553,
+            "Started": 81705839,
+            "Rejected": 0,
+            "DependencyWait": 55143504197,
+            "WorkerWait": 46373785200430,
+            "MaxDependencyWait": 32704625,
+            "MaxWorkerWait": 194238541,
+            "OldestWaiting": 0
+          },
+          "Slow": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "Long": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "LongPool": {
+            "Name": "nest_long",
+            "WorkerNum": 8,
+            "QueueCap": 4096,
+            "QueueLen": 0,
+            "Started": true,
+            "Stopped": false
+          },
+          "LongContinuations": 0,
+          "ContinuationRunning": 0
+        },
+        "Fast": {
+          "Name": "nest_fast",
+          "WorkerNum": 8,
+          "QueueCap": 65536,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Slow": {
+          "Name": "nest_slow",
+          "WorkerNum": 8,
+          "QueueCap": 64,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Long": {
+          "Name": "nest_long",
+          "WorkerNum": 8,
+          "QueueCap": 4096,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "FastContinuations": 0,
+        "Delayed": 0,
+        "Stopped": false,
+        "Work": {
+          "ProcessedMessages": 81705836,
+          "Slow200msMessages": 2
+        }
+      },
+      "tick_lag_ms": 458.61075,
+      "wall_drift_ms": 51.087375
+    },
+    {
+      "allocated": 620155360560,
+      "elapsed": 746.734496209,
+      "gc_count": 4789,
+      "gc_pause_total_ns": 959625284,
+      "goroutines": 5236,
+      "heap": 179411088,
+      "nest": {
+        "Queue": {
+          "Fast": {
+            "Running": 6,
+            "Ready": 479,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 477,
+            "PeakWaiting": 8553,
+            "Started": 81787276,
+            "Rejected": 0,
+            "DependencyWait": 59107289699,
+            "WorkerWait": 47067797877451,
+            "MaxDependencyWait": 35793750,
+            "MaxWorkerWait": 194238541,
+            "OldestWaiting": 1169833
+          },
+          "Slow": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "Long": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "LongPool": {
+            "Name": "nest_long",
+            "WorkerNum": 8,
+            "QueueCap": 4096,
+            "QueueLen": 0,
+            "Started": true,
+            "Stopped": false
+          },
+          "LongContinuations": 0,
+          "ContinuationRunning": 0
+        },
+        "Fast": {
+          "Name": "nest_fast",
+          "WorkerNum": 8,
+          "QueueCap": 65536,
+          "QueueLen": 477,
+          "Started": true,
+          "Stopped": false
+        },
+        "Slow": {
+          "Name": "nest_slow",
+          "WorkerNum": 8,
+          "QueueCap": 64,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Long": {
+          "Name": "nest_long",
+          "WorkerNum": 8,
+          "QueueCap": 4096,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "FastContinuations": 0,
+        "Delayed": 0,
+        "Stopped": false,
+        "Work": {
+          "ProcessedMessages": 81787270,
+          "Slow200msMessages": 5
+        }
+      },
+      "tick_lag_ms": 0.010876,
+      "wall_drift_ms": 51.093791
+    },
+    {
+      "allocated": 621218199488,
+      "elapsed": 747.734519167,
+      "gc_count": 4797,
+      "gc_pause_total_ns": 962198410,
+      "goroutines": 5236,
+      "heap": 191745832,
+      "nest": {
+        "Queue": {
+          "Fast": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 8553,
+            "Started": 81936875,
+            "Rejected": 0,
+            "DependencyWait": 65930363183,
+            "WorkerWait": 47843653251619,
+            "MaxDependencyWait": 35793750,
+            "MaxWorkerWait": 194238541,
+            "OldestWaiting": 0
+          },
+          "Slow": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "Long": {
+            "Running": 0,
+            "Ready": 0,
+            "BlockedOnPredecessor": 0,
+            "WaitingForWorker": 0,
+            "PeakWaiting": 0,
+            "Started": 0,
+            "Rejected": 0,
+            "DependencyWait": 0,
+            "WorkerWait": 0,
+            "MaxDependencyWait": 0,
+            "MaxWorkerWait": 0,
+            "OldestWaiting": 0
+          },
+          "LongPool": {
+            "Name": "nest_long",
+            "WorkerNum": 8,
+            "QueueCap": 4096,
+            "QueueLen": 0,
+            "Started": true,
+            "Stopped": false
+          },
+          "LongContinuations": 0,
+          "ContinuationRunning": 0
+        },
+        "Fast": {
+          "Name": "nest_fast",
+          "WorkerNum": 8,
+          "QueueCap": 65536,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Slow": {
+          "Name": "nest_slow",
+          "WorkerNum": 8,
+          "QueueCap": 64,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "Long": {
+          "Name": "nest_long",
+          "WorkerNum": 8,
+          "QueueCap": 4096,
+          "QueueLen": 0,
+          "Started": true,
+          "Stopped": false
+        },
+        "FastContinuations": 0,
+        "Delayed": 0,
+        "Stopped": false,
+        "Work": {
+          "ProcessedMessages": 81936875,
+          "Slow200msMessages": 5
+        }
+      },
+      "tick_lag_ms": 0.019209,
+      "wall_drift_ms": 51.105833
+    }
+  ],
+  "first_error_second_outbound_failures": 52,
+  "limitations": [
+    "diagnostic flight recorder and 1-second samplers enabled; no final full-run TPS/P99",
+    "initial pre-stack scheduling stalls not uniquely attributed",
+    "no change to production code, timeouts, queue size or workers in this rerun"
+  ]
+}

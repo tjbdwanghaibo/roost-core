@@ -3,7 +3,6 @@ package nest
 import (
 	"fmt"
 	"log/slog"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,8 +14,7 @@ import (
 const (
 	nestSlowDispatchThreshold      = 200 * time.Millisecond
 	nestSlowDispatchTraceThreshold = nestSlowDispatchThreshold
-	nestSlowDispatchStackLimit     = 256 * 1024
-	nestSlowDispatchStackInterval  = 5 * time.Second
+	nestSlowDispatchLogInterval    = 5 * time.Second
 )
 
 func observeDispatch(msg *Msg, err error, cost time.Duration) {
@@ -70,6 +68,7 @@ func dispatchResult(err error) string {
 }
 
 // watch 在 stop 确认计时回调结束后才可复用；完成信号只由计时回调发送。
+// timer 回调会读取 msg；即使完成路径已经记过日志，也要等待回调退出才能释放 msg。
 // 快请求只 Stop 计时器，无需每次分配 channel、Timer 和回调闭包。
 type slowDispatchTraceWatch struct {
 	timer  *time.Timer
@@ -120,7 +119,7 @@ func (watch *slowDispatchTraceWatch) trace(cost time.Duration, result string) {
 	if !watch.traced.CompareAndSwap(false, true) {
 		return
 	}
-	allowed, suppressed := slowDispatchStackGate.take(time.Now())
+	allowed, suppressed := slowDispatchLogGate.take(time.Now())
 	if !allowed {
 		metrics.IncCounter("nest.dispatch.slow_trace_suppressed", nil, 1)
 		return
@@ -128,15 +127,16 @@ func (watch *slowDispatchTraceWatch) trace(cost time.Duration, result string) {
 	logSlowDispatchTrace(newNestMsgDebugInfo(watch.msg), cost, result, suppressed)
 }
 
-// 全 goroutine 堆栈是进程级诊断，按进程限频。慢日志和耗时指标仍逐请求记录；
-// 依赖阻塞时不能让每个等待者都分配 256 KiB 并暂停运行时抓取相同堆栈。
+// 详细慢日志按进程限频，完成耗时与指标仍逐请求记录。
+// 自动诊断不抓全进程栈：runtime.Stack(all=true) 会暂停全部业务，
+// 将短暂延迟放大为网络超时；全栈仅由运维显式采集。
 type slowTraceGate struct {
 	mu         sync.Mutex
 	next       time.Time
 	suppressed uint64
 }
 
-var slowDispatchStackGate slowTraceGate
+var slowDispatchLogGate slowTraceGate
 
 func (gate *slowTraceGate) take(now time.Time) (bool, uint64) {
 	gate.mu.Lock()
@@ -147,7 +147,7 @@ func (gate *slowTraceGate) take(now time.Time) (bool, uint64) {
 	}
 	suppressed := gate.suppressed
 	gate.suppressed = 0
-	gate.next = now.Add(nestSlowDispatchStackInterval)
+	gate.next = now.Add(nestSlowDispatchLogInterval)
 	return true, suppressed
 }
 
@@ -294,7 +294,6 @@ func truncateNestDebugText(text string, limit int) string {
 }
 
 func logSlowDispatchTrace(info nestMsgDebugInfo, cost time.Duration, result string, suppressed uint64) {
-	stack, truncated := captureSlowDispatchStack()
 	flog.NewELog().Title("nest").Warn("slow dispatch trace",
 		"handler", info.Handler,
 		"type", info.Type,
@@ -303,9 +302,7 @@ func logSlowDispatchTrace(info nestMsgDebugInfo, cost time.Duration, result stri
 		"cost", cost.String(),
 		"result", result,
 		"msg_info", info.fields(),
-		"stack_truncated", truncated,
 		"suppressed_since_last_trace", suppressed,
-		"stack", stack,
 	)
 }
 
@@ -388,12 +385,6 @@ func emitNestTraceEventInfo(info nestTraceEventInfo, event string, result string
 		"seq", info.Seq,
 		"tags", info.Tags,
 	)
-}
-
-func captureSlowDispatchStack() (string, bool) {
-	buf := make([]byte, nestSlowDispatchStackLimit)
-	n := runtime.Stack(buf, true)
-	return string(buf[:n]), n == len(buf)
 }
 
 func logAsyncDispatchError(msg *Msg, err error) {

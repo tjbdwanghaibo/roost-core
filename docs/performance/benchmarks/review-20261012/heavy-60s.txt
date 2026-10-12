@@ -1,0 +1,11 @@
+=== RUN   TestNestGameLoad
+2026/10/12 15:49:14 INFO nats: connected url=nats://127.0.0.1:60796
+2026/10/12 15:49:14 INFO nats: connected url=nats://127.0.0.1:60796
+2026/10/12 15:49:14 INFO player tcp listener started addr=127.0.0.1:60799 max_connections=10000
+messages=9999.4/s heartbeat=99993.6/s changes=5499.6/s p99=13.070/10.450ms counts=true values=true latency=true
+2026/10/12 15:50:16 INFO nats: disconnected err=<nil>
+2026/10/12 15:50:16 INFO nats: connection closed
+2026/10/12 15:50:16 INFO nats: disconnected err=<nil>
+2026/10/12 15:50:16 INFO nats: connection closed
+--- PASS: TestNestGameLoad (62.86s)
+PASS

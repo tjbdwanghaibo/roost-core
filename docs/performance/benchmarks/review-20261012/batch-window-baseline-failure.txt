@@ -1,0 +1,48 @@
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/5ms (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/0s (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/5ms (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/5ms (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/5ms (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/5ms (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/10ms (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/5ms (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/5ms (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/10ms (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/5ms (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/10ms (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/0s (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/10ms (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+--- FAIL: TestOnChangeBatchWindowBurstComparison (0.00s)
+    --- FAIL: TestOnChangeBatchWindowBurstComparison/5ms (0.00s)
+        batch_window_test.go:227: entity: subject sync state has no pending dirty data
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.561s
+FAIL

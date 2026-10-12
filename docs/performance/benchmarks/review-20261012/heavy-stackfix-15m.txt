@@ -1,0 +1,14 @@
+=== RUN   TestNestGameLoad
+2026/10/12 18:32:26 INFO nats: connected url=nats://127.0.0.1:51265
+2026/10/12 18:32:26 INFO nats: connected url=nats://127.0.0.1:51265
+2026/10/12 18:32:26 INFO player tcp listener started addr=127.0.0.1:51277 max_connections=10000
+2026/10/12 18:44:52 WARN nest handler held entity locks beyond threshold handler=perf.game.business hold=136.532042ms threshold=100ms
+2026/10/12 18:44:52 WARN nest handler held entity locks beyond threshold handler=perf.game.business hold=140.973042ms threshold=100ms
+2026/10/12 18:44:52 WARN nest handler held entity locks beyond threshold handler=perf.game.business hold=140.929875ms threshold=100ms
+messages=9999.9/s heartbeat=99999.4/s changes=5500.0/s p99=30.330/13.630ms counts=true values=true latency=true
+2026/10/12 18:47:29 INFO nats: disconnected err=<nil>
+2026/10/12 18:47:29 INFO nats: connection closed
+2026/10/12 18:47:29 INFO nats: disconnected err=<nil>
+2026/10/12 18:47:29 INFO nats: connection closed
+--- PASS: TestNestGameLoad (902.89s)
+PASS

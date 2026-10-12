@@ -1,0 +1,37 @@
+=== RUN   TestNestGameLoad
+2026/10/12 15:40:44 INFO nats: connected url=nats://127.0.0.1:59553
+2026/10/12 15:40:44 INFO nats: connected url=nats://127.0.0.1:59553
+2026/10/12 15:40:44 INFO player tcp listener started addr=127.0.0.1:59558 max_connections=10000
+2026/10/12 15:46:41 WARN gate closed binding after channel failure receiver=221 game_sid=22 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN player tcp dispatch failed player_id=221 message_id=1 sequence=3545 over_budget=false err="gateway: stale binding"
+2026/10/12 15:46:41 WARN gate closed binding after channel failure receiver=160 game_sid=22 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=160 err="context canceled"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=186 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=206 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=162 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=265 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=209 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=230 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=262 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN player tcp dispatch failed player_id=186 message_id=1 sequence=3545 over_budget=false err="gateway: stale binding"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=229 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=63 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=62 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=64 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=58 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN player tcp dispatch failed player_id=160 message_id=1 sequence=3545 over_budget=false err="gateway: stale binding"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=231 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN player tcp dispatch failed player_id=162 message_id=1 sequence=3545 over_budget=false err="gateway: stale binding"
+2026/10/12 15:46:41 WARN player tcp dispatch failed player_id=58 message_id=1 sequence=3546 over_budget=false err="context canceled"
+2026/10/12 15:46:41 WARN player tcp dispatch failed player_id=231 message_id=1 sequence=3545 over_budget=false err="gateway: stale binding"
+2026/10/12 15:46:41 WARN player tcp dispatch failed player_id=265 message_id=1 sequence=3545 over_budget=false err="gateway: stale binding"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=158 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=185 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN player tcp dispatch failed player_id=209 message_id=1 sequence=3545 over_budget=false err="gateway: stale binding"
+2026/10/12 15:46:41 WARN player tcp dispatch failed player_id=230 message_id=1 sequence=3545 over_budget=false err="gateway: stale binding"
+2026/10/12 15:46:41 WARN player tcp dispatch failed player_id=206 message_id=1 sequence=3545 over_budget=false err="gateway: stale binding"
+2026/10/12 15:46:41 WARN player tcp dispatch failed player_id=262 message_id=1 sequence=3545 over_budget=false err="gateway: stale binding"
+2026/10/12 15:46:41 WARN game ingress outbound failed; retiring binding receiver=144 err="context deadline exceeded"
+2026/10/12 15:46:41 WARN player tcp dispatch failed player_id=158 message_id=1 sequence=3545 over_budget=false err="gateway: stale binding"
+
+15m target not completed. First observed failure at 15:46:41: Gate channel context deadline exceeded, then bindings retired. Stopped the owned test with SIGQUIT after failure to retain stacks. No final full-window TPS/P99 can be claimed.

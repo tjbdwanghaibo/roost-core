@@ -1,0 +1,13 @@
+COMMAND: ['go', 'test', './framework/sync/lockstep', '-run', '^$', '-bench', '^BenchmarkHistoryRollingWindow$', '-benchmem', '-benchtime=500ms', '-count=3']
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep
+cpu: Apple M5
+BenchmarkHistoryRollingWindow/300-10         	57699112	        10.30 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/300-10         	60493017	        10.15 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/300-10         	60786423	        10.06 ns/op	      67 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-10       	27950636	        21.60 ns/op	     152 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-10       	27449014	        21.97 ns/op	     152 B/op	       0 allocs/op
+BenchmarkHistoryRollingWindow/18000-10       	27237339	        21.93 ns/op	     152 B/op	       0 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	4.220s

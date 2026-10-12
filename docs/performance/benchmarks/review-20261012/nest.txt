@@ -1,0 +1,34 @@
+COMMAND: ['go', 'test', './framework/nest', '-run', '^$', '-bench', '^BenchmarkDispatchCompareMicro$/cpu_(10|50|100|500)us$/uniform$/nest$', '-benchmem', '-benchtime=500ms', '-count=3']
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-10         	--- FAIL: BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-10
+    dispatch_compare_bench_test.go:276: drain=<nil> rejected=36
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-10         	--- FAIL: BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-10
+    dispatch_compare_bench_test.go:276: drain=<nil> rejected=36
+BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-10         	--- FAIL: BenchmarkDispatchCompareMicro/cpu_10us/uniform/nest-10
+    dispatch_compare_bench_test.go:276: drain=<nil> rejected=36
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-10         	--- FAIL: BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-10
+    dispatch_compare_bench_test.go:276: drain=<nil> rejected=36
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-10         	--- FAIL: BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-10
+    dispatch_compare_bench_test.go:276: drain=<nil> rejected=36
+BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-10         	--- FAIL: BenchmarkDispatchCompareMicro/cpu_50us/uniform/nest-10
+    dispatch_compare_bench_test.go:276: drain=<nil> rejected=36
+BenchmarkDispatchCompareMicro/cpu_100us/uniform/nest-10        	--- FAIL: BenchmarkDispatchCompareMicro/cpu_100us/uniform/nest-10
+    dispatch_compare_bench_test.go:276: drain=<nil> rejected=36
+BenchmarkDispatchCompareMicro/cpu_100us/uniform/nest-10        	--- FAIL: BenchmarkDispatchCompareMicro/cpu_100us/uniform/nest-10
+    dispatch_compare_bench_test.go:276: drain=<nil> rejected=36
+BenchmarkDispatchCompareMicro/cpu_100us/uniform/nest-10        	--- FAIL: BenchmarkDispatchCompareMicro/cpu_100us/uniform/nest-10
+    dispatch_compare_bench_test.go:276: drain=<nil> rejected=36
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-10        	--- FAIL: BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-10
+    dispatch_compare_bench_test.go:276: drain=<nil> rejected=32
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-10        	--- FAIL: BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-10
+    dispatch_compare_bench_test.go:276: drain=<nil> rejected=32
+BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-10        	--- FAIL: BenchmarkDispatchCompareMicro/cpu_500us/uniform/nest-10
+    dispatch_compare_bench_test.go:276: drain=<nil> rejected=32
+--- FAIL: BenchmarkDispatchCompareMicro
+FAIL
+exit status 1
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	3.456s
+FAIL

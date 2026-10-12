@@ -1,23 +1,16 @@
 package lockstep
 
-// History stores every sequenced frame of a match: the catch-up source for
-// reconnects, mid-game joins and spectators, and — because inputs plus a
-// deterministic simulation ARE the match — the replay file, for free.
+// History 保存一场对局的连续帧，供重连追帧、旁观和回放读取。
+// 宿主通过 TrimBefore 控制保留窗口；裁掉的帧不能再用于追帧。
 //
-// Memory budget: the worst case is duration × rate × players × payload —
-// e.g. one hour at 30 fps with 10 players × 8-byte inputs ≈ 50 MB. Hosts
-// that do not need the full replay must TrimBefore periodically (catch-up
-// older than the trim point becomes unservable).
-//
-// History is single-owner state like the rest of the package: Replay and
-// ReadRange return views that are only valid inside the owning serial
-// handler, until the next Append or TrimBefore. Callers retaining a replay
-// beyond that point must copy it. Concurrent reads and mutations are unsupported.
+// 由对局的串行 handler 独占。Replay 和 ReadRange 返回共享只读视图，
+// 只在下一次 Append/TrimBefore 之前有效；跨调用保留时必须复制，不能并发读写。
 type History struct {
 	first  FrameID
 	frames []Frame
-	// allocated 包含已裁掉前缀仍占用的底层数组容量，不能只看当前切片的 cap。
-	allocated int
+	// retainedCapacity 记录整个底层数组容量，包含已裁掉的前缀；
+	// frames 的 cap 只覆盖后缀，不能据此判断实际保留的内存。
+	retainedCapacity int
 }
 
 func NewHistory() *History { return &History{} }
@@ -34,11 +27,11 @@ func (h *History) Append(frame Frame) {
 	grows := len(h.frames) == cap(h.frames)
 	h.frames = append(h.frames, frame)
 	if grows {
-		h.allocated = cap(h.frames)
+		h.retainedCapacity = cap(h.frames)
 	}
 }
 
-// Latest is the newest stored frame id (0 when empty).
+// Latest 返回当前保留的最新帧 ID，空历史返回 0。
 func (h *History) Latest() FrameID {
 	if len(h.frames) == 0 {
 		return 0
@@ -46,10 +39,10 @@ func (h *History) Latest() FrameID {
 	return h.first + FrameID(len(h.frames)) - 1
 }
 
-// Len is the stored frame count.
+// Len 返回当前保留的帧数。
 func (h *History) Len() int { return len(h.frames) }
 
-// FirstID is the oldest stored frame id (0 when empty).
+// FirstID 返回当前保留的最早帧 ID，空历史返回 0。
 func (h *History) FirstID() FrameID {
 	if len(h.frames) == 0 {
 		return 0
@@ -71,11 +64,11 @@ func (h *History) TrimBefore(keep FrameID) {
 	switch {
 	case len(remaining) == 0:
 		h.frames = nil
-		h.allocated = 0
-	case h.allocated > max(256, 2*len(remaining)):
+		h.retainedCapacity = 0
+	case h.retainedCapacity > max(256, 2*len(remaining)):
 		// 大幅裁剪才收缩，避免很短的尾部长期持有大数组。
 		h.frames = append([]Frame(nil), remaining...)
-		h.allocated = cap(h.frames)
+		h.retainedCapacity = cap(h.frames)
 	default:
 		h.frames = remaining
 	}

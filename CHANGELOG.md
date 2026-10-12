@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+- 修复on_change合批测试绕过Guard提交门导致的偶发无脏数据错误：测试通过正式加锁、冻结、确认与释放流程提交，保留帧数/版本/内容断言；生产同步逻辑不变。
+
+- 整理近期同步热路径可读性：Relation复用正反关系更新中的重复操作，合批定时器和历史容量使用明确名称，补充视图、工作区及慢日志生命周期注释；不改锁边界、同步策略和协议。
+
+- Nest 慢请求自动诊断移除全进程抓栈，保留200ms慢请求检测、消息详情、耗时与5秒限频；避免诊断STW放大Gate超时。全栈由运维显式采集，证据见 docs/performance/REVIEW-20261012.md。
+
+- 修复 codegen 配置快照遗漏 `sync.entity.on_change_batch_window`：重新生成 `kitconfig_gen.go`，使配置一致性检查通过，doctor 不再把框架合批参数误计为业务字段。
+- 修复调度 benchmark 的裸整数 ID 被三池路由识别为其他 Kind 的问题：使用正式短业务 EntityID，分片对照按 UniqueID 保持原负载分布，补完整 ID 周期的路由与分布回归；不改变生产准入策略。
 - Sync OnChange 新增固定合批窗口 `OnChangeBatchWindow` / `sync.entity.on_change_batch_window`，默认 0 保持原行为；支持配置显式关闭和最终 Configure 覆盖，周期与停机仍可提前 Flush。
 - Lockstep 历史裁剪清除旧引用后复用连续窗口，避免逐帧复制整段历史；修复超大 ReadRange 长度及 FrameID 上界裁剪溢出。补一小时逻辑帧、hash 裁剪和滚动追帧验证，结果及使用边界见 docs/framework/SYNC-OPTIMIZATION.md。
 

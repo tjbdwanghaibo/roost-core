@@ -1,0 +1,90 @@
+Extracted with go tool trace -d=parsed. Original trace retained in ignored artifacts.
+
+M=6178516992 P=4 G=181 StateTransition Time=692757784742912 GoID=4123 Waiting->Waiting Reason=""
+M=6178516992 P=4 G=181 StateTransition Time=692757784743104 GoID=4123 Waiting->Runnable Reason=""
+Stack=
+	runtime.selectnbsend @ 0x102a01113
+		/opt/homebrew/Cellar/go/1.27.0/libexec/src/runtime/chan.go:785
+	github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport.signal @ 0x102f7060f
+		/Users/whb/roost/roost-core/framework/sync/nettransport/channel.go:524
+	github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport.(*AsyncTransport).SendReliable @ 0x102f70604
+		/Users/whb/roost/roost-core/framework/sync/nettransport/channel.go:271
+	github.com/tjbdwanghaibo/roost-core/wiring/gate.asyncQueue.Enqueue @ 0x102f91fc7
+		/Users/whb/roost/roost-core/wiring/gate/queue.go:38
+	github.com/tjbdwanghaibo/roost-core/infra/network/gateway.(*GameIngress).enqueueOutbound @ 0x102db13fb
+		/Users/whb/roost/roost-core/infra/network/gateway/ingress_outbound.go:39
+	github.com/tjbdwanghaibo/roost-core/infra/network/gateway.gameSession.Reply @ 0x102db0fdf
+		/Users/whb/roost/roost-core/infra/network/gateway/ingress_forward.go:299
+	github.com/tjbdwanghaibo/roost-core/infra/network/gateway.(*GameIngress).dispatch @ 0x102db0a73
+		/Users/whb/roost/roost-core/infra/network/gateway/ingress_forward.go:264
+	github.com/tjbdwanghaibo/roost-core/infra/network/gateway.(*GameIngress).forwardWorker @ 0x102db0773
+		/Users/whb/roost/roost-core/infra/network/gateway/ingress_forward.go:224
+	sync.(*WaitGroup).Go.func1 @ 0x102a8c727
+		/opt/homebrew/Cellar/go/1.27.0/libexec/src/sync/waitgroup.go:258
+
+M=6178516992 P=4 G=-1 StateTransition Time=692757784763520 GoID=4123 Runnable->Running Reason=""
+M=6178516992 P=4 G=4123 StateTransition Time=692757876594944 GoID=4123 Running->Waiting Reason="select"
+TransitionStack=
+	runtime.selectgo @ 0x102a4ea17
+		/opt/homebrew/Cellar/go/1.27.0/libexec/src/runtime/select.go:351
+	github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver.(*inboxClient).RequestContext @ 0x103017393
+		/Users/whb/roost/roost-core/infra/network/nats/driver/raw_inbox.go:120
+	github.com/tjbdwanghaibo/roost-core/infra/network/gateway.(*GameIngress).sendOutbound @ 0x102db17f3
+		/Users/whb/roost/roost-core/infra/network/gateway/ingress_outbound.go:69
+	nestgame.diagFactory.func1.1 @ 0x103039073
+		/var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T/roost-nest-game.4ITH0k/diagnostic_test.go:29
+	github.com/tjbdwanghaibo/roost-core/wiring/gate.AsyncQueueFactory.func1 @ 0x102f9254f
+		/Users/whb/roost/roost-core/wiring/gate/queue.go:15
+	github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport.TransportFunc.SendReliable @ 0x102f72a5f
+		/Users/whb/roost/roost-core/framework/sync/nettransport/transport.go:52
+	github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport.(*sessionQueue).send @ 0x102f71603
+		/Users/whb/roost/roost-core/framework/sync/nettransport/channel.go:443
+	github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport.(*sessionQueue).run @ 0x102f711b7
+		/Users/whb/roost/roost-core/framework/sync/nettransport/channel.go:399
+
+Stack=
+	runtime.selectgo @ 0x102a4ea17
+		/opt/homebrew/Cellar/go/1.27.0/libexec/src/runtime/select.go:351
+	github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver.(*inboxClient).RequestContext @ 0x103017393
+		/Users/whb/roost/roost-core/infra/network/nats/driver/raw_inbox.go:120
+	github.com/tjbdwanghaibo/roost-core/infra/network/gateway.(*GameIngress).sendOutbound @ 0x102db17f3
+		/Users/whb/roost/roost-core/infra/network/gateway/ingress_outbound.go:69
+	nestgame.diagFactory.func1.1 @ 0x103039073
+		/var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T/roost-nest-game.4ITH0k/diagnostic_test.go:29
+	github.com/tjbdwanghaibo/roost-core/wiring/gate.AsyncQueueFactory.func1 @ 0x102f9254f
+		/Users/whb/roost/roost-core/wiring/gate/queue.go:15
+	github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport.TransportFunc.SendReliable @ 0x102f72a5f
+		/Users/whb/roost/roost-core/framework/sync/nettransport/transport.go:52
+	github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport.(*sessionQueue).send @ 0x102f71603
+		/Users/whb/roost/roost-core/framework/sync/nettransport/channel.go:443
+	github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport.(*sessionQueue).run @ 0x102f711b7
+		/Users/whb/roost/roost-core/framework/sync/nettransport/channel.go:399
+
+M=6414938112 P=1 G=1559918 RangeBegin Time=692758026222848 Name="stop-the-world (all goroutines stack trace)" Scope=Goroutine(1559918)
+Stack=
+	runtime.Stack @ 0x102a31caf
+		/opt/homebrew/Cellar/go/1.27.0/libexec/src/runtime/mprof.go:1693
+	github.com/tjbdwanghaibo/roost-core/framework/nest.captureSlowDispatchStack @ 0x102d2bc2b
+		/Users/whb/roost/roost-core/framework/nest/trace.go:395
+	github.com/tjbdwanghaibo/roost-core/framework/nest.logSlowDispatchTrace @ 0x102d2bc00
+		/Users/whb/roost/roost-core/framework/nest/trace.go:297
+	github.com/tjbdwanghaibo/roost-core/framework/nest.(*slowDispatchTraceWatch).trace @ 0x102d2a99b
+		/Users/whb/roost/roost-core/framework/nest/trace.go:128
+	github.com/tjbdwanghaibo/roost-core/framework/nest.startSlowDispatchTraceWatch.func1 @ 0x102d34177
+		/Users/whb/roost/roost-core/framework/nest/trace.go:96
+
+M=6414938112 P=1 G=1559918 RangeEnd Time=692758356383168 Name="stop-the-world (all goroutines stack trace)" Scope=Goroutine(1559918) Attributes=[]
+M=6178516992 P=4 G=1559897 StateTransition Time=692758356643392 GoID=4123 Waiting->Runnable Reason=""
+Stack=
+	context.(*cancelCtx).cancel @ 0x102acb8e3
+		/opt/homebrew/Cellar/go/1.27.0/libexec/src/context/context.go:568
+	context.(*timerCtx).cancel @ 0x102acc0fb
+		/opt/homebrew/Cellar/go/1.27.0/libexec/src/context/context.go:681
+	context.(*cancelCtx).cancel @ 0x102acb99b
+		/opt/homebrew/Cellar/go/1.27.0/libexec/src/context/context.go:572
+	context.(*timerCtx).cancel @ 0x102acc0fb
+		/opt/homebrew/Cellar/go/1.27.0/libexec/src/context/context.go:681
+	context.WithDeadlineCause.func2 @ 0x102acce63
+		/opt/homebrew/Cellar/go/1.27.0/libexec/src/context/context.go:654
+
+M=6178516992 P=4 G=-1 StateTransition Time=692758356651648 GoID=4123 Runnable->Running Reason=""

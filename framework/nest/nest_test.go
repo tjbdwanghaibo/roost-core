@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/framework/hotcode"
+	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"io"
@@ -186,11 +186,11 @@ func TestShouldTraceSlowDispatchUsesSlowThreshold(t *testing.T) {
 	}
 }
 
-func TestNestDispatchLogsSlowTraceWithStackAndMsgInfo(t *testing.T) {
-	slowDispatchStackGate.mu.Lock()
-	slowDispatchStackGate.next = time.Time{}
-	slowDispatchStackGate.suppressed = 0
-	slowDispatchStackGate.mu.Unlock()
+func TestNestDispatchLogsSlowTraceWithMsgInfoWithoutGlobalStack(t *testing.T) {
+	slowDispatchLogGate.mu.Lock()
+	slowDispatchLogGate.next = time.Time{}
+	slowDispatchLogGate.suppressed = 0
+	slowDispatchLogGate.mu.Unlock()
 	var buf bytes.Buffer
 	if err := flog.Init(flog.Options{
 		Level:          slog.LevelWarn,
@@ -230,11 +230,13 @@ func TestNestDispatchLogsSlowTraceWithStackAndMsgInfo(t *testing.T) {
 	NestDispatch(mgr, msg)
 
 	out := buf.String()
+	if strings.Contains(out, "stack=") || strings.Contains(out, "stack_truncated=") {
+		t.Fatal("automatic slow diagnostics must not dump global goroutine stacks")
+	}
 	for _, want := range []string{
 		"slow dispatch trace",
 		"handler=auto_heartbeat",
 		"type=Single",
-		"stack=",
 		"msg_info=",
 		"param_types",
 		"string",

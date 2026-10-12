@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/goroutine"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
@@ -23,6 +24,7 @@ type dispatchComparisonPool struct {
 }
 
 func newDispatchComparisonPool(kind string, workers int, handler func(*Msg)) dispatchComparisonPool {
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: nestLocalKind, Category: 1, BusinessPool: entity.BusinessPoolShort})
 	if kind == "nest" {
 		q := newDispatchQueue("dispatch_compare", WorkerPoolConfig{workers, DefaultFastQueueCapacity}, WorkerPoolConfig{}, handler, nil)
 		q.start()
@@ -54,7 +56,7 @@ func newDispatchComparisonPool(kind string, workers int, handler func(*Msg)) dis
 	return dispatchComparisonPool{
 		admit: func(m *Msg) error {
 			select {
-			case queues[uint64(m.Tid)%uint64(workers)] <- m:
+			case queues[uint64(entity.ResolveEntityID(m.Tid).UniqueID)%uint64(workers)] <- m:
 				return nil
 			default:
 				return worker.ErrWorkerQueueFull
@@ -131,15 +133,25 @@ type dispatchComparisonJob struct {
 	checksum uint64
 }
 
+// 使用正式短业务 EntityID，避免裸整数的 Kind 位碰到其他测试注册的长业务 Kind。
+// 对照分片按 UniqueID 取模，保持 uniform/colliding_ids 的原始分布；不把固定 Kind 位算成分片负载。
 func dispatchComparisonID(index, workers int, distribution string) int64 {
+	unique := int64(index%10000 + 1)
 	switch distribution {
 	case "hot_id":
-		return 1
+		unique = 1
 	case "colliding_ids":
-		return int64(index%10000*workers + 1)
-	default:
-		return int64(index%10000 + 1)
+		unique = int64(index%10000*workers + 1)
 	}
+	return dispatchComparisonEntityID(unique)
+}
+
+func dispatchComparisonEntityID(unique int64) int64 {
+	id, err := entity.BuildEntityID(unique, nestLocalKind)
+	if err != nil {
+		panic(err)
+	}
+	return id
 }
 
 // BenchmarkDispatchCompare 测固定窗口的完成吞吐，非固定速率压测。
@@ -310,7 +322,7 @@ func TestDispatchComparisonSingleIDContract(t *testing.T) {
 			var active [16]atomic.Int64
 			var invalid atomic.Bool
 			pool := newDispatchComparisonPool(kind, 4, func(m *Msg) {
-				index := int(m.Tid - 1)
+				index := int(entity.ResolveEntityID(m.Tid).UniqueID - 1)
 				if active[index].Add(1) != 1 {
 					invalid.Store(true)
 				}
@@ -338,7 +350,7 @@ func TestDispatchComparisonSingleIDContract(t *testing.T) {
 			for sequence := 1; sequence <= 100; sequence++ {
 				for id := 1; id <= 16; id++ {
 					m := GenMsg(MsgTypeSingle)
-					m.Tid, m.Params = int64(id), []any{sequence}
+					m.Tid, m.Params = dispatchComparisonEntityID(int64(id)), []any{sequence}
 					m.OnSend()
 					if err := pool.admit(m); err != nil {
 						m.OnRelease()
@@ -347,5 +359,35 @@ func TestDispatchComparisonSingleIDContract(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// 覆盖完整 ID 周期，不能只测前 16 个恰好没有撞到长业务 Kind 的裸整数。
+func TestDispatchComparisonIDsStayInShortPool(t *testing.T) {
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: nestLocalKind, Category: 1, BusinessPool: entity.BusinessPoolShort})
+	for _, workers := range []int{4, 10} {
+		for _, distribution := range []string{"uniform", "colliding_ids", "hot_id"} {
+			seen := make(map[int64]struct{})
+			shards := make(map[int64]int)
+			for i := range 10000 {
+				id := dispatchComparisonID(i, workers, distribution)
+				meta := entity.ResolveEntityID(id)
+				if meta.Kind != nestLocalKind || meta.UniqueID <= 0 || businessLane(&Msg{Tid: id}) != dispatchFastLane {
+					t.Fatalf("invalid comparison ID: %+v", meta)
+				}
+				seen[id] = struct{}{}
+				shards[meta.UniqueID%int64(workers)]++
+			}
+			wantIDs, wantShards := 10000, workers
+			if distribution == "hot_id" {
+				wantIDs = 1
+			}
+			if distribution != "uniform" {
+				wantShards = 1
+			}
+			if len(seen) != wantIDs || len(shards) != wantShards {
+				t.Fatalf("%s: IDs=%d shards=%d", distribution, len(seen), len(shards))
+			}
+		}
 	}
 }

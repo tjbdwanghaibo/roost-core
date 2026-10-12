@@ -2,11 +2,51 @@ package entitysync
 
 import (
 	"context"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"errors"
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
+
+// batchEntity 让定时窗口测试遵守正式实体的加锁与提交边界。
+type batchEntity struct{ *entity.EntityBase }
+
+func (e *batchEntity) Base() *entity.EntityBase { return e.EntityBase }
+
+func newBatchEntity(state *entity.SubjectSyncState) *batchEntity {
+	e := &batchEntity{entity.NewEntityBase(state.SubjectID(), entity.EntityCategory(1), true)}
+	e.SetSyncState(state)
+	return e
+}
+
+func commitBatchChange(t *testing.T, m *Manager, e *batchEntity, change func()) {
+	t.Helper()
+	var mutation *entity.SyncMutation
+	err := entity.WithGuardScope("batch window test", func(scope *entity.GuardScope) error {
+		if !scope.Guard().RequireEntity(e) {
+			return errors.New("batch entity lock unavailable")
+		}
+		mutation = entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
+		if change != nil {
+			change()
+		}
+		e.Sync().MarkDirty(1)
+		// Admit 在锁内冻结。没有提交门时，MarkDirty 通知可能让 Flush 抢先消费数据。
+		mutation.Admit()
+		if err := e.Sync().LastError(); err != nil {
+			return err
+		}
+		mutation.Confirm()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// WithGuardScope 已释放实体锁；此处才开放交付并唤醒 Manager。
+	mutation.Release()
+}
 
 func batchManager(t *testing.T, window, interval time.Duration) *Manager {
 	t.Helper()
@@ -152,6 +192,7 @@ func TestOnChangeBatchWindowPreservesDelivery(t *testing.T) {
 		defer m.Close(context.Background())
 		packs := 0
 		s := testSubject(t, 1, &packs)
+		e := newBatchEntity(s)
 		if err = m.Register(s); err != nil {
 			t.Fatal(err)
 		}
@@ -170,11 +211,7 @@ func TestOnChangeBatchWindowPreservesDelivery(t *testing.T) {
 		synctest.Wait()
 		oneFrame(t, tr, 1)
 		for range 3 {
-			s.MarkDirty(1)
-			if err = m.CaptureSync(s); err != nil {
-				t.Fatal(err)
-			}
-			m.WakeSync()
+			commitBatchChange(t, m, e, nil)
 			synctest.Wait()
 			time.Sleep(time.Millisecond)
 		}
@@ -208,6 +245,7 @@ func TestOnChangeBatchWindowBurstComparison(t *testing.T) {
 					return entity.CopyFrozenSyncPayload(1, []byte{value}), nil
 				}
 				s := entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: 1, Packer: entity.SubjectSyncPackFunc{Snapshot: pack, Delta: func(p entity.SyncProfile, _ uint64) (entity.FrozenSyncPayload, error) { return pack(p) }}})
+				e := newBatchEntity(s)
 				if err = m.Register(s); err != nil {
 					t.Fatal(err)
 				}
@@ -221,12 +259,9 @@ func TestOnChangeBatchWindowBurstComparison(t *testing.T) {
 				}
 				synctest.Wait()
 				for range 20 {
-					value++
-					s.MarkDirty(1)
-					if err = m.CaptureSync(s); err != nil {
-						t.Fatal(err)
-					}
-					m.WakeSync()
+					// 当前时刻到期的窗口先处理完，再开始下一笔业务提交。
+					synctest.Wait()
+					commitBatchChange(t, m, e, func() { value++ })
 					synctest.Wait()
 					time.Sleep(time.Millisecond)
 				}

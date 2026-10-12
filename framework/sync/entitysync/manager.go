@@ -734,38 +734,40 @@ func (m *Manager) Start(ctx context.Context) error {
 func (m *Manager) run(ctx context.Context, state *managerRun) {
 	defer close(state.done)
 	defer state.cancel()
-	ticker := time.NewTicker(m.config.Interval)
-	defer ticker.Stop()
-	var timer *time.Timer
-	var batch <-chan time.Time
-	stopBatch := func() {
-		if timer != nil {
-			timer.Stop()
+	fallbackTicker := time.NewTicker(m.config.Interval)
+	defer fallbackTicker.Stop()
+	var batchTimer *time.Timer
+	// nil 表示没有待处理窗口，同时禁用 select 的到期分支。
+	var batchDeadline <-chan time.Time
+	cancelBatchWindow := func() {
+		if batchTimer != nil {
+			batchTimer.Stop()
 		}
-		batch = nil
+		batchDeadline = nil
 	}
-	defer stopBatch()
+	defer cancelBatchWindow()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			stopBatch()
+		case <-fallbackTicker.C:
+			// 周期兜底将提前 Flush，不再等待本轮合批窗口到期。
+			cancelBatchWindow()
 			_ = m.Flush(ctx)
 		case <-m.wake:
 			if m.config.OnChangeBatchWindow == 0 {
 				_ = m.Flush(ctx)
-			} else if batch == nil {
+			} else if batchDeadline == nil {
 				// 固定截止时间而非不断续期的 debounce，持续写入也能得到处理机会。
-				if timer == nil {
-					timer = time.NewTimer(m.config.OnChangeBatchWindow)
+				if batchTimer == nil {
+					batchTimer = time.NewTimer(m.config.OnChangeBatchWindow)
 				} else {
-					timer.Reset(m.config.OnChangeBatchWindow)
+					batchTimer.Reset(m.config.OnChangeBatchWindow)
 				}
-				batch = timer.C
+				batchDeadline = batchTimer.C
 			}
-		case <-batch:
-			batch = nil
+		case <-batchDeadline:
+			batchDeadline = nil
 			_ = m.Flush(ctx)
 		}
 	}

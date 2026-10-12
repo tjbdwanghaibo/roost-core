@@ -77,6 +77,8 @@ WAL目录使用单写持久卷，不同实例不得共享同一写目录。Mongo
 
 生成代码同样面向人阅读：局部变量表达职责，必要中文注释说明校验和执行边界；从模板修改，不手改产物。保留统一格式化、当前生成物编译及运行回归；不要通过删除测试来掩盖生成错误。历史修复过程放Git，当前注释直接解释约束。
 
+修改 Wiring 的配置声明时，同步运行 `go generate ./codegen/internal/roost`，更新生成器持有的 `kitconfig_gen.go` 快照，再运行 `go test ./codegen/internal/roost -run '^(TestKitConfigSchemasMatchKitDeclarations|TestDoctorReadsBusinessDeclarationsFromTheProcess)$' -count=1`。遗漏快照会让配置检查与运行时声明不一致，doctor 还会把新增框架字段误计为业务字段；不能只测 Wiring 包或修改业务字段数量断言来掩盖漂移。`sync.entity.on_change_batch_window` 曾触发这两项失败，正式重新生成后两项均通过，修复不改变运行时同步行为。
+
 2026-10-10整理：Nest目标存储显式归job所有，复制后不再更改；补消息切片隔离回归。删除DataEngine旧checkpoint符号扫描及Saga两项内部组织守卫，保留Saga完成判定与代际行为测试；Nest生成器5份零散回归合并为签名和handler契约2份。未删除快慢池、Sync/AOI、WAL恢复、Remote幂等及生成产物清理回归，后续全仓整理结果见下表；整理不等于证明所有测试互不重复。
 
 本次验证：Nest、Saga、DataEngine、Nest生成器定向测试及race通过；真实生成game-demo的build/vet通过；根包文档、指标、依赖门禁通过。未跑新性能负载，未宣称吞吐提升。
@@ -102,3 +104,23 @@ WAL目录使用单写持久卷，不同实例不得共享同一写目录。Mongo
 本地验证首次发现`artifacts/perf/remote/`内的历史源码备份被Go包枚举包含，旧路径与混合package导致setup失败。`.gitignore`不控制Go构建范围；本机新增忽略的`artifacts/go.mod`划出独立模块，仅隔离历史证据，不改主模块测试范围、不删除备份。新克隆不含这些本地归档；后续保存源码备份时使用独立模块或以下划线开头的目录。
 
 全仓验证结果：首次`go test -count=1 ./...`中主模块各包通过，仅3个历史归档包setup失败；隔离本地归档后`go test ./...`整体通过，`go vet ./...`通过，测试声明语法摘要复核一致。未运行integration标签、跨机故障矩阵或新性能压测；带显式环境条件的跳过不计为外部资源验收。
+
+
+### 近期热路径的可读性整理（2026-10-12）
+
+范围限定为本轮新改动的Relation、AOI候选淘汰、Sync合批、Lockstep历史帧及Nest慢日志生命周期。采用局部具名操作、明确状态名称和中文所有权注释，不新增包、接口或第二套调度路径。
+
+- Relation的Set/ApplyDelta复用反向索引与进入/离开事件维护；调用方仍持同一把锁并负责正向成员表。小集合工作区一旦成为正式成员表即转移所有权，不能清空复用；大集合仍在锁外构表。Forget保留整组退出流程。
+- Sync循环区分周期兜底ticker、合批timer及其启用通道；nil表示没有待处理窗口。固定截止、不因新变化延期、周期提前Flush的行为保持不变。
+- History以retainedCapacity表示包含已裁前缀的底层数组容量，避免与当前切片cap混淆；明确返回视图的只读、串行与有效期要求。裁剪和收缩阈值不变。
+- AOI淘汰变量明确表示最远实体与候选是否存在，保留负数ID、同距稳定规则；Nest补充timer回调读msg与停止后才能复用的契约。
+
+受影响的Nest、EntitySync/Policy、Lockstep包正常测试和race均通过，复用既有行为回归，没有为纯命名编写结构断言。首次检查漏改测试中History私有字段引用，已同步更名；沙箱缓存/端口拒绝不计代码缺陷，授权环境复跑通过。本轮没有重新运行15分钟重档，前节性能结果属于可读性整理之前的代码，不宣称本轮有吞吐收益。
+
+### 合批测试提交边界修复（2026-10-12）
+
+`TestOnChangeBatchWindowBurstComparison`直接调用MarkDirty后再CaptureSync，没有正式提交门。MarkDirty通知让Manager进入Flush，可能在CaptureSync冻结之前消费脏数据，触发`subject sync state has no pending dirty data`；这不是合批窗口本身的生产缺陷。用Go overlay恢复HEAD的manager.go后重复1000轮仍可复现，修前证据保留在[基线失败](../performance/benchmarks/review-20261012/batch-window-baseline-failure.txt)。
+
+BurstComparison与PreservesDelivery统一使用带EntityBase的测试实体，通过Guard取得实体锁、BeginSyncMutation建立提交门、锁内修改并Admit冻结、确认后解锁，最后Release开放交付。冻包失败仍检查LastError，不忽略错误或重试掩盖失败。BurstComparison每次业务开始前用synctest.Wait处理当前虚拟时刻已到期的窗口，明确同一时刻先到期、后下一笔业务的测试顺序；不改生产调度顺序。原0/5/10ms窗口分别20/4/2帧、版本链、最终payload和冻结预算释放断言全部保留。
+
+两条交付测试重复1000轮通过，全部on_change测试race重复100轮通过；EntitySync/Policy、Nest和Wiring/Nest整包通过。[重复回归](../performance/benchmarks/review-20261012/batch-window-fix-repeat.txt)、[race回归](../performance/benchmarks/review-20261012/batch-window-fix-race.txt)、[整包回归](../performance/benchmarks/review-20261012/batch-window-fix-packages.txt)。本项已从已知限制移除；本轮仅修改测试夹具与文档，没有修改运行时、放宽断言或重跑性能负载。后续on_change交付测试应复用正式提交边界，不能把裸MarkDirty加CaptureSync当成Nest handler提交。

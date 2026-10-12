@@ -571,24 +571,24 @@ func (m *AOI) evaluatePair(observer *interestObserver, subject int64, at spatial
 // the farthest current member if it is strictly farther (ties keep the
 // incumbent; the farthest scan breaks distance ties by id for determinism).
 func (m *AOI) evictFarther(observer *interestObserver, at spatial.Point) bool {
-	farthest, farthestDistance := int64(-1), int64(-1)
-	found := false // 非零负数也是合法 ID，不能用 ID 的符号表示是否找到成员。
+	farthestSubject, farthestDistance := int64(-1), int64(-1)
+	hasCandidate := false // 非零负数也是合法 ID，不能用 ID 的符号表示是否找到成员。
 	for subject := range observer.visible {
 		position, exists := m.subjects[subject]
 		if !exists {
 			continue
 		}
 		distance := spatial.DistanceSquared(observer.at, position)
-		if distance > farthestDistance || (distance == farthestDistance && subject < farthest) {
-			farthest, farthestDistance = subject, distance
-			found = true
+		if distance > farthestDistance || (distance == farthestDistance && subject < farthestSubject) {
+			farthestSubject, farthestDistance = subject, distance
+			hasCandidate = true
 		}
 	}
-	if !found || spatial.DistanceSquared(observer.at, at) >= farthestDistance {
+	if !hasCandidate || spatial.DistanceSquared(observer.at, at) >= farthestDistance {
 		return false
 	}
-	delete(observer.visible, farthest)
-	m.emit(observer.id, farthest, InterestLeave, -1)
+	delete(observer.visible, farthestSubject)
+	m.emit(observer.id, farthestSubject, InterestLeave, -1)
 	return true
 }
 

@@ -4,6 +4,7 @@
 
 | 报告 | 范围与结论 |
 | --- | --- |
+| [2026-10-12 新增提交复验](REVIEW-20261012.md) | 配置快照/基准夹具修复与局部性能；15分钟重档目标在约6分钟出现Gate通道超时，未通过 |
 | [v1.24.0 稳定基线](STABLE-v1.24.0.md) | Nest、Sync、DataEngine、Remote/Saga 的历史验收；不代替新增 Gate 验收 |
 | [Gate / AOI 混合负载](GATE-AOI.md) | 1000玩家、10000实体、10000消息/s；2026-10-09常规通过、4并行度重档失败；2026-10-10快8/慢8/默认并行度重档15分钟通过 |
 | [Nest 调度对照](NEST-DISPATCH-BENCHMARK.md) | ID hash / ID tail、10～500μs handler 与 job 布局；微基准不能直接换算真实服务器容量 |
