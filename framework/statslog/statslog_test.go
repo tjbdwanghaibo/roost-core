@@ -1,9 +1,13 @@
+// 统计日志：独立 JSONL 文件、关闭时不建文件、provider 注销与 panic、停止不被阻塞的 flush、只读快照不消费窗口、写失败可见。
+
 package statslog
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,11 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
-
-	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 func TestLoggerWritesSeparateJSONLFile(t *testing.T) {
@@ -215,5 +219,187 @@ func TestFormatNestStatsUsesReadableQueueNames(t *testing.T) {
 	}
 	if stats.ProcessedMessagesTotal != 100 || stats.Slow200msMessagesTotal != 7 {
 		t.Fatalf("nest cumulative stats mismatch: %+v", stats)
+	}
+}
+
+type snapshotNest struct{ n uint64 }
+
+func (s *snapshotNest) Stats() nest.DispatcherStats {
+	return nest.DispatcherStats{Work: nest.DispatcherWorkStats{ProcessedMessages: s.n}}
+}
+func TestStatsEndpointDoesNotConsumeFileWindow(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("stats_log.enabled", true)
+	cfg.Set("stats_log.dir", t.TempDir())
+	cfg.Set("stats_log.filename", "b7.jsonl")
+	m := New()
+	if err := configureTestLogger(m, cfg); err != nil {
+		t.Fatal(err)
+	}
+	r := app.NewRegistry(cfg)
+	n := &snapshotNest{n: 10}
+	if err := r.Register(app.ModName("nest"), n); err != nil {
+		t.Fatal(err)
+	}
+	if err := connectTestLogger(m, r); err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+	if err := m.FlushOnce(); err != nil {
+		t.Fatal(err)
+	}
+	n.n = 15
+	m.CollectStats()
+	n.n = 20
+	if err := m.FlushOnce(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(m.dir, m.filename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total uint64
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var record StatsRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		total += record.Nest.ProcessedMessages
+	}
+	if total != 20 {
+		t.Fatalf("file windows contain %d messages, want 20; /statsz consumed part of the window", total)
+	}
+}
+
+// stats_log 写不进去时运维看得见：WARN 日志加一个无标签计数器 stats_log.write_failures，启动时就发现，不等第一个 interval。同一个
+// 错误反复出现只告警一次（计数器每次都加），恢复写入时打一条 INFO。
+// 历史：RR-20260928-04。
+
+// lockedBuffer is a slog sink the flush goroutine and the test read and write
+// concurrently.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// captureSlog routes the default logger into a buffer for one test. The
+// default logger is process-wide, so these tests do not run in parallel.
+func captureSlog(t *testing.T) *lockedBuffer {
+	t.Helper()
+	out := &lockedBuffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return out
+}
+
+// unwritableStatsDir is a stats_log.dir that MkdirAll cannot create even as
+// root: its parent is a regular file.
+func unwritableStatsDir(t *testing.T) (dir, blocker string) {
+	t.Helper()
+	blocker = filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(blocker, "log"), blocker
+}
+
+func startStatsLog(t *testing.T, dir string, interval time.Duration) (*Logger, *metrics.Registry) {
+	t.Helper()
+	cfg := viper.New()
+	cfg.Set("server_type", "game")
+	cfg.Set("sid", 9)
+	cfg.Set("stats_log.enabled", true)
+	cfg.Set("stats_log.dir", dir)
+	cfg.Set("stats_log.interval", interval)
+	mod := New()
+	if err := configureTestLogger(mod, cfg); err != nil {
+		t.Fatal(err)
+	}
+	registry := app.NewRegistry(cfg)
+	if err := connectTestLogger(mod, registry); err != nil {
+		t.Fatal(err)
+	}
+	reg, ok := app.Lookup[*metrics.Registry](registry, app.ModMetrics)
+	if !ok || reg == nil {
+		t.Fatal("the app registry publishes no metrics registry")
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(mod.Stop)
+	return mod, reg
+}
+
+func writeFailures(reg *metrics.Registry) int64 {
+	for _, metric := range reg.Snapshot() {
+		if metric.Name == "stats_log.write_failures" {
+			return metric.Value
+		}
+	}
+	return 0
+}
+
+func TestStatsLogStartReportsAnUnwritableDirectory(t *testing.T) {
+	logs := captureSlog(t)
+	dir, _ := unwritableStatsDir(t)
+	// An hour: nothing periodic runs during the test, so whatever is reported
+	// was reported by Start itself.
+	_, reg := startStatsLog(t, dir, time.Hour)
+
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), dir) {
+		t.Errorf("Start with an unwritable stats_log.dir %s logged no WARN naming it; logs:\n%s", dir, logs.String())
+	}
+	if got := writeFailures(reg); got != 1 {
+		t.Errorf("stats_log.write_failures after Start = %d, want 1", got)
+	}
+}
+
+func TestStatsLogPeriodicFailuresAreCountedWarnedOnceAndRecoveryIsLogged(t *testing.T) {
+	logs := captureSlog(t)
+	dir, blocker := unwritableStatsDir(t)
+	_, reg := startStatsLog(t, dir, 5*time.Millisecond)
+
+	waitFor(t, "stats_log.write_failures >= 3", func() bool { return writeFailures(reg) >= 3 })
+	if warns := strings.Count(logs.String(), "level=WARN"); warns != 1 {
+		t.Errorf("the same write error repeated %d times produced %d WARN lines, want 1; logs:\n%s",
+			writeFailures(reg), warns, logs.String())
+	}
+
+	// The operator fixes the directory: the next tick writes, and says so.
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "game-9.stats.log")
+	waitFor(t, "a record in "+file, func() bool {
+		info, err := os.Stat(file)
+		return err == nil && info.Size() > 0
+	})
+	waitFor(t, "an INFO line saying writing resumed", func() bool {
+		return strings.Contains(logs.String(), "level=INFO") && strings.Contains(logs.String(), file)
+	})
+}
+
+// waitFor polls a condition the flush goroutine establishes on its own clock.
+func waitFor(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !done() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

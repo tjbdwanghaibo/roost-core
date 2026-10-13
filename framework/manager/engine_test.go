@@ -1,16 +1,19 @@
+// 管理器引擎：按依赖启动与逆序停止、启动失败回滚、停止错误汇总与幂等、注册时机、停机契约、关停中止启动。
+
 package manager
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/app"
-
 	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/internal/stopcontract"
 )
 
 // fakeManager records lifecycle calls against a shared journal so the tests
@@ -472,3 +475,115 @@ func (h *hookManager) Start(*app.Registry) error {
 	return nil
 }
 func (h *hookManager) Stop() { h.onStop() }
+
+// Engine.Stop 套共用停机契约骨架：卡住的工作是一个还没排空的 manager，“资源”是它依赖的 manager——只能在它停完之后被停。
+// 历史：RR-20261005-NC-170。
+func TestEngineStopContract(t *testing.T) {
+	dependent := &drainingManager{name: "dependent", dependsOn: []string{"dependency"}, initiated: make(chan struct{}), drained: make(chan struct{})}
+	dependency := &dependencyManager{name: "dependency", dependent: dependent}
+	var engine *Engine
+	stopcontract.Check(t, stopcontract.Hooks{
+		Start: func(testing.TB) { engine, _ = newStartedEngine(t, dependency, dependent) },
+		Stop:  func(ctx context.Context) error { return engine.Stop(ctx) },
+		Release: func() {
+			close(dependent.drained)
+		},
+		Released: func() bool { return dependency.stops.Load() > 0 },
+	})
+	if dependency.stoppedUnderUsage.Load() || dependency.stops.Load() != 1 {
+		t.Fatalf("dependency stops=%d stoppedUnderUsage=%v, want one stop after the dependent drained", dependency.stops.Load(), dependency.stoppedUnderUsage.Load())
+	}
+}
+
+// Start 一旦取走待启动列表，Register 就按 ErrRegisterAfterStart 拒绝——即使第一个管理器还在慢 Start；被拒的管理器不出现在 Manager(name)。
+// 历史：RR-20260916-07。
+func TestRegisterDuringTheFirstStartIsRefused(t *testing.T) {
+	slow := &gatedManager{name: "slow", entered: make(chan struct{}), release: make(chan struct{})}
+	e := NewEngine(slow)
+	if err := e.Provide(app.NewRegistry(viper.New())); err != nil {
+		t.Fatal(err)
+	}
+	startDone := make(chan struct{})
+	go func() { _ = e.Start(); close(startDone) }()
+	waitFor(t, slow.entered)
+
+	late := &gatedManager{name: "late"}
+	err := e.Register(late)
+	close(slow.release)
+	waitFor(t, startDone)
+	_ = e.Stop(context.Background())
+	if !errors.Is(err, ErrRegisterAfterStart) {
+		t.Fatalf("Register during the first Start = %v (late starts=%d stops=%d, managers=%d); want ErrRegisterAfterStart",
+			err, late.starts.Load(), late.stops.Load(), len(e.Managers()))
+	}
+	if _, listed := e.Manager("late"); listed {
+		t.Fatal("the refused manager is still listed")
+	}
+}
+
+// abortingManager starts fine, but by the time it returns a shutdown has been
+// requested (as a SIGTERM during a slow start would), and its own stop fails.
+type abortingManager struct {
+	mod     *Engine
+	stopErr error
+}
+
+func (m *abortingManager) Name() string { return "aborting" }
+func (m *abortingManager) Start(*app.Registry) error {
+	m.mod.mu.Lock()
+	m.mod.stopping = true
+	m.mod.mu.Unlock()
+	return nil
+}
+func (m *abortingManager) Stop()                                 {}
+func (m *abortingManager) StopWithContext(context.Context) error { return m.stopErr }
+
+// 启动途中收到关停，已启动的管理器回滚失败时，错误同时说明“被关停中止”和回滚的原因；后面的管理器不再启动。
+func TestStartAbortedByShutdownReportsARollbackFailure(t *testing.T) {
+	stopErr := errors.New("flush failed")
+	aborting := &abortingManager{stopErr: stopErr}
+	journal := []string{}
+	mod := NewEngine(aborting, &fakeManager{name: "second", journal: &journal})
+	aborting.mod = mod
+	if err := mod.Provide(app.NewRegistry(viper.New())); err != nil {
+		t.Fatal(err)
+	}
+	err := mod.Start()
+	if !errors.Is(err, stopErr) || !strings.Contains(err.Error(), "start aborted by shutdown") || !strings.Contains(err.Error(), "rollback") {
+		t.Fatalf("Start aborted with a failing rollback = %v", err)
+	}
+	if len(journal) != 0 {
+		t.Fatalf("a manager started after shutdown was requested: %v", journal)
+	}
+}
+
+type stopFailingManager struct {
+	name string
+	err  error
+}
+
+func (m *stopFailingManager) Name() string                          { return m.name }
+func (m *stopFailingManager) Start(*app.Registry) error             { return nil }
+func (m *stopFailingManager) Stop()                                 {}
+func (m *stopFailingManager) StopWithContext(context.Context) error { return m.err }
+
+// Provide 拒绝 nil 注册表；自依赖是环；Start 失败回滚时若已启动的管理器停止也失败，两个错误都报出来。
+func TestEngineReportsRollbackFailuresAndRefusesCycles(t *testing.T) {
+	if err := NewEngine().Provide(nil); err == nil || !strings.Contains(err.Error(), "registry is nil") {
+		t.Fatalf("Provide(nil) = %v", err)
+	}
+	if _, err := Order([]app.IManager{orderManager{name: "a", dependsOn: []string{"a"}}}); err == nil || !strings.Contains(err.Error(), `dependency cycle at "a"`) {
+		t.Fatalf("self-dependency = %v", err)
+	}
+	stopErr := errors.New("flush failed")
+	startErr := errors.New("bind failed")
+	journal := []string{}
+	mod := NewEngine(&stopFailingManager{name: "first", err: stopErr}, &fakeManager{name: "second", startErr: startErr, journal: &journal})
+	if err := mod.Provide(app.NewRegistry(viper.New())); err != nil {
+		t.Fatal(err)
+	}
+	err := mod.Start()
+	if !errors.Is(err, startErr) || !errors.Is(err, stopErr) || !strings.Contains(err.Error(), "rollback") {
+		t.Fatalf("Start with a failing rollback = %v, want both the start and the stop error", err)
+	}
+}

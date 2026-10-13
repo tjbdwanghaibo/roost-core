@@ -77,7 +77,7 @@
 
 ### manager
 
-2 个实现文件、9 个测试文件。
+2 个实现文件、3 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -119,15 +119,9 @@
 
 ### manager
 
-- [abort_promises_test.go](../../../framework/manager/abort_promises_test.go)：`TestStartAbortedByShutdownReportsARollbackFailure`
-- [engine_lifecycle_promises_test.go](../../../framework/manager/engine_lifecycle_promises_test.go)：`TestConcurrentStartHasOneOwner`、`TestSingleAttemptAfterFailureOrStop`、`TestProvidePreconditionDoesNotConsumeStartup`、`TestLastStartupHandoverAlsoContainsStopPanic`、`TestStopPanicPreservesCauseAndContinues`；其余 4 项见文件
-- [engine_test.go](../../../framework/manager/engine_test.go)：`TestEngineStartsInRegistrationOrderAndStopsInReverse`、`TestEngineStartsDependenciesFirstAndTearsDownAfterDependents`、`TestEngineOrderIsStableAcrossRunsForIndependentManagers`、`TestEngineRollsBackStartedManagersWhenOneFails`、`TestEngineStopPrefersBoundedHookAndPassesContext`；其余 8 项见文件
-- [guards_promises_test.go](../../../framework/manager/guards_promises_test.go)：`TestEngineReportsRollbackFailuresAndRefusesCycles`
+- [engine_lifecycle_test.go](../../../framework/manager/engine_lifecycle_test.go)：`TestConcurrentStartHasOneOwner`、`TestSingleAttemptAfterFailureOrStop`、`TestProvidePreconditionDoesNotConsumeStartup`、`TestLastStartupHandoverAlsoContainsStopPanic`、`TestStopPanicPreservesCauseAndContinues`；其余 7 项见文件
+- [engine_test.go](../../../framework/manager/engine_test.go)：`TestEngineStartsInRegistrationOrderAndStopsInReverse`、`TestEngineStartsDependenciesFirstAndTearsDownAfterDependents`、`TestEngineOrderIsStableAcrossRunsForIndependentManagers`、`TestEngineRollsBackStartedManagersWhenOneFails`、`TestEngineStopPrefersBoundedHookAndPassesContext`；其余 12 项见文件
 - [order_test.go](../../../framework/manager/order_test.go)：`TestOrderRejectsCyclesByName`、`TestOrderRejectsMissingDependencyNamingBothSides`、`TestOrderRejectsDuplicateAndInvalidEntries`、`TestOrderHandlesDiamondDependencies`、`TestOrderIgnoresDependsOnListingOrder`；其余 2 项见文件
-- [register_during_start_promises_test.go](../../../framework/manager/register_during_start_promises_test.go)：`TestRegisterDuringTheFirstStartIsRefused`
-- [stop_contract_test.go](../../../framework/manager/stop_contract_test.go)：`TestEngineStopContract`
-- [stop_during_last_start_promises_test.go](../../../framework/manager/stop_during_last_start_promises_test.go)：`TestStopDuringTheLastStartStillStopsWhatStarted`
-- [stop_retry_promises_test.go](../../../framework/manager/stop_retry_promises_test.go)：`TestEngineStopRetryWaitsForTheManagerTheFirstStopCouldNotDrain`、`TestEngineConcurrentStopWaitsWithinItsOwnContext`
 
 </details>
 

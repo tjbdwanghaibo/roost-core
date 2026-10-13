@@ -1,13 +1,16 @@
+// 热更提交：监听器准备 / 提交 / 回滚的顺序与范围、panic 转错误、全局槽位恢复、回滚只一次、JSON 包装与严格模式、并发热更。
+
 package configdata
 
 import (
 	"context"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 func newCommitTestStore(t *testing.T) (*Store, string) {
@@ -220,6 +223,11 @@ func TestFirstLoadFailureSkipsRollbackCallbacks(t *testing.T) {
 	if store.Current() != nil {
 		t.Fatal("current not nil after failed first load")
 	}
+	if cfg := fctx.RuntimeConfig(); cfg != nil {
+		if snap, ok := cfg.(*Snapshot); ok && snap == nil {
+			t.Fatal("typed-nil *Snapshot parked in runtime config slot")
+		}
+	}
 }
 
 func TestDuplicateRegistrationIsAnError(t *testing.T) {
@@ -323,5 +331,178 @@ func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
 		t.Fatalf("timed out waiting for %s", what)
 		var zero T
 		return zero
+	}
+}
+
+func TestBeforeApplyPanicRollsBackOnlyPrepared(t *testing.T) {
+	store, _ := newCommitTestStore(t)
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	store.AddReloadListener(&recordingListener{name: "a", calls: &calls})
+	store.AddReloadListener(&recordingListener{name: "b", calls: &calls, panicBefore: true})
+	if _, err := store.Reload(context.Background()); err == nil || !strings.Contains(err.Error(), "panic: before boom") {
+		t.Fatalf("panic swallowed: %v", err)
+	}
+	joined := strings.Join(calls, ",")
+	if !strings.HasSuffix(joined, "b.before,a.rollback") {
+		t.Fatalf("prepared-only rollback broken: %s", joined)
+	}
+}
+
+func TestRevertRestoresAllGlobalSlots(t *testing.T) {
+	store, _ := newCommitTestStore(t)
+	first, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevDefault := DefaultStore()
+	prevConfig := fctx.RuntimeConfig()
+	var calls []string
+	unregister := store.AddReloadListener(&recordingListener{name: "a", calls: &calls, failAfter: true})
+	if _, err := store.Reload(context.Background()); err == nil {
+		t.Fatal("failure swallowed")
+	}
+	unregister()
+	if store.Current() != first {
+		t.Fatal("current not reverted")
+	}
+	if DefaultStore() != prevDefault {
+		t.Fatal("defaultStore not restored")
+	}
+	if fctx.RuntimeConfig() != prevConfig {
+		t.Fatal("fctx runtime config not restored")
+	}
+	// previous must not have been polluted by the failed generation.
+	if _, err := store.Rollback(context.Background(), "test"); err == nil {
+		snapAfter := store.Current()
+		if snapAfter.Version >= first.Version {
+			t.Fatalf("rollback after failed reload landed on %d", snapAfter.Version)
+		}
+	}
+}
+
+func TestRollbackTwiceIsRejected(t *testing.T) {
+	store, dir := newCommitTestStore(t)
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "monster.json"), `[{"id":1,"name":"bear","scene_id":7}]`)
+	v2, err := store.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := store.Rollback(context.Background(), "oops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Version >= v2.Version {
+		t.Fatalf("rollback landed on %d", back.Version)
+	}
+	// The bad generation must not be reachable as "previous" anymore: a
+	// second rollback (operator double-click) must fail, not republish it.
+	if _, err := store.Rollback(context.Background(), "double-click"); err == nil {
+		t.Fatal("second rollback republished the rejected generation")
+	}
+	// And versions stay monotonic afterwards: v2 burned, rollback burned
+	// nothing new, next reload allocates past everything seen so far.
+	next, err := store.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Version <= v2.Version {
+		t.Fatalf("version reused after rollback: %d <= %d", next.Version, v2.Version)
+	}
+}
+
+func TestWrapperDocumentsHappyPathAndGuards(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry()
+	MustRegisterTable(reg, TableDef[int32, testMonsterCfg]{
+		Name: "monster", File: "monster.json",
+		Key: func(v testMonsterCfg) int32 { return v.ID },
+	})
+	store := NewStore(reg, dir)
+
+	writeFile(t, filepath.Join(dir, "monster.json"), `{"rows":[{"id":1,"name":"wolf","scene_id":7}]}`)
+	snap, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("wrapped rows document rejected: %v", err)
+	}
+	table, _ := TableFrom[int32, testMonsterCfg](snap, "monster")
+	if table.Len() != 1 {
+		t.Fatalf("wrapped rows not loaded: %d", table.Len())
+	}
+	// {"rows": null} must not sneak past the null guard.
+	writeFile(t, filepath.Join(dir, "monster.json"), `{"rows":null}`)
+	if _, err := store.Reload(context.Background()); err == nil || !strings.Contains(err.Error(), "null") {
+		t.Fatalf("null wrapper accepted: %v", err)
+	}
+}
+
+type strictWorldCfg struct {
+	Width int32 `json:"width"`
+}
+
+func TestStrictModeWrapperObjectAndTrailingJunk(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry()
+	MustRegisterObject(reg, ObjectDef[strictWorldCfg]{Name: "world", File: "world.json"})
+	store := NewStore(reg, dir)
+	store.SetStrictJSON(true)
+
+	// A wrapped object document must decode identically in strict and
+	// lenient mode (lenient used to zero it silently).
+	writeFile(t, filepath.Join(dir, "world.json"), `{"data":{"width":42}}`)
+	snap, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("strict wrapped object rejected: %v", err)
+	}
+	world, _ := ObjectFrom[strictWorldCfg](snap, "world")
+	if world.Width != 42 {
+		t.Fatalf("strict wrapped object zeroed: %+v", world)
+	}
+	store.SetStrictJSON(false)
+	snap2, err := store.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	world2, _ := ObjectFrom[strictWorldCfg](snap2, "world")
+	if world2.Width != 42 {
+		t.Fatalf("lenient wrapped object zeroed (mode divergence): %+v", world2)
+	}
+	// Strict must reject trailing junk (it used to be MORE lenient here).
+	store.SetStrictJSON(true)
+	writeFile(t, filepath.Join(dir, "world.json"), `{"width":42}{"junk":1}`)
+	if _, err := store.Reload(context.Background()); err == nil || !strings.Contains(err.Error(), "trailing") {
+		t.Fatalf("strict accepted trailing junk: %v", err)
+	}
+}
+
+func TestConcurrentReloadDryRunAndSetDir(t *testing.T) {
+	store, dir := newCommitTestStore(t)
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			_, _ = store.Reload(context.Background())
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = store.DryRun(context.Background(), "probe")
+		}()
+		go func() {
+			defer wg.Done()
+			store.SetDir(dir)
+		}()
+	}
+	wg.Wait()
+	if store.Current() == nil {
+		t.Fatal("store lost its snapshot under concurrency")
 	}
 }
