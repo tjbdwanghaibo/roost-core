@@ -2,9 +2,10 @@ package skillsync
 
 import (
 	"encoding/json"
+	"testing"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/syncstream"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
-	"testing"
 )
 
 func TestVisibilityClockAndUnknownMutationFailClosed(t *testing.T) {

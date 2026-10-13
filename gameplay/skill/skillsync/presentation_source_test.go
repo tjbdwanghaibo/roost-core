@@ -1,21 +1,19 @@
 package skillsync
 
-// SKILL-3 补测（RR-20261005-NC-114 的 spawn 条目）：presentation reset 里的持续衍生物表现要按“Runtime 为这个衍生物发出的
-// 增量事件”交给 VisibilityPolicy.FilterPresentation，reset 与增量对同一 observer 得出同样的可见性与同样的 Anchor。
-// visibility_recovery_promises_test.go 只用了 cast 条目，spawn 条目此前没有专门用例。
-//
-// 衍生物有两种归属：仍在施法里（增量经施法发出，Source / PrimaryTarget 是施法者与施法目标），以及施法结束后移交出去
-// （增量经 detachedSpawnCast 发出，PrimaryTarget 是 lifecycle 实体）。两种都核对。
-//
-// RR-20261006-22：补测时“仍在施法里”是红的。activePresentationEvent 把 PrimaryTarget 填成 Anchor.Target（lifecycle
-// 实体），而增量里是施法目标；按 PrimaryTarget 判定的策略挡住了增量，reset 却把同一个衍生物表现发了出去。
-
 import (
+	"encoding/json"
+	"errors"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/syncstream"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 )
+
+// presentation reset 里的持续衍生物表现按“Runtime 为这个衍生物发出的增量事件”交给 VisibilityPolicy.FilterPresentation：
+// reset 与增量对同一 observer 得出同样的可见性与同样的 Anchor。
+//
+// 衍生物有两种归属：仍在施法里（增量经施法发出，Source / PrimaryTarget 是施法者与施法目标），以及施法结束后移交出去
+// （增量经 detachedSpawnCast 发出，PrimaryTarget 是 lifecycle 实体）。两种都核对。历史：RR-20261006-22。
 
 // visualAreaSpawn 召出一个带 area 视觉的衍生物：lifecycle 实体是新生成的陷阱，不是施法目标。
 const visualAreaSpawn = `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":8},"spawn":{"kind":"area","duration_ticks":8,"interval_ticks":1,"visual":{"category":"area","theme":"default","elements":["default"]},"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}}}`
@@ -164,4 +162,129 @@ func recoverPresentationReset(t *testing.T, runtime *skill.Runtime, policy Visib
 		t.Fatal(err)
 	}
 	return publishedResets(t, publisher.packets)
+}
+
+// 新 observer 以当前快照为基线，不重播加入前的一次性表现。
+func TestSnapshotStartsPresentationAtCurrentRuntime(t *testing.T) {
+	runtime, program := visibilityRuntime(t, skill.RuntimeOptions{})
+	if _, err := runtime.Start(program, skill.CastInput{Caster: 1, Target: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Advance(10); err != nil {
+		t.Fatal(err)
+	}
+	publisher := &recordingPublisher{}
+	projector, _ := NewProjector(1)
+	c, err := NewCoordinator(CoordinatorOptions{Runtime: runtime, History: syncstream.NewHistory(syncstream.HistoryOptions{SchemaVersion: 1}), Publisher: publisher, Projector: projector, Visibility: AllowAllVisibility{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := syncstream.Observer{ID: 9}
+	if err := c.OpenObserver(observer); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PublishSnapshot(observer, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(observer, 1); err != nil {
+		t.Fatal(err)
+	}
+	reset := false
+	for _, packet := range publisher.packets {
+		if packet.Stream.Topic != TopicPresentation {
+			continue
+		}
+		var record PresentationRecord
+		if err := json.Unmarshal(packet.Payload, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Event != nil {
+			t.Error("late observer received historical presentation event")
+		}
+		reset = reset || record.Reset != nil
+	}
+	if !reset {
+		t.Error("late observer did not receive current persistent presentation reset")
+	}
+}
+
+type rejectingPacketStore struct{ fail bool }
+
+func (*rejectingPacketStore) Load() ([]syncstream.Packet, error)    { return nil, nil }
+func (*rejectingPacketStore) LoadRecords() ([]OutboxRecord, error)  { return nil, nil }
+func (s *rejectingPacketStore) PutRecord(record OutboxRecord) error { return s.Put(record.Packet) }
+func (s *rejectingPacketStore) Put(syncstream.Packet) error {
+	if s.fail {
+		return errors.New("outbox unavailable")
+	}
+	return nil
+}
+func (*rejectingPacketStore) Delete(syncstream.Observer, syncstream.Stream, uint64, uint64) error {
+	return nil
+}
+
+// History 已接受的 mutation 在 outbox 拒收后只能补交付，不能再次追加。
+func TestOutboxFailureDoesNotAppendTheSameSourceAgain(t *testing.T) {
+	runtime, _ := visibilityRuntime(t, skill.RuntimeOptions{})
+	if err := runtime.Advance(1); err != nil {
+		t.Fatal(err)
+	}
+	store := &rejectingPacketStore{fail: true}
+	box, err := NewOutbox(OutboxOptions{Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := syncstream.NewHistory(syncstream.HistoryOptions{SchemaVersion: 1})
+	projector, _ := NewProjector(1)
+	c, err := NewCoordinator(CoordinatorOptions{Runtime: runtime, History: history, Outbox: box, Publisher: &recordingPublisher{}, Projector: projector, Visibility: AllowAllVisibility{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := syncstream.Observer{ID: 10}
+	if err := c.OpenObserver(observer); err != nil {
+		t.Fatal(err)
+	}
+	stream := syncstream.Stream{Topic: TopicState, Key: 1}
+	for range 3 {
+		if err := c.Flush(observer, 1); err == nil {
+			t.Fatal("outbox refusal hidden")
+		}
+	}
+	if got := history.Status(observer, stream).Retained; got != 1 {
+		t.Fatalf("history retained=%d want one accepted source mutation", got)
+	}
+	store.fail = false
+	if err := c.Flush(observer, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := history.Status(observer, stream).Retained; got != 1 {
+		t.Fatalf("retry appended duplicate: %d", got)
+	}
+}
+
+func TestFullRecoveryAdvancesSourceCursor(t *testing.T) {
+	runtime, _ := visibilityRuntime(t, skill.RuntimeOptions{})
+	if err := runtime.Advance(1); err != nil {
+		t.Fatal(err)
+	}
+	history := syncstream.NewHistory(syncstream.HistoryOptions{SchemaVersion: 1})
+	projector, _ := NewProjector(1)
+	c, err := NewCoordinator(CoordinatorOptions{Runtime: runtime, History: history, Publisher: &recordingPublisher{}, Projector: projector, Visibility: AllowAllVisibility{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := syncstream.Observer{ID: 11}
+	if err := c.OpenObserver(observer); err != nil {
+		t.Fatal(err)
+	}
+	stream := syncstream.Stream{Topic: TopicState, Key: 1}
+	if _, err := c.Recover(syncstream.ResyncRequest{Observer: observer, Stream: stream, SchemaVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(observer, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := history.Status(observer, stream).Retained; got != 1 {
+		t.Fatalf("full recovery replayed %d old state records", got-1)
+	}
 }
