@@ -476,3 +476,34 @@ func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
 		return zero
 	}
 }
+
+// BenchmarkJetStreamRPCRequest 覆盖服务端 onJetStreamRPCRequest 的成功路径：解码请求、查 handler、准入检查、
+// 建立处理期限与 fctx、调用 handler、编码并发布应答。
+func BenchmarkJetStreamRPCRequest(b *testing.B) {
+	js := &captureJetStreamRPC{}
+	bus := New(nil, nil, nil, Config{Sid: 6, SvcType: "game"})
+	if err := bus.EnableJetStreamRPC(js, JetStreamRPCConfig{}); err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(bus.Stop)
+	bus.rpcHandlers["queue.join"] = func(*RpcContext) (any, error) {
+		return map[string]int{"value": 42}, nil
+	}
+	req := &fnats.NatsMsg{MsgName: "queue.join", SessionId: "id", ReplySubject: "roost.rpc_resp.8.id", DeadlineAt: time.Now().Add(time.Hour).UnixMilli()}
+	raw, err := bus.codec.Marshal(req)
+	if err != nil {
+		b.Fatal(err)
+	}
+	msg := &fnats.JetStreamMsg{Subject: bus.subject.Rpc("game", "queue.join"), Data: raw, NumDelivered: 1}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := bus.onJetStreamRPCRequest(ctx, msg); err != nil {
+			b.Fatal(err)
+		}
+		js.mu.Lock()
+		js.publishes = js.publishes[:0]
+		js.mu.Unlock()
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -222,5 +223,38 @@ func BenchmarkInternalMessageCodec(b *testing.B) {
 				b.ReportMetric(float64(len(data)), "wire-B/op")
 			})
 		})
+	}
+}
+
+// BenchmarkMessagePackValueEnd 覆盖解码前的长度与深度预检（messagePackValueEnd）：样本含 fixstr / str8 / str16、
+// 各宽度整数与浮点、bin、array16、嵌套 map 与 timestamp 扩展，走遍主要格式分支。
+func BenchmarkMessagePackValueEnd(b *testing.B) {
+	items := make([]any, 20)
+	for i := range items {
+		items[i] = map[string]any{"id": int64(i) << (i * 3 % 60), "name": strings.Repeat("n", i*3), "ok": i%2 == 0}
+	}
+	value := map[string]any{
+		"sample": codecSample(),
+		"short":  "abc",
+		"medium": strings.Repeat("m", 40),
+		"long":   strings.Repeat("l", 300),
+		"bin":    bytes.Repeat([]byte{7}, 300),
+		"float":  3.25,
+		"ints":   []int64{1, -1, 200, -200, 70000, -70000, math.MaxInt64, math.MinInt64},
+		"items":  items,
+		"when":   time.Unix(1791500000, 1).UTC(),
+	}
+	data, err := MessagePackCodec{}.Marshal(value)
+	if err != nil {
+		b.Fatal(err)
+	}
+	body := data[len(messagePackHeader):]
+	b.ReportAllocs()
+	b.SetBytes(int64(len(body)))
+	for b.Loop() {
+		end, err := messagePackValueEnd(body, 0, 0)
+		if err != nil || end != len(body) {
+			b.Fatalf("end=%d len=%d err=%v", end, len(body), err)
+		}
 	}
 }
