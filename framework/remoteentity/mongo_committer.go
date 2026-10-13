@@ -21,9 +21,8 @@ const (
 	remoteSnapshotCollection = "_remote_entity_snapshots"
 )
 
-// MongoCommitter is the authoritative Remote Entity commit implementation.
-// Entity CAS metadata, DAO documents, immutable snapshots, and idempotency
-// status are committed in one MongoDB transaction.
+// MongoCommitter 是权威的 Remote Entity 提交实现：实体 CAS 元数据、DAO 文档、不可变快照与幂等状态在同一个 MongoDB
+// 事务中提交。
 type MongoCommitter struct {
 	mongo          fmongo.IMongo
 	database       string
@@ -31,9 +30,8 @@ type MongoCommitter struct {
 	transactionTTL time.Duration
 }
 
-// AtomicCommitStore applies Remote Entity commits inside a MongoDB transaction
-// owned by another infrastructure component. Implementations must not start or
-// commit a nested session and must be idempotent by RemoteTransactionID.
+// AtomicCommitStore 在另一个基础设施组件拥有的 MongoDB 事务内应用 Remote Entity 提交。实现不得开启或提交嵌套会话，
+// 并必须按 RemoteTransactionID 幂等。
 type AtomicCommitStore interface {
 	ApplyRemoteCommitsInTransaction(context.Context, []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error)
 }
@@ -115,8 +113,7 @@ func (s *MongoCommitter) CommitRemoteBatch(ctx context.Context, commits []entity
 	return receipts, nil
 }
 
-// ApplyRemoteCommitsInTransaction performs the authoritative CAS, data writes,
-// snapshots and outbox receipt using the caller's MongoDB session context.
+// ApplyRemoteCommitsInTransaction 用调用方的 MongoDB 会话 ctx 执行权威 CAS、数据写入、快照与 outbox 回执。
 func (s *MongoCommitter) ApplyRemoteCommitsInTransaction(ctx context.Context, commits []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error) {
 	if s == nil || s.mongo == nil || s.database == "" || len(commits) == 0 {
 		return nil, entity.ErrRemoteWriteCapabilityDisabled
@@ -180,10 +177,8 @@ func validateRemoteCommitBatch(commits []entity.RemoteCommit) (entity.RemoteTran
 		if err := commits[i].Validate(); err != nil {
 			return entity.RemoteTransactionID{}, nil, err
 		}
-		// Encodability is part of validity here: a commit whose counters do
-		// not fit a BSON number fails deterministically at projection time,
-		// and by then the record is durable and startup recovery replays it
-		// forever (RR-20260920-01).
+		// 可编码性在这里也是合法性的一部分：计数放不进 BSON 数值的提交会在投影时确定性地失败，而那时记录已经持久，
+		// 启动恢复会永远重放它。
 		if err := validateRemoteCommitEncodable(commits[i]); err != nil {
 			return entity.RemoteTransactionID{}, nil, err
 		}
@@ -228,9 +223,8 @@ func (s *MongoCommitter) EnsureRemoteStorage(ctx context.Context) error {
 	}
 	if err := s.controlDB().Collection(remoteTxCollection).EnsureIndexes(ctx, []fmongo.IndexModel{
 		{Keys: bson.D{{Key: "state", Value: 1}, {Key: "created_at", Value: 1}}, Name: "state_created_at"},
-		// Keep the historical index name so EnsureIndexes replaces deployments
-		// that expired Applied outbox records by created_at. Only acknowledged
-		// records receive expires_at; unpublished commits must never age out.
+		// 沿用原有索引名，EnsureIndexes 才能替换按 created_at 让 Applied outbox 记录过期的旧索引。只有已确认的记录带
+		// expires_at；未发布的提交永远不能过期。
 		{Keys: bson.D{{Key: "expires_at", Value: 1}}, Name: "created_at_ttl", Sparse: true, TTL: remoteTransactionTTLSeconds(ttl), RecreateOnConflict: true},
 	}); err != nil {
 		return fmt.Errorf("remote_entity: ensure transaction indexes: %w", err)
@@ -352,7 +346,7 @@ func (s *MongoCommitter) LoadRemoteSnapshot(ctx context.Context, key entity.Remo
 	return loadMongoRemoteSnapshot(ctx, s.controlDB(), key, minVersion)
 }
 
-// NewMongoSnapshotLoader 返回只读的权威快照 loader（Mirror 第 5 步）：只读 owner 提交时写进 database 的
+// NewMongoSnapshotLoader 返回只读的权威快照 loader：只读 owner 提交时写进 database 的
 // _remote_entity_snapshots（与 MongoCommitter.LoadRemoteSnapshot 同一个查询），不建索引、不写、不碰所有权与
 // 事务集合，所以只读服务不需要写 backend。它不声明线性化：装配时 LinearizableLoader 应为 false。
 func NewMongoSnapshotLoader(mongo fmongo.IMongo, database string) entity.RemoteSnapshotLoader {

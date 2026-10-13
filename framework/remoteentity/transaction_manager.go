@@ -73,14 +73,14 @@ type deferredRemoteClose struct {
 	durability uint8
 	entries    []*remoteWriteEntry
 	attempt    int
-	// projectionDeadline 是 Durability 1/2/3 等待投影器结论的截止时间，首次处理时设定（RR-20260926-38）。
+	// projectionDeadline 是 Durability 1/2/3 等待投影器结论的截止时间，首次处理时设定。
 	projectionDeadline time.Time
 	// settled 表示持久拒绝已收尾（回滚、隔离、gate/fence/写额度已交还），这一项只剩仅内存卸载
-	// 需要完成或重试（RR-20260926-39）；排空与重试都不能再次释放。
+	// 需要完成或重试；排空与重试都不能再次释放。
 	settled bool
-	// onOutcome 是 Nest 交来的提交后工作（Sync Confirm、AfterCommit；RR-20260926-37），只在拿到持久结论后
+	// onOutcome 是 Nest 交来的提交后工作（Sync Confirm、AfterCommit），只在拿到持久结论后
 	// 经 Nest 快池调用至多一次：Applied/Committed 为 true，Rejected（卸载完成后）为 false。停机排空时不调用；
-	// 快池拒绝投递时也不调用，只计数告警（RR-20260926-61，见 deliverRemoteOutcome）。
+	// 快池拒绝投递时也不调用，只计数告警（见 deliverRemoteOutcome）。
 	onOutcome func(bool)
 }
 
@@ -120,6 +120,7 @@ func newRemoteState(cfg *Config) *remoteState {
 	return state
 }
 
+// StartFinalizer 启动延迟收尾 worker（默认 16 个）；重复调用无副作用。
 func (m *Manager) StartFinalizer() {
 	if m == nil || m.remote == nil {
 		return
@@ -155,21 +156,14 @@ func (m *Manager) releaseRemoteWriteSlot() {
 	}
 }
 
-// deferRemoteClose hands one deferred close to the finalizers, or refuses so
-// the caller cleans up synchronously. Exactly one of the two, ever.
+// deferRemoteClose 把一次延迟收尾交给 finalizer，或拒绝让调用方同步清理——两者恰好发生其一。
 //
-// The refusal has to be decided under the SAME barrier the stop uses, not by a
-// select race. finalizeCtx.Done being ready does not stop the select from
-// picking a queue that still has room, so after the stop had completed a
-// handoff could still be accepted into a queue nobody drains any more — and
-// batch.Close, told the handoff succeeded, dropped its entries, writeGate,
-// ownership read lock and finalize slot on the floor, with finalizeOnce
-// preventing any restart that might have collected them (RR-20260911-03).
+// 拒绝必须在与停止相同的屏障下决定，而不是靠 select 竞争：finalizeCtx.Done 就绪并不妨碍 select 选中仍有空位的
+// 队列，停止完成后交接仍可能被放进一个已无人排空的队列，而 batch.Close 以为交接成功，会丢下它的条目、写门、
+// 所有权读锁与收尾额度（finalizeOnce 又阻止了任何能回收它们的重启）。
 //
-// Registering on retryWG before releasing retryMu is what makes it safe:
-// runRemoteFinalizers waits on retryWG before its final drain, so a sender
-// admitted here is always drained, and StopFinalizer sets stopping under the
-// same lock, so no sender is admitted after it.
+// 在释放 retryMu 之前登记 retryWG 保证了安全：runRemoteFinalizers 在最后一次排空前等待 retryWG，这里接纳的发送方
+// 一定会被排空；StopFinalizer 在同一把锁下置 stopping，之后不再接纳发送方。
 func (m *Manager) deferRemoteClose(item deferredRemoteClose) error {
 	state := m.remote
 	state.retryMu.Lock()
@@ -199,10 +193,8 @@ func (m *Manager) runRemoteFinalizers(state *remoteState, workers int) {
 	}
 	state.finalizeWG.Wait()
 	state.retryWG.Wait()
-	// Retry goroutines send without holding a lock, so one may race the
-	// workers' final drain and land an item after they exited. All senders
-	// are done here (retryWG), so one last drain guarantees every deferred
-	// close releases its entries and slot before finalizeDone is published.
+	// 重试 goroutine 发送时不持锁，可能与 worker 的最后排空竞争，在它们退出后才放入一项。到这里全部发送方都已
+	// 结束（retryWG），再排空一次保证每个延迟收尾在发布 finalizeDone 之前交还条目与额度。
 	for {
 		select {
 		case item := <-state.finalizeQueue:
@@ -255,8 +247,8 @@ func (m *Manager) abandonDeferredRemoteClose(state *remoteState, item deferredRe
 //
 // Durability 1/2/3（3 是带 Remote 批次、随 strict 路径提交的 pipelined）有 WAL：投影器在同一 Mongo 事务里提交，outbox 发布并确认后写进 tracker
 // （Committed / Rejected，失败时 Indeterminate）。投影期间 finalizer 不回源、不隔离、不发布，
-// 只等 tracker 结束或 FinalizeProjectionTimeout 到期（RR-20260926-38）；投影器报告未知
-// （Indeterminate）或超期后才按 RR-19 回源取得持久结论。Durability 0 没有 WAL，一律回源。
+// 只等 tracker 结束或 FinalizeProjectionTimeout 到期；投影器报告未知
+// （Indeterminate）或超期后才回源权威取得持久结论。Durability 0 没有 WAL，一律回源。
 func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRemoteClose) {
 	if item.settled {
 		m.finishRejectedRemoteClose(state, item)
@@ -306,23 +298,21 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 			return
 		}
 	}
-	// One failed/pending transaction must not monopolize a finalizer worker.
-	// Keep its write gate and fence, quarantine the live object, and retry with
-	// bounded exponential backoff on a timer.
+	// 一笔失败 / 未决的事务不能独占 finalizer worker：保留它的写门与 fence，隔离内存实例，按有界指数退避定时重试。
 	if quarantineErr := m.quarantineEntries(item.entries, err); quarantineErr != nil {
 		metrics.IncCounter("remote_entity.quarantine_error_total", nil, 1)
 	}
 	m.scheduleDeferredRetry(state, item)
 }
 
-// finishRejectedRemoteClose 完成持久拒绝后的仅内存卸载（RR-20260926-39）：gate 已释放，旧实例经
+// finishRejectedRemoteClose 完成持久拒绝后的仅内存卸载：gate 已释放，旧实例经
 // 本地执行入口卸载，下一次访问从权威重载。卸载失败时实例保持隔离、按退避重试；loader 不支持卸载时
 // 维持旧行为（隔离到业务重新加载）。
 func (m *Manager) finishRejectedRemoteClose(state *remoteState, item deferredRemoteClose) {
 	ctx := m.localContext(state.finalizeCtx)
 	err := m.unloadRejectedEntities(ctx, item.entries)
 	if err == nil {
-		// 被拒绝实例已卸载、同步状态已关闭：丢弃 Sync 门，不执行 AfterCommit（RR-20260926-37）。
+		// 被拒绝实例已卸载、同步状态已关闭：丢弃 Sync 门，不执行 AfterCommit。
 		m.deliverRemoteOutcome(ctx, item.txID, item.onOutcome, false)
 		state.traceFinalize(item.txID, "released")
 		return
@@ -342,7 +332,7 @@ func (m *Manager) finishRejectedRemoteClose(state *remoteState, item deferredRem
 // 调用后收尾项不再入队。经 ctx 的本地执行入口（Nest 快池）执行；fn 自己隔离每个回调的 panic，
 // 这里只兜底记录执行入口的错误。
 //
-// NestMgr.RunLocal 拒绝投递（Nest 未启动、停机中或已 fence）时 fn 不执行（RR-20260926-61，维护者批准：不离池执行，
+// NestMgr.RunLocal 拒绝投递（Nest 未启动、停机中或已 fence）时 fn 不执行（维护者批准：不离池执行，
 // 计数告警）：提交后工作里有业务 AfterCommit，不能在 finalizer goroutine 上就地运行——那会与已 fence 的快池里仍在
 // 执行的 handler 并发，或在 Nest Shutdown 返回之后才执行；框架的 Sync Confirm / Reject 与业务回调同在 fn 里，
 // 也不单独执行，Sync 门保持冻结（进程正在退出或已被隔离，重启后从权威重载）。持久结论本身不受影响。
@@ -416,10 +406,8 @@ func (m *Manager) requeueDeferredRemoteClose(state *remoteState, item deferredRe
 		m.abandonDeferredRemoteClose(state, item)
 		return
 	}
-	// Send outside the lock: holding retryMu across a bounded-queue send
-	// stalls Stop behind a full queue. The Done branch and the final
-	// drain in runRemoteFinalizers together guarantee the item is always
-	// consumed or released, whichever side wins the race.
+	// 在锁外发送：持 retryMu 做有界队列的发送会让 Stop 卡在满队列之后。Done 分支与 runRemoteFinalizers 的最后排空
+	// 共同保证这一项不论哪边赢得竞争，总会被消费或释放。
 	select {
 	case state.finalizeQueue <- item:
 	case <-state.finalizeCtx.Done():
@@ -443,7 +431,7 @@ func (m *Manager) finalizeProjectionTimeout() time.Duration {
 // rejectUnresolvedMemoryTransaction 为回源读不到的 Durability 0 事务写下持久结论。
 //
 // 这类事务只有 ApplyRemoteCommits 那一次提交尝试，没有 WAL 会重放它；后端返回瞬时
-// 错误时事务可能根本没有到达 Mongo，CommitStatus 永远是 Unknown（RR-20260926-28）。
+// 错误时事务可能根本没有到达 Mongo，CommitStatus 永远是 Unknown。
 // 调用时本次提交尝试已经返回（batch.Close 在 Commit 之后才转交 finalizer），但服务端
 // 仍可能有在途的提交，所以不能直接当成未提交：用同一事务 _id 写入拒绝，由唯一索引
 // 在“拒绝”和“迟到提交”之间裁决。插入成功即 Rejected；撞键则返回事务的真实状态
@@ -496,7 +484,7 @@ func remoteCommitStateLabel(state entity.RemoteCommitState) string {
 // 拒绝后不能解冻：生成实体的 RollbackRemoteCommit 是 no-op，被拒绝事务的内存修改仍在实体
 // 里，而下一次提交按整份 DAO 编码（MarshalPersist 忽略 mask、写入是 ReplaceOne），会把被拒绝
 // 的修改一并 CAS 进 Mongo。框架无法证明内存已回到权威状态，因此批次内实体一律隔离到重新
-// 加载为止（RR-20260926-28 复核）；隔离失败时返回错误，调用方保留 gate 重试，不释放。
+// 加载为止；隔离失败时返回错误，调用方保留 gate 重试，不释放。
 func (m *Manager) settleRejectedRemoteEntries(ctx context.Context, entries []*remoteWriteEntry) error {
 	runErr := entity.RunLocal(m.localContext(ctx), func() {
 		m.rollbackRemoteEntries(entries)
@@ -510,7 +498,7 @@ func (m *Manager) settleRejectedRemoteEntries(ctx context.Context, entries []*re
 	if err := errors.Join(runErr, m.quarantineEntries(entries, entity.ErrRemoteRejected)); err != nil {
 		return err
 	}
-	// gate 释放之后框架会卸载这些实例、下一次访问从权威重载；其间下一写者得到可重试的重载哨兵（RR-20260926-62）。
+	// gate 释放之后框架会卸载这些实例、下一次访问从权威重载；其间下一写者得到可重试的重载哨兵。
 	m.markRejectedReloadPending(entries)
 	return nil
 }
@@ -536,6 +524,8 @@ func (m *Manager) reconcileRemoteEntries(entries []*remoteWriteEntry, receipts [
 	return nil
 }
 
+// StopFinalizer 停止准入新的延迟收尾并取消 finalizer，在 ctx 内等待它们排空（未结论的项交还资源、实体保持隔离）。
+// 超时返回 ctx 错误；用新 ctx 重试会再次等待同一排空。
 func (m *Manager) StopFinalizer(ctx context.Context) error {
 	if m == nil || m.remote == nil {
 		return nil
@@ -844,7 +834,7 @@ func (m *Manager) publishAppliedRemoteTransaction(ctx context.Context, status en
 	return nil
 }
 
-// ReadRemoteSnapshot 委托 SnapshotClient（Mirror 方案第 3 步：全仓只有一份读 / 兴趣 / 接收协议）。
+// ReadRemoteSnapshot 委托 SnapshotClient（全仓只有一份读 / 兴趣 / 接收协议）。
 func (m *Manager) ReadRemoteSnapshot(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
 	if m == nil || m.snapshots == nil {
 		return entity.RemoteSnapshotEnvelope{}, false, entity.ErrRemoteRejected
@@ -877,6 +867,7 @@ type remoteInterestPublisher interface {
 	PublishRemoteInterest(context.Context, entity.RemoteSnapshotInterest, bool) error
 }
 
+// RenewRemoteSnapshotInterest 续约本进程对 key 的快照兴趣。
 func (m *Manager) RenewRemoteSnapshotInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
 	if m == nil || m.snapshots == nil {
 		return entity.ErrRemoteRejected
@@ -884,20 +875,15 @@ func (m *Manager) RenewRemoteSnapshotInterest(ctx context.Context, key entity.Re
 	return m.snapshots.RenewInterest(ctx, key)
 }
 
-// interestGenerationClock is the process-wide high-water mark of every
-// interest generation issued by any Manager in this process. A Manager seeds
-// strictly above it, so two instances created within the same clock tick (a
-// restart harness, coarse clocks on Windows — RR-20260913-02 复核) cannot
-// both start at the same UnixNano and re-issue each other's generations. It
-// does not survive the process; across restarts the clock is the guarantee.
+// interestGenerationClock 是本进程内所有 Manager 发出的兴趣代际的高水位。Manager 的种子严格高于它，所以同一时钟
+// 刻度内创建的两个实例（重启测试夹具、粗粒度时钟）不会从同一个 UnixNano 起步、重复发出对方的代际。它不跨进程存活，
+// 跨重启由时钟保证。
 var interestGenerationClock atomic.Uint64
 
-// interestGenerationNow is the clock behind the seed; a variable so tests can
-// freeze it and prove the ordering does not depend on nanosecond resolution.
+// interestGenerationNow 是种子的时钟；做成变量，测试可以冻结它，证明顺序不依赖纳秒分辨率。
 var interestGenerationNow = func() uint64 { return uint64(time.Now().UnixNano()) }
 
-// seedInterestGeneration returns a seed above both now and every generation
-// already issued in this process, and records it as issued.
+// seedInterestGeneration 返回同时高于 now 与本进程已发出的全部代际的种子，并记为已发出。
 func seedInterestGeneration(now uint64) uint64 {
 	for {
 		last := interestGenerationClock.Load()
@@ -911,7 +897,7 @@ func seedInterestGeneration(now uint64) uint64 {
 	}
 }
 
-// noteInterestGenerationIssued raises the process-wide high-water mark.
+// noteInterestGenerationIssued 抬高进程级高水位。
 func noteInterestGenerationIssued(generation uint64) {
 	for {
 		last := interestGenerationClock.Load()
@@ -921,6 +907,7 @@ func noteInterestGenerationIssued(generation uint64) {
 	}
 }
 
+// ReleaseRemoteSnapshotInterest 撤销本进程对 key 的快照兴趣。
 func (m *Manager) ReleaseRemoteSnapshotInterest(ctx context.Context, key entity.RemoteSnapshotKey) error {
 	if m == nil || m.snapshots == nil {
 		return entity.ErrRemoteRejected
@@ -964,6 +951,7 @@ func (m *Manager) afterRemoteCommit(ctx context.Context, commit entity.RemoteCom
 	return nil
 }
 
+// FlushRemoteEntity 等待实体 id 的已发布版本达到 minVersion；等待者达到上限时返回 ErrRemoteOverloaded。
 func (m *Manager) FlushRemoteEntity(ctx context.Context, id int64, minVersion uint64) error {
 	if minVersion == 0 {
 		return nil
@@ -1140,10 +1128,10 @@ func (m *Manager) acknowledgeRemoteCommit(commit entity.RemoteCommit) error {
 	if live == nil || remoteReceiptObsolete(live, commit) {
 		return nil
 	}
-	// RR-20261006-01：登记里挂着的实例已经不是这个实体——同一事务的删除在准入后就把它从内存删掉，实体管理器
-	// ClearBase 把 ID 归零（strict / pipelined 的确认在投影器里稍后才到），或实例已被回收。没有内存状态可推进：
-	// 摘掉它，确认视为完成，调用方照常发布（删除提交即 L2 墓碑与推送）。回执已由调用方核对（validateRemoteReceipt）。
-	// 之前把删除提交交给被清空的实例，生成代码按身份拒绝，发布被整段跳过：Mongo 已删除，L2 仍是删除前的快照。
+	// 登记里挂着的实例已经不是这个实体——同一事务的删除在准入后就把它从内存删掉，实体管理器 ClearBase 把 ID 归零
+	// （strict / pipelined 的确认在投影器里稍后才到），或实例已被回收。没有内存状态可推进：摘掉它，确认视为完成，
+	// 调用方照常发布（删除提交即 L2 墓碑与推送）。回执已由调用方核对（validateRemoteReceipt）。若把删除提交交给被清空
+	// 的实例，生成代码会按身份拒绝，发布被整段跳过，Mongo 已删除而 L2 仍是删除前的快照。
 	if live.ID() != commit.EntityID {
 		wrapper.detachEntity(live)
 		return nil
@@ -1161,8 +1149,8 @@ func (m *Manager) acknowledgeRemoteCommit(commit entity.RemoteCommit) error {
 			if err := thawAcknowledgedRemote(remote, wrapper.isMarked()); err != nil {
 				// outbox 发布与已提交回执的本地确认可能交错。另一方
 				// 已经确认并解冻时，上面读到的 Quarantined 已经过期：版本向量正是本提交、状态已是
-				// LocalOwned/Shared，就是同一次确认的结果，视为成功，不能让实体再被隔离重试
-				// （RR-20260926-38）。这里只接受“已解冻”的事实，从不自行解冻（RR-28 复核约束不变）。
+				// LocalOwned/Shared，就是同一次确认的结果，视为成功，不能让实体再被隔离重试。
+				// 这里只接受“已解冻”的事实，从不自行解冻（内存不等于权威时不解冻）。
 				if remoteCommitAlreadyAcknowledged(remote, vector) {
 					return nil
 				}
@@ -1170,7 +1158,7 @@ func (m *Manager) acknowledgeRemoteCommit(commit entity.RemoteCommit) error {
 			}
 		}
 	} else if err := live.SetEntityVersion(int64(commit.NextVersion)); err != nil {
-		// 同 fence 回退被拒（RR-20260930-13）：与上面的向量分支相同，再次核对是否已是过期回执。
+		// 同 fence 回退被拒：与上面的向量分支相同，再次核对是否已是过期回执。
 		if remoteReceiptObsolete(live, commit) {
 			return nil
 		}

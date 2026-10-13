@@ -20,16 +20,13 @@ type remoteSyncTransport interface {
 	PublishRemoteInterest(context.Context, entity.RemoteSnapshotInterest, bool) error
 }
 
-// Manager is the single transaction/snapshot implementation.
-// Wrappers are private coordination cells and are not exposed as an alternate
-// persistence API.
+// Manager 是唯一的 Remote 事务 / 快照实现。wrapper 是私有的协调单元，不作为另一套持久化 API 暴露。
 type Manager struct {
 	mu          sync.RWMutex
 	wrappers    map[int64]*remoteEntityWrapper
 	creating    map[int64]*remoteWrapperCreate
 	lockFactory redis.IVersionedLockFactory
-	// lockFactoryErr is set when the factory hands out locks without a fence;
-	// see NewManager. A manager carrying it creates no wrappers.
+	// lockFactoryErr 在锁工厂发出的锁不带 fence 时设置（见 NewManager）；带着它的 Manager 不创建任何 wrapper。
 	lockFactoryErr  error
 	lockFactoryWarn sync.Once
 	backend         entity.IRemoteEntityBackend
@@ -37,7 +34,7 @@ type Manager struct {
 	cfg             *Config
 	localSid        int32
 	remote          *remoteState
-	// snapshots 是快照读、兴趣、复制接收与它们的生命周期（Mirror 方案第 3 步）。Manager 只组合并委托它，
+	// snapshots 是快照读、兴趣、复制接收与它们的生命周期。Manager 只组合并委托它，
 	// owner 的提交后发布经它的包内入口 publishCommitted。
 	snapshots *SnapshotClient
 	sealed    bool
@@ -48,6 +45,7 @@ type Manager struct {
 	localExecutor atomic.Pointer[func(func()) error]
 }
 
+// SetFatalHandler 设置首次释放失败时的致命错误回调（通常让进程 fail-stop）。
 func (m *Manager) SetFatalHandler(handler func(error)) {
 	if m == nil {
 		return
@@ -57,6 +55,7 @@ func (m *Manager) SetFatalHandler(handler func(error)) {
 	m.fatalMu.Unlock()
 }
 
+// recordReleaseFailure 累积释放失败：首次失败时调用致命回调，此后 FatalError 非 nil，Prepare 一律按 fence 拒绝。
 func (m *Manager) recordReleaseFailure(err error) {
 	if m == nil || err == nil {
 		return
@@ -72,6 +71,7 @@ func (m *Manager) recordReleaseFailure(err error) {
 	}
 }
 
+// FatalError 返回累积的释放失败；非 nil 时不再准入新的写批次。
 func (m *Manager) FatalError() error {
 	if m == nil {
 		return entity.ErrRemoteWriteCapabilityDisabled
@@ -81,6 +81,7 @@ func (m *Manager) FatalError() error {
 	return m.fatalErr
 }
 
+// WrapperCount 返回当前的 wrapper 数。
 func (m *Manager) WrapperCount() int {
 	if m == nil {
 		return 0
@@ -97,6 +98,8 @@ type remoteWrapperCreate struct {
 
 var _ entity.IRemoteEntityManager = (*Manager)(nil)
 
+// NewManager 构造 Manager；snapshotL2 可选（最多取第一个）。锁工厂发出的锁不带 fence 时记下 LockFactoryError，
+// 不创建任何 wrapper。后端与所有权存储另经 Set* 注入，并在启动前 SealDependencies。
 func NewManager(lockFactory redis.IVersionedLockFactory, cfg *Config, localSid int32, snapshotL2 ...cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]) *Manager {
 	mgr := &Manager{
 		wrappers:    make(map[int64]*remoteEntityWrapper),
@@ -105,12 +108,9 @@ func NewManager(lockFactory redis.IVersionedLockFactory, cfg *Config, localSid i
 		cfg:         cfg,
 		localSid:    localSid,
 	}
-	// Fail closed at construction, once, where the wiring is. Remote Entity's
-	// write gate needs the fence a lock allocates on acquisition
-	// (redis.IFencedVersionedLock). A factory of plain versioned locks would
-	// have every shared operation refused at run time with ErrRemoteFenced —
-	// correct, but late, noisy, and indistinguishable from a real fence
-	// conflict in the metrics. Constructing a probe lock performs no I/O.
+	// 在装配处、构造时一次性按失败关闭：Remote Entity 的写门需要锁在取得时分配的 fence（redis.IFencedVersionedLock）。
+	// 普通版本锁的工厂会让每个共享操作在运行期被 ErrRemoteFenced 拒绝——结果正确，但发现得晚、噪声大，指标上也与
+	// 真正的 fence 冲突无法区分。构造探测锁不做 I/O。
 	if lockFactory != nil {
 		probeKey, probeTTL := "e", time.Hour
 		if cfg != nil {
@@ -139,9 +139,8 @@ func NewManager(lockFactory redis.IVersionedLockFactory, cfg *Config, localSid i
 	return mgr
 }
 
-// LockFactoryError reports why this manager will create no wrappers, or nil.
-// The Mod turns it into a Provide failure so a misconfigured deployment stops
-// at startup instead of refusing every shared operation.
+// LockFactoryError 返回本 Manager 不会创建 wrapper 的原因，没有时为 nil。Mod 把它转成 Provide 失败，配置错误的部署
+// 在启动时停下，而不是拒绝每一个共享操作。
 func (m *Manager) LockFactoryError() error {
 	if m == nil {
 		return nil
@@ -261,6 +260,7 @@ func (m *Manager) get(id int64) (*remoteEntityWrapper, bool) {
 	return w, ok
 }
 
+// SetBackend 注入权威后端；依赖封存后调用 panic。
 func (m *Manager) SetBackend(backend entity.IRemoteEntityBackend) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -270,6 +270,7 @@ func (m *Manager) SetBackend(backend entity.IRemoteEntityBackend) {
 	m.backend = backend
 }
 
+// SetOwnershipStore 注入所有权存储；依赖封存后调用 panic。
 func (m *Manager) SetOwnershipStore(store entity.IRemoteEntityOwnershipStore) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -279,6 +280,7 @@ func (m *Manager) SetOwnershipStore(store entity.IRemoteEntityOwnershipStore) {
 	m.ownershipStore = store
 }
 
+// SetSyncer 注入快照与兴趣的发布通道；依赖封存后调用 panic。
 func (m *Manager) SetSyncer(syncer remoteSyncTransport) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -288,12 +290,14 @@ func (m *Manager) SetSyncer(syncer remoteSyncTransport) {
 	m.snapshots.transport = syncer
 }
 
+// SealDependencies 封存依赖，此后 Set* 调用 panic。
 func (m *Manager) SealDependencies() {
 	m.mu.Lock()
 	m.sealed = true
 	m.mu.Unlock()
 }
 
+// ValidateDependencies 确认锁工厂、权威后端与所有权存储都已注入。
 func (m *Manager) ValidateDependencies() error {
 	if m == nil || m.cfg == nil || m.lockFactory == nil {
 		return fmt.Errorf("remote_entity: manager is not initialized")

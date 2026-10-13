@@ -14,30 +14,27 @@ import (
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
-// AssemblyDeps are the capabilities Remote Entity consumes. Redis is always
-// required (coordination locks and snapshot L2). Durable ownership is stored with commits. The backend is
-// either supplied directly or built from Loader on Mongo.
+// AssemblyDeps 是 Remote Entity 依赖的能力。Redis 总是必需（协调锁与快照 L2）；持久所有权随提交存储。后端要么直接
+// 给出，要么在 Mongo 上由 Loader 构建。
 type AssemblyDeps struct {
 	Redis   fredis.IRedis
 	Mongo   fmongo.IMongo
 	Loader  entity.IRemoteEntityLoader
 	Backend entity.IRemoteEntityBackend
 	OnFatal func(error)
-	// Incarnation 是本进程持有的 App 单实例锁的身份（O-M6-6）：非 nil 时，第一次取某个实体的共享锁就接管同 sid
+	// Incarnation 是本进程持有的 App 单实例锁的身份：非 nil 时，第一次取某个实体的共享锁就接管同 sid
 	// 上一代进程留下的锁，不等 lock_ttl。只有持有单实例锁的进程才能传；nil（singleton.enabled=false）时按 TTL 等待。
 	Incarnation *ProcessIncarnation
 }
 
-// MongoBackendConfig configures the Mongo committer built from Loader.
+// MongoBackendConfig 配置由 Loader 构建的 Mongo committer。
 type MongoBackendConfig struct {
 	Database       string
 	TransactionTTL time.Duration
 }
 
-// Assembly owns the manager's construction, dependency sealing, storage
-// initialisation, outbox recovery and replication lifecycle. The kit Mod
-// only parses configuration, publishes the three capabilities and forwards
-// lifecycle calls (P3b).
+// Assembly 负责 Manager 的构造、依赖封存、存储初始化、outbox 恢复与复制生命周期。wiring 的 Mod 只解析配置、发布三项
+// 能力并转发生命周期调用。
 type Assembly struct {
 	Manager     *Manager
 	LockFactory fredis.IVersionedLockFactory
@@ -55,13 +52,12 @@ type Assembly struct {
 // ErrAssemblyStopped 表示 finalizer 已进入不可逆的停止流程；重新运行须重新 Assemble。
 var ErrAssemblyStopped = errors.New("remote_entity: assembly is stopping or stopped")
 
-// ErrRemoteManagedServerScopedDAO 表示 remote=managed 实体注册了按服选库（dbscope=sid）的 DAO（RR-20260926-45）。
+// ErrRemoteManagedServerScopedDAO 表示 remote=managed 实体注册了按服选库（dbscope=sid）的 DAO。
 // 与 entity.ErrRemoteManagedServerScopedDAO 是同一个值：entity.ValidateEntityRegistry 与 Remote 提交的 WAL 准入前
-// 用同一哨兵报告同一规则（RR-20260927-09），errors.Is 判断任选其一。
+// 用同一哨兵报告同一规则，errors.Is 判断任选其一。
 var ErrRemoteManagedServerScopedDAO = entity.ErrRemoteManagedServerScopedDAO
 
-// Assemble builds the manager with its lock factory, snapshot L2, backend and
-// ownership store. localSid must be non-zero: it fences ownership.
+// Assemble 构建 Manager 及其锁工厂、快照 L2、后端与所有权存储。localSid 必须非零：它是所有权的 fence。
 func Assemble(deps AssemblyDeps, cfg *Config, localSid int32, mongoCfg MongoBackendConfig) (*Assembly, error) {
 	if deps.Redis == nil {
 		return nil, errors.New("remote_entity: redis client is required")
@@ -72,7 +68,7 @@ func Assemble(deps AssemblyDeps, cfg *Config, localSid int32, mongoCfg MongoBack
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
-	// 快照段与只读方 NewSnapshotClient 同一套校验（RR-20261006-71）；正式装配总带 Redis L2。
+	// 快照段与只读方 NewSnapshotClient 同一套校验；正式装配总带 Redis L2。
 	if err := validateSnapshotConfig(cfg, true); err != nil {
 		return nil, err
 	}
@@ -133,11 +129,8 @@ func Assemble(deps AssemblyDeps, cfg *Config, localSid int32, mongoCfg MongoBack
 	return &Assembly{Manager: manager, LockFactory: lockFactory, AtomicStore: atomicStore, cfg: cfg}, nil
 }
 
-// Start validates and seals the dependencies, binds and starts snapshot and
-// interest replication on bus, initialises remote storage when the backend
-// supports it, recovers the outbox and starts the finalizer. Any failure
-// stops the replicators again. ctx is the parent for the bounded storage and
-// recovery calls (each limited to cfg.OpTimeout).
+// Start 校验并封存依赖，在 bus 上绑定并启动快照与兴趣复制，后端支持时初始化 Remote 存储，恢复 outbox 并启动
+// finalizer。任何一步失败都会再停掉复制。ctx 是有界的存储与恢复调用的父 ctx（每次调用受 cfg.OpTimeout 限制）。
 // 重复启动幂等；失败重试复用首次绑定的 bus，替换 bus 需要新的 Assembly。
 func (a *Assembly) Start(ctx context.Context, bus fsyncbus.ISyncBus) error {
 	if a == nil || a.Manager == nil {
@@ -177,7 +170,7 @@ func (a *Assembly) Start(ctx context.Context, bus fsyncbus.ISyncBus) error {
 			snapshots.unsubscribe()
 		}
 	}()
-	// O-M6-1：同 sid 重启的 owner 兴趣表是空的（兴趣主题从 durable 游标续读，不重放已确认的兴趣）。订阅已确认，
+	// 同 sid 重启的 owner 兴趣表是空的（兴趣主题从 durable 游标续读，不重放已确认的兴趣）。订阅已确认，
 	// 之后发出的续租一定能到达，此时请求只读方立即重新续租，推送不必等下一个续租周期；放在存储初始化与 outbox
 	// 恢复之前，让续租尽早回来。失败只记日志，退化到原来的续租周期。
 	if err := snapshots.requestInterestRefresh(ctx); err != nil {
@@ -208,12 +201,9 @@ func (a *Assembly) Start(ctx context.Context, bus fsyncbus.ISyncBus) error {
 	return nil
 }
 
-// Stop stops the finalizer within ctx and then the snapshot client. A timeout keeps
-// replication available for accepted work; a later Stop finishes the cleanup.
-// The snapshot client stops in three steps (RR-20261005-NC-174, Mirror 第 3 步): admission
-// closes and the subscriptions go, then Stop waits within ctx for the replica handlers and
-// the L2 / authority / interest calls already admitted; a timeout returns the ctx error and
-// a later Stop waits again.
+// Stop 在 ctx 内先停 finalizer，再停快照客户端。超时时复制仍为已接受的工作保持可用，之后的 Stop 完成清理。
+// 快照客户端按三步停止：关闭准入并退订，然后在 ctx 内等待复制处理与已准入的 L2 / 权威 / 兴趣调用结束；超时返回
+// ctx 错误，之后的 Stop 再次等待。
 func (a *Assembly) Stop(ctx context.Context) error {
 	if a == nil {
 		return nil

@@ -16,7 +16,7 @@ import (
 
 const SyncTopicSnapshot = "remote_entity_snapshot"
 
-// remoteSyncer publishes immutable snapshots and renewable interests.
+// remoteSyncer 发布不可变快照与可续约的兴趣。
 type remoteSyncer struct {
 	snapshotRep *mirror.Replicator
 	interestRep *mirror.Replicator
@@ -32,7 +32,7 @@ type remoteSnapshotWire struct {
 	Delete bool                        `json:"delete,omitempty"`
 	Key    entity.RemoteSnapshotKey    `json:"key"`
 	Update entity.RemoteSnapshotRecord `json:"update,omitempty"`
-	// PublishedAt 是发布方发出这条消息的时刻（Unix 纳秒，B2 新增，omitempty）。接收方据此丢弃比共享 L2
+	// PublishedAt 是发布方发出这条消息的时刻（Unix 纳秒，omitempty）。接收方据此丢弃比共享 L2
 	// 能担保的窗口更老的快照更新（ApplyReplica）。旧发布者不带它，旧接收方忽略它。
 	PublishedAt int64 `json:"published_at,omitempty"`
 }
@@ -80,9 +80,8 @@ func (s *remoteSyncer) DeleteRemoteSnapshot(ctx context.Context, key entity.Remo
 	return s.snapshotRep.Publish(ctx, mirror.Envelope{Key: remoteSnapshotReplicaKey(key), Version: int64(version), Op: mirror.OpUpsert, Payload: raw})
 }
 
-// remoteSnapshotReplicaKey defines the ordering/deduplication domain. Every
-// independently versioned tenant/entity/kind/scope/policy snapshot needs its
-// own key; using EntityID alone drops sibling snapshots at the same version.
+// remoteSnapshotReplicaKey 定义排序 / 去重的域。每个独立版本化的 tenant/entity/kind/scope/policy 快照都要有自己的键；
+// 只用 EntityID 会丢掉同一版本的兄弟快照。
 func remoteSnapshotReplicaKey(key entity.RemoteSnapshotKey) int64 {
 	h := fnv.New64a()
 	var raw [22]byte
@@ -115,12 +114,8 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 		return err
 	}
 	if wire.Delete {
-		// The delete carries the version of the commit that removed the
-		// snapshot (DeleteRemoteSnapshot publishes it as env.Version). Apply
-		// it at that version so it neither clears a newer snapshot delivered
-		// first nor lets an older one delivered later resurrect the key
-		// (U-0187, RR-20260913-01). A version-less delete stays a plain
-		// invalidation for compatibility with older publishers.
+		// 删除带着移除快照的那次提交的版本（DeleteRemoteSnapshot 以 env.Version 发布）。按该版本应用：既不清掉先送达的
+		// 更新快照，也不让后送达的更旧快照复活键。不带版本的删除为兼容旧发布者仍按普通失效处理。
 		version := uint64(0)
 		if env.Version > 0 {
 			version = uint64(env.Version)
@@ -128,7 +123,7 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 		return snapshotCache.ApplyReplica(ctx, entity.RemoteSnapshotReplica{Key: wire.Key, Delete: true, DeleteVersion: version})
 	}
 	if s.historic(wire.PublishedAt, time.Now()) {
-		// N05 O5：同步总线的 durable 用 DeliverAll，新 sid 或落后的游标会重放保留期内的历史。共享 L2 对
+		// 同步总线的 durable 用 DeliverAll，新 sid 或落后的游标会重放保留期内的历史。共享 L2 对
 		// 一次写入（更新的版本或删除墓碑）的记忆只有 snapshot_l2_ttl 那么长；比这更老的快照，L2 的 CAS 已经
 		// 无法替它担保——键过期后会接受它，旧版本同时写进 L2 与 L1、所有冷节点都读到。丢掉它只意味着之后
 		// 按需读取。窗口取 L2 TTL 的一半，另一半留给跨节点时钟偏差与投递延迟。删除不过滤：带版本删除的
@@ -136,7 +131,7 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 		metrics.IncCounter("remote_entity.snapshot_replica_historic_dropped_total", nil, 1)
 		return nil
 	}
-	// Mirror 第 4 步：这个 key 的权威加载在途时消息进首载缓冲（ApplyReplica 返回 nil），加载装入后重放；
+	// 这个 key 的权威加载在途时消息进首载缓冲（ApplyReplica 返回 nil），加载装入后重放；
 	// 只有不在首载时的缺基 / 换代 / schema 不符才在这里回源（这次回源本身也是一次首载）。
 	err := snapshotCache.ApplyReplica(ctx, entity.RemoteSnapshotReplica{Key: wire.Key, Update: wire.Update})
 	if errors.Is(err, entity.ErrRemoteSnapshotGap) || errors.Is(err, entity.ErrRemoteSnapshotEpochMismatch) || errors.Is(err, entity.ErrRemoteSnapshotSchemaMismatch) {
@@ -155,19 +150,13 @@ func (s SnapshotReplicaStore) historic(publishedAt int64, now time.Time) bool {
 	return now.UnixNano()-publishedAt > (s.client.cfg.SnapshotL2TTL / 2).Nanoseconds()
 }
 
-// validateSnapshotWireIdentity binds the payload's own identity to the
-// envelope that routed it.
+// validateSnapshotWireIdentity 把载荷自身的身份绑定到路由它的信封上。
 //
-// The generic Replicator checks the outer SyncMsg against mirror.Envelope, but
-// this third layer — wire.Key, wire.Update.Key and Update.StateVersion — was
-// never cross-checked against either. A message could therefore declare one
-// key for routing and ordering and write a different view: changing only
-// Update.Key.Scope in the payload applied to the other scope's cache and
-// returned nil (RR-20260913-03). Ordering, deduplication and the write must
-// all name the same thing or the message is malformed.
+// 通用 Replicator 只校验外层 SyncMsg 与 mirror.Envelope；第三层——wire.Key、wire.Update.Key 与 Update.StateVersion——
+// 必须在这里与它们交叉核对，否则一条消息可以声明一个键用于路由和排序，却写入另一个视图（只改载荷里的
+// Update.Key.Scope 就会写进别的 scope 的缓存）。排序、去重与写入必须指向同一个对象，否则消息不合法。
 //
-// This is protocol integrity, not authorization: who may publish on the
-// internal topic stays a transport and service-identity question.
+// 这是协议完整性而不是授权：谁可以在内部主题上发布，仍是传输与服务身份的问题。
 func validateSnapshotWireIdentity(env mirror.Envelope, wire remoteSnapshotWire) error {
 	if !wire.Key.Valid() {
 		return fmt.Errorf("remote_entity: snapshot message has an invalid key")

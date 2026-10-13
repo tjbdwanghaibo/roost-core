@@ -12,7 +12,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// 兴趣续租请求（O-M6-1，docs/feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md）。
+// 兴趣续租请求。
 //
 // 兴趣是广播软状态。owner 以相同 sid 重启时，兴趣主题的 durable 从游标续读，之前已确认的兴趣消息不重放，
 // 兴趣表是空的；只读方的续租要等剩余不足一半才发（缺省最长约 15s），这段时间 owner 不推送，读取只能靠
@@ -177,7 +177,7 @@ func (c *SnapshotClient) waitInterestRefreshGap(wait time.Duration) bool {
 }
 
 // refreshInterestsOnce 把本机兴趣表里仍有效的每个 key 经 renewInterest(refresh) 续租一次：与读时续租同一
-// 入口（条带锁内分配代际、本机兴趣表按 O4 配额判定、广播），只是不看半衰期门槛。消息数不超过本机兴趣表
+// 入口（条带锁内分配代际、本机兴趣表按配额判定、广播），只是不看半衰期门槛。消息数不超过本机兴趣表
 // 的 key 数（上限 snapshot_interest_keys），与一个正常续租周期同级。
 func (c *SnapshotClient) refreshInterestsOnce() {
 	now := time.Now().UnixNano()

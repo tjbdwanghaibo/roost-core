@@ -13,6 +13,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
+// remoteWriteEntry 是写批次中的一个实体：持有它的写门、所有权读锁（共享模式下还有分布式锁）与写租约，定稿后带
+// 冻结的 Remote 提交。
 type remoteWriteEntry struct {
 	wrapper   *remoteEntityWrapper
 	entity    entity.IThreadSafeRemoteEntity
@@ -20,10 +22,12 @@ type remoteWriteEntry struct {
 	distLock  bool
 	finalized bool
 	commit    entity.RemoteCommit
-	// unloaded 表示持久拒绝后旧实例已被仅内存卸载（RR-20260926-39），重试时跳过。
+	// unloaded 表示持久拒绝后旧实例已被仅内存卸载，重试时跳过。
 	unloaded bool
 }
 
+// remoteWriteBatch 实现 entity.RemoteWriteBatch：Prepare 取得全部写权限 → 持锁 FinalizeLocked 冻结提交 →
+// 解锁后 Commit 按持久级别提交或等待结论 → Close 释放资源，结论未定时交给 finalizer。
 type remoteWriteBatch struct {
 	mgr     *Manager
 	entries []*remoteWriteEntry
@@ -35,16 +39,18 @@ type remoteWriteBatch struct {
 	committed     bool
 	aborted       bool
 	indeterminate bool
-	// rejected 表示 Durability 0 被权威明确拒绝，Commit 已同步回滚并隔离；Close 释放后卸载旧实例（RR-20260926-39）。
+	// rejected 表示 Durability 0 被权威明确拒绝，Commit 已同步回滚并隔离；Close 释放后卸载旧实例。
 	rejected bool
 	closed   bool
-	// onOutcome 是 Nest 交来的提交后工作（RR-20260926-37），拿到持久结论后恰好调用一次。
+	// onOutcome 是 Nest 交来的提交后工作，拿到持久结论后恰好调用一次。
 	onOutcome func(bool)
 	reserved  bool
 }
 
 var _ entity.RemoteWriteBatch = (*remoteWriteBatch)(nil)
 
+// PrepareRemoteWriteBatch 在 Nest 加锁之前按 ID 升序为每个目标取得写权限（写门、所有权、共享模式的分布式锁与
+// fence）并加载权威实例。整批共用一个 OpTimeout 上界；任一实体失败即中止并释放已取得的资源。
 func (m *Manager) PrepareRemoteWriteBatch(ctx context.Context, ids []int64) (_ entity.RemoteWriteBatch, err error) {
 	fctx.AssertBlockingAllowed("remoteentity.PrepareRemoteWriteBatch")
 	started := time.Now()
@@ -108,16 +114,14 @@ func (m *Manager) PrepareRemoteWriteBatch(ctx context.Context, ids []int64) (_ e
 	return batch, nil
 }
 
+// beginWrite 为一个实体取得写权限：写门 → 所有权（必要时认领）→ 共享模式取分布式锁与 fence（或独占模式取持久写许可）
+// → 加载与权威版本一致的实例 → 校验所有权状态 → 写入版本向量。任一步失败都释放此前取得的锁与写门。
 func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEntry, error) {
 	if w == nil || w.mgr == nil {
 		return nil, entity.ErrRemoteRejected
 	}
-	// OpTimeout is the budget for the WHOLE operation, and the queue is part
-	// of it. It used to be applied after the gate below, which left the wait
-	// bounded only by the caller: N writers on one entity then made the last
-	// one wait for all the others, and a configured 3s budget coexisted with
-	// a 79s dispatch (RR-20260920-08). The lock path in ownership.go already
-	// sets its deadline before waiting; this is the same rule, not a new one.
+	// OpTimeout 是整个操作的预算，排队等写门也计入其中：截止时间必须在等待之前设定，否则同一实体上的 N 个写者会让
+	// 最后一个等完其余全部，配置的预算形同虚设。ownership.go 的加锁路径遵守同一规则。
 	ctx, cancel := w.mgr.ownershipContext(parent)
 	defer cancel()
 	gateStarted := time.Now()
@@ -140,8 +144,7 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 	if _, found := w.cachedOwnership(); !found {
 		lease, err := w.mgr.ownershipStore.ClaimOwnership(ctx, w.id, w.mgr.localSid)
 		if err != nil {
-			// Refresh after a failed CAS so the error reports the actual owner
-			// that won the claim instead of treating absence as local ownership.
+			// CAS 失败后刷新，让错误报告真正赢得认领的所有者，而不是把“没有记录”当作本地拥有。
 			_ = w.refreshMarked(ctx)
 			current, _ := w.cachedOwnership()
 			release()
@@ -167,10 +170,8 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 			return nil, fmt.Errorf("remote_entity: shared lock %d: %w", w.id, err)
 		}
 		distLocked = true
-		// The public contract, not a duck type: the manager refuses a factory
-		// whose locks lack it at construction, so this assertion holds for
-		// every wrapper that exists. The zero check below stays as the
-		// last-line guard against a lock that has the method and lies.
+		// 这是公开契约而非鸭子类型：Manager 构造时拒绝锁不具备该能力的工厂，所以每个 wrapper 上这个断言都成立。
+		// 下面的零值检查是最后一道防线，防备实现了方法却给出错误值的锁。
 		if provider, ok := w.rMu.(redis.IFencedVersionedLock); ok {
 			lockFence = provider.Fence()
 		}
@@ -232,7 +233,7 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 			release()
 			if errors.Is(loadErr, entity.ErrEntityRemoved) {
 				// 旧实例正被卸载（Destroy 已把它移出索引、生命周期回调未结束），EntityManager 拒绝登记重载的实例：
-				// 这是卸载重载窗口，可重试（RR-20260926-62）。
+				// 这是卸载重载窗口，可重试。
 				return nil, fmt.Errorf("%w: entity %d: %w", entity.ErrRemoteEntityReloading, w.id, loadErr)
 			}
 			return nil, fmt.Errorf("remote_entity: load entity %d: %w", w.id, loadErr)
@@ -249,10 +250,8 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 		state := remote.RemoteOwnershipState()
 		switch state {
 		case entity.RemoteOwnershipRecovering:
-			// Frozen by an ownership transition whose outcome was unknown
-			// (U-0188). Reaching this line means the marker — invalidated
-			// at freeze time — was re-read from the authority above and it
-			// still names this node, so the copy is ours again.
+			// 结果未知的所有权转换把实例冻结了。走到这里说明冻结时作废的 marker 已在上面从权威重读，且仍指向本节点，
+			// 这份副本重新归本节点所有。
 			thaw := entity.RemoteOwnershipLocalOwned
 			if marked {
 				thaw = entity.RemoteOwnershipShared
@@ -272,7 +271,7 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 			cause := entity.ErrRemoteOwnerTransition
 			switch {
 			case state == entity.RemoteOwnershipQuarantined && w.rejectedReloadPending(remote):
-				// 持久拒绝已收尾、gate 已释放，框架即将卸载这份旧实例并从权威重载：可重试（RR-20260926-62）。
+				// 持久拒绝已收尾、gate 已释放，框架即将卸载这份旧实例并从权威重载：可重试。
 				cause = entity.ErrRemoteEntityReloading
 			case state == entity.RemoteOwnershipFenced || state == entity.RemoteOwnershipQuarantined:
 				cause = entity.ErrRemoteFenced
@@ -328,6 +327,7 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 	return &remoteWriteEntry{wrapper: w, entity: remoteEntity, lease: lease, distLock: distLocked}, nil
 }
 
+// EntityIDs 返回批次目标（升序、去重）的副本。
 func (b *remoteWriteBatch) EntityIDs() []int64 {
 	if b == nil {
 		return nil
@@ -335,6 +335,8 @@ func (b *remoteWriteBatch) EntityIDs() []int64 {
 	return append([]int64(nil), b.ids...)
 }
 
+// FinalizeLocked 在业务锁内为每个有持久变化（或删除意图）的实体生成冻结的 Remote 提交，填入租约的版本与代际，
+// 校验后登记事务。任何一个失败都回滚已生成的提交并返回错误；只能定稿一次。
 func (b *remoteWriteBatch) FinalizeLocked(outcome entity.RemoteTransactionOutcome) error {
 	if b == nil || b.mgr == nil || !outcome.Succeeded || outcome.TransactionID.IsZero() {
 		return entity.ErrRemoteCommitNotFinalized
@@ -403,12 +405,12 @@ func (b *remoteWriteBatch) FinalizeLocked(outcome entity.RemoteTransactionOutcom
 	return nil
 }
 
-// refuseServerScopedRemoteData 在 WAL 准入之前拒绝按服选库（dbscope=sid）的托管数据（RR-20260927-09）。
-// RR-20260926-45 的装配期校验只看注册的 DAO 工厂；手写实体注册的工厂与实际持有的 DAO 不一致时它看不到，而提交按
+// refuseServerScopedRemoteData 在 WAL 准入之前拒绝按服选库（dbscope=sid）的托管数据。
+// 装配期校验只看注册的 DAO 工厂；手写实体注册的工厂与实际持有的 DAO 不一致时它看不到，而提交按
 // mutation 自带的 DatabaseScope 选库（mongo_payload.go → MongoCommitter.dataDB），又回到“提交按提交方 sid、加载按
 // 本服 sid”的不一致。这里是 Remote 提交进入 WAL 前的唯一定稿点，所以只在这里拒绝：RemoteCommit.Validate 同时被
-// WAL 编解码、投影与 ApplyRemoteCommits（投影重放）调用，在那里拒绝会把已准入的记录变成投影毒丸、让重启重放失败
-// （RR-45 修复记录“未采用”一节）；DatabaseScope 字段、WAL 编码与 dataDB 的 sid 分支因此原样保留。
+// WAL 编解码、投影与 ApplyRemoteCommits（投影重放）调用，在那里拒绝会把已准入的记录变成投影毒丸、让重启重放失败；
+// DatabaseScope 字段、WAL 编码与 dataDB 的 sid 分支因此原样保留。
 func refuseServerScopedRemoteData(commit entity.RemoteCommit) error {
 	for i := range commit.Mutations {
 		if entity.DatabaseScope(commit.Mutations[i].DatabaseScope) == entity.DatabaseServer {
@@ -425,6 +427,7 @@ func refuseServerScopedRemoteData(commit entity.RemoteCommit) error {
 	return nil
 }
 
+// rollbackFinalizedLocked 撤销已定稿实体的 Remote 提交（调用方持 b.mu 且仍在业务锁内）。
 func (b *remoteWriteBatch) rollbackFinalizedLocked() {
 	for _, entry := range b.entries {
 		if !entry.finalized || entry.entity == nil {
@@ -438,21 +441,18 @@ func (b *remoteWriteBatch) rollbackFinalizedLocked() {
 	}
 }
 
+// Commits 按批次实体顺序返回已定稿提交的副本。
 func (b *remoteWriteBatch) Commits() []entity.RemoteCommit {
 	if b == nil {
 		return nil
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	commits := make([]entity.RemoteCommit, 0, len(b.entries))
-	for _, entry := range b.entries {
-		if entry.finalized {
-			commits = append(commits, entry.commit.Clone())
-		}
-	}
-	return commits
+	return b.commitsLocked()
 }
 
+// Commit 在实体锁释放后按持久级别收尾：Durability 0 直接写权威并等待发布确认；1 返回推测回执，由 finalizer 等投影；
+// 2/3 等投影器的结论。失败时等待结论的批次标为结果未知（交 finalizer），Durability 0 的明确拒绝在快池回滚并隔离。
 func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitReceipt, error) {
 	fctx.AssertBlockingAllowed("remoteentity.remoteWriteBatch.Commit")
 	if b == nil || b.mgr == nil {
@@ -507,9 +507,9 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 	if err != nil {
 		rejected := false
 		// 等待投影器结论的批次（strict = 2，以及带 Remote 批次、随 strict 路径提交的 pipelined = 3）：本地记录已进 WAL，
-		// 即使等到的是明确拒绝，也由 finalizer 按持久结论收尾（Rejected：回滚、隔离、释放、仅内存卸载后交付 false，RR-28 / 39 / 58 / 62）。
-		// 之前这里只认 == 2：pipelined 被拒时既不交给 finalizer、也不走下面 Durability 0 的同步回滚，Close 直接释放 gate，
-		// 实例隔离后永不卸载（直到重启都不可写）、提交后工作没有结论、Sync 门永久冻结（RR-20260928-09）。
+		// 即使等到的是明确拒绝，也由 finalizer 按持久结论收尾（Rejected：回滚、隔离、释放、仅内存卸载后交付 false）。
+		// 必须用 >= 2 覆盖 pipelined：否则它被拒时既不交给 finalizer、也不走 Durability 0 的同步回滚，实例隔离后永不
+		// 卸载、提交后工作没有结论、Sync 门永久冻结。
 		if outcome.Durability >= 2 || errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
 			b.mu.Lock()
 			b.indeterminate = true
@@ -523,7 +523,7 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 		}
 		quarantineErr := b.mgr.quarantineEntries(b.entries, err)
 		if rejected && quarantineErr == nil {
-			// 明确拒绝：Close 释放后卸载这些实例，其间下一写者得到可重试的重载哨兵（RR-20260926-62）。
+			// 明确拒绝：Close 释放后卸载这些实例，其间下一写者得到可重试的重载哨兵。
 			b.mgr.markRejectedReloadPending(b.entries)
 		}
 		return nil, errors.Join(err, quarantineErr)
@@ -534,14 +534,13 @@ func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitRec
 	return receipts, nil
 }
 
-// waitedCommitError 给等待投影器结论的 Commit（strict，以及随 strict 路径提交的 pipelined）的错误归类（RR-20260928-08）。
+// waitedCommitError 给等待投影器结论的 Commit（strict，以及随 strict 路径提交的 pipelined）的错误归类。
 // 本地记录已经进 WAL，Remote 部分由投影器按 WAL 写权威；这里的错误只说明本批次没有等到结论，不说明 Remote 没写入。
 // 只有 entity.ErrRemoteRejected 是明确拒绝：tracker 终态 Rejected（投影器写权威被 fenced / 版本冲突 / 持久拒绝，
-// 过期租约跳过），或 finalizer 回源得到 Rejected，原样返回（判别表第 4 行）。其余——tracker 被容量淘汰后重新登记报
-// ErrRemoteOverloaded、状态查询失败、未定终态——一律加上 entity.ErrRemotePersistenceIndeterminate（判别表第 2 行）；
-// 已带它的（Indeterminate 终态、等待截止，RR-20260927-24）不重复加。
-// 之前 Commit 对 strict 的这些错误已按结果未知交给 finalizer（之后按已提交收尾），错误本身却不带哨兵，nest 按“不带哨兵 =
-// 明确拒绝”给回复加 ErrRemotePartRejected，调用方照做会把已提交的 Remote 部分再写一次。
+// 过期租约跳过），或 finalizer 回源得到 Rejected，原样返回。其余——tracker 被容量淘汰后重新登记报
+// ErrRemoteOverloaded、状态查询失败、未定终态——一律加上 entity.ErrRemotePersistenceIndeterminate；
+// 已带它的（Indeterminate 终态、等待截止）不重复加。这些情形 Commit 已按结果未知交给 finalizer，错误若不带哨兵，
+// nest 会按“不带哨兵 = 明确拒绝”给回复加 ErrRemotePartRejected，调用方照做会把已提交的 Remote 部分再写一次。
 func waitedCommitError(err error) error {
 	if err == nil || errors.Is(err, entity.ErrRemoteRejected) || errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
 		return err
@@ -549,12 +548,14 @@ func waitedCommitError(err error) error {
 	return errors.Join(entity.ErrRemotePersistenceIndeterminate, err)
 }
 
+// Abort 中止批次：未定稿时只做标记；已定稿时在快池撤销本地的 Remote 提交并把事务登记为 Rejected。
+// 已提交、结果未知或已关闭的批次不受影响。
 func (b *remoteWriteBatch) Abort(ctx context.Context, cause error) error {
 	if b == nil {
 		return nil
 	}
 	// 未定稿的批次没有本地状态要回滚（定稿失败已在 FinalizeLocked 内回滚），也没有登记事务：
-	// 就地标记 aborted，不投递快池续行（RR-20260926-44）。标记与定稿共用 b.mu，
+	// 就地标记 aborted，不投递快池续行。标记与定稿共用 b.mu，
 	// 之后的 FinalizeLocked 会拒绝；写门与写许可仍由 Close 统一释放。
 	b.mu.Lock()
 	if !b.finalized {
@@ -596,6 +597,7 @@ func (b *remoteWriteBatch) Abort(ctx context.Context, cause error) error {
 	})
 }
 
+// Indeterminate 标记本地提交结果未知：Close 时交给 finalizer 取得持久结论，不按 Abort 处理。
 func (b *remoteWriteBatch) Indeterminate(_ context.Context, _ error) error {
 	if b == nil {
 		return nil
@@ -626,6 +628,8 @@ func (b *remoteWriteBatch) DeferUntilDurableOutcome(fn func(bool)) bool {
 
 var _ entity.RemoteOutcomeDeferrer = (*remoteWriteBatch)(nil)
 
+// Close 结束批次：结论未定（或 Durability 1 待投影）时把条目交给 finalizer；否则释放写门、锁与写额度，明确拒绝的
+// 批次随后卸载持有被拒绝修改的实例并交付结论。重复调用返回 nil。
 func (b *remoteWriteBatch) Close(ctx context.Context) error {
 	fctx.AssertBlockingAllowed("remoteentity.remoteWriteBatch.Close")
 	if b == nil {
@@ -676,6 +680,7 @@ func (b *remoteWriteBatch) Close(ctx context.Context) error {
 	return err
 }
 
+// commitsLocked 返回已定稿提交的副本，调用方持 b.mu。
 func (b *remoteWriteBatch) commitsLocked() []entity.RemoteCommit {
 	return finalizedRemoteCommits(b.entries)
 }
@@ -692,6 +697,7 @@ func finalizedRemoteCommits(entries []*remoteWriteEntry) []entity.RemoteCommit {
 	return commits
 }
 
+// speculativeReceipts 按提交内容构造推测回执（Durability 1 不等投影结论时使用）。
 func speculativeReceipts(commits []entity.RemoteCommit) []entity.RemoteCommitReceipt {
 	receipts := make([]entity.RemoteCommitReceipt, len(commits))
 	for i, commit := range commits {

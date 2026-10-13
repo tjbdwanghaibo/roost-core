@@ -22,15 +22,11 @@ local value = "local:" .. ARGV[2] .. ":1:1"
 redis.call("HSET", KEYS[1], ARGV[1], value)
 return value
 `
-	// ownershipDecimalInc adds one to a decimal string without ever turning it
-	// into a Lua number.
+	// ownershipDecimalInc 给十进制串加一，全程不转成 Lua 数值。
 	//
-	// The scripts used to write `.. ((tonumber(x) or 0) + 1)`, which
-	// concatenates a Lua NUMBER, and Lua 5.1 renders numbers with "%.14g":
-	// 10^14 came out as "1e+14". parseMarkerLease only accepts decimal uint64,
-	// so the read failed — AFTER Redis had already stored the unreadable
-	// record, which is the opposite of refusing bad input (RR-20260913-11).
-	// Returning nil past uint64 means the caller refuses before persisting.
+	// 不能写 `.. ((tonumber(x) or 0) + 1)`：那会拼接一个 Lua 数值，而 Lua 5.1 用 "%.14g" 格式化数值，10^14 会变成
+	// "1e+14"。parseMarkerLease 只接受十进制 uint64，读取会在 Redis 已经存下不可读的记录之后才失败。超出 uint64 时
+	// 返回 nil，调用方在持久化之前就拒绝。
 	ownershipDecimalInc = `
 local function incdec(v)
   if not v or v == "" then v = "0" end
@@ -95,16 +91,15 @@ return value
 
 // markerRedisKey 是缺省的所有权标记 hash 键：一把 hash，field 是实体 ID。正式 Assemble 不写它
 // （所有权存储是 Mongo 的 WriteAuthority）；只有自行 SetOwnershipStore(NewRedisMarker…) 的非 authority
-// 兼容装配会用到。缺省不带部署前缀，共用一个 Redis db 的多个部署应各自加前缀（RR-20260930-19）。
+// 兼容装配会用到。缺省不带部署前缀，共用一个 Redis db 的多个部署应各自加前缀。
 const markerRedisKey = "remote_entity:marks"
 
 type markerEval interface {
 	Eval(ctx context.Context, script string, keys []string, args ...any) (any, error)
 }
 
-// redisMarker implements entity.IRemoteEntityOwnershipStore using one Redis
-// hash and Lua CAS transitions. Ownership absence is never interpreted as a
-// local lease.
+// redisMarker 用一个 Redis 哈希与 Lua CAS 转换实现 entity.IRemoteEntityOwnershipStore。没有所有权记录绝不被解读为
+// 本地租约。
 type redisMarker struct {
 	redis markerEval
 	key   string
@@ -120,7 +115,7 @@ func NewRedisMarker(redis fredis.IRedis, key string) *redisMarker {
 // NewRedisMarkerWithKeyPrefix 与 NewRedisMarker(redis, "") 相同，另给标记键加部署前缀：
 // prefix 为空时键仍是 remote_entity:marks（逐字不变），非空时是 "<prefix>:remote_entity:marks"，
 // 与 L2 快照键前缀（NewSnapshotL2StoreWithKeyPrefix）同形，同一个部署前缀值可同时用于两者。
-// 前缀先经 ValidateMarkerKeyPrefix 校验（RR-20260930-19）。
+// 前缀先经 ValidateMarkerKeyPrefix 校验。
 func NewRedisMarkerWithKeyPrefix(redis fredis.IRedis, prefix string) (*redisMarker, error) {
 	return newRedisMarkerForEvalWithKeyPrefix(redis, prefix)
 }
@@ -128,7 +123,7 @@ func NewRedisMarkerWithKeyPrefix(redis fredis.IRedis, prefix string) (*redisMark
 // ValidateMarkerKeyPrefix 校验标记键前缀：可以为空（键不变）；非空时不能含首尾或内部空白。
 // 标记只有一把 hash 键，Redis Cluster hash tag 无害、允许（与 L2 前缀不同，L2 是逐实体多键，带 tag 会钉在一个槽）；
 // 但一旦写了花括号就要求首个 tag 非空且闭合——Redis 对 "e{" / "e{}" 不做 tag 哈希，配置者会以为钉住了槽而没有。
-// 这与 kit 对 remote_entity.lock_key 的 Cluster 判断是同一条规则（RR-20260924-25）。
+// 这与 kit 对 remote_entity.lock_key 的 Cluster 判断是同一条规则。
 func ValidateMarkerKeyPrefix(prefix string) error {
 	if prefix == "" {
 		return nil

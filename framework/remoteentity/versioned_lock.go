@@ -17,6 +17,7 @@ import (
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
+// 版本锁的错误：未取得、不由本方持有、租约已过期、配置非法。
 var (
 	ErrVersionedLockNotAcquired = errors.New("versioned lock not acquired")
 	ErrVersionedLockNotOwned    = errors.New("versioned lock not owned")
@@ -24,7 +25,8 @@ var (
 	ErrVersionedLockConfig      = errors.New("versioned lock invalid configuration")
 )
 
-// versionedLock implements fredis.IVersionedLock.
+// versionedLock 实现 fredis.IVersionedLock：基于 Redis 哈希的租约锁，取锁时从不过期的独立计数器分配 fence，
+// 可选异步续期；带 authority 时取锁同时取得持久写许可。
 type versionedLock struct {
 	redis     fredis.IRedis
 	key       string
@@ -41,21 +43,21 @@ type versionedLock struct {
 	fence    uint64
 	grant    WriteGrant
 
-	// 取锁 token 按锁对象分代（RR-20261004-01）：token = tokenPrefix + 十进制 tokenSeq。tokenPrefix 在创建锁对象时随机生成、
+	// 取锁 token 按锁对象分代：token = tokenPrefix + 十进制 tokenSeq。tokenPrefix 在创建锁对象时随机生成、
 	// 只有这个锁对象会铸造带它的 token；tokenSeq 每次 TryLock 加一（l.mu 下），所以同一锁对象的 token 有先后。
 	// 本地不持有（acquired=false）时，Redis 上 owner 若是本锁对象较早一代的 token，它一定是"结果未知"留下的：
-	// 取锁脚本执行了但回复丢失或迟到（RR-20261004-01）、释放没有得到明确答复（RR-20260930-21）、或放弃未准入许可的清理失败。
+	// 取锁脚本执行了但回复丢失或迟到、释放没有得到明确答复、或放弃未准入许可的清理失败。
 	// TryLock 把 tokenPrefix 与本次序号交给 Lua，由 Redis 判定：owner 是本锁对象更早的序号就视为可取得（新 token、新 fence、
-	// 新代际），被别人持有走 NotAcquired，空闲正常取锁。只认"更早"，迟到落地的旧代脚本挤不掉已经取得的新代际（RR-20260924-20）。
+	// 新代际），被别人持有走 NotAcquired，空闲正常取锁。只认"更早"，迟到落地的旧代脚本挤不掉已经取得的新代际。
 	// 不在本地记"哪几个 token 结果未知"：连续多次没有答复时每一个都可能是 owner，只记一个会取不回真正的 owner，全记又无界。
 	tokenPrefix string
 	tokenSeq    uint64
 
 	// incarnation 非 nil 时 tokenPrefix 以它的 self 开头，取锁时可以接管同一单实例锁持有者上一代进程留下的
-	// owner（O-M6-6，见 lockIncarnation）；nil 时不接管，旧格式 token，行为与之前相同。
+	// owner（见 lockIncarnation）；nil 时不接管，token 不带代际前缀。
 	incarnation *lockIncarnation
 
-	// 异步续期按锁代际绑定（RR-20260926-43）。touchGeneration 是当前登记的续期 goroutine
+	// 异步续期按锁代际绑定。touchGeneration 是当前登记的续期 goroutine
 	// 所服务的 token，空表示没有登记。旧代际 goroutine 只续期、只判失效自己的 token，退出时
 	// 也只清除仍属于自己的登记；新代际 TryLock 时取消旧 goroutine 并为新 token 启动续期，
 	// 不依赖旧 goroutine 先退出。touchWg 覆盖全部尚未退出的续期 goroutine。
@@ -84,14 +86,7 @@ func newVersionedLock(redis fredis.IRedis, id int64, opts fredis.VersionedLockOp
 	if opts.TTL < time.Millisecond {
 		l.initErr = errors.Join(l.initErr, fmt.Errorf("%w: TTL must be at least 1ms", ErrVersionedLockConfig))
 	}
-	if opts.RetryCount < 0 {
-		l.opts.RetryCount = 0
-	}
-	if opts.RetryInterval < 0 {
-		l.opts.RetryInterval = 0
-	}
-
-	// Normalize async touch params
+	// 规范异步续期参数；重试参数在最后统一规范。
 	if opts.AutoAsyncTouch {
 		if opts.AsyncTouchExtend <= 0 {
 			opts.AsyncTouchExtend = opts.TTL / 2
@@ -132,9 +127,9 @@ func (l *versionedLock) TryLock(ctx context.Context) error {
 	l.tokenSeq++
 	seq := l.tokenSeq
 	token := l.tokenPrefix + strconv.FormatUint(seq, 10)
-	// 本锁对象更早一代留在 Redis 上的租约交给 Lua 以 Redis 为准取回（RR-20261004-01 / RR-20260930-21）。
+	// 本锁对象更早一代留在 Redis 上的租约交给 Lua 以 Redis 为准取回。
 	// Eval 出错时脚本可能已经执行（owner 已是 token）：本地不记录，下一次 TryLock 的序号更大，同一条判定会把它取回。
-	// 同一单实例锁持有者上一代进程留下的 owner 也交给 Lua 当场接管（O-M6-6）；没有代际时两项为空，不做这项判定。
+	// 同一单实例锁持有者上一代进程留下的 owner 也交给 Lua 当场接管；没有代际时两项为空，不做这项判定。
 	scope, self := l.incarnation.prefixes()
 	result, err := l.redis.Eval(ctx, versionedTryLockLua, []string{l.key, l.key + ":fence"}, token, ttlMs, l.tokenPrefix, seq, scope, self)
 	if err != nil {
@@ -284,8 +279,7 @@ func (l *versionedLock) UnlockWithRetry(ctx context.Context, newVersion int64, v
 				l.mu.Unlock()
 				return ErrVersionedLockNotOwned
 			} else {
-				// 1 = unlocked now; 2 = a previous attempt whose response was
-				// lost already landed. Both mean the unlock succeeded.
+				// 1 = 本次解锁；2 = 之前一次回复丢失的解锁已经生效。两者都表示解锁成功。
 				l.mu.Lock()
 				// Redis 已按 token 隔离代际；迟到的回复也只能更新同一代本地状态。
 				if l.token == token {
@@ -309,14 +303,14 @@ func (l *versionedLock) UnlockWithRetry(ctx context.Context, newVersion int64, v
 		}
 	}
 	// Redis 错误用尽重试：没有明确答复，Redis 上 owner 可能仍是 token。本地进入持有状态未知，
-	// 下一次 TryLock 以 Redis 为准（RR-20260930-21）；这里既不能伪造已释放，也不能保持 acquired。
+	// 下一次 TryLock 以 Redis 为准；这里既不能伪造已释放，也不能保持 acquired。
 	l.releaseOutcomeUnknown(token)
 	return lastErr
 }
 
-// releaseOutcomeUnknown 记录一次没有拿到 Redis 明确答复的释放（RR-20260930-21）：只对仍是当前代际的 token 生效
+// releaseOutcomeUnknown 记录一次没有拿到 Redis 明确答复的释放：只对仍是当前代际的 token 生效
 // （Touch / Refresh 已看到失效的代际不再改），本地不再算持有。Redis 上 owner 可能仍是 token，下一次 TryLock 按
-// 分代规则（tokenPrefix / tokenSeq，RR-20261004-01）交 Lua 裁决。
+// 分代规则（tokenPrefix / tokenSeq）交 Lua 裁决。
 // 调用时续期 goroutine 已由 stopAsyncTouch 停掉并等待退出，不会再有人为这个 token 续期。
 func (l *versionedLock) releaseOutcomeUnknown(token string) {
 	l.mu.Lock()
@@ -471,7 +465,7 @@ func (l *versionedLock) Close() error {
 	return nil
 }
 
-// --- Async Touch ---
+// --- 异步续期 ---
 
 // startAsyncTouchLocked 为刚取得的 token 代际启动续期；调用方持有 l.mu。
 // 上一代际的 goroutine 可能已判定失效但尚未退出：这里只取消它，不在 l.mu 下等待
@@ -537,16 +531,16 @@ func (l *versionedLock) runAsyncTouch(ctx context.Context, cancel context.Cancel
 	}
 }
 
-// --- 进程代际（O-M6-6） ---
+// --- 进程代际 ---
 
-// ProcessIncarnation 是“同一个 sid 同一时刻只有本进程在跑”的证明，来自 App 单实例锁
-// （docs/feature/APP-SINGLETON-LOCK-2026-10-05.md）：Holder 是单实例锁的键（<key_prefix>:<server_type>:<sid>），
+// ProcessIncarnation 是“同一个 sid 同一时刻只有本进程在跑”的证明，来自 App 单实例锁：Holder 是单实例锁的键
+// （<key_prefix>:<server_type>:<sid>），
 // Token 是本次启动的持锁令牌（锁值第一段，每次启动都不同）。
 //
 // 传给 Assemble 之后，Remote 实体共享锁的 token 带上 sid、Holder 摘要与 Token；新进程第一次取某个实体的锁时，
-// owner 若是同一 Holder、不同 Token 留下的（上一代进程），在取锁脚本里当场接管，不再等 lock_ttl
-// （docs/feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md §7）。只有持有单实例锁的进程才能传：没有“旧进程已死
-// 或已失锁 fail-stop”的保证时接管会打断仍在服务的进程，所以 singleton.enabled=false 时不传，照旧按 TTL 等待。
+// owner 若是同一 Holder、不同 Token 留下的（上一代进程），在取锁脚本里当场接管，不再等 lock_ttl。
+// 只有持有单实例锁的进程才能传：没有“旧进程已死或已失锁 fail-stop”的保证时接管会打断仍在服务的进程，
+// 所以 singleton.enabled=false 时不传，照旧按 TTL 等待。
 type ProcessIncarnation struct {
 	Holder string
 	Token  string
@@ -605,8 +599,9 @@ func (i *lockIncarnation) noteTakeover(id int64) {
 	})
 }
 
-// --- Versioned Lock Factory ---
+// --- 版本锁工厂 ---
 
+// versionedLockFactory 为每个 Remote 实体创建版本锁，统一注入写授权与进程代际。
 type versionedLockFactory struct {
 	redis       fredis.IRedis
 	authority   WriteAuthority
@@ -631,15 +626,16 @@ func (f *versionedLockFactory) NewVersionedLock(id int64, opts fredis.VersionedL
 	lock := newVersionedLock(f.redis, id, opts)
 	lock.authority = f.authority
 	if f.incarnation != nil {
-		// 代际前缀放在锁对象前缀之前：RR-20261004-01 的“本锁对象更早序号”判定照旧以完整 tokenPrefix 为准。
+		// 代际前缀放在锁对象前缀之前：“本锁对象更早序号”的判定照旧以完整 tokenPrefix 为准。
 		lock.incarnation = f.incarnation
 		lock.tokenPrefix = f.incarnation.self + lock.tokenPrefix
 	}
 	return lock
 }
 
-// --- Helpers ---
+// --- 辅助函数 ---
 
+// generateToken 生成随机令牌（crypto/rand 文本）。
 func generateToken() string {
 	return crand.Text()
 }

@@ -18,7 +18,8 @@ import (
 	rediscore "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
-// remoteSnapshotL2Lua holds the helpers every L2 script shares.
+// remoteSnapshotL2Lua 是所有 L2 脚本共用的辅助函数（按精确十进制串比较 uint64，避免 Lua float64 丢精度）。
+// 脚本文本会原样发给 Redis，其中的注释保持不变。
 const remoteSnapshotL2Lua = `
 -- Versions, marker epochs and route epochs are uint64 on the Go side. Lua
 -- numbers are float64, so tonumber collapses adjacent values above 2^53 and
@@ -71,20 +72,13 @@ if ttl and ttl > 0 then redis.call("PEXPIRE", KEYS[1], ttl) end
 return 1
 `
 
-// remoteSnapshotL2DeleteAtVersion deletes the key unless it holds a
-// snapshot newer than ARGV[1]. Compared as an exact decimal string like the
-// CAS above; a delete is ordered against the versions of one key only, so
-// epochs are not part of it (U-0187 复核补修, RR-20260913-01).
+// remoteSnapshotL2DeleteAtVersion 删除键，除非它持有比 ARGV[1] 更新的快照。与上面的 CAS 一样按精确十进制串比较；
+// 删除只与同一键的版本排序，不涉及代际。
 //
-// The key is not simply removed: it becomes a tombstone holding only
-// deleted_version, with the snapshot TTL (ARGV[2], milliseconds). The local
-// tombstone of the node that applied the delete fences only that node; another
-// node that has not seen the delete yet — its authoritative load read the old
-// value first, or a late replica arrived before the delete message — used to
-// write the deleted snapshot back into the empty key, and every node with a
-// cold L1 then read the deleted entity until the L2 TTL (RR-20260913-01 复核,
-// 2026-10-05). An older delete never lowers a newer tombstone. Without a TTL
-// the key is dropped as before rather than leaving a tombstone forever.
+// 键不是简单删除，而是变成只含 deleted_version 的墓碑，TTL 取快照 TTL（ARGV[2]，毫秒）。应用删除的节点自己的本地
+// 墓碑只挡住它自己；另一个尚未看到删除的节点（权威加载先读到旧值，或迟到的复制消息先于删除消息到达）会把已删除的
+// 快照写回空键，所有 L1 冷的节点就会在 L2 TTL 内把已删除的实体读成存在。墓碑挡住了这种回写。更旧的删除不会降低
+// 更新的墓碑；没有 TTL 时直接删键，不留永久墓碑。
 const remoteSnapshotL2DeleteAtVersion = remoteSnapshotL2Lua + `
 local stored = redis.call("HGET", KEYS[1], "version")
 if stored and cmp(stored, ARGV[1]) > 0 then return 0 end
@@ -100,24 +94,21 @@ end
 return 1
 `
 
-// remoteSnapshotL2Store is the shared cache layer. Its comparison and write
-// happen in one Redis script, so a delayed publisher cannot overwrite a newer
-// ownership epoch or state version.
+// remoteSnapshotL2Store 是共享缓存层。比较与写入在同一个 Redis 脚本里完成，迟到的发布者无法覆盖更新的所有权代际或状态版本。
 type remoteSnapshotL2Store struct {
 	redis remoteSnapshotRedis
 	ttl   time.Duration
 	// keyPrefix 为空时键与旧版本逐字相同（remote_entity:snapshot:…）；非空时键为 "<keyPrefix>:remote_entity:snapshot:…"，
-	// 让共用一个 Redis db 的多个部署不共享 L2 快照（RR-20260927-17）。
+	// 让共用一个 Redis db 的多个部署不共享 L2 快照。
 	keyPrefix string
-	// tombstoneWait 是写墓碑之后的 WAIT（O-M6-3）；零值不等。
+	// tombstoneWait 是写墓碑之后的 WAIT；零值不等。
 	tombstoneWait tombstoneWait
 }
 
-// tombstoneWait 是 DeleteAtVersion 写墓碑之后的 WAIT 设置与计数（O-M6-3，
-// docs/feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md §3）。
+// tombstoneWait 是 DeleteAtVersion 写墓碑之后的 WAIT 设置与计数。
 //
 // 为什么只对墓碑：Redis 异步复制，切主时还没复制到副本的写会丢。快照丢了只是回到更旧的版本，L2 的 CAS 与
-// 陈旧上限照样保证不回退；墓碑丢了，L1 空的新读者会在陈旧上限内把已删除的实体读成存在（O-M6-3）。删除很少，
+// 陈旧上限照样保证不回退；墓碑丢了，L1 空的新读者会在陈旧上限内把已删除的实体读成存在。删除很少，
 // 每次多等一次副本确认的代价小。WAIT 只缩小窗口：副本在确认前断开或被暂停时仍会丢，结果计为 short /
 // no_replicas，可观测。
 type tombstoneWait struct {
@@ -151,12 +142,14 @@ type remoteSnapshotL2Value struct {
 	Data         []byte                   `json:"data"`
 }
 
+// remoteSnapshotRedis 是 L2 存储用到的 Redis 能力。
 type remoteSnapshotRedis interface {
 	HGet(context.Context, string, string) ([]byte, error)
 	Eval(context.Context, string, []string, ...any) (any, error)
 	Del(context.Context, ...string) (int64, error)
 }
 
+// NewSnapshotL2Store 建 L2 快照存储，ttl 同时是快照与墓碑的 TTL。
 func NewSnapshotL2Store(redis remoteSnapshotRedis, ttl time.Duration) *remoteSnapshotL2Store {
 	return &remoteSnapshotL2Store{redis: redis, ttl: ttl}
 }
@@ -171,7 +164,7 @@ func NewSnapshotL2StoreWithKeyPrefix(redis remoteSnapshotRedis, ttl time.Duratio
 }
 
 // NewSnapshotL2StoreFromConfig 按 Config 建 L2 store：SnapshotL2TTL、SnapshotL2KeyPrefix 与墓碑 WAIT
-// （SnapshotL2TombstoneWaitReplicas / Timeout，O-M6-3）。Assemble 与 kit 的只读 RemoteMirrorMod 都用它，
+// （SnapshotL2TombstoneWaitReplicas / Timeout）。Assemble 与 wiring 的只读 RemoteMirrorMod 都用它，
 // 规则只在这里检查一次。
 func NewSnapshotL2StoreFromConfig(redis remoteSnapshotRedis, cfg *Config) (*remoteSnapshotL2Store, error) {
 	if cfg == nil {
@@ -292,9 +285,8 @@ func (s *remoteSnapshotL2Store) Set(ctx context.Context, value entity.RemoteSnap
 		return fmt.Errorf("remote_entity: invalid L2 CAS response %q: %w", fmt.Sprint(result), parseErr)
 	}
 	if accepted == 0 {
-		// RR-20261005-NC-130：CAS 落败（L2 已有更新的版本或更新的 epoch）就是被判 stale 的写，
-		// 按 cache.Store 约定返回 ErrStaleWrite。之前返回 nil，ReadThroughStore.Set 把它当成写入成功
-		// 照常写 L1，L1 冷的节点于是停在比 L2 更旧的快照上。
+		// CAS 落败（L2 已有更新的版本或更新的 epoch）就是被判 stale 的写，按 cache.Store 约定返回 ErrStaleWrite；
+		// 若返回 nil，调用方会当作写入成功照常写 L1，L1 冷的节点就停在比 L2 更旧的快照上。
 		return fmt.Errorf("%w: L2 holds a newer snapshot", cache.ErrStaleWrite)
 	}
 	if accepted < 0 {
@@ -311,14 +303,11 @@ func (s *remoteSnapshotL2Store) Delete(ctx context.Context, key entity.RemoteSna
 	return err
 }
 
-// DeleteAtVersion implements entity.RemoteSnapshotVersionedDeleter: the
-// comparison and the delete run in one script, so a newer snapshot that lands
-// between "read version" and "DEL" cannot be lost. A stored snapshot newer
-// than version refuses the delete; that is reported as cache.ErrStaleWrite so
-// the cache adopts the newer snapshot (B2). The script is idempotent — the
-// tombstone only ever rises — so re-sending it after an unknown result is safe.
+// DeleteAtVersion 实现 entity.RemoteSnapshotVersionedDeleter：比较与删除在同一脚本里执行，“读版本”与“DEL”之间落下的
+// 更新快照不会丢。已存快照新于 version 时拒绝删除，报 cache.ErrStaleWrite，让缓存采纳更新的快照。脚本幂等（墓碑只升
+// 不降），结果未知后重发是安全的。
 //
-// O-M6-3：配置了墓碑 WAIT 且客户端支持同连接 WAIT（fredis.ReplicatedEvaler）时，脚本之后在同一连接上等副本
+// 配置了墓碑 WAIT 且客户端支持同连接 WAIT（fredis.ReplicatedEvaler）时，脚本之后在同一连接上等副本
 // 确认。WAIT 的结果不改变返回值——墓碑已经写在主节点上，报错只会把一次已提交的删除变成“结果未知”；
 // 确认不足、出错都只计数与记日志（recordTombstoneWait）。调用方最多多等 timeout。
 func (s *remoteSnapshotL2Store) DeleteAtVersion(ctx context.Context, key entity.RemoteSnapshotKey, version uint64) error {

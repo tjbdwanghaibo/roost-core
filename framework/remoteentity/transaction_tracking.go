@@ -25,15 +25,11 @@ func (m *Manager) trackRemoteTransaction(id entity.RemoteTransactionID) error {
 	return err
 }
 
-// trackedRemoteTransaction admits the transaction and hands back its tracker.
+// trackedRemoteTransaction 准入事务并返回它的 tracker。
 //
-// A caller that is going to WAIT must keep this pointer rather than looking the
-// id up again: capacity admission evicts the oldest CLOSED record, which is
-// exactly the record a waiter is being woken by, so between close(done) and the
-// waiter reacquiring txMu the map entry can be gone. Re-reading the map there
-// dereferenced nil, inside the txMu critical section, so the deferred Unlock
-// never ran and every later tracker call blocked on it (RR-20260910-03).
-// Eviction only drops the index; the object stays alive for whoever holds it.
+// 要等待的调用方必须保存这个指针，而不是再按 id 查一次：容量准入会淘汰最老的已关闭记录，那正是唤醒等待者的记录，
+// 在 close(done) 与等待者重新取得 txMu 之间 map 条目可能已经不在了，重新查 map 会在 txMu 临界区内解引用 nil。
+// 淘汰只删除索引，对象对持有它的一方仍然有效。
 func (m *Manager) trackedRemoteTransaction(id entity.RemoteTransactionID) (*remoteTransactionTracker, error) {
 	if m == nil || m.remote == nil || id.IsZero() {
 		return nil, entity.ErrRemoteRejected
@@ -101,7 +97,7 @@ func (m *Manager) completeRemoteTransaction(id entity.RemoteTransactionID, statu
 		return
 	}
 	if remoteCommitFinal(tracker.status.State) {
-		// 终态不可改写（RR-20260926-11 复核残留）：已提交事务的重放发布失败只影响这次
+		// 终态不可改写：已提交事务的重放发布失败只影响这次
 		// 调用的返回值，不能把 Committed 改回 Indeterminate，后到的等待方/FlushRemoteAll
 		// 仍须得到已提交结论。相互矛盾的终态保留先到的持久结论并计数。
 		if status.State != tracker.status.State {
@@ -172,17 +168,16 @@ func (m *Manager) waitTrackedRemoteTransaction(ctx context.Context, tracker *rem
 	}
 	select {
 	case <-done:
-		// Read through the tracker this call is holding, not through the map:
-		// the record may have been evicted while this goroutine was parked.
-		// Still under txMu, because completeRemoteTransaction writes status.
+		// 经本次调用持有的 tracker 读取，而不是经 map：本 goroutine 等待期间记录可能已被淘汰。仍在 txMu 下读取，
+		// 因为 completeRemoteTransaction 会写 status。
 		m.remote.txMu.Lock()
 		status = tracker.status.Clone()
 		m.remote.txMu.Unlock()
 		return status, remoteStatusError(status)
 	case <-ctx.Done():
 		// 等待截止只说明没等到结论：事务仍在跟踪、之后可能提交，是“结果未知”而不是失败。
-		// 之前只带 ErrRemoteCommitTimeout，按 RR-20260926-37 承诺的 ErrRemotePersistenceIndeterminate 判“可能已提交、不得重试”的
-		// 调用方在 strict 截止时漏判（RR-20260927-24）；现同时带上它，原有的 ErrRemoteCommitTimeout 与 ctx 错误保留。
+		// 同时带 ErrRemotePersistenceIndeterminate，按它判“可能已提交、不得重试”的调用方在 strict 截止时不会漏判；
+		// ErrRemoteCommitTimeout 与 ctx 错误保留。
 		return entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitUnknown, Cause: ctx.Err().Error()},
 			errors.Join(entity.ErrRemoteCommitTimeout, entity.ErrRemotePersistenceIndeterminate, ctx.Err())
 	}

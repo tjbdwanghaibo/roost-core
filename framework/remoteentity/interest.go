@@ -17,7 +17,7 @@ import (
 
 const SyncTopicInterest = "remote_entity_interest"
 
-// ErrInterestQuotaExceeded 表示这个 consumer 在兴趣表里的租约已到配额（O4，
+// ErrInterestQuotaExceeded 表示这个 consumer 在兴趣表里的租约已到配额（
 // remote_entity.snapshot_interest_per_consumer）。consumer 本机的兴趣表收到自己的全部续租、按同一配额
 // 判定，所以 consumer 在本地就得到这个错误：这个 key 不再有推送，读取在陈旧上限后回源（按需读取）。
 // 它包裹 entity.ErrRemoteOverloaded。
@@ -27,23 +27,18 @@ var ErrInterestQuotaExceeded = fmt.Errorf("remote_entity: snapshot interest quot
 // 配额按 consumer 数选好时不该出现；出现说明 consumer 数 × 配额超过了上限。包裹 entity.ErrRemoteOverloaded。
 var ErrInterestRegistryFull = fmt.Errorf("remote_entity: snapshot interest registry is full: %w", entity.ErrRemoteOverloaded)
 
-// interestLease is what the registry keeps per consumer: when the lease ends
-// and which renewal established it. A release only cancels a lease whose
-// generation it is not older than, so a release that arrives after a newer
-// renewal — reordered on the wire, or replayed — leaves that renewal alone.
+// interestLease 是兴趣表为每个 consumer 保存的内容：租约何时结束、由哪次续约建立。释放只取消代际不比它新的租约，
+// 所以在更新的续约之后到达的释放（线上重排或重放）不会影响那次续约。
 //
-// released marks a release watermark (Mirror 第 4 步): the consumer withdrew
-// its interest at generation, and a renewal not newer than that — issued
-// before the release, delivered after it — must not bring the lease back.
-// The watermark lives until expiresAt (release time + interest TTL): any
-// renewal older than the release has expired by then and is refused anyway.
+// released 标记撤销水位：consumer 在 generation 撤销了兴趣，不比它新的续约（在释放之前发出、之后送达）不能让租约
+// 复活。水位存活到 expiresAt（释放时间 + 兴趣 TTL）：比释放更旧的续约到那时也已过期，同样会被拒绝。
 type interestLease struct {
 	expiresAt  int64
 	generation uint64
 	released   bool
 }
 
-// remoteInterestLimits 是兴趣表的容量（O4）：PerConsumer 是每个 consumer 的租约配额，Total 是每节点全部
+// remoteInterestLimits 是兴趣表的容量：PerConsumer 是每个 consumer 的租约配额，Total 是每节点全部
 // 条目（租约与撤销水位）的内存上限，ReleaseFence 是撤销水位的存活时间（兴趣 TTL）。零值取缺省。
 type remoteInterestLimits struct {
 	PerConsumer  int
@@ -61,9 +56,8 @@ const (
 // remoteInterestRegistry 是全集群兴趣表的本节点副本：兴趣主题是广播，每个节点都收到所有 consumer 的
 // 续租与撤销。owner 用它决定发布哪些 key；consumer 本机也用它，对自己的续租按同一配额先判定一次。
 //
-// 容量按 consumer 计（O4，docs/feature/MIRROR-STEP-4-AND-O4-2026-10-06.md）：一个 consumer 用满自己的
-// 配额不会让别的 consumer 被拒；判定只取决于这个 consumer 自己发出的消息，所以 consumer 能在本地预知。
-// 之前按全集群合计，被拒的 consumer 不知道，推送静默停止。
+// 容量按 consumer 计：一个 consumer 用满自己的配额不会让别的 consumer 被拒；判定只取决于这个 consumer 自己发出的
+// 消息，所以 consumer 能在本地预知（按全集群合计时，被拒的 consumer 不会知道，推送会静默停止）。
 type remoteInterestRegistry struct {
 	mu          sync.Mutex
 	entries     map[entity.RemoteSnapshotKey]map[int32]interestLease
@@ -73,7 +67,7 @@ type remoteInterestRegistry struct {
 	maxSubs     int
 	fence       time.Duration
 	lastLogAt   int64
-	// overflow 是表满放不下撤销水位时的退路（RR-20261006-11），每个 consumer 至多一个，不占表容量。
+	// overflow 是表满放不下撤销水位时的退路，每个 consumer 至多一个，不占表容量。
 	overflow map[int32]*interestOverflowFence
 	// now 是兴趣表读的系统时钟（纳秒）。租约与水位的到期是系统时间（D-L3），这里只为测试留一个注入缝：
 	// 生产只经 newRemoteInterestRegistry 取 time.Now，测试替换它来走到期，不加睡眠。
@@ -153,9 +147,8 @@ func (r *remoteInterestRegistry) renew(interest entity.RemoteSnapshotInterest) e
 	return err
 }
 
-// renewIfNeeded returns whether the caller should publish the renewal. Local
-// read paths pass a threshold so cache hits do not cause one network message
-// per read; replica apply passes zero and remains idempotent.
+// renewIfNeeded 返回调用方是否应发布这次续约。本地读路径传入阈值，缓存命中不会每次读都发一条网络消息；复制应用传 0，
+// 保持幂等。
 func (r *remoteInterestRegistry) renewIfNeeded(interest entity.RemoteSnapshotInterest, remainingThreshold time.Duration) (bool, error) {
 	if r == nil || interest.ConsumerSID == 0 || !interest.Key.Valid() {
 		return false, entity.ErrRemoteRejected
@@ -173,8 +166,7 @@ func (r *remoteInterestRegistry) renewIfNeeded(interest entity.RemoteSnapshotInt
 	}
 	if exists && !current.released {
 		if interest.Generation < current.generation {
-			// A renewal older than the lease on record: reordered or
-			// replayed. It must not move the lease in either direction.
+			// 比已记录租约更旧的续约（重排或重放）：不能把租约往任何方向移动。
 			return false, nil
 		}
 		if remainingThreshold > 0 && current.expiresAt-now > remainingThreshold.Nanoseconds() {
@@ -193,7 +185,7 @@ func (r *remoteInterestRegistry) renewIfNeeded(interest entity.RemoteSnapshotInt
 		return false, nil
 	}
 	if r.overflowFencedLocked(now, interest) {
-		// 同上，只是那次撤销赶上表满、水位记在 overflow 里（RR-20261006-11）。
+		// 同上，只是那次撤销赶上表满、水位记在 overflow 里。
 		return false, nil
 	}
 	// 新租约（或撤销水位之后的续租）：先按这个 consumer 的配额，再按每节点的内存上限。
@@ -266,18 +258,11 @@ func (r *remoteInterestRegistry) removeLocked(key entity.RemoteSnapshotKey, sid 
 	}
 }
 
-// release withdraws one consumer's lease, but only if the release is not
-// older than the renewal that established it. A stale release used to delete
-// whatever was there, so a renewal that overtook it on the wire was silently
-// cancelled and the publisher's interest filter stopped sending updates the
-// consumer still expected (RR-20260913-02).
+// release 撤销一个 consumer 的租约，前提是这次释放不比建立租约的续约旧：陈旧的释放若照删，线上超车的续约会被
+// 静默取消，发布方的兴趣过滤随之停止发送 consumer 仍在等的更新。
 //
-// A release with a generation leaves a watermark (Mirror 第 4 步): before it,
-// a release that overtook an older renewal on the wire found nothing to
-// cancel, and the late renewal then created a lease the consumer had already
-// withdrawn. When the
-// registry is full and the entry does not exist, the watermark goes to the
-// consumer's overflow fence instead of the table (RR-20261006-11).
+// 带代际的释放会留下撤销水位：否则线上超车了更旧续约的释放找不到可取消的租约，迟到的续约随后会建立一个 consumer
+// 已经撤销的租约。表已满且条目不存在时，水位记到该 consumer 的溢出屏障而不是表里。
 func (r *remoteInterestRegistry) release(key entity.RemoteSnapshotKey, consumerSID int32, generation uint64) {
 	if r == nil {
 		return
@@ -293,8 +278,8 @@ func (r *remoteInterestRegistry) release(key entity.RemoteSnapshotKey, consumerS
 		r.pruneExpiredLocked(now)
 	}
 	if !exists && r.total >= r.maxSubs {
-		// 表已满放不下水位。之前在这里只撤销：之后表里空出一格，迟到的旧续租就复活了 consumer 已撤销的
-		// 租约（RR-20261006-11）。改记到 overflow，不占表容量。
+		// 表已满放不下水位。若只撤销不留水位，之后表里空出一格，迟到的旧续租就会复活 consumer 已撤销的租约。
+		// 所以记到 overflow，不占表容量。
 		r.fenceOverflowLocked(now, key, consumerSID, generation)
 		return
 	}
@@ -373,7 +358,7 @@ func (s InterestReplicaStore) ApplyReplica(_ context.Context, env mirror.Envelop
 	if err := json.Unmarshal(env.Payload, &wire); err != nil {
 		return err
 	}
-	// RR-20261005-NC-34：renew/release 都是携带完整身份的 Upsert 消息。
+	// renew / release 都是携带完整身份的 Upsert 消息。
 	// 在改注册表前绑定 payload，不能用一个订阅的信封操作另一个订阅。
 	if env.Op != mirror.OpUpsert || !wire.Interest.Key.Valid() || wire.Interest.ConsumerSID == 0 || wire.Interest.Generation == 0 {
 		return fmt.Errorf("remote_entity: interest message has invalid operation or identity")

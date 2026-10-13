@@ -6,7 +6,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/mirror"
 )
 
-// Stats is the capacity picture the Mod's health check publishes.
+// Stats 是 Mod 健康检查发布的容量概况。
 type Stats struct {
 	Wrappers           int
 	LocalInterests     int
@@ -15,15 +15,13 @@ type Stats struct {
 	WritesInFlight     int
 	WriteLimit         int
 	WriteRejected      uint64
-	// SnapshotPush 报告快照推送是否开着（Mirror 第 4 步；false 时读取按需回源）。
+	// SnapshotPush 报告快照推送是否开着（false 时读取按需回源）。
 	SnapshotPush bool
-	// InterestRefused 是本机兴趣续租被拒的累计次数（O4 配额 / 表满）。
+	// InterestRefused 是本机兴趣续租被拒的累计次数（配额 / 表满）。
 	InterestRefused uint64
 }
 
-// Stats snapshots wrapper, interest and transaction counts. Assembly code
-// compares them against configured limits; the manager itself enforces
-// those limits at admission time.
+// Stats 取 wrapper、兴趣与事务计数的快照。装配代码拿它与配置上限比较；上限本身由 Manager 在准入时强制。
 func (m *Manager) Stats() Stats {
 	if m == nil {
 		return Stats{}
@@ -44,8 +42,7 @@ func (m *Manager) Stats() Stats {
 	return stats
 }
 
-// Backend returns the authoritative backend the manager was sealed with, so
-// the Mod can run storage initialisation before recovery.
+// Backend 返回 Manager 封存的权威后端，让 Mod 能在恢复之前初始化存储。
 func (m *Manager) Backend() entity.IRemoteEntityBackend {
 	if m == nil {
 		return nil
@@ -53,9 +50,8 @@ func (m *Manager) Backend() entity.IRemoteEntityBackend {
 	return m.backend
 }
 
-// BindSync wires snapshot and interest replication onto the given sync bus
-// and installs the resulting syncer on the manager. The replicators are
-// returned unstarted; the caller starts them and owns their shutdown.
+// BindSync 把快照与兴趣复制接到给定的同步总线上，并把得到的 syncer 装到 Manager 上。返回的复制器尚未启动，
+// 由调用方启动并负责停止。
 // 正式装配用 Assembly.Start（经 SnapshotClient.Start 管订阅与停机）；这里保留给自管复制器的旧调用方。
 func (m *Manager) BindSync(bus fsyncbus.ISyncBus) (snapshotRep, interestRep *mirror.Replicator) {
 	m.snapshots.mu.Lock()

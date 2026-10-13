@@ -11,8 +11,8 @@ import (
 	redis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
-// remoteEntityWrapper is an internal per-entity coordination cell. Business
-// code can only reach it through RemoteWriteBatch and immutable snapshot APIs.
+// remoteEntityWrapper 是每个实体的内部协调单元：写门、所有权缓存、版本锁与当前实例。业务代码只能经 RemoteWriteBatch
+// 与不可变快照 API 间接使用它。
 type remoteEntityWrapper struct {
 	id       int64
 	category entity.EntityCategory
@@ -20,7 +20,7 @@ type remoteEntityWrapper struct {
 	e        entity.IThreadSafeRemoteEntity
 	rMu      redis.IVersionedLock
 	entityMu sync.Mutex
-	// rejectedStale 是因 Remote 写被持久拒绝而隔离、等待框架仅内存卸载并从权威重载的旧实例（RR-20260926-62），
+	// rejectedStale 是因 Remote 写被持久拒绝而隔离、等待框架仅内存卸载并从权威重载的旧实例，
 	// 与 e 同由 entityMu 保护。写准入见到它仍处于隔离时返回可重试的 entity.ErrRemoteEntityReloading，而不是通用的
 	// ErrRemoteFenced；关联上别的实例或 loader 不支持卸载时清除。
 	rejectedStale entity.IThreadSafeRemoteEntity
@@ -91,10 +91,8 @@ func (w *remoteEntityWrapper) setOwnership(lease entity.RemoteEntityMarkerLease,
 	w.markerAt.Store(time.Now().UnixNano())
 }
 
-// invalidateMarker forgets the cached lease so the next admission must ask
-// the authority (ensureMarker treats markerUnknown as "refresh now"). Used
-// when an ownership CAS ended with an unknown outcome (U-0188): a hot marker
-// that predates the CAS is exactly the thing that must not be trusted.
+// invalidateMarker 丢弃缓存的租约，下一次准入必须询问权威（ensureMarker 把 markerUnknown 当作“立即刷新”）。所有权 CAS
+// 结果未知时使用：早于这次 CAS 的热 marker 恰恰不能被信任。
 func (w *remoteEntityWrapper) invalidateMarker() {
 	if w == nil {
 		return
@@ -113,7 +111,7 @@ func (w *remoteEntityWrapper) attachEntity(e entity.IThreadSafeRemoteEntity) {
 	w.entityMu.Unlock()
 }
 
-// markRejectedReload 记录 e 因持久拒绝被隔离、正等待框架卸载重载（RR-20260926-62）。
+// markRejectedReload 记录 e 因持久拒绝被隔离、正等待框架卸载重载。
 func (w *remoteEntityWrapper) markRejectedReload(e entity.IThreadSafeRemoteEntity) {
 	if w == nil || e == nil {
 		return
@@ -146,7 +144,7 @@ func (w *remoteEntityWrapper) rejectedReloadPending(e entity.IThreadSafeRemoteEn
 	return pending
 }
 
-// detachEntity 在实例被仅内存卸载后解除关联；已换成新实例时不动（RR-20260926-39）。
+// detachEntity 在实例被仅内存卸载后解除关联；已换成新实例时不动。
 func (w *remoteEntityWrapper) detachEntity(e entity.IThreadSafeRemoteEntity) {
 	w.entityMu.Lock()
 	if w.e == e {

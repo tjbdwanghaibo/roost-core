@@ -21,7 +21,7 @@ import (
 // 重新运行要新建客户端。
 var ErrSnapshotClientStopped = errors.New("remote_entity: snapshot client is stopped")
 
-// SnapshotClient 是 Remote 快照协议的唯一实现（Mirror 方案第 3 步，docs/feature/MIRROR-STEPS-1-3-2026-10-06.md）：
+// SnapshotClient 是 Remote 快照协议的唯一实现：
 //
 //   - 读：ReadSnapshot / ReadRemoteSnapshot，经快照缓存唯一的读出口 RemoteSnapshotCache.Read；
 //   - 兴趣：读时续租本机兴趣并广播，全集群兴趣表决定 owner 发布哪些 key；
@@ -33,7 +33,7 @@ var ErrSnapshotClientStopped = errors.New("remote_entity: snapshot client is sto
 // SnapshotClient 并委托它，owner 的提交后发布走包内入口 publishCommitted，只读方拿不到。
 //
 // 本类型不直接写 L1 / L2：全部缓存写入经 RemoteSnapshotCache 的公开入口（Publish / ApplyReplica /
-// DeleteAtVersion / Read / LoadAuthoritative），新值由其中的 admitLocked 先经 L2 准入（B2）；缓存内部
+// DeleteAtVersion / Read / LoadAuthoritative），新值由其中的 admitLocked 先经 L2 准入；缓存内部
 // 直接写 L1 的几处只回填 L2 的值或删除，清单见 RemoteSnapshotCache 类型注释。
 type SnapshotClient struct {
 	cfg          *Config
@@ -42,10 +42,8 @@ type SnapshotClient struct {
 	cache        *entity.RemoteSnapshotCache
 	interests    *remoteInterestRegistry
 
-	// interestGeneration stamps this consumer's renewals and releases. Seeded
-	// from the clock so a restart that reuses the SID starts above anything
-	// the previous process could have issued, instead of at zero where an
-	// old release in flight would outrank every new renewal (RR-20260913-02).
+	// interestGeneration 给本消费者的续约与释放打代际。以时钟为种子，复用同一 SID 的重启从高于上一个进程可能发出的
+	// 任何代际起步，而不是从 0 开始——那样在途的旧释放会压过每一次新续约。
 	interestGeneration atomic.Uint64
 	// 本机兴趣：key → 本机认为的租约到期时刻。续租在剩余时间不足一半时才广播（避免每次读一条消息）。
 	localInterestMu       sync.Mutex
@@ -57,10 +55,10 @@ type SnapshotClient struct {
 	// transport 在装配期设置（BindSync / Start / SetSyncer），之后只读。
 	transport remoteSyncTransport
 
-	// push 报告快照推送是否开着（Mirror 第 4 步）：Start 在能确认订阅的总线（fsyncbus.ILiveSubscriber，
+	// push 报告快照推送是否开着：Start 在能确认订阅的总线（fsyncbus.ILiveSubscriber，
 	// JetStream）上订阅快照主题并置 true；普通 NATS 上不订阅、记 Warn，读取按陈旧上限回源（按需读取）。
 	push atomic.Bool
-	// interestRejected 计本机兴趣续租被拒（配额、表满）的次数（O4）；被拒的 key 没有推送，按需读取。
+	// interestRejected 计本机兴趣续租被拒（配额、表满）的次数；被拒的 key 没有推送，按需读取。
 	interestRejected atomic.Uint64
 
 	// 生命周期。mu 只保护下面的字段，不在持有它时等待。
@@ -68,7 +66,7 @@ type SnapshotClient struct {
 	bus         fsyncbus.ISyncBus
 	snapshotRep *mirror.Replicator
 	interestRep *mirror.Replicator
-	// refreshRep 订阅兴趣续租请求（O-M6-1，interest_refresh.go）；只在快照推送开着时建立。
+	// refreshRep 订阅兴趣续租请求（interest_refresh.go）；只在快照推送开着时建立。
 	refreshRep *mirror.Replicator
 	started    bool
 	stopped    atomic.Bool
@@ -79,7 +77,7 @@ type SnapshotClient struct {
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
 
-	// 兴趣续租请求的遍历状态（O-M6-1）：同一时刻最多一个遍历，进行中到达的请求只置 refreshPending。
+	// 兴趣续租请求的遍历状态：同一时刻最多一个遍历，进行中到达的请求只置 refreshPending。
 	refreshMu        sync.Mutex
 	refreshRunning   bool
 	refreshPending   bool
@@ -126,9 +124,9 @@ func validateSnapshotClientConfig(cfg *Config, deps SnapshotClientDeps) error {
 	return validateSnapshotConfig(cfg, deps.L2 != nil)
 }
 
-// validateSnapshotConfig 校验快照段配置。只读方（NewSnapshotClient）与写 owner（Assemble）共用同一套规则
-// （RR-20261006-71）：之前只有只读路径校验，owner 装配静默接受 SnapshotInterestTTL = 0（兴趣一律拒绝、
-// owner 永不推送）、SnapshotL2TTL = 0（墓碑不落地、O5 过滤关闭）这类组合。
+// validateSnapshotConfig 校验快照段配置。只读方（NewSnapshotClient）与写 owner（Assemble）共用同一套规则，
+// owner 装配同样拒绝 SnapshotInterestTTL = 0（兴趣一律拒绝、owner 永不推送）、SnapshotL2TTL = 0（墓碑不落地、
+// 陈旧过滤关闭）这类组合。
 func validateSnapshotConfig(cfg *Config, hasL2 bool) error {
 	switch {
 	case cfg.SnapshotInterestTTL <= 0:
@@ -204,7 +202,7 @@ func (c *SnapshotClient) ReadSnapshot(ctx context.Context, req entity.RemoteSnap
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// 续租失败（O4 配额、表满、总线不可用）不影响这次读：这个 key 没有推送刷新确认时刻，读取在陈旧上限
+	// 续租失败（配额、表满、总线不可用）不影响这次读：这个 key 没有推送刷新确认时刻，读取在陈旧上限
 	// 之后经 L2 / 权威重新确认——按需读取。被拒在 RenewInterest 里计数。
 	if err := ctx.Err(); err != nil {
 		return entity.RemoteSnapshotEnvelope{}, false, err
@@ -238,13 +236,13 @@ type SnapshotClientStats struct {
 	LocalInterests int
 	// PushEnabled 报告快照推送是否开着（Start 在能确认订阅的总线上）；false 时全部读取按需回源。
 	PushEnabled bool
-	// InterestRejected 是本机兴趣续租被拒的累计次数（O4：配额或表满；这些 key 按需读取）。
+	// InterestRejected 是本机兴趣续租被拒的累计次数（配额或表满；这些 key 按需读取）。
 	InterestRejected uint64
-	// Bootstrap 是首载缓冲的累计计数（Mirror 第 4 步）。
+	// Bootstrap 是首载缓冲的累计计数。
 	Bootstrap entity.RemoteSnapshotBootstrapStats
 }
 
-// Stats 返回本机兴趣数。RR-20261005-NC-131：过期条目只在新建兴趣且表满、或每 1024 次续租时清理，空闲进程
+// Stats 返回本机兴趣数。过期条目只在新建兴趣且表满、或每 1024 次续租时清理，空闲进程
 // 里会一直留着；健康检查拿这个数和上限比，所以表满时先清掉过期的再数。只在表满时清理，平时不全表扫描。
 func (c *SnapshotClient) Stats() SnapshotClientStats {
 	if c == nil {
@@ -269,7 +267,7 @@ func (c *SnapshotClient) RenewInterest(ctx context.Context, key entity.RemoteSna
 	return err
 }
 
-// renewInterest 是续租的唯一入口。refresh 为 true 时是兴趣续租请求触发的重新续租（O-M6-1）：不看“剩余
+// renewInterest 是续租的唯一入口。refresh 为 true 时是兴趣续租请求触发的重新续租：不看“剩余
 // 不足一半”的门槛，但只续本机表里仍然有效的 key——遍历开始之后被 release 或已过期的 key 不归它复活。
 // 其余（条带锁内分配代际、本机兴趣表按同一配额判定、锁外广播、失败回滚）与读时续租完全相同。
 // 返回是否广播了一条续租。
@@ -281,8 +279,8 @@ func (c *SnapshotClient) renewInterest(ctx context.Context, key entity.RemoteSna
 	if !ok {
 		return false, err
 	}
-	// 广播在条带锁外（RR-20261006-68）：之前在锁内同步发布，总线慢时（最长 syncbus.publish_timeout）同条带
-	// 其他 key 的读——包括不需要续租的 L1 命中——都排队等这一次发布。锁外发布不破坏顺序：线上的 renew /
+	// 广播在条带锁外：若在锁内同步发布，总线慢时（最长 syncbus.publish_timeout）同条带其他 key 的读——包括不需要
+	// 续租的 L1 命中——都要排队等这一次发布。锁外发布不破坏顺序：线上的 renew /
 	// release 带锁内分配的代际，接收端按代际判新旧（renewIfNeeded 的撤销水位、release 的代际比较），到达
 	// 顺序与分配顺序不同也收敛到同一结果。同一个 key 的其他读在发布期间看到本机表里的新租约，不再重复续租。
 	if err := c.publishInterest(ctx, interest, false); err != nil {
@@ -305,9 +303,9 @@ func (c *SnapshotClient) admitInterestRenewal(key entity.RemoteSnapshotKey, refr
 	stripe := &c.localInterestLocks[uint64(key.EntityID)%uint64(len(c.localInterestLocks))]
 	stripe.Lock()
 	defer stripe.Unlock()
-	// generation 在条带锁内分配（Mirror 第 4 步）：同一 key 的 renew / release 按锁的顺序拿到递增的代际，
-	// 本机表与兴趣表按同一顺序收敛。之前在锁外分配，并发的 renew(g) 与 release(g+1) 可能按相反顺序执行：
-	// 本机表记着租约，兴趣表与 owner 却按 g+1 撤销了。
+	// generation 在条带锁内分配：同一 key 的 renew / release 按锁的顺序拿到递增的代际，本机表与兴趣表按同一顺序
+	// 收敛。若在锁外分配，并发的 renew(g) 与 release(g+1) 可能按相反顺序执行：本机表记着租约，兴趣表与 owner 却
+	// 按 g+1 撤销了。
 	now := time.Now().UnixNano()
 	interest := entity.RemoteSnapshotInterest{ConsumerSID: c.consumerSID, Key: key, ExpiresAt: now + ttl.Nanoseconds(), Generation: c.nextInterestGeneration()}
 	c.localInterestMu.Lock()
@@ -330,7 +328,7 @@ func (c *SnapshotClient) admitInterestRenewal(key entity.RemoteSnapshotKey, refr
 	}
 	c.localInterests[key] = interest.ExpiresAt
 	c.localInterestMu.Unlock()
-	// 本机的兴趣表收到自己的全部续租，与 owner 按同一配额判定（O4）：在这里被拒，owner 也会拒，不再广播。
+	// 本机的兴趣表收到自己的全部续租，与 owner 按同一配额判定：在这里被拒，owner 也会拒，不再广播。
 	if err := c.interests.renew(interest); err != nil {
 		c.rollbackLocalInterest(key, interest.ExpiresAt)
 		if errors.Is(err, entity.ErrRemoteOverloaded) {
@@ -354,11 +352,11 @@ func (c *SnapshotClient) ReleaseInterest(ctx context.Context, key entity.RemoteS
 	c.localInterestMu.Unlock()
 	c.interests.release(key, c.consumerSID, interest.Generation)
 	stripe.Unlock()
-	// 与续租相同，广播在条带锁外（RR-20261006-68）；接收端按代际判新旧。
+	// 与续租相同，广播在条带锁外；接收端按代际判新旧。
 	return c.publishInterest(ctx, interest, true)
 }
 
-// noteInterestRejected 计一次本机续租被拒（O4）。日志由兴趣表限频记录；这里只计数。
+// noteInterestRejected 计一次本机续租被拒。日志由兴趣表限频记录；这里只计数。
 func (c *SnapshotClient) noteInterestRejected(reason string) {
 	c.interestRejected.Add(1)
 	metrics.IncCounter("remote_entity.remote.interest_renew_refused_total", metrics.Labels{"reason": reason}, 1)
@@ -377,9 +375,7 @@ func (c *SnapshotClient) publishInterest(ctx context.Context, interest entity.Re
 	return publisher.PublishRemoteInterest(ctx, interest, release)
 }
 
-// nextInterestGeneration issues the next generation for this consumer's
-// interest messages. The first call seeds from the clock (see
-// interestGenerationClock).
+// nextInterestGeneration 为本消费者的兴趣消息发出下一个代际；第一次调用以时钟为种子（见 interestGenerationClock）。
 func (c *SnapshotClient) nextInterestGeneration() uint64 {
 	for {
 		current := c.interestGeneration.Load()
@@ -399,9 +395,7 @@ func (c *SnapshotClient) rollbackLocalInterest(key entity.RemoteSnapshotKey, exp
 	c.localInterestMu.Lock()
 	if c.localInterests[key] == expiresAt {
 		delete(c.localInterests, key)
-		// This process withdrawing its own lease locally: no message was
-		// reordered, so the latest generation it issued is the right stamp,
-		// and no release watermark is needed.
+		// 本进程在本地撤回自己的租约：没有消息被重排，它发出的最新代际就是正确的戳，不需要释放水位。
 		c.interests.drop(key, c.consumerSID, c.interestGeneration.Load())
 	}
 	c.localInterestMu.Unlock()
@@ -439,9 +433,7 @@ func (c *SnapshotClient) publishCommitted(ctx context.Context, commit entity.Rem
 		}
 	}
 	for _, key := range commit.Invalidations {
-		// Same rule as the replica side (U-0187): the local copy is deleted
-		// at the commit's version so a concurrent older publish for the key
-		// cannot repopulate it behind this commit.
+		// 与复制侧同一规则：本地副本按提交的版本删除，并发的更旧发布不能在这次提交之后把它重新填回。
 		if err := c.cache.DeleteAtVersion(ctx, key, commit.NextVersion); err != nil {
 			return err
 		}
@@ -468,17 +460,17 @@ func (c *SnapshotClient) bindLocked(bus fsyncbus.ISyncBus, live bool) (snapshotR
 	c.bus, c.snapshotRep, c.interestRep = bus, snapshotRep, interestRep
 	c.refreshRep = nil
 	if live {
-		// 兴趣续租请求（O-M6-1）只对当下有意义：用可确认订阅（JetStream DeliverNew），新 sid 不重放历史请求。
+		// 兴趣续租请求只对当下有意义：用可确认订阅（JetStream DeliverNew），新 sid 不重放历史请求。
 		c.refreshRep = mirror.NewLive(bus, SyncTopicInterestRefresh, InterestRefreshStore{client: c})
 	}
 	c.transport = &remoteSyncer{snapshotRep: snapshotRep, interestRep: interestRep, client: c}
 	return snapshotRep, interestRep
 }
 
-// Start 订阅快照、兴趣与兴趣续租请求（O-M6-1，只在推送开着时）三个复制主题（幂等）。任一订阅失败时
+// Start 订阅快照、兴趣与兴趣续租请求（只在推送开着时）三个复制主题（幂等）。任一订阅失败时
 // 退掉已建立的再返回：失败不留下订阅，重试不会重复订阅。失败重试复用首次绑定的 bus；换 bus 要新建客户端。停止之后不能再启动。
 //
-// 快照推送只在总线能确认订阅（fsyncbus.ILiveSubscriber，JetStream 的 DeliverNew）时开启（Mirror 第 4 步）：
+// 快照推送只在总线能确认订阅（fsyncbus.ILiveSubscriber，JetStream 的 DeliverNew）时开启：
 // 订阅确认之后发布的快照不会被静默丢掉，加载在途时到达的进首载缓冲。普通 NATS 是最多一次，推送随时可能
 // 静默丢失，所以不订阅快照主题，记一条 Warn，Stats().PushEnabled 为 false：读取按 cached_max_staleness
 // 经 L2 / 权威回源（按需读取），正确性不依赖推送。兴趣主题照旧订阅（owner 按它决定发布，供 BindSync 的
@@ -512,7 +504,7 @@ func (c *SnapshotClient) Start(bus fsyncbus.ISyncBus) error {
 		c.snapshotRep.Stop()
 		return fmt.Errorf("remote_entity: start interest replica: %w", err)
 	}
-	// 兴趣续租请求只在推送开着时有用（O-M6-1）：推送关着时 owner 不推，续租也就不必赶。
+	// 兴趣续租请求只在推送开着时有用：推送关着时 owner 不推，续租也就不必赶。
 	if push && c.refreshRep != nil {
 		if err := c.refreshRep.Start(); err != nil {
 			c.snapshotRep.Stop()
@@ -551,7 +543,7 @@ func (c *SnapshotClient) unsubscribe() {
 // Stop 按三步停机（roost-coding；契约骨架 internal/stopcontract）：
 //
 //  1. 发起关闭（幂等）：之后的读返回 ErrSnapshotClientStopped；关闭依赖准入；取消在途的权威加载与
-//     兴趣续租遍历（O-M6-1）；退掉复制订阅。
+//     兴趣续租遍历；退掉复制订阅。
 //  2. 在 ctx 内等待排空：已准入的复制 handler、兴趣续租遍历与依赖调用（L2、权威、兴趣广播）全部返回。ctx 先结束返回
 //     ctx 错误，客户端保持“停止中”，用新 ctx 再调用会继续等同一批。
 //  3. 返回 nil 之后调用方才能释放 Redis / 权威 / 总线。不响应取消的 loader 不会被杀，Stop 如实超时。
@@ -604,7 +596,7 @@ func (c *SnapshotClient) gatedLoader(loader entity.RemoteSnapshotLoader) entity.
 }
 
 // gatedSnapshotL2 让共享 L2 的每次调用受 work 准入约束（L2 调用本身已由缓存的 LoadTimeout 限时，不另外
-// 绑定取消）。停止之后 L2 调用返回 ErrSnapshotClientStopped，缓存按 L2 不可用降级（B2）：写入记为未确认，
+// 绑定取消）。停止之后 L2 调用返回 ErrSnapshotClientStopped，缓存按 L2 不可用降级：写入记为未确认，
 // 读取不交出未确认的条目。
 type gatedSnapshotL2 struct {
 	client *SnapshotClient

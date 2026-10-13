@@ -7,6 +7,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
+// StorageBackend 是框架的事务存储能力：原子批量提交、权威快照读取、outbox 与存储初始化。
 type StorageBackend interface {
 	entity.IRemoteAtomicBatchCommitter
 	entity.IRemoteSnapshotLoader
@@ -14,14 +15,13 @@ type StorageBackend interface {
 	entity.IRemoteStorageInitializer
 }
 
-// Backend combines the application-owned entity loader with the framework's
-// transactional storage implementation. This is the only business-specific
-// boundary required by RemoteEntityMod.
+// Backend 把应用持有的实体加载器与框架的事务存储实现组合在一起，是 RemoteEntityMod 唯一需要业务提供的边界。
 type Backend struct {
 	loader  entity.IRemoteEntityLoader
 	storage StorageBackend
 }
 
+// NewBackend 组合加载器与存储，二者都必需。
 func NewBackend(loader entity.IRemoteEntityLoader, storage StorageBackend) (*Backend, error) {
 	if loader == nil || storage == nil {
 		return nil, fmt.Errorf("remote_entity: loader and storage backend are required")
@@ -93,6 +93,7 @@ func (b *Backend) SupportsConcurrentRemoteCommits() bool {
 	return ok && store.SupportsConcurrentRemoteCommits()
 }
 
+// WriteAuthority 返回存储提供的持久写授权；存储不提供时为 nil。
 func (b *Backend) WriteAuthority() WriteAuthority {
 	if provider, ok := b.storage.(WriteAuthorityProvider); ok {
 		return provider.WriteAuthority()

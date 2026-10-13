@@ -10,6 +10,7 @@ import (
 
 var _ entity.RemoteOwnershipManager = (*Manager)(nil)
 
+// GetRemoteOwnership 读取实体在权威中的所有权记录。
 func (m *Manager) GetRemoteOwnership(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, bool, error) {
 	if m == nil || m.ownershipStore == nil {
 		return entity.RemoteEntityMarkerLease{}, false, entity.ErrRemoteWriteCapabilityDisabled
@@ -23,9 +24,7 @@ func (m *Manager) GetRemoteOwnership(ctx context.Context, id int64) (entity.Remo
 	return m.ownershipStore.GetOwnership(ctx, meta.FullID)
 }
 
-// ClaimRemoteOwnership atomically creates the first local ownership
-// generation. It is idempotent for this server and fails closed when another
-// server won the claim.
+// ClaimRemoteOwnership 原子地创建第一代本地所有权。对本服务幂等；别的服务赢得认领时按 fence 失败。
 func (m *Manager) ClaimRemoteOwnership(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, error) {
 	wrapper, ctx, release, err := m.beginOwnershipTransition(ctx, id, false)
 	if err != nil {
@@ -56,6 +55,7 @@ func (m *Manager) ClaimRemoteOwnership(ctx context.Context, id int64) (entity.Re
 	return next, nil
 }
 
+// EnterRemoteSharedMode 与本地写准入串行化后，把实体从本服务独占切换到共享模式；CAS 结果未知时按 settleIndeterminateOwnership 收敛。
 func (m *Manager) EnterRemoteSharedMode(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, error) {
 	wrapper, ctx, release, err := m.beginOwnershipTransition(ctx, id, false)
 	if err != nil {
@@ -71,8 +71,7 @@ func (m *Manager) EnterRemoteSharedMode(ctx context.Context, id int64) (entity.R
 	}
 	next, err := m.ownershipStore.EnterSharedExpected(ctx, wrapper.id, expected)
 	if err != nil {
-		// Same shape as Transfer (U-0188): the script may have flipped the
-		// authority to shared and only the reply was lost (RR-20260913-12).
+		// 与 Transfer 相同：脚本可能已把权威改成共享，只是回复丢失了。
 		return m.settleIndeterminateOwnership(wrapper, expected, err, "enter shared",
 			func(current entity.RemoteEntityMarkerLease) bool {
 				return current.OwnerSid == m.localSid && current.Shared
@@ -86,6 +85,7 @@ func (m *Manager) EnterRemoteSharedMode(ctx context.Context, id int64) (entity.R
 	return next, nil
 }
 
+// LeaveRemoteSharedMode 在分布式锁下把实体从共享模式切回本服务独占；CAS 结果未知时按 settleIndeterminateOwnership 收敛。
 func (m *Manager) LeaveRemoteSharedMode(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, error) {
 	wrapper, ctx, release, err := m.beginOwnershipTransition(ctx, id, true)
 	if err != nil {
@@ -114,8 +114,8 @@ func (m *Manager) LeaveRemoteSharedMode(ctx context.Context, id int64) (entity.R
 	return next, nil
 }
 
-// TransferRemoteOwnership drains admitted local writes and, for shared mode,
-// holds the distributed entity lock while advancing marker and route epochs.
+// TransferRemoteOwnership 排空已准入的本地写，把所有权转给 newOwnerSID 并推进 marker 与路由代际；共享模式下全程
+// 持有实体的分布式锁。
 func (m *Manager) TransferRemoteOwnership(ctx context.Context, id int64, newOwnerSID int32) (entity.RemoteEntityMarkerLease, error) {
 	if newOwnerSID == 0 || m == nil || newOwnerSID == m.localSid {
 		return entity.RemoteEntityMarkerLease{}, fmt.Errorf("%w: invalid ownership transfer", entity.ErrRemoteOwnerTransition)
@@ -145,30 +145,19 @@ func (m *Manager) TransferRemoteOwnership(ctx context.Context, id int64, newOwne
 	return next, nil
 }
 
-// settleIndeterminateOwnership decides what a failed ownership CAS means —
-// Transfer (U-0188, RR-20260913-09), EnterShared and LeaveShared (U-0189,
-// RR-20260913-12) share it. An error from the store is not "the CAS did not
-// run": the script may have changed the authority and only the reply was
-// lost. Treating it as a no-op restored the previous local mode while the
-// hot marker (trusted for MarkerCacheTTL) still described it, and the next
-// PrepareRemoteWriteBatch admitted a writer whose mode the authority had
-// already changed — for EnterShared that means an exclusive fast-path write
-// while the authority says shared and other nodes coordinate through the
-// distributed lock.
+// settleIndeterminateOwnership 判定一次失败的所有权 CAS 意味着什么，Transfer、EnterShared 与 LeaveShared 共用它。
+// 存储返回错误不等于“CAS 没执行”：脚本可能已改了权威，只是回复丢失。若当作空操作恢复原来的本地模式，而热 marker
+// （在 MarkerCacheTTL 内被信任）仍描述旧模式，下一次 PrepareRemoteWriteBatch 就会按权威已改变的模式准入写者——
+// 对 EnterShared 来说，就是权威已是共享、其他节点经分布式锁协调时，本节点仍走独占快路径写入。
 //
-// So: forget the cached marker, ask the authority again on an independent
-// bounded context (the caller's may already be the thing that failed), and
-// let the answer decide —
+// 所以：丢弃缓存的 marker，在独立的有界 ctx（调用方的 ctx 可能正是失败原因）上重新询问权威，由答案决定——
 //
-//   - authority unchanged: proven no-op, restore the previous local mode;
-//   - applied(current): the CAS happened, finish it as a success (live goes
-//     to appliedState, the current lease is returned with a nil error);
-//   - authority still names us but in some other lease: sync live to the
-//     authority's mode and report the failure;
-//   - authority names someone else / nothing: fence, report the fence;
-//   - authority unreachable: freeze the live entity in Recovering with the
-//     marker unknown. Nothing is admitted until a later authoritative read
-//     succeeds (batch admission thaws Recovering only after such a read).
+//   - 权威未变：证明是空操作，恢复原来的本地模式；
+//   - applied(current)：CAS 已发生，按成功收尾（实例转到 appliedState，返回当前租约与 nil 错误）；
+//   - 权威仍指向本节点但是别的租约：把实例同步到权威的模式并报告失败；
+//   - 权威指向别人或没有记录：fence，报告 fence；
+//   - 权威不可达：把实例冻结在 Recovering、marker 置为未知。直到之后一次权威读取成功前不准入任何写
+//     （批次准入只在这样的读取之后才解冻 Recovering）。
 func (m *Manager) settleIndeterminateOwnership(wrapper *remoteEntityWrapper, expected entity.RemoteEntityMarkerLease, cause error, op string,
 	applied func(entity.RemoteEntityMarkerLease) bool, appliedState entity.RemoteOwnershipState, appliedExcludeSID int32) (entity.RemoteEntityMarkerLease, error) {
 	opErr := fmt.Errorf("remote_entity: %s %d: %w", op, wrapper.id, cause)
@@ -208,9 +197,8 @@ func (m *Manager) settleIndeterminateOwnership(wrapper *remoteEntityWrapper, exp
 	}
 }
 
-// freezeAttachedLive parks a live entity in Recovering. Draining reaches it
-// directly; Sharing (EnterShared in flight) has to go through Fenced first,
-// which is the only path the state table allows.
+// freezeAttachedLive 把内存实例停在 Recovering。Draining 可以直接转过去；Sharing（EnterShared 在途）必须先经
+// Fenced，这是状态表唯一允许的路径。
 func freezeAttachedLive(live entity.IThreadSafeRemoteEntity) error {
 	if live == nil || live.GetMutex() == nil {
 		return nil
@@ -226,8 +214,7 @@ func freezeAttachedLive(live entity.IThreadSafeRemoteEntity) error {
 	return live.TransitionRemoteOwnership(entity.RemoteOwnershipRecovering)
 }
 
-// transitionAttachedLive moves an already-loaded live entity to state under
-// its own mutex; a nil entity is nothing to move.
+// transitionAttachedLive 在实例自己的锁下把已加载的实例转到 state；实例为 nil 时什么也不做。
 func transitionAttachedLive(live entity.IThreadSafeRemoteEntity, state entity.RemoteOwnershipState) error {
 	if live == nil || live.GetMutex() == nil {
 		return nil
@@ -237,9 +224,8 @@ func transitionAttachedLive(live entity.IThreadSafeRemoteEntity, state entity.Re
 	return live.TransitionRemoteOwnership(state)
 }
 
-// beginOwnershipTransition serializes with local write admission. When
-// lockShared is true it also acquires the distributed lock if the observed
-// state is shared, then refreshes ownership under that lock before returning.
+// beginOwnershipTransition 与本地写准入串行化。lockShared 为 true 且观察到的状态是共享时，还取得分布式锁，并在锁下
+// 刷新所有权后才返回。
 func (m *Manager) beginOwnershipTransition(parent context.Context, id int64, lockShared bool) (*remoteEntityWrapper, context.Context, func(), error) {
 	if m == nil || m.ownershipStore == nil || m.localSid == 0 {
 		return nil, nil, nil, entity.ErrRemoteWriteCapabilityDisabled
@@ -339,9 +325,8 @@ func (m *Manager) transitionLiveOwnership(ctx context.Context, wrapper *remoteEn
 	}
 	switch remote.RemoteOwnershipState() {
 	case entity.RemoteOwnershipUnknown, entity.RemoteOwnershipRecovering:
-		// Unknown: first contact. Recovering: frozen by an indeterminate
-		// transition (U-0188); beginOwnershipTransition re-read the authority
-		// and lease names us again, so thaw before moving on.
+		// Unknown：首次接触。Recovering：被结果未知的转换冻结；beginOwnershipTransition 已重读权威、租约仍指向本节点，
+		// 先解冻再继续。
 		initial := entity.RemoteOwnershipLocalOwned
 		if lease.Shared {
 			initial = entity.RemoteOwnershipShared
@@ -357,6 +342,7 @@ func (m *Manager) transitionLiveOwnership(ctx context.Context, wrapper *remoteEn
 	return nil
 }
 
+// applyLiveOwnership 把新的所有权租约应用到内存实例（必要时先加载）：设置 ExcludeSId、marker / 路由代际与所有权状态。
 func (m *Manager) applyLiveOwnership(ctx context.Context, wrapper *remoteEntityWrapper, lease entity.RemoteEntityMarkerLease, state entity.RemoteOwnershipState, excludeSID int32) error {
 	live := wrapper.lookupLocalEntity()
 	if live == nil {
@@ -387,6 +373,7 @@ func (m *Manager) applyLiveOwnership(ctx context.Context, wrapper *remoteEntityW
 	return nil
 }
 
+// restoreOwnershipAfterTransitionFailure 在转换被证明未发生时，把实例恢复到租约对应的本地模式。
 func (m *Manager) restoreOwnershipAfterTransitionFailure(live entity.IThreadSafeRemoteEntity, lease entity.RemoteEntityMarkerLease) error {
 	if live == nil || live.GetMutex() == nil {
 		return nil

@@ -18,6 +18,7 @@ type WriteAuthority interface {
 	GrantWrite(context.Context, int64, string, int32) (WriteGrant, error)
 }
 
+// WriteGrant 是一次持久写许可：权威版本、新分配的 fence 与当时的所有权。
 type WriteGrant struct {
 	Version   int64
 	Fence     uint64
@@ -27,6 +28,7 @@ type WriteGrant struct {
 // WriteAuthorityProvider 必须同时保证提交时对最新许可做原子校验。
 type WriteAuthorityProvider interface{ WriteAuthority() WriteAuthority }
 
+// ErrRemoteAuthorityInvalid 表示权威元数据不存在、未启用或格式不受支持。
 var ErrRemoteAuthorityInvalid = errors.New("remote_entity: invalid or unsupported ownership metadata")
 
 type mongoAuthority struct {
@@ -45,6 +47,7 @@ func (d mongoAuthority) lease() entity.RemoteEntityMarkerLease {
 	return entity.RemoteEntityMarkerLease{OwnerSid: d.Owner, Shared: d.Shared, MarkerEpoch: d.Marker, RouteEpoch: d.Route}
 }
 
+// WriteAuthority 返回 MongoCommitter 自身（它同时是持久写授权）。
 func (s *MongoCommitter) WriteAuthority() WriteAuthority {
 	return s
 }
@@ -93,6 +96,8 @@ func authorityFilter(id int64, lease entity.RemoteEntityMarkerLease) bson.M {
 	return bson.M{"_id": id, "_authority": true, "_owner_sid": lease.OwnerSid, "_owner_shared": lease.Shared, "_owner_epoch": lease.MarkerEpoch, "_owner_route": lease.RouteEpoch}
 }
 
+// GrantWrite 以 CAS 为实体分配新的写 fence 并记下令牌：owner 为 0 时要求实体处于共享模式，否则要求 owner 是当前
+// 独占所有者。不满足条件返回 ErrRemoteFenced。
 func (s *MongoCommitter) GrantWrite(ctx context.Context, id int64, token string, owner int32) (WriteGrant, error) {
 	if id == 0 || token == "" {
 		return WriteGrant{}, entity.ErrRemoteFenced
