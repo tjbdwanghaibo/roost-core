@@ -18,7 +18,7 @@ codegen/cmd/roost 是统一 CLI；内部生成器负责 DAO、Entity、Nest、Pr
 
 用固定版本 roost 创建工程 → 在 roost.yaml 声明模块、版本策略、能力和生成目标 → 添加业务模型/handler → 执行生成 → 编译测试 → doctor/配置检查 → 启动。变更生成器或框架 API 后重新生成业务工程，禁止只手改生成物让当前编译通过。
 
-当前生成物最低 core 是 v1.24.0；文档补丁版不引入新运行 API，因此不需要无理由抬高最低版本。release manifest 的 release 必须等于实际发布 tag。工具输出 roost-codegen 名称不代表仍是独立模块。
+当前生成物最低 core 是 v1.25.0（生成代码使用分类后的包路径与 Gate 接入 API，见 `codegen/internal/roost/manifest.go` 的 `minimumVersions`）；roost.yaml 只有 `versions.core` 一个版本策略。文档补丁版不引入新运行 API，因此不需要无理由抬高最低版本。release manifest 的 release 必须等于实际发布 tag。工具输出 roost-codegen 名称不代表仍是独立模块。
 
 ## 3. 生成契约
 

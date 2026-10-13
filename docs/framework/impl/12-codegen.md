@@ -14,13 +14,13 @@ Codegen根据业务定义生成重复的连接代码，让你少写DAO、消息�
 
 ## 2. 必须保持的契约
 
-1. 生成物依赖最低 core v1.24.0，发布 manifest 与 tag 一致。
+1. 生成物依赖最低 core v1.25.0（`minimumVersions.Core`），发布 manifest 与 tag 一致。
 2. 全阶段成功后发布目标，标记不等于覆盖权限。
 3. 重复生成无漂移，真实 tag 消费不使用本地 replace。
 
 ## 2A. 正式工程生成链路
 
-[manifest.go](../../../codegen/internal/roost/manifest.go)定义Manifest、默认策略和minimumVersions；运行时最低Core固定v1.24.0。renderProject在[render.go](../../../codegen/internal/roost/render.go)构建plannedFile集合，renderBootstrap/服务Mod构造/配置段/Makefile等由同一清单导出。render生成候选字节不是正式发布到用户目标目录，写入权限和全阶段发布由项目事务流程控制。
+[manifest.go](../../../codegen/internal/roost/manifest.go)定义Manifest、默认策略和minimumVersions；运行时最低Core固定v1.25.0；VersionSpec 只有 Core，kit/skill/service/codegen 键在解码前按名拒绝。renderProject在[render.go](../../../codegen/internal/roost/render.go)构建plannedFile集合，renderBootstrap/服务Mod构造/配置段/Makefile等由同一清单导出。render生成候选字节不是正式发布到用户目标目录，写入权限和全阶段发布由项目事务流程控制。
 
 DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中出现Go函数文本不表示它是生成器运行时函数。修改生成形状应验证生成输出的行为，而非只断言某段字符串出现。
 

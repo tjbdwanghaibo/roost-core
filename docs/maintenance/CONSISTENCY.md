@@ -29,7 +29,7 @@
 | C11 | Remote发布 | 唯一outbox发布者仍是方案 | 已随v1.24.0完成；正式路径按全部实体依赖调度 | [outbox_publish.go](../../framework/remoteentity/outbox_publish.go) |
 | C12 | Service归属 | 需核实kit是否已全部只装配 | mail/match/session在service；其余七个领域仍在wiring/service | [wiring/account/service.go](../../service/account/service.go) |
 | C13 | 通用迁移 | 自动DAO迁移与通用migration包需区分 | 通用Registry仍提供显式步骤；不等于Repository自动迁移 | [migration/migration.go](../../infra/storage/migration/migration.go) |
-| C14 | Codegen最低版 | 最低core仍为v1.23.1 | minimumVersions.Core=v1.24.0；补丁不新增API | [codegen/internal/roost/manifest.go](../../codegen/internal/roost/manifest.go) |
+| C14 | Codegen最低版 | 最低core仍为v1.23.1 | minimumVersions.Core=v1.25.0（v1.25.0 分类包路径与 Gate API；roost.yaml 只剩 versions.core）；补丁不新增API | [codegen/internal/roost/manifest.go](../../codegen/internal/roost/manifest.go) |
 | C15 | 发布门禁 | pretag没有生成漂移检查 | 脚本包含go generate及干净树检查 | [scripts/pretag.sh](../../scripts/pretag.sh) |
 | C16 | 性能状态 | Remote/Sync仍暂停、旧性能失败作为当前结论 | v1.24.0已补一小时与声明负载；失败样本仍保留 | [稳定版性能基线](../performance/STABLE-v1.24.0.md) |
 | C17 | 未验证边界 | 需保留本机与跨机/引擎的验收边界 | 环境、平台、时长、模拟范围分别列出 | [docs/maintenance/KNOWN-LIMITS.md](KNOWN-LIMITS.md) |

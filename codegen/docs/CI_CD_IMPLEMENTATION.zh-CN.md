@@ -30,7 +30,7 @@
 
 ### 框架兼容矩阵
 
-- minimum：codegen 声明的最低 core/kit/skill 版本。
+- minimum：codegen 声明的最低 core 版本（`minimumVersions.Core`，当前 v1.25.0）。
 - released：生成时解析并锁定的一组最新正式版本。
 - source-head：在临时生成项目中使用不提交的 `go.work` 联调四仓 main；不再以写入 module 的临时 replace 作为标准研发流程。
 - version-skew：当前 codegen 对上一框架集合，明确支持边界。
