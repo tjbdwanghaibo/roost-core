@@ -15,8 +15,8 @@ output="$repo_dir/artifacts/perf/remote/$label"
 mkdir -p "$output"
 export GOWORK=off ROOST_IT_TOXIPROXY=1
 cd "$repo_dir"
-{ go version; git rev-parse HEAD; shasum -a 256 codegen/internal/entity/testdata/remoteflow/*.go remoteentity/*.go nest/*.go dataengine/engine/*.go redis/driver/cluster_recovery.go; } > "$output/env.txt"
-bash kit/scripts/integration/dataengine-env.sh heal > "$output/preflight.log" 2>&1
+{ go version; git rev-parse HEAD; shasum -a 256 codegen/internal/entity/testdata/remoteflow/*.go framework/remoteentity/*.go framework/nest/*.go framework/dataengine/engine/*.go infra/storage/redis/driver/cluster_recovery.go; } > "$output/env.txt"
+bash wiring/scripts/integration/dataengine-env.sh heal > "$output/preflight.log" 2>&1
 status=0
 run_case() {
  local name="$1";shift
@@ -24,7 +24,7 @@ run_case() {
  "$@" > "$output/$name.log" 2>&1 || code=$?
  case "$name" in
   business-*|broker-*)
-   if ! bash kit/scripts/integration/dataengine-env.sh heal > "$output/$name-heal.log" 2>&1; then
+   if ! bash wiring/scripts/integration/dataengine-env.sh heal > "$output/$name-heal.log" 2>&1; then
     printf '%s\tFAIL(environment recovery)\n' "$name" | tee -a "$output/results.tsv"
     exit 1
    fi ;;
@@ -52,6 +52,6 @@ run_case ownership-counters go test -race -tags=integration ./framework/remoteen
 run_case mongo-wal-recovery go test -race -tags=integration ./wiring/dataengine -run '^TestRealDataEngineRemotePublicationAndWALRecovery$' -count=1 -timeout=120s -v
 run_case broker-failover go test -race -tags=integration ./wiring/dataengine -run '^TestReal(MongoPrimaryFailover|NATSOutage|JetStreamLeaderFailover)' -count=1 -timeout=240s -v
 run_case broker-network go test -race -tags=integration ./wiring/dataengine -run '^TestToxicNATS' -count=1 -timeout=180s -v
-run_case final-health bash kit/scripts/integration/dataengine-env.sh status
+run_case final-health bash wiring/scripts/integration/dataengine-env.sh status
 printf 'Matrix results: %s\n' "$output"
 exit "$status"

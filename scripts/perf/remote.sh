@@ -22,8 +22,8 @@ export ROOST_REMOTE_ENTITIES="${ROOST_REMOTE_ENTITIES:-10000}" ROOST_REMOTE_SESS
 case "$ROOST_REMOTE_POLICY" in async|strict|pipelined) ;; *) echo 'Invalid policy' >&2; exit 2;; esac
 cd "$repo_dir"
 # 故障测试或上一次执行器退出后，先恢复并确认隔离集群就绪，再生成业务工程。
-bash kit/scripts/integration/dataengine-env.sh heal > "$output/preflight.log" 2>&1
-{ go version; git rev-parse HEAD; git status --short; shasum -a 256 codegen/internal/entity/testdata/remoteflow/*.go remoteentity/*.go nest/*.go dataengine/engine/*.go redis/driver/cluster_recovery.go; env | sort | sed -n '/^ROOST_REMOTE_/p'; printf 'GOMAXPROCS=%s\n' "$GOMAXPROCS"; } > "$output/env.txt"
+bash wiring/scripts/integration/dataengine-env.sh heal > "$output/preflight.log" 2>&1
+{ go version; git rev-parse HEAD; git status --short; shasum -a 256 codegen/internal/entity/testdata/remoteflow/*.go framework/remoteentity/*.go framework/nest/*.go framework/dataengine/engine/*.go infra/storage/redis/driver/cluster_recovery.go; env | sort | sed -n '/^ROOST_REMOTE_/p'; printf 'GOMAXPROCS=%s\n' "$GOMAXPROCS"; } > "$output/env.txt"
 # 慢请求原始堆栈保留，但压缩以免长稳产生巨量文本文件。
 status=0
 bash scripts/test-remote-generated.sh 2>&1 | gzip > "$output/run.log.gz" || status=$?

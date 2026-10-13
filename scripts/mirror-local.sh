@@ -2,7 +2,7 @@
 # Mirror 第 6 步的本机替代（docs/feature/MIRROR-STEP-6-LOCAL-2026-10-06.md）：在本机私有依赖进程上做
 # 只读方（RemoteMirrorMod）的故障与性能验证。默认不在 CI 跑；`test` / `bench` 才会起进程。
 #
-# 依赖全部由本脚本自起，复用 kit/scripts/integration/lib（根目录、端口平移、按命令行认领 pid）：
+# 依赖全部由本脚本自起，复用 wiring/scripts/integration/lib（根目录、端口平移、按命令行认领 pid）：
 #   - NATS JetStream 3 节点、Mongo 3 节点副本集、Redis 单机、toxiproxy（与隔离环境脚本同一套 lib 函数，但根目录是私有的）；
 #   - Redis 单机的 1 个副本（单机切主：副本提升后把 toxiproxy 的 redis 代理改指新主，客户端地址不变）；
 #   - Redis 3 主 3 从 Cluster（node-timeout 1s）。
@@ -23,7 +23,7 @@
 #   ROOST_MIRROR_LOCAL_KEEP=1 时 test / test-core / bench 结束不清理（调试用，之后手工 clean）。
 set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-lib_dir="$repo_dir/kit/scripts/integration/lib"
+lib_dir="$repo_dir/wiring/scripts/integration/lib"
 
 home="${ROOST_MIRROR_LOCAL_HOME:-${TMPDIR:-/tmp}/roost-mirror-local}"
 home="${home%/}"

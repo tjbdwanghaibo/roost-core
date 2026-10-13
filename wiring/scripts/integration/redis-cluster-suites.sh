@@ -5,7 +5,7 @@
 # 包清单由 integration_coverage_test.go 钉在磁盘上的文件：每个含
 # ROOST_REVIEW_CLUSTER 测试文件的包都要列在这里，没有的包不能列（那一格是空绿）。
 #
-# 用法：ROOST_REVIEW_CLUSTER=127.0.0.1:7000,...,127.0.0.1:7005 bash kit/scripts/integration/redis-cluster-suites.sh
+# 用法：ROOST_REVIEW_CLUSTER=127.0.0.1:7000,...,127.0.0.1:7005 bash wiring/scripts/integration/redis-cluster-suites.sh
 # 集群里的键会按每次运行的随机前缀写入并清理；不要指向共享的集群。
 set -euo pipefail
 : "${ROOST_REVIEW_CLUSTER:?comma-separated addresses of a Redis Cluster reserved for tests}"

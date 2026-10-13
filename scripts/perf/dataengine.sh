@@ -16,7 +16,7 @@ cd "$repo_dir"
   go version
   git rev-parse HEAD
   git status --short
-  shasum -a 256 codegen/internal/entity/testdata/dataengine/*.go nest/*.go dataengine/engine/*.go sync/entitysync/*.go
+  shasum -a 256 codegen/internal/entity/testdata/dataengine/*.go framework/nest/*.go framework/dataengine/engine/*.go framework/sync/entitysync/*.go
   env | sort | sed -n '/^ROOST_PERF_/p'
   printf 'GOMAXPROCS=%s\n' "$GOMAXPROCS"
 } > "$output/env.txt"

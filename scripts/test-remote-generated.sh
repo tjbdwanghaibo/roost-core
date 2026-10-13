@@ -8,7 +8,7 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # A5：带 ROOST_REMOTE_FAULT 时用例会经 remote-fault.sh 停共享环境的节点再 heal，整段是全局操作，
 # 运行期间持有验收锁（矩阵 / 长稳调起时沿用它们的锁），别人持锁时在生成工程之前以 2 拒绝。
 if [[ -n "${ROOST_REMOTE_FAULT:-}" ]]; then
-  source "$repo_dir/kit/scripts/integration/lib/common.sh"
+  source "$repo_dir/wiring/scripts/integration/lib/common.sh"
   require_safe_root
   acquire_acceptance_lock
 fi
