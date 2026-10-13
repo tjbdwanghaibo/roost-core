@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math"
 	"slices"
 	"sort"
@@ -80,9 +79,8 @@ type Config struct {
 	// by OpenActivity, Activities.Create not yet observed — before a sweep
 	// helps its durable creation intent forward. A timeout cannot prove an
 	// in-flight Create will never commit, so it does not release the slot.
-	// A legacy entry without an intent (written by a build before the plan
-	// existed, whose openers were drained before upgrading) has nothing to
-	// help forward and is reclaimed after this grace instead (RR-20261001-09).
+	// An entry without an intent is malformed (this package never writes
+	// one): it is reported and kept for an operator, never reclaimed.
 	// Zero selects DefaultOpeningGrace.
 	OpeningGrace time.Duration
 
@@ -362,17 +360,11 @@ func (s *Service) admitToWindow(ctx context.Context, activity Activity) (Activit
 		}
 		if next.contains(key) {
 			if i := next.openingIndex(key); i >= 0 {
-				if next.Opening[i].Intent != nil {
-					// NC-42：恢复复用持久意图前验证；坏记录只能拒绝，不能写出另一个活动。
-					if reason := openingIntentProblem(next.Opening[i], key.GroupID); reason != "" {
-						return current, false, fmt.Errorf("%w: malformed opening intent for %s: %s", ErrConflict, key, reason)
-					}
-					planned = next.Opening[i].Intent.clone()
-				} else {
-					intent := planned.clone()
-					next.Opening[i].Intent = &intent
-					return next, true, nil
+				// NC-42：恢复复用持久意图前验证；坏记录（含没有意图的条目）只能拒绝，不能写出另一个活动。
+				if reason := openingIntentProblem(next.Opening[i], key.GroupID); reason != "" {
+					return current, false, fmt.Errorf("%w: malformed opening intent for %s: %s", ErrConflict, key, reason)
 				}
+				planned = next.Opening[i].Intent.clone()
 			}
 			return current, false, nil
 		}
@@ -812,25 +804,18 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 	)
 	nowUnix := s.cfg.Now().Unix()
 	snapshot := entries.usable
-	batch := pendingScanBatch(snapshot)
+	if pending := snapshot.pending(); pending > MaxPendingActivities {
+		// Admission never lets a window past the limit, so this window was
+		// written by something else (an older build had no such bound). It is
+		// refused before any read rather than scanned in rotation: there is
+		// no compatibility for it (maintainer 2026-10-13); repair it offline.
+		return nil, fmt.Errorf("%w: group %q window holds %d pending entries, above the limit %d; repair it offline",
+			ErrConflict, groupID, pending, MaxPendingActivities)
+	}
+	batch := pendingKeys(snapshot)
 	selected := make(map[Key]struct{}, len(batch))
 	for _, key := range batch {
 		selected[key] = struct{}{}
-	}
-	if snapshot.pending() > MaxPendingActivities && len(batch) > 0 {
-		// Advance before I/O so one unavailable activity cannot pin every
-		// legacy tail behind it. Failed work is revisited on the next rotation.
-		last := batch[len(batch)-1]
-		if _, _, err := s.cfg.Windows.Update(ctx, groupID, func(current Window, found bool) (Window, bool, error) {
-			if !found {
-				return current, false, nil
-			}
-			next := current.clone()
-			next.ScanAfter = &last
-			return next, true, nil
-		}); err != nil {
-			return nil, err
-		}
 	}
 	keys := snapshot.Keys
 	sortKeys(keys)
@@ -865,19 +850,14 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 	}
 	// Help durable openings after grace; absence or a deadline cannot prove
 	// a slow Create is cancelled, so an entry WITH a plan keeps its slot and
-	// the sweep executes the plan. Three kinds of entry cannot be helped
+	// the sweep executes the plan. Two kinds of entry cannot be helped
 	// (RR-20261001-09), and each is handled on its own so that none of them
 	// stalls the group's other activities:
 	//
-	//   - no plan at all: a legacy admission from a build before
-	//     RR-20260914-02. Its openers were drained before the upgrade (the
-	//     09-29 record's upgrade contract), so nothing can still confirm it
-	//     and nothing can ever help it; it is reclaimed after OpeningGrace
-	//     the way the old code reclaimed it — and only if it still has no
-	//     plan when the compare-and-set runs, since a same-key Open in
-	//     between gives it one;
-	//   - a plan this code cannot execute (key mismatch, not pending, invalid
-	//     expected set): corruption, which this code never writes. It is
+	//   - a plan this code cannot execute (missing, key mismatch, not
+	//     pending, invalid expected set): corruption, which this code never
+	//     writes — an entry with no plan at all included, since there is no
+	//     compatibility for admissions written before plans existed. It is
 	//     skipped, counted every tick and logged once, and its slot is KEPT:
 	//     the opener's own Create of the original plan may still land, and a
 	//     record whose slot was given away would never be swept (the exact
@@ -887,7 +867,6 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 	//     the rest of the group has been served, not instead of it.
 	openingGraceUnix := int64(s.cfg.OpeningGrace / time.Second)
 	var (
-		reclaim []Key
 		// Opening entries reported this tick: a bad key (from the reader,
 		// always visible) or a plan this code cannot execute (judged below,
 		// only for entries the bounded batch reached).
@@ -904,10 +883,6 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		}
 		if !exists {
 			if nowUnix-entry.AdmittedAtUnix < openingGraceUnix {
-				continue
-			}
-			if entry.Intent == nil {
-				reclaim = append(reclaim, entry.Key)
 				continue
 			}
 			if reason := openingIntentProblem(entry, groupID); reason != "" {
@@ -978,15 +953,9 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 		prune = append(prune, activity.Key)
 		delivering = append(delivering, activity.Key)
 	}
-	if len(prune)+len(reclaim) > 0 {
-		reclaimed, err := s.retireFromWindow(ctx, groupID, prune, delivering, reclaim)
-		if err != nil {
+	if len(prune) > 0 {
+		if err := s.retireFromWindow(ctx, groupID, prune, delivering); err != nil {
 			return completed, errors.Join(helpErr, err)
-		}
-		if reclaimed > 0 {
-			s.report.Dropped("sweep.opening_legacy_reclaimed", reclaimed)
-			slog.Info("activity: legacy opening entries without a plan reclaimed after grace",
-				"group_id", groupID, "count", reclaimed)
 		}
 	}
 	return completed, helpErr
@@ -1029,9 +998,10 @@ func windowKeyProblem(key Key, groupID string) string {
 	return ""
 }
 
-// pendingScanBatch bounds backend reads and rotates a legacy oversized
-// window. The cursor is a key, so removal or insertion does not reset progress.
-func pendingScanBatch(window Window) []Key {
+// pendingKeys lists every key holding a pending slot, confirmed or opening,
+// once. The sweep refuses a window above MaxPendingActivities before calling
+// it, so this is also the read bound.
+func pendingKeys(window Window) []Key {
 	unique := make(map[Key]struct{}, window.pending())
 	for _, key := range window.Keys {
 		unique[key] = struct{}{}
@@ -1044,18 +1014,7 @@ func pendingScanBatch(window Window) []Key {
 		keys = append(keys, key)
 	}
 	sortKeys(keys)
-	if len(keys) <= MaxPendingActivities {
-		return keys
-	}
-	start := 0
-	if window.ScanAfter != nil {
-		start = sort.Search(len(keys), func(i int) bool { return keys[i].String() > window.ScanAfter.String() })
-	}
-	batch := make([]Key, 0, MaxPendingActivities)
-	for i := 0; i < MaxPendingActivities; i++ {
-		batch = append(batch, keys[(start+i)%len(keys)])
-	}
-	return batch
+	return keys
 }
 
 // completeExpired finishes one lapsed aggregation. advanced reports whether
@@ -1100,8 +1059,7 @@ func (s *Service) settleCompletion(ctx context.Context, activity Activity) error
 	if err := s.ensureDispatches(ctx, activity); err != nil {
 		return err
 	}
-	_, err := s.retireFromWindow(ctx, activity.Key.GroupID, []Key{activity.Key}, []Key{activity.Key}, nil)
-	return err
+	return s.retireFromWindow(ctx, activity.Key.GroupID, []Key{activity.Key}, []Key{activity.Key})
 }
 
 // retireFromWindow is the one compare-and-set that moves keys out of the
@@ -1109,28 +1067,16 @@ func (s *Service) settleCompletion(ctx context.Context, activity Activity) error
 //
 //   - prune leaves Keys (and Opening, should a confirm have been skipped);
 //   - delivering (a subset of prune: the complete ones) joins Delivering so
-//     the sweep keeps retrying their dispatches (U-0192);
-//   - reclaim leaves Opening only, and only while the entry still has no
-//     plan: the sweep observed a legacy admission past its grace, and a
-//     same-key Open that supplied a plan since then owns the slot now, so
-//     the reclaim would be acting on a generation that no longer exists
-//     (RR-20261001-09; the same guard U-0191 gave the pre-plan reclaim).
-//
-// reclaimed is how many reclaim entries the write that won actually removed.
-func (s *Service) retireFromWindow(ctx context.Context, groupID string, prune, delivering, reclaim []Key) (reclaimed int, err error) {
-	if len(prune)+len(reclaim) == 0 {
-		return 0, nil
+//     the sweep keeps retrying their dispatches (U-0192).
+func (s *Service) retireFromWindow(ctx context.Context, groupID string, prune, delivering []Key) error {
+	if len(prune) == 0 {
+		return nil
 	}
 	remove := make(map[Key]struct{}, len(prune))
 	for _, key := range prune {
 		remove[key] = struct{}{}
 	}
-	legacy := make(map[Key]struct{}, len(reclaim))
-	for _, key := range reclaim {
-		legacy[key] = struct{}{}
-	}
-	_, _, err = s.cfg.Windows.Update(ctx, groupID, func(current Window, found bool) (Window, bool, error) {
-		reclaimed = 0
+	_, _, err := s.cfg.Windows.Update(ctx, groupID, func(current Window, found bool) (Window, bool, error) {
 		if !found {
 			return current, false, nil
 		}
@@ -1151,11 +1097,6 @@ func (s *Service) retireFromWindow(ctx context.Context, groupID string, prune, d
 				changed = true
 				continue
 			}
-			if _, drop := legacy[entry.Key]; drop && entry.Intent == nil {
-				changed = true
-				reclaimed++
-				continue
-			}
 			opening = append(opening, entry)
 		}
 		next.Opening = append([]OpeningEntry(nil), opening...)
@@ -1170,10 +1111,7 @@ func (s *Service) retireFromWindow(ctx context.Context, groupID string, prune, d
 		}
 		return next, true, nil
 	})
-	if err != nil {
-		return 0, err
-	}
-	return reclaimed, nil
+	return err
 }
 
 // --- participant progress ---

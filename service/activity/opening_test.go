@@ -1,4 +1,4 @@
-// 活动开窗：后到的创建不借用已承诺的名额、丢回复后恢复原计划、legacy 与畸形 opening 的回收与隔离、开窗与 sweep 交错不丢窗口索引。
+// 活动开窗：后到的创建不借用已承诺的名额、丢回复后恢复原计划、畸形 opening（含无计划条目）的隔离与运维移除、超限窗口拒绝、开窗与 sweep 交错不丢窗口索引。
 
 package activity
 
@@ -227,86 +227,71 @@ func (s *bugfix5CountingActivities) Get(ctx context.Context, key Key) (versionst
 	s.reads.Add(1)
 	return s.Store.Get(ctx, key)
 }
-func TestOversizedLegacyWindowRotatesAcrossServiceRebuild(t *testing.T) {
+// 准入从不让窗口超过 MaxPendingActivities；超限的窗口（旧版本没有这个上限时写下的形态）在任何读之前被
+// 拒绝（ErrConflict），不轮转扫描、不改窗口，交线下修复。
+// 历史：此前按 ScanAfter 游标轮转扫描旧的超限窗口；维护者 2026-10-13 决定不兼容旧数据。
+func TestAWindowAboveTheLimitIsRefusedBeforeAnyRead(t *testing.T) {
 	var store *bugfix5CountingActivities
-	s, clock := bugfix5Activity(t, func(c *Config) { store = &bugfix5CountingActivities{Store: c.Activities}; c.Activities = store })
+	s, _ := bugfix5Activity(t, func(c *Config) { store = &bugfix5CountingActivities{Store: c.Activities}; c.Activities = store })
 	ctx := context.Background()
 	window := Window{GroupID: "group-a"}
 	for i := 0; i < MaxPendingActivities+1; i++ {
-		key := activityKey(fmt.Sprintf("legacy-%03d", i))
-		window.Keys = append(window.Keys, key)
-		value := Activity{Key: key, Status: StatusPending, ExpectedGameSIDs: []int32{1, 2}}
-		if _, _, err := store.Create(ctx, key, value); err != nil {
-			t.Fatal(err)
-		}
+		window.Keys = append(window.Keys, activityKey(fmt.Sprintf("oversized-%03d", i)))
 	}
-	if _, _, err := s.cfg.Windows.Create(ctx, window.GroupID, window); err != nil {
-		t.Fatal(err)
-	}
-	tail := window.Keys[len(window.Keys)-1]
-	if _, err := s.NotifyPhase(ctx, tail, 1); err != nil {
-		t.Fatal(err)
-	}
-	clock.advance(s.cfg.GraceWindow + time.Second)
-	store.reads.Store(0)
-	if _, err := s.AdvanceExpired(ctx, window.GroupID, 1); err != nil {
-		t.Fatal(err)
-	}
-	if store.reads.Load() > MaxPendingActivities {
-		t.Fatal("unbounded reads", store.reads.Load())
-	}
-	rebuilt, err := New(s.cfg)
+	stored, _, err := s.cfg.Windows.Create(ctx, window.GroupID, window)
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.reads.Store(0)
-	if _, err := rebuilt.AdvanceExpired(ctx, window.GroupID, 1); err != nil {
-		t.Fatal(err)
+	if _, err := s.AdvanceExpired(ctx, window.GroupID, 1); !errors.Is(err, ErrConflict) {
+		t.Fatalf("AdvanceExpired over a window above the limit = %v, want ErrConflict", err)
 	}
-	if store.reads.Load() > MaxPendingActivities {
-		t.Fatal("unbounded reads", store.reads.Load())
+	if store.reads.Load() != 0 {
+		t.Fatalf("the refused window was still scanned: %d reads", store.reads.Load())
 	}
-	got, found, err := rebuilt.LookupActivity(ctx, tail)
-	if err != nil || !found || got.Status != StatusComplete {
-		t.Fatal(got, found, err)
+	if after, _, err := s.cfg.Windows.Get(ctx, window.GroupID); err != nil || after.Version != stored.Version {
+		t.Fatalf("the refused window was rewritten: %+v %v", after, err)
 	}
 }
 
-// legacy 条目在 grace 内保留（同 key Open 仍能补计划），过 grace 且活动不存在则回收；之后同 key Open 走正常准入。
-func TestLegacyOpeningNeedsAPlanInsteadOfTimeoutReclaim(t *testing.T) {
+// 没有 Intent 的 Opening 条目（本包从不写出；旧版本在计划出现之前的准入形态）是畸形条目：过 grace 也不回收、
+// 名额保留；运维列表列出它（"intent is missing"），同 key Open 以 ErrConflict 拒绝、不补计划；运维移除之后
+// 同 key Open 走正常准入。
+// 历史：RR-20261001-09 曾在 grace 后回收它、同 key Open 为它补计划；维护者 2026-10-13 决定不兼容旧数据。
+func TestAnOpeningWithoutAPlanIsMalformedAndKeptForAnOperator(t *testing.T) {
 	s, clock := bugfix5Activity(t, nil)
 	ctx := context.Background()
-	key := activityKey("legacy-opening")
+	key := activityKey("planless-opening")
 	if _, _, err := s.cfg.Windows.Create(ctx, key.GroupID, Window{GroupID: key.GroupID, Opening: []OpeningEntry{{Key: key, AdmittedAtUnix: clock.Now().Unix()}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AdvanceExpired(ctx, key.GroupID, 1); err != nil {
-		t.Fatal(err)
-	}
-	window, _, err := s.cfg.Windows.Get(ctx, key.GroupID)
-	if err != nil || window.Value.pending() != 1 {
-		t.Fatalf("a legacy entry inside its grace was reclaimed: %+v %v", window, err)
-	}
 	clock.advance(s.cfg.OpeningGrace + time.Second)
 	if _, err := s.AdvanceExpired(ctx, key.GroupID, 1); err != nil {
-		t.Fatal(err)
+		t.Fatalf("a planless entry failed the whole sweep: %v", err)
 	}
-	window, _, err = s.cfg.Windows.Get(ctx, key.GroupID)
-	if err != nil || window.Value.pending() != 0 {
-		t.Fatalf("a legacy entry past its grace still holds a slot: %+v %v", window, err)
+	if window, _, err := s.cfg.Windows.Get(ctx, key.GroupID); err != nil || window.Value.pending() != 1 {
+		t.Fatalf("a planless entry past its grace was reclaimed: %+v %v", window, err)
+	}
+	problems, err := s.MalformedWindowEntries(ctx, key.GroupID)
+	if err != nil || len(problems) != 1 || problems[0].List != WindowOpening || problems[0].Key != key || problems[0].Reason != "intent is missing" {
+		t.Fatalf("MalformedWindowEntries = %+v %v, want the planless opening", problems, err)
+	}
+	if _, err := s.OpenActivity(ctx, key, []int32{1, 2}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("same-key Open over a planless entry = %v, want ErrConflict (no plan is supplied)", err)
+	}
+	if removed, err := s.RemoveMalformedWindowEntry(ctx, key.GroupID, WindowOpening, key, "planless opening from an older build"); err != nil || removed != 1 {
+		t.Fatalf("RemoveMalformedWindowEntry = %d %v", removed, err)
 	}
 	if _, err := s.OpenActivity(ctx, key, []int32{1, 2}); err != nil {
 		t.Fatal(err)
 	}
-	window, _, err = s.cfg.Windows.Get(ctx, key.GroupID)
-	if err != nil || len(window.Value.Opening) != 0 || len(window.Value.Keys) != 1 {
+	if window, _, err := s.cfg.Windows.Get(ctx, key.GroupID); err != nil || len(window.Value.Opening) != 0 || len(window.Value.Keys) != 1 {
 		t.Fatal(window, err)
 	}
 }
 
-// 窗口里一条没有 Intent 的 legacy Opening 不能永久占名额，一条坏 Intent 不能让该 group 的 AdvanceExpired 每 tick 整体失败：legacy 条目过
-// OpeningGrace 且活动不存在 → 回收名额（只删 CAS 时仍无 Intent 的那一段）；坏 Intent → 跳过、每 tick 计 sweep.opening_intent_malformed、
-// 日志只在状态变化时打一次，名额保留；同组其他条目照常推进。
+// 一条坏 Intent 不能让该 group 的 AdvanceExpired 每 tick 整体失败：坏 Intent → 跳过、每 tick 计
+// sweep.opening_intent_malformed、日志只在状态变化时打一次，名额保留；同组其他条目照常推进。
 // 后端由 ROOST_REVIEW4_BACKEND 选：默认 Memory；"redis" 时用 ROOST_REVIEW_REDIS 指向的隔离 Redis（前缀 rr09:activity:<nanos>，不 FLUSH）。
 // 历史：RR-20261001-09。
 
@@ -407,10 +392,9 @@ func malformedIntent(key Key) *Activity {
 	return &Activity{Key: other, Status: StatusPending, ExpectedGameSIDs: []int32{1}}
 }
 
-// 一条无 Intent 的 legacy Opening + 一条坏 Intent + 一条正常到期活动：sweep 后正常
-// 活动完成、legacy 名额回收、坏条目被跳过且不让整组失败；坏条目的日志只打一次，
-// 修好之后再打一次“恢复”并被 sweep 按计划创建。
-func TestSweepReclaimsLegacyOpeningAndSkipsMalformedIntent(t *testing.T) {
+// 一条坏 Intent + 一条正常到期活动：sweep 后正常活动完成，坏条目被跳过且不让整组失败；坏条目的日志
+// 只打一次，修好之后再打一次“恢复”并被 sweep 按计划创建。
+func TestSweepSkipsAMalformedIntentWithoutStallingTheGroup(t *testing.T) {
 	recorder := servicemetrics.NewRecorder()
 	s, clock := newRR09Service(t, func(c *Config) { c.Metrics = recorder })
 	logs := captureSweepLogs(t, "opening intent is malformed", "opening intent is usable again")
@@ -418,20 +402,16 @@ func TestSweepReclaimsLegacyOpeningAndSkipsMalformedIntent(t *testing.T) {
 	server := &Server{service: s}
 
 	normal := activityKey("rr09-normal")
-	legacy := activityKey("rr09-legacy")
 	bad := activityKey("rr09-bad-intent")
 	openActivity(t, s, normal, 1, 2)
 	notify(t, s, normal, 1) // collecting, grace deadline now+30s
 	now := clock.Now().Unix()
-	seedOpening(t, s,
-		OpeningEntry{Key: legacy, AdmittedAtUnix: now},
-		OpeningEntry{Key: bad, AdmittedAtUnix: now, Intent: malformedIntent(bad)},
-	)
+	seedOpening(t, s, OpeningEntry{Key: bad, AdmittedAtUnix: now, Intent: malformedIntent(bad)})
 
-	// Inside both graces nothing moves: the legacy entry is still within
-	// OpeningGrace, so a sweep must not read "no activity yet" as dead.
+	// Inside both graces nothing moves: a sweep must not read "no activity
+	// yet" as dead.
 	server.sweepGroup(ctx, s, normal.GroupID)
-	if got := windowOf(t, s, normal.GroupID); got.pending() != 3 {
+	if got := windowOf(t, s, normal.GroupID); got.pending() != 2 {
 		t.Fatalf("a sweep inside the grace changed the window: %+v", got)
 	}
 
@@ -447,17 +427,11 @@ func TestSweepReclaimsLegacyOpeningAndSkipsMalformedIntent(t *testing.T) {
 		t.Fatalf("the healthy due activity was not completed behind the bad entry: %+v found=%v err=%v", activity, found, err)
 	}
 	window := windowOf(t, s, normal.GroupID)
-	if window.openingIndex(legacy) >= 0 {
-		t.Fatalf("legacy opening without a plan still holds a slot after OpeningGrace: %+v", window)
-	}
 	if window.openingIndex(bad) < 0 || window.Opening[window.openingIndex(bad)].Intent == nil {
 		t.Fatalf("the malformed entry was reclaimed or rewritten instead of kept for an operator: %+v", window)
 	}
 	if got := recorder.Count("dropped:sweep.opening_intent_malformed"); got != 2 {
 		t.Fatalf("sweep.opening_intent_malformed counted %d after two sweeps past grace, want 2", got)
-	}
-	if got := recorder.Count("dropped:sweep.opening_legacy_reclaimed"); got != 1 {
-		t.Fatalf("sweep.opening_legacy_reclaimed counted %d, want 1", got)
 	}
 	if got := logs.count("opening intent is malformed"); got != 1 {
 		t.Fatalf("malformed intent logged %d times across two sweeps, want once per state change", got)
@@ -766,29 +740,20 @@ func TestOpeningSweepRejectsInvalidOrForeignGroupBeforeSideEffects(t *testing.T)
 	}
 }
 
-func TestOpeningRecoveryKeepsValidIntentAndLegacyAdmission(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		t.Run(map[bool]string{false: "persisted", true: "legacy"}[legacy], func(t *testing.T) {
-			s, clock := newRR09Service(t)
-			key := activityKey("valid-recovery")
-			entry := OpeningEntry{Key: key, AdmittedAtUnix: clock.Now().Unix()}
-			if !legacy {
-				entry.Intent = &Activity{Key: key, Status: StatusPending, ExpectedGameSIDs: []int32{1, 2}, OpenedAtUnix: clock.Now().Unix(), UpdatedAtUnix: clock.Now().Unix()}
-			}
-			seedOpening(t, s, entry)
-			got, err := s.OpenActivity(context.Background(), key, []int32{3})
-			want := []int32{1, 2}
-			if legacy {
-				want = []int32{3}
-			}
-			if err != nil || !reflect.DeepEqual(got.ExpectedGameSIDs, want) {
-				t.Fatalf("durable/legacy recovery changed intent: %+v %v", got, err)
-			}
-			window := windowOf(t, s, key.GroupID)
-			if window.openingIndex(key) >= 0 || !window.contains(key) || window.pending() != 1 {
-				t.Fatalf("recovery did not confirm its one slot: %+v", window)
-			}
-		})
+// 同 key Open 恢复一条持久的开窗计划时沿用计划里的期望集合（不按本次请求改写），并把它确认进 Keys。
+func TestOpeningRecoveryKeepsTheDurableIntent(t *testing.T) {
+	s, clock := newRR09Service(t)
+	key := activityKey("valid-recovery")
+	now := clock.Now().Unix()
+	seedOpening(t, s, OpeningEntry{Key: key, AdmittedAtUnix: now,
+		Intent: &Activity{Key: key, Status: StatusPending, ExpectedGameSIDs: []int32{1, 2}, OpenedAtUnix: now, UpdatedAtUnix: now}})
+	got, err := s.OpenActivity(context.Background(), key, []int32{3})
+	if err != nil || !reflect.DeepEqual(got.ExpectedGameSIDs, []int32{1, 2}) {
+		t.Fatalf("durable recovery changed intent: %+v %v", got, err)
+	}
+	window := windowOf(t, s, key.GroupID)
+	if window.openingIndex(key) >= 0 || !window.contains(key) || window.pending() != 1 {
+		t.Fatalf("recovery did not confirm its one slot: %+v", window)
 	}
 }
 

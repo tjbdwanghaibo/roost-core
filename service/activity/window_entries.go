@@ -45,7 +45,7 @@ type MalformedWindowEntry struct {
 // must be skipped.
 type windowEntries struct {
 	// usable is the stored record with every malformed entry left out; its
-	// other fields (ScanAfter, RefusedOpens) are the stored ones.
+	// other fields (RefusedOpens, admin note) are the stored ones.
 	usable Window
 	// malformed lists what was left out, in stored order.
 	malformed []MalformedWindowEntry

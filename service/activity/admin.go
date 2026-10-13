@@ -297,14 +297,11 @@ func (s *Service) MalformedWindowEntries(ctx context.Context, groupID string) ([
 // Opening entries whose plan cannot be executed (openingIntentProblem): the
 // reader leaves a plan alone because an entry whose activity exists is
 // confirmed whatever its plan says, but for an operator it is still corrupt.
-// A legacy entry with no plan is not listed: the sweep reclaims it.
+// An entry with no plan at all is listed too: this package never writes one.
 func storedEntryProblems(groupID string, stored Window) []MalformedWindowEntry {
 	entries := readWindowEntries(groupID, stored)
 	out := entries.malformed
 	for _, entry := range entries.usable.Opening {
-		if entry.Intent == nil {
-			continue
-		}
 		if reason := openingIntentProblem(entry, groupID); reason != "" {
 			out = append(out, MalformedWindowEntry{List: WindowOpening, Key: entry.Key, Reason: reason})
 		}

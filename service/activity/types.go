@@ -807,12 +807,8 @@ type Window struct {
 	// one of these cannot tell "not created yet" from "never will be".
 	// After Config.OpeningGrace it helps the durable intent forward; it never
 	// frees a slot that holds a plan on the strength of a timeout. An entry
-	// with no plan (legacy, pre-plan build) has nothing to help and is
-	// reclaimed after the same grace (RR-20261001-09).
+	// with no plan is malformed: reported and kept for an operator.
 	Opening []OpeningEntry `json:"opening,omitempty"`
-	// ScanAfter rotates bounded reads across legacy oversized windows.
-	// Persisted so rebuilding the service does not restart at the same prefix.
-	ScanAfter *Key `json:"scan_after,omitempty"`
 	// Delivering are complete activities whose dispatches are not all
 	// terminal yet (U-0192, RR-20260914-03). They left Keys — the aggregation
 	// is over — but the sweep must keep finding them until every dispatch is
@@ -835,10 +831,11 @@ type OpeningEntry struct {
 	AdmittedAtUnix int64 `json:"admitted_at_unix"`
 	// Intent is the immutable creation plan. A timeout cannot revoke a
 	// possibly in-flight Create; the sweep helps this plan forward instead.
-	// Nil identifies a legacy admission: a same-key Open retry supplies a
-	// plan, and failing that the sweep reclaims the slot after
-	// Config.OpeningGrace (RR-20261001-09). A plan the sweep cannot execute
-	// is skipped and reported, never executed and never reclaimed.
+	// This package always writes one; a nil or unexecutable plan is
+	// malformed — a same-key Open is refused, the sweep skips and reports it,
+	// and the slot is kept for an operator (Admin.RemoveMalformedWindowEntry).
+	// Admissions written before plans existed are not supported
+	// (maintainer 2026-10-13).
 	Intent *Activity `json:"intent,omitempty"`
 }
 
@@ -888,10 +885,6 @@ func (w Window) clone() Window {
 				out.Opening[i].Intent = &intent
 			}
 		}
-	}
-	if w.ScanAfter != nil {
-		key := *w.ScanAfter
-		out.ScanAfter = &key
 	}
 	if len(w.Delivering) > 0 {
 		out.Delivering = make([]Key, len(w.Delivering))
