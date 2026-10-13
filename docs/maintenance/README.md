@@ -10,7 +10,7 @@
 
 单模块发布，wiring、codegen、demo 随 core 同一 tag。新业务固定 core 与工具版本，重新生成并编译工程。v1.25.0 最低生成物运行依赖是 core v1.25.0。文档补丁不改变最低版本和业务 API。
 
-当前没有旧 WAL/schema/interest/客户端包的透明兼容。WAL只支持codec7；DAO只接受当前schema；Remote interest要求非零代际及完整身份；客户端RS v2区分PB、Sync、Lockstep；Remote 快照 checksum 只读 8 字节形态，WAL 中“Remote 写 + lease fence”历史记录不再投影（投影器 fatal、WAL 原样保留）。服务数据同样不兼容旧形态：account 的未转义旧账号 ID、无建角计划的 slot 与无 `CreationID` 的角色，activity 无计划的开窗条目与超限窗口，rank 的逗号分隔请求账本，均被明确拒绝而不读取或升级（清单见 CHANGELOG `[Unreleased]`“移除旧格式兼容”）。不要把单模块版本号与这些各自的线/存储格式号混为一谈。
+当前没有旧 WAL/schema/interest/客户端包的透明兼容。WAL只支持codec7；DAO只接受当前schema；Remote interest要求非零代际及完整身份；客户端RS v2区分PB、Sync、Lockstep；Remote 快照 checksum 只读 8 字节形态，WAL 中“Remote 写 + lease fence”历史记录不再投影（投影器 fatal、WAL 原样保留）。服务数据同样不兼容旧形态：account 的未转义旧账号 ID、无建角计划的 slot 与无 `CreationID` 的角色，activity 无计划的开窗条目与超限窗口，rank 的逗号分隔请求账本，mail 无窗口的已结算 claim，均被明确拒绝而不读取或升级（清单见 CHANGELOG `[Unreleased]`“移除旧格式兼容”）。不要把单模块版本号与这些各自的线/存储格式号混为一谈。
 
 ## 2. 升级与回退
 

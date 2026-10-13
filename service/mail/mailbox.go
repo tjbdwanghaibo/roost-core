@@ -79,7 +79,9 @@ type Entry struct {
 }
 
 // expireEntries reclaims only known-expired entries with no unsettled claim.
-// Unknown legacy expiry and a retained token require explicit recovery.
+// An entry without an expiry is never written by this package (every envelope
+// must expire); one is kept rather than guessed expired, as is a retained token,
+// and both require explicit recovery.
 func (m *Mailbox) expireEntries(nowUnix int64) bool {
 	changed := false
 	for id, entry := range m.Entries {
@@ -280,37 +282,17 @@ func (m *Mailbox) evict(nowUnix int64) {
 // (RR-20260911-01). A record is now kept until the envelope it protects can no
 // longer be claimed.
 //
-// Records written before the expiry was recorded carry no window and cannot be
-// aged out. Only those are dropped by count, oldest first, and only when the
-// mailbox is over the bound — that bounds an upgraded mailbox without ever
-// dropping a record that knows what it is protecting.
+// Every envelope must expire (Envelope.Validate), so every record this package
+// writes carries its window. A record without one (written before the window
+// was recorded) is never guessed away by count: it stays, and a mailbox it
+// keeps over the bound refuses delivery with ErrClaimHistoryFull
+// (settledClaimsOverflow) until an operator repairs it. There is no
+// compatibility for such records (maintainer 2026-10-13).
 func (m *Mailbox) evictSettledClaims(nowUnix int64) {
 	for mailID, settled := range m.SettledClaims {
 		if settled.EnvelopeExpiresAtUnix > 0 && nowUnix >= settled.EnvelopeExpiresAtUnix {
 			delete(m.SettledClaims, mailID)
 		}
-	}
-	if len(m.SettledClaims) <= MaxSettledClaims {
-		return
-	}
-	legacy := make([]string, 0, len(m.SettledClaims))
-	for mailID, settled := range m.SettledClaims {
-		if settled.EnvelopeExpiresAtUnix <= 0 && !settled.Deleted {
-			legacy = append(legacy, mailID)
-		}
-	}
-	sort.Slice(legacy, func(i, j int) bool {
-		left, right := m.SettledClaims[legacy[i]], m.SettledClaims[legacy[j]]
-		if left.SettledAtUnix == right.SettledAtUnix {
-			return legacy[i] < legacy[j]
-		}
-		return left.SettledAtUnix < right.SettledAtUnix
-	})
-	for _, mailID := range legacy {
-		if len(m.SettledClaims) <= MaxSettledClaims {
-			break
-		}
-		delete(m.SettledClaims, mailID)
 	}
 }
 

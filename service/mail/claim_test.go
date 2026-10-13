@@ -172,8 +172,9 @@ func TestCommitClaimReplaysAfterTheEntryWasEvicted(t *testing.T) {
 	}
 }
 
-// Retention drops a settled claim when the envelope it protects can no longer be claimed; the count only bounds records
-// written before the window was recorded.
+// Retention drops a settled claim when the envelope it protects can no longer be claimed, and never by count: a record
+// without a window is kept and makes delivery refuse rather than being guessed away.
+// 历史：此前按条数淘汰无窗口的旧记录；维护者 2026-10-13 决定不兼容旧数据。
 func TestSettledClaimsAgeOutWithTheirEnvelope(t *testing.T) {
 	var box Mailbox
 	box.init(1)
@@ -188,25 +189,19 @@ func TestSettledClaimsAgeOutWithTheirEnvelope(t *testing.T) {
 		t.Error("a record was dropped while its envelope was still claimable, even though it was the oldest")
 	}
 
-	// Records with no recorded window are the only ones the count bound may
-	// drop, and only when the mailbox is over it.
-	var legacy Mailbox
-	legacy.init(1)
+	// A record without a window (never written by this package: every envelope
+	// expires) is not dropped by count, however old: retention keeps it, and
+	// settledClaimsOverflow then makes delivery refuse with ErrClaimHistoryFull.
+	var windowless Mailbox
+	windowless.init(1)
 	for i := 0; i < MaxSettledClaims+50; i++ {
-		legacy.SettledClaims[fmt.Sprintf("mail-%04d", i)] = SettledClaim{
+		windowless.SettledClaims[fmt.Sprintf("mail-%04d", i)] = SettledClaim{
 			Token: fmt.Sprintf("token-%d", i), SettledAtUnix: int64(i),
 		}
 	}
-	legacy.SettledClaims["known-window"] = SettledClaim{Token: "keep", SettledAtUnix: 0, EnvelopeExpiresAtUnix: now + 1}
-	legacy.evictSettledClaims(now)
-	if len(legacy.SettledClaims) != MaxSettledClaims {
-		t.Fatalf("settled claims = %d, want the bound %d", len(legacy.SettledClaims), MaxSettledClaims)
-	}
-	if _, ok := legacy.SettledClaims["known-window"]; !ok {
-		t.Error("the count bound dropped a record that knows its window")
-	}
-	if _, ok := legacy.SettledClaims["mail-0000"]; ok {
-		t.Error("the oldest window-less record survived the bound")
+	windowless.evictSettledClaims(now)
+	if len(windowless.SettledClaims) != MaxSettledClaims+50 || !windowless.settledClaimsOverflow() {
+		t.Fatalf("window-less records were dropped by count: %d left, overflow=%v", len(windowless.SettledClaims), windowless.settledClaimsOverflow())
 	}
 }
 
