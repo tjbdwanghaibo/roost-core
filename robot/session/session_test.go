@@ -94,9 +94,9 @@ func newScriptedSession(t *testing.T) (*Session, *scriptedConn) {
 	return s, conn
 }
 
-// RR-20261005-NC-261（N12 观察 O8 前半）：Call 受调用方 ctx 约束，包括发送阶段。
-// 旧行为：Call 同步调用 conn.WritePackets，TCP 发送缓冲满（服务端不读）时写一直阻塞，Call 越过自己的超时，
-// 直到会话被关闭才返回；Notify 已经用 sendWithContext 受 ctx 约束，Call 没有。
+// Call 受调用方 ctx 约束，包括发送阶段：写被卡住（服务端不读、发送缓冲满）时 Call 在自己的超时
+// 返回，不等到会话关闭。
+// 历史：RR-20261005-NC-261
 func TestCallReturnsWhenTheWriteBlocksPastItsContext(t *testing.T) {
 	s, conn := newScriptedSession(t)
 	release := make(chan struct{})
@@ -128,9 +128,9 @@ func TestCallReturnsWhenTheWriteBlocksPastItsContext(t *testing.T) {
 	}
 }
 
-// RR-20261005-NC-262（N12 观察 O8 后半）：超时之后才到的应答（seq 非 0、已无等待者）丢弃，不当成推送。
-// 传输层约定 seq 0 才是推送（transport.Packet 注释）。旧行为：dispatch 找不到 pending 就落到推送分发，
-// 同 msg id 的 WaitPush / 推送 handler 收到一条旧应答；请求与应答共用 msg id 的协议里把旧应答当成了推送。
+// 超时之后才到的应答（seq 非 0、已无等待者）丢弃，不当成推送：传输层约定只有 seq 0 是推送，
+// 同 msg id 的 WaitPush / 推送 handler 收不到旧应答。
+// 历史：RR-20261005-NC-262
 func TestALateResponseIsNotDeliveredAsAPush(t *testing.T) {
 	s, conn := newScriptedSession(t)
 

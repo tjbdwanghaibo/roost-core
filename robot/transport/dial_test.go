@@ -1,12 +1,5 @@
 package transport
 
-// RR-20261005-NC-163：websocket 拨号受 ctx 与 DialTimeout 约束。
-//
-// Config.DialTimeout（Normalize 缺省 5s）与 Dial 的 ctx 只被 tcp 拨号使用；dialWebSocket 用
-// websocket.DialConfig，既不看 ctx 也没有超时。端点接受 TCP 却不回 HTTP 升级响应（把 ws 机器人
-// 指到了 TCP 玩家端口、网关卡住、黑洞代理）时，握手无限阻塞：connect 动作不返回，runner.Stop
-// 取消 ctx 也停不下这个机器人。
-
 import (
 	"context"
 	"net"
@@ -18,6 +11,10 @@ import (
 
 	"golang.org/x/net/websocket"
 )
+
+// websocket 拨号受 ctx 与 Config.DialTimeout 约束：端点接受 TCP 却不回 HTTP 升级响应（指错端口、
+// 网关卡住、黑洞代理）时，握手在超时或 ctx 取消时返回，connect 动作与 runner.Stop 不会被无限挡住。
+// 历史：RR-20261005-NC-163
 
 // silentListener 接受连接但从不回复。
 func silentListener(t *testing.T) string {

@@ -2,9 +2,10 @@ package robot
 
 import (
 	"errors"
-	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
 	"slices"
 	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
 )
 
 type stepFailSink struct {
@@ -50,7 +51,7 @@ func newStepBot(t *testing.T, sink *stepFailSink, simulate func(lockstep.Frame) 
 	return bot
 }
 
-func TestLockstepBotPromiseTransientSinkFailureKeepsTheBatchTail(t *testing.T) {
+func TestLockstepBotTransientSinkFailureKeepsTheBatchTail(t *testing.T) {
 	for _, mode := range []string{"input", "hash"} {
 		t.Run(mode, func(t *testing.T) {
 			sink := &stepFailSink{mode: mode, failures: 1}
@@ -89,7 +90,7 @@ func TestLockstepBotPromiseTransientSinkFailureKeepsTheBatchTail(t *testing.T) {
 	}
 }
 
-func TestLockstepBotPromiseSimulateFailureIsTerminal(t *testing.T) {
+func TestLockstepBotSimulateFailureIsTerminal(t *testing.T) {
 	sink := &stepFailSink{}
 	var applied []lockstep.FrameID
 	failed := false
@@ -124,7 +125,7 @@ func TestLockstepBotPromiseSimulateFailureIsTerminal(t *testing.T) {
 }
 
 // 保留的工作要有上界:sink 一直失败时进入 terminal,而不是让待应用队列无限增长。
-func TestLockstepBotPromisePendingApplyIsBounded(t *testing.T) {
+func TestLockstepBotPendingApplyIsBounded(t *testing.T) {
 	sink := &stepFailSink{mode: "input", failures: 1 << 30}
 	bot, err := NewLockstepBot(LockstepBotConfig{
 		Player: 1, Sink: sink, KeyframeInterval: 1, MaxPendingApply: 8,
@@ -145,7 +146,7 @@ func TestLockstepBotPromisePendingApplyIsBounded(t *testing.T) {
 }
 
 // HandleFrames 收的是调用方的帧,payload 是调用方的内存;保留到下次调用时必须是自己的副本。
-func TestLockstepBotPromiseRetainedFramesDoNotAliasCallerPayloads(t *testing.T) {
+func TestLockstepBotRetainedFramesDoNotAliasCallerPayloads(t *testing.T) {
 	sink := &stepFailSink{mode: "input", failures: 1}
 	var seen []byte
 	bot := newStepBot(t, sink, func(f lockstep.Frame) error {
@@ -190,7 +191,7 @@ func broadcastPackets(count int, depth int) [][]byte {
 	return packets
 }
 
-func TestLockstepBotPromiseRequestsCatchupOnAnyUnhealedGap(t *testing.T) {
+func TestLockstepBotRequestsCatchupOnAnyUnhealedGap(t *testing.T) {
 	sink := &gapSink{}
 	bot, err := NewLockstepBot(LockstepBotConfig{Player: 1, Sink: sink, KeyframeInterval: 1000})
 	if err != nil {
@@ -221,7 +222,7 @@ func TestLockstepBotPromiseRequestsCatchupOnAnyUnhealedGap(t *testing.T) {
 	}
 }
 
-func TestLockstepBotPromiseReRequestsAnAbandonedCatchup(t *testing.T) {
+func TestLockstepBotReRequestsAnAbandonedCatchup(t *testing.T) {
 	sink := &gapSink{}
 	bot, err := NewLockstepBot(LockstepBotConfig{Player: 1, Sink: sink, KeyframeInterval: 1000})
 	if err != nil {

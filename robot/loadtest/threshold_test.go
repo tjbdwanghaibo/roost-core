@@ -2,15 +2,40 @@ package loadtest_test
 
 import (
 	"context"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/loadtest"
 	"github.com/tjbdwanghaibo/roost-core/robot/runner"
 	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
-	"strings"
-	"testing"
-	"time"
 )
+
+func TestThresholdViolationFailsRun(t *testing.T) {
+	fake := &fakeRunner{delay: 20 * time.Millisecond, stats: runner.Stats{Started: 10, Success: 8, Failure: 2}}
+	m := newManager(t, fake, []loadtest.Threshold{
+		{Metric: "error_rate", Max: 0.10}, // actual 0.2 -> violated
+		{Metric: "p99", Max: 1.0},         // actual 5ms -> pass
+	}, 5*time.Millisecond)
+	if _, err := m.Start(context.Background(), loadtest.StartRequest{Profile: "smoke"}); err != nil {
+		t.Fatal(err)
+	}
+	done := waitDone(t, m)
+	if done.State != loadtest.StateFailed || done.StopReason != loadtest.StopReasonThreshold {
+		t.Fatalf("threshold verdict = %+v", done)
+	}
+	violated := 0
+	for _, result := range done.Thresholds {
+		if result.Violated {
+			violated++
+		}
+	}
+	if violated != 1 {
+		t.Fatalf("thresholds = %+v", done.Thresholds)
+	}
+}
 
 func TestThresholdsWithoutSamplesFailTheRun(t *testing.T) {
 	// 5 个机器人全部在场景中途被取消：没有一个完成的场景。

@@ -153,17 +153,57 @@ func TestSpecInterpreterRunsEquivalentTree(t *testing.T) {
 	}
 }
 
-func TestSpecRejectsBrokenDocuments(t *testing.T) {
-	for name, spec := range map[string]string{
-		"unknown key":    "scenarios:\n  - name: x\n    node: {action: a}\n    typo: 1\n",
-		"two node kinds": "scenarios:\n  - name: x\n    node: {action: a, wait: 1s}\n",
-		"empty node":     "scenarios:\n  - name: x\n    node: {}\n",
-		"bad duration":   "scenarios:\n  - name: x\n    node: {wait: soon}\n",
-		"no name":        "scenarios:\n  - node: {action: a}\n",
-		"duplicate":      "scenarios:\n  - name: x\n    node: {action: a}\n  - name: X\n    node: {action: a}\n",
-	} {
-		if _, err := scenario.ParseSpec([]byte(spec)); err == nil {
-			t.Fatalf("%s: accepted", name)
-		}
+type namedScenario string
+
+func (n namedScenario) Name() string                              { return string(n) }
+func (n namedScenario) Run(context.Context, *robot.Context) error { return nil }
+
+func expectText(t *testing.T, err error, text string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), text) {
+		t.Fatalf("error = %v, want it to contain %q", err, text)
+	}
+}
+
+// 场景按（归一化后的）名字被 spec 与管理命令寻址：无名或重名的场景会不可达或有歧义，注册时拒绝。
+func TestScenarioRegistryRefusesNamelessAndDuplicateScenarios(t *testing.T) {
+	r := scenario.NewRegistry()
+	expectText(t, r.Register(nil), "scenario is nil")
+	expectText(t, r.Register(namedScenario("  ")), "name is required")
+	if err := r.Register(namedScenario("Raid")); err != nil {
+		t.Fatal(err)
+	}
+	expectText(t, r.Register(namedScenario("raid")), `duplicate "raid"`)
+}
+
+// 声明式场景文档的每条拒绝规则按消息各钉一行：去掉任何一条规则恰好让一行变红。
+func TestSpecRefusesEachBrokenDocumentByMessage(t *testing.T) {
+	cases := map[string]struct{ spec, text string }{
+		"no scenarios":   {"scenarios: []\n", "spec has no scenarios"},
+		"no name":        {"scenarios:\n  - node: {action: a}\n", "spec scenario without a name"},
+		"duplicate":      {"scenarios:\n  - name: x\n    node: {action: a}\n  - name: X\n    node: {action: a}\n", `duplicate spec scenario "x"`},
+		"empty node":     {"scenarios:\n  - name: x\n    node: {}\n", "empty node"},
+		"two node kinds": {"scenarios:\n  - name: x\n    node: {action: a, wait: 1s}\n", "exactly one node kind"},
+		"unknown key":    {"scenarios:\n  - name: x\n    node: {action: a}\n    typo: 1\n", "parse spec"},
+		"bad duration":   {"scenarios:\n  - name: x\n    node: {wait: soon}\n", `wait: time: invalid duration "soon"`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := scenario.ParseSpec([]byte(tc.spec))
+			expectText(t, err, tc.text)
+		})
+	}
+}
+
+// nil 注册表不能注册；声明式树里的空节点报 "node is required"。
+// 历史：U-0149
+func TestRegistryAndSpecRefuseNilNodes(t *testing.T) {
+	var none *scenario.Registry
+	if err := none.Register(nil); err == nil || !strings.Contains(err.Error(), "registry is nil") {
+		t.Fatalf("Register on a nil registry = %v", err)
+	}
+	_, err := scenario.ParseSpec([]byte("scenarios:\n  - name: x\n    node:\n      sequence:\n        - action: a\n        - ~\n"))
+	if err == nil || !strings.Contains(err.Error(), "node is required") {
+		t.Fatalf("ParseSpec with a null sequence element = %v", err)
 	}
 }

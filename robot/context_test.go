@@ -9,8 +9,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/session"
 )
 
-// U-0147 · C2 · nightly gap map core `robot` 5/5：nil 上下文 / 无动作执行器不能 Do；
-// 捕获登记要求 key 与 handler，且没有会话时报 session.ErrClosed；步进 bot 缺 Sink 不能建。
+// nil 上下文 / 无动作执行器不能 Do；捕获登记要求 key 与 handler，没有会话时报 session.ErrClosed；
+// 步进 bot 缺 Sink 不能建。
+// 历史：U-0147
 func TestContextRefusesMissingRunnerSessionAndCaptureArguments(t *testing.T) {
 	ctx := context.Background()
 	var none *Context

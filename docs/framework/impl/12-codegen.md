@@ -384,7 +384,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### robot/action
 
-4 个实现文件、3 个测试文件。
+4 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -395,7 +395,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### robot
 
-4 个实现文件、7 个测试文件。
+4 个实现文件、4 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -406,7 +406,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### robot/loadtest
 
-2 个实现文件、6 个测试文件。
+2 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -423,7 +423,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### robot/runner
 
-1 个实现文件、2 个测试文件。
+1 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -431,7 +431,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### robot/scenario
 
-2 个实现文件、3 个测试文件。
+2 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -601,45 +601,36 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### robot/action
 
-- [call_test.go](../../../robot/action/call_test.go)：`TestRegisterCallConventions`、`TestRegisterCallMapFieldAndValidation`、`TestParamsChain`
-- [guards_promises_test.go](../../../robot/action/guards_promises_test.go)：`TestActionRegistryNilAndLookupGuards`、`TestWaitPushRequiresMsgParamAndSession`、`TestRegisterCallGuards`
-- [promises_test.go](../../../robot/action/promises_test.go)：`TestActionRegistryRefusesNamelessAndDuplicateActions`
+- [call_test.go](../../../robot/action/call_test.go)：`TestRegisterCallConventions`、`TestRegisterCallMapFieldAndValidation`、`TestParamsChain`、`TestRegisterCallGuards`
+- [registry_test.go](../../../robot/action/registry_test.go)：`TestActionRegistryRefusesNamelessAndDuplicateActions`、`TestActionRegistryNilAndLookupGuards`、`TestWaitPushRequiresMsgParamAndSession`
 
 ### robot
 
-- [capture_reconnect_promises_test.go](../../../robot/capture_reconnect_promises_test.go)：`TestPushCaptureIsReinstalledOnTheSessionAfterReconnect`
-- [coalescer_close_promises_test.go](../../../robot/coalescer_close_promises_test.go)：`TestCoalescerCloseReturnsAfterTheFinalFlush`
-- [context_guards_promises_test.go](../../../robot/context_guards_promises_test.go)：`TestContextRefusesMissingRunnerSessionAndCaptureArguments`
-- [lockstep_contract_test.go](../../../robot/lockstep_contract_test.go)：`TestLockstepBotPromiseTransientSinkFailureKeepsTheBatchTail`、`TestLockstepBotPromiseSimulateFailureIsTerminal`、`TestLockstepBotPromisePendingApplyIsBounded`、`TestLockstepBotPromiseRetainedFramesDoNotAliasCallerPayloads`、`TestLockstepBotPromiseRequestsCatchupOnAnyUnhealedGap`、`TestLockstepBotPromiseReRequestsAnAbandonedCatchup`
+- [context_test.go](../../../robot/context_test.go)：`TestContextRefusesMissingRunnerSessionAndCaptureArguments`
+- [lockstep_test.go](../../../robot/lockstep_test.go)：`TestLockstepBotTransientSinkFailureKeepsTheBatchTail`、`TestLockstepBotSimulateFailureIsTerminal`、`TestLockstepBotPendingApplyIsBounded`、`TestLockstepBotRetainedFramesDoNotAliasCallerPayloads`、`TestLockstepBotRequestsCatchupOnAnyUnhealedGap`；其余 1 项见文件
 - [robot_impl_test.go](../../../robot/robot_impl_test.go)：`TestKCPDialerEndToEnd`、`TestQUICDialerEndToEnd`、`TestQUICDialerRequiresALPN`、`TestLockstepBotsSurviveThirtyPercentLoss`、`TestLockstepBotRequestsCatchupOncePerGap`；其余 1 项见文件
-- [robot_test.go](../../../robot/robot_test.go)：`TestPacketCodecRoundTrip`、`TestSessionCallEchoAndPush`、`TestSessionCloseFansOutToPendingAndWaiters`、`TestTypedKeyAndBlackboard`、`TestCoalescerDedupsAndFlushes`；其余 3 项见文件
+- [robot_test.go](../../../robot/robot_test.go)：`TestPacketCodecRoundTrip`、`TestSessionCallEchoAndPush`、`TestSessionCloseFansOutToPendingAndWaiters`、`TestTypedKeyAndBlackboard`、`TestCoalescerDedupsAndFlushes`；其余 5 项见文件
 
 ### robot/loadtest
 
-- [duration_stop_reason_promises_test.go](../../../robot/loadtest/duration_stop_reason_promises_test.go)：`TestARunCutByItsDurationStopsWithReasonDuration`、`TestARunThatFinishesBeforeItsDurationIsCompleted`
-- [guards_promises_test.go](../../../robot/loadtest/guards_promises_test.go)：`TestManagerEntryPointsRefuseMissingPartsAndUnknownRuns`
-- [loadtest_test.go](../../../robot/loadtest/loadtest_test.go)：`TestManagerLifecycleAndSingleActiveRun`、`TestThresholdViolationFailsRun`、`TestAdminCommandsAndReport`、`TestAdminStartGate`
-- [run_series_lifecycle_promises_test.go](../../../robot/loadtest/run_series_lifecycle_promises_test.go)：`TestRunSeriesLeaveTheRegistryWithTheRunRecord`
-- [threshold_contract_test.go](../../../robot/loadtest/threshold_contract_test.go)：`TestThresholdsWithoutSamplesFailTheRun`、`TestQuantileThresholdFailsWhenTheHistogramSeriesWasDropped`、`TestQuantileThresholdJudgesTheObservedCostsNotABucketBound`、`TestThresholdFailureNamesTheThresholdAndTheActualValue`
+- [loadtest_test.go](../../../robot/loadtest/loadtest_test.go)：`TestManagerLifecycleAndSingleActiveRun`、`TestAdminCommandsAndReport`、`TestAdminStartGate`、`TestManagerEntryPointsRefuseMissingPartsAndUnknownRuns`、`TestARunCutByItsDurationStopsWithReasonDuration`；其余 2 项见文件
+- [threshold_test.go](../../../robot/loadtest/threshold_test.go)：`TestThresholdViolationFailsRun`、`TestThresholdsWithoutSamplesFailTheRun`、`TestQuantileThresholdFailsWhenTheHistogramSeriesWasDropped`、`TestQuantileThresholdJudgesTheObservedCostsNotABucketBound`、`TestThresholdFailureNamesTheThresholdAndTheActualValue`
 
 ### robot/runner
 
-- [runner_test.go](../../../robot/runner/runner_test.go)：`TestPoolExecutorRunsEveryRobotOnce`、`TestLoopingExecutorStopsAndCountsCanceled`、`TestStagedRampUpAndDown`、`TestArrivalRateExecutorLaunchesFreshRobots`、`TestRunnerUnknownScenarioFails`
-- [stage_ordinal_promises_test.go](../../../robot/runner/stage_ordinal_promises_test.go)：`TestStageRegrowDoesNotReuseOrdinals`
+- [runner_test.go](../../../robot/runner/runner_test.go)：`TestPoolExecutorRunsEveryRobotOnce`、`TestLoopingExecutorStopsAndCountsCanceled`、`TestStagedRampUpAndDown`、`TestArrivalRateExecutorLaunchesFreshRobots`、`TestRunnerUnknownScenarioFails`；其余 1 项见文件
 
 ### robot/scenario
 
-- [guards_promises_test.go](../../../robot/scenario/guards_promises_test.go)：`TestRegistryAndSpecRefuseNilNodes`
-- [promises_test.go](../../../robot/scenario/promises_test.go)：`TestScenarioRegistryRefusesNamelessAndDuplicateScenarios`、`TestSpecRefusesEachBrokenDocumentByMessage`
-- [scenario_test.go](../../../robot/scenario/scenario_test.go)：`TestCombinators`、`TestRandomIsSeededPerRobot`、`TestSpecInterpreterRunsEquivalentTree`、`TestSpecRejectsBrokenDocuments`
+- [scenario_test.go](../../../robot/scenario/scenario_test.go)：`TestCombinators`、`TestRandomIsSeededPerRobot`、`TestSpecInterpreterRunsEquivalentTree`、`TestScenarioRegistryRefusesNamelessAndDuplicateScenarios`、`TestSpecRefusesEachBrokenDocumentByMessage`；其余 1 项见文件
 
 ### robot/session
 
-- [session_promises_test.go](../../../robot/session/session_promises_test.go)：`TestCallReturnsWhenTheWriteBlocksPastItsContext`、`TestALateResponseIsNotDeliveredAsAPush`
+- [session_test.go](../../../robot/session/session_test.go)：`TestCallReturnsWhenTheWriteBlocksPastItsContext`、`TestALateResponseIsNotDeliveredAsAPush`
 
 ### robot/transport
 
-- [dial_bounds_promises_test.go](../../../robot/transport/dial_bounds_promises_test.go)：`TestWebSocketDialHonorsDialTimeoutAndContext`、`TestWebSocketDialStillReachesARealEndpoint`
+- [dial_test.go](../../../robot/transport/dial_test.go)：`TestWebSocketDialHonorsDialTimeoutAndContext`、`TestWebSocketDialStillReachesARealEndpoint`
 
 </details>
 
