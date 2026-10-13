@@ -29,6 +29,13 @@
   - activity：没有计划（Intent）的开窗条目不再在 grace 后回收、同 key Open 也不再为它补计划——归为畸形条目（同 key Open 报 `ErrConflict`，sweep 跳过并上报、名额保留，`MalformedWindowEntries` 列出，运维移除）；超过 `MaxPendingActivities` 的窗口不再按 `ScanAfter` 游标轮转扫描，sweep 在任何读之前报 `ErrConflict`；`Window.ScanAfter` 字段与 `sweep.opening_legacy_reclaimed` 计数删除。**升级前须排空旧版本的开窗条目。**
   - rank：请求账本只读 `:applied_v2` 的 JSON 环；旧版本的逗号分隔 `:applied` 账本不再读取与升级，带着它的 owner 提交 / 查名次报错（"retired comma format"），不当成空账本。**升级前须清除旧 `:applied` 字段。** 同时删除弃用别名 `rank.ErrConflictSentinel`，调用方改用 `rank.ErrConflict`。
   - mail：现行信封必须有过期时间，已结算 claim 都带窗口；不再按条数淘汰无窗口的旧已结算 claim——它被保留，超出上限时投递以 `ErrClaimHistoryFull` 拒绝，交运维处理。“未读不可淘汰”与 RequestID 去重不变。**升级前须清理旧邮箱中无窗口的已结算 claim。**
+  - Remote 快照副本：不带版本（`version <= 0`）的删除消息不再按"无版本删除"应用，与其他畸形消息一样被拒绝（`remote_entity: snapshot delete message has no version`，传输层记 handler 错误）；删除一律携带版本（7afc4c63）。**升级要求：先停旧进程再起新进程**，不让旧发布者与新副本混跑。
+  - Remote 控制库事务集合：只建当前的 `expires_at_ttl` TTL 索引，不再识别并替换旧名 / 旧键的 TTL 索引（d71aa7ac）。**升级要求：清空 Remote 控制库的事务集合，或先手工删除旧的 `created_at_ttl` 索引**——它若建在 `expires_at` 上，新索引同键不同名，启动建索引报冲突；若是更早按 `created_at` 过期的形态，不会报错，但会删掉未发布的提交。
+- Nest：`completionPump.stop` 一次超时返回后，重试的 stop 仍等待完成队列排空与 worker 池停止（以前第二次调用直接返回，排空未完成就继续停机），与三步停机契约一致（f8af5afc）。
+- Nest：Client 准入错误只归一化一次，队列满等错误文本不再重复同一段（e161459b）。
+- Entity：组件依赖拓扑排序在入度为 0 的候选里按组件类型排序，同一组注册得到确定的初始化顺序（以前随 map 遍历变化）（d610a1b6）。
+- 删除仓内无引用的导出 API（维护者 2026-10-13 批准"按推荐处理"；build、vet、`-tags integration` vet 均通过，外部调用方需改用现行入口），涉及包：`framework/nest`、`framework/nestwal`（`JetStreamEffectPublisher` 删除，`EffectEnvelope` 保留并移到 `effect_envelope.go`）、`framework/entity`、`framework/saga`（`SubscribeStep`）、`framework/cache`、`framework/configdata`、`framework/dataengine`（`Tracker.CommitSync` / `RollbackSync`）、`framework/sync/entitysync/policy`、`framework/sync/nettransport`、`infra/base/fctx`、`infra/base/goroutine`、`infra/base/safemap`、`infra/network/bus`、`infra/network/etcd`、`infra/network/servicerpc`、`infra/observe/admin`、`infra/observe/log`（`NewELog` 不再接受 option，`WithLevel` / `*f` 格式化方法删除）、`infra/storage/redis`；逐项清单见 5f719bef、d30f41fd、27313740、cd67e9d3。
+- 生成器模板、game-demo 模板与 wiring 配置 help 去掉过程代号、旧设计文档引用与 roost-kit / kit 旧路径，重新生成 `*_gen.go`、golden 与 kitconfig 快照；生成代码只差注释与 help / 消息文本。
 
 - Nest 执行池统一为 short/long/io：配置、Stats、指标标签、fctx 身份和生成 Sender 同步迁移；唯一配置 option 为 `NestOptionWithWorkerPools(short, long, io)`，强制准备使用 `SendOptionIO`，不保留旧别名。补齐 statslog 与健康队列汇总遗漏的 long 池，调度和 ID tail 语义不变；迁移表见 docs/framework/NEST-AWAIT.md。
 
