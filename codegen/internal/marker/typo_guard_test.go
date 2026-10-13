@@ -21,14 +21,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/webroute"
 )
 
-// RR-20261006-56：标记键名拼错必须报错，并点名键、文件和行。
-//
-// 旧行为：//roost:nest、//roost:dao、//roost:redisdao、//roost:attribute（以及
-// protocol / msg / proto / view / table / object / rpc）只取认识的键，拼错的键
-// 被当成“没写”取缺省值：`durabilty=strict` 生成出 async，`dbscop=sid` 写进全局库，
-// 生成器不报错，生成物看起来正常。
-//
-// 这里对每一种带选项的标记，各跑一次它所属的生成器，喂一个拼错的键。
+// 标记键名拼错必须报错，并点名键、文件和行：拼错的键不能被当成“没写”取缺省值（`durabilty=strict` 生成出 async、
+// `dbscop=sid` 写进全局库）。这里对每一种带选项的标记，各跑一次它所属的生成器，喂一个拼错的键。历史：RR-20261006-56。
 
 // typoCase is one marker kind fed a misspelt key through its own generator.
 type typoCase struct {
@@ -140,11 +134,8 @@ func TestEveryMarkerRefusesAMisspeltKey(t *testing.T) {
 	}
 }
 
-// TestEveryMarkerKindHasASpecAndAGuardCase keeps the list above complete: a
-// generator that starts reading a new marker kind must give it a Spec (so
-// CheckFile / Parse can refuse its typos) and a case in typoCases. It also
-// refuses a hand-written `//[a-z]+:` pattern, which accepts any prefix and
-// bypasses this package (G5: protocol and id.go used to do that).
+// TestEveryMarkerKindHasASpecAndAGuardCase 保持上面的清单完整：生成器开始读一种新标记，就必须给它 Spec（CheckFile / Parse
+// 才能拒绝拼错）并在 typoCases 里加一例；也拒绝手写的 `//[a-z]+:` 模式，它接受任意前缀、绕过本包。
 func TestEveryMarkerKindHasASpecAndAGuardCase(t *testing.T) {
 	specs := map[string]bool{}
 	for _, spec := range marker.Specs {
