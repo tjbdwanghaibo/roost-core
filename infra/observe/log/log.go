@@ -23,7 +23,7 @@ var (
 	defaultLogger = slog.Default()
 	outputFile    io.Closer
 	// consoleOutput 是 Init 配置的非文件输出（Output 或 stdout），文件 sink 时为 nil；
-	// sinkOptions 是那次 Init 的选项。Close 用它们重建默认 logger（RR-20261005-NC-165）。
+	// sinkOptions 是那次 Init 的选项。Close 用它们重建默认 logger。
 	consoleOutput io.Writer
 	sinkOptions   Options
 )
@@ -116,7 +116,7 @@ func newLogger(output io.Writer, opts Options) *slog.Logger {
 }
 
 // Close 关闭 Init 打开的日志文件，并把默认 logger 换成同格式、只写非文件输出的 logger；
-// 只配了文件时改写 stderr（RR-20261005-NC-165）。
+// 只配了文件时改写 stderr。
 //
 // 关闭之后仍有日志要写：app.run 返回后生成的 main 用 slog 写 "server exit" 和退出原因，停机超时时
 // 仍在运行的 Serve / Shutdown / Mod 也会继续打日志。旧 Close 只关文件、默认 logger 仍写已关闭的
@@ -338,7 +338,7 @@ type namedSink struct {
 }
 
 // fanOutWriter 把每一行写给全部 sink：某个 sink 出错不影响其余 sink，错误按 sink 计入
-// log.write_errors，返回第一个错误（RR-20261005-NC-263）。旧实现用 io.MultiWriter，它在第一个写
+// log.write_errors，返回第一个错误。不能用 io.MultiWriter：它在第一个写
 // 失败处停止——控制台排在前面，控制台出错时文件也收不到这一行；而 slog 吞掉 handler 的写错误，
 // 丢行没有任何痕迹。
 type fanOutWriter []namedSink

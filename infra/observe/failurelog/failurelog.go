@@ -227,7 +227,7 @@ func (l *RedisList) labels(result string) metrics.Labels {
 	return labels
 }
 
-// 原子脚本与非原子降级（RR-20261005-NC-160）。
+// 原子脚本与非原子降级。
 //
 // 每个写操作先发一条 Lua 脚本。降级路径（RPUSH+LTRIM、LREM、LLEN+DEL）只为“适配器没有 Lua”
 // 准备：替身的 Eval 返回 (nil, nil)，表示脚本根本没有执行。生产驱动的 Eval 不会这样返回
@@ -235,8 +235,8 @@ func (l *RedisList) labels(result string) metrics.Labels {
 //
 // Eval 返回错误时不再降级：连接断开、读超时、ctx 到期都可能发生在服务端已经执行完脚本之后，
 // 再走降级就是第二次执行——追加两次、多删同值记录、把清空之后新到的死信也删掉。结果未知原样交给
-// 调用方（bus 的 DeadLetter 会返回错误，由消息重投决定下一步），与 cache RefHMap（NC-21）和
-// 驱动脚本不重放（NC-100）同一契约。脚本执行了但返回值解析不了，同样按“已执行、结果未知”报错。
+// 调用方（bus 的 DeadLetter 会返回错误，由消息重投决定下一步），与 cache RefHMap 和
+// redis 驱动脚本不重放是同一契约。脚本执行了但返回值解析不了，同样按“已执行、结果未知”报错。
 
 // errUnexpectedScriptResult 表示脚本已执行，但返回值不是约定的整数。
 var errUnexpectedScriptResult = errors.New("failurelog: unexpected script result")

@@ -213,10 +213,6 @@ func (l *ELog) writef(level slog.Level, format string, skip int, args ...any) {
 	l.writeWithSkip(level, fmt.Sprintf(format, args...), skip)
 }
 
-func (l *ELog) write(level slog.Level, msg string, args ...any) {
-	l.writeWithSkip(level, msg, 4, args...)
-}
-
 func (l *ELog) writeWithSkip(level slog.Level, msg string, skip int, args ...any) {
 	if !l.Enabled(level) {
 		return

@@ -2,11 +2,11 @@ package servicemetrics
 
 import "github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 
-// 默认的生产 Reporter（维护者决定 C6，docs/feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md）。
+// 默认的生产 Reporter（维护者决定）。
 //
-// 服务事件写进进程的 metrics 注册表，由 kit ops 的 /metrics 以 Prometheus 文本导出。指标名只有下面
-// 六个，服务、操作、原因与对象都放在标签里——之前队列 key、看板 ID 拼在深度名字里，每个对象就是一个新
-// 指标名（N12 O1）。注册表虽能删除序列，但 Reporter 不拥有对象生命周期，无法安全决定删除时点，所以不加按运行 / 请求 / 实体变化的标签。
+// 服务事件写进进程的 metrics 注册表，由 ops 的 /metrics 以 Prometheus 文本导出。指标名只有下面
+// 六个，服务、操作、原因与对象都放在标签里——若把队列 key、看板 ID 拼进名字，每个对象就是一个新
+// 指标名。注册表虽能删除序列，但 Reporter 不拥有对象生命周期，无法安全决定删除时点，所以不加按运行 / 请求 / 实体变化的标签。
 const (
 	// MetricAccepted counts Accepted events (labels service, op).
 	MetricAccepted = "service.accepted.total"
@@ -24,7 +24,7 @@ const (
 )
 
 // MetricsReporter is the production Reporter: it writes every event into the
-// process's metrics registry, which kit ops serves on /metrics.
+// process's metrics registry, which ops serves on /metrics.
 //
 // It resolves the registry on every report (metrics.DefaultRegistry) rather
 // than when it is built. Collaborators are called while the App is being

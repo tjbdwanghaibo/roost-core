@@ -12,7 +12,7 @@ import (
 )
 
 // rotateRetryInterval 是打开新分片失败之后到下一次重试的间隔。失败期间继续写当前分片，
-// 不在每一行上重试 MkdirAll + Open（RR-20261005-NC-263）。
+// 不在每一行上重试 MkdirAll + Open。
 const rotateRetryInterval = time.Second
 
 type timeRotatingFileOptions struct {
@@ -71,7 +71,7 @@ func (w *timeRotatingFileWriter) Write(p []byte) (int, error) {
 	if err := w.rotateLocked(w.nowFunc()); err != nil && w.file == nil {
 		return 0, err
 	}
-	// 新分片打不开时 rotateLocked 保留了当前分片：这一行照常写进去，不丢（RR-20261005-NC-263）。
+	// 新分片打不开时 rotateLocked 保留了当前分片：这一行照常写进去，不丢。
 	return w.file.Write(p)
 }
 
@@ -99,7 +99,7 @@ func (w *timeRotatingFileWriter) rotateLocked(now time.Time) error {
 
 	next, err := w.openSlice(slice)
 	if err != nil {
-		// 旧实现在这里返回错误、调用方丢掉整行，且每一行都重试一次。现在计数、记下重试时刻；
+		// 不在这里直接返回错误（那样调用方丢掉整行，且每一行都重试一次）：计数、记下重试时刻；
 		// 调用方有当前分片时继续写它，没有时（首次打开）才报错。
 		metrics.IncCounter("log.rotate_failures", nil, 1)
 		w.retryAt = now.Add(rotateRetryInterval)

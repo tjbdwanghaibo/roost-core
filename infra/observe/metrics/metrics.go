@@ -80,7 +80,7 @@ type timer struct {
 type histogram struct {
 	buckets  [17]atomic.Int64 // cumulative-on-export; stored as per-bucket counts
 	overflow atomic.Int64
-	// minNanos / maxNanos bound every quantile estimate (RR-20261006-27);
+	// minNanos / maxNanos bound every quantile estimate;
 	// minNanos starts at math.MaxInt64 (newHistogram).
 	minNanos    atomic.Int64
 	maxNanos    atomic.Int64
@@ -122,7 +122,7 @@ func (h *histogram) observe(nanos int64) {
 // the winning bucket — the Prometheus histogram_quantile shape — with the
 // interpolation range narrowed to the observed [min, max].
 //
-// RR-20261006-27: interpolating over the bare bucket bounds put the estimate
+// interpolating over the bare bucket bounds put the estimate
 // outside every sample. Buckets double, so the last sample of a bucket was
 // reported at the bucket's upper bound — up to twice its real value; with 10
 // samples p95 is that last sample, and a drill whose 10 robots all finished
@@ -347,8 +347,7 @@ func (r *Registry) HistogramQuantile(name string, labels Labels, q float64) time
 
 // HistogramCount returns the observation count of one histogram series.
 // Zero means "no data" — the series was never observed or was dropped by the
-// series limit — which a caller judging a quantile must not read as "0 ms"
-// (RR-20261005-NC-161).
+// series limit — which a caller judging a quantile must not read as "0 ms".
 func (r *Registry) HistogramCount(name string, labels Labels) int64 {
 	if r == nil || name == "" {
 		return 0

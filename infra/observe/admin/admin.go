@@ -285,7 +285,7 @@ func DecodePayload[T any](cmd Command) (T, error) {
 
 func cloneMeta(meta CommandMeta) CommandMeta {
 	meta.TargetScope = slices.Clone(meta.TargetScope)
-	// RR-20261004-NC-03：非 nil 空 map 同样可变，数组中的 JSON 容器也必须递归隔离。
+	// 非 nil 空 map 同样可变，数组中的 JSON 容器也必须递归隔离。
 	meta.PayloadSchema = cloneMap(meta.PayloadSchema)
 	return meta
 }

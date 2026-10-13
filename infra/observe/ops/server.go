@@ -120,7 +120,7 @@ func (m *Server) Start() error {
 	server := httpserver.NewServer(m.addr, engine,
 		httpserver.WithMaxBodyBytes(opsMaxJSONBodyBytes),
 		httpserver.WithTimeouts(0, 0, writeTimeout, 0))
-	// 在 Start 里同步 bind（RR-20261005-NC-230）：Start 返回 nil 就表示探针与运维端点已经在监听。
+	// 在 Start 里同步 bind：Start 返回 nil 就表示探针与运维端点已经在监听。
 	// 端口被占用时启动失败，而不是让进程在没有 /healthz、/readyz 的情况下继续跑——同机部署的健康检查
 	// 那时探到的是占着端口的另一个进程。
 	listener, err := net.Listen("tcp", m.addr)
@@ -179,7 +179,7 @@ func (m *Server) StopWithContext(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// RR-20261004-NC-04：取消/超时不等于 handler 已排空，错误时保留同一 server 供重试。
+	// 取消/超时不等于 handler 已排空，错误时保留同一 server 供重试。
 	// Shutdown 在锁外等待，不能阻塞其他调用取得自己的 context/关闭结果。
 	if err := server.Shutdown(ctx); err != nil {
 		return err
@@ -204,7 +204,7 @@ func (m *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 //
 // Degraded 算就绪（维护者决定 D1，2026-10-06）：有降级项时仍返回 200、`ok` 为 true，
 // 用 `degraded: true` 与 `degraded_dependencies`（每项的 name / status / message / error）标出，
-// `dependencies` 照样列出全部 checker。之前 Degraded 与 Fail 一样 503，k8s 会把单副本服务唯一的
+// `dependencies` 照样列出全部 checker。若 Degraded 也回 503，k8s 会把单副本服务唯一的
 // endpoint 摘掉，entitysync 在 80% 容量边界上还会来回翻转。/healthz 不受影响。
 func (m *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	deps := health.Snapshot{OK: true}
@@ -241,11 +241,6 @@ func (m *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	_, _ = w.Write(metrics.PrometheusText(snapshot))
 }
-
-// statsCollector is what the statslog Mod publishes: one observation of the
-// process — goroutines, heap, entity counts by category and kind, Nest
-// dispatcher figures — as a JSON-marshalable record.
-type statsCollector interface{ CollectStats() any }
 
 // handleStats serves the current runtime observation. It is the JSON twin of
 // the statslog JSONL line and of the gauges on /metrics, for an operator who
@@ -377,8 +372,8 @@ func (m *Server) authorized(r *http.Request) bool {
 // is case-insensitive per RFC 7235, so `bearer x` must work as well as
 // `Bearer x`.
 //
-// 没有 `Bearer ` 前缀的 Authorization 不交出任何凭据（维护者第十二轮决定，N01b 观察 O-P1）：
-// 之前原样返回整个头，`Authorization: <token>` 也能通过。不构成绕过（仍要知道 token），但
+// 没有 `Bearer ` 前缀的 Authorization 不交出任何凭据（维护者决定）：不能原样返回整个头让
+// `Authorization: <token>` 也通过。这不构成绕过（仍要知道 token），但
 // Authorization 头按 RFC 7235 必须带 scheme，别的 scheme（Basic 等）更不能被当成 admin token。
 // 不带 scheme 的客户端改用 `Authorization: Bearer <token>` 或 `X-Admin-Token: <token>`。
 func bearerToken(header string) string {

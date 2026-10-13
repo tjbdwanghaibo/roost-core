@@ -31,7 +31,7 @@ type Result struct {
 // 聚合规则（维护者决定 D1，2026-10-06）：Degraded 算可用。OK 为真表示没有任何 checker 为
 // Fail——Degraded 不影响 OK，只置 Degraded；Fail 与未知的 Status 一律让 OK 为假。Degraded 的
 // 含义是“还能服务、需要关注”（单实例锁续期结果未知、容量接近上限、写许可用满、积压告警），
-// Fail 是“不能再安全工作”。kit/ops 的 /readyz 据此只在 Fail（或就绪位为假）时返回 503，
+// Fail 是“不能再安全工作”。ops 的 /readyz 据此只在 Fail（或就绪位为假）时返回 503，
 // 并在响应体里列出降级项。
 type Snapshot struct {
 	OK       bool     `json:"ok"`
@@ -63,11 +63,11 @@ func (f CheckerFunc) CheckHealth(ctx context.Context) Result {
 	return f(ctx)
 }
 
-// DefaultCheckTimeout 是每个 checker 的期限（维护者第十二轮决定，N01b 观察 O-H1）。
+// DefaultCheckTimeout 是每个 checker 的期限（维护者决定）。
 //
 // Snapshot 并发调用全部 checker，各自最多等这么久；到期没返回的报 Fail（原因写明期限），不拖住
 // 整个快照。取 1.5s：k8s 探针 timeoutSeconds 是 2s，并发之后整个 /readyz 在探针断开之前答完；
-// Redis / Mongo / etcd 的 checker 自带 2s ping 超时，现在被这个期限截短。
+// Redis / Mongo / etcd 的 checker 自带 2s ping 超时，会被这个期限截短。
 const DefaultCheckTimeout = 1500 * time.Millisecond
 
 type Registry struct {
