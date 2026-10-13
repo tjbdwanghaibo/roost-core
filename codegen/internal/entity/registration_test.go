@@ -11,10 +11,8 @@ import (
 	"testing"
 )
 
-// U-0160 · C2 · RR-20260909-04：同一个包里放两个 //roost:entity 实体，生成器此前给每个文件都
-// 声明包级 registerEntityOnce / RegisterEntity，生成成功、消费者编译报 redeclared。现在每个实体
-// 的注册函数按实体名命名，包里只有一个聚合的 RegisterEntity（带 //roost:register 标记）调用它们。
-// 这里不编译消费者（要拉 core），而是解析生成物的包级声明：重名即编译失败的直接原因。
+// 同一个包里的多个 //roost:entity 实体：每个实体的注册函数按实体名命名，包里只有一个聚合的 RegisterEntity
+// （带 //roost:register 标记）调用它们。这里不编译消费者（要拉 core），而是解析生成物的包级声明：重名即编译失败的直接原因。
 func TestGenerateGivesEachEntityInAPackageDistinctRegistrationSymbols(t *testing.T) {
 	dir := t.TempDir()
 	player, err := os.ReadFile(filepath.Join("testdata", "player.go"))
@@ -138,4 +136,45 @@ func keys(m map[string]string) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func TestGeneratedBusinessPoolRegistration(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "player.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pool := range []string{"short", "long", "invalid"} {
+		t.Run(pool, func(t *testing.T) {
+			dir := t.TempDir()
+			source := strings.Replace(string(raw), "//roost:entity entityKind=EntityKindPlayer", "//roost:entity entityKind=EntityKindPlayer businessPool="+pool, 1)
+			if err := os.WriteFile(filepath.Join(dir, "player.go"), []byte(source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			defs, pkg, err := parseDir(dir)
+			if pool == "invalid" {
+				if err == nil {
+					t.Fatal("invalid pool accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := filepath.Join(dir, "player_gen_wire.go")
+			if _, err := generate(defs[0], pkg, out, true); err != nil {
+				t.Fatal(err)
+			}
+			generated, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "entity.BusinessPoolShort"
+			if pool == "long" {
+				want = "entity.BusinessPoolLong"
+			}
+			if !strings.Contains(string(generated), want) {
+				t.Fatalf("generated registration omitted %s", want)
+			}
+		})
+	}
 }
