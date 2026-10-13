@@ -142,13 +142,12 @@ func (f *fakeRedis) Eval(_ context.Context, script string, keys []string, args .
 		defer f.mu.Unlock()
 		f.evalCalls++
 		member, _ := f.hget(keys[0], strArgs[0])
-		ring, _ := f.hget(keys[0], strArgs[0]+":applied")
-		if v2, found := f.hget(keys[0], strArgs[0]+":applied_v2"); found {
-			ring = "2\n" + v2
-		} else {
-			ring = "1\n" + ring
+		ring, _ := f.hget(keys[0], strArgs[0]+":applied_v2")
+		retired := int64(0)
+		if _, found := f.hget(keys[0], strArgs[0]+":applied"); found {
+			retired = 1
 		}
-		return []any{member, ring}, nil
+		return []any{member, ring, retired}, nil
 
 	case strings.Contains(script, "ZADD"):
 		// swapScript
@@ -161,12 +160,7 @@ func (f *fakeRedis) Eval(_ context.Context, script string, keys []string, args .
 		zkey, okey := keys[0], keys[1]
 		owner, expected, next, requestID, ring := strArgs[0], strArgs[1], strArgs[2], strArgs[3], strArgs[4]
 		stored, exists := f.hget(okey, owner)
-		previous, _ := f.hget(okey, owner+":applied")
-		if v2, found := f.hget(okey, owner+":applied_v2"); found {
-			previous = "2\n" + v2
-		} else {
-			previous = "1\n" + previous
-		}
+		previous, _ := f.hget(okey, owner+":applied_v2")
 		if previous != strArgs[5] {
 			return []any{int64(0), stored}, nil
 		}
@@ -192,7 +186,6 @@ func (f *fakeRedis) Eval(_ context.Context, script string, keys []string, args .
 		f.hset(okey, owner, next)
 		if requestID != "" {
 			f.hset(okey, owner+":applied_v2", ring)
-			delete(f.hashes[okey], owner+":applied")
 		}
 		return []any{int64(1), next}, nil
 
@@ -211,7 +204,6 @@ func (f *fakeRedis) Eval(_ context.Context, script string, keys []string, args .
 			delete(f.zsets[zkey], stored)
 		}
 		delete(f.hashes[okey], owner)
-		delete(f.hashes[okey], owner+":applied")
 		delete(f.hashes[okey], owner+":applied_v2")
 		return int64(1), nil
 	}

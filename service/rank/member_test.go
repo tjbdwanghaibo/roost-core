@@ -162,30 +162,28 @@ func TestDecodeEntryRefusesEachMalformedMember(t *testing.T) {
 	}
 }
 
-func TestLegacyRequestRingUpgradesWithoutDroppingPriorIDs(t *testing.T) {
+// 请求账本只有 JSON 环一种形态。旧版本写下的逗号分隔 ":applied" 账本不再读取、不再升级：带着它的 owner
+// 提交与查名次都被明确拒绝，不把它当成空账本（那会让它记得的请求被重复应用），已存的分数不变。
+// 历史：此前按 v1 读出并在下次提交时升级为 v2；维护者 2026-10-13 决定不兼容旧数据。
+func TestARetiredCommaRequestLedgerIsRefused(t *testing.T) {
 	s, f := newStore(t)
 	ctx := context.Background()
 	submit(t, s, 1, 10, UpdateSet, "")
 	f.mu.Lock()
 	f.hset(s.ownerKey(arena()), "1:applied", "old-a,old-b")
 	f.mu.Unlock()
-	submit(t, s, 1, 1, UpdateAdd, "new,comma")
-	replay := submit(t, s, 1, 100, UpdateAdd, "old-b")
-	if replay.Score.Value != 11 {
-		t.Fatalf("legacy proof lost: %+v", replay)
+	if _, err := s.Submit(ctx, arena(), Score{OwnerID: 1, Value: 1}, UpdateAdd, "old-b"); err == nil || !strings.Contains(err.Error(), "retired comma format") {
+		t.Fatalf("Submit over a retired ledger = %v, want it refused", err)
 	}
-	replay = submit(t, s, 1, 100, UpdateAdd, "new,comma")
-	if replay.Score.Value != 11 {
-		t.Fatal(replay)
+	if _, _, err := s.Rank(ctx, arena(), 1); err == nil || !strings.Contains(err.Error(), "retired comma format") {
+		t.Fatalf("Rank over a retired ledger = %v, want it refused", err)
 	}
-	if err := s.Remove(ctx, arena(), 1); err != nil {
-		t.Fatal(err)
-	}
-	fresh := submit(t, s, 1, 7, UpdateAdd, "new,comma")
-	if fresh.Score.Value != 7 {
-		t.Fatalf("removed owner retained ledger: %+v", fresh)
+	page, err := s.Page(ctx, arena(), 0, 1)
+	if err != nil || len(page.Entries) != 1 || page.Entries[0].Score.Value != 10 {
+		t.Fatal(page, err)
 	}
 }
+
 func TestMalformedRequestRingFailsClosed(t *testing.T) {
 	s, f := newStore(t)
 	submit(t, s, 1, 10, UpdateSet, "")

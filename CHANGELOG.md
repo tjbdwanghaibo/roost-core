@@ -11,6 +11,7 @@
   - 历史 WAL 中“Remote 写 + lease fence”混合记录：不再投影为 Remote Rejected 并卸载重载（RR-20260926-19 的历史路径）。投影器遇到它以 `engine.ErrRetiredRemoteLeaseFenceRecord` fatal，不写库、不推进 checkpoint，WAL 原样保留；准入处的 `ErrRemoteLeaseFenceUnsupported` 与原生 saga 步骤的 lease fence 不变。**升级前须用旧版本排空 WAL。**
   - account：删除登录时回查未转义渠道的旧账号 ID（旧记录不再被沿用，登录得到转义后的 ID；同 ID 存量账号身份不符仍报 `ErrIdentityInvalid`）；缺建角计划的 slot（含有角色但无计划的“旧已发布”形态）统一归为 malformed，建角报 `ErrConflict`、`ResolvePendingCreation` 报 `ErrNotResolvable`；缺 `CreationID` 的角色不可选、不可校验会话、不可改资料（`ErrConflict`）。**升级前须清理旧账号 / slot / 角色数据。**
   - activity：没有计划（Intent）的开窗条目不再在 grace 后回收、同 key Open 也不再为它补计划——归为畸形条目（同 key Open 报 `ErrConflict`，sweep 跳过并上报、名额保留，`MalformedWindowEntries` 列出，运维移除）；超过 `MaxPendingActivities` 的窗口不再按 `ScanAfter` 游标轮转扫描，sweep 在任何读之前报 `ErrConflict`；`Window.ScanAfter` 字段与 `sweep.opening_legacy_reclaimed` 计数删除。**升级前须排空旧版本的开窗条目。**
+  - rank：请求账本只读 `:applied_v2` 的 JSON 环；旧版本的逗号分隔 `:applied` 账本不再读取与升级，带着它的 owner 提交 / 查名次报错（"retired comma format"），不当成空账本。**升级前须清除旧 `:applied` 字段。**
 
 - Nest 执行池统一为 short/long/io：配置、Stats、指标标签、fctx 身份和生成 Sender 同步迁移；唯一配置 option 为 `NestOptionWithWorkerPools(short, long, io)`，强制准备使用 `SendOptionIO`，不保留旧别名。补齐 statslog 与健康队列汇总遗漏的 long 池，调度和 ID tail 语义不变；迁移表见 docs/framework/NEST-AWAIT.md。
 

@@ -171,7 +171,7 @@ func TestIdempotencyRingIsBoundedAndRecognisesRecentRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tokens := strings.Split(ring, ","); len(tokens) > maxAppliedRequests {
+	if tokens := decodeRing(ring); len(tokens) > maxAppliedRequests {
 		t.Fatalf("the request ring holds %d ids, bound is %d", len(tokens), maxAppliedRequests)
 	}
 }

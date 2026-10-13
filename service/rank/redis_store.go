@@ -97,7 +97,7 @@ func (s *RedisStore) ownerKey(board Board) string {
 //
 // KEYS[1] board sorted set, KEYS[2] owner->member hash.
 // ARGV: owner id, expected member (empty for create), next member,
-// request id (may be empty), next JSON request ring, previous tagged ring.
+// request id (may be empty), next JSON request ring, previous JSON ring ("" when none).
 const swapScript = `
 local ownerID  = ARGV[1]
 local expected = ARGV[2]
@@ -106,8 +106,7 @@ local reqID    = ARGV[4]
 local ring     = ARGV[5]
 local previousRing = ARGV[6]
 
-local v2 = redis.call("HGET", KEYS[2], ownerID .. ":applied_v2")
-local currentRing = v2 and ("2\n" .. v2) or ("1\n" .. (redis.call("HGET", KEYS[2], ownerID .. ":applied") or ""))
+local currentRing = redis.call("HGET", KEYS[2], ownerID .. ":applied_v2") or ""
 if currentRing ~= previousRing then return {0, redis.call("HGET", KEYS[2], ownerID) or ""} end
 
 local stored = redis.call("HGET", KEYS[2], ownerID)
@@ -121,7 +120,6 @@ redis.call("ZADD", KEYS[1], 0, nextMember)
 redis.call("HSET", KEYS[2], ownerID, nextMember)
 if reqID ~= "" then
   redis.call("HSET", KEYS[2], ownerID .. ":applied_v2", ring)
-  redis.call("HDEL", KEYS[2], ownerID .. ":applied")
 end
 return {1, nextMember}
 `
@@ -132,7 +130,6 @@ local stored = redis.call("HGET", KEYS[2], ownerID)
 if not stored then return 0 end
 redis.call("ZREM", KEYS[1], stored)
 redis.call("HDEL", KEYS[2], ownerID)
-redis.call("HDEL", KEYS[2], ownerID .. ":applied")
 redis.call("HDEL", KEYS[2], ownerID .. ":applied_v2")
 return 1
 `
@@ -226,24 +223,31 @@ func (s *RedisStore) casStoreLabel() string { return s.cfg.Prefix + ":o:" }
 // Deprecated: use ErrConflict.
 var ErrConflictSentinel = ErrConflict
 
+// readOwner returns the owner's stored member and its JSON request ring ("" when
+// none). The comma-separated ":applied" ledger an older build wrote is not read:
+// its presence is refused, so a replay it would have caught is never applied
+// twice silently (no compatibility, maintainer 2026-10-13).
 func (s *RedisStore) readOwner(ctx context.Context, okey string, ownerID int64) (member string, ring string, err error) {
 	ret, err := s.client.Eval(ctx, `
 local m = redis.call("HGET", KEYS[1], ARGV[1])
-local a = redis.call("HGET", KEYS[1], ARGV[1] .. ":applied")
-local v2 = redis.call("HGET", KEYS[1], ARGV[1] .. ":applied_v2")
-return {m or "", v2 and ("2\n" .. v2) or ("1\n" .. (a or ""))}
+local retired = redis.call("HEXISTS", KEYS[1], ARGV[1] .. ":applied")
+local ring = redis.call("HGET", KEYS[1], ARGV[1] .. ":applied_v2")
+return {m or "", ring or "", retired}
 `, []string{okey}, strconv.FormatInt(ownerID, 10))
 	if err != nil {
 		return "", "", err
 	}
 	items, ok := ret.([]any)
-	if !ok || len(items) != 2 {
+	if !ok || len(items) != 3 {
 		return "", "", fmt.Errorf("rank: unexpected owner read result %T", ret)
 	}
+	if retired, err := luaInt(items[2]); err != nil || retired != 0 {
+		return "", "", fmt.Errorf("rank: owner %d holds a request ledger in the retired comma format; clear it offline", ownerID)
+	}
 	member, ring = luaString(items[0]), luaString(items[1])
-	if strings.HasPrefix(ring, "2\n") {
+	if ring != "" {
 		var ids []string
-		if err := json.Unmarshal([]byte(ring[2:]), &ids); err != nil {
+		if err := json.Unmarshal([]byte(ring), &ids); err != nil {
 			return "", "", fmt.Errorf("rank: invalid request ledger: %w", err)
 		}
 	}
@@ -469,19 +473,15 @@ func appendRing(ring, requestID string) string {
 	return string(encoded)
 }
 
+// decodeRing reads a JSON request ring; readOwner has already refused one that
+// does not decode.
 func decodeRing(ring string) []string {
-	if strings.HasPrefix(ring, "2\n") {
-		var ids []string
-		_ = json.Unmarshal([]byte(ring[2:]), &ids)
-		return ids
-	}
-	if strings.HasPrefix(ring, "1\n") {
-		ring = ring[2:]
-	}
 	if ring == "" {
 		return nil
 	}
-	return strings.Split(ring, ",")
+	var ids []string
+	_ = json.Unmarshal([]byte(ring), &ids)
+	return ids
 }
 
 func luaString(value any) string {
