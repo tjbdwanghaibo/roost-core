@@ -154,7 +154,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/attribute
 
-5 个实现文件、5 个测试文件。
+5 个实现文件、3 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -166,7 +166,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/cfggen
 
-1 个实现文件、8 个测试文件。
+1 个实现文件、3 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -174,7 +174,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/dao
 
-8 个实现文件、10 个测试文件。
+8 个实现文件、6 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -189,7 +189,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/entity
 
-8 个实现文件、16 个测试文件。
+8 个实现文件、10 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -204,7 +204,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/errcode
 
-1 个实现文件、4 个测试文件。
+1 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -212,7 +212,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/eventgen
 
-6 个实现文件、7 个测试文件。
+6 个实现文件、5 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -243,7 +243,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/nest
 
-5 个实现文件、10 个测试文件。
+5 个实现文件、6 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -255,7 +255,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/project
 
-1 个实现文件、2 个测试文件。
+1 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -263,7 +263,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/protocol
 
-9 个实现文件、7 个测试文件。
+10 个实现文件、6 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -279,7 +279,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/registry
 
-3 个实现文件、4 个测试文件。
+3 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -345,7 +345,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/servicerpc
 
-6 个实现文件、7 个测试文件。
+6 个实现文件、4 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -358,7 +358,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/tablegen
 
-1 个实现文件、10 个测试文件。
+1 个实现文件、4 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -366,7 +366,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/webroute
 
-3 个实现文件、5 个测试文件。
+3 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -474,65 +474,47 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/attribute
 
-- [representable_promises_test.go](../../../codegen/internal/attribute/representable_promises_test.go)：`TestParseDirRejectsAttributesTheWireCannotCarry`
 - [retirement_test.go](../../../codegen/internal/attribute/retirement_test.go)：`TestRunRetiresOnlyOwnedProfileAfterLastMarkerIsRemoved`
 - [run_test.go](../../../codegen/internal/attribute/run_test.go)：`TestRunGeneratesProfile`
-- [util_promises_test.go](../../../codegen/internal/attribute/util_promises_test.go)：`TestParsePositiveIntRefusesNonPositiveValues`
-- [validation_test.go](../../../codegen/internal/attribute/validation_test.go)：`TestParseDirRejectsEachProfileViolation`
+- [validation_test.go](../../../codegen/internal/attribute/validation_test.go)：`TestParseDirRejectsEachProfileViolation`、`TestParseDirRejectsAttributesTheWireCannotCarry`、`TestParsePositiveIntRefusesNonPositiveValues`
 
 ### codegen/internal/cfggen
 
-- [consumer_promises_test.go](../../../codegen/internal/cfggen/consumer_promises_test.go)：`TestCfggenDisabledIndexesCompile`
-- [global_rules_promises_test.go](../../../codegen/internal/cfggen/global_rules_promises_test.go)：`TestCfggenGlobalRulesBecomeObjectDefRules`、`TestCfggenGlobalWithoutRulesKeepsItsRegistration`、`TestCfggenGlobalRulesStillRejectWhatAnObjectCannotMean`
-- [groups_exhausted_promises_test.go](../../../codegen/internal/cfggen/groups_exhausted_promises_test.go)：`TestExportRefusesABeanWithEveryFieldExcluded`
-- [groups_test.go](../../../codegen/internal/cfggen/groups_test.go)：`TestCfggenExportsOnlyTheTargetGroups`、`TestCfggenGroupsFlagSelectsAnotherTarget`、`TestCfggenWithoutGroupsExportsEverything`、`TestCfggenRefusesEachInvalidGroupUse`
-- [main_test.go](../../../codegen/internal/cfggen/main_test.go)：`TestCfggenGeneratesStructsRegistrationAndAccessors`、`TestCfggenAcceptsObjectsAliasForGlobals`、`TestCfggenRejectsBrokenMeta`、`TestCfggenIndexFalseDisablesIndex`、`TestCfggenKeywordFieldNamesGenerateCompilableParams`；其余 5 项见文件
-- [meta_promises_test.go](../../../codegen/internal/cfggen/meta_promises_test.go)：`TestCfggenRejectsEachFieldRuleForTheStatedReason`
-- [namespace_promises_test.go](../../../codegen/internal/cfggen/namespace_promises_test.go)：`TestCfggenRejectsReservedBeanNamesBeforeWriting`、`TestCfggenNonCollidingBeanNamesCompile`
-- [validation_messages_test.go](../../../codegen/internal/cfggen/validation_messages_test.go)：`TestCfggenRejectsBrokenMetaForTheStatedReason`
+- [globals_test.go](../../../codegen/internal/cfggen/globals_test.go)：`TestCfggenGlobalRulesBecomeObjectDefRules`、`TestCfggenGlobalWithoutRulesKeepsItsRegistration`、`TestCfggenGlobalRulesStillRejectWhatAnObjectCannotMean`
+- [groups_test.go](../../../codegen/internal/cfggen/groups_test.go)：`TestCfggenExportsOnlyTheTargetGroups`、`TestCfggenGroupsFlagSelectsAnotherTarget`、`TestCfggenWithoutGroupsExportsEverything`、`TestCfggenRefusesEachInvalidGroupUse`、`TestExportRefusesABeanWithEveryFieldExcluded`
+- [main_test.go](../../../codegen/internal/cfggen/main_test.go)：`TestCfggenGeneratesStructsRegistrationAndAccessors`、`TestCfggenAcceptsObjectsAliasForGlobals`、`TestCfggenRejectsBrokenMetaForTheStatedReason`、`TestCfggenIndexFalseDisablesIndex`、`TestCfggenKeywordFieldNamesGenerateCompilableParams`；其余 9 项见文件
 
 ### codegen/internal/dao
 
-- [failfast_test.go](../../../codegen/internal/dao/failfast_test.go)：`TestParseRejectsOrphanMarker`、`TestParseRejectsMarkerBindingMultipleStructs`、`TestRunSweepsOrphansWhenAllDefinitionsRemoved`、`TestParseAcceptsMarkerAboveDocComment`、`TestParseRejectsMarkerWithoutParameters`；其余 5 项见文件
-- [gen_promises_test.go](../../../codegen/internal/dao/gen_promises_test.go)：`TestGenerateRedisDaoRefusesEachIncompleteDefinition`、`TestGenerateDaoRefusesUnknownDatabaseScope`
+- [failfast_test.go](../../../codegen/internal/dao/failfast_test.go)：`TestParseRejectsOrphanMarker`、`TestParseRejectsMarkerBindingMultipleStructs`、`TestRunSweepsOrphansWhenAllDefinitionsRemoved`、`TestParseAcceptsMarkerAboveDocComment`、`TestParseRejectsMarkerWithoutParameters`；其余 8 项见文件
+- [fields_test.go](../../../codegen/internal/dao/fields_test.go)：`TestAFieldWhoseLowercaseNameIsAKeywordGenerates`、`TestANestedFieldWhoseLowercaseNameIsAKeywordGenerates`、`TestNestedStructsPersistTheirFieldsNotTheDirtyHook`、`TestTheDaoDocumentCarriesNestedWireFormsNotMarshalers`、`TestTransientFieldsHaveMutatorsAndStayOutOfStorageAndSync`
 - [golden_test.go](../../../codegen/internal/dao/golden_test.go)：`TestGoldenGeneratedOutput`
-- [keyword_field_promises_test.go](../../../codegen/internal/dao/keyword_field_promises_test.go)：`TestAFieldWhoseLowercaseNameIsAKeywordGenerates`、`TestANestedFieldWhoseLowercaseNameIsAKeywordGenerates`
-- [nested_bson_promises_test.go](../../../codegen/internal/dao/nested_bson_promises_test.go)：`TestNestedStructsPersistTheirFieldsNotTheDirtyHook`、`TestTheDaoDocumentCarriesNestedWireFormsNotMarshalers`
-- [nocoll_promises_test.go](../../../codegen/internal/dao/nocoll_promises_test.go)：`TestANoCollectionDaoKeepsSyncAndDropsEveryStoragePath`、`TestANoCollectionDaoWithPersistentFieldsIsRefusedByName`、`TestTheNoCollectionMarkerRefusesContradictions`、`TestACollectionDaoIsUnchangedByTheNoCollectionFlag`、`TestSwitchingADaoToNoCollectionRetiresItsStoragePaths`
+- [nocollection_test.go](../../../codegen/internal/dao/nocollection_test.go)：`TestANoCollectionDaoKeepsSyncAndDropsEveryStoragePath`、`TestANoCollectionDaoWithPersistentFieldsIsRefusedByName`、`TestTheNoCollectionMarkerRefusesContradictions`、`TestACollectionDaoIsUnchangedByTheNoCollectionFlag`、`TestSwitchingADaoToNoCollectionRetiresItsStoragePaths`
 - [parse_test.go](../../../codegen/internal/dao/parse_test.go)：`TestParseDefDir`、`TestGenerateDao`、`TestGenerateNested`、`TestGenerateNestedPointerGetterDoesNotAddPointerLevel`、`TestFieldVarNamePreservesInitialisms`；其余 4 项见文件
-- [redis_marker_promises_test.go](../../../codegen/internal/dao/redis_marker_promises_test.go)：`TestParseRefusesEachMalformedRedisMarkerAndConflictingDaoTag`
-- [schema_version_promises_test.go](../../../codegen/internal/dao/schema_version_promises_test.go)：`TestDaoSchemaVersionComesFromTheMarker`、`TestDaoSchemaVersionDefaultsToOne`、`TestDaoSchemaVersionRefusesNonsense`
-- [transient_field_promises_test.go](../../../codegen/internal/dao/transient_field_promises_test.go)：`TestTransientFieldsHaveMutatorsAndStayOutOfStorageAndSync`
+- [schema_version_test.go](../../../codegen/internal/dao/schema_version_test.go)：`TestDaoSchemaVersionComesFromTheMarker`、`TestDaoSchemaVersionDefaultsToOne`、`TestDaoSchemaVersionRefusesNonsense`
 
 ### codegen/internal/entity
 
 - [category_contract_test.go](../../../codegen/internal/entity/category_contract_test.go)：`TestGeneratedWiringImportsEveryPackageItQualifies`、`TestEntityMarkerCategoryIsGeneratedDirectly`、`TestEntityMarkerWithoutCategoryKeepsTheRuntimeLookup`、`TestEntityMarkerRefusesAMalformedCategory`
-- [gen_promises_test.go](../../../codegen/internal/entity/gen_promises_test.go)：`TestGenerateRefusesManagedRemoteWithoutRemoteBase`、`TestParseDirRejectsMarkerParameterGivenTwice`
-- [guard_tests_promises_test.go](../../../codegen/internal/entity/guard_tests_promises_test.go)：`TestGenerateEmitsAndReconcilesRemoteGuardTests`
-- [marker_promises_test.go](../../../codegen/internal/entity/marker_promises_test.go)：`TestParseDirRejectsMarkerNotAttachedToStruct`、`TestParseDirRejectsMarkerAboveNonStruct`、`TestParseDirRejectsUnknownMarkerParameters`、`TestParseDirRejectsInvalidMarkerValues`、`TestParseDirAcceptsEveryDocumentedMarkerForm`
-- [mirror_promises_test.go](../../../codegen/internal/entity/mirror_promises_test.go)：`TestRemoteMirrorEntityMarkerIsAMigrationError`、`TestMirrorDTOGeneratesReadOnlyView`、`TestMirrorDTOOnlyPackageIsDiscoveredAndRetired`、`TestMirrorMarkerValidation`
-- [multi_entity_package_promises_test.go](../../../codegen/internal/entity/multi_entity_package_promises_test.go)：`TestGenerateGivesEachEntityInAPackageDistinctRegistrationSymbols`
-- [nocoll_dao_promises_test.go](../../../codegen/internal/entity/nocoll_dao_promises_test.go)：`TestANoPersistEntityWiresANoCollectionDaoByItsRegistryKey`、`TestACollectionDaoIsStillWiredByItsCollection`、`TestAStoredEntityCannotUseANoCollectionDao`
-- [output_multi_entity_promises_test.go](../../../codegen/internal/entity/output_multi_entity_promises_test.go)：`TestExplicitOutputRefusesMoreThanOneEntityInAPackage`
+- [marker_test.go](../../../codegen/internal/entity/marker_test.go)：`TestParseDirRejectsMarkerNotAttachedToStruct`、`TestParseDirRejectsMarkerAboveNonStruct`、`TestParseDirRejectsUnknownMarkerParameters`、`TestParseDirRejectsInvalidMarkerValues`、`TestParseDirAcceptsEveryDocumentedMarkerForm`；其余 3 项见文件
+- [mirror_test.go](../../../codegen/internal/entity/mirror_test.go)：`TestRemoteMirrorEntityMarkerIsAMigrationError`、`TestMirrorDTOGeneratesReadOnlyView`、`TestMirrorDTOOnlyPackageIsDiscoveredAndRetired`、`TestMirrorMarkerValidation`
+- [nocollection_test.go](../../../codegen/internal/entity/nocollection_test.go)：`TestANoPersistEntityWiresANoCollectionDaoByItsRegistryKey`、`TestACollectionDaoIsStillWiredByItsCollection`、`TestAStoredEntityCannotUseANoCollectionDao`
 - [parse_test.go](../../../codegen/internal/entity/parse_test.go)：`TestParseDir`、`TestGenerate`、`TestGenerateRemoteManagedV2Participant`、`TestGeneratePreservesManualSyncMethods`、`TestToSnake`
-- [remote_contract_test.go](../../../codegen/internal/entity/remote_contract_test.go)：`TestRemoteCapableMarkerIsRejectedWithTheCategoryReplacement`、`TestRemoteManagedEntityRejectsServerScopedDao`
+- [registration_test.go](../../../codegen/internal/entity/registration_test.go)：`TestGenerateGivesEachEntityInAPackageDistinctRegistrationSymbols`、`TestGeneratedBusinessPoolRegistration`
+- [remote_contract_test.go](../../../codegen/internal/entity/remote_contract_test.go)：`TestRemoteCapableMarkerIsRejectedWithTheCategoryReplacement`、`TestRemoteManagedEntityRejectsServerScopedDao`、`TestGenerateEmitsAndReconcilesRemoteGuardTests`
 - [retirement_test.go](../../../codegen/internal/entity/retirement_test.go)：`TestRunRetiresEntityWireAfterLastMarkerRemoved`、`TestRunMovesRegistrationWhenFirstSiblingIsRetired`
 - [run_test.go](../../../codegen/internal/entity/run_test.go)：`TestRunReturnsFlagErrors`
 - [sync_contract_test.go](../../../codegen/internal/entity/sync_contract_test.go)：`TestSyncNamespaceRejectsABareIdentifier`、`TestSyncNamespaceAcceptsLiteralsAndQualifiedConstants`、`TestGeneratedSyncBlockOnlyNamesFieldsCoreHas`、`TestRetiredPackerMarkerIsRefused`、`TestPackerWithoutSyncIsRefused`
 
 ### codegen/internal/errcode
 
-- [ast_test.go](../../../codegen/internal/errcode/ast_test.go)：`TestExtractDefinitionsIgnoresCommentAndStringLiterals`
 - [export_test.go](../../../codegen/internal/errcode/export_test.go)：`TestExtractDefinitionsAndWriteCSV`
-- [promises_test.go](../../../codegen/internal/errcode/promises_test.go)：`TestExtractDefinitionsRejectsADuplicateCode`
-- [scan_promises_test.go](../../../codegen/internal/errcode/scan_promises_test.go)：`TestExtractDefinitionsRefusesWhatItCannotRead`
+- [scan_test.go](../../../codegen/internal/errcode/scan_test.go)：`TestExtractDefinitionsIgnoresCommentAndStringLiterals`、`TestExtractDefinitionsRefusesWhatItCannotRead`
 
 ### codegen/internal/eventgen
 
-- [args_promises_test.go](../../../codegen/internal/eventgen/args_promises_test.go)：`TestRunNamesUnexpectedPositionalArguments`
 - [golden_test.go](../../../codegen/internal/eventgen/golden_test.go)：`TestGoldenHandlerOutput`
-- [handler_promises_test.go](../../../codegen/internal/eventgen/handler_promises_test.go)：`TestScanGameDirRefusesUnparseableSource`、`TestScanGameDirRejectsHandlerForUndeclaredEvent`、`TestScanGameDirAcceptsDeclaredHandlers`
-- [handler_test.go](../../../codegen/internal/eventgen/handler_test.go)：`TestScanFile`、`TestScanGameDir`、`TestRecvVar`
+- [handler_test.go](../../../codegen/internal/eventgen/handler_test.go)：`TestScanFile`、`TestScanGameDir`、`TestRecvVar`、`TestScanGameDirRefusesUnparseableSource`、`TestScanGameDirRejectsHandlerForUndeclaredEvent`；其余 1 项见文件
 - [parse_test.go](../../../codegen/internal/eventgen/parse_test.go)：`TestParseEventDir`、`TestConstName`、`TestGenerateDefs`、`TestGenerateTypes`、`TestGenerateTypeImpl`
 - [retirement_test.go](../../../codegen/internal/eventgen/retirement_test.go)：`TestRunRetiresEventTypesAndHandlerAfterLastDefinition`、`TestScanGameDirRetiresOnlyRemovedReceiver`
 - [run_test.go](../../../codegen/internal/eventgen/run_test.go)：`TestRunReturnsFlagErrors`
@@ -544,36 +526,29 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/nest
 
-- [generated_signatures_test.go](../../../codegen/internal/nest/generated_signatures_test.go)：`TestABlankParameterNameGeneratesUsableCode`
-- [handler_contract_test.go](../../../codegen/internal/nest/handler_contract_test.go)：`TestParseFileRejectsDuplicateRemoteAliasesWithinAndAcrossFiles`、`TestModuleDiscoveryRejectsBrokenOrMissingGoMod`、`TestParseFileRefusesValueReceiversAndBadTargetDeclarations`、`TestGeneratePipelinedHandlerMeta`
+- [generated_signatures_test.go](../../../codegen/internal/nest/generated_signatures_test.go)：`TestABlankParameterNameGeneratesUsableCode`、`TestHandlerSideGenerationDoesNotImportReturnOnlyPackages`
+- [handler_contract_test.go](../../../codegen/internal/nest/handler_contract_test.go)：`TestParseFileRefusesValueReceiversAndBadTargetDeclarations`、`TestParseFileRejectsDuplicateRemoteAliasesWithinAndAcrossFiles`、`TestModuleDiscoveryRejectsBrokenOrMissingGoMod`、`TestGeneratePipelinedHandlerMeta`、`TestParseFileRejectsRemainingRemoteTagViolations`；其余 1 项见文件
 - [nest_test.go](../../../codegen/internal/nest/nest_test.go)：`TestParseFile`、`TestValidateTransactionOptionsRejectsLegacyDirty`、`TestParseFileReadsRemoteRequestTagsFromPackageFiles`、`TestGenerate`、`TestGenerateMultipleNonErrorReturns`；其余 7 项见文件
-- [promises_test.go](../../../codegen/internal/nest/promises_test.go)：`TestParseFileRejectsRemainingRemoteTagViolations`、`TestOneSourceFileCannotMixHandlerReceivers`
 - [retirement_test.go](../../../codegen/internal/nest/retirement_test.go)：`TestRunRetiresNestOutputsAfterLastMarkerRemoved`、`TestRunWithoutSenderRetiresOnlySenderOutputs`
-- [generated_signatures_test.go](../../../codegen/internal/nest/generated_signatures_test.go)：`TestHandlerSideGenerationDoesNotImportReturnOnlyPackages`
 - [run_test.go](../../../codegen/internal/nest/run_test.go)：`TestRunReturnsFlagErrors`
-- [sender_guard_test_promises_test.go](../../../codegen/internal/nest/sender_guard_test_promises_test.go)：`TestGenerateSenderGuardTest`
+- [sender_guard_test.go](../../../codegen/internal/nest/sender_guard_test.go)：`TestGenerateSenderGuardTest`
 
 ### codegen/internal/project
 
-- [module_test.go](../../../codegen/internal/project/module_test.go)：`TestDiscoverDerivesImportAndPackage`、`TestDiscoverRejectsDirectoryOutsideModule`、`TestPackageNameFallsBackToGeneratedFiles`
-- [package_promises_test.go](../../../codegen/internal/project/package_promises_test.go)：`TestPackageNameRefusesADirectoryWithTwoPackages`
+- [module_test.go](../../../codegen/internal/project/module_test.go)：`TestDiscoverDerivesImportAndPackage`、`TestDiscoverRejectsDirectoryOutsideModule`、`TestPackageNameFallsBackToGeneratedFiles`、`TestPackageNameRefusesADirectoryWithTwoPackages`
 
 ### codegen/internal/protocol
 
+- [controllers_test.go](../../../codegen/internal/protocol/controllers_test.go)：`TestControllerScaffoldsPreserveBusinessAndFollowMethods`、`TestControllerScaffoldRefusesFilenameConflict`
 - [csharp_test.go](../../../codegen/internal/protocol/csharp_test.go)：`TestCSharpCLIIDsAndRetirement`
-- [definition_promises_test.go](../../../codegen/internal/protocol/definition_promises_test.go)：`TestParseRejectsEachValueAndReferenceViolation`
 - [golden_test.go](../../../codegen/internal/protocol/golden_test.go)：`TestGoldenProtocolOutput`
-- [guards_promises_test.go](../../../codegen/internal/protocol/guards_promises_test.go)：`TestParseRejectsEachMarkerViolation`、`TestValidateDefinitionsEnforcesIDAndEnumInvariants`、`TestBootstrapRequiresHandlerImportBaseWhenControllersExist`
 - [protocol_test.go](../../../codegen/internal/protocol/protocol_test.go)：`TestParseAndGenerateProtocol`、`TestRunDiscoversTargetModule`、`TestDuplicateMessageIDRejected`
 - [retirement_test.go](../../../codegen/internal/protocol/retirement_test.go)：`TestRunRetiresOutputsWhenLastDefinitionIsRemoved`、`TestRunRetiresHandlersButKeepsEmptyBootstrap`、`TestRunPreservesUnrecognizedFilesWhenDefinitionsAreEmpty`、`TestRunRetiresOnlyRemovedHandlerDomain`、`TestRunDoesNotRetireOutputsBeforeEmptyBootstrapIsValidated`
-- [validation_test.go](../../../codegen/internal/protocol/validation_test.go)：`TestParseRejectsEachStructuralViolation`
+- [validation_test.go](../../../codegen/internal/protocol/validation_test.go)：`TestParseRejectsEachStructuralViolation`、`TestParseRejectsEachValueAndReferenceViolation`、`TestParseRejectsEachMarkerViolation`、`TestValidateDefinitionsEnforcesIDAndEnumInvariants`、`TestBootstrapRequiresHandlerImportBaseWhenControllersExist`
 
 ### codegen/internal/registry
 
-- [entity_alias_promises_test.go](../../../codegen/internal/registry/entity_alias_promises_test.go)：`TestAggregateReservesItsFixedImportNames`
-- [promises_test.go](../../../codegen/internal/registry/promises_test.go)：`TestScanReportsAnUnparsableFileInsteadOfDroppingItsRegistrations`、`TestRenderChecksTheErrorOfErrorReturningRegistrations`
-- [registry_test.go](../../../codegen/internal/registry/registry_test.go)：`TestScanOrdersByPhaseThenOrderThenPath`、`TestScanIsDeterministicAcrossRuns`、`TestScanRejectsUnusableMarkers`、`TestScanIgnoresTestdataVendorAndTestFiles`、`TestGeneratedAggregateParsesAndImportsWhatItUses`；其余 7 项见文件
-- [validate_promises_test.go](../../../codegen/internal/registry/validate_promises_test.go)：`TestGeneratedAggregateValidatesTheEntityRegistry`、`TestGeneratedAggregateValidatesEvenWithNoRegistrations`
+- [registry_test.go](../../../codegen/internal/registry/registry_test.go)：`TestScanOrdersByPhaseThenOrderThenPath`、`TestScanIsDeterministicAcrossRuns`、`TestScanRejectsUnusableMarkers`、`TestScanIgnoresTestdataVendorAndTestFiles`、`TestGeneratedAggregateParsesAndImportsWhatItUses`；其余 12 项见文件
 
 ### codegen/internal/roost
 
@@ -640,33 +615,21 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 ### codegen/internal/servicerpc
 
 - [golden_test.go](../../../codegen/internal/servicerpc/golden_test.go)：`TestGoldenTransport`、`TestGenerationIsDeterministic`、`TestGeneratedSourceIsValidGo`、`TestWireTypesAreUnexported`、`TestAnAffinityMarkerReachesTheGeneratedClient`；其余 8 项见文件
-- [halves_promises_test.go](../../../codegen/internal/servicerpc/halves_promises_test.go)：`TestEitherHalfCanBeEmittedAloneIntoAnotherDirectory`、`TestDirAcceptsAnImportPathResolvedInTheOutModule`
-- [method_rules_promises_test.go](../../../codegen/internal/servicerpc/method_rules_promises_test.go)：`TestBuildServiceRefusesDuplicateMethodsAndMalformedDerivedAffinity`
-- [parse_test.go](../../../codegen/internal/servicerpc/parse_test.go)：`TestParsesAnAnnotatedInterface`、`TestAnUnmarkedInterfaceIsIgnored`、`TestRefusals`、`TestParsingIsDeterministic`、`TestAnUnsafeTypeInsideAPassedStructIsRefused`；其余 15 项见文件
-- [remaining_promises_test.go](../../../codegen/internal/servicerpc/remaining_promises_test.go)：`TestUnsupportedWireShapesAreRejectedAtTheNamedField`、`TestReliableMarkerCannotSilentlyPromiseAProtocol`、`TestDerivedAffinityRejectsExpressionsInsteadOfMethodNames`、`TestTicketIDsWireNameKeepsPluralAcronymTogether`、`TestAssemblyCollisionIsCheckedWhereCodeWillBeWritten`
+- [halves_test.go](../../../codegen/internal/servicerpc/halves_test.go)：`TestEitherHalfCanBeEmittedAloneIntoAnotherDirectory`、`TestDirAcceptsAnImportPathResolvedInTheOutModule`、`TestTransportHalfImportsCoreOnlyAndAssemblyHalfOwnsTheMods`
+- [parse_test.go](../../../codegen/internal/servicerpc/parse_test.go)：`TestParsesAnAnnotatedInterface`、`TestAnUnmarkedInterfaceIsIgnored`、`TestRefusals`、`TestParsingIsDeterministic`、`TestAnUnsafeTypeInsideAPassedStructIsRefused`；其余 21 项见文件
 - [retirement_test.go](../../../codegen/internal/servicerpc/retirement_test.go)：`TestRunRetiresTransportWhenInterfaceMarkerIsRemoved`、`TestRunRetiresOnlyItsAssemblyHalf`
-- [split_promises_test.go](../../../codegen/internal/servicerpc/split_promises_test.go)：`TestTransportHalfImportsCoreOnlyAndAssemblyHalfOwnsTheMods`
 
 ### codegen/internal/tablegen
 
-- [args_promises_test.go](../../../codegen/internal/tablegen/args_promises_test.go)：`TestRunNamesUnexpectedPositionalArguments`
-- [check_json_promises_test.go](../../../codegen/internal/tablegen/check_json_promises_test.go)：`TestCheckJSONEnforcesTheDeclaredRules`、`TestRefDeclarationsAreResolvedAtGeneration`
-- [csv_rules_test.go](../../../codegen/internal/tablegen/csv_rules_test.go)：`TestReadCSVRecordsEnforcesDeclaredRules`、`TestReadCSVRecordsSkipsTitleTypeAndRuleRows`、`TestWriteGeneratedRefusesToOverwriteWithoutForce`
-- [key_case_promises_test.go](../../../codegen/internal/tablegen/key_case_promises_test.go)：`TestCheckJSONRejectsMisspelledKeys`、`TestCSVHeaderIsCaseSensitive`
-- [legacy_manifest_promises_test.go](../../../codegen/internal/tablegen/legacy_manifest_promises_test.go)：`TestLegacyManifestUntrackedJSONErrorTellsRecoverySteps`
-- [main_test.go](../../../codegen/internal/tablegen/main_test.go)：`TestParseMetaRootUsesTargetProjectModulePath`
-- [remaining_promises_test.go](../../../codegen/internal/tablegen/remaining_promises_test.go)：`TestUnlabelledFieldsRoundTripThroughGeneratedJSON`、`TestUnknownTableKeyIsRejected`、`TestObjectCSVRejectsMultipleDataRows`、`TestGeneratedLoaderAndObjectConverterMatchSchema`
-- [retirement_test.go](../../../codegen/internal/tablegen/retirement_test.go)：`TestConvertCSVToJSONRetiresOwnedDataAndPreservesManualData`、`TestConvertCSVToJSONRefusesEditedOrLegacyUnownedRetirement`
-- [rules_single_source_promises_test.go](../../../codegen/internal/tablegen/rules_single_source_promises_test.go)：`TestOneTagDrivesTheGenerationCheckAndTheGeneratedLoader`
+- [main_test.go](../../../codegen/internal/tablegen/main_test.go)：`TestParseMetaRootUsesTargetProjectModulePath`、`TestUnlabelledFieldsRoundTripThroughGeneratedJSON`、`TestUnknownTableKeyIsRejected`、`TestObjectCSVRejectsMultipleDataRows`、`TestGeneratedLoaderAndObjectConverterMatchSchema`
+- [retirement_test.go](../../../codegen/internal/tablegen/retirement_test.go)：`TestConvertCSVToJSONRetiresOwnedDataAndPreservesManualData`、`TestConvertCSVToJSONRefusesEditedOrLegacyUnownedRetirement`、`TestLegacyManifestUntrackedJSONErrorTellsRecoverySteps`
+- [rules_test.go](../../../codegen/internal/tablegen/rules_test.go)：`TestReadCSVRecordsEnforcesDeclaredRules`、`TestReadCSVRecordsSkipsTitleTypeAndRuleRows`、`TestWriteGeneratedRefusesToOverwriteWithoutForce`、`TestCheckJSONEnforcesTheDeclaredRules`、`TestRefDeclarationsAreResolvedAtGeneration`；其余 3 项见文件
 - [run_test.go](../../../codegen/internal/tablegen/run_test.go)：`TestRunReturnsFlagErrors`
 
 ### codegen/internal/webroute
 
-- [pattern_promises_test.go](../../../codegen/internal/webroute/pattern_promises_test.go)：`TestGenerateRejectsMalformedPatternsWithoutChangingOutput`、`TestParseAcceptsChiPatterns`
-- [promises_test.go](../../../codegen/internal/webroute/promises_test.go)：`TestParseFileRefusesEachBadMarkerByMessage`、`TestParseFileRefusesRawRouteWithTypedRequest`、`TestParseFileRefusesEachSignatureDefectSeparately`、`TestGenerateDirRefusesMixedPackagesInOneDirectory`
 - [retirement_test.go](../../../codegen/internal/webroute/retirement_test.go)：`TestGenerateDirRetiresLastRouteWithoutRemovingManualFile`
-- [signature_promises_test.go](../../../codegen/internal/webroute/signature_promises_test.go)：`TestParseFileRefusesAHandlerWhoseSecondResultIsNotError`
-- [webroute_test.go](../../../codegen/internal/webroute/webroute_test.go)：`TestParseJSONRoute`、`TestParseRejectsInvalidHandler`、`TestGenerateRoutes`、`TestGenerateRejectsDuplicateRoute`
+- [webroute_test.go](../../../codegen/internal/webroute/webroute_test.go)：`TestParseJSONRoute`、`TestParseRejectsInvalidHandler`、`TestGenerateRoutes`、`TestGenerateRejectsDuplicateRoute`、`TestGenerateRejectsMalformedPatternsWithoutChangingOutput`；其余 5 项见文件
 
 ### robot/action
 
