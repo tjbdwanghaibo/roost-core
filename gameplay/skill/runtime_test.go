@@ -226,27 +226,34 @@ func stringsReplaceOnce(t *testing.T, input, old, replacement string) string {
 
 // BenchmarkActivateFinishingCast 覆盖 Activate → startLocked（准入、冻结输入、建立施法、memory 默认值、登记、准备）
 // 与 enter 流程里 executeOperation 的控制流分支（sequence、parallel、if/else、无间隔 repeat、effect、finish）。
-// 每轮在新的 Host 与 Runtime 上（不计时）做一次完整的立即结束施法：终态施法与世界历史会累积，复用会让成本随轮数增长。
+// mixed 每种分支走一次；control_heavy 用 repeat 放大控制流分支的执行次数。每轮在新的 Host 与 Runtime 上（不计时）
+// 做一次完整的立即结束施法：终态施法与世界历史会累积，复用会让成本随轮数增长。
 func BenchmarkActivateFinishingCast(b *testing.B) {
 	environment := abilityTestEnvironment()
 	mana := func(amount string) string {
 		return `{"flow":"effect","effect":{"type":"resource","target":"$caster","resource":"mana","operation":"set","amount":` + amount + `}}`
 	}
-	flow := `{"flow":"sequence","steps":[` +
-		`{"flow":"parallel","branches":[` + mana("10") + `,` + mana("20") + `]},` +
-		`{"flow":"if","condition":{"op":"eq","args":[1,1]},"then":` + mana("30") + `,"else":` + mana("40") + `},` +
-		`{"flow":"repeat","times":4,"index_as":"i","do":` + mana("50") + `},` +
-		`{"flow":"finish"}]}`
-	program, diagnostics := Compile(mustParseJSON(b, abilityTestSkillJSON("bench", `{"mode":"tap"}`, 0, flow)), environment)
-	requireNoErrors(b, diagnostics)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		b.StopTimer()
-		runtime := NewRuntime(runtimeTestHost(environment), RuntimeOptions{})
-		b.StartTimer()
-		if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
-			b.Fatal(err)
-		}
+	branch := `{"flow":"if","condition":{"op":"eq","args":[1,1]},"then":` + mana("30") + `,"else":` + mana("40") + `}`
+	parallel := `{"flow":"parallel","branches":[` + mana("10") + `,` + mana("20") + `]}`
+	for _, tc := range []struct{ name, flow string }{
+		{"mixed", `{"flow":"sequence","steps":[` + parallel + `,` + branch + `,` +
+			`{"flow":"repeat","times":4,"index_as":"i","do":` + mana("50") + `},{"flow":"finish"}]}`},
+		{"control_heavy", `{"flow":"sequence","steps":[{"flow":"repeat","times":16,"index_as":"i","do":{"flow":"sequence","steps":[` +
+			branch + `,` + parallel + `]}},{"flow":"finish"}]}`},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			program, diagnostics := Compile(mustParseJSON(b, abilityTestSkillJSON("bench."+tc.name, `{"mode":"tap"}`, 0, tc.flow)), environment)
+			requireNoErrors(b, diagnostics)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				runtime := NewRuntime(runtimeTestHost(environment), RuntimeOptions{})
+				b.StartTimer()
+				if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
