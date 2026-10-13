@@ -18,8 +18,8 @@ import (
 // defaultPrefix 是未配置 prefix 时本 Mod 用的主题前缀，与驱动缺省、生成配置一致；流名由它推出 ROOST_SYNC。
 const defaultPrefix = "roost.sync"
 
-// config 是 syncbus.* 的声明（维护者决定 A4 ①）。A4 ① 起只读 syncbus 段：旧的 room / sync 同名回退删除
-// （线上未部署，不做旧格式兼容）；拼错的键由 App 启动时的未知键告警与 doctor 报出（RR-20260926-12 的初衷）。
+// config 是 syncbus.* 的声明（维护者决定）。只读 syncbus 段，不回退到 room / sync 同名段
+// （线上未部署，不做旧格式兼容）；拼错的键由 App 启动时的未知键告警与 doctor 报出。
 // 时长与整数写 0 取驱动缺省。
 type config struct {
 	app.ServiceIdentity
@@ -92,14 +92,14 @@ func (m *SyncBusMod) Init(cfg *viper.Viper) error {
 
 // JetStreamStreamFromConfig 返回本 Mod 按 cfg 启动 JetStream 时实际使用的流名，规则与 Init 相同：
 // 显式 stream 优先，否则由 prefix（未写时缺省 roost.sync）推出。生成工程的测试用它推期望流名，规则只有
-// 这一份（RR-20260927-35）。只读 cfg，不校验 transport。
+// 这一份。只读 cfg，不校验 transport。
 func JetStreamStreamFromConfig(cfg *viper.Viper) string {
 	var settings config
 	_ = app.LoadConfig(cfg, &settings) // 只推流名；写错的值由 Init 报出
 	return jetStreamStream(settings.Stream, settings.prefix())
 }
 
-// jetStreamStream 决定 JetStream 流名（RR-20260926-56）：显式 stream 优先；否则由 prefix 派生，
+// jetStreamStream 决定 JetStream 流名：显式 stream 优先；否则由 prefix 派生，
 // 不同 prefix 的部署共用一个 NATS 时各有各的流。没有按旧前缀的特例映射：沿用已有的流与 durable
 // 游标只能显式写 syncbus.stream。
 func jetStreamStream(configured, prefix string) string {
@@ -142,7 +142,7 @@ func (m *SyncBusMod) DependsOn() []app.ModName {
 
 func (m *SyncBusMod) Start() error {
 	if m.useJetStream() {
-		// 实际流名写进启动日志：流名决定与谁共享消息与游标（RR-20260926-56）。
+		// 实际流名写进启动日志：流名决定与谁共享消息与游标。
 		slog.Info("syncbus mod: started", "transport", "jetstream", "prefix", m.prefix, "stream", m.jsCfg.Stream)
 		return nil
 	}

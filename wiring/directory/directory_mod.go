@@ -43,7 +43,7 @@ func (m *Mod) Name() app.ModName { return mods.ModDirectory }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
-// config 是 directory.* 的声明（维护者决定 A4 ①）。
+// config 是 directory.* 的声明（维护者决定）。
 type config struct {
 	mods.ServiceMetricsConfig
 	Directory struct {

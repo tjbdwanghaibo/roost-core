@@ -25,10 +25,10 @@ import (
 // NatsMod implements app.Mod for NATS connectivity. Core assembles the
 // connection, JetStream and RPC client; the Mod parses configuration, builds
 // the bus from registry configuration on top of them, publishes the
-// capabilities and forwards lifecycle calls (P3b).
+// capabilities and forwards lifecycle calls.
 type NatsMod struct {
 	// stopSerial 串行化 StopWithContext（后到者在自己的 ctx 内等第一个做完）；mu 保护健康检查读的 asm，
-	// 健康检查可能与停止并发。bus 只在 Provide / Start / Stop 里读写，由 App 串行调用（RR-20261006-10）。
+	// 健康检查可能与停止并发。bus 只在 Provide / Start / Stop 里读写，由 App 串行调用。
 	stopSerial operation.Serial
 	mu         sync.Mutex
 	asm        *natsdriver.Assembly
@@ -39,7 +39,7 @@ type NatsMod struct {
 	settings   config
 }
 
-// config 是 nats.* 的声明（维护者决定 A4 ①）。nats.rpc.* 只在 transport 为 jetstream / js 时生效，写了就检查。
+// config 是 nats.* 的声明（维护者决定）。nats.rpc.* 只在 transport 为 jetstream / js 时生效，写了就检查。
 type config struct {
 	app.ServiceIdentity
 	URL                     string `config:"nats.url" default:"nats://localhost:4222" example:"nats://127.0.0.1:4222"`
@@ -200,8 +200,7 @@ func (m *NatsMod) Stop() {
 }
 
 // StopWithContext 先停 Bus、再关 Assembly；排空超出预算时保留对象供再次停止，见下方注释。
-// 并发调用串行执行，后到者在自己的 ctx 内等第一个做完（RR-20261006-10；旧实现读写 m.bus / m.asm
-// 不加锁，并发调用有数据竞争）。
+// 并发调用串行执行，后到者在自己的 ctx 内等第一个做完；读写 m.bus / m.asm 都在锁内。
 func (m *NatsMod) StopWithContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = fctx.BaseContext()
@@ -216,7 +215,7 @@ func (m *NatsMod) StopWithContext(ctx context.Context) error {
 		if stopErr := m.bus.StopWithContext(ctx); stopErr != nil {
 			if busDrainPending(stopErr) {
 				// Bus 的 handler 仍在运行、连接仍在使用；保留 bus / asm，
-				// 再次停止会继续等同一次排空（RR-20261004-07）。
+				// 再次停止会继续等同一次排空。
 				return stopErr
 			}
 			// 终态错误（如退订失败）：Bus 已不会再有进展，照常关闭 Assembly。
@@ -234,8 +233,8 @@ func (m *NatsMod) StopWithContext(ctx context.Context) error {
 				return err
 			}
 			// 连接已被硬关闭（drain 超预算，或连接早已关闭 / 正在重连）：报告
-			// 错误并释放引用。旧实现在这里也保留 asm，重试只能拿到 nats.go 的
-			// ErrConnectionClosed，永远失败、引用永不置空（RR-20261004-08）。
+			// 错误并释放引用。这里若保留 asm，重试只能拿到 nats.go 的
+			// ErrConnectionClosed，永远失败、引用永不置空。
 			slog.Warn("nats mod: connection closed before drain finished", "err", closeErr)
 		}
 		m.mu.Lock()

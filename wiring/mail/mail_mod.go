@@ -46,7 +46,7 @@ func (m *Mod) Name() app.ModName { return domain.CapabilityName }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
-// config 是 mail.* 的声明（维护者决定 A4 ①）。
+// config 是 mail.* 的声明（维护者决定）。
 type config struct {
 	mods.ServiceMetricsConfig
 	Mail struct {
@@ -91,7 +91,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 	// about what time it is. They did once, and the result was a mail that
 	// read as live and had already been evicted.
 	//
-	// 邮件过期和领取预约截止都使用业务单调钟（D-L3）；Redis 物理 TTL 按剩余
+	// 邮件过期和领取预约截止都使用业务单调钟；Redis 物理 TTL 按剩余
 	// 时长设置，不能把业务时间戳直接当成系统绝对过期时间。
 	now := app.BusinessClock(r).Now
 	stores, err := domain.NewRedisStores(client, domain.RedisConfig{

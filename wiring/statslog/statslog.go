@@ -16,7 +16,7 @@ type StatsLogMod struct{ *runtime.Logger }
 func NewStatsLogMod() *StatsLogMod       { return &StatsLogMod{Logger: runtime.New()} }
 func (m *StatsLogMod) Name() app.ModName { return mods.ModStatsLog }
 
-// config 是 stats_log.* 的声明（维护者决定 A4 ①）。
+// config 是 stats_log.* 的声明（维护者决定）。
 type config struct {
 	app.ServiceIdentity
 	Enabled  bool          `config:"stats_log.enabled" example:"true" help:"按 interval 把指标快照写进 stats 日志"`

@@ -140,7 +140,7 @@ func (s *singletonStore) Get(ctx context.Context, keys []string) ([][]byte, erro
 }
 
 // Close 幂等：只有第一次真正关闭两个客户端，第一次的错误只报给那一次调用，之后（含并发的后到者，
-// 它们等第一次做完）都返回 nil（RR-20261006-10；旧实现粘滞返回第一次的结果）。两个客户端不论成败
+// 它们等第一次做完）都返回 nil，不粘滞返回第一次的结果。两个客户端不论成败
 // 都已关闭（go-redis 遇错继续关完连接池），没有可以重试的资源。
 func (s *singletonStore) Close() error {
 	var err error

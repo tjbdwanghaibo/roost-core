@@ -26,8 +26,8 @@ import (
 )
 
 // ErrManagerRegisterAfterStart is returned by Register once Start has run. It
-// is the engine's sentinel under its historical kit name, so errors.Is holds
-// for callers comparing against either.
+// is the engine's sentinel re-exported under the wiring name, so errors.Is
+// holds for callers comparing against either.
 var ErrManagerRegisterAfterStart = coremanager.ErrRegisterAfterStart
 
 // ErrManagerStartState preserves the engine's one-attempt lifecycle error.

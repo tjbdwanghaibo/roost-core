@@ -50,7 +50,7 @@ func (m *Mod) Name() app.ModName { return domain.CapabilityName }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
-// config 是 session.* 的声明（维护者决定 A4 ①）。
+// config 是 session.* 的声明（维护者决定）。
 type config struct {
 	mods.ServiceMetricsConfig
 	kitredis.ClusterConfig
@@ -109,7 +109,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 		Runs: stores.Runs, Claims: stores.Claims, Requests: stores.Requests,
 		Release: m.release, TTL: m.ttl, Metrics: m.metrics,
 		Owners: m.owners,
-		// run 的开始、截止与结束时间发给客户端，是玩法计时：业务时钟（D-L3）。
+		// run 的开始、截止与结束时间发给客户端，是玩法计时：业务时钟。
 		Now: app.BusinessClock(r).Now,
 	})
 	if err != nil {

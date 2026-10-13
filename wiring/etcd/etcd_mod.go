@@ -19,7 +19,7 @@ import (
 // EtcdMod implements app.Mod for etcd connectivity. It parses configuration,
 // asks core to assemble client / discovery / elections on one connection,
 // publishes them as capabilities and forwards lifecycle calls; it holds no
-// raw clientv3 handle (P3b).
+// raw clientv3 handle.
 type EtcdMod struct {
 	registerService bool
 	asm             *etcddriver.Assembly
@@ -50,7 +50,7 @@ func NewEtcdMod(options ...Option) *EtcdMod {
 
 func (m *EtcdMod) Name() app.ModName { return mods.ModEtcd }
 
-// config 是 etcd.* 的声明（维护者决定 A4 ①）。
+// config 是 etcd.* 的声明（维护者决定）。
 type config struct {
 	app.ServiceIdentity
 	Endpoints     []string `config:"etcd.endpoints" default:"localhost:2379" example:"127.0.0.1:2379" help:"etcd 地址（逗号分隔或 YAML 列表）"`
@@ -67,8 +67,8 @@ type config struct {
 // ConfigSchema 声明 etcd.*。
 func (m *EtcdMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
 
-// Init 读 etcd.*。A4 ① 起删掉了旧 gate 服务的地址回退（gate.backend_advertise_addr / gate.backend_addr /
-// game.advertise_addr）与 gate.* 元数据：仓内没有生成器写这些键，也没有任何代码读注册里的元数据。
+// Init 读 etcd.*。不回退到 gate 服务的地址键（gate.backend_advertise_addr / gate.backend_addr /
+// game.advertise_addr），也不写 gate.* 元数据：仓内没有生成器写这些键，也没有任何代码读注册里的元数据。
 func (m *EtcdMod) Init(cfg *viper.Viper) error {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {

@@ -18,7 +18,7 @@ const (
 	cfgKeyDir = "config_data.dir"
 )
 
-// config 是 config_data.* 的声明（维护者决定 A4 ①）。
+// config 是 config_data.* 的声明（维护者决定）。
 type config struct {
 	Dir string `config:"config_data.dir" default:"configs/data" example:"configs/data" help:"配置表目录（相对进程工作目录）"`
 }

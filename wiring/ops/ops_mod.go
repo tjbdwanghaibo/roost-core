@@ -23,7 +23,7 @@ type OpsMod struct{ *runtime.Server }
 func NewOpsMod() *OpsMod            { return &OpsMod{Server: runtime.New()} }
 func (m *OpsMod) Name() app.ModName { return mods.ModOps }
 
-// config 是 ops.* 的声明（维护者决定 A4 ①）。
+// config 是 ops.* 的声明（维护者决定）。
 type config struct {
 	app.ServiceIdentity
 	Enabled         bool          `config:"ops.enabled" example:"true" help:"打开 ops 端点（/healthz、/readyz、/metrics、/statsz、/admin）"`

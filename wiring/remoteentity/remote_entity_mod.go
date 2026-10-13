@@ -23,7 +23,7 @@ import (
 // Depends on: redis mod (for versioned locks and marker storage). Core
 // assembles the manager, backend and ownership store and owns the start /
 // stop sequence; the Mod parses configuration, publishes the capabilities and
-// forwards lifecycle calls (P3b).
+// forwards lifecycle calls.
 type RemoteEntityMod struct {
 	asm         *coreremote.Assembly
 	cfg         *coreremote.Config
@@ -117,7 +117,7 @@ func (m *RemoteEntityMod) Provide(r *app.Registry) error {
 	if failure, ok := app.Lookup[*app.RuntimeFailure](r, app.ModRuntimeFailure); ok && failure != nil {
 		deps.OnFatal = func(err error) { failure.Fail(fmt.Errorf("remote_entity fatal release failure: %w", err)) }
 	}
-	// O-M6-6：持有 App 单实例锁时，把它的身份交给 Remote，同 sid 重启后第一次取锁即接管上一代进程留下的
+	// 持有 App 单实例锁时，把它的身份交给 Remote，同 sid 重启后第一次取锁即接管上一代进程留下的
 	// 共享锁。只在 Remote 的 sid 就是单实例锁的 sid 时传（NewRemoteEntityMod 显式给了别的 sid 时没有这个保证）；
 	// singleton.enabled=false 时没有这个能力，不接管，照旧按 lock_ttl 等待。
 	if incarnation, ok := app.Lookup[app.SingletonIncarnation](r, mods.ModSingletonIncarnation); ok && incarnation.Sid == m.localSid {
@@ -150,7 +150,7 @@ func (m *RemoteEntityMod) Provide(r *app.Registry) error {
 }
 
 func (m *RemoteEntityMod) DependsOn() []app.ModName {
-	// Mods only: health is a registry built-in, not a Mod (roost-codegen U-0025).
+	// Mods only: health is a registry built-in, not a Mod.
 	dependencies := []app.ModName{mods.ModRedis, mods.ModSyncBus}
 	if m != nil && m.mongoLoader != nil && m.backend == nil {
 		dependencies = append(dependencies, mods.ModMongo)
@@ -216,7 +216,7 @@ func (m *RemoteEntityMod) StopWithContext(ctx context.Context) error {
 		ctx = fctx.BaseContext()
 	}
 	// 停止失败（ctx 到期时 finalizer / 复制 handler 还没排空）保留 Assembly，之后的 Stop 再等；只有真的
-	// 停完才记 “stopped”（RR-20261005-NC-234）。
+	// 停完才记 “stopped”。
 	if err := m.asm.Stop(ctx); err != nil {
 		slog.Warn("remote_entity mod: stop incomplete", "err", err)
 		return err

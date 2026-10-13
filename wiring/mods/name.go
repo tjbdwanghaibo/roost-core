@@ -35,7 +35,7 @@ const (
 	ModRemoteEntity            app.ModName = "remote_entity"
 	ModRemoteEntityAtomicStore app.ModName = "remote_entity.atomic_store"
 	// ModRemoteMirror 是只读快照能力（entity.RemoteSnapshotReadOnly，Mirror 第 5 步）：只读服务由
-	// kit/remoteentity.RemoteMirrorMod 提供，owner 进程由 RemoteEntityMod 以 Manager.SnapshotClient() 提供。
+	// wiring/remoteentity.RemoteMirrorMod 提供，owner 进程由 RemoteEntityMod 以 Manager.SnapshotClient() 提供。
 	ModRemoteMirror  app.ModName = "remote_entity.mirror"
 	ModLock          app.ModName = "lock"
 	ModOps           app.ModName = "ops"

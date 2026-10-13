@@ -42,7 +42,7 @@ func CheckKeyPrefix(service, prefix string) error {
 // with atomic multi-key writes. Redis uses the first opening brace and the
 // first closing brace after it; an empty first pair disables tag hashing even
 // when a later pair is valid. Single-server prefixes (no redis.cluster_addrs,
-// declared by kit/redis.ClusterConfig) are unchanged.
+// declared by wiring/redis.ClusterConfig) are unchanged.
 func ValidateClusterKeyPrefix(clusterAddrs []string, service, prefix string) error {
 	if len(clusterAddrs) == 0 {
 		return nil
@@ -55,8 +55,8 @@ func ValidateClusterKeyPrefix(clusterAddrs []string, service, prefix string) err
 	return fmt.Errorf("servicemods: %s.key_prefix (%q) requires a non-empty closed first hash tag for Redis Cluster; use e.g. {roost:%s} so atomic keys share a slot", service, prefix, service)
 }
 
-// ServiceMetricsConfig is service_metrics.enabled (decision C6), embedded by
-// every kit service Mod's config so they share one declaration: false
+// ServiceMetricsConfig is service_metrics.enabled (maintainer decision), embedded by
+// every wiring service Mod's config so they share one declaration: false
 // replaces the reporter with nil, so the service reports nothing; unset or
 // true leaves it as the collaborator supplied it.
 //

@@ -10,7 +10,7 @@ import (
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 )
 
-// StepBudgetsFromConfig 读取步骤的超时与重试预算（U-0280：重试次数是配置，一次操作可以有多次尝试）：
+// StepBudgetsFromConfig 读取步骤的超时与重试预算（重试次数是配置，一次操作可以有多次尝试）：
 //
 //	saga:
 //	  step_defaults:            # 定义里没写的字段取这里；不写取框架默认 5s / 5 次 / 100ms..5s
@@ -23,11 +23,11 @@ import (
 //	      debit:                # Step.Name
 //	        max_attempts: 15
 //
-// 字段的类型与范围、未知字段由 saga Mod 的声明检查（A4 ①）。definitions 非空时，saga.steps 下每个类型与步骤必须
+// 字段的类型与范围、未知字段由 saga Mod 的声明检查。definitions 非空时，saga.steps 下每个类型与步骤必须
 // 对应其中某个定义的步骤：写错名字的覆盖不会静默失效，而是让 Init 失败。生成工程的测试可以用它在单元测试里得到
-// 与运行时相同的预算。定义里只差大小写的类型名或步骤名无法用配置键区分，直接报歧义错误（RR-20261006-06）。
+// 与运行时相同的预算。定义里只差大小写的类型名或步骤名无法用配置键区分，直接报歧义错误。
 // definitions 为空时无法核对名字，覆盖以 viper 给出的小写键保存；Engine.Register 的 StepBudgets.Resolve
-// 原样查不到时按小写回退，大小写混写的类型 / 步骤名照样生效（RR-20261005-NC-194）。
+// 原样查不到时按小写回退，大小写混写的类型 / 步骤名照样生效。
 func StepBudgetsFromConfig(cfg *viper.Viper, definitions ...coresaga.Definition) (coresaga.StepBudgets, error) {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {
@@ -80,8 +80,8 @@ func (c stepBudgetConfig) budget() coresaga.StepBudget {
 }
 
 // knownSagaSteps 按 viper 的小写键建已知步骤表。viper 读出的配置键一律小写，只差大小写的两个类型名或同一类型下
-// 两个步骤名在 saga.steps 里无法区分：之前后注册的静默覆盖先注册的，覆盖落到谁身上取决于定义顺序
-// （RR-20261006-06）。这里直接报歧义错误，与 configdata 大小写敏感、不猜的方向一致；同一个名字重复出现不算冲突。
+// 两个步骤名在 saga.steps 里无法区分：若后注册的静默覆盖先注册的，覆盖落到谁身上会取决于定义顺序，
+// 所以这里直接报歧义错误，与 configdata 大小写敏感、不猜的方向一致；同一个名字重复出现不算冲突。
 func knownSagaSteps(definitions []coresaga.Definition) (map[string]map[string]coresaga.StepKey, error) {
 	known := map[string]map[string]coresaga.StepKey{}
 	typeNames := map[string]string{}

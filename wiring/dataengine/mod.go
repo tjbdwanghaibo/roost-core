@@ -25,7 +25,7 @@ import (
 
 // Mod parses configuration, looks up the Mongo / JetStream / Remote Entity
 // capabilities, hands them to core's engine.Assemble and forwards lifecycle
-// calls. Construction order and failure rollback live in core (P3b).
+// calls. Construction order and failure rollback live in core.
 type Mod struct {
 	remoteEnabled bool
 	access        *entity.ManagerAccess
@@ -79,7 +79,7 @@ func (mod *Mod) Name() app.ModName { return mods.ModDataEngine }
 // Mod NAME — so declaring mods.ModHealth here made every process that
 // assembled the data engine fail at startup with
 // `unknown mod dependency "health"` (found by the first generated project
-// that was actually started; roost-codegen U-0025).
+// that was actually started).
 func (mod *Mod) DependsOn() []app.ModName { return nil }
 
 // OptionalDependsOn orders this Mod after the Mods whose capabilities it
@@ -104,7 +104,7 @@ type EffectsConfig struct {
 	Replicas        int           `config:"replicas" default:"1" min:"1" example:"1"`
 }
 
-// config 是 kit/dataengine 读的键（维护者决定 A4 ①）。数字与时长写 0 的取 core 缺省（声明里 min:"0" 的键）；
+// config 是 wiring/dataengine 读的键（维护者决定）。数字与时长写 0 的取 core 缺省（声明里 min:"0" 的键）；
 // 其余键的缺省值就是声明的 default，写 0 或负数拒绝。
 type config struct {
 	app.ServiceIdentity
@@ -334,7 +334,7 @@ func (mod *Mod) Stop() {
 
 // StopBudget 声明 dataengine.shutdown_timeout 为 App 停机预算（app.ModStopBudgetProvider）：
 // App 在 shutdown.total_timeout 扣除其他未声明 Mod 的固定保底后优先把这段时间给 StopWithContext
-// 排空 WAL 与投影，不够时按比例缩放并告警（RR-20260926-42、RR-20260926-51）。未 Init 时为 0，即不声明。
+// 排空 WAL 与投影，不够时按比例缩放并告警。未 Init 时为 0，即不声明。
 func (mod *Mod) StopBudget() time.Duration {
 	if mod == nil {
 		return 0
@@ -357,11 +357,10 @@ func (mod *Mod) Runtime() *engine.Runtime {
 }
 
 // WaitEntityProjection 等待本进程 WAL 中该实体（完整 Entity ID）的在途投影落库，
-// 是跨进程交出实体所有权前的屏障（RR-20260926-31）：另一进程接手时只从 Mongo
+// 是跨进程交出实体所有权前的屏障：另一进程接手时只从 Mongo
 // 读取，本进程已确认但未投影的事务不会被它看到。只跟踪本进程的在途记录；
 // 投影失败、Runtime 未就绪或 WAL 不健康都返回错误，调用方应保留所有权并重试。
-// 会阻塞，只能在慢路径或独立 goroutine 调用，快 worker 上调用会按
-// RR-20260926-06 fail-fast。
+// 会阻塞，只能在慢路径或独立 goroutine 调用，快 worker 上调用会 fail-fast。
 func (mod *Mod) WaitEntityProjection(ctx context.Context, entityID int64) error {
 	runtime := mod.Runtime()
 	if runtime == nil {
@@ -430,7 +429,7 @@ func (mod *Mod) TransactionReleased(id corenest.TransactionID) {
 }
 
 // BindLocalExecutor 实现 corenest.LocalExecutorBinder：Nest 在构造时交来快池执行入口，
-// DataEngine 用它在快池持锁驱逐被跳过的原生步骤留下的实体（RR-20260926-30）。
+// DataEngine 用它在快池持锁驱逐被跳过的原生步骤留下的实体。
 func (mod *Mod) BindLocalExecutor(run func(func()) error) {
 	if mod != nil && run != nil {
 		mod.localExecutor.Store(&run)
@@ -518,7 +517,7 @@ var _ corenest.TransactionReleaseNotifier = (*Mod)(nil)
 var _ corenest.LocalExecutorBinder = (*Mod)(nil)
 
 // 效果流（ROOST_EFFECTS）的缺省名字与保留期。saga Mod 用 EffectStreamRetention 读同一份，
-// 校验完成回执比流里的结果活得久（O-S5-2，维护者第十二轮决定）。
+// 校验完成回执比流里的结果活得久（维护者决定）。
 const (
 	DefaultEffectStream = "ROOST_EFFECTS"
 	DefaultEffectMaxAge = 7 * 24 * time.Hour
@@ -539,7 +538,7 @@ func EffectStreamRetention(cfg *viper.Viper) (stream string, maxAge time.Duratio
 // EffectSettings 按 DataEngine Mod 的声明（整份 dataengine.*，与 Mod Init 读的同一个结构体）返回业务订阅效果流
 // 要用的三样：效果收件箱所在的库（dataengine.database）、主题前缀（去掉首尾点，与 Mod 发布时相同）与流名。
 // 业务代码（game-demo 的升级邮件、活动阶段消费者、赠礼 saga）用它，不直接读 viper、不另抄一份缺省值
-// （A4 ① 收尾：生成工程同样守住“读配置只经声明”）。
+// （生成工程同样守住“读配置只经声明”）。
 func EffectSettings(cfg *viper.Viper) (database, subjectPrefix, stream string, err error) {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {

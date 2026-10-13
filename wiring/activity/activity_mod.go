@@ -50,7 +50,7 @@ func (m *Mod) Name() app.ModName { return domain.CapabilityName }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
-// config 是 activity.* 的声明（维护者决定 A4 ①）。
+// config 是 activity.* 的声明（维护者决定）。
 type config struct {
 	mods.ServiceMetricsConfig
 	kitredis.ClusterConfig
@@ -94,7 +94,7 @@ func (m *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) }
 // file, instead of again in this config. An explicit sweep_groups still
 // decides, for a deployment that splits the back-stop across replicas.
 // OpenActivity checks every window against the file: the group must be in it
-// and every expected game a member of that group (RR-20261006-17).
+// and every expected game a member of that group.
 //
 // Redis Cluster requires a common non-empty hash tag in key_prefix, for
 // example {roost:activity}; dispatch records and their owed index share a CAS.
@@ -141,7 +141,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 	if err != nil {
 		return err
 	}
-	// 业务时钟（D-L3）：窗口截止、宽限、过期都与 game 一端的窗口 id 同钟，偏移非 0 时两端一起前移。
+	// 业务时钟：窗口截止、宽限、过期都与 game 一端的窗口 id 同钟，偏移非 0 时两端一起前移。
 	service, err := m.newService(stores, app.BusinessClock(r).Now)
 	if err != nil {
 		return err

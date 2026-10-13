@@ -25,7 +25,7 @@ import (
 type Mod struct {
 	syncSetup  *EntitySyncSetup
 	entitySync *entitysync.Manager
-	// autoWatermark 表示 EntitySync 的外发水位由 kit 接线，来源在 Provide 构造引擎后写入 watermark；
+	// autoWatermark 表示 EntitySync 的外发水位由 wiring 接线，来源在 Provide 构造引擎后写入 watermark；
 	// Sync 的 Flush 可能在其他 goroutine 读取，所以用原子指针。
 	autoWatermark bool
 	watermark     atomic.Pointer[durableWatermarkSource]
@@ -36,14 +36,14 @@ type Mod struct {
 	// dataEngine 是 Provide 时查到的 DataEngine 能力；Start 时用它把 Sync 接上重新加载的实体。
 	dataEngine   any
 	unhookLoaded func()
-	// stopResync 停止卸载后重载（ManagerAccess.ConfigureUnloadResync，RR-20260926-59）；未接线或已排空时为 nil。
-	// 等 worker 退出超时时保留，重试再等（RR-20261005-NC-171）。
+	// stopResync 停止卸载后重载（ManagerAccess.ConfigureUnloadResync）；未接线或已排空时为 nil。
+	// 等 worker 退出超时时保留，重试再等。
 	stopResync func(context.Context) error
 	// stopped 在 Nest 与 entitysync 都已停完并释放后置位，之后的 Stop 直接返回 nil。
 	stopped bool
 }
 
-// entityLoadNotifier 是 DataEngine 的可选能力（kit/dataengine Mod.OnEntityLoaded）。
+// entityLoadNotifier 是 DataEngine 的可选能力（wiring/dataengine Mod.OnEntityLoaded）。
 type entityLoadNotifier interface {
 	OnEntityLoaded(func(entity.IThreadSafeEntity)) (func(), error)
 }
@@ -53,7 +53,7 @@ type unloadResyncConfigurer interface {
 	ConfigureUnloadResync(entity.UnloadedSubjectSync, entity.UnloadResyncConfig) (func(context.Context) error, error)
 }
 
-// loadTimeoutConfigurer 是 getter 的可选能力（*entity.ManagerAccess.ConfigureLoadTimeout，RR-20260926-54）。
+// loadTimeoutConfigurer 是 getter 的可选能力（*entity.ManagerAccess.ConfigureLoadTimeout）。
 type loadTimeoutConfigurer interface {
 	ConfigureLoadTimeout(time.Duration)
 }
@@ -89,10 +89,10 @@ type workerPool struct {
 	QueueCapacity int `config:"queue_capacity" min:"0" example:"0"`
 }
 
-// config 是 kit/nest 读的键（维护者决定 A4 ①）。数字与时长写 0 取框架缺省（core nest / entity 的默认值）。
+// config 是 wiring/nest 读的键（维护者决定）。数字与时长写 0 取框架缺省（core nest / entity 的默认值）。
 type config struct {
 	mods.PersistenceConfig
-	// saga.max_payload_bytes：EmitStart 在 Nest 事务里按它拒绝超限的启动意图，与协调器（kit/saga）共用一份声明（RR-20261006-66）。
+	// saga.max_payload_bytes：EmitStart 在 Nest 事务里按它拒绝超限的启动意图，与协调器（wiring/saga）共用一份声明。
 	mods.SagaPayloadConfig
 	Nest struct {
 		Short             workerPool    `config:"short"`
@@ -152,9 +152,9 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	return m.initEntitySync(settings, present["sync.entity.on_change_batch_window"])
 }
 
-// initEntityLoadConfig 接上 ManagerAccess 的共享冷加载上限 nest.entity_load_timeout（RR-54，缺省
-// entity.DefaultEntityLoadTimeout）；卸载后重载的 nest.unload_resync.*（RR-59）在 Start 时交给 ConfigureUnloadResync
-// （RR-20260927-13）。负值由声明拒绝；0 或不写时行为与之前相同。
+// initEntityLoadConfig 接上 ManagerAccess 的共享冷加载上限 nest.entity_load_timeout（缺省
+// entity.DefaultEntityLoadTimeout）；卸载后重载的 nest.unload_resync.* 在 Start 时交给 ConfigureUnloadResync。
+// 负值由声明拒绝；0 或不写时沿用缺省。
 func (m *Mod) initEntityLoadConfig(loadTimeout time.Duration) error {
 	if loadTimeout == 0 {
 		return nil
@@ -233,7 +233,7 @@ func (m *Mod) Start() error {
 			return err
 		}
 		slog.Info("entity sync started", "mode", m.entitySync.Mode().String(), "interval", m.entitySync.Interval(), "on_change_batch_window", m.entitySync.OnChangeBatchWindow())
-		// DataEngine 驱逐实体（例如原生步骤被 lease fence 跳过，RR-20260926-30）会关闭它的同步状态；
+		// DataEngine 驱逐实体（例如原生步骤被 lease fence 跳过）会关闭它的同步状态；
 		// 重新加载后把仍登记着的 subject 接到新对象上，原订阅者收到全量而不是续发增量。
 		if loads, ok := m.dataEngine.(entityLoadNotifier); ok && m.unhookLoaded == nil {
 			unhook, err := loads.OnEntityLoaded(m.rebindEntitySync)
@@ -243,8 +243,8 @@ func (m *Mod) Start() error {
 			}
 			m.unhookLoaded = unhook
 		}
-		// 实体被仅内存卸载（RR-30 驱逐、RR-39 持久拒绝）后仍有订阅者时，框架在业务池之外从权威重载并 Rebind，
-		// 重载不了退回 remove（RR-20260926-59）。重载走 ManagerAccess 的共享加载，发布经 NewEngine 绑定给 getter
+		// 实体被仅内存卸载（lease fence 跳过后的驱逐、Remote 持久拒绝）后仍有订阅者时，框架在业务池之外从权威重载并 Rebind，
+		// 重载不了退回 remove。重载走 ManagerAccess 的共享加载，发布经 NewEngine 绑定给 getter
 		// 的 NestMgr.RunLocal（BindLocalExecutor）回业务池。
 		if resync, ok := m.getter.(unloadResyncConfigurer); ok && m.stopResync == nil {
 			stop, err := resync.ConfigureUnloadResync(m.entitySync, m.config.unloadResync)
@@ -271,8 +271,7 @@ func (m *Mod) stopUnloadResync(ctx context.Context) error {
 	if m.stopResync == nil {
 		return nil
 	}
-	// 句柄只在 worker 确实退出后清除：超时清掉它，重试就不再等 worker，而它的目标 entitysync 随后被关闭
-	// （RR-20261005-NC-171）。
+	// 句柄只在 worker 确实退出后清除：超时清掉它，重试就不再等 worker，而它的目标 entitysync 随后被关闭。
 	if err := m.stopResync(ctx); err != nil {
 		return err
 	}
@@ -309,7 +308,7 @@ func (m *Mod) StopWithContext(ctx context.Context) error {
 	if m == nil || m.engine == nil || m.stopped {
 		return nil
 	}
-	// 三步停机（RR-20261005-NC-171）：
+	// 三步停机：
 	//  1. 发起：停卸载后重载（停机期间不再为订阅者重载，取消在途重载，不发 remove），发起 Nest 停机——
 	//     两者都幂等，等 worker 退出超时也照样发起 Nest 停机。
 	//  2. 等待：在 ctx 内等重载 worker 与 Nest 排空；超时返回 ctx 错误，句柄与 entitysync 都保留，重试再等。

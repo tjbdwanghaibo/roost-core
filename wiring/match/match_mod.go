@@ -22,7 +22,7 @@ import (
 // a matchmaker in the game process reads Candidates, applies a Grouping and
 // Commits. An earlier version accepted a Grouping here and in Config and
 // then never executed it, so a project that injected its own policy got the
-// caller's pairing anyway (U-0217, RR-20260916-05). A parameter the code
+// caller's pairing anyway. A parameter the code
 // cannot honour is worse than none.
 type Mod struct {
 	metrics servicemetrics.Reporter
@@ -74,7 +74,7 @@ func (m *Mod) Name() app.ModName { return domain.CapabilityName }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
-// config 是 match.* 的声明（维护者决定 A4 ①）。
+// config 是 match.* 的声明（维护者决定）。
 type config struct {
 	mods.ServiceMetricsConfig
 	Match struct {
@@ -117,7 +117,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 	if err != nil {
 		return err
 	}
-	// Ticket times are business time (D-L3, maintainer round 8): a ticket's
+	// Ticket times are business time (maintainer decision): a ticket's
 	// creation, its deadline and the "the longer you wait, the wider the
 	// window" policy in the game's matchmaker all read the business clock, so
 	// a test environment that moves time.logic_offset moves them together.

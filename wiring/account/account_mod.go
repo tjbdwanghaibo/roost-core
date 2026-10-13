@@ -76,7 +76,7 @@ func KeyPrefix(cfg *viper.Viper) (string, error) {
 	return settings.Account.KeyPrefix, nil
 }
 
-// config 是 account.* 的声明（维护者决定 A4 ①）。
+// config 是 account.* 的声明（维护者决定）。
 type config struct {
 	mods.ServiceMetricsConfig
 	Account struct {
@@ -149,7 +149,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 		SessionSecret: m.sessionSecret, SessionTTL: m.sessionTTL, ClaimTTL: m.claimTTL,
 		Metrics: m.metrics,
 		// Creation and login times are business time; session tokens and
-		// operator stamps are system time (D-L3 round 8).
+		// operator stamps are system time.
 		Now: app.BusinessClock(r).Now, SystemNow: time.Now,
 	})
 	if err != nil {

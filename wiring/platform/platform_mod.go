@@ -57,7 +57,7 @@ func NewMod(verifier domain.Verifier, players domain.PlayerResolver, deliver dom
 // purpose: the three constructor collaborators have no safe default, while
 // this one has a defensible "none" — a deployment whose channel re-delivers
 // callbacks does not need it. What it must not be is invisible, so a Server
-// without it says so at start (RR-20260917-04).
+// without it says so at start.
 func (m *Mod) WithPendingOrders(pending domain.PendingOrders) *Mod {
 	if m != nil {
 		m.pending = pending
@@ -92,7 +92,7 @@ func KeyPrefix(cfg *viper.Viper) (string, error) {
 	return settings.Platform.KeyPrefix, nil
 }
 
-// config 是 platform.* 的声明（维护者决定 A4 ①）。
+// config 是 platform.* 的声明（维护者决定）。
 type config struct {
 	mods.ServiceMetricsConfig
 	kitredis.ClusterConfig
@@ -148,8 +148,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	// On a single Redis that is free; on a cluster it requires a hash tag in
 	// the prefix — `{...}` around the part the order keys and the index share.
 	// Refused here rather than discovered as a CROSSSLOT error on the first
-	// callback, or, worse, as an index that is only usually right
-	// (RR-20260919-04).
+	// callback, or, worse, as an index that is only usually right.
 	if err := mods.ValidateClusterKeyPrefix(settings.ClusterAddrs, "platform", c.KeyPrefix); err != nil {
 		return err
 	}
@@ -174,8 +173,8 @@ func (m *Mod) Provide(r *app.Registry) error {
 	if err != nil {
 		return fmt.Errorf("platform mod: %w", err)
 	}
-	// The store keeps its own pending index, in the same write as the order
-	// (RR-20260919-04), so background retry is ON by default and a deployment
+	// The store keeps its own pending index, in the same write as the order,
+	// so background retry is ON by default and a deployment
 	// no longer has to supply an index to get recovery. WithPendingOrders
 	// still wins: a deployment whose orders live somewhere else, or that wants
 	// retry off, says so explicitly.

@@ -70,7 +70,7 @@ func (m *Mod) Name() app.ModName { return domain.CapabilityName }
 // DependsOn implements app.ModDependencyProvider.
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModRedis} }
 
-// config 是 chat.* 的声明（维护者决定 A4 ①）。
+// config 是 chat.* 的声明（维护者决定）。
 type config struct {
 	mods.ServiceMetricsConfig
 	Chat struct {
@@ -163,7 +163,7 @@ func (m *Mod) Provide(r *app.Registry) error {
 	if err != nil {
 		return err
 	}
-	// Two clocks (D-L3 round 8): the time shown to players is business time,
+	// Two clocks: the time shown to players is business time,
 	// retention is space reclamation and runs on the system clock.
 	store, err := domain.NewRedisStore(client, m.prefix, domain.Config{
 		Policy: m.policy, Bodies: m.bodies, Rules: m.rules,

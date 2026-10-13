@@ -25,7 +25,7 @@ import (
 // 取消，剩下的是 L2 调用（受 snapshot_load_timeout 约束，缺省 2s）与已准入的复制 handler。
 const defaultMirrorShutdownTimeout = 5 * time.Second
 
-// RemoteMirrorMod 是只读服务的 Remote 快照装配（Mirror 第 5 步，docs/feature/MIRROR-STEP-5-2026-10-06.md）。
+// RemoteMirrorMod 是只读服务的 Remote 快照装配（现行说明见 docs/framework/guide/05-remote-mirror.md）。
 //
 // 它只装 remoteentity.SnapshotClient：读、兴趣续租、复制接收、权威回填与三步停机。没有写 Manager、Mongo 原子
 // backend、分布式锁或 finalizer，注册表里唯一的能力是 entity.RemoteSnapshotReadOnly（mods.ModRemoteMirror），
@@ -152,7 +152,7 @@ func (m *RemoteMirrorMod) Provide(r *app.Registry) error {
 	return nil
 }
 
-// Start 用 kit/syncbus 的总线启动客户端：JetStream 上开推送，普通 NATS 上不订阅快照推送、记 Warn（按需读取）。
+// Start 用 wiring/syncbus 的总线启动客户端：JetStream 上开推送，普通 NATS 上不订阅快照推送、记 Warn（按需读取）。
 func (m *RemoteMirrorMod) Start() error {
 	if m == nil || m.client == nil || m.registry == nil {
 		return errors.New("remote_entity mirror mod: not provided")
@@ -171,7 +171,7 @@ func (m *RemoteMirrorMod) Start() error {
 }
 
 // StopBudget 声明 remote_entity.mirror.shutdown_timeout 为停机预算（app.ModStopBudgetProvider）。手写 Mod 的
-// 预算不计入生成器算出的 shutdown.total_timeout（RR-20260926-66），装这个 Mod 的服务要手工留出这段时间。
+// 预算不计入生成器算出的 shutdown.total_timeout，装这个 Mod 的服务要手工留出这段时间。
 func (m *RemoteMirrorMod) StopBudget() time.Duration {
 	if m == nil {
 		return 0

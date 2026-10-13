@@ -11,7 +11,7 @@ import (
 	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 )
 
-// remote_entity.* 的声明（维护者决定 A4 ①）。数字与时长写 0 取 coreremote.DefaultConfig 的值（声明里 min:"0"），
+// remote_entity.* 的声明（维护者决定）。数字与时长写 0 取 coreremote.DefaultConfig 的值（声明里 min:"0"），
 // 负数拒绝；0 本身有含义的键（写许可、墓碑副本数、每节点配额）声明的 default 与 DefaultConfig 相同
 // （TestRemoteEntityDeclaredDefaultsMatchCoreDefaults）。
 
@@ -25,7 +25,7 @@ type snapshotConfig struct {
 	CachedMaxStaleness   time.Duration `config:"cached_max_staleness" min:"1ns" example:"30s" help:"B2：Cached / Monotonic 读交出的快照距最近一次被共享 L2 或权威确认的最长时间，超过先重新确认，\n确认不了就不交出。不配置时等于 snapshot_cache_ttl（这里写成与它相同）；配置了必须为正。"`
 	SnapshotL2TTL        time.Duration `config:"snapshot_l2_ttl" min:"0" example:"10m"`
 	SnapshotL2KeyPrefix  string        `config:"snapshot_l2_key_prefix" example:"" help:"Prefix for the shared L2 snapshot keys (remote_entity:snapshot:*). Empty keeps the\nunprefixed keys; deployments sharing one Redis db must set different values, e.g.\nroost:<project>. Every node of a deployment must use the same value; no hash tags."`
-	// O-M6-3：L2 写墓碑之后等几个副本确认、最多等多久。超时必须为正（Redis 的 WAIT … 0 是永久阻塞）且不超过 1s。
+	// L2 写墓碑之后等几个副本确认、最多等多久。超时必须为正（Redis 的 WAIT … 0 是永久阻塞）且不超过 1s。
 	SnapshotL2TombstoneWaitReplicas int           `config:"snapshot_l2_tombstone_wait_replicas" default:"1" min:"0" example:"1" help:"O-M6-3：L2 写删除墓碑后用 WAIT 等几个副本确认、最多等多久，缩小切主时删除短暂复活的窗口。\n0 个副本即关闭；主节点没有副本时自动不等；确认不足只计数并记 Warn，不回滚。超时必须为正且不超过 1s。"`
 	SnapshotL2TombstoneWaitTimeout  time.Duration `config:"snapshot_l2_tombstone_wait_timeout" default:"50ms" min:"1ns" max:"1s" example:"50ms"`
 	SnapshotInterestTTL             time.Duration `config:"snapshot_interest_ttl" min:"0" example:"30s"`
@@ -43,7 +43,7 @@ type mongoConfig struct {
 	TransactionTTL time.Duration `config:"transaction_ttl" min:"0" example:"168h"`
 }
 
-// ValidateConfig：L2 键前缀的格式（RR-20260927-17）与每节点配额不超过兴趣表的每节点上限（O4）。
+// ValidateConfig：L2 键前缀的格式与每节点配额不超过兴趣表的每节点上限（O4）。
 func (c *snapshotConfig) ValidateConfig(bool) error {
 	var errs []error
 	if c.SnapshotL2KeyPrefix != "" {

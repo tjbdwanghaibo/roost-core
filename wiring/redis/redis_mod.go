@@ -18,9 +18,9 @@ import (
 
 // RedisMod implements app.Mod for Redis connectivity. It parses configuration,
 // asks core to assemble the client and lock factory, publishes them as
-// capabilities and forwards lifecycle calls; it holds no driver handles (P3b).
+// capabilities and forwards lifecycle calls; it holds no driver handles.
 type RedisMod struct {
-	// mu 保护 asm：停止入口可能并发调用，健康检查也可能与停止并发（RR-20261006-10）。
+	// mu 保护 asm：停止入口可能并发调用，健康检查也可能与停止并发。
 	mu  sync.Mutex
 	asm *redisdriver.Assembly
 	cfg *fredis.Config
@@ -41,12 +41,12 @@ func (m *RedisMod) Name() app.ModName { return mods.ModRedis }
 
 // ClusterConfig 是 redis.cluster_addrs 的声明。Redis Mod、单实例锁的连接与各服务 Mod 的 Cluster hash tag 校验
 // （mods.ValidateClusterKeyPrefix）都按它判断是不是 Cluster，所以单独成一个结构体，服务 Mod 匿名嵌入它共用这份声明。
-// 逗号分隔的字符串与 YAML 列表都接受，每项去掉两端空白（RR-20261005-NC-190）。
+// 逗号分隔的字符串与 YAML 列表都接受，每项去掉两端空白。
 type ClusterConfig struct {
 	ClusterAddrs []string `config:"redis.cluster_addrs" help:"Redis Cluster 种子地址（逗号分隔或 YAML 列表）；写了就按 Cluster 连接，redis.addr 不再使用"`
 }
 
-// Config 是 redis.* 的声明（维护者决定 A4 ①），Redis Mod 与单实例锁的 SingletonStore 共用。
+// Config 是 redis.* 的声明（维护者决定），Redis Mod 与单实例锁的 SingletonStore 共用。
 // redis.addr 缺省时 Redis Mod 兜底 localhost:6379，SingletonStore 则报错。
 type Config struct {
 	Addr         string `config:"redis.addr" example:"127.0.0.1:6379" help:"单机 Redis 地址"`
@@ -58,7 +58,7 @@ type Config struct {
 }
 
 // ValidateConfig：生产环境必须写 redis.addr 或 redis.cluster_addrs。两种写法都能接上 Redis；Cluster 配置优先，
-// 只为过校验而写的 addr 不起作用（RR-20261006-28）。以前这条按服务类型写在 app 的生产校验里，现在跟着 Redis 配置走：
+// 只为过校验而写的 addr 不起作用。以前这条按服务类型写在 app 的生产校验里，现在跟着 Redis 配置走：
 // 读 Redis 配置的进程（Redis Mod、单实例锁）都受它约束。
 func (c *Config) ValidateConfig(production bool) error {
 	if production && c.Addr == "" && len(c.ClusterAddrs) == 0 {
@@ -156,10 +156,10 @@ func (m *RedisMod) Stop() {
 // StopWithContext 关闭连接池。go-redis 的 Close 不等在途命令（它们随之失败），先把连接池标记为关闭、
 // 清空连接，再返回逐个关连接时遇到的第一个错误：返回错误时资源同样已经释放，再调 Close 只会得到
 // “client is closed”。所以第一次 Close 之后不论结果都交出 asm，错误只报告这一次，之后的 Stop 返回 nil
-// （停机契约“再调用返回 nil”，RR-20261005-NC-233；旧实现只在成功时置空，出错后的每次重试都失败）。
+// （停机契约“再调用返回 nil”；若只在成功时置空，出错后的每次重试都会失败）。
 //
 // 并发调用串行执行，后到者等第一个关完再返回 nil；go-redis 的 Close 不等在途命令，持锁时间很短
-// （RR-20261006-10；旧实现读写 m.asm 不加锁，并发调用有数据竞争）。
+// （读写 m.asm 都在锁内，并发调用没有数据竞争）。
 func (m *RedisMod) StopWithContext(_ context.Context) error {
 	if m == nil {
 		return nil

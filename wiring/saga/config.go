@@ -11,10 +11,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
-// saga.* 的声明（维护者决定 A4 ①）。缺省值与 coresaga.DefaultOptions 相同（TestSagaDeclaredDefaultsMatchCoreDefaults），
+// saga.* 的声明（维护者决定）。缺省值与 coresaga.DefaultOptions 相同（TestSagaDeclaredDefaultsMatchCoreDefaults），
 // 写 0 或负数拒绝；要缺省就不写这个键。
 
-// stepBudgetConfig 是一个步骤的超时与重试预算（U-0280）：saga.step_defaults 与 saga.steps.<type>.<step> 共用。
+// stepBudgetConfig 是一个步骤的超时与重试预算：saga.step_defaults 与 saga.steps.<type>.<step> 共用。
 // 没写的字段不覆盖（定义里的值、step_defaults、框架缺省依次生效）；段下没有声明的字段报错。
 type stepBudgetConfig struct {
 	Timeout     time.Duration `config:"timeout" min:"1ns" example:"5s"`
@@ -35,7 +35,7 @@ type consumerConfig struct {
 
 type config struct {
 	app.ServiceIdentity
-	// saga.max_payload_bytes 与发起方（kit/nest）共用一份声明（RR-20261006-66）。
+	// saga.max_payload_bytes 与发起方（wiring/nest）共用一份声明。
 	mods.SagaPayloadConfig
 	Saga struct {
 		Database     string           `config:"database" default:"saga" example:"saga"`
@@ -68,7 +68,7 @@ type config struct {
 		Replicas              int            `config:"replicas" default:"1" min:"1" example:"1"`
 		ResultDurable         string         `config:"result_durable" default:"roost-saga-coordinator"`
 		Result                consumerConfig `config:"result_"`
-		// 原生 Nest 步骤的开始请求与完成结果都在 DataEngine 的效果流上（RR-20260917-07）。
+		// 原生 Nest 步骤的开始请求与完成结果都在 DataEngine 的效果流上。
 		StartEffectStream   string         `config:"start_effect_stream" default:"ROOST_EFFECTS" example:"ROOST_EFFECTS"`
 		StartEffectPrefix   string         `config:"start_effect_prefix" default:"roost.effect" example:"roost.effect"`
 		StartEffectDurable  string         `config:"start_effect_durable" default:"roost-saga-start" example:"roost-saga-start"`
@@ -80,10 +80,10 @@ type config struct {
 	} `config:"saga"`
 }
 
-// ValidateConfig 是 saga.* 的跨键规则（A4 ①）：配置里写的步骤超时必须短于步骤消费者的 AckWait（RR-20261006-46）。
+// ValidateConfig 是 saga.* 的跨键规则：配置里写的步骤超时必须短于步骤消费者的 AckWait。
 // 一次尝试的处理以命令截止（派发时刻 + 步骤 Timeout）为界，步骤消费者在 AckWait 之内 ack；Timeout 不短于 AckWait 时
 // JetStream 会在 handler 还在跑时把同一条命令重投给另一个消费者。步骤消费者的 AckWait 不是配置：生成的与 demo 的步骤消费者
-// 都取 coresaga.DefaultStepAckWait，这里与它比较（不另声明一个没人读的 ack_wait 键，RR-20261006-38 的教训）。
+// 都取 coresaga.DefaultStepAckWait，这里与它比较（不另声明一个没人读的 ack_wait 键）。
 // 定义里写死的 Timeout 不在配置里，由 Init 在解析步骤预算之后用 checkStepTimeouts 查。
 func (c *config) ValidateConfig(bool) error {
 	var errs []error

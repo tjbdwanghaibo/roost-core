@@ -21,7 +21,7 @@ import (
 // It creates an IMongo instance and registers it in the Registry.
 type MongoMod struct {
 	// stopSerial 串行化 StopWithContext（后到者在自己的 ctx 内等第一个做完）；mu 保护 client 字段，
-	// 健康检查与 Client() 可能与停止并发（RR-20261006-10）。
+	// 健康检查与 Client() 可能与停止并发。
 	stopSerial operation.Serial
 	mu         sync.Mutex
 	client     fmongo.IMongo
@@ -35,7 +35,7 @@ func NewMongoMod() *MongoMod {
 
 func (m *MongoMod) Name() app.ModName { return mods.ModMongo }
 
-// config 是 mongo.* 的声明（维护者决定 A4 ①）。时长与连接池写 0 取驱动缺省。
+// config 是 mongo.* 的声明（维护者决定）。时长与连接池写 0 取驱动缺省。
 type config struct {
 	URI                string        `config:"mongo.uri" default:"mongodb://localhost:27017" example:"mongodb://127.0.0.1:27017/?replicaSet=rs0"`
 	ConnectTimeout     time.Duration `config:"mongo.connect_timeout" min:"0" example:"5s"`
@@ -131,8 +131,7 @@ func (m *MongoMod) Stop() {
 }
 
 // StopWithContext 断开客户端：成功后交出 client，之后再调用返回 nil；Close 失败或 ctx 已过期时保留
-// client，下次 Stop 重试。并发调用串行执行，后到者在自己的 ctx 内等第一个做完（RR-20261006-10；旧实现
-// 读写 m.client 不加锁，并发调用有数据竞争）。
+// client，下次 Stop 重试。并发调用串行执行，后到者在自己的 ctx 内等第一个做完；读写 m.client 都在锁内。
 func (m *MongoMod) StopWithContext(ctx context.Context) error {
 	if m == nil {
 		return nil
@@ -161,8 +160,8 @@ func (m *MongoMod) StopWithContext(ctx context.Context) error {
 	return nil
 }
 
-// redactedURI 把 URI userinfo 里的口令换成 ***，保留用户名、主机与选项，供日志使用
-// （RR-20261005-NC-191）。fmongo.Config 没有单独的用户名 / 口令字段，凭据只能写在 mongo.uri 里，
+// redactedURI 把 URI userinfo 里的口令换成 ***，保留用户名、主机与选项，供日志使用。
+// fmongo.Config 没有单独的用户名 / 口令字段，凭据只能写在 mongo.uri 里，
 // 原样记录就把口令写进了日志。userinfo 取到 '?' 之前的最后一个 '@' 为止，口令里没转义的 '/' 也盖得住。
 func redactedURI(uri string) string {
 	scheme := strings.Index(uri, "://")

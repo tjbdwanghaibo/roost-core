@@ -2,13 +2,13 @@
 // this repository, and the small helpers their Mods share.
 //
 // The names live in one table rather than one per package for the same reason
-// roost-kit keeps its own: a capability name is a global key in the registry,
+// the infrastructure names share one: a capability name is a global key in the registry,
 // so a collision is a runtime failure that two separately-correct packages can
 // cause together. One table is where a collision is visible by reading.
 //
-// The names are prefixed "service." so they cannot collide with roost-kit's
+// The names are prefixed "service." so they cannot collide with the
 // infrastructure capabilities — a service named "chat" and a hypothetical
-// kit transport named "chat" would otherwise be the same key.
+// transport named "chat" would otherwise be the same key.
 package mods
 
 import "github.com/tjbdwanghaibo/roost-core/framework/app"

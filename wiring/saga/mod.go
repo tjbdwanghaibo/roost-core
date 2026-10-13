@@ -18,7 +18,7 @@ import (
 
 // Mod parses configuration, looks up the Mongo and JetStream capabilities,
 // hands them to core's saga.Assemble and forwards lifecycle calls. Consumer
-// subscription, engine loop and drain-then-stop live in core (P3b).
+// subscription, engine loop and drain-then-stop live in core.
 type Mod struct {
 	definitions []coresaga.Definition
 	config      coresaga.AssemblyConfig
@@ -46,7 +46,7 @@ func (m *Mod) Name() app.ModName { return mods.ModSaga }
 
 // DependsOn names Mods: Mongo and NATS. JetStream is the NATS Mod's
 // capability and health is a registry built-in — neither is a Mod name, and
-// app resolves dependencies by Mod name (roost-codegen U-0025).
+// app resolves dependencies by Mod name.
 func (m *Mod) DependsOn() []app.ModName {
 	return []app.ModName{mods.ModMongo, mods.ModNats}
 }
@@ -90,8 +90,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		// Native Nest steps commit their completion as an effect, so it
 		// arrives on the effect stream rather than the saga stream. Its
 		// consumer shares the start consumer's stream and prefix and takes
-		// its own durable; core derives the rest when these are empty
-		// (RR-20260917-07).
+		// its own durable; core derives the rest when these are empty.
 		NestResults: coresaga.NestCompletionConsumerConfig{
 			Stream: resultStream, Durable: c.ResultEffectDurable, EffectPrefix: resultPrefix,
 			AckWait: c.ResultEffect.AckWait, ProcessTimeout: c.ResultEffect.ProcessTimeout, MaxDeliver: c.ResultEffect.MaxDeliver,
@@ -117,7 +116,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	return m.checkEffectRetention(cfg)
 }
 
-// checkEffectRetention 是 O-S5-2 的跨 Mod 校验（维护者第十二轮决定）：原生 Nest 步骤的完成结果在
+// checkEffectRetention 是跨 Mod 校验（维护者决定）：原生 Nest 步骤的完成结果在
 // DataEngine 的效果流上，回执必须比流里的结果活得久，否则回执过期后再投递的结果协调器分不清是
 // 已计入的重复还是放弃后生效的成功，只能 Term。saga 流的同一前提上面已经校验；这里只在结果效果流
 // 就是 DataEngine 效果流（按 DataEngine Mod 的读法解析的流名）时比较，别的流的保留期不归这份配置管。
@@ -232,7 +231,7 @@ var _ app.ModOptionalDependencyProvider = (*Mod)(nil)
 
 // StreamSettings 按 saga Mod 的声明（整份 saga.*，与 Mod Init 读的同一个结构体）返回步骤消费者与协调器会合要用的
 // 三样：命令主题前缀、saga 流名与 saga 库名。业务的步骤消费者（game-demo 的赠礼 saga）用它，不直接读 viper、
-// 不另抄一份缺省值（A4 ① 收尾）。
+// 不另抄一份缺省值。
 func StreamSettings(cfg *viper.Viper) (subjectPrefix, stream, database string, err error) {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {
