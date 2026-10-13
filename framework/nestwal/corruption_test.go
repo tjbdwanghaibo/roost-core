@@ -1,27 +1,150 @@
+// WAL 损坏处理：段缺口与未确认截断、帧头字段逐项、零填充尾只在安全条件下截断、跨页半写回拒绝。
+
 package nestwal
 
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// RR-20260926-41：断电 / 快照后最后一段尾部可能是零填充（ext4 data=writeback、部分网络盘与云盘：
-// 文件长度已持久、数据块未写回，读出为 0）。
-//
-// 承诺：只有同时满足四个条件才截断——(1) 仅最后一段；(2) 坏点（第一个无法解析的帧起点）不早于
-// checkpoint fence，即不与已确认前缀重叠；(3) 自坏帧头起至文件末尾全为 0（坏帧头所在 4 KiB 块的剩余部分
-// 及其后所有块全零），而不是 CRC 不符的非零数据；(4) 截断后告警并计指标（reason 低基数）。否则仍 ErrCorrupt，
-// 且拒绝打开时不改动文件。不完整尾帧（帧头不足 20 字节 / 帧体越过文件末尾）的既有截断不变，但同样先核对 fence。
-//
-// 旧行为（v1.17.0）：只按长度判撕裂，零尾 5 / 19 字节打开成功，20 / 4096 字节报 invalid frame header 拒绝启动；
-// 尾帧越过 fence 时先截断文件再报 “acknowledgement is beyond recovered WAL end”。
+// writeOneRecordAndClose opens a WAL, appends one record and closes it,
+// returning the active segment number so the test can corrupt the file.
+func writeOneRecordAndClose(t *testing.T, opts Options) uint64 {
+	t.Helper()
+	w, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Append(context.Background(), testRecord(1, corenest.DurabilityStrict)); err != nil {
+		t.Fatal(err)
+	}
+	segment := w.Stats().Segment
+	if err := w.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return segment
+}
+
+func patchSegment(t *testing.T, dir string, segment uint64, offset int64, raw []byte) {
+	t.Helper()
+	file, err := os.OpenFile(filepath.Join(dir, segmentName(segment)), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := file.WriteAt(raw, offset); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// resealHeader recomputes the first frame's header CRC after a deliberate
+// field change, so the test exercises the rule for that field rather than the
+// checksum rule.
+func resealHeader(t *testing.T, dir string, segment uint64) {
+	t.Helper()
+	file, err := os.OpenFile(filepath.Join(dir, segmentName(segment)), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	header := make([]byte, frameHeaderSize)
+	if _, err := file.ReadAt(header, 0); err != nil {
+		t.Fatal(err)
+	}
+	binary.BigEndian.PutUint32(header[16:20], crc32.ChecksumIEEE(header[:16]))
+	if _, err := file.WriteAt(header[16:20], 16); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func expectCorrupt(t *testing.T, opts Options, text string) {
+	t.Helper()
+	w, err := Open(opts)
+	if err == nil {
+		_ = w.Close(context.Background())
+		t.Fatalf("corrupt log opened; want ErrCorrupt containing %q", text)
+	}
+	if !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), text) {
+		t.Fatalf("Open = %v, want ErrCorrupt containing %q", err, text)
+	}
+}
+
+// The directory layout is part of the durability contract: a missing segment
+// in the middle, or a log whose first segment is not 1 with nothing ever
+// acknowledged, means records are gone. Open must refuse rather than replay a
+// hole as "nothing happened".
+func TestOpenRefusesSegmentGapsAndUnacknowledgedTruncation(t *testing.T) {
+	dir := t.TempDir()
+	opts := testOptions(dir)
+	segment := writeOneRecordAndClose(t, opts)
+	if err := os.WriteFile(filepath.Join(dir, segmentName(segment+2)), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	expectCorrupt(t, opts, "non-contiguous WAL segments")
+	if err := os.Remove(filepath.Join(dir, segmentName(segment+2))); err != nil {
+		t.Fatal(err)
+	}
+
+	dir2 := t.TempDir()
+	opts2 := testOptions(dir2)
+	segment2 := writeOneRecordAndClose(t, opts2)
+	if err := os.Rename(filepath.Join(dir2, segmentName(segment2)), filepath.Join(dir2, segmentName(segment2+1))); err != nil {
+		t.Fatal(err)
+	}
+	expectCorrupt(t, opts2, "WAL starts after segment 1 without an acknowledgement")
+}
+
+// Every field of the frame header is checked on replay; only the payload
+// checksum had a test. A flipped magic, a flipped header CRC and an absurd
+// size must each be a distinct, named refusal.
+func TestOpenRefusesEachCorruptFrameHeaderField(t *testing.T) {
+	cases := []struct {
+		name  string
+		patch func(t *testing.T, dir string, segment uint64)
+		want  string
+	}{
+		// The header CRC covers the magic and the size, so a plain flip is
+		// caught by the checksum rule first; reseal the CRC so only the rule
+		// for the changed field can fire.
+		{"foreign magic", func(t *testing.T, dir string, segment uint64) {
+			patchSegment(t, dir, segment, 0, []byte{0xde, 0xad, 0xbe, 0xef})
+			resealHeader(t, dir, segment)
+		}, "invalid frame header"},
+		{"flipped header checksum", func(t *testing.T, dir string, segment uint64) {
+			patchSegment(t, dir, segment, 16, []byte{0x00, 0x00, 0x00, 0x00})
+		}, "invalid frame header checksum"},
+		{"size beyond the record limit", func(t *testing.T, dir string, segment uint64) {
+			size := make([]byte, 4)
+			binary.BigEndian.PutUint32(size, 1<<30)
+			patchSegment(t, dir, segment, 8, size)
+			resealHeader(t, dir, segment)
+		}, ErrRecordTooLarge.Error()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := testOptions(dir)
+			segment := writeOneRecordAndClose(t, opts)
+			tc.patch(t, dir, segment)
+			expectCorrupt(t, opts, tc.want)
+		})
+	}
+}
+
+// 断电 / 快照后最后一段尾部可能是零填充（文件长度已持久、数据块未写回，读出为 0）。只有同时满足四个条件才截断：(1) 仅最后一段；
+// (2) 坏点不早于 checkpoint fence，不与已确认前缀重叠；(3) 自坏帧头起至文件末尾全为 0，而不是 CRC 不符的非零数据；(4) 截断后
+// 告警并计指标（reason 低基数）。否则仍 ErrCorrupt，且拒绝打开时不改动文件。不完整尾帧的既有截断不变，但同样先核对 fence。
+// 历史：RR-20260926-41。
 
 const (
 	tailTruncatedTotal = "nestwal.recovery.tail_truncated.total"
@@ -294,4 +417,68 @@ func TestReplayRefusesZeroFillInEarlierSegment(t *testing.T) {
 	if fileSize(t, path) != before {
 		t.Fatalf("earlier segment modified: size %d -> %d", before, fileSize(t, path))
 	}
+}
+
+// 跨页半写回仍拒绝启动：最后一帧跨 4 KiB 页边界，前页（含 20 字节帧头）已写回，后页未写回、读出为 0。帧头有效、帧体完整在文件
+// 长度之内，只是 payload CRC 不符，自坏点至文件末尾并非全 0：既不是“零填充尾”也不是“不完整尾帧”，必须 ErrCorrupt 拒绝启动且
+// 不改动文件——即使坏点在 checkpoint fence 之后也不放宽：WAL 无法区分“后页丢写回”与真实的 payload 损坏。
+func TestOpenRefusesFrameWhosePayloadPageWasNotWrittenBack(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		ackFirst bool
+	}{
+		{name: "no checkpoint", ackFirst: false},
+		{name: "torn frame after checkpoint fence", ackFirst: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := testOptions(dir)
+			opts.SegmentBytes = 64 << 10
+			opts.MaxRecordBytes = 16 << 10
+			w, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first, err := w.Append(context.Background(), bulkyRecord(1, 3000))
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := w.Append(context.Background(), bulkyRecord(2, 3000))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.ackFirst {
+				if err := w.Ack(context.Background(), first); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			// 前提：第二帧起点（= 第一帧的结束偏移）连同整个帧头落在第一页，帧体跨过 4096 且是最后一帧。
+			if first.Segment != second.Segment {
+				t.Fatalf("premise: records span segments %d/%d", first.Segment, second.Segment)
+			}
+			path := segmentPath(dir, second.Segment)
+			if first.Offset+frameHeaderSize > tailBlockSize || second.Offset <= tailBlockSize || fileSize(t, path) != second.Offset {
+				t.Fatalf("premise: second frame [%d,%d) must keep its header in the first page and cross %d; file size %d",
+					first.Offset, second.Offset, tailBlockSize, fileSize(t, path))
+			}
+			// 模拟后页未写回：自页边界起至文件末尾清零，文件长度不变。
+			patchSegment(t, dir, second.Segment, tailBlockSize, make([]byte, second.Offset-tailBlockSize))
+
+			err = expectRefusedUntouched(t, opts, path)
+			if !strings.Contains(err.Error(), "invalid frame payload checksum") {
+				t.Fatalf("Open = %v, want the payload checksum refusal", err)
+			}
+		})
+	}
+}
+
+// bulkyRecord 是带 dataBytes 字节 mutation 数据的测试记录，用来让帧跨过页边界。
+func bulkyRecord(sequence byte, dataBytes int) corenest.CommitRecord {
+	record := testRecord(sequence, corenest.DurabilityStrict)
+	record.Mutations[0].Data = bytes.Repeat([]byte{sequence}, dataBytes)
+	return record
 }

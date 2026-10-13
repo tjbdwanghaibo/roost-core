@@ -119,7 +119,7 @@ Checkpoint Mod。
 ## 8. 测试与验收
 
 全部已实现（`framework/nest/pipelined_commit_test.go`、`framework/nest/pipelined_bench_test.go`；
-`framework/nestwal/pipelined_test.go`、`framework/nestwal/crash_test.go`、`framework/dataengine/projector_test.go`）：
+`framework/nestwal/terminal_test.go`、`framework/nestwal/crash_test.go`、`framework/dataengine/engine/projector_test.go`）：
 
 1. 单元（fake PipelinedCommitter，可控 resolve 时机/结果）：Enqueue 拒绝→回滚完好；
    indeterminate→abandon 不回滚；早放锁（探针在 ticket 未 resolve 时成功抢到实体锁）；

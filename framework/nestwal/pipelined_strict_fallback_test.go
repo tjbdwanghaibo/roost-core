@@ -1,38 +1,39 @@
-package nestwal_test
+// 上层组件经真实 WAL 的持久语义：pipelined 回退 strict 路径时等 fsync，WAL terminal 唤醒实体投影等待方。
 
-// RR-20260928-11：pipelined handler 在 broadcast（没有提前放锁的闭包）或带 Remote 批次时不走 Enqueue，回退到 strict 提交路径，
-// 经 committer.Commit（正式装配为 Projector.Commit）进入 WAL.Append，记录的 Durability 仍是 3。
-// 修前 Append 只对 DurabilityStrict 置 requireSync：Durability 3 的记录与 async 一样在 fsync 之前返回，于是锁释放、Sync Confirm、
-// AfterCommit 都可能先于 fsync 对外可见，违反 pipelined “成功只在持久之后对外可见”的契约（NEST_PIPELINED_COMMIT.md §5 写明这些路径
-// “表现等同 Strict（锁内等待 durable）”）。承诺：
-//   - WAL 层：Append 对 strict 与 pipelined 都在所在批 fsync 之后才返回；async 不等 fsync（不变）；Enqueue 仍在 fsync 之前交出票据（不变）。
-//   - broadcast pipelined（真实 Nest + 正式 Projector + 真实 WAL）：fsync 完成之前实体锁不释放、Sync 门不放行、AfterCommit 不执行，与 strict 相同。
-//   - 快路径（单目标 Request，Enqueue 两阶段）不变：fsync 还没完成时实体锁已经释放，回复、AfterCommit、Sync 门仍等到持久之后。
-// 放在 nestwal 目录的外部测试包里：要用 RR-33 的段文件 fsync 测试缝（SetSyncFileForTest）把 fsync 停住，同时装配 Nest 与 engine.Projector。
-// 修前没有 fsync 可停：用 GroupCommitInterval=1h 关掉后台刷盘，已完成的 fsync 次数在每个观察点仍为 0，即“对外可见早于 fsync”。
+package nestwal_test
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
-	engine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 )
 
+// pipelined handler 在 broadcast（没有提前放锁的闭包）或带 Remote 批次时不走 Enqueue，回退到 strict 提交路径（committer.Commit →
+// WAL.Append），记录的 Durability 仍是 3。pipelined “成功只在持久之后对外可见”：
+//   - WAL 层：Append 对 strict 与 pipelined 都在所在批 fsync 之后才返回；async 不等 fsync；Enqueue 仍在 fsync 之前交出票据。
+//   - broadcast pipelined（真实 Nest + 正式 Projector + 真实 WAL）：fsync 完成之前实体锁不释放、Sync 门不放行、AfterCommit 不执行，与 strict 相同。
+//   - 快路径（单目标 Request，Enqueue 两阶段）不变：fsync 还没完成时实体锁已经释放，回复、AfterCommit、Sync 门仍等到持久之后。
+// 放在外部测试包里：要用段文件 fsync 测试缝（SetSyncFileForTest）把 fsync 停住，同时装配 Nest 与 engine.Projector。
+// 历史：RR-20260928-11。
+
 // fallbackKind 是本测试二进制里唯一的本地 kind：nestwal 目录下 remote_codec_test.go 已占用 125、197（Remote managed），不能撞号。
 const fallbackKind entity.EntityKind = 198
 
-// fsyncGate 包住段文件 fsync：arm 之后每次 fsync 先通知 entered、再停到 release。只在测试编译（RR-33 的 Options.syncFile 缝）。
+// fsyncGate 包住段文件 fsync：arm 之后每次 fsync 先通知 entered、再停到 release。只在测试编译（Options.syncFile 缝）。
 // completed 是已完成的段文件 fsync 次数，免锁读取：写线程在 fsync 期间持有 stateMu，fsync 停住时 WAL.Stats() 会阻塞。
 type fsyncGate struct {
 	armed     atomic.Bool
@@ -493,5 +494,95 @@ func TestPipelinedFastPathStillReleasesLockBeforeFsync(t *testing.T) {
 	}
 	if got := f.live.Base().LastCommitLSN(); got == 0 {
 		t.Fatal("fast path did not record the commit LSN (Enqueue was not used)")
+	}
+}
+
+// 真实 WAL 进入 terminal（段文件 fsync 返回 EIO）后本进程不会再确认任何记录：已在 Projector.WaitEntityProjection 里等待的冷加载
+// 立即拿到可判别的 WAL 错误，而不是等到自己的截止时间或 Projector 关闭。放在外部测试包里，用 fsync 测试缝在上层组件上制造真实 terminal。
+// 历史：RR-20260926-50。
+
+type acceptingStore struct{}
+
+func (acceptingStore) Project(context.Context, coredata.CommitRecord) error { return nil }
+
+type enteredContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+// Done 在等待方的 select 求值 ctx.Done() 时通知测试：此后发生的事件一定是在“等待中”被观察到的。
+func (c *enteredContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
+
+func projectionRecord(sequence byte, entityID int64, durability coredata.Durability) coredata.CommitRecord {
+	var id coredata.TransactionID
+	id[15] = sequence
+	data := []byte{0x05, 0, 0, 0, 0} // 空 BSON 文档；ManualReplay 下不投影，Projector 不解析它
+	return coredata.CommitRecord{
+		ID: id, Handler: "test.handler", Durability: durability,
+		Mutations: []coredata.Mutation{{
+			Key:  coredata.DocumentKey{Database: "game", Resource: "players", ID: entityID},
+			Kind: coredata.MutationPut, NextVersion: 1, Mask: 1, Schema: 1, Codec: "bson-v2", Data: data,
+		}},
+	}
+}
+
+func TestWALTerminalWakesEntityProjectionWaiters(t *testing.T) {
+	failing := make(chan struct{})
+	opts := nestwal.DefaultOptions(t.TempDir())
+	opts.GroupCommitInterval = time.Hour
+	nestwal.SetSyncFileForTest(&opts, func(file *os.File) error {
+		select {
+		case <-failing:
+			return &os.PathError{Op: "sync", Path: file.Name(), Err: syscall.EIO}
+		default:
+			return file.Sync()
+		}
+	})
+	wal, err := nestwal.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wal.Close(context.Background()) })
+	projector, err := engine.NewProjector(wal, acceptingStore{}, engine.ProjectorOptions{CloseWAL: false, ManualReplay: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = projector.Close(context.Background()) })
+
+	// 已准入、仍在实体锁内（未 TransactionReleased）：测试期间不会投影，实体 41 的冷加载须等待。
+	if err := projector.Commit(context.Background(), projectionRecord(1, 41, 2)); err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	entered := &enteredContext{Context: waitCtx, entered: make(chan struct{})}
+	waiter := make(chan error, 1)
+	go func() { waiter <- projector.WaitEntityProjection(entered, 41) }()
+	select {
+	case <-entered.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter did not start waiting")
+	}
+
+	close(failing)
+	if err := projector.Commit(context.Background(), projectionRecord(2, 42, 2)); !errors.Is(err, corenest.ErrCommitIndeterminate) {
+		t.Fatalf("premise: strict commit on a failing fsync err=%v, want ErrCommitIndeterminate", err)
+	}
+	select {
+	case <-wal.Terminated():
+	default:
+		t.Fatal("premise: WAL is not terminal after the injected fsync failure")
+	}
+	select {
+	case err := <-waiter:
+		if !errors.Is(err, corenest.ErrCommitIndeterminate) {
+			t.Fatalf("waiter woken by WAL terminal err=%v, want errors.Is ErrCommitIndeterminate", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("WAL went terminal but a cold load already waiting in WaitEntityProjection is still blocked; it gets no WAL error until its own deadline or Close")
 	}
 }

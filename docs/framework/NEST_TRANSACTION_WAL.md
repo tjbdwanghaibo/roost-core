@@ -116,7 +116,7 @@ pipelined 在准入后为动态实体写入 CommitLSN，并在等待 WAL 前释�
 坏点是这一帧的起点，帧头有效、帧体长度在文件之内，只有 payload CRC 不符（`invalid frame payload checksum`）；坏点之后并非全 0，所以不属于零填充尾，
 即使这一帧在 checkpoint fence 之后、从未被确认，也按“帧头有效但 CRC 不符”拒绝启动且不改动文件。WAL 无法区分“后页丢写回”与真实的 payload 损坏，
 放宽会吞掉真实的 CRC 错误。这种拒绝与“零页之后仍有非零字节”一样需要人工处置；错误文本只有 `invalid frame payload checksum`，不带段号与偏移，坏帧在最后一段，起点是其中最后一个完整帧的结束偏移。
-回归：`framework/nestwal/torn_page_tail_promises_test.go`。
+回归：`framework/nestwal/corruption_test.go` 的 `TestOpenRefusesFrameWhosePayloadPageWasNotWrittenBack`。
 
 ## 6. 一致性和幂等
 

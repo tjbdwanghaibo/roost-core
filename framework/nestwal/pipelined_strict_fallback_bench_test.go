@@ -1,9 +1,8 @@
 package nestwal_test
 
-// RR-20260928-11 的同机前后对照基准：真实 Nest（8 快 worker）+ 正式 engine.Projector（正常回放 / Ack）+ 真实 WAL
+// pipelined 回退 strict 路径的同机前后对照基准：真实 Nest（8 快 worker）+ 正式 engine.Projector（正常回放 / Ack）+ 真实 WAL
 // （默认 GroupCommitInterval 10ms、BatchDelay 500µs），32 个闭环客户端各自轮换 2 个独立实体。
 // broadcast_*：DispatchBroadcast 单目标，从派发到 AfterCommit 的延迟；request_pipelined：快路径 Request（Enqueue 两阶段）对照。
-// 修复前 broadcast_pipelined 不等 fsync（async 语义），修复后应与 broadcast_strict 相同；request_pipelined 不受影响。
 // 复跑：把本文件复制进基线副本的 nestwal/，两侧 go test -c 后交替运行 -test.bench BenchmarkBroadcastPipelinedCommit，benchstat 比较。
 
 import (
