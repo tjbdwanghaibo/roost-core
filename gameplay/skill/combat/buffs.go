@@ -5,56 +5,48 @@ import (
 	"fmt"
 )
 
-// BuffID identifies a buff definition in the host's catalog.
+// BuffID 标识 Host catalog 里的一个 buff 定义。
 type BuffID uint32
 
-// BuffInstanceID identifies one application inside a container. Instance ids
-// are a per-container sequence, so they double as AttributeSet modifier
-// handles and as deterministic ordering keys.
+// BuffInstanceID 标识容器里的一次施加。实例 ID 是每个容器自己的序号，因此同时充当 AttributeSet 的修正句柄与
+// 确定的排序键。
 type BuffInstanceID uint64
 
-// Tag classifies buffs for dispel and immunity matching.
+// Tag 给 buff 分类，用于驱散与免疫匹配。
 type Tag string
 
-// BuffStackPolicy controls what re-applying an already-present buff does.
+// BuffStackPolicy 决定对已存在的 buff 再次施加时怎么做。
 type BuffStackPolicy uint8
 
 const (
-	// BuffRefresh adds a stack (up to MaxStacks) and resets the duration.
+	// BuffRefresh 加一层（不超过 MaxStacks）并重置持续时间。
 	BuffRefresh BuffStackPolicy = iota
-	// BuffExtend adds a stack and extends the remaining duration by the
-	// spec's (tenacity-adjusted) duration.
+	// BuffExtend 加一层，并把剩余时间延长 spec 的持续时间（经韧性调整）。
 	BuffExtend
-	// BuffIgnore keeps the existing instance untouched.
+	// BuffIgnore 保持已有实例不变。
 	BuffIgnore
-	// BuffIndependent always creates a fresh instance with its own duration,
-	// never merging with existing instances of the same ID (independently
-	// timed DoTs, one-shot attribute modifiers).
+	// BuffIndependent 总是新建一个有自己持续时间的实例，从不与同 ID 的已有实例合并（独立计时的 DoT、一次性属性修正）。
 	BuffIndependent
 )
 
-// BuffSpec is a buff definition. Specs are value data owned by the caller;
-// the container copies what it stores.
+// BuffSpec 是 buff 定义。spec 是调用方拥有的值数据，容器复制它要保存的部分。
 type BuffSpec struct {
 	ID   BuffID
 	Tags []Tag
-	// GrantsImmunityTo blocks later applications of any buff carrying one of
-	// these tags while this buff is active.
+	// GrantsImmunityTo：本 buff 生效期间，阻止之后施加任何带这些标签的 buff。
 	GrantsImmunityTo []Tag
-	MaxStacks        int64 // <=1 means no stacking
+	MaxStacks        int64 // <=1 表示不叠层
 	StackPolicy      BuffStackPolicy
-	DurationTicks    int64 // <=0 means permanent until dispelled
-	// TenacityAffected durations are reduced by the container's tenacity:
-	// duration * (10000 - tenacityBP) / 10000, floored at 1 tick.
+	DurationTicks    int64 // <=0 表示永久，直到被驱散
+	// TenacityAffected 的持续时间按容器的韧性缩短：duration * (10000 - tenacityBP) / 10000，至少 1 tick。
 	TenacityAffected bool
-	// MaxDurationTicks, when positive, caps the effective duration after
-	// tenacity scaling.
+	// MaxDurationTicks 为正时，在韧性缩放之后封顶有效持续时间。
 	MaxDurationTicks int64
-	// Modifiers are granted to the linked AttributeSet per stack.
+	// Modifiers 按层数授予给关联的 AttributeSet。
 	Modifiers []Modifier
 }
 
-// BuffApplyOutcome reports what Apply did.
+// BuffApplyOutcome 报告 Apply 的结果。
 type BuffApplyOutcome uint8
 
 const (
@@ -65,21 +57,18 @@ const (
 	BuffBlockedImmune
 )
 
-// BuffInstance is one active buff.
+// BuffInstance 是一个生效中的 buff。
 type BuffInstance struct {
 	Instance    BuffInstanceID
 	Spec        BuffSpec
 	Stacks      int64
 	Source      int64
 	AppliedTick int64
-	DueTick     int64 // 0 means permanent
+	DueTick     int64 // 0 表示永久
 }
 
-// BuffContainer holds a combatant's active buffs with stacking, dispel-tag,
-// immunity, and tenacity semantics. Instances keep application order (by
-// instance id), so every walk is deterministic. Linking an AttributeSet
-// makes buff modifiers materialize as attribute grants automatically, scaled
-// by stack count.
+// BuffContainer 持有一个战斗单位生效中的 buff，实现叠层、驱散标签、免疫与韧性语义。实例保持施加顺序（按实例 ID），
+// 每次遍历都是确定的。关联 AttributeSet 后，buff 的修正按层数自动落成属性授予。
 type BuffContainer struct {
 	sequence   uint64
 	active     []BuffInstance
@@ -87,10 +76,10 @@ type BuffContainer struct {
 	attributes *AttributeSet
 }
 
+// NewBuffContainer 返回空的 buff 容器。
 func NewBuffContainer() *BuffContainer { return &BuffContainer{} }
 
-// LinkAttributes connects the container to an AttributeSet; active buffs are
-// re-granted immediately.
+// LinkAttributes 把容器关联到一个 AttributeSet，并立即重新授予生效中 buff 的修正。
 func (container *BuffContainer) LinkAttributes(attributes *AttributeSet) {
 	container.attributes = attributes
 	for index := range container.active {
@@ -98,8 +87,7 @@ func (container *BuffContainer) LinkAttributes(attributes *AttributeSet) {
 	}
 }
 
-// SetTenacityBP sets crowd-control resistance in basis points (2000 = -20%
-// duration on tenacity-affected buffs). Values are clamped into [0, 10000].
+// SetTenacityBP 设置以基点表示的控制抗性（2000 表示受韧性影响的 buff 持续时间 -20%），夹在 [0, 10000]。
 func (container *BuffContainer) SetTenacityBP(tenacityBP int64) {
 	if tenacityBP < 0 {
 		tenacityBP = 0
@@ -127,7 +115,7 @@ func (container *BuffContainer) effectiveDuration(spec BuffSpec) int64 {
 	return duration
 }
 
-// ImmuneTo reports whether an active buff grants immunity against the tag.
+// ImmuneTo 报告是否有生效中的 buff 对该标签免疫。
 func (container *BuffContainer) ImmuneTo(tags []Tag) bool {
 	for _, instance := range container.active {
 		for _, immunity := range instance.Spec.GrantsImmunityTo {
@@ -141,7 +129,7 @@ func (container *BuffContainer) ImmuneTo(tags []Tag) bool {
 	return false
 }
 
-// Apply adds (or re-applies) a buff at the given tick.
+// Apply 在给定 tick 施加（或再次施加）一个 buff。
 func (container *BuffContainer) Apply(spec BuffSpec, tick, source int64) (BuffInstanceID, BuffApplyOutcome) {
 	if container.ImmuneTo(spec.Tags) {
 		return 0, BuffBlockedImmune
@@ -192,8 +180,7 @@ func (container *BuffContainer) Apply(spec BuffSpec, tick, source int64) (BuffIn
 	return instance.Instance, BuffApplied
 }
 
-// Dispel removes up to limit active buffs carrying the tag, newest first
-// (limit <= 0 means all). It returns the removed instances.
+// Dispel 移除至多 limit 个带该标签的生效 buff，最新的先移除（limit <= 0 表示全部），返回被移除的实例。
 func (container *BuffContainer) Dispel(tag Tag, limit int) []BuffInstance {
 	var removed []BuffInstance
 	for index := len(container.active) - 1; index >= 0; index-- {
@@ -208,7 +195,7 @@ func (container *BuffContainer) Dispel(tag Tag, limit int) []BuffInstance {
 	return removed
 }
 
-// Remove drops one instance by id.
+// Remove 按 ID 移除一个实例。
 func (container *BuffContainer) Remove(id BuffInstanceID) (BuffInstance, bool) {
 	for index := range container.active {
 		if container.active[index].Instance == id {
@@ -218,9 +205,8 @@ func (container *BuffContainer) Remove(id BuffInstanceID) (BuffInstance, bool) {
 	return BuffInstance{}, false
 }
 
-// SetStacks pins an instance's stack count (clamped to [0, MaxStacks]) and
-// re-materializes its attribute grants at the new scale. A count of zero
-// removes the instance. Returns the post-change instance.
+// SetStacks 固定实例的层数（夹在 [0, MaxStacks]），并按新层数重新落成属性授予。层数为 0 时移除实例。
+// 返回修改后的实例。
 func (container *BuffContainer) SetStacks(id BuffInstanceID, stacks int64) (BuffInstance, bool) {
 	for index := range container.active {
 		instance := &container.active[index]
@@ -241,7 +227,7 @@ func (container *BuffContainer) SetStacks(id BuffInstanceID, stacks int64) (Buff
 	return BuffInstance{}, false
 }
 
-// SetDueTick pins an instance's expiry (0 means permanent).
+// SetDueTick 固定实例的到期 tick（0 表示永久）。
 func (container *BuffContainer) SetDueTick(id BuffInstanceID, dueTick int64) (BuffInstance, bool) {
 	for index := range container.active {
 		instance := &container.active[index]
@@ -254,10 +240,8 @@ func (container *BuffContainer) SetDueTick(id BuffInstanceID, dueTick int64) (Bu
 	return BuffInstance{}, false
 }
 
-// Adopt injects a foreign instance (a copy or transfer from another
-// container) under a fresh local instance id, bypassing immunity and
-// stacking rules: the caller has already decided the move is legal. The
-// adopted instance keeps its spec, stacks, source, and expiry.
+// Adopt 以新的本地实例 ID 注入一个外来实例（从另一个容器复制或转移），绕过免疫与叠层规则：调用方已经判定这次
+// 移动合法。被接收的实例保留 spec、层数、来源与到期时间。
 func (container *BuffContainer) Adopt(instance BuffInstance) BuffInstanceID {
 	container.sequence++
 	instance.Instance = BuffInstanceID(container.sequence)
@@ -267,8 +251,7 @@ func (container *BuffContainer) Adopt(instance BuffInstance) BuffInstanceID {
 	return instance.Instance
 }
 
-// Tick expires every instance due at or before now and returns them in
-// application order.
+// Tick 让所有到期 tick 不晚于 now 的实例过期，按施加顺序返回它们。
 func (container *BuffContainer) Tick(now int64) []BuffInstance {
 	var expired []BuffInstance
 	for index := 0; index < len(container.active); {
@@ -282,13 +265,12 @@ func (container *BuffContainer) Tick(now int64) []BuffInstance {
 	return expired
 }
 
-// Active returns the live instances in application order. The slice is a
-// copy; instances inside are the container's values.
+// Active 按施加顺序返回生效中的实例。切片是副本；其中的实例是容器的值。
 func (container *BuffContainer) Active() []BuffInstance {
 	return append([]BuffInstance(nil), container.active...)
 }
 
-// HasTag reports whether any active buff carries the tag.
+// HasTag 报告是否有生效中的 buff 带该标签。
 func (container *BuffContainer) HasTag(tag Tag) bool {
 	for _, instance := range container.active {
 		if containsTag(instance.Spec.Tags, tag) {
@@ -338,17 +320,15 @@ func containsTag(tags []Tag, want Tag) bool {
 	return false
 }
 
-// BuffContainerState is the container's persistable state. Instance ids are
-// part of the state so restored containers keep issuing unique ids and
-// attribute grant handles stay stable across a reload.
+// BuffContainerState 是容器可持久化的状态。实例 ID 属于状态：恢复后的容器继续签发唯一 ID，属性授予句柄在重新加载
+// 前后保持稳定。
 type BuffContainerState struct {
 	Sequence   uint64         `json:"sequence"`
 	TenacityBP int64          `json:"tenacity_bp,omitempty"`
 	Active     []BuffInstance `json:"active,omitempty"`
 }
 
-// State snapshots the container. The result shares nothing with the live
-// container and is safe to retain across further mutations.
+// State 快照容器。结果不与活的容器共享任何东西，之后继续修改容器也可以安全保留。
 func (container *BuffContainer) State() BuffContainerState {
 	state := BuffContainerState{Sequence: container.sequence, TenacityBP: container.tenacityBP}
 	if len(container.active) > 0 {
@@ -361,18 +341,13 @@ func (container *BuffContainer) State() BuffContainerState {
 	return state
 }
 
-// ErrBuffStateCorrupt rejects a BuffContainerState whose instances violate
-// the container's invariants.
+// ErrBuffStateCorrupt 拒绝实例违反容器不变量的 BuffContainerState。
 var ErrBuffStateCorrupt = errors.New("combat: buff container state corrupt")
 
-// RestoreBuffContainer rebuilds a container from a State snapshot. Link an
-// AttributeSet afterwards to re-materialize modifier grants.
+// RestoreBuffContainer 从 State 快照重建容器；之后关联 AttributeSet 以重新落成修正授予。
 //
-// The snapshot is validated before use: instance ids must be unique, nonzero,
-// and no greater than the sequence counter. Accepting a violating snapshot
-// would let the sequence re-issue a live id later — and instance ids double
-// as attribute grant handles, so a collision silently corrupts modifier
-// bookkeeping far from the corrupt data. Fail here instead.
+// 使用前先校验快照：实例 ID 必须唯一、非零且不大于序号计数器。接受违规快照会让序号之后重新签发一个仍在用的
+// ID——实例 ID 同时是属性授予句柄，冲突会在远离损坏数据的地方静默破坏修正记账，所以在这里就失败。
 func RestoreBuffContainer(state BuffContainerState) (*BuffContainer, error) {
 	seen := make(map[BuffInstanceID]struct{}, len(state.Active))
 	for _, instance := range state.Active {

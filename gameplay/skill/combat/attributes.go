@@ -6,38 +6,32 @@ import (
 	"sort"
 )
 
-// AttributeID identifies one attribute channel (health, armor, haste, ...).
-// The mapping to gameplay meaning belongs to the host's catalog.
+// AttributeID 标识一个属性通道（生命、护甲、急速等）；与玩法含义的对应由 Host 的 catalog 决定。
 type AttributeID uint16
 
-// ModifierHandle identifies one grant inside an AttributeSet so it can be
-// revoked exactly. Handles are caller-supplied (buff instance ids are a
-// natural choice); granting an existing handle replaces its modifiers.
+// ModifierHandle 标识 AttributeSet 里的一次授予，以便精确撤销。句柄由调用方提供（buff 实例 ID 是自然的选择）；
+// 对已有句柄再次授予会替换它的修正。
 type ModifierHandle uint64
 
-// Modifier adjusts one attribute: Flat adds to the base sum, RateBP adds to
-// the additive rate bucket in basis-point deltas (+2000 = +20%, -3000 =
-// -30%). Flat and rate buckets aggregate by summation, so the current value
-// is independent of grant order — a determinism requirement.
+// Modifier 调整一个属性：Flat 加到基础值之和上，RateBP 以基点增量加进加法比率桶（+2000 = +20%，-3000 = -30%）。
+// 固定值与比率桶都按求和聚合，当前值与授予顺序无关——这是确定性要求。
 type Modifier struct {
 	Attribute AttributeID
 	Flat      int64
 	RateBP    int64
 }
 
-// AttributeBounds clamps an attribute's current value.
+// AttributeBounds 夹取属性的当前值。
 type AttributeBounds struct {
 	Minimum int64
 	Maximum int64
 }
 
-// AttributeSet resolves current attribute values from a base value plus
-// granted modifiers:
+// AttributeSet 由基础值加上授予的修正算出当前属性值：
 //
 //	Current = clamp((base + Σflat) * max(0, 10000 + ΣrateBP) / 10000)
 //
-// All aggregation is exact integer summation, so Grant and Revoke are
-// perfectly reversible and the result never depends on application order.
+// 所有聚合都是精确整数求和，Grant 与 Revoke 完全可逆，结果与施加顺序无关。
 type AttributeSet struct {
 	base     map[AttributeID]int64
 	flatSum  map[AttributeID]*big.Int
@@ -47,6 +41,7 @@ type AttributeSet struct {
 	observer func(AttributeID)
 }
 
+// NewAttributeSet 返回空的属性集。
 func NewAttributeSet() *AttributeSet {
 	return &AttributeSet{
 		base:    make(map[AttributeID]int64),
@@ -57,8 +52,7 @@ func NewAttributeSet() *AttributeSet {
 	}
 }
 
-// Observe registers a callback fired once per attribute whose inputs change
-// (base, bounds, or modifiers) — the hook dirty tracking plugs into.
+// Observe 注册一个回调：某个属性的输入（基础值、上下界或修正）改变时，每个属性触发一次——脏标记跟踪接在这里。
 func (set *AttributeSet) Observe(observer func(AttributeID)) { set.observer = observer }
 
 func (set *AttributeSet) notify(id AttributeID) {
@@ -67,6 +61,7 @@ func (set *AttributeSet) notify(id AttributeID) {
 	}
 }
 
+// SetBase 设置属性的基础值，值变化时通知观察者。
 func (set *AttributeSet) SetBase(id AttributeID, value int64) {
 	if set.base[id] == value {
 		return
@@ -75,8 +70,10 @@ func (set *AttributeSet) SetBase(id AttributeID, value int64) {
 	set.notify(id)
 }
 
+// Base 返回属性的基础值。
 func (set *AttributeSet) Base(id AttributeID) int64 { return set.base[id] }
 
+// SetBounds 设置属性当前值的上下界，值变化时通知观察者。
 func (set *AttributeSet) SetBounds(id AttributeID, bounds AttributeBounds) {
 	if set.bounds[id] == bounds {
 		return
@@ -85,8 +82,7 @@ func (set *AttributeSet) SetBounds(id AttributeID, bounds AttributeBounds) {
 	set.notify(id)
 }
 
-// Grant installs the handle's modifiers, replacing any prior grant under the
-// same handle.
+// Grant 安装句柄的修正，替换同一句柄下先前的授予。
 func (set *AttributeSet) Grant(handle ModifierHandle, modifiers ...Modifier) {
 	set.Revoke(handle)
 	if len(modifiers) == 0 {
@@ -101,7 +97,7 @@ func (set *AttributeSet) Grant(handle ModifierHandle, modifiers ...Modifier) {
 	}
 }
 
-// Revoke removes a grant exactly; unknown handles are a no-op.
+// Revoke 精确移除一次授予；未知句柄是空操作。
 func (set *AttributeSet) Revoke(handle ModifierHandle) {
 	modifiers, ok := set.grants[handle]
 	if !ok {
@@ -115,7 +111,7 @@ func (set *AttributeSet) Revoke(handle ModifierHandle) {
 	}
 }
 
-// Current resolves the attribute's effective value.
+// Current 算出属性的有效值。
 func (set *AttributeSet) Current(id AttributeID) int64 {
 	total := clampModifierSum(set.base[id], set.flatSum[id])
 	rate := clampModifierSum(BasisPointScale, set.rateSum[id])
@@ -134,8 +130,7 @@ func (set *AttributeSet) Current(id AttributeID) int64 {
 	return value
 }
 
-// Snapshot returns every attribute with a non-zero input, in ascending
-// AttributeID order — a deterministic view for persistence and sync.
+// Snapshot 按 AttributeID 升序返回每个有非零输入的属性，是供持久化与同步用的确定视图。
 func (set *AttributeSet) Snapshot() []AttributeValue {
 	present := make(map[AttributeID]struct{}, len(set.base)+len(set.flatSum))
 	for id := range set.base {
@@ -159,16 +154,15 @@ func (set *AttributeSet) Snapshot() []AttributeValue {
 	return result
 }
 
-// AttributeValue is one row of an AttributeSet snapshot.
+// AttributeValue 是 AttributeSet 快照里的一行。
 type AttributeValue struct {
 	Attribute AttributeID
 	Base      int64
 	Current   int64
 }
 
-// AttributeBaseState is one attribute's persistable configuration: base
-// value and bounds. Modifier grants are intentionally excluded — they belong
-// to their granters (buffs, equipment), which re-grant on restore.
+// AttributeBaseState 是一个属性可持久化的配置：基础值与上下界。修正授予刻意不含在内——它们属于授予方（buff、装备），
+// 恢复时由授予方重新授予。
 type AttributeBaseState struct {
 	Attribute AttributeID     `json:"attribute"`
 	Base      int64           `json:"base"`
@@ -176,7 +170,7 @@ type AttributeBaseState struct {
 	Bounds    AttributeBounds `json:"bounds,omitempty"`
 }
 
-// BaseState snapshots base values and bounds in ascending attribute order.
+// BaseState 按属性升序快照基础值与上下界。
 func (set *AttributeSet) BaseState() []AttributeBaseState {
 	present := make(map[AttributeID]struct{}, len(set.base)+len(set.bounds))
 	for id := range set.base {
@@ -201,8 +195,7 @@ func (set *AttributeSet) BaseState() []AttributeBaseState {
 	return result
 }
 
-// RestoreBase replaces every base value and bound with the given state,
-// notifying the observer for each attribute that appears on either side.
+// RestoreBase 用给定状态替换全部基础值与上下界，对出现在任一侧的每个属性通知观察者。
 func (set *AttributeSet) RestoreBase(states []AttributeBaseState) {
 	touched := make(map[AttributeID]struct{}, len(set.base)+len(states))
 	for id := range set.base {

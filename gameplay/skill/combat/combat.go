@@ -1,26 +1,19 @@
-// Package combat is the reusable combat content battery for roost-skill
-// hosts: attribute sets, buff containers, and the twelve-stage damage
-// pipeline, all in deterministic fixed-point integer math (amounts in raw
-// units, rates in basis points where 10000 = 100%).
+// Package combat 是 roost 技能 Host 可复用的战斗内容组件：属性集、buff 容器与十二阶段伤害管线，全部用确定性的
+// 定点整数运算（数量用原始单位，比率用基点，10000 = 100%）。
 //
-// The package has zero dependencies so any host can embed it into its own
-// entity model. The skill MemoryHost runs on this exact code, and
-// combatcomponent wires it into roost-core entities, so test-host math,
-// reference math, and production math cannot diverge.
+// 包没有任何依赖，任何 Host 都能把它嵌进自己的实体模型。skill 的 MemoryHost 直接跑这份代码，combatcomponent
+// 把它接进 roost-core 实体，测试 Host、参考实现与生产环境的计算不会分叉。
 //
-// Randomness is intentionally absent: callers roll chances themselves (the
-// skill runtime derives rolls from HMAC keys) and pass the outcomes in as
-// facts (Dodge, ForceCritical, ...). Wall-clock time is likewise absent;
-// durations are ticks supplied by the caller.
+// 刻意不含随机性：概率由调用方自己掷（skill 运行时从 HMAC 密钥派生），结果作为事实传入（Dodge、ForceCritical 等）。
+// 同样不含墙钟时间：时长是调用方给的 tick。
 package combat
 
 import "math"
 
-// BasisPointScale is the fixed-point denominator for all rates: 10000 = 100%.
+// BasisPointScale 是所有比率的定点分母：10000 = 100%。
 const BasisPointScale = 10000
 
-// ScaleBasisPoints applies a basis-point rate to a value, saturating on
-// int64 overflow. A rate of 0 means 0, not "unset" — callers apply defaults.
+// ScaleBasisPoints 按基点比率缩放数值，int64 溢出时饱和。比率 0 就是 0，不表示“未设置”——默认值由调用方补。
 func ScaleBasisPoints(value, basisPoints int64) int64 {
 	return saturatingInt64Mul(value, basisPoints) / BasisPointScale
 }

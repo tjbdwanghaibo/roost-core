@@ -1,20 +1,18 @@
 package combat
 
-// DamageType selects the resistance channel in the damage pipeline. Any
-// other value takes no resistance channel (true damage).
+// DamageType 选择伤害管线里的抗性通道；其它取值不走抗性通道（真实伤害）。
 type DamageType uint16
 
 const (
 	DamageTypeTrue     DamageType = 0
-	DamageTypePhysical DamageType = 1 // mitigated by Armor
-	DamageTypeMagical  DamageType = 2 // mitigated by MagicResistance
+	DamageTypePhysical DamageType = 1 // 由 Armor 减免
+	DamageTypeMagical  DamageType = 2 // 由 MagicResistance 减免
 )
 
-// Element identifies an element channel for per-element damage multipliers.
+// Element 标识按元素区分伤害倍率的元素通道。
 type Element uint16
 
-// Combat result names, a closed vocabulary matching the skill EventContext
-// result field and proc filters.
+// 战斗结果名：封闭词表，与 skill EventContext 的 result 字段及 proc 过滤一致。
 const (
 	ResultHit     = "hit"
 	ResultImmune  = "immune"
@@ -24,18 +22,15 @@ const (
 	ResultKilled  = "killed"
 )
 
-// PipelineStages documents the fixed twelve-stage damage order. The order is
-// part of the determinism contract and never varies by content.
+// PipelineStages 记录固定的十二阶段伤害顺序。顺序是确定性契约的一部分，不随内容变化。
 var PipelineStages = [12]string{
 	"target_validity", "immunity", "avoidance", "damage_type",
 	"penetration", "element", "modifiers", "critical",
 	"caps", "shield", "health", "aftermath",
 }
 
-// Combatant is the flat fixed-point stat block the pipeline reads and
-// writes. Hosts project their entity model into it (or embed it directly);
-// avoidance and critical facts are pre-rolled booleans so the pipeline stays
-// free of randomness.
+// Combatant 是管线读写的扁平定点属性块。Host 把自己的实体模型投影进来（或直接嵌入）；闪避与暴击是预先掷好的
+// 布尔事实，管线本身不含随机性。
 type Combatant struct {
 	Alive     bool
 	Health    int64
@@ -46,17 +41,16 @@ type Combatant struct {
 	MagicResistance int64
 	Penetration     int64
 
-	DamageDealtBP        int64 // 0 means the 10000 default
-	DamageTakenBP        int64 // 0 means the 10000 default
-	CriticalMultiplierBP int64 // 0 means the 15000 default
-	// ElementMultipliersBP scales damage per element; a missing or zero entry
-	// means the 10000 default, so full element immunity is expressed with the
-	// DamageImmune flag or a dodge fact, never a 0 multiplier.
+	DamageDealtBP        int64 // 0 表示默认 10000
+	DamageTakenBP        int64 // 0 表示默认 10000
+	CriticalMultiplierBP int64 // 0 表示默认 15000
+	// ElementMultipliersBP 按元素缩放伤害；缺项或 0 表示默认 10000，所以完全免疫某元素用 DamageImmune 标志或闪避事实
+	// 表达，而不是 0 倍率。
 	ElementMultipliersBP map[Element]int64
 	VampBP               int64
 
-	DamageCap     int64 // 0 disables
-	MinimumDamage int64 // 0 disables
+	DamageCap     int64 // 0 表示不启用
+	MinimumDamage int64 // 0 表示不启用
 
 	Dodge         bool
 	Parry         bool
@@ -66,19 +60,17 @@ type Combatant struct {
 	ForceCritical bool
 }
 
-// DamageInput is one damage instance entering the pipeline.
+// DamageInput 是进入管线的一次伤害实例。
 type DamageInput struct {
 	Amount      int64
 	Type        DamageType
 	Element     Element
 	CanCritical bool
-	// SpellTagged marks the instance as spell damage, making it interceptable
-	// by a spell-shield hook.
+	// SpellTagged 把实例标为法术伤害，可以被法术护盾钩子拦截。
 	SpellTagged bool
 }
 
-// DamageOutcome reports what the pipeline did. Result carries the closed
-// result vocabulary (or a consumed hook name) for event contexts.
+// DamageOutcome 报告管线做了什么。Result 是封闭结果词表里的值（或被消耗的钩子名），供事件上下文使用。
 type DamageOutcome struct {
 	Attempted    int64
 	Mitigated    int64
@@ -95,38 +87,26 @@ type DamageOutcome struct {
 	Result       string
 }
 
-// Hooks lets the embedding world interpose status-driven combat hooks at the
-// pipeline's fixed interception points. Peek must be side-effect free; the
-// pipeline calls ConsumeHook exactly when a peeked hook is used. A nil Hooks
-// disables all interceptions.
+// Hooks 让嵌入方世界在管线固定的拦截点插入由状态驱动的战斗钩子。Peek 必须没有副作用；管线恰好在使用了被查看的
+// 钩子时调用 ConsumeHook。Hooks 为 nil 时不做任何拦截。
 type Hooks interface {
-	// PeekSpellShield reports the hook that fully intercepts a spell-tagged
-	// damage instance against the target ("spell_shield"-category statuses).
+	// PeekSpellShield 报告对目标完全拦截一次法术伤害的钩子（“spell_shield”类状态）。
 	PeekSpellShield() (string, bool)
-	// PeekCriticalOverride reports the hook that forces a critical hit for
-	// the source.
+	// PeekCriticalOverride 报告让来源必定暴击的钩子。
 	PeekCriticalOverride() (string, bool)
-	// PeekDeathPrevention reports the hook that pins the target at 1 health
-	// when the instance would be lethal ("death_prevention" or
-	// "execute_immunity" statuses).
+	// PeekDeathPrevention 报告实例致命时把目标钉在 1 点生命的钩子（“death_prevention”或“execute_immunity”状态）。
 	PeekDeathPrevention() (string, bool)
-	// ConsumeHook removes the hook's backing status after the pipeline used it.
+	// ConsumeHook 在管线用过钩子之后移除支撑它的状态。
 	ConsumeHook(hook string)
-	// OnShieldAbsorbed mirrors aggregate-shield absorption into the world's
-	// per-status shield pools. Called only when absorbed > 0.
+	// OnShieldAbsorbed 把聚合护盾的吸收量同步到世界里各状态的护盾池；只在 absorbed > 0 时调用。
 	OnShieldAbsorbed(absorbed int64)
 }
 
-// ResolveDamage runs one damage instance through the twelve-stage pipeline,
-// mutating target (health, shield, life state) and, for vamp, source. The
-// source may be nil (world-sourced damage: no penetration, no crit force, no
-// vamp). It returns ok=false without side effects when the target is nil or
-// already dead or has a corrupted negative health value — the caller decides
-// how to report an invalid target.
+// ResolveDamage 让一次伤害实例走完十二阶段管线，修改 target（生命、护盾、存活状态），吸血时还修改 source。source
+// 可以为 nil（世界来源的伤害：没有穿透、没有强制暴击、没有吸血）。目标为 nil、已死亡或生命值被破坏成负数时返回
+// ok=false 且没有副作用——如何报告无效目标由调用方决定。
 //
-// The math is the authoritative "twelve_stage_v1" formula: resistance R
-// mitigates by 10000/(10000+100R), rates compose multiplicatively in basis
-// points, and every step saturates instead of wrapping.
+// 计算是权威的“twelve_stage_v1”公式：抗性 R 按 10000/(10000+100R) 减免，比率以基点相乘组合，每一步都饱和而不回绕。
 func ResolveDamage(source, target *Combatant, input DamageInput, hooks Hooks) (DamageOutcome, bool) {
 	if target == nil || !target.Alive || target.Health < 0 {
 		return DamageOutcome{}, false
@@ -179,9 +159,8 @@ func ResolveDamage(source, target *Combatant, input DamageInput, hooks Hooks) (D
 	}
 	outcome.Mitigated = amount
 
-	// Rate stages clamp to zero after each scale: hosts project modifier
-	// stacks into these BP fields, and a stack driven below -10000 must mean
-	// "no damage", never negative damage (which would grant shield or health).
+	// 比率阶段每次缩放后都夹到 0：Host 把修正层数投影进这些基点字段，层数把比率压到 -10000 以下时必须表示“无伤害”，
+	// 而不是负伤害（那会变成加护盾或加血）。
 	elementBP := target.ElementMultipliersBP[input.Element]
 	if elementBP == 0 {
 		elementBP = BasisPointScale
@@ -226,8 +205,7 @@ func ResolveDamage(source, target *Combatant, input DamageInput, hooks Hooks) (D
 		amount = target.MinimumDamage
 	}
 
-	// A host-corrupted negative shield never amplifies damage: absorption is
-	// computed against the non-negative part of the pool.
+	// Host 写坏的负护盾不会放大伤害：吸收量只按护盾池的非负部分计算。
 	outcome.Absorbed = minInt64(maxInt64(target.Shield, 0), amount)
 	target.Shield -= outcome.Absorbed
 	amount -= outcome.Absorbed
@@ -258,14 +236,13 @@ func ResolveDamage(source, target *Combatant, input DamageInput, hooks Hooks) (D
 	return outcome, true
 }
 
-// HealOutcome reports a resolved heal.
+// HealOutcome 报告一次治疗的结算结果。
 type HealOutcome struct {
 	Attempted int64
 	Effective int64
 }
 
-// ResolveHeal applies a heal capped at missing health. ok=false when the
-// target is nil or dead (dead targets are not healable).
+// ResolveHeal 施加以缺失生命为上限的治疗。目标为 nil 或已死亡（死亡目标不可治疗）时 ok=false。
 func ResolveHeal(target *Combatant, amount int64) (HealOutcome, bool) {
 	if target == nil || !target.Alive {
 		return HealOutcome{}, false
@@ -276,8 +253,7 @@ func ResolveHeal(target *Combatant, amount int64) (HealOutcome, bool) {
 	return HealOutcome{Attempted: attempted, Effective: effective}, true
 }
 
-// AddShield grants shield points, saturating, and returns the amount added.
-// ok=false when the target is nil or dead.
+// AddShield 饱和地增加护盾值，返回实际增加量。目标为 nil 或已死亡时 ok=false。
 func AddShield(target *Combatant, amount int64) (int64, bool) {
 	if target == nil || !target.Alive {
 		return 0, false
@@ -285,7 +261,6 @@ func AddShield(target *Combatant, amount int64) (int64, bool) {
 	attempted := maxInt64(amount, 0)
 	before := target.Shield
 	target.Shield = saturatingInt64Add(before, attempted)
-	// Report the authoritative delta, not the requested amount. This keeps
-	// result payloads and events consistent when the value saturates.
+	// 报告权威的增量而不是请求的数量：数值饱和时结果载荷与事件仍然一致。
 	return target.Shield - before, true
 }
