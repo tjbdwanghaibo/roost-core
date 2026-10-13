@@ -39,7 +39,7 @@ type config struct {
 	mods.SagaPayloadConfig
 	Saga struct {
 		Database     string           `config:"database" default:"saga" example:"saga"`
-		StepDefaults stepBudgetConfig `config:"step_defaults,closed" help:"Step timeout and retry budget (U-0280). Fields a saga definition leaves unset\ntake these; one operation of a step gets up to max_attempts attempts, at most\none of which takes effect."`
+		StepDefaults stepBudgetConfig `config:"step_defaults,closed" help:"Step timeout and retry budget. Fields a saga definition leaves unset\ntake these; one operation of a step gets up to max_attempts attempts, at most\none of which takes effect."`
 		// Steps 按 <saga type>.<step name> 覆盖，优先于定义与 step_defaults；类型与步骤名要对应已注册的定义。
 		Steps       map[string]map[string]stepBudgetConfig `config:"steps" example:"{}" help:"Per-step overrides, winning over the definition and step_defaults:\nsteps.<saga type>.<step name>.<timeout|max_attempts|backoff_min|backoff_max>."`
 		Owner       string                                 `config:"owner" help:"协调器租约的持有者名，不写取 saga-<sid>-<随机 id>"`

@@ -26,7 +26,7 @@ type snapshotConfig struct {
 	SnapshotL2TTL        time.Duration `config:"snapshot_l2_ttl" min:"0" example:"10m"`
 	SnapshotL2KeyPrefix  string        `config:"snapshot_l2_key_prefix" example:"" help:"Prefix for the shared L2 snapshot keys (remote_entity:snapshot:*). Empty keeps the\nunprefixed keys; deployments sharing one Redis db must set different values, e.g.\nroost:<project>. Every node of a deployment must use the same value; no hash tags."`
 	// L2 写墓碑之后等几个副本确认、最多等多久。超时必须为正（Redis 的 WAIT … 0 是永久阻塞）且不超过 1s。
-	SnapshotL2TombstoneWaitReplicas int           `config:"snapshot_l2_tombstone_wait_replicas" default:"1" min:"0" example:"1" help:"O-M6-3：L2 写删除墓碑后用 WAIT 等几个副本确认、最多等多久，缩小切主时删除短暂复活的窗口。\n0 个副本即关闭；主节点没有副本时自动不等；确认不足只计数并记 Warn，不回滚。超时必须为正且不超过 1s。"`
+	SnapshotL2TombstoneWaitReplicas int           `config:"snapshot_l2_tombstone_wait_replicas" default:"1" min:"0" example:"1" help:"L2 写删除墓碑后用 WAIT 等几个副本确认、最多等多久，缩小切主时删除短暂复活的窗口。\n0 个副本即关闭；主节点没有副本时自动不等；确认不足只计数并记 Warn，不回滚。超时必须为正且不超过 1s。"`
 	SnapshotL2TombstoneWaitTimeout  time.Duration `config:"snapshot_l2_tombstone_wait_timeout" default:"50ms" min:"1ns" max:"1s" example:"50ms"`
 	SnapshotInterestTTL             time.Duration `config:"snapshot_interest_ttl" min:"0" example:"30s"`
 	SnapshotInterestKeys            int           `config:"snapshot_interest_keys" min:"0" example:"10000"`
@@ -103,7 +103,7 @@ type entityConfig struct {
 		FinalizeRetryInterval     time.Duration `config:"finalize_retry_interval" min:"0" example:"500ms"`
 		FinalizeProjectionTimeout time.Duration `config:"finalize_projection_timeout" min:"0"`
 		MaxWriteBatch             int           `config:"max_write_batch" min:"0" example:"64"`
-		MaxConcurrentWrites       int           `config:"max_concurrent_writes" default:"128" min:"0" help:"同时在途的 Remote 写许可；0 取 async_finalize_capacity，大于它时按它封顶；定容见 kit/README.md remoteentity“独立资源预算”"`
+		MaxConcurrentWrites       int           `config:"max_concurrent_writes" default:"128" min:"0" help:"同时在途的 Remote 写许可；0 取 async_finalize_capacity，大于它时按它封顶；与 async_finalize_* 一起按 Remote 写入峰值定容"`
 		AsyncFinalizeCapacity     int           `config:"async_finalize_capacity" min:"0" example:"4096"`
 		AsyncFinalizeWorkers      int           `config:"async_finalize_workers" min:"0" example:"16"`
 		OutboxPublishWorkers      int           `config:"outbox_publish_workers" default:"8" min:"0" max:"64" help:"唯一发布协调者内的独立事务并发；0取8，同Entity保序"`
@@ -140,7 +140,7 @@ type mirrorConfig struct {
 		snapshotConfig
 		Mongo  mongoConfig `config:"mongo"`
 		Mirror struct {
-			ShutdownTimeout time.Duration `config:"shutdown_timeout" default:"5s" min:"1ns" example:"5s" help:"Mirror 第 5 步：只读服务（kit/remoteentity.NewRemoteMirrorMod）声明给 App 的停机预算，RemoteEntityMod 不读它。\n生成的 shutdown.total_timeout 与部署宽限期只计入生成器认识的 Mod，手工接入 Mirror Mod 时要一并调大。"`
+			ShutdownTimeout time.Duration `config:"shutdown_timeout" default:"5s" min:"1ns" example:"5s" help:"只读服务（wiring/remoteentity.NewRemoteMirrorMod）声明给 App 的停机预算，RemoteEntityMod 不读它。\n生成的 shutdown.total_timeout 与部署宽限期只计入生成器认识的 Mod，手工接入 Mirror Mod 时要一并调大。"`
 		} `config:"mirror"`
 	} `config:"remote_entity"`
 }
