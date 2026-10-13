@@ -55,7 +55,7 @@ func TestGuildIDsSurviveIncarnationsAndConcurrentCreators(t *testing.T) {
 	}
 }
 
-// RR-20260926-22（复核残留）：号段用尽要报“超出 dynamic 半区”，不能回绕、不能退回
+// 号段用尽要报“超出 dynamic 半区”，不能回绕、不能退回
 // 进程内 RuntimeIDs。只断言 err != nil 分不出修前修后——修前的范围过滤在上限处匹配不到
 // 计数文档，upsert 去插第二份 _id=guild，得到的是 duplicate key，同样非 nil。
 // 名字以 TestGuildIDs 开头，CI 的 -run '^TestGuildIDs' 才覆盖得到。
@@ -213,7 +213,7 @@ func (a guildReplayApplier) ApplyRemoteCommits(ctx context.Context, _ entity.Rem
 	return a.store.CommitRemoteBatch(ctx, commits)
 }
 
-// RR-20260926-22（复核残留）：首次发号的并发 upsert 不能撞 duplicate key。
+// 首次发号的并发 upsert 不能撞 duplicate key。
 //
 // 真实触发场景是“集合已存在、计数文档还没有”：修前过滤条件带范围谓词，Mongo 不对这种
 // upsert 做 duplicate key 的服务端重试，每个并发者都去插 _id=guild，复核实测 30 轮 30 轮

@@ -13,8 +13,7 @@ func TestClaimWindowClosedIsTheAdmissionAndThePruningRule(t *testing.T) {
 	// session.run_ttl in the generated configuration is 30 minutes: how long
 	// a run may stay *open*. It is not a storage lifetime — a succeeded run
 	// stays in the session service and can be finished again indefinitely,
-	// which is why the window below cannot be derived from it
-	// (RR-20260918-04).
+	// which is why the window below cannot be derived from it.
 	const runTTL int64 = 30 * 60
 	for name, test := range map[string]struct {
 		resolvedAt int64

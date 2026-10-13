@@ -64,7 +64,7 @@ type ActivityRunner struct {
 	coordinator svcactivity.Coordinator
 	routing     svcglobal.Routing
 	// liveness 是 App 单实例锁的只读查询（app.ModSingleton）：同一服务类型下哪些 sid 有进程持有锁。
-	// 协调器的 expected 集合从这里来，activity 不再持有自己的租约（App 单实例锁方案 §7.2）。
+	// 协调器的 expected 集合从这里来，activity 不再持有自己的租约。
 	liveness   app.SingletonLiveness
 	serverType string
 	mailer     svcmail.Mail
@@ -82,12 +82,12 @@ type ActivityRunner struct {
 	// activity does not wait on a server nobody started.
 	candidates []int32
 	// now is the clock every window id, close deadline, World timer tick and
-	// settlement time is read from: the business clock (D-L3, real time +
+	// settlement time is read from: the business clock (real time +
 	// time.logic_offset), the same one the coordinator runs on, so the two
 	// ends move together under an offset. It is a field so a test can put a
 	// contribution and a lookup on opposite sides of a window boundary —
 	// which is the one case the wall clock makes unreproducible, and the one
-	// that was failing in CI (RR-20260921-01).
+	// that was failing in CI.
 	now func() time.Time
 }
 
@@ -100,7 +100,7 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 	if !ok || liveness == nil {
 		return nil, nil, fmt.Errorf("activity: capability %q not found; the activity's expected servers come from the App singleton lock, which needs singleton.enabled=true for this service", app.ModSingleton)
 	}
-	// sid、server_type 与活动的两个键都经 game 服务的声明读（game/settings，A4 ①）。
+	// sid、server_type 与活动的两个键都经 game 服务的声明读（game/settings）。
 	identity, activity, err := settings.LoadActivity(registry)
 	if err != nil {
 		return nil, nil, fmt.Errorf("activity: %w", err)
@@ -115,8 +115,7 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 	if serverType == "" {
 		return nil, nil, errors.New("activity: server_type is empty; the App writes it before Init")
 	}
-	// 活动组在任何远端调用之前确定：组文件不合格、本服不在任何组里，都在这里点名拒绝（C4，取代
-	// RR-20261005-01 对 activity.game_sids 的检查）。
+	// 活动组在任何远端调用之前确定：组文件不合格、本服不在任何组里，都在这里点名拒绝。
 	group, err := activityGroup(activity.GroupsFile, gameSID)
 	if err != nil {
 		return nil, nil, err
@@ -176,7 +175,7 @@ func startActivity(ctx context.Context, registry *app.Registry) (*ActivityRunner
 // and a server whose sid is in no group is refused here: it would open
 // windows for a group the file does not have. Either way the process stops at
 // start, naming the file, instead of starting and then failing every pass with
-// a warning (RR-20261005-01).
+// a warning.
 func activityGroup(path string, gameSID int32) (svcactivity.Group, error) {
 	if path == "" {
 		return svcactivity.Group{}, errors.New("activity: activity.groups_file is empty; it names the activity groups file (configs/activity_groups.yaml) that says which game servers take part together")
@@ -222,7 +221,7 @@ func (runner *ActivityRunner) bindGroup(ctx context.Context) error {
 
 // tickWorld drives the World's timer heap through a Nest transaction. How
 // often it ticks is system time (the ticker); the time each tick carries is
-// business time, which is what the World's deadlines are dated in (D-L3).
+// business time, which is what the World's deadlines are dated in.
 func (runner *ActivityRunner) tickWorld(ctx context.Context, done chan<- struct{}) {
 	defer func() { done <- struct{}{} }()
 	ticker := time.NewTicker(worldTickInterval)
@@ -375,13 +374,13 @@ func (runner *ActivityRunner) NotifyPhaseDue(ctx context.Context, activityID str
 // gameactivity.WindowSeconds and both this call and Standing derive their id
 // from the clock at the moment they run, so a contribution at 12:14:59 and a
 // lookup at 12:15:01 are about different windows — and without this value
-// nothing downstream can tell that apart from "the point did not count"
-// (RR-20260921-01). The point is not lost in that case: it stays in the
+// nothing downstream can tell that apart from "the point did not count".
+// The point is not lost in that case: it stays in the
 // window it landed in and settles with it.
 //
 // A window the coordinator does not know yet is opened here, with the same
-// idempotent call the loop makes, and the progress applied again
-// (RR-20261006-29). runActivity opens the clock's window once every
+// idempotent call the loop makes, and the progress applied again.
+// runActivity opens the clock's window once every
 // activityLoopInterval, so for up to that long after every boundary the
 // window the clock is in does not exist: a clear then answered "activity: not
 // found", its point was dropped and the endpoint reported no window. The
@@ -457,8 +456,8 @@ func (runner *ActivityRunner) Settled(ctx context.Context, activityID string) (b
 // What it does NOT do is guess. The first version computed "the window that
 // just closed" and "the current one" from the local clock and looked those two
 // up — which works exactly until this server is down longer than one window,
-// and then the older obligation is still recorded and permanently unreachable
-// (RR-20260919-10). The coordinator keeps a per-game index; this asks it.
+// and then the older obligation is still recorded and permanently unreachable.
+// The coordinator keeps a per-game index; this asks it.
 //
 // The order is take → mail → record → ack, and each step is safe to repeat:
 //

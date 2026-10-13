@@ -30,7 +30,7 @@ const maxPlaceRings = 16
 // search can be running while the scene stops; Stop only flips stopped, and
 // the terrain answers "stopped" on its own once it is stopped. Clearing the
 // pointer in Stop raced every in-flight Path / Place and could nil it between
-// their check and their use (RR-20261005-NC-270).
+// their check and their use.
 type PathFindSystem struct {
 	terrain *TerrainSystem
 	stopped atomic.Bool

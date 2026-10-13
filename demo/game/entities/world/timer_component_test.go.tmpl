@@ -173,7 +173,7 @@ type rejectingWorldCommitter struct{ err error }
 
 func (c rejectingWorldCommitter) Commit(context.Context, dataengine.CommitRecord) error { return c.err }
 
-// RR-20261005-NC-140：定时器堆是组件内存，Nest 的 undo 只撤回 DAO。事务失败或提交被拒绝后，
+// 定时器堆是组件内存，Nest 的 undo 只撤回 DAO。事务失败或提交被拒绝后，
 // 堆与 DAO 必须一起回到事务开始时的样子：武装被撤回就不能还“已武装”，触发被撤回就必须还能再触发。
 func TestTheTimerHeapRollsBackWithTheTransaction(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
@@ -263,7 +263,7 @@ func TestTheTimerHeapRollsBackWithTheTransaction(t *testing.T) {
 // rather than being refused for being late: the window it closes is the one
 // nobody closed while the process was down. It fires on the next tick.
 //
-// RR-20261005-NC-142：这里原来只断言 armed 与 Tick 后“剩余 0 个节点”——节点根本没建出来时它也通过。
+// 这里原来只断言 armed 与 Tick 后“剩余 0 个节点”——节点根本没建出来时它也通过。
 // 现在断言节点存在、被存储，并且下一次 Tick 带着 effect 触发。
 func TestAnOverdueDeadlineIsArmedAndFires(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
@@ -312,7 +312,7 @@ func TestAnOverdueDeadlineIsArmedAndFires(t *testing.T) {
 	}
 }
 
-// A1（回滚统一走 DAO，docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md）：定时器的回滚就是 DAO 的回滚。
+// 回滚统一走 DAO：定时器的回滚就是 DAO 的回滚。
 // 经真实 Nest 派发，两种回滚策略 × 两条失败路径，分别撤回一次武装和一次触发。承诺：回滚后 DAO 与组件看到的
 // 待触发节点一致（撤回的武装不再“已武装”，撤回的触发还能再触发），并且之后的一次成功操作照常写一条记录。
 // 组件里没有任何逆操作登记，能通过只因为定时器的全部状态都在 DAO 里。
@@ -414,7 +414,7 @@ func TestTimerRollbackIsTheDaoRollback(t *testing.T) {
 	}
 }
 
-// A1：定时器只把节点与种子写进提交记录（也就是 WAL 收到的记录）；组件为空转 Tick 记的最早到期时间是
+// 定时器只把节点与种子写进提交记录（也就是 WAL 收到的记录）；组件为空转 Tick 记的最早到期时间是
 // 非持久字段，不在记录里。重启后从存储构建的 World 照样按时触发（TestADeadlineSurvivesARestartAndFires）。
 func TestTimerBookkeepingStaysOutOfTheCommitRecord(t *testing.T) {
 	subject := newWorld(t)
@@ -493,7 +493,7 @@ func runWorldHandler(t *testing.T, subject *World, meta nest.HandlerMeta, commit
 	return err
 }
 
-// D-L1（维护者决定，2026-10-06）：同一期限的截止按 (期限, priority, 登记顺序) 触发。World 每次调用都从 DAO
+// 同一期限的截止按 (期限, priority, 登记顺序) 触发。World 每次调用都从 DAO
 // 的 map 重建调度器，map 的遍历顺序是随机的；修前同期限的顺序由 map 顺序与堆的形状决定，修后按登记顺序（节点 ID）。
 // 触发顺序就是 effect 在提交记录里的顺序。
 func TestDeadlinesDueAtTheSameMomentFireInArmOrder(t *testing.T) {
@@ -529,7 +529,7 @@ func TestDeadlinesDueAtTheSameMomentFireInArmOrder(t *testing.T) {
 	}
 }
 
-// D-L2（维护者决定，2026-10-06）：存储里有一种这个版本没有 handler 的定时器（例如下线了一种类型）。
+// 存储里有一种这个版本没有 handler 的定时器（例如下线了一种类型）。
 // 加载时每种类型告警一次；到期时节点照旧删除，但每个被删的节点打一条 Warn 并计
 // timer.unhandled_dropped_total{kind=<类型号>}。修前加载与删除都没有日志、没有计数。
 func TestAStoredTimerOfATypeWithNoHandlerIsReportedAndCountedWhenDropped(t *testing.T) {
@@ -593,7 +593,7 @@ func TestAStoredTimerOfATypeWithNoHandlerIsReportedAndCountedWhenDropped(t *test
 	}
 }
 
-// D-L1：priority 随节点存储，重启后照样决定同期限的顺序；加字段之前存下的节点没有 priority 键，按 0 读回。
+// priority 随节点存储，重启后照样决定同期限的顺序；加字段之前存下的节点没有 priority 键，按 0 读回。
 func TestTimerPriorityIsStoredAndOrdersAfterARestart(t *testing.T) {
 	first := newWorld(t)
 	now := time.Unix(1_800_000_000, 0)

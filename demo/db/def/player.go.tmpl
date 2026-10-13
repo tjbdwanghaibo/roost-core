@@ -11,8 +11,7 @@ type PlayerDao struct {
 	// run id -> the run's resolution time. The claim transaction records the
 	// run here and pays only when it is the one that recorded it. Entries
 	// are pruned by the same window that decides whether a claim is still
-	// admissible; see game/dungeon for why those have to be one number
-	// (RR-20260918-04).
+	// admissible; see game/dungeon for why those have to be one number.
 	// PosX / PosY are where the player is, and this is the ONLY place that
 	// answers that. The scene's AOI keeps an index of positions so it can
 	// answer "who is near whom" without walking every player, but an index is
@@ -27,8 +26,8 @@ type PlayerDao struct {
 	SceneID int64 `bson:"scene_id" dao:"persist,sync"`
 	// Equipment is what the player is wearing. It is the demo's one NESTED
 	// struct — a struct inside the DAO, holding a map of pointers to another
-	// struct — and it is here on purpose: two P1 defects (U-0236, U-0238)
-	// lived in exactly that path and only the dao runtime gate could see
+	// struct — and it is here on purpose: real defects
+	// have lived in exactly that path and only the dao runtime gate could see
 	// them, because nothing the demo generated had a nested field. Now the
 	// live run covers it too.
 	Equipment Equipment `bson:"equipment" dao:"persist,sync"`
@@ -50,7 +49,7 @@ type PlayerDao struct {
 	// `nopersist,nosync` — kept only so that it is IN the transaction: a
 	// failed equip or a refused commit puts it back with the equipment it
 	// was computed from, by the DAO's own rollback. The attribute component
-	// holds no layer of its own (A1: state a transaction changes lives in
+	// holds no layer of its own (state a transaction changes lives in
 	// the DAO; see game/entities/player/attribute_component.go).
 	AttrGear map[int32]int64 `bson:"attr_gear" dao:"nopersist,nosync,map=fast"`
 	DungeonClaims map[string]int64 `bson:"dungeon_claims" dao:"persist,map=fast"`
@@ -86,7 +85,7 @@ type PlayerDao struct {
 // writing the link.
 type Equipment struct {
 	// Slots is slot id -> the piece worn there. Nested inside a nested
-	// struct, which is the shape whose ownership transfer U-0236 fixed.
+	// struct, the shape whose ownership transfer the generated DAO must get right.
 	Slots map[int32]*GearPiece
 }
 

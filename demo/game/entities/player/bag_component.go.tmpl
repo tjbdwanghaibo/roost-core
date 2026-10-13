@@ -132,7 +132,7 @@ func (component *BagComponent) ClaimMailReward(mailID string, expiresAtUnix, now
 // order returns false and changes nothing.
 //
 // It is the mail ledger's shape, and it is the one ledger here that is NEVER
-// pruned (RR-20260919-06). The mail ledger may forget an entry the moment the
+// pruned. The mail ledger may forget an entry the moment the
 // envelope expires, because after that no replay can reach the grant path. A
 // paid order has no such moment: the platform service marked it delivered when
 // the grant became durable, so forgetting the order id does not close the

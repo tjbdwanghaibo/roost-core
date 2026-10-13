@@ -31,7 +31,7 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 	// 先校验绑定，再装载实体，因为装载正是被把关的那件事。玩家建角时由 account 绑定到一个 game sid
 	// （Role.ServerID），之后不迁移；一个 Player 只能在他绑定的 sid 上驻留，同一 sid 只有一个进程（App
 	// 单实例锁）。所以“这次登录该不该在这里服务”是一个静态判断：会话 Claims 里认证器从 account 取来的
-	// server_id 是否等于本进程的 sid（GAME_DEMO_TEMPLATE §9.11；docs/feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md §3.1）。
+	// server_id 是否等于本进程的 sid。
 	//
 	// 不是本服的登录按名拒绝（player_elsewhere，带 owner_sid），客户端改连那个服的网关，不要在本服重试。
 	// Claims 里没有 server_id 说明认证器被换掉了、没有记下绑定：fail-closed，同样拒绝（owner_sid=0，
@@ -50,10 +50,10 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 	}
 	// Taking the player into service — waiting out an unload of their
 	// previous copy, then the load — runs on its own budget, a share of this
-	// request's dispatch deadline (player_access.tcp.login_timeout,
-	// RR-20260926-36). A cold load waits for this player's projections to
-	// reach the store; if the store is down that wait does not end on its
-	// own, and it must not hold the connection: the client gets login_timeout
+	// request's dispatch deadline (player_access.tcp.login_timeout). A cold
+	// load waits for this player's projections to reach the store; if the
+	// store is down that wait does not end on its own, and it must not hold
+	// the connection: the client gets login_timeout
 	// and retries. What is left of the dispatch budget covers the answer and
 	// the placement steps below.
 	//

@@ -16,9 +16,9 @@ import (
 // The clear reward is paid at most once per run, and the ledger that promises
 // it is bounded. Those two only hold together if forgetting a record and
 // refusing a claim are the same condition — otherwise there is a moment when
-// the run is forgotten but still payable, and the player collects twice
-// (RR-20260918-04: a run succeeded, four hours later another run's claim
-// pruned its record, and replaying the first paid a second 100 exp).
+// the run is forgotten but still payable, and the player collects twice (a
+// run succeeds, hours later another run's claim prunes its record, and
+// replaying the first pays a second 100 exp).
 //
 // Same harness idea as claim_mail_reward_test.go, with two entities: the
 // reward transaction touches the Player and the World's counter.

@@ -153,7 +153,7 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 		return fmt.Errorf("gm: %w", err)
 	}
 	localSID := identity.Sid
-	// GM 命令里的时间是业务时间（D-L3）：关窗要算出与 runner 同一个窗口 id，入会时间是玩法时间。
+	// GM 命令里的时间是业务时间：关窗要算出与 runner 同一个窗口 id，入会时间是玩法时间。
 	business := app.BusinessClock(registry)
 	// player_id is whichever id the operator has at hand: the unique id the
 	// client sees (EnterGameResponse.PlayerID, the mail recipient) or the
@@ -422,7 +422,7 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 			// and a release ships configs/data alone. The text used to point at
 			// configs/table/featureflag.csv (a name that does not exist), so an
 			// operator who followed it got an "ok" reload and an unchanged
-			// switch (RR-20261005-NC-64).
+			// switch.
 			Description: "reload config data in THIS process: {reason?}. Rebuilds every table from the JSON under configs/data " +
 				"(config_data.dir), which is also how a kill switch takes effect: edit configs/data/feature_flag.json, " +
 				"or in a checkout edit configs/table/feature_flag.csv and run `roost generate` first — the reload never reads the CSV. " +

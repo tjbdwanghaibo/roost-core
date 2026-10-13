@@ -40,7 +40,7 @@ func (pusher *recordingPusher) count(playerID int64) int {
 // A room must start cutting frames after the start grace even if nobody has
 // sent an input: the grace is a promise that a client who never connects does
 // not strand the ones who did. Waiting for a first command instead made the
-// constant a lie — no input meant no frame, ever (RR-20260917-09).
+// constant a lie — no input meant no frame, ever.
 func TestBattleStartsAfterTheGraceWithoutAnyInput(t *testing.T) {
 	pusher := newRecordingPusher()
 	manager := &battleManager{transport: pusher, rooms: make(map[string]*battleRoom)}

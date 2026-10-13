@@ -30,7 +30,7 @@ import (
 // entity's `sync=true` — the entity produces versioned deltas, the framework
 // decides who gets them and puts them on the wire.
 //
-// Three layers, each from the framework (ARCH-10):
+// Three layers, each from the framework:
 //
 //	Player.Sync()            the subject: version, dirty mask, packer — content only
 //	entitysync.Manager       the mechanism: every subject, every session, one frame per session per tick
@@ -61,8 +61,8 @@ const (
 	// A replication session the transport could not open yet — it is still
 	// closing the player's previous one, which a quick reconnect over a
 	// SessionLifecycle transport runs into (entitysync.SessionOpenRetryable) —
-	// is opened again with a doubling delay, a bounded number of times
-	// (RR-20260926-55). Past the last attempt the player keeps its place and
+	// is opened again with a doubling delay, a bounded number of times.
+	// Past the last attempt the player keeps its place and
 	// its own view comes back with its next login.
 	sessionReopenAttempts   = 8
 	sessionReopenFirstDelay = 25 * time.Millisecond
@@ -72,7 +72,7 @@ const (
 	// could not be reopened — attempts used up (reason "exhausted") or a
 	// refusal that is not "not yet" (reason "refused", e.g. the session
 	// limit). Each one stays in the scene without its own view until its next
-	// login; a warning per player was the only trace (RR-20260927-19).
+	// login; a warning per player was the only trace.
 	sceneReopenFailedMetric = "scene_session_reopen_failed_total"
 )
 
@@ -96,14 +96,14 @@ type Scene struct {
 	stopUnloads func(context.Context) error
 	// loads is the Data Engine's notice of an entity loaded from the
 	// authority; Start hooks rebindLoaded on it and unhookLoads is what that
-	// returned (RR-20260927-23). Nil in a test that builds no Data Engine.
+	// returned. Nil in a test that builds no Data Engine.
 	loads       entityLoadNotifier
 	unhookLoads func()
 
 	// transitions serializes what changes a player's membership — Join,
 	// Ready, Leave and the disconnect-driven settle — so a removal decided for
-	// an old connection cannot interleave with the Join of a new one
-	// (RR-20260926-40). It is held across manager and policy calls; none of
+	// an old connection cannot interleave with the Join of a new one.
+	// It is held across manager and policy calls; none of
 	// them calls back into the scene (SessionLost only schedules a settle).
 	transitions sync.Mutex
 
@@ -157,8 +157,8 @@ type unloadResyncer interface {
 }
 
 // entityLoadNotifier is the Data Engine's notice of an entity loaded from the
-// authority and published (kit/dataengine Mod.OnEntityLoaded) — the same
-// optional capability the kit's Nest Mod hooks for the manager it owns. The
+// authority and published (wiring/dataengine Mod.OnEntityLoaded) — the same
+// optional capability the wiring Nest Mod hooks for the manager it owns. The
 // hook runs where the load is published, on the Nest fast pool: it must not
 // block.
 type entityLoadNotifier interface {
@@ -205,7 +205,7 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 	if !ok || access == nil {
 		return nil, errors.New("scene: entity runtime is unavailable, so an unloaded player could never be reloaded for the ones watching it")
 	}
-	// The other half of following a reloaded player (RR-20260927-23): a load
+	// The other half of following a reloaded player: a load
 	// nobody's watching triggered — the business touching a player it had
 	// unloaded while nobody watched — is rebound here (Start).
 	loads, ok := app.Lookup[entityLoadNotifier](registry, mods.ModDataEngine)
@@ -219,8 +219,7 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 	scene.unloads, scene.loads = access, loads
 	// The connection telling us it is gone beats waiting to fail a push to
 	// it: a player who logs off while nothing is happening used to stay in
-	// the scene until somebody else's frame tried to reach them
-	// (RR-20260918-06).
+	// the scene until somebody else's frame tried to reach them.
 	scene.watchSessions(transport)
 	return scene, nil
 }
@@ -239,7 +238,7 @@ func (bridge *Scene) watchSessions(source sessionSource) {
 			return
 		}
 		// Checked again when the settle runs, together with the generation:
-		// the player may have logged in again in between (RR-20260926-40).
+		// the player may have logged in again in between.
 		bridge.settleLater(event.PlayerID, false)
 	})
 }
@@ -272,7 +271,7 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 	// Monster 42 never collide — and sessionFor is the one translation to
 	// the transport's player id. Bands are deliberately not configured: a
 	// band only means something once the packer can pack less for a far
-	// subject, and the demo's packer is mask-opaque (ARCH-06).
+	// subject, and the demo's packer is mask-opaque.
 	interest, err := policy.NewInterest(policy.InterestConfig{
 		Manager: manager,
 		AOI: policy.AOIConfig{
@@ -296,25 +295,24 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 // failed later in assembly never leaves a replication loop running.
 //
 // It also wires the reload of a player unloaded from memory only — the Data
-// Engine evicting it after a native step it skipped (the gift debit is one,
-// RR-20260926-30), or a Remote write the authority refused (RR-20260926-39).
+// Engine evicting it after a native step it skipped (the gift debit is one),
+// or a Remote write the authority refused.
 // Unloading closes the player's sync state; while anyone still watches it,
 // the framework reloads it from the authority off the fast pool and rebinds
 // this manager's subject to the new instance, so the watchers get its
 // authoritative state as a full update and its changes after that; if it
-// cannot be reloaded they get a remove (RR-20260926-59). The kit's Nest Mod
+// cannot be reloaded they get a remove. The wiring Nest Mod
 // only wires the manager it owns; without this the scene's subject stayed on
 // the closed state and the others kept the last content they had received —
-// possibly an effect that never became the authority — until the player left
-// (RR-20260927-18). One entity runtime takes one such wiring.
+// possibly an effect that never became the authority — until the player left.
+// One entity runtime takes one such wiring.
 //
 // The framework reloads only while someone watches. A player unloaded while
 // nobody did — its own session dropped and not reopened, nobody near — is
 // loaded again by whatever touches it next, and the Data Engine reports that
-// load; Start hooks it (rebindLoaded) the way the kit's Nest Mod does for its
+// load; Start hooks it (rebindLoaded) the way the wiring Nest Mod does for its
 // own manager. Without it the subject stayed on the closed state and a
-// watcher who came into view later never received the player
-// (RR-20260927-23).
+// watcher who came into view later never received the player.
 //
 // Both are wired before the replication loop starts, and a failure takes
 // back what was wired, so a scene that did not start leaves nothing hooked.
@@ -345,7 +343,7 @@ func (bridge *Scene) Start(ctx context.Context) error {
 
 // rebindLoaded binds the scene's subject to an instance just loaded from the
 // authority, if the subject is still on a closed one: the watchers get it as
-// a full update and follow the new instance (RR-20260927-23). Any other load
+// a full update and follow the new instance. Any other load
 // is none of the scene's business and answers one of the ignored errors — a
 // player not in the scene (not registered), the instance the subject is
 // already on or another live one (registered), a leave still owing removes
@@ -404,11 +402,11 @@ func (bridge *Scene) Close(ctx context.Context) error {
 	bridge.mu.Lock()
 	bridge.closed = true
 	bridge.mu.Unlock()
-	// The reload first, the way the kit's Nest Mod stops its own before the
+	// The reload first, the way the wiring Nest Mod stops its own before the
 	// Nest: nothing rebinds or retracts on a manager being closed, and a
 	// reload never runs into a Nest that is stopping (the service shuts down
 	// before its Mods). Its timeout does not keep the manager open. Then the
-	// load hook (RR-20260927-23), before the manager closes: the Nest is still
+	// load hook, before the manager closes: the Nest is still
 	// running, and a load it publishes from here on is not rebound.
 	resyncErr := bridge.stopUnloadResync(ctx)
 	bridge.unhookEntityLoads()
@@ -447,7 +445,7 @@ func sessionFor(entityID int64) entitysync.SessionID {
 // sends once it listens. Nothing here decides who sees whom; the policy does.
 //
 // A quick reconnect can find the previous Join's leave still in flight
-// (RR-20260926-55): the subject is retiring — the others are owed its
+//: the subject is retiring — the others are owed its
 // ObjectRemove — or the transport is still closing the old session. Neither
 // loses this Join: the registration waits for the retirement
 // (RegisterAfterRetirement) and the session open is retried (reopenLater).
@@ -587,7 +585,7 @@ func (bridge *Scene) Moved(_ context.Context, subjectID int64, to spatial.Point)
 // manager refused. The first refusal of a pair is the one worth reading (a
 // subject that has not joined yet, a session that is gone); the repeats are
 // the policy trying again, and would bury that line if logged at the same
-// level (RR-20260920-06).
+// level.
 func (bridge *Scene) apply() {
 	for _, refusal := range bridge.interest.Apply() {
 		// A subject still retiring from a leave is a rejoin whose registration
@@ -723,10 +721,9 @@ func (bridge *Scene) sweepLocked() {
 
 // sessionLost is the manager telling us a push to a player failed and their
 // session was closed. A leaver is ordinary churn, not an error, but a scene
-// that silently loses members is how RR-20260922-01 stayed invisible — so one
-// Info line. The push goes to every connection the player has and fails only
-// when none of them took it (the ones that could not are closed,
-// RR-20260926-52); a new connection may have come up since (RR-20260926-40),
+// that silently loses members hides real failures — so one Info line. The
+// push goes to every connection the player has and fails only when none of
+// them took it (the ones that could not are closed); a new connection may have come up since,
 // and settle tells the two apart. It runs inside the manager's tick, so the
 // settle goes to its own goroutine.
 func (bridge *Scene) sessionLost(session entitysync.SessionID, cause error) {
@@ -762,7 +759,7 @@ func (bridge *Scene) runLater(fn func()) {
 }
 
 // settle decides what a disconnect means for the member table, with
-// transitions held so no Join runs in between (RR-20260926-40):
+// transitions held so no Join runs in between:
 //
 //   - the Join it was reported against is no longer current (the player
 //     logged in again, or already left): the event speaks for a connection
@@ -771,7 +768,7 @@ func (bridge *Scene) runLater(fn func()) {
 //     dropped its replication session (sessionDropped: a push failed on every
 //     connection the player had at that moment — the transport closes a
 //     connection that cannot take a frame and fails the push only when none
-//     took it, RR-20260926-52 — and a new connection came up since), the
+//     took it — and a new connection came up since), the
 //     session is opened again and the policy says the player's
 //     pairs again, so the live client gets a fresh snapshot instead of
 //     silence. The failed connections are gone, so this happens at most once
@@ -801,11 +798,11 @@ func (bridge *Scene) settle(subjectID int64, generation uint64, sessionDropped b
 // client was in: held until scene_ready, or ready. A new session starts a new
 // lifetime, so the client's next frame is a full snapshot of everything it
 // sees. A refusal that only means "not yet" (the transport is still closing
-// the previous session, RR-20260926-55) is retried with a growing delay, up to
+// the previous session) is retried with a growing delay, up to
 // sessionReopenAttempts; anything else, or the last attempt, leaves the player
 // in the scene (others still see it) with its own view to come back with its
-// next login — a warning and one count on sceneReopenFailedMetric per player
-// (RR-20260927-19). Called with transitions held.
+// next login — a warning and one count on sceneReopenFailedMetric per player.
+// Called with transitions held.
 func (bridge *Scene) reopenLocked(subjectID int64, member sceneMember, attempt int) {
 	session := sessionFor(subjectID)
 	open := bridge.manager.OpenHeldSession

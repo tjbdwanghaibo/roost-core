@@ -129,7 +129,7 @@ func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
 // The value stored is the run's **resolution time**, not the time of the
 // claim: that is the number the reward's deadline is computed from, so the
 // ledger and the admission check read the same fact (game/dungeon explains
-// why one number for both is the whole argument — RR-20260918-04).
+// why one number for both is the whole argument).
 //
 // Pruning happens here, on the write path, so the ledger is bounded without
 // a sweeper. It is safe because a record can only be dropped once the run it
@@ -138,10 +138,9 @@ func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
 // mutators, so a handler that fails later takes the whole ledger change back
 // with the reward.
 //
-// Records written by a build before RR-20260918-04 hold the claim time
-// instead, which is never earlier than the resolution time — under the new
-// reading they simply expire a little later, never sooner, so no old record
-// can start paying again.
+// A record that holds the claim time instead is never earlier than the
+// resolution time — it simply expires a little later, never sooner, so no
+// such record can start paying again.
 func (component *ProfileComponent) ClaimDungeonRun(runID string, resolvedAtUnix, nowUnix int64) bool {
 	dao := component.Owner().Dao()
 	if _, claimed := dao.GetDungeonClaims(runID); claimed {

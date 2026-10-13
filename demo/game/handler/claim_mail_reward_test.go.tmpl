@@ -143,7 +143,7 @@ func TestMailAttachmentIsGrantedOnce(t *testing.T) {
 }
 
 // The ledger is bounded by the MAIL's own expiry, not by a number this game
-// picked. That is the whole of RR-20260918-05: a fixed retention has to be
+// picked: a fixed retention has to be
 // argued against another service's configuration, and `mail.send_ttl` only
 // has to be positive — a deployment that keeps mail for forty days is legal
 // and makes a thirty-one day ledger forget while the envelope is still

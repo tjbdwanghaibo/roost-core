@@ -17,7 +17,7 @@ import (
 // pin the decisions that keep it from happening — none of them needs a Mongo
 // or a bus, because the decisions are the point (§9.11, §9.12).
 //
-// 静态绑定（docs/feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md §3.3）：赠礼命令携带发送方绑定的
+// 静态绑定：赠礼命令携带发送方绑定的
 // sid（gift.State.FromSID），debit / refund 只在那个 sid 上执行。准入与转交接收方都用真实的驻留表
 // （PlayerOwners.AdmitBound），转交用生产的路由器（giftHandoffRouter），只有传输是替身。
 

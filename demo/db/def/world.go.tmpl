@@ -29,7 +29,7 @@ type WorldDao struct {
 	// stored, never replicated — and recomputed when the World loads; but it
 	// is a DAO field, so a rolled-back arm or fire takes it back with the
 	// nodes, and no component keeps a copy of the schedule that could
-	// disagree with them (A1: transaction state lives in the DAO).
+	// disagree with them (transaction state lives in the DAO).
 	TimerNextDue int64 `bson:"timer_next_due" dao:"nopersist,nosync"`
 	// SettledActivities is activity id -> when this server acked its result
 	// dispatch. It is what makes settlement once-per-activity across
@@ -44,7 +44,7 @@ type WorldDao struct {
 // would be a function pointer, and the type is what finds it again.
 //
 // The format only grows. Priority was added after nodes were already stored
-// (D-L1, 2026-10-06): a node stored before it has no "priority" key and
+// (2026-10-06): a node stored before it has no "priority" key and
 // decodes as 0, the default, so no migration and no schema bump.
 type TimerNode struct {
 	Type int32 `bson:"type"`

@@ -128,7 +128,7 @@ type pushTransport interface {
 
 // loginBudgetSource is the slice of the player TCP Runtime EnterGame reads:
 // player_access.tcp.login_timeout, the share of a login request's dispatch
-// budget that taking the player into service may use (RR-20260926-36).
+// budget that taking the player into service may use.
 type loginBudgetSource interface {
 	LoginTimeout() time.Duration
 }
@@ -219,7 +219,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	}
 	// The sid comes from the registry's config, not from the runtime-config
 	// slot: that slot holds whatever wrote to it last, and the config-data Mod
-	// overwrites it with its snapshot (U-0244).
+	// overwrites it with its snapshot.
 	identity, err := settings.Identity(registry)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
@@ -478,7 +478,7 @@ func (controller *Controller) WorldSceneID() int64 {
 	return controller.sceneID
 }
 
-// BusinessNow is the business clock's now (D-L3: real time +
+// BusinessNow is the business clock's now (real time +
 // time.logic_offset). Every time an endpoint hands a transaction as "now" —
 // mail claim expiry, a dungeon claim window, guild join times — is business
 // time; leases, timeouts and payment times are not, and use package time.

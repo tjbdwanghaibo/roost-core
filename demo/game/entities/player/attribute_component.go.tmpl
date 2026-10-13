@@ -31,8 +31,8 @@ var Gear = coreattr.Selector{Layer: "gear"}
 // can be redone at any time: that is why Final is never persisted.
 //
 // Where the layers live is the other decision, and it is the framework's rule
-// rather than this game's: state a transaction changes lives in the DAO
-// (A1, docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md). Base is
+// rather than this game's: state a transaction changes lives in the DAO.
+// Base is
 // attr_base (stored and replicated), Gear is attr_gear (nopersist,nosync) and
 // Final is attr_final (nopersist,sync). This component reads them and writes
 // them through the generated mutators, and keeps nothing between calls. So a
@@ -41,8 +41,7 @@ var Gear = coreattr.Selector{Layer: "gear"}
 // the DAO is the whole of it, under rollback=undo and rollback=state alike,
 // and there is no undo to register here. Before this, the layers were a
 // container in this component and each path had to copy it into the
-// transaction by hand (RR-20261005-NC-61) and rebuild it on load
-// (RR-20261005-NC-65).
+// transaction by hand and rebuild it on load.
 //
 // The derived layers (Gear, Final) are written by one function, derive, from
 // two places: when the player is built (they are nopersist, so the stored
@@ -83,9 +82,8 @@ func (component *AttributeComponent) Owner() *Player { return component.owner }
 // attaches the DAO before it initializes components, so attr_base and the
 // equipment are already here; attr_gear and attr_final are nopersist and are
 // not. Only nopersist fields are written: their setters mark nothing for
-// storage, so a load needs no transaction and produces no save
-// (RR-20261005-NC-65: before, a player wearing a sword came back from a
-// restart with Final = Base).
+// storage, so a load needs no transaction and produces no save (otherwise a
+// player wearing a sword would come back from a restart with Final = Base).
 func (component *AttributeComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
 	component.derive()
 	return nil

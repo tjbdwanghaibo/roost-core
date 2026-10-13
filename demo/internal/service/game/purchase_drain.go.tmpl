@@ -46,7 +46,7 @@ type PurchaseDrain struct {
 	redis  fredis.IRedis
 	nest   corenest.Client
 	prefix string
-	// business is the clock the grant transaction's now comes from (D-L3:
+	// business is the clock the grant transaction's now comes from (
 	// a handler's nowUnix is business time). The paid time is the order's.
 	business clock.Business
 }
@@ -112,7 +112,7 @@ func (drain *PurchaseDrain) DrainPlayer(ctx context.Context, playerID int64) ([]
 			// The grant STAYS. There is no failure here that makes a paid
 			// order undeliverable — a full bag, a Mongo blip, a process going
 			// down mid-transaction are all things that pass — so nothing in
-			// this loop may drop one (RR-20260919-06). It is read again on the
+			// this loop may drop one. It is read again on the
 			// player's next login.
 			slog.Error("purchase drain: grant failed; it stays for the next drain",
 				"player_id", playerID, "order_id", grant.OrderID, "err", err)

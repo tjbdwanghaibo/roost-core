@@ -10,8 +10,7 @@ const EntityKindPlayer entity.EntityKind = 1
 // SyncNamespacePlayer is the routing key every update of a replicated Player carries on the wire.
 // The marker below repeats the literal because a marker is not Go: syncNamespace
 // takes a topic name or a package-qualified constant, and a bare identifier
-// is refused rather than quoted into the string of its own name
-// (RR-20260918-07).
+// is refused rather than quoted into the string of its own name.
 const SyncNamespacePlayer = "player"
 
 // IPlayerEntity is the lock-safe business view used by Nest handlers.

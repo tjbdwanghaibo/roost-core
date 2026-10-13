@@ -33,7 +33,7 @@ const DungeonClearExp = dungeon.ClearExp
 //     run past its deadline comes back expired whatever outcome the caller
 //     asked for. So `request.Success` says only what the client wanted;
 //     `run.State == StateSucceeded` is the fact. Judging on the request paid
-//     for failed runs, expired runs and every replay (RR-20260917-08).
+//     for failed runs, expired runs and every replay.
 //   - **The claim ledger, and the window it is bounded by.** Two replays can
 //     both see a succeeded run, so the
 //     reward transaction records the run id on the Player and pays only when
@@ -42,7 +42,7 @@ const DungeonClearExp = dungeon.ClearExp
 //     bounded by the run's own resolution time, and a run past that window is
 //     refused rather than paid — a succeeded run stays succeeded in the
 //     session service forever, so "it can no longer be replayed" was never
-//     something this endpoint could assume (RR-20260918-04).
+//     something this endpoint could assume.
 //
 // The two calls are still not one transaction: a crash between Finish and
 // the claim leaves a resolved run unpaid. That direction is recoverable — a
@@ -96,8 +96,7 @@ func (controller *Controller) HandleFinishDungeon(context *player_agent.Context,
 			// A run this old can no longer be paid, and that is a decision
 			// somebody has to be able to see: it is either a replay that
 			// would have been paid twice, or a player who really never
-			// collected. Compensation is an operator's call, by mail
-			// (RR-20260918-04).
+			// collected. Compensation is an operator's call, by mail.
 			slog.Warn("finish_dungeon: clear reward window closed", "player_id", context.PlayerID, "run_id", request.RunID, "resolved_at", resolvedAt)
 		}
 		response.Code, response.Reason = code, reason
@@ -134,8 +133,7 @@ func (controller *Controller) HandleFinishDungeon(context *player_agent.Context,
 	} else {
 		// Which window took the point. A caller that reads its standing a
 		// moment later may well be looking at the NEXT window; this is what
-		// lets it tell that apart from a point that did not count
-		// (RR-20260921-01).
+		// lets it tell that apart from a point that did not count.
 		response.ActivityID = activityID
 	}
 	return response, nil

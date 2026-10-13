@@ -136,7 +136,7 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) 
 	// (`dataengine.database`), not the saga's: the receipt it binds is a
 	// lease fence on that database, and it is projected by the same commit
 	// that carries the Bag change. That is the ONLY thing this database name
-	// is for here — the Player documents are not in it (RR-20260930-22).
+	// is for here — the Player documents are not in it.
 	//
 	// Owner names this process — two replicas must not claim one command —
 	// and LeaseDuration has to outlast the consumer's AckWait, or a lease
@@ -233,7 +233,7 @@ func processOwnerSuffix() string {
 // here rather than taking *PlayerOwners so a test could stand it in; the
 // handoff tests use the real table.
 //
-// 静态绑定（静态绑定方案 §3.3）：步骤命令携带发送方绑定的 sid，准入只问“这个 sid 是不是本服”。是本服
+// 静态绑定：步骤命令携带发送方绑定的 sid，准入只问“这个 sid 是不是本服”。是本服
 // 就接入（建立或刷新驻留记录，算一次使用），发送方离线、没有副本也照常执行——Nest 在慢池冷加载他，
 // 驻留记录让闲置卸载之后收走这份副本；不是本服就不建记录，交给那个 sid。驻留记录因此只会出现在玩家
 // 绑定的那个 sid 上，不会有两个写者。
@@ -593,7 +593,7 @@ func (steps giftSteps) refund(ctx context.Context, command saga.Command) (saga.C
 // the two only coincide while both are left at the default `game`. The first
 // version read `dataengine.database` here, so the README's own advice to
 // isolate a run by renaming it made every gift compensate as "recipient has
-// never entered the game" (RR-20260930-22).
+// never entered the game".
 func (steps giftSteps) deliver(ctx context.Context, command saga.Command) (saga.Completion, error) {
 	state, entityID, err := giftTarget(command, func(state gift.State) int64 { return state.To })
 	if err != nil {

@@ -76,7 +76,7 @@ func startMatchmaker(ctx context.Context, registry *app.Registry, battles *battl
 		// inside a widening window. The policies live here, in the game
 		// process, not in the match service.
 		// The match service dates tickets on the business clock (matchmaking
-		// is business logic, D-L3), and the widening window is measured from
+		// is business logic), and the widening window is measured from
 		// those dates, so the policy reads the same clock. The offset is fixed
 		// at start, so how long a player has waited is still real time.
 		business := app.BusinessClock(registry)

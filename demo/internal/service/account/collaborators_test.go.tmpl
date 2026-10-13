@@ -17,7 +17,7 @@ import (
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
-// RR-20260927-03（OPEN-ITEMS A04）：demo 的玩家 id 计数器归属 account 服务的数据，和它的账号、角色、服务器
+// demo 的玩家 id 计数器归属 account 服务的数据，和它的账号、角色、服务器
 // 登记放在同一个 account.key_prefix 下（<key_prefix>:player_id）。旧版本写死 roost:demo:player_id：同一个
 // Redis db 上的多份部署共用一个计数器，按前缀清理一份部署时它被漏掉。已部署的 demo 用的是那个旧键，所以新键
 // 不存在时从旧键接着数（只取旧值作为起点，旧键不改不删），升级后发出的 id 仍然大于升级前发出的所有 id。

@@ -31,7 +31,7 @@ type sidOwners struct{ recordingOwners }
 
 func (sidOwners) SID() int32 { return 1300 }
 
-// 静态绑定（docs/feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md §3.3）：send_gift 把本进程的 sid
+// 静态绑定：send_gift 把本进程的 sid
 // 作为发送方绑定的 sid 交给 StartGift，赠礼的 debit / refund 按它路由。能在本进程发起赠礼的玩家一定
 // 经过了 Serve，也就一定绑定在这个 sid 上。
 func TestSendGiftWritesThisProcessSidAsTheSendersSid(t *testing.T) {

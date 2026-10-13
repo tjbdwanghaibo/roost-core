@@ -402,7 +402,7 @@ func TestSceneRetiresASubjectOnLeave(t *testing.T) {
 // A player who disconnects while nothing else is happening must leave the
 // scene anyway. Before the access layer published session closes, the only
 // thing that noticed was a failed push — which never happens if nobody is
-// pushing, so an idle world kept its ghosts (RR-20260918-06).
+// pushing, so an idle world kept its ghosts.
 func TestAClosedSessionLeavesTheSceneWithoutAnyTraffic(t *testing.T) {
 	recorder := newSceneRecorder()
 	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
@@ -440,11 +440,11 @@ func TestAClosedSessionLeavesTheSceneWithoutAnyTraffic(t *testing.T) {
 	}
 }
 
-// U-0278（W-2026-09-22-03）：一个推不到的玩家不能让同一批里排在它后面的人少收帧。
+// 一个推不到的玩家不能让同一批里排在它后面的人少收帧。
 //
 // 房间把一次 flush 的帧按观察者 id 升序排成一批交给这条 lane。lane 以前逐个推、第一个
 // 失败就整批返回错误——排在前面的已经推出去了（下一 tick 再收一遍），排在后面的一个
-// 都没推。RR-20260922-01 的实跑里，16 个客户端有 13 个从第一个断线者起再没收到任何帧。
+// 都没推。实跑中曾出现 16 个客户端有 13 个从第一个断线者起再没收到任何帧。
 //
 // 承诺：推不到的那个玩家自己离开场景；其余人这一帧照常到达；批次不报错。
 func TestAnUnreachablePlayerDoesNotStarveTheOthers(t *testing.T) {
@@ -615,11 +615,10 @@ func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
 
 // The other half of the same source: chat presence.
 //
-// The first round of RR-20260918-06 wired the scene and left presence to the
-// lazy path — the chat push removes a player when a push to them fails and
-// they have no sessions left. In a quiet world nothing pushes, so an offline
-// player stayed in the world channel's recipient set indefinitely. The 09-19
-// review called that a partial fix, correctly.
+// Wiring only the scene and leaving presence to the lazy path is not enough:
+// the chat push removes a player when a push to them fails and they have no
+// sessions left. In a quiet world nothing pushes, so an offline player would
+// stay in the world channel's recipient set indefinitely.
 func TestAClosedSessionLeavesTheWorldChannel(t *testing.T) {
 	recorder := &sceneRecorder{}
 	presence := chatroom.DefaultPresence()
@@ -660,7 +659,7 @@ func presenceHolds(presence *chatroom.Presence, playerID int64) bool {
 	return false
 }
 
-// U-0267 · C5 · RR-20260920-06：房间拒绝的 subscribe 必须重发。
+// 房间拒绝的 subscribe 必须重发。
 //
 // The matchmaker forms a team before every member has reached the scene. The
 // team source claims the pair at once, so the subscribe for the member who
@@ -733,7 +732,7 @@ func TestSceneRetriesASubscribeTheRoomRefused(t *testing.T) {
 	}
 }
 
-// RR-20260926-40 (REPRO-2026-09-26-04 §7): during a reconnect the player has
+// during a reconnect the player has
 // two connections, and the push goes to both. Writing to the OLD one fails,
 // the manager closes the player's replication session and reports it lost —
 // while the NEW connection is up. The player must stay: still a member, its
@@ -809,7 +808,7 @@ func TestAnOldConnectionsPushFailureKeepsTheReconnectedPlayer(t *testing.T) {
 	}
 }
 
-// RR-20260926-40: a disconnect is acted on for the Join it was reported
+// a disconnect is acted on for the Join it was reported
 // against. A close or a lost session reported for the previous login, whose
 // settle only runs after the player has logged in again, must not remove the
 // new login; a close for the current login still removes the player.
@@ -922,7 +921,7 @@ func TestADisconnectReportedForAnEarlierJoinDoesNotRemoveTheRejoinedPlayer(t *te
 	}
 }
 
-// RR-20260926-55 (REPRO-2026-09-26-05 §6): the connection closes, the settle
+// the connection closes, the settle
 // takes the player out — which retires its subject: the watcher is still owed
 // the ObjectRemove, sent on the next tick — and the player logs in again
 // before that tick. Register used to refuse the retiring subject and the Join
@@ -1122,7 +1121,7 @@ func (schedule *sceneSchedule) runRetry(t *testing.T) (time.Duration, bool) {
 	return delay, true
 }
 
-// RR-20260926-55 (second half): over a transport with a session lifecycle a
+// over a transport with a session lifecycle a
 // reopen can find the player's previous session still closing — OpenSession
 // answers ErrSessionClosing, which only means "not yet". The resync after a
 // push failure used to log a warning and give up, leaving a connected player
@@ -1241,7 +1240,7 @@ func TestASessionReopenRefusedWhileTheOldOneClosesIsRetried(t *testing.T) {
 		if h.scene.Members() != 2 {
 			t.Fatalf("giving up on the reopen removed the player: members=%d", h.scene.Members())
 		}
-		// RR-20260927-19: giving up is counted once per player, not only logged.
+		// giving up is counted once per player, not only logged.
 		if got := sceneReopenFailures("exhausted") - exhaustedBefore; got != 1 {
 			t.Fatalf("a reopen given up after %d attempts counted %d on %s{reason=exhausted}, want 1", sessionReopenAttempts, got, sceneReopenFailedMetric)
 		}
@@ -1325,7 +1324,7 @@ type sceneAuthority struct {
 	nextHook int
 }
 
-// OnEntityLoaded is the Data Engine's load notice (kit/dataengine
+// OnEntityLoaded is the Data Engine's load notice (wiring/dataengine
 // Mod.OnEntityLoaded), stood in for.
 func (authority *sceneAuthority) OnEntityLoaded(hook func(entity.IThreadSafeEntity)) (func(), error) {
 	authority.hookMu.Lock()
@@ -1410,10 +1409,10 @@ func sceneFullUpdates(t *testing.T, pushes []*pb.EntitySyncPush) map[int64]bson.
 	return out
 }
 
-// OPEN-ITEMS B25 / RR-20260927-18: a player in the scene whose instance is
+// A player in the scene whose instance is
 // unloaded from memory only — the Data Engine evicting it after a skipped
-// native step (RR-20260926-30; the gift debit is one), or a refused Remote
-// write (RR-20260926-39) — has its sync state closed. The scene's manager is
+// native step (the gift debit is one), or a refused Remote
+// write — has its sync state closed. The scene's manager is
 // the scene's own, so nothing reloaded the player for the others and nothing
 // bound the reloaded instance to the scene: the others stayed on the content
 // they had last received, which may never have become the authority, and saw
@@ -1563,11 +1562,11 @@ func TestTheSceneStopsTheReloadOfUnloadedPlayersWhenItCloses(t *testing.T) {
 	_ = stop(ctx)
 }
 
-// RR-20260927-23: the framework reloads an unloaded player only while
-// someone still watches it (RR-20260926-59). A player unloaded while nobody
+// the framework reloads an unloaded player only while
+// someone still watches it. A player unloaded while nobody
 // did — its own replication session dropped and not reopened, nobody near —
 // is loaded again by whatever touches it next, and that load is the Data
-// Engine's to report (OnEntityLoaded). The scene did not hook it, as the kit's
+// Engine's to report (OnEntityLoaded). The scene did not hook it, as the wiring
 // Nest Mod does for the manager it owns: its subject stayed on the unloaded
 // instance, and a watcher who came into view afterwards never received the
 // player. The scene now rebinds the subject on that load: the newcomer gets
@@ -1697,7 +1696,7 @@ func TestAPlayerLoadedAgainAfterAnUnloadNobodyWatchedReachesALaterWatcher(t *tes
 	}
 }
 
-// RR-20260927-23: the scene holds the Data Engine load hook exactly while it
+// the scene holds the Data Engine load hook exactly while it
 // runs. Start hooks it before the replication loop; Close releases it after
 // the reload stops and before the manager closes; a Start that fails takes
 // back both wirings.

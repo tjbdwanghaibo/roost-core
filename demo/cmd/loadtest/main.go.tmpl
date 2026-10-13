@@ -471,8 +471,7 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 				// window it landed in and settles with it, so what must hold
 				// HERE is the opposite: a fresh window must not have inherited
 				// it. Asserting an exact 1 across a boundary is what made this
-				// gate fail for a reason unrelated to what it tests
-				// (RR-20260921-01).
+				// gate fail for a reason unrelated to what it tests.
 				if resp.Score != 0 || resp.Progress != 0 {
 					return fmt.Errorf("window %s is not the one that took the point (%s) yet already counts score=%d progress=%d",
 						resp.ActivityID, contributed, resp.Score, resp.Progress)
@@ -655,7 +654,7 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			// needs it: a window lasts 5 minutes and the standing endpoint
 			// answers about whichever one is current when it is asked, so
 			// without this the robot would be asserting a count in a window
-			// it never contributed to (RR-20260921-01).
+			// it never contributed to.
 			if resp.ActivityID == "" {
 				return fmt.Errorf("the clear did not say which activity window took its point")
 			}
@@ -665,7 +664,7 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 	// The same call again, on the same run id. Finish is idempotent, so the
 	// service answers with the run as it stands — and the reward must not be
 	// paid a second time. A demo that pays here lets a client replay one
-	// frame for unlimited experience (RR-20260917-08).
+	// frame for unlimited experience.
 	action.MustRegisterCall[pb.FinishDungeonRequest, pb.FinishDungeonResponse](actions, protocols, "finish_dungeon_replay", msgid.MsgFinishDungeon,
 		action.OnResp(func(_ *robot.Context, resp *pb.FinishDungeonResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {

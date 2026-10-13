@@ -53,8 +53,8 @@ const overdueDeadlineDelay = time.Millisecond
 //     call. Calling another service from inside an entity lock is how one
 //     slow service stops a whole process.
 //
-// It keeps no schedule of its own (A1, docs/feature/REFACTOR-2026-10-05-
-// dao-unified-rollback.md: state a transaction changes lives in the DAO).
+// It keeps no schedule of its own (state a transaction changes lives in the
+// DAO, so rollback is the DAO's rollback).
 // Arming and firing build a timer.Scheduler from the stored nodes for that
 // one call; its change hook writes every add, fire and removal back to the
 // DAO, and the scheduler is dropped. The only derived value, the earliest
@@ -63,19 +63,18 @@ const overdueDeadlineDelay = time.Millisecond
 // that fails, or whose commit is refused, rolls the nodes, the seed and that
 // number back together — Nest's rollback of the DAO is the whole of it, and
 // there is no undo to register here. Before this the heap lived in the
-// component and every path had to copy it into the transaction by hand
-// (RR-20261005-NC-140).
+// component and every path had to copy it into the transaction by hand.
 //
 // Order: deadlines due at the same moment fire by priority (lower first,
 // default 0), then in the order they were armed — the node id, which the
-// scheduler compares, not the map order the nodes are rebuilt in (D-L1). A
+// scheduler compares, not the map order the nodes are rebuilt in. A
 // timer type that must fire before or after others at the same moment arms
 // with scheduler.NewTimerWithPriority; the activity phase has no such need
 // and arms at 0.
 //
 // A stored node whose type has no handler in this build (a type that was
 // removed) is reported once per type when the World loads, and dropped with
-// a warning and timer.unhandled_dropped_total{kind} when it comes due (D-L2):
+// a warning and timer.unhandled_dropped_total{kind} when it comes due:
 // keeping it would leave it at the top of the heap forever.
 type TimerComponent struct {
 	entity.ComponentBase
@@ -107,7 +106,7 @@ func (component *TimerComponent) Owner() *World { return component.owner }
 // so the stored document does not bring it back. It runs after the DAO is
 // attached and before anything can call Tick, which is the only order in
 // which a restored deadline is not briefly invisible. It also warns, once per
-// type, about stored nodes no handler in this build can fire (D-L2).
+// type, about stored nodes no handler in this build can fire.
 //
 // Nothing is armed or fired here, so the scheduler's clock is never read.
 // Building it writes nothing, and writing a nopersist field marks nothing for
@@ -207,7 +206,7 @@ func (component *TimerComponent) ScheduleActivityPhase(activityID string, at tim
 		// Already due: arm it for the next tick rather than refusing, so a
 		// process that starts after the deadline still closes the window.
 		// Not zero: the scheduler refuses a non-positive delay and returns no
-		// node, which used to be reported here as armed (RR-20261005-NC-142).
+		// node, which used to be reported here as armed.
 		delay = overdueDeadlineDelay
 	}
 	scheduler := component.scheduler(now)

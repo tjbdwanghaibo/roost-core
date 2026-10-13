@@ -51,16 +51,16 @@ func Verifier() accountdomain.IdentityVerifier {
 
 // playerIDCounterKey is the Redis key the demo's player id counter lives
 // under: <account.key_prefix>:player_id, beside the accounts, roles and server
-// registrations the account service keeps under the same prefix
-// (RR-20260927-03). Two deployments sharing one Redis database are told apart
+// registrations the account service keeps under the same prefix.
+// Two deployments sharing one Redis database are told apart
 // by that prefix, so they must not share one counter, and a cleanup by prefix
 // must take the counter with the rest. A deployment that changes its prefix
 // while keeping its data moves every key under the old prefix — the counter
 // with them; the account store would be lost otherwise anyway.
 func playerIDCounterKey(prefix string) string { return prefix + ":player_id" }
 
-// legacyPlayerIDCounterKey is where the counter lived before RR-20260927-03,
-// the same fixed key for every deployment. A counter under the prefix that
+// legacyPlayerIDCounterKey is where the counter lived before it moved under
+// the deployment's prefix, the same fixed key for every deployment. A counter under the prefix that
 // does not exist yet starts from its value (carryLegacyCounter), so a demo
 // deployed before the move never hands out an id it handed out already. It
 // is only read — never written or deleted; remove it by hand once every

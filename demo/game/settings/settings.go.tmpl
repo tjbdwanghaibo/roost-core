@@ -1,6 +1,6 @@
 // Package settings declares the config keys the game service's own code
 // reads, the same way every framework Mod declares its keys (maintainer
-// decision A4 ①): one struct, the key names and rules in its tags, read with
+// decision): one struct, the key names and rules in its tags, read with
 // app.LoadConfig. The game service returns Schema() from its ConfigSchema
 // method, so the App checks these keys before any Mod starts, together with
 // every Mod's, and `<bin> {{GAME_SERVICE}} --print-config` / `roost project
@@ -38,7 +38,7 @@ type Config struct {
 // means a settlement reading an empty board.
 type Activity struct {
 	KeyPrefix  string `config:"key_prefix" required:"true" help:"the activity coordinator's Redis key prefix (activity.key_prefix in config.activity.yaml); the game keeps its contributor board beside it"`
-	GroupsFile string `config:"groups_file" required:"true" help:"the activity groups file the coordinator reads too (C4): this server takes part in the group that lists its sid"`
+	GroupsFile string `config:"groups_file" required:"true" help:"the activity groups file the coordinator reads too: this server takes part in the group that lists its sid"`
 }
 
 // Platform is the game side of the platform service's handover: the prefix

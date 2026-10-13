@@ -193,8 +193,8 @@ func Deliver() platformdomain.Deliverer { return grants }
 // Pending is where the background retry loop gets its candidates.
 //
 // nil, and that is now the right answer: the order store keeps the pending
-// index itself, in the SAME Redis write as the order (kit's NewRedisOrders,
-// RR-20260919-04), so the service has one by default and it is atomic with
+// index itself, in the SAME Redis write as the order (service/platform's
+// NewRedisOrders), so the service has one by default and it is atomic with
 // the record. A deployment-side index cannot be — it can only write after the
 // order is stored, and a process that dies in between leaves a paid order no
 // loop can enumerate.

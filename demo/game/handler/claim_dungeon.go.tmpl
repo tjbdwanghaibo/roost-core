@@ -19,14 +19,13 @@ import (
 // marked paid but was not (rollback=undo takes the record back with the rest).
 //
 // Why this is not the endpoint's job: the endpoint cannot read-then-write
-// atomically, so two replays arriving together would both see "not claimed"
-// (RR-20260917-08).
+// atomically, so two replays arriving together would both see "not claimed".
 //
 // The ledger cannot be kept forever, so the identity it remembers has to
 // stop being replayable at some point. That point is resolvedAtUnix + the
 // claim window, and it is checked **here**, in the same transaction that
 // would pay — one choke point for every entry into the reward, sharing the
-// predicate with the pruning (RR-20260918-04). A refusal is an error, not a
+// predicate with the pruning. A refusal is an error, not a
 // quiet zero: a player whose reward really did time out unclaimed has to be
 // visible to an operator, or the fix for double-paying becomes silent
 // under-paying.

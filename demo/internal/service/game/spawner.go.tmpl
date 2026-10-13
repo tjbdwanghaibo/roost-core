@@ -35,14 +35,14 @@ const spawnTick = time.Second
 // Monster ids come from game/runtimeid: the process's sid is encoded into the
 // id, so two game processes cannot mint the same one. A local counter was the
 // first version of this and it was wrong for exactly the deployment the rest
-// of the demo is built for (RR-20260918-09).
+// of the demo is built for.
 type spawner struct {
 	area   *sceneentity.Scene
 	bridge *Scene
 	lives  *lifecycle.MonsterLifecycle
 	ids    *runtimeid.Allocator
 
-	// business is the clock respawn cooldowns run on (D-L3: a cooldown is
+	// business is the clock respawn cooldowns run on (a cooldown is
 	// business time). How often the spawner looks is the ticker, system time.
 	business clock.Business
 

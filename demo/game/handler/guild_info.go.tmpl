@@ -12,7 +12,7 @@ import (
 // wants cheap, bounded-stale reads of a shared object uses a mirror instead: a
 // plain struct carrying the roost mirror marker (entityKind=guild.EntityKindGuild
 // coll=guild) gets a generated New<DTO>Reader, read through
-// kit/remoteentity.MirrorSource (RemoteMirrorMod in a read-only service). This
+// wiring/remoteentity.MirrorSource (RemoteMirrorMod in a read-only service). This
 // handler answers a player who is about to act on the guild, so it pays for
 // the lock; saying so is more useful than pretending the read is free.
 //

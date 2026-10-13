@@ -10,8 +10,7 @@ package dungeon
 // alone), and a run whose deadline passed comes back as expired whatever the
 // caller asked for. So "the Finish call succeeded" does NOT mean "this call
 // is the one that resolved the run", and the request's own Success flag
-// means nothing at all — only the returned run.State is authoritative
-// (RR-20260917-08).
+// means nothing at all — only the returned run.State is authoritative.
 //
 // That settles which runs deserve a reward. It does not settle how many
 // times one run is paid: two concurrent replays can both see a succeeded run.
@@ -30,7 +29,7 @@ const ClearExp int64 = 100
 //
 // The first version of this bounded the ledger by "a run cannot be replayed
 // forever anyway": `session.run_ttl` is 30m, so a claim held 4h outlived
-// every replay. That is wrong, and review caught it (RR-20260918-04). Runs
+// every replay. That is wrong, and review caught it. Runs
 // and claims have **no storage TTL** in the session service — run_ttl is how
 // long a run may stay *open*. A run that succeeded stays succeeded, and
 // `session.Finish` keeps answering with that terminal state years later. So
@@ -61,7 +60,7 @@ const ClaimWindowSeconds int64 = 4 * 60 * 60
 // the point where its clear reward may still be paid at nowUnix. It is the
 // admission check on the reward path and the pruning predicate for the
 // ledger — deliberately the same function, because two predicates that drift
-// apart is exactly how RR-20260918-04 happened.
+// apart would let a forgotten run still be paid.
 //
 // A non-positive timestamp is a run whose resolution time cannot be proven
 // (a hand-edited document, a record written by an older build). It is

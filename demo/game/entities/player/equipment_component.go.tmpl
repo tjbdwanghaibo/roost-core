@@ -18,8 +18,8 @@ const CompTypeEquipment entity.ComponentType = 2005
 // It is the demo's one NESTED write path: `Equipment` is a struct inside the
 // DAO and `Slots` is a map of pointers inside that struct, so a change to a
 // worn piece has to travel two links before it reaches the persist patch.
-// Nobody writes those links — the generated code does — and two P1 defects
-// (U-0236, U-0238) were exactly them being written wrong.
+// Nobody writes those links — the generated code does — and real defects
+// have been exactly them being written wrong.
 type EquipmentComponent struct {
 	entity.ComponentBase
 	owner *Player

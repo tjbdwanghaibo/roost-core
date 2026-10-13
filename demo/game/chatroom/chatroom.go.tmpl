@@ -77,7 +77,7 @@ func NewPresence() *Presence { return &Presence{players: map[int64]struct{}{}} }
 // It is a package-level singleton because there is exactly one per process and
 // two things need it: the endpoints, which add a player on login and fan chat
 // out to it, and the game service, which removes a player when their last
-// connection closes (RR-20260918-06). Before that second consumer existed the
+// connection closes. Before that second consumer existed the
 // set lived in the controller, and an offline player stayed in it until some
 // later push to them happened to fail — which never happens in a quiet world.
 var processPresence = NewPresence()

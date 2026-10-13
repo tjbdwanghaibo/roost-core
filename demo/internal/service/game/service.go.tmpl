@@ -48,7 +48,7 @@ func (*Service) Name() app.ServiceName { return app.ServiceName("{{GAME_SERVICE}
 // the App checks them before any Mod starts, together with every Mod's, and
 // `--print-config` / `roost project doctor` know about them. Without it the
 // activity.* and platform.* sections in this service's config are keys no
-// declaration owns (maintainer decision A4 ①).
+// declaration owns (maintainer decision).
 func (*Service) ConfigSchema() app.ConfigSchema { return settings.Schema() }
 
 // Init runs after every Mod has started, so the Entity runtime, JetStream,
@@ -229,11 +229,11 @@ func (*Service) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
 // to the next process holding the durable; nothing is lost either way.
 //
 // ctx is the App's stop context, bounded by shutdown.total_timeout; the scene
-// closes under it (RR-20260930-18), so stopping the reload of unloaded
+// closes under it, so stopping the reload of unloaded
 // players and closing the replication manager cannot outlive the deployment's
 // grace period. It used to close under context.Background().
 //
-// 第一件事是断开本进程服务中的全部玩家连接（RR-20260930-23 在 App 单实例锁之下的形态）：停机可能
+// 第一件事是断开本进程服务中的全部玩家连接：停机可能
 // 是 fail-stop（失锁、DataEngine / Remote fatal，此时 Nest 已被围栏），进程不再处理请求，连接不能
 // 留在这里，客户端重连到接替的进程。会话关闭事件照常走到场景、在线状态，此时它们都还开着。
 func (s *Service) Shutdown(ctx context.Context) error {

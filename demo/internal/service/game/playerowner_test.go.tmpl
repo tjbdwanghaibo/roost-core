@@ -12,10 +12,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
-// 静态绑定下的驻留表（docs/feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md §4）：只有通过绑定校验
+// 静态绑定下的驻留表：只有通过绑定校验
 // 才有驻留记录，WriteGate 只看记录与卸载状态；闲置卸载是本地内存管理，卸载进行中不准入、登录等它结束。
 // 按玩家的 Redis 租约、续租、重新认领、跨间断撤离都已删除，同一 sid 的单写者由 App 单实例锁保证，
-// 相应回归在 app 包（见方案 §4.4 与 App 单实例锁方案 §7.3 的去向表）。
+// 相应回归在 app 包。
 
 const ownSID int32 = 1000
 
@@ -183,7 +183,7 @@ func unloadStuck(t *testing.T, owners *PlayerOwners, clock *time.Time, playerID 
 }
 
 // Serve 的三种结果：绑定在别的服 → player_elsewhere，不建记录；绑定在本服 → 建记录、放行；
-// 卸载进行中且超过等待预算 → 可重试的超时（RR-20260920-12：等待有界），记录不变。
+// 卸载进行中且超过等待预算 → 可重试的超时（等待有界），记录不变。
 func TestServeAnswersEachOfItsThreeOutcomes(t *testing.T) {
 	t.Run("bound-elsewhere", func(t *testing.T) {
 		owners, _, _ := ownersUnderTest(t)
@@ -291,7 +291,7 @@ func TestLookingAtAPlayerIsNotUse(t *testing.T) {
 	}
 }
 
-// RR-20260920-10 转写：后台工作接入的离线玩家，用完、闲置之后被卸载，记录随之删除。
+// 后台工作接入的离线玩家，用完、闲置之后被卸载，记录随之删除。
 func TestABackgroundAdmissionIsUnloadedWhenNobodyIsPlaying(t *testing.T) {
 	owners, _, clock := ownersUnderTest(t)
 	evictor := &evictorStub{}
@@ -355,7 +355,7 @@ func TestWorkInProgressKeepsThePlayerResident(t *testing.T) {
 	}
 }
 
-// RR-20260920-11 转写：为新工作重新接入（Serve / AdmitBound）算使用，记录旧了也不例外——紧随其后
+// 为新工作重新接入（Serve / AdmitBound）算使用，记录旧了也不例外——紧随其后
 // 的卸载轮次不能把刚放行的工作脚下的玩家卸掉。
 func TestAPlayerTakenIntoServiceForNewWorkIsNotIdle(t *testing.T) {
 	for _, entry := range []struct {
@@ -507,7 +507,7 @@ func TestAnUnloadInFlightAdmitsNothing(t *testing.T) {
 	}
 }
 
-// RR-20261004-11 转写：卸载等超时之后仍在后台进行，期间什么都不放行；后台工作在卸载结束后重新接入，
+// 卸载等超时之后仍在后台进行，期间什么都不放行；后台工作在卸载结束后重新接入，
 // 登录加入正在进行的卸载、结束之后再接入。
 func TestAnUnloadWhoseDropOutlivesItsWaitAdmitsNothingUntilTheDropEnds(t *testing.T) {
 	t.Run("background-work", func(t *testing.T) {
@@ -553,7 +553,7 @@ func TestAnUnloadWhoseDropOutlivesItsWaitAdmitsNothingUntilTheDropEnds(t *testin
 	})
 }
 
-// RR-20260920-12 转写：同一玩家同时至多一次卸载。卸载等超时后再来一轮，不会再起第二次；登录也只
+// 同一玩家同时至多一次卸载。卸载等超时后再来一轮，不会再起第二次；登录也只
 // 加入它，不自己起一次。
 func TestASecondUnloadJoinsTheOneAlreadyRunning(t *testing.T) {
 	owners, _, clock := ownersUnderTest(t)
@@ -573,7 +573,7 @@ func TestASecondUnloadJoinsTheOneAlreadyRunning(t *testing.T) {
 	}
 }
 
-// RR-20260921-03 转写（原四个子测试合并）：卸载进行中到达的登录，结局一定可服务——记录存在、放行；
+// 卸载进行中到达的登录，结局一定可服务——记录存在、放行；
 // 卸载成功删记录发生在登录醒来之前，不会删掉登录建的那条。登录的等待受调用方 ctx 约束。
 func TestALoginDuringAnUnloadEndsServed(t *testing.T) {
 	t.Run("ends-served", func(t *testing.T) {

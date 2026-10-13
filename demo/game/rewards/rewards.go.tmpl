@@ -22,7 +22,7 @@ import (
 //
 // The first version of this bounded the ledger by a fixed 31 days and argued
 // that it outlived `mail.send_ttl` (720h in the generated configuration).
-// That was wrong and review caught it (RR-20260918-05): `send_ttl` only has
+// That was wrong and review caught it: `send_ttl` only has
 // to be positive, so a deployment that keeps mail for 40 days is legal and
 // the ledger forgets while the envelope is still claimable. **Asset
 // correctness cannot be bound to another service's configuration** — it has

@@ -31,7 +31,7 @@ import (
 
 // These run the scene on the REAL generated player TCP transport, over
 // loopback sockets, because what they are about is the transport's answer to
-// one connection that cannot take a frame (RR-20260926-52). A recorder that
+// one connection that cannot take a frame. A recorder that
 // decided that answer itself would be testing its own decision.
 //
 // A connection that "cannot take a frame" is a client that stopped reading:
@@ -202,7 +202,7 @@ func readSceneFrame(reader io.Reader) (uint32, []byte, error) {
 // connections. The transport writes the authentication ack before it
 // registers the session, so a dialed client is not yet one the scene can see:
 // a member without a registered connection is swept out when the next player
-// joins, and a push to it fails (RR-20260928-15).
+// joins, and a push to it fails.
 func waitActiveSessions(t *testing.T, transport *accessplayertcp.Runtime, playerID int64, want int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -233,7 +233,7 @@ func stallPlayer(t *testing.T, transport *accessplayertcp.Runtime, playerID int6
 	return nil
 }
 
-// RR-20260926-52 (REPRO-2026-09-26-05 §5, on the real transport): a player who
+// a player who
 // logged in again keeps their old, stalled connection registered until its
 // read loop notices. Every push to the player went to both connections and
 // failed as a whole, so the manager dropped the replication session, the
@@ -311,7 +311,7 @@ func TestAStalledOldConnectionDoesNotResetTheLiveClient(t *testing.T) {
 	}
 }
 
-// The other half of RR-20260926-52: when NO connection of a player takes the
+// The other half: when NO connection of a player takes the
 // frame, the player is gone — the push fails, every connection is closed, and
 // the scene removes them (the mover is told).
 func TestAPlayerWhoseEveryConnectionStallsLeavesTheScene(t *testing.T) {
@@ -365,7 +365,7 @@ func TestAPlayerWhoseEveryConnectionStallsLeavesTheScene(t *testing.T) {
 	}
 }
 
-// RR-20260926-40 on the real transport (B27 第 3 批): a player logs in again
+// On the real transport: a player logs in again
 // while their first connection is still alive and reading. The second
 // EnterGame resyncs the replication session, so every connection of the
 // player gets a full snapshot and both keep receiving deltas; the mover is
@@ -452,7 +452,7 @@ func TestASecondLiveConnectionKeepsThePlayerInTheSceneWhenTheFirstCloses(t *test
 	}
 }
 
-// RR-20260926-55 on the real transport (B27 第 3 批): the player's connection
+// On the real transport: the player's connection
 // closes and a new one is dialed, authenticated and joined at once —
 // inside one tick when the machine is fast enough, after the leave settled
 // when it is not (the transport reports the close from its read loop, the
@@ -500,7 +500,7 @@ func TestADisconnectAndReconnectInsideOneTickEndsWithTheNewConnectionReplicated(
 		// one is registered after its ack: wait for exactly the fresh one.
 		waitActiveSessions(t, transport, reID, 1)
 		if err := scene.Join(ctx, re, spatial.Point{X: 510, Y: 500}); err != nil {
-			// RR-20260926-40 的已知边界：同一 tick 内 Leave 后立刻 Join 可能撞上
+			// 已知边界：同一 tick 内 Leave 后立刻 Join 可能撞上
 			// retiring。这里只记数，最后一起判断。
 			joinErrors++
 			t.Logf("round %d: join refused: %v", round, err)

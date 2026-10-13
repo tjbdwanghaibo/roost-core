@@ -59,8 +59,7 @@ func TestAPaidOrderIsGrantedOnce(t *testing.T) {
 	}
 }
 
-// A paid grant does not expire, and its ledger entry is never pruned
-// (RR-20260919-06).
+// A paid grant does not expire, and its ledger entry is never pruned.
 //
 // The first version of this gave a grant thirty days and pruned on the same
 // number. The reasoning was right for mail — admission and pruning must be one

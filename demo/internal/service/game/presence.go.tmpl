@@ -16,7 +16,7 @@ import (
 // source exists. Before it, presence was only ever cleaned up lazily — the
 // chat push path removes a player when a push to them fails and they have no
 // sessions left — and in a quiet world nothing pushes, so an offline player
-// stayed in the set indefinitely (RR-20260918-06; the first round wired the
+// stayed in the set indefinitely (the first round wired the
 // scene and left this half, which the 09-19 review correctly called a partial
 // fix).
 //

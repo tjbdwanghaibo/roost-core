@@ -54,7 +54,7 @@ type boardRedis struct{ fredis.IRedis }
 
 func (boardRedis) ZAdd(_ context.Context, _ string, _ ...fredis.Z) (int64, error) { return 1, nil }
 
-// U-0273 · C5 · RR-20260921-01：一次贡献必须说出它落进了哪个窗口。
+// 一次贡献必须说出它落进了哪个窗口。
 //
 // 窗口每 gameactivity.WindowSeconds 滚一次，而 Contribute 与 Standing 各自
 // 用调用那一刻的时钟算窗口 id。所以"12:14:59 贡献、12:15:01 查询"问的是两个
@@ -138,7 +138,7 @@ func (c *lateOpenCoordinator) ApplyProgress(_ context.Context, key svcactivity.K
 	return svcactivity.Participant{Score: c.scores[key.ActivityID], Progress: c.scores[key.ActivityID]}, nil
 }
 
-// RR-20261006-29：窗口刚滚动、开窗循环还没跑到时通关，这一点也要算进当前窗口。
+// 窗口刚滚动、开窗循环还没跑到时通关，这一点也要算进当前窗口。
 //
 // 窗口由 runActivity 每 activityLoopInterval（5s）开一次，于是每个 300 秒边界之后最长 5s 里，时钟所在的
 // 窗口在协调方那里还不存在：这段时间的通关 ApplyProgress 得到 “activity: not found”，贡献丢掉，
@@ -213,8 +213,7 @@ func (c *openRecorder) OpenActivity(context.Context, svcactivity.Key, []int32) (
 	return svcactivity.Activity{}, nil
 }
 
-// App 单实例锁方案 §7.2 / §8.1：activity 不再持有自己的全局租约，协调器的 expected 集合来自 App 锁的
-// Live 查询（取代 RR-20260930-24 的三条租约用例：租约本身删除了，承诺换成下面这三条）。
+// activity 不持有自己的全局租约，协调器的 expected 集合来自 App 锁的 Live 查询。
 func TestTheExpectedServersAreTheOnesTheAppLockSeesAlive(t *testing.T) {
 	ctx := context.Background()
 	newRunner := func(source *liveSource) *ActivityRunner {
@@ -299,10 +298,9 @@ func sidsFrom(first int64, n int) []int64 {
 	return out
 }
 
-// C4（维护者决定）：活动组由 configs/activity_groups.yaml 定义，game 按自己的 sid 找组，组成员就是
+// 维护者决定：活动组由 configs/activity_groups.yaml 定义，game 按自己的 sid 找组，组成员就是
 // Live 查询的候选。组文件注定让窗口开不出来、或本服不在任何组里，都在启动时、任何远端调用之前，
-// 按 activity.groups_file 点名拒绝，而不是每 5 秒记一条 Warn、活动永远不开（RR-20261005-01 的承诺，
-// 改由组文件兑现）：
+// 按 activity.groups_file 点名拒绝，而不是每 5 秒记一条 Warn、活动永远不开：
 //   - 一组超过 svcactivity.MaxExpectedGames（协调器单个窗口的上限）：同时活着超过上限时每个窗口都被拒；
 //   - 组内重复的 sid、一个 sid 属于两个组、超出 int32 的 sid；
 //   - 本服的 sid 不在文件的任何组里；没有配置 activity.groups_file。
@@ -355,9 +353,9 @@ func TestActivityRefusesAGroupNoWindowCouldOpenWith(t *testing.T) {
 	})
 }
 
-// C4：正常的组经真实协调器（内存存储）开窗——Key 的组 id 是组文件里本服所在的组，expected 是 Live 在组成员里
+// 正常的组经真实协调器（内存存储）开窗——Key 的组 id 是组文件里本服所在的组，expected 是 Live 在组成员里
 // 找到的活着的服；组的全部 MaxExpectedGames 个成员都活着时，协调器同样接受。
-// 协调器读的是 game 读的同一个组文件（与部署相同），New 没有组就拒绝构造（RR-20261006-17）。
+// 协调器读的是 game 读的同一个组文件（与部署相同），New 没有组就拒绝构造。
 func TestAWindowOpensForTheGroupTheFilePutsThisServerIn(t *testing.T) {
 	ctx := context.Background()
 	newCoordinator := func(t *testing.T, path string) *svcactivity.Service {
@@ -461,7 +459,7 @@ func (n *recordingNest) Request(_ context.Context, _ corenest.HandlerName, _ int
 	return nil, errors.New("recording nest: not served")
 }
 
-// D-L3（维护者第六轮决定）：活动窗口、关窗截止与 World 定时器读业务时钟（time.logic_offset）。
+// 活动窗口、关窗截止与 World 定时器读业务时钟（time.logic_offset）。
 // 业务时钟比真实时间快一天时，开的是业务时间所在的窗口，钉到 World 上的“现在”也是业务时间；
 // 修前 openCurrentWindow 读 time.Now()，开的是真实时间所在的窗口，与协调器的业务时钟错开一天。
 func TestTheWindowFollowsTheBusinessClock(t *testing.T) {
@@ -487,7 +485,7 @@ func TestTheWindowFollowsTheBusinessClock(t *testing.T) {
 	}
 }
 
-// D-L3：World 定时器的每一拍带的是业务时间（A1 之后定时器由调用方钉时间，timer_component 的 scheduler(now)
+// World 定时器的每一拍带的是业务时间（A1 之后定时器由调用方钉时间，timer_component 的 scheduler(now)
 // 只认这一拍带来的时间），所以前拨偏移后到期的关窗节点按业务时间触发。
 func TestTheWorldTickCarriesBusinessTime(t *testing.T) {
 	business := time.Now().Add(24 * time.Hour)

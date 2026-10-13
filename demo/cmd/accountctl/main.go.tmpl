@@ -7,7 +7,7 @@
 // The account RPC interface has Login, CreateRole, SelectRole and friends —
 // player-facing operations any process may call — but not UpsertServer: that
 // changes what every player can log in to, and a game process has no business
-// making that change (see roost-kit service/account/account_rpc.go). So this
+// making that change (see roost-core service/account/account_rpc.go). So this
 // tool does what an operator would: it opens the account service's own store
 // with Redis credentials and writes the server record there. Without a
 // registered, open server, CreateRole is refused — the load test's real-login
@@ -34,7 +34,7 @@ func main() {
 	redisPassword := flag.String("redis-password", "", "Redis password, if any")
 	redisDB := flag.Int("redis-db", 0, "Redis database index")
 	// A single-node client against a Cluster only reaches the keys whose slot
-	// that node serves; every other write fails with MOVED (RR-20261006-28).
+	// that node serves; every other write fails with MOVED.
 	redisCluster := flag.String("redis-cluster", "", "comma-separated Redis Cluster seed addresses (redis.cluster_addrs in config.account.yaml); when set, -redis and -redis-db are ignored")
 	prefix := flag.String("prefix", "roost:{{PROJECT}}:account", "account.key_prefix from config.account.yaml; the store is shared with the running service through this prefix")
 	flag.Parse()

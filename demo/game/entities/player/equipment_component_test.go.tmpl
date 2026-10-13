@@ -16,10 +16,9 @@ import (
 // it that nothing else in the project does: **a change two levels down has to
 // reach the persist patch, and a piece that came off must stop reaching it.**
 //
-// Both directions were real defects (U-0236, U-0238, both P1), and both were
-// invisible to every generated project because nothing in the demo had a
-// nested field. That is why these live here rather than only in the
-// generator's own runtime gate.
+// Both directions have been real defects, and both were invisible to every
+// generated project while nothing in the demo had a nested field. That is
+// why these live here rather than only in the generator's own runtime gate.
 
 type equipmentCommitter struct{ records []dataengine.CommitRecord }
 
@@ -86,7 +85,7 @@ func TestAWornPieceReachesThePersistPatch(t *testing.T) {
 
 // The piece that came off must stop reporting. A detached value that still
 // marks the DAO writes its own content under a slot it no longer occupies —
-// which is data corruption, not a spurious dirty flag (U-0238).
+// which is data corruption, not a spurious dirty flag.
 func TestAReplacedPieceStopsReachingStorage(t *testing.T) {
 	subject := newEquippedPlayer(t)
 	committer := &equipmentCommitter{}

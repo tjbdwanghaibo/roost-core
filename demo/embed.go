@@ -9,7 +9,7 @@
 // it generates for"; codegen and the runtime are now one module, so that
 // sentence is no longer the reason. The reason is simpler and was always also
 // true: these files carry `{{MODULE}}` placeholders, so they are not valid Go
-// until a project is generated from them (三仓合一仓 P3).
+// until a project is generated from them.
 //
 // Nothing here is compiled by this module. It is verified by CI generating a
 // project from the template and building it — the same reason the framework's

@@ -59,7 +59,7 @@ const (
 	// timer: a client that never arrives must not stall the others, and an
 	// absent seat's frames are simply empty (optimistic frame locking).
 	// Waiting for a command to arrive before starting made this constant a
-	// lie — with nobody typing, no frame was ever cut (RR-20260917-09).
+	// lie — with nobody typing, no frame was ever cut.
 	battleStartGrace = 2 * time.Second
 	// battleMaxLifetime is the absolute cap on one room, distinct from the
 	// grace: it bounds the whole life (grace + every frame + the drain

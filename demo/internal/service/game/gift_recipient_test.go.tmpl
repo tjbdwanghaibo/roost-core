@@ -12,7 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// RR-20260930-22：deliver 的收件人检查必须读 Player DAO 自己的库和集合。
+// deliver 的收件人检查必须读 Player DAO 自己的库和集合。
 //
 // Player 文档落在 DAO 标记 `//roost:dao coll=player db=game` 生成的库里
 // （db.PlayerDaoDBName / db.PlayerDaoCollection），与 `dataengine.database`

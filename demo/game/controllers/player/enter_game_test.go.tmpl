@@ -27,7 +27,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// RR-20260926-36: a cold login waits for the player's admitted transactions
+// a cold login waits for the player's admitted transactions
 // to be projected before it reads the store. With the store down the
 // projector retries without end, so that wait never finishes on its own.
 // Before the fix EnterGame ran it on the connection's context — no deadline at
@@ -178,7 +178,7 @@ func TestEnterGameColdLoadStuckOnProjectionAnswersWithinTheLoginBudget(t *testin
 		login := newStuckLogin(t)
 		login.enter(t)
 		// The login gave up, but the load it started keeps running: the load
-		// runs on a context of its own (RR-20260926-54), bounded by the
+		// runs on a context of its own, bounded by the
 		// framework load timeout and the loader's shutdown, not by whoever
 		// happened to start it. The next attempt joins that live load instead
 		// of starting another one, and answers within its own budget again.
@@ -245,7 +245,7 @@ func (owners *recordingOwners) Serve(_ context.Context, playerID int64, boundSID
 	return nil
 }
 
-// 静态绑定（docs/feature/PLAYEROWNER-STATIC-BINDING-2026-10-05.md §3.1）：登录只在玩家绑定的服上服务。
+// 静态绑定：登录只在玩家绑定的服上服务。
 // Claims 里没有 server_id → fail-closed，按名拒绝、不问驻留表、不装载；绑定在别的服 → 驻留表回答
 // player_elsewhere，端点原样转给客户端、不装载。两种情况都在装载之前结束（controller 没有 Players，
 // 走到装载会 panic）。
