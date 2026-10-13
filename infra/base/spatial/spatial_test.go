@@ -3,6 +3,8 @@ package spatial
 import (
 	"errors"
 	"math"
+	"math/rand/v2"
+	"runtime"
 	"sync"
 	"testing"
 )
@@ -219,5 +221,121 @@ func BenchmarkBlockIndexQuery100Units(b *testing.B) {
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
 		benchmarkBlockIDs = index.QueryRect(query)
+	}
+}
+
+// NewBlockIndex 接受的合法边界上，BlockRect 必须是落在 bounds 内、包含其块内全部点的半开矩形：在 int64 上界附近
+// 计算最后一块的边界不能溢出成倒置矩形。
+func TestBlockRectsStayInsideBoundsAtTheInt64Edge(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		bounds    Rect
+		blockSize int64
+		probes    []Point
+	}{
+		{
+			name:      "upper edge, two huge blocks",
+			bounds:    Rect{Max: Point{X: math.MaxInt64, Y: 1}},
+			blockSize: 1 << 62,
+			probes:    []Point{{X: 0}, {X: 1<<62 - 1}, {X: 1 << 62}, {X: math.MaxInt64 - 1}},
+		},
+		{
+			name:      "upper edge on both axes",
+			bounds:    Rect{Min: Point{X: 1, Y: 1}, Max: Point{X: math.MaxInt64, Y: math.MaxInt64}},
+			blockSize: 1 << 62,
+			probes:    []Point{{X: 1, Y: 1}, {X: math.MaxInt64 - 1, Y: math.MaxInt64 - 1}, {X: math.MaxInt64 / 2, Y: math.MaxInt64 - 1}},
+		},
+		{
+			name:      "lower edge control",
+			bounds:    Rect{Min: Point{X: math.MinInt64 + 1}, Max: Point{X: 0, Y: 1}},
+			blockSize: 1 << 62,
+			probes:    []Point{{X: math.MinInt64 + 1}, {X: -1}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			index, err := NewBlockIndex(tc.bounds, tc.blockSize)
+			if err != nil {
+				t.Fatalf("NewBlockIndex refused a configuration this test relies on: %v", err)
+			}
+			for block := int64(0); block < index.cols*index.rows; block++ {
+				rect := index.BlockRect(block)
+				if rect.Min.X >= rect.Max.X || rect.Min.Y >= rect.Max.Y {
+					t.Fatalf("block %d rect %+v is empty or inverted", block, rect)
+				}
+				if rect.Min.X < tc.bounds.Min.X || rect.Min.Y < tc.bounds.Min.Y || rect.Max.X > tc.bounds.Max.X || rect.Max.Y > tc.bounds.Max.Y {
+					t.Fatalf("block %d rect %+v leaves bounds %+v", block, rect, tc.bounds)
+				}
+			}
+			for _, point := range tc.probes {
+				block := index.BlockIndex(point)
+				if block < 0 {
+					t.Fatalf("point %+v inside bounds has no block", point)
+				}
+				if rect := index.BlockRect(block); !rect.Contains(point) {
+					t.Fatalf("point %+v is in block %d but BlockRect(%d) = %+v does not contain it", point, block, block, rect)
+				}
+				blocks, ok := index.BlockRects(Rect{Min: point, Max: Point{X: point.X + 1, Y: point.Y + 1}})
+				if !ok || len(blocks) != 1 || !blocks[block].Contains(point) {
+					t.Fatalf("BlockRects around %+v = %+v (ok %v), want block %d containing it", point, blocks, ok, block)
+				}
+			}
+		})
+	}
+}
+
+func TestPathBudgetCountsExpandedCells(t *testing.T) {
+	rng := rand.New(rand.NewPCG(71, 19))
+	for trial := 0; trial < 200; trial++ {
+		grid, _ := NewGridTerrain(15, 15)
+		for x := int64(0); x < 15; x++ {
+			for y := int64(0); y < 15; y++ {
+				if rng.IntN(5) == 0 {
+					grid.SetBlocked(Point{x, y}, true)
+				}
+			}
+		}
+		grid.SetBlocked(Point{0, 0}, false)
+		grid.SetBlocked(Point{14, 14}, false)
+		grid.SetBlocked(Point{13, 14}, true)
+		grid.SetBlocked(Point{14, 13}, true)
+		_, err := FindPath(grid, Point{0, 0}, Point{14, 14}, PathOptions{MaxVisited: 225 - len(grid.obstacles)})
+		if !errors.Is(err, ErrNoPath) {
+			t.Fatalf("trial=%d budget covers every free cell but got %v", trial, err)
+		}
+	}
+}
+
+func TestGridSearchSeesOneObstacleView(t *testing.T) {
+	grid, _ := NewGridTerrain(100, 1)
+	a, b := Point{25, 0}, Point{75, 0}
+	grid.SetBlocked(a, true)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			grid.mu.Lock()
+			if _, ok := grid.obstacles[a]; ok {
+				delete(grid.obstacles, a)
+				grid.obstacles[b] = struct{}{}
+			} else {
+				delete(grid.obstacles, b)
+				grid.obstacles[a] = struct{}{}
+			}
+			grid.mu.Unlock()
+			runtime.Gosched()
+		}
+	}()
+	defer func() { close(stop); wg.Wait() }()
+	for range 5000 {
+		if path, err := FindPath(grid, Point{0, 0}, Point{99, 0}, PathOptions{}); !errors.Is(err, ErrNoPath) {
+			t.Fatalf("crossed a corridor that is always blocked: path=%v err=%v", path, err)
+		}
 	}
 }
