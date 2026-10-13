@@ -59,13 +59,17 @@ func Verifier() accountdomain.IdentityVerifier {
 // with them; the account store would be lost otherwise anyway.
 func playerIDCounterKey(prefix string) string { return prefix + ":player_id" }
 
-// legacyPlayerIDCounterKey is where the counter lived before it moved under
-// the deployment's prefix, the same fixed key for every deployment. A counter under the prefix that
-// does not exist yet starts from its value (carryLegacyCounter), so a demo
-// deployed before the move never hands out an id it handed out already. It
-// is only read — never written or deleted; remove it by hand once every
-// deployment on that Redis database has allocated an id since upgrading.
-const legacyPlayerIDCounterKey = "roost:demo:player_id"
+// retiredPlayerIDCounterKey is the fixed key the counter used before it moved under
+// the deployment's prefix. It is no longer read as a counter: while it exists every
+// allocation is refused (refuseRetiredCounter), because counting from 0 under the
+// prefix would hand out ids that key already handed out, and silently continuing
+// from it is the compatibility path the project dropped (not deployed yet).
+// The operator migrates by hand: set <prefix>:player_id to its value if that key
+// does not exist yet, then delete it — or clear this deployment's account data.
+const retiredPlayerIDCounterKey = "roost:demo:player_id"
+
+// errRetiredPlayerIDCounter is the refusal while retiredPlayerIDCounterKey exists.
+var errRetiredPlayerIDCounter = errors.New("demo player id allocator: retired counter key " + retiredPlayerIDCounterKey + " is still present and no longer read")
 
 // firstPlayerID keeps demo ids clear of the small numbers hand-written test
 // data tends to use.
@@ -75,38 +79,35 @@ type redisHandle struct {
 	client     fredis.IRedis
 	counterKey string
 
-	// carried is set once carryLegacyCounter has run to completion in this
-	// process; carryMu makes concurrent first allocations wait for it.
-	carried atomic.Bool
-	carryMu sync.Mutex
+	// checked is set once refuseRetiredCounter has seen the retired key absent in
+	// this process; checkMu makes concurrent first allocations wait for it.
+	checked atomic.Bool
+	checkMu sync.Mutex
 }
 
-// carryLegacyCounter makes the counter under the prefix start from the
-// legacy key's value when it does not exist yet (SETNX: a counter that
-// already exists — this deployment's, or one another replica just seeded —
-// is left alone). It runs before this process's first INCR and is retried
-// until it succeeds, so no process of an upgraded deployment counts from 0.
-func (handle *redisHandle) carryLegacyCounter(ctx context.Context) error {
-	if handle.carried.Load() {
+// refuseRetiredCounter refuses allocation while the retired fixed counter key
+// exists. It writes nothing; once the key has been seen absent the process does
+// not look again.
+func (handle *redisHandle) refuseRetiredCounter(ctx context.Context) error {
+	if handle.checked.Load() {
 		return nil
 	}
-	handle.carryMu.Lock()
-	defer handle.carryMu.Unlock()
-	if handle.carried.Load() {
+	handle.checkMu.Lock()
+	defer handle.checkMu.Unlock()
+	if handle.checked.Load() {
 		return nil
 	}
-	legacy, err := handle.client.Get(ctx, legacyPlayerIDCounterKey)
+	_, err := handle.client.Get(ctx, retiredPlayerIDCounterKey)
 	switch {
 	case errors.Is(err, fredis.ErrNil):
+		handle.checked.Store(true)
+		return nil
 	case err != nil:
-		return fmt.Errorf("demo player id allocator: read legacy counter %s: %w", legacyPlayerIDCounterKey, err)
+		return fmt.Errorf("demo player id allocator: check retired counter %s: %w", retiredPlayerIDCounterKey, err)
 	default:
-		if _, err := handle.client.SetNX(ctx, handle.counterKey, string(legacy), 0); err != nil {
-			return fmt.Errorf("demo player id allocator: seed %s from %s: %w", handle.counterKey, legacyPlayerIDCounterKey, err)
-		}
+		return fmt.Errorf("%w: set %s to its value if that key does not exist yet, then delete %s (or clear this deployment's account data)",
+			errRetiredPlayerIDCounter, handle.counterKey, retiredPlayerIDCounterKey)
 	}
-	handle.carried.Store(true)
-	return nil
 }
 
 // redisAllocator mints player ids from one INCR counter in the account
@@ -143,7 +144,7 @@ func (allocator *redisAllocator) Allocate(ctx context.Context, _ int32) (int64, 
 	if handle == nil {
 		return 0, errors.New("demo player id allocator: not bound to a registry (the account Mod binds it in Provide)")
 	}
-	if err := handle.carryLegacyCounter(ctx); err != nil {
+	if err := handle.refuseRetiredCounter(ctx); err != nil {
 		return 0, err
 	}
 	next, err := handle.client.Incr(ctx, handle.counterKey)

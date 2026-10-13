@@ -8,7 +8,7 @@
 
 未上线，以下变化都不做旧数据 / 旧进程兼容，细节在各分组的条目里：
 
-- **先用旧程序落库并清理旧数据，再起新版本**：Remote 快照 checksum 旧形态、WAL 中“Remote 写 + lease fence”历史记录（须先排空 WAL）、account 旧账号 ID / 无建角计划的 slot / 无 `CreationID` 的角色、activity 无计划的开窗条目、rank 逗号分隔的 `:applied` 账本、mail 无窗口的已结算 claim、Remote 控制库事务集合的旧 TTL 索引（清空集合或先删旧索引）。
+- **先用旧程序落库并清理旧数据，再起新版本**：Remote 快照 checksum 旧形态、WAL 中“Remote 写 + lease fence”历史记录（须先排空 WAL）、account 旧账号 ID / 无建角计划的 slot / 无 `CreationID` 的角色、activity 无计划的开窗条目、rank 逗号分隔的 `:applied` 账本、mail 无窗口的已结算 claim、Remote 控制库事务集合的旧 TTL 索引（清空集合或先删旧索引）、game-demo 的旧计数键 `roost:demo:player_id`（迁到 `<account.key_prefix>:player_id` 后删除）。
 - **先停旧进程再起新进程**：Remote 快照副本拒绝无版本删除与无发布时刻的更新；SyncBusMod 缺省前缀改为 `roost.sync`（JetStream 全新部署或显式配置旧名）。
 - **手工改工程后 `roost project sync`**：roost.yaml 删 `versions.kit/skill/service/codegen`、`sync` / `room` → `syncbus`、`replication-*` → `nettransport-*`、从 `features` 删 `event` 并删掉遗留的 `framework/event/` 与 `*_event_gen.go`；源码 `//cube:` → `//roost:`；cfggen `objects:` → `globals:`；删除 v1 `_manifest.json`；shell 部署旧 release 需全新安装。
 - **改代码并重新生成**：Nest 三池 API / 配置 / 监控改名（无别名，迁移表见 docs/framework/NEST-AWAIT.md）；Sync 命名 `RoomID` → `StreamID`、Lockstep `Room` → `Match`；删除的导出 API 的调用方改用现行入口；player_agent 模板修复需重新生成。
@@ -42,6 +42,7 @@
   - activity：没有计划（Intent）的开窗条目不再在 grace 后回收、同 key Open 也不再为它补计划——归为畸形条目（同 key Open 报 `ErrConflict`，sweep 跳过并上报、名额保留，`MalformedWindowEntries` 列出，运维移除）；超过 `MaxPendingActivities` 的窗口不再按 `ScanAfter` 游标轮转扫描，sweep 在任何读之前报 `ErrConflict`；`Window.ScanAfter` 字段与 `sweep.opening_legacy_reclaimed` 计数删除。**升级前须排空旧版本的开窗条目。**
   - rank：请求账本只读 `:applied_v2` 的 JSON 环；旧版本的逗号分隔 `:applied` 账本不再读取与升级，带着它的 owner 提交 / 查名次报错（"retired comma format"），不当成空账本。**升级前须清除旧 `:applied` 字段。** 同时删除弃用别名 `rank.ErrConflictSentinel`，调用方改用 `rank.ErrConflict`。
   - mail：现行信封必须有过期时间，已结算 claim 都带窗口；不再按条数淘汰无窗口的旧已结算 claim——它被保留，超出上限时投递以 `ErrClaimHistoryFull` 拒绝，交运维处理。“未读不可淘汰”与 RequestID 去重不变。**升级前须清理旧邮箱中无窗口的已结算 claim。**
+  - game-demo 模板（account 的 player id 分配器）：不再从旧的固定计数键 `roost:demo:player_id` 接着数（原先新键 `<account.key_prefix>:player_id` 不存在时以 SETNX 取旧值作起点）。旧键仍存在时每次分配都明确拒绝（`retired counter key roost:demo:player_id is still present and no longer read`），不写任何键，也不会从 0 重数而重发旧 id。**升级要求**：已生成工程的 `internal/service/account/collaborators.go` 是应用自有文件，不会被 sync 覆盖，需要按当前模板手工更新；部署前若 `<account.key_prefix>:player_id` 不存在，先把它设为旧键的值，再删除旧键（或清掉该部署的 account 数据）。
   - Remote 快照副本：不带版本（`version <= 0`）的删除消息不再按"无版本删除"应用，与其他畸形消息一样被拒绝（`remote_entity: snapshot delete message has no version`，传输层记 handler 错误）；删除一律携带版本（7afc4c63）。**升级要求：先停旧进程再起新进程**，不让旧发布者与新副本混跑。
   - Remote 控制库事务集合：只建当前的 `expires_at_ttl` TTL 索引，不再识别并替换旧名 / 旧键的 TTL 索引（d71aa7ac）。**升级要求：清空 Remote 控制库的事务集合，或先手工删除旧的 `created_at_ttl` 索引**——它若建在 `expires_at` 上，新索引同键不同名，启动建索引报冲突；若是更早按 `created_at` 过期的形态，不会报错，但会删掉未发布的提交。
   - Remote 快照副本：不带发布时刻（`published_at`）的快照更新不再按"旧发布者"放行，与其他畸形消息一样被拒绝（`remote_entity: snapshot update message has no publish time`）——没有发布时刻就无法判断它是否是比共享 L2 担保窗口更老的重放。现行发布者的更新与删除都带发布时刻。**升级要求：先停旧进程再起新进程。**
