@@ -110,7 +110,7 @@
 
 ### migration
 
-1 个实现文件、3 个测试文件。
+1 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -225,9 +225,7 @@
 
 ### migration
 
-- [guards_promises_test.go](../../../infra/storage/migration/guards_promises_test.go)：`TestRegistriesRefuseNilReceiversAndNilData`
-- [migration_test.go](../../../infra/storage/migration/migration_test.go)：`TestRegistryRun`
-- [promises_test.go](../../../infra/storage/migration/promises_test.go)：`TestRegistryRefusesEachInvalidStepAndRequest`
+- [migration_test.go](../../../infra/storage/migration/migration_test.go)：`TestRegistryRun`、`TestRegistriesRefuseNilReceiversAndNilData`、`TestRegistryRefusesEachInvalidStepAndRequest`
 
 ### misc
 

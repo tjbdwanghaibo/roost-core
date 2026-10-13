@@ -1,22 +1,24 @@
-package versionstore
+// 写令牌：回复丢失的写不重复生效、不误判冲突，令牌历史有界，读不回来的记录报 malformed。
 
-// A2 ③：写命令的回复丢失时（脚本已在服务端执行、调用方只拿到传输错误），调用方的重试不能把
-// 自己那次已生效的写再生效一次，也不能把它判成冲突。
-//
-// 修前：store 把传输错误原样返回。调用方重试 Update，mutate 叠在自己已生效的写上（Total 2 / v3）；
-// 重试 Create，键已被自己建好，返回 created=false。
-//
-// 承诺：每次写带一个一次性令牌，与值在同一条 SET 里写进信封；结果未知时 store 先核对令牌，
-// 已生效就返回那一次的结果，确定没执行才原样重发，无法证明时返回 ErrOutcomeUnknown。
-//
-// 替身：fakeRedis 的 compare-and-set 是逐字节比较，与 Lua 一致；loseReplies / dropWrites /
-// failGets 注入“执行后丢回复”“没执行就断开”“核对时读不到”。
+package versionstore
 
 import (
 	"context"
 	"errors"
+	"os"
+	"strconv"
 	"testing"
+	"time"
+
+	goredis "github.com/redis/go-redis/v9"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
+
+// 写命令的回复丢失时（脚本已在服务端执行、调用方只拿到传输错误），调用方的重试不能把自己那次已生效的写再生效一次，也不能把它判成
+// 冲突：每次写带一个一次性令牌，与值在同一条 SET 里写进信封；结果未知时 store 先核对令牌，已生效就返回那一次的结果，确定没执行才
+// 原样重发，无法证明时返回 ErrOutcomeUnknown。
+// 替身：fakeRedis 的 compare-and-set 是逐字节比较，与 Lua 一致；loseReplies / dropWrites / failGets 注入“执行后丢回复”
+// “没执行就断开”“核对时读不到”。
 
 func newTokenTestStore(t *testing.T, fake *fakeRedis) *RedisStore[string, counter] {
 	t.Helper()
@@ -360,4 +362,189 @@ func TestTheEnvelopeKeepsABoundedTokenHistory(t *testing.T) {
 	}); err == nil {
 		t.Fatal("a negative token history was accepted")
 	}
+}
+
+// 一条读不回来的记录与“基础设施出问题了”区分开：字节解不开的记录返回 ErrMalformedRecord（会永远以同样方式失败），超时等传输错误
+// 不是 malformed（值得重试）。
+func TestAnUnreadableRecordIsReportedAsMalformed(t *testing.T) {
+	for name, stored := range map[string]string{
+		"no version separator":    "not-an-envelope",
+		"version not a number":    "abc\n{}",
+		"version is zero":         "0\n{}",
+		"payload does not decode": "1|AAAAAAAAAAA\n{not json",
+		// A2 ③：令牌是信封的一部分，旧格式不兼容（升级需清空）。
+		"old envelope without a write token": "1\n{}",
+		"empty write token":                  "1|\n{}",
+		"more write tokens than versions":    "1|AAAAAAAAAAA|BBBBBBBBBBB\n{}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := newMalformedTestStore(t)
+			store.client.values["bad"] = []byte(stored)
+			_, _, err := store.store.Get(context.Background(), "bad")
+			if !errors.Is(err, ErrMalformedRecord) {
+				t.Fatalf("an unreadable record reported %v, want ErrMalformedRecord", err)
+			}
+		})
+	}
+}
+
+// 反面：基础设施错误**不能**被归成 malformed，否则调用方会把一次超时当成永久损坏。
+func TestATransportFailureIsNotMalformed(t *testing.T) {
+	store := newMalformedTestStore(t)
+	store.client.fail = errors.New("connection reset")
+	_, _, err := store.store.Get(context.Background(), "anything")
+	if err == nil {
+		t.Fatal("a failing transport returned no error")
+	}
+	if errors.Is(err, ErrMalformedRecord) {
+		t.Fatalf("a transport failure was classified as an unreadable record: %v", err)
+	}
+}
+
+type malformedTestStore struct {
+	client *malformedFakeRedis
+	store  *RedisStore[string, map[string]any]
+}
+
+func newMalformedTestStore(t *testing.T) malformedTestStore {
+	t.Helper()
+	client := &malformedFakeRedis{values: map[string][]byte{}}
+	store, err := NewRedisStore(client, RedisConfig[string, map[string]any]{
+		Prefix: "orders",
+		KeyOf:  func(k string) string { return k },
+		Codec:  JSONCodec[map[string]any]{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return malformedTestStore{client: client, store: store}
+}
+
+type malformedFakeRedis struct {
+	values map[string][]byte
+	fail   error
+}
+
+func (f *malformedFakeRedis) Get(_ context.Context, key string) ([]byte, error) {
+	if f.fail != nil {
+		return nil, f.fail
+	}
+	// Keyed by nothing on purpose: this fake answers for whatever key the
+	// store renders, so the test is about decoding rather than key format.
+	if len(f.values) == 0 {
+		return nil, fredis.ErrNil
+	}
+	for _, value := range f.values {
+		return value, nil
+	}
+	return nil, fredis.ErrNil
+}
+
+func (f *malformedFakeRedis) Del(_ context.Context, keys ...string) (int64, error) {
+	if f.fail != nil {
+		return 0, f.fail
+	}
+	var removed int64
+	for _, key := range keys {
+		if _, ok := f.values[key]; ok {
+			delete(f.values, key)
+			removed++
+		}
+	}
+	return removed, nil
+}
+
+func (f *malformedFakeRedis) Eval(_ context.Context, _ string, _ []string, _ ...any) (any, error) {
+	if f.fail != nil {
+		return nil, f.fail
+	}
+	return []any{int64(1), ""}, nil
+}
+
+// IndexDefer 的两条承诺：把已有条目挪到后面，不存在的条目不要凭空造出来。
+// 后一条是为了不让"索引"和"记录"悄悄分叉——一个 defer 不存在条目的调用方，
+// 说明它已经和索引不同步了。
+func TestIndexDeferMovesAnExistingEntryAndCreatesNothingIntegration(t *testing.T) {
+	client := integrationVersionRedis(t)
+	ctx := context.Background()
+	unique := strconv.FormatInt(time.Now().UnixNano(), 36)
+	prefix := "roost:test:vs:" + unique
+	indexKey := prefix + ":index"
+	t.Cleanup(func() { client.Del(ctx, indexKey, prefix+":a") })
+
+	store, err := NewRedisStore(evalRedis{client: client}, RedisConfig[string, map[string]any]{
+		Prefix: prefix,
+		KeyOf:  func(k string) string { return k },
+		Codec:  JSONCodec[map[string]any]{},
+		Index: &RedisIndex[map[string]any]{
+			Key:   indexKey,
+			Entry: func(map[string]any) (float64, bool) { return 10, true },
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Create(ctx, "a", map[string]any{"v": 1}); err != nil {
+		t.Fatal(err)
+	}
+	due, err := store.IndexDue(ctx, 20, 10)
+	if err != nil || len(due) != 1 {
+		t.Fatalf("due=%v err=%v", due, err)
+	}
+
+	moved, err := store.IndexDefer(ctx, "a", 1000)
+	if err != nil || !moved {
+		t.Fatalf("deferring an existing entry: moved=%v err=%v", moved, err)
+	}
+	if due, err = store.IndexDue(ctx, 20, 10); err != nil || len(due) != 0 {
+		t.Fatalf("a deferred entry is still due: due=%v err=%v", due, err)
+	}
+	if due, err = store.IndexDue(ctx, 2000, 10); err != nil || len(due) != 1 {
+		t.Fatalf("a deferred entry disappeared instead of moving: due=%v err=%v", due, err)
+	}
+
+	moved, err = store.IndexDefer(ctx, "never-indexed", 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved {
+		t.Fatal("deferring an absent entry reported a move")
+	}
+	if due, err = store.IndexDue(ctx, 2000, 10); err != nil || len(due) != 1 {
+		t.Fatalf("deferring an absent entry added it to the index: due=%v err=%v", due, err)
+	}
+}
+
+// The integration harness: the index operations are Lua, so a Go double would
+// only prove what I think the script does.
+func integrationVersionRedis(t *testing.T) *goredis.Client {
+	t.Helper()
+	addr := os.Getenv("ROOST_REDIS_TEST_ADDR")
+	if addr == "" {
+		t.Skip("ROOST_REDIS_TEST_ADDR is not set")
+	}
+	client := goredis.NewClient(&goredis.Options{Addr: addr})
+	if err := client.Ping(context.Background()).Err(); err != nil {
+		t.Skipf("redis at %s is not reachable: %v", addr, err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+type evalRedis struct{ client *goredis.Client }
+
+func (r evalRedis) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+	return r.client.Eval(ctx, script, keys, args...).Result()
+}
+
+func (r evalRedis) Get(ctx context.Context, key string) ([]byte, error) {
+	value, err := r.client.Get(ctx, key).Bytes()
+	if errors.Is(err, goredis.Nil) {
+		return nil, fredis.ErrNil
+	}
+	return value, err
+}
+
+func (r evalRedis) Del(ctx context.Context, keys ...string) (int64, error) {
+	return r.client.Del(ctx, keys...).Result()
 }

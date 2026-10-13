@@ -11,16 +11,10 @@ import (
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
-// RR-20261006-10（W-2026-10-06-02 转 RR）：驱动 Close 的统一口径——重复 Close 幂等返回 nil，第一次的
-// 错误只报一次；并发 Close 的后到者等第一个做完；Close 之后的其他调用返回已关闭错误（这里是
-// goredis.ErrClosed）。
-//
-// 旧行为：Client.Close 直接透传 go-redis。单机部署第二次 Close 返回 “redis: client is closed”，Cluster
-// 返回 nil，调用方拿到的结果取决于部署形态；并发 Close 时单机的后到者立刻返回 ErrClosed。分布式锁在
-// 客户端关闭后 Acquire 一次就被记成“结果未知”，之后一直返回 ErrDistLockStateUncertain——而 ErrClosed
-// 按 IsDefinitelyNotExecuted 的分类是“确定没执行”，锁的状态并没有不确定。
-//
+// 驱动 Close 的统一口径：重复 Close 幂等返回 nil，第一次的错误只报一次；并发 Close 的后到者等第一个做完；Close 之后的其他调用返回已关闭
+// 错误（goredis.ErrClosed），分布式锁据此确定“没执行”而不是记成结果未知。单机与 Cluster 口径一致。
 // 用不可达地址（127.0.0.1:1），不需要真实 Redis：Close / 关闭后的命令都不经过网络。
+// 历史：RR-20261006-10。
 func closeContractConfig(cluster bool) *fredis.Config {
 	cfg := fredis.DefaultConfig("127.0.0.1:1")
 	cfg.MaxRetries = -1

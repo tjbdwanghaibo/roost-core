@@ -1,17 +1,170 @@
-// RR-20261004-NC-22～25：通过公开集合 API 验证数据隔离、唯一候选、精确数值和返回身份边界。
+// 替身数据身份：读写副本隔离、$in 去重、整数精确比较、find-and-modify 的返回镜像。
+
 package mongotest
 
 import (
 	"context"
 	"errors"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	"go.mongodb.org/mongo-driver/v2/bson"
 	"math"
 	"math/big"
 	"reflect"
 	"testing"
+
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+// 嵌套数据隔离、成员查询唯一、整数精确比较（post-image 见 TestMongoIdentityBoundaries 的 image_*）。
+func TestMongoIdentityPromises(t *testing.T) {
+	ctx := context.Background()
+	for _, nested := range []bool{false, true} {
+		name := "flat_abort_control"
+		if nested {
+			name = "nested_abort"
+		}
+		t.Run(name, func(t *testing.T) {
+			client := NewClient()
+			coll := client.Collection("r14", "records")
+			seed := bson.M{"_id": int64(1), "n": int64(1)}
+			path := "n"
+			if nested {
+				seed = bson.M{"_id": int64(1), "meta": bson.M{"n": int64(1)}}
+				path = "meta.n"
+			}
+			if err := coll.Seed(seed); err != nil {
+				t.Fatal(err)
+			}
+			if nested {
+				if _, err := coll.UpdateOne(ctx, bson.M{"_id": int64(1)}, bson.M{"$set": bson.M{"meta.n": int64(1)}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			session, err := client.StartSession(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer session.EndSession(ctx)
+			abort := errors.New("business abort")
+			err = session.WithTransaction(ctx, func(tx context.Context) error {
+				if _, err := coll.UpdateOne(tx, bson.M{"_id": int64(1)}, bson.M{"$set": bson.M{path: int64(9)}}); err != nil {
+					return err
+				}
+				return abort
+			})
+			if !errors.Is(err, abort) {
+				t.Fatal(err)
+			}
+			n := identityStoredNumber(t, coll, nested)
+			if n != int64(1) {
+				t.Fatalf("abort left %s=%v, want 1", path, n)
+			}
+		})
+	}
+	for _, duplicate := range []bool{false, true} {
+		name := "distinct_in_control"
+		if duplicate {
+			name = "duplicate_in"
+		}
+		t.Run(name, func(t *testing.T) {
+			coll := NewClient().Collection("r14", "in")
+			for _, id := range []int64{1, 2} {
+				if err := coll.Seed(bson.M{"_id": id}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ids := bson.A{int64(1), int64(2)}
+			if duplicate {
+				ids = bson.A{int64(1), int64(1), int64(2)}
+			}
+			var rows []bson.M
+			if err := coll.Find(ctx, bson.M{"_id": bson.M{"$in": ids}}, &rows); err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 2 {
+				t.Fatalf("membership duplicated documents: rows=%v", rows)
+			}
+		})
+	}
+	for _, large := range []bool{false, true} {
+		name := "small_integer_control"
+		if large {
+			name = "large_integer_equality"
+		}
+		t.Run(name, func(t *testing.T) {
+			coll := NewClient().Collection("r14", "precision")
+			n := int64(7)
+			if large {
+				n = 1 << 53
+			}
+			if err := coll.Seed(bson.M{"_id": int64(1), "version": n}); err != nil {
+				t.Fatal(err)
+			}
+			var rows []bson.M
+			if err := coll.Find(ctx, bson.M{"version": n + 1}, &rows); err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 0 {
+				t.Fatalf("distinct BSON int64 compared equal: have=%d query=%d rows=%v", n, n+1, rows)
+			}
+		})
+	}
+	for _, nested := range []bool{false, true} {
+		name := "flat_read_copy_control"
+		if nested {
+			name = "nested_read_copy"
+		}
+		t.Run(name, func(t *testing.T) {
+			coll := NewClient().Collection("r14", "copy")
+			doc := bson.M{"_id": int64(1), "n": int64(1)}
+			if nested {
+				doc = bson.M{"_id": int64(1), "meta": bson.M{"n": int64(1)}}
+			}
+			if err := coll.Seed(doc); err != nil {
+				t.Fatal(err)
+			}
+			var rows []bson.M
+			if err := coll.Find(ctx, bson.M{}, &rows); err != nil {
+				t.Fatal(err)
+			}
+			if nested {
+				meta, ok := rows[0]["meta"].(bson.D)
+				if !ok {
+					t.Fatalf("BSON nested type changed: %T", rows[0]["meta"])
+				}
+				for i := range meta {
+					if meta[i].Key == "n" {
+						meta[i].Value = int64(9)
+					}
+				}
+			} else {
+				rows[0]["n"] = int64(9)
+			}
+			n := identityStoredNumber(t, coll, nested)
+			if n != int64(1) {
+				t.Fatalf("mutating query output changed stored data: n=%v", n)
+			}
+		})
+	}
+}
+
+func identityStoredNumber(t *testing.T, coll *Collection, nested bool) int64 {
+	t.Helper()
+	var got struct {
+		N    int64 `bson:"n"`
+		Meta struct {
+			N int64 `bson:"n"`
+		} `bson:"meta"`
+	}
+	if err := coll.FindOne(context.Background(), bson.M{"_id": int64(1)}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if nested {
+		return got.Meta.N
+	}
+	return got.N
+}
+
+// 通过公开集合 API 验证数据隔离、唯一候选、精确数值和返回身份边界。历史：RR-20261004-NC-22～25。
 func TestMongoIdentityBoundaries(t *testing.T) {
 	ctx := context.Background()
 	t.Run("duplicate_members_count_and_update", func(t *testing.T) {

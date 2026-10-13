@@ -1,18 +1,6 @@
-package driver
+// 驱动不重放结果未知的写：写 / 脚本 / pipeline 回复丢失只执行一次，确定未执行的错误仍重发，复制等待的脚本连接与错误。
 
-// A2（维护者 2026-10-05 决定，NC-21 / NC-52 / NC-100 / NC-101 / NC-160 同一类问题）：
-// 驱动的默认重试必须与框架“结果未知交给调用方”的约定一致。
-//
-// 承诺一：写命令（以及含写的 pipeline、分布式锁的 SETNX / 脚本）回复丢失时，一次调用至多让服务端
-// 执行一次，错误原样交回调用方。修前 go-redis 的 MaxRetries（fredis.DefaultConfig 缺省 3）把回复
-// 丢失的写换连接重发：INCR 加两次、RPUSH 追加两次、SETNX 把自己刚拿到的键报成“已被占用”。
-// 真实 Redis + 自建 toxiproxy 代理的复现见 write_lost_reply_integration_test.go。
-//
-// 承诺二：错误证明命令没有执行（LOADING、MASTERDOWN、TRYAGAIN、CLUSTERDOWN、max clients、
-// READONLY、NOREPLICAS，以及取连接阶段的失败）时仍然重发——包括脚本（NC-100 关掉驱动重试后
-// 脚本在这些错误上直接失败，NC-101 复审列为应改）。读命令照常交给驱动重试。
-//
-// 用只会说 RESP 的本地替身服务端控制每条命令第几次怎样回答；驱动按生产构造（NewRedisClient）。
+package driver
 
 import (
 	"bufio"
@@ -22,6 +10,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +19,13 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
+
+// 驱动的默认重试与框架“结果未知交给调用方”的约定一致：
+//   - 写命令（以及含写的 pipeline、分布式锁的 SETNX / 脚本）回复丢失时，一次调用至多让服务端执行一次，错误原样交回调用方；
+//     真实 Redis + toxiproxy 的复现见 write_lost_reply_integration_test.go。
+//   - 错误证明命令没有执行（LOADING、MASTERDOWN、TRYAGAIN、CLUSTERDOWN、max clients、READONLY、NOREPLICAS，以及取连接阶段的失败）
+//     时仍然重发，包括脚本；读命令照常交给驱动重试。
+// 用只会说 RESP 的本地替身服务端控制每条命令第几次怎样回答；驱动按生产构造（NewRedisClient）。
 
 // standInAction 是替身对某条命令某一次调用的处理：drop=执行后断开不回复；reject=不执行、回这条错误。
 type standInAction struct {
@@ -355,5 +351,312 @@ func TestIsDefinitelyNotExecuted(t *testing.T) {
 				t.Fatalf("shouldResend(%v) = %v, want %v", tc.err, got, tc.resend)
 			}
 		})
+	}
+}
+
+// 一次 Eval 至多让服务端执行一次脚本：回复丢失时脚本可能已经执行，驱动不自动重放，把错误原样交回调用方按自己的语义裁决。
+// 用只会说 RESP 的本地替身服务端：第一次收到 EVAL 时“执行”（计数）后直接断开连接、不回复，之后的 EVAL 正常回复；驱动按生产构造。
+// 历史：RR-20261005-NC-100。
+
+// dropFirstScriptReply 是最小 RESP2 服务端：脚本命令计数，第一次执行后断开不回复。
+type dropFirstScriptReply struct {
+	listener net.Listener
+	mu       sync.Mutex
+	scripts  map[string]int // 命令名 → 服务端“执行”次数
+	dropped  bool
+}
+
+func newDropFirstScriptReply(t *testing.T) *dropFirstScriptReply {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &dropFirstScriptReply{listener: listener, scripts: make(map[string]int)}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.serve(conn)
+		}
+	}()
+	return server
+}
+
+func (s *dropFirstScriptReply) executions(name string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.scripts[name]
+}
+
+func (s *dropFirstScriptReply) serve(conn net.Conn) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	for {
+		args, err := readRESPArray(reader)
+		if err != nil {
+			return
+		}
+		name := strings.ToLower(args[0])
+		switch name {
+		case "eval", "evalsha":
+			s.mu.Lock()
+			s.scripts[name]++
+			drop := !s.dropped
+			s.dropped = true
+			s.mu.Unlock()
+			if drop {
+				return // 已执行，回复丢在网络上
+			}
+			_, _ = io.WriteString(conn, ":1\r\n")
+		case "ping":
+			_, _ = io.WriteString(conn, "+PONG\r\n")
+		default:
+			// HELLO / CLIENT SETINFO 等握手命令：按旧服务端回错误，驱动回落到 RESP2。
+			_, _ = io.WriteString(conn, "-ERR unknown command '"+args[0]+"'\r\n")
+		}
+	}
+}
+
+func readRESPArray(reader *bufio.Reader) ([]string, error) {
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(line, "*") {
+		return nil, fmt.Errorf("not an array: %q", line)
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(line[1:]))
+	if err != nil {
+		return nil, err
+	}
+	args := make([]string, 0, count)
+	for range count {
+		header, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		size, err := strconv.Atoi(strings.TrimSpace(header[1:]))
+		if err != nil {
+			return nil, err
+		}
+		body := make([]byte, size+2)
+		if _, err := io.ReadFull(reader, body); err != nil {
+			return nil, err
+		}
+		args = append(args, string(body[:size]))
+	}
+	return args, nil
+}
+
+func TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver(t *testing.T) {
+	for _, call := range []struct {
+		name string
+		run  func(ctx context.Context, c *Client) (any, error)
+	}{
+		{"eval", func(ctx context.Context, c *Client) (any, error) {
+			return c.Eval(ctx, "return 1", []string{"k"}, "a")
+		}},
+		{"evalsha", func(ctx context.Context, c *Client) (any, error) {
+			return c.EvalSha(ctx, "e0e1f9fabfc9d4800c877a703b823ac0578ff8db", []string{"k"}, "a")
+		}},
+	} {
+		t.Run(call.name, func(t *testing.T) {
+			server := newDropFirstScriptReply(t)
+			cfg := fredis.DefaultConfig(server.listener.Addr().String())
+			cfg.MinIdleConns = 0
+			cfg.DialTimeout, cfg.ReadTimeout, cfg.WriteTimeout = time.Second, time.Second, time.Second
+			if cfg.MaxRetries <= 0 {
+				t.Fatalf("fixture needs the production default MaxRetries > 0, got %d", cfg.MaxRetries)
+			}
+			client := NewRedisClient(cfg)
+			defer client.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			reply, err := call.run(ctx, client)
+			if got := server.executions(call.name); got != 1 {
+				t.Fatalf("one %s call executed the script %d times on the server (reply=%v err=%v); want exactly once", call.name, got, reply, err)
+			}
+			if err == nil {
+				t.Fatalf("%s whose reply was lost returned %v with no error; the outcome is unknown and must surface", call.name, reply)
+			}
+			if errors.Is(err, goredis.Nil) {
+				t.Fatalf("lost reply reported as a miss: %v", err)
+			}
+		})
+	}
+}
+
+// 不可重放标记（noReplay）克隆后仍在，没加标记的命令保留驱动的自动重试。原名 TestOnlyScriptCommandsOptOutOfTheDriverRetry：
+// A2 之后写命令同样加标记（见本文件前面的写命令用例），“只有脚本”不再成立，按实际断言改名。
+func TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry(t *testing.T) {
+	server := newDropFirstScriptReply(t)
+	cfg := fredis.DefaultConfig(server.listener.Addr().String())
+	cfg.MinIdleConns = 0
+	client := NewRedisClient(cfg)
+	defer client.Close()
+	if err := client.Ping(context.Background()); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+	cmd := noReplay{newScriptCmd(context.Background(), "eval", "return 1", []string{"k"})}
+	if !cmd.NoRetry() || !cmd.Clone().NoRetry() {
+		t.Fatal("a noReplay-marked command (or its clone) is retryable")
+	}
+	if goredis.NewCmd(context.Background(), "get", "k").NoRetry() {
+		t.Fatal("ordinary commands lost their retry")
+	}
+}
+
+// O-M6-3（docs/feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md）：EvalReplicated 的契约。
+//
+//   - WAIT 与脚本在同一条连接上（WAIT 只统计本连接之前的写）；
+//   - 主节点没有连着的副本时不发 WAIT（单机开发环境不被卡到超时）；
+//   - 副本确认不足不是错误；ROLE / WAIT 出错时脚本结果照常返回，错误只在 WaitErr；
+//   - 脚本自己的错误照 Eval 的分类返回，不发 WAIT；
+//   - numReplicas / timeout 不为正时普通发送脚本。
+
+// recordingRESPServer 与 cannedRESPServer 相同，另按连接记录收到的命令名。
+func recordingRESPServer(t *testing.T, replies map[string]string) (*goredis.Client, func() [][]string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	var mu sync.Mutex
+	var conns [][]string
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			index := len(conns)
+			conns = append(conns, nil)
+			mu.Unlock()
+			go func(conn net.Conn) {
+				defer func() { _ = conn.Close() }()
+				reader := bufio.NewReader(conn)
+				for {
+					args, err := readRESPCommand(reader)
+					if err != nil {
+						return
+					}
+					name := strings.ToUpper(args[0])
+					if name != "HELLO" { // 连接握手，不计
+						mu.Lock()
+						conns[index] = append(conns[index], name)
+						mu.Unlock()
+					}
+					reply, ok := replies[name]
+					if !ok {
+						reply = "-ERR unknown command '" + args[0] + "'\r\n"
+					}
+					if _, err := io.WriteString(conn, reply); err != nil {
+						return
+					}
+				}
+			}(conn)
+		}
+	}()
+	client := goredis.NewClient(&goredis.Options{
+		Addr: listener.Addr().String(), Protocol: 2, DisableIdentity: true,
+		MaxRetries: -1, DialTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second,
+	})
+	t.Cleanup(func() { _ = client.Close() })
+	return client, func() [][]string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([][]string, len(conns))
+		for i, c := range conns {
+			out[i] = append([]string(nil), c...)
+		}
+		return out
+	}
+}
+
+const (
+	roleOneReplica = "*3\r\n$6\r\nmaster\r\n:100\r\n*1\r\n*3\r\n$9\r\n127.0.0.1\r\n$4\r\n6380\r\n$3\r\n100\r\n"
+	roleNoReplica  = "*3\r\n$6\r\nmaster\r\n:100\r\n*0\r\n"
+)
+
+// connectionWith 返回含 command 的那条连接上的命令序列。
+func connectionWith(conns [][]string, command string) []string {
+	for _, c := range conns {
+		for _, name := range c {
+			if name == command {
+				return c
+			}
+		}
+	}
+	return nil
+}
+
+func TestEvalReplicatedWaitsOnTheScriptsConnection(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name     string
+		role     string
+		wait     string
+		waited   bool
+		replicas int64
+		skipped  string
+		waitErr  bool
+	}{
+		{name: "confirmed", role: roleOneReplica, wait: ":1\r\n", waited: true, replicas: 1},
+		{name: "short", role: roleOneReplica, wait: ":0\r\n", waited: true, replicas: 0},
+		{name: "no replicas", role: roleNoReplica, skipped: fredis.ReplicatedSkipNoReplicas},
+		{name: "wait error", role: roleOneReplica, wait: "-ERR wait failed\r\n", waitErr: true},
+		{name: "not a master", role: "*5\r\n$5\r\nslave\r\n$9\r\n127.0.0.1\r\n:6379\r\n$9\r\nconnected\r\n:10\r\n", waitErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			replies := map[string]string{"EVAL": ":1\r\n", "ROLE": tc.role}
+			if tc.wait != "" {
+				replies["WAIT"] = tc.wait
+			}
+			rdb, commands := recordingRESPServer(t, replies)
+			client := &Client{rdb: rdb}
+			got, err := client.EvalReplicated(ctx, "return 1", []string{"k"}, 1, 50*time.Millisecond)
+			if err != nil {
+				t.Fatalf("script error %v; the script succeeded", err)
+			}
+			if got.Result != int64(1) || got.Waited != tc.waited || got.Replicas != tc.replicas || got.Skipped != tc.skipped || (got.WaitErr != nil) != tc.waitErr {
+				t.Fatalf("result=%+v, want waited=%v replicas=%d skipped=%q waitErr=%v", got, tc.waited, tc.replicas, tc.skipped, tc.waitErr)
+			}
+			sequence := connectionWith(commands(), "EVAL")
+			wantWait := tc.wait != ""
+			if wantWait && strings.Join(sequence, ",") != "EVAL,ROLE,WAIT" {
+				t.Fatalf("commands on the script's connection = %v, want EVAL,ROLE,WAIT", sequence)
+			}
+			if !wantWait && strings.Join(sequence, ",") != "EVAL,ROLE" {
+				t.Fatalf("commands on the script's connection = %v, want EVAL,ROLE (no WAIT)", sequence)
+			}
+		})
+	}
+}
+
+func TestEvalReplicatedScriptErrorsAndDisabledWait(t *testing.T) {
+	ctx := context.Background()
+	rdb, commands := recordingRESPServer(t, map[string]string{"EVAL": "-ERR user_script failed\r\n", "ROLE": roleOneReplica, "WAIT": ":1\r\n"})
+	client := &Client{rdb: rdb}
+	if _, err := client.EvalReplicated(ctx, "return 1", []string{"k"}, 1, 50*time.Millisecond); err == nil || !strings.Contains(err.Error(), "user_script") {
+		t.Fatalf("script error = %v, want the script's own error", err)
+	}
+	if seq := connectionWith(commands(), "WAIT"); seq != nil {
+		t.Fatalf("WAIT was sent after a failed script: %v", seq)
+	}
+
+	rdb, commands = recordingRESPServer(t, map[string]string{"EVAL": ":1\r\n"})
+	client = &Client{rdb: rdb}
+	got, err := client.EvalReplicated(ctx, "return 1", []string{"k"}, 0, 50*time.Millisecond)
+	if err != nil || got.Result != int64(1) || got.Skipped != fredis.ReplicatedSkipDisabled || got.Waited {
+		t.Fatalf("disabled: result=%+v err=%v", got, err)
+	}
+	if seq := connectionWith(commands(), "EVAL"); strings.Join(seq, ",") != "EVAL" {
+		t.Fatalf("disabled sent %v, want only EVAL", seq)
 	}
 }

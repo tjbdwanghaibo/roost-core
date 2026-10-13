@@ -118,7 +118,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### mongo/driver
 
-4 个实现文件、9 个测试文件。
+4 个实现文件、5 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -129,7 +129,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### mongo/mongotest
 
-2 个实现文件、14 个测试文件。
+2 个实现文件、4 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -156,7 +156,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### redis
 
-9 个实现文件、4 个测试文件。
+9 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -172,7 +172,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### redis/driver
 
-8 个实现文件、19 个测试文件。
+8 个实现文件、9 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -187,7 +187,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### versionstore
 
-5 个实现文件、14 个测试文件。
+5 个实现文件、6 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -247,31 +247,18 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### mongo/driver
 
-- [close_contract_promises_test.go](../../../infra/storage/mongo/driver/close_contract_promises_test.go)：`TestClientConcurrentCloseWaitsForTheFirstDisconnect`、`TestClientCloseRetriesAfterAFailedDisconnect`
-- [collection_test.go](../../../infra/storage/mongo/driver/collection_test.go)：`TestIsIndexDefinitionConflict`、`TestIsIndexNotFound`、`TestIndexConflictPolicyRequiresExplicitAutoRecreate`、`TestMongoIndexModelDistinguishesRelativeAndAbsoluteExpiry`、`TestStringifyIDDoesNotExposeNilSentinel`；其余 1 项见文件
-- [election_retry_promises_test.go](../../../infra/storage/mongo/driver/election_retry_promises_test.go)：`TestIndexCreationRetriesThroughAnElectionWithinBounds`
-- [error_chain_test.go](../../../infra/storage/mongo/driver/error_chain_test.go)：`TestWrapErrorKeepsTheDriverChainBehindTheSentinel`
-- [guards_promises_test.go](../../../infra/storage/mongo/driver/guards_promises_test.go)：`TestClientAndCollectionGuardsWithoutADeployment`
+- [client_test.go](../../../infra/storage/mongo/driver/client_test.go)：`TestClientConcurrentCloseWaitsForTheFirstDisconnect`、`TestClientCloseRetriesAfterAFailedDisconnect`、`TestIndexCreationRetriesThroughAnElectionWithinBounds`、`TestWithTransactionKeepsTheLastCallbackErrorWhenTheWindowClosesInBackoff`、`TestWithTransactionFailuresBeforeTheCommitAreNotResultUnknown`
+- [collection_test.go](../../../infra/storage/mongo/driver/collection_test.go)：`TestIsIndexDefinitionConflict`、`TestIsIndexNotFound`、`TestIndexConflictPolicyRequiresExplicitAutoRecreate`、`TestMongoIndexModelDistinguishesRelativeAndAbsoluteExpiry`、`TestStringifyIDDoesNotExposeNilSentinel`；其余 3 项见文件
 - [real_mongo_promises_test.go](../../../infra/storage/mongo/driver/real_mongo_promises_test.go)：`TestRealMongoValidateDeploymentRefusesAStandalone`、`TestRealMongoIndexConflictIsSurfacedUnlessRecreationIsAllowed`
 - [real_mongo_transaction_test.go](../../../infra/storage/mongo/driver/real_mongo_transaction_test.go)：`TestRealMongoWriteErrorAbortsTransactionAndKeepsDriverChain`
 - [transaction_deadline_integration_test.go](../../../infra/storage/mongo/driver/transaction_deadline_integration_test.go)：`TestRealMongoCommitIsBoundedByTransactionTimeout`、`TestRealMongoEndSessionAfterCommitTimeoutIsBounded`
-- [transaction_retry_chain_test.go](../../../infra/storage/mongo/driver/transaction_retry_chain_test.go)：`TestWithTransactionKeepsTheLastCallbackErrorWhenTheWindowClosesInBackoff`、`TestWithTransactionFailuresBeforeTheCommitAreNotResultUnknown`
 
 ### mongo/mongotest
 
-- [boundary_promises_test.go](../../../infra/storage/mongo/mongotest/boundary_promises_test.go)：`TestMongoBoundaryPromises`
-- [contract_promises_test.go](../../../infra/storage/mongo/mongotest/contract_promises_test.go)：`TestFakeCollectionRefusalsMatchTheDriverContract`
-- [guards_promises_test.go](../../../infra/storage/mongo/mongotest/guards_promises_test.go)：`TestFindAndModifyMissesAreNotFoundEvenWhenAskingForTheAfterImage`、`TestWritesRefuseIDCollisionsAndIDChanges`、`TestFiltersFailLoudlyOnShapesTheFakeDoesNotModel`
-- [identity_boundary_test.go](../../../infra/storage/mongo/mongotest/identity_boundary_test.go)：`TestMongoIdentityBoundaries`
-- [identity_promises_test.go](../../../infra/storage/mongo/mongotest/identity_promises_test.go)：`TestMongoIdentityPromises`
-- [in_named_slice_promises_test.go](../../../infra/storage/mongo/mongotest/in_named_slice_promises_test.go)：`TestInAcceptsNamedSlices`
-- [index_bulk_promises_test.go](../../../infra/storage/mongo/mongotest/index_bulk_promises_test.go)：`TestIndexAndBulkBoundaryPromises`
-- [mongotest_test.go](../../../infra/storage/mongo/mongotest/mongotest_test.go)：`TestInsertRejectsDuplicateIDAndUniqueIndex`、`TestVersionCASSemantics`、`TestUpsertSeedsFromEqualityFieldsOnly`、`TestLeaseFilterEvaluatesOwnerTokenStatusAndExpiry`、`TestClaimStealUsesTokenCAS`；其余 9 项见文件
-- [pagination_boundary_test.go](../../../infra/storage/mongo/mongotest/pagination_boundary_test.go)：`TestPaginationBoundaryPromises`
-- [pagination_promises_test.go](../../../infra/storage/mongo/mongotest/pagination_promises_test.go)：`TestPaginationPromises`
-- [transaction_abort_test.go](../../../infra/storage/mongo/mongotest/transaction_abort_test.go)：`TestTransactionWriteErrorAbortsLikeTheServer`、`TestTransactionCommitAfterSwallowedWriteErrorIsRetried`、`TestTransactionNotFoundDoesNotAbortAndPlainErrorsAreNotRetried`
-- [transaction_promises_test.go](../../../infra/storage/mongo/mongotest/transaction_promises_test.go)：`TestTransactionSnapshotPromises`
-- [unique_contract_test.go](../../../infra/storage/mongo/mongotest/unique_contract_test.go)：`TestUniqueIndexOverAnArrayIsRefusedNotGuessed`、`TestUniqueIndexMissingFieldPromises`
+- [identity_test.go](../../../infra/storage/mongo/mongotest/identity_test.go)：`TestMongoIdentityPromises`、`TestMongoIdentityBoundaries`
+- [index_test.go](../../../infra/storage/mongo/mongotest/index_test.go)：`TestMongoBoundaryPromises`、`TestIndexAndBulkBoundaryPromises`、`TestUniqueIndexOverAnArrayIsRefusedNotGuessed`、`TestUniqueIndexMissingFieldPromises`
+- [mongotest_test.go](../../../infra/storage/mongo/mongotest/mongotest_test.go)：`TestInsertRejectsDuplicateIDAndUniqueIndex`、`TestVersionCASSemantics`、`TestUpsertSeedsFromEqualityFieldsOnly`、`TestLeaseFilterEvaluatesOwnerTokenStatusAndExpiry`、`TestClaimStealUsesTokenCAS`；其余 15 项见文件
+- [transaction_test.go](../../../infra/storage/mongo/mongotest/transaction_test.go)：`TestTransactionWriteErrorAbortsLikeTheServer`、`TestTransactionCommitAfterSwallowedWriteErrorIsRetried`、`TestTransactionNotFoundDoesNotAbortAndPlainErrorsAreNotRetried`、`TestTransactionSnapshotPromises`
 
 ### nestwal
 
@@ -289,48 +276,28 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### redis
 
-- [cas_contract_test.go](../../../infra/storage/redis/cas_contract_test.go)：`TestCompareAndDeleteOnlyRemovesTheValueItWasShownIntegration`、`TestCompareAndDeleteRefusesACommandItCannotHonour`、`TestCompareAndSetRefusesAnIncompleteIndex`、`TestIndexIsMaintainedInTheSameWriteIntegration`、`TestIndexScorePrecisionSurvivesLuaIntegration`
-- [cas_promises_test.go](../../../infra/storage/redis/cas_promises_test.go)：`TestCompareAndSetRejectsIncompleteCommandsBeforeIO`、`TestCompareAndSetRejectsMalformedScriptReply`
-- [cas_test.go](../../../infra/storage/redis/cas_test.go)：`TestCompareAndSetAppliesWhenExpectedValueMatches`、`TestCompareAndSetReturnsCurrentWhenExpectedValueDiffers`、`TestCompareAndSetCanRequireMissingKey`
+- [cas_test.go](../../../infra/storage/redis/cas_test.go)：`TestCompareAndSetAppliesWhenExpectedValueMatches`、`TestCompareAndSetReturnsCurrentWhenExpectedValueDiffers`、`TestCompareAndSetCanRequireMissingKey`、`TestCompareAndSetRejectsIncompleteCommandsBeforeIO`、`TestCompareAndSetRejectsMalformedScriptReply`；其余 5 项见文件
 
 ### redis/driver
 
-- [assembly_test.go](../../../infra/storage/redis/driver/assembly_test.go)：`TestAssembleBuildsClientAndLocksOnOnePool`
-- [client_deadline_test.go](../../../infra/storage/redis/driver/client_deadline_test.go)：`TestRedisClientsHonourContextDeadlinesOnTheWire`
-- [client_export_test.go](../../../infra/storage/redis/driver/client_export_test.go)：`TestNewClientRequiresAnAddress`
-- [client_promises_test.go](../../../infra/storage/redis/driver/client_promises_test.go)：`TestMissingKeysSurfaceAsContractErrNil`、`TestEvalDurableRejectsMalformedWAITAOFReply`、`TestRedisIntegerRejectsUnsignedOverflow`、`TestPipelineExecToleratesNilButPropagatesRealErrors`
-- [client_test.go](../../../infra/storage/redis/driver/client_test.go)：`TestRedisIntegerParsesWAITAOFReplyValues`、`TestRedisIntegerRejectsInvalidWAITAOFReplyValue`、`TestEvalDurableRejectsClusterTopologyBeforeIO`
-- [close_contract_promises_test.go](../../../infra/storage/redis/driver/close_contract_promises_test.go)：`TestClientRepeatedCloseReturnsNilOnEveryDeployment`、`TestClientCloseErrorIsReportedOnce`、`TestClientConcurrentCloseAllReturnNil`、`TestAssemblyRepeatedCloseReturnsNil`、`TestDistLockAfterClientCloseKeepsReportingErrClosed`
-- [cluster_recovery_test.go](../../../infra/storage/redis/driver/cluster_recovery_test.go)：`TestClusterRecoveryPreservesErrorsWithoutReplayingCommands`
+- [client_test.go](../../../infra/storage/redis/driver/client_test.go)：`TestRedisIntegerParsesWAITAOFReplyValues`、`TestRedisIntegerRejectsInvalidWAITAOFReplyValue`、`TestEvalDurableRejectsClusterTopologyBeforeIO`、`TestMissingKeysSurfaceAsContractErrNil`、`TestEvalDurableRejectsMalformedWAITAOFReply`；其余 8 项见文件
+- [close_test.go](../../../infra/storage/redis/driver/close_test.go)：`TestClientRepeatedCloseReturnsNilOnEveryDeployment`、`TestClientCloseErrorIsReportedOnce`、`TestClientConcurrentCloseAllReturnNil`、`TestAssemblyRepeatedCloseReturnsNil`、`TestDistLockAfterClientCloseKeepsReportingErrClosed`
 - [lock_integration_test.go](../../../infra/storage/redis/driver/lock_integration_test.go)：`TestDistLockExpiryAndReacquireIntegration`
-- [lock_promises_test.go](../../../infra/storage/redis/driver/lock_promises_test.go)：`TestDistLockReleaseAndExtendRequireAHeldLease`、`TestDistLockRejectsMissingClientAndInvalidTTL`、`TestAutoExtendLockNilReceiverIsAnError`、`TestAutoExtendLockDoesNotStartWatchdogWhenAcquireFails`
-- [lock_state_test.go](../../../infra/storage/redis/driver/lock_state_test.go)：`TestDistLockRefusesATTLBelowOneMillisecond`、`TestDistLockOwnerTokenIsPerAcquisition`、`TestDistLockUncertainStateBlocksReuseUntilReleaseReconciles`、`TestDistLockReleaseErrorLeavesTheLockUncertain`
-- [lock_test.go](../../../infra/storage/redis/driver/lock_test.go)：`TestAutoExtendLockKeepsLeaseAliveUntilRelease`、`TestAutoExtendLockSurvivesTransientExtendErrors`、`TestAutoExtendLockSurfacesLostLease`、`TestAutoExtendLockRejectsInvalidConfiguration`、`TestAutoExtendLockRejectsConcurrentAcquire`
+- [lock_test.go](../../../infra/storage/redis/driver/lock_test.go)：`TestAutoExtendLockKeepsLeaseAliveUntilRelease`、`TestAutoExtendLockSurvivesTransientExtendErrors`、`TestAutoExtendLockSurfacesLostLease`、`TestAutoExtendLockRejectsInvalidConfiguration`、`TestAutoExtendLockRejectsConcurrentAcquire`；其余 8 项见文件
 - [lock_toxic_integration_test.go](../../../infra/storage/redis/driver/lock_toxic_integration_test.go)：`TestToxicRedisDroppedReleaseReplyLeavesTheLockUncertainUntilReconciled`、`TestToxicRedisDroppedAcquireReplyIsReconciledNotRetried`、`TestToxicRedisLatencyKeepsAcquireWithinItsDeadline`
 - [mget_integration_test.go](../../../infra/storage/redis/driver/mget_integration_test.go)：`TestMGetReturnsOneElementPerKeyIncludingMisses`、`TestMGetWithNoKeysMakesNoRoundTrip`、`TestMGetPreservesBinaryValues`
+- [no_replay_test.go](../../../infra/storage/redis/driver/no_replay_test.go)：`TestAWriteWhoseReplyIsLostIsNotReplayedByTheDriver`、`TestNotExecutedErrorsAreStillResent`、`TestResendsStopAtTheConfiguredBudget`、`TestAPipelineWithAnExecutedCommandIsNotResent`、`TestReadsKeepTheDriverRetry`；其余 6 项见文件
 - [pipeline_errors_integration_test.go](../../../infra/storage/redis/driver/pipeline_errors_integration_test.go)：`TestIntegrationPipelineDoesNotHideWriteErrors`、`TestIntegrationPipelineFuturesAndLifecycle`、`TestIntegrationPipelinePreservesPostWriteUnknownError`
-- [pipeline_errors_test.go](../../../infra/storage/redis/driver/pipeline_errors_test.go)：`TestPipelineExecChecksEveryCommandError`、`TestPipelineExecPopulatesAllFuturesOnFailure`
-- [replicated_promises_test.go](../../../infra/storage/redis/driver/replicated_promises_test.go)：`TestEvalReplicatedWaitsOnTheScriptsConnection`、`TestEvalReplicatedScriptErrorsAndDisabledWait`
-- [script_no_retry_promises_test.go](../../../infra/storage/redis/driver/script_no_retry_promises_test.go)：`TestAScriptWhoseReplyIsLostIsNotReplayedByTheDriver`、`TestNoReplayMarkSurvivesCloneAndUnmarkedCommandsKeepTheDriverRetry`
 - [write_lost_reply_integration_test.go](../../../infra/storage/redis/driver/write_lost_reply_integration_test.go)：`TestRealRedisAWriteWhoseReplyIsLostRunsOnce`
-- [write_no_replay_promises_test.go](../../../infra/storage/redis/driver/write_no_replay_promises_test.go)：`TestAWriteWhoseReplyIsLostIsNotReplayedByTheDriver`、`TestNotExecutedErrorsAreStillResent`、`TestResendsStopAtTheConfiguredBudget`、`TestAPipelineWithAnExecutedCommandIsNotResent`、`TestReadsKeepTheDriverRetry`；其余 2 项见文件
 
 ### versionstore
 
-- [bugfix_index_retirement_test.go](../../../infra/storage/versionstore/bugfix_index_retirement_test.go)：`TestBugfix6ConditionalIndexRetirementIntegration`
-- [cas_metrics_promises_test.go](../../../infra/storage/versionstore/cas_metrics_promises_test.go)：`TestUpdateCountsEveryCompareAndSetAndTheExhaustedConflict`
-- [conditional_delete_test.go](../../../infra/storage/versionstore/conditional_delete_test.go)：`TestConditionalDeleteProtectsRecreatedIdentity`
 - [fake_redis_test.go](../../../infra/storage/versionstore/fake_redis_test.go)
-- [guards_promises_test.go](../../../infra/storage/versionstore/guards_promises_test.go)：`TestStoresRefuseNilMutatorsMissingClientsAndStaleDeletes`
-- [index_promises_test.go](../../../infra/storage/versionstore/index_promises_test.go)：`TestAnIndexedCreateEntersTheIndex`、`TestAnIndexedUpdateRetiresTheEntry`、`TestTheIndexIsReadByScoreAndBounded`、`TestAStoreWithoutAnIndexSaysSo`、`TestAPerOwnerIndexKeepsOwnersApart`；其余 1 项见文件
-- [index_score_promises_test.go](../../../infra/storage/versionstore/index_score_promises_test.go)：`TestAnIndexedWriteWithANaNScoreChangesNothing`
+- [index_test.go](../../../infra/storage/versionstore/index_test.go)：`TestAnIndexedCreateEntersTheIndex`、`TestAnIndexedUpdateRetiresTheEntry`、`TestTheIndexIsReadByScoreAndBounded`、`TestAStoreWithoutAnIndexSaysSo`、`TestAPerOwnerIndexKeepsOwnersApart`；其余 4 项见文件
 - [lost_reply_integration_test.go](../../../infra/storage/versionstore/lost_reply_integration_test.go)：`TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice`
-- [malformed_promises_test.go](../../../infra/storage/versionstore/malformed_promises_test.go)：`TestAnUnreadableRecordIsReportedAsMalformed`、`TestATransportFailureIsNotMalformed`、`TestIndexDeferMovesAnExistingEntryAndCreatesNothingIntegration`
-- [remaining_promises_test.go](../../../infra/storage/versionstore/remaining_promises_test.go)：`TestResendsAndCASRacesShareOneSendBudget`、`TestResumedUpdateCountsItsResolvedCAS`
-- [retry_freshness_promises_test.go](../../../infra/storage/versionstore/retry_freshness_promises_test.go)：`TestARetryAfterBackoffSeesWritesThatLandedDuringTheBackoff`、`TestARetryAfterBackoffSeesADeletionAsAbsence`
-- [versionstore_test.go](../../../infra/storage/versionstore/versionstore_test.go)：`TestStoredVersionIsNeverZeroAndIncrementsPerWrite`、`TestUpdateDecliningToSaveChangesNothing`、`TestUpdatePropagatesMutateErrorWithoutWriting`、`TestCreateRefusesAnExistingKey`、`TestDeleteRequiresTheCallersVersion`；其余 7 项见文件
+- [versionstore_test.go](../../../infra/storage/versionstore/versionstore_test.go)：`TestStoredVersionIsNeverZeroAndIncrementsPerWrite`、`TestUpdateDecliningToSaveChangesNothing`、`TestUpdatePropagatesMutateErrorWithoutWriting`、`TestCreateRefusesAnExistingKey`、`TestDeleteRequiresTheCallersVersion`；其余 12 项见文件
 - [write_token_integration_test.go](../../../infra/storage/versionstore/write_token_integration_test.go)：`TestRealRedisAWriteWhoseReplyIsLostIsRecognisedByItsToken`、`TestRealRedisClusterAWriteWhoseReplyIsLostIsRecognisedByItsToken`、`TestRealRedisAnIndexedWriteWithANaNScoreChangesNothing`
-- [write_token_promises_test.go](../../../infra/storage/versionstore/write_token_promises_test.go)：`TestAnUpdateWhoseReplyIsLostIsNotAppliedTwiceWhenTheCallerRetries`、`TestACreateWhoseReplyIsLostIsNotReportedAsTakenWhenTheCallerRetries`、`TestAnUpdateWhoseReplyIsLostStaysAppliedOnceAfterSomeoneElseWritesOnTop`、`TestAnUpdateThatNeverRanIsResentOnce`、`TestResumeReturnsTheEarlierWriteInsteadOfWritingAgain`；其余 5 项见文件
+- [write_token_test.go](../../../infra/storage/versionstore/write_token_test.go)：`TestAnUpdateWhoseReplyIsLostIsNotAppliedTwiceWhenTheCallerRetries`、`TestACreateWhoseReplyIsLostIsNotReportedAsTakenWhenTheCallerRetries`、`TestAnUpdateWhoseReplyIsLostStaysAppliedOnceAfterSomeoneElseWritesOnTop`、`TestAnUpdateThatNeverRanIsResentOnce`、`TestResumeReturnsTheEarlierWriteInsteadOfWritingAgain`；其余 8 项见文件
 
 </details>
 
