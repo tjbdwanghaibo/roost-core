@@ -9,20 +9,19 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
-
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
-	"github.com/tjbdwanghaibo/roost-core/internal/stopcontract"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	coreremote "github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/internal/stopcontract"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // Mirror 第 5 步：kit 只读装配 RemoteMirrorMod（docs/feature/MIRROR-STEP-5-2026-10-06.md）。
 //
-// kind 252：本包已用 253（interest_health_promises_test.go），两者不能撞号。
+// kind 252：本包已用 253（remoteentity_mod_test.go），两者不能撞号。
 const mirrorModKind entity.EntityKind = 252
 
 func mirrorModKey(t *testing.T, raw int64) entity.RemoteSnapshotKey {
