@@ -273,6 +273,7 @@ func BenchmarkProjectorAdmissionMatrix(b *testing.B) {
 }
 
 // 空 WAL 与首条事务仍在 Entity 锁内，是后台轮询最常见的无进展路径。
+// 用 ManualReplay 关掉后台回放循环，由基准自己驱动 ReplayPass；投影器保持可用直到基准结束。
 func BenchmarkProjectorReplayIdleOrHeld(b *testing.B) {
 	for _, held := range []bool{false, true} {
 		name := "idle"
@@ -286,13 +287,11 @@ func BenchmarkProjectorReplayIdleOrHeld(b *testing.B) {
 				b.Fatal(err)
 			}
 			defer wal.Close(context.Background())
-			p, err := NewProjector(wal, &benchmarkProjectionStore{}, ProjectorOptions{IdlePoll: time.Hour})
+			p, err := NewProjector(wal, &benchmarkProjectionStore{}, ProjectorOptions{IdlePoll: time.Hour, ManualReplay: true})
 			if err != nil {
 				b.Fatal(err)
 			}
-			if err := p.Close(context.Background()); err != nil {
-				b.Fatal(err)
-			}
+			defer p.Close(context.Background())
 			if held {
 				record := benchmarkReplayRecords(b, 1, 0)[0]
 				p.admit(record.ID)
