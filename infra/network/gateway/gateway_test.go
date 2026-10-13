@@ -4,7 +4,12 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
+	"testing/synctest"
+
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 )
 
 type testSession struct{ principal Principal }
@@ -42,4 +47,67 @@ func TestChainOrderAndAuthentication(t *testing.T) {
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("order=%v want=%v", order, want)
 	}
+}
+
+type payloadClient struct {
+	fnats.RawClient
+	limit int64
+}
+
+func (c payloadClient) MaxPayload() (int64, error) { return c.limit, nil }
+func TestCompleteChannelEnvelopeMustFitActualLimits(t *testing.T) {
+	config := DefaultConfig()
+	if err := checkChannelSize(config, payloadClient{limit: 1 << 20}); err != nil {
+		t.Fatal(err)
+	}
+	// 裸正文可装下并不代表完整信封可准入，不能启动后随机截断业务包。
+	if err := checkChannelSize(config, payloadClient{limit: int64(config.MaxPayloadBytes)}); err == nil || !strings.Contains(err.Error(), "complete") {
+		t.Fatalf("NATS envelope overflow=%v", err)
+	}
+	config.Outbound.MaxPacketBytes = config.MaxPayloadBytes
+	if err := checkChannelSize(config, payloadClient{limit: 1 << 20}); err == nil {
+		t.Fatal("outbound limit checked only naked payload")
+	}
+	config = DefaultConfig()
+	config.SubscriptionBytes = 8192
+	if err := checkChannelSize(config, payloadClient{limit: 1 << 20}); err == nil {
+		t.Fatal("subscription bytes cannot hold one complete control/data packet")
+	}
+	config = DefaultConfig()
+	config.ClockSkew = 2 * config.Lease
+	if err := config.Validate(); err == nil {
+		t.Fatal("unbounded clock skew accepted")
+	}
+}
+
+// 多次取消 Stop 只取消调用方的等待；不能为同一批仍未完成的请求累积等待协程。
+func TestGateStopRetriesShareOneDrainWaiter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		gate := &Gate{}
+		gate.forwards.Add(1)
+		defer gate.forwards.Done()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		for range 20 {
+			if err := gate.Stop(ctx); !errors.Is(err, context.Canceled) {
+				t.Fatalf("Stop = %v, want canceled while dispatch remains active", err)
+			}
+		}
+		// 等全部新增协程真正阻塞，不依赖 sleep 或任意调度时机。
+		synctest.Wait()
+		stack := make([]byte, 1<<20)
+		n := runtime.Stack(stack, true)
+		if n == len(stack) {
+			t.Fatal("goroutine stack truncated")
+		}
+		waiters := 0
+		for _, block := range strings.Split(string(stack[:n]), "\n\n") {
+			if strings.Contains(block, "gateway.waitRuntime.func") {
+				waiters++
+			}
+		}
+		if waiters != 1 {
+			t.Fatalf("same Stop phase created %d waiters; want one", waiters)
+		}
+	})
 }

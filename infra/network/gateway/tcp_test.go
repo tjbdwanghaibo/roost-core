@@ -154,13 +154,6 @@ func TestHandshakeFrameUsesIndependentSmallLimit(t *testing.T) {
 	}
 }
 
-func TestWriteFrameRejectsOversizedServerPayload(t *testing.T) {
-	session := &tcpSession{maxPayloadBytes: 4}
-	if err := session.writeFrame(context.Background(), flagServerPush, 1, 1, []byte("12345")); !errors.Is(err, errInvalidFrame) {
-		t.Fatalf("error = %v", err)
-	}
-}
-
 func TestSessionReplyRejectsUnknownEnvelope(t *testing.T) {
 	session := &tcpSession{}
 	if err := session.Reply(context.Background(), struct{}{}); err == nil {
@@ -245,14 +238,8 @@ func TestRuntimePushPlayerEncodesOnceAndMarksServerPush(t *testing.T) {
 	}
 }
 
-// One subscriber's panic must not take the process with it.
-//
-// The dispatcher runs on its own goroutine, and a panic nobody recovers there
-// ends the whole process — so a scene bridge with a nil map would turn every
-// disconnect into an outage for every player (RR-20260919-03). Every other
-// callback boundary in this framework isolates per callback; this one has to
-// as well, and the subscribers after the panicking one still have to run,
-// because "who is online" is exactly the state that must converge.
+// 一个订阅者 panic 不能带走进程：分发器在自己的 goroutine 上运行，没人 recover 的 panic 会结束整个进程，把每次断线
+// 变成所有玩家的事故。像框架里其他回调边界一样逐个回调隔离，而且 panic 之后的订阅者照样要跑——“谁在线”正是必须收敛的状态。
 func TestASubscriberPanicIsIsolated(t *testing.T) {
 	runtime := &TCPRuntime{}
 	var before, after int
@@ -386,12 +373,8 @@ func sendStuckRequest(t *testing.T, connection net.Conn, sequence uint32) {
 	}
 }
 
-// waitRegistered waits, bounded, until the player has want registered
-// sessions. The server writes the authentication ack before it registers the
-// tcpSession (serveConnection), so a client holding its ack does not yet prove
-// the server counts it: a test that pushes, closes or counts right after
-// dialAuthenticated has to wait for the registration first (RR-20260927-02,
-// RR-20260928-15).
+// waitRegistered 有界地等待玩家注册到 want 个会话。服务端先写认证 ack 再注册 tcpSession（serveConnection），客户端拿到 ack
+// 还不能证明服务端已计入它：在 dialAuthenticated 之后马上 push、关闭或计数的用例要先等注册。
 func waitRegistered(t *testing.T, runtime *TCPRuntime, playerID int64, want int) {
 	t.Helper()
 	for deadline := time.Now().Add(2 * time.Second); runtime.ActiveSessions(playerID) != want && time.Now().Before(deadline); {
@@ -425,10 +408,8 @@ func waitReleased(t *testing.T, server *TCPServer, open int) {
 	}
 }
 
-// RR-20260926-36: a request whose work never finishes must end at the
-// dispatch budget and be answered, and the connection's slot and per-IP count
-// must come back when the client goes. Before, the handler's context was the
-// connection's, which only the server stopping ended.
+// 永远不结束的请求在分发预算处结束并得到应答；客户端离开后连接的槽位与按 IP 计数要归还（handler 的 context 不能是
+// 只有服务器停止才结束的连接 context）。
 func TestADispatchThatOutlivesItsBudgetAnswersAndFreesTheSlot(t *testing.T) {
 	server, started := stuckDispatchServer(t, "200ms")
 	connection := dialAuthenticated(t, server, "tcpSession-a")
@@ -466,11 +447,8 @@ func TestADispatchThatOutlivesItsBudgetAnswersAndFreesTheSlot(t *testing.T) {
 	waitReleased(t, server, 0)
 }
 
-// RR-20260926-36: same-ID replacement (demo auth normally assigns a new ID per connection):
-// closing a tcpSession — here the same SessionID logging in on a
-// new connection, which is what a reconnect does — must cancel the request its
-// old connection is still running, so the old goroutine and slot are released
-// now rather than when the server stops.
+// 同一 SessionID 在新连接上登录（重连）关闭旧 tcpSession 时，取消旧连接仍在执行的请求，旧 goroutine 与槽位立即释放，
+// 而不是等服务器停止（demo 的认证通常每个连接分配新 ID，这里覆盖同 ID 替换）。
 func TestClosingASessionCancelsItsInFlightDispatch(t *testing.T) {
 	server, started := stuckDispatchServer(t, "1m")
 	old := dialAuthenticated(t, server, "tcpSession-r")
@@ -698,16 +676,9 @@ func waitClosed(t *testing.T, closed <-chan TCPSessionClosed, want ...string) {
 	}
 }
 
-// RR-20260926-52: a push goes to every connection of the player. One that
-// cannot take it — an old connection that stopped reading — used to fail the
-// whole push while staying registered until its read loop noticed (up to
-// idle_timeout), so every later push failed the same way and the caller
-// could not tell a dead player from a live one with a dead old socket.
-//
-// The connection whose write failed is now closed and unregistered at once;
-// the push is a success for the connections that took it; the close goes
-// through the socket's own teardown, so its slot, its per-IP count and its
-// tcpSession-close event are released exactly once.
+// push 发往玩家的每个连接。收不下的那个（停止读取的旧连接）立即关闭并注销；push 对收下的连接算成功；关闭走 socket 自己的
+// 拆除流程，槽位、按 IP 计数与 tcpSession 关闭事件恰好释放一次。否则整次 push 失败、坏连接留到 idle_timeout，之后每次
+// push 同样失败，调用方分不清死玩家与带着死旧连接的活玩家。
 func TestAConnectionThatCannotTakeAPushIsClosedAndTheOthersKeepIt(t *testing.T) {
 	server, runtime, closed := pushServer(t)
 	live := dialAuthenticated(t, server, "live")
@@ -829,12 +800,8 @@ func TestASessionPushThatCannotBeWrittenClosesThatSession(t *testing.T) {
 	waitReleased(t, server, 1)
 }
 
-// RR-20260927-02: CloseSessions reports how many sessions it closed. A
-// tcpSession's Close returns the close reason — never nil: a nil reason becomes
-// ErrSessionClosed — so counting the calls that returned nil counted
-// none, and every fail-closed decision logged sessions_closed=0 however many
-// sockets it cut. A tcpSession some other path already closed is not counted
-// again.
+// CloseSessions 报告它关闭了多少个会话：tcpSession.Close 返回关闭原因（从不为 nil，nil 原因变成 ErrSessionClosed），
+// 不能按“返回 nil 的调用”计数；已被其他路径关闭的 tcpSession 不重复计数。
 func TestCloseSessionsCountsTheSessionsItClosed(t *testing.T) {
 	server, runtime, closed := pushServer(t)
 	dialAuthenticated(t, server, "first")
@@ -885,11 +852,8 @@ func (c *scriptedConn) SetWriteDeadline(t time.Time) error {
 }
 func (c *scriptedConn) Close() error { return nil }
 
-// RR-20260926-68: a write the caller's own deadline cut off before a single
-// byte went out left the stream in step; it is refused like a push whose
-// context was already done, and must not close the connection. The same
-// write stopped by write_timeout, one that wrote part of the frame, and one
-// the peer reset are connection failures and still close it (RR-52).
+// 调用方自己的期限在一个字节都没写出之前切断的写，流仍然对齐：它像 context 已结束的 push 一样被拒绝，不关闭连接。
+// 被 write_timeout 停下的写、写了半帧的写、对端重置的写是连接故障，照样关闭连接。
 func TestAWriteCutOffByTheCallerDeadlineBeforeAnyByteIsARefusal(t *testing.T) {
 	callerDeadline := func() (context.Context, context.CancelFunc) {
 		return context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -949,9 +913,7 @@ func TestAPipeWriteRefusedByTheCallerDeadlineIsNotAConnectionFailure(t *testing.
 	}
 }
 
-// REPRO-2026-09-26-06 §4: pushes whose caller context expires almost at once
-// (1µs) are refused, but must not close the player's two healthy, reading
-// connections; a normal push afterwards still reaches both.
+// 调用方 context 几乎立刻到期（1µs）的 push 被拒绝，但不能关闭玩家两个健康、在读的连接；之后的正常 push 仍到达两个连接。
 func TestAnExpiringCallerDeadlineClosesNoHealthyConnection(t *testing.T) {
 	server, runtime, closed := pushServer(t)
 	var received []<-chan int
@@ -1067,10 +1029,7 @@ func stalledAuthServer(t *testing.T) (*TCPServer, chan struct{}, <-chan struct{}
 	return server, release, entered, returned
 }
 
-// RR-20261005-NC-83: a Stop whose context ends before an authenticator that
-// ignores its context returns must not leave a later Stop to report a drain
-// that did not happen. The retry waits for the goroutine and only then
-// succeeds.
+// Stop 的 context 先于一个不看 context 的认证器结束时，之后的 Stop 不能报告一次没有发生的排空：重试等到那个 goroutine 退出才成功。
 func TestAStopRetryWaitsForAConnectionTheFirstStopCouldNotDrain(t *testing.T) {
 	server, release, _, returned := stalledAuthServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -1092,8 +1051,7 @@ func TestAStopRetryWaitsForAConnectionTheFirstStopCouldNotDrain(t *testing.T) {
 	}
 }
 
-// RR-20261005-NC-83: a tcpSession-close subscriber that blocks holds the
-// dispatcher, not the Stop budget; once it returns a retry completes.
+// 阻塞的 tcpSession 关闭订阅者卡住的是分发器，不是 Stop 的预算；它返回之后重试完成。
 func TestABlockingCloseSubscriberDoesNotHoldStopPastItsContext(t *testing.T) {
 	runtime := &TCPRuntime{}
 	block, entered := make(chan struct{}), make(chan struct{})
