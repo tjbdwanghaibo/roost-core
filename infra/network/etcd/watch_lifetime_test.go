@@ -1,6 +1,5 @@
 package etcd
 
-// RR-20261004-NC-12：关闭预算必须覆盖底层 watcher，实际完成仍由 subscription 唯一负责。
 import (
 	"context"
 	"errors"
@@ -9,6 +8,8 @@ import (
 	"testing"
 	"time"
 )
+
+// 关闭预算必须覆盖底层 watcher，实际完成仍由 subscription 唯一负责。
 
 type lifetimeFailureWatcher struct {
 	lifetimeBlockingWatcher

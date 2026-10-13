@@ -3,6 +3,7 @@ package etcd
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -107,14 +108,6 @@ func TestWatchCallbackReportsWatcherAndContextTermination(t *testing.T) {
 	}
 }
 
-func TestSubscribeLocalMirrorRejectsUnsupportedMirror(t *testing.T) {
-	var mirror ILocalMirror[int]
-	_, err := SubscribeLocalMirror(mirror, context.Background(), func(context.Context, LocalMirrorChange[int]) error { return nil }, LocalMirrorSubscribeOptions{})
-	if !errors.Is(err, ErrMirrorSubscribeUnsupported) {
-		t.Fatalf("error=%v", err)
-	}
-}
-
 // awaitChan receives from ch with an upper bound. A bare receive made a broken
 // property fail as a go test timeout — a stack dump after the default ten
 // minutes, naming no expectation — so every wait that IS the assertion is
@@ -128,5 +121,35 @@ func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
 		t.Fatalf("timed out waiting for %s", what)
 		var zero T
 		return zero
+	}
+}
+
+// plainMirror is an ILocalMirror that does not implement ILocalMirrorSubscriber.
+type plainMirror struct{ ILocalMirror[string] }
+
+// nil（含类型化 nil）或不支持订阅的镜像不能订阅；WatchCallback 拒绝 nil watcher（含类型化 nil）与 nil 处理器。
+func TestSubscribeAndWatchCallbackRefuseMissingParts(t *testing.T) {
+	ctx := context.Background()
+	handler := func(context.Context, LocalMirrorChange[string]) error { return nil }
+	if _, err := SubscribeLocalMirror[string](nil, ctx, handler, LocalMirrorSubscribeOptions{}); !errors.Is(err, ErrMirrorSubscribeUnsupported) {
+		t.Fatalf("SubscribeLocalMirror(nil) = %v", err)
+	}
+	var typedNil *plainMirror
+	if _, err := SubscribeLocalMirror[string](typedNil, ctx, handler, LocalMirrorSubscribeOptions{}); !errors.Is(err, ErrMirrorSubscribeUnsupported) {
+		t.Fatalf("SubscribeLocalMirror(typed nil) = %v", err)
+	}
+	if _, err := SubscribeLocalMirror[string](plainMirror{}, ctx, handler, LocalMirrorSubscribeOptions{}); !errors.Is(err, ErrMirrorSubscribeUnsupported) {
+		t.Fatalf("SubscribeLocalMirror(non-subscriber) = %v", err)
+	}
+	watch := func(context.Context, *WatchEvent) error { return nil }
+	if _, err := WatchCallback(ctx, nil, watch); !errors.Is(err, ErrWatchInvalidCallback) || !strings.Contains(err.Error(), "watcher is nil") {
+		t.Fatalf("WatchCallback(nil watcher) = %v", err)
+	}
+	var typedNilWatcher *callbackTestWatcher
+	if _, err := WatchCallback(ctx, typedNilWatcher, watch); !errors.Is(err, ErrWatchInvalidCallback) || !strings.Contains(err.Error(), "watcher is nil") {
+		t.Fatalf("WatchCallback(typed nil watcher) = %v", err)
+	}
+	if _, err := WatchCallback(ctx, newCallbackTestWatcher(), nil); !errors.Is(err, ErrWatchInvalidCallback) || !strings.Contains(err.Error(), "handler is nil") {
+		t.Fatalf("WatchCallback(nil handler) = %v", err)
 	}
 }
