@@ -293,6 +293,22 @@ func deleteOrderDelete(t *testing.T, key entity.RemoteSnapshotKey, version uint6
 	return mirror.Envelope{Key: remoteSnapshotReplicaKey(key), Version: int64(version), Op: mirror.OpUpsert, Payload: raw}
 }
 
+// 删除必须带版本（DeleteRemoteSnapshot 总以提交版本发布）。不带版本的删除是坏消息：拒绝、不失效缓存。
+func TestApplyReplicaRefusesUnversionedDelete(t *testing.T) {
+	manager, store, key := deleteOrderSetup(t, 246, 9343)
+	ctx := context.Background()
+	if err := store.ApplyReplica(ctx, deleteOrderUpsert(t, key, 3)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ApplyReplica(ctx, deleteOrderDelete(t, key, 0)); err == nil {
+		t.Fatal("an unversioned delete was applied")
+	}
+	got, ok, err := manager.snapshots.cache.Get(ctx, key, entity.RemoteReadCached, 0)
+	if err != nil || !ok || got.StateVersion != 3 {
+		t.Fatalf("refused unversioned delete still invalidated v3: found=%v version=%d err=%v", ok, got.StateVersion, err)
+	}
+}
+
 func TestApplyReplicaPromiseDelayedDeleteKeepsNewerSnapshot(t *testing.T) {
 	manager, store, key := deleteOrderSetup(t, 244, 9341)
 	ctx := context.Background()

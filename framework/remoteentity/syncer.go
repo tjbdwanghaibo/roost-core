@@ -114,13 +114,9 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 		return err
 	}
 	if wire.Delete {
-		// 删除带着移除快照的那次提交的版本（DeleteRemoteSnapshot 以 env.Version 发布）。按该版本应用：既不清掉先送达的
-		// 更新快照，也不让后送达的更旧快照复活键。不带版本的删除为兼容旧发布者仍按普通失效处理。
-		version := uint64(0)
-		if env.Version > 0 {
-			version = uint64(env.Version)
-		}
-		return snapshotCache.ApplyReplica(ctx, entity.RemoteSnapshotReplica{Key: wire.Key, Delete: true, DeleteVersion: version})
+		// 删除带着移除快照的那次提交的版本（DeleteRemoteSnapshot 以 env.Version 发布，身份校验已保证它为正）。
+		// 按该版本应用：既不清掉先送达的更新快照，也不让后送达的更旧快照复活键。
+		return snapshotCache.ApplyReplica(ctx, entity.RemoteSnapshotReplica{Key: wire.Key, Delete: true, DeleteVersion: uint64(env.Version)})
 	}
 	if s.historic(wire.PublishedAt, time.Now()) {
 		// 同步总线的 durable 用 DeliverAll，新 sid 或落后的游标会重放保留期内的历史。共享 L2 对
@@ -165,6 +161,10 @@ func validateSnapshotWireIdentity(env mirror.Envelope, wire remoteSnapshotWire) 
 		return fmt.Errorf("remote_entity: snapshot message key %d does not match its payload", env.Key)
 	}
 	if wire.Delete {
+		// 不带版本的删除无法排序（会清掉先到的更新快照），不兼容旧发布者，按坏消息拒绝。
+		if env.Version <= 0 {
+			return fmt.Errorf("remote_entity: snapshot delete message has no version")
+		}
 		return nil
 	}
 	if wire.Update.Key != wire.Key {
