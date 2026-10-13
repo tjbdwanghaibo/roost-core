@@ -100,6 +100,8 @@ func phaseRootOperation(program *Program, phase phaseProgram, event string) (Ope
 	return 0, false
 }
 
+// executeOperation 执行一个 lower 后的操作：控制流操作（sequence / parallel / if / repeat / wait / goto / finish）
+// 决定后续走向，效果操作经各自的 execute 函数落到 Host，再由 resolve*EffectExecution 处理结果续行。
 func (runtime *Runtime) executeOperation(cast *castInstance, index OperationIndex) (flowControl, error) {
 	if int(index) >= len(cast.program.operations) || cast.program.operations[index] == nil {
 		return flowControl{}, ErrProgramInvariant
@@ -108,90 +110,13 @@ func (runtime *Runtime) executeOperation(cast *castInstance, index OperationInde
 	case sequenceOperation:
 		return runtime.executeOperations(cast, operation.children)
 	case parallelOperation:
-		for _, branch := range operation.branches {
-			control, err := runtime.executeOperation(cast, branch)
-			if err != nil {
-				return control, err
-			}
-			if control.kind == flowSuspend {
-				if err := runtime.schedule(cast, control.dueTick, control.payload); err != nil {
-					return flowControl{}, err
-				}
-				continue
-			}
-			if control.kind != flowContinue {
-				return control, nil
-			}
-		}
-		return flowControl{kind: flowContinue}, nil
+		return runtime.executeParallel(cast, operation)
 	case branchOperation:
-		condition, err := runtime.evalValue(cast, operation.condition)
-		if err != nil {
-			return flowControl{}, err
-		}
-		value, ok := condition.Bool()
-		if !ok {
-			return flowControl{}, ErrRuntimeTypeMismatch
-		}
-		if value {
-			return runtime.executeOperation(cast, operation.thenOperation)
-		}
-		if operation.hasElse {
-			return runtime.executeOperation(cast, operation.elseOperation)
-		}
-		return flowControl{}, nil
+		return runtime.executeBranch(cast, operation)
 	case repeatOperation:
-		timesValue, err := runtime.evalValue(cast, operation.times)
-		if err != nil {
-			return flowControl{}, err
-		}
-		times, ok := timesValue.Int()
-		if !ok || times < 0 || times > int64(cast.program.limits.Repeat) {
-			return flowControl{}, ErrProgramInvariant
-		}
-		if times == 0 {
-			return flowControl{kind: flowContinue}, nil
-		}
-		if operation.intervalTicks != 0 {
-			previous := cast.locals[operation.indexLocal]
-			cast.locals[operation.indexLocal] = IntRuntimeValue(0, quantityCount)
-			control, executeErr := runtime.executeOperation(cast, operation.body)
-			cast.locals[operation.indexLocal] = previous
-			if executeErr != nil || control.kind != flowContinue {
-				return control, executeErr
-			}
-			if times == 1 {
-				return flowControl{kind: flowContinue}, nil
-			}
-			frame := runtime.retainLocalFrame(cast.locals)
-			return flowControl{
-				kind: flowSuspend, dueTick: runtime.currentTick + operation.intervalTicks,
-				payload: &repeatIterationTask{
-					CastID: cast.id, PhaseToken: cast.phaseToken, Frame: frame,
-					Body: operation.body, IndexLocal: operation.indexLocal, Iteration: 1,
-					Times: times, Interval: operation.intervalTicks,
-				},
-			}, nil
-		}
-		previous := cast.locals[operation.indexLocal]
-		for iteration := int64(0); iteration < times; iteration++ {
-			cast.locals[operation.indexLocal] = IntRuntimeValue(iteration, quantityCount)
-			control, err := runtime.executeOperation(cast, operation.body)
-			if err != nil || control.kind != flowContinue {
-				return control, err
-			}
-		}
-		cast.locals[operation.indexLocal] = previous
-		return flowControl{kind: flowContinue}, nil
+		return runtime.executeRepeat(cast, operation)
 	case waitOperation:
-		frame := runtime.retainLocalFrame(cast.locals)
-		return flowControl{
-			kind: flowSuspend, dueTick: runtime.currentTick + operation.ticks,
-			payload: &flowContinuationTask{
-				CastID: cast.id, PhaseToken: cast.phaseToken, Frame: frame,
-				Operations: []OperationIndex{operation.then},
-			},
-		}, nil
+		return runtime.suspendWait(cast, operation), nil
 	case queryOperation:
 		if int(operation.selector) >= len(cast.program.selectors) {
 			return flowControl{}, ErrProgramInvariant
@@ -248,12 +173,7 @@ func (runtime *Runtime) executeOperation(cast *castInstance, index OperationInde
 	case motionImpulseOperation:
 		return flowControl{}, runtime.executeMotionImpulse(cast, operation)
 	case stopMovementOperation:
-		target, err := runtime.evalEntity(cast, operation.target)
-		if err != nil {
-			return flowControl{}, err
-		}
-		runtime.emitEffectPresentation(cast, operation.effectContinuations, operation.effectIndex, runtime.host.CurrentRevision(), PresentationAnchor{Source: cast.caster, Target: target})
-		return flowControl{}, nil
+		return flowControl{}, runtime.executeStopMovement(cast, operation)
 	case gotoOperation:
 		return flowControl{kind: flowGoto, phase: operation.phase}, nil
 	case finishOperation:
@@ -261,6 +181,120 @@ func (runtime *Runtime) executeOperation(cast *castInstance, index OperationInde
 	default:
 		return flowControl{}, fmt.Errorf("%w: operation %T", ErrProgramInvariant, operation)
 	}
+}
+
+// executeParallel 依次执行各分支：挂起的分支交给排程器后继续下一个分支，其他非 continue 结果（goto / finish）
+// 立即结束整个 parallel。
+func (runtime *Runtime) executeParallel(cast *castInstance, operation parallelOperation) (flowControl, error) {
+	for _, branch := range operation.branches {
+		control, err := runtime.executeOperation(cast, branch)
+		if err != nil {
+			return control, err
+		}
+		if control.kind == flowSuspend {
+			if err := runtime.schedule(cast, control.dueTick, control.payload); err != nil {
+				return flowControl{}, err
+			}
+			continue
+		}
+		if control.kind != flowContinue {
+			return control, nil
+		}
+	}
+	return flowControl{kind: flowContinue}, nil
+}
+
+// executeBranch 求值条件（必须是 bool）并执行对应分支；条件为假且没有 else 时什么也不做。
+func (runtime *Runtime) executeBranch(cast *castInstance, operation branchOperation) (flowControl, error) {
+	condition, err := runtime.evalValue(cast, operation.condition)
+	if err != nil {
+		return flowControl{}, err
+	}
+	value, ok := condition.Bool()
+	if !ok {
+		return flowControl{}, ErrRuntimeTypeMismatch
+	}
+	if value {
+		return runtime.executeOperation(cast, operation.thenOperation)
+	}
+	if operation.hasElse {
+		return runtime.executeOperation(cast, operation.elseOperation)
+	}
+	return flowControl{}, nil
+}
+
+// executeRepeat 求值次数（0 到程序上限）。无间隔时在本 tick 内依次执行全部迭代，循环变量在结束后恢复；
+// 有间隔时见 startIntervalRepeat。
+func (runtime *Runtime) executeRepeat(cast *castInstance, operation repeatOperation) (flowControl, error) {
+	timesValue, err := runtime.evalValue(cast, operation.times)
+	if err != nil {
+		return flowControl{}, err
+	}
+	times, ok := timesValue.Int()
+	if !ok || times < 0 || times > int64(cast.program.limits.Repeat) {
+		return flowControl{}, ErrProgramInvariant
+	}
+	if times == 0 {
+		return flowControl{kind: flowContinue}, nil
+	}
+	if operation.intervalTicks != 0 {
+		return runtime.startIntervalRepeat(cast, operation, times)
+	}
+	previous := cast.locals[operation.indexLocal]
+	for iteration := int64(0); iteration < times; iteration++ {
+		cast.locals[operation.indexLocal] = IntRuntimeValue(iteration, quantityCount)
+		control, err := runtime.executeOperation(cast, operation.body)
+		if err != nil || control.kind != flowContinue {
+			return control, err
+		}
+	}
+	cast.locals[operation.indexLocal] = previous
+	return flowControl{kind: flowContinue}, nil
+}
+
+// startIntervalRepeat 立即执行第 0 次迭代，其余迭代以 repeatIterationTask 按间隔挂起（由 executeRepeatIteration 续行）。
+func (runtime *Runtime) startIntervalRepeat(cast *castInstance, operation repeatOperation, times int64) (flowControl, error) {
+	previous := cast.locals[operation.indexLocal]
+	cast.locals[operation.indexLocal] = IntRuntimeValue(0, quantityCount)
+	control, executeErr := runtime.executeOperation(cast, operation.body)
+	cast.locals[operation.indexLocal] = previous
+	if executeErr != nil || control.kind != flowContinue {
+		return control, executeErr
+	}
+	if times == 1 {
+		return flowControl{kind: flowContinue}, nil
+	}
+	frame := runtime.retainLocalFrame(cast.locals)
+	return flowControl{
+		kind: flowSuspend, dueTick: runtime.currentTick + operation.intervalTicks,
+		payload: &repeatIterationTask{
+			CastID: cast.id, PhaseToken: cast.phaseToken, Frame: frame,
+			Body: operation.body, IndexLocal: operation.indexLocal, Iteration: 1,
+			Times: times, Interval: operation.intervalTicks,
+		},
+	}, nil
+}
+
+// suspendWait 保存当前局部变量帧，挂起到 ticks 之后从 then 续行。
+func (runtime *Runtime) suspendWait(cast *castInstance, operation waitOperation) flowControl {
+	frame := runtime.retainLocalFrame(cast.locals)
+	return flowControl{
+		kind: flowSuspend, dueTick: runtime.currentTick + operation.ticks,
+		payload: &flowContinuationTask{
+			CastID: cast.id, PhaseToken: cast.phaseToken, Frame: frame,
+			Operations: []OperationIndex{operation.then},
+		},
+	}
+}
+
+// executeStopMovement 求值目标，并发出锚定施法者与目标的效果表现事件。
+func (runtime *Runtime) executeStopMovement(cast *castInstance, operation stopMovementOperation) error {
+	target, err := runtime.evalEntity(cast, operation.target)
+	if err != nil {
+		return err
+	}
+	runtime.emitEffectPresentation(cast, operation.effectContinuations, operation.effectIndex, runtime.host.CurrentRevision(), PresentationAnchor{Source: cast.caster, Target: target})
+	return nil
 }
 
 func (runtime *Runtime) executeRepeatIteration(cast *castInstance, task *repeatIterationTask) (flowControl, error) {
