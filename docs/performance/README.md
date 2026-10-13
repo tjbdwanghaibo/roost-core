@@ -1,6 +1,6 @@
 # 性能验证与复跑
 
-性能报告按版本、场景和参数保留；通过仅对该次实际负载成立。业务功能验收归 [release](../release/v1.25.0-VALIDATION.md)，未关闭问题归 [已知限制](../maintenance/KNOWN-LIMITS.md)。
+性能报告按版本、场景和参数保留；通过仅对该次实际负载成立。业务功能验收归 [release](../release/v1.26.0-VALIDATION.md)，未关闭问题归 [已知限制](../maintenance/KNOWN-LIMITS.md)。
 
 | 报告 | 范围与结论 |
 | --- | --- |

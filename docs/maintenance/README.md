@@ -2,15 +2,15 @@
 
 如果这是第一次维护Roost，先读[入门手册](../GETTING-STARTED.md)。本篇按日常修改、升级、故障、发布、文档、测试与可读性规则组织；先找到你的场景，再执行对应步骤。
 
-当前版本v1.25.0，目录/Gate/Block AOI已交付；重档性能限制见发布说明。未发版的变化与升级要求见 [CHANGELOG `[Unreleased]`](../../CHANGELOG.md)。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
+当前版本v1.26.0（[发布说明](../release/v1.26.0-NOTES.md)：三池与 Await、Sync 优化、旧兼容移除与全仓整理）；最终代码上的重档复测见[发布验收](../release/v1.26.0-VALIDATION.md)。之后未发版的变化见 [CHANGELOG `[Unreleased]`](../../CHANGELOG.md)。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
 
 ## 1. 版本与兼容
 
-单模块发布，wiring、codegen、demo 随 core 同一 tag。新业务固定 core 与工具版本，重新生成并编译工程。v1.25.0 最低生成物运行依赖是 core v1.25.0。文档补丁不改变最低版本和业务 API。
+单模块发布，wiring、codegen、demo 随 core 同一 tag。新业务固定 core 与工具版本，重新生成并编译工程。v1.26.0 最低生成物运行依赖是 core v1.26.0（生成物使用 `lockstep.NewMatch` 等新 API）。文档补丁不改变最低版本和业务 API。
 
 Nest 执行池命名为 short/long/io，不保留 fast/slow 旧名；配置、API、生成 Sender 和监控查询需一起迁移，迁移表见 [Nest 三池说明](../framework/NEST-AWAIT.md#池命名收敛2026-10-13)。
 
-当前没有旧 WAL/schema/interest/客户端包的透明兼容。WAL只支持codec7；DAO只接受当前schema；Remote interest要求非零代际及完整身份；客户端RS v2区分PB、Sync、Lockstep；Remote 快照 checksum 只读 8 字节形态，WAL 中“Remote 写 + lease fence”历史记录不再投影（投影器 fatal、WAL 原样保留）。服务数据同样不兼容旧形态：account 的未转义旧账号 ID、无建角计划的 slot 与无 `CreationID` 的角色，activity 无计划的开窗条目与超限窗口，rank 的逗号分隔请求账本，mail 无窗口的已结算 claim，均被明确拒绝而不读取或升级（清单见 CHANGELOG `[Unreleased]`“移除旧格式兼容”）。生成器同样不兼容旧工程：roost.yaml 的 `versions.kit/skill/service/codegen`、旧 mod/feature 名与已删除的 `event` feature、`//cube:` 标记、cfggen `objects`、tablegen v1 manifest 均被拒绝并提示手工改法，三仓合一迁移工具已删除；SyncBusMod 缺省前缀改为 `roost.sync`、不再把 `roost.room` 映射到 `ROOST_SYNC`，未写前缀的部署须先停旧再起新（JetStream 全新部署或显式配置旧名，见 CHANGELOG“移除旧兼容（生成器）/（wiring / syncbus）”）。不要把单模块版本号与这些各自的线/存储格式号混为一谈。
+当前没有旧 WAL/schema/interest/客户端包的透明兼容。WAL只支持codec7；DAO只接受当前schema；Remote interest要求非零代际及完整身份；客户端RS v2区分PB、Sync、Lockstep；Remote 快照 checksum 只读 8 字节形态，WAL 中“Remote 写 + lease fence”历史记录不再投影（投影器 fatal、WAL 原样保留）。服务数据同样不兼容旧形态：account 的未转义旧账号 ID、无建角计划的 slot 与无 `CreationID` 的角色，activity 无计划的开窗条目与超限窗口，rank 的逗号分隔请求账本，mail 无窗口的已结算 claim，均被明确拒绝而不读取或升级（清单见 CHANGELOG `[v1.26.0]`“移除旧格式兼容”与[发布说明](../release/v1.26.0-NOTES.md#2-升级要求速查)）。生成器同样不兼容旧工程：roost.yaml 的 `versions.kit/skill/service/codegen`、旧 mod/feature 名与已删除的 `event` feature、`//cube:` 标记、cfggen `objects`、tablegen v1 manifest 均被拒绝并提示手工改法，三仓合一迁移工具已删除；SyncBusMod 缺省前缀改为 `roost.sync`、不再把 `roost.room` 映射到 `ROOST_SYNC`，未写前缀的部署须先停旧再起新（JetStream 全新部署或显式配置旧名，见 CHANGELOG `[v1.26.0]`“移除旧兼容（生成器）/（wiring / syncbus）”）。不要把单模块版本号与这些各自的线/存储格式号混为一谈。
 
 ## 2. 升级与回退
 
@@ -95,7 +95,7 @@ WAL目录使用单写持久卷，不同实例不得共享同一写目录。Mongo
 - 受影响包 `go vet` 与 `-race`，`-tags integration` 的 `go vet`，根包门禁，全仓 `go test ./...`，`go generate ./...` 无漂移；
 - integration 标签的真实依赖用例没有运行时只记“编译与 vet”，不计作外部资源验收。
 
-整理不等于证明所有测试互不重复。最近两次整理的数字与过程见 CHANGELOG `[Unreleased]` 的“测试整理”与[整理时的维护手册（固定提交）](https://github.com/tjbdwanghaibo/roost-core/blob/ea776b4a977f29661932896b11aea80dd00ea3a0/docs/maintenance/README.md#7-测试与生成代码维护)。
+整理不等于证明所有测试互不重复。最近两次整理的数字与过程见 CHANGELOG `[v1.26.0]` 的“测试整理与门禁”与[整理时的维护手册（固定提交）](https://github.com/tjbdwanghaibo/roost-core/blob/ea776b4a977f29661932896b11aea80dd00ea3a0/docs/maintenance/README.md#7-测试与生成代码维护)。
 
 ### 编写行为测试的边界
 

@@ -80,6 +80,9 @@
 
 ## docs/release
 
+- [v1.26.0-NOTES.md](../release/v1.26.0-NOTES.md)：v1.26.0 发布说明（三池与 Await、Sync 优化、旧兼容移除与全仓整理；升级要求速查、维护者决定、最低版本）
+- [v1.26.0-IMPLEMENTATION.md](../release/v1.26.0-IMPLEMENTATION.md)：v1.26.0 实现与证据（与说明篇同编号：提交、源码位置、守卫、红绿、review 检查点）
+- [v1.26.0-VALIDATION.md](../release/v1.26.0-VALIDATION.md)：v1.26.0 发布验收（本地命令、pretag、故障矩阵、真实 tag 消费者、15 分钟性能）
 - [v1.25.0-NOTES.md](../release/v1.25.0-NOTES.md)：v1.25.0 发布说明（目录分类、Gate 与 Block AOI）
 - [v1.25.0-IMPLEMENTATION.md](../release/v1.25.0-IMPLEMENTATION.md)：v1.25.0 实现与验证
 - [v1.25.0-VALIDATION.md](../release/v1.25.0-VALIDATION.md)：v1.25.0 功能验收

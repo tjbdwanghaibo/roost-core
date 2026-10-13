@@ -1,6 +1,6 @@
 # Remote Entity 与 Mirror：设计与使用
 
-适用版本：v1.25.0 及当前主线（未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/05-remote-mirror.md) · [模块总目录](../README.md)
+适用版本：v1.26.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/05-remote-mirror.md) · [模块总目录](../README.md)
 
 ## 先理解这一块
 

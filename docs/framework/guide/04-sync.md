@@ -1,6 +1,6 @@
 # 核心：Sync、Lockstep 与客户端：设计与使用
 
-适用版本：v1.25.0 及当前主线（未发版变化见 [CHANGELOG](../../../CHANGELOG.md)，未发版 API 在对应章节注明）。[实现与维护入口](../impl/04-sync.md) · [模块总目录](../README.md)
+适用版本：v1.26.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/04-sync.md) · [模块总目录](../README.md)
 
 ## 先理解这一块
 
@@ -12,7 +12,7 @@
 
 ## 1. 子系统分工
 
-当前主线将同步流、对局和空间区域分别命名为 `StreamID`、`lockstep.Match`、`AreaID`。这是 v1.25.0 之后尚未发版的源码 API 调整，升级映射与验证见[维护记录](../../maintenance/ACCESS-SYNC-FOLLOWUPS.md)。流标识只在连接/同步上下文内有意义，Entity Sync 当前填入 1；不要把它当地图或副本 ID。
+当前主线将同步流、对局和空间区域分别命名为 `StreamID`、`lockstep.Match`、`AreaID`。这是随 v1.26.0 发布的源码 API 调整（不留旧别名），升级映射与验证见[维护记录](../../maintenance/ACCESS-SYNC-FOLLOWUPS.md)。流标识只在连接/同步上下文内有意义，Entity Sync 当前填入 1；不要把它当地图或副本 ID。
 
 entitysync 维护 subject、session、subscription、profile 与每会话帧；policy 提供 Direct/Group/Interest/AOI 的可见关系。frame 定义帧格式，nettransport 负责发送能力与背压。syncbus/mirror 是服务间复制，syncstream 是带基线/增量与 journal 的流。lockstep 传输输入、帧与校验，不替业务保证跨引擎确定性。
 
@@ -26,7 +26,7 @@ PrepareViews 汇总所需 profile；优先级配置先参与选择，再按确�
 
 ### 好友、队伍等关系如何更新
 
-关系源必须先通过 Interest 配置声明，subject 和接收 session 也需要完成注册。已掌握完整成员表时用 `QueueRelation` 全量替换；只知道哪些成员加入、退出时，用当前主线新增、尚未发版的 `QueueRelationDelta`。例如好友列表有 1000 人，只增删 1 人时，不必再发送整张列表。
+关系源必须先通过 Interest 配置声明，subject 和接收 session 也需要完成注册。已掌握完整成员表时用 `QueueRelation` 全量替换；只知道哪些成员加入、退出时，用 v1.26.0 新增的 `QueueRelationDelta`。例如好友列表有 1000 人，只增删 1 人时，不必再发送整张列表。
 
 业务在已有 Nest handler 中先修改自己的关系 DAO，再调用以下入口；调用失败必须向 handler 返回错误。框架只维护同步可见关系，不替业务保存好友或队伍数据。
 
@@ -49,7 +49,7 @@ periodic 按 Interval 合并检查；on_change 在正式 handler 提交边界汇
 
 配置 DurableWatermark 时，冻结状态的 CommitLSN 超出水位则暂不发送。不要把 MarkDirty 的时刻当成客户端可见时刻，也不要把 on_change 描述成每个 setter 都立即发包。
 
-### 可配置合批窗口（当前主线新增，尚未发版）
+### 可配置合批窗口（v1.26.0 新增）
 
 希望将短时间内多次已提交更新集中处理，可以设置：
 
