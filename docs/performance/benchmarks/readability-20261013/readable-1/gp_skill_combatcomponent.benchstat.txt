@@ -1,0 +1,16 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/skill/combatcomponent
+cpu: Apple M5
+                                 │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill_combatcomponent.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill_combatcomponent.new.txt │
+                                 │                                                                sec/op                                                                 │                                                       sec/op                                                        vs base          │
+CombatRepeatedAttributeWrites-10                                                                                                                            421.4µ ± 10%                                                                                                          423.8µ ± 7%  ~ (p=1.000 n=10)
+
+                                 │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill_combatcomponent.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill_combatcomponent.new.txt │
+                                 │                                                                 B/op                                                                  │                                                        B/op                                                         vs base          │
+CombatRepeatedAttributeWrites-10                                                                                                                            677.1Ki ± 2%                                                                                                         673.1Ki ± 2%  ~ (p=0.971 n=10)
+
+                                 │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill_combatcomponent.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill_combatcomponent.new.txt │
+                                 │                                                               allocs/op                                                               │                                                     allocs/op                                                       vs base          │
+CombatRepeatedAttributeWrites-10                                                                                                                              70.00 ± 1%                                                                                                           69.00 ± 1%  ~ (p=0.433 n=10)
+DONE

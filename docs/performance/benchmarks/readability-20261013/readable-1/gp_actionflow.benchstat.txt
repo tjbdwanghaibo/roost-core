@@ -1,0 +1,26 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/actionflow
+cpu: Apple M5
+                         │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_actionflow.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_actionflow.new.txt │
+                         │                                                           sec/op                                                           │                                               sec/op                                                vs base               │
+ActionRunnerTick-10                                                                                                                      31.94n ±  2%                                                                                          31.90n ± 5%       ~ (p=0.985 n=10)
+ActionRunnerLifecycle-10                                                                                                                 146.8n ± 19%                                                                                          144.8n ± 1%       ~ (p=0.209 n=10)
+geomean                                                                                                                                  68.46n                                                                                                67.98n       -0.70%
+
+                         │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_actionflow.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_actionflow.new.txt │
+                         │                                                            B/op                                                            │                                               B/op                                                vs base                 │
+ActionRunnerTick-10                                                                                                                      0.000 ± 0%                                                                                           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ActionRunnerLifecycle-10                                                                                                                 112.0 ± 0%                                                                                           112.0 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                                             ²                                                                                                     +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                         │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_actionflow.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_actionflow.new.txt │
+                         │                                                         allocs/op                                                          │                                            allocs/op                                              vs base                 │
+ActionRunnerTick-10                                                                                                                      0.000 ± 0%                                                                                           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ActionRunnerLifecycle-10                                                                                                                 2.000 ± 0%                                                                                           2.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                                             ²                                                                                                     +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+DONE

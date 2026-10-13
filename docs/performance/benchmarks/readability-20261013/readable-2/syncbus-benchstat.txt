@@ -1,0 +1,25 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver
+cpu: Apple M5
+                        │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-2/syncbus-base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-2/syncbus-new.txt │
+                        │                                                        sec/op                                                        │                                           sec/op                                             vs base                │
+SyncMsgID/message_id-10                                                                                                           24.250n ± 8%                                                                                  2.397n ± 12%  -90.11% (p=0.000 n=10)
+SyncMsgID/tuple-10                                                                                                                112.45n ± 5%                                                                                  91.66n ±  2%  -18.49% (p=0.000 n=10)
+geomean                                                                                                                            52.22n                                                                                       14.82n        -71.61%
+
+                        │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-2/syncbus-base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-2/syncbus-new.txt │
+                        │                                                         B/op                                                         │                                            B/op                                             vs base                 │
+SyncMsgID/message_id-10                                                                                                           0.000 ± 0%                                                                                     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+SyncMsgID/tuple-10                                                                                                                40.00 ± 0%                                                                                     40.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                                      ²                                                                                               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                        │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-2/syncbus-base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-2/syncbus-new.txt │
+                        │                                                      allocs/op                                                       │                                         allocs/op                                           vs base                 │
+SyncMsgID/message_id-10                                                                                                           0.000 ± 0%                                                                                     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+SyncMsgID/tuple-10                                                                                                                2.000 ± 0%                                                                                     2.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                                      ²                                                                                               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

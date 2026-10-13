@@ -109,7 +109,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		module := fs.String("module", "", "target Go module")
 		out := fs.String("out", "", "target directory")
 		services := fs.String("services", "game", "comma-separated services")
-		mods := fs.String("mods", "", "comma-separated service Kit mods")
+		mods := fs.String("mods", "", "comma-separated service wiring mods")
 		features := fs.String("features", "", "comma-separated features")
 		// Same reason as `project upgrade --skip-deps`: during a boundary
 		// migration the generated imports are correct before any release

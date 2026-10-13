@@ -1,0 +1,17 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/network/bus
+cpu: Apple M5
+                       │ before.txt  │           after.txt           │
+                       │   sec/op    │   sec/op     vs base          │
+JetStreamRPCRequest-10   2.254µ ± 9%   2.269µ ± 9%  ~ (p=0.425 n=20)
+
+                       │  before.txt  │            after.txt             │
+                       │     B/op     │     B/op      vs base            │
+JetStreamRPCRequest-10   2.165Ki ± 0%   2.165Ki ± 0%  ~ (p=1.000 n=20) ¹
+¹ all samples are equal
+
+                       │ before.txt │           after.txt            │
+                       │ allocs/op  │ allocs/op   vs base            │
+JetStreamRPCRequest-10   36.00 ± 0%   36.00 ± 0%  ~ (p=1.000 n=20) ¹
+¹ all samples are equal

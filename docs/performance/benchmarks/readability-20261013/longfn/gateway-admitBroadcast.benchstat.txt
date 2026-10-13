@@ -1,0 +1,16 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/network/gateway
+cpu: Apple M5
+                      │  before.txt  │           after.txt            │
+                      │    sec/op    │    sec/op     vs base          │
+GateAdmitBroadcast-10   316.0µ ± 19%   318.4µ ± 16%  ~ (p=0.796 n=10)
+
+                      │  before.txt  │           after.txt            │
+                      │     B/op     │     B/op      vs base          │
+GateAdmitBroadcast-10   324.8Ki ± 0%   324.8Ki ± 0%  ~ (p=0.447 n=10)
+
+                      │ before.txt  │            after.txt            │
+                      │  allocs/op  │  allocs/op   vs base            │
+GateAdmitBroadcast-10   2.056k ± 0%   2.056k ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal

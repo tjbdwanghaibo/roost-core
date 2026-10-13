@@ -94,7 +94,7 @@ func (e *step4JetStream) bus(sid int32) fsyncbus.ISyncBus {
 // durable 名在服务端的实际形状（发版文档 REM-4 疑点闭环，2026-10-06）：durableSyncName 经 sanitizeSyncName
 // 把主题里的 "." 换成 "_"，所以快照主题的 DeliverNew durable 是 sync_remote_entity_snapshot_live_<sid>_<16 位
 // 十六进制>，旧的 DeliverAll durable 是 sync_remote_entity_snapshot_<sid>_<16 位十六进制>（MIRROR-STEP-4 与
-// USER_GUIDE 之前写成 sync_remote_entity_snapshot.live_<sid>_…）。这里从服务端列出消费者名核对。
+// 旧文档曾写成 sync_remote_entity_snapshot.live_<sid>_…）。这里从服务端列出消费者名核对。
 func TestRealJetStreamLiveDurableNameShape(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

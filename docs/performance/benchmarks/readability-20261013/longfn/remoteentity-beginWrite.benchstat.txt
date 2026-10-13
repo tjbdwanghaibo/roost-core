@@ -1,0 +1,23 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/remoteentity
+cpu: Apple M5
+                                        │ before.txt  │             after.txt              │
+                                        │   sec/op    │   sec/op     vs base               │
+PrepareRemoteWriteBatch/owner_routed-10   1.444µ ± 1%   1.452µ ± 2%       ~ (p=0.447 n=10)
+PrepareRemoteWriteBatch/shared_lock-10    1.672µ ± 1%   1.677µ ± 4%       ~ (p=0.306 n=10)
+geomean                                   1.554µ        1.560µ       +0.39%
+
+                                        │  before.txt  │               after.txt               │
+                                        │     B/op     │     B/op      vs base                 │
+PrepareRemoteWriteBatch/owner_routed-10   1.508Ki ± 0%   1.508Ki ± 0%       ~ (p=1.000 n=10) ¹
+PrepareRemoteWriteBatch/shared_lock-10    1.834Ki ± 0%   1.834Ki ± 0%       ~ (p=0.721 n=10)
+geomean                                   1.663Ki        1.663Ki       +0.00%
+¹ all samples are equal
+
+                                        │ before.txt │              after.txt              │
+                                        │ allocs/op  │ allocs/op   vs base                 │
+PrepareRemoteWriteBatch/owner_routed-10   20.00 ± 0%   20.00 ± 0%       ~ (p=1.000 n=10) ¹
+PrepareRemoteWriteBatch/shared_lock-10    25.00 ± 0%   25.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                   22.36        22.36       +0.00%
+¹ all samples are equal

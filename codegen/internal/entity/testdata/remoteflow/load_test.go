@@ -119,7 +119,7 @@ func remoteErrorIs(target error) func(error) bool {
 	return func(err error) bool { return errors.Is(err, target) }
 }
 
-// remoteErrorRules 按 docs/USER_GUIDE.md §4“回复错误判别”表从上到下排列，取第一个命中的行，全部 errors.Is，不匹配文本。
+// remoteErrorRules 按 docs/framework/guide/02-nest-entity.md §6 错误判别表从上到下排列，取第一个命中的行，全部 errors.Is，不匹配文本。
 // 第 10、11、13 行在本 fixture 不会出现，未列出，命中时落入下面的保守兜底。
 var remoteErrorRules = []remoteErrorRule{
 	{"row1 nest.ErrCommitIndeterminate", remoteOutcomeUncertain, remoteErrorIs(nest.ErrCommitIndeterminate)},

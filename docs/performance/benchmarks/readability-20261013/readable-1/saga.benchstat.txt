@@ -1,0 +1,35 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/saga
+cpu: Apple M5
+                                                    │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/saga.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/saga.new.txt │
+                                                    │                                                      sec/op                                                       │                                          sec/op                                            vs base               │
+DataEngineStepReservation/new_command-10                                                                                                                   2.964m ± 14%                                                                                2.976m ± 36%       ~ (p=0.739 n=10)
+DataEngineStepReservation/duplicate_active_claim-10                                                                                                        5.617µ ± 43%                                                                                6.325µ ± 90%       ~ (p=0.684 n=10)
+NewID-10                                                                                                                                                   17.59n ± 26%                                                                                16.04n ± 86%       ~ (p=0.912 n=10)
+MemoryStoreApply-10                                                                                                                                        99.74n ± 20%                                                                               102.85n ± 69%       ~ (p=0.494 n=10)
+MongoCommandInboxHandle-10                                                                                                                                 3.571m ± 33%                                                                                3.386m ± 12%  -5.19% (p=0.043 n=10)
+geomean                                                                                                                                                    10.08µ                                                                                      10.10µ        +0.15%
+
+                                                    │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/saga.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/saga.new.txt │
+                                                    │                                                       B/op                                                        │                                          B/op                                            vs base                 │
+DataEngineStepReservation/new_command-10                                                                                                                3.656Mi ± 23%                                                                               3.602Mi ± 25%       ~ (p=0.971 n=10)
+DataEngineStepReservation/duplicate_active_claim-10                                                                                                     6.034Ki ±  0%                                                                               6.032Ki ±  0%       ~ (p=0.147 n=10)
+NewID-10                                                                                                                                                  32.00 ±  0%                                                                                 32.00 ±  0%       ~ (p=1.000 n=10) ¹
+MemoryStoreApply-10                                                                                                                                       0.000 ±  0%                                                                                 0.000 ±  0%       ~ (p=1.000 n=10) ¹
+MongoCommandInboxHandle-10                                                                                                                              7.602Mi ± 20%                                                                               6.793Mi ± 19%       ~ (p=0.247 n=10)
+geomean                                                                                                                                                               ²                                                                                            -2.52%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                                    │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/saga.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/saga.new.txt │
+                                                    │                                                     allocs/op                                                     │                                        allocs/op                                         vs base                 │
+DataEngineStepReservation/new_command-10                                                                                                                 29.13k ± 23%                                                                                28.70k ± 24%       ~ (p=0.960 n=10)
+DataEngineStepReservation/duplicate_active_claim-10                                                                                                       113.0 ±  0%                                                                                 113.0 ±  0%       ~ (p=1.000 n=10) ¹
+NewID-10                                                                                                                                                  1.000 ±  0%                                                                                 1.000 ±  0%       ~ (p=1.000 n=10) ¹
+MemoryStoreApply-10                                                                                                                                       0.000 ±  0%                                                                                 0.000 ±  0%       ~ (p=1.000 n=10) ¹
+MongoCommandInboxHandle-10                                                                                                                               47.38k ± 20%                                                                                42.30k ± 19%       ~ (p=0.247 n=10)
+geomean                                                                                                                                                               ²                                                                                            -2.53%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+DONE

@@ -1,0 +1,35 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/remoteentity
+cpu: Apple M5
+                                 │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/remoteentity.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/remoteentity.new.txt │
+                                 │                                                          sec/op                                                           │                                              sec/op                                                vs base               │
+RemoteTrackerAtCapacity/64-10                                                                                                                   156.6n ±  4%                                                                                        159.7n ± 16%       ~ (p=0.493 n=10)
+RemoteTrackerAtCapacity/1024-10                                                                                                                 153.7n ±  2%                                                                                        154.9n ±  9%       ~ (p=0.158 n=10)
+RemoteTrackerAtCapacity/8192-10                                                                                                                 168.2n ±  4%                                                                                        168.6n ± 13%       ~ (p=0.565 n=10)
+RemoteTrackerAtCapacity/65536-10                                                                                                                170.6n ± 10%                                                                                        171.3n ±  7%       ~ (p=0.670 n=10)
+RemoteTrackerStats-10                                                                                                                           16.19n ±  6%                                                                                        16.13n ±  2%       ~ (p=0.323 n=10)
+geomean                                                                                                                                         102.3n                                                                                              102.9n        +0.62%
+
+                                 │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/remoteentity.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/remoteentity.new.txt │
+                                 │                                                           B/op                                                            │                                              B/op                                                vs base                 │
+RemoteTrackerAtCapacity/64-10                                                                                                                   272.0 ± 0%                                                                                          272.0 ± 0%       ~ (p=1.000 n=10) ¹
+RemoteTrackerAtCapacity/1024-10                                                                                                                 272.0 ± 0%                                                                                          272.0 ± 0%       ~ (p=1.000 n=10) ¹
+RemoteTrackerAtCapacity/8192-10                                                                                                                 272.0 ± 0%                                                                                          272.0 ± 0%       ~ (p=1.000 n=10) ¹
+RemoteTrackerAtCapacity/65536-10                                                                                                                275.0 ± 0%                                                                                          275.0 ± 0%       ~ (p=1.000 n=10) ¹
+RemoteTrackerStats-10                                                                                                                           0.000 ± 0%                                                                                          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                                                    ²                                                                                                    +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                 │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/remoteentity.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/remoteentity.new.txt │
+                                 │                                                         allocs/op                                                         │                                            allocs/op                                             vs base                 │
+RemoteTrackerAtCapacity/64-10                                                                                                                   2.000 ± 0%                                                                                          2.000 ± 0%       ~ (p=1.000 n=10) ¹
+RemoteTrackerAtCapacity/1024-10                                                                                                                 2.000 ± 0%                                                                                          2.000 ± 0%       ~ (p=1.000 n=10) ¹
+RemoteTrackerAtCapacity/8192-10                                                                                                                 2.000 ± 0%                                                                                          2.000 ± 0%       ~ (p=1.000 n=10) ¹
+RemoteTrackerAtCapacity/65536-10                                                                                                                2.000 ± 0%                                                                                          2.000 ± 0%       ~ (p=1.000 n=10) ¹
+RemoteTrackerStats-10                                                                                                                           0.000 ± 0%                                                                                          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                                                    ²                                                                                                    +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+DONE

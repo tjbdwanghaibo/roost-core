@@ -1,0 +1,23 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/skill
+cpu: Apple M5
+                          │ before.txt  │             after.txt              │
+                          │   sec/op    │   sec/op     vs base               │
+StepSpawnMotion/moving-10   16.48µ ± 1%   16.58µ ± 2%       ~ (p=0.781 n=10)
+StepSpawnMotion/static-10   7.625µ ± 5%   7.436µ ± 3%  -2.48% (p=0.019 n=10)
+geomean                     11.21µ        11.10µ       -0.96%
+
+                          │  before.txt  │               after.txt               │
+                          │     B/op     │     B/op      vs base                 │
+StepSpawnMotion/moving-10   19.53Ki ± 0%   19.53Ki ± 0%       ~ (p=1.000 n=10) ¹
+StepSpawnMotion/static-10   33.99Ki ± 0%   33.99Ki ± 0%       ~ (p=1.000 n=10) ¹
+geomean                     25.77Ki        25.77Ki       +0.00%
+¹ all samples are equal
+
+                          │ before.txt │              after.txt              │
+                          │ allocs/op  │ allocs/op   vs base                 │
+StepSpawnMotion/moving-10   136.0 ± 0%   136.0 ± 0%       ~ (p=1.000 n=10) ¹
+StepSpawnMotion/static-10   84.00 ± 0%   84.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                     106.9        106.9       +0.00%
+¹ all samples are equal

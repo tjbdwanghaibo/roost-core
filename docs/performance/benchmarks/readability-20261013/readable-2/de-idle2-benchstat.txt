@@ -1,0 +1,23 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine
+cpu: Apple M5
+                                  │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-2/de-idle2-base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-2/de-idle2-new.txt │
+                                  │                                                        sec/op                                                         │                                            sec/op                                             vs base                │
+TmpReplayIdleOrHeldManual/idle-10                                                                                                            34.35µ ± 93%                                                                                  38.00µ ±  91%        ~ (p=0.481 n=10)
+TmpReplayIdleOrHeldManual/held-10                                                                                                            34.46µ ± 20%                                                                                  37.88µ ± 131%        ~ (p=0.280 n=10)
+geomean                                                                                                                                      34.41µ                                                                                        37.94µ         +10.27%
+
+                                  │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-2/de-idle2-base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-2/de-idle2-new.txt │
+                                  │                                                         B/op                                                          │                                            B/op                                              vs base                 │
+TmpReplayIdleOrHeldManual/idle-10                                                                                                            2.048Ki ± 0%                                                                                  2.048Ki ± 0%       ~ (p=1.000 n=10)
+TmpReplayIdleOrHeldManual/held-10                                                                                                            2.869Ki ± 0%                                                                                  2.869Ki ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                                      2.424Ki                                                                                       2.424Ki       -0.01%
+¹ all samples are equal
+
+                                  │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-2/de-idle2-base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-2/de-idle2-new.txt │
+                                  │                                                       allocs/op                                                       │                                          allocs/op                                           vs base                 │
+TmpReplayIdleOrHeldManual/idle-10                                                                                                              20.00 ± 0%                                                                                    20.00 ± 0%       ~ (p=1.000 n=10) ¹
+TmpReplayIdleOrHeldManual/held-10                                                                                                              51.00 ± 0%                                                                                    51.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                                        31.94                                                                                         31.94       +0.00%
+¹ all samples are equal

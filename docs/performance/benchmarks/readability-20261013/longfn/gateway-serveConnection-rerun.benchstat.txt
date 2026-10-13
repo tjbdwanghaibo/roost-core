@@ -1,0 +1,22 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/network/gateway
+cpu: Apple M5
+                       │ before.txt  │             after.txt              │
+                       │   sec/op    │   sec/op     vs base               │
+TCPRequestRoundTrip-10   16.57µ ± 5%   16.47µ ± 4%       ~ (p=0.796 n=10)
+TCPHandshake-10          64.17µ ± 1%   63.87µ ± 1%       ~ (p=0.436 n=10)
+geomean                  32.60µ        32.43µ       -0.52%
+
+                       │  before.txt  │              after.txt              │
+                       │     B/op     │     B/op      vs base               │
+TCPRequestRoundTrip-10     690.0 ± 0%     690.0 ± 0%       ~ (p=1.000 n=10)
+TCPHandshake-10          3.186Ki ± 0%   3.186Ki ± 0%       ~ (p=0.635 n=10)
+geomean                  1.465Ki        1.465Ki       +0.00%
+
+                       │ before.txt │              after.txt              │
+                       │ allocs/op  │ allocs/op   vs base                 │
+TCPRequestRoundTrip-10   20.00 ± 0%   20.00 ± 0%       ~ (p=1.000 n=10) ¹
+TCPHandshake-10          66.00 ± 0%   66.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                  36.33        36.33       +0.00%
+¹ all samples are equal

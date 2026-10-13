@@ -1,0 +1,22 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/skill
+cpu: Apple M5
+                                       │ before.txt  │             after.txt              │
+                                       │   sec/op    │   sec/op     vs base               │
+ActivateFinishingCast/mixed-10           20.96µ ± 1%   20.89µ ± 1%  -0.32% (p=0.019 n=10)
+ActivateFinishingCast/control_heavy-10   52.22µ ± 1%   52.05µ ± 1%       ~ (p=0.436 n=10)
+geomean                                  33.08µ        32.98µ       -0.33%
+
+                                       │  before.txt  │              after.txt              │
+                                       │     B/op     │     B/op      vs base               │
+ActivateFinishingCast/mixed-10           43.39Ki ± 0%   43.39Ki ± 0%       ~ (p=0.113 n=10)
+ActivateFinishingCast/control_heavy-10   166.5Ki ± 0%   166.5Ki ± 0%       ~ (p=0.565 n=10)
+geomean                                  85.00Ki        85.01Ki       +0.00%
+
+                                       │ before.txt │              after.txt              │
+                                       │ allocs/op  │ allocs/op   vs base                 │
+ActivateFinishingCast/mixed-10           187.0 ± 0%   187.0 ± 0%       ~ (p=1.000 n=10) ¹
+ActivateFinishingCast/control_heavy-10   298.0 ± 0%   298.0 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                  236.1        236.1       +0.00%
+¹ all samples are equal

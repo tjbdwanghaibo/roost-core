@@ -1,0 +1,29 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/skill
+cpu: Apple M5
+                                               │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill.new.txt │
+                                               │                                                        sec/op                                                         │                                            sec/op                                              vs base               │
+StateMutationCommit1000Cooldowns-10                                                                                                                        146.7n ± 2%                                                                                    145.5n ± 64%       ~ (p=0.631 n=10)
+StateMutationCommit1000CooldownsTickAdvance-10                                                                                                             7.134µ ± 8%                                                                                    7.066µ ±  3%       ~ (p=0.447 n=10)
+ApplyStateMutation-10                                                                                                                                      52.72n ± 3%                                                                                    53.19n ±  4%       ~ (p=0.280 n=10)
+geomean                                                                                                                                                    380.7n                                                                                         379.6n        -0.30%
+
+                                               │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill.new.txt │
+                                               │                                                         B/op                                                          │                                            B/op                                              vs base                 │
+StateMutationCommit1000Cooldowns-10                                                                                                                       48.00 ± 0%                                                                                      48.00 ± 0%       ~ (p=1.000 n=10) ¹
+StateMutationCommit1000CooldownsTickAdvance-10                                                                                                            323.0 ± 1%                                                                                      324.0 ± 0%       ~ (p=0.514 n=10)
+ApplyStateMutation-10                                                                                                                                     0.000 ± 0%                                                                                      0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                                                              ²                                                                                                +0.10%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                               │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill.new.txt │
+                                               │                                                       allocs/op                                                       │                                          allocs/op                                           vs base                 │
+StateMutationCommit1000Cooldowns-10                                                                                                                       2.000 ± 0%                                                                                      2.000 ± 0%       ~ (p=1.000 n=10) ¹
+StateMutationCommit1000CooldownsTickAdvance-10                                                                                                            4.000 ± 0%                                                                                      4.000 ± 0%       ~ (p=1.000 n=10) ¹
+ApplyStateMutation-10                                                                                                                                     0.000 ± 0%                                                                                      0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                                                              ²                                                                                                +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+DONE

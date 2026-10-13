@@ -74,6 +74,7 @@
 
 ### 修复
 
+- 故障矩阵与 Remote / DataEngine / Saga 性能脚本改用包重组后的路径（`kit/scripts/integration` → `wiring/scripts/integration`，env 记录的源码清单改为 `framework/`、`infra/` 下的现行路径）；原脚本在 `set -euo pipefail` 下第一步就退出（8731576b）。`nest.unload_resync` 配置 help、`roost project new -mods` 说明与若干注释里指向已删除 USER_GUIDE / Kit 的文字改为现行文档。
 - Nest：`completionPump.stop` 一次超时返回后，重试的 stop 仍等待完成队列排空与 worker 池停止（以前第二次调用直接返回，排空未完成就继续停机），与三步停机契约一致（f8af5afc）。
 - 修复日志帧号恒为 0：删除从未推进的 Nest 包级帧计数 `nest.CurTick`；不在 Nest 请求上下文里的日志行改为取运行中 Nest Ticker 的帧号（App 经新能力 `app.ModLogFrame` 提供 `*app.LogFrame`，Nest Mod 在 Provide 时接上 `NestMgr.CurrentTick`）。请求内日志仍由 fctx 带帧号；进程里没有 Nest 时为 0。
 - Nest：Client 准入错误只归一化一次，队列满等错误文本不再重复同一段（e161459b）。

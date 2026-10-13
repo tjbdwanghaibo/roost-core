@@ -1,0 +1,34 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/infra/network/bus
+cpu: Apple M5
+                                           │  before.txt  │               after.txt                │
+                                           │    sec/op    │    sec/op      vs base                 │
+InternalMessageCodec/messagepack/decode-10   778.8n ±  9%    875.2n ± 32%   +12.39% (p=0.003 n=10)
+MessagePackValueEnd-10                       445.2n ± 20%   1036.0n ± 44%  +132.73% (p=0.000 n=10)
+geomean                                      588.8n          952.2n         +61.73%
+
+                                           │ before.txt │           after.txt            │
+                                           │ wire-B/op  │ wire-B/op   vs base            │
+InternalMessageCodec/messagepack/decode-10   105.0 ± 0%   105.0 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+                                           │  before.txt  │              after.txt              │
+                                           │     B/op     │    B/op     vs base                 │
+InternalMessageCodec/messagepack/decode-10   962.0 ± 0%     962.0 ± 0%       ~ (p=1.000 n=10) ¹
+MessagePackValueEnd-10                       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                 ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                           │  before.txt  │              after.txt              │
+                                           │  allocs/op   │ allocs/op   vs base                 │
+InternalMessageCodec/messagepack/decode-10   16.00 ± 0%     16.00 ± 0%       ~ (p=1.000 n=10) ¹
+MessagePackValueEnd-10                       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                 ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                       │  before.txt   │               after.txt               │
+                       │      B/s      │      B/s       vs base                │
+MessagePackValueEnd-10   3.867Gi ± 17%   1.661Gi ± 31%  -57.04% (p=0.000 n=10)

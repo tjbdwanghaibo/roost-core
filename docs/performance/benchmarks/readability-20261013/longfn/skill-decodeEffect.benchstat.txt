@@ -1,0 +1,16 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/skill
+cpu: Apple M5
+                │ before.txt  │           after.txt           │
+                │   sec/op    │   sec/op     vs base          │
+DecodeEffect-10   54.43µ ± 2%   54.38µ ± 2%  ~ (p=0.912 n=10)
+
+                │  before.txt  │           after.txt            │
+                │     B/op     │     B/op      vs base          │
+DecodeEffect-10   41.33Ki ± 0%   41.33Ki ± 0%  ~ (p=0.466 n=10)
+
+                │ before.txt │           after.txt            │
+                │ allocs/op  │ allocs/op   vs base            │
+DecodeEffect-10   681.0 ± 0%   681.0 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal

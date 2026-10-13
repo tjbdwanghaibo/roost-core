@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/entity
+cpu: Apple M5
+                              │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/entity.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/entity.new.txt │
+                              │                                                       sec/op                                                        │                                              sec/op                                               vs base          │
+RemoteSnapshotCacheL1Get4K-10                                                                                                           158.4n ± 0%                                                                                        158.4n ± 0%  ~ (p=0.870 n=10)
+
+                              │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/entity.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/entity.new.txt │
+                              │                                                        B/op                                                         │                                              B/op                                               vs base            │
+RemoteSnapshotCacheL1Get4K-10                                                                                                            0.000 ± 0%                                                                                       0.000 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+                              │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/entity.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/entity.new.txt │
+                              │                                                      allocs/op                                                      │                                           allocs/op                                             vs base            │
+RemoteSnapshotCacheL1Get4K-10                                                                                                            0.000 ± 0%                                                                                       0.000 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+DONE

@@ -366,7 +366,7 @@ func (c *countingLocalCommitter) Commit(context.Context, coredata.CommitRecord) 
 
 func (c *countingLocalCommitter) commits() int32 { return c.calls.Load() }
 
-// replySentinels 是 USER_GUIDE §4“回复错误判别”表第 1～14 行的判据，按行号与表对齐；第 15 行是兜底（不命中以上任何一行），
+// replySentinels 是错误判别表（docs/framework/guide/02-nest-entity.md §6）各行的判据，按行号与表对齐；第 15 行是兜底（不命中以上任何一行），
 // firstTableRow 对它返回 15。第 7、8 行共用 ErrCreatedEntityLockConflict，按是否同时带 ErrLockTimeout 区分（without / with）；
 // 第 13 行 entity.ErrEntityRemoved 只对“handler 内新建本 handler 较早撤销的同 ID”成立，errors.Is 看不出来源，用例自己保证来源。
 // row 0 的项不是任何一行的判据，只在命中时打印（context.DeadlineExceeded 与第 2、14 行并存）。

@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/skill/skillsync
+cpu: Apple M5
+                       │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill_skillsync.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill_skillsync.new.txt │
+                       │                                                             sec/op                                                              │                                                    sec/op                                                     vs base          │
+OutboxPutSameStream-10                                                                                                                       938.4n ± 6%                                                                                                  991.1n ± 106%  ~ (p=0.481 n=10)
+
+                       │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill_skillsync.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill_skillsync.new.txt │
+                       │                                                              B/op                                                               │                                                    B/op                                                     vs base            │
+OutboxPutSameStream-10                                                                                                                      1.438Ki ± 0%                                                                                                 1.438Ki ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+                       │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill_skillsync.base.txt │ /private/tmp/claude-502/-Users-whb-roost/4f139f43-13e1-4529-b481-b39566685060/scratchpad/readable-1/gp_skill_skillsync.new.txt │
+                       │                                                            allocs/op                                                            │                                                 allocs/op                                                   vs base            │
+OutboxPutSameStream-10                                                                                                                        6.000 ± 0%                                                                                                   6.000 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+DONE

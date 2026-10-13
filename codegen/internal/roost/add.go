@@ -513,7 +513,7 @@ const (
 // Definition lists the steps. Their timeout and retry budget is configuration,
 // not code: saga.step_defaults gives every step its Timeout, MaxAttempts and
 // backoff, and saga.steps.%s.<step>.<field> overrides one step (see the
-// roost-core USER_GUIDE, "Saga 步骤预算"). One operation of a step may take up
+// roost-core docs/framework/SAGA.md, step budgets). One operation of a step may take up
 // to MaxAttempts attempts; the framework makes sure at most one of them takes
 // effect (roost-core SAGA.md, 原生步骤执行契约; Mongo steps since 2026-10-06).
 func Definition() saga.Definition {
