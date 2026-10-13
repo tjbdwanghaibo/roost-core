@@ -1,9 +1,12 @@
+// 业务池不阻塞：快池拒绝直接冷访问与自派发，慢池 handler 的 RunLocal 不等自己的池，RunLocal 入口的执行位置与生命周期。
+
 package nest
 
 import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync/atomic"
@@ -164,5 +167,156 @@ func TestFastBroadcastReportsColdTargetAndContinues(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "nest broadcast target load failed") || !strings.Contains(logs.String(), name.String()) {
 		t.Fatalf("missing actionable log: %s", logs.String())
+	}
+}
+
+func TestSlowHandlerRunLocalDoesNotWaitForOwnPool(t *testing.T) {
+	for _, workers := range []int{1, 2} {
+		t.Run(fmt.Sprint(workers), func(t *testing.T) {
+			getter := newMockGetter()
+			ids := make([]int64, workers+1)
+			for i := range ids {
+				ids[i] = mustBuildCastID(t, int64(8100+i), entity.EntityCategory(1), nestLocalKind)
+				getter.Add(newMockEntity(ids[i], entity.EntityCategory(1)))
+			}
+			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithWorkerPools(WorkerPoolConfig{workers, 8}, WorkerPoolConfig{}, WorkerPoolConfig{workers, 8}))
+			entered := make(chan struct{}, workers)
+			release := make(chan struct{})
+			var ran atomic.Int32
+			mgr.MustRegisterHandlerWithMeta(NewHandlerName("local_step"), func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+				entered <- struct{}{}
+				<-release // 受控地让每个业务 worker 都进入同一边界，不靠 sleep。
+				return "ok", entity.RunLocal(nestBaseContext(), func() { ran.Add(1) })
+			}, HandlerMeta{Rollback: RollbackNone, Durability: DurabilityMemory})
+			mgr.MustRegisterHandlerWithMeta(NewHandlerName("plain"), func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+				return "ok", nil
+			}, HandlerMeta{Rollback: RollbackNone, Durability: DurabilityMemory})
+			if err := mgr.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				if err := mgr.Shutdown(ctx); err != nil {
+					t.Error(err)
+				}
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			results := make(chan error, workers)
+			for i := range workers {
+				go func() {
+					_, err := mgr.Request(ctx, NewHandlerName("local_step"), ids[i], nil, SendOptionIO())
+					results <- err
+				}()
+			}
+			for range workers {
+				stagedSignal(t, entered)
+			}
+			close(release)
+			for range workers {
+				if err := <-results; err != nil {
+					t.Fatal(err)
+				}
+			}
+			if ran.Load() != int32(workers) {
+				t.Fatalf("local steps=%d", ran.Load())
+			}
+			if _, err := mgr.Request(ctx, NewHandlerName("plain"), ids[workers], nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// NestMgr.RunLocal 是框架后台 goroutine 在业务池持锁执行的正式入口：fn 在业务 worker 上运行、调用方同步等它；
+// 业务 worker 上调用 fail-fast；未运行的引擎拒绝且不执行 fn；它不排在同 ID 链上，同一实体正在 I/O 准备时也能完成。
+// 历史：RR-20260926-30。
+
+type binderCommitter struct {
+	run func(func()) error
+}
+
+func (*binderCommitter) Commit(context.Context, CommitRecord) error { return nil }
+func (committer *binderCommitter) BindLocalExecutor(run func(func()) error) {
+	committer.run = run
+}
+
+func TestRunLocalExecutesOnTheShortPoolAndIsBoundToTheCommitter(t *testing.T) {
+	committer := &binderCommitter{}
+	mgr := NewEngine(NestOptionWithGetter(newMockGetter()), NestOptionWithTransactionCommitter(committer))
+	if committer.run == nil {
+		t.Fatal("NewEngine did not hand RunLocal to a LocalExecutorBinder committer")
+	}
+	ran := false
+	if err := committer.run(func() { ran = true }); !errors.Is(err, ErrNestStopped) || ran {
+		t.Fatalf("RunLocal before Start=%v ran=%v, want ErrNestStopped without running", err, ran)
+	}
+	if err := mgr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	onFast := false
+	if err := committer.run(func() { onFast = fctx.InShortWorker() }); err != nil || !onFast {
+		t.Fatalf("RunLocal=%v on fast worker=%v", err, onFast)
+	}
+	if err := mgr.RunLocal(context.Background(), func() { panic("injected") }); err == nil {
+		t.Fatal("a panicking task reported success")
+	}
+	if err := mgr.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ran = false
+	if err := committer.run(func() { ran = true }); !errors.Is(err, ErrNestStopped) || ran {
+		t.Fatalf("RunLocal after Shutdown=%v ran=%v, want ErrNestStopped without running", err, ran)
+	}
+}
+
+func TestRunLocalFromAFastWorkerFailsFast(t *testing.T) {
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 9920, entity.EntityCategory(1), nestLocalKind)
+	getter.Add(newMockEntity(id, entity.EntityCategory(1)))
+	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{}, WorkerPoolConfig{1, 4}))
+	mgr.MustRegisterHandlerWithMeta(NewHandlerName("self_run_local"), func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		return nil, mgr.RunLocal(context.Background(), func() {})
+	}, HandlerMeta{Rollback: RollbackNone, Durability: DurabilityMemory})
+	if err := mgr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Shutdown(context.Background())
+	if _, err := mgr.Request(context.Background(), NewHandlerName("self_run_local"), id, nil); !errors.Is(err, fctx.ErrBlockingInBusinessWorker) {
+		t.Fatalf("RunLocal on a fast worker=%v, want ErrBlockingInBusinessWorker", err)
+	}
+}
+
+func TestRunLocalIsNotOrderedBehindTheEntitysSlowPreparation(t *testing.T) {
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 9921, entity.EntityCategory(1), nestLocalKind)
+	getter.Add(newMockEntity(id, entity.EntityCategory(1)))
+	slow := &slowTestGetter{Getter: getter, entered: make(chan struct{}), release: make(chan struct{})}
+	mgr := NewEngine(NestOptionWithGetter(slow), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{}, WorkerPoolConfig{1, 4}))
+	mgr.MustRegisterHandlerWithMeta(NewHandlerName("cold"), func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		return "ok", nil
+	}, HandlerMeta{Rollback: RollbackNone, Durability: DurabilityMemory})
+	if err := mgr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Shutdown(context.Background())
+	msg, ch := GenSyncMsg(MsgTypeSingle)
+	msg.Name, msg.Tid, msg.Cost = "cold", id, true
+	if err := mgr.dispatcher.TrySendMsg(msg); err != nil {
+		t.Fatal(err)
+	}
+	stagedSignal(t, slow.entered) // 同一实体的消息正卡在I/O 准备里
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := mgr.RunLocal(context.Background(), func() {}); err != nil {
+			t.Error(err)
+		}
+	}()
+	stagedSignal(t, done)
+	close(slow.release)
+	if got := stagedWait(t, ch); got != "ok" {
+		t.Fatal(got)
 	}
 }

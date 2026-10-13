@@ -254,7 +254,7 @@ func TestRemotePersistChangeIsTransactionLocalAndExcludedFromOrdinaryMutations(t
 }
 
 func TestPipelinedAcceptFailureDoesNotRollbackAndFencesNest(t *testing.T) {
-	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
+	t.Cleanup(ResetHandlersForTest) // 清掉本用例注册的包级 handler，-count>1 重跑不重复注册
 	getter := newMockGetter()
 	id := mustBuildCastID(t, 390, 1, nestLocalKind)
 	dao := &rollbackTestDao{id: id, Value: 10}

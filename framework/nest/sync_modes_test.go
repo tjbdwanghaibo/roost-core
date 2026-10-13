@@ -107,7 +107,7 @@ func TestNestSyncModesShareCommitAndUnlockBoundaries(t *testing.T) {
 }
 
 func TestNestOnChangeRunsWithoutWaitingForInterval(t *testing.T) {
-	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
+	t.Cleanup(ResetHandlersForTest) // 清掉本用例注册的包级 handler，-count>1 重跑不重复注册
 	id, e := newAsyncPilotEntity(t, 9901, 10)
 	m, frames, _ := syncTestManager(t, e, entitysync.ModeOnChange)
 	getter := newMockGetter()
@@ -242,7 +242,7 @@ func TestNestSyncRejectedCommitDoesNotFreezeOrPublish(t *testing.T) {
 }
 
 func TestNestSyncTracksCastEntityUntilAdmission(t *testing.T) {
-	t.Cleanup(ResetHandlersForTest) // RR-20260927-20：本用例注册包级 handler，收尾清掉，单用例 -count>1 重跑才不 duplicate handler
+	t.Cleanup(ResetHandlersForTest) // 清掉本用例注册的包级 handler，-count>1 重跑不重复注册
 	id, a := newAsyncPilotEntity(t, 9905, 10)
 	_, b := newAsyncPilotEntity(t, 9906, 20)
 	bid := mustBuildCastID(t, 9906, castAllianceCategory, castAllianceKind)
@@ -311,8 +311,7 @@ func TestSyncRemoteConfirmationIsSeparateFromLocalCommit(t *testing.T) {
 	scope.Guard().RequireEntity(e)
 	batch := entity.BeginSyncMutation([]entity.IThreadSafeEntity{e}, m)
 	defer batch.Finish(false)
-	// 本测试直接模拟“本地事务已持久提交”；RR-20260926-32 起这个事实由提交路径显式记录
-	// （remoteCommitted），finishRemoteWriteBatch 不再从 nil 错误推断已提交。
+	// 本测试直接模拟“本地事务已持久提交”：这个事实由提交路径显式记录（remoteCommitted），finishRemoteWriteBatch 不从 nil 错误推断。
 	msg := &Msg{RemoteWriteBatch: &remoteBatchIntegrationFake{}, remoteFinalized: true, remoteCommitted: true}
 	pop := pushCurrentNestDispatchMsg(msg)
 	defer pop()

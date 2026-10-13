@@ -1,3 +1,5 @@
+// 实体锁组：分组派发的组作用域与快照校验、组锁 / 额外实体忙时不阻塞而重排、组迁移请求的准入与执行。
+
 package nest
 
 import (
@@ -7,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/goroutine"
 )
 
 func TestEntityLockGroupScopeAvailableForGroupedDispatch(t *testing.T) {
@@ -123,7 +126,7 @@ func TestEntityLockGroupSnapshotDetectsPendingTransition(t *testing.T) {
 }
 
 // singleDispatchInGuardScope 在当前 goroutine 上建 Guard 作用域再直接调用 singleDispatch，与 runNestLogic 一致：
-// 派发取锁要求作用域（RR-20261006-12）。
+// 派发取锁要求作用域。
 func singleDispatchInGuardScope(mgr *NestMgr, name string, id int64) (got any, err error) {
 	err = entity.WithGuardScope("group-lock-test", func(*entity.GuardScope) error {
 		var dispatchErr error
@@ -134,16 +137,8 @@ func singleDispatchInGuardScope(mgr *NestMgr, name string, id int64) (got any, e
 }
 
 // withDispatchGuardScope 在当前 goroutine 上建 Guard 作用域再取锁，与业务池派发（runNestLogic 先 NewGuardScope、
-// dispatchLoadedEntities 再取锁）一致：Guard 归作用域所有，作用域结束时只归还池一次。
-//
-// 之前这几条用例在新 goroutine 里直接 entity.GetEntityGuard()：没有作用域时它从池里取一个独立 Guard，
-// releaseDispatchLocks 的无作用域分支每次释放都把它 EntityGuardRelease 回池。组迁移重试会先释放一次、再拿同一个
-// Guard 重新取锁并再释放一次，同一个 Guard 进池两次；之后同进程里两个业务 worker 会取到同一个 Guard，互相解对方
-// goroutine 持有的实体锁（“unlock of unowned mutex”），-shuffle 下排在后面的
-// TestSymmetricCrossCreatePairsResolveWithinRequeueBudget 出现 winners=0、sync timeout 或停机挂死。
-// 生产调用方都在 Guard 作用域里，不走那条分支（见 docs/bugfix/CLOSING-BATCH-4-2026-10-06.md A2）。之后 RR-20261006-12 删掉了
-// 这条分支：没有作用域时派发取锁直接返回 errDispatchWithoutGuardScope，Guard 只由作用域归还。
-// glsvet -tests 也因此不再报 “GetEntityGuard called inside a go statement”。
+// dispatchLoadedEntities 再取锁）一致：Guard 归作用域所有，作用域结束时只归还池一次。没有作用域时派发取锁直接返回
+// errDispatchWithoutGuardScope（见 dispatch_test.go），所以用例不能在裸 goroutine 里直接 GetEntityGuard。
 func withDispatchGuardScope(fn func(guard *entity.EntityGuard) error) error {
 	return entity.WithGuardScope("group-lock-test", func(scope *entity.GuardScope) error {
 		return fn(scope.Guard())
@@ -419,5 +414,467 @@ func TestEntityLockGroupDispatchRequeuesBusyExtraEntity(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("MultiSync did not finish after extra lock released")
+	}
+}
+
+func TestGroupReleasePanicStillReleasesGroupLockAndScope(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		name := "normal-release"
+		if partial {
+			name = "partial-acquire"
+		}
+		t.Run(name, func(t *testing.T) {
+			testGroupReleasePanic(t, partial)
+		})
+	}
+}
+
+func testGroupReleasePanic(t *testing.T, partial bool) {
+	id := mustBuildCastID(t, 9810, entity.EntityCategory(1), nestLocalKind)
+	ent := newMockEntity(id, entity.EntityCategory(1))
+	manager := entity.NewEntityManager()
+	if err := manager.TryAdd(ent); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.RegisterOnEntityRelease(func(entity.IThreadSafeEntity) { panic("release hook failed") })()
+	scope, closeScope := entity.NewGuardScope("group-release-panic")
+	defer closeScope()
+	locks := newEntityLockGroupLockManager()
+	entities := []entity.IThreadSafeEntity{ent}
+	if partial {
+		busyID := mustBuildCastID(t, 9811, entity.EntityCategory(1), nestLocalKind)
+		busy := newMockEntity(busyID, entity.EntityCategory(1))
+		locked, unlock, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		go func() {
+			busy.GetMutex().Lock()
+			close(locked)
+			<-unlock
+			busy.GetMutex().Unlock()
+			close(done)
+		}()
+		<-locked
+		defer func() { close(unlock); <-done }()
+		entities = append(entities, busy)
+	}
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_, release, err := lockDispatchEntitiesWithGroup(locks, scope.Guard(), entities, 9800, nil)
+		if err != nil {
+			t.Fatalf("lock: %v", err)
+		}
+		release()
+	}()
+	if recovered == nil {
+		t.Fatal("release panic should reach the dispatch recovery boundary")
+	}
+	if group := CurrentEntityLockGroup(); group != nil {
+		// 先清理测试线程的残留 scope，避免影响其它测试。
+		entityLockGroupScopes.Delete(goroutine.GoID())
+		t.Errorf("group scope leaked: %d", group.GroupID())
+	}
+	if scope.Guard().Guarded(id) {
+		t.Error("entity remained guarded")
+	}
+	locks.mu.Lock()
+	remaining := len(locks.locks)
+	locks.mu.Unlock()
+	if remaining != 0 {
+		t.Errorf("group lock entries leaked: %d", remaining)
+	}
+}
+
+// Lock-group transitions are requested by entity id; the guards in front of
+// the request are what keep a zero group id, an unknown entity, or a second
+// concurrent request from reaching the dispatcher. Each is pinned.
+func TestGroupTransitionRequestsRefuseZeroGroupsUnknownEntitiesAndOverlaps(t *testing.T) {
+	const kind entity.EntityKind = 171
+	const category entity.EntityCategory = 1
+	entity.MustRegisterEntityKindCategory(kind, category)
+	getter := newMockGetter()
+	mgr := NewEngine(NestOptionWithGetter(getter))
+	if err := mgr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Shutdown(nil) })
+
+	id, err := entity.BuildEntityID(9001, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ent := newMockEntityWithKind(id, category, kind)
+	getter.Add(ent)
+	missing, err := entity.BuildEntityID(9002, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mgr.RequestJoinEntityLockGroup(id, 0); !errors.Is(err, ErrInvalidEntityLockGroup) {
+		t.Fatalf("join group 0 = %v", err)
+	}
+	if err := mgr.RequestMoveEntityLockGroup(id, 0); !errors.Is(err, ErrInvalidEntityLockGroup) {
+		t.Fatalf("move to group 0 = %v", err)
+	}
+	if err := mgr.RequestJoinEntityLockGroup(missing, 5); !errors.Is(err, ErrEntityNotFound) {
+		t.Fatalf("join for an entity the getter does not know = %v", err)
+	}
+	if ent.Base().GroupTransitionPending() {
+		t.Fatal("refused requests must not leave a transition pending on the entity")
+	}
+
+	// Hold the entity's lock so the dispatched transition cannot complete:
+	// under the race detector the worker otherwise finishes the join before
+	// the second request is issued, and "pending" is no longer observable.
+	mu := ent.GetMutex()
+	mu.Lock()
+	t.Cleanup(mu.Unlock)
+	if err := mgr.RequestJoinEntityLockGroup(id, 5); err != nil {
+		t.Fatalf("first join request: %v", err)
+	}
+	if !ent.Base().GroupTransitionPending() {
+		t.Fatal("the first join must be pending while the entity lock is held")
+	}
+	if err := mgr.RequestMoveEntityLockGroup(id, 6); !errors.Is(err, ErrEntityGroupTransitionPending) {
+		t.Fatalf("second request while the first is pending = %v", err)
+	}
+	if err := mgr.RequestLeaveEntityLockGroup(id); !errors.Is(err, ErrEntityGroupTransitionPending) {
+		t.Fatalf("leave while a join is pending = %v", err)
+	}
+}
+
+func TestEntityLockGroupTransitionJoinMoveLeaveUpdatesState(t *testing.T) {
+	ResetHandlersForTest()
+	defer ResetHandlersForTest()
+
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 4301, entity.EntityCategory(1), nestLocalKind)
+	e := newMockEntity(id, entity.EntityCategory(1))
+	getter.groups.Add(e)
+	getter.Add(e)
+
+	InitNest(
+		NestOptionWithGetter(getter),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
+		NestOptionWithTickDuration(100*time.Millisecond),
+	)
+	defer StopNest()
+
+	if err := Nest.RequestJoinEntityLockGroup(id, 8101); err != nil {
+		t.Fatalf("RequestJoinEntityLockGroup: %v", err)
+	}
+	waitForNestCondition(t, func() bool {
+		return e.Base().GroupLockID() == 8101 &&
+			e.Base().GroupEpoch() == 1 &&
+			!e.Base().GroupTransitionPending() &&
+			getter.groups.GetGroupEntity(8101, id) == e
+	})
+
+	if err := Nest.RequestMoveEntityLockGroup(id, 8102); err != nil {
+		t.Fatalf("RequestMoveEntityLockGroup: %v", err)
+	}
+	waitForNestCondition(t, func() bool {
+		return e.Base().GroupLockID() == 8102 &&
+			e.Base().GroupEpoch() == 2 &&
+			!e.Base().GroupTransitionPending() &&
+			getter.groups.GetGroupEntity(8101, id) == nil &&
+			getter.groups.GetGroupEntity(8102, id) == e
+	})
+
+	if err := Nest.RequestLeaveEntityLockGroup(id); err != nil {
+		t.Fatalf("RequestLeaveEntityLockGroup: %v", err)
+	}
+	waitForNestCondition(t, func() bool {
+		return e.Base().GroupLockID() == 0 &&
+			e.Base().GroupEpoch() == 3 &&
+			!e.Base().GroupTransitionPending() &&
+			getter.groups.GetGroupEntity(8102, id) == nil
+	})
+}
+
+func TestEntityLockGroupTransitionPendingGatesNormalDispatch(t *testing.T) {
+	ResetHandlersForTest()
+	defer ResetHandlersForTest()
+
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 4401, entity.EntityCategory(1), nestLocalKind)
+	e := newMockEntity(id, entity.EntityCategory(1))
+	if !e.Base().BeginGroupTransition(entity.EntityGroupTransitionJoin, 8201) {
+		t.Fatal("BeginGroupTransition should succeed")
+	}
+	getter.Add(e)
+
+	name := NewHandlerName("test_group_transition_pending_gate")
+	MustRegisterMemoryHandler(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+		return nil, errors.New("handler should not run while transition is pending")
+	})
+
+	mgr := &NestMgr{getter: getter}
+	_, err := mgr.singleDispatch(name.String(), id, nil)
+	if !errors.Is(err, ErrEntityGroupTransitionPending) {
+		t.Fatalf("singleDispatch err = %v, want ErrEntityGroupTransitionPending", err)
+	}
+}
+
+func TestEntityLockGroupTransitionPendingRequeuesSyncDispatch(t *testing.T) {
+	ResetHandlersForTest()
+	defer ResetHandlersForTest()
+
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 4451, entity.EntityCategory(1), nestLocalKind)
+	e := newMockEntity(id, entity.EntityCategory(1))
+	if !e.Base().BeginGroupTransition(entity.EntityGroupTransitionJoin, 8251) {
+		t.Fatal("BeginGroupTransition should succeed")
+	}
+	getter.Add(e)
+
+	InitNest(
+		NestOptionWithGetter(getter),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
+		NestOptionWithTickDuration(100*time.Millisecond),
+	)
+	defer StopNest()
+
+	name := NewHandlerName("test_group_transition_pending_requeue_sync")
+	called := make(chan struct{}, 1)
+	MustRegisterMemoryHandler(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+		called <- struct{}{}
+		return "ok", nil
+	})
+
+	time.AfterFunc(30*time.Millisecond, func() {
+		e.Base().ClearGroupTransition()
+	})
+
+	got, err := Nest.Request(context.Background(), name, id, nil)
+	if err != nil {
+		t.Fatalf("Nest.Sync err = %v, want nil", err)
+	}
+	if got != "ok" {
+		t.Fatalf("Nest.Sync result = %v, want ok", got)
+	}
+	select {
+	case <-called:
+	default:
+		t.Fatal("handler should run after pending clears")
+	}
+}
+
+func TestEntityLockGroupTransitionContinuationReturnsSyncResult(t *testing.T) {
+	ResetHandlersForTest()
+	defer ResetHandlersForTest()
+
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 4501, entity.EntityCategory(1), nestLocalKind)
+	e := newMockEntity(id, entity.EntityCategory(1))
+	getter.groups.Add(e)
+	getter.Add(e)
+
+	InitNest(
+		NestOptionWithGetter(getter),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
+		NestOptionWithTickDuration(100*time.Millisecond),
+	)
+	defer StopNest()
+
+	startName := NewHandlerName("test_group_transition_continuation_start")
+	continuationName := NewHandlerName("test_group_transition_continuation_after_join")
+	MustRegisterMemoryHandler(startName, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+		if err := Nest.RequestJoinEntityLockGroup(
+			id,
+			8301,
+			GroupTransitionWithContinuation(continuationName, NewParams("ready")),
+		); err != nil {
+			return nil, err
+		}
+		return nil, ErrEntityGroupTransitionScheduled
+	})
+	MustRegisterMemoryHandler(continuationName, func(es []entity.IThreadSafeEntity, params []any, _ ...HandlerOption) (any, error) {
+		if len(params) != 1 || params[0] != "ready" {
+			return nil, errors.New("continuation params mismatch")
+		}
+		if len(es) != 1 || es[0] != e {
+			return nil, errors.New("continuation entity mismatch")
+		}
+		scope := CurrentEntityLockGroup()
+		if scope == nil || scope.GroupID() != 8301 {
+			return nil, errors.New("continuation did not run under target group")
+		}
+		return "joined", nil
+	})
+
+	got, err := Nest.Request(context.Background(), startName, id, nil)
+	if err != nil {
+		t.Fatalf("Nest.Sync: %v", err)
+	}
+	if got != "joined" {
+		t.Fatalf("sync result = %v, want joined", got)
+	}
+	if e.Base().GroupLockID() != 8301 {
+		t.Fatalf("group id = %d, want 8301", e.Base().GroupLockID())
+	}
+}
+
+func TestEntityLockGroupTransitionRetriesWhenEntityLockBusy(t *testing.T) {
+	ResetHandlersForTest()
+	defer ResetHandlersForTest()
+
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 4601, entity.EntityCategory(1), nestLocalKind)
+	e := newMockEntity(id, entity.EntityCategory(1))
+	getter.groups.Add(e)
+	getter.Add(e)
+
+	InitNest(
+		NestOptionWithGetter(getter),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
+		NestOptionWithTickDuration(100*time.Millisecond),
+	)
+	defer StopNest()
+
+	mu := e.GetMutex()
+	mu.Lock()
+	if err := Nest.RequestJoinEntityLockGroup(id, 8401); err != nil {
+		mu.Unlock()
+		t.Fatalf("RequestJoinEntityLockGroup: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if !e.Base().GroupTransitionPending() {
+		mu.Unlock()
+		t.Fatal("transition should remain pending while entity lock is busy")
+	}
+	mu.Unlock()
+
+	waitForNestCondition(t, func() bool {
+		return e.Base().GroupLockID() == 8401 &&
+			!e.Base().GroupTransitionPending() &&
+			getter.groups.GetGroupEntity(8401, id) == e
+	})
+}
+
+func TestEntityLockGroupTransitionTimeoutClearsPending(t *testing.T) {
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 4602, entity.EntityCategory(1), nestLocalKind)
+	e := newMockEntity(id, entity.EntityCategory(1))
+	getter.groups.Add(e)
+	getter.Add(e)
+
+	if !e.Base().BeginGroupTransition(entity.EntityGroupTransitionJoin, 8402) {
+		t.Fatal("BeginGroupTransition should succeed")
+	}
+
+	mgr := &NestMgr{getter: getter}
+	mu := e.GetMutex()
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		mu.Lock()
+		close(locked)
+		<-release
+		mu.Unlock()
+	}()
+	awaitChan(t, locked, "the group transition to acquire the entity lock")
+	// 派发取锁要求 Guard 作用域（RR-20261006-12），与 runNestLogic 一致。
+	err := entity.WithGuardScope("group-transition-test", func(*entity.GuardScope) error {
+		_, err := mgr.groupTransitionDispatch(&GroupTransitionRequest{
+			EntityID:      id,
+			TargetGroupID: 8402,
+			State:         entity.EntityGroupTransitionJoin,
+			Attempts:      entityGroupTransitionRetryMax,
+			Deadline:      time.Now().Add(-time.Millisecond),
+		})
+		return err
+	})
+	close(release)
+
+	if !errors.Is(err, ErrLockTimeout) {
+		t.Fatalf("groupTransitionDispatch err = %v, want ErrLockTimeout", err)
+	}
+	if e.Base().GroupTransitionPending() {
+		t.Fatal("transition pending should be cleared after timeout")
+	}
+}
+
+func TestRequeueTransientDispatchHandlesGroupChanged(t *testing.T) {
+	dispatcher := NewDispatcher("test_group_changed_requeue", 1, 16, nil)
+	dispatcher.OnInit()
+	defer dispatcher.OnDestroy()
+
+	mgr := &NestMgr{dispatcher: dispatcher}
+	msg, ch := GenSyncMsg(MsgTypeSingle)
+	msg.Name = "test_group_changed_requeue"
+	msg.Tid = 4701
+
+	if !requeueTransientDispatch(mgr, msg, ErrEntityLockGroupChanged) {
+		t.Fatal("ErrEntityLockGroupChanged should be requeued as a transient dispatch error")
+	}
+	if msg.RetChan != nil {
+		t.Fatal("original message RetChan should be moved to the requeued clone")
+	}
+	select {
+	case got := <-ch:
+		t.Fatalf("requeue should not complete sync channel immediately: %v", got)
+	default:
+	}
+}
+
+func waitForNestCondition(t *testing.T, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if ok() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("condition not met before timeout")
+}
+
+// awaitChan receives from ch with an upper bound. A bare receive made a broken
+// property fail as a go test timeout — a stack dump after the default ten
+// minutes, naming no expectation — so every wait that IS the assertion is
+// bounded and says what it was waiting for.
+func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		var zero T
+		return zero
+	}
+}
+
+func TestCurrentDispatchMessageNestedScopes(t *testing.T) {
+	first, second := &Msg{Name: "first"}, &Msg{Name: "second"}
+	func() {
+		release := pushCurrentNestDispatchMsg(first)
+		defer release()
+		func() {
+			same := pushCurrentNestDispatchMsg(first)
+			defer same()
+			func() {
+				defer func() {
+					if recover() != "nested" {
+						t.Error("missing nested panic")
+					}
+				}()
+				other := pushCurrentNestDispatchMsg(second)
+				defer other()
+				if currentNestDispatchMsg() != second {
+					t.Error("nested identity")
+				}
+				panic("nested")
+			}()
+			if currentNestDispatchMsg() != first {
+				t.Error("outer identity not restored")
+			}
+		}()
+		if currentNestDispatchMsg() != first {
+			t.Error("same-message scope removed outer identity")
+		}
+	}()
+	if currentNestDispatchMsg() != nil {
+		t.Fatal("message identity leaked")
 	}
 }
