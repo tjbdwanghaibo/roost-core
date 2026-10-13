@@ -23,7 +23,7 @@ type Client struct {
 	txnTimeout        time.Duration
 	requireReplicaSet bool
 
-	// closeSerial 串行化 Close：并发的后到者等第一次断开做完，再按 closed 判断（RR-20261006-10）。
+	// closeSerial 串行化 Close：并发的后到者等第一次断开做完，再按 closed 判断。
 	closeSerial operation.Serial
 	closed      bool
 	// disconnect 为 nil 时用 cli.Disconnect；只有测试替换它，用来控制断开的耗时与结果。
@@ -110,12 +110,12 @@ func (c *Client) Ping(ctx context.Context) error {
 
 // Close 断开客户端，幂等：断开成功之后再调用返回 nil；Close 之后的命令返回 mongo.ErrClientDisconnected。
 // mongo-driver 的 Disconnect 对已经断开的客户端返回 ErrClientDisconnected，这时连接已经释放，按已关闭
-// 返回 nil（RR-20261005-NC-260）。Disconnect 断开各 server 时的 ctx 错误由驱动自己忽略，其余错误
+// 返回 nil。Disconnect 断开各 server 时的 ctx 错误由驱动自己忽略，其余错误
 // （FLE 客户端断开失败，拓扑没断开）照常返回，下一次 Close 重做断开。
 //
 // 并发调用串行执行：后到者在自己的 ctx 内等第一次断开做完，ctx 先结束返回 ctx 错误（客户端状态不变，
-// 可以再调用）。旧实现不串行，后到者从驱动拿到 ErrClientDisconnected 立刻返回 nil，第一个调用者可能
-// 还在等在途连接归还、关连接池（RR-20261006-10）。
+// 可以再调用）。不串行时后到者会从驱动拿到 ErrClientDisconnected 立刻返回 nil，而第一个调用者可能
+// 还在等在途连接归还、关连接池。
 func (c *Client) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()

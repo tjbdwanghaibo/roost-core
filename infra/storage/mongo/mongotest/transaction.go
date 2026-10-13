@@ -9,7 +9,7 @@ import (
 )
 
 // ErrTransactionConflict 表示替身的集合快照在发布前已失效，可按既有 transient 规则重试。
-// RR-20261004-NC-29：按集合检测比真实 Mongo 的文档冲突更保守，不宣称服务端等价。
+// 按集合检测比真实 Mongo 的文档冲突更保守，不宣称服务端等价。
 var ErrTransactionConflict = errors.New("mongofake: collection changed during transaction")
 
 // lockFor 仅在本次集合操作持锁期间切换到事务私有数据；返回函数恢复共享状态。

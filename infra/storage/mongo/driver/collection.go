@@ -256,12 +256,12 @@ func (c *collection) EnsureIndexes(ctx context.Context, indexes []fmongo.IndexMo
 	return nil
 }
 
-// electionRetry 是启动期索引创建遇到副本集选举时的有界重试（O-M6-5，维护者第十二轮决定）。
+// electionRetry 是启动期索引创建遇到副本集选举时的有界重试（维护者决定）。
 //
 // EnsureIndexes 只在启动时调用（DataEngine、Remote owner、saga、效果收件箱建索引），createIndexes /
 // dropIndexes 不在驱动的可重试读写之列：主节点让位时在途的命令得到 InterruptedDueToReplStateChange，
-// 新主选出之前打到旧主的得到 NotWritablePrimary，进程直接启动失败（Mirror 第 6 步本机替代里 owner
-// 在 S5 之后撞上过一次）。普通读写由驱动的可重试读写吸收，这里只补 DDL。索引创建是幂等的，重做安全。
+// 新主选出之前打到旧主的得到 NotWritablePrimary，进程会直接启动失败（Remote owner 的本机演练中
+// 出现过）。普通读写由驱动的可重试读写吸收，这里只补 DDL。索引创建是幂等的，重做安全。
 //
 // 次数与间隔都有上限：attempts 次、每次之间 interval，用完返回最后一次的错误并写明是选举没有结束；
 // ctx 先到期则以 ctx 为准，同样点名。只认选举相关的服务端错误码，其他错误原样立即返回。
@@ -419,9 +419,9 @@ func stringifyID(id any) string {
 // holds, and the WriteException / server labels stay reachable through
 // errors.As (mongo.LabeledError, mongo.ServerError) — including the
 // TransientTransactionError label that mongo.Session.WithTransaction retries
-// on. Replacing it with the bare sentinel used to discard them
-// (RR-20260926-34). ErrNoDocuments carries no server state and maps to the bare
-// fmongo.ErrNotFound as before.
+// on; replacing it with the bare sentinel would discard them.
+// ErrNoDocuments carries no server state and maps to the bare
+// fmongo.ErrNotFound.
 func wrapError(err error) error {
 	if err == nil {
 		return nil

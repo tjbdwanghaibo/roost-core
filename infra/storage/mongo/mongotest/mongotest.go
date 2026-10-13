@@ -1,11 +1,11 @@
 // Package mongotest is a filter-evaluating in-memory MongoDB for tests.
 //
-// It is exported — rather than internal to the kit — because a test double
+// It is exported — rather than internal to one package — because a test double
 // that does not evaluate its filters is worse than none: it makes every
 // version CAS, lease predicate, unique-index conflict and tombstone guard
 // pass unconditionally, so the semantics those constructs exist to enforce go
-// untested. Business repositories and roost-service need the same double the
-// kit's own tests use, and hand-rolled copies reliably get it wrong (comparing
+// untested. Business repositories and services need the same double the
+// framework's own tests use, and hand-rolled copies reliably get it wrong (comparing
 // with fmt.Sprint, encoding documents with encoding/json instead of bson, or
 // returning nil from Pipeline so the production read path never executes).
 //
@@ -125,7 +125,7 @@ const TransientTransactionError = "TransientTransactionError"
 // statements with NoSuchTransaction (code 251) labelled
 // TransientTransactionError; code that "reads back after a duplicate key"
 // inside the transaction therefore never sees the document, and the driver
-// retries the callback until transaction_timeout (RR-20260926-34).
+// retries the callback until transaction_timeout.
 var ErrNoSuchTransaction = errors.New("mongofake: NoSuchTransaction: transaction has been aborted")
 
 // transientAttemptLimit bounds how often WithTransaction re-runs a callback
@@ -281,7 +281,7 @@ func (s *session) WithTransaction(ctx context.Context, fn func(context.Context) 
 		}
 		tx.finish()
 		if err != nil {
-			// RR-20261004-NC-29：abort 只丢弃私有状态，不撤回他人已提交写。
+			// abort 只丢弃私有状态，不撤回他人已提交写。
 			if !hasErrorLabel(err, TransientTransactionError) {
 				return err
 			}
@@ -611,7 +611,7 @@ func (c *Collection) StreamFind(ctx context.Context, filter any, consume func([]
 	return nil
 }
 
-// RR-20261004-NC-20：排序后先skip再limit，页外为空；比较完成后再缩窄int64。
+// 排序后先skip再limit，页外为空；比较完成后再缩窄int64。
 func paginateMatches(matched []string, option fmongo.FindOption) []string {
 	if option.Skip > 0 {
 		if option.Skip >= int64(len(matched)) {
@@ -742,7 +742,7 @@ func (c *Collection) FindOneAndUpdate(ctx context.Context, filter any, update an
 		}
 		return decodeInto(before, result)
 	}
-	// RR-20261004-NC-25：post-image 属于被更新的身份，不能用旧谓词另选文档。
+	// post-image 属于被更新的身份，不能用旧谓词另选文档。
 	doc, ok := c.docs[selectedKey]
 	if !ok {
 		return fmongo.ErrNotFound
@@ -815,7 +815,7 @@ func (c *Collection) CountDocuments(ctx context.Context, filter any) (int64, err
 	return int64(len(matched)), nil
 }
 
-// Aggregate is intentionally unsupported: no kit production path uses it, and
+// Aggregate is intentionally unsupported: no framework production path uses it, and
 // returning an empty result would be indistinguishable from a passing query.
 func (c *Collection) Aggregate(ctx context.Context, _ any, _ any) error {
 	tx := transactionFrom(ctx)
@@ -835,7 +835,7 @@ func (c *Collection) BulkWrite(ctx context.Context, models []fmongo.WriteModel) 
 	if err := c.enter(tx, "BulkWrite"); err != nil {
 		return nil, err
 	}
-	// RR-20261004-NC-28：正式 driver 在提交任何模型前先验证全部 Type。
+	// 正式 driver 在提交任何模型前先验证全部 Type。
 	for i, model := range models {
 		switch model.Type {
 		case fmongo.WriteModelInsertOne, fmongo.WriteModelUpdateOne, fmongo.WriteModelReplaceOne, fmongo.WriteModelDeleteOne:
@@ -903,7 +903,7 @@ func (c *Collection) EnsureIndexes(ctx context.Context, indexes []fmongo.IndexMo
 		if err != nil {
 			return err
 		}
-		// RR-20261004-NC-27：先验证存量文档，再发布本个索引；前面成功的索引保留。
+		// 先验证存量文档，再发布本个索引；前面成功的索引保留。
 		if index.Unique {
 			unique := uniqueIndex{fields: fields, sparse: index.Sparse}
 			for key, doc := range c.docs {
@@ -970,7 +970,7 @@ func (c *Collection) checkUniqueLocked(doc bson.M, selfKey string) error {
 // uniqueKey returns the index key a document is stored under, or ok=false
 // when the index holds no entry for it.
 //
-// RR-20261004-05: Mongo keys a missing field (including a dotted path that
+// Mongo keys a missing field (including a dotted path that
 // runs through a scalar or absent parent) as BSON null, equal to an explicit
 // null. A sparse index leaves a document out only when every indexed field is
 // missing; one present field — even an explicit null — indexes the document
@@ -998,7 +998,7 @@ func uniqueKey(doc bson.M, index uniqueIndex) (values []any, ok bool, err error)
 
 // uniqueFieldValue reads one indexed path, refusing arrays.
 //
-// RR-20261005-NC-102: real Mongo builds a multikey entry per array element —
+// real Mongo builds a multikey entry per array element —
 // {tags:[1,2]} collides with {tags:[2,3]} and with {tags:2}, and a path
 // through an array of documents ("m.n" over m:[{n:1}]) indexes each element's
 // n. The fake used to compare the whole array as one value and treat a path
@@ -1136,7 +1136,7 @@ func (c *Collection) idCandidatesLocked(filter bson.M) ([]string, bool) {
 			if err != nil {
 				return nil, false
 			}
-			// RR-20261004-NC-23：按规范化物理键去重，保留首次出现顺序。
+			// 按规范化物理键去重，保留首次出现顺序。
 			if !seen[key] {
 				seen[key] = true
 				keys = append(keys, key)
@@ -1331,7 +1331,7 @@ func cloneDoc(doc bson.M) bson.M {
 	return out
 }
 
-// RR-20261004-NC-22：复制 BSON 容器并保持 M/D 形状，避免快照和读结果共享数据。
+// 复制 BSON 容器并保持 M/D 形状，避免快照和读结果共享数据。
 // 存储值经真实 BSON codec 归一；其他 BSON 标量是值类型，无可变子对象。
 func cloneBSONValue(value any) any {
 	switch v := value.(type) {
@@ -1657,8 +1657,8 @@ func operatorSpec(spec any) (bson.M, bool) {
 }
 
 // valueList 展开 $in 的操作数。真实驱动把任意切片 / 数组编码成 BSON 数组、元素按底层类型编码，所以具名切片
-// （如 saga 的 []Status）也是合法操作数；之前这里只认 bson.A / []any / []string，其余报 ErrUnsupported，
-// MongoStore.ClaimDue 在替身上不可用（RR-20261006-08，O-S5-6）。[]byte 是二进制标量、不是数组，仍然拒绝。
+// （如 saga 的 []Status）也是合法操作数，否则 MongoStore.ClaimDue 在替身上不可用。[]byte 是二进制标量、
+// 不是数组，仍然拒绝。
 func valueList(operand any) ([]any, error) {
 	switch value := operand.(type) {
 	case bson.A:
@@ -1757,7 +1757,7 @@ func unsetPath(doc bson.M, path string) {
 	delete(current, parts[len(parts)-1])
 }
 
-// RR-20261004-NC-26：BSON 解码产生 D；修改所经容器时保留同级字段。
+// BSON 解码产生 D；修改所经容器时保留同级字段。
 // 数组下标及位置运算符不在替身的已支持路径语法中。
 func pathMap(value any) (bson.M, bool) {
 	switch value := value.(type) {
@@ -1978,7 +1978,7 @@ func compareValues(left any, right any) (int, error) {
 	return 0, fmt.Errorf("%w: compare %T with %T", ErrUnsupported, left, right)
 }
 
-// RR-20261004-NC-24：整数和有限浮点按精确值比较，不先舍入到 float64。
+// 整数和有限浮点按精确值比较，不先舍入到 float64。
 // 非有限浮点显式拒绝，避免 NaN 在排序中冒充相等。
 func compareNumbers(left, right any) (int, error) {
 	a, err := exactNumber(left)

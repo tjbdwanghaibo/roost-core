@@ -10,7 +10,7 @@ type Config struct {
 	MinPoolSize    uint64        // default: 10
 	MaxIdleTime    time.Duration // default: 5m
 	// TransactionTimeout bounds one WithTransaction call end to end: callback
-	// retries and the commit (RR-20261005-NC-101). An error returned once the
+	// retries and the commit. An error returned once the
 	// commit was sent may mean it committed; treat it as an unknown result.
 	// <= 0 selects the driver's 120s window.
 	TransactionTimeout time.Duration

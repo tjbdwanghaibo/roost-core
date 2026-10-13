@@ -36,7 +36,7 @@ type session struct {
 }
 
 // WithTransaction 按驱动便捷 API 的重试规则执行事务，但整个过程——包括提交——都受
-// TransactionTimeout 约束（RR-20261005-NC-101）。
+// TransactionTimeout 约束。
 //
 // 驱动的 mongo.Session.WithTransaction 用 background ctx 调 CommitTransaction，提交重试只看
 // 它自己的 120s 计时器、且只在两次尝试之间检查：网络在回调之后黑洞时，调用方的截止时间
@@ -106,8 +106,8 @@ func (s *session) WithTransaction(ctx context.Context, fn func(ctx context.Conte
 		}
 		if err != nil {
 			// 提交命令已经发出：服务端可能已经提交。包上专用哨兵，调用方不必再靠标签或
-			// DeadlineExceeded 猜（标签可能被驱动的内部重试覆盖，DeadlineExceeded 也匹配提交前到期，
-			// RR-20261005-NC-101 复审观察）；原错误链保留。
+			// DeadlineExceeded 猜（标签可能被驱动的内部重试覆盖，DeadlineExceeded 也匹配提交前到期）；
+			// 原错误链保留。
 			return fmt.Errorf("%w: %w", fmongo.ErrCommitResultUnknown, err)
 		}
 		return nil
@@ -153,7 +153,7 @@ func hasErrorLabel(err error, label string) bool {
 // EndSession 结束会话。事务仍在进行时驱动会在这里先 abort——典型是提交因截止失败之后
 // （见 WithTransaction）。调用方传入的通常是自己的长期 ctx（投影器、committer、saga、
 // effect inbox 都是 defer EndSession(ctx)，没有截止），网络黑洞时这次 abort 会一直阻塞到网络
-// 恢复，让 transaction_timeout 对调用方失效（RR-20261005-NC-101 复审）。所以与回调失败后的
+// 恢复，让 transaction_timeout 对调用方失效。所以与回调失败后的
 // abort 相同：不受调用方取消影响，但有 transactionAbortTimeout 上限。没有进行中的事务时不发命令。
 // 上限内没送达的 abort 留下的服务端事务由服务端在 transactionLifetimeLimitSeconds（缺省 60s）后
 // 中止；在此之前写同一文档的事务得到 WriteConflict，按 TransientTransactionError 重跑。
