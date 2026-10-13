@@ -9,6 +9,7 @@ type MetricSink interface {
 	Gauge(name string, value float64, labels map[string]string)
 }
 
+// HealthOptions 是健康判定的阈值；为 0 的项不检查。
 type HealthOptions struct {
 	MaxPending            int
 	MaxPendingBytes       int64
@@ -16,6 +17,8 @@ type HealthOptions struct {
 	MaxPublishFailures    uint64
 	MaxVisibilityFailures uint64
 }
+
+// HealthStatus 是健康判定结果、第一个超限项的原因与当时的计数。
 type HealthStatus struct {
 	Healthy     bool
 	Reason      string
@@ -23,6 +26,7 @@ type HealthStatus struct {
 	Outbox      OutboxMetrics
 }
 
+// Health 按阈值判定 Coordinator 与 outbox 是否健康。
 func (coordinator *Coordinator) Health(options HealthOptions) HealthStatus {
 	status := HealthStatus{Healthy: true, Coordinator: coordinator.Metrics(), Outbox: coordinator.outbox.Metrics()}
 	if options.MaxPending > 0 && status.Outbox.Pending > options.MaxPending {
@@ -39,6 +43,7 @@ func (coordinator *Coordinator) Health(options HealthOptions) HealthStatus {
 	return status
 }
 
+// ExportMetrics 把计数写成 sink 的 gauge；sink 为 nil 时什么都不做。
 func (coordinator *Coordinator) ExportMetrics(sink MetricSink, labels map[string]string) {
 	if sink == nil {
 		return

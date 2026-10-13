@@ -22,39 +22,47 @@ var (
 	ErrTransactionRequired = errors.New("skillsync: prepare returned a nil transaction")
 )
 
-// ApplyTransaction separates validation/preparation from the externally
-// visible mutation. Commit must be atomic; Rollback must be idempotent.
+// ApplyTransaction 把校验 / 准备与外部可见的修改分开。Commit 必须原子；Rollback 必须幂等。
 type ApplyTransaction interface {
 	Commit() error
 	Rollback()
 }
 
+// ManifestConsumer 接收表现清单（manifest）记录。下面的 Transactional* 变体把准备与提交分开（ApplyTransaction）。
 type ManifestConsumer interface {
 	ApplyManifest(int64, skill.PresentationPlan) error
 }
 
+// TransactionalManifestConsumer 是 ManifestConsumer 的两阶段版本。
 type TransactionalManifestConsumer interface {
 	PrepareManifest(int64, skill.PresentationPlan) (ApplyTransaction, error)
 }
+
+// StateConsumer 接收全量状态快照与状态增量。
 type StateConsumer interface {
 	ApplyStateSnapshot(int64, skill.RuntimeStateSnapshot) error
 	ApplyStateDelta(int64, skill.StateMutation) error
 }
 
+// TransactionalStateConsumer 是 StateConsumer 的两阶段版本。
 type TransactionalStateConsumer interface {
 	PrepareStateSnapshot(int64, skill.RuntimeStateSnapshot) (ApplyTransaction, error)
 	PrepareStateDelta(int64, skill.StateMutation) (ApplyTransaction, error)
 }
+
+// PresentationConsumer 接收表现重置与表现事件。
 type PresentationConsumer interface {
 	ResetPresentation(int64, PresentationReset) error
 	ApplyPresentation(int64, skill.PresentationEvent) error
 }
 
+// TransactionalPresentationConsumer 是 PresentationConsumer 的两阶段版本。
 type TransactionalPresentationConsumer interface {
 	PreparePresentationReset(int64, PresentationReset) (ApplyTransaction, error)
 	PreparePresentation(int64, skill.PresentationEvent) (ApplyTransaction, error)
 }
 
+// ApplierOptions 是客户端 Applier 的身份、schema 版本范围、迁移器与各类消费方。
 type ApplierOptions struct {
 	Observer        syncstream.Observer
 	SchemaVersion   uint32
@@ -65,6 +73,7 @@ type ApplierOptions struct {
 	Presentation    PresentationConsumer
 }
 
+// ApplyResult 是一次 Apply 的结果：是否应用、是否重复包，以及流当前的序号与 epoch。
 type ApplyResult struct {
 	Applied   bool
 	Duplicate bool
@@ -76,9 +85,7 @@ type streamCursor struct {
 	sequence uint64
 }
 
-// Applier uses optimistic per-stream admission. No mutex is held while invoking
-// consumer callbacks; reentrant/concurrent application returns
-// ErrApplyInProgress and can be retried.
+// Applier 按流做乐观准入。调用消费方回调时不持有任何互斥锁；重入或并发应用返回 ErrApplyInProgress，可以重试。
 type Applier struct {
 	mutex                sync.Mutex
 	observer             syncstream.Observer
@@ -97,6 +104,8 @@ type Applier struct {
 	manifests            map[string]skill.PresentationPlan
 }
 
+// NewApplier 构造 Applier。SchemaVersion 为 0 时返回 ErrSchemaVersionRequired；SupportedSchema 缺省时只支持
+// SchemaVersion 本身，且必须包含 SchemaVersion，否则返回 ErrSchemaMismatch。
 func NewApplier(options ApplierOptions) (*Applier, error) {
 	if options.SchemaVersion == 0 {
 		return nil, ErrSchemaVersionRequired
@@ -110,6 +119,8 @@ func NewApplier(options ApplierOptions) (*Applier, error) {
 	return &Applier{observer: options.Observer, schemaVersion: options.SchemaVersion, supported: options.SupportedSchema, migrator: options.Migrator, manifestConsumer: options.Manifest, stateConsumer: options.State, presentationConsumer: options.Presentation, sequences: make(map[syncstream.Stream]streamCursor), inflight: make(map[syncstream.Stream]struct{}), stateMutations: make(map[int64]uint64), presentationEvents: make(map[int64]uint64), manifests: make(map[string]skill.PresentationPlan)}, nil
 }
 
+// Apply 准入并应用一个包：按流核对 epoch 与序号连续性，重复包直接返回 Duplicate；两阶段消费方的事务在这里提交，
+// 提交失败时回滚。
 func (applier *Applier) Apply(packet syncstream.Packet) (ApplyResult, error) {
 	packet, result, err := applier.admit(packet)
 	if err != nil || result.Duplicate {
@@ -180,9 +191,9 @@ func (applier *Applier) admit(packet syncstream.Packet) (syncstream.Packet, Appl
 	if _, busy := applier.inflight[packet.Stream]; busy {
 		return packet, ApplyResult{}, ErrApplyInProgress
 	}
-	// 开新 epoch 只在这里判定，pendingEpoch 等全部准入检查通过、真正占用 inflight 时才置位：被拒绝的包
-	// 不能改变 Applier 状态。之前先置 pendingEpoch 再查 BaseSequence，拒绝后没人复位，之后每个包都得到
-	// ErrApplyInProgress，Applier 永久卡死（NC-116）。
+	// 开新 epoch 只在这里判定，pendingEpoch 等全部准入检查通过、真正占用 inflight 时才置位：被拒绝的包不能改变
+	// Applier 状态（先置 pendingEpoch 再做检查的话，拒绝后没人复位，之后每个包都得到 ErrApplyInProgress，Applier
+	// 永久卡死）。
 	switchesEpoch := false
 	if applier.epoch != 0 && packet.Epoch != applier.epoch {
 		if !packet.Full {
@@ -209,9 +220,7 @@ func (applier *Applier) admit(packet syncstream.Packet) (syncstream.Packet, Appl
 		if packet.BaseSequence != 0 {
 			return packet, ApplyResult{}, ErrPacketShape
 		}
-		// A chain start is identified by BaseSequence 0, not by the absolute
-		// sequence: since U-0215 a stream's first sequence is above every
-		// sequence its epoch has handed out, so it is not necessarily 1.
+		// 链的起点由 BaseSequence 0 标识，而不是绝对序号：流的第一个序号高于它所在 epoch 已经发出的每个序号，不一定是 1。
 	} else if (current.epoch != 0 && (packet.BaseSequence != current.sequence || packet.Sequence != current.sequence+1)) || (current.epoch == 0 && packet.BaseSequence != 0) {
 		return packet, ApplyResult{}, fmt.Errorf("%w: current=%d base=%d sequence=%d", ErrSequenceGap, current.sequence, packet.BaseSequence, packet.Sequence)
 	}
@@ -409,11 +418,14 @@ func decodeStrict(data []byte, target any) error {
 	return nil
 }
 
+// Sequence 返回流已应用到的序号。
 func (applier *Applier) Sequence(stream syncstream.Stream) uint64 {
 	applier.mutex.Lock()
 	defer applier.mutex.Unlock()
 	return applier.sequences[stream].sequence
 }
+
+// Epoch 返回当前 epoch。
 func (applier *Applier) Epoch() uint64 {
 	applier.mutex.Lock()
 	defer applier.mutex.Unlock()

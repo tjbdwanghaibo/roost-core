@@ -33,6 +33,5 @@ func replaceFile(source, target string) error {
 	return syscall.EINVAL
 }
 
-// MoveFileEx with WRITE_THROUGH provides the durability barrier available for
-// Windows file replacement; directory handles cannot be fsynced through os.
+// 带 WRITE_THROUGH 的 MoveFileEx 是 Windows 文件替换能提供的持久化屏障；os 无法对目录句柄 fsync。
 func syncDirectory(string) error { return nil }

@@ -8,10 +8,13 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 )
 
+// ErrVisibilityEvaluatorRequired 表示需要判断实体可见性，但 EntityVisibilityPolicy.Visible 为空。
 var ErrVisibilityEvaluatorRequired = errors.New("skillsync: entity visibility evaluator is required")
 
+// EntityVisibilityEvaluator 判断 observer 能否看见实体。
 type EntityVisibilityEvaluator func(syncstream.Observer, skill.EntityID) (bool, error)
 
+// VisibilityField 是可按 observer 单独控制可见性的字段类别。
 type VisibilityField string
 
 const (
@@ -29,8 +32,11 @@ const (
 	VisibilityPresentationSpatial VisibilityField = "presentation_spatial"
 )
 
+// FieldVisibilityEvaluator 判断 observer 能否看见某类字段（handle 细分到具体条目，空串表示整类）。
 type FieldVisibilityEvaluator func(syncstream.Observer, VisibilityField, string) (bool, error)
 
+// EntityVisibilityPolicy 是按实体可见性与字段可见性过滤的 VisibilityPolicy。没有 FieldVisible 时按
+// DefaultDenyFields 决定字段默认可见与否；RedactSpatial / RedactOpaque 控制是否去掉空间与不透明引用。
 type EntityVisibilityPolicy struct {
 	Visible           EntityVisibilityEvaluator
 	FieldVisible      FieldVisibilityEvaluator
@@ -57,8 +63,7 @@ func (policy EntityVisibilityPolicy) fieldVisible(observer syncstream.Observer, 
 }
 
 func (policy EntityVisibilityPolicy) FilterStateSnapshot(observer syncstream.Observer, snapshot skill.RuntimeStateSnapshot) (skill.RuntimeStateSnapshot, error) {
-	// Build an explicit projection. Newly added snapshot fields remain hidden
-	// until this policy deliberately handles them.
+	// 构造显式投影。快照新增的字段在这个策略有意处理它们之前保持隐藏。
 	result := skill.RuntimeStateSnapshot{LatestStateEventSequence: snapshot.LatestStateEventSequence, LatestStateMutationSequence: snapshot.LatestStateMutationSequence, LatestPresentationSequence: snapshot.LatestPresentationSequence}
 	clock, err := policy.fieldVisible(observer, VisibilityClock, "")
 	if err != nil {
@@ -119,8 +124,8 @@ func (policy EntityVisibilityPolicy) FilterStateSnapshot(observer syncstream.Obs
 			}
 		}
 	}
-	// ability 与增量一样按具体 handle 问 FieldVisible（mutationVisibilityField），快照与增量才得到同一可见集合。
-	// 之前快照只问一次空 handle，按 handle 隐藏的 ability 经快照完整下发（NC-115）。
+	// ability 与增量一样按具体 handle 问 FieldVisible（mutationVisibilityField），快照与增量才得到同一可见集合；
+	// 只问一次空 handle 的话，按 handle 隐藏的 ability 会经快照完整下发。
 	for _, value := range snapshot.Abilities {
 		fieldAllowed, err := policy.fieldVisible(observer, VisibilityAbilities, abilityHandleReference(value.Handle))
 		if err != nil {
@@ -253,8 +258,8 @@ func (policy EntityVisibilityPolicy) FilterStateMutation(observer syncstream.Obs
 	if entity == 0 && mutation.Persistent != nil {
 		entity = mutation.Persistent.Binding.Owner
 	}
-	// persistent remove 不带 Persistent，按 mutation 自身的 Binding 判断，与 upsert / 快照一样要求
-	// owner 与 subject 都可见。之前 remove 推不出实体、按“无主”放行，连同不可见实体的 Binding 下发（NC-115）。
+	// persistent remove 不带 Persistent，按 mutation 自身的 Binding 判断，与 upsert / 快照一样要求 owner 与 subject
+	// 都可见；不能因为推不出实体就按“无主”放行，那样会连同不可见实体的 Binding 下发。
 	if mutation.Kind == skill.StateMutationPersistentRemove && mutation.Persistent == nil {
 		if entity == 0 {
 			entity = mutation.Binding.Owner

@@ -26,14 +26,17 @@ var (
 	ErrManifestConflict    = errors.New("skillsync: key already has a different manifest")
 )
 
+// PacketPublisher 把包交给传输层。
 type PacketPublisher interface{ Publish(syncstream.Packet) error }
 
+// VisibilityPolicy 按 observer 过滤状态快照、状态增量与表现事件；第二个返回值为 false 表示整条不下发。
 type VisibilityPolicy interface {
 	FilterStateSnapshot(syncstream.Observer, skill.RuntimeStateSnapshot) (skill.RuntimeStateSnapshot, error)
 	FilterStateMutation(syncstream.Observer, skill.StateMutation) (skill.StateMutation, bool, error)
 	FilterPresentation(syncstream.Observer, skill.PresentationEvent) (skill.PresentationEvent, bool, error)
 }
 
+// AllowAllVisibility 是不做任何过滤的 VisibilityPolicy。
 type AllowAllVisibility struct{}
 
 func (AllowAllVisibility) FilterStateSnapshot(_ syncstream.Observer, snapshot skill.RuntimeStateSnapshot) (skill.RuntimeStateSnapshot, error) {
@@ -46,6 +49,7 @@ func (AllowAllVisibility) FilterPresentation(_ syncstream.Observer, event skill.
 	return event, true, nil
 }
 
+// CoordinatorOptions 是 Coordinator 的依赖与上限；Runtime、History、Publisher、Projector 与 Visibility 必填。
 type CoordinatorOptions struct {
 	Runtime              *skill.Runtime
 	History              *syncstream.History
@@ -74,6 +78,7 @@ type viewLockEntry struct {
 	refs  int
 }
 
+// CoordinatorMetrics 是 Coordinator 的累计计数。
 type CoordinatorMetrics struct {
 	Published          uint64
 	PublishFailures    uint64
@@ -88,8 +93,7 @@ type coordinatorCounters struct {
 	snapshotRecoveries atomic.Uint64
 }
 
-// Coordinator serializes preparation per observer/key but never holds its
-// global mutex while invoking VisibilityPolicy, PacketPublisher, or Runtime.
+// Coordinator 按 observer / 键串行化准备工作，但调用 VisibilityPolicy、PacketPublisher 或 Runtime 时从不持有全局锁。
 type Coordinator struct {
 	mutex sync.RWMutex
 	// journalMutex 串行 History/outbox 的交接和修复；不覆盖网络发送。
@@ -114,6 +118,7 @@ type Coordinator struct {
 	counters          coordinatorCounters
 }
 
+// NewCoordinator 校验依赖、补齐上限默认值并构造 Coordinator（构造时对账一次 history 与 outbox）。
 func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
 	if options.Runtime == nil {
 		return nil, ErrRuntimeRequired
@@ -186,6 +191,8 @@ func (coordinator *Coordinator) acquireView(key observerKey) (func(), error) {
 	return release, nil
 }
 
+// OpenObserver 登记一个 observer；已登记时是空操作。observer 正在关闭时返回 ErrApplyInProgress，超过
+// MaxObservers 时返回 ErrCoordinatorCapacity。
 func (coordinator *Coordinator) OpenObserver(observer syncstream.Observer) error {
 	coordinator.mutex.Lock()
 	defer coordinator.mutex.Unlock()
@@ -264,6 +271,7 @@ func (coordinator *Coordinator) setCursor(key observerKey, cursor sourceCursor) 
 	coordinator.mutex.Unlock()
 }
 
+// PublishManifest 把 key 对应的表现清单追加到 observer 的流并立即尝试发布。
 func (coordinator *Coordinator) PublishManifest(observer syncstream.Observer, key int64) error {
 	view := observerKey{observer, key}
 	release, err := coordinator.acquireView(view)
@@ -286,6 +294,7 @@ func (coordinator *Coordinator) PublishManifest(observer syncstream.Observer, ke
 	return coordinator.publishDue(observer, syncstream.Stream{Topic: TopicManifest, Key: key})
 }
 
+// PublishSnapshot 按可见性过滤后的全量状态快照开始 observer 的状态流，并重置该视图的增量游标。
 func (coordinator *Coordinator) PublishSnapshot(observer syncstream.Observer, key int64) error {
 	view := observerKey{observer, key}
 	release, err := coordinator.acquireView(view)
@@ -316,6 +325,7 @@ func (coordinator *Coordinator) PublishSnapshot(observer syncstream.Observer, ke
 	return coordinator.publishDue(observer, syncstream.Stream{Topic: TopicState, Key: key})
 }
 
+// Flush 把 Runtime 新产生的状态增量与表现事件经可见性过滤后追加到 observer 的流，再发布到期的包。
 func (coordinator *Coordinator) Flush(observer syncstream.Observer, key int64) error {
 	view := observerKey{observer, key}
 	release, err := coordinator.acquireView(view)
@@ -518,23 +528,20 @@ func (coordinator *Coordinator) Acknowledge(observer syncstream.Observer, stream
 	defer release()
 	coordinator.journalMutex.Lock()
 	defer coordinator.journalMutex.Unlock()
-	// Validate before deleting the derived copy. latest can only advance while
-	// this view is held, so a valid sequence cannot become invalid here.
+	// 删除派生副本之前先校验。持有这个视图期间 latest 只会前进，有效的序号在这里不会变得无效。
 	if epoch != coordinator.history.Epoch() {
 		return syncstream.ErrAckEpochMismatch
 	}
 	if sequence > coordinator.history.Status(observer, stream).LatestSequence {
 		return syncstream.ErrAckAhead
 	}
-	// Delete the derived outbox copy first. If History ACK then fails, startup
-	// reconciliation can recreate it. The opposite order can permanently orphan
-	// a stale outbox record after a crash or store failure.
+	// 先删 outbox 里的派生副本。之后 History ACK 失败时，启动时的对账能重建它；反过来的顺序在崩溃或存储失败后会永久
+	// 留下一条过期的 outbox 记录。
 	if err := coordinator.outbox.Acknowledge(observer, stream, epoch, sequence); err != nil {
 		return errors.Join(err, coordinator.reconcileOutboxLocked())
 	}
 	if err := coordinator.history.AcknowledgeEpoch(observer, stream, epoch, sequence); err != nil {
-		// Repair immediately as well as retaining History as the crash-recovery
-		// source. Joining both failures preserves the primary WAL error.
+		// 立即修复，同时保留 History 作为崩溃恢复的来源。合并两个错误时保留主要的 WAL 错误。
 		return errors.Join(err, coordinator.reconcileOutboxLocked())
 	}
 	return nil
@@ -546,6 +553,7 @@ func (provider snapshotProviderFunc) Snapshot(request syncstream.ResyncRequest) 
 	return provider(request)
 }
 
+// Recover 处理客户端的重同步请求：先修复 outbox，再由 History 决定补发增量还是重发全量快照。
 func (coordinator *Coordinator) Recover(request syncstream.ResyncRequest) (syncstream.ResyncResult, error) {
 	view := observerKey{request.Observer, request.Stream.Key}
 	release, err := coordinator.acquireView(view)
@@ -586,11 +594,6 @@ func (coordinator *Coordinator) Recover(request syncstream.ResyncRequest) (syncs
 	return result, err
 }
 
-func (coordinator *Coordinator) snapshotPacket(request syncstream.ResyncRequest) (syncstream.Packet, error) {
-	cursor := sourceCursor{}
-	return coordinator.snapshotPacketWithCursor(request, &cursor)
-}
-
 func (coordinator *Coordinator) snapshotPacketWithCursor(request syncstream.ResyncRequest, cursor *sourceCursor) (syncstream.Packet, error) {
 	switch request.Stream.Topic {
 	case TopicManifest:
@@ -623,8 +626,8 @@ func (coordinator *Coordinator) snapshotPacketWithCursor(request syncstream.Resy
 
 // presentationReset 是 presentation reset 的唯一构造点：每条持续表现按它对应的增量事件交给 observer 的
 // VisibilityPolicy.FilterPresentation，不可见的整条去掉，可见的取回过滤后的 Anchor（目标清零、空间字段按策略清除）。
-// 游标过期的 Flush 与 Recover 都走这里。之前两处直接投影 Runtime.PresentationSnapshot()，不可见施法者的持续
-// 表现、目标与坐标发给所有 observer（NC-114）。复用 FilterPresentation 而不在接口上加方法，自定义策略无需改动。
+// 游标过期的 Flush 与 Recover 都走这里，不直接投影 Runtime.PresentationSnapshot()（那样不可见施法者的持续表现、目标与
+// 坐标会发给所有 observer）。复用 FilterPresentation 而不在接口上加方法，自定义策略无需改动。
 func (coordinator *Coordinator) presentationReset(observer syncstream.Observer) (skill.PresentationRecoverySnapshot, error) {
 	snapshot := coordinator.runtime.PresentationSnapshot()
 	// reset 的包头同样受时钟策略约束，不能只过滤每条持续表现的实体与坐标。
@@ -655,7 +658,7 @@ func (coordinator *Coordinator) presentationReset(observer syncstream.Observer) 
 // activePresentationEvent 把一条持续表现还原成 Runtime 会为它发出的增量事件形状（presentation.go 的
 // appendPresentation：Source 是施法者 / owner，Anchor.Target 是目标 / lifecycle 实体，PrimaryTarget 取条目的
 // PrimaryTarget——仍归施法的衍生物是施法目标而不是 lifecycle 实体），让 reset 与增量经过同一条过滤规则。
-// 之前 PrimaryTarget 用 Anchor.Target 代替，按 PrimaryTarget 判定的策略放行了增量里被挡住的衍生物表现（RR-20261006-22）。
+// PrimaryTarget 不能用 Anchor.Target 代替，否则按 PrimaryTarget 判定的策略会放行增量里被挡住的衍生物表现。
 func activePresentationEvent(snapshot skill.PresentationRecoverySnapshot, entry skill.ActivePresentation) skill.PresentationEvent {
 	event := skill.PresentationEvent{
 		Sequence: snapshot.LatestPresentationSequence, Tick: snapshot.Tick, WorldRevision: snapshot.WorldRevision,
@@ -699,6 +702,8 @@ func (coordinator *Coordinator) publishObserver(observer syncstream.Observer) er
 	err := coordinator.outbox.PublishDue(coordinator.publisher, time.Now(), &observer, nil)
 	return err
 }
+
+// RetryPending 修复 outbox 后发布所有到期的待发包，供调用方定期调用。
 func (coordinator *Coordinator) RetryPending(now time.Time) error {
 	if err := coordinator.repairOutbox(); err != nil {
 		return err
@@ -707,9 +712,8 @@ func (coordinator *Coordinator) RetryPending(now time.Time) error {
 	return err
 }
 
-// ReconcilePending explicitly repairs the history/outbox crash window. Normal
-// retries avoid an O(history) rescan: construction reconciles once and each
-// live append persists directly to the outbox.
+// ReconcilePending 显式修复 history / outbox 之间的崩溃窗口。正常重试不做 O(history) 的重扫：构造时对账一次，
+// 之后每次实时追加都直接持久化到 outbox。
 func (coordinator *Coordinator) ReconcilePending() error {
 	if coordinator == nil || coordinator.outbox == nil || coordinator.history == nil {
 		return ErrCoordinatorInvalid
@@ -719,6 +723,8 @@ func (coordinator *Coordinator) ReconcilePending() error {
 	return coordinator.reconcileOutboxLocked()
 }
 
+// CloseObserver 关闭 observer：先删掉它在 outbox 里的待发包，再删 History 里的流。成功返回才算关闭完成；
+// 有在途发布时返回可重试的 ErrApplyInProgress。
 func (coordinator *Coordinator) CloseObserver(observer syncstream.Observer) error {
 	coordinator.mutex.Lock()
 	if _, closing := coordinator.closingObservers[observer]; closing {
@@ -741,7 +747,7 @@ func (coordinator *Coordinator) CloseObserver(observer syncstream.Observer) erro
 	views := make([]lockedView, 0)
 	for key, entry := range coordinator.viewLocks {
 		if key.observer == observer {
-			entry.refs++ // close operation owns a reference
+			entry.refs++ // 关闭操作持有一个引用
 			views = append(views, lockedView{key, entry})
 		}
 	}
@@ -769,8 +775,7 @@ func (coordinator *Coordinator) CloseObserver(observer syncstream.Observer) erro
 	if err := coordinator.outbox.DiscardObserver(observer); err != nil {
 		return errors.Join(err, coordinator.reconcileOutboxLocked())
 	}
-	// History remains the repair source until every outbox record is durably
-	// removed. A crash after this point is safe: retained History can reconcile.
+	// 在每条 outbox 记录都已持久删除之前，History 一直是修复来源。此后崩溃是安全的：保留的 History 可以对账。
 	if _, err := coordinator.history.DeleteObserver(observer); err != nil {
 		return err
 	}
@@ -785,6 +790,7 @@ func (coordinator *Coordinator) CloseObserver(observer syncstream.Observer) erro
 	return nil
 }
 
+// Metrics 返回累计计数的快照。
 func (coordinator *Coordinator) Metrics() CoordinatorMetrics {
 	// 发布计数由 outbox 唯一记账，不能累加可能重叠的前后快照差。
 	outbox := coordinator.outbox.Metrics()

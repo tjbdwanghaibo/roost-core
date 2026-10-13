@@ -19,12 +19,14 @@ var (
 	ErrOutboxStoreLimit          = errors.New("skillsync: outbox store exceeds configured limits")
 )
 
+// OutboxStore 是 outbox 的持久化存储。
 type OutboxStore interface {
 	Load() ([]syncstream.Packet, error)
 	Put(syncstream.Packet) error
 	Delete(syncstream.Observer, syncstream.Stream, uint64, uint64) error
 }
 
+// OutboxDelete 是按范围 ACK 时的一条删除。
 type OutboxDelete struct {
 	Observer syncstream.Observer
 	Stream   syncstream.Stream
@@ -32,12 +34,12 @@ type OutboxDelete struct {
 	Sequence uint64
 }
 
-// BatchOutboxStore can make range ACK deletion atomic. Implementations must
-// either delete every key or none of them.
+// BatchOutboxStore 能让按范围 ACK 的删除原子化。实现必须要么删掉全部键，要么一个都不删。
 type BatchOutboxStore interface {
 	DeleteBatch([]OutboxDelete) error
 }
 
+// OutboxRecord 是一个待发包及其创建时间与重试状态。
 type OutboxRecord struct {
 	Packet      syncstream.Packet `json:"packet"`
 	CreatedAt   time.Time         `json:"created_at"`
@@ -45,16 +47,14 @@ type OutboxRecord struct {
 	NextAttempt time.Time         `json:"next_attempt,omitempty"`
 }
 
-// RecordOutboxStore persists retry metadata and packet age across restarts.
-// PutRecord is an atomic upsert for the packet identity.
+// RecordOutboxStore 跨重启持久化重试元数据与包的年龄。PutRecord 是按包身份的原子 upsert。
 type RecordOutboxStore interface {
 	LoadRecords() ([]OutboxRecord, error)
 	PutRecord(OutboxRecord) error
 }
 
-// BatchRecordOutboxStore persists a group atomically. Stores backed by a
-// transactional database should implement it; other stores must make each
-// PutRecord upsert crash-safe and idempotent.
+// BatchRecordOutboxStore 原子地持久化一组记录。由事务型数据库支撑的 store 应当实现它；其他 store 必须让每次
+// PutRecord 的 upsert 在崩溃时安全且幂等。
 type BatchRecordOutboxStore interface {
 	PutRecords([]OutboxRecord) error
 }
@@ -83,6 +83,7 @@ type pendingStreamID struct {
 	epoch    uint64
 }
 
+// OutboxOptions 是 Outbox 的存储、重试间隔与各项待发上限。
 type OutboxOptions struct {
 	Store               OutboxStore
 	RequireDurable      bool
@@ -96,6 +97,7 @@ type OutboxOptions struct {
 	MaxPublishBatch     int
 }
 
+// OutboxMetrics 是 outbox 的待发量与累计计数。
 type OutboxMetrics struct {
 	Pending          int
 	PendingBytes     int64
@@ -106,9 +108,7 @@ type OutboxMetrics struct {
 	Acknowledged     uint64
 }
 
-// Outbox retains every appended packet until client ACK, not merely until the
-// transport accepts it. This closes the undetectable "last publish failed"
-// window.
+// Outbox 保留每个追加的包直到客户端 ACK，而不只是到传输层接受为止，这样“最后一次发布失败”不会成为无法察觉的窗口。
 type Outbox struct {
 	mutex           sync.Mutex
 	store           OutboxStore
@@ -127,6 +127,8 @@ type Outbox struct {
 	metrics         OutboxMetrics
 }
 
+// NewOutbox 构造 outbox 并加载存储里的记录。要求持久化却没有存储时返回 ErrOutboxStoreRequired；存储必须实现
+// RecordOutboxStore，否则返回 ErrOutboxRecordStoreRequired。
 func NewOutbox(options OutboxOptions) (*Outbox, error) {
 	if options.RequireDurable && options.Store == nil {
 		return nil, ErrOutboxStoreRequired
@@ -240,6 +242,7 @@ func (box *Outbox) streamAgeError(now time.Time, stream pendingStreamID) error {
 	return nil
 }
 
+// Put 持久化并登记一个待发包。
 func (box *Outbox) Put(packet syncstream.Packet) error {
 	if box == nil || packet.Stream.Topic == "" || packet.Epoch == 0 || packet.Sequence == 0 {
 		return ErrRecordInvalid
@@ -273,6 +276,8 @@ func (box *Outbox) Put(packet syncstream.Packet) error {
 	return nil
 }
 
+// PutBatch 先按容量校验整批，再持久化并登记一组待发包：存储实现 BatchRecordOutboxStore 时整批原子写入，否则逐条
+// 写入；已登记或批内重复的包跳过。
 func (box *Outbox) PutBatch(packets []syncstream.Packet) error {
 	if box == nil {
 		return ErrRecordInvalid
@@ -351,8 +356,7 @@ func (box *Outbox) PutBatch(packets []syncstream.Packet) error {
 	return nil
 }
 
-// Reconcile repairs the crash window between a committed History append and
-// outbox persistence. Every retained packet newer than ACK becomes pending.
+// Reconcile 修复已提交的 History 追加与 outbox 持久化之间的崩溃窗口。每个比 ACK 新的保留包都变成待发。
 func (box *Outbox) Reconcile(snapshot syncstream.HistorySnapshot) error {
 	// History 是身份权威。epoch 切换、删除流或已落盘 ACK 留下的派生记录
 	// 必须退休；不能无限重发客户端已无法确认的身份。
@@ -388,6 +392,7 @@ func (box *Outbox) Reconcile(snapshot syncstream.HistorySnapshot) error {
 	return box.PutBatch(packets)
 }
 
+// Acknowledge 删除该 observer、流与 epoch 下序号不超过 sequence 的待发包。
 func (box *Outbox) Acknowledge(observer syncstream.Observer, stream syncstream.Stream, epoch, sequence uint64) error {
 	if box == nil {
 		return nil
@@ -405,6 +410,7 @@ func (box *Outbox) Acknowledge(observer syncstream.Observer, stream syncstream.S
 	return box.deletePendingLocked(ids, true)
 }
 
+// DiscardObserver 删除 observer 的全部待发包；有包正在发布时返回可重试的 ErrApplyInProgress。
 func (box *Outbox) DiscardObserver(observer syncstream.Observer) error {
 	if box == nil {
 		return nil
@@ -548,8 +554,7 @@ func (box *Outbox) due(now time.Time, observer *syncstream.Observer, stream *syn
 	return packets
 }
 
-// packetMaxHeap keeps the least preferred selected packet at index zero, so
-// due can retain only the best MaxPublishBatch candidates while scanning.
+// packetMaxHeap 把选中包里最不优先的放在下标 0，due 扫描时只需保留最好的 MaxPublishBatch 个候选。
 type packetMaxHeap []syncstream.Packet
 
 func (packets packetMaxHeap) Len() int { return len(packets) }
@@ -613,9 +618,7 @@ func observerLess(left, right syncstream.Observer) bool {
 	return left.Session < right.Session
 }
 
-// PublishDue invokes publisher without holding the outbox lock. Successful
-// packets remain pending until ACK and are periodically retried to repair a
-// lost final delivery.
+// PublishDue 调用 publisher 时不持有 outbox 锁。发布成功的包仍待 ACK，并定期重试，以修复丢失的最后一次投递。
 func (box *Outbox) PublishDue(publisher PacketPublisher, now time.Time, observer *syncstream.Observer, stream *syncstream.Stream) error {
 	return box.publishDue(publisher, now, observer, stream, nil)
 }
@@ -691,6 +694,7 @@ func (box *Outbox) releasePublishing(packets []syncstream.Packet) {
 	}
 }
 
+// PublishNow 把匹配的待发包设为立即到期，再调用 PublishDue。
 func (box *Outbox) PublishNow(publisher PacketPublisher, now time.Time, observer *syncstream.Observer, stream *syncstream.Stream) error {
 	if box == nil {
 		return nil
@@ -706,6 +710,7 @@ func (box *Outbox) PublishNow(publisher PacketPublisher, now time.Time, observer
 	return box.PublishDue(publisher, now, observer, stream)
 }
 
+// Metrics 返回 outbox 计数的快照。
 func (box *Outbox) Metrics() OutboxMetrics {
 	if box == nil {
 		return OutboxMetrics{}

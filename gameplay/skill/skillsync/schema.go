@@ -18,19 +18,20 @@ var (
 	ErrSchemaRegistrySealed    = errors.New("skillsync: schema registry is sealed")
 )
 
+// SchemaRange 是闭区间 [Min, Max] 的 schema 版本范围；Min 为 0 表示没有可用版本。
 type SchemaRange struct {
 	Min uint32
 	Max uint32
 }
 
+// Contains 报告版本是否在范围内。
 func (value SchemaRange) Contains(version uint32) bool {
 	return value.Min != 0 && version >= value.Min && version <= value.Max
 }
 
 // NegotiateSchema 返回两边区间交集里的最高版本。任一边是空区间（Min 为 0，或
-// Min > Max）时协商失败：Contains 与 NewApplier 都把 Min 0 当作“没有可用版本”，
-// 此前这里只在合并后的 minimum 为 0 时失败，一边 Min 0、另一边 Min 非 0 时会返回
-// 一个那一边并不支持的版本（RR-20261005-NC-216）。
+// Min > Max）时协商失败：Contains 与 NewApplier 都把 Min 0 当作“没有可用版本”，所以不能只在合并后的 minimum 为 0
+// 时失败——一边 Min 0、另一边 Min 非 0 时会返回一个那一边并不支持的版本。
 func NegotiateSchema(server, client SchemaRange) (uint32, error) {
 	if server.Min == 0 || client.Min == 0 || server.Min > server.Max || client.Min > client.Max {
 		return 0, ErrSchemaNegotiationFailed
@@ -49,32 +50,27 @@ func NegotiateSchema(server, client SchemaRange) (uint32, error) {
 	return maximum, nil
 }
 
+// SchemaMigrator 把包的载荷迁移到目标版本。
 type SchemaMigrator interface {
 	Migrate(packet syncstream.Packet, targetVersion uint32) ([]byte, error)
 }
 
-// SchemaMigration upgrades one packet payload across one registered edge. The
-// packet supplied to the function already carries the edge's source version.
+// SchemaMigration 把一个包的载荷沿一条已注册的边升级。传给函数的包已经带着这条边的源版本。
 type SchemaMigration func(packet syncstream.Packet) ([]byte, error)
 
-type schemaMigrationEdge struct {
-	to      uint32
-	migrate SchemaMigration
-}
-
-// SchemaRegistry is a concurrency-safe directed migration graph. Migrate uses
-// the shortest path; equal-length paths are resolved by ascending version so a
-// deployment cannot vary with map iteration order.
+// SchemaRegistry 是并发安全的有向迁移图。Migrate 走最短路径；等长路径按版本升序选择，部署结果不随 map 迭代顺序变化。
 type SchemaRegistry struct {
 	mutex  sync.RWMutex
 	edges  map[uint32]map[uint32]SchemaMigration
 	sealed bool
 }
 
+// NewSchemaRegistry 返回空的迁移图。
 func NewSchemaRegistry() *SchemaRegistry {
 	return &SchemaRegistry{edges: make(map[uint32]map[uint32]SchemaMigration)}
 }
 
+// Register 注册一条迁移边；参数无效、边已存在或已封存时返回对应错误。
 func (registry *SchemaRegistry) Register(from, to uint32, migration SchemaMigration) error {
 	if registry == nil || from == 0 || to == 0 || from == to || migration == nil {
 		return ErrSchemaMigrationInvalid
@@ -97,8 +93,7 @@ func (registry *SchemaRegistry) Register(from, to uint32, migration SchemaMigrat
 	return nil
 }
 
-// Seal prevents configuration drift after process startup. Reads and
-// migrations remain lock-safe after sealing.
+// Seal 防止进程启动后配置漂移。封存之后读取与迁移仍然是加锁安全的。
 func (registry *SchemaRegistry) Seal() {
 	if registry == nil {
 		return
@@ -108,6 +103,7 @@ func (registry *SchemaRegistry) Seal() {
 	registry.mutex.Unlock()
 }
 
+// MigrationPath 返回从 from 到 to 的最短迁移路径（含两端版本）。
 func (registry *SchemaRegistry) MigrationPath(from, to uint32) ([]uint32, error) {
 	if registry == nil || from == 0 || to == 0 {
 		return nil, ErrSchemaMigrationInvalid
@@ -147,6 +143,7 @@ func (registry *SchemaRegistry) MigrationPath(from, to uint32) ([]uint32, error)
 	return nil, fmt.Errorf("%w: %d -> %d", ErrSchemaMigrationMissing, from, to)
 }
 
+// Migrate 沿 MigrationPath 逐边迁移包的载荷。
 func (registry *SchemaRegistry) Migrate(packet syncstream.Packet, targetVersion uint32) ([]byte, error) {
 	path, err := registry.MigrationPath(packet.SchemaVersion, targetVersion)
 	if err != nil {

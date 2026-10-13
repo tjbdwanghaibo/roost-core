@@ -34,12 +34,10 @@ type fileOutboxEnvelope struct {
 	Checksum string       `json:"checksum"`
 }
 
-// FileOutboxStore persists one atomically replaceable file per network packet.
-// This makes packet insertion and retry-metadata updates crash-safe without a
-// database dependency.
+// FileOutboxStore 为每个网络包持久化一个可原子替换的文件，不依赖数据库，包的插入与重试元数据更新在崩溃时都安全。
 //
 // 目录归一个 store 独占：打开时会删掉崩溃遗留的 outbox-<数字>.tmp 临时文件，同一目录不能同时被
-// 另一个在写的 store 使用（RR-20261006-04）。
+// 另一个在写的 store 使用。
 type FileOutboxStore struct {
 	mutex          sync.Mutex
 	directory      string
@@ -48,15 +46,18 @@ type FileOutboxStore struct {
 	recordCount    int
 }
 
+// FileOutboxOptions 是 FileOutboxStore 的记录数与单条大小上限。
 type FileOutboxOptions struct {
 	MaxRecords     int
 	MaxRecordBytes int64
 }
 
+// NewFileOutboxStore 用默认上限打开目录作为 outbox 存储。
 func NewFileOutboxStore(directory string) (*FileOutboxStore, error) {
 	return NewFileOutboxStoreWithOptions(directory, FileOutboxOptions{})
 }
 
+// NewFileOutboxStoreWithOptions 打开目录作为 outbox 存储，并清理崩溃遗留的临时文件。
 func NewFileOutboxStoreWithOptions(directory string, options FileOutboxOptions) (*FileOutboxStore, error) {
 	if directory == "" {
 		return nil, ErrOutboxStoreRequired
@@ -92,7 +93,7 @@ func NewFileOutboxStoreWithOptions(directory string, options FileOutboxOptions) 
 			count++
 		}
 		// 写入中途崩溃会留下 PutRecord 的临时文件：它们从未替换成记录，内容不完整也不计入上限，
-		// 只有打开时清理才不会每次崩溃泄漏一个（RR-20261006-04，O6）。目录归这一个 store 所有，
+		// 只有打开时清理才不会每次崩溃泄漏一个。目录归这一个 store 所有，
 		// 打开时没有在途写入；只删确认是本 outbox 生成的普通文件，其他文件一律不动。
 		if isFileOutboxTemporary(entry) {
 			if err := os.Remove(filepath.Join(absolute, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {

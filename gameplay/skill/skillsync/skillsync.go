@@ -1,5 +1,4 @@
-// Package skillsync projects skill runtime data onto roost-core's ordered,
-// transport-neutral syncstream envelopes.
+// Package skillsync 把 skill 运行时数据投影到 roost-core 有序、与传输无关的 syncstream 信封上。
 package skillsync
 
 import (
@@ -22,6 +21,7 @@ var (
 	ErrRecordInvalid         = errors.New("skillsync: record is invalid")
 )
 
+// RecordKind 是同步记录的种类。
 type RecordKind string
 
 const (
@@ -32,6 +32,7 @@ const (
 	RecordPresentationReset RecordKind = "presentation_reset"
 )
 
+// Header 是每条同步记录共有的头。
 type Header struct {
 	SchemaVersion      uint32              `json:"schema_version"`
 	Kind               RecordKind          `json:"kind"`
@@ -41,33 +42,40 @@ type Header struct {
 	PresentationDigest string              `json:"presentation_digest,omitempty"`
 }
 
+// ManifestRecord 携带表现计划。
 type ManifestRecord struct {
 	Header
 	Plan skill.PresentationPlan `json:"plan"`
 }
 
+// StateSnapshot 是 skill.RuntimeStateSnapshot 的别名。
 type StateSnapshot = skill.RuntimeStateSnapshot
 
+// StateRecord 携带全量快照或一条增量，二者恰有其一。
 type StateRecord struct {
 	Header
 	Snapshot *skill.RuntimeStateSnapshot `json:"snapshot,omitempty"`
 	Delta    *skill.StateMutation        `json:"delta,omitempty"`
 }
 
+// PresentationReset 是表现重置的载荷：仍在持续的表现。
 type PresentationReset struct {
 	Recovery skill.PresentationRecoverySnapshot `json:"recovery"`
 }
 
+// PresentationRecord 携带一条表现事件或一次表现重置，二者恰有其一。
 type PresentationRecord struct {
 	Header
 	Event *skill.PresentationEvent `json:"event,omitempty"`
 	Reset *PresentationReset       `json:"reset,omitempty"`
 }
 
+// Projector 把 skill 运行时数据编码成指定 schema 版本的 syncstream 包。
 type Projector struct {
 	SchemaVersion uint32
 }
 
+// NewProjector 构造 Projector；schemaVersion 为 0 时返回 ErrSchemaVersionRequired。
 func NewProjector(schemaVersion uint32) (Projector, error) {
 	if schemaVersion == 0 {
 		return Projector{}, ErrSchemaVersionRequired
