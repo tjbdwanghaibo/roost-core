@@ -53,7 +53,7 @@ roost project new planet \
   -module example.com/planet \
   -out ./planet \
   -services game,gate \
-  -mods configdata,etcd,redis,mongo,nats,room,remote_entity,dataengine,nest \
+  -mods configdata,etcd,redis,mongo,nats,syncbus,remote_entity,dataengine,nest \
   -features protocol,config,entity,nest,event,dao,errcode
 ```
 

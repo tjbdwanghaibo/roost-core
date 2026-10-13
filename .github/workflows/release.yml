@@ -85,7 +85,7 @@ jobs:
         run: |
           # One module, one version: the generated project requires roost-core
           # and nothing else (三仓合一仓 P5).
-          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -services game,gate -mods configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga -roost-core-version "$VERSION"
+          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -services game,gate -mods configdata,etcd,redis,mongo,nats,syncbus,remote_entity,dataengine,nest,saga -roost-core-version "$VERSION"
           cd "${RUNNER_TEMP}/planet"
           "${RUNNER_TEMP}/roost" add access player --service gate
           "${RUNNER_TEMP}/roost" add transport tcp

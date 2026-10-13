@@ -62,7 +62,7 @@ jobs:
             template_args=(-template game-demo)
           fi
           if [ "$SCENARIO" = full ]; then
-            mods=configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga
+            mods=configdata,etcd,redis,mongo,nats,syncbus,remote_entity,dataengine,nest,saga
             services=game,gate
             # The game template hosts all nine framework services and wires
             # game to them, so the full scenario compiles kit/service too.

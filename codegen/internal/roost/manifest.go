@@ -196,43 +196,6 @@ func decodeManifest(root string) (Manifest, error) {
 	return manifest, nil
 }
 
-// legacyModNames and legacyFeatureNames map the pre-rename manifest vocabulary
-// onto the current one. roost.yaml is hand-written and lives in user
-// repositories, so an existing manifest must keep loading; the names are
-// rewritten in memory and the canonical spelling is what `project sync` writes
-// back out.
-var legacyModNames = map[string]string{
-	"sync": "syncbus",
-	"room": "syncbus",
-}
-
-var legacyFeatureNames = map[string]string{
-	"replication-quic": "nettransport-quic",
-	"replication-kcp":  "nettransport-kcp",
-	"replication-udp":  "nettransport-udp",
-}
-
-// canonicalizeLegacyNames rewrites legacy names in place. The receiver is a
-// value, but mod and feature lists are slices and Services is a map, so the
-// rewrite is visible to the caller — that is deliberate: Validate is the one
-// gate every construction path passes through, so normalising here means a
-// manifest is canonical by the time anything reads it.
-func (m Manifest) canonicalizeLegacyNames() {
-	rename := func(values []string, table map[string]string) {
-		for i, value := range values {
-			if canonical, ok := table[value]; ok {
-				values[i] = canonical
-			}
-		}
-	}
-	rename(m.SharedMods, legacyModNames)
-	for name, service := range m.Services {
-		rename(service.Mods, legacyModNames)
-		m.Services[name] = service
-	}
-	rename(m.Features, legacyFeatureNames)
-}
-
 func (m Manifest) Marshal() ([]byte, error) {
 	if err := m.Validate(); err != nil {
 		return nil, err
@@ -249,7 +212,6 @@ func (m Manifest) Marshal() ([]byte, error) {
 }
 
 func (m Manifest) Validate() error {
-	m.canonicalizeLegacyNames()
 	var joined error
 	if m.Schema != 1 {
 		joined = errors.Join(joined, fmt.Errorf("unsupported schema %d", m.Schema))

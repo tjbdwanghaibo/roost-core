@@ -96,7 +96,7 @@ func TestNewProjectSyncPreservesBusinessFiles(t *testing.T) {
 		Module:   "example.com/planet",
 		Out:      target,
 		Services: []string{"game", "gate"},
-		Mods:     []string{"configdata", "sync", "remote_entity"},
+		Mods:     []string{"configdata", "syncbus", "remote_entity"},
 		Features: []string{"config", "nest"},
 	})
 	if err != nil {

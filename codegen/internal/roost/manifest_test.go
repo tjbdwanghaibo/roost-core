@@ -1,68 +1,32 @@
 package roost
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
 
-// roost.yaml is hand-written and lives in user repositories, so the pre-rename
-// vocabulary ("sync" mod, "replication-*" features) has to keep loading after
-// the packages behind those names were renamed. Validate is the single gate
-// every construction path passes through, so the rewrite is asserted there
-// rather than only on the YAML decode path.
-func TestValidateCanonicalizesLegacyModAndFeatureNames(t *testing.T) {
-	manifest := DefaultManifest("planet", "example.com/planet", []string{"game"},
-		[]string{"sync"}, []string{"nest", "replication-quic"})
-	manifest.SharedMods = []string{"lock"}
-
-	if err := manifest.Validate(); err != nil {
-		t.Fatalf("legacy manifest rejected: %v", err)
-	}
-	if got := manifest.Services["game"].Mods; !contains(got, "syncbus") || contains(got, "sync") || contains(got, "room") {
-		t.Fatalf("service mods were not canonicalized: %v", got)
-	}
-	// A legacy name in shared_mods must canonicalize on the same path.
-	shared := Manifest{Schema: 1, Project: ProjectSpec{Name: "planet", Module: "example.com/planet"},
-		Services: map[string]ServiceSpec{"game": {Mods: []string{"nest"}}}, SharedMods: []string{"sync"}}
-	_ = shared.Validate()
-	if !contains(shared.SharedMods, "syncbus") || contains(shared.SharedMods, "sync") || contains(shared.SharedMods, "room") {
-		t.Fatalf("shared mods were not canonicalized: %v", shared.SharedMods)
-	}
-	if !contains(manifest.Features, "nettransport-quic") || contains(manifest.Features, "replication-quic") {
-		t.Fatalf("features were not canonicalized: %v", manifest.Features)
-	}
-	// The canonical spelling is what gets written back, so a legacy manifest
-	// converts itself the first time `project sync` runs.
-	raw, err := manifest.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if text := string(raw); indexOf(text, "- syncbus") < 0 || indexOf(text, "- room") >= 0 {
-		t.Fatalf("marshalled manifest did not persist the canonical mod name:\n%s", text)
-	}
-}
-
-func indexOf(haystack, needle string) int {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return i
+// 未知的 mod / feature 名一律拒绝并点名；改名前的旧名（"sync"、"room" mod，"replication-*" feature）同样是未知名，
+// 不在内存里改写成新名——项目未上线，roost.yaml 需要手工改成 syncbus / nettransport-*。
+func TestValidateRejectsUnknownAndRetiredModAndFeatureNames(t *testing.T) {
+	for _, mod := range []string{"not_a_mod", "sync", "room"} {
+		manifest := DefaultManifest("planet", "example.com/planet", []string{"game"},
+			[]string{mod}, []string{"nest"})
+		if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("unknown kit mod %q", mod)) {
+			t.Fatalf("mod %q: Validate = %v, want it refused by name", mod, err)
 		}
 	}
-	return -1
-}
-
-// An unknown name must still be an error: canonicalization maps a known legacy
-// spelling, it does not make validation permissive.
-func TestValidateStillRejectsUnknownModAndFeature(t *testing.T) {
-	manifest := DefaultManifest("planet", "example.com/planet", []string{"game"},
-		[]string{"not_a_mod"}, []string{"nest"})
-	if err := manifest.Validate(); err == nil {
-		t.Fatal("unknown mod accepted")
+	shared := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"nest"}, []string{"nest"})
+	shared.SharedMods = []string{"sync"}
+	if err := shared.Validate(); err == nil || !strings.Contains(err.Error(), `unknown kit mod "sync"`) {
+		t.Fatalf("shared_mods sync: Validate = %v, want it refused by name", err)
 	}
-	manifest = DefaultManifest("planet", "example.com/planet", []string{"game"},
-		[]string{"room"}, []string{"not_a_feature"})
-	if err := manifest.Validate(); err == nil {
-		t.Fatal("unknown feature accepted")
+	for _, feature := range []string{"not_a_feature", "replication-quic", "replication-kcp", "replication-udp"} {
+		manifest := DefaultManifest("planet", "example.com/planet", []string{"game"},
+			[]string{"syncbus"}, []string{feature})
+		if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("unknown feature %q", feature)) {
+			t.Fatalf("feature %q: Validate = %v, want it refused by name", feature, err)
+		}
 	}
 }
 

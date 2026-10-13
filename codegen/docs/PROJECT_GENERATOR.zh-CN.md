@@ -130,7 +130,7 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
     roost project new planet \
       -module github.com/acme/planet \
       -services game,gate \
-      -mods configdata,etcd,redis,mongo,nats,room,remote_entity \
+      -mods configdata,etcd,redis,mongo,nats,syncbus,remote_entity \
       -features protocol,config,entity,nest,event,dao,errcode \
       -out D:/work/planet
 
@@ -193,7 +193,7 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
           - redis
           - mongo
           - nats
-          - sync
+          - syncbus
           - remote_entity
       gate:
         mods:
@@ -263,7 +263,7 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `attribute` | `game/gameplay/attribute/` | attribute 生成器 |
 | `webroute` | `service/web/` | webroute 生成器（`-dir ./service`） |
 | `saga` | — | 无独立生成器——由 `make new-saga`（`roost add saga`）**自动追加**的标记；saga 骨架由 add 命令生成，bootstrap 聚合各 `Definitions()`。要求至少一个 Service 挂 `saga` mod，且 core/kit >= v1.4.0 |
-| `replication-quic` / `replication-kcp` / `replication-udp` | `internal/transport/generated.go` | 生成 `NewQUIC()` / `NewKCP()` / `NewUDP()`（AsyncTransport 组装）与 `NewRoomSink` 房间下发接线（见第 16 节）；三者可并选，要求 kit >= v1.1.0 |
+| `nettransport-quic` / `nettransport-kcp` / `nettransport-udp` | `internal/transport/generated.go` | 生成 `NewQUIC()` / `NewKCP()` / `NewUDP()`（AsyncTransport 组装）与 `NewRoomSink` 房间下发接线（见第 16 节）；三者可并选，要求 kit >= v1.1.0 |
 
 ✦ = `roost project new` 不传 `-features` 时的默认七项：`protocol, config, entity, nest, event, dao, errcode`。
 
@@ -572,11 +572,11 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 
 ## 16. 帧同步 Transport 预设
 
-在 features 中启用 replication-quic、replication-kcp 或 replication-udp 后，sync 会生成 internal/transport/generated.go：
+在 features 中启用 nettransport-quic、nettransport-kcp 或 nettransport-udp 后，sync 会生成 internal/transport/generated.go：
 
-- replication-quic：QUIC DATAGRAM + Reliable Stream，并包装 AsyncTransport。
-- replication-kcp：KCP 可靠流 + OOB datagram，并包装 AsyncTransport。
-- replication-udp：安全 UDP datagram + 外部 ReliableSender 组合。
+- nettransport-quic：QUIC DATAGRAM + Reliable Stream，并包装 AsyncTransport。
+- nettransport-kcp：KCP 可靠流 + OOB datagram，并包装 AsyncTransport。
+- nettransport-udp：安全 UDP datagram + 外部 ReliableSender 组合。
 
 生成的只是 Transport 装配入口。监听器、TLS、登录票据、会话密钥和 BindSession 仍属于网关接入层，不能用开发默认值代替生产安全配置。
 

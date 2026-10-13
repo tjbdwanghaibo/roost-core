@@ -28,7 +28,7 @@ mods=configdata
 services=game
 template_args=()
 if [[ "$scenario" == full ]]; then
-  mods=configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga
+  mods=configdata,etcd,redis,mongo,nats,syncbus,remote_entity,dataengine,nest,saga
   services=game,gate
   template_args=(-template game)
 fi

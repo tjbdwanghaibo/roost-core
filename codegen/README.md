@@ -187,7 +187,7 @@ go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgr
 创建新项目（生成 `roost.yaml` 描述 Service、Kit Mod、生成能力、版本和 ID 空间）：
 
     roost project new planet -module github.com/your-account/planet -services game,gate \
-      -mods configdata,etcd,redis,mongo,nats,room,remote_entity
+      -mods configdata,etcd,redis,mongo,nats,syncbus,remote_entity
 
 完全新手可以先使用 `-mods configdata` 创建轻量项目来学习生成流程。生成结果内含
 `docs/QUICKSTART.zh-CN.md` 零基础教程、`docs/BEGINNER_WORKBOOK.zh-CN.md` 逐步操作手册、

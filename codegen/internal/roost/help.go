@@ -328,13 +328,13 @@ roost generate`,
 	{
 		Name: "replication", Aliases: []string{"udp", "kcp", "quic", "lockstep"},
 		Summary: "生成 UDP/KCP/QUIC 帧同步 Transport 装配入口",
-		Usage: `roost project new <name> -module <go-module> -features replication-udp,replication-kcp,replication-quic
+		Usage: `roost project new <name> -module <go-module> -features nettransport-udp,nettransport-kcp,nettransport-quic
 roost project sync`,
 		Configuration: `feature 生成 internal/transport/generated.go：QUIC DATAGRAM、KCP reliable stream、UDP datagram 与 ReliableSender 组合。监听、TLS、票据、密钥和 Session 绑定由网关接入层提供。`,
 		Example: `features:
-  - replication-quic
-  - replication-kcp
-  - replication-udp`,
+  - nettransport-quic
+  - nettransport-kcp
+  - nettransport-udp`,
 	},
 	{
 		Name: "config", Aliases: []string{"config-check"},
