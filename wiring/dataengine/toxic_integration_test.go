@@ -20,15 +20,9 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// natsToxiproxy drives the proxies these tests created on the environment's
-// toxiproxy, one per isolated NATS node. No client library: a handful of
-// requests are not worth a dependency in go.mod. RR-20261005-NC-208: the tests
-// used the environment's shared nats-1..3 proxies and POST /reset, which
-// removes every toxic on every proxy of that toxiproxy — other sessions'
-// faults included. Each test now owns uniquely named proxies on ephemeral
-// ports in front of the direct node URLs, adds and removes toxics only on them
-// and deletes them at cleanup; the fixture ignores discovered servers, so it
-// only ever dials these proxies.
+// natsToxiproxy 驱动这些用例在环境 toxiproxy 上自建的代理（每个隔离 NATS 节点一个，唯一命名、临时端口），只在它们上面加删
+// toxic，结束时删除；不用共享的 nats-1..3 代理，也不调 POST /reset（它会清掉其他会话的故障）。不引入客户端库：几个请求不值得
+// 在 go.mod 里加依赖。fixture 忽略发现的服务器，只连这些代理。
 type natsToxiproxy struct {
 	base    string
 	proxies []string
