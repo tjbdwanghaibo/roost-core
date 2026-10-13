@@ -7,32 +7,29 @@ import (
 	"fmt"
 )
 
-// TreeSchema is the wire schema identifier for JSON behavior trees.
+// TreeSchema 是 JSON 行为树的 wire schema 标识。
 const TreeSchema = "roost.ai/v1"
 
-// maxTreeDepth bounds recursion so a hostile or broken document cannot blow
-// the stack.
+// maxTreeDepth 限制递归深度，恶意或损坏的文档不能撑爆栈。
 const maxTreeDepth = 64
 
-// Wire errors.
+// wire 错误。
 var (
 	ErrTreeSchema  = errors.New("ai: unsupported tree schema")
 	ErrTreeInvalid = errors.New("ai: invalid tree document")
 )
 
-// Registry supplies the leaf vocabulary for JSON tree assembly. Composite
-// and decorator nodes (sequence, selector, parallel, inverter, succeeder,
-// until_success, repeat, cooldown, time_limit, guard) are built in; the
-// business registers only its condition and action leaves. Factories receive
-// the leaf's raw "args" and must parse them strictly themselves.
+// Registry 提供 JSON 树组装用的叶子词表。组合与装饰节点（sequence、selector、parallel、inverter、succeeder、
+// until_success、repeat、cooldown、time_limit、guard）是内置的；业务只注册自己的条件与动作叶子。工厂收到叶子原始的
+// "args"，必须自己严格解析。
 type Registry[C any] struct {
-	// now feeds the built-in time nodes (cooldown/time_limit); required if a
-	// document uses them.
+	// now 供内置的时间节点（cooldown / time_limit）使用；文档用到它们时必填。
 	now        func(*C) int64
 	conditions map[string]func(args json.RawMessage) (Node[C], error)
 	actions    map[string]func(args json.RawMessage) (Node[C], error)
 }
 
+// NewRegistry 构造叶子词表；now 供内置时间节点使用，文档不用时间节点时可以为 nil。
 func NewRegistry[C any](now func(*C) int64) *Registry[C] {
 	return &Registry[C]{
 		now:        now,
@@ -41,6 +38,7 @@ func NewRegistry[C any](now func(*C) int64) *Registry[C] {
 	}
 }
 
+// RegisterCondition 注册条件叶子工厂；名字为空、工厂为 nil 或重复注册时返回包装 ErrTreeInvalid 的错误。
 func (r *Registry[C]) RegisterCondition(name string, build func(args json.RawMessage) (Node[C], error)) error {
 	if name == "" || build == nil {
 		return fmt.Errorf("%w: condition registration requires a name and factory", ErrTreeInvalid)
@@ -52,6 +50,7 @@ func (r *Registry[C]) RegisterCondition(name string, build func(args json.RawMes
 	return nil
 }
 
+// RegisterAction 注册动作叶子工厂；种类为空、工厂为 nil 或重复注册时返回包装 ErrTreeInvalid 的错误。
 func (r *Registry[C]) RegisterAction(kind string, build func(args json.RawMessage) (Node[C], error)) error {
 	if kind == "" || build == nil {
 		return fmt.Errorf("%w: action registration requires a kind and factory", ErrTreeInvalid)
@@ -63,17 +62,11 @@ func (r *Registry[C]) RegisterAction(kind string, build func(args json.RawMessag
 	return nil
 }
 
-// ParseTree assembles a behavior tree from its JSON document. Parsing is
-// strict in the skillv2 wire tradition: unknown fields, unknown node names,
-// arity violations, and depth blowups are all compile-time rejections that
-// name the offending JSON path — a broken document never becomes a silently
-// wrong tree.
+// ParseTree 从 JSON 文档组装行为树。解析沿用 skillv2 wire 的严格传统：未知字段、未知节点名、子节点数量不符与深度
+// 超限都在组装期拒绝，并点名出错的 JSON 路径——损坏的文档绝不会变成一棵静默出错的树。
 //
-// The returned tree carries live evaluation state and belongs to exactly ONE
-// strategy: sharing it between strategies (or agents) crosses their cursor
-// and timer state — parse once per consumer instead. A failed parse leaves
-// any currently installed strategy untouched, which Controller.SetStrategy
-// already guarantees.
+// 返回的树带有活的求值状态，只属于一个策略：在策略（或 agent）之间共享会让它们的游标与计时状态交叉——每个使用方
+// 各解析一次。解析失败不影响当前已安装的策略，这一点 Controller.SetStrategy 已经保证。
 func ParseTree[C any](data []byte, registry *Registry[C]) (Node[C], error) {
 	if registry == nil {
 		return nil, fmt.Errorf("%w: registry is required", ErrTreeInvalid)
@@ -199,11 +192,8 @@ func parseNode[C any](data []byte, registry *Registry[C], path string, depth int
 		if len(raw.Condition) == 0 {
 			return nil, fmt.Errorf("%w: %s.condition is required", ErrTreeInvalid, path)
 		}
-		// A guard predicate is re-evaluated every tick and its result is
-		// collapsed to a bool, so only stateless predicate shapes are legal:
-		// condition leaves and pure logic over them. Anything with side
-		// effects or running state (action, cooldown, repeat, ...) would fire
-		// on every check and never be reset — reject at assembly time.
+		// guard 谓词每拍重新求值，结果压成一个布尔值，所以只允许无状态的谓词形状：条件叶子以及在它们之上的纯逻辑。带副作用
+		// 或运行状态的节点（action、cooldown、repeat 等）会在每次检查时触发且永远不被重置——在组装期拒绝。
 		if err := validatePredicate(raw.Condition, path+".condition", depth+1); err != nil {
 			return nil, err
 		}
@@ -215,8 +205,7 @@ func parseNode[C any](data []byte, registry *Registry[C], path string, depth int
 		if err != nil {
 			return nil, err
 		}
-		// A guard predicate must be stateless; the condition leaf contract
-		// satisfies that, so the guard simply asks it for Success.
+		// guard 谓词必须无状态；条件叶子的契约满足这一点，所以 guard 只需问它是否 Success。
 		return &Guard[C]{Check: func(ctx *C) bool { return predicate.Tick(ctx) == StatusSuccess }, Child: child}, nil
 	case "condition":
 		var raw struct {
@@ -305,9 +294,8 @@ func requireChild[C any](child json.RawMessage, registry *Registry[C], path stri
 	return parseNode(child, registry, path+".child", depth+1)
 }
 
-// validatePredicate restricts a guard predicate subtree to stateless shapes:
-// condition leaves composed through sequence (AND), selector (OR), and
-// inverter (NOT).
+// validatePredicate 把 guard 谓词子树限制为无状态形状：经 sequence（与）、selector（或）与 inverter（非）组合的
+// 条件叶子。
 func validatePredicate(data []byte, path string, depth int) error {
 	if depth > maxTreeDepth {
 		return fmt.Errorf("%w: %s exceeds depth %d", ErrTreeInvalid, path, maxTreeDepth)
@@ -340,8 +328,7 @@ func validatePredicate(data []byte, path string, depth int) error {
 	}
 }
 
-// decodeStrictJSON decodes one JSON value rejecting unknown fields and
-// trailing data.
+// decodeStrictJSON 解码一个 JSON 值，拒绝未知字段与尾随数据。
 func decodeStrictJSON(data []byte, destination any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()

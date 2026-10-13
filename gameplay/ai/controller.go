@@ -16,6 +16,7 @@ var (
 	ErrReentrantSwitch  = errors.New("ai: reentrant strategy switch")
 )
 
+// ControllerHooks 是 Controller 的时钟、上下文构造、结束在途动作、策略变化与错误报告钩子。
 type ControllerHooks struct {
 	Now        func() time.Time
 	Context    func(time.Time) *Context
@@ -24,12 +25,10 @@ type ControllerHooks struct {
 	OnError    func(error)
 }
 
-// Controller hosts one strategy and provides transactional replacement:
-// a failing new Init leaves the previous strategy installed and active.
-// Calls are externally serialized by the owning Entity mutex.
+// Controller 承载一个策略，并提供事务式替换：新策略 Init 失败时保留原策略且仍生效。调用由拥有它的实体锁在外部串行化。
 //
 // 策略回调（Tick / OnActionEnd / OnMissionEnd）里调用 SetStrategy / Shutdown 不立即切换，
-// 记为待切换，最外层回调返回后执行（RR-20261005-NC-241，与 actionflow B7 的延后方向一致）：
+// 记为待切换，最外层回调返回后执行（与 actionflow 的延后执行一致）：
 // 立即切换会在旧 Tick 还没返回时 EndActions、Stop 旧策略，旧树随后接着跑、发起的动作没有
 // 被这次切换结束，结束通知又送给新策略，成了孤儿。回调里的 SetStrategy 返回 nil，切换
 // 出错（旧策略拒绝、新策略 Init 失败）经 OnError 报告；同一轮回调里多次请求以最后一次
@@ -52,6 +51,7 @@ type pendingSwitch struct {
 	reason   string
 }
 
+// NewController 构造一个尚无策略的 Controller。
 func NewController(hooks ControllerHooks) *Controller { return &Controller{hooks: hooks} }
 
 // SetStrategy 换上 next。顺序是：旧策略同意被替换 → next.Init（失败则 Stop next、
@@ -108,24 +108,32 @@ func (c *Controller) SetStrategy(next Strategy) error {
 	return nil
 }
 
+// Strategy 返回当前策略；在策略回调里请求的切换生效之前仍返回旧策略。
 func (c *Controller) Strategy() Strategy {
 	if c == nil {
 		return nil
 	}
 	return c.strategy
 }
+
+// Freeze 冻结 Controller：之后的 Tick 不再驱动策略，动作 / 任务结束仍照常送达。
 func (c *Controller) Freeze() {
 	if c != nil {
 		c.frozen = true
 	}
 }
+
+// Recover 解除冻结。
 func (c *Controller) Recover() {
 	if c != nil {
 		c.frozen = false
 	}
 }
+
+// Frozen 报告是否被冻结。
 func (c *Controller) Frozen() bool { return c != nil && c.frozen }
 
+// Tick 驱动当前策略一拍；now 为零值时取 Now 钩子的时间。策略 panic 恢复成错误经 OnError 报告。
 func (c *Controller) Tick(now time.Time) {
 	if !c.ready() {
 		return
@@ -156,8 +164,7 @@ func (c *Controller) OnActionEnd(id int64, kind coreflow.ActionKind, reason core
 
 // OnMissionEnd 把一次任务结束交给当前策略。冻结期间照常送达（见 notifiable）。通常接在
 // MissionRunner 的 OnEnded 钩子上：策略在这里调 ActionList.SetMission 时，MissionRunner 把它
-// 延后到本次结束做完之后执行并返回 nil（之前返回 taskflow 的 ErrReentrantMutation），执行时
-// 的错误经 MissionRunner 的 OnError 报告。
+// 延后到本次结束做完之后执行并返回 nil，执行时的错误经 MissionRunner 的 OnError 报告。
 func (c *Controller) OnMissionEnd(mission coreflow.Mission, reason coreflow.ActionReason) {
 	if !c.notifiable() {
 		return
@@ -172,7 +179,7 @@ func (c *Controller) OnMissionEnd(mission coreflow.Mission, reason coreflow.Acti
 
 // Shutdown 卸下当前策略：调它的 Stop（若实现了 StoppableStrategy）并发布“变为无策略”。
 // 与 SetStrategy 不同，它不调 EndActions，在途动作不会被结束——要结束的话见
-// StoppableStrategy 的说明（N10 O-T4，维护者第十二轮决定保持）。在策略回调里调用时延后到
+// StoppableStrategy 的说明。在策略回调里调用时延后到
 // 最外层回调返回后执行。
 func (c *Controller) Shutdown(reason string) {
 	if c == nil {
@@ -220,7 +227,7 @@ func (c *Controller) ready() bool { return c.notifiable() && !c.frozen }
 // notifiable 判断结束通知能否交给当前策略。Freeze 只暂停决策，不暂停记账：动作在冻结
 // 期间照样会结束（被业务 EndAllAction、被替换、被取消），策略——尤其 BehaviorStrategy 里
 // 等某个动作 ID 的 TaskflowAction 叶子——只能从这条通知得知结果；丢掉它，Recover 之后
-// 树会永远停在 Running（RR-20261005-NC-120）。切换策略期间仍然丢弃：那时结束的是旧
+// 树会永远停在 Running。切换策略期间仍然丢弃：那时结束的是旧
 // 策略的动作（EndActions），新策略不该收到。策略若在 OnActionEnd 里直接发起新动作，
 // 冻结期间也会被调用，需要自己判断时机（BehaviorStrategy 只缓冲到下一次 Tick）。
 func (c *Controller) notifiable() bool { return c != nil && !c.switching && c.strategy != nil }

@@ -1,5 +1,4 @@
-// Package ai defines entity-aware AI strategy boundaries. Scheduling and
-// concrete decision algorithms are supplied by adapters and roost-kit.
+// Package ai 定义感知实体的 AI 策略边界。调度与具体决策算法由适配层提供。
 package ai
 
 import (
@@ -9,6 +8,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
 )
 
+// Context 是策略回调收到的上下文：拥有者实体、动作列表与当前时间。
 type Context struct {
 	Owner      entity.IThreadSafeEntity
 	ActionList actionflow.ActionList
@@ -19,7 +19,7 @@ type Context struct {
 //
 // Init 里不要发起动作：SetStrategy 先 Init 新策略、成功后才 EndActions 结束现有动作（“Init
 // 失败保留旧策略”的事务式顺序），Init 里发起的动作会被一并结束。在第一次 Tick 里发起
-// （N10 O-T3，维护者第十二轮决定保持这个顺序）。
+// （这个顺序是有意保持的）。
 type Strategy interface {
 	Name() string
 	Init(ctx *Context) error
@@ -32,7 +32,7 @@ type Strategy interface {
 // StoppableStrategy 是需要收尾的策略。Stop 在策略被替换（SetStrategy）或 Controller.Shutdown
 // 时调用。
 //
-// Shutdown 不调 EndActions（N10 O-T4，维护者第十二轮决定保持）：替换时在途动作由
+// Shutdown 不调 EndActions（有意保持）：替换时在途动作由
 // EndActions 结束，Shutdown 时没有这一步。要在 Shutdown 时结束在途动作，在 Stop 里自己结束
 // （BehaviorStrategy.Stop 重置树，配了 OnInterrupt 的节点会收尾），或由业务在 Shutdown 之前
 // 调 ActionList 的 EndCurMission / EndAllAction。否则 Shutdown 之后动作继续跑，结束通知

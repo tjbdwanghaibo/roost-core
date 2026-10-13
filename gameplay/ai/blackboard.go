@@ -2,12 +2,16 @@ package ai
 
 import "sync"
 
+// Blackboard 是并发安全的键值黑板；nil 接收者上的方法都是空操作。
 type Blackboard struct {
 	mu     sync.RWMutex
 	values map[string]any
 }
 
+// NewBlackboard 返回空黑板。
 func NewBlackboard() *Blackboard { return &Blackboard{values: make(map[string]any)} }
+
+// Set 写入一个值；空键被忽略。
 func (b *Blackboard) Set(key string, value any) {
 	if b == nil || key == "" {
 		return
@@ -19,6 +23,8 @@ func (b *Blackboard) Set(key string, value any) {
 	b.values[key] = value
 	b.mu.Unlock()
 }
+
+// Get 读取一个值。
 func (b *Blackboard) Get(key string) (any, bool) {
 	if b == nil {
 		return nil, false
@@ -28,6 +34,8 @@ func (b *Blackboard) Get(key string) (any, bool) {
 	b.mu.RUnlock()
 	return value, ok
 }
+
+// Delete 删除一个键。
 func (b *Blackboard) Delete(key string) {
 	if b == nil {
 		return
@@ -36,6 +44,8 @@ func (b *Blackboard) Delete(key string) {
 	delete(b.values, key)
 	b.mu.Unlock()
 }
+
+// Snapshot 返回全部键值的浅拷贝。
 func (b *Blackboard) Snapshot() map[string]any {
 	if b == nil {
 		return nil
