@@ -101,7 +101,7 @@ func (mgr *NestMgr) DispatchMulti(ctx context.Context, name HandlerName, ids []i
 		return err
 	}
 	msg := GenMsg(MsgTypeMulti)
-	msg.Tids = append(msg.Tids[:0], fullIDs...)
+	msg.Tids = fullIDs // 标准化已建立独立存储，直接把所有权交给消息。
 	prepareClientMessage(ctx, msg, name, params, false, opts...)
 	checkRemoteIds(msg, msg.Tids)
 	return normalizeAdmissionError(mgr.admit(msg, opts...))
@@ -119,7 +119,7 @@ func (mgr *NestMgr) RequestMulti(ctx context.Context, name HandlerName, ids []in
 		return nil, err
 	}
 	msg, ch := GenSyncMsg(MsgTypeMulti)
-	msg.Tids = append(msg.Tids[:0], fullIDs...)
+	msg.Tids = fullIDs // 不再重复复制；调用方原切片仍与消息隔离。
 	prepareClientMessage(ctx, msg, name, params, true, opts...)
 	checkRemoteIds(msg, msg.Tids)
 	requestTimeout := msg.Context.SyncWait
@@ -311,13 +311,25 @@ func normalizeClientIDs(ids []int64) ([]int64, error) {
 }
 
 func normalizeClientGroups(groups [][]int64) ([][]int64, error) {
+	count := 0
+	for _, ids := range groups {
+		count += len(ids)
+	}
 	ret := make([][]int64, len(groups))
+	// 一份消息独占连续存储；各组限制 cap，append 不会覆盖相邻组。
+	storage := make([]int64, count)
+	offset := 0
 	for i, ids := range groups {
-		fullIDs, err := normalizeClientIDs(ids)
-		if err != nil {
-			return nil, fmt.Errorf("entity group %d: %w", i, err)
+		end := offset + len(ids)
+		ret[i] = storage[offset:end:end]
+		for j, id := range ids {
+			fullID, err := normalizeClientID(id)
+			if err != nil {
+				return nil, fmt.Errorf("entity group %d: entity index %d: %w", i, j, err)
+			}
+			ret[i][j] = fullID
 		}
-		ret[i] = fullIDs
+		offset = end
 	}
 	return ret, nil
 }

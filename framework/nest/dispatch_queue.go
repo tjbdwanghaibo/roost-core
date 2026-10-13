@@ -205,8 +205,8 @@ func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 	if lane == dispatchSlowLane {
 		reserved = q.awaitReserved
 	}
-	hasExecutionSlot := j.predecessors == 0 && q.busyWorkers(lane)+state.readyCount+reserved < state.config.Workers
-	if !hasExecutionSlot && q.waitingCount(lane) >= state.config.QueueCap {
+	hasExecutionSlot := j.predecessors == 0 && q.busyWorkers(lane, state)+state.readyCount+reserved < state.config.Workers
+	if !hasExecutionSlot && q.waitingCount(lane, state) >= state.config.QueueCap {
 		state.observation.Rejected++
 		return worker.ErrWorkerQueueFull
 	}
@@ -224,7 +224,7 @@ func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 	if j.predecessors == 0 {
 		q.enqueueReady(lane, j)
 	}
-	state.observation.PeakWaiting = max(state.observation.PeakWaiting, q.waitingCount(lane))
+	state.observation.PeakWaiting = max(state.observation.PeakWaiting, q.waitingCount(lane, state))
 	return nil
 }
 
@@ -262,7 +262,7 @@ func (q *dispatchQueue) take(lane int) *dispatchJob {
 		q.lanes[lane].preferContinuation = false
 		q.lanes[lane].continuationCount--
 		q.lanes[lane].continuationRunning++
-		state.observation.PeakWaiting = max(state.observation.PeakWaiting, q.waitingCount(lane))
+		state.observation.PeakWaiting = max(state.observation.PeakWaiting, q.waitingCount(lane, state))
 		return q.lanes[lane].continuations.pop()
 	}
 	if j := state.ready.pop(); j != nil {
@@ -284,6 +284,13 @@ func (q *dispatchQueue) take(lane int) *dispatchJob {
 }
 func (q *dispatchQueue) work(lane int) {
 	state := &q.lanes[lane]
+	phase := fctx.WithIOWorker()
+	if lane != dispatchSlowLane {
+		phase = fctx.WithFastWorker()
+		if lane == dispatchLongLane {
+			phase = fctx.WithLongWorker()
+		}
+	}
 	defer q.wg.Done()
 	for {
 		q.mu.Lock()
@@ -299,13 +306,6 @@ func (q *dispatchQueue) work(lane int) {
 		rerouted := false
 		var after func()
 		goroutine.SafeFunc(func() {
-			phase := fctx.WithIOWorker()
-			if lane != dispatchSlowLane {
-				phase = fctx.WithFastWorker()
-				if lane == dispatchLongLane {
-					phase = fctx.WithLongWorker()
-				}
-			}
 			_, release := fctx.NewContext(fctx.WithSource("worker"), fctx.WithHandler(q.name), phase)
 			defer release()
 			// 转慢的作业仍归队列所有，消息引用留给慢池那一次执行释放。
@@ -373,7 +373,7 @@ func (q *dispatchQueue) rerouteToSlow(j *dispatchJob) {
 	slow.queued++
 	slow.waiting.push(j)
 	q.enqueueReady(dispatchSlowLane, j)
-	slow.observation.PeakWaiting = max(slow.observation.PeakWaiting, q.waitingCount(dispatchSlowLane))
+	slow.observation.PeakWaiting = max(slow.observation.PeakWaiting, q.waitingCount(dispatchSlowLane, slow))
 	metrics.IncCounter("nest.dispatch.slow_reroute.total", metrics.Labels{"dispatcher": q.name}, 1)
 }
 
@@ -413,11 +413,11 @@ func (q *dispatchQueue) snapshotStats() (fast, slow worker.PoolStats, continuati
 	now := time.Since(q.clockOrigin)
 	for i, name := range []string{"fast", "slow", "long"} {
 		state := &q.lanes[i]
-		pools[i] = worker.PoolStats{Name: q.name + "_" + name, WorkerNum: state.config.Workers, QueueCap: state.config.QueueCap, QueueLen: q.waitingCount(i), Started: q.started, Stopped: q.stopping}
+		pools[i] = worker.PoolStats{Name: q.name + "_" + name, WorkerNum: state.config.Workers, QueueCap: state.config.QueueCap, QueueLen: q.waitingCount(i, state), Started: q.started, Stopped: q.stopping}
 		observed[i] = state.observation
 		observed[i].Running, observed[i].Ready = state.running, state.readyCount
 		observed[i].BlockedOnPredecessor = state.queued - state.readyCount
-		observed[i].WaitingForWorker = max(0, state.readyCount-max(0, state.config.Workers-q.busyWorkers(i)))
+		observed[i].WaitingForWorker = max(0, state.readyCount-max(0, state.config.Workers-q.busyWorkers(i, state)))
 		if head := state.waiting.head; head != nil {
 			observed[i].OldestWaiting = now - head.admittedAt
 		}
@@ -427,22 +427,20 @@ func (q *dispatchQueue) snapshotStats() (fast, slow worker.PoolStats, continuati
 
 // waitingCount 排除已预留外部执行额度的就绪消息。前驱未完成的消息
 // 始终算等待，不能用空闲 worker 数掩盖同 ID 的积压。调用方持有 q.mu。
-func (q *dispatchQueue) waitingCount(lane int) int {
-	state := &q.lanes[lane]
+func (q *dispatchQueue) waitingCount(lane int, state *dispatchLane) int {
 	await := 0
 	if lane == dispatchSlowLane {
 		await = q.awaitReserved
 	}
-	reserved := min(state.readyCount+await, max(0, state.config.Workers-q.busyWorkers(lane)))
+	reserved := min(state.readyCount+await, max(0, state.config.Workers-q.busyWorkers(lane, state)))
 	return state.queued + await - reserved
 }
 
 // 续行也占实际快 worker；准入和观测必须使用同一执行容量。调用方持有 q.mu。
-func (q *dispatchQueue) busyWorkers(lane int) int {
-	state := &q.lanes[lane]
+func (q *dispatchQueue) busyWorkers(lane int, state *dispatchLane) int {
 	busy := state.running
 	if lane != dispatchSlowLane {
-		busy += q.lanes[lane].continuationRunning
+		busy += state.continuationRunning
 	}
 	return busy
 }
@@ -499,16 +497,12 @@ func businessLane(msg *Msg) int {
 	if long(msg.Tid) {
 		return dispatchLongLane
 	}
-	for _, id := range msg.Tids {
-		if long(id) {
-			return dispatchLongLane
-		}
+	if slices.ContainsFunc(msg.Tids, long) {
+		return dispatchLongLane
 	}
 	for _, group := range msg.GroupTIds {
-		for _, id := range group {
-			if long(id) {
-				return dispatchLongLane
-			}
+		if slices.ContainsFunc(group, long) {
+			return dispatchLongLane
 		}
 	}
 	return dispatchFastLane

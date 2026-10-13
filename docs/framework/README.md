@@ -16,6 +16,8 @@
 
 [Nest 三池与 Await](NEST-AWAIT.md)：Kind 选择长短业务池、共享目标顺序、I/O 查询与匿名恢复、配置和迁移；当前工作树新增，尚未发版。
 
+[Nest 消息热路径优化设计](NEST-OPTIMIZATION.md)：目标解析复用、指标与上下文、临时存储和前驱边优化；设计待实施，包含基线证据、分批方案与验收矩阵。
+
 ## 次核心模块
 
 [玩家协议处理教程](PLAYER-ACCESS.md)：用 demo 穿戴装备说明协议定义、Controller、生成 Sender 和 Nest handler，区分网络会话与 Session 运行服务。

@@ -12,6 +12,8 @@
 
 - 修复 codegen 配置快照遗漏 `sync.entity.on_change_batch_window`：重新生成 `kitconfig_gen.go`，使配置一致性检查通过，doctor 不再把框架合批参数误计为业务字段。
 - 修复调度 benchmark 的裸整数 ID 被三池路由识别为其他 Kind 的问题：使用正式短业务 EntityID，分片对照按 UniqueID 保持原负载分布，补完整 ID 周期的路由与分布回归；不改变生产准入策略。
+- Nest Msg 按职责整理字段和中文契约，保留所有提交/重排状态；多目标入口接管标准化切片，分组目标共用有容量边界的连续存储。单目标和业务参数顺序不变，多组分配收益及单组耗时代价见 docs/framework/NEST-AWAIT.md。
+
 - Sync OnChange 新增固定合批窗口 `OnChangeBatchWindow` / `sync.entity.on_change_batch_window`，默认 0 保持原行为；支持配置显式关闭和最终 Configure 覆盖，周期与停机仍可提前 Flush。
 - Lockstep 历史裁剪清除旧引用后复用连续窗口，避免逐帧复制整段历史；修复超大 ReadRange 长度及 FrameID 上界裁剪溢出。补一小时逻辑帧、hash 裁剪和滚动追帧验证，结果及使用边界见 docs/framework/SYNC-OPTIMIZATION.md。
 
