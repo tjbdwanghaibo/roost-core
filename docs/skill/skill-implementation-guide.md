@@ -2,7 +2,7 @@
 
 阅读准备：先了解 [Skill 的职责与例子](../framework/guide/08-skill.md)；不熟悉DAO、事务、Host等概念时，从 [入门手册](../GETTING-STARTED.md) 开始。本篇保留具体接口与示例，适合在接入或定位问题时查阅。
 
-> 当前升级口径（2026-10-08）：单仓单模块，Runtime checkpoint=10；旧版拒绝。旧文中的版本号与三仓发布/可灰度说法仅适用于当时的改名阶段，本轮先停旧再起新。见 [当前架构与迁移](../framework/guide/08-skill.md)。
+> 当前升级口径：单模块随 roost-core 同一 tag 发布，Runtime checkpoint 只接受当前版本（`RuntimeCheckpointVersion`），旧版本拒绝，升级先停旧再起新。见 [Skill 设计与使用](../framework/guide/08-skill.md)。
 
 本文对应当前稳定 `gameplay/skill` 包实现。目标是帮助新读者从一份
 JSON 技能定义，顺着真实调用链走到确定性的世界交互，而不是先被大量
@@ -85,8 +85,8 @@ Runtime 只消费已证明的 Program，并通过 Host 保持世界权威性。
 `$input.*` / `$memory.*` / `$local.*` / `$caster` / `$cast.*` / `$owner` / `$event.*` …）是唯一来源：`type_snapshot`
 按表生成每个位点的作用域，Runtime 求值时查同一张表，表外引用报 `ErrReferenceOutOfContext`。给定义加新的值位点或新的
 求值上下文时先改表，`eval_context_test.go` 会要求每个格子补正例 / 反例（引用表与快照点表都逐格守）。
-格子只有“可用”与“不可用”两种：值会随衍生物移交或读写位置变化的格子一律不可用（O33，维护者第七轮决定），不可用格的说明写原因与“改用 …”，诊断原样带出。作者侧的规则与改写对照见 [施法语义 · 引用在哪里能读](skill-casting-and-combat.md#引用在哪里能读求值上下文)。
-[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。
+格子只有“可用”与“不可用”两种：值会随衍生物移交或读写位置变化的格子一律不可用（维护者 2026-10-06 决定），不可用格的说明写原因与“改用 …”，诊断原样带出。作者侧的规则与改写对照见 [施法语义 · 引用在哪里能读](skill-casting-and-combat.md#引用在哪里能读求值上下文)。
+[设计记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md)。
 
 建议配合阅读：
 
@@ -177,14 +177,14 @@ owner、source、target（以及需要时的 `Result: "kill"`），主动 fixtur
 World revision 是关键防线：Runtime 的 query/command 会携带期望 revision，Host 负责
 拒绝已失效读取或提交。因而不要缓存 Host 返回的可变对象，再在后续 tick 假设其仍然有效。
 
-**Host 能力表**（B3 ③，2026-10-07，[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)）：Host 用
+**Host 能力表**（[设计记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md)）：Host 用
 `HostCapabilityProvider` 声明能读 / 支持的取值（属性、资源、衍生物 kind、motion 步骤、只交给 Host 的数值字段、资源与
 修正 operation、召唤物），环境的 `Host` 段与它对齐。三处各管一件事：
 
 - 编译器（`compile_host_capability.go`）从 IR 收集需求，只经 `HostCapabilityTableOf` 读表，表外报
   `HOST_CAPABILITY_MISSING`；需求排序去重后写进 `Program.hostRequirements`。新增会向 Host 要新取值的 DSL 构造时，
   在这里加收集、在 `hostCapabilityColumns` 加列（封闭集合只登记在那里）。
-- Runtime（`runtime_host_capability.go`）在 Program 第一次使用时核对需求在 Host 的表里。能力表是 `skill.Host` 接口的一部分（`HostCapabilities()`，收尾时并入，[RR-20261006-39](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/bugfix/RR-20261006-39.md)）：每个 Host 都必须声明，没有“没实现就跳过”的分支；包装别的 Host 的类型（`RecordingHost` / `ReplayHost` 的做法）转发被包装者的表，不要自己另写一份。空表表示什么都不支持。
+- Runtime（`runtime_host_capability.go`）在 Program 第一次使用时核对需求在 Host 的表里。能力表是 `skill.Host` 接口的一部分（`HostCapabilities()`）：每个 Host 都必须声明，没有“没实现就跳过”的分支；包装别的 Host 的类型（`RecordingHost` / `ReplayHost` 的做法）转发被包装者的表，不要自己另写一份。空表表示什么都不支持。
 - Host 对表外的属性 / 资源报错；`CheckHostCapabilities` 按声明逐项调用 Host。`MemoryHost` 声明全部能力（属性 /
   资源两列取配置的 catalog）；`combatcomponent.HostAdapter` 声明战斗那部分（可读属性、有映射的资源、资源
   operation，接了 `StatusBridge` 再加修正），运动 / 衍生物 / 召唤物由业务声明后 `MergeHostCapabilities`。
@@ -193,10 +193,10 @@ World revision 是关键防线：Runtime 的 query/command 会携带期望 revis
 发的东西时它会先红）、`TestCompilerConsultsTheTableForEveryRequirement`、`TestCompilerReadsHostCapabilitiesOnlyThroughTheTable`、
 `TestHostOnlySpawnNumericFieldsMatchRuntime`。
 
-**`StopSpawn` 必须幂等**（Host 契约，2026-10-06）：停一个已经停掉或 Host 不认识的衍生物要成功返回、不产生第二次
+**`StopSpawn` 必须幂等**（Host 契约）：停一个已经停掉或 Host 不认识的衍生物要成功返回、不产生第二次
 副作用（`MemoryHost` 返回当前 revision、不发事件）。只有衍生物在世界里确实还在运行时才返回错误。原因：宿主停止
 失败时——不论来自哪个停止入口：施法失败或施法里的停止、衍生物启动失败的清理、tick 驱动的回收、`RemoveProgram`、
-`Shutdown`（停止入口统一，2026-10-07）——Runtime 把衍生物标成 `stop_pending`，之后的 tick 按退避重试同一个停止
+`Shutdown`（停止入口统一）——Runtime 把衍生物标成 `stop_pending`，之后的 tick 按退避重试同一个停止
 （`RuntimeOptions.SpawnStopRetryBackoff` 默认 4 tick、每次失败翻倍到最多 64 倍，`SpawnStopRetryLimit` 默认 10 次）；
 `Shutdown` / `RemoveProgram` 对待停止的衍生物也会立即再停一次。宿主实际停掉了却报失败的，会再收到一次停止。
 `Shutdown` 停不下的衍生物同样留成 `stop_pending` 并写进 checkpoint，宿主侧要准备好在 `Shutdown` 之后（继续推进或
@@ -345,7 +345,7 @@ Host command/result 和 revision。这样通常不需要在整条链路中盲目
 3. 在 `syncstream_test.go` ACK 并裁剪所有 retained packet，重启 journal 后继续 Append，确认
    Sequence/BaseSequence 没有回退；
 4. 运行 `integration/sync-e2e`，沿调用栈观察确认失败、磁盘恢复、分片重组、Applier 和 ACK
-   清理。这个测试是三仓边界是否真正契合的最终阅读入口。
+   清理。这个测试是同步流、Skill 与传输三层边界是否真正契合的最终阅读入口。
 
 ## 11. 生产化增量：从写入到恢复的完整闭环
 
@@ -501,9 +501,9 @@ go test ./... -run TestProtocolSoak -count=1 -timeout 35m
 完整生产接入、发布与故障注入流程见
 [Visual 与数据同步生产指南](visual-sync-production-guide.md)。
 
-## 2026-10-07 契约边界补充
+## skillcompose、扩展 API 与表现流的契约边界
 
 - skillcompose 的 SHA-256 digest 只校验内容自洽，不是带密钥签名。合同应由可信服务保存/提供；客户端提交的 Grants、Budgets 即使摘要匹配也不能当授权。Constraints / Obligations / Packages 目前只校验格式，业务策略须另行执行。
 - `GraphFromProfile` 是操作数组摘要；有效果出口的检查不替代正式编译与控制流分析。
-- C8 保留公开扩展 API（`RegisterProgram` / `PublishManifest` / `ExportMetrics`、`DefaultCatalog`、`Metrics.Bounded`）；仓内没有调用不等于对外废弃。manifest 注册/发送属于接入方责任。
+- 保留公开扩展 API（`RegisterProgram` / `PublishManifest` / `ExportMetrics`、`DefaultCatalog`、`Metrics.Bounded`）；仓内没有调用不等于对外废弃。manifest 注册/发送属于接入方责任。
 - `Critical=false` 不是丢包许可，presentation 当前仍经过严格 sequence 链、ACK 和 outbox 重发；丢包需 replay/reset。

@@ -1,6 +1,6 @@
 # 游戏 Skill 专项手册
 
-本目录说明游戏内技能，不包含开发 AI 提示词。现行模块为 roost-core/skill，Runtime checkpoint=10；历史改名与旧格式只从 Git 追溯，不作为当前接入步骤。
+本目录说明游戏内技能，不包含开发 AI 提示词。现行包为 `gameplay/skill`（随 roost-core 同一 tag 发布），Runtime checkpoint 只接受当前版本（`RuntimeCheckpointVersion`）；历史改名与旧格式只从 Git 追溯，不作为当前接入步骤。
 
 - [整体设计与边界](../framework/guide/08-skill.md)
 - [实现、类型与回归入口](../framework/impl/08-skill.md)

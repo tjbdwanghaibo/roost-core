@@ -2,7 +2,7 @@
 
 阅读准备：先了解 [Skill 的职责与例子](../framework/guide/08-skill.md)；不熟悉DAO、事务、Host等概念时，从 [入门手册](../GETTING-STARTED.md) 开始。本篇保留具体接口与示例，适合在接入或定位问题时查阅。
 
-> 2026-10-08 当前入口：[架构与迁移](../framework/guide/08-skill.md)。下面保留历次详细设计；旧三仓发布段、旧 checkpoint 数字及 Import 周期刷新说法均被本轮单仓/版本10规则取代。新字段隐私由业务 projector 明确实现，CloseObserver 不撤回在飞 Publish，AssemblyTTL 由新分片到达触发清扫。
+> 当前入口：[Skill 设计与使用](../framework/guide/08-skill.md)。单模块发布，Runtime checkpoint 只接受当前版本（`RuntimeCheckpointVersion`）。§11、§12 是当前生产闭环与基线；新字段隐私由业务 projector 明确实现，CloseObserver 不撤回在飞 Publish，AssemblyTTL 由新分片到达触发清扫。
 
 本文描述单仓 `roost-core` 中 skill/skillsync 与 syncstream 的正式边界、接入顺序、
 恢复语义、运行指标和发布门槛。它既是学习入口，也是生产接入检查表。
@@ -26,13 +26,13 @@ skillsync.Coordinator ── roost-core/syncstream.History ── roost-core/syn
 client skillsync.Applier ◀───────────────────────────────────┘
 ```
 
-三个仓库各自只负责一层：
+三层各自只负责一件事（同一个 roost-core 模块，随同一 tag 发布）：
 
-| 仓库 | 正式职责 | 明确不负责 |
+| 层（包） | 正式职责 | 明确不负责 |
 | --- | --- | --- |
-| `roost-core` | 通用有序流、ACK、有限历史、全量恢复、持久化表示、指标 | Skill payload、NATS、可见性规则 |
-| `roost-skill` | DSL/Runtime、视觉契约、状态快照、强类型记录、服务端协调器、客户端应用器 | 引擎资源路径、具体消息中间件 |
-| `roost-kit` | Packet 与 SyncMsg 的严格适配、observer 防串流、负载上限、有界发布队列 | 解释 Skill 状态或视觉语义 |
+| 通用同步流（`framework/sync/...`） | 通用有序流、ACK、有限历史、全量恢复、持久化表示、指标 | Skill payload、NATS、可见性规则 |
+| Skill（`gameplay/skill`、`skillsync`、`skillcompose`） | DSL/Runtime、视觉契约、状态快照、强类型记录、服务端协调器、客户端应用器 | 引擎资源路径、具体消息中间件 |
+| 传输适配（`framework/sync/syncstream`，总线由 `wiring/syncbus` 装配） | Packet 与 SyncMsg 的严格适配、observer 防串流、负载上限、有界发布队列 | 解释 Skill 状态或视觉语义 |
 
 具体游戏负责实现生产 `Host`、observer 可见性策略、视觉资产目录解析器、History
 持久化后端，以及客户端 consumer。`MemoryHost` 仅是确定性参考实现。
@@ -172,9 +172,9 @@ client ahead 时，自动调用 provider 生成 full、Append 成新恢复锚点
 生产存储必须用“写临时对象 → fsync/提交 → 原子切换版本”策略，不能直接覆盖唯一副本。
 建议在 match/shard 生命周期边界保存，并在进程退出前再保存一次。
 
-## 6. roost-kit 传输边界
+## 6. 传输边界（syncstream）
 
-同步发送使用 `roost-core/syncstream` 的 `NewPublisherWithOptions` 设置：
+同步发送使用 `framework/sync/syncstream` 的 `NewPublisherWithOptions` 设置：
 
 - `ExpectedObserver`：防止服务端路由代码把另一 observer 的包发进当前通道；
 - `MaxPayloadBytes`：在 JSON envelope 前拒绝超大业务 payload；
@@ -188,7 +188,7 @@ client ahead 时，自动调用 provider 生成 full、Append 成新恢复锚点
 4. 校验 envelope 和 payload 大小；
 5. 给 handler 传递脱离副本。
 
-返回值是总线的 `*syncbus.Subscription`：停机时 `Unsubscribe(ctx)` 返回 nil 之后 handler 不会再被调用，这时才释放 handler 用到的依赖（A3 ②）。
+返回值是总线的 `*syncbus.Subscription`：停机时 `Unsubscribe(ctx)` 返回 nil 之后 handler 不会再被调用，这时才释放 handler 用到的依赖。
 
 高吞吐场景可在 Publisher 外包 `BufferedPublisher`。队列满时返回 `ErrBackpressure`，
 不静默丢包；关闭时停止接收并排空已接收包。异步下游最终失败会进入 OnError 和指标，
@@ -226,7 +226,7 @@ state 重建持续表现。
 | retained/dropped/pending/streams | `History.Metrics` | dropped 持续增长；pending 长时间不回落 |
 | oldest/latest/acked | `History.Status` | latest-acked 接近保留窗口 |
 | published/publish_failures/filtered/recoveries | `Coordinator.Metrics` | failures 或 recoveries 突增 |
-| published/failures | kit `Publisher.Metrics` | broker 错误连续出现 |
+| published/failures | syncstream `Publisher.Metrics` | broker 错误连续出现 |
 | queued/published/failures/backpressure | `BufferedPublisher.Metrics` | backpressure > 0；queued-published 持续扩大 |
 | Runtime CursorExpired/Dropped | poll batch | 任一稳定出现 |
 
@@ -236,7 +236,7 @@ sequence、source sequence 和 resync reason，但不要记录完整敏感 paylo
 
 ## 9. 发布、兼容与回滚
 
-单模块一次发布：先停旧服务、按格式版本清理或离线重建旧数据，升级业务服务与客户端依赖后再开放流量。`gameplay/skill`、`kit`、`framework/sync/syncstream` 不再分别发版本。当前 checkpoint=10，旧版拒绝。
+单模块一次发布：先停旧服务、按格式版本清理或离线重建旧数据，升级业务服务与客户端依赖后再开放流量。`gameplay/skill`、`wiring`、`framework/sync/syncstream` 不再分别发版本。当前 checkpoint=10，旧版拒绝。
 
 Schema 或视觉目录升级采用双版本窗口：先部署能读取新旧版本的客户端，再让服务端以 full
 切换 schema/catalog。回滚时停止产生新 schema，恢复旧 producer；客户端收到 mismatch
@@ -245,25 +245,20 @@ Schema 或视觉目录升级采用双版本窗口：先部署能读取新旧版�
 
 ## 10. 生产验证流程
 
-以下命令在三个仓库分别执行，并设置 `GOWORK=off` 验证模块边界：
+以下命令在仓库根执行，设置 `GOWORK=off`：
 
-```powershell
-# roost-core
+```sh
+# 通用同步流与传输适配
 go test ./framework/sync/syncstream -count=1
 go vet ./framework/sync/syncstream
 go test -race ./framework/sync/syncstream -count=1
 
-# roost-skill
-go test ./gameplay/skill ./skillcompose ./skillsync -count=1
-go vet ./gameplay/skill ./skillcompose ./skillsync
-go test -race ./gameplay/skill ./skillcompose ./skillsync -count=1
+# Skill
+go test ./gameplay/skill ./gameplay/skill/skillcompose ./gameplay/skill/skillsync -count=1
+go vet ./gameplay/skill ./gameplay/skill/skillcompose ./gameplay/skill/skillsync
+go test -race ./gameplay/skill ./gameplay/skill/skillcompose ./gameplay/skill/skillsync -count=1
 go test ./gameplay/skill -run TestAllFixturesParseCompileInspectAndRun -count=1
 go test -run=^$ -fuzz=FuzzParseGeneratedNeverPanics -fuzztime=10s ./gameplay/skill
-
-# roost-kit
-go test ./framework/sync/syncstream -count=1
-go vet ./framework/sync/syncstream
-go test -race ./framework/sync/syncstream -count=1
 ```
 
 发布环境还必须做端到端故障注入：
@@ -284,8 +279,7 @@ go test -race ./framework/sync/syncstream -count=1
 
 ## 11. 当前稳定版生产闭环补充
 
-本节覆盖旧章节中基于“定期 Export/Import、发布后等待 Resync”的保守描述。当前正式
-可靠链路如下：
+当前正式可靠链路如下（History 绑定 journal 后不靠定期 Export/Import，也不靠发布后等待 Resync）：
 
 1. `History.Append` 在修改内存前把 mutation 写入 `HistoryJournal`；Packet 自动携带随机
    非零 Epoch。ACK、删除、空闲清理和 Epoch 轮换也遵守 write-ahead 顺序。
@@ -337,24 +331,24 @@ publisher, _ := syncstream.NewPublisherWithOptions(bus, syncstream.PublisherOpti
 })
 ```
 
-必须为 `History.Health`、`Coordinator.Health`（包含 Outbox）和 kit Publisher/Subscriber
+必须为 `History.Health`、`Coordinator.Health`（包含 Outbox）和 syncstream Publisher/Subscriber
 指标接入告警。框架 exporter 可观察 history dropped 和 outbox pending age/失败；订阅端目前没有独立 assembly/checksum 指标，宿主应根据返回错误记录 assembly 超限、checksum
 失败、visibility failure、schema/epoch mismatch 和 snapshot recovery 突增。
 
 ### 11.2 完整测试入口
 
-```powershell
-# 三个发布模块：在本地临时 go.work 中组合，生产 go.mod 不含 replace
+```sh
+# 仓库根，GOWORK=off
 go test ./... -count=1
 go vet ./...
 go test -race ./... -count=1
 
 # 基准
-go test ./framework/sync/syncstream -run '^$' -bench . -benchmem       # roost-core / roost-kit
-go test ./gameplay/skill -run '^$' -bench . -benchmem          # roost-skill
+go test ./framework/sync/syncstream -run '^$' -bench . -benchmem
+go test ./gameplay/skill -run '^$' -bench . -benchmem
 
-# 跨模块：确认失败 -> 重启 -> WAL/outbox 恢复 -> gzip/分片/checksum -> ACK/裁剪
-cd skill/integration/sync-e2e
+# 独立测试模块：确认失败 -> 重启 -> WAL/outbox 恢复 -> gzip/分片/checksum -> ACK/裁剪
+cd gameplay/skill/integration/sync-e2e
 go test ./... -count=1
 
 # 发布前 30 分钟 soak（可先用 5s 验证任务配置）
@@ -363,10 +357,7 @@ $env:ROOST_SYNC_SOAK_DURATION='30m'
 go test ./... -run TestProtocolSoak -count=1 -timeout 35m
 ```
 
-发布顺序为 `roost-core`（当时 v1.10.0）→ `roost-skill` → `roost-kit`（当时 v1.10.0）→ 业务服务/客户端。
-`roost-skill` 的模块路径是 `github.com/tjbdwanghaibo/roost-core/gameplay/skill`。生产模块只依赖
-语义版本；相对 `replace` 仅存在于 `integration/sync-e2e` 测试模块。正式发布 tag 前应先用
-临时 workspace 执行三仓全量测试，然后在无 workspace 环境验证已发布版本可解析。
+单模块随同一 tag 发布，之后升级业务服务与客户端。Skill 的包路径是 `github.com/tjbdwanghaibo/roost-core/gameplay/skill`。生产模块只依赖语义版本；相对 `replace` 仅存在于 `gameplay/skill/integration/sync-e2e` 与 `gameplay/skill/examples` 两个独立测试模块。发版流程见[维护手册 §5](../maintenance/README.md#5-发版)。
 
 ## 12. 当前生产基线补充
 

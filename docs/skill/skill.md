@@ -138,7 +138,7 @@ operation、召唤物（`OwnedEntityRuntimeHost`）。后六列写在 `environme
 - `Program` 不应跨版本自行序列化；持久化源定义、环境 identity 和 gameplay digest。
 - checkpoint 恢复必须匹配 Program resolver、Host authority、world revision 和 checksum。
 - 客户端同步使用 `skillsync` 的 manifest/state/presentation 三流，不直接发送 Runtime 私有结构。
-- 从 `/skillv2` 升级使用[稳定包迁移手册](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/skill/breaking-upgrade-skill-package.md)。
+- 历史上从 `/skillv2` 迁移的步骤见[稳定包迁移手册（固定提交）](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/skill/breaking-upgrade-skill-package.md)。
 
 ## 下一步
 
