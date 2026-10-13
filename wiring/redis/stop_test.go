@@ -9,13 +9,8 @@ import (
 	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 )
 
-// RR-20261006-10（W-2026-10-06-02 转 RR）：Close / Stop 的统一口径——重复调用幂等返回 nil，第一次的
-// 错误只报一次；并发调用安全，后到者等第一个做完。
-//
-// 旧行为：单实例锁 store 的 Close 粘滞返回第一次的结果（第一次出错，之后每次都是同一个错误）；
-// RedisMod.StopWithContext 并发调用时读写 m.asm 没有同步（-race 报数据竞争），可能把连接池关两次。
-// App 每次停机对每个 Mod 只串行调一次，现有路径走不到，但停止入口的契约是“幂等、可重入”。
-// 不可达地址，不需要真实 Redis。
+// Close / Stop 的统一口径：重复调用幂等返回 nil，第一次的错误只报一次；并发调用安全，后到者等第一个做完（-race 下不能有数据竞争，
+// 不能把连接池关两次）。不可达地址，不需要真实 Redis。
 func TestSingletonStoreCloseErrorIsReportedOnce(t *testing.T) {
 	s, err := newSingletonStore(fredis.DefaultConfig("127.0.0.1:1"))
 	if err != nil {
@@ -55,5 +50,23 @@ func TestRedisModConcurrentStopIsSafe(t *testing.T) {
 		if err := m.StopWithContext(context.Background()); err != nil {
 			t.Fatalf("Stop after stop = %v, want nil", err)
 		}
+	}
+}
+
+// Redis Mod 的停止入口幂等：go-redis 的 Close 先把连接池标记为关闭再返回逐个关连接时的第一个错误，返回错误时资源同样已经释放，
+// 所以 Close 出错之后再调用 Stop 返回 nil（停机契约第 4 步）。用例先关闭一次底层客户端来制造“Close 返回错误”。
+func TestRedisModStopConvergesAfterACloseError(t *testing.T) {
+	asm, err := redisdriver.Assemble(fredis.DefaultConfig("127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &RedisMod{asm: asm, cfg: fredis.DefaultConfig("127.0.0.1:1")}
+	_ = asm.Client.Raw().Close() // 连接池已在底层关闭；Mod 的 Close 将返回错误（驱动 Close 幂等后要绕过它，RR-20261006-10）
+
+	if err := m.StopWithContext(context.Background()); err == nil {
+		t.Fatal("first Stop = nil, want the Close error reported once")
+	}
+	if err := m.StopWithContext(context.Background()); err != nil {
+		t.Fatalf("Stop after the pool was closed = %v, want nil: retrying can never succeed", err)
 	}
 }

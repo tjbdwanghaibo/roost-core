@@ -8,9 +8,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
-// RR-20261005-NC-190：redis.cluster_addrs 写成 YAML 列表时同样是 Cluster，逗号后的空格不进地址。
-// 旧行为：列表读成空串，Redis Mod 退回 localhost:6379 单机、服务 Mod 的 Cluster hash tag 校验被
-// 跳过；`a:1, b:2` 拆出带前导空格的 " b:2"。
+// redis.cluster_addrs 写成 YAML 列表时同样是 Cluster（不能读成空串退回 localhost 单机、跳过 hash tag 校验），逗号后的空格不进地址。
 func TestClusterAddrsAcceptAYAMLListAndTrimEntries(t *testing.T) {
 	for _, text := range []string{"a:1,b:2", "a:1, b:2", "[a:1, b:2]", "\n    - a:1\n    - b:2"} {
 		cfg := viper.New()
@@ -31,10 +29,8 @@ func TestClusterAddrsAcceptAYAMLListAndTrimEntries(t *testing.T) {
 	}
 }
 
-// A4 留项（维护者决定 A4，REFACTOR-2026-10-05-strict-config-reads）：redis.db / redis.pool_size /
-// redis.min_idle_conns 由 Redis Mod 与单实例锁的 SingletonStore 自己严格读取，写成 8k、1.5、10s 这样的值
-// 在 Init 时点名报错，不再被 viper 的宽松 getter 读成 0（db 0、连接池取默认）。旧行为只靠 App 启动时的
-// ValidateServiceConfig 兜底，直接装配 Mod 的调用方（测试、工具）读到的是 0。
+// redis.db / redis.pool_size / redis.min_idle_conns 由 Redis Mod 与单实例锁的 SingletonStore 自己严格读取（维护者决定 A4）：
+// 写成 8k、1.5、10s 这样的值在 Init 时点名报错，不被宽松 getter 读成 0；直接装配 Mod 的调用方（测试、工具）同样拿到错误。
 func TestRedisIntegerKeysAreReadStrictly(t *testing.T) {
 	for _, key := range []string{"db", "pool_size", "min_idle_conns"} {
 		for _, bad := range []string{"8k", "1.5", "10s"} {
@@ -66,9 +62,8 @@ func TestRedisIntegerKeysAreReadStrictly(t *testing.T) {
 	}
 }
 
-// RR-20261006-28：生产环境要有 Redis，但 redis.addr 与 redis.cluster_addrs 任一即可——只配 Cluster 的生产配置
-// 不必再写一个被 Cluster 覆盖、不起作用的 addr。A4 ① 起这条跟着 Redis 配置的声明走（以前按服务类型写在 app 的
-// 生产校验里），Redis Mod 与单实例锁的连接都受它约束。
+// 生产环境要有 Redis，但 redis.addr 与 redis.cluster_addrs 任一即可（只配 Cluster 的生产配置不必再写不起作用的 addr）；这条跟着 Redis
+// 配置的声明走，Redis Mod 与单实例锁的连接都受它约束。
 func TestProductionRedisNeedsAnAddrOrClusterSeeds(t *testing.T) {
 	production := func(body string) *viper.Viper {
 		cfg := viper.New()
