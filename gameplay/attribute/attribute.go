@@ -1,35 +1,21 @@
-// Package attribute is the framework's half of the attribute system: the
-// identifiers, the metadata, the profile contract and the container that
-// holds a subject's layers. The other half is generated per project by
-// roost-codegen's attribute generator from a `//roost:attribute` marker —
-// it produces one profile's ids, masks, metadata, typed setters, derived
-// formulas and typed accessors, and it implements Profile.
+// Package attribute 是属性系统里框架负责的一半：标识、元数据、profile 契约，以及持有主体各层属性的容器。另一半由
+// roost-codegen 的属性生成器按项目从 `//roost:attribute` 标记生成——它产出一个 profile 的 ID、掩码、元数据、
+// 带类型的 setter、派生公式与带类型的访问器，并实现 Profile。
 //
-// The split is deliberate. What every game needs the same way (how an
-// attribute is named and addressed, what a snapshot means, how layers are
-// selected) lives here and can be relied on across projects; what is specific
-// to a game (which attributes exist, how power is derived from attack) is
-// generated from the game's own declaration. Before this package existed the
-// generated code referenced these types by name and no package provided
-// them, so the feature could not compile at all (RR-20260917-06).
+// 这样分开是有意的：每个游戏都以同样方式需要的东西（属性如何命名与寻址、快照意味着什么、如何选择层）放在这里，
+// 可以跨项目依赖；游戏特有的东西（有哪些属性、攻击力如何派生出战力）从游戏自己的声明生成。
 package attribute
 
-// AttrID identifies one attribute inside a profile. Ids are assigned by the
-// generator from the profile's declared index range, so they are stable for
-// as long as the declaration is: persist them, put them on the wire, key
-// maps by them.
+// AttrID 标识 profile 里的一个属性。ID 由生成器从 profile 声明的下标范围分配，只要声明不变就稳定：可以持久化、
+// 上线路、作 map 的键。
 type AttrID uint16
 
-// AttrValue is the common numeric form every attribute travels in. A profile
-// may store an attribute as a narrower type; the generated setters convert.
-// One type for the wire and for bulk transfer is what lets the framework move
-// attributes it knows nothing about.
+// AttrValue 是每个属性传递时共用的数值形式。profile 可以用更窄的类型存储属性，由生成的 setter 转换。线路与批量
+// 传输只用一种类型，框架才能搬运它一无所知的属性。
 type AttrValue int64
 
-// Meta describes one attribute: what it is called in the declaration
-// (`attr:"hp"`) and in Go (`HP`), which dirty bit belongs to it, and whether
-// it is derived — a derived attribute is computed by a formula and must not
-// be set directly, which is why the generated SetDirectAttr refuses it.
+// Meta 描述一个属性：声明里的名字（`attr:"hp"`）与 Go 里的名字（`HP`）、它对应的脏位，以及是否派生——派生属性
+// 由公式计算，不能直接设置，所以生成的 SetDirectAttr 会拒绝它。
 type Meta struct {
 	ID      AttrID
 	Name    string
@@ -38,39 +24,30 @@ type Meta struct {
 	Derived bool
 }
 
-// Profile is what a generated attribute profile implements. A game holds
-// profiles; the framework moves them.
+// Profile 是生成的属性 profile 实现的接口。游戏持有 profile，框架搬运它们。
 //
-// The dirty mask is the contract's core: every setter ORs its attribute's bit
-// into it, Update recomputes the derived attributes whose inputs are set, and
-// ClearDirty resets it once the change has been published. The generated code
-// maintains an unexported `dirtyMask uint64` field on the profile struct —
-// the one field the declaration must carry itself.
+// 脏掩码是契约的核心：每个 setter 把自己属性的位 OR 进去，Update 重算输入被置脏的派生属性，变化发布之后
+// ClearDirty 清掉它。生成代码在 profile 结构体上维护一个未导出的 `dirtyMask uint64` 字段——这是声明本身必须
+// 携带的唯一字段。
 type Profile interface {
-	// Reset returns the profile to its zero value, dirty mask included.
+	// Reset 把 profile 恢复为零值，包括脏掩码。
 	Reset()
-	// CloneProfile is a deep copy: a snapshot hands one out so a reader can
-	// never mutate the live profile.
+	// CloneProfile 是深拷贝：快照交出的是它，读者无法修改活的 profile。
 	CloneProfile() Profile
-	// DirtyMask is the OR of every attribute changed since ClearDirty.
+	// DirtyMask 是自上次 ClearDirty 以来改变过的属性的位 OR。
 	DirtyMask() uint64
 	ClearDirty()
-	// SetAttr sets any attribute, derived ones included; the generated code
-	// uses it for restores. Returns whether the value changed.
+	// SetAttr 设置任意属性（包括派生属性），生成代码在恢复时用它。返回值是否改变。
 	SetAttr(id AttrID, value AttrValue) bool
-	// SetDirectAttr sets only attributes that are not derived. This is the
-	// entry point for gameplay: a derived attribute is the formula's to own.
+	// SetDirectAttr 只设置非派生属性，是玩法的入口：派生属性归公式所有。
 	SetDirectAttr(id AttrID, value AttrValue) bool
 	GetAttr(id AttrID) (AttrValue, bool)
-	// LoadValues applies a bulk map and runs Update, and returns the bits
-	// this call turned on (the mask before the load is excluded, so a caller
-	// learns what IT changed).
+	// LoadValues 应用一个批量 map 并运行 Update，返回这次调用置上的位（不含加载前已有的掩码，调用方知道的是
+	// 自己改了什么）。
 	LoadValues(values map[AttrID]AttrValue) uint64
-	// ExportValues writes the profile into dst, deleting the entries whose
-	// attribute is zero so the map stays the sparse form the wire wants.
+	// ExportValues 把 profile 写进 dst，并删除属性为零的项，让 map 保持线路需要的稀疏形式。
 	ExportValues(dst map[AttrID]AttrValue)
-	// Update recomputes every derived attribute whose inputs are dirty and
-	// reports whether any of them moved.
+	// Update 重算输入已脏的每个派生属性，报告其中是否有变化。
 	Update() bool
 	MetaByID(id AttrID) (Meta, bool)
 	MetaByName(name string) (Meta, bool)
