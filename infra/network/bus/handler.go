@@ -54,4 +54,3 @@ type HandlerFunc func(ctx *MsgContext)
 
 // RpcHandlerFunc handles an incoming RPC request and returns a response.
 type RpcHandlerFunc func(ctx *RpcContext) (resp any, err error)
-
