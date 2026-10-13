@@ -11,42 +11,16 @@ type IDProvider interface {
 }
 
 type ELog struct {
-	logger  *slog.Logger
 	enabled bool
 	level   slog.Level
 	attrs   []any
 }
 
-func NewELog(opts ...ELogOption) *ELog {
-	l := &ELog{
+// NewELog 返回写入默认 logger 的 ELog：启用、最低级别 Debug。
+func NewELog() *ELog {
+	return &ELog{
 		enabled: true,
 		level:   slog.LevelDebug,
-	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(l)
-		}
-	}
-	return l
-}
-
-type ELogOption func(*ELog)
-
-func WithLogger(logger *slog.Logger) ELogOption {
-	return func(l *ELog) {
-		l.logger = logger
-	}
-}
-
-func WithELogLevel(level slog.Level) ELogOption {
-	return func(l *ELog) {
-		l.level = level
-	}
-}
-
-func WithELogEnabled(enabled bool) ELogOption {
-	return func(l *ELog) {
-		l.enabled = enabled
 	}
 }
 
@@ -61,15 +35,6 @@ func (l *ELog) If(enabled bool) *ELog {
 
 func (l *ELog) Log(enabled bool) *ELog {
 	return l.If(enabled)
-}
-
-func (l *ELog) WithLevel(level slog.Level) *ELog {
-	if l == nil {
-		return l
-	}
-	next := l.clone()
-	next.level = level
-	return next
 }
 
 func (l *ELog) With(args ...any) *ELog {
@@ -190,18 +155,6 @@ func (l *ELog) Error(msg string, args ...any) {
 	l.writeWithSkip(slog.LevelError, msg, 4, args...)
 }
 
-func (l *ELog) Debugf(format string, args ...any) {
-	l.writef(slog.LevelDebug, format, 5, args...)
-}
-
-func (l *ELog) Infof(format string, args ...any) {
-	l.writef(slog.LevelInfo, format, 5, args...)
-}
-
-func (l *ELog) Warnf(format string, args ...any) {
-	l.writef(slog.LevelWarn, format, 5, args...)
-}
-
 func (l *ELog) Errorf(format string, args ...any) {
 	l.writef(slog.LevelError, format, 5, args...)
 }
@@ -228,9 +181,6 @@ func (l *ELog) writeWithSkip(level slog.Level, msg string, skip int, args ...any
 }
 
 func (l *ELog) base() *slog.Logger {
-	if l != nil && l.logger != nil {
-		return l.logger
-	}
 	return Default()
 }
 

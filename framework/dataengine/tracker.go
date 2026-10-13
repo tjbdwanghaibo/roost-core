@@ -66,12 +66,6 @@ func (t *Tracker) Dirty() bool { return t.HasSyncDirty() }
 
 func (t *Tracker) TakeSyncDirty() uint64 { return t.syncDirty.Swap(0) }
 
-// CommitSync 是空操作：TakeSyncDirty 取走掩码时已经清除，不需要再确认。
-func (t *Tracker) CommitSync(_ uint64) {}
-
-// RollbackSync 把已取走的服务间同步掩码放回，供下一次 TakeSyncDirty 重新取走。
-func (t *Tracker) RollbackSync(mask uint64) { t.syncDirty.Or(mask) }
-
 // TakeEntitySyncDirty 独立消费客户端同步变化，不影响服务间同步掩码。
 func (t *Tracker) TakeEntitySyncDirty() uint64 { return t.entitySyncDirty.Swap(0) }
 

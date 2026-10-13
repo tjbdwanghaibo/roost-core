@@ -27,10 +27,9 @@ import (
 type Name string
 
 var (
-	ErrSnapshotNotFound = errors.New("configdata: snapshot not found")
-	ErrTableNotFound    = errors.New("configdata: table not found")
-	ErrObjectNotFound   = errors.New("configdata: object not found")
-	ErrCustomNotFound   = errors.New("configdata: custom data not found")
+	ErrTableNotFound  = errors.New("configdata: table not found")
+	ErrObjectNotFound = errors.New("configdata: object not found")
+	ErrCustomNotFound = errors.New("configdata: custom data not found")
 )
 
 // Snapshot is an immutable, point-in-time view of all business configuration.
@@ -332,14 +331,6 @@ func ObjectFrom[V any](snap *Snapshot, name Name) (V, bool) {
 		return zero, false
 	}
 	return obj, true
-}
-
-func MustObjectFrom[V any](snap *Snapshot, name Name) V {
-	obj, ok := ObjectFrom[V](snap, name)
-	if !ok {
-		panic(fmt.Errorf("configdata: object %s: %w", name, ErrObjectNotFound))
-	}
-	return obj
 }
 
 func CustomFrom[V any](snap *Snapshot, name Name) (V, bool) {

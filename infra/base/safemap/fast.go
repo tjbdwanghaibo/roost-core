@@ -38,10 +38,6 @@ func NewInt64FastMap[V any](capHint int) *FastMap[int64, V] {
 	return NewIntegerFastMap[int64, V](capHint)
 }
 
-func NewUint64FastMap[V any](capHint int) *FastMap[uint64, V] {
-	return NewIntegerFastMap[uint64, V](capHint)
-}
-
 func NewStringFastMap[V any](capHint int) *FastMap[string, V] {
 	return NewFastMap[string, V](capHint, HashString)
 }

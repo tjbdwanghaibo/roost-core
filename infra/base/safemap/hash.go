@@ -16,14 +16,6 @@ func HashInteger[K Integer](key K) uint64 {
 	return Mix64(uint64(key))
 }
 
-func HashInt64(key int64) uint64 {
-	return HashInteger(key)
-}
-
-func HashUint64(key uint64) uint64 {
-	return HashInteger(key)
-}
-
 func HashString(key string) uint64 {
 	const (
 		offset64 = 14695981039346656037

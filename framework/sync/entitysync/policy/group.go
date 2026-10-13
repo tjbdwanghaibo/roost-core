@@ -30,7 +30,6 @@ var (
 	ErrGroupSubjectLimit   = errors.New("policy: group subject limit reached")
 	ErrGroupMemberLimit    = errors.New("policy: group member limit reached")
 	ErrGroupSubjectPresent = errors.New("policy: subject is already in the group")
-	ErrGroupMemberPresent  = errors.New("policy: member is already in the group")
 	ErrGroupNotPresent     = errors.New("policy: not in the group")
 )
 

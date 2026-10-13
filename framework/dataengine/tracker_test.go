@@ -51,17 +51,6 @@ func TestTrackerPersistenceAcceptDoesNotConsumeSyncDirty(t *testing.T) {
 	}
 }
 
-func TestTrackerRollbackSyncRestoresMask(t *testing.T) {
-	var tracker Tracker
-	tracker.MarkSync(0b001)
-	got := tracker.TakeSyncDirty()
-	tracker.MarkSync(0b100)
-	tracker.RollbackSync(got)
-	if dirty := tracker.TakeSyncDirty(); dirty != 0b101 {
-		t.Fatalf("sync dirty = %b, want 101", dirty)
-	}
-}
-
 func TestTrackerSnapshotRestoreCoversVersionAndSyncState(t *testing.T) {
 	var tracker Tracker
 	tracker.SetVersion(4)
@@ -107,10 +96,6 @@ func TestEntitySyncConsumptionIsIndependentAndRollsBack(t *testing.T) {
 	}
 	if got := tracker.TakeSyncDirty(); got != 3 {
 		t.Fatalf("server mask=%d", got)
-	}
-	tracker.RollbackSync(3)
-	if got := tracker.TakeEntitySyncDirty(); got != 0 {
-		t.Fatalf("server retry republished client mask=%d", got)
 	}
 	tracker.Restore(before)
 	if got := tracker.TakeEntitySyncDirty(); got != 1 {

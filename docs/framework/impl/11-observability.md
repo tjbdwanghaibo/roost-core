@@ -83,7 +83,7 @@
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
-| [elog.go](../../../infra/observe/log/elog.go) | `IDProvider`、`ELog`、`ELogOption` |
+| [elog.go](../../../infra/observe/log/elog.go) | `IDProvider`、`ELog` |
 | [log.go](../../../infra/observe/log/log.go) | `Options` |
 | [ordered_text_handler.go](../../../infra/observe/log/ordered_text_handler.go) | 函数/方法或内部实现；见源码 |
 | [rotation.go](../../../infra/observe/log/rotation.go) | 函数/方法或内部实现；见源码 |

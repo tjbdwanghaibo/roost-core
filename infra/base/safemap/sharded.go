@@ -38,14 +38,6 @@ func NewInt64ShardedSafeMap[V any](shardCount int) *ShardedSafeMap[int64, V] {
 	return NewIntegerShardedSafeMap[int64, V](shardCount)
 }
 
-func NewUint64ShardedSafeMap[V any](shardCount int) *ShardedSafeMap[uint64, V] {
-	return NewIntegerShardedSafeMap[uint64, V](shardCount)
-}
-
-func NewStringShardedSafeMap[V any](shardCount int) *ShardedSafeMap[string, V] {
-	return NewShardedSafeMap[string, V](shardCount, HashString)
-}
-
 func (m *ShardedSafeMap[K, V]) Set(key K, value V) {
 	shard := m.shard(key)
 	shard.mu.Lock()

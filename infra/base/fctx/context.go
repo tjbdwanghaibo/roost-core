@@ -2,10 +2,8 @@ package fctx
 
 import (
 	stdctx "context"
-	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -54,8 +52,6 @@ type TraceMeta struct {
 	Tags    map[string]string
 }
 
-var traceSeq atomic.Uint64
-
 func (t TraceMeta) Active() bool {
 	return t.Enabled && t.TraceID != ""
 }
@@ -63,13 +59,6 @@ func (t TraceMeta) Active() bool {
 func (t TraceMeta) Clone() TraceMeta {
 	t.Tags = cloneTraceTags(t.Tags)
 	return t
-}
-
-func NewTraceID(prefix string) string {
-	if prefix == "" {
-		prefix = "trace"
-	}
-	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), traceSeq.Add(1))
 }
 
 type RequestMeta struct {

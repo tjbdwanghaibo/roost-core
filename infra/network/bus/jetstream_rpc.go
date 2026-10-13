@@ -29,7 +29,6 @@ const (
 
 var (
 	ErrJetStreamRPCUnavailable = errors.New("bus: jetstream rpc unavailable")
-	ErrJetStreamRPCExpired     = errors.New("bus: jetstream rpc request expired")
 
 	// errJetStreamRPCStopping 让停止开始后才到达的投递回到 broker（driver 据此 NAK），
 	// 由同服务的其他实例处理。

@@ -8,8 +8,7 @@ import (
 )
 
 const (
-	CodeOK    int32 = errcode.CodeOK
-	CodeError int32 = errcode.CodeInternal
+	CodeOK int32 = errcode.CodeOK
 )
 
 func Error(err error) (int32, string) {

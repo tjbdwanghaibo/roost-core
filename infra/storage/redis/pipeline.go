@@ -53,10 +53,6 @@ type FutureStringMap struct {
 	err error
 }
 
-func NewFutureStringMap(val map[string]string, err error) *FutureStringMap {
-	return &FutureStringMap{val: val, err: err}
-}
-
 func (f *FutureStringMap) Result() (map[string]string, error) { return f.val, f.err }
 
 func (f *FutureStringMap) SetResult(val map[string]string, err error) {

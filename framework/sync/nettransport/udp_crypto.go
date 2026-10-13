@@ -3,10 +3,8 @@ package nettransport
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"io"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -47,12 +45,6 @@ func NewAESGCMProtector(key []byte, sendSalt, receiveSalt [4]byte) (*AEADSession
 		return nil, err
 	}
 	return &AEADSessionProtector{aead: aead, sendSalt: sendSalt, receiveSalt: receiveSalt}, nil
-}
-
-func RandomNonceSalt() ([4]byte, error) {
-	var salt [4]byte
-	_, err := io.ReadFull(rand.Reader, salt[:])
-	return salt, err
 }
 
 func (protector *AEADSessionProtector) Overhead() int {

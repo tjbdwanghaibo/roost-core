@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -479,13 +478,6 @@ func DialKCP(address string, block kcp.BlockCrypt, dataShards, parityShards int)
 		return nil, fmt.Errorf("%w: KCP requires encryption and FEC for the unreliable OOB lane", ErrProtocolConfig)
 	}
 	return kcp.DialWithOptions(address, block, dataShards, parityShards)
-}
-
-func KCPRemoteAddress(session *kcp.UDPSession) net.Addr {
-	if session == nil {
-		return nil
-	}
-	return session.RemoteAddr()
 }
 
 var _ Transport = (*KCPTransport)(nil)

@@ -80,13 +80,3 @@ func (s *GroupedLocalStore[G, K, V]) Delete(_ context.Context, key K) error {
 	}
 	return nil
 }
-
-func (s *GroupedLocalStore[G, K, V]) DeleteGroup(_ context.Context, groupKey G) error {
-	if s == nil {
-		return nil
-	}
-	s.mu.Lock()
-	delete(s.groups, groupKey)
-	s.mu.Unlock()
-	return nil
-}

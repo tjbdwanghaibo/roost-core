@@ -97,16 +97,8 @@ func Register(def CommandDef) error {
 	return DefaultRegistry().Register(def)
 }
 
-func RegisterMetadata(meta CommandMeta) error {
-	return defaultMetadataRegistry.Register(meta)
-}
-
 func Metadata(name string) (CommandMeta, bool) {
 	return defaultMetadataRegistry.Get(name)
-}
-
-func MetadataList() []CommandMeta {
-	return defaultMetadataRegistry.List()
 }
 
 func Execute(ctx context.Context, cmd Command) (Result, error) {

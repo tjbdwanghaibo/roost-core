@@ -1,10 +1,8 @@
 package goroutine
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
-	"time"
 )
 
 func SafeFunc(f func()) {
@@ -17,12 +15,6 @@ func SafeFunc(f func()) {
 		}
 	}()
 	f()
-}
-
-func SafeFuncWrapper(f func()) func() {
-	return func() {
-		SafeFunc(f)
-	}
 }
 
 func SafeFuncWithRet[T any](f func() T) (t T) {
@@ -67,12 +59,4 @@ func safeCallErr(f func() error) (err error) {
 		}
 	}()
 	return f()
-}
-
-func SafeFuncWithExpireCtx(d time.Duration, f func(ctx context.Context)) {
-	ctx, rls := context.WithTimeout(context.Background(), d)
-	defer rls()
-	SafeFunc(func() {
-		f(ctx)
-	})
 }

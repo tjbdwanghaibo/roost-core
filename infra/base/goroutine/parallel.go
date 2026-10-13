@@ -13,14 +13,6 @@ type parallelMapConfig struct {
 	maxWorkers int
 }
 
-func WithMaxWorkers(n int) ParallelMapOption {
-	return func(cfg *parallelMapConfig) {
-		if n > 0 {
-			cfg.maxWorkers = n
-		}
-	}
-}
-
 func buildConfig(dataLen int, opts []ParallelMapOption) *parallelMapConfig {
 	cfg := &parallelMapConfig{maxWorkers: runtime.NumCPU()}
 	for _, opt := range opts {
@@ -57,29 +49,6 @@ func ParallelMap[K comparable, V any](data map[K]V, fn func(K, V), opts ...Paral
 		e := entries[idx]
 		safeCall(func() { fn(e.k, e.v) }, e.k)
 	})
-}
-
-func ParallelMapCollect[K comparable, V any, R any](data map[K]V, fn func(K, V) R, opts ...ParallelMapOption) []R {
-	if len(data) == 0 {
-		return nil
-	}
-	cfg := buildConfig(len(data), opts)
-
-	type entry struct {
-		k K
-		v V
-	}
-	entries := make([]entry, 0, len(data))
-	for k, v := range data {
-		entries = append(entries, entry{k, v})
-	}
-
-	results := make([]R, len(entries))
-	parallelExec(cfg.maxWorkers, len(entries), func(idx int) {
-		e := entries[idx]
-		safeCall(func() { results[idx] = fn(e.k, e.v) }, e.k)
-	})
-	return results
 }
 
 func ParallelSlice[V any](data []V, fn func(int, V), opts ...ParallelMapOption) {
