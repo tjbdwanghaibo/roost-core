@@ -43,7 +43,7 @@ roost help all
 
 ```bash
 make project-upgrade # 使用 @latest codegen 升级工程模板
-make deps-update  # 只联合解析 core、kit、skill
+make deps-update  # 只解析 roost-core 一个框架模块
 make roost-up     # GOWORK=off go get -u ./...，然后 GOWORK=off go mod tidy
 make codegen-up   # go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest
 ```
@@ -140,9 +140,7 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
 
     roost project new planet \
       -module github.com/acme/planet \
-      -roost-core-version v1.8.0 \
-      -roost-kit-version v1.8.0 \
-      -roost-skill-version v1.9.0
+      -roost-core-version v1.25.0
 
 生成器随 roost-core 发布，Makefile 按 `versions.core` 运行它；没有单独的 codegen 版本（RR-20261006-57）。
 
@@ -215,8 +213,8 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
 | `project.name` | 是 | 应用名；小写字母开头，只允许小写字母、数字和下划线 |
 | `project.module` | 是 | 生成代码使用的 Go module import path |
 | `versions.core` | 是 | roost-core 的 `latest` 策略或明确最低版本 |
-| `versions.kit` | 是 | roost-kit 的更新策略或最低版本 |
-| `versions.skill` | 是 | roost-skill 的更新策略或最低版本 |
+| `versions.kit` | 是 | 历史字段：kit 已是 roost-core 的包（`wiring/`），只做版本策略格式与下限校验 |
+| `versions.skill` / `versions.service` | 否 | 已退役、不再解码：写了会被加载与 `roost project upgrade` 一并拒绝，需手工删掉（skill 与框架服务都是 roost-core 的包） |
 | `versions.codegen` | 否 | 已退役、不再解码：写了会被加载与 `roost project upgrade` 一并拒绝，需手工删掉；Makefile 按 `versions.core` 运行生成器（RR-20261006-57） |
 | `shared_mods` | 否 | 进程级共享 Mod；每个 Service 不得重复声明 |
 | `services` | 是 | Service 名到配置的 map；至少一个 Service |
@@ -562,11 +560,9 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 
 ## 15. Module path 与发布依赖
 
-生成的 `go.mod` 直接引用各仓库真实发布的 module path。首次离线启动使用当前兼容下限作为合法 bootstrap：
+生成的 `go.mod` 只 require 一个框架模块 `github.com/tjbdwanghaibo/roost-core`（kit、skill、框架服务、生成器都是其中的包）。首次离线启动使用当前兼容下限作为合法 bootstrap：
 
-    github.com/tjbdwanghaibo/roost-core v1.8.0
-    github.com/tjbdwanghaibo/roost-kit v1.8.0
-    github.com/tjbdwanghaibo/roost-skill v1.9.0
+    github.com/tjbdwanghaibo/roost-core v1.25.0
 
 不生成 `replace`。在正常的 `project new/sync/deps` 路径中，上述版本会立即被当前最新 release 替换；具体版本留在 `go.mod/go.sum`，而“继续跟随最新”的策略留在 `roost.yaml`。生成的 `internal/frameworkdeps/generated.go` 通过稳定路径 `github.com/tjbdwanghaibo/roost-core/gameplay/skill` 的类型别名保留暂未被业务导入的 skill，因此 tidy 不会删掉它。若需要离线生成，bootstrap 下限仍可构建；恢复网络后执行 `make deps-update` 即可追到最新。
 

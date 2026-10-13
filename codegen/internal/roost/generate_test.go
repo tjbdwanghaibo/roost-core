@@ -62,12 +62,6 @@ func TestOrdinaryMentionOfGeneratedTextRemainsBusinessInput(t *testing.T) {
 		t.Fatal("ordinary comment claimed generator ownership")
 	}
 }
-func TestNewManifestDoesNotAdvertiseRetiredModules(t *testing.T) {
-	m := DefaultManifest("b7", "example.com/b7", nil, nil, nil)
-	if m.Versions.Skill != "" || m.Versions.Service != "" {
-		t.Fatalf("retired version policies: %+v", m.Versions)
-	}
-}
 func TestProductionConfigAllowsLoopbackOpsAddress(t *testing.T) {
 	root := t.TempDir()
 	p := filepath.Join(root, "config.yaml")

@@ -65,11 +65,6 @@ func TestFrameworkServiceManifestValidation(t *testing.T) {
 	if err := hostedUses.Validate(); err == nil || !strings.Contains(err.Error(), "cannot also declare uses") {
 		t.Fatalf("a hosted service with uses accepted: %v", err)
 	}
-	legacy := base()
-	legacy.Versions.Service = "v1.5.4" // written by a generator that predates the consolidation
-	if err := legacy.Validate(); err != nil {
-		t.Fatalf("a pre-consolidation versions.service must still load (the module is folded into kit): %v", err)
-	}
 }
 
 // What the generator emits for a hosted service and for a service that calls

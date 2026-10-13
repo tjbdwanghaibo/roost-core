@@ -131,26 +131,25 @@ func TestFrameworkCompatMinimumSetMatchesTheGeneratorFloor(t *testing.T) {
 	}
 }
 
-// Historical generators below v1.11.0 emit go.mod requirements on the
-// pre-rename module paths (github.com/tjbdwanghaibo/cube-core, cube-kit);
-// `go get` of those fails forever, so a project created by them can never be
-// upgraded in CI. The upgrade matrix must start at the first release that
-// emitted roost-* paths.
-func TestUpgradeCompatHistoryStartsAtTheRoostModulePaths(t *testing.T) {
+// upgrade-compat 从已发布的 roost-core 生成器起步：合仓前的工程需要已删除的 import 改写
+// （upgrade --consolidate），矩阵里只能出现当前包布局（v1.25.0 起）的发布版。
+func TestUpgradeCompatHistoryStartsAtTheCurrentPackageLayout(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "upgrade-compat.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	re := regexp.MustCompile(`codegen: \[([^\]]+)\]`)
-	match := re.FindStringSubmatch(string(raw))
+	match := regexp.MustCompile(`core: \[([^\]]+)\]`).FindStringSubmatch(string(raw))
 	if match == nil {
-		t.Fatal("upgrade-compat.yml has no codegen matrix")
+		t.Fatal("upgrade-compat.yml has no core matrix")
 	}
 	for _, entry := range strings.Split(match[1], ",") {
 		version := strings.TrimSpace(entry)
-		if !versionAtLeast(version, 1, 11, 0) {
-			t.Errorf("matrix entry %s predates the roost-* module paths and cannot resolve", version)
+		if !versionAtLeast(version, 1, 25, 0) {
+			t.Errorf("matrix entry %s predates the current package layout and needs the retired import rewrite", version)
 		}
+	}
+	if regexp.MustCompile(`roost-current" project upgrade[^\n]*--consolidate`).Match(raw) || strings.Contains(string(raw), "roost-codegen/cmd/roost") {
+		t.Error("upgrade-compat.yml still runs the retired consolidation path")
 	}
 }
 

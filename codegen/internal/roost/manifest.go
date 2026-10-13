@@ -55,12 +55,6 @@ type ProjectSpec struct {
 type VersionSpec struct {
 	Core string `yaml:"core"`
 	Kit  string `yaml:"kit"`
-	// Skill and Service are the pre-consolidation module policies. They are
-	// still read so an old roost.yaml loads, but the modules no longer exist:
-	// skill and services ship inside roost-core. New manifests omit these
-	// fields; upgrade --consolidate removes them from old manifests.
-	Skill   string `yaml:"skill,omitempty"`
-	Service string `yaml:"service,omitempty"`
 }
 
 // retiredVersionKeys 是 versions 下已退役、不再解码的键及其拒绝说明。严格解码本来就会拒绝未知键，
@@ -68,8 +62,13 @@ type VersionSpec struct {
 //
 // codegen（RR-20261006-57）：合仓后生成器就是 roost-core/codegen/cmd/roost，“codegen 版本”就是
 // roost-core 版本，再写一个数字只会和 versions.core 不一致；生成的 Makefile 按 versions.core 运行生成器。
+//
+// skill / service：合仓前 roost-skill / roost-service 两个模块的版本策略；两者早已是 roost-core 的包，
+// 不再有单独的版本。旧工程的 import 改写工具（upgrade --consolidate）一并删除。
 var retiredVersionKeys = map[string]string{
 	"codegen": "the generator ships inside roost-core and the Makefile runs it at versions.core",
+	"skill":   "skill is a package of roost-core and follows versions.core",
+	"service": "the framework services are packages of roost-core and follow versions.core",
 }
 
 // rejectRetiredVersionKeys 在严格解码前检查 versions 下的退役键；raw 不是合法 YAML 时交给解码报错。
@@ -96,12 +95,6 @@ func rejectRetiredVersionKeys(raw []byte) error {
 		}
 	}
 	return joined
-}
-
-// consolidated reports whether the manifest still carries pre-consolidation
-// module policies that sync must drop.
-func (v VersionSpec) legacyModulePolicies() bool {
-	return strings.TrimSpace(v.Skill) != "" || strings.TrimSpace(v.Service) != ""
 }
 
 // CICDSpec contains only non-secret delivery policy. Credentials, production

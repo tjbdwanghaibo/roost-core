@@ -676,12 +676,6 @@ func mergeVersions(target *VersionSpec, override VersionSpec) {
 	if override.Kit != "" {
 		target.Kit = override.Kit
 	}
-	if override.Skill != "" {
-		target.Skill = override.Skill
-	}
-	if override.Service != "" {
-		target.Service = override.Service
-	}
 }
 
 func printSyncResult(w io.Writer, result SyncResult) {

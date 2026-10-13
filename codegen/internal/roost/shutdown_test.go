@@ -204,6 +204,18 @@ func readProjectFile(t *testing.T, root, rel string) string {
 	return string(raw)
 }
 
+func writeProjectFile(t *testing.T, root, rel, content string) string {
+	t.Helper()
+	p := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 // The configs are application-owned and rendered once, but the grace periods
 // are regenerated on every sync from the current Mods. A Mod added later has
 // to move an unedited generated shutdown: block with it (the game-demo is

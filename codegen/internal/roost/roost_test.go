@@ -188,7 +188,7 @@ func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, module := range []string{"core", "kit", "skill"} {
+	for _, module := range []string{"core", "kit"} {
 		raw = bytes.Replace(raw, []byte("  "+module+": latest"), []byte("  "+module+": v1.0.0"), 1)
 	}
 	if err := os.WriteFile(manifestPath, raw, 0o644); err != nil {
@@ -230,7 +230,7 @@ func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
 	if manifest.CICD.Provider != "github" || !contains(manifest.CICD.Deploy, "shell") || !contains(manifest.CICD.Deploy, "docker") || !contains(manifest.CICD.Deploy, "k8s") {
 		t.Fatalf("legacy manifest did not receive production CI/CD defaults: %+v", manifest.CICD)
 	}
-	mergeVersions(&manifest.Versions, VersionSpec{Core: "latest", Kit: "latest", Skill: "latest"})
+	mergeVersions(&manifest.Versions, VersionSpec{Core: "latest", Kit: "latest"})
 	if err := saveManifest(root, manifest); err != nil {
 		t.Fatalf("save upgraded manifest: %v", err)
 	}
@@ -1192,7 +1192,7 @@ func TestProductionRenderingIncludesDurabilityAndTopologyGuards(t *testing.T) {
 	if !strings.Contains(compose, `"-sd", "/data"`) || !strings.Contains(compose, "mongo-data:/data/db") {
 		t.Fatalf("development dependencies are not durable:\n%s", compose)
 	}
-	if m.Versions.Core != "latest" || m.Versions.Kit != "latest" || m.Versions.Skill != "" || m.Versions.Service != "" {
+	if m.Versions.Core != "latest" || m.Versions.Kit != "latest" {
 		t.Fatalf("latest version policy defaults = %+v", m.Versions)
 	}
 }
@@ -1499,7 +1499,7 @@ func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
 		"cicd.provider", "cicd.registry", "cicd.environments", "cicd.deploy",
 		"access.player.service", "features", "sagas", "ids", "groups", "min", "max", "完整示例",
 		"Feature 和 Mod 必须分别理解", "roost id next protocol -group game",
-		minimumVersions.Core, minimumVersions.Kit, minimumVersions.Skill,
+		minimumVersions.Core, minimumVersions.Kit,
 	} {
 		if !strings.Contains(manifestGuide, want) {
 			t.Errorf("manifest guide missing %q:\n%s", want, manifestGuide)

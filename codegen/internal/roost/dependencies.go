@@ -22,8 +22,8 @@ type dependencyFileSnapshot struct {
 	exists bool
 }
 
-// UpdateFrameworkDependencies stages legacy import consolidation and resolves
-// the single Core module, then commits the planned migration and module files.
+// UpdateFrameworkDependencies resolves the single Core module in a staged copy
+// of the project, then commits only go.mod and go.sum.
 // When ctx ends before the commit, nothing is committed and the staging tree is
 // removed; a commit that started is finished.
 func UpdateFrameworkDependencies(ctx context.Context, root string, manifest Manifest, stdout, stderr io.Writer) error {
@@ -52,24 +52,6 @@ func updateFrameworkDependenciesTransactional(ctx context.Context, root string, 
 	if err != nil {
 		return fmt.Errorf("snapshot dependency inputs: %w", err)
 	}
-	var migrationChanges []syncChange
-	if needsConsolidation(stage) {
-		fmt.Fprintln(stdout, "framework dependencies: staging import consolidation before resolving modules")
-		result, err := ConsolidateProject(stage, false, stdout)
-		if err != nil {
-			return inProjectPaths(fmt.Errorf("consolidate project before resolving dependencies: %w", err), stage, absRoot)
-		}
-		rels := result.Files
-		if result.Manifest {
-			rels = append(rels, ManifestName)
-		}
-		// RR-20260930-CG-14: freeze only the migration's own output before the
-		// resolver runs. Arbitrary stage edits by go commands stay isolated.
-		migrationChanges, err = planExplicitStagedFiles(absRoot, stage, rels...)
-		if err != nil {
-			return err
-		}
-	}
 	if err := updateFrameworkDependencies(ctx, stage, manifest, stdout, stderr, run); err != nil {
 		return inProjectPaths(err, stage, absRoot)
 	}
@@ -84,7 +66,7 @@ func updateFrameworkDependenciesTransactional(ctx context.Context, root string, 
 		return err
 	}
 	reachStagePhase(ctx, "commit")
-	return commitSyncChanges(append(migrationChanges, changes...))
+	return commitSyncChanges(changes)
 }
 
 // TidyProjectDependencies records module checksums introduced by newly
