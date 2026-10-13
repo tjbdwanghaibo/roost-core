@@ -18,7 +18,8 @@ import (
 //
 // RR-20260927-05：accessplayertcp 也声明预算（player_access.tcp.shutdown_timeout: 10s），不再只拿 3s 保底；
 // game 服务的生成值因此是 30s + 10s + 3s × 21 + 5s = 108s（此前 101s）。
-// codegen/internal/roost/shutdown_test.go 从生成工程的 bootstrap 数出 23 个 Mod 并钉住同一个值。
+// codegen/internal/roost/shutdown_test.go 现在从生成工程的 bootstrap 数出 24 个 Mod（加了按亲和键路由所需的 etcd），
+// 钉住 30s + 10s + 3s × 22 + 5s + 3s 单实例锁释放 = 114s；本文件仍按上面 23 个 Mod 的清单与 108s 规划。
 const (
 	generatedGameShutdownTotal  = 108 * time.Second
 	generatedShutdownMargin     = 5 * time.Second
