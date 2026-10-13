@@ -5,7 +5,7 @@
 读代码之前先读这一篇，能省掉"这个调用为什么不能放在锁里"这类反复踩的坑。
 
 例子全部取自 `roost project new … -template game-demo` 生成的工程（demo 的说明见生成工程里的
-`demo/README.md`，模板源与设计说明见 roost-core 的 [demo/README.md](../../demo/README.md)），路径都是生成后的真实路径。
+`demo/README.md`，模板源见 roost-core 的 [demo/README.md](../../demo/README.md)，逐项设计取舍见 [demo/WALKTHROUGH.md](../../demo/WALKTHROUGH.md)），路径都是生成后的真实路径。
 
 ## 0. 六条路径速查
 
