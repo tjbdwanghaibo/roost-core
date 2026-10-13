@@ -296,7 +296,7 @@ func (runtime *Runtime) reapUnhandedEntitySpawns() error {
 	return firstErr
 }
 
-// advanceOwnedSpawns 是衍生物逐 tick 推进的唯一入口（RR-20261006-51；spawn_lifecycle_e2e_promises_test.go 的源码守卫
+// advanceOwnedSpawns 是衍生物逐 tick 推进的唯一入口（RR-20261006-51；spawn_lifecycle_test.go 的源码守卫
 // 核对只有它与 startEntitySpawn 的启动步调用 stepSpawnMotion / stepAreaMembership）。施放中与已移交的衍生物走同一条路：
 // 回收已失效 / 已到期的、按 NextTick 推进到期的、派发信号与回调、再回收这一步之后到期的。两者只差在停止、表现与 revision
 // 记在谁名下（spawnOwnerCast）。之前这里只推进已移交分区；施放中的衍生物唯一的推进路径 spawnStepTask 在生产路径上没有

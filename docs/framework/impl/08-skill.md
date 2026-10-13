@@ -40,7 +40,7 @@
 
 ### skill
 
-155 个实现文件、110 个测试文件。
+155 个实现文件、54 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -202,7 +202,7 @@
 
 ### skill/combat
 
-5 个实现文件、2 个测试文件。
+5 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -214,7 +214,7 @@
 
 ### skill/combatcomponent
 
-3 个实现文件、12 个测试文件。
+3 个实现文件、5 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -248,7 +248,7 @@
 
 ### skill/skillcompose
 
-15 个实现文件、7 个测试文件。
+15 个实现文件、4 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -270,7 +270,7 @@
 
 ### skill/skillsync
 
-10 个实现文件、19 个测试文件。
+10 个实现文件、8 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -312,127 +312,71 @@
 
 ### skill
 
-- [ability_overlay_bound_promises_test.go](../../../gameplay/skill/ability_overlay_bound_promises_test.go)：`TestAbilityOverlayBoundSurvivesRestoreAndReleasesOnExpiry`
-- [ability_test.go](../../../gameplay/skill/ability_test.go)：`TestAbilityStateCooldownMutationClampsAndPreservesCast`、`TestAbilityStateReadAndMutationExecuteFromDSL`、`TestAbilityStateRejectsReadOnlyMutation`、`TestAbilityDisableOverlaysExpireIndependentlyAndDoNotCancelCast`、`TestAbilityAmmoMutationPreservesRechargeTimeline`；其余 7 项见文件
+- [ability_test.go](../../../gameplay/skill/ability_test.go)：`TestAbilityStateCooldownMutationClampsAndPreservesCast`、`TestAbilityStateReadAndMutationExecuteFromDSL`、`TestAbilityStateRejectsReadOnlyMutation`、`TestAbilityDisableOverlaysExpireIndependentlyAndDoNotCancelCast`、`TestAbilityAmmoMutationPreservesRechargeTimeline`；其余 9 项见文件
 - [acceptance_test.go](../../../gameplay/skill/acceptance_test.go)：`TestAllFixturesParseCompileInspectAndRun`
-- [area_handoff_finish_promises_test.go](../../../gameplay/skill/area_handoff_finish_promises_test.go)：`TestHandedOffAreaFinishEndsOnlyTheAreaSpawn`、`TestLiveAreaFinishStillFinishesTheCast`
-- [area_test.go](../../../gameplay/skill/area_test.go)：`TestTargetValidity`、`TestAreaMembership`、`TestAreaMembershipRotatingMembersRemainBounded`、`TestAreaCallbackFinishStopsRemainingSignals`、`TestAreaFinalLeaveFinishSuppressesTerminalCallback`；其余 1 项见文件
-- [canonical_definition_promises_test.go](../../../gameplay/skill/canonical_definition_promises_test.go)：`TestSourceDocumentDigestSeesEveryDifference`、`TestSourceDocumentDigestSeesTheEffectType`
-- [carry_retry_promises_test.go](../../../gameplay/skill/carry_retry_promises_test.go)：`TestFailedCarryDetachRetriesBeforeSpawnRetirement`
-- [checkpoint_contract_test.go](../../../gameplay/skill/checkpoint_contract_test.go)：`TestRuntimeCheckpointBytesAreDeterministic`、`TestRuntimeRestoresUnsortedLegacyCheckpointLists`、`TestCheckpointRestoreRejectsPhaseTimeoutTask`
+- [area_test.go](../../../gameplay/skill/area_test.go)：`TestTargetValidity`、`TestAreaMembership`、`TestAreaMembershipRotatingMembersRemainBounded`、`TestAreaCallbackFinishStopsRemainingSignals`、`TestAreaFinalLeaveFinishSuppressesTerminalCallback`；其余 2 项见文件
+- [cast_retention_test.go](../../../gameplay/skill/cast_retention_test.go)：`TestUncommittedFailedCastsStayWithinTheCompletedCastLimit`、`TestCheckpointCarriesTheCompletionOrderSeparately`、`TestRestoreCompletedCastOrderPrefersTheRecordedOrder`、`TestRestoredCompletionOrderDecidesWhichCastRetentionEvicts`、`TestReferencedCompletedCastsSurviveTheRetentionBound`
+- [cast_terminal_test.go](../../../gameplay/skill/cast_terminal_test.go)：`TestFailedStartLeavesNoScheduledWorkForTheReusedCastID`、`TestCheckpointAfterFailedStartRestores`、`TestCancelCallbackFailureStillEndsTheCast`、`TestChargeReleaseFailureStillEndsTheCast`、`TestFailedToggleReleasesItsPolicySlot`；其余 4 项见文件
+- [cast_window_test.go](../../../gameplay/skill/cast_window_test.go)：`TestCastWindowUsesExactPrepareCommitExecuteRecoveryTimeline`、`TestCastWindowCancelBeforeCommitUsesRefundPolicy`、`TestCastWindowExpressionsAreClampedToDeclaredBounds`、`TestCastWindowExpressionShapeRules`、`TestExternallyAuthoredHasteAttributeDrivesWindup`；其余 2 项见文件
+- [checkpoint_test.go](../../../gameplay/skill/checkpoint_test.go)：`TestRuntimeCheckpointBytesAreDeterministic`、`TestRuntimeRestoresUnsortedLegacyCheckpointLists`、`TestCheckpointRestoreRejectsPhaseTimeoutTask`、`TestRuntimeCheckpointRestoresActiveTimelineDeterministically`、`TestRuntimeCheckpointRestoresActiveSpawns`；其余 6 项见文件
 - [combat_test.go](../../../gameplay/skill/combat_test.go)：`TestCombatPipelineResolvesMitigationElementCriticalShieldAndDeath`、`TestDamageImmuneIsSuccessfulAndTagsDoNotAlias`
 - [compile_authority_test.go](../../../gameplay/skill/compile_authority_test.go)：`TestCompileEnvironmentRejectsEmptyAuthority`、`TestAuthorityDigestChangesWithElementPolicy`、`TestVisualCatalogDoesNotChangeGameplayAuthorityDigest`、`TestAuthorityIdentityRequiresExactNonEmptyMatch`、`TestGameplayCatalogValidation`；其余 1 项见文件
-- [compile_budget_test.go](../../../gameplay/skill/compile_budget_test.go)：`TestBudgetRejectsRepeatAboveLimit`
-- [compile_contract_test.go](../../../gameplay/skill/compile_contract_test.go)：`TestCompileRejectsSnapshotsThatCannotBeCapturedWhereTheyAreRead`、`TestSnapshotsCapturedAtTheirPointStillRun`、`TestCompileRejectsPassivesThatCanNeverActivate`、`TestPassivesWithEventInputsStillActivate`、`TestCompileRejectsSpawnsOnEffectsThatDoNotSummon`；其余 3 项见文件、`TestMinionSpawnRejectsFieldsItNeverReads`、`TestMinionSpawnWithoutDurationCompilesAndLivesForTheSummonDuration`、`TestCompileRejectsMemoryEffectsOnUndeclaredOrNonIntMemory`、`TestDeclaredMemoryEffectsWriteTheirOwnSlot`、`TestCompileEnvironmentRejectsDuplicateCatalogKeys`、`TestCompileRejectsFieldsTheRuntimeDoesNotExecute`、`TestCompileRejectsUnknownCatalogNames`；其余 2 项见文件、`TestCompileRejectsNegativeTicksAtTheirField`、`TestCompileAcceptsZeroTicks`
-- [compile_graph_test.go](../../../gameplay/skill/compile_graph_test.go)：`TestCompileRejectsInvalidPhaseGraphs`
-- [compile_lifetime_test.go](../../../gameplay/skill/compile_lifetime_test.go)：`TestCompileRejectsFallthroughEnterWithoutTimeout`、`TestCompileRejectsParallelFinish`
-- [compile_memory_test.go](../../../gameplay/skill/compile_memory_test.go)：`TestCompileRejectsMaybeInitializedMemoryRead`、`TestCompileAcceptsGuardedMemoryRead`、`TestCompileAcceptsInitializedMemoryRead`
+- [compile_contract_test.go](../../../gameplay/skill/compile_contract_test.go)：`TestCompileRejectsSnapshotsThatCannotBeCapturedWhereTheyAreRead`、`TestSnapshotsCapturedAtTheirPointStillRun`、`TestCompileRejectsPassivesThatCanNeverActivate`、`TestPassivesWithEventInputsStillActivate`、`TestCompileRejectsSpawnsOnEffectsThatDoNotSummon`；其余 14 项见文件
 - [compile_mutation_property_test.go](../../../gameplay/skill/compile_mutation_property_test.go)：`TestCompiledMutationsNeverHitProgramInvariant`、`TestCompiledMutationsChangeDigestWhenProgramChanges`
 - [compile_mutation_race_test.go](../../../gameplay/skill/compile_mutation_race_test.go)
 - [compile_pass_branches_test.go](../../../gameplay/skill/compile_pass_branches_test.go)：`TestRandomPassBranches`、`TestTemporalPassBranches`、`TestGraphPassBranchesRunEveryReachablePhase`、`TestEffectResultPassBranches`、`TestProcPassResultFilterBranches`；其余 1 项见文件
-- [compile_proc_test.go](../../../gameplay/skill/compile_proc_test.go)：`TestProcRejectsRequiredExcludedTagConflict`、`TestProcRejectsDepthAboveEnvironmentLimit`、`TestProcResolvesElementAndDamageTypeHandles`
-- [compile_random_test.go](../../../gameplay/skill/compile_random_test.go)：`TestCompileRandomSitesAreDeterministic`
-- [compile_shape_test.go](../../../gameplay/skill/compile_shape_test.go)：`TestCompilePassOrder`、`TestCompilePassOrderStopsAfterUpstreamError`、`TestShapeRejectsSelectOneWithMultipleResults`、`TestShapeAcceptsVisualAfterVisualPassIsDeployed`
-- [compile_snapshot_test.go](../../../gameplay/skill/compile_snapshot_test.go)：`TestAttributeSnapshotResolvesHandleAndPoint`、`TestAttributeSnapshotRejectsUnsupportedPoint`
-- [compile_tags_test.go](../../../gameplay/skill/compile_tags_test.go)：`TestGameplayTagsResolveDeclarableHandles`、`TestGameplayTagsRejectCompilerAndRuntimeOnlyDeclarations`、`TestGameplayTagsDamageDefaultsToNeutralElement`、`TestGameplayTagsRejectTrueDamageWithElement`
-- [compile_typecheck_test.go](../../../gameplay/skill/compile_typecheck_test.go)：`TestCompileRejectsDamageToPosition`、`TestCompileRejectsUnknownLocal`、`TestCompileRejectsDamageAmountWithWrongType`、`TestCompileRejectsInputReferenceOutsideSchema`
-- [completed_order_checkpoint_promises_test.go](../../../gameplay/skill/completed_order_checkpoint_promises_test.go)：`TestCheckpointCarriesTheCompletionOrderSeparately`、`TestRestoreCompletedCastOrderPrefersTheRecordedOrder`、`TestRestoredCompletionOrderDecidesWhichCastRetentionEvicts`
-- [effect_result_branch_spawn_promises_test.go](../../../gameplay/skill/effect_result_branch_spawn_promises_test.go)：`TestEffectResultBranchMayStartASpawnWithoutCallbacks`、`TestEffectResultBranchDiagnosticNamesSpawnCallbacks`
-- [effect_result_test.go](../../../gameplay/skill/effect_result_test.go)：`TestEffectResultDamageSuccessExecutesTypedBranch`、`TestEffectResultStateChangeCarriesDynamicBeforeAndAfter`、`TestEffectResultBlockedCombatStillUsesSuccessOutcome`、`TestEffectExpectedFailureFromMemoryHostUsesFailureBranch`、`TestEffectResultScopeRejectsInvalidFieldOutcomeAndEscape`；其余 9 项见文件
-- [eval_context_promises_test.go](../../../gameplay/skill/eval_context_promises_test.go)：`TestCompileRejectsMemoryDefaultsReadingMemoryDeterministically`、`TestMemoryDefaultsReadingTheCastStillRun`、`TestCompileRejectsStateDefaultsThatCannotBeEvaluatedEverywhere`、`TestStateDefaultOfTheCasterRunsInCallbacks`、`TestCompileRejectsOptionalEntitiesInCachedReads`；其余 3 项见文件
-- [eval_contexts_table_test.go](../../../gameplay/skill/eval_contexts_table_test.go)：`TestEvalContextTableEveryCellHasACase`、`TestEvalContextTableCellsAgreeWithCompilerAndRuntime`、`TestRuntimeEvaluatesReferencesOnlyWhereTheTableAllows`、`TestSpawnStepPrimaryTargetIsRejectedAtCompileTime`、`TestEvalContextTableRejectsTheO33DriftCellsWithAnAlternative`；其余 2 项见文件
-- [executor_flow_promises_test.go](../../../gameplay/skill/executor_flow_promises_test.go)：`TestExecutorRefusesNonBoolConditionsAndStopsRepeatOnBodyOutcome`、`TestExecutorRefusesSelectorsAndIterationTasksOutsideTheProgram`、`TestMemoryHostReadsAndDamageRefuseUnknownEntitiesAndForeignCatalogs`
-- [executor_promises_test.go](../../../gameplay/skill/executor_promises_test.go)：`TestStartRefusesEachCorruptedProgramShape`
+- [compile_rules_test.go](../../../gameplay/skill/compile_rules_test.go)：`TestBudgetRejectsRepeatAboveLimit`、`TestCompileRejectsInvalidPhaseGraphs`、`TestCompileRejectsFallthroughEnterWithoutTimeout`、`TestCompileRejectsParallelFinish`、`TestCompileRejectsMaybeInitializedMemoryRead`；其余 26 项见文件
+- [documentation_test.go](../../../gameplay/skill/documentation_test.go)：`TestUserGuideExamplesCompile`
+- [effect_result_test.go](../../../gameplay/skill/effect_result_test.go)：`TestEffectResultDamageSuccessExecutesTypedBranch`、`TestEffectResultStateChangeCarriesDynamicBeforeAndAfter`、`TestEffectResultBlockedCombatStillUsesSuccessOutcome`、`TestEffectExpectedFailureFromMemoryHostUsesFailureBranch`、`TestEffectResultScopeRejectsInvalidFieldOutcomeAndEscape`；其余 10 项见文件
+- [eval_context_test.go](../../../gameplay/skill/eval_context_test.go)：`TestCompileRejectsMemoryDefaultsReadingMemoryDeterministically`、`TestMemoryDefaultsReadingTheCastStillRun`、`TestCompileRejectsStateDefaultsThatCannotBeEvaluatedEverywhere`、`TestStateDefaultOfTheCasterRunsInCallbacks`、`TestCompileRejectsOptionalEntitiesInCachedReads`；其余 10 项见文件
+- [executor_test.go](../../../gameplay/skill/executor_test.go)：`TestStartRefusesEachCorruptedProgramShape`、`TestExecutorRefusesNonBoolConditionsAndStopsRepeatOnBodyOutcome`、`TestExecutorRefusesSelectorsAndIterationTasksOutsideTheProgram`、`TestMemoryHostReadsAndDamageRefuseUnknownEntitiesAndForeignCatalogs`
 - [fixed_math_test.go](../../../gameplay/skill/fixed_math_test.go)：`TestMulDivRoundedMatchesReference`、`TestIntegerDistanceMatchesReference`、`TestMotionMetricIsEuclidean`、`TestIsqrt64Floor`
 - [fuzz_test.go](../../../gameplay/skill/fuzz_test.go)
 - [generated_definitions_compile_test.go](../../../gameplay/skill/generated_definitions_compile_test.go)：`TestGeneratedSkillDefinitionsCompileWithoutDiagnostics`
-- [host_contract_test.go](../../../gameplay/skill/host_contract_test.go)：`TestNilHostAdvanceAndPassiveReturnError`、`TestCheckpointCapabilityFailureKeepsSentinel`、`TestHostAdmissionCacheRemainsBounded`、`TestHostCapabilityMissingIsRejectedAtCompileTime`、`TestRuntimeRefusesProgramsOutsideTheHostTable`、`TestRestoreRefusesProgramsOutsideTheHostTable`、`TestMemoryHostCapabilitiesMatchItsBehavior`、`TestCheckHostCapabilitiesCatchesMisdeclaredHosts`；其余 5 项见文件、`TestHostInterfaceRequiresTheCapabilityTable`、`TestWrappingHostsForwardTheWrappedCapabilities`、`TestEmptyTableRefusesEveryRequirement`、`TestNoHostCapabilitySkipBranch`、`TestCapabilityProbeIsNeutralAndStopsItsSpawn`、`TestCapabilityProbeUsesRuntimeHandleOnlyPayment`、`TestDefaultMemoryHostSupportsItsDeclaredResourceHandles`
-- [identity_test.go](../../../gameplay/skill/identity_test.go)：`TestProgramIdentityAndIndicesAreDeterministic`、`TestProgramIdentitySeparatesGameplayAndPresentation`、`TestVisualCatalogIdentityDoesNotChangeGameplayDigest`、`TestProgramIdentityIgnoresMemoryMapInsertionOrder`
+- [host_contract_test.go](../../../gameplay/skill/host_contract_test.go)：`TestNilHostAdvanceAndPassiveReturnError`、`TestCheckpointCapabilityFailureKeepsSentinel`、`TestHostAdmissionCacheRemainsBounded`、`TestHostCapabilityMissingIsRejectedAtCompileTime`、`TestRuntimeRefusesProgramsOutsideTheHostTable`；其余 15 项见文件
+- [identity_test.go](../../../gameplay/skill/identity_test.go)：`TestProgramIdentityAndIndicesAreDeterministic`、`TestProgramIdentitySeparatesGameplayAndPresentation`、`TestVisualCatalogIdentityDoesNotChangeGameplayDigest`、`TestProgramIdentityIgnoresMemoryMapInsertionOrder`、`TestInspectReturnsStableCopies`
 - [input_test.go](../../../gameplay/skill/input_test.go)：`TestInputSchemaVisibilityAndValidation`、`TestInputClampRangeDragAndBlockedPosition`、`TestInputPathBoundsSimplificationAndSnapshot`、`TestInputUpdateReplacesOnlyPortFieldAndPreservesCommitState`
-- [inspect_test.go](../../../gameplay/skill/inspect_test.go)：`TestInspectReturnsStableCopies`
-- [lower_lookup_promises_test.go](../../../gameplay/skill/lower_lookup_promises_test.go)：`TestLowerRefusesEveryUnresolvedLookup`
-- [lower_test.go](../../../gameplay/skill/lower_test.go)：`TestProgramDoesNotAliasDefinition`、`TestLowerProducesTypedDamageOperation`、`TestLowerPreservesStableInputSelectionAndRandomTables`
-- [memory_host_promises_test.go](../../../gameplay/skill/memory_host_promises_test.go)：`TestMemoryHostRefusesBackwardTicksAndIllegalPayments`
-- [memory_host_test.go](../../../gameplay/skill/memory_host_test.go)：`TestHostCommandPayloadsAreNarrowAndTyped`、`TestMemoryHostPayCostsIsAtomic`、`TestMemoryHostSelectIsDeterministic`、`TestMemoryHostRaycastUsesHitDistanceThenStableCollider`、`TestMemoryHostStopSpawnIsIdempotent`；其余 1 项见文件
+- [lower_test.go](../../../gameplay/skill/lower_test.go)：`TestProgramDoesNotAliasDefinition`、`TestLowerProducesTypedDamageOperation`、`TestLowerPreservesStableInputSelectionAndRandomTables`、`TestLowerRefusesEveryUnresolvedLookup`
+- [memory_host_test.go](../../../gameplay/skill/memory_host_test.go)：`TestHostCommandPayloadsAreNarrowAndTyped`、`TestMemoryHostPayCostsIsAtomic`、`TestMemoryHostSelectIsDeterministic`、`TestMemoryHostRaycastUsesHitDistanceThenStableCollider`、`TestMemoryHostStopSpawnIsIdempotent`；其余 3 项见文件
 - [motion_test.go](../../../gameplay/skill/motion_test.go)：`TestMotionPipelineHasFixedStageOrder`、`TestMotionLinearTrajectoryRoundsHalfAwayFromZero`、`TestMotionPipelineAggregatesStageSignalsAndEmitsTargetLostOnce`、`TestMotionPayloadsControlTrajectoryAndSteering`、`TestMotionFixedSteeringAndOffsetsUseStableTrajectoryBase`；其余 12 项见文件
 - [normalize_test.go](../../../gameplay/skill/normalize_test.go)：`TestNormalizeCreatesTypedDamageIR`、`TestNormalizeDefaultsTapPolicy`、`TestNormalizeWalkValuesVisitsEachSourceOnce`、`TestNormalizeDoesNotRetainMutableWireData`、`TestNormalizeRejectsInvalidIdentifiersWithSourcePath`；其余 1 项见文件
 - [numeric_test.go](../../../gameplay/skill/numeric_test.go)：`TestNumericPropertyCatalogIsClosed`、`TestModifySpawnRejectsInvalidOwnershipOrValue`、`TestModifySpawnIsCallbackScopedAndDoesNotEmitWorldEffect`、`TestNumericCatalogAuthorityValidation`、`TestNumericCatalogRequiresExactCanonicalPolicyFacts`；其余 2 项见文件
-- [optional_test.go](../../../gameplay/skill/optional_test.go)：`TestCompileRejectsExistsOnNonOptionalValue`
 - [owned_entity_test.go](../../../gameplay/skill/owned_entity_test.go)：`TestOwnedEntitySummonRegistersAuthoritativeIdentityAndTypedResult`、`TestOwnedEntitySummonBindingsAreTypedClampedAndCapabilityChecked`、`TestOwnedReplacementPoliciesAreStableAndAtomic`、`TestOwnedReplacementDistanceTieUsesSummonSequenceThenEntityID`、`TestOwnedReplacementLimitsPerSourceSkillAndTeam`；其余 14 项见文件
-- [parse_exact_keys_promises_test.go](../../../gameplay/skill/parse_exact_keys_promises_test.go)：`TestParseRejectsCaseVariantKeys`、`TestParseKeepsNameKeyedMapsAndCanonicalKeys`
-- [parse_test.go](../../../gameplay/skill/parse_test.go)：`TestParseGeneratedAcceptsDirectSkillRoot`、`TestParseGeneratedRejectsSkillJSONWrapper`、`TestParseGeneratedAcceptsRejection`、`TestParseRejectsDuplicateNestedKey`、`TestParseRejectsNonCanonicalJSON`；其余 4 项见文件
-- [phase_contract_test.go](../../../gameplay/skill/phase_contract_test.go)：`TestCompileRejectsPhaseEventsTheRuntimeNeverDispatches`、`TestPhaseTimeoutTicksDoNotExcuseEnterFallthrough`、`TestNonzeroPhaseTimeoutTicksWarnsThatItIsNotEnforced`、`TestPhaseEventTableIsTheSingleSource`
-- [presentation_asset_cache_cancel_promises_test.go](../../../gameplay/skill/presentation_asset_cache_cancel_promises_test.go)：`TestVisualPlanCacheWaiterSurvivesCreatorCancellation`、`TestVisualAssetWaiterSurvivesCreatorCancellation`、`TestVisualPlanCacheWaiterSeesRealLoadFailureAndOwnCancellation`
-- [presentation_asset_cache_test.go](../../../gameplay/skill/presentation_asset_cache_test.go)：`TestVisualPlanCacheTrustFallbackAndRelease`、`TestVisualPlanCacheRejectsUntrustedCatalog`、`TestVisualPlanCacheRejectsDigestCollision`、`TestVisualPlanCacheSharesAssetUntilLastPlanEviction`、`TestVisualPlanCacheSharesResolvedFallbackAcrossDifferentPrimaryKeys`；其余 1 项见文件
-- [presentation_assets_test.go](../../../gameplay/skill/presentation_assets_test.go)：`TestResolvePresentationPlanValidatesCatalogAndDetachesAssets`
-- [presentation_test.go](../../../gameplay/skill/presentation_test.go)：`TestPresentationPlanExposesCastAndEffectMounts`、`TestRuntimePresentationEventsAreCommittedOrderedAndPollable`、`TestPresentationPollingReportsRetentionLoss`、`TestSpawnVisualCompilesAndEmitsLifecycle`、`TestRuntimeDoesNotEmitEffectPresentationForExpectedFailure`
+- [parse_test.go](../../../gameplay/skill/parse_test.go)：`TestParseGeneratedAcceptsDirectSkillRoot`、`TestParseGeneratedRejectsSkillJSONWrapper`、`TestParseGeneratedAcceptsRejection`、`TestParseRejectsDuplicateNestedKey`、`TestParseRejectsNonCanonicalJSON`；其余 8 项见文件
+- [presentation_asset_cache_test.go](../../../gameplay/skill/presentation_asset_cache_test.go)：`TestVisualPlanCacheTrustFallbackAndRelease`、`TestVisualPlanCacheRejectsUntrustedCatalog`、`TestVisualPlanCacheRejectsDigestCollision`、`TestVisualPlanCacheSharesAssetUntilLastPlanEviction`、`TestVisualPlanCacheSharesResolvedFallbackAcrossDifferentPrimaryKeys`；其余 5 项见文件
+- [presentation_test.go](../../../gameplay/skill/presentation_test.go)：`TestPresentationPlanExposesCastAndEffectMounts`、`TestRuntimePresentationEventsAreCommittedOrderedAndPollable`、`TestPresentationPollingReportsRetentionLoss`、`TestSpawnVisualCompilesAndEmitsLifecycle`、`TestRuntimeDoesNotEmitEffectPresentationForExpectedFailure`；其余 4 项见文件
 - [production_limits_test.go](../../../gameplay/skill/production_limits_test.go)：`TestParseLimitsRejectWorkBeforeSemanticDecode`、`TestRuntimeRetentionIsBounded`、`TestClockMutationCarriesDerivedTimeWithoutEntityFanout`
-- [promises_test.go](../../../gameplay/skill/promises_test.go)：`TestRestoreRuntimeKeepsTheEventsEmittedAfterTheCheckpoint`、`TestAWaitingAcquireIsNotEvictedByTheFirstHoldersRelease`、`TestReferencedCompletedCastsSurviveTheRetentionBound`、`TestRestoreRefusesACheckpointWhosePayloadWasTampered`
-- [documentation_test.go](../../../gameplay/skill/documentation_test.go)：`TestUserGuideExamplesCompile`
-- [quantity_test.go](../../../gameplay/skill/quantity_test.go)：`TestCompileRejectsQuantityMismatchInDamageAmount`、`TestCompileAcceptsCombatAmountAttributeForDamage`
-- [random_test.go](../../../gameplay/skill/random_test.go)：`TestRuntimeRandomSelectionIgnoresCandidateInsertionOrder`、`TestBoundedRandomIsDeterministicAndBounded`
-- [replay_optional_promises_test.go](../../../gameplay/skill/replay_optional_promises_test.go)：`TestRecordingReplayPreserveOwnedSummonLifecycle`、`TestRecordingReplayForwardOptionalWorldViews`
-- [replay_test.go](../../../gameplay/skill/replay_test.go)：`TestRecordingAndReplayHostMatchTypedInteractionOrder`
-- [runtime_cast_exclusivity_test.go](../../../gameplay/skill/runtime_cast_exclusivity_test.go)：`TestCasterWindowExclusivityRejectsSecondRootCast`、`TestGlobalCooldownGatesRootCastsAcrossSkills`
-- [runtime_cast_policy_test.go](../../../gameplay/skill/runtime_cast_policy_test.go)：`TestCastPolicyTogglePulsesAndSecondActivateReleases`、`TestHoldReleaseStopsPulsesAndStartsCooldown`、`TestChargeBelowMinimumCancelsAndSuccessfulReleasePaysOnce`、`TestAmmoPaymentStockAndSingleRechargeTimeline`、`TestToggleSustainFailureReleasesAndCancelStartsCooldown`；其余 2 项见文件
-- [runtime_cast_terminal_branches_promises_test.go](../../../gameplay/skill/runtime_cast_terminal_branches_promises_test.go)：`TestInterruptSpawnStopFailureStillEndsTheCast`、`TestToggleReleaseCallbackFailureStillEndsTheCast`、`TestFailedChargeStartWithOwnedSpawnLeavesNoResidue`、`TestFailedChargeStartWhoseSpawnCannotStopKeepsItsCast`
-- [runtime_cast_terminal_promises_test.go](../../../gameplay/skill/runtime_cast_terminal_promises_test.go)：`TestFailedStartLeavesNoScheduledWorkForTheReusedCastID`、`TestCheckpointAfterFailedStartRestores`、`TestCancelCallbackFailureStillEndsTheCast`、`TestChargeReleaseFailureStillEndsTheCast`、`TestFailedToggleReleasesItsPolicySlot`
-- [runtime_cast_window_expression_test.go](../../../gameplay/skill/runtime_cast_window_expression_test.go)：`TestCastWindowExpressionsAreClampedToDeclaredBounds`、`TestCastWindowExpressionShapeRules`、`TestExternallyAuthoredHasteAttributeDrivesWindup`
-- [runtime_cast_window_test.go](../../../gameplay/skill/runtime_cast_window_test.go)：`TestCastWindowUsesExactPrepareCommitExecuteRecoveryTimeline`、`TestCastWindowCancelBeforeCommitUsesRefundPolicy`
-- [runtime_checkpoint_test.go](../../../gameplay/skill/runtime_checkpoint_test.go)：`TestRuntimeCheckpointRestoresActiveTimelineDeterministically`、`TestRuntimeCheckpointRestoresActiveSpawns`、`TestRuntimeCheckpointFailsClosed`、`TestRuntimeRestoreRequiresFullRecoveryForOmittedDeliveryBuffers`、`TestRuntimeCheckpointRestoresPendingPassiveActivation`
-- [runtime_dispatch_failure_promises_test.go](../../../gameplay/skill/runtime_dispatch_failure_promises_test.go)：`TestUncoverablePassiveCandidateDoesNotStallTheEventStream`、`TestCostPaymentDispatchFailureDoesNotDropAPaidCast`
-- [runtime_dispatch_test.go](../../../gameplay/skill/runtime_dispatch_test.go)：`TestQueueExternalEventRoutesWithoutRecursiveActivation`、`TestRouterCandidatesAreNormalizedBeforeEnqueue`
-- [runtime_effect_result_test.go](../../../gameplay/skill/runtime_effect_result_test.go)：`TestHostPayloadCarriesSuccessDataUsesTypedZeroChecks`
-- [runtime_event_test.go](../../../gameplay/skill/runtime_event_test.go)：`TestDerivedEventPreservesRootAndSetsParent`、`TestEventContextCopiesSortsAndDeduplicatesTags`、`TestCollectHostEventsSkipsEventWhenEveryRootIsPinned`
-- [runtime_failed_cast_retention_promises_test.go](../../../gameplay/skill/runtime_failed_cast_retention_promises_test.go)：`TestUncommittedFailedCastsStayWithinTheCompletedCastLimit`、`TestFailedStartLeavesNoCompletedQueueEntry`
+- [random_test.go](../../../gameplay/skill/random_test.go)：`TestRuntimeRandomSelectionIgnoresCandidateInsertionOrder`、`TestBoundedRandomIsDeterministicAndBounded`、`TestCompileRandomSitesAreDeterministic`
+- [replay_test.go](../../../gameplay/skill/replay_test.go)：`TestRecordingAndReplayHostMatchTypedInteractionOrder`、`TestRecordingReplayPreserveOwnedSummonLifecycle`、`TestRecordingReplayForwardOptionalWorldViews`
+- [runtime_bounds_test.go](../../../gameplay/skill/runtime_bounds_test.go)：`TestQueueExternalEventRejectsAtTheQueueBoundInsteadOfFillingTheRootTable`、`TestPassiveCandidatesPastTheQueueBoundAreRejectedNotDropped`、`TestAbilityOverlayExpiriesDoNotPinRoots`、`TestTasksOfEndedCastsDoNotPinRoots`、`TestLegalConfigurationNeverReachesTheRootTableFallback`；其余 3 项见文件
+- [runtime_cast_policy_test.go](../../../gameplay/skill/runtime_cast_policy_test.go)：`TestCastPolicyTogglePulsesAndSecondActivateReleases`、`TestHoldReleaseStopsPulsesAndStartsCooldown`、`TestChargeBelowMinimumCancelsAndSuccessfulReleasePaysOnce`、`TestAmmoPaymentStockAndSingleRechargeTimeline`、`TestToggleSustainFailureReleasesAndCancelStartsCooldown`；其余 3 项见文件
+- [runtime_dispatch_test.go](../../../gameplay/skill/runtime_dispatch_test.go)：`TestQueueExternalEventRoutesWithoutRecursiveActivation`、`TestRouterCandidatesAreNormalizedBeforeEnqueue`、`TestUncoverablePassiveCandidateDoesNotStallTheEventStream`、`TestCostPaymentDispatchFailureDoesNotDropAPaidCast`、`TestDerivedEventPreservesRootAndSetsParent`；其余 5 项见文件
 - [runtime_mutation_benchmark_test.go](../../../gameplay/skill/runtime_mutation_benchmark_test.go)
-- [runtime_mutation_remove_identity_promises_test.go](../../../gameplay/skill/runtime_mutation_remove_identity_promises_test.go)：`TestRemoveMutationsCarryTheEntityTheirUpsertCarried`
 - [runtime_mutation_verify_test.go](../../../gameplay/skill/runtime_mutation_verify_test.go)
-- [runtime_proc_test.go](../../../gameplay/skill/runtime_proc_test.go)：`TestPassiveActivationQueuesThenAppliesFilterAndOncePerRootLedger`、`TestPassiveSelfTriggerAndDepthAreBounded`、`TestPassiveActivationPerTickLimitSuppressesWithoutCreatingCast`
-- [runtime_queued_task_bound_promises_test.go](../../../gameplay/skill/runtime_queued_task_bound_promises_test.go)：`TestQueueExternalEventRejectsAtTheQueueBoundInsteadOfFillingTheRootTable`、`TestPassiveCandidatesPastTheQueueBoundAreRejectedNotDropped`、`TestAbilityOverlayExpiriesDoNotPinRoots`、`TestTasksOfEndedCastsDoNotPinRoots`、`TestLegalConfigurationNeverReachesTheRootTableFallback`；其余 1 项见文件
-- [runtime_regression_v141_test.go](../../../gameplay/skill/runtime_regression_v141_test.go)：`TestAmmoReadAfterRechargeKeepsCheckpointHealthy`、`TestCancelledToggleCanBeActivatedAgain`、`TestPersistentRemoveOrderingIsDeterministic`、`TestRestoreRuntimePreservesPostCheckpointEvents`
-- [runtime_root_event_bound_promises_test.go](../../../gameplay/skill/runtime_root_event_bound_promises_test.go)：`TestNewRuntimeRejectsRootEventLimitNotAboveReferencedRootBound`、`TestRestoreRuntimeRejectsCheckpointWhoseRootEventLimitIsNotAboveTheBound`
-- [runtime_spawn_abandon_promises_test.go](../../../gameplay/skill/runtime_spawn_abandon_promises_test.go)：`TestStopSweepAbandonsAtTheStopPendingLimit`、`TestAbandonedSpawnsArePrunedOnlyAtTheEndOfAdvance`、`TestAbandonedSpawnIsVisibleToSyncConsistently`
-- [runtime_spawn_retention_promises_test.go](../../../gameplay/skill/runtime_spawn_retention_promises_test.go)：`TestCastsWhoseSpawnsEndedStayWithinTheCompletedCastLimit`、`TestHandedOffSpawnsBeyondTheCompletedLimitStillRestore`
-- [runtime_spawn_stop_retry_promises_test.go](../../../gameplay/skill/runtime_spawn_stop_retry_promises_test.go)：`TestFailedStartRetriesTheStopItCouldNotFinish`、`TestStopPendingSurvivesCheckpointAndKeepsRetrying`、`TestPinnedCastsBeyondTheCompletedLimitStillRestore`、`TestStopRetriesAreBoundedAndAlertWhenExhausted`、`TestStopPendingIsVisibleToSyncConsistently`；其余 1 项见文件
-- [runtime_spawn_stop_sweep_promises_test.go](../../../gameplay/skill/runtime_spawn_stop_sweep_promises_test.go)：`TestStopSweepSkipsSpawnsDroppedAtTheStopPendingLimit`
-- [runtime_sync_test.go](../../../gameplay/skill/runtime_sync_test.go)：`TestRuntimeValueJSONRoundTrip`、`TestRuntimeStateSnapshotAndEventCursorAreComplete`、`TestStateMutationsFoldExactlyIntoLaterSnapshot`、`TestStateMutationsAreCommittedBeforeWriteReturns`
+- [runtime_sync_test.go](../../../gameplay/skill/runtime_sync_test.go)：`TestRuntimeValueJSONRoundTrip`、`TestRuntimeStateSnapshotAndEventCursorAreComplete`、`TestStateMutationsFoldExactlyIntoLaterSnapshot`、`TestStateMutationsAreCommittedBeforeWriteReturns`、`TestRedactRuntimeValueRecursivelyFiltersSensitiveReferences`
 - [runtime_test.go](../../../gameplay/skill/runtime_test.go)：`TestRuntimeActivateExecutesTypedDamage`、`TestRuntimeExecutesSequenceRepeatIfAndMemory`、`TestRuntimeRejectsAuthorityMismatchWithoutSideEffects`、`TestRuntimeDoesNotRetainOrInterpretDefinition`、`TestRuntimeRejectsCompilerSemanticsAndInputBeforeSideEffects`；其余 5 项见文件
-- [runtime_value_redaction_test.go](../../../gameplay/skill/runtime_value_redaction_test.go)：`TestRedactRuntimeValueRecursivelyFiltersSensitiveReferences`
 - [scheduler_test.go](../../../gameplay/skill/scheduler_test.go)：`TestSchedulerOrdersByDueTickThenSequence`、`TestRuntimeWaitExecutesExactlyAtDueTick`、`TestRuntimeRepeatIntervalExecutesExactCount`、`TestRuntimeSelectEachSuspensionRetainsIndependentLocalFrames`、`TestRuntimeStalePhaseTaskReleasesFrameOnce`
-- [spawn_lifecycle_e2e_promises_test.go](../../../gameplay/skill/spawn_lifecycle_e2e_promises_test.go)：`TestSpawnLifecycleSettlesEveryTickFromCastToHandoffToStop`、`TestRefusedMotionStartStepLeavesNoHostSpawn`、`TestSpawnCallbacksShareTheCastRootForOncePerRoot`、`TestProcCastSpawnCallbacksKeepDepthAndRoot`、`TestCastingAreaFinishAtALaterTickFinishesTheCast`；其余 1 项见文件
-- [spawn_partition_promises_test.go](../../../gameplay/skill/spawn_partition_promises_test.go)：`TestSpawnPartitionsFollowRecordFields`、`TestSpawnPartitionWritesStayInSpawnTable`
-- [spawn_scope_contract_test.go](../../../gameplay/skill/spawn_scope_contract_test.go)：`TestEntityCarrySurvivesGotoAndNormalFinish`
-- [spawn_stop_entries_promises_test.go](../../../gameplay/skill/spawn_stop_entries_promises_test.go)：`TestEveryStopEntryDefersARefusedStopTheSameWay`、`TestSpawnStopEntriesAreRegistered`
-- [spawn_test.go](../../../gameplay/skill/spawn_test.go)：`TestSpawnStopIsUnifiedAndIdempotent`、`TestSpawnSignalsUseCanonicalOrder`
-- [state_null_default_promises_test.go](../../../gameplay/skill/state_null_default_promises_test.go)：`TestNullDefaultEntityStateCanBeSet`
-- [state_test.go](../../../gameplay/skill/state_test.go)：`TestPersistentStateSchemaLowersStablePrivateLayout`、`TestPersistentStateRejectsSharedDeclarationDuplicateEnumAndInvalidSnapshotScope`、`TestSharedStateUnknownHandleIsRejected`、`TestPersistentStateTypedReadAndMutationExecuteAcrossCasts`、`TestPersistentStatePrivateIdentityAndOwnerTargetIsolation`；其余 4 项见文件
+- [spawn_lifecycle_test.go](../../../gameplay/skill/spawn_lifecycle_test.go)：`TestSpawnLifecycleSettlesEveryTickFromCastToHandoffToStop`、`TestRefusedMotionStartStepLeavesNoHostSpawn`、`TestSpawnCallbacksShareTheCastRootForOncePerRoot`、`TestProcCastSpawnCallbacksKeepDepthAndRoot`、`TestCastingAreaFinishAtALaterTickFinishesTheCast`；其余 7 项见文件
+- [spawn_partition_test.go](../../../gameplay/skill/spawn_partition_test.go)：`TestSpawnPartitionsFollowRecordFields`、`TestSpawnPartitionWritesStayInSpawnTable`
+- [spawn_retention_test.go](../../../gameplay/skill/spawn_retention_test.go)：`TestStopSweepAbandonsAtTheStopPendingLimit`、`TestAbandonedSpawnsArePrunedOnlyAtTheEndOfAdvance`、`TestAbandonedSpawnIsVisibleToSyncConsistently`、`TestCastsWhoseSpawnsEndedStayWithinTheCompletedCastLimit`、`TestHandedOffSpawnsBeyondTheCompletedLimitStillRestore`
+- [spawn_stop_test.go](../../../gameplay/skill/spawn_stop_test.go)：`TestEveryStopEntryDefersARefusedStopTheSameWay`、`TestSpawnStopEntriesAreRegistered`、`TestFailedStartRetriesTheStopItCouldNotFinish`、`TestStopPendingSurvivesCheckpointAndKeepsRetrying`、`TestPinnedCastsBeyondTheCompletedLimitStillRestore`；其余 4 项见文件
+- [state_test.go](../../../gameplay/skill/state_test.go)：`TestPersistentStateSchemaLowersStablePrivateLayout`、`TestPersistentStateRejectsSharedDeclarationDuplicateEnumAndInvalidSnapshotScope`、`TestSharedStateUnknownHandleIsRejected`、`TestPersistentStateTypedReadAndMutationExecuteAcrossCasts`、`TestPersistentStatePrivateIdentityAndOwnerTargetIsolation`；其余 7 项见文件
 - [status_instance_test.go](../../../gameplay/skill/status_instance_test.go)：`TestStatusSelectFiltersAndStableOrders`、`TestStatusOperationClosedSetClampCopyTransferAndExpiry`、`TestStatusDurationClampAppliesAtCreationAndCopy`、`TestStatusBatchSnapshotAndConsumerCannotSuspend`、`TestShieldStatusIsQueryableAndEmitsSingleAbsorbBreak`；其余 3 项见文件
 - [status_test.go](../../../gameplay/skill/status_test.go)：`TestStatusRefreshStacksAndExpiresAtLogicalTick`、`TestAttributeModifierUsesAddThenMultiplyOrdering`、`TestAttributeModifierUsesCatalogRounding`、`TestStatusHonorsImmunityTenacitySourceRemovalAndDispel`
-- [temporal_test.go](../../../gameplay/skill/temporal_test.go)：`TestTemporalProfileCompileRules`、`TestTemporalCatalogRejectsDuplicateProfileKey`、`TestTemporalCaptureFreezesProfileAuthorization`、`TestTemporalResultLayoutsAcceptHostExpectedFailures`、`TestTemporalRestoreResultProjectsFieldLists`；其余 9 项见文件
+- [temporal_test.go](../../../gameplay/skill/temporal_test.go)：`TestTemporalProfileCompileRules`、`TestTemporalCatalogRejectsDuplicateProfileKey`、`TestTemporalCaptureFreezesProfileAuthorization`、`TestTemporalResultLayoutsAcceptHostExpectedFailures`、`TestTemporalRestoreResultProjectsFieldLists`；其余 8 项见文件
 - [test_helpers_test.go](../../../gameplay/skill/test_helpers_test.go)
 - [trace_test.go](../../../gameplay/skill/trace_test.go)：`TestTraceIsBoundedAndDoesNotChangeGameplay`、`TestTraceSinkIsDrainedOutsideGameplayAndFailuresAreIgnored`
-- [visual_test.go](../../../gameplay/skill/visual_test.go)：`TestVisualManifestCompilesCanonicalVisual`、`TestVisualRejectsInvalidSchemaAndCatalogBindings`、`TestVisualTableDeduplicatesAndDoesNotChangeGameplayIdentity`
-- [world_revision_test.go](../../../gameplay/skill/world_revision_test.go)：`TestMemoryHostRevisionAndEventCursorContract`
 
 ### skill/combat
 
-- [combat_test.go](../../../gameplay/skill/combat/combat_test.go)：`TestAttributeSetGrantRevokeIsExactlyReversible`、`TestAttributeSetObserverAndSnapshotOrder`、`TestBuffContainerStackRefreshDispelAndImmunity`、`TestBuffContainerTenacityAndExpiry`、`TestBuffExtendPolicyAccumulatesDuration`；其余 9 项见文件
-- [remaining_promises_test.go](../../../gameplay/skill/combat/remaining_promises_test.go)：`TestAvoidancePreservesCriticalHook`、`TestVampOnlyHealsMissingHealthOfLivingSource`、`TestDamageRejectsInvalidNegativeHealth`、`TestModifierOverflowRemainsReversibleAndOrderIndependent`、`TestReapplyBuffPermanentAndLowerStackLimit`
+- [combat_test.go](../../../gameplay/skill/combat/combat_test.go)：`TestAttributeSetGrantRevokeIsExactlyReversible`、`TestAttributeSetObserverAndSnapshotOrder`、`TestBuffContainerStackRefreshDispelAndImmunity`、`TestBuffContainerTenacityAndExpiry`、`TestBuffExtendPolicyAccumulatesDuration`；其余 14 项见文件
 
 ### skill/combatcomponent
 
-- [adapter_test.go](../../../gameplay/skill/combatcomponent/adapter_test.go)：`TestHostAdapterAppliesDamageWithEvents`、`TestHostAdapterHealShieldAndReads`、`TestHostAdapterShieldReportsEffectiveDeltaAndSkipsNoOpCommit`、`TestHostAdapterPayCostsIsAtomic`
-- [attribute_projection_promises_test.go](../../../gameplay/skill/combatcomponent/attribute_projection_promises_test.go)：`TestBuffAttributeModifierReachesDamage`、`TestAttributeProjectionRollsBackWithTheDao`、`TestAttributeProjectionReprojectsOnLoad`
-- [combatant_copy_promises_test.go](../../../gameplay/skill/combatcomponent/combatant_copy_promises_test.go)：`TestCombatantCopiesDoNotShareElementMultipliers`
-- [component_test.go](../../../gameplay/skill/combatcomponent/component_test.go)：`TestNestUndoRollbackRestoresCombatStateExactly`、`TestCombatDaoPersistenceRoundTrip`、`TestNestUndoWorksThroughRealHandlers`、`TestCombatDaoProducesTransactionLocalMutationAndSyncMask`、`TestCombatMutationOutsideTransactionPanicsBeforeStateChange`
-- [dao_rollback_promises_test.go](../../../gameplay/skill/combatcomponent/dao_rollback_promises_test.go)：`TestCombatRollbackIsTheDaoRollback`
-- [detached_indeterminate_fence_promises_test.go](../../../gameplay/skill/combatcomponent/detached_indeterminate_fence_promises_test.go)：`TestHostAdapterApplyInMemoryHandlerFencesOnIndeterminateOutcome`
-- [guards_promises_test.go](../../../gameplay/skill/combatcomponent/guards_promises_test.go)：`TestDetachedTransactionFailuresAreReturnedNotDereferenced`、`TestReadsAndPaymentsRefuseUnknownEntitiesAndUnmappedResources`、`TestCombatDaoRefusesForeignPersistedStateAndEmptyPatches`、`TestStatusBridgeRefusesToModifyABuffWithoutACatalogPolicy`
-- [host_capability_promises_test.go](../../../gameplay/skill/combatcomponent/host_capability_promises_test.go)：`TestBusinessHostOverHostAdapterMatchesItsCapabilities`、`TestHostAdapterWithoutStatusBridgeDeclaresNoModifiers`、`TestHostAdapterUnmappedResourceIsNamedAtStartup`、`TestHostAdapterRefusesAttributesOutsideTheCatalog`
-- [remaining_benchmark_test.go](../../../gameplay/skill/combatcomponent/remaining_benchmark_test.go)
-- [remaining_promises_test.go](../../../gameplay/skill/combatcomponent/remaining_promises_test.go)：`TestNoChangeCombatDoesNotMarkDirty`、`TestAbsentResourceMappingReturnsErrors`、`TestResourceReadMatchesSpendableBase`、`TestHostAdapterRejectsUnsupportedCombatCatalog`、`TestStatusStackOverflowAndPermanentRefresh`
-- [resource_promises_test.go](../../../gameplay/skill/combatcomponent/resource_promises_test.go)：`TestResourceCommandRefusesEachIllegalOperation`、`TestPayCostsRefusesNegativeOverflowingAndComponentlessPayments`
+- [adapter_test.go](../../../gameplay/skill/combatcomponent/adapter_test.go)：`TestHostAdapterAppliesDamageWithEvents`、`TestHostAdapterHealShieldAndReads`、`TestHostAdapterShieldReportsEffectiveDeltaAndSkipsNoOpCommit`、`TestHostAdapterPayCostsIsAtomic`、`TestResourceCommandRefusesEachIllegalOperation`；其余 10 项见文件
+- [benchmark_test.go](../../../gameplay/skill/combatcomponent/benchmark_test.go)
+- [component_test.go](../../../gameplay/skill/combatcomponent/component_test.go)：`TestNestUndoRollbackRestoresCombatStateExactly`、`TestCombatDaoPersistenceRoundTrip`、`TestNestUndoWorksThroughRealHandlers`、`TestCombatDaoProducesTransactionLocalMutationAndSyncMask`、`TestCombatMutationOutsideTransactionPanicsBeforeStateChange`；其余 6 项见文件
+- [refusals_test.go](../../../gameplay/skill/combatcomponent/refusals_test.go)：`TestDetachedTransactionFailuresAreReturnedNotDereferenced`、`TestReadsAndPaymentsRefuseUnknownEntitiesAndUnmappedResources`、`TestCombatDaoRefusesForeignPersistedStateAndEmptyPatches`、`TestStatusBridgeRefusesToModifyABuffWithoutACatalogPolicy`
 - [status_bridge_test.go](../../../gameplay/skill/combatcomponent/status_bridge_test.go)：`TestStatusBridgeAppliesStacksAndModifiers`、`TestStatusBridgeImmunityTenacityAndReplace`、`TestStatusBridgeRemoveAndDispel`、`TestStatusBridgeAttributeModifierIsIndependent`、`TestHostAdapterResourceCommand`；其余 2 项见文件
 
 ### skill/integration/sync-e2e
@@ -442,32 +386,21 @@
 
 ### skill/skillcompose
 
-- [contract_promises_test.go](../../../gameplay/skill/skillcompose/contract_promises_test.go)：`TestBuildContractRefusesEachInvalidInput`、`TestValidateContractRefusesEachStructuralDefect`
-- [contract_test.go](../../../gameplay/skill/skillcompose/contract_test.go)：`TestContractCallerPolicyOnlyTightens`、`TestContractCanonicalOmitsDerivedPromptFields`、`TestCanonicalContractDoesNotMutateCaller`、`TestBuildContractRejectsUnboundSourceAuthority`
-- [effect_sink_promises_test.go](../../../gameplay/skill/skillcompose/effect_sink_promises_test.go)：`TestGrantedNonDamageEffectsAreValidCandidates`
+- [contract_test.go](../../../gameplay/skill/skillcompose/contract_test.go)：`TestContractCallerPolicyOnlyTightens`、`TestContractCanonicalOmitsDerivedPromptFields`、`TestCanonicalContractDoesNotMutateCaller`、`TestBuildContractRejectsUnboundSourceAuthority`、`TestBuildContractRefusesEachInvalidInput`；其余 1 项见文件
 - [matcher_test.go](../../../gameplay/skill/skillcompose/matcher_test.go)：`TestMatcherIsDeterministic`
 - [profile_test.go](../../../gameplay/skill/skillcompose/profile_test.go)：`TestProfileExtractionIsStableAndUsesInspectorFacts`
-- [validator_provenance_promises_test.go](../../../gameplay/skill/skillcompose/validator_provenance_promises_test.go)：`TestValidateCandidateExplainsBlankOrDuplicateSources`
-- [validator_test.go](../../../gameplay/skill/skillcompose/validator_test.go)：`TestValidateCandidateRejectsUngrantableGrowthAndDisconnectedFlow`、`TestValidateCandidateRejectsUngroundedFeatureOrigin`
+- [validator_test.go](../../../gameplay/skill/skillcompose/validator_test.go)：`TestValidateCandidateRejectsUngrantableGrowthAndDisconnectedFlow`、`TestValidateCandidateRejectsUngroundedFeatureOrigin`、`TestValidateCandidateExplainsBlankOrDuplicateSources`、`TestGrantedNonDamageEffectsAreValidCandidates`
 
 ### skill/skillsync
 
-- [applier_contract_test.go](../../../gameplay/skill/skillsync/applier_contract_test.go)：`TestRejectedFullPacketDoesNotWedgeTheApplier`、`TestApplierRefusesConcurrentApplyStatesAndMisshapenRecords`
-- [applier_promises_test.go](../../../gameplay/skill/skillsync/applier_promises_test.go)：`TestNewApplierRefusesUnservableSchemas`、`TestApplierAdmissionRefusesEachMalformedPacket`、`TestApplierRecordRefusesHeaderAndDigestDisagreement`
-- [coordinator_durability_test.go](../../../gameplay/skill/skillsync/coordinator_durability_test.go)：`TestCoordinatorRepairsPartialOutboxDeleteFailure`、`TestCoordinatorAckKeepsHistoryWhenOutboxDeleteFails`、`TestCoordinatorRejectsAckAheadBeforeDeletingOutbox`、`TestCoordinatorRepairsOutboxWhenHistoryAckFails`、`TestCoordinatorCloseKeepsHistoryWhenOutboxDeleteFails`
-- [coordinator_resources_promises_test.go](../../../gameplay/skill/skillsync/coordinator_resources_promises_test.go)：`TestAcquireRechecksObserverAfterWaiting`、`TestCoordinatorExplicitLifecycleCapacityAndManifestIdentity`、`TestCoordinatorCloseMustFinishBeforeReopen`、`TestClosedObserverIdentitiesDoNotAccumulate`、`TestRegisteredManifestPlansAreBounded`
-- [file_outbox_tmp_cleanup_promises_test.go](../../../gameplay/skill/skillsync/file_outbox_tmp_cleanup_promises_test.go)：`TestFileOutboxOpenRemovesCrashLeftoverTemporaryFiles`
-- [outbox_age_contract_test.go](../../../gameplay/skill/skillsync/outbox_age_contract_test.go)：`TestOutboxRefusesStoreWithoutPersistentAge`
-- [outbox_contract_test.go](../../../gameplay/skill/skillsync/outbox_contract_test.go)：`TestPutAndPutBatchReachTheSameAdmissionVerdict`、`TestOutboxFailureBlocksLaterPacketsInSameStream`、`TestOverageOutboxCanRestartPublishAndAcknowledge`、`TestIdleSweepPreservesUnacknowledgedDelivery`、`TestDiscardObserverCannotSucceedWithPublishInFlight`、`TestEpochRotationRetiresOldOutboxBeforeRetry`
+- [applier_test.go](../../../gameplay/skill/skillsync/applier_test.go)：`TestRejectedFullPacketDoesNotWedgeTheApplier`、`TestApplierRefusesConcurrentApplyStatesAndMisshapenRecords`、`TestNewApplierRefusesUnservableSchemas`、`TestApplierAdmissionRefusesEachMalformedPacket`、`TestApplierRecordRefusesHeaderAndDigestDisagreement`
+- [coordinator_test.go](../../../gameplay/skill/skillsync/coordinator_test.go)：`TestCoordinatorRepairsPartialOutboxDeleteFailure`、`TestCoordinatorAckKeepsHistoryWhenOutboxDeleteFails`、`TestCoordinatorRejectsAckAheadBeforeDeletingOutbox`、`TestCoordinatorRepairsOutboxWhenHistoryAckFails`、`TestCoordinatorCloseKeepsHistoryWhenOutboxDeleteFails`；其余 6 项见文件
 - [outbox_benchmark_test.go](../../../gameplay/skill/skillsync/outbox_benchmark_test.go)
-- [outbox_production_test.go](../../../gameplay/skill/skillsync/outbox_production_test.go)：`TestPublishPersistsRetryMetadata`、`TestPublishDueHonorsBatchLimit`、`TestConcurrentPublishDueDoesNotPublishSamePacket`、`TestPublishDueJoinsPublisherAndMetadataErrors`、`TestFileOutboxEnforcesRecordLimitOnPut`
-- [presentation_reset_spawn_promises_test.go](../../../gameplay/skill/skillsync/presentation_reset_spawn_promises_test.go)：`TestPresentationResetSpawnEntryMatchesItsIncrementalEvent`
-- [publish_metrics_promises_test.go](../../../gameplay/skill/skillsync/publish_metrics_promises_test.go)：`TestConcurrentCoordinatorMetricsCountEachPublishOnce`
-- [schema_negotiation_promises_test.go](../../../gameplay/skill/skillsync/schema_negotiation_promises_test.go)：`TestNegotiateSchemaRequiresBothRangesToContainTheResult`
-- [schema_test.go](../../../gameplay/skill/skillsync/schema_test.go)：`TestSchemaRegistryMigratesDeterministicShortestChain`、`TestSchemaRegistryRejectsInvalidAndMissingMigrations`
+- [outbox_test.go](../../../gameplay/skill/skillsync/outbox_test.go)：`TestPutAndPutBatchReachTheSameAdmissionVerdict`、`TestOutboxFailureBlocksLaterPacketsInSameStream`、`TestOverageOutboxCanRestartPublishAndAcknowledge`、`TestIdleSweepPreservesUnacknowledgedDelivery`、`TestDiscardObserverCannotSucceedWithPublishInFlight`；其余 8 项见文件
+- [presentation_source_test.go](../../../gameplay/skill/skillsync/presentation_source_test.go)：`TestPresentationResetSpawnEntryMatchesItsIncrementalEvent`、`TestSnapshotStartsPresentationAtCurrentRuntime`、`TestOutboxFailureDoesNotAppendTheSameSourceAgain`、`TestFullRecoveryAdvancesSourceCursor`
+- [schema_test.go](../../../gameplay/skill/skillsync/schema_test.go)：`TestSchemaRegistryMigratesDeterministicShortestChain`、`TestSchemaRegistryRejectsInvalidAndMissingMigrations`、`TestNegotiateSchemaRequiresBothRangesToContainTheResult`
 - [skillsync_test.go](../../../gameplay/skill/skillsync/skillsync_test.go)：`TestProjectorBuildsStronglyTypedPackets`、`TestApplierValidatesChainObserverAndManifestDependency`、`TestCoordinatorRetainsPublishFailureForRecovery`、`TestCoordinatorRequiresExplicitVisibilityPolicy`、`TestCoordinatorReclaimsViewLocksAndRequiresExplicitReopen`；其余 9 项见文件
-- [source_cursor_promises_test.go](../../../gameplay/skill/skillsync/source_cursor_promises_test.go)：`TestSnapshotStartsPresentationAtCurrentRuntime`、`TestOutboxFailureDoesNotAppendTheSameSourceAgain`、`TestFullRecoveryAdvancesSourceCursor`
-- [visibility_contract_test.go](../../../gameplay/skill/skillsync/visibility_contract_test.go)：`TestVisibilityClockAndUnknownMutationFailClosed`、`TestPresentationResetFromRecoverHonoursVisibility`、`TestPresentationResetFromExpiredCursorHonoursVisibility`、`TestStateSnapshotAndDeltasHideTheSameAbility`、`TestRemoveMutationsOfInvisibleEntitiesAreFiltered`
+- [visibility_test.go](../../../gameplay/skill/skillsync/visibility_test.go)：`TestVisibilityClockAndUnknownMutationFailClosed`、`TestPresentationResetFromRecoverHonoursVisibility`、`TestPresentationResetFromExpiredCursorHonoursVisibility`、`TestStateSnapshotAndDeltasHideTheSameAbility`、`TestRemoveMutationsOfInvisibleEntitiesAreFiltered`
 
 ### spatial
 

@@ -124,8 +124,7 @@ func (host *noCollisionHost) HostCapabilities() HostCapabilityTable {
 	return withoutHostCapabilities(host.MemoryHost.HostCapabilities(), HostCapability{HostCapabilityMotionStep, "collision"})
 }
 
-// noSteeringHost 不接受 steering 步骤（RR-20261006-37）：Runtime 对每个运动衍生物每步都发
-// SteeringMotionStep，不论定义写没写 steering。
+// noSteeringHost 不接受 steering 步骤：Runtime 对每个运动衍生物每步都发 SteeringMotionStep，不论定义写没写 steering。
 type noSteeringHost struct{ *MemoryHost }
 
 func (host *noSteeringHost) StepSpawn(command SpawnStepCommand, state SpawnHostState) (SpawnStepResult, error) {

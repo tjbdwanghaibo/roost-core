@@ -3,6 +3,7 @@ package skill
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -100,5 +101,91 @@ func TestMemoryHostRuntimeValueUsesPresentBitAndQuantities(t *testing.T) {
 	}
 	if _, err := CheckedAddRuntimeValues(zero, IntRuntimeValue(1, quantityWorldDistance)); !errors.Is(err, ErrRuntimeQuantityMismatch) {
 		t.Fatalf("quantity mismatch = %v", err)
+	}
+}
+
+// The memory host is the reference host every skill test runs against; its
+// refusals are the contract real hosts are compared to. Time only moves
+// forward, costs are non-negative and name a known resource, and an entity
+// pays only what it has — atomically.
+func TestMemoryHostRefusesBackwardTicksAndIllegalPayments(t *testing.T) {
+	host := NewMemoryHost(AuthorityIdentity{Revision: "test", Digest: "test"})
+	if _, err := host.Advance(10); err != nil {
+		t.Fatal(err)
+	}
+	revision := host.CurrentRevision()
+	if got, err := host.Advance(10); err != nil || got != revision {
+		t.Fatalf("same tick must be a no-op: revision=%v err=%v", got, err)
+	}
+	if _, err := host.Advance(9); err == nil || !strings.Contains(err.Error(), "tick moved backwards") {
+		t.Fatalf("Advance backwards = %v", err)
+	}
+
+	host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Health: 100, MaxHealth: 100, Resources: map[string]int64{"mana": 50}})
+	if _, err := host.PayCosts(CostPayment{Entity: 99, Entries: []CostEntry{{Resource: "mana", Amount: 1}}}); !errors.Is(err, ErrEntityNotFound) {
+		t.Fatalf("unknown entity = %v", err)
+	}
+	if _, err := host.PayCosts(CostPayment{Entity: 1, Entries: []CostEntry{{Resource: "mana", Amount: -1}}}); err == nil || !strings.Contains(err.Error(), "negative cost") {
+		t.Fatalf("negative cost = %v", err)
+	}
+	if _, err := host.PayCosts(CostPayment{Entity: 1, Entries: []CostEntry{{Handle: 77, Amount: 1}}}); !errors.Is(err, ErrCombatHandleInvalid) {
+		t.Fatalf("unmapped handle and no resource name = %v", err)
+	}
+	if _, err := host.PayCosts(CostPayment{Entity: 1, Entries: []CostEntry{{Resource: "mana", Amount: 30}, {Resource: "mana", Amount: 30}}}); !errors.Is(err, ErrInsufficientResource) {
+		t.Fatalf("total over the pool = %v", err)
+	}
+	if got := host.ResourceForTest(1, "mana"); got != 50 {
+		t.Fatalf("a refused payment deducted: mana=%d", got)
+	}
+	if _, err := host.PayCosts(CostPayment{Entity: 1, Entries: []CostEntry{{Resource: "mana", Amount: 20}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := host.ResourceForTest(1, "mana"); got != 30 {
+		t.Fatalf("legal payment left mana=%d, want 30", got)
+	}
+}
+
+func TestMemoryHostRevisionAndEventCursorContract(t *testing.T) {
+	host := NewMemoryHost(AuthorityIdentity{Revision: "test", Digest: "test"})
+	host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Position: Position{}, Resources: map[string]int64{"mana": 5}})
+	current := host.CurrentRevision()
+	if _, err := host.Read(ReadRequest{Meta: QueryMeta{RequiredRevision: current + 1}, Payload: ResourceRead{Entity: 1, Resource: "mana"}}); !errors.Is(err, ErrRevisionUnavailable) {
+		t.Fatalf("future read = %v", err)
+	}
+	if _, err := host.Select(SelectRequest{Meta: QueryMeta{RequiredRevision: current + 1}, Shape: CircleSelectShape{Radius: 10}, Limit: 1}); !errors.Is(err, ErrRevisionUnavailable) {
+		t.Fatalf("future select = %v", err)
+	}
+
+	failedRevision := host.CurrentRevision()
+	failed, err := host.Apply(EffectCommand{Payload: TeleportCommand{Target: 999, Destination: Position{X: 1}}})
+	payload, ok := failed.Payload.(TeleportEffectResult)
+	if err != nil || !ok || payload.Succeeded || payload.FailureReason != ExpectedFailureInvalidTarget {
+		t.Fatalf("missing target = %#v, %v", failed, err)
+	}
+	if host.CurrentRevision() != failedRevision {
+		t.Fatal("expected failure advanced revision")
+	}
+
+	result, err := host.Apply(EffectCommand{Payload: TeleportCommand{Target: 1, Destination: Position{X: 4}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := host.Events(0)
+	last := events[len(events)-1]
+	if result.Commit.Revision != last.Revision || result.Commit.Revision != host.CurrentRevision() {
+		t.Fatalf("commit/event/current revisions differ: %#v %#v %d", result.Commit, last, host.CurrentRevision())
+	}
+	read, err := host.Read(ReadRequest{Meta: QueryMeta{RequiredRevision: result.Commit.Revision}, Payload: PositionRead{Entity: 1}})
+	if err != nil || read.Meta.Revision != result.Commit.Revision {
+		t.Fatalf("read did not use required committed snapshot: %#v %v", read, err)
+	}
+	if got := host.Events(last.Cursor); len(got) != 0 {
+		t.Fatalf("Events(after) returned stale events: %#v", got)
+	}
+	if len(events) > 1 {
+		after := host.Events(events[len(events)-2].Cursor)
+		if len(after) != 1 || after[0].Cursor != last.Cursor {
+			t.Fatalf("event cursor is not strict: %#v", after)
+		}
 	}
 }

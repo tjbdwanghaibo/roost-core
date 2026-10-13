@@ -18,7 +18,7 @@ import (
 //	stop_pending ──待停止条目超过 MaxStopPendingSpawns──▶ abandoned，进已放弃分区：告警，不再重试，Runtime 不再负责停它
 //	abandoned ──已放弃分区超过 MaxAbandonedSpawns，Advance 末尾──▶ 记录删除（最早的先删）
 //
-// 停止入口（spawn_stop_entries_promises_test.go 的 spawnStopEntries 逐个登记，守卫核对源码里调用 requestSpawnStop
+// 停止入口（spawn_stop_test.go 的 spawnStopEntries 逐个登记，守卫核对源码里调用 requestSpawnStop
 // 的函数与登记表一致）：
 //   - 施法里的停止：failCastLocked、Cancel、Interrupt（stopCastSpawns），衍生物启动失败的清理
 //     （startEntitySpawn、executeOwnedSummon），移交时 lifecycle 实体已失效（handoffEntitySpawns）；

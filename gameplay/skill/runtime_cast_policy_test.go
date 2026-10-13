@@ -228,3 +228,48 @@ func compilePolicySkill(t *testing.T, id, policy string, cooldown Tick) (*Progra
 func tickString(value Tick) string {
 	return strconv.FormatInt(int64(value), 10)
 }
+
+// Cancel（与 Interrupt）释放 toggle 的 policy 槽位：被取消的 toggle 可以再次激活（开始新 cast，不被拒为对死 cast 的输入），
+// 被取消的 cast 可淘汰；反复取消 / 激活都成立，且不影响别的施法者。
+func TestCancelledToggleCanBeActivatedAgain(t *testing.T) {
+	policy := `{"mode":"toggle","pulse_interval_ticks":2,"max_duration_ticks":8,"sustain_costs":[]}`
+	program, environment := compilePolicySkill(t, "toggle-cancel", policy, 4)
+	runtime := NewRuntime(runtimeTestHost(environment), RuntimeOptions{})
+	castID, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Cancel(castID); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(runtime.StateSnapshot().ActivePolicies); got != 0 {
+		t.Fatalf("cancel left %d active policy entries", got)
+	}
+	if evictable := runtime.castEvictableLocked(runtime.casts[castID]); !evictable {
+		t.Fatal("cancelled toggle cast is not evictable")
+	}
+	if err := runtime.Advance(6); err != nil { // past the cooldown started by Cancel
+		t.Fatal(err)
+	}
+	second, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2})
+	if err != nil {
+		t.Fatalf("re-activation after cancel: %v", err)
+	}
+	if second == castID {
+		t.Fatal("re-activation resolved to the dead cast")
+	}
+	// And the same for Interrupt-style cancellation via the shared helper:
+	// the fresh toggle can be cancelled and re-activated repeatedly.
+	if err := runtime.Cancel(second); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Advance(12); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2}); err != nil {
+		t.Fatalf("second re-activation: %v", err)
+	}
+	if _, err := runtime.Activate(program, CastInput{Caster: 99, Target: 2}); errors.Is(err, ErrCastInputRejected) {
+		t.Fatalf("unrelated caster affected: %v", err)
+	}
+}

@@ -1,5 +1,18 @@
 package skill
 
+import (
+	"fmt"
+	"go/ast"
+	"go/importer"
+	"go/parser"
+	"go/token"
+	"go/types"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+)
+
 // 衍生物分区存放（维护者第十三轮“skill 衍生物两张表”，docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md）。
 //
 // 承诺：每条衍生物记录恰好在一个分区里，分区由记录字段（Status、handedOff）决定——施放中 / 已移交 / 待停止 /
@@ -14,19 +27,6 @@ package skill
 //     被重新赋值。另起一张衍生物索引表、绕过 setState 改字段都会红；
 //   - 同一守卫核对删记录的调用点（维护者第十三轮“待停止上限”选 B）：spawnTable.drop 只能在登记表 spawnDropSites 里的
 //     函数调用，已放弃分区的清理 pruneAbandonedSpawnsLocked 只能由 Advance 调用。在 Shutdown 等循环里直接 drop 会红。
-
-import (
-	"fmt"
-	"go/ast"
-	"go/importer"
-	"go/parser"
-	"go/token"
-	"go/types"
-	"path/filepath"
-	"sort"
-	"strings"
-	"testing"
-)
 
 // fileSpawnForTest 把测试直接构造的记录放进分区（按记录字段）。
 func fileSpawnForTest(runtime *Runtime, spawn *SpawnInstance) {

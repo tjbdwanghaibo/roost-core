@@ -12,10 +12,8 @@ import (
 	"testing"
 )
 
-// 生成工程在启动期对 game/skills/*.json 做 Parse + Compile，任何 error 诊断都让
-// game 服起不来。生成器写出的两份定义——`roost add skill` 的骨架与 game-demo 的
-// fireball——此前没有任何测试走这条编译链（RR-20261005-NC-151 收紧编译规则时
-// 就可能把它们变成启动失败）。core 不能 import codegen，这里把它们当数据读：
+// 生成工程在启动期对 game/skills/*.json 做 Parse + Compile，任何 error 诊断都让 game 服起不来：生成器写出的两份定义——
+// `roost add skill` 的骨架与 game-demo 的 fireball——必须无诊断编译。core 不能 import codegen，这里把它们当数据读：
 // 骨架取自 add_skill.go 里 Sprintf 的格式串，fireball 取自 demo 模板。
 func TestGeneratedSkillDefinitionsCompileWithoutDiagnostics(t *testing.T) {
 	definitions := map[string]string{

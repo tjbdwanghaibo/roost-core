@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -229,5 +230,108 @@ func stateIntCommand(host *MemoryHost, handle StateHandle, binding StateScopeBin
 		Meta: CommandMeta{RequiredRevision: host.CurrentRevision()}, Handle: handle, Binding: binding, Scope: scope,
 		Operation: operation, Value: IntRuntimeValue(value, quantityDimensionless), Default: IntRuntimeValue(0, quantityDimensionless),
 		Minimum: 0, Maximum: 100, DurationTicks: duration, MaximumDurationTicks: 20, ExpiryPolicy: policy,
+	}
+}
+
+// 默认值为 null 的实体持久状态可以用 modify_state set 写入实体（state 声明类型就是 entity，null 只表示“还没写过”）：
+// Runtime 交给 Host 的 Default 总是带 state 声明的类型；第一次 set 成功，状态里存的是写入的实体，事件里的 Before
+// 是该类型的缺省值，再次施法时 read_state 读回写入的实体。
+func TestNullDefaultEntityStateCanBeSet(t *testing.T) {
+	state := `{"mark":{"type":"entity","scope":"owner","default":null,"lifetime":{"duration_ticks":20,"maximum_duration_ticks":40,"on_write":"refresh","clear_on":[]}}}`
+	// 读到 mark 已写入时打伤目标（第二次施法才会读到），再 set 为本次目标。
+	flow := `{"flow":"sequence","steps":[` +
+		`{"flow":"if","condition":{"op":"exists","args":[{"read_state":{"state":"mark","owner":"$caster","snapshot":"current"}}]},"then":{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":2,"damage_type":"physical"}}},` +
+		`{"flow":"effect","effect":{"type":"modify_state","state":"mark","owner":"$caster","operation":"set","value":"$input.target","duration_ticks":20,"expiry_policy":"refresh"}},{"flow":"finish"}]}`
+	json := strings.Replace(stateSchemaSkillJSON(state), `"input_schema":{"type":"none"}`, `"input_schema":{"type":"entity"}`, 1)
+	json = strings.Replace(json, `{"flow":"finish"}`, flow, 1)
+	program, environment := compileRuntimeJSON(t, json)
+	host := runtimeTestHost(environment)
+	runtime := NewRuntime(host, RuntimeOptions{})
+	_, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2})
+	if errors.Is(err, ErrRuntimeTypeMismatch) {
+		t.Fatalf("modify_state set on a null-default entity state reported a type mismatch: %v", err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var changed *StateChangeEvent
+	for _, event := range host.Events(0) {
+		if event.Kind == "state_changed" {
+			changed = event.State
+		}
+	}
+	if changed == nil {
+		t.Fatal("no state_changed event")
+	}
+	if entity, ok := changed.After.Entity(); !ok || entity != 2 {
+		t.Fatalf("after=%#v", changed.After)
+	}
+	if changed.Before.Present() || changed.Before.Type().Base != valueKindEntity {
+		t.Fatalf("before should be the missing value of the declared entity type, got %#v", changed.Before)
+	}
+	snapshot := host.SkillPersistentStateSnapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("persistent state=%#v", snapshot)
+	}
+	if entity, ok := snapshot[0].Value.Entity(); !ok || entity != 2 {
+		t.Fatalf("persistent state=%#v", snapshot)
+	}
+	if host.HealthForTest(2) != 100 {
+		t.Fatalf("first cast must not read a mark, health=%d", host.HealthForTest(2))
+	}
+	if _, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if host.HealthForTest(2) != 98 {
+		t.Fatalf("second cast should read the mark and damage the target, health=%d", host.HealthForTest(2))
+	}
+}
+
+// skillsync 的可见性策略按 mutation 携带的实体判断能否下发：cast / spawn 的 remove 必须带上与 upsert 相同的归属实体
+// （Caster / Owner），否则过滤器当作“无主”放行，观察者会收到不可见实体的 cast / spawn 何时结束。
+
+func TestRemoveMutationsCarryTheEntityTheirUpsertCarried(t *testing.T) {
+	before := RuntimeStateSnapshot{
+		Casts:  []CastStateSnapshot{{ID: 3, ProgramID: "p", Caster: 7, PrimaryTarget: 8}},
+		Spawns: []SpawnStateSnapshot{{ID: 4, CastID: 3, ProgramID: "p", Owner: 7, LifecycleEntity: 8}},
+	}
+	var castRemove, spawnRemove *StateMutation
+	mutations := diffRuntimeState(before, RuntimeStateSnapshot{})
+	for index := range mutations {
+		switch mutations[index].Kind {
+		case StateMutationCastRemove:
+			castRemove = &mutations[index]
+		case StateMutationSpawnRemove:
+			spawnRemove = &mutations[index]
+		}
+	}
+	if castRemove == nil || spawnRemove == nil {
+		t.Fatalf("mutations = %+v, want a cast and a spawn remove", mutations)
+	}
+	if castRemove.Caster != 7 {
+		t.Errorf("cast remove = %+v, want Caster 7 (the upsert's caster)", *castRemove)
+	}
+	if spawnRemove.Owner != 7 {
+		t.Errorf("spawn remove = %+v, want Owner 7 (the upsert's owner)", *spawnRemove)
+	}
+}
+
+// 同一绑定下的多个 persistent_remove 按 StateHandle 区分排序键：删除顺序跨次运行确定，副本之间的重放 / 序号对账一致。
+func TestPersistentRemoveOrderingIsDeterministic(t *testing.T) {
+	binding := StateScopeBinding{Owner: 7}
+	first := StateMutation{Kind: StateMutationPersistentRemove, StateHandle: StateHandle{GameplayDigest: "aa", Slot: 1}, Binding: binding}
+	second := StateMutation{Kind: StateMutationPersistentRemove, StateHandle: StateHandle{GameplayDigest: "bb", Slot: 2}, Binding: binding}
+	if mutationSortKey(first) == mutationSortKey(second) {
+		t.Fatal("distinct persistent handles share a sort key")
+	}
+	before := []PersistentStateSnapshot{
+		{Handle: first.StateHandle, Binding: binding, Sequence: 1},
+		{Handle: second.StateHandle, Binding: binding, Sequence: 2},
+	}
+	for run := 0; run < 32; run++ {
+		result := diffPersistentStates(nil, before, nil)
+		if len(result) != 2 || result[0].StateHandle != first.StateHandle || result[1].StateHandle != second.StateHandle {
+			t.Fatalf("run %d: removal order changed: %+v", run, result)
+		}
 	}
 }

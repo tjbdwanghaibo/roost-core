@@ -24,7 +24,7 @@ import (
 //   - Runtime：castInstance.evalContext 记着当前上下文，evalReference 先查表，表外引用返回
 //     ErrReferenceOutOfContext（指向表项），不再落到 ErrProgramInvariant。
 //
-// 改表的规则：加一行或一个上下文，必须同时在 eval_contexts_table_test.go 里给每个格子补
+// 改表的规则：加一行或一个上下文，必须同时在 eval_context_test.go 里给每个格子补
 // 正例 / 反例（或写明“没有该类型的位点”），守卫测试会逐格检查。
 //
 // 格子只有两种结论：可用（值就是 semantics 写的那样，任何时刻都成立）或不可用（编译期拒绝）。

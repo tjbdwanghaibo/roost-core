@@ -389,3 +389,61 @@ func assertEntityIDs(t *testing.T, got, want []EntityID) {
 		}
 	}
 }
+
+// 召唤效果带的 area 衍生物允许在 enter / tick / leave 回调里 finish，含义是“结束拥有它的施法并停止本 area 余下的信号”。
+// 施法先结束、衍生物已移交（handedOff）时，回调里的 finish 没有施法可结束，只结束本 area 衍生物；编译通过的定义
+// 不能在运行期触发 ErrProgramInvariant。历史：RR-20261005-NC-211。
+func areaHandoffFinishSkill(callbacks string) string {
+	area := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":6},"spawn":{"kind":"area","duration_ticks":6,"interval_ticks":1,"emit_leave_on_stop":true,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":` + callbacks + `}`
+	return strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, `{"flow":"sequence","steps":[`+area+`,{"flow":"finish"}]}`, 1)
+}
+
+func TestHandedOffAreaFinishEndsOnlyTheAreaSpawn(t *testing.T) {
+	heal := `{"flow":"effect","effect":{"type":"heal","target":"$event.target","amount":1}}`
+	cases := map[string]struct {
+		callbacks, finishing string
+		members              [][]EntityID
+	}{
+		// 成员 2 在第 2 次查询时离开：leave 回调在移交之后执行 finish。
+		"leave after handoff": {`{"enter":` + heal + `,"leave":{"flow":"finish"}}`, "owned_spawn_callback_leave", [][]EntityID{{2}, {2}, {}}},
+		// 成员 2 在移交之后才进入：enter 回调执行 finish。
+		"enter after handoff": {`{"enter":{"flow":"finish"}}`, "owned_spawn_callback_enter", [][]EntityID{{}, {2}, {2}}},
+	}
+	for name, test := range cases {
+		t.Run(name, func(t *testing.T) {
+			callbacks := test.callbacks
+			environment := DefaultCompileEnvironment()
+			program, diagnostics := Compile(mustParseJSON(t, areaHandoffFinishSkill(callbacks)), environment)
+			requireNoErrors(t, diagnostics)
+			host := &areaSnapshotHost{MemoryHost: runtimeTestHost(environment), snapshots: test.members}
+			runtime := NewRuntime(host, RuntimeOptions{})
+			castID, err := runtime.Activate(program, CastInput{Caster: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cast, _ := runtime.InspectCast(castID); cast.Status != CastFinished {
+				t.Fatalf("cast = %#v, want finished before the area callback runs", cast)
+			}
+			if owned := runtime.OwnedSpawns(1); len(owned) != 1 {
+				t.Fatalf("owned spawns = %#v, want the handed-off area", owned)
+			}
+			for tick := Tick(1); tick <= 8; tick++ {
+				if err := runtime.Advance(tick); err != nil {
+					t.Fatalf("Advance(%d) = %v; a compiled area finish must not fail the runtime", tick, err)
+				}
+			}
+			if owned := runtime.OwnedSpawns(1); len(owned) != 0 {
+				t.Fatalf("owned spawns after finish = %#v, want none", owned)
+			}
+			finishes := 0
+			for _, event := range runtime.RuntimeEvents() {
+				if event.Kind == test.finishing {
+					finishes++
+				}
+			}
+			if finishes != 1 {
+				t.Fatalf("finishing callbacks = %d, want exactly one: finish stops the remaining signals", finishes)
+			}
+		})
+	}
+}

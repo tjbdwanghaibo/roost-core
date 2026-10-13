@@ -296,31 +296,6 @@ func TestTemporalRestoreFailureCannotCarryAppliedFields(t *testing.T) {
 	}
 }
 
-func TestTemporalRestoreRejectedEmitsTemporalEvent(t *testing.T) {
-	environment := DefaultCompileEnvironment()
-	environment.Gameplay.Temporal.Entries = []TemporalSnapshotProfile{{Handle: 1, Key: "temporal.blocked", Fields: []string{"position"}, MaximumAgeTicks: 20, MaximumPerOwner: 4, RestorePolicy: "authorized_fields", EventPolicy: "temporal_only", BlockedPositionPolicy: "fail"}}
-	environment.Digest = authorityDigest(environment)
-	host := runtimeTestHost(environment)
-	host.temporalBlocked = map[Position]Position{{X: 1}: {X: 2}}
-	host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Position: Position{X: 1}})
-	captured, err := host.Apply(EffectCommand{Meta: CommandMeta{RequiredRevision: host.CurrentRevision()}, Payload: TemporalCaptureCommand{Owner: 1, Target: 1, ProgramID: "skill.temporal", GameplayDigest: environment.Digest, Profile: 1}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Position: Position{X: 9}})
-	result, err := host.Apply(EffectCommand{Meta: CommandMeta{RequiredRevision: host.CurrentRevision()}, Payload: TemporalRestoreCommand{Owner: 1, Target: 1, ProgramID: "skill.temporal", GameplayDigest: environment.Digest, Token: captured.Payload.(SnapshotCaptureEffectResult).Token}})
-	if err != nil || result.Payload.(SnapshotRestoreEffectResult).FailureReason != ExpectedFailureDestinationBlocked {
-		t.Fatalf("result=%#v error=%v", result, err)
-	}
-	seen := false
-	for _, event := range host.Events(0) {
-		seen = seen || event.Kind == "temporal_restore_rejected"
-	}
-	if !seen {
-		t.Fatalf("events=%#v", host.Events(0))
-	}
-}
-
 func TestTemporalDerivedCombatEventsRequireProfilePolicy(t *testing.T) {
 	for name, eventPolicy := range map[string]struct {
 		policy string

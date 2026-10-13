@@ -1,27 +1,7 @@
 package skill
 
-// 衍生物“施放 → 移交 → 停止”端到端用例（维护者 2026-10-07：先补端到端用例，再在这套用例上修
-// F08-R / F08-H+，不再逐条打补丁；docs/framework/impl/08-skill.md §11）。
-//
-// 在 MemoryHost 上跑真实的 Activate / Advance / Cancel / Interrupt / Shutdown，覆盖 area、projectile、beam、
-// orbit 四种衍生物，每种走一遍：召唤后立即 finish、召唤后 wait 再 finish（移交前后都在推进）、同上但施放中
-// Checkpoint / RestoreRuntime、wait 超过衍生物寿命（施放中到期）、施放中 Cancel / Interrupt、施放中与移交后 Shutdown。
-// 每个 tick 断言：
-//
-//   - 效果按 tick 结算：衍生物每一步的 tick 回调在它该跑的每个 tick 恰好跑一次，不丢、不重复，与什么时候移交无关；
-//     停止之后不再结算；到期跑一次 end 回调，Cancel / Interrupt / Shutdown（施放中与移交后）跑一次 cancel 回调
-//     （施放中 Shutdown 这一格是 RR-20261006-55 后续补的断言，修前 0 次）；
-//   - 事件链：衍生物回调里的效果继承施法的 RootEventID / ProcDepth，每次结算的 EventID 互不相同，父事件存在且
-//     不是自己；proc 施放的第 0 号效果不与施法事件撞号；max_depth 与 once_per_root 按“衍生物属于施法的因果链”生效；
-//   - Host 侧状态：MemoryHost 里仍 active 的衍生物，恰好是 Runtime 仍负责的衍生物（running / stop_pending），没有残留。
-//
-// 另有：施放中 area 回调在之后的 tick finish 时结束施法；推进入口的源码守卫（只有 advanceOwnedSpawns 与启动步）。
-//
-// 修前红（基线 47abe511）：RR-20261006-51（施放中不推进，移交前的 tick 丢失）、RR-20261006-52（运动衍生物启动步
-// Frame 之后被拒，Host 侧残留）、RR-20261006-53（事件链不继承、EventID 每 tick 相同）、RR-20261006-54（proc 第 0 号
-// 效果撞号）。失败文本抄在各自的 docs/bug 记录里。
-
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -29,10 +9,28 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
 )
+
+// 衍生物“施放 → 移交 → 停止”端到端用例（维护者 2026-10-07：衍生物生命周期按这套用例收敛，不再逐条打补丁；
+// docs/framework/impl/08-skill.md §11）。
+//
+// 在 MemoryHost 上跑真实的 Activate / Advance / Cancel / Interrupt / Shutdown，覆盖 area、projectile、beam、
+// orbit 四种衍生物，每种走一遍：召唤后立即 finish、召唤后 wait 再 finish（移交前后都在推进）、同上但施放中
+// Checkpoint / RestoreRuntime、wait 超过衍生物寿命（施放中到期）、施放中 Cancel / Interrupt、施放中与移交后 Shutdown。
+// 每个 tick 断言：
+//
+//   - 效果按 tick 结算：衍生物每一步的 tick 回调在它该跑的每个 tick 恰好跑一次，不丢、不重复，与什么时候移交无关；
+//     停止之后不再结算；到期跑一次 end 回调，Cancel / Interrupt / Shutdown（施放中与移交后）跑一次 cancel 回调；
+//   - 事件链：衍生物回调里的效果继承施法的 RootEventID / ProcDepth，每次结算的 EventID 互不相同，父事件存在且
+//     不是自己；proc 施放的第 0 号效果不与施法事件撞号；max_depth 与 once_per_root 按“衍生物属于施法的因果链”生效；
+//   - Host 侧状态：MemoryHost 里仍 active 的衍生物，恰好是 Runtime 仍负责的衍生物（running / stop_pending），没有残留。
+//
+// 另有：施放中 area 回调在之后的 tick finish 时结束施法；推进入口的源码守卫（只有 advanceOwnedSpawns 与启动步）。
+// 历史：RR-20261006-51～54。
 
 // spawnLifecycleHost 记录每一次伤害命令（tick、目标、事件上下文），可让某一类运动步骤被拒一次。
 type spawnLifecycleHost struct {
@@ -396,7 +394,7 @@ func TestProcCastSpawnCallbacksKeepDepthAndRoot(t *testing.T) {
 }
 
 // 施放中 area 衍生物的回调在之后某个 tick 执行 finish（施法停在 wait 上）：结束拥有它的施法——撤掉余下的流程（wait 之后的
-// 伤害不再执行）、走正常收尾，area 停止、不再结算（RR-20261006-51 之后施放中的衍生物才会在之后的 tick 上跑回调）。
+// 伤害不再执行）、走正常收尾，area 停止、不再结算。
 func TestCastingAreaFinishAtALaterTickFinishesTheCast(t *testing.T) {
 	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":30},"spawn":{"kind":"area","duration_ticks":6,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":10},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}},"on":{"enter":{"flow":"finish"}}},{"flow":"wait","ticks":10,"then":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$caster","amount":1,"damage_type":"physical"}},{"flow":"finish"}]}}]}`
 	program, environment := compileRuntimeJSON(t, spawnLifecycleSkill("area-finish", spawnLifecycleActive, flow))
@@ -428,10 +426,9 @@ func TestCastingAreaFinishAtALaterTickFinishesTheCast(t *testing.T) {
 	}
 }
 
-// 推进入口守卫（RR-20261006-51）：衍生物的一步（stepSpawnMotion / stepAreaMembership）只在两处发生——启动那一步
+// 推进入口守卫：衍生物的一步（stepSpawnMotion / stepAreaMembership）只在两处发生——启动那一步
 // （startEntitySpawn）与逐 tick 推进（advanceOwnedSpawns）。与“分区只由 spawnTable 写”“停止只经 requestSpawnStop”
-// 两条守卫一起，衍生物的推进、存放、停止各只有一个入口；新增一条推进路径（例如之前只在 checkpoint 恢复里存在的
-// spawnStepTask）会在这里变红。
+// 两条守卫一起，衍生物的推进、存放、停止各只有一个入口；新增一条推进路径会在这里变红。
 func TestSpawnStepsHaveOneTickEntry(t *testing.T) {
 	allowed := map[string]bool{"startEntitySpawn": true, "advanceOwnedSpawns": true}
 	files, err := filepath.Glob("*.go")
@@ -476,5 +473,199 @@ func TestSpawnStepsHaveOneTickEntry(t *testing.T) {
 		if !callers[caller] {
 			t.Errorf("%s no longer steps spawns; update the guard together with the advancing entry", caller)
 		}
+	}
+}
+
+func TestSpawnStopIsUnifiedAndIdempotent(t *testing.T) {
+	program, environment := compileRuntimeFixture(t, "simple_damage.json")
+	host := runtimeTestHost(environment)
+	runtime := NewRuntime(host, RuntimeOptions{})
+	castID, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spawn := &SpawnInstance{ID: 7, CastID: castID, Status: SpawnRunning, Scope: SpawnScopeEntity, HostState: SpawnHostState{SpawnID: 7, Active: true}}
+	fileSpawnForTest(runtime, spawn)
+	if _, err := host.StepSpawn(SpawnStepCommand{Meta: SpawnCommandMeta{SpawnID: 7}, Motion: StaticMotionStep{}}, spawn.HostState); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.stopSpawn(runtime.casts[castID], spawn, StopCauseCancel); err != nil {
+		t.Fatal(err)
+	}
+	revision := host.CurrentRevision()
+	if err := runtime.stopSpawn(runtime.casts[castID], spawn, StopCauseCancel); err != nil || host.CurrentRevision() != revision {
+		t.Fatalf("second stop changed world: %v", err)
+	}
+	if spawn.Status != SpawnCancelled {
+		t.Fatalf("spawn = %#v", spawn)
+	}
+}
+
+func TestSpawnSignalsUseCanonicalOrder(t *testing.T) {
+	signals := []SpawnSignal{
+		{Kind: SpawnSignalTick, Target: 5},
+		{Kind: SpawnSignalEnter, Target: 4},
+		{Kind: SpawnSignalCollision, Target: 3, Distance: 20, ContactOrdinal: 1},
+		{Kind: SpawnSignalEnd},
+		{Kind: SpawnSignalHit, Target: 2, Distance: 10, ContactOrdinal: 2},
+		{Kind: SpawnSignalTargetLost},
+		{Kind: SpawnSignalLeave, Target: 7},
+		{Kind: SpawnSignalTransition},
+	}
+	ordered := normalizeSpawnSignals(signals)
+	got := make([]SpawnSignalKind, len(ordered))
+	for index := range ordered {
+		got[index] = ordered[index].Kind
+	}
+	want := []SpawnSignalKind{
+		SpawnSignalHit, SpawnSignalCollision, SpawnSignalTargetLost, SpawnSignalTransition,
+		SpawnSignalLeave, SpawnSignalEnter, SpawnSignalTick, SpawnSignalEnd,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+}
+
+// 正式创建的 entity 衍生物跨 goto 存活，finish 后移交，不伪造 phase/cast 作用域。
+func TestEntityCarrySurvivesGotoAndNormalFinish(t *testing.T) {
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{"kind":"projectile","duration_ticks":10,"motion":{"frame":{"type":"world"},"trajectory":{"type":"linear","speed":1},"carry":{"target":"$caster"},"completion":{"type":"end"}}}},{"flow":"goto","phase":"next"}]}`
+	var document map[string]any
+	if err := json.Unmarshal([]byte(hostCapabilitySkill("carry-goto", `[]`, flow)), &document); err != nil {
+		t.Fatal(err)
+	}
+	var next map[string]any
+	if err := json.Unmarshal([]byte(`{"id":"next","timeout_ticks":0,"on":{"enter":{"flow":"wait","ticks":3,"then":{"flow":"finish"}}}}`), &next); err != nil {
+		t.Fatal(err)
+	}
+	document["phases"] = append(document["phases"].([]any), next)
+	data, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := DefaultCompileEnvironment()
+	program, diagnostics := Compile(mustParseJSON(t, string(data)), environment)
+	requireNoErrors(t, diagnostics)
+	host := runtimeTestHost(environment)
+	runtime := NewRuntime(host, RuntimeOptions{})
+	id, err := runtime.Activate(program, CastInput{Caster: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spawn *SpawnInstance
+	runtime.spawns.each(func(value *SpawnInstance) { spawn = value }, spawnCasting)
+	if spawn == nil || spawn.Scope != SpawnScopeEntity || !spawn.Motion.CarryAttached || runtime.casts[id].currentPhase != 1 {
+		t.Fatalf("goto did not preserve entity carry: spawn=%+v", spawn)
+	}
+	if err := runtime.Advance(3); err != nil {
+		t.Fatal(err)
+	}
+	if !spawn.handedOff || spawn.Status != SpawnRunning || !spawn.Motion.CarryAttached {
+		t.Fatalf("normal finish stopped entity carry: %+v", spawn)
+	}
+}
+
+// O29（维护者第十二轮决定，2026-10-06，只改文案）：effect result 分支（以及 status 实例
+// 选择的消费流程）不能挂起、不能启动带 on 回调的衍生物——规则是 effectResultBranchMaySuspend：
+// wait、带间隔的 repeat、带 on 的效果。召唤效果加不带回调的衍生物照常编译、分支执行时照常
+// 启动衍生物。以前诊断写 “cannot suspend or start a spawn”，与规则不符。
+//
+// 承诺：result 分支里 summon + 无回调衍生物编译并启动衍生物；带 on 的衍生物被拒绝，诊断文案
+// 说的是“带 on 回调的衍生物”，不再说不能启动衍生物。
+
+func TestEffectResultBranchMayStartASpawnWithoutCallbacks(t *testing.T) {
+	spawn := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":5},"spawn":{"kind":"minion"}}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"heal","target":"$caster","amount":1},"result":{"success":` + spawn + `,"failure":` + spawn + `}},{"flow":"finish"}]}`
+	program, environment := compileOwnedSkill(t, "result-branch-spawn", flow)
+	runtime := NewRuntime(runtimeTestHost(environment), RuntimeOptions{})
+	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.spawns.count(spawnHandedOff) != 1 {
+		t.Fatalf("owned spawns = %d, want the minion spawn started from the result branch", runtime.spawns.count(spawnHandedOff))
+	}
+}
+
+func TestEffectResultBranchDiagnosticNamesSpawnCallbacks(t *testing.T) {
+	spawn := `{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":5},"spawn":{"kind":"minion"},"on":{"end":{"flow":"effect","effect":{"type":"heal","target":"$owner","amount":1}}}}`
+	flow := `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"heal","target":"$caster","amount":1},"result":{"success":` + spawn + `}},{"flow":"finish"}]}`
+	json := strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, flow, 1)
+	_, diagnostics := compileToArtifacts(mustParseJSON(t, json), DefaultCompileEnvironment())
+	for _, diagnostic := range diagnostics {
+		if !strings.HasPrefix(diagnostic.Message, "effect result branches") {
+			continue
+		}
+		if !strings.Contains(diagnostic.Message, "with on callbacks") {
+			t.Fatalf("result branch diagnostic %q must name spawn on callbacks", diagnostic.Message)
+		}
+		return
+	}
+	t.Fatalf("no effect result branch diagnostic: %#v", diagnostics)
+}
+
+type carryRejectOnceHost struct {
+	*ownedCarryLifecycleHost
+	attached              bool
+	detachAttempts, stops int
+	reject                error
+}
+
+func (host *carryRejectOnceHost) StepSpawn(command SpawnStepCommand, state SpawnHostState) (SpawnStepResult, error) {
+	if carry, ok := command.Motion.(CarryMotionStep); ok && !carry.Attached {
+		host.detachAttempts++
+		if host.detachAttempts == 1 {
+			return SpawnStepResult{}, host.reject
+		}
+		result, err := host.ownedCarryLifecycleHost.StepSpawn(command, state)
+		if err == nil {
+			host.attached = false
+		}
+		return result, err
+	}
+	return host.ownedCarryLifecycleHost.StepSpawn(command, state)
+}
+func (host *carryRejectOnceHost) StopSpawn(command SpawnStopCommand, state SpawnHostState) (CommitReceipt, error) {
+	host.stops++
+	return host.MemoryHost.StopSpawn(command, state)
+}
+
+func TestFailedCarryDetachRetriesBeforeSpawnRetirement(t *testing.T) {
+	for _, restore := range []bool{false, true} {
+		name := "live"
+		if restore {
+			name = "checkpoint"
+		}
+		t.Run(name, func(t *testing.T) {
+			runtime, base, spawn := startOwnedCarryLifecycle(t, `{"type":"end"}`, "")
+			callbacks := 0
+			base.observeApply = func() { callbacks++ }
+			program := spawn.Program
+			host := &carryRejectOnceHost{ownedCarryLifecycleHost: base, attached: true, reject: errors.New("detach refused")}
+			runtime.host = host
+			if err := runtime.Shutdown(); !errors.Is(err, host.reject) {
+				t.Fatalf("shutdown error=%v", err)
+			}
+			if spawn.Status != SpawnStopPending || !spawn.Motion.CarryAttached || host.stops != 0 {
+				t.Errorf("failed detach retired spawn: status=%s attached=%v stops=%d", spawn.Status, spawn.Motion.CarryAttached, host.stops)
+			}
+			if restore {
+				checkpoint, err := runtime.Checkpoint()
+				if err != nil {
+					t.Fatal(err)
+				}
+				runtime, err = RestoreRuntime(host, RuntimeOptions{}, checkpoint, ProgramResolverFunc(func(string, string) (*Program, error) { return program, nil }))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := runtime.Advance(4); err != nil {
+				t.Fatal(err)
+			}
+			if host.attached || host.detachAttempts != 2 || host.stops != 1 {
+				t.Fatalf("carry left attached: attached=%v attempts=%d stops=%d", host.attached, host.detachAttempts, host.stops)
+			}
+			if callbacks != 1 {
+				t.Fatalf("cancel callbacks=%d", callbacks)
+			}
+		})
 	}
 }

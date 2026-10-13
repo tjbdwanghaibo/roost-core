@@ -19,8 +19,8 @@ type HostCapabilityProbe struct {
 // （Host.HostCapabilities）逐项调用 Host，确认声明的每一项都真的支持；属性与资源两列还反过来
 // 核对表外的 key 被拒绝，而不是静默当成 0。catalog 用来把 key 换成 handle、核对属性量纲。
 //
-// 业务 Host 在自己的测试里调用一次即可（参考 skill/host_capability_promises_test.go 与
-// combatcomponent 的同名测试）。返回的错误列出全部不一致项。
+// 业务 Host 在自己的测试里调用一次即可（参考 skill/host_contract_test.go 与
+// combatcomponent/adapter_test.go）。返回的错误列出全部不一致项。
 func CheckHostCapabilities(host Host, catalog GameplayCatalog, probe HostCapabilityProbe) error {
 	if host == nil {
 		return fmt.Errorf("%w: no host", ErrHostContractViolation)

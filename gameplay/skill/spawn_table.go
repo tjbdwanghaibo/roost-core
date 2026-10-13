@@ -16,7 +16,7 @@ import "sort"
 //	spawnAbandoned    Status == abandoned                待停止超过 MaxStopPendingSpawns 时放弃的；Advance 末尾按 MaxAbandonedSpawns 清理
 //
 // 只有 setState 改分区字段（Status、handedOff）并把记录挪到对应分区；新记录经 add 入表、按字段落分区，删除经 drop。
-// spawn_partition_promises_test.go 的源码守卫禁止别处写分区 map、给这两个字段赋值。
+// spawn_partition_test.go 的源码守卫禁止别处写分区 map、给这两个字段赋值。
 // drop 只有三个调用点（同一守卫登记）：Advance 末尾清理已放弃分区（pruneAbandonedSpawnsLocked）、随 cast 回收已停止的
 // 记录（forgetCastSpawnsLocked）、衍生物启动失败且已停掉之后（startEntitySpawn）。任何“取 ID 列表 → 逐个处理”的循环
 // 中途都不会删记录（维护者第十三轮“待停止上限”选 B，docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md §11）。

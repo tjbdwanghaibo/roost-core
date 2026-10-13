@@ -1,24 +1,187 @@
 package skill
 
-// SKILL-1 补测（RR-20261005-NC-110～112 的邻近分支）：runtime_cast_terminal_promises_test.go 的五个用例覆盖了
-// 启动失败、Cancel 回调失败、charge Release 失败、排程失败的 toggle。下面三条路径同样承诺“出错的终止只走
-// failCastLocked 一个终态入口”，此前没有专门用例：
-//
-//   - Interrupt 停衍生物出错（runtime_cast_window.go Interrupt 的 stopSpawns 分支）：原错误返回给调用方，cast 进
-//     failed、保留第一次原因，再次 Interrupt / Cancel 被拒、不重跑回调，施法者不被占住，宿主侧衍生物已停；
-//   - toggle 的 release 回调出错（releaseCast 的 toggle / hold 分支，经 Release 与经再次激活的 toggle-off 两个入口）：
-//     同上，且 policy 槽位释放，下一次激活开始新 cast；
-//   - charge 的 enter 在提交前起了 owned 衍生物后失败：Start 返回 (0, 原错误)，宿主侧衍生物停止，Runtime 不在被复用
-//     的 cast ID 名下留下衍生物记录，失败启动之后的 checkpoint 能恢复（NC-110 对排程任务的承诺扩到衍生物）。
-//
-// RR-20261006-21：第三条补测时是红的。失败启动删了 cast、还了 ID，但已停 minion 衍生物的记录留在 Runtime 里：
-// 记录挂到下一个 cast 名下，而且停止时已清掉 Program，Checkpoint 直接报 corrupt；宿主停不下衍生物时，运行中的
-// 记录同样被下一个 cast 接走。
-
 import (
 	"errors"
 	"testing"
 )
+
+// 施法的每条终止路径（启动失败、Cancel / Interrupt / Release 中途出错、排程任务失败）都把 cast 收敛到同一个终态：
+// 本 cast 的排程任务与帧全部撤掉、衍生物停止、policy 槽位释放、不再占施法者窗口。
+// 历史：RR-20261005-NC-110～112。
+
+const terminalChargeEnter = `{"flow":"parallel","branches":[{"flow":"wait","ticks":3,"then":{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":40,"damage_type":"true"}}},{"flow":"effect","effect":{"type":"resource","target":"$caster","resource":"mana","operation":"spend","amount":50}}]}`
+
+func compileTerminalCharge(t *testing.T) (*Program, CompileEnvironment) {
+	t.Helper()
+	json := `{"schema":"roost.skill/v2","id":"skill.test.terminal.charge","name":"Terminal","description":"Charge whose enter schedules a wait, then fails.","activation":{"type":"active","policy":{"mode":"charge","max_charge_ticks":10,"min_charge_bp":0,"auto_release":false}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + terminalChargeEnter + `,"release":{"flow":"finish"}}}]}`
+	return compileRuntimeJSON(t, json)
+}
+
+func setTerminalMana(host *MemoryHost, mana int64) {
+	host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Health: 100, MaxHealth: 100, Resources: map[string]int64{"mana": mana}})
+}
+
+func scheduledTasksFor(runtime *Runtime, id CastID) int {
+	count := 0
+	for _, task := range runtime.scheduler.tasks {
+		if castID, _ := scheduledTaskIdentity(task.Payload); castID == id {
+			count++
+		}
+	}
+	return count
+}
+
+// 启动失败、未提交的 cast 被删除且 ID 复用：它已排程的等待不能落到下一个拿到同一 ID 的 cast 上。
+func TestFailedStartLeavesNoScheduledWorkForTheReusedCastID(t *testing.T) {
+	program, environment := compileTerminalCharge(t)
+	host := runtimeTestHost(environment)
+	setTerminalMana(host, 10)
+	runtime := NewRuntime(host, RuntimeOptions{})
+	if id, err := runtime.Start(program, CastInput{Caster: 1, Target: 2}); !errors.Is(err, ErrInsufficientResource) || id != 0 {
+		t.Fatalf("first start = %d, %v; want 0, ErrInsufficientResource", id, err)
+	}
+	if left := scheduledTasksFor(runtime, 1); left != 0 || len(runtime.frames) != 0 {
+		t.Errorf("failed start left %d scheduled tasks and %d frames for cast 1", left, len(runtime.frames))
+	}
+	// 失败启动的 cast 被删除、ID 复用：完成队列里也不能残留指向这个 ID 的条目。
+	if len(runtime.completedCastOrder) != 0 {
+		t.Errorf("completed queue after a deleted failed start = %v", runtime.completedCastOrder)
+	}
+	if err := runtime.Advance(1); err != nil {
+		t.Fatal(err)
+	}
+	setTerminalMana(host, 100)
+	id, err := runtime.Start(program, CastInput{Caster: 1, Target: 2})
+	if err != nil || id != 1 {
+		t.Fatalf("second start = %d, %v; want the reused id 1", id, err)
+	}
+	if err := runtime.Advance(3); err != nil {
+		t.Fatalf("advance to 3: %v", err)
+	}
+	if got := host.HealthForTest(2); got != 100 {
+		t.Fatalf("health at tick 3 = %d: the rejected cast's wait landed on the reused id (second cast is due at tick 4)", got)
+	}
+	if err := runtime.Advance(4); err != nil {
+		t.Fatalf("advance to 4: %v", err)
+	}
+	if got := host.HealthForTest(2); got != 60 {
+		t.Fatalf("health at tick 4 = %d, want 60", got)
+	}
+}
+
+// 失败启动之后立刻 checkpoint 必须能恢复（不留指向不存在 cast 的任务）。
+func TestCheckpointAfterFailedStartRestores(t *testing.T) {
+	program, environment := compileTerminalCharge(t)
+	host := runtimeTestHost(environment)
+	setTerminalMana(host, 10)
+	runtime := NewRuntime(host, RuntimeOptions{})
+	if _, err := runtime.Start(program, CastInput{Caster: 1, Target: 2}); !errors.Is(err, ErrInsufficientResource) {
+		t.Fatalf("start = %v", err)
+	}
+	checkpoint, err := runtime.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RestoreRuntime(host, RuntimeOptions{}, checkpoint, ProgramResolverFunc(func(string, string) (*Program, error) { return program, nil })); err != nil {
+		t.Fatalf("restore after a failed start: %v", err)
+	}
+}
+
+// cancel 回调失败：Cancel 返回错误，但 cast 必须终止——施法者可以再次施法，再次 Cancel 被拒绝而不是重跑回调。
+func TestCancelCallbackFailureStillEndsTheCast(t *testing.T) {
+	window := `"cast_window":{"windup_ticks":5,"commit_tick":3,"recovery_ticks":1,"movement":"locked","turning":"allowed","interrupt_tags":[],"refund_before_commit":true}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.terminal.cancel","name":"Terminal","description":"Cancel callback that cannot pay.","activation":{"type":"active","policy":{"mode":"tap"},` + window + `},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{"flow":"finish"},"cancel":{"flow":"effect","effect":{"type":"resource","target":"$caster","resource":"mana","operation":"spend","amount":500}}}}]}`
+	program, environment := compileRuntimeJSON(t, json)
+	host := runtimeTestHost(environment)
+	runtime := NewRuntime(host, RuntimeOptions{})
+	castID, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Cancel(castID); !errors.Is(err, ErrInsufficientResource) {
+		t.Fatalf("cancel = %v, want the callback's ErrInsufficientResource", err)
+	}
+	snapshot, _ := runtime.InspectCast(castID)
+	if snapshot.Status != CastFailed {
+		t.Fatalf("cast after failed cancel: status=%s stage=%s, want failed", snapshot.Status, snapshot.WindowStage)
+	}
+	if err := runtime.Cancel(castID); !errors.Is(err, ErrCastInputRejected) {
+		t.Fatalf("second cancel = %v, want ErrCastInputRejected (the callback must not run again)", err)
+	}
+	if runtime.ActiveCastCount() != 0 {
+		t.Fatalf("active casts = %d after the cast ended", runtime.ActiveCastCount())
+	}
+	if _, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2}); err != nil {
+		t.Fatalf("caster still locked after the failed cancel: %v", err)
+	}
+}
+
+// 手动 Release 在重新进入施法窗口后失败（付费不足）：cast 必须终止，不能停在 preparing 永久占住施法者。
+func TestChargeReleaseFailureStillEndsTheCast(t *testing.T) {
+	policy := `{"mode":"charge","max_charge_ticks":10,"min_charge_bp":0,"auto_release":true}`
+	program, environment := compilePolicySkill(t, "charge", policy, 0)
+	host := runtimeTestHost(environment)
+	runtime := NewRuntime(host, RuntimeOptions{})
+	castID, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Advance(5); err != nil {
+		t.Fatal(err)
+	}
+	setTerminalMana(host, 1)
+	if err := runtime.Release(castID); !errors.Is(err, ErrInsufficientResource) {
+		t.Fatalf("release = %v, want ErrInsufficientResource", err)
+	}
+	snapshot, _ := runtime.InspectCast(castID)
+	if snapshot.Status != CastFailed {
+		t.Fatalf("cast after failed release: status=%s stage=%s, want failed", snapshot.Status, snapshot.WindowStage)
+	}
+	setTerminalMana(host, 100)
+	if _, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2}); err != nil {
+		t.Fatalf("caster still locked after the failed release: %v", err)
+	}
+}
+
+// toggle 的 pulse 失败后 cast 终止并释放 policy 槽位：下一次激活开始一个新 cast，
+// 不能变成对失败 cast 的 toggle-off（执行它的 release 效果、把 failed 改写成 finished、起冷却）。
+func TestFailedToggleReleasesItsPolicySlot(t *testing.T) {
+	policy := `{"mode":"toggle","pulse_interval_ticks":2,"max_duration_ticks":20,"sustain_costs":[]}`
+	json := `{"schema":"roost.skill/v2","id":"skill.test.terminal.toggle","name":"Terminal","description":"Toggle whose pulse cannot pay.","activation":{"type":"active","policy":` + policy + `},"input_schema":{"type":"entity"},"cooldown_ticks":10,"costs":[],"memory":{"entered":{"type":"bool","default":false}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{"flow":"effect","effect":{"type":"set_memory","name":"entered","value":true}},"pulse":{"flow":"effect","effect":{"type":"resource","target":"$caster","resource":"mana","operation":"spend","amount":500}},"release":{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"damage","target":"$input.target","amount":2,"damage_type":"physical"}},{"flow":"finish"}]}}}]}`
+	program, environment := compileRuntimeJSON(t, json)
+	host := runtimeTestHost(environment)
+	runtime := NewRuntime(host, RuntimeOptions{})
+	castID, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Advance(2); !errors.Is(err, ErrInsufficientResource) {
+		t.Fatalf("pulse advance = %v, want ErrInsufficientResource", err)
+	}
+	next, err := runtime.Activate(program, CastInput{Caster: 1, Target: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, _ := runtime.InspectCast(castID)
+	if next == castID || failed.Status != CastFailed || host.HealthForTest(2) != 100 || runtime.CooldownUntil(program, 1) != 0 {
+		t.Fatalf("activation after a failed toggle: id=%d (failed=%d) failedStatus=%s health=%d cooldown=%d; want a new cast, the failed one untouched",
+			next, castID, failed.Status, host.HealthForTest(2), runtime.CooldownUntil(program, 1))
+	}
+	if err := runtime.Cancel(castID); !errors.Is(err, ErrCastInputRejected) {
+		t.Fatalf("cancel of a failed cast = %v, want ErrCastInputRejected", err)
+	}
+}
+
+// 出错的终止只走 failCastLocked 一个终态入口，另外三条路径：
+//
+//   - Interrupt 停衍生物出错：原错误返回给调用方，cast 进 failed、保留第一次原因，再次 Interrupt / Cancel 被拒、
+//     不重跑回调，施法者不被占住，宿主侧衍生物已停；
+//   - toggle 的 release 回调出错（经 Release 与经再次激活的 toggle-off 两个入口）：同上，且 policy 槽位释放，
+//     下一次激活开始新 cast；
+//   - charge 的 enter 在提交前起了 owned 衍生物后失败：Start 返回 (0, 原错误)，宿主侧衍生物停止，Runtime 不在被复用的
+//     cast ID 名下留下衍生物记录，失败启动之后的 checkpoint 能恢复；宿主停不下衍生物时 cast 保留（见 spawn_stop_test.go）。
+//
+// 历史：RR-20261006-21。
 
 // summonWithFailingCancel 召出一个带 minion 衍生物的陷阱：取消时回调先给拥有者回 1 点血（用来数回调跑了几次），再向拥有者
 // 扣 500 mana，测试宿主上必然余额不足。

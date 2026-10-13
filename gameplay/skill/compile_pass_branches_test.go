@@ -5,10 +5,8 @@ import (
 	"testing"
 )
 
-// N09 第五批：random / temporal / graph / effect_result / proc / quantity 几个 pass 的直接
-// 分支用例（snapshot 见 compile_capture_context_promises_test.go）。每个接受分支在
-// MemoryHost 上施法，核对 Runtime 的执行点与编译期的产物一致；拒绝分支钉住诊断码与位置。
-// 第四批的变异性质测试只间接覆盖这些分支。
+// random / temporal / graph / effect_result / proc / quantity 几个 pass 的直接分支用例：每个接受分支在 MemoryHost 上
+// 施法，核对 Runtime 的执行点与编译期产物一致；拒绝分支钉住诊断码与位置。变异性质测试只间接覆盖这些分支。
 
 func branchHost(t *testing.T, environment CompileEnvironment, entities ...MemoryEntity) *MemoryHost {
 	t.Helper()

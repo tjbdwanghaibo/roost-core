@@ -1,6 +1,9 @@
 package skill
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -458,5 +461,111 @@ func assertAbilityAmmo(t *testing.T, runtime *Runtime, handle AbilityHandle, wan
 	got, _ := value.Int()
 	if got != want {
 		t.Fatalf("ammo=%d want=%d", got, want)
+	}
+}
+
+func TestAbilityOverlayBoundSurvivesRestoreAndReleasesOnExpiry(t *testing.T) {
+	environment := abilityTestEnvironment()
+	program := compileAbilityTestSkill(t, environment, "overlay-bound", `{"mode":"tap"}`, 0, `{"flow":"finish"}`)
+	host := runtimeTestHost(environment)
+	runtime := NewRuntime(host, RuntimeOptions{MaxAbilityOverlays: 2})
+	for _, owner := range []EntityID{1, 2} {
+		if err := runtime.RegisterAbility(AbilityRegistration{Owner: owner, Handle: AbilityHandle(owner), Program: program}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set := func(owner EntityID) error {
+		handle := runtime.abilityByProgram[skillStateKey{Caster: owner, Skill: program.id}]
+		_, err := runtime.ModifyAbilityState(owner, handle, "enabled", "set", BoolRuntimeValue(false), 2, EventContext{})
+		return err
+	}
+	for _, owner := range []EntityID{1, 2} {
+		if err := set(owner); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertFull := func() {
+		t.Helper()
+		id, events := runtime.nextAbilityOverlay, len(runtime.RuntimeEvents())
+		if err := set(1); !errors.Is(err, ErrRuntimeCapacityExceeded) {
+			t.Fatalf("third overlay at cap 2 = %v, want capacity rejection", err)
+		}
+		if runtime.nextAbilityOverlay != id || len(runtime.RuntimeEvents()) != events {
+			t.Fatal("rejected overlay changed state")
+		}
+	}
+	assertFull()
+	checkpoint, err := runtime.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := ProgramResolverFunc(func(string, string) (*Program, error) { return program, nil })
+	for _, bound := range []int{0, 1} {
+		var payload runtimeCheckpointPayload
+		if err := json.Unmarshal(checkpoint.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		payload.MaxAbilityOverlays = bound
+		tampered := checkpoint
+		tampered.Payload, err = json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(tampered.Payload)
+		tampered.Checksum = hex.EncodeToString(digest[:])
+		if _, err := RestoreRuntime(host, RuntimeOptions{}, tampered, resolver); !errors.Is(err, ErrCheckpointCorrupt) {
+			t.Fatalf("restore overlay bound %d: %v", bound, err)
+		}
+	}
+	legacy := checkpoint
+	legacy.Version = 9
+	if _, err := RestoreRuntime(host, RuntimeOptions{}, legacy, resolver); !errors.Is(err, ErrCheckpointUnsupported) {
+		t.Fatalf("accepted old checkpoint: %v", err)
+	}
+	runtime, err = RestoreRuntime(host, RuntimeOptions{}, checkpoint, ProgramResolverFunc(func(string, string) (*Program, error) { return program, nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFull()
+	if err := runtime.Advance(2); err != nil {
+		t.Fatal(err)
+	}
+	if err := set(1); err != nil {
+		t.Fatalf("expired overlays did not release capacity: %v", err)
+	}
+}
+
+// 读 ammo_stock 不能在读路径上把权威库存写回能力缓存（没有写入点）：充能之后读一次，增量变更基线必须仍与
+// 实时快照一致，之后的 Checkpoint 不报 ErrCheckpointHostMismatch；充能本身经快照对能力状态的消费者可见。
+func TestAmmoReadAfterRechargeKeepsCheckpointHealthy(t *testing.T) {
+	environment := abilityTestEnvironment()
+	program := compileAbilityTestSkill(t, environment, "ammo-read", `{"mode":"ammo","max_stock":3,"recharge_ticks":3,"initial_stock":3}`, 0, `{"flow":"finish"}`)
+	runtime := NewRuntime(runtimeTestHost(environment), RuntimeOptions{})
+	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
+		t.Fatal(err)
+	}
+	handle := runtime.abilityByProgram[skillStateKey{Caster: 1, Skill: program.id}]
+	if err := runtime.Advance(3); err != nil { // recharge fires
+		t.Fatal(err)
+	}
+	if _, err := runtime.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint before read: %v", err)
+	}
+	stock, err := runtime.ReadAbilityState(1, handle, "ammo_stock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := stock.Int(); value != 3 {
+		t.Fatalf("ammo_stock = %d, want 3 (recharged)", value)
+	}
+	if _, err := runtime.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint after ammo read diverged the baseline: %v", err)
+	}
+	// The recharge itself must be visible to ability-state consumers via the
+	// snapshot, not only through a read-path side effect.
+	for _, ability := range runtime.StateSnapshot().Abilities {
+		if ability.Handle == handle && ability.AmmoStock != 3 {
+			t.Fatalf("snapshot ammo = %d, want 3", ability.AmmoStock)
+		}
 	}
 }

@@ -329,3 +329,15 @@ func compileEffectResultSkill(t *testing.T, flow string) (*Program, CompileEnvir
 func effectResultSkillJSON(flow string) string {
 	return `{"schema":"roost.skill/v2","id":"skill.test.effect-result","name":"Result","description":"Typed effect result.","activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"entity"},"cooldown_ticks":0,"costs":[],"memory":{"branch":{"type":"int","default":0}},"initial_phase":"cast","phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":` + flow + `}}]}`
 }
+
+func TestHostPayloadCarriesSuccessDataUsesTypedZeroChecks(t *testing.T) {
+	if hostPayloadCarriesSuccessData(DamageEffectResult{}) || hostPayloadCarriesSuccessData(StatusEffectResult{}) {
+		t.Fatal("zero typed results must not carry success data")
+	}
+	if !hostPayloadCarriesSuccessData(DamageEffectResult{Result: DamageResult{HealthDamage: 1}}) {
+		t.Fatal("damage result must carry success data")
+	}
+	if !hostPayloadCarriesSuccessData(StatusEffectResult{Result: StatusResult{Created: StatusInstanceRef{ID: StatusInstanceID{opaque: 1}}}}) {
+		t.Fatal("status result must carry success data")
+	}
+}

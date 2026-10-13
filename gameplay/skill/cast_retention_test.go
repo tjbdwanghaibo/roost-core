@@ -1,15 +1,73 @@
 package skill
 
 import (
+	"encoding/json"
+	"errors"
 	"testing"
 )
 
-// U-0169 · C8 · RR-20260910-04:快照必须保存完成的先后顺序,而不是让恢复按 ID 重排。
-//
-// completedCastOrder 是"按完成顺序"的队列,pruneCompletedCastsLocked 从队头开始淘汰。而
-// Checkpoint 把 casts 按 ID 排序序列化,Restore 又按这个顺序重建队列:创建早但完成晚的技能
-// 会被排到前面,恢复之后同一批后续输入淘汰掉的是另一个 cast。两条路径对"谁最旧"的判据不同,
-// 历史保留与诊断查询因此在恢复前后分叉。
+// CompletedCastLimit 有界保留终态 cast：提交前失败（施法窗口 commit 付费不足、Cancel / Release 回调失败）的 cast
+// 同样进完成队列、按上限回收；checkpoint 恢复按“所有 finished / failed”重建完成队列，与运行中的保留集合一致。
+// 历史：RR-20261005-NC-117。
+
+func failBeforeCommit(t *testing.T, runtime *Runtime, program *Program, tick *Tick) CastID {
+	t.Helper()
+	id, err := runtime.Start(program, CastInput{Caster: 1, Target: 2})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	*tick += 3
+	if err := runtime.Advance(*tick); !errors.Is(err, ErrInsufficientResource) {
+		t.Fatalf("commit advance = %v, want ErrInsufficientResource", err)
+	}
+	if snapshot, _ := runtime.InspectCast(id); snapshot.Status != CastFailed || runtime.casts[id].committed {
+		t.Fatalf("cast %d: status=%s committed=%v, want an uncommitted failure", id, snapshot.Status, runtime.casts[id].committed)
+	}
+	*tick += 10
+	if err := runtime.Advance(*tick); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestUncommittedFailedCastsStayWithinTheCompletedCastLimit(t *testing.T) {
+	program, environment := compileRuntimeFixture(t, "cast_window_interrupt.json")
+	host := runtimeTestHost(environment)
+	host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Health: 100, MaxHealth: 100, Resources: map[string]int64{"mana": 0}})
+	options := RuntimeOptions{CompletedCastLimit: 2}
+	runtime := NewRuntime(host, options)
+	tick := Tick(0)
+	for range 5 {
+		failBeforeCommit(t, runtime, program, &tick)
+	}
+	if stats := runtime.RetentionStats(); stats.Casts > options.CompletedCastLimit {
+		t.Errorf("retained casts = %d (completed queue %d) after 5 pre-commit failures; CompletedCastLimit is %d", stats.Casts, stats.CompletedCasts, options.CompletedCastLimit)
+	}
+	checkpoint, err := runtime.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := RestoreRuntime(host, options, checkpoint, ProgramResolverFunc(func(string, string) (*Program, error) { return program, nil }))
+	if err != nil {
+		t.Fatalf("restore after pre-commit failures: %v", err)
+	}
+	again, err := restored.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after struct {
+		CompletedCastOrder []CastID `json:"completed_cast_order"`
+	}
+	_ = json.Unmarshal(checkpoint.Payload, &before)
+	_ = json.Unmarshal(again.Payload, &after)
+	if len(before.CompletedCastOrder) != len(after.CompletedCastOrder) {
+		t.Fatalf("completed queue live=%v restored=%v: restore rebuilt a different retention set", before.CompletedCastOrder, after.CompletedCastOrder)
+	}
+}
+
+// 快照保存完成的先后顺序，恢复不按 ID 重排：completedCastOrder 按完成顺序排队，pruneCompletedCastsLocked 从队头淘汰；
+// Checkpoint 按 ID 序列化 casts，所以完成顺序要单独带上，否则恢复前后同一批后续输入淘汰掉的是不同的 cast。
+// 历史：U-0169。
 
 // 序列化侧:payload 必须把运行时的完成顺序单独带上,因为 Casts 是按 ID 序列化的。
 func TestCheckpointCarriesTheCompletionOrderSeparately(t *testing.T) {
@@ -139,5 +197,34 @@ func TestRestoredCompletionOrderDecidesWhichCastRetentionEvicts(t *testing.T) {
 				t.Errorf("cast %d should have been kept", tc.kept)
 			}
 		})
+	}
+}
+
+// CompletedCastLimit 只限制可淘汰的终态 cast：仍有待执行任务或仍被衍生物引用的 cast 超出上限也不淘汰，
+// 淘汰跳过它、改淘汰下一个可淘汰的；引用清空后它和其他 cast 一样可淘汰。
+func TestReferencedCompletedCastsSurviveTheRetentionBound(t *testing.T) {
+	runtime := NewRuntime(nil, RuntimeOptions{CompletedCastLimit: 1})
+	referenced := &castInstance{id: 1, status: CastFinished, committed: true, abilityFinished: true, pendingTasks: 1}
+	plain := &castInstance{id: 2, status: CastFinished, committed: true, abilityFinished: true}
+	newest := &castInstance{id: 3, status: CastFinished, committed: true, abilityFinished: true}
+	runtime.casts[1], runtime.casts[2], runtime.casts[3] = referenced, plain, newest
+	runtime.activeCastCount = 3
+	runtime.trackCompletedCastLocked(referenced)
+	runtime.trackCompletedCastLocked(plain)
+	runtime.trackCompletedCastLocked(newest)
+	if runtime.casts[1] == nil {
+		t.Fatal("a completed cast with a pending task was evicted by the retention bound")
+	}
+	if runtime.casts[2] != nil {
+		t.Fatal("the evictable cast was kept while the referenced one should have been skipped over")
+	}
+	// Once its task drains it becomes evictable like any other.
+	referenced.pendingTasks = 0
+	extra := &castInstance{id: 4, status: CastFinished, committed: true, abilityFinished: true}
+	runtime.casts[4] = extra
+	runtime.activeCastCount = 1
+	runtime.trackCompletedCastLocked(extra)
+	if runtime.casts[1] != nil {
+		t.Fatal("a cast whose references drained was still pinned")
 	}
 }

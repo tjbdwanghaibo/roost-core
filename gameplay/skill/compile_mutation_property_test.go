@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// 编译 ⇒ 可执行的性质测试（N09 第四批，第三批方向判断第 3 条）。
+// 编译 ⇒ 可执行的性质测试。
 //
 // 编译器的职责是证明 Program 可执行：Runtime 遇到 ErrProgramInvariant 就意味着编译器
 // 放过了一个它本该拒绝（或 Runtime 本该支持）的形状。手写 acceptance 只覆盖 fixture
@@ -26,9 +26,8 @@ import (
 // checkpoint 恢复按 (id, gameplay digest) 找 Program，摘要漏字段会让恢复拿到另一个
 // 语义的 Program。
 //
-// 本测试在 RR-20261005-NC-210（未声明 memory 名字落到槽位 0）与 NC-211（移交后 area
-// 回调 finish）修复前分别失败。新增效果 / 字段时，若这里出现 ErrProgramInvariant，先
-// 看编译器缺了哪条规则，而不是在 Runtime 里补一个兜底分支。
+// 新增效果 / 字段时，若这里出现 ErrProgramInvariant，先看编译器缺了哪条规则，而不是在
+// Runtime 里补一个兜底分支。
 
 type mutationSeed struct {
 	name    string
