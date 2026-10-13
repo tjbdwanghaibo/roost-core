@@ -42,22 +42,18 @@ const (
 	EntityKindMask     = (uint64(1) << EntityKindBits) - 1
 	EntityRemoteMask   = (uint64(1) << EntityRemoteBits) - 1
 
-	EntityKindShift    = EntityCategoryBits
-	UniqueIDShift      = EntityIDTagBits
-	EntityRemoteShift  = UniqueIDShift + UniqueIDBits
-	EntityIDValueBits  = UniqueIDBits + EntityIDTagBits + EntityRemoteBits // 63 bits, positive int64
-	EntityIDValueMask  = (uint64(1) << EntityIDValueBits) - 1
-	MaxEntityKindValue = EntityKindMask
+	EntityKindShift   = EntityCategoryBits
+	UniqueIDShift     = EntityIDTagBits
+	EntityRemoteShift = UniqueIDShift + UniqueIDBits
+	EntityIDValueBits = UniqueIDBits + EntityIDTagBits + EntityRemoteBits // 63 bits, positive int64
+	EntityIDValueMask = (uint64(1) << EntityIDValueBits) - 1
 )
 
 // ID 生成与 EntityID 解析的错误。
 var (
-	ErrInvalidBlockNo    = errors.New("idgen: block number exceeds 52-bit unique range")
-	ErrBlockExhausted    = errors.New("idgen: current block exhausted and no block allocator configured")
-	ErrNoBlockSource     = errors.New("idgen: no initial block or block allocator configured")
-	ErrInvalidCategory   = errors.New("entity id: category exceeds 2-bit limit")
-	ErrInvalidEntityKind = errors.New("entity id: kind exceeds 8-bit limit")
-	ErrInvalidEntityID   = errors.New("entity id: invalid")
+	ErrInvalidBlockNo  = errors.New("idgen: block number exceeds 52-bit unique range")
+	ErrBlockExhausted  = errors.New("idgen: current block exhausted and no block allocator configured")
+	ErrInvalidEntityID = errors.New("entity id: invalid")
 )
 
 // IDGen 是快路径无锁的唯一号生成器，只在当前块用尽时调用 acquireBlock 取新块（同一时刻只有一个 goroutine 取块，
@@ -136,12 +132,6 @@ func (g *IDGen) resetBlock(blockNo uint64) {
 	g.end.Store((blockNo << IDGenOffsetBits) + IDGenBlockSize)
 }
 
-// ParseUniqueID 把唯一号拆成块号与块内偏移。
-func ParseUniqueID(id uint64) (blockNo uint64, offset uint64) {
-	id &= UniqueIDMask
-	return id >> IDGenOffsetBits, id & (IDGenBlockSize - 1)
-}
-
 // BuildEntityID 由唯一号与已注册的 kind 构造完整 EntityID（kind 为 Remote 可用时置 Remote 位）。
 func BuildEntityID(uniqueID int64, kind EntityKind) (int64, error) {
 	category, err := ResolveEntityKindCategory(kind)
@@ -183,14 +173,6 @@ func makeEntityID(uniqueID int64, category EntityCategory, kind EntityKind, remo
 		id |= EntityRemoteMask << EntityRemoteShift
 	}
 	return int64(id)
-}
-
-// GetEntityCategoryFromID 读取 ID 低两位的分类字段。
-//
-// Deprecated: kind 的分类以注册表为准，该字段只有三个可用值。请使用 ResolveEntityID(id).Category，或对 kind 使用
-// EntityCategoryOfKind。只有持有本进程未链接 kind 的 ID、别无他法时才用它。
-func GetEntityCategoryFromID(id int64) EntityCategory {
-	return EntityCategory(uint64(id) & EntityCategoryMask)
 }
 
 // GetEntityKindFromID 读取 ID 中的 kind。

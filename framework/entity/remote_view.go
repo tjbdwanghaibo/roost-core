@@ -2,7 +2,6 @@ package entity
 
 import (
 	"errors"
-	"fmt"
 	"time"
 )
 
@@ -109,27 +108,6 @@ func (s RemoteSnapshot) AsString() string {
 	return ""
 }
 
-// RemoteSnapshotRequest 是一次按 scope 读取快照的请求。
-type RemoteSnapshotRequest struct {
-	Scope      uint64
-	RouteEpoch uint64
-	Option     RemoteReadOption
-}
-
-// RemoteSnapshotProvider 按 scope 提供快照视图。
-type RemoteSnapshotProvider interface {
-	RemoteSnapshot(scope uint64) (any, bool)
-}
-
-// RemoteSnapshotResolveRequest 是按引用解析快照的请求。
-type RemoteSnapshotResolveRequest struct {
-	Ref        RemoteViewRef
-	Mode       RemoteAcquireMode
-	Scope      uint64
-	RouteEpoch uint64
-	Option     RemoteReadOption
-}
-
 // RemoteViewRef 是对服务端读模型的通用持久引用：说明消费的是哪个 Remote 实体、观察到的是哪个版本。
 type RemoteViewRef struct {
 	EntityID   int64
@@ -155,15 +133,6 @@ func (r RemoteViewRef) UniqueID() int64 {
 	return ResolveEntityID(r.EntityID).UniqueID
 }
 
-// NewRemoteViewRef 构造并校验引用。
-func NewRemoteViewRef(entityID int64, kind EntityKind, version uint64, routeEpoch uint64) (RemoteViewRef, error) {
-	ref := RemoteViewRef{EntityID: entityID, Kind: kind, Version: version, RouteEpoch: routeEpoch}
-	if !ref.Valid() {
-		return RemoteViewRef{}, fmt.Errorf("remote view ref: invalid entity=%d kind=%d", entityID, kind)
-	}
-	return ref, nil
-}
-
 // RemoteSnapshotReadAt 返回读取时刻（毫秒）：选项给出的当前时间，否则取系统时间。
 func RemoteSnapshotReadAt(option RemoteReadOption) int64 {
 	option = NormalizeRemoteReadOption(option)
@@ -171,16 +140,4 @@ func RemoteSnapshotReadAt(option RemoteReadOption) int64 {
 		return option.NowMillis
 	}
 	return time.Now().UnixMilli()
-}
-
-// RemoteSnapshotExpiresAt 返回按缓存 TTL 计算的过期时刻（毫秒）；未设 TTL 时为 0（不过期）。
-func RemoteSnapshotExpiresAt(readAt int64, option RemoteReadOption) int64 {
-	option = NormalizeRemoteReadOption(option)
-	if option.CacheTTLMillis <= 0 {
-		return 0
-	}
-	if readAt <= 0 {
-		readAt = RemoteSnapshotReadAt(option)
-	}
-	return readAt + option.CacheTTLMillis
 }

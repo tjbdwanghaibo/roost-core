@@ -98,18 +98,6 @@ type RemoteVersionVector struct {
 	RouteEpoch   uint64
 }
 
-// ValidateWrite 校验以 v 写入时与 base 一致：代际不同或 fence 更旧返回 ErrRemoteFenced，状态版本不同返回
-// ErrRemoteVersionConflict。
-func (v RemoteVersionVector) ValidateWrite(base RemoteVersionVector) error {
-	if v.MarkerEpoch != base.MarkerEpoch || v.RouteEpoch != base.RouteEpoch || v.LockFence < base.LockFence {
-		return ErrRemoteFenced
-	}
-	if v.StateVersion != base.StateVersion {
-		return ErrRemoteVersionConflict
-	}
-	return nil
-}
-
 // RemoteWriteMode 是取得写权限的方式：经所有者路由，或共享模式下的分布式锁。
 type RemoteWriteMode uint8
 
@@ -407,10 +395,6 @@ type IRemoteCommitter interface {
 type IRemoteAtomicBatchCommitter interface {
 	IRemoteCommitter
 	CommitRemoteBatch(context.Context, []RemoteCommit) ([]RemoteCommitReceipt, error)
-}
-
-type IRemoteCommitWaiter interface {
-	WaitRemoteCommit(context.Context, RemoteTransactionID) (RemoteCommitStatus, error)
 }
 
 // IRemoteCommitOutbox 暴露已在存储中应用、但快照 / 事件发布被中断的提交。实现把这一状态与实体数据原子地持久化，

@@ -41,11 +41,6 @@ func (k RemoteSnapshotKey) Valid() bool {
 	return meta.FullID == k.EntityID && meta.Kind == k.Kind && k.Kind != EntityKindNone
 }
 
-type ImmutableRemoteSnapshot interface {
-	RemoteSnapshotSchema() uint32
-	RemoteSnapshotSize() int
-}
-
 // FrozenRemoteSnapshotPayload owns immutable snapshot bytes. It makes L1 reads
 // allocation-free without exposing the cache's backing slice to business code.
 type FrozenRemoteSnapshotPayload struct{ data []byte }

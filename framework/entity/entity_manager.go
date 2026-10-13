@@ -55,13 +55,6 @@ func WithEntityIDGenerator(generator func() (uint64, error)) EntityManagerOption
 	}
 }
 
-// WithEntityLockManager 指定实体锁的分配器；未指定时新建一个。
-func WithEntityLockManager(manager *lock.LockManager) EntityManagerOption {
-	return func(entityManager *EntityManager) {
-		entityManager.locks = manager
-	}
-}
-
 // ConfigureIDGenerator 在发布任何实体之前安装 ID 生成器。可与并发的 Create 安全共存；Manager 已有实体后拒绝替换。
 func (m *EntityManager) ConfigureIDGenerator(generator func() (uint64, error)) error {
 	if m == nil || generator == nil {

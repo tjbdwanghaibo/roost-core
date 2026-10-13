@@ -103,13 +103,6 @@ func RegisterEntityKindCategories(defs ...EntityKindCategory) error {
 	return registerEntityKindDefinitionsLocked(kindDefs)
 }
 
-// MustRegisterEntityKindCategories 是 RegisterEntityKindCategories 的 panic 版本。
-func MustRegisterEntityKindCategories(defs ...EntityKindCategory) {
-	if err := RegisterEntityKindCategories(defs...); err != nil {
-		panic(err)
-	}
-}
-
 // RegisterEntityKindDefs 整批登记 kind 定义：先校验整批（含批内同一 kind 的多条定义），全部通过才写入；
 // 出错时注册表与派生锁档保持调用前的样子。
 func RegisterEntityKindDefs(defs ...EntityKindDef) error {
@@ -255,21 +248,6 @@ func GetAllEntityBuilders() []*EntityBuilderParam {
 		}
 	}
 	return result
-}
-
-// ResetEntityRegistryForTest 清空整张 kind 注册表（每个 kind 的定义、builder 与派生锁档）。
-//
-// Deprecated: 不要再用。它清掉的是进程级的整张表，包括 init() 与 sync.Once 只注册一次的条目，
-// 同一进程里的后续用例（含 go test -count>1 的第二轮）因此拿不到它们。entity 包自己的测试使用按用例快照并恢复
-// 注册表的夹具；包外测试请让每个用例使用互不冲突的 kind，并用 sync.Once 保证只注册一次。
-// 维护者 2026-09-27 决定加弃用注释、保留导出。
-func ResetEntityRegistryForTest() {
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	for i := range kindEntries {
-		kindEntries[i].Store(nil)
-		lockRankByKind[i].Store(0)
-	}
 }
 
 // GetEntityKindRemotePolicy 返回 kind 在注册表里的实际 Remote 策略；未注册时为 RemotePolicyNone。

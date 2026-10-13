@@ -115,11 +115,6 @@ func (e *EntityBase) SetHooks(onClear func(), onDestroy func(EntityDestroyReason
 	e.onDestroy = onDestroy
 }
 
-// SetEventBus 装配事件总线，由生成的工厂代码或应用层调用。
-func (e *EntityBase) SetEventBus(bus *event.EventBus) {
-	e.eventBus = bus
-}
-
 // EventBus 返回实体的事件总线。
 func (e *EntityBase) EventBus() *event.EventBus {
 	return e.eventBus
@@ -201,25 +196,10 @@ func (e *EntityBase) Sync() *SubjectSyncState {
 	return e.sync
 }
 
-// SyncEnabled 报告实体是否启用了同步。
-func (e *EntityBase) SyncEnabled() bool {
-	if syncState := e.Sync(); syncState != nil {
-		return syncState.Enabled()
-	}
-	return false
-}
-
 // MarkSyncDirty 按字段掩码标脏（只标脏，不发送）。
 func (e *EntityBase) MarkSyncDirty(mask uint64) {
 	if syncState := e.Sync(); syncState != nil {
 		syncState.MarkDirty(mask)
-	}
-}
-
-// MarkSyncFullDirty 标记需要全量同步。
-func (e *EntityBase) MarkSyncFullDirty(reason uint32) {
-	if syncState := e.Sync(); syncState != nil {
-		syncState.MarkFullDirty(reason)
 	}
 }
 
@@ -586,13 +566,6 @@ func sortedComponentTypes(comps map[ComponentType]ComponentInterfaceBase) []Comp
 var globalCompDependLock sync.RWMutex
 var globalCompDependencies = newCompTopologicalSort()
 
-// RegisterComponentDependency 声明组件类型依赖的其他组件，决定初始化顺序。在服务启动路径调用。
-func RegisterComponentDependency(compType ComponentType, dependencies ...ComponentType) {
-	globalCompDependLock.Lock()
-	defer globalCompDependLock.Unlock()
-	globalCompDependencies.RegisterCompDependency(compType, dependencies...)
-}
-
 // GetTopologicalSortedComponents 按依赖顺序返回组件类型；存在环时返回错误。
 func GetTopologicalSortedComponents() ([]ComponentType, error) {
 	globalCompDependLock.RLock()
@@ -616,17 +589,6 @@ func RegisterComponentFactory(compType ComponentType, factory ComponentFactory) 
 		panic("duplicate component factory registration")
 	}
 	globalCompFactories[compType] = factory
-}
-
-// ResetComponentRegistryForTest 清空组件依赖与工厂登记，只供测试使用。
-func ResetComponentRegistryForTest() {
-	globalCompDependLock.Lock()
-	globalCompDependencies = newCompTopologicalSort()
-	globalCompDependLock.Unlock()
-
-	globalCompFactoryLock.Lock()
-	globalCompFactories = make(map[ComponentType]ComponentFactory)
-	globalCompFactoryLock.Unlock()
 }
 
 // CreateComponent 调用组件类型登记的工厂。

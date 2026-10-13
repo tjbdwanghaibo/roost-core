@@ -15,7 +15,7 @@ Entity Sync 只有一套实现，四层（ARCH-10 / M-13 / M-14，2026-09-22）�
 
 ## 写入与锁
 
-- 正式 Nest 接入自动消费生成实体的 `TakeEntitySyncChanges()`；客户端与服务间 dirty 独立。手写同步字段使用 `EntityBase.MarkSyncDirty` / `MarkSyncFullDirty`，在正式事务作用域内暂存到成功准入。EntityBase 不提供显式 Publish；消息总线发布是独立的 SyncBus 能力。
+- 正式 Nest 接入自动消费生成实体的 `TakeEntitySyncChanges()`；客户端与服务间 dirty 独立。手写同步字段使用 `EntityBase.MarkSyncDirty`，在正式事务作用域内暂存到成功准入。EntityBase 不提供显式 Publish；消息总线发布是独立的 SyncBus 能力。
 - setter 只标脏，不触发逐字段发送。on_change 在成功准入且 Guard 仍持有 Entity 锁时冻结内容；全部 Entity 解锁且提交确认后才允许发送。periodic 在周期 Flush 时捕获。
 - packer 总是在 Entity mutex 内执行（周期捕获或准入冻结），返回 `FrozenSyncPayload`；返回后业务不得再持有可变 payload 引用。
 - Entity 不保存 player/session/observer/history；订阅者表在 Manager 的 subject 对象里，Entity 只有内容。

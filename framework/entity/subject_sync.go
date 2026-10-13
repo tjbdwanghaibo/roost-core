@@ -303,15 +303,6 @@ func (s *SubjectSyncState) LastError() error {
 	return s.lastError
 }
 
-func (s *SubjectSyncState) SetPacker(packer SubjectSyncPacker) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	s.packer = packer
-	s.mu.Unlock()
-}
-
 func (s *SubjectSyncState) SetDirtyNotifier(notifier SubjectSyncDirtyNotifier) {
 	if s == nil {
 		return

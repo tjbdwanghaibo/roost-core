@@ -480,11 +480,6 @@ func (e *EntityGuard) AppendPostRelease(f func()) {
 	}
 }
 
-// GuardEntity 把 ent 记为本 Guard 持有，不取锁。调用方必须已持有 ent 的锁。
-func (e *EntityGuard) GuardEntity(ent IThreadSafeEntity) {
-	e.eMap[ent.GUId()] = ent
-}
-
 // ReleaseEntity 按 ID 提前释放 id 当前登记的实例，不论调用方手里是哪个实例。同 ID 被它取代、锁仍由本 Guard 持有的旧实例
 // 随后回到 eMap：锁序判断与 Guarded 仍要算上这把锁，Guard 释放时解锁。
 // 调用方持有实例指针、要释放的是“这个实例的锁”时用 ReleaseEntityInstance：handler 内 Destroy 后同 ID 重建，
