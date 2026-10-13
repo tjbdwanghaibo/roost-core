@@ -1,14 +1,14 @@
-# v1.25 维护手册
+# 维护手册
 
-执行池命名已统一为 short/long/io；配置、API、生成 Sender 和监控查询需一起迁移。迁移表、long 池观测遗漏修复及验证见 [Nest 三池说明](../framework/NEST-AWAIT.md#池命名收敛2026-10-13)。
+如果这是第一次维护Roost，先读[入门手册](../GETTING-STARTED.md)。本篇按日常修改、升级、故障、发布、文档、测试与可读性规则组织；先找到你的场景，再执行对应步骤。
 
-如果这是第一次维护Roost，先读[入门手册](../GETTING-STARTED.md)。本篇按日常修改、升级、故障和发布组织；先找到你的场景，再执行对应步骤。
-
-当前版本v1.25.0，目录/Gate/Block AOI已交付；重档性能限制见发布说明。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
+当前版本v1.25.0，目录/Gate/Block AOI已交付；重档性能限制见发布说明。未发版的变化与升级要求见 [CHANGELOG `[Unreleased]`](../../CHANGELOG.md)。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
 
 ## 1. 版本与兼容
 
 单模块发布，wiring、codegen、demo 随 core 同一 tag。新业务固定 core 与工具版本，重新生成并编译工程。v1.25.0 最低生成物运行依赖是 core v1.25.0。文档补丁不改变最低版本和业务 API。
+
+Nest 执行池命名为 short/long/io，不保留 fast/slow 旧名；配置、API、生成 Sender 和监控查询需一起迁移，迁移表见 [Nest 三池说明](../framework/NEST-AWAIT.md#池命名收敛2026-10-13)。
 
 当前没有旧 WAL/schema/interest/客户端包的透明兼容。WAL只支持codec7；DAO只接受当前schema；Remote interest要求非零代际及完整身份；客户端RS v2区分PB、Sync、Lockstep；Remote 快照 checksum 只读 8 字节形态，WAL 中“Remote 写 + lease fence”历史记录不再投影（投影器 fatal、WAL 原样保留）。服务数据同样不兼容旧形态：account 的未转义旧账号 ID、无建角计划的 slot 与无 `CreationID` 的角色，activity 无计划的开窗条目与超限窗口，rank 的逗号分隔请求账本，mail 无窗口的已结算 claim，均被明确拒绝而不读取或升级（清单见 CHANGELOG `[Unreleased]`“移除旧格式兼容”）。生成器同样不兼容旧工程：roost.yaml 的 `versions.skill/service/codegen` 与旧 mod/feature 名、`//cube:` 标记、cfggen `objects`、tablegen v1 manifest 均被拒绝并提示手工改法，三仓合一迁移工具已删除；SyncBusMod 缺省前缀改为 `roost.sync`、不再把 `roost.room` 映射到 `ROOST_SYNC`，未写前缀的部署须先停旧再起新（JetStream 全新部署或显式配置旧名，见 CHANGELOG“移除旧兼容（生成器）/（wiring / syncbus）”）。不要把单模块版本号与这些各自的线/存储格式号混为一谈。
 
@@ -20,7 +20,7 @@
 4. 重新生成消费者，执行 build/vet/test、配置检查及声明场景冒烟，再启动新版本。静态 Player 跨机迁移只依赖已落库数据，不搬本地 WAL 热状态。
 5. 回退前检查新进程是否写入旧程序不认识的数据/格式。无法读取时恢复匹配备份并按业务方案处理，不能只把二进制降级。
 
-v1.24.0 → v1.24.1 的运行代码相同，不要求清空/转换任何数据，不要求因这次文档清理重新生成业务代码。
+线上尚未部署（2026-10-06 起）：改存储格式或协议时不做旧进程、旧数据兼容，格式版本加 1、旧版本明确拒绝，并在 CHANGELOG 写“升级需清空 / 先停旧再起新”。维护者宣布上线后改为必须兼容。
 
 ## 3. 日常修改与验证
 
@@ -77,72 +77,53 @@ WAL目录使用单写持久卷，不同实例不得共享同一写目录。Mongo
 
 ## 7. 测试与生成代码维护
 
-测试按当前业务契约组织，不按每轮RR新增独立文件。保留顺序、并发、回滚、持久恢复、协议、正式生成工程和关键错误路径的行为验证；示例与benchmark继续保留。可删除一次性诊断、已删除实现的文字扫描和限制内部函数组织方式的结构断言。重复测试只有在剩余用例覆盖其独有断言后才删除；历史名称不等于过时功能，生成器的失效产物清理测试仍属于当前契约。
+### 测试组织
 
-生成代码同样面向人阅读：局部变量表达职责，必要中文注释说明校验和执行边界；从模板修改，不手改产物。保留统一格式化、当前生成物编译及运行回归；不要通过删除测试来掩盖生成错误。历史修复过程放Git，当前注释直接解释约束。
+- 测试按当前业务契约和功能主题放进包内现有文件，不按每次修复新建文件；文件名不带 RR、日期或 Bugfix，单文件不超过约 1200 行。不同测试包、构建标签与平台特定文件不跨合并；生成产物、fixture、独立示例模块及 benchmark 原位保留。
+- 测试名与头注释写当前承诺；需要追溯时最多一行“历史：见 <提交>”，过程留在 Git 与 CHANGELOG。
 
-修改 Wiring 的配置声明时，同步运行 `go generate ./codegen/internal/roost`，更新生成器持有的 `kitconfig_gen.go` 快照，再运行 `go test ./codegen/internal/roost -run '^(TestKitConfigSchemasMatchKitDeclarations|TestDoctorReadsBusinessDeclarationsFromTheProcess)$' -count=1`。遗漏快照会让配置检查与运行时声明不一致，doctor 还会把新增框架字段误计为业务字段；不能只测 Wiring 包或修改业务字段数量断言来掩盖漂移。`sync.entity.on_change_batch_window` 曾触发这两项失败，正式重新生成后两项均通过，修复不改变运行时同步行为。
+### 保留与删除
 
-2026-10-10整理：Nest目标存储显式归job所有，复制后不再更改；补消息切片隔离回归。删除DataEngine旧checkpoint符号扫描及Saga两项内部组织守卫，保留Saga完成判定与代际行为测试；Nest生成器5份零散回归合并为签名和handler契约2份。未删除快慢池、Sync/AOI、WAL恢复、Remote幂等及生成产物清理回归，后续全仓整理结果见下表；整理不等于证明所有测试互不重复。
+- **保留**：顺序、并发、回滚、持久恢复、协议往返、状态机交错、结果未知、fail-stop 的行为回归；结构守卫；生成产物与正式生成工程的测试；benchmark、example、fuzz。拿不准的一律保留。
+- **可删除**：断言已被同包另一用例完整覆盖的重复用例（删前写明覆盖它的保留用例，独有断言先并入）；只测测试替身、不经产品代码的用例；只断言返回值形状而不触及承诺的用例；一次性诊断、已删除实现的文字扫描、限制内部函数组织方式的结构断言。
+- 历史名称不等于过时功能：生成器对已退役写法的拒绝、失效产物清理测试仍是现行契约。不能通过删除测试或放宽断言掩盖生成错误或产品缺陷。
 
-本次验证：Nest、Saga、DataEngine、Nest生成器定向测试及race通过；真实生成game-demo的build/vet通过；根包文档、指标、依赖门禁通过。未跑新性能负载，未宣称吞吐提升。
+### 批量整理测试时的验证方法
 
-### 全仓测试整理（2026-10-10）
+- 每包整理前后对全部非 import 声明做语法摘要对比，除列明的删除外必须一致；
+- 逐函数语句覆盖率对比，差异只允许来自计时相关后台循环的跑间波动，并逐条说明；
+- 受影响包 `go vet` 与 `-race`，`-tags integration` 的 `go vet`，根包门禁，全仓 `go test ./...`，`go generate ./...` 无漂移；
+- integration 标签的真实依赖用例没有运行时只记“编译与 vet”，不计作外部资源验收。
 
-以整理前工作树为基准，扫描Git跟踪及未忽略新增的全部1527份`_test.go`。按同包、功能主题合并202份零散回归为80份，整理后1405份；4687个Test/Benchmark/Example/Fuzz入口数量不变。全部非import声明以Go扫描器生成语法摘要，按目录、包名对比多重集合，合并前后一致：没有删除或改写这些用例的断言、辅助函数、常量和变量声明。
+整理不等于证明所有测试互不重复。最近两次整理的数字与过程见 CHANGELOG `[Unreleased]` 的“测试整理”与[整理时的维护手册（固定提交）](https://github.com/tjbdwanghaibo/roost-core/blob/ea776b4a977f29661932896b11aea80dd00ea3a0/docs/maintenance/README.md#7-测试与生成代码维护)。
 
-| 范围 | 合并前文件 | 合并后文件 |
-| --- | ---: | ---: |
-| codegen | 32 | 13 |
-| framework | 106 | 40 |
-| gameplay | 18 | 7 |
-| infra | 21 | 8 |
-| robot | 4 | 2 |
-| service | 13 | 6 |
-| wiring | 8 | 4 |
+### 编写行为测试的边界
 
-保留构建标签、平台特定文件、生成产物、fixture、独立示例模块及benchmark原位置；不同测试包、依赖源码文件位置的用例不强行合并。生成器的retirement和迁移工具测试继续验证现有功能，不能仅因名字含旧版本或迁移就删除。大组不强行塞进千行以上文件。测试依然就近放在所属包，当前实现文档的源码链接同步更新。
+- on_change 等交付测试必须走正式提交边界：经 Guard 取得实体锁、`BeginSyncMutation` 建提交门、锁内修改并 Admit 冻结、确认后解锁、最后 Release 开放交付。裸 `MarkDirty` 加 `CaptureSync` 不等于 Nest handler 提交，会让 Manager 抢先 Flush 而偶发失败；冻包失败要检查 `LastError`，不能忽略错误或靠重试掩盖。用 `synctest` 时，同一虚拟时刻的先后顺序用 `synctest.Wait` 明确写出，不改生产调度顺序。
+- 需要区分“未配置”和“显式零值”的 Mod 用 `app.LoadConfigWithPresence`：它复用声明解码器、在读取声明键时返回来源存在性，失败时不返回部分结果。不由 Mod 再读 Viper，不复制单键直读或增加守卫白名单。
+- 先红后绿：每个修复先有一条在修前代码上确实变红、且红在承诺本身上的回归，修前失败文本原样记录；不在“恰好能过的规模”上宣布验收。
 
-本次做的是全仓文件组织与历史过程文字收敛，未宣称每个测试都已逐一证明没有语义重复。删除检查的范围仍限上一轮明确列出的三项结构/旧符号门禁；核心行为与故障回归保留。
+### 生成代码
 
-本地验证首次发现`artifacts/perf/remote/`内的历史源码备份被Go包枚举包含，旧路径与混合package导致setup失败。`.gitignore`不控制Go构建范围；本机新增忽略的`artifacts/go.mod`划出独立模块，仅隔离历史证据，不改主模块测试范围、不删除备份。新克隆不含这些本地归档；后续保存源码备份时使用独立模块或以下划线开头的目录。
+生成代码同样面向人阅读：局部变量表达职责，必要中文注释说明校验和执行边界；从模板修改，不手改产物。保留统一格式化、当前生成物编译及运行回归。改生成模板后：
 
-全仓验证结果：首次`go test -count=1 ./...`中主模块各包通过，仅3个历史归档包setup失败；隔离本地归档后`go test ./...`整体通过，`go vet ./...`通过，测试声明语法摘要复核一致。未运行integration标签、跨机故障矩阵或新性能压测；带显式环境条件的跳过不计为外部资源验收。
+1. `GOWORK=off go generate ./...`，`git status --porcelain` 必须干净；
+2. 有意改动的 golden 用 `-update` 刷新并逐个看 diff；
+3. 重新生成 game-demo 跑 `go build ./... && go vet ./... && go test ./...`（命令见 [demo README](../../demo/README.md#改这里的东西之后)）。
 
+修改 Wiring 的配置声明时，同步运行 `go generate ./codegen/internal/roost`，更新生成器持有的 `kitconfig_gen.go` 快照，再运行 `go test ./codegen/internal/roost -run '^(TestKitConfigSchemasMatchKitDeclarations|TestDoctorReadsBusinessDeclarationsFromTheProcess)$' -count=1`。遗漏快照会让配置检查与运行时声明不一致，doctor 还会把新增框架字段误计为业务字段；不能只测 Wiring 包或修改业务字段数量断言来掩盖漂移。
 
-### 按有用价值整理测试（2026-10-13）
+### 本地证据目录
 
-在 2026-10-10 文件合并的基础上，对全部包逐个判断测试价值，规则（维护者确认）：
+`artifacts/perf/` 是忽略的本地证据目录，其中的 `.go` 源码备份会被 Go 包枚举（`.gitignore` 不控制 Go 构建范围），让 `go build ./...` / `go test ./...` 报错。保存源码备份时放进带独立 `go.mod` 的目录或以下划线开头的目录；构建、pretag 在干净 worktree 里跑。删除 worktree 前先把 `artifacts/perf/*`、pprof、日志复制到持久位置。
 
-- 保留：顺序 / 并发 / 回滚 / 持久恢复 / 协议往返 / 状态机交错 / 不确定结果 / fail-stop 的行为回归，结构守卫，生成产物与生成工程测试，benchmark / example / fuzz。拿不准的一律保留。
-- 删除：断言已被同包另一用例完整覆盖的重复用例（删前写明覆盖它的保留用例，独有断言先并入）；只测测试替身、不经产品代码的用例；只断言返回值形状而不触及承诺的用例。
-- 合并：同包同主题的零散文件合进按功能命名的文件，文件名不带 RR / 日期 / Bugfix，单文件不超过约 1200 行；不同测试包、构建标签与平台文件不跨合并。
+## 8. 可读性整理的现行要求
 
-结果：测试文件 1427 → 711，删除或并入约 60 个用例。验证口径：每包合并前后全部非 import 声明的语法摘要对比（除列明的删除外一致）、逐函数语句覆盖率对比（只有计时相关后台循环的跑间波动）、各包 vet 与 race、`-tags integration` vet、根包门禁、全仓 `go test ./...`、`go generate` 无漂移、kitconfig 快照与 doctor 回归、真实生成 game-demo 的 build / vet。integration 标签的真实依赖用例只编译与 vet，未运行。
+这些要求适用于以后的代码修改与 review，不只是一次整理活动。
 
-同一轮按“未上线不做兼容”删除了旧格式 / 旧名 / 旧接口兼容代码（见 CHANGELOG `[Unreleased]` “移除旧兼容”各条与 §1 的升级要求）；删除后旧形态由明确错误拒绝，对应拒绝测试均在删除前代码上实测为红。
-
-### 近期热路径的可读性整理（2026-10-12）
-
-范围限定为本轮新改动的Relation、AOI候选淘汰、Sync合批、Lockstep历史帧及Nest慢日志生命周期。采用局部具名操作、明确状态名称和中文所有权注释，不新增包、接口或第二套调度路径。
-
-- Relation的Set/ApplyDelta复用反向索引与进入/离开事件维护；调用方仍持同一把锁并负责正向成员表。小集合工作区一旦成为正式成员表即转移所有权，不能清空复用；大集合仍在锁外构表。Forget保留整组退出流程。
-- Sync循环区分周期兜底ticker、合批timer及其启用通道；nil表示没有待处理窗口。固定截止、不因新变化延期、周期提前Flush的行为保持不变。
-- History以retainedCapacity表示包含已裁前缀的底层数组容量，避免与当前切片cap混淆；明确返回视图的只读、串行与有效期要求。裁剪和收缩阈值不变。
-- AOI淘汰变量明确表示最远实体与候选是否存在，保留负数ID、同距稳定规则；Nest补充timer回调读msg与停止后才能复用的契约。
-
-受影响的Nest、EntitySync/Policy、Lockstep包正常测试和race均通过，复用既有行为回归，没有为纯命名编写结构断言。首次检查漏改测试中History私有字段引用，已同步更名；沙箱缓存/端口拒绝不计代码缺陷，授权环境复跑通过。本轮没有重新运行15分钟重档，前节性能结果属于可读性整理之前的代码，不宣称本轮有吞吐收益。
-
-### 合批测试提交边界修复（2026-10-12）
-
-`TestOnChangeBatchWindowBurstComparison`直接调用MarkDirty后再CaptureSync，没有正式提交门。MarkDirty通知让Manager进入Flush，可能在CaptureSync冻结之前消费脏数据，触发`subject sync state has no pending dirty data`；这不是合批窗口本身的生产缺陷。用Go overlay恢复HEAD的manager.go后重复1000轮仍可复现，修前证据保留在[基线失败](../performance/benchmarks/review-20261012/batch-window-baseline-failure.txt)。
-
-BurstComparison与PreservesDelivery统一使用带EntityBase的测试实体，通过Guard取得实体锁、BeginSyncMutation建立提交门、锁内修改并Admit冻结、确认后解锁，最后Release开放交付。冻包失败仍检查LastError，不忽略错误或重试掩盖失败。BurstComparison每次业务开始前用synctest.Wait处理当前虚拟时刻已到期的窗口，明确同一时刻先到期、后下一笔业务的测试顺序；不改生产调度顺序。原0/5/10ms窗口分别20/4/2帧、版本链、最终payload和冻结预算释放断言全部保留。
-
-两条交付测试重复1000轮通过，全部on_change测试race重复100轮通过；EntitySync/Policy、Nest和Wiring/Nest整包通过。[重复回归](../performance/benchmarks/review-20261012/batch-window-fix-repeat.txt)、[race回归](../performance/benchmarks/review-20261012/batch-window-fix-race.txt)、[整包回归](../performance/benchmarks/review-20261012/batch-window-fix-packages.txt)。本项已从已知限制移除；本轮仅修改测试夹具与文档，没有修改运行时、放宽断言或重跑性能负载。后续on_change交付测试应复用正式提交边界，不能把裸MarkDirty加CaptureSync当成Nest handler提交。
-
-### 声明式配置的显式零值（2026-10-13）
-
-需要区分“未配置”和“显式零值”的 Mod 使用 `app.LoadConfigWithPresence`。它复用声明解码器，在实际读取声明键时返回来源存在性；不由 Mod 再读 Viper，也不放宽配置守卫。Viper 环境变量、绑定参数与 SetDefault 继续沿用其 IsSet 语义；失败时不返回部分存在性结果。
-
-本轮全仓回归发现 Nest 的 `sync.entity.on_change_batch_window` 在声明解码后直接调用 Viper.IsSet，违反统一配置入口（来自 `9d97a2115`，非此次远端三个提交引入）。已改用解码返回的存在性，保留未配置沿用代码值、显式 0 关闭合批、Configure 最终覆盖、负值和错误格式拒绝。配置声明和生成快照内容不变，快照一致性与 doctor 回归通过；[修前失败](../performance/benchmarks/nest-hot-path-20261013/config-declaration-before.txt)与[修后验证](../performance/benchmarks/nest-hot-path-20261013/config-declaration-after.txt)保留。后续需要存在性时走此入口，不复制单键直读或增加守卫白名单。
+1. **注释写当前约束**：中文注释写职责、所有权、锁与准入边界、失败语义和原因；不写过程编号（RR、NC、O、B、M、U、W 等）、轮次、日期与“以前 / 修复前”叙述。过程留在 Git 与 CHANGELOG，确需追溯时一行“历史：见 <提交>”。错误前缀与日志文本用当前包名与现行术语（例如 `actionflow:`、`wiring mod`、short/long/io），按文本匹配的使用方在 CHANGELOG 里列出。
+2. **命名表达职责与状态**：变量和字段名说明它是什么（如 `retainedCapacity` 区别于当前切片 `cap`），零值或 nil 的含义写在声明处（如“nil 表示没有待处理窗口”）。改名不留旧别名；导出名改动按 API 变化记入 CHANGELOG。
+3. **按步骤拆分长函数**：拆成按准备、校验、执行、收尾命名的局部步骤，不新增包、接口或第二套执行路径；锁边界、调用顺序、错误与资源释放时机保持不变。拆分本身不写结构断言，复用既有行为回归。
+4. **热路径改函数体须 benchstat**：Nest 调度、Sync Flush / AOI / Relation、DataEngine 提交与投影、编解码等热路径的函数体改动（含为可读性做的拆分与改写），在同机同配置下前后交替多轮跑相关 benchmark（`-count` 至少 10，长基准后台跑并加 `-timeout 0`），用 `benchstat` 对比 ns/op、B/op、allocs/op；样本放 `docs/performance/benchmarks/<label>/`。有退化写明代价与取舍，不宣称未测量的吞吐变化。只改注释和命名不需要。
+5. **生成产物字节不变**：只为可读性改生成器或模板（局部命名、注释、拆分）时，生成物必须字节不变：`go generate ./...` 后 `git diff --exit-code` 干净，各生成器 golden 测试不加 `-update` 即通过，重新生成 game-demo 与改动前的生成树 `diff -r` 一致。若改动有意让生成物只差注释或 help 文本，在提交说明里写明“生成代码只差注释 / 文本”并一并提交重新生成的产物与快照。
+6. **验收**：每批改动跑受影响包 `go vet`、`go test`，并发相关加 `-race`，再跑根包 `go test -count=1 .`（含 gofmt 与文档链接门禁）；跨包改动推送前跑全仓 `go test ./...`。文档补丁不混入行为重构。

@@ -2,7 +2,7 @@
 
 这份文档适合第一次接触 Roost 的开发者。你不需要先理解分布式事务、WAL 或所有 Go 类型。先知道一条游戏请求如何完成，再按需要阅读模块文档。
 
-这里的“入门”不替代 Go 语言基础：至少需要能阅读结构体、接口、函数、错误返回和 goroutine。运行时基线是 **v1.24.0**，**v1.24.1** 主要整理文档。正式支持范围是 macOS 和 Linux。
+这里的“入门”不替代 Go 语言基础：至少需要能阅读结构体、接口、函数、错误返回和 goroutine。当前发布版本是 **v1.25.0**（未发版的变化见 [CHANGELOG](../CHANGELOG.md) 的 `[Unreleased]`）。正式支持范围是 macOS 和 Linux。
 
 ## 1. Roost 帮你解决什么
 
@@ -68,7 +68,7 @@ Roost 把这三件事分别交给三个核心模块：
 以下命令用于 macOS/Linux。安装 Git 和 Go 1.27.x，确认 `go version` 的输出符合要求。首次执行可能需要下载 Go 依赖。
 
 ```sh
-git clone --branch v1.24.1 https://github.com/tjbdwanghaibo/roost-core.git
+git clone --branch v1.25.0 https://github.com/tjbdwanghaibo/roost-core.git
 cd roost-core/examples/configgen
 GOWORK=off go run .
 ```
@@ -88,9 +88,9 @@ reloaded: monster#1=dire wolf version=3 ...
 
 ## 5. 准备建立自己的游戏工程
 
-先阅读 [Codegen 的设计与使用](framework/guide/12-codegen.md)，再按 [项目生成器手册](../codegen/docs/PROJECT_GENERATOR.zh-CN.md) 创建工程。建议先完成一条最小链路：连接认证 → 一个只读请求 → 一个受事务保护的修改 → 客户端看到状态。
+先阅读 [Codegen 的设计与使用](framework/guide/12-codegen.md)，再按 [codegen 快速上手](../codegen/README.md#快速上手) 与[项目生成器手册](../codegen/docs/PROJECT_GENERATOR.zh-CN.md) 创建工程。建议先完成一条最小链路：连接认证 → 一个只读请求 → 一个受事务保护的修改 → 客户端看到状态。
 
-`game-demo` 是完整工程模板；运行其中的服务需要按模板配置外部资源。不要把上一节“不需要数据库的单个示例”理解为整个游戏服都没有资源依赖。
+`game-demo` 是完整工程模板（[生成与本地实跑](../demo/README.md)）；运行其中的服务需要按模板配置外部资源。不要把上一节“不需要数据库的单个示例”理解为整个游戏服都没有资源依赖。
 
 生成工程后，优先修改手写业务定义，再重新生成。带有 `Code generated` 标记的文件通常不是业务修改入口。版本号要固定并记录，避免同一项目的开发机悄悄使用不同生成器。
 
@@ -112,6 +112,6 @@ reloaded: monster#1=dire wolf version=3 ...
 
 先看“必须保持的契约”和流程说明，带着一个具体问题再展开源码或测试目录。例如想知道持久字段写入为什么被拒绝，就查 DataEngine/Nest 对应的实现入口，而不是从所有测试文件的第一行开始读。
 
-源码表回答“在哪里”，测试表回答“有哪些现成回归入口”。是否已运行、在哪个平台运行、还有哪些限制，则看 [本版验收记录](release/v1.24.1-IMPLEMENTATION.md) 和 [已知边界](maintenance/KNOWN-LIMITS.md)。不能把一张很长的表理解成全部能力已验证。
+源码表回答“在哪里”，测试表回答“有哪些现成回归入口”。是否已运行、在哪个平台运行、还有哪些限制，则看 [本版验收记录](release/v1.25.0-IMPLEMENTATION.md) 和 [已知边界](maintenance/KNOWN-LIMITS.md)。不能把一张很长的表理解成全部能力已验证。
 
 [返回文档首页](README.md) · [完整模块目录](framework/README.md)

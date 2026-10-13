@@ -95,7 +95,7 @@
 ### E08 多机 Redis Cluster：驱动与单实例锁
 
 - **来源**：[A2 驱动契约](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)“未完成 / 观察”（`noReplay` 在 `ClusterClient` 里的 MOVED / ASK 只按源码核对）；清单 N01、N04、N14 行（Cluster 两客户端 integration、跨 slot、`cluster_addrs` 列表写法起服）；App 单实例锁方案（Cluster 下真实进程演练未验）。
-- **验证什么**：kit 单实例锁 store（CAS 与 Live 两个客户端）、写命令不重放、Lua 跨 slot 布局在多机 Cluster 切主与 MOVED / ASK 期间的行为；go-redis 写路由缓存旧主的刷新（RR-20260924-24）；`cluster_addrs` 起服。
+- **验证什么**：Wiring 单实例锁 store（`wiring/redis`，CAS 与 Live 两个客户端）、写命令不重放、Lua 跨 slot 布局在多机 Cluster 切主与 MOVED / ASK 期间的行为；go-redis 写路由缓存旧主的刷新（RR-20260924-24）；`cluster_addrs` 起服。
 - **怎么做**：多台主机组 Cluster，重跑 `wiring/scripts/integration/redis-cluster-suites.sh`（`ROOST_REMOTE_CLUSTER_IT=1`，本机已在同机 3 主 3 从上跑过），再按 App 单实例锁 §13 的步骤做两个 sid 的真实进程演练。
 - **通过标准**：不误放权、不永久残留、合法新 ctx / 新实例可恢复（清单外部验证表口径）。（建议）切主期间没有重复执行的写，MOVED / ASK 后不重放写命令。
 
@@ -161,7 +161,7 @@
 
 - **来源**：[REMOTE-AUTHORITY](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REMOTE-AUTHORITY-2026-09-25.md)（30 分钟 / 24 小时、多主机、真实业务流量回放、100 TPS 稳定容量未验收）；REMOTE-ACCEPTANCE（未测出最大可持续吞吐）；[nest-remote-stages](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-25-nest-remote-stages.md)；[core-nine-items](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-26-core-nine-items.md)；[DATAENGINE-PRESSURE](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/DATAENGINE-PRESSURE-2026-09-24.md)；[REFACTOR-2026-09-24-dataengine](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-24-dataengine.md)；[C01-RUNBOOK](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/review/C01-RUNBOOK-2026-09-30.md)。
 - **现状**：C01 已在 macOS 单机通过（1 小时 × 80 TPS，另有两次 24 小时的内存平台），本机阶梯 120 TPS 通过、160 过载。都是本机限定负载，不是生产跨机 SLA。
-- **验证什么**：专用静默 Linux 主机、正式 kit 装配下，Remote strict 的最大可持续吞吐、24 小时 × 80 TPS 的内存与 goroutine 有界、DataEngine 在峰谷负载下的积压。
+- **验证什么**：专用静默 Linux 主机、正式 Wiring 装配下，Remote strict 的最大可持续吞吐、24 小时 × 80 TPS 的内存与 goroutine 有界、DataEngine 在峰谷负载下的积压。
 - **怎么做**：`ROOST_REMOTE_LABEL=<新标签> ROOST_REMOTE_DURATION=24h ROOST_REMOTE_TIMEOUT=25h ROOST_REMOTE_RATE=80 bash scripts/perf/remote.sh`；容量阶梯 `ROOST_REMOTE_RATES='80 120 160' bash scripts/perf/remote-capacity.sh`；环境检查见 C01-RUNBOOK §3，用新 label，不覆盖旧结果。
 - **通过标准**：C01-RUNBOOK §5——`result.json.verified` 存在；Errors = 0、Dropped = 0、ProjectionFailures = 0、FatalProjectionConflicts = 0；堆每小时最低值无单调增长，pprof 增量不在框架，tracker 在上限下持平；一致性判据与错误判据分开判定。（建议）稳定容量取 p99 回复等待 < 5s 的最高档。
 
