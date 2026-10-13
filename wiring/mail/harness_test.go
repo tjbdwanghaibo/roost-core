@@ -31,12 +31,6 @@ func (c *clock) Now() time.Time {
 	return c.now
 }
 
-func (c *clock) advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.now = c.now.Add(d)
-}
-
 func tokens(prefix string) func() (string, error) {
 	var mu sync.Mutex
 	next := 0

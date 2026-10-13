@@ -23,12 +23,6 @@ func (c *activityClock) Now() time.Time {
 	return c.now
 }
 
-func (c *activityClock) advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.now = c.now.Add(d)
-}
-
 // testGroupsYAML 是本包除组文件专项用例外每个协调器都用的活动组文件："group-a"（activityKey 用的组）含 game 1～9 与 1000，
 // "group-b" 含 2001、2002 供需要第二个组的用例。New 要求组，Mod 的用例读同一份文件（modConfig），两种构造方式对此一致。
 const testGroupsYAML = `groups:

@@ -190,12 +190,6 @@ func (f *fakeBus) handler(method string) (bus.RpcHandlerFunc, bool) {
 	return handler, ok
 }
 
-func (f *fakeBus) count() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.handlers)
-}
-
 // --- fakeBus: a routing in-process bus ---
 
 // Call routes to the registered handler and puts the response through the
@@ -284,18 +278,6 @@ func (f *fakeBus) Handle(string, string, bus.HandlerFunc) error {
 }
 
 var _ bus.IBus = (*fakeBus)(nil)
-
-// invoke drives one handler the way the bus would: encode the request, call,
-// and hand back the response value.
-func invoke(t *testing.T, handler bus.RpcHandlerFunc, method string, req any) (any, error) {
-	t.Helper()
-	codec := bus.MessagePackCodec{}
-	payload, err := codec.Marshal(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return handler(bus.NewRPCContext(context.Background(), method, payload, codec))
-}
 
 func expectWiringErr(t *testing.T, err error, want string) {
 	t.Helper()

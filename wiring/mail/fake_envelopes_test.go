@@ -17,13 +17,6 @@ import (
 type fakeEnvelopes struct {
 	mu    sync.Mutex
 	items map[string]domain.Envelope
-	// getManyCalls and getCalls let a test assert on the number of round
-	// trips, not just the number of results. The defect this package answers
-	// was unbounded round trips behind a bounded result, so "how many reads"
-	// has to be observable.
-	getManyCalls int
-	getCalls     int
-	failGetMany  error
 }
 
 func newFakeEnvelopes() *fakeEnvelopes {
@@ -43,7 +36,6 @@ func (f *fakeEnvelopes) Create(_ context.Context, envelope domain.Envelope) (boo
 func (f *fakeEnvelopes) Get(_ context.Context, id string) (domain.Envelope, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.getCalls++
 	envelope, ok := f.items[id]
 	if !ok {
 		return domain.Envelope{}, false, nil
@@ -54,10 +46,6 @@ func (f *fakeEnvelopes) Get(_ context.Context, id string) (domain.Envelope, bool
 func (f *fakeEnvelopes) GetMany(_ context.Context, ids []string) (map[string]domain.Envelope, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.getManyCalls++
-	if f.failGetMany != nil {
-		return nil, f.failGetMany
-	}
 	out := make(map[string]domain.Envelope, len(ids))
 	for _, id := range ids {
 		if envelope, ok := f.items[id]; ok {
@@ -65,26 +53,6 @@ func (f *fakeEnvelopes) GetMany(_ context.Context, ids []string) (map[string]dom
 		}
 	}
 	return out, nil
-}
-
-// drop removes an envelope without touching any mailbox, which is what an
-// expiry sweep looks like from a mailbox's point of view.
-func (f *fakeEnvelopes) drop(id string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.items, id)
-}
-
-func (f *fakeEnvelopes) roundTrips() (gets int, getManys int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.getCalls, f.getManyCalls
-}
-
-func (f *fakeEnvelopes) resetCounts() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.getCalls, f.getManyCalls = 0, 0
 }
 
 var _ domain.EnvelopeStore = (*fakeEnvelopes)(nil)
