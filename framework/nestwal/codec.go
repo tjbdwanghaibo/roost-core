@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -20,8 +20,10 @@ const (
 	maxStringBytes = 1 << 20
 )
 
+// ErrUnsupportedRecordVersion 表示记录的编码版本不是 codecVersion；旧格式需用匹配的旧程序处理。
 var ErrUnsupportedRecordVersion = errors.New("nestwal: unsupported record version")
 
+// validateRecord 在编码前检查记录：非空、持久级别合法、条目数不超限，并通过 DataEngine 的记录校验。
 func validateRecord(record corenest.CommitRecord) error {
 	if record.Empty() {
 		return errors.New("nestwal: empty commit record")
@@ -35,8 +37,9 @@ func validateRecord(record corenest.CommitRecord) error {
 	return dataengine.ValidateCommitRecord(record)
 }
 
-func encodeRecordHeader(b *bytes.Buffer, codec uint16, record corenest.CommitRecord) error {
-	_ = binary.Write(b, binary.BigEndian, codec)
+// encodeRecordHeader 写入编码版本与记录头（ID、创建时间、持久级别、handler、请求 ID）。
+func encodeRecordHeader(b *bytes.Buffer, record corenest.CommitRecord) error {
+	_ = binary.Write(b, binary.BigEndian, codecVersion)
 	_, _ = b.Write(record.ID[:])
 	_ = binary.Write(b, binary.BigEndian, record.CreatedAt)
 	_ = b.WriteByte(byte(record.Durability))
@@ -49,75 +52,90 @@ func encodeRecordHeader(b *bytes.Buffer, codec uint16, record corenest.CommitRec
 	return nil
 }
 
+// encodeRecord 把提交记录编码为 WAL payload，顺序为：记录头、mutations、effects、receipts。
+// 字段顺序即落盘格式，修改须提升 codecVersion。
 func encodeRecord(record corenest.CommitRecord) ([]byte, error) {
 	if err := validateRecord(record); err != nil {
 		return nil, err
 	}
 	b := bytes.NewBuffer(make([]byte, 0, recordSizeHint(record)))
-	if err := encodeRecordHeader(b, codecVersion, record); err != nil {
+	if err := encodeRecordHeader(b, record); err != nil {
 		return nil, err
 	}
 	_ = binary.Write(b, binary.BigEndian, uint32(len(record.Mutations)))
 	for i := range record.Mutations {
-		m := &record.Mutations[i]
-		_ = binary.Write(b, binary.BigEndian, m.Key.ID)
-		_ = binary.Write(b, binary.BigEndian, m.ExpectedVersion)
-		_ = binary.Write(b, binary.BigEndian, m.NextVersion)
-		_ = binary.Write(b, binary.BigEndian, m.Mask)
-		_ = binary.Write(b, binary.BigEndian, m.Schema)
-		_ = b.WriteByte(byte(m.Kind))
-		_ = b.WriteByte(byte(m.Key.Scope))
-		if err := writeString(b, m.Key.Database); err != nil {
-			return nil, err
-		}
-		if err := writeString(b, m.Key.Resource); err != nil {
-			return nil, err
-		}
-		if err := writeString(b, m.Codec); err != nil {
-			return nil, err
-		}
-		if err := writeBytes(b, m.Data); err != nil {
-			return nil, err
-		}
-		if err := writeBytes(b, m.Patch.SetBSON); err != nil {
-			return nil, err
-		}
-		if len(m.Patch.Unset) > maxEntryCount {
-			return nil, errors.New("nestwal: too many unset paths")
-		}
-		_ = binary.Write(b, binary.BigEndian, uint32(len(m.Patch.Unset)))
-		for _, path := range m.Patch.Unset {
-			if err := writeString(b, path); err != nil {
-				return nil, err
-			}
-		}
-		if err := writeRemoteCommit(b, m.Remote); err != nil {
+		if err := writeMutation(b, &record.Mutations[i]); err != nil {
 			return nil, err
 		}
 	}
 	if err := writeEffects(b, record.Effects); err != nil {
 		return nil, err
 	}
-	_ = binary.Write(b, binary.BigEndian, uint32(len(record.Receipts)))
-	for i := range record.Receipts {
-		receipt := &record.Receipts[i]
-		if err := writeString(b, receipt.Namespace); err != nil {
-			return nil, err
-		}
-		if err := writeString(b, receipt.ID); err != nil {
-			return nil, err
-		}
-		if err := writeBytes(b, receipt.Digest); err != nil {
-			return nil, err
-		}
-		if err := writeBytes(b, receipt.Payload); err != nil {
-			return nil, err
-		}
-		_ = binary.Write(b, binary.BigEndian, receipt.ExpiresAt)
+	if err := writeReceipts(b, record.Receipts); err != nil {
+		return nil, err
 	}
 	return b.Bytes(), nil
 }
 
+// writeMutation 编码一条实体变更，含可选的 Remote 提交。
+func writeMutation(b *bytes.Buffer, m *corenest.EntityMutation) error {
+	_ = binary.Write(b, binary.BigEndian, m.Key.ID)
+	_ = binary.Write(b, binary.BigEndian, m.ExpectedVersion)
+	_ = binary.Write(b, binary.BigEndian, m.NextVersion)
+	_ = binary.Write(b, binary.BigEndian, m.Mask)
+	_ = binary.Write(b, binary.BigEndian, m.Schema)
+	_ = b.WriteByte(byte(m.Kind))
+	_ = b.WriteByte(byte(m.Key.Scope))
+	if err := writeString(b, m.Key.Database); err != nil {
+		return err
+	}
+	if err := writeString(b, m.Key.Resource); err != nil {
+		return err
+	}
+	if err := writeString(b, m.Codec); err != nil {
+		return err
+	}
+	if err := writeBytes(b, m.Data); err != nil {
+		return err
+	}
+	if err := writeBytes(b, m.Patch.SetBSON); err != nil {
+		return err
+	}
+	if len(m.Patch.Unset) > maxEntryCount {
+		return errors.New("nestwal: too many unset paths")
+	}
+	_ = binary.Write(b, binary.BigEndian, uint32(len(m.Patch.Unset)))
+	for _, path := range m.Patch.Unset {
+		if err := writeString(b, path); err != nil {
+			return err
+		}
+	}
+	return writeRemoteCommit(b, m.Remote)
+}
+
+// writeReceipts 编码幂等回执列表。
+func writeReceipts(b *bytes.Buffer, receipts []dataengine.Receipt) error {
+	_ = binary.Write(b, binary.BigEndian, uint32(len(receipts)))
+	for i := range receipts {
+		receipt := &receipts[i]
+		if err := writeString(b, receipt.Namespace); err != nil {
+			return err
+		}
+		if err := writeString(b, receipt.ID); err != nil {
+			return err
+		}
+		if err := writeBytes(b, receipt.Digest); err != nil {
+			return err
+		}
+		if err := writeBytes(b, receipt.Payload); err != nil {
+			return err
+		}
+		_ = binary.Write(b, binary.BigEndian, receipt.ExpiresAt)
+	}
+	return nil
+}
+
+// writeEffects 编码外部效果列表；Headers 按键排序，保证同一记录编码结果确定。
 func writeEffects(b *bytes.Buffer, effects []corenest.Effect) error {
 	_ = binary.Write(b, binary.BigEndian, uint32(len(effects)))
 	for i := range effects {
@@ -142,7 +160,7 @@ func writeEffects(b *bytes.Buffer, effects []corenest.Effect) error {
 		for key := range e.Headers {
 			keys = append(keys, key)
 		}
-		sort.Strings(keys)
+		slices.Sort(keys)
 		_ = binary.Write(b, binary.BigEndian, uint32(len(keys)))
 		for _, key := range keys {
 			if err := writeString(b, key); err != nil {
@@ -156,6 +174,8 @@ func writeEffects(b *bytes.Buffer, effects []corenest.Effect) error {
 	return nil
 }
 
+// decodeRecord 解码一条 WAL payload；版本不符返回 ErrUnsupportedRecordVersion，有尾随字节或
+// 解码结果未通过 DataEngine 校验时报错。
 func decodeRecord(raw []byte) (corenest.CommitRecord, error) {
 	r := bytes.NewReader(raw)
 	var version uint16
@@ -201,79 +221,15 @@ func decodeRecordBody(r *bytes.Reader) (corenest.CommitRecord, error) {
 	}
 	record.Mutations = make([]corenest.EntityMutation, mutationCount)
 	for i := range record.Mutations {
-		m := &record.Mutations[i]
-		if err := binary.Read(r, binary.BigEndian, &m.Key.ID); err != nil {
-			return record, err
-		}
-		for _, field := range []any{&m.ExpectedVersion, &m.NextVersion, &m.Mask, &m.Schema} {
-			if err := binary.Read(r, binary.BigEndian, field); err != nil {
-				return record, err
-			}
-		}
-		kind, readErr := r.ReadByte()
-		if readErr != nil {
-			return record, readErr
-		}
-		m.Kind = dataengine.MutationKind(kind)
-		scope, readErr := r.ReadByte()
-		if readErr != nil {
-			return record, readErr
-		}
-		m.Key.Scope = dataengine.DatabaseScope(scope)
-		if m.Key.Database, err = readString(r); err != nil {
-			return record, err
-		}
-		if m.Key.Resource, err = readString(r); err != nil {
-			return record, err
-		}
-		if m.Codec, err = readString(r); err != nil {
-			return record, err
-		}
-		if m.Data, err = readBytes(r); err != nil {
-			return record, err
-		}
-		if m.Patch.SetBSON, err = readBytes(r); err != nil {
-			return record, err
-		}
-		unsetCount, readErr := readCount(r)
-		if readErr != nil {
-			return record, readErr
-		}
-		m.Patch.Unset = make([]string, unsetCount)
-		for j := range m.Patch.Unset {
-			if m.Patch.Unset[j], err = readString(r); err != nil {
-				return record, err
-			}
-		}
-		if m.Remote, err = readRemoteCommit(r); err != nil {
+		if err := readMutation(r, &record.Mutations[i]); err != nil {
 			return record, err
 		}
 	}
 	if record.Effects, err = readEffects(r); err != nil {
 		return record, err
 	}
-	receiptCount, err := readCount(r)
-	if err != nil {
+	if record.Receipts, err = readReceipts(r); err != nil {
 		return record, err
-	}
-	record.Receipts = make([]dataengine.Receipt, receiptCount)
-	for i := range record.Receipts {
-		receipt := &record.Receipts[i]
-		if receipt.Namespace, err = readString(r); err != nil {
-			return record, err
-		}
-		if receipt.ID, err = readString(r); err != nil {
-			return record, err
-		}
-		if receipt.Digest, err = readBytes(r); err != nil {
-			return record, err
-		}
-		if receipt.Payload, err = readBytes(r); err != nil {
-			return record, err
-		}
-		if err := binary.Read(r, binary.BigEndian, &receipt.ExpiresAt); err != nil {
-			return record, err
-		}
 	}
 	if r.Len() != 0 {
 		return record, fmt.Errorf("nestwal: %d trailing record bytes", r.Len())
@@ -282,6 +238,84 @@ func decodeRecordBody(r *bytes.Reader) (corenest.CommitRecord, error) {
 		return record, err
 	}
 	return record, nil
+}
+
+// readMutation 解码一条实体变更，与 writeMutation 对称。
+func readMutation(r *bytes.Reader, m *corenest.EntityMutation) error {
+	var err error
+	if err := binary.Read(r, binary.BigEndian, &m.Key.ID); err != nil {
+		return err
+	}
+	for _, field := range []any{&m.ExpectedVersion, &m.NextVersion, &m.Mask, &m.Schema} {
+		if err := binary.Read(r, binary.BigEndian, field); err != nil {
+			return err
+		}
+	}
+	kind, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+	m.Kind = dataengine.MutationKind(kind)
+	scope, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+	m.Key.Scope = dataengine.DatabaseScope(scope)
+	if m.Key.Database, err = readString(r); err != nil {
+		return err
+	}
+	if m.Key.Resource, err = readString(r); err != nil {
+		return err
+	}
+	if m.Codec, err = readString(r); err != nil {
+		return err
+	}
+	if m.Data, err = readBytes(r); err != nil {
+		return err
+	}
+	if m.Patch.SetBSON, err = readBytes(r); err != nil {
+		return err
+	}
+	unsetCount, err := readCount(r)
+	if err != nil {
+		return err
+	}
+	m.Patch.Unset = make([]string, unsetCount)
+	for j := range m.Patch.Unset {
+		if m.Patch.Unset[j], err = readString(r); err != nil {
+			return err
+		}
+	}
+	m.Remote, err = readRemoteCommit(r)
+	return err
+}
+
+// readReceipts 解码幂等回执列表，与 writeReceipts 对称。
+func readReceipts(r *bytes.Reader) ([]dataengine.Receipt, error) {
+	receiptCount, err := readCount(r)
+	if err != nil {
+		return nil, err
+	}
+	receipts := make([]dataengine.Receipt, receiptCount)
+	for i := range receipts {
+		receipt := &receipts[i]
+		if receipt.Namespace, err = readString(r); err != nil {
+			return nil, err
+		}
+		if receipt.ID, err = readString(r); err != nil {
+			return nil, err
+		}
+		if receipt.Digest, err = readBytes(r); err != nil {
+			return nil, err
+		}
+		if receipt.Payload, err = readBytes(r); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(r, binary.BigEndian, &receipt.ExpiresAt); err != nil {
+			return nil, err
+		}
+	}
+	return receipts, nil
 }
 
 func readEffects(r *bytes.Reader) ([]corenest.Effect, error) {
@@ -329,6 +363,7 @@ func readEffects(r *bytes.Reader) ([]corenest.Effect, error) {
 	return effects, nil
 }
 
+// recordSizeHint 估算编码长度，用于一次性预分配缓冲区；只影响分配次数，不影响格式。
 func recordSizeHint(record corenest.CommitRecord) int {
 	n := 64 + len(record.Handler) + len(record.RequestID)
 	for i := range record.Mutations {
@@ -403,6 +438,7 @@ func readCount(r *bytes.Reader) (int, error) {
 	return int(count), nil
 }
 
+// writeRemoteCommit 编码可选的 Remote 提交：先写 0/1 存在标记，存在时写入校验后的完整提交。
 func writeRemoteCommit(w *bytes.Buffer, commit *entity.RemoteCommit) error {
 	if commit == nil {
 		return w.WriteByte(0)

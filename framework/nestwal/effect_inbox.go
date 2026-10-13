@@ -16,12 +16,13 @@ import (
 )
 
 var (
+	// ErrEffectIdentityConflict 表示同一 EffectID 再次到达但内容摘要不同。
 	ErrEffectIdentityConflict = errors.New("nestwal: effect identity conflict")
-	ErrEffectInboxRequired    = errors.New("nestwal: effect inbox is required")
+	// ErrEffectInboxRequired 表示 inbox、EffectID 或 handler 缺失。
+	ErrEffectInboxRequired = errors.New("nestwal: effect inbox is required")
 )
 
-// EffectHandler must perform MongoDB work using the supplied context. The
-// inbox receipt and handler writes then commit atomically in one transaction.
+// EffectHandler 必须用传入的 ctx 执行 MongoDB 操作，这样 inbox 回执与 handler 的写入在同一事务中原子提交。
 type EffectHandler func(context.Context, EffectEnvelope) error
 
 type effectInboxReceipt struct {
@@ -30,9 +31,8 @@ type effectInboxReceipt struct {
 	CreatedAt time.Time `bson:"created_at"`
 }
 
-// MongoEffectInbox is the durable consumer-side half of exactly-once effects.
-// JetStream MsgID deduplication remains an optimization; correctness comes from
-// this receipt being committed atomically with the business side effect.
+// MongoEffectInbox 是外部效果“恰好一次”在消费端的持久部分。JetStream MsgID 去重只是优化，
+// 正确性来自回执与业务副作用在同一 Mongo 事务中原子提交。
 type MongoEffectInbox struct {
 	client     fmongo.IMongo
 	database   string
@@ -41,8 +41,7 @@ type MongoEffectInbox struct {
 }
 
 type EffectInboxOptions struct {
-	// ReceiptTTL must exceed the maximum broker retention/redelivery period.
-	// It bounds storage without weakening idempotence for deliverable messages.
+	// ReceiptTTL 必须长于消息队列的最长保留 / 重投期：它只限制存储，不削弱仍可能投递的消息的幂等性。
 	ReceiptTTL time.Duration
 }
 
@@ -75,6 +74,8 @@ func (i *MongoEffectInbox) EnsureInfrastructure(ctx context.Context) error {
 	}})
 }
 
+// Handle 在一个 Mongo 事务内查回执：已存在且摘要相同返回 duplicate=true 不调用 handler，摘要不同
+// 返回 ErrEffectIdentityConflict；不存在则调用 handler 并写入回执。
 func (i *MongoEffectInbox) Handle(ctx context.Context, envelope EffectEnvelope, handler EffectHandler) (bool, error) {
 	if i == nil || i.client == nil || envelope.EffectID == "" || handler == nil {
 		return false, ErrEffectInboxRequired
@@ -121,8 +122,8 @@ type JetStreamEffectConsumerConfig struct {
 	MaxDeliver    int
 }
 
-// SubscribeJetStreamEffects installs a durable consumer that never invokes a
-// MongoDB side effect twice for the same EffectID.
+// SubscribeJetStreamEffects 安装一个持久消费者，经 MongoEffectInbox 保证同一 EffectID 的
+// MongoDB 副作用至多执行一次。
 func SubscribeJetStreamEffects(ctx context.Context, client fnats.IJetStream, inbox *MongoEffectInbox, config JetStreamEffectConsumerConfig, handler EffectHandler) (fnats.IJetStreamSubscription, error) {
 	if client == nil || inbox == nil || handler == nil || strings.TrimSpace(config.Stream) == "" || strings.TrimSpace(config.Durable) == "" || strings.TrimSpace(config.FilterSubject) == "" {
 		return nil, fmt.Errorf("nestwal: invalid effect consumer configuration")
