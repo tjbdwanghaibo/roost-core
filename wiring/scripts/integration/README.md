@@ -120,7 +120,7 @@ ROOST_REVIEW_CLUSTER=127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003
   bash wiring/scripts/integration/redis-cluster-suites.sh
 ```
 
-包清单由 `integration_coverage_promises_test.go` 钉在磁盘上的文件：新增一个含
+包清单由 `integration_coverage_test.go` 钉在磁盘上的文件：新增一个含
 `ROOST_REVIEW_CLUSTER` 的 integration 测试文件，它所在的包必须加进脚本，否则根包测试
 `TestRedisClusterScriptNamesEveryClusterKeyedSuite` 变红；同理，`ROOST_DATAENGINE_IT`
 准入的包必须在 `dataengine-env.sh test` 的清单里，`REDIS_ADDR` 准入的包必须在 ci.yml 的

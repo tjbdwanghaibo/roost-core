@@ -39,7 +39,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### cmd/glsvet
 
-4 个实现文件、6 个测试文件。
+5 个实现文件、5 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -466,10 +466,9 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 ### cmd/glsvet
 
 - [clockhints_test.go](../../../cmd/glsvet/clockhints_test.go)：`TestClockHintsFlagDirectReadsInABusinessPackage`、`TestClockHintsHonourTheSystemClockDirective`、`TestClockHintsLeaveOtherPackagesAlone`、`TestClockHintsLookOnlyBelowTheModuleRoot`、`TestClockHintsAreNotFindings`
-- [componentfields_promises_test.go](../../../cmd/glsvet/componentfields_promises_test.go)：`TestComponentFieldWritesOutsideTheDaoAreHinted`、`TestSkillPackagesGetNoComponentFieldHint`、`TestNestDirectiveMarksAHandlerWithoutTheHandlerPrefix`
-- [inputs_promises_test.go](../../../cmd/glsvet/inputs_promises_test.go)：`TestMain`、`TestMissingDirectoryArgumentFails`、`TestUnparsableFileFailsInsteadOfSkippingTheDirectory`、`TestDirectoryWithoutGoFilesStillPasses`
-- [main_test.go](../../../cmd/glsvet/main_test.go)：`TestHandlerRawGoroutineIsRejected`、`TestHandlerNamedGoroutineWrapperIsRejected`、`TestHandlerErrgroupGoIsRejected`、`TestHandlerCoreWorkerPoolGoIsAllowed`、`TestHandlerCoreWorkerPoolFieldGoIsAllowed`；其余 11 项见文件
-- [method_handler_promises_test.go](../../../cmd/glsvet/method_handler_promises_test.go)：`TestMethodHandlerConcurrencyChecks`
+- [componentfields_test.go](../../../cmd/glsvet/componentfields_test.go)：`TestComponentFieldWritesOutsideTheDaoAreHinted`、`TestSkillPackagesGetNoComponentFieldHint`、`TestNestDirectiveMarksAHandlerWithoutTheHandlerPrefix`
+- [inputs_test.go](../../../cmd/glsvet/inputs_test.go)：`TestMain`、`TestMissingDirectoryArgumentFails`、`TestUnparsableFileFailsInsteadOfSkippingTheDirectory`、`TestDirectoryWithoutGoFilesStillPasses`
+- [main_test.go](../../../cmd/glsvet/main_test.go)：`TestHandlerRawGoroutineIsRejected`、`TestHandlerNamedGoroutineWrapperIsRejected`、`TestHandlerErrgroupGoIsRejected`、`TestHandlerCoreWorkerPoolGoIsAllowed`、`TestHandlerCoreWorkerPoolFieldGoIsAllowed`；其余 13 项见文件
 - [stophints_test.go](../../../cmd/glsvet/stophints_test.go)：`TestStopHintsFlagABareReceiveInAStopWithContext`、`TestStopHintsFollowOneCallIntoAHelperThatCannotSeeTheContext`、`TestStopHintsAcceptBoundedWaits`、`TestStopHintsDoNotCountAsFindings`
 
 ### codegen/internal/attribute

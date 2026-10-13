@@ -9,15 +9,11 @@ import (
 	"testing"
 )
 
-// 维护者决定 A5（2026-10-05）：隔离测试环境按共享模式使用——多个会话可以并行跑各自 `-run` 选定、
-// 自建代理 / 进程注入故障的用例；会改动整套环境的全局操作（dataengine-env.sh 的 up / down / heal / reset /
-// fault、remote-fault.sh、故障矩阵、长稳、调用这些命令的 Go 故障用例）运行期间必须持有
-// <根>/remote-acceptance.lock。脚本命令自己的持锁由 kit/scripts/integration/dataengine_env_test.sh 用垫片验证；
-// 这里守调用方：
+// 维护者决定 A5：隔离测试环境按共享模式使用——多个会话可以并行跑各自 `-run` 选定、自建代理 / 进程注入故障的用例；会改动整套环境
+// 的全局操作（dataengine-env.sh 的 up / down / heal / reset / fault、remote-fault.sh、故障矩阵、长稳、调用这些命令的 Go 故障用例）
+// 运行期间必须持有 <根>/remote-acceptance.lock。脚本命令自己的持锁由 wiring/scripts/integration/dataengine_env_test.sh 用垫片验证；这里守调用方：
 //
-//   - 调用 fault / heal 的 Go 用例从 fault 到 heal 的整段持锁（holdAcceptanceLock）。旧行为：kit/dataengine 的
-//     三个 failover 用例手工 `-run` 时不持锁，命令各自只检查锁空闲，fault 与 heal 之间别的会话的 heal /
-//     矩阵照常进入。
+//   - 调用 fault / heal 的 Go 用例从 fault 到 heal 的整段持锁（holdAcceptanceLock），不能只在命令各自检查锁空闲；
 //   - 调起 dataengine-env.sh / remote-fault.sh 改动环境的脚本，自己持锁或经 acquire_acceptance_lock 持锁。
 func TestGlobalEnvironmentOperationsHoldTheAcceptanceLock(t *testing.T) {
 	testFunc := regexp.MustCompile(`(?m)^func (Test\w+)\(`)
@@ -28,7 +24,7 @@ func TestGlobalEnvironmentOperationsHoldTheAcceptanceLock(t *testing.T) {
 		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == "testdata" || entry.Name() == "artifacts" || entry.Name() == "docs") {
 			return filepath.SkipDir
 		}
-		if entry.IsDir() || !strings.HasSuffix(path, "_test.go") || path == "acceptance_lock_promises_test.go" {
+		if entry.IsDir() || !strings.HasSuffix(path, "_test.go") || path == "acceptance_lock_test.go" {
 			return nil
 		}
 		body, err := os.ReadFile(path)

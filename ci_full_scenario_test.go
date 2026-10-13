@@ -1,12 +1,7 @@
 package roostcore_test
 
-// A11（收尾第 2 批，2026-10-06）：framework-compat 的 full 场景在生成工程上执行的 add 序列只有一份
-// （codegen/scripts/full-scenario-adds.sh），CI 与本地镜像 codegen/scripts/source-head-check.sh 都调用它，
-// 而且任何一步失败都让调用方失败。
-//
-// 旧行为：两边各写一份。本地脚本只 add 了 access / transport / skill / saga 四步（CI 还有 component、
-// dao、handler、protocol、endpoint、rpc 与 project sync），并用 `(...) || true` 吞掉失败，所以本地
-// “source-head full OK” 既没跑 CI 跑的那些步骤，也不说明 add 本身成功了。
+// framework-compat 的 full 场景在生成工程上执行的 add 序列只有一份（codegen/scripts/full-scenario-adds.sh），CI 与本地镜像
+// codegen/scripts/source-head-check.sh 都调用它，而且任何一步失败都让调用方失败（不能各写一份、用 `|| true` 吞掉失败）。
 
 import (
 	"os"

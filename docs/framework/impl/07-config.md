@@ -71,7 +71,7 @@
 
 ### internal/configschema
 
-5 个实现文件、2 个测试文件。
+5 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -130,8 +130,7 @@
 
 ### internal/configschema
 
-- [remaining_promises_test.go](../../../internal/configschema/remaining_promises_test.go)：`TestNonFiniteAndOverflowingConfigNumbersAreRejected`、`TestUnderscoreClosedChecksBothSchemaForms`、`TestMapSourcePreservesUnderscoreYAMLHierarchy`
-- [schema_test.go](../../../internal/configschema/schema_test.go)：`TestDecodeAppliesDefaultsAndReadsValues`、`TestDecodeReportsEveryBadKeyByName`、`TestDecodeRunsValidateConfigOnlyAfterDeclarationsPass`、`TestProductionSecrets`、`TestDataSchemaChecksLikeTheStruct`；其余 4 项见文件
+- [schema_test.go](../../../internal/configschema/schema_test.go)：`TestDecodeAppliesDefaultsAndReadsValues`、`TestDecodeReportsEveryBadKeyByName`、`TestDecodeRunsValidateConfigOnlyAfterDeclarationsPass`、`TestProductionSecrets`、`TestDataSchemaChecksLikeTheStruct`；其余 7 项见文件
 
 </details>
 

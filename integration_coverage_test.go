@@ -9,14 +9,8 @@ import (
 	"testing"
 )
 
-// U-0275 · C2 · RR-20260922-03 / U-0276 · C2 · RR-20260922-02：带 integration tag 的测试文件，
-// 每一个都要有人跑。
-//
-// 旧行为：ci.yml 的 Redis job 只跑 `./wiring/service/...`，`service/mail` 的五个 Redis 用例在 glob 之外，
-// 而"no Redis test was skipped"守卫只看那个 glob 的输出；故障矩阵脚本跑 `./framework/saga ./framework/remoteentity`
-// （两个目录已经没有测试文件）、core 侧四个套件因 `../roost-core` 不存在被跳过且退出码 0，
-// 并且没有任何 workflow 调用它。两处的共同点：**"要跑什么"是手写的列表，而真相是文件系统里
-// 有哪些 `//go:build integration` 的测试文件。** 这条测试让列表以真相为准。
+// 带 integration tag 的测试文件，每一个都要有人跑：“要跑什么”不能是手写的列表，真相是文件系统里有哪些 `//go:build integration`
+// 的测试文件，这条测试让 CI job 与故障矩阵脚本的列表以它为准。
 
 // integrationTestPackages lists every package directory that has at least one
 // `//go:build integration` test file, grouped by the environment those files
@@ -162,10 +156,8 @@ func TestCIRedisJobRunsEveryRedisIntegrationSuite(t *testing.T) {
 	}
 }
 
-// RR-20261001-01：service 测试把 Redis 变体挂在哪个环境变量上是各轮审查自己定的
-// （REDIS_ADDR、ROOST_REVIEW_REDIS、ROOST_REDIS_TEST_ADDR、ROOST_REVIEW3_BACKEND、ROOST_BUGFIX5_BACKEND…），
-// 没设的变量让用例静默 SKIP 或落回 Memory 替身，Redis job 看起来绿、其实没跑。
-// 这条测试把测试文件里 os.Getenv 到的每个 Redis 门变量钉到 ci.yml Redis job 的 env 上。
+// service 测试把 Redis 变体挂在各自的环境变量上，没设的变量让用例静默 SKIP 或落回 Memory 替身：这条测试把测试文件里 os.Getenv 到的
+// 每个 Redis 门变量钉到 ci.yml Redis job 的 env 上。
 var redisGateVariable = regexp.MustCompile(`os\.Getenv\("((?:[A-Z0-9_]*REDIS[A-Z0-9_]*)|(?:ROOST_[A-Z0-9]*_BACKEND))"\)`)
 
 func TestCIRedisJobSetsEveryRedisGateVariable(t *testing.T) {

@@ -11,14 +11,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RR-20260921-05：仓内 go:generate 的产物与 codegen 的运行期守卫，都得有 CI 在跑。
-//
-// 旧行为：kit/service 与 service/ 下 13 处 //go:generate 的产物提交在仓里，ci.yml 没有任何一步重新生成
-// 再比对——把 service/session/session_rpc_gen.go 改脏，build / vet / test 全绿，只有 go generate 能看出来
-// （generate --check 只跑在生成工程那侧）。codegen/scripts/*-runtime.sh 四个守卫是 RR-20260917-05/06、
-// RR-20260918-01、U-0224 唯一的运行期证明（codegen 自身的测试只比文本），合仓后取 pin 的那一行被删，
-// 四个脚本默认 exit 2，也没有任何 workflow 调用它们。两件事同根：守卫在仓里，CI 不跑。
-// 这两条测试把"CI 跑它们"钉在 workflow 上，删掉那一步会在普通 go test 里红，而不是再沉默一次。
+// 仓内 go:generate 的产物与 codegen 的运行期守卫（codegen/scripts/*-runtime.sh）都得有 CI 在跑：把“CI 跑它们”钉在 workflow 上，
+// 删掉那一步会在普通 go test 里红，而不是让生成物漂移或运行期守卫静默不跑。
 
 // workflowStep is the part of a GitHub Actions step these checks read.
 type workflowStep struct {

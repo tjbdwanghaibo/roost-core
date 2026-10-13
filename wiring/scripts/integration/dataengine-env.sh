@@ -152,7 +152,7 @@ environment_test() {
 	# printed "NOT run" and exited 0 (RR-20260922-02).
 	#
 	# The package list is pinned to the files on disk by
-	# integration_coverage_promises_test.go: every directory with a
+	# integration_coverage_test.go: every directory with a
 	# `//go:build integration` test file that keys on ROOST_DATAENGINE_IT,
 	# and nothing else. etcd/driver spawns etcd from PATH and skips loudly
 	# when the binary is absent; mongo/driver spawns its own standalone mongod
