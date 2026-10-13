@@ -455,8 +455,9 @@ func remoteCommitReceipt(commit entity.RemoteCommit) entity.RemoteCommitReceipt 
 func (*MongoCommitter) SupportsConcurrentRemoteCommits() bool { return true }
 
 // RejectRemoteCommitsInTransaction 在调用方的 Mongo 事务里写下 Remote Rejected 记录。
-// 重放只能复用相同内容的拒绝，不能覆盖已经提交的事务。正式投影链路已不再调用它（“Remote + lease fence”
-// 历史 WAL 记录改为投影器 fatal，维护者 2026-10-13），现仅供测试注入持久拒绝；是否删除待维护者决定。
+// 重放只能复用相同内容的拒绝，不能覆盖已经提交的事务。生产路径不再产生（“Remote + lease fence”历史 WAL
+// 记录改为投影器 fatal，维护者 2026-10-13），仅供测试注入 durable rejection；去留见 KNOWN-LIMITS
+// “Remote WAL级Rejected处理”。
 func (s *MongoCommitter) RejectRemoteCommitsInTransaction(ctx context.Context, commits []entity.RemoteCommit, cause string) error {
 	if s == nil || s.mongo == nil || s.database == "" {
 		return entity.ErrRemoteWriteCapabilityDisabled

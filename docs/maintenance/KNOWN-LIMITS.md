@@ -24,6 +24,7 @@
 | policy Drain | 等待retry和已承担事实；永久拒绝需修关系或ctx超时 | 拒绝、关闭和排空组合 |
 | Skill Runtime | 不参与Nest回滚；Host副作用和确定性由业务契约保证 | Host能力、重入、阻塞、恢复和回放测试 |
 | 观测接线 | ExportMetrics/admin元数据不是自动外部监控或审批系统 | 部署实际接线与鉴权审计 |
+| Remote WAL级Rejected处理 | 移除“Remote写+lease fence”历史记录投影后（2026-10-13），Durability 1/2/3 的正式链路不再产生 Remote Rejected；tracker 的 WAL 级 Rejected 收尾（隔离、仅内存卸载、重载）仍保留，只由测试经 `MongoCommitter`/`Backend.RejectRemoteCommitsInTransaction` 与 `Manager.RejectRemoteTransaction` 注入覆盖。暂留原因：同一收尾与 Durability 0 的 finalizer 拒绝共用，且约10个 remoteentity 用例与 codegen remoteflow testdata 依赖这些注入点 | 评估 WAL 级 Rejected 分支能否精简：从 `remoteentity/transaction_tracking.go` 的 `completeRemoteTransaction` 与 rejected_write / finalizer / deferred_outcome 测试入手，区分 Durability 0 必需部分与仅 WAL 级可达部分，再决定是否删除三个注入函数 |
 | Windows | 非框架保证平台；本次6个既有测试失败已在稳定基线复现，详见发布验收 | 本机测试结果不改变macOS/Linux支持范围 |
 
 [外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据。[性能基线](../performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本次核对是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零bug或100%行为覆盖。

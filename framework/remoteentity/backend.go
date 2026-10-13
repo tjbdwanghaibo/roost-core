@@ -100,6 +100,9 @@ func (b *Backend) WriteAuthority() WriteAuthority {
 	return nil
 }
 
+// RejectRemoteCommitsInTransaction 转发到存储适配器，在调用方的 Mongo 事务里写 Remote Rejected 记录。
+// 生产路径不再产生（维护者 2026-10-13），仅供测试注入 durable rejection；去留见 KNOWN-LIMITS
+// “Remote WAL级Rejected处理”。
 func (b *Backend) RejectRemoteCommitsInTransaction(ctx context.Context, commits []entity.RemoteCommit, cause string) error {
 	store, ok := b.storage.(interface {
 		RejectRemoteCommitsInTransaction(context.Context, []entity.RemoteCommit, string) error
