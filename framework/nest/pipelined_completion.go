@@ -266,25 +266,26 @@ func completionEntityID(es []entity.IThreadSafeEntity, msg *Msg) int64 {
 }
 
 // stop 排空全部已接受的完成并停止池。在派发器排空后调用，不会有新的提交与关闭竞争。
+//
+// 按三步停机：关闭队列只发起一次；每次调用都在自己的 ctx 内等泵排空、再等池停止。ctx 先结束返回 ctx 错误，
+// 泵与池保持“停止中”，用新 ctx 重试会继续等同一批完成，排空之后才返回 nil。
 func (p *completionPump) stop(ctx context.Context) error {
 	if p == nil {
 		return nil
 	}
-	var err error
 	p.once.Do(func() {
 		// 关闭队列之前等在途的 submit 全部结束。
 		p.closeMu.Lock()
 		p.closed.Store(true)
 		p.closeMu.Unlock()
 		close(p.queue)
-		select {
-		case <-p.done:
-			err = p.pool.StopWithContext(ctx)
-		case <-ctx.Done():
-			// 仍发起池停止：泵在后台继续排空，被拒绝的 Dispatch 会降级为就地执行，所以这里停止能限制泄漏，
-			// 不让池 goroutine 在超时的关闭之后永远存活。
-			err = errors.Join(ctx.Err(), p.pool.StopWithContext(ctx))
-		}
 	})
-	return err
+	select {
+	case <-p.done:
+		return p.pool.StopWithContext(ctx)
+	case <-ctx.Done():
+		// 仍发起池停止：泵在后台继续排空，被拒绝的 Dispatch 会降级为就地执行，所以这里停止能限制泄漏，
+		// 不让池 goroutine 在超时的关闭之后永远存活。池停止可重入，重试时会继续等它。
+		return errors.Join(ctx.Err(), p.pool.StopWithContext(ctx))
+	}
 }

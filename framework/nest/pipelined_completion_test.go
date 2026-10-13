@@ -512,6 +512,38 @@ func TestCompletionPumpFullRejectsSynchronouslyAndDrainsAccepted(t *testing.T) {
 	}
 }
 
+// stop 的超时只结束本次等待：重试必须继续等同一批已接受的完成排空，不能因为“已经发起过”就返回 nil。
+func TestCompletionPumpStopRetryWaitsForDrain(t *testing.T) {
+	pump := newCompletionPump(1, 1)
+	pump.start()
+	ticket := &fakeCommitTicket{lsn: 1, done: make(chan struct{})}
+	delivered := make(chan struct{})
+	if !pump.submit(pipelinedCompletion{ticket: ticket, entityID: 1, complete: func(error) { close(delivered) }}) {
+		t.Fatal("submit should be accepted")
+	}
+
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := pump.stop(expired); !errors.Is(err, context.Canceled) {
+		t.Fatalf("first stop with a cancelled ctx = %v, want context.Canceled", err)
+	}
+	retry, cancelRetry := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelRetry()
+	if err := pump.stop(retry); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("retry while the accepted completion is still pending = %v, want context.DeadlineExceeded", err)
+	}
+
+	close(ticket.done)
+	if err := pump.stop(context.Background()); err != nil {
+		t.Fatalf("stop after the ticket resolved = %v", err)
+	}
+	select {
+	case <-delivered:
+	default:
+		t.Fatal("stop returned before the accepted completion was delivered")
+	}
+}
+
 // The chain link is taken before the pump decides whether it can own the
 // work, so on the degraded path the caller holds the release obligation while
 // it waits for its own ticket. If that path unwinds — a panic while releasing
