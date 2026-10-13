@@ -3,10 +3,96 @@ package actionflow
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
 )
+
+type runnerTestMission struct {
+	id       int64
+	kind     MissionKind
+	status   MissionStatus
+	startErr error
+	ends     int
+}
+
+func (m *runnerTestMission) SetRuntime(id int64, _ MissionManager) { m.id = id }
+func (m *runnerTestMission) ID() int64                             { return m.id }
+func (m *runnerTestMission) Kind() MissionKind                     { return m.kind }
+func (m *runnerTestMission) Status() MissionStatus                 { return m.status }
+func (m *runnerTestMission) Start(*MissionContext, any) error {
+	if m.startErr == nil {
+		m.status = MissionStatusRunning
+	}
+	return m.startErr
+}
+func (*runnerTestMission) Tick(*MissionContext, time.Time) {}
+func (*runnerTestMission) OnActionEnd(*MissionContext, int64, ActionKind, ActionReason) {
+}
+func (m *runnerTestMission) End(_ *MissionContext, reason ActionReason) {
+	m.ends++
+	result := reason.ToActionResult(ActionStatusCanceled)
+	if result.Status == ActionStatusFailed {
+		m.status = MissionStatusFailed
+	} else {
+		m.status = MissionStatusCanceled
+	}
+}
+func (*runnerTestMission) CanReplaceBy(MissionKind, any) bool { return true }
+func (m *runnerTestMission) MissionInfo() MissionInfo {
+	return MissionInfo{Status: m.status, CurrentStep: -1}
+}
+
+func TestMissionRunnerBuildFailurePreservesCurrent(t *testing.T) {
+	registry := NewRegistry()
+	current := &runnerTestMission{kind: 1}
+	if err := registry.RegisterMission(1, func() Mission { return current }); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := NewMissionRunner(MissionRunnerConfig{Registry: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.StartMission(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.StartMission(2, nil); !errors.Is(err, ErrMissionBuilderNotFound) {
+		t.Fatalf("missing builder error = %v", err)
+	}
+	if runner.CurMission() != current || current.ends != 0 {
+		t.Fatalf("build failure replaced current mission: current=%v ends=%d", runner.CurMission(), current.ends)
+	}
+}
+
+func TestMissionRunnerStartFailureCleansState(t *testing.T) {
+	registry := NewRegistry()
+	failed := &runnerTestMission{kind: 1, startErr: errors.New("start")}
+	if err := registry.RegisterMission(1, func() Mission { return failed }); err != nil {
+		t.Fatal(err)
+	}
+	states := make([]bool, 0, 2)
+	cleared := int64(0)
+	runner, err := NewMissionRunner(MissionRunnerConfig{
+		Registry: registry,
+		Hooks: MissionRunnerHooks{
+			OnState: func(active bool) { states = append(states, active) },
+			ClearActions: func(id int64, _ ActionReason) error {
+				cleared = id
+				return nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.StartMission(1, nil); !errors.Is(err, failed.startErr) {
+		t.Fatalf("start error = %v", err)
+	}
+	if runner.CurMission() != nil || len(states) != 2 || !states[0] || states[1] || cleared != failed.id || failed.ends != 1 {
+		t.Fatalf("start rollback incomplete: current=%v states=%v cleared=%d id=%d ends=%d", runner.CurMission(), states, cleared, failed.id, failed.ends)
+	}
+}
 
 // MissionRunner 延后队列（维护者 2026-10-06 第五轮决定，与 ActionRunner / B7 一致）：回调——
 // 任务的 Start / Tick / OnActionEnd / End，以及 OnState / OnChanged / OnEnded / ClearActions
@@ -338,7 +424,7 @@ func TestMissionDeferredQueueIsBounded(t *testing.T) {
 }
 
 // 回调 panic（钩子、任务 Start）被恢复成错误：已经发起的延后命令照常执行，执行状态复位，
-// runner 之后照常可用（N10 第二批 / NC-242 的教训：新回调点一律 recover）。
+// runner 之后照常可用（每个回调点都 recover）。
 func TestMissionRunnerStaysUsableAfterCallbacksPanic(t *testing.T) {
 	registry := NewRegistry()
 	next := &scriptedMission{runnerTestMission: runnerTestMission{kind: 2}, label: "next"}
@@ -450,4 +536,178 @@ func TestEndCurMissionBeforeEndAllLeavesNothingRunning(t *testing.T) {
 				list.runner.Current(1), second.starts, list.missions.CurMission())
 		}
 	})
+}
+
+type stickyMission struct{ runnerTestMission }
+
+func (*stickyMission) CanReplaceBy(MissionKind, any) bool { return false }
+
+// Missions are exclusive per runner: a kind of 0 with no default is a
+// programming error, and a running mission that declines replacement keeps
+// the runner (the replacement is not built, the current is not ended).
+func TestMissionRunnerRefusesUnknownKindAndUnreplaceableMission(t *testing.T) {
+	registry := NewRegistry()
+	sticky := &stickyMission{runnerTestMission{kind: 1}}
+	built := 0
+	if err := registry.RegisterMission(1, func() Mission { return sticky }); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterMission(2, func() Mission { built++; return &runnerTestMission{kind: 2} }); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := NewMissionRunner(MissionRunnerConfig{Registry: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.StartMission(0, nil); !errors.Is(err, ErrKindInvalid) {
+		t.Fatalf("StartMission(0) without a default kind = %v", err)
+	}
+	if err := runner.StartMission(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.StartMission(2, nil); !errors.Is(err, ErrMissionRunning) {
+		t.Fatalf("StartMission over an unreplaceable mission = %v", err)
+	}
+	if built != 0 || sticky.ends != 0 || runner.CurMission() != sticky {
+		t.Fatalf("refused replacement touched state: built=%d ends=%d current=%v", built, sticky.ends, runner.CurMission())
+	}
+}
+
+// 任务计划在归一化时拒绝所有空 / 越界的形状（无步骤、起点越界、动作为 none、后继步骤越界、
+// nil 指针），之后按步索引执行时再守一次越界；任务运行器的钩子若在启动途中结束了任务，结束
+// 延后到启动之后执行，不把已结束的任务留作当前任务；动作构建器交出 nil 动作被 ErrBuilderNil 拒绝。
+// 历史：U-0125
+
+func TestNormalizePlanRefusesEveryInvalidShape(t *testing.T) {
+	valid := MissionPlan{Steps: []MissionStep{{Action: 1}, {Action: 2}}}
+	if _, err := NormalizePlan(valid); err != nil {
+		t.Fatalf("baseline plan rejected: %v", err)
+	}
+	cases := []struct {
+		name string
+		plan MissionPlan
+		want error
+		text string
+	}{
+		{"no steps", MissionPlan{}, ErrMissionPlanInvalid, ""},
+		{"start below zero", MissionPlan{Start: -1, Steps: valid.Steps}, ErrMissionPlanInvalid, ""},
+		{"start past the end", MissionPlan{Start: 2, Steps: valid.Steps}, ErrMissionPlanInvalid, ""},
+		{"action none", MissionPlan{Steps: []MissionStep{{Action: 1}, {Action: 0}}}, ErrMissionStepInvalid, "action none at 1"},
+		{"success next past the end", MissionPlan{Steps: []MissionStep{{Action: 1, OnSuccess: NextMissionStep(5)}}}, ErrMissionStepInvalid, "next step 5"},
+		{"fail next below zero", MissionPlan{Steps: []MissionStep{{Action: 1, OnFail: NextMissionStep(-1)}}}, ErrMissionStepInvalid, "next step -1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NormalizePlan(tc.plan)
+			if !errors.Is(err, tc.want) || !strings.Contains(err.Error(), tc.text) {
+				t.Fatalf("NormalizePlan = %v, want %v containing %q", err, tc.want, tc.text)
+			}
+		})
+	}
+	var none *MissionPlan
+	if _, err := PlanFrom(none); !errors.Is(err, ErrMissionPlanInvalid) {
+		t.Fatalf("PlanFrom(nil *MissionPlan) = %v", err)
+	}
+	if _, err := PlanFrom(&valid); err != nil {
+		t.Fatalf("PlanFrom(*MissionPlan) = %v", err)
+	}
+	if _, err := PlanFrom("not a plan"); !errors.Is(err, ErrMissionPlanInvalid) {
+		t.Fatalf("PlanFrom(string) = %v", err)
+	}
+}
+
+func TestPlanMissionRefusesAStepIndexOutsideThePlan(t *testing.T) {
+	plan, err := NormalizePlan(MissionPlan{Steps: []MissionStep{{Action: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mission := &PlanMission{plan: plan}
+	for _, step := range []int{-1, 1, 99} {
+		if err := mission.startStep(nil, step); !errors.Is(err, ErrMissionStepInvalid) {
+			t.Fatalf("startStep(%d) = %v, want ErrMissionStepInvalid", step, err)
+		}
+	}
+}
+
+// 第五轮决定（MissionRunner 改为延后队列）之后：钩子在启动途中发起的结束延后到启动做完
+// 之后执行，StartMission 返回 nil，任务完整启动一次、结束一次。原承诺“不把一个已结束的任务
+// 当作当前任务”不变：返回后没有当前任务。
+func TestMissionRunnerHookThatEndsTheMissionDuringStartEndsItAfterTheStart(t *testing.T) {
+	registry := NewRegistry()
+	mission := &runnerTestMission{kind: 1}
+	if err := registry.RegisterMission(1, func() Mission { return mission }); err != nil {
+		t.Fatal(err)
+	}
+	var runner *MissionRunner
+	statusAtEnd := MissionStatusIdle
+	runner, err := NewMissionRunner(MissionRunnerConfig{Registry: registry, Hooks: MissionRunnerHooks{
+		OnChanged: func(MissionInfo) {
+			runner.EndCurMission(NewActionReason("ended from hook"))
+		},
+		OnState: func(active bool) {
+			if !active {
+				statusAtEnd = mission.status
+			}
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.StartMission(1, nil); err != nil {
+		t.Fatalf("StartMission with a hook ending the mission = %v, want nil (the end is deferred)", err)
+	}
+	if runner.CurMission() != nil {
+		t.Fatalf("a mission ended during its own start is still current: %v", runner.CurMission())
+	}
+	if mission.ends != 1 || statusAtEnd != MissionStatusCanceled {
+		t.Fatalf("mission ends=%d status at end=%v, want ended once after a complete start", mission.ends, statusAtEnd)
+	}
+}
+
+func TestMissionRunnerDefersReentrantStartAndRefusesExhaustedIDsAndIdleCancel(t *testing.T) {
+	if _, err := NewMissionRunner(MissionRunnerConfig{}); !errors.Is(err, ErrMissionBuilderNotFound) {
+		t.Fatalf("mission runner without registry = %v", err)
+	}
+	registry := NewRegistry()
+	runner, err := NewMissionRunner(MissionRunnerConfig{Registry: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	built := 0
+	mission := &reentrantMission{runnerTestMission: runnerTestMission{kind: 1}, runner: runner, built: &built}
+	if err := registry.RegisterMission(1, func() Mission { return mission }); err != nil {
+		t.Fatal(err)
+	}
+	var second Mission
+	if err := registry.RegisterMission(2, func() Mission { built++; second = &runnerTestMission{kind: 2}; return second }); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.CancelMission("nothing"); !errors.Is(err, ErrMissionNotRunning) {
+		t.Fatalf("CancelMission with nothing running = %v", err)
+	}
+	if err := runner.StartMission(1, nil); err != nil {
+		t.Fatalf("outer StartMission = %v", err)
+	}
+	if mission.innerErr != nil || mission.builtAtCall != 0 || mission.innerCurrent != mission {
+		t.Fatalf("inner StartMission = %v built=%d current=%v; want nil, nothing built and the outer mission still current inside its own Start",
+			mission.innerErr, mission.builtAtCall, mission.innerCurrent)
+	}
+	if built != 1 || runner.CurMission() != second || mission.ends != 1 {
+		t.Fatalf("after the outer start: built=%d current=%v outer ends=%d; want the deferred start to replace the outer mission once",
+			built, runner.CurMission(), mission.ends)
+	}
+	runner.nextID = math.MaxInt64
+	if err := runner.StartMission(2, nil); !errors.Is(err, ErrMissionIDExhausted) || built != 1 {
+		t.Fatalf("StartMission with exhausted ids = %v built=%d", err, built)
+	}
+	plan := MissionPlan{Steps: []MissionStep{{Action: 1}}}
+	if _, err := PlanFrom(plan); err != nil {
+		t.Fatalf("fixture plan must be valid so the context guard is the only refuser: %v", err)
+	}
+	if err := NewPlanMission(3).Start(nil, plan); !errors.Is(err, ErrMissionPlanInvalid) {
+		t.Fatalf("PlanMission.Start without a context = %v", err)
+	}
+	if err := NewPlanMission(3).Start(&MissionContext{}, plan); !errors.Is(err, ErrMissionPlanInvalid) {
+		t.Fatalf("PlanMission.Start without an action list = %v", err)
+	}
 }

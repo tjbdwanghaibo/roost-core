@@ -49,7 +49,7 @@
 
 ### actionflow
 
-6 个实现文件、12 个测试文件。
+6 个实现文件、3 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -188,18 +188,9 @@
 
 ### actionflow
 
-- [action_runner_test.go](../../../gameplay/actionflow/action_runner_test.go)：`TestActionRunnerExplicitStartPrecedesQueue`、`TestActionRunnerEnqueueStartsIdleGroup`、`TestActionRunnerQueuedStartFailureContinuesQueue`、`TestActionRunnerRecoversTickPanic`、`TestRegistrySealAndBuilderPanic`
-- [deferred_mutation_promises_test.go](../../../gameplay/actionflow/deferred_mutation_promises_test.go)：`TestCallbackMutationsAreDeferredUntilTheOuterCallReturns`、`TestCancelReentryCancelsTheReplacedActionOnce`、`TestDirectStartFailureEndsTheActionOnce`、`TestDeferredStartThatCanNoLongerRunStillEndsItsID`、`TestHookStartStillPrecedesQueuedActions`；其余 4 项见文件
-- [execution_cleanup_test.go](../../../gameplay/actionflow/execution_cleanup_test.go)：`TestOuterExecutionResetsAfterInternalPanic`
-- [mission_deferred_promises_test.go](../../../gameplay/actionflow/mission_deferred_promises_test.go)：`TestMissionCallbackMutationsAreDeferredUntilTheOuterCallReturns`、`TestDeferredMissionStartErrorsAreReported`、`TestMissionCallbacksThatKeepTriggeringEachOtherAreBounded`、`TestOuterMissionStartReturnsRunaway`、`TestMissionDeferredQueueIsBounded`；其余 2 项见文件
-- [mission_runner_test.go](../../../gameplay/actionflow/mission_runner_test.go)：`TestMissionRunnerBuildFailurePreservesCurrent`、`TestMissionRunnerStartFailureCleansState`
-- [plan_guards_promises_test.go](../../../gameplay/actionflow/plan_guards_promises_test.go)：`TestNormalizePlanRefusesEveryInvalidShape`、`TestPlanMissionRefusesAStepIndexOutsideThePlan`、`TestMissionRunnerHookThatEndsTheMissionDuringStartEndsItAfterTheStart`、`TestActionRunnerRefusesABuilderThatReturnsNoAction`
-- [promises_test.go](../../../gameplay/actionflow/promises_test.go)：`TestActionRunnerRefusesToStartInAFrozenGroup`、`TestMissionRunnerRefusesUnknownKindAndUnreplaceableMission`
-- [queue_discard_promises_test.go](../../../gameplay/actionflow/queue_discard_promises_test.go)：`TestDiscardedQueuedActionsAreReportedAsEnded`、`TestClearMissionKeepsAnotherMissionsQueuedActions`
-- [reentrancy_promises_test.go](../../../gameplay/actionflow/reentrancy_promises_test.go)：`TestActionRunnerCallbackStartReplacesTheOuterActionExactlyOnce`、`TestActionRunnerRefusesInvalidConfigUnknownGroupsAndExhaustedIDs`、`TestMissionRunnerDefersReentrantStartAndRefusesExhaustedIDsAndIdleCancel`
-- [start_failure_reentrancy_promises_test.go](../../../gameplay/actionflow/start_failure_reentrancy_promises_test.go)：`TestStartFailureWhoseCancelStartsAnotherActionKeepsThatAction`、`TestQueuedStartFailureWhoseCancelStartsAnotherActionKeepsThatAction`
-- [types_test.go](../../../gameplay/actionflow/types_test.go)：`TestActionReasonPreservesStructuredResult`
-- [update_and_replace_promises_test.go](../../../gameplay/actionflow/update_and_replace_promises_test.go)：`TestUpdateWhoseFnPanicsLeavesTheRunnerUsable`、`TestReplacedActionWhoseCancelPanicsStillLetsTheNewActionStart`
+- [action_runner_test.go](../../../gameplay/actionflow/action_runner_test.go)：`TestActionRunnerExplicitStartPrecedesQueue`、`TestActionRunnerEnqueueStartsIdleGroup`、`TestActionRunnerQueuedStartFailureContinuesQueue`、`TestActionRunnerRecoversTickPanic`、`TestRegistrySealAndBuilderPanic`；其余 9 项见文件
+- [deferred_test.go](../../../gameplay/actionflow/deferred_test.go)：`TestCallbackMutationsAreDeferredUntilTheOuterCallReturns`、`TestDirectStartFailureEndsTheActionOnce`、`TestDeferredStartThatCanNoLongerRunStillEndsItsID`、`TestHookStartStillPrecedesQueuedActions`、`TestEndAllEndsEverythingBeforeCallbackMutationsRun`；其余 6 项见文件
+- [mission_test.go](../../../gameplay/actionflow/mission_test.go)：`TestMissionRunnerBuildFailurePreservesCurrent`、`TestMissionRunnerStartFailureCleansState`、`TestMissionCallbackMutationsAreDeferredUntilTheOuterCallReturns`、`TestDeferredMissionStartErrorsAreReported`、`TestMissionCallbacksThatKeepTriggeringEachOtherAreBounded`；其余 9 项见文件
 
 ### entity
 

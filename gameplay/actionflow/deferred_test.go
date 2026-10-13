@@ -7,11 +7,10 @@ import (
 	"time"
 )
 
-// B7（维护者 2026-10-05 第三轮决定，方向 b）：回调——动作的 Start / Tick / Cancel，以及
-// OnQueued / OnTransition / OnEnded 钩子——里对 ActionRunner 的变更（Start、Enqueue、End、
-// EndAll、ClearQueue、ClearMission、Recover、Tick）不立即执行，进入延后命令队列，等最外层
-// 调用把自己的那一步做完后按发起顺序执行。判定只在一处（ActionRunner.submit），不再在每个
-// 回调点之后事后比对当前位（U-0100 / NC-122 那组 ErrReentrantMutation 分支）。
+// 回调——动作的 Start / Tick / Cancel，以及 OnQueued / OnTransition / OnEnded 钩子——里对
+// ActionRunner 的变更（Start、Enqueue、End、EndAll、ClearQueue、ClearMission、Recover、Tick）
+// 不立即执行，进入延后命令队列，等最外层调用把自己的那一步做完后按发起顺序执行；判定只在
+// ActionRunner.submit 一处。
 //
 // 承诺：
 //   - 回调里调用变更方法时 Deferring() 为真；Start / Enqueue 立即返回已分配的 ID、错误为 nil，
@@ -20,6 +19,7 @@ import (
 //     耗尽）也发一次 OnEnded。
 //   - 延后队列有界（ErrDeferredQueueFull），回调互相触发不会无限执行（ErrDeferredRunaway），
 //     之后 runner 照常可用。
+// 历史：维护者 2026-10-05 决定 B7（方向 b），取代 U-0100 / NC-122 的 ErrReentrantMutation 分支
 
 // callbackStarter 在指定回调里发起一次 Start(next)，并记录回调内看到的状态。
 type callbackStarter struct {
@@ -145,7 +145,7 @@ func TestCallbackMutationsAreDeferredUntilTheOuterCallReturns(t *testing.T) {
 			if got := runner.Current(1); got != next || next.starts != 1 {
 				t.Fatalf("after %s: current=%v next starts=%d, want the deferred action running once", from, got, next.starts)
 			}
-			// 被替换的动作恰好 Cancel 一次（O-A3：之前嵌套 Start 会再 finish 一次）、结束一次。
+			// 被替换的动作恰好 Cancel 一次、结束一次。
 			if from != "ended" && from != "queued" && (outer.cancels != 1 || ended[1] != 1) {
 				t.Fatalf("replaced action canceled %d / ended %d time(s), want 1 / 1", outer.cancels, ended[1])
 			}
@@ -153,40 +153,7 @@ func TestCallbackMutationsAreDeferredUntilTheOuterCallReturns(t *testing.T) {
 	}
 }
 
-// O-A3：Cancel 里重入的 Start 不再让同一动作被 Cancel 两次——替换路径与启动失败路径都是。
-func TestCancelReentryCancelsTheReplacedActionOnce(t *testing.T) {
-	t.Run("replace", func(t *testing.T) {
-		runner := newReentrancyRunner(t)
-		next := &runnerTestAction{label: "next"}
-		old := &callbackStarter{runnerTestAction: runnerTestAction{label: "old"}, runner: runner, from: "cancel", next: next}
-		if _, err := runner.Start(1, old, 0, time.Now()); err != nil {
-			t.Fatal(err)
-		}
-		replacement := &runnerTestAction{label: "replacement"}
-		if _, err := runner.Start(1, replacement, 0, time.Now()); err != nil {
-			t.Fatal(err)
-		}
-		if old.cancels != 1 {
-			t.Fatalf("old action canceled %d time(s), want 1", old.cancels)
-		}
-		// 发起顺序：replacement 先（外层），next 后（Cancel 回调里），所以 next 最终在当前位。
-		if runner.Current(1) != next || replacement.starts != 1 || replacement.cancels != 1 {
-			t.Fatalf("current=%v replacement starts=%d cancels=%d", runner.Current(1), replacement.starts, replacement.cancels)
-		}
-	})
-	t.Run("start failure", func(t *testing.T) {
-		runner, _ := newStartFailureRunner(t)
-		next := &runnerTestAction{label: "next"}
-		failing := &cancelReentersAction{runner: runner, next: next}
-		_, _ = runner.Start(1, failing, 0, time.Now())
-		if failing.cancels != 1 {
-			t.Fatalf("failing action canceled %d time(s), want 1", failing.cancels)
-		}
-	})
-}
-
-// O-A2：直接 Start 失败也发一次 OnEnded，与排队 / 延后路径对称——进入切换的动作恰好一次
-// 离开、一次结束。
+// 直接 Start 失败也发一次 OnEnded，与排队 / 延后路径对称：进入切换的动作恰好离开一次、结束一次。
 func TestDirectStartFailureEndsTheActionOnce(t *testing.T) {
 	runner, trace := newStartFailureRunner(t)
 	failed := &runnerTestAction{startErr: errStartRefused}
@@ -263,9 +230,8 @@ func TestHookStartStillPrecedesQueuedActions(t *testing.T) {
 	}
 }
 
-// O-A1 在延后语义下的定义：EndAll 先结束调用时存在的全部动作，回调里发起的变更随后按序执行。
-// 所以结束钩子里推进任务启动的下一步在 EndAll 返回时仍在运行——这是“任务决定失败后去哪”，
-// 不再与 EndAll 的结束过程交错。
+// EndAll 先结束调用时存在的全部动作，回调里发起的变更随后按序执行：结束钩子里推进的下一步
+// 在 EndAll 返回时仍在运行，不与 EndAll 的结束过程交错。
 func TestEndAllEndsEverythingBeforeCallbackMutationsRun(t *testing.T) {
 	var runner *ActionRunner
 	var order []string
@@ -492,4 +458,257 @@ func TestPlanMissionAdvancesThroughADeferredStart(t *testing.T) {
 	if len(ended) != 1 || list.missions.CurMission() != nil || list.missions.MissionInfo().Status != MissionStatusSuccess {
 		t.Fatalf("mission did not finish: ended=%+v info=%+v", ended, list.missions.MissionInfo())
 	}
+}
+
+// 动作 Start 失败后 runner 调它的 Cancel；Cancel 里发起的 Start 延后到失败处理完成后执行：
+// 失败动作先完整收尾（离开一次、结束一次、Cancel 一次），再装上 next；外层只返回启动错误本身。
+// next 是当前动作、只启动一次、能被 Tick 结束；排队路径不越过它启动下一项。
+// 历史：RR-20261005-NC-122
+
+var errStartRefused = errors.New("start refused")
+
+// cancelReentersAction 的 Start 总是失败，Cancel 第一次被调用时重入启动 next。
+type cancelReentersAction struct {
+	runnerTestAction
+	runner    *ActionRunner
+	next      Action
+	reentered bool
+	innerErr  error
+}
+
+func (a *cancelReentersAction) Start(*ActionContext) error {
+	a.starts++
+	return errStartRefused
+}
+
+func (a *cancelReentersAction) Cancel(ctx *ActionContext, reason string) {
+	a.runnerTestAction.Cancel(ctx, reason)
+	if a.reentered {
+		return
+	}
+	a.reentered = true
+	_, a.innerErr = a.runner.Start(1, a.next, 0, time.Now())
+}
+
+type startFailureTrace struct {
+	leaves map[int64]int
+	ended  map[int64]int
+}
+
+func newStartFailureRunner(t *testing.T) (*ActionRunner, *startFailureTrace) {
+	trace := &startFailureTrace{leaves: map[int64]int{}, ended: map[int64]int{}}
+	runner := newReentrancyRunner(t, ActionRunnerHooks{
+		OnTransition: func(s ActionSnapshot, entering bool) {
+			if !entering {
+				trace.leaves[s.ID]++
+			}
+		},
+		OnEnded: func(s ActionSnapshot, _ ActionReason) { trace.ended[s.ID]++ },
+	})
+	return runner, trace
+}
+
+func TestStartFailureWhoseCancelStartsAnotherActionKeepsThatAction(t *testing.T) {
+	runner, trace := newStartFailureRunner(t)
+	next := &runnerTestAction{label: "next"}
+	failing := &cancelReentersAction{runner: runner, next: next}
+	_, err := runner.Start(1, failing, 0, time.Now())
+	if failing.innerErr != nil {
+		t.Fatalf("reentrant Start = %v", failing.innerErr)
+	}
+	if got := runner.Current(1); got != next {
+		t.Fatalf("current = %v, want the action the reentrant Start installed (started %d time(s)); failing left %d time(s)",
+			got, next.starts, trace.leaves[1])
+	}
+	if !errors.Is(err, errStartRefused) || errors.Is(err, ErrReentrantMutation) {
+		t.Fatalf("Start = %v, want the start error alone", err)
+	}
+	if next.starts != 1 || next.cancels != 0 || failing.cancels != 1 {
+		t.Fatalf("next starts=%d cancels=%d, failing cancels=%d", next.starts, next.cancels, failing.cancels)
+	}
+	// 失败的动作 ID 是 1：恰好离开一次、结束一次。
+	if trace.leaves[1] != 1 || trace.ended[1] != 1 {
+		t.Fatalf("failing action left %d time(s) and ended %d time(s), want 1 and 1", trace.leaves[1], trace.ended[1])
+	}
+	// 重入装上的动作没有被离开 / 结束，Tick 照常驱动它。
+	if trace.leaves[2] != 0 || trace.ended[2] != 0 {
+		t.Fatalf("installed action left=%d ended=%d", trace.leaves[2], trace.ended[2])
+	}
+	next.done = true
+	if err := runner.Tick(1, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if trace.ended[2] != 1 {
+		t.Fatalf("installed action never completed through Tick: ended=%v", trace.ended)
+	}
+}
+
+func TestQueuedStartFailureWhoseCancelStartsAnotherActionKeepsThatAction(t *testing.T) {
+	runner, trace := newStartFailureRunner(t)
+	next := &runnerTestAction{label: "next"}
+	after := &runnerTestAction{label: "after"}
+	failing := &cancelReentersAction{runner: runner, next: next}
+	runner.Freeze(1)
+	failingID, err := runner.Enqueue(1, failing, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Enqueue(1, after, 0); err != nil {
+		t.Fatal(err)
+	}
+	err = runner.Recover(1, time.Now())
+	if got := runner.Current(1); got != next {
+		t.Fatalf("current = %v, want the reentrantly installed action (next starts=%d, after starts=%d, failing ended %d time(s))",
+			got, next.starts, after.starts, trace.ended[failingID])
+	}
+	if !errors.Is(err, errStartRefused) || errors.Is(err, ErrReentrantMutation) {
+		t.Fatalf("Recover = %v, want the start error alone", err)
+	}
+	if after.starts != 0 || runner.QueueLength(1) != 1 {
+		t.Fatalf("the queue ran past the installed action: after starts=%d queue=%d", after.starts, runner.QueueLength(1))
+	}
+	if trace.ended[failingID] != 1 || trace.leaves[failingID] != 1 {
+		t.Fatalf("failing queued action ended %d / left %d time(s), want 1 / 1", trace.ended[failingID], trace.leaves[failingID])
+	}
+}
+
+// reentrantAction calls back into the runner from inside one of its own
+// callbacks, once. Whatever it starts replaces itself, which the runner has to
+// detect rather than keep driving a stale entry.
+type reentrantAction struct {
+	runnerTestAction
+	runner    *ActionRunner
+	from      string // "start", "tick" or "cancel"
+	next      *runnerTestAction
+	reentered bool
+	innerErr  error
+}
+
+func (a *reentrantAction) reenter(where string) {
+	if a.from != where || a.reentered {
+		return
+	}
+	a.reentered = true
+	_, a.innerErr = a.runner.Start(1, a.next, 0, time.Now())
+}
+
+func (a *reentrantAction) Start(ctx *ActionContext) error {
+	a.reenter("start")
+	return a.runnerTestAction.Start(ctx)
+}
+
+func (a *reentrantAction) Tick(ctx *ActionContext) (bool, ActionResult) {
+	a.reenter("tick")
+	return a.runnerTestAction.Tick(ctx)
+}
+
+func (a *reentrantAction) Cancel(ctx *ActionContext, reason string) {
+	a.reenter("cancel")
+	a.runnerTestAction.Cancel(ctx, reason)
+}
+
+// newReentrancyRunner accepts any Action as the build parameter so a
+// reentrant action and a plain one can share a kind.
+func newReentrancyRunner(t *testing.T, hooks ...ActionRunnerHooks) *ActionRunner {
+	t.Helper()
+	var hook ActionRunnerHooks
+	if len(hooks) > 0 {
+		hook = hooks[0]
+	}
+	registry := NewRegistry()
+	if err := registry.RegisterAction(1, func(param any) (Action, error) {
+		action, ok := param.(Action)
+		if !ok {
+			return nil, errors.New("invalid action")
+		}
+		return action, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := NewActionRunner(ActionRunnerConfig{
+		Registry:     registry,
+		GroupForKind: func(ActionKind) (ActionGroup, bool) { return 1, true },
+		Hooks:        hook,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runner
+}
+
+// Start / Tick / Cancel / transition 回调里发起的 Start 在外层调用做完自己那一步后执行：外层
+// 调用返回 nil；内层动作是当前动作、只启动一次；外层动作恰好启动一次、Cancel 一次、OnEnded 一次。
+// 历史：U-0100
+func TestActionRunnerCallbackStartReplacesTheOuterActionExactlyOnce(t *testing.T) {
+	for _, from := range []string{"start", "tick", "cancel", "transition"} {
+		t.Run(from, func(t *testing.T) {
+			next := &runnerTestAction{label: "next"}
+			var runner *ActionRunner
+			var outer *reentrantAction
+			ended := map[Action]int{}
+			runner = newReentrancyRunner(t, ActionRunnerHooks{
+				OnTransition: func(snapshot ActionSnapshot, entering bool) {
+					if from == "transition" && entering && snapshot.Action == outer && !outer.reentered {
+						outer.reentered = true
+						_, outer.innerErr = runner.Start(1, next, 0, time.Now())
+					}
+				},
+				OnEnded: func(snapshot ActionSnapshot, _ ActionReason) { ended[snapshot.Action]++ },
+			})
+			outer = &reentrantAction{runnerTestAction: runnerTestAction{label: "outer"}, runner: runner, from: from, next: next}
+			replacement := &runnerTestAction{label: "replacement"}
+			var err error
+			switch from {
+			case "start", "transition":
+				_, err = runner.Start(1, outer, 0, time.Now())
+			case "tick":
+				if _, err = runner.Start(1, outer, 0, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+				err = runner.Tick(1, time.Now())
+			case "cancel":
+				if _, err = runner.Start(1, outer, 0, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+				_, err = runner.Start(1, replacement, 0, time.Now())
+			}
+			if err != nil {
+				t.Fatalf("outer call from %s = %v, want nil (the callback Start is deferred)", from, err)
+			}
+			if !outer.reentered || outer.innerErr != nil {
+				t.Fatalf("inner Start reentered=%v err=%v", outer.reentered, outer.innerErr)
+			}
+			if got := runner.Current(1); got != next {
+				t.Fatalf("current after reentrancy = %v, want the action the inner Start installed", got)
+			}
+			if next.starts != 1 || next.cancels != 0 {
+				t.Fatalf("inner action started %d / canceled %d time(s)", next.starts, next.cancels)
+			}
+			if outer.starts != 1 || outer.cancels != 1 || ended[outer] != 1 {
+				t.Fatalf("outer action starts=%d cancels=%d ended=%d, want 1/1/1", outer.starts, outer.cancels, ended[outer])
+			}
+			if from == "cancel" && (replacement.starts != 1 || replacement.cancels != 1 || ended[replacement] != 1) {
+				// 外层 Start(replacement) 先于 Cancel 回调里发起的 Start(next)，按发起顺序执行。
+				t.Fatalf("replacement starts=%d cancels=%d ended=%d, want 1/1/1", replacement.starts, replacement.cancels, ended[replacement])
+			}
+		})
+	}
+}
+
+// reentrantMission 在自己的 Start 里再调 StartMission。MissionRunner 改为延后队列（第五轮
+// 决定）之后，这次调用返回 nil、回调返回前不构建也不替换，外层启动做完后再按序执行。
+type reentrantMission struct {
+	runnerTestMission
+	runner       *MissionRunner
+	innerErr     error
+	innerCurrent Mission
+	builtAtCall  int
+	built        *int
+}
+
+func (m *reentrantMission) Start(ctx *MissionContext, param any) error {
+	m.innerErr = m.runner.StartMission(2, nil)
+	m.innerCurrent = m.runner.CurMission()
+	m.builtAtCall = *m.built
+	return m.runnerTestMission.Start(ctx, param)
 }
