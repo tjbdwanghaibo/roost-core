@@ -615,8 +615,7 @@ func (c *BusClient) Reservation(ctx context.Context, key Key, participantID stri
 // it exists because the alternative is guessing: before it, a game had to
 // compute activity ids from its own clock and look each one up, which
 // stops working the moment it is down longer than one window — the
-// obligation stays recorded and becomes permanently unreachable
-// (RR-20260919-10).
+// obligation stays recorded and becomes permanently unreachable.
 //
 // The index is per (group, game), so this routes by group like every
 // other call about an activity — a game that belongs to several groups
