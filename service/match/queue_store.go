@@ -99,7 +99,7 @@ type Config struct {
 	TicketTTL time.Duration
 	// Now is the clock tickets are dated on (CreatedAtUnix, ExpiresAtUnix,
 	// ResolvedAtUnix, Match.CreatedAtUnix) and expiry is judged by; nil means
-	// time.Now. The match Mod injects the business clock (D-L3): matchmaking
+	// time.Now. The match Mod injects the business clock: matchmaking
 	// is business logic, and ScoreWindowGrouping.NowUnix must read the same
 	// clock, since the widening window is measured from CreatedAtUnix.
 	Now func() time.Time
@@ -204,8 +204,7 @@ func (s *queueStore) Enqueue(ctx context.Context, queue Queue, subject Subject, 
 					// first one's ticket and score while dropping its own
 					// enqueue entirely — no request record, no queue entry.
 					// The read path has always checked this
-					// (validateOwnership); the replay branch had not
-					// (RR-20260909-05).
+					// (validateOwnership); the replay branch had not.
 					if err := validateOwnership(ticket, subject); err != nil {
 						s.report.Refused("enqueue", "request_subject_mismatch")
 						return current, false, err
@@ -231,7 +230,7 @@ func (s *queueStore) Enqueue(ctx context.Context, queue Queue, subject Subject, 
 
 		ticket := Ticket{
 			// The caller keeps its Subject; the store keeps its own copy of the
-			// payload (RR-20260917-03).
+			// payload.
 			ID: id, Queue: queue, Subject: subject.clone(), State: TicketWaiting,
 			RequestID: requestID, CreatedAtUnix: now.Unix(),
 			ExpiresAtUnix: now.Add(s.cfg.TicketTTL).Unix(),
@@ -259,7 +258,7 @@ func (s *queueStore) Enqueue(ctx context.Context, queue Queue, subject Subject, 
 	// emit: its tickets lived in per-subject records with no aggregate, so
 	// "how many players are waiting" had no answer.
 	if length, err := s.QueueLength(ctx, queue); err == nil {
-		// The queue is a label, not part of the name (C6): one gauge, one
+		// The queue is a label, not part of the name (maintainer decision): one gauge, one
 		// series per configured queue.
 		s.report.DepthOf("queue", queue.Key(), int64(length))
 	}
@@ -360,7 +359,7 @@ func (s *queueStore) Candidates(ctx context.Context, queue Queue, limit int) ([]
 		if !ok || ticket.State != TicketWaiting || ticket.Expired(now) {
 			continue
 		}
-		// Defence in depth behind the injective Key (RR-20260917-01): a
+		// Defence in depth behind the injective Key: a
 		// ticket that says it belongs to another queue is never a candidate
 		// here, whatever key it was stored under.
 		if ticket.Queue != queue {
@@ -439,7 +438,7 @@ func (s *queueStore) Commit(ctx context.Context, queue Queue, ticketIDs []string
 				return current, false, fmt.Errorf("%w: %s", ErrTicketMissing, id)
 			}
 			// A ticket of another queue is "not in this queue", even if the
-			// two ever shared storage (RR-20260917-01).
+			// two ever shared storage.
 			if ticket.Queue != queue {
 				return current, false, fmt.Errorf("%w: %s belongs to queue %s", ErrTicketMissing, id, ticket.Queue.Key())
 			}
@@ -517,7 +516,7 @@ func (s *queueStore) Sweep(ctx context.Context, queue Queue, limit int) (int, er
 	if err != nil {
 		// Counted as well as returned: the background sweep only logs this,
 		// and a sweep that fails on every tick must show up somewhere other
-		// than a log line (U-0121).
+		// than a log line.
 		s.report.Dropped("sweep.failed", 1)
 		return 0, err
 	}

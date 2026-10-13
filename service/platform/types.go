@@ -115,7 +115,7 @@ var (
 
 // Error maps an error to the code and reason a client sees.
 //
-// It matches roost-kit's servicerpc.Error convention, which is what an RPC
+// It matches the servicerpc.Error convention (infra/network/servicerpc), which is what an RPC
 // envelope is filled from.
 //
 // It is short because the sentinels carry their own codes: errcode.ClientError
@@ -138,7 +138,7 @@ func Error(err error) (int32, string) {
 	if err == nil {
 		return CodeOK, ""
 	}
-	// versionstore.ErrConflict is a FOREIGN sentinel: it belongs to roost-kit
+	// versionstore.ErrConflict is a FOREIGN sentinel: it belongs to versionstore
 	// and carries no code of this package's, so errcode.ClientError would
 	// report it as CodeInternal. Compare-and-set exhaustion under contention
 	// is a real, retryable outcome a caller can act on, and "server error" is

@@ -11,7 +11,7 @@ import (
 //
 // No storage logic: a channel's ring and its sequence live in ONE versioned
 // entry — which is what makes a sequence number that disagrees with the
-// messages it numbers impossible — and kit's versionstore.RedisStore already
+// messages it numbers impossible — and versionstore.RedisStore already
 // implements that contract.
 //
 // It returns a ready Store rather than the state store because the state's

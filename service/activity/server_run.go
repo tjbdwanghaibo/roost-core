@@ -90,7 +90,7 @@ func (s *Server) sweepGroup(ctx context.Context, service *Service, groupID strin
 	if err != nil {
 		// Counted as well as logged: a sweep that fails on every tick is
 		// otherwise indistinguishable, in the metrics, from one that has
-		// nothing to do (U-0120).
+		// nothing to do.
 		service.report.Dropped("sweep.advance_failed", 1)
 		slog.Error("activity server: advancing expired activities failed",
 			"group_id", groupID, "err", err)
@@ -101,7 +101,7 @@ func (s *Server) sweepGroup(ctx context.Context, service *Service, groupID strin
 			"phase", activity.Key.Phase, "status", activity.Status)
 	}
 	// Retries come from the persistent Delivering index, not from this
-	// round's completions (U-0192, RR-20260914-03): an activity completed by
+	// round's completions: an activity completed by
 	// its last notify, one healed from an earlier failed dispatch create, and
 	// one whose backoff elapsed since the previous tick all have to be found
 	// again here. Each stays listed until RetireDelivered sees every dispatch
@@ -115,7 +115,7 @@ func (s *Server) sweepGroup(ctx context.Context, service *Service, groupID strin
 	}
 	for _, key := range delivering {
 		// The sweep OBSERVES the outstanding deliveries; it does not attempt
-		// them (RR-20260919-10). It used to call AttemptDispatch here, which
+		// them. It used to call AttemptDispatch here, which
 		// spends one of the delivery budget's attempts and returns the
 		// payload — and there is no transport on this side, so the payload
 		// went nowhere. Five ticks later a game server that had simply been
@@ -151,6 +151,5 @@ func (s *Server) sweepGroup(ctx context.Context, service *Service, groupID strin
 // sweepGroups is the set of groups this process sweeps: the deployment's
 // `activity.sweep_groups`. Empty means no back-stop runs here — said once at
 // start by run — because enumerating groups would be an unbounded scan and a
-// deployment knows its own groups. Until U-0119 this returned nil with no way
-// to configure anything, so no process ever advanced an expired activity.
+// deployment knows its own groups.
 func (s *Server) sweepGroups(service *Service) []string { return service.SweepGroups() }

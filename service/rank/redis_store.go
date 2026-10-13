@@ -37,7 +37,7 @@ type RedisConfig struct {
 	// for configured clusters; direct constructors must supply a valid prefix.
 	Prefix string
 	// Now supplies the default tiebreak for a submit that leaves Tie zero.
-	// It is the business clock (D-L3; the Mod injects app.BusinessClock).
+	// It is the business clock (the Mod injects app.BusinessClock).
 	// nil means clock.Now.
 	Now func() time.Time
 	// RetryBackoff is the base delay between lost compare-and-swaps; zero
@@ -294,7 +294,7 @@ func (s *RedisStore) Page(ctx context.Context, board Board, offset, limit int) (
 	if err != nil {
 		return Page{}, err
 	}
-	// The board is a label, not part of the name (C6). Board.ID is the kind
+	// The board is a label, not part of the name (maintainer decision). Board.ID is the kind
 	// of board ("arena"); scope and season are not in it, so the series stay
 	// one per board kind.
 	s.report.DepthOf("board", board.ID, total)

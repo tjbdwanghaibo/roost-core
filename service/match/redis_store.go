@@ -10,7 +10,7 @@ import (
 // NewRedisStore builds a queue Store over Redis.
 //
 // No storage logic: the whole queue is one versioned entry, which is what
-// makes a group commit a single compare-and-set, and kit's
+// makes a group commit a single compare-and-set, and
 // versionstore.RedisStore already implements that contract.
 //
 // One key per queue is deliberate and is the cost of that design: throughput

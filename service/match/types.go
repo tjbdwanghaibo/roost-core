@@ -27,12 +27,12 @@
 //   - ExpiresAt was written and never read: nothing enforced a timeout. Here
 //     expiry is enforced on read and by an explicit sweep.
 //
-// This is the domain half of the match service (M-06, ARCH-01): types, error
-// codes, the ticket state machine behind Store, the Redis store and the
-// Grouping policies. It imports nothing from roost-kit. The other half — the
-// Mod that reads configuration and registers the capability, the Matchmaker
-// RPC surface with its generated client and server, the sweep loop — lives in
-// roost-kit/service/match and calls into this package.
+// This is the domain half of the match service: types, error codes, the
+// ticket state machine behind Store, the Redis store and the Grouping
+// policies. It imports nothing from wiring. The other half — the Mod that
+// reads configuration and registers the capability, the Matchmaker RPC
+// surface with its generated client and server, the sweep loop — lives in
+// wiring/match and calls into this package.
 package match
 
 import (
@@ -179,7 +179,7 @@ func (q Queue) Validate() error {
 // themselves contain ':', and {Mode "a:2", GroupSize 3, Partition "x"} and
 // {Mode "a", GroupSize 2, Partition "3:x"} both used to render as "a:2:3:x" —
 // two valid pools sharing one queueState, so Candidates read across them and
-// Commit took a three-player ticket into a two-player match (RR-20260917-01).
+// Commit took a three-player ticket into a two-player match.
 // The two free fields are escaped so a ':' inside them can no longer be read
 // as the separator. A key without ':' or '%' in either field is byte-for-byte
 // what it was, so no deployed key moves; a queue whose Mode or Partition did
@@ -309,7 +309,7 @@ func Code(err error) int32 {
 // clone deep-copies the one reference field, Payload. The memory store hands
 // values back and forth by copy, and a []byte inside a copied struct is still
 // the same bytes: a caller that edited a returned Payload — or its own input
-// after Enqueue — was editing the store (RR-20260917-03).
+// after Enqueue — was editing the store.
 func (s Subject) clone() Subject {
 	if s.Payload != nil {
 		s.Payload = append([]byte(nil), s.Payload...)

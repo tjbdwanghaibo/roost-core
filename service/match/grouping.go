@@ -10,7 +10,7 @@ import (
 // tool: a matchmaker reads Candidates, asks a Grouping for a group, and
 // Commits it. The store does not run it — Enqueue only queues, Commit only
 // commits the tickets it is given — so a policy lives where it can be retried,
-// observed and cancelled outside the storage CAS (RR-20260916-05).
+// observed and cancelled outside the storage CAS.
 type Grouping interface {
 	// Group selects exactly queue.GroupSize tickets from candidates, or
 	// reports that no group can be formed yet. candidates are waiting,
@@ -51,8 +51,7 @@ type ScoreWindowGrouping struct {
 	// MaxWindow caps it; zero means uncapped.
 	MaxWindow int64
 	// NowUnix supplies the current time on the clock tickets are dated on (the
-	// store's Config.Now — the business clock when the match Mod built it,
-	// D-L3); required, because the window depends
+	// store's Config.Now — the business clock when the match Mod built it); required, because the window depends
 	// on how long the oldest candidate has waited.
 	NowUnix func() int64
 }
@@ -65,7 +64,7 @@ func (g ScoreWindowGrouping) Group(queue Queue, candidates []Ticket) ([]Ticket, 
 		return nil, false, fmt.Errorf("%w: score window grouping needs a clock", ErrQueueInvalid)
 	}
 	// The window is a distance, and a distance is not negative. Refusing here
-	// is what lets the arithmetic below stay in uint64 (RR-20260917-02).
+	// is what lets the arithmetic below stay in uint64.
 	if g.InitialWindow < 0 || g.WidenPerSecond < 0 || g.MaxWindow < 0 {
 		return nil, false, fmt.Errorf("%w: score window, widening and cap must not be negative (got %d, %d, %d)",
 			ErrQueueInvalid, g.InitialWindow, g.WidenPerSecond, g.MaxWindow)
@@ -111,8 +110,8 @@ func (g ScoreWindowGrouping) Group(queue Queue, candidates []Ticket) ([]Ticket, 
 // Score is an int64 whose meaning belongs to the caller, so the API cannot
 // assume "reasonable" magnitudes: with signed arithmetic a large
 // InitialWindow plus a little widening wrapped negative and the cap compared
-// against garbage, and a large WidenPerSecond wrapped the product
-// (RR-20260917-02). Saturation is the right answer for a window: past
+// against garbage, and a large WidenPerSecond wrapped the product.
+// Saturation is the right answer for a window: past
 // math.MaxUint64 everything is inside anyway, and the cap applies after.
 func (g ScoreWindowGrouping) window(waited uint64) uint64 {
 	window := uint64(g.InitialWindow)

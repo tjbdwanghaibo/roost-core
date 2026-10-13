@@ -16,7 +16,7 @@ import (
 //
 // # Why this exists
 //
-// The slot is the durable creation plan (RR-20260929-19). Once a plan is
+// The slot is the durable creation plan. Once a plan is
 // admitted — its name reserved, the reservation written on the slot — a
 // storage error after that point is recovered forward by the next same-name
 // CreateRole, never by deleting a role whose Create may have committed. That
@@ -28,7 +28,7 @@ import (
 // no code path could change that except editing Redis by hand.
 //
 // createRole releases the slot by itself when the name is COMMITTED elsewhere,
-// because that fact is final (RR-20261001-06). This entry covers what the
+// because that fact is final. This entry covers what the
 // automatic path cannot prove: the name is only reserved by someone else and
 // may yet lapse, or the name is free and the player simply wants a different
 // one — a plan whose name NameRules no longer accepts, for instance, is
@@ -101,7 +101,7 @@ func (s *Service) ResolvePendingCreation(ctx context.Context, accountID string, 
 	if err != nil {
 		return RoleCreation{}, err
 	}
-	// The creation table decides (B9), from the same classified facts
+	// The creation table decides, from the same classified facts
 	// createRole reads, so a plan createRole treats as alive is never one an
 	// operator can release by mistake, and the reverse.
 	state := classifySlot(slot, found, accountID, serverID)

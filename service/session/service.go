@@ -96,8 +96,8 @@ type Config struct {
 	// another owner's run.
 	NewRunID func() (string, error)
 
-	// Now is the business clock (D-L3: a run's deadline is game time; the
-	// kit Mod injects app.BusinessClock). nil means clock.Now.
+	// Now is the business clock (a run's deadline is game time; the
+	// wiring Mod injects app.BusinessClock). nil means clock.Now.
 	Now func() time.Time
 	// Metrics receives reports. A nil reporter means no reporting and never
 	// fails an operation.
@@ -356,8 +356,8 @@ func (s *Service) Enter(ctx context.Context, ownerID int64, req EnterRequest) (R
 	// before either wrote it. Update's compare-and-set inserts when the key is
 	// still absent and otherwise hands back the entry that won, so the loser
 	// can undo the run and claim it built for a request that already has an
-	// answer. (RR-20260908-01: Create's created=false used to be dropped, and
-	// both owners were told they had succeeded.)
+	// answer; dropping Create's created=false would tell both owners they had
+	// succeeded.
 	var winner LedgerEntry
 	collided := false
 	if _, _, err := s.cfg.Requests.Update(ctx, req.RequestID, func(current LedgerEntry, found bool) (LedgerEntry, bool, error) {
@@ -384,7 +384,7 @@ func (s *Service) Enter(ctx context.Context, ownerID int64, req EnterRequest) (R
 		// same-owner Enter saw the orphaned claim, took a fresh one, and — a
 		// deleted-and-recreated key restarts at version 1 — the loser's
 		// version-checked delete then removed the newcomer's claim, leaving
-		// two open runs for one owner (RR-20260909-02).
+		// two open runs for one owner.
 		undo := errors.Join(s.releaseClaim(ctx, ownerID, runID), s.discard(ctx, stored))
 		if winner.OwnerID != ownerID {
 			s.report.Refused("enter", "request_owner_collision")
@@ -854,8 +854,8 @@ func (s *Service) Sweep(ctx context.Context, ownerIDs []int64, limit int) ([]Run
 		}
 		resolved = append(resolved, swept)
 	}
-	// How many runs this pass resolved is a count, not a reading (C6, N12 O1):
-	// as a gauge it said only "the last sweep handled n", and two sweeps of
+	// How many runs this pass resolved is a count, not a reading: as a gauge it
+	// would say only "the last sweep handled n", and two sweeps of
 	// three looked like one.
 	s.report.Dropped("run.swept", len(resolved))
 	return resolved, failures

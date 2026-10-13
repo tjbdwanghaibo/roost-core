@@ -17,13 +17,12 @@ import "context"
 // Exposing them would let any process on the bus advance activities it does
 // not own, on a cadence nobody configured.
 //
-// AttemptDispatch USED to be in that group, and moving it out is the whole of
-// RR-20260919-10. It was the sweep that called it — which spends one of the
-// delivery budget's attempts and returns the payload — and there is no
-// transport on the service side, so the payload went nowhere and a game that
-// was merely down found its result "retried" into exhausted. The taker is the
-// game, so the game is who calls it: an attempt is now spent exactly when
-// somebody takes the payload. It carries the caller's own gameSID, the same
+// AttemptDispatch is deliberately NOT in that group. It spends one of the
+// delivery budget's attempts and returns the payload, and there is no
+// transport on the service side: if the sweep called it, the payload would go
+// nowhere and a game that was merely down would find its result "retried" into
+// exhausted. The taker is the game, so the game is who calls it: an attempt is
+// spent exactly when somebody takes the payload. It carries the caller's own gameSID, the same
 // trust model NotifyPhase already has.
 //
 // NotifyAudits and AuditOverflow are the diagnostic surface: why was this
@@ -98,8 +97,7 @@ type Coordinator interface {
 	// it exists because the alternative is guessing: before it, a game had to
 	// compute activity ids from its own clock and look each one up, which
 	// stops working the moment it is down longer than one window — the
-	// obligation stays recorded and becomes permanently unreachable
-	// (RR-20260919-10).
+	// obligation stays recorded and becomes permanently unreachable.
 	//
 	// The index is per (group, game), so this routes by group like every
 	// other call about an activity — a game that belongs to several groups

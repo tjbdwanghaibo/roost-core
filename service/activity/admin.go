@@ -10,7 +10,7 @@ import (
 
 // Admin is the operator surface: what a human can do about state the
 // automatic paths have given up on — a result delivery whose attempts are
-// exhausted, a participant's stuck progress proofs, and (B9) window entries
+// exhausted, a participant's stuck progress proofs, and window entries
 // written by something other than this package, which the sweep only skips.
 //
 // # Why this exists
@@ -60,7 +60,7 @@ type Admin interface {
 	// the sweep skips: a key that is invalid or belongs to another group, in
 	// any of the three lists, and an Opening entry whose creation plan cannot
 	// be executed. Nothing in this package writes such an entry and nothing
-	// removes one automatically (B9, NC-42, NC-51): this is how an operator
+	// removes one automatically: this is how an operator
 	// finds them, the sweep's counters say only that they exist.
 	MalformedWindowEntries(ctx context.Context, groupID string) (entries []MalformedWindowEntry, err error)
 
@@ -215,7 +215,7 @@ func (s *Service) ReopenDispatch(ctx context.Context, key Key, gameSID int32, no
 // participant record, exactly as if the original call had completed.
 //
 // Why an operator entry at all, when ApplyProgress reclaims a proof by itself
-// once the ledger's TTL reaps the entry (RR-20261001-05): the TTL is the
+// once the ledger's TTL reaps the entry: the TTL is the
 // client retry horizon, thirty minutes by default, and a ledger outage that
 // strands a busy participant with MaxProgressWindow lost marks would refuse it
 // for that long. Writing the marks ends the refusal now.

@@ -23,7 +23,7 @@ func (s *Service) BackgroundSweepEnabled() bool {
 	return indexed || s.cfg.Owners != nil
 }
 
-// SweepPending is the owner-only hook used by the kit server. A source error
+// SweepPending is the owner-only hook used by the generated server. A source error
 // leaves progress to the next tick, and oversized pages are refused.
 func (s *Service) SweepPending(ctx context.Context, limit int) ([]Run, error) {
 	if limit <= 0 || limit > MaxPageSize {

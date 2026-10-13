@@ -143,7 +143,7 @@ var (
 
 // Error maps an error to the code and reason a client sees.
 //
-// It matches roost-kit's servicerpc.Error convention, which is what an RPC
+// It matches the servicerpc.Error convention (infra/network/servicerpc), which is what an RPC
 // envelope is filled from.
 //
 // It is short because the sentinels carry their own codes: errcode.ClientError
@@ -166,7 +166,7 @@ func Error(err error) (int32, string) {
 	if err == nil {
 		return CodeOK, ""
 	}
-	// versionstore.ErrConflict is a FOREIGN sentinel: it belongs to roost-kit
+	// versionstore.ErrConflict is a FOREIGN sentinel: it belongs to versionstore
 	// and carries no code of this package's, so errcode.ClientError would
 	// report it as CodeInternal. Compare-and-set exhaustion under contention
 	// is a real, retryable outcome a caller can act on, and "server error" is
@@ -485,13 +485,13 @@ type Message struct {
 	RequestID string `json:"request_id"`
 	// StoredAtUnix is when the service stored it, on the system clock
 	// (Config.SystemNow). It exists for retention: Prune reclaims space by real
-	// age, whatever time.logic_offset says (D-L3). Nothing orders by it, and it
+	// age, whatever time.logic_offset says. Nothing orders by it, and it
 	// is not what a client shows; SentAtUnix is. Retention is the only reason
 	// it is a date at all: the implementation this replaces persisted
 	// milliseconds in an int64, which no TTL and no age-based prune can use.
 	StoredAtUnix int64 `json:"stored_at_unix"`
 	// SentAtUnix is the time shown to players, on the business clock
-	// (Config.Now: real time + time.logic_offset, D-L3 round 8). Nothing orders
+	// (Config.Now: real time + time.logic_offset). Nothing orders
 	// or prunes by it.
 	//
 	// Added after StoredAtUnix and never replacing it: a message stored before

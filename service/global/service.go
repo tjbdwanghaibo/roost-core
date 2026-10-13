@@ -59,8 +59,8 @@ func New(cfg Config) (*Service, error) {
 // the current epoch. (There is no Rebind.)
 //
 // Bind 可以安全重试：已有绑定的 group 与 globalSID 和本次请求一致时，返回已存的绑定、按重放计数，
-// 不报冲突——上一次 Bind 可能已经落库、只是回复丢了（结果未知）。只有已存的绑定指向别处才是 ErrConflict
-// （RR-20261006-05）。之前 !created 时直接报冲突，调用方在结果未知后重试会被告知“已绑定”，却不知道绑的是不是自己。
+// 不报冲突——上一次 Bind 可能已经落库、只是回复丢了（结果未知）。只有已存的绑定指向别处才是 ErrConflict。
+// 之前 !created 时直接报冲突，调用方在结果未知后重试会被告知“已绑定”，却不知道绑的是不是自己。
 func (s *Service) Bind(ctx context.Context, gameSID int32, groupID string, globalSID int32) (RouteBinding, error) {
 	binding := RouteBinding{
 		GameSID: gameSID, GlobalGroupID: groupID, GlobalSID: globalSID,

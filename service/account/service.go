@@ -50,7 +50,7 @@ type Config struct {
 	// ClaimTTL is how long an uncommitted name claim is held while a role is being
 	// created; zero selects DefaultClaimTTL.
 	ClaimTTL time.Duration
-	// Now is the business clock (D-L3 round 8; the account Mod injects
+	// Now is the business clock (the account Mod injects
 	// app.BusinessClock, real time + time.logic_offset): the times a game
 	// shows or builds rules on — account creation, role creation, last login
 	// and logout. nil means clock.Now.
@@ -279,7 +279,7 @@ func (s *Service) SelectRole(ctx context.Context, accountID string, playerID int
 	if err := s.roleReady(ctx, role.Value); err != nil {
 		return Session{}, err
 	}
-	// The login stamp is business time; the token is system time (D-L3).
+	// The login stamp is business time; the token is system time.
 	now, issued := s.cfg.Now(), s.cfg.SystemNow()
 	token, err := security.SignSessionToken(playerID, s.cfg.SessionSecret, s.cfg.SessionTTL, issued)
 	if err != nil {

@@ -17,7 +17,7 @@ import (
 // DAO variant whose Update read and then wrote unconditionally — satisfying
 // one interface, so the type system could not tell them apart and whichever
 // was configured decided whether the documented invariant held. Here there is
-// one implementation, in kit, whose contract has no unconditional write.
+// one implementation, in versionstore, whose contract has no unconditional write.
 type RedisStores struct {
 	Routes versionstore.Store[int32, RouteBinding]
 }

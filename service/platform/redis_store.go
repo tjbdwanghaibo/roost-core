@@ -15,11 +15,11 @@ import (
 // There is no storage logic here: an order is versioned state, and
 // versionstore.RedisStore already implements that contract — including the
 // insert-only Create that turns a second callback into a replay instead of a
-// second grant, and, since RR-20260919-04, a sorted-set index maintained in
-// the same script as the value.
+// second grant, and a sorted-set index maintained in the same script as the
+// value.
 //
-// The index is the part worth explaining. U-0234 left it to the deployment,
-// and a deployment can only write it AFTER the order is stored — which leaves
+// The index is the part worth explaining. Left to the deployment, it could
+// only be written AFTER the order is stored — which leaves
 // a window: the order lands, the process dies before the index write, and the
 // order is in no index. The background loop's only input is that index, so the
 // payment is invisible to recovery forever. Nothing outside the store can
@@ -115,7 +115,7 @@ func (o *RedisOrders) Delete(ctx context.Context, key string, expect versionstor
 // It reads the index and nothing else: an order that reached a terminal state
 // left the index in the write that made it terminal, so there is no per-order
 // read here to fail, and therefore no way for one unreadable order to hold up
-// the page (the shape RR-20260919-05 found in a deployment-side index).
+// the page (the failure a deployment-side index is prone to).
 func (o *RedisOrders) PendingOrders(ctx context.Context, limit int) ([]string, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -130,7 +130,7 @@ func (o *RedisOrders) PendingOrders(ctx context.Context, limit int) ([]string, e
 // key by hand. Current Delete removes the value and index atomically. A ghost is
 // read on every page, refused by
 // AttemptDelivery as "not recorded", and stays; with a small batch it is the
-// whole batch, every tick, forever (RR-20260919-07). Retiring it is safe
+// whole batch, every tick, forever. Retiring it is safe
 // precisely because there is nothing to deliver. The store checks absence
 // atomically with removal, preserving a concurrent paid callback's new entry.
 func (o *RedisOrders) RetirePending(ctx context.Context, orderID string) error {

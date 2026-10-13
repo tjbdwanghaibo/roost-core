@@ -14,8 +14,8 @@ import (
 // Intent side always carries nil slices (clone keeps nil, and JSON omitempty
 // round-trips nil as nil) while an EnvelopeStore is free to hand back an
 // empty-but-non-nil Recipients or Attachment. Those are the same envelope;
-// DeepEqual called them different and the same-request recovery of
-// RR-20260929-16 then failed with ErrConflict on every retry (RR-20261001-02).
+// DeepEqual would call them different, and same-request recovery would then
+// fail with ErrConflict on every retry.
 func sameSendIntent(a, b Envelope) bool {
 	return a.ID == b.ID &&
 		a.Audience == b.Audience &&

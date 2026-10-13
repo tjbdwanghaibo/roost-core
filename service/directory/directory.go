@@ -76,7 +76,7 @@ var (
 
 // Error maps an error to the code and reason a client sees.
 //
-// It matches roost-kit's servicerpc.Error convention, which is what an RPC
+// It matches the servicerpc.Error convention (infra/network/servicerpc), which is what an RPC
 // envelope is filled from. The sentinels carry their own codes, so there is no
 // per-sentinel table here to keep in step.
 //

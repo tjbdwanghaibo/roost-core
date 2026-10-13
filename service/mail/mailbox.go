@@ -33,7 +33,7 @@ type Mailbox struct {
 	// capped at MaxMailboxEntries so a mailbox stays readable, while "this mail
 	// was already claimed" has to outlive the entry or a duplicate fanout
 	// message resurrects the mail and a second token is minted for the same
-	// attachment (RR-20260910-02). CommitClaim's own comment already says the
+	// attachment. CommitClaim's own comment already says the
 	// token "stays the delivery key for this mail forever"; eviction was
 	// deleting it. Capped separately by MaxSettledClaims, oldest first.
 	SettledClaims map[string]SettledClaim `json:"settled_claims,omitempty"`
@@ -131,7 +131,7 @@ type SettledClaim struct {
 	// EnvelopeExpiresAtUnix is when the envelope this claim protects stops
 	// being claimable. Retention drops the record then and not before: a count
 	// bound cannot express a time window, and the mail stays re-claimable for
-	// as long as its envelope is valid (RR-20260911-01).
+	// as long as its envelope is valid.
 	EnvelopeExpiresAtUnix int64 `json:"envelope_expires_at_unix,omitempty"`
 }
 
@@ -274,13 +274,11 @@ func (m *Mailbox) evict(nowUnix int64) {
 // evictSettledClaims drops the settled claims that have nothing left to
 // protect, which is a TIME question, not a count one.
 //
-// U-0165 bounded these by count and argued that was enough because
-// ReserveClaim refuses an expired envelope. That argument does not hold: a
-// count bound cannot express a time window, so an envelope with a week left
-// lost its claim identity as soon as MaxSettledClaims newer claims were
-// settled, and the mail became re-claimable under a fresh token
-// (RR-20260911-01). A record is now kept until the envelope it protects can no
-// longer be claimed.
+// A count bound is not enough even though ReserveClaim refuses an expired
+// envelope: a count cannot express a time window, so an envelope with a week
+// left would lose its claim identity as soon as MaxSettledClaims newer claims
+// were settled, and the mail would become re-claimable under a fresh token.
+// A record is kept until the envelope it protects can no longer be claimed.
 //
 // Every envelope must expire (Envelope.Validate), so every record this package
 // writes carries its window. A record without one (written before the window
@@ -330,7 +328,7 @@ func (m Mailbox) clone() Mailbox {
 	// Every mutable collection, not just Entries: `out := m` copies the map
 	// HEADER, so a caller mutating the returned snapshot was reaching straight
 	// into the stored settled claims and deleting a claim identity without
-	// going through Store.Update (RR-20260911-02).
+	// going through Store.Update.
 	if m.SettledClaims != nil {
 		out.SettledClaims = make(map[string]SettledClaim, len(m.SettledClaims))
 		for id, settled := range m.SettledClaims {

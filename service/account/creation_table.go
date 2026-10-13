@@ -5,12 +5,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/service/directory"
 )
 
-// 建角判定表（维护者决定 B9，docs/feature/B9-C5-WINDOW-ENTRIES-ROLE-TABLE-2026-10-06.md）。
+// 建角判定表（维护者决定）。
 //
 // 一个账号在一个区服的建角由两样持久事实决定：名额（slot，同时是持久的建角计划）和计划名字在
-// directory 里的条目。此前每个入口各自写判断，同一个已判定的事实只在部分入口生效：RR-20260929-19
-// （计划不持久）→ RR-20261001-06（名字被别人 committed 的死计划只在同名重试里释放）→ 其残余（换名
-// 请求不判死计划）。所以入口不再各写各的：先把两样事实归类（classifySlot / classifyName，Admin 与
+// directory 里的条目。若每个入口各自写判断，同一个已判定的事实只会在部分入口生效（例如名字被别人
+// committed 的死计划只在同名重试里释放）。所以入口不各写各的：先把两样事实归类（classifySlot / classifyName，Admin 与
 // createRole 共用同一份），再查 decideCreation，按返回的动作执行。表的全部格子见
 // creation_table_test.go。
 //
@@ -28,7 +27,7 @@ const (
 	// slotMalformed: a slot this version never writes — no creation plan
 	// (or a plan without its player id), with or without a published role.
 	// It is refused, never inferred; reconcile it offline. Slots written
-	// before creation plans existed (RR-20260929-19) land here: there is no
+	// before creation plans existed land here: there is no
 	// compatibility for them (maintainer 2026-10-13).
 	slotMalformed
 	// slotPendingUnadmitted: a plan whose name reservation is not admitted
@@ -59,7 +58,7 @@ const (
 	nameReservedElsewhere
 	// nameCommittedElsewhere is final for the plan: Commit needs the token
 	// the entry now carries and a committed entry leaves only by its owner's
-	// Release, so the plan can never publish (RR-20261001-06).
+	// Release, so the plan can never publish.
 	nameCommittedElsewhere
 )
 
@@ -115,7 +114,7 @@ const (
 
 // decideCreation is the table. It is a pure function of the two classified
 // facts and the entry, so every cell has one answer for every entry — the
-// property the RR-19 / RR-06 chain lacked.
+// property per-entry judgements cannot guarantee.
 func decideCreation(slot slotState, entry creationEntry, name nameState) creationAction {
 	switch slot {
 	case slotForeign:
@@ -158,8 +157,7 @@ func decideCreation(slot slotState, entry creationEntry, name nameState) creatio
 		// plan also gives way when its name is reserved by someone else or
 		// free: nothing after admission has happened, so the release strands
 		// nothing — the same fact on which a same-name retry already releases
-		// it (maintainer decisions, 2026-10-06: round 5 for reserved
-		// elsewhere, round 7 / O37 for free). Only a never-admitted plan that
+		// it (maintainer decisions, 2026-10-06). Only a never-admitted plan that
 		// still holds its own name keeps the slot: an attempt may be past
 		// Reserve and about to admit. The release itself is a DeleteIf that
 		// deletes only while the plan is still unadmitted (releaseCreationSlot).

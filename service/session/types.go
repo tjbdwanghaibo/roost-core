@@ -103,7 +103,7 @@ var (
 
 // Error maps an error to the code and reason a client sees.
 //
-// It matches the servicerpc.Error convention (roost-kit transport), which is what an RPC
+// It matches the servicerpc.Error convention (infra/network/servicerpc), which is what an RPC
 // envelope is filled from.
 //
 // It is short because the sentinels carry their own codes: errcode.ClientError

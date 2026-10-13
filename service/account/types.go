@@ -76,7 +76,7 @@ const (
 	// request as a server fault.
 	CodeRequestInvalid int32 = 560114
 	// CodeNotResolvable and CodeAdminNoteRequired belong to the operator
-	// surface in admin.go (RR-20261001-06). They are separate codes because
+	// surface in admin.go. They are separate codes because
 	// they are separate answers: "this slot is not in a state a human may
 	// release" and "you did not say why".
 	CodeNotResolvable     int32 = 560115
@@ -115,7 +115,7 @@ var (
 
 // Error maps an error to the code and reason a client sees.
 //
-// It matches roost-kit's servicerpc.Error convention, which is what an RPC
+// It matches the servicerpc.Error convention (infra/network/servicerpc), which is what an RPC
 // envelope is filled from.
 //
 // It is short because the sentinels carry their own codes: errcode.ClientError
@@ -138,7 +138,7 @@ func Error(err error) (int32, string) {
 	if err == nil {
 		return CodeOK, ""
 	}
-	// versionstore.ErrConflict is a FOREIGN sentinel: it belongs to roost-kit
+	// versionstore.ErrConflict is a FOREIGN sentinel: it belongs to versionstore
 	// and carries no code of this package's, so errcode.ClientError would
 	// report it as CodeInternal. Compare-and-set exhaustion under contention
 	// is a real, retryable outcome a caller can act on, and "server error" is
@@ -313,9 +313,9 @@ type Slot struct {
 	// version-fenced deletes: a definite pre-admission refusal (name taken,
 	// foreign allocator id), a create request — same name or another — that
 	// finds the name COMMITTED to another owner (the plan can never commit
-	// it, RR-20261001-06 and its residual), or an operator's
+	// it), or an operator's
 	// Admin.ResolvePendingCreation. Which door applies is the creation table
-	// (decideCreation, B9).
+	// (decideCreation).
 	Creation RoleCreation `json:"creation,omitempty"`
 }
 

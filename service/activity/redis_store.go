@@ -16,7 +16,7 @@ import (
 // this replaces had a Redis store whose Update used compare-and-set and a
 // DAO-backed store whose Update read and then wrote unconditionally, both
 // satisfying one interface — so which one was configured decided whether the
-// documented CAS invariant held. Here there is one implementation, in kit,
+// documented CAS invariant held. Here there is one implementation, in versionstore,
 // whose contract has no unconditional write.
 type RedisStores struct {
 	Activities   versionstore.Store[Key, Activity]
@@ -77,8 +77,8 @@ func NewRedisStores(client versionstore.RedisClient, prefix string, reservationT
 	//
 	// It is what lets a game server ask "what do I still owe an ack for"
 	// instead of guessing activity ids from its own clock — the thing that
-	// breaks the moment a server is down longer than one window
-	// (RR-20260919-10). Per game rather than one global set because the
+	// breaks the moment a server is down longer than one window.
+	// Per game rather than one global set because the
 	// question is per game, and a global set would have to be filtered, which
 	// is the shape that pages badly.
 	dispatchStore, err := versionstore.NewRedisStore(client, versionstore.RedisConfig[DispatchKey, Dispatch]{
@@ -124,9 +124,9 @@ func owedDispatchEntry(dispatch Dispatch) (float64, bool) {
 		return 0, false
 	}
 	due := dispatch.NextAttemptAtUnix
-	// Business time, like the nowUnix OwedDispatches queries with. Only a
-	// dispatch an operator reopened under a release before v1.21.0 has 0
-	// here; its CreatedAtUnix is in the past, so it is due.
+	// Business time, like the nowUnix OwedDispatches queries with. A dispatch
+	// with no recorded next attempt (0) falls back to CreatedAtUnix, which is
+	// in the past, so it is due.
 	if due <= 0 {
 		due = dispatch.CreatedAtUnix
 	}

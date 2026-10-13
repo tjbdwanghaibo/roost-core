@@ -91,11 +91,11 @@ const (
 	CodeNotResolvable     int32 = 620116
 	CodeAdminNoteRequired int32 = 620117
 	// CodeUnsupported reports a capability this deployment's stores do not
-	// have — the per-game owed index is the first (RR-20260919-10). It is a
+	// have — the per-game owed index is the first. It is a
 	// deployment fact, not a request error, so it is worth its own code.
 	CodeUnsupported int32 = 620118
-	// CodeProgressBacklog is a participant's full pending-proof window
-	// (RR-20261001-05). It is its own code because it is not CodeConflict: a
+	// CodeProgressBacklog is a participant's full pending-proof window.
+	// It is its own code because it is not CodeConflict: a
 	// conflict is cleared by retrying now, a backlog by the ledger
 	// confirming, by its entries expiring, or by an operator reconciling.
 	CodeProgressBacklog int32 = 620119
@@ -171,13 +171,13 @@ var (
 	// progress proofs whose ledger marks have not landed, so no further apply
 	// is admitted until some clear. It is backpressure with a horizon of at
 	// most ReservationTTL, not contention: retrying immediately does not help,
-	// and a caller must be able to tell the two apart (RR-20261001-05).
+	// and a caller must be able to tell the two apart.
 	ErrProgressBacklog = errcode.Define(CodeProgressBacklog, "activity: participant's unconfirmed progress window is full", "")
 )
 
 // Error maps an error to the code and reason a client sees.
 //
-// It matches roost-kit's servicerpc.Error convention, which is what an RPC
+// It matches the servicerpc.Error convention (infra/network/servicerpc), which is what an RPC
 // envelope is filled from.
 //
 // It is short because the sentinels carry their own codes: errcode.ClientError
@@ -196,7 +196,7 @@ func Error(err error) (int32, string) {
 	if err == nil {
 		return CodeOK, ""
 	}
-	// versionstore.ErrConflict is a FOREIGN sentinel: it belongs to roost-kit
+	// versionstore.ErrConflict is a FOREIGN sentinel: it belongs to versionstore
 	// and carries no code of this package's, so errcode.ClientError would
 	// report it as CodeInternal. Compare-and-set exhaustion under contention
 	// is a real, retryable outcome a caller can act on, and "server error" is
@@ -803,14 +803,14 @@ type Window struct {
 	// is one whose record is genuinely gone.
 	Keys []Key `json:"keys,omitempty"`
 	// Opening are entries admitted before their Activities.Create has been
-	// confirmed (U-0191, RR-20260914-02). A sweep that finds no activity for
+	// confirmed. A sweep that finds no activity for
 	// one of these cannot tell "not created yet" from "never will be".
 	// After Config.OpeningGrace it helps the durable intent forward; it never
 	// frees a slot that holds a plan on the strength of a timeout. An entry
 	// with no plan is malformed: reported and kept for an operator.
 	Opening []OpeningEntry `json:"opening,omitempty"`
 	// Delivering are complete activities whose dispatches are not all
-	// terminal yet (U-0192, RR-20260914-03). They left Keys — the aggregation
+	// terminal yet. They left Keys — the aggregation
 	// is over — but the sweep must keep finding them until every dispatch is
 	// acked or exhausted, or a retry that misses one sweep tick is lost. The
 	// list does not count against MaxPendingActivities.

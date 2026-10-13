@@ -59,7 +59,7 @@ type Config struct {
 	// deployment whose channel re-delivers callbacks, and one the service
 	// states rather than mimes: the loop used to call a private method that
 	// always returned nil, so a recoverable failure could hang forever with
-	// nothing in the logs (RR-20260917-04).
+	// nothing in the logs.
 	Pending PendingOrders
 	// Deliver grants the goods. Required.
 	Deliver Deliverer
@@ -405,7 +405,7 @@ func (s *Service) HandleCallback(ctx context.Context, raw []byte, signature stri
 	// retry that committed first, the caller must be able to tell "I granted
 	// the goods" from "they were already granted" — the distinction this
 	// function's own contract insists on. Dropping the flag here erased it
-	// for every callback-driven delivery (U-0018).
+	// for every callback-driven delivery.
 	return Receipt{Order: attempt.Order, Delivered: attempt.Delivered, Replayed: attempt.Replayed}, nil
 }
 

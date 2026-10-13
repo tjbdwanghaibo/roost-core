@@ -14,12 +14,12 @@ import (
 // share one plan and one player ID; no side effect lives inside a CAS callback.
 //
 // What to do with the slot it finds is decided by the creation table
-// (decideCreation, B9), the same one Admin.ResolvePendingCreation reads: a
+// (decideCreation), the same one Admin.ResolvePendingCreation reads: a
 // request for a different name than the pending plan's is refused with
 // ErrRoleLimit while that plan can still complete, and releases the slot once
 // the plan's name is committed to another owner — the refusal never tells the
 // client the pending name, so a player who simply picks another name is the
-// ordinary path to that state (RR-20261001-06 残余).
+// ordinary path to that state.
 func (s *Service) createRole(ctx context.Context, accountID string, serverID int32, name string) (Role, error) {
 	key := slotKeyFor(accountID, serverID)
 	// At most one release per call: a second pass that still meets another
@@ -70,8 +70,8 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 		case actReleaseAndRetry:
 			plan := slot.Value.Creation
 			// 与同名重试同一个证明：名字已 committed 给别的 owner，这个计划再也不能提交名字、
-			// 发布角色；或计划还没 admitted、名字被别人 reserved（维护者第五轮决定）或已无人持有
-			// （第七轮 O37）——admitted 之后的事都没发生，释放不会留下角色，与同名重试对齐。只被
+			// 发布角色；或计划还没 admitted、名字被别人 reserved 或已无人持有
+			// （均为维护者决定）——admitted 之后的事都没发生，释放不会留下角色，与同名重试对齐。只被
 			// reserved 的已 admitted 计划或名字仍归本计划时表答 ErrRoleLimit，slot 保留。DeleteIf 对未 admitted 的计划
 			// 只在删除时它仍未 admitted 才删（releaseCreationSlot），与并发的 admission 互斥。
 			done, err := s.releaseCreationSlot(ctx, key, slot, planDead(nameAt))
@@ -138,7 +138,7 @@ func creationOwner(key string, plan RoleCreation) directory.Owner {
 // compensated reports a failed compensation and returns err unchanged. A
 // release or cancel that fails leaves a slot or a reservation behind; the
 // error is returned, but a returned error nobody aggregates is how such a
-// stranded slot stayed invisible before (NC-50, Config.Metrics).
+// stranded slot would stay invisible (hence Config.Metrics).
 func (s *Service) compensated(err error) error {
 	if err != nil {
 		s.report.Dropped("rollback.failed", 1)
@@ -159,7 +159,7 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 			// by someone else keeps its slot: that reservation can expire and
 			// the plan can still complete. A name COMMITTED to another owner
 			// is final for this plan, so holding the slot would block this
-			// account on this server for good (RR-20261001-06). The creation
+			// account on this server for good. The creation
 			// table says which; a failed read is judged on the weakest fact
 			// the refusal proves — someone else holds the name.
 			name := nameReservedElsewhere
@@ -266,7 +266,7 @@ func (s *Service) resumeRoleCreation(ctx context.Context, key string, slot versi
 // refuseResumedName is the table's answer once a same-name resume was
 // refused its name: release the slot when the plan is dead or was never
 // admitted, keep it otherwise. A dead plan actually released is counted as
-// create_role.plan_released; a failed release as rollback.failed (NC-50).
+// create_role.plan_released; a failed release as rollback.failed.
 func (s *Service) refuseResumedName(ctx context.Context, key string, slot versionstore.Versioned[Slot], name nameState) error {
 	state := classifySlot(slot, true, slot.Value.AccountID, slot.Value.ServerID)
 	if decideCreation(state, entrySameNameRefused, name) != actReleaseRefuseNameTaken {
@@ -290,8 +290,8 @@ func (s *Service) refuseResumedName(ctx context.Context, key string, slot versio
 // released reports whether THIS call deleted the slot. A delete fenced out
 // because the slot already moved — another request released it first, or
 // re-admitted it — is not an error and not a release: two different-name
-// requests racing on one dead plan used to count plan_released twice for one
-// delete (N06 S3 observation 4).
+// requests racing on one dead plan must not count plan_released twice for one
+// delete.
 func (s *Service) releaseCreationSlot(ctx context.Context, key string, slot versionstore.Versioned[Slot], planDead bool) (released bool, err error) {
 	deleter, ok := s.cfg.Slots.(versionstore.ConditionalDeleter[string, Slot])
 	if !ok {

@@ -49,19 +49,17 @@ type Config struct {
 	// They must be unguessable: the token authorizes a commit.
 	NewClaimToken func() (string, error)
 
-	// Now is the business clock (D-L3): creation, expiry, delivery and read
-	// times, and the claim lease (Entry.ClaimDeadlineUnix). The kit Mod
+	// Now is the business clock: creation, expiry, delivery and read
+	// times, and the claim lease (Entry.ClaimDeadlineUnix). The wiring Mod
 	// injects app.BusinessClock. nil means clock.Now.
 	//
 	// The claim lease is on it too: it is compared only here, by mail service
 	// instances that all run on the deployment's one offset, and nothing
 	// outside (no Redis ttl, no other process's wall clock) reads it. The App
-	// refuses to start a deployment whose business time would move back
-	// (docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md), so a lease never
-	// outlives its length by more than the clock skew between hosts; an
-	// offset moved forward only ends it early, and the retry gets the same
-	// token. (Release v1.21.0 kept the lease on a separate SystemNow to
-	// survive the offset moving back; that is no longer possible.)
+	// refuses to start a deployment whose business time would move back, so a
+	// lease never outlives its length by more than the clock skew between
+	// hosts; an offset moved forward only ends it early, and the retry gets the
+	// same token.
 	Now func() time.Time
 	// Metrics receives reports. A nil reporter means no reporting and never
 	// fails an operation.
@@ -400,8 +398,8 @@ func (s *Service) deliver(ctx context.Context, playerID int64, mailID string, no
 		// copy whose maps still alias the stored value, so mutating them
 		// and then returning save=false left the store changed anyway —
 		// a refused delivery had already inserted its entry and its
-		// tombstone while Unread and Version kept their old values
-		// (RR-20260911-05). match's callbacks have always cloned first.
+		// tombstone while Unread and Version kept their old values.
+		// match's callbacks have always cloned first.
 		current = current.clone()
 		current.init(playerID)
 		current.expireEntries(nowUnix)
@@ -681,8 +679,8 @@ func (s *Service) transition(
 		// copy whose maps still alias the stored value, so mutating them
 		// and then returning save=false left the store changed anyway —
 		// a refused delivery had already inserted its entry and its
-		// tombstone while Unread and Version kept their old values
-		// (RR-20260911-05). match's callbacks have always cloned first.
+		// tombstone while Unread and Version kept their old values.
+		// match's callbacks have always cloned first.
 		current = current.clone()
 		changed = false
 		if !found {
@@ -740,7 +738,7 @@ type Claim struct {
 	// how long that identity must outlive the claim, and it cannot work it
 	// out: the sender's TTL is another service's configuration, and binding
 	// asset correctness to a configuration means a legal change to that
-	// configuration re-opens a double grant (RR-20260918-05). After this
+	// configuration re-opens a double grant. After this
 	// moment the mail cannot be reserved at all, so a dedupe record keyed on
 	// it may be forgotten — and not one moment sooner.
 	ExpiresAtUnix int64
@@ -813,8 +811,8 @@ func (s *Service) ReserveClaim(ctx context.Context, playerID int64, mailID strin
 		// copy whose maps still alias the stored value, so mutating them
 		// and then returning save=false left the store changed anyway —
 		// a refused delivery had already inserted its entry and its
-		// tombstone while Unread and Version kept their old values
-		// (RR-20260911-05). match's callbacks have always cloned first.
+		// tombstone while Unread and Version kept their old values.
+		// match's callbacks have always cloned first.
 		current = current.clone()
 		refusal = ""
 		if !found {
@@ -829,8 +827,7 @@ func (s *Service) ReserveClaim(ctx context.Context, playerID int64, mailID strin
 				}
 				// The entry is gone because retention dropped it, but the
 				// claim it recorded is not: minting a second token here is
-				// exactly what let the same attachment be handed out twice
-				// (RR-20260910-02).
+				// exactly what let the same attachment be handed out twice.
 				refusal = "already_claimed"
 				return current, false, fmt.Errorf("%w: mail %s", ErrAlreadyClaimed, mailID)
 			}
@@ -863,8 +860,7 @@ func (s *Service) ReserveClaim(ctx context.Context, playerID int64, mailID strin
 		}
 		entry.ClaimToken = reserved
 		// Remember how long this mail stays claimable, so the settled-claim
-		// record that outlives the entry can be kept for exactly that long
-		// (RR-20260911-01).
+		// record that outlives the entry can be kept for exactly that long.
 		entry.ClaimEnvelopeExpiresAtUnix = envelope.ExpiresAtUnix
 		entry.ClaimDeadlineUnix = nowUnix + int64(s.cfg.ClaimLease.Seconds())
 		entry.ClaimAttempts++
@@ -921,8 +917,8 @@ func (s *Service) CommitClaim(ctx context.Context, playerID int64, mailID string
 		// copy whose maps still alias the stored value, so mutating them
 		// and then returning save=false left the store changed anyway —
 		// a refused delivery had already inserted its entry and its
-		// tombstone while Unread and Version kept their old values
-		// (RR-20260911-05). match's callbacks have always cloned first.
+		// tombstone while Unread and Version kept their old values.
+		// match's callbacks have always cloned first.
 		current = current.clone()
 		replayed, refusal = false, ""
 		if !found {
@@ -1012,8 +1008,8 @@ func (s *Service) CancelClaim(ctx context.Context, playerID int64, mailID string
 		// copy whose maps still alias the stored value, so mutating them
 		// and then returning save=false left the store changed anyway —
 		// a refused delivery had already inserted its entry and its
-		// tombstone while Unread and Version kept their old values
-		// (RR-20260911-05). match's callbacks have always cloned first.
+		// tombstone while Unread and Version kept their old values.
+		// match's callbacks have always cloned first.
 		current = current.clone()
 		released = false
 		if !found {

@@ -5,11 +5,10 @@ import (
 	"log/slog"
 )
 
-// 读取已存窗口条目的唯一入口（维护者决定 B9，docs/feature/B9-C5-WINDOW-ENTRIES-ROLE-TABLE-2026-10-06.md）。
+// 读取已存窗口条目的唯一入口（维护者决定）。
 //
 // 窗口记录是 sweep 的全部索引，它的条目却可能被本包以外的东西改过（存量坏记录、人工修复写错组）。
-// “先验证再行动”这条不变量此前在相邻的读循环里一个一个补：RR-20260914-02 → RR-20261001-09 → 其残余 →
-// NC-42 → NC-51，每次漏的都是另一个循环。所以读者不再各自判断：PendingActivities、DeliveringActivities、
+// “先验证再行动”这条不变量若由各个读循环分别实现，总会有某个循环漏掉。所以读者不各自判断：PendingActivities、DeliveringActivities、
 // RetireDelivered 与 AdvanceExpired 都从 readWindowEntries 拿“可以行动的条目”，坏条目只出现在
 // malformed 里——跳过、保留给运维（MalformedWindowEntries / RemoveMalformedWindowEntry）、按列表计数。
 //
@@ -136,7 +135,7 @@ var malformedReport = map[WindowList]struct{ metric, appeared, cleared string }{
 // groupID's window. found must be every malformed entry of that list this
 // tick could see. unseen says whether an entry reported earlier but absent
 // from found was simply outside this tick's bounded scan — not seeing it is
-// not the same as seeing it healthy (RR-20261001-09) — and may be nil when
+// not the same as seeing it healthy — and may be nil when
 // the whole list was judged.
 func (s *Service) noteMalformed(groupID string, list WindowList, found []MalformedWindowEntry, unseen func(Key) bool) {
 	report := malformedReport[list]

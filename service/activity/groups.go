@@ -12,7 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 活动组文件（维护者决定 C4，docs/feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md）。
+// 活动组文件（维护者决定）。
 //
 // 活动组是参与同一个全服活动的 game sid 集合，组 id 就是 Key.GroupID。它由一个文件定义，game 进程
 // （按自己的 sid 找组，组成员是开窗时 expected 集合的候选）与协调器（后台 sweep 兜底这些组）读同一个
@@ -142,7 +142,7 @@ func (g Groups) Of(gameSID int32) (Group, bool) {
 	return g.groups[index].clone(), true
 }
 
-// checkExpected is the coordinator's half of the file (RR-20261006-17): the
+// checkExpected is the coordinator's half of the file: the
 // expected set of a window opened under groupID must be drawn from that group.
 // A subset is normal — a game passes the members that are live — but a sid
 // from another group or from no group, or a group the file does not define,

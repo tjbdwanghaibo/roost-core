@@ -11,7 +11,7 @@ import (
 // NewRedisState builds the versioned state a Directory runs on.
 //
 // There is no storage logic here. A directory entry is versioned state, and
-// kit's versionstore.RedisStore already implements that contract; what this
+// versionstore.RedisStore already implements that contract; what this
 // adds is the key namespacing, which must not be each caller's to invent.
 //
 // The keys are already normalized by the time they reach the store — that is

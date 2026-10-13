@@ -277,8 +277,8 @@ type Config struct {
 	// disables age pruning. Count-based ring retention remains active.
 	RetentionAge time.Duration
 	// Now is the business clock the time shown to players (SentAtUnix) is
-	// read from; nil means clock.Now. The chat Mod injects app.BusinessClock
-	// (D-L3). Injected because a stored timestamp must come from one place —
+	// read from; nil means clock.Now. The chat Mod injects app.BusinessClock.
+	// Injected because a stored timestamp must come from one place —
 	// and because the ordering test requires a clock that runs backwards.
 	Now func() time.Time
 	// SystemNow is the system clock retention runs on: StoredAtUnix and the
@@ -631,8 +631,7 @@ func pageOf(state channelState, query HistoryQuery) Page {
 	// a gap: a ring that no longer starts at sequence 1 is ordinary capacity
 	// eviction, and a client opening a channel asked for what is current, not
 	// for what was evicted. Counting it made every latest page of a channel
-	// that had ever overflowed report Gap and bump history.gap each time
-	// (RR-20261001-08).
+	// that had ever overflowed report Gap and bump history.gap each time.
 	if query.AfterSeq > 0 {
 		cursor := query.AfterSeq
 		for _, message := range selected {
@@ -694,7 +693,7 @@ func (s *channelStore) Prune(ctx context.Context, ref ChannelRef, limit int) (in
 	if s.age == 0 {
 		return 0, nil
 	}
-	// System clock: retention is space reclamation by real age (D-L3).
+	// System clock: retention is space reclamation by real age.
 	cutoff := s.system().Add(-s.age).Unix()
 
 	pruned := 0
@@ -730,7 +729,7 @@ func (s *channelStore) Prune(ctx context.Context, ref ChannelRef, limit int) (in
 		if !errors.Is(err, versionstore.ErrConflict) {
 			// Counted as well as returned: the retention loop only logs this,
 			// and a prune that fails on every tick must be distinguishable, in
-			// the metrics, from a channel with nothing to evict (U-0122).
+			// the metrics, from a channel with nothing to evict.
 			s.metrics.Dropped("prune.failed", 1)
 		}
 		return 0, err

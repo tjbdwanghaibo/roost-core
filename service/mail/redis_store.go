@@ -17,7 +17,7 @@ import (
 // RedisStores are the three stores this package needs, over Redis.
 //
 // Two of them are pure reuse: mailboxes and the send ledger are versioned
-// state, and kit's versionstore.RedisStore already implements that contract.
+// state, and versionstore.RedisStore already implements that contract.
 // Only the envelope store needed writing, because an envelope is not
 // versioned state — it is written once and never rewritten, and its read path
 // is a BATCH, which is the whole reason EnvelopeStore has a GetMany.
@@ -42,21 +42,19 @@ type RedisConfig struct {
 	// the SAME clock the Service uses: the ttl is computed from the expiry the
 	// Service compares against, and two components disagreeing about the
 	// current time is a mail that reads as live and has already been evicted.
-	// In a deployment it is the business clock (D-L3; the kit Mod injects
+	// In a deployment it is the business clock (the wiring Mod injects
 	// app.BusinessClock). nil means clock.Now.
 	Now func() time.Time
 }
 
 // EnvelopeStorageGrace is how long an envelope key outlives the mail's
-// business expiry. D-L3: the storage ttl only reclaims space and must outlive
+// business expiry. The storage ttl only reclaims space and must outlive
 // the business expiry, which the Service decides with Envelope.Expired — so a
 // claim after expiry answers ErrExpired rather than ErrMailMissing, and the
 // clock skew between hosts cannot evict a mail another host still reads as
 // live. It is fixed: business time only moves forward (the App refuses to
-// start a deployment whose business time would move back,
-// docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md), so there is no
-// rollback for a larger grace to cover. (Release v1.21.0 made it configurable
-// as RedisConfig.StorageGrace for exactly that; the field is gone.)
+// start a deployment whose business time would move back), so there is no
+// rollback for a larger grace to cover.
 const EnvelopeStorageGrace = 24 * time.Hour
 
 // NewRedisStores builds them.
@@ -110,7 +108,7 @@ func NewRedisStores(client fredis.IRedis, cfg RedisConfig) (RedisStores, error) 
 //
 // Taking the narrow interface documents exactly which backend capability this
 // depends on, and lets a test supply an evaluating double without stubbing a
-// whole client — the same reason kit's versionstore does it.
+// whole client — the same reason versionstore does it.
 type envelopeClient interface {
 	SetNX(ctx context.Context, key string, value any, expiration time.Duration) (bool, error)
 	Get(ctx context.Context, key string) ([]byte, error)
@@ -136,7 +134,7 @@ type redisEnvelopes struct {
 	client envelopeClient
 	prefix string
 	now    func() time.Time
-	// grace is added to the business remainder to get the key ttl (D-L3):
+	// grace is added to the business remainder to get the key ttl:
 	// EnvelopeStorageGrace; only a test of key expiry shortens it.
 	grace time.Duration
 }
@@ -169,7 +167,7 @@ func (s *redisEnvelopes) key(id string) string { return s.prefix + ":env:" + id 
 //
 // The key's TTL comes from the envelope's own expiry plus the storage grace,
 // so an expired mail stops occupying storage without a sweep. The ttl is only
-// that reclamation (D-L3): whether a mail is expired is the Service's
+// that reclamation: whether a mail is expired is the Service's
 // Envelope.Expired against the business clock, and the key outlives that by
 // the grace. An envelope whose expiry has already passed is refused rather
 // than stored — it would be a mail nobody could ever read.

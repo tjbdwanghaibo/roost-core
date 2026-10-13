@@ -15,7 +15,7 @@ import (
 // name directory.
 //
 // There is no storage logic here. Accounts, roles, servers and slots are all
-// versioned state, and kit's versionstore.RedisStore already implements that
+// versioned state, and versionstore.RedisStore already implements that
 // contract. What this contributes is the part that must not be each caller's
 // to invent: four key namespaces under one prefix that must not collide, and
 // the TTL decisions below, each of which has a wrong answer that looks fine.

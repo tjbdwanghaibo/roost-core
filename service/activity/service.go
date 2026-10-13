@@ -42,7 +42,7 @@ type Config struct {
 	// The store's TTL must not be SHORTER than ReservationTTL (NewRedisStores
 	// sets both from one value). ApplyProgress treats a pending proof whose
 	// ledger entry is gone as past every client's retry horizon and reclaims
-	// it (RR-20261001-05); a ledger that forgets entries earlier than the
+	// it; a ledger that forgets entries earlier than the
 	// configured horizon would make that reclaim early. New cannot check
 	// this — a Store does not expose its TTL — so it is a wiring invariant.
 	Ledger versionstore.Store[RequestKey, ProgressReservation]
@@ -84,7 +84,7 @@ type Config struct {
 	// Zero selects DefaultOpeningGrace.
 	OpeningGrace time.Duration
 
-	// Now is the business clock (D-L3: real time + time.logic_offset; the Mod
+	// Now is the business clock (real time + time.logic_offset; the Mod
 	// injects app.BusinessClock); nil means clock.Now. Every deadline, grace
 	// window, dispatch backoff (Dispatch.NextAttemptAtUnix and the owed
 	// index) and record timestamp in this package reads it, and none of them
@@ -92,12 +92,10 @@ type Config struct {
 	// test has no test for expiry.
 	//
 	// Backoff is on the business clock too, deliberately: the App refuses to
-	// start a deployment whose business time would move back
-	// (docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md), so a stamp written
-	// in one run is never in a later run's future by more than the clock skew
-	// between hosts. An offset moved forward only makes a backoff end early,
-	// which retries sooner. (Release v1.21.0 ran backoff on a separate system
-	// clock to survive the offset moving back; that is no longer possible.)
+	// start a deployment whose business time would move back, so a stamp
+	// written in one run is never in a later run's future by more than the
+	// clock skew between hosts. An offset moved forward only makes a backoff
+	// end early, which retries sooner.
 	Now func() time.Time
 	// NewDispatchToken mints ACK tokens; nil means a 128-bit random token.
 	// They must be unguessable because the token is what authorizes the ACK:
@@ -108,12 +106,11 @@ type Config struct {
 	// advances in the background (activity.sweep_groups). Enumerating groups
 	// would be an unbounded keyspace scan, so a deployment supplies them; an
 	// empty list means no back-stop runs here, and the Server says so once at
-	// start. Until U-0119 there was no way to supply them at all, so the grace
-	// window was never enforced by any process.
+	// start. Without it no process would ever enforce the grace window.
 	SweepGroups []string
-	// Groups is the activity groups file (activity.groups_file, C4).
+	// Groups is the activity groups file (activity.groups_file).
 	// OpenActivity refuses a window whose group the file does not define, or
-	// whose expected set names a game outside that group (RR-20261006-17).
+	// whose expected set names a game outside that group.
 	// It is required: the Mod sets it from the file Init loaded, and New
 	// refuses a nil one, so no coordinator — the Mod's, a test's in-memory
 	// one or a hand-assembled one — opens windows unchecked. A coordinator
@@ -158,14 +155,14 @@ const (
 type Service struct {
 	// deliveryMu / deliveryCursor rotate DeliveringActivities through a
 	// group's list across sweeps so a long list is not always served from
-	// the same head (U-0192).
+	// the same head.
 	deliveryMu     sync.Mutex
 	deliveryCursor map[string]Key
 
 	// malformedMu / malformed remember which stored window entries have
 	// already been reported as unusable, so the report is written once when
 	// the problem appears and once when it is gone rather than every tick
-	// (RR-20261001-09, NC-51, B9; noteMalformed). The Server is generated
+	// (noteMalformed). The Server is generated
 	// code and cannot carry this.
 	malformedMu sync.Mutex
 	// 按所属窗口分组；坏条目的 Key.GroupID 本身可能不可信，不能用它决定日志清理归属。
@@ -200,7 +197,7 @@ func New(cfg Config) (*Service, error) {
 	}
 	if cfg.Groups == nil {
 		// Without the groups nothing checks an expected set against the group
-		// it opens under (RR-20261006-17). The Mod requires
+		// it opens under. The Mod requires
 		// activity.groups_file for the same reason; a Service built directly
 		// had no such gate until this one, and was the last way around it.
 		return nil, fmt.Errorf("activity: Groups is required (the activity.groups_file the Mod loads; build it with LoadGroupsFile or ParseGroups)")
@@ -281,7 +278,7 @@ func (s *Service) OpenActivity(ctx context.Context, key Key, expectedGameSIDs []
 		return Activity{}, err
 	}
 	// Before anything is written: a refused open leaves no opening entry for
-	// the sweep to help forward (RR-20261006-17).
+	// the sweep to help forward.
 	if err := s.cfg.Groups.checkExpected(key.GroupID, expectedGameSIDs); err != nil {
 		return Activity{}, err
 	}
@@ -296,7 +293,7 @@ func (s *Service) OpenActivity(ctx context.Context, key Key, expectedGameSIDs []
 	}
 	// Persist the plan and its capacity slot BEFORE Create. A sweep can help
 	// it after a crash without inventing a new expected set or releasing a
-	// slot still promised to a slow opener (RR-20260914-02).
+	// slot still promised to a slow opener.
 	activity, err := s.admitToWindow(ctx, activity)
 	if err != nil {
 		return Activity{}, err
@@ -360,7 +357,7 @@ func (s *Service) admitToWindow(ctx context.Context, activity Activity) (Activit
 		}
 		if next.contains(key) {
 			if i := next.openingIndex(key); i >= 0 {
-				// NC-42：恢复复用持久意图前验证；坏记录（含没有意图的条目）只能拒绝，不能写出另一个活动。
+				// 恢复复用持久意图前验证；坏记录（含没有意图的条目）只能拒绝，不能写出另一个活动。
 				if reason := openingIntentProblem(next.Opening[i], key.GroupID); reason != "" {
 					return current, false, fmt.Errorf("%w: malformed opening intent for %s: %s", ErrConflict, key, reason)
 				}
@@ -413,7 +410,7 @@ func (s *Service) PendingActivities(ctx context.Context, groupID string, limit i
 	if err := validateLimit(limit); err != nil {
 		return nil, err
 	}
-	// B9：经统一入口读，坏条目（别的组的键、不合法的键）不交给调用方——game 拿它去查只会查到
+	// 经统一入口读（readWindowEntries），坏条目（别的组的键、不合法的键）不交给调用方——game 拿它去查只会查到
 	// 别的组的活动。它们由 sweep 计数并保留给运维。
 	entries, found, err := s.loadWindowEntries(ctx, groupID)
 	if err != nil || !found {
@@ -431,7 +428,7 @@ func (s *Service) PendingActivities(ctx context.Context, groupID string, limit i
 }
 
 // DeliveringActivities lists complete activities whose dispatches are still
-// being delivered (U-0192), up to limit, rotating through the group's list
+// being delivered, up to limit, rotating through the group's list
 // across calls so a long list is served fairly rather than from its head.
 func (s *Service) DeliveringActivities(ctx context.Context, groupID string, limit int) ([]Key, error) {
 	if groupID == "" {
@@ -440,7 +437,7 @@ func (s *Service) DeliveringActivities(ctx context.Context, groupID string, limi
 	if err := validateLimit(limit); err != nil {
 		return nil, err
 	}
-	// B9：经统一入口读。坏条目不交出（否则 sweep 会读别的组的活动、按键自身的 GroupID 写别的组的
+	// 经统一入口读（readWindowEntries）。坏条目不交出（否则 sweep 会读别的组的活动、按键自身的 GroupID 写别的组的
 	// 窗口，而本组这一条永远移不走），每次计 sweep.delivering_key_malformed 并保留给运维。
 	// 只有 sweep 调这个方法（不在 Coordinator 上），所以这里就是它的 tick。
 	entries, found, err := s.loadWindowEntries(ctx, groupID)
@@ -483,11 +480,10 @@ func (s *Service) DeliveringActivities(ctx context.Context, groupID string, limi
 // window has no other way back.
 //
 // The key must be listed in its own group's Delivering, read through the one
-// window entry reader (B9). A key that is not listed — already retired by an
+// window entry reader. A key that is not listed — already retired by an
 // earlier call, or never there — is answered false without reading the
-// activity or writing any window; it used to be answered true, which let a
-// caller holding a foreign entry believe it had retired something (N06 S3
-// observation 4).
+// activity or writing any window; answering true would let a caller holding
+// a foreign entry believe it had retired something.
 func (s *Service) RetireDelivered(ctx context.Context, key Key) (bool, error) {
 	if err := key.Validate(); err != nil {
 		return false, err
@@ -783,8 +779,8 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 	if err := validateLimit(limit); err != nil {
 		return nil, err
 	}
-	// B9：已确认 Keys 与 Opening 都经统一入口读——键合法且属于本组才读写 Activities、才能进本组
-	// Delivering（RR-20261001-09 残余、NC-51）。坏条目跳过并保留给运维，不自动剪掉：剪掉的依据是
+	// 已确认 Keys 与 Opening 都经统一入口读——键合法且属于本组才读写 Activities、才能进本组
+	// Delivering。坏条目跳过并保留给运维，不自动剪掉：剪掉的依据是
 	// “记录不在了”，而对一个不该在这里的键读出的结论不属于本组。
 	entries, found, err := s.loadWindowEntries(ctx, groupID)
 	if err != nil || !found {
@@ -850,8 +846,8 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 	}
 	// Help durable openings after grace; absence or a deadline cannot prove
 	// a slow Create is cancelled, so an entry WITH a plan keeps its slot and
-	// the sweep executes the plan. Two kinds of entry cannot be helped
-	// (RR-20261001-09), and each is handled on its own so that none of them
+	// the sweep executes the plan. Two kinds of entry cannot be helped,
+	// and each is handled on its own so that none of them
 	// stalls the group's other activities:
 	//
 	//   - a plan this code cannot execute (missing, key mismatch, not
@@ -861,7 +857,7 @@ func (s *Service) AdvanceExpired(ctx context.Context, groupID string, limit int)
 	//     skipped, counted every tick and logged once, and its slot is KEPT:
 	//     the opener's own Create of the original plan may still land, and a
 	//     record whose slot was given away would never be swept (the exact
-	//     hole RR-20260914-02 closed). An operator repairs or removes it;
+	//     hole this rule exists to close). An operator repairs or removes it;
 	//   - a plan whose Create keeps failing: the error is still reported —
 	//     the slot stays, the caller learns the plan is unmade — but after
 	//     the rest of the group has been served, not instead of it.
@@ -986,8 +982,8 @@ func openingIntentProblem(entry OpeningEntry, groupID string) string {
 // windowKeyProblem says why a key stored in groupID's window must not be acted
 // on by groupID's sweep, or "" when it may. Every key this package writes into
 // a window passed Validate and belongs to that window's group, so a non-empty
-// answer means the stored record was changed by something else
-// (RR-20261001-09 for Opening entries, NC-51 for confirmed Keys).
+// answer means the stored record (an Opening entry or a confirmed Key) was
+// changed by something else.
 func windowKeyProblem(key Key, groupID string) string {
 	if err := key.Validate(); err != nil {
 		return err.Error()
@@ -1067,7 +1063,7 @@ func (s *Service) settleCompletion(ctx context.Context, activity Activity) error
 //
 //   - prune leaves Keys (and Opening, should a confirm have been skipped);
 //   - delivering (a subset of prune: the complete ones) joins Delivering so
-//     the sweep keeps retrying their dispatches (U-0192).
+//     the sweep keeps retrying their dispatches.
 func (s *Service) retireFromWindow(ctx context.Context, groupID string, prune, delivering []Key) error {
 	if len(prune) == 0 {
 		return nil
@@ -1218,7 +1214,7 @@ func (s *Service) applyProgress(ctx context.Context, key Key, participantID, req
 			// and past it the ledger itself answers a replay as a new request.
 			// There is nothing left for this proof to protect; keeping it only
 			// counted toward MaxProgressWindow, which is how a participant with
-			// 32 lost marks was refused forever (RR-20261001-05).
+			// 32 lost marks was refused forever.
 			expired++
 			confirmed = append(confirmed, id)
 		case proof.Value.State == ReservationApplied:
@@ -1474,7 +1470,7 @@ func (s *Service) LookupDispatch(ctx context.Context, key Key, gameSID int32) (D
 // is what the game had to do before, is to GUESS activity ids from its own
 // clock and look each one up. That works until a game is down longer than a
 // window, and then the obligation is still recorded and permanently
-// unreachable (RR-20260919-10).
+// unreachable.
 type OwedDispatchIndex interface {
 	// OwedDispatches returns up to limit dispatch keys owed to gameSID in
 	// groupID that are pending and due at nowUnix, oldest first.

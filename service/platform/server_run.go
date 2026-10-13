@@ -46,7 +46,7 @@ func (s *Server) run(ctx context.Context) error {
 	// Say once, at start, which mode this process is in. A deployment that
 	// expects recovery and sees "off" has forgotten to wire its index; the
 	// old loop called a private method that always returned nil, so the
-	// difference was invisible (RR-20260917-04).
+	// difference was invisible.
 	if service.BackgroundRetryEnabled() {
 		slog.Info("platform server: retrying paid orders from the configured pending index",
 			"interval", RetryInterval, "batch", RetryBatch)
@@ -96,8 +96,8 @@ func (service *Service) retryPendingOnce(ctx context.Context) {
 				case errors.Is(err, ErrOrderInvalid):
 					// The index names an order that is not there. It would be
 					// read on every page and refused every time, and with a
-					// small batch it would be the whole batch, forever
-					// (RR-20260919-07). Retiring it is safe exactly because
+					// small batch it would be the whole batch, forever.
+					// Retiring it is safe exactly because
 					// there is nothing to deliver; an index that cannot retire
 					// keeps it, and the log is then the operator's signal.
 					slog.Error("platform server: an indexed order has no record; retiring the index entry",
@@ -113,7 +113,7 @@ func (service *Service) retryPendingOnce(ctx context.Context) {
 					// on the next tick either. Left alone it keeps its place at
 					// the head of the page: with a batch of 128, 128 such
 					// records are the whole batch, forever, and the healthy
-					// orders behind them are never even read (RR-20260920-05).
+					// orders behind them are never even read.
 					//
 					// It is NOT retired — unlike an index entry with no order,
 					// this one names a real record that somebody has to look
@@ -159,4 +159,4 @@ type PendingDeferrer interface {
 // Service.pendingOrderIDs. There is deliberately no default — enumerating
 // pending orders would be the unbounded scan this package refuses — but
 // "none configured" is now stated at start rather than mimed by a private
-// method that returned nil (RR-20260917-04).
+// method that returned nil.

@@ -14,7 +14,7 @@ import (
 // RedisStores are the three stores this package needs, over Redis.
 //
 // There is no storage logic here, and that is the point: runs, claims and
-// ledger entries are all versioned state, and kit's versionstore.RedisStore
+// ledger entries are all versioned state, and versionstore.RedisStore
 // already implements that contract — compare-and-set through
 // roost-core/redis.CompareAndSet, jittered exponential backoff, insert-only
 // Create, version-checked Delete. Reimplementing any of it per service is how

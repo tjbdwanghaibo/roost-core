@@ -110,7 +110,7 @@ var (
 	// action — the first wants the player to read mail, the second means too
 	// many attachments were claimed and evicted inside one envelope lifetime.
 	// Refusing is deliberate; forgetting an identity is how the same
-	// attachment gets a second token (RR-20260911-01).
+	// attachment gets a second token.
 	ErrClaimHistoryFull = errcode.Define(CodeClaimHistoryFull, "mail: claim history is full", "")
 	ErrRangeInvalid     = errcode.Define(CodeRangeInvalid, "mail: range is invalid", "")
 	ErrRequestInvalid   = errcode.Define(CodeRequestInvalid, "mail: request is invalid", "")
@@ -146,7 +146,7 @@ var codeBySentinel = map[int32]error{
 
 // Error maps an error to the code and reason a client sees.
 //
-// It matches the servicerpc.Error convention (roost-kit transport), which is what an RPC
+// It matches the servicerpc.Error convention (infra/network/servicerpc), which is what an RPC
 // envelope is filled from.
 //
 // It is short because the sentinels carry their own codes: errcode.ClientError
