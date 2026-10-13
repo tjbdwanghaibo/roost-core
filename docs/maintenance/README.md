@@ -1,5 +1,7 @@
 # v1.25 维护手册
 
+执行池命名已统一为 short/long/io；配置、API、生成 Sender 和监控查询需一起迁移。迁移表、long 池观测遗漏修复及验证见 [Nest 三池说明](../framework/NEST-AWAIT.md#池命名收敛2026-10-13)。
+
 如果这是第一次维护Roost，先读[入门手册](../GETTING-STARTED.md)。本篇按日常修改、升级、故障和发布组织；先找到你的场景，再执行对应步骤。
 
 当前版本v1.25.0，目录/Gate/Block AOI已交付；重档性能限制见发布说明。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。

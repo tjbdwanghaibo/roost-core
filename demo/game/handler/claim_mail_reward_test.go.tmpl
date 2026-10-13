@@ -83,7 +83,7 @@ func newClaimHarness(t *testing.T) (*player.Player, nest.Client, *recordingCommi
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(singleEntityGetter{value: value}),
 		nest.NestOptionWithTransactionCommitter(committer),
-		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
 	)
 	if err := engine.Start(); err != nil {
 		t.Fatalf("start nest: %v", err)

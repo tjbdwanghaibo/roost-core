@@ -19,7 +19,7 @@ func TestClientRequestCarriesContextAndReturnsResult(t *testing.T) {
 
 	engine := NewEngine(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 8}, WorkerPoolConfig{}),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 8}, WorkerPoolConfig{}, WorkerPoolConfig{}),
 		NestOptionWithSyncTimeout(time.Second),
 	)
 	if err := engine.Start(); err != nil {
@@ -56,7 +56,7 @@ func TestClientDispatchCarriesOnlyFrameworkEnvelope(t *testing.T) {
 
 	engine := NewEngine(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 8}, WorkerPoolConfig{}),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 8}, WorkerPoolConfig{}, WorkerPoolConfig{}),
 	)
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestClientAdmissionReportsQueueFull(t *testing.T) {
 	getter.Add(newMockEntity(id, entity.EntityCategory(1)))
 	engine := NewEngine(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 1}, WorkerPoolConfig{}),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 1}, WorkerPoolConfig{}, WorkerPoolConfig{}),
 	)
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
@@ -215,7 +215,7 @@ func TestClientRejectsCanceledContextBeforeAdmission(t *testing.T) {
 }
 
 func TestClientFenceRejectsAdmissionWithCause(t *testing.T) {
-	engine := NewEngine(NestOptionWithGetter(newMockGetter()), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 8}, WorkerPoolConfig{}))
+	engine := NewEngine(NestOptionWithGetter(newMockGetter()), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 8}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func BenchmarkClientRequestSingle(b *testing.B) {
 	getter.Add(newMockEntity(id, entity.EntityCategory(1)))
 	engine := NewEngine(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 1024}, WorkerPoolConfig{}),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 1024}, WorkerPoolConfig{}, WorkerPoolConfig{}),
 	)
 	if err := engine.Start(); err != nil {
 		b.Fatal(err)

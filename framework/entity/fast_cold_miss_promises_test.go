@@ -24,7 +24,7 @@ func TestFastWorkerColdMissReturnsErrorInsteadOfPanicking(t *testing.T) {
 	}
 	hot := newMgrTestEntity(5101, testEntityCategoryPlayer)
 	manager.Add(hot)
-	_, release := fctx.NewContext(fctx.WithFastWorker(), fctx.WithHandler("optional_friend"))
+	_, release := fctx.NewContext(fctx.WithShortWorker(), fctx.WithHandler("optional_friend"))
 	defer release()
 
 	for _, detached := range []bool{false, true} {
@@ -62,7 +62,7 @@ func checkColdMiss(t *testing.T, name string, call func() error) {
 		}()
 		err = call()
 	}()
-	if !errors.Is(err, ErrColdLoadInLogic) || !errors.Is(err, fctx.ErrBlockingInFastWorker) {
+	if !errors.Is(err, ErrColdLoadInLogic) || !errors.Is(err, fctx.ErrBlockingInBusinessWorker) {
 		t.Fatalf("%s: err=%v, want ErrColdLoadInLogic with the fast-worker marker", name, err)
 	}
 }

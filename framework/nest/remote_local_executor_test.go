@@ -30,10 +30,10 @@ func (m *bindingRemoteManager) localExecutor() func(func()) error {
 }
 
 // RR-20260926-37/39：Remote 后台收尾不属于任何 Nest 消息。NewEngine 把与 DataEngine 驱逐（RR-30）同一个 RunLocal
-// 交给 Remote Manager：从非快 worker 调用时在快池执行并等待，panic 作为错误返回；停机后拒绝投递、不执行 fn。
+// 交给 Remote Manager：从非业务 worker 调用时在业务池执行并等待，panic 作为错误返回；停机后拒绝投递、不执行 fn。
 func TestNestBindsRunLocalIntoRemoteManager(t *testing.T) {
 	manager := &bindingRemoteManager{}
-	mgr := NewEngine(NestOptionWithGetter(newMockGetter()), NestOptionWithRemoteEntityManager(manager), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
+	mgr := NewEngine(NestOptionWithGetter(newMockGetter()), NestOptionWithRemoteEntityManager(manager), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 	run := manager.localExecutor()
 	if run == nil {
 		t.Fatal("NewEngine did not bind its RunLocal into the remote manager")
@@ -43,7 +43,7 @@ func TestNestBindsRunLocalIntoRemoteManager(t *testing.T) {
 	}
 	onFast := make(chan bool, 1)
 	done := make(chan error, 1)
-	go func() { done <- run(func() { onFast <- fctx.InFastWorker() }) }()
+	go func() { done <- run(func() { onFast <- fctx.InShortWorker() }) }()
 	select {
 	case err := <-done:
 		if err != nil {

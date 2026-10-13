@@ -12,17 +12,17 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
-	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
-	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 	syncdriver "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -301,7 +301,7 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 			})
 			options := append(runtime.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithRemoteEntityManager(assembly.Manager))
 			options = append(options, nest.NestOptionWithWorkerPools(
-				nest.WorkerPoolConfig{Workers: remoteNestWorkers(), QueueCap: remoteInt("ROOST_REMOTE_FAST_QUEUE", 4096)},
+				nest.WorkerPoolConfig{Workers: remoteNestWorkers(), QueueCap: remoteInt("ROOST_REMOTE_FAST_QUEUE", 4096)}, nest.WorkerPoolConfig{},
 				nest.WorkerPoolConfig{Workers: remoteInt("ROOST_REMOTE_IO_WORKERS", remoteNestWorkers()), QueueCap: remoteInt("ROOST_REMOTE_SLOW_QUEUE", 64)},
 			))
 			if os.Getenv("ROOST_REMOTE_STAGE_METRICS") == "1" {

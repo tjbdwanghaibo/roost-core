@@ -8,7 +8,7 @@ import (
 )
 
 func TestBusinessWorkersRefuseRPCBeforeTransportAndDiscovery(t *testing.T) {
-	for _, option := range []fctx.Option{fctx.WithFastWorker(), fctx.WithLongWorker()} {
+	for _, option := range []fctx.Option{fctx.WithShortWorker(), fctx.WithLongWorker()} {
 		func() {
 			_, release := fctx.NewContext(option)
 			defer release()

@@ -43,7 +43,7 @@ func BenchmarkAdmissionColdProbe(b *testing.B) {
 		b.Run(bc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				if got := mgr.declaredTargetsNeedSlowPreparation(bc.msg); got != bc.want {
+				if got := mgr.declaredTargetsNeedIOPreparation(bc.msg); got != bc.want {
 					b.Fatalf("cold=%v want %v", got, bc.want)
 				}
 			}
@@ -68,7 +68,7 @@ func BenchmarkClientRequestManagerAccess(b *testing.B) {
 	if err := manager.TryAdd(newMockEntityWithKind(id, entity.EntityCategory(1), nestLocalKind)); err != nil {
 		b.Fatal(err)
 	}
-	engine := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 1024}, WorkerPoolConfig{}))
+	engine := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 1024}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 	if err := engine.Start(); err != nil {
 		b.Fatal(err)
 	}

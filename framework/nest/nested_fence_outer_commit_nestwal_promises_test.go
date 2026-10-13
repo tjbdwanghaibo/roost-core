@@ -148,7 +148,7 @@ func TestOuterCommitAfterNestedAcceptFailureIsRefusedBeforeWAL(t *testing.T) {
 			inner := addFenceOuterEntity(t, manager, 52001+int64(i)*10, fenceOuterInnerKind, fenceOuterInnerGroup)
 			inner.dao.failAccept = true
 			wal, committer := openFenceOuterCommitter(t)
-			mgr := nest.NewEngine(nest.NestOptionWithGetter(entity.NewManagerAccess(manager)), nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}))
+			mgr := nest.NewEngine(nest.NestOptionWithGetter(entity.NewManagerAccess(manager)), nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 			name := nest.NewHandlerName("b03_fence_then_outer_commit_" + tc.name)
 			var isoErr, fencedInHandler error
 			var appendedAfterNested uint64

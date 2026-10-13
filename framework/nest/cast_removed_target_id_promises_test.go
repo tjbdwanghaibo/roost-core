@@ -39,7 +39,7 @@ func TestCastTargetRemovedWhileWaitingNamesTheTarget(t *testing.T) {
 				t.Fatal(err)
 			}
 			access := entity.NewManagerAccess(manager)
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 			holding, proceed := make(chan struct{}), make(chan struct{})
 			holder, follower := NewHandlerName("rr73_id_holder_"+tc.name), NewHandlerName("rr73_id_follower_"+tc.name)
 			var removeErr error

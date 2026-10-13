@@ -133,12 +133,12 @@ func singleDispatchInGuardScope(mgr *NestMgr, name string, id int64) (got any, e
 	return got, err
 }
 
-// withDispatchGuardScope 在当前 goroutine 上建 Guard 作用域再取锁，与快池派发（runNestLogic 先 NewGuardScope、
+// withDispatchGuardScope 在当前 goroutine 上建 Guard 作用域再取锁，与业务池派发（runNestLogic 先 NewGuardScope、
 // dispatchLoadedEntities 再取锁）一致：Guard 归作用域所有，作用域结束时只归还池一次。
 //
 // 之前这几条用例在新 goroutine 里直接 entity.GetEntityGuard()：没有作用域时它从池里取一个独立 Guard，
 // releaseDispatchLocks 的无作用域分支每次释放都把它 EntityGuardRelease 回池。组迁移重试会先释放一次、再拿同一个
-// Guard 重新取锁并再释放一次，同一个 Guard 进池两次；之后同进程里两个快 worker 会取到同一个 Guard，互相解对方
+// Guard 重新取锁并再释放一次，同一个 Guard 进池两次；之后同进程里两个业务 worker 会取到同一个 Guard，互相解对方
 // goroutine 持有的实体锁（“unlock of unowned mutex”），-shuffle 下排在后面的
 // TestSymmetricCrossCreatePairsResolveWithinRequeueBudget 出现 winners=0、sync timeout 或停机挂死。
 // 生产调用方都在 Guard 作用域里，不走那条分支（见 docs/bugfix/CLOSING-BATCH-4-2026-10-06.md A2）。之后 RR-20261006-12 删掉了
@@ -286,7 +286,7 @@ func TestEntityLockGroupDispatchRequeuesBusyGroupLock(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()
@@ -364,7 +364,7 @@ func TestEntityLockGroupDispatchRequeuesBusyExtraEntity(t *testing.T) {
 
 	InitNest(
 		NestOptionWithGetter(getter),
-		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
 	defer StopNest()

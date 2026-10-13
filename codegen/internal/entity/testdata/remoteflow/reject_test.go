@@ -35,19 +35,19 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
-	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
-	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	syncdriver "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -379,7 +379,7 @@ func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis 
 	}
 	options := append(rig.runtime.NestOptions(), nest.NestOptionWithGetter(rig.access), nest.NestOptionWithRemoteEntityManager(assembly.Manager),
 		nest.NestOptionWithEntitySync(rig.sync),
-		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 256}, nest.WorkerPoolConfig{Workers: 4, QueueCap: 64}))
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 256}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{Workers: 4, QueueCap: 64}))
 	options = append(options, extra...)
 	rig.scheduler = nest.NewEngine(options...)
 	rig.scheduler.MustRegisterHandlerWithMeta(rig.write, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
@@ -390,7 +390,7 @@ func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis 
 		}
 		nest.AfterCommit(func() {
 			rig.afterCommit.Add(1)
-			if fctx.InFastWorker() {
+			if fctx.InShortWorker() {
 				rig.afterCommitOnFast.Add(1)
 			}
 		})

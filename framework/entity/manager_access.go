@@ -254,7 +254,7 @@ func (access *ManagerAccess) IsLoaded(id int64) bool {
 // singleflight 等待之前，本身不阻塞，所以返回可 errors.Is 判别的 ErrColdLoadInLogic，
 // 让业务按“目标未加载”降级（RR-02 契约）。RR-06 曾在这里 panic，业务因此失去降级能力
 // （RR-20260926-26）；fail-fast 只留给真正会等待的入口（Repository 冷加载、投影等待、
-// Remote 准备等）。在快 worker 上额外包裹 fctx.ErrBlockingInFastWorker，便于定位入口与 handler。
+// Remote 准备等）。在快 worker 上额外包裹 fctx.ErrBlockingInBusinessWorker，便于定位入口与 handler。
 func coldLoadInLogicError(operation string, id int64) error {
 	if err := fctx.BlockingError(operation); err != nil {
 		return fmt.Errorf("%w: entity %d: %w", ErrColdLoadInLogic, id, err)

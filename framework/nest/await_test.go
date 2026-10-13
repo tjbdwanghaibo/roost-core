@@ -28,7 +28,7 @@ func awaitFixture(t *testing.T) (*NestMgr, int64, int64, int64) {
 	for _, id := range []int64{p, a, b} {
 		getter.Add(newMockEntity(id, 1))
 	}
-	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithBusinessPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{1, 8}, WorkerPoolConfig{1, 8}))
+	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{1, 8}, WorkerPoolConfig{1, 8}))
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -67,7 +67,7 @@ func TestBusinessPoolsShareAllTargetTails(t *testing.T) {
 		return nil, nil
 	})
 	awaitRegister(mgr, "probe", func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
-		if !fctx.InFastWorker() {
+		if !fctx.InShortWorker() {
 			t.Error("short target on wrong pool")
 		}
 		return es[0].GUId(), nil
@@ -93,7 +93,7 @@ func TestBusinessPoolsShareAllTargetTails(t *testing.T) {
 		t.Fatal("shared target passed unfinished predecessor")
 	default:
 	}
-	if mgr.Stats().Queue.Fast.BlockedOnPredecessor != 1 {
+	if mgr.Stats().Queue.Short.BlockedOnPredecessor != 1 {
 		t.Fatal("dependency was not retained in queue")
 	}
 	close(release)
@@ -333,7 +333,7 @@ func TestAwaitReservationsCompeteWithRunningAndOrdinaryIO(t *testing.T) {
 		t.Fatalf("Await overbooked queued I/O: %v", err)
 	}
 	q.cancelAwait()
-	q.take(dispatchSlowLane)
+	q.take(dispatchIOLane)
 	if err := q.reserveAwait(); err != nil {
 		t.Fatal(err)
 	}

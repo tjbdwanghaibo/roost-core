@@ -9,12 +9,12 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 type modJetStream struct{ streams int }
@@ -195,7 +195,7 @@ func TestModForwardsNestLocalExecutorAndReloadHook(t *testing.T) {
 		t.Fatal("reload hook accepted before the runtime exists")
 	}
 	inPlace := false
-	if err := mod.runLocal(func() { inPlace = !fctx.InFastWorker() }); err != nil || !inPlace {
+	if err := mod.runLocal(func() { inPlace = !fctx.InShortWorker() }); err != nil || !inPlace {
 		t.Fatalf("unbound local executor=%v in place=%v", err, inPlace)
 	}
 	if err := mod.Start(); err != nil {
@@ -213,7 +213,7 @@ func TestModForwardsNestLocalExecutorAndReloadHook(t *testing.T) {
 	}
 	defer scheduler.Shutdown(context.Background())
 	onFast := false
-	if err := mod.runLocal(func() { onFast = fctx.InFastWorker() }); err != nil || !onFast {
+	if err := mod.runLocal(func() { onFast = fctx.InShortWorker() }); err != nil || !onFast {
 		t.Fatalf("bound local executor=%v on fast worker=%v", err, onFast)
 	}
 }

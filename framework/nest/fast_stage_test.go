@@ -21,13 +21,13 @@ type stageLoader struct {
 
 func (l *stageLoader) LoadEntity(ctx context.Context, id int64, kind entity.EntityKind) (entity.IThreadSafeEntity, error) {
 	l.calls.Add(1)
-	if fctx.InFastWorker() {
+	if fctx.InShortWorker() {
 		return nil, errors.New("loader ran in fast worker")
 	}
 	var value entity.IThreadSafeEntity
 	var createErr error
 	err := entity.RunLocal(ctx, func() {
-		if !fctx.InFastWorker() {
+		if !fctx.InShortWorker() {
 			createErr = errors.New("publication did not run in fast worker")
 			return
 		}
@@ -49,7 +49,7 @@ func TestFastStageRejectsDirectColdAccessBeforeIO(t *testing.T) {
 	if err := manager.TryAdd(newMockEntityWithKind(hot, entity.EntityCategory(1), nestLocalKind)); err != nil {
 		t.Fatal(err)
 	}
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{2, 8}))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{}, WorkerPoolConfig{2, 8}))
 	mgr.MustRegisterHandlerWithMeta(NewHandlerName("direct_access"), func(_ []entity.IThreadSafeEntity, params []any, _ ...HandlerOption) (any, error) {
 		ctx := nestBaseContext()
 		if params[1].(bool) {
@@ -62,7 +62,7 @@ func TestFastStageRejectsDirectColdAccessBeforeIO(t *testing.T) {
 		return access.Get(ctx, cold, entity.EntityCategoryNone)
 	}, HandlerMeta{Rollback: RollbackNone, Durability: DurabilityMemory})
 	mgr.MustRegisterHandlerWithMeta(NewHandlerName("ready"), func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
-		if !fctx.InFastWorker() {
+		if !fctx.InShortWorker() {
 			return nil, errors.New("handler not marked fast")
 		}
 		return "ok", nil
@@ -82,12 +82,12 @@ func TestFastStageRejectsDirectColdAccessBeforeIO(t *testing.T) {
 			for _, detached := range []bool{false, true} {
 				var opts []SendOpt
 				if slow {
-					opts = append(opts, SendOptionSlow())
+					opts = append(opts, SendOptionIO())
 				}
 				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 				_, err := mgr.Request(ctx, NewHandlerName("direct_access"), hot, []any{many, detached}, opts...)
 				cancel()
-				if !errors.Is(err, entity.ErrColdLoadInLogic) || !errors.Is(err, fctx.ErrBlockingInFastWorker) || !strings.Contains(err.Error(), "direct_access") {
+				if !errors.Is(err, entity.ErrColdLoadInLogic) || !errors.Is(err, fctx.ErrBlockingInBusinessWorker) || !strings.Contains(err.Error(), "direct_access") {
 					t.Fatalf("slow=%v many=%v detached=%v: %v", slow, many, detached, err)
 				}
 			}
@@ -96,10 +96,10 @@ func TestFastStageRejectsDirectColdAccessBeforeIO(t *testing.T) {
 	if loader.calls.Load() != 0 {
 		t.Fatalf("loads=%d", loader.calls.Load())
 	}
-	// 相同热ID仍可执行，证明错误路径没有遗留 Guard；声明冷目标后 Slow 正常加载/发布。
+	// 相同热ID仍可执行，证明错误路径没有遗留 Guard；声明冷目标后 IO 正常加载/发布。
 	for _, id := range []int64{hot, cold} {
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-		ret, err := mgr.Request(ctx, NewHandlerName("ready"), id, nil, SendOptionSlow())
+		ret, err := mgr.Request(ctx, NewHandlerName("ready"), id, nil, SendOptionIO())
 		cancel()
 		if err != nil || ret != "ok" {
 			t.Fatalf("%v %v", ret, err)
@@ -114,7 +114,7 @@ func TestFastContinuationRejectsSelfDispatchAndSavedSlowExecutorRunsInline(t *te
 	var manager *NestMgr
 	executorCalls, localCalls := 0, 0
 	saved := entity.WithLocalExecutor(context.Background(), func(fn func()) error { executorCalls++; fn(); return nil })
-	_, release := fctx.NewContext(fctx.WithFastWorker(), fctx.WithHandler("self_dispatch"))
+	_, release := fctx.NewContext(fctx.WithShortWorker(), fctx.WithHandler("self_dispatch"))
 	defer release()
 	if err := entity.RunLocal(saved, func() { localCalls++ }); err != nil {
 		t.Fatal(err)
@@ -124,11 +124,11 @@ func TestFastContinuationRejectsSelfDispatchAndSavedSlowExecutorRunsInline(t *te
 	}
 	defer func() {
 		err, ok := recover().(error)
-		if !ok || !errors.Is(err, fctx.ErrBlockingInFastWorker) || !strings.Contains(err.Error(), "dispatchFastContinuation") {
+		if !ok || !errors.Is(err, fctx.ErrBlockingInBusinessWorker) || !strings.Contains(err.Error(), "dispatchBusinessContinuation") {
 			t.Fatalf("panic=%v", err)
 		}
 	}()
-	_, _ = manager.dispatchFastContinuation(nil, nil)
+	_, _ = manager.dispatchBusinessContinuation(nil, nil)
 }
 
 func TestFastBroadcastReportsColdTargetAndContinues(t *testing.T) {
@@ -154,7 +154,7 @@ func TestFastBroadcastReportsColdTargetAndContinues(t *testing.T) {
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	defer slog.SetDefault(old)
-	_, release := fctx.NewContext(fctx.WithFastWorker(), fctx.WithHandler(name.String()))
+	_, release := fctx.NewContext(fctx.WithShortWorker(), fctx.WithHandler(name.String()))
 	defer release()
 	_, end := entity.NewGuardScope("broadcast-cold")
 	defer end()

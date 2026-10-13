@@ -15,10 +15,10 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -122,7 +122,7 @@ func TestGeneratedDataEngineProcessLifecycle(t *testing.T) {
 					t.Fatalf("phase=%d id=%d loaded value/version=%d/%d want=%d", phase, id, account.state.GetValue(), account.state.DirtyTracker().Version(), wantBefore)
 				}
 			}
-			options := append(runtime.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 8, QueueCap: 256}, nest.WorkerPoolConfig{}))
+			options := append(runtime.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 8, QueueCap: 256}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 			scheduler := nest.NewEngine(options...)
 			scheduler.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 				state := es[0].(*Account).state

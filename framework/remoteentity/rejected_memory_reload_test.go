@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 )
 
 // RR-20260926-39：Remote 事务被持久拒绝、实例隔离后，框架在释放 gate 之后对旧实例做“仅内存卸载”
@@ -36,7 +36,7 @@ func (e *reloadableFullDocEntity) OnDestroy(reason entity.EntityDestroyReason) {
 	if e.duringDestroy != nil {
 		e.duringDestroy()
 	}
-	e.destroyedOnFast.Store(fctx.InFastWorker())
+	e.destroyedOnFast.Store(fctx.InShortWorker())
 	select {
 	case e.destroyed <- reason:
 	default:
@@ -305,7 +305,7 @@ func TestRejectedStrictWriteReloadsFromAuthority(t *testing.T) {
 // 驱逐同一接线）。finalizer 拿到持久拒绝后，仅内存卸载在 Nest 快池执行（不在 finalizer goroutine 上取实体锁）。
 // Sync 与 RR-30 驱逐同一规则：卸载关闭旧同步状态（被拒绝的内容不交付、也不发 remove，订阅保持），
 // 重载后的实例重新接上（kit 在 OnEntityLoaded 上调 Rebind；这里用等价的 Register 路径）时原订阅者收到全量。
-func TestRejectedWriteUnloadsOnNestFastPoolAndRebindsSync(t *testing.T) {
+func TestRejectedWriteUnloadsOnNestShortPoolAndRebindsSync(t *testing.T) {
 	f, live := newReloadFixture(t, 1955)
 	frames := make(chan []byte, 8)
 	syncMgr, err := entitysync.NewManager(entitysync.ManagerConfig{Mode: entitysync.ModePeriodic, Interval: time.Hour, Transport: entitysync.TransportFunc(func(_ context.Context, _ entitysync.SessionID, p []byte) error {
@@ -339,7 +339,7 @@ func TestRejectedWriteUnloadsOnNestFastPoolAndRebindsSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithRemoteEntityManager(f.mgr), nest.NestOptionWithEntitySync(syncMgr), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}))
+	engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithRemoteEntityManager(f.mgr), nest.NestOptionWithEntitySync(syncMgr), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	if err = engine.Start(); err != nil {
 		t.Fatal(err)
 	}

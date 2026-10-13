@@ -14,7 +14,7 @@ type preparedEntity struct {
 }
 
 // preparedGetter 只缓存本次声明目标；加载不获取 Entity 业务锁。
-// Touch 保护慢→快交接期间的存活；UnTouch 可能触发销毁，因此必须在快池归还。
+// Touch 保护慢→快交接期间的存活；UnTouch 可能触发销毁，因此必须在业务池归还。
 type preparedGetter struct {
 	base    entity.Getter
 	entries map[int64]preparedEntity
@@ -57,11 +57,11 @@ func (p *preparedGetter) release() {
 	}
 
 }
-func prepareSlowEntities(msg *Msg) error {
+func prepareIOEntities(msg *Msg) error {
 	ids := dispatchIDs(msg)
 	p := &preparedGetter{base: msg.getter, entries: make(map[int64]preparedEntity, len(ids))}
 	msg.getter = p
-	// 即使 getter panic，已取得的引用仍由 dispatch 的快阶段兜底归还。
+	// 即使 getter panic，已取得的引用仍由 dispatch 的业务阶段兜底归还。
 	msg.prepared = p
 	if msg.Type == MsgTypeMulti || msg.Type == MsgTypeMultiGroup {
 		full, categories, err := normalizeFullIDs(ids)
@@ -106,18 +106,18 @@ func (g loadedGetter) GetMany(ctx context.Context, ids []int64, categories []ent
 }
 
 // errDeclaredTargetCold 标记“声明目标在 handler 取得 Guard 之前被发现未加载或已被驱逐”。
-// 它只在快池首跑、业务执行之前产生；dispatchNest 据此让派发队列把同一条已准入请求原位
-// 转到慢池准备，保留准入资格和同 ID 顺序位置（RR-20260926-25）。慢准备后的快续行不再
+// 它只在业务池首跑、业务执行之前产生；dispatchNest 据此让派发队列把同一条已准入请求原位
+// 转到I/O 池准备，保留准入资格和同 ID 顺序位置（RR-20260926-25）。I/O 准备后的业务续行不再
 // 产生它，冷目标错误照常返回。
-var errDeclaredTargetCold = errors.New("nest: declared target is not loaded; moving to slow preparation")
+var errDeclaredTargetCold = errors.New("nest: declared target is not loaded; moving to IO preparation")
 
-// declaredTargetsNeedSlowPreparation 在统一准入时判断声明目标里是否有需要加载的冷实体。
+// declaredTargetsNeedIOPreparation 在统一准入时判断声明目标里是否有需要加载的冷实体。
 // 只用 Getter 可选实现的 entity.LoadedChecker（ManagerAccess 实现为一次内存查找），不调用 Get：
-// 准入在发送方 goroutine 上执行——包括在 handler 里发送的快 worker 和唯一的延迟派发 goroutine——
+// 准入在发送方 goroutine 上执行——包括在 handler 里发送的业务 worker 和唯一的延迟派发 goroutine——
 // 不能依赖自定义 Getter 遵守 LoadedEntitiesOnly（RR-20260926-47）。Getter 未实现时 NewEngine 不安装本判定。
 // 广播是尽力扇出，冷目标逐个报告（TestFastBroadcastReportsColdTargetAndContinues），不为它批量冷加载；
 // 组迁移等内部消息没有业务目标。ID 格式错误留给派发阶段按原语义报告。
-func (mgr *NestMgr) declaredTargetsNeedSlowPreparation(msg *Msg) bool {
+func (mgr *NestMgr) declaredTargetsNeedIOPreparation(msg *Msg) bool {
 	checker := mgr.loadedChecker
 	if checker == nil {
 		return false
@@ -152,11 +152,11 @@ func (mgr *NestMgr) declaredTargetsNeedSlowPreparation(msg *Msg) bool {
 	return false
 }
 
-// beforeSlowPreparation 报告当前派发是否是快池首跑（尚未经过慢准备，msg.prepared == nil），并且本引擎
+// beforeIOPreparation 报告当前派发是否是业务池首跑（尚未经过I/O 准备，msg.prepared == nil），并且本引擎
 // 在准入时做了冷目标判定（Getter 实现 LoadedChecker）。只有这时发现的声明目标冷缺失/驱逐才改写为
-// errDeclaredTargetCold；慢准备后的续行已持有准备阶段的引用，冷目标错误原样返回，不会第二次迁移。
+// errDeclaredTargetCold；I/O 准备后的续行已持有准备阶段的引用，冷目标错误原样返回，不会第二次迁移。
 // 准入不判冷的 Getter 没有“准入时已加载”这个前提，冷目标按 RR-02 原样返回（RR-20260926-47）。
-func (mgr *NestMgr) beforeSlowPreparation() bool {
+func (mgr *NestMgr) beforeIOPreparation() bool {
 	if mgr.loadedChecker == nil {
 		return false
 	}

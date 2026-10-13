@@ -129,9 +129,9 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 }
 
 // deferPostRemoteCommit 把 Sync Confirm 与 AfterCommit 交给 Remote 批次的持久结论（RR-20260926-37）。
-// 结论为已提交时回调按注册顺序在本地执行入口（快池）运行，每个回调独立隔离 panic；原请求已经或即将以
+// 结论为已提交时回调按注册顺序在本地执行入口（业务池）运行，每个回调独立隔离 panic；原请求已经或即将以
 // “结果未知”的错误回复（二者可能并发），回调错误只记录日志与指标。回调看到的是原请求的上下文快照
-// （RR-20260926-61，见 deferredRequestSnapshot），与结论及时到达时经快池续行执行看到的一致。Nest 已停机或已 fence
+// （RR-20260926-61，见 deferredRequestSnapshot），与结论及时到达时经业务池续行执行看到的一致。Nest 已停机或已 fence
 // 时 Remote 收尾不会调用闭包（不离池执行，计数告警），这些回调就不执行。结论为拒绝时只丢弃批次内 Remote 实体的
 // Sync 门与事实（RejectEntities，RR-20260926-58）：本地部分已经持久提交，本地实体的门按 Confirm 放行；
 // AfterCommit 不执行。批次不接手（没有后续持久结论）时什么也不做：没有持久结论就不 Confirm，门保持冻结。
@@ -172,9 +172,9 @@ func (m *Msg) deferPostRemoteCommit(batch entity.RemoteWriteBatch) {
 	metrics.IncCounter("nest.remote.post_commit_without_outcome_total", metrics.Labels{"handler": handler}, 1)
 }
 
-// deferredRequestSnapshot 捕获慢阶段此刻的请求上下文（快阶段写回的请求数据已在其中），供延迟执行的提交后回调使用
-// （RR-20260926-61）。两处与原样不同：去掉慢阶段注入的本地执行器（执行器属于正在结束的这次派发，不能随快照进入
-// 快阶段）；Base 与请求 ctx 的取消脱钩——结论到达时回复早已发出、请求 ctx 通常已取消，取消等待不等于撤销业务，
+// deferredRequestSnapshot 捕获I/O 阶段此刻的请求上下文（业务阶段写回的请求数据已在其中），供延迟执行的提交后回调使用
+// （RR-20260926-61）。两处与原样不同：去掉I/O 阶段注入的本地执行器（执行器属于正在结束的这次派发，不能随快照进入
+// 业务阶段）；Base 与请求 ctx 的取消脱钩——结论到达时回复早已发出、请求 ctx 通常已取消，取消等待不等于撤销业务，
 // 已提交事务的回调不应因此失败。Base 上的值（请求元数据等）保留。
 func deferredRequestSnapshot() fctx.ContextSnapshot {
 	snapshot := fctx.CaptureSnapshot()
@@ -400,7 +400,7 @@ type Msg struct {
 	// 观测与调度标志。转 I/O 保留作业身份和 tail，不重复准入或释放消息。
 	queuedAt     time.Time
 	stageMetrics bool
-	slowReroute  bool // 声明目标在取 Guard 前变冷，需要原位转 I/O 准备。
+	ioReroute    bool // 声明目标在取 Guard 前变冷，需要原位转 I/O 准备。
 }
 
 func (m *Msg) Key() int64 {

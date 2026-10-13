@@ -24,11 +24,11 @@ func TestFastWorkerRejectsRemoteWaitingBeforeMutation(t *testing.T) {
 	}
 	for name, call := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, release := fctx.NewContext(fctx.WithFastWorker(), fctx.WithHandler("misuse"))
+			_, release := fctx.NewContext(fctx.WithShortWorker(), fctx.WithHandler("misuse"))
 			defer release()
 			defer func() {
 				err, ok := recover().(error)
-				if !ok || !errors.Is(err, fctx.ErrBlockingInFastWorker) || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "misuse") {
+				if !ok || !errors.Is(err, fctx.ErrBlockingInBusinessWorker) || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "misuse") {
 					t.Fatalf("panic=%v", err)
 				}
 				if batch.closed || batch.committed || batch.reserved {

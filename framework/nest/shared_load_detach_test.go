@@ -11,10 +11,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// RR-20260926-54（Nest 正式链路）：Nest 慢阶段准备以请求自己的截止时间领头一次冷加载，截止后
+// RR-20260926-54（Nest 正式链路）：Nest I/O 阶段准备以请求自己的截止时间领头一次冷加载，截止后
 // 请求结束、Msg 回收；同一 flight 里预算更长的等待方仍要拿到结果。加载不能再用领头方的 ctx
-// ——既不能随它的截止被取消，也不能在它结束后还经它的快续行（已回收的 Msg）发布实体：发布改走
-// Nest 绑定给 ManagerAccess 的 RunLocal，仍在快 worker 上执行。
+// ——既不能随它的截止被取消，也不能在它结束后还经它的业务续行（已回收的 Msg）发布实体：发布改走
+// Nest 绑定给 ManagerAccess 的 RunLocal，仍在业务 worker 上执行。
 
 type gatedStageLoader struct {
 	manager      *entity.EntityManager
@@ -26,7 +26,7 @@ type gatedStageLoader struct {
 
 func (l *gatedStageLoader) LoadEntity(ctx context.Context, id int64, kind entity.EntityKind) (entity.IThreadSafeEntity, error) {
 	l.loads.Add(1)
-	if fctx.InFastWorker() {
+	if fctx.InShortWorker() {
 		return nil, errors.New("loader ran in fast worker")
 	}
 	l.entered <- struct{}{}
@@ -38,7 +38,7 @@ func (l *gatedStageLoader) LoadEntity(ctx context.Context, id int64, kind entity
 	var value entity.IThreadSafeEntity
 	var createErr error
 	err := entity.RunLocal(ctx, func() {
-		if !fctx.InFastWorker() {
+		if !fctx.InShortWorker() {
 			l.publishedOff.Store(true)
 		}
 		value = newMockEntityWithKind(id, entity.ResolveEntityID(id).Category, kind)
@@ -54,7 +54,7 @@ func TestSlowPreparationLeaderTimeoutDoesNotCutTheSharedLoad(t *testing.T) {
 	if _, err := access.ConfigureLoader(loader); err != nil {
 		t.Fatal(err)
 	}
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{2, 8}))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{}, WorkerPoolConfig{2, 8}))
 	mgr.MustRegisterHandlerWithMeta(NewHandlerName("touch"), func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
 		return len(es), nil
 	}, HandlerMeta{Rollback: RollbackNone, Durability: DurabilityMemory})
@@ -93,10 +93,10 @@ func TestSlowPreparationLeaderTimeoutDoesNotCutTheSharedLoad(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the leader did not return when its budget expired")
 	}
-	// 等领头请求在慢池、快池都彻底结束（Msg 已回收），再放行加载：发布只能走绑定的快池入口。
+	// 等领头请求在I/O 池、业务池都彻底结束（Msg 已回收），再放行加载：发布只能走绑定的业务池入口。
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
 		queue := mgr.Stats().Queue
-		if queue.Slow.Running == 0 && queue.Fast.Running == 0 && queue.ContinuationRunning == 0 {
+		if queue.IO.Running == 0 && queue.Short.Running == 0 && queue.ContinuationRunning == 0 {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -118,7 +118,7 @@ func TestSlowPreparationLeaderTimeoutDoesNotCutTheSharedLoad(t *testing.T) {
 	if n := loader.loads.Load(); n != 1 {
 		t.Fatalf("loads=%d, want the waiter to share the leader's flight", n)
 	}
-	// 实体已发布，后续请求直接在快池执行。
+	// 实体已发布，后续请求直接在业务池执行。
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if ret, err := mgr.Request(ctx, NewHandlerName("touch"), cold, nil); err != nil || ret != 1 {

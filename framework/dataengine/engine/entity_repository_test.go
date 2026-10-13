@@ -411,11 +411,11 @@ func TestRepositoryRejectsFastColdLoadBeforeJoiningFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo.flights[id] = &entityLoadFlight{done: make(chan struct{})}
-	_, release := fctx.NewContext(fctx.WithFastWorker(), fctx.WithHandler("repository_cold"))
+	_, release := fctx.NewContext(fctx.WithShortWorker(), fctx.WithHandler("repository_cold"))
 	defer release()
 	defer func() {
 		err, ok := recover().(error)
-		if !ok || !errors.Is(err, fctx.ErrBlockingInFastWorker) || !errors.Is(err, entity.ErrColdLoadInLogic) {
+		if !ok || !errors.Is(err, fctx.ErrBlockingInBusinessWorker) || !errors.Is(err, entity.ErrColdLoadInLogic) {
 			t.Fatalf("panic=%v", err)
 		}
 		if store.transactions.Load() != 0 || len(repo.flights) != 1 {

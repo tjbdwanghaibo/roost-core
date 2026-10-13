@@ -10,7 +10,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-// Remote 后端预算拒绝发生于慢阶段；不得执行业务，也不得遗留同 ID 的调度所有权。
+// Remote 后端预算拒绝发生于I/O 阶段；不得执行业务，也不得遗留同 ID 的调度所有权。
 func TestRemoteBudgetRejectionReleasesIDAndWorkers(t *testing.T) {
 	var prepares, ran atomic.Int32
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -28,7 +28,7 @@ func TestRemoteBudgetRejectionReleasesIDAndWorkers(t *testing.T) {
 	first := stagedSend(t, m, id, true, func() { ran.Add(1) })
 	stagedSignal(t, entered)
 	second := stagedSend(t, m, id, true, func() { ran.Add(1) })
-	// 普通慢业务也能回到快池执行，不需要获取 Remote 写额度。
+	// 普通慢业务也能回到业务池执行，不需要获取 Remote 写额度。
 	msg, ch := GenSyncMsg(MsgTypeSingle)
 	msg.Name = "staged"
 	msg.Tid = local

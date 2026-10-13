@@ -48,10 +48,10 @@ func TestTCPSenderRejectsFastWorkerBeforeResolverOrSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	func() {
-		_, release := fctx.NewContext(fctx.WithFastWorker())
+		_, release := fctx.NewContext(fctx.WithShortWorker())
 		defer release()
 		for _, send := range []func(context.Context, nettransport.SessionID, []byte) error{sender.SendDatagram, sender.SendReliable} {
-			if err := send(context.Background(), 7, nil); !errors.Is(err, fctx.ErrBlockingInFastWorker) {
+			if err := send(context.Background(), 7, nil); !errors.Is(err, fctx.ErrBlockingInBusinessWorker) {
 				t.Errorf("fast worker accepted: %v", err)
 			}
 		}

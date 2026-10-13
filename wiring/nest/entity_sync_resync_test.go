@@ -8,15 +8,15 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 )
 
 // reloadLoader 是 AggregateLoader：按“权威”构造同 ID 的新实例，发布经 entity.RunLocal（与 EntityRepository 相同）。
 type reloadLoader struct {
 	manager *entity.EntityManager
-	loads   chan bool // 值：发布是否在快池执行
+	loads   chan bool // 值：发布是否在业务池执行
 }
 
 func (loader *reloadLoader) LoadEntity(ctx context.Context, id int64, _ entity.EntityKind) (entity.IThreadSafeEntity, error) {
@@ -26,7 +26,7 @@ func (loader *reloadLoader) LoadEntity(ctx context.Context, id int64, _ entity.E
 	var addErr error
 	onFast := false
 	if err := entity.RunLocal(ctx, func() {
-		onFast = fctx.InFastWorker()
+		onFast = fctx.InShortWorker()
 		addErr = loader.manager.TryAdd(fresh)
 	}); err != nil {
 		return nil, err
@@ -36,7 +36,7 @@ func (loader *reloadLoader) LoadEntity(ctx context.Context, id int64, _ entity.E
 }
 
 // RR-20260926-59：kit 装配在 Nest Mod 启动时把 entitysync 接到 ManagerAccess 的卸载后重载（ConfigureUnloadResync，
-// 发布经 NestMgr.RunLocal 回快池），停止时先停重载再停 Nest。卸载一个仍有订阅者的实体后，框架主动重载并重新绑定。
+// 发布经 NestMgr.RunLocal 回业务池），停止时先停重载再停 Nest。卸载一个仍有订阅者的实体后，框架主动重载并重新绑定。
 func TestEntitySyncModResyncsSubscribersAfterUnload(t *testing.T) {
 	cfg := viper.New()
 	frames := make(chan []byte, 8)

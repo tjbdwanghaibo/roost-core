@@ -17,7 +17,7 @@ import (
 )
 
 // 本文件只比较单 ID 的调度，不运行 Entity/Guard/事务/DAO/网络业务。
-// id 分片是测试对照组，不具备正式队列的多 ID、慢准备、续行和取消契约。
+// id 分片是测试对照组，不具备正式队列的多 ID、I/O 准备、续行和取消契约。
 type dispatchComparisonPool struct {
 	admit func(*Msg) error
 	stop  func(context.Context) error
@@ -26,7 +26,7 @@ type dispatchComparisonPool struct {
 func newDispatchComparisonPool(kind string, workers int, handler func(*Msg)) dispatchComparisonPool {
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: nestLocalKind, Category: 1, BusinessPool: entity.BusinessPoolShort})
 	if kind == "nest" {
-		q := newDispatchQueue("dispatch_compare", WorkerPoolConfig{workers, DefaultFastQueueCapacity}, WorkerPoolConfig{}, handler, nil)
+		q := newDispatchQueue("dispatch_compare", WorkerPoolConfig{workers, DefaultShortQueueCapacity}, WorkerPoolConfig{}, handler, nil)
 		q.start()
 		return dispatchComparisonPool{func(m *Msg) error { return q.admit(m, false) }, q.stop}
 	}
@@ -34,8 +34,8 @@ func newDispatchComparisonPool(kind string, workers int, handler func(*Msg)) dis
 	var wg sync.WaitGroup
 	for i := range queues {
 		// 总等待容量与 Nest 相同（余数留给前几个分片）；测试窗口远小于任何分片容量。
-		capacity := DefaultFastQueueCapacity / workers
-		if i < DefaultFastQueueCapacity%workers {
+		capacity := DefaultShortQueueCapacity / workers
+		if i < DefaultShortQueueCapacity%workers {
 			capacity++
 		}
 		queues[i] = make(chan *Msg, capacity)
@@ -43,9 +43,9 @@ func newDispatchComparisonPool(kind string, workers int, handler func(*Msg)) dis
 		go func(queue <-chan *Msg) {
 			defer wg.Done()
 			for m := range queue {
-				// 与 dispatchQueue.work 的快阶段保留相同的异常隔离、fctx 和 Msg 释放。
+				// 与 dispatchQueue.work 的业务阶段保留相同的异常隔离、fctx 和 Msg 释放。
 				goroutine.SafeFunc(func() {
-					_, release := fctx.NewContext(fctx.WithSource("worker"), fctx.WithHandler("dispatch_compare"), fctx.WithFastWorker())
+					_, release := fctx.NewContext(fctx.WithSource("worker"), fctx.WithHandler("dispatch_compare"), fctx.WithShortWorker())
 					defer release()
 					defer m.OnRelease()
 					handler(m)
@@ -372,7 +372,7 @@ func TestDispatchComparisonIDsStayInShortPool(t *testing.T) {
 			for i := range 10000 {
 				id := dispatchComparisonID(i, workers, distribution)
 				meta := entity.ResolveEntityID(id)
-				if meta.Kind != nestLocalKind || meta.UniqueID <= 0 || businessLane(&Msg{Tid: id}) != dispatchFastLane {
+				if meta.Kind != nestLocalKind || meta.UniqueID <= 0 || businessLane(&Msg{Tid: id}) != dispatchShortLane {
 					t.Fatalf("invalid comparison ID: %+v", meta)
 				}
 				seen[id] = struct{}{}

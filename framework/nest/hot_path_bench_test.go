@@ -78,7 +78,7 @@ func benchmarkNestHotPath(b *testing.B, shape string, workers int, independent, 
 			}
 		}
 	}
-	engine := NewEngine(NestOptionWithGetter(getter), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: workers, QueueCap: 1024}, WorkerPoolConfig{}), NestOptionWithStageMetrics(false))
+	engine := NewEngine(NestOptionWithGetter(getter), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: workers, QueueCap: 1024}, WorkerPoolConfig{}, WorkerPoolConfig{}), NestOptionWithStageMetrics(false))
 	name := NewHandlerName("bench_hot_path")
 	slots := make(chan int, window)
 	for slot := range window {

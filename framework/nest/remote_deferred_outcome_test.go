@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 // outcomeDeferringBatch 模拟 remoteentity 在 strict 确认超时后的批次：Commit 返回“结果未知”，
@@ -44,7 +44,7 @@ func (b *outcomeDeferringBatch) takeOutcome() func(bool) {
 }
 
 // RR-20260926-37：本地已持久提交、strict 远端确认超时时，Sync Confirm 与 AfterCommit 不能丢，也不能在没有持久结论时执行。
-// 它们随批次交给 finalizer：Committed 时经 Nest 本地执行入口在快池执行一次；Rejected 时丢弃 Sync 门（不阻塞后续提交、
+// 它们随批次交给 finalizer：Committed 时经 Nest 本地执行入口在业务池执行一次；Rejected 时丢弃 Sync 门（不阻塞后续提交、
 // 不执行 AfterCommit）；停机排空拿不到结论时门保持冻结。REPRO-2026-09-26-04 §5 探针改写。
 func TestStrictRemoteConfirmTimeoutDefersPostCommitToDurableOutcome(t *testing.T) {
 	for _, mode := range []entitysync.SyncMode{entitysync.ModePeriodic, entitysync.ModeOnChange} {
@@ -74,7 +74,7 @@ func TestStrictRemoteConfirmTimeoutDefersPostCommitToDurableOutcome(t *testing.T
 					}
 					return &stagedRemoteBatch{}, nil
 				}}}
-				mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithEntitySync(m), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
+				mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithEntitySync(m), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 				name := NewHandlerName(fmt.Sprintf("strict_confirm_outcome_%d", unique))
 				var hookMu sync.Mutex
 				afterCommit, afterCommitOnFast := 0, 0
@@ -84,7 +84,7 @@ func TestStrictRemoteConfirmTimeoutDefersPostCommitToDurableOutcome(t *testing.T
 					AfterCommit(func() {
 						hookMu.Lock()
 						afterCommit++
-						if fctx.InFastWorker() {
+						if fctx.InShortWorker() {
 							afterCommitOnFast++
 						}
 						hookMu.Unlock()
@@ -133,7 +133,7 @@ func TestStrictRemoteConfirmTimeoutDefersPostCommitToDurableOutcome(t *testing.T
 				}
 				switch conclusion {
 				case "committed":
-					// finalizer 拿到 Applied/Committed：经 Nest 本地执行入口调用一次（非快 worker 发起）。
+					// finalizer 拿到 Applied/Committed：经 Nest 本地执行入口调用一次（非业务 worker 发起）。
 					done := make(chan error, 1)
 					go func() { done <- run(func() { outcome(true) }) }()
 					if err := <-done; err != nil {

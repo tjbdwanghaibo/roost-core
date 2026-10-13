@@ -81,7 +81,7 @@ func TestHandlerCreateInsideDestroyWindowIsTreatedAsLockConflict(t *testing.T) {
 		pilots := addPilots(t, manager, 38100, 1)
 		access := entity.NewManagerAccess(manager)
 		x := mustBuildCastID(t, 38105, entity.EntityCategory(1), createdInScopeKind)
-		mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
+		mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 		attempts := &createAttempts{first: make(chan struct{})}
 		name := NewHandlerName("b18_destroy_window_strict")
 		mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
@@ -130,7 +130,7 @@ func TestHandlerCreateInsideDestroyWindowIsTreatedAsLockConflict(t *testing.T) {
 		pilots := addPilots(t, manager, 38110, 1)
 		access := entity.NewManagerAccess(manager)
 		x := mustBuildCastID(t, 38115, entity.EntityCategory(1), createdInScopeKind)
-		mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
+		mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 		attempts := &createAttempts{first: make(chan struct{})}
 		name := NewHandlerName("b18_destroy_window_memory")
 		mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
@@ -183,8 +183,8 @@ func newRevokeWindowFixture(t *testing.T, unique int64) *revokeWindowFixture {
 	f.pilots = addPilots(t, f.manager, unique, 2)
 	f.access = entity.NewManagerAccess(f.manager)
 	f.x = mustBuildCastID(t, unique+5, entity.EntityCategory(1), createdInScopeKind)
-	// A 停在 post-release 里占一个快 worker（测试同步点），B 需要另一个。
-	f.mgr = NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
+	// A 停在 post-release 里占一个业务 worker（测试同步点），B 需要另一个。
+	f.mgr = NewEngine(NestOptionWithGetter(f.access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 	f.aName = NewHandlerName("rr81_create_then_fail")
 	f.mgr.MustRegisterHandlerWithMeta(f.aName, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 		if _, err := f.access.Create(createParam(f.x)); err != nil {
@@ -371,7 +371,7 @@ func TestOuterCreateAfterNestedRevokeInSameGuardFailsDeterministically(t *testin
 			access := entity.NewManagerAccess(manager)
 			x := mustBuildCastID(t, 38125+int64(i)*10, entity.EntityCategory(1), createdInScopeKind)
 			committer := &recordingCommitter{}
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 			nestedBoom := errors.New("nested transaction failed after creating X")
 			var runs int
 			var isoErr, outerErr error
@@ -441,7 +441,7 @@ func TestCreateInOtherManagerAfterSameIDRevokeKeepsRemovalWindowConflict(t *test
 			defer window.finish(t)
 
 			committer := &recordingCommitter{}
-			mgr := NewEngine(NestOptionWithGetter(accessA), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
+			mgr := NewEngine(NestOptionWithGetter(accessA), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 			nestedBoom := errors.New("nested transaction failed after creating X in A")
 			var isoErr, crossErr error
 			var runs int

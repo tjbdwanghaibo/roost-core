@@ -48,7 +48,7 @@ type IThreadSafeEntityBase interface {
 // Getter 必须保留 context；LoadedEntitiesOnly 为真（快 worker 或显式约束的 ctx）时
 // 仅允许内存读取，冷目标返回可 errors.Is 判别的 ErrColdLoadInLogic，不能执行 I/O、
 // 不能等待加载，也不能 panic：冷缺失本身不阻塞，业务可以据此降级（RR-20260926-26）。
-// 在快 worker 上返回的错误同时包裹 fctx.ErrBlockingInFastWorker。Nest 统一准入不调用
+// 在快 worker 上返回的错误同时包裹 fctx.ErrBlockingInBusinessWorker。Nest 统一准入不调用
 // Get 判断冷热，只用可选的 LoadedChecker（RR-20260926-47）。
 type Getter interface {
 	Get(context.Context, int64, EntityCategory) (IThreadSafeEntity, error)

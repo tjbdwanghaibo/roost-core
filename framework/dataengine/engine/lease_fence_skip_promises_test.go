@@ -10,10 +10,10 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -317,14 +317,14 @@ type evictionTestEntity struct {
 
 func (value *evictionTestEntity) Base() *entity.EntityBase { return value.EntityBase }
 func (value *evictionTestEntity) OnDestroy(entity.EntityDestroyReason) {
-	if fctx.InFastWorker() {
+	if fctx.InShortWorker() {
 		value.destroyedOnFast.Add(1)
 	}
 }
 
 // Runtime 驱逐：Nest 构造时把 RunLocal 绑定给作为 committer 的 Projector，驱逐在快池持锁执行，
 // 常驻实体被移出内存（不删库）。
-func TestSkippedFencedStepEvictsTheResidentEntityOnTheFastPool(t *testing.T) {
+func TestSkippedFencedStepEvictsTheResidentEntityOnTheShortPool(t *testing.T) {
 	store, client, collection := newMongoStoreTest(t)
 	seedHero(t, collection, 4)
 	seedClaim(t, client, fencedClaim, "worker-1", 7, fencedDigest, time.Now().UTC().Add(-time.Second))

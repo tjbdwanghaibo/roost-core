@@ -12,18 +12,18 @@ import (
 // Context is the per-goroutine request context.
 // It carries request-scoped metadata for logging, timing, and config access.
 type Context struct {
-	Now        time.Time
-	NowMilli   int64
-	Config     any
-	Base       stdctx.Context
-	Frame      uint64
-	Meta       RequestMeta
-	Trace      TraceMeta
-	SyncWait   time.Duration
-	keyValue   map[any]any
-	longWorker bool
-	ioWorker   bool
-	fastWorker bool // 当前 goroutine 的执行位置，不进入 Snapshot
+	Now         time.Time
+	NowMilli    int64
+	Config      any
+	Base        stdctx.Context
+	Frame       uint64
+	Meta        RequestMeta
+	Trace       TraceMeta
+	SyncWait    time.Duration
+	keyValue    map[any]any
+	longWorker  bool
+	ioWorker    bool
+	shortWorker bool // 当前 goroutine 的执行位置，不进入 Snapshot
 }
 
 // ContextSnapshot 用于框架控制的同步交接。异步 Nest 只带 Meta/Trace，并在入队时
@@ -103,7 +103,7 @@ func NewContext(opts ...Option) (*Context, func()) {
 	prev := CurrentContext()
 	c := contextPool.Get().(*Context)
 	c.init()
-	c.fastWorker = prev != nil && prev.fastWorker
+	c.shortWorker = prev != nil && prev.shortWorker
 	c.longWorker = prev != nil && prev.longWorker
 	c.ioWorker = prev != nil && prev.ioWorker
 	for _, opt := range opts {
@@ -156,7 +156,7 @@ func NowMilli() int64 {
 
 // Clear clears request-scoped state before the context is returned to pool.
 func (c *Context) Clear() {
-	c.fastWorker = false
+	c.shortWorker = false
 	c.longWorker = false
 	c.ioWorker = false
 	c.Config = nil

@@ -13,10 +13,10 @@ import (
 )
 
 // RR-20260926-48：handler 内新建实体的取锁遵循与 Cast 相同的锁序。新实体的锁组不高于已持有的锁组时只 try-lock，
-// 被占用时整条消息回滚并以 ErrLockTimeout 重新准入，不在快 worker 上无界等待；memory 模式 handler 内 Create
+// 被占用时整条消息回滚并以 ErrLockTimeout 重新准入，不在业务 worker 上无界等待；memory 模式 handler 内 Create
 // 同样在 Guard 作用域内持锁到 handler 结束。
 
-// blockingCommitter 让第一次 Commit 停在 release 上（模拟锁内 WAL 准入，属于快池等待豁免），其余立即返回。
+// blockingCommitter 让第一次 Commit 停在 release 上（模拟锁内 WAL 准入，属于业务池等待豁免），其余立即返回。
 type blockingCommitter struct {
 	calls   atomic.Int64
 	entered chan struct{}
@@ -65,15 +65,15 @@ func addPilots(t *testing.T, manager *entity.EntityManager, first int64, n int) 
 	return ids
 }
 
-// REPRO-2026-09-26-05 §1 探针 A：两个 handler 以相反顺序新建 X、Y。修前两个快 worker 永久停在 RequireEntity；
-// 修后冲突方整条回滚并重新准入，两请求都有确定结果（一个建成两者，另一个得到 ErrEntityExists），快池不被占满。
+// REPRO-2026-09-26-05 §1 探针 A：两个 handler 以相反顺序新建 X、Y。修前两个业务 worker 永久停在 RequireEntity；
+// 修后冲突方整条回滚并重新准入，两请求都有确定结果（一个建成两者，另一个得到 ErrEntityExists），业务池不被占满。
 func TestHandlerCreateCrossOrderResolvesWithoutDeadlock(t *testing.T) {
 	manager := entity.NewEntityManager()
 	ids := addPilots(t, manager, 9850, 3)
 	access := entity.NewManagerAccess(manager)
 	x := mustBuildCastID(t, 9860, entity.EntityCategory(1), createdInScopeKind)
 	y := mustBuildCastID(t, 9861, entity.EntityCategory(1), createdInScopeKind)
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 	first := make(chan struct{}, 2)
 	proceed := make(chan struct{})
 	var attempts [2]atomic.Int64
@@ -114,7 +114,7 @@ func TestHandlerCreateCrossOrderResolvesWithoutDeadlock(t *testing.T) {
 			t.Fatalf("unrelated memory request failed: %v", r.err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatalf("unrelated request did not finish within 2s: fast workers are parked on created-entity locks (AB/BA on x=%d y=%d); stats=%+v", x, y, mgr.Stats().Queue.Fast)
+		t.Fatalf("unrelated request did not finish within 2s: fast workers are parked on created-entity locks (AB/BA on x=%d y=%d); stats=%+v", x, y, mgr.Stats().Queue.Short)
 	}
 	results := map[string]requestResult{}
 	for len(results) < 2 {
@@ -122,7 +122,7 @@ func TestHandlerCreateCrossOrderResolvesWithoutDeadlock(t *testing.T) {
 		case r := <-out:
 			results[r.tag] = r
 		case <-time.After(5 * time.Second):
-			t.Fatalf("cross-order creates did not both finish within 5s: got %v; stats=%+v", results, mgr.Stats().Queue.Fast)
+			t.Fatalf("cross-order creates did not both finish within 5s: got %v; stats=%+v", results, mgr.Stats().Queue.Short)
 		}
 	}
 	defer func() { _ = mgr.Shutdown(context.Background()) }()
@@ -150,10 +150,10 @@ func TestHandlerCreateCrossOrderResolvesWithoutDeadlock(t *testing.T) {
 	}
 	// 回复先于 worker 的收尾记账发出，给收尾一个有界窗口；停在锁上的 worker 不会在窗口内归零。
 	idleBy := time.Now().Add(time.Second)
-	for mgr.Stats().Queue.Fast.Running != 0 && time.Now().Before(idleBy) {
+	for mgr.Stats().Queue.Short.Running != 0 && time.Now().Before(idleBy) {
 		time.Sleep(time.Millisecond)
 	}
-	if running := mgr.Stats().Queue.Fast.Running; running != 0 {
+	if running := mgr.Stats().Queue.Short.Running; running != 0 {
 		t.Fatalf("fast workers still running 1s after both requests returned: %d", running)
 	}
 }
@@ -173,7 +173,7 @@ func TestHandlerCreateThenHigherGroupCastDoesNotFormCycle(t *testing.T) {
 	}
 	access := entity.NewManagerAccess(manager)
 	x := mustBuildCastID(t, 9932, entity.EntityCategory(1), createdInScopeKind)
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 	h1Created := make(chan struct{})
 	h2Holding := make(chan struct{})
 	proceed := make(chan struct{})
@@ -215,7 +215,7 @@ func TestHandlerCreateThenHigherGroupCastDoesNotFormCycle(t *testing.T) {
 		case r := <-out:
 			results[r.tag] = r
 		case <-time.After(3 * time.Second):
-			t.Fatalf("Create+Cast across lock groups did not finish within 3s (cycle H1 waits Z / H2 waits X): got %v; stats=%+v", results, mgr.Stats().Queue.Fast)
+			t.Fatalf("Create+Cast across lock groups did not finish within 3s (cycle H1 waits Z / H2 waits X): got %v; stats=%+v", results, mgr.Stats().Queue.Short)
 		}
 	}
 	defer func() { _ = mgr.Shutdown(context.Background()) }()
@@ -231,7 +231,7 @@ func TestHandlerCreateThenHigherGroupCastDoesNotFormCycle(t *testing.T) {
 }
 
 // REPRO-2026-09-26-05 §1 探针 B：A 新建 X 后停在 strict 提交里（锁内 WAL 准入，豁免）；声明不同目标的 handler
-// 也新建 X。修前它们停在 X 的锁上占满快池；修后冲突即回滚并延迟重新准入，无关请求照常完成，A 提交后都得到“已存在”。
+// 也新建 X。修前它们停在 X 的锁上占满业务池；修后冲突即回滚并延迟重新准入，无关请求照常完成，A 提交后都得到“已存在”。
 // memory 模式 handler 不回滚：冲突前的修改不撤销，所以不重排，调用方直接收到 ErrCreatedEntityLockConflict
 // （RR-20260926-64 按维护者 2026-09-27 的决定改了这条子用例的期望；修前它会重排直到“已存在”）。
 //
@@ -239,7 +239,7 @@ func TestHandlerCreateThenHigherGroupCastDoesNotFormCycle(t *testing.T) {
 // 没等它的 Create 真正对 X 做出取锁判定：follower 进入 Create 后在 try-lock 之前被调度延迟，用例已放开 creator 的提交，
 // creator 提交并放锁后 follower 才 try-lock，拿到锁、发布时发现 X 已存在——这是用例时序，不是框架缺陷（插桩与变异见
 // bf-RR-20260926-64 §后续验证）。现在等每个 follower 的第一次 Create 返回（取锁判定已在 creator 持有 X 期间做出）再放开提交。
-func TestSameIDCreateDoesNotOccupyFastPool(t *testing.T) {
+func TestSameIDCreateDoesNotOccupyShortPool(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		meta HandlerMeta
@@ -254,7 +254,7 @@ func TestSameIDCreateDoesNotOccupyFastPool(t *testing.T) {
 			access := entity.NewManagerAccess(manager)
 			x := mustBuildCastID(t, 9890, entity.EntityCategory(1), createdInScopeKind)
 			committer := newBlockingCommitter()
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: workers, QueueCap: 64}, WorkerPoolConfig{}))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: workers, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 			creator := NewHandlerName("rr48_same_id_creator_" + tc.name)
 			mgr.MustRegisterHandlerWithMeta(creator, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 				value, err := access.Create(createParam(x))
@@ -266,7 +266,7 @@ func TestSameIDCreateDoesNotOccupyFastPool(t *testing.T) {
 			var attempts atomic.Int64
 			// decidedBy 按 follower（声明的 pilot）记“第一次 Create 已返回”（audit6 疑点 N32）：之前只数 Create 返回总次数，
 			// state_strict 的 follower 锁冲突回滚后会重排再 Create，一个 follower 重试几次就凑够 workers，“每个 follower 都已进入
-			// Create 并做出判定、占满快池”的前提因此变弱。现在要求每个 follower 至少各一次。
+			// Create 并做出判定、占满业务池”的前提因此变弱。现在要求每个 follower 至少各一次。
 			var decidedBy sync.Map
 			decidedFollowers := func() int {
 				n := 0
@@ -360,7 +360,7 @@ func TestSwallowedCreateLockConflictStillRollsBack(t *testing.T) {
 	access := entity.NewManagerAccess(manager)
 	x := mustBuildCastID(t, 9945, entity.EntityCategory(1), createdInScopeKind)
 	committer := newBlockingCommitter()
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(committer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 	creator := NewHandlerName("rr48_swallow_creator")
 	mgr.MustRegisterHandlerWithMeta(creator, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 		value, err := access.Create(createParam(x))
@@ -436,7 +436,7 @@ func TestMemoryHandlerCreateHoldsLockUntilHandlerEnds(t *testing.T) {
 	for i, via := range []string{"access.Create", "CreateInScope"} {
 		t.Run(via, func(t *testing.T) {
 			f := newCreateInScopeFixture(t, 9990+int64(i)*4, nil)
-			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
+			mgr := NewEngine(NestOptionWithGetter(f.access), NestOptionWithEntitySync(f.sync), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 			name := NewHandlerName("rr48_memory_create_" + via)
 			var created entity.IThreadSafeEntity
 			var lockedByOther, readyMidHandler bool

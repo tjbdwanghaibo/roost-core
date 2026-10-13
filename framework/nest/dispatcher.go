@@ -21,7 +21,7 @@ type Dispatcher struct {
 	DelayedMsgCap int
 	MaxDelay      time.Duration
 	queue         *dispatchQueue
-	slowConfig    WorkerPoolConfig
+	ioConfig      WorkerPoolConfig
 	longConfig    WorkerPoolConfig
 	remoteHandler func(*Msg)
 	workerNum     int
@@ -40,7 +40,7 @@ type Dispatcher struct {
 	processed     atomic.Uint64
 	slow200ms     atomic.Uint64
 
-	// coldTargets 由 NestMgr 装配：统一准入时只读内存判断声明目标是否需要慢阶段预加载。
+	// coldTargets 由 NestMgr 装配：统一准入时只读内存判断声明目标是否需要I/O 阶段预加载。
 	coldTargets func(*Msg) bool
 
 	// seriesName 非 nil 表示本派发器以这个名字持有 nest.dispatch.*{dispatcher} 序列
@@ -94,13 +94,13 @@ func NewDispatcher(name string, workerNum, msgCap int, handler func(*Msg)) *Disp
 	if ret.workerNum <= 0 {
 		ret.workerNum = runtime.GOMAXPROCS(0)
 	}
-	// 即时快池预算与延时任务预算分开；提高快池缺省不连带扩大延时驻留。
+	// 即时业务池预算与延时任务预算分开；提高业务池缺省不连带扩大延时驻留。
 	ret.DelayedMsgCap = ret.MsgCap
 	if ret.DelayedMsgCap <= 0 {
 		ret.DelayedMsgCap = 10000
 	}
 	if ret.MsgCap <= 0 {
-		ret.MsgCap = DefaultFastQueueCapacity
+		ret.MsgCap = DefaultShortQueueCapacity
 	}
 	ret.MaxDelay = 24 * time.Hour
 	return ret
@@ -130,12 +130,12 @@ func (m *Dispatcher) OnInit() {
 	m.mu.Unlock()
 	go m.delayLoop()
 
-	slow := m.slowConfig
-	if slow.Workers <= 0 {
-		slow.Workers = max(32, m.workerNum*4)
+	io := m.ioConfig
+	if io.Workers <= 0 {
+		io.Workers = max(32, m.workerNum*4)
 	}
-	if slow.QueueCap <= 0 {
-		slow.QueueCap = 64
+	if io.QueueCap <= 0 {
+		io.QueueCap = 64
 	}
 	long := m.longConfig
 	if long.Workers <= 0 {
@@ -144,7 +144,7 @@ func (m *Dispatcher) OnInit() {
 	if long.QueueCap <= 0 {
 		long.QueueCap = 4096
 	}
-	m.queue = newDispatchQueue(m.Name, WorkerPoolConfig{Workers: m.workerNum, QueueCap: m.MsgCap}, slow, m.handler, m.remoteHandler, long)
+	m.queue = newDispatchQueue(m.Name, WorkerPoolConfig{Workers: m.workerNum, QueueCap: m.MsgCap}, io, m.handler, m.remoteHandler, long)
 	m.holdSeries()
 
 }
@@ -272,11 +272,11 @@ func (m *Dispatcher) TrySendMsg(msg *Msg) error {
 	msg.stageMetrics = m.stageMetrics
 	msg.queuedAt = startNestStage(m.stageMetrics)
 	msg.OnSend()
-	// 慢阶段三个来源：显式 SendOptionSlow、Remote，以及声明目标中有未加载的冷实体
+	// I/O 阶段三个来源：显式 SendOptionIO、Remote，以及声明目标中有未加载的冷实体
 	// （RR-20260926-25：业务不必知道目标冷热；只经 Getter 的 LoadedChecker 判定、不调用 Get，RR-20260926-47）。
 	// 同 ID 顺序在这里统一建立，与走哪个池无关。
-	slow := m.remoteHandler != nil && (msg.Cost || needsRemoteStage(msg) || (m.coldTargets != nil && m.coldTargets(msg)))
-	err := m.queue.admit(msg, slow)
+	prepareIO := m.remoteHandler != nil && (msg.Cost || needsRemoteStage(msg) || (m.coldTargets != nil && m.coldTargets(msg)))
+	err := m.queue.admit(msg, prepareIO)
 	if err != nil {
 		emitNestTraceEventInfo(trace, "enqueue", "error", 0)
 		if msg.RetChan == nil {
@@ -318,15 +318,15 @@ func (m *Dispatcher) observeStats() {
 	if m == nil {
 		return
 	}
-	fast, slow, continuations, details := m.queue.snapshotStats()
+	short, io, continuations, details := m.queue.snapshotStats()
 	delayed := m.delayedCount()
 	// Only while the series are held: a report racing the release must not
 	// recreate what the release deleted (RR-20261006-18).
 	m.reportSeries(func(name string) {
-		observePoolStats(name, "fast", fast)
-		observePoolStats(name, "slow", slow)
+		observePoolStats(name, "short", short)
+		observePoolStats(name, "io", io)
 		observePoolStats(name, "long", details.LongPool)
-		metrics.SetGauge("nest.dispatch.fast_continuations", metrics.Labels{"dispatcher": name}, int64(continuations))
+		metrics.SetGauge("nest.dispatch.short_continuations", metrics.Labels{"dispatcher": name}, int64(continuations))
 		metrics.SetGauge("nest.dispatch.delayed_messages", metrics.Labels{"dispatcher": name}, int64(delayed))
 	})
 }

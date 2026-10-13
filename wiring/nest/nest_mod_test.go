@@ -8,9 +8,9 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
 type emptyGetter struct{}
@@ -36,10 +36,12 @@ func (emptyGetter) GetMany(context.Context, []int64, []entity.EntityCategory) ([
 
 func TestModProvidesInstanceClientAndHealth(t *testing.T) {
 	cfg := viper.New()
-	cfg.Set("nest.fast.queue_capacity", 8)
-	cfg.Set("nest.fast.workers", 2)
-	cfg.Set("nest.slow.workers", 4)
-	cfg.Set("nest.slow.queue_capacity", 7)
+	cfg.Set("nest.short.queue_capacity", 8)
+	cfg.Set("nest.short.workers", 2)
+	cfg.Set("nest.io.workers", 4)
+	cfg.Set("nest.io.queue_capacity", 7)
+	cfg.Set("nest.long.workers", 3)
+	cfg.Set("nest.long.queue_capacity", 9)
 	registry := app.NewRegistry(cfg)
 	if err := registry.Register(mods.ModDataEngine, dataEngineNestProvider{committer: noOpCommitter{}}); err != nil {
 		t.Fatal(err)
@@ -58,10 +60,10 @@ func TestModProvidesInstanceClientAndHealth(t *testing.T) {
 	if err := mod.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if got := mod.Engine().Stats().Slow.WorkerNum; got != 4 {
+	if got := mod.Engine().Stats().IO.WorkerNum; got != 4 {
 		t.Fatalf("remote workers = %d", got)
 	}
-	if stats := mod.Engine().Stats(); stats.Fast.WorkerNum != 2 || stats.Slow.QueueCap != 7 || stats.Fast.QueueCap != 8 {
+	if stats := mod.Engine().Stats(); stats.Short.WorkerNum != 2 || stats.IO.QueueCap != 7 || stats.Short.QueueCap != 8 || stats.Long.WorkerNum != 3 || stats.Long.QueueCap != 9 {
 		t.Fatalf("pool config=%+v", stats)
 	}
 	if !mod.Engine().Running() {

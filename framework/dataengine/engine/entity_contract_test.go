@@ -29,11 +29,11 @@ func TestFastWorkerRemoteDeleteIsDefiniteRejection(t *testing.T) {
 	if err := manager.TryAdd(remote); err != nil {
 		t.Fatal(err)
 	}
-	_, release := fctx.NewContext(fctx.WithFastWorker(), fctx.WithHandler("default_handler"))
+	_, release := fctx.NewContext(fctx.WithShortWorker(), fctx.WithHandler("default_handler"))
 	destroyErr := runtime.access.Destroy(context.Background(), remote, entity.DestroyReasonCommon, true)
 	release()
-	if !errors.Is(destroyErr, fctx.ErrBlockingInFastWorker) {
-		t.Errorf("Destroy err=%v, want errors.Is(fctx.ErrBlockingInFastWorker)", destroyErr)
+	if !errors.Is(destroyErr, fctx.ErrBlockingInBusinessWorker) {
+		t.Errorf("Destroy err=%v, want errors.Is(fctx.ErrBlockingInBusinessWorker)", destroyErr)
 	}
 	if len(fatal) != 0 {
 		t.Errorf("fast-worker rejection before any side effect escalated to runtime fatal: %v", fatal)

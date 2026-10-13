@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Nest 执行池统一为 short/long/io：配置、Stats、指标标签、fctx 身份和生成 Sender 同步迁移；唯一配置 option 为 `NestOptionWithWorkerPools(short, long, io)`，强制准备使用 `SendOptionIO`，不保留旧别名。补齐 statslog 与健康队列汇总遗漏的 long 池，调度和 ID tail 语义不变；迁移表见 docs/framework/NEST-AWAIT.md。
+
 - Nest 消息热路径减少分组展开、上下文和锁/快照临时分配；相同前驱只登记一条依赖边，不改变 ID tail、三池及 Guard/事务契约。六项局部优化的同机矩阵与延期候选见 docs/performance/NEST-HOT-PATH-20261013.md。
 - Nest 的 Sync 合批窗口存在性改由 `app.LoadConfigWithPresence` 在声明解码时返回，保留缺省与显式 0 的区别，消除 Mod 直接读取 Viper；不改变配置格式或放宽声明检查。
 

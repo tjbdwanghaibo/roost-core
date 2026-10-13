@@ -60,7 +60,7 @@ func TestGeneratedGateNestDAOAndWAL(t *testing.T){
  syncManager,err:=entitysync.NewManager(entitysync.ManagerConfig{Mode:entitysync.ModeOnChange,Interval:time.Hour,Transport:syncTransport});if err!=nil{t.Fatal(err)}
  if err=syncManager.Register(player.Sync());err!=nil{t.Fatal(err)}
  t.Cleanup(func(){_ = syncManager.Close(context.Background())})
- business:=nest.NewEngine(nest.NestOptionWithEntitySync(syncManager),nest.NestOptionWithGetter(sceneGetter{player.ID():player,world.ID():world}),nest.NestOptionWithTransactionCommitter(projector),nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers:4,QueueCap:32},nest.WorkerPoolConfig{}))
+ business:=nest.NewEngine(nest.NestOptionWithEntitySync(syncManager),nest.NestOptionWithGetter(sceneGetter{player.ID():player,world.ID():world}),nest.NestOptionWithTransactionCommitter(projector),nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers:4,QueueCap:32}, nest.WorkerPoolConfig{},nest.WorkerPoolConfig{}))
  if err:=business.Start();err!=nil{t.Fatal(err)};t.Cleanup(func(){_ = business.Shutdown(context.Background())})
  registry:=player_agent.NewProtocolRegistry()
  if err:=player_agent.RegisterProtocol[*pb.AddExpRequest,*pb.AddExpResponse](registry,42,43,pb.UnmarshalAddExpRequest,pb.MarshalAddExpResponse,func(ctx *player_agent.Context,request *pb.AddExpRequest)(*pb.AddExpResponse,error){

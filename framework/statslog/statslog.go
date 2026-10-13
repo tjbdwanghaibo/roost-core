@@ -58,9 +58,11 @@ type StatsRecord struct {
 }
 
 type NestStats struct {
-	Fast                   NestQueueStats `json:"fast"`
-	Slow                   NestQueueStats `json:"slow"`
-	FastContinuations      int            `json:"fast_continuations"`
+	Short                  NestQueueStats `json:"short"`
+	Long                   NestQueueStats `json:"long"`
+	IO                     NestQueueStats `json:"io"`
+	ShortContinuations     int            `json:"short_continuations"`
+	LongContinuations      int            `json:"long_continuations"`
 	WindowSeconds          float64        `json:"window_seconds"`
 	ProcessedMessages      uint64         `json:"processed_messages"`
 	Slow200msMessages      uint64         `json:"slow_200ms_messages"`
@@ -467,9 +469,11 @@ func (m *Logger) formatNestStats(stats nest.DispatcherStats, now time.Time) Nest
 
 func formatNestStats(stats nest.DispatcherStats, delta nest.DispatcherWorkStats, interval time.Duration) NestStats {
 	return NestStats{
-		Fast:                   formatNestPoolStats(stats.Fast),
-		Slow:                   formatNestPoolStats(stats.Slow),
-		FastContinuations:      stats.FastContinuations,
+		Short:                  formatNestPoolStats(stats.Short),
+		IO:                     formatNestPoolStats(stats.IO),
+		Long:                   formatNestPoolStats(stats.Long),
+		LongContinuations:      stats.Queue.LongContinuations,
+		ShortContinuations:     stats.ShortContinuations,
 		WindowSeconds:          roundSeconds(interval),
 		ProcessedMessages:      delta.ProcessedMessages,
 		Slow200msMessages:      delta.Slow200msMessages,

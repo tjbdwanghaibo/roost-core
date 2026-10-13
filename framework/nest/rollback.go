@@ -774,7 +774,7 @@ func (tx *RollbackTx) preparedMutationKey(key mutationKey) bool {
 // 另加 ErrCommitRejected；RollbackNone 的事务不撤销内存修改，RR-20260927-32）。
 // 错误里不带 fence 原因的哨兵（%v）：原因链上的 ErrCommitIndeterminate 会让调用方误走结果未知分支（abandon 而不回滚）。
 // 嵌套独立事务（dispatch 为 nil）不在此列：C07 的约束只针对外层自己的提交。只读一次 lifecycleMu 保护的字段，不等待、不做 I/O，
-// 与派发入口 runNestLogic 在快 worker 上读 FenceError 相同。
+// 与派发入口 runNestLogic 在业务 worker 上读 FenceError 相同。
 // 带 Remote 批次、没有 effect 的 memory handler 没有记录交给 committer，但它的 Durability 0 Remote 直写同样经这里拒绝
 // （durableCommit 的 memory 分支，RR-20260930-12）。
 //

@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
-	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
 // RR-20260926-37 / RR-20260927-24：strict 等 Remote 确认到截止（投影器被拖住）后，提交后工作交给 finalizer；投影器随后照常
@@ -243,7 +243,7 @@ func TestGeneratedRemoteNestedIsolatedTransactionIsRefused(t *testing.T) {
 // RR-20260926-27：快 worker 上直接删除一个没有声明进消息的 Remote 托管实体，删除准入在任何副作用之前确定拒绝：Runtime 不 fatal、
 // Nest 不 fence，实体留在内存、Mongo 不变，之后照常可写。两种调用位置：
 //   - local_memory_message：目标是本地 Clerk 的 memory handler（没有 RollbackTx），走 admitRemoteEntityDelete 的快池检查，
-//     错误可 errors.Is(fctx.ErrBlockingInFastWorker)（RR-27 修复的那条路径）；
+//     错误可 errors.Is(fctx.ErrBlockingInBusinessWorker)（RR-27 修复的那条路径）；
 //   - remote_message：目标是另一个 Remote 实体的消息（Remote 消息总有 RollbackTx），删除随事务走 deferEntityDelete，
 //     未声明的 Remote 删除目标以 nest.ErrDurableRemoteWriteUnsupported 拒绝。
 func TestGeneratedRemoteFastWorkerDeleteIsDefiniteRejection(t *testing.T) {
@@ -288,7 +288,7 @@ func TestGeneratedRemoteFastWorkerDeleteIsDefiniteRejection(t *testing.T) {
 		caller int64
 		cause  error
 	}{
-		{name: "local_memory_message", caller: localCaller, cause: fctx.ErrBlockingInFastWorker},
+		{name: "local_memory_message", caller: localCaller, cause: fctx.ErrBlockingInBusinessWorker},
 		{name: "remote_message", caller: remoteCaller, cause: nest.ErrDurableRemoteWriteUnsupported},
 	} {
 		destroyErr.Store(nil)

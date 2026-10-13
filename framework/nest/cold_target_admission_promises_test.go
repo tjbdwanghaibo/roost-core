@@ -13,15 +13,15 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// RR-20260926-25：生成 sender 与 demo 从不带 SendOptionSlow，冷实体上的正式业务固定失败。
+// RR-20260926-25：生成 sender 与 demo 从不带 SendOptionIO，冷实体上的正式业务固定失败。
 //
-// RR-02 让快阶段只读已加载实体后，进入慢池只剩显式 SendOptionSlow 和 Remote 两条路；
+// RR-02 让业务阶段只读已加载实体后，进入I/O 池只剩显式 SendOptionIO 和 Remote 两条路；
 // 生成的 sender 不暴露 SendOpt，demo 没有一个 handler 用 _cost 后缀，于是进程重启或
 // 闲置驱逐后的离线玩家（gift saga 扣减/补偿、GM 发放）一律得到 ErrColdLoadInLogic。
 // 承诺：Nest 在统一准入时发现声明目标里有未加载、可由 loader 加载的实体，就自动走
-// 慢阶段预加载；业务代码不改，同 ID 顺序仍在统一准入处建立，loader 只在慢 worker 上
+// I/O 阶段预加载；业务代码不改，同 ID 顺序仍在统一准入处建立，loader 只在I/O worker 上
 // 执行。准入之后、handler 取得 Guard 之前目标被驱逐时，同一条已准入请求原位转到慢
-// 阶段准备，不重新排到同 ID 后继之后，也不在快 worker 上冷加载。
+// 阶段准备，不重新排到同 ID 后继之后，也不在业务 worker 上冷加载。
 
 func newColdTargetEngine(t *testing.T, fast, slow WorkerPoolConfig) (*NestMgr, *entity.EntityManager, *stageLoader) {
 	t.Helper()
@@ -31,7 +31,7 @@ func newColdTargetEngine(t *testing.T, fast, slow WorkerPoolConfig) (*NestMgr, *
 	if _, err := access.ConfigureLoader(loader); err != nil {
 		t.Fatal(err)
 	}
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(fast, slow))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(fast, WorkerPoolConfig{}, slow))
 	return mgr, manager, loader
 }
 
@@ -59,7 +59,7 @@ func TestDefaultSenderPreparesColdDeclaredTargetsOnSlowWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	mgr.MustRegisterHandlerWithMeta(NewHandlerName("grant"), func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
-		if !fctx.InFastWorker() {
+		if !fctx.InShortWorker() {
 			return nil, errors.New("handler left the fast pool")
 		}
 		for _, e := range es {
@@ -83,16 +83,16 @@ func TestDefaultSenderPreparesColdDeclaredTargetsOnSlowWorker(t *testing.T) {
 	if ret, err := mgr.RequestMultiGroup(ctx, NewHandlerName("grant"), [][]int64{{hot}, {coldGroup}}, nil); err != nil || ret != 2 {
 		t.Fatalf("multi-group request with a cold target: ret=%v err=%v", ret, err)
 	}
-	// stageLoader 在快 worker 上被调用会返回错误，所以三次成功即证明加载只在慢 worker。
+	// stageLoader 在业务 worker 上被调用会返回错误，所以三次成功即证明加载只在I/O worker。
 	if loads := loader.calls.Load(); loads != 3 {
 		t.Fatalf("loads=%d, want one per cold declared target", loads)
 	}
-	// 目标已加载后回到快池直接执行，不再经过慢阶段。
-	slowBefore := mgr.Stats().Queue.Slow.Started
+	// 目标已加载后回到业务池直接执行，不再经过I/O 阶段。
+	slowBefore := mgr.Stats().Queue.IO.Started
 	if ret, err := mgr.Request(ctx, NewHandlerName("grant"), coldSingle, nil); err != nil || ret != 1 {
 		t.Fatalf("warm request: ret=%v err=%v", ret, err)
 	}
-	if slowAfter := mgr.Stats().Queue.Slow.Started; slowAfter != slowBefore || loader.calls.Load() != 3 {
+	if slowAfter := mgr.Stats().Queue.IO.Started; slowAfter != slowBefore || loader.calls.Load() != 3 {
 		t.Fatalf("loaded target still used the slow stage: slow started %d -> %d loads=%d", slowBefore, slowAfter, loader.calls.Load())
 	}
 }
@@ -120,7 +120,7 @@ func (e *evictingEntity) Touch() bool {
 func TestDeclaredTargetEvictedAfterAdmissionMovesToSlowKeepingOrder(t *testing.T) {
 	for _, window := range []string{"before lookup", "between lookup and touch", "between touch and lock"} {
 		t.Run(window, func(t *testing.T) {
-			// 1 个快 worker：先用 blocker 占住，保证两条请求都在目标仍加载时准入并走快池，
+			// 1 个业务 worker：先用 blocker 占住，保证两条请求都在目标仍加载时准入并走业务池，
 			// 然后在 handler 取 Guard 之前把目标驱逐。第二条请求用来证明第一条没有被重新
 			// 准入到同 ID 队尾。
 			mgr, manager, loader := newColdTargetEngine(t, WorkerPoolConfig{1, 8}, WorkerPoolConfig{2, 8})
@@ -141,7 +141,7 @@ func TestDeclaredTargetEvictedAfterAdmissionMovesToSlowKeepingOrder(t *testing.T
 			var orderMu sync.Mutex
 			var order []string
 			mgr.MustRegisterHandlerWithMeta(NewHandlerName("record"), func(es []entity.IThreadSafeEntity, params []any, _ ...HandlerOption) (any, error) {
-				if !fctx.InFastWorker() || len(es) != 1 || es[0] == nil || es[0] == entity.IThreadSafeEntity(target) {
+				if !fctx.InShortWorker() || len(es) != 1 || es[0] == nil || es[0] == entity.IThreadSafeEntity(target) {
 					return nil, errors.New("handler did not run on the fast pool with the reloaded target")
 				}
 				orderMu.Lock()
@@ -164,7 +164,7 @@ func TestDeclaredTargetEvictedAfterAdmissionMovesToSlowKeepingOrder(t *testing.T
 			stagedSignal(t, entered)
 			first := send("record", targetID, "first")
 			second := send("record", targetID, "second")
-			if fast := mgr.Stats().Queue.Fast; fast.Ready+fast.BlockedOnPredecessor != 2 {
+			if fast := mgr.Stats().Queue.Short; fast.Ready+fast.BlockedOnPredecessor != 2 {
 				t.Fatalf("both requests should be admitted to the fast lane while the target is loaded: %+v", fast)
 			}
 			evict := func() {

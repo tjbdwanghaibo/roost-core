@@ -5,18 +5,18 @@ import "testing"
 func TestFastWorkerIsLocalExecutionState(t *testing.T) {
 	var snapshot ContextSnapshot
 	func() {
-		_, release := NewContext(WithFastWorker())
+		_, release := NewContext(WithShortWorker())
 		defer release()
 		_, nested := NewContext()
 		defer nested()
-		if !InFastWorker() {
+		if !InShortWorker() {
 			t.Fatal("nested context lost execution state")
 		}
 		snapshot = CaptureSnapshot()
 	}()
 	_, release := NewContext(WithSnapshot(snapshot))
 	defer release()
-	if InFastWorker() {
+	if InShortWorker() {
 		t.Fatal("snapshot moved execution state across boundary")
 	}
 	if BlockingError("slow") != nil {
@@ -34,7 +34,7 @@ func TestLongAndIOWorkerStateDoesNotTravelWithSnapshot(t *testing.T) {
 			_, release := NewContext(option)
 			defer release()
 			_, nested := NewContext()
-			if InFastWorker() || InLongWorker() != long || InIOWorker() == long || (BlockingError("test") != nil) != long {
+			if InShortWorker() || InLongWorker() != long || InIOWorker() == long || (BlockingError("test") != nil) != long {
 				t.Fatal("wrong nested worker identity")
 			}
 			snapshot := CaptureSnapshot()

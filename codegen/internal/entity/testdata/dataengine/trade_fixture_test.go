@@ -14,10 +14,10 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -183,7 +183,7 @@ func newTradeFixtureFull(t *testing.T, ctx context.Context, client fmongo.IMongo
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = h.runtime.Shutdown(context.Background()) })
-	options := append(h.runtime.NestOptions(), nest.NestOptionWithGetter(h.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 8, QueueCap: 256}, nest.WorkerPoolConfig{}))
+	options := append(h.runtime.NestOptions(), nest.NestOptionWithGetter(h.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 8, QueueCap: 256}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	options = append(options, nestOptions...)
 	h.scheduler = nest.NewEngine(options...)
 	meta := nest.HandlerMeta{Rollback: nest.RollbackState, Durability: policy}

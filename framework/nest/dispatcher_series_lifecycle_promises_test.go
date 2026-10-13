@@ -4,7 +4,7 @@ package nest
 // （第十二轮 O3）。承诺：派发器排空停止（OnDestroyWithContext 返回 nil）后删掉带它 dispatcher 标签的全部
 // 序列；创建再销毁 N 次序列数不增长，/metrics 里不再出现已销毁的派发器；同名派发器还有活着的
 // （生产里 NestMgr 都叫 "nest"）时不删，留给最后一个；停机超时（返回 ctx 错误）时不删，重试排空后再删。
-// nest.dispatch.slow_reroute.total 只在冷目标改道时产生，不经 observeStats，单独用一次真实改道验证（补测）。
+// nest.dispatch.io_reroute.total 只在冷目标改道时产生，不经 observeStats，单独用一次真实改道验证（补测）。
 
 import (
 	"context"
@@ -129,11 +129,11 @@ func TestADispatcherThatDidNotDrainKeepsItsSeriesUntilItDoes(t *testing.T) {
 	}
 }
 
-// slowRerouteSeries is the nest.dispatch.slow_reroute.total value of the named
+// ioRerouteSeries is the nest.dispatch.io_reroute.total value of the named
 // dispatcher, and whether the series exists at all.
-func slowRerouteSeries(name string) (int64, bool) {
+func ioRerouteSeries(name string) (int64, bool) {
 	for _, metric := range metrics.Snapshot() {
-		if metric.Name == "nest.dispatch.slow_reroute.total" && metric.Labels["dispatcher"] == name {
+		if metric.Name == "nest.dispatch.io_reroute.total" && metric.Labels["dispatcher"] == name {
 			return metric.Value, true
 		}
 	}
@@ -201,8 +201,8 @@ func TestTheSlowRerouteSeriesGoesWithItsDispatcher(t *testing.T) {
 	if got := stagedWait(t, rerouted); got != "ok" {
 		t.Fatalf("request to the evicted target: %v (loads=%d)", got, loader.calls.Load())
 	}
-	if value, ok := slowRerouteSeries(name); !ok || value != 1 {
-		t.Fatalf("nest.dispatch.slow_reroute.total{dispatcher=%q} = %d (present=%v) after one reroute; want 1", name, value, ok)
+	if value, ok := ioRerouteSeries(name); !ok || value != 1 {
+		t.Fatalf("nest.dispatch.io_reroute.total{dispatcher=%q} = %d (present=%v) after one reroute; want 1", name, value, ok)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -210,8 +210,8 @@ func TestTheSlowRerouteSeriesGoesWithItsDispatcher(t *testing.T) {
 	if err := mgr.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if value, ok := slowRerouteSeries(name); ok {
-		t.Fatalf("the dispatcher %s is shut down and nest.dispatch.slow_reroute.total still reports %d", name, value)
+	if value, ok := ioRerouteSeries(name); ok {
+		t.Fatalf("the dispatcher %s is shut down and nest.dispatch.io_reroute.total still reports %d", name, value)
 	}
 	if text := string(metrics.PrometheusText(metrics.Snapshot())); strings.Contains(text, name) {
 		t.Fatalf("/metrics still shows the destroyed dispatcher:\n%s", text)

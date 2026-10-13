@@ -199,7 +199,7 @@ func (q *dispatchQueue) reserveAwait() error {
 	if q.stopping || !q.started {
 		return worker.ErrWorkerClosed
 	}
-	state := &q.lanes[dispatchSlowLane]
+	state := &q.lanes[dispatchIOLane]
 	if q.awaitReserved+state.queued+state.running >= state.config.Workers+state.config.QueueCap {
 		return worker.ErrWorkerQueueFull
 	}
@@ -220,13 +220,13 @@ func (q *dispatchQueue) cancelAwait() {
 }
 func (q *dispatchQueue) startAwait(work func()) {
 	msg := &Msg{RefCount: 1, ioWork: work}
-	j := &dispatchJob{msg: msg, lane: dispatchSlowLane, slow: true}
+	j := &dispatchJob{msg: msg, lane: dispatchIOLane, ioStage: true}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.awaitReserved--
-	state := &q.lanes[dispatchSlowLane]
+	state := &q.lanes[dispatchIOLane]
 	j.admittedAt = time.Since(q.clockOrigin)
 	state.queued++
 	state.waiting.push(j)
-	q.enqueueReady(dispatchSlowLane, j)
+	q.enqueueReady(dispatchIOLane, j)
 }

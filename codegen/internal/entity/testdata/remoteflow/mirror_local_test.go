@@ -40,19 +40,19 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
+	syncdriver "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitremote "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
 	kitsyncbus "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
-	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
-	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
-	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
-	"github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
-	syncdriver "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver"
 )
 
 // 只读方的 cached_max_staleness：故障场景用 3s（检验“推送中断期间按陈旧上限回源”）；toxiproxy 场景用 60s，
@@ -1035,7 +1035,7 @@ func runLocalOwner(t *testing.T) {
 	defer func() { _ = runtime.Shutdown(context.Background()) }()
 	rename, remove := nest.NewHandlerName("mirror_local_rename"), nest.NewHandlerName("mirror_local_delete")
 	scheduler := nest.NewEngine(append(runtime.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithRemoteEntityManager(assembly.Manager),
-		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}))...)
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}))...)
 	scheduler.MustRegisterHandlerWithMeta(rename, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
 		guild := es[0].(*Guild)
 		guild.dao.SetName(params[0].(string))

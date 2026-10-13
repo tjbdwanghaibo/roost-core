@@ -222,7 +222,7 @@ func deferredOutcomeNotRun(outcome string) int64 {
 
 // RR-20260926-61：Nest 已停机 / 已 fence（RunLocal 拒绝投递、fn 不执行）时拿到持久结论：提交后工作（Sync Confirm、
 // AfterCommit）不离开快池执行——不在 finalizer goroutine 上就地运行，计数 +1 并记日志；gate 等资源照常交还，只调用一次入口。
-func TestOutcomeIsNotRunWhenFastPoolRefuses(t *testing.T) {
+func TestOutcomeIsNotRunWhenShortPoolRefuses(t *testing.T) {
 	f, live := newReloadFixture(t, 1965)
 	steps := make(chan string, 16)
 	f.mgr.remote.finalizeTrace = func(_ entity.RemoteTransactionID, step string) { steps <- step }

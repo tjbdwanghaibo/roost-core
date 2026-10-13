@@ -28,7 +28,7 @@ func TestGeneratedPlayerAwaitsAndResumesOnLongPool(t *testing.T) {
 	if err := manager.TryAdd(player); err != nil {
 		t.Fatal(err)
 	}
-	scheduler := nest.NewEngine(nest.NestOptionWithGetter(entity.NewManagerAccess(manager)), nest.NestOptionWithBusinessPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}))
+	scheduler := nest.NewEngine(nest.NestOptionWithGetter(entity.NewManagerAccess(manager)), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}))
 	if err := scheduler.Start(); err != nil {
 		t.Fatal(err)
 	}

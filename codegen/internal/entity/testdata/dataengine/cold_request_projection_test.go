@@ -3,7 +3,7 @@ package persistflow
 // OPEN-ITEMS B11：RR-20260926-10 / RR-20260926-25 的正式 Nest 入口端到端回归（RR-25 当时用的是不入库的临时测试）。
 // 投影挂起 → 普通卸载（deletePersisted=false）→ 经 Nest RequestMulti 访问冷目标：慢阶段经正式 EntityRepository
 // 冷加载，必须等在途投影放行后才读 Mongo，结果建立在挂起事务之后的状态上（不读到旧版本、不在快池阻塞加载）。
-// 默认发送（RR-25：声明目标里有冷实体自动走慢阶段）与显式 SendOptionSlow 两条入口都覆盖；正式生成 DAO / Entity + 真实 Mongo。
+// 默认发送（RR-25：声明目标里有冷实体自动走慢阶段）与显式 SendOptionIO 两条入口都覆盖；正式生成 DAO / Entity + 真实 Mongo。
 
 import (
 	"testing"
@@ -19,7 +19,7 @@ func TestGeneratedDataEngineColdRequestWaitsForPendingProjection(t *testing.T) {
 		for entryIndex, entry := range []struct {
 			name string
 			opts []nest.SendOpt
-		}{{name: "default", opts: nil}, {name: "slow", opts: []nest.SendOpt{nest.SendOptionSlow()}}} {
+		}{{name: "default", opts: nil}, {name: "slow", opts: []nest.SendOpt{nest.SendOptionIO()}}} {
 			t.Run(policy.String()+"/"+entry.name, func(t *testing.T) {
 				// 34000 段本文件独用：同包其他用例的 seed 段都在 1000～33000 之内。
 				base := 34000 + policyIndex*100 + entryIndex*10

@@ -12,7 +12,7 @@ import (
 
 func (e *reloadableFullDocEntity) RollbackRemoteCommit(entity.RemoteCommit) {
 	e.rollbacks.Add(1)
-	if !fctx.InFastWorker() {
+	if !fctx.InShortWorker() {
 		e.rollbacksOffFast.Add(1)
 	}
 }
@@ -27,7 +27,7 @@ func TestFinalizerRejectionRollbackRunsOnNestFastWorker(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, live := newReloadFixture(t, 1961+int64(i))
-			engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithRemoteEntityManager(entity.IRemoteEntityManager(f.mgr)), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}))
+			engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithRemoteEntityManager(entity.IRemoteEntityManager(f.mgr)), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 			if err := engine.Start(); err != nil {
 				t.Fatal(err)
 			}

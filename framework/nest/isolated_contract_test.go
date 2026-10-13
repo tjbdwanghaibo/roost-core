@@ -28,7 +28,7 @@ func (g *prepareHookGetter) GetMany(ctx context.Context, ids []int64, categories
 	return g.mockGetter.GetMany(ctx, ids, categories)
 }
 
-// isolatedInPrepare 记录慢阶段准备里那一次 RunIsolatedTransaction 的观察结果（只在第一次读取时调用）。
+// isolatedInPrepare 记录I/O 阶段准备里那一次 RunIsolatedTransaction 的观察结果（只在第一次读取时调用）。
 type isolatedInPrepare struct {
 	once              atomic.Bool
 	inMessage, inFast bool
@@ -40,7 +40,7 @@ func (o *isolatedInPrepare) run(iso TransactionCommitter, target int64) {
 	if !o.once.CompareAndSwap(false, true) {
 		return
 	}
-	o.inMessage, o.inFast = currentNestDispatchMsg() != nil, fctx.InFastWorker()
+	o.inMessage, o.inFast = currentNestDispatchMsg() != nil, fctx.InShortWorker()
 	_, o.err = RunIsolatedTransaction(context.Background(), iso, "b19_iso_in_prepare", func() (any, error) {
 		o.callRan = true
 		return nil, CurrentRollbackTx().AddMutation(EntityMutation{Key: dataengine.DocumentKey{ID: target, Database: "test", Resource: "b19_prepare"}, Kind: dataengine.MutationPut, ExpectedVersion: 0, NextVersion: 1, Data: []byte(`{}`)})
@@ -54,7 +54,7 @@ func TestIsolatedInSlowPrepareOfLocalMessageDoesNotClaimIt(t *testing.T) {
 	getter := &prepareHookGetter{mockGetter: newMockGetter(), hook: func() { obs.run(iso, id) }}
 	getter.Add(newMockEntity(id, entity.EntityCategory(1)))
 	outer := &recordsCommitter{}
-	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{1, 8}))
+	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{}, WorkerPoolConfig{1, 8}))
 	name := NewHandlerName("b19_local_after_prepare")
 	var attempts atomic.Int64
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
@@ -67,7 +67,7 @@ func TestIsolatedInSlowPrepareOfLocalMessageDoesNotClaimIt(t *testing.T) {
 	defer func() { _ = mgr.Shutdown(context.Background()) }()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := mgr.Request(ctx, name, id, nil, SendOptionSlow())
+	_, err := mgr.Request(ctx, name, id, nil, SendOptionIO())
 
 	if !obs.inMessage || obs.inFast {
 		t.Fatalf("premise: the isolated call must run in the message's slow stage (in message=%v, fast worker=%v)", obs.inMessage, obs.inFast)
@@ -97,7 +97,7 @@ func TestIsolatedInSlowPrepareOfRemoteMessageIsRefused(t *testing.T) {
 	var batchCommits atomic.Int32
 	batch := &stagedRemoteBatch{commit: func() { batchCommits.Add(1) }}
 	remote := stagedRemoteManager{prepare: func(context.Context) (entity.RemoteWriteBatch, error) { return batch, nil }}
-	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(remote), NestOptionWithTransactionCommitter(&recordsCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
+	mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(remote), NestOptionWithTransactionCommitter(&recordsCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 	name := NewHandlerName("b19_remote_after_prepare")
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 		return "ok", nil
@@ -176,7 +176,7 @@ func TestIsolatedInClosingPhaseOfRemoteMessageIsRefused(t *testing.T) {
 			if tc.afterUnlock {
 				outer.onReleased = isolated
 			}
-			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
+			mgr := NewEngine(NestOptionWithGetter(getter), NestOptionWithRemoteEntityManager(manager), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 			name := NewHandlerName(fmt.Sprintf("rr84_remote_closing_%d", i))
 			mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
 				if !tc.afterUnlock {
@@ -257,7 +257,7 @@ func TestIsolatedInClosingPhaseOfLocalMessageDoesNotClaimIt(t *testing.T) {
 			}
 			access := entity.NewManagerAccess(manager)
 			outer := &recordsCommitter{}
-			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
+			mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(outer), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 			hookCommits := &recordsCommitter{}
 			var hookCommitter TransactionCommitter = hookCommits
 			if tc.indeterminate {

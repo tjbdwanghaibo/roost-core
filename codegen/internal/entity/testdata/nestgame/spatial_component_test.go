@@ -72,7 +72,7 @@ func TestSpatialComponentNestCommitAndRollback(t *testing.T) {
 	if err := component.Move(spatial.Point{X: 600, Y: 10}); !errors.Is(err, policy.ErrSpatialScope) {
 		t.Fatalf("outside scope: %v", err)
 	}
-	engine := nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithEntitySync(syncer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}, nest.WorkerPoolConfig{}))
+	engine := nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithEntitySync(syncer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 8}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	rejected := errors.New("rollback movement")
 	name := nest.NewHandlerName("spatial.component.move")
 	engine.MustRegisterHandlerWithMeta(name, func(_ []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {

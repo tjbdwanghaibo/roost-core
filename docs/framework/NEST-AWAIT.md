@@ -6,22 +6,22 @@
 
 | 配置 | 用途 | 实体访问 |
 | --- | --- | --- |
-| `nest.fast` | 短业务 | Guard 保护 |
+| `nest.short` | 短业务 | Guard 保护 |
 | `nest.long` | 长业务 | Guard 保护 |
-| `nest.slow` | I/O、冷加载、Remote 准备与收尾 | 禁止直接取得 Guard/Cast |
+| `nest.io` | I/O、冷加载、Remote 准备与收尾 | 禁止直接取得 Guard/Cast |
 
-每组分别配置 `workers`、`queue_capacity`。沿用 fast/slow 配置名称，避免无关的配置迁移。长池默认 worker 数等于短池，等待容量 4096；短池与 I/O 池沿用既有缺省值。CPU 密集长业务仍消耗 CPU，更多 worker 不代表更多算力。
+每组分别配置 `workers`、`queue_capacity`。配置统一按职责使用 short/long/io。长池默认 worker 数等于短池，等待容量 4096；短池与 I/O 池沿用既有缺省值。CPU 密集长业务仍消耗 CPU，更多 worker 不代表更多算力。
 
 一个接线配置例子（这些数值只用于说明，不是容量建议）：
 
 ```yaml
 nest:
-  fast: {workers: 8, queue_capacity: 65536}
+  short: {workers: 8, queue_capacity: 65536}
   long: {workers: 4, queue_capacity: 4096}
-  slow: {workers: 32, queue_capacity: 64}
+  io: {workers: 32, queue_capacity: 64}
 ```
 
-`NestOptionWithBusinessPools(short, long, io)` 可在直接构造引擎时配置三池。`NestOptionWithWorkerPools(fast, slow)` 保留原来的短业务与 I/O 含义。
+`NestOptionWithWorkerPools(short, long, io)` 可在直接构造引擎时配置三池。旧二参数调用改为 `NestOptionWithWorkerPools(short, WorkerPoolConfig{}, io)`，中间空配置沿用长业务池默认值。
 
 ## 初始化注册 Kind
 
@@ -167,3 +167,32 @@ Go 1.27.0，Windows/amd64，Ryzen 7 5800H，GOMAXPROCS=4；每组 4 个 ID，前
 新增所有权回归覆盖顺序、重复 ID、空组、调用方修改隔离、组 append 隔离，以及错误中的组号/成员位置。图谱代际 2026-10-10T16:08:17Z 已过期，本次用当前源码核对写入、读取、回收及调用链，未把旧索引当完整证明。
 
 本次实际通过：`go test -race ./framework/nest ./wiring/nest -count=2 -timeout=4m`、`go build ./...`、`go vet ./framework/nest ./wiring/nest` 和根包 Markdown 链接检查。AST 对比确认 Msg 的 43 个字段名称和类型完全保留。未运行新增真实资源、跨机或长期容量测试，不宣称生产吞吐提升。
+
+## 池命名收敛（2026-10-13）
+
+本轮原包结构保持不变，`slow_load.go` 改名为 `io_load.go`。只迁移命名，不改变默认 worker/等待预算、ID tail、Kind 路由、Remote 续行和 Await 重新准入。顺序为 API 与调用方 → 接线和生成物 → 指标/说明 → 回归；回退须连同配置、生成 Sender 与监控一起回退。
+
+| 旧入口 | 当前唯一入口 |
+| --- | --- |
+| `nest.fast` / `nest.slow` | `nest.short` / `nest.io`；`nest.long` 不变 |
+| `NestOptionWithBusinessPools` / 二参数 `NestOptionWithWorkerPools` | 三参数 `NestOptionWithWorkerPools(short, long, io)` |
+| `SendOptionSlow` | `SendOptionIO`：只强制 I/O 准备，handler 按 Kind 进入 short/long |
+| `FastPool` / `SlowPool`、Stats 的 `Fast` / `Slow` | `ShortPool` / `IOPool`、`Short` / `IO` |
+| `WithFastWorker` / `InFastWorker` | `WithShortWorker` / `InShortWorker` |
+| `ErrBlockingInFastWorker` | `ErrBlockingInBusinessWorker`，覆盖 short 与 long |
+| `FastContinuations`、`nest.dispatch.fast_continuations` | `ShortContinuations`、`nest.dispatch.short_continuations` |
+| `nest.dispatch.slow_reroute.total` | `nest.dispatch.io_reroute.total` |
+
+池标签与 statslog JSON 使用 short/long/io；同时补齐原先 statslog 的 long 队列/续行和健康检查遗漏的 long 等待计数，只影响观测输出。slow handler/lock hold 表示耗时诊断，保留原义。内部续行称 BusinessContinuation，因为它按 Kind 回到 short 或 long；并非固定短池。生成器 `_cost` 标记保持强制 I/O 准备含义，重新生成后调用 SendOptionIO。
+
+不提供旧名别名。消费者需同步迁移 Go 调用、YAML/环境配置和监控查询，重新生成 Sender；业务 kind 的 `BusinessPoolShort/Long` 不变。当前压测入口改用 `ROOST_NEST_GAME_SHORT_WORKERS`、`ROOST_NEST_GAME_IO_WORKERS`、`ROOST_NEST_GAME_SHORT_QUEUE`。历史性能报告和原始样本保留当时名称，复跑时按此映射。
+
+### 本轮验证与边界
+
+基线 `47d8f154`，macOS/arm64、Go 1.27.0，未限制 GOMAXPROCS。已执行并通过：全仓 `go build ./...`、`go vet ./...`、`go test ./... -count=1`；Nest、Wiring/Nest、fctx、statslog 的整包 race；根包文档/示例回归；配置快照一致性及 doctor 业务声明回归。`go generate ./codegen/internal/roost` 已刷新声明快照。三池配置测试分别指定 short/long/io 的 worker 与容量并核对生效值。
+
+实际生成消费链通过 `ROOST_PERF_CPU=0 bash scripts/perf/nest-game.sh --check-spatial` 验证：生成 DAO/Entity、编译负载夹具、运行正式 Nest 提交/回滚空间组件测试。该入口没有启动性能负载。本轮未跑新的 15 分钟压测或 Linux 实机测试，不宣称容量变化。
+
+观测遗漏的触发条件是使用 long 池：原 statslog 只投影 short/io，健康检查也只累加这两池；long 的等待与续行因此未被展示。修复只补观测字段和求和，不改变调度。`TestFormatNestStatsUsesReadableQueueNames` 增加 long 队列与续行断言；用源码 overlay 撤去两项 long 赋值时失败（期望 2 workers、3/16 队列和 2 continuations，实际全零），恢复后通过。后续新增执行池应同步核对 DispatcherStats、statslog、健康和 metrics 四个出口，避免只修改调度器。
+
+CBM 核对代际为 `2026-10-10T03:58:22Z`；相关源码存在 metadata_changed，文档/消费 testdata 按设计排除，旧符号片段行号已经漂移。已对更改路径分批检查 coverage，并以当前源码、调用点和编译回归补证，未把图谱旧行号作为正确性依据。

@@ -34,7 +34,7 @@ func countingLocalExecutor(hops *atomic.Int32) context.Context {
 
 // RR-20260926-44：Prepare 在慢阶段失败时没有任何已定稿的本地状态，Abort 不得再投递快池续行；
 // 已经取得的前序实体仍须由 Close 释放。
-func TestPrepareRemoteWriteBatchFailureAbortsWithoutFastPoolHop(t *testing.T) {
+func TestPrepareRemoteWriteBatchFailureAbortsWithoutShortPoolHop(t *testing.T) {
 	m, loader := newRR44Manager(t)
 	present := newTestRemoteEntity(9301, 1, rr44Kind)
 	loader.add(present)

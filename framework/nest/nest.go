@@ -137,7 +137,7 @@ var (
 	//   - 能否重试：原样重试仍会被拒绝（结构性冲突，不是暂时性错误）。把这次写入并入外层事务，或让嵌套事务只写外层没有捕获的实体。
 	ErrNestedTransactionRollbackConflict = errors.New("nest: nested isolated transaction writes an entity the enclosing transaction may roll back")
 	// ErrNestedTransactionInRemoteMessage 表示在带 Remote 批次的消息里调用了 RunIsolatedTransaction（RR-20260926-75）：handler 内，
-	// 消息自己的事务开始之前的慢阶段准备里（批次挂上之后），或消息自己的事务结束之后、批次收尾之前的收尾阶段（Guard post-release、
+	// 消息自己的事务开始之前的I/O 阶段准备里（批次挂上之后），或消息自己的事务结束之后、批次收尾之前的收尾阶段（Guard post-release、
 	// 解锁后回调，RR-20260926-84）。Remote 批次只随
 	// 消息自己的事务 Commit 或 Abort；独立事务若经过它，会替外层 finalize 并把批次标成已提交，外层失败时 Remote 修改照样发布。
 	// 框架直接拒绝：call 不执行、没有任何提交、批次与消息的 Remote 状态不变。
@@ -285,10 +285,10 @@ func (mgr *NestMgr) TickDuration() time.Duration {
 }
 
 type NestOpts struct {
-	FastPool, SlowPool, LongPool WorkerPoolConfig
-	Getter                       entity.Getter
-	RemoteSnapshotResolver       RemoteSnapshotResolver
-	RemoteManager                entity.IRemoteEntityManager
+	ShortPool, IOPool, LongPool WorkerPoolConfig
+	Getter                      entity.Getter
+	RemoteSnapshotResolver      RemoteSnapshotResolver
+	RemoteManager               entity.IRemoteEntityManager
 
 	DelayedMsgCap          int
 	MaxDelay               time.Duration
@@ -308,10 +308,6 @@ type NestOpts struct {
 type NestOption func(*NestOpts)
 
 var (
-	// NestOptionWithWorkerPools 设置快慢两个执行池；非正数字段使用框架默认值。
-	NestOptionWithWorkerPools = func(fast, slow WorkerPoolConfig) NestOption {
-		return func(opts *NestOpts) { opts.FastPool, opts.SlowPool = fast, slow }
-	}
 	// NestOptionWithStageMetrics 启用按 handler/stage 的耗时指标，默认关闭。
 	// 旧 dispatch.cost 与 lock_hold 指标保持原口径。
 	NestOptionWithStageMetrics = func(enabled bool) NestOption {
@@ -437,24 +433,24 @@ func NewEngine(opts ...NestOption) *NestMgr {
 	if ret.syncTimeout <= 0 {
 		ret.syncTimeout = NestSyncTimeout
 	}
-	ret.dispatcher = NewDispatcher("nest", params.FastPool.Workers, params.FastPool.QueueCap, func(msg *Msg) {
+	ret.dispatcher = NewDispatcher("nest", params.ShortPool.Workers, params.ShortPool.QueueCap, func(msg *Msg) {
 		if msg.remoteLogic != nil {
 			msg.remoteLogic.run(ret)
 			return
 		}
 		NestDispatch(ret, msg)
 	})
-	ret.dispatcher.slowConfig = params.SlowPool
+	ret.dispatcher.ioConfig = params.IOPool
 	ret.dispatcher.longConfig = params.LongPool
 	ret.dispatcher.remoteHandler = func(msg *Msg) { dispatchNest(ret, msg, true) }
 	if checker, ok := params.Getter.(entity.LoadedChecker); ok && checker != nil {
 		ret.loadedChecker = checker
-		ret.dispatcher.coldTargets = ret.declaredTargetsNeedSlowPreparation
+		ret.dispatcher.coldTargets = ret.declaredTargetsNeedIOPreparation
 	}
 	ret.dispatcher.stageMetrics = params.StageMetrics
 	ret.dispatcher.ConfigureDelayedAdmission(params.DelayedMsgCap, params.MaxDelay)
 	ret.ticker = NewTicker(params.TickDuration)
-	// committer 的可选能力：DataEngine 需要在快池持锁执行框架步骤（驱逐被跳过的原生步骤留下的
+	// committer 的可选能力：DataEngine 需要在业务池持锁执行框架步骤（驱逐被跳过的原生步骤留下的
 	// 实体，RR-20260926-30），这里把本引擎的 RunLocal 交给它。
 	// Remote Manager 的后台收尾（finalizer）同样需要：持久拒绝后的回滚与仅内存卸载、确认无结论时
 	// 延迟执行的提交后回调（RR-20260926-37/39）。两者共用这一个入口。
@@ -465,8 +461,8 @@ func NewEngine(opts ...NestOption) *NestMgr {
 	if binder, ok := params.RemoteManager.(LocalExecutorBinder); ok {
 		binder.BindLocalExecutor(runLocal)
 	}
-	// Getter（entity.ManagerAccess）的共享冷加载与调用方解耦：领头的慢阶段请求截止离开后，加载仍在
-	// 进行，发布实体不能再经那条已结束消息的快续行，改走这个入口（RR-20260926-54）。
+	// Getter（entity.ManagerAccess）的共享冷加载与调用方解耦：领头的I/O 阶段请求截止离开后，加载仍在
+	// 进行，发布实体不能再经那条已结束消息的业务续行，改走这个入口（RR-20260926-54）。
 	if binder, ok := params.Getter.(LocalExecutorBinder); ok {
 		binder.BindLocalExecutor(runLocal)
 	}
@@ -596,11 +592,11 @@ var (
 			opt.Delay = delay
 		}
 	}
-	// SendOptionSlow 将声明目标的加载及前后置 I/O 放入慢池；handler 始终在快池。
+	// SendOptionIO 将声明目标的加载及前后置 I/O 放入 I/O 池；handler 始终在业务池。
 	// Getter 实现 entity.LoadedChecker（ManagerAccess 已实现）时，声明目标中有未加载实体会在统一准入处
-	// 自动走慢阶段（RR-20260926-25 / 47）；显式 Slow 仍有效，用于强制慢准备，也是未实现 LoadedChecker 的
+	// 自动走 I/O 阶段（RR-20260926-25 / 47）；显式 IO 仍有效，用于强制 I/O 准备，也是未实现 LoadedChecker 的
 	// 自定义 Getter 预加载冷目标的方式。
-	SendOptionSlow = func() SendOpt {
+	SendOptionIO = func() SendOpt {
 		return func(opt *sendOptParam) { opt.Cost = true }
 	}
 )
@@ -675,8 +671,7 @@ func asyncMessageContextSnapshot(snapshot fctx.ContextSnapshot) fctx.ContextSnap
 	}
 }
 
-// NestOptionWithBusinessPools 分别配置短业务、长业务和 I/O 池；三者共用 ID 顺序。
-// 原 WithWorkerPools 仍配置短业务和 I/O，长业务使用默认值。
-func NestOptionWithBusinessPools(short, long, io WorkerPoolConfig) NestOption {
-	return func(o *NestOpts) { o.FastPool = short; o.LongPool = long; o.SlowPool = io }
+// NestOptionWithWorkerPools 分别配置短业务、长业务和 I/O 池；三者共用 ID 顺序。
+func NestOptionWithWorkerPools(short, long, io WorkerPoolConfig) NestOption {
+	return func(o *NestOpts) { o.ShortPool = short; o.LongPool = long; o.IOPool = io }
 }

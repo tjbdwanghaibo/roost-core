@@ -10,7 +10,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// remoteLogicCall 是慢 worker 到逻辑 worker 的一次借用。原 Msg 由慢 worker
+// remoteLogicCall 是I/O worker 到逻辑 worker 的一次借用。原 Msg 由I/O worker
 // 独占其引用；借用期间它只等待 done，不读写 Msg。独立信封被逻辑池释放后
 // 才关闭 done，因此不会与 Msg 池回收、Guard 清理或 RefCount 更新竞争。
 type remoteLogicCall struct {
@@ -36,7 +36,7 @@ func needsRemoteStage(msg *Msg) bool {
 }
 
 func (call *remoteLogicCall) run(mgr *NestMgr) {
-	phase := fctx.WithFastWorker()
+	phase := fctx.WithShortWorker()
 	if businessLane(call.msg) == dispatchLongLane {
 		phase = fctx.WithLongWorker()
 	}
@@ -53,7 +53,7 @@ func (call *remoteLogicCall) run(mgr *NestMgr) {
 				call.err = fmt.Errorf("nest: local continuation panic: %v", r)
 			}
 		}
-		// 只返回请求数据；本地执行器仍属于等待本次续行的慢阶段。
+		// 只返回请求数据；本地执行器仍属于等待本次续行的I/O 阶段。
 		current.Base = base
 		call.snapshot = fctx.CaptureSnapshot()
 	}()
@@ -70,12 +70,12 @@ func (call *remoteLogicCall) run(mgr *NestMgr) {
 
 const localTaskName = "__nest_run_local"
 
-// RunLocal 把需要 Entity 本地锁的框架步骤交给快池执行，并同步等待它结束；fn 在快 worker 上运行，
+// RunLocal 把需要 Entity 本地锁的框架步骤交给业务池执行，并同步等待它结束；fn 在业务 worker 上运行，
 // 自己取所需的 Entity 锁（锁等待属于 Guard/本地锁豁免）。它走续行通道，不排在任何实体的同 ID 链上，
-// 所以等待它的调用方与同 ID 的慢准备不会互相等待。
+// 所以等待它的调用方与同 ID 的I/O 准备不会互相等待。
 //
-// 只能在快池之外调用：慢 worker 或框架后台 goroutine（例如 DataEngine 驱逐被跳过的原生步骤留下的
-// 实体，RR-20260926-30）。在快 worker 上调用返回 fctx.ErrBlockingInFastWorker，不会自等
+// 只能在业务池之外调用：I/O worker 或框架后台 goroutine（例如 DataEngine 驱逐被跳过的原生步骤留下的
+// 实体，RR-20260926-30）。在业务 worker 上调用返回 fctx.ErrBlockingInBusinessWorker，不会自等
 // （RR-20260926-06）。Nest 未启动、已开始停机或已 fence 时返回错误，fn 不会执行；一旦投递成功就
 // 等到 fn 结束，不因 ctx 提前返回——fn 仍可能正持有 Entity 锁。fn 的 panic 作为错误返回。
 func (mgr *NestMgr) RunLocal(ctx context.Context, fn func()) error {
@@ -112,7 +112,7 @@ func (mgr *NestMgr) RunLocal(ctx context.Context, fn func()) error {
 	envelope := msgPool.Get().(*Msg)
 	envelope.remoteLogic = call
 	envelope.OnSend()
-	if !queue.tryContinueFast(envelope) {
+	if !queue.tryContinueBusiness(envelope) {
 		envelope.OnRelease()
 		return ErrNestStopped
 	}
@@ -121,10 +121,10 @@ func (mgr *NestMgr) RunLocal(ctx context.Context, fn func()) error {
 }
 
 func (mgr *NestMgr) dispatchRemoteLogic(msg *Msg) (any, error) {
-	return mgr.dispatchFastContinuation(msg, nil)
+	return mgr.dispatchBusinessContinuation(msg, nil)
 }
-func (mgr *NestMgr) dispatchFastContinuation(msg *Msg, fn func()) (any, error) {
-	fctx.AssertBlockingAllowed("nest.dispatchFastContinuation")
+func (mgr *NestMgr) dispatchBusinessContinuation(msg *Msg, fn func()) (any, error) {
+	fctx.AssertBlockingAllowed("nest.dispatchBusinessContinuation")
 	call := &remoteLogicCall{
 		msg: msg, fn: fn, snapshot: fctx.CaptureSnapshot(), done: make(chan struct{}),
 		queuedAt: startNestStage(mgr.stageMetrics),
@@ -133,7 +133,7 @@ func (mgr *NestMgr) dispatchFastContinuation(msg *Msg, fn func()) (any, error) {
 	envelope.Tid = msg.Key()
 	envelope.remoteLogic = call
 	envelope.OnSend()
-	mgr.dispatcher.queue.continueFast(envelope)
+	mgr.dispatcher.queue.continueBusiness(envelope)
 	// 不能在 ctx 取消时提前返回：逻辑阶段仍可能持锁并使用原 Msg。
 	<-call.done
 	if current := fctx.CurrentContext(); current != nil {

@@ -8,7 +8,7 @@ import (
 )
 
 // BenchmarkHandlerCreateEntity 测量 handler 内经 ManagerAccess.Create（生成 Lifecycle 的入口）新建实体的
-// 整条请求：真实 EntityManager / ManagerAccess，单快 worker，每次新建一个新 ID（RR-20260926-48 取锁路径）。
+// 整条请求：真实 EntityManager / ManagerAccess，单业务 worker，每次新建一个新 ID（RR-20260926-48 取锁路径）。
 func BenchmarkHandlerCreateEntity(b *testing.B) {
 	for _, tc := range []struct {
 		name string
@@ -30,7 +30,7 @@ func BenchmarkHandlerCreateEntity(b *testing.B) {
 				b.Fatal(err)
 			}
 			access := entity.NewManagerAccess(manager)
-			engine := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 1024}, WorkerPoolConfig{}))
+			engine := NewEngine(NestOptionWithGetter(access), NestOptionWithTransactionCommitter(&recordingCommitter{}), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 1024}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 			name := NewHandlerName("bench_handler_create_" + tc.name)
 			next := int64(200000)
 			engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {

@@ -9,8 +9,8 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 const entityDeleteHandler = "__dataengine_entity_delete"
@@ -110,7 +110,7 @@ func (runtime *Runtime) admitRemoteEntityDelete(ctx context.Context, value entit
 	}
 	// 独立的 Remote 删除要准备远端批次、等待持久提交和确认，快 worker 上不允许等待。
 	// 在任何远端/WAL 副作用之前明确拒绝：实体保留在内存、不 fence，调用方可按
-	// fctx.ErrBlockingInFastWorker 判别并改为声明目标后走正式事务（RR-20260926-27）。
+	// fctx.ErrBlockingInBusinessWorker 判别并改为声明目标后走正式事务（RR-20260926-27）。
 	// 旧实现让 PrepareRemoteWriteBatch 入口断言 panic，再被上面的 recover 当成
 	// 不确定结果，一次误用就 fence 全进程并摘除实体。
 	if err := fctx.BlockingError("dataengine.admitRemoteEntityDelete"); err != nil {

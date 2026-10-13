@@ -19,10 +19,10 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -216,7 +216,7 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = rt.Shutdown(context.Background()) })
-	options := append(rt.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 8, QueueCap: 4096}, nest.WorkerPoolConfig{Workers: 128, QueueCap: 256}))
+	options := append(rt.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 8, QueueCap: 4096}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{Workers: 128, QueueCap: 256}))
 	var mixed *mixedLoad
 	if os.Getenv("ROOST_PERF_MIXED") == "1" {
 		if shape == "cold" {
@@ -335,7 +335,7 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 				if daos == 4 {
 					var opts []nest.SendOpt
 					if shape == "cold" {
-						opts = append(opts, nest.SendOptionSlow())
+						opts = append(opts, nest.SendOptionIO())
 					}
 					_, err = scheduler.RequestMulti(ctx, nest.NewHandlerName("pressure_update"), entityIDs, nil, opts...)
 				} else {

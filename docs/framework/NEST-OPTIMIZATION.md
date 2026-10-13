@@ -53,7 +53,7 @@ go tool pprof -top -alloc_space artifacts/nest-review-20261013/nest.test.exe art
 
 ### 当前重复工作
 
-[客户端入口](../../framework/nest/client.go)先标准化目标；[调度队列](../../framework/nest/dispatch_queue.go)的 `dispatchIDs` 为多目标展开、排序、去重；[慢准备](../../framework/nest/slow_load.go)再次取得调度目标，并按路径标准化；[业务执行](../../framework/nest/nest_dispatch.go)的 `dispatchMany` 也会标准化目标。
+[客户端入口](../../framework/nest/client.go)先标准化目标；[调度队列](../../framework/nest/dispatch_queue.go)的 `dispatchIDs` 为多目标展开、排序、去重；[I/O 准备](../../framework/nest/io_load.go)再次取得调度目标，并按路径标准化；[业务执行](../../framework/nest/nest_dispatch.go)的 `dispatchMany` 也会标准化目标。
 
 [CastMulti](../../framework/nest/cast.go)每次重新生成当前消息的声明目标集合，再逐个检查待访问目标是否在声明内。同一 Handler 多次 Cast 时，这部分准备可能重复。
 

@@ -35,7 +35,7 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 		msg.localExecutor = func(fn func()) error {
 			executorMu.Lock()
 			defer executorMu.Unlock()
-			_, err := mgr.dispatchFastContinuation(msg, fn)
+			_, err := mgr.dispatchBusinessContinuation(msg, fn)
 			return err
 		}
 	}
@@ -55,13 +55,13 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 		if !remoteStage && errors.Is(err, errDeclaredTargetCold) && mgr.dispatcher.remoteHandler != nil {
 			// 声明目标在 handler 取得 Guard 之前被发现未加载：此时没有业务修改、没有 Remote 批次，
 			// 也没有已准备的引用。不回复、不重新准入，由派发队列把同一作业（连同它在同 ID 链上的
-			// 位置）交给慢池准备；慢阶段再按普通 Slow 路径加载并回到快池执行（RR-20260926-25）。
-			msg.slowReroute = true
+			// 位置）交给I/O 池准备；I/O 阶段再按普通 IO 路径加载并回到业务池执行（RR-20260926-25）。
+			msg.ioReroute = true
 			releaseCurrentMsg()
 			releaseCtx()
 			cost := time.Since(start)
-			emitNestTraceEvent(msg, "dispatch_done", "slow_reroute", cost)
-			traceWatch.stop(cost, "slow_reroute")
+			emitNestTraceEvent(msg, "dispatch_done", "io_reroute", cost)
+			traceWatch.stop(cost, "io_reroute")
 			return
 		}
 		commitCtx := context.Background()
@@ -189,7 +189,7 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 	observeNestStage(msg.Name, "remote_prepare", prepareStart)
 	prepareStart = time.Time{}
 	if remoteStage {
-		if err = prepareSlowEntities(msg); err != nil {
+		if err = prepareIOEntities(msg); err != nil {
 			return
 		}
 		ret, err = mgr.dispatchRemoteLogic(msg)
@@ -199,7 +199,7 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 }
 
 // runNestLogic 的 Guard 与事务上下文始终由执行 handler 的 goroutine 持有。
-// Remote 的获取和最终确认在调用者的慢 worker 上完成。
+// Remote 的获取和最终确认在调用者的I/O worker 上完成。
 func runNestLogic(mgr *NestMgr, msg *Msg) (ret any, err error) {
 	previousGetter := msg.getter
 	msg.getter = loadedGetter{previousGetter}
@@ -286,8 +286,8 @@ func (mgr *NestMgr) singleDispatch(name string, id int64, params []any) (any, er
 	loadStart := startNestStage(mgr.stageMetrics)
 	e, err := mgr.dispatchGetter().Get(nestBaseContext(), meta.FullID, meta.Category)
 	observeNestStage(name, "load", loadStart)
-	if errors.Is(err, entity.ErrColdLoadInLogic) && mgr.beforeSlowPreparation() {
-		// 准入时已加载、执行前被驱逐：handler 尚未开始，原位转慢准备（RR-20260926-25）。
+	if errors.Is(err, entity.ErrColdLoadInLogic) && mgr.beforeIOPreparation() {
+		// 准入时已加载、执行前被驱逐：handler 尚未开始，原位转I/O 准备（RR-20260926-25）。
 		return nil, declaredTargetCold(err)
 	}
 	if err != nil {
@@ -304,8 +304,8 @@ func (mgr *NestMgr) singleDispatch(name string, id int64, params []any) (any, er
 		return nil, ErrEntityNotFound
 	}
 	if !e.Touch() {
-		if mgr.beforeSlowPreparation() {
-			// 读取之后、引用之前被驱逐：对象已摘除不可再用；慢准备会重新加载或确认不存在。
+		if mgr.beforeIOPreparation() {
+			// 读取之后、引用之前被驱逐：对象已摘除不可再用；I/O 准备会重新加载或确认不存在。
 			return nil, declaredTargetCold(ErrEntityNotFound)
 		}
 		return nil, ErrEntityNotFound
@@ -352,7 +352,7 @@ func (mgr *NestMgr) dispatchMany(entry handlerEntry, name string, ids []int64, p
 	loadStart := startNestStage(mgr.stageMetrics)
 	es, err := mgr.dispatchGetter().GetMany(nestBaseContext(), fullIDs, categories)
 	observeNestStage(name, "load", loadStart)
-	if errors.Is(err, entity.ErrColdLoadInLogic) && mgr.beforeSlowPreparation() {
+	if errors.Is(err, entity.ErrColdLoadInLogic) && mgr.beforeIOPreparation() {
 		return nil, declaredTargetCold(err)
 	}
 	if err != nil {
@@ -377,8 +377,8 @@ func (mgr *NestMgr) dispatchMany(entry handlerEntry, name string, ids []int64, p
 			e.UnTouch()
 		}
 	}()
-	if evicted && mgr.beforeSlowPreparation() {
-		// 声明目标在读取与引用之间被驱逐：可选目标也不能静默当成缺失，交给慢准备重新判定。
+	if evicted && mgr.beforeIOPreparation() {
+		// 声明目标在读取与引用之间被驱逐：可选目标也不能静默当成缺失，交给I/O 准备重新判定。
 		return nil, declaredTargetCold(ErrEntityNotFound)
 	}
 	if firstDispatchEntityMissing(es) {
@@ -403,9 +403,9 @@ func (mgr *NestMgr) dispatchLoadedEntities(entry handlerEntry, name string, es, 
 	_, releaseLocks, err := lockDispatchEntitiesForHandlerWithStore(mgr.groupLockManager(), guard, lockEs, groupStoreOf(mgr.getter))
 	observeNestStage(name, "lock", lockStart)
 	if err != nil {
-		if errors.Is(err, ErrLockTimeout) && mgr.beforeSlowPreparation() && slices.ContainsFunc(lockEs, entity.IThreadSafeEntity.IsRemoved) {
+		if errors.Is(err, ErrLockTimeout) && mgr.beforeIOPreparation() && slices.ContainsFunc(lockEs, entity.IThreadSafeEntity.IsRemoved) {
 			// 引用之后、取锁之前被驱逐（RequireEntity 拒绝已摘除实体）：handler 仍未开始，
-			// 原位转慢准备，不走会排到同 ID 后继之后的延迟重新准入。
+			// 原位转I/O 准备，不走会排到同 ID 后继之后的延迟重新准入。
 			return nil, declaredTargetCold(err)
 		}
 		return nil, err
@@ -473,7 +473,7 @@ func lockDispatchEntities(guard *entity.EntityGuard, lockEs []entity.IThreadSafe
 	}
 	// useTryLock（guard 已持有别的实体时改用 TryRequire，避免越锁序阻塞等待）在当前生产路径上不可达（OPEN-ITEMS B05，
 	// 2026-09-27 按源码核对）：本函数唯一调用方是 group_lock.go 的 lockDispatchEntitiesWithGroup（groupID==0），往上只有
-	// dispatchLoadedEntities ← singleDispatch / dispatchMany ← runNestLogic（快池派发与 remote_dispatch.go 的快续行都经它）。
+	// dispatchLoadedEntities ← singleDispatch / dispatchMany ← runNestLogic（业务池派发与 remote_dispatch.go 的业务续行都经它）。
 	// runNestLogic 在取锁前新建 GuardScope，dispatchScopeGuard 取到的是池里已清空的 guard；其间的 Getter 只读已加载实体、不取实体锁，
 	// 所以这里 GuardedCount() 恒为 0。handler 内的公开 Request / Dispatch 被 ErrSyncInHandler / ErrAsyncInHandler 拒绝，
 	// 也没有别的嵌套派发入口。分支保留为防御：将来出现“在已持锁 guard 上派发”的入口时，它避免越锁序等待。

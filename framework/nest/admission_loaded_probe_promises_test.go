@@ -35,7 +35,7 @@ func TestAdmissionNeverRunsCustomGetterOnSender(t *testing.T) {
 	base := newMockGetter()
 	base.Add(e)
 	g := &probeIOGetter{Getter: base}
-	mgr := NewEngine(NestOptionWithGetter(g), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}))
+	mgr := NewEngine(NestOptionWithGetter(g), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 	name := NewHandlerName("admission_custom_getter")
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) { return "ok", nil }, HandlerMeta{})
 	if err := mgr.Start(); err != nil {
@@ -63,7 +63,7 @@ func TestDelayedAdmissionIsNotSerializedByCustomGetter(t *testing.T) {
 	base := newMockGetter()
 	base.Add(e)
 	g := &probeIOGetter{Getter: base}
-	mgr := NewEngine(NestOptionWithGetter(g), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 4, QueueCap: 16}, WorkerPoolConfig{}))
+	mgr := NewEngine(NestOptionWithGetter(g), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 4, QueueCap: 16}, WorkerPoolConfig{}, WorkerPoolConfig{}))
 	name := NewHandlerName("admission_custom_getter_delayed")
 	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) { return "ok", nil }, HandlerMeta{})
 	if err := mgr.Start(); err != nil {
@@ -142,21 +142,21 @@ func newLoaderAccess(t *testing.T) (*entity.ManagerAccess, *entity.EntityManager
 func TestAdmissionColdProbeRequiresLoadedChecker(t *testing.T) {
 	t.Run("custom_getter_without_checker_keeps_old_behavior", func(t *testing.T) {
 		access, _, loader := newLoaderAccess(t)
-		mgr := NewEngine(NestOptionWithGetter(contractGetter{access: access}), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{2, 8}))
+		mgr := NewEngine(NestOptionWithGetter(contractGetter{access: access}), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{}, WorkerPoolConfig{2, 8}))
 		mgr.MustRegisterHandlerWithMeta(NewHandlerName("old_cold"), func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) { return "ok", nil }, HandlerMeta{})
 		startColdTargetEngine(t, mgr)
 		cold := mustBuildCastID(t, 9821, entity.EntityCategory(1), nestLocalKind)
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 		defer cancel()
 		_, err := mgr.Request(ctx, NewHandlerName("old_cold"), cold, nil)
-		if !errors.Is(err, entity.ErrColdLoadInLogic) || loader.calls.Load() != 0 || mgr.Stats().Queue.Slow.Started != 0 {
-			t.Fatalf("custom Getter without IsLoaded was probed and moved to the slow stage: err=%v loads=%d slow started=%d", err, loader.calls.Load(), mgr.Stats().Queue.Slow.Started)
+		if !errors.Is(err, entity.ErrColdLoadInLogic) || loader.calls.Load() != 0 || mgr.Stats().Queue.IO.Started != 0 {
+			t.Fatalf("custom Getter without IsLoaded was probed and moved to the slow stage: err=%v loads=%d slow started=%d", err, loader.calls.Load(), mgr.Stats().Queue.IO.Started)
 		}
 	})
 	t.Run("custom_getter_with_checker_auto_slows", func(t *testing.T) {
 		access, _, loader := newLoaderAccess(t)
 		g := &loadedCheckerGetter{contractGetter: contractGetter{access: access}}
-		mgr := NewEngine(NestOptionWithGetter(g), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{2, 8}))
+		mgr := NewEngine(NestOptionWithGetter(g), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{}, WorkerPoolConfig{2, 8}))
 		mgr.MustRegisterHandlerWithMeta(NewHandlerName("checked_cold"), func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
 			if es[0] == nil {
 				return nil, errors.New("declared target missing in handler")

@@ -9,7 +9,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-// RR-20260926-26：handler 在快阶段用动态 Cast 访问未加载目标时，业务要能拿到
+// RR-20260926-26：handler 在业务阶段用动态 Cast 访问未加载目标时，业务要能拿到
 // ErrColdLoadInLogic 并降级。
 //
 // 动态 Cast 的目标不在消息声明里，按 RR-02 契约只读已加载实体：冷目标返回可
@@ -29,7 +29,7 @@ func TestFastCastColdTargetLetsBusinessFallBack(t *testing.T) {
 	if err := manager.TryAdd(newMockEntityWithKind(hot, castPlayerCategory, castPlayerKind)); err != nil {
 		t.Fatal(err)
 	}
-	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{1, 8}))
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{}, WorkerPoolConfig{1, 8}))
 	fallback := false
 	mgr.MustRegisterHandlerWithMeta(NewHandlerName("optional_friend"), func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
 		if _, err := guardFixtureCastOne[entity.IThreadSafeEntity](cold); err != nil {

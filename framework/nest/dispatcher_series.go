@@ -23,11 +23,11 @@ import (
 // dispatcherSeriesNames is every metric labelled with dispatcher. A new one
 // must be added here, or it outlives its dispatcher.
 var dispatcherSeriesNames = [...]string{
-	"nest.dispatch.fast_continuations",
+	"nest.dispatch.short_continuations",
 	"nest.dispatch.delayed_messages",
 	"nest.dispatch.queue_len",
 	"nest.dispatch.worker_num",
-	"nest.dispatch.slow_reroute.total",
+	"nest.dispatch.io_reroute.total",
 }
 
 var dispatcherSeries struct {

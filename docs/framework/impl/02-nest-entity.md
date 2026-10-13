@@ -162,7 +162,7 @@
 | [remote_access.go](../../../framework/nest/remote_access.go) | `RemoteAcquireMode`、`RemoteAccess`、`RemoteAccessProvider`、`RemoteSnapshotResolver`、`RemoteKey`、`RemoteScopeProvider`、`RemoteDefaultTTLMillisProvider` |
 | [remote_dispatch.go](../../../framework/nest/remote_dispatch.go) | 函数/方法或内部实现；见源码 |
 | [rollback.go](../../../framework/nest/rollback.go) | `RollbackPolicy`、`HandlerMeta`、`RollbackParticipant`、`RollbackTx`、`PersistFieldNamer`、`RollbackSnapshotter` |
-| [slow_load.go](../../../framework/nest/slow_load.go) | 函数/方法或内部实现；见源码 |
+| [io_load.go](../../../framework/nest/io_load.go) | 函数/方法或内部实现；见源码 |
 | [stats.go](../../../framework/nest/stats.go) | `DispatcherWorkStats`、`DispatchLaneStats`、`DispatchQueueStats`、`DispatcherStats` |
 | [ticker.go](../../../framework/nest/ticker.go) | `TickCallbackName`、`Ticker` |
 | [trace.go](../../../framework/nest/trace.go) | 函数/方法或内部实现；见源码 |
@@ -281,7 +281,7 @@
 - [create_capture_failure_promises_test.go](../../../framework/nest/create_capture_failure_promises_test.go)：`TestCreateCaptureFailureFailsTheTransactionEvenIfSwallowed`
 - [create_in_scope_commit_boundary_promises_test.go](../../../framework/nest/create_in_scope_commit_boundary_promises_test.go)：`TestCreateInScopePipelinedWithoutWatermarkWaitsForDurable`、`TestCreateInScopeRevokedWhenHandlerFails`、`TestCreateInScopeRevokedWhenStrictCommitRejected`、`TestCreateInScopeCommittedEntitySyncsAfterCommit`、`TestCreateOutsideTransactionUnchanged`
 - [create_lock_bench_test.go](../../../framework/nest/create_lock_bench_test.go)
-- [create_lock_order_promises_test.go](../../../framework/nest/create_lock_order_promises_test.go)：`TestHandlerCreateCrossOrderResolvesWithoutDeadlock`、`TestHandlerCreateThenHigherGroupCastDoesNotFormCycle`、`TestSameIDCreateDoesNotOccupyFastPool`、`TestSwallowedCreateLockConflictStillRollsBack`、`TestMemoryHandlerCreateHoldsLockUntilHandlerEnds`
+- [create_lock_order_promises_test.go](../../../framework/nest/create_lock_order_promises_test.go)：`TestHandlerCreateCrossOrderResolvesWithoutDeadlock`、`TestHandlerCreateThenHigherGroupCastDoesNotFormCycle`、`TestSameIDCreateDoesNotOccupyShortPool`、`TestSwallowedCreateLockConflictStillRollsBack`、`TestMemoryHandlerCreateHoldsLockUntilHandlerEnds`
 - [create_revoke_destroy_reason_promises_test.go](../../../framework/nest/create_revoke_destroy_reason_promises_test.go)：`TestRevokedCreationIsDestroyedWithCreateRevokedReason`
 - [created_contract_test.go](../../../framework/nest/created_contract_test.go)：`TestHandlerCreateInsideDestroyWindowIsTreatedAsLockConflict`、`TestHandlerCreateInsideRevokeWindowIsTreatedAsLockConflict`、`TestOuterCreateAfterNestedRevokeInSameGuardFailsDeterministically`、`TestCreateInOtherManagerAfterSameIDRevokeKeepsRemovalWindowConflict`
 - [cross_create_requeue_budget_promises_test.go](../../../framework/nest/cross_create_requeue_budget_promises_test.go)：`TestSymmetricCrossCreatePairsResolveWithinRequeueBudget`
@@ -290,7 +290,7 @@
 - [destroy_recreate_same_id_promises_test.go](../../../framework/nest/destroy_recreate_same_id_promises_test.go)：`TestDestroyThenRecreateSameIDInHandlerLocksNewInstance`、`TestDestroyThenRecreateSameIDInHandlerRollsBack`、`TestCastAfterDestroyDoesNotReturnUnlockedRecreatedInstance`、`TestDestroyThenRecreateSameIDRemoteEntityLocksNewInstance`
 - [dispatch_guard_scope_promises_test.go](../../../framework/nest/dispatch_guard_scope_promises_test.go)：`TestDispatchLockingWithoutGuardScopeNeverReturnsCallerGuardToPool`、`TestDispatchLockingGroupRetryInScopeKeepsGuardUntilScopeEnds`、`TestDispatchEntriesRequireGuardScope`
 - [dispatch_lifecycle_test.go](../../../framework/nest/dispatch_lifecycle_test.go)：`TestBroadcastReleasePanicBalancesTouchesAndContinues`、`TestDispatchRoutesPreserveArgumentsAndReleaseOnEveryOutcome`
-- [dispatch_queue_test.go](../../../framework/nest/dispatch_queue_test.go)：`TestTwoPoolsOrderAllTargetsWithoutOccupyingFastWorker`、`TestSlowPoolUsesSharedWorkersAndBoundedWaiting`、`TestSlowLoadAndHandlerUseDifferentWorkers`、`TestQueueStatsSeparateDependencyAndWorkerWait`、`TestFastLogicMarksGetterContextAndSlowPreparationCanLoad`；其余 1 项见文件
+- [dispatch_queue_test.go](../../../framework/nest/dispatch_queue_test.go)：`TestTwoPoolsOrderAllTargetsWithoutOccupyingFastWorker`、`TestIOPoolUsesSharedWorkersAndBoundedWaiting`、`TestSlowLoadAndHandlerUseDifferentWorkers`、`TestQueueStatsSeparateDependencyAndWorkerWait`、`TestFastLogicMarksGetterContextAndSlowPreparationCanLoad`；其余 1 项见文件
 - [dispatcher_series_lifecycle_promises_test.go](../../../framework/nest/dispatcher_series_lifecycle_promises_test.go)：`TestDestroyedDispatchersLeaveNoSeries`、`TestADispatcherSharingItsNameKeepsTheSeries`、`TestADispatcherThatDidNotDrainKeepsItsSeriesUntilItDoes`、`TestTheSlowRerouteSeriesGoesWithItsDispatcher`
 - [fast_cold_miss_promises_test.go](../../../framework/nest/fast_cold_miss_promises_test.go)：`TestFastCastColdTargetLetsBusinessFallBack`
 - [fast_stage_test.go](../../../framework/nest/fast_stage_test.go)：`TestFastStageRejectsDirectColdAccessBeforeIO`、`TestFastContinuationRejectsSelfDispatchAndSavedSlowExecutorRunsInline`、`TestFastBroadcastReportsColdTargetAndContinues`
@@ -336,7 +336,7 @@
 - [remote_transaction_test.go](../../../framework/nest/remote_transaction_test.go)：`TestRemoteManagedDispatchRejectsBroadcast`、`TestFinalizeRemoteWriteBatchProducesValidWALMutation`、`TestCommitRecordAcceptsMixedRemoteAndOrdinaryMutations`、`TestRemoteTransactionUsesNestOutbox`、`TestIndeterminateRemoteBatchIsNotAborted`
 - [requeue_jitter_promises_test.go](../../../framework/nest/requeue_jitter_promises_test.go)：`TestSymmetricTransientRequeuesAreNotReadmittedInLockstep`
 - [rolled_back_release_hook_promises_test.go](../../../framework/nest/rolled_back_release_hook_promises_test.go)：`TestRolledBackReleaseHookPanicKeepsBusinessError`
-- [run_local_promises_test.go](../../../framework/nest/run_local_promises_test.go)：`TestRunLocalExecutesOnTheFastPoolAndIsBoundToTheCommitter`、`TestRunLocalFromAFastWorkerFailsFast`、`TestRunLocalIsNotOrderedBehindTheEntitysSlowPreparation`
+- [run_local_promises_test.go](../../../framework/nest/run_local_promises_test.go)：`TestRunLocalExecutesOnTheShortPoolAndIsBoundToTheCommitter`、`TestRunLocalFromAFastWorkerFailsFast`、`TestRunLocalIsNotOrderedBehindTheEntitysSlowPreparation`
 - [runlocal_stage_test.go](../../../framework/nest/runlocal_stage_test.go)：`TestSlowHandlerRunLocalDoesNotWaitForOwnPool`
 - [shared_load_detach_test.go](../../../framework/nest/shared_load_detach_test.go)：`TestSlowPreparationLeaderTimeoutDoesNotCutTheSharedLoad`
 - [slow_trace_gate_test.go](../../../framework/nest/slow_trace_gate_test.go)：`TestSlowTraceGateBoundsConcurrentDiagnostics`
@@ -364,4 +364,4 @@
 
 ### 调度目标的存储所有权
 
-`newDispatchJob`直接初始化单目标的内嵌数组并建立只读切片视图；多个目标由`dispatchIDs`复制、排序和去重。不再向通用函数传入job的可变缓冲区。队列发布后目标集合直到收尾都保持不变；消息中的目标切片变化不影响队列的依赖登记和释放。ID tail顺序和快慢池容量契约不变。
+`newDispatchJob`直接初始化单目标的内嵌数组并建立只读切片视图；多个目标由`dispatchIDs`复制、排序和去重。不再向通用函数传入job的可变缓冲区。队列发布后目标集合直到收尾都保持不变；消息中的目标切片变化不影响队列的依赖登记和释放。ID tail顺序和业务池与 I/O 池容量契约不变。

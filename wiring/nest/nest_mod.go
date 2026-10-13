@@ -59,11 +59,11 @@ type loadTimeoutConfigurer interface {
 }
 
 type engineConfig struct {
-	fast, slow, long corenest.WorkerPoolConfig
-	tick             time.Duration
-	timeout          time.Duration
-	delayedCap       int
-	maxDelay         time.Duration
+	short, io, long corenest.WorkerPoolConfig
+	tick            time.Duration
+	timeout         time.Duration
+	delayedCap      int
+	maxDelay        time.Duration
 	// unloadResync 来自 nest.unload_resync.*，零值字段取 entity 的默认（Workers 4、Attempts 5、QueueCapacity 4096）。
 	unloadResync entity.UnloadResyncConfig
 }
@@ -82,8 +82,8 @@ func (m *Mod) OptionalDependsOn() []app.ModName {
 	return []app.ModName{mods.ModDataEngine, mods.ModRemoteEntity}
 }
 
-// workerPool 是 nest.fast / nest.slow 的声明：0 取框架缺省。
-// 快池等待缺省为65536（全池共享），慢池为64；显式值仍按独立预算生效。
+// workerPool 是 nest.short / nest.long / nest.io 的声明：0 取框架缺省。
+// 短业务池等待缺省为65536（全池共享），I/O 池为64；显式值仍按独立预算生效。
 type workerPool struct {
 	Workers       int `config:"workers" min:"0" example:"0"`
 	QueueCapacity int `config:"queue_capacity" min:"0" example:"0"`
@@ -95,8 +95,8 @@ type config struct {
 	// saga.max_payload_bytes：EmitStart 在 Nest 事务里按它拒绝超限的启动意图，与协调器（kit/saga）共用一份声明（RR-20261006-66）。
 	mods.SagaPayloadConfig
 	Nest struct {
-		Fast              workerPool    `config:"fast"`
-		Slow              workerPool    `config:"slow"`
+		Short             workerPool    `config:"short"`
+		IO                workerPool    `config:"io"`
 		Long              workerPool    `config:"long"`
 		DelayedCapacity   int           `config:"delayed_capacity" min:"0" example:"4096"`
 		MaxDelay          time.Duration `config:"max_delay" min:"0" example:"24h"`
@@ -133,8 +133,8 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	coresaga.SetStartDataLimit(settings.SagaPayloadLimit())
 	nest := settings.Nest
 	m.config = engineConfig{
-		fast:       corenest.WorkerPoolConfig{Workers: nest.Fast.Workers, QueueCap: nest.Fast.QueueCapacity},
-		slow:       corenest.WorkerPoolConfig{Workers: nest.Slow.Workers, QueueCap: nest.Slow.QueueCapacity},
+		short:      corenest.WorkerPoolConfig{Workers: nest.Short.Workers, QueueCap: nest.Short.QueueCapacity},
+		io:         corenest.WorkerPoolConfig{Workers: nest.IO.Workers, QueueCap: nest.IO.QueueCapacity},
 		long:       corenest.WorkerPoolConfig{Workers: nest.Long.Workers, QueueCap: nest.Long.QueueCapacity},
 		tick:       nest.TickDuration,
 		timeout:    nest.RequestTimeout,
@@ -176,7 +176,7 @@ func (m *Mod) Provide(registry *app.Registry) error {
 	}
 	opts := []corenest.NestOption{
 		corenest.NestOptionWithGetter(m.getter),
-		corenest.NestOptionWithBusinessPools(m.config.fast, m.config.long, m.config.slow),
+		corenest.NestOptionWithWorkerPools(m.config.short, m.config.long, m.config.io),
 		corenest.NestOptionWithTickDuration(m.config.tick),
 		corenest.NestOptionWithSyncTimeout(m.config.timeout),
 		corenest.NestOptionWithDelayedAdmission(m.config.delayedCap, m.config.maxDelay),
@@ -243,9 +243,9 @@ func (m *Mod) Start() error {
 			}
 			m.unhookLoaded = unhook
 		}
-		// 实体被仅内存卸载（RR-30 驱逐、RR-39 持久拒绝）后仍有订阅者时，框架在快池之外从权威重载并 Rebind，
+		// 实体被仅内存卸载（RR-30 驱逐、RR-39 持久拒绝）后仍有订阅者时，框架在业务池之外从权威重载并 Rebind，
 		// 重载不了退回 remove（RR-20260926-59）。重载走 ManagerAccess 的共享加载，发布经 NewEngine 绑定给 getter
-		// 的 NestMgr.RunLocal（BindLocalExecutor）回快池。
+		// 的 NestMgr.RunLocal（BindLocalExecutor）回业务池。
 		if resync, ok := m.getter.(unloadResyncConfigurer); ok && m.stopResync == nil {
 			stop, err := resync.ConfigureUnloadResync(m.entitySync, m.config.unloadResync)
 			if err != nil {
@@ -351,6 +351,6 @@ func (m *Mod) checkHealth(context.Context) health.Result {
 	stats := m.engine.Stats()
 	return health.Result{
 		Status:  health.StatusOK,
-		Message: fmt.Sprintf("queue=%d delayed=%d", stats.Fast.QueueLen+stats.Slow.QueueLen+stats.FastContinuations, stats.Delayed),
+		Message: fmt.Sprintf("queue=%d delayed=%d", stats.Short.QueueLen+stats.Long.QueueLen+stats.IO.QueueLen+stats.ShortContinuations+stats.Queue.LongContinuations, stats.Delayed),
 	}
 }

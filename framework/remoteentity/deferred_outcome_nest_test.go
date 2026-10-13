@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 // deferredOutcomeNestRig 是跨层夹具：真实 Nest + 正式 Remote Manager（MongoCommitter 权威、ManagerAccess loader），
@@ -50,7 +50,7 @@ func newDeferredOutcomeNestRig(t *testing.T, rawID int64, name string) *deferred
 	if err = syncMgr.Register(live.Sync()); err != nil {
 		t.Fatal(err)
 	}
-	rig.engine = nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithRemoteEntityManager(f.mgr), nest.NestOptionWithEntitySync(syncMgr), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}))
+	rig.engine = nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithRemoteEntityManager(f.mgr), nest.NestOptionWithEntitySync(syncMgr), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	rig.name = nest.NewHandlerName(name)
 	rig.engine.MustRegisterHandlerWithMeta(rig.name, func(_ []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		live.set("rejected", "")
@@ -61,7 +61,7 @@ func newDeferredOutcomeNestRig(t *testing.T, rawID int64, name string) *deferred
 			rig.mu.Lock()
 			defer rig.mu.Unlock()
 			rig.afterCommit++
-			if fctx.InFastWorker() {
+			if fctx.InShortWorker() {
 				rig.afterCommitOnFast++
 			}
 			if current != nil {

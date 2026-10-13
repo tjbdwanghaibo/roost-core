@@ -61,7 +61,7 @@ func TestPipelinedRemoteBatchLocalRecordIsFsyncedBeforeVisible(t *testing.T) {
 					_, _ = f.mgr.ApplyRemoteCommits(context.Background(), commits[0].TransactionID, commits)
 				}
 				manager := boundedConfirmManager{Manager: f.mgr, fixture: f, confirm: 3 * time.Second, beforeWait: beforeWait}
-				engineMgr := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}),
+				engineMgr := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
 					nest.NestOptionWithRemoteEntityManager(manager), nest.NestOptionWithTransactionCommitter(projector))
 				name := nest.NewHandlerName("rr11_remote_local_fsync_" + durability.String() + "_" + outcome)
 				afterCommit := make(chan uint64, 2)
@@ -196,14 +196,14 @@ func TestPipelinedRemoteOutcomeMatchesStrict(t *testing.T) {
 				rec := &remoteOutcomeTap{}
 				manager := outcomeTapManager{boundedConfirmManager: boundedConfirmManager{Manager: f.mgr, fixture: f, confirm: confirm, beforeWait: beforeWait}, rec: rec}
 				committer := p.committer()
-				engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}),
+				engine := nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
 					nest.NestOptionWithRemoteEntityManager(manager), nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithEntitySync(syncMgr))
 				name := nest.NewHandlerName("pipelined_remote_outcome_" + p.name + "_" + outcome)
 				afterCommit := make(chan bool, 4)
 				engine.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
 					live.set("rejected", "")
 					live.MarkSyncDirty(1)
-					nest.AfterCommit(func() { afterCommit <- fctx.InFastWorker() })
+					nest.AfterCommit(func() { afterCommit <- fctx.InShortWorker() })
 					return "ok", nil
 				}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: p.durability})
 				if err = engine.Start(); err != nil {
