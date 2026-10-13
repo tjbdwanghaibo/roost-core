@@ -20,17 +20,19 @@ func (sendError SendError) Error() string {
 	}
 	return sendError.Err.Error()
 }
+
 func (sendError SendError) Unwrap() error { return sendError.Err }
 
 // ErrorHandler must return promptly. Panics are contained and counted, but a
 // blocking handler still blocks the affected session's worker.
 type ErrorHandler func(SendError)
 
+// AsyncTransportConfig 配置 AsyncTransport 的会话数、每会话队列与驻留字节上限、消息时效与发送超时。
 type AsyncTransportConfig struct {
 	MaxSessions       int
 	ReliableQueueSize int
 	MaxReliableBytes  int
-	// MaxQueuedReliableBytes 限制每会话待发送字节，不含正在发送的一条；0 保持旧行为。
+	// MaxQueuedReliableBytes 限制每会话待发送字节，不含正在发送的一条；0 表示只按条数（ReliableQueueSize）限制。
 	MaxQueuedReliableBytes int
 	// MaxResidentReliableBytes 限制全部会话可靠消息的驻留字节（排队+在途）；0 关闭。
 	MaxResidentReliableBytes int64
@@ -57,10 +59,10 @@ func DefaultAsyncTransportConfig() AsyncTransportConfig {
 // ErrReliableBackpressure — which entitysync treats as that session's
 // failure. A downstream send error is terminal for the session.
 //
-// It has exactly one lane. The latest-only datagram lane the old Replicator
-// used was removed (ARCH-12, M-18): a frame that carries only what changed
-// cannot survive being replaced by the next one. Unreliable sends go straight
-// to a DatagramSender (lockstep does this).
+// It has exactly one lane, and it is reliable: a frame that carries only what
+// changed cannot survive being replaced by the next one, so there is no
+// latest-only datagram lane here. Unreliable sends go straight to a
+// DatagramSender (lockstep does this).
 type AsyncTransport struct {
 	mu         sync.RWMutex
 	downstream ReliableSender

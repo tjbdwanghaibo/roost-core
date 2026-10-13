@@ -150,4 +150,5 @@ func interruptReadOnCancel(ctx context.Context, setter readDeadlineSetter) func(
 }
 
 var _ Transport = CompositeTransport{}
+
 var _ DatagramBatchTransport = CompositeTransport{}
