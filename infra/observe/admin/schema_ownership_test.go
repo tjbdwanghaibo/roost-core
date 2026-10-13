@@ -1,4 +1,3 @@
-// RR-20261004-NC-03：JSON schema 的输入和输出容器不得共享可变引用。
 package admin
 
 import (
@@ -7,6 +6,7 @@ import (
 	"testing"
 )
 
+// JSON schema 的输入和输出容器不共享可变引用。历史：RR-20261004-NC-03。
 func TestMetadataOwnership(t *testing.T) {
 	for _, mode := range []string{"empty_input", "empty_get", "empty_list", "array_input", "array_get", "array_list", "ordinary_map_control"} {
 		t.Run(mode, func(t *testing.T) {

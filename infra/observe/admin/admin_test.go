@@ -1,7 +1,12 @@
+// 管理命令：注册与执行、替换、handler panic 恢复、元数据排序、非法定义与 nil 守卫、执行审计不带载荷。
+
 package admin
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -130,5 +135,91 @@ func TestMetadataRegistryRegistersAndListsSortedCommands(t *testing.T) {
 	}
 	if list[0].Name != "config.reload" || list[1].Name != "feature_flag.set" {
 		t.Fatalf("list not sorted: %+v", list)
+	}
+}
+
+// nil 注册表不能注册 / 执行；未知命令报 ErrCommandNotFound；nil 元数据注册表不能注册。
+func TestRegistriesRefuseNilReceiversAndUnknownCommands(t *testing.T) {
+	ctx := context.Background()
+	handler := func(context.Context, Command) (Result, error) { return Result{OK: true}, nil }
+	var none *Registry
+	if err := none.Register(CommandDef{Name: "x", Handler: handler}); !errors.Is(err, ErrCommandInvalid) || !strings.Contains(err.Error(), "registry nil") {
+		t.Fatalf("Register on a nil registry = %v", err)
+	}
+	if _, err := none.Execute(ctx, Command{Name: "x"}); !errors.Is(err, ErrCommandInvalid) {
+		t.Fatalf("Execute on a nil registry = %v", err)
+	}
+	registry := NewRegistry()
+	if _, err := registry.Execute(ctx, Command{Name: "missing"}); !errors.Is(err, ErrCommandNotFound) {
+		t.Fatalf("Execute of an unknown command = %v", err)
+	}
+	if err := registry.Register(CommandDef{Name: "x", Handler: handler}); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := registry.Execute(ctx, Command{Name: "x"}); err != nil || !result.OK {
+		t.Fatalf("Execute of a registered command = (%+v, %v)", result, err)
+	}
+	var meta *MetadataRegistry
+	if err := meta.Register(CommandMeta{Name: "x"}); !errors.Is(err, ErrCommandInvalid) || !strings.Contains(err.Error(), "metadata registry nil") {
+		t.Fatalf("Register on a nil metadata registry = %v", err)
+	}
+}
+
+// Admin commands are operator-facing entry points; a nameless definition or
+// a nameless command would register or execute "nothing" without a word.
+func TestAdminRegistriesRefuseNamelessAndHandlerlessCommands(t *testing.T) {
+	reg := NewRegistry()
+	err := reg.Register(CommandDef{Handler: func(context.Context, Command) (Result, error) { return Result{}, nil }})
+	if !errors.Is(err, ErrCommandInvalid) || !strings.Contains(err.Error(), "name required") {
+		t.Fatalf("nameless definition = %v", err)
+	}
+	err = reg.Register(CommandDef{Name: "reload"})
+	if !errors.Is(err, ErrCommandInvalid) || !strings.Contains(err.Error(), "handler required for reload") {
+		t.Fatalf("handlerless definition = %v", err)
+	}
+	if _, err := reg.Execute(context.Background(), Command{}); !errors.Is(err, ErrCommandInvalid) || !strings.Contains(err.Error(), "name required") {
+		t.Fatalf("nameless command = %v", err)
+	}
+	meta := NewMetadataRegistry()
+	if err := meta.Register(CommandMeta{}); !errors.Is(err, ErrCommandInvalid) || !strings.Contains(err.Error(), "metadata name required") {
+		t.Fatalf("nameless metadata = %v", err)
+	}
+}
+
+func TestAdminExecutionWritesCorrelatedAuditWithoutPayload(t *testing.T) {
+	for _, kind := range []string{"ok", "error", "panic", "unknown", "missing"} {
+		t.Run(kind, func(t *testing.T) {
+			var buf bytes.Buffer
+			old := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+			defer slog.SetDefault(old)
+			r := NewRegistry()
+			if kind != "missing" {
+				_ = r.Register(CommandDef{Name: "b7", Handler: func(context.Context, Command) (Result, error) {
+					switch kind {
+					case "error":
+						return Result{}, errors.New("failed")
+					case "panic":
+						panic("failed")
+					case "unknown":
+						return Result{}, context.DeadlineExceeded
+					}
+					return Result{}, nil
+				}})
+			}
+			result, _ := r.Execute(context.Background(), Command{Name: "b7", TraceID: "trace-b7", Operator: "operator-b7", Source: "source-b7", Payload: []byte(`{"secret":"do-not-log-b7"}`)})
+			got := buf.String()
+			for _, want := range []string{"admin command started", "admin command finished", "trace-b7", "operator-b7", "source-b7", "outcome", "duration_ms"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("audit missing %q: %s", want, got)
+				}
+			}
+			if strings.Contains(got, "do-not-log-b7") {
+				t.Fatal("audit leaked payload")
+			}
+			if result.TraceID != "trace-b7" {
+				t.Fatalf("failure loses trace: %+v", result)
+			}
+		})
 	}
 }

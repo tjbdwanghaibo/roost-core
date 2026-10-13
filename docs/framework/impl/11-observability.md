@@ -31,7 +31,7 @@
 
 ### admin
 
-1 个实现文件、5 个测试文件。
+1 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -47,7 +47,7 @@
 
 ### failurelog
 
-1 个实现文件、6 个测试文件。
+1 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -55,7 +55,7 @@
 
 ### health
 
-1 个实现文件、2 个测试文件。
+1 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -79,7 +79,7 @@
 
 ### log
 
-4 个实现文件、5 个测试文件。
+4 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -90,7 +90,7 @@
 
 ### metrics
 
-2 个实现文件、4 个测试文件。
+2 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -126,11 +126,8 @@
 
 ### admin
 
-- [admin_test.go](../../../infra/observe/admin/admin_test.go)：`TestRegistryExecute`、`TestRegistryRegisterReplacesExistingCommand`、`TestRegistryExecuteRecoversHandlerPanic`、`TestMetadataRegistryRegistersAndListsSortedCommands`
-- [audit_promises_test.go](../../../infra/observe/admin/audit_promises_test.go)：`TestAdminExecutionWritesCorrelatedAuditWithoutPayload`
-- [guards_promises_test.go](../../../infra/observe/admin/guards_promises_test.go)：`TestRegistriesRefuseNilReceiversAndUnknownCommands`
-- [promises_test.go](../../../infra/observe/admin/promises_test.go)：`TestAdminRegistriesRefuseNamelessAndHandlerlessCommands`
-- [schema_ownership_promises_test.go](../../../infra/observe/admin/schema_ownership_promises_test.go)：`TestMetadataOwnership`、`TestSchemaPreservesNilAndEmptyContainers`、`TestSchemaNestedArraysAndStringsHaveIndependentOwnership`、`TestConcurrentMetadataConsumersOnlyMutateTheirCopies`
+- [admin_test.go](../../../infra/observe/admin/admin_test.go)：`TestRegistryExecute`、`TestRegistryRegisterReplacesExistingCommand`、`TestRegistryExecuteRecoversHandlerPanic`、`TestMetadataRegistryRegistersAndListsSortedCommands`、`TestRegistriesRefuseNilReceiversAndUnknownCommands`；其余 2 项见文件
+- [schema_ownership_test.go](../../../infra/observe/admin/schema_ownership_test.go)：`TestMetadataOwnership`、`TestSchemaPreservesNilAndEmptyContainers`、`TestSchemaNestedArraysAndStringsHaveIndependentOwnership`、`TestConcurrentMetadataConsumersOnlyMutateTheirCopies`
 
 ### errcode
 
@@ -138,17 +135,12 @@
 
 ### failurelog
 
-- [failurelog_fix_test.go](../../../infra/observe/failurelog/failurelog_fix_test.go)：`TestTrimUsesInPlaceLTrimWithoutDelete`、`TestDeleteRawUsesInPlaceLRemWithoutDelete`、`TestScriptFallbackIsCountedAsDegraded`
-- [failurelog_test.go](../../../infra/observe/failurelog/failurelog_test.go)：`TestRedisListAppendRawKeepsNewestEntries`、`TestRedisListListRawSupportsSingleElementRange`、`TestRedisListPurgeDeletesKey`、`TestRedisListPurgeReturnsEntryCount`、`TestRedisListCountRawReturnsListLength`；其余 2 项见文件
-- [key_guards_promises_test.go](../../../infra/observe/failurelog/key_guards_promises_test.go)：`TestRedisListRefusesAnEmptyKeyOnEveryOperation`
-- [trim_metrics_promises_test.go](../../../infra/observe/failurelog/trim_metrics_promises_test.go)：`TestLuaAppendCountsTrimmedRecords`
+- [failurelog_test.go](../../../infra/observe/failurelog/failurelog_test.go)：`TestRedisListAppendRawKeepsNewestEntries`、`TestRedisListListRawSupportsSingleElementRange`、`TestRedisListPurgeReturnsEntryCount`、`TestRedisListCountRawReturnsListLength`、`TestRedisListMetricsIncludeNamespace`；其余 8 项见文件
 - [unknown_result_integration_test.go](../../../infra/observe/failurelog/unknown_result_integration_test.go)：`TestIntegrationLostScriptReplyDoesNotAppendTwice`
-- [unknown_result_promises_test.go](../../../infra/observe/failurelog/unknown_result_promises_test.go)：`TestUnknownScriptResultIsReturnedWithoutReplayingTheWrite`、`TestAdapterWithoutLuaStillUsesTheFallback`
 
 ### health
 
-- [checker_deadline_promises_test.go](../../../infra/observe/health/checker_deadline_promises_test.go)：`TestSnapshotBoundsEveryCheckerByOneDeadline`
-- [health_test.go](../../../infra/observe/health/health_test.go)：`TestRegistrySnapshotAggregatesDependencyHealth`、`TestRegistrySnapshotRecoversCheckerPanic`、`TestRegistrySnapshotCountsDegradedAsAvailable`
+- [health_test.go](../../../infra/observe/health/health_test.go)：`TestRegistrySnapshotAggregatesDependencyHealth`、`TestRegistrySnapshotRecoversCheckerPanic`、`TestRegistrySnapshotCountsDegradedAsAvailable`、`TestSnapshotBoundsEveryCheckerByOneDeadline`
 
 ### httpclient
 
@@ -161,18 +153,11 @@
 
 ### log
 
-- [close_fallback_promises_test.go](../../../infra/observe/log/close_fallback_promises_test.go)：`TestLogsAfterCloseOfAFileOnlySinkReachStderr`、`TestLogsAfterCloseKeepTheConsoleWriter`
-- [log_test.go](../../../infra/observe/log/log_test.go)：`TestContextAttrsArePrepended`、`TestRuntimeAttrsAreWrittenBetweenLevelAndMessage`、`TestCallerAttrsIncludeFileLineAndFunction`、`TestELogCallerAttrsIncludeUserFunction`、`TestGoIDKey`；其余 4 项见文件
-- [rotation_guards_promises_test.go](../../../infra/observe/log/rotation_guards_promises_test.go)：`TestRotatingWriterRefusesNonPositiveIntervalsAndWritesAfterClose`
-- [system_time_promises_test.go](../../../infra/observe/log/system_time_promises_test.go)：`TestServerTimeUsesSystemClockInsideBusinessContext`
-- [write_failure_promises_test.go](../../../infra/observe/log/write_failure_promises_test.go)：`TestRotationFailureKeepsWritingTheCurrentSlice`、`TestAFailingConsoleDoesNotStopTheFileSink`
+- [log_test.go](../../../infra/observe/log/log_test.go)：`TestContextAttrsArePrepended`、`TestRuntimeAttrsAreWrittenBetweenLevelAndMessage`、`TestCallerAttrsIncludeFileLineAndFunction`、`TestELogCallerAttrsIncludeUserFunction`、`TestGoIDKey`；其余 10 项见文件
 
 ### metrics
 
-- [delete_series_promises_test.go](../../../infra/observe/metrics/delete_series_promises_test.go)：`TestDeleteSeriesRemovesEveryKindByLabelAndReturnsTheQuota`
-- [histogram_quantile_bounds_promises_test.go](../../../infra/observe/metrics/histogram_quantile_bounds_promises_test.go)：`TestHistogramQuantileNeverExceedsTheSlowestObservation`、`TestHistogramQuantileInTheOverflowIsNotUnderstated`、`TestHistogramQuantileOfIdenticalSamplesIsThatSample`
-- [metrics_test.go](../../../infra/observe/metrics/metrics_test.go)：`TestRegistrySnapshot`、`TestPrometheusTextDoesNotDoubleTotalSuffix`、`TestRegistryLimitsMetricSeriesCardinality`、`TestSeriesLimitDropIsVisible`、`TestHistogramObserveQuantileAndExport`；其余 1 项见文件
-- [prometheus_escape_promises_test.go](../../../infra/observe/metrics/prometheus_escape_promises_test.go)：`TestPrometheusLabelValuesUseTheExpositionEscapes`
+- [metrics_test.go](../../../infra/observe/metrics/metrics_test.go)：`TestRegistrySnapshot`、`TestPrometheusTextDoesNotDoubleTotalSuffix`、`TestRegistryLimitsMetricSeriesCardinality`、`TestSeriesLimitDropIsVisible`、`TestHistogramObserveQuantileAndExport`；其余 6 项见文件
 
 ### security
 

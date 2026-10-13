@@ -1,4 +1,3 @@
-// RR-20261004-NC-04：Shutdown 被取消仍保留 server，直到请求排空成功。
 package ops
 
 import (
@@ -16,6 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 )
 
+// Shutdown 被取消仍保留 server，直到请求排空成功。历史：RR-20261004-NC-04。
 type ownershipListener struct {
 	net.Listener
 	closed chan struct{}
