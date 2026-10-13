@@ -40,7 +40,7 @@ bash wiring/scripts/integration/dataengine-env.sh reset   # 停进程并删除�
 长期使用的环境（比如要跑几十分钟的压测、要跨天复用的环境）**不要放在 /tmp**：macOS
 会清理 /tmp 下几天没被访问的文件，进程还在跑，数据文件、pid 文件、`env.sh`、`nats.conf`
 却会被删掉。2026-09-27 旧环境的 mongo-3 因此丢了一个 WiredTiger 数据文件，之后持续报
-FTDC 错误（见 `docs/review/REVIEW-2026-09-29-b30.md`「环境异常」）。推荐：
+FTDC 错误（见[历史复核记录「环境异常」](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/review/REVIEW-2026-09-29-b30.md#环境异常需处理)）。推荐：
 
 ```bash
 mkdir -p "$HOME/.roost-it"
@@ -102,7 +102,7 @@ source "$HOME/.roost-it/roost-dataengine-it/env.sh"
    全局入口照此实现，根包 `TestGlobalEnvironmentOperationsHoldTheAcceptanceLock` 与
    `dataengine_env_test.sh` 会检查。
 5. **锁存在时不跑真实依赖用例**：看到 `<根目录>/remote-acceptance.lock` 说明矩阵、长稳或别人的全局命令
-   正在改环境，等它结束再跑。强杀后残留的锁按 TROUBLESHOOTING T-252 查清持有者后手工 `rmdir`。
+   正在改环境，等它结束再跑。强杀后残留的锁先查清持有者（锁目录修改时间、`pgrep -fl 'test-remote-matrix|perf/remote.sh|dataengine-env.sh test'`），确认已不在再手工 `rmdir`（[历史故障表 T-252](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/TROUBLESHOOTING.md)）。
 
 脚本自检：`bash wiring/scripts/integration/dataengine_env_test.sh`。它只 source 库、只写
 临时目录，不启动进程；开头那次 `status` 只读，会指向当前变量选中的环境。

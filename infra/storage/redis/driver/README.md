@@ -1,6 +1,6 @@
 # redis/driver 驱动行为契约
 
-`redis/driver` 是 `fredis.IRedis`（`redis/client.go`）在 go-redis v9.22.0 上的实现，kit 的 RedisMod（`kit/redis/redis_mod.go`）、`SingletonStore` 和 `NewClient` 都用它。框架的约定是：**结果未知时交给调用方处理**。下面几张表写明驱动在哪些情况下会自己重放命令、哪些错误可以安全重试、在哪里替换了 ctx，以及各项默认值。新增 Redis 调用点时先对照这几张表（A2 决定，2026-10-05；[方案与实施记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)）。
+`redis/driver` 是 `fredis.IRedis`（`redis/client.go`）在 go-redis v9.22.0 上的实现，Wiring 的 RedisMod（`wiring/redis/redis_mod.go`）、`SingletonStore` 和 `NewClient` 都用它。框架的约定是：**结果未知时交给调用方处理**。下面几张表写明驱动在哪些情况下会自己重放命令、哪些错误可以安全重试、在哪里替换了 ctx，以及各项默认值。新增 Redis 调用点时先对照这几张表（A2 决定，2026-10-05；[方案与实施记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)）。
 
 升级 go-redis 时要按源码重新核对本页：`error.go`（`shouldRetry`、`isBadConn`）、`redis.go`（`processWithRetry`、`generalProcessPipeline`）、`osscluster.go`（`process`）、`internal/pool`。
 
@@ -41,20 +41,20 @@ pipeline 只有在每条命令的错误都满足本函数时，才算整条没�
 
 | 位置 | 用的 ctx |
 | --- | --- |
-| 命令的读写 | 调用方的 ctx。客户端打开了 `ContextTimeoutEnabled`，ctx 的截止时间会下发为 socket deadline。没有截止时间时，由 ReadTimeout / WriteTimeout 兜底（TROUBLESHOOTING T-43） |
+| 命令的读写 | 调用方的 ctx。客户端打开了 `ContextTimeoutEnabled`，ctx 的截止时间会下发为 socket deadline。没有截止时间时，由 ReadTimeout / WriteTimeout 兜底（[历史故障表 T-43](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/TROUBLESHOOTING.md)） |
 | 拨号 | 调用方的 ctx 外面再套一层 DialTimeout，取两者中更早的，每次拨号单独计时 |
 | 等待池连接 | PoolTimeout 与调用方 ctx，取先到期的 |
 | 确定没执行时的重发退避 | 调用方的 ctx |
 | Cluster 断连后的拓扑刷新 | `clusterRecoveryHook` 用 `context.Background()` 异步调用 `ReloadState`，不阻塞调用方，原错误原样返回 |
-| `kit/redis.SingletonStore` | 自建的两个客户端都设 `MaxRetries=-1`，读写都不重发；启动时用 `singletonPingTimeout` 做 Ping |
+| `wiring/redis.SingletonStore` | 自建的两个客户端都设 `MaxRetries=-1`，读写都不重发；启动时用 `singletonPingTimeout` 做 Ping |
 
 ## 4. 默认值
 
 | 项 | 默认值 | 来源 |
 | --- | --- | --- |
-| DialTimeout / ReadTimeout / WriteTimeout | 5s / 3s / 3s | `fredis.DefaultConfig`；kit 的 `redis.*` 不暴露这三项 |
+| DialTimeout / ReadTimeout / WriteTimeout | 5s / 3s / 3s | `fredis.DefaultConfig`；Wiring 的 `redis.*` 配置不暴露这三项 |
 | MaxRetries | 3：读命令最多重试 3 次；写命令只在确定没执行时最多重发 3 次 | `fredis.DefaultConfig` |
-| PoolSize / MinIdleConns | 10 / 5 | `fredis.DefaultConfig`；kit 用 `redis.pool_size`、`redis.min_idle_conns` 覆盖 |
+| PoolSize / MinIdleConns | 10 / 5 | `fredis.DefaultConfig`；Wiring 用 `redis.pool_size`、`redis.min_idle_conns` 覆盖 |
 | PoolTimeout | ReadTimeout + 1s = 4s | go-redis 缺省 |
 | 重试与重发退避 | 10ms 起，封顶 1s | go-redis 缺省（MinRetryBackoff / MaxRetryBackoff），本包重发沿用同一公式 |
 | 连接池内部重拨 | 5 次 | go-redis `DialerRetries` 缺省 |
@@ -69,8 +69,8 @@ pipeline 只有在每条命令的错误都满足本函数时，才算整条没�
 | `Client.Close` / `Assembly.Close`（单机与 Cluster 相同） | nil（`sync.Once`，只关一次） | 第一次不论成败都已关完全部连接池（go-redis 遇错继续关），错误只报给那一次，再调返回 nil | 一律 `goredis.ErrClosed`（可 `errors.Is`；`IsDefinitelyNotExecuted` 为真）；写命令不重发 | 后到者等第一个做完，返回 nil；第一次的错误只报给第一个 |
 | `IPubSub.Close` | nil（`sync.Once`） | 只在第一次释放，错误只报给那一次；之后 nil | 消息 channel 已关闭 | 后到者等第一个做完，返回 nil |
 | `DistLock` / `AutoExtendLock` | 没有 Close，只有 Release：第二次 Release 返回 `ErrLockNotHeld` | — | 客户端关闭后 Acquire / Release / Extend 每次都返回 `goredis.ErrClosed`，锁状态不变（命令确定没发出去，不记成结果未知） | — |
-| kit `RedisMod.StopWithContext` | nil（第一次就交出连接，NC-233） | 第一次报错（错误里写明连接池照样已关），之后 nil | — | 串行：后到者等第一个关完，返回 nil |
-| kit 单实例锁 `singletonStore.Close` | nil | 两个客户端都已关；错误只报给第一次，再调返回 nil | `goredis.ErrClosed` | 后到者等第一个做完，返回 nil |
+| Wiring `RedisMod.StopWithContext` | nil（第一次就交出连接，NC-233） | 第一次报错（错误里写明连接池照样已关），之后 nil | — | 串行：后到者等第一个关完，返回 nil |
+| Wiring 单实例锁 `singletonStore.Close` | nil | 两个客户端都已关；错误只报给第一次，再调返回 nil | `goredis.ErrClosed` | 后到者等第一个做完，返回 nil |
 
 调用方据此：重复 Close 不需要特判；判断“已经关了”用 `errors.Is(err, goredis.ErrClosed)`。**行为变化（RR-20261006-10，v1.23.0 起）**：单机部署重复 Close 不再返回 `ErrClosed`；客户端关闭后的锁操作不再把锁记成未知（之前第二次 Acquire 起返回 `ErrDistLockStateUncertain`）。
 

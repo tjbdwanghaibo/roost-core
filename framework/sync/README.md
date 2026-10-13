@@ -12,7 +12,7 @@ roost core 的三块基础之一（另两块：nest 调度、dataengine）。这
 | | `nettransport` | 传输：UDP / KCP / QUIC、AEAD、`AsyncTransport`（每会话有界 reliable 队列，给 entitysync；只有这一条 lane）、`SessionID`。不可靠 datagram 直接走协议传输的 `DatagramSender`（lockstep 这么用）。不知道帧里有什么 |
 | | `lockstep` | 帧同步（输入帧）：与状态同步并列的另一种模型，共用 `nettransport` |
 | 服务 ↔ 服务（总线） | `syncbus` | `ISyncBus` 契约、`Subscription`（退订带 ctx 排空，A3 ②）、`DeliveryIDs`、`PatchSyncer` |
-| | `syncbus/driver` | NATS（至多一次）与 JetStream（持久、确认）实现；kit 的 `SyncBusMod` 二选一装配 |
+| | `syncbus/driver` | NATS（至多一次）与 JetStream（持久、确认）实现；`wiring/syncbus` 的 `SyncBusMod` 二选一装配 |
 | | `syncbus/mirror` | 在总线上的副本复制器（`Envelope` upsert / delete）；`cache.ReplicaSyncer`、`remoteentity` 的快照发布用它 |
 
 依赖箭头只有一个方向：
@@ -49,8 +49,8 @@ entity（内容层，在块外）← entitysync        spatial（基建）← po
 `ErrManagerClosed`）。每个 subject 至多一个排队，后到的替换先到的，再次 `Unregister` 取消；退役期间的订阅仍被拒绝，remove-before-create 不变。
 done 在 Manager 的调用路径上执行、不持锁，不得阻塞或调用 Flush（RR-20260926-55）。
 实体被仅内存卸载（`entity.ManagerAccess.Unload`：DataEngine 驱逐被 lease fence 跳过的原生步骤、Remote 持久拒绝后的实例）时状态立即关闭，subject 保持登记。
-`Manager` 实现 `entity.UnloadedSubjectSync`：`SubjectAwaitsReload` 报告“状态已关闭且仍有非 leaving 订阅者”，`ManagerAccess.ConfigureUnloadResync`（kit
-`NewModWithEntitySync` 自动接线）据此在快池之外从权威重载实体并 `Rebind`，订阅者收到同一对象的权威全量；权威里没有它、有界重试用尽或重载队列已满时
+`Manager` 实现 `entity.UnloadedSubjectSync`：`SubjectAwaitsReload` 报告“状态已关闭且仍有非 leaving 订阅者”，`ManagerAccess.ConfigureUnloadResync`（`wiring/nest`
+`NewModWithEntitySync` 自动接线）据此在 Nest 业务池之外从权威重载实体并 `Rebind`，订阅者收到同一对象的权威全量；权威里没有它、有界重试用尽或重载队列已满时
 `RetractUnloadedSubject` 退回 remove（只在 subject 仍停在关闭状态时，语义同 `Unregister`）；退役完成前实体又被加载时，`Rebind` / `Register` 按上面
 `RegisterAfterRetirement` 的同一机制排到退役完成后登记、返回 nil；无订阅者不重载（RR-20260926-59）。这个排队位与业务的
 `RegisterAfterRetirement` 共用：卸载退役中业务登记同样返回 `queued=true`、done 恰好报告一次，后到的替换先到的（RR-20260926-72）。
@@ -91,7 +91,7 @@ on_change 同窗口停止重复冷捕获，已有对象更新不受影响。
 恢复类别目前指同一会话 lifetime 的 Hold/Ready；Close/Open 后是新入场。
 传输实现 SessionLifecycle 时，OpenSession 在 SessionOpened 成功后才发布会话；同 ID 旧发送未退出返回
 `ErrSessionClosing`，另一次打开尚未确认返回 `ErrSessionOpening`，两者都未创建会话、可重试，OpenSession 本身不等待；
-`SessionOpenRetryable(err)` 判断这两种，重试的退避由调用方安排在快池之外（demo scene 为 25ms 起翻倍、上限 1s、至多 8 次）。
+`SessionOpenRetryable(err)` 判断这两种，重试的退避由调用方安排在 Nest 业务池之外（demo scene 为 25ms 起翻倍、上限 1s、至多 8 次）。
 具体边界和回归见[复审核实](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/review/REVIEW-2026-09-26-followup.md)。
 
 可显式创建 `NewSyncTrace(capacity)`，传入 `ManagerConfig.Trace` 开启有界阶段记录；

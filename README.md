@@ -30,9 +30,9 @@ Roost 是通用游戏服务器框架。业务采用 ECS：Entity 组合组件与
 
 ## 核心执行边界
 
-业务经正式 Nest Sender 执行。快池处理 handler 和 Entity local 锁；慢池处理前置 I/O、Remote 获取/释放和等待，不在慢池拿 Entity local 锁。
+业务经正式 Nest Sender 执行。short / long 业务池处理 handler 和 Entity local 锁（Entity Kind 决定进哪个池）；io 池处理前置 I/O、Remote 获取/释放、冷加载和 Await 查询，不在 io 池拿 Entity local 锁。
 
-setter 只标脏。handler 完成后，Guard 内汇总并冻结变更；释放全部锁、满足持久提交水位后唤醒 Sync。支持 `on_change` 与 20Hz 兜底，网络写等待在 Guard 和快 worker 外执行。AOI/Interest 由业务决定订阅，Sync 复用 profile、完整 Entity 包和会话生命周期。
+setter 只标脏。handler 完成后，Guard 内汇总并冻结变更；释放全部锁、满足持久提交水位后唤醒 Sync。支持 `on_change` 与 20Hz 兜底，网络写等待在 Guard 和业务 worker 外执行。AOI/Interest 由业务决定订阅，Sync 复用 profile、完整 Entity 包和会话生命周期。
 
 WAL durable、业务事务完成与数据库投影完成是不同结果。结果未知不能盲重试；停止超时必须保留仍被在途任务使用的依赖，并允许新的 context 继续等待真实排空。
 

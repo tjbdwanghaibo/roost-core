@@ -70,7 +70,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
-| ~~`cache.refhmap.write_degraded_total`~~ | — | **v1.19.0 起已移除**（RR-20261004-NC-21）：RefHMap Eval 失败不再降级为非原子写，而是保留原始错误返回调用方；按业务判别结果未知（USER_GUIDE §4）。旧面板 / 告警请删除这一项 |
+| ~~`cache.refhmap.write_degraded_total`~~ | — | **v1.19.0 起已移除**（RR-20261004-NC-21）：RefHMap Eval 失败不再降级为非原子写，而是保留原始错误返回调用方；按业务判别结果未知（[回复错误判别](guide/02-nest-entity.md#6-回复错误判别是否可能已提交能否重试)）。旧面板 / 告警请删除这一项 |
 | `bus_dispatch_total` / `bus_dispatch_drop_total` / `bus_dispatch_duration` | C/C/D | 总线吞吐与丢弃 |
 | `bus_dead_letter_total` / `_requeue_total` / `_purge_total` | Counter | 死信生命周期 |
 | `bus_duplicate_total`、`bus_rpc_*` | Counter/Gauge | 去重与 RPC 水位。可靠 RPC 的 `method` 标签有界（RR-20261006-19）：被调方只用注册过的方法，其余 `_unregistered`；调用方每个 Bus 至多 256 个方法，其余 `_other` |

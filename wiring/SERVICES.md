@@ -1,16 +1,14 @@
 # Roost 通用服务
 
-roost 框架的**通用服务层**：与玩法无关的公共服务，作为库提供给业务仓装配。
+roost 框架的**通用服务层**：与玩法无关的公共服务，作为库提供给业务仓装配。本文原是 roost-service 仓库的 README，合仓后保留设计约束与各服务的取舍说明；当前目录归属见 [包目录分类方案](../docs/framework/PACKAGE-REORGANIZATION.md)，使用与实现见 [Service 设计与使用](../docs/framework/guide/09-services.md)。
 
-每个服务是一个包，内含请求/响应类型、`Client` 接口与 bus 实现、服务端实现、
-存储契约与后端实现、admin 命令注册。业务仓装配它们；`app.Service` 进程壳留在业务仓，
-因为"哪些服务同进程部署"是部署决策，不是库的决策。
+每个服务的领域实现（请求/响应类型、RPC 接口与生成的传输半、服务端实现、存储契约与后端实现、admin 操作面）在 `service/<领域>`；Wiring 在 `wiring/<领域>` 提供本地 Mod、远端 ClientMod 与进程接线。`app.Service` 进程壳留在业务仓，因为"哪些服务同进程部署"是部署决策，不是库的决策。
 
 ## 设计约束
 
 这些约束来自对一个生产业务仓公共服务层的逐文件审计（62 项发现，收敛到六个反复出现
 的模式）。它们不是风格偏好，每一条都对应一类已确认的缺陷。完整依据见
-[roost-core docs/ROOST_SERVICE_EXTRACTION.md](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/ROOST_SERVICE_EXTRACTION.md)。
+[服务抽取方案（历史）](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/ROOST_SERVICE_EXTRACTION.md)。
 
 1. **状态变更只有版本化路径。** 共享状态走 `roost-core/versionstore`：契约里没有
    无条件写，因此非 CAS 实现无法存在。不自己手写"读-改-写"。
@@ -42,7 +40,7 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
    `versionstore.unknown_outcome.total{store,result=applied|lost|unresolved}`；`unresolved`
    持续增长说明后端不答或删除 / 新建遇到回复丢失，服务拿到 `versionstore.ErrOutcomeUnknown`。
 7. **任何列表接口都有上界**，且上界不能被 `0` 绕过。
-8. **测试用求值型替身**（`roost-core/mongo/mongotest`），并发不变量必须有并发测试。
+8. **测试用求值型替身**（`infra/storage/mongo/mongotest`），并发不变量必须有并发测试。
 9. **每个修掉的缺陷都有一条经"回退修复即变红"验证过的回归测试。**
 10. **求值型替身也有边界，要说清楚。** 用 Go 重新实现 Lua 脚本语义的替身，无法发现
     脚本文本自身的缺陷——改脚本字符串对它没有影响。这部分由 `//go:build integration`
@@ -67,62 +65,54 @@ roost 框架的**通用服务层**：与玩法无关的公共服务，作为库�
 还有一条横切的：**多处测试把缺陷当期望行为钉死了**。所以第 9 条约束（每个修掉的缺陷
 都要经"回退修复即变红"验证）不是形式主义——省掉它就是那些测试的来源。
 
-完整依据见 [roost-core docs/ROOST_SERVICE_EXTRACTION.md](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/ROOST_SERVICE_EXTRACTION.md)。
+完整依据见 [服务抽取方案（历史）](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/ROOST_SERVICE_EXTRACTION.md)。
 
 ## 包
 
-| 包 | 职责 | 单测 | 变异验证 |
-| --- | --- | --- | --- |
-| `directory/` | 唯一键预留的两阶段提交原语（**注意：同 owner 幂等，因此不是互斥锁**——需要"只准一次尝试"用 `versionstore.Create`） | 21 | 6 |
-| `rank/` | 榜单提交与查询。排名所需的一切编进 sorted-set 的 member，因此读一页一次往返、排名与分数不可能不一致 | 35 | 8 |
-| `match/` | 匹配：Mod、sweep 循环、`Matchmaker` RPC 与生成传输；**领域实现（队列状态机、原子成组提交、Redis store、Grouping）在 roost-core/service/match**，此处别名（M-06）；`Matchmaker` 接口与传输半在 core，kit 只有装配半（M-11） | 29 | 10 |
-| `account/` | 账号与角色目录、角色会话令牌。`IdentityVerifier`/`PlayerIDAllocator`/`NameValidator` 必填且**无默认实现** | 32 | 11 |
-| `global/` | 跨服路由绑定（epoch CAS 迁移）。原有的游戏服租约（incarnation fence）已删除，进程存活统一由 App 单实例锁提供（`app.SingletonLiveness.Live`） | 26 | 13† |
-| `global/activity/` | 跨服活动协调：首个 notify 起算的宽限窗、先预留后应用的进度 ledger、拒绝即审计、带 ACK 令牌的结果投递 | 47 | 13† |
-| `chat/` | 频道消息：发布/历史/保留。`PublishRequest` 里**没有**发送者或可信字段；系统消息只能经 `PublishSystem` + 服务端签发的 `SystemToken` | 39 | 8 |
-| `mail/` | 邮件：Mod、`Mail` RPC 与生成传输、server run；**领域实现（信封、邮箱状态机、三段式领取、Redis stores、错误码段）在 roost-core/service/mail**，此处别名（M-07）；`Mail` RPC 接口与传输半（wire / handler 表 / `BusClient`）也在 core，kit 从 core 的接口生成装配半 `mail_rpc_assembly_gen.go`（M-11）。claim token 由服务端生成且对同一封邮件恒定——重试换不出新的幂等键 | 6 | 4 |
-| `platform/` | 渠道边缘：凭证换会话、支付回调换恰好一次发货。**验签是必要而不充分的**，订单是仅插入的持久记录 | 51 | 21 |
-| `session/` | 有界 run 原语：Mod、`Session` RPC 与生成传输、server run；**领域实现（幂等 Enter、每 owner 一个活 run、资源恰好释放一次、Admin 操作面、Redis stores）在 roost-core/service/session**，此处别名（M-08）；`Session` 接口与传输半在 core，kit 只有装配半（M-11） | 6 | 3 |
-| `servicemetrics/` | 全仓共享的上报 seam 与测试用 `Recorder`——**实现已在 roost-core/servicemetrics**，此处是别名包（M-06） | 8 | 3 |
-| `wiring/mods/` | capability 名字表与各 Mod 共用的配置读取 | 12 | — |
-| `integration/` | 跨服务的真实后端测试：十个包在一个活 Redis 上装起来跑通、key 命名空间不冲突、以及**整套 Mod 生命周期端到端** | 67 真实 Redis | 30 |
+领域实现在 `service/<领域>`，接线在 `wiring/<领域>`；旧的 kit 路径与领域类型别名已删除。
 
-† `global/activity/` 从 `global/` 拆出（见下），拆分前那 13 条变异验证是合并记录的，
-没有事后拆开归属——凭印象分摊会得到一个看起来精确其实是编的数字。
+| 服务 | 职责 |
+| --- | --- |
+| `directory` | 唯一键预留的两阶段提交原语（**注意：同 owner 幂等，因此不是互斥锁**——需要"只准一次尝试"用 `versionstore.Create`） |
+| `rank` | 榜单提交与查询。排名所需的一切编进 sorted-set 的 member，因此读一页一次往返、排名与分数不可能不一致 |
+| `match` | 匹配：队列状态机、原子成组提交、Redis store、Grouping、`Matchmaker` RPC；Wiring 提供 Mod、sweep 循环与装配半 |
+| `account` | 账号与角色目录、角色会话令牌。`IdentityVerifier`/`PlayerIDAllocator`/`NameValidator` 必填且**无默认实现** |
+| `global` | 跨服路由绑定（epoch CAS 迁移）。进程存活统一由 App 单实例锁提供（`app.SingletonLiveness.Live`），不再有游戏服租约 |
+| `activity` | 跨服活动协调（原 `global/activity`）：首个 notify 起算的宽限窗、先预留后应用的进度 ledger、拒绝即审计、带 ACK 令牌的结果投递 |
+| `chat` | 频道消息：发布/历史/保留。`PublishRequest` 里**没有**发送者或可信字段；系统消息只能经 `PublishSystem` + 服务端签发的 `SystemToken` |
+| `mail` | 邮件：信封、邮箱状态机、三段式领取、Redis stores、错误码段与 `Mail` RPC；claim token 由服务端生成且对同一封邮件恒定——重试换不出新的幂等键 |
+| `platform` | 渠道边缘：凭证换会话、支付回调换恰好一次发货。**验签是必要而不充分的**，订单是仅插入的持久记录 |
+| `session` | 有界 run 原语：幂等 Enter、每 owner 一个活 run、资源恰好释放一次、Admin 操作面、Redis stores 与 `Session` RPC |
 
-合计 430 条单测 + 67 条真实 Redis 集成测试，`-race` 全绿（单测与集成测试都跑过 `-race`）。
+共享件：上报 seam 与测试用 `Recorder` 在 `infra/observe/servicemetrics`；capability 名字表与各 Mod 共用的配置读取在 `wiring/mods`；跨服务的真实后端测试在 `wiring/integration`（各服务在一个活 Redis 上装起来跑通、key 命名空间不冲突、整套 Mod 生命周期端到端）。
 
 **集成测试默认是跳过的**：没有 `REDIS_ADDR` 时 `integration/` 全部 `t.Skip`。这不是
 细节——本轮就是因为这个，`session`/`rank`/`match`/`platform` 四个包里断言**具体类型**
 的四条集成子测试长期"绿着"，直到真的连上 Redis 那天同时红掉四条。所以：
 
 ```bash
-REDIS_ADDR=127.0.0.1:6379 go test -race -tags integration ./integration/
+REDIS_ADDR=127.0.0.1:6379 go test -race -tags integration ./wiring/integration/
 ```
 
-传输层重新生成（`roost-codegen` 以 **tool 依赖**接在 go.mod 里，所以 `GOWORK=off`
-发布态下同样能跑）：
+传输层重新生成（生成器是同一模块的 `codegen/cmd/servicerpc`，`GOWORK=off` 下同样能跑）：
 
 ```bash
 go generate ./...
 ```
 
-`-check` 给 CI 用:生成并逐字节比对，任何差异非零退出（它一度只跑拒绝规则、
-不比对生成物，于是永远退出 0——见 roost-codegen CHANGELOG）：
+`-check` 给 CI 用：生成并逐字节比对，任何差异非零退出（它曾经只跑拒绝规则、不比对生成物，于是永远退出 0，见 [codegen 历史变更记录](../docs/release/history/codegen-CHANGELOG.md)）：
 
 ```bash
 go run ./codegen/cmd/servicerpc -dir ./service/mail -check
 ```
 发布态 `GOWORK=off` 下 build / vet / test / -race 与集成测试同样全绿。
 
-「变异验证」= 把修复逐条回退、确认对应测试变红的次数。不编译的变异不算——它什么都
-没证明。
 
 ## 跨进程：接口 + 生成的传输层
 
 服务会各自独立成进程,所以 registry 里放的**不能是具体类型**。放的是**接口**,两种实现都满足它:拥有者进程放 `*Service`,其他进程放 `BusClient`。调用方永远 `app.Lookup[mail.Mail]`,不知道也不需要知道对面在哪 —— 同一份业务代码在合并部署与拆分部署下都不用改。
 
-传输层由 **`roost-codegen` 的 `infra/network/servicerpc` 生成器**从**手写的接口本身**生成(不另立 def 文件):线上类型、handler 注册、打字的 client、`Server`、`ClientMod`、capability 包装。
+传输层由 **servicerpc 生成器**（`codegen/cmd/servicerpc`，写法与拒绝规则见[命令与标记参考 §13](../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#13-servicerpc接口先行的跨进程服务)）从**手写的接口本身**生成(不另立 def 文件):线上类型、handler 注册、打字的 client、`Server`、`ClientMod`、capability 包装。
 
 从接口生成让**漂移结构上不可能**,而不是被检测到 —— 这是这个生成器唯一值得存在的理由,它省的打字量不多。接口刻意比进程内 API 小(mail 是 8 个方法而不是 11 个),每个省略都有理由。
 
@@ -243,7 +233,7 @@ claim 是**故意**在清理成功之后才释放的（"claim 绝不能比清理
 不共享了，只是同住一个 Go 包里看不出来。
 
 这次拆分是**破坏性变更**（`global.ActivityService` → `activity.Service`，活动的错误码
-5701xx → 6201xx），需要 roost-service 的一个大版本。顺手修掉的一件事：`global` 的错误码
+5701xx → 6201xx），当时发了 roost-service 的一个大版本；现在 `activity` 是独立的 `service/activity` 与 `wiring/activity`。顺手修掉的一件事：`global` 的错误码
 段原先在 570111 有一个"永久的洞"，那个洞完全是两个服务从一个号段里发号造成的，现在
 两边各自连续。
 
@@ -266,8 +256,8 @@ key 前缀同样**必填且无默认**：默认值在每个部署里都是同一
 ## 存储：复用，不重写
 
 七个包**没有一行自己的存储代码**。它们的状态就是 `versionstore.Store[K,V]`，而
-`roost-kit` 已经提供了这个契约的生产实现 `versionstore.NewRedisStore`：CAS 走
-`roost-core/redis.CompareAndSet`、带全抖动指数退避、仅插入的 `Create`、版本校验的
+`infra/storage/versionstore` 提供了这个契约的生产实现 `NewRedisStore`：CAS 走
+`infra/storage/redis.CompareAndSet`、带全抖动指数退避、仅插入的 `Create`、版本校验的
 `Delete`。每个包只有一个薄构造器（`redis_store.go`，几十行，零存储逻辑）。
 
 这不是省事，是第 3.1 节那条系统性缺陷的结构性答案：被替换的实现里每个关注点都有

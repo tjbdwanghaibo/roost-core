@@ -154,4 +154,4 @@ go test ./codegen/internal/roost -run '^TestClientSDKAgainstGeneratedPlayerTCP$'
 
 `client/spec/packets.json`由Go正式wire、frame、entitysync和lockstep编码器生成，C#消费并验证64位身份、frame/SubjectUpdate、Command/C7、与robot一致的输入链hash和重新封包。只有协议有意变化时才执行`go test ./client/wire -run TestClientProtocolGolden -update`并检查差异，普通回归不能自动更新期望。[设计与当前验证边界](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)。
 
-TCP发送会检查fctx当前执行位置，快worker在resolver/socket前返回ErrBlockingInShortWorker。Match.Tick含同步网络I/O，必须由Entity锁外的比赛单所有者驱动；不能放进Nest快handler等待socket，也不能临时换goroutine绕过标记却并发访问Match。Nest边界只转交命令/调用已配置的比赛单所有者；本轮真实TCP夹具用独立串行owner channel，证明协议/Match消费，未声称具体业务比赛Nest实体及持久化装配已验收。
+TCP发送会检查fctx当前执行位置，业务 worker 在resolver/socket前返回ErrBlockingInBusinessWorker。Match.Tick含同步网络I/O，必须由Entity锁外的比赛单所有者驱动；不能放进Nest快handler等待socket，也不能临时换goroutine绕过标记却并发访问Match。Nest边界只转交命令/调用已配置的比赛单所有者；本轮真实TCP夹具用独立串行owner channel，证明协议/Match消费，未声称具体业务比赛Nest实体及持久化装配已验收。

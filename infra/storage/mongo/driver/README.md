@@ -1,6 +1,6 @@
 # mongo/driver 驱动行为契约
 
-`mongo/driver` 在 mongo-driver v2.6.0 之上实现 `fmongo.IMongo`（`mongo/`），kit 的 MongoMod（`kit/mongo/mongo_mod.go`）用的就是它。框架的约定是：**结果未知时交给调用方处理**。本页说明驱动在哪里自动重试、哪些错误表示“确定没提交”或“结果未知”、在哪里替换了 ctx、默认超时是多少。新增调用点时先对照本页（A2 决定，2026-10-05；Redis 侧见 [redis/driver/README.md](../../redis/driver/README.md)，方案见 [A2 方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)）。
+`mongo/driver` 在 mongo-driver v2.6.0 之上实现 `fmongo.IMongo`（`mongo/`），Wiring 的 MongoMod（`wiring/mongo/mongo_mod.go`）用的就是它。框架的约定是：**结果未知时交给调用方处理**。本页说明驱动在哪里自动重试、哪些错误表示“确定没提交”或“结果未知”、在哪里替换了 ctx、默认超时是多少。新增调用点时先对照本页（A2 决定，2026-10-05；Redis 侧见 [redis/driver/README.md](../../redis/driver/README.md)，方案见 [A2 方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/A2-DRIVER-REPLAY-CONTRACT-2026-10-05.md)）。
 
 升级驱动时，要对照驱动 `mongo.Session.WithTransaction` 的规则重新核对 `session.go` 里自己实现的重试循环（RR-20261005-NC-101）。
 
@@ -47,7 +47,7 @@
 | 对象 | 第二次 Close | 第一次 Close 出错后再调用 | Close 之后的操作 | 并发 Close |
 | --- | --- | --- | --- | --- |
 | `Client.Close(ctx)` | nil：断开成功后记为已关闭；驱动对已断开的客户端返回的 `mongo.ErrClientDisconnected` 也按“已关闭”处理（NC-260） | ctx 已过期或超时照样释放（驱动断开各 server 时忽略 ctx 错误），返回 nil；只有 FLE 客户端断开失败会返回错误且拓扑未断开，再调会重做一遍断开（本项目不配 FLE） | 命令返回 `mongo.ErrClientDisconnected`（可 `errors.Is`）；`StartSession` 本身不报错，第一条命令才报 | 串行：后到者在**自己的 ctx** 内等第一个断开做完，之后返回 nil；ctx 先结束返回 ctx 错误，可以再调用 |
-| kit `MongoMod.StopWithContext` | nil | Close 失败时保留 client，下次 Stop 重试；ctx 已过期时不调 Close，直接返回 `ctx.Err()`、保留 client | — | 串行：后到者在自己的 ctx 内等第一个做完，返回 nil |
+| Wiring `MongoMod.StopWithContext` | nil | Close 失败时保留 client，下次 Stop 重试；ctx 已过期时不调 Close，直接返回 `ctx.Err()`、保留 client | — | 串行：后到者在自己的 ctx 内等第一个做完，返回 nil |
 
 **行为变化（RR-20261006-10，v1.23.0 起）**：并发 Close 的后到者不再在第一个还在断开时立刻返回 nil。
 

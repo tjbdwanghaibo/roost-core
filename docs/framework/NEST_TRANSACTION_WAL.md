@@ -19,7 +19,7 @@ Nest handler 在进入业务代码前已经持有所有目标 entity 的 mutex�
 
 `framework/nest/` 只定义框架语义：事务状态机、rollback/durability 策略、commit record、participant、committer 和 entity 解锁通知。core 不依赖文件系统、Mongo、Redis 或消息中间件。
 
-### 持久化与 Kit 装配
+### 持久化与 Wiring 装配
 
 `framework/nestwal/` 提供物理日志原语：分段 WAL、CRC、group commit、fsync、ack checkpoint 与 replay。`framework/dataengine` 在其上提供 Mongo projection、aggregate load/schema校验、Saga/Remote mutation、effect outbox、健康状态和主动 flush；应用只装配 Data Engine Mod。
 

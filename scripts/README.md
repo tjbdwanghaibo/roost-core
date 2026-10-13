@@ -2,15 +2,13 @@
 
 Remote 容量/长稳：`scripts/perf/remote.sh`（默认 30m，`ROOST_REMOTE_DURATION=24h` 可复跑 24 小时）；故障矩阵：`scripts/test-remote-matrix.sh`。两者独占隔离环境，原始日志和数据保存于 `artifacts/perf/remote/<label>/`；[负载、判据与结果](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REMOTE-ACCEPTANCE-2026-09-24.md)。
 
-Remote 正式业务验收：加载隔离环境的 `ROOST_DATAENGINE_IT_MONGO_URI`、`ROOST_DATAENGINE_IT_REDIS_ADDR`、`ROOST_DATAENGINE_IT_NATS_URL` 后运行 `./scripts/test-remote-generated.sh`。正式 DAO/Entity 生成器构造两实体各两 DAO，经 Nest 与三种持久化策略提交，校验 Mongo、业务拒绝/panic 回滚和真实 NATS 快照接收；不依赖 demo。同一次运行还跑持久拒绝与收尾用例（`reject_test.go` / `outcome_test.go`：正式 `ManagerAccess` 作 Remote loader + entitysync，Durability 0～3 的持久拒绝后卸载、重载全量、重载后可写，以及 strict 确认截止、结果未知后停机、嵌套独立事务、快 worker 删除，OPEN-ITEMS C34 / B27 第 1 批）；`ROOST_REMOTE_LOAD=1` 或设置了 `ROOST_REMOTE_FAULT` 时只跑 `TestGeneratedRemoteNestFlow`。`ROOST_REMOTE_COUNT` 设 `-count`，`ROOST_REMOTE_RUN` 覆盖 `-run`。脚本只清理自身临时工程，测试仅清理专属数据库和 Redis key。[完整验收及独立多进程故障命令](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-24-remote.md#第三轮进程故障与正式业务链路)。
+Remote 正式业务验收：加载隔离环境的 `ROOST_DATAENGINE_IT_MONGO_URI`、`ROOST_DATAENGINE_IT_REDIS_ADDR`、`ROOST_DATAENGINE_IT_NATS_URL` 后运行 `./scripts/test-remote-generated.sh`。正式 DAO/Entity 生成器构造两实体各两 DAO，经 Nest 与三种持久化策略提交，校验 Mongo、业务拒绝/panic 回滚和真实 NATS 快照接收；不依赖 demo。同一次运行还跑持久拒绝与收尾用例（`reject_test.go` / `outcome_test.go`：正式 `ManagerAccess` 作 Remote loader + entitysync，Durability 0～3 的持久拒绝后卸载、重载全量、重载后可写，以及 strict 确认截止、结果未知后停机、嵌套独立事务、业务 worker 上删除）；`ROOST_REMOTE_LOAD=1` 或设置了 `ROOST_REMOTE_FAULT` 时只跑 `TestGeneratedRemoteNestFlow`。`ROOST_REMOTE_COUNT` 设 `-count`，`ROOST_REMOTE_RUN` 覆盖 `-run`。脚本只清理自身临时工程，测试仅清理专属数据库和 Redis key。[完整验收及独立多进程故障命令](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-24-remote.md#第三轮进程故障与正式业务链路)。
 
-仓库级的工具，**每个只有一份**。合仓之前 core / kit / codegen 各带一套，
-其中 `gapmap.sh` 三份逐字节相同、`pretag.sh` 三份各不相同却只有一个还能用
-（另外两个仓已归档，发不了版）。整体检查时收敛成这里的一份（2026-09-21）。
+仓库级的工具，**每个只有一份**（合仓前各仓的副本已收敛到这里）。
 
 | 路径 | 做什么 | 谁在用 |
 | --- | --- | --- |
-| `pretag.sh <version>` | 发版前的门禁：tag 与 module 主版本一致、tag 未存在、无 replace、工作树干净、`GOWORK=off` 下 build/vet/tidy/test 全过、发布清单声明的版本等于要打的 tag（U-0270） | 人工在打 tag 之前跑；`.github/workflows/release.yml` 在 tag 之后再校验一次清单 |
+| `pretag.sh <version>` | 发版前的门禁：tag 与 module 主版本一致、tag 未存在、无 replace、工作树干净、`GOWORK=off` 下 build/vet/tidy/test 全过、发布清单声明的版本等于要打的 tag | 人工在打 tag 之前跑；`.github/workflows/release.yml` 在 tag 之后再校验一次清单 |
 | `gapmap.sh [--max N] [pkg...]` | 覆盖率采样：按包回退断言看测试是否真的会红，产出 `gapmap-report.md` | `.github/workflows/nightly-gapmap.yml` |
 | `gapmap/` | 上面那个脚本的 Python 部件（`classscan.py`、`revertsample.py`） | `gapmap.sh` |
 | `perf/` | `nest-msg.sh` 跑 [Nest 消息吞吐](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/NEST-MSG-THROUGHPUT-2026-09-24.md)；`nest.sh` 跑 [Nest 调度与诊断微基准](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/NEST-COMPLETION-2026-09-24.md)；`sync.sh` 跑微基准；`sync-business.sh` 跑[隔离 demo](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SYNC-BUSINESS-LOAD-2026-09-23.md)；`sync-aoi.sh` 跑[1000/10000 AOI 双进程负载](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SYNC-AOI-1000-10000-2026-09-23.md) | 人工 |
@@ -18,7 +16,7 @@ Remote 正式业务验收：加载隔离环境的 `ROOST_DATAENGINE_IT_MONGO_URI
 
 另外两处 `scripts/` 是**层内**的，不重复：
 
-- `kit/scripts/integration/` — kit 服务的集成环境（brew 起的 Redis / Mongo 副本集 / NATS，见 `dataengine-env.sh`；根目录与端口偏移用 `ROOST_IT_HOME` / `ROOST_IT_PORT_OFFSET` 配置，长期环境不要放 /tmp，见[该目录 README](../wiring/scripts/integration/README.md)）。
+- `wiring/scripts/integration/` — 框架服务与 Wiring 的集成环境（brew 起的 Redis / Mongo 副本集 / NATS，见 `dataengine-env.sh`；根目录与端口偏移用 `ROOST_IT_HOME` / `ROOST_IT_PORT_OFFSET` 配置，长期环境不要放 /tmp，见[该目录 README](../wiring/scripts/integration/README.md)）。
 - `codegen/scripts/` — 生成器自己的运行时校验（`*-runtime.sh` 把生成物编译进真运行时跑一遍）、
   `source-head-check.sh`（本地版 framework-compat）、`install-windows.ps1`。
 
@@ -40,24 +38,24 @@ DataEngine 多 DAO 批量优化后的验收与性能对比见
 Remote 的持久权限、最新故障矩阵和容量复跑见 [2026-09-25 实施报告](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REMOTE-AUTHORITY-2026-09-25.md)。旧部署必须先停写、排空并迁移；脚本记录当前 Remote 源码摘要，不能拿旧协议长稳结果替代新协议验收。
 
 
-Remote 诊断可设置 `ROOST_REMOTE_CPU_PROFILE=/绝对路径/cpu.pprof` 和 `ROOST_REMOTE_TRACE=/绝对路径/trace.out`；`scripts/test-remote-generated.sh` 把它们传给 Go test。跟踪会覆盖初始化、预热和计时阶段，诊断结果应与不带 profile 的正式负载分开。长稳仍使用 `scripts/perf/remote.sh` 的 `ROOST_REMOTE_DURATION=30m` / `24h`；当前版最新实跑范围见 `docs/feature/REMOTE-UNIFIED-2026-09-25.md`。
+Remote 诊断可设置 `ROOST_REMOTE_CPU_PROFILE=/绝对路径/cpu.pprof` 和 `ROOST_REMOTE_TRACE=/绝对路径/trace.out`；`scripts/test-remote-generated.sh` 把它们传给 Go test。跟踪会覆盖初始化、预热和计时阶段，诊断结果应与不带 profile 的正式负载分开。长稳仍使用 `scripts/perf/remote.sh` 的 `ROOST_REMOTE_DURATION=30m` / `24h`；当时的实跑范围见 [Remote 统一实施记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REMOTE-UNIFIED-2026-09-25.md)。
 
 Remote 阶段定位可设置 `ROOST_REMOTE_STAGE_METRICS=1`，结果包含 Nest 阶段 metrics 和最多 32 个请求错误样本。`ROOST_REMOTE_PROJECTION_WORKERS=1` 提供串行对照，默认使用正式 Projector 的 8 路独立 Entity 投影；`ROOST_REMOTE_RATE=60` 可验证 50 TPS 以上目标。脚本源码摘要包含 DataEngine。最新容量/长稳结果见 [吞吐与超时报告](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-25-remote-throughput.md)。
 
 Remote 容量阶梯入口：`ROOST_REMOTE_CAPACITY_LABEL=<唯一标签> ROOST_REMOTE_RATES='80 120 160' ROOST_REMOTE_DURATION=120s bash scripts/perf/remote-capacity.sh`。先加载隔离环境 env.sh，沿用 1000 会话、10000 Entity、2 Entity × 2 DAO、strict。每档单独初始化、预热并全量核验，首次失败停止，保留退出码；之后用更细档位缩小区间，最高通过档应延长验证，不能把短测单点当通用上限。
 
-`ROOST_REMOTE_WORKERS` 控制本轮 Nest 逻辑并发（负载默认 64）；`ROOST_REMOTE_IO_WORKERS` 单独控制慢池并发（默认跟随前者）；`ROOST_REMOTE_PROJECTION_WORKERS` 控制 DataEngine 独立 Remote 投影并发（默认 8）。容量对比必须同时披露这三项、CPU 和持久化策略。
+`ROOST_REMOTE_WORKERS` 控制 Nest short 池并发（负载默认 64）；`ROOST_REMOTE_IO_WORKERS` 单独控制 io 池并发（默认跟随前者）；`ROOST_REMOTE_PROJECTION_WORKERS` 控制 DataEngine 独立 Remote 投影并发（默认 8）。容量对比必须同时披露这三项、CPU 和持久化策略。
 
-### Nest 快慢双池验收
+### Nest 三池（short / long / io）验收
 
-启动 option：`NestOptionWithWorkerPools(fast, slow)`；每池 QueueCap 为整池等待容量。
-`ROOST_REMOTE_WORKERS` 配快池，`ROOST_REMOTE_IO_WORKERS` 配共享慢池，新增 `ROOST_REMOTE_FAST_QUEUE`（默认 4096）与 `ROOST_REMOTE_SLOW_QUEUE`（默认 64）。Remote 模式仍走正式业务/存储链路。
+启动 option：`NestOptionWithWorkerPools(short, long, io)`；每池 QueueCap 为整池等待容量（池命名与迁移见 [Nest 三池](../docs/framework/NEST-AWAIT.md)）。
+Remote 负载里 `ROOST_REMOTE_WORKERS` 与 `ROOST_REMOTE_FAST_QUEUE`（默认 4096）配 short 池，`ROOST_REMOTE_IO_WORKERS` 与 `ROOST_REMOTE_SLOW_QUEUE`（默认 64）配 io 池，long 池不配置（变量名沿用旧池名，保持复跑命令不变）。Remote 模式仍走正式业务/存储链路。
 
-调度混合基准：`ROOST_PERF_BENCH=BenchmarkMixedFastSlow bash scripts/perf/nest.sh`。1%/5% 是慢 I/O 请求比例，模拟等待 500μs，不能当作 Entity 变化频率或真实数据库 TPS。
+调度混合基准：`ROOST_PERF_BENCH=BenchmarkMixedFastSlow bash scripts/perf/nest.sh`（基准名沿用旧名，测的是 short 池加 io 池混合）。1%/5% 是走 I/O 准备的请求比例，模拟等待 500μs，不能当作 Entity 变化频率或真实数据库 TPS。
 
-慢池并发/队列对比：加载隔离环境后运行 `ROOST_REMOTE_WORKER_LABEL=<唯一标签> bash scripts/perf/remote-workers.sh`。默认固定快池8、投影8、每档120秒，比较慢池64/128/256/1024与等待位16/64；`ROOST_REMOTE_WORKER_CASES='64:64:120 1024:16:120'` 可指定慢worker:等待位:输入TPS。过载结果保留并继续下一档，环境/预热无结果则停止；以零错误、零丢弃和全量校验通过判定通过，不能只看成功TPS或队列长度。
+io 池并发/队列对比：加载隔离环境后运行 `ROOST_REMOTE_WORKER_LABEL=<唯一标签> bash scripts/perf/remote-workers.sh`。默认固定 short 池 8、投影 8、每档 120 秒，比较 io 池 64/128/256/1024 与等待位 16/64；`ROOST_REMOTE_WORKER_CASES='64:64:120 1024:16:120'` 可指定 io worker:等待位:输入TPS。过载结果保留并继续下一档，环境/预热无结果则停止；以零错误、零丢弃和全量校验通过判定通过，不能只看成功TPS或队列长度。
 
-Remote 资源预算验证新增 `ROOST_REMOTE_WRITE_LIMIT`（正整数，未设使用正式默认 128）、`ROOST_REMOTE_WAL_LIMIT`（正整数，未设保持 WAL 不设记录数上限）。它们独立于快/慢 worker 数；历史 4096 预算对照可显式设 `ROOST_REMOTE_WRITE_LIMIT=4096`，前提是 `AsyncFinalizeCapacity` 足够。最新[预算与集中恢复验收](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-25-resource-budgets-and-session-recovery.md)披露拒绝和成功 TPS。
+Remote 资源预算验证新增 `ROOST_REMOTE_WRITE_LIMIT`（正整数，未设使用正式默认 128）、`ROOST_REMOTE_WAL_LIMIT`（正整数，未设保持 WAL 不设记录数上限）。它们独立于 short / io worker 数；历史 4096 预算对照可显式设 `ROOST_REMOTE_WRITE_LIMIT=4096`，前提是 `AsyncFinalizeCapacity` 足够。最新[预算与集中恢复验收](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-25-resource-budgets-and-session-recovery.md)披露拒绝和成功 TPS。
 
 `scripts/perf/remote.sh` 的一致性与负载错误分开报告（2026-10-04）：负载有错误时仍做区间核验并写 `result.json.verified`，之后测试再以错误失败；退出码 0 = 核验通过且无错误，3 = 核验通过但负载有错误（输出 `consistency verified; load errors=…`），1 = `.verified` 缺失。`ROOST_REMOTE_REQUEST_TIMEOUT`（缺省 30s）只用于区间核验负对照。口径见 [REMOTE-ACCEPTANCE §负载有错误时的区间核验](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REMOTE-ACCEPTANCE-2026-09-24.md#负载有错误时的区间核验2026-10-04)。
 

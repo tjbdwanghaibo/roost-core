@@ -40,7 +40,7 @@ definition := saga.Definition{
             ForwardTopic: "alliance_rally.reserve_troops",
             CompensateTopic: "alliance_rally.reserve_troops.compensate",
             // Timeout / MaxAttempts / BackoffMin / BackoffMax 可以不写：Engine.Register 按
-            // Options.StepBudgets 补齐（kit 的 saga Mod 从配置读，见下）。
+            // Options.StepBudgets 补齐（`wiring/saga` 的 saga Mod 从配置读，见下）。
         },
     },
 }
@@ -48,7 +48,7 @@ definition := saga.Definition{
 
 **步骤预算是配置。** 一次操作（同一步骤、同一方向）最多派发 `MaxAttempts` 次尝试，每次等 `Timeout`，相邻两次按
 `BackoffMin..BackoffMax` 退避。`Engine.Register` 按 `Options.StepBudgets` 补齐每个字段：按步骤覆盖 > 定义里写的值 >
-配置默认值 > 框架默认（5s / 5 次 / 100ms..5s）。kit 的 saga Mod 从 `saga.step_defaults.{timeout,max_attempts,backoff_min,backoff_max}`
+配置默认值 > 框架默认（5s / 5 次 / 100ms..5s）。`wiring/saga` 的 saga Mod 从 `saga.step_defaults.{timeout,max_attempts,backoff_min,backoff_max}`
 与 `saga.steps.<saga type>.<step name>.<字段>` 读取；`saga.steps` 下写了不存在的类型、步骤或字段时 `Init` 失败，不会静默失效。
 **步骤 `Timeout` 必须短于步骤消费者的 `AckWait`**（`saga.DefaultStepAckWait` = 30s，生成的与 demo 的步骤消费者都用它）：一次尝试
 处理到命令截止（派发时刻 + `Timeout`），更长时 JetStream 会在 handler 还在跑时把命令重投给另一个消费者。saga Mod 在 App 启动前按
@@ -66,17 +66,17 @@ A4 ① 的跨键规则（`ValidateConfig`）拒绝 `saga.step_defaults.timeout` 
 
 需要与当前 Nest handler 的 Entity 修改可靠绑定时，不要直接调用 `StartSaga`，而应
 在 handler 内调用 `saga.EmitStart`。启动意图会与 Entity mutation 写入同一个 Nest
-WAL record，再由 kit 的 durable consumer 幂等创建 Saga。`EmitStart` 在事务里就按 `saga.max_payload_bytes`（缺省 64 KiB）
+WAL record，再由 Wiring 装配的 durable consumer 幂等创建 Saga。`EmitStart` 在事务里就按 `saga.max_payload_bytes`（缺省 64 KiB）
 校验 `Data`，超过时返回 `ErrInvalidRecord`、事务回滚（RR-20261006-43）。这个键是**发起方与协调器共用的配置**（RR-20261006-66，v1.23.1 起）：
-`kit/nest`（发起方）与 `kit/saga`（协调器）共用一份声明，协调器在别的进程时发起方也按它拒绝；两类进程的配置要写同一个值
-（生成的配置段不写它，即都取缺省）。本进程同时有该类型的协调器时与它的 `MaxPayloadBytes` 取小；未经 kit 装配的进程只按线上硬上限
+`wiring/nest`（发起方）与 `wiring/saga`（协调器）共用一份声明，协调器在别的进程时发起方也按它拒绝；两类进程的配置要写同一个值
+（生成的配置段不写它，即都取缺省）。本进程同时有该类型的协调器时与它的 `MaxPayloadBytes` 取小；未经 Wiring 装配的进程只按线上硬上限
 4 MiB。值不一致导致协调器拒绝时，由启动消费者 Term 并计 `saga.start.rejected_total`。
 直接 `StartSaga` 只用于
 本身已经处于可靠消息消费者、运维任务或不需要与另一笔提交原子绑定的入口。
 相同 type/business key 只有在 ID、payload、deadline 表示同一意图时才返回已有记录，
 否则返回 `ErrIdentityConflict`。deadline 会规范到毫秒精度，以适配 MongoDB datetime。
 
-Native Entity step 使用 Data Engine inbox。Kit consumer 在同步调用 handler 前分配
+Native Entity step 使用 Data Engine inbox。Wiring 装配的 consumer 在同步调用 handler 前分配
 `Reservation`；业务从当前调用 context 读取一次，并把它作为**显式业务参数**传进 Nest
 handler，不能把 handler context 交给异步 goroutine：
 
@@ -114,7 +114,7 @@ WAL 不以它为基础（RR-20260926-30）：
   失败回复客户端或稍后重投，不要当成业务拒绝。同一命令的重投（新 token）同样被挡到屏障
   解除；`SubscribeDataEngineStep` 在 handler 以该错误失败时交还本次刚拿到的租约，屏障解除
   后的重投能立刻重新 Reserve，而不是等租约自然过期。
-- **跳过后驱逐**：记录被跳过时，受影响的常驻实体在 Nest 快池内持锁驱逐（不持久化），屏障
+- **跳过后驱逐**：记录被跳过时，受影响的常驻实体在 Nest 业务池（short / long）内持锁驱逐（不持久化），屏障
   保持到驱逐完成。之后的访问从 Mongo 重载；已登记的 Sync subject 在重载后被重新绑定，
   订阅者收到整份全量，而不是在旧版本链上续发增量（驱逐到重载之间该对象不再同步）。
   `Projector.Stats()` 的 `FencedEntities`、`FencedAdmissionRejected`、`StaleEvictions`
@@ -205,7 +205,7 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
      第 s 步在“下一个边界”补偿，可能排在一个已在途的补偿之后（在途的补偿不能放弃，它可能生效）。计 `late_after_abandon_total{phase="forward"}`、WARN；
      终态被重开（以及 `ManualRequired` 上 `Resume` / `Compensate` 先补第 s 步）另计 `saga.reopened_total{saga_type,from_status,reason}`，见「运维观察」。
    - **补偿方向：只告警**：记 ERROR、`Stats().LateAfterAbandon` 与 `saga.completion.late_after_abandon_total{phase="compensate"}`，不改记录。
-     补偿方向的放弃都停在 `ManualRequired`，运维按 TROUBLESHOOTING T-226 核对后 `Resume`，新一生的同一补偿回放这次成功而不是再执行。
+     补偿方向的放弃都停在 `ManualRequired`，运维核对该步业务数据（核对项见[历史故障表 T-226](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/TROUBLESHOOTING.md)）后 `Resume`，新一生的同一补偿回放这次成功而不是再执行。
    同一个成功会多次送达（effect 重投、过期投递的回放、JetStream 重投），**按（操作，代际）只计一次**：正向由回执去重，补偿方向由 tombstone 上的
    `late_alarms.r<代际>`（`LateSuccessAlarmStore`，B1）；之后的送达计 `Duplicates`。成功若在 Resume 之后、新一生派发之前才到达，协调器直接把它接收为
    这一步的结果（第 3 条），不是迟到。
@@ -305,12 +305,12 @@ worker 扫描；进程内 signal 只用于降低新任务延迟。
 
 ## 运维观察
 
-协调器的计数都在 `Engine.Stats()`（kit saga Mod 的健康检查消息里同样列出），指标标签只有 saga 类型与方向 / 原状态 / 原因，保持低基数：
+协调器的计数都在 `Engine.Stats()`（saga Mod 的健康检查消息里同样列出），指标标签只有 saga 类型与方向 / 原状态 / 原因，保持低基数：
 
 | 指标 | `Stats()` | 含义 | 是否故障 |
 | --- | --- | --- | --- |
 | `saga.reopened_total{saga_type,from_status,reason}` | `Reopened` | saga 被**重开**（下面一节） | 不是故障，是记录被改过的信号；持续增长说明 completion 送达经常晚于步骤截止 |
-| `saga.completion.late_after_abandon_total{saga_type,phase}` | `LateAfterAbandon` | 放弃之后才到的成功（契约第 4 条），按（操作，代际）计一次 | `phase="forward"` 已自动补偿（WARN）；`phase="compensate"` 要运维核对（ERROR，TROUBLESHOOTING T-226） |
+| `saga.completion.late_after_abandon_total{saga_type,phase}` | `LateAfterAbandon` | 放弃之后才到的成功（契约第 4 条），按（操作，代际）计一次 | `phase="forward"` 已自动补偿（WARN）；`phase="compensate"` 要运维核对（ERROR，核对项见[历史故障表 T-226](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/TROUBLESHOOTING.md)） |
 | `saga.completion.stale_attempt_total{saga_type,phase}` | `StaleAttempt` | 同一生较早尝试晚到的可重试失败被忽略（saga 方向 ③） | 正常现象 |
 | `saga.completion.stale_incarnation_total{saga_type,phase}` | `StaleIncarnation` | Resume 之后旧一生的拒绝 / 失败被忽略（B1） | 正常现象 |
 

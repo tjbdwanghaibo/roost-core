@@ -37,7 +37,7 @@ App 引用 Nest；Cache 引用 SyncBus/Mirror；StatsLog 采集 Nest/Entity 并�
 roost-core/
 ├── framework/
 │   ├── app/                 # Registry、配置、进程生命周期、singleton
-│   ├── nest/                # 正式调度与快慢池
+│   ├── nest/                # 正式调度与 short/long/io 三池
 │   ├── entity/              # ECS、Guard、变更
 │   ├── dataengine/          # 持久化契约与 engine
 │   ├── sync/                # Entity Sync、Lockstep、SyncBus、SyncStream
@@ -227,7 +227,7 @@ Framework、Infra、领域 Service 禁止反向 import Wiring；Infra 不引入 
 
 | 契约 | 验收要求 |
 | --- | --- |
-| Nest | 同 ID FIFO、快慢池、准入/拒绝保持；慢池不拿 Entity local 锁 |
+| Nest | 同 ID FIFO、short/long/io 三池、准入/拒绝保持；io 池不拿 Entity local 锁 |
 | Entity/Sync | setter 标脏；handler 全部变化在 Guard 释放前冻结，解锁后按水位唤醒；on_change 与 20Hz 兜底保持 |
 | DataEngine/WAL | strict、未知、投影、恢复、关闭语义保持，不增加旧格式兼容 |
 | Remote/Saga | 固定拥有者、代际、持久 fence、未知与补偿保持 |

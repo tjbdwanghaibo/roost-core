@@ -25,7 +25,7 @@ Nest WAL当前codec7 持久化完整 RemoteCommit（mutation、delete、snapshot
 
 Mongo transaction首先标记`Applied`；唯一的`RecoverOutbox`协调者负责快照/复制发布，成功后标记`Committed`。投影只持久提交并唤醒outbox，finalizer只确认和释放，不自行发布；`ApplyRemoteCommits`成功只代表持久回执，需要发布确认的调用者等待`FlushRemoteTransaction`。memory/strict/pipelined的回复与写额度释放语义保持不变，不能提前到Applied。
 
-协调者共用启动恢复、显式恢复、重试和停止屏障，页内按完整事务有界并行；涉及任意同一Entity的事务按扫描顺序尝试，失败仍保留Applied。正式配置`remote_entity.outbox_publish_workers`默认8（0取8），范围1～64；设1用于串行诊断，不随Nest慢worker数放大。带游标的正式Backend可越过失败页继续扫描，不删除失败记录。页间先排空；停止必须等已派发发布结束。
+协调者共用启动恢复、显式恢复、重试和停止屏障，页内按完整事务有界并行；涉及任意同一Entity的事务按扫描顺序尝试，失败仍保留Applied。正式配置`remote_entity.outbox_publish_workers`默认8（0取8），范围1～64；设1用于串行诊断，不随Nest io 池 worker数放大。带游标的正式Backend可越过失败页继续扫描，不删除失败记录。页间先排空；停止必须等已派发发布结束。
 
 未发布记录不设置TTL，只有完成发布的记录才进入过期回收。发布与ACK保持幂等。实体侧的`AcknowledgeRemoteCommit`必须并发安全：outbox和Committed回执的本地确认可能交错，生成实体经`Tracker.AdvanceVersion`原子CAS满足。阶段耗时见[指标](OBSERVABILITY.md)，功能验收不能当作新TPS结论。
 

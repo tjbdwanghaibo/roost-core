@@ -139,7 +139,7 @@ Checkpoint Mod。
 - durability 是 per-handler 元数据，逐 handler 灰度；首选高频写、非跨服、AfterCommit 简单的
   handler 试点。
 - prod 配置门禁初期要求 pipelined 显式白名单。
-- 装配接线（同一 roost-core 版本中的 kit）：
+- 装配接线（`wiring/dataengine` 与 `wiring/nest`）：
   - Data Engine Mod 独占 WAL，并在 recovery barrier 完成后提供 committer；
   - entitysync 闸门一行接线：`entitysync.ManagerConfig{DurableWatermark: dataEngineMod.DurableLSN}`；
   - 引擎选项使用 `dataEngineMod.NestOptions()`（committer + 配置驱动的

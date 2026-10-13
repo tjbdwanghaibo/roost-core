@@ -34,7 +34,7 @@
 
 Gate 不注册游戏 controller，不持 Entity，不运行业务 Nest。Game 接入适配器实现现有 `gateway.Session`，因此 ProtocolRegistry 可以继续使用当前分发接口。所有业务仍进入本地正式 Sender；不能让 Gate、NATS callback 或接入工作协程直接拿 Entity local 锁。
 
-Nest 快慢池保持现有契约：快池执行 handler；慢池只做允许的前置 I/O、Remote 获取/释放与等待。转发等待不能占用业务快池。Gate 的网络执行器属于接入基建，不是第三种 Nest 业务池。
+Nest 三池保持现有契约：short / long 业务池执行 handler；io 池只做允许的前置 I/O、Remote 获取/释放与等待。转发等待不能占用业务池。Gate 的网络执行器属于接入基建，不是另一种 Nest 池。
 
 | 位置 | 拟定改动 | 边界 |
 | --- | --- | --- |
@@ -144,7 +144,7 @@ Game→Gate ACK 丢失可能已入队：不自动重放写 socket 的包，关�
 
 队列满不能采用“丢一个 Sync delta、继续发送后续 delta”。可靠 PB、状态帧、Lockstep 帧均按完整包准入；拒绝/后续失败进入相应关闭、全量或追帧恢复。临时基础设施不可用可在未准入时用原 ErrRetryLater 保持 pending；一旦旧链路连续性未知，就必须终止该 lifetime。
 
-on_change 保持现有正式边界：setter 标脏 → handler 汇总变更 → Guard 内冻结 → 释放全部锁并满足提交水位 → 唤醒 Sync → 出站。20Hz 仍是兜底，不因增加 Gate 改为每个 setter 发包。任何 NATS/socket 写等待都在 Guard 和 Nest 快 worker 外发生。
+on_change 保持现有正式边界：setter 标脏 → handler 汇总变更 → Guard 内冻结 → 释放全部锁并满足提交水位 → 唤醒 Sync → 出站。20Hz 仍是兜底，不因增加 Gate 改为每个 setter 发包。任何 NATS/socket 写等待都在 Guard 和 Nest 业务 worker 外发生。
 
 ### 5.1 面向客户端的广播
 
@@ -182,12 +182,12 @@ Lockstep 与 PB/Entity Sync 共用 Gate、Core NATS 和 MessagePack 信封，不
 | --- | --- | --- |
 | [command.go](../../framework/sync/lockstep/command.go) | 原始 Command 编解码；HandleCommand 根据认证 session 处理 Input/Hash/Catchup | Gate 原样转发 flags=4 的字节；Game 校验 PayloadKind 后解码，完整 BindID 映射到当前数值 session，再进入 Match 的串行入口 |
 | [match.go](../../framework/sync/lockstep/match.go) | 席位/旁观者绑定、输入收集、C7 广播、历史追帧 | Match 和成员真相保留在 Game；连接换代通过 Attach/旁观者入口更新，追帧复用当前 History/Catchup |
-| [tcp.go](../../framework/sync/lockstep/tcp.go) | TCPSender 将实时和可靠通道接到 PushLockstepSession | 复用 sender 的 resolver/包大小/禁止快 worker 阻塞契约，将 push 接到 Game 的有序 Gate 出站；复用共同逻辑，不复制一份 TCP sender |
+| [tcp.go](../../framework/sync/lockstep/tcp.go) | TCPSender 将实时和可靠通道接到 PushLockstepSession | 复用 sender 的 resolver/包大小/禁止业务 worker 阻塞契约，将 push 接到 Game 的有序 Gate 出站；复用共同逻辑，不复制一份 TCP sender |
 | [生成 TCP](../../codegen/internal/roost/render_player_tcp.go)、[ProtocolRegistry](../../codegen/internal/roost/render_access.go) | flags=4 上行和 flags=5 推送；显式注册 Lockstep Notify | Gate 保留 RS 头与类型校验；Game 保留路由注册；Gate writer 写出原始 C7/追帧字节 |
 
 MessagePack 只编码内部 envelope，不重新编码 Command、C7 或追帧页。实时帧和追帧页首期最终均走 Gate TCP，有界发送且不采用只保留最新帧；不能因为 Match 的实时接口名叫 SendDatagram，就宣称 Gate 首期提供 UDP/KCP。
 
-输入、Attach/Detach、Tick 按 Match 的现有串行拥有者调度；仅每玩家/每连接串行不足以保护多人共享 Match。Tick 驱动保持在快 worker/Entity 锁之外，出站对本地有界队列准入，后台任务承担 NATS/socket 等待；单个追帧者或慢客户端不能卡住全 Match 的帧推进。
+输入、Attach/Detach、Tick 按 Match 的现有串行拥有者调度；仅每玩家/每连接串行不足以保护多人共享 Match。Tick 驱动保持在业务 worker/Entity 锁之外，出站对本地有界队列准入，后台任务承担 NATS/socket 等待；单个追帧者或慢客户端不能卡住全 Match 的帧推进。
 
 断线处理先在同一个 Match 串行作用域内核对当前 session 是否仍对应待关闭的 BindID，再执行 Detach；现有 Detach 接受 player，直接用迟到旧断线调用会错误解绑重连后的新 session。重连后的输入、hash 和追帧也必须用新绑定身份，旁观者仍只具有追帧权限。
 

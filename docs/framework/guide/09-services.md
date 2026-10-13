@@ -1,6 +1,6 @@
 # 次核心：Service 领域能力：设计与使用
 
-适用运行时：v1.24.0；文档维护版：v1.24.1。[实现与维护入口](../impl/09-services.md) · [模块总目录](../README.md)
+适用版本：v1.25.0 及当前主线（未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/09-services.md) · [模块总目录](../README.md)
 
 ## 先理解这一块
 
