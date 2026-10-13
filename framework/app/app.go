@@ -179,6 +179,33 @@ func (a *App) printConfigSchema(serverType ServiceName, out io.Writer) error {
 	return encoder.Encode(schema.Keys)
 }
 
+// appRun 是一次 App.run 在启动、服务与停机各步骤之间共享的运行状态，只承载跨步骤的所有权与收尾判定。
+//
+//   - failureReturned：RuntimeFailure 是否已经进了返回值（启动检查点、或等待停止时的 Done 分支）。
+//     没进的由 run 的 reportLateRuntimeFailure 在返回时并入。
+//   - singletonReleasable / singletonReleaseDeadline：单实例锁 finish 的释放判定。singletonReleasable
+//     只在“全部 Mod 都停完”的路径上置位（逐个返回点置位，漏掉的路径默认不释放，键在 TTL 内自然过期，
+//     方向是安全的）；singletonReleaseDeadline 是停机路径 shutdownCtx 的截止时间。
+//   - startedSharedMods / startedServiceMods：已 Start 的 Mod，启动失败与停机按逆序停止它们。
+//
+// 启动阶段的 runStartupStep 返回 finished=false（超时或被信号打断）时阶段仍可能在跑：各步骤直接返回，
+// 不停 Mod、不置 singletonReleasable，交由进程退出收回资源。
+type appRun struct {
+	serverType     ServiceName
+	sigChan        <-chan os.Signal
+	startupCtx     context.Context
+	runtimeFailure *RuntimeFailure
+
+	failureReturned bool
+
+	singleton                *singletonLock
+	singletonReleasable      bool
+	singletonReleaseDeadline time.Time
+
+	startedSharedMods  []Mod
+	startedServiceMods []Mod
+}
+
 func (a *App) run(serverType ServiceName) (runErr error) {
 	// --- Load and check config: before any Mod Init ---
 	cfgPath, err := a.loadServiceConfig(serverType, false)
@@ -230,61 +257,26 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	defer stopSignals()
 	startupCtx, cancelStartup := context.WithTimeout(context.Background(), a.settings.Startup.Timeout)
 	defer cancelStartup()
+	run := &appRun{serverType: serverType, sigChan: sigChan, startupCtx: startupCtx}
 
 	// --- Init registry ---
-	a.registry = NewRegistry(a.cfg)
-	a.registry.store[ModLogFrame] = &a.logFrame
-	if _, err := runStartupStep(startupCtx, sigChan, "app.init", func(ctx context.Context) error {
-		return a.emitLifecycle(ctx, lifecycle.Event{
-			Phase:   lifecycle.PhaseAppInit,
-			Service: string(serverType),
-			Name:    a.name,
-			Data: map[string]any{
-				"sid":    int(a.settings.Sid),
-				"config": cfgPath,
-			},
-		})
-	}); err != nil {
+	if err := a.initRegistry(run, cfgPath); err != nil {
 		return err
 	}
-	runtimeFailure, _ := Lookup[*RuntimeFailure](a.registry, ModRuntimeFailure)
-	// failureReturned 记录 RuntimeFailure 是否已经进了返回值（启动检查点、或 select 的 Done 分支）。
-	// 没进的——停机开始之后才失败、启动失败收尾期间才失败——在 run 返回时并入：返回值是进程退出码
-	// 与部署脚本看得到的唯一信号，fail-stop 不能以 0 退出。围栏、失锁不 Release
-	// 这些安全动作由 RuntimeFailure / 单实例锁自己完成，这里只补报告。这个 defer 登记在单实例锁的
-	// finish 之前，因而在它之后执行，收尾期间的失败也看得到。
-	failureReturned := false
-	defer func() {
-		if failureReturned {
-			return
-		}
-		if err := runtimeFailure.Err(); err != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("app: runtime failure after shutdown began: %w", err))
-		}
-	}()
-	// startupFailure 在启动各阶段之间检查：启动期间（例如 DataEngine 重放很长时）发生的 fail-stop
-	// （失锁、DataEngine / Remote fatal）不等进入 Serve 的 select，按启动失败路径停掉已启动的 Mod。
-	startupFailure := func() error {
-		if err := runtimeFailure.Err(); err != nil {
-			failureReturned = true
-			return fmt.Errorf("app: runtime failure during startup: %w", err)
-		}
-		return nil
-	}
+	run.runtimeFailure, _ = Lookup[*RuntimeFailure](a.registry, ModRuntimeFailure)
+	// 这个 defer 登记在单实例锁的 finish 之前，因而在它之后执行，收尾期间的失败也看得到。
+	defer run.reportLateRuntimeFailure(&runErr)
 
 	// --- Singleton lock: before any Mod Init ---
 	// 同一服务类型 + sid 只让一个进程跑 Mod（见 singleton.go）。
 	// 收尾统一在 defer 里：先停续期，再按 singletonReleasable 决定是否 Release，最后关闭 store。
-	// singletonReleasable 只在“全部 Mod 都停完”的路径上置位（逐个返回点置位，漏掉的路径默认不释放，
-	// 键在 TTL 内自然过期，方向是安全的）；singletonReleaseDeadline 是停机路径 shutdownCtx 的截止时间。
 	singleton, err := a.openSingleton(serverType)
 	if err != nil {
 		return err
 	}
-	var singletonReleasable bool
-	var singletonReleaseDeadline time.Time
 	if singleton != nil {
-		defer func() { singleton.finish(singletonReleasable, singletonReleaseDeadline) }()
+		run.singleton = singleton
+		defer run.finishSingleton()
 		slog.Info("singleton: acquiring", "key", singleton.key)
 		if err := singleton.acquire(sigChan); err != nil {
 			if errors.Is(err, errSingletonWaitInterrupted) {
@@ -301,66 +293,145 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	// 这套部署到过的时刻就拒绝启动。它可能与单实例锁共用存储，所以 stop 登记在锁的 finish 之后、先于它执行。
 	businessTime, err := a.startBusinessTimeGuard(serverType, singleton)
 	if err != nil {
-		singletonReleasable = true
+		run.singletonReleasable = true
 		return err
 	}
 	defer businessTime.stop()
 
+	// --- Mods lifecycle: Init → Provide → Start ---
 	sharedMods, err := sortMods(a.mods, nil)
 	if err != nil {
-		singletonReleasable = true
+		run.singletonReleasable = true
 		return err
 	}
-	var startedSharedMods []Mod
-	var startedServiceMods []Mod
-	var providedSharedMods []Mod
-	var providedServiceMods []Mod
+	if err := a.startSharedMods(run, sharedMods); err != nil {
+		return err
+	}
+	entry, serviceMods, err := a.resolveServiceEntry(run, sharedMods)
+	if err != nil {
+		return err
+	}
+	if err := a.startServiceMods(run, serviceMods); err != nil {
+		return err
+	}
+	if err := a.confirmModsStarted(run); err != nil {
+		return err
+	}
 
-	// --- Mods lifecycle: Init → Provide → Start ---
+	// --- Service lifecycle: Init → Serve ---
+	svc := entry.svc
+	if err := a.initService(run, svc); err != nil {
+		return err
+	}
+	cancelStartup()
+	return a.serveAndShutdown(run, svc)
+}
+
+// initRegistry 建立本次运行的 Registry 并发布 app.init。
+func (a *App) initRegistry(run *appRun, cfgPath string) error {
+	a.registry = NewRegistry(a.cfg)
+	a.registry.store[ModLogFrame] = &a.logFrame
+	_, err := runStartupStep(run.startupCtx, run.sigChan, "app.init", func(ctx context.Context) error {
+		return a.emitLifecycle(ctx, lifecycle.Event{
+			Phase:   lifecycle.PhaseAppInit,
+			Service: string(run.serverType),
+			Name:    a.name,
+			Data: map[string]any{
+				"sid":    int(a.settings.Sid),
+				"config": cfgPath,
+			},
+		})
+	})
+	return err
+}
+
+// reportLateRuntimeFailure 在 run 返回时并入没进返回值的 RuntimeFailure——停机开始之后才失败、
+// 启动失败收尾期间才失败：返回值是进程退出码与部署脚本看得到的唯一信号，fail-stop 不能以 0 退出。
+// 围栏、失锁不 Release 这些安全动作由 RuntimeFailure / 单实例锁自己完成，这里只补报告。
+func (run *appRun) reportLateRuntimeFailure(runErr *error) {
+	if run.failureReturned {
+		return
+	}
+	if err := run.runtimeFailure.Err(); err != nil {
+		*runErr = errors.Join(*runErr, fmt.Errorf("app: runtime failure after shutdown began: %w", err))
+	}
+}
+
+// startupFailure 在启动各阶段之间检查：启动期间（例如 DataEngine 重放很长时）发生的 fail-stop
+// （失锁、DataEngine / Remote fatal）不等进入 Serve 的 select，按启动失败路径停掉已启动的 Mod。
+func (run *appRun) startupFailure() error {
+	if err := run.runtimeFailure.Err(); err != nil {
+		run.failureReturned = true
+		return fmt.Errorf("app: runtime failure during startup: %w", err)
+	}
+	return nil
+}
+
+// finishSingleton 停续期，按 singletonReleasable 决定是否 Release，最后关闭 store。
+func (run *appRun) finishSingleton() {
+	run.singleton.finish(run.singletonReleasable, run.singletonReleaseDeadline)
+}
+
+// stopStartedMods 是启动失败路径的收尾：先逆序停服务专属 Mod，再逆序停共享 Mod，
+// 返回是否全部停完（决定能否释放单实例锁）。还没有服务专属 Mod 启动时第一段为空操作。
+func (run *appRun) stopStartedMods() bool {
+	return allStopped(
+		stopModsReverse(run.startedServiceMods, "mod stop (service-specific)"),
+		stopModsReverse(run.startedSharedMods, "mod stop"))
+}
+
+// startSharedMods 对共享 Mod 依次执行 Init → Provide → Start。Provide / Start 失败时逆序停止
+// 已 Provide 的共享 Mod（Provide 失败的那个也停，它可能已部分登记）。
+func (a *App) startSharedMods(run *appRun, sharedMods []Mod) error {
 	for _, mod := range sharedMods {
 		slog.Info("mod init", "mod", mod.Name())
-		finished, err := runStartupStep(startupCtx, sigChan, "mod init "+string(mod.Name()), func(context.Context) error { return mod.Init(a.cfg) })
+		finished, err := runStartupStep(run.startupCtx, run.sigChan, "mod init "+string(mod.Name()), func(context.Context) error { return mod.Init(a.cfg) })
 		if !finished {
 			return err
 		}
 		if err != nil {
-			singletonReleasable = true
+			run.singletonReleasable = true
 			return fmt.Errorf("mod %s init: %w", mod.Name(), err)
 		}
 	}
+	var providedSharedMods []Mod
 	for _, mod := range sharedMods {
-		finished, err := runStartupStep(startupCtx, sigChan, "mod provide "+string(mod.Name()), func(context.Context) error { return mod.Provide(a.registry) })
+		finished, err := runStartupStep(run.startupCtx, run.sigChan, "mod provide "+string(mod.Name()), func(context.Context) error { return mod.Provide(a.registry) })
 		if !finished {
 			return err
 		}
 		if err != nil {
-			singletonReleasable = stopModsReverse(append(providedSharedMods, mod), "mod stop after provide error")
+			run.singletonReleasable = stopModsReverse(append(providedSharedMods, mod), "mod stop after provide error")
 			return fmt.Errorf("mod %s provide: %w", mod.Name(), err)
 		}
 		providedSharedMods = append(providedSharedMods, mod)
 	}
 	for _, mod := range sharedMods {
-		if err := startupFailure(); err != nil {
-			singletonReleasable = stopModsReverse(providedSharedMods, "mod stop")
+		if err := run.startupFailure(); err != nil {
+			run.singletonReleasable = stopModsReverse(providedSharedMods, "mod stop")
 			return err
 		}
 		slog.Info("mod start", "mod", mod.Name())
-		finished, err := runStartupStep(startupCtx, sigChan, "mod start "+string(mod.Name()), func(context.Context) error { return mod.Start() })
+		finished, err := runStartupStep(run.startupCtx, run.sigChan, "mod start "+string(mod.Name()), func(context.Context) error { return mod.Start() })
 		if !finished {
 			return err
 		}
 		if err != nil {
-			singletonReleasable = stopModsReverse(providedSharedMods, "mod stop")
+			run.singletonReleasable = stopModsReverse(providedSharedMods, "mod stop")
 			return fmt.Errorf("mod %s start: %w", mod.Name(), err)
 		}
-		startedSharedMods = append(startedSharedMods, mod)
+		run.startedSharedMods = append(run.startedSharedMods, mod)
 	}
+	return nil
+}
 
-	// --- Service entry ---
-	entry, ok := a.services[serverType]
+// resolveServiceEntry 找到本服务类型的入口，并对它的专属 Mod 排序（共享 Mod 视为已满足的依赖）。
+// 失败时共享 Mod 已全部启动，逆序停止它们。
+func (a *App) resolveServiceEntry(run *appRun, sharedMods []Mod) (*serviceEntry, []Mod, error) {
+	entry, ok := a.services[run.serverType]
 	if !ok {
-		singletonReleasable = stopModsReverse(startedSharedMods, "mod stop")
-		return fmt.Errorf("unknown server type: %s", serverType)
+		run.singletonReleasable = run.stopStartedMods()
+		return nil, nil, fmt.Errorf("unknown server type: %s", run.serverType)
 	}
 	sharedNames := make(map[ModName]struct{}, len(sharedMods))
 	for _, mod := range sharedMods {
@@ -368,65 +439,73 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	}
 	serviceMods, err := sortMods(entry.mods, sharedNames)
 	if err != nil {
-		singletonReleasable = stopModsReverse(startedSharedMods, "mod stop")
-		return err
+		run.singletonReleasable = run.stopStartedMods()
+		return nil, nil, err
 	}
+	return entry, serviceMods, nil
+}
 
-	// --- Service-specific Mods lifecycle: Init → Provide → Start ---
+// startServiceMods 对服务专属 Mod 依次执行 Init → Provide → Start。失败时先逆序停服务专属 Mod
+// （Provide 阶段停已 Provide 的、含失败的那个；Start 阶段停已 Provide 的），再停已启动的共享 Mod。
+func (a *App) startServiceMods(run *appRun, serviceMods []Mod) error {
 	for _, mod := range serviceMods {
 		slog.Info("mod init (service-specific)", "mod", mod.Name())
-		finished, err := runStartupStep(startupCtx, sigChan, "mod init "+string(mod.Name()), func(context.Context) error { return mod.Init(a.cfg) })
+		finished, err := runStartupStep(run.startupCtx, run.sigChan, "mod init "+string(mod.Name()), func(context.Context) error { return mod.Init(a.cfg) })
 		if !finished {
 			return err
 		}
 		if err != nil {
-			singletonReleasable = stopModsReverse(startedSharedMods, "mod stop")
+			run.singletonReleasable = run.stopStartedMods()
 			return fmt.Errorf("mod %s init: %w", mod.Name(), err)
 		}
 	}
+	var providedServiceMods []Mod
 	for _, mod := range serviceMods {
-		finished, err := runStartupStep(startupCtx, sigChan, "mod provide "+string(mod.Name()), func(context.Context) error { return mod.Provide(a.registry) })
+		finished, err := runStartupStep(run.startupCtx, run.sigChan, "mod provide "+string(mod.Name()), func(context.Context) error { return mod.Provide(a.registry) })
 		if !finished {
 			return err
 		}
 		if err != nil {
-			singletonReleasable = allStopped(
+			run.singletonReleasable = allStopped(
 				stopModsReverse(append(providedServiceMods, mod), "mod stop after provide error (service-specific)"),
-				stopModsReverse(startedSharedMods, "mod stop"))
+				stopModsReverse(run.startedSharedMods, "mod stop"))
 			return fmt.Errorf("mod %s provide: %w", mod.Name(), err)
 		}
 		providedServiceMods = append(providedServiceMods, mod)
 	}
 	for _, mod := range serviceMods {
-		if err := startupFailure(); err != nil {
-			singletonReleasable = allStopped(
+		if err := run.startupFailure(); err != nil {
+			run.singletonReleasable = allStopped(
 				stopModsReverse(providedServiceMods, "mod stop (service-specific)"),
-				stopModsReverse(startedSharedMods, "mod stop"))
+				stopModsReverse(run.startedSharedMods, "mod stop"))
 			return err
 		}
 		slog.Info("mod start (service-specific)", "mod", mod.Name())
-		finished, err := runStartupStep(startupCtx, sigChan, "mod start "+string(mod.Name()), func(context.Context) error { return mod.Start() })
+		finished, err := runStartupStep(run.startupCtx, run.sigChan, "mod start "+string(mod.Name()), func(context.Context) error { return mod.Start() })
 		if !finished {
 			return err
 		}
 		if err != nil {
-			singletonReleasable = allStopped(
+			run.singletonReleasable = allStopped(
 				stopModsReverse(providedServiceMods, "mod stop (service-specific)"),
-				stopModsReverse(startedSharedMods, "mod stop"))
+				stopModsReverse(run.startedSharedMods, "mod stop"))
 			return fmt.Errorf("mod %s start: %w", mod.Name(), err)
 		}
-		startedServiceMods = append(startedServiceMods, mod)
+		run.startedServiceMods = append(run.startedServiceMods, mod)
 	}
-	if err := startupFailure(); err != nil {
-		singletonReleasable = allStopped(
-			stopModsReverse(startedServiceMods, "mod stop (service-specific)"),
-			stopModsReverse(startedSharedMods, "mod stop"))
+	return nil
+}
+
+// confirmModsStarted 在全部 Mod 启动后再查一次 RuntimeFailure，然后发布 mods.started。
+func (a *App) confirmModsStarted(run *appRun) error {
+	if err := run.startupFailure(); err != nil {
+		run.singletonReleasable = run.stopStartedMods()
 		return err
 	}
-	finished, err := runStartupStep(startupCtx, sigChan, "mods.started", func(ctx context.Context) error {
+	finished, err := runStartupStep(run.startupCtx, run.sigChan, "mods.started", func(ctx context.Context) error {
 		return a.emitLifecycle(ctx, lifecycle.Event{
 			Phase:   lifecycle.PhaseModsStarted,
-			Service: string(serverType),
+			Service: string(run.serverType),
 			Name:    a.name,
 		})
 	})
@@ -434,31 +513,31 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 		return err
 	}
 	if err != nil {
-		singletonReleasable = allStopped(
-			stopModsReverse(startedServiceMods, "mod stop (service-specific)"),
-			stopModsReverse(startedSharedMods, "mod stop"))
+		run.singletonReleasable = run.stopStartedMods()
 		return err
 	}
+	return nil
+}
 
-	// --- Service lifecycle: Init → Serve ---
-	svc := entry.svc
+// initService 执行 Service.Init、再查一次 RuntimeFailure，然后发布 service.started。
+// Init 失败与 Init 之后的启动失败走同一条收尾：先收回 Service 已启动的部分，再停 Mod、释放锁；
+// Service 在预算内停不下来就保留 Mod 与锁，与正常停机相同。
+func (a *App) initService(run *appRun, svc Service) error {
 	slog.Info("service init", "service", svc.Name())
-	// Init 失败与 Init 之后的启动失败走同一条收尾：先收回 Service 已启动的部分，再停 Mod、释放锁；
-	// Service 在预算内停不下来就保留 Mod 与锁，与正常停机相同。
-	finished, startErr := runStartupStep(startupCtx, sigChan, "service init "+string(svc.Name()), func(context.Context) error { return svc.Init(a.registry) })
+	finished, startErr := runStartupStep(run.startupCtx, run.sigChan, "service init "+string(svc.Name()), func(context.Context) error { return svc.Init(a.registry) })
 	if !finished {
 		return startErr
 	}
 	if startErr != nil {
 		startErr = fmt.Errorf("service %s init: %w", svc.Name(), startErr)
 	} else {
-		startErr = startupFailure()
+		startErr = run.startupFailure()
 	}
 	if startErr == nil {
-		finished, startErr = runStartupStep(startupCtx, sigChan, "service.started", func(ctx context.Context) error {
+		finished, startErr = runStartupStep(run.startupCtx, run.sigChan, "service.started", func(ctx context.Context) error {
 			return a.emitLifecycle(ctx, lifecycle.Event{
 				Phase:   lifecycle.PhaseServiceStarted,
-				Service: string(serverType),
+				Service: string(run.serverType),
 				Name:    string(svc.Name()),
 			})
 		})
@@ -476,32 +555,35 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 			// 进程退出后键在 TTL 内过期。
 			return startErr
 		}
-		singletonReleasable = allStopped(
-			stopModsReverse(startedServiceMods, "mod stop (service-specific)"),
-			stopModsReverse(startedSharedMods, "mod stop"))
+		run.singletonReleasable = run.stopStartedMods()
 		return startErr
 	}
+	return nil
+}
 
-	cancelStartup()
-
-	// Serve in background, wait for signal.
+// serveAndShutdown 在后台运行 Serve，等到终止信号、RuntimeFailure 或 Serve 自行退出，然后按停机预算
+// 收尾。返回值合并 Serve 自身的错误与停机过程的错误。
+func (a *App) serveAndShutdown(run *appRun, svc Service) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- svc.Serve(ctx)
 	}()
+	serviceErr, serveDone := run.waitForStop(serveErr)
+	cancel()
+	return a.shutdown(run, svc, serveErr, serveDone, serviceErr)
+}
 
-	// Wait for signal, fail-stop infrastructure, or service exit.
-	var serviceErr error
-	serveDone := false
+// waitForStop 等终止信号、fail-stop 基础设施失败或 Serve 退出，返回 Serve 的错误与 Serve 是否已返回。
+func (run *appRun) waitForStop(serveErr <-chan error) (serviceErr error, serveDone bool) {
 	select {
-	case sig := <-sigChan:
+	case sig := <-run.sigChan:
 		slog.Info("received signal, shutting down", "signal", sig)
-	case err := <-runtimeFailure.Done():
+	case err := <-run.runtimeFailure.Done():
 		slog.Error("runtime infrastructure failure, shutting down", "err", err)
 		serviceErr = errors.Join(serviceErr, err)
-		failureReturned = true
+		run.failureReturned = true
 	case err := <-serveErr:
 		serveDone = true
 		if err != nil && !errors.Is(err, context.Canceled) {
@@ -509,35 +591,24 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 			serviceErr = err
 		}
 	}
-	cancel()
+	return serviceErr, serveDone
+}
 
-	// --- Graceful shutdown ---
+// shutdown 是优雅停机：发布 service.stopping → 等 Serve 与 Service.Shutdown 返回 → 逆序停服务专属
+// Mod、再停共享 Mod（决定单实例锁能否释放）→ 发布 service.stopped。任何一步在预算内没结束都直接返回，
+// 保留仍可能被访问的依赖与锁。
+func (a *App) shutdown(run *appRun, svc Service, serveErr <-chan error, serveDone bool, serviceErr error) error {
 	shutdownTimeout := a.settings.Shutdown.TotalTimeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
-	// 启用单实例锁时，Mod 停机用的截止时间提前 releaseReserve，留给全部 Mod 停完之后的 Release：
-	// stopModsReverseBefore 会把截止前的剩余时间全部分给 Mod。预留不超过总时长的一半，避免很小的
-	// total_timeout 被预留吃光（codegen 会把 Release 的 3s 计入 total_timeout）。此刻已 Lost
-	// （失锁触发的 fail-stop）就不会 Release，不预留，整段时间留给 Mod 停机；停机期间才失锁的，
-	// 预留照旧，只是用不上。
-	modStopCtx := shutdownCtx
-	if singleton != nil {
-		deadline, _ := shutdownCtx.Deadline()
-		singletonReleaseDeadline = deadline
-		releaseReserve := min(singletonReleaseBudget, shutdownTimeout/2)
-		if singleton.snapshot().state == singletonLost {
-			releaseReserve = 0
-		}
-		var modStopCancel context.CancelFunc
-		modStopCtx, modStopCancel = context.WithDeadline(shutdownCtx, deadline.Add(-releaseReserve))
-		defer modStopCancel()
-	}
+	modStopCtx, modStopCancel := run.modStopContext(shutdownCtx, shutdownTimeout)
+	defer modStopCancel()
 
 	slog.Info("service shutdown", "service", svc.Name())
 	var shutdownErr error
 	stoppingFinished, err := a.emitLifecycleWithin(shutdownCtx, lifecycle.Event{
 		Phase:   lifecycle.PhaseServiceStopping,
-		Service: string(serverType),
+		Service: string(run.serverType),
 		Name:    string(svc.Name()),
 	})
 	if err != nil {
@@ -548,6 +619,69 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 		// 不完整相同，不调 Shutdown、不停 Mod、不释放单实例锁。
 		return errors.Join(serviceErr, shutdownErr)
 	}
+	serviceErr, shutdownErr, complete := awaitServeAndShutdown(shutdownCtx, svc, serveErr, serveDone, serviceErr, shutdownErr)
+	if !complete {
+		// Dependencies must remain alive while Serve or Shutdown can still
+		// access them. Returning without stopping mods is safer than racing
+		// an uncooperative service during process termination.
+		// 单实例锁同理不释放（singletonReleasable 保持 false）。
+		return errors.Join(serviceErr, shutdownErr)
+	}
+
+	// Stop service-specific mods in reverse order
+	// 共享 Mod 在服务专属 Mod 之后停止，但共用同一个总时限：规划时把它们声明的预算算进去。
+	if err := stopModsReverseBefore(modStopCtx, run.startedServiceMods, run.startedSharedMods, "mod stop (service-specific)"); err != nil {
+		shutdownErr = errors.Join(shutdownErr, err)
+		if stopIncomplete(err) {
+			// A service-specific Mod may still use shared capabilities. Preserve
+			// those dependencies until the process terminates.
+			return errors.Join(serviceErr, shutdownErr)
+		}
+	}
+
+	// Stop shared mods in reverse order
+	if err := stopModsReverseWithContext(modStopCtx, run.startedSharedMods, "mod stop"); err != nil {
+		shutdownErr = errors.Join(shutdownErr, err)
+		run.singletonReleasable = !stopIncomplete(err)
+	} else {
+		run.singletonReleasable = true
+	}
+
+	slog.Info("server stopped", "type", run.serverType)
+	// Mod 已经停完，singletonReleasable 已按 Mod 的结果定好；这里卡住的 hook 只让 run 按预算返回
+	// （剩余时间不够时 Release 跳过，键在 ttl 内过期），不改变释放规则。
+	if _, err := a.emitLifecycleWithin(shutdownCtx, lifecycle.Event{
+		Phase:   lifecycle.PhaseServiceStopped,
+		Service: string(run.serverType),
+		Name:    string(svc.Name()),
+	}); err != nil {
+		shutdownErr = errors.Join(shutdownErr, err)
+	}
+	return errors.Join(serviceErr, shutdownErr)
+}
+
+// modStopContext 返回 Mod 停机用的 ctx。启用单实例锁时，截止时间比 shutdownCtx 提前 releaseReserve，
+// 留给全部 Mod 停完之后的 Release：stopModsReverseBefore 会把截止前的剩余时间全部分给 Mod。预留不超过
+// 总时长的一半，避免很小的 total_timeout 被预留吃光（codegen 会把 Release 的 3s 计入 total_timeout）。
+// 此刻已 Lost（失锁触发的 fail-stop）就不会 Release，不预留，整段时间留给 Mod 停机；停机期间才失锁的，
+// 预留照旧，只是用不上。未启用单实例锁时直接用 shutdownCtx。
+func (run *appRun) modStopContext(shutdownCtx context.Context, shutdownTimeout time.Duration) (context.Context, context.CancelFunc) {
+	if run.singleton == nil {
+		return shutdownCtx, func() {}
+	}
+	deadline, _ := shutdownCtx.Deadline()
+	run.singletonReleaseDeadline = deadline
+	releaseReserve := min(singletonReleaseBudget, shutdownTimeout/2)
+	if run.singleton.snapshot().state == singletonLost {
+		releaseReserve = 0
+	}
+	return context.WithDeadline(shutdownCtx, deadline.Add(-releaseReserve))
+}
+
+// awaitServeAndShutdown 调用 Service.Shutdown，并等 Serve 与 Shutdown 都返回；两者的错误分别并入
+// serviceErr 与 shutdownErr。complete 为 false 表示停机预算内没等到：Serve 或 Shutdown 仍可能访问依赖，
+// 调用方不停 Mod、不释放单实例锁。
+func awaitServeAndShutdown(shutdownCtx context.Context, svc Service, serveErr <-chan error, serveDone bool, serviceErr, shutdownErr error) (error, error, bool) {
 	shutdownResult := make(chan error, 1)
 	go func() { shutdownResult <- svc.Shutdown(shutdownCtx) }()
 	shutdownDone := false
@@ -567,44 +701,10 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 			}
 		case <-shutdownCtx.Done():
 			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("service %s shutdown incomplete: %w", svc.Name(), shutdownCtx.Err()))
-			// Dependencies must remain alive while Serve or Shutdown can still
-			// access them. Returning without stopping mods is safer than racing
-			// an uncooperative service during process termination.
-			// 单实例锁同理不释放（singletonReleasable 保持 false）。
-			return errors.Join(serviceErr, shutdownErr)
+			return serviceErr, shutdownErr, false
 		}
 	}
-
-	// Stop service-specific mods in reverse order
-	// 共享 Mod 在服务专属 Mod 之后停止，但共用同一个总时限：规划时把它们声明的预算算进去。
-	if err := stopModsReverseBefore(modStopCtx, startedServiceMods, startedSharedMods, "mod stop (service-specific)"); err != nil {
-		shutdownErr = errors.Join(shutdownErr, err)
-		if stopIncomplete(err) {
-			// A service-specific Mod may still use shared capabilities. Preserve
-			// those dependencies until the process terminates.
-			return errors.Join(serviceErr, shutdownErr)
-		}
-	}
-
-	// Stop shared mods in reverse order
-	if err := stopModsReverseWithContext(modStopCtx, startedSharedMods, "mod stop"); err != nil {
-		shutdownErr = errors.Join(shutdownErr, err)
-		singletonReleasable = !stopIncomplete(err)
-	} else {
-		singletonReleasable = true
-	}
-
-	slog.Info("server stopped", "type", serverType)
-	// Mod 已经停完，singletonReleasable 已按 Mod 的结果定好；这里卡住的 hook 只让 run 按预算返回
-	// （剩余时间不够时 Release 跳过，键在 ttl 内过期），不改变释放规则。
-	if _, err := a.emitLifecycleWithin(shutdownCtx, lifecycle.Event{
-		Phase:   lifecycle.PhaseServiceStopped,
-		Service: string(serverType),
-		Name:    string(svc.Name()),
-	}); err != nil {
-		shutdownErr = errors.Join(shutdownErr, err)
-	}
-	return errors.Join(serviceErr, shutdownErr)
+	return serviceErr, shutdownErr, true
 }
 
 func (a *App) exitSignals() (<-chan os.Signal, func()) {
