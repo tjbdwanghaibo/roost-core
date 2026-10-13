@@ -64,6 +64,10 @@ func (gate *Gate) receiveBroadcast(role string, msg *fnats.Msg) {
 		gate.replyBroadcast(msg.Reply, result)
 	}()
 }
+
+// admitBroadcast 准入一次广播：核对发起方权限 → 按内容摘要去重（同 ID 同内容在窗口内返回同一结果，
+// 换内容复用 ID 拒绝）→ 登记记录 → 持 Gate 锁按受众逐个连接准入出站 → 写回记录结论。
+// 任何一步 panic 都按 Unknown（可能已部分投递）返回。
 func (gate *Gate) admitBroadcast(ctx context.Context, role string, request BroadcastRequest) (result BroadcastResponse) {
 	result.ExecutionResult = ExecutionResult{Version: InternalVersion, Outcome: NotAdmitted, Reason: "broadcast refused"}
 	defer func() {
@@ -71,45 +75,23 @@ func (gate *Gate) admitBroadcast(ctx context.Context, role string, request Broad
 			result = BroadcastResponse{ExecutionResult: ExecutionResult{Version: InternalVersion, Outcome: Unknown, Reason: "broadcast failed"}}
 		}
 	}()
-	if role == "game" && (request.Audience.Kind == AllOnline || (request.Audience.Kind == GameOnline && request.Audience.GameID != request.Source.ServerID)) {
+	if !gate.broadcastAuthorized(ctx, role, request) {
 		return result
 	}
-	if match, err := gate.deps.Matches(ctx, role, request.Source); err != nil || !match {
-		return result
-	}
-	// Budget/Target 不属于内容身份，允许同 ID 在窗口内查询同一结果，拒绝换内容复用。
-	encoded, err := gate.codec.Marshal(struct {
-		Audience  Audience
-		MessageID uint32
-		Payload   []byte
-	}{request.Audience, request.MessageID, request.Payload})
+	digest, err := gate.broadcastDigest(request)
 	if err != nil {
 		return result
 	}
-	digest := sha256.Sum256(encoded)
 	key := broadcastKey{request.Source, role, request.BroadcastID}
 	gate.mu.Lock()
 	now := time.Now()
-	for key, record := range gate.broadcasts {
-		if !now.Before(record.expires) {
-			select {
-			case <-record.done:
-				delete(gate.broadcasts, key)
-			default:
-			}
-		}
-	}
+	gate.dropExpiredBroadcastsLocked(now)
 	if prior := gate.broadcasts[key]; prior != nil {
 		gate.mu.Unlock()
 		if prior.digest != digest {
 			return result
 		}
-		select {
-		case <-prior.done:
-			return prior.result
-		case <-ctx.Done():
-			return BroadcastResponse{ExecutionResult: ExecutionResult{Version: InternalVersion, Outcome: Unknown, Reason: "broadcast still executing"}}
-		}
+		return awaitBroadcastRecord(ctx, prior)
 	}
 	if len(gate.broadcasts) >= gate.config.MaxBroadcastRecords {
 		gate.mu.Unlock()
@@ -126,12 +108,63 @@ func (gate *Gate) admitBroadcast(ctx context.Context, role string, request Broad
 		close(record.done)
 		gate.mu.Unlock()
 	}()
-	// 完整临界区内形成受众并准入，与断线替换及普通出站共享同一连接表。
+	return gate.enqueueBroadcastLocked(ctx, role, request)
+}
+
+// broadcastAuthorized 核对发起方能否发这条广播：Game 只能发给自己服的在线玩家或指定玩家，发起方身份须与当前
+// 持锁代次一致。
+func (gate *Gate) broadcastAuthorized(ctx context.Context, role string, request BroadcastRequest) bool {
+	if role == "game" && (request.Audience.Kind == AllOnline || (request.Audience.Kind == GameOnline && request.Audience.GameID != request.Source.ServerID)) {
+		return false
+	}
+	match, err := gate.deps.Matches(ctx, role, request.Source)
+	return err == nil && match
+}
+
+// broadcastDigest 是广播内容身份的摘要。Budget/Target 不属于内容身份，允许同 ID 在窗口内查询同一结果，拒绝换内容复用。
+func (gate *Gate) broadcastDigest(request BroadcastRequest) ([32]byte, error) {
+	encoded, err := gate.codec.Marshal(struct {
+		Audience  Audience
+		MessageID uint32
+		Payload   []byte
+	}{request.Audience, request.MessageID, request.Payload})
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(encoded), nil
+}
+
+// dropExpiredBroadcastsLocked 删除已过期且已有结论的广播记录；仍在执行的记录保留。调用方持 gate.mu。
+func (gate *Gate) dropExpiredBroadcastsLocked(now time.Time) {
+	for key, record := range gate.broadcasts {
+		if !now.Before(record.expires) {
+			select {
+			case <-record.done:
+				delete(gate.broadcasts, key)
+			default:
+			}
+		}
+	}
+}
+
+// awaitBroadcastRecord 等同一广播的已有记录给出结论；等不到（ctx 结束）按 Unknown 返回，原广播可能仍在执行。
+func awaitBroadcastRecord(ctx context.Context, prior *broadcastRecord) BroadcastResponse {
+	select {
+	case <-prior.done:
+		return prior.result
+	case <-ctx.Done():
+		return BroadcastResponse{ExecutionResult: ExecutionResult{Version: InternalVersion, Outcome: Unknown, Reason: "broadcast still executing"}}
+	}
+}
+
+// enqueueBroadcastLocked 在完整临界区内形成受众并准入，与断线替换及普通出站共享同一连接表。调用方持 gate.mu。
+// ctx 结束后仍计入匹配，但记为拒绝。
+func (gate *Gate) enqueueBroadcastLocked(ctx context.Context, role string, request BroadcastRequest) BroadcastResponse {
 	players := make(map[int64]struct{}, len(request.Audience.PlayerIDs))
 	for _, id := range request.Audience.PlayerIDs {
 		players[id] = struct{}{}
 	}
-	result.ExecutionResult = ExecutionResult{Version: InternalVersion, Outcome: Completed}
+	result := BroadcastResponse{ExecutionResult: ExecutionResult{Version: InternalVersion, Outcome: Completed}}
 	for _, connection := range gate.connections {
 		if !connection.active {
 			continue
