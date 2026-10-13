@@ -83,3 +83,12 @@ func TestLogicClockIsSafeForConcurrentUse(t *testing.T) {
 		t.Fatalf("final offset %v is not one of the values written", got)
 	}
 }
+
+func TestProcessClockKeepsConfiguredSubmillisecondOffset(t *testing.T) {
+	c := NewLogicClock()
+	want := 1500 * time.Microsecond
+	c.SetOffset(want)
+	if got := c.Offset(); got != want {
+		t.Fatalf("process offset=%s registry offset=%s", got, want)
+	}
+}
