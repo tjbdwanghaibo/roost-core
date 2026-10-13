@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
+
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -235,13 +235,6 @@ func SyncProjectContext(ctx context.Context, root string) (SyncResult, error) {
 	if err := generate(ctx, stage, GenerateOptions{Stdout: io.Discard}); err != nil {
 		return SyncResult{}, inProjectPaths(fmt.Errorf("refresh generated artifacts: %w", err), stage, absRoot)
 	}
-	// An obsolete output is expressed as "absent from the staging tree";
-	// planStagedProjectCommit then mirrors the deletion into the project,
-	// keeping the bytes for rollback. Generators only ever write, so outputs
-	// that moved have to be pruned here.
-	if err := pruneLegacyKubernetesBase(stage); err != nil {
-		return SyncResult{}, fmt.Errorf("prune relocated outputs: %w", err)
-	}
 	changes, err := planStagedProjectCommit(absRoot, stage, manifest)
 	if err != nil {
 		return SyncResult{}, err
@@ -355,7 +348,7 @@ func planStagedProjectCommit(root, stage string, manifest Manifest) ([]syncChang
 			return relErr
 		}
 		rel = filepath.ToSlash(rel)
-		if !hasGeneratedHeader(path, raw) && !isGeneratedData(path) && !isLegacyKubernetesBase(rel, raw) && !protocol.IsGeneratedArtifact(rel, raw) {
+		if !hasGeneratedHeader(path, raw) && !isGeneratedData(path) && !protocol.IsGeneratedArtifact(rel, raw) {
 			return nil
 		}
 		if _, exists := paths[rel]; exists {
@@ -471,56 +464,6 @@ func planExplicitStagedFiles(root, stage string, rels ...string) ([]syncChange, 
 		}
 	}
 	return changes, nil
-}
-
-// isLegacyKubernetesBase recognises the Kubernetes base manifests generators
-// before the base/ directory wrote straight under deploy/k8s/, without a
-// generated header. They are codegen's output and must go when the base
-// moves, or the tree carries two copies of every workload — but only files
-// this generator demonstrably wrote qualify: the fixed names it used, or a
-// manifest in the "roost" namespace. A hand-written deploy/k8s/extra.yaml
-// stays. Secret examples were never owned and are left alone.
-func isLegacyKubernetesBase(rel string, raw []byte) bool {
-	dir, name := path.Split(rel)
-	if dir != "deploy/k8s/" || !strings.HasSuffix(name, ".yaml") || strings.HasPrefix(name, "secret.") {
-		return false
-	}
-	switch name {
-	case "kustomization.yaml", "namespace.yaml", "service-account.yaml", "network-policy.yaml":
-		return bytes.Contains(raw, []byte("roost"))
-	}
-	return bytes.Contains(raw, []byte("namespace: roost"))
-}
-
-// pruneLegacyKubernetesBase removes, from the staging tree, the Kubernetes
-// base manifests that pre-base/ generators wrote straight under deploy/k8s/.
-// The commit planner turns each into a removal of the real file — provided it
-// recognises the real file as codegen's, which isLegacyKubernetesBase does.
-func pruneLegacyKubernetesBase(stage string) error {
-	entries, err := os.ReadDir(filepath.Join(stage, "deploy", "k8s"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	for _, entry := range entries {
-		if !entry.Type().IsRegular() {
-			continue
-		}
-		full := filepath.Join(stage, "deploy", "k8s", entry.Name())
-		raw, err := os.ReadFile(full)
-		if err != nil {
-			return err
-		}
-		if !isLegacyKubernetesBase("deploy/k8s/"+entry.Name(), raw) {
-			continue
-		}
-		if err := os.Remove(full); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func mergeSyncChanges(groups ...[]syncChange) ([]syncChange, error) {
