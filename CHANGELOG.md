@@ -48,6 +48,7 @@
 
 - Nest 增加按 Entity Kind 选择的长业务池；长短业务与 I/O 共用 ID tails。新增 `Await(work, resume)` 和可选 `WithResumeTargets`，支持无回滚 memory handler 的锁外查询与匿名恢复。Cast 拒绝未声明目标；长短业务池禁止同步等待，I/O 禁止 Guard。新增 `nest.long` 配置和实体生成标记 `businessPool=long`，使用及迁移见 docs/framework/NEST-AWAIT.md。
 
+- 全仓测试按有用价值整理（2026-10-13）：Git 跟踪的测试文件 1427 → 711、约 23.5 万 → 22.6 万行；零散 promises / RR / Bugfix 命名文件按功能主题合并，测试名与头注释改写为当前承诺（过程只留一行“历史”）。删除或并入约 60 个“同入口、同断言”的重复用例，每条都先把独有断言并入保留用例；并发、恢复、协议、状态机回归与结构守卫全部保留。各包语句覆盖率不变（个别计时分支的跑间波动除外），全仓 test / race / 门禁通过。整理规则见 docs/maintenance/README.md §7。
 - 全仓按功能主题合并202份零散测试为80份，净减少122份；4687个测试/基准/示例/fuzz入口及全部测试声明语法保持一致，更新对应实现文档引用。
 
 - Nest显式构造job目标存储，移除可变输出缓冲区接口；整理生成器签名/handler回归和Saga行为测试，删除历史符号扫描及内部组织门禁，改善生成handler局部命名与中文说明。
