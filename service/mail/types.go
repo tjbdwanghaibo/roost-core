@@ -233,8 +233,6 @@ const (
 	StatusDeleted Status = "deleted"
 )
 
-func (s Status) terminal() bool { return s == StatusDeleted }
-
 // Audience says who an envelope addresses.
 type Audience string
 
