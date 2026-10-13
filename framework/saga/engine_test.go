@@ -429,12 +429,6 @@ func TestNestStartEffectHasStableIdentity(t *testing.T) {
 	}
 }
 
-func TestNestStartEffectRejectsUnknownWireVersion(t *testing.T) {
-	if _, err := DecodeStartEffect([]byte(`{"version":2,"start":{"Type":"rally","BusinessKey":"r-1"}}`)); !errors.Is(err, ErrInvalidRecord) {
-		t.Fatalf("err=%v", err)
-	}
-}
-
 func TestNestCompletionEffectHasStableCommandIdentityAndWireVersion(t *testing.T) {
 	completion := Completion{CommandID: "command-1", IdempotencyKey: "operation-1", SagaID: "saga-1", Success: true, Data: []byte("done")}
 	effect, err := NewCompletionEffect(completion)
@@ -627,14 +621,6 @@ func TestDefinitionRejectsUnsafeTransportSubject(t *testing.T) {
 	definition.Steps[0].ForwardTopic = "reserve..troops"
 	if err := definition.Validate(); err == nil {
 		t.Fatal("empty subject token accepted")
-	}
-}
-
-func TestEngineRejectsPublisherBatchWhichCanOutliveLease(t *testing.T) {
-	options := DefaultOptions()
-	options.PublisherBatch = 5
-	if _, err := NewEngine(newMemoryStore(), PublishFunc(func(context.Context, Command) error { return nil }), options); err == nil {
-		t.Fatal("unsafe publisher batch accepted")
 	}
 }
 

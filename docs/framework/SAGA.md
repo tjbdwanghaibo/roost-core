@@ -176,7 +176,7 @@ raw Mongo step 继续使用 `MongoCommandInbox`，其 handler 运行在 Mongo tr
    - **协调器接收结果的统一规则**（v1.23.1 起，维护者 2026-10-07 选 A，[方案](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/SAGA-COMPLETION-RULE-UNIFIED-2026-10-07.md)）：
      **成功是操作的结论，只要这个操作开过、还没有带结果关闭，就接收**——记录还停在这个操作上就接收为它的结果，记录已离开（放弃关闭）
      就补偿这一步（第 4 条），已带结果关闭是重复；**拒绝是本生这个操作的结论、可重试失败是一次尝试的结论**，只在协调器正等着时接收。
-     判定只在 `judgeCompletion` 一处（行为回归见 `framework/saga/completion_transition_test.go`）；下面三段是这条规则在代际、尝试、退避上的展开（B1、方向 ③、RR-20261006-42）。
+     判定只在 `judgeCompletion` 一处（行为回归见 `framework/saga/completion_test.go`）；下面三段是这条规则在代际、尝试、退避上的展开（B1、方向 ③、RR-20261006-42）。
    - **协调器用同一张表接收结果**（B1，维护者决定 2026-10-05）：completion 的代际从 `CommandID` 解析（第 0 代 `<key>:<attempt>`，
      第 N 代 `<key>:rN:<attempt>`，与铸造 ID 的 `commandID` 同一处），与记录当前代际（`Record.Incarnation`）比较。
      旧一生的拒绝 / 失败**不接收**，只计 `Stats().StaleIncarnation` 与 `saga.completion.stale_incarnation_total{saga_type,phase}`

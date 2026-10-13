@@ -3,14 +3,21 @@ package saga
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
-	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -186,16 +193,9 @@ func inboxReceipts(client *mongotest.Client) *mongotest.Collection {
 	return client.Collection("game", dataEngineReceiptCollection)
 }
 
-// The projector lives in another package and queries the operation state document this
-// package writes. Nothing in the compiler ties the two together, and a
-// mismatch is silent by construction: an unsatisfiable predicate looks exactly
-// like a legitimately stale lease, so every fenced transaction would be
-// acknowledged as a skipped no-op with no error and no failing test.
-//
-// This closes that gap by round-tripping a real state document through BSON and
-// evaluating the real predicate against it, then verifying the predicate
-// rejects every single-field deviation. A rename or a type change on either
-// side fails here.
+// 投影器在另一个包里按本包写的操作状态文档做 fence 判定，编译器不把两边连起来，而且不匹配是静默的：
+// 无法满足的谓词看起来与正常过期的租约一样，每个被 fence 的事务都会被当成跳过的空操作确认。
+// 这里把真实状态文档经 BSON 往返后用真实谓词求值，并验证每个单字段偏差都被拒绝；任一侧改名或改类型都会在此变红。
 func TestDataEngineOperationStateSatisfiesProjectorFencePredicate(t *testing.T) {
 	client := mongotest.NewClient()
 	inbox, err := NewDataEngineStepInbox(client, "game", DataEngineStepInboxOptions{
@@ -266,5 +266,274 @@ func TestDataEngineOperationStateSatisfiesProjectorFencePredicate(t *testing.T) 
 	}
 	if err := operations.FindOne(context.Background(), fence.Predicate(now), &found); !errors.Is(err, fmongo.ErrNotFound) {
 		t.Fatalf("settled attempt still matched the pending predicate: %v", err)
+	}
+}
+
+// Reserve 在事务内读到权威回执时顺手结算状态文档（markCompleted）。返回值以回执为准、不因这次写失败而改变，
+// 但失败不能静默：每次失败记一条带 command_id 与原因的 Warn，并累加 saga.step_inbox.mark_completed_error_total。
+// 历史：RR-20260927-16。
+func TestReserveReportsSwallowedMarkCompletedFailure(t *testing.T) {
+	client := newDataEngineInboxMongo()
+	injected := errors.New("injected operation state update failure")
+	flaky := &operationUpdateFailOnce{Client: client, err: injected}
+	inbox, err := NewDataEngineStepInbox(flaky, "game", DataEngineStepInboxOptions{Owner: "worker-1", LeaseDuration: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := dataEngineCommand("command-mark", "operation-mark", "a")
+	if _, err := inbox.Reserve(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	completion := Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: true, Data: []byte("done"), CompletedAt: time.Now().UTC()}
+	effect, err := NewCompletionEffect(completion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inboxReceipts(client).Seed(dataEngineReceipt{
+		ID: dataEngineStepNamespace + "/" + command.ID, Digest: mustCommandDigest(t, command), Payload: effect.Payload,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	before := markCompletedErrors()
+	flaky.armed.Store(true)
+
+	reservation, err := inbox.Reserve(context.Background(), command)
+	// 返回值不变：第一次尝试的写错误让事务中止，驱动重跑后结算成功，Reserve 照常返回 Duplicate + 回执里的完成结果。
+	if err != nil || !reservation.Duplicate || reservation.Completion.CommandID != command.ID || string(reservation.Completion.Data) != "done" {
+		t.Fatalf("reservation=%+v err=%v, want the duplicate completion from the receipt", reservation, err)
+	}
+	if flaky.failed.Load() != 1 {
+		t.Fatalf("premise: injected operation state update failures=%d, want 1", flaky.failed.Load())
+	}
+	if got := markCompletedErrors() - before; got != 1 {
+		t.Fatalf("saga.step_inbox.mark_completed_error_total grew by %d, want 1: the swallowed failure is silent", got)
+	}
+	text := logs.String()
+	if !strings.Contains(text, "level=WARN") || !strings.Contains(text, "command_id="+command.ID) || !strings.Contains(text, injected.Error()) {
+		t.Fatalf("no warning with the command id and cause for the swallowed markCompleted failure; logs=%q", text)
+	}
+	if state := inboxOperation(t, client, command.IdempotencyKey); state.CommandID != command.ID || state.Status != operationStatusSettled || state.Result != operationResultSuccess {
+		t.Fatalf("operation state=%+v, want the attempt settled after the retried transaction", state)
+	}
+}
+
+func markCompletedErrors() int64 {
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name == "saga.step_inbox.mark_completed_error_total" {
+			return metric.Value
+		}
+	}
+	return 0
+}
+
+// operationUpdateFailOnce 在 armed 之后让状态文档集合的第一次 UpdateOne 返回 err（经伪 Mongo 的事务语义：写错误中止事务）。
+type operationUpdateFailOnce struct {
+	*mongotest.Client
+	err    error
+	armed  atomic.Bool
+	failed atomic.Int32
+}
+
+func (m *operationUpdateFailOnce) Database(name string) fmongo.IDatabase {
+	return operationFailDatabase{IDatabase: m.Client.Database(name), mongo: m}
+}
+
+type operationFailDatabase struct {
+	fmongo.IDatabase
+	mongo *operationUpdateFailOnce
+}
+
+func (d operationFailDatabase) Collection(name string) fmongo.ICollection {
+	coll := d.IDatabase.Collection(name)
+	if name != dataEngineOperationCollection {
+		return coll
+	}
+	return operationFailCollection{ICollection: coll, mongo: d.mongo}
+}
+
+type operationFailCollection struct {
+	fmongo.ICollection
+	mongo *operationUpdateFailOnce
+}
+
+func (c operationFailCollection) UpdateOne(ctx context.Context, filter any, update any) (*fmongo.UpdateResult, error) {
+	if c.mongo.armed.CompareAndSwap(true, false) {
+		c.mongo.failed.Add(1)
+		// 与服务端一致：事务里的写错误中止事务。借真实集合一次注定失败的写入登记中止原因。
+		raw := c.mongo.Client.Collection("game", dataEngineOperationCollection)
+		raw.Errors["UpdateOne"] = c.mongo.err
+		defer delete(raw.Errors, "UpdateOne")
+	}
+	return c.ICollection.UpdateOne(ctx, filter, update)
+}
+
+// 原生步骤的 Nest 事务在 WAL 准入处被实体屏障拒绝（ErrFencedEntityPending）时整体回滚、没有带本 token 的记录进 WAL：
+// 消费者交还刚拿到的租约，屏障解除后的重投立刻重新 Reserve 并执行 handler，而不是读到“租约有效”的 Duplicate
+// 一直等到租约过期；其他 handler 错误照旧保留租约。历史：RR-20260926-30。
+func TestDataEngineStepHandsBackTheLeaseWhenTheEntityIsFenced(t *testing.T) {
+	now := time.Now()
+	command := Command{
+		ID: "cmd-fenced", IdempotencyKey: "op-fenced", SagaID: "saga-1", SagaType: "gift", DefinitionVersion: 1,
+		BusinessKey: "gift-1", StepName: "debit", Phase: PhaseForward, Attempt: 1,
+		Topic: "debit", CreatedAt: now, DeadlineAt: now.Add(time.Minute),
+	}
+	raw, err := json.Marshal(commandEnvelope{Version: WireVersion, Command: command})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fenced := errors.Join(corenest.ErrCommitRejected, fmt.Errorf("gift debit: %w", coredata.ErrFencedEntityPending))
+	for name, tc := range map[string]struct {
+		handlerErr error
+		released   bool
+	}{
+		"fenced entity":        {fenced, true},
+		"other handler errors": {errors.New("business adapter failed"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mongoClient := mongotest.NewClient()
+			inbox, err := NewDataEngineStepInbox(mongoClient, "game", DataEngineStepInboxOptions{Owner: "game-1", LeaseDuration: 2 * time.Minute})
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := &startJetStream{}
+			transport, _ := NewJetStreamPublisher(client, "roost.saga")
+			var tokens []uint64
+			handler := func(ctx context.Context, _ Command) (Completion, error) {
+				reservation, _ := ReservationFromContext(ctx)
+				tokens = append(tokens, reservation.Token)
+				return Completion{}, tc.handlerErr
+			}
+			config := StepConsumerConfig{Stream: "ROOST_SAGA", Durable: "game-gift-debit", Topic: "debit", AckWait: 30 * time.Second}
+			if _, err := SubscribeDataEngineStep(context.Background(), client, transport, inbox, config, handler); err != nil {
+				t.Fatal(err)
+			}
+			if err := client.handler(context.Background(), &fnats.JetStreamMsg{Data: raw}); !errors.Is(err, tc.handlerErr) {
+				t.Fatalf("delivery=%v, want the handler error", err)
+			}
+			claim := inboxOperation(t, mongoClient, command.IdempotencyKey)
+			if released := !claim.LeaseUntil.After(time.Now()); released != tc.released || claim.LeaseToken != 1 {
+				t.Fatalf("after the failed delivery: lease released=%v want %v (token=%d lease_until=%v)", released, tc.released, claim.LeaseToken, claim.LeaseUntil)
+			}
+			if !tc.released {
+				return
+			}
+			if err := client.handler(context.Background(), &fnats.JetStreamMsg{Data: raw}); !errors.Is(err, tc.handlerErr) {
+				t.Fatalf("redelivery=%v", err)
+			}
+			if len(tokens) != 2 || tokens[1] != 2 {
+				t.Fatalf("redelivery after the barrier did not reserve again: handler tokens=%v", tokens)
+			}
+		})
+	}
+}
+
+// 取消等待不等于撤销已经可能进入 WAL 的业务：普通取消保留租约，晚到的权威回执出现后重投只回放不重跑；
+// 只有明确在 WAL 之前的 ErrFencedEntityPending 才交还租约。这里注入持久回执，不代替真实 WAL / 投影验收。
+func TestNativeStepCancellationAndFenceRecovery(t *testing.T) {
+	for _, scenario := range []string{"cancelled_delivery", "fenced_before_wal"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := context.Background()
+			backend := mongotest.NewClient()
+			inbox, err := NewDataEngineStepInbox(backend, "game", DataEngineStepInboxOptions{Owner: "native-review", LeaseDuration: time.Minute})
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			inbox.now = func() time.Time { return now }
+			command := dataEngineCommand("native-cancel", "native-operation", "initial")
+			client := &startJetStream{}
+			transport, err := NewJetStreamPublisher(client, "roost.saga")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cancelCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			calls := 0
+			var tokens []uint64
+			_, err = SubscribeDataEngineStep(ctx, client, transport, inbox, StepConsumerConfig{Stream: "SAGA", Durable: "native-review", Topic: command.Topic}, func(deliveryCtx context.Context, c Command) (Completion, error) {
+				calls++
+				reservation, ok := ReservationFromContext(deliveryCtx)
+				if !ok {
+					t.Fatal("missing active reservation")
+				}
+				tokens = append(tokens, reservation.Token)
+				if calls == 1 {
+					if scenario == "cancelled_delivery" {
+						cancel()
+						return Completion{}, context.Canceled
+					}
+					return Completion{}, coredata.ErrFencedEntityPending
+				}
+				// 第二次 handler 代表业务最终持久提交；只使用权威回执推进 ACK，不信返回值。
+				completion := Completion{CommandID: c.ID, IdempotencyKey: c.IdempotencyKey, SagaID: c.SagaID, Success: true}
+				effect, err := NewCompletionEffect(completion)
+				if err != nil {
+					return Completion{}, err
+				}
+				_, err = inbox.receipts().InsertOne(deliveryCtx, dataEngineReceipt{ID: dataEngineStepNamespace + "/" + c.ID, Digest: mustCommandDigest(t, c), Payload: effect.Payload})
+				return completion, err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(commandEnvelope{Version: WireVersion, Command: command})
+			if err != nil {
+				t.Fatal(err)
+			}
+			message := &fnats.JetStreamMsg{Data: raw}
+			firstCtx := ctx
+			want := coredata.ErrFencedEntityPending
+			if scenario == "cancelled_delivery" {
+				firstCtx = cancelCtx
+				want = context.Canceled
+			}
+			if err := client.handler(firstCtx, message); !errors.Is(err, want) {
+				t.Fatalf("first delivery=%v", err)
+			}
+			var claim stepOperation
+			if err := inbox.operations().FindOne(ctx, bson.M{"_id": command.IdempotencyKey}, &claim); err != nil {
+				t.Fatal(err)
+			}
+			if claim.CommandID != command.ID || claim.LeaseToken != 1 || claim.Status != operationStatusPending {
+				t.Fatalf("first claim=%+v", claim)
+			}
+			if scenario == "cancelled_delivery" {
+				if !claim.LeaseUntil.After(now) {
+					t.Fatal("unknown in-flight result lost lease")
+				}
+				if reservation, err := inbox.Reserve(ctx, command); err != nil || !reservation.Duplicate {
+					t.Fatalf("cancel retry lost fencing: %+v %v", reservation, err)
+				}
+				completion := Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: true}
+				effect, err := NewCompletionEffect(completion)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := inbox.receipts().InsertOne(ctx, dataEngineReceipt{ID: dataEngineStepNamespace + "/" + command.ID, Digest: mustCommandDigest(t, command), Payload: effect.Payload}); err != nil {
+					t.Fatal(err)
+				}
+			} else if claim.LeaseUntil.After(now) {
+				t.Fatal("unused fenced lease was not released")
+			}
+			for i := 0; i < 2; i++ {
+				if err := client.handler(ctx, message); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario == "cancelled_delivery" && calls != 1 {
+				t.Fatalf("late receipt reran business: calls=%d", calls)
+			}
+			if scenario == "fenced_before_wal" && (calls != 2 || len(tokens) != 2 || tokens[1] != tokens[0]+1) {
+				t.Fatalf("fence recovery did not acquire new generation: calls=%d tokens=%v", calls, tokens)
+			}
+			if err := inbox.operations().FindOne(ctx, bson.M{"_id": command.IdempotencyKey}, &claim); err != nil || claim.CommandID != command.ID || claim.Status != operationStatusSettled {
+				t.Fatalf("claim not settled=%+v err=%v", claim, err)
+			}
+		})
 	}
 }

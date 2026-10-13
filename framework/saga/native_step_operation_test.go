@@ -13,30 +13,28 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	deengine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// U-0280：原生步骤的“最多生效一次”以操作实例（saga + 步骤 + 方向）为单位，不以尝试（CommandID）为单位。
+// 原生步骤的“最多生效一次”以操作实例（saga + 步骤 + 方向）为单位，不以尝试（CommandID）为单位。
 //
-// 这里把演练 drill6 的三种交错做成确定性用例：协调器用内存 Store、手动推进时钟（processClaimed），
-// 原生收件箱是 mongotest 上真实的 DataEngineStepInbox，“进程崩溃后 WAL 重放投影”用真实的
-// dataengine MongoStore.Project 投影同一条 CommitRecord（含 lease fence、回执、completion effect
-// 和一笔业务写），所以 fence 的接受 / 跳过就是生产的判定。业务写是往 debits 集合插入一份以尝试号
-// 区分的文档：debits 里的文档数就是这一步真实生效的次数。
+// 协调器用内存 Store、手动推进时钟（processClaimed）；原生收件箱是 mongotest 上真实的 DataEngineStepInbox；
+// “进程崩溃后 WAL 重放投影”用真实的 dataengine MongoStore.Project 投影同一条 CommitRecord（含 lease fence、回执、
+// completion effect 和一笔业务写），fence 的接受 / 跳过就是生产判定。业务写往 debits 插入以尝试号区分的文档：
+// debits 的文档数就是这一步真实生效的次数。
 //
-//   - (a) 尝试 k 已提交、协调器已发出 k+1；k 的结果在 k+1 等待期间到达并被接收，随后 k+1 投递：
-//     k+1 不能再执行，只回放 k 的结果。
-//   - (b) k 的结果在 k+1 投递前没有送达协调器（effect 积压或丢失）；k+1 投递时必须回放 k 的结果，
-//     协调器照常接收并前进，而不是让 k+1 再扣一次。原来这里是“退避期间到达、被以 ErrNotWaiting 丢弃”，
-//     RR-20261006-42 起退避中送达的成功被接收（b'）。
-//   - (c) 协调器放弃（重试用尽）之后，k 才由 WAL 重放投影：命令截止已过，租约封顶在截止时间，
-//     记录必须被跳过、不留回执、不改业务；而“截止前已投影、结果在放弃后才送达”的残余窗口
-//     只告警（计数 + ERROR），不重开终态。
+//   - (a) 尝试 k 已提交、协调器已发出 k+1；k 的结果在 k+1 等待期间到达并被接收，随后 k+1 投递：k+1 不再执行，只回放 k 的结果。
+//   - (b) k 的结果在 k+1 投递前没有送达协调器（effect 积压或丢失）：k+1 投递时回放 k 的结果，协调器接收并前进，
+//     而不是让 k+1 再扣一次；(b') 退避中送达的成功被接收。
+//   - (c) 协调器放弃（重试用尽）之后 k 才由 WAL 重放投影：命令截止已过、租约封顶在截止时间，记录被跳过、不留回执、
+//     不改业务；“截止前已投影、结果在放弃后才送达”的残余窗口只告警（计数 + ERROR），不重开终态。
 //   - (d) 投影积压：k 已准入 WAL 但未投影，k+1 接替它（supersede），k 之后的投影被跳过，k+1 执行一次。
+//
+// 历史：U-0280（演练 drill6 的交错）。
 func TestNativeStepTakesEffectAtMostOncePerOperation(t *testing.T) {
 	t.Run("a: late result accepted while k+1 waits, k+1 replays it", func(t *testing.T) {
 		w := newNativeWorld(t, 15, time.Now().UTC())
@@ -163,8 +161,7 @@ func TestNativeStepTakesEffectAtMostOncePerOperation(t *testing.T) {
 	})
 }
 
-// S5 与 U-0280 重叠的交错：deadline / compensation / Resume 与晚到回执、同一操作多个结果或旧尝试、
-// receipt / tombstone TTL 之后的重投。
+// 协调器决定（截止、补偿、Resume）与晚到回执、同一操作的多个结果或旧尝试、receipt / tombstone TTL 之后重投的交错。
 func TestNativeStepOperationInterleavingsWithCoordinatorDecisions(t *testing.T) {
 	// saga 方向 ④（2026-10-07）：之前迟到成功只告警、saga 仍 Failed，运维 Resume 让新一生回放它、继续向前。现在协调器
 	// 自己把 saga 带回补偿、只补偿这一步，不需要 Resume（Compensating 也不能 Resume）；这一步仍然只执行过一次。
@@ -779,15 +776,14 @@ func TestNativeStepConsumerHandlesOperationOutcomes(t *testing.T) {
 	})
 }
 
-// C' 在 MongoStore 上：tombstone 记录关闭方式；放弃关闭后到达的成功告警，带结果关闭后的旧结果按重复处理，
-// U-0280 之前写的 tombstone（没有 closure 字段）不告警；Resume 后的新一生带结果关闭时改记为“带结果”。
+// MongoStore 的 tombstone 记录关闭方式：放弃关闭后到达的成功告警，带结果关闭后的旧结果按重复处理，
+// 没有 closure 字段的旧形状 tombstone 不告警；Resume 后的新一生带结果关闭时改记为“带结果”。
 func TestMongoStoreTombstoneTellsAbandonedFromResolved(t *testing.T) {
 	ctx := context.Background()
 	t.Run("abandoned by timeout, then a late success", func(t *testing.T) {
 		engine, store, waiting := waitingOnMongo(t)
 		// rally 的 march 步骤 MaxAttempts 2：库里的记录已是第 2 次尝试，超时即用尽 → 补偿 reserve。
-		// 领取走真实的 ClaimDue（带租约 fence）；之前 mongotest 不支持 ClaimDue 的 $in []Status，
-		// 这里绕开领取直接交给 processClaimed（RR-20261006-08，O-S5-6）。
+		// 领取走真实的 ClaimDue（带租约 fence），再交给 processClaimed。
 		record := waiting.Clone()
 		record.Attempt, record.Version = 2, waiting.Version+1
 		record.CommandID = commandID(record.OperationKey, 0, 2)
@@ -866,4 +862,74 @@ func TestMongoStoreTombstoneTellsAbandonedFromResolved(t *testing.T) {
 			t.Fatalf("history=%+v err=%v, want the tombstone upgraded to a result closure", history, err)
 		}
 	})
+}
+
+// MongoStore：以失败 receipt 关闭的操作记为放弃关闭，只有成功 receipt 记为带结果关闭。
+func TestMongoStoreTombstoneOfAFailureCloseIsAbandoned(t *testing.T) {
+	ctx := context.Background()
+	for name, receipt := range map[string]Completion{
+		"retryable failure exhausts the step": {Success: false, Retryable: true, Error: "busy"},
+		"refusal":                             {Success: false, Error: "refused"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, store, record := waitingOnMongo(t)
+			after := record.Clone()
+			after.Version++
+			after.Status, after.NextRunAt, after.OperationKey, after.CommandID = StatusCompensating, record.NextRunAt, "", ""
+			after.Phase, after.Step = PhaseCompensate, 0
+			receipt.CommandID, receipt.IdempotencyKey, receipt.SagaID, receipt.CompletedAt = record.OperationKey+":0", record.OperationKey, record.ID, time.Now().UTC()
+			if _, err := store.Apply(ctx, ApplyRequest{ExpectedVersion: record.Version, After: after, Receipt: &receipt, CloseOperation: record.OperationKey}); err != nil {
+				t.Fatal(err)
+			}
+			live := Completion{CommandID: record.CommandID, IdempotencyKey: record.OperationKey, SagaID: record.ID, Success: true}
+			history, err := store.CompletionHistory(ctx, live)
+			if err != nil || !history.Recorded || history.Receipt || history.Closure != OperationAbandoned {
+				t.Fatalf("history of a success after the operation closed on a %s = %+v err=%v, want an abandoned tombstone (the coordinator accounted for no effect)", name, history, err)
+			}
+		})
+	}
+}
+
+// 较早尝试 k 已生效但 completion 没有送达协调器（effect 积压 / 丢失），最后一次尝试 k+1 的投递晚于它自己的截止
+// （不执行、直接 ack）：ack 前仍要把同一操作已生效的成功经 saga 结果流重发——协调器还在等就接收，已放弃就告警；
+// 否则扣款既不在 CompletedSteps 里、不被补偿，也没有告警。
+func TestNativeStepExpiredDeliveryStillReplaysTheOperationsSuccess(t *testing.T) {
+	for name, expire := range map[string]func(*nativeWorld, Command) Command{
+		// 消费者在 Reserve 之前就看到截止已过（U-0281 的过期分支）。
+		"expired before the consumer looks": func(_ *nativeWorld, command Command) Command {
+			command.DeadlineAt = time.Now().UTC().Add(-time.Second)
+			return command
+		},
+		// 消费者检查时还没过截止，Reserve 时已过（ErrCommandExpired）。
+		"expired by the time it is reserved": func(w *nativeWorld, command Command) Command {
+			w.clock = command.DeadlineAt.Add(time.Second)
+			return command
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newNativeWorld(t, 2, time.Now().UTC())
+			w.tick(0)
+			k := w.pendingCommand()
+			recordK := w.commitAttempt(w.inboxA, k)
+			if !w.project(recordK) {
+				t.Fatal("attempt k projected within its deadline was skipped")
+			}
+			w.tick(5 * time.Second)  // k 超时 → 退避；k 的 completion effect 没有送达
+			w.tick(10 * time.Second) // 最后一次尝试 k+1
+			k1 := w.pendingCommand()
+			w.deliverCommand(w.inboxB, expire(w, k1)) // 过期投递：不执行，ack
+			w.tick(16 * time.Second)                  // k+1 超时 → 重试用尽 → Failed
+			before := counterValue("saga.completion.late_after_abandon_total")
+			w.deliverReplays()
+			w.assertEffective(k.IdempotencyKey, 1)
+			if got := w.executions(k.IdempotencyKey); got != 1 {
+				t.Fatalf("handler ran %d times, want 1 (the expired delivery must not run)", got)
+			}
+			record := w.record()
+			if record.CompletedSteps == 0 && counterValue("saga.completion.late_after_abandon_total")-before != 1 {
+				t.Errorf("attempt %s took effect, its completion was dropped during backoff, and the expired delivery of %s was acknowledged without replaying it: the saga ended %s with CompletedSteps=0 and no late_after_abandon alarm — an uncompensated debit nobody is told about",
+					k.ID, k1.ID, record.Status)
+			}
+		})
+	}
 }

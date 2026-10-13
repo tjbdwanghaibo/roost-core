@@ -4,7 +4,7 @@ package saga
 
 // v1.23.0 发版前验证（2026-10-06，记录 docs/bugfix/PRERELEASE-VERIFICATION-2026-10-06.md 第 4 项）：
 // saga 结果消费者在真实 NATS JetStream 上的 nak 退避与 MaxDeliver。单测只在替身上断言了 handler 返回的
-// 错误分类（completion_definition_rollout_promises_test.go），真正的重投节奏和终止由 broker 与
+// 错误分类（completion_test.go），真正的重投节奏和终止由 broker 与
 // nats/driver 的 settle 决定，这里在真实 JetStream 上核对：
 //
 //  1. 结果先到了还没有这个定义版本的协调器（ErrDefinitionMissing，可重试）：按 NakBackoffMin 起翻倍的延迟

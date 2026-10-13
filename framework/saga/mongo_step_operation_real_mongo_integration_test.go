@@ -3,7 +3,7 @@
 package saga
 
 // saga 方向 ②在真实 Mongo 副本集上的红绿：mongotest 按集合检测写冲突，比服务端的文档级冲突保守；
-// “相邻两次尝试都提交”要在真实服务端上复现（两次尝试写的是不同文档，互不冲突）。场景说明见 mongo_step_operation_promises_test.go。
+// “相邻两次尝试都提交”要在真实服务端上复现（两次尝试写的是不同文档，互不冲突）。场景说明见 mongo_store_test.go 的 runMongoStepOperationCases。
 //
 // 运行：source ~/.roost-it/roost-dataengine-it/env.sh 后
 //   GOWORK=off go test -tags integration -count=1 -run '^TestRealMongoStepAttemptsOfOneOperationTakeEffectOnce$' ./framework/saga/

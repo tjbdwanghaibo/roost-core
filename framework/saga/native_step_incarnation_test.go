@@ -8,20 +8,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// B1（维护者决定 2026-10-05）：协调器接收 completion 时核对代际（Resume 一生）。U-0280 的契约说“成功在任何一生里
-// 都不重做、拒绝只在本生回放”，收件箱照此执行，协调器却按 IdempotencyKey 接收同一操作任一生、任一次尝试的结果。
-// 独立审查列出的四个边角各一条用例，跑在 nativeWorld 上（真实 SubscribeDataEngineStep 消费者、mongotest 上真实的
-// DataEngineStepInbox、真实 dataengine MongoStore.Project 投影器），手动推进时钟：
+// 协调器接收 completion 时核对代际（Resume 开启新一生）：成功在任何一生里都不重做，拒绝只在本生回放。
+// 跑在 nativeWorld 上（真实 SubscribeDataEngineStep 消费者、mongotest 上真实的 DataEngineStepInbox、
+// 真实 dataengine MongoStore.Project 投影器），手动推进时钟：
 //
-//   - E1：Resume 之后，上一生晚到的拒绝在新一生等待时到达，不能被新一生接收（只计数），新一生照常执行并前进；
+//   - E1：Resume 之后，上一生晚到的拒绝不被新一生接收（只计数），新一生照常执行并前进；
 //   - E2：放弃后迟到的成功按（操作，代际）只告警一次，不随每次重投重复计数；
 //   - E3：Resume 之后、新一生派发之前到达的上一生成功，直接接收为这个操作的结果，不告警、不再派发这一步；
 //   - E4：补偿方向 ManualRequired 上的人工 Compensate 进入新一生，补偿真正重新执行，而不是复用上一轮的 CommandID。
+//
+// 历史：维护者决定 B1（2026-10-05）。
 func TestCoordinatorChecksTheIncarnationOfACompletion(t *testing.T) {
 	refusal := Completion{Success: false, Error: "sender no longer has the items"}
 
@@ -70,7 +71,7 @@ func TestCoordinatorChecksTheIncarnationOfACompletion(t *testing.T) {
 		if !w.project(recordK) {
 			t.Fatal("attempt k projected within its deadline was skipped")
 		}
-		w.tick(5 * time.Second)  // k 超时 → 退避；k 的 completion effect 还没送达（RR-20261006-42 起退避中送达会被接收）
+		w.tick(5 * time.Second)  // k 超时 → 退避；k 的 completion effect 还没送达（退避中送达会被接收）
 		w.tick(10 * time.Second) // 最后一次尝试 k+1
 		expired := w.pendingCommand()
 		expired.DeadlineAt = time.Now().UTC().Add(-time.Second) // 投递晚于截止：不执行，回放 k 的成功
@@ -113,7 +114,7 @@ func TestCoordinatorChecksTheIncarnationOfACompletion(t *testing.T) {
 		}
 		w.tick(6 * time.Second)
 		if next := w.pendingCommand(); next.Step != 1 {
-			w.deliverCommand(w.inboxB, next) // 修前：新一生派发 debit，收件箱回放 k 的成功
+			w.deliverCommand(w.inboxB, next) // 不应发生：新一生派发 debit，收件箱回放 k 的成功
 			w.deliverReplays()
 		}
 		w.assertEffective(k.IdempotencyKey, 1)
@@ -170,7 +171,7 @@ func TestCoordinatorChecksTheIncarnationOfACompletion(t *testing.T) {
 		}
 	})
 
-	// 正确做法的守卫（修前即绿）：补偿方向 ManualRequired 修复原因后用 Resume，进入新一生、补偿重新执行。
+	// 守卫正确做法：补偿方向 ManualRequired 修复原因后用 Resume，进入新一生、补偿重新执行。
 	t.Run("Resume on a compensation ManualRequired re-runs the compensation", func(t *testing.T) {
 		w := newNativeWorld(t, 1, time.Now().UTC())
 		refundFixed := false
@@ -267,7 +268,7 @@ func TestMongoStoreMarksALateSuccessAlarmOncePerLife(t *testing.T) {
 		if first, err := store.MarkLateSuccessAlarm(ctx, late, 0); err != nil || first {
 			t.Fatalf("mark without a tombstone = %t, %v; want false", first, err)
 		}
-		// U-0280 之前形状的 tombstone：没有 closure、没有 late_alarms。
+		// 旧形状的 tombstone：没有 closure、没有 late_alarms。
 		if err := store.client.(*mongotest.Client).Collection("saga", defaultOperationCollection).Seed(bson.M{"_id": record.OperationKey, "saga_id": record.ID, "closure": operationClosureAbandoned, "created_at": record.CreatedAt}); err != nil {
 			t.Fatal(err)
 		}

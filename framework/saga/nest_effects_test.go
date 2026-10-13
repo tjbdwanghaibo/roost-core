@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 )
 
 func TestNestCompletionRejectsForeignSagaRouteBeforeMutation(t *testing.T) {

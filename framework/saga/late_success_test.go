@@ -3,12 +3,13 @@ package saga
 import (
 	"bytes"
 	"context"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 func TestNativeStepStaleAttemptRetryableFailureDoesNotAbandonTheLastAttempt(t *testing.T) {
