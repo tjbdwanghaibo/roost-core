@@ -223,9 +223,8 @@ func (s *MongoCommitter) EnsureRemoteStorage(ctx context.Context) error {
 	}
 	if err := s.controlDB().Collection(remoteTxCollection).EnsureIndexes(ctx, []fmongo.IndexModel{
 		{Keys: bson.D{{Key: "state", Value: 1}, {Key: "created_at", Value: 1}}, Name: "state_created_at"},
-		// 沿用原有索引名，EnsureIndexes 才能替换按 created_at 让 Applied outbox 记录过期的旧索引。只有已确认的记录带
-		// expires_at；未发布的提交永远不能过期。
-		{Keys: bson.D{{Key: "expires_at", Value: 1}}, Name: "created_at_ttl", Sparse: true, TTL: remoteTransactionTTLSeconds(ttl), RecreateOnConflict: true},
+		// 只有已确认的记录带 expires_at；未发布的提交永远不能过期（稀疏索引）。
+		{Keys: bson.D{{Key: "expires_at", Value: 1}}, Name: "expires_at_ttl", Sparse: true, TTL: remoteTransactionTTLSeconds(ttl)},
 	}); err != nil {
 		return fmt.Errorf("remote_entity: ensure transaction indexes: %w", err)
 	}

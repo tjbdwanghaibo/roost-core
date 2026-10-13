@@ -387,7 +387,9 @@ func TestMongoCommitterCASIdempotencySnapshotAndOutbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	txCollection := mongo.Collection("control", remoteTxCollection)
-	if len(txCollection.Indexes) != 2 || !txCollection.Indexes[1].Sparse || !txCollection.Indexes[1].RecreateOnConflict || txCollection.Indexes[1].TTL <= 0 {
+	// 只建当前的 expires_at TTL 索引：不沿用旧索引名、不替换旧的 created_at TTL 索引。
+	if len(txCollection.Indexes) != 2 || txCollection.Indexes[1].Name != "expires_at_ttl" || !txCollection.Indexes[1].Sparse ||
+		txCollection.Indexes[1].RecreateOnConflict || txCollection.Indexes[1].TTL <= 0 {
 		t.Fatalf("unsafe transaction TTL indexes: %+v", txCollection.Indexes)
 	}
 	commit.LockFence = testWriteGrant(t, store, id).Fence
