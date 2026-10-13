@@ -45,8 +45,7 @@ func NewVarietyDao() *VarietyDao {
 	// and never goes through this DAO's own setter, so an entity that was
 	// CREATED rather than loaded would have an unbound nested value: the
 	// change marks nothing, never enters the persist patch, and is lost
-	// without a word until the entity has been stored and read back once
-	// (U-0245).
+	// without a word until the entity has been stored and read back once.
 	d.Init()
 	return d
 }
@@ -648,7 +647,7 @@ func (d *VarietyDao) marshalPersistPatchBSON(change nest.PersistChange) (dataeng
 
 // PersistFieldNames implements nest.PersistFieldNamer: the stored names of the
 // persistent fields in mask. A durability=memory transaction that changes one
-// of them fails and names them (RR-20261006-41).
+// of them fails and names them.
 func (d *VarietyDao) PersistFieldNames(mask uint64) []string {
 	var names []string
 	if mask&varietyDaoFieldPersistOnly != 0 {
@@ -669,7 +668,7 @@ func (d *VarietyDao) PersistFieldNames(mask uint64) []string {
 // It exists because the bit constants themselves are unexported — a packer
 // written outside this package can hand a mask to MarshalSync but cannot look
 // inside it, which is fine until the game has its own client protocol and has
-// to decide what changed (ARCH-06).
+// to decide what changed.
 //
 // **Bit is stable only within this generated schema.** Anything that outlives
 // the build — a stored projection, a client's cached layout — keys on Name or

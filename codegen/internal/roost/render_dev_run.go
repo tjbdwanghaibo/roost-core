@@ -125,7 +125,7 @@ register_game_server() {
   # servers however their account collaborators decide.
   if [ -d cmd/accountctl ] && [ -f configs/service/config.account.yaml ]; then
     # The same Redis the account service reads: addr, password AND db
-    # (RR-20260927-03 — without the db a non-zero database registered the
+    # (without the db a non-zero database registered the
     # server in db 0, and CreateRole answered "account: server is invalid").
     redis=$(awk '/^redis:/{r=1;next} r&&/^  addr:/{print $2;exit} r&&/^[^ ]/{r=0}' configs/service/config.account.yaml | tr -d '"')
     redis_db=$(awk '/^redis:/{r=1;next} r&&/^  db:/{print $2;exit} r&&/^[^ ]/{r=0}' configs/service/config.account.yaml | tr -d '"')
@@ -133,8 +133,7 @@ register_game_server() {
     prefix=$(awk '/^account:/{a=1;next} a&&/^  key_prefix:/{print $2;exit} a&&/^[^ ]/{a=0}' configs/service/config.account.yaml | tr -d '"')
     # redis.cluster_addrs (a comma string or a YAML list) puts the account
     # service on a Redis Cluster and wins over addr, as in the Redis Mod; a
-    # single-node client there only reaches the keys of that node's slots
-    # (RR-20261006-28).
+    # single-node client there only reaches the keys of that node's slots.
     cluster=$(awk '/^redis:/{r=1;next} r&&/^[^ ]/{exit} l&&/^    - /{v=$0; sub(/^    - [ \t]*/, "", v); out=out (out=="" ? "" : ",") v; next} l{exit} r&&/^  cluster_addrs:/{v=$0; sub(/^  cluster_addrs:[ \t]*/, "", v); if (v != "") {out=v; exit}; l=1} END{print out}' configs/service/config.account.yaml | tr -d "\"' ")
     echo "registering game server $SID with the account service"
     if [ -n "$cluster" ]; then

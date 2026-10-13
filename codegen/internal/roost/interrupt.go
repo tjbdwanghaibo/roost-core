@@ -31,7 +31,7 @@ const reraisedSignalGrace = 10 * time.Second
 // in half. Then Main re-raises the signal, so roost still dies of it with the
 // same exit status as before. A second signal ends roost at once.
 //
-// Before B6 the signal was caught inside runCommandTree, only while a go
+// The signal used to be caught inside runCommandTree, only while a go
 // command ran, and re-raised from there; everything that went wrong around it
 // came from dying in
 // the middle of the call stack instead of after it.

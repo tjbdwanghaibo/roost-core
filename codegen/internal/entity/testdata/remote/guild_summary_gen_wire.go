@@ -29,7 +29,7 @@ func DecodeGuildSummary(data []byte) (GuildSummary, error) {
 	return value, nil
 }
 
-// NewGuildSummaryReader binds the DTO to a read-only snapshot source: kit/remoteentity.MirrorSource(registry)
+// NewGuildSummaryReader binds the DTO to a read-only snapshot source: wiring/remoteentity.MirrorSource(registry)
 // (RemoteMirrorMod in a read-only service, or RemoteEntityMod in the owner's process). The reader registers
 // nothing process-wide and has no write, commit or publish capability.
 func NewGuildSummaryReader(source entity.RemoteSnapshotReadOnly) (*entity.RemoteMirrorReader[GuildSummary], error) {

@@ -27,9 +27,9 @@ var transportTemplate = template.Must(template.New("transport").Funcs(templateFu
 //
 // This file is the transport half and depends on roost-core only. The
 // assembly half — Server, OwnerCapabilities, ClientMod, which need
-// roost-kit/mods for the Mod and capability names — is {{.FileBase}}_rpc_assembly_gen.go
+// wiring/mods for the Mod and capability names — is {{.FileBase}}_rpc_assembly_gen.go
 // beside it. The split is what lets an interface move into a core domain
-// package and take its wire types, handler table and BusClient along (M-10).
+// package and take its wire types, handler table and BusClient along.
 //
 // Regenerate with:
 //
@@ -180,10 +180,9 @@ const AffinityMethods = "{{.AffinityMethods}}"
 // discovery is required. AffinityMethods route by key, and reaching "the
 // instance that owns this key" means choosing a sid from the discovered
 // instances; without discovery there is nothing to choose from and the call
-// can only go to the queue group, i.e. to a random instance. That is what the
-// generated client did until RR-20261006-59 (F09-R1) — the marker read as
-// configured and routed at random — so a missing discovery is refused here
-// rather than degraded.
+// can only go to the queue group, i.e. to a random instance — the marker would
+// read as configured and route at random — so a missing discovery is refused
+// here rather than degraded.
 func NewBusClient(b bus.IBus, discovery fetcd.IDiscovery, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
 	if b == nil {
 		return nil, fmt.Errorf("{{.Package}}: bus is nil")
@@ -331,10 +330,10 @@ var assemblyTemplate = template.Must(template.New("assembly").Funcs(templateFunc
 //
 // Assembly half of the {{.Iface}} transport: what a process needs to OWN this
 // service (Server, OwnerCapabilities) or to CALL it from another process
-// (ClientMod). It depends on roost-kit/mods for the Mod and capability names;
+// (ClientMod). It depends on wiring/mods for the Mod and capability names;
 // the wire types, handler table and BusClient in {{.FileBase}}_rpc_gen.go depend
 // on roost-core only, so an interface that moves into a core domain package
-// takes that file with it and leaves this one behind (M-10).
+// takes that file with it and leaves this one behind.
 //
 // Regenerate with:
 //
@@ -531,21 +530,19 @@ func (m *ClientMod) Name() app.ModName { return CapabilityName }
 
 // DependsOn implements app.ModDependencyProvider.
 //
-// It names the Mod that publishes the bus — kit's NATS mod — not the bus
+// It names the Mod that publishes the bus — the wiring NATS Mod — not the bus
 // capability. app resolves dependencies by Mod NAME, so a ClientMod that
 // depended on mods.ModBus ("bus", a capability nobody is named after) could
 // never be assembled in a real process: "unknown mod dependency \"bus\"".
-// That shipped in every generated client until a generated game template
-// tried to start (roost-codegen U-0024).
 {{if .AnyAffinity}}//
 // It also names the etcd Mod: AffinityMethods route by key, which needs the
-// discovery that Mod publishes (RR-20261006-59). A process without it is
+// discovery that Mod publishes. A process without it is
 // refused at assembly rather than left to route those calls at random.
 func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats, mods.ModEtcd} }
 {{else}}func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }
 {{end}}
 
-// clientModConfig is what the client Mod reads (maintainer decision A4 ①):
+// clientModConfig is what the client Mod reads (maintainer decision):
 // the declaration the App checks before any Mod Init, and Init reads it with
 // app.LoadConfig. A bare number for call_timeout is refused rather than read
 // as nanoseconds (5 → 5ns, every call times out), a negative one rather than
@@ -572,7 +569,7 @@ func (m *ClientMod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(client
 // The transport has to follow nats.rpc.transport: an owner with
 // transport=jetstream serves RPC over JetStream only, and a client that always
 // used request-reply got bus.ErrRPCCapturedByJetStream for every call although
-// both processes were configured alike (RR-20261006-74).
+// both processes were configured alike.
 func (m *ClientMod) Init(cfg *viper.Viper) error {
 	var settings clientModConfig
 	if err := app.LoadConfig(cfg, &settings); err != nil {
@@ -596,7 +593,7 @@ func (m *ClientMod) Provide(r *app.Registry) error {
 	}
 {{if .AnyAffinity}}	// AffinityMethods need discovery to reach one instance per key. Refused
 	// here, at startup, when the process has no etcd Mod: the alternative is
-	// the old silent fallback to random routing (RR-20261006-59).
+	// the old silent fallback to random routing.
 	discovery, ok := app.Lookup[fetcd.IDiscovery](r, mods.ModEtcdDiscov)
 	if !ok || discovery == nil {
 		return fmt.Errorf("{{.Package}} client mod: capability %q not found; %s route by an "+

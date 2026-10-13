@@ -8,9 +8,9 @@
 //
 // This file is the transport half and depends on roost-core only. The
 // assembly half — Server, OwnerCapabilities, ClientMod, which need
-// roost-kit/mods for the Mod and capability names — is accounts_rpc_assembly_gen.go
+// wiring/mods for the Mod and capability names — is accounts_rpc_assembly_gen.go
 // beside it. The split is what lets an interface move into a core domain
-// package and take its wire types, handler table and BusClient along (M-10).
+// package and take its wire types, handler table and BusClient along.
 //
 // Regenerate with:
 //

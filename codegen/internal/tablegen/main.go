@@ -497,7 +497,7 @@ func safeTableJSONName(name string) bool {
 // checkJSONFiles is `-json <dir> -check`: the JSON a server will load is held
 // to the rules the schema declares — the same []rules.Rule the generated
 // loader hands configdata (metaRules), checked by the same rules.Check the
-// loader runs on every load and reload (B10). It is early feedback only: the
+// loader runs on every load and reload. It is early feedback only: the
 // loader enforces the rules whether or not anybody ran -check. ref needs the
 // typed tables and is left to the loader. -check goes beyond "is valid JSON".
 func checkJSONFiles(metas []Meta, jsonDir string) error {
@@ -564,7 +564,7 @@ func rowKeyOf(meta Meta, rows []map[string]json.RawMessage) func(int) string {
 
 // metaRules is the one translation of a meta's tags into rules. It feeds the
 // CSV conversion, -check and the Rules literal of the generated loader, so a
-// tag edited in the schema changes all three on the next generate (B10). The
+// tag edited in the schema changes all three on the next generate. The
 // key of a table is unique even without the tag (configdata rejects a
 // duplicate key anyway; saying so here reports it as a rule violation).
 func metaRules(meta Meta) []rules.Rule {

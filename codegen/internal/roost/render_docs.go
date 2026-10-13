@@ -396,7 +396,7 @@ services.<name>.mods 表示该 Service 运行时装配的 Kit Mod。生成器会
 DependsOn 拓扑排序。nest 和 saga 会自动补唯一的 dataengine 持久化引擎及 mongo、nats。
 同一个 Mod 不能同时出现在 shared_mods 和某个 Service 中，未知 Mod 和依赖环会失败。
 
-services.<name>.framework 把该进程声明为一个托管的框架服务（roost-kit/service：account、mail、
+services.<name>.framework 把该进程声明为一个托管的框架服务（roost-core service/：account、mail、
 match、chat 之一）：没有业务 Service，进程就是该服务的 Server 加它的 owner Mod，redis 与
 nats 自动补齐；Mod 需要的协作者写在 internal/service/<name>/collaborators.go（只生成一次，
 默认全部拒绝）。services.<name>.uses 列出业务 Service 要调用的托管服务，生成器给该进程装配

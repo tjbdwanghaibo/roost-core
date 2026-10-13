@@ -504,7 +504,7 @@ func filterSync(fields []FieldDef) []FieldDef {
 // excluded with dao:"-" never reaches FieldDef. A `nopersist,nosync` field is
 // transaction-only state — its setter records the inverse like any other and
 // the rollback snapshot covers it, while its mark function is empty, so it
-// never reaches the commit record, storage or sync (A1, maintainer
+// never reaches the commit record, storage or sync (maintainer
 // 2026-10-05: state a transaction changes lives in the DAO, so that the DAO's
 // rollback is the only rollback). This used to keep only persist or sync
 // fields, which left such a field with a getter and no way to change it, and

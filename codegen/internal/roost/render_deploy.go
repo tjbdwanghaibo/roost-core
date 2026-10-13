@@ -573,7 +573,7 @@ Docker Desktop 这类把卷放在虚拟机里的环境宿主机够不到挂载�
 
 deploy.sh 要求 digest，使用容器内 /app/healthprobe 等待所有实例 readiness，并记录 current/previous image。生产 workflow 使用受保护 Environment 和带 roost-docker 标签的 self-hosted runner。
 
-make compose-check 除了 docker compose config --quiet（只校验语法）还跑 deploy/docker/compose_check_test.go：读 docker compose config --format json 解析后的结果，核对每个 Service 的 read_only / user / cap_drop / security_opt、tmpfs 恰好一条绝对路径挂载、stop_grace_period、healthcheck 与 config bind / 命名卷（RR-20260930-17；RR-20260927-33 那种"语法合法、语义错"的 tmpfs 在这里红）。这个测试只在设置 `+composeCheckEnv+` 时执行（CI 的 generated-and-deployment 作业设置它），平时 go test ./... 跳过它。
+make compose-check 除了 docker compose config --quiet（只校验语法）还跑 deploy/docker/compose_check_test.go：读 docker compose config --format json 解析后的结果，核对每个 Service 的 read_only / user / cap_drop / security_opt、tmpfs 恰好一条绝对路径挂载、stop_grace_period、healthcheck 与 config bind / 命名卷（"语法合法、语义错"的 tmpfs 在这里红）。这个测试只在设置 `+composeCheckEnv+` 时执行（CI 的 generated-and-deployment 作业设置它），平时 go test ./... 跳过它。
 `, service, playerPort, service, playerNote, paragraph(configDataImageNote(m))), m)
 }
 
@@ -598,9 +598,9 @@ package docker
 // The production compose file is validated by `+"`docker compose config --quiet`"+`
 // in CI, which only proves the YAML parses. A value that parses as the wrong
 // shape — tmpfs: [/tmp:rw,noexec,nosuid,size=64m] splitting into four mounts
-// at the commas (RR-20260927-33) — passes it and fails at compose up. This
+// at the commas — passes it and fails at compose up. This
 // test reads what compose actually resolved and pins the fields the
-// deployment relies on (RR-20260930-17).
+// deployment relies on.
 //
 // It runs only with `+composeCheckEnv+` set (make compose-check and the
 // generated-and-deployment CI job set it), so go test ./... on a machine
@@ -697,10 +697,10 @@ func checkComposeService(t *testing.T, name string, service composeService, decl
 	}
 	// One mount with its options in the same item. An unquoted flow sequence
 	// splits at the commas into "/tmp:rw", "noexec", "nosuid", "size=64m",
-	// and compose up refuses "noexec" as a mount path (RR-20260927-33).
+	// and compose up refuses "noexec" as a mount path.
 	switch {
 	case len(service.Tmpfs) != 1:
-		t.Errorf("tmpfs resolved to %d mounts %q, want exactly one (an unquoted flow sequence splits at the commas, RR-20260927-33)", len(service.Tmpfs), service.Tmpfs)
+		t.Errorf("tmpfs resolved to %d mounts %q, want exactly one (an unquoted flow sequence splits at the commas)", len(service.Tmpfs), service.Tmpfs)
 	case !strings.HasPrefix(service.Tmpfs[0], "/"):
 		t.Errorf("tmpfs mount %q is not an absolute path", service.Tmpfs[0])
 	case service.Tmpfs[0] != tmpfsMount:
@@ -1245,7 +1245,7 @@ func renderImplementationGuide(m Manifest) string {
 ## 本项目装配
 
 %s
-所有 Mod 都经过 Init → Provide → Start → Stop。业务通过 Registry capability 取接口，不持有基础设施私有实现。实现细节以 core 的 NEST_TRANSACTION_WAL、REMOTE_ENTITY、SAGA、ENTITY_SYNC、OBSERVABILITY 文档以及 kit README 为准。
+所有 Mod 都经过 Init → Provide → Start → Stop。业务通过 Registry capability 取接口，不持有基础设施私有实现。实现细节以 core 的 NEST_TRANSACTION_WAL、REMOTE_ENTITY、SAGA、ENTITY_SYNC、OBSERVABILITY 文档为准。
 `, m.Project.Name, renderServiceList(m))
 }
 

@@ -325,7 +325,7 @@ func TestGeneratedProjectCarriesAComposeShapeCheckAndRunsItInCI(t *testing.T) {
 	if parsed.Name.Name != "docker" {
 		t.Errorf("%s is package %s, want docker", composeCheckRel, parsed.Name.Name)
 	}
-	for _, want := range []string{composeCheckEnv, `"docker", "compose"`, `"config", "--format", "json"`, "ghcr.io/example/planet@sha256:", "RR-20260927-33"} {
+	for _, want := range []string{composeCheckEnv, `"docker", "compose"`, `"config", "--format", "json"`, "ghcr.io/example/planet@sha256:", "an unquoted flow sequence splits at the commas"} {
 		if !bytes.Contains(file.Body, []byte(want)) {
 			t.Errorf("%s does not contain %q", composeCheckRel, want)
 		}

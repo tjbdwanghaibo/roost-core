@@ -43,7 +43,7 @@ func updateFrameworkDependenciesTransactional(ctx context.Context, root string, 
 		return err
 	}
 	// Every exit removes the stage, an interrupted one included: the CLI entry
-	// turns the signal into ctx and dies of it only after this returns (B6).
+	// turns the signal into ctx and dies of it only after this returns.
 	defer os.RemoveAll(stage)
 	if err := copyProject(ctx, absRoot, stage); err != nil {
 		return fmt.Errorf("stage framework dependencies: %w", err)

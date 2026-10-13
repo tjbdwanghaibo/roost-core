@@ -137,7 +137,7 @@ func validateConfig(config gateway.TCPConfig) error { return gateway.ValidateTCP
 
 type Authenticator interface { Authenticate(context.Context,string,net.Addr)(gateway.Principal,error) }
 // configFromViper reads player_access.tcp.* through the declaration above
-// (maintainer decision A4 ①): a value of the wrong type — "enabled: on",
+// (maintainer decision): a value of the wrong type — "enabled: on",
 // "max_payload_bytes: 8k", a duration without a unit — is refused by key
 // instead of being read as false / 0 (the default) / nanoseconds, every bad
 // key at once, and the App checks the same declaration before any Mod Init.
@@ -248,7 +248,7 @@ func (mod *Mod) Stop() {
 // StopBudget declares player_access.tcp.shutdown_timeout to the App
 // (app.ModStopBudgetProvider): within shutdown.total_timeout the App grants
 // the listener this long to drain its connections, and the generated
-// total_timeout counts it (RR-20260927-05). Undeclared, the Mod only got the
+// total_timeout counts it. Undeclared, the Mod only got the
 // App's fixed 3s floor — below its own 10s, and no slack over the 3s a
 // request already in flight may take (nest.request_timeout). 0 before Init,
 // i.e. not declared.
@@ -259,7 +259,7 @@ func (mod *Mod) StopBudget() time.Duration { return mod.config.ShutdownTimeout }
 // A ctx that ends first returns its error and keeps the server: a handler or
 // authenticator that ignores its context is still running, so a later call
 // with a fresh ctx waits for it again instead of reporting a drain that did
-// not happen (RR-20261005-NC-83). Session-close subscribers are waited for
+// not happen. Session-close subscribers are waited for
 // within the same ctx.
 func (mod *Mod) StopWithContext(ctx context.Context) error {
 	if ctx == nil { ctx = context.Background() }
@@ -360,7 +360,7 @@ func TestHandlerPanicHasErrorLevelStack(t *testing.T){
  got:=logs.String();if !strings.Contains(got,"level=ERROR") || !strings.Contains(got,"stack=") || !strings.Contains(got,"TestHandlerPanicHasErrorLevelStack") {t.Fatalf("panic lacks visible stack: %%s",got)}
 }
 
-// A4 ①: the declared defaults are defaultConfig(): an empty config reads as
+// the declared defaults are defaultConfig(): an empty config reads as
 // the Config NewServer is given in code, so the default the generator and
 // --print-config show is the one that runs.
 func TestDeclaredDefaultsAreDefaultConfig(t *testing.T) {
@@ -369,7 +369,7 @@ func TestDeclaredDefaultsAreDefaultConfig(t *testing.T) {
 	if config != defaultConfig() { t.Fatalf("declared defaults %%+v, defaultConfig() %%+v", config, defaultConfig()) }
 }
 
-// RR-20260926-36: the dispatch budget follows nest.request_timeout unless it
+// the dispatch budget follows nest.request_timeout unless it
 // is set on its own, and a login budget larger than the dispatch it runs in is
 // refused rather than silently cut short.
 func TestDispatchBudgetFollowsTheNestRequestTimeout(t *testing.T) {
@@ -391,7 +391,7 @@ func TestDispatchBudgetFollowsTheNestRequestTimeout(t *testing.T) {
 	}
 }
 
-// A4: player_access.tcp.* is read strictly. A value of the wrong type used to
+// player_access.tcp.* is read strictly. A value of the wrong type used to
 // be read as false / 0 (the default) / nanoseconds and pass every check; Init
 // now refuses it and names the key, and a valid value written as a string (an
 // environment override) still reads.
@@ -433,7 +433,7 @@ func TestConfigValuesOfTheWrongTypeAreRefusedByName(t *testing.T) {
 	}
 }
 
-// A9 (closing batch 2): a limit outside its bounds is refused by its key,
+// A limit outside its bounds is refused by its key,
 // and a limit bounded by another names that one too, so the operator knows
 // which line to change. Before, every limit shared one sentence ("addr,
 // limits and timeouts are outside safe bounds", and "timeouts exceed safe
@@ -474,7 +474,7 @@ func TestAnOutOfBoundsSettingIsRefusedByName(t *testing.T) {
 	if _, err := configFromViper(viper.New()); err != nil { t.Fatalf("the defaults are refused: %%v", err) }
 }
 
-// RR-20260927-05: the Mod declares player_access.tcp.shutdown_timeout as its
+// the Mod declares player_access.tcp.shutdown_timeout as its
 // stop budget, so the App grants the listener that long inside
 // shutdown.total_timeout instead of the 3s floor of an undeclared Mod.
 func TestTheModDeclaresItsShutdownTimeoutAsTheStopBudget(t *testing.T) {
@@ -491,7 +491,7 @@ func TestTheModDeclaresItsShutdownTimeoutAsTheStopBudget(t *testing.T) {
 	}
 }
 
-// RR-20261005-NC-83: the Mod keeps the server after a Stop that ran out of
+// the Mod keeps the server after a Stop that ran out of
 // time, so the retry has something to wait for.
 func TestAModStopRetryKeepsTheServerUntilItDrains(t *testing.T) {
 	server, release, _, returned := stalledAuthServer(t)

@@ -32,7 +32,7 @@
 // JSON key must be present and not null in every row); unique; min: <n>;
 // enum: [a, b]. On tables the rules are emitted as cfg tags and enforced by
 // configdata on every load and reload — the same check tablegen's tags get
-// (B10). Globals take required / min / enum too, emitted as ObjectDef.Rules
+// Globals take required / min / enum too, emitted as ObjectDef.Rules
 // and checked by the same configdata/rules code (unique / ref / index mean
 // nothing for a single object and are rejected). Scalar types:
 // int32/int64/uint32/uint64/float32/float64/string/bool; []scalar, bean and

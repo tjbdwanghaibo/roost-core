@@ -56,8 +56,8 @@ type playerTCPDeclaration struct {
 		HandshakeTimeout    time.Duration `config:"handshake_timeout" default:"5s" example:"5s"`
 		IdleTimeout         time.Duration `config:"idle_timeout" default:"90s" example:"90s"`
 		WriteTimeout        time.Duration `config:"write_timeout" default:"5s" example:"5s"`
-		ShutdownTimeout     time.Duration `config:"shutdown_timeout" default:"10s" example:"10s" help:"The generated Mod declares it as its stop budget and the generated shutdown.total_timeout counts it (RR-20260927-05)."`
-		DispatchTimeout     time.Duration `config:"dispatch_timeout" example:"0s" help:"Bound of one request; unset or 0 follows nest.request_timeout (RR-20260926-36)."`
+		ShutdownTimeout     time.Duration `config:"shutdown_timeout" default:"10s" example:"10s" help:"The generated Mod declares it as its stop budget and the generated shutdown.total_timeout counts it."`
+		DispatchTimeout     time.Duration `config:"dispatch_timeout" example:"0s" help:"Bound of one request; unset or 0 follows nest.request_timeout."`
 		LoginTimeout        time.Duration `config:"login_timeout" example:"0s" help:"Share of the dispatch budget a login gives to claim + cold load; unset or 0 is min(2s, dispatch_timeout)."`
 	} `config:"player_access.tcp"`
 	Nest struct {
@@ -98,7 +98,7 @@ func playerTCPConfigDefaults() []struct{ key, value string } {
 // tcpConfig type.
 func renderPlayerTCPDeclaration() string {
 	var b strings.Builder
-	b.WriteString("// tcpConfig is what this Mod reads (maintainer decision A4 ①). Generated from the\n")
+	b.WriteString("// tcpConfig is what this Mod reads (maintainer decision). Generated from the\n")
 	b.WriteString("// generator's declaration; the App checks it before any Mod Init.\n")
 	b.WriteString("type tcpConfig ")
 	writeGoStructType(&b, reflect.TypeOf(playerTCPDeclaration{}), "")

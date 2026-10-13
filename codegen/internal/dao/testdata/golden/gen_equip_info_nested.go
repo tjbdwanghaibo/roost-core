@@ -14,7 +14,7 @@ import (
 //
 // The hook is excluded from every codec: it is runtime wiring, not state, and
 // an exported embedded struct with no exported fields would otherwise be
-// written as an empty "dirtyhook" sub-document (U-0224).
+// written as an empty "dirtyhook" sub-document.
 type EquipInfo struct {
 	dataengine.DirtyHook `bson:"-" json:"-"`
 	// dirtyOwner is the one place this value belongs to. Unexported, so no
@@ -33,7 +33,7 @@ type EquipInfo struct {
 // The parent is identified, not just remembered: a value that already belongs
 // somewhere else is refused rather than silently re-pointed, because the
 // notification is a single slot and re-pointing it leaves the first place
-// stale on disk while memory shows both equal (RR-20260919-02). unbindDirty
+// stale on disk while memory shows both equal. unbindDirty
 // releases only its own binding, so a stale release from a place this value
 // has already left cannot silence the place it is in now.
 func (s *EquipInfo) bindDirty(owner daoDirtyOwner, notify func()) {
@@ -58,8 +58,8 @@ func (s *EquipInfo) unbindDirty(owner daoDirtyOwner) {
 // reflection-based codec cannot see unexported fields. EquipInfo therefore
 // has a WIRE FORM, equipInfoBSONDoc, with exported fields: the
 // parent DAO places that into its own document and reflection encodes it
-// inline, with no per-value Marshaler round trip (U-0224 and its follow-up:
-// the bson.Marshaler route cost about four allocations per nested value).
+// inline, with no per-value Marshaler round trip (the bson.Marshaler route
+// costs about four allocations per nested value).
 // MarshalBSON / UnmarshalBSON are kept for a EquipInfo encoded on its own.
 type equipInfoBSONDoc struct {
 	Level int32                     `bson:"level"`
@@ -83,7 +83,7 @@ func (s EquipInfo) bsonDoc() equipInfoBSONDoc {
 	}
 }
 
-// RR-20261005-NC-32：wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
+// wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
 // 先只恢复字段；父对象就位后，由 bindDirty 或原址 UnmarshalBSON 递归建立通知。
 func (s *EquipInfo) loadBSONDoc(doc equipInfoBSONDoc) {
 	s.level = doc.Level
@@ -161,7 +161,7 @@ func (s *EquipInfo) setGemsRawMap(src map[int32]*GemInfo) {
 		s.gems.Set(key, val)
 	}
 	// A restore is how a loaded document gets its children, so it is one of
-	// the paths that establishes ownership (RR-20260917-05).
+	// the paths that establishes ownership.
 	s.bindGems()
 }
 
@@ -169,7 +169,7 @@ func (s *EquipInfo) setGemsRawMap(src map[int32]*GemInfo) {
 // Gems's children and nothing else: no dirty mark, no undo record. That is
 // what makes them callable from inside a rollback undo, where the transaction
 // is already rolledBack and a public setter would register another undo and
-// fail (RR-20260918-03). Every path that changes what the field holds — the
+// fail. Every path that changes what the field holds — the
 // setter, a restore from storage, the undo — releases what it drops and binds
 // what it ends up with, so "which children notify this struct" always equals
 // "which children the field holds".
@@ -201,7 +201,7 @@ func (s *EquipInfo) unbindGems() {
 // Runes's children and nothing else: no dirty mark, no undo record. That is
 // what makes them callable from inside a rollback undo, where the transaction
 // is already rolledBack and a public setter would register another undo and
-// fail (RR-20260918-03). Every path that changes what the field holds — the
+// fail. Every path that changes what the field holds — the
 // setter, a restore from storage, the undo — releases what it drops and binds
 // what it ends up with, so "which children notify this struct" always equals
 // "which children the field holds".
@@ -225,7 +225,7 @@ func (s *EquipInfo) unbindRunes() {
 // Core's children and nothing else: no dirty mark, no undo record. That is
 // what makes them callable from inside a rollback undo, where the transaction
 // is already rolledBack and a public setter would register another undo and
-// fail (RR-20260918-03). Every path that changes what the field holds — the
+// fail. Every path that changes what the field holds — the
 // setter, a restore from storage, the undo — releases what it drops and binds
 // what it ends up with, so "which children notify this struct" always equals
 // "which children the field holds".
@@ -245,7 +245,7 @@ func (s *EquipInfo) unbindCore() {
 // Shape's children and nothing else: no dirty mark, no undo record. That is
 // what makes them callable from inside a rollback undo, where the transaction
 // is already rolledBack and a public setter would register another undo and
-// fail (RR-20260918-03). Every path that changes what the field holds — the
+// fail. Every path that changes what the field holds — the
 // setter, a restore from storage, the undo — releases what it drops and binds
 // what it ends up with, so "which children notify this struct" always equals
 // "which children the field holds".
@@ -345,7 +345,7 @@ func (s *EquipInfo) SetGems(v map[int32]*GemInfo) {
 		old := s.gems
 		if err := tx.RecordUndo(s, uint64(2), func() error {
 			// The callbacks are not part of the field's value, so restoring
-			// the value does not restore them (RR-20260918-03).
+			// the value does not restore them.
 			s.unbindGems()
 			s.gems = old
 			s.bindGems()
@@ -357,8 +357,7 @@ func (s *EquipInfo) SetGems(v map[int32]*GemInfo) {
 		}
 	}
 	// The children being replaced stop reporting: a detached child marking a
-	// parent it no longer belongs to is a dirty flag nobody can explain
-	// (RR-20260917-05).
+	// parent it no longer belongs to is a dirty flag nobody can explain.
 	s.unbindGems()
 	s.gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(v))
 	for key, val := range v {
@@ -373,7 +372,7 @@ func (s *EquipInfo) SetRunes(v []*GemInfo) {
 		old := s.runes
 		if err := tx.RecordUndo(s, uint64(3), func() error {
 			// The callbacks are not part of the field's value, so restoring
-			// the value does not restore them (RR-20260918-03).
+			// the value does not restore them.
 			s.unbindRunes()
 			s.runes = old
 			s.bindRunes()
@@ -395,7 +394,7 @@ func (s *EquipInfo) SetCore(v *GemInfo) {
 		old := s.core
 		if err := tx.RecordUndo(s, uint64(4), func() error {
 			// The callbacks are not part of the field's value, so restoring
-			// the value does not restore them (RR-20260918-03).
+			// the value does not restore them.
 			s.unbindCore()
 			s.core = old
 			s.bindCore()

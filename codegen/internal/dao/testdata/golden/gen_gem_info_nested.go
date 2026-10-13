@@ -13,7 +13,7 @@ import (
 //
 // The hook is excluded from every codec: it is runtime wiring, not state, and
 // an exported embedded struct with no exported fields would otherwise be
-// written as an empty "dirtyhook" sub-document (U-0224).
+// written as an empty "dirtyhook" sub-document.
 type GemInfo struct {
 	dataengine.DirtyHook `bson:"-" json:"-"`
 	// dirtyOwner is the one place this value belongs to. Unexported, so no
@@ -28,7 +28,7 @@ type GemInfo struct {
 // The parent is identified, not just remembered: a value that already belongs
 // somewhere else is refused rather than silently re-pointed, because the
 // notification is a single slot and re-pointing it leaves the first place
-// stale on disk while memory shows both equal (RR-20260919-02). unbindDirty
+// stale on disk while memory shows both equal. unbindDirty
 // releases only its own binding, so a stale release from a place this value
 // has already left cannot silence the place it is in now.
 func (s *GemInfo) bindDirty(owner daoDirtyOwner, notify func()) {
@@ -53,8 +53,8 @@ func (s *GemInfo) unbindDirty(owner daoDirtyOwner) {
 // reflection-based codec cannot see unexported fields. GemInfo therefore
 // has a WIRE FORM, gemInfoBSONDoc, with exported fields: the
 // parent DAO places that into its own document and reflection encodes it
-// inline, with no per-value Marshaler round trip (U-0224 and its follow-up:
-// the bson.Marshaler route cost about four allocations per nested value).
+// inline, with no per-value Marshaler round trip (the bson.Marshaler route
+// costs about four allocations per nested value).
 // MarshalBSON / UnmarshalBSON are kept for a GemInfo encoded on its own.
 type gemInfoBSONDoc struct {
 	ID    int32 `bson:"id"`
@@ -70,7 +70,7 @@ func (s GemInfo) bsonDoc() gemInfoBSONDoc {
 	}
 }
 
-// RR-20261005-NC-32：wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
+// wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
 // 先只恢复字段；父对象就位后，由 bindDirty 或原址 UnmarshalBSON 递归建立通知。
 func (s *GemInfo) loadBSONDoc(doc gemInfoBSONDoc) {
 	s.id = doc.ID

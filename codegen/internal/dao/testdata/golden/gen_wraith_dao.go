@@ -40,8 +40,7 @@ func NewWraithDao() *WraithDao {
 	// and never goes through this DAO's own setter, so an entity that was
 	// CREATED rather than loaded would have an unbound nested value: the
 	// change marks nothing, never enters the persist patch, and is lost
-	// without a word until the entity has been stored and read back once
-	// (U-0245).
+	// without a word until the entity has been stored and read back once.
 	d.Init()
 	return d
 }
@@ -332,7 +331,7 @@ func (d *WraithDao) RestoreRollbackState(raw []byte) error {
 // It exists because the bit constants themselves are unexported — a packer
 // written outside this package can hand a mask to MarshalSync but cannot look
 // inside it, which is fine until the game has its own client protocol and has
-// to decide what changed (ARCH-06).
+// to decide what changed.
 //
 // **Bit is stable only within this generated schema.** Anything that outlives
 // the build — a stored projection, a client's cached layout — keys on Name or

@@ -43,7 +43,7 @@ type MirrorDef struct {
 }
 
 // remoteMirrorMigration is the diagnostic for the retired `remote=mirror` entity form.
-const remoteMirrorMigration = `remote=mirror no longer generates an entity: the old form was metadata only (no subscription, no load, no read-only enforcement) and the generated entity stayed writable. A mirror is a read-only DTO now: declare the fields you read on a plain struct marked //roost:mirror entityKind=<owner kind> coll=<owner DAO collection>, regenerate, and read it through the generated New<DTO>Reader(source) — source is kit/remoteentity.MirrorSource(registry) (RemoteMirrorMod in a read-only service, RemoteEntityMod next to the owner)`
+const remoteMirrorMigration = `remote=mirror no longer generates an entity: the old form was metadata only (no subscription, no load, no read-only enforcement) and the generated entity stayed writable. A mirror is a read-only DTO now: declare the fields you read on a plain struct marked //roost:mirror entityKind=<owner kind> coll=<owner DAO collection>, regenerate, and read it through the generated New<DTO>Reader(source) — source is wiring/remoteentity.MirrorSource(registry) (RemoteMirrorMod in a read-only service, RemoteEntityMod next to the owner)`
 
 // extractMirrors finds //roost:mirror markers and the structs they annotate.
 func extractMirrors(fset *token.FileSet, f *ast.File, filePath string, importMap map[string]ImportDef) ([]MirrorDef, error) {
@@ -236,7 +236,7 @@ func Decode{{.Mirror.Name}}(data []byte) ({{.Mirror.Name}}, error) {
 	return value, nil
 }
 
-// New{{.Mirror.Name}}Reader binds the DTO to a read-only snapshot source: kit/remoteentity.MirrorSource(registry)
+// New{{.Mirror.Name}}Reader binds the DTO to a read-only snapshot source: wiring/remoteentity.MirrorSource(registry)
 // (RemoteMirrorMod in a read-only service, or RemoteEntityMod in the owner's process). The reader registers
 // nothing process-wide and has no write, commit or publish capability.
 func New{{.Mirror.Name}}Reader(source entity.RemoteSnapshotReadOnly) (*entity.RemoteMirrorReader[{{.Mirror.Name}}], error) {

@@ -47,8 +47,8 @@ func daoSliceDocs[V, D any](src []V, conv func(V) D) []D {
 //
 // A nested value reports its changes through a single notification slot, so a
 // value put in two places reports to whichever place bound it last — and the
-// other place silently stops being persisted while memory shows both equal
-// (RR-20260919-02). Neither "last wins" nor "first wins" is a correct answer,
+// other place silently stops being persisted while memory shows both equal.
+// Neither "last wins" nor "first wins" is a correct answer,
 // so the model is unique parent ownership: one parent at a time, and an
 // attempt to take a value that already has one is refused at the call.
 //

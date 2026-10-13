@@ -48,8 +48,7 @@ func NewHeroDao() *HeroDao {
 	// and never goes through this DAO's own setter, so an entity that was
 	// CREATED rather than loaded would have an unbound nested value: the
 	// change marks nothing, never enters the persist patch, and is lost
-	// without a word until the entity has been stored and read back once
-	// (U-0245).
+	// without a word until the entity has been stored and read back once.
 	d.Init()
 	return d
 }
@@ -430,7 +429,7 @@ func (d *HeroDao) GetEquips(key int64) (*EquipInfo, bool) {
 // It matters more here than for a plain nested field: the callback captures
 // the KEY as well as the value, so a value that left the map and kept its
 // callback does not merely mark the DAO dirty — it writes ITS content under
-// the key it no longer occupies (RR-20260918-10).
+// the key it no longer occupies.
 func (d *HeroDao) bindEquipsValue(key int64, val *EquipInfo) {
 	if val != nil {
 		val.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldEquips, key: key},
@@ -511,7 +510,7 @@ func (d *HeroDao) EquipsLen() int {
 
 // bindSquadItems / unbindSquadItems move the notification ownership of
 // this slice's elements, and nothing else — no dirty mark, no undo record, so
-// they are callable from a rollback undo (RR-20260918-10).
+// they are callable from a rollback undo.
 func (d *HeroDao) bindSquadItems() {
 	for index, item := range d.squad {
 		if item != nil {
@@ -581,9 +580,7 @@ func (d *HeroDao) SquadLen() int {
 //
 // A value that leaves this field must stop reporting, or it keeps writing its
 // own content into a field it no longer occupies — the same ownership
-// invariant U-0236 and U-0238 established for nested containers and for
-// top-level maps and slices, on the branch they did not touch
-// (RR-20260919-01).
+// invariant nested containers and top-level maps and slices keep.
 func (d *HeroDao) bindMount() {
 	if d.mount != nil {
 		d.mount.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldMount}, d.markMountDirty)
@@ -898,7 +895,7 @@ func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine
 
 // PersistFieldNames implements nest.PersistFieldNamer: the stored names of the
 // persistent fields in mask. A durability=memory transaction that changes one
-// of them fails and names them (RR-20261006-41).
+// of them fails and names them.
 func (d *HeroDao) PersistFieldNames(mask uint64) []string {
 	var names []string
 	if mask&heroDaoFieldName != 0 {
@@ -940,7 +937,7 @@ func (d *HeroDao) PersistFieldNames(mask uint64) []string {
 // It exists because the bit constants themselves are unexported — a packer
 // written outside this package can hand a mask to MarshalSync but cannot look
 // inside it, which is fine until the game has its own client protocol and has
-// to decide what changed (ARCH-06).
+// to decide what changed.
 //
 // **Bit is stable only within this generated schema.** Anything that outlives
 // the build — a stored projection, a client's cached layout — keys on Name or

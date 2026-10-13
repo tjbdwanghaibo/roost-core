@@ -8,9 +8,9 @@
 //
 // This file is the transport half and depends on roost-core only. The
 // assembly half — Server, OwnerCapabilities, ClientMod, which need
-// roost-kit/mods for the Mod and capability names — is matchmaker_rpc_assembly_gen.go
+// wiring/mods for the Mod and capability names — is matchmaker_rpc_assembly_gen.go
 // beside it. The split is what lets an interface move into a core domain
-// package and take its wire types, handler table and BusClient along (M-10).
+// package and take its wire types, handler table and BusClient along.
 //
 // Regenerate with:
 //
@@ -327,10 +327,9 @@ const AffinityMethods = "Enqueue, Cancel, Ticket, Candidates, Commit, Match, Que
 // discovery is required. AffinityMethods route by key, and reaching "the
 // instance that owns this key" means choosing a sid from the discovered
 // instances; without discovery there is nothing to choose from and the call
-// can only go to the queue group, i.e. to a random instance. That is what the
-// generated client did until RR-20261006-59 (F09-R1) — the marker read as
-// configured and routed at random — so a missing discovery is refused here
-// rather than degraded.
+// can only go to the queue group, i.e. to a random instance — the marker would
+// read as configured and route at random — so a missing discovery is refused
+// here rather than degraded.
 func NewBusClient(b bus.IBus, discovery fetcd.IDiscovery, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
 	if b == nil {
 		return nil, fmt.Errorf("match: bus is nil")

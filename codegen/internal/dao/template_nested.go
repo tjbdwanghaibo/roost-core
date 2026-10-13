@@ -18,7 +18,7 @@ import (
 //
 // The hook is excluded from every codec: it is runtime wiring, not state, and
 // an exported embedded struct with no exported fields would otherwise be
-// written as an empty "dirtyhook" sub-document (U-0224).
+// written as an empty "dirtyhook" sub-document.
 type {{.Nested.Name}} struct {
 	dataengine.DirtyHook ` + "`" + `bson:"-" json:"-"` + "`" + `
 	// dirtyOwner is the one place this value belongs to. Unexported, so no
@@ -34,7 +34,7 @@ type {{.Nested.Name}} struct {
 // The parent is identified, not just remembered: a value that already belongs
 // somewhere else is refused rather than silently re-pointed, because the
 // notification is a single slot and re-pointing it leaves the first place
-// stale on disk while memory shows both equal (RR-20260919-02). unbindDirty
+// stale on disk while memory shows both equal. unbindDirty
 // releases only its own binding, so a stale release from a place this value
 // has already left cannot silence the place it is in now.
 func (s *{{.Nested.Name}}) bindDirty(owner daoDirtyOwner, notify func()) {
@@ -59,8 +59,8 @@ func (s *{{.Nested.Name}}) unbindDirty(owner daoDirtyOwner) {
 // reflection-based codec cannot see unexported fields. {{.Nested.Name}} therefore
 // has a WIRE FORM, {{lower1 .Nested.Name}}BSONDoc, with exported fields: the
 // parent DAO places that into its own document and reflection encodes it
-// inline, with no per-value Marshaler round trip (U-0224 and its follow-up:
-// the bson.Marshaler route cost about four allocations per nested value).
+// inline, with no per-value Marshaler round trip (the bson.Marshaler route
+// costs about four allocations per nested value).
 // MarshalBSON / UnmarshalBSON are kept for a {{.Nested.Name}} encoded on its own.
 type {{lower1 .Nested.Name}}BSONDoc struct {
 {{- range .Nested.Fields}}
@@ -82,7 +82,7 @@ func (s {{.Nested.Name}}) bsonDoc() {{lower1 .Nested.Name}}BSONDoc {
 	}
 }
 
-// RR-20261005-NC-32：wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
+// wire 转换返回值还会被复制，不能把通知绑定到临时父对象。
 // 先只恢复字段；父对象就位后，由 bindDirty 或原址 UnmarshalBSON 递归建立通知。
 func (s *{{.Nested.Name}}) loadBSONDoc(doc {{lower1 .Nested.Name}}BSONDoc) {
 {{- range .Nested.Fields}}
@@ -164,7 +164,7 @@ func (s *{{$.Nested.Name}}) set{{.Name}}RawMap(src {{rawMapType .}}) {
 	}
 {{- if hasHook .}}
 	// A restore is how a loaded document gets its children, so it is one of
-	// the paths that establishes ownership (RR-20260917-05).
+	// the paths that establishes ownership.
 	s.bind{{.Name}}()
 {{- end}}
 }
@@ -176,7 +176,7 @@ func (s *{{$.Nested.Name}}) set{{.Name}}RawMap(src {{rawMapType .}}) {
 // {{.Name}}'s children and nothing else: no dirty mark, no undo record. That is
 // what makes them callable from inside a rollback undo, where the transaction
 // is already rolledBack and a public setter would register another undo and
-// fail (RR-20260918-03). Every path that changes what the field holds — the
+// fail. Every path that changes what the field holds — the
 // setter, a restore from storage, the undo — releases what it drops and binds
 // what it ends up with, so "which children notify this struct" always equals
 // "which children the field holds".
@@ -289,7 +289,7 @@ func (s *{{$.Nested.Name}}) Set{{.Name}}(v {{if eq .Kind 2}}{{rawMapType .}}{{el
 		if err := tx.RecordUndo(s, uint64({{$idx}}), func() error {
 {{- if hasDetach .}}
 			// The callbacks are not part of the field's value, so restoring
-			// the value does not restore them (RR-20260918-03).
+			// the value does not restore them.
 			s.unbind{{.Name}}()
 {{- end}}
 			s.{{fieldVar .Name}} = old
@@ -311,8 +311,7 @@ func (s *{{$.Nested.Name}}) Set{{.Name}}(v {{if eq .Kind 2}}{{rawMapType .}}{{el
 {{- else if eq .Kind 2}}
 {{- if hasDetach .}}
 	// The children being replaced stop reporting: a detached child marking a
-	// parent it no longer belongs to is a dirty flag nobody can explain
-	// (RR-20260917-05).
+	// parent it no longer belongs to is a dirty flag nobody can explain.
 	s.unbind{{.Name}}()
 {{- end}}
 	s.{{fieldVar .Name}} = {{mapNewExpr . "len(v)"}}

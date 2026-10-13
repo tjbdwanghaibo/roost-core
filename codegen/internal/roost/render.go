@@ -144,7 +144,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		add("configs/service/config."+name+".prod.example.yaml", renderServiceConfig(m, name, true), false)
 	}
 	if hostsActivityCoordinator(m) {
-		// C4：活动组文件只创建一次，之后归项目（列出真实部署的 game sid）。
+		// 活动组文件只创建一次，之后归项目（列出真实部署的 game sid）。
 		add(activityGroupsFile, renderActivityGroups(m), false)
 	}
 	if hasFeature(m, "config") {
@@ -253,10 +253,9 @@ go `+generatedGoVersion+`.0
 // bootstrap file starts at the supported minimum and roost project deps
 // resolves it to the latest tag.
 //
-// One require: the framework is one module since the consolidation. kit and
-// the generator live inside roost-core (kit/, codegen/) as package paths, and
-// asking go.mod for roost-core/kit would be asking for a module that does not
-// exist (三仓合一仓 P3).
+// One require: the framework is one module. Wiring and the generator live
+// inside roost-core (wiring/, codegen/) as package paths, not as modules of
+// their own.
 require github.com/tjbdwanghaibo/roost-core %s
 `, m.Project.Module,
 		resolvedModuleVersion(m.Versions.Core, minimumVersions.Core))
@@ -289,8 +288,8 @@ import (
 // runtime initialization or requiring business code to import it immediately.
 type SkillProgram = skill.Program
 
-// ServiceMetrics retains roost-kit/service, which the framework services this
-// project hosts or calls are built from.
+// ServiceMetrics keeps the reporter (infra/observe/servicemetrics) that the
+// framework services this project hosts or calls report through.
 type ServiceMetrics = servicemetrics.Reporter
 `
 }
@@ -566,7 +565,7 @@ const (
 )
 
 // serviceSingletonEnabled 报告生成器是否给这个服务的配置写 singleton.enabled: true：resolved mods 含
-// dataengine（方案 §6.2 / D-B）。带 DataEngine 的服务按 sid 划分 WAL 目录，设计上就是每个 sid 一个写者，
+// dataengine。带 DataEngine 的服务按 sid 划分 WAL 目录，设计上就是每个 sid 一个写者，
 // 打开不改变部署形态；其他服务是否按 sid 多副本部署生成器不知道，写 enabled: false，由应用自己打开。
 func serviceSingletonEnabled(m Manifest, service string) bool {
 	mods, _ := resolveMods(append(append([]string{}, m.SharedMods...), effectiveServiceMods(m, service)...))
@@ -574,7 +573,7 @@ func serviceSingletonEnabled(m Manifest, service string) bool {
 }
 
 // projectInstallsSingleton 报告 bootstrap 是否安装 kitredis.SingletonStore：项目里有 redis Mod（任何服务
-// 都可以在配置里手工打开 singleton，bootstrap 是生成文件、用户改不了，方案 §6.3），或有服务默认打开
+// 都可以在配置里手工打开 singleton，bootstrap 是生成文件、用户改不了），或有服务默认打开
 // （dataengine 服务没有 redis Mod 时同样要装，否则启动时 fail-closed）。
 func projectInstallsSingleton(m Manifest) bool {
 	all := allProjectMods(m)
@@ -688,7 +687,7 @@ func appendModConfigSections(root string, before, after Manifest, service string
 	}
 	// 后加进 dataengine 的服务：生成时写的 enabled: false 段翻成 true（turnGeneratedSingletonOn），
 	// 没有 singleton: 段的文件追加打开的段，并补上单实例锁连接用的 redis: 段（已有则跳过）。
-	// 否则这个服务会带着 enabled: false 静默不启用（方案 §6.3）。
+	// 否则这个服务会带着 enabled: false 静默不启用。
 	turnOn := !serviceSingletonEnabled(before, service) && serviceSingletonEnabled(after, service)
 	if turnOn {
 		sections = append(sections, modConfigSection("redis"), renderSingletonConfig(after.Project.Name, true))
@@ -1221,7 +1220,7 @@ func renderDockerfile(m Manifest) string {
 	if contains(allMods, "configdata") {
 		configData = "COPY --from=build /src/" + defaultConfigDataDir + " /app/" + defaultConfigDataDir + "\n"
 	}
-	// C4：活动组文件与 configs/data 一样是随代码版本发布的内容，协调器与 game 都按相对路径读它。
+	// 活动组文件与 configs/data 一样是随代码版本发布的内容，协调器与 game 都按相对路径读它。
 	if hostsActivityCoordinator(m) {
 		configData += "COPY --from=build /src/" + activityGroupsFile + " /app/" + activityGroupsFile + "\n"
 	}
@@ -1354,10 +1353,10 @@ func renderUsage(m Manifest) string {
 
 - roost help / roost help <capability>：查看能力目录或指定能力的配置与示例。
 - make run SERVICE=<name> SID=<id>：启动服务。
-- make project-upgrade：使用最新 codegen 升级受控工程模板，并将 core、kit、skill、codegen 策略设为 latest。
+- make project-upgrade：使用最新 codegen 升级受控工程模板，并将 versions.core 策略设为 latest。
 - make roost-up：执行 go get -u ./... 和 go mod tidy，更新整个项目依赖图。
 - make codegen-up：安装最新 roost-codegen CLI。
-- make deps-update：只按 roost.yaml 更新 core、kit、skill 三个框架模块。
+- make deps-update：只按 roost.yaml 更新框架模块 roost-core。
 - make new-rpc NAME=<name> SERVICE=<owner>：脚手架一个本工程自己的跨进程服务（internal/rpc/<name>：//roost:rpc 接口、实现、owner Mod、生成的传输与装配两半），调用方在 roost.yaml 的 services.<caller>.uses_rpcs 列出它。
 - make dev-up/dev-down：启动或停止所需基础设施。
 - make dev-run/dev-stop/dev-status：在本机一次起 / 停 / 查看工程声明的全部服务进程（每个服务自己的 ops 端口，日志在 .dev/）；game-demo 工程随后可用 make dev-smoke 跑两个机器人走完整条链。
@@ -1370,7 +1369,7 @@ func renderUsage(m Manifest) string {
 
 ## 框架版本策略
 
-versions.core 默认是 latest。框架只有 roost-core 一个模块（kit、skill、生成器都是其中的包，versions.kit 等旧字段写了会被拒绝），roost project new/sync/deps 只把它作为直接依赖解析，随后执行 go mod tidy；Makefile 按 versions.core 运行生成器。go.mod 不支持 latest 查询值，所以它保存本次实际解析出的具体版本，roost.yaml 保存持续跟随 latest 的策略，同一次测试和发布使用确定的依赖图。
+versions.core 默认是 latest。框架只有 roost-core 一个模块（wiring、skill、生成器都是其中的包，versions.kit 等旧字段写了会被拒绝），roost project new/sync/deps 只把它作为直接依赖解析，随后执行 go mod tidy；Makefile 按 versions.core 运行生成器。go.mod 不支持 latest 查询值，所以它保存本次实际解析出的具体版本，roost.yaml 保存持续跟随 latest 的策略，同一次测试和发布使用确定的依赖图。
 
 当前兼容下限为 core %s。明确版本低于下限会在生成前失败；latest 始终允许。解析与 tidy 在临时项目完成，只提交最终 go.mod/go.sum；失败不会修改原依赖文件，并发变化会拒绝覆盖。
 

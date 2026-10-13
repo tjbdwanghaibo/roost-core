@@ -26,8 +26,8 @@ const commandTreeWaitDelay = 5 * time.Second
 // On Unix the tree is a new process group, which also takes it out of the
 // terminal's foreground group: Ctrl-C (and a hangup or SIGTERM) reaches only
 // roost. The CLI entry (Main) owns those signals and cancels ctx; this
-// function only has to kill the tree when ctx ends. It used to catch and
-// re-raise the signals itself, which is what B6 removed.
+// function only has to kill the tree when ctx ends; it does not catch or
+// re-raise the signals itself.
 func runCommandTree(ctx context.Context, dir string, env []string, stdout, stderr io.Writer, binary string, args ...string) error {
 	command := exec.CommandContext(ctx, binary, args...)
 	command.Dir = dir

@@ -114,7 +114,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		// Same reason as `project upgrade --skip-deps`: during a boundary
 		// migration the generated imports are correct before any release
 		// carries them, so file generation and dependency resolution have to
-		// be separable (三仓合一仓 P4).
+		// be separable.
 		newSkipDeps := fs.Bool("skip-deps", false, "write the project but do not resolve framework dependencies")
 		core := fs.String("roost-core-version", "", "roost-core version")
 		template := fs.String("template", "", "opt-in starting shape: game (hosts all nine framework services and wires the first service to them), or game-demo (game plus a working Player write path: Profile/Bag components, a DAO, one Nest transaction and a TCP endpoint)")
@@ -236,7 +236,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 			if *skipDeps {
 				fmt.Fprintln(stdout, "upgrade: --skip-deps, framework dependencies not resolved")
 			} else if err := UpdateFrameworkDependencies(ctx, root, manifest, stdout, stderr); err != nil {
-				// N08 O2: roost.yaml and the templates are already upgraded,
+				// roost.yaml and the templates are already upgraded,
 				// go.mod is not; deps is the step that converges the two.
 				return fmt.Errorf("project upgraded but framework resolution failed; after the cause is fixed run roost project deps --root %s: %w", root, err)
 			}
