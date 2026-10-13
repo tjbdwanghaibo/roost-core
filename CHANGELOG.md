@@ -82,6 +82,7 @@
 - 修复调度 benchmark 的裸整数 ID 被三池路由识别为其他 Kind 的问题：使用正式短业务 EntityID，分片对照按 UniqueID 保持原负载分布，补完整 ID 周期的路由与分布回归；不改变生产准入策略。
 - 修复on_change合批测试绕过Guard提交门导致的偶发无脏数据错误：测试通过正式加锁、冻结、确认与释放流程提交，保留帧数/版本/内容断言；生产同步逻辑不变。
 - 生成器错误文本 `unknown kit mod %q` / `kit mod dependency cycle at %q` 改为 `unknown wiring mod %q` / `wiring mod dependency cycle at %q`（Mod 现在在 `wiring/` 下）；按旧文本匹配错误的脚本需同步。
+- `entity.ErrColdLoadInLogic` 的文本改为指向 `SendOptionIO`，remote_entity 延后提交工作被拒的告警把 fast pool 改为 business pool；`errors.Is` 不受影响，按文本匹配的日志查询需同步。
 - actionflow 的错误前缀由旧包名 `taskflow:` 改为 `actionflow:`（17 个导出错误值与全部格式化错误）；`errors.Is` 判断不受影响，按文本匹配的日志查询需同步。
 - skill 求值上下文表的说明（编译诊断原样带出）去掉过程编号（RR-20261005-NC-220/224/280/281/282、O28、O33～O36），改为描述原因与替代写法；诊断码与诊断位置不变。按旧文本匹配诊断的工具需同步。
 

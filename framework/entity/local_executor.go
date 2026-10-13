@@ -39,7 +39,7 @@ func RunLocal(ctx context.Context, fn func()) error {
 
 // ErrColdLoadInLogic 表示业务池阶段缺少预加载目标。应在消息上声明全部冷目标（或用 SendOptionIO 强制 I/O 准备），
 // 不能在持有 Guard 时把半个 handler 转移到 io 池。
-var ErrColdLoadInLogic = errors.New("entity: cold load forbidden in logic; declare targets and dispatch through slow preparation")
+var ErrColdLoadInLogic = errors.New("entity: cold load forbidden in logic; declare targets and dispatch with SendOptionIO preparation")
 
 type loadedEntitiesOnlyKey struct{}
 

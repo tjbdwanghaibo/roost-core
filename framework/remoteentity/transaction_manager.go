@@ -348,7 +348,7 @@ func (m *Manager) deliverRemoteOutcome(ctx context.Context, txID entity.RemoteTr
 	ran, err := runLocalStep(ctx, func() { fn(committed) })
 	if !ran {
 		metrics.IncCounter("remote_entity.deferred_outcome_not_run_total", metrics.Labels{"outcome": outcome}, 1)
-		slog.Warn("remote_entity: fast pool refused the deferred post-commit work; AfterCommit not run and the Sync gate stays frozen",
+		slog.Warn("remote_entity: business pool refused the deferred post-commit work; AfterCommit not run and the Sync gate stays frozen",
 			"tx", txID.String(), "outcome", outcome, "err", err)
 		return
 	}
