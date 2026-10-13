@@ -325,10 +325,15 @@ func (mgr *NestMgr) multiGroupDispatch(name string, groups [][]int64, params []a
 	if !ok || entry.handler == nil {
 		return nil, ErrHandlerNotFound
 	}
-	ids := make([]int64, 0)
 	groupLen := make([]int, len(groups))
+	total := 0
 	for i, group := range groups {
 		groupLen[i] = len(group)
+		total += len(group)
+	}
+	// 外部 Msg 的各组不一定连续；只预分配展开容量，保留顺序、重复项与组边界。
+	ids := make([]int64, 0, total)
+	for _, group := range groups {
 		ids = append(ids, group...)
 	}
 	return mgr.dispatchMany(entry, name, ids, params, HandlerOptionWithGroup(groupLen))

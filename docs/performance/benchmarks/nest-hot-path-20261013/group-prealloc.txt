@@ -1,0 +1,36 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups1/async=false-10         	   55878	      4672 ns/op	    2471 B/op	      59 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups1/async=false-10         	   60025	      3669 ns/op	    2469 B/op	      59 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups1/async=false-10         	   55358	      4267 ns/op	    2469 B/op	      58 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups1/async=false-10         	   71292	      3370 ns/op	    2470 B/op	      59 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups1/async=false-10         	   68265	      3518 ns/op	    2468 B/op	      58 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups1/async=true-10          	   58869	      5444 ns/op	    2093 B/op	      54 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups1/async=true-10          	   51258	      4477 ns/op	    2092 B/op	      54 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups1/async=true-10          	   59250	      4048 ns/op	    2092 B/op	      54 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups1/async=true-10          	   59793	      5963 ns/op	    2093 B/op	      54 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups1/async=true-10          	   47526	      5456 ns/op	    2094 B/op	      54 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups8/async=false-10         	   16846	     12292 ns/op	    7560 B/op	      63 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups8/async=false-10         	   21877	     13759 ns/op	    7520 B/op	      62 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups8/async=false-10         	   19956	     11868 ns/op	    7570 B/op	      63 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups8/async=false-10         	   25867	      8387 ns/op	    7562 B/op	      63 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups8/async=false-10         	   31419	      7750 ns/op	    7556 B/op	      63 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups8/async=true-10          	   28527	      8075 ns/op	    7166 B/op	      58 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups8/async=true-10          	   29887	      7931 ns/op	    7167 B/op	      58 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups8/async=true-10          	   30812	      7833 ns/op	    7168 B/op	      58 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups8/async=true-10          	   31274	      8471 ns/op	    7173 B/op	      58 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups8/async=true-10          	   30270	      8026 ns/op	    7173 B/op	      58 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups32/async=false-10        	   10000	     21683 ns/op	   25560 B/op	      65 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups32/async=false-10        	   10000	     26906 ns/op	   25727 B/op	      66 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups32/async=false-10        	    8671	     25074 ns/op	   25692 B/op	      66 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups32/async=false-10        	   10000	     25346 ns/op	   25705 B/op	      66 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups32/async=false-10        	    9574	     24846 ns/op	   25704 B/op	      66 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups32/async=true-10         	   10000	     25541 ns/op	   25258 B/op	      61 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups32/async=true-10         	    9716	     26444 ns/op	   25329 B/op	      61 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups32/async=true-10         	    7692	     28625 ns/op	   25355 B/op	      61 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups32/async=true-10         	   10000	     28484 ns/op	   25344 B/op	      61 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/groups32/async=true-10         	    7651	     28124 ns/op	   25359 B/op	      61 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	11.082s

@@ -1,6 +1,7 @@
 package nest
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -67,5 +68,40 @@ func BenchmarkClientGroupTargets(b *testing.B) {
 			}
 			b.ReportMetric(float64(unsafe.Sizeof(Msg{})), "Msg-B")
 		})
+	}
+}
+
+// 业务目标有顺序和重复项，不能使用排序去重的 tail 集合代替。
+func TestDispatchGroupedTargetsKeepOrderAndBoundaries(t *testing.T) {
+	getter := newMockGetter()
+	a := mustBuildCastID(t, 8321, 1, nestLocalKind)
+	b := mustBuildCastID(t, 8322, 1, nestLocalKind)
+	for _, id := range []int64{a, b} {
+		getter.Add(newMockEntity(id, 1))
+	}
+	mgr := NewEngine(NestOptionWithGetter(getter))
+	name := NewHandlerName("grouped_order")
+	mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, opts ...HandlerOption) (any, error) {
+		ids := make([]int64, len(es))
+		for i, e := range es {
+			ids[i] = e.GUId()
+		}
+		var option HandlerOptionParam
+		for _, apply := range opts {
+			apply(&option)
+		}
+		if !reflect.DeepEqual(ids, []int64{b, a, b, a}) || !reflect.DeepEqual(option.GroupLen, []int{3, 1}) {
+			return nil, fmt.Errorf("ids=%v groups=%v", ids, option.GroupLen)
+		}
+		// Handler 可以替换参数切片，不能影响框架释放原实体引用。
+		es[0] = nil
+		return nil, nil
+	}, HandlerMeta{})
+	if err := mgr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Shutdown(context.Background())
+	if _, err := mgr.RequestMultiGroup(context.Background(), name, [][]int64{{b, a, b}, {a}}, nil); err != nil {
+		t.Fatal(err)
 	}
 }
