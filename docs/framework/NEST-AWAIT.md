@@ -196,3 +196,5 @@ Go 1.27.0，Windows/amd64，Ryzen 7 5800H，GOMAXPROCS=4；每组 4 个 ID，前
 观测遗漏的触发条件是使用 long 池：原 statslog 只投影 short/io，健康检查也只累加这两池；long 的等待与续行因此未被展示。修复只补观测字段和求和，不改变调度。`TestFormatNestStatsUsesReadableQueueNames` 增加 long 队列与续行断言；用源码 overlay 撤去两项 long 赋值时失败（期望 2 workers、3/16 队列和 2 continuations，实际全零），恢复后通过。后续新增执行池应同步核对 DispatcherStats、statslog、健康和 metrics 四个出口，避免只修改调度器。
 
 CBM 核对代际为 `2026-10-10T03:58:22Z`；相关源码存在 metadata_changed，文档/消费 testdata 按设计排除，旧符号片段行号已经漂移。已对更改路径分批检查 coverage，并以当前源码、调用点和编译回归补证，未把图谱旧行号作为正确性依据。
+
+实施提交 `bce30797` 合回本地 main 后尝试刷新 CBM，worker 退出，日志原因为 `a pre-coordination or unverified CBM generation is active`。本轮索引未更新；没有清理未知协调状态或停止共享服务，后续检索仍需当前源码补证。
