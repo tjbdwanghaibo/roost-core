@@ -1,4 +1,6 @@
-# Changelog
+# roost-kit 历史变更记录（只读）
+
+> 来源：原 `wiring/CHANGELOG.md`（更早为 roost-kit 仓库的 CHANGELOG），记录 kit 独立成仓期间（截至 v1.14.17 之后的未发版段）的装配层变更；kit 现为 `wiring/`。合仓为单模块后只维护根目录 [CHANGELOG](../../../CHANGELOG.md)；本文件保留原文作为只读历史，不再追加，文中的版本号是当时各仓自己的版本线，与 roost-core 单模块版本无关，文中的路径与包名也是当时的写法。
 
 本文件从 v1.6.1 起维护；更早版本见 git 历史。
 

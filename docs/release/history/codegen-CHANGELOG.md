@@ -1,4 +1,6 @@
-# Changelog
+# roost-codegen 历史变更记录（只读）
+
+> 来源：原 `codegen/CHANGELOG.md`，记录 roost-codegen 独立成仓期间及并入 roost-core 之初（截至 2026-09-23）的生成器变更。合仓为单模块后只维护根目录 [CHANGELOG](../../../CHANGELOG.md)；本文件保留原文作为只读历史，不再追加，文中的版本号是当时各仓自己的版本线，与 roost-core 单模块版本无关，文中的路径与包名也是当时的写法。
 
 本文件从 v1.5.0 起维护；更早版本见 git 历史。
 

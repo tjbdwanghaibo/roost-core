@@ -1,4 +1,6 @@
-# Changelog
+# roost-service 历史变更记录（只读）
+
+> 来源：原 `wiring/docs/history/SERVICE_CHANGELOG.md`（更早为 roost-service 仓库的 CHANGELOG），记录框架服务独立成仓期间的变更；领域实现现位于 `service/`，接线位于 `wiring/`。合仓为单模块后只维护根目录 [CHANGELOG](../../../CHANGELOG.md)；本文件保留原文作为只读历史，不再追加，文中的版本号是当时各仓自己的版本线，与 roost-core 单模块版本无关，文中的路径与包名也是当时的写法。
 
 格式遵循 Keep a Changelog，版本号遵循语义化版本。
 

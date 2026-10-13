@@ -2,7 +2,7 @@
 
 > **这里已经是 roost-core 的一部分**（生成器，模块路径 `github.com/tjbdwanghaibo/roost-core/codegen/…`，模板在 `../demo/`）。独立的 roost-codegen 仓库已归档；下文里说"本仓库"的地方指的是这个目录。CLI：`go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest`。方案见 [三仓合一仓](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)。
 
-roost 框架的项目脚手架与代码生成工具链：用源码里的标记注释（`//roost:dao`、`//roost:nest` 等）驱动一组 Go 代码生成器，把持久化、同步、协议、事件、配置表这些"写错就丢数据"的样板代码变成可重复生成、可 CI 校验的产物。版本与升级记录以 [CHANGELOG](CHANGELOG.md) 和仓库 release/tag 为准；生成器会在运行前校验框架兼容下限。
+roost 框架的项目脚手架与代码生成工具链：用源码里的标记注释（`//roost:dao`、`//roost:nest` 等）驱动一组 Go 代码生成器，把持久化、同步、协议、事件、配置表这些"写错就丢数据"的样板代码变成可重复生成、可 CI 校验的产物。版本与升级记录以根目录 [CHANGELOG](../CHANGELOG.md) 和仓库 release/tag 为准（合仓前的生成器历史见 [codegen 历史变更记录](../docs/release/history/codegen-CHANGELOG.md)）；生成器会在运行前校验框架兼容下限。
 
 生成物依赖 [roost-core](https://github.com/tjbdwanghaibo/roost-core) 运行时（`dataengine`、`entity`、`nest`、`fmap` 等包），见[与 roost-core 的关系](#学习路径与-roost-core-的关系)。
 
