@@ -212,18 +212,15 @@ func (m *NatsMod) StopWithContext(ctx context.Context) error {
 	defer m.stopSerial.Unlock()
 	var err error
 	if m.bus != nil {
-		if stopper, ok := any(m.bus).(interface{ StopWithContext(context.Context) error }); ok {
-			if stopErr := stopper.StopWithContext(ctx); stopErr != nil {
-				if busDrainPending(stopErr) {
-					// Bus 的 handler 仍在运行、连接仍在使用；保留 bus / asm，
-					// 再次停止会继续等同一次排空（RR-20261004-07）。
-					return stopErr
-				}
-				// 终态错误（如退订失败）：Bus 已不会再有进展，照常关闭 Assembly。
-				err = errors.Join(err, stopErr)
+		// m.bus 是具体类型 *bus.Bus，StopWithContext 在编译期就存在；不再做运行期断言，也没有不限时的 Stop() 回退。
+		if stopErr := m.bus.StopWithContext(ctx); stopErr != nil {
+			if busDrainPending(stopErr) {
+				// Bus 的 handler 仍在运行、连接仍在使用；保留 bus / asm，
+				// 再次停止会继续等同一次排空（RR-20261004-07）。
+				return stopErr
 			}
-		} else {
-			m.bus.Stop()
+			// 终态错误（如退订失败）：Bus 已不会再有进展，照常关闭 Assembly。
+			err = errors.Join(err, stopErr)
 		}
 		m.bus = nil
 	}
