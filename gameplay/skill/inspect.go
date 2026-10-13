@@ -120,33 +120,6 @@ func InspectVisualManifest(program *Program) SkillVisualManifest {
 	return SkillVisualManifest{Digest: digestStrings("roost.skill/v2/visual-manifest", program.visualCatalogRevision+"/"+program.visualCatalogDigest, parts), CatalogRevision: program.visualCatalogRevision, CatalogDigest: program.visualCatalogDigest, Entries: entries}
 }
 
-// InspectCombatSemantics 返回战斗相关的语义（伤害类型、元素等）。
-func InspectCombatSemantics(program *Program) CombatSemanticView {
-	view := CombatSemanticView{}
-	if program == nil {
-		return view
-	}
-	for _, operation := range program.operations {
-		if damage, ok := operation.(damageOperation); ok {
-			view.DamageEffects++
-			view.Damage = append(view.Damage, DamageSemanticView{EffectIndex: damage.effectIndex, DamageType: damage.damageType, Element: damage.element, CombatTags: append([]GameplayTagHandle(nil), damage.combatTags...), CanCritical: damage.canCritical})
-		}
-	}
-	return view
-}
-
-// InspectEventPlans 返回事件计划。
-func InspectEventPlans(program *Program) []EventPlanView {
-	if program == nil {
-		return nil
-	}
-	result := make([]EventPlanView, len(program.eventPlans))
-	for index, plan := range program.eventPlans {
-		result[index] = EventPlanView{RequiredTags: append([]GameplayTagHandle(nil), plan.filter.RequiredTags...), ExcludedTags: append([]GameplayTagHandle(nil), plan.filter.ExcludedTags...), Elements: append([]ElementHandle(nil), plan.filter.Elements...), DamageTypes: append([]DamageTypeHandle(nil), plan.filter.DamageTypes...), Results: append([]string(nil), plan.filter.Results...), MaxDepth: plan.proc.MaxDepth, MaxEventsPerRoot: plan.proc.MaxEventsPerRoot, AllowSelfTrigger: plan.proc.AllowSelfTrigger, OncePerRootEvent: plan.proc.OncePerRootEvent}
-	}
-	return result
-}
-
 // InspectStateLayouts 返回 memory、持久状态与局部变量的布局。
 func InspectStateLayouts(program *Program) StateLayoutView {
 	return StateLayoutView{Memory: inspectMemory(program), PersistentState: inspectPersistentState(program), Locals: inspectLocals(program)}
@@ -178,53 +151,6 @@ func inspectLocals(program *Program) []LocalSlotView {
 	}
 	return result
 }
-
-// InspectAbilityControls 返回技能实例相关的控制项。
-func InspectAbilityControls(program *Program) AbilityControlView {
-	view := AbilityControlView{}
-	if program == nil {
-		return view
-	}
-	for _, operation := range program.operations {
-		if _, ok := operation.(abilityStateOperation); ok {
-			view.Operations++
-		}
-	}
-	return view
-}
-
-// InspectOwnedEntities 返回召唤物相关的模板与策略。
-func InspectOwnedEntities(program *Program) OwnedEntityView {
-	view := OwnedEntityView{}
-	if program == nil {
-		return view
-	}
-	for _, operation := range program.operations {
-		switch operation.(type) {
-		case summonOperation, entityCommandOperation:
-			view.Operations++
-		}
-	}
-	return view
-}
-
-// InspectStatusOperations 返回状态（buff）相关的操作。
-func InspectStatusOperations(program *Program) StatusOperationView {
-	view := StatusOperationView{}
-	if program == nil {
-		return view
-	}
-	for _, operation := range program.operations {
-		switch operation.(type) {
-		case statusOperation, modifyStatusInstanceOperation:
-			view.Operations++
-		}
-	}
-	return view
-}
-
-// InspectTemporalProfiles 当前总是返回零值。
-func InspectTemporalProfiles(*Program) TemporalProfileView { return TemporalProfileView{} }
 
 // InspectIdentity 返回 Program 的身份与各项 digest。
 func InspectIdentity(program *Program) ProgramIdentityView {

@@ -26,13 +26,7 @@ const (
 // SpawnScope 是衍生物的作用域。Runtime 只创建 entity 衍生物：施法结束时移交给 lifecycle 实体继续运行。
 type SpawnScope string
 
-const (
-	// Deprecated: Runtime 只创建 entity 衍生物；保留旧常量供源码迁移。
-	SpawnScopePhase SpawnScope = "phase"
-	// Deprecated: Runtime 只创建 entity 衍生物；正常施法结束会移交，不按 cast 停止。
-	SpawnScopeCast   SpawnScope = "cast"
-	SpawnScopeEntity SpawnScope = "entity"
-)
+const SpawnScopeEntity SpawnScope = "entity"
 
 // StopCause 是衍生物停止的原因，决定停止后的终态（ended / cancelled / failed）。
 type StopCause string

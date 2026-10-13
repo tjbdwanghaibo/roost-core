@@ -197,8 +197,3 @@ type boomerangMotionCompletionProgram struct{ maxReturnTicks Tick }
 func (endMotionCompletionProgram) isMotionCompletionProgram()          {}
 func (pauseThenEndMotionCompletionProgram) isMotionCompletionProgram() {}
 func (boomerangMotionCompletionProgram) isMotionCompletionProgram()    {}
-
-type SpawnTemplateView struct {
-	Index     SpawnTemplateIndex
-	Callbacks []OperationIndex
-}

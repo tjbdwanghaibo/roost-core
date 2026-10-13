@@ -127,10 +127,3 @@ func (runtime *Runtime) RuntimeEvents() []RuntimeEvent {
 	defer runtime.mutex.Unlock()
 	return cloneRuntimeEvents(runtime.runtimeEvents)
 }
-
-// RuntimeEventDropped 返回因超过 RuntimeEventLimit 被丢弃的诊断事件累计条数。
-func (runtime *Runtime) RuntimeEventDropped() uint64 {
-	runtime.mutex.Lock()
-	defer runtime.mutex.Unlock()
-	return runtime.runtimeEventDropped
-}

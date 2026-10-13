@@ -520,7 +520,7 @@ func TestStartFailureWhoseCancelStartsAnotherActionKeepsThatAction(t *testing.T)
 		t.Fatalf("current = %v, want the action the reentrant Start installed (started %d time(s)); failing left %d time(s)",
 			got, next.starts, trace.leaves[1])
 	}
-	if !errors.Is(err, errStartRefused) || errors.Is(err, ErrReentrantMutation) {
+	if !errors.Is(err, errStartRefused) {
 		t.Fatalf("Start = %v, want the start error alone", err)
 	}
 	if next.starts != 1 || next.cancels != 0 || failing.cancels != 1 {
@@ -561,7 +561,7 @@ func TestQueuedStartFailureWhoseCancelStartsAnotherActionKeepsThatAction(t *test
 		t.Fatalf("current = %v, want the reentrantly installed action (next starts=%d, after starts=%d, failing ended %d time(s))",
 			got, next.starts, after.starts, trace.ended[failingID])
 	}
-	if !errors.Is(err, errStartRefused) || errors.Is(err, ErrReentrantMutation) {
+	if !errors.Is(err, errStartRefused) {
 		t.Fatalf("Recover = %v, want the start error alone", err)
 	}
 	if after.starts != 0 || runner.QueueLength(1) != 1 {

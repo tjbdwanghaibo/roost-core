@@ -224,26 +224,8 @@ type MetricSnapshot struct {
 	ComputedLimits
 }
 
-type CombatSemanticView struct {
-	DamageEffects int
-	Damage        []DamageSemanticView
-}
-
-type DamageSemanticView struct {
-	EffectIndex EffectIndex
-	DamageType  DamageTypeHandle
-	Element     ElementHandle
-	CombatTags  []GameplayTagHandle
-	CanCritical bool
-}
-
 type StateLayoutView struct {
 	Memory          []MemorySlotView
 	PersistentState []PersistentStateView
 	Locals          []LocalSlotView
 }
-
-type AbilityControlView struct{ Operations int }
-type OwnedEntityView struct{ Operations int }
-type StatusOperationView struct{ Operations int }
-type TemporalProfileView struct{ Profiles int }

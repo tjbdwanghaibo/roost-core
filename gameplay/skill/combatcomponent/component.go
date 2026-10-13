@@ -298,11 +298,6 @@ func (component *CombatComponent) ActiveBuffs() []combat.BuffInstance {
 	return component.dao.buffs.Active()
 }
 
-// HasBuffTag 报告是否有生效中的 buff 带该标签。
-func (component *CombatComponent) HasBuffTag(tag combat.Tag) bool {
-	return component.dao.buffs.HasTag(tag)
-}
-
 // beginChange 在 mask 里的字段第一次改动之前把它们加入当前事务。它是每次修改里 DAO 自己的那一半，形状与生成的
 // DAO setter 相同：DAO 记录自己状态的逆操作，驱动它的组件不登记任何东西（回滚就是 DAO 的回滚）。rollback=undo 下
 // 每个字段每个事务只记录一次（Nest 对每个 DAO 与字段保留第一个逆操作），无论之后有多少次修改，逆操作都恢复到事务

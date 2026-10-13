@@ -14,8 +14,6 @@ var (
 	ErrActionGroupInvalid = errors.New("taskflow: action group is invalid")
 	ErrActionGroupFrozen  = errors.New("taskflow: action group is frozen")
 	ErrActionIDExhausted  = errors.New("taskflow: action id exhausted")
-	// ErrReentrantMutation 已不再由任何 runner 返回：两种 runner 都把回调里的变更延后执行。保留导出名以兼容调用方。
-	ErrReentrantMutation = errors.New("taskflow: reentrant mutation changed current action")
 	// ErrDeferredQueueFull：一次最外层调用里，回调发起的待执行命令超过
 	// ActionRunnerConfig.MaxDeferredCommands。被拒的 Start / Enqueue 不分配 ID。
 	ErrDeferredQueueFull = errors.New("taskflow: deferred command queue is full")

@@ -129,12 +129,11 @@
 | [presentation_asset_cache.go](../../../gameplay/skill/presentation_asset_cache.go) | `VisualCatalogTrust`、`TrustedVisualCatalogs`、`VisualAssetLoader`、`VisualPlanCacheOptions`、`VisualPlanCache`、`VisualPlanLease` |
 | [presentation_assets.go](../../../gameplay/skill/presentation_assets.go) | `VisualAsset`、`VisualAssetResolver`、`ResolvedVisualAsset`、`ResolvedPresentationPlan` |
 | [presentation_recovery.go](../../../gameplay/skill/presentation_recovery.go) | `ActivePresentationKind`、`ActivePresentation`、`PresentationRecoverySnapshot` |
-| [program.go](../../../gameplay/skill/program.go) | `Program`、`ProgramView`、`CastWindowView`、`CostView`、`MemorySlotView`、`LocalSlotView`、`PhaseView`、`RootView`、`OperationView`、`MetricSnapshot`、`CombatSemanticView`、`DamageSemanticView`、`StateLayoutView`、`AbilityControlView`、`OwnedEntityView`、`StatusOperationView`、`TemporalProfileView` |
+| [program.go](../../../gameplay/skill/program.go) | `Program`、`ProgramView`、`CastWindowView`、`CostView`、`MemorySlotView`、`LocalSlotView`、`PhaseView`、`RootView`、`OperationView`、`MetricSnapshot`、`StateLayoutView` |
 | [program_ability.go](../../../gameplay/skill/program_ability.go) | 函数/方法或内部实现；见源码 |
 | [program_combat.go](../../../gameplay/skill/program_combat.go) | 函数/方法或内部实现；见源码 |
 | [program_digest.go](../../../gameplay/skill/program_digest.go) | 函数/方法或内部实现；见源码 |
 | [program_effect_result.go](../../../gameplay/skill/program_effect_result.go) | `ResultFieldHandle` |
-| [program_event.go](../../../gameplay/skill/program_event.go) | `EventPlanView` |
 | [program_identity.go](../../../gameplay/skill/program_identity.go) | `MemoryIndex`、`LocalIndex`、`PhaseIndex`、`RootIndex`、`SelectorIndex`、`OperationIndex`、`EffectIndex`、`SpawnTemplateIndex`、`VisualIndex`、`RandomSiteIndex`、`ProgramIdentityView` |
 | [program_input.go](../../../gameplay/skill/program_input.go) | `InputPort`、`InputSlotView`、`InputProgramView`、`InputLayoutView` |
 | [program_operation.go](../../../gameplay/skill/program_operation.go) | 函数/方法或内部实现；见源码 |
@@ -142,7 +141,6 @@
 | [program_quantity.go](../../../gameplay/skill/program_quantity.go) | `QuantityView` |
 | [program_random.go](../../../gameplay/skill/program_random.go) | `RandomSiteView` |
 | [program_select.go](../../../gameplay/skill/program_select.go) | `SelectionView`、`EffectResultView` |
-| [program_spawn.go](../../../gameplay/skill/program_spawn.go) | `SpawnTemplateView` |
 | [program_state.go](../../../gameplay/skill/program_state.go) | `PersistentStateView` |
 | [program_status.go](../../../gameplay/skill/program_status.go) | 函数/方法或内部实现；见源码 |
 | [program_temporal.go](../../../gameplay/skill/program_temporal.go) | 函数/方法或内部实现；见源码 |

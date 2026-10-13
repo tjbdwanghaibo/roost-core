@@ -235,7 +235,6 @@ type SelectionQueryMeta struct {
 	Limit     int
 }
 
-func (selection Selection) ElementType() string       { return selectionElementName(selection.elementType) }
 func (selection Selection) Meta() QueryResultMeta     { return selection.meta }
 func (selection Selection) Query() SelectionQueryMeta { return selection.query }
 func (selection Selection) EntityIDs() []EntityID {
@@ -250,14 +249,6 @@ func (selection Selection) Hits() []Hit {
 	result := make([]Hit, len(selection.elements))
 	for index, element := range selection.elements {
 		result[index] = element.hit
-	}
-	return result
-}
-
-func (selection Selection) Positions() []Position {
-	result := make([]Position, len(selection.elements))
-	for index, element := range selection.elements {
-		result[index] = element.position
 	}
 	return result
 }

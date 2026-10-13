@@ -85,15 +85,14 @@ type EffectResult struct {
 type ExpectedFailureReason string
 
 const (
-	ExpectedFailureNone                ExpectedFailureReason = "none"
-	ExpectedFailureInvalidTarget       ExpectedFailureReason = "invalid_target"
-	ExpectedFailureInvalidPosition     ExpectedFailureReason = "invalid_position"
-	ExpectedFailureCapacityReached     ExpectedFailureReason = "capacity_reached"
-	ExpectedFailurePolicyRejected      ExpectedFailureReason = "policy_rejected"
-	ExpectedFailurePermissionDenied    ExpectedFailureReason = "permission_denied"
-	ExpectedFailureReferenceExpired    ExpectedFailureReason = "reference_expired"
-	ExpectedFailureDestinationBlocked  ExpectedFailureReason = "destination_blocked"
-	ExpectedFailureResourceUnavailable ExpectedFailureReason = "resource_unavailable"
+	ExpectedFailureNone               ExpectedFailureReason = "none"
+	ExpectedFailureInvalidTarget      ExpectedFailureReason = "invalid_target"
+	ExpectedFailureInvalidPosition    ExpectedFailureReason = "invalid_position"
+	ExpectedFailureCapacityReached    ExpectedFailureReason = "capacity_reached"
+	ExpectedFailurePolicyRejected     ExpectedFailureReason = "policy_rejected"
+	ExpectedFailurePermissionDenied   ExpectedFailureReason = "permission_denied"
+	ExpectedFailureReferenceExpired   ExpectedFailureReason = "reference_expired"
+	ExpectedFailureDestinationBlocked ExpectedFailureReason = "destination_blocked"
 )
 
 // ResultOutcome 是效果结果共有的成功标志与失败原因。

@@ -37,7 +37,6 @@ const (
 	DiagnosticAttributeSnapshotInvalid DiagnosticCode = "ATTRIBUTE_SNAPSHOT_INVALID"
 	DiagnosticEventFilterConflict      DiagnosticCode = "EVENT_FILTER_CONFLICT"
 	DiagnosticProcLimitExceeded        DiagnosticCode = "PROC_LIMIT_EXCEEDED"
-	DiagnosticVisualNotDeployed        DiagnosticCode = "VISUAL_NOT_DEPLOYED"
 	DiagnosticVisualInvalid            DiagnosticCode = "VISUAL_INVALID"
 	DiagnosticTypeMismatch             DiagnosticCode = "TYPE_MISMATCH"
 	DiagnosticReferenceUnknown         DiagnosticCode = "REFERENCE_UNKNOWN"

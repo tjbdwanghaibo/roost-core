@@ -10,9 +10,6 @@ type StateHandle struct {
 	Shared         SharedStateHandle
 }
 
-// IsShared 报告句柄是否指向共享状态。
-func (handle StateHandle) IsShared() bool { return handle.Shared != 0 }
-
 // StateScope 是持久状态的作用域。
 type StateScope string
 

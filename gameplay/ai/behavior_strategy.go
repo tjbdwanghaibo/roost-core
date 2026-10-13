@@ -34,9 +34,6 @@ func (b *BehaviorContext[C]) TakeActionEnd(id int64) (ActionEnd, bool) {
 	return ActionEnd{}, false
 }
 
-// NowTicks 把上下文的 tick 时钟适配成节点库 Now 的签名（Cooldown / TimeLimit）。
-func NowTicks[C any](ctx *BehaviorContext[C]) int64 { return ctx.NowTick }
-
 // BehaviorStrategyOptions 配置树到策略的桥接。
 type BehaviorStrategyOptions[C any] struct {
 	Name string
