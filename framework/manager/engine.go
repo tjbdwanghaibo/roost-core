@@ -8,8 +8,8 @@
 // its own. app declares the contract (app.IManager,
 // app.ManagerDependencyProvider, app.IManagerStopperWithContext); this package
 // drives it. The app.Mod that owns the engine inside a service (name, config,
-// capability registration under the kit's mod name) is roost-kit/manager's
-// ManagerMod, which wraps an Engine (ARCH-02, M-09).
+// capability registration under the mod's name) is wiring/manager's
+// ManagerMod, which wraps an Engine.
 //
 // Managers are per service, not per process: the same singleton may appear in
 // several services' manager sets, and only the service actually running starts
@@ -40,7 +40,7 @@ var ErrRegisterAfterStart = errors.New("manager: Register after Start")
 var ErrStartState = errors.New("manager: lifecycle already started or stopped")
 
 // Engine starts a service's managers in dependency order and stops them in
-// reverse. Layers: Service -> Mod (kit ManagerMod) -> Engine -> IManager.
+// reverse. Layers: Service -> Mod (wiring ManagerMod) -> Engine -> IManager.
 type Engine struct {
 	mu       sync.Mutex
 	managers []app.IManager
@@ -50,11 +50,11 @@ type Engine struct {
 	// never cleared: from then on the set is closed. It is a separate flag
 	// because started stays nil until the FIRST manager finishes, and a
 	// Register that slipped in during that first Start was accepted into a
-	// list nobody would ever start or stop (RR-20260916-07).
+	// list nobody would ever start or stop.
 	starting bool
 	stopping bool
 	// stopTurn 是停止 manager 的执行权（容量 1）：同一时刻只有一个调用方在停，其余调用方按自己的
-	// ctx 等待，不会绕过正在停的那个报告成功（RR-20261005-NC-170）。
+	// ctx 等待，不会绕过正在停的那个报告成功。
 	stopTurn chan struct{}
 }
 
@@ -126,7 +126,7 @@ func (e *Engine) Provide(r *app.Registry) error {
 // an engine admits one startup attempt; subsequent calls return ErrStartState.
 func (e *Engine) Start() error {
 	e.mu.Lock()
-	// RR-20261004-NC-02：在快照前取得唯一启动权，不能重复调用 singleton 的 Start。
+	// 在快照前取得唯一启动权，不能重复调用 singleton 的 Start。
 	if e.starting || e.stopping {
 		e.mu.Unlock()
 		return ErrStartState
@@ -181,7 +181,7 @@ func (e *Engine) Start() error {
 		// started and this path owns the cleanup. The loop-top check alone is
 		// not enough — for the LAST manager there is no next iteration, so a
 		// Stop that landed while it was starting used to leave it running
-		// with Start reporting success (RR-20260916-06).
+		// with Start reporting success.
 		e.mu.Lock()
 		if e.stopping {
 			e.mu.Unlock()
@@ -204,8 +204,8 @@ func (e *Engine) Start() error {
 // error counts as stopped and the rest still get their chance; every failure is
 // reported (errors.Join). A stop cut short by ctx (Canceled / DeadlineExceeded)
 // ends the call at once and keeps that manager and the older ones — its
-// dependencies — registered, so a later Stop with a fresh ctx continues from it
-// (RR-20261005-NC-170). Once everything has stopped, Stop returns nil.
+// dependencies — registered, so a later Stop with a fresh ctx continues from
+// it. Once everything has stopped, Stop returns nil.
 func (e *Engine) Stop(ctx context.Context) error {
 	if ctx == nil {
 		ctx = fctx.BaseContext()
@@ -213,7 +213,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 	return e.stopStarted(ctx)
 }
 
-// stopStarted 按三步停机（RR-20261005-NC-170，roost-coding 生命周期复审要点）：
+// stopStarted 按三步停机（roost-coding 生命周期复审要点）：
 //
 //  1. 发起：置 stopping（幂等），Start 据此中止、不再把 manager 交给 started。
 //  2. 等待：取得停止执行权后逆序在 ctx 内停止仍登记的 manager；某个 manager 停完（含普通错误）
@@ -221,8 +221,8 @@ func (e *Engine) Stop(ctx context.Context) error {
 //  3. 释放：没有停完的 manager 与更早启动的（它的依赖）都留在 started 里，不在过期的 ctx 下继续
 //     停依赖；用新 ctx 重试从它继续。
 //
-// 修前先把 started 换成空切片再逐个停：第一次超时后，第二次 Stop 看到空列表返回 nil，manager 实际
-// 仍在运行；同一次调用还会继续停它的依赖。
+// 不能先把 started 换成空切片再逐个停：第一次超时后，第二次 Stop 会看到空列表返回 nil，manager
+// 实际仍在运行；同一次调用还会继续停它的依赖。历史：RR-20261005-NC-170。
 func (e *Engine) stopStarted(ctx context.Context) error {
 	e.mu.Lock()
 	e.stopping = true
@@ -279,10 +279,10 @@ func stopIncomplete(err error) bool {
 
 // stopOne stops a single manager, preferring the bounded hook. It is shared
 // by the reverse-order drain and by a Start that finished after Stop had
-// already drained (RR-20260916-06), so both paths stop a manager the same way.
+// already drained, so both paths stop a manager the same way.
 func stopOne(ctx context.Context, manager app.IManager) (err error) {
 	name := "<unknown>"
-	// RR-20261004-NC-01：逐 manager 隔离 panic，回滚和逆序停机都必须继续清理其余对象。
+	// 逐 manager 隔离 panic，回滚和逆序停机都必须继续清理其余对象。
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			if cause, ok := recovered.(error); ok {

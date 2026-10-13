@@ -46,7 +46,7 @@ func RegisterAdminCommands(reg *admin.Registry) error {
 					return admin.Result{}, err
 				}
 				// 与 hotcode.load_plugin 串行：插件 Apply 失败的恢复按应用前快照判断，交错的
-				// revert 会被一起恢复掉（RR-20261005-NC-245）。
+				// revert 会被一起恢复掉。
 				if err := Default.revertBetweenApplies(payload.Name); err != nil {
 					return admin.Result{}, err
 				}

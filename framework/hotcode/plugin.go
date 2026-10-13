@@ -23,7 +23,7 @@ type Bundle interface {
 // method or by reverting individual patch points.
 //
 // Apply 失败（错误或 panic）时，已被它替换的补丁点恢复成加载前的那一代，再返回错误
-// （Registry.ApplyBundle，RR-20261005-NC-245）。
+// （Registry.ApplyBundle）。
 func LoadPlugin(path string) (Bundle, error) {
 	if path == "" {
 		return nil, fmt.Errorf("hotcode: plugin path required")
@@ -41,9 +41,8 @@ func LoadPlugin(path string) (Bundle, error) {
 	}
 	bundle, ok := sym.(Bundle)
 	if !ok {
-		// 导出成 hotcode.Bundle 接口变量时 Lookup 得到 *Bundle。之前这里写成
-		// `if ptr, ok := ...; ok && ptr != nil { ok = bundle != nil }`，内层 ok 遮住了外层，
-		// 这种导出方式一律被拒（RR-20261005-NC-244）。
+		// 导出成 hotcode.Bundle 接口变量时 Lookup 得到 *Bundle。这里给内层断言单独起名 isPtr：
+		// 若写成 `if ptr, ok := ...`，内层 ok 会遮住外层，这种导出方式会被一律拒绝。
 		if ptr, isPtr := sym.(*Bundle); isPtr && ptr != nil {
 			bundle = *ptr
 			ok = bundle != nil

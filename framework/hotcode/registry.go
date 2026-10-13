@@ -35,16 +35,15 @@ type PointInfo struct {
 	Patched    bool
 	Meta       Meta
 	// ResolveMismatches 是 Resolve[T] 因 T 与注册签名不符而回落到 fallback 的次数：非零表示
-	// 有调用方用错了类型，这个点的补丁对它永远不生效（RR-20261005-NC-247）。
+	// 有调用方用错了类型，这个点的补丁对它永远不生效。
 	ResolveMismatches uint64
 }
 
 // pointState 是一个补丁点在某一代的完整状态：当前函数、对应的 Meta、是否打了补丁与代数。
 // 它整体发布、发布后不再修改，读者一次 Load 拿到的各项总是同一次 Replace / Revert 写下的。
 //
-// patched 由写者记录（Replace 为真、Revert 为假）。之前 List 用函数代码指针与原函数比较，
-// 同一函数字面量 / 工厂产生、捕获值不同的闭包代码指针相同，补丁在生效却报成未打补丁
-// （RR-20261005-NC-246）。
+// patched 由写者记录（Replace 为真、Revert 为假），不能用函数代码指针与原函数比较：同一函数
+// 字面量 / 工厂产生、捕获值不同的闭包代码指针相同，补丁在生效也会被报成未打补丁。
 type pointState struct {
 	fn      any
 	meta    Meta
@@ -52,10 +51,9 @@ type pointState struct {
 	gen     uint64
 }
 
-// point 是一个补丁点。之前 current / meta / gen 是三个独立的原子值，并发的 Replace 与
-// Revert 交错写入后会永久留下“当前是原函数、Meta 却是补丁版本”或反过来的组合，List
-// 报出的 Patched 与 Meta 互相矛盾（RR-20261005-NC-123）。现在写者在 writeMu 下基于上一代
-// 生成新的 pointState 整体替换；Resolve / List 不取锁，只读 state。
+// point 是一个补丁点。写者在 writeMu 下基于上一代生成新的 pointState 整体替换；Resolve / List
+// 不取锁，只读 state。函数、Meta 与代数不能分成几个独立的原子值：并发的 Replace 与 Revert 交错
+// 写入后会永久留下“当前是原函数、Meta 却是补丁版本”这类组合，List 报出的 Patched 与 Meta 互相矛盾。
 type point struct {
 	name       string
 	fnType     reflect.Type
@@ -127,10 +125,9 @@ func Revert(name string) error {
 
 // Resolve 返回补丁点当前的函数，没有注册这个点时返回 fallback。
 //
-// 注册的签名与 T 只差命名（func(int) int 与 type F func(int) int）时转换成 T 照常返回；
-// 之前类型断言失败就静默回落 fallback，Replace 照样成功、hotcode.list 照样显示已打补丁，
-// 这个调用方却永远拿不到补丁（RR-20261005-NC-247）。签名确实不同、无法转换时仍回落
-// fallback，并计入该点的 PointInfo.ResolveMismatches。
+// 注册的签名与 T 只差命名（func(int) int 与 type F func(int) int）时转换成 T 照常返回，不能因
+// 类型断言失败静默回落 fallback——那样 Replace 照样成功、hotcode.list 照样显示已打补丁，这个调用方
+// 却永远拿不到补丁。签名确实不同、无法转换时仍回落 fallback，并计入该点的 PointInfo.ResolveMismatches。
 func Resolve[T any](name string, fallback T) T {
 	return resolveTyped(Default, name, fallback)
 }
@@ -251,9 +248,9 @@ func (r *Registry) List() []PointInfo {
 // 应用前的那一代（函数、Meta、补丁标记；不是原函数——Revert 只能回到原函数，会把应用前
 // 已生效的补丁一起撤掉），返回恢复的点数与错误。成功时返回 0, nil。
 //
-// 之前 LoadPlugin 直接调 Bundle.Apply，中途失败只返回错误、丢掉 Bundle：已替换的点留在
-// 插件版本，运维看到“加载失败”，hotcode.list 里却有点被替换了，也拿不到 Bundle 去调它的
-// Revert（RR-20261005-NC-245，N10 观察 O-H1）。
+// LoadPlugin 经它应用补丁包：若直接调 Bundle.Apply，中途失败只返回错误、丢掉 Bundle，已替换的点
+// 留在插件版本，运维看到“加载失败”，hotcode.list 里却有点被替换了，也拿不到 Bundle 去调它的 Revert。
+// 历史：RR-20261005-NC-245。
 //
 // 同一 Registry 上的 ApplyBundle 互相串行。恢复按“应用前快照”判断改动，Apply 期间别处
 // 对同一 Registry 的 Replace / Revert（例如直接调用的业务代码）也会被一起恢复；admin 的

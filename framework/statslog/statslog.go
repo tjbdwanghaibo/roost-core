@@ -101,11 +101,11 @@ type Logger struct {
 	nestSource     func() NestSource
 	entitySource   func() EntitySource
 	// writeErr 是上一次打开 / 写文件的错误文本（空表示上一次成功），只用来给
-	// reportWrite 去重告警（RR-20260928-04）。受 mu 保护。
+	// reportWrite 去重告警。受 mu 保护。
 	writeErr string
 
 	// gaugeMu 保护 publishedCategories / publishedKinds：发布过 gauge 的实体分类与 kind。
-	// 某个键在本次采集里不再出现（实体全部卸载）时要把它的 gauge 写回 0（RR-20261005-NC-164）。
+	// 某个键在本次采集里不再出现（实体全部卸载）时要把它的 gauge 写回 0。
 	// 键的数量受实体 kind / category 定义个数约束，不随实体数增长。
 	gaugeMu             sync.Mutex
 	publishedCategories map[string]struct{}
@@ -158,8 +158,8 @@ func (m *Logger) publishGauges(record StatsRecord) {
 	m.metrics.SetGauge("runtime.sys_bytes", nil, int64(record.Runtime.SysBytes))
 	m.metrics.SetGauge("runtime.num_gc", nil, int64(record.Runtime.NumGC))
 	m.metrics.SetGauge("entity.count", nil, int64(record.Entity.Total))
-	// 记录里只有当前还有实体的键；之前发布过、这次缺席的键写 0，否则 gauge 停在最后一次的
-	// 非零值，与 JSONL（缺席即 0）不一致（RR-20261005-NC-164）。
+	// 记录里只有当前还有实体的键；上一次发布过、这次缺席的键写 0，否则 gauge 停在最后一次的
+	// 非零值，与 JSONL（缺席即 0）不一致。
 	m.gaugeMu.Lock()
 	defer m.gaugeMu.Unlock()
 	m.publishedCategories = m.publishCounts("entity.count_by_category", "category", record.Entity.ByCategory, m.publishedCategories)
@@ -196,9 +196,9 @@ func (m *Logger) Start() error {
 	m.started = true
 	m.mu.Unlock()
 
-	// RR-20260928-04：启动时先把文件打开一次，目录不可写在启动日志里就能看到，
-	// 不用等第一个 interval（默认 1 分钟）。之前 Start 不碰文件，周期循环又把错误吞掉，
-	// 生成的容器（只读根文件系统上的相对目录 /app/log）从不落盘，也没有一行告警。
+	// 启动时先把文件打开一次，目录不可写在启动日志里就能看到，
+	// 不用等第一个 interval（默认 1 分钟）。若 Start 不碰文件、周期循环又把错误吞掉，
+	// 生成的容器（只读根文件系统上的相对目录 /app/log）会从不落盘，也没有一行告警。
 	// 不因此让 Start 失败：统计文件是旁路观测，同一份数据每次采集都已发布到 metrics
 	// gauge 与 ops /statsz；为它拒绝启动会让已部署、但还没合并新部署物的服务在升级后
 	// 反复重启，代价比丢一份统计文件大。
@@ -223,7 +223,7 @@ func (m *Logger) Start() error {
 // working directory when relative.
 func (m *Logger) path() string { return filepath.Join(m.dir, m.filename) }
 
-// reportWrite makes a failed open or write visible (RR-20260928-04): every
+// reportWrite makes a failed open or write visible: every
 // failure counts in stats_log.write_failures (no labels), and a WARN is logged
 // when writing starts failing or the error changes, so a tick every few
 // seconds does not flood the log with one fact. The first success after a
