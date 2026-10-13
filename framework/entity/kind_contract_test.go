@@ -1,3 +1,5 @@
+// kind / category 注册表：批量注册不留半批、策略与生命周期同源、锁档就是 category、非法组合逐项拒绝、读写互不阻塞。
+
 package entity
 
 import (
@@ -116,7 +118,7 @@ func plainKindBuilder(kind EntityKind) *EntityBuilderParam {
 	}
 }
 
-// REPRO-2026-09-26-06 §7 第二个探针改写（entity_factory.go validateBuiltEntityPolicy）：修前构建成功。
+// 构建出的实体策略与 kind 策略一致（validateBuiltEntityPolicy）。
 func TestBuiltEntityPolicyUsesKindPolicy(t *testing.T) {
 	registerOnce(0, func() {
 		MustRegisterEntityKindDefs(EntityKindDef{Kind: kindDefManagedPlainKind, Category: 1, RemotePolicy: RemotePolicyManaged})
@@ -135,7 +137,7 @@ func TestBuiltEntityPolicyUsesKindPolicy(t *testing.T) {
 	}
 }
 
-// entity_factory.go normalizeBuilderPolicy 的默认生命周期同源：修前按 builder 字段（none）得到 ephemeral / persisted。
+// builder 的默认生命周期按 kind 的策略决定，不按 builder 字段（none）。
 func TestBuilderDefaultLifetimeFollowsKindPolicy(t *testing.T) {
 	for i, tc := range []struct {
 		kind   EntityKind
@@ -155,8 +157,7 @@ func TestBuilderDefaultLifetimeFollowsKindPolicy(t *testing.T) {
 	}
 }
 
-// 反方向的注册顺序：builder 先按 none 注册并取得默认生命周期，kind 定义随后把策略升级为 managed。
-// 生命周期与新策略矛盾，注册必须被拒绝（修前接受，kind 变成 managed 而 builder 的生命周期仍是 none 时的默认值）。
+// 反方向的注册顺序：builder 先按 none 注册并取得默认生命周期，kind 定义随后把策略升级为 managed：生命周期与新策略矛盾，注册被拒绝。
 func TestLateKindPolicyUpgradeConflictingWithBuilderIsRefused(t *testing.T) {
 	registerOnce(3, func() { RegisterEntityBuilder(plainKindBuilder(lateManagedKind)) })
 	err := RegisterEntityKindDefs(EntityKindDef{Kind: lateManagedKind, Category: 1, RemotePolicy: RemotePolicyManaged})
@@ -175,9 +176,8 @@ func expectErrContains(t *testing.T, err error, want string) {
 	}
 }
 
-// U-0099 (C2): the kind/category registry is the root of every entity id in
-// the system, and none of its refusals had a test. Each rule is pinned by the
-// reason it names; re-registering an identical pair stays idempotent.
+// The kind/category registry is the root of every entity id in the system:
+// each refusal is pinned by the reason it names; re-registering an identical pair stays idempotent.
 func TestRegisterEntityKindCategoryRefusesEachInvalidPair(t *testing.T) {
 	// 用例断言 kind 201 还没注册（“被拒的注册没有留下登记”），重复运行时必须撤销上一轮的登记（RR-20260926-83）。
 	isolateEntityRegistry(t)
@@ -392,3 +392,212 @@ func TestKindRegistryKeepsItsRegistrationRules(t *testing.T) {
 // test above can prove readers are not blocked by it.
 func lockRegistryForTest()   { registryMu.Lock() }
 func unlockRegistryForTest() { registryMu.Unlock() }
+
+func TestRegisteredCategoriesMakeTheCategoryValueTheLockOrder(t *testing.T) {
+	// RR-20260926-83：收尾时原样放回注册表与锁档；原来的 t.Cleanup(resetEntityCategoriesForTest) 把所有 kind
+	// 的锁档清零，而重复注册同一定义不会重算锁档，第二轮起这些 kind 的锁档都变成“未派生”。
+	isolateEntityRegistry(t)
+	resetEntityCategoriesForTest()
+
+	const (
+		catWorld        = EntityCategoryRemote + 1
+		catPlayerScoped = EntityCategoryRemote + 2
+		catPlayer       = EntityCategoryRemote + 3
+		catOther        = EntityCategoryRemote + 4
+	)
+	MustRegisterEntityCategories(
+		EntityCategoryDef{Category: EntityCategoryRemote, Name: "remote"},
+		EntityCategoryDef{Category: catWorld, Name: "world"},
+		EntityCategoryDef{Category: catPlayerScoped, Name: "player_scoped"},
+		EntityCategoryDef{Category: catPlayer, Name: "player"},
+		EntityCategoryDef{Category: catOther, Name: "other"},
+	)
+
+	const (
+		remoteKind      EntityKind = 171
+		worldKind       EntityKind = 172
+		playerKind      EntityKind = 173
+		otherKind       EntityKind = 174
+		managedElseKind EntityKind = 175
+	)
+	MustRegisterEntityKindDefs(
+		EntityKindDef{Kind: remoteKind, Category: EntityCategoryRemote, RemotePolicy: RemotePolicyManaged},
+		EntityKindDef{Kind: worldKind, Category: catWorld},
+		EntityKindDef{Kind: playerKind, Category: catPlayer},
+		EntityKindDef{Kind: otherKind, Category: catOther},
+		// A managed kind declared outside the remote category: the rank must
+		// still put it first, because that ordering is a physical constraint,
+		// and Seal must report the declaration as wrong.
+		EntityKindDef{Kind: managedElseKind, Category: catPlayer, RemotePolicy: RemotePolicyManaged},
+	)
+
+	for _, tc := range []struct {
+		name string
+		kind EntityKind
+		want int
+	}{
+		{"remote", remoteKind, int(EntityCategoryRemote)},
+		{"world", worldKind, int(catWorld)},
+		{"player", playerKind, int(catPlayer)},
+		{"other", otherKind, int(catOther)},
+		{"managed declared elsewhere still ranks first", managedElseKind, int(EntityCategoryRemote)},
+	} {
+		id, err := BuildEntityID(9, tc.kind)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := GetEntityGroup(id); got != tc.want {
+			t.Errorf("%s: GetEntityGroup = %d, want the category value %d", tc.name, got, tc.want)
+		}
+	}
+
+	// Remote is the minimum, so a world object may be taken after a remote
+	// entity but never before one.
+	if int(EntityCategoryRemote) >= int(catWorld) {
+		t.Fatal("EntityCategoryRemote must be the lowest rank")
+	}
+
+	// Names are for diagnostics only.
+	if got := EntityCategoryName(catWorld); got != "world" {
+		t.Errorf("EntityCategoryName = %q, want %q", got, "world")
+	}
+
+	// Seal reports the managed kind that was declared outside the remote
+	// category, and says which kind it is.
+	err := ValidateEntityRegistry()
+	if err == nil {
+		t.Fatal("ValidateEntityRegistry accepted a managed kind outside the remote category")
+	}
+	if !strings.Contains(err.Error(), "175") {
+		t.Errorf("seal error does not name the offending kind: %v", err)
+	}
+}
+
+// resetEntityCategoriesForTest drops the declared taxonomy and every derived
+// rank, so a test can exercise the legacy path and the declared path in the
+// same package run. It deliberately does NOT touch the kind registry, which
+// this package's init populates for every other test.
+func resetEntityCategoriesForTest() {
+	categoryMu.Lock()
+	defer categoryMu.Unlock()
+	taxonomy.Store(nil)
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	for kind := range lockRankByKind {
+		lockRankByKind[kind].Store(0)
+	}
+}
+
+func TestEntityCategoriesBeyondTheIDMaskAreAllowed(t *testing.T) {
+	// No reset: the package's init registers shared test kinds.
+	const (
+		fourth  EntityKind     = 161
+		fifth   EntityKind     = 162
+		catFour EntityCategory = EntityCategory(EntityCategoryMask) + 1
+		catFive EntityCategory = EntityCategory(EntityCategoryMask) + 2
+	)
+
+	if err := RegisterEntityKindCategory(fourth, catFour); err != nil {
+		t.Fatalf("registering category %d must be allowed once category left the ID: %v", catFour, err)
+	}
+	if err := RegisterEntityKindCategory(fifth, catFive); err != nil {
+		t.Fatalf("registering category %d must be allowed: %v", catFive, err)
+	}
+
+	// The registry, not the ID's low bits, answers what a kind's category is.
+	if got, ok := EntityCategoryOfKind(fourth); !ok || got != catFour {
+		t.Fatalf("EntityCategoryOfKind = (%d, %v), want (%d, true)", got, ok, catFour)
+	}
+
+	// IDs still round-trip: kind and unique id survive, and the id resolves to
+	// the registered category even though it cannot fit in the low two bits.
+	id, err := BuildEntityID(1234, fourth)
+	if err != nil {
+		t.Fatalf("BuildEntityID for a kind above the mask: %v", err)
+	}
+	meta := ResolveEntityID(id)
+	if meta.Kind != fourth {
+		t.Fatalf("resolved kind = %d, want %d", meta.Kind, fourth)
+	}
+	if meta.UniqueID != 1234 {
+		t.Fatalf("resolved unique id = %d, want 1234", meta.UniqueID)
+	}
+	if meta.Category != catFour {
+		t.Fatalf("resolved category = %d, want the registered %d", meta.Category, catFour)
+	}
+	if _, err := NormalizeFullID(id, fourth); err != nil {
+		t.Fatalf("NormalizeFullID must accept a kind whose category exceeds the mask: %v", err)
+	}
+}
+
+// M-04 · 锁档就是 kind 的 category,不再经过任何应用层钩子。
+//
+// 这条测试**不声明 category**:声明与否不该改变锁档的来源。GetEntityGroupFunc 那个
+// 包级可写变量删除后,唯一的来源是注册表里这个 kind 的 category;managed 恒定排在
+// EntityCategoryRemote 档;本进程不认识的 kind 排最后,因为持有它之后什么都锁不了,
+// 是最保守的答案。
+func TestLockOrderIsTheCategoryWithNoApplicationHook(t *testing.T) {
+	// RR-20260926-83：收尾时原样放回注册表与锁档；原来的 t.Cleanup(resetEntityCategoriesForTest) 把所有 kind
+	// 的锁档清零，而重复注册同一定义不会重算锁档，第二轮起这些 kind 的锁档都变成“未派生”。
+	isolateEntityRegistry(t)
+
+	const (
+		worldKind  EntityKind     = 181
+		playerKind EntityKind     = 182
+		lateKind   EntityKind     = 183
+		catWorld   EntityCategory = EntityCategoryRemote + 1
+		catPlayer  EntityCategory = EntityCategoryRemote + 3
+	)
+	MustRegisterEntityKindDefs(
+		EntityKindDef{Kind: worldKind, Category: catWorld},
+		EntityKindDef{Kind: playerKind, Category: catPlayer},
+		// Remote-managed but declared in a late category: the rank must still
+		// be remote's, because that ordering is the one physical constraint.
+		EntityKindDef{Kind: lateKind, Category: catPlayer, RemotePolicy: RemotePolicyManaged},
+	)
+
+	for _, tc := range []struct {
+		name string
+		kind EntityKind
+		want EntityCategory
+	}{
+		{"world", worldKind, catWorld},
+		{"player", playerKind, catPlayer},
+		{"managed declared late", lateKind, EntityCategoryRemote},
+	} {
+		id, err := BuildEntityID(5, tc.kind)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := GetEntityGroup(id); got != int(tc.want) {
+			t.Errorf("%s: lock rank = %d, want the category %d", tc.name, got, tc.want)
+		}
+	}
+
+	// A kind this process does not link ranks last, and one whose id carries
+	// the remote bit ranks with remote. 250 is claimed by no test in this
+	// package; the original 200 is registered by remote_snapshot_test, and
+	// only the whole-registry reset removed by RR-20260926-83 hid that.
+	unknown := int64(1) << UniqueIDShift
+	unknown |= int64(uint64(250) << EntityKindShift)
+	if got := GetEntityGroup(unknown); got != int(EntityCategoryUnknown) {
+		t.Errorf("unknown kind lock rank = %d, want last (%d)", got, EntityCategoryUnknown)
+	}
+	if got := GetEntityGroup(setRemoteCapableBit(unknown)); got != int(EntityCategoryRemote) {
+		t.Errorf("unknown remote-bit id lock rank = %d, want remote (%d)", got, EntityCategoryRemote)
+	}
+}
+
+func TestBusinessPoolDefinitionIsImmutableAndValidated(t *testing.T) {
+	base := &entityKindEntry{category: 1, businessPool: BusinessPoolLong}
+	if _, err := resolveEntityKindDefinition(base, EntityKindDef{Kind: 1, Category: 1, BusinessPool: BusinessPoolShort}); err == nil {
+		t.Fatal("changed registered business pool")
+	}
+	if _, err := resolveEntityKindDefinition(nil, EntityKindDef{Kind: 1, Category: 1, BusinessPool: 99}); err == nil {
+		t.Fatal("invalid pool accepted")
+	}
+	next, err := resolveEntityKindDefinition(base, EntityKindDef{Kind: 1, Category: 1})
+	if err != nil || next.businessPool != BusinessPoolLong {
+		t.Fatal("partial category registration lost pool")
+	}
+}

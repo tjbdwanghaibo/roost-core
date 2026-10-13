@@ -116,9 +116,8 @@ func TestGuardReleaseEntityKeepsSupersededLockAccounted(t *testing.T) {
 	}
 }
 
-// RR-20260927-25：自定义 lock.Mutex 可以是不可比较的值类型（含 func 字段、值接收者）。同 ID 两个实例各持一份时，
-// holding 直接用 == 比较两个接口值会 panic（comparing uncomparable type）；修后不可比较的锁按“不是同一把锁”处理，
-// 新实例照常加锁、Guard 释放时两把锁都归还。
+// 自定义 lock.Mutex 可以是不可比较的值类型（含 func 字段、值接收者）：同 ID 两个实例各持一份时不 panic，不可比较的锁按
+// “不是同一把锁”处理，新实例照常加锁、Guard 释放时两把锁都归还。
 type funcFieldMutex struct {
 	id     int64
 	mu     *sync.Mutex
@@ -178,10 +177,8 @@ func TestGuardUncomparableCustomMutexValueDoesNotPanic(t *testing.T) {
 	}
 }
 
-// RR-20260927-30：RR-25 用 reflect.Type.Comparable 判定能否比较。含接口字段的结构体在类型层面可比较，但接口里装着 func 时
-// == 仍在运行期 panic（comparing uncomparable type func()）。修后按值判定：装着不可比较动态值的锁按“不是同一把锁”处理
-// （与 RR-25 相同，各用各的底层锁）；接口字段装的是可比较值时仍能认出同一把锁，不退化成各自加锁。
-// hook 放在最前：结构体 == 逐字段比较、遇到不等即停，排在不同的 mu 之后就比较不到 hook。
+// 含接口字段的锁在类型层面可比较，但接口里装着 func 时 == 仍在运行期 panic：按值判定，装着不可比较动态值的锁按“不是同一把锁”
+// 处理；接口字段装的是可比较值时仍能认出同一把锁，不退化成各自加锁。hook 放在最前：结构体 == 逐字段比较、遇到不等即停。
 type ifaceFieldMutex struct {
 	hook any
 	id   int64
@@ -281,8 +278,8 @@ func TestGuardCustomMutexWithFuncInInterfaceFieldDoesNotPanic(t *testing.T) {
 	})
 }
 
-// RR-20260927-26：ReleaseEntityInstance 只释放传入实例自己的锁。旧实例被同 ID 新实例取代（锁在 superseded）时释放旧锁、
-// 新实例仍被持有；传入当前实例或与它共用同一把锁的实例时同 ReleaseEntity；本 Guard 没为它登记锁时不动别人的锁。
+// ReleaseEntityInstance 只释放传入实例自己的锁：旧实例被同 ID 新实例取代时释放旧锁、新实例仍被持有；传入当前实例或共用同一把锁的
+// 实例时同 ReleaseEntity；本 Guard 没为它登记锁时不动别人的锁。
 func TestGuardReleaseEntityInstanceReleasesOnlyThatInstance(t *testing.T) {
 	t.Run("superseded_old", func(t *testing.T) {
 		old, fresh := guardInstancePair(t, false)

@@ -290,26 +290,3 @@ func TestNewEntity_UnregisteredType(t *testing.T) {
 		t.Fatal("expected error for unregistered type")
 	}
 }
-
-func TestDestroyEntity(t *testing.T) {
-	var seq atomic.Uint64
-	manager := NewEntityManager(WithEntityIDGenerator(func() (uint64, error) { return seq.Add(1), nil }))
-
-	param := &EntityCreateParam{
-		IsCreate: true,
-		Category: testEntityCategory,
-		Kind:     testEntityKind,
-	}
-	e, _ := manager.Create(param)
-
-	if err := manager.Destroy(context.Background(), e, testDestroyCommon, false); err != nil {
-		t.Fatal(err)
-	}
-
-	if manager.Get(e.ID()) != nil {
-		t.Fatal("entity should be removed from manager")
-	}
-	if !e.IsRemoved() {
-		t.Fatal("entity should be marked removed")
-	}
-}

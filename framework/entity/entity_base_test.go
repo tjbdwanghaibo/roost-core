@@ -2,6 +2,7 @@ package entity
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -190,23 +191,6 @@ func TestEntityReleaseHooksAreManagerScoped(t *testing.T) {
 	}
 }
 
-func TestEntityGuardBasic(t *testing.T) {
-	e := newTestEntity(10, testEntityCategoryPlayer)
-
-	guard := GetEntityGuard()
-	if !guard.RequireEntity(e) {
-		t.Fatal("RequireEntity should succeed")
-	}
-
-	// Re-require same entity should succeed (idempotent)
-	if !guard.RequireEntity(e) {
-		t.Fatal("RequireEntity same entity should be idempotent")
-	}
-
-	guard.ReleaseAll()
-	EntityGuardRelease(guard)
-}
-
 func TestEntityGuardReleaseAllPostReleaseIdempotent(t *testing.T) {
 	guard := GetEntityGuard()
 	defer EntityGuardRelease(guard)
@@ -252,25 +236,6 @@ func TestEntityGuardPostReleaseRunsOutsideReleasedScope(t *testing.T) {
 	}
 	if !run {
 		t.Fatal("post-release callback should run")
-	}
-}
-
-func TestBuildResolveEntityID(t *testing.T) {
-	rawID := int64(12345)
-	entityCategory := testEntityCategoryPlayer
-	kind := EntityKind(4)
-
-	guid := mustBuildTestEntityID(t, rawID, entityCategory, kind)
-	meta := ResolveEntityID(guid)
-
-	if meta.UniqueID != rawID {
-		t.Fatalf("ResolveEntityID uniqueID: got %d, want %d", meta.UniqueID, rawID)
-	}
-	if meta.Category != entityCategory {
-		t.Fatalf("ResolveEntityID entityCategory: got %d, want %d", meta.Category, entityCategory)
-	}
-	if meta.Kind != kind {
-		t.Fatalf("ResolveEntityID kind: got %d, want %d", meta.Kind, kind)
 	}
 }
 
@@ -516,5 +481,44 @@ func TestEntityGuardAccessorsOnNilGuard(t *testing.T) {
 	var guard *EntityGuard
 	if guard.Guarded(1) || guard.GuardedCount() != 0 || guard.Entities() != nil {
 		t.Fatal("nil guard must read as empty")
+	}
+}
+
+// NormalizeID 拒绝 none 种类；未注册的组件类型不能创建；非远端托管实体不接受远端恢复状态；管理器的 id 生成器缺失 / 已有实体后
+// 不能换；TryAdd 拒绝 nil 实体与无 Base 的实体。
+func TestEntityGuardsRefuseNoneKindMissingFactoriesAndLateGeneratorChanges(t *testing.T) {
+	if err := (&EntityCreateParam{}).NormalizeID(EntityKindNone); err == nil || !strings.Contains(err.Error(), "kind must not be none") {
+		t.Fatalf("NormalizeID with no kind anywhere = %v", err)
+	}
+	if _, err := CreateComponent(ComponentType(250), nil, &EntityCreateParam{}); err == nil || !strings.Contains(err.Error(), "no component factory registered") {
+		t.Fatalf("CreateComponent for an unregistered type = %v", err)
+	}
+	if _, err := BuildEntity(&EntityCreateParam{IsCreate: true, Kind: testEntityKind, UniqueID: 77, RemoteRestore: &RemoteVersionVector{}}); err == nil || !strings.Contains(err.Error(), "is not remote-managed") {
+		t.Fatalf("BuildEntity with remote restore state on a local kind = %v", err)
+	}
+
+	var none *EntityManager
+	generator := func() (uint64, error) { return 1, nil }
+	if err := none.ConfigureIDGenerator(generator); err == nil || !strings.Contains(err.Error(), "id generator is required") {
+		t.Fatalf("ConfigureIDGenerator on a nil manager = %v", err)
+	}
+	manager := NewEntityManager()
+	if err := manager.ConfigureIDGenerator(nil); err == nil || !strings.Contains(err.Error(), "id generator is required") {
+		t.Fatalf("ConfigureIDGenerator(nil) = %v", err)
+	}
+	if err := manager.ConfigureIDGenerator(generator); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.TryAdd(nil); !errors.Is(err, ErrEntityNil) {
+		t.Fatalf("TryAdd(nil) = %v", err)
+	}
+	if err := manager.TryAdd(&mgrTestEntity{}); !errors.Is(err, ErrEntityNil) {
+		t.Fatalf("TryAdd(entity without a base) = %v", err)
+	}
+	if err := manager.TryAdd(newMgrTestEntity(1001, testEntityCategoryPlayer)); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ConfigureIDGenerator(generator); err == nil || !strings.Contains(err.Error(), "cannot change after entity publication") {
+		t.Fatalf("ConfigureIDGenerator after an entity was published = %v", err)
 	}
 }

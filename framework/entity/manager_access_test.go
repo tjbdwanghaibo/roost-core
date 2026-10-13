@@ -1,3 +1,5 @@
+// ManagerAccess：保持顺序与缺失项、冷加载并发与单飞、等待方按自己的 ctx 离开、只查已加载的入口不触发加载。
+
 package entity
 
 import (
@@ -6,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 func TestManagerAccessPreservesOrderAndMissingEntries(t *testing.T) {
@@ -221,5 +225,100 @@ func TestLoadedOnlyLookupNeverStartsOrJoinsColdLoad(t *testing.T) {
 	values, err := access.GetMany(ctx, []int64{4242, 4242}, nil)
 	if err != nil || len(values) != 2 || values[0] != value || values[1] != value {
 		t.Fatalf("prepared lookup: %v %v", values, err)
+	}
+}
+
+// ManagerAccess.IsLoaded 是 Nest 准入的冷目标判定，只读内存：已加载 → true；未加载且有 loader → false；没有 loader → true
+// （慢阶段也读不到）。不调用 loader、不加入在途加载、不 Touch。
+func TestManagerAccessIsLoadedNeverLoads(t *testing.T) {
+	manager := NewEntityManager()
+	access := NewManagerAccess(manager)
+	hot := newMgrTestEntity(5101, testEntityCategoryPlayer)
+	manager.Add(hot)
+	if !access.IsLoaded(5102) {
+		t.Fatal("without a loader a missing entity has nothing to load")
+	}
+	loader := &countingAggregateLoader{manager: manager, block: make(chan struct{})}
+	if _, err := access.ConfigureLoader(loader); err != nil {
+		t.Fatal(err)
+	}
+	if !access.IsLoaded(5101) {
+		t.Fatal("loaded entity reported cold")
+	}
+	if access.IsLoaded(5102) {
+		t.Fatal("missing entity with a loader reported loaded")
+	}
+	// 在途加载存在时也只回答内存状态，不等待。
+	access.flights[5102] = &entityLoadFlight{done: make(chan struct{})}
+	if access.IsLoaded(5102) {
+		t.Fatal("in-flight load reported loaded")
+	}
+	delete(access.flights, 5102)
+	if loader.loads.Load() != 0 {
+		t.Fatalf("IsLoaded called the loader %d time(s)", loader.loads.Load())
+	}
+	close(loader.block)
+	if _, err := access.Get(context.Background(), 5102, EntityCategoryNone); err != nil {
+		t.Fatal(err)
+	}
+	if !access.IsLoaded(5102) {
+		t.Fatal("entity published by the loader still reported cold")
+	}
+	var checker LoadedChecker = access
+	_ = checker
+}
+
+// 快阶段的冷缺失本身不阻塞：访问未加载且配置了 loader 的目标时不做 I/O、不等待 singleflight，返回可 errors.Is 的
+// ErrColdLoadInLogic，业务可以据此降级。只有真正会等待的入口（I/O、等待 flight / 投影）才 fail-fast。
+// 历史：RR-20260926-26。
+func TestFastWorkerColdMissReturnsErrorInsteadOfPanicking(t *testing.T) {
+	manager := NewEntityManager()
+	access := NewManagerAccess(manager)
+	loader := &countingAggregateLoader{manager: manager}
+	if _, err := access.ConfigureLoader(loader); err != nil {
+		t.Fatal(err)
+	}
+	hot := newMgrTestEntity(5101, testEntityCategoryPlayer)
+	manager.Add(hot)
+	_, release := fctx.NewContext(fctx.WithShortWorker(), fctx.WithHandler("optional_friend"))
+	defer release()
+
+	for _, detached := range []bool{false, true} {
+		ctx := WithLoadedEntitiesOnly(context.Background())
+		if detached {
+			// 保存的 Background ctx 不带加载约束，快 worker 标记本身也必须生效。
+			ctx = context.Background()
+		}
+		checkColdMiss(t, "Get", func() error {
+			_, err := access.Get(ctx, 5102, EntityCategoryNone)
+			return err
+		})
+		checkColdMiss(t, "GetMany", func() error {
+			_, err := access.GetMany(ctx, []int64{5101, 5102}, nil)
+			return err
+		})
+	}
+	if loads := loader.loads.Load(); loads != 0 {
+		t.Fatalf("fast-stage cold miss reached the loader %d times", loads)
+	}
+	// 已加载实体仍按内存读取成功。
+	if value, err := access.Get(context.Background(), 5101, EntityCategoryNone); err != nil || value != hot {
+		t.Fatalf("hot Get: %v %v", value, err)
+	}
+}
+
+func checkColdMiss(t *testing.T, name string, call func() error) {
+	t.Helper()
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("%s: fast-stage cold miss panicked instead of returning ErrColdLoadInLogic: %v", name, r)
+			}
+		}()
+		err = call()
+	}()
+	if !errors.Is(err, ErrColdLoadInLogic) || !errors.Is(err, fctx.ErrBlockingInBusinessWorker) {
+		t.Fatalf("%s: err=%v, want ErrColdLoadInLogic with the fast-worker marker", name, err)
 	}
 }

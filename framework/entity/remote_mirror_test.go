@@ -1,3 +1,5 @@
+// Mirror 读出口：观测按准入顺序覆盖、DTO 不污染缓存、只读方不需要注册、身份与 schema 校验、读出口共用一个后置条件。
+
 package entity
 
 import (
@@ -137,8 +139,7 @@ func TestRemoteMirrorReaderNeedsNoRegistrationBesideTheOwner(t *testing.T) {
 	}
 }
 
-// 身份与 schema 是读出口的后置条件（RR-20261005-NC-35 / RR-20260913-07 的读侧）：source 交回别的 key 或别的
-// schema 时报错，解码器不被调用。
+// 身份与 schema 是读出口的后置条件：source 交回别的 key 或别的 schema 时报错，解码器不被调用。
 func TestRemoteMirrorReaderRejectsForeignIdentityAndSchema(t *testing.T) {
 	ctx := context.Background()
 	key := mirrorContractKey(t, 9703)
