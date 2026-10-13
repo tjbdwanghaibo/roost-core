@@ -29,7 +29,7 @@ type CompareAndSetCommand struct {
 	// It exists because "the record" and "the record is in the pending set"
 	// are one fact, and writing them as two operations leaves a window where
 	// a crash produces a record nothing enumerates — a paid order no
-	// background loop can ever find (RR-20260919-04). Two keys in one script
+	// background loop can ever find. Two keys in one script
 	// means a Redis Cluster deployment must keep them in one hash slot; the
 	// caller chooses the key layout, so the caller owns that.
 	Index *CompareAndSetIndex
@@ -127,7 +127,7 @@ func CompareAndSet(ctx context.Context, client ScriptRunner, cmd CompareAndSetCo
 		}
 		// ZADD rejects NaN only after the script's SET has run, and a script is
 		// not rolled back on error: the value would land without its index
-		// entry while the caller gets an error (RR-20261006-35). Refuse it
+		// entry while the caller gets an error. Refuse it
 		// before anything is sent.
 		if !cmd.Index.Remove && math.IsNaN(cmd.Index.Score) {
 			return CompareAndSetResult{}, fmt.Errorf("%w: index score is NaN", ErrCASInvalidCommand)

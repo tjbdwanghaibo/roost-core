@@ -10,8 +10,8 @@ import (
 
 // Assembly is the complete Redis capability set a process publishes: the
 // contract client and the distributed-lock factory that shares its connection
-// pool. It is what the kit RedisMod hands out; the Mod itself only parses
-// configuration, registers capabilities and forwards lifecycle calls (P3b).
+// pool. It is what the wiring RedisMod hands out; the Mod itself only parses
+// configuration, registers capabilities and forwards lifecycle calls.
 type Assembly struct {
 	Client *Client
 	Locks  *DistLockFactory

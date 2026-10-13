@@ -12,7 +12,7 @@ import (
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
-// EvalReplicated 实现 fredis.ReplicatedEvaler（O-M6-3，docs/feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md）：
+// EvalReplicated 实现 fredis.ReplicatedEvaler：
 //
 //  1. 选连接：单机 / Sentinel 用客户端本身；Cluster 按第一个键取该槽位的主节点（MasterForKey），WAIT 只发往它。
 //  2. 在一条独占的物理连接上流水线发 EVAL 与 ROLE（一次往返）。脚本与 Eval 一样不经驱动重放；流水线里每条

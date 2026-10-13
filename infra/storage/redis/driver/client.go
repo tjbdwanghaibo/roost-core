@@ -347,9 +347,9 @@ func newScriptCmd(ctx context.Context, name, payload string, keys []string, args
 	return cmd
 }
 
-// runScript 发一次脚本：驱动不重放（回复丢失时脚本可能已执行，第二次执行会把自己的写当成别人的写，
-// RR-20261005-NC-100）；错误证明脚本没执行（LOADING、拨号失败等）时在这里重发，补回 NC-100
-// 关掉驱动重试后丢掉的那部分可用性（NC-101 复审“应改”，A2）。
+// runScript 发一次脚本：驱动不重放（回复丢失时脚本可能已执行，第二次执行会把自己的写当成别人的写）；
+// 错误证明脚本没执行（LOADING、拨号失败等）时在这里重发，补回关掉驱动重试后损失的那部分可用性。
+// 历史：RR-20261005-NC-100、RR-20261005-NC-101。
 func runScript(ctx context.Context, rdb goredis.UniversalClient, resends int, name, payload string, keys []string, args ...any) *goredis.Cmd {
 	cmd := newScriptCmd(ctx, name, payload, keys, args...)
 	_ = sendOnce(ctx, rdb, resends, cmd)
@@ -411,7 +411,7 @@ func evalBatchOnConn(ctx context.Context, client *goredis.Client, script string,
 	pipe := conn.Pipeline()
 	commands := make([]*goredis.Cmd, 0, len(calls))
 	for _, call := range calls {
-		// 与 Eval 相同，脚本不经驱动重放（RR-20261005-NC-100）：含 NoRetry 命令的流水线整体不重发。
+		// 与 Eval 相同，脚本不经驱动重放：含 NoRetry 命令的流水线整体不重发。
 		command := newScriptCmd(ctx, "eval", script, call.Keys, call.Args...)
 		_ = pipe.Process(ctx, noReplay{command})
 		commands = append(commands, command)
@@ -475,10 +475,10 @@ func (c *Client) Ping(ctx context.Context) error {
 }
 
 // Close 关闭连接池，幂等：只有第一次真正关闭，第一次的错误只报给那一次调用，之后（含并发的后到者，
-// 它们等第一次做完）都返回 nil。Close 之后的命令返回 goredis.ErrClosed（RR-20261006-10）。
+// 它们等第一次做完）都返回 nil。Close 之后的命令返回 goredis.ErrClosed。
 //
-// go-redis 单机的 Close 不幂等（第二次返回 ErrClosed），Cluster 的幂等（返回 nil）；旧实现直接透传，
-// 重复 Close 的结果随部署形态变化，并发时单机的后到者不等第一个关完就返回。go-redis 遇到错误也会
+// go-redis 单机的 Close 不幂等（第二次返回 ErrClosed），Cluster 的幂等（返回 nil）；直接透传会让
+// 重复 Close 的结果随部署形态变化，并发时单机的后到者也不等第一个关完就返回。go-redis 遇到错误也会
 // 关完全部连接，所以第一次出错之后同样没有可以重试的资源。
 func (c *Client) Close() error {
 	var err error

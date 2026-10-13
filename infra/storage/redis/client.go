@@ -97,7 +97,7 @@ type DurableBatchEvaler interface {
 	EvalBatchDurable(ctx context.Context, script string, calls []EvalCall, numLocal, numReplicas int, timeout time.Duration) (results []any, local, replicas int64, err error)
 }
 
-// ReplicatedEvaler 执行一个脚本，然后在同一条物理连接上对执行它的主节点发 WAIT（O-M6-3）。WAIT 只统计
+// ReplicatedEvaler 执行一个脚本，然后在同一条物理连接上对执行它的主节点发 WAIT。WAIT 只统计
 // 本连接之前的写，所以必须与脚本同连接；独立的池化调用不满足这个约定。Cluster 下 WAIT 只发往脚本第一个键
 // 所在槽位的主节点。契约（重放、结果分类）见 redis/driver/README.md。
 //

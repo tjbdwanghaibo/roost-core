@@ -111,8 +111,8 @@ func (l *distLock) Acquire(ctx context.Context) (bool, error) {
 	_ = sendOnce(ctx, l.rdb, l.resends, setNX)
 	ok, err := setNX.Result()
 	if errors.Is(err, goredis.ErrClosed) {
-		// 客户端已关闭：命令确定没发出去（IsDefinitelyNotExecuted），锁状态没变，不记成未知
-		// （RR-20261006-10；旧实现记成未知，之后 Acquire 一直返回 ErrDistLockStateUncertain）。
+		// 客户端已关闭：命令确定没发出去（IsDefinitelyNotExecuted），锁状态没变，不记成未知——
+		// 记成未知会让之后的 Acquire 一直返回 ErrDistLockStateUncertain。
 		return false, err
 	}
 	if err != nil {
