@@ -91,8 +91,8 @@ func (s *correctStopper) Stop(ctx context.Context) error {
 	return nil
 }
 
-// fieldClearingStopper 是 NC-170 / NC-171 / NC-173 / NC-83 的错法：先把在途句柄取走（清空字段），
-// 超时之后重试看到字段为空就报告“已停”，依赖永远不会被释放（或在工作仍在跑时被调用方释放）。
+// fieldClearingStopper 是一种错法：先把在途句柄取走（清空字段），超时之后重试看到字段为空就报告“已停”，依赖永远不会被释放
+// （或在工作仍在跑时被调用方释放）。
 type fieldClearingStopper struct {
 	*stopObject
 	mu      sync.Mutex
@@ -116,7 +116,7 @@ func (s *fieldClearingStopper) Stop(ctx context.Context) error {
 	return nil
 }
 
-// releaseFirstStopper 是 NC-173 Assembly.Close 的错法：等待失败也照样释放依赖。
+// releaseFirstStopper 是一种错法：等待失败也照样释放依赖。
 type releaseFirstStopper struct{ *stopObject }
 
 func (s *releaseFirstStopper) Stop(ctx context.Context) error {
@@ -129,7 +129,7 @@ func (s *releaseFirstStopper) Stop(ctx context.Context) error {
 	}
 }
 
-// unboundedStopper 是 NC-173 Deregister 的错法：裸 <-done，不看 ctx。
+// unboundedStopper 是一种错法：裸 <-done，不看 ctx。
 type unboundedStopper struct{ *stopObject }
 
 func (s *unboundedStopper) Stop(context.Context) error {
