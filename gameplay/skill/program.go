@@ -42,6 +42,7 @@ type Program struct {
 	hostRequirements []HostCapability
 }
 
+// AuthorityIdentity 返回 Program 编译时绑定的权威身份；nil Program 返回零值。
 func (program *Program) AuthorityIdentity() AuthorityIdentity {
 	if program == nil {
 		return AuthorityIdentity{}
@@ -49,6 +50,7 @@ func (program *Program) AuthorityIdentity() AuthorityIdentity {
 	return program.authority
 }
 
+// CompilerSemanticsRevision 返回编译 Program 的编译器语义修订；nil Program 返回空串。
 func (program *Program) CompilerSemanticsRevision() string {
 	if program == nil {
 		return ""

@@ -51,6 +51,7 @@ func (runtime *Runtime) traceBufferLimit() int {
 	return runtime.options.TraceLimits.MaxBuffer
 }
 
+// InspectTrace 返回缓冲中的 trace 事件副本。
 func (runtime *Runtime) InspectTrace() []TraceEvent {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()

@@ -48,9 +48,9 @@ func runTypeCheckPass(context *compileContext) {
 		checker.memory[name] = typ
 	}
 	// memory 默认值在 Activate 里按槽位顺序求值，读不到别的 memory（表的 memory_default 列）。
-	// 此前在填 checker.memory 的同一个 map 循环里按施法作用域检查，能不能看见另一个 memory
-	// 取决于 map 遍历顺序；看见了就编译通过，槽位排在后面时每次 Activate 类型不匹配
-	// （RR-20261005-NC-280）。
+	// 必须在 checker.memory 填完之后按排序后的名字、用 memory_default 作用域检查：若在填表的 map 循环里按施法
+	// 作用域检查，能不能看见另一个 memory 取决于 map 遍历顺序，看见了就编译通过，槽位排在后面时每次 Activate
+	// 类型不匹配。
 	memoryDefaultScope := checker.scopeFor(evalMemoryDefault, "")
 	for _, name := range sortedMemoryNames(context.artifacts.ir.memory) {
 		declaration := context.artifacts.ir.memory[name]
@@ -66,8 +66,7 @@ func runTypeCheckPass(context *compileContext) {
 				context.addDiagnostic(DiagnosticTypeMismatch, declaration.source.Path+".default", "state type does not allow null default")
 			}
 		} else {
-			// 状态默认值在读 / 写处求值，那里可能是衍生物回调或衍生物字段（表的 state_default 列，
-			// RR-20261005-NC-281）。
+			// 状态默认值在读 / 写处求值，那里可能是衍生物回调或衍生物字段（表的 state_default 列）。
 			checker.expect(declaration.defaultValue, checker.scopeFor(evalStateDefault, ""), typ)
 		}
 		checker.state[name] = typ
@@ -212,7 +211,7 @@ func (c *typeChecker) flow(flow flowIR, scope typeScope) {
 				spawnKind = typed.spawn.kind
 			}
 			// 回调的作用域只来自表的 spawn_callback 列：施法的输入、memory、局部变量与
-			// `$caster` / `$cast.*` 都不在里面（此前 owned entity pass 另写一份 detachedReferenceAllowed）。
+			// `$caster` / `$cast.*` 都不在里面；不另写前缀黑名单。
 			callbackScope := c.scopeFor(evalSpawnCallback, spawnKind)
 			if typed.spawn != nil {
 				for _, policy := range c.context.environment.SpawnProperties.Properties {
@@ -232,7 +231,7 @@ func (c *typeChecker) flow(flow flowIR, scope typeScope) {
 // spawn 检查召唤效果上衍生物的字段。每一步重新求值的字段（area 选择、motion 的目标 / 点 / 锚点 /
 // 目的地、未绑定到衍生物数值属性的数值字段）用表的 spawn_step 列；numeric track 的值与绑定到
 // 数值属性的字段只在启动时用施法求一次（initializeSpawnNumeric），用施法作用域 castScope。
-// 此前全部按施法作用域检查，再由 owned entity pass 另写一份前缀黑名单（RR-20261005-NC-224）。
+// 两类字段分开查，不另写前缀黑名单。
 func (c *typeChecker) spawn(spawn *spawnIR, castScope typeScope) {
 	if spawn == nil {
 		return
@@ -537,10 +536,9 @@ func (c *typeChecker) effect(effect effectIR, scope typeScope) {
 	}
 }
 
-// declaredMemory 是 set / add / clear_memory 共用的名字检查（RR-20261005-NC-210）。
-// lower 按名字取槽位时用的是 map 零值：此前未声明的名字在这里被直接跳过，lower 把它
-// 落到槽位 0——有别的 memory 时静默改写那个槽位（值的类型也没查过），没有 memory 时
-// executeMemory 返回 ErrProgramInvariant。
+// declaredMemory 是 set / add / clear_memory 共用的名字检查。
+// 未声明的名字必须在这里报错：放过去时，lower 会把它落到槽位 0（resolveName 现在会报 LOWER_UNRESOLVED，
+// 这里是第一道防线）——有别的 memory 时静默改写那个槽位，没有 memory 时 executeMemory 返回 ErrProgramInvariant。
 func (c *typeChecker) declaredMemory(name, effectPath string) (valueType, bool) {
 	memoryType, found := c.memory[name]
 	if !found {
@@ -873,10 +871,10 @@ func (c *typeChecker) validateExpectedFailureLiteral(referenceValue, literalValu
 // checkCachedRead 按求值上下文表检查缓存型快照读取（cast_start / phase_start / spawn_start）：
 // 这些读取的整个求值（包括实体）发生在采样点，之后读缓存（runtime_eval.go captureSnapshots）。
 //   - 快照点在读取所在的上下文里要可用（evalSnapshotTable）：spawn_start 只在衍生物回调里，
-//     cast_start / phase_start 不在衍生物回调里（RR-20261005-NC-220）；
+//     cast_start / phase_start 不在衍生物回调里；
 //   - 实体里的每个引用在采样上下文里要可用（引用表的采样列：采样点上没有局部变量，
 //     spawn_start 采样在衍生物上下文里），且不能是可缺省的——采样时没有读取处的 exists
-//     守卫，缺省即 Activate / 进 phase 失败（RR-20261005-NC-282）。
+//     守卫，缺省即 Activate / 进 phase 失败。
 //
 // current / each_tick / on_hit / on_event 在读取处求值，不受这两条限制。
 func (c *typeChecker) checkCachedRead(read *attributeReadValueIR, scope typeScope) {

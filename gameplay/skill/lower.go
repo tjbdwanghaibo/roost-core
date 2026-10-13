@@ -16,20 +16,20 @@ type loweringContext struct {
 	nextRandomSite RandomSiteIndex
 	// path 是正在 lower 的定义位置（operation 的源路径或声明路径），查找失败时用来定位。
 	path string
-	// failures 收集查找失败（B3 ①）。lower 不在第一处失败就返回，以便一次报出全部未解析的
+	// failures 收集查找失败。lower 不在第一处失败就返回，以便一次报出全部未解析的
 	// 名字；有任何失败时 lowerProgram 不交出 Program。
 	failures []Diagnostic
 	// readEntities 记下每个 read_attribute 在读取处（带作用域）lower 出的实体，按源路径。
-	// lowerSnapshots 用它生成快照计划的实体，见那里的说明（RR-20261005-NC-223）。
+	// lowerSnapshots 用它生成快照计划的实体，见那里的说明。
 	readEntities map[string]programValue
 }
 
-// resolveName 是 lower 里“名字 → 槽位 / handle”查找的唯一入口（维护者决定 B3 ①）：查不到时
+// resolveName 是 lower 里“名字 → 槽位 / handle”查找的唯一入口：查不到时
 // 记一条 LOWER_UNRESOLVED 编译错误并返回零值，lowerProgram 收尾时整体失败，不交出 Program。
 //
-// 之前各处直接读 map 零值：前面的 pass 漏查一种名字时，lower 静默产出指向槽位 / handle 0 的
-// Program（NC-210 的 memory、NC-214 的 status / attribute / resource），或在少数地方 panic。
-// 类型检查仍是第一道防线，这里是第二道：编译通过的 Program 不再含“查不到却用了 0”的引用。
+// 不直接读 map 零值：前面的 pass 漏查一种名字时，那样会静默产出指向槽位 / handle 0 的 Program（memory、
+// status / attribute / resource），或在少数地方 panic。类型检查是第一道防线，这里是第二道：编译通过的
+// Program 不含“查不到却用了 0”的引用。
 func resolveName[T any](c *loweringContext, table map[string]T, kind, name string) T {
 	value, found := table[name]
 	if !found {
@@ -58,6 +58,8 @@ func (c *loweringContext) at(path string) func() {
 
 type lowerScope map[string]LocalIndex
 
+// Compile 按环境编译技能定义：先跑全部编译 pass，再 lower 成不可变的 Program。有错误级诊断时返回 nil 与全部
+// 诊断；成功时诊断里可能仍有 warning。
 func Compile(definition *Definition, environment CompileEnvironment) (*Program, []Diagnostic) {
 	artifacts, diagnostics := compileToArtifacts(definition, environment)
 	if artifacts == nil || diagnosticsHaveErrors(diagnostics) {
@@ -245,7 +247,7 @@ func (c *loweringContext) lowerCastAndCosts() {
 	}
 	restore := c.at("$.activation.cast_window.interrupt_tags")
 	for _, key := range window.interruptTags {
-		// 之前查不到就静默跳过：打断标签少一个，施法不再被它打断。
+		// 查不到必须报错而不是跳过：打断标签少一个，施法就不再被它打断。
 		c.program.cast.interruptTags = append(c.program.cast.interruptTags, resolveName(c, c.artifacts.authority.tags, "interrupt tag", key))
 	}
 	restore()
@@ -270,10 +272,10 @@ func (c *loweringContext) lowerSnapshots() {
 	for _, path := range paths {
 		plan := c.artifacts.snapshots.reads[path]
 		// 计划的实体取读取处 lower 出的值。cast_start / phase_start / spawn_start 在采样点
-		// 求值，snapshot pass 已拒绝其中的 `$local.` 引用（NC-220），读取处与空作用域 lower
+		// 求值，snapshot pass 已拒绝其中的 `$local.` 引用，读取处与空作用域 lower
 		// 出的值相同；current 等运行期不采样的计划只是随 Program 记录（进 gameplay digest），
-		// 它们的实体可以是读取处的局部变量。此前一律用空作用域 lower，B3 之后局部变量查不到
-		// 就报 LOWER_UNRESOLVED，“对每个选中目标读它自己的属性”编译失败（RR-20261005-NC-223）。
+		// 它们的实体可以是读取处的局部变量，不能用空作用域 lower（局部变量查不到会报 LOWER_UNRESOLVED，
+		// “对每个选中目标读它自己的属性”就编译不过）。
 		// 读取处没有 lower 过的计划（不应出现）仍按空作用域 lower，查不到照样报错。
 		entity, lowered := c.readEntities[path]
 		if !lowered {
@@ -767,9 +769,8 @@ func (c *loweringContext) lowerValue(value valueIR, scope lowerScope) programVal
 		}
 		return result
 	case *attributeReadValueIR:
-		// A read the snapshot pass never visited would lower to attribute
-		// handle 0 and silently read the wrong (or no) attribute at runtime —
-		// the walkValues traversal must cover every value site.
+		// snapshot pass 没访问过的读取会 lower 成属性 handle 0，运行期静默读错（或读不到）属性——walkValues
+		// 的遍历必须覆盖每个值位点；resolveName 在这里兜底报错。
 		plan := resolveName(c, c.artifacts.snapshots.reads, "attribute snapshot plan at", typed.source.Path)
 		entity := c.lowerValue(typed.entity, scope)
 		c.readEntities[typed.source.Path] = entity
@@ -819,13 +820,12 @@ func (c *loweringContext) lowerReference(reference *referenceValueIR, scope lowe
 	if name, field, found := resolveIndexedReference(reference.reference, "$local.", localIndexMap(scope)); found {
 		return referenceProgramValue{kind: referenceLocal, index: name, field: field, resultField: reference.resultField, typ: reference.resolvedType, row: evalRowLocal}
 	}
-	// 输入槽位可带投射（`$input.target.position`）：类型检查按根投射，此前 lower 只按全名查，
-	// B3 之后报 LOWER_UNRESOLVED（RR-20261005-NC-283）。
+	// 输入槽位可带投射（`$input.target.position`）：与类型检查一样按根 + 投射查，不能只按全名查。
 	if index, field, found := resolveIndexedReference(reference.reference, "$input.", inputIndexMap(c.input)); found {
 		return referenceProgramValue{kind: referenceInput, index: index, field: field, typ: reference.resolvedType, row: evalRowInput}
 	}
-	// $memory / $local / $input 前缀的引用查不到不是 builtin：之前退成同名 builtin，运行期才以
-	// ErrProgramInvariant 失败（B3 ①）。
+	// $memory / $local / $input 前缀的引用查不到不是 builtin：退成同名 builtin 的话，运行期才以
+	// ErrProgramInvariant 失败。
 	for _, prefix := range []string{"$memory.", "$local.", "$input."} {
 		if strings.HasPrefix(reference.reference, prefix) {
 			c.unresolved("reference", reference.reference)
@@ -834,8 +834,7 @@ func (c *loweringContext) lowerReference(reference *referenceValueIR, scope lowe
 	}
 	// builtin 按求值上下文表的行 lower：精确名字照旧；投射（`$primary_target.position`、
 	// `$event.target.position`、`$lifecycle_entity.position`）拆成根 + field，由 evalReference
-	// 的 field 分支取位置。此前整串当 builtin 名字，Runtime 没有这个分支，每次求值
-	// ErrProgramInvariant（RR-20261005-NC-283）。
+	// 的 field 分支取位置。整串当 builtin 名字的话，Runtime 没有对应分支，每次求值 ErrProgramInvariant。
 	row, field, known := evalReferenceRowFor(reference.reference)
 	if !known {
 		return referenceProgramValue{kind: referenceBuiltin, builtin: reference.reference, typ: reference.resolvedType, row: evalRowUnknown}

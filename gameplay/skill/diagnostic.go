@@ -54,10 +54,10 @@ const (
 	DiagnosticLifecycleControlConflict DiagnosticCode = "LIFECYCLE_CONTROL_CONFLICT"
 	DiagnosticBudgetExceeded           DiagnosticCode = "BUDGET_EXCEEDED"
 	DiagnosticMotionInvalid            DiagnosticCode = "MOTION_INVALID"
-	// DiagnosticLowerUnresolved：lower 查某个名字的槽位 / handle 查不到（B3 ①）。出现它说明
+	// DiagnosticLowerUnresolved：lower 查某个名字的槽位 / handle 查不到。出现它说明
 	// 前面某个 pass 接受了一个它没有解析的名字，是编译器缺陷；Program 不会被交出。
 	DiagnosticLowerUnresolved DiagnosticCode = "LOWER_UNRESOLVED"
-	// DiagnosticHostCapabilityMissing：定义用到的取值不在环境的 Host 能力表里（B3 ③），消息点名
+	// DiagnosticHostCapabilityMissing：定义用到的取值不在环境的 Host 能力表里，消息点名
 	// 缺的那一项（如 `motion_step "collision"`、`summon`）。
 	DiagnosticHostCapabilityMissing DiagnosticCode = "HOST_CAPABILITY_MISSING"
 )

@@ -83,6 +83,8 @@ type ownedSummonTransaction struct {
 	entities map[EntityID]MemoryEntity
 }
 
+// MemoryHost 是内存中的参考 Host 实现，供测试、示例与回放使用；它实现 Host 契约的全部要求（含 StopSpawn
+// 幂等与能力表），不是生产世界模型。
 type MemoryHost struct {
 	mutex                 sync.RWMutex
 	authority             AuthorityIdentity
@@ -110,12 +112,15 @@ type MemoryHost struct {
 	compactEvents         bool
 }
 
+// MemoryHostOptions 是 MemoryHost 的选项；CompactEvents 为 true 时允许 Runtime 压缩已消费的事件。
 type MemoryHostOptions struct{ CompactEvents bool }
 
+// NewMemoryHost 用默认选项与默认 catalog 构造 MemoryHost。
 func NewMemoryHost(authority AuthorityIdentity) *MemoryHost {
 	return NewMemoryHostWithOptions(authority, MemoryHostOptions{})
 }
 
+// NewMemoryHostWithOptions 用给定选项与默认 catalog 构造 MemoryHost。
 func NewMemoryHostWithOptions(authority AuthorityIdentity, options MemoryHostOptions) *MemoryHost {
 	host := &MemoryHost{authority: authority, entities: make(map[EntityID]MemoryEntity), spawns: make(map[SpawnID]memorySpawn), states: make(map[memoryStateKey]memoryStateRecord), ownedEntities: make(map[EntityID]OwnedEntityMetadata), ownedTransactions: make(map[OwnedSummonTransactionID]ownedSummonTransaction), temporalSnapshots: make(map[uint64]temporalSnapshotRecord), temporalBlocked: make(map[Position]Position), nextEntity: 1, compactEvents: options.CompactEvents}
 	host.ConfigureGameplayCatalog(defaultGameplayCatalog())

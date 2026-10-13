@@ -26,7 +26,7 @@ func runSnapshotPass(context *compileContext) {
 			return
 		}
 		// 缓存型快照点能不能写在这里、实体能不能在采样点求出，由类型检查按求值上下文表检查
-		// （typeChecker.checkCachedRead，RR-20261005-NC-220 / RR-20261005-NC-282）。
+		// （typeChecker.checkCachedRead）。
 		context.artifacts.snapshots.reads[read.source.Path] = AttributeReadPlan{Entity: read.entity, Attribute: entry.Handle, Snapshot: point, SnapshotSlot: slot}
 		slot++
 	})

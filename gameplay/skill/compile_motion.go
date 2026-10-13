@@ -118,9 +118,8 @@ func validateSpawnMotion(context *compileContext, spawn *spawnIR) {
 	if spawn.kind == "minion" {
 		// minion 衍生物的寿命是召唤效果的 duration_ticks（编译期要求为正）；运行期只在带
 		// motion / area 的衍生物上读模板时长（spawn_owned.go startEntitySpawn），所以
-		// minion 自己的 duration_ticks 与 area 成员字段从来不生效。以前这里直接返回、
-		// 负数也照样编译，写了 area 运行期反而拿 0 时长报 ErrProgramInvariant；现在写了
-		// 就拒绝（O22，维护者第十二轮决定）。
+		// minion 自己的 duration_ticks 与 area 成员字段从来不生效，写了就拒绝（否则写了 area 的 minion 运行期
+		// 拿 0 时长报 ErrProgramInvariant）。
 		if spawn.motion != nil {
 			context.addDiagnostic(DiagnosticMotionInvalid, path+".motion", "minion spawns do not support motion")
 		}
@@ -153,7 +152,7 @@ func validateSpawnMotion(context *compileContext, spawn *spawnIR) {
 		return
 	}
 	// Host 是否接受各 motion 步骤（frame / steering / offsets / collision / carry / completion）
-	// 由 Host 能力表检查（compile_host_capability.go，B3 ③），这里只查运动本身的策略。
+	// 由 Host 能力表检查（compile_host_capability.go），这里只查运动本身的策略。
 	if !motionPairAllowed(context.environment.Motion, spawn.kind, motion.trajectory.name()) {
 		context.addDiagnostic(DiagnosticMotionInvalid, path+".motion.trajectory", "spawn and trajectory pair is not allowed by the motion catalog")
 	}

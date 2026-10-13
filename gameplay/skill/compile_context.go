@@ -37,7 +37,7 @@ type compileArtifacts struct {
 	ability         abilityArtifact
 	temporal        temporalArtifact
 	spawnProperties []SpawnPropertyPolicy
-	// hostRequirements：Program 运行期会向 Host 要的能力（B3 ③），排序去重。
+	// hostRequirements：Program 运行期会向 Host 要的能力，排序去重。
 	hostRequirements []HostCapability
 	lifetimes        map[string]lifecycleFact
 	identity         identityArtifact

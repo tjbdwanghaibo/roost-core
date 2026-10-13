@@ -5,10 +5,10 @@ import (
 	"sync"
 )
 
-// ErrReplayMismatch reports a changed, missing, or reordered Host interaction
-// while replaying a recorded deterministic run.
+// ErrReplayMismatch 表示回放确定性运行时，Host 调用与记录相比有改变、缺失或乱序。
 var ErrReplayMismatch = fmt.Errorf("skill: replay host mismatch")
 
+// HostRecord 是 RecordingHost 记下的一次 Host 调用：种类、请求的规范表示、结果、错误与前后 revision。
 type HostRecord struct {
 	Kind           string
 	Request        string
@@ -18,16 +18,17 @@ type HostRecord struct {
 	AfterRevision  WorldRevision
 }
 
-// RecordingHost preserves typed host results for deterministic test replay.
-// It is a debugging adapter and is intentionally not a production world model.
+// RecordingHost 保存带类型的 Host 结果，供确定性测试回放。它是调试适配器，刻意不作为生产世界模型。
 type RecordingHost struct {
 	host    Host
 	mutex   sync.Mutex
 	records []HostRecord
 }
 
+// NewRecordingHost 包装 host，记录经过它的每次调用。
 func NewRecordingHost(host Host) *RecordingHost { return &RecordingHost{host: host} }
 
+// Records 返回到目前为止的调用记录副本。
 func (host *RecordingHost) Records() []HostRecord {
 	host.mutex.Lock()
 	defer host.mutex.Unlock()
@@ -125,14 +126,16 @@ func (host *RecordingHost) ModifyState(value StateMutationCommand) (StateMutatio
 	return result, err
 }
 
-// ReplayHost returns the captured typed result only when the next interaction
-// has the same kind and canonical debug representation as the recorded call.
+// ReplayHost 按记录顺序回放 Host 调用：只有下一次调用的种类与请求的规范调试表示都与记录一致时，才返回记录的
+// 带类型结果；不一致或记录已用完时以包装 ErrReplayMismatch 的错误 panic（多出的记录由 AssertComplete 报告）。
+// 与 RecordingHost 一样只用于调试与测试。
 type ReplayHost struct {
 	authority AuthorityIdentity
 	records   []HostRecord
 	index     int
 }
 
+// NewReplayHost 用一组记录构造回放 Host。
 func NewReplayHost(authority AuthorityIdentity, records []HostRecord) *ReplayHost {
 	return &ReplayHost{authority: authority, records: append([]HostRecord(nil), records...)}
 }
@@ -192,6 +195,8 @@ func (host *ReplayHost) ModifyState(value StateMutationCommand) (StateMutationRe
 	record := host.nextRecord("modify_state", value)
 	return record.Result.(StateMutationResult), record.Err
 }
+
+// AssertComplete 核对全部记录都已被消费；有剩余时返回 ErrReplayMismatch。
 func (host *ReplayHost) AssertComplete() error {
 	if host.index != len(host.records) {
 		return fmt.Errorf("%w: %d unconsumed calls", ErrReplayMismatch, len(host.records)-host.index)

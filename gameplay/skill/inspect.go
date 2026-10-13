@@ -1,5 +1,7 @@
 package skill
 
+// Inspect 返回 Program 的只读视图（身份、施放、消耗、输入、memory、phase 等）。Inspect* 系列都接受 nil Program
+// 并返回零值，返回的切片与 map 都是副本。
 func Inspect(program *Program) ProgramView {
 	if program == nil {
 		return ProgramView{}
@@ -70,6 +72,7 @@ func programValueType(value programValue) valueType {
 	}
 }
 
+// InspectMetrics 返回编译期算出的预算上限。
 func InspectMetrics(program *Program) MetricSnapshot {
 	if program == nil {
 		return MetricSnapshot{}
@@ -77,9 +80,13 @@ func InspectMetrics(program *Program) MetricSnapshot {
 	return MetricSnapshot{ComputedLimits: program.limits}
 }
 
+// InspectInputLayout 返回施法输入的布局。
 func InspectInputLayout(program *Program) InputLayoutView { return inspectInput(program) }
-func InspectSelections(program *Program) []SelectionView  { return inspectSelectors(program) }
 
+// InspectSelections 返回各个目标选择位点。
+func InspectSelections(program *Program) []SelectionView { return inspectSelectors(program) }
+
+// InspectEffectResults 返回效果结果的布局与分支。
 func InspectEffectResults(program *Program) []EffectResultView {
 	if program == nil {
 		return nil
@@ -99,6 +106,7 @@ func InspectEffectResults(program *Program) []EffectResultView {
 	return result
 }
 
+// InspectVisualManifest 返回技能用到的表现资源清单。
 func InspectVisualManifest(program *Program) SkillVisualManifest {
 	if program == nil {
 		return SkillVisualManifest{}
@@ -112,6 +120,7 @@ func InspectVisualManifest(program *Program) SkillVisualManifest {
 	return SkillVisualManifest{Digest: digestStrings("roost.skill/v2/visual-manifest", program.visualCatalogRevision+"/"+program.visualCatalogDigest, parts), CatalogRevision: program.visualCatalogRevision, CatalogDigest: program.visualCatalogDigest, Entries: entries}
 }
 
+// InspectCombatSemantics 返回战斗相关的语义（伤害类型、元素等）。
 func InspectCombatSemantics(program *Program) CombatSemanticView {
 	view := CombatSemanticView{}
 	if program == nil {
@@ -126,6 +135,7 @@ func InspectCombatSemantics(program *Program) CombatSemanticView {
 	return view
 }
 
+// InspectEventPlans 返回事件计划。
 func InspectEventPlans(program *Program) []EventPlanView {
 	if program == nil {
 		return nil
@@ -137,6 +147,7 @@ func InspectEventPlans(program *Program) []EventPlanView {
 	return result
 }
 
+// InspectStateLayouts 返回 memory、持久状态与局部变量的布局。
 func InspectStateLayouts(program *Program) StateLayoutView {
 	return StateLayoutView{Memory: inspectMemory(program), PersistentState: inspectPersistentState(program), Locals: inspectLocals(program)}
 }
@@ -168,6 +179,7 @@ func inspectLocals(program *Program) []LocalSlotView {
 	return result
 }
 
+// InspectAbilityControls 返回技能实例相关的控制项。
 func InspectAbilityControls(program *Program) AbilityControlView {
 	view := AbilityControlView{}
 	if program == nil {
@@ -180,6 +192,8 @@ func InspectAbilityControls(program *Program) AbilityControlView {
 	}
 	return view
 }
+
+// InspectOwnedEntities 返回召唤物相关的模板与策略。
 func InspectOwnedEntities(program *Program) OwnedEntityView {
 	view := OwnedEntityView{}
 	if program == nil {
@@ -194,6 +208,7 @@ func InspectOwnedEntities(program *Program) OwnedEntityView {
 	return view
 }
 
+// InspectStatusOperations 返回状态（buff）相关的操作。
 func InspectStatusOperations(program *Program) StatusOperationView {
 	view := StatusOperationView{}
 	if program == nil {
@@ -208,8 +223,10 @@ func InspectStatusOperations(program *Program) StatusOperationView {
 	return view
 }
 
+// InspectTemporalProfiles 当前总是返回零值。
 func InspectTemporalProfiles(*Program) TemporalProfileView { return TemporalProfileView{} }
 
+// InspectIdentity 返回 Program 的身份与各项 digest。
 func InspectIdentity(program *Program) ProgramIdentityView {
 	if program == nil {
 		return ProgramIdentityView{}
@@ -217,7 +234,10 @@ func InspectIdentity(program *Program) ProgramIdentityView {
 	return ProgramIdentityView{SourceDocumentDigest: program.identity.sourceDocumentDigest, GameplayDigest: program.identity.gameplayDigest, PresentationDigest: program.identity.presentationDigest}
 }
 
-func InspectQuantities(program *Program) []QuantityView    { return inspectQuantities(program) }
+// InspectQuantities 返回数值位点的量纲。
+func InspectQuantities(program *Program) []QuantityView { return inspectQuantities(program) }
+
+// InspectRandomSites 返回随机数位点。
 func InspectRandomSites(program *Program) []RandomSiteView { return inspectRandomSites(program) }
 
 func inspectInput(program *Program) InputProgramView {

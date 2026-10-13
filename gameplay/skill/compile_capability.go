@@ -71,7 +71,7 @@ func validateTargetFilterList(context *compileContext, tags map[string]GameplayT
 			}
 		case *statusFilterIR:
 			// has_status / missing_status：lower 用 lookupStatusHandle 的 map 零值，未知名字
-			// 会变成 handle 0，filter 静默按不存在的状态过滤（RR-20261005-NC-214）。
+			// 会变成 handle 0，filter 静默按不存在的状态过滤。
 			if _, found := context.artifacts.authority.statuses[typed.status]; !found {
 				context.addDiagnostic(DiagnosticCapabilityUnknown, typed.source.Path+".status", "unknown status")
 			}
@@ -79,7 +79,7 @@ func validateTargetFilterList(context *compileContext, tags map[string]GameplayT
 			if _, found := context.artifacts.authority.attributes[typed.attribute]; !found {
 				context.addDiagnostic(DiagnosticCapabilityUnknown, typed.source.Path+".attribute", "unknown attribute")
 			}
-			// Host 对未知比较运算一律判不匹配，filter 静默全部落空（RR-20261005-NC-215）。
+			// Host 对未知比较运算一律判不匹配，filter 静默全部落空。
 			if !validCompareOperation(typed.op) {
 				context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".op", "attribute comparison must be eq, ne, lt, lte, gt, or gte")
 			}
@@ -98,15 +98,14 @@ func validateTargetFilterList(context *compileContext, tags map[string]GameplayT
 }
 
 // validateCatalogReferences 检查 effect 与 cost 里按名字引用的 status / attribute /
-// resource 都在 catalog 里（RR-20261005-NC-214）。lower 的 lookupStatusHandle /
+// resource 都在 catalog 里。lower 的 lookupStatusHandle /
 // lookupAttributeHandle / lookupResourceHandle 对未知名字返回 map 零值 handle 0：
 // add_status、resource、cost 每次施法被 Host 拒绝，remove_status、attribute_modifier
 // 静默作用在 handle 0 上。damage_type、element、gameplay tag、collision、unit template
 // 已在各自的 pass 里检查；filter 里的名字由 validateTargetFilterList 检查。
 //
 // attribute_modifier 的 operation 同时要在该属性 catalog 的 ModifierOperations 里，
-// 并且是 Host 实现的 add / mul_bp（RR-20261005-NC-215）：两个参考 Host 对其它取值
-// 一律返回错误，ModifierOperations 此前没有读取方。
+// 并且是 Host 实现的 add / mul_bp：两个参考 Host 对其它取值一律返回错误。
 func validateCatalogReferences(context *compileContext, authority authorityArtifact) {
 	ir := context.artifacts.ir
 	checkResource := func(name, path string) {

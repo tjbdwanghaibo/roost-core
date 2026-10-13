@@ -16,9 +16,8 @@ var (
 	ErrParseLimitExceeded           = errors.New("skill: JSON input exceeds configured limits")
 )
 
-// ParseLimits bounds work and memory before semantic decoding starts. The
-// defaults are intentionally generous for authored skills while still making
-// untrusted/generated JSON safe to accept at a service boundary.
+// ParseLimits 在语义解码开始之前限制工作量与内存。默认值对手写技能足够宽松，同时让不可信 / 生成的 JSON
+// 可以在服务边界安全地接收。
 type ParseLimits struct {
 	MaxBytes            int
 	MaxDepth            int
@@ -27,6 +26,7 @@ type ParseLimits struct {
 	MaxContainerEntries int
 }
 
+// DefaultParseLimits 返回解析的默认上限；ParseLimits 里非正的字段取这里的值。
 func DefaultParseLimits() ParseLimits {
 	return ParseLimits{MaxBytes: 1 << 20, MaxDepth: 64, MaxTokens: 100000, MaxStringBytes: 64 << 10, MaxContainerEntries: 4096}
 }
@@ -51,10 +51,13 @@ func normalizeParseLimits(limits ParseLimits) ParseLimits {
 	return limits
 }
 
+// Parse 按默认上限解析一份技能定义 JSON。
 func Parse(data []byte) (*Definition, error) {
 	return ParseWithLimits(data, DefaultParseLimits())
 }
 
+// ParseWithLimits 按给定上限解析技能定义：先限制字节数、拒绝重复键与超限结构，再严格解码（未知字段、只差大小写
+// 的字段名都会被拒绝）。
 func ParseWithLimits(data []byte, limits ParseLimits) (*Definition, error) {
 	limits = normalizeParseLimits(limits)
 	if len(data) > limits.MaxBytes {
@@ -66,10 +69,12 @@ func ParseWithLimits(data []byte, limits ParseLimits) (*Definition, error) {
 	return parseDefinition(data)
 }
 
+// ParseGenerated 按默认上限解析生成器的输出：一份技能定义，或生成器给出的拒绝说明（Rejection）。
 func ParseGenerated(data []byte) (GeneratedResult, error) {
 	return ParseGeneratedWithLimits(data, DefaultParseLimits())
 }
 
+// ParseGeneratedWithLimits 按给定上限解析生成器产出的结果，规则与 ParseWithLimits 相同。
 func ParseGeneratedWithLimits(data []byte, limits ParseLimits) (GeneratedResult, error) {
 	limits = normalizeParseLimits(limits)
 	if len(data) > limits.MaxBytes {
@@ -191,8 +196,7 @@ func decodeStrictSingle(data []byte, destination any) error {
 	}
 	// encoding/json 按大小写不敏感匹配字段：DisallowUnknownFields 放过 "ID"、
 	// "Cooldown_Ticks"，同一字段的大小写变体出现两次时后者静默覆盖前者，而
-	// 重复键扫描按字节比较看不出来（RR-20261005-NC-150）。解码成功后再按
-	// 目标类型逐字核对一遍键名。
+	// 重复键扫描按字节比较看不出来。解码成功后再按目标类型逐字核对一遍键名。
 	return requireExactFieldNames(data, reflect.TypeOf(destination))
 }
 

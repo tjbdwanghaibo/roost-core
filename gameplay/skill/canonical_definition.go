@@ -18,9 +18,9 @@ import (
 //   - 结构体写类型名与全部字段（字段名 + 值），不看 json tag，未导出字段同样写出；
 //   - map 按 key 的规范表示排序；nil 指针 / 切片 / map / 接口与空值区分；每段都带长度前缀，不会两段拼成同一串字节。
 //
-// 之前是 json.Marshal(Definition) 的摘要（RR-20261006-33）：接口值只写出具体类型的字段、不写类型，字段完全相同只差
-// 类型的两个定义（set_memory / add_memory、hold / toggle 策略、entity / direction 输入、line / rectangle 形状等）摘要
-// 相同；带 `json:"-"` 的字段（Cost.Amount、cast window 的 windup / recovery 表达式）整个被跳过，只改消耗数量摘要也不变。
+// 不能用 json.Marshal(Definition) 做摘要：接口值只写出具体类型的字段、不写类型，字段完全相同只差类型的两个定义
+// （set_memory / add_memory、hold / toggle 策略、entity / direction 输入、line / rectangle 形状等）摘要相同；带
+// `json:"-"` 的字段（Cost.Amount、cast window 的 windup / recovery 表达式）整个被跳过，只改消耗数量摘要也不变。
 // Go 类型名、字段名改名会改变这个摘要（json 编码时字段名同样在摘要里），这是改名的直接后果。
 func canonicalDefinitionDigest(definition *Definition) string {
 	var encoder canonicalEncoder

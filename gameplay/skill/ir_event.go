@@ -61,11 +61,13 @@ func deriveEvent(parent EventContext, id EventID) EventContext {
 	return result
 }
 
+// WithGameplayTags 返回带上（规范化排序后的）玩法标签的事件副本。
 func (event EventContext) WithGameplayTags(tags []GameplayTagHandle) EventContext {
 	event.gameplayTags = normalizeGameplayTagHandles(tags)
 	return event
 }
 
+// GameplayTags 返回事件玩法标签的副本。
 func (event EventContext) GameplayTags() []GameplayTagHandle {
 	return append([]GameplayTagHandle(nil), event.gameplayTags...)
 }

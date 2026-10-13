@@ -124,19 +124,14 @@ func jsonObjectPath(path, key string) string {
 
 var jsonUnmarshalerType = reflect.TypeFor[json.Unmarshaler]()
 
-// exactFieldNames caches, per struct type, the canonical JSON name of every
-// field and the type its value decodes into.
+// exactFieldNames 按结构体类型缓存每个字段的规范 JSON 名字与其值解码到的类型。
 var exactFieldNames sync.Map // reflect.Type -> map[string]reflect.Type
 
-// requireExactFieldNames walks data along destination's type and rejects any
-// object key that names a struct field only case-insensitively. Duplicate keys
-// that differ only in case therefore fail too: at most one of them can be the
-// canonical spelling. Types with their own UnmarshalJSON (json.RawMessage,
-// SkillPresentation, VisualRef, RuntimeValue) are skipped because they decode
-// through decodeStrictSingle again; map keys are names chosen by the author
-// (memory, persistent_state, attribute_overrides…) and stay case-sensitive.
-// It runs after a successful strict Decode, so shape errors are already
-// reported and any re-decode failure here is unreachable.
+// requireExactFieldNames 沿 destination 的类型遍历 data，拒绝只在大小写不敏感时才能对上结构体字段的对象键。
+// 只差大小写的重复键因此也会失败：其中至多一个是规范拼写。自带 UnmarshalJSON 的类型（json.RawMessage、
+// SkillPresentation、VisualRef、RuntimeValue）跳过，它们会再经 decodeStrictSingle 解码；map 的键是作者起的名字
+// （memory、persistent_state、attribute_overrides 等），保持大小写敏感。它在严格 Decode 成功之后运行，形状错误
+// 已经报过，这里的再解码失败走不到。
 func requireExactFieldNames(data []byte, typ reflect.Type) error {
 	if typ == nil {
 		return nil

@@ -24,7 +24,7 @@ type ActivePresentation struct {
 	// PrimaryTarget 是 Runtime 为这条持续表现发出的增量事件里的 PrimaryTarget：施法条目与仍归施法的衍生物是施法目标，
 	// 移交后的衍生物是 lifecycle 实体（detachedSpawnCast）。只供 reset 按增量的形状做可见性过滤，不下发。
 	// 之前 reset 用 Anchor.Target 代替它，仍归施法的衍生物两者不同，按 PrimaryTarget 判定的策略对 reset 与增量
-	// 得出相反结论（RR-20261006-22）。
+	// 得出相反结论。
 	PrimaryTarget EntityID `json:"-"`
 }
 
@@ -37,6 +37,7 @@ type PresentationRecoverySnapshot struct {
 	Active                     []ActivePresentation `json:"active,omitempty"`
 }
 
+// PresentationSnapshot 返回当前仍在进行的表现，供断线重连的客户端恢复画面。
 func (runtime *Runtime) PresentationSnapshot() PresentationRecoverySnapshot {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()

@@ -13,9 +13,8 @@ func runLifetimePass(context *compileContext) {
 		if phase.events.enter != nil {
 			fact := context.artifacts.lifetimes[phase.events.enter.sourceRef().Path]
 			policySuspend := phase.id == context.artifacts.ir.initialPhase && policyAllowsEnterFallthrough(context.artifacts.ir.activation.policy.mode)
-			// timeout_ticks 不再豁免 fallthrough：Runtime 没有 phase 计时，落空的
-			// enter 在 tap 技能上只会走到 beginPolicyWait 的 ErrProgramInvariant
-			// （RR-20261005-NC-151）。
+			// timeout_ticks 不豁免 fallthrough：Runtime 没有 phase 计时，落空的 enter 在 tap 技能上只会走到
+			// beginPolicyWait 的 ErrProgramInvariant。
 			if fact.CanFallthrough && !policySuspend {
 				context.addDiagnostic(DiagnosticLifecycleFallthrough, phase.events.enter.sourceRef().Path, "phase enter flow may fall through; end it with finish or goto (the runtime has no phase timeout)")
 			}
@@ -182,13 +181,13 @@ func maxInt(left, right int) int {
 	return right
 }
 
-// requireDispatchedPhaseEvents 让编译器接受的 phase 事件与 Runtime 的派发点一致
-// （RR-20261005-NC-151）。Runtime 只从 enter（executeCast）、cancel（Cancel）、
+// requireDispatchedPhaseEvents 让编译器接受的 phase 事件与 Runtime 的派发点一致。
+// Runtime 只从 enter（executeCast）、cancel（Cancel）、
 // release（Release / 自动释放）、pulse（policy 脉冲）与 direction_changed /
 // target_changed（UpdateInput）取 root；recast 与 timeout 没有派发点，
-// timeout_ticks 也不排任何计时。在 Runtime 实现它们之前，编译期拒绝这两个
+// timeout_ticks 也不排任何计时。Runtime 没有实现它们，所以编译期拒绝这两个
 // 事件，并对非零 timeout_ticks 给出 warning，而不是编出永远不会执行的分支。
-// 哪些事件有派发点只在 phase_events.go 的 phaseEventTable 里写一次（B3 ②）。
+// 哪些事件有派发点只在 phase_events.go 的 phaseEventTable 里写一次。
 func requireDispatchedPhaseEvents(context *compileContext, phase phaseIR, index int) {
 	path := fmt.Sprintf("$.phases[%d]", index)
 	for _, event := range undispatchedPhaseEventFlows(phase.events) {

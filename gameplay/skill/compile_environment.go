@@ -121,6 +121,7 @@ type ElementCatalogEntry struct {
 	Key, MatchupPolicy string
 }
 
+// WithTestRevision 返回改了 Revision 的副本，供测试构造不同版本的 catalog。
 func (c ElementCatalog) WithTestRevision(revision string) ElementCatalog {
 	c.Revision = revision
 	c.Entries = append([]ElementCatalogEntry(nil), c.Entries...)
@@ -266,6 +267,7 @@ type VisualThemeDescriptor struct {
 	ClientPackageKey string
 }
 
+// WithTestRevision 返回改了 Revision（并重算 Digest）的副本，供测试构造不同版本的 catalog。
 func (c VisualCatalog) WithTestRevision(revision string) VisualCatalog {
 	c.Revision = revision
 	c.Digest = digestStrings("visual", revision, c.Themes)
@@ -297,12 +299,13 @@ type CompileEnvironment struct {
 	Gameplay                  GameplayCatalog
 	Motion                    MotionCapabilityCatalog
 	SpawnProperties           SpawnPropertyCatalog
-	// Host 是 Host 取值能力表里业务声明的部分（B3 ③），随环境下发、算进 authority digest；
+	// Host 是 Host 取值能力表里业务声明的部分，随环境下发、算进 authority digest；
 	// 完整的表用 HostCapabilityTableOf 取。
 	Host   HostCapabilityCatalog
 	Visual VisualCatalog
 }
 
+// DefaultCompileEnvironment 返回内置的默认编译环境（默认 catalog、全量能力表与默认上限）。
 func DefaultCompileEnvironment() CompileEnvironment {
 	environment := CompileEnvironment{
 		CompilerSemanticsRevision: "skillv2-compiler-2", Revision: "gameplay-default-1",

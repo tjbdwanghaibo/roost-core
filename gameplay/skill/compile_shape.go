@@ -14,73 +14,92 @@ func runShapePass(context *compileContext) {
 	rejectValuesTheRuntimeDoesNotExecute(context)
 	activation := context.artifacts.ir.activation
 	if activation.kind == "active" {
-		window := activation.castWindow
-		if window.windupTicks < 0 || window.commitTick < 0 || window.recoveryTicks < 0 {
-			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window", "cast window ticks must be non-negative")
+		checkCastWindowShape(context, activation.castWindow)
+		checkCastPolicyShape(context, activation.policy)
+	} else {
+		checkPassiveActivationShape(context, activation)
+	}
+	checkFlowShapes(context)
+	context.artifacts.shape.checked = !context.hasErrors()
+}
+
+// checkCastWindowShape 检查主动技能施法窗口的时长、表达式上下界、移动与转向取值。
+func checkCastWindowShape(context *compileContext, window castWindowIR) {
+	if window.windupTicks < 0 || window.commitTick < 0 || window.recoveryTicks < 0 {
+		context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window", "cast window ticks must be non-negative")
+	}
+	if window.hasWindupExpression {
+		if window.windupTicks != 0 {
+			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.windup_ticks", "windup_ticks must be omitted when windup_ticks_expression is set")
 		}
-		if window.hasWindupExpression {
-			if window.windupTicks != 0 {
-				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.windup_ticks", "windup_ticks must be omitted when windup_ticks_expression is set")
-			}
-			if window.windupTicksMin < 0 || window.windupTicksMax < window.windupTicksMin {
-				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.windup_ticks_expression", "windup ticks bounds require 0 <= windup_ticks_min <= windup_ticks_max")
-			}
-			if window.commitTick > window.windupTicksMin {
-				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.commit_tick", "commit_tick must not exceed windup_ticks_min")
-			}
-		} else {
-			if window.windupTicksMin != 0 || window.windupTicksMax != 0 {
-				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.windup_ticks_min", "windup ticks bounds require windup_ticks_expression")
-			}
-			if window.commitTick > window.windupTicks {
-				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window", "commit_tick must not exceed windup_ticks")
-			}
+		if window.windupTicksMin < 0 || window.windupTicksMax < window.windupTicksMin {
+			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.windup_ticks_expression", "windup ticks bounds require 0 <= windup_ticks_min <= windup_ticks_max")
 		}
-		if window.hasRecoveryExpression {
-			if window.recoveryTicks != 0 {
-				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.recovery_ticks", "recovery_ticks must be omitted when recovery_ticks_expression is set")
-			}
-			if window.recoveryTicksMin < 0 || window.recoveryTicksMax < window.recoveryTicksMin {
-				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.recovery_ticks_expression", "recovery ticks bounds require 0 <= recovery_ticks_min <= recovery_ticks_max")
-			}
-		} else if window.recoveryTicksMin != 0 || window.recoveryTicksMax != 0 {
-			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.recovery_ticks_min", "recovery ticks bounds require recovery_ticks_expression")
-		}
-		if window.movement != "allowed" && window.movement != "slow" && window.movement != "locked" {
-			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.movement", "movement must be allowed, slow, or locked")
-		}
-		if window.turning != "allowed" && window.turning != "locked" {
-			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.turning", "turning must be allowed or locked")
-		}
-		policy := activation.policy
-		switch policy.mode {
-		case castModeToggle, castModeHold:
-			if policy.pulseIntervalTicks <= 0 || policy.maxDurationTicks <= 0 {
-				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.policy", "toggle and hold require positive pulse_interval_ticks and max_duration_ticks")
-			}
-		case castModeCharge:
-			if policy.maxChargeTicks <= 0 || policy.minChargeBP < 0 || policy.minChargeBP > 10000 {
-				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.policy", "charge requires positive max_charge_ticks and min_charge_bp in 0..10000")
-			}
-		case castModeAmmo:
-			if policy.maxStock <= 0 || policy.rechargeTicks <= 0 || policy.initialStock < 0 || policy.initialStock > policy.maxStock {
-				context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.policy", "ammo stock and recharge configuration is invalid")
-			}
+		if window.commitTick > window.windupTicksMin {
+			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.commit_tick", "commit_tick must not exceed windup_ticks_min")
 		}
 	} else {
-		if activation.cooldownScope != "caster" && activation.cooldownScope != "target" {
-			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cooldown_scope", "passive cooldown_scope must be caster or target")
+		if window.windupTicksMin != 0 || window.windupTicksMax != 0 {
+			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.windup_ticks_min", "windup ticks bounds require windup_ticks_expression")
 		}
-		// 被动由 ActivatePassive 按触发事件启动（runtime_proc.go）：事件深度 >= max_depth 时
-		// 压制，施法输入只有事件的 target（passiveCastInput）。max_depth 0 或需要位置 / 方向
-		// 输入的被动每次触发都被压制，编译通过却永远不生效（RR-20261005-NC-221）。
-		if activation.procPolicy.maxDepth < 1 {
-			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.proc_policy.max_depth", "proc max depth must be at least 1; a passive with max_depth 0 never activates")
-		}
-		if kind := context.artifacts.ir.input.kind; kind != inputNone && kind != inputEntity {
-			context.addDiagnostic(DiagnosticInputUnavailable, "$.input_schema", fmt.Sprintf("a passive cast only receives the triggering event's target; input_schema %q can never be filled", kind))
+		if window.commitTick > window.windupTicks {
+			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window", "commit_tick must not exceed windup_ticks")
 		}
 	}
+	if window.hasRecoveryExpression {
+		if window.recoveryTicks != 0 {
+			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.recovery_ticks", "recovery_ticks must be omitted when recovery_ticks_expression is set")
+		}
+		if window.recoveryTicksMin < 0 || window.recoveryTicksMax < window.recoveryTicksMin {
+			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.recovery_ticks_expression", "recovery ticks bounds require 0 <= recovery_ticks_min <= recovery_ticks_max")
+		}
+	} else if window.recoveryTicksMin != 0 || window.recoveryTicksMax != 0 {
+		context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.recovery_ticks_min", "recovery ticks bounds require recovery_ticks_expression")
+	}
+	if window.movement != "allowed" && window.movement != "slow" && window.movement != "locked" {
+		context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.movement", "movement must be allowed, slow, or locked")
+	}
+	if window.turning != "allowed" && window.turning != "locked" {
+		context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cast_window.turning", "turning must be allowed or locked")
+	}
+}
+
+// checkCastPolicyShape 检查 toggle / hold / charge / ammo 策略各自要求的参数。
+func checkCastPolicyShape(context *compileContext, policy castPolicyIR) {
+	switch policy.mode {
+	case castModeToggle, castModeHold:
+		if policy.pulseIntervalTicks <= 0 || policy.maxDurationTicks <= 0 {
+			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.policy", "toggle and hold require positive pulse_interval_ticks and max_duration_ticks")
+		}
+	case castModeCharge:
+		if policy.maxChargeTicks <= 0 || policy.minChargeBP < 0 || policy.minChargeBP > 10000 {
+			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.policy", "charge requires positive max_charge_ticks and min_charge_bp in 0..10000")
+		}
+	case castModeAmmo:
+		if policy.maxStock <= 0 || policy.rechargeTicks <= 0 || policy.initialStock < 0 || policy.initialStock > policy.maxStock {
+			context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.policy", "ammo stock and recharge configuration is invalid")
+		}
+	}
+}
+
+// checkPassiveActivationShape 检查被动技能的冷却作用域、proc 深度与输入。
+func checkPassiveActivationShape(context *compileContext, activation activationIR) {
+	if activation.cooldownScope != "caster" && activation.cooldownScope != "target" {
+		context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.cooldown_scope", "passive cooldown_scope must be caster or target")
+	}
+	// 被动由 ActivatePassive 按触发事件启动（runtime_proc.go）：事件深度 >= max_depth 时
+	// 压制，施法输入只有事件的 target（passiveCastInput）。max_depth 0 或需要位置 / 方向
+	// 输入的被动每次触发都被压制，编译通过却永远不生效。
+	if activation.procPolicy.maxDepth < 1 {
+		context.addDiagnostic(DiagnosticShapeInvalid, "$.activation.proc_policy.max_depth", "proc max depth must be at least 1; a passive with max_depth 0 never activates")
+	}
+	if kind := context.artifacts.ir.input.kind; kind != inputNone && kind != inputEntity {
+		context.addDiagnostic(DiagnosticInputUnavailable, "$.input_schema", fmt.Sprintf("a passive cast only receives the triggering event's target; input_schema %q can never be filled", kind))
+	}
+}
+
+// checkFlowShapes 检查每个流程节点的形状：sequence / parallel 非空、只有召唤效果带衍生物与回调、select 的上限。
+func checkFlowShapes(context *compileContext) {
 	context.artifacts.ir.walkFlows(func(flow flowIR) {
 		switch typed := flow.(type) {
 		case *sequenceFlowIR:
@@ -93,8 +112,7 @@ func runShapePass(context *compileContext) {
 			}
 		case *effectFlowIR:
 			// 只有召唤效果（summon）会启动实体衍生物（executeOwnedSummon → startEntitySpawn）。其他效果上的
-			// spawn / on 会被 lower 成衍生物模板，但 Runtime 从不启动、回调从不执行
-			// （RR-20261005-NC-222）。
+			// spawn / on 会被 lower 成衍生物模板，但 Runtime 从不启动、回调从不执行。
 			if _, summon := typed.effect.(*summonEffectIR); !summon {
 				if typed.spawn != nil {
 					context.addDiagnostic(DiagnosticShapeInvalid, typed.source.Path+".spawn", "only a summon effect starts a spawn")
@@ -115,16 +133,12 @@ func runShapePass(context *compileContext) {
 			}
 		}
 	})
-	context.artifacts.shape.checked = !context.hasErrors()
 }
 
 // requireNonNegativeAuthoredTicks 是“作者写的 tick 不能为负”在 shape pass 里的
-// 集中检查（RR-20261005-NC-152）。Tick 是 int64，wire 不限制符号；此前只有
-// global_cooldown、cast window、policy 等字段在这里检查，其余字段要么不检查
-// （负 cooldown 让冷却立即结束、负 repeat 间隔在运行时排到过去而
-// ErrProgramInvariant、负状态时长每次被 Host 拒绝），要么靠预算 pass 把负数
-// 饱和成 MaxInt64 后在 `$` 报一个误导的生命期超限。motion、spawn、numeric
-// track、状态生命期等字段仍由各自 pass 检查，这里只补没有检查的字段。
+// 集中检查。Tick 是 int64，wire 不限制符号；没有检查的负值会让冷却立即结束、repeat 间隔在运行时排到过去而
+// ErrProgramInvariant、状态时长每次被 Host 拒绝，或被预算 pass 饱和成 MaxInt64 后在 `$` 报一个误导的生命期
+// 超限。motion、spawn、numeric track、状态生命期等字段由各自 pass 检查，这里只管没有专门 pass 检查的字段。
 func requireNonNegativeAuthoredTicks(context *compileContext) {
 	ir := context.artifacts.ir
 	if ir.cooldownTicks < 0 {
@@ -159,16 +173,16 @@ func requireNonNegativeAuthoredTicks(context *compileContext) {
 
 // rejectValuesTheRuntimeDoesNotExecute 拒绝能解码、却不会按作者意思执行的取值。
 //
-//   - 只编译不传 Host 的字段（RR-20261005-NC-213）：chain 的 allow_repeat /
+//   - 只编译不传 Host 的字段：chain 的 allow_repeat /
 //     hop_interval_ticks 不在 ChainSelectShape 里，Runtime 也不按间隔排 hop；
 //     attribute_modifier 的 stack_policy / max_stacks 不在 AttributeModifierCommand
-//     里。只接受 Runtime 实际执行的默认值，与 NC-151 的方向 B 一致；实现它们需要
+//     里。只接受 Runtime 实际执行的默认值（与 phase 事件“没有派发点就拒绝”同一方向）；实现它们需要
 //     维护者先定语义。
-//   - 两个参考 Host（MemoryHost、combatcomponent）与 Runtime 都拒绝的取值
-//     （RR-20261005-NC-215）：attribute_modifier 时长 <= 0、add_status 时长为 0
+//   - 两个参考 Host（MemoryHost、combatcomponent）与 Runtime 都拒绝的取值：attribute_modifier 时长 <= 0、
+//     add_status 时长为 0
 //     （负值由 requireNonNegativeAuthoredTicks 报）、resource 的 operation 不是
 //     set / add / spend / sub、cost 字面量为负（runtime_turn.go 的 payCostList 拒绝）。
-//     这些定义此前编译通过，施法时每次失败。attribute_modifier 的 operation 要对照
+//     这些定义若编译通过，施法时每次都会失败。attribute_modifier 的 operation 要对照
 //     属性 catalog，在 authority pass 里检查。
 func rejectValuesTheRuntimeDoesNotExecute(context *compileContext) {
 	ir := context.artifacts.ir

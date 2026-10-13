@@ -8,6 +8,7 @@ type StateHandle struct {
 	Shared         SharedStateHandle
 }
 
+// IsShared 报告句柄是否指向共享状态。
 func (handle StateHandle) IsShared() bool { return handle.Shared != 0 }
 
 type StateScope string

@@ -124,7 +124,7 @@ func validateCatalogHandles(environment CompileEnvironment, diagnostics *[]Diagn
 	checkHandles("$.gameplay.shared_states", len(environment.Gameplay.SharedStates.Entries), func(i int) uint16 { return uint16(environment.Gameplay.SharedStates.Entries[i].Handle) }, diagnostics)
 	checkHandles("$.gameplay.temporal", len(environment.Gameplay.Temporal.Entries), func(i int) uint16 { return uint16(environment.Gameplay.Temporal.Entries[i].Handle) }, diagnostics)
 	checkHandles("$.spawn_properties", len(environment.SpawnProperties.Properties), func(i int) uint16 { return uint16(environment.SpawnProperties.Properties[i].Handle) }, diagnostics)
-	// key 也必须非空且唯一（RR-20261005-NC-212）。编译器按 key 查 catalog 的写法不止一种：
+	// key 也必须非空且唯一。编译器按 key 查 catalog 的写法不止一种：
 	// authority 表与 owned entity 的模板表后出现的条目覆盖前面的，unitTemplateEntry /
 	// typecheck 的属性表取第一个。只查 handle 唯一时，同一个 key 在一次编译里会被解析成
 	// 两个条目，typecheck 与 lower 用的策略不同。temporal 与 spawn property 在各自的
