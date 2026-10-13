@@ -1538,6 +1538,9 @@ func TestRuntimeFailureOnFailRunsHooksOnceInOrderBeforeDone(t *testing.T) {
 	default:
 		t.Fatal("Done not delivered")
 	}
+	if !errors.Is(failure.Err(), cause) {
+		t.Fatalf("Err = %v, want the first failure retained for diagnostics", failure.Err())
+	}
 	var late error
 	failure.OnFail(func(err error) { late = err })
 	if !errors.Is(late, cause) {

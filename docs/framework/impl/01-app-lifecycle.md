@@ -31,7 +31,7 @@
 
 ### app
 
-14 个实现文件、26 个测试文件。
+14 个实现文件、8 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -95,28 +95,14 @@
 
 ### app
 
-- [app_test.go](../../../framework/app/app_test.go)：`TestAppReturnsServeError`、`TestAppExplicitConfigPathFailsClosed`、`TestAppInvalidDefaultConfigFailsClosed`、`TestAppReturnsShutdownError`、`TestAppReturnsServiceStoppingLifecycleError`；其余 9 项见文件
-- [business_clock_contract_test.go](../../../framework/app/business_clock_contract_test.go)：`TestBusinessClockFollowsTheConfiguredOffset`、`TestOffsetMovesBusinessTimeButNotTheSingletonLease`、`TestBusinessTimeMovingBackRefusesToStart`、`TestBusinessTimeMayMoveForwardOrStay`、`TestTheHighWaterMarkAdvancesWhileRunning`、`TestAnUnreadableHighWaterMarkRefusesToStart`、`TestAnOffsetWithoutTheSingletonStillGuardsBusinessTime`；其余 2 项见文件
-- [config_contract_test.go](../../../framework/app/config_contract_test.go)：`TestCheckConfigRequiresAnExistingFile`、`TestCheckConfigAcceptsExistingDefaultFileWithoutStartingService`、`TestSortModsRejectsNameAlreadyOwnedBySharedMod`、`TestConfigIntAcceptsWholeNumbersOnly`、`TestCheckConfigReportsEveryModsErrorsAtOnce`、`TestLoadConfigFillsDefaultsAndRefusesOutOfRangeValues`、`TestServiceDeclarationsAreCheckedAndPrintedWithTheMods`、`TestFrameworkModsReadConfigOnlyThroughDeclarations`；其余 2 项见文件、`TestValidateServiceConfigRejectsABoolSwitchThatIsNotABool`、`TestValidateServiceConfigAcceptsTheBoolSpellingsItAlwaysAccepted`、`TestValidateServiceConfigRejectsADurationWithoutAUnit`、`TestValidateServiceConfigAcceptsDurationsWithUnits`
-- [config_validation_test.go](../../../framework/app/config_validation_test.go)：`TestValidateServiceConfigAcceptsMinimalConfig`、`TestProductionServiceConfigBaselineIsValid`
+- [app_test.go](../../../framework/app/app_test.go)：`TestAppReturnsServeError`、`TestAppExplicitConfigPathFailsClosed`、`TestAppInvalidDefaultConfigFailsClosed`、`TestAppReturnsShutdownError`、`TestAppReturnsServiceStoppingLifecycleError`；其余 21 项见文件
+- [business_clock_contract_test.go](../../../framework/app/business_clock_contract_test.go)：`TestBusinessClockFollowsTheConfiguredOffset`、`TestOffsetMovesBusinessTimeButNotTheSingletonLease`、`TestBusinessTimeMovingBackRefusesToStart`、`TestBusinessTimeMayMoveForwardOrStay`、`TestTheHighWaterMarkAdvancesWhileRunning`；其余 4 项见文件
+- [config_contract_test.go](../../../framework/app/config_contract_test.go)：`TestCheckConfigRequiresAnExistingFile`、`TestCheckConfigAcceptsExistingDefaultFileWithoutStartingService`、`TestSortModsRejectsNameAlreadyOwnedBySharedMod`、`TestConfigIntAcceptsWholeNumbersOnly`、`TestCheckConfigReportsEveryModsErrorsAtOnce`；其余 15 项见文件
 - [example_test.go](../../../framework/app/example_test.go)
-- [exit_reason_log_promises_test.go](../../../framework/app/exit_reason_log_promises_test.go)：`TestRunWritesTheExitReasonToTheFileLog`
-- [guards_promises_test.go](../../../framework/app/guards_promises_test.go)：`TestStopModsReverseStopsNothingOnceTheContextIsDone`、`TestEmitLifecycleRequiresARegistryWithTheLifecycleCapability`、`TestSortModsRefusesNilUnnamedAndDuplicateMods`、`TestValidateServiceConfigAndRegisterBatchRefuseMissingInputs`
-- [late_runtime_failure_promises_test.go](../../../framework/app/late_runtime_failure_promises_test.go)：`TestRuntimeFailureDuringShutdownIsReturned`、`TestRuntimeFailureThatStartsTheShutdownIsReturnedOnce`
-- [log_rotation_promises_test.go](../../../framework/app/log_rotation_promises_test.go)：`TestNegativeLogRotationIsRejected`
-- [logic_offset_production_promises_test.go](../../../framework/app/logic_offset_production_promises_test.go)：`TestProductionRefusesANonZeroLogicOffset`
-- [mod_order_test.go](../../../framework/app/mod_order_test.go)：`TestSortModsOrdersPresentOptionalDependencies`、`TestSortModsIgnoresAbsentOptionalDependencies`、`TestSortModsDetectsOptionalDependencyCycle`
-- [mod_validation_promises_test.go](../../../framework/app/mod_validation_promises_test.go)：`TestSingleModValidation`、`TestSingleModExecuteFailsBeforeInit`
-- [registry_test.go](../../../framework/app/registry_test.go)：`TestNewRegistryInstallsRuntimeObsRegistry`、`TestRegistryRegisterBatchIsAtomic`
-- [remaining_config_promises_test.go](../../../framework/app/remaining_config_promises_test.go)：`TestSharedKeyErrorIsReportedOnceAcrossOwners`
-- [runtime_failure_test.go](../../../framework/app/runtime_failure_test.go)：`TestRuntimeFailureFirstReportWakesShutdown`
-- [shutdown_hooks_promises_test.go](../../../framework/app/shutdown_hooks_promises_test.go)：`TestShutdownLifecycleHooksStayWithinTheShutdownBudget`
-- [singleton_incarnation_promises_test.go](../../../framework/app/singleton_incarnation_promises_test.go)：`TestSingletonIncarnationIsTheHeldLocksIdentity`
+- [mod_test.go](../../../framework/app/mod_test.go)：`TestSortModsOrdersPresentOptionalDependencies`、`TestSortModsIgnoresAbsentOptionalDependencies`、`TestSortModsDetectsOptionalDependencyCycle`、`TestSingleModValidation`、`TestSingleModExecuteFailsBeforeInit`；其余 2 项见文件
+- [singleton_identity_test.go](../../../framework/app/singleton_identity_test.go)：`TestSingletonIdentityChecksTheCurrentToken`、`TestSingletonIdentityCapabilityUsesTheSameHeldLock`、`TestSingletonIncarnationIsTheHeldLocksIdentity`
 - [singleton_test.go](../../../framework/app/singleton_test.go)：`TestSingletonWaitsForTheHolderBeforeAnyModInit`、`TestSingletonGivesUpAtStartupWaitWithoutTakingTheKey`、`TestSingletonTakesOverAfterTheHolderExpires`、`TestSingletonReportsAnUnavailableStoreAtStartupWait`、`TestSingletonClaimsItsOwnValueAfterALostAcquireReply`；其余 21 项见文件
-- [startup_contract_test.go](../../../framework/app/startup_contract_test.go)：`TestStartupHookCancellationPreservesDependencies`、`TestSignalDuringModStartNeverReachesServiceInit`、`TestServiceInitFailureStopsWhatInitStartedBeforeTheMods`、`TestStartupCleanupThatDoesNotFinishKeepsTheModsAndTheLock`
-- [stop_budget_floor_test.go](../../../framework/app/stop_budget_floor_test.go)：`TestDeclaredStopBudgetIsGrantedWhenTotalCoversItAndTheFloors`、`TestLargeDeclaredStopBudgetKeepsTheFloorOfEarlierMods`、`TestGeneratedDefaultShutdownBudgetsCoverEveryMod`、`TestStopBudgetsSplitEvenlyWhenTotalCannotCoverTheFloors`、`TestUndeclaredStopBudgetsKeepTheEvenSplit`
-- [stop_budget_generated_test.go](../../../framework/app/stop_budget_generated_test.go)：`TestGeneratedGameServiceTotalCoversEveryModFloorAndTheDeclaredBudget`、`TestGeneratedGameServiceStopsWithoutBudgetWarnings`
-- [stop_budget_test.go](../../../framework/app/stop_budget_test.go)：`TestDeclaredStopBudgetIsHonoredWithinTotalTimeout`、`TestStopBudgetsScaleProportionallyWhenTotalIsInsufficient`、`TestGeneratedDefaultsGrantDataEngineItsScaledDeclaredBudget`、`TestServiceModStopPlansAroundLaterSharedDeclaredBudget`、`TestDeclaredStopBudgetAppliesWithoutTotalDeadline`；其余 1 项见文件
+- [stop_budget_test.go](../../../framework/app/stop_budget_test.go)：`TestGeneratedDefaultsGrantDataEngineItsScaledDeclaredBudget`、`TestServiceModStopPlansAroundLaterSharedDeclaredBudget`、`TestDeclaredStopBudgetAppliesWithoutTotalDeadline`、`TestAppShutdownGrantsDeclaredStopBudgetAcrossModGroups`、`TestDeclaredStopBudgetIsGrantedWhenTotalCoversItAndTheFloors`；其余 6 项见文件
 
 ### app/buildinfo
 

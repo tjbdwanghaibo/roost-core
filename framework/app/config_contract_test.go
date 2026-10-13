@@ -1,3 +1,5 @@
+// 配置契约：--check-config、声明式 schema（SchemaOf / LoadConfig / LoadConfigWithPresence）、只经声明读配置、服务配置校验。
+
 package app
 
 import (
@@ -5,8 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +15,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 )
 
 func TestCheckConfigRequiresAnExistingFile(t *testing.T) {
@@ -61,7 +64,7 @@ func TestCheckConfigAcceptsExistingDefaultFileWithoutStartingService(t *testing.
 	}
 }
 
-// RR-20261007-02（F01-9）：服务 Mod 与共享 Mod 使用同一名字空间，外部依赖可以引用共享 Mod，但不能覆盖它。
+// 服务 Mod 与共享 Mod 使用同一名字空间：外部依赖可以引用共享 Mod，但不能覆盖它。
 func TestSortModsRejectsNameAlreadyOwnedBySharedMod(t *testing.T) {
 	external := map[ModName]struct{}{"shared": {}}
 	if _, err := sortMods([]Mod{&orderedTestMod{name: "shared"}}, external); err == nil {
@@ -159,8 +162,7 @@ func TestLoadConfigFillsDefaultsAndRefusesOutOfRangeValues(t *testing.T) {
 // --- 业务服务的声明（A4 ① 收尾，2026-10-07） ---
 
 // 业务服务（RegisterServer 注册的 Service）与 Mod 一样实现 ConfigSchema：App 启动检查、CheckServiceConfig、
-// ServiceConfigSchema（--print-config）与 --print-config-schema 都带上它。修前只看 Mod：game-demo 的业务代码读的
-// activity.* / platform.* 没有任何声明，doctor 对 game 报 WARN，写错的值要到业务代码第一次读才暴露。
+// ServiceConfigSchema（--print-config）与 --print-config-schema 都带上它。
 type declaredService struct{ schema ConfigSchema }
 
 func (declaredService) Name() ServiceName               { return "shop" }
@@ -425,5 +427,82 @@ func TestValidateServiceConfigAcceptsDurationsWithUnits(t *testing.T) {
 	cfg.Set("singleton.ttl", 15*time.Second)
 	if err := ValidateServiceConfig(cfg); err != nil {
 		t.Fatalf("ValidateServiceConfig with a time.Duration value = %v, want accepted", err)
+	}
+}
+
+func TestValidateServiceConfigAcceptsMinimalConfig(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("server_type", "game")
+	cfg.Set("sid", 2001)
+
+	if err := ValidateServiceConfig(cfg); err != nil {
+		t.Fatalf("ValidateServiceConfig: %v", err)
+	}
+}
+
+// productionServiceConfig 是满足 App 自己全部生产规则的配置：用例只加它要测的那一个键，看到的拒绝就是它要的那一条。
+// 框架 Mod 的生产规则（密钥、ops 端点、Redis 地址）跟着声明走，用例在 kit（config_schema_promises_test.go）。
+func productionServiceConfig(serverType string) *viper.Viper {
+	cfg := viper.New()
+	cfg.Set("server_type", serverType)
+	cfg.Set("sid", 2001)
+	cfg.Set("env", "production")
+	return cfg
+}
+
+func TestProductionServiceConfigBaselineIsValid(t *testing.T) {
+	if err := ValidateServiceConfig(productionServiceConfig("game")); err != nil {
+		t.Fatalf("production baseline is not valid: %v", err)
+	}
+}
+
+func TestSharedKeyErrorIsReportedOnceAcrossOwners(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("sid", "abc")
+	schema := SchemaOf(ServiceIdentity{})
+	_, err := checkConfig(cfg, []configDeclaration{{owner: "mod a", schema: schema}, {owner: "mod b", schema: schema}})
+	if err == nil || strings.Count(err.Error(), "sid must be a whole number") != 1 {
+		t.Fatalf("one invalid key produced repeated owner errors: %v", err)
+	}
+}
+
+func TestNegativeLogRotationIsRejected(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("server_type", "game")
+	cfg.Set("sid", 7)
+	cfg.Set("log.rotate_interval", "-1s")
+	var value appConfig
+	if err := LoadConfig(cfg, &value); err == nil {
+		t.Fatal("negative rotation interval silently disabled file rotation")
+	} else if !strings.Contains(err.Error(), "log.rotate_interval") {
+		t.Fatalf("unrelated config failure: %v", err)
+	}
+}
+
+// 生产环境的业务时钟偏移必须为 0：time.logic_offset 是给测试环境前拨业务时间用的，ValidateServiceConfig 在生产配置里拒绝非零值。
+func TestProductionRefusesANonZeroLogicOffset(t *testing.T) {
+	for _, offset := range []any{"24h", 24 * time.Hour, "-1s"} {
+		cfg := productionServiceConfig("game")
+		cfg.Set("time.logic_offset", offset)
+		err := ValidateServiceConfig(cfg)
+		if err == nil || !strings.Contains(err.Error(), "time.logic_offset") {
+			t.Fatalf("production with time.logic_offset=%v: ValidateServiceConfig error = %v, want a refusal naming time.logic_offset", offset, err)
+		}
+	}
+	// 0 与不写都放行；非生产环境任意偏移都放行。
+	for _, offset := range []any{nil, "0s", time.Duration(0)} {
+		cfg := productionServiceConfig("game")
+		if offset != nil {
+			cfg.Set("time.logic_offset", offset)
+		}
+		if err := ValidateServiceConfig(cfg); err != nil {
+			t.Fatalf("production with time.logic_offset=%v: %v", offset, err)
+		}
+	}
+	dev := productionServiceConfig("game")
+	dev.Set("env", "dev")
+	dev.Set("time.logic_offset", "24h")
+	if err := ValidateServiceConfig(dev); err != nil {
+		t.Fatalf("a dev config with an offset was refused: %v", err)
 	}
 }
