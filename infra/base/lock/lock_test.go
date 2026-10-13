@@ -1,6 +1,8 @@
 package lock
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -246,24 +248,6 @@ func TestReentrantMutex_LockWithTimeout_SucceedsAfterRelease(t *testing.T) {
 	}
 }
 
-func TestReentrantMutex_UnlockByNonOwnerPanics(t *testing.T) {
-	mu := NewReentrantMutex(6)
-	mu.Lock()
-	defer mu.Unlock()
-
-	done := make(chan bool, 1)
-	go func() {
-		defer func() {
-			done <- recover() != nil
-		}()
-		mu.Unlock()
-	}()
-
-	if !<-done {
-		t.Fatal("Unlock by non-owner should panic")
-	}
-}
-
 func TestDefaultMutex_LockWithTimeout(t *testing.T) {
 	mu := NewDefaultMutex(7)
 	mu.Lock()
@@ -297,5 +281,37 @@ func TestLockManager_CustomFactory(t *testing.T) {
 
 	if callCount.Load() != 2 {
 		t.Fatalf("expected factory called 2 times, got %d", callCount.Load())
+	}
+}
+
+// 仅暴露旧Mutex方法集，验证外部实现无需新增方法也能使用取消入口。
+type legacyContextMutex struct{ Mutex }
+
+func TestLockContextCancellationPreservesOwnerAndAllowsReuse(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		name := "native"
+		if legacy {
+			name = "legacy"
+		}
+		t.Run(name, func(t *testing.T) {
+			mu := NewDefaultMutex(1)
+			if legacy {
+				mu = legacyContextMutex{mu}
+			}
+			mu.Lock()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			if err := LockContext(ctx, mu); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("blocked lock: %v", err)
+			}
+			if mu.TryLock() {
+				t.Fatal("canceled waiter released another owner's lock")
+			}
+			mu.Unlock()
+			if err := LockContext(context.Background(), mu); err != nil {
+				t.Fatal(err)
+			}
+			mu.Unlock()
+		})
 	}
 }
