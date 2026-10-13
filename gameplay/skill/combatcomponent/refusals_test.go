@@ -12,14 +12,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// U-0130 · C2（空洞测试）· nightly gap map core `skill/combatcomponent` 11/20。
-//
-// 宿主适配器与状态桥在事务外会自开一段分离事务再重入自身；事务开不起来（无
-// Committer）时拿到的是 nil 结果，必须把错误交回而不是对 nil 做类型断言。读请求
-// 与费用支付对"没有战斗组件的实体"和"没有属性映射的资源"要报具体错误并且
-// 不动属性底值。持久化 DAO：落盘 id 与 DAO id 不符、不支持的迁移起点、掩码里
-// 没有任何字段的补丁都必须拒绝。状态桥修改一个目录里查不到策略的 buff 实例
-// 要报错，而不是默认放行或默认拒绝。
+// 宿主适配器与状态桥在事务外会自开一段分离事务再重入自身；事务开不起来（无 Committer）时拿到的是 nil 结果，
+// 必须把错误交回而不是对 nil 做类型断言。读请求与费用支付对“没有战斗组件的实体”和“没有属性映射的资源”要报具体
+// 错误并且不动属性底值。持久化 DAO：落盘 id 与 DAO id 不符、不支持的迁移起点、掩码里没有任何字段的补丁都必须拒绝。
+// 状态桥修改一个目录里查不到策略的 buff 实例要报错，而不是默认放行或默认拒绝。
 
 func TestDetachedTransactionFailuresAreReturnedNotDereferenced(t *testing.T) {
 	adapter, revision, _, defender := newAdapterFixture()
