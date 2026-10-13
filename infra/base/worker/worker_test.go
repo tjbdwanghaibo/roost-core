@@ -1,6 +1,8 @@
 package worker
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -117,4 +119,77 @@ func TestWorker_CloseWakesIdleWorker(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("idle worker was not woken by close")
 	}
+}
+
+// 启动前 / 停止后 TryDispatch 报 ErrWorkerClosed，队列满报 ErrWorkerQueueFull 而不是阻塞。
+func TestTryDispatchRefusesBeforeStartAfterStopAndWhenTheQueueIsFull(t *testing.T) {
+	var released atomic.Int64
+	block := make(chan struct{})
+	entered := make(chan struct{}, 4)
+	pool := NewPool[workerTestTask](PoolConfig{Name: "guards", WorkerNum: 1, QueueCap: 1}, func(workerTestTask) {
+		select {
+		case entered <- struct{}{}:
+		default: // 排空阶段的后续任务不能卡在这里，否则 Stop 永远等不到
+		}
+		<-block
+	})
+	task := workerTestTask{id: 1, released: &released}
+	if err := pool.TryDispatch(1, task); !errors.Is(err, ErrWorkerClosed) {
+		t.Fatalf("TryDispatch before Start = %v", err)
+	}
+	pool.Start()
+	if err := pool.TryDispatch(1, task); err != nil {
+		t.Fatalf("first TryDispatch = %v", err)
+	}
+	<-entered
+	// 队列容量会被向上取整：一直投到被拒为止，被拒的理由必须是队列满而不是阻塞或关闭。
+	queued := 0
+	var full error
+	for i := 0; i < 4096 && full == nil; i++ {
+		if err := pool.TryDispatch(1, task); err != nil {
+			full = err
+		} else {
+			queued++
+		}
+	}
+	if !errors.Is(full, ErrWorkerQueueFull) || queued == 0 {
+		t.Fatalf("TryDispatch on a full queue = %v after %d queued, want ErrWorkerQueueFull", full, queued)
+	}
+	close(block)
+	pool.Stop()
+	if err := pool.TryDispatch(1, task); !errors.Is(err, ErrWorkerClosed) {
+		t.Fatalf("TryDispatch after Stop = %v", err)
+	}
+}
+
+type blockingPoolTask struct {
+	released atomic.Bool
+}
+
+func (t *blockingPoolTask) OnRelease() {
+	t.released.Store(true)
+}
+
+func TestPoolStopWithContextReturnsWhenHandlerIsBlocked(t *testing.T) {
+	started := make(chan struct{})
+	unblock := make(chan struct{})
+	pool := NewPool[*blockingPoolTask](PoolConfig{Name: "shutdown-test", WorkerNum: 1, QueueCap: 1}, func(*blockingPoolTask) {
+		close(started)
+		<-unblock
+	})
+	pool.Start()
+	task := &blockingPoolTask{}
+	if err := pool.TryDispatch(1, task); err != nil {
+		t.Fatalf("TryDispatch: %v", err)
+	}
+	<-started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	err := pool.StopWithContext(ctx)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("StopWithContext err = %v, want context deadline", err)
+	}
+	close(unblock)
 }
