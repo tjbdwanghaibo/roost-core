@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"io"
@@ -385,5 +386,147 @@ func TestRenderCallsSamePackageRegistrationsUnqualified(t *testing.T) {
 	}
 	if _, err := parser.ParseFile(token.NewFileSet(), "generated.go", content, parser.ParseComments); err != nil {
 		t.Fatalf("generated source does not parse: %v\n%s", err, content)
+	}
+}
+
+// 聚合注册的固定 import 名（模板无条件导入的 core entity 包等）必须对动态别名预留：业务注册包路径以 entity 结尾时
+// 不能也分到 entity 别名。断言方式是解析生成物、要求 import 名互不重复，并且 entity 这个名字确实指向 core——
+// 只检查文本会漏掉“名字对了但指向错了”。
+func TestAggregateReservesItsFixedImportNames(t *testing.T) {
+	generated, err := render("example.com/alias", []Registration{
+		{ImportPath: "example.com/alias/entity", Func: "RegisterEntity", Phase: "entity"},
+		{ImportPath: "example.com/alias/fmt", Func: "RegisterFormats", Phase: "config"},
+		{ImportPath: "example.com/alias/sync", Func: "RegisterSync", Phase: "post"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "generated.go", generated, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("generated source does not parse: %v\n%s", err, generated)
+	}
+
+	byName := map[string]string{}
+	for _, spec := range file.Imports {
+		path := strings.Trim(spec.Path.Value, `"`)
+		name := path[strings.LastIndex(path, "/")+1:]
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		if previous, dup := byName[name]; dup {
+			t.Errorf("import name %q is used by both %q and %q; the consumer would fail to compile", name, previous, path)
+		}
+		byName[name] = path
+	}
+	if got := byName["entity"]; got != "github.com/tjbdwanghaibo/roost-core/framework/entity" {
+		t.Errorf("the name entity resolves to %q, not the core package the template calls", got)
+	}
+	for _, reserved := range []string{"fmt", "sync"} {
+		if got := byName[reserved]; got != reserved {
+			t.Errorf("the name %q resolves to %q, not the standard library package the template uses", reserved, got)
+		}
+	}
+
+	// Every business registration is still called, under whatever alias it got.
+	var called []string
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+			if ident, ok := sel.X.(*ast.Ident); ok {
+				called = append(called, ident.Name+"."+sel.Sel.Name)
+			}
+		}
+		return true
+	})
+	for _, want := range []string{"RegisterEntity", "RegisterFormats", "RegisterSync"} {
+		found := false
+		for _, call := range called {
+			if strings.HasSuffix(call, "."+want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s is not called; calls: %v\n%s", want, called, generated)
+		}
+	}
+}
+
+// 解析不了的文件要报错而不是跳过：跳过会丢掉其中的注册，聚合静默地少注册。
+func TestScanReportsAnUnparsableFileInsteadOfDroppingItsRegistrations(t *testing.T) {
+	root := writeProject(t, map[string]string{
+		"game/ok/ok.go":         "package ok\n\n//roost:register phase=entity\nfunc RegisterOK() {}\n",
+		"game/broken/broken.go": "package broken\n\n//roost:register phase=entity\nfunc RegisterBroken( {\n",
+	})
+	_, err := Scan(root, "example.com/planet")
+	if err == nil {
+		t.Fatal("Scan accepted a project with an unparsable file")
+	}
+	if !strings.Contains(err.Error(), "parse") || !strings.Contains(err.Error(), "broken.go") {
+		t.Fatalf("error %q does not name the unparsable file", err)
+	}
+}
+
+// 返回 error 的注册函数调用时检查错误并包进 RegisterAll 的结果；不返回值的直接调用。去掉检查会让失败的注册不可见。
+func TestRenderChecksTheErrorOfErrorReturningRegistrations(t *testing.T) {
+	content, err := render("example.com/p", []Registration{
+		{ImportPath: "example.com/p/game/a", Func: "RegisterA", Phase: "entity", ReturnsError: true},
+		{ImportPath: "example.com/p/game/b", Func: "RegisterB", Phase: "entity", ReturnsError: false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(content)
+	if !strings.Contains(src, "if err := a.RegisterA(); err != nil {") || !strings.Contains(src, `fmt.Errorf("registry: example.com/p/game/a.RegisterA: %w", err)`) {
+		t.Fatalf("error-returning registration is not checked and wrapped:\n%s", src)
+	}
+	if !strings.Contains(src, "\n\tb.RegisterB()\n") {
+		t.Fatalf("plain registration is not a plain call:\n%s", src)
+	}
+}
+
+// M-05 · 生成的聚合注册在跑完所有阶段之后校验 entity 注册表。
+//
+// RegisterAll 是整个工程里唯一知道"注册结束了"的时点:bootstrap 在 app.New 之前调它一次,
+// 所有 //roost:register 函数按阶段跑完。校验挂在这里,才能一次列出所有不一致 —— 远程托管的
+// kind 没在 remote 档、kind 落在没声明过的 category、kind 占了保留的 unknown 档。
+// 挂在别处都只能看到局部。
+func TestGeneratedAggregateValidatesTheEntityRegistry(t *testing.T) {
+	generated, err := render("example.com/planet", []Registration{
+		{ImportPath: "example.com/planet/game/entities/player", Func: "RegisterEntity", Phase: "entity"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(generated)
+
+	if !strings.Contains(body, "entity.ValidateEntityRegistry()") {
+		t.Fatalf("the aggregate does not validate the entity registry:\n%s", body)
+	}
+	if !strings.Contains(body, `"github.com/tjbdwanghaibo/roost-core/framework/entity"`) {
+		t.Errorf("the aggregate does not import the entity package:\n%s", body)
+	}
+
+	// The check has to come after every registration, or it validates a
+	// half-populated registry and reports kinds that are merely not there yet.
+	lastCall := strings.LastIndex(body, "player.RegisterEntity()")
+	validate := strings.Index(body, "entity.ValidateEntityRegistry()")
+	if lastCall < 0 || validate < lastCall {
+		t.Errorf("validation runs before the registrations finish (call at %d, validate at %d):\n%s", lastCall, validate, body)
+	}
+}
+
+// A project with no registrations at all still validates, and still compiles:
+// an empty registry is consistent, so the call returns nil.
+func TestGeneratedAggregateValidatesEvenWithNoRegistrations(t *testing.T) {
+	generated, err := render("example.com/planet", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(generated), "entity.ValidateEntityRegistry()") {
+		t.Fatalf("an empty project's aggregate skips validation:\n%s", generated)
 	}
 }
