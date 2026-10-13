@@ -18,14 +18,13 @@ var (
 	ErrCastInputRejected        = errors.New("skill: cast does not accept gameplay input in its current state")
 )
 
-// supportedCompilerSemanticsRevision gates programs and checkpoints to one
-// compiler generation. Bumped to 2 for the v1.4/v1.5 semantics additions
-// (cast exclusivity, global cooldown, window-tick expressions): they change
-// every gameplay digest, so older programs, checkpoints, and composition
-// contracts must be recompiled/rebuilt rather than silently failing digest
-// resolution. See docs/skill-casting-and-combat.md for the migration note.
+// supportedCompilerSemanticsRevision 把 Program 与 checkpoint 限定在同一代编译器语义上。语义变化会改变
+// 每个 gameplay digest，旧 Program、checkpoint 与组合契约必须重新编译 / 重建，而不是在解析 digest 时
+// 静默失败；升级说明见 docs/skill/skill-casting-and-combat.md。
 const supportedCompilerSemanticsRevision = "skillv2-compiler-2"
 
+// RuntimeOptions 是 Runtime 的随机种子、被动路由与各项容量上限。零值选项取默认值（newRuntimeCore）；
+// 上限之间的关系由 validateRootEventLimit 校验。
 type RuntimeOptions struct {
 	MatchSeed                          [32]byte
 	SupportedCompilerSemanticsRevision string
@@ -37,69 +36,54 @@ type RuntimeOptions struct {
 	MaxOwnedSpawnsPerTemplate          int
 	TraceSink                          TraceSink
 	TraceLimits                        TraceLimits
-	// PresentationLimit bounds renderer-facing events retained for polling.
+	// PresentationLimit 是保留待轮询的表现事件条数上限。
 	PresentationLimit int
-	// StateEventLimit bounds authoritative change events retained for sync.
+	// StateEventLimit 是保留待同步的权威状态变化事件条数上限。
 	StateEventLimit int
-	// StateMutationLimit bounds canonical, client-applicable state mutations.
+	// StateMutationLimit 是可直接应用到客户端的规范化状态变更条数上限。
 	StateMutationLimit int
-	// RuntimeEventLimit bounds diagnostic events retained by RuntimeEvents.
+	// RuntimeEventLimit 是 RuntimeEvents 保留的诊断事件条数上限。
 	RuntimeEventLimit int
-	// CompletedCastLimit bounds inspectable terminal casts. Active or still
-	// referenced casts (pending tasks, an active policy, a running or
-	// stop_pending spawn) are never evicted; an evicted cast takes its stopped spawn records
-	// with it.
+	// CompletedCastLimit 是可供查看的终态施法条数上限。仍在活动或仍被引用的施法（有排程任务、策略在生效、
+	// 名下有 running 或 stop_pending 衍生物）不会被淘汰；淘汰一个施法时连同它名下已停衍生物的记录一起删。
 	CompletedCastLimit int
-	// RootEventLimit bounds once-per-root accounting after inactive roots have
-	// been reclaimed. It must exceed MaxActiveCasts + MaxOwnedSpawns +
-	// MaxStopPendingSpawns + MaxQueuedTasks (the most roots casts, spawns and
-	// queued tasks can reference at once); NewRuntime panics and
-	// RestoreRuntime fails otherwise. Default 8192.
+	// RootEventLimit 是回收不活跃的根之后，按根计数（每根一次）的记账条数上限。它必须大于
+	// MaxActiveCasts + MaxOwnedSpawns + MaxStopPendingSpawns + MaxQueuedTasks（施法、衍生物与排队任务
+	// 同时能引用的根数上界），否则 NewRuntime panic、RestoreRuntime 返回错误。默认 8192。
 	RootEventLimit int
-	// MaxQueuedTasks bounds queued tasks that pin a root event: passive
-	// activations not yet executed (routed by PassiveRouter or ActivatePassive)
-	// and external events queued by QueueExternalEvent. At the bound
-	// QueueExternalEvent and ActivatePassive return ErrQueuedTasksFull and a
-	// routed passive candidate is rejected (passive_suppressed with Result
-	// queue_full, skill.passive.dispatch_rejected.total{reason="queue_full"}).
-	// Default 2048.
+	// MaxQueuedTasks 是钉住根事件的排队任务数上限：尚未执行的被动激活（PassiveRouter 路由或
+	// ActivatePassive 排入）与 QueueExternalEvent 排入的外部事件。到上限时 QueueExternalEvent 与
+	// ActivatePassive 返回 ErrQueuedTasksFull，路由来的被动候选被拒（passive_suppressed，Result 为
+	// queue_full，计 skill.passive.dispatch_rejected.total{reason="queue_full"}）。默认 2048。
 	MaxQueuedTasks int
 	// MaxAbilityOverlays 限制整个 Runtime 的临时禁用覆盖数（含到期任务）。默认 10000；
 	// 设置入口超限返回 ErrAbilityOverlaysFull，覆盖到期后释放额度，不占根事件额度。
 	MaxAbilityOverlays int
-	// CheckpointMaxBytes and CheckpointMaxRecords bound recovery input before
-	// it can allocate unbounded object graphs.
+	// CheckpointMaxBytes 与 CheckpointMaxRecords 在恢复输入分配对象图之前限制它的大小。
 	CheckpointMaxBytes   int
 	CheckpointMaxRecords int
 	MaxActiveCasts       int
 	MaxAbilities         int
 	MaxProcLedgerEntries int
-	// CastEventLimit bounds per-cast diagnostic history returned by InspectCast.
+	// CastEventLimit 是 InspectCast 返回的单个施法诊断历史条数上限。
 	CastEventLimit int
-	// SpawnStopRetryBackoff is the delay, in ticks, before the Runtime
-	// retries a Host.StopSpawn that failed while a cast was failing; the
-	// delay doubles after every failed retry, up to 64 times this value.
-	// Default 4.
+	// SpawnStopRetryBackoff 是 Host.StopSpawn 失败后 Runtime 重试前等待的 tick 数；每失败一次翻倍，
+	// 最多到这个值的 64 倍。默认 4。
 	SpawnStopRetryBackoff Tick
-	// SpawnStopRetryLimit bounds the failed retries of one such stop. At the
-	// limit the Runtime stops retrying, counts
-	// skill.spawn.stop_retry_exhausted.total, logs a warning and keeps the
-	// stop_pending record. Default 10 (about 64 seconds at 20 ticks per second
-	// with the default backoff).
+	// SpawnStopRetryLimit 是同一次停止的失败重试次数上限。到上限后不再重试，计
+	// skill.spawn.stop_retry_exhausted.total、写一条 Warn，保留 stop_pending 记录。默认 10
+	// （默认退避下、每秒 20 tick 约 64 秒）。
 	SpawnStopRetryLimit int
-	// MaxStopPendingSpawns bounds stop_pending records. Past the bound the
-	// oldest exhausted record (else the oldest still retrying) is abandoned:
-	// it moves to status abandoned (no more retries, no longer pins its cast),
-	// counted as skill.spawn.abandoned.total and logged as an error; the
-	// record is kept, the host may still run that spawn. Default 256.
+	// MaxStopPendingSpawns 是 stop_pending 记录数上限。超过时放弃最早一条已重试耗尽的记录（没有则放弃
+	// 最早一条仍在重试的）：记录转为 abandoned（不再重试、不再钉住所属施法），计
+	// skill.spawn.abandoned.total、写一条 Error；记录保留，宿主侧那个衍生物可能仍在运行。默认 256。
 	MaxStopPendingSpawns int
-	// MaxAbandonedSpawns bounds abandoned records. Only at the end of Advance
-	// the oldest ones past the bound are removed, counted as
-	// skill.spawn.abandoned_pruned.total and logged; between two Advance calls
-	// the count may exceed it. Default 1024.
+	// MaxAbandonedSpawns 是 abandoned 记录数上限。只在 Advance 末尾删除超出上限的最早几条，计
+	// skill.spawn.abandoned_pruned.total 并记日志；两次 Advance 之间记录数可能暂时超过上限。默认 1024。
 	MaxAbandonedSpawns int
 }
 
+// CastInput 是发起一次施法的输入：施法者与按 Program 输入布局冻结的目标、位置、方向与路径。
 type CastInput struct {
 	Caster        EntityID
 	Target        EntityID
@@ -110,6 +94,7 @@ type CastInput struct {
 	Path          []Position
 }
 
+// InputPayload 是施法进行中 UpdateInput 送入的输入载荷，字段与 CastInput 的输入部分一致。
 type InputPayload struct {
 	Target        EntityID
 	Position      *Position
@@ -119,6 +104,7 @@ type InputPayload struct {
 	Path          []Position
 }
 
+// CastStatus 是施法的生命周期状态。
 type CastStatus string
 
 const (
@@ -128,6 +114,7 @@ const (
 	CastFailed    CastStatus = "failed"
 )
 
+// CastWindowStage 是施法窗口所处的阶段（准备、已提交、执行、恢复、完成、取消）。
 type CastWindowStage string
 
 const (
@@ -139,6 +126,7 @@ const (
 	CastWindowCancelled  CastWindowStage = "cancelled"
 )
 
+// CastSnapshot 是 InspectCast 返回的单个施法的只读快照。
 type CastSnapshot struct {
 	ID              CastID
 	Caster          EntityID
@@ -220,6 +208,8 @@ type skillState struct {
 	rechargeGeneration uint64
 }
 
+// Runtime 推进一组技能施法、衍生物与被动路由。全部状态由 mutex 保护；公开方法各自加锁，
+// 以 Locked 结尾的方法要求调用方已持锁。
 type Runtime struct {
 	mutex                   sync.Mutex
 	host                    Host
@@ -274,24 +264,20 @@ type Runtime struct {
 	dirtyResources          map[skillStateKey]struct{}
 	dirtyAbilities          map[abilityKey]struct{}
 	dirtyPolicies           map[skillStateKey]struct{}
-	// hostAdmitted：能力需求已核对过、在 Host 声明的表里的 Program（B3 ③，runtime_host_capability.go）。
+	// hostAdmitted：能力需求已核对过、在 Host 声明的表里的 Program（runtime_host_capability.go）。
 	hostAdmitted map[*Program]struct{}
 }
 
 // NewRuntime 构造一个从宿主当前事件前沿开始的 Runtime。上限之间的关系不成立时（RootEventLimit 不大于
 // MaxActiveCasts + MaxOwnedSpawns + MaxStopPendingSpawns + MaxQueuedTasks，见 validateRootEventLimit）以
-// ErrRuntimeLimitsInvalid panic：这是装配期的配置错误，错误信息点出全部相关选项与当前值（维护者 2026-10-07 F08-H+2 ③
-// 决定保持 panic）。
+// ErrRuntimeLimitsInvalid panic：这是装配期的配置错误，错误信息点出全部相关选项与当前值。
 func NewRuntime(host Host, options RuntimeOptions) *Runtime {
 	runtime := newRuntimeCore(host, options)
 	if err := validateRootEventLimit(runtime.options); err != nil {
 		panic(err)
 	}
-	// Fresh runtimes start at the host's current event frontier: everything
-	// already in the queue predates this runtime and is never replayed, so it
-	// may be compacted away. RestoreRuntime must NOT take this path — a
-	// restored runtime resumes from the checkpoint's cursor and needs every
-	// event after it preserved for replay.
+	// 新 Runtime 从宿主当前的事件前沿开始：队列里已有的事件早于这个 Runtime、永不回放，可以压缩掉。
+	// RestoreRuntime 不能走这里——恢复的 Runtime 从 checkpoint 的游标继续，之后的事件都要留着回放。
 	if host != nil {
 		for _, event := range host.Events(0) {
 			if event.Cursor > runtime.eventCursor {
@@ -305,7 +291,7 @@ func NewRuntime(host Host, options RuntimeOptions) *Runtime {
 	return runtime
 }
 
-// newRuntimeCore builds a runtime without touching the host's event queue.
+// newRuntimeCore 补齐选项默认值并构造 Runtime，不碰宿主的事件队列。
 func newRuntimeCore(host Host, options RuntimeOptions) *Runtime {
 	if options.SupportedCompilerSemanticsRevision == "" {
 		options.SupportedCompilerSemanticsRevision = supportedCompilerSemanticsRevision
@@ -399,10 +385,14 @@ func newRuntimeCore(host Host, options RuntimeOptions) *Runtime {
 	return runtime
 }
 
+// Activate 是 Start 的别名。
 func (runtime *Runtime) Activate(program *Program, input CastInput) (CastID, error) {
 	return runtime.Start(program, input)
 }
 
+// Start 发起一次主动施法：核对语义修订、权威身份与 Host 能力，冻结输入、求 memory 默认值并完成准备阶段。
+// 准备阶段失败且尚未提交时，施法被删除、ID 归还，返回 0 与错误；已提交（或名下有停不下来的衍生物）时
+// 施法留作 failed 终态，返回它的 ID 与错误。
 func (runtime *Runtime) Start(program *Program, input CastInput) (CastID, error) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -459,8 +449,7 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 		}
 	}
 	if parentEvent == nil && program.activationKind == "active" {
-		// Root activations respect caster exclusivity and the global
-		// cooldown; proc- and passive-triggered casts bypass both.
+		// 根施法遵守施法者独占与公共冷却；proc 与被动触发的施法两者都不受限。
 		if !program.cast.concurrent && runtime.casterWindowBusyLocked(input.Caster) {
 			return 0, ErrCasterBusy
 		}
@@ -484,13 +473,13 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 	if parentEvent == nil {
 		cast.eventContext = newRootEvent(EventID(tentativeID))
 	} else {
-		// proc 施放自己的事件 ID 低 32 位为 0：第 i 号效果的事件是 castID<<32 | (i+1)（effectEventContext），之前这里用
-		// castID<<32 | 1，与第 0 号效果撞号，第 0 号效果事件的父事件是它自己（RR-20261006-54）。
+		// proc 施放自己的事件 ID 低 32 位为 0：第 i 号效果的事件是 castID<<32 | (i+1)（effectEventContext），
+		// 用 | 1 会与第 0 号效果撞号，让第 0 号效果事件的父事件成为它自己。
 		cast.eventContext = deriveEvent(*parentEvent, EventID(uint64(tentativeID)<<32))
 		cast.eventContext.ProcDepth = parentEvent.ProcDepth + 1
 	}
 	cast.eventContext.Source, cast.eventContext.Owner, cast.eventContext.Target, cast.eventContext.SkillID, cast.eventContext.CastID = input.Caster, input.Caster, input.Target, program.id, tentativeID
-	// memory 默认值在 memory_default 上下文里求值：读不到别的 memory（RR-20261005-NC-280）。
+	// memory 默认值在 memory_default 上下文里求值：读不到别的 memory。
 	cast.switchEvalContext(evalMemoryDefault)
 	for index, slot := range program.memory {
 		value, evalErr := runtime.evalValue(cast, slot.defaultValue)
@@ -513,7 +502,7 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 		if !cast.committed && !runtime.castHasRunningSpawnLocked(cast.id) && !runtime.castHasAbandonedSpawnLocked(cast.id) {
 			// 未提交的失败启动对调用方等于“没有施法”：删掉 cast 并把 ID 还给下一个 cast。
 			// failCastLocked 已撤掉它名下的全部排程任务、停掉它起的衍生物；已停衍生物的记录随 cast 一起删，
-			// 复用 ID 才安全（NC-110；衍生物记录见 RR-20261006-21）。
+			// 复用 ID 才安全。
 			runtime.forgetCastSpawnsLocked(cast.id)
 			delete(runtime.casts, cast.id)
 			runtime.forgetCompletedCastLocked(cast.id)
@@ -521,7 +510,8 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 			return 0, err
 		}
 		// 已提交，或有衍生物停不下来（宿主 StopSpawn 失败、记录已标成待停止）：cast 留作 failed 终态、不还 ID，
-		// 待停止的衍生物记录继续挂在一个存在的 cast 名下，由之后的 tick 重试停止，停掉后按 RR-23 回收。
+		// 待停止的衍生物记录继续挂在一个存在的 cast 名下，由之后的 tick 重试停止，停掉后按终态施法的规则回收
+		// （runtime_retention.go）。
 		// 名下有已放弃的记录（它比 cast 活得久）同样不还 ID，免得这条记录挂到下一个 cast 名下。
 		return cast.id, err
 	}
@@ -529,18 +519,21 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 	return cast.id, nil
 }
 
+// CastCount 返回 Runtime 当前保留的施法数（含终态施法）。
 func (runtime *Runtime) CastCount() int {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
 	return len(runtime.casts)
 }
 
+// ActiveCastCount 返回仍在活动的施法数。
 func (runtime *Runtime) ActiveCastCount() int {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
 	return runtime.activeCastCount
 }
 
+// InspectCast 返回指定施法的快照；施法不存在（或已被淘汰）时第二个返回值为 false。
 func (runtime *Runtime) InspectCast(id CastID) (CastSnapshot, bool) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()

@@ -9,8 +9,7 @@ import (
 // NewRuntime 以它 panic，RestoreRuntime 把它与 ErrCheckpointCorrupt 一起返回。
 var ErrRuntimeLimitsInvalid = errors.New("skill: invalid runtime limits")
 
-// RuntimeRetentionStats exposes bounded-state pressure for production
-// monitoring without leaking mutable runtime internals.
+// RuntimeRetentionStats 是有界状态的占用情况，供生产监控使用，不暴露可变的 Runtime 内部状态。
 type RuntimeRetentionStats struct {
 	Casts                int
 	CompletedCasts       int
@@ -18,18 +17,16 @@ type RuntimeRetentionStats struct {
 	ProcLedgerEntries    int
 	RuntimeEvents        int
 	RuntimeEventsDropped uint64
-	// StopPendingSpawns counts spawns the Host failed to stop that the
-	// Runtime still owns (bounded by MaxStopPendingSpawns);
-	// StopRetryExhaustedSpawns is the subset whose retries hit
-	// SpawnStopRetryLimit and are no longer retried automatically.
-	// AbandonedSpawns counts records abandoned past MaxStopPendingSpawns
-	// that are still kept (bounded by MaxAbandonedSpawns at the end of
-	// Advance); the Runtime no longer stops them.
+	// StopPendingSpawns 是宿主拒绝停止、仍归 Runtime 负责的衍生物数（不超过 MaxStopPendingSpawns）；
+	// StopRetryExhaustedSpawns 是其中重试已达 SpawnStopRetryLimit、不再自动重试的部分。
+	// AbandonedSpawns 是超过 MaxStopPendingSpawns 被放弃、记录仍保留的衍生物数（Advance 末尾按
+	// MaxAbandonedSpawns 清理），Runtime 不再负责停它们。
 	StopPendingSpawns        int
 	StopRetryExhaustedSpawns int
 	AbandonedSpawns          int
 }
 
+// RetentionStats 在锁内统计当前的有界状态占用。
 func (runtime *Runtime) RetentionStats() RuntimeRetentionStats {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -52,10 +49,10 @@ func (runtime *Runtime) trackCompletedCastLocked(cast *castInstance) {
 		runtime.activeCastCount--
 	}
 	// 所有终态 cast（finished 与 failed，不论是否已提交）都进完成队列，按 CompletedCastLimit 回收；
-	// checkpoint 恢复按同一规则重建队列（restoreCheckpointPayload 把 finished / failed 都当作完成）。
-	// 之前只收“已提交的 failed”，提交前失败（commit 付费不足、Cancel / Release 回调失败）的 cast
-	// 永不回收，累计超过上限后 checkpoint 恢复判 corrupt（NC-117）。startLocked 删除并复用 ID 的
-	// 失败启动随后用 forgetCompletedCastLocked 撤掉这里登记的条目。
+	// checkpoint 恢复按同一规则重建队列（restoreCheckpointCasts 把 finished / failed 都当作完成）。
+	// 提交前失败（commit 付费不足、Cancel / Release 回调失败）的 cast 同样要进队，否则永不回收，累计超过
+	// 上限后 checkpoint 无法恢复。startLocked 删除并复用 ID 的失败启动随后用 forgetCompletedCastLocked
+	// 撤掉这里登记的条目。
 	if cast.status != CastFinished && cast.status != CastFailed {
 		return
 	}
@@ -64,7 +61,7 @@ func (runtime *Runtime) trackCompletedCastLocked(cast *castInstance) {
 }
 
 // forgetCompletedCastLocked 从完成队列撤掉一个已被删除的 cast，避免它的 ID 被复用后队列里留下
-// 指向新 cast 的旧条目（NC-117）。
+// 指向新 cast 的旧条目。
 func (runtime *Runtime) forgetCompletedCastLocked(id CastID) {
 	for index, completed := range runtime.completedCastOrder {
 		if completed == id {
@@ -76,9 +73,8 @@ func (runtime *Runtime) forgetCompletedCastLocked(id CastID) {
 
 // castHasRunningSpawnLocked 报告 cast 名下是否还有在宿主侧运行的衍生物（含已移交的，以及停止失败、等 Runtime
 // 重试停止的 stop_pending）。已停的衍生物记录不算：它们只是历史，随 cast 一起回收（forgetCastSpawnsLocked）。
-// 已放弃的也不算（维护者第十三轮“待停止上限”选 B）：Runtime 不再推进、不再重试它，没有任何路径要再经它的 cast
-// 求值或发表现，所以 cast 照 RR-20261006-23 的规则回收；放弃的记录自带 Program，不随 cast 删，只在 Advance 末尾
-// 按 MaxAbandonedSpawns 清理。
+// 已放弃的也不算：Runtime 不再推进、不再重试它，没有任何路径要再经它的 cast 求值或发表现，所以 cast 照终态施法的
+// 规则回收；放弃的记录自带 Program，不随 cast 删，只在 Advance 末尾按 MaxAbandonedSpawns 清理。
 func (runtime *Runtime) castHasRunningSpawnLocked(id CastID) bool {
 	running := false
 	runtime.spawns.each(func(spawn *SpawnInstance) {
@@ -98,11 +94,11 @@ func (runtime *Runtime) castHasAbandonedSpawnLocked(id CastID) bool {
 
 // forgetCastSpawnsLocked 在 cast 被删除之前删掉它名下已停止的衍生物记录（调用方已确认没有运行中的衍生物）。
 // 已放弃的记录不在这里删：它们只在 Advance 末尾按 MaxAbandonedSpawns 清理（pruneAbandonedSpawnsLocked）。
-// 衍生物停止后记录一直留在已停止分区里；之前没有任何路径删它们：
-//   - 未提交的失败启动删 cast、还 ID 后，旧记录挂到下一个 cast 名下，entity 衍生物停止时又清掉了 Program，
-//     Checkpoint 找不到它的程序直接报 corrupt（RR-20261006-21）；
-//   - castEvictableLocked 把已停的记录也当作引用，起过衍生物的 cast 永不回收：live Runtime 的 cast 与衍生物记录无界增长，
-//     完成队列超过 CompletedCastLimit 后 checkpoint 恢复判 corrupt（RR-20261006-23）。
+// 已停止的记录只能经这里随 cast 删除，否则：
+//   - 未提交的失败启动删 cast、还 ID 后，旧记录会挂到下一个 cast 名下，而 entity 衍生物停止时已清掉 Program，
+//     Checkpoint 找不到它的程序；
+//   - 已停的记录若算作引用，起过衍生物的 cast 永不回收：cast 与衍生物记录无界增长，完成队列超过
+//     CompletedCastLimit 后 checkpoint 无法恢复。
 func (runtime *Runtime) forgetCastSpawnsLocked(id CastID) {
 	for _, spawnID := range runtime.spawns.sortedIDs(func(spawn *SpawnInstance) bool { return spawn.CastID == id }, spawnStopped) {
 		runtime.spawns.drop(spawnID)
@@ -139,7 +135,7 @@ func (runtime *Runtime) castEvictableLocked(cast *castInstance) bool {
 	if cast == nil || cast.pendingTasks != 0 || cast.policyActive || (cast.status != CastFinished && cast.status != CastFailed) {
 		return false
 	}
-	// 运行中的衍生物（包括移交后仍在运行的）仍引用这个 cast；已停的记录随 cast 一起删（RR-20261006-23）。
+	// 运行中的衍生物（包括移交后仍在运行的）仍引用这个 cast；已停的记录随 cast 一起删。
 	return !runtime.castHasRunningSpawnLocked(cast.id)
 }
 
@@ -152,7 +148,7 @@ func (runtime *Runtime) castEvictableLocked(cast *castInstance) bool {
 //     不超过 MaxStopPendingSpawns（makeRoomForStopPendingLocked）；
 //   - 已停止 / 已放弃的记录不引用根，MaxAbandonedSpawns 不进上界；
 //   - 排队任务（未执行的被动激活、QueueExternalEvent 排的外部事件，isQueuedTask）：不超过 MaxQueuedTasks，入口
-//     （QueueExternalEvent、enqueuePassive、ActivatePassive）满了就拒绝（admitQueuedTaskLocked，RR-20261006-55 后续二）；
+//     （QueueExternalEvent、enqueuePassive、ActivatePassive）满了就拒绝（admitQueuedTaskLocked）；
 //   - 其余排程任务不钉住根（queuedTaskRoot）：施法的任务在施法未结束时与施法同根、已算在施法里，施法结束后残留的任务
 //     执行时是空操作（phase token 已推进或状态是终态，executeScheduledTask），不再在这个根下产生事件；能力覆盖到期只发一条
 //     ability_enabled_changed 运行时事件，不走被动路由、不读写根账本（expireAbilityOverlay）；弹药回复没有根。
@@ -213,7 +209,7 @@ func (runtime *Runtime) rootEventReferencedLocked(root EventID) bool {
 			return true
 		}
 	}
-	// 衍生物继承施法的根事件（RR-20261006-53）：Runtime 仍负责的衍生物还会在这个根下产生事件，根不能被淘汰，否则
+	// 衍生物继承施法的根事件：Runtime 仍负责的衍生物还会在这个根下产生事件，根不能被淘汰，否则
 	// once_per_root 的账本随根一起删掉、同一个根再触发一次。已停止 / 已放弃的记录不再产生事件，不钉住根。
 	referenced := false
 	runtime.spawns.each(func(spawn *SpawnInstance) {
@@ -235,9 +231,7 @@ func (runtime *Runtime) rootEventReferencedLocked(root EventID) bool {
 
 // queuedTaskRoot 返回排队任务钉住的根（与 dispatchEvent / executePassiveActivation 用的根一致：RootEventID，为 0 时取
 // EventID）；第二个返回值报告 payload 是不是排队任务。只有排队任务钉住根，其余排程任务为什么不钉见 rootEventReferenceBound。
-//
-// 之前能力覆盖到期与已结束施法残留的任务也钉住根，而它们的数量没有配置上限，合法配置下也能把根事件表占满
-// （RR-20261006-55 后续二）。
+// 能力覆盖到期与已结束施法残留的任务不能钉住根：它们的数量没有配置上限，钉住后合法配置下也能把根事件表占满。
 func queuedTaskRoot(payload scheduledTaskPayload) (EventID, bool) {
 	switch task := payload.(type) {
 	case *passiveActivationTask:

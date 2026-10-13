@@ -6,12 +6,12 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// 衍生物停止的统一状态机（停止入口统一，维护者 2026-10-07；docs/feature/REFACTOR-2026-10-06-skill-spawn-stop-unified.md）。
+// 衍生物停止的统一状态机。
 //
 // 每个停止入口只“请求停止”（requestSpawnStop），宿主拒绝 StopSpawn 之后的处理只在这里一处：
 //
 //	running ──请求停止──▶ 停止中：解除 carry、区域离开信号、回调（只对 running）、宿主 StopSpawn
-//	停止中 ──宿主已停──▶ 已停止（ended / cancelled / failed），进已停止分区；记录随 cast 按 RR-20261006-23 的规则回收
+//	停止中 ──宿主已停──▶ 已停止（ended / cancelled / failed），进已停止分区；记录随 cast 按终态施法的规则回收（runtime_retention.go）
 //	停止中 ──宿主拒绝──▶ stop_pending，进待停止分区；Runtime 不再推进它（不步进、不派发信号、不跑回调）
 //	stop_pending ──重试到期 / 再次请求──▶ 停止中（先重试尚未成功的 carry 解除，再发宿主 StopSpawn；停止原因沿用第一次请求）
 //	stop_pending ──失败的重试达到上限──▶ stop_pending（exhausted）：告警、记录保留，不再自动重试；再次请求仍会停
@@ -22,30 +22,29 @@ import (
 // 的函数与登记表一致）：
 //   - 施法里的停止：failCastLocked、Cancel、Interrupt（stopCastSpawns），衍生物启动失败的清理
 //     （startEntitySpawn、executeOwnedSummon），移交时 lifecycle 实体已失效（handoffEntitySpawns）；
-//   - tick 驱动：施法期间 lifecycle 实体消失（reapUnhandedEntitySpawns），逐 tick 推进的衍生物（施放中与已移交，
-//     RR-20261006-51）的到期 / 失效 / 步进失败 / area 回调 finish（terminateOwnedSpawn）；
+//   - tick 驱动：施法期间 lifecycle 实体消失（reapUnhandedEntitySpawns），逐 tick 推进的衍生物（施放中与已移交）
+//     的到期 / 失效 / 步进失败 / area 回调 finish（terminateOwnedSpawn）；
 //   - 调用方驱动：RemoveProgram、Shutdown。
 //
-// 宿主拒绝时入口照常把错误返回这一次，之后由 Runtime 在 tick 上重试；入口不再各自写失败分支。之前四类入口各管各的
-// （RR-20261006-21 后续、RR-20261006-31 只收了施法失败与 tick 回收）：Shutdown / RemoveProgram 把记录留成 running、
-// 交给调用方重试，Runtime 从此不管；施法里的其余路径靠错误传到 failCastLocked 再停一次，第二次停止又跑一遍 cancel
-// 回调（RR-20261006-32）。
+// 宿主拒绝时入口照常把错误返回这一次，之后由 Runtime 在 tick 上重试；入口不各自写失败分支。这样 Shutdown /
+// RemoveProgram 停不下的记录仍归 Runtime 重试，施法路径上的错误传到 failCastLocked 时也不会第二次停止、
+// 再跑一遍 cancel 回调。
 //
 // Shutdown 没有后续 tick 时，停不下的衍生物同样留成 stop_pending、写进 checkpoint：继续 Advance、或 Checkpoint 后
 // 在新进程 RestoreRuntime 再 Advance，都会按原来的重试时刻接着停；再调一次 Shutdown 会立即再请求一次。不在 Shutdown
 // 里同步重试：Runtime 是按 tick 推进的确定性状态机，没有 ctx 也不读系统时钟，原地循环只会在宿主状态不变时连打宿主，
 // 按墙钟等待会让回放与 checkpoint 恢复失去确定性，还会在调用方的执行线程上阻塞。RemoveProgram 之后，程序的
-// stop_pending 衍生物同样由 Runtime 在 tick 上重试：重试先重试尚未成功的 carry 解除，再发宿主 StopSpawn，不执行程序代码，记录仍引用程序
-// （checkpoint 恢复时 resolver 仍要能解析它，cast 记录本来也引用它）。
+// stop_pending 衍生物同样由 Runtime 在 tick 上重试：先重试尚未成功的 carry 解除，再发宿主 StopSpawn，不执行程序代码；
+// 记录仍引用程序（checkpoint 恢复时 resolver 仍要能解析它，cast 记录本来也引用它）。
 //
 // 重试（retrySpawnStopsLocked，advanceHost 每推进到一个 tick 调用）：第一次在 SpawnStopRetryBackoff 个 tick 之后，
 // 之后每失败一次间隔翻倍，最多翻到 64 倍；成功后 cast 不再被钉住，按 CompletedCastLimit 连同记录回收。失败的重试
 // 达到 SpawnStopRetryLimit 次后记 skill.spawn.stop_retry_exhausted.total、写一条 Warn 日志。
 //
-// 待停止上限（维护者第十三轮“待停止上限”选 B，2026-10-07）：新条目会使待停止数超过 MaxStopPendingSpawns 时，
-// 最早的已到重试上限的条目（没有就是最早仍在重试的）挪进已放弃分区（abandonSpawnLocked），不删记录。之前这里删记录：
-// 删除发生在 Shutdown / RemoveProgram 等“取 ID 列表 → 逐个处理”的循环中途，后面取回 nil 就崩（RR-20261006-34），
-// Runtime 也不再记得一个宿主仍在运行的衍生物、客户端收到 spawn_remove。已放弃的记录不再重试、不再推进、不钉住 cast、
+// 待停止上限：新条目会使待停止数超过 MaxStopPendingSpawns 时，最早的已到重试上限的条目（没有就是最早仍在重试的）
+// 挪进已放弃分区（abandonSpawnLocked），不删记录。不能在这里删：这一步发生在 Shutdown / RemoveProgram 等
+// “取 ID 列表 → 逐个处理”的循环中途，删掉后面就会取回 nil；删记录还会让 Runtime 忘掉一个宿主仍在运行的衍生物、
+// 客户端收到 spawn_remove。已放弃的记录不再重试、不再推进、不钉住 cast、
 // 不占待停止与 owned 名额；客户端看到一次 spawn_update / spawn_upsert（status abandoned），没有 spawn_remove。
 // 已放弃分区自己的上限 MaxAbandonedSpawns 只在 Advance 末尾这一个安全点清理（pruneAbandonedSpawnsLocked），
 // 那时没有任何循环在进行；这时删掉的记录 state mutation 才发 spawn_remove（Runtime 不再记得它，不代表宿主已停）。
@@ -53,8 +52,9 @@ import (
 // 宿主侧要求 StopSpawn 幂等（Host 契约）：重试、再次请求都可能对同一个衍生物再停一次。重试只发生在 Advance 推进
 // tick 时，结果是 tick 与宿主应答的确定函数；重试状态（次数、下一次时刻、是否已到上限）随衍生物记录写进 checkpoint。
 const (
+	// MetricSpawnStopRetryExhausted 计失败重试达到 SpawnStopRetryLimit 的待停止衍生物。
 	MetricSpawnStopRetryExhausted = "skill.spawn.stop_retry_exhausted.total"
-	// MetricSpawnAbandoned 计待停止上限放弃的衍生物（替换之前的 skill.spawn.stop_pending_dropped.total）；
+	// MetricSpawnAbandoned 计待停止上限放弃的衍生物；
 	// MetricSpawnAbandonedPruned 计已放弃分区超过 MaxAbandonedSpawns、在 Advance 末尾删掉的记录。
 	MetricSpawnAbandoned       = "skill.spawn.abandoned.total"
 	MetricSpawnAbandonedPruned = "skill.spawn.abandoned_pruned.total"
@@ -183,7 +183,7 @@ func (runtime *Runtime) retrySpawnStopsLocked() {
 		if spawn == nil {
 			continue
 		}
-		// 已移交的衍生物经 detachedSpawnCast 发表现（与它移交后的增量一致，RR-20261006-22），用宿主当前 revision。
+		// 已移交的衍生物经 detachedSpawnCast 发表现（与它移交后的增量一致），用宿主当前 revision。
 		cast := runtime.spawnOwnerCast(spawn)
 		err := runtime.requestSpawnStop(cast, spawn, spawn.stopCause, "")
 		if spawn.Status != SpawnStopPending {
@@ -203,7 +203,7 @@ func (runtime *Runtime) retrySpawnStopsLocked() {
 		spawn.stopRetryTick = saturatingTickAdd(runtime.currentTick, spawnStopRetryDelay(runtime.options.SpawnStopRetryBackoff, spawn.stopRetryAttempts))
 	}
 	if released {
-		// 停掉之后 cast 不再被钉住，按 RR-23 的规则回收（完成队列超过 CompletedCastLimit 时连同记录删除）。
+		// 停掉之后 cast 不再被钉住，按终态施法的规则回收（完成队列超过 CompletedCastLimit 时连同记录删除）。
 		runtime.pruneCompletedCastsLocked()
 	}
 }

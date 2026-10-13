@@ -13,25 +13,11 @@ import (
 	"sort"
 )
 
-// RuntimeCheckpointVersion 标识 checkpoint payload 的格式。格式每次变化（扩展或改名）都递增版本号，恢复只接受当前版本，
-// 旧版本得到 ErrCheckpointUnsupported（排空后再升级）。3：衍生物（当时叫 process）记录加待停止重试状态
-// （stop_pending 与 stop_retry_*），payload 加三项停止重试选项（RR-20261006-21 后续，2026-10-06；线上未部署，
-// 不兼容版本 2）。4：process 全量改名为 spawn（衍生物），JSON 字段名随之改变（processes → spawns、
-// next_process_id → next_spawn_id、owned_processes → owned_spawns 等，对照见
-// docs/feature/REFACTOR-2026-10-06-skill-process-to-spawn.md）；维护者 2026-10-06 第十三轮决定，线上未部署，
-// 不兼容版本 3。5：生成宿主单位的效果改名为召唤（summon），cast 值里召唤效果结果的类型 spawn_result →
-// summon_result（字段名不变，变的是值；对照见 docs/feature/REFACTOR-2026-10-07-skill-summon-rename.md）；
-// 维护者第十三轮决定，线上未部署，不兼容版本 4。6：衍生物记录只存一份（spawns），删掉重复存储“已移交、仍在运行”
-// 那部分的 owned_spawns；恢复时按记录字段（status、handed_off）重新分区（docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md）；
-// 维护者第十三轮“skill 衍生物两张表”，线上未部署，不兼容版本 5。7：衍生物新状态 abandoned（待停止超过
-// MaxStopPendingSpawns 时放弃、不删记录），payload 加 max_abandoned_spawns；维护者第十三轮“待停止上限”选 B
-// （docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md §11），线上未部署，不兼容版本 6。8：payload 加
-// spawn_event_sequence（衍生物回调事件 ID 的计数，RR-20261006-53），任务删掉 spawn_step 一类与它的 spawn_id 字段
-// （衍生物只由 advanceOwnedSpawns 推进，RR-20261006-51）；施放中衍生物的 next_tick 从此生效。线上未部署，不兼容版本 7。
-// 9：payload 加 max_queued_tasks（排队任务上限，计入根事件表上界；恢复时排程里的排队任务数不得超过它），RR-20261006-55
-// 后续二，维护者 2026-10-07 F08-H+2；线上未部署，不兼容版本 8。
-// 10：payload 加 max_ability_overlays（D1），恢复重建计数并校验上限；旧版本拒绝。
+// RuntimeCheckpointVersion 标识 checkpoint payload 的格式。格式每次变化（扩展或改名）都递增版本号，恢复只接受
+// 当前版本，旧版本得到 ErrCheckpointUnsupported（先排空再升级）。各版本的变化见 CHANGELOG。
 const RuntimeCheckpointVersion uint32 = 10
+
+// RuntimeCheckpointMaxBytes 与 RuntimeCheckpointMaxRecords 是 CheckpointMaxBytes / CheckpointMaxRecords 选项的硬上限。
 const RuntimeCheckpointMaxBytes = 64 << 20
 const RuntimeCheckpointMaxRecords = 1_000_000
 
@@ -42,24 +28,24 @@ var (
 	ErrCheckpointProgram      = errors.New("skill: runtime checkpoint program cannot be resolved")
 )
 
-// RuntimeCheckpoint is a versioned, checksummed authoritative gameplay image.
-// Delivery buffers (trace, presentation and state mutation queues) are not part
-// of gameplay and are intentionally rebuilt after restore.
+// RuntimeCheckpoint 是带版本与校验和的权威玩法镜像。投递缓冲（trace、表现与状态变更队列）不属于玩法状态，
+// 恢复后重新建立。
 type RuntimeCheckpoint struct {
 	Version  uint32 `json:"version"`
 	Payload  []byte `json:"payload"`
 	Checksum string `json:"checksum"`
 }
 
-// ProgramResolver supplies immutable compiled programs referenced by a
-// checkpoint. Restore validates every returned program before publishing the
-// recovered Runtime.
+// ProgramResolver 按 ID 与 gameplay digest 提供 checkpoint 引用的已编译 Program。恢复在交出 Runtime 之前
+// 核对每个返回的 Program 的身份与 Host 能力。
 type ProgramResolver interface {
 	ResolveProgram(id, gameplayDigest string) (*Program, error)
 }
 
+// ProgramResolverFunc 让普通函数实现 ProgramResolver。
 type ProgramResolverFunc func(id, gameplayDigest string) (*Program, error)
 
+// ResolveProgram 调用函数本身。
 func (function ProgramResolverFunc) ResolveProgram(id, gameplayDigest string) (*Program, error) {
 	return function(id, gameplayDigest)
 }
@@ -86,16 +72,13 @@ type runtimeCheckpointPayload struct {
 	MaxAbilities        int               `json:"max_abilities"`
 	MaxAbilityOverlays  int               `json:"max_ability_overlays"`
 	CompletedCastLimit  int               `json:"completed_cast_limit"`
-	// CompletedCastOrder is the completion order of the terminal casts, which
-	// pruneCompletedCastsLocked evicts from the head. Casts are serialized in
-	// id order, so rebuilding the queue from them replaced "oldest completion"
-	// with "lowest id" and made retention diverge across a restore
-	// (RR-20260910-04). Absent in checkpoints written before this field, and
-	// restore then falls back to id order — what it did all along.
+	// CompletedCastOrder 是终态施法的完成顺序，pruneCompletedCastsLocked 从队头淘汰。Casts 按 ID 顺序写出，
+	// 不能用它重建队列：那样“最早完成”会变成“ID 最小”，恢复前后的淘汰顺序不一致。缺项时按 ID 顺序补齐
+	// （restoreCompletedCastOrder）。
 	CompletedCastOrder   []CastID `json:"completed_cast_order,omitempty"`
 	RootEventLimit       int      `json:"root_event_limit"`
 	MaxProcLedgerEntries int      `json:"max_proc_ledger_entries"`
-	// 停止重试的三项选项随 checkpoint 走，恢复后的 Runtime 与原 Runtime 在同样的 tick 重试（版本 3）。
+	// 停止重试的三项选项随 checkpoint 走，恢复后的 Runtime 与原 Runtime 在同样的 tick 重试。
 	SpawnStopRetryBackoff Tick                      `json:"spawn_stop_retry_backoff"`
 	SpawnStopRetryLimit   int                       `json:"spawn_stop_retry_limit"`
 	MaxStopPendingSpawns  int                       `json:"max_stop_pending_spawns"`
@@ -201,7 +184,7 @@ type checkpointSpawn struct {
 	StopCause                StopCause                    `json:"stop_cause"`
 	HandedOff                bool                         `json:"handed_off"`
 	AreaCallbackFinishedCast bool                         `json:"area_callback_finished_cast"`
-	// 只在 status 为 stop_pending 时出现（版本 3）。
+	// 只在 status 为 stop_pending 时出现。
 	StopRetryAttempts  int  `json:"stop_retry_attempts,omitempty"`
 	StopRetryTick      Tick `json:"stop_retry_tick,omitempty"`
 	StopRetryExhausted bool `json:"stop_retry_exhausted,omitempty"`
@@ -348,6 +331,8 @@ type checkpointTask struct {
 	OverlayID  uint64                 `json:"overlay_id,omitempty"`
 }
 
+// Checkpoint 在锁内写出 Runtime 的权威状态。宿主的 revision 或权威身份与 Runtime 记录的不一致时返回
+// ErrCheckpointHostMismatch；超过 CheckpointMaxBytes / CheckpointMaxRecords 时返回 ErrCheckpointCorrupt。
 func (runtime *Runtime) Checkpoint() (RuntimeCheckpoint, error) {
 	if runtime == nil {
 		return RuntimeCheckpoint{}, ErrCheckpointCorrupt
@@ -375,6 +360,9 @@ func (runtime *Runtime) Checkpoint() (RuntimeCheckpoint, error) {
 	return RuntimeCheckpoint{Version: RuntimeCheckpointVersion, Payload: data, Checksum: hex.EncodeToString(digest[:])}, nil
 }
 
+// RestoreRuntime 从 checkpoint 恢复 Runtime：核对版本、校验和与大小，按 payload 里的上限选项重建 Runtime，
+// 经 resolver 解析并核对每个 Program，最后核对宿主的 revision 与权威身份。随机种子、语义修订与 payload
+// 记录的容量上限以 checkpoint 为准；PassiveRouter、TraceSink、投递缓冲上限等其余选项取自 options。
 func RestoreRuntime(host Host, options RuntimeOptions, checkpoint RuntimeCheckpoint, resolver ProgramResolver) (*Runtime, error) {
 	if options.CheckpointMaxBytes <= 0 {
 		options.CheckpointMaxBytes = 16 << 20
@@ -443,7 +431,7 @@ func RestoreRuntime(host Host, options RuntimeOptions, checkpoint RuntimeCheckpo
 	// 初始化。Host 世界及尚未消费的事件应先恢复到同一 checkpoint 边界；这里只恢复
 	// Runtime，不负责撤销更新世界的效果，也不要求已消费事件永远保留。
 	runtime := newRuntimeCore(host, options)
-	// 恢复出来的每个 Program 同样要在 Host 声明的能力表里（B3 ③）。
+	// 恢复出来的每个 Program 同样要在 Host 声明的能力表里。
 	if err := runtime.restoreCheckpointPayload(payload, resolver); err != nil {
 		return nil, err
 	}
@@ -663,8 +651,7 @@ func (runtime *Runtime) checkpointPayloadLocked() (runtimeCheckpointPayload, err
 		}
 		return p.SkillStates[i].Skill < p.SkillStates[j].Skill
 	})
-	// 下面四个列表来自 map，按键排序写出，同一状态的 checkpoint 字节确定（O7，维护者第十二轮
-	// 决定）。以前按 map 迭代顺序写出；恢复与顺序无关，所以旧的乱序 checkpoint 照常可读。
+	// 下面四个列表来自 map，按键排序写出，同一状态的 checkpoint 字节确定；恢复与列表顺序无关。
 	for key, id := range runtime.activePolicies {
 		p.ActivePolicies = append(p.ActivePolicies, checkpointActivePolicy{Caster: key.Caster, Skill: key.Skill, CastID: id})
 	}
@@ -829,13 +816,10 @@ func checkpointScheduledTask(task scheduledTask) (checkpointTask, error) {
 	return w, nil
 }
 
-// restoreCompletedCastOrder rebuilds the completion queue from the checkpoint.
+// restoreCompletedCastOrder 从 checkpoint 重建完成队列。
 //
-// The recorded order wins, filtered to the casts that actually came back
-// terminal, so a stale or hand-edited order cannot resurrect or duplicate an
-// entry. Anything terminal the order does not mention is appended in id order:
-// that covers a checkpoint written before the field existed, and keeps the
-// result deterministic either way.
+// 以记录的顺序为准，但只保留确实恢复成终态的施法，过期或被改动的顺序不能复活或重复任何一项；记录里没提到的
+// 终态施法按 ID 顺序追加在后面，结果总是确定的。
 func restoreCompletedCastOrder(recorded []CastID, completed map[CastID]bool, casts []checkpointCast) []CastID {
 	order := make([]CastID, 0, len(completed))
 	placed := make(map[CastID]bool, len(completed))
@@ -845,7 +829,7 @@ func restoreCompletedCastOrder(recorded []CastID, completed map[CastID]bool, cas
 			placed[id] = true
 		}
 	}
-	// p.Casts is serialized in id order, so this append is id-ordered too.
+	// p.Casts 按 ID 顺序写出，这里追加的也按 ID 顺序。
 	for _, item := range casts {
 		if completed[item.ID] && !placed[item.ID] {
 			order = append(order, item.ID)
@@ -855,7 +839,49 @@ func restoreCompletedCastOrder(recorded []CastID, completed map[CastID]bool, cas
 	return order
 }
 
+// restoreCheckpointPayload 把 payload 恢复进刚构造的 Runtime，按固定顺序逐步恢复、逐步核对；任何一步失败，
+// 整个 Runtime 由调用方丢弃。步骤顺序即依赖顺序：任务核对引用的施法与帧，技能表核对引用的施法。
 func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, resolver ProgramResolver) error {
+	runtime.restoreCheckpointCounters(p)
+	if err := runtime.restoreCheckpointCasts(p, resolver); err != nil {
+		return err
+	}
+	if err := restoreCheckpointSpawns(&runtime.spawns, p.Spawns, resolver, p.Authority, p.SemanticsRevision, p.NextSpawnID, runtime.host); err != nil {
+		return err
+	}
+	if err := runtime.restoreCheckpointFrames(p); err != nil {
+		return err
+	}
+	if err := runtime.restoreCheckpointTasks(p, resolver); err != nil {
+		return err
+	}
+	if err := runtime.restoreCheckpointSkillTables(p); err != nil {
+		return err
+	}
+	if err := runtime.restoreCheckpointEventLedgers(p); err != nil {
+		return err
+	}
+	if err := runtime.restoreCheckpointAbilities(p, resolver); err != nil {
+		return err
+	}
+	if err := runtime.validateRestoredLimitsLocked(); err != nil {
+		return err
+	}
+	if !p.StateMutationReady || p.StateMutationBaseline.LatestStateMutationSequence != p.StateMutationSequence || p.StateMutationBaseline.Tick > p.CurrentTick || p.StateMutationBaseline.WorldRevision > p.WorldRevision {
+		return ErrCheckpointCorrupt
+	}
+	if !runtimeSnapshotsEqual(p.StateMutationBaseline, runtime.stateSnapshotLocked()) {
+		return ErrCheckpointHostMismatch
+	}
+	runtime.stateMutationBaseline = p.StateMutationBaseline
+	runtime.stateMutationReady = p.StateMutationReady
+	runtime.clearStateMutationWritePointsLocked()
+	runtime.stateMutationDirty = false
+	return nil
+}
+
+// restoreCheckpointCounters 恢复当前 tick、事件游标与各类 ID / 序号计数。
+func (runtime *Runtime) restoreCheckpointCounters(p runtimeCheckpointPayload) {
 	runtime.currentTick = p.CurrentTick
 	runtime.eventCursor = p.EventCursor
 	runtime.nextCastID = p.NextCastID
@@ -874,6 +900,11 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 	runtime.stateEventDropped = p.StateEventDropped
 	runtime.stateMutationSequence = p.StateMutationSequence
 	runtime.stateMutationDropped = p.StateMutationDropped
+}
+
+// restoreCheckpointCasts 恢复施法记录并重建完成队列：ID 不越过 NextCastID、不重复，程序按引用解析并核对身份；
+// finished / failed 计入完成队列，其余计入活动施法数。
+func (runtime *Runtime) restoreCheckpointCasts(p runtimeCheckpointPayload, resolver ProgramResolver) error {
 	completed := make(map[CastID]bool, len(p.Casts))
 	for _, item := range p.Casts {
 		if item.ID == 0 || item.ID > p.NextCastID || runtime.casts[item.ID] != nil {
@@ -911,9 +942,11 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 		}
 	}
 	runtime.completedCastOrder = restoreCompletedCastOrder(p.CompletedCastOrder, completed, p.Casts)
-	if err := restoreCheckpointSpawns(&runtime.spawns, p.Spawns, resolver, p.Authority, p.SemanticsRevision, p.NextSpawnID, runtime.host); err != nil {
-		return err
-	}
+	return nil
+}
+
+// restoreCheckpointFrames 恢复流程帧：ID 不越过 NextFrameID、不重复。
+func (runtime *Runtime) restoreCheckpointFrames(p runtimeCheckpointPayload) error {
 	for _, frame := range p.Frames {
 		if frame.ID == 0 || frame.ID > p.NextFrameID {
 			return ErrCheckpointCorrupt
@@ -927,6 +960,12 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 		}
 		runtime.frames[frame.ID] = values
 	}
+	return nil
+}
+
+// restoreCheckpointTasks 重建排程：任务序号不越过 NextTaskSequence、不重复、不早于当前 tick；每个帧恰好被一个任务
+// 引用；每个施法的 pendingTasks 等于排程里属于它的任务数。
+func (runtime *Runtime) restoreCheckpointTasks(p runtimeCheckpointPayload, resolver ProgramResolver) error {
 	sequences := make(map[uint64]struct{}, len(p.Tasks))
 	frameReferences := make(map[FrameID]struct{}, len(p.Frames))
 	pendingByCast := make(map[CastID]int)
@@ -963,6 +1002,11 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 		}
 	}
 	heap.Init(&runtime.scheduler.tasks)
+	return nil
+}
+
+// restoreCheckpointSkillTables 恢复冷却、技能库存状态与生效中的策略，键不得重复，策略指向的施法必须存在。
+func (runtime *Runtime) restoreCheckpointSkillTables(p runtimeCheckpointPayload) error {
 	for _, item := range p.Cooldowns {
 		key := cooldownKey{Caster: item.Caster, Skill: item.Skill}
 		if key.Caster == 0 || key.Skill == "" {
@@ -993,6 +1037,11 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 		}
 		runtime.activePolicies[key] = item.CastID
 	}
+	return nil
+}
+
+// restoreCheckpointEventLedgers 恢复 proc 去重账本与根事件计数；根事件顺序按 ID 重建。
+func (runtime *Runtime) restoreCheckpointEventLedgers(p runtimeCheckpointPayload) error {
 	for _, item := range p.ProcLedger {
 		key := procLedgerKey{Root: item.Root, Caster: item.Caster, Digest: item.Digest}
 		if _, ok := runtime.procLedger[key]; ok {
@@ -1011,6 +1060,12 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 		runtime.rootEventOrder = append(runtime.rootEventOrder, item.ID)
 	}
 	sort.Slice(runtime.rootEventOrder, func(i, j int) bool { return runtime.rootEventOrder[i] < runtime.rootEventOrder[j] })
+	return nil
+}
+
+// restoreCheckpointAbilities 恢复技能实例、临时禁用覆盖与程序到技能句柄的映射；覆盖总数在恢复中重建并按
+// MaxAbilityOverlays 核对，映射与技能实例一一对应。
+func (runtime *Runtime) restoreCheckpointAbilities(p runtimeCheckpointPayload, resolver ProgramResolver) error {
 	for _, item := range p.Abilities {
 		key := abilityKey{owner: item.Owner, handle: item.Handle}
 		if item.Owner == 0 || item.Handle == 0 || runtime.abilities[key] != nil {
@@ -1046,6 +1101,12 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 	if len(runtime.abilityByProgram) != len(runtime.abilities) {
 		return ErrCheckpointCorrupt
 	}
+	return nil
+}
+
+// validateRestoredLimitsLocked 重算排队任务数，核对恢复结果满足各项容量上限与待停止记录的不变量，
+// 并核对每个技能实例都能经程序映射找回自己。
+func (runtime *Runtime) validateRestoredLimitsLocked() error {
 	runtime.queuedTasks = runtime.countQueuedTasksLocked()
 	if runtime.queuedTasks > runtime.options.MaxQueuedTasks || runtime.activeCastCount > runtime.options.MaxActiveCasts || len(runtime.abilities) > runtime.options.MaxAbilities || !runtime.completedCastOrderWithinLimitLocked() || len(runtime.rootEventCounts) > runtime.options.RootEventLimit || len(runtime.procLedger) > runtime.options.MaxProcLedgerEntries || !runtime.stopPendingRecordsValidLocked() {
 		return ErrCheckpointCorrupt
@@ -1055,16 +1116,6 @@ func (runtime *Runtime) restoreCheckpointPayload(p runtimeCheckpointPayload, res
 			return ErrCheckpointCorrupt
 		}
 	}
-	if !p.StateMutationReady || p.StateMutationBaseline.LatestStateMutationSequence != p.StateMutationSequence || p.StateMutationBaseline.Tick > p.CurrentTick || p.StateMutationBaseline.WorldRevision > p.WorldRevision {
-		return ErrCheckpointCorrupt
-	}
-	if !runtimeSnapshotsEqual(p.StateMutationBaseline, runtime.stateSnapshotLocked()) {
-		return ErrCheckpointHostMismatch
-	}
-	runtime.stateMutationBaseline = p.StateMutationBaseline
-	runtime.stateMutationReady = p.StateMutationReady
-	runtime.clearStateMutationWritePointsLocked()
-	runtime.stateMutationDirty = false
 	return nil
 }
 
@@ -1169,16 +1220,14 @@ func (runtime *Runtime) restoreCheckpointTask(w checkpointTask, resolver Program
 	case "repeat":
 		payload = &repeatIterationTask{CastID: w.CastID, PhaseToken: w.PhaseToken, Frame: w.Frame, Body: w.Body, IndexLocal: w.IndexLocal, Iteration: w.Iteration, Times: w.Times, Interval: w.Interval, Tail: append([]OperationIndex(nil), w.Tail...)}
 	case "phase_timeout":
-		// phase 计时保持方向 B（B3④）：timeout_ticks > 0 编译期拒绝，Runtime 从不调度这类任务，
-		// 任务类型已删除。旧 checkpoint 里出现它说明来源不可信或格式不符，按 corrupt 拒绝、不迁移
-		// （RR-20261006-03，O20）。
+		// timeout_ticks > 0 在编译期拒绝，Runtime 从不调度这类任务。checkpoint 里出现它说明来源不可信或
+		// 格式不符，按 corrupt 拒绝、不迁移。
 		return scheduledTask{}, ErrCheckpointCorrupt
 	case "chain_hop":
 		payload = &chainHopTask{CastID: w.CastID, PhaseToken: w.PhaseToken, Frame: w.Frame, Operation: w.Operation, Hop: w.Hop}
 	case "spawn_step":
-		// 衍生物只由 advanceOwnedSpawns 按记录的 NextTick 推进（RR-20261006-51），这类任务已删除：它在生产路径上
-		// 从未被创建，checkpoint 里出现它说明来源不可信或格式不符，按 corrupt 拒绝；接受它会让同一个衍生物在一个
-		// tick 里走两步。
+		// 衍生物只由 advanceOwnedSpawns 按记录的 NextTick 推进，Runtime 不创建这类任务；checkpoint 里出现它
+		// 说明来源不可信或格式不符，按 corrupt 拒绝。接受它会让同一个衍生物在一个 tick 里走两步。
 		return scheduledTask{}, ErrCheckpointCorrupt
 	case "cast_commit":
 		payload = &castCommitTask{CastID: w.CastID, PhaseToken: w.PhaseToken, Frame: w.Frame}
@@ -1216,8 +1265,8 @@ func (runtime *Runtime) restoreCheckpointTask(w checkpointTask, resolver Program
 
 // completedCastOrderWithinLimitLocked 核对恢复出的完成队列满足 pruneCompletedCastsLocked 的不变量：不超过
 // CompletedCastLimit，或者超出部分全是仍被引用、不能回收的 cast（排程任务、policy、运行中或待停止的衍生物）。
-// 之前直接要求不超过上限：被钉住的 cast 多于上限时（例如上限 3、4 个移交后仍在运行的召唤），live Runtime
-// 合法保留着它们，checkpoint 却恢复不了（RR-20261006-30）。
+// 不能直接要求不超过上限：被钉住的 cast 可以多于上限（例如上限 3、4 个移交后仍在运行的召唤），live Runtime
+// 合法保留着它们，checkpoint 也必须能恢复。
 func (runtime *Runtime) completedCastOrderWithinLimitLocked() bool {
 	if len(runtime.completedCastOrder) <= runtime.options.CompletedCastLimit {
 		return true

@@ -37,15 +37,14 @@ func (runtime *Runtime) startEntitySpawn(cast *castInstance, template SpawnTempl
 		phaseToken: cast.phaseToken, locals: detachedSpawnLocals(cast.program), snapshots: make(map[int]RuntimeValue), randomKey: cast.randomKey, randomInvocations: make(map[RandomSiteIndex]uint64), visibleRevision: cast.visibleRevision,
 	}
 	// 衍生物属于施法的因果链：继承施法事件的 EventID（作为回调事件的父事件）、RootEventID、ProcDepth 与 proc 系数，
-	// 每次回调再派生一个新事件（runOwnedSpawnCallback）。之前这里只填 tick / source / owner / target / skill / cast / spawn，
-	// 根事件与深度在衍生物处清零：max_depth 管不住“被动 → 召唤衍生物 → 回调伤害 → 被动”，回调效果每个 tick 同一个
-	// EventID、自成一个根（RR-20261006-53）。
+	// 每次回调再派生一个新事件（runOwnedSpawnCallback）。根事件与深度不能在衍生物处清零：否则 max_depth 管不住
+	// “被动 → 召唤衍生物 → 回调伤害 → 被动”，回调效果每个 tick 同一个 EventID、自成一个根。
 	spawn.eventContext = cast.eventContext
 	spawn.eventContext.Tick, spawn.eventContext.Target, spawn.eventContext.SpawnID = runtime.currentTick, lifecycle, runtime.nextSpawnID
 	spawn.eventContext.Source, spawn.eventContext.Owner, spawn.eventContext.SkillID, spawn.eventContext.CastID = cast.caster, cast.caster, cast.program.id, cast.id
 	spawn.eventContext.EffectIndex = 0
 	// 启动那一步用施法本身求衍生物字段，但按 spawn_step 列查表：之后每一步在移交后的衍生物里
-	// 求同样的字段，两边都要求得出（RR-20261005-NC-224）。numeric track 初值在
+	// 求同样的字段，两边都要求得出。numeric track 初值在
 	// initializeSpawnNumeric 里切回施法流程。
 	if !runtime.spawns.add(spawn) {
 		// 不可达：ID 取自只增不减的 nextSpawnID，checkpoint 恢复核对过记录 ID 不超过它。
@@ -57,7 +56,7 @@ func (runtime *Runtime) startEntitySpawn(cast *castInstance, template SpawnTempl
 	if err != nil {
 		// 启动步的任何一步被宿主拒绝时，宿主可能已经登记了这个衍生物（Frame 等前几步已提交），所以记录先入表、
 		// 失败时经 requestSpawnStop 停掉（含解除 carry）；宿主拒绝停止时转入待停止、由 Runtime 重试，Shutdown 也停得到。
-		// 之前记录在步进成功之后才入表，失败只解除 carry 就返回：召唤事务回滚了，宿主侧的衍生物没人停（RR-20261006-52）。
+		// 若等步进成功才入表、失败只解除 carry，召唤事务回滚后宿主侧的衍生物就没人停了。
 		stopErr := runtime.requestSpawnStop(cast, spawn, StopCauseFailure, "")
 		if stopErr == nil {
 			runtime.spawns.drop(spawn.ID)
@@ -296,11 +295,11 @@ func (runtime *Runtime) reapUnhandedEntitySpawns() error {
 	return firstErr
 }
 
-// advanceOwnedSpawns 是衍生物逐 tick 推进的唯一入口（RR-20261006-51；spawn_lifecycle_test.go 的源码守卫
+// advanceOwnedSpawns 是衍生物逐 tick 推进的唯一入口（spawn_lifecycle_test.go 的源码守卫
 // 核对只有它与 startEntitySpawn 的启动步调用 stepSpawnMotion / stepAreaMembership）。施放中与已移交的衍生物走同一条路：
 // 回收已失效 / 已到期的、按 NextTick 推进到期的、派发信号与回调、再回收这一步之后到期的。两者只差在停止、表现与 revision
-// 记在谁名下（spawnOwnerCast）。之前这里只推进已移交分区；施放中的衍生物唯一的推进路径 spawnStepTask 在生产路径上没有
-// 创建点，召唤后 wait 的施法里衍生物在移交之前一步都不走，EndTick 照样从启动算起，移交后只补走一步，中间的 tick 永久丢失。
+// 记在谁名下（spawnOwnerCast）。施放中的衍生物也必须在这里推进，否则召唤后 wait 的施法里衍生物在移交之前一步都不走，
+// EndTick 照样从启动算起，移交前的 tick 永久丢失。
 func (runtime *Runtime) advanceOwnedSpawns() error {
 	if err := runtime.reapUnhandedEntitySpawns(); err != nil {
 		return err
@@ -315,8 +314,8 @@ func (runtime *Runtime) advanceOwnedSpawns() error {
 			continue
 		}
 		owner := runtime.spawnOwnerCast(spawn)
-		// 每一步都在脱离施法的 cast 上求值（spawn_step 列），与移交与否无关：同一个衍生物移交前后求得同样的字段
-		// （RR-20261005-NC-224）。表现记在所属施法名下（施放中），已移交的记在 detachedSpawnCast 名下（RR-20261006-22）。
+		// 每一步都在脱离施法的 cast 上求值（spawn_step 列），与移交与否无关：同一个衍生物移交前后求得同样的字段。
+		// 表现记在所属施法名下（施放中），已移交的记在 detachedSpawnCast 名下。
 		stepCast := runtime.detachedSpawnCast(spawn, evalSpawnStep)
 		presentationCast := stepCast
 		if owner != nil {
@@ -344,7 +343,7 @@ func (runtime *Runtime) advanceOwnedSpawns() error {
 			return runtime.failOwnedSpawn(spawn, err)
 		}
 		if spawn.areaCallbackFinishedCast {
-			// area 回调 finish：停止本 area 衍生物，不再跑 end / cancel 回调（RR-20261005-NC-211）；施法仍在时同时结束施法
+			// area 回调 finish：停止本 area 衍生物，不再跑 end / cancel 回调；施法仍在时同时结束施法
 			// （与启动那一步 startEntitySpawn 的处理一致）。
 			if err := runtime.terminateOwnedSpawn(id, StopCauseCancel, ""); err != nil {
 				return err
@@ -496,8 +495,7 @@ func (runtime *Runtime) runOwnedSpawnCallback(spawn *SpawnInstance, event string
 			continue
 		}
 		callbackCast := runtime.detachedSpawnCast(spawn, evalSpawnCallback)
-		// 每次回调是衍生物事件的一个新子事件（新 EventID，父事件是施法事件，根事件与深度不变），回调里的效果再从它派生
-		// （RR-20261006-53）。
+		// 每次回调是衍生物事件的一个新子事件（新 EventID，父事件是施法事件，根事件与深度不变），回调里的效果再从它派生。
 		callbackEvent := deriveEvent(callbackCast.eventContext, runtime.nextSpawnEventID())
 		callbackCast.eventContext, callbackCast.detachedEvent = callbackEvent, callbackEvent
 		control, err := runtime.executeOperation(callbackCast, callback.operation)
@@ -518,8 +516,7 @@ func (runtime *Runtime) runOwnedSpawnCallback(spawn *SpawnInstance, event string
 			// area 回调的 finish = 结束拥有它的施法 + 停止本 area 余下的信号。编译器
 			// （compile_owned_entity.go 的 allowAreaFinish）不知道施法会不会先结束：
 			// 施法先结束时 entity 衍生物已经移交（handedOff），拥有者施法是终态或已回收，
-			// 这时 finish 没有施法可结束，只停止本 area。此前这里返回
-			// ErrProgramInvariant，Advance 在 tick 中途失败（RR-20261005-NC-211）。
+			// 这时 finish 没有施法可结束，只停止本 area，不能当作程序不变量失败、让 Advance 在 tick 中途失败。
 			ownerCast := runtime.casts[spawn.CastID]
 			ownerLive := !spawn.handedOff && ownerCast != nil && ownerCast.status != CastFinished && ownerCast.status != CastFailed && !ownerCast.logicalFinished
 			if ownerLive {
@@ -533,8 +530,7 @@ func (runtime *Runtime) runOwnedSpawnCallback(spawn *SpawnInstance, event string
 }
 
 // terminateOwnedSpawn 请求停止一个逐 tick 推进的衍生物（tick 驱动：到期、失效、步进失败、area 回调 finish），施放中的
-// 经所属施法请求（spawnOwnerCast）。宿主拒绝时 requestSpawnStop 把它转入待停止，下一次 Advance 不会再卡在它上面
-// （RR-20261006-31）。
+// 经所属施法请求（spawnOwnerCast）。宿主拒绝时 requestSpawnStop 把它转入待停止，下一次 Advance 不会再卡在它上面。
 func (runtime *Runtime) terminateOwnedSpawn(id SpawnID, cause StopCause, callbackEvent string) error {
 	spawn := runtime.spawns.get(id, spawnSteppedPartitions...)
 	if spawn == nil {
@@ -544,12 +540,10 @@ func (runtime *Runtime) terminateOwnedSpawn(id SpawnID, cause StopCause, callbac
 }
 
 // RemoveProgram 请求停止该程序的全部衍生物（entity 衍生物不论施放中还是已移交都跑一次 cancel 回调，
-// spawnCancelCallbackEvent），再让宿主删除它的 owned 实体。之前只给已移交的跑，施放中的被 RemoveProgram 停下时一次
-// cancel 也没有，与 Shutdown / Cancel / Interrupt 不一致（RR-20261006-55 后续二，维护者 2026-10-07 F08-H+2 ②）。
+// spawnCancelCallbackEvent，与 Shutdown / Cancel / Interrupt 一致），再让宿主删除它的 owned 实体。
 // 宿主拒绝停止时返回第一个错误（errors.Is 宿主的错误），停不下的衍生物留成 stop_pending：程序移除之后仍由 Runtime
-// 在之后的 tick 按退避重试（重试先重试尚未成功的 carry 解除，再发宿主 StopSpawn，不执行程序代码），再调用一次 RemoveProgram 会立即再请求一次。
-// 之前它们留成 running、列在 OwnedSpawns 里等调用方重试（停止入口统一，维护者 2026-10-07）。该程序已放弃的衍生物
-// 不再停；它们的记录仍引用程序（checkpoint 恢复时 resolver 仍要能解析它），直到 Advance 末尾按 MaxAbandonedSpawns 清理。
+// 在之后的 tick 按退避重试（先重试尚未成功的 carry 解除，再发宿主 StopSpawn，不执行程序代码）；再调用一次
+// RemoveProgram 会立即再请求一次。该程序已放弃的衍生物不再停；它们的记录仍引用程序（checkpoint 恢复时 resolver 仍要能解析它），直到 Advance 末尾按 MaxAbandonedSpawns 清理。
 func (runtime *Runtime) RemoveProgram(programID string) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -568,7 +562,7 @@ func (runtime *Runtime) RemoveProgram(programID string) error {
 	for _, id := range ids {
 		spawn := runtime.spawns.get(id)
 		if spawn == nil {
-			// 双重保险（RR-20261006-34）：循环中途不会删记录——到待停止上限的记录挪进已放弃分区而不删，取回的是
+			// 双重保险：循环中途不会删记录——到待停止上限的记录挪进已放弃分区而不删，取回的是
 			// 那条已放弃的记录，停止请求对它是空操作；删记录只在 spawnDropSites 登记的安全点。
 			continue
 		}
@@ -605,7 +599,7 @@ func (runtime *Runtime) Shutdown() error {
 	for _, id := range ids {
 		spawn := runtime.spawns.get(id)
 		if spawn == nil {
-			// 双重保险（RR-20261006-34）：循环中途不会删记录——到待停止上限的记录挪进已放弃分区而不删，取回的是
+			// 双重保险：循环中途不会删记录——到待停止上限的记录挪进已放弃分区而不删，取回的是
 			// 那条已放弃的记录，停止请求对它是空操作；删记录只在 spawnDropSites 登记的安全点。
 			continue
 		}

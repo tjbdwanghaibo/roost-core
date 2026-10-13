@@ -5,6 +5,7 @@ import (
 	"sort"
 )
 
+// SpawnStatus 是衍生物记录的状态；状态决定记录所在的分区（spawn_table.go）。
 type SpawnStatus string
 
 const (
@@ -14,14 +15,15 @@ const (
 	SpawnFailed    SpawnStatus = "failed"
 	// SpawnStopPending 表示 Runtime 已请求停掉这个衍生物（任何停止入口），但宿主 StopSpawn 失败，衍生物仍在
 	// 宿主侧运行。Runtime 不再推进它（不步进、不派发信号、不跑回调），只在之后的 tick 按退避重试 StopSpawn，
-	// 成功后改成停止状态；状态机见 runtime_spawn_stop.go（停止入口统一，维护者 2026-10-07）。
+	// 成功后改成停止状态；状态机见 runtime_spawn_stop.go。
 	SpawnStopPending SpawnStatus = "stop_pending"
-	// SpawnAbandoned 表示待停止条目超过 MaxStopPendingSpawns 时，Runtime 放弃了这个停不下的衍生物（维护者第十三轮
-	// “待停止上限”选 B，2026-10-07）：不再重试、不再推进，不钉住 cast、不占 owned 容量；宿主那边可能仍在运行它。
+	// SpawnAbandoned 表示待停止条目超过 MaxStopPendingSpawns 时，Runtime 放弃了这个停不下的衍生物：
+	// 不再重试、不再推进，不钉住 cast、不占 owned 容量；宿主那边可能仍在运行它。
 	// 记录留在“已放弃”分区里，Runtime 不在任何循环中途删它，只在 Advance 末尾按 MaxAbandonedSpawns 清理最早的。
 	SpawnAbandoned SpawnStatus = "abandoned"
 )
 
+// SpawnScope 是衍生物的作用域。Runtime 只创建 entity 衍生物：施法结束时移交给 lifecycle 实体继续运行。
 type SpawnScope string
 
 const (
@@ -32,6 +34,7 @@ const (
 	SpawnScopeEntity SpawnScope = "entity"
 )
 
+// StopCause 是衍生物停止的原因，决定停止后的终态（ended / cancelled / failed）。
 type StopCause string
 
 const (
@@ -40,6 +43,7 @@ const (
 	StopCauseFailure StopCause = "failure"
 )
 
+// MotionSpawnStage 是运动衍生物的阶段：去程、暂停、回程、完成。
 type MotionSpawnStage uint8
 
 const (
@@ -49,6 +53,7 @@ const (
 	MotionStageCompleted
 )
 
+// MotionState 是运动衍生物逐 tick 推进的确定性状态，随 checkpoint 保存。
 type MotionState struct {
 	Initialized        bool
 	Position           Position
@@ -70,11 +75,13 @@ type MotionState struct {
 	CarryAttached      bool
 }
 
+// SpawnNumericState 是衍生物数值属性（numeric track）的当前值。
 type SpawnNumericState struct {
 	Initialized bool
 	Properties  []numericPropertyState
 }
 
+// SpawnInstance 是 Runtime 持有的一条衍生物记录。分区字段（Status、handedOff）只能经 spawnTable.setState 修改。
 type SpawnInstance struct {
 	ID                SpawnID
 	CastID            CastID
@@ -121,6 +128,7 @@ func (spawn *SpawnInstance) liveOnHost() bool {
 	return spawn != nil && (spawn.Status == SpawnRunning || spawn.Status == SpawnStopPending)
 }
 
+// SpawnSignalKind 是运动与区域推进产生的衍生物信号种类，决定触发哪个回调。
 type SpawnSignalKind string
 
 const (
@@ -135,6 +143,7 @@ const (
 	SpawnSignalCancel     SpawnSignalKind = "cancel"
 )
 
+// SpawnSignal 是一次衍生物信号及其目标、距离与区域成员计数。
 type SpawnSignal struct {
 	Kind            SpawnSignalKind
 	Target          EntityID
@@ -299,9 +308,7 @@ func (runtime *Runtime) terminateSpawn(cast *castInstance, spawn *SpawnInstance,
 		}
 	}
 	var callbackErr error
-	// Area callback completion suppresses only the remaining signals of that
-	// Area spawn. Other spawns owned by the cast still need their normal
-	// terminal cleanup callbacks during the same stop sweep.
+	// area 回调 finish 只压制该 area 衍生物剩下的信号；同一次停止扫描里，施法名下的其它衍生物照常跑收尾回调。
 	callbackLive := spawn != nil && spawn.Status == SpawnRunning && !spawn.areaCallbackFinishedCast
 	if areaErr == nil && callbackEvent != "" && callbackLive {
 		callbackErr = runtime.runOwnedSpawnCallback(spawn, callbackEvent)
@@ -314,8 +321,7 @@ func (runtime *Runtime) terminateSpawn(cast *castInstance, spawn *SpawnInstance,
 }
 
 // spawnCancelCallbackEvent 是衍生物被提前停止（Cancel / Interrupt / 施法失败 / goto / Shutdown / RemoveProgram）时要跑的回调：entity
-// 衍生物不论施放中还是已移交都跑一次 cancel，phase / cast 作用域的衍生物不跑。Shutdown 之前只给已移交的跑，施放中的
-// 被 Shutdown 停下时一次 cancel 也没有，与 Cancel / Interrupt 停同一个衍生物不一致（RR-20261006-55 后续，维护者选 A）。
+// 衍生物不论施放中还是已移交都跑一次 cancel（各停止入口对同一个衍生物的行为一致），phase / cast 作用域的衍生物不跑。
 func spawnCancelCallbackEvent(spawn *SpawnInstance) string {
 	if spawn.Scope == SpawnScopeEntity {
 		return "cancel"

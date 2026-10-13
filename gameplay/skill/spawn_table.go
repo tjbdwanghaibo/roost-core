@@ -2,11 +2,10 @@ package skill
 
 import "sort"
 
-// 衍生物记录按分区存放（维护者第十三轮“skill 衍生物两张表”，docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md）。
+// 衍生物记录按分区存放。
 //
-// 之前 Runtime 有两张 map：spawns 存全部记录，ownedSpawns 是其中“已移交、仍在运行”那部分的重复索引，指向同一批
-// *SpawnInstance；两张表要在移交、停止、待停止、回收时一起维护，checkpoint 也存两份、恢复时逐条比对。现在“移交给谁”
-// 只由记录字段（Owner、handedOff）表达，记录按字段分进五个分区，每条记录恰好在一个分区里：
+// 每条记录只存一份，“移交给谁”只由记录字段（Owner、handedOff）表达，不另建重复索引；记录按字段分进五个分区，
+// 每条记录恰好在一个分区里：
 //
 //	分区              字段                               谁按它查
 //	spawnCasting      Status == running，未移交          施法收尾 / 打断 / goto 停衍生物，移交，施法期间 lifecycle 失效回收；逐 tick 推进
@@ -19,7 +18,7 @@ import "sort"
 // spawn_partition_test.go 的源码守卫禁止别处写分区 map、给这两个字段赋值。
 // drop 只有三个调用点（同一守卫登记）：Advance 末尾清理已放弃分区（pruneAbandonedSpawnsLocked）、随 cast 回收已停止的
 // 记录（forgetCastSpawnsLocked）、衍生物启动失败且已停掉之后（startEntitySpawn）。任何“取 ID 列表 → 逐个处理”的循环
-// 中途都不会删记录（维护者第十三轮“待停止上限”选 B，docs/feature/REFACTOR-2026-10-07-skill-spawn-partition.md §11）。
+// 中途都不会删记录。
 type spawnPartition uint8
 
 const (
@@ -36,8 +35,8 @@ const (
 var spawnLivePartitions = []spawnPartition{spawnCasting, spawnHandedOff, spawnStopPending}
 
 // spawnSteppedPartitions 是 Runtime 逐 tick 推进的分区：运行中的衍生物不论是否已移交，都由 advanceOwnedSpawns 这一个
-// 入口按 NextTick 推进、按 EndTick / 运动完成回收（RR-20261006-51）。之前只推进已移交分区，施放中的衍生物在移交之前
-// 一步都不走，移交前的 tick 永久丢失。是否移交只决定停止、表现与 revision 记在谁名下（spawnOwnerCast）。
+// 入口按 NextTick 推进、按 EndTick / 运动完成回收；施放中的衍生物不推进，移交前的 tick 就会永久丢失。是否移交只决定
+// 停止、表现与 revision 记在谁名下（spawnOwnerCast）。
 var spawnSteppedPartitions = []spawnPartition{spawnCasting, spawnHandedOff}
 
 // partition 由记录字段决定记录所在的分区。checkpoint 恢复只接受已知的 Status（validSpawnStatus）。
