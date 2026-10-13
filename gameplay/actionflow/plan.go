@@ -11,6 +11,7 @@ var (
 	ErrMissionStepInvalid = errors.New("taskflow: mission step is invalid")
 )
 
+// PlanMission 按 MissionPlan 逐步执行动作的通用任务。
 type PlanMission struct {
 	kind            MissionKind
 	id              int64
@@ -23,6 +24,7 @@ type PlanMission struct {
 	lastResult      ActionResult
 }
 
+// NewPlanMission 构造一个尚未开始的计划任务。
 func NewPlanMission(kind MissionKind) *PlanMission {
 	return &PlanMission{kind: kind, status: MissionStatusIdle, currentStep: -1}
 }
@@ -146,6 +148,7 @@ func (m *PlanMission) apply(ctx *MissionContext, result ActionResult) error {
 	return nil
 }
 
+// PlanFrom 从任务参数取出 MissionPlan（值或非 nil 指针）并规范化。
 func PlanFrom(param any) (MissionPlan, error) {
 	switch plan := param.(type) {
 	case MissionPlan:
@@ -159,6 +162,9 @@ func PlanFrom(param any) (MissionPlan, error) {
 		return MissionPlan{}, fmt.Errorf("%w: %T", ErrMissionPlanInvalid, param)
 	}
 }
+
+// NormalizePlan 校验计划（步骤非空、起始步与去向在范围内、动作非空）并返回规范化的副本：未设置的成功去向取下一步
+// （最后一步则成功结束），未设置的失败去向取失败结束。
 func NormalizePlan(plan MissionPlan) (MissionPlan, error) {
 	if len(plan.Steps) == 0 || plan.Start < 0 || plan.Start >= len(plan.Steps) {
 		return MissionPlan{}, ErrMissionPlanInvalid

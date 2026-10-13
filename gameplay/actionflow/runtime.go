@@ -6,8 +6,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
-// ActionContext is callback-scoped. Implementations must not retain its pointer
-// after Start, Tick or Cancel returns; runners may reuse the storage.
+// ActionContext 只在回调期间有效。实现不得在 Start、Tick 或 Cancel 返回后保留它的指针；runner 可能复用这块存储。
 type ActionContext struct {
 	Owner          entity.IThreadSafeEntity
 	ActionList     ActionList
@@ -15,6 +14,7 @@ type ActionContext struct {
 	Now            time.Time
 }
 
+// Action 是一个动作：Start 启动，Tick 推进并报告是否结束及结果，Cancel 取消。
 type Action interface {
 	Kind() ActionKind
 	Start(ctx *ActionContext) error
@@ -50,6 +50,7 @@ type ActionList interface {
 	EndCurMission(reason ActionReason)
 }
 
+// MissionContext 是任务回调的上下文。
 type MissionContext struct {
 	Owner      entity.IThreadSafeEntity
 	ActionList ActionList
@@ -57,6 +58,7 @@ type MissionContext struct {
 	Now        time.Time
 }
 
+// Mission 是一个任务：编排一系列动作，并在动作结束时决定下一步。
 type Mission interface {
 	ID() int64
 	Kind() MissionKind
@@ -69,6 +71,7 @@ type Mission interface {
 	MissionInfo() MissionInfo
 }
 
+// MissionManager 是任务回调看到的任务管理接口（MissionRunner 实现）。
 type MissionManager interface {
 	StartMission(kind MissionKind, param any) error
 	CancelMission(reason string) error
@@ -80,6 +83,7 @@ type MissionManager interface {
 	EndCurMission(reason ActionReason)
 }
 
+// MissionRuntimeSetter 由需要知道自己 ID 与管理者的任务实现，runner 在启动前调用。
 type MissionRuntimeSetter interface {
 	SetRuntime(id int64, manager MissionManager)
 }

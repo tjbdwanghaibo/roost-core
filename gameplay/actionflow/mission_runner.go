@@ -14,6 +14,7 @@ var (
 	ErrMissionIDExhausted = errors.New("taskflow: mission id exhausted")
 )
 
+// MissionRunnerHooks 是 MissionRunner 的回调钩子，都在“执行中”运行，钩子里发起的变更会被延后。
 type MissionRunnerHooks struct {
 	Now          func() time.Time
 	Context      func(time.Time) *MissionContext
@@ -24,6 +25,7 @@ type MissionRunnerHooks struct {
 	OnError      func(error)
 }
 
+// MissionRunnerConfig 是 MissionRunner 的注册表、默认任务种类、钩子与延后队列上限。
 type MissionRunnerConfig struct {
 	Registry    *Registry
 	DefaultKind MissionKind
@@ -74,13 +76,13 @@ type missionCommand struct {
 
 // MissionRunner 与 ActionRunner 一样刻意无锁，由持实体锁的一方串行调用。
 //
-// 回调里的变更延后执行（维护者 2026-10-06 第五轮决定，与 ActionRunner / B7 一致）：任务的
+// 回调里的变更延后执行（与 ActionRunner 一致）：任务的
 // Start / Tick / OnActionEnd / End / CanReplaceBy、任务构建器，以及 Now / Context / OnState /
 // OnChanged / OnEnded / ClearActions / OnError 钩子都在某次最外层调用“执行中”运行；这期间对
 // 本 runner 的 StartMission、CancelMission、EndCurMission、Tick、OnActionEnd 不立即生效，
 // 而是按发起顺序进延后队列，最外层调用做完自己那一步后依次执行（执行中引出的回调再发起的
 // 命令接着排在后面），全部执行完才返回。判定只在 submit 一处；任一回调运行期间当前任务都
-// 不会被换掉，之前的 starting / ending 守卫与 ErrReentrantMutation 分支已删除。
+// 不会被换掉，不需要 starting / ending 守卫。
 //
 //   - 回调里的 StartMission / CancelMission 返回 nil（Deferring() 为真即表示被延后）；参数
 //     校验（任务类型为 0、CancelMission 时没有任务）仍立即返回错误。延后命令执行时的错误
@@ -113,6 +115,7 @@ type MissionRunner struct {
 	head     int
 }
 
+// NewMissionRunner 构造 MissionRunner；缺少 Registry 时返回 ErrMissionBuilderNotFound。
 func NewMissionRunner(config MissionRunnerConfig) (*MissionRunner, error) {
 	if config.Registry == nil {
 		return nil, ErrMissionBuilderNotFound
@@ -164,27 +167,36 @@ func (r *MissionRunner) CancelMission(reason string) error {
 	return r.submit(missionCommand{op: missionOpEnd, reason: NewActionReason(reason)})
 }
 
+// InMission 报告是否有正在运行的任务。
 func (r *MissionRunner) InMission() bool {
 	return r != nil && r.cur != nil && r.cur.Status() == MissionStatusRunning
 }
+
+// CurrentAction 返回当前任务正在执行的动作种类。
 func (r *MissionRunner) CurrentAction() ActionKind {
 	if r == nil || r.cur == nil {
 		return 0
 	}
 	return r.cur.MissionInfo().CurrentAction
 }
+
+// CurMission 返回当前任务；没有时返回 nil。
 func (r *MissionRunner) CurMission() Mission {
 	if r == nil {
 		return nil
 	}
 	return r.cur
 }
+
+// CurrentMissionID 返回当前任务的 ID；没有时返回 0。
 func (r *MissionRunner) CurrentMissionID() int64 {
 	if r == nil || r.cur == nil {
 		return 0
 	}
 	return r.cur.ID()
 }
+
+// MissionInfo 返回当前任务的信息；没有任务时返回上一个任务结束时的信息。
 func (r *MissionRunner) MissionInfo() MissionInfo {
 	if r == nil {
 		return MissionInfo{CurrentStep: -1}
@@ -212,6 +224,7 @@ func (r *MissionRunner) EndCurMission(reason ActionReason) {
 	r.submitWithoutResult(missionCommand{op: missionOpEnd, reason: reason})
 }
 
+// Tick 推进当前任务；在回调里调用时延后执行，错误经 OnError 报告。
 func (r *MissionRunner) Tick(now time.Time) {
 	if r == nil {
 		return
@@ -227,7 +240,7 @@ func (r *MissionRunner) Reset() {
 
 // submit 是变更的唯一入口：回调期间（executing）进延后队列，否则作为最外层调用立即执行，
 // 并在返回前执行完全部延后命令。执行状态在 defer 里复位：即使有未预料的 panic 穿出，
-// runner 也不会停在“延后中”、之后的变更全被排进一个没人执行的队列（NC-242 的教训）。
+// runner 也不会停在“延后中”、之后的变更全被排进一个没人执行的队列。
 func (r *MissionRunner) submit(cmd missionCommand) error {
 	if r.executing {
 		if err := r.deferrable(); err != nil {

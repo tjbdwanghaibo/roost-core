@@ -14,8 +14,7 @@ var (
 	ErrActionGroupInvalid = errors.New("taskflow: action group is invalid")
 	ErrActionGroupFrozen  = errors.New("taskflow: action group is frozen")
 	ErrActionIDExhausted  = errors.New("taskflow: action id exhausted")
-	// ErrReentrantMutation 已不再由任何 runner 返回：ActionRunner 自 B7 起、MissionRunner 自
-	// 2026-10-06 第五轮决定起，都把回调里的变更延后执行。保留导出名以兼容调用方。
+	// ErrReentrantMutation 已不再由任何 runner 返回：两种 runner 都把回调里的变更延后执行。保留导出名以兼容调用方。
 	ErrReentrantMutation = errors.New("taskflow: reentrant mutation changed current action")
 	// ErrDeferredQueueFull：一次最外层调用里，回调发起的待执行命令超过
 	// ActionRunnerConfig.MaxDeferredCommands。被拒的 Start / Enqueue 不分配 ID。
@@ -31,6 +30,7 @@ const (
 	defaultMaxDeferredSteps    = 1024
 )
 
+// ActionSnapshot 是一个动作的身份快照：ID、所属任务、种类、组与动作本身。
 type ActionSnapshot struct {
 	ID        int64
 	MissionID int64
@@ -39,9 +39,9 @@ type ActionSnapshot struct {
 	Action    Action
 }
 
+// ActionRunnerHooks 是 ActionRunner 的回调钩子，都在“执行中”运行，钩子里发起的变更会被延后。
 type ActionRunnerHooks struct {
-	// PopulateContext is the allocation-free context hook. Context remains for
-	// compatibility and is copied into runner-owned callback-scoped storage.
+	// PopulateContext 是不分配内存的上下文钩子。Context 为兼容而保留，它的结果会被复制进 runner 持有的回调期存储。
 	PopulateContext func(*ActionContext, time.Time)
 	Context         func(time.Time) *ActionContext
 	OnQueued        func(ActionSnapshot)
@@ -50,6 +50,7 @@ type ActionRunnerHooks struct {
 	OnError         func(error)
 }
 
+// ActionRunnerConfig 是 ActionRunner 的注册表、种类到组的映射、钩子与延后队列上限。
 type ActionRunnerConfig struct {
 	Registry     *Registry
 	GroupForKind func(ActionKind) (ActionGroup, bool)
@@ -129,15 +130,14 @@ type runnerCommand struct {
 	outer bool
 }
 
-// ActionRunner is intentionally lock-free. The owning entity must serialize
-// every call with its Entity mutex, including heartbeat-driven Tick calls.
+// ActionRunner 刻意无锁。拥有它的实体必须用实体锁串行化每次调用，包括心跳驱动的 Tick。
 //
-// 回调里的变更延后执行（维护者决定 B7，方向 b）：动作的 Start / Tick / Cancel 和
+// 回调里的变更延后执行：动作的 Start / Tick / Cancel 和
 // OnQueued / OnTransition / OnEnded 钩子都在某次最外层调用“执行中”运行；这期间对本 runner
 // 的 Start、Enqueue、Tick、End、EndAll、ClearQueue、ClearMission、Recover 不立即生效，而是
 // 按发起顺序进延后队列，最外层调用做完自己那一步后依次执行（执行中引出的回调再发起的
 // 命令接着排在后面），全部执行完才返回。所以任一回调运行期间当前位、队列都不会被改，
-// 不需要在每个回调点之后事后比对（U-0100 / NC-122 那组 ErrReentrantMutation 分支已删除）。
+// 不需要在每个回调点之后事后比对。
 //
 //   - 回调里的 Start / Enqueue 立即构建动作并返回已分配的 ID、错误为 nil（Deferring() 为真
 //     即表示本次调用被延后）。拿到 ID 的动作一定有结论：启动后照常结束；延后执行时已无法
@@ -169,6 +169,7 @@ type ActionRunner struct {
 	head     int
 }
 
+// NewActionRunner 构造 ActionRunner；缺少 Registry 或 GroupForKind 时返回 ErrActionGroupInvalid。
 func NewActionRunner(config ActionRunnerConfig) (*ActionRunner, error) {
 	if config.Registry == nil || config.GroupForKind == nil {
 		return nil, ErrActionGroupInvalid
@@ -232,6 +233,7 @@ func (r *ActionRunner) Enqueue(kind ActionKind, param any, missionID int64) (int
 	return entry.ID, r.submit(runnerCommand{op: opEnqueue, group: group, entry: entry})
 }
 
+// Current 返回组的当前动作；没有时返回 nil。
 func (r *ActionRunner) Current(group ActionGroup) Action {
 	unit := r.groups[group]
 	if unit == nil || unit.cur == nil {
@@ -240,6 +242,7 @@ func (r *ActionRunner) Current(group ActionGroup) Action {
 	return unit.cur.Action
 }
 
+// CurrentSnapshot 返回组当前动作的快照。
 func (r *ActionRunner) CurrentSnapshot(group ActionGroup) (ActionSnapshot, bool) {
 	unit := r.groups[group]
 	if unit == nil || unit.cur == nil {
@@ -248,6 +251,7 @@ func (r *ActionRunner) CurrentSnapshot(group ActionGroup) (ActionSnapshot, bool)
 	return unit.cur.ActionSnapshot, true
 }
 
+// QueueLength 返回组里排队的动作数。
 func (r *ActionRunner) QueueLength(group ActionGroup) int {
 	unit := r.groups[group]
 	if unit == nil {
@@ -256,6 +260,7 @@ func (r *ActionRunner) QueueLength(group ActionGroup) int {
 	return len(unit.next)
 }
 
+// Pending 按顺序返回组里排队动作的快照副本。
 func (r *ActionRunner) Pending(group ActionGroup) []ActionSnapshot {
 	unit := r.groups[group]
 	if unit == nil || len(unit.next) == 0 {
@@ -273,7 +278,7 @@ func (r *ActionRunner) Pending(group ActionGroup) []ActionSnapshot {
 // Update 对组的当前动作调用 fn。在回调里立即调用；不在回调里时 fn 运行期间同样算回调，
 // fn 里的变更在 fn 返回后执行。fn 的 panic 与动作回调一样恢复成错误返回：fn 运行期间
 // executing 已置位，panic 直接穿出会让它永远不复位，之后的变更全被当成延后命令、再没有
-// 人执行（RR-20261005-NC-242）。
+// 人执行。
 func (r *ActionRunner) Update(group ActionGroup, fn func(Action) error) error {
 	if fn == nil {
 		return nil
@@ -291,29 +296,32 @@ func (r *ActionRunner) Update(group ActionGroup, fn func(Action) error) error {
 	return errors.Join(err, r.drain())
 }
 
+// Tick 推进组的当前动作；动作结束时启动队首。在回调里调用时延后执行。
 func (r *ActionRunner) Tick(group ActionGroup, now time.Time) error {
 	return r.submit(runnerCommand{op: opTick, group: group, now: now})
 }
 
+// End 结束组的当前动作（force 时取消），并启动队首。在回调里调用时延后执行。
 func (r *ActionRunner) End(group ActionGroup, force bool, reason ActionReason) error {
 	return r.submit(runnerCommand{op: opEnd, group: group, force: force, reason: reason})
 }
 
 // EndAll 结束每个组的当前动作并丢弃排队项。回调（如 OnEnded 里推进任务）随之发起的
-// 变更在全部结束之后按序执行，所以 EndAll 返回时可能已有回调启动的新动作在运行（O-A1）。
+// 变更在全部结束之后按序执行，所以 EndAll 返回时可能已有回调启动的新动作在运行。
 // EndAll 不是“清场”：要让什么都不再运行，先结束当前任务（MissionRunner.EndCurMission，
-// 任务结束后送来的动作结束被忽略、不再推进），再调 EndAll（维护者第五轮决定保持此语义）。
+// 任务结束后送来的动作结束被忽略、不再推进），再调 EndAll。
 func (r *ActionRunner) EndAll(force bool, reason ActionReason) error {
 	return r.submit(runnerCommand{op: opEndAll, force: force, reason: reason})
 }
 
-// ClearQueue 丢弃全部排队动作；每个被丢弃的动作发一次 OnEnded（取消，RR-20261005-NC-121）。
+// ClearQueue 丢弃全部排队动作；每个被丢弃的动作发一次 OnEnded（取消）。
 func (r *ActionRunner) ClearQueue() {
 	if err := r.submit(runnerCommand{op: opClearQueue}); err != nil {
 		r.report(err)
 	}
 }
 
+// ClearMission 结束属于该任务的当前动作并丢弃它的排队动作；missionID 为 0 时是空操作。
 func (r *ActionRunner) ClearMission(missionID int64, cancel bool, reason ActionReason) error {
 	if missionID == 0 {
 		return nil
@@ -321,12 +329,16 @@ func (r *ActionRunner) ClearMission(missionID int64, cancel bool, reason ActionR
 	return r.submit(runnerCommand{op: opClearMission, missionID: missionID, force: cancel, reason: reason})
 }
 
+// Freeze 冻结组：之后的 Start 被拒绝，队列不再推进，直到 Recover。
 func (r *ActionRunner) Freeze(group ActionGroup) { r.group(group).frozen = true }
+
+// Frozen 报告组是否被冻结。
 func (r *ActionRunner) Frozen(group ActionGroup) bool {
 	unit := r.groups[group]
 	return unit != nil && unit.frozen
 }
 
+// Recover 解除组的冻结；组空闲时随即推进队列。在回调里调用时延后执行。
 func (r *ActionRunner) Recover(group ActionGroup, now time.Time) error {
 	return r.submit(runnerCommand{op: opRecover, group: group, now: now})
 }
@@ -510,10 +522,9 @@ func (r *ActionRunner) apply(cmd runnerCommand) error {
 // applyStart 启动一个已构建的动作，替换当前动作。延后的 Start 已把 ID 交出，执行时组被
 // 冻结也要发 OnEnded 收尾。
 //
-// 被替换动作的 Cancel 失败（panic）只经 OnError 报告，不阻止新动作启动：finish 已经把旧
-// 动作结束（清当前位、发 OnEnded），之前在这里整体返回，新动作既不启动也没有 OnEnded——
-// 回调里交出的 ID 永远没有结论，直接调用时组空着、队列也不推进（RR-20261005-NC-243，
-// N10 观察 O-A4）。Start 的错误只表示请求的动作没有在运行。
+// 被替换动作的 Cancel 失败（panic）只经 OnError 报告，不阻止新动作启动：finish 已经把旧动作结束（清当前位、发
+// OnEnded），若在这里整体返回，新动作既不启动也没有 OnEnded——回调里交出的 ID 永远没有结论，直接调用时组空着、
+// 队列也不推进。Start 的错误只表示请求的动作没有在运行。
 func (r *ActionRunner) applyStart(cmd runnerCommand) error {
 	unit := r.group(cmd.group)
 	entry := cmd.entry
@@ -589,7 +600,7 @@ func (r *ActionRunner) scheduleAdvance(unit *actionGroupState, group ActionGroup
 
 // discardQueued 把一个组里命中 match（nil 表示全部）的排队动作移出队列，再为每个发一次
 // OnEnded。排队动作已经发过 OnQueued、ID 也交给了 Enqueue 的调用方（ai.TaskflowAction 等
-// 这个 ID 的结束），静默丢弃会让等待方永远等不到结果（RR-20261005-NC-121）。它们从未
+// 这个 ID 的结束），静默丢弃会让等待方永远等不到结果。它们从未
 // 启动，所以不调 Cancel、不发激活切换，结束状态一律是取消。Hook 里发起的新排队在延后
 // 队列里，丢弃完才入队，不被这次丢弃误伤。
 func (r *ActionRunner) discardQueued(unit *actionGroupState, match func(*actionEntry) bool, reason ActionReason) {
@@ -645,7 +656,7 @@ func (r *ActionRunner) resolveGroup(kind ActionKind) (group ActionGroup, ok bool
 
 // start 把 entry 装到当前位：进入切换 → 动作 Start。Start 失败时调 Cancel、离开切换、清当前
 // 位，并发一次失败状态的 OnEnded——进入切换的动作恰好一次离开、一次结束，直接 Start 与
-// 排队 / 延后启动一致（O-A2）。回调里的变更都在延后队列，这期间当前位一直是 entry。
+// 排队 / 延后启动一致。回调里的变更都在延后队列，这期间当前位一直是 entry。
 func (r *ActionRunner) start(unit *actionGroupState, entry *actionEntry, now time.Time) error {
 	if unit == nil || entry == nil || entry.Action == nil {
 		return ErrBuilderNil
