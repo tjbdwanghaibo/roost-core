@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// RR-20261006-10：Serial 让并发的停止调用串行，后到者的等待受它自己的 ctx 约束。
+// Serial 让并发的停止调用串行，后到者的等待受它自己的 ctx 约束。
 func TestSerialLaterCallerWaitsWithinItsOwnContext(t *testing.T) {
 	var serial Serial
 	if err := serial.Lock(context.Background()); err != nil {
