@@ -1,6 +1,9 @@
 package container
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestBucketHolder(t *testing.T) {
 	bh := NewBucketHolder[int64, int](4, func(k int64) int { return int(k * 10) }, true)
@@ -167,4 +170,96 @@ func TestNewObjectPoolRejectsNilConstructor(t *testing.T) {
 		}
 	}()
 	NewObjectPool[*int](nil, nil)
+}
+
+// 依赖里出现未单独注册的节点时，拓扑排序既不误报环（A→B、B 未注册），也不把真正的环藏起来（A↔B 成环时不能静默丢掉 A、B）。
+func TestTopologicalSortHandlesUnregisteredDependencies(t *testing.T) {
+	leaf := NewTopologicalSortCache[string]()
+	leaf.RegisterCompDependency("A", "B")
+	if got := leaf.GetTopologicalSortedComponents(); !slices.Equal(got, []string{"B", "A"}) {
+		t.Fatalf("A depends on unregistered B: got %v, want [B A]", got)
+	}
+
+	masked := NewTopologicalSortCache[string]()
+	masked.RegisterCompDependency("A", "B")
+	masked.RegisterCompDependency("B", "A")
+	masked.RegisterCompDependency("C", "X", "Y")
+	if got := masked.GetTopologicalSortedComponents(); got != nil {
+		t.Fatalf("A and B form a cycle: got %v, want nil", got)
+	}
+}
+
+// KeyMap.Range 的回调删除当前键时，其余键各出现一次，不出现不存在的键（Remove 把桶末尾的元素换到当前位置，Range 不能跳过它，
+// 也不能把清零的末尾槽以零值键交给回调）。
+func TestKeyMapRangeWithRemoveOfTheCurrentKey(t *testing.T) {
+	m := NewKeyMap[int64, int64](1) // one bucket: every key in the same slice
+	for i := int64(1); i <= 4; i++ {
+		m.Set(i, i*10)
+	}
+	seen := map[int64]int{}
+	m.Range(func(k, v int64) bool {
+		seen[k]++
+		if v != k*10 {
+			t.Errorf("key %d delivered with value %d, want %d", k, v, k*10)
+		}
+		if k == 1 {
+			m.Remove(k)
+		}
+		return true
+	})
+	want := map[int64]int{1: 1, 2: 1, 3: 1, 4: 1}
+	if len(seen) != len(want) {
+		t.Fatalf("Range delivered %v, want each of 1..4 exactly once", seen)
+	}
+	for k, n := range want {
+		if seen[k] != n {
+			t.Fatalf("Range delivered %v, want each of 1..4 exactly once", seen)
+		}
+	}
+	if m.Len() != 3 {
+		t.Fatalf("Len = %d after removing one of four, want 3", m.Len())
+	}
+}
+
+// 同一个对象 Put 两次不能让它在空闲表里出现两份，否则之后两次 Get 交出同一个对象、两个使用者共享一份可变状态。
+func TestObjectPoolIgnoresASecondPutOfTheSameObject(t *testing.T) {
+	type item struct{ n int }
+	pool := NewObjectPool(func() *item { return &item{} }, nil)
+	a := pool.Get()
+	pool.Put(a)
+	pool.Put(a) // 重复归还
+
+	x := pool.Get()
+	y := pool.Get()
+	if x == y {
+		t.Fatalf("two Gets after a double Put returned the same object %p: both callers now share it", x)
+	}
+	// 邻近分支：从未经 Get 的外来对象仍可放入，且只放一份。
+	foreign := &item{n: 7}
+	pool.Put(foreign)
+	pool.Put(foreign)
+	if got := pool.Get(); got != foreign {
+		t.Fatalf("Get after Put(foreign) = %p, want the foreign object %p", got, foreign)
+	}
+	if got := pool.Get(); got == foreign {
+		t.Fatal("a foreign object put twice was handed out twice")
+	}
+}
+
+// 依赖表与调用方互不共享切片：登记时复制调用方的变参切片，GetCompDependencies 返回副本；任一方改动都不影响登记的依赖与排序缓存。
+func TestTopologicalSortCacheDoesNotShareSlicesWithCallers(t *testing.T) {
+	cache := NewTopologicalSortCache[string]()
+	deps := []string{"B", "C"}
+	cache.RegisterCompDependency("A", deps...)
+	deps[0] = "X" // 调用方复用自己的切片
+
+	if got := cache.GetCompDependencies("A"); !slices.Equal(got, []string{"B", "C"}) {
+		t.Errorf("dependencies of A after the caller reused its slice = %v, want [B C]", got)
+	}
+
+	got := cache.GetCompDependencies("A")
+	got[1] = "Y" // 调用方改返回值
+	if again := cache.GetCompDependencies("A"); !slices.Equal(again, []string{"B", "C"}) {
+		t.Fatalf("dependencies of A after the caller edited the returned slice = %v, want [B C]", again)
+	}
 }
