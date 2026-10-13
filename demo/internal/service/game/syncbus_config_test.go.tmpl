@@ -23,9 +23,7 @@ import (
 // 实际流名——未显式配置时由 prefix 派生，生成的 prefix roost.sync 仍是 ROOST_SYNC。
 //
 // RR-20260927-35：期望流名用 kit 导出的 kitsyncbus.JetStreamStreamFromConfig 推（与 Mod 同一规则），
-// 不在测试里重抄。之前按 driver.JetStreamSyncStream(prefix) 推，漏了 kit 对 roost.room 的兼容映射：
-// 从旧版升级、按迁移说明保留 prefix: roost.room 的工程，期望 ROOST_ROOM、实际 ROOST_SYNC，测试误报失败。
-// 第二个用例把 prefix 分别换成 roost.room、roost.sync 与非默认前缀，逐一对照写死的流名。
+// 不在测试里重抄。第二个用例把 prefix 分别换成生成默认的 roost.sync 与非默认前缀，逐一对照写死的流名。
 func TestTheConfiguredSyncBusTransportIsTheOneThatStarts(t *testing.T) {
 	for _, file := range []string{
 		"../../../configs/service/config.{{GAME_SERVICE}}.yaml",
@@ -49,7 +47,7 @@ func TestTheConfiguredSyncBusTransportIsTheOneThatStarts(t *testing.T) {
 			if want == "jetstream" {
 				wantStream = kitsyncbus.JetStreamStreamFromConfig(cfg)
 				prefix := cfg.GetString("syncbus.prefix")
-				if !cfg.IsSet("syncbus.stream") && (prefix == "roost.sync" || prefix == "roost.room") && wantStream != "ROOST_SYNC" {
+				if !cfg.IsSet("syncbus.stream") && prefix == "roost.sync" && wantStream != "ROOST_SYNC" {
 					t.Fatalf("prefix %s must keep the deployed stream ROOST_SYNC, derived %q", prefix, wantStream)
 				}
 			}
@@ -65,11 +63,10 @@ func TestTheConfiguredSyncBusTransportIsTheOneThatStarts(t *testing.T) {
 	}
 }
 
-// RR-20260927-35：同一份生成配置换三种 prefix（旧版兼容的 roost.room、生成默认 roost.sync、
-// 与别的部署隔离的非默认前缀），启动日志里的流名逐一对照写死的值。
+// RR-20260927-35：同一份生成配置换两种 prefix（生成默认 roost.sync、与别的部署隔离的非默认前缀），
+// 启动日志里的流名逐一对照写死的值。
 func TestTheSyncBusStreamFollowsThePrefixRules(t *testing.T) {
 	for _, tc := range []struct{ prefix, stream string }{
-		{prefix: "roost.room", stream: "ROOST_SYNC"},
 		{prefix: "roost.sync", stream: "ROOST_SYNC"},
 		{prefix: "zz35.sync", stream: "ZZ35_SYNC"},
 	} {

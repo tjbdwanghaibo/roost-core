@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -57,7 +58,8 @@ func TestSyncBusRefusesAnUnknownTransport(t *testing.T) {
 
 // 装配的 JetStream 流名随 prefix 隔离，默认配置流名不变，显式 syncbus.stream 优先，启动日志说出实际流名。
 //
-// 默认边界：生成配置写 prefix: roost.sync，未写 prefix 时缺省为 roost.room，两者的流名都是 ROOST_SYNC。
+// 默认边界：生成配置写 prefix: roost.sync，未写 prefix 时缺省也是 roost.sync，流名都是 ROOST_SYNC；
+// room 时代的 roost.room 不再特例映射到 ROOST_SYNC，按规则推出自己的流。
 func TestSyncBusStreamIsDerivedFromThePrefix(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -66,7 +68,7 @@ func TestSyncBusStreamIsDerivedFromThePrefix(t *testing.T) {
 	}{
 		{name: "generated default prefix", config: map[string]any{"syncbus.prefix": "roost.sync"}, want: "ROOST_SYNC"},
 		{name: "no prefix configured", config: map[string]any{}, want: "ROOST_SYNC"},
-		{name: "kit default prefix written out", config: map[string]any{"syncbus.prefix": "roost.room"}, want: "ROOST_SYNC"},
+		{name: "room-era prefix is not mapped", config: map[string]any{"syncbus.prefix": "roost.room"}, want: "ROOST_ROOM"},
 		{name: "isolated prefix", config: map[string]any{"syncbus.prefix": "zz3640.sync"}, want: "ZZ3640_SYNC"},
 		{name: "explicit stream wins", config: map[string]any{"syncbus.prefix": "zz3640.sync", "syncbus.stream": "ZZ3640_OWN"}, want: "ZZ3640_OWN"},
 	} {
@@ -81,11 +83,13 @@ func TestSyncBusStreamIsDerivedFromThePrefix(t *testing.T) {
 			if len(js.streams) != 1 || js.streams[0].Name != tc.want {
 				t.Fatalf("ensured streams %+v, want exactly %s", js.streams, tc.want)
 			}
+			if _, written := tc.config["syncbus.prefix"]; !written && !slices.Equal(js.streams[0].Subjects, []string{"roost.sync.>"}) {
+				t.Fatalf("with no prefix configured the stream holds %v, want the default prefix roost.sync", js.streams[0].Subjects)
+			}
 			if got := startedStream(logs); got != tc.want {
 				t.Fatalf("the start log names stream %q, the bus runs on %q: %s", got, tc.want, logs)
 			}
-			// RR-20260927-35：导出给生成工程测试用的解析函数必须与 Mod 实际确保的流一致，
-			// 含 roost.room 的兼容映射。
+			// RR-20260927-35：导出给生成工程测试用的解析函数必须与 Mod 实际确保的流一致。
 			if got := JetStreamStreamFromConfig(cfg); got != tc.want {
 				t.Fatalf("JetStreamStreamFromConfig = %q, the bus runs on %q", got, tc.want)
 			}

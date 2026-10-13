@@ -16,8 +16,8 @@ import (
 	"github.com/spf13/viper"
 )
 
-// defaultPrefix 是未配置 prefix 时本 Mod 用的主题前缀（沿用 room 时代的名字）。
-const defaultPrefix = "roost.room"
+// defaultPrefix 是未配置 prefix 时本 Mod 用的主题前缀，与驱动缺省、生成配置一致；流名由它推出 ROOST_SYNC。
+const defaultPrefix = "roost.sync"
 
 // config 是 syncbus.* 的声明（维护者决定 A4 ①）。A4 ① 起只读 syncbus 段：旧的 room / sync 同名回退删除
 // （线上未部署，不做旧格式兼容）；拼错的键由 App 启动时的未知键告警与 doctor 报出（RR-20260926-12 的初衷）。
@@ -25,7 +25,7 @@ const defaultPrefix = "roost.room"
 type config struct {
 	app.ServiceIdentity
 	Transport      string        `config:"syncbus.transport" default:"nats" enum:"nats|jetstream|js" example:"jetstream" help:"服务间同步总线：nats 或 jetstream（持久投递）"`
-	Prefix         string        `config:"syncbus.prefix" default:"roost.room" example:"roost.sync" help:"主题前缀"`
+	Prefix         string        `config:"syncbus.prefix" default:"roost.sync" example:"roost.sync" help:"主题前缀"`
 	Stream         string        `config:"syncbus.stream" help:"JetStream 流名。不写由 prefix 推出（roost.sync -> ROOST_SYNC，zz.sync -> ZZ_SYNC），共用一个 NATS 的部署 prefix 不同流就不同；只在要沿用已有的流与 consumer 游标时写"`
 	Storage        string        `config:"syncbus.storage" enum:"file|memory" example:"file"`
 	AckWait        time.Duration `config:"syncbus.ack_wait" min:"0"`
@@ -92,9 +92,8 @@ func (m *SyncBusMod) Init(cfg *viper.Viper) error {
 }
 
 // JetStreamStreamFromConfig 返回本 Mod 按 cfg 启动 JetStream 时实际使用的流名，规则与 Init 相同：
-// 未写 prefix 时的缺省 roost.room、roost.room → ROOST_SYNC 的兼容映射、显式 stream 优先。生成工程的测试用它推期望流名（RR-20260927-35）：之前测试自己按
-// driver.JetStreamSyncStream(prefix) 推，漏了兼容映射，按迁移说明保留 prefix: roost.room 的工程
-// 期望 ROOST_ROOM、实际 ROOST_SYNC，测试误报失败。只读 cfg，不校验 transport。
+// 显式 stream 优先，否则由 prefix（未写时缺省 roost.sync）推出。生成工程的测试用它推期望流名，规则只有
+// 这一份（RR-20260927-35）。只读 cfg，不校验 transport。
 func JetStreamStreamFromConfig(cfg *viper.Viper) string {
 	var settings config
 	_ = app.LoadConfig(cfg, &settings) // 只推流名；写错的值由 Init 报出
@@ -102,14 +101,11 @@ func JetStreamStreamFromConfig(cfg *viper.Viper) string {
 }
 
 // jetStreamStream 决定 JetStream 流名（RR-20260926-56）：显式 stream 优先；否则由 prefix 派生，
-// 不同 prefix 的部署共用一个 NATS 时各有各的流。本 Mod 的缺省 prefix roost.room 与生成配置的
-// roost.sync 在修复前都落在 ROOST_SYNC 上，仍映射到 ROOST_SYNC，已部署的流与 durable 游标不变。
+// 不同 prefix 的部署共用一个 NATS 时各有各的流。没有按旧前缀的特例映射：沿用已有的流与 durable
+// 游标只能显式写 syncbus.stream。
 func jetStreamStream(configured, prefix string) string {
 	if configured != "" {
 		return configured
-	}
-	if prefix == defaultPrefix {
-		return driver.JetStreamSyncStream("")
 	}
 	return driver.JetStreamSyncStream(prefix)
 }

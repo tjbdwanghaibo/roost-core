@@ -392,7 +392,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "server_type", Kind: "string", Help: "服务类型，App 按启动的子命令写入"},
 		{Name: "sid", Kind: "int", Help: "服务实例号（正整数），同一服务类型内唯一；也可以用 --sid 覆盖"},
 		{Name: "syncbus.transport", Kind: "string", Default: "nats", Help: "服务间同步总线：nats 或 jetstream（持久投递）", Starter: true, Example: "jetstream", Enum: []string{"nats", "jetstream", "js"}},
-		{Name: "syncbus.prefix", Kind: "string", Default: "roost.room", Help: "主题前缀", Starter: true, Example: "roost.sync"},
+		{Name: "syncbus.prefix", Kind: "string", Default: "roost.sync", Help: "主题前缀", Starter: true, Example: "roost.sync"},
 		{Name: "syncbus.stream", Kind: "string", Help: "JetStream 流名。不写由 prefix 推出（roost.sync -> ROOST_SYNC，zz.sync -> ZZ_SYNC），共用一个 NATS 的部署 prefix 不同流就不同；只在要沿用已有的流与 consumer 游标时写"},
 		{Name: "syncbus.storage", Kind: "string", Starter: true, Example: "file", Enum: []string{"file", "memory"}},
 		{Name: "syncbus.ack_wait", Kind: "duration", Min: "0"},

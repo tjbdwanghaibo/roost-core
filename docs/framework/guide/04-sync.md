@@ -73,6 +73,8 @@ sync:
 
 ## 5. 服务间总线与流
 
+SyncBusMod 的主题前缀缺省 `roost.sync`，与驱动缺省、生成配置一致；JetStream 流名显式 `syncbus.stream` 优先，否则由前缀推出（`roost.sync` → `ROOST_SYNC`，`zz.sync` → `ZZ_SYNC`），共用一个 NATS 的不同前缀各有各的流。没有按旧前缀的特例映射：要沿用已有的流与 durable 游标只能显式写 `syncbus.stream`；新流与已有流的 subjects 重叠时启动明确失败，不静默换流。
+
 JetStream SyncBus 默认有限投递次数 5，不能宣称无限重试或绝不丢。topic 创建/退役期间拒绝冲突订阅，旧 consumer 和在途回调排空后才能重订。无 handler 准入不 ACK；业务错误与坏信封按各自规则结算。流容量、保留期限与次数上限均可能终止投递，恢复由快照或业务对账承担。
 
 syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。FileJournal 直接并发 Append 可合批，但单一 History.Record 的写锁串行化不能据此承诺每业务记录减少 fsync。订阅停止、回调排空、journal 生命周期须一起关闭。
