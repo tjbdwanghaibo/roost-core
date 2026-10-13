@@ -1,0 +1,45 @@
+round=1 side=before
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=true-10         	  450373	      2671 ns/op	    1455 B/op	      37 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi2/async=true-10         	  409340	      2943 ns/op	    1586 B/op	      41 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/groups1/async=true-10        	  352209	      3416 ns/op	    2072 B/op	      52 allocs/op
+PASS
+round=2 side=before
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=true-10         	  451435	      2625 ns/op	    1455 B/op	      37 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi2/async=true-10         	  447764	      2876 ns/op	    1634 B/op	      45 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/groups1/async=true-10        	  334285	      3753 ns/op	    2072 B/op	      52 allocs/op
+PASS
+round=3 side=before
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=true-10         	  390705	      3100 ns/op	    1456 B/op	      37 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi2/async=true-10         	  339672	      3292 ns/op	    1634 B/op	      45 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/groups1/async=true-10        	  293552	      3438 ns/op	    2073 B/op	      52 allocs/op
+PASS
+round=4 side=before
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=true-10         	  427050	      2725 ns/op	    1455 B/op	      37 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi2/async=true-10         	  410139	      3302 ns/op	    1634 B/op	      45 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/groups1/async=true-10        	  304888	      3815 ns/op	    2072 B/op	      52 allocs/op
+PASS
+round=5 side=before
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=true-10         	  481932	      2714 ns/op	    1455 B/op	      37 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi2/async=true-10         	  368748	      3030 ns/op	    1586 B/op	      41 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/groups1/async=true-10        	  347193	      3521 ns/op	    2040 B/op	      48 allocs/op
+PASS

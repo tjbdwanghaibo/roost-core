@@ -14,7 +14,7 @@
 
 ### framework
 
-- [framework/NEST-OPTIMIZATION.md](../framework/NEST-OPTIMIZATION.md)：Nest 热路径优化设计、诊断基线与分批验收（待实施）
+- [framework/NEST-OPTIMIZATION.md](../framework/NEST-OPTIMIZATION.md)：Nest 热路径优化设计、已保留改动及延期候选
 
 - [framework/PLAYER-ACCESS.md](../framework/PLAYER-ACCESS.md)：玩家协议、Controller、生成 Sender 与 Nest handler 实例
 
@@ -68,6 +68,7 @@
 
 - [performance/GATE-AOI.md](../performance/GATE-AOI.md)：Gate、Nest 与 Block AOI 性能验证
 - [performance/NEST-DISPATCH-BENCHMARK.md](../performance/NEST-DISPATCH-BENCHMARK.md)：Nest 共享调度与按 ID 分片的对照基准
+- [performance/NEST-HOT-PATH-20261013.md](../performance/NEST-HOT-PATH-20261013.md)：Nest 六项局部优化的分批对照、96 组矩阵、异常复核与配置入口修复
 - [performance/README.md](../performance/README.md)：性能验证与复跑
 - [performance/STABLE-v1.24.0.md](../performance/STABLE-v1.24.0.md)：v1.24.0 稳定版性能验收
 

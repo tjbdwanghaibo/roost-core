@@ -1,6 +1,6 @@
 # Nest 消息热路径优化设计
 
-本文说明 Nest 下一阶段如何减少每条消息的框架开销，供后续实施和验收使用。**状态：分批实施中。分组展开预分配已实现并验证，其他候选以下文实施记录为准。**
+本文说明 Nest 如何减少每条消息的框架开销。**状态：本轮六项局部优化已实施；目标视图缓存与指标预绑定明确延期，未引入相应缓存。最终选择与证据见第 8 节及 [性能报告](../performance/NEST-HOT-PATH-20261013.md)。**
 
 评估日期：2026-10-13。源码基线：`fd13e178`。此前 `58d27e7a` 已完成 Msg 字段整理与客户端目标存储优化，不属于本次待实施内容，详情见 [Nest 三池与 Await](NEST-AWAIT.md)。
 
@@ -134,7 +134,7 @@ go tool pprof -top -alloc_space artifacts/nest-review-20261013/nest.test.exe art
 2. 第二批：根据新的 profile 判断指标与上下文的剩余占比，再分别实施。
 3. 第三批：多实体临时存储、重复前驱边去重，各自证明收益再保留。
 
-每批都更新本文的实施状态、最终选择、验证命令、完整结果和未验证边界。第一批的分组预分配已完成；目标视图复用、第二批与第三批仍在评估。
+各批的最终选择、验证命令、完整结果和未验证边界见第 8 节。第一批保留分组预分配，第二批保留上下文局部优化，第三批保留临时存储与前驱边优化；目标视图复用与指标预绑定延期。
 
 无公开格式变化时，回退以撤销对应批次提交为主，不需要数据迁移。不用生产配置开关长期维护两套内部状态机；对照实现可留在基准中。若出现顺序、Guard、释放责任或上下文隔离退化，优先回退，不能用扩大队列、增加 worker 或放宽测试掩盖。
 
@@ -148,8 +148,10 @@ go tool pprof -top -alloc_space artifacts/nest-review-20261013/nest.test.exe art
 
 第二批保留两项局部改动：`ensureNestContext` 直接传 Snapshot option，避免临时可增长切片导致闭包逃逸；`pushCurrentNestDispatchMsg` 遇到同 goroutine 的同消息只省登记，不省 fctx、Guard 或事务作用域。新增同消息/不同消息嵌套与 panic 恢复回归，既有 Context、Await、Remote 和阻塞约束用例通过 5 轮。见 [分配采样](../performance/benchmarks/nest-hot-path-20261013/alloc-profile.txt) 与 [上下文样本](../performance/benchmarks/nest-hot-path-20261013/context.txt)。
 
-指标预绑定明确延期：新采样仍显示指标编码分配，但公共 Registry 目前无绑定句柄接口，Reset、series 限额及动态标签需要一并设计。不能为本轮 Nest 优化另建全局句柄缓存。目标业务视图的跨准入缓存也暂不引入：现有直接 Msg、Clone、重排、广播和续行的校验阶段不同，`normalizeFullIDs` 本次只占约 1.42% 分配字节；先保留显式校验，不用跳过校验换取收益。这两项是候选延期，不能表述为已完成缓存复用。
+指标预绑定明确延期：新采样仍显示指标编码分配，但公共 Registry 目前无绑定句柄接口，Reset、series 限额及动态标签需要一并设计。不能为本轮 Nest 优化另建全局句柄缓存。目标视图缓存（包括慢准备、Cast 复用）也暂不引入：现有直接 Msg、Clone、重排、广播和续行的校验阶段不同，`normalizeFullIDs` 本次只占约 1.42% 分配字节；先保留显式校验，不用跳过校验换取收益。这两项是候选延期，不能表述为已完成缓存复用。
 
 第三批临时存储保留两项：锁列表与 Touch 列表一次分配、切成容量不重叠的区间；分组快照在取锁调用栈内用 4 项数组，大集合按需扩容，重试重新采集，不进入 release 闭包、不引入对象池。Group/Multi/Touch/Release/Cast 回归重复 5 轮通过。四实体异步热点样本在上下文批次基础上减少 192 B/op、2 allocs/op，见 [临时存储样本](../performance/benchmarks/nest-hot-path-20261013/storage.txt)。
 
 第三批前驱边保留去重：共享队列锁内，同一前驱在本次准入追加的最后后继必为当前 job，因此不需要 map 或额外前驱数组；准入容量先判断是否存在前驱，接受后一起登记边和计数。新增交错 ID 的双前驱合流及后继分流回归，跨业务池、慢池及 Remote 排空既有用例通过 5 轮。8 worker、32 组热点异步样本由 25374 B/op、53 allocs/op 降到 22901 B/op、45 allocs/op；中位时间 28013→25705 ns/op。独立实体异步 32 组时间约有 2.2% 波动、分配基本不变，不能宣称所有场景提速。见 [去重前](../performance/benchmarks/nest-hot-path-20261013/edges-before.txt) / [去重后](../performance/benchmarks/nest-hot-path-20261013/edges-after.txt)。
+
+最终 build、vet、全仓默认测试、相关 race 和根包文档检查通过。全仓回归同时发现并修复了已有 Nest 配置绕过声明入口的问题，未豁免守卫。96 组矩阵各保留 5 个样本；首次单 worker 双实体慢样本保留，交替二进制复核未复现稳定退化。详见 [最终报告](../performance/NEST-HOT-PATH-20261013.md)。本轮未复跑 15 分钟游戏混合负载，未关闭此前网络长尾及跨机验证限制。

@@ -1,0 +1,4 @@
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	3.638s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/nest	2.661s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/fctx	1.993s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	3.129s
