@@ -18,7 +18,7 @@ func TestHelpCatalogIsCompleteAndUnique(t *testing.T) {
 	names := helpTopicNames()
 	for _, required := range []string{
 		"environment", "beginner", "project", "versions", "framework-release", "generate", "add", "mods", "dao", "entity", "nest",
-		"access", "transport", "lifecycle", "endpoint", "skill", "protocol", "cfggen", "tablegen", "eventgen", "attribute", "webroute",
+		"access", "transport", "lifecycle", "endpoint", "skill", "protocol", "cfggen", "tablegen", "attribute", "webroute",
 		"errcode", "saga", "replication", "config", "id", "format", "deploy",
 	} {
 		if !contains(names, required) {

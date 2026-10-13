@@ -20,7 +20,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/entity"
 	codeerr "github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode"
-	"github.com/tjbdwanghaibo/roost-core/codegen/internal/eventgen"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/nest"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/registry"
@@ -86,13 +85,6 @@ func generatorsFor(m Manifest, force bool) []generator {
 	return []generator{
 		{Feature: "dao", Name: "dao", Prefixes: []string{"db/def/"}, Run: func(root string, w io.Writer) error {
 			return dao.Run(forceArg([]string{"-def", under(root, dao.DefaultDefDir), "-out", under(root, dao.DefaultOutDir)}, force), w)
-		}},
-		{Feature: "event", Name: "event", Prefixes: []string{"framework/event/def/"}, Run: func(root string, w io.Writer) error {
-			args := forceArg([]string{"-def", under(root, eventgen.DefaultDefDir), "-out", under(root, eventgen.DefaultOutDir)}, force)
-			if info, err := os.Stat(under(root, "game")); err == nil && info.IsDir() {
-				args = append(args, "-game", under(root, "game"))
-			}
-			return eventgen.Run(args, w)
 		}},
 		{Feature: "errcode", Name: "errcode", Prefixes: []string{"game/", "internal/", "service/"}, Run: func(root string, w io.Writer) error {
 			return codeerr.Run([]string{"-root", root, "-out", under(root, codeerr.DefaultOutFile)}, w)

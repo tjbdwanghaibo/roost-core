@@ -270,7 +270,7 @@ func runGenerate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 
 func runAdd(args []string, stdout, stderr io.Writer) error {
 	if len(args) < 2 {
-		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|event|table|dao|webroute|errcode|saga|rpc> <name> [flags]")
+		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|rpc> <name> [flags]")
 	}
 	fs := flag.NewFlagSet("add "+args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -297,7 +297,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		"protocol": {"root", "group", "handler", "id"}, "entity": {"root", "id"},
 		"component": {"root", "entity", "id"}, "handler": {"root", "entity", "component"},
 		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler"},
-		"skill": {"root"}, "event": {"root"}, "table": {"root"}, "dao": {"root", "entity"},
+		"skill": {"root"}, "table": {"root"}, "dao": {"root", "entity"},
 		"webroute": {"root"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps"},
 		"rpc": {"root", "service"},
 	}

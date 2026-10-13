@@ -159,7 +159,6 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
       configs/data/
       protocol/def/
       game/
-      event/def/
       db/def/
       deploy/dev/docker-compose.yaml
       .github/workflows/ci.yml
@@ -199,7 +198,6 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
       - config
       - entity
       - nest
-      - event
       - dao
       - errcode
 
@@ -252,7 +250,6 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `config` ✦ | `configs/schema/`、`configs/generated/`、`configs/data/`（含 `_manifest.json`） | tablegen 三连：`config-template`（meta → CSV 模板）、`config-data`（CSV → JSON）、`config-go`（meta → struct + 注册 + 类型化访问器）；与 `configdata` mod 同时存在时 bootstrap 自动调 `RegisterGeneratedConfigData` |
 | `entity` ✦ | `game/entities/` | entity 生成器（`-dir ./game`） |
 | `nest` ✦ | `game/handler/`、`game/bootstrap/register.go` | nest 生成器；bootstrap 里插入 `gamebootstrap.RegisterNestHandlers()` |
-| `event` ✦ | `event/def/`、`event/` | event 生成器（存在 `./game` 目录时联动） |
 | `dao` ✦ | `db/def/`、`db/` | dao 生成器 |
 | `errcode` ✦ | — | errcode 扫描器，产出 `docs/generated/errcode.csv` |
 | `attribute` | `game/gameplay/attribute/` | attribute 生成器 |
@@ -260,7 +257,7 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `saga` | — | 无独立生成器——由 `make new-saga`（`roost add saga`）**自动追加**的标记；saga 骨架由 add 命令生成，bootstrap 聚合各 `Definitions()`。要求至少一个 Service 挂 `saga` mod，且 core/kit >= v1.4.0 |
 | `nettransport-quic` / `nettransport-kcp` / `nettransport-udp` | `internal/transport/generated.go` | 生成 `NewQUIC()` / `NewKCP()` / `NewUDP()`（AsyncTransport 组装）与 `NewRoomSink` 房间下发接线（见第 16 节）；三者可并选，要求 kit >= v1.1.0 |
 
-✦ = `roost project new` 不传 `-features` 时的默认七项：`protocol, config, entity, nest, event, dao, errcode`。
+✦ = `roost project new` 不传 `-features` 时的默认六项：`protocol, config, entity, nest, dao, errcode`。
 
 ## 5. Kit Mod 自动装配
 
@@ -310,7 +307,6 @@ Core 会根据 DependsOn 排序生命周期。生成器负责补齐必需依赖�
     roost add endpoint UseItem --handler inventory
     roost add lifecycle Player --service game
     roost add skill Fireball
-    roost add event PlayerLogin
     roost add table Item
     roost add dao Player --entity Player
     roost add webroute AdminQuery

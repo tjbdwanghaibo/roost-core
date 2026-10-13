@@ -5,7 +5,7 @@
 目录已按 [分类方案](PACKAGE-REORGANIZATION.md)迁到 Framework、Infra、Gameplay、Service 与 Wiring。领域实现统一在 service；wiring 负责配置与启动接线，不保留旧 kit 或领域 alias。Gate 的实现进度见 [Gate 方案](GATEWAY-IMPLEMENTATION.md)。
 
 <details>
-<summary>展开171个包目录的职责映射</summary>
+<summary>展开168个包目录的职责映射</summary>
 
 | 包路径 | 主说明 | 实现文件 | 测试文件 |
 | --- | --- | ---: | ---: |
@@ -18,7 +18,6 @@
 | [codegen/cmd/dao](../../codegen/cmd/dao) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 1 | 0 |
 | [codegen/cmd/entity](../../codegen/cmd/entity) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 1 | 0 |
 | [codegen/cmd/errcode](../../codegen/cmd/errcode) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 1 | 0 |
-| [codegen/cmd/eventgen](../../codegen/cmd/eventgen) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 1 | 0 |
 | [codegen/cmd/nest](../../codegen/cmd/nest) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 1 | 0 |
 | [codegen/cmd/project](../../codegen/cmd/project) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 1 | 0 |
 | [codegen/cmd/protocol](../../codegen/cmd/protocol) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 1 | 0 |
@@ -31,7 +30,6 @@
 | [codegen/internal/dao](../../codegen/internal/dao) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 8 | 10 |
 | [codegen/internal/entity](../../codegen/internal/entity) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 8 | 16 |
 | [codegen/internal/errcode](../../codegen/internal/errcode) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 1 | 4 |
-| [codegen/internal/eventgen](../../codegen/internal/eventgen) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 6 | 7 |
 | [codegen/internal/genutil](../../codegen/internal/genutil) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 2 | 0 |
 | [codegen/internal/marker](../../codegen/internal/marker) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 2 | 2 |
 | [codegen/internal/nest](../../codegen/internal/nest) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 5 | 10 |
@@ -57,7 +55,6 @@
 | [framework/dataengine](../../framework/dataengine) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 10 | 10 |
 | [framework/dataengine/engine](../../framework/dataengine/engine) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 18 | 41 |
 | [framework/entity](../../framework/entity) | [核心：Nest 调度与实体](impl/02-nest-entity.md) | 28 | 46 |
-| [framework/event](../../framework/event) | [核心：Nest 调度与实体](impl/02-nest-entity.md) | 4 | 1 |
 | [framework/hotcode](../../framework/hotcode) | [配置、数据表与热更](impl/07-config.md) | 4 | 8 |
 | [framework/hotcode/plugintest](../../framework/hotcode/plugintest) | [公共基础设施](impl/14-foundation.md) | 0 | 3 |
 | [framework/manager](../../framework/manager) | [App 与生命周期](impl/01-app-lifecycle.md) | 2 | 9 |

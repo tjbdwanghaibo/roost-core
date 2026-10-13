@@ -10,7 +10,7 @@
 
 ## 1. 实现边界
 
-`framework/nest`、`framework/entity`、`gameplay/actionflow`、`infra/base/fctx`、`infra/base/lock`、`infra/base/worker`、`infra/base/goroutine`、`framework/event`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`framework/nest`、`framework/entity`、`gameplay/actionflow`、`infra/base/fctx`、`infra/base/lock`、`infra/base/worker`、`infra/base/goroutine`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
@@ -94,17 +94,6 @@
 | [sync_frozen.go](../../../framework/entity/sync_frozen.go) | 函数/方法或内部实现；见源码 |
 | [sync_view.go](../../../framework/entity/sync_view.go) | `SyncView`、`SyncViewSet`、`NamedSyncView` |
 | [unload_resync.go](../../../framework/entity/unload_resync.go) | `UnloadedSubjectSync`、`UnloadResyncConfig`、`UnloadResyncStats` |
-
-### event
-
-4 个实现文件、1 个测试文件。
-
-| 源码 | 导出类型（定位用） |
-| --- | --- |
-| [event.go](../../../framework/event/event.go) | `EventType`、`EventGroupType`、`EventData` |
-| [event_bus.go](../../../framework/event/event_bus.go) | `EventBus` |
-| [event_handler.go](../../../framework/event/event_handler.go) | `EventHandler`、`AsyncDispatcher` |
-| [event_mgr.go](../../../framework/event/event_mgr.go) | `EventUnit`、`EventMgr` |
 
 ### fctx
 
@@ -210,10 +199,6 @@
 - [remote_snapshot_write_guard_test.go](../../../framework/entity/remote_snapshot_write_guard_test.go)：`TestRemoteSnapshotCacheWritesStayInTheListedFunctions`
 - [subject_sync_test.go](../../../framework/entity/subject_sync_test.go)：`TestFrozenSyncPayloadOwnership`、`TestSubjectSyncPrepareCommitProfiles`、`TestSubjectSyncReclaimsAbandonedPrepare`、`TestSubjectSyncAbortAndConcurrentDirty`、`TestSubjectSyncSnapshotDoesNotAdvanceVersion`；其余 7 项见文件
 - [unload_resync_test.go](../../../framework/entity/unload_resync_test.go)：`TestUnloadReloadsSubscribedSubjectFromAuthority`、`TestUnloadWithoutSubscribersDoesNotReload`、`TestUnloadRetractsWhenAuthorityHasNoEntity`、`TestUnloadRetractsAfterBoundedReloadFailures`、`TestUnloadResyncSharesTheLoadWithConcurrentAccess`；其余 5 项见文件
-
-### event
-
-- [event_test.go](../../../framework/event/event_test.go)：`TestEventMgr_PubSub`、`TestEventMgr_AsyncDispatch`、`TestEventMgr_Unsub`、`TestEventMgr_MultiGroup`、`TestEventBus`；其余 1 项见文件
 
 ### fctx
 

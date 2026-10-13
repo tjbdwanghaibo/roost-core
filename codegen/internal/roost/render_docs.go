@@ -307,7 +307,6 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
       - config
       - entity
       - nest
-      - event
       - dao
       - errcode
       - nettransport-quic

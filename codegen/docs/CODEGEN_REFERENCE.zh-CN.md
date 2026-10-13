@@ -20,7 +20,7 @@ roost help all              # 全部专题
 roost <command> --help      # 上下文帮助
 ```
 
-可查询的 capability：`environment`、`beginner`、`project`、`versions`、`framework-release`、`generate`、`add`、`mods`、`access`、`transport`、`lifecycle`、`endpoint`、`skill`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`eventgen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。专题输出统一包含用途、命令、配置/marker 和可复制的最小示例。
+可查询的 capability：`environment`、`beginner`、`project`、`versions`、`framework-release`、`generate`、`add`、`mods`、`access`、`transport`、`lifecycle`、`endpoint`、`skill`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。专题输出统一包含用途、命令、配置/marker 和可复制的最小示例。
 
 框架发布维护者使用 `roost framework verify` 校验 `ci/framework-release.yaml` 的精确版本集合并生成 `framework-lock.json`。该命令拒绝 `latest`、replace 和框架内部伪版本依赖；具体发布顺序与 GitHub Environment 配置见 `docs/CI_CD_IMPLEMENTATION.zh-CN.md`。
 
@@ -153,7 +153,6 @@ roost add handler use_item --entity player --component inventory
 roost add endpoint use_item --handler inventory
 roost add lifecycle player --service game
 roost add skill fireball
-roost add event player_level_up
 roost add table monster
 roost add dao player --entity player
 roost add webroute gm_query
@@ -484,34 +483,7 @@ CSV 前四行依次为字段名、标题、类型和规则；转换会校验规�
 
 **只读 v2 manifest**：`_manifest.json` 存在时版本必须是 2。v1（v1.17.2 及更早生成的工程，`tables` 恒空、没有归属记录）不再读取，转换与 `roost generate` 的 config-data 判断都报 `table manifest … is version 1, which is no longer read`；其它版本报 `unsupported table manifest version N`。一次性清理：删掉 v1 的 `_manifest.json`，同时删掉目录里由旧生成器写出、meta 已不存在的 JSON，手写 JSON 保留，再运行一次生成——新 manifest 只登记本轮输出，留下的未登记文件按手写数据永久保留。
 
-## 10. eventgen
-
-事件定义中所有 `Event` 前缀 struct 都会进入生成：
-
-```go
-package eventdef
-
-type EventPlayerLevelUp struct {
-    PlayerID int64
-    Level    int32
-}
-```
-
-接收者只写约定方法：
-
-```go
-func (p *Player) DealEventPlayerLevelUp(e *event.EventPlayerLevelUp) {}
-```
-
-```bash
-go run .../cmd/eventgen@latest \
-  -def ./framework/event/def -out ./framework/event -pkg event \
-  -game ./game -eventpkg example.com/planet/event
-```
-
-产物包括事件定义、EventType、`Type()` 实现和接收者订阅/分发代码。方法名与参数类型不匹配会生成期失败。
-
-## 11. attribute
+## 10. attribute
 
 ```go
 //roost:attribute index=1 max=64
@@ -549,7 +521,7 @@ Go 不允许给外包类型定义方法，做成函数别名才成立。
 派生公式出现环、未知字段或重复输出时生成失败。`scripts/attribute-runtime.sh` 把脚手架的 runtime、真实 profile 与生成物放进临时模块，
 对着钉住的 core 编译并跑一遍（类型化 setter / dirty / 公式 / 元数据 / 导入导出 / 快照隔离）。
 
-## 12. webroute
+## 11. webroute
 
 ```go
 //roost:web method=POST path=/gm/player body=json
@@ -569,7 +541,7 @@ go run .../cmd/webroute@latest -dir ./service/web
 
 生成 `RegisterRoutes`。JSON 模式只接受一个完整 JSON 文档并统一返回 400 解码错误；raw 模式保留原始 body。是否拒绝未知 JSON 字段由 `roost-core/webroute.DecodeJSON` 的版本契约决定。重复 method/path、非法 body mode 或 handler 签名直接失败。
 
-## 13. errcode
+## 12. errcode
 
 ```go
 var ErrItemNotFound = errcode.Define(100001, "item_not_found", "item not found")
@@ -587,7 +559,7 @@ roost id next -group game protocol
 roost id check
 ```
 
-## 14. 配置、格式和生产门禁
+## 13. 配置、格式和生产门禁
 
 ```bash
 roost config check --service game
@@ -613,14 +585,13 @@ roost format check
 | `protocol` | `-def` | `-proto`、`-pb`、`-msgid`、`-bind`、`-handlers`、`-robot-protocol`、`-manifest` | `-reverse-proto`、`-reverse-out`、`-reverse-package`、`-force` |
 | `cfggen` | `-meta`（默认 `./configs/schema/cfg.yaml`） | `-out`（默认 `./cfg`）、`-pkg` | 无 |
 | `tablegen` | `-meta` | `-out`、`-pkg`、`-csv-template`、`-json` | `-csv`、`-check`、`-force` |
-| `eventgen` | `-def`、`-game` | `-out`、`-pkg`、`-eventpkg` | `-force` |
 | `attribute` | `-dir` | `-output` | `-force` |
 | `webroute` | `-dir` | 按源目录生成 | `-force` |
 | `errcode` | `-root` | `-out` | 无 |
 
 任何独立命令均可加 `-h` 查看当前版本的权威默认值。生产工程优先把这些参数写进 `roost.yaml` 后使用 `roost generate`，避免开发机与 CI 命令漂移。
 
-## 15. 常见问题
+## 14. 常见问题
 
 - **entity 生成代码访问 `dao.Tracker` 编译失败**：使用 v1.7.0 重新生成；新模板调用 `DirtyTracker()`。DAO 与 Entity 必须由同一代 codegen 重新生成。
 - **`go mod tidy` 删除 skill**：新项目的 `internal/frameworkdeps/generated.go` 用类型别名固定 skill module。
@@ -630,7 +601,7 @@ roost format check
 - **直接修改 DAO 字段不再编译**：这是预期保护，改用生成 getter/mutator；不得为了兼容重新导出存储字段。
 - **跨平台 golden 误报**：v1.7.0 只规范化 CRLF/LF，其他模板内容仍完整比较。
 
-## 16. 推荐的日常闭环
+## 15. 推荐的日常闭环
 
 ```bash
 roost add entity player

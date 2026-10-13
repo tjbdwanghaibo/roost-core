@@ -12,7 +12,6 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/dao"
 	codeerr "github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode"
-	"github.com/tjbdwanghaibo/roost-core/codegen/internal/eventgen"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/tablegen"
 )
@@ -23,8 +22,6 @@ func TestOrchestratorDoesNotRepeatGeneratorDefaultPaths(t *testing.T) {
 	shared := map[string]string{
 		dao.DefaultDefDir:                "dao.DefaultDefDir",
 		dao.DefaultOutDir:                "dao.DefaultOutDir",
-		eventgen.DefaultDefDir:           "eventgen.DefaultDefDir",
-		eventgen.DefaultOutDir:           "eventgen.DefaultOutDir",
 		codeerr.DefaultOutFile:           "codeerr.DefaultOutFile",
 		protocol.DefaultDefDir:           "protocol.DefaultDefDir",
 		protocol.DefaultBindDir:          "protocol.DefaultBindDir",

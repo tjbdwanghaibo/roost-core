@@ -27,7 +27,6 @@ cfggen 的 schema 字段级参考见 [CFGGEN_META](docs/CFGGEN_META.zh-CN.md)；
 | `protocol` | `protocol/def` 下的 `//x:proto` `//x:protocol` `//x:msg` `//x:view` 标记 | `.proto`、pb Go 代码、msgid、player_bind、协议 handler、robot 注册表、协议 manifest | 用 Go struct 单一来源维护协议，也支持从 `.proto` 反向生成（`-reverse-proto`） |
 | `entity` | `//roost:entity entityKind=...` | `<entity>_gen_wire.go` | Entity 工厂、组件/DAO 装配、Snapshot、hook 接线 |
 | `nest` | `//roost:nest target=... [sync] [rollback=state\|undo] [durability=memory\|async\|strict]` | `<source>_nest_gen.go`、`sender/`、`syncsender/`、`game/bootstrap/nest.go` | handler 的 invoke 包装、显式注册与可注入的类型化 Sender |
-| `eventgen` | `event/def` 下 `Event` 前缀 struct + game 目录中 `DealEventXXX` 方法 | `event_def_gen.go`、`event_type_gen.go`、`event_type_impl_gen.go`、`<receiver>_event_gen.go` | 事件类型常量、`Type()` 实现与订阅分发代码 |
 | `tablegen` | `configs/schema` 下 `//roost:table`、`//roost:object`（Go 元数据先行） | Go 访问代码（`configs/generated`）、CSV 模板、CSV→JSON 数据 | 配置表 schema、策划填表模板与运行时数据的一致性 |
 | `cfggen` | 一个 YAML schema 文件（**meta 文件先行**，类似简化版 Luban）：表/对象/bean、字段类型、key/index/ref | 单文件 Go 绑定（行 struct 带 `cfg` tag、`RegisterGeneratedConfigData`、类型化访问器） | 配置定义零手写 Go：只写 meta + 一行注册；ref 在生成期查表存在性与类型一致、运行期由 configdata 查悬空引用 |
 | `attribute` | `//roost:attribute` | `gen_<profile>_attribute.go` | 属性 profile 的计算/聚合代码 |
@@ -158,7 +157,7 @@ roost project deps --help     # 等价于 roost help versions
 roost add dao --help          # 等价于 roost help dao
 ```
 
-内置专题包括：`environment`、`beginner`、`project`、`versions`、`framework-release`、`generate`、`add`、`mods`、`access`、`transport`、`lifecycle`、`endpoint`、`skill`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`eventgen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。常用别名也可查询，例如 `roost help start`、`roost help release-train`、`roost help player-tcp`、`roost help protocol-to-nest`、`roost help k8s`。
+内置专题包括：`environment`、`beginner`、`project`、`versions`、`framework-release`、`generate`、`add`、`mods`、`access`、`transport`、`lifecycle`、`endpoint`、`skill`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。常用别名也可查询，例如 `roost help start`、`roost help release-train`、`roost help player-tcp`、`roost help protocol-to-nest`、`roost help k8s`。
 
 专题输出固定包含四部分：用途、命令、配置/标记和示例。未知能力会失败并提示先运行 `roost help`，适合脚本和 CI 发现拼写错误。
 

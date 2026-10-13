@@ -7,7 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/event"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
 )
 
@@ -41,10 +40,8 @@ type EntityBase struct {
 	// checkpoint 与 sync 不得持久化或分发 LSN 高于 committer 持久水位的状态。0 表示没有 pipelined 事务修改过它。
 	lastCommitLSN atomic.Uint64
 
-	// eventBus 提供实体级的事件订阅 / 发布。
-	eventBus *event.EventBus
-	syncMu   sync.RWMutex
-	sync     *SubjectSyncState
+	syncMu sync.RWMutex
+	sync   *SubjectSyncState
 
 	// 生命周期 hook，由生成的实体工厂代码设置。
 	onClear   func()
@@ -113,25 +110,6 @@ func NewEntityBaseWithMutex(id int64, category EntityCategory, notAutoPersist bo
 func (e *EntityBase) SetHooks(onClear func(), onDestroy func(EntityDestroyReason)) {
 	e.onClear = onClear
 	e.onDestroy = onDestroy
-}
-
-// EventBus 返回实体的事件总线。
-func (e *EntityBase) EventBus() *event.EventBus {
-	return e.eventBus
-}
-
-// SubEvent 经实体的事件总线订阅事件类型。
-func (e *EntityBase) SubEvent(eventType event.EventType) {
-	if e.eventBus != nil {
-		e.eventBus.SubEvent(eventType)
-	}
-}
-
-// PubEvent 经实体的事件总线发布事件。
-func (e *EntityBase) PubEvent(d event.EventData) {
-	if e.eventBus != nil {
-		e.eventBus.PubEvent(d)
-	}
 }
 
 // EnableSync 装配实体级同步状态。它有意不是组件：同步可见性与脏数据刷新属于实体的基础生命周期。
@@ -384,7 +362,7 @@ func (e *EntityBase) ClearBase() {
 	}
 }
 
-// doClear 执行清理：依次调用 onClear、销毁事件总线、关闭同步状态（各自恢复 panic），清零身份与锁组状态；
+// doClear 执行清理：依次调用 onClear、关闭同步状态（各自恢复 panic），清零身份与锁组状态；
 // 全部完成后重新抛出第一个 panic。
 func (e *EntityBase) doClear() {
 	var firstPanic any
@@ -402,11 +380,6 @@ func (e *EntityBase) doClear() {
 	onClear := e.onClear
 	e.onClear = nil
 	runCleanup(onClear)
-	eventBus := e.eventBus
-	e.eventBus = nil
-	if eventBus != nil {
-		runCleanup(eventBus.Destroy)
-	}
 	e.syncMu.Lock()
 	syncState := e.sync
 	e.sync = nil

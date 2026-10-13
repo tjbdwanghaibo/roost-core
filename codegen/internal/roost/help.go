@@ -70,7 +70,7 @@ roost project next [--workflow first-business|player-tcp]
 roost project doctor --workflow first-business
 roost project upgrade [--root dir] [--dry-run] [--skip-deps] [-core version]
 make project-upgrade`,
-		Configuration: `-module 必填，防止项目意外使用框架作者的仓库命名空间。默认 -out=<name>、-services=game、features=protocol,config,entity,nest,event,dao,errcode；不传 -mods 时启用除 saga 外的生产基础 Mod，新手建议显式使用 -mods configdata。-template game 是可选的起步形态：account、chat、mail、match、session、activity、global、platform、rank 九个框架服务各作为独立子命令托管（services.<name>.framework），第一个业务 Service 通过 services.<name>.uses 拿到它们的 ClientMod 与类型化访问器，并带 nest 运行时、Player 与 World 两个 Entity 及其 lifecycle；World 是进程内单例（game/lifecycle/world_singleton.go 的 EnsureWorld，Service.Init 里确保存在）；托管服务的协作者（身份校验、投递、频道策略……）在 internal/service/<name>/collaborators.go 里，默认全部拒绝，需要项目自己实现。-template game-demo 在 game 之上再生成一条可运行的写入链路：Player 带 Profile / Bag 两个组件与 PlayerDao 持久化字段，一个 //roost:nest rollback=undo durability=strict 的加道具事务，以及 player TCP 接入与对应协议 / 端点。组件方法、DAO 字段、handler、协议定义和 auth.go 都是业务文件：生成一次，之后 sync / upgrade 不再改写，直接在上面改。其中 game-demo 的 auth.go 只认 session:<id>:<token> 并通过 account 校验，普通接入骨架默认拒绝；上线前须实现身份协作者。demo 源码在本仓 demo/ 目录，按生成后的路径原样存放。project next 根据项目真实文件计算进度，只给一个当前动作，不会替业务决定字段或生成 preset；默认先完成 first-business，再进入可选 player-tcp。项目声明位于 roost.yaml。sync 在同级临时副本完成全部生成和所有权预检后提交；失败回滚已写文件，并拒绝覆盖提交期间发生的并发修改。upgrade 只覆盖 codegen 受控文件，以及应用配置里未手改、随 Mod 计划刷新的生成 shutdown: 块；project diff 与 upgrade --dry-run 会列出这些文件（生成器输出用 roost generate --check 检查）。`,
+		Configuration: `-module 必填，防止项目意外使用框架作者的仓库命名空间。默认 -out=<name>、-services=game、features=protocol,config,entity,nest,dao,errcode；不传 -mods 时启用除 saga 外的生产基础 Mod，新手建议显式使用 -mods configdata。-template game 是可选的起步形态：account、chat、mail、match、session、activity、global、platform、rank 九个框架服务各作为独立子命令托管（services.<name>.framework），第一个业务 Service 通过 services.<name>.uses 拿到它们的 ClientMod 与类型化访问器，并带 nest 运行时、Player 与 World 两个 Entity 及其 lifecycle；World 是进程内单例（game/lifecycle/world_singleton.go 的 EnsureWorld，Service.Init 里确保存在）；托管服务的协作者（身份校验、投递、频道策略……）在 internal/service/<name>/collaborators.go 里，默认全部拒绝，需要项目自己实现。-template game-demo 在 game 之上再生成一条可运行的写入链路：Player 带 Profile / Bag 两个组件与 PlayerDao 持久化字段，一个 //roost:nest rollback=undo durability=strict 的加道具事务，以及 player TCP 接入与对应协议 / 端点。组件方法、DAO 字段、handler、协议定义和 auth.go 都是业务文件：生成一次，之后 sync / upgrade 不再改写，直接在上面改。其中 game-demo 的 auth.go 只认 session:<id>:<token> 并通过 account 校验，普通接入骨架默认拒绝；上线前须实现身份协作者。demo 源码在本仓 demo/ 目录，按生成后的路径原样存放。project next 根据项目真实文件计算进度，只给一个当前动作，不会替业务决定字段或生成 preset；默认先完成 first-business，再进入可选 player-tcp。项目声明位于 roost.yaml。sync 在同级临时副本完成全部生成和所有权预检后提交；失败回滚已写文件，并拒绝覆盖提交期间发生的并发修改。upgrade 只覆盖 codegen 受控文件，以及应用配置里未手改、随 Mod 计划刷新的生成 shutdown: 块；project diff 与 upgrade --dry-run 会列出这些文件（生成器输出用 roost generate --check 检查）。`,
 		Example: `roost project new planet -module example.com/planet -services game,gate
 cd planet
 roost project next
@@ -122,7 +122,7 @@ roost generate --check`,
 	{
 		Name: "add", Aliases: []string{"scaffold"},
 		Summary:       "生成业务骨架并分配需要的 ID",
-		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|event|table|dao|webroute|errcode|saga|rpc> <name> [flags]`,
+		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|table|dao|webroute|errcode|saga|rpc> <name> [flags]`,
 		Configuration: `通用参数：--root、--service、--mods、--steps、--group、--id；Component/DAO 可用 --entity 自动接入所属 Entity；protocol 用 --handler 选择 controller domain；endpoint 用 --handler、--protocol、--nest-handler 接线；handler 使用 --entity 和 --component 生成正确 Nest 锁目标。骨架文件归业务所有，不会被 project sync 覆盖；创建后运行 roost generate。`,
 		Example: `roost add entity player
 roost add component profile --entity player
@@ -273,15 +273,6 @@ type Monster struct {
     ID   int32  ` + "`csv:\"id\" json:\"id\" required:\"true\" unique:\"true\"`" + `
     Name string ` + "`csv:\"name\" json:\"name\"`" + `
 }`,
-	},
-	{
-		Name: "eventgen", Aliases: []string{"event", "events"},
-		Summary:       "生成事件类型、Type 方法以及接收者订阅/分发代码",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/eventgen@latest -def ./framework/event/def -out ./framework/event -pkg event -game ./game -eventpkg <module>/event [-force]`,
-		Configuration: `定义目录中 Event 前缀 struct 会进入生成。业务接收者实现 DealEventXxx(*event.EventXxx)；签名不匹配在生成期失败。`,
-		Example: `type EventPlayerLevelUp struct { PlayerID int64; Level int32 }
-
-func (p *Player) DealEventPlayerLevelUp(e *event.EventPlayerLevelUp) {}`,
 	},
 	{
 		Name: "attribute", Aliases: []string{"attr", "attributes"},

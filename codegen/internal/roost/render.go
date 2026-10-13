@@ -158,7 +158,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	}
 	featurePackages := map[string]string{
 		"protocol": "protocol/def/doc.go", "entity": "game/entities/doc.go", "nest": "game/handler/doc.go",
-		"event": "framework/event/def/doc.go", "dao": "db/def/doc.go", "attribute": "game/gameplay/attribute/doc.go",
+		"dao": "db/def/doc.go", "attribute": "game/gameplay/attribute/doc.go",
 		"webroute": "service/web/doc.go",
 	}
 	for feature, path := range featurePackages {
@@ -196,11 +196,6 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	}
 	if hasFeature(m, "dao") {
 		if err := addGo("db/doc.go", "package db\n", false); err != nil {
-			return nil, err
-		}
-	}
-	if hasFeature(m, "event") {
-		if err := addGo("framework/event/doc.go", "package event\n", false); err != nil {
 			return nil, err
 		}
 	}
@@ -897,7 +892,7 @@ LOADTEST_METRICS_ADDR ?= 127.0.0.1:9300
 LOADTEST_ACCOUNT_NATS ?= nats://127.0.0.1:4222
 
 .PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet glsvet test test-race build run loadtest generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs dev-run dev-stop dev-status dev-smoke clean
-.PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-event new-table new-dao new-webroute new-errcode new-saga new-rpc
+.PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-table new-dao new-webroute new-errcode new-saga new-rpc
 
 help:
 	$(ROOST) help-make
@@ -975,8 +970,6 @@ new-endpoint:
 	$(ROOST) add endpoint $(NAME) --handler $(HANDLER) $(if $(PROTOCOL),--protocol $(PROTOCOL),) $(if $(NEST_HANDLER),--nest-handler $(NEST_HANDLER),)
 new-skill:
 	$(ROOST) add skill $(NAME)
-new-event:
-	$(ROOST) add event $(NAME)
 new-table:
 	$(ROOST) add table $(NAME)
 new-dao:

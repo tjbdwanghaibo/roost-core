@@ -21,7 +21,7 @@ func TestValidateRejectsUnknownAndRetiredModAndFeatureNames(t *testing.T) {
 	if err := shared.Validate(); err == nil || !strings.Contains(err.Error(), `unknown kit mod "sync"`) {
 		t.Fatalf("shared_mods sync: Validate = %v, want it refused by name", err)
 	}
-	for _, feature := range []string{"not_a_feature", "replication-quic", "replication-kcp", "replication-udp"} {
+	for _, feature := range []string{"not_a_feature", "replication-quic", "replication-kcp", "replication-udp", "event"} {
 		manifest := DefaultManifest("planet", "example.com/planet", []string{"game"},
 			[]string{"syncbus"}, []string{feature})
 		if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("unknown feature %q", feature)) {

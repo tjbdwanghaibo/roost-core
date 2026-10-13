@@ -438,9 +438,6 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		return addEntityLifecycle(root, m, o)
 	case "endpoint":
 		return addProtocolEndpoint(root, m, o)
-	case "event":
-		path = "framework/event/def/" + snake + ".go"
-		body = fmt.Sprintf("package eventdef\n\ntype Event%s struct{}\n", pascal)
 	case "table":
 		path = "configs/schema/" + snake + ".go"
 		body = fmt.Sprintf("package schema\n\n//roost:table name=%s key=ID\ntype %s struct {\n\tID int64 `csv:\"id\" json:\"id\" title:\"ID\" required:\"true\" unique:\"true\"`\n}\n", snake, pascal)

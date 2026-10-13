@@ -88,14 +88,6 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 | --- | --- |
 | [main.go](../../../codegen/cmd/errcode/main.go) | 函数/方法或内部实现；见源码 |
 
-### codegen/cmd/eventgen
-
-1 个实现文件、0 个测试文件。
-
-| 源码 | 导出类型（定位用） |
-| --- | --- |
-| [main.go](../../../codegen/cmd/eventgen/main.go) | 函数/方法或内部实现；见源码 |
-
 ### codegen/cmd/nest
 
 1 个实现文件、0 个测试文件。
@@ -209,19 +201,6 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [main.go](../../../codegen/internal/errcode/main.go) | `Definition` |
-
-### codegen/internal/eventgen
-
-6 个实现文件、5 个测试文件。
-
-| 源码 | 导出类型（定位用） |
-| --- | --- |
-| [gen.go](../../../codegen/internal/eventgen/gen.go) | 函数/方法或内部实现；见源码 |
-| [handler.go](../../../codegen/internal/eventgen/handler.go) | `HandlerInfo`、`HandlerEvent` |
-| [handler_gen.go](../../../codegen/internal/eventgen/handler_gen.go) | 函数/方法或内部实现；见源码 |
-| [main.go](../../../codegen/internal/eventgen/main.go) | 函数/方法或内部实现；见源码 |
-| [parse.go](../../../codegen/internal/eventgen/parse.go) | `EventDef`、`EventFieldDef` |
-| [run.go](../../../codegen/internal/eventgen/run.go) | 函数/方法或内部实现；见源码 |
 
 ### codegen/internal/genutil
 
@@ -508,14 +487,6 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 - [export_test.go](../../../codegen/internal/errcode/export_test.go)：`TestExtractDefinitionsAndWriteCSV`
 - [scan_test.go](../../../codegen/internal/errcode/scan_test.go)：`TestExtractDefinitionsIgnoresCommentAndStringLiterals`、`TestExtractDefinitionsRefusesWhatItCannotRead`
-
-### codegen/internal/eventgen
-
-- [golden_test.go](../../../codegen/internal/eventgen/golden_test.go)：`TestGoldenHandlerOutput`
-- [handler_test.go](../../../codegen/internal/eventgen/handler_test.go)：`TestScanFile`、`TestScanGameDir`、`TestRecvVar`、`TestScanGameDirRefusesUnparseableSource`、`TestScanGameDirRejectsHandlerForUndeclaredEvent`；其余 1 项见文件
-- [parse_test.go](../../../codegen/internal/eventgen/parse_test.go)：`TestParseEventDir`、`TestConstName`、`TestGenerateDefs`、`TestGenerateTypes`、`TestGenerateTypeImpl`
-- [retirement_test.go](../../../codegen/internal/eventgen/retirement_test.go)：`TestRunRetiresEventTypesAndHandlerAfterLastDefinition`、`TestScanGameDirRetiresOnlyRemovedReceiver`
-- [run_test.go](../../../codegen/internal/eventgen/run_test.go)：`TestRunReturnsFlagErrors`
 
 ### codegen/internal/marker
 

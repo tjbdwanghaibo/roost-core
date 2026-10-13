@@ -154,7 +154,7 @@ func DefaultManifest(name, module string, services, mods, features []string) Man
 		services = []string{"game"}
 	}
 	if len(features) == 0 {
-		features = []string{"protocol", "config", "entity", "nest", "event", "dao", "errcode"}
+		features = []string{"protocol", "config", "entity", "nest", "dao", "errcode"}
 	}
 	shared := []string{"lock", "ops", "statslog"}
 	if len(mods) == 0 {
