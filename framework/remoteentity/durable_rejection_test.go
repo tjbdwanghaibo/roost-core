@@ -15,6 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 )
 
 // neverReachedStorage 模拟事务根本没有到达 Mongo 的瞬时失败：发出前 ctx 已过期、
@@ -316,13 +317,12 @@ func TestMongoRejectUnresolvedDefersToExistingTransaction(t *testing.T) {
 	}
 }
 
-// 历史 WAL 里“Remote + 过期 lease fence”的混合记录：新写入在准入处已被 engine.ErrRemoteLeaseFenceUnsupported 拒绝（用例先证明
-// 这一点），只剩已写进 WAL 的旧记录会走到投影。这里绕过准入直接把记录追加进真实 nestwal WAL，由 engine.Projector +
-// engine.MongoStore 投影：lease 条件写不命中 → 同一 Mongo 事务写入 digest 绑定的 Remote Rejected 记录与 skipped marker →
-// 通知真实 Manager。验证 WAL ack、无 fatal；持久状态与 tracker 都是 Rejected；gate / 写额度释放；被拒绝的旧实例仅内存卸载，
-// 重载后等于权威且可写，被拒绝的内存修改没有进入 Mongo。
-// 历史：RR-20260926-19。
-func TestHistoricalLeaseFencedRemoteRecordRejectsAndReloads(t *testing.T) {
+// 历史 WAL 里“Remote + lease fence”的混合记录按退役格式处理：新写入在准入处已被
+// engine.ErrRemoteLeaseFenceUnsupported 拒绝（用例先证明这一点），WAL 里已有的这种记录由真实 nestwal WAL +
+// engine.Projector + engine.MongoStore 投影时，投影器以 ErrRetiredRemoteLeaseFenceRecord fatal：不写 Remote
+// 事务记录、不写 DataEngine 事务标记、不写实体数据，记录不被 ack（checkpoint 停在它之前）。
+// 历史：RR-20260926-19 曾把它投影为 Remote Rejected 并卸载重载；维护者 2026-10-13 决定移除旧格式兼容。
+func TestHistoricalLeaseFencedRemoteRecordStopsTheProjectorWithoutWriting(t *testing.T) {
 	f, live := newReloadFixture(t, 1957)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -385,26 +385,42 @@ func TestHistoricalLeaseFencedRemoteRecordRejectsAndReloads(t *testing.T) {
 		t.Fatalf("premise: admission of Remote + lease fence = %v, want ErrRemoteLeaseFenceUnsupported", err)
 	}
 
-	if _, err = batch.Commit(ctx); err != nil {
+	// 只需要提交内容；本进程的这笔写入不参与投影。
+	_ = batch.Abort(ctx, errors.New("only the commit content is needed"))
+	_ = batch.Close(ctx)
+
+	if err = projector.Flush(ctx); !errors.Is(err, engine.ErrRetiredRemoteLeaseFenceRecord) {
+		t.Fatalf("projector flush = %v, want ErrRetiredRemoteLeaseFenceRecord", err)
+	}
+	if stats := projector.Stats(); stats.Projected != 0 || stats.FatalProjectionConflicts != 1 {
+		t.Fatalf("projector stats=%+v, want the retired record fatal and not projected", stats)
+	}
+	if status, err := f.store.CommitStatus(ctx, tx); err != nil || status.State != entity.RemoteCommitUnknown {
+		t.Fatalf("durable status=%+v err=%v, want no Remote transaction record", status, err)
+	}
+	if markers := f.store.mongo.(*mongotest.Client).Collection("game", engine.TransactionCollection).Len(); markers != 0 {
+		t.Fatalf("retired record left %d DataEngine transaction markers", markers)
+	}
+	if doc := f.storedDocument(t); doc != "" {
+		t.Fatalf("retired record reached Mongo: %q", doc)
+	}
+	// checkpoint 没有越过它：关闭投影器（连同 WAL）后重开，重放仍从这条记录开始。
+	if err = projector.Close(ctx); err != nil && !errors.Is(err, engine.ErrRetiredRemoteLeaseFenceRecord) {
+		t.Fatalf("projector close: %v", err)
+	}
+	reopened, err := nestwal.Open(walOptions)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err = batch.Close(ctx); err != nil {
+	defer reopened.Close(context.Background())
+	var replayed []nest.TransactionID
+	if err = reopened.Replay(ctx, func(_ nest.CommitFence, r nest.CommitRecord) error {
+		replayed = append(replayed, r.ID)
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = projector.Flush(ctx); err != nil {
-		t.Fatalf("projector flush: %v", err)
-	}
-	if stats := projector.Stats(); stats.WALUnacked != 0 || stats.FatalProjectionConflicts != 0 || stats.ProjectionFailures != 0 {
-		t.Fatalf("projector stats=%+v, want the skipped record acknowledged without failures", stats)
-	}
-	if status, err := f.store.CommitStatus(ctx, tx); err != nil || status.State != entity.RemoteCommitRejected {
-		t.Fatalf("durable status=%+v err=%v, want Rejected", status, err)
-	}
-	if status, err := f.mgr.RemoteCommitStatus(ctx, tx); err != nil || status.State != entity.RemoteCommitRejected {
-		t.Fatalf("tracker status=%+v err=%v, want Rejected", status, err)
-	}
-	f.assertReloadedFromAuthority(t, live)
-	if active := f.mgr.Stats().ActiveTransactions; active != 0 {
-		t.Fatalf("active transactions=%d after rejection and the next write", active)
+	if len(replayed) != 1 || replayed[0] != nest.TransactionID(tx) {
+		t.Fatalf("WAL replay after the fatal = %v, want the retired record still unacknowledged", replayed)
 	}
 }

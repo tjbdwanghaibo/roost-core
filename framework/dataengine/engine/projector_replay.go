@@ -187,6 +187,10 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 func (projector *Projector) projectSegment(ctx context.Context, segment projectionSegment) (projectionOutcome, error) {
 	if len(segment.records) == 1 {
 		record := segment.records[0]
+		// 退役的历史记录：不交给 Store，投影器 fatal，checkpoint 停在它之前。
+		if mixesRemoteWithLeaseFence(record) {
+			return projectionApplied, fmt.Errorf("transaction %s: %w", record.ID.String(), ErrRetiredRemoteLeaseFenceRecord)
+		}
 		outcome := projectionApplied
 		var err error
 		if store, ok := projector.store.(FenceOutcomeProjectionStore); ok {

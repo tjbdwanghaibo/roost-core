@@ -270,7 +270,9 @@ func (m *Manager) FlushRemoteAll(ctx context.Context) error {
 	return nil
 }
 
-// RejectRemoteTransaction 仅由投影器在持久拒绝完成后通知；finalizer 仍可回源恢复此结论。
+// RejectRemoteTransaction 在持久拒绝写下之后把结论交给 tracker；finalizer 仍可回源恢复此结论。
+// 正式链路上原唯一调用方（投影器对“Remote + lease fence”历史 WAL 记录的拒绝）已随旧格式兼容移除
+// （维护者 2026-10-13），现仅供测试注入持久拒绝；是否删除待维护者决定。
 func (m *Manager) RejectRemoteTransaction(id entity.RemoteTransactionID, cause string) {
 	m.completeRemoteTransaction(id, entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitRejected, Cause: cause})
 }

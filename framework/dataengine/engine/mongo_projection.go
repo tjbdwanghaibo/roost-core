@@ -34,6 +34,10 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 	if err := coredata.ValidateCommitRecord(record); err != nil {
 		return false, err
 	}
+	// Remote 写与 lease fence 同在的记录只可能来自旧版本的 WAL，不再投影：在任何 Mongo 写之前拒绝。
+	if mixesRemoteWithLeaseFence(record) {
+		return false, ErrRetiredRemoteLeaseFenceRecord
+	}
 	if len(record.Mutations) == 1 && len(record.Effects) == 0 && len(record.Receipts) == 0 && record.Mutations[0].Remote == nil {
 		err := store.applyMutation(ctx, record.ID.String(), record.Mutations[0], false)
 		return false, err
@@ -84,9 +88,6 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 		}
 		if alreadyApplied {
 			transactionSkipped = skipped
-			if skipped {
-				return store.rejectRemoteCommits(txCtx, remote)
-			}
 			return nil
 		}
 		fencesMatch, err := store.leaseFencesMatch(txCtx, record.Receipts)
@@ -94,10 +95,8 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 			return err
 		}
 		if !fencesMatch {
+			// 只有不含 Remote 写的原生步骤会走到这里（混合记录已在入口拒绝）。
 			transactionSkipped = true
-			if err := store.rejectRemoteCommits(txCtx, remote); err != nil {
-				return err
-			}
 			return store.insertTransactionMarker(txCtx, transactionDocument{
 				ID: record.ID.String(), Digest: digest, CreatedAt: store.now().UTC(), Skipped: true,
 			})
@@ -140,13 +139,6 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 		return false, err
 	}
 	if transactionSkipped {
-		if len(remote) > 0 {
-			if notifier, ok := store.remoteApplier.(interface {
-				RejectRemoteTransaction(entity.RemoteTransactionID, string)
-			}); ok {
-				notifier.RejectRemoteTransaction(entity.RemoteTransactionID(record.ID), expiredLeaseCause)
-			}
-		}
 		return true, nil
 	}
 	if len(remote) > 0 {
@@ -351,19 +343,4 @@ func bulkUpserted(result *fmongo.BulkWriteResult) int64 {
 		return 0
 	}
 	return result.UpsertedCount
-}
-
-const expiredLeaseCause = "dataengine: lease fence expired or superseded"
-
-func (store *MongoStore) rejectRemoteCommits(ctx context.Context, commits []entity.RemoteCommit) error {
-	if len(commits) == 0 {
-		return nil
-	}
-	rejecter, ok := store.remoteStore.(interface {
-		RejectRemoteCommitsInTransaction(context.Context, []entity.RemoteCommit, string) error
-	})
-	if !ok {
-		return fmt.Errorf("%w: remote store cannot persist lease-fence rejection", ErrRemoteProjection)
-	}
-	return rejecter.RejectRemoteCommitsInTransaction(ctx, commits, expiredLeaseCause)
 }

@@ -58,6 +58,20 @@ func recordEntityIDs(record coredata.CommitRecord) []int64 {
 	return ids
 }
 
+// mixesRemoteWithLeaseFence 报告记录是否同时含 Remote 写与 lease fence：准入拒绝它
+// （ErrRemoteLeaseFenceUnsupported），WAL 里的历史记录投影时按退役格式 fatal（ErrRetiredRemoteLeaseFenceRecord）。
+func mixesRemoteWithLeaseFence(record coredata.CommitRecord) bool {
+	if !hasLeaseFence(record) {
+		return false
+	}
+	for _, mutation := range record.Mutations {
+		if mutation.Remote != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func hasLeaseFence(record coredata.CommitRecord) bool {
 	for _, receipt := range record.Receipts {
 		if receipt.Namespace == coredata.LeaseFenceReceiptNamespace {

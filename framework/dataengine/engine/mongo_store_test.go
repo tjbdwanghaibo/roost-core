@@ -28,10 +28,8 @@ import (
 const testDatabase = "game"
 
 type mongoRemoteProjectionFake struct {
-	stored   int
-	applied  int
-	rejected int
-	notified int
+	stored  int
+	applied int
 }
 
 func (fake *mongoRemoteProjectionFake) ApplyRemoteCommitsInTransaction(_ context.Context, commits []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error) {
@@ -44,13 +42,6 @@ func (fake *mongoRemoteProjectionFake) ApplyRemoteCommits(_ context.Context, _ e
 	return nil, nil
 }
 
-func (fake *mongoRemoteProjectionFake) RejectRemoteCommitsInTransaction(_ context.Context, commits []entity.RemoteCommit, _ string) error {
-	fake.rejected += len(commits)
-	return nil
-}
-func (fake *mongoRemoteProjectionFake) RejectRemoteTransaction(entity.RemoteTransactionID, string) {
-	fake.notified++
-}
 
 func newMongoStoreTest(t *testing.T) (*MongoStore, *mongotest.Client, *mongotest.Collection) {
 	t.Helper()
@@ -181,7 +172,10 @@ func TestMongoStoreLeaseFenceRejectsExpiredLease(t *testing.T) {
 	}
 }
 
-func TestMongoStoreSkippedLeaseFenceNeverPublishesRemoteCommit(t *testing.T) {
+// WAL 里 Remote 写与 lease fence 同在的历史记录不再投影：MongoStore 在任何写之前以
+// ErrRetiredRemoteLeaseFenceRecord 拒绝，旧进程留下的 skipped 标记也不改变这一点。
+// 历史：RR-20260926-19 曾把它投影为 Remote Rejected；维护者 2026-10-13 决定移除旧格式兼容。
+func TestMongoStoreRefusesARetiredRemoteLeaseFenceRecordWithoutWriting(t *testing.T) {
 	// 只需要一个托管且没有 builder 的 kind。原用 242，与 entity_repository_promises_test.go 的本地 builder
 	// dataEngineNilBuilderKind 撞号：两个用例先后运行时 kind 被升级成 managed 而 builder 仍是本地生命周期，
 	// RR-20260926-71 起注册表拒绝这种升级。
@@ -211,26 +205,26 @@ func TestMongoStoreSkippedLeaseFenceNeverPublishesRemoteCommit(t *testing.T) {
 			ExpectedVersion: 1, NextVersion: 2, Remote: &remote,
 		}},
 	}
-	if err := store.Project(context.Background(), record); err != nil {
+	// 准入早已拒绝 Remote + lease fence；这种记录只可能来自旧版本 WAL，投影在任何写之前拒绝。
+	if err := store.Project(context.Background(), record); !errors.Is(err, ErrRetiredRemoteLeaseFenceRecord) {
+		t.Fatalf("Project(remote + lease fence) = %v, want ErrRetiredRemoteLeaseFenceRecord", err)
+	}
+	if remoteProjection.stored != 0 || remoteProjection.applied != 0 || markerCollection(client).Len() != 0 {
+		t.Fatalf("retired record wrote: remote stored=%d published=%d markers=%d", remoteProjection.stored, remoteProjection.applied, markerCollection(client).Len())
+	}
+	// 旧版本可能已为它写下 skipped 标记（WAL 尚未 ack）：照样拒绝，不读标记、不再写。
+	digest, err := digestRecord(record)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if remoteProjection.stored != 0 || remoteProjection.applied != 0 {
-		t.Fatalf("stale fenced remote commit stored=%d published=%d", remoteProjection.stored, remoteProjection.applied)
-	}
-
-	// A WAL replay sees the durable skipped marker written by the first pass.
-	// It must remain a no-op and must not publish outside the transaction.
-	if err := store.Project(context.Background(), record); err != nil {
+	if err := store.insertTransactionMarker(context.Background(), transactionDocument{ID: txID.String(), Digest: digest, CreatedAt: time.Now().UTC(), Skipped: true}); err != nil {
 		t.Fatal(err)
 	}
-	if remoteProjection.stored != 0 || remoteProjection.applied != 0 {
-		t.Fatalf("replayed skipped remote commit stored=%d published=%d", remoteProjection.stored, remoteProjection.applied)
+	if skipped, err := store.ProjectFenced(context.Background(), record); skipped || !errors.Is(err, ErrRetiredRemoteLeaseFenceRecord) {
+		t.Fatalf("ProjectFenced over an old skipped marker = skipped=%v err=%v, want the retired-record refusal", skipped, err)
 	}
-	if remoteProjection.rejected != 2 || remoteProjection.notified != 2 {
-		t.Fatalf("rejected=%d notified=%d", remoteProjection.rejected, remoteProjection.notified)
-	}
-	if markers := markerCollection(client).Len(); markers != 1 {
-		t.Fatalf("replay wrote %d markers, want 1", markers)
+	if remoteProjection.stored != 0 || remoteProjection.applied != 0 || markerCollection(client).Len() != 1 {
+		t.Fatalf("retired record wrote on replay: remote stored=%d published=%d markers=%d", remoteProjection.stored, remoteProjection.applied, markerCollection(client).Len())
 	}
 }
 

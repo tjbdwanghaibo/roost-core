@@ -136,6 +136,11 @@ deadline，之后按 `Timeout` / `MaxAttempts` 重试、最终补偿，而不是
 没有让原生步骤与 Remote 写原子提交的入口：Remote 实体的修改应放在 Saga 之外、以
 `IdempotencyKey` 幂等的 Remote 事务里，原生步骤只修改本地 Entity。
 
+旧版本 WAL 里可能留有“Remote 写 + lease fence”同在的历史记录。它们不再被投影（维护者 2026-10-13 移除旧格式
+兼容）：投影器遇到这种记录以 `engine.ErrRetiredRemoteLeaseFenceRecord` fatal，不写 Remote 事务记录、不写
+DataEngine 事务标记、不写实体数据、不推进 checkpoint，原始 WAL 原样保留，与其他退役 WAL 格式同一口径。
+升级前须用旧版本把 WAL 排空。
+
 handler 返回后不得直接 publish NATS；Mongo 投影负责原子保存 mutation、receipt 和
 outbox，独立 publisher 再投递 effect。重复 CommandID 由操作状态文档上的短租约协调，最终以
 receipt 为权威；同 ID 不同 digest 返回 `ErrIdentityConflict`。不同 CommandID、相同 IdempotencyKey 是同一操作实例的

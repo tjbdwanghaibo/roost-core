@@ -22,6 +22,11 @@ var (
 	ErrProjectionBackpressure      = errors.New("dataengine projector: unacknowledged transaction limit reached")
 )
 
+// ErrRetiredRemoteLeaseFenceRecord：WAL 里出现 Remote 写与 lease fence 同在的记录。准入早已拒绝这种组合，
+// 它只可能是旧版本写下的历史记录；投影不再处理它，按退役 WAL 格式对待：投影器 fatal、不写库、不 ack，
+// 原始 WAL 原样保留，须用旧版本排空后再升级。
+var ErrRetiredRemoteLeaseFenceRecord = fmt.Errorf("%w: retired WAL record is no longer projected", ErrRemoteLeaseFenceUnsupported)
+
 type ProjectionStore interface {
 	Project(context.Context, coredata.CommitRecord) error
 }
@@ -392,7 +397,8 @@ func (projector *Projector) isFatalProjection(err error) bool {
 	if errors.Is(err, ErrProjectionBatchNeedsPerRecord) {
 		return false
 	}
-	if !errors.Is(err, ErrProjectionConflict) && !errors.Is(err, ErrTransactionIdentity) && !errors.Is(err, ErrReceiptIdentity) {
+	if !errors.Is(err, ErrProjectionConflict) && !errors.Is(err, ErrTransactionIdentity) && !errors.Is(err, ErrReceiptIdentity) &&
+		!errors.Is(err, ErrRetiredRemoteLeaseFenceRecord) {
 		return false
 	}
 	projector.fatalOnce.Do(func() {
@@ -534,16 +540,10 @@ func (projector *Projector) Shutdown(ctx context.Context) error {
 // reserve 在同一锁内检查与预留额度，不能让并发 Commit 越过上限。
 func (projector *Projector) reserve(record coredata.CommitRecord, held bool) error {
 	// 租约在投影时失效会跳过整笔记录；生成 Entity 无法在准入后撤销多实体内存修改。
-	// 在 WAL 前明确拒绝，让 Nest 仍在 Guard 内执行完整回滚；历史 WAL 回放不经过这里。
-	for _, receipt := range record.Receipts {
-		if receipt.Namespace != coredata.LeaseFenceReceiptNamespace {
-			continue
-		}
-		for _, mutation := range record.Mutations {
-			if mutation.Remote != nil {
-				return ErrRemoteLeaseFenceUnsupported
-			}
-		}
+	// 在 WAL 前明确拒绝，让 Nest 仍在 Guard 内执行完整回滚。WAL 里已有的这种记录见
+	// ErrRetiredRemoteLeaseFenceRecord。
+	if mixesRemoteWithLeaseFence(record) {
+		return ErrRemoteLeaseFenceUnsupported
 	}
 	id := record.ID
 	projector.heldMu.Lock()

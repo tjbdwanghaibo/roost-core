@@ -8,6 +8,7 @@
 - 移除旧兼容（wiring）：SyncBusMod 停机只走总线的 `StopWithContext` 契约，删除对旧 `Stop()` 接口的回退分支（两种传输的现有实现都不依赖它：JetStream 总线实现了 StopWithContext，普通 NATS 总线没有订阅之外的资源）。无配置或数据变化，无需升级操作。
 - **移除旧格式兼容**（维护者 2026-10-13："兼容代码一起删"；项目未上线，不兼容旧数据 / 旧进程）。旧形态现在被明确拒绝而不是被读取或升级；**升级要求：先用旧程序完成落库并清理旧数据，再起新版本**。各项：
   - Remote 快照 `checksum`：只读 8 字节 Binary 形态，旧版本写下的 BSON 数字形态（int32 / int64 / double）报 `remote checksum has unexpected BSON type`。
+  - 历史 WAL 中“Remote 写 + lease fence”混合记录：不再投影为 Remote Rejected 并卸载重载（RR-20260926-19 的历史路径）。投影器遇到它以 `engine.ErrRetiredRemoteLeaseFenceRecord` fatal，不写库、不推进 checkpoint，WAL 原样保留；准入处的 `ErrRemoteLeaseFenceUnsupported` 与原生 saga 步骤的 lease fence 不变。**升级前须用旧版本排空 WAL。**
 
 - Nest 执行池统一为 short/long/io：配置、Stats、指标标签、fctx 身份和生成 Sender 同步迁移；唯一配置 option 为 `NestOptionWithWorkerPools(short, long, io)`，强制准备使用 `SendOptionIO`，不保留旧别名。补齐 statslog 与健康队列汇总遗漏的 long 池，调度和 ID tail 语义不变；迁移表见 docs/framework/NEST-AWAIT.md。
 
