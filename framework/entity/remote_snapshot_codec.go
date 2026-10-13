@@ -58,8 +58,9 @@ var remoteSnapshotChecksumTable = crc64.MakeTable(crc64.ECMA)
 // fails with "overflows int64" for exactly those (RR-20260920-01).
 //
 // Nothing compares or ranges over a checksum, so the storage form is fixed 8
-// bytes, big-endian. Reading also accepts the numeric forms written before
-// this existed, so the snapshots already in a database stay readable.
+// bytes, big-endian. The numeric form written before RR-20260920-01 is not
+// read: the project has no deployed data to carry over, so a numeric checksum
+// is refused as an unexpected BSON type instead of being silently accepted.
 type RemoteChecksum uint64
 
 // The signature takes a plain byte, not bson.Type: the driver's ValueMarshaler
@@ -85,15 +86,6 @@ func (c *RemoteChecksum) UnmarshalBSONValue(typ byte, data []byte) error {
 			return fmt.Errorf("entity: remote checksum is %d bytes, want 8", len(binaryValue.Data))
 		}
 		*c = RemoteChecksum(binary.BigEndian.Uint64(binaryValue.Data))
-		return nil
-	case bson.TypeInt64, bson.TypeInt32, bson.TypeDouble:
-		// Written before checksums became bytes; only values below MaxInt64
-		// could have been stored, so this is exact.
-		var numeric int64
-		if err := bson.UnmarshalValue(t, data, &numeric); err != nil {
-			return err
-		}
-		*c = RemoteChecksum(numeric)
 		return nil
 	case bson.TypeNull, bson.TypeUndefined:
 		*c = 0

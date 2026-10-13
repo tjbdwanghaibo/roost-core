@@ -459,13 +459,14 @@ func TestACommitWhoseCountersCannotBeEncodedIsRefusedUpFront(t *testing.T) {
 	}
 }
 
-// 升级之前写进去的 checksum 是 BSON 数字。升级之后必须还能读回来，否则升级本身
-// 会让既有快照不可用。
-func TestAChecksumStoredAsANumberStillReads(t *testing.T) {
+// checksum 只有 8 字节一种存储形态。旧版本写下的 BSON 数字形态不再读取：明确报
+// “unexpected BSON type”，不静默读成某个值。
+// 历史：RR-20260920-01 之前 checksum 存为数字；未上线，不兼容旧数据（维护者 2026-10-13）。
+func TestAChecksumStoredAsANumberIsRefused(t *testing.T) {
 	for name, stored := range map[string]any{
 		"int64":  int64(1234567890123),
 		"int32":  int32(4242),
-		"absent": nil,
+		"double": float64(42),
 	} {
 		t.Run(name, func(t *testing.T) {
 			raw, err := bson.Marshal(bson.M{"checksum": stored})
@@ -475,18 +476,9 @@ func TestAChecksumStoredAsANumberStillReads(t *testing.T) {
 			var back struct {
 				Checksum entity.RemoteChecksum `bson:"checksum"`
 			}
-			if err := bson.Unmarshal(raw, &back); err != nil {
-				t.Fatalf("an existing %s checksum can no longer be read: %v", name, err)
-			}
-			var want uint64
-			switch typed := stored.(type) {
-			case int64:
-				want = uint64(typed)
-			case int32:
-				want = uint64(typed)
-			}
-			if uint64(back.Checksum) != want {
-				t.Fatalf("old checksum read back as %d, want %d", uint64(back.Checksum), want)
+			err = bson.Unmarshal(raw, &back)
+			if err == nil || !strings.Contains(err.Error(), "remote checksum has unexpected BSON type") {
+				t.Fatalf("a %s checksum was read as %d (err=%v); want it refused", name, uint64(back.Checksum), err)
 			}
 		})
 	}
