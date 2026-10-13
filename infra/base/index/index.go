@@ -39,7 +39,7 @@ func (i *Index[K, V]) Upsert(key K, value V) {
 	i.primary[key] = value
 	if value != value {
 		// 不等于自身的值（NaN，或装着 NaN 的接口 / 结构体）作 map 键取不回来：反查桶建了也查不到、删不掉。
-		// 旧实现先建桶再按同一个值取回写入，第一次插入就 panic（RR-20261005-NC-144）。这种值只进主表，
+		// 先建桶再按同一个值取回写入会在第一次插入就 panic。这种值只进主表，
 		// Get / Delete / Len 照常；Query 按 Go map 语义本来就命中不了它。
 		return
 	}
@@ -130,8 +130,7 @@ func (i *Index[K, V]) ensureLocked() {
 // OrderedIndex 是 Query 结果按键排序的 Index。与 Index 一样，零值可直接使用（默认排序），
 // nil 指针是空索引。
 //
-// 数据按值内嵌：旧实现存 *Index、只有 NewOrderedIndex 会填，零值的写入转发给 nil *Index 被静默丢掉，
-// nil *OrderedIndex 的写入则解引用 panic（RR-20261005-NC-146）。
+// 数据按值内嵌，零值可用：若存 *Index、只有 NewOrderedIndex 会填，零值的写入会转发给 nil *Index 被静默丢掉。
 type OrderedIndex[K comparable, V comparable] struct {
 	index Index[K, V]
 	less  func(K, K) bool
@@ -173,8 +172,8 @@ func (i *OrderedIndex[K, V]) Query(value V) []K {
 // blanket fmt.Sprint comparison sorted integers lexically: [9, 10] -> [10, 9]).
 //
 // K 为接口类型（如 any）时两边的动态类型可以不同、也可以是 nil：先按动态类型排（nil 最前，其余按类型名，
-// 同名再按格式化串），同类型才比较值。旧实现只看左边的 Kind 就对右边调用 Int()/Uint()/Float()，
-// 右边是 string、uint 或 nil 时 panic（RR-20261005-NC-145）。
+// 同名再按格式化串），同类型才比较值。不能只看左边的 Kind 就对右边调用 Int()/Uint()/Float()，
+// 右边是 string、uint 或 nil 时会 panic。
 func defaultLess[K comparable](a, b K) bool {
 	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
 	if !va.IsValid() || !vb.IsValid() {

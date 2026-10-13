@@ -47,10 +47,9 @@ func NewStringFastMap[V any](capHint int) *FastMap[string, V] {
 }
 
 // Set 先查键：改已有键、复用墓碑都原地写，只有占用新的空槽且会超过装载率时
-// 才扩容 / 重排。之前 Set 先 ensureWritable 再查键，装载率到阈值时改已有键
-// 也会换掉整张表，Range 回调里的 `Set(k, v*10)` 因此让遍历读错数组
-// （RR-20261005-NC-182）。used（已占用 + 墓碑）不超过装载率的不变量不变，
-// 探测总能遇到空槽结束。
+// 才扩容 / 重排。若先 ensureWritable 再查键，装载率到阈值时改已有键
+// 也会换掉整张表，Range 回调里的 `Set(k, v*10)` 会让遍历读错数组。
+// used（已占用 + 墓碑）不超过装载率的不变量保持，探测总能遇到空槽结束。
 func (m *FastMap[K, V]) Set(key K, value V) {
 	if len(m.states) > 0 {
 		idx, found := m.findSlot(key)
@@ -143,9 +142,8 @@ func (m *FastMap[K, V]) Clear() {
 // 交出，回调里新增的键是否交出不承诺（与 Go map 相同）。
 //
 // 遍历固定开始时的三个数组。回调扩容 / 重排 / Clear 换掉了表之后，旧数组里
-// 还没走到的键改到当前表里查，查不到（已删除）就跳过——之前 Range 拿旧 states
-// 的下标去读新数组，交出零值键、漏掉原有键，Clear 后下标越界
-// （RR-20261005-NC-182）。
+// 还没走到的键改到当前表里查，查不到（已删除）就跳过——拿旧 states 的下标去读新数组
+// 会交出零值键、漏掉原有键，Clear 后下标越界。
 func (m *FastMap[K, V]) Range(f func(key K, value V) bool) {
 	if f == nil {
 		return

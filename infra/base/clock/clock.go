@@ -1,4 +1,4 @@
-// Package clock 是业务时钟（维护者决定 D-L3，docs/feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md）。
+// Package clock 是业务时钟（维护者决定，现行说明见 docs/framework/guide/10-time.md）。
 //
 // 时间分两个钟，边界写死：
 //
@@ -9,7 +9,7 @@
 //
 // 偏移只有一个配置来源 time.logic_offset，App 在启动时读一次（生产环境强制为 0），运行期没有修改入口。
 // 同一套部署的业务时间只许前进：偏移可以前拨，不能让业务时间回到部署已经到过的时刻——App 用存在协调
-// 存储里的高水位在启动时拒绝（docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md），要回到过去只能清库重建。
+// 存储里的高水位在启动时拒绝，要回到过去只能清库重建。
 // 因此业务服务内部、只与业务时间比较的退避和租约（activity 派发退避、mail 领取租约）也读业务时钟；
 // 依赖存储服务端 TTL、与读系统时钟的进程比较、安全有效期、空间回收、审计的才是系统时钟。
 // 业务代码从 app.BusinessClock(registry) 拿 Business，或由服务的 Config.Now 注入；本包的全局函数
@@ -57,7 +57,7 @@ func (processBusiness) Now() time.Time { return global.Now() }
 func Process() Business { return processBusiness{} }
 
 // Clock 是可设置偏移的逻辑时钟（进程级业务时钟的实现）。业务代码只读时间，用 Business
-// （app.BusinessClock）；偏移只在启动时由 App 设置，运行期不改（D-L3）。
+// （app.BusinessClock）；偏移只在启动时由 App 设置，运行期不改。
 type Clock interface {
 	Now() time.Time
 	UnixMilli() int64
@@ -92,7 +92,7 @@ func Set(now time.Time) {
 }
 
 // SetOffset 设置进程级业务时钟的偏移。由 App 在启动时按 time.logic_offset 调用一次；
-// 运行期不许调用（D-L3：偏移只在启动时生效），测试可以调用并在结束时恢复。
+// 运行期不许调用（偏移只在启动时生效），测试可以调用并在结束时恢复。
 func SetOffset(offset time.Duration) {
 	global.SetOffset(offset)
 }

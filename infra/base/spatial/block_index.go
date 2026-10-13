@@ -74,8 +74,8 @@ func (i *BlockIndex) BlockRect(index int64) Rect {
 	}
 	x, y := index%i.cols, index/i.cols
 	// x*blockSize 小于跨度，Min 加它不会溢出；右 / 下边界再饱和加一个块宽，然后截到 bounds。
-	// 旧实现直接算 Min + (x+1)*blockSize：最后一块的乘积可以超过剩余跨度，bounds 贴近 int64 上界时
-	// 溢出成负数，截断判断不成立，返回 Max < Min 的倒置矩形（RR-20261005-NC-143）。
+	// 不能直接算 Min + (x+1)*blockSize：最后一块的乘积可以超过剩余跨度，bounds 贴近 int64 上界时
+	// 溢出成负数，截断判断不成立，会返回 Max < Min 的倒置矩形。
 	minX, minY := i.bounds.Min.X+x*i.blockSize, i.bounds.Min.Y+y*i.blockSize
 	rect := Rect{
 		Min: Point{X: minX, Y: minY},

@@ -1,11 +1,11 @@
 // Package timer 是实体自己的定时器调度：一个不加锁的最小堆，由宿主在自己的锁 / 事务里调用 Tick 驱动。
 //
-// 触发顺序（维护者决定 D-L1，2026-10-06）：先比期限 End，期限相同再比 Node.Priority（数值小的先触发，缺省 0），
+// 触发顺序（维护者决定，2026-10-06）：先比期限 End，期限相同再比 Node.Priority（数值小的先触发，缺省 0），
 // priority 也相同时按登记顺序，也就是节点 ID（同一个 Scheduler 的 ID 单调递增；ChangeTimer 改期、handler
 // 按返回值重排都保留原 ID，所以“登记顺序”指最初登记的顺序）。宿主从存储重建时同样按这三个键排序，与存储
 // 的遍历顺序无关。需要在同一时刻先于 / 后于别的定时器触发的类型用 NewTimerWithPriority 指定；不指定的保持 0。
 //
-// 没有 handler 的类型（维护者决定 D-L2）：到期节点的类型没有注册 handler 时，节点照旧删除（并发持久化删除），
+// 没有 handler 的类型（维护者决定）：到期节点的类型没有注册 handler 时，节点照旧删除（并发持久化删除），
 // 同时打一条 Warn 并计 timer.unhandled_dropped_total{kind=<类型号>}——下线一种定时器类型时运维能看见丢了什么。
 // 宿主在加载后、注册完 handler 时调用 ReportUnhandledTypes，对没有 handler 的存量类型每种告警一次。类型号是
 // 代码里的常量，标签基数等于定义过的类型数。
@@ -132,7 +132,7 @@ func (s *Scheduler) Seed() int64 {
 }
 
 // SetClock replaces the time source used to stamp new timers' End. Game
-// timers run on the business clock (D-L3), so the default is the process
+// timers run on the business clock, so the default is the process
 // business clock clock.Now (real time + time.logic_offset). A host that drives
 // Tick with its own time must inject the same source here — the World's
 // TimerComponent pins both to the tick's / transaction's time — otherwise
@@ -211,7 +211,7 @@ func (s *Scheduler) ReportUnhandledTypes() []int32 {
 // RemoveTimer 取消一个定时器；返回 true 之后它不再触发。
 //
 // Tick 期间（handler 里）调用时：目标仍在堆里（包括本次 Tick 也已到期、还没轮到的）就立即出堆，
-// 不能推迟到 Tick 结束——那样它会先按旧期限触发（RR-20261005-NC-141）。目标不在堆里时——正在触发的
+// 不能推迟到 Tick 结束——那样它会先按旧期限触发。目标不在堆里时——正在触发的
 // 定时器自己，或本次 Tick 里刚新建、尚未入堆的——推迟到最外层 Tick 结束执行，此时返回 true 只表示“已接受”。
 func (s *Scheduler) RemoveTimer(id int64) bool {
 	if s == nil || id <= 0 {
@@ -236,9 +236,9 @@ func (s *Scheduler) RemoveTimer(id int64) bool {
 // ChangeTimer 把定时器改到 now+delay（now 为零值时取注入时钟）。
 //
 // Tick 期间调用、目标仍在堆里时，立即把它移出堆，推迟到最外层 Tick 结束再按新期限放回：既不会在本次
-// Tick 按旧期限触发（RR-20261005-NC-141），也不会在本次 Tick 按新期限触发——两个 handler 互相改期
+// Tick 按旧期限触发，也不会在本次 Tick 按新期限触发——两个 handler 互相改期
 // 不会在一次 Tick 里循环。移出期间不发持久化变化，放回时发一次 upsert。目标不在堆里（正在触发的自己、
-// 本次 Tick 新建的）时整个操作推迟，与之前相同。
+// 本次 Tick 新建的）时整个操作推迟。
 func (s *Scheduler) ChangeTimer(id int64, now time.Time, delay time.Duration) bool {
 	if s == nil || id <= 0 || delay <= 0 {
 		return false
@@ -291,7 +291,7 @@ func (s *Scheduler) Tick(now time.Time) {
 	}
 	// handler 里可以再调 Tick（重入）：内层照常触发到期节点，但只有最外层负责清 running 并执行推迟操作。
 	// 内层若也清掉 running，回到外层 handler 后“取消正在触发的自己”就不再推迟、查不到节点而失效，
-	// 外层随后又按返回值把它重新排上（RR-20261005-NC-147）。
+	// 外层随后又按返回值把它重新排上。
 	if !s.running {
 		s.running = true
 		defer func() {
@@ -324,7 +324,7 @@ func (s *Scheduler) Tick(now time.Time) {
 		} else if h := s.handlers[node.Type]; h != nil {
 			next = h(Context{OwnerID: s.ownerID, Node: node.clone(), Now: now})
 		} else {
-			// 没有 handler：节点已经删除（上面的 ChangeDelete），这里只让它被看见（D-L2）。
+			// 没有 handler：节点已经删除（上面的 ChangeDelete），这里只让它被看见。
 			// 不保留节点：留在堆顶会挡住之后的所有节点，Tick 就要多一种“越过”状态。
 			slog.Warn("timer: dropped a due timer with no handler registered for its type",
 				"owner_id", s.ownerID, "timer_id", node.ID, "type", node.Type, "end", node.End)

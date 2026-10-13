@@ -90,8 +90,8 @@ func (m *KeyMap[K, V]) Clear() {
 
 // Range 逐桶遍历，每个桶先复制再调用 f；f 返回 false 即停止。
 //
-// 回调里可以 Set / Remove（RR-20261005-NC-185）：Remove 把桶末尾的元素换到
-// 被删位置并清零末尾，之前直接遍历活切片时，换过来的键被跳过、清零的末尾
+// 回调里可以 Set / Remove：Remove 把桶末尾的元素换到
+// 被删位置并清零末尾，直接遍历活切片会跳过换过来的键、把清零的末尾
 // 以零值键交给 f。复制之后回调看到的是该桶开始遍历时的内容，与
 // SmallSafeMap / ShardedSafeMap 的快照语义一致。
 func (m *KeyMap[K, V]) Range(f func(key K, value V) bool) {

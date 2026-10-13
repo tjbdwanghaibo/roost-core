@@ -6,7 +6,7 @@ import (
 )
 
 // LockContext 在原有Mutex契约上增加可取消等待，不为等待者创建goroutine。
-// 内建锁直接等待信号量；外部旧实现沿用其有界LockWithTimeout契约。
+// 内建锁直接等待信号量；外部实现沿用其有界LockWithTimeout契约。
 // nil表示已取得一层锁，调用者负责Unlock；取消与取得同时发生时归还这一层。
 func LockContext(ctx context.Context, mu Mutex) error {
 	if ctx == nil {

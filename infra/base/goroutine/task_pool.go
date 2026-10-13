@@ -44,7 +44,7 @@ func DefaultTaskPoolConfig() *TaskPoolConfig {
 	}
 }
 
-// 测试缝（RR-20261006-20）：只在测试里赋值，生产恒为 nil（每次 Submit / GetStats 多一次 nil 判断）。
+// 测试缝：只在测试里赋值，生产恒为 nil（每次 Submit / GetStats 多一次 nil 判断）。
 // 用来在“任务已进 channel”之后、“读第一个计数”之后停住，确定性地造出统计读写交错。
 var (
 	submitEnqueuedHook   func() // Submit：任务已进 worker channel 之后
@@ -57,8 +57,8 @@ type TaskPool struct {
 	running atomic.Bool
 	wg      sync.WaitGroup
 	// lifeMu 串行化 Start 与 Shutdown 的状态转换；shut 置位后池不能再启动（一次性）。
-	// 旧实现用 closeOnce：从未 Start 就 Shutdown 时 once 已执行却没关 worker，之后 Start 起的 worker
-	// 再也关不掉；Shutdown 之后 Start 又会把池标成 running、每次 Submit 却都被拒（RR-20261005-NC-269）。
+	// 不能用 closeOnce：从未 Start 就 Shutdown 时 once 已执行却没关 worker，之后 Start 起的 worker
+	// 再也关不掉；Shutdown 之后 Start 也会把池标成 running、每次 Submit 却都被拒。
 	lifeMu sync.Mutex
 	shut   bool
 
@@ -118,7 +118,7 @@ func (tp *TaskPool) Submit(task Task) error {
 		return fmt.Errorf("task pool is not running")
 	}
 	workerIndex := tp.hashTaskID(task.GetID())
-	// 先计数再入队（RR-20261006-20）：任务一进 channel 就可能被执行完、计入 completed / failed，
+	// 先计数再入队：任务一进 channel 就可能被执行完、计入 completed / failed，
 	// 入队之后才加 total 时，读统计会瞬间看到“结束数 > 提交数”。被拒绝时撤回这一次计数，
 	// 所以 total 可能短暂多算一个正在被拒绝的提交，但不会少算已结束的任务。
 	tp.totalTasks.Add(1)
@@ -166,7 +166,7 @@ func (tp *TaskPool) ShutdownWithTimeout(timeout time.Duration) error {
 }
 
 // GetStats 返回提交、完成、失败计数与是否在运行。三个计数各自是原子量，不是同一时刻的快照，
-// 但保证 completed + failed ≤ total（RR-20261006-20）：Submit 先加 total 再入队，任务结束才加
+// 但保证 completed + failed ≤ total：Submit 先加 total 再入队，任务结束才加
 // completed / failed；这里先读结束数、后读 total，读到的每个结束任务的提交计数都已可见。
 // 没有用一把锁包住计数和读取：那会让每个任务的提交与完成都去抢同一把锁，只为统计一致。
 func (tp *TaskPool) GetStats() (total, completed, failed int64, running bool) {
@@ -194,9 +194,8 @@ func (tp *TaskPool) hashTaskID(taskID int64) int {
 type taskWorker struct {
 	id       int
 	taskChan chan Task
-	// closeMu 让“检查 closed + 发送”与“置 closed + 关闭 channel”互斥
-	// （RR-20261005-NC-183）：之前两步之间 Shutdown 关闭 channel，Submit 向已
-	// 关闭的 channel 发送即 panic。发送是非阻塞的，读锁不会挡住 close 太久。
+	// closeMu 让“检查 closed + 发送”与“置 closed + 关闭 channel”互斥：否则两步之间 Shutdown
+	// 关闭 channel，Submit 向已关闭的 channel 发送即 panic。发送是非阻塞的，读锁不会挡住 close 太久。
 	// 与 worker.Worker.closeMu 同一做法：受理即进入 channel，必被排空执行。
 	closeMu sync.RWMutex
 	closed  atomic.Bool

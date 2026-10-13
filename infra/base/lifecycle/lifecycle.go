@@ -114,7 +114,7 @@ func (r *Registry) EmitAll(ctx context.Context, event Event) error {
 
 // EmitAllWatched 与 EmitAll 相同，另外在每个 hook 开始前用它的名字调用 starting（nil 时不调用）。
 // 停机方在预算内等 hook、到期不能杀掉它时，靠最后一次 starting 知道卡住的是哪一个，写进停机错误
-// （RR-20261006-25；之前只报阶段，同一阶段有多个 hook 时运维无从定位）。starting 在派发 hook 的
+// （只报阶段的话，同一阶段有多个 hook 时运维无从定位）。starting 在派发 hook 的
 // goroutine 里同步调用，不能阻塞。
 func (r *Registry) EmitAllWatched(ctx context.Context, event Event, starting func(hook string)) error {
 	if r == nil {

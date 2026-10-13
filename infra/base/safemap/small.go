@@ -126,7 +126,7 @@ func (m *SmallSafeMap[K, V]) SetRawMap(src map[K]V) {
 // returning bson.Type compiles, does not implement the interface, and is
 // silently never called — the value then goes through the default struct
 // encoder, and every field here is unexported, so the map used to serialize
-// as an empty document with nothing reporting it (RR-20260920-07).
+// as an empty document with nothing reporting it.
 func (m *SmallSafeMap[K, V]) MarshalBSONValue() (byte, []byte, error) {
 	typ, data, err := bson.MarshalValue(m.RawMap())
 	return byte(typ), data, err

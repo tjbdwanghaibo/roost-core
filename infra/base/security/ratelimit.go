@@ -19,8 +19,7 @@ type RateLimitKey struct {
 // IdleTTL 内用到的请求协议数：game-demo 模板共 29 个请求 MessageID，协议生成器只要求
 // ID 唯一、不限范围，所以协议号本身给不出上界。256 约为 demo 的 9 倍，留足大型游戏的
 // 协议余量；同时单个主体最多占默认表（MaxKeys=100000）的 0.256%，要占满默认表需要
-// 至少 391 个同时活跃、各自用满上限的已认证主体，这已是容量本身不足而非单点滥用
-// （RR-20261005-NC-82）。
+// 至少 391 个同时活跃、各自用满上限的已认证主体，这已是容量本身不足而非单点滥用。
 const DefaultMaxKeysPerOwner = 256
 
 type RateLimitConfig struct {
@@ -86,7 +85,7 @@ type RateLimitStats struct {
 // not have — one bucket per key with a bounded key set, idle eviction and
 // stats, so attacker-controlled key cardinality cannot grow memory.
 //
-// 容量按两层界定（RR-20261005-NC-82）：每个 OwnerID 至多 MaxKeysPerOwner 个 key，
+// 容量按两层界定：每个 OwnerID 至多 MaxKeysPerOwner 个 key，
 // 一个主体变化 Action 只会耗尽自己的名额；全表至多 MaxKeys 个 key，满表时陌生 key
 // 立即拒绝（O(1)），闲置 key 只由每 SweepInterval 至多一次的清扫回收，拒绝路径不会
 // 让全表扫描频率随请求速率增长。
@@ -143,7 +142,7 @@ func (l *RateLimiter) AllowN(key RateLimitKey, n int64) bool {
 	if n <= 0 {
 		return true
 	}
-	// RR-20261004-NC-05：不可满足的需求不占 key，也不刷新 idle 活性。
+	// 不可满足的需求不占 key，也不刷新 idle 活性。
 	// 先按实际 burst 拒绝，避免把非法需求误计为 key 容量耗尽。
 	if n > int64(l.burst) {
 		return false

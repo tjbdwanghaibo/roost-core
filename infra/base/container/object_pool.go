@@ -66,7 +66,7 @@ func (p *ObjectPool[T]) Put(obj T) {
 		}
 	}
 	// 不在 workList：外来对象，或同一对象第二次归还。已在 freeList 里的忽略——否则它在空闲表里有两份，
-	// 之后两次 Get 交出同一个对象，两个使用者共享一份可变状态（RR-20261005-NC-267）。
+	// 之后两次 Get 交出同一个对象，两个使用者共享一份可变状态。
 	for _, v := range p.freeList {
 		if any(v) == any(obj) {
 			return

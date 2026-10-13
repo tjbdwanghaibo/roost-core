@@ -43,7 +43,7 @@ func (h *BucketHolder[K, T]) RangeWithCursor(f func(K, T) bool) {
 // RangeWithCursorCnt 从游标处依次遍历 cursorCnt 个桶；f 返回 false 时立即停止，
 // 游标前进走过的桶数（已开始的桶算作走过）。
 //
-// 要遍历的桶在进入时就按游标定下（C7 遍历回调契约）：之前每个桶都现读游标，回调里
+// 要遍历的桶在进入时就按游标定下（遍历回调契约）：若每个桶都现读游标，回调里
 // 再调一次游标遍历会推进同一个游标，外层随后重走同一个桶、把同一条目交出两次。
 // 回调里推进的游标照样保留（这里是累加，不是覆盖）。
 func (h *BucketHolder[K, T]) RangeWithCursorCnt(cursorCnt uint, f func(K, T) bool) {
@@ -63,8 +63,8 @@ func (h *BucketHolder[K, T]) RangeByCursor(cursor uint, f func(K, T) bool) {
 
 // RangeAll 遍历全部桶，f 第一次返回 false 后不再被调用。
 //
-// 之前 false 只结束当前桶，接着遍历下一个桶（RR-20261005-NC-181），
-// EntityManager.Range / RangeByCategory 写明的提前停止因此不成立。
+// false 必须结束整个遍历而不只是当前桶，
+// EntityManager.Range / RangeByCategory 写明的提前停止依赖这一点。
 func (h *BucketHolder[K, T]) RangeAll(f func(K, T) bool) {
 	for _, bucket := range h.Buckets {
 		if rangeBucket(bucket, f) {
@@ -149,8 +149,8 @@ func (b *Bucket[K, T]) Clear() {
 
 // Range 在读锁内复制本桶条目，释放锁之后再逐个调用 f，f 返回 false 即停止。
 //
-// 回调不在锁内（RR-20261005-NC-180）：之前 f 在 RLock 内执行，回调里 Del / Add
-// 同一桶要写锁、未命中的 Get 也升级写锁，当场自锁；EntityManager.Range 的回调
+// 回调不在锁内：若 f 在 RLock 内执行，回调里 Del / Add
+// 同一桶要写锁、未命中的 Get 也升级写锁，会当场自锁；EntityManager.Range 的回调
 // 里 Destroy 实体会在持有实体锁与 addMu 时卡住，连带全进程的 Add / Destroy。
 // 代价是回调看到的是复制时的快照：期间被删除的条目仍可能交给 f，调用方照例
 // 在拿到对象自己的锁后复核（见 lock.LockManager.GetLock 的约定）。
