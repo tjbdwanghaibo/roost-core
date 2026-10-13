@@ -5,7 +5,7 @@
 // Delete / Clear / 嵌套 Range），不死锁、不交出不存在的键；回调返回 false 立即停止。遍历开始
 // 时就在、期间没被删除的键恰好交出一次；回调里新增的键是否交出不承诺。SmallSafeMap /
 // ShardedSafeMap 按快照遍历（期间删掉的未到达键仍可能交出），FastMap 活遍历（不交出）。
-// 回归：range_contract_promises_test.go（共用辅助 internal/rangecontract）。
+// 回归：range_contract_test.go（共用辅助 internal/rangecontract）。
 package safemap
 
 type IMap[K comparable, V any] interface {

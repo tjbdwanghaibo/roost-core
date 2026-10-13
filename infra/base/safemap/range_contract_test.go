@@ -6,10 +6,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/internal/rangecontract"
 )
 
-// C7（维护者 2026-10-05）：遍历回调契约——回调里可以读写同一个 map，返回 false 立即停止。
-// SmallSafeMap / ShardedSafeMap 按快照遍历（回调期间删掉的未到达键仍可能交出）；FastMap 活遍历
-// （删掉的不交出，回调里扩容 / Clear 之后到当前表查剩余键，NC-182）。生成 DAO 的 RangeX 直接委托
-// 给这三种 map，其组合在 codegen/internal/dao/testdata/runtime/range_contract_test.go 里再跑一遍。
+// 遍历回调契约（维护者决定 C7）：回调里可以读写同一个 map，返回 false 立即停止。SmallSafeMap / ShardedSafeMap 按快照遍历
+// （回调期间删掉的未到达键仍可能交出）；FastMap 活遍历（删掉的不交出，回调里扩容 / Clear 之后到当前表查剩余键）。生成 DAO 的
+// RangeX 直接委托给这三种 map，其组合在 codegen/internal/dao/testdata/runtime/range_contract_test.go 里再跑一遍。
 
 func mapOps(m IMap[int64, int64]) rangecontract.Ops {
 	return rangecontract.Ops{
