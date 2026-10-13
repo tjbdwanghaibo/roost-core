@@ -5,7 +5,9 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -265,12 +267,8 @@ func TestDoctorReportsUnimplementedCollaborators(t *testing.T) {
 	}
 }
 
-// RR-20261006-59: a framework service whose generated client routes by an
-// affinity key needs etcd discovery on both sides — the ClientMod refuses to
-// start without it, and the owner must register for callers to find its sid.
-// The catalog's Affinity flag is what adds the etcd Mod, so it must agree with
-// the generated transports, which declare AffinityMethods exactly when some
-// method routes by key.
+// 生成的客户端按亲和键路由的框架服务两侧都需要 etcd 发现（ClientMod 没有它拒绝启动，owner 要注册 sid 才能被找到）：
+// catalog 的 Affinity 标记决定是否加 etcd Mod，必须与生成的 transport 一致——有方法按键路由时才声明 AffinityMethods。
 func TestFrameworkCatalogAffinityMatchesTheGeneratedClients(t *testing.T) {
 	repo := filepath.Join("..", "..", "..")
 	for name, spec := range frameworkCatalog {
@@ -311,5 +309,166 @@ func TestFrameworkCatalogAffinityMatchesTheGeneratedClients(t *testing.T) {
 	}
 	if !contains(effectiveServiceMods(m, "match"), "etcd") {
 		t.Fatalf("the match owner does not register in etcd: %v", effectiveServiceMods(m, "match"))
+	}
+}
+
+// A hosted framework service sometimes has an OPTIONAL collaborator that is
+// not a NewMod parameter — platform's pending-order index is the first
+// (kit `Mod.WithPendingOrders`). The generated wiring has to call it, or the
+// project's collaborators file can define it and nothing will ever read it.
+//
+// The second promise here is the configuration block: platform's Mod refuses
+// at Init when `session_secret` or `payment_secret` is empty, so a generated
+// starter config that omits them produces a process that cannot start. The
+// account block already emits `session_secret: CHANGE_ME` for exactly this
+// reason.
+
+func TestHostedServiceChainsItsOptionalCollaborators(t *testing.T) {
+	generated := renderBootstrap(gameTemplateManifest(t))
+	const want = "svcplatform.NewMod(servicePlatform.Verify(), servicePlatform.Players(), servicePlatform.Deliver(), servicePlatform.Metrics()).WithPendingOrders(servicePlatform.Pending())"
+	if !strings.Contains(generated, want) {
+		t.Errorf("the platform Mod is wired without its pending-order index:\n%s", generated)
+	}
+}
+
+func TestPlatformConfigCarriesTheSecretsItsModRequires(t *testing.T) {
+	block := frameworkConfigSection("platform", "demo")
+	for _, key := range []string{"session_secret:", "payment_secret:"} {
+		if !strings.Contains(block, key) {
+			t.Errorf("platform config block omits %s, so the process refuses to start:\n%s", key, block)
+		}
+	}
+}
+
+// The default collaborators file has to define everything the wiring names,
+// including the optional ones, or the project does not compile.
+func TestDefaultCollaboratorsDefineEveryWiredName(t *testing.T) {
+	body := renderFrameworkCollaborators(gameTemplateManifest(t), "platform")
+	for _, fn := range []string{"func Verify()", "func Players()", "func Deliver()", "func Pending()", "func Metrics()"} {
+		if !strings.Contains(body, fn) {
+			t.Errorf("collaborators file is missing %s:\n%s", fn, body)
+		}
+	}
+}
+
+// A kit service whose Go package is not at the top of service/ — activity
+// lives at service/global/activity — must still be hostable. The catalog's
+// Package is both an identifier (svcactivity) and an import suffix, and those
+// are not the same string here; a catalog that conflates them generates
+// `svcglobal/activity`, which is not an identifier.
+func TestAServiceNestedUnderAnotherIsHostable(t *testing.T) {
+	m := gameTemplateManifest(t)
+	for _, name := range []string{"global", "activity"} {
+		if m.Services[name].Framework != name {
+			t.Fatalf("the game template does not host %s: %+v", name, m.Services[name])
+		}
+	}
+	generated := renderBootstrap(m)
+	for _, want := range []string{
+		`svcactivity "github.com/tjbdwanghaibo/roost-core/wiring/activity"`,
+		"svcactivity.NewMod(serviceActivity.Metrics())",
+		"svcglobal.NewMod(serviceGlobal.Metrics())",
+	} {
+		if !strings.Contains(generated, want) {
+			t.Errorf("bootstrap is missing %q:\n%s", want, generated)
+		}
+	}
+}
+
+// The activity Mod refuses an unset reservation_ttl at Init (it must exceed
+// the caller's retry horizon, which the service cannot pick), and since
+// 2026-10-06 an unset groups_file (nothing to check a window's expected set
+// against), so a starter config that omits either is a process that cannot
+// start.
+func TestActivityConfigCarriesTheTTLItsModRequires(t *testing.T) {
+	block := frameworkConfigSection("activity", "demo")
+	for _, want := range []string{"reservation_ttl:", "groups_file: " + activityGroupsFile + "\n"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("activity config block omits %q:\n%s", want, block)
+		}
+	}
+}
+
+// 每个托管服务的 collaborators 文件里，每一个 import 都被正文里的选择表达式引用（注释里出现的 `match.Grouping` 不算）：
+// 无条件 import 服务包会让生成文件 "imported and not used"、整个工程编译不过。
+func TestFrameworkCollaboratorsImportOnlyWhatTheyUse(t *testing.T) {
+	for framework := range frameworkCatalog {
+		m := DefaultManifest("planet", "example.com/planet", []string{framework}, nil, nil)
+		m.Services[framework] = ServiceSpec{Framework: framework}
+		src := renderFrameworkCollaborators(m, framework)
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, framework+"/collaborators.go", src, 0)
+		if err != nil {
+			t.Fatalf("%s collaborators do not parse: %v\n%s", framework, err, src)
+		}
+		used := map[string]bool{}
+		ast.Inspect(file, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if ident, ok := sel.X.(*ast.Ident); ok {
+					used[ident.Name] = true
+				}
+			}
+			return true
+		})
+		for _, imp := range file.Imports {
+			importPath := strings.Trim(imp.Path.Value, `"`)
+			name := path.Base(importPath)
+			if imp.Name != nil {
+				name = imp.Name.Name
+			}
+			if !used[name] {
+				t.Errorf("%s collaborators import %q but never use it:\n%s", framework, importPath, src)
+			}
+		}
+	}
+}
+
+// C6（维护者决定，docs/feature/C6-DEFAULT-SERVICE-METRICS-2026-10-06.md）：生成工程的每个托管服务默认把
+// servicemetrics 事件写进进程的 metrics 注册表（ops /metrics 导出），而不是 Metrics() 返回 nil、
+// 事件无处落地（N06 观察 1、N12 O1）。承诺：
+//   - 生成器写的 collaborators.go 与 game-demo 自带的 collaborators.go，Metrics() 都返回
+//     servicemetrics.NewMetricsReporter("<服务名>")；
+//   - 注释说明怎么关：返回 nil，或配置 service_metrics.enabled: false。
+
+var metricsCollaborator = regexp.MustCompile(`func Metrics\(\) servicemetrics\.Reporter \{\s*return ([^\n}]*)\}`)
+
+func TestGeneratedServicesReportIntoTheMetricsRegistryByDefault(t *testing.T) {
+	t.Parallel()
+	root := newGameDemo(t)
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, name := range sortedServiceNames(m) {
+		if !m.isFrameworkService(name) {
+			continue
+		}
+		rel := "internal/service/" + name + "/collaborators.go"
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		match := metricsCollaborator.FindStringSubmatch(string(raw))
+		if match == nil {
+			t.Fatalf("%s has no Metrics() collaborator", rel)
+		}
+		want := `servicemetrics.NewMetricsReporter("` + name + `")`
+		if got := strings.TrimSpace(match[1]); got != want {
+			t.Fatalf("%s: Metrics() returns %s, want %s: a nil reporter leaves the service's events with nowhere to go", rel, got, want)
+		}
+		if !strings.Contains(string(raw), "service_metrics.enabled") {
+			t.Fatalf("%s does not say how to turn the default reporter off", rel)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("game-demo hosts no framework service")
+	}
+	// A project the generator writes from scratch (not the demo's own files).
+	plain := Manifest{Project: ProjectSpec{Name: "plain"}, Services: map[string]ServiceSpec{"rank": {Framework: "rank"}}}
+	match := metricsCollaborator.FindStringSubmatch(renderFrameworkCollaborators(plain, "rank"))
+	if match == nil || strings.TrimSpace(match[1]) != `servicemetrics.NewMetricsReporter("rank")` {
+		t.Fatalf("the generated rank collaborators return %v, want the default reporter", match)
 	}
 }

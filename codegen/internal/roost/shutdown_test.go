@@ -3,6 +3,7 @@ package roost
 import (
 	"bytes"
 	"crypto/sha256"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,6 +14,386 @@ import (
 	"testing"
 	"time"
 )
+
+// 停机预算按服务计算：生成器从每个服务 bootstrap 实际注册的 Mod 算出
+//
+//	total_timeout = 声明的停机预算之和 + 3s x 未声明的 Mod + 5s（带 dataengine 的服务再加 3s 单实例锁释放）
+//	grace period  = total_timeout + 5s
+//
+// 并把同一组数字写进服务配置（开发与生产示例）、k8s workload、生产 compose、shell 安装器写的 systemd unit 和
+// dev 运行脚本。声明预算的 Mod：dataengine（dataengine.shutdown_timeout，30s）与 player TCP
+// （player_access.tcp.shutdown_timeout，10s）；App 给每个未声明的 Mod 留 3s 下限，固定 60s 盖不住 game-demo 的 game 服务。
+
+// bootstrapModCounts reads the generated bootstrap and returns, per service,
+// how many Mods the process registers: the shared a.Mods(...) block plus the
+// Mods passed to that service's RegisterServer. It is read from the output, not
+// from the generator's own bookkeeping, so the two cannot agree by accident.
+func bootstrapModCounts(t *testing.T, root string) (map[string]int, map[string]declaringMods) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, "internal", "bootstrap", "generated.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	constructor := regexp.MustCompile(`(?m)^\t\t\S`)
+	shared := 0
+	if start := strings.Index(body, "\ta.Mods(\n"); start >= 0 {
+		block := body[start : start+strings.Index(body[start:], "\n\t)\n")]
+		shared = len(constructor.FindAllString(block, -1))
+	}
+	sharedDataEngine := strings.Contains(body[:max(strings.Index(body, "a.RegisterServer("), 0)], "kitdataengine.NewMod(")
+	counts, declares := map[string]int{}, map[string]declaringMods{}
+	register := regexp.MustCompile(`(?m)^\ta\.RegisterServer\(app\.ServiceName\(([^)]*)\)`)
+	for _, match := range register.FindAllStringSubmatchIndex(body, -1) {
+		name := strings.Trim(body[match[2]:match[3]], `"`)
+		if strings.HasPrefix(name, "domain") && strings.HasSuffix(name, ".ServiceType") {
+			name = strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(name, "domain"), ".ServiceType"))
+		}
+		rest := body[match[0]:]
+		end := strings.Index(rest, "\n\ta.")
+		if end < 0 {
+			end = strings.Index(rest, "\n\treturn a, nil")
+		}
+		block := rest[:end]
+		counts[name] = shared + len(constructor.FindAllString(block, -1))
+		declares[name] = declaringMods{
+			dataengine: sharedDataEngine || strings.Contains(block, "kitdataengine.NewMod("),
+			playerTCP:  strings.Contains(block, "accessplayertcp.NewMod("),
+		}
+	}
+	return counts, declares
+}
+
+// declaringMods is which of the Mods that declare a stop budget a service's
+// bootstrap registers.
+type declaringMods struct{ dataengine, playerTCP bool }
+
+// expectedShutdown is the formula of the fix, applied to what the bootstrap
+// registers: dataengine declares dataengine.shutdown_timeout (30s in the
+// generated config), the player TCP Mod player_access.tcp.shutdown_timeout
+// (10s, RR-20260927-05); every other Mod declares nothing. A service with
+// dataengine has singleton.enabled: true in its generated config, and the App
+// keeps 3s of the window back from the Mods for the release (APP-SINGLETON-LOCK §3.5).
+func expectedShutdown(mods int, declares declaringMods) (totalSeconds, graceSeconds int) {
+	declared, undeclared, release := 0, mods, 0
+	if declares.dataengine {
+		declared, undeclared, release = declared+30, undeclared-1, 3
+	}
+	if declares.playerTCP {
+		declared, undeclared = declared+10, undeclared-1
+	}
+	total := declared + 3*undeclared + 5 + release
+	return total, total + 5
+}
+
+func assertContains(t *testing.T, root, rel, want string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), want) {
+		t.Errorf("%s does not contain %q", rel, want)
+	}
+}
+
+func assertGeneratedShutdown(t *testing.T, root string, service string, total, grace int) {
+	t.Helper()
+	for _, rel := range []string{
+		"configs/service/config." + service + ".yaml",
+		"configs/service/config." + service + ".prod.example.yaml",
+		"deploy/k8s/base/secret." + service + ".example.yaml",
+	} {
+		assertContains(t, root, rel, fmt.Sprintf("total_timeout: %ds\n", total))
+		assertContains(t, root, rel, fmt.Sprintf(">= total_timeout + 5s: %ds for this service", grace))
+	}
+	assertContains(t, root, "deploy/k8s/base/"+service+".yaml", fmt.Sprintf("terminationGracePeriodSeconds: %d\n", grace))
+	compose, err := os.ReadFile(filepath.Join(root, "deploy", "docker", "docker-compose.prod.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := string(compose)[strings.Index(string(compose), "\n  "+service+":\n"):]
+	if next := regexp.MustCompile(`\n  [a-z0-9_-]+:\n`).FindStringIndex(block[1:]); next != nil {
+		block = block[:next[0]+1]
+	}
+	if !strings.Contains(block, fmt.Sprintf("stop_grace_period: %ds\n", grace)) {
+		t.Errorf("compose service %s: stop_grace_period is not %ds:\n%s", service, grace, block)
+	}
+	assertContains(t, root, "deploy/shell/install.sh", fmt.Sprintf("  %s) STOP_TIMEOUT=%ds ;;\n", service, grace))
+	// audit8 D3: the shell README names the same per-service value, not a fixed 45s.
+	readme, err := os.ReadFile(filepath.Join(root, "deploy", "shell", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(当前为 |、)`+regexp.QuoteMeta(fmt.Sprintf("%s %ds", service, grace))+`(、|；)`).Match(readme) || strings.Contains(string(readme), "45 秒") {
+		t.Errorf("deploy/shell/README.md does not give %s the stop budget %ds install.sh uses", service, grace)
+	}
+	run, err := os.ReadFile(filepath.Join(root, "deploy", "dev", "run.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := fmt.Sprintf("%s:%d:%d", service, opsPortOf(t, root, service), grace)
+	if !regexp.MustCompile(`[" ]` + regexp.QuoteMeta(entry) + `[" ]`).Match(run) {
+		t.Errorf("deploy/dev/run.sh SERVICES has no %q entry", entry)
+	}
+}
+
+func opsPortOf(t *testing.T, root, service string) int {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, "deploy", "dev", "run.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`[" ]` + regexp.QuoteMeta(service) + `:(\d+)`).FindStringSubmatch(string(raw))
+	if match == nil {
+		t.Fatalf("deploy/dev/run.sh has no entry for %s", service)
+	}
+	var port int
+	fmt.Sscanf(match[1], "%d", &port)
+	return port
+}
+
+func TestGeneratedShutdownTimeoutFollowsEachServicesMods(t *testing.T) {
+	target := newGameDemo(t)
+	counts, declares := bootstrapModCounts(t, target)
+	// The real game service of the demo: 21 service Mods (etcd among them, for the
+	// match / activity clients that route by key, RR-20261006-59) + lock, ops, statslog.
+	if counts["game"] != 24 || !declares["game"].dataengine || !declares["game"].playerTCP {
+		t.Fatalf("game registers %d Mods (declaring: %+v), want 24 with dataengine and the player TCP Mod", counts["game"], declares["game"])
+	}
+	// 30s + 10s + 3s x 22 + 5s + 3s singleton release; a framework service (redis, nats, its owner Mod + 3 shared): 3s x 6 + 5s.
+	pinned := map[string][2]int{"game": {114, 119}, "account": {23, 28}}
+	for service, mods := range counts {
+		total, grace := expectedShutdown(mods, declares[service])
+		if want, ok := pinned[service]; ok && (want[0] != total || want[1] != grace) {
+			t.Fatalf("%s: formula gives %ds / %ds, pinned %v", service, total, grace, want)
+		}
+		t.Run(service, func(t *testing.T) { assertGeneratedShutdown(t, target, service, total, grace) })
+	}
+	if counts["account"] >= counts["game"] {
+		t.Fatalf("account registers %d Mods, game %d", counts["account"], counts["game"])
+	}
+	// The second game process runs the game service's Mods and waits as long.
+	assertContains(t, target, "deploy/dev/second-game.sh", `[ "$i" -lt 119 ]`)
+}
+
+// A service with few Mods gets a smaller window than the demo's game service.
+func TestGeneratedShutdownTimeoutIsSmallerForAServiceWithFewMods(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	if _, _, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target,
+		Services: []string{"gate"}, Mods: []string{"configdata"}, Features: []string{"config"}}); err != nil {
+		t.Fatal(err)
+	}
+	counts, declares := bootstrapModCounts(t, target)
+	if declares["gate"] != (declaringMods{}) {
+		t.Fatalf("gate unexpectedly runs a declaring Mod: %+v", declares["gate"])
+	}
+	total, grace := expectedShutdown(counts["gate"], declaringMods{})
+	if total >= 114 {
+		t.Fatalf("gate with %d Mods gets %ds, not less than the game service's 114s", counts["gate"], total)
+	}
+	assertGeneratedShutdown(t, target, "gate", total, grace)
+}
+
+func readProjectFile(t *testing.T, root, rel string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// The configs are application-owned and rendered once, but the grace periods
+// are regenerated on every sync from the current Mods. A Mod added later has
+// to move an unedited generated shutdown: block with it (the game-demo is
+// built exactly that way: its configs are written with 20 Mods, the scaffold
+// then adds saga and the two player access Mods). A block someone edited, or
+// one from an older generator, is left alone.
+func TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods(t *testing.T) {
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
+	counts, declares := bootstrapModCounts(t, root)
+	before, _ := expectedShutdown(counts["game"], declares["game"])
+	if _, err := Add(root, AddOptions{Kind: "mod", Name: "redis", Service: "game"}); err != nil {
+		t.Fatal(err)
+	}
+	counts, declares = bootstrapModCounts(t, root)
+	total, grace := expectedShutdown(counts["game"], declares["game"])
+	if total != before+3 {
+		t.Fatalf("adding redis moved the formula from %ds to %ds, want +3s", before, total)
+	}
+	assertGeneratedShutdown(t, root, "game", total, grace)
+
+	// Hand-edited: kept as written, through the next Mod.
+	dev := readProjectFile(t, root, "configs/service/config.game.yaml")
+	writeProjectFile(t, root, "configs/service/config.game.yaml", strings.Replace(dev, fmt.Sprintf("total_timeout: %ds\n", total), "total_timeout: 200s\n", 1))
+	// Written by a generator before RR-20260926-66: kept as written too.
+	legacy := "shutdown:\n  # Keep it >= dataengine.shutdown_timeout + 3s x the other Mods.\n  total_timeout: 60s\n  serve_wait_timeout: 5s\n"
+	prod := readProjectFile(t, root, "configs/service/config.game.prod.example.yaml")
+	end := shutdownBlockEnd(prod)
+	writeProjectFile(t, root, "configs/service/config.game.prod.example.yaml", strings.Replace(prod, prod[strings.Index(prod, "shutdown:\n"):end], legacy, 1))
+	if _, err := Add(root, AddOptions{Kind: "mod", Name: "mongo", Service: "game"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readProjectFile(t, root, "configs/service/config.game.yaml"); !strings.Contains(got, "total_timeout: 200s\n") {
+		t.Errorf("a hand-edited total_timeout was rewritten:\n%s", got)
+	}
+	if got := readProjectFile(t, root, "configs/service/config.game.prod.example.yaml"); !strings.Contains(got, legacy) {
+		t.Errorf("a shutdown block from an older generator was rewritten:\n%s", got)
+	}
+	// The secret example was never touched by hand and keeps following.
+	counts, declares = bootstrapModCounts(t, root)
+	total, _ = expectedShutdown(counts["game"], declares["game"])
+	assertContains(t, root, "deploy/k8s/base/secret.game.example.yaml", fmt.Sprintf("total_timeout: %ds\n", total))
+	// The grace period follows the longest configured total (the hand-edited 200s), not the formula.
+	assertDeployedGrace(t, root, "game", 205)
+}
+
+// deployedGraces reads a service's grace period out of every generated
+// deployment template: k8s, production compose, the systemd installer and the
+// dev run script.
+func deployedGraces(t *testing.T, root, service string) map[string]int {
+	t.Helper()
+	number := func(rel, pattern string) int {
+		match := regexp.MustCompile(pattern).FindStringSubmatch(readProjectFile(t, root, rel))
+		if match == nil {
+			t.Fatalf("%s: no grace period for %s (%s)", rel, service, pattern)
+		}
+		var value int
+		fmt.Sscanf(match[1], "%d", &value)
+		return value
+	}
+	compose := readProjectFile(t, root, "deploy/docker/docker-compose.prod.yaml")
+	block := compose[strings.Index(compose, "\n  "+service+":\n")+1:]
+	if next := regexp.MustCompile(`\n  [a-z0-9_-]+:\n`).FindStringIndex(block); next != nil {
+		block = block[:next[0]]
+	}
+	composeGrace := regexp.MustCompile(`stop_grace_period: (\d+)s`).FindStringSubmatch(block)
+	if composeGrace == nil {
+		t.Fatalf("compose service %s has no stop_grace_period", service)
+	}
+	var composeValue int
+	fmt.Sscanf(composeGrace[1], "%d", &composeValue)
+	return map[string]int{
+		"k8s":     number("deploy/k8s/base/"+service+".yaml", `terminationGracePeriodSeconds: (\d+)`),
+		"compose": composeValue,
+		"systemd": number("deploy/shell/install.sh", `\n  `+regexp.QuoteMeta(service)+`\) STOP_TIMEOUT=(\d+)s ;;`),
+		"dev":     number("deploy/dev/run.sh", `[" ]`+regexp.QuoteMeta(service)+`:\d+:(\d+)[" ]`),
+	}
+}
+
+func assertDeployedGrace(t *testing.T, root, service string, want int) {
+	t.Helper()
+	for template, got := range deployedGraces(t, root, service) {
+		if got != want {
+			t.Errorf("%s: %s grace period = %ds, want %ds", service, template, got, want)
+		}
+	}
+}
+
+// sync 重新生成的宽限期不能低于进程实际会等的时间：沿用旧 60s shutdown 块（sync 不改写它）或手改过 total 的工程，
+// 公式单独算出的宽限期会小于配置的 total，平台会在 App 自己的窗口中途 SIGKILL。所以 grace = max(公式, 配置的 total) + 5s。
+func TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal(t *testing.T) {
+	t.Parallel()
+	target := newGameDemo(t)
+	// account: the shutdown block a generator before RR-66 wrote (RR-51: 60s for every service).
+	legacy := "shutdown:\n" +
+		"  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without\n" +
+		"  # a declared stop budget keeps a fixed 3s floor; a Mod that declares one\n" +
+		"  # (dataengine.shutdown_timeout) is granted it from the rest, scaled down with a warning only\n" +
+		"  # when the rest cannot cover it. Keep it >= dataengine.shutdown_timeout + 3s x the other Mods.\n" +
+		"  # The deployment's termination grace period (k8s terminationGracePeriodSeconds, compose\n" +
+		"  # stop_grace_period, systemd TimeoutStopSec) must be >= total_timeout + 5s: 65s by default.\n" +
+		"  total_timeout: 60s\n  serve_wait_timeout: 5s\n"
+	for _, rel := range []string{"configs/service/config.account.yaml", "configs/service/config.account.prod.example.yaml"} {
+		body := readProjectFile(t, target, rel)
+		end := shutdownBlockEnd(body)
+		writeProjectFile(t, target, rel, strings.Replace(body, body[strings.Index(body, "shutdown:\n"):end], legacy, 1))
+	}
+	// game: a hand-edited total above the formula's 114s.
+	game := readProjectFile(t, target, "configs/service/config.game.yaml")
+	writeProjectFile(t, target, "configs/service/config.game.yaml", strings.Replace(game, "total_timeout: 114s\n", "total_timeout: 120s\n", 1))
+	if _, err := SyncProject(target); err != nil {
+		t.Fatal(err)
+	}
+	assertDeployedGrace(t, target, "account", 65)
+	assertDeployedGrace(t, target, "game", 125)
+	// Services nobody touched keep the formula.
+	assertDeployedGrace(t, target, "chat", 28)
+	// Neither config was rewritten.
+	assertContains(t, target, "configs/service/config.account.yaml", legacy)
+	assertContains(t, target, "configs/service/config.game.yaml", "total_timeout: 120s\n")
+	// The second game process waits as long as the first.
+	assertContains(t, target, "deploy/dev/second-game.sh", `[ "$i" -lt 125 ]`)
+
+	// A config with no total_timeout key runs on the App's 30s fallback.
+	rel := "configs/service/config.chat.yaml"
+	writeProjectFile(t, target, rel, regexp.MustCompile(`  total_timeout: \d+s\n`).ReplaceAllString(readProjectFile(t, target, rel), ""))
+	if _, err := SyncProject(target); err != nil {
+		t.Fatal(err)
+	}
+	assertDeployedGrace(t, target, "chat", 35)
+}
+
+// roost doctor reports a config the generator no longer maintains when its
+// window no longer fits: one the platform would cut short (a framework
+// service still on the old 60s default, now generated with a 28s grace
+// period), and one too short for its Mods (the game service on 60s).
+func TestDoctorChecksEachServicesShutdownWindow(t *testing.T) {
+	t.Parallel()
+	target := newGameDemo(t)
+	m, err := LoadManifest(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := func() map[string]CheckItem {
+		items := map[string]CheckItem{}
+		for _, item := range checkShutdownBudgets(target, m) {
+			items[item.Name] = item
+		}
+		return items
+	}
+	for name, item := range status() {
+		if item.Status != StatusOK {
+			t.Errorf("freshly generated %s: %s %s", name, item.Status, item.Detail)
+		}
+	}
+	for _, service := range []string{"account", "game"} {
+		rel := "configs/service/config." + service + ".yaml"
+		body := regexp.MustCompile(`total_timeout: \d+s\n`).ReplaceAllString(readProjectFile(t, target, rel), "total_timeout: 60s\n")
+		writeProjectFile(t, target, rel, body)
+	}
+	// Before a sync the deployment templates still carry 28s for account:
+	// a process the platform would SIGKILL while the App is still stopping it.
+	items := status()
+	if item := items["shutdown:account"]; item.Status != StatusFail || !strings.Contains(item.Detail, "deploy/k8s/base/account.yaml grace period 28s < total_timeout 60s + 5s") {
+		t.Errorf("account on 60s before sync: %s %s", item.Status, item.Detail)
+	}
+	if item := items["shutdown:game"]; item.Status != StatusWarn || !strings.Contains(item.Detail, "cannot cover 24 Mods (40s declared + 3s x 22 + 3s singleton release = 109s)") || !strings.Contains(item.Detail, "Set it to 114s") {
+		t.Errorf("game on 60s: %s %s", item.Status, item.Detail)
+	}
+	// Sync follows the configured total: the grace period is back above it.
+	if _, err := SyncProject(target); err != nil {
+		t.Fatal(err)
+	}
+	items = status()
+	if item := items["shutdown:account"]; item.Status != StatusOK {
+		t.Errorf("account on 60s after sync: %s %s", item.Status, item.Detail)
+	}
+	if item := items["shutdown:game"]; item.Status != StatusWarn {
+		t.Errorf("game on 60s after sync: %s %s (the total still cannot cover its Mods)", item.Status, item.Detail)
+	}
+}
+
+// shutdownBlockEnd is the end of the first shutdown: block's total_timeout
+// line, the block's last line since RR-20261006-38 dropped the unread
+// serve_wait_timeout.
+func shutdownBlockEnd(body string) int {
+	start := strings.Index(body, "shutdown:\n")
+	line := strings.Index(body[start:], "  total_timeout: ") + start
+	return line + strings.IndexByte(body[line:], '\n') + 1
+}
 
 const legacyShutdownBlock = "shutdown:\n" +
 	"  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without\n" +
@@ -89,8 +470,8 @@ func editManifest(t *testing.T, root string, edit func(*Manifest)) {
 	writeProjectFile(t, root, ManifestName, string(raw))
 }
 
-// newGameDemo 返回一份私有的 game-demo 工程。同参数只真实 NewProject 一次，之后复制（RR-20260928-14，
-// 见 project_fixture_test.go；副本与新鲜生成逐字节相同）。
+// newGameDemo 返回一份私有的 game-demo 工程。同参数只真实 NewProject 一次，之后复制（见 project_fixture_test.go；
+// 副本与新鲜生成逐字节相同）。
 func newGameDemo(t *testing.T) string {
 	t.Helper()
 	return copyOfNewProject(t, "game-demo")
@@ -263,19 +644,13 @@ func assertProjectUnchanged(t *testing.T, root string, before map[string][sha256
 	}
 }
 
-// blockWritesIn makes the files already in dir impossible to replace for the
-// rest of the test, so an atomic write into dir (writeAtomic: a temporary
-// file, then a rename over the target) fails. The files keep their bytes and
-// stay readable.
+// blockWritesIn 让 dir 里已有的文件在本测试余下时间里无法被替换，于是向 dir 的原子写（writeAtomic：先写临时文件，再改名覆盖）
+// 失败；文件内容不变、仍可读。
 //
-// RR-20260927-01：这里原先只有 os.Chmod(dir, 0o555)。Windows 上 os.Chmod 只切换文件的只读属性
-// （os.Chmod 文档：Windows 只用 0o200 位），对目录的写入与改名不起作用，CI windows-compatibility
-// 因此 "sync succeeded although configs/service is read-only"。Windows 上改为持有目录里每个文件的
-// 句柄：Go 在 Windows 打开文件时共享模式只有 FILE_SHARE_READ|FILE_SHARE_WRITE、不带
-// FILE_SHARE_DELETE（syscall.Open），而 os.Rename 是 MoveFileEx(MOVEFILE_REPLACE_EXISTING)——
-// 替换一个这样被打开的文件、或把它挪去备份，都会被拒绝，writeAtomic 的直接改名与它为 Windows 准备的
-// “先挪到备份再改名”两条路都失败；读取（os.ReadFile 同样只要读共享）不受影响。Unix 上打开的句柄
-// 不妨碍改名，仍用去掉目录写权限的办法（创建临时文件即失败）。
+// Windows 上 os.Chmod 只切换文件的只读属性，对目录的写入与改名不起作用，所以改为持有目录里每个文件的句柄：Go 在 Windows
+// 打开文件时共享模式不带 FILE_SHARE_DELETE，而 os.Rename 是 MoveFileEx(MOVEFILE_REPLACE_EXISTING)——替换一个这样被打开的
+// 文件、或把它挪去备份，都会被拒绝，writeAtomic 的直接改名与“先挪到备份再改名”两条路都失败；读取不受影响。Unix 上打开的
+// 句柄不妨碍改名，仍用去掉目录写权限的办法（创建临时文件即失败）。
 func blockWritesIn(t *testing.T, dir string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -749,4 +1124,29 @@ func TestSyncMovesAnUneditedBlockWrittenBeforeThePlayerTCPBudget(t *testing.T) {
 	}
 	assertDeployedGrace(t, root, "game", int((plan.total+generatedGraceOverTotal)/time.Second))
 	assertProjectDiffEmpty(t, root)
+}
+
+func TestExplicitZeroTCPShutdownBudgetIsRefused(t *testing.T) {
+	var s shutdownSettings
+	s.PlayerAccess.TCP.ShutdownTimeout = "0s"
+	if got, err := configuredDeclaredBudgets(serviceShutdown{playerTCP: 1}, s); err == nil {
+		t.Fatalf("explicit zero accepted with budget %s", got)
+	}
+	s.PlayerAccess.TCP.ShutdownTimeout = ""
+	if got, err := configuredDeclaredBudgets(serviceShutdown{playerTCP: 1}, s); err != nil || got != 10*time.Second {
+		t.Fatalf("missing default: %s %v", got, err)
+	}
+}
+func TestGeneratedTCPBudgetKeepsInheritance(t *testing.T) {
+	for _, raw := range []string{"nest:\n  request_timeout: 12s\n", "service: game\n"} {
+		d, err := parseYAMLDocument([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range playerTCPDefaultsFor(d) {
+			if (entry.key == "dispatch_timeout" || entry.key == "login_timeout") && entry.value != "0s" {
+				t.Errorf("generated %s=%s freezes a runtime fallback", entry.key, entry.value)
+			}
+		}
+	}
 }

@@ -16,7 +16,7 @@
 # of scripts/source-head-check.sh; 6d04aea4 removed that line when the release
 # chain became one module, and all four exited 2 ("cannot determine the
 # roost-core pin") without anybody noticing — no workflow ran them.
-# internal/roost/core_pin_script_promises_test.go pins this script's output to
+# internal/roost/release_test.go (TestCorePinScriptPrintsTheGeneratorMinimum) pins this script's output to
 # minimumVersions.Core.
 set -eu
 

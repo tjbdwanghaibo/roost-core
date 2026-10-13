@@ -1,14 +1,24 @@
 package roost
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 // The embed pattern in demo/embed.go lists top-level directories by name, so a
@@ -650,4 +660,452 @@ func TestGeneratedMakefileHasLoadtestTarget(t *testing.T) {
 	if !strings.Contains(body, " loadtest ") && !strings.Contains(body, " loadtest\n") {
 		t.Errorf("loadtest is not declared .PHONY")
 	}
+}
+
+// C4（维护者决定，docs/feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md）：托管 activity 协调器的工程生成
+// 一份活动组文件 configs/activity_groups.yaml，协调器与 game-demo 的 game 都经 activity.groups_file 读它。
+// 承诺：
+//   - 文件存在，一个以工程名为 id 的组，成员覆盖生成的各部署方式给第一个业务服务的 sid（本机 / k8s /
+//     shell 1000、second-game.sh 1001、生产 compose 的 1000+N），game 按任何一种生成的方式启动都在组里；
+//   - 协调器的开发 / 生产示例配置写 groups_file，不再写 sweep_groups: []（组 id 只写在组文件里）；
+//   - game-demo 的 game 三份配置写 groups_file，不再有 activity.game_sids；
+//   - 文件随发布走：Dockerfile 把它拷到 /app 下同一相对路径，shell install 把它装进 release；
+//   - second-game.sh 在 game 读组文件时先检查自己的 sid 在文件里。
+// 文件的校验规则本身（≤ 64、重复、int32……）由 kit/service/global/activity 的 groups 测试守；生成器不得
+// import kit（dependency_boundary_test），这里按文件格式直接解析。
+
+func TestGameDemoActivityGroupsFileIsTheOneDefinition(t *testing.T) {
+	t.Parallel()
+	root := newGameDemo(t)
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(rel string) string {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+
+	var file struct {
+		Groups []struct {
+			ID       string  `yaml:"id"`
+			GameSIDs []int32 `yaml:"game_sids"`
+		} `yaml:"groups"`
+	}
+	if err := yaml.Unmarshal([]byte(read(activityGroupsFile)), &file); err != nil {
+		t.Fatalf("decode %s: %v", activityGroupsFile, err)
+	}
+	if len(file.Groups) != 1 || file.Groups[0].ID != m.Project.Name {
+		t.Fatalf("%s groups = %+v, want one group named %q", activityGroupsFile, file.Groups, m.Project.Name)
+	}
+	members := file.Groups[0].GameSIDs
+
+	// Every sid a generated deployment starts the game with is a member.
+	gameService := m.Access["player"].Service
+	composeSID := regexp.MustCompile(`"` + regexp.QuoteMeta(gameService) + `", "--sid=(\d+)"`).FindStringSubmatch(read("deploy/docker/docker-compose.prod.yaml"))
+	if composeSID == nil {
+		t.Fatal("the production compose does not start the game with a --sid")
+	}
+	k8sSID := regexp.MustCompile(`name: ROOST_SID\s+value: "(\d+)"`).FindStringSubmatch(read("deploy/k8s/base/" + gameService + ".yaml"))
+	if k8sSID == nil {
+		t.Fatal("the k8s workload sets no ROOST_SID")
+	}
+	secondSID := regexp.MustCompile(`SECOND_SID:-(\d+)`).FindStringSubmatch(read("deploy/dev/second-game.sh"))
+	devSID := regexp.MustCompile(`SID:-(\d+)`).FindStringSubmatch(read("deploy/dev/run.sh"))
+	if secondSID == nil || devSID == nil {
+		t.Fatal("the dev scripts set no default sid")
+	}
+	for _, started := range []struct{ how, sid string }{
+		{"production compose", composeSID[1]}, {"k8s", k8sSID[1]}, {"second-game.sh", secondSID[1]}, {"run.sh", devSID[1]},
+	} {
+		sid, _ := strconv.Atoi(started.sid)
+		if !slices.Contains(members, int32(sid)) {
+			t.Fatalf("%s starts the game as sid %d, which is in no group of %s %v: that game would refuse to start", started.how, sid, activityGroupsFile, members)
+		}
+	}
+
+	for _, rel := range []string{"configs/service/config.activity.yaml", "configs/service/config.activity.prod.example.yaml"} {
+		leaves := configLeaves(t, rel, read(rel))
+		if leaves["activity.groups_file"] != activityGroupsFile {
+			t.Fatalf("%s activity.groups_file = %q, want %q", rel, leaves["activity.groups_file"], activityGroupsFile)
+		}
+		if _, ok := leaves["activity.sweep_groups"]; ok {
+			t.Fatalf("%s still writes activity.sweep_groups; the group ids are written once, in %s", rel, activityGroupsFile)
+		}
+	}
+	for _, rel := range []string{
+		"configs/service/config." + gameService + ".yaml",
+		"configs/service/config." + gameService + ".prod.example.yaml",
+	} {
+		leaves := configLeaves(t, rel, read(rel))
+		if leaves["activity.groups_file"] != activityGroupsFile {
+			t.Fatalf("%s activity.groups_file = %q, want %q", rel, leaves["activity.groups_file"], activityGroupsFile)
+		}
+		if _, ok := leaves["activity.game_sids"]; ok {
+			t.Fatalf("%s still has the removed activity.game_sids", rel)
+		}
+	}
+
+	if want := "COPY --from=build /src/" + activityGroupsFile + " /app/" + activityGroupsFile; !strings.Contains(read("Dockerfile"), want) {
+		t.Fatalf("the Dockerfile does not ship the groups file (%q)", want)
+	}
+	if want := `install -m 0644 "$ACTIVITY_GROUPS" "$RELEASE_ROOT/` + activityGroupsFile + `"`; !strings.Contains(read("deploy/shell/install.sh"), want) {
+		t.Fatalf("install.sh does not install the groups file into the release (%q)", want)
+	}
+	if !strings.Contains(read("deploy/dev/second-game.sh"), "check_activity_group\n") {
+		t.Fatal("second-game.sh does not check its sid against the groups file before starting")
+	}
+}
+
+// A project without the activity coordinator gets no groups file and no
+// Dockerfile line for one.
+func TestNoActivityGroupsFileWithoutTheCoordinator(t *testing.T) {
+	t.Parallel()
+	m := Manifest{Project: ProjectSpec{Name: "plain"}, Services: map[string]ServiceSpec{"game": {}}}
+	if hostsActivityCoordinator(m) {
+		t.Fatal("a project with no activity service hosts the coordinator")
+	}
+	if strings.Contains(renderDockerfile(m), activityGroupsFile) {
+		t.Fatal("the Dockerfile copies a groups file the project does not have")
+	}
+	if guard, install := renderShellActivityGroups(m); guard != "" || install != "" {
+		t.Fatal("install.sh requires a groups file the project does not have")
+	}
+}
+
+// game-demo 的生产示例配置与 k8s Secret 示例必须能让 game 通过 Init 的配置校验：platform.payment_secret 非空、
+// App 单实例锁打开、activity.key_prefix 非空、activity.groups_file 指向活动组文件、platform.key_prefix 按
+// kit/mods.KeyPrefix 的规则非空且无空白。
+// 同时守“与开发配置同源”：每个服务的生产示例与开发配置的键集合一致；Secret 示例里 demo 追加的段与生产示例一致；
+// 前缀取值与开发配置、以及所属服务自己的配置相同；密钥不沿用开发值（生产里是 CHANGE_ME，由运维填）。
+// Secret 与生产示例整体同源由 k8s_contract_test.go 守。
+// App 单实例锁：game 带 dataengine，三份配置都要 singleton.enabled: true、key_prefix 为 roost:<project>:singleton，
+// 取值满足 App 启动校验的三条关系。按玩家的 Redis 表已删除，game_route 段在三份配置里都不能再有。
+
+// configLeaves flattens a YAML document into dotted key -> scalar text.
+func configLeaves(t *testing.T, name, body string) map[string]string {
+	t.Helper()
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode %s: %v", name, err)
+	}
+	out := map[string]string{}
+	var walk func(prefix string, value any)
+	walk = func(prefix string, value any) {
+		if m, ok := value.(map[string]any); ok && len(m) > 0 {
+			for key, child := range m {
+				next := key
+				if prefix != "" {
+					next = prefix + "." + key
+				}
+				walk(next, child)
+			}
+			return
+		}
+		out[prefix] = fmt.Sprint(value)
+	}
+	walk("", doc)
+	return out
+}
+
+// secretExampleConfig returns the config.yaml a k8s Secret example embeds.
+func secretExampleConfig(t *testing.T, name, body string) string {
+	t.Helper()
+	var secret struct {
+		StringData map[string]string `yaml:"stringData"`
+	}
+	if err := yaml.Unmarshal([]byte(body), &secret); err != nil {
+		t.Fatalf("decode %s: %v", name, err)
+	}
+	config, ok := secret.StringData["config.yaml"]
+	if !ok {
+		t.Fatalf("%s has no stringData.config.yaml", name)
+	}
+	return config
+}
+
+func sortedKeys(set map[string]string) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// checkDemoGameInitConfig applies the checks the demo's game code makes on its
+// configuration at Init, in the order it makes them, and returns the first
+// refusal with the game's own wording.
+func checkDemoGameInitConfig(body string) error {
+	cfg := viper.New()
+	cfg.SetConfigType("yaml")
+	if err := cfg.ReadConfig(strings.NewReader(body)); err != nil {
+		return err
+	}
+	// game/controllers/player/controller.go
+	if cfg.GetString("platform.payment_secret") == "" {
+		return fmt.Errorf("player controller: platform.payment_secret is empty")
+	}
+	// internal/service/<game>/activity.go: app.ModSingleton is published only
+	// when the App singleton lock is on.
+	if !cfg.GetBool("singleton.enabled") {
+		return fmt.Errorf("activity: capability %q not found; needs singleton.enabled=true", "singleton")
+	}
+	if cfg.GetString("activity.key_prefix") == "" {
+		return fmt.Errorf("activity: activity.key_prefix is empty")
+	}
+	if cfg.GetString("activity.groups_file") == "" {
+		return fmt.Errorf("activity: activity.groups_file is empty")
+	}
+	if cfg.IsSet("activity.game_sids") {
+		return fmt.Errorf("activity: activity.game_sids is the removed per-service list; the group comes from activity.groups_file (C4)")
+	}
+	// internal/service/<game>/purchase_drain.go: mods.KeyPrefix(cfg, "platform")
+	if prefix := strings.TrimSpace(cfg.GetString("platform.key_prefix")); prefix == "" || strings.ContainsAny(prefix, " \t\n") {
+		return fmt.Errorf("purchase drain: platform.key_prefix %q", prefix)
+	}
+	return nil
+}
+
+// demoGameSection reports whether a dotted key belongs to one of the sections
+// the demo appends to the game service's configs.
+func demoGameSection(key string) bool {
+	for _, section := range []string{"activity", "platform", "singleton"} {
+		if key == section || strings.HasPrefix(key, section+".") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestGameDemoProductionConfigsPassTheGameInitChecks(t *testing.T) {
+	t.Parallel()
+	root := newGameDemo(t)
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(rel string) string {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	gameService := m.Access["player"].Service
+	if gameService == "" {
+		t.Fatal("game-demo declares no player access service")
+	}
+	for _, service := range sortedServiceNames(m) {
+		devRel := "configs/service/config." + service + ".yaml"
+		prodRel := "configs/service/config." + service + ".prod.example.yaml"
+		secretRel := "deploy/k8s/base/secret." + service + ".example.yaml"
+		configs := map[string]string{
+			prodRel:   read(prodRel),
+			secretRel: secretExampleConfig(t, secretRel, read(secretRel)),
+		}
+		dev := configLeaves(t, devRel, read(devRel))
+		for rel, body := range configs {
+			leaves := configLeaves(t, rel, body)
+			var missing []string
+			for _, key := range sortedKeys(dev) {
+				if rel == secretRel && !demoGameSection(key) {
+					continue
+				}
+				if _, ok := leaves[key]; !ok {
+					missing = append(missing, key)
+				}
+			}
+			if len(missing) > 0 {
+				t.Errorf("%s lacks keys the dev config %s has: %v", rel, devRel, missing)
+			}
+			for _, key := range sortedKeys(leaves) {
+				if strings.HasSuffix(key, "key_prefix") && dev[key] != "" && leaves[key] != dev[key] {
+					t.Errorf("%s: %s = %q, dev config has %q; the two come from one source", rel, key, leaves[key], dev[key])
+				}
+				if strings.Contains(strings.ToLower(leaves[key]), "dev-") {
+					t.Errorf("%s: %s carries the dev value %q", rel, key, leaves[key])
+				}
+			}
+			if service != gameService {
+				continue
+			}
+			if err := checkDemoGameInitConfig(body); err != nil {
+				t.Errorf("%s: the game refuses it at Init: %v", rel, err)
+			}
+			assertSingletonOn(t, rel, leaves, "roost:planet:singleton")
+			for key := range leaves {
+				if key == "game_route" || strings.HasPrefix(key, "game_route.") {
+					t.Errorf("%s still has %s; the per-player route table and its keyspace were removed with static binding", rel, key)
+				}
+			}
+			// The prefixes the game borrows are the owning services' own.
+			for owner, key := range map[string]string{"activity": "activity.key_prefix", "platform": "platform.key_prefix"} {
+				ownerRel := "configs/service/config." + owner + ".prod.example.yaml"
+				want := configLeaves(t, ownerRel, read(ownerRel))[key]
+				if got := leaves[key]; got != want {
+					t.Errorf("%s: %s = %q, but the %s service keeps its keys under %q", rel, key, got, owner, want)
+				}
+			}
+		}
+	}
+}
+
+// 实际生成 Entity/DAO/PB/Sender，经过真实 TCP、NATS、Nest 和文件 WAL。
+// 投影记录器是测试存储，不把它记成真实 Mongo 或独立进程集群验收。
+const gateConsumerTest = `package Game
+import (
+ "context"
+ "fmt"
+ "net"
+ "os"
+ "sync"
+ "testing"
+ "time"
+ "github.com/spf13/viper"
+ "github.com/tjbdwanghaibo/roost-core/framework/app"
+ "github.com/tjbdwanghaibo/roost-core/wiring/mods"
+ accessplayer "example.com/planet/internal/access/player"
+ playertcp "example.com/planet/internal/access/player/tcp"
+ "github.com/tjbdwanghaibo/roost-core/client/wire"
+ coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+ dataengine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+ "github.com/tjbdwanghaibo/roost-core/framework/nest"
+ "github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+ "github.com/tjbdwanghaibo/roost-core/framework/entity"
+ "github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+ "github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+ "github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+ fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+ "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+ gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
+ "example.com/planet/game/handler"
+ syncsender "example.com/planet/game/handler/syncsender"
+ "example.com/planet/game/player_agent"
+ "example.com/planet/protocol/pb"
+)
+type gateChecker struct{matches func(context.Context,string,gateway.ProcessIdentity)(bool,error)}
+func(checker gateChecker)Matches(ctx context.Context,role string,sid int32,incarnation string)(bool,error){return checker.matches(ctx,role,gateway.ProcessIdentity{ServerID:sid,Incarnation:incarnation})}
+type gateProjection struct{mu sync.Mutex;records map[coredata.TransactionID]coredata.CommitRecord}
+func (store *gateProjection) Project(_ context.Context,record coredata.CommitRecord)error{store.mu.Lock();defer store.mu.Unlock();store.records[record.ID]=coredata.CloneCommitRecord(record);return nil}
+func TestGeneratedGateNestDAOAndWAL(t *testing.T){
+ url:=os.Getenv("ROOST_DATAENGINE_IT_NATS_URL");if url==""{t.Skip("private NATS URL not configured")}
+ player,world:=newScenePlayer(t,7001),newSceneWorld(t)
+ handler.RegisterAddExpNestHandlers();t.Cleanup(nest.ResetHandlersForTest)
+ wal,err:=nestwal.Open(nestwal.DefaultOptions(t.TempDir()));if err!=nil{t.Fatal(err)}
+ store:=&gateProjection{records:make(map[coredata.TransactionID]coredata.CommitRecord)}
+ projector,err:=dataengine.NewProjector(wal,store,dataengine.DefaultProjectorOptions());if err!=nil{t.Fatal(err)}
+ t.Cleanup(func(){ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second);defer cancel();if err:=projector.Close(ctx);err!=nil{t.Error(err)}})
+ syncTransport:=&gatewiring.Transport{SyncMessageID:501,LockstepMessageID:502}
+ syncManager,err:=entitysync.NewManager(entitysync.ManagerConfig{Mode:entitysync.ModeOnChange,Interval:time.Hour,Transport:syncTransport});if err!=nil{t.Fatal(err)}
+ if err=syncManager.Register(player.Sync());err!=nil{t.Fatal(err)}
+ t.Cleanup(func(){_ = syncManager.Close(context.Background())})
+ business:=nest.NewEngine(nest.NestOptionWithEntitySync(syncManager),nest.NestOptionWithGetter(sceneGetter{player.ID():player,world.ID():world}),nest.NestOptionWithTransactionCommitter(projector),nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers:4,QueueCap:32}, nest.WorkerPoolConfig{},nest.WorkerPoolConfig{}))
+ if err:=business.Start();err!=nil{t.Fatal(err)};t.Cleanup(func(){_ = business.Shutdown(context.Background())})
+ registry:=player_agent.NewProtocolRegistry()
+ if err:=player_agent.RegisterProtocol[*pb.AddExpRequest,*pb.AddExpResponse](registry,42,43,pb.UnmarshalAddExpRequest,pb.MarshalAddExpResponse,func(ctx *player_agent.Context,request *pb.AddExpRequest)(*pb.AddExpResponse,error){
+  if ctx.PlayerID!=7001{return nil,gateway.ErrUnauthenticated}
+  gained,err:=syncsender.NewAddExpSender(business).MultiSync_AddExp(ctx.Context(),player.ID(),world.ID(),request.Amount)
+  return &pb.AddExpResponse{LevelsGained:gained},err
+ });err!=nil{t.Fatal(err)};if err:=registry.Seal();err!=nil{t.Fatal(err)}
+ config:=gateway.DefaultConfig();config.Namespace=fmt.Sprintf("roost.generated.gate.n%d",time.Now().UnixNano())
+ gateID,gameID:=gateway.ProcessIdentity{ServerID:11,Incarnation:"gate000000000001"},gateway.ProcessIdentity{ServerID:22,Incarnation:"game000000000001"}
+ raw:=func(role string,identity gateway.ProcessIdentity)fnats.RawClient{
+  client,err:=driver.NewClient(fnats.DefaultConfig(url),driver.ClientOptions{ReconnectBufferBytes:-1});if err!=nil{t.Fatal(err)};t.Cleanup(client.Close)
+  prefix,_:=gateway.InboxPrefix(config.Namespace,role,identity);scoped,err:=client.ForInbox(prefix);if err!=nil{t.Fatal(err)};return scoped
+ }
+ gameRaw,gateRaw:=raw("game",gameID),raw("gate",gateID)
+ auth:=gateway.AuthenticatorFunc(func(context.Context,string,net.Addr)(gateway.Principal,error){return gateway.Principal{PlayerID:7001,ServerID:22,SessionID:"generated"},nil})
+ matches:=func(_ context.Context,role string,id gateway.ProcessIdentity)(bool,error){return (role=="game"&&id==gameID)||(role=="gate"&&id==gateID),nil}
+ cfg:=viper.New();cfg.Set("player.tcp.enabled",false)
+ capabilities:=app.NewRegistry(cfg)
+ for _,capability:=range []app.Capability{{Name:app.ModSingletonIncarnation,Value:app.SingletonIncarnation{Sid:gameID.ServerID,Token:gameID.Incarnation}},{Name:app.ModSingletonIdentityChecker,Value:gateChecker{matches}},{Name:mods.ModNatsRaw,Value:gameRaw},{Name:accessplayer.Name,Value:&accessplayer.Runtime{Protocols:registry}}}{if err:=capabilities.Register(capability.Name,capability.Value);err!=nil{t.Fatal(err)}}
+ options:=gatewiring.DefaultOptions();options.Config=config;options.Authenticator=auth;options.Ready=func()bool{return true}
+ options.OnActive=func(binding gateway.Binding,id uint64)error{if err:=syncManager.OpenSession(entitysync.SessionID(id));err!=nil{return err};return syncManager.Subscribe(entitysync.SessionID(id),player.ID(),entity.SyncProfile{})}
+ options.OnClosed=func(_ gateway.Binding,id uint64){syncManager.CloseSession(entitysync.SessionID(id))}
+ ingressMod:=playertcp.NewIngressMod(options)
+ if err:=ingressMod.Init(cfg);err!=nil{t.Fatal(err)};if err:=ingressMod.Provide(capabilities);err!=nil{t.Fatal(err)}
+ ingress,ok:=app.Lookup[*gateway.GameIngress](capabilities,gatewiring.GameIngressName);if !ok{t.Fatal("generated Game ingress not provided")}
+ if _,ok:=app.Lookup[*playertcp.Runtime](capabilities,playertcp.Name);!ok{t.Fatal("generated business runtime missing")}
+
+ syncTransport.Game=ingress
+ if err=syncManager.Start(context.Background());err!=nil{t.Fatal(err)}
+ if err=ingressMod.Start();err!=nil{t.Fatal(err)}
+ gate,err:=gateway.NewGate(config,gateID,gateway.GateDependencies{Client:gateRaw,QueueFactory:gatewiring.AsyncQueueFactory,Ready:func()bool{return true},Matches:matches,ResolveGame:func(context.Context,int32)(gateway.ProcessIdentity,error){return gameID,nil}});if err!=nil{t.Fatal(err)}
+ if err=gate.Start();err!=nil{t.Fatal(err)}
+ tcp:=gateway.DefaultTCPConfig();tcp.Addr="127.0.0.1:0";tcp.MaxPayloadBytes=uint32(config.MaxPayloadBytes)
+ server,err:=gateway.NewTCPServer(tcp,gate.Forward,auth);if err!=nil{t.Fatal(err)};if err=server.ConnectHandshake(gate);err!=nil{t.Fatal(err)}
+ ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second);defer cancel()
+ for _,client:=range []fnats.RawClient{gameRaw,gateRaw}{if err:=client.FlushContext(ctx);err!=nil{t.Fatal(err)}}
+ if err=server.Start();err!=nil{t.Fatal(err)}
+ t.Cleanup(func(){ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second);defer cancel();if err:=gate.Stop(ctx);err!=nil{t.Error(err)};if err:=server.Stop(ctx);err!=nil{t.Error(err)};if err:=ingressMod.StopWithContext(ctx);err!=nil{t.Error(err)}})
+ conn,err:=net.DialTimeout("tcp",server.Addr().String(),time.Second);if err!=nil{t.Fatal(err)};defer conn.Close();_ = conn.SetDeadline(time.Now().Add(5*time.Second))
+ if err=wire.Write(conn,[]*wire.Packet{{Seq:1,Payload:[]byte("ticket")}},8192);err!=nil{t.Fatal(err)};if _,err=wire.Read(conn,8192);err!=nil{t.Fatal(err)}
+ // Interval 为一小时，下面的增量必须由 handler 完成后的 on_change 唤醒。
+ snapshot,err:=wire.Read(conn,config.MaxPayloadBytes);if err!=nil{t.Fatal(err)}
+ if (wire.Header{Flags:snapshot.Flags}).Kind()!=wire.PayloadSync||snapshot.MsgID!=501{t.Fatalf("initial Sync packet=%+v",snapshot)}
+ full,err:=entitysync.DecodeFrame(snapshot.Payload,frame.DefaultLimits());if err!=nil{t.Fatal(err)}
+ if len(full.Objects)!=1||len(full.Objects[0].Components)!=1{t.Fatalf("snapshot=%+v",full)}
+ initial,err:=entitysync.DecodeSubjectUpdate(full.Objects[0].Components[0].Data,0);if err!=nil||!initial.Full||initial.SubjectID!=player.ID(){t.Fatalf("initial update=%+v error=%v",initial,err)}
+ data,err:=pb.MarshalAddExpRequest(&pb.AddExpRequest{Amount:250});if err!=nil{t.Fatal(err)}
+ if err=wire.Write(conn,[]*wire.Packet{{MsgID:42,Seq:2,Payload:data}},config.MaxPayloadBytes);err!=nil{t.Fatal(err)}
+ var gotResponse,gotDelta bool
+ for range 2{
+  response,err:=wire.Read(conn,config.MaxPayloadBytes);if err!=nil{t.Fatal(err)}
+  if (wire.Header{Flags:response.Flags}).Kind()==wire.PayloadSync{
+   delta,err:=entitysync.DecodeFrame(response.Payload,frame.DefaultLimits());if err!=nil{t.Fatal(err)}
+   if delta.Epoch!=full.Epoch||delta.Tick<=full.Tick||len(delta.Objects)!=1||len(delta.Objects[0].Components)!=1{t.Fatalf("delta frame=%+v",delta)}
+   update,err:=entitysync.DecodeSubjectUpdate(delta.Objects[0].Components[0].Data,0);if err!=nil||update.Full||update.SubjectID!=player.ID()||update.BaseVersion!=initial.Version||update.Version<=initial.Version||update.Payload.Len()==0{t.Fatalf("delta=%+v err=%v",update,err)}
+   gotDelta=true
+  }else{decoded,err:=pb.UnmarshalAddExpResponse(response.Payload);if err!=nil||decoded.Code!=0||decoded.LevelsGained==0||response.MsgID!=43||response.Seq!=2{t.Fatalf("response=%+v packet=%+v err=%v",decoded,response,err)};gotResponse=true}
+ }
+ if !gotResponse||!gotDelta{t.Fatalf("response=%v delta=%v",gotResponse,gotDelta)}
+ if err=projector.Flush(ctx);err!=nil{t.Fatal(err)}
+ store.mu.Lock();defer store.mu.Unlock()
+ if len(store.records)!=1{t.Fatalf("unique transactions=%d",len(store.records))}
+ for _,record:=range store.records{ids:=make(map[int64]bool);for _,mutation:=range record.Mutations{ids[mutation.Key.ID]=true};if len(ids)!=2{t.Fatalf("two-entity transaction=%+v",record)}}
+ if stats:=wal.Stats();stats.Appended!=1{t.Fatalf("WAL=%+v",stats)}
+}
+`
+
+func TestGateGeneratedBusinessConsumer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles and executes formal generated business consumer")
+	}
+	if os.Getenv("ROOST_DATAENGINE_IT_NATS_URL") == "" {
+		t.Skip("private NATS URL not configured")
+	}
+	repo, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := copyOfNewProject(t, "game-demo")
+	modPath := filepath.Join(root, "go.mod")
+	mod, err := os.ReadFile(modPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod = regexp.MustCompile(`(?m)^replace github\.com/tjbdwanghaibo/roost-core\b.*$\n?`).ReplaceAll(mod, nil)
+	mod = append(mod, []byte("\nreplace github.com/tjbdwanghaibo/roost-core => "+strconv.Quote(filepath.ToSlash(repo))+"\n")...)
+	if err = os.WriteFile(modPath, mod, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "internal/service/game/gate_consumer_test.go"), []byte(gateConsumerTest), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "test", "-mod=mod", "-race", "-count=1", "-v", "-run", "^TestGeneratedGateNestDAOAndWAL$", "./internal/service/game")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("generated Gate business: %v\n%s", err, output)
+	}
+	t.Log(string(output))
 }

@@ -2,22 +2,6 @@
 
 package roost
 
-// RR-20261004-13：roost 替用户跑的 go 命令（doctor 的 go mod verify / go list / go test，
-// project deps 与 generate 的 go get / go mod tidy）在超时或取消后，必须在有界时间内返回，
-// 并且不留下任何还活着的子孙进程。go 自己会再起 compile / link / git 等子进程；旧实现用
-// exec.CommandContext 却没设 WaitDelay、也不按进程组杀：ctx 到期只 kill go 本身，
-// (1) 孙进程继续以命令的 Dir 为工作目录（project deps / generate 时是 .roost-deps-* /
-// .roost-generate-* 暂存树，Windows 上因此删不掉，同族 RR-20261004-12）；
-// (2) 输出写到 bytes.Buffer（doctor 的 CombinedOutput、generate 的暂存输出）时，Wait 要等
-// 孙进程关掉继承的管道，超时形同虚设。
-//
-// 这里用一个 sh 替身代替 go：起一个长寿孙进程（继承 stdout / stderr 与工作目录）后 wait，
-// 和被 kill 的 go 留下 compile 子进程是同一形态。
-//
-// 同步全部是确定性的：替身把孙进程 pid 原子地写进文件，测试等到这份报告之后才取消或让
-// 期限到达；“等报告”“等孙进程消失”的时间上限只作兜底，放得很宽，满载时也不会误报。
-// 唯一按时间断言的是承诺本身：上下文结束后命令要在 treeCommandReturnBound 内返回。
-
 import (
 	"bytes"
 	"context"
@@ -35,6 +19,17 @@ import (
 	"testing"
 	"time"
 )
+
+// roost 替用户跑的 go 命令（doctor 的 go mod verify / go list / go test，project deps 与 generate 的 go get / go mod tidy）
+// 在超时或取消后，必须在有界时间内返回，并且不留下任何还活着的子孙进程：go 自己会再起 compile / link / git 等子进程，
+// 只 kill go 本身时孙进程会继续占着暂存树为工作目录，输出写到 bytes.Buffer 时 Wait 还要等孙进程关掉继承的管道。
+//
+// 这里用一个 sh 替身代替 go：起一个长寿孙进程（继承 stdout / stderr 与工作目录）后 wait，和被 kill 的 go 留下
+// compile 子进程是同一形态。
+//
+// 同步全部是确定性的：替身把孙进程 pid 原子地写进文件，测试等到这份报告之后才取消或让期限到达；“等报告”
+// “等孙进程消失”的时间上限只作兜底，放得很宽，满载时也不会误报。唯一按时间断言的是承诺本身：上下文结束后
+// 命令要在 treeCommandReturnBound 内返回。
 
 // treeCommandReturnBound is how long a cancelled command may take to return.
 // It is the promise under test, twice the production WaitDelay.

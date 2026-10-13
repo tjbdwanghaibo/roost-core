@@ -18,7 +18,7 @@ import (
 //
 // RR-20260927-05：accessplayertcp 也声明预算（player_access.tcp.shutdown_timeout: 10s），不再只拿 3s 保底；
 // game 服务的生成值因此是 30s + 10s + 3s × 21 + 5s = 108s（此前 101s）。
-// codegen/internal/roost/shutdown_budget_test.go 从生成工程的 bootstrap 数出 23 个 Mod 并钉住同一个值。
+// codegen/internal/roost/shutdown_test.go 从生成工程的 bootstrap 数出 23 个 Mod 并钉住同一个值。
 const (
 	generatedGameShutdownTotal  = 108 * time.Second
 	generatedShutdownMargin     = 5 * time.Second

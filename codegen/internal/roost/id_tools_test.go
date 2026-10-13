@@ -1,14 +1,5 @@
 package roost
 
-// RR-20261005-NC-73（RR-20261005-NC-63 残余，N07 交给 N08）：`roost id next errcode`、
-// `roost add errcode`（NextID）、`roost id check` / doctor（CheckIDs）用正则
-// `errcode\.Define\(\s*([0-9]+)\s*,` 找已占用的错误码，而 errcode 生成器（`roost generate`）
-// 自 NC-63 起按 AST 读取：认别名 / 点导入，不认注释和字符串里的文字。两边口径不同：
-//   - 别名导入的 `ec.Define(100000, …)` 不进占用表，`roost add errcode` 再发 100000，
-//     add 成功、id check 报 valid，直到 generate 才报 duplicate errcode；
-//   - 注释或字符串里的 `errcode.Define(100003, …` 被当成占用，id check 误报重复。
-// 承诺：ID 工具与生成器看到同一组错误码定义。
-
 import (
 	"os"
 	"path/filepath"
@@ -16,6 +7,9 @@ import (
 	"strings"
 	"testing"
 )
+
+// `roost id next errcode`、`roost add errcode`（NextID）、`roost id check` / doctor（CheckIDs）与 errcode 生成器看到同一组
+// 错误码定义：认别名 / 点导入，不认注释和字符串里的文字。否则 add 发出重复编号、id check 报 valid，或误报重复。
 
 func TestIDToolsSeeErrcodeDefinitionsTheWayTheGeneratorDoes(t *testing.T) {
 	t.Parallel()

@@ -3,7 +3,8 @@ package roost
 import (
 	"bytes"
 	"context"
-	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 )
 
 func TestKitConfigSchemasMatchKitDeclarations(t *testing.T) {
@@ -457,4 +460,149 @@ func tailBytes(raw []byte, n int) []byte {
 		return raw
 	}
 	return raw[len(raw)-n:]
+}
+
+// 生成的 remote_entity 段写出 kit 的快照键（cached_max_staleness、snapshot_interest_per_consumer、
+// snapshot_l2_tombstone_wait_*、mirror.shutdown_timeout），开发配置、生产示例、k8s Secret 示例三份一致；
+// 生产化只改独占一行的流副本数（不把墓碑 WAIT 的 replicas 一起改成 3）。取值与 core DefaultConfig 的比对、
+// 两个 Mod 的 Init 在 generated_contract_test.go 里对生成工程的真实文件做。
+
+func TestGeneratedRemoteEntitySectionCarriesTheSnapshotKeys(t *testing.T) {
+	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"remote_entity"}, []string{"config"})
+	for _, production := range []bool{false, true} {
+		config := renderServiceConfig(m, "game", production)
+		for _, want := range []string{
+			"\n  cached_max_staleness: 30s\n",
+			"\n  snapshot_interest_per_consumer: 0\n",
+			"\n  snapshot_l2_tombstone_wait_replicas: 1\n",
+			"\n  snapshot_l2_tombstone_wait_timeout: 50ms\n",
+			"\n    shutdown_timeout: 5s\n",
+		} {
+			if !strings.Contains(config, want) {
+				t.Errorf("production=%v: config lacks %q:\n%s", production, strings.TrimSpace(want), config)
+			}
+		}
+		if production && !strings.Contains(config, "\n  replicas: 3\n") {
+			t.Errorf("production config no longer raises the stream replicas:\n%s", config)
+		}
+	}
+}
+
+// The etcd Discovery key is service_prefix + server_type + "/" + sid with no separator of its own
+// (etcd/driver/discovery.go registerOnceWithEtcd; the core default is "/service/"). A generated
+// service_prefix without the trailing slash registered "/roost/servicesgame/1300" (2026-10-05
+// real-process drill, APP-SINGLETON-LOCK §13 第 5 笔).
+func TestGeneratedEtcdServicePrefixSeparatesTheServerType(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "planet")
+	if _, _, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: root, Mods: []string{"configdata", "etcd"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"configs/service/config.game.yaml", "configs/service/config.game.prod.example.yaml"} {
+		prefix := configLeaves(t, rel, readProjectFile(t, root, rel))["etcd.service_prefix"]
+		if prefix == "" {
+			t.Fatalf("%s: no etcd.service_prefix", rel)
+		}
+		key := fmt.Sprintf("%s%s/%d", prefix, "game", 1300)
+		if !strings.HasSuffix(prefix, "/") || !strings.Contains(key, "/game/1300") {
+			t.Errorf("%s: etcd.service_prefix %q registers the key %q, want the server type as its own path segment", rel, prefix, key)
+		}
+	}
+}
+
+// 所有进程读同一个 time.logic_offset（维护者决定 D-L3）：偏移不同，窗口 id、关窗截止、票据时间就错开一个偏移量。
+// roost doctor 检查项目里每个服务的配置（dev、prod example、k8s secret example）是否一致，不一致时点名服务、文件和值；
+// 三类文件各是一套部署，分别比较（dev 配了 +24h 测试偏移而 prod example 是 0 是正常的）。
+
+func setLogicOffset(t *testing.T, root, rel, value string) {
+	t.Helper()
+	body := readProjectFile(t, root, rel)
+	if strings.HasPrefix(rel, "deploy/") {
+		// The secret example carries the config under stringData.config.yaml, indented four spaces.
+		marker := "config.yaml: |\n"
+		at := strings.Index(body, marker)
+		if at < 0 {
+			t.Fatalf("%s: no stringData config.yaml block", rel)
+		}
+		at += len(marker)
+		body = body[:at] + "    time:\n      logic_offset: " + value + "\n" + body[at:]
+	} else {
+		body += "time:\n  logic_offset: " + value + "\n"
+	}
+	writeProjectFile(t, root, rel, body)
+}
+
+func doctorItems(t *testing.T, root string) (map[string]CheckItem, error) {
+	t.Helper()
+	var output bytes.Buffer
+	err := DoctorWithOptions(context.Background(), root, DoctorOptions{JSONOutput: true}, &output)
+	var report DoctorReport
+	if decodeErr := json.Unmarshal(output.Bytes(), &report); decodeErr != nil {
+		t.Fatalf("doctor output is not a JSON report (%v):\n%s", decodeErr, output.String())
+	}
+	items := map[string]CheckItem{}
+	for _, item := range report.Items {
+		items[item.Name] = item
+	}
+	return items, err
+}
+
+func TestDoctorNamesTheServicesWhoseLogicOffsetDisagrees(t *testing.T) {
+	t.Parallel()
+	root := newGameDemo(t)
+
+	// dev 里只有 game 前拨一天：game 与 activity / match 等不一致，必须点名。
+	setLogicOffset(t, root, "configs/service/config.game.yaml", "24h")
+	items, err := doctorItems(t, root)
+	item, ok := items["time:logic_offset"]
+	if !ok || item.Status != StatusFail {
+		t.Fatalf("only the dev game config sets time.logic_offset 24h: doctor says %+v (present=%v), want FAIL", item, ok)
+	}
+	for _, want := range []string{"game=24h", "activity=0s", "match=0s", "configs/service/config.<service>.yaml"} {
+		if !strings.Contains(item.Detail, want) {
+			t.Errorf("FAIL line does not name %q: %s", want, item.Detail)
+		}
+	}
+	if err == nil || !strings.Contains(err.Error(), "time:logic_offset") {
+		t.Errorf("doctor returned %v, want an error naming time:logic_offset", err)
+	}
+
+	// 全部未配置（= 0）：一致。
+	if item, ok := mustDoctorItems(t, newGameDemo(t))["time:logic_offset"]; !ok || item.Status != StatusOK {
+		t.Fatalf("no service sets time.logic_offset: doctor says %+v (present=%v), want an OK time:logic_offset line", item, ok)
+	}
+
+	// 一种部署内全部改成同一个值就一致；另一种部署（prod example）仍是 0 不算不一致。
+	for _, service := range sortedServiceNames(mustManifest(t, root)) {
+		if service != "game" {
+			setLogicOffset(t, root, "configs/service/config."+service+".yaml", "24h")
+		}
+	}
+	items, _ = doctorItems(t, root)
+	if item := items["time:logic_offset"]; item.Status != StatusOK {
+		t.Fatalf("every dev config sets 24h, the production examples 0: doctor says %s %s, want OK", item.Status, item.Detail)
+	}
+
+	// k8s secret example 里一个服务的值写错，点名文件。
+	setLogicOffset(t, root, "deploy/k8s/base/secret.match.example.yaml", "1d")
+	items, _ = doctorItems(t, root)
+	if item := items["time:logic_offset"]; item.Status != StatusFail ||
+		!strings.Contains(item.Detail, "deploy/k8s/base/secret.match.example.yaml") || !strings.Contains(item.Detail, `"1d"`) {
+		t.Fatalf("secret.match.example.yaml sets logic_offset 1d (not a duration): doctor says %s %s, want FAIL naming the file and value", item.Status, item.Detail)
+	}
+}
+
+func mustDoctorItems(t *testing.T, root string) map[string]CheckItem {
+	t.Helper()
+	items, _ := doctorItems(t, root)
+	return items
+}
+
+func mustManifest(t *testing.T, root string) Manifest {
+	t.Helper()
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }

@@ -98,9 +98,8 @@ func TestA4GeneratedConfigsPassValidation(t *testing.T) {
 	}
 }
 
-// checkRemoteEntityKeys：A8（收尾第 2 批）。生成的 remote_entity 段写出 B2 / O4 / O-M6-3 / Mirror 第 5 步的键，
-// 取值等于 core DefaultConfig（或 kit 的缺省）的语义，并通过两个 Mod 的 Init（值域检查在 Init 里，
-// ValidateServiceConfig 只查类型）。
+// checkRemoteEntityKeys：生成的 remote_entity 段的快照键取值等于 core DefaultConfig（或 kit 的缺省）的语义，并通过两个 Mod 的
+// Init（值域检查在 Init 里，ValidateServiceConfig 只查类型）。
 func checkRemoteEntityKeys(t *testing.T, name string, cfg *viper.Viper) {
 	for _, key := range []string{
 		"remote_entity.cached_max_staleness",

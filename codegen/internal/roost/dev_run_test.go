@@ -1,10 +1,5 @@
 package roost
 
-// RR-20260927-03（OPEN-ITEMS A03）：deploy/dev/run.sh 向 account 服务登记游戏服时，必须连到 account 服务
-// 自己的那份 Redis——config.account.yaml 的 redis.addr、redis.password、redis.db 三项都要传给 accountctl。
-// 旧脚本只读 addr（与 account.key_prefix），非 0 db 的开发配置把服务器登记写进了 db 0，account 服务在自己的
-// db 里查不到，机器人 / 客户端 CreateRole 报 "account: server is invalid"（bf-56 的集成环境实际撞到过）。
-
 import (
 	"os"
 	"os/exec"
@@ -13,6 +8,9 @@ import (
 	"strings"
 	"testing"
 )
+
+// deploy/dev/run.sh 向 account 服务登记游戏服时，必须连到 account 服务自己的那份 Redis：config.account.yaml 的
+// redis.addr、redis.password、redis.db 都传给 accountctl（只读 addr 时非 0 db 的登记写进 db 0，CreateRole 报 server is invalid）。
 
 // registerGameServerArgs runs the generated register_game_server function
 // against configs/service/config.account.yaml = accountConfig, with a stub go
@@ -118,9 +116,8 @@ func TestDevRunKeepsAccountctlDefaultsWhenTheRedisKeysAreAbsent(t *testing.T) {
 	}
 }
 
-// RR-20261006-28：account 服务配成 Redis Cluster（redis.cluster_addrs，逗号串或 YAML 列表）时，登记游戏服
-// 也要连这个 Cluster。旧脚本只读 redis.addr，读不到就用 127.0.0.1:6379，而且 accountctl 只有单机客户端：
-// 对着 Cluster 的某个节点写，只有槽恰好在这个节点上的键能写进去，其余都是 MOVED（真实进程演练实测）。
+// account 服务配成 Redis Cluster（redis.cluster_addrs，逗号串或 YAML 列表）时，登记游戏服也要连这个 Cluster，
+// 不能退回 127.0.0.1:6379 或用单机客户端写某一个节点（槽不在该节点的键会 MOVED）。
 func TestDevRunRegistersTheGameServerOnTheAccountServicesRedisCluster(t *testing.T) {
 	for name, config := range map[string]string{
 		"comma string": "redis:\n  cluster_addrs: \"10.0.0.1:7000, 10.0.0.2:7000,10.0.0.3:7000\"\n  password: \"\"\naccount:\n  key_prefix: roost:planet:account\n",

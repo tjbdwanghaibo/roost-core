@@ -17,12 +17,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/tablegen"
 )
 
-// U-0118 (C4, classscan O-1): the orchestrator used to repeat every generator's
-// default path as its own literal — "./db/def", "./protocol/player_bind",
-// "/game/player_agent", ... — so a generator that moved its default would
-// keep working on its own and silently disagree with `roost generate`. The
-// generators now export those defaults and this package refers to them; a
-// literal equal to one of them anywhere in this package is a regression.
+// 编排器不重复各生成器的默认路径字面量（"./db/def"、"./protocol/player_bind"、"/game/player_agent" ……），
+// 只引用生成器导出的常量：否则生成器改了默认值，它自己照常工作，却与 `roost generate` 静默不一致。
 func TestOrchestratorDoesNotRepeatGeneratorDefaultPaths(t *testing.T) {
 	shared := map[string]string{
 		dao.DefaultDefDir:                "dao.DefaultDefDir",

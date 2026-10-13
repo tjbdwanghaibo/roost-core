@@ -1,5 +1,16 @@
 package roost
 
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
 // App 单实例锁的生成承诺（docs/feature/APP-SINGLETON-LOCK-2026-10-05.md §6.3，第 2 笔）。
 //
 //  1. bootstrap：项目里有 redis Mod，或有带 dataengine 的服务（其配置默认打开 singleton），就生成
@@ -13,17 +24,6 @@ package roost
 //     doctor 对 singleton.enabled 的配置同样计入。
 //  4. 启动等待：k8s startupProbe、shell 部署 HEALTH_ATTEMPTS、compose start_period 覆盖
 //     singleton.startup_wait（新进程可能先等旧进程的键过期，再做 DataEngine 重放）。
-
-import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strconv"
-	"strings"
-	"testing"
-	"time"
-)
 
 const singletonBootstrapCall = "a.Singleton(kitredis.SingletonStore)"
 
