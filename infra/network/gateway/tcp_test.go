@@ -7,6 +7,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"os"
 	"sync"
@@ -300,7 +302,7 @@ func stuckDispatchServer(t *testing.T, dispatchTimeout string) (*TCPServer, <-ch
 	return server, started
 }
 
-func dispatchServer(t *testing.T, dispatchTimeout string, handler func(*tcpTestContext, string) (string, error), configure ...func(*TCPConfig)) *TCPServer {
+func dispatchServer(t testing.TB, dispatchTimeout string, handler func(*tcpTestContext, string) (string, error), configure ...func(*TCPConfig)) *TCPServer {
 	t.Helper()
 	config := DefaultTCPConfig()
 	config.Addr = "127.0.0.1:0"
@@ -339,7 +341,7 @@ func dispatchServer(t *testing.T, dispatchTimeout string, handler func(*tcpTestC
 	return server
 }
 
-func dialAuthenticated(t *testing.T, server *TCPServer, token string) net.Conn {
+func dialAuthenticated(t testing.TB, server *TCPServer, token string) net.Conn {
 	t.Helper()
 	server.mu.RLock()
 	addr := server.listener.Addr().String()
@@ -1083,4 +1085,82 @@ type tcpTestContext struct{ base context.Context }
 func (ctx *tcpTestContext) Context() context.Context { return ctx.base }
 func emptyTCPDispatch(context.Context, Session, uint32, uint32, wire.PayloadKind, []byte) (any, error) {
 	return nil, nil
+}
+
+// benchmarkTCPServer 起一个不限流的回显服务：请求原样作为应答负载返回。限流器保留（速率给到上限），读循环的令牌检查
+// 仍在测量路径上。
+func benchmarkTCPServer(b *testing.B) *TCPServer {
+	b.Helper()
+	// 监听日志会插进基准结果行，benchstat 无法解析；基准期间丢弃默认日志。
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	b.Cleanup(func() { slog.SetDefault(previous) })
+	return dispatchServer(b, "5s", func(_ *tcpTestContext, payload string) (string, error) {
+		return payload, nil
+	}, func(config *TCPConfig) {
+		config.RequestRate, config.RequestBurst = 100000, 100000
+		config.MaxConnectionsPerIP = config.MaxConnections
+	})
+}
+
+// BenchmarkTCPRequestRoundTrip 覆盖 serveConnection 的读循环：一个已认证连接上逐个发送请求并读回应答
+// （读帧、序号与限流检查、分发、应答写回）。
+func BenchmarkTCPRequestRoundTrip(b *testing.B) {
+	server := benchmarkTCPServer(b)
+	connection := dialAuthenticated(b, server, "bench-session")
+	client := &tcpSession{connection: connection, writeTimeout: time.Second}
+	payload := []byte("ping")
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := client.writeFrame(ctx, 0, stuckRequestID, uint32(i+2), payload); err != nil {
+			b.Fatal(err)
+		}
+		_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+		response, release, err := server.readFrame(connection)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if response.messageID != stuckResponseID {
+			b.Fatalf("unexpected response %+v", response)
+		}
+		release()
+	}
+}
+
+// BenchmarkTCPHandshake 覆盖 serveConnection 的握手段：每轮新建连接、发送认证帧、读回 ack 后关闭。客户端以 RST 关闭
+// （linger 0），避免大量 TIME_WAIT 耗尽本机端口。
+func BenchmarkTCPHandshake(b *testing.B) {
+	server := benchmarkTCPServer(b)
+	server.mu.RLock()
+	addr := server.listener.Addr().String()
+	server.mu.RUnlock()
+	token := []byte("bench-session")
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		connection, err := net.Dial("tcp", addr)
+		if err != nil {
+			b.Fatal(err)
+		}
+		client := &tcpSession{connection: connection, writeTimeout: time.Second}
+		if err := client.writeFrame(ctx, 0, 0, 1, token); err != nil {
+			b.Fatal(err)
+		}
+		_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+		ack, release, err := server.readFrame(connection)
+		if err != nil {
+			b.Fatalf("authentication ack: %v", err)
+		}
+		release()
+		if ack.messageID != 0 || ack.sequence != 1 {
+			b.Fatalf("unexpected ack %+v", ack)
+		}
+		if tcpConnection, ok := connection.(*net.TCPConn); ok {
+			_ = tcpConnection.SetLinger(0)
+		}
+		_ = connection.Close()
+	}
 }
