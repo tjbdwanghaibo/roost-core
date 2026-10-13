@@ -11,9 +11,7 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 )
 
-// RR-20261005-NC-191：Mongo 的账号口令只能写在 mongo.uri 的 userinfo 里（fmongo.Config 没有单独的
-// 用户名 / 密码字段），Start 的 “connected” 日志不能把它写进日志。旧行为：
-// `slog.Info("mongo mod: connected", "uri", m.cfg.URI)` 原样记录整条 URI，口令进了日志文件。
+// Mongo 的账号口令只能写在 mongo.uri 的 userinfo 里，Start 的 “connected” 日志不能把它写进日志（只记脱敏后的 URI）。
 //
 // 用不拨号的替身：Start 只调 Ping，类型断言不到 *mongodriver.Client 时不做部署校验，正好走到那行日志。
 

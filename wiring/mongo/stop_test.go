@@ -2,6 +2,7 @@ package mongo
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,11 +10,36 @@ import (
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 )
 
-// RR-20261005-NC-260（小防护 B，与 NC-173 残余 / NC-233 同类）：第三方客户端的 Close 不幂等。
-// mongo-driver 的 Disconnect 第二次调用返回 “client is disconnected”（拓扑已关闭）。Mongo Mod 只在 Close
-// 成功时交出 client，客户端一旦已经断开（别处关过一次），之后每次 Stop 都调 Disconnect、都得到同一个错误，
-// 停机契约第 4 步“已停完的对象再调用返回 nil”永远不成立，调用方据此以为连接还没释放。
-// 用不拨号的真实客户端（mongo-driver v2 Connect 不立即连接），先关闭一次来制造“已断开”。
+// Stop 的统一口径：重复调用幂等返回 nil，并发调用安全，后到者等第一个做完（-race 下不能有数据竞争）。用不拨号的真实客户端。
+func TestMongoModConcurrentStopIsSafe(t *testing.T) {
+	for round := 0; round < 5; round++ {
+		cfg := fmongo.DefaultConfig("mongodb://127.0.0.1:1")
+		cfg.ConnectTimeout = 100 * time.Millisecond
+		cli, err := mongodriver.NewClient(cfg, mongodriver.IndexMigrationPolicy{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := &MongoMod{client: cli, cfg: cfg}
+		var wg sync.WaitGroup
+		errs := make([]error, 4)
+		for i := range errs {
+			wg.Add(1)
+			go func(i int) { defer wg.Done(); errs[i] = m.StopWithContext(context.Background()) }(i)
+		}
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: concurrent Stop #%d = %v, want nil (all = %v)", round, i, err, errs)
+			}
+		}
+		if m.Client() != nil {
+			t.Fatalf("round %d: client still held after a successful Stop", round)
+		}
+	}
+}
+
+// 第三方客户端的 Close 不幂等（mongo-driver 第二次 Disconnect 返回 “client is disconnected”）：客户端已经断开时，Stop 也要返回 nil
+// 并交出 client（停机契约第 4 步“已停完的对象再调用返回 nil”）。用不拨号的真实客户端，先关闭一次来制造“已断开”。
 func TestMongoModStopConvergesWhenTheClientIsAlreadyDisconnected(t *testing.T) {
 	cfg := fmongo.DefaultConfig("mongodb://127.0.0.1:1")
 	cfg.ConnectTimeout = 100 * time.Millisecond

@@ -1,10 +1,5 @@
 //go:build integration
 
-// RR-20261006-10 的真实依赖验收（APP-7，真实进程演练第 4 项，docs/bugfix/REAL-PROCESS-DRILLS-2026-10-06.md）：
-// 修复时 kit MongoMod 的 Close 口径只用不可达地址验证过。这里经正式的 Init → Provide → Start 接真实
-// Mongo 副本集，钉住：并发 Stop 无竞争（-race）且全部返回 nil；重复 Stop 返回 nil；Stop 之后经 Mod
-// 发布的 IMongo 的调用（Ping、集合读写、会话里的第一条命令）快速返回可 errors.Is 到
-// mongo.ErrClientDisconnected 的错误（mongo 驱动的“已关闭”，mongo/driver/README.md 的 Close 一行）。
 package mongo
 
 import (
@@ -17,12 +12,15 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
-	"go.mongodb.org/mongo-driver/v2/mongo"
-
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
+
+// MongoMod 停机口径的真实依赖验收：经正式的 Init → Provide → Start 接真实 Mongo 副本集，钉住并发 Stop 无竞争（-race）且全部返回 nil；
+// 重复 Stop 返回 nil；Stop 之后经 Mod 发布的 IMongo 的调用（Ping、集合读写、会话里的第一条命令）快速返回可 errors.Is 到
+// mongo.ErrClientDisconnected 的错误（mongo 驱动的“已关闭”，mongo/driver/README.md 的 Close 一行）。
 
 func TestRealMongoModCloseContract(t *testing.T) {
 	uri := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
