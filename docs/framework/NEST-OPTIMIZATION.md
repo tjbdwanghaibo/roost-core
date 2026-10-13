@@ -151,3 +151,5 @@ go tool pprof -top -alloc_space artifacts/nest-review-20261013/nest.test.exe art
 指标预绑定明确延期：新采样仍显示指标编码分配，但公共 Registry 目前无绑定句柄接口，Reset、series 限额及动态标签需要一并设计。不能为本轮 Nest 优化另建全局句柄缓存。目标业务视图的跨准入缓存也暂不引入：现有直接 Msg、Clone、重排、广播和续行的校验阶段不同，`normalizeFullIDs` 本次只占约 1.42% 分配字节；先保留显式校验，不用跳过校验换取收益。这两项是候选延期，不能表述为已完成缓存复用。
 
 第三批临时存储保留两项：锁列表与 Touch 列表一次分配、切成容量不重叠的区间；分组快照在取锁调用栈内用 4 项数组，大集合按需扩容，重试重新采集，不进入 release 闭包、不引入对象池。Group/Multi/Touch/Release/Cast 回归重复 5 轮通过。四实体异步热点样本在上下文批次基础上减少 192 B/op、2 allocs/op，见 [临时存储样本](../performance/benchmarks/nest-hot-path-20261013/storage.txt)。
+
+第三批前驱边保留去重：共享队列锁内，同一前驱在本次准入追加的最后后继必为当前 job，因此不需要 map 或额外前驱数组；准入容量先判断是否存在前驱，接受后一起登记边和计数。新增交错 ID 的双前驱合流及后继分流回归，跨业务池、慢池及 Remote 排空既有用例通过 5 轮。8 worker、32 组热点异步样本由 25374 B/op、53 allocs/op 降到 22901 B/op、45 allocs/op；中位时间 28013→25705 ns/op。独立实体异步 32 组时间约有 2.2% 波动、分配基本不变，不能宣称所有场景提速。见 [去重前](../performance/benchmarks/nest-hot-path-20261013/edges-before.txt) / [去重后](../performance/benchmarks/nest-hot-path-20261013/edges-after.txt)。

@@ -1,0 +1,46 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups8/async=false-10         	   22224	     10870 ns/op	    7349 B/op	      55 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups8/async=false-10         	   25141	      9476 ns/op	    7327 B/op	      53 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups8/async=false-10         	   24537	      9623 ns/op	    7352 B/op	      55 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups8/async=false-10         	   24484	      9748 ns/op	    7338 B/op	      54 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups8/async=false-10         	   24579	     10212 ns/op	    7357 B/op	      55 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups8/async=true-10          	   23091	      9528 ns/op	    6974 B/op	      50 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups8/async=true-10          	   25590	      9410 ns/op	    6969 B/op	      50 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups8/async=true-10          	   27632	      8620 ns/op	    6967 B/op	      50 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups8/async=true-10          	   28162	      9237 ns/op	    6975 B/op	      50 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups8/async=true-10          	   25585	      9673 ns/op	    6969 B/op	      50 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups32/async=false-10        	   10000	     24598 ns/op	   25559 B/op	      58 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups32/async=false-10        	    7544	     28202 ns/op	   25631 B/op	      58 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups32/async=false-10        	    7956	     27761 ns/op	   25686 B/op	      56 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups32/async=false-10        	    8596	     27603 ns/op	   25644 B/op	      58 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups32/async=false-10        	    8144	     28052 ns/op	   25656 B/op	      58 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups32/async=true-10         	   10000	     28423 ns/op	   25390 B/op	      53 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups32/async=true-10         	    8300	     29070 ns/op	   25356 B/op	      53 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups32/async=true-10         	    7274	     28013 ns/op	   25438 B/op	      53 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups32/async=true-10         	    9615	     25669 ns/op	   25336 B/op	      53 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=false/groups32/async=true-10         	    9878	     25769 ns/op	   25374 B/op	      53 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups8/async=false-10          	   25477	      9681 ns/op	    7100 B/op	      51 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups8/async=false-10          	   28809	      8458 ns/op	    7013 B/op	      50 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups8/async=false-10          	   27722	      8296 ns/op	    7003 B/op	      50 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups8/async=false-10          	   28642	      8300 ns/op	    7008 B/op	      50 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups8/async=false-10          	   30249	      8452 ns/op	    7008 B/op	      50 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups8/async=true-10           	   27336	      9120 ns/op	    6599 B/op	      44 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups8/async=true-10           	   31083	      8252 ns/op	    6529 B/op	      44 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups8/async=true-10           	   30872	      8518 ns/op	    6539 B/op	      44 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups8/async=true-10           	   31284	      8303 ns/op	    6538 B/op	      44 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups8/async=true-10           	   30967	      8310 ns/op	    6538 B/op	      44 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups32/async=false-10         	   10000	     20361 ns/op	   23954 B/op	      52 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups32/async=false-10         	   12754	     19137 ns/op	   23699 B/op	      51 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups32/async=false-10         	   12910	     19035 ns/op	   23680 B/op	      51 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups32/async=false-10         	   12463	     18746 ns/op	   23647 B/op	      51 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups32/async=false-10         	   12211	     19613 ns/op	   23703 B/op	      51 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups32/async=true-10          	   10000	     21173 ns/op	   23146 B/op	      45 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups32/async=true-10          	    9793	     21685 ns/op	   22836 B/op	      44 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups32/async=true-10          	   11574	     22977 ns/op	   22859 B/op	      44 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups32/async=true-10          	   11690	     20854 ns/op	   22857 B/op	      44 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/groups32/async=true-10          	    9355	     22441 ns/op	   22860 B/op	      44 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	13.494s

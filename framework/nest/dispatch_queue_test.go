@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -63,6 +64,61 @@ func TestTwoPoolsOrderAllTargetsWithoutOccupyingFastWorker(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 两个前驱各占交错的 ID；合流消息必须等两个都完成，随后才能放行两个分支。
+func TestQueueSharedPredecessorsJoinAndSplit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		a, b, join := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		closeA := sync.OnceFunc(func() { close(a) })
+		closeB := sync.OnceFunc(func() { close(b) })
+		closeJoin := sync.OnceFunc(func() { close(join) })
+		entered := make(chan struct{}, 2)
+		joined := make(chan struct{}, 1)
+		finished := make(chan struct{}, 2)
+		q := newDispatchQueue("join_split", WorkerPoolConfig{2, 8}, WorkerPoolConfig{2, 8}, func(msg *Msg) {
+			if len(msg.Tids) > 1 {
+				joined <- struct{}{}
+				<-join
+			} else {
+				finished <- struct{}{}
+			}
+		}, func(msg *Msg) {
+			entered <- struct{}{}
+			if msg.Key() == 1 {
+				<-a
+			} else {
+				<-b
+			}
+		})
+		q.start()
+		defer q.stop(context.Background())
+		defer closeA()
+		defer closeB()
+		defer closeJoin()
+		admitQueue(t, q, true, 1, 3)
+		admitQueue(t, q, true, 2, 4)
+		<-entered
+		<-entered
+		admitQueue(t, q, false, 4, 3, 2, 1, 3)
+		admitQueue(t, q, false, 1)
+		admitQueue(t, q, false, 4)
+		closeA()
+		synctest.Wait()
+		if len(joined) != 0 || len(finished) != 0 {
+			t.Fatal("ran before all predecessors completed")
+		}
+		closeB()
+		synctest.Wait()
+		if len(joined) != 1 || len(finished) != 0 {
+			t.Fatal("join/split ordering violated")
+		}
+		closeJoin()
+		synctest.Wait()
+		if len(finished) != 2 {
+			t.Fatal("successors did not drain")
+		}
+	})
 }
 func TestSlowPoolUsesSharedWorkersAndBoundedWaiting(t *testing.T) {
 	entered := make(chan struct{}, 2)

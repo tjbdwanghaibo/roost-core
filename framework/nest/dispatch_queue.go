@@ -193,9 +193,11 @@ func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 	if !q.started || q.stopping {
 		return worker.ErrWorkerClosed
 	}
+	blocked := false
 	for _, id := range j.ids {
 		if q.tails[id] != nil {
-			j.predecessors++
+			blocked = true
+			break
 		}
 	}
 	// 先使用尚未占用的外部执行额度。否则 1024 worker / 16 等待位
@@ -205,14 +207,19 @@ func (q *dispatchQueue) admit(msg *Msg, slow bool) error {
 	if lane == dispatchSlowLane {
 		reserved = q.awaitReserved
 	}
-	hasExecutionSlot := j.predecessors == 0 && q.busyWorkers(lane, state)+state.readyCount+reserved < state.config.Workers
+	hasExecutionSlot := !blocked && q.busyWorkers(lane, state)+state.readyCount+reserved < state.config.Workers
 	if !hasExecutionSlot && q.waitingCount(lane, state) >= state.config.QueueCap {
 		state.observation.Rejected++
 		return worker.ErrWorkerQueueFull
 	}
 	for _, id := range j.ids {
 		if prev := q.tails[id]; prev != nil {
-			prev.successors = append(prev.successors, j)
+			// 准入全程持有 q.mu；本轮若已登记 j，它必是该前驱的最后一个后继。
+			// 多个 ID 指向同一前驱时只建一条边，计数与登记在一起，不另建去重表。
+			if n := len(prev.successors); n == 0 || prev.successors[n-1] != j {
+				prev.successors = append(prev.successors, j)
+				j.predecessors++
+			}
 		}
 		q.tails[id] = j
 	}
