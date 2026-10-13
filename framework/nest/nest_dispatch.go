@@ -20,6 +20,11 @@ func NestDispatch(mgr *NestMgr, msg *Msg) {
 	dispatchNest(mgr, msg, false)
 }
 
+// dispatchNest 执行一条消息的一个阶段。remoteStage 为 true 时是 I/O 池上的准备阶段（Remote 获取、冷加载），
+// 业务部分经 dispatchRemoteLogic 交回业务池；为 false 时直接在业务池执行 runNestLogic。
+//
+// 收尾顺序（defer）：声明目标冷则原位转 I/O 准备并直接返回；否则收尾 Remote 批次与预加载引用 →
+// 按提交事实给错误补哨兵 → 释放上下文 → 判定是否重新准入 → 交接 await 计划 → 回复 → 记录指标。
 func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 	if msg == nil {
 		return
@@ -55,7 +60,7 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 		if !remoteStage && errors.Is(err, errDeclaredTargetCold) && mgr.dispatcher.remoteHandler != nil {
 			// 声明目标在 handler 取得 Guard 之前被发现未加载：此时没有业务修改、没有 Remote 批次，
 			// 也没有已准备的引用。不回复、不重新准入，由派发队列把同一作业（连同它在同 ID 链上的
-			// 位置）交给I/O 池准备；I/O 阶段再按普通 IO 路径加载并回到业务池执行（RR-20260926-25）。
+			// 位置）交给 I/O 池准备；I/O 阶段再按普通 IO 路径加载并回到业务池执行。
 			msg.ioReroute = true
 			releaseCurrentMsg()
 			releaseCtx()
@@ -64,90 +69,13 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 			traceWatch.stop(cost, "io_reroute")
 			return
 		}
-		commitCtx := context.Background()
-		if current := fctx.CurrentContext(); current != nil && current.Base != nil {
-			commitCtx = current.Base
-		}
-		remoteStart := startNestStage(mgr.stageMetrics && msg.RemoteWriteBatch != nil)
-		if remoteErr := msg.finishRemoteWriteBatch(commitCtx, err); remoteErr != nil {
-			err = errors.Join(err, fmt.Errorf("nest: finish remote write batch: %w", remoteErr))
-		}
-		observeNestStage(msg.Name, "remote_confirm", remoteStart)
-		if msg.prepared != nil {
-			err = errors.Join(err, msg.localExecutor(msg.prepared.release))
-			msg.prepared = nil
-		}
-		if msg.replyAfterCommit() && err != nil && !errors.Is(err, ErrAfterCommitFailed) {
-			// 事务已提交（纯本地：本地提交成功，RR-20260926-53；Remote：本地与 Remote 都已提交，RR-20260926-46）：
-			// release hook、Close、预加载引用释放等错误只说明收尾失败，调用方必须能用
-			// errors.Is(ErrAfterCommitFailed) 区分“已提交”，不能据此重复业务。
-			err = fmt.Errorf("%w: %w", ErrAfterCommitFailed, err)
-		}
-		if msg.remotePartRejected && err != nil && !errors.Is(err, ErrRemotePartRejected) {
-			// 本地事务已提交，Remote 部分被明确拒绝（只丢弃 Remote 部分，RR-20260926-58）：调用方必须能区分“部分已提交”，
-			// 不能整笔重试；之前回复只有 Remote 的原因错误，判别表一行都不命中（RR-20260928-03）。与上面的 ErrAfterCommitFailed
-			// （Remote 也已确认）互斥；与 Remote 结果未知（错误链上的 entity.ErrRemotePersistenceIndeterminate）互斥。
-			err = fmt.Errorf("%w: %w", ErrRemotePartRejected, err)
-		}
-		if msg.nestedTxCommitted && err != nil && !errors.Is(err, ErrAfterCommitFailed) && !errors.Is(err, ErrNestedTransactionCommitted) {
-			// 自己的事务没有提交，但 handler 内嵌套的独立事务已持久提交（或结果未知）：调用方必须能区分
-			// “什么都没提交”与“部分已提交”，不能据此重试整笔业务；消息也不重排（RR-20260926-65）。
-			// 带 Remote 批次的消息自己的本地事务已提交（Remote 未确认：结果未知或被拒绝）时，外层换成不说“消息失败”的表述，
-			// 哨兵语义不变（RR-20260928-08，OPEN-ITEMS B19 并存形态）。
-			nested := ErrNestedTransactionCommitted
-			if msg.remoteCommitted {
-				nested = errNestedTransactionAlsoCommitted
-			}
-			err = fmt.Errorf("%w: %w", nested, err)
-		}
+		err = finishDispatchResources(mgr, msg, err)
+		err = annotateCommitOutcome(msg, err)
 		releaseCurrentMsg()
 		releaseCtx()
-		if errors.Is(err, ErrEntityGroupTransitionScheduled) {
-			err = nil
-		}
-		// 锁超时 / 组迁移等暂时性错误只对尚未提交的消息重新准入；已越过提交点的事务回复原错误（RR-20260926-49）。
-		// 不能回滚的 handler 一旦开始执行，已做的修改不撤销，同样不重排（新建实体冲突 RR-20260926-64，其余 RR-20260926-73）。
-		if msg.requeueAllowed(err) {
-			if requeuePendingEntityGroupTransition(mgr, msg, err) {
-				err = nil
-			}
-			if requeueTransientDispatch(mgr, msg, err) {
-				err = nil
-			}
-		} else {
-			if msg.createLockConflictNoRollback && isRequeueableDispatchError(err) && !errors.Is(err, ErrCreatedEntityLockConflict) {
-				// 业务换成了别的锁超时类错误回复：补上冲突哨兵，调用方仍能判别“框架没有重排、修改未回滚”。
-				err = fmt.Errorf("%w: %w", ErrCreatedEntityLockConflict, err)
-			}
-			if msg.noRollbackHandlerStarted && !msg.transactionPastCommitPoint(err) && isRequeueableDispatchError(err) && !errors.Is(err, ErrNonRollbackNotRequeued) {
-				// 本该重排的暂时性错误因 handler 不能回滚而没有重排：调用方据此判别“框架没有重排、修改未回滚”，
-				// 不能按 ErrLockTimeout 的“未执行”语义重发（RR-20260926-73）。已越过提交点的由提交哨兵说明，不叠加。
-				err = fmt.Errorf("%w: %w", ErrNonRollbackNotRequeued, err)
-			}
-		}
-		if msg.awaitPlan != nil {
-			plan := msg.awaitPlan
-			msg.awaitPlan = nil
-			if err != nil {
-				plan.cancel()
-			} else {
-				msg.afterQueue = plan.start
-				msg.RetChan = nil // 最终回复已经转交给 plan，当前段不提前回复。
-			}
-		}
-		if msg.deferredCompletion {
-			// The completion pump owns the reply: it sends RetChan (or logs
-			// the failure) once the commit ticket resolves. Sending here
-			// would leak a result whose durability is not decided yet.
-		} else if msg.RetChan != nil {
-			if err != nil {
-				msg.RetChan <- err
-			} else {
-				msg.RetChan <- ret
-			}
-		} else if err != nil {
-			logAsyncDispatchError(msg, err)
-		}
+		err = requeueOrAnnotateNotRequeued(mgr, msg, err)
+		handOverAwaitPlan(msg, err)
+		replyDispatch(msg, ret, err)
 		cost := time.Since(start)
 		mgr.recordDispatch(cost)
 		emitNestTraceEvent(msg, "dispatch_done", dispatchResult(err), cost)
@@ -179,7 +107,7 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 		return
 	}
 
-	// Prepare remote entities (acquire distributed lock + load from DB)
+	// 准备 Remote 实体（取得分布式写权限并从库加载）。
 	if msg.HasRemote {
 		if err = prepareRemoteWriteBatch(mgr.remoteManager, msg); err != nil {
 			return
@@ -198,8 +126,119 @@ func dispatchNest(mgr *NestMgr, msg *Msg, remoteStage bool) {
 	}
 }
 
-// runNestLogic 的 Guard 与事务上下文始终由执行 handler 的 goroutine 持有。
-// Remote 的获取和最终确认在调用者的I/O worker 上完成。
+// finishDispatchResources 收尾 Remote 写批次（按 err 与提交事实 Commit / Abort），再经本地执行器释放
+// I/O 阶段预加载的引用；收尾错误并入 err。必须在释放请求上下文之前调用（Remote 收尾使用其 Base ctx）。
+func finishDispatchResources(mgr *NestMgr, msg *Msg, err error) error {
+	commitCtx := context.Background()
+	if current := fctx.CurrentContext(); current != nil && current.Base != nil {
+		commitCtx = current.Base
+	}
+	remoteStart := startNestStage(mgr.stageMetrics && msg.RemoteWriteBatch != nil)
+	if remoteErr := msg.finishRemoteWriteBatch(commitCtx, err); remoteErr != nil {
+		err = errors.Join(err, fmt.Errorf("nest: finish remote write batch: %w", remoteErr))
+	}
+	observeNestStage(msg.Name, "remote_confirm", remoteStart)
+	if msg.prepared != nil {
+		err = errors.Join(err, msg.localExecutor(msg.prepared.release))
+		msg.prepared = nil
+	}
+	return err
+}
+
+// annotateCommitOutcome 按消息上记录的提交事实给失败回复补哨兵，让调用方区分“已提交 / 部分已提交 / 未提交”。
+// 三者都只在 err 非 nil 且尚未带对应哨兵时补。
+func annotateCommitOutcome(msg *Msg, err error) error {
+	if err == nil {
+		return nil
+	}
+	if msg.replyAfterCommit() && !errors.Is(err, ErrAfterCommitFailed) {
+		// 事务已提交（纯本地：本地提交成功；Remote：本地与 Remote 都已提交）：release hook、Close、预加载引用
+		// 释放等错误只说明收尾失败，调用方必须能用 errors.Is(ErrAfterCommitFailed) 区分“已提交”，不能据此重复业务。
+		err = fmt.Errorf("%w: %w", ErrAfterCommitFailed, err)
+	}
+	if msg.remotePartRejected && !errors.Is(err, ErrRemotePartRejected) {
+		// 本地事务已提交，Remote 部分被明确拒绝（只丢弃 Remote 部分）：调用方必须能区分“部分已提交”，不能整笔重试。
+		// 与上面的 ErrAfterCommitFailed（Remote 也已确认）互斥；与 Remote 结果未知（错误链上的
+		// entity.ErrRemotePersistenceIndeterminate）互斥。
+		err = fmt.Errorf("%w: %w", ErrRemotePartRejected, err)
+	}
+	if msg.nestedTxCommitted && !errors.Is(err, ErrAfterCommitFailed) && !errors.Is(err, ErrNestedTransactionCommitted) {
+		// 自己的事务没有提交，但 handler 内嵌套的独立事务已持久提交（或结果未知）：调用方必须能区分
+		// “什么都没提交”与“部分已提交”，不能据此重试整笔业务；消息也不重排。
+		// 带 Remote 批次的消息自己的本地事务已提交（Remote 未确认：结果未知或被拒绝）时，外层换成不说“消息失败”的表述，
+		// 哨兵语义不变。
+		nested := ErrNestedTransactionCommitted
+		if msg.remoteCommitted {
+			nested = errNestedTransactionAlsoCommitted
+		}
+		err = fmt.Errorf("%w: %w", nested, err)
+	}
+	return err
+}
+
+// requeueOrAnnotateNotRequeued 决定失败消息是否由框架重新准入；已重排时返回 nil（不回复）。
+//
+// 锁超时 / 组迁移等暂时性错误只对尚未越过提交点的消息重新准入；已越过提交点的事务回复原错误。不能回滚的 handler
+// 一旦开始执行，已做的修改不撤销，同样不重排，此时给回复补上说明“框架没有重排、修改未回滚”的哨兵。
+func requeueOrAnnotateNotRequeued(mgr *NestMgr, msg *Msg, err error) error {
+	if errors.Is(err, ErrEntityGroupTransitionScheduled) {
+		err = nil
+	}
+	if msg.requeueAllowed(err) {
+		if requeuePendingEntityGroupTransition(mgr, msg, err) {
+			err = nil
+		}
+		if requeueTransientDispatch(mgr, msg, err) {
+			err = nil
+		}
+		return err
+	}
+	if msg.createLockConflictNoRollback && isRequeueableDispatchError(err) && !errors.Is(err, ErrCreatedEntityLockConflict) {
+		// 业务换成了别的锁超时类错误回复：补上冲突哨兵，调用方仍能判别“框架没有重排、修改未回滚”。
+		err = fmt.Errorf("%w: %w", ErrCreatedEntityLockConflict, err)
+	}
+	if msg.noRollbackHandlerStarted && !msg.transactionPastCommitPoint(err) && isRequeueableDispatchError(err) && !errors.Is(err, ErrNonRollbackNotRequeued) {
+		// 本该重排的暂时性错误因 handler 不能回滚而没有重排：调用方不能按 ErrLockTimeout 的“未执行”语义重发。
+		// 已越过提交点的由提交哨兵说明，不叠加。
+		err = fmt.Errorf("%w: %w", ErrNonRollbackNotRequeued, err)
+	}
+	return err
+}
+
+// handOverAwaitPlan 处理本段登记的 await 计划：失败则取消；成功则把计划的启动挂到出队之后，并把最终回复的
+// 所有权转交给计划（当前段不回复）。
+func handOverAwaitPlan(msg *Msg, err error) {
+	if msg.awaitPlan == nil {
+		return
+	}
+	plan := msg.awaitPlan
+	msg.awaitPlan = nil
+	if err != nil {
+		plan.cancel()
+		return
+	}
+	msg.afterQueue = plan.start
+	msg.RetChan = nil // 最终回复已经转交给 plan，当前段不提前回复。
+}
+
+// replyDispatch 回复同步调用方，或记录异步消息的失败。回复已由完成泵接管（pipelined 延迟完成）时不在这里发送：
+// 完成泵在提交票据有结论后回复，这里发送会泄漏一个持久性尚未确定的结果。
+func replyDispatch(msg *Msg, ret any, err error) {
+	switch {
+	case msg.deferredCompletion:
+	case msg.RetChan != nil:
+		if err != nil {
+			msg.RetChan <- err
+		} else {
+			msg.RetChan <- ret
+		}
+	case err != nil:
+		logAsyncDispatchError(msg, err)
+	}
+}
+
+// runNestLogic 在业务池上建立 Guard 作用域并按消息类型派发。Guard 与事务上下文始终由执行 handler 的 goroutine 持有；
+// Remote 的获取和最终确认在调用者的 I/O worker 上完成。
 func runNestLogic(mgr *NestMgr, msg *Msg) (ret any, err error) {
 	previousGetter := msg.getter
 	msg.getter = loadedGetter{previousGetter}
@@ -207,7 +246,7 @@ func runNestLogic(mgr *NestMgr, msg *Msg) (ret any, err error) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			// 收尾（Guard 作用域释放、解锁后回调）里的 panic 到这里时 err 已经是 handler 的结果：并进去，不覆盖（RR-20260930-20）。
+			// 收尾（Guard 作用域释放、解锁后回调）里的 panic 到这里时 err 已经是 handler 的结果：并进去，不覆盖。
 			err = joinRecoveredError(err, r)
 		}
 	}()
@@ -244,6 +283,7 @@ func runNestLogic(mgr *NestMgr, msg *Msg) (ret any, err error) {
 	return ret, err
 }
 
+// ensureNestContext 为消息建立 fctx 请求上下文（带消息快照、handler 元信息与当前帧号），返回释放函数。
 func ensureNestContext(mgr *NestMgr, msg *Msg) func() {
 	meta := fctx.RequestMeta{Source: "nest"}
 	if msg != nil {
@@ -266,6 +306,7 @@ func ensureNestContext(mgr *NestMgr, msg *Msg) func() {
 	return release
 }
 
+// nestBaseContext 返回当前请求上下文的 Base ctx；没有时为 Background。
 func nestBaseContext() context.Context {
 	if current := fctx.CurrentContext(); current != nil && current.Base != nil {
 		return current.Base
@@ -273,6 +314,7 @@ func nestBaseContext() context.Context {
 	return context.Background()
 }
 
+// singleDispatch 派发单目标消息：取已加载实体、Touch 后进入统一的加锁与执行。
 func (mgr *NestMgr) singleDispatch(name string, id int64, params []any) (any, error) {
 	entry, ok := mgr.getHandlerEntry(NewHandlerName(name))
 	if !ok || entry.handler == nil {
@@ -287,19 +329,14 @@ func (mgr *NestMgr) singleDispatch(name string, id int64, params []any) (any, er
 	e, err := mgr.dispatchGetter().Get(nestBaseContext(), meta.FullID, meta.Category)
 	observeNestStage(name, "load", loadStart)
 	if errors.Is(err, entity.ErrColdLoadInLogic) && mgr.beforeIOPreparation() {
-		// 准入时已加载、执行前被驱逐：handler 尚未开始，原位转I/O 准备（RR-20260926-25）。
+		// 准入时已加载、执行前被驱逐：handler 尚未开始，原位转 I/O 准备。
 		return nil, declaredTargetCold(err)
 	}
 	if err != nil {
 		return nil, err
 	}
-	// The production getter reports "no such entity" as (nil, nil): the
-	// manager missed and there was no loader, or the loader legitimately
-	// found nothing. Touching that is a nil dereference, and what the caller
-	// then sees is whatever the top-level recovery made of it rather than
-	// ErrEntityNotFound — "this entity does not exist" and "the framework
-	// broke" become the same answer (RR-20260919-09). multi and multiGroup in
-	// this file already check; these two did not.
+	// 生产 Getter 以 (nil, nil) 表示“实体不存在”（未命中且没有 loader，或 loader 确认不存在），必须回复
+	// ErrEntityNotFound，不能解引用 nil 让顶层恢复把“不存在”和“框架出错”变成同一个回答。
 	if e == nil {
 		return nil, ErrEntityNotFound
 	}
@@ -315,6 +352,7 @@ func (mgr *NestMgr) singleDispatch(name string, id int64, params []any) (any, er
 	return mgr.dispatchLoadedEntities(entry, name, es, es, params)
 }
 
+// multiDispatch 派发多目标消息。
 func (mgr *NestMgr) multiDispatch(name string, ids []int64, params []any) (any, error) {
 	entry, ok := mgr.getHandlerEntry(NewHandlerName(name))
 	if !ok || entry.handler == nil {
@@ -323,6 +361,7 @@ func (mgr *NestMgr) multiDispatch(name string, ids []int64, params []any) (any, 
 	return mgr.dispatchMany(entry, name, ids, params)
 }
 
+// multiGroupDispatch 派发分组多目标消息：展开为一个 ID 列表，组边界经 HandlerOptionWithGroup 交给 handler。
 func (mgr *NestMgr) multiGroupDispatch(name string, groups [][]int64, params []any) (any, error) {
 	entry, ok := mgr.getHandlerEntry(NewHandlerName(name))
 	if !ok || entry.handler == nil {
@@ -378,7 +417,7 @@ func (mgr *NestMgr) dispatchMany(entry handlerEntry, name string, ids []int64, p
 		}
 	}()
 	if evicted && mgr.beforeIOPreparation() {
-		// 声明目标在读取与引用之间被驱逐：可选目标也不能静默当成缺失，交给I/O 准备重新判定。
+		// 声明目标在读取与引用之间被驱逐：可选目标也不能静默当成缺失，交给 I/O 准备重新判定。
 		return nil, declaredTargetCold(ErrEntityNotFound)
 	}
 	if firstDispatchEntityMissing(es) {
@@ -405,7 +444,7 @@ func (mgr *NestMgr) dispatchLoadedEntities(entry handlerEntry, name string, es, 
 	if err != nil {
 		if errors.Is(err, ErrLockTimeout) && mgr.beforeIOPreparation() && slices.ContainsFunc(lockEs, entity.IThreadSafeEntity.IsRemoved) {
 			// 引用之后、取锁之前被驱逐（RequireEntity 拒绝已摘除实体）：handler 仍未开始，
-			// 原位转I/O 准备，不走会排到同 ID 后继之后的延迟重新准入。
+			// 原位转 I/O 准备，不走会排到同 ID 后继之后的延迟重新准入。
 			return nil, declaredTargetCold(err)
 		}
 		return nil, err
@@ -422,10 +461,9 @@ func (mgr *NestMgr) dispatchLoadedEntities(entry handlerEntry, name string, es, 
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(releaseLocks) }
 	defer func() {
-		// 兜底释放在自己的 recover 边界里跑：release hook 的 panic 并进已在途的返回值，而不是把它整个抛掉。
-		// 之前 `defer release()` 直接 panic，handler 返回的业务错误随返回值一起丢失，runNestLogic 的 recover 再把 err 换成
-		// hook 错误，回滚后的回复只剩 `release hook failed`，调用方无法判别（RR-20260930-20）。已提交路径不受影响：
-		// 那时 err 为 nil，回复仍是 hook 错误本身，再由 dispatchNest 按提交事实包 ErrAfterCommitFailed（RR-20260926-53）。
+		// 兜底释放在自己的 recover 边界里跑：release hook 的 panic 并进已在途的返回值，而不是把它整个抛掉，
+		// 否则 handler 返回的业务错误会丢失，回滚后的回复只剩 hook 错误。已提交路径不受影响：那时 err 为 nil，
+		// 回复是 hook 错误本身，再由 dispatchNest 按提交事实包 ErrAfterCommitFailed。
 		// 只包住这一次释放：业务阶段沿函数体传出的 panic 不在这里 recover，仍交给 runNestLogic。
 		if r := recoverRelease(release); r != nil {
 			err = joinRecoveredError(err, r)
@@ -449,9 +487,9 @@ func recoverRelease(release func()) (recovered any) {
 	return nil
 }
 
-// joinRecoveredError 把 recover 到的 panic 值并进在途的错误：err 为 nil 时结果就是 panic 的错误本身（文本与旧行为一致）；
-// err 非 nil 时两者以 errors.Join 并列，errors.Is 对业务错误与 panic 原因都成立（RR-20260930-20）。
-// 之前的 recover 一律 `err = recoveredErr`，收尾阶段的 panic 会把 handler 已经返回的错误整个覆盖。
+// joinRecoveredError 把 recover 到的 panic 值并进在途的错误：err 为 nil 时结果就是 panic 的错误本身；
+// err 非 nil 时两者以 errors.Join 并列，errors.Is 对业务错误与 panic 原因都成立，收尾阶段的 panic 不会覆盖
+// handler 已经返回的错误。
 func joinRecoveredError(err error, r any) error {
 	recovered, ok := r.(error)
 	if !ok {
@@ -463,16 +501,19 @@ func joinRecoveredError(err error, r any) error {
 	return errors.Join(err, recovered)
 }
 
+// firstDispatchEntityMissing 报告主目标（第一个声明目标）是否缺失；其余目标允许为 nil 占位。
 func firstDispatchEntityMissing(es []entity.IThreadSafeEntity) bool {
 	return len(es) == 0 || es[0] == nil
 }
 
+// lockDispatchEntities 在无锁组时按已排序的 lockEs 依次取实体锁（已持有的跳过），任何一把取不到就放掉本次已取的锁
+// 并返回 ErrLockTimeout。
 func lockDispatchEntities(guard *entity.EntityGuard, lockEs []entity.IThreadSafeEntity) ([]entity.IThreadSafeEntity, error) {
 	if guard == nil {
 		return nil, ErrLockTimeout
 	}
-	// useTryLock（guard 已持有别的实体时改用 TryRequire，避免越锁序阻塞等待）在当前生产路径上不可达（OPEN-ITEMS B05，
-	// 2026-09-27 按源码核对）：本函数唯一调用方是 group_lock.go 的 lockDispatchEntitiesWithGroup（groupID==0），往上只有
+	// useTryLock（guard 已持有别的实体时改用 TryRequire，避免越锁序阻塞等待）在当前生产路径上不可达（2026-09-27 按源码
+	// 核对）：本函数唯一调用方是 group_lock.go 的 lockDispatchEntitiesWithGroup（groupID==0），往上只有
 	// dispatchLoadedEntities ← singleDispatch / dispatchMany ← runNestLogic（业务池派发与 remote_dispatch.go 的业务续行都经它）。
 	// runNestLogic 在取锁前新建 GuardScope，dispatchScopeGuard 取到的是池里已清空的 guard；其间的 Getter 只读已加载实体、不取实体锁，
 	// 所以这里 GuardedCount() 恒为 0。handler 内的公开 Request / Dispatch 被 ErrSyncInHandler / ErrAsyncInHandler 拒绝，
@@ -509,7 +550,7 @@ func tryRequireDispatchEntity(guard *entity.EntityGuard, ent entity.IThreadSafeE
 }
 
 // releaseDispatchEntities 逆序放掉本次派发取得的实体锁。只放 acquired：Guard 本身和它上面的其他持有（handler 新建的实体、
-// 被取代实例、解锁后回调）由 Guard 作用域结束时统一释放，Guard 也只在那时归还池（RR-20261006-12）。
+// 被取代实例、解锁后回调）由 Guard 作用域结束时统一释放，Guard 也只在那时归还池。
 func releaseDispatchEntities(guard *entity.EntityGuard, acquired []entity.IThreadSafeEntity) {
 	if guard == nil {
 		return
@@ -521,11 +562,10 @@ func releaseDispatchEntities(guard *entity.EntityGuard, acquired []entity.IThrea
 	}
 }
 
-// broadcastDispatch 对每个目标各执行一次 handler（每个目标一个事务）。每个目标在自己的 Guard 作用域里取锁、执行、释放
-// （RR-20260930-14）：目标结束时它取得的全部锁——声明的目标实例、handler 内 Destroy 后同 ID 重建的新实例（旧实例转入
-// superseded）、Cast 取得的实体——连同 post-release 回调一起释放，不跨后续目标持有。之前整轮广播共用 runNestLogic 的
-// 一把 Guard、目标结束时按 ID 释放：Destroy 后同 ID 重建时按 ID 放掉的是新实例的锁，旧实例回到 eMap，它的锁一直持有到
-// 整轮广播结束（RR-20260927-26 §未验证项，REMAINING §3 N28）。
+// broadcastDispatch 对每个目标各执行一次 handler（每个目标一个事务）。每个目标在自己的 Guard 作用域里取锁、执行、释放：
+// 目标结束时它取得的全部锁——声明的目标实例、handler 内 Destroy 后同 ID 重建的新实例（旧实例转入 superseded）、
+// Cast 取得的实体——连同 post-release 回调一起释放，不跨后续目标持有。某个目标加载失败、取锁失败或 handler panic
+// 只记录日志，不影响后续目标。
 func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 	entry, ok := mgr.getHandlerEntry(NewHandlerName(name))
 	if !ok || entry.handler == nil {
@@ -558,10 +598,8 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 			slog.Error("nest broadcast target load failed", "id", meta.FullID, "handler", name, "err", err)
 			continue
 		}
-		// Skip, do not dereference: the per-entity recovery below starts
-		// AFTER Touch, so a nil here escaped to the whole dispatch's recovery
-		// and every entity after this one was silently dropped
-		// (RR-20260919-09).
+		// 跳过，不解引用：下面的逐目标恢复边界从 Touch 之后才开始，nil 在这里会逃到整条派发的恢复边界，
+		// 让后续目标全部被静默丢弃。
 		if e == nil || !e.Touch() {
 			continue
 		}
@@ -592,8 +630,7 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 				guard.ReleaseEntityInstance(e)
 			}()
 			oneEntity[0] = e
-			// Broadcast has no early-release closure: pipelined handlers run
-			// with strict in-lock commit semantics on this path.
+			// 广播没有提前放锁闭包：pipelined handler 在这条路径上按 strict 锁内提交执行。
 			if _, err := mgr.invokeHandlerTransaction(entry.meta, oneEntity, name, nil, func() (any, error) {
 				return entry.handler(oneEntity, params)
 			}); err != nil {
@@ -603,6 +640,7 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 	}
 }
 
+// normalizeFullIDs 把目标 ID 规范为完整 ID 并解析各自的分类。
 func normalizeFullIDs(ids []int64) ([]int64, []entity.EntityCategory, error) {
 	fullIDs := make([]int64, len(ids))
 	fullIDCategories := make([]entity.EntityCategory, len(ids))
@@ -618,17 +656,19 @@ func normalizeFullIDs(ids []int64) ([]int64, []entity.EntityCategory, error) {
 	return fullIDs, fullIDCategories, nil
 }
 
-// SortEntity sorts entities for deadlock-free lock acquisition.
+// SortEntity 把实体按锁序（先锁组、再 GUId）排序，保证多实体取锁无死锁。
 func SortEntity(es []entity.IThreadSafeEntity) {
 	slices.SortFunc(es, func(a, b entity.IThreadSafeEntity) int {
 		return compareEntityIDs(a.GUId(), b.GUId())
 	})
 }
 
+// SortEntityId 按与 SortEntity 相同的锁序排序实体 ID。
 func SortEntityId(guids []int64) {
 	slices.SortFunc(guids, compareEntityIDs)
 }
 
+// compareEntityIDs 是锁序比较：先比锁组，再比 GUId。
 func compareEntityIDs(guidI, guidJ int64) int {
 	groupI, groupJ := entity.GetEntityGroup(guidI), entity.GetEntityGroup(guidJ)
 	if groupI != groupJ {
@@ -637,15 +677,13 @@ func compareEntityIDs(guidI, guidJ int64) int {
 	return cmp.Compare(guidI, guidJ)
 }
 
-// prepareRemoteWriteBatch admits one fenced transaction before dispatch.
+// prepareRemoteWriteBatch 在派发前为消息的 Remote 目标准入一个带 fence 的写批次（取得写权限并加载）。
 func prepareRemoteWriteBatch(manager entity.IRemoteEntityManager, msg *Msg) error {
 	ids := extractRemoteIds(msg)
 	if len(ids) == 0 {
 		return nil
 	}
-	// A remote write batch is one transaction. Broadcast invokes one
-	// transaction per entity and therefore cannot provide a matching atomic
-	// commit/rollback boundary for the batch.
+	// 一个 Remote 写批次对应一个事务；广播每个实体一个事务，无法给批次提供匹配的原子提交 / 回滚边界。
 	if msg.Type == MsgTypeBroadcast {
 		return ErrRemoteBroadcastUnsupported
 	}
@@ -667,8 +705,7 @@ func prepareRemoteWriteBatch(manager entity.IRemoteEntityManager, msg *Msg) erro
 	return nil
 }
 
-// extractRemoteIds collects entity IDs whose ID remote bit and entity kind
-// indicate remote-managed lifecycle.
+// extractRemoteIds 收集消息目标里 ID 带 Remote 能力位且 kind 为 Remote 托管的实体 ID。
 func extractRemoteIds(msg *Msg) []int64 {
 	var ids []int64
 	if msg.Tid != 0 {

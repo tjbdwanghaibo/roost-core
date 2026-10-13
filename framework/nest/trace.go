@@ -11,12 +11,14 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
+// 慢派发阈值：达到即计入慢派发并打日志；详细慢日志按进程限频。
 const (
 	nestSlowDispatchThreshold      = 200 * time.Millisecond
 	nestSlowDispatchTraceThreshold = nestSlowDispatchThreshold
 	nestSlowDispatchLogInterval    = 5 * time.Second
 )
 
+// observeDispatch 记录一次派发的计数、耗时与结果，慢派发另打告警日志。
 func observeDispatch(msg *Msg, err error, cost time.Duration) {
 	if msg == nil {
 		return
@@ -404,10 +406,8 @@ func logAsyncDispatchError(msg *Msg, err error) {
 	)
 }
 
-// observeLockHold records the per-handler entity-lock hold time and flags
-// holds beyond the configured threshold — the operational signal for "which
-// handler is doing slow work inside its entity locks" (the exact cost class
-// DurabilityPipelined exists to remove).
+// observeLockHold 记录每个 handler 持有实体锁的时长，超过阈值的另计数并告警——这是“哪个 handler 在实体锁内做慢
+// 工作”的运维信号（正是 DurabilityPipelined 要消除的那类开销）。
 func (mgr *NestMgr) observeLockHold(handler string, hold time.Duration) {
 	metrics.ObserveDuration("nest.handler.lock_hold", metrics.Labels{"handler": handler}, hold)
 	if threshold := mgr.slowLockThreshold; threshold > 0 && hold >= threshold {

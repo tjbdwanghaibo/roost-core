@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"sync"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
+// NestSyncTimeout 是同步请求等待回复的默认上限，NestOptionWithSyncTimeout 可覆盖。
 const NestSyncTimeout = 5 * time.Second
 
 var (
@@ -22,9 +24,8 @@ var (
 	// ErrLockTimeout 是取锁超时 / 锁冲突类暂时性错误。只有回复不带任何“可能已提交”哨兵（ErrCommitIndeterminate、
 	// entity.ErrRemotePersistenceIndeterminate、entity.ErrRemoteCommitTimeout、ErrAfterCommitFailed、ErrRemotePartRejected、
 	// ErrNestedTransactionCommitted），也不带 ErrNonRollbackNotRequeued 或不带锁超时形态的 ErrCreatedEntityLockConflict 时，
-	// 它才表示“未提交（未开始或已回滚）、
-	// 框架已自动重排到上限”，可以重试；链上有前述哨兵时以它们为准（RR-20260926-77，判别表见 docs/USER_GUIDE.md §4）。
-	// strict 等 Remote 确认到截止的回复同时带 ErrRemoteCommitTimeout 与 ErrRemotePersistenceIndeterminate（RR-20260927-24）；
+	// 它才表示“未提交（未开始或已回滚）、框架已自动重排到上限”，可以重试；链上有前述哨兵时以它们为准。
+	// strict 等 Remote 确认到截止的回复同时带 ErrRemoteCommitTimeout 与 ErrRemotePersistenceIndeterminate；
 	// 自定义 Remote 实现可能只返回前者，所以两者都列。
 	ErrLockTimeout                    = errors.New("nest: lock timeout")
 	ErrNestTimeout                    = errors.New("nest: sync timeout")
@@ -42,21 +43,19 @@ var (
 	ErrInvalidEntityLockGroup         = errors.New("nest: invalid entity lock group")
 	ErrRollbackUnsupported            = errors.New("nest: rollback is not supported by all participants")
 	ErrRollbackFailed                 = errors.New("nest: rollback failed")
-	// ErrAfterCommitFailed reports that a transaction is durable but one of its
-	// after-commit callbacks panicked. The committed state stands; what failed
-	// is work that ran after it, and the caller needs to know the difference
-	// from a rollback (RR-20260911-06).
+	// ErrAfterCommitFailed 表示事务已持久，但某个提交后回调 panic。已提交的状态保持有效，失败的是提交之后的工作，
+	// 调用方需要把它与回滚区分开。
 	//   - 是否可能已提交：已提交（消息自己的事务）。能否重试：不得重试。
-	//   - 它只覆盖消息自己的事务：handler 内嵌套独立事务（或消息自己的事务结束后、收尾阶段调用的独立事务，RR-20260926-84）
-	//     已提交而外层失败时回复是 ErrNestedTransactionCommitted，不带本哨兵，所以判断“是否可能已提交”不能只看它（RR-20260926-77）。
+	//   - 它只覆盖消息自己的事务：handler 内嵌套独立事务（或消息自己的事务结束后、收尾阶段调用的独立事务）
+	//     已提交而外层失败时回复是 ErrNestedTransactionCommitted，不带本哨兵，所以判断“是否可能已提交”不能只看它。
 	ErrAfterCommitFailed = errors.New("nest: transaction committed but after-commit work failed")
 	// ErrRemotePartRejected 表示带 Remote 批次的消息自己的本地事务已提交（按 handler 的 durability：strict / async 已持久，
-	// memory 为内存提交），而 Remote 部分被明确拒绝（RR-20260928-03）。按 RR-20260926-58，只丢弃被拒绝 Remote 实体的修改
-	// （批次回滚、隔离并从权威重载），同一事务里的本地部分照常生效；提交后回调（AfterCommit）不执行。
+	// memory 为内存提交），而 Remote 部分被明确拒绝。只丢弃被拒绝 Remote 实体的修改（批次回滚、隔离并从权威重载），
+	// 同一事务里的本地部分照常生效；提交后回调（AfterCommit）不执行。
 	// 原因错误（如 entity.ErrRemoteRejected、entity.ErrRemoteVersionConflict）保留在链上。按 entity 契约，Remote 结果未知时 Commit
-	// 返回 entity.ErrRemotePersistenceIndeterminate（判别表第 2 行），不带它的 Commit 失败就是 Remote 没有写入（框架自带的 remoteentity
-	// 在 strict 下只有 entity.ErrRemoteRejected 不带它，其余等待失败都带，RR-20260928-08）；两者互斥，
-	// 与 ErrAfterCommitFailed（Remote 也已确认）同样互斥。之前这种回复不带任何哨兵，调用方看不出本地已提交。
+	// 返回 entity.ErrRemotePersistenceIndeterminate，不带它的 Commit 失败就是 Remote 没有写入（框架自带的 remoteentity
+	// 在 strict 下只有 entity.ErrRemoteRejected 不带它，其余等待失败都带）；两者互斥，与 ErrAfterCommitFailed（Remote 也已确认）
+	// 同样互斥。
 	//   - 是否可能已提交：部分已提交（本地部分已提交，Remote 部分未提交）。能否重试：不得整笔重试（本地部分会重复执行）；
 	//     按业务只补做 Remote 部分，或读回状态后再决定。
 	ErrRemotePartRejected = errors.New("nest: local transaction committed but its remote part was rejected")
@@ -67,62 +66,56 @@ var (
 	ErrCommitterRequired             = errors.New("nest: durable transaction committer is required")
 	ErrDurableRemoteWriteUnsupported = errors.New("nest: durable remote write requires a lease-aware WAL committer")
 	ErrRemoteBroadcastUnsupported    = errors.New("nest: remote-managed entities cannot use broadcast dispatch")
-	// ErrCommitRejected 表示事务在写任何持久记录之前被明确拒绝：committer / Enqueue 拒绝，以及 Remote 批次 FinalizeLocked
+	// ErrCommitRejected 表示事务在写任何持久记录之前被明确拒绝：committer / Enqueue 拒绝，Remote 批次 FinalizeLocked
 	// 拒绝、准备提交记录失败、嵌套事务写外层快照被拒（ErrNestedTransactionRollbackConflict）、fence 之后不交给 committer
-	// （ErrNestFenced）——后几种从 RR-20260927-32 起同样带本哨兵，原因仍可 errors.Is。
+	// （ErrNestFenced）。原因错误仍可 errors.Is。
 	//   - 是否可能已提交：否。可回滚事务已回滚；不能回滚的事务（带 Remote 批次的 memory handler）内存修改不撤销。
 	ErrCommitRejected = errors.New("nest: transaction commit rejected")
 	// ErrMemoryTransactionPersistentWrite 表示 durability=memory 的事务（rollback=state|undo，或带 Remote 批次的 rollback=none）
-	// 改了本地持久字段（或用 AddMutation 加了本地 mutation）：memory 事务不写任何持久记录，这些改动无处可去（RR-20261006-41）。
+	// 改了本地持久字段（或用 AddMutation 加了本地 mutation）：memory 事务不写任何持久记录，这些改动无处可去。
 	// 提交点整笔拒绝，回复同时带 ErrCommitRejected，错误点名实体（collection/id）与字段；可回滚的事务已按回滚策略撤销内存修改，
-	// rollback=none 的（带 Remote 批次）不撤销内存修改、Remote 批次 Abort。旧实现直接返回成功，改动静默丢失。
+	// rollback=none 的（带 Remote 批次）不撤销内存修改、Remote 批次 Abort。
 	//   - 是否可能已提交：否。能否重试：不能原样重试——这是 handler 声明与业务写法的矛盾：把 durability 改成 strict / async，
 	//     或把字段声明为 nopersist。
 	ErrMemoryTransactionPersistentWrite = errors.New("nest: memory transaction changed persistent fields")
-	// ErrPipelinedCommitterRequired means a handler declared
-	// DurabilityPipelined but the configured committer does not implement
-	// PipelinedTransactionCommitter. This is a deployment configuration error
-	// and is reported instead of silently degrading to strict commits.
+	// ErrPipelinedCommitterRequired 表示 handler 声明了 DurabilityPipelined，但装配的 committer 没有实现
+	// PipelinedTransactionCommitter。这是部署配置错误，直接报告，不静默降级为 strict 提交。
 	ErrPipelinedCommitterRequired = errors.New("nest: pipelined durability requires a PipelinedTransactionCommitter")
-	// ErrPipelinedNotAllowed means a handler declared DurabilityPipelined but
-	// the engine's pipelined allowlist does not include it. Early lock
-	// release changes commit semantics, so production rollout is gated per
-	// handler; see NEST_PIPELINED_COMMIT.md.
+	// ErrPipelinedNotAllowed 表示 handler 声明了 DurabilityPipelined，但不在引擎的 pipelined 白名单内。提前放锁会改变提交
+	// 语义，所以生产环境按 handler 逐个放开；见 NEST_PIPELINED_COMMIT.md。
 	ErrPipelinedNotAllowed = errors.New("nest: handler is not on the pipelined durability allowlist")
-	// ErrDurabilityUnset 是注册期错误：手写 HandlerMeta 的 Rollback 不为 none，却没有显式写 Durability
-	// （RR-20261006-60，v1.23.1 起）。Durability 零值不再隐含 memory，要在 memory / async / strict / pipelined 里选一个；
+	// ErrDurabilityUnset 是注册期错误：手写 HandlerMeta 的 Rollback 不为 none，却没有显式写 Durability。
+	// Durability 零值不隐含 memory，要在 memory / async / strict / pipelined 里选一个；
 	// //roost:nest 生成的 meta 总是写明 durability，不受影响。
 	//   - 是否可能已提交：否（注册失败，handler 不可用）。能否重试：不能原样重试，补上 Durability 后重新注册。
 	ErrDurabilityUnset = errors.New("nest: handler meta durability not declared")
-	// ErrCommitIndeterminate means the storage device returned an error after
-	// commit bytes may have reached durable media. The process must be fenced
-	// and recovered from WAL; rolling the in-memory state back could create a
-	// second, conflicting history.
+	// ErrCommitIndeterminate 表示存储设备在提交字节可能已到达持久介质之后报错。进程必须 fence 并从 WAL 恢复；
+	// 回滚内存状态可能制造第二条相互冲突的历史。
 	//   - 是否可能已提交：可能。能否重试：不得重试，等实例从 WAL 恢复后按业务幂等键核对。
-	//   - 消息自己的事务与 handler 内嵌套独立事务结果未知时都已 fence 引擎（RR-20260926-76）；消息自己的事务结束后、收尾阶段
-	//     （Guard post-release、解锁后回调）调用的独立事务同样（RR-20260926-84）。
+	//   - 消息自己的事务、handler 内嵌套独立事务，以及消息自己的事务结束后收尾阶段（Guard post-release、解锁后回调）
+	//     调用的独立事务，结果未知时都已 fence 引擎。
 	ErrCommitIndeterminate = errors.New("nest: transaction commit outcome is indeterminate")
-	// ErrCreatedEntityLockConflict 表示 handler 内新建实体时，新实体的锁按锁序不能等待且已被其他持有者占用
-	// （RR-20260926-48 / 64），或同 ID 的上一个实例仍在撤销 / 销毁收尾（RR-20260926-81，不再返回 entity.ErrEntityRemoved）。可回滚的事务同时带 ErrLockTimeout：整条回滚后由 Nest 自动重新准入。
+	// ErrCreatedEntityLockConflict 表示 handler 内新建实体时，新实体的锁按锁序不能等待且已被其他持有者占用，
+	// 或同 ID 的上一个实例仍在撤销 / 销毁收尾。可回滚的事务同时带 ErrLockTimeout：整条回滚后由 Nest 自动重新准入。
 	// 不能回滚的 handler（RollbackNone、memory 快路径）不带 ErrLockTimeout：冲突前的内存修改已生效且不撤销，
 	// 消息不自动重排，这个错误原样（或补在业务错误上）回复调用方；是否重试由业务按 handler 的幂等性决定。
 	//   - 是否可能已提交：两种形态本身都未提交。但“与 ErrLockTimeout 并存 = 已回滚、已重排到上限”只在不带
-	//     ErrNestedTransactionCommitted 时成立：外层已有嵌套提交时同样两者并存，却是“已回滚、未重排、嵌套部分已提交”（RR-20260926-77）。
+	//     ErrNestedTransactionCommitted 时成立：外层已有嵌套提交时同样两者并存，却是“已回滚、未重排、嵌套部分已提交”。
 	//   - 能否重试：带 ErrLockTimeout 且不带任何“可能已提交”哨兵时可重试；不带 ErrLockTimeout 时框架未重排、修改未回滚，
 	//     业务确认 handler 幂等后才可重试。
 	ErrCreatedEntityLockConflict = errors.New("nest: created entity is locked by another holder")
 	// ErrNestedTransactionCommitted 表示这条消息自己的事务没有提交（回滚或失败），但 handler 内嵌套的独立事务
-	// （RunIsolatedTransaction 等）已经持久提交或结果未知（RR-20260926-65）；消息自己的事务结束后、收尾阶段（Guard post-release、
-	// 解锁后回调）调用的独立事务也不认领消息，同样由本哨兵说明，不会被当成消息自己的提交（RR-20260926-84）。消息按已越过提交点处理，框架不自动重排；
-	// 调用方不能把它当作“什么都没发生”重试整笔业务。原因错误仍可 errors.Is。
-	//   - 是否可能已提交：是（嵌套部分已提交或结果未知）。能否重试：不得整笔重试，即使链上同时有 ErrLockTimeout（RR-20260926-77）。
+	// （RunIsolatedTransaction 等）已经持久提交或结果未知；消息自己的事务结束后、收尾阶段（Guard post-release、
+	// 解锁后回调）调用的独立事务也不认领消息，同样由本哨兵说明，不会被当成消息自己的提交。消息按已越过提交点处理，
+	// 框架不自动重排；调用方不能把它当作“什么都没发生”重试整笔业务。原因错误仍可 errors.Is。
+	//   - 是否可能已提交：是（嵌套部分已提交或结果未知）。能否重试：不得整笔重试，即使链上同时有 ErrLockTimeout。
 	//   - 带 Remote 批次的消息自己的本地事务已提交、Remote 结果未知或被明确拒绝（链上同时有 entity.ErrRemotePersistenceIndeterminate
-	//     或 ErrRemotePartRejected，判别表第 2、4 行先命中）时也可能带本哨兵：PrepareRemoteWriteBatch 期间调用的独立事务已提交
-	//     （OPEN-ITEMS B19 窗口）。这时回复外层文本是“nest: a nested isolated transaction also committed”，不说“消息失败”；
-	//     errors.Is(err, ErrNestedTransactionCommitted) 照常成立（RR-20260928-08）。
+	//     或 ErrRemotePartRejected，以它们为先）时也可能带本哨兵：PrepareRemoteWriteBatch 期间调用的独立事务已提交。
+	//     这时回复外层文本是“nest: a nested isolated transaction also committed”，不说“消息失败”；
+	//     errors.Is(err, ErrNestedTransactionCommitted) 照常成立。
 	ErrNestedTransactionCommitted = errors.New("nest: a nested isolated transaction committed before the message failed")
 	// ErrNonRollbackNotRequeued 表示不能回滚的 handler（memory 快路径，或消息自己的事务是 RollbackNone）已经开始执行后，
-	// 以锁超时 / 组迁移类暂时性错误失败（RR-20260926-73）。可回滚的事务遇到这类错误会整条回滚后由 Nest 自动重新准入；
+	// 以锁超时 / 组迁移类暂时性错误失败。可回滚的事务遇到这类错误会整条回滚后由 Nest 自动重新准入；
 	// 这里 handler 失败前已做的内存修改不撤销，重排会让它们重复生效，所以框架不重排，原因错误（如 ErrLockTimeout）保留在链上。
 	//   - 是否可能已提交：消息自己的事务没有提交（memory 快路径未准入、Remote 批次已 Abort），但失败前的内存修改仍在；
 	//     消息已越过提交点（例如嵌套独立事务已提交）时不补本哨兵，由 ErrNestedTransactionCommitted 等说明。
@@ -130,31 +123,30 @@ var (
 	// handler 开始执行之前的准入失败（声明目标取锁超时、组迁移待定等）不带它，照常由 Nest 重新准入。
 	ErrNonRollbackNotRequeued = errors.New("nest: handler cannot roll back; transient failure after it started was not requeued")
 	// ErrNestedTransactionRollbackConflict 表示 handler 内嵌套的独立事务（RunIsolatedTransaction）要持久写的实体，已被外层可回滚事务
-	// （RollbackState / RollbackUndo）登记了回滚快照（RR-20260926-74）。外层随后失败回滚会把快照恢复到内存，覆盖嵌套事务已持久的
+	// （RollbackState / RollbackUndo）登记了回滚快照。外层随后失败回滚会把快照恢复到内存，覆盖嵌套事务已持久的
 	// 结果，所以嵌套事务在写任何持久记录之前被拒绝并自身回滚；外层快照不变。外层是 memory handler（无回滚快照）时不受此限。
-	// 不经 DAO、用 AddMutation 直接加入的原始 mutation 按实体 ID 同样判断（RR-20260927-07）。
+	// 不经 DAO、用 AddMutation 直接加入的原始 mutation 按实体 ID 同样判断。
 	//   - 是否可能已提交：否。嵌套事务没有写任何持久记录，它的内存修改已撤销；外层事务照常由业务决定继续或失败。
 	//   - 能否重试：原样重试仍会被拒绝（结构性冲突，不是暂时性错误）。把这次写入并入外层事务，或让嵌套事务只写外层没有捕获的实体。
 	ErrNestedTransactionRollbackConflict = errors.New("nest: nested isolated transaction writes an entity the enclosing transaction may roll back")
-	// ErrNestedTransactionInRemoteMessage 表示在带 Remote 批次的消息里调用了 RunIsolatedTransaction（RR-20260926-75）：handler 内，
-	// 消息自己的事务开始之前的I/O 阶段准备里（批次挂上之后），或消息自己的事务结束之后、批次收尾之前的收尾阶段（Guard post-release、
-	// 解锁后回调，RR-20260926-84）。Remote 批次只随
-	// 消息自己的事务 Commit 或 Abort；独立事务若经过它，会替外层 finalize 并把批次标成已提交，外层失败时 Remote 修改照样发布。
-	// 框架直接拒绝：call 不执行、没有任何提交、批次与消息的 Remote 状态不变。
+	// ErrNestedTransactionInRemoteMessage 表示在带 Remote 批次的消息里调用了 RunIsolatedTransaction：handler 内，
+	// 消息自己的事务开始之前的 I/O 阶段准备里（批次挂上之后），或消息自己的事务结束之后、批次收尾之前的收尾阶段
+	// （Guard post-release、解锁后回调）。Remote 批次只随消息自己的事务 Commit 或 Abort；独立事务若经过它，会替外层
+	// finalize 并把批次标成已提交，外层失败时 Remote 修改照样发布。框架直接拒绝：call 不执行、没有任何提交、批次与消息的
+	// Remote 状态不变。
 	// “带 Remote 批次”从批次挂到消息上开始算：IRemoteEntityManager.PrepareRemoteWriteBatch 执行期间批次还没挂上，这时调用
-	// RunIsolatedTransaction 不返回本错误，按不认领消息的嵌套独立事务处理：照常执行并提交，不碰随后才挂上的批次；RR-65 的
-	// 标记（消息自己的事务随后没提交时回复带 ErrNestedTransactionCommitted）与 RR-76 的 fence（结果未知）同样适用，与纯本地
-	// 消息的收尾阶段相同。框架自带的 remoteentity.Manager 在这一步只做所有权准入与冷加载，本身不调用 RunIsolatedTransaction
-	// （RR-20260926-84 复核残留，OPEN-ITEMS B19）。
+	// RunIsolatedTransaction 不返回本错误，按不认领消息的嵌套独立事务处理：照常执行并提交，不碰随后才挂上的批次；消息自己的
+	// 事务随后没提交时回复带 ErrNestedTransactionCommitted，结果未知时 fence，与纯本地消息的收尾阶段相同。框架自带的
+	// remoteentity.Manager 在这一步只做所有权准入与冷加载，本身不调用 RunIsolatedTransaction。
 	//   - 是否可能已提交：否。独立事务没有执行；消息自己的事务照常由业务决定继续或失败，其 Remote 批次按它的结果 Commit / Abort。
 	//   - 能否重试：原样重试仍会被拒绝（结构性限制）。把写入并入消息自己的事务，或放到不声明 Remote 目标的消息里执行。
 	ErrNestedTransactionInRemoteMessage = errors.New("nest: nested isolated transaction is not supported in a message with a remote write batch")
 )
 
-// errNestedTransactionAlsoCommitted 是 ErrNestedTransactionCommitted 在“消息自己的本地事务也已提交”时的外层表述（RR-20260928-08）。
-// 带 Remote 批次的消息本地已提交、Remote 结果未知或被明确拒绝，同时 PrepareRemoteWriteBatch 期间开的独立事务已提交（OPEN-ITEMS B19）：
-// 之前回复外层是 ErrNestedTransactionCommitted 的文本“…committed before the message failed”，与内层“local transaction committed …”矛盾。
-// 只换文本，errors.Is(err, ErrNestedTransactionCommitted) 照常成立。
+// errNestedTransactionAlsoCommitted 是 ErrNestedTransactionCommitted 在“消息自己的本地事务也已提交”时的外层表述：
+// 带 Remote 批次的消息本地已提交、Remote 结果未知或被明确拒绝，同时 PrepareRemoteWriteBatch 期间开的独立事务已提交。
+// 外层若沿用“…committed before the message failed”会与内层“local transaction committed …”矛盾，所以只换文本，
+// errors.Is(err, ErrNestedTransactionCommitted) 照常成立。
 var errNestedTransactionAlsoCommitted error = nestedTransactionAlsoCommitted{}
 
 type nestedTransactionAlsoCommitted struct{}
@@ -183,20 +175,20 @@ func NewParamTypeMismatchError(handler string, idx int, want string, got any) er
 	return fmt.Errorf("%w: handler=%s param=%d want=%s got=%T", ErrParamMismatch, handler, idx, want, got)
 }
 
+// NestMgr 是一个实例级 Nest 引擎：持有派发器（short / long / io 三池）、帧 ticker、实体 Getter、
+// 事务 committer 与 Remote 协作入口。引擎一次性使用，Shutdown 后不能再启动。
 type NestMgr struct {
 	dispatcher             *Dispatcher
 	ticker                 *Ticker
 	getter                 entity.Getter
-	loadedChecker          entity.LoadedChecker // getter 可选实现的只读“是否已加载”；nil 时准入不判冷（RR-20260926-47）
+	loadedChecker          entity.LoadedChecker // getter 可选实现的只读“是否已加载”；nil 时准入不判冷
 	remoteSnapshotResolver RemoteSnapshotResolver
 	remoteManager          entity.IRemoteEntityManager
 	committer              TransactionCommitter
 	entitySync             entity.SyncCommitObserver
 	syncTimeout            time.Duration
-	// slowLockThreshold is the entity-lock hold time at which a dispatch is
-	// counted and logged as slow. Zero disables the warning; the metric is
-	// recorded regardless.
-	stageMetrics      bool
+	stageMetrics           bool
+	// slowLockThreshold 是实体锁持有时长的慢告警阈值：达到即计数并打日志。0 关闭告警，指标照常记录。
 	slowLockThreshold time.Duration
 	lifecycleMu       sync.Mutex
 	started           bool
@@ -206,15 +198,11 @@ type NestMgr struct {
 	fenceErr          error
 	groupLocks        *entityLockGroupLockManager
 	handlers          map[HandlerName]handlerEntry
-	// pipelinedAllow, when non-nil, is the set of handler names permitted to
-	// run with DurabilityPipelined. Nil permits all handlers (development
-	// default); production deployments should pin an explicit allowlist so a
-	// handler cannot adopt early lock release without an operations review.
+	// pipelinedAllow 非 nil 时是允许使用 DurabilityPipelined 的 handler 名单；nil 允许全部（开发默认）。
+	// 生产部署应固定名单，避免 handler 未经评审就采用提前放锁。
 	pipelinedAllow map[string]struct{}
-	// completions, when non-nil, enables Phase 2 async completion: dispatch
-	// workers hand the post-durability work (AfterCommit, reply) to the pump
-	// instead of parking on the commit ticket. Nil keeps the Phase 1
-	// in-worker wait.
+	// completions 非 nil 时启用 pipelined 第二阶段异步完成：派发 worker 把持久之后的工作（AfterCommit、
+	// 回复）交给完成泵，不在提交票据上等待。nil 时保持第一阶段在 worker 内等待。
 	completions *completionPump
 }
 
@@ -231,10 +219,8 @@ func (mgr *NestMgr) groupLockManager() *entityLockGroupLockManager {
 	return locks
 }
 
-// Fence immediately rejects new and queued dispatches without attempting to
-// roll back any transaction whose durable outcome is indeterminate. It is
-// idempotent and is intentionally separate from Shutdown so in-flight handlers
-// can finish their fail-stop paths before the application drains workers.
+// Fence 立即拒绝新的与已排队的派发，不尝试回滚任何持久结果不确定的事务。它是幂等的，并且有意与
+// Shutdown 分开：在途 handler 先走完自己的 fail-stop 路径，应用再排空 worker。首个 cause 胜出。
 func (mgr *NestMgr) Fence(cause error) {
 	if mgr == nil || cause == nil {
 		return
@@ -250,6 +236,7 @@ func (mgr *NestMgr) Fence(cause error) {
 	}
 }
 
+// FenceError 返回 Fence 记录的错误（包裹 ErrNestFenced）；未 fence 时为 nil。
 func (mgr *NestMgr) FenceError() error {
 	if mgr == nil {
 		return ErrNestStopped
@@ -352,35 +339,26 @@ var (
 			opts.Committer = committer
 		}
 	}
-	// NestOptionWithPipelinedAllowlist restricts DurabilityPipelined to the
-	// named handlers; dispatching any other pipelined handler fails with
-	// ErrPipelinedNotAllowed. Not calling it (or passing no names) permits
-	// every handler — production deployments should always pin a list.
-	// NestOptionWithSlowLockThreshold sets the warn threshold for the
-	// per-handler entity-lock hold time. Every dispatch records its hold in
-	// the nest.handler.lock_hold metric; holds at or beyond the threshold
-	// additionally count nest.handler.lock_hold.slow.total and log a
-	// warning. Zero disables the warning (the metric is always recorded);
-	// the default is 100ms.
+	// NestOptionWithSlowLockThreshold 设置每个 handler 实体锁持有时长的告警阈值。每次派发都把持有时长记入
+	// nest.handler.lock_hold；达到阈值的另计 nest.handler.lock_hold.slow.total 并打告警日志。0 关闭告警
+	// （指标照常记录），默认 100ms。
 	NestOptionWithSlowLockThreshold = func(threshold time.Duration) NestOption {
 		return func(opts *NestOpts) {
 			opts.SlowLockThreshold = threshold
 			opts.SlowLockThresholdSet = true
 		}
 	}
+	// NestOptionWithPipelinedAllowlist 把 DurabilityPipelined 限制在列出的 handler；其他 pipelined handler 的派发
+	// 返回 ErrPipelinedNotAllowed。不调用（或不传名字）时允许全部 handler——生产部署应始终固定名单。
 	NestOptionWithPipelinedAllowlist = func(names ...string) NestOption {
 		return func(opts *NestOpts) {
 			opts.PipelinedAllowlist = append(opts.PipelinedAllowlist, names...)
 		}
 	}
-	// NestOptionWithPipelinedAsyncCompletion enables Phase 2 of the pipelined
-	// commit: the dispatch worker no longer parks on the commit ticket —
-	// AfterCommit hooks and the reply run on a completion pool (hashed by
-	// entity, so same-entity completions keep commit order) once the record
-	// is durable. Hooks therefore run without the request context or entity
-	// locks; see NEST_PIPELINED_COMMIT.md §10 before enabling. workers and
-	// queueCap <= 0 select defaults (4, 8192); a full queue degrades single
-	// transactions back to the Phase 1 in-worker wait.
+	// NestOptionWithPipelinedAsyncCompletion 启用 pipelined 提交第二阶段：派发 worker 不再在提交票据上等待，
+	// 记录持久后 AfterCommit 与回复在完成池执行（按实体哈希，同实体的完成保持提交顺序）。因此这些回调不带请求
+	// 上下文、也不持实体锁；启用前先读 NEST_PIPELINED_COMMIT.md §10。workers 与 queueCap <= 0 取默认值
+	// （4、8192）；队列满时单笔事务降级为第一阶段的 worker 内等待。
 	NestOptionWithPipelinedAsyncCompletion = func(workers, queueCap int) NestOption {
 		return func(opts *NestOpts) {
 			opts.PipelinedAsync = true
@@ -390,9 +368,8 @@ var (
 	}
 )
 
-// NewEngine constructs an instance-scoped Nest engine. Callers inject its
-// Client into generated senders. An engine is single-use and cannot be
-// restarted after Shutdown.
+// NewEngine 构造一个实例级 Nest 引擎，调用方把它的 Client 注入生成的 sender。引擎一次性使用，
+// Shutdown 后不能重启。
 func NewEngine(opts ...NestOption) *NestMgr {
 	entity.FreezeBusinessPools()
 	params := &NestOpts{}
@@ -450,10 +427,11 @@ func NewEngine(opts ...NestOption) *NestMgr {
 	ret.dispatcher.stageMetrics = params.StageMetrics
 	ret.dispatcher.ConfigureDelayedAdmission(params.DelayedMsgCap, params.MaxDelay)
 	ret.ticker = NewTicker(params.TickDuration)
-	// committer 的可选能力：DataEngine 需要在业务池持锁执行框架步骤（驱逐被跳过的原生步骤留下的
-	// 实体，RR-20260926-30），这里把本引擎的 RunLocal 交给它。
-	// Remote Manager 的后台收尾（finalizer）同样需要：持久拒绝后的回滚与仅内存卸载、确认无结论时
-	// 延迟执行的提交后回调（RR-20260926-37/39）。两者共用这一个入口。
+	// 把本引擎的 RunLocal 交给需要在业务池持锁执行框架步骤的组件，三者共用这一个入口：
+	//   - committer（DataEngine）：驱逐被跳过的原生步骤留下的实体；
+	//   - Remote Manager 的后台收尾（finalizer）：持久拒绝后的回滚与仅内存卸载、确认无结论时延迟执行的提交后回调；
+	//   - Getter（entity.ManagerAccess）的共享冷加载：领头的 I/O 阶段请求截止离开后加载仍在进行，发布实体
+	//     不能再经那条已结束消息的业务续行。
 	runLocal := func(fn func()) error { return ret.RunLocal(context.Background(), fn) }
 	if binder, ok := params.Committer.(LocalExecutorBinder); ok {
 		binder.BindLocalExecutor(runLocal)
@@ -461,16 +439,13 @@ func NewEngine(opts ...NestOption) *NestMgr {
 	if binder, ok := params.RemoteManager.(LocalExecutorBinder); ok {
 		binder.BindLocalExecutor(runLocal)
 	}
-	// Getter（entity.ManagerAccess）的共享冷加载与调用方解耦：领头的I/O 阶段请求截止离开后，加载仍在
-	// 进行，发布实体不能再经那条已结束消息的业务续行，改走这个入口（RR-20260926-54）。
 	if binder, ok := params.Getter.(LocalExecutorBinder); ok {
 		binder.BindLocalExecutor(runLocal)
 	}
 	return ret
 }
 
-// Start starts the worker pools and frame ticker. Repeated calls before
-// Shutdown are harmless.
+// Start 启动 worker 池与帧 ticker。Shutdown 之前重复调用无副作用。
 func (mgr *NestMgr) Start() error {
 	if mgr == nil {
 		return ErrNestStopped
@@ -496,8 +471,8 @@ func (mgr *NestMgr) Start() error {
 	return nil
 }
 
-// Shutdown stops admission, drains accepted work and stops the ticker. It is
-// safe for concurrent callers; all callers observe the same result.
+// Shutdown 停止准入、排空已接受的工作并停止 ticker。可并发调用，所有调用方看到同一结果；
+// 每个调用方只在自己的 ctx 内等待。
 func (mgr *NestMgr) Shutdown(ctx context.Context) error {
 	if mgr == nil {
 		return nil
@@ -520,15 +495,13 @@ func (mgr *NestMgr) Shutdown(ctx context.Context) error {
 		mgr.finishShutdown(nil)
 		return nil
 	}
-	// Once shutdown starts, accepted work must finish even if one caller's
-	// deadline expires. This prevents a second engine from starting while old
-	// workers still mutate entities. The caller's context bounds only its wait.
+	// 关闭一旦开始，已接受的工作必须完成，即使某个调用方的截止时间先到：否则新引擎可能在旧 worker
+	// 仍修改实体时启动。调用方的 ctx 只约束它自己的等待。
 	go func() {
 		mgr.ticker.Stop()
 		err := mgr.dispatcher.OnDestroyWithContext(context.Background())
-		// Deferred completions are accepted work: every reply and AfterCommit
-		// promised to a caller must be delivered before shutdown finishes.
-		// The dispatcher is drained, so no new submissions can arrive.
+		// 延迟完成也是已接受的工作：承诺给调用方的回复与 AfterCommit 都要在关闭结束前送达。
+		// 派发器已排空，不会再有新的提交。
 		if mgr.completions != nil {
 			err = errors.Join(err, mgr.completions.stop(context.Background()))
 		}
@@ -556,7 +529,7 @@ func (mgr *NestMgr) finishShutdown(err error) {
 	mgr.lifecycleMu.Unlock()
 }
 
-// Running reports whether Start completed and Shutdown has not begun.
+// Running 报告 Start 已完成、Shutdown 未开始且引擎未被 fence。
 func (mgr *NestMgr) Running() bool {
 	if mgr == nil {
 		return false
@@ -568,7 +541,7 @@ func (mgr *NestMgr) Running() bool {
 
 // DurableWatermark 返回装配的 committer 的持久化水位来源：committer 实现
 // PipelinedTransactionCommitter 时为其 DurableLSN，否则为 nil（同步持久提交不需要外发水位）。
-// 装配层用它给 Sync 的 DurableWatermark 接线，pipelined 事务在 WAL 持久化前不外发（RR-20260926-35）。
+// 装配层用它给 Sync 的 DurableWatermark 接线，pipelined 事务在 WAL 持久化前不外发。
 func (mgr *NestMgr) DurableWatermark() func() uint64 {
 	if mgr == nil {
 		return nil
@@ -594,16 +567,15 @@ var (
 	}
 	// SendOptionIO 将声明目标的加载及前后置 I/O 放入 I/O 池；handler 始终在业务池。
 	// Getter 实现 entity.LoadedChecker（ManagerAccess 已实现）时，声明目标中有未加载实体会在统一准入处
-	// 自动走 I/O 阶段（RR-20260926-25 / 47）；显式 IO 仍有效，用于强制 I/O 准备，也是未实现 LoadedChecker 的
+	// 自动走 I/O 阶段；显式 IO 仍有效，用于强制 I/O 准备，也是未实现 LoadedChecker 的
 	// 自定义 Getter 预加载冷目标的方式。
 	SendOptionIO = func() SendOpt {
 		return func(opt *sendOptParam) { opt.Cost = true }
 	}
 )
 
-// checkRemoteId checks whether a target ID is remote-capable and marks the
-// message for remote preparation. The preparer later decides marked remote vs
-// local fast path from the runtime marker store.
+// checkRemoteId 在目标 ID 属于 Remote 托管 kind 时把消息标记为需要 Remote 准备（同时走 I/O 阶段）。
+// 准备阶段再按运行期标记决定走 Remote 还是本地快路径。
 func checkRemoteId(msg *Msg, id int64) {
 	if shouldPrepareRemoteID(entity.ResolveEntityID(id)) {
 		msg.HasRemote = true
@@ -611,8 +583,7 @@ func checkRemoteId(msg *Msg, id int64) {
 	}
 }
 
-// checkRemoteIds checks if any target ID in the slice is remote-capable and
-// marks the message for remote preparation.
+// checkRemoteIds 是 checkRemoteId 的切片形式，任一 ID 命中即标记。
 func checkRemoteIds(msg *Msg, ids []int64) {
 	for _, id := range ids {
 		if shouldPrepareRemoteID(entity.ResolveEntityID(id)) {
@@ -623,8 +594,7 @@ func checkRemoteIds(msg *Msg, ids []int64) {
 	}
 }
 
-// checkRemoteGroups checks if any target ID in grouped slices is
-// remote-capable and marks the message for remote preparation.
+// checkRemoteGroups 是 checkRemoteId 的分组形式，任一 ID 命中即标记。
 func checkRemoteGroups(msg *Msg, groups [][]int64) {
 	for _, g := range groups {
 		for _, id := range g {
@@ -637,6 +607,7 @@ func checkRemoteGroups(msg *Msg, groups [][]int64) {
 	}
 }
 
+// shouldPrepareRemoteID 报告 ID 是否携带 Remote 能力位且其 kind 已注册为 Remote 托管。
 func shouldPrepareRemoteID(meta entity.EntityIDMeta) bool {
 	if meta.Kind == entity.EntityKindNone || !meta.RemoteCapable {
 		return false
@@ -647,6 +618,7 @@ func shouldPrepareRemoteID(meta entity.EntityIDMeta) bool {
 	return entity.IsEntityKindRemoteManaged(meta.Kind)
 }
 
+// bindMsgContext 把调用方上下文快照绑定到消息；carryBase 为 false（异步消息）时只保留可跨异步边界的部分。
 func bindMsgContext(msg *Msg, carryBase bool) {
 	if msg == nil {
 		return
@@ -658,10 +630,9 @@ func bindMsgContext(msg *Msg, carryBase bool) {
 	msg.Context = snapshot
 }
 
-// 异步入队是新的配置准入边界：固定当前 RuntimeConfig，后续 reload 不改在队消息。
-// 自续发下一跳重新取当前代际，避免长链永久钉住旧快照；Meta/Trace 可传递，
-// Base、KV、Frame、SyncWait 等执行局部状态（尤其事务）不能跨异步边界。
-
+// asyncMessageContextSnapshot 生成异步消息携带的上下文。异步入队是新的配置准入边界：固定当前
+// RuntimeConfig，后续 reload 不改在队消息；自续发的下一跳重新取当前代际，避免长链永久钉住旧快照。
+// Meta / Trace 可传递，Base、KV、Frame、SyncWait 等执行局部状态（尤其事务）不能跨异步边界。
 func asyncMessageContextSnapshot(snapshot fctx.ContextSnapshot) fctx.ContextSnapshot {
 	return fctx.ContextSnapshot{
 		Valid:  true,

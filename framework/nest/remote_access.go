@@ -10,6 +10,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
+// RemoteAcquireMode 是 RemoteAccess 未指定一致性时的读取方式（只读或允许缓存）。
 type RemoteAcquireMode = entity.RemoteAcquireMode
 
 const (
@@ -17,6 +18,7 @@ const (
 	RemoteAcquireCache    = entity.RemoteAcquireCache
 )
 
+// Remote 快照读取的错误：别名重复、快照缺失、类型不符、身份（实体 / kind / scope / 路由代际）不符。
 var (
 	ErrRemoteAccessAliasDuplicate = errors.New("nest: duplicate remote access alias")
 	ErrRemoteAccessMissing        = errors.New("nest: remote snapshot missing")
@@ -24,6 +26,8 @@ var (
 	ErrRemoteSnapshotIdentity     = errors.New("nest: remote snapshot identity mismatch")
 )
 
+// RemoteAccess 声明 handler 需要的一份 Remote 实体只读快照：I/O 阶段按它读取并校验，handler 内经 Remote(key) 按
+// Alias 取用。Required 为 true 时读取失败、身份不符或版本过旧会让消息失败，否则只是不提供该快照。
 type RemoteAccess struct {
 	Alias          string
 	Ref            entity.RemoteViewRef
@@ -38,16 +42,19 @@ type RemoteAccess struct {
 	Consistency    entity.RemoteReadConsistency
 }
 
+// RemoteAccessProvider 由消息参数实现，声明本消息需要的 Remote 快照。
 type RemoteAccessProvider interface {
 	RemoteAccess() []RemoteAccess
 }
 
+// RemoteSnapshotResolver 是可替换的快照来源；未装配时经 IRemoteEntityManager.ReadRemoteSnapshot 读取。
 type RemoteSnapshotResolver interface {
 	ResolveRemoteSnapshot(access RemoteAccess) (entity.RemoteSnapshot, error)
 }
 
 type remoteSnapshotCtxKey struct{}
 
+// prepareRemoteSnapshots 在派发准备阶段读取消息参数声明的全部 Remote 快照，校验后按别名存入当前请求上下文。
 func prepareRemoteSnapshots(msg *Msg, resolver RemoteSnapshotResolver, manager entity.IRemoteEntityManager) error {
 	if msg == nil {
 		return nil
@@ -73,22 +80,10 @@ func prepareRemoteSnapshots(msg *Msg, resolver RemoteSnapshotResolver, manager e
 		if access.Consistency > entity.RemoteReadLinearizable {
 			return fmt.Errorf("nest: remote access %s has invalid consistency %d", access.Alias, access.Consistency)
 		}
-		snapshot, err := resolveRemoteSnapshot(access, resolver, manager)
+		snapshot, err := resolveAcceptedSnapshot(access, resolver, manager)
 		if err != nil {
 			if access.Required {
-				return fmt.Errorf("nest: remote access %s: %w", access.Alias, err)
-			}
-			continue
-		}
-		if snapshot.EntityID != access.Ref.EntityID || snapshot.Kind != access.Ref.Kind || snapshot.Scope != access.Scope || snapshot.RouteEpoch != access.Ref.RouteEpoch {
-			if access.Required {
-				return fmt.Errorf("%w: alias=%s", ErrRemoteSnapshotIdentity, access.Alias)
-			}
-			continue
-		}
-		if !snapshot.Accepts(remoteReadOption(access)) {
-			if access.Required {
-				return fmt.Errorf("nest: remote access %s stale: version=%d min=%d", access.Alias, snapshot.Version, access.MinVersion)
+				return err
 			}
 			continue
 		}
@@ -105,6 +100,22 @@ func prepareRemoteSnapshots(msg *Msg, resolver RemoteSnapshotResolver, manager e
 	return nil
 }
 
+// resolveAcceptedSnapshot 读取 access 声明的快照，并确认它的身份与声明一致、版本满足读取要求。
+func resolveAcceptedSnapshot(access RemoteAccess, resolver RemoteSnapshotResolver, manager entity.IRemoteEntityManager) (entity.RemoteSnapshot, error) {
+	snapshot, err := resolveRemoteSnapshot(access, resolver, manager)
+	if err != nil {
+		return entity.RemoteSnapshot{}, fmt.Errorf("nest: remote access %s: %w", access.Alias, err)
+	}
+	if snapshot.EntityID != access.Ref.EntityID || snapshot.Kind != access.Ref.Kind || snapshot.Scope != access.Scope || snapshot.RouteEpoch != access.Ref.RouteEpoch {
+		return entity.RemoteSnapshot{}, fmt.Errorf("%w: alias=%s", ErrRemoteSnapshotIdentity, access.Alias)
+	}
+	if !snapshot.Accepts(remoteReadOption(access)) {
+		return entity.RemoteSnapshot{}, fmt.Errorf("nest: remote access %s stale: version=%d min=%d", access.Alias, snapshot.Version, access.MinVersion)
+	}
+	return snapshot, nil
+}
+
+// resolveRemoteSnapshot 从 resolver（装配时）或 Remote Manager 读取快照。未指定一致性时按读取方式取 Cached 或 Monotonic。
 func resolveRemoteSnapshot(access RemoteAccess, resolver RemoteSnapshotResolver, manager entity.IRemoteEntityManager) (entity.RemoteSnapshot, error) {
 	if resolver != nil {
 		return resolver.ResolveRemoteSnapshot(access)
@@ -127,7 +138,7 @@ func resolveRemoteSnapshot(access RemoteAccess, resolver RemoteSnapshotResolver,
 	minVersion := access.MinVersion
 	if access.AllowStale && consistency == entity.RemoteReadCached {
 		// AllowStale 接受低于 MinVersion 的快照（调用方的 RemoteSnapshot.Accepts 判定）。Cached 读出口对不满足
-		// 最低版本的 L1 返回 ErrRemoteSnapshotStale（Mirror 第 2 步），不能把下限交给它，否则 allow_stale 失效。
+		// 最低版本的 L1 返回 ErrRemoteSnapshotStale，不能把下限交给它，否则 allow_stale 失效。
 		minVersion = 0
 	}
 	envelope, found, err := manager.ReadRemoteSnapshot(baseCtx, entity.RemoteSnapshotKey{
@@ -152,6 +163,7 @@ func resolveRemoteSnapshot(access RemoteAccess, resolver RemoteSnapshotResolver,
 	}, nil
 }
 
+// collectRemoteAccess 收集参数中全部 RemoteAccessProvider 声明的访问。
 func collectRemoteAccess(params []any) []RemoteAccess {
 	if len(params) == 0 {
 		return nil
@@ -165,6 +177,7 @@ func collectRemoteAccess(params []any) []RemoteAccess {
 	return accesses
 }
 
+// remoteReadOption 把访问声明换成快照的接受条件（以当前时间判断缓存是否过期）。
 func remoteReadOption(access RemoteAccess) entity.RemoteReadOption {
 	return entity.RemoteReadOption{
 		MinVersion:     access.MinVersion,
@@ -174,23 +187,28 @@ func remoteReadOption(access RemoteAccess) entity.RemoteReadOption {
 	}
 }
 
+// RemoteKey 是按别名取用类型为 T 的 Remote 快照的键。
 type RemoteKey[T any] struct {
 	Alias string
 }
 
+// RemoteScopeProvider 由 Remote 视图类型实现，给出它的 scope。
 type RemoteScopeProvider interface {
 	RemoteScope() uint64
 }
 
+// RemoteDefaultTTLMillisProvider 由 Remote 视图类型可选实现，给出默认缓存 TTL（毫秒）。
 type RemoteDefaultTTLMillisProvider interface {
 	RemoteDefaultTTLMillis() int64
 }
 
+// RemoteScopeOf 返回视图类型 T 的 scope。
 func RemoteScopeOf[T RemoteScopeProvider]() uint64 {
 	var v T
 	return v.RemoteScope()
 }
 
+// RemoteDefaultTTLMillisOf 返回视图类型 T 的默认缓存 TTL；未实现时为 0。
 func RemoteDefaultTTLMillisOf[T any]() int64 {
 	var v T
 	provider, ok := any(v).(RemoteDefaultTTLMillisProvider)
@@ -200,10 +218,12 @@ func RemoteDefaultTTLMillisOf[T any]() int64 {
 	return provider.RemoteDefaultTTLMillis()
 }
 
+// Remote 在 handler 内取当前消息准备好的 Remote 快照；没有或类型不符时返回 false。
 func Remote[T any](key RemoteKey[T]) (T, bool) {
 	return remoteSnapshot[T](key.Alias)
 }
 
+// MustRemote 是 Remote 的 panic 版本，缺失时以 ErrRemoteAccessMissing panic。
 func MustRemote[T any](key RemoteKey[T]) T {
 	v, ok := Remote(key)
 	if !ok {

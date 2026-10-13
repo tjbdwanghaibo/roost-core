@@ -15,24 +15,19 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// Phase 2 of the pipelined commit (see NEST_PIPELINED_COMMIT.md §10): instead
-// of parking the dispatch worker on the commit ticket, the transaction's
-// completion (AfterCommit hooks, release notification, reply) is handed to a
-// completion pump and the worker moves on to its next message.
+// pipelined 提交第二阶段（见 NEST_PIPELINED_COMMIT.md §10）：派发 worker 不在提交票据上等待，事务的完成
+// （AfterCommit 回调、释放通知、回复）交给完成泵，worker 继续处理下一条消息。
 //
-// Ordering contract: completions are submitted while the entity locks are
-// still held, the pump forwards them in FIFO order, and execution is hashed
-// by primary entity onto a worker pool — so completions of the same entity
-// run in commit (LSN) order, exactly as they did when the dispatch worker ran
-// them inline. The pump itself only waits on tickets and forwards; business
-// hooks run in the pool and can never head-of-line block resolution of other
-// entities' completions.
+// 顺序契约：完成在仍持实体锁时提交，泵按 FIFO 转发，执行按主实体哈希到 worker 池——所以同一实体的完成按提交
+// （LSN）顺序执行，与派发 worker 就地执行时完全相同。泵本身只等票据并转发；业务回调在池里运行，不会队头阻塞
+// 其他实体完成的解析。
 
 const (
 	defaultCompletionWorkers  = 4
 	defaultCompletionQueueCap = 8192
 )
 
+// pipelinedCompletion 是提交给完成泵的一项：等 ticket 持久后执行 complete。
 type pipelinedCompletion struct {
 	ticket      CommitTicket
 	entityID    int64
@@ -42,34 +37,31 @@ type pipelinedCompletion struct {
 	submittedAt time.Time
 }
 
+// completionTask 是完成池的任务包装（worker.Pool 要求任务实现 OnRelease）。
 type completionTask struct {
 	run func()
 }
 
 func (t *completionTask) OnRelease() {}
 
+// completionPump 按 FIFO 等待提交票据，再把完成交给按实体哈希的 worker 池；结果不确定时经 fence 停止引擎。
 type completionPump struct {
 	queue chan pipelinedCompletion
 	pool  *worker.Pool[*completionTask]
 	done  chan struct{}
 	fence func(error)
-	// closeMu pairs the closed check with the queue send in submit, so a
-	// send can never race stop's close of the queue.
+	// closeMu 让 submit 中的 closed 检查与入队成为一步，入队不会与 stop 关闭队列竞争。
 	closeMu sync.RWMutex
 	closed  atomic.Bool
 	once    sync.Once
 
-	// chains carries the per-entity ordering links. The tail node for an
-	// entity is installed while the entity lock is held, so the chain order
-	// equals commit (LSN) order, and every execution path — pool worker,
-	// inline in the pump, and the dispatch-worker fallback — waits for its
-	// predecessor before running. That keeps same-entity completion order
-	// unconditional, including under overload.
+	// chains 是按实体的顺序链。实体的链尾在持实体锁时登记，所以链序即提交（LSN）顺序；每条执行路径——池 worker、
+	// 泵内就地执行、派发 worker 降级——都先等前驱完成再运行，过载时同实体的完成顺序也无条件成立。
 	chainMu sync.Mutex
 	chains  map[int64]chan struct{}
 }
 
-// completionOrder is one entity's link in the completion chain.
+// completionOrder 是一个实体完成链上的一节。
 type completionOrder struct {
 	pump        *completionPump
 	entityID    int64
@@ -78,8 +70,7 @@ type completionOrder struct {
 	releaseOnce sync.Once
 }
 
-// link reserves this transaction's place in its entity's completion order.
-// Called while the entity lock is held.
+// link 在实体的完成顺序里为本事务占位。必须在持实体锁时调用。
 func (p *completionPump) link(entityID int64) *completionOrder {
 	order := &completionOrder{pump: p, entityID: entityID, mine: make(chan struct{})}
 	p.chainMu.Lock()
@@ -89,9 +80,7 @@ func (p *completionPump) link(entityID int64) *completionOrder {
 	return order
 }
 
-// await blocks until the previous completion of the same entity has finished.
-// It can never deadlock: predecessors only wait on strictly earlier links and
-// on their own tickets, which the WAL resolves independently.
+// await 等待同一实体的上一个完成结束。不会死锁：前驱只等严格更早的节点和自己的票据，票据由 WAL 独立完成。
 func (o *completionOrder) await() {
 	if o == nil || o.prev == nil {
 		return
@@ -99,14 +88,10 @@ func (o *completionOrder) await() {
 	<-o.prev
 }
 
-// release publishes this completion as finished and drops the entity's chain
-// entry when no successor has been linked behind it.
+// release 发布本完成已结束；后面没有登记后继时删除该实体的链条目。
 //
-// Idempotent on purpose: the link is taken before the pump decides whether it
-// can own the work, so on the degraded path the caller holds a release
-// obligation it must be able to discharge defensively without risking a double
-// close. An unreleased link would block every later completion for that entity
-// forever, with no timeout and no metric to show it.
+// 有意设计为幂等：占位发生在泵决定能否接手之前，降级路径上调用方要能防御性地履行释放义务而不重复关闭。
+// 未释放的节点会永久阻塞该实体此后的所有完成，既无超时也无指标可见。
 func (o *completionOrder) release() {
 	if o == nil {
 		return
@@ -121,6 +106,7 @@ func (o *completionOrder) release() {
 	})
 }
 
+// newCompletionPump 构造完成泵；workers、queueCap <= 0 取默认值。
 func newCompletionPump(workers, queueCap int) *completionPump {
 	if workers <= 0 {
 		workers = defaultCompletionWorkers
@@ -141,17 +127,17 @@ func newCompletionPump(workers, queueCap int) *completionPump {
 	return p
 }
 
+// start 启动完成池与泵。
 func (p *completionPump) start() {
 	p.pool.Start()
 	go p.run()
 }
 
+// run 是泵循环：按提交顺序等每个票据，再把完成交给池；队列关闭并排空后退出。
 func (p *completionPump) run() {
 	defer close(p.done)
 	for entry := range p.queue {
-		// Tickets resolve in LSN order (prefix durability), so a FIFO wait
-		// adds at most one group-commit batch of latency for entries pushed
-		// slightly out of order across entities.
+		// 票据按 LSN 顺序完成（前缀持久），跨实体略微乱序入队的条目因 FIFO 等待最多多一个组提交批次的延迟。
 		observeNestStage(entry.handler, "commit_queue", entry.submittedAt)
 		waitStart := startNestStage(entry.stages)
 		<-entry.ticket.Done()
@@ -164,29 +150,21 @@ func (p *completionPump) run() {
 			complete(err)
 		}}
 		if p.pool.Dispatch(entry.entityID, task) != nil {
-			// Pool rejected (saturated or stopping): run inline rather than
-			// drop — a completion is a durability promise that must be
-			// delivered. complete waits for its entity predecessor, so
-			// ordering holds here too; the cost is pump head-of-line delay
-			// while the pool is saturated.
+			// 池拒绝（饱和或停止中）：就地执行而不是丢弃——完成是必须送达的持久承诺。complete 会等实体前驱，
+			// 顺序在这里同样成立；代价是池饱和期间泵的队头延迟。
 			//
-			// Inside the same recovery boundary the worker gives it: this
-			// goroutine is the pump itself, and a panic that escaped here
-			// took the process down (RR-20260911-06, 09-12 实测).
+			// 与池 worker 相同的恢复边界：这个 goroutine 就是泵本身，逃逸的 panic 会让进程退出。
 			goroutine.SafeFunc(task.run)
 		}
 	}
 }
 
-// submit hands one completion to the pump. It is called with entity locks
-// held and therefore never blocks: a full queue returns false and the caller
-// falls back to the Phase 1 in-worker wait.
+// submit 把一个完成交给泵。调用方持实体锁，所以从不阻塞：队列满返回 false，调用方降级为第一阶段的 worker 内等待。
 func (p *completionPump) submit(entry pipelinedCompletion) bool {
 	if p == nil {
 		return false
 	}
-	// The read lock makes the closed check and the send one atomic step
-	// against stop, which closes the queue only after taking the write lock.
+	// 读锁让 closed 检查与发送相对 stop 成为原子的一步；stop 取得写锁后才关闭队列。
 	p.closeMu.RLock()
 	defer p.closeMu.RUnlock()
 	if p.closed.Load() {
@@ -216,7 +194,7 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 	retChan := msg.RetChan
 	waitStart := time.Now()
 	entityID := completionEntityID(es, msg)
-	// Linked while the entity lock is still held: chain order == commit order.
+	// 仍持实体锁时占位：链序即提交顺序。
 	order := pump.link(entityID)
 	complete := func(ticketErr error) {
 		unlockStart := startNestStage(tx.stageMetrics)
@@ -229,9 +207,7 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 		defer order.release()
 		metrics.ObserveDuration("nest.pipelined.durable_wait", metrics.Labels{"handler": handler}, time.Since(waitStart))
 		if ticketErr != nil {
-			// Same verdict as the in-worker path: indeterminate never rolls
-			// back — successors may already build on this state and WAL
-			// replay owns the final history.
+			// 与 worker 内路径相同的结论：结果不确定从不回滚——后继可能已基于这一状态，最终历史由 WAL 回放决定。
 			tx.abandon()
 			if pump.fence != nil {
 				pump.fence(ticketErr)
@@ -247,7 +223,7 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 		}
 		if commitErr := errors.Join(tx.commit(true), handoff.releaseErr); commitErr != nil {
 			// WAL 已成功，释放 hook 或完成回调失败仍需报告；不回滚、不回复业务成功。
-			// 事务已提交：统一带 ErrAfterCommitFailed，保留原因链（RR-20260926-53）。
+			// 事务已提交：统一带 ErrAfterCommitFailed，保留原因链。
 			if !errors.Is(commitErr, ErrAfterCommitFailed) {
 				commitErr = fmt.Errorf("%w: %w", ErrAfterCommitFailed, commitErr)
 			}
@@ -272,8 +248,7 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 		return handoff
 	}
 	metrics.IncCounter("nest.pipelined.async_total", metrics.Labels{"result": "degraded"}, 1)
-	// The caller replies through complete(), so the dispatch path must not
-	// also send RetChan.
+	// 调用方经 complete() 回复，派发路径不能再发 RetChan。
 	msg.deferredCompletion = true
 	return handoff
 }
@@ -290,15 +265,14 @@ func completionEntityID(es []entity.IThreadSafeEntity, msg *Msg) int64 {
 	return msg.Key()
 }
 
-// stop drains every accepted completion and stops the pool. Called after the
-// dispatcher has drained, so no new submissions can race the close.
+// stop 排空全部已接受的完成并停止池。在派发器排空后调用，不会有新的提交与关闭竞争。
 func (p *completionPump) stop(ctx context.Context) error {
 	if p == nil {
 		return nil
 	}
 	var err error
 	p.once.Do(func() {
-		// Wait out every in-flight submit before closing the queue.
+		// 关闭队列之前等在途的 submit 全部结束。
 		p.closeMu.Lock()
 		p.closed.Store(true)
 		p.closeMu.Unlock()
@@ -307,10 +281,8 @@ func (p *completionPump) stop(ctx context.Context) error {
 		case <-p.done:
 			err = p.pool.StopWithContext(ctx)
 		case <-ctx.Done():
-			// Still initiate the pool stop: the pump keeps draining in the
-			// background and a rejected Dispatch falls back to inline
-			// delivery, so stopping here bounds the leak instead of leaving
-			// the pool goroutines alive forever after a timed-out shutdown.
+			// 仍发起池停止：泵在后台继续排空，被拒绝的 Dispatch 会降级为就地执行，所以这里停止能限制泄漏，
+			// 不让池 goroutine 在超时的关闭之后永远存活。
 			err = errors.Join(ctx.Err(), p.pool.StopWithContext(ctx))
 		}
 	})

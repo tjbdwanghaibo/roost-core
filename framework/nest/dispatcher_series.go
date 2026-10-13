@@ -6,7 +6,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// 派发器指标序列的生命周期（RR-20261006-18，第十二轮 O3）。
+// 派发器指标序列的生命周期。
 //
 // nest.dispatch.* 里带 dispatcher 标签的序列属于以这个名字运行的派发器：OnInit 时登记，
 // OnDestroyWithContext 排空返回 nil 之后撤销；以这个名字登记的最后一个派发器撤销时删除这些序列
@@ -20,8 +20,7 @@ import (
 // 删除与上报在同一把锁下互斥：上报前确认本派发器仍持有序列，所以一次与撤销并发的上报不会在
 // 删除之后把序列重新建出来。上报每 1024 次投递一次，这把包级锁不在热路径上。
 
-// dispatcherSeriesNames is every metric labelled with dispatcher. A new one
-// must be added here, or it outlives its dispatcher.
+// dispatcherSeriesNames 列出全部带 dispatcher 标签的指标。新增这类指标必须加到这里，否则它会比派发器活得更久。
 var dispatcherSeriesNames = [...]string{
 	"nest.dispatch.short_continuations",
 	"nest.dispatch.delayed_messages",
@@ -32,12 +31,11 @@ var dispatcherSeriesNames = [...]string{
 
 var dispatcherSeries struct {
 	mu sync.Mutex
-	// live counts, per dispatcher name, the dispatchers holding its series.
+	// live 按派发器名字记录持有该组序列的派发器个数。
 	live map[string]int
 }
 
-// holdSeries registers m as reporting under its name. OnInit calls it; a
-// second call without a release in between is a no-op.
+// holdSeries 登记 m 以自己的名字上报序列。OnInit 调用；中间没有 release 的重复调用无效果。
 func (m *Dispatcher) holdSeries() {
 	dispatcherSeries.mu.Lock()
 	defer dispatcherSeries.mu.Unlock()
@@ -52,8 +50,7 @@ func (m *Dispatcher) holdSeries() {
 	dispatcherSeries.live[name]++
 }
 
-// releaseSeries undoes holdSeries once m has drained, and deletes the series
-// when no other live dispatcher reports under the same name.
+// releaseSeries 在 m 排空后撤销 holdSeries；同名的其他派发器都已撤销时删除这组序列。
 func (m *Dispatcher) releaseSeries() {
 	dispatcherSeries.mu.Lock()
 	defer dispatcherSeries.mu.Unlock()
@@ -71,7 +68,7 @@ func (m *Dispatcher) releaseSeries() {
 	}
 }
 
-// reportSeries runs report only while m holds its series.
+// reportSeries 只在 m 持有序列期间执行 report。
 func (m *Dispatcher) reportSeries(report func(name string)) {
 	dispatcherSeries.mu.Lock()
 	defer dispatcherSeries.mu.Unlock()

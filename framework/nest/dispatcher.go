@@ -3,18 +3,21 @@ package nest
 import (
 	"container/heap"
 	"context"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/misc"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
-	"runtime"
-	"sync"
-	"sync/atomic"
-	"time"
 )
 
+// Dispatcher 是 Nest 的统一准入与派发器：在这里按声明目标建立同 ID 顺序，再把消息交给 short / long / io 三池
+// （dispatchQueue）；延时消息先进入按到期时间排序的堆，到期后再走同一准入。
 type Dispatcher struct {
 	Name          string
 	MsgCap        int
@@ -40,14 +43,15 @@ type Dispatcher struct {
 	processed     atomic.Uint64
 	slow200ms     atomic.Uint64
 
-	// coldTargets 由 NestMgr 装配：统一准入时只读内存判断声明目标是否需要I/O 阶段预加载。
+	// coldTargets 由 NestMgr 装配：统一准入时只读内存判断声明目标是否需要 I/O 阶段预加载。
 	coldTargets func(*Msg) bool
 
 	// seriesName 非 nil 表示本派发器以这个名字持有 nest.dispatch.*{dispatcher} 序列
-	// （dispatcher_series.go，RR-20261006-18）；由 dispatcherSeries.mu 保护。
+	// （见 dispatcher_series.go）；由 dispatcherSeries.mu 保护。
 	seriesName *string
 }
 
+// delayedMsg 是延时队列中的一条消息；seq 让同一到期时间的消息保持提交顺序，idx 是堆内下标。
 type delayedMsg struct {
 	due time.Time
 	seq uint64
@@ -55,6 +59,7 @@ type delayedMsg struct {
 	idx int
 }
 
+// delayedMsgHeap 是按 (due, seq) 排序的最小堆，实现 container/heap 接口。
 type delayedMsgHeap []*delayedMsg
 
 func (h delayedMsgHeap) Len() int { return len(h) }
@@ -84,6 +89,8 @@ func (h *delayedMsgHeap) Pop() any {
 	return item
 }
 
+// NewDispatcher 构造派发器：workerNum <= 0 取 GOMAXPROCS，msgCap <= 0 取 short 池默认容量；
+// 延时队列容量默认跟随 msgCap（未配置时为 10000），最长延时默认 24 小时。
 func NewDispatcher(name string, workerNum, msgCap int, handler func(*Msg)) *Dispatcher {
 	ret := &Dispatcher{
 		Name:      name,
@@ -106,6 +113,7 @@ func NewDispatcher(name string, workerNum, msgCap int, handler func(*Msg)) *Disp
 	return ret
 }
 
+// ConfigureDelayedAdmission 设置延时队列容量与最长延时；非正值保持原值。
 func (m *Dispatcher) ConfigureDelayedAdmission(capacity int, maxDelay time.Duration) {
 	if m == nil {
 		return
@@ -118,6 +126,7 @@ func (m *Dispatcher) ConfigureDelayedAdmission(capacity int, maxDelay time.Durat
 	}
 }
 
+// OnInit 初始化延时队列并启动延时泵，按配置（未配置取默认值）建立 short / io / long 三池。
 func (m *Dispatcher) OnInit() {
 	m.mu.Lock()
 	m.delayed = make(map[*delayedMsg]struct{})
@@ -146,11 +155,9 @@ func (m *Dispatcher) OnInit() {
 	}
 	m.queue = newDispatchQueue(m.Name, WorkerPoolConfig{Workers: m.workerNum, QueueCap: m.MsgCap}, io, m.handler, m.remoteHandler, long)
 	m.holdSeries()
-
 }
 
-// Fence stops admission while leaving worker shutdown to OnDestroy. Messages
-// already queued are rejected by NestDispatch before entity loading/mutation.
+// Fence 停止准入，worker 的停止留给 OnDestroy。已排队的消息由 NestDispatch 在加载 / 修改实体之前拒绝。首个错误胜出。
 func (m *Dispatcher) Fence(err error) {
 	if m == nil || err == nil {
 		return
@@ -162,16 +169,20 @@ func (m *Dispatcher) Fence(err error) {
 	m.mu.Unlock()
 }
 
+// OnRun 启动三池 worker。
 func (m *Dispatcher) OnRun() {
 	m.queue.start()
 }
 
+// OnDestroy 以进程基础 ctx 停止派发器，中断时只记录告警。
 func (m *Dispatcher) OnDestroy() {
 	if err := m.OnDestroyWithContext(fctx.BaseContext()); err != nil {
 		flog.NewELog().Title("nest").Warn("dispatcher stop interrupted", "err", err)
 	}
 }
 
+// OnDestroyWithContext 停止准入与延时泵，以 ErrNestStopped 回复尚未到期的延时消息，然后在 ctx 内排空三池。
+// 排空超时返回 ctx 错误，worker 与指标序列保留，可用新 ctx 重试。
 func (m *Dispatcher) OnDestroyWithContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = fctx.BaseContext()
@@ -201,20 +212,12 @@ func (m *Dispatcher) OnDestroyWithContext(ctx context.Context) error {
 		m.delayDone = nil
 	}
 	m.mu.Unlock()
-	// The delay pump has exited, and taking the queue under m.mu made this
-	// snapshot exclusive: a message is either here or was already popped, never
-	// both. So answering here is the only reply this message will ever get, and
-	// it has to happen — an accepted synchronous request that is merely
-	// recycled leaves its caller waiting for its own timeout, with the failure
-	// reported as a cancellation instead of "the nest stopped"
-	// (RR-20260911-04). The admission path has always answered
-	// ErrNestStopped; this is the same answer for a message that got in
-	// before the stop.
+	// 延时泵已退出，且在 m.mu 下取走队列，这份快照是独占的：一条消息要么在这里，要么已被弹出，不会两者都是。
+	// 所以这里的回复是它唯一会得到的回复，必须发出：只回收不回复的同步请求会让调用方等到自己超时，把“Nest 已停止”
+	// 报成取消。与准入路径对停止后消息的回答相同，都是 ErrNestStopped。
 	for dm := range delayed {
 		if dm.msg != nil && dm.msg.RetChan != nil {
-			// Buffered with room for exactly this one value (GenSyncMsg), so
-			// the send cannot block, and clearing it keeps the reply at most
-			// once even if the message is reused.
+			// 回复通道恰好有一个缓冲位（GenSyncMsg），发送不会阻塞；清空它保证即使消息被复用也至多回复一次。
 			dm.msg.RetChan <- ErrNestStopped
 			dm.msg.RetChan = nil
 		} else if dm.msg != nil {
@@ -224,26 +227,27 @@ func (m *Dispatcher) OnDestroyWithContext(ctx context.Context) error {
 	}
 
 	if err := m.queue.stop(ctx); err != nil {
-		// Workers are still running and still report; the series stay until a
-		// retry sees them drained (RR-20261006-18).
+		// worker 仍在运行并上报指标：序列保留，直到重试看到排空。
 		return err
 	}
 	m.releaseSeries()
 	return nil
 }
 
+// hashKey 把实体 ID 散列到 worker 槽位。
 func hashKey(key int64) uint64 {
 	return misc.Hash64(uint64(key))
 }
 
 const (
-	MaxBroadcastIdNum     = 32
+	// MaxBroadcastIdNum 是广播拆批时每批的最大 ID 数。
+	MaxBroadcastIdNum = 32
+	// spliceDenseGroupLimit 以内的锁组用定长数组分桶，更大的组号用 map 分桶。
 	spliceDenseGroupLimit = 8
 )
 
-// TrySendMsg transfers ownership of msg to the dispatcher. It returns an
-// admission error when the selected worker cannot accept the message. A failed
-// message is released before the method returns.
+// TrySendMsg 把 msg 的所有权交给派发器。选定的池不能接收时返回准入错误；失败的消息在返回前已释放，
+// 异步消息（无 RetChan）的失败另记日志。
 func (m *Dispatcher) TrySendMsg(msg *Msg) error {
 	if msg == nil {
 		return ErrInvalidMessage
@@ -272,9 +276,8 @@ func (m *Dispatcher) TrySendMsg(msg *Msg) error {
 	msg.stageMetrics = m.stageMetrics
 	msg.queuedAt = startNestStage(m.stageMetrics)
 	msg.OnSend()
-	// I/O 阶段三个来源：显式 SendOptionIO、Remote，以及声明目标中有未加载的冷实体
-	// （RR-20260926-25：业务不必知道目标冷热；只经 Getter 的 LoadedChecker 判定、不调用 Get，RR-20260926-47）。
-	// 同 ID 顺序在这里统一建立，与走哪个池无关。
+	// I/O 阶段三个来源：显式 SendOptionIO、Remote，以及声明目标中有未加载的冷实体（业务不必知道目标冷热；
+	// 只经 Getter 的 LoadedChecker 判定、不调用 Get）。同 ID 顺序在这里统一建立，与走哪个池无关。
 	prepareIO := m.remoteHandler != nil && (msg.Cost || needsRemoteStage(msg) || (m.coldTargets != nil && m.coldTargets(msg)))
 	err := m.queue.admit(msg, prepareIO)
 	if err != nil {
@@ -290,6 +293,7 @@ func (m *Dispatcher) TrySendMsg(msg *Msg) error {
 	return err
 }
 
+// sendMsg 是 TrySendMsg 的内部版本：准入失败时把错误回复到同步调用方的 RetChan。
 func (m *Dispatcher) sendMsg(msg *Msg) {
 	if msg == nil {
 		return
@@ -302,8 +306,10 @@ func (m *Dispatcher) sendMsg(msg *Msg) {
 	}
 }
 
+// dispatcherObserveStatsEvery 是每多少次准入上报一次池指标。
 const dispatcherObserveStatsEvery = 1024
 
+// observeStatsIfDue 按准入计数抽样上报池指标，避免每条消息都取快照。
 func (m *Dispatcher) observeStatsIfDue() {
 	if m == nil {
 		return
@@ -320,8 +326,7 @@ func (m *Dispatcher) observeStats() {
 	}
 	short, io, continuations, details := m.queue.snapshotStats()
 	delayed := m.delayedCount()
-	// Only while the series are held: a report racing the release must not
-	// recreate what the release deleted (RR-20261006-18).
+	// 只在持有序列期间上报：与释放竞争的上报不能重新建出释放已删除的序列。
 	m.reportSeries(func(name string) {
 		observePoolStats(name, "short", short)
 		observePoolStats(name, "io", io)
@@ -349,6 +354,7 @@ func (m *Dispatcher) delayedCount() int {
 	return len(m.delayed)
 }
 
+// logAsyncDispatchFailure 记录没有回复通道的异步消息的准入失败。
 func logAsyncDispatchFailure(msg *Msg, err error) {
 	if msg == nil || err == nil {
 		return
@@ -366,6 +372,7 @@ func logAsyncDispatchFailure(msg *Msg, err error) {
 	)
 }
 
+// delaySendMsg 是 TryDelaySendMsg 的内部版本：准入失败时把错误回复到同步调用方的 RetChan。
 func (m *Dispatcher) delaySendMsg(delay time.Duration, msg *Msg) {
 	if msg == nil {
 		return
@@ -376,10 +383,8 @@ func (m *Dispatcher) delaySendMsg(delay time.Duration, msg *Msg) {
 	}
 }
 
-// TryDelaySendMsg transfers ownership of msg to the delay queue. Admission to
-// the worker pool happens when the delay expires; a later overload is observed
-// through Nest metrics/logging because the original caller is no longer
-// waiting at that point.
+// TryDelaySendMsg 把 msg 的所有权交给延时队列。到期时才进入 worker 池准入；那时原调用方已不在等待，
+// 届时的过载只能经 Nest 指标与日志观察。delay <= 0 等同 TrySendMsg。
 func (m *Dispatcher) TryDelaySendMsg(delay time.Duration, msg *Msg) error {
 	if msg == nil {
 		return ErrInvalidMessage
@@ -441,6 +446,8 @@ func notifyDelayLoop(ch chan struct{}) {
 	}
 }
 
+// delayLoop 是延时泵：取出到期消息送入准入；队列为空时等待新消息通知，最早的消息未到期时等到期或新消息通知。
+// 收到停止信号后退出并关闭 delayDone。
 func (m *Dispatcher) delayLoop() {
 	defer func() {
 		m.mu.Lock()
@@ -451,47 +458,37 @@ func (m *Dispatcher) delayLoop() {
 		}
 	}()
 	for {
-		dm, wait, stop, notify := m.nextDelayedWait()
-		if stop != nil && dm == nil && wait < 0 {
+		due, wait, stop, notify := m.nextDelayedWait()
+		switch {
+		case stop == nil:
+			return
+		case due != nil:
+			m.sendMsg(due.msg)
+		case wait < 0:
 			select {
 			case <-notify:
-				continue
 			case <-stop:
 				return
 			}
-		}
-		if stop == nil {
-			return
-		}
-		if wait > 0 {
+		case wait > 0:
 			timer := time.NewTimer(wait)
 			select {
 			case <-timer.C:
 			case <-notify:
 			case <-stop:
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
+				timer.Stop()
 				return
 			}
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			continue
+			timer.Stop()
 		}
-		if dm == nil {
-			continue
-		}
-		m.sendMsg(dm.msg)
 	}
 }
 
+// nextDelayedWait 在 m.mu 下决定延时泵的下一步，返回 (到期消息, 等待时长, 停止通道, 通知通道)：
+//   - 已停止：stop 为 nil；
+//   - 队列为空：wait 为 -1；
+//   - 最早的消息未到期：wait 为剩余时长；
+//   - 有到期消息：弹出并返回它，wait 为 0。
 func (m *Dispatcher) nextDelayedWait() (*delayedMsg, time.Duration, chan struct{}, chan struct{}) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -513,12 +510,14 @@ func (m *Dispatcher) nextDelayedWait() (*delayedMsg, time.Duration, chan struct{
 	return dm, 0, stop, notify
 }
 
+// spliceSparseGroupSlots 是组号不小于 spliceDenseGroupLimit 的锁组按 worker 槽位分的 ID 批与原始下标批。
 type spliceSparseGroupSlots struct {
 	group    int
 	slots    [][]int64
 	idxSlots [][]int
 }
 
+// spliceGroupBuckets 是 ForEachSpliceBatch 的分桶：小组号用定长数组，大组号用 sparse + 索引。
 type spliceGroupBuckets struct {
 	dense       [spliceDenseGroupLimit][][]int64
 	denseIdx    [spliceDenseGroupLimit][][]int
@@ -526,6 +525,7 @@ type spliceGroupBuckets struct {
 	sparseIndex map[int]int
 }
 
+// getGroupSlots 返回锁组 group 的槽位批（按需创建）。
 func (m *Dispatcher) getGroupSlots(b *spliceGroupBuckets, group int) (*[][]int64, *[][]int) {
 	if group >= 0 && group < spliceDenseGroupLimit {
 		if b.dense[group] == nil {
@@ -550,6 +550,7 @@ func (m *Dispatcher) getGroupSlots(b *spliceGroupBuckets, group int) (*[][]int64
 	return &b.sparse[idx].slots, &b.sparse[idx].idxSlots
 }
 
+// flushGroupSlots 交出一个锁组中所有非空的槽位批并清空。
 func (m *Dispatcher) flushGroupSlots(group int, slots [][]int64, idxSlots [][]int, emit func(group int, batch []int64, origIndices []int)) {
 	for i := range slots {
 		if len(slots[i]) == 0 {
@@ -561,7 +562,8 @@ func (m *Dispatcher) flushGroupSlots(group int, slots [][]int64, idxSlots [][]in
 	}
 }
 
-// ForEachSpliceBatch partitions broadcast IDs into batches by entity group and worker hash.
+// ForEachSpliceBatch 按锁组与 worker 散列把广播 ID 拆成批（每批至多 MaxBroadcastIdNum 个），emit 同时收到每个 ID
+// 在原列表中的下标。
 func (m *Dispatcher) ForEachSpliceBatch(ids []int64, emit func(group int, batch []int64, origIndices []int)) {
 	if len(ids) == 0 || emit == nil {
 		return

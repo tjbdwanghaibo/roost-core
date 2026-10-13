@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -12,11 +13,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
+// ErrReceiptConflict 表示同一事务内以相同 namespace/id 绑定了摘要不同的回执。
 var ErrReceiptConflict = errors.New("nest: transaction receipt conflict")
 
-// PersistChange is the transaction-local accumulation of persistence changes
-// for one DAO. It is discarded on rollback; no persistence dirty mask is
-// written back to the DAO.
+// PersistChange 是一个 DAO 在本事务内累积的持久化变化：字段位掩码、删除标记、按路径的 $set / $unset，以及整字段
+// 重写。回滚时丢弃，不把持久化脏掩码写回 DAO。
 type PersistChange struct {
 	Mask       uint64
 	Delete     bool
@@ -25,39 +26,30 @@ type PersistChange struct {
 	FullFields map[string]struct{}
 }
 
+// Clone 返回独立的副本（Set 的值浅拷贝）。
 func (change PersistChange) Clone() PersistChange {
-	cloned := PersistChange{
-		Mask:   change.Mask,
-		Delete: change.Delete,
-		Unset:  slices.Clone(change.Unset),
+	return PersistChange{
+		Mask:       change.Mask,
+		Delete:     change.Delete,
+		Set:        maps.Clone(change.Set),
+		Unset:      slices.Clone(change.Unset),
+		FullFields: maps.Clone(change.FullFields),
 	}
-	if change.Set != nil {
-		cloned.Set = make(map[string]any, len(change.Set))
-		for path, value := range change.Set {
-			cloned.Set[path] = value
-		}
-	}
-	if change.FullFields != nil {
-		cloned.FullFields = make(map[string]struct{}, len(change.FullFields))
-		for field := range change.FullFields {
-			cloned.FullFields[field] = struct{}{}
-		}
-	}
-	return cloned
 }
 
-// MutationParticipant freezes a transaction-local change into one mutation
-// and advances its accepted in-memory persistence version after admission.
+// MutationParticipant 把事务内的变化冻结成一条 mutation，并在准入后推进它已接受的内存持久化版本。
 type MutationParticipant interface {
 	PrepareMutation(PersistChange) (dataengine.Mutation, error)
 	AcceptMutation(dataengine.Mutation) error
 }
 
+// persistChange 返回参与方在本事务中的变化记录（首次登记时创建，并为它的 tracker 登记回滚恢复），并合入 mask。
+// 持久化准备开始后不再接受登记。
 func (tx *RollbackTx) persistChange(participant MutationParticipant, mask uint64) (*PersistChange, error) {
 	if tx == nil || tx.state != rollbackTxOpen || tx.persistencePrepared {
 		return nil, ErrTransactionClosed
 	}
-	if isNilMutationParticipant(participant) {
+	if isNilParticipant(participant) {
 		return nil, errors.New("nest: nil mutation participant")
 	}
 	if !reflect.TypeOf(participant).Comparable() {
@@ -84,23 +76,18 @@ func (tx *RollbackTx) persistChange(participant MutationParticipant, mask uint64
 	return change, nil
 }
 
-func isNilMutationParticipant(participant MutationParticipant) bool {
-	if participant == nil {
-		return true
-	}
-	v := reflect.ValueOf(participant)
-	return (v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface) && v.IsNil()
-}
-
+// MarkPersist 登记参与方按 mask 指示的字段有持久化变化（整字段覆盖由 DAO 在准备时决定）。
 func (tx *RollbackTx) MarkPersist(participant MutationParticipant, mask uint64) error {
 	_, err := tx.persistChange(participant, mask)
 	return err
 }
 
+// MarkPersist 在当前事务上登记持久化变化；不在事务内时返回 ErrTransactionClosed。
 func MarkPersist(participant MutationParticipant, mask uint64) error {
 	return CurrentRollbackTx().MarkPersist(participant, mask)
 }
 
+// MarkPersistSet 登记对 path 的 $set（已被整字段重写覆盖时忽略），并撤销同路径的 $unset。
 func (tx *RollbackTx) MarkPersistSet(participant MutationParticipant, mask uint64, path string, value any) error {
 	if !validPersistPath(path) {
 		return fmt.Errorf("nest: invalid persistence path %q", path)
@@ -120,10 +107,12 @@ func (tx *RollbackTx) MarkPersistSet(participant MutationParticipant, mask uint6
 	return nil
 }
 
+// MarkPersistSet 在当前事务上登记 $set。
 func MarkPersistSet(participant MutationParticipant, mask uint64, path string, value any) error {
 	return CurrentRollbackTx().MarkPersistSet(participant, mask, path, value)
 }
 
+// MarkPersistUnset 登记对 path 的 $unset（已被整字段重写覆盖时忽略），并撤销同路径的 $set。
 func (tx *RollbackTx) MarkPersistUnset(participant MutationParticipant, mask uint64, path string) error {
 	if !validPersistPath(path) {
 		return fmt.Errorf("nest: invalid persistence path %q", path)
@@ -136,19 +125,19 @@ func (tx *RollbackTx) MarkPersistUnset(participant MutationParticipant, mask uin
 		return nil
 	}
 	delete(change.Set, path)
-	for _, existing := range change.Unset {
-		if existing == path {
-			return nil
-		}
+	if slices.Contains(change.Unset, path) {
+		return nil
 	}
 	change.Unset = append(change.Unset, path)
 	return nil
 }
 
+// MarkPersistUnset 在当前事务上登记 $unset。
 func MarkPersistUnset(participant MutationParticipant, mask uint64, path string) error {
 	return CurrentRollbackTx().MarkPersistUnset(participant, mask, path)
 }
 
+// MarkPersistFull 登记整字段重写 field：它覆盖并清除 field 之下已登记的 $set / $unset 与更细的整字段重写。
 func (tx *RollbackTx) MarkPersistFull(participant MutationParticipant, mask uint64, field string) error {
 	if !validPersistPath(field) {
 		return fmt.Errorf("nest: invalid persistence field %q", field)
@@ -184,10 +173,12 @@ func (tx *RollbackTx) MarkPersistFull(participant MutationParticipant, mask uint
 	return nil
 }
 
+// MarkPersistFull 在当前事务上登记整字段重写。
 func MarkPersistFull(participant MutationParticipant, mask uint64, field string) error {
 	return CurrentRollbackTx().MarkPersistFull(participant, mask, field)
 }
 
+// MarkPersistDelete 登记删除参与方的文档，清除其他已登记的变化。
 func (tx *RollbackTx) MarkPersistDelete(participant MutationParticipant) error {
 	change, err := tx.persistChange(participant, dataengine.AllFields)
 	if err != nil {
@@ -200,19 +191,19 @@ func (tx *RollbackTx) MarkPersistDelete(participant MutationParticipant) error {
 	return nil
 }
 
+// MarkPersistDelete 在当前事务上登记删除。
 func MarkPersistDelete(participant MutationParticipant) error {
 	return CurrentRollbackTx().MarkPersistDelete(participant)
 }
 
-// RemotePersistChangeFor claims one transaction-local DAO change for the
-// remote aggregate commit. Claimed participants are excluded from the
-// ordinary mutation list, preventing duplicate persistence paths.
+// RemotePersistChangeFor 把一个 DAO 在本事务内的变化认领给 Remote 聚合提交。被认领的参与方不再进入普通 mutation
+// 列表，避免同一变化走两条持久化路径。
 func (tx *RollbackTx) RemotePersistChangeFor(value any) (entity.RemotePersistChange, bool) {
 	if tx == nil || tx.state != rollbackTxOpen || tx.persistencePrepared {
 		return entity.RemotePersistChange{}, false
 	}
 	participant, ok := value.(MutationParticipant)
-	if !ok || isNilMutationParticipant(participant) {
+	if !ok || isNilParticipant(participant) {
 		return entity.RemotePersistChange{}, false
 	}
 	change := tx.participantChanges[participant]
@@ -226,6 +217,7 @@ func (tx *RollbackTx) RemotePersistChangeFor(value any) (entity.RemotePersistCha
 	return entity.RemotePersistChange{Mask: change.Mask, Delete: change.Delete}, true
 }
 
+// AddReceipt 绑定一条随事务持久的幂等回执；同一 namespace/id 摘要相同时幂等，不同时返回 ErrReceiptConflict。
 func (tx *RollbackTx) AddReceipt(receipt dataengine.Receipt) error {
 	if tx == nil || tx.state != rollbackTxOpen {
 		return ErrTransactionClosed
@@ -249,12 +241,12 @@ func (tx *RollbackTx) AddReceipt(receipt dataengine.Receipt) error {
 	return nil
 }
 
+// AddReceipt 在当前事务上绑定回执。
 func AddReceipt(receipt dataengine.Receipt) error {
 	return CurrentRollbackTx().AddReceipt(receipt)
 }
 
-// SetReceiptPayload attaches the durable result of an operation to a receipt
-// already bound in this transaction. Identity and digest cannot be changed.
+// SetReceiptPayload 为本事务已绑定的回执附上操作的持久结果。身份与摘要不能修改。
 func (tx *RollbackTx) SetReceiptPayload(namespace, id string, payload []byte) error {
 	if tx == nil || tx.state != rollbackTxOpen {
 		return ErrTransactionClosed
@@ -272,6 +264,7 @@ func (tx *RollbackTx) SetReceiptPayload(namespace, id string, payload []byte) er
 	return fmt.Errorf("nest: transaction receipt %s/%s is not bound", namespace, id)
 }
 
+// SetReceiptPayload 在当前事务上为回执附上结果。
 func SetReceiptPayload(namespace, id string, payload []byte) error {
 	tx := CurrentRollbackTx()
 	if tx == nil {
@@ -280,6 +273,8 @@ func SetReceiptPayload(namespace, id string, payload []byte) error {
 	return tx.SetReceiptPayload(namespace, id, payload)
 }
 
+// preparePersistence 按登记顺序让每个未被 Remote 认领的参与方把变化冻结成 mutation，校验后加入事务。只执行一次；
+// 之后不再接受新的持久化登记。
 func (tx *RollbackTx) preparePersistence() error {
 	if tx.persistencePrepared {
 		return nil
@@ -309,6 +304,8 @@ func (tx *RollbackTx) preparePersistence() error {
 	return nil
 }
 
+// acceptPersistence 在 committer 接受记录后通知参与方推进内存持久化版本。失败时记录已持久而内存未推进，
+// 只能按结果不确定处理（ErrCommitIndeterminate）。
 func (tx *RollbackTx) acceptPersistence() error {
 	if tx == nil || tx.accepted {
 		return nil
@@ -326,6 +323,7 @@ func (tx *RollbackTx) acceptPersistence() error {
 	return nil
 }
 
+// validPersistPath 拒绝空路径、含 NUL、空段或以 $ 开头的段。
 func validPersistPath(path string) bool {
 	if path == "" || strings.IndexByte(path, 0) >= 0 {
 		return false
@@ -338,6 +336,7 @@ func validPersistPath(path string) bool {
 	return true
 }
 
+// coveredByFullField 报告 path 是否落在某个整字段重写之下。
 func coveredByFullField(fields map[string]struct{}, path string) bool {
 	for field := range fields {
 		if pathCovers(field, path) {
@@ -347,10 +346,12 @@ func coveredByFullField(fields map[string]struct{}, path string) bool {
 	return false
 }
 
+// pathCovers 报告 path 等于 parent 或位于 parent 之下。
 func pathCovers(parent, path string) bool {
 	return path == parent || strings.HasPrefix(path, parent+".")
 }
 
+// removePath 删除 paths 中第一个等于 target 的元素（原地）。
 func removePath(paths []string, target string) []string {
 	for i, path := range paths {
 		if path == target {

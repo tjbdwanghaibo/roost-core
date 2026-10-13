@@ -9,29 +9,32 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/goroutine"
 )
 
+// tick 是包级帧计数，独立于各 Ticker 实例自己的帧号。
 var tick uint64
 
+// CurTick 返回包级帧计数。
 func CurTick() uint64 {
 	return atomic.LoadUint64(&tick)
 }
 
+// IncTick 把包级帧计数加一并返回新值。
 func IncTick() uint64 {
 	return atomic.AddUint64(&tick, 1)
 }
 
+// SetTick 设置包级帧计数。
 func SetTick(curTick uint64) {
 	atomic.StoreUint64(&tick, curTick)
 }
 
 var (
 	tickMu sync.RWMutex
-	// tickCbSeen deduplicates names; tickCbList preserves registration order
-	// so callbacks execute deterministically (a map-ordered walk would make
-	// inter-callback ordering vary per process).
+	// tickCbSeen 按名字去重；tickCbList 保持注册顺序，让回调执行顺序确定（按 map 遍历会让回调间顺序随进程变化）。
 	tickCbSeen = make(map[TickCallbackName]struct{})
 	tickCbList []func(msg TickMsg)
 )
 
+// TickCallbackName 是帧回调的唯一名字。
 type TickCallbackName struct {
 	value string
 }
@@ -44,6 +47,8 @@ func (n TickCallbackName) String() string {
 	return n.value
 }
 
+// RegisterTickCallback 注册一个每帧执行的回调（包级，所有 Ticker 共用）；重名返回错误。引擎启动后注册的回调
+// 从下一帧开始生效。
 func RegisterTickCallback(name TickCallbackName, cb func(msg TickMsg)) error {
 	tickMu.Lock()
 	defer tickMu.Unlock()
@@ -59,12 +64,14 @@ func RegisterTickCallback(name TickCallbackName, cb func(msg TickMsg)) error {
 	return nil
 }
 
+// MustRegisterTickCallback 是 RegisterTickCallback 的 panic 版本。
 func MustRegisterTickCallback(name TickCallbackName, cb func(msg TickMsg)) {
 	if err := RegisterTickCallback(name, cb); err != nil {
 		panic(err)
 	}
 }
 
+// RangeAllTickCallback 按注册顺序把每个帧回调交给 f。
 func RangeAllTickCallback(f func(ff func(msg TickMsg))) {
 	for _, cb := range snapshotTickCallbacks() {
 		f(cb)
@@ -79,7 +86,7 @@ func snapshotTickCallbacks() []func(msg TickMsg) {
 	return tickCbList
 }
 
-// Ticker is the frame-based timing system (channel-based, no actor).
+// Ticker 是帧驱动的计时器：按固定间隔递增帧号并依次执行已注册的帧回调（每个回调独立恢复 panic）。
 type Ticker struct {
 	duration     time.Duration
 	lastTickTime time.Time
@@ -91,6 +98,7 @@ type Ticker struct {
 	stopped      bool
 }
 
+// NewTicker 构造帧间隔为 duration 的 Ticker；duration <= 0 取 100ms。
 func NewTicker(duration time.Duration) *Ticker {
 	if duration <= 0 {
 		duration = 100 * time.Millisecond
@@ -103,6 +111,7 @@ func NewTicker(duration time.Duration) *Ticker {
 	}
 }
 
+// CurrentTick 返回当前帧号；nil 接收者为 0。
 func (t *Ticker) CurrentTick() uint64 {
 	if t == nil {
 		return 0
@@ -110,12 +119,14 @@ func (t *Ticker) CurrentTick() uint64 {
 	return t.tick.Load()
 }
 
+// SetCurrentTick 设置当前帧号。
 func (t *Ticker) SetCurrentTick(value uint64) {
 	if t != nil {
 		t.tick.Store(value)
 	}
 }
 
+// Duration 返回帧间隔；nil 或未配置时为 100ms。
 func (t *Ticker) Duration() time.Duration {
 	if t == nil || t.duration <= 0 {
 		return 100 * time.Millisecond
@@ -134,6 +145,7 @@ func (t *Ticker) Start() {
 	go t.run()
 }
 
+// Stop 停止 Ticker 并等待帧循环退出；可重复、可并发调用，未启动时直接返回。
 func (t *Ticker) Stop() {
 	t.lifecycleMu.Lock()
 	started := t.started
@@ -174,9 +186,8 @@ func (t *Ticker) doTick() {
 	}
 	t.lastTickTime = now
 	msg := TickMsg{Elapsed: elapsed, FrameNumber: curFrame}
-	// Read the live registry every tick (registration order, copied outside
-	// the lock): callbacks registered after the engine started take effect on
-	// the next tick instead of being silently dropped by a construction-time snapshot.
+	// 每帧读取当前注册表（按注册顺序、锁内只取切片）：引擎启动后注册的回调从下一帧生效，
+	// 不会因构造时的快照被静默丢弃。
 	for _, f := range snapshotTickCallbacks() {
 		goroutine.SafeFunc(func() {
 			f(msg)

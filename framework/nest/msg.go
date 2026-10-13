@@ -21,10 +21,8 @@ func (m *Msg) setRemoteWriteBatch(batch entity.RemoteWriteBatch) {
 	}
 }
 
-// CurrentRemoteWriteBatchContains reports whether the active Nest dispatch
-// prepared a fenced remote write entry for the entity. Infrastructure hooks
-// use it to reject a remote delete that was not declared in the message
-// targets before locks were acquired.
+// CurrentRemoteWriteBatchContains 报告当前 Nest 派发是否为该实体准备了带 fence 的 Remote 写条目。基础设施 hook
+// 用它拒绝取锁前未在消息目标中声明的 Remote 删除。
 func CurrentRemoteWriteBatchContains(entityID int64) bool {
 	msg := currentNestDispatchMsg()
 	if msg == nil || msg.RemoteWriteBatch == nil {
@@ -38,6 +36,8 @@ func CurrentRemoteWriteBatchContains(entityID int64) bool {
 	return false
 }
 
+// finalizeRemoteWriteBatch 在业务锁内让 Remote 批次按事务结果生成提交内容（FinalizeLocked），并把每条 Remote
+// 提交作为 mutation 加入本事务，随事务一起写入 WAL。批次只 finalize 一次。
 func (m *Msg) finalizeRemoteWriteBatch(tx *RollbackTx) error {
 	if m == nil || m.RemoteWriteBatch == nil || m.remoteFinalized {
 		return nil
@@ -75,6 +75,8 @@ func (m *Msg) finalizeRemoteWriteBatch(tx *RollbackTx) error {
 	return nil
 }
 
+// finishRemoteWriteBatch 在 I/O 阶段收尾 Remote 批次并关闭它：本地结果未知时交给 Manager 的结论处理者；本地已持久
+// 提交时 Commit，确认成功后执行提交后回调，确认失败则把回调交给批次的持久结论；其余情况 Abort。
 func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) error {
 	if m == nil || m.RemoteWriteBatch == nil {
 		return nil
@@ -87,22 +89,21 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 	var err error
 	committed := false
 	// 是否已提交只看提交路径记录的事实，不从 dispatchErr 的类型推断：提交之后的 release
-	// hook panic、回复前的其他错误都会以普通错误出现，旧实现据此把已持久的事务 Abort
-	// （RR-20260926-32，与 RR-13/14 同根）。提交后的错误只随回复报告。
+	// hook panic、回复前的其他错误都会以普通错误出现，不能据此把已持久的事务 Abort。
+	// 提交后的错误只随回复报告。
 	switch {
 	case m.remoteIndeterminate:
-		// WAL may already contain the transaction. Close transfers ownership of
-		// the held gates/leases to the manager's status-driven finalizer.
+		// WAL 里可能已有这笔事务：Close 把持有的门与租约交给 Manager 按状态驱动的收尾处理。
 	case m.remoteCommitted:
 		_, err = batch.Commit(ctx)
 		committed = err == nil
 		if err != nil {
 			// 本地已持久提交，Remote 确认超时 / 结果未知 / 被明确拒绝：此刻没有持久结论，不能 Confirm；
-			// 提交后工作在 Close 之前交给批次，由它拿到结论后执行一次（RR-20260926-37）。
+			// 提交后工作在 Close 之前交给批次，由它拿到结论后执行一次。
 			m.deferPostRemoteCommit(batch)
-			// 结果未知的 Commit 错误带 entity.ErrRemotePersistenceIndeterminate（entity 契约，判别表第 2 行）；不带它的就是
-			// Remote 没有写入的明确拒绝。记下事实，由 dispatchNest 给回复加 ErrRemotePartRejected（RR-20260928-03）。
-			// 这个判据要求 Remote 实现在“没等到结论”时也带未知哨兵：remoteentity 的 strict Commit 自 RR-20260928-08 起如此。
+			// 结果未知的 Commit 错误带 entity.ErrRemotePersistenceIndeterminate（entity 契约）；不带它的就是
+			// Remote 没有写入的明确拒绝。记下事实，由 dispatchNest 给回复加 ErrRemotePartRejected。
+			// 这个判据要求 Remote 实现在“没等到结论”时也带未知哨兵，框架自带的 remoteentity strict Commit 满足这一点。
 			m.remotePartRejected = !errors.Is(err, entity.ErrRemotePersistenceIndeterminate)
 		}
 	default:
@@ -114,7 +115,7 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 	}
 	err = errors.Join(err, batch.Close(ctx))
 	// 提交事实独立于释放/回调错误，不能遗失 Sync Confirm 或再次 Abort。
-	// remoteConfirmed 让回复路径给此后的释放/回调错误加 ErrAfterCommitFailed（RR-20260926-46）。
+	// remoteConfirmed 让回复路径给此后的释放/回调错误加 ErrAfterCommitFailed。
 	m.remoteConfirmed = committed
 	if committed {
 		if m.localExecutor != nil {
@@ -128,12 +129,12 @@ func (m *Msg) finishRemoteWriteBatch(ctx context.Context, dispatchErr error) err
 	return err
 }
 
-// deferPostRemoteCommit 把 Sync Confirm 与 AfterCommit 交给 Remote 批次的持久结论（RR-20260926-37）。
+// deferPostRemoteCommit 把 Sync Confirm 与 AfterCommit 交给 Remote 批次的持久结论。
 // 结论为已提交时回调按注册顺序在本地执行入口（业务池）运行，每个回调独立隔离 panic；原请求已经或即将以
 // “结果未知”的错误回复（二者可能并发），回调错误只记录日志与指标。回调看到的是原请求的上下文快照
-// （RR-20260926-61，见 deferredRequestSnapshot），与结论及时到达时经业务池续行执行看到的一致。Nest 已停机或已 fence
+// （见 deferredRequestSnapshot），与结论及时到达时经业务池续行执行看到的一致。Nest 已停机或已 fence
 // 时 Remote 收尾不会调用闭包（不离池执行，计数告警），这些回调就不执行。结论为拒绝时只丢弃批次内 Remote 实体的
-// Sync 门与事实（RejectEntities，RR-20260926-58）：本地部分已经持久提交，本地实体的门按 Confirm 放行；
+// Sync 门与事实（RejectEntities）：本地部分已经持久提交，本地实体的门按 Confirm 放行；
 // AfterCommit 不执行。批次不接手（没有后续持久结论）时什么也不做：没有持久结论就不 Confirm，门保持冻结。
 // 闭包只捕获值，不引用会被回收复用的 Msg。
 func (m *Msg) deferPostRemoteCommit(batch entity.RemoteWriteBatch) {
@@ -172,8 +173,8 @@ func (m *Msg) deferPostRemoteCommit(batch entity.RemoteWriteBatch) {
 	metrics.IncCounter("nest.remote.post_commit_without_outcome_total", metrics.Labels{"handler": handler}, 1)
 }
 
-// deferredRequestSnapshot 捕获I/O 阶段此刻的请求上下文（业务阶段写回的请求数据已在其中），供延迟执行的提交后回调使用
-// （RR-20260926-61）。两处与原样不同：去掉I/O 阶段注入的本地执行器（执行器属于正在结束的这次派发，不能随快照进入
+// deferredRequestSnapshot 捕获 I/O 阶段此刻的请求上下文（业务阶段写回的请求数据已在其中），供延迟执行的提交后回调使用。
+// 两处与原样不同：去掉 I/O 阶段注入的本地执行器（执行器属于正在结束的这次派发，不能随快照进入
 // 业务阶段）；Base 与请求 ctx 的取消脱钩——结论到达时回复早已发出、请求 ctx 通常已取消，取消等待不等于撤销业务，
 // 已提交事务的回调不应因此失败。Base 上的值（请求元数据等）保留。
 func deferredRequestSnapshot() fctx.ContextSnapshot {
@@ -184,6 +185,7 @@ func deferredRequestSnapshot() fctx.ContextSnapshot {
 	return snapshot
 }
 
+// abortRemoteWriteBatchLocked 在业务锁内以 cause 中止 Remote 批次（明确拒绝路径）。
 func (m *Msg) abortRemoteWriteBatchLocked(cause error) error {
 	if m == nil || m.RemoteWriteBatch == nil {
 		return nil
@@ -191,6 +193,7 @@ func (m *Msg) abortRemoteWriteBatchLocked(cause error) error {
 	return m.RemoteWriteBatch.Abort(context.Background(), cause)
 }
 
+// markRemoteWriteIndeterminateLocked 在业务锁内把 Remote 批次标为本地结果未知，收尾时不再推断为 Abort。
 func (m *Msg) markRemoteWriteIndeterminateLocked(cause error) error {
 	if m == nil || m.RemoteWriteBatch == nil {
 		return nil
@@ -216,8 +219,8 @@ func (m *Msg) markTransactionCommitted() {
 	}
 }
 
-// markNestedTransactionCommitted 记录这条消息的 handler 内（或消息自己的事务结束后的收尾阶段，RR-20260926-84），一个不认领消息的
-// 独立事务已持久提交或结果未知（RR-20260926-65）；nil 接收者（不在派发中）无操作。
+// markNestedTransactionCommitted 记录这条消息的 handler 内（或消息自己的事务结束后的收尾阶段），一个不认领消息的
+// 独立事务已持久提交或结果未知；nil 接收者（不在派发中）无操作。
 func (m *Msg) markNestedTransactionCommitted() {
 	if m != nil {
 		m.nestedTxCommitted = true
@@ -231,15 +234,14 @@ func (m *Msg) fenceEngine(cause error) {
 	}
 }
 
-// markCreateLockConflictWithoutRollback 记录这条消息里，不能回滚的 handler 内新建实体遇到了锁冲突
-// （RR-20260926-64）；nil 接收者无操作。
+// markCreateLockConflictWithoutRollback 记录这条消息里，不能回滚的 handler 内新建实体遇到了锁冲突；nil 接收者无操作。
 func (m *Msg) markCreateLockConflictWithoutRollback() {
 	if m != nil {
 		m.createLockConflictNoRollback = true
 	}
 }
 
-// markNoRollbackHandlerStarted 记录这条消息自己的事务不能回滚、且业务 handler 已开始执行（RR-20260926-73）；
+// markNoRollbackHandlerStarted 记录这条消息自己的事务不能回滚、且业务 handler 已开始执行；
 // nil 接收者（嵌套事务、无派发调用）无操作。
 func (m *Msg) markNoRollbackHandlerStarted() {
 	if m != nil {
@@ -247,9 +249,9 @@ func (m *Msg) markNoRollbackHandlerStarted() {
 	}
 }
 
-// requeueAllowed 判断失败的这条消息能否由框架自动重新准入：没有越过提交点（RR-20260926-49），
-// 且不是“不能回滚的 handler 已经开始执行”——冲突前 / 失败前已做的修改不撤销，重排会让它们重复生效
-// （新建实体冲突 RR-20260926-64，任意锁超时 / 组迁移类错误 RR-20260926-73）。handler 开始之前的准入失败照常重排。
+// requeueAllowed 判断失败的这条消息能否由框架自动重新准入：没有越过提交点，且不是“不能回滚的 handler 已经开始
+// 执行”——冲突前 / 失败前已做的修改不撤销，重排会让它们重复生效（新建实体冲突，以及任意锁超时 / 组迁移类错误）。
+// handler 开始之前的准入失败照常重排。
 func (m *Msg) requeueAllowed(err error) bool {
 	if m == nil {
 		return false
@@ -258,7 +260,7 @@ func (m *Msg) requeueAllowed(err error) bool {
 }
 
 // replyAfterCommit 判断回复里的错误是否都发生在提交之后：纯本地事务看 txCommitted，带 Remote 批次的看 remoteConfirmed
-// （本地已提交而 Remote 确认未知 / 被拒绝不是“已提交”，RR-20260926-46）。
+// （本地已提交而 Remote 确认未知 / 被拒绝不是“已提交”）。
 func (m *Msg) replyAfterCommit() bool {
 	if m == nil {
 		return false
@@ -270,8 +272,8 @@ func (m *Msg) replyAfterCommit() bool {
 }
 
 // transactionPastCommitPoint 判断这条消息是否可能已经提交了业务：自己的事务越过提交点、handler 内嵌套的独立事务
-// 已持久提交或结果未知（RR-20260926-65）、Remote 本地已持久提交或结果未知，或回复已声明“提交之后失败”/“结果不确定”。
-// 这样的消息不能重新准入，否则已提交内容会再执行一次（RR-20260926-49）。
+// 已持久提交或结果未知、Remote 本地已持久提交或结果未知，或回复已声明“提交之后失败”/“结果不确定”。
+// 这样的消息不能重新准入，否则已提交内容会再执行一次。
 func (m *Msg) transactionPastCommitPoint(err error) bool {
 	if m == nil {
 		return false
@@ -280,6 +282,7 @@ func (m *Msg) transactionPastCommitPoint(err error) bool {
 		errors.Is(err, ErrAfterCommitFailed) || errors.Is(err, ErrCommitIndeterminate)
 }
 
+// addAfterUnlock 登记 Guard 释放实体锁之后执行的回调。
 func (m *Msg) addAfterUnlock(fn func()) {
 	if m != nil && fn != nil {
 		m.afterUnlock = append(m.afterUnlock, fn)
@@ -299,12 +302,14 @@ func (m *Msg) runAfterUnlock() {
 	}
 }
 
+// addPostRemoteCommit 登记 Remote 批次确认提交后才执行的回调（带 Remote 批次的消息的 AfterCommit）。
 func (m *Msg) addPostRemoteCommit(callbacks ...func()) {
 	if m != nil {
 		m.postRemoteCommit = append(m.postRemoteCommit, callbacks...)
 	}
 }
 
+// runPostRemoteCommit 依次执行 Remote 确认后的回调，每个回调独立恢复 panic，错误合并返回。
 func (m *Msg) runPostRemoteCommit() error {
 	callbacks := m.postRemoteCommit
 	m.postRemoteCommit = nil
@@ -315,6 +320,7 @@ func (m *Msg) runPostRemoteCommit() error {
 	return failed
 }
 
+// MsgType 是消息的目标形态，决定 runNestLogic 的派发方式。
 type MsgType uint8
 
 const (
@@ -403,6 +409,7 @@ type Msg struct {
 	ioReroute    bool // 声明目标在取 Guard 前变冷，需要原位转 I/O 准备。
 }
 
+// Key 返回消息的主目标 ID（单目标、多目标或分组的第一个），没有目标时为 0。
 func (m *Msg) Key() int64 {
 	if m.Tid != 0 {
 		return m.Tid
@@ -422,10 +429,12 @@ func (m *Msg) clean() {
 	*m = Msg{}
 }
 
+// OnSend 增加消息引用计数；与 OnRelease 配对，计数归零时回收消息。
 func (m *Msg) OnSend() {
 	m.RefCount++
 }
 
+// OnRelease 减少引用计数；归零时回收消息并唤醒等待该内部续行的一方。
 func (m *Msg) OnRelease() {
 	m.RefCount--
 	if m.RefCount == 0 {
@@ -437,6 +446,7 @@ func (m *Msg) OnRelease() {
 	}
 }
 
+// Clone 只复制可重新准入的请求数据（目标、参数、上下文快照、回复通道），不复制派发运行状态。
 func (m *Msg) Clone() *Msg {
 	ret := &Msg{
 		Tid:             m.Tid,
@@ -480,24 +490,26 @@ func (m *Msg) String() string {
 	return string(buf)
 }
 
-// TickMsg is dispatched each frame tick.
+// TickMsg 是每帧 tick 派发的消息内容。
 type TickMsg struct {
 	Elapsed     int64 // nanoseconds
 	FrameNumber uint64
 }
 
 var msgPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return &Msg{}
 	},
 }
 
+// GenMsg 从池里取一条消息并设置类型。
 func GenMsg(msgType MsgType) *Msg {
 	msg := msgPool.Get().(*Msg)
 	msg.Type = msgType
 	return msg
 }
 
+// GenSyncMsg 取一条带缓冲为 1 的回复通道的同步消息。
 func GenSyncMsg(msgType MsgType) (*Msg, chan any) {
 	msg := GenMsg(msgType)
 	ch := make(chan any, 1)
@@ -505,6 +517,7 @@ func GenSyncMsg(msgType MsgType) (*Msg, chan any) {
 	return msg, ch
 }
 
+// recycleMsg 清零消息并归还池。
 func recycleMsg(m *Msg) {
 	if m != nil {
 		m.clean()

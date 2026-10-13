@@ -1,10 +1,12 @@
 package nest
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 )
 
+// DispatcherWorkStats 是派发完成计数：总处理数与超过慢日志阈值（200ms）的条数。
 type DispatcherWorkStats struct {
 	ProcessedMessages uint64
 	Slow200msMessages uint64
@@ -21,12 +23,16 @@ type DispatchLaneStats struct {
 	DependencyWait, WorkerWait                             time.Duration
 	MaxDependencyWait, MaxWorkerWait, OldestWaiting        time.Duration
 }
+
+// DispatchQueueStats 是三个通道的观测统计与 long 池指标、续行计数。
 type DispatchQueueStats struct {
 	Short, IO, Long     DispatchLaneStats
 	LongPool            worker.PoolStats
 	LongContinuations   int
 	ContinuationRunning int
 }
+
+// DispatcherStats 是派发器的瞬时观测值，只用于监控与诊断。
 type DispatcherStats struct {
 	Queue              DispatchQueueStats
 	Short, IO, Long    worker.PoolStats
@@ -36,6 +42,7 @@ type DispatcherStats struct {
 	Work               DispatcherWorkStats
 }
 
+// Stats 返回派发器的瞬时统计。
 func (m *Dispatcher) Stats() DispatcherStats {
 	if m == nil {
 		return DispatcherStats{}
@@ -57,6 +64,7 @@ func (m *Dispatcher) Stats() DispatcherStats {
 	return stats
 }
 
+// recordDispatch 记录一次派发完成及是否为慢派发。
 func (m *Dispatcher) recordDispatch(cost time.Duration) {
 	if m == nil {
 		return
@@ -67,6 +75,7 @@ func (m *Dispatcher) recordDispatch(cost time.Duration) {
 	}
 }
 
+// Stats 返回引擎派发器的瞬时统计。
 func (mgr *NestMgr) Stats() DispatcherStats {
 	if mgr == nil || mgr.dispatcher == nil {
 		return DispatcherStats{}

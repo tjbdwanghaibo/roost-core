@@ -19,6 +19,7 @@ const DefaultShortQueueCapacity = 65536
 // WorkerPoolConfig 配置整个池的等待预算，QueueCap 不再按 worker 倍增。
 type WorkerPoolConfig struct{ Workers, QueueCap int }
 
+// 三个执行通道：short 业务池、io 准备池、long 业务池（按实体 kind 注册的业务池分流）。
 const (
 	dispatchShortLane = iota
 	dispatchIOLane
@@ -44,6 +45,7 @@ type dispatchJob struct {
 	waitedForPredecessor     bool
 }
 
+// readyJobs 是经 dispatchJob.next 串起的 FIFO 单链表。
 type readyJobs struct{ head, tail *dispatchJob }
 
 func (q *readyJobs) push(j *dispatchJob) {
@@ -54,6 +56,7 @@ func (q *readyJobs) push(j *dispatchJob) {
 	}
 	q.tail = j
 }
+
 func (q *readyJobs) pop() *dispatchJob {
 	j := q.head
 	if j != nil {
@@ -101,6 +104,7 @@ type dispatchQueue struct {
 	started, stopping bool
 }
 
+// newDispatchQueue 构造三通道队列；longConfig 省略时 long 池没有 worker（只在测试中省略）。
 func newDispatchQueue(name string, short, io WorkerPoolConfig, handler, ioHandler func(*Msg), longConfig ...WorkerPoolConfig) *dispatchQueue {
 	q := &dispatchQueue{
 		name:        name,
@@ -121,6 +125,8 @@ func newDispatchQueue(name string, short, io WorkerPoolConfig, handler, ioHandle
 	}
 	return q
 }
+
+// start 为每个通道启动配置数量的 worker；重复调用或停止后调用无副作用。
 func (q *dispatchQueue) start() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -165,7 +171,7 @@ func newDispatchJob(msg *Msg, prepareIO bool) *dispatchJob {
 	j := &dispatchJob{msg: msg, ioStage: prepareIO}
 	switch {
 	case len(msg.Tids) == 0 && len(msg.GroupTIds) == 0:
-		// 没有目标时仍用ID 0保持原来的顺序域。
+		// 没有目标时仍用 ID 0 保持原来的顺序域。
 		j.inlineID[0] = msg.Tid
 		j.ids = j.inlineID[:]
 	case msg.Tid == 0 && len(msg.Tids) == 1 && len(msg.GroupTIds) == 0:
@@ -177,6 +183,8 @@ func newDispatchJob(msg *Msg, prepareIO bool) *dispatchJob {
 	return j
 }
 
+// admit 是统一准入：按消息的全部声明目标登记同 ID 顺序（对每个 ID 的当前尾作业建一条依赖边），再按容量决定
+// 接受或以 ErrWorkerQueueFull 拒绝。prepareIO 时进入 io 通道，否则按实体 kind 进入 short 或 long 通道。
 func (q *dispatchQueue) admit(msg *Msg, prepareIO bool) error {
 	if q == nil {
 		return worker.ErrWorkerClosed
@@ -241,10 +249,7 @@ func (q *dispatchQueue) continueBusiness(msg *Msg) {
 	lane := businessLane(msg)
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.lanes[lane].continuations.push(&dispatchJob{msg: msg, continuation: true, lane: lane})
-	q.lanes[lane].continuationCount++
-	q.pending++
-	q.lanes[lane].wake.Signal()
+	q.pushContinuationLocked(lane, msg)
 }
 
 // tryContinueBusiness 是 continueBusiness 给框架外部入口（NestMgr.RunLocal）用的版本：队列未启动或已开始
@@ -256,21 +261,30 @@ func (q *dispatchQueue) tryContinueBusiness(msg *Msg) bool {
 	if !q.started || q.stopping {
 		return false
 	}
-	q.lanes[lane].continuations.push(&dispatchJob{msg: msg, continuation: true, lane: lane})
-	q.lanes[lane].continuationCount++
-	q.pending++
-	q.lanes[lane].wake.Signal()
+	q.pushContinuationLocked(lane, msg)
 	return true
 }
 
+// pushContinuationLocked 把内部业务续行放进业务通道 lane 的续行队列并唤醒一个 worker。续行继承父请求的
+// 准入资格与顺序位置，不经 admit、不受外部容量限制，但计入 pending 让停机排空等它。调用方持有 q.mu。
+func (q *dispatchQueue) pushContinuationLocked(lane int, msg *Msg) {
+	state := &q.lanes[lane]
+	state.continuations.push(&dispatchJob{msg: msg, continuation: true, lane: lane})
+	state.continuationCount++
+	q.pending++
+	state.wake.Signal()
+}
+
+// take 取通道的下一项工作，没有时返回 nil。业务通道在续行与就绪外部作业之间交替：刚开始一个外部作业后优先续行，
+// 避免续行在持续的外部负载下饥饿。调用方持有 q.mu。
 func (q *dispatchQueue) take(lane int) *dispatchJob {
 	state := &q.lanes[lane]
-	if lane != dispatchIOLane && q.lanes[lane].continuations.head != nil && (q.lanes[lane].preferContinuation || state.ready.head == nil) {
-		q.lanes[lane].preferContinuation = false
-		q.lanes[lane].continuationCount--
-		q.lanes[lane].continuationRunning++
+	if lane != dispatchIOLane && state.continuations.head != nil && (state.preferContinuation || state.ready.head == nil) {
+		state.preferContinuation = false
+		state.continuationCount--
+		state.continuationRunning++
 		state.observation.PeakWaiting = max(state.observation.PeakWaiting, q.waitingCount(lane, state))
-		return q.lanes[lane].continuations.pop()
+		return state.continuations.pop()
 	}
 	if j := state.ready.pop(); j != nil {
 		state.queued--
@@ -283,12 +297,15 @@ func (q *dispatchQueue) take(lane int) *dispatchJob {
 		stats.WorkerWait += waited
 		stats.MaxWorkerWait = max(stats.MaxWorkerWait, waited)
 		if lane != dispatchIOLane {
-			q.lanes[lane].preferContinuation = true
+			state.preferContinuation = true
 		}
 		return j
 	}
 	return nil
 }
+
+// work 是通道 worker 的主循环：取工作 → 在新的请求上下文中执行 → 结束作业（释放同 ID 顺序、唤醒后继）→
+// 执行消息登记的出队后动作。停止且全部 pending 排空后退出。
 func (q *dispatchQueue) work(lane int) {
 	state := &q.lanes[lane]
 	phase := fctx.WithIOWorker()
@@ -315,7 +332,7 @@ func (q *dispatchQueue) work(lane int) {
 		goroutine.SafeFunc(func() {
 			_, release := fctx.NewContext(fctx.WithSource("worker"), fctx.WithHandler(q.name), phase)
 			defer release()
-			// 转慢的作业仍归队列所有，消息引用留给I/O 池那一次执行释放。
+			// 转 I/O 的作业仍归队列所有，消息引用留给 I/O 池那一次执行释放。
 			defer func() {
 				if !rerouted {
 					j.msg.OnRelease()
@@ -335,29 +352,7 @@ func (q *dispatchQueue) work(lane int) {
 			q.mu.Unlock()
 			continue
 		}
-		if !j.continuation {
-			state.running--
-		} else {
-			q.lanes[lane].continuationRunning--
-		}
-		for _, id := range j.ids {
-			if q.tails[id] == j {
-				delete(q.tails, id)
-			}
-		}
-		for _, next := range j.successors {
-			next.predecessors--
-			if next.predecessors == 0 {
-				target := next.lane
-				q.enqueueReady(target, next)
-			}
-		}
-		q.pending--
-		if q.stopping && q.pending == 0 {
-			for i := range q.lanes {
-				q.lanes[i].wake.Broadcast()
-			}
-		}
+		q.finishJobLocked(state, j)
 		q.mu.Unlock()
 		if after != nil {
 			after()
@@ -365,7 +360,34 @@ func (q *dispatchQueue) work(lane int) {
 	}
 }
 
-// rerouteToIO 把业务池首跑时发现声明目标变冷的外部作业原位转到I/O 池。作业保持在
+// finishJobLocked 结束一项工作：归还执行额度，撤下它在各 ID 上的尾登记，后继的前驱全部完成即进入就绪；
+// 停止中且全部排空时唤醒所有 worker 退出。调用方持有 q.mu。
+func (q *dispatchQueue) finishJobLocked(state *dispatchLane, j *dispatchJob) {
+	if j.continuation {
+		state.continuationRunning--
+	} else {
+		state.running--
+	}
+	for _, id := range j.ids {
+		if q.tails[id] == j {
+			delete(q.tails, id)
+		}
+	}
+	for _, next := range j.successors {
+		next.predecessors--
+		if next.predecessors == 0 {
+			q.enqueueReady(next.lane, next)
+		}
+	}
+	q.pending--
+	if q.stopping && q.pending == 0 {
+		for i := range q.lanes {
+			q.lanes[i].wake.Broadcast()
+		}
+	}
+}
+
+// rerouteToIO 把业务池首跑时发现声明目标变冷的外部作业原位转到 I/O 池。作业保持在
 // tails / successors 里的位置和 pending 计数：同 ID 后继继续等它完成，停机排空也继续等它，
 // 所以既不重新排到自身之后，也不占用新的准入预算（它早已准入；I/O 池等待数可暂时超过
 // QueueCap，上界仍是已准入的业务池作业数）。handler 从未开始，迁移的只是“I/O 准备”这一步。
@@ -384,6 +406,7 @@ func (q *dispatchQueue) rerouteToIO(j *dispatchJob) {
 	metrics.IncCounter("nest.dispatch.io_reroute.total", metrics.Labels{"dispatcher": q.name}, 1)
 }
 
+// stop 停止准入并唤醒 worker，在 ctx 内等待全部 pending 排空、worker 退出；超时返回 ctx 错误，可重试。
 func (q *dispatchQueue) stop(ctx context.Context) error {
 	if q == nil {
 		return nil
@@ -404,11 +427,14 @@ func (q *dispatchQueue) stop(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
+
+// stats 是 snapshotStats 的精简版（只供包内测试）。
 func (q *dispatchQueue) stats() (short, io worker.PoolStats, continuations int) {
 	short, io, continuations, _ = q.snapshotStats()
 	return
 }
 
+// snapshotStats 在 q.mu 下取三个通道的池指标与观测统计。
 func (q *dispatchQueue) snapshotStats() (short, io worker.PoolStats, continuations int, details DispatchQueueStats) {
 	if q == nil {
 		return
@@ -443,7 +469,8 @@ func (q *dispatchQueue) waitingCount(lane int, state *dispatchLane) int {
 	return state.queued + await - reserved
 }
 
-// 续行也占实际业务 worker；准入和观测必须使用同一执行容量。调用方持有 q.mu。
+// busyWorkers 返回通道正在占用的 worker 数。续行也占实际业务 worker；准入和观测必须使用同一执行容量。
+// 调用方持有 q.mu。
 func (q *dispatchQueue) busyWorkers(lane int, state *dispatchLane) int {
 	busy := state.running
 	if lane != dispatchIOLane {
@@ -451,6 +478,8 @@ func (q *dispatchQueue) busyWorkers(lane int, state *dispatchLane) int {
 	}
 	return busy
 }
+
+// enqueueReady 把前驱已全部完成的作业放入通道就绪队列，记录依赖等待并唤醒一个 worker。调用方持有 q.mu。
 func (q *dispatchQueue) enqueueReady(lane int, j *dispatchJob) {
 	state := &q.lanes[lane]
 	j.readyAt = time.Since(q.clockOrigin)
@@ -464,7 +493,8 @@ func (q *dispatchQueue) enqueueReady(lane int, j *dispatchJob) {
 	state.wake.Signal()
 }
 
-// 等待链按准入顺序维护，启动时 O(1) 删除；Stats 不扫描全部 ID 或依赖链。
+// readyWaiting 是尚未开始执行的外部作业的双向链表，按准入顺序维护，启动时 O(1) 删除；
+// Stats 据它的表头取最老等待时长，不扫描全部 ID 或依赖链。
 type readyWaiting struct{ head, tail *dispatchJob }
 
 func (w *readyWaiting) push(j *dispatchJob) {
@@ -476,6 +506,7 @@ func (w *readyWaiting) push(j *dispatchJob) {
 	}
 	w.tail = j
 }
+
 func (w *readyWaiting) remove(j *dispatchJob) {
 	if j.waitingPrev != nil {
 		j.waitingPrev.waitingNext = j.waitingNext

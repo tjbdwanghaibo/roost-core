@@ -10,14 +10,18 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
 )
 
+// entityLockGroupDispatchRetryMax 是取锁期间锁组变化时重新取锁的最大次数。
 const entityLockGroupDispatchRetryMax = 4
 
+// EntityLockGroupScope 是 handler 执行期间当前 goroutine 持有的锁组：同组实体共用一把组锁，handler 可经它读取
+// 同组的其他实体。按 goroutine 登记，嵌套时保留上一层。
 type EntityLockGroupScope struct {
 	groupID int64
 	store   entityGroupStore
 	prev    *EntityLockGroupScope
 }
 
+// entityGroupStore 是 Getter 可选实现的锁组查询与迁移能力（ManagerAccess 实现）。
 type entityGroupStore interface {
 	GetGroupEntity(groupID, entityID int64) entity.IThreadSafeEntity
 	GetGroupEntities(groupID int64) []entity.IThreadSafeEntity
@@ -31,6 +35,7 @@ func groupStoreOf(getter entity.Getter) entityGroupStore {
 
 var entityLockGroupScopes sync.Map // map[int64]*EntityLockGroupScope
 
+// CurrentEntityLockGroup 返回当前 goroutine 持有的锁组作用域；不在锁组内时为 nil。
 func CurrentEntityLockGroup() *EntityLockGroupScope {
 	if value, ok := entityLockGroupScopes.Load(goroutine.GoID()); ok {
 		if scope, ok := value.(*EntityLockGroupScope); ok {
@@ -47,6 +52,7 @@ func (s *EntityLockGroupScope) GroupID() int64 {
 	return s.groupID
 }
 
+// Get 返回同组中的实体；实体不在本组（或已迁出）时返回 nil。
 func (s *EntityLockGroupScope) Get(entityID int64) entity.IThreadSafeEntity {
 	if s == nil || s.groupID == 0 || entityID == 0 || s.store == nil {
 		return nil
@@ -58,6 +64,7 @@ func (s *EntityLockGroupScope) Get(entityID int64) entity.IThreadSafeEntity {
 	return ent
 }
 
+// Range 遍历仍属于本组的实体，fn 返回 false 时停止。
 func (s *EntityLockGroupScope) Range(fn func(entity.IThreadSafeEntity) bool) {
 	if s == nil || s.groupID == 0 || fn == nil || s.store == nil {
 		return
@@ -72,6 +79,7 @@ func (s *EntityLockGroupScope) Range(fn func(entity.IThreadSafeEntity) bool) {
 	}
 }
 
+// GroupEntityAs 按类型取同组实体；不存在或类型不符时返回零值与 false。
 func GroupEntityAs[T entity.IThreadSafeEntity](scope *EntityLockGroupScope, entityID int64) (T, bool) {
 	var zero T
 	ent := scope.Get(entityID)
@@ -85,6 +93,7 @@ func GroupEntityAs[T entity.IThreadSafeEntity](scope *EntityLockGroupScope, enti
 	return typed, true
 }
 
+// pushEntityLockGroupScope 为当前 goroutine 登记锁组作用域，返回恢复上一层的函数；groupID 为 0 时不登记。
 func pushEntityLockGroupScope(groupID int64, store entityGroupStore) func() {
 	if groupID == 0 {
 		return func() {}
@@ -107,6 +116,7 @@ func pushEntityLockGroupScope(groupID int64, store entityGroupStore) func() {
 	}
 }
 
+// entityLockGroupLockManager 管理按组 ID 引用计数的组锁；最后一个引用释放时删除条目。组锁只 TryLock，不等待。
 type entityLockGroupLockManager struct {
 	mu    sync.Mutex
 	locks map[int64]*entityLockGroupLockEntry
@@ -120,7 +130,6 @@ type entityLockGroupLockEntry struct {
 
 func newEntityLockGroupLockManager() *entityLockGroupLockManager {
 	return &entityLockGroupLockManager{locks: make(map[int64]*entityLockGroupLockEntry)}
-
 }
 
 func (m *entityLockGroupLockManager) acquire(groupID int64) (*entityLockGroupLockEntry, bool) {
@@ -162,11 +171,7 @@ func (m *entityLockGroupLockManager) releaseRef(entry *entityLockGroupLockEntry)
 	m.mu.Unlock()
 }
 
-func resolveDispatchGroupID(lockEs []entity.IThreadSafeEntity) (int64, error) {
-	var storage [4]dispatchGroupSnapshot
-	return resolveDispatchGroupIDFromSnapshots(captureDispatchGroupSnapshots(lockEs, storage[:0]))
-}
-
+// dispatchGroupSnapshot 是取锁前采集的实体锁组状态，取锁后据此校验锁组没有变化。
 type dispatchGroupSnapshot struct {
 	ent      entity.IThreadSafeEntity
 	groupID  int64
@@ -193,6 +198,7 @@ func captureDispatchGroupSnapshots(lockEs []entity.IThreadSafeEntity, storage []
 	return ret
 }
 
+// resolveDispatchGroupIDFromSnapshots 返回目标共同所属的锁组（0 表示都不在组内）；属于不同组时返回 ErrEntityLockGroupMix。
 func resolveDispatchGroupIDFromSnapshots(snapshots []dispatchGroupSnapshot) (int64, error) {
 	var groupID int64
 	for _, snap := range snapshots {
@@ -211,6 +217,8 @@ func resolveDispatchGroupIDFromSnapshots(snapshots []dispatchGroupSnapshot) (int
 	return groupID, nil
 }
 
+// validateDispatchGroupSnapshots 在取锁后确认每个实体的锁组状态与快照一致：组迁移待定返回 ErrEntityGroupTransitionPending，
+// 其余变化返回 ErrEntityLockGroupChanged（调用方放锁重试）。
 func validateDispatchGroupSnapshots(snapshots []dispatchGroupSnapshot) error {
 	for _, snap := range snapshots {
 		if snap.ent == nil || snap.ent.Base() == nil {
@@ -235,17 +243,16 @@ func lockDispatchEntitiesForHandler(locks *entityLockGroupLockManager, guard *en
 }
 
 // errDispatchWithoutGuardScope 表示派发取锁时当前 goroutine 没有 Guard 作用域，或传入的 Guard 不是作用域里的那一个。
-// 这是调用方的编程错误：生产入口都在 runNestLogic 建的作用域里（RR-20261006-12）。
+// 这是调用方的编程错误：生产入口都在 runNestLogic 建的作用域里。
 var errDispatchWithoutGuardScope = errors.New("nest: dispatch locking requires the caller's entity guard scope")
 
 // dispatchScopeGuard 返回当前 goroutine Guard 作用域里的 Guard，没有作用域时返回 errDispatchWithoutGuardScope。
 //
-// 派发取锁只用作用域的 Guard（RR-20261006-12）：Guard 归作用域所有，作用域结束时释放它上面的全部实体锁、跑解锁后回调并
-// 归还池，正好一次；取锁、组迁移重试和 releaseDispatchEntities 只放本次取得的实体锁，从不归还 Guard。之前没有作用域时
-// 用 entity.GetEntityGuard() 从池里取独立 Guard，releaseDispatchLocks 每次释放都把它整个归还池；组迁移重试先释放一次、
-// 再拿同一个 Guard 重新取锁，成功后调用方再释放一次，同一 Guard 进池两次，之后两个业务 worker 共用它、互相解对方的实体锁
-// （收尾第 4 批 A2、W-2026-10-06-01）。没有采用“无作用域时调用方持有、重试不归还”：handler 新建实体的锁、被取代实例和
-// 解锁后回调都挂在 Guard 上，只有完整的作用域释放能收尾，调用方等于要自己再写一遍作用域。
+// 派发取锁只用作用域的 Guard：Guard 归作用域所有，作用域结束时释放它上面的全部实体锁、跑解锁后回调并归还池，
+// 正好一次；取锁、组迁移重试和 releaseDispatchEntities 只放本次取得的实体锁，从不归还 Guard。若派发自己从池里取
+// Guard 并在每次释放时归还，组迁移重试会让同一 Guard 进池两次，之后两个业务 worker 共用它、互相解对方的实体锁。
+// 也不采用“无作用域时调用方持有、重试不归还”：handler 新建实体的锁、被取代实例和解锁后回调都挂在 Guard 上，
+// 只有完整的作用域释放能收尾，调用方等于要自己再写一遍作用域。历史：RR-20261006-12。
 func dispatchScopeGuard() (*entity.EntityGuard, error) {
 	scope := entity.CurrentGuardScope()
 	if scope == nil || scope.Guard() == nil {
@@ -292,6 +299,8 @@ func lockDispatchEntitiesForHandlerWithStore(locks *entityLockGroupLockManager, 
 	return nil, nil, lastErr
 }
 
+// lockDispatchEntitiesWithGroup 取一次锁：无锁组时按锁序等待实体锁；有锁组时先 TryLock 组锁并登记组作用域，
+// 再 TryLock 每个实体锁。返回的释放函数先放实体锁、再放组作用域与组锁（实体释放 hook panic 时组锁仍会释放）。
 func lockDispatchEntitiesWithGroup(locks *entityLockGroupLockManager, guard *entity.EntityGuard, lockEs []entity.IThreadSafeEntity, groupID int64, store entityGroupStore) ([]entity.IThreadSafeEntity, func(), error) {
 	if groupID == 0 {
 		acquired, err := lockDispatchEntities(guard, lockEs)
@@ -330,6 +339,8 @@ func lockDispatchEntitiesWithGroup(locks *entityLockGroupLockManager, guard *ent
 	}, nil
 }
 
+// tryLockDispatchEntities 在持有组锁时逐个 TryLock 实体锁（已持有的跳过），任何一把取不到就放掉本次已取的锁
+// 并返回 ErrLockTimeout。
 func tryLockDispatchEntities(guard *entity.EntityGuard, lockEs []entity.IThreadSafeEntity) ([]entity.IThreadSafeEntity, error) {
 	if guard == nil {
 		return nil, ErrLockTimeout

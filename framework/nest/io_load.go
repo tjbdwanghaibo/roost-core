@@ -8,25 +8,29 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
+// preparedEntity 是 I/O 阶段对一个声明目标的读取结果（实体或错误）。
 type preparedEntity struct {
 	value entity.IThreadSafeEntity
 	err   error
 }
 
 // preparedGetter 只缓存本次声明目标；加载不获取 Entity 业务锁。
-// Touch 保护慢→快交接期间的存活；UnTouch 可能触发销毁，因此必须在业务池归还。
+// Touch 保护 I/O → 业务池交接期间的存活；UnTouch 可能触发销毁，因此必须在业务池归还。
 type preparedGetter struct {
 	base    entity.Getter
 	entries map[int64]preparedEntity
 	touched []entity.IThreadSafeEntity
 }
 
+// Get 优先返回 I/O 阶段准备的结果，未准备的目标交给底层 Getter。
 func (p *preparedGetter) Get(ctx context.Context, id int64, category entity.EntityCategory) (entity.IThreadSafeEntity, error) {
 	if entry, ok := p.entries[id]; ok {
 		return entry.value, entry.err
 	}
 	return p.base.Get(ctx, id, category)
 }
+
+// GetMany 逐个调用 Get，任一失败即返回错误。
 func (p *preparedGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
 	result := make([]entity.IThreadSafeEntity, len(ids))
 	for i, id := range ids {
@@ -38,6 +42,8 @@ func (p *preparedGetter) GetMany(ctx context.Context, ids []int64, categories []
 	}
 	return result, nil
 }
+
+// add 记录一个目标的准备结果；实体 Touch 成功才缓存并登记待归还的引用，Touch 失败（已摘除）记为 nil。
 func (p *preparedGetter) add(id int64, value entity.IThreadSafeEntity, err error) {
 	if value != nil {
 		if value.Touch() {
@@ -48,6 +54,8 @@ func (p *preparedGetter) add(id int64, value entity.IThreadSafeEntity, err error
 	}
 	p.entries[id] = preparedEntity{value, err}
 }
+
+// release 归还准备阶段取得的全部引用。必须在业务池调用（UnTouch 可能触发销毁）。
 func (p *preparedGetter) release() {
 	values := p.touched
 	p.touched = nil
@@ -55,8 +63,10 @@ func (p *preparedGetter) release() {
 	for _, value := range values {
 		defer value.UnTouch()
 	}
-
 }
+
+// prepareIOEntities 在 I/O 阶段加载消息的全部声明目标并 Touch 持有，把 msg.getter 换成只读这些结果的
+// preparedGetter；引用由派发收尾经本地执行器在业务池归还。
 func prepareIOEntities(msg *Msg) error {
 	ids := dispatchIDs(msg)
 	p := &preparedGetter{base: msg.getter, entries: make(map[int64]preparedEntity, len(ids))}
@@ -87,6 +97,9 @@ func prepareIOEntities(msg *Msg) error {
 	}
 	return nil
 }
+
+// dispatchGetter 返回当前派发使用的 Getter（I/O 准备后的 preparedGetter 或只读已加载实体的包装），不在派发中时
+// 用引擎的 Getter。
 func (mgr *NestMgr) dispatchGetter() entity.Getter {
 	if msg := currentNestDispatchMsg(); msg != nil && msg.getter != nil {
 		return msg.getter
@@ -107,14 +120,14 @@ func (g loadedGetter) GetMany(ctx context.Context, ids []int64, categories []ent
 
 // errDeclaredTargetCold 标记“声明目标在 handler 取得 Guard 之前被发现未加载或已被驱逐”。
 // 它只在业务池首跑、业务执行之前产生；dispatchNest 据此让派发队列把同一条已准入请求原位
-// 转到I/O 池准备，保留准入资格和同 ID 顺序位置（RR-20260926-25）。I/O 准备后的业务续行不再
+// 转到 I/O 池准备，保留准入资格和同 ID 顺序位置。I/O 准备后的业务续行不再
 // 产生它，冷目标错误照常返回。
 var errDeclaredTargetCold = errors.New("nest: declared target is not loaded; moving to IO preparation")
 
 // declaredTargetsNeedIOPreparation 在统一准入时判断声明目标里是否有需要加载的冷实体。
 // 只用 Getter 可选实现的 entity.LoadedChecker（ManagerAccess 实现为一次内存查找），不调用 Get：
 // 准入在发送方 goroutine 上执行——包括在 handler 里发送的业务 worker 和唯一的延迟派发 goroutine——
-// 不能依赖自定义 Getter 遵守 LoadedEntitiesOnly（RR-20260926-47）。Getter 未实现时 NewEngine 不安装本判定。
+// 不能依赖自定义 Getter 遵守 LoadedEntitiesOnly。Getter 未实现时 NewEngine 不安装本判定。
 // 广播是尽力扇出，冷目标逐个报告（TestFastBroadcastReportsColdTargetAndContinues），不为它批量冷加载；
 // 组迁移等内部消息没有业务目标。ID 格式错误留给派发阶段按原语义报告。
 func (mgr *NestMgr) declaredTargetsNeedIOPreparation(msg *Msg) bool {
@@ -152,10 +165,10 @@ func (mgr *NestMgr) declaredTargetsNeedIOPreparation(msg *Msg) bool {
 	return false
 }
 
-// beforeIOPreparation 报告当前派发是否是业务池首跑（尚未经过I/O 准备，msg.prepared == nil），并且本引擎
+// beforeIOPreparation 报告当前派发是否是业务池首跑（尚未经过 I/O 准备，msg.prepared == nil），并且本引擎
 // 在准入时做了冷目标判定（Getter 实现 LoadedChecker）。只有这时发现的声明目标冷缺失/驱逐才改写为
 // errDeclaredTargetCold；I/O 准备后的续行已持有准备阶段的引用，冷目标错误原样返回，不会第二次迁移。
-// 准入不判冷的 Getter 没有“准入时已加载”这个前提，冷目标按 RR-02 原样返回（RR-20260926-47）。
+// 准入不判冷的 Getter 没有“准入时已加载”这个前提，冷目标错误同样原样返回。
 func (mgr *NestMgr) beforeIOPreparation() bool {
 	if mgr.loadedChecker == nil {
 		return false

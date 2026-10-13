@@ -11,10 +11,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 )
 
-// Client is the instance-scoped command boundary used by generated senders.
-// Implementations must transfer ownership of Params only for the duration of
-// the dispatch; callers must treat mutable parameter values as immutable after
-// a successful asynchronous admission.
+// Client 是生成的 sender 使用的实例级命令边界。实现只在派发期间持有 Params 的所有权；异步准入成功后，调用方
+// 必须把可变参数值视为不可再改。Dispatch* 为异步投递，Request* 同步等待回复；在 Nest handler 或业务 worker
+// 内调用分别返回 ErrAsyncInHandler / ErrSyncInHandler。
 type Client interface {
 	Dispatch(context.Context, HandlerName, int64, Params, ...SendOpt) error
 	Request(context.Context, HandlerName, int64, Params, ...SendOpt) (any, error)
@@ -25,9 +24,8 @@ type Client interface {
 	RequestMultiGroup(context.Context, HandlerName, [][]int64, Params, ...SendOpt) (any, error)
 }
 
-// DispatchBroadcast admits independent single-entity deliveries. If admission
-// fails, deliveries admitted before the returned error may still execute;
-// callers that require all-or-nothing semantics must use DispatchMulti.
+// DispatchBroadcast 按锁组与 worker 拆批，准入一组相互独立的单实体投递。准入中途失败时，失败之前已准入的投递
+// 仍可能执行；需要全有或全无语义的调用方应使用 DispatchMulti。
 func (mgr *NestMgr) DispatchBroadcast(ctx context.Context, name HandlerName, ids []int64, params Params, opts ...SendOpt) error {
 	if len(ids) == 0 {
 		return fmt.Errorf("%w: empty entity ids", ErrInvalidMessage)
@@ -55,6 +53,7 @@ func (mgr *NestMgr) DispatchBroadcast(ctx context.Context, name HandlerName, ids
 
 var _ Client = (*NestMgr)(nil)
 
+// Dispatch 异步投递单目标消息；返回 nil 只表示已准入。
 func (mgr *NestMgr) Dispatch(ctx context.Context, name HandlerName, id int64, params Params, opts ...SendOpt) error {
 	if err := validateClientDispatch(mgr, ctx, "Dispatch", name, ErrAsyncInHandler); err != nil {
 		return err
@@ -70,6 +69,7 @@ func (mgr *NestMgr) Dispatch(ctx context.Context, name HandlerName, id int64, pa
 	return normalizeAdmissionError(mgr.admit(msg, opts...))
 }
 
+// Request 投递单目标消息并等待回复，超时取请求上下文的 SyncWait，其次引擎的同步超时。
 func (mgr *NestMgr) Request(ctx context.Context, name HandlerName, id int64, params Params, opts ...SendOpt) (any, error) {
 	if err := validateClientDispatch(mgr, ctx, "Request", name, ErrSyncInHandler); err != nil {
 		return nil, err
@@ -89,6 +89,7 @@ func (mgr *NestMgr) Request(ctx context.Context, name HandlerName, id int64, par
 	return mgr.waitResult(ctx, ch, requestTimeout)
 }
 
+// DispatchMulti 异步投递多目标消息：全部目标在同一事务中按锁序加锁执行。
 func (mgr *NestMgr) DispatchMulti(ctx context.Context, name HandlerName, ids []int64, params Params, opts ...SendOpt) error {
 	if len(ids) == 0 {
 		return fmt.Errorf("%w: empty entity ids", ErrInvalidMessage)
@@ -107,6 +108,7 @@ func (mgr *NestMgr) DispatchMulti(ctx context.Context, name HandlerName, ids []i
 	return normalizeAdmissionError(mgr.admit(msg, opts...))
 }
 
+// RequestMulti 是 DispatchMulti 的同步版本。
 func (mgr *NestMgr) RequestMulti(ctx context.Context, name HandlerName, ids []int64, params Params, opts ...SendOpt) (any, error) {
 	if len(ids) == 0 {
 		return nil, fmt.Errorf("%w: empty entity ids", ErrInvalidMessage)
@@ -129,6 +131,7 @@ func (mgr *NestMgr) RequestMulti(ctx context.Context, name HandlerName, ids []in
 	return mgr.waitResult(ctx, ch, requestTimeout)
 }
 
+// DispatchMultiGroup 异步投递分组多目标消息；组边界经 HandlerOptionWithGroup 交给 handler。
 func (mgr *NestMgr) DispatchMultiGroup(ctx context.Context, name HandlerName, groups [][]int64, params Params, opts ...SendOpt) error {
 	if !validGroups(groups) {
 		return fmt.Errorf("%w: empty entity groups", ErrInvalidMessage)
@@ -147,6 +150,7 @@ func (mgr *NestMgr) DispatchMultiGroup(ctx context.Context, name HandlerName, gr
 	return normalizeAdmissionError(mgr.admit(msg, opts...))
 }
 
+// RequestMultiGroup 是 DispatchMultiGroup 的同步版本。
 func (mgr *NestMgr) RequestMultiGroup(ctx context.Context, name HandlerName, groups [][]int64, params Params, opts ...SendOpt) (any, error) {
 	if !validGroups(groups) {
 		return nil, fmt.Errorf("%w: empty entity groups", ErrInvalidMessage)
@@ -169,6 +173,8 @@ func (mgr *NestMgr) RequestMultiGroup(ctx context.Context, name HandlerName, gro
 	return mgr.waitResult(ctx, ch, requestTimeout)
 }
 
+// validateClientDispatch 检查投递前置条件：引擎运行且未 fence、handler 名与 ctx 合法且未取消、不在 Nest handler
+// 或业务 worker 内（在其中调用返回 nestedError）。
 func validateClientDispatch(mgr *NestMgr, ctx context.Context, api string, name HandlerName, nestedError error) error {
 	if mgr == nil {
 		return ErrNestStopped
@@ -195,6 +201,8 @@ func validateClientDispatch(mgr *NestMgr, ctx context.Context, api string, name 
 	return nil
 }
 
+// prepareClientMessage 填写消息名、参数副本、发送选项与上下文快照。同步请求携带调用方 ctx 作为 Base；异步消息只带
+// 可跨异步边界的部分。
 func prepareClientMessage(ctx context.Context, msg *Msg, name HandlerName, params Params, wait bool, opts ...SendOpt) {
 	msg.Name = name.String()
 	msg.Params = append(msg.Params[:0], params...)
@@ -209,15 +217,14 @@ func prepareClientMessage(ctx context.Context, msg *Msg, name HandlerName, param
 		}
 		snapshot.Base = ctx
 	} else {
-		// Async admission uses ctx only for its cancellation/deadline check.
-		// Capture the current runtime config generation; preserve request
-		// identity and trace, but never Base values, arbitrary KV or transaction
-		// state. Business data must travel explicitly in Params.
+		// 异步准入只用 ctx 检查取消 / 截止。固定当前运行期配置代际，保留请求身份与 trace，但从不携带 Base 上的值、
+		// 任意 KV 或事务状态；业务数据必须显式放在 Params 中。
 		snapshot = asyncMessageContextSnapshot(fctx.CaptureSnapshot())
 	}
 	msg.Context = snapshot
 }
 
+// resolveSendOptions 合并发送选项。
 func resolveSendOptions(opts []SendOpt) sendOptParam {
 	var ret sendOptParam
 	for _, opt := range opts {
@@ -228,6 +235,7 @@ func resolveSendOptions(opts []SendOpt) sendOptParam {
 	return ret
 }
 
+// admit 把消息交给派发器：带延时选项时进入延时队列，否则立即准入。
 func (mgr *NestMgr) admit(msg *Msg, opts ...SendOpt) error {
 	opt := resolveSendOptions(opts)
 	var err error
@@ -239,6 +247,7 @@ func (mgr *NestMgr) admit(msg *Msg, opts ...SendOpt) error {
 	return normalizeAdmissionError(err)
 }
 
+// normalizeAdmissionError 把 worker 层的准入错误换成 Nest 的哨兵（ErrQueueFull / ErrNestStopped），保留原因链。
 func normalizeAdmissionError(err error) error {
 	if err == nil {
 		return nil
@@ -252,6 +261,8 @@ func normalizeAdmissionError(err error) error {
 	return err
 }
 
+// waitResult 等待同步请求的回复：回复是 error 时作为错误返回；ctx 取消返回 ErrNestCanceled，超时返回 ErrNestTimeout。
+// 取消或超时只结束等待，不撤销已准入的业务。
 func (mgr *NestMgr) waitResult(ctx context.Context, ch <-chan any, requestTimeout time.Duration) (any, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -278,6 +289,7 @@ func (mgr *NestMgr) waitResult(ctx context.Context, ch <-chan any, requestTimeou
 	}
 }
 
+// validGroups 报告分组非空且每组都非空。
 func validGroups(groups [][]int64) bool {
 	if len(groups) == 0 {
 		return false
@@ -290,6 +302,7 @@ func validGroups(groups [][]int64) bool {
 	return true
 }
 
+// normalizeClientID 把调用方传入的 ID 规范为完整 ID，非法时返回 ErrInvalidMessage。
 func normalizeClientID(id int64) (int64, error) {
 	fullID, err := entity.NormalizeFullID(id, entity.EntityKindNone)
 	if err != nil {
@@ -298,6 +311,7 @@ func normalizeClientID(id int64) (int64, error) {
 	return fullID, nil
 }
 
+// normalizeClientIDs 规范一组 ID，结果使用独立存储，与调用方切片隔离。
 func normalizeClientIDs(ids []int64) ([]int64, error) {
 	ret := make([]int64, len(ids))
 	for i, id := range ids {
@@ -310,6 +324,7 @@ func normalizeClientIDs(ids []int64) ([]int64, error) {
 	return ret, nil
 }
 
+// normalizeClientGroups 规范分组 ID，结果使用独立的连续存储。
 func normalizeClientGroups(groups [][]int64) ([][]int64, error) {
 	count := 0
 	for _, ids := range groups {

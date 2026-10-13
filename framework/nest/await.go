@@ -12,6 +12,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 )
 
+// Await 的错误：调用上下文不符合要求、恢复回调签名不合法、本段已有一个 Await。
 var (
 	ErrAwaitContext   = errors.New("nest: Await requires a memory business handler without a remote write batch")
 	ErrAwaitSignature = errors.New("nest: invalid Await callback signature")
@@ -20,6 +21,7 @@ var (
 
 // AwaitOption 仅决定恢复段的目标，不读取 Entity，不执行 I/O。
 type AwaitOption[T any] func(*awaitOptions[T])
+
 type awaitOptions[T any] struct{ targets func(T) []int64 }
 
 // WithResumeTargets 用查询结果选择新目标。返回顺序就是恢复回调的实体参数顺序。
@@ -28,6 +30,7 @@ func WithResumeTargets[T any](fn func(T) []int64) AwaitOption[T] {
 	return func(o *awaitOptions[T]) { o.targets = fn }
 }
 
+// awaitPlan 是本段登记的 Await：段成功结束后 start（在 I/O 池执行 work 再派发恢复段），失败则 cancel 归还预留。
 type awaitPlan struct{ start, cancel func() }
 
 // Await 结束当前 memory handler 段，释放 Guard 和 tail 后在 I/O 池执行 work。
@@ -60,7 +63,7 @@ func Await[T any](work func(context.Context) (T, error), resume any, options ...
 	if ft.IsVariadic() || count < 1 || ft.NumOut() != 1 || ft.Out(0) != errType || ft.In(count) != typ || ft.In(count+1) != errType {
 		return ErrAwaitSignature
 	}
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if !ft.In(i).Implements(entityType) {
 			return ErrAwaitSignature
 		}
@@ -181,6 +184,7 @@ func Await[T any](work func(context.Context) (T, error), resume any, options ...
 	return nil
 }
 
+// orderedMessageIDs 按参数顺序展开消息目标（单目标、多目标或分组）。
 func orderedMessageIDs(msg *Msg) []int64 {
 	if msg.Type == MsgTypeSingle {
 		return []int64{msg.Tid}
@@ -192,7 +196,7 @@ func orderedMessageIDs(msg *Msg) []int64 {
 	return ids
 }
 
-// 预留先于业务段结束；pending 包含尚未启动的 I/O，停机不能提前完成。
+// reserveAwait 在 io 通道为 Await 预留一个执行名额。预留先于业务段结束；pending 包含尚未启动的 I/O，停机不能提前完成。
 func (q *dispatchQueue) reserveAwait() error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -207,6 +211,8 @@ func (q *dispatchQueue) reserveAwait() error {
 	q.pending++
 	return nil
 }
+
+// cancelAwait 归还未启动的 Await 预留。
 func (q *dispatchQueue) cancelAwait() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -218,6 +224,8 @@ func (q *dispatchQueue) cancelAwait() {
 		}
 	}
 }
+
+// startAwait 把预留转成 io 通道上的一项就绪作业（不登记 ID 顺序）。
 func (q *dispatchQueue) startAwait(work func()) {
 	msg := &Msg{RefCount: 1, ioWork: work}
 	j := &dispatchJob{msg: msg, lane: dispatchIOLane, ioStage: true}
