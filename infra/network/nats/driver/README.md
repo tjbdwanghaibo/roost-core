@@ -14,8 +14,8 @@ nats-io/nats.go v1.53.1 之上的驱动：核心连接 `Client`、同连接上�
 | `Client.Close()` | 无返回值，幂等 | — | Publish / Request / Subscribe / QueueSubscribe / Drain / DrainWithContext 返回 `fnats.ErrClosed`；`Connected()` 为 false；之前拿到的订阅 `Unsubscribe` 返回 `fnats.ErrClosed`、`IsValid` 为 false | 原子置位，无等待 |
 | `JetStreamClient` | — | — | EnsureStream / Publish / Subscribe 返回 `fnats.ErrClosed`（连接关闭后） | — |
 | `RPCClient.Stop` / `StopWithContext` | nil（只停一次，后到者等同一次回调排空，受自己的 ctx 约束） | ctx 先结束返回 ctx 错误，再调继续等 | 停止后的 CallAsync、停止时在途的 CallAsync 回调都收到同时 `errors.Is` 到 `fnats.ErrCancelled` 与 `fnats.ErrClosed` 的错误；连接关闭后 Call / CallWithTimeout / Reply 返回 `fnats.ErrClosed`；只关连接、没停 RPC 时在途 CallAsync 到 5s 超时收到 `fnats.ErrClosed` | 同左 |
-| kit `NatsMod.StopWithContext` | nil | `ErrClosedUndrained` 时报告并释放 Assembly（RR-20261004-08），之后 nil；Bus / RPC 回调超预算时保留，可以再调 | 经 Mod 发布的 IClient / IRpc / IJetStream / IBus 调用返回可 `errors.Is` 到 `fnats.ErrClosed` 的错误（真实 NATS 实测，`kit/nats/close_contract_real_promises_test.go`） | 串行：后到者等第一个做完 |
+| kit `NatsMod.StopWithContext` | nil | `ErrClosedUndrained` 时报告并释放 Assembly（RR-20261004-08），之后 nil；Bus / RPC 回调超预算时保留，可以再调 | 经 Mod 发布的 IClient / IRpc / IJetStream / IBus 调用返回可 `errors.Is` 到 `fnats.ErrClosed` 的错误（真实 NATS 实测，`wiring/nats/real_nats_integration_test.go`） | 串行：后到者等第一个做完 |
 
 调用方据此：判断“已经关了”用 `errors.Is(err, fnats.ErrClosed)`，不要按 nats.go 的 `ErrConnectionClosed` 判断（Close 之后的错误不再包着它）。
 
-**守卫**：`closed_state_guard_promises_test.go` 解析本包源码列出每个导出方法，要求表里登记它 Close 之后的结果；新加导出方法不登记就红。新增方法的入口先调 `admit()`，nats.go 的失败经 `wrapError` 返回。
+**守卫**：`closed_state_test.go` 解析本包源码列出每个导出方法，要求表里登记它 Close 之后的结果；新加导出方法不登记就红。新增方法的入口先调 `admit()`，nats.go 的失败经 `wrapError` 返回。

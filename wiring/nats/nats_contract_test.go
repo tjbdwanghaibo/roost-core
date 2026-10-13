@@ -5,14 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 	"net"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 )
 
 type stubNatsServer struct {
@@ -336,5 +337,25 @@ func TestNatsModStopClosesAssemblyAfterTerminalBusError(t *testing.T) {
 	}
 	if m.bus != nil {
 		t.Fatal("bus reference retained after its stop became terminal")
+	}
+}
+
+// Stop 的统一口径：重复调用幂等返回 nil，并发调用安全，后到者等第一个做完（-race 下不能有数据竞争）。
+func TestNatsModConcurrentStopIsSafe(t *testing.T) {
+	for round := 0; round < 5; round++ {
+		rpc := natsdriver.NewRPCClient(nil, fnats.DefaultRetryPolicy(), 1)
+		m := &NatsMod{asm: &natsdriver.Assembly{RPC: rpc}}
+		var wg sync.WaitGroup
+		errs := make([]error, 4)
+		for i := range errs {
+			wg.Add(1)
+			go func(i int) { defer wg.Done(); errs[i] = m.StopWithContext(context.Background()) }(i)
+		}
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: concurrent Stop #%d = %v, want nil (all = %v)", round, i, err, errs)
+			}
+		}
 	}
 }

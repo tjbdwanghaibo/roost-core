@@ -23,13 +23,8 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 )
 
-// rpcToxiproxy drives the proxies this test created on the environment's
-// toxiproxy, one per isolated NATS node. RR-20261005-NC-208: the test used the
-// environment's shared nats-1..3 proxies and POST /reset, which removes every
-// toxic on every proxy of that toxiproxy — other sessions' faults included.
-// It now owns uniquely named proxies on ephemeral ports in front of the direct
-// node URLs, adds and removes toxics only on them and deletes them at cleanup.
-// The bus ignores discovered servers, so it only ever dials these proxies.
+// rpcToxiproxy 驱动本用例在环境 toxiproxy 上自建的代理（每个隔离 NATS 节点一个，唯一命名、临时端口），只在它们上面加删 toxic，
+// 结束时删除；不用共享的 nats-1..3 代理，也不调 POST /reset（它会清掉其他会话的故障）。总线忽略发现的服务器，只连这些代理。
 type rpcToxiproxy struct {
 	base    string
 	proxies []string
@@ -144,12 +139,8 @@ func (c rpcToxiproxy) blackholeNATS(t *testing.T) {
 	}
 }
 
-// Fault matrix, fifth slice: a JetStream RPC call while NATS is half-open
-// (connections up, no byte comes back) must return within the caller's
-// deadline — not hang on the publish acknowledgement or on the response
-// consumer — and the same bus must serve calls again once the network heals.
-// This is the RPC path's version of the Redis finding (U-0061): the timeout
-// the caller wrote is the contract.
+// 故障矩阵：NATS 半开（连接在、一个字节都不回）时 JetStream RPC 调用在调用方期限内返回——不卡在发布确认或响应消费者上；
+// 网络恢复后同一条总线照常服务。调用方写的超时就是契约。
 func TestToxicJetStreamRPCCallHonoursItsDeadlineWhileHalfOpen(t *testing.T) {
 	if os.Getenv("ROOST_DATAENGINE_IT") != "1" {
 		t.Skip("set ROOST_DATAENGINE_IT=1 or use scripts/integration/dataengine-env.sh test")
