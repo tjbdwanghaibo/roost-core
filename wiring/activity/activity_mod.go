@@ -60,7 +60,7 @@ type config struct {
 		GraceWindow      time.Duration `config:"grace_window" default:"60s" min:"1s" example:"60s"`
 		DispatchAttempts int           `config:"dispatch_attempts" default:"5" min:"1" example:"5"`
 		DispatchBackoff  time.Duration `config:"dispatch_backoff" default:"5s" min:"1ns" example:"5s"`
-		GroupsFile       string        `config:"groups_file" required:"true" example:"configs/activity_groups.yaml" help:"活动组文件（C4）：game 服务在这些组里开窗口，本进程启动时校验、清扫它们"`
+		GroupsFile       string        `config:"groups_file" required:"true" example:"configs/activity_groups.yaml" help:"活动组文件：game 服务在这些组里开窗口，本进程启动时校验、清扫它们"`
 		SweepGroups      []string      `config:"sweep_groups" help:"另外要清扫的组；不写取 groups_file 里的全部组"`
 	} `config:"activity"`
 }

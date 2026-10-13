@@ -22,7 +22,7 @@ type snapshotConfig struct {
 	SnapshotCacheEntries int           `config:"snapshot_cache_entries" min:"0" example:"10000"`
 	SnapshotCacheBytes   int64         `config:"snapshot_cache_bytes" min:"0" example:"268435456"`
 	SnapshotCacheTTL     time.Duration `config:"snapshot_cache_ttl" min:"0" example:"30s"`
-	CachedMaxStaleness   time.Duration `config:"cached_max_staleness" min:"1ns" example:"30s" help:"B2：Cached / Monotonic 读交出的快照距最近一次被共享 L2 或权威确认的最长时间，超过先重新确认，\n确认不了就不交出。不配置时等于 snapshot_cache_ttl（这里写成与它相同）；配置了必须为正。"`
+	CachedMaxStaleness   time.Duration `config:"cached_max_staleness" min:"1ns" example:"30s" help:"Cached / Monotonic 读交出的快照距最近一次被共享 L2 或权威确认的最长时间，超过先重新确认，\n确认不了就不交出。不配置时等于 snapshot_cache_ttl（这里写成与它相同）；配置了必须为正。"`
 	SnapshotL2TTL        time.Duration `config:"snapshot_l2_ttl" min:"0" example:"10m"`
 	SnapshotL2KeyPrefix  string        `config:"snapshot_l2_key_prefix" example:"" help:"Prefix for the shared L2 snapshot keys (remote_entity:snapshot:*). Empty keeps the\nunprefixed keys; deployments sharing one Redis db must set different values, e.g.\nroost:<project>. Every node of a deployment must use the same value; no hash tags."`
 	// L2 写墓碑之后等几个副本确认、最多等多久。超时必须为正（Redis 的 WAIT … 0 是永久阻塞）且不超过 1s。
@@ -31,7 +31,7 @@ type snapshotConfig struct {
 	SnapshotInterestTTL             time.Duration `config:"snapshot_interest_ttl" min:"0" example:"30s"`
 	SnapshotInterestKeys            int           `config:"snapshot_interest_keys" min:"0" example:"10000"`
 	SnapshotInterestSubs            int           `config:"snapshot_interest_subs" min:"0" example:"100000"`
-	SnapshotInterestPerConsumer     int           `config:"snapshot_interest_per_consumer" min:"0" example:"0" help:"O4：每个 consumer 节点在兴趣表里的租约配额，0 取 snapshot_interest_subs / 16，不能超过 snapshot_interest_subs。\n超出配额的 key 没有推送、按需读取（计 interest_rejected_total{reason}）。"`
+	SnapshotInterestPerConsumer     int           `config:"snapshot_interest_per_consumer" min:"0" example:"0" help:"每个 consumer 节点在兴趣表里的租约配额，0 取 snapshot_interest_subs / 16，不能超过 snapshot_interest_subs。\n超出配额的 key 没有推送、按需读取（计 interest_rejected_total{reason}）。"`
 	MarkerCacheTTL                  time.Duration `config:"marker_cache_ttl" min:"0" example:"2s"`
 	SnapshotLoadTimeout             time.Duration `config:"snapshot_load_timeout" min:"0" example:"3s"`
 	SnapshotMaxWaiters              int           `config:"snapshot_max_waiters" min:"0" example:"4096"`
@@ -43,7 +43,7 @@ type mongoConfig struct {
 	TransactionTTL time.Duration `config:"transaction_ttl" min:"0" example:"168h"`
 }
 
-// ValidateConfig：L2 键前缀的格式与每节点配额不超过兴趣表的每节点上限（O4）。
+// ValidateConfig：L2 键前缀的格式与每节点配额不超过兴趣表的每节点上限。
 func (c *snapshotConfig) ValidateConfig(bool) error {
 	var errs []error
 	if c.SnapshotL2KeyPrefix != "" {
