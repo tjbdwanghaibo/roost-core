@@ -413,20 +413,11 @@ func (runtime *Runtime) Start(program *Program, input CastInput) (CastID, error)
 	return runtime.startLocked(program, input, nil)
 }
 
+// startLocked 启动一次施法（主动施法与 proc 共用，调用方持有 Runtime 锁）：准入程序 → 冻结输入、取能力状态 →
+// 切换型技能再次启动即释放 → 根施法的独占与公共冷却 → 建立施法实例并求 memory 默认值与施法开始快照 → 登记 →
+// 准备。准备失败时按是否已提交决定撤销还是保留 failed 终态（见 abandonUnpreparedCastLocked）。
 func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEvent *EventContext) (CastID, error) {
-	if program == nil || runtime.host == nil {
-		return 0, ErrProgramInvariant
-	}
-	if runtime.activeCastCount >= runtime.options.MaxActiveCasts {
-		return 0, ErrRuntimeCapacityExceeded
-	}
-	if program.compilerSemanticsRevision != runtime.options.SupportedCompilerSemanticsRevision {
-		return 0, ErrProgramSemanticsMismatch
-	}
-	if !authorityMatches(program.authority, runtime.host.AuthorityIdentity()) {
-		return 0, ErrAuthorityMismatch
-	}
-	if err := runtime.admitHostCapabilitiesLocked(program); err != nil {
+	if err := runtime.admitCastProgramLocked(program); err != nil {
 		return 0, err
 	}
 	inputs, err := freezeCastInput(program, input, runtime.host)
@@ -437,26 +428,76 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 	if abilityErr != nil {
 		return 0, abilityErr
 	}
-	policyKey := skillStateKey{Caster: input.Caster, Skill: program.id}
 	if program.cast.mode == castModeToggle {
-		if activeID := runtime.activePolicies[policyKey]; activeID != 0 {
-			active := runtime.casts[activeID]
-			if active != nil && active.policyActive {
-				return activeID, runtime.releaseCast(active, "toggle_off")
-			}
-			delete(runtime.activePolicies, policyKey)
-			runtime.touchActivePolicyLocked(policyKey)
+		if activeID, released, err := runtime.releaseActiveToggleLocked(skillStateKey{Caster: input.Caster, Skill: program.id}); released {
+			return activeID, err
 		}
 	}
 	if parentEvent == nil && program.activationKind == "active" {
 		// 根施法遵守施法者独占与公共冷却；proc 与被动触发的施法两者都不受限。
-		if !program.cast.concurrent && runtime.casterWindowBusyLocked(input.Caster) {
-			return 0, ErrCasterBusy
-		}
-		if runtime.cooldowns[cooldownKey{Caster: input.Caster, Skill: globalCooldownProgramID}] > runtime.currentTick {
-			return 0, ErrGlobalCooldownActive
+		if err := runtime.rootCastBlockedLocked(program, input.Caster); err != nil {
+			return 0, err
 		}
 	}
+	cast := runtime.newCastInstance(program, input, inputs, ability, parentEvent)
+	if err := runtime.initializeCastValues(cast); err != nil {
+		return 0, err
+	}
+	runtime.registerCastLocked(cast)
+	if err := runtime.prepareCast(cast); err != nil {
+		return runtime.abandonUnpreparedCastLocked(cast, err)
+	}
+	runtime.recordTrace(TraceEvent{Kind: TraceCastPrepared, Tick: runtime.currentTick, CastID: cast.id})
+	return cast.id, nil
+}
+
+// admitCastProgramLocked 核对程序能在本 Runtime 上启动：容量、编译语义修订、权威身份与 Host 能力。
+func (runtime *Runtime) admitCastProgramLocked(program *Program) error {
+	if program == nil || runtime.host == nil {
+		return ErrProgramInvariant
+	}
+	if runtime.activeCastCount >= runtime.options.MaxActiveCasts {
+		return ErrRuntimeCapacityExceeded
+	}
+	if program.compilerSemanticsRevision != runtime.options.SupportedCompilerSemanticsRevision {
+		return ErrProgramSemanticsMismatch
+	}
+	if !authorityMatches(program.authority, runtime.host.AuthorityIdentity()) {
+		return ErrAuthorityMismatch
+	}
+	return runtime.admitHostCapabilitiesLocked(program)
+}
+
+// releaseActiveToggleLocked 处理切换型技能的再次启动：施法者已有生效中的同技能施法时释放它（toggle_off），
+// released 为 true，调用方返回该施法的 ID 与释放结果；登记的施法已不在生效时清掉登记，继续正常启动。
+func (runtime *Runtime) releaseActiveToggleLocked(policyKey skillStateKey) (activeID CastID, released bool, err error) {
+	activeID = runtime.activePolicies[policyKey]
+	if activeID == 0 {
+		return 0, false, nil
+	}
+	active := runtime.casts[activeID]
+	if active != nil && active.policyActive {
+		return activeID, true, runtime.releaseCast(active, "toggle_off")
+	}
+	delete(runtime.activePolicies, policyKey)
+	runtime.touchActivePolicyLocked(policyKey)
+	return 0, false, nil
+}
+
+// rootCastBlockedLocked 检查根施法的施法者独占窗口与公共冷却。
+func (runtime *Runtime) rootCastBlockedLocked(program *Program, caster EntityID) error {
+	if !program.cast.concurrent && runtime.casterWindowBusyLocked(caster) {
+		return ErrCasterBusy
+	}
+	if runtime.cooldowns[cooldownKey{Caster: caster, Skill: globalCooldownProgramID}] > runtime.currentTick {
+		return ErrGlobalCooldownActive
+	}
+	return nil
+}
+
+// newCastInstance 以下一个施法 ID（暂定，登记时才占用）建立施法实例：冻结的输入、memory 与局部变量槽、
+// 冷却归属、随机键与事件上下文。
+func (runtime *Runtime) newCastInstance(program *Program, input CastInput, inputs []RuntimeValue, ability *abilityState, parentEvent *EventContext) *castInstance {
 	tentativeID := runtime.nextCastID + 1
 	cast := &castInstance{
 		id: tentativeID, program: program, caster: input.Caster, primaryTarget: input.Target,
@@ -479,44 +520,50 @@ func (runtime *Runtime) startLocked(program *Program, input CastInput, parentEve
 		cast.eventContext.ProcDepth = parentEvent.ProcDepth + 1
 	}
 	cast.eventContext.Source, cast.eventContext.Owner, cast.eventContext.Target, cast.eventContext.SkillID, cast.eventContext.CastID = input.Caster, input.Caster, input.Target, program.id, tentativeID
-	// memory 默认值在 memory_default 上下文里求值：读不到别的 memory。
+	return cast
+}
+
+// initializeCastValues 求 memory 默认值并拍施法开始快照。memory 默认值在 memory_default 上下文里求值：读不到别的 memory。
+func (runtime *Runtime) initializeCastValues(cast *castInstance) error {
 	cast.switchEvalContext(evalMemoryDefault)
-	for index, slot := range program.memory {
+	for index, slot := range cast.program.memory {
 		value, evalErr := runtime.evalValue(cast, slot.defaultValue)
 		if evalErr != nil {
-			return 0, evalErr
+			return evalErr
 		}
 		cast.memory[index] = value
 	}
 	cast.switchEvalContext(evalCastFlow)
-	if err := runtime.captureSnapshots(cast, snapshotCastStart); err != nil {
-		return 0, err
-	}
-	runtime.nextCastID = tentativeID
+	return runtime.captureSnapshots(cast, snapshotCastStart)
+}
+
+// registerCastLocked 占用暂定 ID 并登记施法：计入活动施法、记 trace、标记能力的施法开始。
+func (runtime *Runtime) registerCastLocked(cast *castInstance) {
+	runtime.nextCastID = cast.id
 	runtime.casts[cast.id] = cast
 	runtime.activeCastCount++
 	runtime.recordTrace(TraceEvent{Kind: TraceCastActivated, Tick: runtime.currentTick, CastID: cast.id})
 	runtime.markAbilityCastStarted(cast)
-	if err := runtime.prepareCast(cast); err != nil {
-		runtime.failCastLocked(cast, err)
-		if !cast.committed && !runtime.castHasRunningSpawnLocked(cast.id) && !runtime.castHasAbandonedSpawnLocked(cast.id) {
-			// 未提交的失败启动对调用方等于“没有施法”：删掉 cast 并把 ID 还给下一个 cast。
-			// failCastLocked 已撤掉它名下的全部排程任务、停掉它起的衍生物；已停衍生物的记录随 cast 一起删，
-			// 复用 ID 才安全。
-			runtime.forgetCastSpawnsLocked(cast.id)
-			delete(runtime.casts, cast.id)
-			runtime.forgetCompletedCastLocked(cast.id)
-			runtime.nextCastID--
-			return 0, err
-		}
-		// 已提交，或有衍生物停不下来（宿主 StopSpawn 失败、记录已标成待停止）：cast 留作 failed 终态、不还 ID，
-		// 待停止的衍生物记录继续挂在一个存在的 cast 名下，由之后的 tick 重试停止，停掉后按终态施法的规则回收
-		// （runtime_retention.go）。
-		// 名下有已放弃的记录（它比 cast 活得久）同样不还 ID，免得这条记录挂到下一个 cast 名下。
-		return cast.id, err
+}
+
+// abandonUnpreparedCastLocked 处理准备阶段失败的施法：先按失败终态收尾，再决定撤销还是保留。
+func (runtime *Runtime) abandonUnpreparedCastLocked(cast *castInstance, err error) (CastID, error) {
+	runtime.failCastLocked(cast, err)
+	if !cast.committed && !runtime.castHasRunningSpawnLocked(cast.id) && !runtime.castHasAbandonedSpawnLocked(cast.id) {
+		// 未提交的失败启动对调用方等于“没有施法”：删掉 cast 并把 ID 还给下一个 cast。
+		// failCastLocked 已撤掉它名下的全部排程任务、停掉它起的衍生物；已停衍生物的记录随 cast 一起删，
+		// 复用 ID 才安全。
+		runtime.forgetCastSpawnsLocked(cast.id)
+		delete(runtime.casts, cast.id)
+		runtime.forgetCompletedCastLocked(cast.id)
+		runtime.nextCastID--
+		return 0, err
 	}
-	runtime.recordTrace(TraceEvent{Kind: TraceCastPrepared, Tick: runtime.currentTick, CastID: cast.id})
-	return cast.id, nil
+	// 已提交，或有衍生物停不下来（宿主 StopSpawn 失败、记录已标成待停止）：cast 留作 failed 终态、不还 ID，
+	// 待停止的衍生物记录继续挂在一个存在的 cast 名下，由之后的 tick 重试停止，停掉后按终态施法的规则回收
+	// （runtime_retention.go）。
+	// 名下有已放弃的记录（它比 cast 活得久）同样不还 ID，免得这条记录挂到下一个 cast 名下。
+	return cast.id, err
 }
 
 // CastCount 返回 Runtime 当前保留的施法数（含终态施法）。
