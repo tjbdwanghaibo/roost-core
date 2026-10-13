@@ -284,6 +284,12 @@ func (server *TCPServer) acceptLoop(listener net.Listener) {
 	}
 }
 
+// serveConnection 服务一条已接受的连接：取得握手槽 → 认证 → BeforeACK 与 ack → 注册会话 → AfterACK →
+// 归还握手槽 → 读循环按序分发请求。
+//
+// 资源所有权：连接槽、连接表与按 IP 计数、wait 由 acceptLoop 取得，这里在返回时归还。握手槽从取得起持有到
+// AfterACK 完成（handshakeHeld），中途返回由 defer 归还。会话创建后，返回时先注销（已注册时）、再关闭并通知
+// handshake.Closed。
 func (server *TCPServer) serveConnection(connection net.Conn) {
 	defer func() {
 		if value := recover(); value != nil {
@@ -297,22 +303,8 @@ func (server *TCPServer) serveConnection(connection net.Conn) {
 	defer func() { <-server.connectionSlots }()
 	metrics.AddGauge("player_tcp_connections", nil, 1)
 	defer metrics.AddGauge("player_tcp_connections", nil, -1)
-	defer func() {
-		server.mu.Lock()
-		delete(server.connections, connection)
-		host := remoteHost(connection.RemoteAddr())
-		if server.ipConnections[host] <= 1 {
-			delete(server.ipConnections, host)
-		} else {
-			server.ipConnections[host]--
-		}
-		server.mu.Unlock()
-	}()
-	if tcpConnection, ok := connection.(*net.TCPConn); ok {
-		_ = tcpConnection.SetKeepAlive(true)
-		_ = tcpConnection.SetKeepAlivePeriod(30 * time.Second)
-		_ = tcpConnection.SetNoDelay(true)
-	}
+	defer server.forgetConnection(connection)
+	tuneTCPConnection(connection)
 	// connectionCtx is this connection's lifetime: the server stopping or the
 	// tcpSession closing (a replacing login, CloseSessions, a network error) ends
 	// it, and with it whatever request the connection is still running.
@@ -320,18 +312,7 @@ func (server *TCPServer) serveConnection(connection net.Conn) {
 	defer cancel(ErrSessionClosed)
 	handshakeCtx, handshakeCancel := context.WithTimeout(connectionCtx, server.config.HandshakeTimeout)
 	defer handshakeCancel()
-	handshakeDeadline, _ := handshakeCtx.Deadline()
-	if err := connection.SetReadDeadline(handshakeDeadline); err != nil {
-		_ = connection.Close()
-		return
-	}
-	select {
-	case server.handshakeSlots <- struct{}{}:
-	case <-connectionCtx.Done():
-		_ = connection.Close()
-		return
-	case <-handshakeCtx.Done():
-		metrics.IncCounter("player_tcp_auth_failure_total", map[string]string{"reason": "handshake_capacity"}, 1)
+	if !server.acquireHandshakeSlot(connectionCtx, handshakeCtx, connection) {
 		_ = connection.Close()
 		return
 	}
@@ -341,40 +322,13 @@ func (server *TCPServer) serveConnection(connection net.Conn) {
 			<-server.handshakeSlots
 		}
 	}()
-	authFrame, release, err := server.readFrameLimit(connection, server.config.MaxHandshakeBytes)
-	if err != nil {
-		metrics.IncCounter("player_tcp_frame_error_total", nil, 1)
-		_ = connection.Close()
-		return
-	}
-	if authFrame.flags != 0 || authFrame.messageID != 0 || authFrame.sequence == 0 || len(authFrame.payload) == 0 {
-		metrics.IncCounter("player_tcp_auth_failure_total", nil, 1)
-		release()
-		_ = connection.Close()
-		return
-	}
-	principal, err := server.authenticator.Authenticate(handshakeCtx, string(authFrame.payload), connection.RemoteAddr())
-	if err != nil || !principal.Authenticated() || handshakeCtx.Err() != nil {
-		metrics.IncCounter("player_tcp_auth_failure_total", nil, 1)
-		_ = connection.Close()
-		release()
+	authFrame, release, principal, ok := server.authenticateConnection(handshakeCtx, connection)
+	if !ok {
 		return
 	}
 	session := &tcpSession{connection: connection, principal: clonePrincipal(principal), nonce: newBindingToken(), writeTimeout: server.config.WriteTimeout, maxPayloadBytes: server.config.MaxPayloadBytes, cancel: cancel}
-	defer func() {
-		_ = session.Close(ErrSessionClosed)
-		if server.handshake != nil {
-			server.handshake.Closed(session)
-		}
-	}()
-	if server.handshake != nil {
-		err = server.handshake.BeforeACK(handshakeCtx, session, string(authFrame.payload))
-	}
-	release()
-	if err != nil || handshakeCtx.Err() != nil {
-		return
-	}
-	if err := session.writeFrame(handshakeCtx, 0, 0, authFrame.sequence, nil); err != nil {
+	defer server.closeConnectionSession(session)
+	if !server.acknowledgeHandshake(handshakeCtx, session, authFrame, release) {
 		return
 	}
 	server.registerSession(session)
@@ -387,7 +341,99 @@ func (server *TCPServer) serveConnection(connection net.Conn) {
 	handshakeCancel()
 	<-server.handshakeSlots
 	handshakeHeld = false
-	lastSequence := authFrame.sequence
+	server.readRequests(connectionCtx, connection, session, principal.PlayerID, authFrame.sequence)
+}
+
+// forgetConnection 把连接移出连接表并减少它所属 IP 的计数（acceptLoop 登记的反操作）。
+func (server *TCPServer) forgetConnection(connection net.Conn) {
+	server.mu.Lock()
+	delete(server.connections, connection)
+	host := remoteHost(connection.RemoteAddr())
+	if server.ipConnections[host] <= 1 {
+		delete(server.ipConnections, host)
+	} else {
+		server.ipConnections[host]--
+	}
+	server.mu.Unlock()
+}
+
+// tuneTCPConnection 为玩家 TCP 连接打开保活并关闭 Nagle。
+func tuneTCPConnection(connection net.Conn) {
+	if tcpConnection, ok := connection.(*net.TCPConn); ok {
+		_ = tcpConnection.SetKeepAlive(true)
+		_ = tcpConnection.SetKeepAlivePeriod(30 * time.Second)
+		_ = tcpConnection.SetNoDelay(true)
+	}
+}
+
+// acquireHandshakeSlot 把读截止时间设为握手截止时间，并在握手期限内排队取得握手槽。返回 false 时没有取得槽，
+// 调用方关闭连接。
+func (server *TCPServer) acquireHandshakeSlot(connectionCtx, handshakeCtx context.Context, connection net.Conn) bool {
+	handshakeDeadline, _ := handshakeCtx.Deadline()
+	if err := connection.SetReadDeadline(handshakeDeadline); err != nil {
+		return false
+	}
+	select {
+	case server.handshakeSlots <- struct{}{}:
+		return true
+	case <-connectionCtx.Done():
+		return false
+	case <-handshakeCtx.Done():
+		metrics.IncCounter("player_tcp_auth_failure_total", map[string]string{"reason": "handshake_capacity"}, 1)
+		return false
+	}
+}
+
+// authenticateConnection 读取并校验认证帧，交给 authenticator 认证。成功时返回认证帧与它的缓冲归还函数（由调用方
+// 在 BeforeACK 之后归还）；失败时已在这里关闭连接并归还缓冲，ok 为 false。
+func (server *TCPServer) authenticateConnection(handshakeCtx context.Context, connection net.Conn) (authFrame frame, release func(), principal Principal, ok bool) {
+	authFrame, release, err := server.readFrameLimit(connection, server.config.MaxHandshakeBytes)
+	if err != nil {
+		metrics.IncCounter("player_tcp_frame_error_total", nil, 1)
+		_ = connection.Close()
+		return frame{}, nil, Principal{}, false
+	}
+	if authFrame.flags != 0 || authFrame.messageID != 0 || authFrame.sequence == 0 || len(authFrame.payload) == 0 {
+		metrics.IncCounter("player_tcp_auth_failure_total", nil, 1)
+		release()
+		_ = connection.Close()
+		return frame{}, nil, Principal{}, false
+	}
+	principal, err = server.authenticator.Authenticate(handshakeCtx, string(authFrame.payload), connection.RemoteAddr())
+	if err != nil || !principal.Authenticated() || handshakeCtx.Err() != nil {
+		metrics.IncCounter("player_tcp_auth_failure_total", nil, 1)
+		_ = connection.Close()
+		release()
+		return frame{}, nil, Principal{}, false
+	}
+	return authFrame, release, principal, true
+}
+
+// closeConnectionSession 在连接返回时关闭会话并通知 handshake.Closed。
+func (server *TCPServer) closeConnectionSession(session *tcpSession) {
+	_ = session.Close(ErrSessionClosed)
+	if server.handshake != nil {
+		server.handshake.Closed(session)
+	}
+}
+
+// acknowledgeHandshake 执行 BeforeACK、归还认证帧缓冲，然后写回 ack（序号沿用认证帧）。返回 false 表示握手
+// 没有完成，调用方结束连接。
+func (server *TCPServer) acknowledgeHandshake(handshakeCtx context.Context, session *tcpSession, authFrame frame, release func()) bool {
+	var err error
+	if server.handshake != nil {
+		err = server.handshake.BeforeACK(handshakeCtx, session, string(authFrame.payload))
+	}
+	release()
+	if err != nil || handshakeCtx.Err() != nil {
+		return false
+	}
+	return session.writeFrame(handshakeCtx, 0, 0, authFrame.sequence, nil) == nil
+}
+
+// readRequests 是握手完成后的读循环：同一连接上的请求按到达顺序同步处理（不为每个请求开 goroutine）。
+// 序号必须严格递增；心跳也消耗限流令牌。任何读、校验、分发或写回失败都结束循环，由 serveConnection 收尾。
+func (server *TCPServer) readRequests(connectionCtx context.Context, connection net.Conn, session *tcpSession, playerID int64, lastSequence uint32) {
 	var limiter *rate.Limiter
 	if server.config.RequestRate > 0 {
 		limiter = rate.NewLimiter(rate.Limit(server.config.RequestRate), server.config.RequestBurst)
@@ -416,49 +462,63 @@ func (server *TCPServer) serveConnection(connection net.Conn) {
 			return
 		}
 		if request.messageID == 0 {
-			valid := request.flags == 0 && server.config.HeartbeatEnabled && len(request.payload) == 0
-			releasePayload()
-			if !valid {
-				metrics.IncCounter("player_tcp_frame_error_total", nil, 1)
-				return
-			}
-			if err := session.writeFrame(connectionCtx, 0, 0, request.sequence, nil); err != nil {
+			if !server.answerHeartbeat(connectionCtx, session, request, releasePayload) {
 				return
 			}
 			continue
 		}
-		// One request, one deadline. Without it a handler
-		// waiting on something that never finishes — a cold load behind a
-		// projection that keeps failing — held this goroutine, this socket's
-		// reads and the connection slot until the process stopped. The read
-		// loop is synchronous on purpose (per-connection order, no goroutine
-		// per request); the deadline is what keeps that from being unbounded.
-		// It bounds waiting, not work: a request the handler already had
-		// admitted is not undone by it.
-		dispatchStarted := time.Now()
-		dispatchCtx, cancelDispatch := context.WithTimeout(connectionCtx, server.config.DispatchTimeout)
-		response, dispatchErr := server.dispatch(dispatchCtx, session, request.messageID, request.sequence, wire.PayloadKind((request.flags>>1)&3), request.payload)
-		overBudget := errors.Is(dispatchCtx.Err(), context.DeadlineExceeded)
-		cancelDispatch()
-		metrics.ObserveDuration("player_tcp_dispatch_duration", nil, time.Since(dispatchStarted))
-		releasePayload()
-		if overBudget {
-			metrics.IncCounter("player_tcp_dispatch_timeout_total", nil, 1)
-		}
-		if dispatchErr != nil {
-			metrics.IncCounter("player_tcp_dispatch_error_total", nil, 1)
-			slog.Warn("player tcp dispatch failed", "player_id", principal.PlayerID, "message_id", request.messageID, "sequence", request.sequence, "over_budget", overBudget, "err", dispatchErr)
+		if !server.dispatchRequest(connectionCtx, session, playerID, request, releasePayload) {
 			return
 		}
-		// The answer goes out on the connection's context, not the request's:
-		// a handler that finished at its deadline is reporting what happened,
-		// and dropping that report would leave the client guessing.
-		if response != nil {
-			if err := session.Reply(connectionCtx, response); err != nil {
-				return
-			}
+	}
+}
+
+// answerHeartbeat 校验心跳帧并原序号回一个空帧。返回 false 时调用方结束连接。
+func (server *TCPServer) answerHeartbeat(connectionCtx context.Context, session *tcpSession, request frame, releasePayload func()) bool {
+	valid := request.flags == 0 && server.config.HeartbeatEnabled && len(request.payload) == 0
+	releasePayload()
+	if !valid {
+		metrics.IncCounter("player_tcp_frame_error_total", nil, 1)
+		return false
+	}
+	return session.writeFrame(connectionCtx, 0, 0, request.sequence, nil) == nil
+}
+
+// dispatchRequest 在分发预算内处理一个请求并写回应答。返回 false 时调用方结束连接。
+//
+// One request, one deadline. Without it a handler
+// waiting on something that never finishes — a cold load behind a
+// projection that keeps failing — held this goroutine, this socket's
+// reads and the connection slot until the process stopped. The read
+// loop is synchronous on purpose (per-connection order, no goroutine
+// per request); the deadline is what keeps that from being unbounded.
+// It bounds waiting, not work: a request the handler already had
+// admitted is not undone by it.
+func (server *TCPServer) dispatchRequest(connectionCtx context.Context, session *tcpSession, playerID int64, request frame, releasePayload func()) bool {
+	dispatchStarted := time.Now()
+	dispatchCtx, cancelDispatch := context.WithTimeout(connectionCtx, server.config.DispatchTimeout)
+	response, dispatchErr := server.dispatch(dispatchCtx, session, request.messageID, request.sequence, wire.PayloadKind((request.flags>>1)&3), request.payload)
+	overBudget := errors.Is(dispatchCtx.Err(), context.DeadlineExceeded)
+	cancelDispatch()
+	metrics.ObserveDuration("player_tcp_dispatch_duration", nil, time.Since(dispatchStarted))
+	releasePayload()
+	if overBudget {
+		metrics.IncCounter("player_tcp_dispatch_timeout_total", nil, 1)
+	}
+	if dispatchErr != nil {
+		metrics.IncCounter("player_tcp_dispatch_error_total", nil, 1)
+		slog.Warn("player tcp dispatch failed", "player_id", playerID, "message_id", request.messageID, "sequence", request.sequence, "over_budget", overBudget, "err", dispatchErr)
+		return false
+	}
+	// The answer goes out on the connection's context, not the request's:
+	// a handler that finished at its deadline is reporting what happened,
+	// and dropping that report would leave the client guessing.
+	if response != nil {
+		if err := session.Reply(connectionCtx, response); err != nil {
+			return false
 		}
 	}
+	return true
 }
 
 func (server *TCPServer) registerSession(current *tcpSession) {
