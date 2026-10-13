@@ -447,6 +447,11 @@ func pushCurrentNestDispatchMsg(msg *Msg) func() {
 	}
 	gid := goroutine.GoID()
 	prev, _ := currentNestDispatchMsgs.Load(gid)
+	if prev == msg {
+		// 只省掉当前消息身份的重复登记；Guard、事务与 fctx 仍各自建立作用域。
+		// 外层持有同一登记，内层退出（包括 panic）不能删除它。
+		return func() {}
+	}
 	currentNestDispatchMsgs.Store(gid, msg)
 	return func() {
 		if prev != nil {

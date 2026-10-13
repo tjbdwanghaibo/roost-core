@@ -253,11 +253,14 @@ func ensureNestContext(mgr *NestMgr, msg *Msg) func() {
 	if mgr != nil && mgr.ticker != nil {
 		frame = mgr.ticker.CurrentTick()
 	}
-	var opts []fctx.Option
+	var c *fctx.Context
+	var release func()
 	if msg != nil && msg.Context.Valid {
-		opts = append(opts, fctx.WithSnapshot(msg.Context))
+		// 直接传递选项，避免为每条消息构造可增长切片并让快照闭包逃逸。
+		c, release = fctx.NewContext(fctx.WithSnapshot(msg.Context))
+	} else {
+		c, release = fctx.NewContext()
 	}
-	c, release := fctx.NewContext(opts...)
 	c.MergeMeta(meta)
 	c.Frame = frame
 	return release

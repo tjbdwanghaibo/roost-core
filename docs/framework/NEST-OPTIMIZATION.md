@@ -145,3 +145,7 @@ go tool pprof -top -alloc_space artifacts/nest-review-20261013/nest.test.exe art
 远端 `58d27e7a`、`fd13e178`、`cc635481` 与本地 `533d819a` 已合并到 `f1fd7fb8`。核对了客户端目标所有权、Msg 字段重排、队列 lane 状态与 worker option 的复用；在这些新增改动中未发现确定缺陷。图谱代际为 `2026-10-10T03:58:22Z`，变更文件按当前源码补证，不能视作全仓无缺陷结论。
 
 第一批保留分组容量预分配，不改变校验阶段或 Handler 的顺序、重复项、组边界。新增正式 Client 链路基准以及业务顺序回归；输入隔离与跨组 append 隔离沿用现有测试。完整样本见 [基线](../performance/benchmarks/nest-hot-path-20261013/before.txt) 和 [分组预分配](../performance/benchmarks/nest-hot-path-20261013/group-prealloc.txt)。环境为 Apple M5、macOS/arm64、Go 1.27.0、GOMAXPROCS=0（实际 10）；基准是内存 Getter，不代表游戏网络或持久容量。
+
+第二批保留两项局部改动：`ensureNestContext` 直接传 Snapshot option，避免临时可增长切片导致闭包逃逸；`pushCurrentNestDispatchMsg` 遇到同 goroutine 的同消息只省登记，不省 fctx、Guard 或事务作用域。新增同消息/不同消息嵌套与 panic 恢复回归，既有 Context、Await、Remote 和阻塞约束用例通过 5 轮。见 [分配采样](../performance/benchmarks/nest-hot-path-20261013/alloc-profile.txt) 与 [上下文样本](../performance/benchmarks/nest-hot-path-20261013/context.txt)。
+
+指标预绑定明确延期：新采样仍显示指标编码分配，但公共 Registry 目前无绑定句柄接口，Reset、series 限额及动态标签需要一并设计。不能为本轮 Nest 优化另建全局句柄缓存。目标业务视图的跨准入缓存也暂不引入：现有直接 Msg、Clone、重排、广播和续行的校验阶段不同，`normalizeFullIDs` 本次只占约 1.42% 分配字节；先保留显式校验，不用跳过校验换取收益。这两项是候选延期，不能表述为已完成缓存复用。

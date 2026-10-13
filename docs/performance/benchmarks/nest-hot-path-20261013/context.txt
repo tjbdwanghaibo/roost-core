@@ -1,0 +1,41 @@
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=enqueue result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=0s remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=dispatch_start result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=0s remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=dispatch_done result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=587.167µs remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=dispatch_start result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=0s remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=enqueue result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=0s remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=dispatch_done result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=99.334µs remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=enqueue result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=0s remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=dispatch_start result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=0s remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=dispatch_done result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=96.5µs remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=dispatch_start result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=0s remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=enqueue result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=0s remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=dispatch_done result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=109.125µs remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=enqueue result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=0s remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=dispatch_start result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=0 cost=0s remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+2026/10/13 12:13:44 INFO nest trace event title=nest_trace trace_id=trace-nest-test reason=test event=dispatch_done result=ok handler=test_nest_trace_context type=Single key=106465 tid=106465 tids=0 groups=0 cost_ms=1 cost=1.287458ms remote=false source=player_protocol player=777 msg_id=13003 seq=9 tags=map[player_id:777]
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=false-10         	   67881	      3154 ns/op	    1546 B/op	      40 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=false-10         	   74916	      3160 ns/op	    1546 B/op	      40 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=false-10         	   75488	      3102 ns/op	    1545 B/op	      40 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=false-10         	   76560	      3241 ns/op	    1546 B/op	      40 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=false-10         	   77130	      3190 ns/op	    1546 B/op	      40 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=true-10          	   91117	      2675 ns/op	    1166 B/op	      35 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=true-10          	   92846	      2665 ns/op	    1166 B/op	      35 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=true-10          	   91003	      2590 ns/op	    1166 B/op	      35 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=true-10          	   90633	      2673 ns/op	    1166 B/op	      35 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=true-10          	   89565	      2607 ns/op	    1166 B/op	      35 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=false-10         	   60528	      3889 ns/op	    2069 B/op	      48 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=false-10         	   60662	      3933 ns/op	    2069 B/op	      48 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=false-10         	   61669	      3917 ns/op	    2068 B/op	      48 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=false-10         	   60489	      3941 ns/op	    2069 B/op	      48 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=false-10         	   59620	      3933 ns/op	    2069 B/op	      48 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=true-10          	   75326	      3244 ns/op	    1689 B/op	      43 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=true-10          	   73378	      3294 ns/op	    1690 B/op	      43 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=true-10          	   71084	      3207 ns/op	    1689 B/op	      43 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=true-10          	   74692	      3302 ns/op	    1689 B/op	      43 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=true-10          	   76042	      3201 ns/op	    1689 B/op	      43 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	6.599s

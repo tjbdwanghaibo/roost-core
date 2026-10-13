@@ -311,3 +311,37 @@ func awaitChan[T any](t *testing.T, ch <-chan T, what string) T {
 		return zero
 	}
 }
+
+func TestCurrentDispatchMessageNestedScopes(t *testing.T) {
+	first, second := &Msg{Name: "first"}, &Msg{Name: "second"}
+	func() {
+		release := pushCurrentNestDispatchMsg(first)
+		defer release()
+		func() {
+			same := pushCurrentNestDispatchMsg(first)
+			defer same()
+			func() {
+				defer func() {
+					if recover() != "nested" {
+						t.Error("missing nested panic")
+					}
+				}()
+				other := pushCurrentNestDispatchMsg(second)
+				defer other()
+				if currentNestDispatchMsg() != second {
+					t.Error("nested identity")
+				}
+				panic("nested")
+			}()
+			if currentNestDispatchMsg() != first {
+				t.Error("outer identity not restored")
+			}
+		}()
+		if currentNestDispatchMsg() != first {
+			t.Error("same-message scope removed outer identity")
+		}
+	}()
+	if currentNestDispatchMsg() != nil {
+		t.Fatal("message identity leaked")
+	}
+}

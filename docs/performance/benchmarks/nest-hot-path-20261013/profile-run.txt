@@ -1,0 +1,7 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkClientRequestMulti-10    	  251959	      5561 ns/op	    2258 B/op	      47 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	2.098s
