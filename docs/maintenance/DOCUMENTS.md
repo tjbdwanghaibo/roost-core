@@ -65,6 +65,7 @@
 - [STABLE-v1.24.0.md](../performance/STABLE-v1.24.0.md)：v1.24.0 稳定版性能验收
 - [GATE-AOI.md](../performance/GATE-AOI.md)：Gate、Nest 与 Block AOI 性能验证
 - [NEST-DISPATCH-BENCHMARK.md](../performance/NEST-DISPATCH-BENCHMARK.md)：Nest 共享调度与按 ID 分片的对照基准（池名为当时的 fast/slow）
+- [V1260-HEAVY-20261013.md](../performance/V1260-HEAVY-20261013.md)：v1.26.0 发布后同参数 15 分钟重档复测（通过）与上一样本对照
 - [REVIEW-20261012.md](../performance/REVIEW-20261012.md)：2026-10-12 新增提交的修复与性能验证、合批测试修复证据
 - [NEST-HOT-PATH-20261013.md](../performance/NEST-HOT-PATH-20261013.md)：Nest 六项局部优化的分批对照、矩阵与配置入口修复
 - [benchmarks/](../performance/benchmarks/)：随仓原始样本（大型本地产物归忽略的 `artifacts/`）
