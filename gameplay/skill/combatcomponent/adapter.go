@@ -11,64 +11,53 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
 )
 
-// Resolver locates the combat component for a skill entity id. The entity
-// must already be locked by the caller (skill.Host methods run under the
-// Runtime lock inside a nest handler, which holds the entity locks).
+// Resolver 按 skill 实体 ID 找到战斗组件。实体必须已由调用方加锁（skill.Host 的方法在 nest handler 内、Runtime
+// 的锁下运行，handler 持有实体锁）。
 // 来源（含吸血）、目标和 buff 迁移目的实体都须在 Nest 声明目标或 Cast 动态纳入的范围内；
 // Resolver 只查已持锁对象，不自动上锁，也不替未 CaptureEntities 的实体建立 state 回滚快照。
 type Resolver interface {
 	CombatComponent(id skill.EntityID) (*CombatComponent, bool)
 }
 
-// RevisionSource owns the world revision and the host event stream.
+// RevisionSource 持有世界 revision 与 Host 事件流。
 type RevisionSource interface {
 	CurrentRevision() skill.WorldRevision
-	// CommitEffect advances the revision once and appends the events in
-	// order, returning the receipt for the mutation.
+	// CommitEffect 把 revision 推进一次并按顺序追加事件，返回这次修改的回执。
 	CommitEffect(events []EffectEvent) skill.CommitReceipt
 }
 
-// EffectEvent is one host event an effect produced.
+// EffectEvent 是一次效果产生的一条 Host 事件。
 type EffectEvent struct {
 	Kind    string
 	Entity  skill.EntityID
 	Context skill.EventContext
 }
 
-// HostAdapter implements the combat effect surface of skill.Host over
-// combat components: damage, heal, and shield commands, attribute and
-// resource reads, and cost payment. Embed it in a business Host and delegate
-// the commands it recognizes; world queries (Select), motion, spawns, and
-// summoning stay with the business host. It follows the MemoryHost event
-// vocabulary (damage_resolved, combat_hook_*, shield_absorbed, ...) so proc
-// filters behave identically on both hosts.
+// HostAdapter 在战斗组件之上实现 skill.Host 的战斗效果部分：伤害、治疗与护盾命令，属性与资源读取，以及费用支付。
+// 把它嵌进业务 Host，由业务 Host 把它认得的命令委托过来；世界查询（Select）、运动、衍生物与召唤留在业务 Host。
+// 它沿用 MemoryHost 的事件词表（damage_resolved、combat_hook_*、shield_absorbed 等），proc 过滤在两种 Host 上
+// 行为一致。
 type HostAdapter struct {
 	Resolver Resolver
 	Revision RevisionSource
-	// Committer is required only when the adapter is invoked outside an
-	// existing Nest transaction; that path uses RunDetachedTransaction.
+	// Committer 只在不处于已有 Nest 事务里调用适配器时才需要；那条路径用 RunDetachedTransaction。
 	Committer nest.TransactionCommitter
-	// Catalog supplies attribute quantities for reads and the critical tag.
+	// Catalog 提供读取用的属性量纲与暴击标签。
 	Catalog skill.GameplayCatalog
-	// SpellTag marks damage commands carrying it as spell damage; zero
-	// disables spell-shield interception.
+	// SpellTag：带这个标签的伤害命令算作法术伤害；零值关闭法术护盾拦截。
 	SpellTag skill.GameplayTagHandle
-	// CriticalTag is appended to damage event tags on critical hits.
+	// CriticalTag 在暴击时追加到伤害事件的标签里。
 	CriticalTag skill.GameplayTagHandle
-	// Hooks supplies combat-hook interceptors for one damage instance; nil
-	// disables status-driven hooks.
+	// Hooks 为一次伤害实例提供战斗钩子拦截器；nil 关闭由状态驱动的钩子。
 	Hooks func(source, target skill.EntityID) combat.Hooks
-	// ResourceAttribute maps a resource to the attribute channel that backs
-	// it; required for PayCosts, resource reads, and resource commands.
+	// ResourceAttribute 把资源映射到承载它的属性通道；PayCosts、资源读取与资源命令都需要它。
 	ResourceAttribute func(resource string, handle skill.ResourceHandle) (combat.AttributeID, bool)
-	// Status, when set, extends Apply to the status-domain commands
-	// (StatusCommand, RemoveStatusCommand, DispelStatusCommand,
-	// AttributeModifierCommand) through a StatusBridge.
+	// Status 设置时，Apply 经 StatusBridge 额外处理状态域命令（StatusCommand、RemoveStatusCommand、
+	// DispelStatusCommand、AttributeModifierCommand）。
 	Status *StatusBridge
 }
 
-// Apply handles a combat effect command. handled=false means the payload is
-// not a combat command and the business host must process it.
+// Apply 处理一条战斗效果命令。handled=false 表示载荷不是战斗命令，业务 Host 必须自己处理。
 func (adapter *HostAdapter) Apply(command skill.EffectCommand) (skill.EffectResult, bool, error) {
 	if nest.CurrentRollbackTx() == nil && adapter.handlesMutation(command) {
 		value, err := nest.RunDetachedTransaction(context.Background(), adapter.Committer, "combat_host_apply", func() (any, error) {
@@ -117,10 +106,8 @@ func (adapter *HostAdapter) handlesMutation(command skill.EffectCommand) bool {
 	}
 }
 
-// applyResource lands a resource gain/spend/set on the mapped attribute
-// base, with the MemoryHost's semantics: spend/sub fails atomically on
-// insufficient funds, negative results are rejected, and a no-op change
-// commits nothing.
+// applyResource 把资源的增加 / 花费 / 设置落到映射属性的 base 上，语义与 MemoryHost 相同：余额不足时 spend / sub
+// 原子失败，结果为负时拒绝，没有变化时什么也不提交。
 func (adapter *HostAdapter) applyResource(command skill.ResourceCommand) (skill.EffectResult, error) {
 	component, ok := adapter.Resolver.CombatComponent(command.Target)
 	if !ok {
@@ -289,12 +276,9 @@ func (adapter *HostAdapter) applyShield(command skill.ShieldCommand) (skill.Effe
 	return skill.EffectResult{Commit: receipt, Payload: skill.ShieldEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.ShieldResult{Added: added}}}, nil
 }
 
-// HostCapabilities declares the part of the skill host capability table
-// (B3 ③) this adapter implements: the readable attributes of Catalog, the
-// Catalog resources that ResourceAttribute maps, the four resource
-// operations, and — with a StatusBridge — the add / mul_bp attribute
-// modifiers. Spawns, motion, and summons belong to the business host, which
-// declares its own part and merges both with skill.MergeHostCapabilities.
+// HostCapabilities 声明这个适配器实现的那部分 skill Host 能力表：Catalog 里可读的属性、ResourceAttribute 映射到的
+// Catalog 资源、四种资源操作，以及（有 StatusBridge 时）add / mul_bp 属性修正。衍生物、运动与召唤属于业务 Host，
+// 由业务 Host 声明自己的部分，再用 skill.MergeHostCapabilities 合并两者。
 func (adapter *HostAdapter) HostCapabilities() skill.HostCapabilityTable {
 	table := skill.CatalogHostCapabilities(adapter.Catalog)
 	mapped := make([]string, 0, len(table.Resources))
@@ -316,9 +300,7 @@ func (adapter *HostAdapter) HostCapabilities() skill.HostCapabilityTable {
 	return table
 }
 
-// readableAttribute reports whether Catalog declares the handle readable.
-// Reads outside the capability table fail instead of returning the zero an
-// unknown combat attribute channel holds.
+// readableAttribute 报告 Catalog 是否声明该句柄可读。能力表之外的读取直接失败，而不是返回未知战斗属性通道里的零值。
 func (adapter *HostAdapter) readableAttribute(handle skill.AttributeHandle) bool {
 	for _, entry := range adapter.Catalog.Attributes.Entries {
 		if entry.Handle == handle {
@@ -328,9 +310,9 @@ func (adapter *HostAdapter) readableAttribute(handle skill.AttributeHandle) bool
 	return false
 }
 
-// Read answers attribute and resource reads from component state.
+// Read 从组件状态回答属性与资源读取。
 // 资源读返回可支付的 base 池；属性读返回包含修饰的 Current，两者不能混用。
-// handled=false means the payload is not a combat read.
+// handled=false 表示载荷不是战斗读取。
 func (adapter *HostAdapter) Read(request skill.ReadRequest) (skill.ReadResult, bool, error) {
 	switch payload := request.Payload.(type) {
 	case skill.AttributeRead:
@@ -357,8 +339,7 @@ func (adapter *HostAdapter) Read(request skill.ReadRequest) (skill.ReadResult, b
 	return skill.ReadResult{}, false, nil
 }
 
-// PayCosts atomically validates and deducts every entry against the mapped
-// attribute bases: either every entry is paid or nothing changes.
+// PayCosts 原子地按映射属性的 base 校验并扣除每一项：要么全部支付，要么什么都不变。
 func (adapter *HostAdapter) PayCosts(payment skill.CostPayment) (skill.CommitReceipt, error) {
 	if nest.CurrentRollbackTx() == nil {
 		value, err := nest.RunDetachedTransaction(context.Background(), adapter.Committer, "combat_host_pay_costs", func() (any, error) {

@@ -1,22 +1,14 @@
-// Package combatcomponent wires the combat content battery into roost-core
-// entities: the CombatDao holds the authoritative combat state behind a
-// dataengine.Tracker, and the CombatComponent exposes mutators that are
-// transaction-safe inside nest handlers. Every mutation goes through the DAO:
-// the DAO records the inverse of its own fields (rollback=undo) or is
-// restored from its snapshot (rollback=state) and marks field-level dirty
-// bits, so a rolled-back handler leaves the entity byte-identical and
-// persistence sees exactly what committed. The component registers no undo
-// of its own: rollback is the DAO's rollback (A1, maintainer 2026-10-05).
+// Package combatcomponent 把战斗内容组件接进 roost-core 实体：CombatDao 在 dataengine.Tracker 背后持有权威战斗
+// 状态，CombatComponent 提供在 nest handler 内事务安全的修改方法。每次修改都经过 DAO：DAO 记录自己字段的逆操作
+// （rollback=undo）或从快照恢复（rollback=state），并标记字段级脏位；回滚后的 handler 让实体逐字节恢复原样，
+// 持久化看到的正好是提交的内容。组件自己不登记任何撤销：回滚就是 DAO 的回滚。
 //
-// The component is deliberately owner-agnostic: generated entity factories
-// construct the DAO, register it with the entity's DaoManager (it implements
-// entity.DaoInterface, the nest dirty-tracker contract, and
-// entity.PersistedDaoLoader), and hand it to NewCombatComponent.
+// 组件刻意与拥有者无关：生成的实体工厂构造 DAO，把它注册到实体的 DaoManager（它实现 entity.DaoInterface、
+// nest 脏标记契约与 entity.PersistedDaoLoader），再交给 NewCombatComponent。
 //
-// 属性 → 伤害字段的投影交给业务（维护者第十二轮决定，skill O2）：伤害管线读 Combatant 的
-// 平铺字段（Armor、DamageTakenBP…），buff 与属性修饰只改 AttributeSet。业务用
-// ProjectAttributes 给出“哪个属性写到哪个字段”，组件在每次改了属性来源（属性 base、buff）
-// 的同一事务里把投影写进 DAO 的 vitals，回滚随 DAO 一起恢复（A1 的派生值规则）。
+// 属性 → 伤害字段的投影交给业务：伤害管线读 Combatant 的平铺字段（Armor、DamageTakenBP…），buff 与属性修饰只改
+// AttributeSet。业务用 ProjectAttributes 给出“哪个属性写到哪个字段”，组件在每次改了属性来源（属性 base、buff）的
+// 同一事务里把投影写进 DAO 的 vitals，回滚随 DAO 一起恢复（派生值规则）。
 package combatcomponent
 
 import (
@@ -32,20 +24,20 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
 )
 
-// CollectionName is the default persistence collection for combat state.
+// CollectionName 是战斗状态默认的持久化集合。
 const CollectionName = "combat_state"
 
-// combatSchemaVersion versions the persisted payload for forward migration.
+// combatSchemaVersion 是持久化载荷的版本，用于向前迁移。
 const combatSchemaVersion uint32 = 2
 
-// Field-level dirty-mask bits.
+// 字段级脏位。
 const (
-	FieldVitals     uint64 = 1 << 0 // the Combatant block: health, shield, life state, avoidance facts, and the fields ProjectAttributes writes
-	FieldAttributes uint64 = 1 << 1 // attribute base values and bounds
-	FieldBuffs      uint64 = 1 << 2 // buff container (and its attribute grants)
+	FieldVitals     uint64 = 1 << 0 // Combatant 块：生命、护盾、存活状态、闪避事实，以及 ProjectAttributes 写的字段
+	FieldAttributes uint64 = 1 << 1 // 属性基础值与上下界
+	FieldBuffs      uint64 = 1 << 2 // buff 容器（及其属性授予）
 )
 
-// CombatDao is the persistence-facing holder of an entity's combat state.
+// CombatDao 是面向持久化的实体战斗状态持有者。
 type CombatDao struct {
 	id      int64
 	dbName  string
@@ -57,15 +49,14 @@ type CombatDao struct {
 	buffs      *combat.BuffContainer
 }
 
-// NewCombatDao builds an empty DAO for the entity's storage id. The dbName
-// is the logical database the storage service resolves ("game" by default in
-// generated factories).
+// NewCombatDao 为实体的存储 ID 构造空 DAO。dbName 是存储服务解析的逻辑库名（生成的工厂默认 "game"）。
 func NewCombatDao(id int64, dbName string) *CombatDao {
 	dao := &CombatDao{id: id, dbName: dbName, coll: CollectionName, attributes: combat.NewAttributeSet(), buffs: combat.NewBuffContainer()}
 	dao.buffs.LinkAttributes(dao.attributes)
 	return dao
 }
 
+// 以下访问器实现 entity.DaoInterface 与 nest 脏标记契约。
 func (dao *CombatDao) Id() int64                         { return dao.id }
 func (dao *CombatDao) SetId(id int64)                    { dao.id = id }
 func (dao *CombatDao) DbName() string                    { return dao.dbName }
@@ -81,7 +72,7 @@ type persistedCombatState struct {
 	Buffs      combat.BuffContainerState   `json:"buffs" bson:"buffs"`
 }
 
-// MarshalPersisted serializes the full combat state for storage.
+// MarshalPersisted 序列化完整的战斗状态以供存储。
 func (dao *CombatDao) MarshalPersisted() ([]byte, uint32, error) {
 	payload, err := bson.Marshal(dao.persistedState())
 	if err != nil {
@@ -90,7 +81,7 @@ func (dao *CombatDao) MarshalPersisted() ([]byte, uint32, error) {
 	return payload, combatSchemaVersion, nil
 }
 
-// RestorePersisted implements entity.PersistedDaoLoader.
+// RestorePersisted 实现 entity.PersistedDaoLoader。
 func (dao *CombatDao) RestorePersisted(raw []byte, schemaVersion uint32, version uint64) error {
 	if schemaVersion > combatSchemaVersion {
 		return fmt.Errorf("combatcomponent: schema version %d is newer than supported %d", schemaVersion, combatSchemaVersion)
@@ -117,10 +108,10 @@ func (dao *CombatDao) RestorePersisted(raw []byte, schemaVersion uint32, version
 	return nil
 }
 
+// SchemaVersion 返回持久化载荷的当前 schema 版本。
 func (*CombatDao) SchemaVersion() uint32 { return combatSchemaVersion }
 
-// Migrate converts the legacy schema-1 JSON payload into the BSON document
-// owned by Data Engine. Later schema steps must be added explicitly.
+// Migrate 把旧的 schema-1 JSON 载荷转换成 Data Engine 持有的 BSON 文档。之后的 schema 步骤必须显式添加。
 func (dao *CombatDao) Migrate(raw []byte, from uint32) ([]byte, error) {
 	if from != 1 || combatSchemaVersion != 2 {
 		return nil, fmt.Errorf("combatcomponent: unsupported migration %d -> %d", from, combatSchemaVersion)
@@ -133,6 +124,7 @@ func (dao *CombatDao) Migrate(raw []byte, from uint32) ([]byte, error) {
 	return bson.Marshal(state)
 }
 
+// PrepareMutation 按本次变更的字段掩码生成带期望版本的补丁写入（bson-v2 编码）。
 func (dao *CombatDao) PrepareMutation(change nest.PersistChange) (dataengine.Mutation, error) {
 	version := dao.tracker.Version()
 	mutation := dataengine.Mutation{
@@ -174,12 +166,12 @@ func (dao *CombatDao) PrepareMutation(change nest.PersistChange) (dataengine.Mut
 	return mutation, nil
 }
 
+// AcceptMutation 在写入被存储确认后推进 tracker 的版本。
 func (dao *CombatDao) AcceptMutation(mutation dataengine.Mutation) error {
 	return dao.tracker.AcceptVersion(mutation.ExpectedVersion, mutation.NextVersion)
 }
 
-// CaptureRollbackState and RestoreRollbackState implement the nest
-// state-rollback contract for RollbackState-policy handlers.
+// CaptureRollbackState 与 RestoreRollbackState 为 RollbackState 策略的 handler 实现 nest 状态回滚契约。
 func (dao *CombatDao) CaptureRollbackState() ([]byte, error) {
 	return json.Marshal(dao.persistedState())
 }
@@ -211,14 +203,10 @@ func (dao *CombatDao) applyState(state persistedCombatState) error {
 	return nil
 }
 
-// CombatComponent is the behavior wrapper generated entity factories attach
-// to an entity. Its only state is its DAO; the optional attribute projection
-// is business code, not state. All mutators must run inside a nest
-// transaction: the DAO joins each changed field to it (its own inverse under
-// rollback=undo, the snapshot under rollback=state), and a mutator called
-// outside one panics before changing anything. ProjectAttributes is the one
-// exception — it may be installed at construction, outside a transaction.
-// Reads are safe anywhere the entity lock is held.
+// CombatComponent 是生成的实体工厂挂到实体上的行为包装。它唯一的状态是 DAO；可选的属性投影是业务代码，不是状态。
+// 所有修改方法都必须在 nest 事务内运行：DAO 把每个改动的字段加入事务（rollback=undo 下是它自己的逆操作，
+// rollback=state 下是快照），在事务外调用时在改动任何东西之前 panic。ProjectAttributes 是唯一的例外——可以在构造时、
+// 事务之外安装。只要持有实体锁，读取在哪里都安全。
 type CombatComponent struct {
 	dao        *CombatDao
 	projection AttributeProjection
@@ -231,12 +219,13 @@ type CombatComponent struct {
 // 属性值写出同样的字段，不读外部可变状态。
 type AttributeProjection func(attribute func(combat.AttributeID) int64, combatant *combat.Combatant)
 
+// NewCombatComponent 用已注册到实体 DaoManager 的 DAO 构造组件。
 func NewCombatComponent(dao *CombatDao) *CombatComponent { return &CombatComponent{dao: dao} }
 
 func (component *CombatComponent) Name() string { return "combat" }
 
-// OnInitFinish 在实体建好（新建或从存储加载）后投影一次：存储里的 vitals 是上次提交时
-// 的投影结果，投影函数可能已随版本改变（A1 的“加载”触发点）。
+// OnInitFinish 在实体建好（新建或从存储加载）后投影一次：存储里的 vitals 是上次提交时的投影结果，投影函数可能已随
+// 版本改变（“加载”触发点）。
 func (component *CombatComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
 	component.deriveProjection()
 	return nil
@@ -253,12 +242,10 @@ func (component *CombatComponent) ProjectAttributes(projection AttributeProjecti
 	component.deriveProjection()
 }
 
-// deriveProjection 是写投影字段的唯一入口（A1：派生值是 DAO 字段，由组件里唯一的 derive
-// 在加载与改源字段的事务里写；回滚不是触发点）。投影写在 vitals 上：事务里经
-// beginChange / markChanged，与源字段同一笔逆操作 / 快照，handler 失败或提交被拒时随
-// DAO 回到事务开始时的值，不需要重算。不在事务里（加载、构造时安装）直接写内存，不登记
-// 逆操作、不标脏——与存储里的值只在投影函数变了时不同，下一次 vitals 提交写回。
-// 结果与现值相同时什么都不做，不产生持久写。
+// deriveProjection 是写投影字段的唯一入口（派生值是 DAO 字段，由组件里唯一的 derive 在加载与改源字段的事务里写；
+// 回滚不是触发点）。投影写在 vitals 上：事务里经 beginChange / markChanged，与源字段同一笔逆操作 / 快照，handler
+// 失败或提交被拒时随 DAO 回到事务开始时的值，不需要重算。不在事务里（加载、构造时安装）直接写内存，不登记逆操作、
+// 不标脏——与存储里的值只在投影函数变了时不同，下一次 vitals 提交写回。结果与现值相同时什么都不做，不产生持久写。
 func (component *CombatComponent) deriveProjection() {
 	if component.projection == nil {
 		return
@@ -278,17 +265,13 @@ func (component *CombatComponent) deriveProjection() {
 	dao.markChanged(FieldVitals)
 }
 
-// Combatant returns a copy of the vitals block. The element multiplier map is
-// copied too: a shared map would let callers change authoritative state
-// outside the transaction, undo, and dirty tracking (RR-20261005-NC-113).
+// Combatant 返回 vitals 块的副本，元素倍率 map 也复制：共享 map 会让调用方绕过事务、撤销与脏标记修改权威状态。
 func (component *CombatComponent) Combatant() combat.Combatant {
 	return cloneCombatant(component.dao.combatant)
 }
 
-// cloneCombatant copies the only reference-typed field of the vitals block.
-// The DAO never mutates ElementMultipliersBP in place, so every value that
-// crosses the component boundary owning its own map keeps the stored map
-// immutable — which also keeps beginChange's shallow "before" copy of the vitals exact.
+// cloneCombatant 复制 vitals 块里唯一的引用类型字段。DAO 从不原地修改 ElementMultipliersBP，每个跨过组件边界的值都
+// 持有自己的 map，存储的 map 因此不可变——这也保证 beginChange 对 vitals 做的浅拷贝“修改前”副本是精确的。
 func cloneCombatant(combatant combat.Combatant) combat.Combatant {
 	if combatant.ElementMultipliersBP != nil {
 		multipliers := make(map[combat.Element]int64, len(combatant.ElementMultipliersBP))
@@ -300,37 +283,30 @@ func cloneCombatant(combatant combat.Combatant) combat.Combatant {
 	return combatant
 }
 
-// AttributeCurrent resolves an attribute's effective value.
+// AttributeCurrent 返回属性的有效值。
 func (component *CombatComponent) AttributeCurrent(id combat.AttributeID) int64 {
 	return component.dao.attributes.Current(id)
 }
 
-// AttributeBase reads an attribute's base value.
+// AttributeBase 读取属性的基础值。
 func (component *CombatComponent) AttributeBase(id combat.AttributeID) int64 {
 	return component.dao.attributes.Base(id)
 }
 
-// ActiveBuffs lists the live buff instances in application order.
+// ActiveBuffs 按施加顺序列出生效中的 buff 实例。
 func (component *CombatComponent) ActiveBuffs() []combat.BuffInstance {
 	return component.dao.buffs.Active()
 }
 
-// HasBuffTag reports whether any active buff carries the tag.
+// HasBuffTag 报告是否有生效中的 buff 带该标签。
 func (component *CombatComponent) HasBuffTag(tag combat.Tag) bool {
 	return component.dao.buffs.HasTag(tag)
 }
 
-// beginChange makes the fields in mask part of the running transaction before
-// the first change to them. It is the DAO's own half of every mutation, the
-// same shape as a generated DAO setter: the DAO records the inverse of its
-// own state, so the component that drives it registers nothing (A1,
-// maintainer 2026-10-05: rollback is the DAO's rollback;
-// docs/feature/REFACTOR-2026-10-05-dao-unified-rollback.md). Under
-// rollback=undo each field records once per transaction (Nest keeps the
-// first inverse per DAO and field), so the inverse restores transaction-start
-// state however many mutations follow; under rollback=state the DAO snapshot
-// covers it and nothing is recorded. Outside a transaction it panics before
-// anything changes.
+// beginChange 在 mask 里的字段第一次改动之前把它们加入当前事务。它是每次修改里 DAO 自己的那一半，形状与生成的
+// DAO setter 相同：DAO 记录自己状态的逆操作，驱动它的组件不登记任何东西（回滚就是 DAO 的回滚）。rollback=undo 下
+// 每个字段每个事务只记录一次（Nest 对每个 DAO 与字段保留第一个逆操作），无论之后有多少次修改，逆操作都恢复到事务
+// 开始时的状态；rollback=state 下由 DAO 快照覆盖，不记录任何东西。在事务外调用时，在改动任何东西之前 panic。
 func (dao *CombatDao) beginChange(mask uint64) {
 	tx := nest.CurrentRollbackTx()
 	if tx == nil {
@@ -356,12 +332,10 @@ func (dao *CombatDao) beginChange(mask uint64) {
 	if mask&FieldBuffs != 0 && !tx.HasUndo(dao, FieldBuffs) {
 		before := dao.buffs.State()
 		nest.RecordUndo(dao, FieldBuffs, func() error {
-			// Revoke the grants of whatever is active now, then rebuild the
-			// container; relinking re-grants the restored instances.
+			// 先撤销当前生效 buff 的授予，再重建容器；重新关联时会重新授予恢复出的实例。
 			restored, err := combat.RestoreBuffContainer(before)
 			if err != nil {
-				// before is a State() of a live container, which satisfies the
-				// invariants by construction; failing here means memory corruption.
+				// before 是活容器的 State()，按构造满足不变量；这里失败意味着内存损坏。
 				return err
 			}
 			for _, instance := range dao.buffs.Active() {
@@ -374,7 +348,7 @@ func (dao *CombatDao) beginChange(mask uint64) {
 	}
 }
 
-// markChanged marks the fields in mask for persistence and replication.
+// markChanged 标记 mask 里的字段待持久化与复制。
 func (dao *CombatDao) markChanged(mask uint64) {
 	if err := nest.MarkPersist(dao, mask); err != nil {
 		panic(fmt.Errorf("combatcomponent: mark persistence: %w", err))
@@ -382,9 +356,8 @@ func (dao *CombatDao) markChanged(mask uint64) {
 	dao.tracker.MarkSync(mask)
 }
 
-// InitCombatant replaces the vitals block (spawn/config load). The caller's
-// element multiplier map is copied, so a template shared across entities
-// stays independent of every stored combatant (RR-20261005-NC-113).
+// InitCombatant 替换 vitals 块（生成 / 加载配置时）。调用方的元素倍率 map 被复制，跨实体共享的模板与每个存储的
+// 战斗单位相互独立。
 func (component *CombatComponent) InitCombatant(combatant combat.Combatant) {
 	component.dao.beginChange(FieldVitals)
 	component.dao.combatant = cloneCombatant(combatant)
@@ -392,7 +365,7 @@ func (component *CombatComponent) InitCombatant(combatant combat.Combatant) {
 	component.deriveProjection()
 }
 
-// SetAttributeBase sets an attribute's base value.
+// SetAttributeBase 设置属性的基础值。
 func (component *CombatComponent) SetAttributeBase(id combat.AttributeID, value int64) {
 	component.dao.beginChange(FieldAttributes)
 	component.dao.attributes.SetBase(id, value)
@@ -400,7 +373,7 @@ func (component *CombatComponent) SetAttributeBase(id combat.AttributeID, value 
 	component.deriveProjection()
 }
 
-// SetAttributeBounds sets an attribute's clamp bounds.
+// SetAttributeBounds 设置属性的夹取上下界。
 func (component *CombatComponent) SetAttributeBounds(id combat.AttributeID, bounds combat.AttributeBounds) {
 	component.dao.beginChange(FieldAttributes)
 	component.dao.attributes.SetBounds(id, bounds)
@@ -408,7 +381,7 @@ func (component *CombatComponent) SetAttributeBounds(id combat.AttributeID, boun
 	component.deriveProjection()
 }
 
-// ApplyBuff applies a buff at the given tick.
+// ApplyBuff 在给定 tick 施加一个 buff。
 func (component *CombatComponent) ApplyBuff(spec combat.BuffSpec, tick, source int64) (combat.BuffInstanceID, combat.BuffApplyOutcome) {
 	component.dao.beginChange(FieldBuffs)
 	id, outcome := component.dao.buffs.Apply(spec, tick, source)
@@ -419,7 +392,7 @@ func (component *CombatComponent) ApplyBuff(spec combat.BuffSpec, tick, source i
 	return id, outcome
 }
 
-// RemoveBuff drops one buff instance by id.
+// RemoveBuff 按 ID 移除一个 buff 实例。
 func (component *CombatComponent) RemoveBuff(id combat.BuffInstanceID) (combat.BuffInstance, bool) {
 	component.dao.beginChange(FieldBuffs)
 	instance, removed := component.dao.buffs.Remove(id)
@@ -430,7 +403,7 @@ func (component *CombatComponent) RemoveBuff(id combat.BuffInstanceID) (combat.B
 	return instance, removed
 }
 
-// SetBuffStacks pins a buff instance's stack count (zero removes it).
+// SetBuffStacks 固定 buff 实例的层数（0 表示移除）。
 func (component *CombatComponent) SetBuffStacks(id combat.BuffInstanceID, stacks int64) (combat.BuffInstance, bool) {
 	component.dao.beginChange(FieldBuffs)
 	instance, ok := component.dao.buffs.SetStacks(id, stacks)
@@ -441,8 +414,7 @@ func (component *CombatComponent) SetBuffStacks(id combat.BuffInstanceID, stacks
 	return instance, ok
 }
 
-// SetBuffDueTick pins a buff instance's expiry. Expiry does not change
-// attributes, so there is nothing to re-project.
+// SetBuffDueTick 固定 buff 实例的到期 tick。到期时间不影响属性，不需要重新投影。
 func (component *CombatComponent) SetBuffDueTick(id combat.BuffInstanceID, dueTick int64) (combat.BuffInstance, bool) {
 	component.dao.beginChange(FieldBuffs)
 	instance, ok := component.dao.buffs.SetDueTick(id, dueTick)
@@ -452,7 +424,7 @@ func (component *CombatComponent) SetBuffDueTick(id combat.BuffInstanceID, dueTi
 	return instance, ok
 }
 
-// AdoptBuff injects a copied or transferred instance under a fresh id.
+// AdoptBuff 以新 ID 注入一个复制或转移来的实例。
 func (component *CombatComponent) AdoptBuff(instance combat.BuffInstance) combat.BuffInstanceID {
 	component.dao.beginChange(FieldBuffs)
 	id := component.dao.buffs.Adopt(instance)
@@ -461,7 +433,7 @@ func (component *CombatComponent) AdoptBuff(instance combat.BuffInstance) combat
 	return id
 }
 
-// DispelBuffs removes up to limit buffs carrying the tag, newest first.
+// DispelBuffs 移除至多 limit 个带该标签的 buff，最新的先移除。
 func (component *CombatComponent) DispelBuffs(tag combat.Tag, limit int) []combat.BuffInstance {
 	component.dao.beginChange(FieldBuffs)
 	removed := component.dao.buffs.Dispel(tag, limit)
@@ -472,7 +444,7 @@ func (component *CombatComponent) DispelBuffs(tag combat.Tag, limit int) []comba
 	return removed
 }
 
-// TickBuffs expires due buffs and returns them.
+// TickBuffs 让到期的 buff 过期并返回它们。
 // 由业务的 Nest 心跳/定时 handler 在实体锁内调用，now 与 StatusBridge.CurrentTick 同源。
 // Runtime.Advance 不自动推进此 DAO 的 buff；重启后首次业务 tick 也需执行以清理过期记录。
 func (component *CombatComponent) TickBuffs(now int64) []combat.BuffInstance {
@@ -485,11 +457,8 @@ func (component *CombatComponent) TickBuffs(now int64) []combat.BuffInstance {
 	return expired
 }
 
-// ApplyDamage runs one damage instance against this component. A nil source
-// means world-sourced damage. Both sides' vitals join the transaction before
-// the pipeline runs; the target is marked dirty when the damage resolves, the
-// source only when a vampiric heal changed it. Damage changes no attribute, so
-// nothing is re-projected.
+// ApplyDamage 让一次伤害实例作用于这个组件。source 为 nil 表示世界来源的伤害。管线运行前双方的 vitals 都加入事务；
+// 伤害结算后标记目标为脏，来源只在吸血治疗改变了它时才标脏。伤害不改属性，不需要重新投影。
 func (component *CombatComponent) ApplyDamage(source *CombatComponent, input combat.DamageInput, hooks combat.Hooks) (combat.DamageOutcome, bool) {
 	component.dao.beginChange(FieldVitals)
 	before := component.dao.combatant
@@ -511,7 +480,7 @@ func (component *CombatComponent) ApplyDamage(source *CombatComponent, input com
 	return outcome, true
 }
 
-// Heal applies a heal capped at missing health.
+// Heal 施加以缺失生命为上限的治疗。
 func (component *CombatComponent) Heal(amount int64) (combat.HealOutcome, bool) {
 	component.dao.beginChange(FieldVitals)
 	outcome, ok := combat.ResolveHeal(&component.dao.combatant, amount)
@@ -521,7 +490,7 @@ func (component *CombatComponent) Heal(amount int64) (combat.HealOutcome, bool) 
 	return outcome, ok
 }
 
-// AddShield grants shield points.
+// AddShield 增加护盾值。
 func (component *CombatComponent) AddShield(amount int64) (int64, bool) {
 	component.dao.beginChange(FieldVitals)
 	added, ok := combat.AddShield(&component.dao.combatant, amount)

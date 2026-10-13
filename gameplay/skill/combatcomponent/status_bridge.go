@@ -10,47 +10,36 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
 )
 
-// AttributeModifierBuffID is the reserved buff definition id carrying
-// standalone AttributeModifierCommand grants. Modifier commands apply as
-// independent instances under this id (each with its own duration, matching
-// the MemoryHost's per-command modifier semantics), tagged
-// "attribute_modifier" so dispels can address or avoid them.
+// AttributeModifierBuffID 是承载独立 AttributeModifierCommand 授予的保留 buff 定义 ID。修正命令以独立实例施加在
+// 这个 ID 下（各自有持续时间，与 MemoryHost 每条命令一个修正的语义一致），并带 "attribute_modifier" 标签，驱散时
+// 可以针对或避开它们。
 const AttributeModifierBuffID combat.BuffID = 0xFFFFFFFF
 
-// AttributeModifierTag classifies bridge-created modifier instances.
+// AttributeModifierTag 给桥接创建的修正实例分类。
 const AttributeModifierTag combat.Tag = "attribute_modifier"
 
-// StatusBridge lands the skill status and attribute-modifier effect
-// commands on combat containers: StatusCommand becomes a BuffContainer
-// application driven by the status catalog entry, Remove/Dispel become
-// container removals, and AttributeModifierCommand becomes an independent
-// timed modifier grant. It follows the MemoryHost event vocabulary
-// (status_applied, status_immune, status_removed, status_dispelled,
-// attribute_modifier_applied).
+// StatusBridge 把 skill 的状态与属性修正效果命令落到战斗容器上：StatusCommand 变成按状态 catalog 条目驱动的
+// BuffContainer 施加，Remove / Dispel 变成容器移除，AttributeModifierCommand 变成独立的限时修正授予。它沿用
+// MemoryHost 的事件词表（status_applied、status_immune、status_removed、status_dispelled、
+// attribute_modifier_applied）。
 //
-// One deliberate semantic difference from the MemoryHost: mul_bp modifiers
-// aggregate additively in basis-point deltas (combat.AttributeSet's rule,
-// order-independent and exactly reversible for transaction rollback), while
-// the MemoryHost chains them multiplicatively. Two +20% modifiers yield
-// +40% here and +44% there; pick one host semantics per game and keep it.
+// 与 MemoryHost 有一处刻意的语义差异：mul_bp 修正在这里按基点增量相加（combat.AttributeSet 的规则，与顺序无关，
+// 事务回滚时精确可逆），MemoryHost 则相乘。两个 +20% 修正在这里得 +40%，在 MemoryHost 得 +44%；每个游戏选定一种
+// Host 语义并保持一致。
 type StatusBridge struct {
 	Resolver Resolver
 	Revision RevisionSource
-	// Committer backs lower-isolation calls made outside a Nest handler.
+	// Committer 承接在 Nest handler 之外发起的低隔离调用。
 	Committer nest.TransactionCommitter
-	// Catalog supplies status policies (stacking, dispel category, immunity
-	// tags, attribute modifiers, tenacity and duration caps).
+	// Catalog 提供状态策略（叠层、驱散类别、免疫标签、属性修正、韧性与时长上限）。
 	Catalog skill.GameplayCatalog
-	// CurrentTick supplies the authoritative tick durations anchor to.
+	// CurrentTick 提供权威 tick，时长以它为起点。
 	CurrentTick func() skill.Tick
-	// HasGameplayTag reports whether the target carries a gameplay tag —
-	// immunity tags are world facts the component does not own. nil disables
-	// immunity-tag checks.
+	// HasGameplayTag 报告目标是否带某个玩法标签——免疫标签是组件不拥有的世界事实。nil 关闭免疫标签检查。
 	HasGameplayTag func(target skill.EntityID, tag skill.GameplayTagHandle) bool
 }
 
-// Apply handles a status-domain effect command. handled=false means the
-// payload is not a status command and the caller must process it.
+// Apply 处理一条状态域效果命令。handled=false 表示载荷不是状态命令，调用方必须自己处理。
 func (bridge *StatusBridge) Apply(command skill.EffectCommand) (skill.EffectResult, bool, error) {
 	if nest.CurrentRollbackTx() == nil && bridge.handlesMutation(command) {
 		value, err := nest.RunDetachedTransaction(context.Background(), bridge.Committer, "combat_status_apply", func() (any, error) {
@@ -92,13 +81,10 @@ func (*StatusBridge) handlesMutation(command skill.EffectCommand) bool {
 	}
 }
 
-// modifyStatusInstance lands instance-handle operations (steal, transfer,
-// stack and duration edits) on the buff container. Instance addressing
-// contract: the opaque StatusInstanceRef id IS the combat.BuffInstanceID —
-// hosts that surface buff instances through Select must hand out the
-// container's instance ids as the opaque ids. Authorization and operation
-// gating mirror the MemoryHost matrix (SourceOwnership, Dispellable,
-// Copyable/Transferable/Stealable, DurationOperations, MaximumDurationTicks).
+// modifyStatusInstance 把实例句柄操作（偷取、转移、层数与时长修改）落到 buff 容器上。实例寻址契约：不透明的
+// StatusInstanceRef ID 就是 combat.BuffInstanceID——经 Select 暴露 buff 实例的 Host 必须把容器的实例 ID 作为
+// 不透明 ID 交出去。授权与操作门槛与 MemoryHost 的矩阵一致（SourceOwnership、Dispellable、
+// Copyable / Transferable / Stealable、DurationOperations、MaximumDurationTicks）。
 func (bridge *StatusBridge) modifyStatusInstance(command skill.ModifyStatusInstanceCommand) (skill.EffectResult, error) {
 	component, ok := bridge.Resolver.CombatComponent(command.Status.Target)
 	if !ok {
@@ -282,8 +268,7 @@ func (bridge *StatusBridge) statusPolicy(handle skill.StatusHandle) (skill.Statu
 	return skill.StatusCatalogEntry{}, false
 }
 
-// buffSpec translates a status catalog entry plus one application command
-// into the combat.BuffSpec the container applies.
+// buffSpec 把一条状态 catalog 条目加一次施加命令翻译成容器施加用的 combat.BuffSpec。
 func buffSpec(policy skill.StatusCatalogEntry, command skill.StatusCommand) combat.BuffSpec {
 	spec := combat.BuffSpec{
 		ID:               combat.BuffID(policy.Handle),
@@ -306,14 +291,13 @@ func buffSpec(policy skill.StatusCatalogEntry, command skill.StatusCommand) comb
 		spec.StackPolicy = combat.BuffIgnore
 	case "extend":
 		spec.StackPolicy = combat.BuffExtend
-	default: // "", "refresh", and "replace" (replace removes first, below)
+	default: // ""、"refresh" 与 "replace"（replace 先移除，见下）
 		spec.StackPolicy = combat.BuffRefresh
 	}
 	for _, modifier := range policy.AttributeModifiers {
 		translated := combat.Modifier{Attribute: combat.AttributeID(modifier.Attribute)}
 		if modifier.Operation == "mul_bp" {
-			// Catalog mul_bp values are absolute rates (12000 = ×1.2); the
-			// AttributeSet aggregates additive deltas (+2000).
+			// catalog 里的 mul_bp 是绝对比率（12000 = ×1.2）；AttributeSet 聚合的是加法增量（+2000）。
 			translated.RateBP = modifier.Value - combat.BasisPointScale
 		} else {
 			translated.Flat = modifier.Value
