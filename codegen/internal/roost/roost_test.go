@@ -191,8 +191,6 @@ func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
 	for _, module := range []string{"core", "kit", "skill"} {
 		raw = bytes.Replace(raw, []byte("  "+module+": latest"), []byte("  "+module+": v1.0.0"), 1)
 	}
-	// An old manifest still pins the retired versions.codegen; upgrade drops it.
-	raw = bytes.Replace(raw, []byte("kit: v1.0.0\n"), []byte("kit: v1.0.0\n    codegen: v1.0.0\n"), 1)
 	if err := os.WriteFile(manifestPath, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -207,9 +205,6 @@ func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
 	var preview bytes.Buffer
 	if err := Run([]string{"project", "upgrade", "--root", root, "--dry-run", "-core", "latest", "-kit", "latest"}, &preview, io.Discard); err != nil {
 		t.Fatalf("preview legacy upgrade: %v", err)
-	}
-	if !strings.Contains(preview.String(), "dropped versions.codegen v1.0.0") {
-		t.Fatalf("upgrade preview did not report dropping versions.codegen:\n%s", preview.String())
 	}
 	if !strings.Contains(preview.String(), "roost.yaml") || !strings.Contains(preview.String(), "Makefile") {
 		t.Fatalf("upgrade preview did not report manifest and Makefile:\n%s", preview.String())
@@ -236,7 +231,6 @@ func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
 		t.Fatalf("legacy manifest did not receive production CI/CD defaults: %+v", manifest.CICD)
 	}
 	mergeVersions(&manifest.Versions, VersionSpec{Core: "latest", Kit: "latest", Skill: "latest"})
-	manifest.Versions.Codegen = "" // what upgrade does, asserted on the preview above
 	if err := saveManifest(root, manifest); err != nil {
 		t.Fatalf("save upgraded manifest: %v", err)
 	}
@@ -1198,7 +1192,7 @@ func TestProductionRenderingIncludesDurabilityAndTopologyGuards(t *testing.T) {
 	if !strings.Contains(compose, `"-sd", "/data"`) || !strings.Contains(compose, "mongo-data:/data/db") {
 		t.Fatalf("development dependencies are not durable:\n%s", compose)
 	}
-	if m.Versions.Core != "latest" || m.Versions.Kit != "latest" || m.Versions.Skill != "" || m.Versions.Service != "" || m.Versions.Codegen != "" {
+	if m.Versions.Core != "latest" || m.Versions.Kit != "latest" || m.Versions.Skill != "" || m.Versions.Service != "" {
 		t.Fatalf("latest version policy defaults = %+v", m.Versions)
 	}
 }
@@ -1501,7 +1495,7 @@ func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
 	manifestGuide := string(plan["docs/ROOST_YAML.zh-CN.md"].Body)
 	for _, want := range []string{
 		"schema", "project.name", "project.module", "versions.core", "versions.kit",
-		"versions.codegen 已废弃", "shared_mods", "services.<name>.mods",
+		"versions.codegen 已退役", "shared_mods", "services.<name>.mods",
 		"cicd.provider", "cicd.registry", "cicd.environments", "cicd.deploy",
 		"access.player.service", "features", "sagas", "ids", "groups", "min", "max", "完整示例",
 		"Feature 和 Mod 必须分别理解", "roost id next protocol -group game",

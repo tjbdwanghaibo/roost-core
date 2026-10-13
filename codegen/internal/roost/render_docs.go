@@ -363,7 +363,7 @@ name 是运行与部署身份；module 是 Go import 前缀。仓库目录名可
 | versions.core | roost-core 依赖解析 | %s | latest 或 %s |
 | versions.kit | roost-kit 依赖解析 | %s | latest 或 %s |
 
-生成器随 roost-core 发布，Makefile 按 versions.core 运行它；versions.codegen 已废弃，写了会被拒绝（roost project upgrade 会删掉它）。
+生成器随 roost-core 发布，Makefile 按 versions.core 运行它；versions.codegen 已退役，写了会被拒绝，需要手工删掉这一行。
 
 latest 是持续更新策略，不会原样写进 go.mod。project deps 会在同级临时项目联合解析 core、kit，
 只把本次选中的具体版本写入 go.mod/go.sum；失败或并发变化不覆盖原文件，这样一次测试和发布仍然

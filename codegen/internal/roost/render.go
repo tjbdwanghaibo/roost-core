@@ -1371,9 +1371,9 @@ func renderUsage(m Manifest) string {
 
 ## 框架版本策略
 
-core、kit、skill、codegen 默认都是 latest。roost project new/sync/deps 会把前三者作为直接依赖在一条 go get 命令中联合解析，随后执行 go mod tidy。go.mod 不支持 latest 查询值，所以它保存本次实际解析出的具体版本，roost.yaml 保存持续跟随 latest 的策略。这样既避免下游依赖把 core/kit 降级，也保证同一次测试和发布使用确定的依赖图。
+versions.core 与 versions.kit 默认都是 latest。框架只有 roost-core 一个模块（kit、skill、生成器都是其中的包），roost project new/sync/deps 只把它作为直接依赖解析，随后执行 go mod tidy；Makefile 按 versions.core 运行生成器。go.mod 不支持 latest 查询值，所以它保存本次实际解析出的具体版本，roost.yaml 保存持续跟随 latest 的策略，同一次测试和发布使用确定的依赖图。
 
-当前兼容下限为 core %s、kit %s、codegen %s。明确版本低于下限会在生成前失败；latest 始终允许。解析与 tidy 在临时项目完成，只提交最终 go.mod/go.sum；失败不会修改原依赖文件，并发变化会拒绝覆盖。
+当前兼容下限为 core %s、kit %s。明确版本低于下限会在生成前失败；latest 始终允许。解析与 tidy 在临时项目完成，只提交最终 go.mod/go.sum；失败不会修改原依赖文件，并发变化会拒绝覆盖。
 
 ## 安全约定
 
@@ -1382,7 +1382,7 @@ core、kit、skill、codegen 默认都是 latest。roost project new/sync/deps �
 - MongoDB 必须使用副本集；启动会拒绝 standalone，并固定 majority write concern 与 snapshot transaction read concern。
 - /var/lib/roost/wal 必须挂载单写持久卷，同一个 SID 不得由两个实例同时挂载。
 - JetStream effect 必须先由 Data Engine 在业务 Mongo transaction 中持久化到 outbox；发布和消费不能只依赖 MsgID 去重窗口。
-- 发布顺序为 roost-codegen、roost-core、roost-kit；部署前必须执行 make ci 并完成容器重启恢复演练。
+- 部署前必须执行 make ci 并完成容器重启恢复演练。
 
 ## 继续阅读
 
@@ -1397,7 +1397,7 @@ core、kit、skill、codegen 默认都是 latest。roost project new/sync/deps �
 - roost.yaml 所有字段：ROOST_YAML.zh-CN.md
 - 实现原理：IMPLEMENTATION.zh-CN.md
 - 生产部署：DEPLOYMENT.zh-CN.md
-`, m.Project.Name, services.String(), minimumVersions.Core, minimumVersions.Kit, minimumVersions.Codegen)
+`, m.Project.Name, services.String(), minimumVersions.Core, minimumVersions.Kit)
 }
 
 // renderGitattributes pins LF for every text file the generators write. A

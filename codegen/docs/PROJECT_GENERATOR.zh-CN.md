@@ -217,7 +217,7 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
 | `versions.core` | 是 | roost-core 的 `latest` 策略或明确最低版本 |
 | `versions.kit` | 是 | roost-kit 的更新策略或最低版本 |
 | `versions.skill` | 是 | roost-skill 的更新策略或最低版本 |
-| `versions.codegen` | 否 | 已废弃：写了会被拒绝，`roost project upgrade` 删掉它；Makefile 按 `versions.core` 运行生成器（RR-20261006-57） |
+| `versions.codegen` | 否 | 已退役、不再解码：写了会被加载与 `roost project upgrade` 一并拒绝，需手工删掉；Makefile 按 `versions.core` 运行生成器（RR-20261006-57） |
 | `shared_mods` | 否 | 进程级共享 Mod；每个 Service 不得重复声明 |
 | `services` | 是 | Service 名到配置的 map；至少一个 Service |
 | `services.<name>.mods` | 否 | 该 Service 装配的 Kit Mod，依赖会自动展开 |

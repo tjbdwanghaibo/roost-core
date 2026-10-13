@@ -177,7 +177,7 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		allowed := map[string][]string{
 			"sync": {"root", "skip-deps"}, "diff": {"root"}, "doctor": {"root", "strict", "json", "workflow"},
 			"next": {"root", "workflow"}, "deps": {"root"},
-			"upgrade": {"root", "dry-run", "core", "kit", "skill", "service", "codegen", "consolidate", "skip-deps"},
+			"upgrade": {"root", "dry-run", "core", "kit", "skill", "service", "consolidate", "skip-deps"},
 		}
 		if err := rejectUnsupportedFlags(fs, allowed[args[0]]...); err != nil {
 			return err
@@ -236,12 +236,6 @@ func runProject(ctx context.Context, args []string, stdout, stderr io.Writer) er
 				return err
 			}
 			mergeVersions(&m.Versions, VersionSpec{Core: *core, Kit: *kit})
-			// versions.codegen is retired (RR-20261006-57): the generator runs
-			// at versions.core. Upgrading is where an old manifest loses it.
-			if m.Versions.Codegen != "" {
-				fmt.Fprintf(stdout, "dropped versions.codegen %s: the generator now runs at versions.core\n", m.Versions.Codegen)
-				m.Versions.Codegen = ""
-			}
 			if err := m.Validate(); err != nil {
 				return fmt.Errorf("validate upgraded manifest: %w", err)
 			}

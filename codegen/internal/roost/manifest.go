@@ -23,7 +23,6 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // v1.25.0 生成物使用分类后的包路径和 Gate 接入 API，不能接入旧 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
 // Kit 字段仅识别历史清单，不再指代独立模块；其下限保留最后一个有效历史值。
-// Codegen 字段已废弃，生成 Makefile 直接使用 versions.core（RR-20261006-57）。
 var minimumVersions = VersionSpec{
 	Core: "v1.25.0",
 	Kit:  "v1.14.8",
@@ -62,15 +61,41 @@ type VersionSpec struct {
 	// fields; upgrade --consolidate removes them from old manifests.
 	Skill   string `yaml:"skill,omitempty"`
 	Service string `yaml:"service,omitempty"`
-	// Codegen is retired (RR-20261006-57). Since the consolidation the
-	// generator is roost-core/codegen/cmd/roost, so "the codegen version" is a
-	// roost-core version, and a second number for the same module could only
-	// disagree with the first: v1.15.x has no generator at all, v1.16～v1.22
-	// rewrites a project with an older generator than the core it builds
-	// against. The generated Makefile runs the generator at versions.core.
-	// The field is still decoded so that Validate can name it and `project
-	// upgrade` can drop it; nothing writes it.
-	Codegen string `yaml:"codegen,omitempty"`
+}
+
+// retiredVersionKeys 是 versions 下已退役、不再解码的键及其拒绝说明。严格解码本来就会拒绝未知键，
+// 这里提前按名字拒绝，让错误说清为什么退役、该怎么改（手工删掉这一行），而不是只报 "field not found"。
+//
+// codegen（RR-20261006-57）：合仓后生成器就是 roost-core/codegen/cmd/roost，“codegen 版本”就是
+// roost-core 版本，再写一个数字只会和 versions.core 不一致；生成的 Makefile 按 versions.core 运行生成器。
+var retiredVersionKeys = map[string]string{
+	"codegen": "the generator ships inside roost-core and the Makefile runs it at versions.core",
+}
+
+// rejectRetiredVersionKeys 在严格解码前检查 versions 下的退役键；raw 不是合法 YAML 时交给解码报错。
+func rejectRetiredVersionKeys(raw []byte) error {
+	var document yaml.Node
+	if err := yaml.Unmarshal(raw, &document); err != nil || len(document.Content) == 0 {
+		return nil
+	}
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	var joined error
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "versions" || root.Content[i+1].Kind != yaml.MappingNode {
+			continue
+		}
+		versions := root.Content[i+1]
+		for j := 0; j+1 < len(versions.Content); j += 2 {
+			key := versions.Content[j].Value
+			if reason, retired := retiredVersionKeys[key]; retired {
+				joined = errors.Join(joined, fmt.Errorf("versions.%s (%s) is retired and no longer read: %s; delete the line by hand", key, versions.Content[j+1].Value, reason))
+			}
+		}
+	}
+	return joined
 }
 
 // consolidated reports whether the manifest still carries pre-consolidation
@@ -187,6 +212,9 @@ func decodeManifest(root string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, fmt.Errorf("read %s: %w", path, err)
 	}
+	if err := rejectRetiredVersionKeys(raw); err != nil {
+		return Manifest{}, fmt.Errorf("decode %s: %w", path, err)
+	}
 	manifest := Manifest{CICD: defaultCICDSpec()}
 	decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
 	decoder.KnownFields(true)
@@ -300,9 +328,6 @@ func (m Manifest) Validate() error {
 		if err := validateVersionPolicy(version.name, version.value, version.minimum); err != nil {
 			joined = errors.Join(joined, err)
 		}
-	}
-	if strings.TrimSpace(m.Versions.Codegen) != "" {
-		joined = errors.Join(joined, fmt.Errorf("versions.codegen (%s) is retired: the generator ships inside roost-core and the Makefile runs it at versions.core; delete the line, or run roost project upgrade, which drops it", m.Versions.Codegen))
 	}
 	if m.CICD.Provider != "github" {
 		joined = errors.Join(joined, fmt.Errorf("cicd.provider must be github; got %q", m.CICD.Provider))

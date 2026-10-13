@@ -251,13 +251,41 @@ func within(t *testing.T, path, dir string) bool {
 
 const firstCoreWithGenerator = "v1.16.0"
 
+// versions.codegen 已退役、不再解码：roost.yaml 里出现就拒绝，错误指向 versions.core 并要求手工删行；
+// 普通加载与 project upgrade 的加载都一样拒绝，upgrade 不再替它删。
 func TestVersionsCodegenIsRefused(t *testing.T) {
+	root := t.TempDir()
 	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"configdata"}, nil)
 	m.Versions.Core = minimumVersions.Core
-	m.Versions.Codegen = "v1.15.0"
-	err := m.Validate()
-	if err == nil || !strings.Contains(err.Error(), "versions.codegen") || !strings.Contains(err.Error(), "versions.core") {
-		t.Fatalf("a manifest pinning versions.codegen separately from versions.core must be refused, pointing at versions.core; got %v", err)
+	if err := saveManifest(root, m); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, ManifestName)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned := strings.Replace(string(raw), "\n    kit: ", "\n    codegen: v1.15.0\n    kit: ", 1)
+	if pinned == string(raw) {
+		t.Fatalf("no versions.kit line to pin codegen next to:\n%s", raw)
+	}
+	if err := os.WriteFile(path, []byte(pinned), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, load := range map[string]func(string) (Manifest, error){"load": LoadManifest, "upgrade": loadManifestForUpgrade} {
+		_, err := load(root)
+		if err == nil {
+			t.Fatalf("%s: a manifest pinning versions.codegen was accepted", name)
+		}
+		for _, want := range []string{"versions.codegen (v1.15.0) is retired", "versions.core", "delete the line"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: error lacks %q: %v", name, want, err)
+			}
+		}
+	}
+	var out bytes.Buffer
+	if err := Run([]string{"project", "upgrade", "--root", root, "--dry-run", "-core", "latest"}, &out, io.Discard); err == nil || !strings.Contains(err.Error(), "versions.codegen") {
+		t.Fatalf("project upgrade on a manifest with versions.codegen = %v, want the same refusal", err)
 	}
 }
 
