@@ -496,3 +496,19 @@ func TestRollbackSyncReportsAFileItCannotInspect(t *testing.T) {
 		t.Fatal("rollback replaced the directory it could not inspect")
 	}
 }
+
+// 退役的 //cube: 前缀不再被读取：工程里仍有它时 generate 在跑任何生成器之前失败并点名文件，而不是静默不生成。
+func TestGenerateRefusesTheRetiredCubeMarkerPrefix(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "game", "player")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "player.go"), []byte("package player\n\n//cube:entity kind=Player\ntype Player struct{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := runGenerators(context.Background(), root, Manifest{}, nil, GenerateOptions{Stdout: io.Discard})
+	if err == nil || !strings.Contains(err.Error(), "retired //cube: marker prefix") || !strings.Contains(err.Error(), "game/player/player.go") {
+		t.Fatalf("generate over a //cube: marker = %v, want a refusal naming the file", err)
+	}
+}

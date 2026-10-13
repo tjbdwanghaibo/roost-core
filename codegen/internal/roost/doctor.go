@@ -794,12 +794,6 @@ func anyFileContains(root, pattern, needle string) (bool, error) {
 		if readErr != nil {
 			return false, readErr
 		}
-		// Marker needles accept the deprecated //cube: spelling as well, so
-		// doctor does not report a migrated-but-not-yet-renamed project as
-		// missing the thing it is looking at.
-		if body, isMarker := strings.CutPrefix(needle, marker.Prefix); isMarker && marker.Has(string(raw), body) {
-			return true, nil
-		}
 		if bytes.Contains(raw, []byte(needle)) {
 			return true, nil
 		}

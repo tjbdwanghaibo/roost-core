@@ -6,32 +6,27 @@ import (
 	"testing"
 )
 
-// Business code carries these markers by hand, so the old prefix must keep
-// parsing for one release — and the new one must parse identically, or the
-// migration guide is wrong.
-func TestBothPrefixesParseIdentically(t *testing.T) {
+// 只读 //roost: 前缀：退役的 //cube: 不是标记（Regexp / Cut / Has / HasProvenance 都不认），
+// 由 FindRetiredPrefix 让 roost generate 明确拒绝。
+func TestOnlyTheRoostPrefixIsRead(t *testing.T) {
 	re := Regexp("entity", `\s+(.+)`)
-	for _, line := range []string{"//roost:entity kind=Player", "//cube:entity kind=Player"} {
-		match := re.FindStringSubmatch(line)
-		if match == nil || match[1] != "kind=Player" {
-			t.Fatalf("%q: got %v", line, match)
-		}
+	if match := re.FindStringSubmatch("//roost:entity kind=Player"); match == nil || match[1] != "kind=Player" {
+		t.Fatalf("//roost:entity: got %v", match)
 	}
-	for _, line := range []string{"//roost:dao persist", "//cube:dao persist"} {
-		rest, ok := Cut(line, "dao")
-		if !ok || rest != " persist" {
-			t.Fatalf("Cut(%q): rest=%q ok=%v", line, rest, ok)
-		}
+	if re.MatchString("//cube:entity kind=Player") {
+		t.Fatal("the retired //cube: prefix still matches")
 	}
-	for _, text := range []string{"x\n//roost:reverse_proto ignore=true\n", "x\n//cube:reverse_proto ignore=true\n"} {
-		if !Has(text, "reverse_proto ignore=true") {
-			t.Fatalf("Has missed %q", text)
-		}
+	if rest, ok := Cut("//roost:dao persist", "dao"); !ok || rest != " persist" {
+		t.Fatalf("Cut(//roost:dao): rest=%q ok=%v", rest, ok)
 	}
-	for _, line := range []string{"// roost:source=go_def", "// cube:source=go_def"} {
-		if !HasProvenance(line) {
-			t.Fatalf("HasProvenance missed %q", line)
-		}
+	if _, ok := Cut("//cube:dao persist", "dao"); ok {
+		t.Fatal("Cut still reads the retired //cube: prefix")
+	}
+	if !Has("x\n//roost:reverse_proto ignore=true\n", "reverse_proto ignore=true") || Has("x\n//cube:reverse_proto ignore=true\n", "reverse_proto ignore=true") {
+		t.Fatal("Has must read //roost: only")
+	}
+	if !HasProvenance("// roost:source=go_def") || HasProvenance("// cube:source=go_def") {
+		t.Fatal("HasProvenance must read the roost spelling only")
 	}
 }
 
@@ -54,9 +49,8 @@ func TestRegexpIsAnchoredAndKindIsLiteral(t *testing.T) {
 	}
 }
 
-// FindLegacy is what tells the author what to migrate; it must see production
-// sources only and must report the provenance spelling too.
-func TestFindLegacyReportsProductionSourcesOnly(t *testing.T) {
+// FindRetiredPrefix 只看生产源码（不看测试、testdata、vendor），找出仍写 //cube: 的文件。
+func TestFindRetiredPrefixReportsProductionSourcesOnly(t *testing.T) {
 	root := t.TempDir()
 	write := func(rel, body string) {
 		path := filepath.Join(root, filepath.FromSlash(rel))
@@ -69,16 +63,16 @@ func TestFindLegacyReportsProductionSourcesOnly(t *testing.T) {
 	}
 	write("game/a/a.go", "package a\n\n//cube:entity kind=A\ntype A struct{}\n")
 	write("game/b/b.go", "package b\n\n//roost:entity kind=B\ntype B struct{}\n")
-	write("protocol/gen.proto.go", "package p\n// cube:source=go_def\n")
+	write("game/c/c.go", "package c\n\n//cube:dao persist\ntype C struct{}\n")
 	write("game/a/a_test.go", "package a\n//cube:entity\n")
 	write("game/a/testdata/x.go", "package x\n//cube:entity\n")
 	write("vendor/v/v.go", "package v\n//cube:entity\n")
 
-	got, err := FindLegacy(root)
+	got, err := FindRetiredPrefix(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"game/a/a.go", "protocol/gen.proto.go"}
+	want := []string{"game/a/a.go", "game/c/c.go"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v want %v", got, want)
 	}

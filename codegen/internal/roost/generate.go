@@ -415,15 +415,12 @@ func runGenerators(ctx context.Context, root string, manifest Manifest, generato
 	if err != nil {
 		return err
 	}
-	if legacy, err := marker.FindLegacy(root); err != nil {
-		return fmt.Errorf("scan for deprecated markers: %w", err)
-	} else if len(legacy) > 0 {
-		// Accepted this release, removed next: say so once per run, naming
-		// the files, rather than failing or staying silent.
-		fmt.Fprintf(options.Stdout, "warning: %d file(s) still use the deprecated //cube: marker prefix; rename to //roost: (accepted for now, removed in the next major):\n", len(legacy))
-		for _, rel := range legacy {
-			fmt.Fprintf(options.Stdout, "  %s\n", rel)
-		}
+	// The //cube: prefix is no longer read; a project that still carries it
+	// fails here, naming the files, instead of generating nothing for them.
+	if retired, err := marker.FindRetiredPrefix(root); err != nil {
+		return fmt.Errorf("scan for retired markers: %w", err)
+	} else if len(retired) > 0 {
+		return fmt.Errorf("%d file(s) use the retired //cube: marker prefix, which is no longer read; rename it to //roost: in: %s", len(retired), strings.Join(retired, ", "))
 	}
 	for _, gen := range generators {
 		if !gen.Always && !hasFeature(manifest, gen.Feature) {

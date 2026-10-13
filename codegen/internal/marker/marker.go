@@ -1,10 +1,9 @@
 // Package marker is the single definition of the source-comment markers the
 // generators read (//roost:entity, //roost:dao, //roost:register, ...).
-//
-// The markers were renamed from //cube: to //roost:. Business code carries
-// them by hand, so the old prefix is still accepted for this release and
-// reported as deprecated; every parser goes through this package so the
-// acceptance rule and the deprecation live in one place.
+// Every parser goes through this package, so the accepted spelling lives in
+// one place. Only the //roost: prefix is read; the retired //cube: prefix is
+// not a marker, and FindRetiredPrefix lets `roost generate` refuse a project
+// that still carries it instead of silently generating nothing for it.
 package marker
 
 import (
@@ -16,58 +15,45 @@ import (
 )
 
 const (
-	// Prefix is the marker prefix generators emit and documentation shows.
+	// Prefix is the marker prefix generators read, emit and documentation shows.
 	Prefix = "//roost:"
-	// LegacyPrefix is accepted when reading and never emitted.
-	LegacyPrefix = "//cube:"
+	// retiredPrefix is the pre-rename prefix. It is not read; it is only
+	// looked for so that a project still using it fails with a clear error.
+	retiredPrefix = "//cube:"
 
 	// Provenance is the comment generators write into produced .proto files to
 	// record that a definition came from a Go source of truth.
-	Provenance       = "roost:source=go_def"
-	legacyProvenance = "cube:source=go_def"
+	Provenance = "roost:source=go_def"
 )
 
-// Regexp builds the anchored pattern `^//(roost|cube):<kind><suffix>$`.
-// suffix is appended verbatim and may contain capture groups; the prefix
-// group is non-capturing so callers' group numbering is unchanged.
+// Regexp builds the anchored pattern `^//roost:<kind><suffix>$`. suffix is
+// appended verbatim and may contain capture groups.
 func Regexp(kind, suffix string) *regexp.Regexp {
-	return regexp.MustCompile(`^//(?:roost|cube):` + regexp.QuoteMeta(kind) + suffix + `$`)
+	return regexp.MustCompile(`^` + regexp.QuoteMeta(Prefix+kind) + suffix + `$`)
 }
 
-// Cut returns the text following "//roost:<kind>" or "//cube:<kind>" at the
-// start of line, and whether line carried the marker at all.
+// Cut returns the text following "//roost:<kind>" at the start of line, and
+// whether line carried the marker at all.
 func Cut(line, kind string) (rest string, ok bool) {
-	for _, prefix := range []string{Prefix, LegacyPrefix} {
-		if rest, ok = strings.CutPrefix(line, prefix+kind); ok {
-			return rest, true
-		}
-	}
-	return "", false
+	return strings.CutPrefix(line, Prefix+kind)
 }
 
-// Has reports whether text contains the marker "<prefix><body>" under either
-// prefix. body may include attributes, e.g. "reverse_proto ignore=true".
+// Has reports whether text contains the marker "//roost:<body>". body may
+// include attributes, e.g. "reverse_proto ignore=true".
 func Has(text, body string) bool {
-	return strings.Contains(text, Prefix+body) || strings.Contains(text, LegacyPrefix+body)
+	return strings.Contains(text, Prefix+body)
 }
 
-// HasProvenance reports whether line carries the generated-proto provenance
-// comment under either spelling.
+// HasProvenance reports whether line carries the generated-proto provenance comment.
 func HasProvenance(line string) bool {
-	return strings.Contains(line, Provenance) || strings.Contains(line, legacyProvenance)
+	return strings.Contains(line, Provenance)
 }
 
-// Both returns the current and legacy spellings of a marker body, for callers
-// that match against a fixed list rather than parsing a line.
-func Both(body string) []string {
-	return []string{Prefix + body, LegacyPrefix + body}
-}
-
-// FindLegacy walks root and returns, sorted, every .go file (excluding tests,
-// vendor and testdata) that still uses the //cube: prefix. It exists so
-// `roost generate` can tell the author what to migrate; the parsers accept
-// the old spelling silently.
-func FindLegacy(root string) ([]string, error) {
+// FindRetiredPrefix walks root and returns, sorted, every .go file (excluding
+// tests, vendor and testdata) that still uses the retired //cube: prefix.
+// `roost generate` refuses such a project: the parsers no longer read it, so
+// the markers would otherwise be skipped without a word.
+func FindRetiredPrefix(root string) ([]string, error) {
 	var found []string
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -87,7 +73,7 @@ func FindLegacy(root string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if strings.Contains(string(raw), LegacyPrefix) || strings.Contains(string(raw), legacyProvenance) {
+		if strings.Contains(string(raw), retiredPrefix) {
 			rel, relErr := filepath.Rel(root, path)
 			if relErr != nil {
 				rel = path
