@@ -482,11 +482,7 @@ CSV 前四行依次为字段名、标题、类型和规则；转换会校验规�
 
 `roost generate` 的 config-data 步骤：`configs/table` 已有 CSV 就运行转换；`configs/table` 还没有 CSV 时，只有 `_manifest.json` 仍登记着文件（有东西可退役）才运行，否则跳过——写好 schema、还没来得及放 CSV 的工程可以照常 `generate` / `--check` / `project sync`（RR-20261001-03）。保留 schema 但删掉它的 CSV、而上一轮 JSON 仍登记在 manifest 里，转换会报 `open configs/table/<file>.csv: no such file`：要么补回 CSV，要么把 schema 一起删掉让 JSON 退役。
 
-**从 v1 manifest 升级**（v1.17.2 及更早生成的工程，`tables` 恒空、没有归属记录）：第一次用 v2 版生成器运行时，JSON 目录里凡是当前 meta 未认领的 `.json` 都会报 `untracked table JSON … from legacy manifest`——v1 无法分辨它是手写数据还是早已删 meta 的旧生成物，没有自动 migrate 命令（RR-20261001-04）。恢复步骤：
-
-1. 旧生成物（meta / CSV 已删）：直接删掉该 JSON；
-2. 手写数据：先把它移出 `configs/data`，运行一次 `roost generate`（或 `tablegen -csv … -json …`）把 manifest 升到 v2，再移回，再运行一次生成；之后它作为未登记文件永久保留；
-3. 升级只发生一次：v2 之后的工程不再触发这个错误。`configs/table` 还没有 CSV 时 config-data 整步跳过，错误也不会出现。
+**只读 v2 manifest**：`_manifest.json` 存在时版本必须是 2。v1（v1.17.2 及更早生成的工程，`tables` 恒空、没有归属记录）不再读取，转换与 `roost generate` 的 config-data 判断都报 `table manifest … is version 1, which is no longer read`；其它版本报 `unsupported table manifest version N`。一次性清理：删掉 v1 的 `_manifest.json`，同时删掉目录里由旧生成器写出、meta 已不存在的 JSON，手写 JSON 保留，再运行一次生成——新 manifest 只登记本轮输出，留下的未登记文件按手写数据永久保留。
 
 ## 10. eventgen
 

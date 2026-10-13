@@ -359,15 +359,11 @@ func convertCSVToJSON(metas []Meta, csvDir string, jsonDir string, force bool, s
 		return err
 	}
 	manifestPath := filepath.Join(jsonDir, "_manifest.json")
-	previous := tableJSONManifest{}
-	if raw, err := os.ReadFile(manifestPath); err == nil {
-		if err := json.Unmarshal(raw, &previous); err != nil {
-			return fmt.Errorf("read table manifest: %w", err)
-		}
-	} else if !os.IsNotExist(err) {
+	previous, err := readTableManifest(jsonDir)
+	if err != nil {
 		return err
 	}
-	manifest := tableJSONManifest{Version: 2, Tables: make(map[string]string)}
+	manifest := tableJSONManifest{Version: tableManifestVersion, Tables: make(map[string]string)}
 	type output struct {
 		name string
 		raw  []byte
@@ -402,28 +398,6 @@ func convertCSVToJSON(metas []Meta, csvDir string, jsonDir string, force bool, s
 		raw = append(raw, '\n')
 		outputs = append(outputs, output{meta.JSON, raw})
 		manifest.Tables[meta.JSON] = fmt.Sprintf("%x", sha256.Sum256(raw))
-	}
-	// Version 1 did not record ownership. An unrecognized JSON file could be
-	// either retired generated data or hand-maintained data; require an explicit
-	// decision rather than silently retaining it or deleting it.
-	if previous.Version == 1 {
-		entries, err := os.ReadDir(jsonDir)
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			name := entry.Name()
-			if entry.IsDir() || name == "_manifest.json" || !strings.HasSuffix(name, ".json") || manifest.Tables[name] != "" {
-				continue
-			}
-			// There is no migrate command: the owner decides. Say so here
-			// because this is the only place a v1 project learns about it
-			// (RR-20261001-04).
-			return fmt.Errorf("untracked table JSON %s from legacy manifest (v1 recorded no ownership): delete it if an earlier generation produced it; if it is hand-maintained, move it out of %s, run generate once to upgrade _manifest.json to v2, then move it back (codegen/docs/CODEGEN_REFERENCE.zh-CN.md §9)", filepath.Join(jsonDir, name), jsonDir)
-		}
-	}
-	if previous.Version != 0 && previous.Version != 1 && previous.Version != 2 {
-		return fmt.Errorf("unsupported table manifest version %d", previous.Version)
 	}
 	for name, digest := range previous.Tables {
 		if manifest.Tables[name] != "" {
@@ -472,24 +446,46 @@ type tableJSONManifest struct {
 	Tables      map[string]string `json:"tables"`
 }
 
+// tableManifestVersion 是 tablegen 读写的唯一 manifest 版本。v2 用 tables 记录每个生成文件的
+// 名字与内容哈希，退役与“未登记即手写”都依赖这份归属记录。
+const tableManifestVersion = 2
+
+// readTableManifest 读 jsonDir/_manifest.json；文件不存在返回零值（从未生成过）。存在时版本必须是
+// v2：v1 没有归属记录，无法判断目录里未登记的 JSON 是旧生成物还是手写数据，不再读取，报错并给出一次性清理办法。
+func readTableManifest(jsonDir string) (tableJSONManifest, error) {
+	path := filepath.Join(jsonDir, "_manifest.json")
+	var manifest tableJSONManifest
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return manifest, nil
+	}
+	if err != nil {
+		return manifest, err
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return manifest, fmt.Errorf("read table manifest: %w", err)
+	}
+	switch manifest.Version {
+	case tableManifestVersion:
+		return manifest, nil
+	case 1:
+		return manifest, fmt.Errorf("table manifest %s is version 1, which is no longer read (it recorded no ownership): delete it and any JSON in %s that an earlier generation produced, keep hand-maintained JSON, then generate again (codegen/docs/CODEGEN_REFERENCE.zh-CN.md §9.1)", path, jsonDir)
+	default:
+		return manifest, fmt.Errorf("unsupported table manifest version %d in %s", manifest.Version, path)
+	}
+}
+
 // ManifestOwnsJSON reports whether jsonDir/_manifest.json still records
 // generated JSON files. `roost generate` asks this when configs/table has no
 // CSV: only a manifest that owns outputs has something to retire
-// (RR-20260930-09). A missing manifest, the scaffold's empty v2 manifest and a
-// legacy v1 manifest (which never recorded ownership) all mean the project
-// has simply not written its CSVs yet, and running tablegen would fail on the
-// first meta's missing CSV (RR-20261001-03).
+// (RR-20260930-09). A missing manifest and the scaffold's empty v2 manifest
+// mean the project has simply not written its CSVs yet, and running tablegen
+// would fail on the first meta's missing CSV (RR-20261001-03). A manifest in
+// any other version is an error, as in the conversion itself.
 func ManifestOwnsJSON(jsonDir string) (bool, error) {
-	raw, err := os.ReadFile(filepath.Join(jsonDir, "_manifest.json"))
-	if os.IsNotExist(err) {
-		return false, nil
-	}
+	manifest, err := readTableManifest(jsonDir)
 	if err != nil {
 		return false, err
-	}
-	var manifest tableJSONManifest
-	if err := json.Unmarshal(raw, &manifest); err != nil {
-		return false, fmt.Errorf("read table manifest: %w", err)
 	}
 	return len(manifest.Tables) > 0, nil
 }
