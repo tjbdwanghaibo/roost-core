@@ -11,15 +11,14 @@ import "slices"
 type DesyncDetector struct {
 	// quorum is the minimum size of the AGREEING group before a frame can
 	// be judged: a verdict exists only once some hash has quorum reports
-	// backing it. Choose quorum > seats/2 (the kit Match derives it that
-	// way) and the majority can never flip afterwards — a minority that
+	// backing it. Choose quorum > seats/2 (NewMatch derives it that way)
+	// and the majority can never flip afterwards — a minority that
 	// reports first can no longer frame an honest player.
 	quorum int
 	// seats is the match's seat count (0 = unknown, standalone use). Once
 	// every seat has reported a frame and no hash reached quorum, more
 	// reports can never come and the frame is ruled with no majority —
-	// otherwise a two-seat match (quorum 2) could never rule a 1:1 split
-	// (RR-20261006-64).
+	// otherwise a two-seat match (quorum 2) could never rule a 1:1 split.
 	seats         int
 	reports       map[FrameID]map[PlayerID]uint64
 	trimmedBefore FrameID

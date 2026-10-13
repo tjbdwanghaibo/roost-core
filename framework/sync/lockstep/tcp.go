@@ -20,6 +20,7 @@ type TCPSender struct {
 	maxPayload int
 }
 
+// NewTCPSender 创建 TCP 发送器；maxPayload 为 0 时取 wire.DefaultMaxPayload。
 func NewTCPSender(messageID uint32, maxPayload int,
 	resolve func(nettransport.SessionID) (string, bool),
 	push func(context.Context, string, uint32, []byte) error) (*TCPSender, error) {
@@ -33,12 +34,15 @@ func NewTCPSender(messageID uint32, maxPayload int,
 }
 
 func (s *TCPSender) MaxDatagramPayload() int { return s.maxPayload }
+
 func (s *TCPSender) SendDatagram(ctx context.Context, id nettransport.SessionID, payload []byte) error {
 	return s.send(ctx, id, payload)
 }
+
 func (s *TCPSender) SendReliable(ctx context.Context, id nettransport.SessionID, payload []byte) error {
 	return s.send(ctx, id, payload)
 }
+
 func (s *TCPSender) send(ctx context.Context, id nettransport.SessionID, payload []byte) error {
 	if err := fctx.BlockingError("lockstep.TCPSender.send"); err != nil {
 		return err

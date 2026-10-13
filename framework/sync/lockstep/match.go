@@ -1,19 +1,3 @@
-// Package lockstep is deterministic input-frame synchronization bound to
-// matches and transports: a Match owns one match's
-// sequencer, frame history, redundant broadcast encoder and desync detector,
-// broadcasts cut frames to attached sessions over the datagram lane (loss is
-// healed by frame redundancy, never by retransmission), and pages catch-up
-// frames to reconnecting sessions over the reliable lane (KCP, QUIC or the
-// AEAD UDP transport via nettransport's senders).
-//
-// Match 由单一所有者串行驱动，没有内部锁。一实例只服务一场对局，结束时调用 Close。
-// Tick 包含同步传输调用，必须在 Nest 业务池及 Entity 锁外驱动；
-// Nest handler 可提交命令，但不能等待对局所有者或并发访问 Match。
-//
-// Transport note: wire Datagrams to a raw transport sender (UDP/KCP/QUIC).
-// nettransport.AsyncTransport is reliable-only and is the wrong place for
-// lockstep frames anyway: a queue that could fold or delay input frames would
-// silently lose more than redundancy can heal.
 package lockstep
 
 import (
@@ -38,10 +22,8 @@ var (
 	ErrHashFrameInvalid   = errors.New("lockstep match: hash report for an uncut or invalid frame")
 )
 
-// Metric names. They are part of the package contract: the alert rules in
-// OBSERVABILITY.md are keyed on them, and a guard test pins the set
-// (RR-20261006-61 — the consolidation once dropped the prefix and the desync
-// alert went silent).
+// 指标名属于包契约：OBSERVABILITY.md 的告警规则以它们为键，守卫测试固定这组名字，
+// 改名或丢前缀会让 desync 告警静默失效。历史：RR-20261006-61。
 const (
 	MetricFrames        = "lockstep.frame.total"
 	MetricInputLate     = "lockstep.input.late.total"
@@ -81,7 +63,7 @@ type MatchConfig struct {
 	// whose worst-case packet — depth × players × max payload plus wire
 	// overhead, i.e. every seat at full payload — exceeds it: a single
 	// full-payload client must never be able to push the match's broadcast
-	// past what the transport can send (RR-20261006-62).
+	// past what the transport can send.
 	MaxDatagramBytes int
 	// HashQuorum is the minimum number of AGREEING hash reports before a
 	// keyframe is judged (<= 0 derives majority-of-seats: len(players)/2+1
@@ -89,15 +71,14 @@ type MatchConfig struct {
 	// convict an honest player). When every seat has reported and no hash
 	// reaches the quorum — a two-seat match with different hashes, a 2:2
 	// split, all different — the frame is ruled with no majority: every
-	// seat is an outlier and the verdict has NoMajority set
-	// (RR-20261006-64).
+	// seat is an outlier and the verdict has NoMajority set.
 	HashQuorum int
 	// CatchupBatchFrames is how many history frames one catching-up session
 	// receives per tick over the reliable lane (<= 0 selects 32; capped at
 	// MaxBroadcastFrames; 1 is refused). The per-tick cap is the rate limit
 	// that keeps a 10s reconnect from flooding the link in one burst — but
 	// every tick also cuts one new frame, so a batch of 1 pages exactly as
-	// fast as the head moves and the backlog never closes (RR-20260914-05).
+	// fast as the head moves and the backlog never closes.
 	// The net catch-up rate is batch-1 frames per tick; it must be positive.
 	CatchupBatchFrames int
 	// CatchupMaxFailures abandons a catch-up after this many consecutive
@@ -115,7 +96,7 @@ type MatchConfig struct {
 	// the match's goroutine, at most one in flight per session; a page that
 	// does not finish within the wait stays in flight and is collected on
 	// a later Tick, so a slow client delays only its own catch-up, never
-	// the match (RR-20261006-63). Tick never waits on a page launched by an
+	// the match. Tick never waits on a page launched by an
 	// earlier tick.
 	CatchupSendWait time.Duration
 	// Datagrams broadcasts cut frames (required). Loss-tolerant lane: the
@@ -313,100 +294,100 @@ func datagramBudget(configured int, sender nettransport.DatagramSender) (int, er
 // (reconnect) replaces the previous one and drops its catch-up. A session
 // already serving another seat or a spectator is refused — two receivers on
 // one session would double-send and cross-cancel each other's catch-up.
-func (r *Match) Attach(player PlayerID, session nettransport.SessionID) error {
-	if r.closed {
+func (m *Match) Attach(player PlayerID, session nettransport.SessionID) error {
+	if m.closed {
 		return ErrMatchClosed
 	}
-	if !r.sequencer.KnownPlayer(player) {
+	if !m.sequencer.KnownPlayer(player) {
 		return ErrPlayerUnknown
 	}
-	if owner, bound := r.sessionOwners[session]; bound && owner != player {
+	if owner, bound := m.sessionOwners[session]; bound && owner != player {
 		return ErrSessionInUse
 	}
-	if previous, attached := r.sessions[player]; attached {
+	if previous, attached := m.sessions[player]; attached {
 		if previous == session {
 			return nil // idempotent re-attach keeps the catch-up cursor
 		}
-		r.dropCatchup(previous)
-		delete(r.sessionOwners, previous)
+		m.dropCatchup(previous)
+		delete(m.sessionOwners, previous)
 	}
-	r.sessions[player] = session
-	r.broadcastReceivers = nil
-	r.sessionOwners[session] = player
+	m.sessions[player] = session
+	m.broadcastReceivers = nil
+	m.sessionOwners[session] = player
 	return nil
 }
 
 // Detach unbinds a seat (disconnect). The seat stays in the match — its
 // inputs simply stop arriving, which optimistic frame locking already
 // tolerates as empty inputs.
-func (r *Match) Detach(player PlayerID) {
-	if session, attached := r.sessions[player]; attached {
-		r.dropCatchup(session)
-		delete(r.sessionOwners, session)
-		delete(r.sessions, player)
-		r.broadcastReceivers = nil
+func (m *Match) Detach(player PlayerID) {
+	if session, attached := m.sessions[player]; attached {
+		m.dropCatchup(session)
+		delete(m.sessionOwners, session)
+		delete(m.sessions, player)
+		m.broadcastReceivers = nil
 	}
 }
 
 // DetachSession 在 Match 的串行 owner 中处理断线通知，仅移除通知所属的生命周期。
 // Gate 的 receiver ID 在进程内不复用；旧连接的迟到关闭不能拆掉已经重绑的新连接。
 // 完整 Gate/Game/BindID 校验仍由接入层完成，Match 不重复持有连接身份表。
-func (r *Match) DetachSession(player PlayerID, session nettransport.SessionID) bool {
-	current, attached := r.sessions[player]
+func (m *Match) DetachSession(player PlayerID, session nettransport.SessionID) bool {
+	current, attached := m.sessions[player]
 	if !attached || current != session {
 		return false
 	}
-	r.Detach(player)
+	m.Detach(player)
 	return true
 }
 
 // AttachSpectator binds a receive-only session: it gets live broadcasts and
 // may catch up via SpectatorCatchup, but holds no seat.
-func (r *Match) AttachSpectator(session nettransport.SessionID) error {
-	if r.closed {
+func (m *Match) AttachSpectator(session nettransport.SessionID) error {
+	if m.closed {
 		return ErrMatchClosed
 	}
-	if owner, bound := r.sessionOwners[session]; bound && owner != ownerSpectator {
+	if owner, bound := m.sessionOwners[session]; bound && owner != ownerSpectator {
 		return ErrSessionInUse
 	}
-	r.spectators[session] = struct{}{}
-	r.broadcastReceivers = nil
-	r.sessionOwners[session] = ownerSpectator
+	m.spectators[session] = struct{}{}
+	m.broadcastReceivers = nil
+	m.sessionOwners[session] = ownerSpectator
 	return nil
 }
 
 // DetachSpectator unbinds a spectator session.
-func (r *Match) DetachSpectator(session nettransport.SessionID) {
-	if _, ok := r.spectators[session]; ok {
-		delete(r.spectators, session)
-		r.broadcastReceivers = nil
-		delete(r.sessionOwners, session)
-		r.dropCatchup(session)
+func (m *Match) DetachSpectator(session nettransport.SessionID) {
+	if _, ok := m.spectators[session]; ok {
+		delete(m.spectators, session)
+		m.broadcastReceivers = nil
+		delete(m.sessionOwners, session)
+		m.dropCatchup(session)
 	}
 }
 
 // dropCatchup ends a session's catch-up and cancels its in-flight page.
-func (r *Match) dropCatchup(session nettransport.SessionID) {
-	if state, ok := r.catchups[session]; ok {
+func (m *Match) dropCatchup(session nettransport.SessionID) {
+	if state, ok := m.catchups[session]; ok {
 		state.drop()
-		delete(r.catchups, session)
+		delete(m.catchups, session)
 	}
 }
 
 // NextFrame is the id the next Tick will cut.
-func (r *Match) NextFrame() FrameID { return r.sequencer.NextFrame() }
+func (m *Match) NextFrame() FrameID { return m.sequencer.NextFrame() }
 
 // SubmitInput feeds one player's input into the sequencer and returns the
 // frame it was folded into. Late inputs (frame already cut) are folded
 // forward and metered as lockstep.input.late.total; rejected inputs are
 // metered as lockstep.input.rejected.total{reason} — the first signal of a
 // malicious or version-skewed client.
-func (r *Match) SubmitInput(player PlayerID, frame FrameID, payload []byte) (FrameID, error) {
-	if r.closed {
+func (m *Match) SubmitInput(player PlayerID, frame FrameID, payload []byte) (FrameID, error) {
+	if m.closed {
 		return 0, ErrMatchClosed
 	}
-	late := frame != 0 && frame < r.sequencer.NextFrame()
-	folded, err := r.sequencer.SubmitInput(player, frame, payload)
+	late := frame != 0 && frame < m.sequencer.NextFrame()
+	folded, err := m.sequencer.SubmitInput(player, frame, payload)
 	if err != nil {
 		metrics.IncCounter(MetricInputRejected, metrics.Labels{"reason": rejectReason(err)}, 1)
 		return 0, err
@@ -440,31 +421,31 @@ func rejectReason(err error) string {
 // Catch-up pages are sent off the match's goroutine (one in flight per
 // session, each bounded by CatchupSendTimeout) and Tick waits at most
 // CatchupSendWait for the pages it launched: a client whose reliable lane
-// stalls slows only its own catch-up, never the match (RR-20261006-63).
-func (r *Match) Tick(ctx context.Context) (Frame, error) {
-	if r.closed {
+// stalls slows only its own catch-up, never the match.
+func (m *Match) Tick(ctx context.Context) (Frame, error) {
+	if m.closed {
 		return Frame{}, ErrMatchClosed
 	}
-	frame := r.sequencer.Advance()
-	r.history.Append(frame)
-	packet := r.encoder.Push(frame)
+	frame := m.sequencer.Advance()
+	m.history.Append(frame)
+	packet := m.encoder.Push(frame)
 	metrics.IncCounter(MetricFrames, nil, 1)
 
 	var errs []error
 	// Pages that finished since the last tick first: a session whose
 	// remaining backlog rides in this tick's redundant packet goes live now.
-	if err := r.collectCatchups(); err != nil {
+	if err := m.collectCatchups(); err != nil {
 		errs = append(errs, err)
 	}
-	for _, receiver := range r.broadcastOrder() {
-		if _, catching := r.catchups[receiver.session]; catching {
+	for _, receiver := range m.broadcastOrder() {
+		if _, catching := m.catchups[receiver.session]; catching {
 			continue // live frames resume once the catch-up pages reach the head
 		}
-		if err := r.datagrams.SendDatagram(ctx, receiver.session, packet); err != nil {
+		if err := m.datagrams.SendDatagram(ctx, receiver.session, packet); err != nil {
 			errs = append(errs, fmt.Errorf("receiver %d session %d: %w", receiver.owner, receiver.session, err))
 		}
 	}
-	if err := r.pumpCatchup(ctx); err != nil {
+	if err := m.pumpCatchup(ctx); err != nil {
 		errs = append(errs, err)
 	}
 	return frame, errors.Join(errs...)
@@ -478,28 +459,28 @@ type broadcastReceiver struct {
 // broadcastOrder returns seats (by ascending player) then spectators (by
 // ascending session): deterministic iteration keeps error text and delivery
 // order reproducible.
-func (r *Match) broadcastOrder() []broadcastReceiver {
-	if r.broadcastReceivers != nil {
-		return r.broadcastReceivers
+func (m *Match) broadcastOrder() []broadcastReceiver {
+	if m.broadcastReceivers != nil {
+		return m.broadcastReceivers
 	}
-	receivers := make([]broadcastReceiver, 0, len(r.sessions)+len(r.spectators))
-	players := make([]PlayerID, 0, len(r.sessions))
-	for player := range r.sessions {
+	receivers := make([]broadcastReceiver, 0, len(m.sessions)+len(m.spectators))
+	players := make([]PlayerID, 0, len(m.sessions))
+	for player := range m.sessions {
 		players = append(players, player)
 	}
 	slices.Sort(players)
 	for _, player := range players {
-		receivers = append(receivers, broadcastReceiver{owner: player, session: r.sessions[player]})
+		receivers = append(receivers, broadcastReceiver{owner: player, session: m.sessions[player]})
 	}
-	specs := make([]nettransport.SessionID, 0, len(r.spectators))
-	for session := range r.spectators {
+	specs := make([]nettransport.SessionID, 0, len(m.spectators))
+	for session := range m.spectators {
 		specs = append(specs, session)
 	}
 	slices.Sort(specs)
 	for _, session := range specs {
 		receivers = append(receivers, broadcastReceiver{owner: ownerSpectator, session: session})
 	}
-	r.broadcastReceivers = receivers
+	m.broadcastReceivers = receivers
 	return receivers
 }
 
@@ -510,57 +491,57 @@ func (r *Match) broadcastOrder() []broadcastReceiver {
 // switches back to live datagram broadcasts. Calling again while already
 // catching up moves the cursor to min(current, from) — it never re-pages
 // forward past history the client is still missing.
-func (r *Match) StartCatchup(player PlayerID, from FrameID) error {
-	session, attached := r.sessions[player]
+func (m *Match) StartCatchup(player PlayerID, from FrameID) error {
+	session, attached := m.sessions[player]
 	if !attached {
 		return ErrPlayerDetached
 	}
-	return r.startCatchup(session, from)
+	return m.startCatchup(session, from)
 }
 
 // SpectatorCatchup begins paging history to an attached spectator session.
-func (r *Match) SpectatorCatchup(session nettransport.SessionID, from FrameID) error {
-	if _, ok := r.spectators[session]; !ok {
+func (m *Match) SpectatorCatchup(session nettransport.SessionID, from FrameID) error {
+	if _, ok := m.spectators[session]; !ok {
 		return ErrPlayerDetached
 	}
-	return r.startCatchup(session, from)
+	return m.startCatchup(session, from)
 }
 
-func (r *Match) startCatchup(session nettransport.SessionID, from FrameID) error {
-	if r.closed {
+func (m *Match) startCatchup(session nettransport.SessionID, from FrameID) error {
+	if m.closed {
 		return ErrMatchClosed
 	}
-	if r.reliable == nil {
+	if m.reliable == nil {
 		return ErrCatchupUnavailable
 	}
-	if from > r.sequencer.NextFrame() {
-		return fmt.Errorf("%w: from %d, next %d", ErrCatchupFuture, from, r.sequencer.NextFrame())
+	if from > m.sequencer.NextFrame() {
+		return fmt.Errorf("%w: from %d, next %d", ErrCatchupFuture, from, m.sequencer.NextFrame())
 	}
-	if existing, catching := r.catchups[session]; catching {
+	if existing, catching := m.catchups[session]; catching {
 		if from < existing.next {
 			existing.next = from
 		}
 		return nil
 	}
-	r.catchups[session] = &catchupState{next: from}
+	m.catchups[session] = &catchupState{next: from}
 	return nil
 }
 
 // CatchingUp reports whether the player's session is still paging history.
-func (r *Match) CatchingUp(player PlayerID) bool {
-	session, attached := r.sessions[player]
+func (m *Match) CatchingUp(player PlayerID) bool {
+	session, attached := m.sessions[player]
 	if !attached {
 		return false
 	}
-	_, catching := r.catchups[session]
+	_, catching := m.catchups[session]
 	return catching
 }
 
 // catchupSessions lists catching-up sessions in ascending order, so error
 // text and send order are reproducible.
-func (r *Match) catchupSessions() []nettransport.SessionID {
-	sessions := make([]nettransport.SessionID, 0, len(r.catchups))
-	for session := range r.catchups {
+func (m *Match) catchupSessions() []nettransport.SessionID {
+	sessions := make([]nettransport.SessionID, 0, len(m.catchups))
+	for session := range m.catchups {
 		sessions = append(sessions, session)
 	}
 	slices.Sort(sessions)
@@ -572,22 +553,22 @@ func (r *Match) catchupSessions() []nettransport.SessionID {
 // frames from Latest-depth+1 on) is caught up: the broadcast that follows
 // carries the rest. Without this a page that always outlives the wait
 // would trail the head by one frame forever.
-func (r *Match) collectCatchups() error {
-	if len(r.catchups) == 0 {
+func (m *Match) collectCatchups() error {
+	if len(m.catchups) == 0 {
 		return nil
 	}
 	var errs []error
-	for _, session := range r.catchupSessions() {
-		state := r.catchups[session]
+	for _, session := range m.catchupSessions() {
+		state := m.catchups[session]
 		if state.inflight == nil || !state.inflight.poll() {
 			continue
 		}
-		if err := r.settleCatchup(session, state); err != nil {
+		if err := m.settleCatchup(session, state); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		if _, catching := r.catchups[session]; catching && state.inflight == nil && state.next+FrameID(r.depth) > r.history.Latest() {
-			delete(r.catchups, session)
+		if _, catching := m.catchups[session]; catching && state.inflight == nil && state.next+FrameID(m.depth) > m.history.Latest() {
+			delete(m.catchups, session)
 		}
 	}
 	return errors.Join(errs...)
@@ -596,14 +577,14 @@ func (r *Match) collectCatchups() error {
 // settleCatchup applies a finished page's result: success moves the cursor
 // (and ends the catch-up once it passes the head); failure keeps the cursor
 // and counts toward CatchupMaxFailures.
-func (r *Match) settleCatchup(session nettransport.SessionID, state *catchupState) error {
+func (m *Match) settleCatchup(session nettransport.SessionID, state *catchupState) error {
 	send := state.inflight
 	state.inflight = nil
 	send.cancel()
 	if send.err != nil {
 		state.failures++
-		if state.failures >= r.catchupMax {
-			delete(r.catchups, session)
+		if state.failures >= m.catchupMax {
+			delete(m.catchups, session)
 			return fmt.Errorf("catchup session %d abandoned after %d failures: %w — the client must reconnect", session, state.failures, send.err)
 		}
 		return fmt.Errorf("catchup session %d: %w", session, send.err)
@@ -613,8 +594,8 @@ func (r *Match) settleCatchup(session nettransport.SessionID, state *catchupStat
 	if state.next >= send.start {
 		state.next = send.end
 	} // else StartCatchup rewound the cursor while the page was in flight: keep it
-	if state.next > r.history.Latest() {
-		delete(r.catchups, session)
+	if state.next > m.history.Latest() {
+		delete(m.catchups, session)
 	}
 	return nil
 }
@@ -623,40 +604,40 @@ func (r *Match) settleCatchup(session nettransport.SessionID, state *catchupStat
 // none in flight, then waits up to CatchupSendWait for those pages. A page
 // still in flight after the wait is collected by a later Tick; Tick never
 // waits on it again.
-func (r *Match) pumpCatchup(ctx context.Context) error {
-	if len(r.catchups) == 0 {
+func (m *Match) pumpCatchup(ctx context.Context) error {
+	if len(m.catchups) == 0 {
 		return nil
 	}
 	var errs []error
 	var launched []nettransport.SessionID
-	for _, session := range r.catchupSessions() {
-		state := r.catchups[session]
+	for _, session := range m.catchupSessions() {
+		state := m.catchups[session]
 		if state.inflight != nil {
 			continue // still sending: only this session waits
 		}
 		// History trimmed past the cursor: the gap can never be served —
 		// abandon loudly instead of paging a stream with a hole in it.
-		if first := r.history.FirstID(); state.next != 0 && state.next < first {
-			delete(r.catchups, session)
+		if first := m.history.FirstID(); state.next != 0 && state.next < first {
+			delete(m.catchups, session)
 			errs = append(errs, fmt.Errorf("catchup session %d: %w: from %d, history starts at %d", session, ErrCatchupUnservable, state.next, first))
 			continue
 		}
-		page := r.history.ReadRange(state.next, r.catchupBatch)
+		page := m.history.ReadRange(state.next, m.catchupBatch)
 		if len(page) == 0 {
-			delete(r.catchups, session) // caught up: live broadcasts take over
+			delete(m.catchups, session) // caught up: live broadcasts take over
 			continue
 		}
-		state.inflight = r.launchPage(ctx, session, state.next, page)
+		state.inflight = m.launchPage(ctx, session, state.next, page)
 		launched = append(launched, session)
 	}
 	if len(launched) == 0 {
 		return errors.Join(errs...)
 	}
-	wait := time.NewTimer(r.sendWait)
+	wait := time.NewTimer(m.sendWait)
 	defer wait.Stop()
 	expired := false
 	for _, session := range launched {
-		send := r.catchups[session].inflight
+		send := m.catchups[session].inflight
 		if !expired {
 			select {
 			case send.err = <-send.done:
@@ -670,7 +651,7 @@ func (r *Match) pumpCatchup(ctx context.Context) error {
 		if !send.poll() {
 			continue
 		}
-		if err := r.settleCatchup(session, r.catchups[session]); err != nil {
+		if err := m.settleCatchup(session, m.catchups[session]); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -681,8 +662,8 @@ func (r *Match) pumpCatchup(ctx context.Context) error {
 // caller's context values but not its cancellation (it may outlive the
 // Tick), and is bounded by CatchupSendTimeout; dropping the catch-up
 // cancels it.
-func (r *Match) launchPage(ctx context.Context, session nettransport.SessionID, start FrameID, page []Frame) *catchupSend {
-	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.sendTimeout)
+func (m *Match) launchPage(ctx context.Context, session nettransport.SessionID, start FrameID, page []Frame) *catchupSend {
+	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.sendTimeout)
 	send := &catchupSend{
 		start:  start,
 		end:    page[len(page)-1].ID + 1,
@@ -691,7 +672,7 @@ func (r *Match) launchPage(ctx context.Context, session nettransport.SessionID, 
 		cancel: cancel,
 	}
 	payload := EncodeBroadcast(page)
-	reliable := r.reliable
+	reliable := m.reliable
 	go func() {
 		send.done <- reliable.SendReliable(sendCtx, session, payload)
 	}()
@@ -704,23 +685,23 @@ func (r *Match) launchPage(ctx context.Context, session nettransport.SessionID, 
 // hash gains quorum agreeing reports the ruling runs; OnDesync fires
 // whenever the outlier SET changes (new members counted in
 // lockstep.desync.total), not merely when it grows in size.
-func (r *Match) ReportHash(player PlayerID, frame FrameID, hash uint64) error {
-	if r.closed {
+func (m *Match) ReportHash(player PlayerID, frame FrameID, hash uint64) error {
+	if m.closed {
 		return ErrMatchClosed
 	}
-	if !r.sequencer.KnownPlayer(player) {
+	if !m.sequencer.KnownPlayer(player) {
 		metrics.IncCounter(MetricInputRejected, metrics.Labels{"reason": "hash_unknown_player"}, 1)
 		return ErrPlayerUnknown
 	}
-	if frame == 0 || frame > r.history.Latest() {
+	if frame == 0 || frame > m.history.Latest() {
 		metrics.IncCounter(MetricInputRejected, metrics.Labels{"reason": "hash_invalid_frame"}, 1)
-		return fmt.Errorf("%w: frame %d, latest %d", ErrHashFrameInvalid, frame, r.history.Latest())
+		return fmt.Errorf("%w: frame %d, latest %d", ErrHashFrameInvalid, frame, m.history.Latest())
 	}
-	verdict, ready := r.detector.Report(player, frame, hash)
+	verdict, ready := m.detector.Report(player, frame, hash)
 	if !ready || len(verdict.Outliers) == 0 {
 		return nil
 	}
-	surfaced := r.ruled[frame]
+	surfaced := m.ruled[frame]
 	changed := len(verdict.Outliers) != len(surfaced)
 	newOutliers := 0
 	for _, outlier := range verdict.Outliers {
@@ -736,12 +717,12 @@ func (r *Match) ReportHash(player PlayerID, frame FrameID, hash uint64) error {
 	for _, outlier := range verdict.Outliers {
 		next[outlier] = struct{}{}
 	}
-	r.ruled[frame] = next
+	m.ruled[frame] = next
 	if newOutliers > 0 {
 		metrics.IncCounter(MetricDesync, nil, int64(newOutliers))
 	}
-	if r.onDesync != nil {
-		r.onDesync(verdict)
+	if m.onDesync != nil {
+		m.onDesync(verdict)
 	}
 	return nil
 }
@@ -749,11 +730,11 @@ func (r *Match) ReportHash(player PlayerID, frame FrameID, hash uint64) error {
 // TrimHashReports drops hash-report state for frames before the given id
 // (already judged and acted on). Trimmed frames are tombstoned in the
 // detector: late reports cannot rebuild a forgeable report set for them.
-func (r *Match) TrimHashReports(before FrameID) {
-	r.detector.Trim(before)
-	for frame := range r.ruled {
+func (m *Match) TrimHashReports(before FrameID) {
+	m.detector.Trim(before)
+	for frame := range m.ruled {
 		if frame < before {
-			delete(r.ruled, frame)
+			delete(m.ruled, frame)
 		}
 	}
 }
@@ -761,27 +742,27 @@ func (r *Match) TrimHashReports(before FrameID) {
 // TrimHistory drops stored frames before keep, bounding memory for long
 // matches that do not need the full replay. Catch-ups older than keep are
 // abandoned on their next pump with ErrCatchupUnservable.
-func (r *Match) TrimHistory(keep FrameID) {
-	r.history.TrimBefore(keep)
+func (m *Match) TrimHistory(keep FrameID) {
+	m.history.TrimBefore(keep)
 }
 
 // History exposes the match's frame history (catch-up source and replay
 // artifact). The returned structure is single-owner state: use it only from
 // the same serial handler that drives the Match, and do not mutate frames.
-func (r *Match) History() *History { return r.history }
+func (m *Match) History() *History { return m.history }
 
 // Close ends the match: all receivers and pending catch-ups are released
 // and every subsequent operation fails with ErrMatchClosed. One Match serves
 // exactly one match — do not reuse it.
-func (r *Match) Close() {
-	for _, state := range r.catchups {
+func (m *Match) Close() {
+	for _, state := range m.catchups {
 		state.drop()
 	}
-	r.closed = true
-	r.broadcastReceivers = nil
-	r.sessions = make(map[PlayerID]nettransport.SessionID)
-	r.spectators = make(map[nettransport.SessionID]struct{})
-	r.sessionOwners = make(map[nettransport.SessionID]PlayerID)
-	r.catchups = make(map[nettransport.SessionID]*catchupState)
-	r.ruled = make(map[FrameID]map[PlayerID]struct{})
+	m.closed = true
+	m.broadcastReceivers = nil
+	m.sessions = make(map[PlayerID]nettransport.SessionID)
+	m.spectators = make(map[nettransport.SessionID]struct{})
+	m.sessionOwners = make(map[nettransport.SessionID]PlayerID)
+	m.catchups = make(map[nettransport.SessionID]*catchupState)
+	m.ruled = make(map[FrameID]map[PlayerID]struct{})
 }

@@ -2,7 +2,7 @@
 // the server sequences player inputs into fixed-rate frames and broadcasts
 // them; simulation runs on the clients (and optionally on a server-side
 // arbiter), which must be bit-deterministic — fixed-point math, injected
-// randomness, no wall clock (the contract roost-skill's runtime already
+// randomness, no wall clock (the contract gameplay/skill's runtime already
 // satisfies).
 //
 // This is INPUT-frame synchronization (lockstep), not to be confused with
@@ -17,6 +17,22 @@
 // Sequencer 只负责输入排序；同包 Match 负责会话、广播与追帧，并通过
 // sync/nettransport 接入传输。实时冗余广播走 datagram，历史追帧走可靠通道；
 // 游戏模拟和输入含义由业务决定，不在排序器中实现。
+//
+// A Match owns one match's sequencer, frame history, redundant broadcast
+// encoder and desync detector. It broadcasts cut frames to attached sessions
+// over the datagram lane (loss is healed by frame redundancy, never by
+// retransmission) and pages catch-up frames to reconnecting sessions over the
+// reliable lane (KCP, QUIC or the AEAD UDP transport via nettransport's
+// senders).
+//
+// Match 由单一所有者串行驱动，没有内部锁。一实例只服务一场对局，结束时调用 Close。
+// Tick 包含同步传输调用，必须在 Nest 业务池及 Entity 锁外驱动；
+// Nest handler 可提交命令，但不能等待对局所有者或并发访问 Match。
+//
+// Transport note: wire Datagrams to a raw transport sender (UDP/KCP/QUIC).
+// nettransport.AsyncTransport is reliable-only and is the wrong place for
+// lockstep frames anyway: a queue that could fold or delay input frames would
+// silently lose more than redundancy can heal.
 package lockstep
 
 import (
@@ -59,7 +75,7 @@ type Frame struct {
 // MaxInputPayloadBytes is the absolute upper bound for one input payload;
 // real lockstep inputs are a few bytes, so anything near this limit is a
 // protocol bug. Matches must usually configure a much tighter
-// SequencerConfig.MaxInputBytes — the kit Match refuses configurations whose
+// SequencerConfig.MaxInputBytes — NewMatch refuses configurations whose
 // redundancy × players × payload budget exceeds one datagram.
 const MaxInputPayloadBytes = 1024
 
@@ -68,17 +84,16 @@ const MaxInputPayloadBytes = 1024
 const MaxSubmitWindow = 64
 
 // ReplayHorizon is how many frames behind the next uncut frame a player's
-// original input frame ids stay remembered (U-0193, RR-20260914-04). A
-// retransmission of an input already folded into a frame within this
-// horizon is idempotent; one older than the horizon is indistinguishable
+// original input frame ids stay remembered. A retransmission of an
+// input already folded into a frame within this horizon is idempotent; one older than the horizon is indistinguishable
 // from a first arrival and folds like one.
 const ReplayHorizon FrameID = MaxSubmitWindow
 
 // replayWindowSize is the number of distinct original frame ids that can be
 // legal at one instant: ReplayHorizon behind next, next itself, and the
 // submit window ahead of it. It is the ring's capacity, which makes the
-// dedup memory bounded at ADMISSION rather than at the next Advance
-// (U-0197, RR-20260914-08) — a client submitting thousands of distinct old
+// dedup memory bounded at ADMISSION rather than at the next Advance — a
+// client submitting thousands of distinct old
 // frame ids between two ticks grows nothing. Because every legal original
 // is within this span of every other, no two of them share a slot.
 const replayWindowSize = int(ReplayHorizon) + MaxSubmitWindow + 1
@@ -118,14 +133,14 @@ type Sequencer struct {
 	// taken and which frame each was folded into. The pending map only
 	// deduplicates within the target frame and is deleted when that frame
 	// is cut, so without this a retransmission of an input already in frame
-	// N was re-folded into frame N+1 and executed twice (RR-20260914-04).
+	// N would be re-folded into frame N+1 and executed twice.
 	//
 	// Each seat's ring holds replayWindowSize slots indexed by original id
 	// modulo that size, allocated on the seat's first input. Ids outside
 	// the horizon are neither read nor written, so an entry left behind by
 	// a long-cut frame is never trusted and is simply overwritten by the
 	// id that eventually maps onto it — no eviction pass, and no growth
-	// between ticks (RR-20260914-08).
+	// between ticks.
 	accepted map[PlayerID][]replaySlot
 }
 
@@ -137,6 +152,8 @@ type pendingInput struct {
 	folded  bool
 }
 
+// NewSequencer validates the seat set and limits and returns a sequencer
+// whose first frame is 1.
 func NewSequencer(config SequencerConfig) (*Sequencer, error) {
 	if len(config.Players) == 0 {
 		return nil, fmt.Errorf("%w: at least one player", ErrConfigInvalid)
@@ -158,7 +175,7 @@ func NewSequencer(config SequencerConfig) (*Sequencer, error) {
 	if len(config.Players) > MaxFrameInputs {
 		// A frame can carry at most MaxFrameInputs inputs on the wire; a
 		// match with more seats than that emits frames its own decoder
-		// rejects (RR-20260914-07). The byte budget in NewMatch does not
+		// rejects. The byte budget in NewMatch does not
 		// cover this — tiny payloads fit any number of seats.
 		return nil, fmt.Errorf("%w: %d players exceeds the wire limit of %d inputs per frame", ErrConfigInvalid, len(config.Players), MaxFrameInputs)
 	}
@@ -167,7 +184,7 @@ func NewSequencer(config SequencerConfig) (*Sequencer, error) {
 		if player < 0 {
 			// Negative ids are not seats: the match keeps a reserved
 			// negative value for spectator ownership, and a seat there
-			// would let one session be both (RR-20260914-06).
+			// would let one session be both.
 			return nil, fmt.Errorf("%w: player id %d is negative", ErrConfigInvalid, player)
 		}
 		if _, duplicate := players[player]; duplicate {
@@ -222,15 +239,15 @@ func (s *Sequencer) SubmitInput(player PlayerID, frame FrameID, payload []byte) 
 		return 0, ErrFrameTooEarly
 	}
 	// Identity, and only now: the ring is indexed by the id the client
-	// asked for, so it must not be touched before that id has been judged
-	// (U-0199). Nothing is lost by waiting — every remembered original
+	// asked for, so it must not be touched before that id has been judged.
+	// Nothing is lost by waiting — every remembered original
 	// satisfied original <= next+window when it was written, next only
 	// grows and window is fixed at construction, so an original the check
 	// above refuses can never have an identity here.
 	//
 	// An original already taken is a retransmission, whatever frame it
 	// would fold into now: answer with the frame it went into and change
-	// nothing (U-0193).
+	// nothing.
 	remembered := original >= s.replayFloor()
 	if remembered {
 		if slot := s.slot(player, original); slot.target != 0 && slot.original == original {
@@ -272,7 +289,7 @@ func (s *Sequencer) replayFloor() FrameID {
 // runs in the FrameID domain on purpose: FrameID is uint32 and the id comes
 // straight from the client, so converting to int first would wrap to a
 // NEGATIVE index on a platform whose int is 32 bits (GOARCH=386/arm) and
-// panic on the indexing — taking the match's goroutine with it (U-0199).
+// panic on the indexing — taking the match's goroutine with it.
 func replaySlotIndex(original FrameID) int {
 	return int(original % FrameID(replayWindowSize))
 }
@@ -324,6 +341,6 @@ func (s *Sequencer) Advance() Frame {
 	s.next++
 	// No eviction pass: the ring is fixed-capacity and replayFloor decides
 	// what is still trusted, so advancing the frame retires stale
-	// identities for free (U-0197).
+	// identities for free.
 	return frame
 }

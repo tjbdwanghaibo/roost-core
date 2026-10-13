@@ -7,6 +7,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
 )
 
+// Operation 是客户端命令类型：提交输入、上报关键帧哈希、请求追帧。
 type Operation byte
 
 const (
@@ -24,6 +25,7 @@ type Command struct {
 	Hash      uint64
 }
 
+// Validate 检查帧号非零以及各命令类型允许携带的字段。
 func (c Command) Validate() error {
 	if c.Frame == 0 {
 		return fmt.Errorf("%w: command frame is zero", ErrFrameCorrupt)
@@ -50,6 +52,7 @@ func (c Command) Validate() error {
 	return nil
 }
 
+// EncodeCommand 校验后编码命令，格式见 Command。
 func EncodeCommand(c Command) ([]byte, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
@@ -109,29 +112,29 @@ func DecodeCommand(data []byte) (Command, error) {
 
 // HandleCommand 必须在Match的串行handler内调用；传入由鉴权层映射的会话。
 // 重绑后旧会话无法提交；旁观者只有追帧权限。没有发送成功即业务ACK的约定。
-func (r *Match) HandleCommand(session nettransport.SessionID, c Command) error {
-	if r.closed {
+func (m *Match) HandleCommand(session nettransport.SessionID, c Command) error {
+	if m.closed {
 		return ErrMatchClosed
 	}
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	player, attached := r.sessionOwners[session]
+	player, attached := m.sessionOwners[session]
 	if !attached {
 		return ErrPlayerDetached
 	}
 	if c.Operation == OpCatchup {
 		if player == ownerSpectator {
-			return r.SpectatorCatchup(session, c.Frame)
+			return m.SpectatorCatchup(session, c.Frame)
 		}
-		return r.StartCatchup(player, c.Frame)
+		return m.StartCatchup(player, c.Frame)
 	}
 	if player == ownerSpectator {
 		return ErrPlayerUnknown
 	}
 	if c.Operation == OpHash {
-		return r.ReportHash(player, c.Frame, c.Hash)
+		return m.ReportHash(player, c.Frame, c.Hash)
 	}
-	_, err := r.SubmitInput(player, c.Frame, c.Payload)
+	_, err := m.SubmitInput(player, c.Frame, c.Payload)
 	return err
 }
