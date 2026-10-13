@@ -1,10 +1,20 @@
+// AOI：进入离开滞回、带区与移动、容量淘汰与同距规则、集群接缝、候选与工作区对照参考实现、配置与非法输入拒绝。
+
 package policy
 
 import (
+	"cmp"
+	"context"
+	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"math/rand/v2"
 	"reflect"
+	"slices"
 	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
 func interestFixture(t *testing.T, config AOIConfig) *AOI {
@@ -406,5 +416,572 @@ func TestInterestObserverEvaluationAdmitsNearestFirst(t *testing.T) {
 	want := []InterestEvent{{Observer: 1, Subject: 9, Kind: InterestEnter, Band: 0}}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("admission emitted transients: %+v, want %+v", events, want)
+	}
+}
+
+func TestObserverBlockBudgetRefusesARatioThatSubscribesTheWholeMap(t *testing.T) {
+	config := AOIConfig{
+		Bounds:      spatial.Rect{Max: spatial.Point{X: 10000, Y: 10000}},
+		BlockSize:   10,
+		EnterRadius: 900,
+		LeaveRadius: 1000,
+	}
+	if _, err := NewAOI(config); !errors.Is(err, ErrInterestBudget) {
+		t.Fatalf("a configuration where one observer covers 40401 blocks was accepted: err=%v", err)
+	}
+}
+
+// The budget is a configuration, not a constant: a deployment that really
+// wants a wide view says so.
+func TestObserverBlockBudgetIsConfigurable(t *testing.T) {
+	config := AOIConfig{
+		Bounds:            spatial.Rect{Max: spatial.Point{X: 10000, Y: 10000}},
+		BlockSize:         10,
+		EnterRadius:       900,
+		LeaveRadius:       1000,
+		MaxObserverBlocks: 100000,
+	}
+	if _, err := NewAOI(config); err != nil {
+		t.Fatalf("an explicit budget did not admit the configuration: %v", err)
+	}
+}
+
+// The ordinary shape — a block about the size of the view — is nowhere near
+// the default budget, and the worst case is computed rather than sampled: a
+// manager that only refused after an observer arrived would refuse in
+// production and pass every start-up check.
+func TestTheNineBlockShapeFitsTheDefaultBudget(t *testing.T) {
+	manager, err := NewAOI(AOIConfig{
+		Bounds:      spatial.Rect{Max: spatial.Point{X: 10000, Y: 10000}},
+		BlockSize:   150,
+		EnterRadius: 120,
+		LeaveRadius: 150,
+	})
+	if err != nil {
+		t.Fatalf("the classic nine-block configuration was refused: %v", err)
+	}
+	if err := manager.AddObserver(1, spatial.Point{X: 5000, Y: 5000}); err != nil {
+		t.Fatalf("add observer: %v", err)
+	}
+	if blocks := len(manager.observers[1].blocks); blocks > 16 {
+		t.Fatalf("a block-sized view subscribed to %d blocks", blocks)
+	}
+}
+
+// A radius so large that the box arithmetic would overflow must be refused by
+// the budget rather than wrap into a small number.
+func TestObserverBlockBudgetSaturatesInsteadOfWrapping(t *testing.T) {
+	config := AOIConfig{
+		Bounds:      spatial.Rect{Max: spatial.Point{X: 1 << 40, Y: 1 << 40}},
+		BlockSize:   1,
+		EnterRadius: 1 << 40,
+		LeaveRadius: 1 << 41,
+	}
+	if _, err := NewAOI(config); err == nil {
+		t.Fatal("a configuration whose observer box covers the whole map was accepted")
+	}
+}
+
+func TestInterestRefusesUnknownObserversAndZeroBlocks(t *testing.T) {
+	manager := interestFixture(t, AOIConfig{})
+	if err := manager.MoveObserver(999, spatial.Point{}); !errors.Is(err, ErrInterestUnknown) {
+		t.Fatalf("MoveObserver of an unknown observer = %v", err)
+	}
+	if _, err := NewAOICluster(AOIConfig{EnterRadius: 10, LeaveRadius: 20}); !errors.Is(err, spatial.ErrInvalidBounds) {
+		t.Fatalf("NewAOICluster without a block size = %v", err)
+	}
+}
+
+func interestConfig() AOIConfig {
+	return AOIConfig{Bounds: spatial.Rect{Min: spatial.Point{X: 0, Y: 0}, Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 100, EnterRadius: 60, LeaveRadius: 80, Bands: []int64{20, 40}}
+}
+
+// The interest manager's configuration is what keeps its box arithmetic from
+// wrapping and its hysteresis from oscillating; every invalid shape is
+// refused at construction.
+func TestNewInterestManagerRefusesEachInvalidConfig(t *testing.T) {
+	if _, err := NewAOI(interestConfig()); err != nil {
+		t.Fatalf("baseline rejected: %v", err)
+	}
+	cases := []struct {
+		name   string
+		mutate func(*AOIConfig)
+		want   error
+	}{
+		{"empty bounds", func(c *AOIConfig) {
+			c.Bounds = spatial.Rect{Min: spatial.Point{X: 5, Y: 5}, Max: spatial.Point{X: 5, Y: 5}}
+		}, spatial.ErrInvalidBounds},
+		{"block size zero", func(c *AOIConfig) { c.BlockSize = 0 }, spatial.ErrInvalidBounds},
+		{"enter radius zero", func(c *AOIConfig) { c.EnterRadius = 0 }, ErrInterestConfig},
+		{"leave radius below enter", func(c *AOIConfig) { c.LeaveRadius = c.EnterRadius - 1 }, ErrInterestConfig},
+		{"leave radius would wrap", func(c *AOIConfig) { c.LeaveRadius = maxInterestRadius }, ErrInterestConfig},
+		{"band edge zero", func(c *AOIConfig) { c.Bands = []int64{0, 40} }, ErrInterestConfig},
+		{"bands not ascending", func(c *AOIConfig) { c.Bands = []int64{40, 40} }, ErrInterestConfig},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := interestConfig()
+			tc.mutate(&cfg)
+			if _, err := NewAOI(cfg); !errors.Is(err, tc.want) {
+				t.Fatalf("NewAOI = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// Subjects and observers live inside the bounds and are addressed by id;
+// a point outside the world or an id nobody registered is refused rather
+// than indexed into a block that does not exist.
+func TestInterestManagerRefusesOutOfBoundsAndUnknownIDs(t *testing.T) {
+	m, err := NewAOI(interestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := spatial.Point{X: 5000, Y: 5}
+	if err := m.AddSubject(1, outside); !errors.Is(err, spatial.ErrInvalidBounds) {
+		t.Fatalf("AddSubject outside = %v", err)
+	}
+	if err := m.AddObserver(9, outside); !errors.Is(err, spatial.ErrInvalidBounds) {
+		t.Fatalf("AddObserver outside = %v", err)
+	}
+	if err := m.MoveSubject(1, spatial.Point{X: 1, Y: 1}); !errors.Is(err, ErrInterestUnknown) {
+		t.Fatalf("MoveSubject unknown = %v", err)
+	}
+	if err := m.RemoveSubject(1); !errors.Is(err, ErrInterestUnknown) {
+		t.Fatalf("RemoveSubject unknown = %v", err)
+	}
+	if err := m.MoveObserver(9, spatial.Point{X: 1, Y: 1}); !errors.Is(err, ErrInterestUnknown) {
+		t.Fatalf("MoveObserver unknown = %v", err)
+	}
+	if err := m.RemoveObserver(9); !errors.Is(err, ErrInterestUnknown) {
+		t.Fatalf("RemoveObserver unknown = %v", err)
+	}
+	if err := m.AddSubject(1, spatial.Point{X: 10, Y: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AddObserver(9, spatial.Point{X: 12, Y: 12}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.MoveSubject(1, outside); !errors.Is(err, spatial.ErrInvalidBounds) {
+		t.Fatalf("MoveSubject outside = %v", err)
+	}
+	if err := m.MoveObserver(9, outside); !errors.Is(err, spatial.ErrInvalidBounds) {
+		t.Fatalf("MoveObserver outside = %v", err)
+	}
+	if got := m.Visible(9); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("refused moves must leave positions intact; visible=%v", got)
+	}
+}
+
+// 以优化前完整候选遍历作对照，覆盖容量、同批多原因、退出和 ID 重建。
+func TestAOICandidatesMatchReference(t *testing.T) {
+	for _, limit := range []int{0, 1, 12, 64} {
+		for _, workers := range []int{1, 4} {
+			t.Run(fmt.Sprintf("limit=%d/workers=%d", limit, workers), func(t *testing.T) {
+				config := AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 2000, Y: 2000}}, BlockSize: 100, EnterRadius: 160, LeaveRadius: 200, MaxVisible: limit, Bands: []int64{50, 100}}
+				actual, err := NewAOI(config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				reference, err := NewAOI(config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				check := func(err error) {
+					t.Helper()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				rng := rand.New(rand.NewPCG(13, 29))
+				point := func() spatial.Point { return spatial.Point{X: 400 + rng.Int64N(600), Y: 400 + rng.Int64N(600)} }
+				for id := int64(1); id <= 80; id++ {
+					at := point()
+					for _, a := range []*AOI{actual, reference} {
+						check(a.AddSubject(id, at))
+					}
+				}
+				for id := int64(1); id <= 24; id++ {
+					at := point()
+					for _, a := range []*AOI{actual, reference} {
+						check(a.AddObserver(id, at))
+					}
+				}
+				compare := func() {
+					t.Helper()
+					if a, r := actual.Flush(), reference.Flush(); !reflect.DeepEqual(a, r) {
+						t.Fatalf("spatial events differ:\n%v\n%v", a, r)
+					}
+					if a, r := (blockSource{actual}).Flush(), (blockSource{reference}).Flush(); !reflect.DeepEqual(a, r) {
+						t.Fatalf("coverage events differ:\n%v\n%v", a, r)
+					}
+					for id := int64(1); id <= 24; id++ {
+						if !reflect.DeepEqual(actual.Visible(id), reference.Visible(id)) || !reflect.DeepEqual(actual.observers[id].blockVisible, reference.observers[id].blockVisible) {
+							t.Fatalf("observer %d differs", id)
+						}
+					}
+				}
+				compare()
+				for batch := range 80 {
+					actual.beginBatch()
+					reference.beginBatch()
+					for operation := range 12 {
+						sid, oid := 1+rng.Int64N(80), 1+rng.Int64N(24)
+						at := point()
+						blocks := []int64{actual.BlockAt(at), actual.BlockAt(point())}
+						for _, a := range []*AOI{actual, reference} {
+							switch (batch + operation) % 5 {
+							case 0:
+								check(a.MoveSubject(sid, at))
+							case 1:
+								check(a.MoveObserver(oid, at))
+							case 2:
+								check(a.SetObservedBlocks(sid, blocks))
+							case 3:
+								check(a.RemoveObserver(oid))
+								check(a.AddObserver(oid, at))
+							case 4:
+								check(a.RemoveSubject(sid))
+								check(a.AddSubject(sid, at))
+							}
+						}
+					}
+					for _, o := range reference.dirty {
+						o.dirty = dirtySpatial | dirtyCoverage
+					}
+					reference.serialWork = aoiWorkspace{}
+					reference.workerWork = nil
+					actual.endBatch(workers)
+					reference.batching = false
+					for _, o := range reference.dirty {
+						reference.evaluateObserverReference(o, &aoiWorkspace{}, o.dirty)
+						o.dirty = 0
+					}
+					clear(reference.dirty)
+					compare()
+				}
+			})
+		}
+	}
+}
+
+// 保留优化前的完整候选遍历算法，作为事件与可见集的对照；共用已修正的单对状态机。
+func (m *AOI) evaluateObserverReference(observer *interestObserver, work *aoiWorkspace, reason observerDirty) {
+	if reason&dirtyCoverage != 0 {
+		m.evaluateObserved(observer)
+	}
+	if reason&dirtySpatial == 0 {
+		return
+	}
+	work.visible = work.visible[:0]
+	for id := range observer.visible {
+		work.visible = append(work.visible, id)
+	}
+	slices.Sort(work.visible)
+	for _, subject := range work.visible {
+		at, exists := m.subjects[subject]
+		m.evaluatePair(observer, subject, at, !exists)
+	}
+	blocks := work.blocks[:0]
+	for block := range observer.blocks {
+		blocks = append(blocks, block)
+	}
+	slices.Sort(blocks)
+	work.blocks = blocks
+	// Admit new candidates nearest-first: block-order admission could let a
+	// farther subject enter and be evicted by a nearer one within the same
+	// evaluation, emitting a transient Enter+Leave pair downstream.
+	candidates := work.candidates[:0]
+	if work.seen == nil {
+		work.seen = make(map[int64]struct{})
+	}
+	seen := work.seen
+	clear(seen)
+	query := work.query[:0]
+	for _, block := range blocks {
+		query = m.index.AppendBlockIDs(query[:0], block)
+		for _, subject := range query {
+			if _, alreadyVisible := observer.visible[subject]; alreadyVisible {
+				continue
+			}
+			if _, duplicate := seen[subject]; duplicate {
+				continue
+			}
+			seen[subject] = struct{}{}
+			if at, exists := m.subjects[subject]; exists {
+				candidates = append(candidates, entryCandidate{subject: subject, at: at, distance: spatial.DistanceSquared(observer.at, at)})
+			}
+		}
+	}
+	work.query, work.candidates = query, candidates
+	work.seenPeak = max(work.seenPeak, len(seen))
+	slices.SortFunc(candidates, func(a, b entryCandidate) int {
+		if order := cmp.Compare(a.distance, b.distance); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.subject, b.subject)
+	})
+	for _, candidate := range candidates {
+		m.evaluatePair(observer, candidate.subject, candidate.at, false)
+	}
+}
+
+func TestAOIMaxVisibleEvictsNegativeID(t *testing.T) {
+	m, err := NewAOI(AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 2000, Y: 2000}}, BlockSize: 100, EnterRadius: 100, LeaveRadius: 120, MaxVisible: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	check(m.AddObserver(1001, spatial.Point{X: 1000, Y: 1000}))
+	check(m.AddSubject(-2, spatial.Point{X: 1090, Y: 1000}))
+	m.Flush()
+	check(m.AddSubject(3, spatial.Point{X: 1010, Y: 1000}))
+	if got := m.Visible(1001); !slices.Equal(got, []int64{3}) {
+		t.Fatalf("closer subject must replace negative ID: got %v", got)
+	}
+	want := []InterestEvent{{Observer: 1001, Subject: -2, Kind: InterestLeave, Band: -1}, {Observer: 1001, Subject: 3, Kind: InterestEnter, Band: 0}}
+	if got := m.Flush(); !slices.Equal(got, want) {
+		t.Fatalf("events: got %v want %v", got, want)
+	}
+}
+
+// 同距离保留旧成员；多个最远成员同距时，按较小 ID 淘汰。
+func TestAOICandidatesPreserveDistanceTies(t *testing.T) {
+	for _, workers := range []int{1, 4} {
+		m, err := NewAOI(AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 2000, Y: 2000}}, BlockSize: 100, EnterRadius: 100, LeaveRadius: 120, MaxVisible: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		check := func(err error) {
+			t.Helper()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		check(m.AddObserver(1001, spatial.Point{X: 1000, Y: 1000}))
+		check(m.AddSubject(-2, spatial.Point{X: 1090, Y: 1000}))
+		check(m.AddSubject(2, spatial.Point{X: 910, Y: 1000}))
+		m.beginBatch()
+		check(m.AddSubject(3, spatial.Point{X: 1000, Y: 1090}))
+		m.endBatch(workers)
+		if got := m.Visible(1001); !slices.Equal(got, []int64{-2, 2}) {
+			t.Fatalf("ties replaced incumbents: %v", got)
+		}
+		m.beginBatch()
+		check(m.AddSubject(4, spatial.Point{X: 1010, Y: 1000}))
+		m.endBatch(workers)
+		if got := m.Visible(1001); !slices.Equal(got, []int64{2, 4}) {
+			t.Fatalf("wrong farthest tie eviction: %v", got)
+		}
+	}
+}
+
+func TestAOIEventCollectionSerialAndParallelLifecycle(t *testing.T) {
+	run := func(workers int) [][]InterestEvent {
+		a := interestFixture(t, AOIConfig{EnterRadius: 100, LeaveRadius: 130, BlockSize: 50})
+		check := func(err error) {
+			t.Helper()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		at := spatial.Point{X: 100, Y: 100}
+		check(a.AddSubject(100, at))
+		for id := int64(1); id <= 8; id++ {
+			check(a.AddObserver(id, at))
+		}
+		a.Flush()
+		(blockSource{a}).Flush()
+		a.beginBatch()
+		check(a.MoveSubject(100, spatial.Point{X: 900, Y: 900}))
+		check(a.SetObservedBlocks(100, []int64{a.BlockAt(at)}))
+		a.endBatch(workers)
+		spatialEvents, blockEvents := a.Flush(), (blockSource{a}).Flush()
+		if len(spatialEvents) != 8 || len(blockEvents) != 8 {
+			t.Fatalf("lost batch events: %v %v", spatialEvents, blockEvents)
+		}
+		for i := range spatialEvents {
+			if spatialEvents[i].Kind != InterestLeave || blockEvents[i].Kind != InterestEnter {
+				t.Fatal("wrong transition")
+			}
+		}
+		check(a.RemoveObserver(1))
+		check(a.AddObserver(1, at))
+		lifecycle := (blockSource{a}).Flush()
+		if len(lifecycle) != 2 || lifecycle[0].Kind != InterestLeave || lifecycle[1].Kind != InterestEnter {
+			t.Fatalf("reordered lifecycle: %v", lifecycle)
+		}
+		if len(a.Flush()) != 0 || len((blockSource{a}).Flush()) != 0 {
+			t.Fatal("events delivered twice")
+		}
+		return [][]InterestEvent{spatialEvents, blockEvents, lifecycle}
+	}
+	if one, many := run(1), run(4); !reflect.DeepEqual(one, many) {
+		t.Fatalf("serial=%v parallel=%v", one, many)
+	}
+}
+
+// 强制全量重算作为分类重算的对照，覆盖同批多原因、退出和 ID 重建。
+func TestAOISelectiveRecomputeMatchesFullRecompute(t *testing.T) {
+	for _, workers := range []int{1, 4} {
+		t.Run(fmt.Sprint(workers), func(t *testing.T) {
+			config := AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 2000, Y: 2000}}, BlockSize: 100, EnterRadius: 160, LeaveRadius: 200, MaxVisible: 12, Bands: []int64{50, 100}}
+			actual, err := NewAOI(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reference, err := NewAOI(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			check := func(err error) {
+				t.Helper()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			rng := rand.New(rand.NewPCG(13, 29))
+			point := func() spatial.Point { return spatial.Point{X: 400 + rng.Int64N(600), Y: 400 + rng.Int64N(600)} }
+			for id := int64(1); id <= 80; id++ {
+				at := point()
+				for _, a := range []*AOI{actual, reference} {
+					check(a.AddSubject(id, at))
+				}
+			}
+			for id := int64(1); id <= 24; id++ {
+				at := point()
+				for _, a := range []*AOI{actual, reference} {
+					check(a.AddObserver(id, at))
+				}
+			}
+			compare := func() {
+				t.Helper()
+				if a, r := actual.Flush(), reference.Flush(); !reflect.DeepEqual(a, r) {
+					t.Fatalf("spatial events differ:\n%v\n%v", a, r)
+				}
+				if a, r := (blockSource{actual}).Flush(), (blockSource{reference}).Flush(); !reflect.DeepEqual(a, r) {
+					t.Fatalf("coverage events differ:\n%v\n%v", a, r)
+				}
+				for id := int64(1); id <= 24; id++ {
+					if !reflect.DeepEqual(actual.Visible(id), reference.Visible(id)) || !reflect.DeepEqual(actual.observers[id].blockVisible, reference.observers[id].blockVisible) {
+						t.Fatalf("observer %d differs", id)
+					}
+				}
+			}
+			compare()
+			for batch := range 80 {
+				actual.beginBatch()
+				reference.beginBatch()
+				for operation := range 12 {
+					sid, oid := 1+rng.Int64N(80), 1+rng.Int64N(24)
+					at := point()
+					blocks := []int64{actual.BlockAt(at), actual.BlockAt(point())}
+					for _, a := range []*AOI{actual, reference} {
+						switch (batch + operation) % 5 {
+						case 0:
+							check(a.MoveSubject(sid, at))
+						case 1:
+							check(a.MoveObserver(oid, at))
+						case 2:
+							check(a.SetObservedBlocks(sid, blocks))
+						case 3:
+							check(a.RemoveObserver(oid))
+							check(a.AddObserver(oid, at))
+						case 4:
+							check(a.RemoveSubject(sid))
+							check(a.AddSubject(sid, at))
+						}
+					}
+				}
+				for _, o := range reference.dirty {
+					o.dirty = dirtySpatial | dirtyCoverage
+				}
+				reference.serialWork = aoiWorkspace{}
+				reference.workerWork = nil
+				actual.endBatch(workers)
+				reference.endBatch(1)
+				compare()
+			}
+		})
+	}
+}
+
+func TestAOIWorkspaceDropsOversizedScratch(t *testing.T) {
+	w := aoiWorkspace{visible: make([]int64, 0, aoiWorkspaceLimit+1), blocks: make([]int64, 0, aoiWorkspaceLimit+1), query: make([]int64, 0, aoiWorkspaceLimit+1), candidates: make([]entryCandidate, 0, aoiWorkspaceLimit+1), seen: map[int64]struct{}{1: {}}, seenPeak: aoiWorkspaceLimit + 1}
+	w.release()
+	if w.visible != nil || w.blocks != nil || w.query != nil || w.candidates != nil || w.seen != nil {
+		t.Fatal("oversized scratch retained")
+	}
+}
+
+func TestFarthestTieKeepsDeterministicEviction(t *testing.T) {
+	for range 100 {
+		a := interestFixture(t, AOIConfig{MaxVisible: 2})
+		a.subjects[10] = spatial.Point{X: 400, Y: 500}
+		a.subjects[20] = spatial.Point{X: 600, Y: 500}
+		observer := &interestObserver{id: 1, at: spatial.Point{X: 500, Y: 500}, visible: map[int64]int{20: 0, 10: 0}}
+		if a.evictFarther(observer, spatial.Point{X: 500, Y: 600}) {
+			t.Fatal("equal distance replaced held object")
+		}
+		if !a.evictFarther(observer, spatial.Point{X: 500, Y: 550}) {
+			t.Fatal("nearer object not admitted")
+		}
+		if _, exists := observer.visible[10]; exists {
+			t.Fatal("tie no longer evicts lower ID")
+		}
+	}
+}
+
+func TestInterestSelectsSourceViewsBeforeComparingPriority(t *testing.T) {
+	near, team := entity.SyncProfile{Key: "near"}, entity.SyncProfile{Key: "team", LOD: 8}
+	m, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: &sink{}, ProfilePriorities: map[entity.SyncProfile]int{team: -5}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close(context.Background())
+	player(t, m, 1)
+	var captured entity.SyncProfile
+	s := entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: 2, Packer: entity.SubjectSyncPackFunc{Snapshot: func(p entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+		captured = p
+		return entity.TakeFrozenSyncPayload(1, []byte("view")), nil
+	}}})
+	if err := m.Register(s); err != nil {
+		t.Fatal(err)
+	}
+	profiles := map[string]map[int]entity.SyncProfile{SourceSpatial: {0: near}, "team": {0: team}}
+	in, err := NewInterest(InterestConfig{Manager: m, AOI: AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150}, Relations: []string{"team"}, SourceProfiles: profiles})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	profiles["team"][0] = near
+	if err := in.Enter(1, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.Show(2, spatial.Point{X: 510, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	in.Relation("team").Set(1, []int64{2})
+	if refusals := in.Apply(); len(refusals) != 0 {
+		t.Fatal(refusals)
+	}
+	if err := m.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if captured != team.Normalize() {
+		t.Fatalf("source/priority lost: %+v", captured)
+	}
+	in.Relation("team").Clear(1)
+	in.Apply()
+	if err := m.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if captured != near.Normalize() {
+		t.Fatalf("source fallback lost: %+v", captured)
 	}
 }

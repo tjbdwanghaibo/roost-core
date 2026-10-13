@@ -1,8 +1,12 @@
+// 序列器、广播编解码、历史与组帧器，以及对局 / 序列器的配置与会话守卫。
+
 package lockstep
 
 import (
+	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -378,5 +382,192 @@ func TestFrameAssemblerReportsUnhealableGap(t *testing.T) {
 	}
 	if len(released) != 13 || released[0].ID != 1 || released[12].ID != 13 {
 		t.Fatalf("released = %d frames, first=%v", len(released), released[0].ID)
+	}
+}
+
+func TestBroadcastCacheTracksConnectionLifecycle(t *testing.T) {
+	transport := newRecordingTransport()
+	match := newTestMatch(t, transport, nil)
+	if err := match.Attach(1, 101); err != nil {
+		t.Fatal(err)
+	}
+	if err := match.AttachSpectator(300); err != nil {
+		t.Fatal(err)
+	}
+	before := match.broadcastOrder()
+	if len(before) != 2 || before[0].session != 101 || before[1].session != 300 {
+		t.Fatal(before)
+	}
+	if err := match.Attach(1, 102); err != nil {
+		t.Fatal(err)
+	}
+	if match.DetachSession(1, 101) {
+		t.Fatal("stale disconnect removed new connection")
+	}
+	after := match.broadcastOrder()
+	if after[0].session != 102 || before[0].session != 101 {
+		t.Fatal("rebind cache invalidation/snapshot failed")
+	}
+	match.DetachSpectator(300)
+	if len(match.broadcastOrder()) != 1 {
+		t.Fatal("spectator remains")
+	}
+	match.Detach(1)
+	if len(match.broadcastOrder()) != 0 {
+		t.Fatal("player remains")
+	}
+	if err := match.Attach(2, 202); err != nil {
+		t.Fatal(err)
+	}
+	if len(match.broadcastOrder()) != 1 {
+		t.Fatal("empty cache did not invalidate")
+	}
+	match.Close()
+	if len(match.broadcastOrder()) != 0 {
+		t.Fatal("closed cache retains receiver")
+	}
+}
+
+// 对局没有数据报发送器不能建；序列器至少一个座位且座位不重复。旁观者会话与座位会话互斥（座位占用的会话不能再当旁观者，旁观者
+// 重复挂接幂等）；未挂接的旁观者不能追帧；关闭后的对局拒绝挂接旁观者与哈希上报。
+
+func TestMatchAndSequencerRefuseInvalidConfiguration(t *testing.T) {
+	if _, err := NewMatch(MatchConfig{Sequencer: SequencerConfig{Players: []PlayerID{1}}}); !errors.Is(err, ErrMatchConfigInvalid) || !strings.Contains(err.Error(), "datagram sender is required") {
+		t.Fatalf("NewMatch without a datagram sender = %v", err)
+	}
+	if _, err := NewSequencer(SequencerConfig{}); !errors.Is(err, ErrConfigInvalid) || !strings.Contains(err.Error(), "at least one player") {
+		t.Fatalf("NewSequencer without players = %v", err)
+	}
+	if _, err := NewSequencer(SequencerConfig{Players: []PlayerID{1, 2, 1}}); !errors.Is(err, ErrConfigInvalid) || !strings.Contains(err.Error(), "duplicate player 1") {
+		t.Fatalf("NewSequencer with a duplicate seat = %v", err)
+	}
+	if _, err := NewMatch(MatchConfig{Sequencer: SequencerConfig{Players: []PlayerID{1, 1}}, Datagrams: newRecordingTransport()}); !errors.Is(err, ErrConfigInvalid) {
+		t.Fatalf("NewMatch forwards the sequencer's refusal: %v", err)
+	}
+}
+
+func TestSpectatorSessionsAreExclusiveAndMustBeAttachedToCatchUp(t *testing.T) {
+	transport := newRecordingTransport()
+	match := newTestMatch(t, transport, nil)
+	if err := match.Attach(1, 101); err != nil {
+		t.Fatal(err)
+	}
+	if err := match.AttachSpectator(101); !errors.Is(err, ErrSessionInUse) {
+		t.Fatalf("a seat's session attached as a spectator: %v", err)
+	}
+	if _, spectating := match.spectators[101]; spectating {
+		t.Fatal("a refused spectator attach still registered the session")
+	}
+	if err := match.AttachSpectator(500); err != nil {
+		t.Fatal(err)
+	}
+	if err := match.AttachSpectator(500); err != nil {
+		t.Fatalf("re-attaching the same spectator session must be idempotent: %v", err)
+	}
+	if err := match.SpectatorCatchup(501, 1); !errors.Is(err, ErrPlayerDetached) {
+		t.Fatalf("catch-up for a spectator that never attached = %v", err)
+	}
+	if _, err := match.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := match.SpectatorCatchup(500, 1); err != nil {
+		t.Fatalf("catch-up for an attached spectator = %v", err)
+	}
+}
+
+func TestClosedMatchRefusesSpectatorsAndHashReports(t *testing.T) {
+	transport := newRecordingTransport()
+	match := newTestMatch(t, transport, nil)
+	if err := match.Attach(1, 101); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := match.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	match.Close()
+	if err := match.AttachSpectator(500); !errors.Is(err, ErrMatchClosed) {
+		t.Fatalf("AttachSpectator after Close = %v", err)
+	}
+	if _, spectating := match.spectators[500]; spectating {
+		t.Fatal("a closed match registered a spectator")
+	}
+	if err := match.ReportHash(1, 1, 42); !errors.Is(err, ErrMatchClosed) {
+		t.Fatalf("ReportHash after Close = %v", err)
+	}
+	if err := match.StartCatchup(1, 1); !errors.Is(err, ErrPlayerDetached) {
+		t.Fatalf("StartCatchup after Close = %v (Close detaches every seat first)", err)
+	}
+}
+
+// 座位号与旁观者标记不能共用一个值域（Match 用 PlayerID(-1) 当旁观者哨兵）：座位号必须非负，负值在创建时拒绝。
+// 历史：RR-20260914-06。
+func TestMatchPromiseNegativeSeatIsRefused(t *testing.T) {
+	tr := newRecordingTransport()
+	r, err := NewMatch(MatchConfig{Sequencer: SequencerConfig{Players: []PlayerID{-1}, MaxInputBytes: 8}, Datagrams: tr, Reliable: tr})
+	if err != nil {
+		if !errors.Is(err, ErrConfigInvalid) {
+			t.Fatalf("negative seat refused with the wrong error: %v", err)
+		}
+		return
+	}
+	defer r.Close()
+	if err := r.Attach(-1, 101); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.AttachSpectator(101); !errors.Is(err, ErrSessionInUse) {
+		t.Fatalf("same session accepted as seat -1 and spectator: %v", err)
+	}
+}
+
+// 被接受的对局不能生成自己的解码器拒绝的帧：座位数在创建时对齐协议上限 MaxFrameInputs。
+// 历史：RR-20260914-07。
+func TestMatchPromiseSeatCountIsBoundByTheWireDecoder(t *testing.T) {
+	tr := newRecordingTransport()
+	players := make([]PlayerID, MaxFrameInputs+1)
+	for i := range players {
+		players[i] = PlayerID(i + 1)
+	}
+	r, err := NewMatch(MatchConfig{Sequencer: SequencerConfig{Players: players, MaxInputBytes: 1}, RedundancyDepth: 1, MaxDatagramBytes: 8192, Datagrams: tr})
+	if err != nil {
+		if !errors.Is(err, ErrConfigInvalid) {
+			t.Fatalf("oversized seat set refused with the wrong error: %v", err)
+		}
+	} else {
+		defer r.Close()
+		if err := r.Attach(1, 101); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range players {
+			if _, err := r.SubmitInput(p, 1, []byte{1}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := r.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := DecodeBroadcast(tr.datagrams[101][0]); err != nil {
+			t.Fatalf("accepted match emits undecodable frame: %v", err)
+		}
+	}
+	// 对照:刚好 MaxFrameInputs 个座位可以建房,且全员输入的帧可解码。
+	full := players[:MaxFrameInputs]
+	r2, err := NewMatch(MatchConfig{Sequencer: SequencerConfig{Players: full, MaxInputBytes: 1}, RedundancyDepth: 1, MaxDatagramBytes: 8192, Datagrams: tr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r2.Close()
+	if err := r2.Attach(1, 102); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range full {
+		if _, err := r2.SubmitInput(p, 1, []byte{1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r2.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if frames, err := DecodeBroadcast(tr.datagrams[102][0]); err != nil || len(frames[0].Inputs) != MaxFrameInputs {
+		t.Fatalf("full match frame: %v inputs=%d", err, len(frames[0].Inputs))
 	}
 }

@@ -4,14 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
+	corenats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 )
 
 func TestDurableSyncNamePromiseDistinguishesPrefixes(t *testing.T) {
@@ -394,4 +396,131 @@ func TestJetStreamSyncBusStopWithContextIsBoundedAndRetryable(t *testing.T) {
 	if js.subs[0].stops.Load() != 1 {
 		t.Fatalf("subscription stopped %d times, want 1", js.subs[0].stops.Load())
 	}
+}
+
+// 流名跟随 prefix：两个 prefix 不同的部署共用一个 NATS 时互不改写对方的流；流名缺省由 prefix 派生，默认 prefix roost.sync 仍得到
+// ROOST_SYNC，显式配置的流名优先。
+// 历史：RR-20260926-56。
+func TestJetStreamSyncStreamFollowsThePrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name, prefix, stream, want string
+	}{
+		{name: "default prefix keeps the deployed stream", want: "ROOST_SYNC"},
+		{name: "explicit default prefix keeps the deployed stream", prefix: "roost.sync", want: "ROOST_SYNC"},
+		{name: "isolated prefix", prefix: "zz3640.sync", want: "ZZ3640_SYNC"},
+		{name: "deeper prefix", prefix: "tenant.b.sync", want: "TENANT_B_SYNC"},
+		{name: "explicit stream wins", prefix: "zz3640.sync", stream: "ROOST_SYNC", want: "ROOST_SYNC"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := streamFor(t, tc.prefix, tc.stream); got != tc.want {
+				t.Fatalf("prefix %q stream %q: the bus ensured stream %q, want %q", tc.prefix, tc.stream, got, tc.want)
+			}
+		})
+	}
+	// 大小写与分隔符在流名里会被折叠；折叠后相撞的不同 prefix 仍须得到不同的流。
+	seen := map[string]string{}
+	for _, prefix := range []string{"roost.sync", "zz.sync", "zz_sync", "ZZ.sync", "zz-sync", "zz.sync.a", "zz.sync_a"} {
+		stream := streamFor(t, prefix, "")
+		if other, taken := seen[stream]; taken {
+			t.Errorf("prefixes %q and %q share stream %q", other, prefix, stream)
+		}
+		seen[stream] = prefix
+	}
+}
+
+func streamFor(t *testing.T, prefix, stream string) string {
+	t.Helper()
+	js := newFakeJetStream()
+	if _, err := NewJetStreamSyncBus(context.Background(), js, JetStreamSyncConfig{
+		LocalSid: 7, Prefix: prefix, Stream: stream, Storage: fnats.JetStreamStorageMemory,
+	}); err != nil {
+		t.Fatalf("prefix %q: %v", prefix, err)
+	}
+	if len(js.streams) != 1 {
+		t.Fatalf("prefix %q: %d streams ensured", prefix, len(js.streams))
+	}
+	wantPrefix := prefix
+	if wantPrefix == "" {
+		wantPrefix = defaultJetStreamSyncPrefix
+	}
+	if subjects := js.streams[0].Subjects; len(subjects) != 1 || subjects[0] != wantPrefix+".>" {
+		t.Fatalf("prefix %q: stream subjects %v", prefix, subjects)
+	}
+	return js.streams[0].Name
+}
+
+// recordingNatsClient is the smallest nats.IClient that lets the bus reach
+// its argument checks; it records what would have gone on the wire.
+type recordingNatsClient struct {
+	published  int
+	subscribed int
+}
+
+func (c *recordingNatsClient) Publish(string, []byte) error { c.published++; return nil }
+func (c *recordingNatsClient) Request(string, []byte, time.Duration) ([]byte, error) {
+	return nil, errors.New("unexpected request")
+}
+func (c *recordingNatsClient) Subscribe(string, corenats.MsgHandler) (corenats.ISubscription, error) {
+	c.subscribed++
+	return nil, errors.New("unexpected subscribe")
+}
+func (c *recordingNatsClient) QueueSubscribe(string, string, corenats.MsgHandler) (corenats.ISubscription, error) {
+	c.subscribed++
+	return nil, errors.New("unexpected queue subscribe")
+}
+func (c *recordingNatsClient) Drain() error { return nil }
+func (c *recordingNatsClient) Close()       {}
+
+func expectGuardErr(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %v, want it to contain %q", err, want)
+	}
+}
+
+// Both sync buses refuse an uninitialised bus, a nil message, a blank topic and a nil handler before anything reaches the wire.
+func TestSyncBusesRefuseEachInvalidArgumentBeforeTheWire(t *testing.T) {
+	t.Run("nats", func(t *testing.T) {
+		expectGuardErr(t, NewNatsSyncBus(nil, 1, "").Publish(&fsyncbus.SyncMsg{Topic: "room"}), "nats sync: bus is not initialized")
+		_, err := NewNatsSyncBus(nil, 1, "").Subscribe("room", func(context.Context, *fsyncbus.SyncMsg) error { return nil })
+		expectGuardErr(t, err, "nats sync: bus is not initialized")
+		var nilBus *natsSyncBus
+		expectGuardErr(t, nilBus.Publish(&fsyncbus.SyncMsg{Topic: "room"}), "nats sync: bus is not initialized")
+
+		client := &recordingNatsClient{}
+		bus := NewNatsSyncBus(client, 1, "")
+		expectGuardErr(t, bus.Publish(nil), "nats sync: message is nil")
+		expectGuardErr(t, bus.Publish(&fsyncbus.SyncMsg{Topic: "  "}), "nats sync: topic is empty")
+		_, err = bus.Subscribe(" ", func(context.Context, *fsyncbus.SyncMsg) error { return nil })
+		expectGuardErr(t, err, "nats sync: topic is empty")
+		_, err = bus.Subscribe("room", nil)
+		expectGuardErr(t, err, "nats sync: handler is nil")
+		if client.published != 0 || client.subscribed != 0 {
+			t.Fatalf("refused calls reached the client: published=%d subscribed=%d", client.published, client.subscribed)
+		}
+	})
+	t.Run("jetstream", func(t *testing.T) {
+		if _, err := NewJetStreamSyncBus(context.Background(), nil, JetStreamSyncConfig{}); err == nil || !strings.Contains(err.Error(), "jetstream is nil") {
+			t.Fatalf("nil jetstream error = %v", err)
+		}
+		var nilBus *jetStreamSyncBus
+		expectGuardErr(t, nilBus.Publish(&fsyncbus.SyncMsg{Topic: "room"}), "jetstream sync: bus is not initialized")
+		_, err := nilBus.Subscribe("room", func(context.Context, *fsyncbus.SyncMsg) error { return nil })
+		expectGuardErr(t, err, "jetstream sync: bus is not initialized")
+
+		js := newFakeJetStream()
+		bus, err := NewJetStreamSyncBus(context.Background(), js, JetStreamSyncConfig{LocalSid: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		expectGuardErr(t, bus.Publish(nil), "jetstream sync: message is nil")
+		expectGuardErr(t, bus.Publish(&fsyncbus.SyncMsg{Topic: "\t"}), "jetstream sync: topic is empty")
+		_, err = bus.Subscribe("", func(context.Context, *fsyncbus.SyncMsg) error { return nil })
+		expectGuardErr(t, err, "jetstream sync: topic is empty")
+		_, err = bus.Subscribe("room", nil)
+		expectGuardErr(t, err, "jetstream sync: handler is nil")
+		if len(js.publishes) != 0 || len(js.consumers) != 0 {
+			t.Fatalf("refused calls reached jetstream: publishes=%d consumers=%d", len(js.publishes), len(js.consumers))
+		}
+	})
 }
