@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// U-0124: the sender's nil-client guard is generated code; the companion test
-// generated next to the sender package is what executes it.
+// sender 的 nil client 守卫是生成代码，执行它的是生成在 sender 包旁边的配套测试。
 func TestGenerateSenderGuardTest(t *testing.T) {
 	dir := t.TempDir()
 	senderFile := filepath.Join(dir, "handler_nest_gen.go")
