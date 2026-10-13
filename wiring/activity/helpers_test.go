@@ -29,12 +29,8 @@ func (c *activityClock) advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
-// testGroupsYAML is the activity groups file every coordinator in this
-// package's tests is built with, unless a test is about the groups themselves:
-// "group-a" (the group activityKey uses) of games 1 to 9 and 1000, and
-// "group-b" of games 2001 and 2002 for the tests that need a second group. New
-// requires groups (RR-20261006-17), and the Mod's tests read the same file
-// (modConfig), so the two ways of building a coordinator agree on it.
+// testGroupsYAML 是本包除组文件专项用例外每个协调器都用的活动组文件："group-a"（activityKey 用的组）含 game 1～9 与 1000，
+// "group-b" 含 2001、2002 供需要第二个组的用例。New 要求组，Mod 的用例读同一份文件（modConfig），两种构造方式对此一致。
 const testGroupsYAML = `groups:
   - id: group-a
     game_sids: [1, 2, 3, 4, 5, 6, 7, 8, 9, 1000]

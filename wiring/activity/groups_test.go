@@ -1,6 +1,20 @@
 package activity
 
-import domain "github.com/tjbdwanghaibo/roost-core/service/activity"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	domain "github.com/tjbdwanghaibo/roost-core/service/activity"
+)
 
 // C4（维护者决定，docs/feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md）：活动组由一个文件定义，game 与
 // 协调器经同一个 ParseGroups 读它。承诺：
@@ -11,16 +25,6 @@ import domain "github.com/tjbdwanghaibo/roost-core/service/activity"
 //   - Of 按 sid 找到所属组，IDs 按文件顺序给出全部组 id；
 //   - 协调器 Mod：activity.groups_file 设置后在 Init 校验文件，sweep_groups 为空时扫文件里的全部组，
 //     显式 sweep_groups 仍以它为准；文件不合格时 Init 失败并点名键名。
-
-import (
-	"context"
-	"fmt"
-	"os"
-	"path/filepath"
-	"slices"
-	"strings"
-	"testing"
-)
 
 func groupYAML(id string, sids []int64) string {
 	var b strings.Builder
@@ -181,4 +185,129 @@ func TestModSweepsTheGroupsInTheGroupsFile(t *testing.T) {
 			t.Fatalf("Init with a missing groups file: %v", err)
 		}
 	})
+}
+
+// 组文件设置后，OpenActivity 按它核对 expected 集合：Key 的组必须在文件里，expected 里的每个 sid 都必须是该组成员（组成员的子集
+// 是正常的——只有活着的服进 expected）；不一致就拒绝（ErrInvalid）并点名文件、组与 sid，拒绝发生在任何写入之前，窗口里不留 opening 条目。
+
+func memoryStores() domain.RedisStores {
+	return domain.RedisStores{
+		Activities:   versionstore.NewMemoryStore[domain.Key, domain.Activity](),
+		Participants: versionstore.NewMemoryStore[domain.ParticipantKey, domain.Participant](),
+		Ledger:       versionstore.NewMemoryStore[domain.RequestKey, domain.ProgressReservation](),
+		Audits:       versionstore.NewMemoryStore[domain.Key, domain.NotifyAuditLog](),
+		Dispatches:   versionstore.NewMemoryStore[domain.DispatchKey, domain.Dispatch](),
+		Windows:      versionstore.NewMemoryStore[string, domain.Window](),
+	}
+}
+
+// coordinatorWithGroupsFile wires the Service the way the Mod's Provide does,
+// over memory stores, with activity.groups_file pointing at path.
+func coordinatorWithGroupsFile(t *testing.T, path string) (*domain.Service, domain.RedisStores) {
+	t.Helper()
+	cfg := modConfig(t)
+	cfg.Set("activity.groups_file", path)
+	mod := NewMod(nil)
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	stores := memoryStores()
+	service, err := mod.newService(stores, func() time.Time { return time.Unix(1_700_000_000, 0) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service, stores
+}
+
+func TestTheCoordinatorRefusesAnExpectedSetTheGroupsFileDoesNotAllow(t *testing.T) {
+	path := writeGroups(t, groupYAML("alliance-a", []int64{1000, 1001, 1002})+"  - id: alliance-b\n    game_sids: [2000, 2001]\n")
+	cases := []struct {
+		name     string
+		group    string
+		expected []int32
+		mustName []string
+	}{
+		{"a-sid-of-another-group", "alliance-a", []int32{1000, 2000}, []string{"alliance-a", "2000", "alliance-b"}},
+		{"a-sid-in-no-group", "alliance-a", []int32{1000, 1001, 3000}, []string{"alliance-a", "3000"}},
+		{"a-group-not-in-the-file", "alliance-c", []int32{1000}, []string{"alliance-c"}},
+		{"the-whole-other-group-under-this-key", "alliance-a", []int32{2000, 2001}, []string{"alliance-a", "2000"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			service, stores := coordinatorWithGroupsFile(t, path)
+			key := domain.Key{GroupID: tc.group, ActivityID: "race-1", Phase: domain.PhaseClose}
+			opened, err := service.OpenActivity(context.Background(), key, tc.expected)
+			if err == nil {
+				t.Fatalf("OpenActivity(%s, %v) opened %+v; the groups file does not allow that expected set", tc.group, tc.expected, opened.ExpectedGameSIDs)
+			}
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("OpenActivity error %v is not ErrInvalid", err)
+			}
+			for _, want := range append([]string{path}, tc.mustName...) {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q does not name %s", err, want)
+				}
+			}
+			if _, found, err := stores.Windows.Get(context.Background(), tc.group); err != nil || found {
+				t.Fatalf("a refused open left a window for %s (found=%v, err=%v)", tc.group, found, err)
+			}
+			if _, found, _ := stores.Activities.Get(context.Background(), key); found {
+				t.Fatalf("a refused open stored activity %s", key)
+			}
+		})
+	}
+}
+
+func TestTheCoordinatorOpensAnyLiveSubsetOfTheGroup(t *testing.T) {
+	path := writeGroups(t, groupYAML("alliance-a", []int64{1000, 1001, 1002}))
+	service, _ := coordinatorWithGroupsFile(t, path)
+	for i, expected := range [][]int32{{1000, 1001, 1002}, {1002}, {1001, 1000}} {
+		key := domain.Key{GroupID: "alliance-a", ActivityID: "race-" + string(rune('a'+i)), Phase: domain.PhaseClose}
+		if _, err := service.OpenActivity(context.Background(), key, expected); err != nil {
+			t.Fatalf("OpenActivity with live members %v of the group: %v", expected, err)
+		}
+	}
+}
+
+// groups_file 必填（维护者 2026-10-06）：协调器没有组文件就无从核对 expected，Init 拒绝启动，错误点名键名和生成器写的默认路径，
+// 空白值等同缺失。
+func TestTheCoordinatorRefusesToStartWithoutAGroupsFile(t *testing.T) {
+	for name, value := range map[string]any{"unset": nil, "blank": "  "} {
+		t.Run(name, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.Set("activity.key_prefix", "roost:activity")
+			cfg.Set("activity.reservation_ttl", 30*time.Minute)
+			if value != nil {
+				cfg.Set("activity.groups_file", value)
+			}
+			err := NewMod(nil).Init(cfg)
+			if err == nil {
+				t.Fatal("Init accepted a coordinator with no activity.groups_file; it would open windows nothing checks against the groups")
+			}
+			for _, want := range []string{"activity.groups_file", "configs/activity_groups.yaml"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q does not name %s", err, want)
+				}
+			}
+		})
+	}
+}
+
+// 不留能绕过核对的分支（维护者 2026-10-06）：Config.Groups 为 nil 时 New 拒绝构造，错误点名 Groups 与它对应的配置键。
+func TestNewRefusesACoordinatorWithoutGroups(t *testing.T) {
+	stores := memoryStores()
+	service, err := domain.New(domain.Config{
+		Activities: stores.Activities, Participants: stores.Participants, Ledger: stores.Ledger,
+		Audits: stores.Audits, Dispatches: stores.Dispatches, Windows: stores.Windows,
+	})
+	if err == nil {
+		key := domain.Key{GroupID: "no-such-group", ActivityID: "race-1", Phase: domain.PhaseClose}
+		_, openErr := service.OpenActivity(context.Background(), key, []int32{4242})
+		t.Fatalf("New accepted a coordinator with no Groups; OpenActivity(%s, [4242]) then returned %v without checking the group", key.GroupID, openErr)
+	}
+	for _, want := range []string{"Groups", "activity.groups_file"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not name %s", err, want)
+		}
+	}
 }

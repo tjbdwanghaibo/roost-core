@@ -1,8 +1,9 @@
 package activity
 
-import domain "github.com/tjbdwanghaibo/roost-core/service/activity"
-
 import (
+	"context"
+	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -10,6 +11,12 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	kitredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	domain "github.com/tjbdwanghaibo/roost-core/service/activity"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
@@ -104,9 +111,7 @@ func TestModInitAndProvideContract(t *testing.T) {
 	}
 }
 
-// U-0119: the groups a process back-stops come from configuration; blank
-// entries are dropped. A missing key means every group in the groups file
-// (C4; the file is required, so it is never "none").
+// 进程兜底处理的组来自配置，空白项丢弃；缺省是组文件里的全部组（组文件必填，所以不会是“无”）。
 func TestModReadsSweepGroups(t *testing.T) {
 	cfg := modConfig(t)
 	cfg.Set("activity.sweep_groups", []string{"alliance-a", " ", "alliance-b"})
@@ -120,5 +125,133 @@ func TestModReadsSweepGroups(t *testing.T) {
 	bare := NewMod(nil)
 	if err := bare.Init(modConfig(t)); err != nil || !slices.Equal(bare.sweepGroups, []string{"group-a", "group-b"}) {
 		t.Fatalf("no key: groups=%v err=%v, want the groups file's [group-a group-b]", bare.sweepGroups, err)
+	}
+}
+
+// 活动窗口与协调器读业务时钟（维护者决定 D-L3，time.logic_offset）：Mod 给协调器注入业务时钟，game 一端与协调器一端用同一个钟
+// 判断截止、宽限与过期，偏移非 0 时两端不错开。
+func TestTheModWiresTheCoordinatorToTheBusinessClock(t *testing.T) {
+	cfg := modConfig(t)
+	cfg.Set("time.logic_offset", "24h")
+	registry := app.NewRegistry(cfg)
+	// 真实的 kit 客户端，指向没人监听的地址：go-redis 惰性连接，Provide 只建存储，不发命令。
+	client, err := kitredis.NewClient(fredis.DefaultConfig("127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if err := registry.Register(mods.ModRedis, client); err != nil {
+		t.Fatal(err)
+	}
+	mod := NewMod(nil)
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now()
+	// 此配置组合的存储使用内存；正式 Provide 的 Redis 路径由 integration/business_clock_test 验证。
+	stores := domain.RedisStores{Activities: versionstore.NewMemoryStore[domain.Key, domain.Activity](), Participants: versionstore.NewMemoryStore[domain.ParticipantKey, domain.Participant](), Ledger: versionstore.NewMemoryStore[domain.RequestKey, domain.ProgressReservation](), Audits: versionstore.NewMemoryStore[domain.Key, domain.NotifyAuditLog](), Dispatches: versionstore.NewMemoryStore[domain.DispatchKey, domain.Dispatch](), Windows: versionstore.NewMemoryStore[string, domain.Window]()}
+	service, err := mod.newService(stores, app.BusinessClock(registry).Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activity, err := service.OpenActivity(context.Background(), activityKey("clock-proof"), []int32{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := time.Unix(activity.OpenedAtUnix, 0)
+	after := time.Now()
+	if got.Before(before.Add(24*time.Hour-time.Second)) || got.After(after.Add(24*time.Hour+time.Second)) {
+		t.Fatalf("opened=%v before=%v after=%v", got, before, after)
+	}
+	collecting := domain.Activity{Status: domain.StatusCollecting, GraceDeadlineUnix: time.Now().Add(time.Hour).Unix()}
+	if !collecting.GraceExpired(activity.OpenedAtUnix) {
+		t.Fatal("business clock did not expire the grace period")
+	}
+}
+
+func bugfix7Activity(t *testing.T, prefix string) (*Mod, error) {
+	t.Helper()
+	addr := os.Getenv("ROOST_REVIEW_CLUSTER")
+	if addr == "" {
+		t.Skip("ROOST_REVIEW_CLUSTER is not set")
+	}
+	cfg := viper.New()
+	cfg.Set("redis.cluster_addrs", addr)
+	cfg.Set("activity.key_prefix", prefix)
+	cfg.Set("activity.reservation_ttl", time.Hour)
+	cfg.Set("activity.groups_file", writeGroups(t, groupYAML("group-a", []int64{1, 2, 3})))
+	m := NewMod(nil)
+	if err := m.Init(cfg); err != nil {
+		return m, err
+	}
+	rcfg := redis.DefaultConfig("")
+	rcfg.ClusterAddrs = strings.Split(addr, ",")
+	client, err := driver.NewClient(rcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	r := app.NewRegistry(cfg)
+	if err := mods.RegisterAll(r, mods.Capability{Name: mods.ModRedis, Value: client}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Provide(r); err != nil {
+		t.Fatal(err)
+	}
+	k := activityKey("cluster-review")
+	t.Cleanup(func() {
+		for _, key := range []string{prefix + ":win:" + k.GroupID, prefix + ":act:" + k.String(), prefix + ":disp:" + (domain.DispatchKey{Activity: k, GameSID: 1}).String(), domain.OwedDispatchKey(prefix, k.GroupID, 1), prefix + ":disp:" + (domain.DispatchKey{Activity: k, GameSID: 2}).String(), domain.OwedDispatchKey(prefix, k.GroupID, 2)} {
+			_, _ = client.Del(context.Background(), key)
+		}
+	})
+	return m, nil
+}
+
+func TestActivityClusterRejectsInvalidPrefix(t *testing.T) {
+	for _, prefix := range []string{"activity", "{}:activity", "{activity", "{}:{valid}:activity"} {
+		t.Run(prefix, func(t *testing.T) {
+			cfg := modConfig(t)
+			cfg.Set("redis.cluster_addrs", "127.0.0.1:1")
+			cfg.Set("activity.key_prefix", prefix)
+			if err := NewMod(nil).Init(cfg); err == nil || !strings.Contains(err.Error(), "activity.key_prefix") {
+				t.Fatalf("configuration rejection: %v", err)
+			}
+		})
+	}
+}
+func TestActivityStandaloneKeepsPlainPrefix(t *testing.T) {
+	if err := NewMod(nil).Init(modConfig(t)); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestActivityTaggedClusterLifecycle(t *testing.T) {
+	m, err := bugfix7Activity(t, fmt.Sprintf("review8:{activity-%d}", time.Now().UnixNano()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	k := activityKey("cluster-review")
+	if _, err := m.service.OpenActivity(ctx, k, []int32{1}); err != nil {
+		t.Fatal(err)
+	}
+	if a, err := m.service.NotifyPhase(ctx, k, 1); err != nil || a.Status != domain.StatusComplete {
+		t.Fatalf("notify: %+v %v", a, err)
+	}
+	if owed, err := m.service.OwedDispatches(ctx, k.GroupID, 1, 10); err != nil || len(owed) != 1 {
+		t.Fatalf("owed: %v %v", owed, err)
+	}
+	d, err := m.service.AttemptDispatch(ctx, k, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ack, err := m.service.AckDispatch(ctx, k, 1, d.Token); err != nil || ack.State != domain.DispatchAcked {
+		t.Fatalf("ack: %+v %v", ack, err)
+	}
+	if owed, err := m.service.OwedDispatches(ctx, k.GroupID, 1, 10); err != nil || len(owed) != 0 {
+		t.Fatalf("retired: %v %v", owed, err)
 	}
 }
