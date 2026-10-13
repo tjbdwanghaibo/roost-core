@@ -60,7 +60,10 @@ var remoteSnapshotChecksumTable = crc64.MakeTable(crc64.ECMA)
 // Nothing compares or ranges over a checksum, so the storage form is fixed 8
 // bytes, big-endian. The numeric form written before RR-20260920-01 is not
 // read: the project has no deployed data to carry over, so a numeric checksum
-// is refused as an unexpected BSON type instead of being silently accepted.
+// is refused as an unexpected BSON type instead of being silently accepted, and
+// so are null and undefined: every writer goes through MarshalBSONValue (no
+// omitempty anywhere), so neither is a current form. A missing field decodes
+// as 0, which RemoteSnapshotEnvelope.Valid then refuses as a checksum mismatch.
 type RemoteChecksum uint64
 
 // The signature takes a plain byte, not bson.Type: the driver's ValueMarshaler
@@ -86,9 +89,6 @@ func (c *RemoteChecksum) UnmarshalBSONValue(typ byte, data []byte) error {
 			return fmt.Errorf("entity: remote checksum is %d bytes, want 8", len(binaryValue.Data))
 		}
 		*c = RemoteChecksum(binary.BigEndian.Uint64(binaryValue.Data))
-		return nil
-	case bson.TypeNull, bson.TypeUndefined:
-		*c = 0
 		return nil
 	default:
 		return fmt.Errorf("entity: remote checksum has unexpected BSON type %s", t)

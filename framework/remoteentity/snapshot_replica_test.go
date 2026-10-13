@@ -459,14 +459,16 @@ func TestACommitWhoseCountersCannotBeEncodedIsRefusedUpFront(t *testing.T) {
 	}
 }
 
-// checksum 只有 8 字节一种存储形态。旧版本写下的 BSON 数字形态不再读取：明确报
-// “unexpected BSON type”，不静默读成某个值。
+// checksum 只有 8 字节一种存储形态（所有写入都经 MarshalBSONValue）。旧版本写下的 BSON 数字形态以及
+// null / undefined 都不读取：明确报“unexpected BSON type”，不静默读成某个值。
 // 历史：RR-20260920-01 之前 checksum 存为数字；未上线，不兼容旧数据（维护者 2026-10-13）。
-func TestAChecksumStoredAsANumberIsRefused(t *testing.T) {
+func TestAChecksumNotStoredAsEightBytesIsRefused(t *testing.T) {
 	for name, stored := range map[string]any{
-		"int64":  int64(1234567890123),
-		"int32":  int32(4242),
-		"double": float64(42),
+		"int64":     int64(1234567890123),
+		"int32":     int32(4242),
+		"double":    float64(42),
+		"null":      nil,
+		"undefined": bson.Undefined{},
 	} {
 		t.Run(name, func(t *testing.T) {
 			raw, err := bson.Marshal(bson.M{"checksum": stored})

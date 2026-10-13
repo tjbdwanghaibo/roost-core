@@ -31,7 +31,7 @@ Mongo transaction首先标记`Applied`；唯一的`RecoverOutbox`协调者负责
 
 ## 读取
 
-业务读取 `RemoteSnapshotEnvelope`，不读取远端 live Entity。L1/L2 以 tenant/entity/kind/scope/policy 为完整 key；payload 是 `FrozenRemoteSnapshotPayload`，L1 命中不复制 backing bytes，解码时显式取 copy。相同 epoch/version 的不同 checksum 被拒绝。checksum（CRC64）在 Mongo 中只存 8 字节 Binary 一种形态；旧版本写下的 BSON 数字形态不再读取，解码时报 `remote checksum has unexpected BSON type`。
+业务读取 `RemoteSnapshotEnvelope`，不读取远端 live Entity。L1/L2 以 tenant/entity/kind/scope/policy 为完整 key；payload 是 `FrozenRemoteSnapshotPayload`，L1 命中不复制 backing bytes，解码时显式取 copy。相同 epoch/version 的不同 checksum 被拒绝。checksum（CRC64）在 Mongo 中只存 8 字节 Binary 一种形态；旧版本写下的 BSON 数字形态与 null / undefined 不再读取，解码时报 `remote checksum has unexpected BSON type`。
 
 - Cached：允许当前缓存版本。
 - Monotonic：要求不低于调用方 minVersion；缓存不满足时不等待推送，按 `(key, After)` 合并回源一次（Mirror 第 2 步起）。
