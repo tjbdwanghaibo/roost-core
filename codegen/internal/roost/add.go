@@ -64,7 +64,7 @@ func Add(root string, options AddOptions) ([]string, error) {
 			return nil, fmt.Errorf("unknown service %q", service)
 		}
 		if _, ok := modCatalog[toSnake(name)]; !ok {
-			return nil, fmt.Errorf("unknown kit mod %q", name)
+			return nil, fmt.Errorf("unknown wiring mod %q", name)
 		}
 		// The spec's Mods slice may share its array with the manifest's;
 		// copy before appending so the "before" view stays what it was.

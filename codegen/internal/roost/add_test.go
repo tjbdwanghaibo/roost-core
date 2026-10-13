@@ -235,7 +235,7 @@ func TestAddRefusesEachInvalidKindParameter(t *testing.T) {
 		{"invalid name", AddOptions{Kind: "service", Name: "9 bad!"}, `invalid service name "9 bad!"`},
 		{"service exists", AddOptions{Kind: "service", Name: "game"}, "service game already exists"},
 		{"mod unknown service", AddOptions{Kind: "mod", Name: "nest", Service: "lobby"}, `unknown service "lobby"`},
-		{"mod unknown kit mod", AddOptions{Kind: "mod", Name: "teleport", Service: "game"}, `unknown kit mod "teleport"`},
+		{"mod unknown wiring mod", AddOptions{Kind: "mod", Name: "teleport", Service: "game"}, `unknown wiring mod "teleport"`},
 		{"access unsupported", AddOptions{Kind: "access", Name: "admin", Service: "game"}, `unsupported access layer "admin"`},
 		{"access ambiguous service", AddOptions{Kind: "access", Name: "player"}, "requires --service when the project has multiple services"},
 		{"access unknown service", AddOptions{Kind: "access", Name: "player", Service: "lobby"}, `unknown service "lobby"`},

@@ -12,13 +12,13 @@ func TestValidateRejectsUnknownAndRetiredModAndFeatureNames(t *testing.T) {
 	for _, mod := range []string{"not_a_mod", "sync", "room"} {
 		manifest := DefaultManifest("planet", "example.com/planet", []string{"game"},
 			[]string{mod}, []string{"nest"})
-		if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("unknown kit mod %q", mod)) {
+		if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("unknown wiring mod %q", mod)) {
 			t.Fatalf("mod %q: Validate = %v, want it refused by name", mod, err)
 		}
 	}
 	shared := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"nest"}, []string{"nest"})
 	shared.SharedMods = []string{"sync"}
-	if err := shared.Validate(); err == nil || !strings.Contains(err.Error(), `unknown kit mod "sync"`) {
+	if err := shared.Validate(); err == nil || !strings.Contains(err.Error(), `unknown wiring mod "sync"`) {
 		t.Fatalf("shared_mods sync: Validate = %v, want it refused by name", err)
 	}
 	for _, feature := range []string{"not_a_feature", "replication-quic", "replication-kcp", "replication-udp", "event"} {

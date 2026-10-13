@@ -112,13 +112,13 @@ func resolveMods(requested []string) ([]string, error) {
 	visit = func(name string) error {
 		spec, ok := modCatalog[name]
 		if !ok {
-			return fmt.Errorf("unknown kit mod %q", name)
+			return fmt.Errorf("unknown wiring mod %q", name)
 		}
 		if seen[name] {
 			return nil
 		}
 		if visiting[name] {
-			return fmt.Errorf("kit mod dependency cycle at %q", name)
+			return fmt.Errorf("wiring mod dependency cycle at %q", name)
 		}
 		visiting[name] = true
 		for _, dependency := range spec.Depends {
