@@ -606,18 +606,18 @@ func TestReleaseExpiredReservationIsNoOp(t *testing.T) {
 	}
 }
 
-type review3DeleteGate struct {
+type pausedDelete struct {
 	versionstore.Store[string, Entry]
 	once             atomic.Bool
 	entered, release chan struct{}
 }
 
-func (s *review3DeleteGate) Delete(ctx context.Context, k string, v versionstore.Versioned[Entry]) error {
+func (s *pausedDelete) Delete(ctx context.Context, k string, v versionstore.Versioned[Entry]) error {
 	s.waitDelete()
 	return s.Store.Delete(ctx, k, v)
 }
 
-func (s *review3DeleteGate) DeleteIf(ctx context.Context, k string, v versionstore.Versioned[Entry], match func(Entry) bool) error {
+func (s *pausedDelete) DeleteIf(ctx context.Context, k string, v versionstore.Versioned[Entry], match func(Entry) bool) error {
 	s.waitDelete()
 	conditional, ok := s.Store.(versionstore.ConditionalDeleter[string, Entry])
 	if !ok {
@@ -626,7 +626,7 @@ func (s *review3DeleteGate) DeleteIf(ctx context.Context, k string, v versionsto
 	return conditional.DeleteIf(ctx, k, v, match)
 }
 
-func (s *review3DeleteGate) waitDelete() {
+func (s *pausedDelete) waitDelete() {
 	if s.once.CompareAndSwap(false, true) {
 		close(s.entered)
 		<-s.release
@@ -653,7 +653,7 @@ func TestDirectoryDeleteCannotRemoveRecreatedOwner(t *testing.T) {
 							t.Fatal(e)
 						}
 					}
-					gate := &review3DeleteGate{Store: state, entered: make(chan struct{}), release: make(chan struct{})}
+					gate := &pausedDelete{Store: state, entered: make(chan struct{}), release: make(chan struct{})}
 					dir, e := New(gate, Config{Normalize: NormalizeLower, DefaultTTL: time.Minute})
 					if e != nil {
 						t.Fatal(e)

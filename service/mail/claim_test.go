@@ -205,7 +205,7 @@ func TestSettledClaimsAgeOutWithTheirEnvelope(t *testing.T) {
 	}
 }
 
-func review3MailHarness(t *testing.T) *harness {
+func claimHarness(t *testing.T) *harness {
 	t.Helper()
 	if os.Getenv("ROOST_REVIEW3_BACKEND") != "redis" {
 		return newHarness(t)
@@ -230,7 +230,7 @@ func review3MailHarness(t *testing.T) *harness {
 	})
 }
 func TestOldCancelCannotReleaseNewClaimAttempt(t *testing.T) {
-	h := review3MailHarness(t)
+	h := claimHarness(t)
 	ctx := context.Background()
 	envelope := mustSend(t, h, withAttachment(directTo(1), "reward"))
 	a, e := h.service.ReserveClaim(ctx, 1, envelope.ID, "")
@@ -255,7 +255,7 @@ func TestOldCancelCannotReleaseNewClaimAttempt(t *testing.T) {
 	}
 }
 func TestObserveExpiredCancelledClaimsRetainCapacity(t *testing.T) {
-	h := review3MailHarness(t)
+	h := claimHarness(t)
 	ctx := context.Background()
 	firstID := ""
 	for i := 0; i < MaxMailboxEntries; i++ {
@@ -404,7 +404,7 @@ func TestClaimAttemptGenerationNeverWraps(t *testing.T) {
 	}
 }
 
-func bugfix4FillMail(t *testing.T, h *harness, count int) {
+func fillMailbox(t *testing.T, h *harness, count int) {
 	t.Helper()
 	for i := 0; i < count; i++ {
 		req := directTo(1)
@@ -414,7 +414,7 @@ func bugfix4FillMail(t *testing.T, h *harness, count int) {
 }
 
 func TestDeletedUnclaimedMailMustNotResurrect(t *testing.T) {
-	h := review3MailHarness(t)
+	h := claimHarness(t)
 	ctx := context.Background()
 	mail := mustSend(t, h, withAttachment(directTo(1), "reward"))
 	if _, err := h.service.Delete(ctx, 1, mail.ID); err != nil {
@@ -424,7 +424,7 @@ func TestDeletedUnclaimedMailMustNotResurrect(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.clock.advance(time.Second)
-	bugfix4FillMail(t, h, MaxMailboxEntries)
+	fillMailbox(t, h, MaxMailboxEntries)
 	box, _, err := h.service.Mailbox(ctx, 1)
 	if err != nil {
 		t.Fatal(err)

@@ -41,7 +41,7 @@ func TestIntegrationSendRecoveryOnRealEnvelopes(t *testing.T) {
 		},
 	}
 	failures := map[string]func(EnvelopeStore) EnvelopeStore{
-		"write_never_landed": func(s EnvelopeStore) EnvelopeStore { return &reviewEnvelopeOnceFailure{EnvelopeStore: s} },
+		"write_never_landed": func(s EnvelopeStore) EnvelopeStore { return &failOnceEnvelopeStore{EnvelopeStore: s} },
 		"landed_reply_lost":  func(s EnvelopeStore) EnvelopeStore { return &landedButLostEnvelopes{EnvelopeStore: s} },
 	}
 	for reqName, req := range requests {

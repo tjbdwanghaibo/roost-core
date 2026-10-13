@@ -16,17 +16,17 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/service/directory"
 )
 
-func revn06Redis() string {
+func isolatedRedisAddr() string {
 	if os.Getenv("ROOST_REVIEW3_BACKEND") != "redis" {
 		return ""
 	}
 	return os.Getenv("ROOST_REVIEW_REDIS")
 }
 
-// revn06AccountService is newService, optionally over the isolated Redis.
-func revn06AccountService(t *testing.T, mutate ...func(*Config)) (*Service, *clock, Config) {
+// pendingContractService is newService, optionally over the isolated Redis.
+func pendingContractService(t *testing.T, mutate ...func(*Config)) (*Service, *clock, Config) {
 	t.Helper()
-	addr := revn06Redis()
+	addr := isolatedRedisAddr()
 	if addr == "" {
 		return newService(t, mutate...)
 	}
@@ -58,10 +58,10 @@ func revn06AccountService(t *testing.T, mutate ...func(*Config)) (*Service, *clo
 	return newService(t, append([]func(*Config){base}, mutate...)...)
 }
 
-// revn06Lapse lets the current reservation of name expire.
-func revn06Lapse(t *testing.T, cfg Config, clock *clock, name string) {
+// lapseReservation lets the current reservation of name expire.
+func lapseReservation(t *testing.T, cfg Config, clock *clock, name string) {
 	t.Helper()
-	if revn06Redis() == "" {
+	if isolatedRedisAddr() == "" {
 		clock.advance(time.Minute)
 		return
 	}
@@ -81,14 +81,14 @@ func revn06Lapse(t *testing.T, cfg Config, clock *clock, name string) {
 	}
 }
 
-// revn06DeadPlan leaves account "revn06-loser" with an admitted plan for
+// deadRolePlan leaves account "revn06-loser" with an admitted plan for
 // "Hero" whose role Create reply was lost, lets the reservation lapse and has
 // another account commit "Hero". The loser's plan can no longer complete.
-func revn06DeadPlan(t *testing.T, mutate ...func(*Config)) (*Service, Config, *review3LostRole, Account, Role) {
+func deadRolePlan(t *testing.T, mutate ...func(*Config)) (*Service, Config, *lostReplyRoleCreate, Account, Role) {
 	t.Helper()
-	var roles *review3LostRole
-	s, clock, cfg := revn06AccountService(t, append([]func(*Config){func(c *Config) {
-		roles = &review3LostRole{Store: c.Roles}
+	var roles *lostReplyRoleCreate
+	s, clock, cfg := pendingContractService(t, append([]func(*Config){func(c *Config) {
+		roles = &lostReplyRoleCreate{Store: c.Roles}
 		c.Roles = roles
 	}}, mutate...)...)
 	ctx := context.Background()
@@ -96,7 +96,7 @@ func revn06DeadPlan(t *testing.T, mutate ...func(*Config)) (*Service, Config, *r
 	if _, err := s.CreateRole(ctx, a.ID, 1, "Hero"); err == nil {
 		t.Fatal("fixture must lose the role create reply")
 	}
-	revn06Lapse(t, cfg, clock, "Hero")
+	lapseReservation(t, cfg, clock, "Hero")
 	b := login(t, s, "revn06-winner")
 	winner, err := s.CreateRole(ctx, b.ID, 1, "Hero")
 	if err != nil {
@@ -107,7 +107,7 @@ func revn06DeadPlan(t *testing.T, mutate ...func(*Config)) (*Service, Config, *r
 
 func TestADifferentNameReleasesAPlanWhoseNameWasCommittedElsewhere(t *testing.T) {
 	sink := servicemetrics.NewRecorder()
-	s, cfg, roles, a, winner := revn06DeadPlan(t, func(c *Config) { c.Metrics = sink })
+	s, cfg, roles, a, winner := deadRolePlan(t, func(c *Config) { c.Metrics = sink })
 	ctx := context.Background()
 
 	// No same-name retry first: the player simply picks another name.
@@ -143,8 +143,8 @@ func TestADifferentNameReleasesAPlanWhoseNameWasCommittedElsewhere(t *testing.T)
 func TestADifferentNameKeepsAPlanThatCanStillComplete(t *testing.T) {
 	ctx := context.Background()
 	t.Run("own live reservation", func(t *testing.T) {
-		var roles *review3LostRole
-		s, _, cfg := revn06AccountService(t, func(c *Config) { roles = &review3LostRole{Store: c.Roles}; c.Roles = roles })
+		var roles *lostReplyRoleCreate
+		s, _, cfg := pendingContractService(t, func(c *Config) { roles = &lostReplyRoleCreate{Store: c.Roles}; c.Roles = roles })
 		a := login(t, s, "revn06-live")
 		if _, err := s.CreateRole(ctx, a.ID, 1, "Hero"); err == nil {
 			t.Fatal("fixture must lose the role reply")
@@ -160,7 +160,7 @@ func TestADifferentNameKeepsAPlanThatCanStillComplete(t *testing.T) {
 		}
 	})
 	t.Run("own committed name", func(t *testing.T) {
-		s, clock, cfg := revn06AccountService(t, func(c *Config) { c.Names = &review3LostCommit{Directory: c.Names} })
+		s, clock, cfg := pendingContractService(t, func(c *Config) { c.Names = &lostReplyNameCommit{Directory: c.Names} })
 		a := login(t, s, "revn06-committed")
 		if _, err := s.CreateRole(ctx, a.ID, 1, "Hero"); err == nil {
 			t.Fatal("fixture must lose the commit reply")
@@ -177,13 +177,13 @@ func TestADifferentNameKeepsAPlanThatCanStillComplete(t *testing.T) {
 		}
 	})
 	t.Run("foreign reservation only", func(t *testing.T) {
-		var roles *review3LostRole
-		s, clock, cfg := revn06AccountService(t, func(c *Config) { roles = &review3LostRole{Store: c.Roles}; c.Roles = roles })
+		var roles *lostReplyRoleCreate
+		s, clock, cfg := pendingContractService(t, func(c *Config) { roles = &lostReplyRoleCreate{Store: c.Roles}; c.Roles = roles })
 		a := login(t, s, "revn06-reserved")
 		if _, err := s.CreateRole(ctx, a.ID, 1, "Hero"); err == nil {
 			t.Fatal("fixture must lose the role reply")
 		}
-		revn06Lapse(t, cfg, clock, "Hero")
+		lapseReservation(t, cfg, clock, "Hero")
 		if _, err := cfg.Names.Reserve(ctx, "Hero", "rival", time.Minute); err != nil {
 			t.Fatal(err)
 		}
@@ -214,7 +214,7 @@ func (s *slotsFailingDeleteOnce) DeleteIf(ctx context.Context, key string, expec
 func TestAFailedReleaseOfADeadPlanIsCountedAndRetriedByTheNextName(t *testing.T) {
 	sink := servicemetrics.NewRecorder()
 	var slots *slotsFailingDeleteOnce
-	s, cfg, roles, a, _ := revn06DeadPlan(t, func(c *Config) {
+	s, cfg, roles, a, _ := deadRolePlan(t, func(c *Config) {
 		c.Metrics = sink
 		slots = &slotsFailingDeleteOnce{Store: c.Slots}
 		c.Slots = slots
@@ -245,7 +245,7 @@ func TestAFailedReleaseOfADeadPlanIsCountedAndRetriedByTheNextName(t *testing.T)
 func TestAFailedReleaseOnTheSameNamePathIsCounted(t *testing.T) {
 	sink := servicemetrics.NewRecorder()
 	var slots *slotsFailingDeleteOnce
-	s, cfg, roles, a, _ := revn06DeadPlan(t, func(c *Config) {
+	s, cfg, roles, a, _ := deadRolePlan(t, func(c *Config) {
 		c.Metrics = sink
 		slots = &slotsFailingDeleteOnce{Store: c.Slots}
 		c.Slots = slots
@@ -303,11 +303,11 @@ func lapseNameClaim(t *testing.T, cfg Config, clock *clock, name string) {
 // losingPlan leaves account a with an admitted plan for "Hero" whose role
 // Create reply was lost, then lets the reservation lapse. roles.first is the
 // orphan role id the lost reply created.
-func losingPlan(t *testing.T, mutate ...func(*Config)) (*Service, *clock, Config, *review3LostRole, Account) {
+func losingPlan(t *testing.T, mutate ...func(*Config)) (*Service, *clock, Config, *lostReplyRoleCreate, Account) {
 	t.Helper()
-	var roles *review3LostRole
-	s, clock, cfg := review3AccountService(t, append([]func(*Config){func(c *Config) {
-		roles = &review3LostRole{Store: c.Roles}
+	var roles *lostReplyRoleCreate
+	s, clock, cfg := createRoleService(t, append([]func(*Config){func(c *Config) {
+		roles = &lostReplyRoleCreate{Store: c.Roles}
 		c.Roles = roles
 		c.ClaimTTL = pendingClaimTTL()
 	}}, mutate...)...)
@@ -451,8 +451,8 @@ func TestResolvePendingCreationRefusesWhatItCannotProve(t *testing.T) {
 		}
 	})
 	t.Run("live own reservation", func(t *testing.T) {
-		var roles *review3LostRole
-		s, _, cfg := newService(t, func(c *Config) { roles = &review3LostRole{Store: c.Roles}; c.Roles = roles })
+		var roles *lostReplyRoleCreate
+		s, _, cfg := newService(t, func(c *Config) { roles = &lostReplyRoleCreate{Store: c.Roles}; c.Roles = roles })
 		a := login(t, s, "rr06-live")
 		if _, err := s.CreateRole(ctx, a.ID, 1, "Hero"); err == nil {
 			t.Fatal("fixture must lose the role reply")
@@ -470,7 +470,7 @@ func TestResolvePendingCreationRefusesWhatItCannotProve(t *testing.T) {
 		}
 	})
 	t.Run("own committed name", func(t *testing.T) {
-		s, clock, cfg := newService(t, func(c *Config) { c.Names = &review3LostCommit{Directory: c.Names} })
+		s, clock, cfg := newService(t, func(c *Config) { c.Names = &lostReplyNameCommit{Directory: c.Names} })
 		a := login(t, s, "rr06-committed")
 		if _, err := s.CreateRole(ctx, a.ID, 1, "Hero"); err == nil {
 			t.Fatal("fixture must lose the commit reply")
@@ -490,8 +490,8 @@ func TestResolvePendingCreationRefusesWhatItCannotProve(t *testing.T) {
 		}
 	})
 	t.Run("slot moved after the decision", func(t *testing.T) {
-		var roles *review3LostRole
-		s, clock, cfg := newService(t, func(c *Config) { roles = &review3LostRole{Store: c.Roles}; c.Roles = roles })
+		var roles *lostReplyRoleCreate
+		s, clock, cfg := newService(t, func(c *Config) { roles = &lostReplyRoleCreate{Store: c.Roles}; c.Roles = roles })
 		a := login(t, s, "rr06-moved")
 		if _, err := s.CreateRole(ctx, a.ID, 1, "Hero"); err == nil {
 			t.Fatal("fixture must lose the role reply")
@@ -553,7 +553,7 @@ func (n *lostReserveReply) Reserve(ctx context.Context, name string, owner direc
 
 func TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsReservedElsewhere(t *testing.T) {
 	sink := servicemetrics.NewRecorder()
-	s, clock, cfg := revn06AccountService(t, func(c *Config) {
+	s, clock, cfg := pendingContractService(t, func(c *Config) {
 		c.Metrics = sink
 		c.Names = &lostReserveReply{Directory: c.Names}
 	})
@@ -565,7 +565,7 @@ func TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsReservedElsewhere(t *t
 	if slot := mustSlot(t, cfg, a.ID); slot.Creation.Name != "Hero" || slot.Creation.Admitted {
 		t.Fatalf("fixture must leave an unadmitted plan for Hero: %+v", slot)
 	}
-	revn06Lapse(t, cfg, clock, "Hero")
+	lapseReservation(t, cfg, clock, "Hero")
 	if _, err := cfg.Names.Reserve(ctx, "Hero", "rival", time.Minute); err != nil {
 		t.Fatal(err)
 	}
@@ -592,7 +592,7 @@ func TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsReservedElsewhere(t *t
 // 与 res-else 格一致（这个计划 admitted 之前什么都没发生，释放不会留下角色）。
 func TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsFree(t *testing.T) {
 	sink := servicemetrics.NewRecorder()
-	s, clock, cfg := revn06AccountService(t, func(c *Config) {
+	s, clock, cfg := pendingContractService(t, func(c *Config) {
 		c.Metrics = sink
 		c.Names = &lostReserveReply{Directory: c.Names}
 	})
@@ -604,7 +604,7 @@ func TestADifferentNameReleasesAnUnadmittedPlanWhoseNameIsFree(t *testing.T) {
 	if slot := mustSlot(t, cfg, a.ID); slot.Creation.Name != "Hero" || slot.Creation.Admitted {
 		t.Fatalf("fixture must leave an unadmitted plan for Hero: %+v", slot)
 	}
-	revn06Lapse(t, cfg, clock, "Hero")
+	lapseReservation(t, cfg, clock, "Hero")
 	if _, found, err := cfg.Names.Lookup(ctx, "Hero"); err != nil || found {
 		t.Fatalf("fixture must leave Hero free: found=%v err=%v", found, err)
 	}
@@ -653,12 +653,12 @@ func TestVerifiedIdentityEncodingIsInjective(t *testing.T) {
 	}
 }
 
-type reviewSlotAppliedError struct {
+type appliedErrorSlotStore struct {
 	versionstore.Store[string, Slot]
 	failed bool
 }
 
-func (s *reviewSlotAppliedError) Update(ctx context.Context, k string, m versionstore.Mutate[Slot]) (versionstore.Versioned[Slot], bool, error) {
+func (s *appliedErrorSlotStore) Update(ctx context.Context, k string, m versionstore.Mutate[Slot]) (versionstore.Versioned[Slot], bool, error) {
 	v, saved, err := s.Store.Update(ctx, k, m)
 	if err == nil && saved && v.Value.PlayerID != 0 && !s.failed {
 		s.failed = true
@@ -667,7 +667,7 @@ func (s *reviewSlotAppliedError) Update(ctx context.Context, k string, m version
 	return v, saved, err
 }
 func TestLostSlotReplyCannotDeleteCommittedRole(t *testing.T) {
-	s, _, cfg := newService(t, func(c *Config) { c.Slots = &reviewSlotAppliedError{Store: c.Slots} })
+	s, _, cfg := newService(t, func(c *Config) { c.Slots = &appliedErrorSlotStore{Store: c.Slots} })
 	ctx := context.Background()
 	a, err := s.Login(ctx, Identity{Channel: "test", OpenID: "slot", Credential: "good"})
 	if err != nil {
@@ -696,6 +696,6 @@ func TestLostSlotReplyCannotDeleteCommittedRole(t *testing.T) {
 	}
 }
 
-func (s *reviewSlotAppliedError) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Slot], match func(Slot) bool) error {
+func (s *appliedErrorSlotStore) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Slot], match func(Slot) bool) error {
 	return s.Store.(versionstore.ConditionalDeleter[string, Slot]).DeleteIf(ctx, key, expect, match)
 }

@@ -37,7 +37,7 @@ func (s *pausedParticipantWrite) Update(ctx context.Context, k ParticipantKey, m
 	return s.Store.Update(ctx, k, m)
 }
 func TestStaleReservedReaderCannotApplyAfterProofWasReclaimed(t *testing.T) {
-	s, _ := newActivityService(t, func(c *Config) { c.Ledger = &reviewLostMark{c.Ledger, true} })
+	s, _ := newActivityService(t, func(c *Config) { c.Ledger = &lostReplyReservations{c.Ledger, true} })
 	ctx := context.Background()
 	key := activityKey("stale-reserved")
 	openActivity(t, s, key, 1)
@@ -330,12 +330,12 @@ func TestReconcileProgressCompletesLostMarksAndFreesTheParticipant(t *testing.T)
 	}
 }
 
-type reviewLostMark struct {
+type lostReplyReservations struct {
 	versionstore.Store[RequestKey, ProgressReservation]
 	fail bool
 }
 
-func (s *reviewLostMark) Update(ctx context.Context, k RequestKey, m versionstore.Mutate[ProgressReservation]) (versionstore.Versioned[ProgressReservation], bool, error) {
+func (s *lostReplyReservations) Update(ctx context.Context, k RequestKey, m versionstore.Mutate[ProgressReservation]) (versionstore.Versioned[ProgressReservation], bool, error) {
 	if k.RequestID == "lost" && s.fail {
 		s.fail = false
 		return versionstore.Versioned[ProgressReservation]{}, false, fmt.Errorf("injected mark failure")
@@ -360,7 +360,7 @@ func TestLastDispatchRetryKeepsAckWindow(t *testing.T) {
 	}
 }
 func TestUnconfirmedProgressSurvivesRingEviction(t *testing.T) {
-	s, _ := newActivityService(t, func(c *Config) { c.Ledger = &reviewLostMark{c.Ledger, true} })
+	s, _ := newActivityService(t, func(c *Config) { c.Ledger = &lostReplyReservations{c.Ledger, true} })
 	ctx := context.Background()
 	key := activityKey("ring")
 	openActivity(t, s, key, 1)
@@ -401,7 +401,7 @@ func TestPositiveProgressCannotWrapNegative(t *testing.T) {
 }
 
 func TestActivityClusterRecoversPartialCompletion(t *testing.T) {
-	m, err := bugfix7ClusterService(t, fmt.Sprintf("bugfix7:{activity-%d}", time.Now().UnixNano()))
+	m, err := clusterBackedService(t, fmt.Sprintf("bugfix7:{activity-%d}", time.Now().UnixNano()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +409,7 @@ func TestActivityClusterRecoversPartialCompletion(t *testing.T) {
 	defer cancel()
 	k := activityKey("cluster-review")
 	base := m.cfg
-	m.cfg.Dispatches = bugfix7FailSecondDispatch{base.Dispatches}
+	m.cfg.Dispatches = failingSecondGameDispatches{base.Dispatches}
 	if _, err := m.OpenActivity(ctx, k, []int32{1, 2}); err != nil {
 		t.Fatal(err)
 	}
@@ -449,11 +449,11 @@ func TestActivityClusterRecoversPartialCompletion(t *testing.T) {
 	}
 }
 
-type bugfix7FailSecondDispatch struct {
+type failingSecondGameDispatches struct {
 	versionstore.Store[DispatchKey, Dispatch]
 }
 
-func (s bugfix7FailSecondDispatch) Create(ctx context.Context, key DispatchKey, value Dispatch) (versionstore.Versioned[Dispatch], bool, error) {
+func (s failingSecondGameDispatches) Create(ctx context.Context, key DispatchKey, value Dispatch) (versionstore.Versioned[Dispatch], bool, error) {
 	if key.GameSID == 2 {
 		return versionstore.Versioned[Dispatch]{}, false, context.DeadlineExceeded
 	}
@@ -461,7 +461,7 @@ func (s bugfix7FailSecondDispatch) Create(ctx context.Context, key DispatchKey, 
 }
 
 // 存储恢复故障留在领域包；Wiring 的真实集群生命周期由 TaggedClusterLifecycle 单独验证。
-func bugfix7ClusterService(t *testing.T, prefix string) (*Service, error) {
+func clusterBackedService(t *testing.T, prefix string) (*Service, error) {
 	t.Helper()
 	addr := os.Getenv("ROOST_REVIEW_CLUSTER")
 	if addr == "" {

@@ -106,7 +106,7 @@ func TestSameRequestRecoveryToleratesEmptyVsNilSlices(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, func(c *Config) {
-				c.Envelopes = &reviewEnvelopeOnceFailure{EnvelopeStore: nilToEmptyEnvelopes{c.Envelopes}}
+				c.Envelopes = &failOnceEnvelopeStore{EnvelopeStore: nilToEmptyEnvelopes{c.Envelopes}}
 				c.Broadcast = DelivererFunc(func(context.Context, Envelope) error { return nil })
 			})
 			ctx := context.Background()
@@ -149,7 +149,7 @@ func TestSameRequestRecoveryStillRejectsSubstitutedEnvelope(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, func(c *Config) {
-				c.Envelopes = &reviewEnvelopeOnceFailure{EnvelopeStore: substitutedEnvelopes{c.Envelopes, mutate}}
+				c.Envelopes = &failOnceEnvelopeStore{EnvelopeStore: substitutedEnvelopes{c.Envelopes, mutate}}
 			})
 			ctx := context.Background()
 			req := directTo(1)
@@ -231,12 +231,12 @@ func TestExpiredMailboxMakesRoom(t *testing.T) {
 	}
 }
 
-type reviewEnvelopeOnceFailure struct {
+type failOnceEnvelopeStore struct {
 	EnvelopeStore
 	failed bool
 }
 
-func (s *reviewEnvelopeOnceFailure) Create(ctx context.Context, e Envelope) (bool, error) {
+func (s *failOnceEnvelopeStore) Create(ctx context.Context, e Envelope) (bool, error) {
 	if !s.failed {
 		s.failed = true
 		return false, fmt.Errorf("injected transient failure before envelope write")
@@ -244,7 +244,7 @@ func (s *reviewEnvelopeOnceFailure) Create(ctx context.Context, e Envelope) (boo
 	return s.EnvelopeStore.Create(ctx, e)
 }
 func TestTransientEnvelopeFailureCanRetrySameRequest(t *testing.T) {
-	h := newHarness(t, func(c *Config) { c.Envelopes = &reviewEnvelopeOnceFailure{EnvelopeStore: c.Envelopes} })
+	h := newHarness(t, func(c *Config) { c.Envelopes = &failOnceEnvelopeStore{EnvelopeStore: c.Envelopes} })
 	ctx := context.Background()
 	req := directTo(1)
 	first, firstErr := h.service.Send(ctx, req)

@@ -387,19 +387,19 @@ func TestCreationTableClassifiers(t *testing.T) {
 	}
 }
 
-type reviewFailSlot struct {
+type failingSlotUpdate struct {
 	versionstore.Store[string, Slot]
 	fail bool
 }
 
-func (s *reviewFailSlot) Update(ctx context.Context, k string, m versionstore.Mutate[Slot]) (versionstore.Versioned[Slot], bool, error) {
+func (s *failingSlotUpdate) Update(ctx context.Context, k string, m versionstore.Mutate[Slot]) (versionstore.Versioned[Slot], bool, error) {
 	if s.fail {
 		return versionstore.Versioned[Slot]{}, false, fmt.Errorf("injected slot write failure")
 	}
 	return s.Store.Update(ctx, k, m)
 }
 func TestCrossServerRoleRollbackKeepsExistingName(t *testing.T) {
-	slots := &reviewFailSlot{Store: versionstore.NewMemoryStore[string, Slot]()}
+	slots := &failingSlotUpdate{Store: versionstore.NewMemoryStore[string, Slot]()}
 	s, _, cfg := newService(t, func(c *Config) { c.Slots = slots })
 	ctx := context.Background()
 	a, err := s.Login(ctx, Identity{Channel: "test", OpenID: "same", Credential: "good"})
@@ -425,16 +425,16 @@ func TestCrossServerRoleRollbackKeepsExistingName(t *testing.T) {
 	}
 }
 
-func (s *reviewFailSlot) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Slot], match func(Slot) bool) error {
+func (s *failingSlotUpdate) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Slot], match func(Slot) bool) error {
 	return s.Store.(versionstore.ConditionalDeleter[string, Slot]).DeleteIf(ctx, key, expect, match)
 }
 
-type review3FailCreate[K comparable, V any] struct {
+type failOnceCreate[K comparable, V any] struct {
 	versionstore.Store[K, V]
 	failed bool
 }
 
-func (s *review3FailCreate[K, V]) Create(ctx context.Context, k K, v V) (versionstore.Versioned[V], bool, error) {
+func (s *failOnceCreate[K, V]) Create(ctx context.Context, k K, v V) (versionstore.Versioned[V], bool, error) {
 	if !s.failed {
 		s.failed = true
 		return versionstore.Versioned[V]{}, false, errors.New("control: before write")
@@ -442,12 +442,12 @@ func (s *review3FailCreate[K, V]) Create(ctx context.Context, k K, v V) (version
 	return s.Store.Create(ctx, k, v)
 }
 
-type review3FailCommit struct {
+type failOnceNameCommit struct {
 	directory.Directory
 	failed bool
 }
 
-func (s *review3FailCommit) Commit(ctx context.Context, c directory.Claim) (directory.Entry, error) {
+func (s *failOnceNameCommit) Commit(ctx context.Context, c directory.Claim) (directory.Entry, error) {
 	if !s.failed {
 		s.failed = true
 		return directory.Entry{}, errors.New("control: before commit")
@@ -457,14 +457,14 @@ func (s *review3FailCommit) Commit(ctx context.Context, c directory.Claim) (dire
 func TestBeforeWriteFailuresRemainRetryable(t *testing.T) {
 	for _, point := range []string{"slot", "role", "name"} {
 		t.Run(point, func(t *testing.T) {
-			s, _, _ := review3AccountService(t, func(c *Config) {
+			s, _, _ := createRoleService(t, func(c *Config) {
 				switch point {
 				case "slot":
-					c.Slots = &review3FailCreate[string, Slot]{Store: c.Slots}
+					c.Slots = &failOnceCreate[string, Slot]{Store: c.Slots}
 				case "role":
-					c.Roles = &review3FailCreate[int64, Role]{Store: c.Roles}
+					c.Roles = &failOnceCreate[int64, Role]{Store: c.Roles}
 				case "name":
-					c.Names = &review3FailCommit{Directory: c.Names}
+					c.Names = &failOnceNameCommit{Directory: c.Names}
 				}
 			})
 			ctx := context.Background()
@@ -482,7 +482,7 @@ func TestBeforeWriteFailuresRemainRetryable(t *testing.T) {
 	}
 }
 
-func review3AccountService(t *testing.T, mutate ...func(*Config)) (*Service, *clock, Config) {
+func createRoleService(t *testing.T, mutate ...func(*Config)) (*Service, *clock, Config) {
 	t.Helper()
 	if os.Getenv("ROOST_REVIEW3_BACKEND") != "redis" {
 		return newService(t, mutate...)
@@ -510,12 +510,12 @@ func review3AccountService(t *testing.T, mutate ...func(*Config)) (*Service, *cl
 	return newService(t, append([]func(*Config){base}, mutate...)...)
 }
 
-type review3LostCommit struct {
+type lostReplyNameCommit struct {
 	directory.Directory
 	lost bool
 }
 
-func (n *review3LostCommit) Commit(ctx context.Context, c directory.Claim) (directory.Entry, error) {
+func (n *lostReplyNameCommit) Commit(ctx context.Context, c directory.Claim) (directory.Entry, error) {
 	v, e := n.Directory.Commit(ctx, c)
 	if e == nil && !n.lost {
 		n.lost = true
@@ -524,7 +524,7 @@ func (n *review3LostCommit) Commit(ctx context.Context, c directory.Claim) (dire
 	return v, e
 }
 func TestNameCommitLostReplyCannotBurnName(t *testing.T) {
-	s, _, cfg := review3AccountService(t, func(c *Config) { c.Names = &review3LostCommit{Directory: c.Names} })
+	s, _, cfg := createRoleService(t, func(c *Config) { c.Names = &lostReplyNameCommit{Directory: c.Names} })
 	ctx := context.Background()
 	a, e := s.Login(ctx, Identity{Channel: "test", OpenID: "name-lost", Credential: "good"})
 	if e != nil {
@@ -548,13 +548,13 @@ func TestNameCommitLostReplyCannotBurnName(t *testing.T) {
 	}
 }
 
-type review3LostRole struct {
+type lostReplyRoleCreate struct {
 	versionstore.Store[int64, Role]
 	lost  bool
 	first int64
 }
 
-func (s *review3LostRole) Create(ctx context.Context, k int64, v Role) (versionstore.Versioned[Role], bool, error) {
+func (s *lostReplyRoleCreate) Create(ctx context.Context, k int64, v Role) (versionstore.Versioned[Role], bool, error) {
 	got, new, e := s.Store.Create(ctx, k, v)
 	if e == nil && new && !s.lost {
 		s.lost = true
@@ -564,8 +564,8 @@ func (s *review3LostRole) Create(ctx context.Context, k int64, v Role) (versions
 	return got, new, e
 }
 func TestRoleCreateLostReplyCannotLeaveDuplicateNames(t *testing.T) {
-	var roles *review3LostRole
-	s, _, _ := review3AccountService(t, func(c *Config) { roles = &review3LostRole{Store: c.Roles}; c.Roles = roles })
+	var roles *lostReplyRoleCreate
+	s, _, _ := createRoleService(t, func(c *Config) { roles = &lostReplyRoleCreate{Store: c.Roles}; c.Roles = roles })
 	ctx := context.Background()
 	a, e := s.Login(ctx, Identity{Channel: "test", OpenID: "role-lost", Credential: "good"})
 	if e != nil {
@@ -587,12 +587,12 @@ func TestRoleCreateLostReplyCannotLeaveDuplicateNames(t *testing.T) {
 	}
 }
 
-type review3LostSlotCreate struct {
+type lostReplySlotCreate struct {
 	versionstore.Store[string, Slot]
 	lost bool
 }
 
-func (s *review3LostSlotCreate) Create(ctx context.Context, k string, v Slot) (versionstore.Versioned[Slot], bool, error) {
+func (s *lostReplySlotCreate) Create(ctx context.Context, k string, v Slot) (versionstore.Versioned[Slot], bool, error) {
 	got, new, e := s.Store.Create(ctx, k, v)
 	if e == nil && new && !s.lost {
 		s.lost = true
@@ -601,7 +601,7 @@ func (s *review3LostSlotCreate) Create(ctx context.Context, k string, v Slot) (v
 	return got, new, e
 }
 func TestInitialSlotUnknownCannotPermanentlyBlockCreate(t *testing.T) {
-	s, clock, cfg := review3AccountService(t, func(c *Config) { c.Slots = &review3LostSlotCreate{Store: c.Slots} })
+	s, clock, cfg := createRoleService(t, func(c *Config) { c.Slots = &lostReplySlotCreate{Store: c.Slots} })
 	ctx := context.Background()
 	a, e := s.Login(ctx, Identity{Channel: "test", OpenID: "slot-first", Credential: "good"})
 	if e != nil {
@@ -623,7 +623,7 @@ func TestInitialSlotUnknownCannotPermanentlyBlockCreate(t *testing.T) {
 func TestProfileOutputCannotMutateRoleWithoutCAS(t *testing.T) {
 	for _, method := range []string{"update", "validate", "create_retry"} {
 		t.Run(method, func(t *testing.T) {
-			s, _, cfg := review3AccountService(t)
+			s, _, cfg := createRoleService(t)
 			ctx := context.Background()
 			a, e := s.Login(ctx, Identity{Channel: "test", OpenID: "profile", Credential: "good"})
 			if e != nil {
@@ -670,8 +670,8 @@ func TestProfileOutputCannotMutateRoleWithoutCAS(t *testing.T) {
 }
 
 func TestPendingRoleRecoversAcrossServiceRestart(t *testing.T) {
-	var roles *review3LostRole
-	s, _, cfg := review3AccountService(t, func(c *Config) { roles = &review3LostRole{Store: c.Roles}; c.Roles = roles })
+	var roles *lostReplyRoleCreate
+	s, _, cfg := createRoleService(t, func(c *Config) { roles = &lostReplyRoleCreate{Store: c.Roles}; c.Roles = roles })
 	ctx := context.Background()
 	a := login(t, s, "restart")
 	if _, err := s.CreateRole(ctx, a.ID, 1, "Hero"); err == nil {
@@ -705,7 +705,7 @@ func TestPendingRoleRecoversAcrossServiceRestart(t *testing.T) {
 }
 
 func TestConcurrentCreationRetriesShareOneDurablePlan(t *testing.T) {
-	s, _, cfg := review3AccountService(t, func(c *Config) { c.Slots = &review3LostSlotCreate{Store: c.Slots} })
+	s, _, cfg := createRoleService(t, func(c *Config) { c.Slots = &lostReplySlotCreate{Store: c.Slots} })
 	ctx := context.Background()
 	a := login(t, s, "concurrent-retry")
 	if _, err := s.CreateRole(ctx, a.ID, 1, "Hero"); err == nil {
@@ -767,8 +767,8 @@ func TestAccountRequiresIdentityCheckedSlotCleanup(t *testing.T) {
 // lost reply created stays unplayable. A name merely RESERVED by someone else still retains the proof — see
 // TestNameReservedElsewhereKeepsThePendingSlot.
 func TestPendingRoleNameConflictReleasesSlotButNotTheOrphanRole(t *testing.T) {
-	var roles *review3LostRole
-	s, clock, cfg := newService(t, func(c *Config) { roles = &review3LostRole{Store: c.Roles}; c.Roles = roles })
+	var roles *lostReplyRoleCreate
+	s, clock, cfg := newService(t, func(c *Config) { roles = &lostReplyRoleCreate{Store: c.Roles}; c.Roles = roles })
 	ctx := context.Background()
 	a := login(t, s, "name-conflict")
 	if _, err := s.CreateRole(ctx, a.ID, 1, "Hero"); err == nil {
@@ -798,11 +798,11 @@ func TestPendingRoleNameConflictReleasesSlotButNotTheOrphanRole(t *testing.T) {
 	}
 }
 
-func (s *review3LostSlotCreate) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Slot], match func(Slot) bool) error {
+func (s *lostReplySlotCreate) DeleteIf(ctx context.Context, key string, expect versionstore.Versioned[Slot], match func(Slot) bool) error {
 	return s.Store.(versionstore.ConditionalDeleter[string, Slot]).DeleteIf(ctx, key, expect, match)
 }
 
-func (s *review3FailCreate[K, V]) DeleteIf(ctx context.Context, key K, expect versionstore.Versioned[V], match func(V) bool) error {
+func (s *failOnceCreate[K, V]) DeleteIf(ctx context.Context, key K, expect versionstore.Versioned[V], match func(V) bool) error {
 	return s.Store.(versionstore.ConditionalDeleter[K, V]).DeleteIf(ctx, key, expect, match)
 }
 
@@ -953,7 +953,7 @@ func (s *slotsDeleteBarrier) DeleteIf(ctx context.Context, key string, expect ve
 func TestConcurrentReleasesOfOneDeadPlanCountOnce(t *testing.T) {
 	sink := servicemetrics.NewRecorder()
 	var slots *slotsDeleteBarrier
-	s, cfg, _, a, _ := revn06DeadPlan(t, func(c *Config) {
+	s, cfg, _, a, _ := deadRolePlan(t, func(c *Config) {
 		c.Metrics = sink
 		slots = &slotsDeleteBarrier{Store: c.Slots}
 		slots.pending.Store(-1 << 30) // disarmed while the fixture runs

@@ -307,13 +307,13 @@ func TestSuccessfulFinishRetryFreesClaim(t *testing.T) {
 	}
 }
 
-type reviewPausedClaimDelete struct {
+type pausedClaimDelete struct {
 	ClaimStore
 	once             atomic.Bool
 	entered, release chan struct{}
 }
 
-func (s *reviewPausedClaimDelete) DeleteIf(ctx context.Context, k int64, v versionstore.Versioned[Claim], match func(Claim) bool) error {
+func (s *pausedClaimDelete) DeleteIf(ctx context.Context, k int64, v versionstore.Versioned[Claim], match func(Claim) bool) error {
 	if s.once.CompareAndSwap(false, true) {
 		close(s.entered)
 		<-s.release
@@ -321,7 +321,7 @@ func (s *reviewPausedClaimDelete) DeleteIf(ctx context.Context, k int64, v versi
 	return s.ClaimStore.DeleteIf(ctx, k, v, match)
 }
 func TestTerminalFinishCannotDeleteReacquiredClaim(t *testing.T) {
-	gate := &reviewPausedClaimDelete{ClaimStore: versionstore.NewMemoryStore[int64, Claim](), entered: make(chan struct{}), release: make(chan struct{})}
+	gate := &pausedClaimDelete{ClaimStore: versionstore.NewMemoryStore[int64, Claim](), entered: make(chan struct{}), release: make(chan struct{})}
 	h := newHarness(t, func(c *Config) {
 		if addr := os.Getenv("ROOST_REVIEW_REDIS"); addr != "" {
 			client, err := driver.NewClient(fredis.DefaultConfig(addr))

@@ -20,7 +20,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
-func bugfix5Chat(t *testing.T) *harness {
+func retentionHarness(t *testing.T) *harness {
 	t.Helper()
 	if os.Getenv("ROOST_BUGFIX5_BACKEND") != "redis" {
 		return newHarness(t)
@@ -42,7 +42,7 @@ func bugfix5Chat(t *testing.T) *harness {
 }
 
 func TestAgePruneHandlesInteriorAndTailGaps(t *testing.T) {
-	h := bugfix5Chat(t)
+	h := retentionHarness(t)
 	ctx := context.Background()
 	mustPublish(t, h, role(1), text("fresh-1", "1", world()))
 	h.clock.advance(-2 * time.Second)
@@ -303,7 +303,7 @@ func TestPruneFailureIsCountedNotJustReturned(t *testing.T) {
 // 淘汰计数守恒、年龄清理留下的页内洞与尾部洞都报 Gap、连续的页不报 Gap，返回的消息体与存储隔离。
 // 默认 Memory；ROOST_BUGFIX5_BACKEND=redis 且 ROOST_REVIEW_REDIS 指向隔离 Redis 时状态在真实 Redis 上，键前缀 revn06:chat:<纳秒>（测试结束删除）。
 
-func revn06ChatState(t *testing.T) StateStore {
+func retentionStateStore(t *testing.T) StateStore {
 	t.Helper()
 	addr := os.Getenv("ROOST_REVIEW_REDIS")
 	if os.Getenv("ROOST_BUGFIX5_BACKEND") != "redis" || addr == "" {
@@ -343,7 +343,7 @@ func TestSkewedReplicasPruneAndPageWithHonestGaps(t *testing.T) {
 		writers   = 3 // per replica
 		total     = 2 * writers * perWriter
 	)
-	state := revn06ChatState(t)
+	state := retentionStateStore(t)
 	registry := testRegistry(t)
 	rule := ChannelRule{Kind: ChannelWorld, RequiresTarget: true, Scope: ScopeShared, Retain: total}
 	fresh := newClock()

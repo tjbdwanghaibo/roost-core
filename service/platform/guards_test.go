@@ -172,7 +172,7 @@ func (s *lostClaimReply) Update(ctx context.Context, key string, mutate versions
 }
 func TestUnknownClaimDoesNotCallOrRepeatExternalGrant(t *testing.T) {
 	calls := 0
-	h := bugfix4Platform(t, 3, DelivererFunc(func(context.Context, Order) error { calls++; return nil }))
+	h := deliveryHarness(t, 3, DelivererFunc(func(context.Context, Order) error { calls++; return nil }))
 	h.service.cfg.Orders = &lostClaimReply{OrderStore: h.orders, lose: true}
 	if _, err := h.service.AttemptDelivery(context.Background(), "paid"); !errors.Is(err, versionstore.ErrOutcomeUnknown) || calls != 0 {
 		t.Fatalf("unknown claim granted: calls=%d err=%v", calls, err)

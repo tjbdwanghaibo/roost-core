@@ -18,7 +18,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
-func bugfix4Platform(t *testing.T, attempts int, deliver Deliverer) *harness {
+func deliveryHarness(t *testing.T, attempts int, deliver Deliverer) *harness {
 	t.Helper()
 	h := newHarness(t, func(c *Config) {
 		c.DeliveryAttempts = attempts
@@ -56,7 +56,7 @@ func bugfix4Platform(t *testing.T, attempts int, deliver Deliverer) *harness {
 // The goods commit at the external boundary; only the response is lost.
 func TestUnknownGrantMustBlockSettlement(t *testing.T) {
 	grants := 0
-	h := bugfix4Platform(t, 1, DelivererFunc(func(context.Context, Order) error { grants++; return context.DeadlineExceeded }))
+	h := deliveryHarness(t, 1, DelivererFunc(func(context.Context, Order) error { grants++; return context.DeadlineExceeded }))
 	ctx := context.Background()
 	_, firstErr := h.service.AttemptDelivery(ctx, "paid")
 	if !errors.Is(firstErr, context.DeadlineExceeded) || grants != 1 {
@@ -74,7 +74,7 @@ func TestUnknownGrantMustBlockSettlement(t *testing.T) {
 
 func TestUnknownGrantMustNotGrantAgain(t *testing.T) {
 	grants := 0
-	h := bugfix4Platform(t, 2, DelivererFunc(func(context.Context, Order) error {
+	h := deliveryHarness(t, 2, DelivererFunc(func(context.Context, Order) error {
 		grants++
 		if grants == 1 {
 			return context.DeadlineExceeded
@@ -94,7 +94,7 @@ func TestUnknownGrantMustNotGrantAgain(t *testing.T) {
 
 func TestUnknownGrantProofSurvivesServiceReconstruction(t *testing.T) {
 	grants := 0
-	h := bugfix4Platform(t, 3, DelivererFunc(func(context.Context, Order) error {
+	h := deliveryHarness(t, 3, DelivererFunc(func(context.Context, Order) error {
 		grants++
 		return context.DeadlineExceeded
 	}))
@@ -123,7 +123,7 @@ func TestUnknownGrantProofSurvivesServiceReconstruction(t *testing.T) {
 
 // The collaborator explicitly proves that the refusal performed no grant.
 func TestKnownNoGrantControl(t *testing.T) {
-	h := bugfix4Platform(t, 1, DelivererFunc(func(context.Context, Order) error {
+	h := deliveryHarness(t, 1, DelivererFunc(func(context.Context, Order) error {
 		return fmt.Errorf("%w: rejected before grant", ErrDeliveryNotApplied)
 	}))
 	ctx := context.Background()
@@ -138,7 +138,7 @@ func TestKnownNoGrantControl(t *testing.T) {
 
 func TestCallbackReceiptMustOwnPendingProof(t *testing.T) {
 	started, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-	h := bugfix4Platform(t, 2, DelivererFunc(func(context.Context, Order) error { close(started); <-release; return nil }))
+	h := deliveryHarness(t, 2, DelivererFunc(func(context.Context, Order) error { close(started); <-release; return nil }))
 	raw, sig := callback(t, "alias-order", 1, 100)
 	ctx := context.Background()
 	go func() { _, err := h.service.HandleCallback(ctx, raw, sig); done <- err }()
@@ -168,13 +168,13 @@ func TestCallbackReceiptMustOwnPendingProof(t *testing.T) {
 	}
 }
 
-type bugfix6Retiring struct {
+type pausedRetirement struct {
 	*RedisOrders
 	entered, release chan struct{}
 	once             sync.Once
 }
 
-func (p *bugfix6Retiring) RetirePending(ctx context.Context, id string) error {
+func (p *pausedRetirement) RetirePending(ctx context.Context, id string) error {
 	close(p.entered)
 	select {
 	case <-p.release:
@@ -184,7 +184,7 @@ func (p *bugfix6Retiring) RetirePending(ctx context.Context, id string) error {
 	return p.RedisOrders.RetirePending(ctx, id)
 }
 
-func bugfix6Wait(t *testing.T, ch <-chan struct{}) {
+func waitClosed(t *testing.T, ch <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-ch:
@@ -199,7 +199,7 @@ func TestRetirementCannotHideLatePaidOrder(t *testing.T) {
 	for _, restart := range []bool{false, true} {
 		t.Run(fmt.Sprintf("reconstruct_%v", restart), func(t *testing.T) {
 			orders, rawClient, prefix := redisOrdersForTest(t)
-			gate := &bugfix6Retiring{RedisOrders: orders, entered: make(chan struct{}), release: make(chan struct{})}
+			gate := &pausedRetirement{RedisOrders: orders, entered: make(chan struct{}), release: make(chan struct{})}
 			unblock := func() { gate.once.Do(func() { close(gate.release) }) }
 			t.Cleanup(unblock)
 			h := newHarness(t, func(cfg *Config) { cfg.Orders = orders; cfg.Pending = gate })
@@ -212,7 +212,7 @@ func TestRetirementCannotHideLatePaidOrder(t *testing.T) {
 			}
 			done := make(chan struct{})
 			go func() { defer close(done); h.service.retryPendingOnce(ctx) }()
-			bugfix6Wait(t, gate.entered)
+			waitClosed(t, gate.entered)
 			payload, signature := callback(t, "late-paid", 1001, 499)
 			receipt, err := h.service.HandleCallback(ctx, payload, signature)
 			if !errors.Is(err, ErrDeliveryFailed) || receipt.Order.OrderID != "late-paid" {
@@ -222,7 +222,7 @@ func TestRetirementCannotHideLatePaidOrder(t *testing.T) {
 				t.Fatalf("new paid order was not initially indexed: %v", err)
 			}
 			unblock()
-			bugfix6Wait(t, done)
+			waitClosed(t, done)
 			h.clock.advance(10 * time.Second)
 			service := h.service
 			if restart {

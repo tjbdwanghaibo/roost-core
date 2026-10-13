@@ -614,7 +614,7 @@ func TestSubmitContentionReportsCodeConflict(t *testing.T) {
 	}
 }
 
-func reviewRankStore(t *testing.T) *RedisStore {
+func isolatedRankStore(t *testing.T) *RedisStore {
 	t.Helper()
 	if addr := os.Getenv("ROOST_REVIEW_REDIS"); addr != "" {
 		c, err := driver.NewClient(fredis.DefaultConfig(addr))
@@ -634,7 +634,7 @@ func reviewRankStore(t *testing.T) *RedisStore {
 }
 
 func TestCommaRequestIsIdempotent(t *testing.T) {
-	s := reviewRankStore(t)
+	s := isolatedRankStore(t)
 	first := submit(t, s, 1, 10, UpdateAdd, "order,one")
 	second := submit(t, s, 1, 10, UpdateAdd, "order,one")
 	if second.Score.Value != first.Score.Value {
@@ -642,20 +642,20 @@ func TestCommaRequestIsIdempotent(t *testing.T) {
 	}
 }
 func TestAroundAcceptedMaximumRadius(t *testing.T) {
-	s := reviewRankStore(t)
+	s := isolatedRankStore(t)
 	submit(t, s, 1, 10, UpdateSet, "")
 	if _, err := s.Around(context.Background(), arena(), 1, MaxPageSize/2); err != nil {
 		t.Fatalf("accepted radius rejects delegated Page: %v", err)
 	}
 }
 
-type reviewPausedSwap struct {
+type pausedSwapClient struct {
 	RedisClient
 	entered, release chan struct{}
 	paused           atomic.Bool
 }
 
-func (c *reviewPausedSwap) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+func (c *pausedSwapClient) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
 	if script == swapScript && fmt.Sprint(args[3]) == "a" && c.paused.CompareAndSwap(false, true) {
 		close(c.entered)
 		<-c.release
@@ -663,9 +663,9 @@ func (c *reviewPausedSwap) Eval(ctx context.Context, script string, keys []strin
 	return c.RedisClient.Eval(ctx, script, keys, args...)
 }
 func TestUnchangedMemberCASProtectsRequestRing(t *testing.T) {
-	s := reviewRankStore(t)
+	s := isolatedRankStore(t)
 	submit(t, s, 1, 100, UpdateSet, "")
-	gate := &reviewPausedSwap{RedisClient: s.client, entered: make(chan struct{}), release: make(chan struct{})}
+	gate := &pausedSwapClient{RedisClient: s.client, entered: make(chan struct{}), release: make(chan struct{})}
 	s.client = gate
 	done := make(chan error, 1)
 	go func() {
@@ -691,7 +691,7 @@ func TestOverflowDoesNotChangeScoreOrConsumeRequest(t *testing.T) {
 		initial, delta, safe int64
 	}{{"positive", math.MaxInt64, 1, -1}, {"negative", math.MinInt64, -1, 1}} {
 		t.Run(test.name, func(t *testing.T) {
-			s := reviewRankStore(t)
+			s := isolatedRankStore(t)
 			ctx := context.Background()
 			if _, err := s.Submit(ctx, arena(), Score{OwnerID: 1, Value: test.initial, Tie: 7, Brief: []byte("original")}, UpdateSet, ""); err != nil {
 				t.Fatal(err)
@@ -716,7 +716,7 @@ func TestOverflowDoesNotChangeScoreOrConsumeRequest(t *testing.T) {
 }
 
 func TestConcurrentAddsCannotWrapAfterCASRetry(t *testing.T) {
-	s := reviewRankStore(t)
+	s := isolatedRankStore(t)
 	ctx := context.Background()
 	if _, err := s.Submit(ctx, arena(), Score{OwnerID: 1, Value: math.MaxInt64 - 1}, UpdateSet, ""); err != nil {
 		t.Fatal(err)

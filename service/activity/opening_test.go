@@ -21,7 +21,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 )
 
-func bugfix5Activity(t *testing.T, mutate func(*Config)) (*Service, *activityClock) {
+func openingService(t *testing.T, mutate func(*Config)) (*Service, *activityClock) {
 	t.Helper()
 	return newActivityService(t, func(c *Config) {
 		if os.Getenv("ROOST_BUGFIX5_BACKEND") == "redis" {
@@ -51,14 +51,14 @@ func bugfix5Activity(t *testing.T, mutate func(*Config)) (*Service, *activityClo
 	})
 }
 
-type bugfix5SlowCreate struct {
+type pausedActivityCreate struct {
 	versionstore.Store[Key, Activity]
 	once             atomic.Bool
 	key              Key
 	entered, release chan struct{}
 }
 
-func (s *bugfix5SlowCreate) Create(ctx context.Context, key Key, value Activity) (versionstore.Versioned[Activity], bool, error) {
+func (s *pausedActivityCreate) Create(ctx context.Context, key Key, value Activity) (versionstore.Versioned[Activity], bool, error) {
 	if key == s.key && s.once.CompareAndSwap(false, true) {
 		close(s.entered)
 		<-s.release
@@ -68,9 +68,9 @@ func (s *bugfix5SlowCreate) Create(ctx context.Context, key Key, value Activity)
 
 func TestLateCreateCannotBorrowAnAlreadyPromisedSlot(t *testing.T) {
 	key := activityKey("zz-late")
-	var gate *bugfix5SlowCreate
-	s, clock := bugfix5Activity(t, func(c *Config) {
-		gate = &bugfix5SlowCreate{Store: c.Activities, key: key, entered: make(chan struct{}), release: make(chan struct{})}
+	var gate *pausedActivityCreate
+	s, clock := openingService(t, func(c *Config) {
+		gate = &pausedActivityCreate{Store: c.Activities, key: key, entered: make(chan struct{}), release: make(chan struct{})}
 		c.Activities = gate
 	})
 	ctx := context.Background()
@@ -116,13 +116,13 @@ func TestLateCreateCannotBorrowAnAlreadyPromisedSlot(t *testing.T) {
 	}
 }
 
-type bugfix5LostAdmission struct {
+type lostReplyWindowStore struct {
 	versionstore.Store[string, Window]
 	writes atomic.Int32
 	failAt int32
 }
 
-func (s *bugfix5LostAdmission) Update(ctx context.Context, key string, mutate versionstore.Mutate[Window]) (versionstore.Versioned[Window], bool, error) {
+func (s *lostReplyWindowStore) Update(ctx context.Context, key string, mutate versionstore.Mutate[Window]) (versionstore.Versioned[Window], bool, error) {
 	got, applied, err := s.Store.Update(ctx, key, mutate)
 	if err == nil && applied && s.writes.Add(1) == s.failAt {
 		return versionstore.Versioned[Window]{}, false, errors.New("admission response lost")
@@ -130,7 +130,7 @@ func (s *bugfix5LostAdmission) Update(ctx context.Context, key string, mutate ve
 	return got, applied, err
 }
 func TestLostAdmissionReplyRecoversItsOriginalPlan(t *testing.T) {
-	s, clock := bugfix5Activity(t, func(c *Config) { c.Windows = &bugfix5LostAdmission{Store: c.Windows, failAt: 1} })
+	s, clock := openingService(t, func(c *Config) { c.Windows = &lostReplyWindowStore{Store: c.Windows, failAt: 1} })
 	ctx := context.Background()
 	key := activityKey("lost")
 	expected := []int32{1, 2}
@@ -163,12 +163,12 @@ func TestLostAdmissionReplyRecoversItsOriginalPlan(t *testing.T) {
 	}
 }
 
-type bugfix5LostCreation struct {
+type lostReplyActivityCreate struct {
 	versionstore.Store[Key, Activity]
 	once atomic.Bool
 }
 
-func (s *bugfix5LostCreation) Create(ctx context.Context, key Key, value Activity) (versionstore.Versioned[Activity], bool, error) {
+func (s *lostReplyActivityCreate) Create(ctx context.Context, key Key, value Activity) (versionstore.Versioned[Activity], bool, error) {
 	stored, created, err := s.Store.Create(ctx, key, value)
 	if err == nil && created && s.once.CompareAndSwap(false, true) {
 		return versionstore.Versioned[Activity]{}, false, errors.New("creation response lost")
@@ -179,11 +179,11 @@ func (s *bugfix5LostCreation) Create(ctx context.Context, key Key, value Activit
 func TestCreatedOrConfirmedReplyLossRemainsRecoverable(t *testing.T) {
 	for _, failure := range []string{"create", "confirm"} {
 		t.Run(failure, func(t *testing.T) {
-			s, clock := bugfix5Activity(t, func(c *Config) {
+			s, clock := openingService(t, func(c *Config) {
 				if failure == "create" {
-					c.Activities = &bugfix5LostCreation{Store: c.Activities}
+					c.Activities = &lostReplyActivityCreate{Store: c.Activities}
 				} else {
-					c.Windows = &bugfix5LostAdmission{Store: c.Windows, failAt: 2}
+					c.Windows = &lostReplyWindowStore{Store: c.Windows, failAt: 2}
 				}
 			})
 			ctx := context.Background()
@@ -218,12 +218,12 @@ func TestCreatedOrConfirmedReplyLossRemainsRecoverable(t *testing.T) {
 	}
 }
 
-type bugfix5CountingActivities struct {
+type countingActivityReads struct {
 	versionstore.Store[Key, Activity]
 	reads atomic.Int64
 }
 
-func (s *bugfix5CountingActivities) Get(ctx context.Context, key Key) (versionstore.Versioned[Activity], bool, error) {
+func (s *countingActivityReads) Get(ctx context.Context, key Key) (versionstore.Versioned[Activity], bool, error) {
 	s.reads.Add(1)
 	return s.Store.Get(ctx, key)
 }
@@ -232,8 +232,8 @@ func (s *bugfix5CountingActivities) Get(ctx context.Context, key Key) (versionst
 // 拒绝（ErrConflict），不轮转扫描、不改窗口，交线下修复。
 // 历史：此前按 ScanAfter 游标轮转扫描旧的超限窗口；维护者 2026-10-13 决定不兼容旧数据。
 func TestAWindowAboveTheLimitIsRefusedBeforeAnyRead(t *testing.T) {
-	var store *bugfix5CountingActivities
-	s, _ := bugfix5Activity(t, func(c *Config) { store = &bugfix5CountingActivities{Store: c.Activities}; c.Activities = store })
+	var store *countingActivityReads
+	s, _ := openingService(t, func(c *Config) { store = &countingActivityReads{Store: c.Activities}; c.Activities = store })
 	ctx := context.Background()
 	window := Window{GroupID: "group-a"}
 	for i := 0; i < MaxPendingActivities+1; i++ {
@@ -260,7 +260,7 @@ func TestAWindowAboveTheLimitIsRefusedBeforeAnyRead(t *testing.T) {
 // 同 key Open 走正常准入。
 // 历史：RR-20261001-09 曾在 grace 后回收它、同 key Open 为它补计划；维护者 2026-10-13 决定不兼容旧数据。
 func TestAnOpeningWithoutAPlanIsMalformedAndKeptForAnOperator(t *testing.T) {
-	s, clock := bugfix5Activity(t, nil)
+	s, clock := openingService(t, nil)
 	ctx := context.Background()
 	key := activityKey("planless-opening")
 	if _, _, err := s.cfg.Windows.Create(ctx, key.GroupID, Window{GroupID: key.GroupID, Opening: []OpeningEntry{{Key: key, AdmittedAtUnix: clock.Now().Unix()}}}); err != nil {
