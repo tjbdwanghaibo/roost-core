@@ -109,7 +109,7 @@ type Interest struct {
 	// for the next Apply to say them again.
 	retry []pair
 	// refused counts consecutive refusals per held pair; a pair at
-	// retryStallAfter no longer holds Drain open (RR-20261006-49).
+	// retryStallAfter no longer holds Drain open.
 	refused map[pair]int
 	closed  bool
 }
@@ -352,8 +352,8 @@ func (in *Interest) Hide(id int64) error {
 // The re-said pairs go through the retry list, so a manager that still
 // refuses one (the session is not open yet) is asked again on every Apply.
 //
-// 实体被框架退回 remove（RR-59 卸载后重载不了）之后重新登记的情形不需要调用它：Manager 把被撤销的订阅
-// 交还 Interest，由 resubmit 自动重新提交（RR-20260926-70）。
+// 实体被框架退回 remove（卸载后重载不了）之后重新登记的情形不需要调用它：Manager 把被撤销的订阅
+// 交还 Interest，由 resubmit 自动重新提交。
 func (in *Interest) Resubscribe(observer int64) int {
 	if in == nil {
 		return 0
@@ -375,7 +375,7 @@ func (in *Interest) Resubscribe(observer int64) int {
 	return queued
 }
 
-// resubmit 是 Interest 的重新提交入口（RR-20260926-70）：RR-59 卸载后重载不了，框架退回 remove 撤销了本 Interest
+// resubmit 是 Interest 的重新提交入口：卸载后重载不了，框架退回 remove 撤销了本 Interest
 // 的订阅，同 ID 实体又重新登记后，Manager 在 Flush 的政策阶段把这些订阅交还这里。与 Resubscribe 同一种修补：
 // Manager 忘了，Interest 没忘。仍持有的 pair 按 Interest 自己的规则重新订阅（来源视图选择、ViewSets 校验、
 // Manager 的优先级与字段白名单）；缺席期间已释放的 pair（观察者走远、关系解除、Hide）不在 held 里，不恢复。
@@ -415,7 +415,7 @@ func (in *Interest) Visible(observer int64) []int64 {
 // last source dropped, re-subscribes for pairs whose band changed. Subscribes
 // the manager refuses come back as Refusals and are said again on the next
 // Apply, for as long as the pair is held — a refusal is not a verdict on the
-// pair (RR-20260920-06). Calling it is the caller's choice: Interest is a
+// pair. Calling it is the caller's choice: Interest is a
 // state machine, not a goroutine.
 func (in *Interest) Apply() []Refusal {
 	in.mu.Lock()
@@ -475,6 +475,7 @@ func (in *Interest) applyLocked() []Refusal {
 	return refusals
 }
 
+// recordEvent 记录一个来源对 pair 的最新可见性与 band，不立即发布。
 // 先收齐所有来源的最终状态，再向 Manager 发布；spatial 转为 block/team
 // 可见时不能先退订后重建，否则会打断对象基线并产生闪烁。
 func (in *Interest) recordEvent(source string, event InterestEvent) {
@@ -492,6 +493,7 @@ func (in *Interest) recordEvent(source string, event InterestEvent) {
 	}
 	current.bands[source] = max(event.Band, 0)
 }
+
 func (in *Interest) settlePair(key pair, refusals *[]Refusal) {
 	current := in.held[key]
 	if current == nil {

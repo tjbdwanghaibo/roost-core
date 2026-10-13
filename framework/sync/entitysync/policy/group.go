@@ -60,7 +60,7 @@ func NewGroup(config GroupConfig) (*Group, error) {
 	return g, nil
 }
 
-// resubmit 是 Group 的重新提交入口（RR-20260926-70）：框架撤销（RR-59 退回 remove）的本组订阅在同 ID 实体重新
+// resubmit 是 Group 的重新提交入口：框架撤销（卸载撤销退回 remove）的本组订阅在同 ID 实体重新
 // 登记后交还这里。实体仍在组里、会话仍属于某个成员时以本组视图重新订阅；缺席期间 RemoveSubject / Leave 过的不恢复。
 // 没有调用方可以报告拒绝（会话已关闭、容量不足、实体又被注销），记一条 Warn 后放弃，与 AddSubject 失败需调用方重做同一口径。
 func (g *Group) resubmit(retracted []entitysync.RetractedSubscription) {

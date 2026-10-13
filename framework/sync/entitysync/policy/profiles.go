@@ -26,6 +26,7 @@ func (in *Interest) validateProfile(profile entity.SyncProfile) error {
 	return nil
 }
 
+// validateConfiguredProfiles 在启动时检查已知 band 都能映射到授权视图。
 // 空间 band 有限，可在启动前检查 fallback。关系 band 由业务动态输入，
 // 已声明映射先检查，其他动态值在 Subscribe 前检查，绝不悄悄放宽视图。
 func (in *Interest) validateConfiguredProfiles(config InterestConfig) error {

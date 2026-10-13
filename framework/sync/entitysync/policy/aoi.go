@@ -16,8 +16,7 @@ var (
 	// ErrInterestBudget: one observer's leave-radius box would cover more
 	// blocks than the configuration allows. It is a refusal at construction
 	// because the cost it guards is invisible at run time — nothing fails,
-	// the manager just gets slower in proportion to a ratio nobody looked at
-	// (RR-20260918-08).
+	// the manager just gets slower in proportion to a ratio nobody looked at.
 	ErrInterestBudget = errors.New("policy: one observer would subscribe to more blocks than the budget allows")
 )
 

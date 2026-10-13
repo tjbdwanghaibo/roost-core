@@ -130,6 +130,7 @@ func (m *AOI) emitBlock(o *interestObserver, event InterestEvent) {
 }
 
 func (blockSource) Name() string { return SourceBlock }
+
 func (s blockSource) Flush() []InterestEvent {
 	m := s.manager
 	events := m.blockPending
@@ -151,6 +152,7 @@ func sortInterestEvents(events []InterestEvent) {
 // 执行，随后不同 observer 并行计算；同一 observer 不会并发写自己的可见集。
 // 不在确认线程、Nest worker 或每个 block 上创建常驻处理器。
 func (m *AOI) beginBatch() { m.batching = true }
+
 func (m *AOI) endBatch(workers int) {
 	m.batching = false
 	observers := make([]*interestObserver, 0, len(m.dirty))

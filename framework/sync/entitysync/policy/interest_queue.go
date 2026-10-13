@@ -32,7 +32,7 @@ type queuedInterestFact struct {
 	condition          func() (bool, bool)
 	at                 spatial.Point
 	observer           bool
-	// subjectGone：Hide 在事实应用前移走了被观察方（RR-20261006-48），只剩观察者那一半要移动。
+	// subjectGone：Hide 在事实应用前移走了被观察方，只剩观察者那一半要移动。
 	subjectGone     bool
 	relation        string
 	subjects        []int64
@@ -40,13 +40,13 @@ type queuedInterestFact struct {
 	removedSubjects []int64
 }
 
-// ---- Leave / Hide 与排队事实（RR-20261006-48） ----
+// ---- Leave / Hide 与排队事实 ----
 //
-// 排队事实在调用顺序上早于之后的 Leave / Hide，却在下一次政策阶段才应用。旧实现 Leave / Hide 不碰 in.facts：
-// 就绪的位置事实在 MoveSubject 处得到 ErrInterestUnknown，被留下并阻塞该 id，错误一路返回到 Flush，Flush 在
+// 排队事实在调用顺序上早于之后的 Leave / Hide，却在下一次政策阶段才应用。若 Leave / Hide 不改写 in.facts，
+// 就绪的位置事实会在 MoveSubject 处得到 ErrInterestUnknown，被留下并阻塞该 id，错误一路返回到 Flush，Flush 在
 // 取 pending 之前失败，之后每一次都一样——这个 Manager 上所有 subject 停发，Stop / Drain 一直报错。
 //
-// 修法是把 Leave / Hide 的效果写进排队事实，使应用结果与“先应用事实、再 Leave / Hide”逐项相同，不多丢也不多留：
+// 所以 Leave / Hide 把自己的效果写进排队事实，使应用结果与“先应用事实、再 Leave / Hide”逐项相同，不多丢也不多留：
 //   - 位置事实：MoveSubject 后 RemoveSubject ≡ RemoveSubject，被观察方那一半作废；MoveObserver 后 RemoveObserver
 //     同理。两半都作废才丢弃整条——Hide 只移走被观察方，observer=true 的事实保留观察者的移动。
 //   - 关系事实：Set(o, S) 后 Forget(id) ≡ Set(o, S\{id})，从成员里去掉 id；Leave 还 Clear(id)，
@@ -143,6 +143,7 @@ func (in *Interest) QueueRelationDelta(e entity.IThreadSafeEntity, source string
 	}
 	return in.queueFact(e, queuedInterestFact{relation: source, relationDelta: true, subjects: slices.Clone(added), removedSubjects: slices.Clone(removed)})
 }
+
 func (in *Interest) queueFact(e entity.IThreadSafeEntity, fact queuedInterestFact) error {
 	if e == nil || e.Base() == nil {
 		return errors.New("policy: entity required")
@@ -279,7 +280,7 @@ func (in *Interest) applyQueued() error {
 	return failed
 }
 
-// queuedPending 告诉 Drain 政策还有没做完的事：排队事实，以及还没停滞的重试 pair（RR-20261006-49）。
+// queuedPending 告诉 Drain 政策还有没做完的事：排队事实，以及还没停滞的重试 pair。
 func (in *Interest) queuedPending() bool {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -304,14 +305,14 @@ func (in *Interest) queuedPending() bool {
 	return false
 }
 
-// ---- 重试停滞（RR-20261006-49） ----
+// ---- 重试停滞 ----
 //
-// 被拒的订阅留在 retry 里，每次 Apply 重说，直到被接受或 pair 被释放（拒绝不是对 pair 的裁决，RR-20260920-06）。
-// 旧实现排队模式把整个 retry 计入 queuedPending：一个永远不会被接受的 pair（观察者会话已关闭且不再重开、
-// subject 已注销而政策没 Hide……）让 Drain 永不结束，只能等 ctx 超时，kit 停机走不到 Close；排队模式又丢掉
-// Refusal，没有任何日志。
+// 被拒的订阅留在 retry 里，每次 Apply 重说，直到被接受或 pair 被释放（拒绝不是对 pair 的裁决）。
+// 不能把整个 retry 计入 queuedPending：一个永远不会被接受的 pair（观察者会话已关闭且不再重开、subject 已注销
+// 而政策没 Hide……）会让 Drain 永不结束，只能等 ctx 超时，停机走不到 Close；排队模式也不返回 Refusal，
+// 这种停滞没有任何其他痕迹。
 //
-// 现在同一 pair 连续被拒 retryStallAfter 次即判定为停滞：计数 entitysync_interest_retry_stalled_total、Warn 一次，
+// 同一 pair 连续被拒 retryStallAfter 次即判定为停滞：计数 entitysync_interest_retry_stalled_total、Warn 一次，
 // 不再计入 queuedPending。它仍留在 retry 里照旧重说——会话重开、容量释放后照常订阅，计数随成功清零。
 // 上界按 Flush 轮次计，默认周期 50ms 下约 500ms：足够覆盖“本轮 remove 释放容量、下一轮接受”这类暂时拒绝。
 const retryStallAfter = 10

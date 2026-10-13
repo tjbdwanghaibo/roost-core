@@ -15,10 +15,10 @@ import (
 // cannot.
 //
 // Direct 记着调用方当前的绑定（成功的 Bind 起，到 Unbind、会话关闭或业务 Unregister 该实体为止），只为一件事：
-// 绑定被框架撤销（RR-59 退回 remove）、实体重新登记后，按调用方当前的绑定重新提交（RR-20260926-70）。会话关闭
+// 绑定被框架撤销（卸载撤销退回 remove）、实体重新登记后，按调用方当前的绑定重新提交。会话关闭
 // （CloseSession 或传输失败）与业务 Unregister 时 Manager 已丢掉订阅，绑定在下一次 Flush 的政策阶段随之删除，
-// 表的大小落在活跃绑定数上（RR-20260926-79）；RR-59 撤销不删除绑定。每条绑定记着本来源最近一次成功订阅的戳，
-// 释放通知只删除戳更早的——通知所指那一次会话打开 / 那一次登记里的绑定（RR-20260926-85）。
+// 表的大小落在活跃绑定数上；卸载撤销不删除绑定。每条绑定记着本来源最近一次成功订阅的戳，
+// 释放通知只删除戳更早的——通知所指那一次会话打开 / 那一次登记里的绑定。
 type Direct struct {
 	subscriptions *entitysync.SubscriptionSource
 	session       func(int64) entitysync.SessionID
@@ -93,13 +93,13 @@ func (d *Direct) resubmit(retracted []entitysync.RetractedSubscription) {
 	}
 }
 
-// released 是 Direct 的释放入口（RR-20260926-79）：会话关闭或业务 Unregister 后 Manager 丢掉了这些订阅，
-// 对应的绑定不再有意义。旧实现只在 Unbind 时删除，表随历史绑定数单调增长。通知在下一次政策阶段才到，其间调用方
+// released 是 Direct 的释放入口：会话关闭或业务 Unregister 后 Manager 丢掉了这些订阅，
+// 对应的绑定不再有意义；若只在 Unbind 时删除，表会随历史绑定数单调增长。通知在下一次政策阶段才到，其间调用方
 // 可能已在重开的会话或重新登记的实体上再次 Bind：绑定的戳晚于通知的是新的，保留。删除时一并 Unsubscribe，让 Manager
-// 释放 RR-59 撤销后仍为这对 pair 保留的重新提交记录（此时本来源已不持有订阅，不影响其他来源）。
+// 释放卸载撤销后仍为这对 pair 保留的重新提交记录（此时本来源已不持有订阅，不影响其他来源）。
 //
-// 判定比较戳而不是 Holds（RR-20260926-85）：新绑定随后被 RR-59 撤销时 subject 退役或已被忘掉，Holds 为假，旧实现据此删掉
-// 新绑定并 Unsubscribe，连它的 RR-70 撤销记录一起删掉，实体重新登记后不再恢复。戳早于通知的绑定一定属于通知所指的那次
+// 判定比较戳而不是 Holds：新绑定随后被卸载撤销时 subject 退役或已被忘掉，Holds 为假；据此判定会删掉
+// 新绑定并 Unsubscribe，连它的撤销记录一起删掉，实体重新登记后不再恢复。戳早于通知的绑定一定属于通知所指的那次
 // 打开 / 登记（或更早、同样已死的），本来源不会有更新的订阅或撤销记录，Unsubscribe 只清掉这次释放留下的记录。
 func (d *Direct) released(pairs []entitysync.ReleasedSubscription) {
 	d.mu.Lock()

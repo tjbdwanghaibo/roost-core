@@ -56,6 +56,7 @@ func NewSpatialComponent(owner entity.IThreadSafeEntity, interest *Interest, obs
 	}
 	return &SpatialComponent{owner: owner, interest: interest, observer: observer, writePosition: writePosition}, nil
 }
+
 func (*SpatialComponent) Name() string { return "spatial" }
 
 // Move 先完成事实准入，再修改 DAO，避免队列已满时写入位置。
@@ -70,6 +71,7 @@ func (c *SpatialComponent) Move(to spatial.Point) error {
 	c.writePosition(to)
 	return nil
 }
+
 func (c *SpatialComponent) MoveWithObservedBlocks(to spatial.Point, blocks []int64) error {
 	if !c.inScope() {
 		return ErrSpatialScope
@@ -80,6 +82,7 @@ func (c *SpatialComponent) MoveWithObservedBlocks(to spatial.Point, blocks []int
 	c.writePosition(to)
 	return nil
 }
+
 func (c *SpatialComponent) SetObservedBlocks(blocks []int64) error {
 	if !c.inScope() {
 		return ErrSpatialScope
