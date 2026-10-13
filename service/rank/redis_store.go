@@ -214,15 +214,6 @@ func (s *RedisStore) Submit(ctx context.Context, board Board, score Score, mode 
 // counters: the configured prefix plus the owner-hash segment the swap guards.
 func (s *RedisStore) casStoreLabel() string { return s.cfg.Prefix + ":o:" }
 
-// ErrConflictSentinel is the previous name of ErrConflict, kept so existing
-// errors.Is call sites keep matching. It used to be a plain errors.New, which
-// is why a submit that lost every compare-and-swap reached clients as
-// CodeInternal / "server error" — the one failure mode its own comment promised
-// was distinguishable from a store outage.
-//
-// Deprecated: use ErrConflict.
-var ErrConflictSentinel = ErrConflict
-
 // readOwner returns the owner's stored member and its JSON request ring ("" when
 // none). The comma-separated ":applied" ledger an older build wrote is not read:
 // its presence is refused, so a replay it would have caught is never applied

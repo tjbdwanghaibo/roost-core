@@ -598,7 +598,7 @@ func TestANilReporterDoesNotAffectBehaviour(t *testing.T) {
 // Every other service in this module pairs CodeConflict with a coded
 // sentinel; rank declared the code, then reported exhaustion through a plain
 // errors.New, so the RPC envelope told the caller "server error" for the one
-// failure mode the doc on ErrConflictSentinel promises is distinguishable.
+// failure mode that must be distinguishable from a store outage.
 func TestSubmitContentionReportsCodeConflict(t *testing.T) {
 	store, fake := newStore(t)
 	fake.swapAlwaysLoses = true
@@ -609,7 +609,7 @@ func TestSubmitContentionReportsCodeConflict(t *testing.T) {
 	if code, reason := Error(err); code != CodeConflict {
 		t.Fatalf("exhausted compare-and-swap reports code %d (%q), want CodeConflict %d", code, reason, CodeConflict)
 	}
-	if !errors.Is(err, ErrConflictSentinel) {
+	if !errors.Is(err, ErrConflict) {
 		t.Fatal("the exported sentinel no longer matches the conflict error")
 	}
 }
