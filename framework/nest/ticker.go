@@ -9,14 +9,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/goroutine"
 )
 
-// tick 是包级帧计数，独立于各 Ticker 实例自己的帧号。
-var tick uint64
-
-// CurTick 返回包级帧计数。
-func CurTick() uint64 {
-	return atomic.LoadUint64(&tick)
-}
-
 var (
 	tickMu sync.RWMutex
 	// tickCbSeen 按名字去重；tickCbList 保持注册顺序，让回调执行顺序确定（按 map 遍历会让回调间顺序随进程变化）。

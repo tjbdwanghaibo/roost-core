@@ -47,7 +47,7 @@
 | [examples/lubanreal](../../examples/lubanreal) | [其他包与公共基础设施](impl/14-foundation.md) | 1 | 0 |
 | [examples/lubanreal/gen](../../examples/lubanreal/gen) | [其他包与公共基础设施](impl/14-foundation.md) | 3 | 0 |
 | [examples/robotdemo](../../examples/robotdemo) | [其他包与公共基础设施](impl/14-foundation.md) | 1 | 0 |
-| [framework/app](../../framework/app) | [App 与生命周期](impl/01-app-lifecycle.md) | 14 | 26 |
+| [framework/app](../../framework/app) | [App 与生命周期](impl/01-app-lifecycle.md) | 15 | 26 |
 | [framework/app/buildinfo](../../framework/app/buildinfo) | [App 与生命周期](impl/01-app-lifecycle.md) | 1 | 1 |
 | [framework/cache](../../framework/cache) | [核心：DataEngine 持久化](impl/03-dataengine.md) | 12 | 24 |
 | [framework/configdata](../../framework/configdata) | [配置、数据表与热更](impl/07-config.md) | 6 | 9 |

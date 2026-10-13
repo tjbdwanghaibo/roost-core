@@ -17,6 +17,7 @@
 1. Degraded 仍 ready，Fail 与生命周期就绪位决定准入。
 2. 指标定义和导出文档同源校验；分位数不由累计量猜测。
 3. admin 认证审计与上层审批分开；敏感数据不入日志。
+4. 日志的 `frame` 字段：Nest 请求内由 fctx 带；请求外取运行中 Nest Ticker 的帧号（App 经 `ModLogFrame` 提供 `*app.LogFrame`，Nest Mod 在 Provide 时接上），进程里没有 Nest 时为 0。
 
 ## 3. 并发、失败与恢复的修改检查
 

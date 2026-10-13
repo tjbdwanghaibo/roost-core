@@ -18,7 +18,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
 )
@@ -47,6 +46,8 @@ type App struct {
 	singletonOpener SingletonOpener
 	singletonClock  singletonClock
 	singleton       *singletonLock
+	// logFrame 是文件 / 控制台日志在 Nest 请求之外取的帧号，Nest Mod 经 ModLogFrame 接上自己的 Ticker。
+	logFrame LogFrame
 	// businessTimeInterval 是运行中推进业务时间高水位的间隔；0 为 businessTimeAdvanceInterval（测试缩短它）。
 	businessTimeInterval time.Duration
 }
@@ -199,7 +200,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 		Caller:           a.settings.Log.Caller,
 		RotateInterval:   a.settings.Log.RotateInterval,
 		RotateTimeFormat: a.settings.Log.RotateTimeFormat,
-		FrameFunc:        nest.CurTick,
+		FrameFunc:        a.logFrame.Current,
 	}); err != nil {
 		return fmt.Errorf("init log: %w", err)
 	}
@@ -232,6 +233,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 
 	// --- Init registry ---
 	a.registry = NewRegistry(a.cfg)
+	a.registry.store[ModLogFrame] = &a.logFrame
 	if _, err := runStartupStep(startupCtx, sigChan, "app.init", func(ctx context.Context) error {
 		return a.emitLifecycle(ctx, lifecycle.Event{
 			Phase:   lifecycle.PhaseAppInit,

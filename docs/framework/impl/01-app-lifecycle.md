@@ -31,7 +31,7 @@
 
 ### app
 
-14 个实现文件、8 个测试文件。
+15 个实现文件、8 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -41,6 +41,7 @@
 | [config_schema.go](../../../framework/app/config_schema.go) | `ConfigSchema`、`ModConfigSchema`、`ServiceIdentity` |
 | [config_validation.go](../../../framework/app/config_validation.go) | 函数/方法或内部实现；见源码 |
 | [config_values.go](../../../framework/app/config_values.go) | 函数/方法或内部实现；见源码 |
+| [log_frame.go](../../../framework/app/log_frame.go) | `LogFrame` |
 | [manager.go](../../../framework/app/manager.go) | `IManager`、`IManagerStopperWithContext`、`ManagerDependencyProvider` |
 | [mod.go](../../../framework/app/mod.go) | `Mod`、`ModStopperWithContext`、`ModStopBudgetProvider`、`ModDependencyProvider`、`ModOptionalDependencyProvider` |
 | [name.go](../../../framework/app/name.go) | `ModName`、`ServiceName` |

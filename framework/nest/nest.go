@@ -264,6 +264,14 @@ func (n HandlerName) String() string {
 	return n.value
 }
 
+// CurrentTick 返回引擎 Ticker 的当前帧号；没有 Ticker 时为 0。
+func (mgr *NestMgr) CurrentTick() uint64 {
+	if mgr == nil {
+		return 0
+	}
+	return mgr.ticker.CurrentTick()
+}
+
 func (mgr *NestMgr) TickDuration() time.Duration {
 	if mgr == nil || mgr.ticker == nil {
 		return 100 * time.Millisecond

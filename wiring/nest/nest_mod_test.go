@@ -3,8 +3,14 @@ package nest
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -239,4 +245,72 @@ func TestProvidedEntitySyncHealthIsRegistered(t *testing.T) {
 		}
 	}
 	t.Fatal("entitysync health is absent from production registry")
+}
+
+// fakeDataEngineMod 只把 Nest 需要的持久化选项放进注册表，让真实的 Nest Mod 能在 App 里起来。
+type fakeDataEngineMod struct{}
+
+func (fakeDataEngineMod) Name() app.ModName       { return mods.ModDataEngine }
+func (fakeDataEngineMod) Init(*viper.Viper) error { return nil }
+func (fakeDataEngineMod) Provide(registry *app.Registry) error {
+	return registry.Register(mods.ModDataEngine, dataEngineNestProvider{committer: noOpCommitter{}})
+}
+func (fakeDataEngineMod) Start() error { return nil }
+func (fakeDataEngineMod) Stop()        {}
+
+// frameProbeService 等 Nest 跑过若干帧之后，在 Nest 请求上下文之外写一行日志，然后结束 Serve 让 App 退出。
+type frameProbeService struct{ wait time.Duration }
+
+func (s *frameProbeService) Name() app.ServiceName { return "game" }
+func (s *frameProbeService) Init(*app.Registry) error {
+	return nil
+}
+func (s *frameProbeService) Serve(ctx context.Context) error {
+	select {
+	case <-time.After(s.wait):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	slog.Info("frame probe")
+	return errFrameProbeDone
+}
+func (s *frameProbeService) Shutdown(context.Context) error { return nil }
+
+var errFrameProbeDone = errors.New("frame probe done")
+
+// 不在 Nest 请求上下文里的日志行（请求内的帧号由 fctx 带）取运行中 Nest 的帧号：Nest 跑过若干帧之后它大于 0。
+func TestLogLinesOutsideARequestCarryTheRunningNestFrame(t *testing.T) {
+	dir := t.TempDir()
+	a := app.New("roost-test", "0.0.0")
+	a.Mods(fakeDataEngineMod{}, NewMod(emptyGetter{}))
+	a.RegisterServer("game", &frameProbeService{wait: 200 * time.Millisecond})
+	config := "log:\n  file: true\n  stdout: false\n  dir: " + strconv.Quote(dir) + "\n  rotate_interval: 0\nnest:\n  tick_duration: 10ms\n"
+	path := filepath.Join(dir, "config.game.yaml")
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.RootCmd().SetArgs([]string{"game", "--config", path})
+
+	if err := a.Execute(); !errors.Is(err, errFrameProbeDone) {
+		t.Fatalf("Execute err = %v, want the probe's own error", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "game-1000.log"))
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.Contains(line, "frame probe") {
+			continue
+		}
+		match := regexp.MustCompile(`\bframe=(\d+)`).FindStringSubmatch(line)
+		if match == nil {
+			t.Fatalf("the probe line has no frame field: %s", line)
+		}
+		frame, _ := strconv.ParseUint(match[1], 10, 64)
+		if frame == 0 {
+			t.Fatalf("the probe line was written after ~20 Nest frames but carries frame=0: %s", line)
+		}
+		return
+	}
+	t.Fatalf("no probe line in the file log:\n%s", raw)
 }

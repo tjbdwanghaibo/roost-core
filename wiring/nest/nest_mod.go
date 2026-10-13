@@ -208,6 +208,10 @@ func (m *Mod) Provide(registry *app.Registry) error {
 		m.engine = nil
 		return err
 	}
+	// 日志在 Nest 请求之外取本引擎的帧号（App 提供 ModLogFrame）。
+	if frame, ok := app.Lookup[*app.LogFrame](registry, app.ModLogFrame); ok && frame != nil {
+		frame.SetSource(m.engine.CurrentTick)
+	}
 	// 任何 fail-stop（单实例锁丢失、DataEngine fatal、Remote fatal）都由 App 的 RuntimeFailure 在唤醒
 	// 停机之前先执行这个回调：立即拒绝新的和排队中的派发，模块不用各自“找 Nest、围栏”。
 	// Fence 只拿 lifecycleMu 与 dispatcher.mu 各一次、不做 I/O，满足 OnFail“快速、不阻塞”的要求；
