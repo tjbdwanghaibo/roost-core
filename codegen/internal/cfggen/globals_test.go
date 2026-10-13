@@ -1,16 +1,16 @@
 package cfggen
 
+import (
+	"strings"
+	"testing"
+)
+
 // 维护者第十二轮决定（2026-10-06，B 类“cfggen globals 规则”）：globals 支持 required / min /
 // enum，与 tables 用同一份规则（configdata/rules.Rule）。以前 cfggen 直接拒绝 globals 上的
 // 规则，单例配置里漏写或写错的值（宽度 0、模式拼错）照样被加载。现在生成器把规则写成
 // ObjectDef.Rules 字面量，configdata 在每次 Load / Reload 用 rules.CheckObject 检查；生成期
 // 用同一个 rules.Rule.Validate 检查规则声明本身。unique / ref / index 对单个对象没有意义，
 // 仍然拒绝。真实加载与 reload 的拒绝由 scripts/cfggen-golden-runtime.sh 跑的 roundtrip 覆盖。
-
-import (
-	"strings"
-	"testing"
-)
 
 const globalRulesMeta = `globals:
   - name: world
