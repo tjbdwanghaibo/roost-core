@@ -75,7 +75,7 @@ func NewRemoteMirrorMod(localSid int32, opts ...MirrorOption) *RemoteMirrorMod {
 func MirrorSource(r *app.Registry) (entity.RemoteSnapshotReadOnly, error) {
 	source, ok := app.Lookup[entity.RemoteSnapshotReadOnly](r, mods.ModRemoteMirror)
 	if !ok || source == nil {
-		return nil, fmt.Errorf("remote mirror: capability %q not found: add kit/remoteentity.NewRemoteMirrorMod (read-only service) or RemoteEntityMod (owner process)", mods.ModRemoteMirror)
+		return nil, fmt.Errorf("remote mirror: capability %q not found: add wiring/remoteentity.NewRemoteMirrorMod (read-only service) or RemoteEntityMod (owner process)", mods.ModRemoteMirror)
 	}
 	return source, nil
 }

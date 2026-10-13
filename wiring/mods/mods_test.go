@@ -42,7 +42,7 @@ func TestRegisterAllAndLookupsRefuseMissingInputs(t *testing.T) {
 	if _, ok := registry.Get("x"); ok {
 		t.Fatal("a refused batch published a capability")
 	}
-	if _, err := Redis(registry); err == nil || !strings.Contains(err.Error(), "add kit/redis.NewRedisMod()") {
+	if _, err := Redis(registry); err == nil || !strings.Contains(err.Error(), "add wiring/redis.NewRedisMod()") {
 		t.Fatalf("Redis without the redis mod = %v", err)
 	}
 }
