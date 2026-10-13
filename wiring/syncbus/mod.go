@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 	driver "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver"
+	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"log/slog"
 	"time"
 
@@ -168,12 +168,12 @@ func (m *SyncBusMod) StopWithContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = fctx.BaseContext()
 	}
+	// 停机只走 StopWithContext 契约（三步停机：ctx 内等在途回调排空，超时返回 ctx 错误并保留总线供重试）。JetStream 总线
+	// 持有消费者，实现了它；普通 NATS 总线不持有订阅之外的资源（每个订阅由 Subscription.Unsubscribe 自己排空），没有可停的东西。
 	if stopper, ok := m.bus.(interface{ StopWithContext(context.Context) error }); ok {
 		if err := stopper.StopWithContext(ctx); err != nil {
 			return err
 		}
-	} else if stopper, ok := m.bus.(interface{ Stop() }); ok {
-		stopper.Stop()
 	}
 	m.bus = nil
 	slog.Info("syncbus mod: stopped")

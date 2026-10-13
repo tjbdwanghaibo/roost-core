@@ -8,33 +8,29 @@ import (
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 )
 
-func TestSyncModStopWithContextPrefersContextStopper(t *testing.T) {
+// 停止委托给总线自己的 StopWithContext，成功后释放总线；没有 Provide 过（总线为 nil）的 Mod 停止直接返回 nil。
+func TestSyncModStopDelegatesToTheBusAndReleasesIt(t *testing.T) {
 	bus := &contextStopSyncBus{}
 	mod := &SyncBusMod{bus: bus}
 	if err := mod.StopWithContext(context.Background()); err != nil {
 		t.Fatalf("StopWithContext: %v", err)
 	}
-	if !bus.contextStopped {
-		t.Fatal("StopWithContext should call bus StopWithContext")
+	if !bus.contextStopped || mod.bus != nil {
+		t.Fatalf("stop did not reach the bus or keep releasing it: stopped=%v kept=%v", bus.contextStopped, mod.bus != nil)
 	}
-	if bus.legacyStopped {
-		t.Fatal("legacy Stop should not be called when context stop is available")
+	if err := (&SyncBusMod{}).StopWithContext(context.Background()); err != nil {
+		t.Fatalf("StopWithContext before Provide = %v, want nil", err)
 	}
 }
 
 type contextStopSyncBus struct {
 	contextStopped bool
-	legacyStopped  bool
 }
 
 func (b *contextStopSyncBus) Publish(*fsyncbus.SyncMsg) error { return nil }
 
 func (b *contextStopSyncBus) Subscribe(topic string, h fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	return fsyncbus.NewSubscription(topic, h, nil), nil
-}
-
-func (b *contextStopSyncBus) Stop() {
-	b.legacyStopped = true
 }
 
 func (b *contextStopSyncBus) StopWithContext(context.Context) error {

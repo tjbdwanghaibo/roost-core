@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 - 移除旧兼容（生成器）：roost.yaml 不再把改名前的 mod 名（`sync`、`room`）与 feature 名（`replication-quic` / `replication-kcp` / `replication-udp`）改写成新名，它们和其他未知名一样被 Validate 点名拒绝。**升级要求**：手工把 roost.yaml 里的 `sync` / `room` 改为 `syncbus`，`replication-*` 改为 `nettransport-*`，再运行 `roost project sync`。`roost help replication`、生成器文档、release / framework-compat 工作流与 source-head-check 脚本同步改用新名。
+- 移除旧兼容（wiring）：SyncBusMod 停机只走总线的 `StopWithContext` 契约，删除对旧 `Stop()` 接口的回退分支（两种传输的现有实现都不依赖它：JetStream 总线实现了 StopWithContext，普通 NATS 总线没有订阅之外的资源）。无配置或数据变化，无需升级操作。
 
 - Nest 执行池统一为 short/long/io：配置、Stats、指标标签、fctx 身份和生成 Sender 同步迁移；唯一配置 option 为 `NestOptionWithWorkerPools(short, long, io)`，强制准备使用 `SendOptionIO`，不保留旧别名。补齐 statslog 与健康队列汇总遗漏的 long 池，调度和 ID tail 语义不变；迁移表见 docs/framework/NEST-AWAIT.md。
 
