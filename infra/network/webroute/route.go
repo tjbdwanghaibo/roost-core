@@ -62,7 +62,7 @@ func ValidatePath(path string) (err error) {
 			err = fmt.Errorf("webroute: invalid route path %q: %v", path, recovered)
 		}
 	}()
-	// RR-20261004-NC-07：chi 解析会 panic，只允许它修改一次性校验 router。
+	// chi 解析会 panic，只允许它修改一次性校验 router。
 	chi.NewRouter().Get(path, func(http.ResponseWriter, *http.Request) {})
 	return nil
 }

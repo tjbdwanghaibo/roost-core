@@ -7,7 +7,7 @@ import (
 	gonats "github.com/nats-io/nats.go"
 )
 
-// ClientOptions are the kit-level knobs that are not part of the core
+// ClientOptions are the driver-level knobs that are not part of the core
 // fnats.Config contract.
 type ClientOptions struct {
 	// IgnoreDiscoveredServers keeps the client on the URLs it was configured

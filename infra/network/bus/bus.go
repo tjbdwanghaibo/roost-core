@@ -90,7 +90,7 @@ type Bus struct {
 	started  bool // a successful Start happened; guarded by lifeMu
 	stopped  bool // a started Bus was stopped; guarded by lifeMu
 	stopping bool
-	// RR-20261004-07：停止分两段。teardown（退订、JetStream RPC 收尾）只由第一个
+	// 停止分两段。teardown（退订、JetStream RPC 收尾）只由第一个
 	// 调用者做一次；pool 排空可以被多次等待——超出预算的调用只返回 ctx 错误，
 	// drainPool 保留到真正排空，之后的调用继续等同一次排空，排空完成才把结果定为终态。
 	stopDone     chan struct{} // closed once teardown ran and the pool drained
@@ -306,7 +306,7 @@ func (b *Bus) startLocked() (func() error, error) {
 // Stop requests the stop and, when it is the first request, waits without a
 // deadline for the drain. Once a stop has been requested it returns
 // immediately: a business handler calling Stop after a budgeted stop must not
-// wait for the drain that is waiting for that handler (RR-20261004-07). Callers
+// wait for the drain that is waiting for that handler. Callers
 // that need to keep waiting for the same drain use StopWithContext.
 func (b *Bus) Stop() {
 	b.lifeMu.Lock()
@@ -319,10 +319,10 @@ func (b *Bus) Stop() {
 }
 
 // StopWithContext unsubscribes, stops the worker pool and waits within ctx for
-// it and for the JetStream RPC handlers in flight to drain (RR-20261005-NC-90).
+// it and for the JetStream RPC handlers in flight to drain.
 // A ctx error only means this caller stopped waiting: the Bus keeps the pool
 // and the handlers' connection, and a later call continues waiting for the same
-// drain (RR-20261004-07). Any other error is terminal and returned by every
+// drain. Any other error is terminal and returned by every
 // later call, as is nil once the drain finished. A handler must not stop its
 // own Bus with an unbounded ctx: that stop waits for the handler itself.
 func (b *Bus) StopWithContext(ctx context.Context) error {
@@ -411,7 +411,7 @@ func (b *Bus) finishStopLocked() {
 // waiting for the pool or for the JetStream request handlers, after which both
 // can be waited for again.
 //
-// Order (RR-20261005-NC-90): JetStream request admission closes first, then the
+// Order: JetStream request admission closes first, then the
 // core subscriptions go, then the pool and the JetStream handlers drain — both
 // run business code on the connection, so a stop only reports success once
 // neither has anything in flight. The response consumer goes last, after the
@@ -808,7 +808,7 @@ func (b *Bus) dispatchTask(key int64, task *incomingTask) {
 // It also stays out of the dead-letter queue — that queue holds async messages
 // a requeue can deliver again, and an RPC entry has neither its reply subject
 // nor its session, so a requeue could only turn it into a module message no
-// handler matches (RR-20261005-NC-91). Messages still go to the DLQ.
+// handler matches. Messages still go to the DLQ.
 func (b *Bus) refuseTask(task *incomingTask, reason string, cause error) {
 	if !task.isRpc {
 		b.deadLetter(task.natsMsg, reason)
@@ -1027,7 +1027,7 @@ func (b *Bus) deadLetter(msg *nats.NatsMsg, reason string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	// 死信桶与指标标签只取本进程注册过的名字（RR-20261006-72）；条目本身保留原名字，重投仍发回原处。
+	// 死信桶与指标标签只取本进程注册过的名字；条目本身保留原名字，重投仍发回原处。
 	module, name := b.incomingLabels(msg, false)
 	if err := b.reliable.DeadLetter(ctx, b.consumer(), msg, DeadLetterBucket{Module: module, MsgName: name}, reason); err != nil {
 		slog.Error("bus: write dead letter failed",
@@ -1046,12 +1046,12 @@ func (b *Bus) deadLetter(msg *nats.NatsMsg, reason string) {
 }
 
 // unregisteredMsgLabel 是对端发来、本进程没有注册的消息 / RPC 方法共用的标签与死信桶名（与 JetStream RPC
-// 被调方的 method 标签同一个值，RR-20261006-19）。
+// 被调方的 method 标签同一个值）。
 const unregisteredMsgLabel = jetStreamRPCUnregisteredMethod
 
-// incomingLabels 返回入站消息的 module / msg 指标标签，也是死信桶名（RR-20261006-72）。名字来自对端的
-// envelope：版本混跑或错发时可以是任意字符串，之前原样当标签与 Redis 列表键，每个新名字多一组序列、一个
-// 列表。现在只有本进程注册过的 (module, msg)（RPC 看方法）用自己的名字，其余一律归并为 "_unregistered"，
+// incomingLabels 返回入站消息的 module / msg 指标标签，也是死信桶名。名字来自对端的
+// envelope：版本混跑或错发时可以是任意字符串，若原样当标签与 Redis 列表键，每个新名字多一组序列、一个
+// 列表。所以只有本进程注册过的 (module, msg)（RPC 看方法）用自己的名字，其余一律归并为 "_unregistered"，
 // 上界是注册数 + 1。RPC 请求不带 module（调用方不填），module 标签固定为空。
 func (b *Bus) incomingLabels(msg *nats.NatsMsg, isRpc bool) (module, name string) {
 	b.mu.RLock()
@@ -1119,7 +1119,7 @@ var ErrNoHandler = errors.New("bus: no handler registered")
 
 var (
 	// errRPCNotAdmitted causes the refusal an RPC caller receives when the
-	// dispatcher did not admit its request (RR-20261005-NC-91).
+	// dispatcher did not admit its request.
 	errRPCNotAdmitted       = errors.New("bus: rpc request not admitted")
 	errDispatcherNotRunning = errors.New("bus: dispatcher not running")
 )

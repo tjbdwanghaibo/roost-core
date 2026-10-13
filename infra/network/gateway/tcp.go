@@ -188,8 +188,8 @@ func (server *TCPServer) Start() error {
 // Stop closes the listener and every connection, then waits within ctx for
 // the accept loop and connection goroutines to return. The first call does
 // the closing; a call after a ctx that ended first only waits again, so it
-// reports success only once everything has actually returned
-// (RR-20261005-NC-83). Stop on a server that never started returns nil.
+// reports success only once everything has actually returned. Stop on a
+// server that never started returns nil.
 func (server *TCPServer) Stop(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -427,7 +427,7 @@ func (server *TCPServer) serveConnection(connection net.Conn) {
 			}
 			continue
 		}
-		// One request, one deadline (RR-20260926-36). Without it a handler
+		// One request, one deadline. Without it a handler
 		// waiting on something that never finishes — a cold load behind a
 		// projection that keeps failing — held this goroutine, this socket's
 		// reads and the connection slot until the process stopped. The read
@@ -481,7 +481,7 @@ func (server *TCPServer) unregisterSession(current *tcpSession) {
 	server.forgetSession(current)
 	// The connection is gone; say so once, asynchronously. Everything that
 	// maintains an "online" set needs this, and the alternative — noticing by
-	// failing to push — never fires if nothing tries (RR-20260918-06).
+	// failing to push — never fires if nothing tries.
 	if server.transport != nil {
 		server.transport.publishClosed(TCPSessionClosed{PlayerID: current.principal.PlayerID, SessionID: current.principal.SessionID})
 	}
@@ -507,8 +507,8 @@ func (server *TCPServer) forgetSession(current *tcpSession) {
 	server.mu.Unlock()
 }
 
-// dropBrokenSession closes a connection a push could not be written to
-// (RR-20260926-52). It is forgotten first, so the push's caller already sees
+// dropBrokenSession closes a connection a push could not be written to.
+// It is forgotten first, so the push's caller already sees
 // it gone (ActiveSessions, the next push); closing the socket then ends its
 // read loop, whose teardown releases the connection slot and the per-IP count
 // and publishes the session-close event — the same single release path as any
@@ -549,7 +549,7 @@ func (server *TCPServer) pushPlayerKind(ctx context.Context, playerID int64, mes
 	}
 	server.mu.RUnlock()
 	// Counted apart from push errors: a push to a player with no tcpSession is the
-	// "who is still addressing a gone player" signal, and it used to leave no trace (U-0278).
+	// "who is still addressing a gone player" signal, and it used to leave no trace.
 	if len(sessions) == 0 {
 		metrics.IncCounter("player_tcp_push_no_session_total", nil, 1)
 		return fmt.Errorf("%w: player %d", ErrSessionNotFound, playerID)
@@ -626,10 +626,9 @@ func (server *TCPServer) closeSessions(playerID int64, reason error) int {
 		targets = append(targets, current)
 	}
 	server.mu.RUnlock()
-	// Counted by whether this call is the one that closed the tcpSession
-	// (RR-20260927-02). It used to count Close returning nil, but Close
-	// returns the close reason, which is never nil, so every call reported
-	// 0; a tcpSession another path already closed is not counted again.
+	// Counted by whether this call is the one that closed the tcpSession, not
+	// by Close returning nil: Close returns the close reason, which is never
+	// nil. A tcpSession another path already closed is not counted again.
 	closed := 0
 	for _, current := range targets {
 		if current.close(reason) {

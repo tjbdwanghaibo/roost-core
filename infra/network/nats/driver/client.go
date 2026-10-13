@@ -116,7 +116,7 @@ func (c *Client) Publish(subject string, data []byte) error {
 			return nil
 		}
 		if errors.Is(err, fnats.ErrClosed) {
-			// 已关闭 / 正在排空，重试不会成功：立即返回（RR-20261006-10）。
+			// 已关闭 / 正在排空，重试不会成功：立即返回。
 			return fmt.Errorf("nats: publish to %s: %w", subject, err)
 		}
 		time.Sleep(publishRetryWait)
@@ -151,7 +151,7 @@ func (c *Client) requestWithContext(ctx context.Context, subject string, data []
 		case c.state.isClosed():
 			return nil, fnats.ErrClosed
 		case ctx.Err() != nil:
-			// 保留 ctx 语义（RR-20261006-73）：之前只回 fnats.ErrTimeout / ErrCancelled，调用方用
+			// 保留 ctx 语义：只回 fnats.ErrTimeout / ErrCancelled 的话，调用方用
 			// errors.Is(err, context.DeadlineExceeded / Canceled) 判断不到。
 			return nil, contextRPCError(ctx)
 		}
@@ -239,7 +239,7 @@ func (c *Client) DrainWithContext(ctx context.Context) error {
 }
 
 // Close 先置已关闭、再关 nats.go 连接；之后 Connected 一直为 false、其他调用一直返回 fnats.ErrClosed。
-// nats.go 在硬关打断排空后会把状态翻回 DRAINING_PUBS、约 5s 内 IsConnected 为 true（RR-20261006-26），
+// nats.go 在硬关打断排空后会把状态翻回 DRAINING_PUBS、约 5s 内 IsConnected 为 true，
 // 驱动不看它。
 func (c *Client) Close() {
 	if c == nil {

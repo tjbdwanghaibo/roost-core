@@ -10,8 +10,8 @@ import (
 
 // Assembly is the complete etcd capability set a process publishes: the
 // contract client, service discovery and the election factory, all on one
-// clientv3 connection. The kit EtcdMod only parses configuration, registers
-// the three capabilities and forwards lifecycle calls (P3b); it never touches
+// clientv3 connection. The wiring EtcdMod only parses configuration, registers
+// the three capabilities and forwards lifecycle calls; it never touches
 // the raw clientv3 handle.
 type Assembly struct {
 	Client    *Client
@@ -71,7 +71,7 @@ func (a *Assembly) Start(ctx context.Context, info *fetcd.ServiceInfo) error {
 // Close deregisters (revoking the lease and its keys) and then closes the
 // connection. A Deregister that fails — its budget ran out, or etcd refused the
 // revoke — keeps the connection open and returns the error, so a later Close
-// with a fresh ctx retries the revoke on a live client (RR-20261005-NC-173);
+// with a fresh ctx retries the revoke on a live client;
 // closing it first made every retry fail with "client connection is closing".
 func (a *Assembly) Close(ctx context.Context) error {
 	if a == nil {

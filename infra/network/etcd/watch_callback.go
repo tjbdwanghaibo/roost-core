@@ -91,7 +91,7 @@ func (s *watchCallbackSubscription) requestClose() {
 	s.startWatcherClose()
 }
 
-// RR-20261004-NC-12: callers only start the unique cleanup and wait with
+// callers only start the unique cleanup and wait with
 // their own budget. Done remains open until both handler and watcher exit.
 func (s *watchCallbackSubscription) startWatcherClose() {
 	s.watcherCloseOnce.Do(func() {

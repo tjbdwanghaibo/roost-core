@@ -27,7 +27,7 @@ var (
 // rate limiting can never widen the authentication surface.
 //
 // MessageID 由客户端决定：一个玩家变化 MessageID 只会用完 limiter 给它自己的
-// MaxKeysPerOwner 个名额，不会挤占其他玩家（RR-20261005-NC-82）。应用有协议注册表时，
+// MaxKeysPerOwner 个名额，不会挤占其他玩家。应用有协议注册表时，
 // 把“拒绝未注册 MessageID”的中间件放在 RateLimit 之前，合法玩家的 key 数就以注册的
 // 协议数为界；两者互补，上限仍是 limiter 自身的保护。
 func RateLimit(limiter *security.RateLimiter) Middleware {
@@ -88,7 +88,7 @@ func Recover(report func(context.Context, any)) Middleware {
 	}
 }
 
-// RR-20261004-NC-06：上报和上报失败的日志都不能替换请求的固定错误。
+// 上报和上报失败的日志都不能替换请求的固定错误。
 // 同步执行保留原 context；阻塞回调仍须由调用方自行约束。
 func reportBoundaryPanic(report func(context.Context, any), ctx context.Context, value any) {
 	defer func() { _ = recover() }() // 自定义 slog handler 也可能 panic。

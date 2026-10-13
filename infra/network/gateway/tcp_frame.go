@@ -28,9 +28,9 @@ var (
 	// errConnectionBroken marks a write that reached the connection and
 	// failed there (a deadline, a reset, a closed socket). Whatever part of
 	// the frame went out, the stream is no longer in step with the client, so
-	// the connection is closed (RR-20260926-52). A frame refused before any
+	// the connection is closed. A frame refused before any
 	// byte was written — the caller's context already done, the caller's own
-	// deadline running out before the first byte (RR-20260926-68), a payload
+	// deadline running out before the first byte, a payload
 	// over the limit — is not the connection's fault and does not carry this
 	// mark. write_timeout running out is the connection's fault even when
 	// nothing was written.

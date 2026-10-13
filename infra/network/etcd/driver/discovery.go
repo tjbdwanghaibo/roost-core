@@ -26,7 +26,7 @@ const (
 //
 // 键是 prefix + serviceType + "/" + sid，prefix 自己要带结尾的 "/"（这里不补）。注册只做地址 /
 // 元数据发现，etcd 租约过期 / 重新注册不代表进程存活与否：进程级存活以 App 单实例锁的 Live 为准
-// （docs/feature/APP-SINGLETON-LOCK-2026-10-05.md §12）。
+// （见 framework/app/singleton.go）。
 type Discovery struct {
 	cli     *clientv3.Client
 	prefix  string
@@ -36,7 +36,7 @@ type Discovery struct {
 
 	mu sync.Mutex
 	// lifecycle 是 Register / Deregister 的执行权（容量 1）。用通道而不是 Mutex：后到的调用方按自己的
-	// ctx 等待，不被前一个调用方的预算拖住（RR-20261005-NC-173）。
+	// ctx 等待，不被前一个调用方的预算拖住。
 	lifecycle        chan struct{}
 	stopping         bool
 	keepaliveCancel  context.CancelFunc
@@ -197,7 +197,7 @@ func (d *Discovery) logRegistered(reg discoveryRegistration) {
 	slog.Info("etcd Discovery: registered", "key", reg.key, "lease", reg.leaseID)
 }
 
-// Deregister 按三步停机（RR-20261005-NC-173）：①标记停止、取消注册循环与 keepalive（幂等）；②在 ctx 内
+// Deregister 按三步停机：①标记停止、取消注册循环与 keepalive（幂等）；②在 ctx 内
 // 等循环退出、撤销当前租约，超时或撤销失败返回错误并保留登记（循环句柄、租约），重试再等再撤销；
 // ③撤销成功才清除登记，调用方此后才能关闭 client（Assembly.Close）。
 func (d *Discovery) Deregister(ctx context.Context) error {

@@ -55,15 +55,3 @@ type HandlerFunc func(ctx *MsgContext)
 // RpcHandlerFunc handles an incoming RPC request and returns a response.
 type RpcHandlerFunc func(ctx *RpcContext) (resp any, err error)
 
-// handlerEntry stores a registered handler.
-type handlerEntry struct {
-	module  string
-	msgName string
-	handler HandlerFunc
-}
-
-// rpcHandlerEntry stores a registered RPC handler.
-type rpcHandlerEntry struct {
-	method  string
-	handler RpcHandlerFunc
-}

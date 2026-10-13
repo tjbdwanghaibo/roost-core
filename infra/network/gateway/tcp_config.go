@@ -25,7 +25,7 @@ type TCPConfig struct {
 	WriteTimeout        time.Duration
 	ShutdownTimeout     time.Duration
 	// DispatchTimeout bounds one request: every Dispatch runs under a context
-	// that ends this long after the frame was read (RR-20260926-36). It is
+	// that ends this long after the frame was read. It is
 	// meant to match nest.request_timeout — the budget one Nest call inside
 	// the handler already has — and defaults to it when the key is absent.
 	DispatchTimeout time.Duration

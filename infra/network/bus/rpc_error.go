@@ -14,8 +14,8 @@ const rpcWireVersion uint8 = 2
 // JetStream PubAck: the target serves RPC over JetStream, whose request stream
 // covers the lightweight RPC subjects, so the request was stored instead of
 // reaching a handler. Align nats.rpc.transport on both sides (use
-// CallReliable / CallToReliable). A server with RR-20261005-NC-92 refuses such
-// a request without running it; an older server may still run it later.
+// CallReliable / CallToReliable). The server refuses such a request without
+// running it.
 var ErrRPCCapturedByJetStream = errors.New("bus: lightweight rpc was stored by a jetstream stream; the target serves rpc over jetstream")
 
 type rpcErrorEnvelope struct {
@@ -58,8 +58,8 @@ type jetStreamPubAck struct {
 	Seq    uint64 `json:"seq"`
 }
 
-// jetStreamCapture recognises a PubAck where an RPC response was expected
-// (RR-20261005-NC-92); nil when data is something else.
+// jetStreamCapture recognises a PubAck where an RPC response was expected;
+// nil when data is something else.
 func jetStreamCapture(data []byte) error {
 	var ack jetStreamPubAck
 	if json.Unmarshal(data, &ack) != nil || ack.Stream == "" {

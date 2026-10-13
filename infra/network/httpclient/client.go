@@ -84,7 +84,7 @@ func (c *Client) Clone(opts ...Option) *Client {
 		next.client = &http.Client{Timeout: next.timeout}
 		next.ownsHTTPClient = true
 	} else if next.ownsHTTPClient && next.timeout != c.timeout {
-		// RR-20261003-NC-02：只复制库拥有的 client，保留 Transport/连接池，不能改父实例。
+		// 只复制库拥有的 client，保留 Transport/连接池，不能改父实例。
 		client := *next.client
 		client.Timeout = next.timeout
 		next.client = &client
@@ -199,7 +199,7 @@ func (c *Client) DoJSON(ctx context.Context, method string, path string, req any
 	}
 	if out != nil && len(body) > 0 {
 		if err := json.Unmarshal(body, out); err != nil {
-			// RR-20261003-NC-03：坏错误体不能吞掉已收到的 HTTP 状态，同时保留解码错误。
+			// 坏错误体不能吞掉已收到的 HTTP 状态，同时保留解码错误。
 			if statusErr != nil {
 				return errors.Join(statusErr, err)
 			}

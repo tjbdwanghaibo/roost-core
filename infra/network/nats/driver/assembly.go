@@ -14,16 +14,16 @@ import (
 // already closed or reconnecting. It wraps the drain error, so a budget that
 // ran out still matches context.DeadlineExceeded / context.Canceled. Unlike the
 // ctx error of RPC callback waiting it is terminal: the connection is gone and
-// a later Close cannot drain it again (RR-20261004-08).
+// a later Close cannot drain it again.
 var ErrClosedUndrained = errors.New("nats: connection closed before drain finished")
 
 // rpcCallbackWorkers is the size of the RPC callback pool every process
-// assembles; it was a literal in the kit Mod before P3b.
+// assembles.
 const rpcCallbackWorkers = 4
 
 // Assembly is the complete NATS capability set a process publishes: the core
 // connection, JetStream on that connection and the request/reply RPC client.
-// The bus is assembled by the kit Mod from registry configuration on top of
+// The bus is assembled by the wiring Mod from registry configuration on top of
 // Client and RPC; everything that needs driver internals lives here.
 type Assembly struct {
 	Client    *Client
@@ -70,7 +70,7 @@ func (a *Assembly) Connected() bool {
 // caller — it owns subscriptions on Client.
 //
 // Close 幂等：连接一旦关闭（排空完成，或排空失败被硬关），之后的 Close 返回 nil，ErrClosedUndrained
-// 只报给关掉连接的那一次调用（RR-20261006-10）。判断“已关闭”用 Client 自己的已关闭状态，与 Client
+// 只报给关掉连接的那一次调用。判断“已关闭”用 Client 自己的已关闭状态，与 Client
 // 的其他方法同一个判据；直接调过 Client.Close 的，Assembly.Close 同样按重复 Close 返回 nil。
 // 并发调用串行执行，后到者在自己的 ctx 内等第一个做完，ctx 先结束返回 ctx 错误、保留所有权（与等
 // RPC 回调超时同样处理，可以再调用）。
@@ -97,7 +97,7 @@ func (a *Assembly) Close(ctx context.Context) error {
 	if err := a.Client.DrainWithContext(ctx); err != nil {
 		// The connection is closed from here on. Returning the bare ctx
 		// error made callers keep the assembly for a retry whose drain can
-		// only fail with nats.go's ErrConnectionClosed (RR-20261004-08).
+		// only fail with nats.go's ErrConnectionClosed.
 		a.Client.Close()
 		return fmt.Errorf("%w: %w", ErrClosedUndrained, err)
 	}

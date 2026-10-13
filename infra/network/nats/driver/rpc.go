@@ -145,11 +145,11 @@ func NewRPCClient(client *Client, policy fnats.RetryPolicy, cbWorkerNum int) *RP
 	return rc
 }
 
-// defaultRPCAttemptTimeout 是调用方没给期限时单次尝试的上限。调用方带期限时按它计时，不再另截（RR-20261006-73）。
+// defaultRPCAttemptTimeout 是调用方没给期限时单次尝试的上限。调用方带期限时按它计时，不再另截。
 const defaultRPCAttemptTimeout = 5 * time.Second
 
-// Call 发一次请求并等回复。计时以调用方期限为准：之前每次尝试固定截到 5s（缺省只尝试 1 次），
-// call_timeout 大于 5s 的调用 5s 就超时（RR-20261006-73）。调用方期限到达或取消后不再重试；超时错误同时
+// Call 发一次请求并等回复。计时以调用方期限为准，不把每次尝试固定截到 5s（否则 call_timeout
+// 大于 5s 的调用 5s 就超时）。调用方期限到达或取消后不再重试；超时错误同时
 // errors.Is 到 fnats.ErrTimeout 与 context.DeadlineExceeded，取消同时 errors.Is 到 fnats.ErrCancelled 与
 // context.Canceled。
 func (r *RPCClient) Call(ctx context.Context, subject string, req []byte) ([]byte, error) {
@@ -190,7 +190,7 @@ func (r *RPCClient) Call(ctx context.Context, subject string, req []byte) ([]byt
 	return nil, fmt.Errorf("rpc: %s failed after %d attempts: %w", subject, r.policy.MaxAttempts, lastErr)
 }
 
-// contextRPCError 把 ctx 的结束原因映射成驱动错误，同时保留 ctx 的语义（RR-20261006-73）。
+// contextRPCError 把 ctx 的结束原因映射成驱动错误，同时保留 ctx 的语义。
 func contextRPCError(ctx context.Context) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return fmt.Errorf("%w: %w", fnats.ErrTimeout, ctx.Err())
@@ -206,7 +206,7 @@ func (r *RPCClient) CallWithTimeout(subject string, req []byte, timeout time.Dur
 
 // errRPCStopped 是 RPC 客户端停止之后的 CallAsync 结果，停止时仍在途的调用与停止之后发起的调用相同：
 // 同时 errors.Is 到 fnats.ErrCancelled（旧结果，按它判断的调用方不变）与 fnats.ErrClosed（关闭之后的
-// 调用统一返回已关闭，RR-20261006-10 口径）。RPC 客户端的“已停止”是它自己的 stopped（回调池的生命
+// 调用统一返回已关闭）。RPC 客户端的“已停止”是它自己的 stopped（回调池的生命
 // 周期），连接的已关闭判据在 client 上（见 Client 的类型注释）。
 var errRPCStopped = fmt.Errorf("%w: %w", fnats.ErrCancelled, fnats.ErrClosed)
 
@@ -285,9 +285,9 @@ func (r *RPCClient) Reply(replySubject string, resp []byte) error {
 
 // Stop requests the stop and, when it is the first request, waits without a
 // deadline for the drain. Once a stop has been requested it returns
-// immediately, as it did before NC-09: RR-20261004-07（复审 S2）—— callback
-// 里的 Stop() 若去等唯一停止任务，而停止任务正在等这个 callback 退出，就会
-// 永久互等。需要继续等待同一次排空的调用方用 StopWithContext。
+// immediately: a Stop() inside a callback that waited for the single stop
+// task, while that task waits for the callback to return, would deadlock.
+// 需要继续等待同一次排空的调用方用 StopWithContext。历史：RR-20261004-07。
 func (r *RPCClient) Stop() {
 	if r == nil || r.stopped.Load() {
 		return
@@ -296,7 +296,7 @@ func (r *RPCClient) Stop() {
 }
 
 // StopWithContext closes admission once and bounds the caller's wait.
-// RR-20261004-NC-09：取消等待不能丢弃 callback；同一 client 只有一个
+// 取消等待不能丢弃 callback；同一 client 只有一个
 // 停止任务负责 pending 的同步 fallback 与 pool 排空，后续调用继续等它。
 // Callback 内再次停止须用可取消的 ctx，不能同步等待自身退出。
 func (r *RPCClient) StopWithContext(ctx context.Context) error {
@@ -343,8 +343,7 @@ func (r *RPCClient) drainCallbacks() {
 	// skipped it. finishPending removes the entry and only then counts it in
 	// callbacks, both inside callbackMu; a removal Range missed may therefore
 	// still be uncounted here. Taking callbackMu once waits out any such
-	// critical section, so its Add happens before Wait (RR-20261004-07, 复审
-	// S1). stopped is already set, so no new pending can appear afterwards and
+	// critical section, so its Add happens before Wait. stopped is already set, so no new pending can appear afterwards and
 	// one barrier is enough. A claimed callback still running its synchronous
 	// queue-rejection fallback is counted and stays part of the drain.
 	r.callbackMu.Lock()

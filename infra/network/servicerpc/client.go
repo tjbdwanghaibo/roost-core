@@ -3,9 +3,9 @@
 // choice between the lightweight and JetStream paths, and the stable response
 // status convention services answer with.
 //
-// It lives in the kit rather than beside any one service because it is
+// It lives in infra rather than beside any one service because it is
 // infrastructure: every service needs the same client, and a business
-// repository and roost-service must not each carry their own copy.
+// repository and the services must not each carry their own copy.
 package servicerpc
 
 import (
@@ -172,7 +172,7 @@ func (c *BusClient) CallDiscoveredChecked(ctx context.Context, method string, re
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// RR-20261004-NC-10：发现、选择和传输共用预算；Call 的子期限
+	// 发现、选择和传输共用预算；Call 的子期限
 	// 不会延长这个 parent，发现耗时不会换来一份新的完整 transport 预算。
 	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()

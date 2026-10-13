@@ -32,7 +32,7 @@ var (
 	ErrJetStreamRPCExpired     = errors.New("bus: jetstream rpc request expired")
 
 	// errJetStreamRPCStopping 让停止开始后才到达的投递回到 broker（driver 据此 NAK），
-	// 由同服务的其他实例处理（RR-20261005-NC-90）。
+	// 由同服务的其他实例处理。
 	errJetStreamRPCStopping = errors.New("bus: jetstream rpc is stopping; delivery returned to the broker")
 )
 
@@ -94,7 +94,7 @@ type jetStreamRPC struct {
 	seq             atomic.Uint64
 
 	// methodLabels is the set of caller-side method labels this Bus has
-	// handed out (jetStreamRPCCallerMethodLabel, RR-20261006-19); labelMu
+	// handed out (jetStreamRPCCallerMethodLabel); labelMu
 	// serializes adding to it so the bound holds under concurrent first calls.
 	labelMu        sync.Mutex
 	methodLabels   sync.Map // method -> struct{}
@@ -105,9 +105,9 @@ type jetStreamRPC struct {
 	subs        []fnats.IJetStreamSubscription // request consumers
 	responseSub fnats.IJetStreamSubscription
 
-	// RR-20261005-NC-90：请求 handler 在 nats.go 的 consume 回调 goroutine 里同步执行，
+	// 请求 handler 在 nats.go 的 consume 回调 goroutine 里同步执行，
 	// 不在 Bus 的 pool 里，pool 排空管不到它们；nats.go 的 ConsumeContext.Stop 也不等在途
-	// 回调。handlers 是它们自己的准入与在途计数（共用的 operation.Lifetime，A3）：停止先关准入，
+	// 回调。handlers 是它们自己的准入与在途计数（共用的 operation.Lifetime）：停止先关准入，
 	// 再等在途归零，归零之前连接不能交还（Bus 的停止返回 ctx 错误、保留责任）。
 	handlers operation.Lifetime
 }
@@ -259,7 +259,7 @@ func (b *Bus) addJetStreamRPCSubscription(sub fnats.IJetStreamSubscription) {
 // goes back to the broker untouched, and stopping the consumers early keeps this
 // instance from NAKing the same request round after round and burning its
 // MaxDeliver. Handlers already running keep the connection; the stop waits for
-// them with waitJetStreamRPCRequests (RR-20261005-NC-90).
+// them with waitJetStreamRPCRequests.
 func (b *Bus) stopJetStreamRPCRequests() {
 	if !b.jetStreamRPCEnabled() {
 		return
@@ -382,15 +382,6 @@ func (b *Bus) callJetStreamRPC(ctx context.Context, subject string, method strin
 	}
 }
 
-func (b *Bus) callJetStreamRPCAsync(subject string, method string, payload []byte, cb func(resp []byte, err error)) {
-	go func() {
-		ctx, cancel := context.WithTimeout(fctx.BaseContext(), b.jsRPC.cfg.CallTimeout)
-		defer cancel()
-		resp, err := b.callJetStreamRPC(ctx, subject, method, 0, payload)
-		cb(resp, err)
-	}()
-}
-
 func (b *Bus) jetStreamRPCCallContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -447,7 +438,7 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	b.mu.RUnlock()
 	// The method label is the registered method, never the envelope's
 	// free-form name: a request naming no registered method is counted under
-	// one label, so the served methods bound these series (RR-20261006-19).
+	// one label, so the served methods bound these series.
 	label := req.MsgName
 	if !ok {
 		label = jetStreamRPCUnregisteredMethod
@@ -457,7 +448,7 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 		// lightweight Call / CallTo the request stream captured (its subjects cover
 		// <prefix>.rpc.>): that caller already got the stream's PubAck as an error
 		// and nobody can receive this answer, so it must not run — the old code ran
-		// it with no deadline and dropped the reply (RR-20261005-NC-92).
+		// it with no deadline and dropped the reply.
 		slog.Warn("bus: refuse jetstream rpc request without reply subject; the caller used the lightweight transport", "method", req.MsgName, "request_id", req.SessionId)
 		b.recordJetStreamRPCRequest(label, "no_reply_subject")
 		return nil
@@ -476,13 +467,13 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	processCtx, cancel := b.jetStreamRPCProcessContext(req)
 	defer cancel()
 	// handler 可能跑得比 AckWait 久（期限取调用方截止）：处理期间定期发 in-progress，broker 不会把这条
-	// 重投给共享 durable 的另一个实例并发执行（RR-20261006-70）。
+	// 重投给共享 durable 的另一个实例并发执行。
 	defer b.keepJetStreamRPCInProgress(msg, processCtx)()
 
 	if !ok {
 		slog.Warn("bus: no jetstream rpc handler", "method", req.MsgName)
 		b.recordJetStreamRPCRequest(label, "no_handler")
-		// RR-20261004-NC-08：拒绝也要走客户端要求的版本 envelope。
+		// 拒绝也要走客户端要求的版本 envelope。
 		data, err := encodeRPCFailure(b.codec, fmt.Errorf("%w: %s", ErrNoHandler, req.MsgName))
 		if err != nil {
 			return err
@@ -522,7 +513,7 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 
 	if handlerErr != nil && errors.Is(processCtx.Err(), context.Canceled) {
 		// processCtx 只会因 Bus 停止被取消（期限到达是 DeadlineExceeded）。handler 因此中断时
-		// 不把“已取消”当业务结果回给调用方，消息交还 broker（NAK），由其他实例处理（NC-90）。
+		// 不把“已取消”当业务结果回给调用方，消息交还 broker（NAK），由其他实例处理。
 		b.recordJetStreamRPCRequest(label, "interrupted")
 		return fmt.Errorf("bus: jetstream rpc %s interrupted by stop: %w", req.MsgName, handlerErr)
 	}
@@ -553,9 +544,9 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 // keepJetStreamRPCInProgress 在 handler 执行期间每 AckWait/2 发一次 in-progress，直到返回的 stop 被调用或
 // processCtx 结束（请求期限到达或 Bus 停止），返回 stop。
 //
-// 修前（RR-20261006-70）处理期间不发 in-progress：handler 期限取调用方截止，可以远长于 nats.rpc.ack_wait；
-// AckWait 一到 broker 把未确认的请求重投，服务级 durable 在实例间共享，另一个实例（或本实例排队的副本）
-// 再执行一次，服务端没有按 MsgID 去重——实测 ack_wait 1s、handler 2.5s 时同一请求执行 3 次。
+// 处理期间必须发 in-progress：handler 期限取调用方截止，可以远长于 nats.rpc.ack_wait；
+// AckWait 一到 broker 会把未确认的请求重投，服务级 durable 在实例间共享，另一个实例（或本实例排队的副本）
+// 再执行一次，服务端没有按 MsgID 去重——不发心跳时实测 ack_wait 1s、handler 2.5s 同一请求执行 3 次。
 // 心跳只持续到请求期限：期限之后调用方已放弃，停止心跳让 broker 重投，收到的实例按 DeadlineAt 判过期
 // 直接确认、不执行。心跳失败（连接抖动）只记日志，退回 at-least-once。用定时器而不是每请求一个 goroutine。
 func (b *Bus) keepJetStreamRPCInProgress(msg *fnats.JetStreamMsg, processCtx context.Context) (stop func()) {
@@ -607,7 +598,7 @@ func (b *Bus) jetStreamRPCProcessContext(req fnats.NatsMsg) (context.Context, co
 // end. Its budget is the caller's deadline (AckWait when the request carries
 // none), detached from the Bus lifetime: the old code published on processCtx,
 // which the stop cancels first, so a handler that finished within the stop
-// budget always lost its response and was redelivered (RR-20261005-NC-90).
+// budget always lost its response and was redelivered.
 func (b *Bus) publishJetStreamRPCReply(req fnats.NatsMsg, data []byte) error {
 	var ctx context.Context
 	var cancel context.CancelFunc
@@ -703,7 +694,7 @@ func (b *Bus) addJetStreamRPCPending(method string, delta int64) {
 	}, methodValue)
 }
 
-// Method labels of the reliable RPC metrics (RR-20261006-19).
+// Method labels of the reliable RPC metrics.
 //
 // A method has no unregister: HandleRpc only adds, and nothing removes one
 // method from a running Bus. So these series are not deleted; they are

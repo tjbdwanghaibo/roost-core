@@ -69,7 +69,7 @@ type leaseSession interface {
 
 // abandonedLeaseRevokeTimeout bounds the Revoke the election owns when a
 // session ends: a campaign that failed before leadership was published, or a
-// Resign (RR-20261005-NC-93). The lease still expires at its TTL if this Revoke
+// Resign. The lease still expires at its TTL if this Revoke
 // does not get through.
 const abandonedLeaseRevokeTimeout = 5 * time.Second
 
@@ -100,7 +100,7 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 	}
 	e.mu.Lock()
 	for e.revoking != nil && !e.campaign {
-		// RR-20261004-06: a new session would queue its key behind the stale
+		// a new session would queue its key behind the stale
 		// one still being revoked; waiting also keeps at most one abandoned
 		// Revoke per election.
 		pending := e.revoking
@@ -127,7 +127,7 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 	if create == nil {
 		create = e.createWithEtcd
 	}
-	// RR-20261004-NC-11: setup follows the caller's cancellation, while a
+	// setup follows the caller's cancellation, while a
 	// successful session follows the client lifetime. Detach the cancellation
 	// bridge before publishing leadership; using ctx as the lifetime directly
 	// would revoke leadership when the successful caller stops waiting.
@@ -149,7 +149,7 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 	}
 	owned := &campaignSession{electionSession: session, cancel: cancelSession}
 	session = owned
-	// RR-20261004-06: every failure branch below hands the session to
+	// every failure branch below hands the session to
 	// abandon. Canceling sessionCtx before session.Close (as 1502f973 did)
 	// made the SDK send its Revoke on that canceled context, so the lease and
 	// the candidate or leader key stayed until TTL and blocked other
@@ -262,8 +262,7 @@ func (s *campaignSession) orphan() (lease clientv3.LeaseID, ok bool) {
 }
 
 // abandon releases a session: one whose campaign failed before leadership was
-// published (RR-20261004-06), and since RR-20261005-NC-93 also the session a
-// Resign gives up. The keepalive stops at once; the lease Revoke runs under its
+// published, and also the session a Resign gives up. The keepalive stops at once; the lease Revoke runs under its
 // own deadline derived from lifetime (the client context, so closing the
 // client cancels it), never from sessionCtx, which the caller's cancellation
 // may already have canceled, and never from the SDK's Session.Close, whose
@@ -325,7 +324,7 @@ func (e *election) Resign(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	err := elect.Resign(ctx)
-	// RR-20261005-NC-93：SDK Session.Close 用 session 自己的 context 加 TTL 秒发 Revoke，不看调用方
+	// SDK Session.Close 用 session 自己的 context 加 TTL 秒发 Revoke，不看调用方
 	// ctx，etcd 无响应时 Resign 会阻塞到 TTL（默认 60s）。改走 abandon：调用方在等就等 Revoke 的
 	// 结果，预算先到就返回 ctx 错误，Revoke 由 election 持有并自带截止，下一次 Campaign 等它。
 	var closeErr error

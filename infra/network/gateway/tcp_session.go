@@ -66,10 +66,6 @@ func (session *tcpSession) Reply(ctx context.Context, value any) error {
 	return session.writeFrame(ctx, 0, response.MessageID, response.Sequence, response.Payload)
 }
 
-func (session *tcpSession) push(ctx context.Context, messageID uint32, payload []byte) error {
-	return session.pushKind(ctx, messageID, payload, 0)
-}
-
 func (session *tcpSession) pushKind(ctx context.Context, messageID uint32, payload []byte, kind byte) error {
 	return session.writeFrame(ctx, flagServerPush|kind, messageID, 0, payload)
 }
@@ -127,14 +123,14 @@ func (session *tcpSession) writeFrame(ctx context.Context, flags byte, messageID
 	// a single byte went out (it can expire between the check above and the
 	// write system call): nothing reached the stream, so it is still in step
 	// and this is a refusal like a context already done, not a connection
-	// failure (RR-20260926-68). Anything else closes the connection: part of
+	// failure. Anything else closes the connection: part of
 	// the frame went out (the stream is out of step), write_timeout itself ran
-	// out (the connection cannot take a byte for that long — RR-52's "slow
-	// enough to drop"), or the socket failed (reset, closed).
+	// out (the connection cannot take a byte for that long — slow enough to
+	// drop), or the socket failed (reset, closed).
 	// Consequence: a caller that keeps pushing with deadlines shorter than
 	// write_timeout never closes a half-dead connection through those pushes;
 	// the next push with no or a longer deadline, or the read loop's
-	// idle_timeout, is what finds and closes it (RR-20260926-68; OPEN-ITEMS A12).
+	// idle_timeout, is what finds and closes it.
 	if written == 0 && callerDeadline && errors.Is(err, os.ErrDeadlineExceeded) {
 		return fmt.Errorf("%w: nothing written before the caller's deadline: %w", context.DeadlineExceeded, err)
 	}

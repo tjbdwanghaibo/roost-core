@@ -212,7 +212,7 @@ func RequestID(ctx context.Context) string {
 
 // JSON 先完整编码，再写状态码和响应体。编码失败（NaN/Inf、不可编码类型、
 // MarshalJSON 返回错误）时改回 500 固定错误体并记录日志：状态码一旦发出就不能
-// 再改，先写 2xx 再编码会让调用方把空体当成功（RR-20261005-NC-80）。
+// 再改，先写 2xx 再编码会让调用方把空体当成功。
 // MarshalJSON panic 发生在写头之前，交给 Engine 的 recover 中间件回 500。
 //
 // json.Encoder 在池化缓冲里完整编码、成功后才一次性 Write（标准实现与 jsonv2
@@ -267,7 +267,7 @@ func BindJSON[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	if !ok || len(raw) == 0 {
 		return out, ok
 	}
-	// RR-20261003-NC-04：已读完整 body，必须整段为单个 JSON 值才能进入业务函数。
+	// 已读完整 body，必须整段为单个 JSON 值才能进入业务函数。
 	if err := json.Unmarshal(raw, &out); err != nil {
 		JSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "decode request"})
 		return out, false
@@ -312,7 +312,7 @@ func (e *Engine) requestContextMiddleware(next http.Handler) http.Handler {
 // 响应已经开始（写过状态码/响应体、Flush 或 Hijack）后状态无法更改，再追加错误体
 // 会让客户端收到一个“完整”的 2xx 拼接体；这时记录日志后以 http.ErrAbortHandler
 // 重新 panic，由 net/http 中止连接，客户端看到传输失败。handler 自己用
-// http.ErrAbortHandler 中止时保持标准库语义，原样传播（RR-20261005-NC-81）。
+// http.ErrAbortHandler 中止时保持标准库语义，原样传播。
 func (e *Engine) recoverMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tracked, state := trackResponse(w)

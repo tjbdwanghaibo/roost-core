@@ -70,7 +70,7 @@ func (c ReliableConfig) normalize() ReliableConfig {
 type ReliableStore interface {
 	BeginConsume(ctx context.Context, consumer ReliableConsumer, msg *nats.NatsMsg) (bool, error)
 	FinishConsume(ctx context.Context, consumer ReliableConsumer, msg *nats.NatsMsg) error
-	// DeadLetter 把 msg 记进 bucket 指定的死信列表（Bus 只给注册过的名字或 "_unregistered"，RR-20261006-72）；
+	// DeadLetter 把 msg 记进 bucket 指定的死信列表（Bus 只给注册过的名字或 "_unregistered"）；
 	// 条目保留 msg 原来的 module / msg，重投按原名字发回。
 	DeadLetter(ctx context.Context, consumer ReliableConsumer, msg *nats.NatsMsg, bucket DeadLetterBucket, reason string) error
 }

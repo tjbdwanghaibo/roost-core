@@ -60,7 +60,7 @@ const sessionClosedQueue = 256
 // OnSessionClosed subscribes to connection closes and returns the
 // unsubscribe. It exists because everything that maintains an "online" set —
 // the replicated scene, chat presence — otherwise has to notice by failing to
-// push to somebody, which never happens if nothing tries (RR-20260918-06).
+// push to somebody, which never happens if nothing tries.
 //
 // Subscribers run on this source's own goroutine, not on the socket's: a slow
 // one delays other subscribers and nothing else. Do not block in one.
@@ -134,7 +134,7 @@ func (runtime *TCPRuntime) deliverClosed(event TCPSessionClosed) {
 // callClosedSubscriber isolates one subscriber. This dispatcher owns a
 // goroutine of its own, so a panic nobody recovers here does not fail one
 // subscriber — it ends the PROCESS, turning a nil map in a presence bridge
-// into an outage for every connected player (RR-20260919-03). Every other
+// into an outage for every connected player. Every other
 // callback boundary in this framework recovers per callback; so does this one,
 // and the subscribers after the failing one still run, because the state they
 // maintain — who is online — is exactly what has to converge.
