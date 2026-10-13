@@ -91,6 +91,9 @@ func (e *election) createWithEtcd(ctx context.Context) (electionSession, electio
 	return session, concurrency.NewElection(session, e.prefix), nil
 }
 
+// Campaign 参选直到当选或 ctx 结束：登记本次参选 → 建立与客户端同寿命的会话（建立期间跟随调用方取消）→
+// 挂上会话 → 竞选 → 解除取消桥接 → 先发布 fence 再发布 leader 标志 → 监视会话过期。
+// 会话建立之后的每个失败分支都把会话交给 abandon 撤销租约。
 func (e *election) Campaign(ctx context.Context, value string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -98,30 +101,9 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	e.mu.Lock()
-	for e.revoking != nil && !e.campaign {
-		// a new session would queue its key behind the stale
-		// one still being revoked; waiting also keeps at most one abandoned
-		// Revoke per election.
-		pending := e.revoking
-		e.mu.Unlock()
-		select {
-		case <-pending:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		e.mu.Lock()
+	if err := e.beginCampaign(ctx); err != nil {
+		return err
 	}
-	if e.campaign {
-		e.mu.Unlock()
-		return fmt.Errorf("etcd election: campaign already active")
-	}
-	e.campaign = true
-	if e.closed {
-		e.leaderCh = make(chan struct{})
-		e.closed = false
-	}
-	e.mu.Unlock()
 
 	create := e.create
 	if create == nil {
@@ -154,15 +136,10 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 	// made the SDK send its Revoke on that canceled context, so the lease and
 	// the candidate or leader key stayed until TTL and blocked other
 	// candidates.
-	e.mu.Lock()
-	if !e.campaign {
-		e.mu.Unlock()
+	if !e.attachCampaignSession(session, elect) {
 		e.abandon(ctx, owned, lifetime)
 		return fetcd.ErrNotLeader
 	}
-	e.session = session
-	e.elect = elect
-	e.mu.Unlock()
 
 	// Campaign blocks until elected or context cancelled
 	if err := elect.Campaign(ctx, value); err != nil {
@@ -176,25 +153,13 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 		return ctx.Err()
 	}
 
-	e.mu.Lock()
-	if e.session != session || !e.campaign {
-		e.mu.Unlock()
+	if published, sessionEnded := e.publishLeadership(session, elect); !published {
 		e.abandon(ctx, owned, lifetime)
+		if sessionEnded {
+			e.finish(session)
+		}
 		return fetcd.ErrNotLeader
 	}
-	select {
-	case <-session.Done():
-		e.mu.Unlock()
-		e.abandon(ctx, owned, lifetime)
-		e.finish(session)
-		return fetcd.ErrNotLeader
-	default:
-	}
-	// Publish the fencing token before the leadership flag: a caller that
-	// observes IsLeader must be able to read the token of that term.
-	e.fence.Store(elect.Rev())
-	e.isLeader.Store(true)
-	e.mu.Unlock()
 
 	// Watch for session expiry (loss of leadership)
 	go func() {
@@ -204,6 +169,68 @@ func (e *election) Campaign(ctx context.Context, value string) error {
 	}()
 
 	return nil
+}
+
+// beginCampaign 登记一次参选：先等上一次被放弃会话的 Revoke 结束，再置 campaign；已关闭的选举换一个新的
+// leaderCh。已有参选在进行时拒绝。
+func (e *election) beginCampaign(ctx context.Context) error {
+	e.mu.Lock()
+	for e.revoking != nil && !e.campaign {
+		// a new session would queue its key behind the stale
+		// one still being revoked; waiting also keeps at most one abandoned
+		// Revoke per election.
+		pending := e.revoking
+		e.mu.Unlock()
+		select {
+		case <-pending:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		e.mu.Lock()
+	}
+	if e.campaign {
+		e.mu.Unlock()
+		return fmt.Errorf("etcd election: campaign already active")
+	}
+	e.campaign = true
+	if e.closed {
+		e.leaderCh = make(chan struct{})
+		e.closed = false
+	}
+	e.mu.Unlock()
+	return nil
+}
+
+// attachCampaignSession 把新会话挂到选举上；会话建立期间参选已被取消（Resign / Close）时返回 false。
+func (e *election) attachCampaignSession(session electionSession, elect electionBackend) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.campaign {
+		return false
+	}
+	e.session = session
+	e.elect = elect
+	return true
+}
+
+// publishLeadership 在当选后确认会话仍是本次参选且未过期，然后先发布 fence 再发布 leader 标志。
+// published 为 false 时调用方放弃会话；sessionEnded 表示会话已过期，调用方还要 finish 它。
+func (e *election) publishLeadership(session electionSession, elect electionBackend) (published, sessionEnded bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.session != session || !e.campaign {
+		return false, false
+	}
+	select {
+	case <-session.Done():
+		return false, true
+	default:
+	}
+	// Publish the fencing token before the leadership flag: a caller that
+	// observes IsLeader must be able to read the token of that term.
+	e.fence.Store(elect.Rev())
+	e.isLeader.Store(true)
+	return true, false
 }
 
 // campaignSession releases the detached lifetime on session loss or Close.
