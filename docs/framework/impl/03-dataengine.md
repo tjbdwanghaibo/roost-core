@@ -42,7 +42,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### cache
 
-12 个实现文件、24 个测试文件。
+12 个实现文件、8 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -138,7 +138,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### nestwal
 
-11 个实现文件、22 个测试文件。
+11 个实现文件、11 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -208,23 +208,14 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### cache
 
-- [admission_controls_test.go](../../../framework/cache/admission_controls_test.go)：`TestCacheAdmissionRemoteErrorCompatibility`、`TestCacheAdmissionLayeredRejectedReadFailures`
-- [admission_promises_test.go](../../../framework/cache/admission_promises_test.go)：`TestCacheAdmissionFatalRemotePolicy`、`TestCacheAdmissionStaleWriteAcrossStores`、`TestCacheAdmissionBackfillAdmission`
-- [atomic_local_order_bounded_promises_test.go](../../../framework/cache/atomic_local_order_bounded_promises_test.go)：`TestAtomicLocalOrderBoundedUnderOverwrite`、`TestAtomicLocalOrderBoundedUnderDeleteChurn`、`TestAtomicLocalOrderBoundedUnderExpiryChurn`、`TestAtomicLocalCompactionKeepsEvictionOrder`、`TestAtomicLocalOrderBoundedConcurrent`
-- [atomic_local_test.go](../../../framework/cache/atomic_local_test.go)：`TestAtomicLocalStoreVersionTTLAndBounds`、`TestReadThroughStoreCoalescesMisses`
-- [cache_test.go](../../../framework/cache/cache_test.go)：`TestLocalStoreRejectsStaleVersion`、`TestLocalStoreEvictsLeastRecentlyUsedEntry`、`TestLayeredStoreReadsThroughAfterTTL`、`TestReplicaSyncerAppliesUpdate`、`TestRedisRawJSONStoreUsesRedisString`；其余 1 项见文件
-- [guards_promises_test.go](../../../framework/cache/guards_promises_test.go)：`TestLayeredGetPropagatesRemoteErrorsAndDoesNotBackfillMisses`、`TestReadThroughStopsAtLocalErrorsLoaderMissesAndStrictRemoteWriteFailures`、`TestRedisStoresRefuseWritesWithoutUsableKeys`、`TestRefHMapStoreRefusesStaleWrites`
-- [layered_capacity_test.go](../../../framework/cache/layered_capacity_test.go)：`TestLayeredColdKeysHaveBoundedMetadata`、`TestLayeredExpiryEvictionRevalidatesAuthority`、`TestLayeredExpiryChurnAndColdExpiration`
-- [layered_expired_veto_promises_test.go](../../../framework/cache/layered_expired_veto_promises_test.go)：`TestLayeredExpiredLocalCopyDoesNotVetoAuthority`、`TestLayeredExpiredLocalCopyDoesNotVetoAuthorityRealRedis`
+- [admission_test.go](../../../framework/cache/admission_test.go)：`TestCacheAdmissionFatalRemoteSetIsNotDegraded`、`TestCacheAdmissionStaleWriteAcrossStores`、`TestCacheAdmissionBackfillAdmission`、`TestCacheAdmissionRemoteErrorPolicyOnGetAndDelete`、`TestCacheAdmissionLayeredRejectedReadFailures`
+- [atomic_local_test.go](../../../framework/cache/atomic_local_test.go)：`TestAtomicLocalStoreVersionTTLAndBounds`、`TestReadThroughStoreCoalescesMisses`、`TestAtomicLocalOrderBoundedUnderOverwrite`、`TestAtomicLocalOrderBoundedUnderDeleteChurn`、`TestAtomicLocalOrderBoundedUnderExpiryChurn`；其余 2 项见文件
+- [cache_test.go](../../../framework/cache/cache_test.go)：`TestLocalStoreRejectsStaleVersion`、`TestLocalStoreEvictsLeastRecentlyUsedEntry`、`TestLayeredStoreReadsThroughAfterTTL`、`TestReplicaSyncerAppliesUpdate`、`TestRedisRawJSONStoreUsesRedisString`；其余 5 项见文件
+- [layered_test.go](../../../framework/cache/layered_test.go)：`TestLayeredColdKeysHaveBoundedMetadata`、`TestLayeredExpiryEvictionRevalidatesAuthority`、`TestLayeredExpiryChurnAndColdExpiration`、`TestLayeredExpiredLocalCopyDoesNotVetoAuthority`、`TestLayeredExpiredLocalCopyDoesNotVetoAuthorityRealRedis`；其余 5 项见文件
 - [read_through_contract_test.go](../../../framework/cache/read_through_contract_test.go)：`TestReadThroughLoaderFillRefusalIsNotReadFailure`、`TestReadThroughRemoteFailurePolicyIsHonouredOnGetAndSet`、`TestReadThroughReturnsACanceledWaitersSlot`
-- [redis_lost_write_ttl_promises_test.go](../../../framework/cache/redis_lost_write_ttl_promises_test.go)：`TestAWriteWhoseReplyIsLostStillGetsItsTTL`
-- [ref_hmap_boundary_test.go](../../../framework/cache/ref_hmap_boundary_test.go)：`TestRefHMapBoundaryContractsRealRedis`、`TestRefHMapLayoutRejectsAliasesBeforeIO`
-- [ref_hmap_contracts_test.go](../../../framework/cache/ref_hmap_contracts_test.go)：`TestRefHMapContractsRealRedis`
-- [ref_hmap_contract_test.go](../../../framework/cache/ref_hmap_contract_test.go)：`TestRefHMapPatchPathRefusesEachShapeItCannotAddress`、`TestRefHMapLayoutRefusesTypesDeeperThanTheLimit`、`TestRedisJSONStoreRefusesStaleWritesAndMissingKeyFunc`、`TestRefHMapPatchKeepsTheWholeRecordAliveRealRedis`、`TestRefHMapGetTreatsAMissingReferencedHashAsMiss`、`TestRefHMapRegistryGuardAcceptsSameLayoutConcurrencyRealRedis`、`TestLayeredDeleteDropsL1WhenRemoteDeleteFails`、`TestRefHMapSchemaRegistryPromises`
-- [ref_hmap_test.go](../../../framework/cache/ref_hmap_test.go)：`TestRedisRefHMapStoreStoresNestedStructsAsSameSlotKeyRefs`、`TestRedisRefHMapStoreSetDeletesPreviouslyRegisteredKeys`、`TestRedisRefHMapStoreDeleteUsesRegisteredKeys`、`TestRedisRefHMapStorePatchUpdatesOnlyTargetScalar`、`TestRedisRefHMapStoreTreatsTimeAsScalar`；其余 2 项见文件
-- [ref_hmap_unknown_write_test.go](../../../framework/cache/ref_hmap_unknown_write_test.go)：`TestRefHMapWriteErrorBoundaries`、`TestRefHMapUnknownWrite`
-- [replica_contract_test.go](../../../framework/cache/replica_contract_test.go)：`TestReplicaDeleteAndUpsertShareVersionOrder`、`TestReplicaRejectsMissingIdentityExtractors`、`TestReplicaLocalStoreRetainsDeleteWatermarkAtCapacity`、`TestReplicaLocalStoreConcurrentDeletesAndWrites`、`TestReplicaPayloadIdentityBeforeStoreMutation`、`TestReplicaNullPointerRefusedBeforeIdentityCallback`、`TestReplicaSyncerStopWaitsForInFlightStoreWrite`
-- [stale_write_test.go](../../../framework/cache/stale_write_test.go)：`TestStaleSetIsReportedNotSwallowed`、`TestStaleSetAcceptsFirstWrite`、`TestLayeredStoreWithoutTTLAlwaysRevalidates`、`TestLayeredStoreServesFromL1WithinTTL`、`TestLayeredStoreWithoutRemoteStillServesLocal`
+- [ref_hmap_contract_test.go](../../../framework/cache/ref_hmap_contract_test.go)：`TestRefHMapPatchPathRefusesEachShapeItCannotAddress`、`TestRefHMapLayoutRefusesTypesDeeperThanTheLimit`、`TestRedisJSONStoreRefusesStaleWritesAndMissingKeyFunc`、`TestRefHMapPatchKeepsTheWholeRecordAliveRealRedis`、`TestRefHMapGetTreatsAMissingReferencedHashAsMiss`；其余 6 项见文件
+- [ref_hmap_test.go](../../../framework/cache/ref_hmap_test.go)：`TestRedisRefHMapStoreStoresNestedStructsAsSameSlotKeyRefs`、`TestRedisRefHMapStoreSetDeletesPreviouslyRegisteredKeys`、`TestRedisRefHMapStoreDeleteUsesRegisteredKeys`、`TestRedisRefHMapStorePatchUpdatesOnlyTargetScalar`、`TestRedisRefHMapStoreTreatsTimeAsScalar`；其余 5 项见文件
+- [replica_contract_test.go](../../../framework/cache/replica_contract_test.go)：`TestReplicaDeleteAndUpsertShareVersionOrder`、`TestReplicaRejectsMissingIdentityExtractors`、`TestReplicaLocalStoreRetainsDeleteWatermarkAtCapacity`、`TestReplicaLocalStoreConcurrentDeletesAndWrites`、`TestReplicaPayloadIdentityBeforeStoreMutation`；其余 2 项见文件
 
 ### dataengine
 
@@ -284,27 +275,17 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### nestwal
 
-- [close_replay_test.go](../../../framework/nestwal/close_replay_test.go)：`TestAckSyncsAsyncRecordBeforeCheckpoint`、`TestCloseRetainsDirectoryUntilExternalReplayReturns`
-- [codec_promises_test.go](../../../framework/nestwal/codec_promises_test.go)：`TestEncodeRejectsUnboundedUnsetPathsAndHeaders`、`TestDecodeRejectsEveryTruncationPoint`
-- [corruption_promises_test.go](../../../framework/nestwal/corruption_promises_test.go)：`TestOpenRefusesSegmentGapsAndUnacknowledgedTruncation`、`TestOpenRefusesEachCorruptFrameHeaderField`
+- [codec_test.go](../../../framework/nestwal/codec_test.go)：`TestEncodeRejectsUnboundedUnsetPathsAndHeaders`、`TestDecodeRejectsEveryTruncationPoint`、`TestCodecPatchRoundTrip`、`TestCodecDeleteCarriesNoPayload`、`TestCodecRejectsUnknownRecordVersion`；其余 5 项见文件
+- [corruption_test.go](../../../framework/nestwal/corruption_test.go)：`TestOpenRefusesSegmentGapsAndUnacknowledgedTruncation`、`TestOpenRefusesEachCorruptFrameHeaderField`、`TestOpenTruncatesZeroFilledTailOfLastSegment`、`TestOpenTruncatesZeroFilledTailStartingAtCheckpointFence`、`TestOpenRefusesTailThatIsNotAllZero`；其余 4 项见文件
 - [crash_test.go](../../../framework/nestwal/crash_test.go)：`TestNestWALCrashChildProcess`、`TestNestWALCrashKeepsDurablePrefix`
 - [effect_inbox_test.go](../../../framework/nestwal/effect_inbox_test.go)：`TestMongoEffectInboxDeduplicatesAndRejectsIdentityConflict`、`TestMongoEffectInboxHandlerFailureLeavesNoReceipt`、`TestMongoEffectInboxSurvivesTransactionRetry`
 - [export_test.go](../../../framework/nestwal/export_test.go)
-- [fsync_failure_promises_test.go](../../../framework/nestwal/fsync_failure_promises_test.go)：`TestAckRefusesTerminalWALAndKeepsCheckpoint`、`TestInflightAckFailsAfterFailedFinalSync`、`TestInflightAckAfterCleanCloseStillSucceeds`、`TestAckFirstFsyncFailureIsIndeterminateForTickets`、`TestSyncAfterTerminalNeverFsyncsOrAdvancesDurableLSN`；其余 1 项见文件
 - [inspect_test.go](../../../framework/nestwal/inspect_test.go)：`TestInspectAcceptsDurableCheckpointBoundary`、`TestInspectRefusesRunningWriterWithoutCreatingSnapshot`、`TestInspectPreservesCorruptRecordAndSuffix`、`TestInspectValidWALCancellationAndUnsafeDestinations`、`TestInspectNeverRepairsTornTailOrCheckpoint`
 - [pipelined_strict_fallback_bench_test.go](../../../framework/nestwal/pipelined_strict_fallback_bench_test.go)
-- [pipelined_strict_fallback_promises_test.go](../../../framework/nestwal/pipelined_strict_fallback_promises_test.go)：`TestAppendWaitsForFsyncOnStrictPathForStrictAndPipelined`、`TestBroadcastPipelinedIsInvisibleUntilFsync`、`TestPipelinedFastPathStillReleasesLockBeforeFsync`
-- [pipelined_test.go](../../../framework/nestwal/pipelined_test.go)：`TestWALEnqueueTicketResolvesDurableAndSurvivesReopen`、`TestWALEnqueueRejectsSynchronously`、`TestWALTerminalFailsPendingAndLateTickets`
-- [promises_test.go](../../../framework/nestwal/promises_test.go)：`TestOpenRefusesEachInvalidOption`、`TestAppendRefusesRecordsTheLogCannotHold`、`TestAckRefusesFencesThatWouldSkipRecords`、`TestHealthyReportsDiskAndAgeLimits`、`TestReadCheckpointRefusesTruncatedForeignAndCorruptFiles`
-- [record_codec_test.go](../../../framework/nestwal/record_codec_test.go)：`TestCodecPatchRoundTrip`、`TestCodecDeleteCarriesNoPayload`、`TestCodecRejectsUnknownRecordVersion`、`TestWALDefaultWriterReplaysPatch`、`TestCodecUnknownVersionDoesNotAdvanceCheckpoint`
-- [remote_codec_test.go](../../../framework/nestwal/remote_codec_test.go)：`TestRemoteCommitCodecRoundTrip`、`TestRemoteDeleteCommitCodecRoundTrip`
-- [single_format_test.go](../../../framework/nestwal/single_format_test.go)：`TestRetiredFormatsLeaveWALUntouched`
-- [sync_contract_test.go](../../../framework/nestwal/sync_contract_test.go)：`TestWALSyncPromiseCoversAdmittedTickets`、`TestWALSyncPromiseDoesNotBlockAfterClose`、`TestWALSyncPromiseWaitsForDrainWhileClosing`、`TestWALSyncPromiseAfterCompletedClose`
-- [terminal_projection_wait_test.go](../../../framework/nestwal/terminal_projection_wait_test.go)：`TestWALTerminalWakesEntityProjectionWaiters`
-- [torn_page_tail_promises_test.go](../../../framework/nestwal/torn_page_tail_promises_test.go)：`TestOpenRefusesFrameWhosePayloadPageWasNotWrittenBack`
+- [pipelined_strict_fallback_test.go](../../../framework/nestwal/pipelined_strict_fallback_test.go)：`TestAppendWaitsForFsyncOnStrictPathForStrictAndPipelined`、`TestBroadcastPipelinedIsInvisibleUntilFsync`、`TestPipelinedFastPathStillReleasesLockBeforeFsync`、`TestWALTerminalWakesEntityProjectionWaiters`
+- [terminal_test.go](../../../framework/nestwal/terminal_test.go)：`TestAckRefusesTerminalWALAndKeepsCheckpoint`、`TestInflightAckFailsAfterFailedFinalSync`、`TestInflightAckAfterCleanCloseStillSucceeds`、`TestAckFirstFsyncFailureIsIndeterminateForTickets`、`TestSyncAfterTerminalNeverFsyncsOrAdvancesDurableLSN`；其余 4 项见文件
 - [wal_benchmark_test.go](../../../framework/nestwal/wal_benchmark_test.go)
-- [wal_test.go](../../../framework/nestwal/wal_test.go)：`TestCodecRoundTrip`、`TestWALReplayAckAndReopen`、`TestWALReplayStartsAtAckFenceAcrossRotation`、`TestWALConcurrentAppendAndRotation`、`TestWALRecoversTornTail`；其余 5 项见文件
-- [zero_tail_promises_test.go](../../../framework/nestwal/zero_tail_promises_test.go)：`TestOpenTruncatesZeroFilledTailOfLastSegment`、`TestOpenTruncatesZeroFilledTailStartingAtCheckpointFence`、`TestOpenRefusesTailThatIsNotAllZero`、`TestOpenRefusesZeroFillInsideAcknowledgedPrefix`、`TestOpenRefusesTornTailBeforeCheckpointWithoutTruncating`；其余 1 项见文件
+- [wal_test.go](../../../framework/nestwal/wal_test.go)：`TestWALReplayAckAndReopen`、`TestWALReplayStartsAtAckFenceAcrossRotation`、`TestWALConcurrentAppendAndRotation`、`TestWALRecoversTornTail`、`TestWALRejectsChecksumCorruption`；其余 15 项见文件
 
 ### redis
 

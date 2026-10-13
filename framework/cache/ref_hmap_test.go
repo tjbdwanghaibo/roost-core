@@ -1,8 +1,12 @@
+// ref-hmap 存储：嵌套结构按同槽引用存放、注册表键的增删、标量 Patch、环拒绝、布局复用、结果未知不重放、写失败仍补 TTL。
+
 package cache
 
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -10,6 +14,7 @@ import (
 	"time"
 
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 )
 
 type refHMapSession struct {
@@ -543,8 +548,7 @@ func (r *refHMapFakeRedis) Eval(_ context.Context, script string, keys []string,
 	return int64(1), nil
 }
 
-// registryCovered 仿真 refHMapRegistryGuardLua：当前注册表的每个键都在 KEYS 里
-// 才放行（RR-20261004-09），字节相等只是快路径。
+// registryCovered 仿真 refHMapRegistryGuardLua：当前注册表的每个键都在 KEYS 里才放行，字节相等只是快路径。
 func (r *refHMapFakeRedis) registryCovered(keys []string, snapshot string) bool {
 	current := r.hashes[keys[0]][refHMapRegistryField]
 	if current == snapshot {
@@ -739,4 +743,199 @@ func TestRedisRefHMapStoreReusesTypeLayoutAcrossOperations(t *testing.T) {
 			t.Fatalf("err=%v, want ErrRefHMapUnsupported", err)
 		}
 	}
+}
+
+// Lua 结果未知时保留错误，不重放覆盖另一已完成的写。历史：RR-20261004-NC-21。
+type unknownWriteRedis struct {
+	fredis.IRedis
+	afterApply  func() error
+	beforeError error
+	evals       int
+	fallbacks   int
+}
+
+func (r *unknownWriteRedis) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+	r.evals++
+	if r.beforeError != nil {
+		return nil, r.beforeError
+	}
+	value, err := r.IRedis.Eval(ctx, script, keys, args...)
+	if err != nil {
+		return value, err
+	}
+	if r.afterApply != nil {
+		hook := r.afterApply
+		r.afterApply = nil
+		if err := hook(); err != nil {
+			return nil, err
+		}
+		return nil, context.DeadlineExceeded
+	}
+	return value, nil
+}
+
+func (r *unknownWriteRedis) Pipeline() fredis.IPipeline {
+	if r.evals > 0 {
+		r.fallbacks++
+	}
+	return r.IRedis.Pipeline()
+}
+
+func (r *unknownWriteRedis) Del(ctx context.Context, keys ...string) (int64, error) {
+	r.fallbacks++
+	return r.IRedis.Del(ctx, keys...)
+}
+
+func TestRefHMapWriteErrorBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cause error
+		apply bool
+	}{
+		{"before_deadline", context.DeadlineExceeded, false}, {"before_cancel", context.Canceled, false},
+		{"wrapped_cause", fmt.Errorf("transport: %w", context.DeadlineExceeded), false},
+		{"applied_reply_lost", context.DeadlineExceeded, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newRefHMapFakeRedis()
+			cfg := RefHMapConfig[int64, refHMapSession]{Name: "session", StoreConfig: refHMapSessionConfig()}
+			authority := NewRedisRefHMapStore(fake, cfg)
+			if err := authority.Set(context.Background(), refHMapSession{ID: 1, Version: 1}); err != nil {
+				t.Fatal(err)
+			}
+			wrapped := &unknownWriteRedis{IRedis: fake, beforeError: tc.cause}
+			if tc.apply {
+				wrapped.beforeError = nil
+				wrapped.afterApply = func() error { return nil }
+			}
+			err := NewRedisRefHMapStore(wrapped, cfg).Set(context.Background(), refHMapSession{ID: 1, Version: 2})
+			if !errors.Is(err, tc.cause) || wrapped.evals != 1 || wrapped.fallbacks != 0 {
+				t.Fatalf("err=%v evals=%d fallbacks=%d", err, wrapped.evals, wrapped.fallbacks)
+			}
+			got, held, err := authority.Get(context.Background(), 1)
+			want := uint64(1)
+			if tc.apply {
+				want = 2
+			}
+			if err != nil || !held || got.Version != want {
+				t.Fatalf("stored=%+v held=%v err=%v", got, held, err)
+			}
+		})
+	}
+}
+
+func TestRefHMapUnknownWrite(t *testing.T) {
+	addr := os.Getenv("ROOST_REDIS_TEST_ADDR")
+	if addr == "" {
+		t.Skip("requires isolated Redis")
+	}
+	client, err := redisdriver.NewClient(fredis.DefaultConfig(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	for _, fault := range []bool{false, true} {
+		name := "normal_control"
+		if fault {
+			name = "applied_reply_lost_newer_write"
+		}
+		t.Run(name, func(t *testing.T) {
+			prefix := "roost:unknownwrite:" + name
+			cfg := RefHMapConfig[int64, refHMapSession]{Prefix: prefix, Name: "session", StoreConfig: refHMapSessionConfig()}
+			authority := NewRedisRefHMapStore(client, cfg)
+			t.Cleanup(func() { _ = authority.Delete(context.Background(), 1) })
+			if err := authority.Set(ctx, refHMapSession{ID: 1, Version: 1}); err != nil {
+				t.Fatal(err)
+			}
+			wrapped := &unknownWriteRedis{IRedis: client}
+			if fault {
+				wrapped.afterApply = func() error { return authority.Set(ctx, refHMapSession{ID: 1, Version: 3}) }
+			}
+			writer := NewRedisRefHMapStore(wrapped, cfg)
+			err := writer.Set(ctx, refHMapSession{ID: 1, Version: 2})
+			got, held, readErr := authority.Get(ctx, 1)
+			if readErr != nil || !held {
+				t.Fatalf("read: %+v %v %v", got, held, readErr)
+			}
+			if fault {
+				t.Logf("ack lost after v2; another writer stored v3; Set err=%v final=%d", err, got.Version)
+				if !errors.Is(err, context.DeadlineExceeded) || got.Version != 3 {
+					t.Fatal("unknown Lua outcome was replayed over a newer authoritative write")
+				}
+			} else if err != nil || got.Version != 2 {
+				t.Fatalf("normal write: %v %+v", err, got)
+			}
+		})
+	}
+}
+
+// RedisJSONHashStore.Set 与 RedisRawSortedSetStore.SetScore 都是“写 + EXPIRE”两步：驱动不替调用方重放写命令，回复丢失的 HSET / ZADD
+// 以错误返回而它可能已在服务端建出新键，所以写的结果未知时仍补发 EXPIRE（键不存在时无副作用），返回的仍是写的错误。
+
+// lostReplyRedis 让写命令在服务端生效后丢掉回复；记录每个键最后一次 EXPIRE。
+type lostReplyRedis struct {
+	fredis.IRedis
+	applied map[string]bool
+	ttl     map[string]time.Duration
+}
+
+var errReplyLost = errors.New("redis: reply lost (EOF)")
+
+func newLostReplyRedis() *lostReplyRedis {
+	return &lostReplyRedis{applied: map[string]bool{}, ttl: map[string]time.Duration{}}
+}
+
+func (r *lostReplyRedis) HGet(context.Context, string, string) ([]byte, error) {
+	return nil, fredis.ErrNil
+}
+func (r *lostReplyRedis) HSet(_ context.Context, key string, _ ...any) error {
+	r.applied[key] = true
+	return errReplyLost
+}
+func (r *lostReplyRedis) ZAdd(_ context.Context, key string, _ ...fredis.Z) (int64, error) {
+	r.applied[key] = true
+	return 0, errReplyLost
+}
+func (r *lostReplyRedis) Expire(_ context.Context, key string, ttl time.Duration) (bool, error) {
+	if !r.applied[key] {
+		return false, nil
+	}
+	r.ttl[key] = ttl
+	return true, nil
+}
+
+type lostReplyValue struct {
+	ID string `json:"id"`
+}
+
+func TestAWriteWhoseReplyIsLostStillGetsItsTTL(t *testing.T) {
+	ctx := context.Background()
+	const ttl = time.Minute
+
+	t.Run("hash", func(t *testing.T) {
+		redis := newLostReplyRedis()
+		store := NewRedisJSONHashStore(redis, ttl,
+			func(id string) RedisHashKey { return RedisHashKey{Key: "h:" + id, Field: "v"} },
+			StoreConfig[string, lostReplyValue]{KeyOf: func(v lostReplyValue) string { return v.ID }})
+		err := store.Set(ctx, lostReplyValue{ID: "a"})
+		if !errors.Is(err, errReplyLost) {
+			t.Fatalf("Set err=%v, want the write's unknown-result error", err)
+		}
+		if got := redis.ttl["h:a"]; got != ttl {
+			t.Fatalf("HSET reached Redis but the key carries TTL %v (want %v): it never expires", got, ttl)
+		}
+	})
+	t.Run("sorted set", func(t *testing.T) {
+		redis := newLostReplyRedis()
+		store := NewRedisRawSortedSetStore[string](redis, "z:rank", ttl)
+		err := store.SetScore(ctx, "m", 1)
+		if !errors.Is(err, errReplyLost) {
+			t.Fatalf("SetScore err=%v, want the write's unknown-result error", err)
+		}
+		if got := redis.ttl["z:rank"]; got != ttl {
+			t.Fatalf("ZADD reached Redis but the key carries TTL %v (want %v): it never expires", got, ttl)
+		}
+	})
 }

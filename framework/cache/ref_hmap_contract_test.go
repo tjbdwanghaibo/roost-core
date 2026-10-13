@@ -1,3 +1,5 @@
+// ref-hmap 契约：Patch 路径与布局拒绝、Stale 判定、整条记录随 Patch 续命、缺失引用按未命中、注册表守卫并发、真实 Redis 边界。
+
 package cache
 
 import (
@@ -5,12 +7,14 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
-	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 )
 
 func newSessionRefHMapStore(t *testing.T, maxDepth int) *RedisRefHMapStore[int64, refHMapSession] {
@@ -21,10 +25,8 @@ func newSessionRefHMapStore(t *testing.T, maxDepth int) *RedisRefHMapStore[int64
 	})
 }
 
-// U-0102 (C2, B-24 第四项): a patch path is resolved against the reflective
-// layout before anything is written. Each way a path can miss the layout is
-// refused as ErrRefHMapUnsupported with the path named; a nested type deeper
-// than the configured limit is refused when the layout is built.
+// A patch path is resolved against the reflective layout before anything is written. Each way a path can miss the layout is
+// refused as ErrRefHMapUnsupported with the path named; a nested type deeper than the configured limit is refused when the layout is built.
 func TestRefHMapPatchPathRefusesEachShapeItCannotAddress(t *testing.T) {
 	store := newSessionRefHMapStore(t, 8)
 	plan, err := store.plan(1001)
@@ -424,8 +426,7 @@ func TestRefHMapRegistryGuardAcceptsSameLayoutConcurrencyRealRedis(t *testing.T)
 	}
 }
 
-// RR-20261004-09：LayeredStore.Delete 的远端删除报错（拒绝、网络、结果未知）时，
-// L1 副本也必须丢掉——丢缓存总是安全的，下一次 Get 回到权威；错误照常返回。
+// LayeredStore.Delete 的远端删除报错（拒绝、网络、结果未知）时 L1 副本也丢掉——丢缓存总是安全的，下一次 Get 回到权威；错误照常返回。
 func TestLayeredDeleteDropsL1WhenRemoteDeleteFails(t *testing.T) {
 	ctx := context.Background()
 	cfg := staleConfig()
@@ -641,5 +642,362 @@ func TestRefHMapSchemaRegistryPromises(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// 支持的类型往返，Patch 成功可见；坏布局在写前拒绝。历史：RR-20261004-NC-16～19。
+
+type refContractPointerText int
+
+func (v *refContractPointerText) MarshalText() ([]byte, error) {
+	return []byte(fmt.Sprintf("code=%d", *v)), nil
+}
+func (v *refContractPointerText) UnmarshalText(raw []byte) error {
+	var n int
+	_, err := fmt.Sscanf(string(raw), "code=%d", &n)
+	*v = refContractPointerText(n)
+	return err
+}
+
+type refContractValueText int
+
+func (v refContractValueText) MarshalText() ([]byte, error) {
+	return []byte(fmt.Sprintf("code=%d", v)), nil
+}
+func (v *refContractValueText) UnmarshalText(raw []byte) error {
+	var n int
+	_, err := fmt.Sscanf(string(raw), "code=%d", &n)
+	*v = refContractValueText(n)
+	return err
+}
+
+type refContractPointerTextRecord struct {
+	ID     int64
+	Amount refContractPointerText
+}
+type refContractValueTextRecord struct {
+	ID     int64
+	Amount refContractValueText
+}
+type refContractRootAlias struct {
+	ID   int64 `json:"id"`
+	Root struct {
+		ID int64 `json:"id"`
+	} `json:"root"`
+}
+type refContractReservedField struct {
+	ID   int64
+	Data string `redisdao:"__keys"`
+}
+
+func TestRefHMapContractsRealRedis(t *testing.T) {
+	addr := os.Getenv("ROOST_REDIS_TEST_ADDR")
+	if addr == "" {
+		t.Skip("requires an isolated Redis")
+	}
+	client, err := redisdriver.NewClient(fredis.DefaultConfig(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := client.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"value_control", "pointer_root", "pointer_text", "value_text_control", "patch_nil_parent", "patch_existing_control", "root_alias", "reserved_field"} {
+		t.Run(scenario, func(t *testing.T) {
+			prefix := "roost:refContract:" + rand.Text()
+			defer func() {
+				if caught := recover(); caught != nil {
+					t.Errorf("supported generic store panicked: %v", caught)
+				}
+			}()
+			switch scenario {
+			case "pointer_root":
+				store := NewRedisRefHMapStore[int64, *refHMapSession](client, RefHMapConfig[int64, *refHMapSession]{Prefix: prefix, Name: "record", StoreConfig: StoreConfig[int64, *refHMapSession]{KeyOf: func(v *refHMapSession) int64 { return v.ID }}})
+				t.Cleanup(func() { _ = store.Delete(context.Background(), 1) })
+				want := &refHMapSession{ID: 1, Version: 2}
+				if err := store.Set(ctx, want); err != nil {
+					t.Fatal(err)
+				}
+				got, held, err := store.Get(ctx, 1)
+				if err != nil || !held || !reflect.DeepEqual(got, want) {
+					t.Fatalf("pointer roundtrip: %+v %v %v", got, held, err)
+				}
+			case "pointer_text":
+				store := NewRedisRefHMapStore(client, RefHMapConfig[int64, refContractPointerTextRecord]{Prefix: prefix, Name: "record", StoreConfig: StoreConfig[int64, refContractPointerTextRecord]{KeyOf: func(v refContractPointerTextRecord) int64 { return v.ID }}})
+				t.Cleanup(func() { _ = store.Delete(context.Background(), 1) })
+				want := refContractPointerTextRecord{ID: 1, Amount: 7}
+				if err := store.Set(ctx, want); err != nil {
+					t.Fatal(err)
+				}
+				got, held, err := store.Get(ctx, 1)
+				t.Logf("pointer TextMarshaler roundtrip: %+v held=%v err=%v", got, held, err)
+				if err != nil || !held || got != want {
+					t.Fatal("recognized text scalar did not roundtrip")
+				}
+			case "value_text_control":
+				store := NewRedisRefHMapStore(client, RefHMapConfig[int64, refContractValueTextRecord]{Prefix: prefix, Name: "record", StoreConfig: StoreConfig[int64, refContractValueTextRecord]{KeyOf: func(v refContractValueTextRecord) int64 { return v.ID }}})
+				t.Cleanup(func() { _ = store.Delete(context.Background(), 1) })
+				want := refContractValueTextRecord{ID: 1, Amount: 7}
+				if err := store.Set(ctx, want); err != nil {
+					t.Fatal(err)
+				}
+				got, held, err := store.Get(ctx, 1)
+				if err != nil || !held || got != want {
+					t.Fatalf("value TextMarshaler: %+v %v %v", got, held, err)
+				}
+			case "root_alias":
+				store := NewRedisRefHMapStore(client, RefHMapConfig[int64, refContractRootAlias]{Prefix: prefix, Name: "record", StoreConfig: StoreConfig[int64, refContractRootAlias]{KeyOf: func(v refContractRootAlias) int64 { return v.ID }}})
+				t.Cleanup(func() { _ = store.Delete(context.Background(), 1) })
+				want := refContractRootAlias{ID: 1}
+				want.Root.ID = 99
+				if err := store.Set(ctx, want); !errors.Is(err, ErrRefHMapUnsupported) {
+					t.Fatalf("RR-NC-19: root collision err=%v, want unsupported before write", err)
+				}
+				if exists, err := client.Exists(ctx, prefix+":{record:1}:root"); err != nil || exists != 0 {
+					t.Fatalf("rejected layout wrote data: exists=%d err=%v", exists, err)
+				}
+
+			case "reserved_field":
+				store := NewRedisRefHMapStore(client, RefHMapConfig[int64, refContractReservedField]{Prefix: prefix, Name: "record", StoreConfig: StoreConfig[int64, refContractReservedField]{KeyOf: func(v refContractReservedField) int64 { return v.ID }}})
+				// Registered keys are precisely this test's root; do not delete arbitrary keys from the payload.
+				rootKey := prefix + ":{record:1}:root"
+				t.Cleanup(func() { _, _ = client.Del(context.Background(), rootKey) })
+				want := refContractReservedField{ID: 1, Data: "payload"}
+				if err := store.Set(ctx, want); !errors.Is(err, ErrRefHMapUnsupported) {
+					t.Fatalf("RR-NC-19: reserved field err=%v, want unsupported before write", err)
+				}
+				if exists, err := client.Exists(ctx, rootKey); err != nil || exists != 0 {
+					t.Fatalf("rejected layout wrote data: exists=%d err=%v", exists, err)
+				}
+
+			default:
+				store := NewRedisRefHMapStore(client, RefHMapConfig[int64, refHMapSession]{Prefix: prefix, Name: "record", StoreConfig: refHMapSessionConfig()})
+				t.Cleanup(func() { _ = store.Delete(context.Background(), 1) })
+				want := refHMapSession{ID: 1, Version: 2}
+				if scenario != "patch_nil_parent" {
+					want.Meta = &refHMapMeta{Label: "before"}
+				}
+				if err := store.Set(ctx, want); err != nil {
+					t.Fatal(err)
+				}
+				if scenario != "value_control" {
+					if err := store.Patch(ctx, 1, "Meta.Label", "after"); err != nil {
+						t.Fatal(err)
+					}
+					want.Meta = &refHMapMeta{Label: "after"}
+				}
+				got, held, err := store.Get(ctx, 1)
+				t.Logf("nested patch: got=%+v Meta=%+v held=%v err=%v", got, got.Meta, held, err)
+				if err != nil || !held || !reflect.DeepEqual(got, want) {
+					t.Fatal("successful nested patch was not observable")
+				}
+			}
+		})
+	}
+}
+
+// 补 nil 根、codec 失败、深层 Patch、类型冲突和名称边界。Redis 脚本语义用专属真实实例验证，不以 Go 替身模拟原子性。
+
+type refBoundaryText int
+
+var refBoundaryCodecError = errors.New("negative codec value")
+
+func (v *refBoundaryText) MarshalText() ([]byte, error) {
+	if *v < 0 {
+		return nil, refBoundaryCodecError
+	}
+	n := *v
+	*v = n + 1 // codec拥有指针receiver；框架不能因此改业务scalar。
+	return []byte(fmt.Sprintf("code=%d", n)), nil
+}
+func (v *refBoundaryText) UnmarshalText(raw []byte) error {
+	var n int
+	_, err := fmt.Sscanf(string(raw), "code=%d", &n)
+	*v = refBoundaryText(n)
+	return err
+}
+
+type refBoundaryRecord struct {
+	ID     int64
+	Amount refBoundaryText
+	Meta   *refBoundaryMeta
+}
+type refBoundaryMeta struct {
+	Child *refBoundaryChild
+	Note  string
+}
+type refBoundaryChild struct{ Score int64 }
+type refBoundaryPointer *refBoundaryRecord
+
+func TestRefHMapBoundaryContractsRealRedis(t *testing.T) {
+	addr := os.Getenv("ROOST_REDIS_TEST_ADDR")
+	if addr == "" {
+		t.Skip("requires an isolated Redis")
+	}
+	client, err := redisdriver.NewClient(fredis.DefaultConfig(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := client.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"nil_root", "named_pointer", "patch_codec", "marshal_failure", "deep_nil_patch", "missing_root", "wrongtype_no_prefix_write", "registry_delete", "ancestor_ttl"} {
+		t.Run(scenario, func(t *testing.T) {
+			prefix := "roost:boundary:" + scenario
+			cfg := RefHMapConfig[int64, refBoundaryRecord]{Prefix: prefix, Name: "record", StoreConfig: StoreConfig[int64, refBoundaryRecord]{KeyOf: func(v refBoundaryRecord) int64 { return v.ID }}}
+			store := NewRedisRefHMapStore(client, cfg)
+			plan, err := store.plan(1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = client.Del(ctx, plan.keys()...)
+			t.Cleanup(func() { _, _ = client.Del(context.Background(), plan.keys()...) })
+			if scenario == "nil_root" {
+				keyCalls := 0
+				ptrStore := NewRedisRefHMapStore(client, RefHMapConfig[int64, *refBoundaryRecord]{Prefix: prefix, Name: "record", StoreConfig: StoreConfig[int64, *refBoundaryRecord]{KeyOf: func(v *refBoundaryRecord) int64 { keyCalls++; return v.ID }}})
+				if err := ptrStore.Set(ctx, nil); !errors.Is(err, ErrRefHMapUnsupported) || keyCalls != 0 {
+					t.Fatalf("nil root: err=%v key calls=%d", err, keyCalls)
+				}
+				if got, held, err := ptrStore.Get(ctx, 1); err != nil || held || got != nil {
+					t.Fatalf("pointer miss: %v %v %v", got, held, err)
+				}
+				return
+			}
+			if scenario == "named_pointer" {
+				ptrStore := NewRedisRefHMapStore(client, RefHMapConfig[int64, refBoundaryPointer]{Prefix: prefix, Name: "record", StoreConfig: StoreConfig[int64, refBoundaryPointer]{KeyOf: func(v refBoundaryPointer) int64 { return v.ID }}})
+				want := refBoundaryPointer(&refBoundaryRecord{ID: 1, Amount: 7})
+				if err := ptrStore.Set(ctx, want); err != nil {
+					t.Fatal(err)
+				}
+				if want.Amount != 7 {
+					t.Fatalf("codec mutated business scalar: %d", want.Amount)
+				}
+				got, held, err := ptrStore.Get(ctx, 1)
+				if err != nil || !held || !reflect.DeepEqual(got, want) || got == want {
+					t.Fatalf("named pointer roundtrip: %v %v %v", got, held, err)
+				}
+				return
+			}
+			if scenario == "missing_root" {
+				if err := store.Patch(ctx, 1, "Meta.Child.Score", int64(9)); !errors.Is(err, ErrRefHMapUnsupported) {
+					t.Fatalf("missing root patch: %v", err)
+				}
+				if n, err := client.Exists(ctx, plan.keys()...); err != nil || n != 0 {
+					t.Fatalf("missing root created keys: %d %v", n, err)
+				}
+				return
+			}
+			want := refBoundaryRecord{ID: 1, Amount: 7}
+			if scenario == "ancestor_ttl" {
+				store.cfg.TTL = 10 * time.Second
+			}
+			if err := store.Set(ctx, want); err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "patch_codec":
+				if err := store.Patch(ctx, 1, "Amount", refBoundaryText(10)); err != nil {
+					t.Fatal(err)
+				}
+				want.Amount = 10
+			case "marshal_failure":
+				bad := want
+				bad.Amount = -1
+				if err := store.Set(ctx, bad); !errors.Is(err, refBoundaryCodecError) {
+					t.Fatalf("marshal failure: %v", err)
+				}
+				if err := store.Patch(ctx, 1, "Amount", refBoundaryText(-1)); !errors.Is(err, refBoundaryCodecError) {
+					t.Fatalf("patch marshal failure: %v", err)
+				}
+			case "wrongtype_no_prefix_write":
+				childKey := prefix + ":{record:1}:meta:child"
+				if err := client.Set(ctx, childKey, "sentinel", 0); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Patch(ctx, 1, "Meta.Child.Score", int64(9)); err == nil {
+					t.Fatal("wrongtype patch succeeded")
+				}
+				if _, err := client.HGet(ctx, plan.key(plan.root), "meta"); !errors.Is(err, fredis.ErrNil) {
+					t.Fatalf("type error changed ancestor: %v", err)
+				}
+				_, _ = client.Del(ctx, childKey)
+			default:
+				if err := store.Patch(ctx, 1, "Meta.Child.Score", int64(9)); err != nil {
+					t.Fatal(err)
+				}
+				want.Meta = &refBoundaryMeta{Child: &refBoundaryChild{Score: 9}}
+				if scenario == "registry_delete" {
+					if err := store.Delete(ctx, 1); err != nil {
+						t.Fatal(err)
+					}
+					if n, err := client.Exists(ctx, plan.keys()...); err != nil || n != 0 {
+						t.Fatalf("Delete orphaned keys: %d %v", n, err)
+					}
+					return
+				}
+				if scenario == "ancestor_ttl" {
+					for _, key := range []string{plan.key(plan.root), prefix + ":{record:1}:meta", prefix + ":{record:1}:meta:child"} {
+						if ttl, err := client.TTL(ctx, key); err != nil || ttl <= 0 || ttl > 10*time.Second {
+							t.Fatalf("ancestor TTL %s: %v %v", key, ttl, err)
+						}
+					}
+				}
+			}
+			got, held, err := store.Get(ctx, 1)
+			if err != nil || !held || !reflect.DeepEqual(got, want) {
+				t.Fatalf("boundary roundtrip: %+v want %+v held=%v err=%v", got, want, held, err)
+			}
+		})
+	}
+}
+
+func TestRefHMapLayoutRejectsAliasesBeforeIO(t *testing.T) {
+	t.Run("duplicate_tag", func(t *testing.T) {
+		assertRefHMapAliasRejected(t, struct {
+			A int `redisdao:"same"`
+			B int `redisdao:"same"`
+		}{})
+	})
+	t.Run("path_separator", func(t *testing.T) {
+		assertRefHMapAliasRejected(t, struct {
+			Child struct{ Value int } `json:"a:b"`
+		}{})
+	})
+	t.Run("registry", func(t *testing.T) {
+		assertRefHMapAliasRejected(t, struct {
+			Data string `redisdao:"__keys"`
+		}{})
+	})
+	t.Run("root", func(t *testing.T) {
+		assertRefHMapAliasRejected(t, struct {
+			Root struct{ Value int } `json:"root"`
+		}{})
+	})
+}
+
+type refHMapNoIO struct{ fredis.IRedis }
+
+func assertRefHMapAliasRejected[V any](t *testing.T, value V) {
+	t.Helper()
+	// nil内嵌IRedis让任何意外I/O直接失败；通过公开API检验写前拒绝。
+	store := NewRedisRefHMapStore[int64, V](&refHMapNoIO{}, RefHMapConfig[int64, V]{StoreConfig: StoreConfig[int64, V]{KeyOf: func(V) int64 { return 1 }}})
+	ctx := context.Background()
+	if err := store.Set(ctx, value); !errors.Is(err, ErrRefHMapUnsupported) {
+		t.Fatalf("Set: %v", err)
+	}
+	if _, _, err := store.Get(ctx, 1); !errors.Is(err, ErrRefHMapUnsupported) {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := store.Patch(ctx, 1, "A", 1); !errors.Is(err, ErrRefHMapUnsupported) {
+		t.Fatalf("Patch: %v", err)
+	}
+	if err := store.Delete(ctx, 1); !errors.Is(err, ErrRefHMapUnsupported) {
+		t.Fatalf("Delete: %v", err)
 	}
 }
