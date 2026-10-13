@@ -4,7 +4,47 @@
 
 ## [Unreleased]
 
-- 删除 gameplay 里仓内无引用的导出符号（维护者 2026-10-13 批准"无引用导出符号删除"，按推荐）：skill 的 `InspectAbilityControls` / `InspectCombatSemantics` / `InspectEventPlans` / `InspectOwnedEntities` / `InspectStatusOperations` / `InspectTemporalProfiles` 及其仅为它们存在的结果类型（`AbilityControlView`、`CombatSemanticView`、`DamageSemanticView`、`EventPlanView`、`OwnedEntityView`、`StatusOperationView`、`TemporalProfileView`），`Runtime.RuntimeEventDropped`（计数仍见 `RetentionStats().RuntimeEventsDropped`），`Selection.ElementType` / `Positions`，`StateHandle.IsShared`，`SpawnTemplateView`，从不产生的 `DiagnosticVisualNotDeployed` 与 `ExpectedFailureResourceUnavailable`，已弃用的 `SpawnScopePhase` / `SpawnScopeCast`；combatcomponent `CombatComponent.HasBuffTag`；actionflow `ErrReentrantMutation`（任何 runner 都早已不再返回它）；ai `NowTicks`。仍引用它们的外部代码需改写（`NowTicks` 直接读 `ctx.NowTick`）。docs/skill 里作为公开能力介绍的 `DefaultCatalog`、`Metrics.Bounded`、`Runtime.CaptureExternalState`、`Coordinator.ReconcilePending`、`CombatComponent.SetAttributeBounds` 与 skillcompose 包文档推荐的 `DeriveContractPromptView` 保留。
+### 升级要求速查
+
+未上线，以下变化都不做旧数据 / 旧进程兼容，细节在各分组的条目里：
+
+- **先用旧程序落库并清理旧数据，再起新版本**：Remote 快照 checksum 旧形态、WAL 中“Remote 写 + lease fence”历史记录（须先排空 WAL）、account 旧账号 ID / 无建角计划的 slot / 无 `CreationID` 的角色、activity 无计划的开窗条目、rank 逗号分隔的 `:applied` 账本、mail 无窗口的已结算 claim、Remote 控制库事务集合的旧 TTL 索引（清空集合或先删旧索引）。
+- **先停旧进程再起新进程**：Remote 快照副本拒绝无版本删除与无发布时刻的更新；SyncBusMod 缺省前缀改为 `roost.sync`（JetStream 全新部署或显式配置旧名）。
+- **手工改工程后 `roost project sync`**：roost.yaml 删 `versions.kit/skill/service/codegen`、`sync` / `room` → `syncbus`、`replication-*` → `nettransport-*`、从 `features` 删 `event` 并删掉遗留的 `framework/event/` 与 `*_event_gen.go`；源码 `//cube:` → `//roost:`；cfggen `objects:` → `globals:`；删除 v1 `_manifest.json`；shell 部署旧 release 需全新安装。
+- **改代码并重新生成**：Nest 三池 API / 配置 / 监控改名（无别名，迁移表见 docs/framework/NEST-AWAIT.md）；Sync 命名 `RoomID` → `StreamID`、Lockstep `Room` → `Match`；删除的导出 API 的调用方改用现行入口；player_agent 模板修复需重新生成。
+- **按文本匹配的工具同步**：`wiring mod` 错误文本、`actionflow:` 错误前缀、skill 求值上下文诊断说明、Client 准入错误文本。
+
+### 新增与改进
+
+- Nest 增加按 Entity Kind 选择的长业务池；长短业务与 I/O 共用 ID tails。新增 `Await(work, resume)` 和可选 `WithResumeTargets`，支持无回滚 memory handler 的锁外查询与匿名恢复。Cast 拒绝未声明目标；长短业务池禁止同步等待，I/O 禁止 Guard。新增 `nest.long` 配置和实体生成标记 `businessPool=long`，使用及迁移见 docs/framework/NEST-AWAIT.md。
+- Nest 执行池统一为 short/long/io：配置、Stats、指标标签、fctx 身份和生成 Sender 同步迁移；唯一配置 option 为 `NestOptionWithWorkerPools(short, long, io)`，强制准备使用 `SendOptionIO`，不保留旧别名。补齐 statslog 与健康队列汇总遗漏的 long 池，调度和 ID tail 语义不变；迁移表见 docs/framework/NEST-AWAIT.md。
+- Nest 消息热路径减少分组展开、上下文和锁/快照临时分配；相同前驱只登记一条依赖边，不改变 ID tail、三池及 Guard/事务契约。六项局部优化的同机矩阵与延期候选见 docs/performance/NEST-HOT-PATH-20261013.md。
+- Nest Msg 按职责整理字段和中文契约，保留所有提交/重排状态；多目标入口接管标准化切片，分组目标共用有容量边界的连续存储。单目标和业务参数顺序不变，多组分配收益及单组耗时代价见 docs/framework/NEST-AWAIT.md。
+- Nest保留ID tail调度，紧凑排列job字段并以队列单调原点偏移存储排队时刻；本机job由160降至120字节，实测每请求减少32 B/op，业务CPU档吞吐基本不变。
+- Nest 慢请求自动诊断移除全进程抓栈，保留200ms慢请求检测、消息详情、耗时与5秒限频；避免诊断STW放大Gate超时。全栈由运维显式采集，证据见 docs/performance/REVIEW-20261012.md。
+- 新增 Nest 单 ID 共享调度与固定 worker 分片的独立 benchmark，覆盖空 handler、1ms/200ms CPU/等待、慢任务混合及热点/碰撞；只增加测试和性能文档，不改生产调度策略。
+- Sync OnChange 新增固定合批窗口 `OnChangeBatchWindow` / `sync.entity.on_change_batch_window`，默认 0 保持原行为；支持配置显式关闭和最终 Configure 覆盖，周期与停机仍可提前 Flush。
+- Sync 新增 `Interest.QueueRelationDelta`，按变化成员提交关系增量，复用提交确认、回滚、同 ID 顺序和发布屏障；底层 `RelationSource.ApplyDelta` 原子维护正反索引。移除优先、退出事实改写与重建隔离已覆盖回归，接入方式见 docs/framework/guide/04-sync.md。
+- Sync 命名按职责收敛：帧元数据 `RoomID` / C# `RoomId` 改为 `StreamID` / `StreamId`；Lockstep `Room`、`RoomConfig`、`NewRoom` 和对应错误改为 `Match` 系列；AOICluster 内部统一使用 area。源码 API 不保留旧别名，消费者须更新并重新生成；帧二进制格式、指标与业务行为不变。新增玩家协议处理教程，见 docs/framework/PLAYER-ACCESS.md。
+- Sync Relation 为不超过 1024 个输入成员的重复 Set 复用有界候选表，关系变化时移交所有权，大集合保留锁外构表；补集合模型、并发生命周期和规模基准。重复 Set 分配降低，退出重加档约 5% 的实测耗时代价见 docs/framework/SYNC-OPTIMIZATION.md。
+- Sync AOI 在候选排序前排除自身和半径外实体，满额且剩余候选无法替换时提前结束扫描；保留等距选择与事件顺序。修复合法负数 ID 无法被满额淘汰的问题，补优化前算法对照与同机基准，详见 docs/framework/SYNC-OPTIMIZATION.md。
+- Sync 第二批优化：AOI 按空间/额外覆盖变化分类重算，并复用有上限的串行/worker 工作区；Flush 复用编码临时结构，发送字节仍独立。补齐批量移动、集中布局、覆盖切换基准和事件/载荷所有权回归。修正统计回归中两次采样跨时钟刻度的误报，详见 docs/framework/SYNC-OPTIMIZATION.md。
+- Sync 减少 Flush 修订表分配、AOI 全观察者事件扫描和 Lockstep 每帧名单排序；Relation 增加退出反向索引。契约、内存代价与同机基准见 docs/framework/SYNC-OPTIMIZATION.md。
+- Lockstep 历史裁剪清除旧引用后复用连续窗口，避免逐帧复制整段历史；修复超大 ReadRange 长度及 FrameID 上界裁剪溢出。补一小时逻辑帧、hash 裁剪和滚动追帧验证，结果及使用边界见 docs/framework/SYNC-OPTIMIZATION.md。
+- player access 工程在生成协议时自动补齐 Controller 业务骨架，参数为 player_agent.Context 与 PB 请求；已有业务不覆盖，支持事务生成和缺失检查。说明主动回包与返回响应的使用边界。
+
+### 移除旧兼容（行为变化与升级要求）
+
+- **移除旧格式兼容**（维护者 2026-10-13："兼容代码一起删"；项目未上线，不兼容旧数据 / 旧进程）。旧形态现在被明确拒绝而不是被读取或升级；**升级要求：先用旧程序完成落库并清理旧数据，再起新版本**。各项：
+  - Remote 快照 `checksum`：只读 8 字节 Binary 形态，旧版本写下的 BSON 数字形态（int32 / int64 / double）以及 null / undefined 报 `remote checksum has unexpected BSON type`（现行写入全部经 `MarshalBSONValue`，不会写出这些形态；缺字段解为 0，由信封校验按 checksum mismatch 拒绝）。
+  - 历史 WAL 中“Remote 写 + lease fence”混合记录：不再投影为 Remote Rejected 并卸载重载（RR-20260926-19 的历史路径）。投影器遇到它以 `engine.ErrRetiredRemoteLeaseFenceRecord` fatal，不写库、不推进 checkpoint，WAL 原样保留；准入处的 `ErrRemoteLeaseFenceUnsupported` 与原生 saga 步骤的 lease fence 不变。**升级前须用旧版本排空 WAL。**
+  - account：删除登录时回查未转义渠道的旧账号 ID（旧记录不再被沿用，登录得到转义后的 ID；同 ID 存量账号身份不符仍报 `ErrIdentityInvalid`）；缺建角计划的 slot（含有角色但无计划的“旧已发布”形态）统一归为 malformed，建角报 `ErrConflict`、`ResolvePendingCreation` 报 `ErrNotResolvable`；缺 `CreationID` 的角色不可选、不可校验会话、不可改资料（`ErrConflict`）。**升级前须清理旧账号 / slot / 角色数据。**
+  - activity：没有计划（Intent）的开窗条目不再在 grace 后回收、同 key Open 也不再为它补计划——归为畸形条目（同 key Open 报 `ErrConflict`，sweep 跳过并上报、名额保留，`MalformedWindowEntries` 列出，运维移除）；超过 `MaxPendingActivities` 的窗口不再按 `ScanAfter` 游标轮转扫描，sweep 在任何读之前报 `ErrConflict`；`Window.ScanAfter` 字段与 `sweep.opening_legacy_reclaimed` 计数删除。**升级前须排空旧版本的开窗条目。**
+  - rank：请求账本只读 `:applied_v2` 的 JSON 环；旧版本的逗号分隔 `:applied` 账本不再读取与升级，带着它的 owner 提交 / 查名次报错（"retired comma format"），不当成空账本。**升级前须清除旧 `:applied` 字段。** 同时删除弃用别名 `rank.ErrConflictSentinel`，调用方改用 `rank.ErrConflict`。
+  - mail：现行信封必须有过期时间，已结算 claim 都带窗口；不再按条数淘汰无窗口的旧已结算 claim——它被保留，超出上限时投递以 `ErrClaimHistoryFull` 拒绝，交运维处理。“未读不可淘汰”与 RequestID 去重不变。**升级前须清理旧邮箱中无窗口的已结算 claim。**
+  - Remote 快照副本：不带版本（`version <= 0`）的删除消息不再按"无版本删除"应用，与其他畸形消息一样被拒绝（`remote_entity: snapshot delete message has no version`，传输层记 handler 错误）；删除一律携带版本（7afc4c63）。**升级要求：先停旧进程再起新进程**，不让旧发布者与新副本混跑。
+  - Remote 控制库事务集合：只建当前的 `expires_at_ttl` TTL 索引，不再识别并替换旧名 / 旧键的 TTL 索引（d71aa7ac）。**升级要求：清空 Remote 控制库的事务集合，或先手工删除旧的 `created_at_ttl` 索引**——它若建在 `expires_at` 上，新索引同键不同名，启动建索引报冲突；若是更早按 `created_at` 过期的形态，不会报错，但会删掉未发布的提交。
+  - Remote 快照副本：不带发布时刻（`published_at`）的快照更新不再按"旧发布者"放行，与其他畸形消息一样被拒绝（`remote_entity: snapshot update message has no publish time`）——没有发布时刻就无法判断它是否是比共享 L2 担保窗口更老的重放。现行发布者的更新与删除都带发布时刻。**升级要求：先停旧进程再起新进程。**
 - 移除旧兼容（生成器）（维护者 2026-10-13 批准清单"按推荐处理"；项目未上线，不兼容旧工程）。旧形态现在被明确拒绝或不再处理，而不是被读取或自动迁移：
   - roost.yaml 不再把改名前的 mod 名（`sync`、`room`）与 feature 名（`replication-quic` / `replication-kcp` / `replication-udp`）改写成新名，它们和其他未知名一样被 Validate 点名拒绝。`roost help replication`、生成器文档、release / framework-compat 工作流与 source-head-check 脚本同步改用新名。
   - 三仓合一迁移工具整套删除：`roost project upgrade --consolidate`、依赖解析前的自动 consolidation、`codegen/internal/roost/migration/consolidation_imports.yaml`，以及 `project new -roost-skill-version / -roost-service-version`、`project upgrade -skill / -service / --consolidate`（现在按未知 flag 报错）。合仓前的工程（仍 require roost-skill / roost-service / roost-kit / roost-codegen 或 import 旧包路径）不再能自动升级，按当前模板重新生成或人工迁移；upgrade-compat 工作流改为从已发布的 roost-core v1.25.0 生成器起步。
@@ -22,73 +62,45 @@
   - SyncBusMod 未配置 `syncbus.prefix` 时的缺省由 room 时代的 `roost.room` 改为 `roost.sync`（与驱动缺省、生成配置一致）；删除 `roost.room → ROOST_SYNC` 的流名特例映射，JetStream 流名一律显式 `syncbus.stream` 优先、否则由 prefix 推出（`roost.sync` → `ROOST_SYNC`，`roost.room` → `ROOST_ROOM`）。配置声明 default 与 kitconfig 快照同步；生成的配置一直写 `prefix: roost.sync`，不受影响。**升级要求**：没写 `syncbus.prefix` 的部署主题从 `roost.room.*` 变为 `roost.sync.*`，新旧进程不能混跑——先停旧再起新；JetStream 部署需全新部署（清掉旧 `ROOST_SYNC` 流后再起），或显式配置旧名 `syncbus.prefix: roost.room` 加 `syncbus.stream: ROOST_SYNC` 沿用旧主题与 durable 游标。显式写了 `prefix: roost.room` 而没写 `stream` 的部署，新推出的 `ROOST_ROOM` 与旧 `ROOST_SYNC` 的 subjects 重叠，启动明确失败，需补 `syncbus.stream: ROOST_SYNC` 或全新部署。
   - 停机：删除 JetStream 总线不限时的 `Stop()`；`framework/sync/syncbus/driver` 新增 `Bus`（`ISyncBus` + `StopWithContext`），普通 NATS 总线补 `StopWithContext`（无可等待资源，返回 nil），两种驱动编译期断言实现它；SyncBusMod 的总线字段收紧为 `driver.Bus`，停机契约由编译期保证，不再运行期类型断言、也没有旧 `Stop()` 回退。直接调用 `Stop()` 的代码改用 `StopWithContext(ctx)`。无配置或数据变化。
   - NatsMod 停止直接调用 `*bus.Bus` 的 `StopWithContext`：删除对它的运行期接口断言和不可达的不限时 `Stop()` 回退，停机契约由具体类型在编译期保证，行为不变。
-- 新增根包门禁 `TestTrackedGoFilesAreGofmtClean`：git 跟踪（及未忽略的新增）全部 `.go` 文件须 gofmt 无差异，失败时列出文件；全仓已先统一 gofmt 一次（dce4be5b）。
-- **移除旧格式兼容**（维护者 2026-10-13："兼容代码一起删"；项目未上线，不兼容旧数据 / 旧进程）。旧形态现在被明确拒绝而不是被读取或升级；**升级要求：先用旧程序完成落库并清理旧数据，再起新版本**。各项：
-  - Remote 快照 `checksum`：只读 8 字节 Binary 形态，旧版本写下的 BSON 数字形态（int32 / int64 / double）以及 null / undefined 报 `remote checksum has unexpected BSON type`（现行写入全部经 `MarshalBSONValue`，不会写出这些形态；缺字段解为 0，由信封校验按 checksum mismatch 拒绝）。
-  - 历史 WAL 中“Remote 写 + lease fence”混合记录：不再投影为 Remote Rejected 并卸载重载（RR-20260926-19 的历史路径）。投影器遇到它以 `engine.ErrRetiredRemoteLeaseFenceRecord` fatal，不写库、不推进 checkpoint，WAL 原样保留；准入处的 `ErrRemoteLeaseFenceUnsupported` 与原生 saga 步骤的 lease fence 不变。**升级前须用旧版本排空 WAL。**
-  - account：删除登录时回查未转义渠道的旧账号 ID（旧记录不再被沿用，登录得到转义后的 ID；同 ID 存量账号身份不符仍报 `ErrIdentityInvalid`）；缺建角计划的 slot（含有角色但无计划的“旧已发布”形态）统一归为 malformed，建角报 `ErrConflict`、`ResolvePendingCreation` 报 `ErrNotResolvable`；缺 `CreationID` 的角色不可选、不可校验会话、不可改资料（`ErrConflict`）。**升级前须清理旧账号 / slot / 角色数据。**
-  - activity：没有计划（Intent）的开窗条目不再在 grace 后回收、同 key Open 也不再为它补计划——归为畸形条目（同 key Open 报 `ErrConflict`，sweep 跳过并上报、名额保留，`MalformedWindowEntries` 列出，运维移除）；超过 `MaxPendingActivities` 的窗口不再按 `ScanAfter` 游标轮转扫描，sweep 在任何读之前报 `ErrConflict`；`Window.ScanAfter` 字段与 `sweep.opening_legacy_reclaimed` 计数删除。**升级前须排空旧版本的开窗条目。**
-  - rank：请求账本只读 `:applied_v2` 的 JSON 环；旧版本的逗号分隔 `:applied` 账本不再读取与升级，带着它的 owner 提交 / 查名次报错（"retired comma format"），不当成空账本。**升级前须清除旧 `:applied` 字段。** 同时删除弃用别名 `rank.ErrConflictSentinel`，调用方改用 `rank.ErrConflict`。
-  - mail：现行信封必须有过期时间，已结算 claim 都带窗口；不再按条数淘汰无窗口的旧已结算 claim——它被保留，超出上限时投递以 `ErrClaimHistoryFull` 拒绝，交运维处理。“未读不可淘汰”与 RequestID 去重不变。**升级前须清理旧邮箱中无窗口的已结算 claim。**
-  - Remote 快照副本：不带版本（`version <= 0`）的删除消息不再按"无版本删除"应用，与其他畸形消息一样被拒绝（`remote_entity: snapshot delete message has no version`，传输层记 handler 错误）；删除一律携带版本（7afc4c63）。**升级要求：先停旧进程再起新进程**，不让旧发布者与新副本混跑。
-  - Remote 控制库事务集合：只建当前的 `expires_at_ttl` TTL 索引，不再识别并替换旧名 / 旧键的 TTL 索引（d71aa7ac）。**升级要求：清空 Remote 控制库的事务集合，或先手工删除旧的 `created_at_ttl` 索引**——它若建在 `expires_at` 上，新索引同键不同名，启动建索引报冲突；若是更早按 `created_at` 过期的形态，不会报错，但会删掉未发布的提交。
-  - Remote 快照副本：不带发布时刻（`published_at`）的快照更新不再按"旧发布者"放行，与其他畸形消息一样被拒绝（`remote_entity: snapshot update message has no publish time`）——没有发布时刻就无法判断它是否是比共享 L2 担保窗口更老的重放。现行发布者的更新与删除都带发布时刻。**升级要求：先停旧进程再起新进程。**
+
+### 删除的功能与导出 API
+
+- 删除从未生效的实体事件链（维护者 2026-10-13 批准"按推荐处理"）：`EntityBase` 的事件总线字段与 `EventBus()` / `SubEvent` / `PubEvent`、整个 `framework/event` 包（只为它存在）、eventgen 生成器（`codegen/cmd/eventgen`、`codegen/internal/eventgen`、`roost generate` 的 event 步骤、`roost add event`、`make new-event`、`roost help eventgen`）以及 roost.yaml 的 `event` feature（不再是默认 feature；写了按未知 feature 拒绝）。该功能从未生效：总线从未被设置（`SubEvent` 恒为空操作），全仓没有 `PubEvent` 调用。**升级要求**：从 roost.yaml 的 `features` 删掉 `event`；删掉业务工程里遗留的 `framework/event/`（含 `def/` 与 `event_def_gen.go` / `event_type_gen.go` / `event_type_impl_gen.go`）、各接收者的 `*_event_gen.go` 与 `DealEventXxx` / `SubEvent` 调用。
+- 删除仓内无引用的导出 API（维护者 2026-10-13 批准"按推荐处理"；build、vet、`-tags integration` vet 均通过，外部调用方需改用现行入口），涉及包：`framework/nest`、`framework/nestwal`（`JetStreamEffectPublisher` 删除，`EffectEnvelope` 保留并移到 `effect_envelope.go`）、`framework/entity`（`ResetEntityRegistryForTest` 按维护者 09-27 决定保留为导出，未删除）、`framework/saga`（`SubscribeStep`）、`framework/cache`、`framework/configdata`、`framework/dataengine`（`Tracker.CommitSync` / `RollbackSync`）、`framework/sync/entitysync/policy`、`framework/sync/nettransport`、`infra/base/fctx`、`infra/base/goroutine`、`infra/base/safemap`、`infra/network/bus`、`infra/network/etcd`、`infra/network/servicerpc`、`infra/observe/admin`、`infra/observe/log`（`NewELog` 不再接受 option，`WithLevel` / `*f` 格式化方法删除）、`infra/storage/redis`；逐项清单见 5f719bef、d30f41fd、27313740、cd67e9d3。
+- 删除 gameplay 里仓内无引用的导出符号（维护者 2026-10-13 批准"无引用导出符号删除"，按推荐）：skill 的 `InspectAbilityControls` / `InspectCombatSemantics` / `InspectEventPlans` / `InspectOwnedEntities` / `InspectStatusOperations` / `InspectTemporalProfiles` 及其仅为它们存在的结果类型（`AbilityControlView`、`CombatSemanticView`、`DamageSemanticView`、`EventPlanView`、`OwnedEntityView`、`StatusOperationView`、`TemporalProfileView`），`Runtime.RuntimeEventDropped`（计数仍见 `RetentionStats().RuntimeEventsDropped`），`Selection.ElementType` / `Positions`，`StateHandle.IsShared`，`SpawnTemplateView`，从不产生的 `DiagnosticVisualNotDeployed` 与 `ExpectedFailureResourceUnavailable`，已弃用的 `SpawnScopePhase` / `SpawnScopeCast`；combatcomponent `CombatComponent.HasBuffTag`；actionflow `ErrReentrantMutation`（任何 runner 都早已不再返回它）；ai `NowTicks`。仍引用它们的外部代码需改写（`NowTicks` 直接读 `ctx.NowTick`）。docs/skill 里作为公开能力介绍的 `DefaultCatalog`、`Metrics.Bounded`、`Runtime.CaptureExternalState`、`Coordinator.ReconcilePending`、`CombatComponent.SetAttributeBounds` 与 skillcompose 包文档推荐的 `DeriveContractPromptView` 保留。
+
+### 修复
+
 - Nest：`completionPump.stop` 一次超时返回后，重试的 stop 仍等待完成队列排空与 worker 池停止（以前第二次调用直接返回，排空未完成就继续停机），与三步停机契约一致（f8af5afc）。
+- 修复日志帧号恒为 0：删除从未推进的 Nest 包级帧计数 `nest.CurTick`；不在 Nest 请求上下文里的日志行改为取运行中 Nest Ticker 的帧号（App 经新能力 `app.ModLogFrame` 提供 `*app.LogFrame`，Nest Mod 在 Provide 时接上 `NestMgr.CurrentTick`）。请求内日志仍由 fctx 带帧号；进程里没有 Nest 时为 0。
 - Nest：Client 准入错误只归一化一次，队列满等错误文本不再重复同一段（e161459b）。
 - Entity：组件依赖拓扑排序在入度为 0 的候选里按组件类型排序，同一组注册得到确定的初始化顺序（以前随 map 遍历变化）（d610a1b6）。
-- 删除仓内无引用的导出 API（维护者 2026-10-13 批准"按推荐处理"；build、vet、`-tags integration` vet 均通过，外部调用方需改用现行入口），涉及包：`framework/nest`、`framework/nestwal`（`JetStreamEffectPublisher` 删除，`EffectEnvelope` 保留并移到 `effect_envelope.go`）、`framework/entity`（`ResetEntityRegistryForTest` 按维护者 09-27 决定保留为导出，未删除）、`framework/saga`（`SubscribeStep`）、`framework/cache`、`framework/configdata`、`framework/dataengine`（`Tracker.CommitSync` / `RollbackSync`）、`framework/sync/entitysync/policy`、`framework/sync/nettransport`、`infra/base/fctx`、`infra/base/goroutine`、`infra/base/safemap`、`infra/network/bus`、`infra/network/etcd`、`infra/network/servicerpc`、`infra/observe/admin`、`infra/observe/log`（`NewELog` 不再接受 option，`WithLevel` / `*f` 格式化方法删除）、`infra/storage/redis`；逐项清单见 5f719bef、d30f41fd、27313740、cd67e9d3。
-- 生成器模板、game-demo 模板与 wiring 配置 help 去掉过程代号、旧设计文档引用与 roost-kit / kit 旧路径，重新生成 `*_gen.go`、golden 与 kitconfig 快照；生成代码只差注释与 help / 消息文本。
-- 删除从未生效的实体事件链（维护者 2026-10-13 批准"按推荐处理"）：`EntityBase` 的事件总线字段与 `EventBus()` / `SubEvent` / `PubEvent`、整个 `framework/event` 包（只为它存在）、eventgen 生成器（`codegen/cmd/eventgen`、`codegen/internal/eventgen`、`roost generate` 的 event 步骤、`roost add event`、`make new-event`、`roost help eventgen`）以及 roost.yaml 的 `event` feature（不再是默认 feature；写了按未知 feature 拒绝）。该功能从未生效：总线从未被设置（`SubEvent` 恒为空操作），全仓没有 `PubEvent` 调用。**升级要求**：从 roost.yaml 的 `features` 删掉 `event`；删掉业务工程里遗留的 `framework/event/`（含 `def/` 与 `event_def_gen.go` / `event_type_gen.go` / `event_type_impl_gen.go`）、各接收者的 `*_event_gen.go` 与 `DealEventXxx` / `SubEvent` 调用。
-- 修复日志帧号恒为 0：删除从未推进的 Nest 包级帧计数 `nest.CurTick`；不在 Nest 请求上下文里的日志行改为取运行中 Nest Ticker 的帧号（App 经新能力 `app.ModLogFrame` 提供 `*app.LogFrame`，Nest Mod 在 Provide 时接上 `NestMgr.CurrentTick`）。请求内日志仍由 fctx 带帧号；进程里没有 Nest 时为 0。
-- 生成器错误文本 `unknown kit mod %q` / `kit mod dependency cycle at %q` 改为 `unknown wiring mod %q` / `wiring mod dependency cycle at %q`（Mod 现在在 `wiring/` 下）；按旧文本匹配错误的脚本需同步。
-- skill 求值上下文表的说明（编译诊断原样带出）去掉过程编号（RR-20261005-NC-220/224/280/281/282、O28、O33～O36），改为描述原因与替代写法；诊断码与诊断位置不变。按旧文本匹配诊断的工具需同步。
-- actionflow 的错误前缀由旧包名 `taskflow:` 改为 `actionflow:`（17 个导出错误值与全部格式化错误）；`errors.Is` 判断不受影响，按文本匹配的日志查询需同步。
-
-- Nest 执行池统一为 short/long/io：配置、Stats、指标标签、fctx 身份和生成 Sender 同步迁移；唯一配置 option 为 `NestOptionWithWorkerPools(short, long, io)`，强制准备使用 `SendOptionIO`，不保留旧别名。补齐 statslog 与健康队列汇总遗漏的 long 池，调度和 ID tail 语义不变；迁移表见 docs/framework/NEST-AWAIT.md。
-
-- Nest 消息热路径减少分组展开、上下文和锁/快照临时分配；相同前驱只登记一条依赖边，不改变 ID tail、三池及 Guard/事务契约。六项局部优化的同机矩阵与延期候选见 docs/performance/NEST-HOT-PATH-20261013.md。
+- 修复 player_agent 将 typed nil 响应误当非空的问题：Controller 手动回包后返回 nil 不再触发额外的自动编码/响应；已有业务工程需同步生成模板后重新生成。
 - Nest 的 Sync 合批窗口存在性改由 `app.LoadConfigWithPresence` 在声明解码时返回，保留缺省与显式 0 的区别，消除 Mod 直接读取 Viper；不改变配置格式或放宽声明检查。
-
-- 修复on_change合批测试绕过Guard提交门导致的偶发无脏数据错误：测试通过正式加锁、冻结、确认与释放流程提交，保留帧数/版本/内容断言；生产同步逻辑不变。
-
-- 整理近期同步热路径可读性：Relation复用正反关系更新中的重复操作，合批定时器和历史容量使用明确名称，补充视图、工作区及慢日志生命周期注释；不改锁边界、同步策略和协议。
-
-- Nest 慢请求自动诊断移除全进程抓栈，保留200ms慢请求检测、消息详情、耗时与5秒限频；避免诊断STW放大Gate超时。全栈由运维显式采集，证据见 docs/performance/REVIEW-20261012.md。
-
 - 修复 codegen 配置快照遗漏 `sync.entity.on_change_batch_window`：重新生成 `kitconfig_gen.go`，使配置一致性检查通过，doctor 不再把框架合批参数误计为业务字段。
 - 修复调度 benchmark 的裸整数 ID 被三池路由识别为其他 Kind 的问题：使用正式短业务 EntityID，分片对照按 UniqueID 保持原负载分布，补完整 ID 周期的路由与分布回归；不改变生产准入策略。
-- Nest Msg 按职责整理字段和中文契约，保留所有提交/重排状态；多目标入口接管标准化切片，分组目标共用有容量边界的连续存储。单目标和业务参数顺序不变，多组分配收益及单组耗时代价见 docs/framework/NEST-AWAIT.md。
+- 修复on_change合批测试绕过Guard提交门导致的偶发无脏数据错误：测试通过正式加锁、冻结、确认与释放流程提交，保留帧数/版本/内容断言；生产同步逻辑不变。
+- 生成器错误文本 `unknown kit mod %q` / `kit mod dependency cycle at %q` 改为 `unknown wiring mod %q` / `wiring mod dependency cycle at %q`（Mod 现在在 `wiring/` 下）；按旧文本匹配错误的脚本需同步。
+- actionflow 的错误前缀由旧包名 `taskflow:` 改为 `actionflow:`（17 个导出错误值与全部格式化错误）；`errors.Is` 判断不受影响，按文本匹配的日志查询需同步。
+- skill 求值上下文表的说明（编译诊断原样带出）去掉过程编号（RR-20261005-NC-220/224/280/281/282、O28、O33～O36），改为描述原因与替代写法；诊断码与诊断位置不变。按旧文本匹配诊断的工具需同步。
 
-- Sync OnChange 新增固定合批窗口 `OnChangeBatchWindow` / `sync.entity.on_change_batch_window`，默认 0 保持原行为；支持配置显式关闭和最终 Configure 覆盖，周期与停机仍可提前 Flush。
-- Lockstep 历史裁剪清除旧引用后复用连续窗口，避免逐帧复制整段历史；修复超大 ReadRange 长度及 FrameID 上界裁剪溢出。补一小时逻辑帧、hash 裁剪和滚动追帧验证，结果及使用边界见 docs/framework/SYNC-OPTIMIZATION.md。
+### 可读性整理
 
-- Sync 新增 `Interest.QueueRelationDelta`，按变化成员提交关系增量，复用提交确认、回滚、同 ID 顺序和发布屏障；底层 `RelationSource.ApplyDelta` 原子维护正反索引。移除优先、退出事实改写与重建隔离已覆盖回归，接入方式见 docs/framework/guide/04-sync.md。
+- 生成器模板、game-demo 模板与 wiring 配置 help 去掉过程代号、旧设计文档引用与 roost-kit / kit 旧路径，重新生成 `*_gen.go`、golden 与 kitconfig 快照；生成代码只差注释与 help / 消息文本。
+- 整理近期同步热路径可读性：Relation复用正反关系更新中的重复操作，合批定时器和历史容量使用明确名称，补充视图、工作区及慢日志生命周期注释；不改锁边界、同步策略和协议。
+- 将 dispatchQueue 的 short / io 通道（当时称快慢通道）并列数组聚合为一个 dispatchLane 数组，明确字段归属；共享锁、跨通道 ID 顺序、容量和生命周期保持原契约。
 
-- Sync Relation 为不超过 1024 个输入成员的重复 Set 复用有界候选表，关系变化时移交所有权，大集合保留锁外构表；补集合模型、并发生命周期和规模基准。重复 Set 分配降低，退出重加档约 5% 的实测耗时代价见 docs/framework/SYNC-OPTIMIZATION.md。
-
-- Sync AOI 在候选排序前排除自身和半径外实体，满额且剩余候选无法替换时提前结束扫描；保留等距选择与事件顺序。修复合法负数 ID 无法被满额淘汰的问题，补优化前算法对照与同机基准，详见 docs/framework/SYNC-OPTIMIZATION.md。
-
-- Sync 第二批优化：AOI 按空间/额外覆盖变化分类重算，并复用有上限的串行/worker 工作区；Flush 复用编码临时结构，发送字节仍独立。补齐批量移动、集中布局、覆盖切换基准和事件/载荷所有权回归。修正统计回归中两次采样跨时钟刻度的误报，详见 docs/framework/SYNC-OPTIMIZATION.md。
-
-- player access 工程在生成协议时自动补齐 Controller 业务骨架，参数为 player_agent.Context 与 PB 请求；已有业务不覆盖，支持事务生成和缺失检查。说明主动回包与返回响应的使用边界。
-- 修复 player_agent 将 typed nil 响应误当非空的问题：Controller 手动回包后返回 nil 不再触发额外的自动编码/响应；已有业务工程需同步生成模板后重新生成。
-- Sync 减少 Flush 修订表分配、AOI 全观察者事件扫描和 Lockstep 每帧名单排序；Relation 增加退出反向索引。契约、内存代价与同机基准见 docs/framework/SYNC-OPTIMIZATION.md。
-
-- Sync 命名按职责收敛：帧元数据 `RoomID` / C# `RoomId` 改为 `StreamID` / `StreamId`；Lockstep `Room`、`RoomConfig`、`NewRoom` 和对应错误改为 `Match` 系列；AOICluster 内部统一使用 area。源码 API 不保留旧别名，消费者须更新并重新生成；帧二进制格式、指标与业务行为不变。新增玩家协议处理教程，见 docs/framework/PLAYER-ACCESS.md。
-
-- Nest 增加按 Entity Kind 选择的长业务池；长短业务与 I/O 共用 ID tails。新增 `Await(work, resume)` 和可选 `WithResumeTargets`，支持无回滚 memory handler 的锁外查询与匿名恢复。Cast 拒绝未声明目标；长短业务池禁止同步等待，I/O 禁止 Guard。新增 `nest.long` 配置和实体生成标记 `businessPool=long`，使用及迁移见 docs/framework/NEST-AWAIT.md。
+### 测试整理与门禁
 
 - 全仓测试按有用价值整理（2026-10-13）：Git 跟踪的测试文件 1427 → 711、约 23.5 万 → 22.6 万行；零散 promises / RR / Bugfix 命名文件按功能主题合并，测试名与头注释改写为当前承诺（过程只留一行“历史”）。删除或并入约 60 个“同入口、同断言”的重复用例，每条都先把独有断言并入保留用例；并发、恢复、协议、状态机回归与结构守卫全部保留。各包语句覆盖率不变（个别计时分支的跑间波动除外），全仓 test / race / 门禁通过。整理规则见 docs/maintenance/README.md §7。
 - 全仓按功能主题合并202份零散测试为80份，净减少122份；4687个测试/基准/示例/fuzz入口及全部测试声明语法保持一致，更新对应实现文档引用。
-
 - Nest显式构造job目标存储，移除可变输出缓冲区接口；整理生成器签名/handler回归和Saga行为测试，删除历史符号扫描及内部组织门禁，改善生成handler局部命名与中文说明。
+- 新增根包门禁 `TestTrackedGoFilesAreGofmtClean`：git 跟踪（及未忽略的新增）全部 `.go` 文件须 gofmt 无差异，失败时列出文件；全仓已先统一 gofmt 一次（dce4be5b）。
+
+### 文档
 
 - 整理根目录契约到docs/framework，性能报告与随仓样本归docs/performance，功能验收归docs/release；移除过时生产清单与历史评估的现行入口，保留固定提交追溯，合并重复gitignore规则。
-
-- Nest保留ID tail调度，紧凑排列job字段并以队列单调原点偏移存储排队时刻；本机job由160降至120字节，实测每请求减少32 B/op，业务CPU档吞吐基本不变。
-
-- 新增 Nest 单 ID 共享调度与固定 worker 分片的独立 benchmark，覆盖空 handler、1ms/200ms CPU/等待、慢任务混合及热点/碰撞；只增加测试和性能文档，不改生产调度策略。
-- 将 dispatchQueue 的快慢通道并列数组聚合为一个 dispatchLane 数组，明确字段归属；共享锁、跨通道 ID 顺序、容量和生命周期保持原契约。
+- 文档按当前代码收敛（2026-10-13）：codegen 的 README / 命令与标记参考 / 项目生成器 / impl/12 按职责去重，去掉已删除的 event feature、旧 mod / feature 名与 kit 说法；回复错误判别表从已删除的 USER_GUIDE 按现行错误值重写进 docs/framework/guide/02-nest-entity.md §6；旧池名（快池 / 慢池）改为 short / long / io；docs/skill 章节标题去掉过程编号；demo/README.md 收为上手入口，功能说明拆到 demo/WALKTHROUGH.md；维护手册 §7 收敛为现行测试规则并新增 §8 可读性整理要求；合仓前的 codegen / kit / service CHANGELOG 移到 docs/release/history/（只读）；文档首页、模块目录与文档清单重写。只改文档与注释，不改代码行为。
 
 ## [v1.25.0] - 2026-10-09
 
