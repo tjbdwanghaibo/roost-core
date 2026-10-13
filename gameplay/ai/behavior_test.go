@@ -238,32 +238,6 @@ func TestParseTreeAssemblesAndRuns(t *testing.T) {
 	}
 }
 
-func TestParseTreeFailFast(t *testing.T) {
-	registry := wireRegistry(t)
-	cases := map[string]string{
-		"unknown schema": `{"schema":"roost.ai/v9","root":{"node":"sequence","children":[{"node":"condition","name":"hp_below","args":{}}]}}`,
-		"unknown node":   `{"schema":"roost.ai/v1","root":{"node":"paralel","children":[]}}`,
-		"unknown field":  `{"schema":"roost.ai/v1","root":{"node":"sequence","childs":[]}}`,
-		"empty children": `{"schema":"roost.ai/v1","root":{"node":"sequence","children":[]}}`,
-		"missing child":  `{"schema":"roost.ai/v1","root":{"node":"inverter"}}`,
-		"unknown leaf":   `{"schema":"roost.ai/v1","root":{"node":"condition","name":"nope","args":{}}}`,
-		"bad ticks":      `{"schema":"roost.ai/v1","root":{"node":"cooldown","ticks":0,"child":{"node":"condition","name":"hp_below","args":{}}}}`,
-		"unknown policy": `{"schema":"roost.ai/v1","root":{"node":"parallel","policy":"most","children":[{"node":"condition","name":"hp_below","args":{}}]}}`,
-	}
-	for name, document := range cases {
-		if _, err := ParseTree([]byte(document), registry); err == nil {
-			t.Fatalf("%s accepted", name)
-		} else if !errors.Is(err, ErrTreeInvalid) && !errors.Is(err, ErrTreeSchema) {
-			t.Fatalf("%s: unexpected error class: %v", name, err)
-		}
-	}
-	// Diagnostics carry the JSON path.
-	_, err := ParseTree([]byte(`{"schema":"roost.ai/v1","root":{"node":"sequence","children":[{"node":"condition","name":"nope","args":{}}]}}`), registry)
-	if err == nil || !strings.Contains(err.Error(), "$.root.children[0]") {
-		t.Fatalf("diagnostic lacks path: %v", err)
-	}
-}
-
 func TestBehaviorStrategyDeterministicDecisions(t *testing.T) {
 	run := func() []string {
 		root, err := ParseTree([]byte(wireTreeJSON), wireRegistry(t))
@@ -287,9 +261,8 @@ func TestBehaviorStrategyDeterministicDecisions(t *testing.T) {
 	}
 }
 
-// Regression (review): a guard predicate accepted arbitrary nodes — an
-// action leaf as predicate would fire side effects on every check with no
-// reset. Predicates are now restricted to stateless shapes at assembly.
+// guard 谓词只接受无状态形状（条件与纯逻辑组合）：动作叶子当谓词会在每次检查时产生副作用
+// 且无人复位，组装时即拒绝。
 func TestParseTreeRejectsStatefulGuardPredicates(t *testing.T) {
 	registry := wireRegistry(t)
 	bad := `{"schema":"roost.ai/v1","root":{"node":"guard",
@@ -308,8 +281,7 @@ func TestParseTreeRejectsStatefulGuardPredicates(t *testing.T) {
 	}
 }
 
-// Regression (review): a nil-root strategy accumulated action completions
-// forever; Tick now drops them.
+// 无根树的策略不累积动作完成通知：Tick 把它们丢弃。
 func TestBehaviorStrategyNilRootDropsPendingCompletions(t *testing.T) {
 	strategy := NewBehaviorStrategy[treeData](nil, BehaviorStrategyOptions[treeData]{})
 	for i := 0; i < 100; i++ {
@@ -318,5 +290,125 @@ func TestBehaviorStrategyNilRootDropsPendingCompletions(t *testing.T) {
 	}
 	if len(strategy.pending) != 0 {
 		t.Fatalf("pending grew to %d", len(strategy.pending))
+	}
+}
+
+func expectTreeErr(t *testing.T, err error, sentinel error, text string) {
+	t.Helper()
+	if err == nil || !errors.Is(err, sentinel) || !strings.Contains(err.Error(), text) {
+		t.Fatalf("error = %v, want %v containing %q", err, sentinel, text)
+	}
+}
+
+// Registrations are addressed by name from documents; a nameless or
+// duplicated factory would make a document bind to the wrong behaviour.
+func TestTreeRegistryRefusesNamelessAndDuplicateFactories(t *testing.T) {
+	registry := NewRegistry[treeCtx](nowOf)
+	factory := func(json.RawMessage) (Node[treeCtx], error) {
+		return &Condition[treeCtx]{Check: func(*treeCtx) bool { return true }}, nil
+	}
+	expectTreeErr(t, registry.RegisterCondition("", factory), ErrTreeInvalid, "condition registration requires a name and factory")
+	expectTreeErr(t, registry.RegisterCondition("ok", nil), ErrTreeInvalid, "condition registration requires a name and factory")
+	if err := registry.RegisterCondition("ok", factory); err != nil {
+		t.Fatal(err)
+	}
+	expectTreeErr(t, registry.RegisterCondition("ok", factory), ErrTreeInvalid, `duplicate condition "ok"`)
+	expectTreeErr(t, registry.RegisterAction("", factory), ErrTreeInvalid, "action registration requires a kind and factory")
+	if err := registry.RegisterAction("go", factory); err != nil {
+		t.Fatal(err)
+	}
+	expectTreeErr(t, registry.RegisterAction("go", factory), ErrTreeInvalid, `duplicate action "go"`)
+}
+
+// 树文档的每条拒绝规则按错误类别、消息与 JSON 路径各钉一行：去掉任何一条规则
+// 恰好让一行变红，不会被相邻规则顺带接住。
+func TestParseTreeRefusesEachDefectByMessageAndPath(t *testing.T) {
+	registry := wireRegistry(t)
+	leaf := `{"node":"condition","name":"hp_below","args":{}}`
+	deep := leaf
+	for i := 0; i <= maxTreeDepth; i++ {
+		deep = `{"node":"inverter","child":` + deep + `}`
+	}
+	cases := []struct{ name, document, text string }{
+		{"schema", `{"schema":"roost.ai/v9","root":` + leaf + `}`, `"roost.ai/v9"`},
+		{"root required", `{"schema":"roost.ai/v1"}`, "$.root is required"},
+		{"missing node kind", `{"schema":"roost.ai/v1","root":{"name":"x"}}`, `$.root: missing "node"`},
+		{"unknown node kind", `{"schema":"roost.ai/v1","root":{"node":"paralel"}}`, `$.root: unknown node "paralel"`},
+		{"unknown action", `{"schema":"roost.ai/v1","root":{"node":"action","kind":"fly","args":{}}}`, `$.root: unknown action "fly"`},
+		{"unknown condition", `{"schema":"roost.ai/v1","root":{"node":"sequence","children":[{"node":"condition","name":"nope","args":{}}]}}`, `$.root.children[0]: unknown condition "nope"`},
+		{"guard without condition", `{"schema":"roost.ai/v1","root":{"node":"guard","child":` + leaf + `}}`, "$.root.condition is required"},
+		{"repeat without child", `{"schema":"roost.ai/v1","root":{"node":"repeat","count":2}}`, "child is required"},
+		{"cooldown ticks not positive", `{"schema":"roost.ai/v1","root":{"node":"cooldown","ticks":0,"child":` + leaf + `}}`, "$.root.ticks must be positive"},
+		{"unknown parallel policy", `{"schema":"roost.ai/v1","root":{"node":"parallel","policy":"most","children":[` + leaf + `]}}`, `$.root.policy: unknown policy "most"`},
+		{"unknown field", `{"schema":"roost.ai/v1","root":{"node":"sequence","childs":[]}}`, `$.root: json: unknown field "childs"`},
+		{"empty children", `{"schema":"roost.ai/v1","root":{"node":"sequence","children":[]}}`, "$.root.children must not be empty"},
+		{"inverter without child", `{"schema":"roost.ai/v1","root":{"node":"inverter"}}`, "$.root.child is required"},
+		{"unknown condition at root", `{"schema":"roost.ai/v1","root":{"node":"condition","name":"nope","args":{}}}`, `$.root: unknown condition "nope"`},
+		{"too deep", `{"schema":"roost.ai/v1","root":` + deep + `}`, "exceeds depth 64"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseTree([]byte(tc.document), registry)
+			sentinel := ErrTreeInvalid
+			if tc.name == "schema" {
+				sentinel = ErrTreeSchema
+			}
+			expectTreeErr(t, err, sentinel, tc.text)
+		})
+	}
+}
+
+type refusingStrategy struct{ controllerTestStrategy }
+
+func (*refusingStrategy) CanStopByNext(Strategy) bool { return false }
+
+// SetStrategy 拒绝 nil 控制器、切换中重入、当前策略拒绝被替换三种情形，被拒的切换不扰动
+// 当前策略；ParseTree 无注册表、时间节点无时钟、谓词过深、inverter 谓词缺 child 各报 ErrTreeInvalid。
+// 历史：U-0148
+func TestSetStrategyRefusesNilReentrantAndRejectedSwitches(t *testing.T) {
+	var none *Controller
+	if err := none.SetStrategy(&controllerTestStrategy{name: "x"}); !errors.Is(err, ErrStrategyInit) {
+		t.Fatalf("SetStrategy on a nil controller = %v", err)
+	}
+	controller := NewController(ControllerHooks{})
+	controller.switching = true
+	if err := controller.SetStrategy(&controllerTestStrategy{name: "x"}); !errors.Is(err, ErrReentrantSwitch) {
+		t.Fatalf("SetStrategy while switching = %v", err)
+	}
+	controller.switching = false
+	holder := &refusingStrategy{controllerTestStrategy{name: "holder"}}
+	if err := controller.SetStrategy(holder); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.SetStrategy(&controllerTestStrategy{name: "next"}); !errors.Is(err, ErrStrategyRejected) {
+		t.Fatalf("SetStrategy over a strategy that refuses to stop = %v", err)
+	}
+	if controller.Strategy() != holder || holder.stopCount != 0 {
+		t.Fatal("a rejected switch disturbed the current strategy")
+	}
+}
+
+func TestParseTreeRefusesMissingRegistryClockAndMalformedPredicates(t *testing.T) {
+	leaf := `{"node":"condition","name":"hp_below","args":{}}`
+	if _, err := ParseTree[treeCtx]([]byte(`{"schema":"roost.ai/v1","root":`+leaf+`}`), nil); !errors.Is(err, ErrTreeInvalid) || !strings.Contains(err.Error(), "registry is required") {
+		t.Fatalf("ParseTree(nil registry) = %v", err)
+	}
+	clockless := NewRegistry[treeCtx](nil)
+	if _, err := ParseTree([]byte(`{"schema":"roost.ai/v1","root":{"node":"cooldown","ticks":3,"child":`+leaf+`}}`), clockless); !errors.Is(err, ErrTreeInvalid) || !strings.Contains(err.Error(), "no tick clock") {
+		t.Fatalf("cooldown without a registry clock = %v", err)
+	}
+	registry := wireRegistry(t)
+	deep := leaf
+	for i := 0; i <= maxTreeDepth; i++ {
+		deep = `{"node":"inverter","child":` + deep + `}`
+	}
+	if _, err := ParseTree([]byte(`{"schema":"roost.ai/v1","root":{"node":"guard","condition":`+deep+`,"child":`+leaf+`}}`), registry); !errors.Is(err, ErrTreeInvalid) || !strings.Contains(err.Error(), "exceeds depth") || !strings.Contains(err.Error(), "condition") {
+		t.Fatalf("guard predicate nested too deep = %v", err)
+	}
+	if _, err := ParseTree([]byte(`{"schema":"roost.ai/v1","root":{"node":"guard","condition":{"node":"inverter"},"child":`+leaf+`}}`), registry); !errors.Is(err, ErrTreeInvalid) || !strings.Contains(err.Error(), "condition.child is required") {
+		t.Fatalf("inverter predicate without a child = %v", err)
+	}
+	if _, err := ParseTree([]byte(`{"schema":"roost.ai/v1","root":{"node":"guard","condition":{"node":"inverter","child":`+leaf+`},"child":`+leaf+`}}`), registry); err != nil {
+		t.Fatalf("valid inverter predicate refused: %v", err)
 	}
 }

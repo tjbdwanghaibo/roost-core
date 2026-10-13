@@ -31,7 +31,7 @@
 
 ### ai
 
-7 个实现文件、8 个测试文件。
+7 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -184,14 +184,8 @@
 
 ### ai
 
-- [behavior_test.go](../../../gameplay/ai/behavior_test.go)：`TestNodesGuardCooldownRepeatParallel`、`TestBehaviorStrategyDrivesTreeThroughController`、`TestTaskflowActionInterruptHook`、`TestParseTreeAssemblesAndRuns`、`TestParseTreeFailFast`；其余 3 项见文件
-- [controller_test.go](../../../gameplay/ai/controller_test.go)：`TestControllerFailedInitKeepsPreviousStrategy`、`TestBehaviorTreeReadyDoesNotAdvanceSequence`、`TestBlackboardConcurrentAccessKeepsEveryWorkersWrite`
-- [deferred_launch_promises_test.go](../../../gameplay/ai/deferred_launch_promises_test.go)：`TestTaskflowActionLaunchedInsideARunnerCallbackStillCompletes`
-- [frozen_completion_promises_test.go](../../../gameplay/ai/frozen_completion_promises_test.go)：`TestAFrozenControllerStillDeliversTheCompletionATreeIsWaitingFor`、`TestAFrozenControllerStillDeliversMissionEndsButNotTicks`
-- [guards_promises_test.go](../../../gameplay/ai/guards_promises_test.go)：`TestSetStrategyRefusesNilReentrantAndRejectedSwitches`、`TestParseTreeRefusesMissingRegistryClockAndMalformedPredicates`
-- [parallel_decision_promises_test.go](../../../gameplay/ai/parallel_decision_promises_test.go)：`TestParallelStopsTickingChildrenOnceTheOutcomeIsDecided`、`TestParallelStillInterruptsRunningChildrenWhenItCompletes`
-- [switch_in_callback_promises_test.go](../../../gameplay/ai/switch_in_callback_promises_test.go)：`TestSwitchRequestedInsideATickRunsAfterTheTickReturns`、`TestDeferredSwitchFailureIsReportedAndKeepsTheCurrentStrategy`
-- [tree_parser_promises_test.go](../../../gameplay/ai/tree_parser_promises_test.go)：`TestTreeRegistryRefusesNamelessAndDuplicateFactories`、`TestParseTreeRefusesEachDefectByMessageAndPath`
+- [behavior_test.go](../../../gameplay/ai/behavior_test.go)：`TestNodesGuardCooldownRepeatParallel`、`TestBehaviorStrategyDrivesTreeThroughController`、`TestTaskflowActionInterruptHook`、`TestParseTreeAssemblesAndRuns`、`TestBehaviorStrategyDeterministicDecisions`；其余 6 项见文件
+- [controller_test.go](../../../gameplay/ai/controller_test.go)：`TestControllerFailedInitKeepsPreviousStrategy`、`TestBehaviorTreeReadyDoesNotAdvanceSequence`、`TestBlackboardConcurrentAccessKeepsEveryWorkersWrite`、`TestTaskflowActionLaunchedInsideARunnerCallbackStillCompletes`、`TestAFrozenControllerStillDeliversTheCompletionATreeIsWaitingFor`；其余 5 项见文件
 
 ### container
 
