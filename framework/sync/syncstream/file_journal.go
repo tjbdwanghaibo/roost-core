@@ -46,12 +46,12 @@ type FileHistoryJournal struct {
 	// in the current WAL as found by Load. Recovery ignores an unterminated
 	// tail (it was never committed), but the bytes are still on disk and
 	// O_APPEND would glue the next record onto them, producing a line the
-	// next recovery cannot decode (RR-20260915-07). The first append after
+	// next recovery cannot decode. The first append after
 	// recovery truncates to this offset under the journal's exclusive
-	// ownership, then syncs, then appends (U-0211).
+	// ownership, then syncs, then appends.
 	truncateTo int64
 	// failure is set when a write or checkpoint publish ended with an
-	// indeterminate outcome. See ErrHistoryJournalFailed (U-0212).
+	// indeterminate outcome. See ErrHistoryJournalFailed.
 	failure error
 	// syncFile / publish are the durability primitives, held as fields so a
 	// test can make them report failure AFTER the real operation succeeded —
@@ -131,8 +131,8 @@ func (journal *FileHistoryJournal) Load() (HistorySnapshot, error) {
 			}
 			if valid == 0 {
 				// 一条完整记录也没有：第一条只写了半截（崩溃 / 断电），它的 Record 从未返回成功，
-				// 那个 epoch 也从未被任何包带出去。按空日志打开，用本次的 initialEpoch；旧实现留着
-				// Epoch 0，Import 报 epoch is required，History 永久打不开（RR-20261006-50 a）。
+				// 那个 epoch 也从未被任何包带出去。按空日志打开，用本次的 initialEpoch；若留着
+				// Epoch 0，Import 会报 epoch is required，History 永久打不开。
 				snapshot.Epoch = journal.initialEpoch
 			}
 			journal.noteTornTail(journal.walPath(1), valid, info.Size())
@@ -154,8 +154,8 @@ func (journal *FileHistoryJournal) Load() (HistorySnapshot, error) {
 	return snapshot, nil
 }
 
-// noteTornTail 记下回放跳过的未换行半尾（从未确认的写入）：首次续写前在独占所有权下截到 valid（U-0211），
-// 打开时计数并告警，与 nestwal 打开时截断未确认尾部的规则一致（RR-20261006-50 a）。完整行解不开仍是损坏，
+// noteTornTail 记下回放跳过的未换行半尾（从未确认的写入）：首次续写前在独占所有权下截到 valid，
+// 打开时计数并告警，与 nestwal 打开时截断未确认尾部的规则一致。完整行解不开仍是损坏，
 // replayWAL 直接拒绝，不走这里。调用方持有 journal.mutex。
 func (journal *FileHistoryJournal) noteTornTail(path string, valid, size int64) {
 	if valid >= size {
@@ -316,7 +316,7 @@ func (journal *FileHistoryJournal) flushBatch(batch []byte) error {
 		}
 		if journal.truncateTo >= 0 && !created {
 			// Drop the unterminated tail recovery skipped before anything is
-			// appended behind it (U-0211). Done by path, before the append
+			// appended behind it. Done by path, before the append
 			// handle exists: Windows refuses SetEndOfFile on a handle opened
 			// for FILE_APPEND_DATA only ("Access is denied"), which is what
 			// O_APPEND|O_WRONLY maps to there — the CI windows-compatibility
@@ -350,7 +350,7 @@ func (journal *FileHistoryJournal) flushBatch(batch []byte) error {
 	// From the first byte written the outcome is indeterminate on error:
 	// part of the batch may be durable, all of it, or none. The in-memory
 	// History rolled its mutation back, so retrying would write the same
-	// sequence twice and the next Load would refuse the WAL (RR-20260916-01).
+	// sequence twice and the next Load would refuse the WAL.
 	// Stop the journal instead; a reopen replays what is actually there.
 	if _, err := journal.walFile.Write(batch); err != nil {
 		journal.failure = err
@@ -431,8 +431,7 @@ func (journal *FileHistoryJournal) Checkpoint(snapshot HistorySnapshot) error {
 	// retry. Publication is the one step whose failure is ambiguous: on
 	// Linux the rename may have landed with only the directory sync failing,
 	// so the new generation could already be the one the next Load picks
-	// while this process still appends to the old WAL. Stop here too
-	// (RR-20260916-01, U-0212).
+	// while this process still appends to the old WAL. Stop here too.
 	if err := journal.publish(temporaryName, journal.checkpointPath(next), journal.directory); err != nil {
 		journal.failure = err
 		removeTemporary = false // the temporary may already be the checkpoint
@@ -523,7 +522,7 @@ func replayHistoryMutation(snapshot *HistorySnapshot, mutation HistoryMutation) 
 		}
 		value := &snapshot.Streams[index]
 		// A stream's first record fixes where it starts (a re-created
-		// identity continues above the epoch's sequence floor, U-0215);
+		// identity continues above the epoch's sequence floor);
 		// every later record must be exactly the next sequence.
 		if value.Latest != 0 || len(value.Packets) > 0 {
 			if mutation.Packet.Sequence != value.Latest+1 {

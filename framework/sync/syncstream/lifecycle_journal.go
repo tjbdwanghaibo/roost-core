@@ -34,8 +34,7 @@ type HistoryMutation struct {
 	// At is the stream activity time (UnixNano) of an Append or an advancing
 	// Acknowledge. Replay restores LastActivity from it so SweepIdle after a
 	// restart does not treat a stream active since the checkpoint as idle; a
-	// record without it replays as "unknown", which Import takes as now
-	// (RR-20261006-50 b).
+	// record without it replays as "unknown", which Import takes as now.
 	At int64 `json:",omitempty"`
 }
 

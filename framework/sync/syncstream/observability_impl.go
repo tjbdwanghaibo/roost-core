@@ -4,6 +4,7 @@ type PublisherHealthOptions struct {
 	MaxFailures     uint64
 	MaxBackpressure uint64
 }
+
 type PublisherHealthStatus struct {
 	Healthy   bool
 	Reason    string

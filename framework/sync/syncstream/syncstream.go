@@ -30,14 +30,15 @@ var (
 	// ended with an indeterminate outcome — bytes may be on disk, a
 	// checkpoint may be published — so its in-memory view of the log is no
 	// longer trustworthy. It refuses further Record/Checkpoint; reopen the
-	// journal to recover from what is actually durable (U-0212).
+	// journal to recover from what is actually durable.
 	ErrHistoryJournalFailed = errors.New("syncstream: history journal failed with an indeterminate outcome; reopen to recover")
 	// ErrRecoverStale means the snapshot a provider captured for Recover was
 	// overtaken (a newer packet, or an epoch rotation) before it could be
-	// committed. Nothing was appended; the caller may retry (U-0214).
+	// committed. Nothing was appended; the caller may retry.
 	ErrRecoverStale = errors.New("syncstream: recovered snapshot is stale; retry")
 )
 
+// HistorySnapshotVersion 是 HistorySnapshot 的格式版本；Import 只接受当前版本。
 const HistorySnapshotVersion uint32 = 1
 
 // Observer identifies an isolated consumer view. Scope can carry a shard,
@@ -86,6 +87,7 @@ type BatchSink interface {
 	EnqueueBatch([]Packet)
 }
 
+// HistoryOptions 配置 History 的保留窗口、载荷与流数量上限、初始纪元和空闲回收。
 type HistoryOptions struct {
 	MaxPacketsPerStream int
 	SchemaVersion       uint32
@@ -98,6 +100,7 @@ type HistoryOptions struct {
 	PruneAcknowledged bool
 }
 
+// streamState 是一个（观察者, 流）的序列位置、确认水位与保留的包。
 type streamState struct {
 	latest   uint64
 	acked    uint64
@@ -121,7 +124,7 @@ type History struct {
 	// DeleteObserver / SweepIdle) starts above it, so an identity that is
 	// cleaned up and reused never hands out a sequence it used before — an
 	// old consumer's ACK or Resync for epoch/sequence cannot be mistaken for
-	// having consumed the new content (U-0215, RR-20260915-06). Reset by
+	// having consumed the new content. Reset by
 	// RotateEpoch, which is the explicit global invalidation.
 	sequenceFloor uint64
 	// revision is the in-process mutation generation: every operation that
@@ -132,7 +135,7 @@ type History struct {
 	// by position: two histories can be at the same epoch, existence and
 	// latest with different contents (Append then DeleteStream; Import of a
 	// same-position snapshot), which is exactly what the position check
-	// accepted (U-0216, RR-20260916-04). Global rather than per-stream: it
+	// accepted. Global rather than per-stream: it
 	// conservatively rejects a capture when an unrelated stream moved, which
 	// costs a retry, never a wrong commit. It is never persisted and never
 	// taken from a snapshot.
@@ -144,6 +147,7 @@ type streamKey struct {
 	Stream   Stream
 }
 
+// NewHistory 创建不带 journal 的内存 History；Epoch 为 0 时随机生成。
 func NewHistory(options HistoryOptions) *History {
 	if options.MaxPacketsPerStream <= 0 {
 		options.MaxPacketsPerStream = 256
@@ -181,8 +185,8 @@ func (history *History) Append(packet Packet) (Packet, error) {
 }
 
 // streamObservation is what Recover records before calling the provider and
-// checks again before committing (U-0214): the mutation revision, which
-// changes on every committed mutation, not the stream's position (U-0216).
+// checks again before committing: the mutation revision, which
+// changes on every committed mutation, not the stream's position.
 type streamObservation struct {
 	revision uint64
 }
@@ -238,7 +242,7 @@ func (history *History) appendLocked(packet Packet) (Packet, error) {
 	if packet.Full || created {
 		// A stream's first packet starts a chain: it has no predecessor in
 		// this stream, so its base is 0 even when its sequence starts above
-		// the epoch's floor (U-0215). Pointing it at the floor would name a
+		// the epoch's floor. Pointing it at the floor would name a
 		// packet this stream never had.
 		packet.BaseSequence = 0
 	} else {
@@ -364,9 +368,9 @@ func (history *History) Recover(request ResyncRequest, provider SnapshotProvider
 	// The provider runs outside History's lock (see SnapshotProvider), so
 	// the stream can move while it captures. Record the history's mutation
 	// revision before calling it, and commit only if nothing was committed
-	// in between — a newer Full or an epoch rotation (U-0214, RR-20260915-09),
+	// in between — a newer Full or an epoch rotation,
 	// and equally an Append-then-Delete or a same-position Import that leave
-	// the stream's position unchanged (U-0216, RR-20260916-04), would
+	// the stream's position unchanged, would
 	// otherwise get the OLD capture stamped with a newer sequence, and a
 	// receiver applying it by sequence would roll back.
 	observed := history.observe()
@@ -377,9 +381,9 @@ func (history *History) Recover(request ResyncRequest, provider SnapshotProvider
 	packet.Observer = request.Observer
 	packet.Stream = request.Stream
 	packet.Full = true
-	// provider 标了版本就以它为准：载荷按它的 schema 编码，标签必须与载荷一致。旧实现用请求方的版本覆盖，
-	// 不看该字段的 provider（skillsync）发出的 Full 标签与载荷不符，随后生产方的 delta 被拒直到下一个 Full
-	// （RR-20261006-50 c）。provider 没标时才用请求方的版本补上。
+	// provider 标了版本就以它为准：载荷按它的 schema 编码，标签必须与载荷一致。若用请求方的版本覆盖，
+	// 不看该字段的 provider（如 skillsync）发出的 Full 标签会与载荷不符，随后生产方的 delta 被拒直到下一个
+	// Full。provider 没标时才用请求方的版本补上。
 	if packet.SchemaVersion == 0 {
 		packet.SchemaVersion = request.SchemaVersion
 	}
@@ -511,7 +515,7 @@ type HistorySnapshot struct {
 	Epoch   uint64
 	Streams []HistoryStreamSnapshot
 	// SequenceFloor persists History.sequenceFloor so a cleaned-up identity
-	// does not reuse sequences across a restart either (U-0215). Zero in
+	// does not reuse sequences across a restart either. Zero in
 	// snapshots written before the field existed; Import then derives it
 	// from the streams present.
 	SequenceFloor uint64 `json:",omitempty"`
@@ -583,10 +587,10 @@ func exportStreams(epoch, sequenceFloor uint64, streams map[streamKey]*streamSta
 // Import atomically replaces history after validating the complete snapshot.
 //
 // On a History bound to a journal the replacement is published through the
-// journal (a checkpoint of the validated snapshot) BEFORE memory switches
-// (U-0213, RR-20260915-08): replacing only memory left the WAL describing the
-// old state, so the next restart either resurrected the old snapshot or
-// refused a WAL that mixed epochs. A failed publish leaves memory unchanged.
+// journal (a checkpoint of the validated snapshot) BEFORE memory switches:
+// replacing only memory would leave the WAL describing the old state, so the
+// next restart would either resurrect the old snapshot or refuse a WAL that
+// mixed epochs. A failed publish leaves memory unchanged.
 // NewHistoryWithJournal imports before the journal is attached, so loading
 // does not write.
 func (history *History) Import(snapshot HistorySnapshot) error {
@@ -629,7 +633,7 @@ func (history *History) Import(snapshot HistorySnapshot) error {
 			}
 			if packetIndex == 0 {
 				// The first retained packet is either a chain start (base 0,
-				// at whatever sequence the stream began — U-0215) or the
+				// at whatever sequence the stream began) or the
 				// continuation of packets that were pruned or dropped.
 				if !packet.Full && packet.BaseSequence != 0 && packet.BaseSequence+1 != packet.Sequence {
 					return fmt.Errorf("%w: invalid first packet base", ErrInvalidSnapshot)
@@ -679,7 +683,7 @@ func (history *History) Import(snapshot HistorySnapshot) error {
 	history.streams = streams
 	history.epoch = snapshot.Epoch
 	history.sequenceFloor = floor
-	history.revision++ // a snapshot replaces content; it never carries the revision (U-0216)
+	history.revision++ // a snapshot replaces content; it never carries the revision
 	return nil
 }
 

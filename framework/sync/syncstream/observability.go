@@ -12,6 +12,7 @@ type HealthOptions struct {
 	MaxDropped uint64
 	MaxStreams int
 }
+
 type HealthStatus struct {
 	Healthy bool
 	Reason  string

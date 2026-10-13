@@ -37,6 +37,7 @@ var (
 	ErrFragmentInvalid        = errors.New("syncstream adapter: fragmented envelope is invalid")
 )
 
+// ErrorHandler 接收 Enqueue 路径上的发布错误（Enqueue 本身不返回错误）。
 type ErrorHandler func(error)
 
 // ConfirmedSyncPublisher returns only after the broker durably accepts a frame.
@@ -45,6 +46,8 @@ type ConfirmedSyncPublisher interface {
 	PublishConfirmed(*coresyncbus.SyncMsg) error
 }
 
+// Publisher 把 Packet 编码为 SyncMsg 发布：JSON 编码、超过阈值时 gzip、按 MaxFrameBytes 分片，
+// 每片带整包 SHA-256 校验和与独立投递身份。RequireConfirmation 时只经确认式发布。
 type Publisher struct {
 	bus                  coresyncbus.IPublisher
 	ids                  *coresyncbus.DeliveryIDs
@@ -61,6 +64,7 @@ type Publisher struct {
 	failures             atomic.Uint64
 }
 
+// PublisherOptions 配置 Publisher；零值表示不限制、不压缩、不分片、不要求确认。
 type PublisherOptions struct {
 	FromSID              int32
 	OnError              ErrorHandler
@@ -84,10 +88,12 @@ var gzipEncoderPool = sync.Pool{New: func() any {
 	return &gzipEncoder{writer: writer}
 }}
 
+// NewPublisher 以默认选项创建 Publisher。
 func NewPublisher(bus coresyncbus.IPublisher, fromSid int32, onError ErrorHandler) (*Publisher, error) {
 	return NewPublisherWithOptions(bus, PublisherOptions{FromSID: fromSid, OnError: onError})
 }
 
+// NewPublisherWithOptions 创建 Publisher；要求确认而总线不支持时返回 ErrConfirmationRequired。
 func NewPublisherWithOptions(bus coresyncbus.IPublisher, options PublisherOptions) (*Publisher, error) {
 	if bus == nil {
 		return nil, ErrPublisherRequired
@@ -104,6 +110,7 @@ func NewPublisherWithOptions(bus coresyncbus.IPublisher, options PublisherOption
 	return &Publisher{bus: bus, ids: coresyncbus.NewDeliveryIDs("stream"), confirmed: confirmed, fromSid: options.FromSID, onError: options.OnError, expectedObserver: observer, maxPayloadBytes: options.MaxPayloadBytes, compressionThreshold: options.CompressionThreshold, maxFrameBytes: options.MaxFrameBytes, requireConfirmation: options.RequireConfirmation}, nil
 }
 
+// Publish 校验并发布一个包；任一分片发布失败即返回，已发出的分片由接收端按重组超时丢弃。
 func (publisher *Publisher) Publish(packet Packet) error {
 	if publisher == nil || publisher.bus == nil {
 		return ErrPublisherRequired
@@ -198,14 +205,17 @@ func (publisher *Publisher) Enqueue(packet Packet) {
 		publisher.onError(err)
 	}
 }
+
 func (publisher *Publisher) EnqueueBatch(packets []Packet) {
 	for _, packet := range packets {
 		publisher.Enqueue(packet)
 	}
 }
 
+// Handler 处理重组并解码后的包。
 type Handler func(Packet) error
 
+// SubscribeOptions 约束接收端：期望的观察者、各级字节上限、分片数、重组超时与是否要求校验和。
 type SubscribeOptions struct {
 	ExpectedObserver *Observer
 	MaxEnvelopeBytes int
@@ -218,10 +228,12 @@ type SubscribeOptions struct {
 }
 
 // Subscribe 订阅 topic 上的包流。返回的 Subscription.Unsubscribe(ctx) 返回 nil 之后 handler 不再被调用
-// （排空在传输层，A3 ②），分片重组表随之可回收。
+// （排空在传输层），分片重组表随之可回收。
 func Subscribe(bus coresyncbus.ISubscriber, topic string, handler Handler) (*coresyncbus.Subscription, error) {
 	return SubscribeWithOptions(bus, topic, SubscribeOptions{}, handler)
 }
+
+// SubscribeForObserver 与 Subscribe 相同，但拒绝观察者不符的包。
 func SubscribeForObserver(bus coresyncbus.ISubscriber, topic string, observer Observer, handler Handler) (*coresyncbus.Subscription, error) {
 	return SubscribeWithOptions(bus, topic, SubscribeOptions{ExpectedObserver: &observer}, handler)
 }
@@ -235,18 +247,21 @@ type assemblyKey struct {
 	encoding string
 	checksum string
 }
+
 type assembly struct {
 	created  time.Time
 	chunks   [][]byte
 	received uint32
 	bytes    int
 }
+
 type reassembler struct {
 	mutex   sync.Mutex
 	options SubscribeOptions
 	values  map[assemblyKey]*assembly
 }
 
+// SubscribeWithOptions 订阅 topic，重组分片、解压并校验后把包交给 handler。
 func SubscribeWithOptions(bus coresyncbus.ISubscriber, topic string, options SubscribeOptions, handler Handler) (*coresyncbus.Subscription, error) {
 	if bus == nil {
 		return nil, ErrSubscriberRequired
@@ -402,12 +417,14 @@ func (publisher *Publisher) Metrics() PublisherMetrics {
 }
 
 type PacketPublisher interface{ Publish(Packet) error }
+
 type BufferedPublisherOptions struct {
 	Capacity    int
 	MaxAttempts int
 	RetryDelay  time.Duration
 	OnError     ErrorHandler
 }
+
 type BufferedPublisherMetrics struct {
 	Queued       uint64
 	Published    uint64
