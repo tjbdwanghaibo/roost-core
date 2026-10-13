@@ -61,7 +61,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### dataengine
 
-10 个实现文件、10 个测试文件。
+10 个实现文件、5 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -78,7 +78,7 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### dataengine/engine
 
-18 个实现文件、41 个测试文件。
+18 个实现文件、17 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -228,54 +228,31 @@ readAggregate的读取回调可能因数据库事务重试再次执行，累积�
 
 ### dataengine
 
-- [guards_promises_test.go](../../../framework/dataengine/guards_promises_test.go)：`TestLeaseFenceLoaderAndTrackerGuards`
 - [lease_fence_test.go](../../../framework/dataengine/lease_fence_test.go)：`TestLeaseFenceReceiptRejectsIdentityAndPayloadTampering`
 - [load_test.go](../../../framework/dataengine/load_test.go)：`TestLoaderRespectsDependenciesAndSkipsLoadedOrDeletedDocuments`、`TestLoaderRejectsUnknownCircularAndStrictCallbackFailures`、`TestLoaderNonStrictSkipIsCountedAndStrictStillFails`
-- [model_test.go](../../../framework/dataengine/model_test.go)：`TestValidateMutationRequiresExactNextVersion`、`TestValidatePatchRejectsFullFallback`、`TestCommitRecordEmptyIncludesReceipts`、`TestValidateMutationRejectsUnsafePatchPath`、`TestCloneEffectPreservesAndDetachesHeaders`
-- [projection_test.go](../../../framework/dataengine/projection_test.go)：`TestWaitProjectionHonorsTicketAndContext`
-- [scope_test.go](../../../framework/dataengine/scope_test.go)：`TestResolveDatabaseScopeDefaultsAndUsesTypedScope`、`TestMapPatchPathBuildsOnlySafeNestedPaths`
-- [sync_view_test.go](../../../framework/dataengine/sync_view_test.go)：`TestNamedSyncViewsSelectFieldsAndRejectUnknownViews`
+- [model_test.go](../../../framework/dataengine/model_test.go)：`TestCommitRecordEmptyIncludesReceipts`、`TestCloneEffectPreservesAndDetachesHeaders`、`TestResolveDatabaseScopeDefaultsAndUsesTypedScope`、`TestMapPatchPathBuildsOnlySafeNestedPaths`、`TestWaitProjectionHonorsTicketAndContext`；其余 1 项见文件
 - [tracker_test.go](../../../framework/dataengine/tracker_test.go)：`TestTrackerAcceptVersionIsConsecutiveAndCompareAndSwap`、`TestTrackerAdvanceVersionAllowsRemoteEntityJumpsAndIsIdempotent`、`TestTrackerPersistenceAcceptDoesNotConsumeSyncDirty`、`TestTrackerRollbackSyncRestoresMask`、`TestTrackerSnapshotRestoreCoversVersionAndSyncState`；其余 2 项见文件
-- [validate_promises_test.go](../../../framework/dataengine/validate_promises_test.go)：`TestValidateMutationRefusesEachMalformedShape`、`TestValidateMutationCrossChecksRemoteCommitAgainstHeader`、`TestValidateCommitRecordRefusesEachMalformedPart`、`TestLeaseFenceValidateRefusesEachIncompleteFence`
+- [validate_test.go](../../../framework/dataengine/validate_test.go)：`TestValidateMutationRefusesEachMalformedShape`、`TestValidateMutationCrossChecksRemoteCommitAgainstHeader`、`TestValidateCommitRecordRefusesEachMalformedPart`、`TestLeaseFenceValidateRefusesEachIncompleteFence`、`TestLeaseFenceLoaderAndTrackerGuards`
 
 ### dataengine/engine
 
 - [admission_reserve_benchmark_test.go](../../../framework/dataengine/engine/admission_reserve_benchmark_test.go)
-- [assembly_promises_test.go](../../../framework/dataengine/engine/assembly_promises_test.go)：`TestAssembleRefusesEachMissingDependency`、`TestJetStreamOutboxPublisherRefusesIncompleteEffects`
-- [assembly_retry_shutdown_owner_test.go](../../../framework/dataengine/engine/assembly_retry_shutdown_owner_test.go)：`TestAssemblyRetriedShutdownHandsOverWALWithoutCheckpointRegression`
-- [assembly_shutdown_promises_test.go](../../../framework/dataengine/engine/assembly_shutdown_promises_test.go)：`TestAssemblyKeepsTheRuntimeUntilShutdownCompletes`
-- [backlog_metrics_promises_test.go](../../../framework/dataengine/engine/backlog_metrics_promises_test.go)：`TestProjectionAdmissionAndAckPublishBacklogGauge`、`TestOutboxSamplingPublishesBacklogAndAge`
+- [assembly_test.go](../../../framework/dataengine/engine/assembly_test.go)：`TestAssembleRefusesEachMissingDependency`、`TestJetStreamOutboxPublisherRefusesIncompleteEffects`、`TestAssemblyRetriedShutdownHandsOverWALWithoutCheckpointRegression`、`TestAssemblyKeepsTheRuntimeUntilShutdownCompletes`、`TestRuntimeRepeatedStartPreservesReadyAndOutbox`；其余 6 项见文件
 - [batch_limits_test.go](../../../framework/dataengine/engine/batch_limits_test.go)：`TestMultiBatchCapabilityAndSpecialBoundaries`、`TestMultiCheckpointThresholdsAndFailurePrefix`、`TestMultiCheckpointLossKeepsEntireSuccessfulPrefix`、`TestMultiCheckpointFlushesBeforeHeldAndOnCancel`、`TestMarkerlessSingleRecordStillCheckpointsImmediately`；其余 4 项见文件
-- [entity_contract_test.go](../../../framework/dataengine/engine/entity_contract_test.go)：`TestFastWorkerRemoteDeleteIsDefiniteRejection`、`TestDeleteAdmissionOtherPanicStaysIndeterminate`、`TestDeleteAdmissionRejectsUnconfiguredRuntime`、`TestDeleteAdmissionInsideTransactionRequiresPreparerAndDeclaredRemoteTarget`、`TestRemoteDeleteAdmissionRequiresRemoteWriteCapability`、`TestLocalDeleteAdmissionRequiresPreparer`、`TestARepositoryLoadPanicDoesNotWedgeTheAggregate`、`TestRepositoryWaitersOfAPanickingLoadAreReleased`、`TestRepositoryRestoresRemoteEnvelopeByKindPolicy`、`TestRepositoryRejectsManagedKindRecordWithoutEnvelope`、`TestEntityRepositoryRefusesEachUnloadableAggregate`、`TestEntityRepositoryRefusesEachCorruptAggregateShape`
-- [entity_delete_test.go](../../../framework/dataengine/engine/entity_delete_test.go)：`TestDataEngineDeleteDefersMemoryRemovalUntilTransactionAdmission`、`TestDataEngineDeleteRollbackLeavesEntityLive`、`TestDataEngineDeleteAdmissionPanicFencesAndStopsServingEntity`
-- [entity_repository_schema_test.go](../../../framework/dataengine/engine/entity_repository_schema_test.go)：`TestEntityRepositoryRejectsSchemaMismatchBeforePublishing`
-- [entity_repository_test.go](../../../framework/dataengine/engine/entity_repository_test.go)：`TestEntityRepositorySingleFlightsCompleteAggregate`、`TestEntityRepositoryRecoveryBarrierAndIncompleteAggregate`、`TestEntityRepositoryRejectsTombstone`、`TestEntityRepositoryTreatsUniformAbsenceAsNotFound`、`TestEntityRepositoryPreservesRemoteVersionVector`；其余 4 项见文件
+- [entity_delete_test.go](../../../framework/dataengine/engine/entity_delete_test.go)：`TestDataEngineDeleteDefersMemoryRemovalUntilTransactionAdmission`、`TestDataEngineDeleteRollbackLeavesEntityLive`、`TestDataEngineDeleteAdmissionPanicFencesAndStopsServingEntity`、`TestFastWorkerRemoteDeleteIsDefiniteRejection`、`TestDeleteAdmissionOtherPanicStaysIndeterminate`；其余 4 项见文件
+- [entity_repository_test.go](../../../framework/dataengine/engine/entity_repository_test.go)：`TestEntityRepositorySingleFlightsCompleteAggregate`、`TestEntityRepositoryRecoveryBarrierAndIncompleteAggregate`、`TestEntityRepositoryRejectsTombstone`、`TestEntityRepositoryTreatsUniformAbsenceAsNotFound`、`TestEntityRepositoryPreservesRemoteVersionVector`；其余 11 项见文件
 - [failure_integration_test.go](../../../framework/dataengine/engine/failure_integration_test.go)：`TestNATSOutageDoesNotBlockProjectionAndBacklogRecoversByEffectID`
 - [fenced_eviction_once_test.go](../../../framework/dataengine/engine/fenced_eviction_once_test.go)：`TestSkippedFencedStepIsQueuedForEvictionOnce`、`TestTerminalAckWakesWaitersOfAPendingEviction`
 - [fenced_step_resync_test.go](../../../framework/dataengine/engine/fenced_step_resync_test.go)：`TestSkippedFencedStepResyncsSubscribersFromMongo`、`TestSkippedFencedStepWithoutAuthorityRetractsSubscribers`
 - [lease_fence_integration_test.go](../../../framework/dataengine/engine/lease_fence_integration_test.go)：`TestRealMongoFencedProjectionSerializesWithLeaseTakeover`
 - [lease_fence_skip_promises_test.go](../../../framework/dataengine/engine/lease_fence_skip_promises_test.go)：`TestFencedLocalStepSkippedAfterLeaseExpiryDoesNotFenceNextTransaction`、`TestFencedLocalStepAppliedReleasesBarrierWithoutEviction`、`TestFencedStepRedeliveryWaitsOnlyUntilThePreviousRecordSettles`、`TestFencedStepBarrierIsReleasedOnEveryExit`、`TestFencedStepSkippedDuringStartupRecoveryNeedsNoEviction`；其余 1 项见文件
-- [lifecycle_test.go](../../../framework/dataengine/engine/lifecycle_test.go)：`TestRuntimeRepeatedStartPreservesReadyAndOutbox`、`TestAssemblyConcurrentStartsShareRuntime`、`TestAssemblyShutdownWaitsForStartingOwner`、`TestAssemblyCanceledRecoveryRetainsCleanupOwnership`、`TestAssemblyOwnsWALWhenProjectorDoesNot`；其余 1 项见文件
 - [mongo_benchmark_test.go](../../../framework/dataengine/engine/mongo_benchmark_test.go)
-- [mongo_load_test.go](../../../framework/dataengine/engine/mongo_load_test.go)：`TestMongoStoreLoadCopiesVersionSchemaAndRemoteEnvelope`、`TestMongoStoreLoadExcludesTombstonesAndHonoursCallerFilter`、`TestMongoStoreStreamLoadUsesCursorAndStopsOnConsumerError`、`TestMongoStoreReadConsistentUsesOneSession`、`TestMongoStoreReadConsistentRetriesCallback`
-- [mongo_store_test.go](../../../framework/dataengine/engine/mongo_store_test.go)：`TestMongoStoreUsesAbsoluteExpiryForReceipts`、`TestMongoStoreLeaseFenceSkipsStaleSagaTransaction`、`TestMongoStoreLeaseFenceRejectsExpiredLease`、`TestMongoStoreSkippedLeaseFenceNeverPublishesRemoteCommit`、`TestMongoStoreLeaseFenceAppliesOnlyMatchingOwnerAndToken`；其余 21 项见文件
-- [outbox_lifecycle_test.go](../../../framework/dataengine/engine/outbox_lifecycle_test.go)：`TestOutboxCloseBeforeStartIsTerminal`、`TestOutboxConcurrentStartClose`
-- [outbox_retry_test.go](../../../framework/dataengine/engine/outbox_retry_test.go)：`TestOutboxRetryDelayStartsAfterFailedPublish`
-- [outbox_store_test.go](../../../framework/dataengine/engine/outbox_store_test.go)：`TestMongoOutboxStoreClaimTakesLeaseByTokenCAS`、`TestMongoOutboxStoreSkipsEffectsNotYetAvailable`、`TestMongoOutboxStoreAckRequiresMatchingLease`、`TestMongoOutboxStoreNackReschedulesAndCountsAttempt`、`TestMongoOutboxStoreBacklogReportsPendingAndOldestAge`
-- [outbox_worker_failures_test.go](../../../framework/dataengine/engine/outbox_worker_failures_test.go)：`TestOutboxWorkerLogsStoreFailureStreakOnceAndItsRecovery`、`TestOutboxWorkerDoesNotReportShutdownAsAStoreFailure`、`TestDataEngineHealthMessageReportsStoreFailures`
-- [outbox_worker_test.go](../../../framework/dataengine/engine/outbox_worker_test.go)：`TestOutboxWorkerAcknowledgesSuccessfulPublishByEffectID`、`TestOutboxWorkerHardLimitFencesWithoutTreatingPublishFailureAsProjectionFailure`、`TestOutboxWorkerRateLimitsBacklogProbe`、`TestOutboxInfrastructureIndexesCoverClaimAndBacklogQueries`
-- [pipelined_projection_promises_test.go](../../../framework/dataengine/engine/pipelined_projection_promises_test.go)：`TestPipelinedCommitIsProjectedOnceDurableWithoutWaitingForIdlePoll`、`TestCommitAndEnqueueRejectAnOversizedRecordAlikeAndLeaveNoAdmission`
-- [projection_lifetime_test.go](../../../framework/dataengine/engine/projection_lifetime_test.go)：`TestProjectorCloseWaitsForExternalProjection`、`TestEntityProjectionBarrierTracksAllDAOsAndReleasesOnFailure`、`TestProjectorOnFatalMayCloseProjector`、`TestEntityProjectionFatalWakesEveryPendingWaiter`、`TestEntityProjectionWaiterSeesFailedPipelinedDurability`；其余 3 项见文件
-- [projection_plan_test.go](../../../framework/dataengine/engine/projection_plan_test.go)：`TestPlanProjectionSegmentsPreservesMixedOrder`、`TestBatchProjectionEligibilityMatchesMongoContract`、`TestPlanProjectionSegmentsBoundsOrdinaryBatches`、`TestPlanProjectionSegmentsHonorsMaxRecords`、`TestPlanProjectionSegmentsPreservesEveryRecordAndFence`；其余 4 项见文件
+- [mongo_store_test.go](../../../framework/dataengine/engine/mongo_store_test.go)：`TestMongoStoreUsesAbsoluteExpiryForReceipts`、`TestMongoStoreLeaseFenceSkipsStaleSagaTransaction`、`TestMongoStoreLeaseFenceRejectsExpiredLease`、`TestMongoStoreSkippedLeaseFenceNeverPublishesRemoteCommit`、`TestMongoStoreLeaseFenceAppliesOnlyMatchingOwnerAndToken`；其余 27 项见文件
+- [outbox_test.go](../../../framework/dataengine/engine/outbox_test.go)：`TestOutboxCloseBeforeStartIsTerminal`、`TestOutboxConcurrentStartClose`、`TestOutboxRetryDelayStartsAfterFailedPublish`、`TestMongoOutboxStoreClaimTakesLeaseByTokenCAS`、`TestMongoOutboxStoreSkipsEffectsNotYetAvailable`；其余 12 项见文件
+- [projection_test.go](../../../framework/dataengine/engine/projection_test.go)：`TestPlanProjectionSegmentsPreservesMixedOrder`、`TestBatchProjectionEligibilityMatchesMongoContract`、`TestPlanProjectionSegmentsBoundsOrdinaryBatches`、`TestPlanProjectionSegmentsHonorsMaxRecords`、`TestPlanProjectionSegmentsPreservesEveryRecordAndFence`；其余 17 项见文件
 - [projector_benchmark_test.go](../../../framework/dataengine/engine/projector_benchmark_test.go)
 - [projector_remote_test.go](../../../framework/dataengine/engine/projector_remote_test.go)：`TestRemoteProjectionIndependentEntityCompletesWhileFirstBlocked`、`TestRemoteProjectionFailureOnlyAcknowledgesPrefixAndReplaysSuffix`、`TestRemoteProjectionWindowBoundaries`、`TestRemoteProjectionCheckpointFailureKeepsWindow`、`TestRemoteProjectionRefillsWhileFirstRecordIsBlocked`；其余 4 项见文件
-- [projector_test.go](../../../framework/dataengine/engine/projector_test.go)：`TestProjectorAckNotBlockedByPublisherFailure`、`TestProjectorFatalConflictInvokesFence`、`TestProjectorCommitSystemTicketCompletesAfterProjection`、`TestProjectorUsesAtomicBatchStoreForBacklog`、`TestProjectorAcknowledgesSuccessfulPrefixBeforeLaterSegmentFailure`；其余 11 项见文件
-- [receipt_retention_test.go](../../../framework/dataengine/engine/receipt_retention_test.go)：`TestAssembleValidatesReceiptRetentionBeforeInfrastructure`
-- [remote_conflict_test.go](../../../framework/dataengine/engine/remote_conflict_test.go)：`TestRemoteCreationConflictFencesProjectorAndKeepsWAL`
-- [replay_read_budget_test.go](../../../framework/dataengine/engine/replay_read_budget_test.go)：`TestReplayReadBudgetRetainsOnlyBoundedPrefix`、`TestReplayOversizedRecordGetsExclusiveReadWindow`、`TestReplayBudgetCountsConsumedRecordsAcrossSegments`
-- [shutdown_deadline_test.go](../../../framework/dataengine/engine/shutdown_deadline_test.go)：`TestProjectorWaitsRespectDeadline`、`TestProjectorShutdownDeadlineBehindBackgroundProjection`、`TestRuntimeConcurrentShutdownHonorsDeadline`
-- [single_path_test.go](../../../framework/dataengine/engine/single_path_test.go)：`TestProjectorSinglePathHoldsRetriesAndSerializesReplay`
-- [stage_effect_race_test.go](../../../framework/dataengine/engine/stage_effect_race_test.go)：`TestStageEffectDuplicateAfterSnapshotMissIsRetryable`
+- [projector_test.go](../../../framework/dataengine/engine/projector_test.go)：`TestProjectorAckNotBlockedByPublisherFailure`、`TestProjectorFatalConflictInvokesFence`、`TestProjectorCommitSystemTicketCompletesAfterProjection`、`TestProjectorUsesAtomicBatchStoreForBacklog`、`TestProjectorAcknowledgesSuccessfulPrefixBeforeLaterSegmentFailure`；其余 16 项见文件
 
 ### mongo/driver
 

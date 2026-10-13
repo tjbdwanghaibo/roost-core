@@ -1,9 +1,12 @@
+// MongoStore：版本化 Put / Patch / 删除墓碑、批投影单事务与 marker、身份裁决、读取与流式加载、effect 暂存竞态。
+
 package engine
 
 import (
 	"bytes"
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -662,7 +665,7 @@ func TestMongoStoreMultiRecordUsesTransactionAndStagesEffectsReceipts(t *testing
 // inMongoTransaction runs a staging step the way Project does: inside one
 // session transaction. The fake aborts the transaction on a write error, so a
 // step that reads back after a duplicate key fails here as it does on a real
-// server (RR-20260926-34) instead of passing outside any transaction.
+// server instead of passing outside any transaction.
 func inMongoTransaction(t *testing.T, client *mongotest.Client, step func(context.Context) error) error {
 	t.Helper()
 	session, err := client.StartSession(context.Background())
@@ -728,10 +731,9 @@ func TestMongoStoreStageEffectRejectsIdentityDrift(t *testing.T) {
 	}
 }
 
-// RR-20260926-34：跨事务复用 receipt / effect 身份时，Project 必须在第一次尝试内裁决：
-// 相同 receipt 成功并落库，receipt 漂移与 effect ID 复用是 fatal 身份冲突且整笔回滚。
-// saga start 的 effect ID 是命令内容哈希，同一 start 在两个事务各发一次即第三种形状，
-// 按现有设计保持 fatal。
+// 跨事务复用 receipt / effect 身份时，Project 在第一次尝试内裁决：相同 receipt 成功并落库，receipt 漂移与 effect ID 复用是 fatal 身份冲突
+// 且整笔回滚。saga start 的 effect ID 是命令内容哈希，同一 start 在两个事务各发一次即第三种形状，保持 fatal。
+// 历史：RR-20260926-34。
 func TestMongoStoreProjectIdentityVerdictsAcrossTransactions(t *testing.T) {
 	store, client, _ := newMongoStoreTest(t)
 	record := func(idByte byte, docID int64) coredata.CommitRecord {
@@ -810,4 +812,253 @@ func TestMongoBatchRejectsConflictingDuplicateIDBeforeMarkerLookup(t *testing.T)
 	if err = store.ProjectBatch(context.Background(), []coredata.CommitRecord{first, second}); !errors.Is(err, ErrTransactionIdentity) {
 		t.Fatalf("conflicting batch identity=%v", err)
 	}
+}
+
+func TestMongoStoreLoadCopiesVersionSchemaAndRemoteEnvelope(t *testing.T) {
+	store, client, collection := newMongoStoreTest(t)
+	ordinary, err := bson.Marshal(bson.M{"_id": int64(7), "_version": uint64(9), "_schema": uint32(3), "name": "hero"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collection.Seed(bson.M{"_id": int64(7), "_version": uint64(9), "_schema": uint32(3), "name": "hero", "zone": int32(3)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := collection.Seed(bson.M{
+		"_id": int64(8), "_ver": uint64(11), "_marker_epoch": uint64(4), "_lock_fence": uint64(5), "_route_epoch": uint64(6),
+		"data": ordinary, "zone": int32(3),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	docs, err := store.Load(context.Background(), coredata.LoadSpec{Database: testDatabase, Resource: "heroes", Filter: map[string]any{"zone": int32(3)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 2 || docs[0].Key.ID != 7 || docs[0].Version != 9 || docs[0].Schema != 3 {
+		t.Fatalf("ordinary=%+v", docs)
+	}
+	if !docs[1].Enveloped || docs[1].Version != 11 || docs[1].MarkerEpoch != 4 || docs[1].LockFence != 5 || docs[1].RouteEpoch != 6 {
+		t.Fatalf("remote=%+v", docs[1])
+	}
+	if client.Sessions() != 0 {
+		t.Fatalf("load unexpectedly started session")
+	}
+}
+
+// The tombstone exclusion is a load-path invariant, so assert it by storage
+// behaviour: a deleted document must not come back, and a caller filter must
+// still be honoured alongside it.
+func TestMongoStoreLoadExcludesTombstonesAndHonoursCallerFilter(t *testing.T) {
+	store, _, collection := newMongoStoreTest(t)
+	for _, doc := range []bson.M{
+		{"_id": int64(1), "_version": uint64(1), "zone": int32(3)},
+		{"_id": int64(2), "_version": uint64(2), "zone": int32(3), "_deleted": true},
+		{"_id": int64(3), "_version": uint64(1), "zone": int32(9)},
+	} {
+		if err := collection.Seed(doc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	docs, err := store.Load(context.Background(), coredata.LoadSpec{
+		Database: testDatabase, Resource: "heroes", Filter: map[string]any{"zone": int32(3)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 1 || docs[0].Key.ID != 1 {
+		t.Fatalf("loaded=%+v, want only the live zone-3 document", docs)
+	}
+	// Without a caller filter the tombstone must still be excluded.
+	docs, err = store.Load(context.Background(), coredata.LoadSpec{Database: testDatabase, Resource: "heroes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 2 {
+		t.Fatalf("loaded=%d documents, want 2 live ones", len(docs))
+	}
+	for _, doc := range docs {
+		if doc.Deleted || doc.Key.ID == 2 {
+			t.Fatalf("tombstone leaked into load: %+v", doc)
+		}
+	}
+}
+
+func TestMongoStoreStreamLoadUsesCursorAndStopsOnConsumerError(t *testing.T) {
+	store, _, collection := newMongoStoreTest(t)
+	for id := int64(1); id <= 3; id++ {
+		if err := collection.Seed(bson.M{"_id": id, "_version": uint64(1)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	boom := errors.New("consumer stop")
+	seen := 0
+	err := store.StreamLoad(context.Background(), coredata.LoadSpec{Database: testDatabase, Resource: "heroes"},
+		func(coredata.RawDocument) error {
+			seen++
+			if seen == 2 {
+				return boom
+			}
+			return nil
+		})
+	if !errors.Is(err, boom) || seen != 2 {
+		t.Fatalf("err=%v seen=%d, want the consumer error to stop the stream", err, seen)
+	}
+	if collection.Calls["StreamFind"] == 0 {
+		t.Fatal("StreamLoad did not use the streaming cursor path")
+	}
+}
+
+func TestMongoStoreReadConsistentUsesOneSession(t *testing.T) {
+	store, client, _ := newMongoStoreTest(t)
+	called := false
+	if err := store.ReadConsistent(context.Background(), func(context.Context) error { called = true; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !called || client.Sessions() != 1 {
+		t.Fatalf("called=%v sessions=%d", called, client.Sessions())
+	}
+}
+
+// ISession.WithTransaction is documented as retrying automatically, so every
+// ReadConsistent callback must be idempotent across invocations.
+func TestMongoStoreReadConsistentRetriesCallback(t *testing.T) {
+	store, client, _ := newMongoStoreTest(t)
+	client.TransientRetries = 1
+	calls := 0
+	if err := store.ReadConsistent(context.Background(), func(context.Context) error {
+		calls++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("callback invocations=%d, want 2 (one transient retry)", calls)
+	}
+}
+
+// 投影事务里 effect 先按 _id 做快照读，未命中才 InsertOne；两步之间并发写者插入同 _id 时 InsertOne 得到 ErrDuplicateKey：这不是身份冲突、
+// 不 fatal——错误保留 errors.Is(fmongo.ErrDuplicateKey)、不带 ErrTransactionIdentity / ErrProjectionConflict / ErrReceiptIdentity，整笔事务
+// 回滚（mutation、transaction marker 都不落库），由重试时的快照读裁决：同一事务身份视为已暂存，不同事务才是 ErrTransactionIdentity。
+func TestStageEffectDuplicateAfterSnapshotMissIsRetryable(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		concurrent string // 并发写者暂存的 effect 属于哪个事务
+		retry      func(t *testing.T, err error)
+	}{
+		{name: "same transaction identity", retry: func(t *testing.T, err error) {
+			if err != nil {
+				t.Fatalf("retry after the concurrent stage of the same effect = %v, want idempotent success", err)
+			}
+		}},
+		{name: "other transaction", concurrent: "other-transaction", retry: func(t *testing.T, err error) {
+			if !errors.Is(err, ErrTransactionIdentity) {
+				t.Fatalf("retry after another transaction staged the same effect id = %v, want ErrTransactionIdentity", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := mongotest.NewClient()
+			racing := &outboxInsertRace{Client: client}
+			store, err := NewMongoStore(racing, MongoStoreConfig{DefaultDatabase: testDatabase, ServerID: 3})
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := projectorRecord(1, true)
+			record.Mutations[0].Key.Database = testDatabase
+			txID := record.ID.String()
+			owner := txID
+			if tc.concurrent != "" {
+				owner = tc.concurrent
+			}
+			concurrentDoc := bson.M{"_id": record.Effects[0].ID, "effect_id": record.Effects[0].ID, "transaction_id": owner, "topic": record.Effects[0].Topic}
+			racing.inject.Store(&concurrentDoc)
+
+			err = store.Project(context.Background(), record)
+			if !errors.Is(err, fmongo.ErrDuplicateKey) {
+				t.Fatalf("Project = %v, want the duplicate key from the racing insert", err)
+			}
+			if errors.Is(err, ErrTransactionIdentity) || errors.Is(err, ErrProjectionConflict) || errors.Is(err, ErrReceiptIdentity) {
+				t.Fatalf("Project = %v: a duplicate after a snapshot miss must not be classified as fatal", err)
+			}
+			if racing.injected.Load() != 1 {
+				t.Fatalf("premise: racing insert injected %d times, want 1", racing.injected.Load())
+			}
+			// 整笔回滚：mutation 与 marker 都没有落库。
+			if _, ok := client.Collection(testDatabase, "heroes").Lookup(int64(1)); ok {
+				t.Fatal("mutation of the aborted projection transaction is visible")
+			}
+			if markerCollection(client).Len() != 0 {
+				t.Fatal("transaction marker of the aborted projection transaction is visible")
+			}
+
+			// RR-20261004-NC-29：abort 不得抹掉并发已提交文档，不再用 Seed 重建它。
+			if doc, ok := client.Collection(testDatabase, OutboxCollection).Lookup(record.Effects[0].ID); !ok || doc["transaction_id"] != owner {
+				t.Fatalf("concurrent commit erased by abort: %v", doc)
+			}
+			err = store.Project(context.Background(), record)
+			tc.retry(t, err)
+			if err == nil {
+				if _, ok := client.Collection(testDatabase, "heroes").Lookup(int64(1)); !ok {
+					t.Fatal("retry succeeded without applying the mutation")
+				}
+				if n := client.Collection(testDatabase, OutboxCollection).Len(); n != 1 {
+					t.Fatalf("outbox holds %d documents after the idempotent retry, want 1", n)
+				}
+			}
+		})
+	}
+}
+
+// outboxInsertRace 在 outbox 集合的 FindOne 未命中之后、返回之前，写入一次事务外并发提交，
+// 并明确注入随后的 InsertOne 重复键错误；两项都只注入一次。
+type outboxInsertRace struct {
+	*mongotest.Client
+	inject    atomic.Pointer[bson.M]
+	injected  atomic.Int32
+	duplicate atomic.Bool
+}
+
+func (m *outboxInsertRace) Database(name string) fmongo.IDatabase {
+	return racingDatabase{IDatabase: m.Client.Database(name), race: m, name: name}
+}
+
+type racingDatabase struct {
+	fmongo.IDatabase
+	race *outboxInsertRace
+	name string
+}
+
+func (d racingDatabase) Collection(name string) fmongo.ICollection {
+	coll := d.IDatabase.Collection(name)
+	if name != OutboxCollection {
+		return coll
+	}
+	return racingCollection{ICollection: coll, race: d.race, raw: d.race.Client.Collection(d.name, name)}
+}
+
+type racingCollection struct {
+	fmongo.ICollection
+	race *outboxInsertRace
+	raw  *mongotest.Collection
+}
+
+func (c racingCollection) FindOne(ctx context.Context, filter any, result any) error {
+	err := c.ICollection.FindOne(ctx, filter, result)
+	if errors.Is(err, fmongo.ErrNotFound) {
+		if doc := c.race.inject.Swap(nil); doc != nil {
+			if seedErr := c.raw.Seed(*doc); seedErr != nil {
+				return seedErr
+			}
+			c.race.injected.Add(1)
+			c.race.duplicate.Store(true)
+		}
+	}
+	return err
+}
+
+// 私有快照不靠看到并发 Seed 制造重复键：明确注入本测试承诺的写错误，保留真实的事务外提交，让回滚 / 重试断言独立于替身隔离实现。
+func (c racingCollection) InsertOne(ctx context.Context, doc any) (string, error) {
+	if c.race.duplicate.Swap(false) {
+		return "", fmongo.ErrDuplicateKey
+	}
+	return c.ICollection.InsertOne(ctx, doc)
 }

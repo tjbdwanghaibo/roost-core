@@ -1,3 +1,5 @@
+// Projector 回放：ack 不受发布失败阻塞、冲突 fence、成功前缀先确认、批量 / 逐条回退、单路径重试串行、回放读取预算。
+
 package engine
 
 import (
@@ -10,8 +12,11 @@ import (
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -773,5 +778,221 @@ func (projector *Projector) admit(id coredata.TransactionID) {
 	if _, exists := projector.admitted[id]; !exists {
 		projector.admitted[id] = struct{}{}
 		projector.walUnacked.Add(1)
+	}
+}
+
+// 去掉独立 Committer 后，在正式 Projector 上固定持锁、重试和并发回放契约。
+type singlePathStore struct {
+	mu      sync.Mutex
+	calls   int
+	failure error
+}
+
+func (s *singlePathStore) Project(context.Context, coredata.CommitRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	return s.failure
+}
+
+func TestProjectorSinglePathHoldsRetriesAndSerializesReplay(t *testing.T) {
+	for _, policy := range []corenest.DurabilityPolicy{corenest.DurabilityStrict, corenest.DurabilityPipelined} {
+		t.Run(policy.String(), func(t *testing.T) {
+			ctx := context.Background()
+			store := &singlePathStore{}
+			p, wal := manualProjector(t, store)
+			record := projectorRecord(61, false)
+			record.Durability = policy.Record()
+			if policy == corenest.DurabilityPipelined {
+				ticket, err := p.Enqueue(ctx, record)
+				if err != nil {
+					t.Fatal(err)
+				}
+				<-ticket.Done()
+				if err := ticket.Err(); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := p.Commit(ctx, record); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.ReplayPass(ctx); !errors.Is(err, errProjectorTransactionHeld) {
+				t.Fatalf("held replay=%v", err)
+			}
+			if store.calls != 0 {
+				t.Fatal("projected before transaction released its entity locks")
+			}
+			p.TransactionReleased(record.ID)
+			retry := errors.New("temporary projection failure")
+			store.failure = retry
+			if _, err := p.ReplayPass(ctx); !errors.Is(err, retry) {
+				t.Fatalf("projection error=%v", err)
+			}
+			assertWALReplayCount(t, wal, 1)
+			store.failure = nil
+			var wg sync.WaitGroup
+			for range 2 {
+				wg.Go(func() {
+					if _, err := p.ReplayPass(ctx); err != nil {
+						t.Errorf("replay: %v", err)
+					}
+				})
+			}
+			wg.Wait()
+			if store.calls != 2 {
+				t.Fatalf("calls=%d, want one failed attempt and one successful projection", store.calls)
+			}
+			assertWALReplayCount(t, wal, 0)
+		})
+	}
+}
+
+func TestRemoteCreationConflictFencesProjectorAndKeepsWAL(t *testing.T) {
+	ensureDataEngineRemoteRepositoryEntity()
+	id, err := entity.BuildEntityID(9821, dataEngineRemoteRepositoryKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, client, heroes := newMongoStoreTest(t)
+	remote := remoteentity.NewMongoCommitter(client, "remote", 3, 0)
+	if err := store.SetRemoteProjection(remote, &mongoRemoteProjectionFake{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Collection("remote", "_remote_entity_meta").Seed(bson.M{"_id": id, "_ver": int64(1), "_marker_epoch": int64(1), "_route_epoch": int64(1), "_lock_fence": int64(0)}); err != nil {
+		t.Fatal(err)
+	}
+	record := projectorRecord(42, false)
+	commit := entity.RemoteCommit{TransactionID: entity.RemoteTransactionID(record.ID), EntityID: id, Kind: dataEngineRemoteRepositoryKind, BaseVersion: 0, NextVersion: 1, MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Codec: 1}
+	commit.Mutations = []entity.RemoteDataMutation{{Database: "game", Collection: "guild", ID: id, Version: 1, Data: []byte("new state")}}
+	record.Mutations = append(record.Mutations, coredata.Mutation{
+		Key: coredata.DocumentKey{Resource: "remote_entity", ID: id}, Kind: coredata.MutationPut,
+		ExpectedVersion: 0, NextVersion: 1, Schema: 1, Codec: "remote", Remote: &commit,
+	})
+	p, wal := stoppedProjectorWithRecords(t, store, []coredata.CommitRecord{record}, 0)
+	// OnFatal 异步投递（RR-20260926-17 复核补修）；用带缓冲 channel 计数。
+	failures := make(chan error, 2)
+	p.opts.OnFatal = func(err error) { failures <- err }
+	for range 2 {
+		count, err := p.ReplayPass(context.Background())
+		if count != 0 || !errors.Is(err, ErrProjectionConflict) || !errors.Is(err, fmongo.ErrVersionConflict) {
+			t.Fatalf("count=%d err=%v", count, err)
+		}
+	}
+	awaitChan(t, failures, "the fatal notification")
+	if len(failures) != 0 {
+		t.Fatalf("fatal notified %d extra times, want once", len(failures))
+	}
+	if err := p.Commit(context.Background(), projectorRecord(43, false)); !errors.Is(err, ErrProjectionConflict) {
+		t.Fatalf("admitted after fatal conflict: %v", err)
+	}
+	if heroes.Len() != 0 {
+		t.Fatal("ordinary mutation escaped failed remote transaction")
+	}
+	assertWALReplayCount(t, wal, 1)
+}
+
+func TestReplayReadBudgetRetainsOnlyBoundedPrefix(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, false), projectorRecord(3, false)}
+	for i := range records {
+		records[i].Mutations[0].Data = make([]byte, 128<<10)
+	}
+	for _, extra := range []int{-1, 0} {
+		t.Run(map[int]string{-1: "before_boundary", 0: "exact_boundary"}[extra], func(t *testing.T) {
+			p, w := stoppedProjectorWithRecords(t, &recordingSegmentStore{}, records, 4<<20)
+			p.opts.ReplayReadBytes = 2*projectionRecordLogicalBytes(records[0]) + extra
+			want := 2
+			if extra < 0 {
+				want = 1
+			}
+			if n, err := p.ReplayPass(context.Background()); n != want || err != nil {
+				t.Fatalf("read window n=%d err=%v", n, err)
+			}
+			ids := make([]coredata.TransactionID, 0, len(records)-want)
+			for _, r := range records[want:] {
+				ids = append(ids, r.ID)
+			}
+			assertWALReplayIDs(t, w, ids)
+			for len(ids) > 0 {
+				n, err := p.ReplayPass(context.Background())
+				if err != nil || n == 0 {
+					t.Fatalf("no progress: %d %v", n, err)
+				}
+				ids = ids[n:]
+			}
+			assertWALReplayCount(t, w, 0)
+		})
+	}
+}
+
+func TestReplayOversizedRecordGetsExclusiveReadWindow(t *testing.T) {
+	records := []coredata.CommitRecord{projectorRecord(1, false), projectorRecord(2, false)}
+	records[0].Mutations[0].Data = make([]byte, 128<<10)
+	p, w := stoppedProjectorWithRecords(t, &recordingSegmentStore{}, records, 4<<20)
+	p.opts.ReplayReadBytes = 1024
+	if n, err := p.ReplayPass(context.Background()); n != 1 || err != nil {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	assertWALReplayIDs(t, w, []coredata.TransactionID{records[1].ID})
+	if n, err := p.ReplayPass(context.Background()); n != 1 || err != nil {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	assertWALReplayCount(t, w, 0)
+}
+
+func TestReplayBudgetCountsConsumedRecordsAcrossSegments(t *testing.T) {
+	for _, budget := range []string{"records", "bytes"} {
+		t.Run(budget, func(t *testing.T) {
+			opts := nestwal.DefaultOptions(t.TempDir())
+			opts.SegmentBytes, opts.MaxRecordBytes = 4096, 2048
+			w, err := nestwal.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.Close(context.Background())
+			p, err := NewProjector(w, &recordingSegmentStore{}, ProjectorOptions{IdlePoll: time.Hour})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.cancel()
+			awaitChan(t, p.done, "stopped projector")
+			defer p.Close(context.Background())
+			p.opts.ReplayBatchRecords = 20
+			for i := byte(1); i <= 20; i++ {
+				record := projectorRecord(i, false)
+				record.Mutations[0].Data = make([]byte, 1024)
+				if budget == "bytes" {
+					p.opts.ReplayReadBytes = 2 * projectionRecordLogicalBytes(record)
+				} else {
+					p.opts.ReplayBatchRecords = 2
+				}
+				if _, err := w.Append(context.Background(), record); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if w.Stats().SegmentFiles < 2 {
+				t.Fatal("test did not cross a physical segment")
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			if n, err := p.ReplayPass(ctx); n != 0 || !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancel: %d %v", n, err)
+			}
+			if w.Stats().Replayed != 0 {
+				t.Fatal("canceled pass consumed records")
+			}
+			for total := 0; total < 20; {
+				n, err := p.ReplayPass(t.Context())
+				if n != 2 || err != nil {
+					t.Fatalf("n=%d err=%v", n, err)
+				}
+				total += n
+				if got := w.Stats().Replayed; got != uint64(total) {
+					t.Fatalf("consumed=%d replayed=%d", total, got)
+				}
+			}
+			if p.Stats().Projected != 20 {
+				t.Fatal(p.Stats())
+			}
+			assertWALReplayCount(t, w, 0)
+		})
 	}
 }
