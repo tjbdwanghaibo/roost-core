@@ -27,9 +27,9 @@ import (
 
 	gonats "github.com/nats-io/nats.go"
 	gojs "github.com/nats-io/nats.go/jetstream"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	ndriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
-	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 )
 
 // recordingCompleter 记下每次投递的时间与结果；afterFirst 在第一次投递返回之后执行一次（模拟定义上线）。

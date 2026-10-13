@@ -8,8 +8,9 @@ import "context"
 // “离开当前步骤时关闭哪个操作”曾经在截止、人工 Compensate、定义缺失、超时、接收结果几个出口各写一遍，
 // “放弃关闭”这条子规则因此在三个出口各漏过一次（U-0280 补截止与人工 Compensate，RR-20261005-NC-250 补定义缺失）。
 // 现在每个出口只算出目标状态 after，交给 stepTransition 统一决定：关闭哪个操作（tombstone 与排队命令的清理随之
-// 在同一个 Store 事务里完成）、是否开新一生、带不带协调器租约，并由它把请求交给 Store。step_transition_guard_test.go
-// 按类型检查全包，保证没有别的代码构造、改写请求或调用 Store.Apply（RR-20261006-14）。
+// 在同一个 Store 事务里完成）、是否开新一生、带不带协调器租约，并由它把请求交给 Store。别的代码不构造、改写请求，
+// 也不直接调用 Store.Apply（RR-20261006-14）；按类型检查的结构守卫已于 2026-10-10 删除，行为回归见 completion_test.go
+// 的 TestStepTransitionAloneDecidesTheIncarnation 与各出口的关闭 / 代际用例。
 
 // transitionCause 是协调器写一次记录的原因。
 type transitionCause uint8
@@ -61,8 +62,7 @@ type transition struct {
 //
 // 为什么做成 Engine 方法并在里面调 Store.Apply（RR-20261006-14）：原来它只返回 ApplyRequest，由出口自己调
 // e.store.Apply，守卫按语法检查出口，看不到包级 helper 改写参数里的请求再写入（例如把 CloseOperation 清空）。
-// 现在出口手里没有请求可改；step_transition_guard_test.go 按类型检查全包非测试代码：ApplyRequest 的值只能在这里
-// 产生、任何地方都不能改写、Store.Apply 只在这里调用。
+// 现在出口手里没有请求可改：ApplyRequest 的值只在这里产生、任何地方都不改写、Store.Apply 只在这里调用。
 func (e *Engine) stepTransition(ctx context.Context, before, after Record, t transition) (Record, ApplyOutcome, error) {
 	after.Incarnation = before.Incarnation
 	if t.cause == causeResume || (t.cause == causeManualCompensate && before.Phase == PhaseCompensate) {
