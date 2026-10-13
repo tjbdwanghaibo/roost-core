@@ -576,6 +576,9 @@ func parseFuncDecl(fnDecl *ast.FuncDecl, markerOptions map[string]string) (*Func
 	if err != nil {
 		return nil, err
 	}
+	// 没写 target(s) 时按参数类型推断锁目标：类型名含 Entity 的参数（如 IPlayerEntity）或它们的切片是目标，
+	// 其余是普通参数。这是现行写法（roost add handler、help 与生成文档都用不带 target 的 //roost:nest），不是
+	// 兼容分支；写了 target(s) 时按声明的个数取开头的参数。
 	explicitTargets := len(declaredTargets) > 0
 	var hasEntity bool
 	var startNonEntity bool
@@ -590,16 +593,16 @@ func parseFuncDecl(fnDecl *ast.FuncDecl, markerOptions map[string]string) (*Func
 
 		for _, name := range field.Names {
 			isExplicitEntity := explicitTargets && paramIndex < len(declaredTargets)
-			isLegacyGroup := !explicitTargets && isEntityGroupType(typeName)
-			isLegacyEntity := !explicitTargets && isEntityCategory(typeName)
-			isEntity := isExplicitEntity || isLegacyEntity || isLegacyGroup
+			isInferredGroup := !explicitTargets && isEntityGroupType(typeName)
+			isInferredEntity := !explicitTargets && isEntityCategory(typeName)
+			isEntity := isExplicitEntity || isInferredEntity || isInferredGroup
 			isGroup := isEntity && strings.HasPrefix(typeName, "[]")
 			if isEntity {
 				hasEntity = true
 			} else {
 				startNonEntity = true
 			}
-			if !isEntity || (startNonEntity && !isExplicitEntity && !isLegacyEntity && !isLegacyGroup) {
+			if !isEntity || (startNonEntity && !isExplicitEntity && !isInferredEntity && !isInferredGroup) {
 				fi.Params = append(fi.Params, NonEntityParam{
 					Index: len(fi.Params),
 					Type:  typeName,
