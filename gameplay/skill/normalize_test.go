@@ -119,7 +119,7 @@ func mustParseFixture(t *testing.T, name string) *Definition {
 	return definition
 }
 
-func requireNoErrors(t *testing.T, diagnostics []Diagnostic) {
+func requireNoErrors(t testing.TB, diagnostics []Diagnostic) {
 	t.Helper()
 	for _, diagnostic := range diagnostics {
 		if diagnostic.Severity == DiagnosticError {

@@ -24,7 +24,7 @@ const minimalSkillJSON = `{
   }]
 }`
 
-func mustParseJSON(t *testing.T, input string) *Definition {
+func mustParseJSON(t testing.TB, input string) *Definition {
 	t.Helper()
 	definition, err := Parse([]byte(input))
 	if err != nil {

@@ -1042,3 +1042,39 @@ func motionSkillJSON(spawn string) string {
 	// enter 以 wait + finish 结束：phase 没有计时，落空的 enter 不能编译（RR-20261005-NC-151）。
 	return strings.Replace(minimalSkillJSON, `{"flow":"finish","reason":"done"}`, `{"flow":"sequence","steps":[{"flow":"effect","effect":{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":10},"spawn":{`+spawn+`}},{"flow":"wait","ticks":10,"then":{"flow":"finish"}}]}`, 1)
 }
+
+// BenchmarkStepSpawnMotion 覆盖 stepSpawnMotion：moving 走全部阶段（追踪转向、线性轨迹、zigzag 与 circular 偏移、
+// 碰撞、携带、完成判定与信号汇总），static 是无运动程序的衍生物（只发静态位置与 tick 信号）。每轮在新的 Host 与
+// Runtime 上（不计时）从未初始化状态连走 8 步：MemoryHost 会累积世界历史，复用会让单步成本随轮数增长。
+func BenchmarkStepSpawnMotion(b *testing.B) {
+	for _, tc := range []struct {
+		name, spawn string
+	}{
+		{"moving", `"kind":"projectile","duration_ticks":10,"motion":{"frame":{"type":"world"},"steering":{"type":"tracking","target":"$caster","duration_ticks":10},"trajectory":{"type":"linear","speed":10},"offsets":[{"type":"zigzag","amplitude":2,"period_ticks":2},{"type":"circular","radius":2,"angular_speed":1000}],"collision":{"layers":["terrain"],"response":"reflect","max_reflects":2},"carry":{"target":"$caster"},"completion":{"type":"end"}}`},
+		{"static", `"kind":"area","duration_ticks":10,"interval_ticks":1,"area":{"from":"$caster","kind":"entity","shape":{"type":"circle","radius":4},"filters":[{"type":"targetable"}],"order":{"by":"stable_id","direction":"asc"},"limit":2}`},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			program, diagnostics := Compile(mustParseJSON(b, motionSkillJSON(tc.spawn)), DefaultCompileEnvironment())
+			requireNoErrors(b, diagnostics)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				host := NewMemoryHost(program.AuthorityIdentity())
+				host.UpsertEntity(MemoryEntity{ID: 1, Alive: true, Position: Position{X: 100}})
+				runtime := NewRuntime(host, RuntimeOptions{})
+				cast := &castInstance{id: 1, program: program, caster: 1, visibleRevision: host.CurrentRevision(), snapshots: make(map[int]RuntimeValue)}
+				spawn := &SpawnInstance{
+					ID: 1, CastID: cast.id, TemplateIndex: 0, Status: SpawnRunning, EndTick: 100, Program: program,
+					HostState: SpawnHostState{SpawnID: 1, Active: true}, Motion: MotionState{Direction: Direction{X: normalizedDirectionScale}},
+				}
+				b.StartTimer()
+				for range 8 {
+					if _, err := runtime.stepSpawnMotion(cast, spawn); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		})
+	}
+}

@@ -354,3 +354,49 @@ func TestSourceDocumentDigestSeesTheEffectType(t *testing.T) {
 		t.Errorf("source document digest %s for set_memory and add_memory: the source changed, the digest did not", setIdentity.SourceDocumentDigest)
 	}
 }
+
+// effectWireSamples 每种效果类型一条线上 JSON，用于效果解码基准。
+var effectWireSamples = []string{
+	`{"type":"capture_snapshot","target":"$caster","profile":"position"}`,
+	`{"type":"restore_snapshot","target":"$caster","snapshot":"$memory.snap","on_blocked":"skip"}`,
+	`{"type":"damage","target":"$input.target","amount":10,"damage_type":"physical","element":"fire","combat_tags":["melee"],"can_critical":true}`,
+	`{"type":"heal","target":"$caster","amount":5}`,
+	`{"type":"shield","target":"$caster","amount":5,"duration_ticks":10}`,
+	`{"type":"add_status","target":"$input.target","status":"burn","duration_ticks":5,"stacks":1,"max_stacks":3}`,
+	`{"type":"remove_status","target":"$input.target","status":"burn"}`,
+	`{"type":"modify_status_instance","status":"$event.status","operation":"add_stacks","value":1,"target":"$input.target","ownership_policy":"any"}`,
+	`{"type":"attribute_modifier","target":"$input.target","attribute":"move_speed","operation":"add","value":5,"duration_ticks":10,"stack_policy":"refresh","max_stacks":2}`,
+	`{"type":"resource","target":"$caster","resource":"mana","operation":"add","amount":10}`,
+	`{"type":"set_memory","name":"branch","value":1}`,
+	`{"type":"add_memory","name":"branch","value":1}`,
+	`{"type":"clear_memory","name":"branch"}`,
+	`{"type":"teleport","target":"$caster","destination":"$input.target.position","on_blocked":"skip"}`,
+	`{"type":"knockback","target":"$input.target","from":"$caster.position","distance":2}`,
+	`{"type":"pull","target":"$input.target","toward":"$caster.position","distance":1}`,
+	`{"type":"stop_movement","target":"$input.target"}`,
+	`{"type":"modify_state","state":"marks","owner":"$caster","subject":"$input.target","operation":"add","value":1,"duration_ticks":20,"expiry_policy":"refresh"}`,
+	`{"type":"modify_ability_state","owner":"$caster","ability":"$ability.self","property":"cooldown_remaining_ticks","operation":"add","value":-20}`,
+	`{"type":"modify_spawn","spawn":"$event.spawn","property":"speed","operation":"set","value":2,"over_ticks":5}`,
+	`{"type":"summon","template":"deployable.trap","position":"$caster.position","count":1,"duration_ticks":3,"attribute_overrides":{"health":10},"parameter_bindings":{"owner":"$caster"}}`,
+	`{"type":"dismiss","target":"$event.target"}`,
+	`{"type":"issue_entity_command","target":"$caster","command":"attack_target","target_entity":"$input.target"}`,
+}
+
+// BenchmarkDecodeEffect 覆盖 decodeEffect 对每种效果类型的线上解码（每轮解码全部样本一遍）。
+func BenchmarkDecodeEffect(b *testing.B) {
+	samples := make([][]byte, len(effectWireSamples))
+	for i, sample := range effectWireSamples {
+		samples[i] = []byte(sample)
+		if _, err := decodeEffect(samples[i]); err != nil {
+			b.Fatalf("sample %d: %v", i, err)
+		}
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		for _, sample := range samples {
+			if _, err := decodeEffect(sample); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
