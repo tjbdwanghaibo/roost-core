@@ -120,7 +120,7 @@ func (s replicaStore[K, V]) ApplyReplica(ctx context.Context, env mirror.Envelop
 	if err != nil {
 		return err
 	}
-	// RR-20261005-NC-33：两层信封一致不代表业务对象一致，写入前绑定
+	// 两层信封一致不代表业务对象一致，写入前绑定
 	// 配置声明的身份；版本和删除身份提取器由 Start 强制要求。
 	if s.cfg.KeyOf != nil && s.cfg.KeyOf(value) != env.Key {
 		return fmt.Errorf("cache: replica payload key does not match envelope key %d", env.Key)

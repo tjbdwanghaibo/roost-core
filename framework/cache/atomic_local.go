@@ -296,9 +296,9 @@ const atomicLocalOrderSlack = 1024
 // 就地只保留仍是当前 generation 的记录并把 hand 归零。调用方持有 shard.mu 写锁，
 // 且不能在 evictLocked 的淘汰循环里调用（循环正按 hand 遍历 order）。
 //
-// RR-20260930-03：之前只有 evictLocked 在淘汰推进 hand 之后才压缩，而覆盖写、Delete、
-// 过期都不回收旧记录；键集合远低于上限的缓存（Remote 快照 L1）永不淘汰，order 随写入
-// 次数线性增长（C01 长稳每小时约 100MB）。过滤保持剩余记录的相对顺序，所以淘汰顺序
+// 覆盖写、Delete、过期都不回收 order 中的旧记录；若只在 evictLocked 淘汰推进 hand 之后
+// 才压缩，键集合远低于上限的缓存（Remote 快照 L1）永不淘汰，order 会随写入次数线性增长
+// （C01 长稳实测每小时约 100MB）。过滤保持剩余记录的相对顺序，所以淘汰顺序
 // （覆盖写 = 重新插入）不变；触发线随存活键数线性增长，过滤成本摊销 O(1)。
 func (shard *atomicLocalShard[K, V]) compactOrderLocked() {
 	if len(shard.order)-shard.hand <= 2*shard.entries+atomicLocalOrderSlack {

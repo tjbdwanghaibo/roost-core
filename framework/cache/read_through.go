@@ -32,7 +32,7 @@ type ReadThroughOptions struct {
 	// keep L1 usable. A remote store can also answer with a consistency
 	// verdict (this version already holds a different value); treating that
 	// as an outage writes the rejected value into L1 and reports success
-	// (RR-20260913-05 复核). Optional; nil means every error is an outage.
+	//. Optional; nil means every error is an outage.
 	// The Remote snapshot cache no longer goes through ReadThroughStore
 	// (B2, 2026-10-06); it classifies L2 verdicts in its own admission path.
 	FatalRemoteError func(error) bool
@@ -149,7 +149,7 @@ func (s *ReadThroughStore[K, V]) loadOne(ctx context.Context, key K) (V, bool, e
 		value, ok, err := s.remote.Get(ctx, key)
 		if err != nil {
 			s.remoteError.Add(1)
-			// RR-20261004-NC-13：读取的一致性裁决也不能绕过后调用loader。
+			// 读取的一致性裁决也不能绕过后调用loader。
 			if !s.degradable(err) {
 				return zero, false, err
 			}
@@ -158,7 +158,7 @@ func (s *ReadThroughStore[K, V]) loadOne(ctx context.Context, key K) (V, bool, e
 			// Stale / Conflict rule as a publish. If L1 meanwhile took a
 			// DIFFERENT value for this same version, L1 is what this process
 			// has already handed out; the L2 copy does not get to silently
-			// replace it, and the caller sees what L1 holds (RR-20260913-06).
+			// replace it, and the caller sees what L1 holds.
 			switch err := s.setLocal(ctx, value); {
 			case errors.Is(err, ErrConflictingWrite):
 				if current, held := s.localAdmitted(ctx, key); held {
@@ -166,8 +166,8 @@ func (s *ReadThroughStore[K, V]) loadOne(ctx context.Context, key K) (V, bool, e
 				}
 			case errors.Is(err, ErrStaleWrite):
 				// L1 refused the backfill as superseded (a delete recorded at a
-				// newer version while this read was in flight, RR-20260913-01
-				// 复核). The captured L2 value is the past: hand out what L1
+				// newer version while this read was in flight). The captured
+				// L2 value is the past: hand out what L1
 				// holds, or a miss — never the value L1 just refused.
 				if current, held := s.localAdmitted(ctx, key); held {
 					return current, true, nil
@@ -186,7 +186,7 @@ func (s *ReadThroughStore[K, V]) loadOne(ctx context.Context, key K) (V, bool, e
 		return value, ok, err
 	}
 	if s.remote != nil {
-		// RR-20261004-04：L2 以 stale 拒绝回写，说明 loader 执行期间 L2 已经收到
+		// L2 以 stale 拒绝回写，说明 loader 执行期间 L2 已经收到
 		// 更新的值；这是写入准入的结论，不是读取失败。loader 的结果照常交给 L1
 		// 准入，由下面同一条规则决定交付什么。
 		err := s.remote.Set(ctx, value)
@@ -194,9 +194,9 @@ func (s *ReadThroughStore[K, V]) loadOne(ctx context.Context, key K) (V, bool, e
 			return zero, false, err
 		}
 	}
-	// RR-20261004-04：loader 回填与 L2 回填是同一类 L1 写入口，准入拒绝按同一
+	// loader 回填与 L2 回填是同一类 L1 写入口，准入拒绝按同一
 	// 条规则处理：交付 L1 已准入的值；L1 没有值时 stale 是 miss（被更新的删除
-	// 取代），conflict 是拒绝。之前这里把拒绝原样返回，读取因“写被拒”而失败。
+	// 取代），conflict 是拒绝；不能把拒绝原样返回，否则读取会因“写被拒”而失败。
 	switch err := s.setLocal(ctx, value); {
 	case err == nil:
 		return value, true, nil
@@ -285,7 +285,7 @@ func (s *ReadThroughStore[K, V]) Delete(ctx context.Context, key K) error {
 		defer cancel()
 		if err := s.remote.Delete(remoteCtx, key); err != nil {
 			s.remoteError.Add(1)
-			// RR-20261004-NC-13：权威明确拒绝删除时保留L1。
+			// 权威明确拒绝删除时保留L1。
 			// 普通故障仍沿用既有策略：清掉L1，strict模式同时返回错误。
 			if s.opts.FatalRemoteError != nil && s.opts.FatalRemoteError(err) {
 				return err

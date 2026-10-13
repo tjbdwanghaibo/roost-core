@@ -60,14 +60,14 @@ type StoreConfig[K comparable, V any] struct {
 	// Stale answers "is next older"; Conflict answers "is next a lie about
 	// this version". Checked under the same lock as Stale, so every path
 	// that writes the local store — publish, loader fill, L2 backfill —
-	// enforces one rule (RR-20260913-06). Optional.
+	// enforces one rule. Optional.
 	Conflict func(old, next V) bool
 	// Superseded reports that next is already behind something the store
 	// cannot see in its own entries — typically a delete recorded at a
 	// newer version. Unlike Stale it is asked even when the key is absent,
 	// because that is exactly the state a delete leaves behind. Checked
 	// under the same lock as Stale and Conflict, so publish, loader fill and
-	// L2 backfill share one admission rule (RR-20260913-01 复核). Refused
+	// L2 backfill share one admission rule. Refused
 	// writes return ErrStaleWrite. Optional. The Remote snapshot cache no
 	// longer uses it: since B2 (2026-10-06) its delete watermark lives in the
 	// shared L2 and in L1 delete markers ordered by Stale.

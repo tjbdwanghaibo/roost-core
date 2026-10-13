@@ -71,7 +71,7 @@ func (s *LocalStore[K, V]) Set(_ context.Context, value V) error {
 	defer s.mu.Unlock()
 	old, ok := s.items[key]
 	if ok && s.cfg.Stale != nil && s.cfg.Stale(old, value) {
-		// RR-20261004-NC-15：拒写必须与成功写入区分。
+		// 拒写必须与成功写入区分。
 		return ErrStaleWrite
 	}
 	s.items[key] = value

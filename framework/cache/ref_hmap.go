@@ -30,31 +30,32 @@ var (
 	// layout published keys this writer does not know). This attempt wrote
 	// nothing; read the current record before retrying. It is a schema/key-set
 	// conflict, not a value/version compare-and-set: same-layout concurrency
-	// (concurrent create/delete, expiry) does not produce it (RR-20261004-09).
+	// (concurrent create/delete, expiry) does not produce it.
 	ErrRefHMapRegistryChanged = errors.New("cache: redis ref hmap registry changed")
 )
 
 // errRefHMapPartialRecord：根引用了一个必然非空的子 hash，它却已不存在。
-// RR-20261004-03：子 hash 单独过期（修复前 Patch 只续期路径）或被外部删除，
+// 子 hash 单独过期或被外部删除，
 // 读到的只是半条记录；Get 把它当整条 miss，让上层按缺失重载，而不是返回
 // ok=true 的部分值。它不是持久损坏：下一次 Set 会整条重写。
 var errRefHMapPartialRecord = errors.New("cache: redis ref hmap referenced hash missing")
 
 var (
-	textMarshalerType   = reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
-	textUnmarshalerType = reflect.TypeOf((*encoding.TextUnmarshaler)(nil)).Elem()
+	textMarshalerType   = reflect.TypeFor[encoding.TextMarshaler]()
+	textUnmarshalerType = reflect.TypeFor[encoding.TextUnmarshaler]()
 )
 
 // refHMapRegistryGuardLua 是 Set / Delete 脚本在任何 DEL 之前的注册表裁决。
 //
-// RR-20261004-NC-30 要防的是“清理清单漏了键”：调用方读完 root.__keys 之后，
+// 要防的是“清理清单漏了键”：调用方读完 root.__keys 之后，
 // 别的布局登记了本次 KEYS 之外的 hash，按旧清单 DEL 会把它变成无 TTL、再也
 // 找不到的孤儿。所以放行条件是“当前注册表里的每个键都在本次 KEYS 里”。
 //
-// RR-20261004-09：NC-30 原先逐字节比较当前注册表与调用方读到的快照，同布局的
-// 正常并发（并发首次创建、并发删除、Set 与 Delete 交错、记录整条到期）也会
-// 让字节变化，被误报成 ErrRefHMapRegistryChanged；可这些情形里清理清单仍覆盖
-// 注册表的全部键，DEL 不会漏。字节相等只保留为快路径（相等时必然覆盖）。
+// 不能逐字节比较当前注册表与调用方读到的快照：同布局的正常并发（并发首次创建、
+// 并发删除、Set 与 Delete 交错、记录整条到期）也会让字节变化，被误报成
+// ErrRefHMapRegistryChanged；这些情形里清理清单仍覆盖注册表的全部键，DEL 不会漏。
+// 字节相等只作为快路径（相等时必然覆盖）。
+// 历史：RR-20261004-NC-30、RR-20261004-09。
 // 脚本只读 KEYS[1]，不访问未声明的键；root 固定为 KEYS[1]（registeredKeys）。
 const refHMapRegistryGuardLua = `
 local function registry_covered(snapshot)
@@ -107,7 +108,7 @@ end
 return 1
 `
 
-// RR-20261004-NC-30：清理清单与根 registry 在同槽 Lua 内一起裁决。
+// 清理清单与根 registry 在同槽 Lua 内一起裁决。
 // 不在脚本里发现未声明键，不自动重试或补偿未知结果。
 const refHMapDeleteScript = refHMapRegistryGuardLua + `
 if not registry_covered(ARGV[1]) then
@@ -117,15 +118,15 @@ for i = 1, #KEYS do redis.call("DEL", KEYS[i]) end
 return 1
 `
 
-// RR-20261004-NC-18：同槽内先检查类型，再补齐祖先引用和叶字段。
+// 同槽内先检查类型，再补齐祖先引用和叶字段。
 // 不创建缺失的整条记录；错误/未知结果不降级为非原子重写。
 //
 // KEYS[1..ARGV[4]] 是根到叶的路径，其后是布局里其余的 hash；全部同属一个
 // {name:key} hash tag，脚本只访问声明过的键。ARGV：1 TTL 毫秒，2 叶字段，
 // 3 叶值，4 路径长度，5.. 路径上每一层的引用字段名。
 //
-// RR-20261004-03：续期覆盖整条记录的全部布局 hash，而不只是路径。原先兄弟
-// hash 保留上一次 Set 的 TTL，过期后 Get 读出 ok=true 的部分记录。注册表并入
+// 续期覆盖整条记录的全部布局 hash，而不只是路径：只续路径时兄弟 hash 保留上一次
+// Set 的 TTL，过期后 Get 会读出 ok=true 的部分记录。注册表并入
 // 全部布局键（与 Set 写的注册表一致），没有 __keys 的旧数据被 Patch 后，
 // Delete 仍能找到兄弟 hash。
 const refHMapPatchScript = `
@@ -214,7 +215,7 @@ func (s *RedisRefHMapStore[K, V]) Get(ctx context.Context, key K) (V, bool, erro
 		}
 		return zero, false, err
 	}
-	// RR-20261004-NC-16：layout保留struct内容，返回仍须匹配调用方的V形状。
+	// layout保留struct内容，返回仍须匹配调用方的V形状。
 	rootType := reflect.TypeOf((*V)(nil)).Elem()
 	if rootType.Kind() == reflect.Pointer {
 		return value.Addr().Convert(rootType).Interface().(V), true, nil
@@ -318,7 +319,7 @@ func (s *RedisRefHMapStore[K, V]) layout() (*refHMapNode, string, error) {
 			s.layoutErr = err
 			return
 		}
-		// RR-20261004-NC-19：在任何I/O之前拒绝物理hash键的别名。
+		// 在任何I/O之前拒绝物理hash键的别名。
 		var keys []string
 		root.collectKeys("", &keys)
 		if len(uniqueRefHMapKeys(keys)) != len(keys) {
@@ -363,7 +364,7 @@ func (s *RedisRefHMapStore[K, V]) Patch(ctx context.Context, key K, path string,
 	for _, name := range target.references {
 		args = append(args, name)
 	}
-	// RR-20261004-03：路径之后声明布局里其余的 hash，脚本把整条记录一起续期。
+	// 路径之后声明布局里其余的 hash，脚本把整条记录一起续期。
 	keys := uniqueRefHMapKeys(append(append([]string(nil), target.keys...), plan.keys()...))
 	applied, err := s.redis.Eval(ctx, refHMapPatchScript, keys, args...)
 	if err != nil {
@@ -449,7 +450,7 @@ func (s *RedisRefHMapStore[K, V]) evalWriteHashes(ctx context.Context, keys []st
 		args = append(args, strconv.Itoa(idx), strconv.Itoa(len(write.values)/2))
 		args = append(args, write.values...)
 	}
-	// RR-20261004-NC-21：错误不能证明 Lua 未执行；无身份重放会覆盖后续写。
+	// 错误不能证明 Lua 未执行；无身份重放会覆盖后续写。
 	// 保留原始原因，让调用方区分失败与结果未知，不自动回滚或降级。
 	result, err := s.redis.Eval(ctx, refHMapWriteScript, keys, args...)
 	return refHMapWriteResult(result, err)
@@ -561,7 +562,7 @@ type refHMapNode struct {
 	suffix string
 	fields []refHMapField
 	// alwaysWritten：这一层有非指针字段，Set 写它时 hash 必然非空。
-	// RR-20261004-03：被引用却不存在的这种 hash 只能是过期或被删，Get 据此报 miss；
+	// 被引用却不存在的这种 hash 只能是过期或被删，Get 据此报 miss；
 	// 字段全是指针的层全 nil 时只被引用、不写 hash，缺失是合法状态。
 	alwaysWritten bool
 }
@@ -638,7 +639,7 @@ func buildRefHMapNode(typ reflect.Type, path []string, maxDepth int, depth int, 
 		if !ok {
 			continue
 		}
-		// RR-20261004-NC-19：同hash字段别名与路径分隔符不能静默覆盖数据。
+		// 同hash字段别名与路径分隔符不能静默覆盖数据。
 		if fieldNames[name] || strings.ContainsAny(name, ":\n\r") || (len(path) == 0 && name == refHMapRegistryField) {
 			return nil, fmt.Errorf("%w: reserved or duplicate field %s.%s (%q)", ErrRefHMapUnsupported, typ.Name(), sf.Name, name)
 		}
@@ -923,7 +924,7 @@ func encodeRefHMapTextScalar(value reflect.Value) (string, bool, error) {
 		return string(raw), true, err
 	}
 	if reflect.PointerTo(value.Type()).Implements(textMarshalerType) {
-		// RR-20261004-NC-17：值根字段不可寻址也要调用已识别的codec。
+		// 值根字段不可寻址也要调用已识别的codec。
 		// 使用独立值副本，避免指针receiver改写调用方的scalar本身。
 		ptr := reflect.New(value.Type())
 		ptr.Elem().Set(value)

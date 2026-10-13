@@ -81,7 +81,7 @@ func (s *RedisJSONHashStore[K, V]) Set(ctx context.Context, value V) error {
 		return err
 	}
 	if ok && s.cfg.Stale != nil && s.cfg.Stale(old, value) {
-		// RR-20261004-NC-15：读前比较仍是建议性检查，但拒写不报告成功。
+		// 读前比较仍是建议性检查，但拒写不报告成功。
 		return ErrStaleWrite
 	}
 	raw, err := json.Marshal(value)
