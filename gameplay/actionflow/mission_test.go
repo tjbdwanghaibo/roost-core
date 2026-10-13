@@ -105,7 +105,7 @@ func TestMissionRunnerStartFailureCleansState(t *testing.T) {
 //   - 回调里调用变更方法时 Deferring() 为真，StartMission 返回 nil，回调返回前被发起的任务
 //     还没有 Start；最外层返回前命令全部执行完，被发起的任务恰好启动一次。
 //   - 延后命令的错误（ErrMissionRunning、构建失败、Start 失败）经 OnError 报告
-//     （`taskflow: deferred start mission: ...`），最外层调用自己的错误照旧返回。
+//     （`actionflow: deferred start mission: ...`），最外层调用自己的错误照旧返回。
 //   - 延后队列有界（ErrDeferredQueueFull），回调互相触发由执行预算截停（ErrDeferredRunaway），
 //     之后 runner 照常可用；回调 panic 被恢复，执行状态不会卡住。
 

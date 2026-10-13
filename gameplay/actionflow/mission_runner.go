@@ -9,9 +9,9 @@ import (
 )
 
 var (
-	ErrMissionRunning     = errors.New("taskflow: mission already running")
-	ErrMissionNotRunning  = errors.New("taskflow: mission not running")
-	ErrMissionIDExhausted = errors.New("taskflow: mission id exhausted")
+	ErrMissionRunning     = errors.New("actionflow: mission already running")
+	ErrMissionNotRunning  = errors.New("actionflow: mission not running")
+	ErrMissionIDExhausted = errors.New("actionflow: mission id exhausted")
 )
 
 // MissionRunnerHooks 是 MissionRunner 的回调钩子，都在“执行中”运行，钩子里发起的变更会被延后。
@@ -87,7 +87,7 @@ type missionCommand struct {
 //   - 回调里的 StartMission / CancelMission 返回 nil（Deferring() 为真即表示被延后）；参数
 //     校验（任务类型为 0、CancelMission 时没有任务）仍立即返回错误。延后命令执行时的错误
 //     （ErrMissionRunning、构建失败、Start 失败等）发起方已拿不到，经 OnError 报告
-//     （`taskflow: deferred start mission: ...`）；最外层调用自己的错误照旧返回。
+//     （`actionflow: deferred start mission: ...`）；最外层调用自己的错误照旧返回。
 //   - 延后命令按“执行时的当前任务”解释，等价于回调返回后立刻按序调用：回调里先
 //     StartMission 再 EndCurMission，结束的是新任务。
 //   - 读方法（CurMission、InMission、MissionInfo 等）在回调里读到的是尚未执行延后命令的状态。
@@ -261,7 +261,7 @@ func (r *MissionRunner) submit(cmd missionCommand) error {
 func (r *MissionRunner) submitWithoutResult(cmd missionCommand) {
 	inCallback := r.executing
 	if err := r.submit(cmd); err != nil && inCallback {
-		r.report(fmt.Errorf("taskflow: %s: %w", cmd.op, err))
+		r.report(fmt.Errorf("actionflow: %s: %w", cmd.op, err))
 	}
 }
 
@@ -288,7 +288,7 @@ func (r *MissionRunner) drain() error {
 		r.deferred[r.head] = missionCommand{}
 		r.head++
 		if err := r.apply(cmd); err != nil {
-			r.report(fmt.Errorf("taskflow: deferred %s: %w", cmd.op, err))
+			r.report(fmt.Errorf("actionflow: deferred %s: %w", cmd.op, err))
 		}
 	}
 	return nil
@@ -330,7 +330,7 @@ func (r *MissionRunner) apply(cmd missionCommand) error {
 		r.applyActionEnd(cmd.actionID, cmd.action, cmd.reason)
 		return nil
 	default:
-		return fmt.Errorf("taskflow: unknown mission command %d", cmd.op)
+		return fmt.Errorf("actionflow: unknown mission command %d", cmd.op)
 	}
 }
 
@@ -437,7 +437,7 @@ func (r *MissionRunner) now() time.Time {
 		func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					r.report(fmt.Errorf("taskflow: mission now hook panic: %v", recovered))
+					r.report(fmt.Errorf("actionflow: mission now hook panic: %v", recovered))
 				}
 			}()
 			now = r.hooks.Now()
@@ -456,7 +456,7 @@ func (r *MissionRunner) context(now time.Time) (ctx *MissionContext) {
 	if r.hooks.Context != nil {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				r.report(fmt.Errorf("taskflow: mission context hook panic: %v", recovered))
+				r.report(fmt.Errorf("actionflow: mission context hook panic: %v", recovered))
 				ctx = &MissionContext{Manager: r, Now: now}
 			}
 		}()
@@ -498,7 +498,7 @@ func (r *MissionRunner) clearActions(missionID int64, reason ActionReason) (err 
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("taskflow: mission clear-actions hook panic: %v", recovered)
+			err = fmt.Errorf("actionflow: mission clear-actions hook panic: %v", recovered)
 		}
 	}()
 	return r.hooks.ClearActions(missionID, reason)
@@ -506,7 +506,7 @@ func (r *MissionRunner) clearActions(missionID int64, reason ActionReason) (err 
 
 func (r *MissionRunner) recoverHook(name string) {
 	if recovered := recover(); recovered != nil {
-		r.report(fmt.Errorf("taskflow: mission %s hook panic: %v", name, recovered))
+		r.report(fmt.Errorf("actionflow: mission %s hook panic: %v", name, recovered))
 	}
 }
 
@@ -544,6 +544,6 @@ func callMissionEnd(m Mission, ctx *MissionContext, reason ActionReason) (err er
 }
 func recoverMissionPanic(operation string, err *error) {
 	if recovered := recover(); recovered != nil {
-		*err = fmt.Errorf("taskflow: mission %s panic: %v", operation, recovered)
+		*err = fmt.Errorf("actionflow: mission %s panic: %v", operation, recovered)
 	}
 }

@@ -7,8 +7,8 @@ import (
 )
 
 var (
-	ErrMissionPlanInvalid = errors.New("taskflow: mission plan is invalid")
-	ErrMissionStepInvalid = errors.New("taskflow: mission step is invalid")
+	ErrMissionPlanInvalid = errors.New("actionflow: mission plan is invalid")
+	ErrMissionStepInvalid = errors.New("actionflow: mission step is invalid")
 )
 
 // PlanMission 按 MissionPlan 逐步执行动作的通用任务。

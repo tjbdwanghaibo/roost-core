@@ -515,3 +515,17 @@ func TestActionRunnerRefusesABuilderThatReturnsNoAction(t *testing.T) {
 		t.Fatal("a nil action was installed as current")
 	}
 }
+
+// 包的错误都以包名 actionflow: 开头，日志与错误链里能直接看出出处。
+func TestErrorsArePrefixedWithThePackageName(t *testing.T) {
+	for _, err := range []error{
+		ErrActionBuilderDuplicate, ErrActionBuilderNotFound, ErrActionGroupFrozen, ErrActionGroupInvalid,
+		ErrActionIDExhausted, ErrBuilderNil, ErrDeferredQueueFull, ErrDeferredRunaway, ErrKindInvalid,
+		ErrMissionBuilderDuplicate, ErrMissionBuilderNotFound, ErrMissionIDExhausted, ErrMissionNotRunning,
+		ErrMissionPlanInvalid, ErrMissionRunning, ErrMissionStepInvalid, ErrRegistrySealed,
+	} {
+		if !strings.HasPrefix(err.Error(), "actionflow: ") {
+			t.Errorf("error %q does not start with the package name", err)
+		}
+	}
+}

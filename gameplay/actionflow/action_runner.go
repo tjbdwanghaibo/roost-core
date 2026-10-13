@@ -11,16 +11,16 @@ import (
 )
 
 var (
-	ErrActionGroupInvalid = errors.New("taskflow: action group is invalid")
-	ErrActionGroupFrozen  = errors.New("taskflow: action group is frozen")
-	ErrActionIDExhausted  = errors.New("taskflow: action id exhausted")
+	ErrActionGroupInvalid = errors.New("actionflow: action group is invalid")
+	ErrActionGroupFrozen  = errors.New("actionflow: action group is frozen")
+	ErrActionIDExhausted  = errors.New("actionflow: action id exhausted")
 	// ErrDeferredQueueFull：一次最外层调用里，回调发起的待执行命令超过
 	// ActionRunnerConfig.MaxDeferredCommands。被拒的 Start / Enqueue 不分配 ID。
-	ErrDeferredQueueFull = errors.New("taskflow: deferred command queue is full")
+	ErrDeferredQueueFull = errors.New("actionflow: deferred command queue is full")
 	// ErrDeferredRunaway：回调互相触发，一次最外层调用执行的延后命令超过
 	// ActionRunnerConfig.MaxDeferredSteps。剩余命令被丢弃，已交出 ID 的动作各收到一次
 	// 取消状态的 OnEnded；截停期间回调里的新变更直接返回本错误。
-	ErrDeferredRunaway = errors.New("taskflow: deferred commands kept triggering more commands")
+	ErrDeferredRunaway = errors.New("actionflow: deferred commands kept triggering more commands")
 )
 
 const (
@@ -424,7 +424,7 @@ func (r *ActionRunner) drain() (err error) {
 			err = errors.Join(err, applyErr)
 		case cmd.op != opAdvance:
 			// 推进命令自己已经报告了排队项的启动失败，这里不重复。
-			r.report(fmt.Errorf("taskflow: deferred %s: %w", cmd.op, applyErr))
+			r.report(fmt.Errorf("actionflow: deferred %s: %w", cmd.op, applyErr))
 		}
 	}
 	return err
@@ -513,7 +513,7 @@ func (r *ActionRunner) apply(cmd runnerCommand) error {
 	case opAdvance:
 		return r.applyAdvance(cmd)
 	default:
-		return fmt.Errorf("taskflow: unknown runner command %d", cmd.op)
+		return fmt.Errorf("actionflow: unknown runner command %d", cmd.op)
 	}
 }
 
@@ -535,7 +535,7 @@ func (r *ActionRunner) applyStart(cmd runnerCommand) error {
 	if unit.cur != nil {
 		replaced := unit.cur.ID
 		if err := r.finish(unit, true, NewActionReason("replaced by next action"), false); err != nil {
-			r.report(fmt.Errorf("taskflow: replaced action %d: %w", replaced, err))
+			r.report(fmt.Errorf("actionflow: replaced action %d: %w", replaced, err))
 		}
 	}
 	return r.start(unit, entry, cmd.now)
@@ -580,7 +580,7 @@ func (r *ActionRunner) applyAdvance(cmd runnerCommand) error {
 	if err == nil {
 		return nil
 	}
-	r.report(fmt.Errorf("taskflow: queued action %d start: %w", next.ID, err))
+	r.report(fmt.Errorf("actionflow: queued action %d start: %w", next.ID, err))
 	r.scheduleAdvance(unit, cmd.group, cmd.now)
 	return err
 }
@@ -645,7 +645,7 @@ func (r *ActionRunner) build(kind ActionKind, param any, missionID int64, group 
 func (r *ActionRunner) resolveGroup(kind ActionKind) (group ActionGroup, ok bool, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("taskflow: group resolver panic for kind %d: %v", kind, recovered)
+			err = fmt.Errorf("actionflow: group resolver panic for kind %d: %v", kind, recovered)
 		}
 	}()
 	group, ok = r.groupForKind(kind)
@@ -724,7 +724,7 @@ func (r *ActionRunner) acquireContext(now time.Time) (ctx *ActionContext) {
 	if r.hooks.PopulateContext != nil || r.hooks.Context != nil {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				r.report(fmt.Errorf("taskflow: action context hook panic: %v", recovered))
+				r.report(fmt.Errorf("actionflow: action context hook panic: %v", recovered))
 				*ctx = ActionContext{Now: now}
 			}
 		}()
@@ -767,7 +767,7 @@ func (r *ActionRunner) transition(entry *actionEntry, active bool) {
 	if r.hooks.OnTransition != nil {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				r.report(fmt.Errorf("taskflow: action transition hook panic: %v", recovered))
+				r.report(fmt.Errorf("actionflow: action transition hook panic: %v", recovered))
 			}
 		}()
 		r.hooks.OnTransition(entry.ActionSnapshot, active)
@@ -777,7 +777,7 @@ func (r *ActionRunner) queued(entry *actionEntry) {
 	if r.hooks.OnQueued != nil {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				r.report(fmt.Errorf("taskflow: action queued hook panic: %v", recovered))
+				r.report(fmt.Errorf("actionflow: action queued hook panic: %v", recovered))
 			}
 		}()
 		r.hooks.OnQueued(entry.ActionSnapshot)
@@ -787,7 +787,7 @@ func (r *ActionRunner) ended(entry *actionEntry, reason ActionReason) {
 	if r.hooks.OnEnded != nil {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				r.report(fmt.Errorf("taskflow: action ended hook panic: %v", recovered))
+				r.report(fmt.Errorf("actionflow: action ended hook panic: %v", recovered))
 			}
 		}()
 		r.hooks.OnEnded(entry.ActionSnapshot, reason)
@@ -820,6 +820,6 @@ func callActionCancel(action Action, ctx *ActionContext, reason string) (err err
 }
 func recoverActionPanic(operation string, err *error) {
 	if recovered := recover(); recovered != nil {
-		*err = fmt.Errorf("taskflow: action %s panic: %v", operation, recovered)
+		*err = fmt.Errorf("actionflow: action %s panic: %v", operation, recovered)
 	}
 }

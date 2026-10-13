@@ -42,6 +42,7 @@
 - 修复日志帧号恒为 0：删除从未推进的 Nest 包级帧计数 `nest.CurTick`；不在 Nest 请求上下文里的日志行改为取运行中 Nest Ticker 的帧号（App 经新能力 `app.ModLogFrame` 提供 `*app.LogFrame`，Nest Mod 在 Provide 时接上 `NestMgr.CurrentTick`）。请求内日志仍由 fctx 带帧号；进程里没有 Nest 时为 0。
 - 生成器错误文本 `unknown kit mod %q` / `kit mod dependency cycle at %q` 改为 `unknown wiring mod %q` / `wiring mod dependency cycle at %q`（Mod 现在在 `wiring/` 下）；按旧文本匹配错误的脚本需同步。
 - skill 求值上下文表的说明（编译诊断原样带出）去掉过程编号（RR-20261005-NC-220/224/280/281/282、O28、O33～O36），改为描述原因与替代写法；诊断码与诊断位置不变。按旧文本匹配诊断的工具需同步。
+- actionflow 的错误前缀由旧包名 `taskflow:` 改为 `actionflow:`（17 个导出错误值与全部格式化错误）；`errors.Is` 判断不受影响，按文本匹配的日志查询需同步。
 
 - Nest 执行池统一为 short/long/io：配置、Stats、指标标签、fctx 身份和生成 Sender 同步迁移；唯一配置 option 为 `NestOptionWithWorkerPools(short, long, io)`，强制准备使用 `SendOptionIO`，不保留旧别名。补齐 statslog 与健康队列汇总遗漏的 long 池，调度和 ID tail 语义不变；迁移表见 docs/framework/NEST-AWAIT.md。
 

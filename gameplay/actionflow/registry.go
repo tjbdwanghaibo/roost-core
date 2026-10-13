@@ -7,13 +7,13 @@ import (
 )
 
 var (
-	ErrRegistrySealed          = errors.New("taskflow: registry is sealed")
-	ErrKindInvalid             = errors.New("taskflow: kind is invalid")
-	ErrBuilderNil              = errors.New("taskflow: builder is nil")
-	ErrActionBuilderDuplicate  = errors.New("taskflow: duplicate action builder")
-	ErrActionBuilderNotFound   = errors.New("taskflow: action builder not found")
-	ErrMissionBuilderDuplicate = errors.New("taskflow: duplicate mission builder")
-	ErrMissionBuilderNotFound  = errors.New("taskflow: mission builder not found")
+	ErrRegistrySealed          = errors.New("actionflow: registry is sealed")
+	ErrKindInvalid             = errors.New("actionflow: kind is invalid")
+	ErrBuilderNil              = errors.New("actionflow: builder is nil")
+	ErrActionBuilderDuplicate  = errors.New("actionflow: duplicate action builder")
+	ErrActionBuilderNotFound   = errors.New("actionflow: action builder not found")
+	ErrMissionBuilderDuplicate = errors.New("actionflow: duplicate mission builder")
+	ErrMissionBuilderNotFound  = errors.New("actionflow: mission builder not found")
 )
 
 // ActionBuilder 按参数构造动作，MissionBuilder 构造任务。
@@ -100,7 +100,7 @@ func (r *Registry) BuildAction(kind ActionKind, param any) (action Action, err e
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			action = nil
-			err = fmt.Errorf("taskflow: action builder %d panic: %v", kind, recovered)
+			err = fmt.Errorf("actionflow: action builder %d panic: %v", kind, recovered)
 		}
 	}()
 	action, err = builder(param)
@@ -124,7 +124,7 @@ func (r *Registry) BuildMission(kind MissionKind) (mission Mission, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			mission = nil
-			err = fmt.Errorf("taskflow: mission builder %d panic: %v", kind, recovered)
+			err = fmt.Errorf("actionflow: mission builder %d panic: %v", kind, recovered)
 		}
 	}()
 	mission = builder()
