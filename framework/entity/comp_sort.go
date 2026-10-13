@@ -3,6 +3,7 @@ package entity
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 )
 
@@ -77,6 +78,9 @@ func (t *compTopologicalSort) GetTopologicalSortedComponents() ([]ComponentType,
 			queue = append(queue, compType)
 		}
 	}
+	// 就绪集合按组件类型值排序再出队：相互独立的组件不能按 map 遍历顺序排列，否则每次进程启动的组件
+	// 初始化顺序都不同。之后变为就绪的组件按依赖登记顺序入队，同样确定。
+	slices.Sort(queue)
 
 	var sorted []ComponentType
 	for len(queue) > 0 {

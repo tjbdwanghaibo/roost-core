@@ -2,6 +2,7 @@ package entity
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -407,6 +408,28 @@ func TestComponentTopologicalSortIncludesDependencies(t *testing.T) {
 	}
 	if len(sorted) != 2 || sorted[0] != ComponentType(1) || sorted[1] != ComponentType(2) {
 		t.Fatalf("unexpected component order: %+v", sorted)
+	}
+}
+
+// 相互独立的组件不能按 map 遍历顺序出队：同一组依赖登记，每次排序（包括新建的排序器）结果都相同。
+func TestComponentTopologicalSortIsDeterministic(t *testing.T) {
+	build := func() []ComponentType {
+		sorter := newCompTopologicalSort()
+		for c := ComponentType(10); c < 40; c++ {
+			sorter.RegisterCompDependency(c)
+		}
+		sorter.RegisterCompDependency(ComponentType(50), ComponentType(12), ComponentType(31))
+		sorted, err := sorter.GetTopologicalSortedComponents()
+		if err != nil {
+			t.Fatalf("GetTopologicalSortedComponents: %v", err)
+		}
+		return sorted
+	}
+	want := build()
+	for range 50 {
+		if got := build(); !slices.Equal(got, want) {
+			t.Fatalf("component order changed between runs:\n first %v\n later %v", want, got)
+		}
 	}
 }
 
