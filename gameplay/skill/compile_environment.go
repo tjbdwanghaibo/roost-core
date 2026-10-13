@@ -1,5 +1,7 @@
 package skill
 
+// AttributeHandle 等是 catalog 条目的数字句柄：属性、资源、状态、单位模板、碰撞层、伤害类型、元素、玩法标签、
+// 共享状态与时间快照 profile。句柄进 gameplay digest，跨版本保持稳定。
 type AttributeHandle uint16
 type ResourceHandle uint16
 type StatusHandle uint16
@@ -11,10 +13,13 @@ type GameplayTagHandle uint16
 type SharedStateHandle uint16
 type TemporalProfileHandle uint16
 
+// AttributeCatalog 是属性目录；每个 *Catalog 都带 Revision，条目按句柄唯一。
 type AttributeCatalog struct {
 	Revision string
 	Entries  []AttributeCatalogEntry
 }
+
+// AttributeCatalogEntry 描述一个属性：键、值类型与量纲、是否可读、允许的快照点与修正操作、上下界与取整。
 type AttributeCatalogEntry struct {
 	Handle             AttributeHandle
 	Key                string
@@ -28,20 +33,26 @@ type AttributeCatalogEntry struct {
 	Rounding           string
 }
 
+// ResourceCatalog 是资源目录。
 type ResourceCatalog struct {
 	Revision string
 	Entries  []ResourceCatalogEntry
 }
+
+// ResourceCatalogEntry 描述一个资源及其上下界。
 type ResourceCatalogEntry struct {
 	Handle           ResourceHandle
 	Key              string
 	Minimum, Maximum int64
 }
 
+// StatusCatalog 是状态（buff）目录。
 type StatusCatalog struct {
 	Revision string
 	Entries  []StatusCatalogEntry
 }
+
+// StatusCatalogEntry 描述一个状态的叠层、刷新、驱散、韧性、来源归属、免疫、属性修正与实例操作策略。
 type StatusCatalogEntry struct {
 	Handle                                                                                                 StatusHandle
 	Key, Category, RefreshPolicy, DispelCategory, TenacityPolicy, SourceOwnership, RemovalPolicy, Polarity string
@@ -55,16 +66,21 @@ type StatusCatalogEntry struct {
 	DurationOperations                                                                                     []string
 	MaximumDurationTicks                                                                                   Tick
 }
+
+// StatusAttributeModifier 是状态带的一个属性修正。
 type StatusAttributeModifier struct {
 	Attribute AttributeHandle
 	Operation string
 	Value     int64
 }
 
+// UnitTemplateCatalog 是召唤物单位模板目录。
 type UnitTemplateCatalog struct {
 	Revision string
 	Entries  []UnitTemplateCatalogEntry
 }
+
+// UnitTemplateCatalogEntry 描述一个单位模板及其召唤策略。
 type UnitTemplateCatalogEntry struct {
 	Handle                                               UnitTemplateHandle
 	Key, OwnerPolicy, ReplacementPolicy, ControlProfile  string
@@ -82,11 +98,13 @@ type UnitTemplateCatalogEntry struct {
 	DynamicCollider                                      bool
 }
 
+// UnitTemplateAttributeOverridePolicy 是模板允许覆盖的一个属性及其范围。
 type UnitTemplateAttributeOverridePolicy struct {
 	Attribute        AttributeHandle
 	Minimum, Maximum int64
 }
 
+// UnitTemplateParameterPolicy 是模板接受的一个具名参数。
 type UnitTemplateParameterPolicy struct {
 	Name             string
 	ValueType        valueKind
@@ -94,6 +112,7 @@ type UnitTemplateParameterPolicy struct {
 	Minimum, Maximum int64
 }
 
+// CollisionLayerCatalog 是碰撞层目录，CollisionLayerCatalogEntry 是其中一项。
 type CollisionLayerCatalog struct {
 	Revision string
 	Entries  []CollisionLayerCatalogEntry
@@ -103,6 +122,7 @@ type CollisionLayerCatalogEntry struct {
 	Key    string
 }
 
+// DamageTypeCatalog 是伤害类型目录，DamageTypeCatalogEntry 是其中一项。
 type DamageTypeCatalog struct {
 	Revision string
 	Entries  []DamageTypeCatalogEntry
@@ -112,6 +132,7 @@ type DamageTypeCatalogEntry struct {
 	Key    string
 }
 
+// ElementCatalog 是元素目录，ElementCatalogEntry 是其中一项。
 type ElementCatalog struct {
 	Revision string
 	Entries  []ElementCatalogEntry
@@ -128,6 +149,7 @@ func (c ElementCatalog) WithTestRevision(revision string) ElementCatalog {
 	return c
 }
 
+// GameplayTagClass 是玩法标签的类别。
 type GameplayTagClass uint8
 
 const (
@@ -137,6 +159,7 @@ const (
 	GameplayTagTargetQueryable
 )
 
+// GameplayTagCatalog 是玩法标签目录，GameplayTagCatalogEntry 是其中一项。
 type GameplayTagCatalog struct {
 	Revision string
 	Entries  []GameplayTagCatalogEntry
@@ -147,12 +170,14 @@ type GameplayTagCatalogEntry struct {
 	Classes GameplayTagClass
 }
 
+// CombatPolicyCatalog 是战斗策略的取值范围。
 type CombatPolicyCatalog struct {
 	Revision      string
 	DamageTypes   []DamageTypeHandle
 	FormulaPolicy string
 }
 
+// SharedStateCatalog 是跨技能共享的持久状态目录，SharedStateCatalogEntry 是其中一项。
 type SharedStateCatalog struct {
 	Revision string
 	Entries  []SharedStateCatalogEntry
@@ -165,12 +190,15 @@ type SharedStateCatalogEntry struct {
 	Minimum, Maximum     int64
 }
 
+// AbilityControlCatalog 是技能实例控制相关的目录。
 type AbilityControlCatalog struct {
 	Revision       string
 	SelectableTags []GameplayTagHandle
 	OwnerRelations []string
 	Properties     []AbilityPropertyPolicy
 }
+
+// AbilityPropertyPolicy 描述技能实例的一个可读 / 可改属性。
 type AbilityPropertyPolicy struct {
 	Property                          string
 	ValueType                         valueKind
@@ -179,6 +207,7 @@ type AbilityPropertyPolicy struct {
 	MaximumDurationTicks              Tick
 }
 
+// TemporalSnapshotCatalog 是时间快照 profile 目录，TemporalSnapshotProfile 是其中一项。
 type TemporalSnapshotCatalog struct {
 	Revision string
 	Entries  []TemporalSnapshotProfile
@@ -193,6 +222,7 @@ type TemporalSnapshotProfile struct {
 	AllowRevive                                       bool
 }
 
+// GameplayCatalog 汇总编译环境里的全部玩法目录。
 type GameplayCatalog struct {
 	Attributes    AttributeCatalog
 	Resources     ResourceCatalog
@@ -208,6 +238,7 @@ type GameplayCatalog struct {
 	Temporal      TemporalSnapshotCatalog
 }
 
+// MotionCapabilityCatalog 是运动能力目录：允许的衍生物种类、轨迹组合与各运动变体。
 type MotionCapabilityCatalog struct {
 	Revision             string
 	SpawnTrajectoryPairs []MotionSpawnTrajectoryPair
@@ -218,6 +249,7 @@ type MotionCapabilityCatalog struct {
 	MaximumTrackingTicks Tick
 }
 
+// MotionSpawnTrajectoryPair 是一对允许组合的衍生物种类与轨迹；MotionVariantCapability 是一个运动变体的能力。
 type MotionSpawnTrajectoryPair struct{ Spawn, Trajectory string }
 type MotionVariantCapability struct {
 	Spawn, Trajectory                             string
@@ -225,10 +257,14 @@ type MotionVariantCapability struct {
 	Carry                                         bool
 	Completions                                   []string
 }
+
+// SpawnPropertyCatalog 是衍生物数值属性目录。
 type SpawnPropertyCatalog struct {
 	Revision   string
 	Properties []SpawnPropertyPolicy
 }
+
+// SpawnPropertyHandle 是衍生物数值属性的句柄；SpawnPropertySlotBinding 与 SpawnPropertyPolicy 描述它的绑定与策略。
 type SpawnPropertyHandle uint16
 type SpawnPropertySlotBinding struct {
 	Stage, Variant, Field string
@@ -243,6 +279,8 @@ type SpawnPropertyPolicy struct {
 	Rounding         string
 	SlotBindings     []SpawnPropertySlotBinding
 }
+
+// VisualCatalog 是表现目录：主题、类别、元素与上限，Digest 由内容算出。
 type VisualCatalog struct {
 	Revision, Digest string
 	Themes           []string // compact compatibility projection of Categories.
@@ -251,6 +289,7 @@ type VisualCatalog struct {
 	Limits           VisualLimits
 }
 
+// VisualLimits 等描述表现目录的上限与各项描述符。
 type VisualLimits struct {
 	MaxIconKeywords, MaxVisualRefs, MaxElementsPerRef, MaxCategoryBytes, MaxThemeBytes, MaxElementBytes, MaxKeywordBytes, MaxManifestEntries int
 }
@@ -277,11 +316,13 @@ func (c VisualCatalog) WithTestRevision(revision string) VisualCatalog {
 	return c
 }
 
+// NumericAuthority 是编译环境约定的数值刻度：距离、角度、基点、整数位宽、tick 单位与默认取整。
 type NumericAuthority struct {
 	WorldDistanceScale, MillidegreesPerDegree, BasisPointsScale, SignedIntegerBits int
 	TickUnit, DefaultRounding                                                      string
 }
 
+// CompileLimits 是编译期的各项预算上限。
 type CompileLimits struct {
 	MaxPhases, MaxFlowNodes, MaxFlowDepth, MaxValueNodes, MaxRepeat, MaxTargets, MaxSpawns, MaxSchedules, MaxMutations                                                                                                                                                                                                                                                                                                                                                              int
 	MaxLifetimeTicks                                                                                                                                                                                                                                                                                                                                                                                                                                                                Tick
@@ -290,6 +331,7 @@ type CompileLimits struct {
 	MaxTemporalSnapshotAge                                                                                                                                                                                                                                                                                                                                                                                                                                                          Tick
 }
 
+// CompileEnvironment 是编译所依据的权威环境：语义修订、目录、能力表与上限，Digest 由 AuthorityDigest 封装。
 type CompileEnvironment struct {
 	CompilerSemanticsRevision string
 	Revision                  string

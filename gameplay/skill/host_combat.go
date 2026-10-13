@@ -1,5 +1,6 @@
 package skill
 
+// DamageCommand 是一次伤害实例。
 type DamageCommand struct {
 	Source      EntityID
 	Owner       EntityID
@@ -15,6 +16,7 @@ type DamageCommand struct {
 
 func (DamageCommand) isEffectCommandPayload() {}
 
+// DamageResult 是伤害管线的结算结果。
 type DamageResult struct {
 	Attempted, Mitigated, Absorbed, HealthDamage int64
 	Critical, Blocked, Dodged, Immune, Killed    bool
@@ -22,6 +24,7 @@ type DamageResult struct {
 	CombatHooks                                  []string
 }
 
+// DamageEffectResult 是伤害效果的结果载荷。
 type DamageEffectResult struct {
 	ResultOutcome
 	Result DamageResult
@@ -29,6 +32,7 @@ type DamageEffectResult struct {
 
 func (DamageEffectResult) isEffectResultPayload() {}
 
+// HealCommand 是一次治疗。
 type HealCommand struct {
 	Source, Target EntityID
 	Amount         int64
@@ -38,6 +42,7 @@ type HealCommand struct {
 
 func (HealCommand) isEffectCommandPayload() {}
 
+// HealResult 是治疗的尝试量与实际恢复量；HealEffectResult 是它的结果载荷。
 type HealResult struct{ Attempted, Effective int64 }
 type HealEffectResult struct {
 	ResultOutcome
@@ -46,6 +51,7 @@ type HealEffectResult struct {
 
 func (HealEffectResult) isEffectResultPayload() {}
 
+// ShieldCommand 给目标加护盾。
 type ShieldCommand struct {
 	Source, Target EntityID
 	Amount         int64
@@ -58,6 +64,7 @@ type ShieldCommand struct {
 
 func (ShieldCommand) isEffectCommandPayload() {}
 
+// ShieldResult 是实际增加的护盾值；ShieldEffectResult 是它的结果载荷。
 type ShieldResult struct{ Added int64 }
 type ShieldEffectResult struct {
 	ResultOutcome
@@ -66,6 +73,7 @@ type ShieldEffectResult struct {
 
 func (ShieldEffectResult) isEffectResultPayload() {}
 
+// StatusCommand 给目标施加状态（buff）。
 type StatusCommand struct {
 	SourceOwner   EntityID
 	SourceSkill   string
@@ -81,6 +89,7 @@ type StatusCommand struct {
 
 func (StatusCommand) isEffectCommandPayload() {}
 
+// RemoveStatusCommand 移除目标的某个状态。
 type RemoveStatusCommand struct {
 	SourceOwner EntityID
 	Target      EntityID
@@ -91,6 +100,7 @@ type RemoveStatusCommand struct {
 
 func (RemoveStatusCommand) isEffectCommandPayload() {}
 
+// DispelStatusCommand 驱散目标身上某个类别的至多 Count 个状态。
 type DispelStatusCommand struct {
 	Target   EntityID
 	Category string
@@ -101,6 +111,7 @@ type DispelStatusCommand struct {
 
 func (DispelStatusCommand) isEffectCommandPayload() {}
 
+// StatusResult 是状态操作的结果：是否施加 / 移除 / 免疫、层数与到期变化。
 type StatusResult struct {
 	Applied, Removed, Immune bool
 	PreviousStacks           int
@@ -112,6 +123,7 @@ type StatusResult struct {
 	CombatHooks              []string
 }
 
+// StatusEffectResult 是状态效果的结果载荷。
 type StatusEffectResult struct {
 	ResultOutcome
 	Result StatusResult
@@ -119,6 +131,7 @@ type StatusEffectResult struct {
 
 func (StatusEffectResult) isEffectResultPayload() {}
 
+// AttributeModifierCommand 给目标施加一个限时属性修正（add / mul_bp）。
 type AttributeModifierCommand struct {
 	SourceOwner   EntityID
 	SourceSkill   string
@@ -134,6 +147,7 @@ type AttributeModifierCommand struct {
 
 func (AttributeModifierCommand) isEffectCommandPayload() {}
 
+// AttributeModifierResult 是属性修正的结果；AttributeModifierEffectResult 是它的结果载荷。
 type AttributeModifierResult struct {
 	Applied bool
 	DueTick Tick

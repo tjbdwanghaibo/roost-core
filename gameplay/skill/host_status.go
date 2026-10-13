@@ -10,15 +10,18 @@ func NewStatusInstanceID(opaque uint64) StatusInstanceID { return StatusInstance
 // OpaqueID 返回 Host 签发的原始 ID。
 func (id StatusInstanceID) OpaqueID() uint64 { return id.opaque }
 
+// StatusInstanceRef 引用目标身上的一个状态实例。
 type StatusInstanceRef struct {
 	ID     StatusInstanceID
 	Target EntityID
 }
 
+// StatusSetSelectShape 选择目标身上的状态实例。
 type StatusSetSelectShape struct{ Target EntityID }
 
 func (StatusSetSelectShape) isSelectShape() {}
 
+// StatusIDSelectFilter 等按状态 ID、文本 / 标签、标志、相关实体、来源技能与数值比较过滤状态实例。
 type StatusIDSelectFilter struct{ Status StatusHandle }
 type StatusTextSelectFilter struct {
 	Kind, Value string
@@ -42,6 +45,7 @@ func (StatusEntitySelectFilter) isSelectFilter()      {}
 func (StatusSourceSkillSelectFilter) isSelectFilter() {}
 func (StatusCompareSelectFilter) isSelectFilter()     {}
 
+// ModifyStatusInstanceCommand 对一个状态实例做偷取、转移、层数或时长修改。
 type ModifyStatusInstanceCommand struct {
 	Owner           EntityID
 	SourceSkillID   string
