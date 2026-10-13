@@ -165,16 +165,8 @@ type Shop interface {
 }
 `
 
-// An affinity marker must change where the generated client sends a call.
-//
-// It was parsed and ignored in the first version: the marker validated, a
-// context key was never set, and the picker was never installed. The second
-// version set the key and installed the picker, and this test compared the
-// generated TEXT for both — while the generated call still went out as
-// CallChecked(ctx, 0, …), the queue-group call that never consults a picker
-// and has no discovery to pick from (RR-20261006-59, F09-R1: match's 7 and
-// activity's 11 affinity methods were all routed at random). So this test now
-// compiles the generated package and runs it against a recording bus.
+// 亲和标记必须改变生成的客户端把调用发往何处：只比生成文本不够（曾经文本里装了 picker，调用仍走不经 picker 的
+// queue-group CallChecked），所以这里编译生成的包并对着记录型总线运行。历史：RR-20261006-59。
 func TestAnAffinityMarkerReachesTheGeneratedClient(t *testing.T) {
 	services, err := ParseDir(writeDir(t, goldenService))
 	if err != nil {
@@ -500,11 +492,8 @@ func TestNothingIsListedThatIsNotEmitted(t *testing.T) {
 	}
 }
 
-// A ClientMod's dependency must name a Mod, because app resolves dependencies
-// by Mod name. mods.ModBus is a CAPABILITY name that no Mod is called, so a
-// client depending on it fails assembly with `unknown mod dependency "bus"` in
-// every real process — which every generated client did until a generated
-// game template was started (U-0024). The bus is published by the NATS Mod.
+// ClientMod 的依赖必须是 Mod 名，因为 app 按 Mod 名解析依赖：mods.ModBus 是能力名、没有 Mod 叫这个名字，依赖它会在
+// 每个真实进程里装配失败（unknown mod dependency "bus"）。总线由 NATS Mod 发布。
 func TestTheGeneratedClientDependsOnTheModThatPublishesTheBus(t *testing.T) {
 	services, err := ParseDir(writeDir(t, goldenService))
 	if err != nil {

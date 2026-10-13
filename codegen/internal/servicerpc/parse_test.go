@@ -801,17 +801,8 @@ type M interface {
 	}
 }
 
-// -check compares the generated output against what is on disk and fails on
-// any difference.
-//
-// This mode used to return right after the refusals ran, so it exited 0 on a
-// generated file that was stale, hand-edited, or produced by a different
-// version of this generator — while being documented in two READMEs as the CI
-// drift gate. A gate that cannot fail is worse than no gate: it reports that
-// the committed transport matches the interface when nobody looked.
-//
-// It was found by deliberately appending a comment to a committed generated
-// file and watching -check exit 0.
+// -check 把生成结果与磁盘上的文件比对，任何差异都失败：过期、手改或由别的生成器版本产出的文件都不能以 0 退出——
+// 一个不会失败的漂移门禁比没有更糟。
 func TestCheckDetectsDrift(t *testing.T) {
 	dir := writeDir(t, goodService)
 
@@ -889,5 +880,69 @@ type M interface {
 	if contains(err.Error(), "missing") || contains(err.Error(), "does not match") {
 		t.Fatalf("the drift report shadowed the refusal, so the author sees a diff instead of "+
 			"the design problem: %v", err)
+	}
+}
+
+// 接口里同名方法声明两次拒绝；派生形式的亲和键必须是 `param.Method()`。
+func TestBuildServiceRefusesDuplicateMethodsAndMalformedDerivedAffinity(t *testing.T) {
+	duplicated := strings.Replace(goodService, "\tList(ctx context.Context, playerID int64, cursor string, limit int) (page Page, err error)\n", "\tSend(ctx context.Context, req SendRequest) (envelope Envelope, err error)\n", 1)
+	if duplicated == goodService {
+		t.Fatal("fixture method not found")
+	}
+	if _, err := ParseDir(writeDir(t, duplicated)); err == nil || !strings.Contains(err.Error(), "method Send is declared twice") {
+		t.Fatalf("duplicate method = %v", err)
+	}
+	derived := strings.Replace(goodService, "\tSend(ctx context.Context, req SendRequest) (envelope Envelope, err error)\n", "\t//roost:rpc affinity=req.Key\n\tSend(ctx context.Context, req SendRequest) (envelope Envelope, err error)\n", 1)
+	if _, err := ParseDir(writeDir(t, derived)); err == nil || !strings.Contains(err.Error(), "the derived form is param.Method() with no arguments") {
+		t.Fatalf("derived affinity without call parentheses = %v", err)
+	}
+	valid := strings.Replace(goodService, "\tSend(ctx context.Context, req SendRequest) (envelope Envelope, err error)\n", "\t//roost:rpc affinity=req.Key()\n\tSend(ctx context.Context, req SendRequest) (envelope Envelope, err error)\n", 1)
+	if _, err := ParseDir(writeDir(t, valid)); err != nil {
+		t.Fatalf("derived affinity with a call refused: %v", err)
+	}
+}
+
+func TestUnsupportedWireShapesAreRejectedAtTheNamedField(t *testing.T) {
+	for _, typ := range []string{"[4]byte", "interface{ Read() }", "*[]time.Duration", "**time.Duration", "[][]time.Time"} {
+		t.Run(typ, func(t *testing.T) {
+			src := strings.Replace(goodService, "req SendRequest", "req "+typ, 1)
+			if _, err := ParseDir(writeDir(t, src)); err == nil || !strings.Contains(err.Error(), "field req") {
+				t.Fatalf("unsupported %s escaped field validation: %v", typ, err)
+			}
+		})
+	}
+}
+func TestReliableMarkerCannotSilentlyPromiseAProtocol(t *testing.T) {
+	src := strings.Replace(goodService, "// Send stores an envelope.", "//roost:rpc reliable", 1)
+	if _, err := ParseDir(writeDir(t, src)); err == nil || !strings.Contains(err.Error(), "nats.rpc.transport") {
+		t.Fatalf("unsupported per-method reliable marker accepted: %v", err)
+	}
+}
+func TestDerivedAffinityRejectsExpressionsInsteadOfMethodNames(t *testing.T) {
+	for _, expr := range []string{"req.X.Y()", "req.Key(1)", "req.Key()()"} {
+		src := strings.Replace(goodService, "// Send stores an envelope.", "//roost:rpc affinity="+expr, 1)
+		if _, err := ParseDir(writeDir(t, src)); err == nil {
+			t.Fatalf("invalid affinity accepted: %s", expr)
+		}
+	}
+}
+func TestTicketIDsWireNameKeepsPluralAcronymTogether(t *testing.T) {
+	for name, want := range map[string]string{"TicketIDs": "ticket_ids", "URLs": "urls", "HTTPStatus": "http_status", "PlayerID": "player_id"} {
+		if got := jsonName(name); got != want {
+			t.Errorf("%s => %s, want %s", name, got, want)
+		}
+	}
+}
+func TestAssemblyCollisionIsCheckedWhereCodeWillBeWritten(t *testing.T) {
+	src := writeDir(t, goodService+"\ntype Server struct{}\n")
+	out := t.TempDir()
+	if err := Run([]string{"-dir", src, "-out", out, "-emit", "assembly"}, io.Discard); err != nil {
+		t.Fatalf("unrelated source Server blocked assembly: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(out, "manual.go"), []byte("package mail\ntype Server struct{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"-dir", src, "-out", out, "-emit", "assembly"}, io.Discard); err == nil || !strings.Contains(err.Error(), "Server") {
+		t.Fatalf("output collision accepted: %v", err)
 	}
 }
