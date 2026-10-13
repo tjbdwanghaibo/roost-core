@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 )
 
 // The RPC response envelope is a wire contract between processes that may run
@@ -62,24 +64,6 @@ func TestDecodeRPCResponseRefusesEveryMalformedEnvelope(t *testing.T) {
 	// A success with a nil target does not need a payload.
 	if err := decodeRPCResponse(codec, encode(t, rpcResponseEnvelope{Version: rpcWireVersion, OK: true}), nil); err != nil {
 		t.Fatalf("nil target must not require a payload: %v", err)
-	}
-}
-
-// Stop is final. Start on a stopped bus must refuse, not silently build a new
-// worker pool on top of released subscriptions.
-func TestBusRefusesToRestartAfterStop(t *testing.T) {
-	b := New(&lifecycleClient{}, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game"})
-	if err := b.Start(); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.StopWithContext(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.Start(); err == nil || !strings.Contains(err.Error(), "cannot restart a stopped bus") {
-		t.Fatalf("Start after Stop = %v", err)
-	}
-	if b.pool != nil {
-		t.Fatal("a refused restart must not leave a worker pool behind")
 	}
 }
 
@@ -142,10 +126,9 @@ func TestBusDeadLetterOperationsRefuseWithoutACapableStore(t *testing.T) {
 	}
 }
 
-// U-0107（B-14）：重投递 ID 是死信条目的摘要。它必须对同一条目稳定（发布成功
-// 但删除失败后，运维重试不能绕过收件箱去重），对不同条目不同，并且在条目
-// 无法序列化时报错而不是把所有条目都发到 sha256(nil) 这一个 ID 下。当前的
-// DeadLetterEntry 全是纯值字段、不会序列化失败，所以最后一条只能作为护栏。
+// 重投递 ID 是死信条目的摘要：对同一条目稳定（发布成功但删除失败后，运维重试不能绕过收件箱去重），对不同条目不同，
+// 条目无法序列化时报错而不是全部落到 sha256(nil) 一个 ID 下。当前 DeadLetterEntry 全是纯值字段、不会序列化失败，
+// 最后一条只作为护栏。
 func TestDeadLetterRequeueIDIsStableAndDistinct(t *testing.T) {
 	entry := DeadLetterEntry{MsgID: "m-1", FromSid: 1, ToSid: 2, ToModule: "mail", MsgName: "Changed", Attempt: 3, Reason: "handler panic", Payload: []byte("p"), CreatedAt: 10, FailedAt: 20}
 	first, err := entry.requeueMsgID()
@@ -161,5 +144,96 @@ func TestDeadLetterRequeueIDIsStableAndDistinct(t *testing.T) {
 	otherID, _ := other.requeueMsgID()
 	if otherID == first {
 		t.Fatal("entries with different payloads shared one requeue id")
+	}
+}
+
+// 死信重投：没有 NATS 客户端时报“客户端为空”，而不是在发布处 nil 解引用；存储只会整桶清除（无逐条删除能力）时，
+// 带 Limit / Stop 的部分重投在发布之后、清桶之前停下并报“不支持部分删除”——否则未被选中的死信会随整桶一起被清掉。
+// 管理命令注册对缺注册表 / 缺总线各报其错且不留下半注册。nil 总线的 Handle / HandleRpc / EnableJetStreamRPC 报错不 panic。
+
+// purgeOnlyStore can list and purge dead letters but cannot delete a chosen
+// subset — the shape of a store whose DLQ is a plain list.
+type purgeOnlyStore struct {
+	ReliableStore
+	inner *reliableMemoryStore
+}
+
+func (s purgeOnlyStore) ListDeadLetters(ctx context.Context, query DeadLetterQuery) ([]DeadLetterEntry, error) {
+	return s.inner.ListDeadLetters(ctx, query)
+}
+
+func (s purgeOnlyStore) PurgeDeadLetters(ctx context.Context, query DeadLetterQuery) (int64, error) {
+	return s.inner.PurgeDeadLetters(ctx, query)
+}
+
+func deadLetterTwice(b *Bus) {
+	for _, id := range []string{"dead-1", "dead-2"} {
+		b.deadLetter(&fnats.NatsMsg{ToSid: 2, ToModule: "mail", MsgName: "Changed", MsgID: id, Payload: []byte(`{"x":1}`)}, "handler failed")
+	}
+}
+
+func TestRequeueDeadLettersRefusesWithoutAClientAndPartialRequeueOnAPurgeOnlyStore(t *testing.T) {
+	ctx := context.Background()
+	store := newReliableMemoryStore()
+	clientless := New(nil, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	_ = clientless.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
+	clientless.EnableReliable(store, ReliableConfig{Enabled: true})
+	deadLetterTwice(clientless)
+	if n, err := clientless.RequeueDeadLetters(ctx, DeadLetterQuery{Module: "mail", MsgName: "Changed"}); err == nil || n != 0 || !strings.Contains(err.Error(), "nats client is nil") {
+		t.Fatalf("RequeueDeadLetters without a client = (%d, %v)", n, err)
+	}
+	if store.deadLetterCount() != 2 {
+		t.Fatalf("a refused requeue touched the dead letters: %d left", store.deadLetterCount())
+	}
+
+	purgeOnly := newReliableMemoryStore()
+	client := &captureNatsClient{}
+	b := New(client, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game", Prefix: "roost"})
+	_ = b.Handle("mail", "Changed", func(*MsgContext) {}) // 死信桶只按注册过的名字建（RR-20261006-72）
+	b.EnableReliable(purgeOnlyStore{ReliableStore: purgeOnly, inner: purgeOnly}, ReliableConfig{Enabled: true})
+	deadLetterTwice(b)
+	n, err := b.RequeueDeadLetters(ctx, DeadLetterQuery{Module: "mail", MsgName: "Changed", Limit: 1})
+	if err == nil || !strings.Contains(err.Error(), "does not support partial dead letter deletion") {
+		t.Fatalf("partial requeue on a purge-only store = (%d, %v)", n, err)
+	}
+	if n != 1 || len(client.published) != 1 {
+		t.Fatalf("partial requeue published %d (n=%d), want exactly the selected entry", len(client.published), n)
+	}
+	if purgeOnly.deadLetterCount() != 2 {
+		t.Fatalf("partial requeue purged the bucket: %d left, want 2", purgeOnly.deadLetterCount())
+	}
+	// 对照：整桶重投在只会清桶的存储上成立。
+	n, err = b.RequeueDeadLetters(ctx, DeadLetterQuery{Module: "mail", MsgName: "Changed"})
+	if err != nil || n != 2 || len(client.published) != 3 || purgeOnly.deadLetterCount() != 0 {
+		t.Fatalf("whole-bucket requeue = (%d, %v), published=%d left=%d", n, err, len(client.published), purgeOnly.deadLetterCount())
+	}
+}
+
+func TestAdminRegistrationAndNilBusEntryPointsRefuse(t *testing.T) {
+	b := New(&lifecycleClient{}, nil, MessagePackCodec{}, Config{Sid: 1, SvcType: "game"})
+	reg := admin.NewRegistry()
+	if err := RegisterAdminCommands(nil, b); err == nil || !strings.Contains(err.Error(), "admin registry nil") {
+		t.Fatalf("RegisterAdminCommands(nil registry) = %v", err)
+	}
+	if err := RegisterAdminCommands(reg, nil); err == nil || !strings.Contains(err.Error(), "nil bus") {
+		t.Fatalf("RegisterAdminCommands(nil bus) = %v", err)
+	}
+	if names := reg.Names(); len(names) != 0 {
+		t.Fatalf("a refused registration left commands behind: %v", names)
+	}
+	if err := RegisterAdminCommands(reg, b); err != nil || len(reg.Names()) == 0 {
+		t.Fatalf("RegisterAdminCommands = %v, names=%v", err, reg.Names())
+	}
+
+	var none *Bus
+	if err := none.Handle("mail", "Changed", func(*MsgContext) {}); err == nil || !strings.Contains(err.Error(), "nil bus") {
+		t.Fatalf("Handle on a nil bus = %v", err)
+	}
+	if err := none.HandleRpc("Ping", func(*RpcContext) (any, error) { return nil, nil }); err == nil || !strings.Contains(err.Error(), "nil bus") {
+		t.Fatalf("HandleRpc on a nil bus = %v", err)
+	}
+	// 传一个真的 JetStream 替身：nil 总线的拒绝不能靠"js 也是 nil"顺带成立。
+	if err := none.EnableJetStreamRPC(&captureJetStreamRPC{}, JetStreamRPCConfig{}); !errors.Is(err, ErrJetStreamRPCUnavailable) {
+		t.Fatalf("EnableJetStreamRPC on a nil bus = %v", err)
 	}
 }

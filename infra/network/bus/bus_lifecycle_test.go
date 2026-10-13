@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"testing"
 	"time"
@@ -117,8 +118,11 @@ func TestBusRejectsRestartAfterStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.Stop()
-	if err := b.Start(); err == nil {
-		t.Fatal("restart after stop must be rejected")
+	if err := b.Start(); err == nil || !strings.Contains(err.Error(), "cannot restart a stopped bus") {
+		t.Fatalf("restart after stop = %v, want it rejected", err)
+	}
+	if b.pool != nil {
+		t.Fatal("a refused restart must not leave a worker pool behind")
 	}
 	// Cleanup of a failed Start keeps the Bus eligible for a retry.
 	retryClient := &lifecycleClient{failAt: 1}

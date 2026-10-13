@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 func refusedRPCTask(id string) *incomingTask {
@@ -326,5 +328,14 @@ func TestServedRPCMethodLabelsAreTheRegisteredMethods(t *testing.T) {
 	}
 	if got := busMetricValue("bus_rpc_request_total", map[string]string{"method": "mail.List", "result": "ok"}); got != 1 {
 		t.Fatalf("the registered method's requests counted %d, want 1", got)
+	}
+}
+
+func TestRPCErrorResponseUsesCodeReasonEnvelope(t *testing.T) {
+	def := errcode.Define(598877, "bus.rpc_test", "rpc test failed")
+	resp := rpcErrorResponse(errcode.Wrap(def, errors.New("storage down")))
+
+	if resp.Code != 598877 || resp.Reason != "rpc test failed" {
+		t.Fatalf("resp = %+v, want code/reason envelope", resp)
 	}
 }
