@@ -250,6 +250,21 @@ func GetAllEntityBuilders() []*EntityBuilderParam {
 	return result
 }
 
+// ResetEntityRegistryForTest 清空整张 kind 注册表（每个 kind 的定义、builder 与派生锁档）。
+//
+// Deprecated: 不要再用。它清掉的是进程级的整张表，包括 init() 与 sync.Once 只注册一次的条目，
+// 同一进程里的后续用例（含 go test -count>1 的第二轮）因此拿不到它们。entity 包自己的测试使用按用例快照并恢复
+// 注册表的夹具；包外测试请让每个用例使用互不冲突的 kind，并用 sync.Once 保证只注册一次。
+// 维护者 2026-09-27 决定加弃用注释、保留为导出，供业务测试使用；仓内没有调用方不是删除它的理由。
+func ResetEntityRegistryForTest() {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	for i := range kindEntries {
+		kindEntries[i].Store(nil)
+		lockRankByKind[i].Store(0)
+	}
+}
+
 // GetEntityKindRemotePolicy 返回 kind 在注册表里的实际 Remote 策略；未注册时为 RemotePolicyNone。
 func GetEntityKindRemotePolicy(kind EntityKind) RemotePolicy {
 	// builder 与 kind 定义共用这条记录，RegisterEntityBuilder 先声明 kind 再存 builder，所以“没有记录”也意味着
