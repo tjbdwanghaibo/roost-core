@@ -421,10 +421,6 @@ func (m *Msg) Key() int64 {
 	return 0
 }
 
-func (m *Msg) TraceActive() bool {
-	return m != nil && m.Context.Trace.Active()
-}
-
 func (m *Msg) clean() {
 	*m = Msg{}
 }

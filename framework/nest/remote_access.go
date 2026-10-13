@@ -22,7 +22,6 @@ const (
 var (
 	ErrRemoteAccessAliasDuplicate = errors.New("nest: duplicate remote access alias")
 	ErrRemoteAccessMissing        = errors.New("nest: remote snapshot missing")
-	ErrRemoteSnapshotTypeMismatch = errors.New("nest: remote snapshot type mismatch")
 	ErrRemoteSnapshotIdentity     = errors.New("nest: remote snapshot identity mismatch")
 )
 

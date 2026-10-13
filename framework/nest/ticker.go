@@ -17,16 +17,6 @@ func CurTick() uint64 {
 	return atomic.LoadUint64(&tick)
 }
 
-// IncTick 把包级帧计数加一并返回新值。
-func IncTick() uint64 {
-	return atomic.AddUint64(&tick, 1)
-}
-
-// SetTick 设置包级帧计数。
-func SetTick(curTick uint64) {
-	atomic.StoreUint64(&tick, curTick)
-}
-
 var (
 	tickMu sync.RWMutex
 	// tickCbSeen 按名字去重；tickCbList 保持注册顺序，让回调执行顺序确定（按 map 遍历会让回调间顺序随进程变化）。
@@ -71,13 +61,6 @@ func MustRegisterTickCallback(name TickCallbackName, cb func(msg TickMsg)) {
 	}
 }
 
-// RangeAllTickCallback 按注册顺序把每个帧回调交给 f。
-func RangeAllTickCallback(f func(ff func(msg TickMsg))) {
-	for _, cb := range snapshotTickCallbacks() {
-		f(cb)
-	}
-}
-
 // snapshotTickCallbacks 返回只读快照，调用者不得改写切片。
 // 注册时发布新数组，故 callback 内注册新 callback 不会影响本轮或造成锁重入。
 func snapshotTickCallbacks() []func(msg TickMsg) {
@@ -117,13 +100,6 @@ func (t *Ticker) CurrentTick() uint64 {
 		return 0
 	}
 	return t.tick.Load()
-}
-
-// SetCurrentTick 设置当前帧号。
-func (t *Ticker) SetCurrentTick(value uint64) {
-	if t != nil {
-		t.tick.Store(value)
-	}
 }
 
 // Duration 返回帧间隔；nil 或未配置时为 100ms。

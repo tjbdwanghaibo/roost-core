@@ -102,13 +102,6 @@ type CommitFence struct {
 	Offset        int64
 }
 
-// CommitWAL 由基础设施包实现。Append 是提交点；Replay 必须按原追加顺序返回未确认的记录。
-type CommitWAL interface {
-	Append(ctx context.Context, record CommitRecord) (CommitFence, error)
-	Ack(ctx context.Context, fence CommitFence) error
-	Replay(ctx context.Context, consume func(CommitFence, CommitRecord) error) error
-}
-
 // TransactionCommitter 执行持久准入并安排回放 / outbox 投递。持久接受记录之后绝不能再报告失败；
 // 提交后的投递失败在带外重试。
 type TransactionCommitter interface {

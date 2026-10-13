@@ -663,11 +663,6 @@ func SortEntity(es []entity.IThreadSafeEntity) {
 	})
 }
 
-// SortEntityId 按与 SortEntity 相同的锁序排序实体 ID。
-func SortEntityId(guids []int64) {
-	slices.SortFunc(guids, compareEntityIDs)
-}
-
 // compareEntityIDs 是锁序比较：先比锁组，再比 GUId。
 func compareEntityIDs(guidI, guidJ int64) int {
 	groupI, groupJ := entity.GetEntityGroup(guidI), entity.GetEntityGroup(guidJ)

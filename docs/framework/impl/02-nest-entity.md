@@ -166,7 +166,7 @@
 | [stats.go](../../../framework/nest/stats.go) | `DispatcherWorkStats`、`DispatchLaneStats`、`DispatchQueueStats`、`DispatcherStats` |
 | [ticker.go](../../../framework/nest/ticker.go) | `TickCallbackName`、`Ticker` |
 | [trace.go](../../../framework/nest/trace.go) | 函数/方法或内部实现；见源码 |
-| [transaction.go](../../../framework/nest/transaction.go) | `DurabilityPolicy`、`TransactionID`、`EntityMutation`、`Effect`、`CommitRecord`、`CommitFence`、`CommitWAL`、`TransactionCommitter`、`TransactionReleaseNotifier`、`LocalExecutorBinder`、`CommitTicket`、`PipelinedTransactionCommitter`、`CommitParticipant` |
+| [transaction.go](../../../framework/nest/transaction.go) | `DurabilityPolicy`、`TransactionID`、`EntityMutation`、`Effect`、`CommitRecord`、`CommitFence`、`TransactionCommitter`、`TransactionReleaseNotifier`、`LocalExecutorBinder`、`CommitTicket`、`PipelinedTransactionCommitter`、`CommitParticipant` |
 
 ### worker
 
