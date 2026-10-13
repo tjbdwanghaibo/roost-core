@@ -34,7 +34,7 @@ type OrderStore = versionstore.Store[string, Order]
 // Return ErrDeliveryNotApplied only with positive proof that no goods or grant
 // record was committed. Other errors retain the attempt for reconciliation.
 // Dedupe on OrderID is still required at the external effect boundary: operator
-// reconciliation and legacy pending attempts cannot establish exactly once.
+// reconciliation and retained pending attempts cannot establish exactly once.
 type Deliverer interface {
 	Deliver(ctx context.Context, order Order) error
 }
