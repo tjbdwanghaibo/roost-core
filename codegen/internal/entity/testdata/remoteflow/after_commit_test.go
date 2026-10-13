@@ -1,6 +1,6 @@
 package remoteflow
 
-// B27 第 2 批：Remote 事务提交后的 hook / Close 失败与慢阶段失败的收尾，在正式装配（ManagerAccess 作 Remote loader、entitysync、
+// B27 第 2 批：Remote 事务提交后的 hook / Close 失败与 I/O 准备阶段失败的收尾，在正式装配（ManagerAccess 作 Remote loader、entitysync、
 // 真实 Mongo / Redis / NATS）上的端到端。
 //   - RR-20260926-32 的未验证项“没有用真实 Remote（Mongo ownership/fence + Redis）做‘提交后 hook panic’的端到端验证”与
 //     “本回归未直接观察 Sync 帧”：strict 持久提交后业务 release hook panic，Remote 批次仍 Commit（Mongo 有这一笔、没有 pending
@@ -8,8 +8,8 @@ package remoteflow
 //   - RR-20260926-46 的未验证项“没有在正式生成工程里构造‘提交后 Close 失败’”：提交后释放 Redis 锁失败（注入点在 Redis 适配器，
 //     其余全部真实），回复带 ErrAfterCommitFailed 且 errors.Is(ErrRemoteReleaseIncomplete)，Mongo 与内存都是已提交的值；
 //     未提交路径（业务失败）上同样的失败不带哨兵。
-//   - RR-20260926-44 的未验证项“未用真实 Nest 慢池 + Remote 争用负载测量快池续行数下降”：Prepare 在慢阶段失败（实体在权威里
-//     不存在，冷加载失败）时 Abort 就地收尾，不占快池续行；用阶段指标 nest.stage.duration{stage=logic_queue} 计数。
+//   - RR-20260926-44 的未验证项“未用真实 Nest io 池 + Remote 争用负载测量业务池续行数下降”：Prepare 在 I/O 准备阶段失败（实体在权威里
+//     不存在，冷加载失败）时 Abort 就地收尾，不占业务池续行；用阶段指标 nest.stage.duration{stage=logic_queue} 计数。
 
 import (
 	"errors"
@@ -54,7 +54,7 @@ func newAfterCommitRig(t *testing.T, extra ...nest.NestOption) (*rejectRig, nest
 				hookArmedM.Unlock()
 			}
 			if mode.failRedis {
-				// 锁已在慢阶段取得；从这里起 Redis 不可用，提交后的 Close 释放锁失败。
+				// 锁已在 I/O 准备阶段取得；从这里起 Redis 不可用，提交后的 Close 释放锁失败。
 				fault := errRedisUnlock
 				rig.redis.evalFault.Store(&fault)
 			}
@@ -254,8 +254,8 @@ func TestGeneratedRemoteEntityWritableAfterUnlockFailure(t *testing.T) {
 	}
 }
 
-// logicQueueObservations 是 handler 被投递到快池续行（remoteLogicCall）的次数：慢阶段准备完成后回快池执行 handler、
-// Abort / RunLocal 经本地执行器回快池都记一次 nest.stage.duration{stage=logic_queue}。
+// logicQueueObservations 是 handler 被投递到业务池续行（remoteLogicCall）的次数：I/O 准备完成后回业务池执行 handler、
+// Abort / RunLocal 经本地执行器回业务池都记一次 nest.stage.duration{stage=logic_queue}。
 func logicQueueObservations(handler string) int64 {
 	var total int64
 	for _, metric := range metrics.Snapshot() {
@@ -270,7 +270,7 @@ func TestGeneratedRemotePrepareFailureAbortsWithoutFastContinuation(t *testing.T
 	rig, name := newAfterCommitRig(t, nest.NestOptionWithStageMetrics(true))
 	id := rig.seed(t, 9720)
 	handler := name.String()
-	// 正对照：一笔成功的 strict 写占用的快池续行数（慢阶段准备后回快池执行 handler，提交后经本地执行器回快池的收尾各记一次）；
+	// 正对照：一笔成功的 strict 写占用的业务池续行数（I/O 准备后回业务池执行 handler，提交后经本地执行器回业务池的收尾各记一次）；
 	// 以它为基线，失败的 Prepare 不得再增加。
 	before := logicQueueObservations(handler)
 	if _, err := rig.scheduler.Request(rig.ctx, name, id, nest.Params{afterCommitMode{}}); err != nil {
@@ -283,7 +283,7 @@ func TestGeneratedRemotePrepareFailureAbortsWithoutFastContinuation(t *testing.T
 	t.Logf("logic_queue continuations per committed write=%d", perCommit)
 	rig.assertNoPending(t)
 
-	// 慢阶段 Prepare 失败：目标在权威里不存在（ManagerAccess 冷加载真实 Mongo 得不到信封），Abort 就地收尾。
+	// I/O 准备阶段 Prepare 失败：目标在权威里不存在（ManagerAccess 冷加载真实 Mongo 得不到信封），Abort 就地收尾。
 	missing, err := entity.BuildEntityID(9721, EntityKindSyncedVault)
 	if err != nil {
 		t.Fatal(err)
@@ -298,7 +298,7 @@ func TestGeneratedRemotePrepareFailureAbortsWithoutFastContinuation(t *testing.T
 	}
 	t.Logf("Prepare failure: %v", soloErr)
 
-	// 争用：32 条并发请求争用同一个缺失实体，另有 8 条对已有实体的写同时进行（真实慢池 + Remote 争用）。
+	// 争用：32 条并发请求争用同一个缺失实体，另有 8 条对已有实体的写同时进行（真实 io 池 + Remote 争用）。
 	const failing, succeeding = 32, 8
 	before = logicQueueObservations(handler)
 	var (

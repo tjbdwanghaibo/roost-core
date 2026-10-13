@@ -6,7 +6,7 @@ import (
 	coreflow "github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
 )
 
-// ActionEnd 是一次 taskflow 动作结束，在它发生之后的那一拍交给树。
+// ActionEnd 是一次 actionflow 动作结束，在它发生之后的那一拍交给树。
 type ActionEnd struct {
 	ID     int64
 	Kind   coreflow.ActionKind
@@ -46,7 +46,7 @@ type BehaviorStrategyOptions[C any] struct {
 	OnResult func(Status)
 }
 
-// BehaviorStrategy 把行为树作为 Strategy 运行，连接树骨架与 Controller / taskflow 执行流程：Tick 驱动树，动作 /
+// BehaviorStrategy 把行为树作为 Strategy 运行，连接树骨架与 Controller / actionflow 执行流程：Tick 驱动树，动作 /
 // 任务结束先缓冲、交给下一拍的上下文，树完成后重置，下一拍从根重新求值。
 type BehaviorStrategy[C any] struct {
 	root    Node[BehaviorContext[C]]
@@ -114,7 +114,7 @@ func (s *BehaviorStrategy[C]) Stop(*Context, string) {
 	s.pending = nil
 }
 
-// TaskflowAction 是闭合树 / taskflow 循环的叶子：树决策，taskflow 执行。第一次 tick 时经注入的 Launch 发起一个
+// TaskflowAction 是闭合树 / actionflow 循环的叶子：树决策，actionflow 执行（类型名沿用旧包名）。第一次 tick 时经注入的 Launch 发起一个
 // 动作（CreateAction 或 EnqueueAction——由业务选择并返回动作 ID），之后保持 Running，直到对应的 ActionEnd 到达，
 // 再经 Succeeded 把结束原因映射成结果。
 //

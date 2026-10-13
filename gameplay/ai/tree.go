@@ -1,5 +1,5 @@
-// Package ai 在 roost-core 的 AI 策略与 taskflow 执行契约之上提供行为树：节点库（组合、装饰、基于确定性 tick 的
-// 计时、注入的随机性），在 Controller 内运行树的 BehaviorStrategy 桥接，让树发起并等待 taskflow 动作的 TaskflowAction
+// Package ai 在 roost-core 的 AI 策略与 actionflow 执行契约之上提供行为树：节点库（组合、装饰、基于确定性 tick 的
+// 计时、注入的随机性），在 Controller 内运行树的 BehaviorStrategy 桥接，让树发起并等待 actionflow 动作的 TaskflowAction
 // 叶子，以及严格的 JSON 树组装（ParseTree + Registry），快速失败并给出带路径的诊断。
 //
 // 范围：JSON 文档是数据驱动树的唯一来源——这里不定义可视化编辑器格式。也没有 utility / GOAP 规划器、没有感知 /

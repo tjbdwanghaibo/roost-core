@@ -240,7 +240,7 @@ func TestNestGameLoad(t *testing.T) {
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
 	ctx, cancel := context.WithTimeout(context.Background(), c.Duration+30*time.Second)
 	defer cancel()
-	// 唯一正式 ticker 只负责投递；组件、DAO 与 Guard 全部由快池处理。
+	// 唯一正式 ticker 只负责投递；组件、DAO 与 Guard 全部由业务池处理。
 	// 各实体的到期相位均匀分散，用绝对计划时间计算应投数量，ticker 变慢不能偷偷降低输入率。
 	rates := [2]int{c.Players * c.MessagesPerPlayer, c.Entities * c.HeartbeatHz}
 	counters := [2]*loadCounters{&messages, &heartbeats}

@@ -2,7 +2,7 @@ package remoteflow
 
 // REMAINING-2026-09-28 B27 第 1 批：reject_test.go 的正式装配（ManagerAccess 作 Remote loader、entitysync、真实 Mongo / Redis / NATS）
 // 上补的另外几条端到端：strict 确认截止后的延迟回调（RR-37 / RR-20260927-24）、结果未知后停机 / fence（RR-63 / 61）、
-// 带 Remote 批次的消息里的嵌套 / 收尾阶段独立事务（RR-75 / 84）、快 worker 上删除 Remote 实体（RR-27）。
+// 带 Remote 批次的消息里的嵌套 / 收尾阶段独立事务（RR-75 / 84）、业务 worker 上删除 Remote 实体（RR-27）。
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 )
 
 // RR-20260926-37 / RR-20260927-24：strict 等 Remote 确认到截止（投影器被拖住）后，提交后工作交给 finalizer；投影器随后照常
-// 提交，AfterCommit 在快池恰好执行一次、Sync 门放行。截止到结论之间 AfterCommit 不执行、订阅者什么都没收到。
+// 提交，AfterCommit 在业务池恰好执行一次、Sync 门放行。截止到结论之间 AfterCommit 不执行、订阅者什么都没收到。
 func TestGeneratedRemoteStrictConfirmDeadlineDefersPostCommit(t *testing.T) {
 	ctx, mongo, redis, database := rejectTestEnv(t)
 	rig := newRejectRig(t, ctx, mongo, redis, database, nest.DurabilityStrict, nil, nil)
@@ -89,7 +89,7 @@ func deferredOutcomeNotRun(outcome string) int64 {
 }
 
 // RR-20260926-63 / 61：Durability 0 写已落 Mongo、回复丢失（结果未知），持久结论到达时 Nest 已停机或已 fence：提交后工作不离开
-// 快池执行——AfterCommit 不执行、Sync 门保持冻结，计数 remote_entity.deferred_outcome_not_run_total{outcome=committed} +1；
+// 业务池执行——AfterCommit 不执行、Sync 门保持冻结，计数 remote_entity.deferred_outcome_not_run_total{outcome=committed} +1；
 // 持久结果本身不受影响（Mongo 已是这一笔）。
 func TestGeneratedRemoteUnknownOutcomeAfterNestStopIsNotRunOffThePool(t *testing.T) {
 	ctx, mongo, redis, database := rejectTestEnv(t)
@@ -240,9 +240,9 @@ func TestGeneratedRemoteNestedIsolatedTransactionIsRefused(t *testing.T) {
 	}
 }
 
-// RR-20260926-27：快 worker 上直接删除一个没有声明进消息的 Remote 托管实体，删除准入在任何副作用之前确定拒绝：Runtime 不 fatal、
+// RR-20260926-27：业务 worker 上直接删除一个没有声明进消息的 Remote 托管实体，删除准入在任何副作用之前确定拒绝：Runtime 不 fatal、
 // Nest 不 fence，实体留在内存、Mongo 不变，之后照常可写。两种调用位置：
-//   - local_memory_message：目标是本地 Clerk 的 memory handler（没有 RollbackTx），走 admitRemoteEntityDelete 的快池检查，
+//   - local_memory_message：目标是本地 Clerk 的 memory handler（没有 RollbackTx），走 admitRemoteEntityDelete 的业务池检查，
 //     错误可 errors.Is(fctx.ErrBlockingInBusinessWorker)（RR-27 修复的那条路径）；
 //   - remote_message：目标是另一个 Remote 实体的消息（Remote 消息总有 RollbackTx），删除随事务走 deferEntityDelete，
 //     未声明的 Remote 删除目标以 nest.ErrDurableRemoteWriteUnsupported 拒绝。

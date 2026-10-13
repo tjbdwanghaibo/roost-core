@@ -256,7 +256,7 @@ type rejectRig struct {
 	write          nest.HandlerName
 	// fatal 收 Runtime 的 onFatal（kit 里就是 Nest.Fence + RuntimeFailure）。
 	fatal chan error
-	// afterCommit / afterCommitOnFast 记 write handler 登记的 AfterCommit 执行次数与其中在快 worker 上的次数。
+	// afterCommit / afterCommitOnFast 记 write handler 登记的 AfterCommit 执行次数与其中在业务 worker 上的次数。
 	afterCommit, afterCommitOnFast atomic.Int32
 	// ref 是订阅者持有的对象，remove 帧只有 ref 没有内容。
 	ref frame.ObjectRef
