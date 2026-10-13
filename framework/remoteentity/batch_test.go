@@ -1049,3 +1049,60 @@ func TestFastWorkerRejectsRemoteWaitingBeforeMutation(t *testing.T) {
 		})
 	}
 }
+
+// BenchmarkPrepareRemoteWriteBatch 覆盖单实体写准入（beginWrite）的两条主路径：独占的所有者路由（marker 热缓存）与
+// 共享模式（分布式锁 + fence）。每轮 Prepare 后 Abort + Close，归还写门与锁，下一轮从同一状态开始。
+func BenchmarkPrepareRemoteWriteBatch(b *testing.B) {
+	const ownerKind, sharedKind entity.EntityKind = 180, 181
+	entity.MustRegisterEntityKindDefs(
+		entity.EntityKindDef{Kind: ownerKind, Category: 1, RemotePolicy: entity.RemotePolicyManaged},
+		entity.EntityKindDef{Kind: sharedKind, Category: 1, RemotePolicy: entity.RemotePolicyManaged},
+	)
+	for _, tc := range []struct {
+		name   string
+		kind   entity.EntityKind
+		shared bool
+	}{
+		{name: "owner_routed", kind: ownerKind},
+		{name: "shared_lock", kind: sharedKind, shared: true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			cfg := DefaultConfig()
+			cfg.MarkerCacheTTL = time.Minute
+			mgr := NewManager(newMockVersionedLockFactory(), cfg, 1000)
+			b.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				_ = mgr.StopFinalizer(ctx)
+			})
+			mgr.SetOwnershipStore(newMockMarkerStore())
+			loader := newRemoteTestLoader()
+			mgr.SetBackend(loader)
+			live := newTestRemoteEntity(1800, 1, tc.kind)
+			loader.add(live)
+			ctx := context.Background()
+			if tc.shared {
+				if _, err := mgr.ClaimRemoteOwnership(ctx, live.GUId()); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := mgr.EnterRemoteSharedMode(ctx, live.GUId()); err != nil {
+					b.Fatal(err)
+				}
+			}
+			ids := []int64{live.GUId()}
+			probe := errors.New("benchmark abort")
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				batch, err := mgr.PrepareRemoteWriteBatch(ctx, ids)
+				if err != nil {
+					b.Fatal(err)
+				}
+				_ = batch.Abort(ctx, probe)
+				if err := batch.Close(ctx); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
