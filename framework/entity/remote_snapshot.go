@@ -54,8 +54,7 @@ func CopyFrozenRemoteSnapshotPayload(data []byte) FrozenRemoteSnapshotPayload {
 	return FrozenRemoteSnapshotPayload{data: append([]byte(nil), data...)}
 }
 
-// TakeFrozenRemoteSnapshotPayload transfers ownership. The caller must not
-// mutate data after this call.
+// TakeFrozenRemoteSnapshotPayload 接管 data 的所有权，调用方此后不得修改 data。
 func TakeFrozenRemoteSnapshotPayload(data []byte) FrozenRemoteSnapshotPayload {
 	return FrozenRemoteSnapshotPayload{data: data}
 }
@@ -110,22 +109,21 @@ type RemoteSnapshotCacheConfig struct {
 	LoadTimeout        time.Duration
 	MaxWaiters         int
 	MaxConcurrentLoads int
-	// TombstoneTTL 是 L1 里删除标记的存活时间（U-0187、RR-20260913-01）。缺省取 TTL：比删除更旧的快照只会
-	// 经同一个重放窗口迟到。共享 L2 的墓碑另由 L2 TTL 约束，那才是跨节点的删除水位（B2）。
+	// TombstoneTTL 是 L1 里删除标记的存活时间。缺省取 TTL：比删除更旧的快照只会经同一个重放窗口迟到。
+	// 共享 L2 的墓碑另由 L2 TTL 约束，那才是跨节点的删除水位。
 	TombstoneTTL time.Duration
 	// MaxStaleness 是非线性读（Cached / Monotonic）能交出的 L1 条目距最近一次确认的最长时间
-	// （kit：remote_entity.cached_max_staleness，B2）。超过它、或从未确认的条目先重新确认（读 L2，
+	// （kit：remote_entity.cached_max_staleness）。超过它、或从未确认的条目先重新确认（读 L2，
 	// 必要时修复 L2 或回源权威），确认不了就不交出。零值取 TTL；TTL 也为零时取 30s。
 	MaxStaleness time.Duration
 	// Now 是缓存的时钟（确认时刻、陈旧上限、L1 过期都用它）。nil 用 time.Now；只为测试控制时间。
 	Now func() time.Time
-	// ReplicaBuffer 是一个 key 的权威加载在途时能缓冲的复制消息条数（首载缓冲，Mirror 第 4 步）。缺省 64。
+	// ReplicaBuffer 是一个 key 的权威加载在途时能缓冲的复制消息条数（首载缓冲）。缺省 64。
 	// 总量受同时在途的加载数（MaxConcurrentLoads）约束。
 	ReplicaBuffer int
 }
 
-// RemoteSnapshotCache 是 Remote 快照的进程内缓存。B2（维护者决定 2026-10-05，方案
-// docs/feature/B2-REMOTE-SNAPSHOT-L2-WATERMARK-2026-10-06.md）之后它的契约是：
+// RemoteSnapshotCache 是 Remote 快照的进程内缓存。它的契约（维护者决定 2026-10-05）是：
 //
 //   - 共享 L2 是快照水位（已知最新版本 / 是否已删除）的唯一权威，L1 只是它的有界副本。
 //   - 一个 key 的全部 L1 写入都在该 key 的 publish 分片锁下。新值——owner 发布、复制消息、权威加载结果、
@@ -139,13 +137,11 @@ type RemoteSnapshotCacheConfig struct {
 //     记为在加载开始时确认。
 //   - 非线性读只交出 now − confirmedAt ≤ MaxStaleness 的条目；其余先 refresh 重新确认。
 //
-// 删除在 L1 里是一个条目（删除标记），与快照用同一条 remoteSnapshotEntryStale 规则排序。
-// 之前分散的本机墓碑侧表、cache.StoreConfig.Superseded 钩子、ReadThrough 的 FatalRemoteError 分类与
-// L1 冷时的 L2 预查都已删除（它们各自补过 RR-20260913-01/05/06/08、NC-130 的一个入口）。
+// 删除在 L1 里是一个条目（删除标记），与快照用同一条 remoteSnapshotEntryStale 规则排序，不另设墓碑侧表。
 //
 // 没有共享 L2 的装配（测试、单进程）里 L1 自己就是水位：写入直接算确认。
 //
-// 复制消息经 ApplyReplica 进入（Mirror 第 4 步，docs/feature/MIRROR-STEP-4-AND-O4-2026-10-06.md）：
+// 复制消息经 ApplyReplica 进入：
 // 一个 key 的权威加载在途时，它的复制消息先进有界的首载缓冲，加载结果装入之后按到达顺序重放；重放与
 // 加载结果都经 admitLocked。缓冲溢出时丢弃缓冲，加载装入后再回源一次。
 type RemoteSnapshotCache struct {
@@ -297,8 +293,7 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 			}
 			return entry.snapshot.Valid()
 		},
-		// One rule for every write into L1: the same version must be the same value, where "value"
-		// includes how its bytes are read (RR-20260913-06).
+		// 每次写入 L1 都遵守同一条规则：同一版本必须是同一个值（“值”包括字节的解读方式）。
 		Conflict: func(old, next remoteSnapshotEntry) bool {
 			return !old.deleted && !next.deleted && remoteSnapshotSameVersionConflict(old.snapshot, next.snapshot)
 		},
@@ -319,11 +314,9 @@ func NewRemoteSnapshotCache(cfg RemoteSnapshotCacheConfig, l2 cache.Store[Remote
 	}
 }
 
-// RemoteSnapshotVersionedDeleter is the L2 capability behind DeleteAtVersion: delete only if the stored
-// snapshot is not newer than version, compared atomically on the L2 side, and keep the delete's version
-// as a tombstone that refuses later writes not newer than it (cache.ErrStaleWrite). A stored snapshot
-// newer than version is reported as cache.ErrStaleWrite too: the delete is the past (B2). An L2 without
-// it is deleted unconditionally, which is the pre-U-0187 behaviour for that layer.
+// RemoteSnapshotVersionedDeleter 是 DeleteAtVersion 依赖的 L2 能力：只在已存快照不新于 version 时删除（在 L2 侧原子比较），
+// 并把删除的版本留作墓碑，拒绝之后不新于它的写入（cache.ErrStaleWrite）。已存快照新于 version 时同样报
+// cache.ErrStaleWrite：这次删除已是过去。不具备该能力的 L2 无条件删除。
 type RemoteSnapshotVersionedDeleter interface {
 	DeleteAtVersion(ctx context.Context, key RemoteSnapshotKey, version uint64) error
 }
@@ -424,11 +417,11 @@ func (c *RemoteSnapshotCache) loadAuthoritative(ctx context.Context, key RemoteS
 	if err != nil || !found {
 		return stored.Clone(), found, err
 	}
-	// RR-20260913-08 残余：写入可能等待 L2，不能复用写入前的时间。
+	// 写入可能等待 L2，不能复用写入前的时间。
 	if stored.Expired(c.now()) {
 		return RemoteSnapshotEnvelope{}, false, nil
 	}
-	// RR-20261005-NC-36：epoch 准入或并发发布可能保留另一份 L1；
+	// epoch 准入或并发发布可能保留另一份 L1；
 	// 最低版本承诺约束的是最终返回值，不能只检查权威的原始结果。
 	if err := covers(stored, after); err != nil {
 		return RemoteSnapshotEnvelope{}, false, err
@@ -450,7 +443,7 @@ func (c *RemoteSnapshotCache) fetchAndAdmit(ctx context.Context, key RemoteSnaps
 	if !ok {
 		return false, nil
 	}
-	// RR-20261005-NC-35：加载回调也属于身份边界，必须在任何缓存写入前
+	// 加载回调也属于身份边界，必须在任何缓存写入前
 	// 绑定完整请求键；否则会写入别的视图，再把请求键的旧值误当成功返回。
 	if snapshot.Key != key {
 		return false, fmt.Errorf("remote snapshot: authoritative result key does not match requested key")
@@ -458,10 +451,8 @@ func (c *RemoteSnapshotCache) fetchAndAdmit(ctx context.Context, key RemoteSnaps
 	if err := covers(snapshot, after); err != nil {
 		return false, err
 	}
-	// Every outward read shares one post-condition: never a snapshot past
-	// its own deadline. The authority's raw answer and whatever L1 keeps
-	// after the write both have to pass it (RR-20260913-08 复核). An expired
-	// authoritative answer is a miss, and is not cached.
+	// 每个对外读取共享同一个后置条件：从不交出超过自身截止时间的快照。权威的原始结果与写入后 L1 保留的值都要
+	// 满足它。已过期的权威结果算未命中，也不缓存。
 	if snapshot.Expired(c.now()) {
 		return false, nil
 	}
@@ -477,7 +468,7 @@ func (c *RemoteSnapshotCache) fetchAndAdmit(ctx context.Context, key RemoteSnaps
 	return true, nil
 }
 
-// ApplyReplica 是复制消息进入缓存的入口（Mirror 第 4 步）。这个 key 的权威加载在途时消息进首载缓冲，
+// ApplyReplica 是复制消息进入缓存的入口。这个 key 的权威加载在途时消息进首载缓冲，
 // 由加载结束时重放；否则直接准入：快照更新经 ApplyUpdate（增量缺基返回 ErrRemoteSnapshotGap，由调用方
 // 决定是否回源），带版本删除经 DeleteAtVersion，不带版本的失效经 Delete。快照与带版本删除经 admitLocked；
 // 不带版本的失效是旧发布者的语义，直接删 L1 与 L2、不留水位。
@@ -589,10 +580,8 @@ func (c *RemoteSnapshotCache) BootstrapStats() RemoteSnapshotBootstrapStats {
 	}
 }
 
-// remoteSnapshotStale reports that next is older than old and must not
-// replace it: a newer marker or route epoch wins regardless of version (a
-// mixed pair is refused both ways), within one epoch the higher version wins.
-// L1 admission and the L2 CAS script apply the same rule.
+// remoteSnapshotStale 报告 next 比 old 旧、不能替换它：marker 或路由代际更新者胜，与版本无关（两个维度一新一旧时
+// 双向拒绝）；同一代际内版本更高者胜。L1 准入与 L2 的 CAS 脚本使用同一规则。
 func remoteSnapshotStale(old, next RemoteSnapshotEnvelope) bool {
 	if old.MarkerEpoch != next.MarkerEpoch || old.RouteEpoch != next.RouteEpoch {
 		return old.MarkerEpoch > next.MarkerEpoch || old.RouteEpoch > next.RouteEpoch
@@ -616,9 +605,7 @@ func remoteSnapshotEntryStale(old, next remoteSnapshotEntry) bool {
 	}
 }
 
-// remoteSnapshotSameVersionConflict reports that next claims old's version
-// but is not the same value. Caller has established the epochs and version
-// match.
+// remoteSnapshotSameVersionConflict 报告 next 声称与 old 同一版本、却不是同一个值。调用方已确认代际与版本一致。
 func remoteSnapshotSameVersionConflict(old, next RemoteSnapshotEnvelope) bool {
 	if !remoteSnapshotSameVersion(old, next) {
 		return false
@@ -640,7 +627,7 @@ func (c *RemoteSnapshotCache) Get(ctx context.Context, key RemoteSnapshotKey, co
 
 // Read 是快照缓存唯一的读出口（Mirror 方案第 2 步）。Cached / Monotonic / Linearizable 与直接加载
 // 共用同一组后置条件：完整 key 一致、未过 ExpiresAt、满足 After（RemoteObservation.Covers）；非线性读
-// 另要求条目在陈旧上限内被确认（B2）。
+// 另要求条目在陈旧上限内被确认。
 //
 //   - Linearizable：每次读权威（不合并：先开始的加载不能代表之后开始的读）。
 //   - Monotonic：确认过的 L1 满足 After 就交出，否则按 (key, After) 合并回源一次。
@@ -698,9 +685,8 @@ func (c *RemoteSnapshotCache) readConfirmed(ctx context.Context, key RemoteSnaps
 	})
 }
 
-// serve 把一个可服务的条目交出去。删除标记是“未找到”。The container TTL says how long this machine
-// keeps a copy; the envelope's ExpiresAt says how long the DATA is worth anything — an envelope past its
-// own deadline is a miss no matter how much cache TTL is left (RR-20260913-08).
+// serve 把一个可服务的条目交出去。删除标记是“未找到”。容器 TTL 决定本机保留副本多久，信封的 ExpiresAt 决定数据
+// 本身多久有效——超过自身截止时间的信封不论缓存 TTL 还剩多少都算未命中。
 func (c *RemoteSnapshotCache) serve(entry remoteSnapshotEntry) (RemoteSnapshotEnvelope, bool, error) {
 	return serveAt(entry, c.nowNanos())
 }
@@ -717,7 +703,7 @@ func serveAt(entry remoteSnapshotEntry, now int64) (RemoteSnapshotEnvelope, bool
 //   - 先读 L2（锁外，一次 HGET），再在 publish 分片锁下与 L1 当前值比较：L1 已被别人确认就直接用；
 //     L2 与 L1 同值改记确认时刻；L2 更新就改记 L2 的值；L1 更新（L2 写丢了）就把 L1 这份重新写进 L2
 //     （版本化 CAS 与带版本删除重发都幂等）。
-//   - L1 没有条目而 L2 也没有值或读不到：未找到——Cached 不因 miss 读权威（与之前相同），Monotonic 由
+//   - L1 没有条目而 L2 也没有值或读不到：未找到——Cached 不因 miss 读权威，Monotonic 由
 //     Get 另行回源。
 //   - L1 有快照而 L2 读不到、或已没有值（过期或墓碑）：回源读权威；权威说不存在就删掉加载开始之前确认的
 //     L1 快照。都失败时返回错误，不交出未确认或超过上限的值。
@@ -855,13 +841,9 @@ func (c *RemoteSnapshotCache) coalesce(ctx context.Context, callKey remoteSnapsh
 		case <-call.done:
 			return call.snapshot.Clone(), call.ok, call.err
 		case <-ctx.Done():
-			// Give the slot back. maxWaiters counts who is WAITING, not who
-			// has ever waited during this load: a follower that times out and
-			// retries used to consume a slot permanently, so a slow authority
-			// refused healthy readers with ErrRemoteOverloaded until the first
-			// load finished (RR-20260913-04). Only decrement while this is
-			// still the current call for the key, or a later generation's
-			// count would be charged for a departure that was not its own.
+			// 归还名额：maxWaiters 计的是正在等待的人数，而不是这次加载期间等过的人数，否则超时重试的跟随者会永久
+			// 占用名额，慢权威会让健康读者一直收到 ErrRemoteOverloaded。只在这仍是该 key 当前的调用时递减，
+			// 否则会把不属于后一代调用的离开记到它头上。
 			c.loadMu.Lock()
 			if c.loads[callKey] == call {
 				call.waiters--
@@ -895,8 +877,7 @@ func (c *RemoteSnapshotCache) Publish(ctx context.Context, snapshot RemoteSnapsh
 	if err != nil {
 		return err
 	}
-	// Waiters are notified even when the snapshot lost: notify only wakes those whose target is
-	// <= this version, and a newer stored value satisfies them too.
+	// 快照落选也要通知等待方：notify 只唤醒目标版本不高于本版本的等待方，已存的更新值同样满足它们。
 	c.notify(snapshot.Key, snapshot.StateVersion)
 	return nil
 }
@@ -911,7 +892,7 @@ func (c *RemoteSnapshotCache) publishLocked(ctx context.Context, snapshot Remote
 			if remoteSnapshotSameVersionConflict(current.snapshot, snapshot) {
 				return fmt.Errorf("%w: same snapshot version has different content", ErrRemoteVersionConflict)
 			}
-			// 同一份值：只有有效期（只能向后，RR-20260913-08 复核）与确认状态可能需要更新。已确认、
+			// 同一份值：只有有效期（只能向后）与确认状态可能需要更新。已确认、
 			// 有效期不更晚、也不是更晚的权威答案时什么都不做——不为重复消息再写一次 L2。
 			if snapshot.ExpiresAt <= current.snapshot.ExpiresAt && current.confirmedAt != 0 &&
 				(authoritativeAt == 0 || current.confirmedAt >= authoritativeAt) {
@@ -929,7 +910,7 @@ func (c *RemoteSnapshotCache) publishLocked(ctx context.Context, snapshot Remote
 	return c.admitLocked(ctx, next, authoritativeAt)
 }
 
-// admitLocked 是新值进入缓存的唯一写入口（B2；其余直接写 L1 的点只回填 L2 的值或删除，见类型注释）：先让共享 L2 判定（快照走版本 CAS，删除走带版本删除），再按
+// admitLocked 是新值进入缓存的唯一写入口（其余直接写 L1 的点只回填 L2 的值或删除，见类型注释）：先让共享 L2 判定（快照走版本 CAS，删除走带版本删除），再按
 // 判定写 L1——
 //
 //   - 接受：L1 记下这份，确认时刻为 L2 调用开始前（权威答案取更早的加载开始时刻）；
@@ -1072,10 +1053,8 @@ func (c *RemoteSnapshotCache) ApplyUpdate(ctx context.Context, update RemoteSnap
 	})
 }
 
-// Delete is the unversioned invalidation primitive: it drops the key from L1
-// and L2 and leaves no fence, so a late older snapshot may repopulate it.
-// Replication and commit paths must use DeleteAtVersion. An L2 failure is
-// degraded around like every other L2 outage.
+// Delete 是不带版本的失效原语：从 L1 与 L2 删除 key，不留屏障，迟到的旧快照可能重新填入。复制与提交路径必须使用
+// DeleteAtVersion。L2 失败与其他 L2 故障一样降级处理。
 func (c *RemoteSnapshotCache) Delete(ctx context.Context, key RemoteSnapshotKey) error {
 	if c == nil || c.l1 == nil || !key.Valid() {
 		return nil
@@ -1093,11 +1072,9 @@ func (c *RemoteSnapshotCache) Delete(ctx context.Context, key RemoteSnapshotKey)
 	return c.l1.Delete(ctx, key)
 }
 
-// DeleteAtVersion applies a delete that happened at version (U-0187, RR-20260913-01). It goes through
-// the same admission as every other write (B2): the shared L2 deletes unless it holds a newer snapshot
-// and keeps a tombstone; L1 keeps a delete marker that fences snapshots not newer than version, unless
-// L1 holds a newer snapshot. An L2 outage or unknown result leaves the marker unconfirmed, and the next
-// read re-sends the versioned delete (idempotent) — A2 left "L2 DEL result unknown" to this layer.
+// DeleteAtVersion 应用发生在 version 的删除，与其他写入走同一准入：共享 L2 除非持有更新的快照否则删除并留下墓碑；
+// L1 留下删除标记，挡住不新于 version 的快照（除非 L1 持有更新的快照）。L2 故障或结果未知时标记保持未确认，下一次
+// 读取会重发带版本的删除（幂等），“L2 删除结果未知”由这一层兜住。
 func (c *RemoteSnapshotCache) DeleteAtVersion(ctx context.Context, key RemoteSnapshotKey, version uint64) error {
 	if c == nil || c.l1 == nil || !key.Valid() {
 		return nil
@@ -1150,7 +1127,7 @@ func (c *RemoteSnapshotCache) Stats() (cache.AtomicLocalStats, cache.ReadThrough
 	if c == nil {
 		return cache.AtomicLocalStats{}, cache.ReadThroughStats{}
 	}
-	// 第二个返回值沿用 ReadThroughStats 的形状（B2 之前由 ReadThroughStore 统计）：权威加载、合并的
+	// 第二个返回值沿用 ReadThroughStats 的形状：权威加载、合并的
 	// 等待、加载错误与 L2 错误次数。
 	return c.l1.Stats(), cache.ReadThroughStats{
 		Loads: c.authorityLoads.Load(), Coalesced: c.coalesced.Load(),

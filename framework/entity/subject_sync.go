@@ -30,12 +30,9 @@ const (
 
 const SyncMaskFull uint64 = ^uint64(0)
 
-// subjectSyncInFlightStaleAfter bounds how long an unfinished prepare may
-// block new prepares. A PreparedSubjectSync whose owner panicked or discarded
-// it without Commit/Abort would otherwise hold the in-flight token forever
-// and permanently stall the subject's sync. Reclaiming is safe because Commit
-// and Abort validate token and base version and turn into stale errors after
-// the token is superseded.
+// subjectSyncInFlightStaleAfter 限定一次未完成的 prepare 能阻塞新 prepare 多久。持有者 panic 或未 Commit / Abort 就丢弃的
+// PreparedSubjectSync 否则会永远占着在途令牌，让该 subject 的同步永久停住。回收是安全的：Commit 与 Abort 会校验令牌与
+// 基础版本，令牌被取代后它们返回陈旧错误。
 const subjectSyncInFlightStaleAfter = 30 * time.Second
 
 const (
@@ -45,14 +42,14 @@ const (
 	SyncFullReasonSchema
 )
 
-// SyncProfile identifies a finite state view such as an LOD, permission, or
-// faction projection. It deliberately contains no subscriber identity.
+// SyncProfile 标识一个有限的状态视图，例如 LOD、权限或阵营投影。它有意不包含订阅者身份。
 type SyncProfile struct {
 	Key           string
 	LOD           uint8
 	SchemaVersion uint32
 }
 
+// Normalize 把空 Key 归为 "default"。
 func (p SyncProfile) Normalize() SyncProfile {
 	if p.Key == "" {
 		p.Key = "default"
@@ -60,9 +57,8 @@ func (p SyncProfile) Normalize() SyncProfile {
 	return p
 }
 
-// FrozenSyncPayload owns immutable bytes. CopyFrozenSyncPayload copies caller
-// memory. TakeFrozenSyncPayload transfers ownership: the caller must never
-// mutate the supplied slice after the call.
+// FrozenSyncPayload 持有不可变字节。CopyFrozenSyncPayload 复制调用方内存；TakeFrozenSyncPayload 接管所有权，调用方此后
+// 绝不能修改传入的切片。
 type FrozenSyncPayload struct {
 	codec uint16
 	data  []byte
@@ -90,21 +86,20 @@ func (p FrozenSyncPayload) Equal(other FrozenSyncPayload) bool {
 	return p.codec == other.codec && bytes.Equal(p.data, other.data)
 }
 
-// SubjectSyncPacker serializes entity state by profile. Implementations run
-// while the owning Entity mutex is held. Returned payload ownership must have
-// been transferred with TakeFrozenSyncPayload or copied explicitly.
+// SubjectSyncPacker 按 profile 序列化实体状态。实现在持有所属实体锁时运行；返回的载荷必须已经用 TakeFrozenSyncPayload
+// 转移所有权或显式复制。
 type SubjectSyncPacker interface {
 	PackSubjectSnapshot(SyncProfile) (FrozenSyncPayload, error)
 	PackSubjectDelta(SyncProfile, uint64) (FrozenSyncPayload, error)
 }
 
+// SubjectSyncPackFunc 用两个函数实现 SubjectSyncPacker；函数为 nil 时返回空载荷。
 type SubjectSyncPackFunc struct {
 	Snapshot func(SyncProfile) (FrozenSyncPayload, error)
 	Delta    func(SyncProfile, uint64) (FrozenSyncPayload, error)
 }
 
-// SubjectSyncDirtyNotifier is installed by a framework scheduler. It carries
-// only content state and deliberately contains no observer/subscriber data.
+// SubjectSyncDirtyNotifier 由框架调度器安装，只携带内容状态，有意不包含观察者 / 订阅者数据。
 type SubjectSyncDirtyNotifier func(*SubjectSyncState)
 
 func (f SubjectSyncPackFunc) PackSubjectSnapshot(profile SyncProfile) (FrozenSyncPayload, error) {
@@ -121,6 +116,7 @@ func (f SubjectSyncPackFunc) PackSubjectDelta(profile SyncProfile, mask uint64) 
 	return f.Delta(profile.Normalize(), mask)
 }
 
+// SubjectSyncCreateParam 是创建 SubjectSyncState 的参数。
 type SubjectSyncCreateParam struct {
 	Enabled     bool
 	SubjectID   int64
@@ -129,16 +125,12 @@ type SubjectSyncCreateParam struct {
 	Packer      SubjectSyncPacker
 }
 
-// EntitySyncCreateParam is the single entity replication configuration. The
-// state contains content only; subscriber membership and delivery live in the
-// entitysync coordinator.
+// EntitySyncCreateParam 是实体同步的唯一配置。状态只包含内容；订阅成员与交付由 entitysync 协调器负责。
 type EntitySyncCreateParam struct {
 	Enabled  bool
 	EntityID int64
-	// Namespace travels on the wire with every update of this subject and is
-	// the client's routing key ("player", "monster", …). It is the only
-	// grouping the replication layer knows about: rooms and areas are
-	// policies that decide who subscribes, not labels on the frame.
+	// Namespace 随该 subject 的每次更新上线，是客户端的路由键（"player"、"monster"……）。这是同步层唯一知道的分组：
+	// 房间、区域是决定谁订阅的策略，不是帧上的标签。
 	Namespace  string
 	EntityKind uint32
 	Packer     SubjectSyncPacker
@@ -173,19 +165,15 @@ type SubjectSyncUpdate struct {
 	Full        bool
 	Reason      uint32
 	Payload     FrozenSyncPayload
-	// CommitLSN is the owning entity's newest pipelined-commit LSN at the
-	// moment the payload was captured, read under the same entity lock the
-	// commit path stamps it with — so it names exactly the commits this
-	// payload can contain. Delivery gates compare it against the durable
-	// watermark; checking LastCommitLSN separately before capturing would
-	// leave a window for a commit to land in between (U-0206).
+	// CommitLSN 是捕获载荷那一刻所属实体最新的 pipelined 提交 LSN，在提交路径写入它的同一把实体锁下读取——所以它
+	// 恰好对应这份载荷可能包含的提交。交付门把它与持久水位比较；若在捕获之前另读 LastCommitLSN，中间会留下一个
+	// 提交落入的窗口。
 	CommitLSN uint64
 }
 
 type subjectSyncLockFunc func(func() error) error
 
-// SubjectSyncState is the observer-free content state machine. Subscriber
-// membership, session sequence, routing, and history live in entitysync/kit.
+// SubjectSyncState 是不含观察者的内容状态机。订阅成员、会话序号、路由与历史由 entitysync / wiring 负责。
 type SubjectSyncState struct {
 	mu        sync.Mutex
 	prepareMu sync.Mutex
@@ -212,10 +200,8 @@ type SubjectSyncState struct {
 	inflightSince   time.Time
 	inflightRelease func()
 	lastError       error
-	// lastCommitLSN mirrors EntityBase.lastCommitLSN so the subscription
-	// coordinator can gate distribution on the durable watermark without a
-	// back-reference to the entity. Atomic: written under the entity lock,
-	// read by flush timers.
+	// lastCommitLSN 镜像 EntityBase.lastCommitLSN，订阅协调器不必回引实体就能按持久水位控制分发。原子：在实体锁内写，
+	// 由刷新计时器读。
 	lastCommitLSN atomic.Uint64
 }
 
@@ -564,9 +550,8 @@ func (s *SubjectSyncState) SetLastCommitLSN(lsn uint64) {
 	s.lastCommitLSN.Store(lsn)
 }
 
-// LastCommitLSN returns the newest pipelined-commit LSN of the owning entity,
-// or zero when no pipelined transaction touched it. Distribution must not run
-// while this is above the committer's durable watermark.
+// LastCommitLSN 返回所属实体最新的 pipelined 提交 LSN；没有 pipelined 事务修改过时为 0。它高于 committer 的持久水位时
+// 不得分发。
 func (s *SubjectSyncState) LastCommitLSN() uint64 {
 	if s == nil {
 		return 0
@@ -655,8 +640,7 @@ func (p *PreparedSubjectSync) Updates() []SubjectSyncUpdate {
 	return append([]SubjectSyncUpdate(nil), p.updates...)
 }
 
-// Snapshots are the full captures PrepareViews made for new subscribers, one
-// per snapshot profile, at the same version as Updates.
+// Snapshots 返回 PrepareViews 为新订阅者做的全量捕获，每个快照 profile 一份，与 Updates 同一版本。
 func (p *PreparedSubjectSync) Snapshots() []SubjectSyncUpdate {
 	if p == nil {
 		return nil
@@ -664,8 +648,7 @@ func (p *PreparedSubjectSync) Snapshots() []SubjectSyncUpdate {
 	return append([]SubjectSyncUpdate(nil), p.snapshots...)
 }
 
-// BaseVersion is the version the subject had when this was captured; equal to
-// Version when the capture carried no delta.
+// BaseVersion 返回捕获时 subject 的版本；捕获不含 delta 时与 Version 相等。
 func (p *PreparedSubjectSync) BaseVersion() uint64 {
 	if p == nil {
 		return 0
@@ -691,19 +674,15 @@ func (p *PreparedSubjectSync) AbortWithError(cause error) error {
 	return batch.AbortWithError(cause)
 }
 
-// PreparedSubjectSyncBatch reserves a set of prepared subjects before a
-// downstream admission. Reservation prevents any caller from independently
-// committing or aborting one member while the batch is in flight. Commit and
-// AbortWithError update every SubjectSyncState while holding all state locks,
-// so observers cannot observe or create a partially committed batch.
+// PreparedSubjectSyncBatch 在下游准入之前预留一组已 prepare 的 subject。预留防止任何调用方在批次在途时单独提交或中止
+// 其中一员。Commit 与 AbortWithError 持有全部状态锁更新每个 SubjectSyncState，观察者看不到也造不出部分提交的批次。
 type PreparedSubjectSyncBatch struct {
 	items    []*PreparedSubjectSync
 	finished atomic.Uint32
 }
 
-// ReservePreparedSubjectSyncBatch transfers completion ownership for every
-// prepared item to one batch. Callers must invoke Commit after successful
-// durable admission or AbortWithError after failed admission.
+// ReservePreparedSubjectSyncBatch 把每个已 prepare 项的完成所有权转给一个批次。调用方必须在持久准入成功后调用 Commit，
+// 失败后调用 AbortWithError。
 func ReservePreparedSubjectSyncBatch(items []*PreparedSubjectSync) (*PreparedSubjectSyncBatch, error) {
 	if len(items) == 0 {
 		return nil, ErrSubjectSyncBatchInvalid
@@ -751,7 +730,7 @@ func ReservePreparedSubjectSyncBatch(items []*PreparedSubjectSync) (*PreparedSub
 	return &PreparedSubjectSyncBatch{items: ordered}, nil
 }
 
-// Commit atomically advances all reserved content versions.
+// Commit 原子地推进全部预留项的内容版本。
 func (b *PreparedSubjectSyncBatch) Commit() error {
 	if b == nil || len(b.items) == 0 {
 		return ErrSubjectSyncBatchInvalid

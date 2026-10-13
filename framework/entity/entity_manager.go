@@ -11,10 +11,11 @@ import (
 	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
 )
 
+// defaultBucketCnt 是实体索引的默认分桶数。
 const defaultBucketCnt = 64
 
-// EntityManager is the central registry for all entities.
-// Uses sharded buckets for high-concurrency access with hundreds of thousands of entities.
+// EntityManager 是实体的中心登记表：按分桶索引支撑数十万实体的高并发访问，并维护锁组成员索引、实体锁分配、
+// 解锁回调与持久删除准入。
 type EntityManager struct {
 	entities       *container.BucketHolder[int64, IThreadSafeEntity]
 	idGen          func() (uint64, error)
@@ -39,29 +40,29 @@ var (
 	ErrDeleteAdmitterExists = errors.New("entity manager: delete admitter already registered")
 	ErrDeleteAdmitterNeeded = errors.New("entity manager: delete admitter is required")
 	ErrDeleteIndeterminate  = errors.New("entity manager: delete admission outcome is indeterminate")
-	// ErrEntityNotPointer：实体实现不是指针（RR-20260930-15）。Guard 按实例比较接口值，值类型实现若不可比较会在运行期 panic；
+	// ErrEntityNotPointer：实体实现不是指针。Guard 按实例比较接口值，值类型实现若不可比较会在运行期 panic；
 	// 实体进入框架的入口（BuildEntity、TryAdd / Add）拒绝这种实现并点名类型。
 	ErrEntityNotPointer = errors.New("entity: entity implementation must be a pointer")
 )
 
-// NewEntityManager creates an EntityManager with default bucket count.
+// EntityManagerOption 配置 NewEntityManager。
 type EntityManagerOption func(*EntityManager)
 
+// WithEntityIDGenerator 设置新建实体的 ID 生成器。
 func WithEntityIDGenerator(generator func() (uint64, error)) EntityManagerOption {
 	return func(manager *EntityManager) {
 		manager.idGen = generator
 	}
 }
 
+// WithEntityLockManager 指定实体锁的分配器；未指定时新建一个。
 func WithEntityLockManager(manager *lock.LockManager) EntityManagerOption {
 	return func(entityManager *EntityManager) {
 		entityManager.locks = manager
 	}
 }
 
-// ConfigureIDGenerator installs the instance generator before any entity is
-// published. It is safe against concurrent Create calls and refuses runtime
-// replacement once the manager contains state.
+// ConfigureIDGenerator 在发布任何实体之前安装 ID 生成器。可与并发的 Create 安全共存；Manager 已有实体后拒绝替换。
 func (m *EntityManager) ConfigureIDGenerator(generator func() (uint64, error)) error {
 	if m == nil || generator == nil {
 		return fmt.Errorf("entity manager: id generator is required")
@@ -75,11 +76,12 @@ func (m *EntityManager) ConfigureIDGenerator(generator func() (uint64, error)) e
 	return nil
 }
 
+// NewEntityManager 以默认分桶数创建 EntityManager。
 func NewEntityManager(options ...EntityManagerOption) *EntityManager {
 	return NewEntityManagerWithBuckets(defaultBucketCnt, options...)
 }
 
-// NewEntityManagerWithBuckets creates an EntityManager with specified bucket count.
+// NewEntityManagerWithBuckets 以指定分桶数创建 EntityManager。
 func NewEntityManagerWithBuckets(bucketCnt int, options ...EntityManagerOption) *EntityManager {
 	manager := &EntityManager{
 		entities: container.NewBucketHolder[int64, IThreadSafeEntity](bucketCnt, nil, false),
@@ -98,19 +100,19 @@ func NewEntityManagerWithBuckets(bucketCnt int, options ...EntityManagerOption) 
 	return manager
 }
 
-// Add registers an entity. Panics on duplicate ID.
+// Add 登记实体，失败（含 ID 重复）时 panic。
 func (m *EntityManager) Add(e IThreadSafeEntity) {
 	if err := m.TryAdd(e); err != nil {
 		panic(fmt.Sprintf("entity manager: add failed: %v", err))
 	}
 }
 
-// TryAdd registers an entity and reports duplicate IDs as an error.
+// TryAdd 登记实体：ID 重复返回 ErrEntityExists，同 ID 实例仍在移除收尾返回 ErrEntityRemoved。
 func (m *EntityManager) TryAdd(e IThreadSafeEntity) error {
 	if e == nil || e.Base() == nil {
 		return ErrEntityNil
 	}
-	// 手工构造、不经注册 builder 的实体在这里进入框架：同样要求是指针（RR-20260930-15）。
+	// 手工构造、不经注册 builder 的实体在这里进入框架：同样要求是指针。
 	if err := requirePointerEntity(e); err != nil {
 		return err
 	}
@@ -130,34 +132,29 @@ func (m *EntityManager) TryAdd(e IThreadSafeEntity) error {
 	return nil
 }
 
+// entityDeleteAdmitter 是已注册的唯一持久删除准入门。
 type entityDeleteAdmitter struct {
 	id uint64
 	fn DeleteAdmitter
 }
 
-// DeleteAdmission tells EntityManager whether durable admission completed in
-// this call or was attached to the active transaction. Deferred admission is
-// finalized by the admitter only after that transaction reaches its commit
-// point; rollback must leave the entity live.
+// DeleteAdmission 告诉 EntityManager 持久删除是在本次调用中完成准入，还是挂到了当前事务上。延迟准入只在该事务越过
+// 提交点后由准入方收尾；回滚时实体必须保持存活。
 type DeleteAdmission uint8
 
 const (
 	DeleteAdmissionImmediate DeleteAdmission = iota
 	DeleteAdmissionDeferred
-	// DeleteAdmissionIndeterminate means persistence may already have accepted
-	// the delete. The entity must be removed from memory and the error returned
-	// so callers cannot continue serving possibly deleted state.
+	// DeleteAdmissionIndeterminate 表示持久层可能已接受删除：实体必须从内存移除并返回错误，调用方不能继续提供可能
+	// 已被删除的状态。
 	DeleteAdmissionIndeterminate
 )
 
-// DeleteAdmitter owns the persistence-specific delete transaction. The reason
-// is supplied so a deferred admission can perform the same in-memory lifecycle
-// transition after the durable commit point.
+// DeleteAdmitter 负责持久层的删除事务。传入 reason，让延迟准入能在持久提交点之后执行同样的内存生命周期转换。
 type DeleteAdmitter func(context.Context, IThreadSafeEntity, EntityDestroyReason) (DeleteAdmission, error)
 
-// RegisterDeleteAdmitter installs the single durable admission gate used by
-// persistent deletion. Multiple independent gates are rejected because they
-// cannot form one atomic deletion decision.
+// RegisterDeleteAdmitter 安装持久删除使用的唯一准入门，返回注销函数。多个独立的门无法形成一个原子的删除决定，
+// 所以重复注册返回 ErrDeleteAdmitterExists。
 func (m *EntityManager) RegisterDeleteAdmitter(admitter DeleteAdmitter) (func(), error) {
 	if m == nil || admitter == nil {
 		return nil, ErrDeleteAdmitterNeeded
@@ -179,6 +176,7 @@ func (m *EntityManager) RegisterDeleteAdmitter(admitter DeleteAdmitter) (func(),
 	}, nil
 }
 
+// admitDelete 调用已注册的删除准入门；没有时返回 ErrDeleteAdmitterNeeded。
 func (m *EntityManager) admitDelete(ctx context.Context, e IThreadSafeEntity, reason EntityDestroyReason) (DeleteAdmission, error) {
 	m.hookMu.RLock()
 	admitter := m.deleteAdmitter.fn
@@ -202,37 +200,11 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !e.Touch() {
-		return ErrEntityRemoved
-	}
-	mu := e.GetMutex()
-	if mu == nil {
-		e.UnTouch()
-		return ErrEntityNil
-	}
-	if err := lock.LockContext(ctx, mu); err != nil {
-		e.UnTouch()
+	mu, err := m.lockManagedForDestroy(ctx, e)
+	if err != nil {
 		return err
-	}
-	if e.IsRemoved() || e.IsClear() {
-		mu.Unlock()
-		e.UnTouch()
-		return ErrEntityRemoved
-	}
-	m.addMu.Lock()
-	managed := m.entities.Get(e.ID()) == e
-	m.addMu.Unlock()
-	if !managed {
-		mu.Unlock()
-		e.UnTouch()
-		return ErrEntityNotManaged
 	}
 	var admissionErr error
-	if err := ctx.Err(); err != nil {
-		mu.Unlock()
-		e.UnTouch()
-		return err
-	}
 	if deleteFromDB {
 		admission, err := m.admitDelete(ctx, e, reason)
 		if admission == DeleteAdmissionIndeterminate && err == nil {
@@ -246,8 +218,7 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 		}
 		admissionErr = err
 		if admission == DeleteAdmissionDeferred {
-			// The admitter registered the lifecycle transition on the current
-			// transaction. It owns finalization after durable admission.
+			// 准入方已把生命周期转换登记到当前事务上，持久准入后的收尾归它。
 			mu.Unlock()
 			e.UnTouch()
 			return nil
@@ -262,9 +233,7 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 	category := e.GetEntityCategory()
 	kind := e.GetEntityKind()
 
-	// Prevent new readers and remove the entity from the global index while the
-	// entity mutex is held. Lifecycle callbacks run after unlock so they can
-	// safely coordinate with other entities through EntityGuard lock ordering.
+	// 持实体锁时阻止新读者并把实体移出全局索引。生命周期回调在解锁后执行，以便经 EntityGuard 的锁序安全地与其他实体协作。
 	m.addMu.Lock()
 	if m.entities.Get(id) != e {
 		m.addMu.Unlock()
@@ -298,13 +267,47 @@ func (m *EntityManager) Destroy(ctx context.Context, e IThreadSafeEntity, reason
 	return admissionErr
 }
 
-// Get returns the entity with the given ID, or nil if not found.
+// lockManagedForDestroy 为销毁取得 e 的引用与实体锁，并确认它仍是本 Manager 托管的当前实例、ctx 未取消。成功时调用方
+// 持有锁与引用；失败时两者都已归还。
+func (m *EntityManager) lockManagedForDestroy(ctx context.Context, e IThreadSafeEntity) (lock.Mutex, error) {
+	if !e.Touch() {
+		return nil, ErrEntityRemoved
+	}
+	mu := e.GetMutex()
+	if mu == nil {
+		e.UnTouch()
+		return nil, ErrEntityNil
+	}
+	if err := lock.LockContext(ctx, mu); err != nil {
+		e.UnTouch()
+		return nil, err
+	}
+	release := func(err error) (lock.Mutex, error) {
+		mu.Unlock()
+		e.UnTouch()
+		return nil, err
+	}
+	if e.IsRemoved() || e.IsClear() {
+		return release(ErrEntityRemoved)
+	}
+	m.addMu.Lock()
+	managed := m.entities.Get(e.ID()) == e
+	m.addMu.Unlock()
+	if !managed {
+		return release(ErrEntityNotManaged)
+	}
+	if err := ctx.Err(); err != nil {
+		return release(err)
+	}
+	return mu, nil
+}
+
+// Get 返回 ID 对应的已加载实体，没有时为 nil。
 func (m *EntityManager) Get(id int64) IThreadSafeEntity {
 	return m.entities.Get(id)
 }
 
-// GetWithCategory returns the entity with the given ID and category check.
-// Returns nil if not found or type mismatch.
+// GetWithCategory 返回 ID 对应且分类相符的实体；未找到或分类不符时为 nil（category 为 None 时不检查）。
 func (m *EntityManager) GetWithCategory(id int64, category EntityCategory) IThreadSafeEntity {
 	e := m.entities.Get(id)
 	if e != nil && category != EntityCategoryNone && e.GetEntityCategory() != category {
@@ -313,8 +316,7 @@ func (m *EntityManager) GetWithCategory(id int64, category EntityCategory) IThre
 	return e
 }
 
-// GetMany returns entities matching the given IDs.
-// Missing entities are skipped.
+// GetMany 返回已加载的那些实体，缺失的跳过（结果与 ids 不按位置对应）。
 func (m *EntityManager) GetMany(ids []int64) []IThreadSafeEntity {
 	result := make([]IThreadSafeEntity, 0, len(ids))
 	for _, id := range ids {
@@ -325,19 +327,19 @@ func (m *EntityManager) GetMany(ids []int64) []IThreadSafeEntity {
 	return result
 }
 
-// Exists checks if an entity with the given ID is in memory.
+// Exists 报告 ID 对应的实体是否已加载。
 func (m *EntityManager) Exists(id int64) bool {
 	return m.entities.Get(id) != nil
 }
 
-// Len returns the total number of managed entities.
+// Len 返回托管实体总数。
 func (m *EntityManager) Len() int {
 	return m.entities.Count()
 }
 
-// Range iterates all entities across all buckets. Return false from fn to stop early.
+// Range 遍历全部实体，fn 返回 false 时停止。
 //
-// 遍历按桶快照进行、回调在桶锁外（RR-20261005-NC-180），fn 里可以 Add / Destroy。
+// 遍历按桶快照进行、回调在桶锁外，fn 里可以 Add / Destroy。
 // 交给 fn 的实体在 fn 返回前持有引用（Touch），并发或 fn 自己的 Destroy 把清理
 // 推迟到引用归还，fn 读到的 ID / 分类 / 种类始终有效；遍历到达前已被摘除的实体
 // 不交出。实体仍可能在 fn 期间被摘除：要改它，照常在实体锁内复核 IsRemoved。
@@ -345,8 +347,7 @@ func (m *EntityManager) Range(fn func(IThreadSafeEntity) bool) {
 	m.rangeHeld(fn)
 }
 
-// RangeByCategory iterates entities of a specific category, with the same
-// snapshot and reference rules as Range.
+// RangeByCategory 遍历指定分类的实体，快照与引用规则同 Range。
 func (m *EntityManager) RangeByCategory(category EntityCategory, fn func(IThreadSafeEntity) bool) {
 	m.rangeHeld(func(e IThreadSafeEntity) bool {
 		if e.GetEntityCategory() == category {
@@ -356,7 +357,7 @@ func (m *EntityManager) RangeByCategory(category EntityCategory, fn func(IThread
 	})
 }
 
-// CountByCategory returns the number of entities of a specific category.
+// CountByCategory 返回指定分类的实体数。
 func (m *EntityManager) CountByCategory(category EntityCategory) int {
 	count := 0
 	m.rangeHeld(func(e IThreadSafeEntity) bool {
@@ -377,6 +378,7 @@ func (m *EntityManager) rangeHeld(fn func(IThreadSafeEntity) bool) {
 	m.entities.RangeAll(func(_ int64, e IThreadSafeEntity) bool { return visitHeld(e, fn) })
 }
 
+// addGroupIndexLockedByManager 在 addMu 内把新登记的实体加入它所属锁组的成员索引。
 func (m *EntityManager) addGroupIndexLockedByManager(e IThreadSafeEntity) {
 	if m == nil || e == nil || e.Base() == nil {
 		return
@@ -390,6 +392,7 @@ func (m *EntityManager) addGroupIndexLockedByManager(e IThreadSafeEntity) {
 	m.addGroupIndexLocked(groupID, e)
 }
 
+// addGroupIndexLocked 把 e 加入 groupID 的成员索引。调用方持 groupMu。
 func (m *EntityManager) addGroupIndexLocked(groupID int64, e IThreadSafeEntity) {
 	if groupID == 0 || e == nil {
 		return
@@ -402,6 +405,7 @@ func (m *EntityManager) addGroupIndexLocked(groupID int64, e IThreadSafeEntity) 
 	bucket[e.ID()] = e
 }
 
+// removeGroupIndex 把 e 移出它所属锁组的成员索引。
 func (m *EntityManager) removeGroupIndex(e IThreadSafeEntity) {
 	if m == nil || e == nil || e.Base() == nil {
 		return
@@ -415,6 +419,7 @@ func (m *EntityManager) removeGroupIndex(e IThreadSafeEntity) {
 	m.removeGroupIndexLocked(groupID, e.ID())
 }
 
+// removeGroupIndexLocked 把 entityID 移出 groupID 的成员索引，组空时删除。调用方持 groupMu。
 func (m *EntityManager) removeGroupIndexLocked(groupID int64, entityID int64) {
 	if groupID == 0 {
 		return
@@ -429,9 +434,7 @@ func (m *EntityManager) removeGroupIndexLocked(groupID int64, entityID int64) {
 	}
 }
 
-// UpdateEntityGroup updates EntityBase group state and the manager's derived
-// group membership index. Callers are responsible for holding the correct
-// entity/group serialization lock.
+// UpdateEntityGroup 更新实体的锁组与 Manager 的成员索引。调用方负责持有相应的实体锁 / 组锁。
 func (m *EntityManager) UpdateEntityGroup(e IThreadSafeEntity, groupID int64) error {
 	if m == nil || e == nil || e.Base() == nil {
 		return ErrEntityNil
@@ -453,6 +456,7 @@ func (m *EntityManager) UpdateEntityGroup(e IThreadSafeEntity, groupID int64) er
 	return nil
 }
 
+// GetGroupEntity 返回锁组 groupID 中的实体，不在组内时为 nil。
 func (m *EntityManager) GetGroupEntity(groupID int64, entityID int64) IThreadSafeEntity {
 	if m == nil || groupID == 0 || entityID == 0 {
 		return nil
@@ -466,6 +470,7 @@ func (m *EntityManager) GetGroupEntity(groupID int64, entityID int64) IThreadSaf
 	return bucket[entityID]
 }
 
+// GetGroupEntities 返回锁组 groupID 成员的快照（无序）。
 func (m *EntityManager) GetGroupEntities(groupID int64) []IThreadSafeEntity {
 	if m == nil || groupID == 0 {
 		return nil
@@ -486,11 +491,8 @@ func (m *EntityManager) GetGroupEntities(groupID int64) []IThreadSafeEntity {
 // RangeGroupEntities 遍历组索引的快照，规则与 Range 相同：回调在锁外、可以 Add / Destroy，
 // 返回 false 立即停止；每个实体先持引用（Touch）再交给 fn，到达前已被摘除的实体不交出，
 // fn 期间被销毁的实体推迟到引用归还才清理。
-//
-// 之前直接遍历切片快照、不持引用（C7 遍历回调契约发现）：回调里 Destroy 同组还没走到的
-// 实体，doClear 立刻把它清零，随后以 ID 0 交给 fn——与 NC-180 复审在 Range 上补的是同一处。
-// 不改组索引本身；nest 的 EntityLockGroupScope.Range 走 GetGroupEntities 并按 GroupLockID
-// 过滤，不受影响。
+// 不持引用直接遍历快照不行：回调里 Destroy 同组还没走到的实体，doClear 会立刻把它清零，随后以 ID 0 交给 fn。
+// nest 的 EntityLockGroupScope.Range 走 GetGroupEntities 并按 GroupLockID 过滤，不经这里。
 func (m *EntityManager) RangeGroupEntities(groupID int64, fn func(IThreadSafeEntity) bool) {
 	if m == nil || groupID == 0 || fn == nil {
 		return

@@ -2,18 +2,11 @@ package entity
 
 import "fmt"
 
-// RemotePolicy describes who owns an entity kind's write path across servers.
+// RemotePolicy 描述一个实体 kind 的跨服写路径归谁所有。
 //
-// Managed means the remote_entity module may load, lock, save and sync the
-// entity through IThreadSafeRemoteEntity, behind a distributed ownership guard.
-// Mirror means this process keeps a local read-only replica of state some other
-// service owns. Both are remote-capable, which is what puts the remote bit in
-// the ID so a process holding only an ID knows the entity may live elsewhere.
-//
-// There used to be a third value, Capable, meaning "remote-addressable but not
-// managed here". Its only effect was to put the kind in the first lock rank,
-// and lock order now comes from the kind's category, so the value said nothing
-// the category does not (M-04).
+// Managed 表示 remote_entity 模块可以经 IThreadSafeRemoteEntity、在分布式所有权保护下加载、加锁、保存与同步该实体。
+// Mirror 表示本进程保存另一服务所拥有状态的本地只读副本。两者都是 Remote 可用的，这会在 ID 中置 Remote 位，让只持有
+// ID 的进程知道该实体可能在别处。锁序由 kind 的分类决定，与策略无关。
 type RemotePolicy uint8
 
 const (
@@ -22,8 +15,7 @@ const (
 	RemotePolicyMirror
 )
 
-// RemoteCapable reports whether the kind is remote-addressable at all, which is
-// what the ID's remote bit records.
+// RemoteCapable 报告该策略是否 Remote 可寻址，即 ID 的 Remote 位记录的内容。
 func (p RemotePolicy) RemoteCapable() bool {
 	switch p {
 	case RemotePolicyManaged, RemotePolicyMirror:
@@ -33,13 +25,13 @@ func (p RemotePolicy) RemoteCapable() bool {
 	}
 }
 
+// RemoteManaged 报告该策略是否为 Remote 托管。
 func (p RemotePolicy) RemoteManaged() bool {
 	return p == RemotePolicyManaged
 }
 
-// EntityLifetime describes the memory/persistence lifecycle expected by the
-// framework. It is declarative; persistence is still controlled by AutoPersist
-// and registered save/load definitions.
+// EntityLifetime 描述框架期望的内存 / 持久化生命周期。它是声明性的；是否持久化仍由 AutoPersist 与登记的保存 / 加载
+// 定义控制。
 type EntityLifetime uint8
 
 const (
@@ -52,6 +44,7 @@ const (
 	EntityLifetimeMirrorCache
 )
 
+// DefaultEntityLifetime 按 Remote 策略与是否持久化给出默认生命周期。
 func DefaultEntityLifetime(noPersist bool, remotePolicy RemotePolicy) EntityLifetime {
 	if remotePolicy == RemotePolicyManaged {
 		return EntityLifetimeRemoteManaged
@@ -65,6 +58,7 @@ func DefaultEntityLifetime(noPersist bool, remotePolicy RemotePolicy) EntityLife
 	return EntityLifetimePersistedHotCold
 }
 
+// ValidateEntityPolicy 校验生命周期与 Remote 策略、持久化设置一致（lifetime 为 Default 时先取默认值）。
 func ValidateEntityPolicy(kind EntityKind, noPersist bool, remotePolicy RemotePolicy, lifetime EntityLifetime) error {
 	if lifetime == EntityLifetimeDefault {
 		lifetime = DefaultEntityLifetime(noPersist, remotePolicy)

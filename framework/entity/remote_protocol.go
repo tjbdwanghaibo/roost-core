@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// Remote 实体写路径的错误。
 var (
 	ErrRemoteRejected                = errors.New("remote entity: write rejected before commit")
 	ErrRemoteOverloaded              = errors.New("remote entity: capacity exceeded")
@@ -20,13 +21,14 @@ var (
 	ErrRemoteWriteCapabilityDisabled = errors.New("remote entity: write capability disabled")
 	ErrRemoteInvalidStateTransition  = errors.New("remote entity: invalid ownership transition")
 	ErrRemoteCommitNotFinalized      = errors.New("remote entity: commit not finalized")
-	// ErrRemoteEntityReloading 表示实例因 Remote 写被持久拒绝而隔离、框架正在把它仅内存卸载并从权威重新加载
-	// （RR-20260926-39 / 62）：gate 释放到卸载完成之间的下一写者、卸载（Destroy）过程中发起的重载都得到它。
+	// ErrRemoteEntityReloading 表示实例因 Remote 写被持久拒绝而隔离、框架正在把它仅内存卸载并从权威重新加载：
+	// gate 释放到卸载完成之间的下一写者、卸载（Destroy）过程中发起的重载都得到它。
 	// 这是可重试错误：卸载完成后的下一次访问得到从权威重载的新实例。它包裹 ErrRemoteFenced，
 	// 既有 errors.Is(err, ErrRemoteFenced) 判断保持成立；需要区分“可重试的重载窗口”时先判断本哨兵。
 	ErrRemoteEntityReloading = fmt.Errorf("%w: rejected instance is being unloaded and reloaded from the authority (retryable)", ErrRemoteFenced)
 )
 
+// RemoteOwnershipState 是实例的 Remote 所有权状态，按 ValidRemoteOwnershipTransition 转换。
 type RemoteOwnershipState uint8
 
 const (
@@ -61,6 +63,7 @@ func (s RemoteOwnershipState) String() string {
 	}
 }
 
+// ValidRemoteOwnershipTransition 报告所有权状态从 from 到 to 是否合法（相同状态总是合法）。
 func ValidRemoteOwnershipTransition(from, to RemoteOwnershipState) bool {
 	if from == to {
 		return true
@@ -87,6 +90,7 @@ func ValidRemoteOwnershipTransition(from, to RemoteOwnershipState) bool {
 	}
 }
 
+// RemoteVersionVector 是 Remote 实体的四个独立版本维度：状态版本、marker 代际、锁 fence、路由代际。
 type RemoteVersionVector struct {
 	StateVersion uint64
 	MarkerEpoch  uint64
@@ -94,6 +98,8 @@ type RemoteVersionVector struct {
 	RouteEpoch   uint64
 }
 
+// ValidateWrite 校验以 v 写入时与 base 一致：代际不同或 fence 更旧返回 ErrRemoteFenced，状态版本不同返回
+// ErrRemoteVersionConflict。
 func (v RemoteVersionVector) ValidateWrite(base RemoteVersionVector) error {
 	if v.MarkerEpoch != base.MarkerEpoch || v.RouteEpoch != base.RouteEpoch || v.LockFence < base.LockFence {
 		return ErrRemoteFenced
@@ -104,6 +110,7 @@ func (v RemoteVersionVector) ValidateWrite(base RemoteVersionVector) error {
 	return nil
 }
 
+// RemoteWriteMode 是取得写权限的方式：经所有者路由，或共享模式下的分布式锁。
 type RemoteWriteMode uint8
 
 const (
@@ -111,6 +118,7 @@ const (
 	RemoteWriteSharedLock
 )
 
+// RemoteWriteLease 是一次 Remote 写入取得的写权限。
 type RemoteWriteLease struct {
 	EntityID    int64
 	OwnerSID    int32
@@ -124,6 +132,7 @@ type RemoteWriteLease struct {
 	ExpiresAt   int64
 }
 
+// Valid 报告租约是否完整可用：有实体与代际，共享锁模式带 fence，状态为本地拥有或共享。
 func (l RemoteWriteLease) Valid() bool {
 	if l.EntityID == 0 || l.MarkerEpoch == 0 || l.RouteEpoch == 0 {
 		return false
@@ -139,24 +148,20 @@ type RemoteTransactionID [16]byte
 func (id RemoteTransactionID) IsZero() bool   { return id == RemoteTransactionID{} }
 func (id RemoteTransactionID) String() string { return fmt.Sprintf("%x", id[:]) }
 
-// RemotePersistChange is the persistence-relevant part of one DAO change.
-// The detailed patch remains owned by Nest; remote aggregates deliberately
-// freeze full documents under their lease and entity version fence.
+// RemotePersistChange 是一个 DAO 变化中与持久化相关的部分。具体 patch 仍归 Nest；Remote 聚合有意在租约与实体版本
+// fence 之下冻结完整文档。
 type RemotePersistChange struct {
 	Mask   uint64
 	Delete bool
 }
 
-// RemotePersistChangeSource exposes only changes recorded by the transaction
-// currently being finalized. Looking up a participant claims it for the
-// remote commit so it is not also emitted as an ordinary mutation.
+// RemotePersistChangeSource 只暴露正在 finalize 的事务所记录的变化。查询某个参与方即把它认领给 Remote 提交，
+// 不再作为普通 mutation 输出。
 type RemotePersistChangeSource interface {
 	RemotePersistChangeFor(any) (RemotePersistChange, bool)
 }
 
-// RemoteDeleteIntentSource exposes aggregate deletion explicitly. The intent
-// is transaction-local and does not depend on mutating IsRemoved before the
-// durable remote commit has been admitted.
+// RemoteDeleteIntentSource 显式暴露聚合删除意图。意图是事务内的，不依赖在持久 Remote 提交准入之前修改 IsRemoved。
 type RemoteDeleteIntentSource interface {
 	RemoteDeleteRequested(int64) bool
 }
@@ -190,9 +195,8 @@ func (r RemoteSnapshotRecord) Clone() RemoteSnapshotRecord {
 	return r
 }
 
-// RemoteDataMutation is a frozen full-document write. It intentionally carries
-// no live DAO pointer and no interface-typed patch values, so WAL records are
-// deterministic and can be replayed by another process or implementation.
+// RemoteDataMutation 是冻结的整文档写入。它有意不携带活的 DAO 指针与接口类型的 patch 值，WAL 记录因此是确定的，
+// 可以由另一个进程或实现重放。
 type RemoteDataMutation struct {
 	Database      string
 	DatabaseScope uint8
@@ -229,8 +233,7 @@ func (m RemoteDataMutation) Validate() error {
 	return nil
 }
 
-// RemoteCommit is immutable after FinalizeLocked returns. Implementations must
-// not retain aliases to live entity/component/DAO memory.
+// RemoteCommit 在 FinalizeLocked 返回后不可变。实现不得保留指向活的实体 / 组件 / DAO 内存的别名。
 type RemoteCommit struct {
 	TransactionID RemoteTransactionID
 	EntityID      int64
@@ -378,12 +381,10 @@ func (s RemoteCommitStatus) Clone() RemoteCommitStatus {
 	return s
 }
 
-// IRemoteCommitParticipant is generated on a remotely managed entity. Build is
-// called with the entity mutex held and freezes transaction-local changes.
-// Acknowledge runs only after the authoritative remote outcome is known;
-// Rollback must not require business code to manage entity locks.
+// IRemoteCommitParticipant 由 Remote 托管实体的生成代码实现。Build 在持实体锁时调用，冻结事务内的变化；Acknowledge
+// 只在权威 Remote 结论已知后执行；Rollback 不得要求业务代码管理实体锁。
 //
-// AcknowledgeRemoteCommit 必须幂等且并发安全（RR-20260926-63）：同一提交可能被确认多次，且可能并发——WAL 投影器报告
+// AcknowledgeRemoteCommit 必须幂等且并发安全：同一提交可能被确认多次，且可能并发——WAL 投影器报告
 // “结果未知”后 finalizer 回源 Applied 自行发布，投影器对同一事务的重试同时也会确认；outbox 重放、Committed 收尾的对账
 // 也会再次确认已确认过的提交。它不持有实体锁被调用，不能假设与 Build / Rollback 或另一次 Acknowledge 互斥。
 // 生成实现经 dataengine.Tracker.AdvanceVersion（原子 CAS，版本已相等时直接成功）满足该契约；手写实现与测试替身须自行
@@ -396,10 +397,8 @@ type IRemoteCommitParticipant interface {
 	RollbackRemoteCommit(RemoteCommit)
 }
 
-// IRemoteCommitter applies immutable commits with storage-side version and
-// fence checks. It must be idempotent by TransactionID and reject reuse of a
-// TransactionID with different commit content. Applied status must include the
-// immutable commits and receipts required for live outbox replay.
+// IRemoteCommitter 以存储侧的版本与 fence 检查应用不可变提交。它必须按 TransactionID 幂等，并拒绝以不同提交内容复用
+// TransactionID。Applied 状态必须包含在线 outbox 重放所需的不可变提交与回执。
 type IRemoteCommitter interface {
 	CommitRemote(context.Context, RemoteCommit) (RemoteCommitReceipt, error)
 	CommitStatus(context.Context, RemoteTransactionID) (RemoteCommitStatus, error)
@@ -414,9 +413,8 @@ type IRemoteCommitWaiter interface {
 	WaitRemoteCommit(context.Context, RemoteTransactionID) (RemoteCommitStatus, error)
 }
 
-// IRemoteCommitOutbox exposes storage-applied commits whose snapshot/event
-// publication was interrupted. Implementations persist this state atomically
-// with entity data and make MarkRemoteCommitPublished idempotent.
+// IRemoteCommitOutbox 暴露已在存储中应用、但快照 / 事件发布被中断的提交。实现把这一状态与实体数据原子地持久化，
+// 并保证 MarkRemoteCommitPublished 幂等。
 type IRemoteCommitOutbox interface {
 	PendingRemoteCommits(context.Context, int) ([]RemoteCommitStatus, error)
 	MarkRemoteCommitPublished(context.Context, RemoteTransactionID) error
@@ -438,16 +436,13 @@ type IRemoteStorageInitializer interface {
 	EnsureRemoteStorage(context.Context) error
 }
 
-// IRemoteCommitAcknowledger is invoked after the authoritative backend has
-// accepted the immutable commit. Generated implementations clear only the
-// dirty generation captured by that commit.
+// IRemoteSnapshotPublisher 发布 / 删除 Remote 快照（删除带版本）。
 type IRemoteSnapshotPublisher interface {
 	PublishRemoteSnapshot(context.Context, RemoteSnapshotRecord) error
 	DeleteRemoteSnapshot(context.Context, RemoteSnapshotKey, uint64) error
 }
 
-// RemoteSnapshotScope produces a stable, non-zero scope ID for generated DAO
-// views. Explicit protocol scope constants remain preferable for public APIs.
+// RemoteSnapshotScope 为生成的 DAO 视图给出稳定、非零的 scope ID。公开 API 仍应优先使用显式的协议 scope 常量。
 func RemoteSnapshotScope(collection string) uint32 {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(collection))
@@ -458,7 +453,7 @@ func RemoteSnapshotScope(collection string) uint32 {
 	return scope
 }
 
-// RemoteSnapshotSchema separates decoder namespaces by entity kind and scope.
+// RemoteSnapshotSchema 按实体 kind 与 scope 划分解码器命名空间。
 func RemoteSnapshotSchema(kind EntityKind, scope uint32) uint32 {
 	value := uint32(kind)*0x9e3779b1 ^ scope
 	if value == 0 {
@@ -471,9 +466,8 @@ type IRemoteSnapshotLoader interface {
 	LoadRemoteSnapshot(context.Context, RemoteSnapshotKey, RemoteReadConsistency, uint64) (RemoteSnapshotEnvelope, bool, error)
 }
 
-// RemoteWriteBatch is prepared before Nest locks entities. FinalizeLocked is
-// called after a successful handler while entity mutexes remain held; Commit is
-// called after those mutexes are released but before write gates are released.
+// RemoteWriteBatch 在 Nest 锁定实体之前准备。FinalizeLocked 在 handler 成功后、仍持实体锁时调用；Commit 在实体锁释放
+// 之后、写门释放之前调用。
 type RemoteWriteBatch interface {
 	EntityIDs() []int64
 	FinalizeLocked(RemoteTransactionOutcome) error
@@ -484,12 +478,12 @@ type RemoteWriteBatch interface {
 	Close(context.Context) error
 }
 
-// RemoteOutcomeDeferrer 由能在后台收尾里拿到持久结论的 RemoteWriteBatch 实现（RR-20260926-37）。
+// RemoteOutcomeDeferrer 由能在后台收尾里拿到持久结论的 RemoteWriteBatch 实现。
 // 本地事务已持久提交、而 Remote Commit 返回错误（确认超时 / 结果未知 / 明确拒绝）时，Nest 在 Close 之前
 // 把提交后工作（Sync Confirm、AfterCommit）交给批次：返回 true 表示批次接手，fn 在拿到持久结论之后
 // 至多调用一次——committed=true 为 Applied/Committed，false 为持久拒绝（此时批次已回滚、隔离、释放并
 // 卸载了持有被拒绝修改的实例）。调用只经 NestMgr.RunLocal 在快池进行；Nest 未启动、停机中或已 fence 而拒绝投递时
-// 不调用（不在后台 goroutine 上执行业务回调，Sync 门保持冻结，计数告警，RR-20260926-61）。停机排空拿不到结论时同样不调用。
+// 不调用（不在后台 goroutine 上执行业务回调，Sync 门保持冻结，计数告警）。停机排空拿不到结论时同样不调用。
 // 返回 false 表示批次不会再有持久结论（调用方保持原状，不得自行 Confirm）。
 type RemoteOutcomeDeferrer interface {
 	DeferUntilDurableOutcome(fn func(committed bool)) bool
@@ -511,17 +505,13 @@ type RemoteOwnershipManager interface {
 	TransferRemoteOwnership(context.Context, int64, int32) (RemoteEntityMarkerLease, error)
 }
 
-// RemoteSnapshotInterest is a renewable soft-state subscription. Scope and
-// policy are part of the key, enabling generated LOD/projection variants.
+// RemoteSnapshotInterest 是可续约的软状态订阅。scope 与 policy 是键的一部分，支持生成的 LOD / 投影变体。
 type RemoteSnapshotInterest struct {
 	ConsumerSID int32
 	Key         RemoteSnapshotKey
 	ExpiresAt   int64
-	// Generation orders one consumer's renewals and releases for a key. It is
-	// assigned by the publisher, only ever advances, and a release cancels a
-	// lease only if its generation is not older than the lease's. ExpiresAt
-	// cannot play this role: a legitimate release is published BEFORE the
-	// lease it withdraws would have expired (RR-20260913-02).
+	// Generation 为同一消费者对同一键的续约与释放排序：由发布者分配、只增不减，释放只在其代际不旧于租约代际时取消
+	// 该租约。ExpiresAt 担不了这个角色：合法的释放在它撤回的租约过期之前就会发布。
 	Generation uint64
 }
 
@@ -540,6 +530,7 @@ type RemoteSnapshotReader interface {
 	ReadRemoteSnapshot(context.Context, RemoteSnapshotKey, RemoteReadConsistency, uint64) (RemoteSnapshotEnvelope, bool, error)
 }
 
+// ValidateRemoteWriteBatchIDs 校验批次目标都是 Remote 托管 kind 的合法 ID，返回去重、升序的完整 ID。
 func ValidateRemoteWriteBatchIDs(ids []int64) ([]int64, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -561,6 +552,7 @@ func ValidateRemoteWriteBatchIDs(ids []int64) ([]int64, error) {
 	return normalized, nil
 }
 
+// NewRemoteTransactionOutcome 构造事务结论，FinalizedAt 取当前时间。
 func NewRemoteTransactionOutcome(id RemoteTransactionID, handler, requestID string, succeeded bool, durability uint8) RemoteTransactionOutcome {
 	return RemoteTransactionOutcome{TransactionID: id, Handler: handler, RequestID: requestID, Succeeded: succeeded, Durability: durability, FinalizedAt: time.Now().UnixNano()}
 }

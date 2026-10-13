@@ -13,9 +13,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// ManagerAccess adapts the in-memory EntityManager to the execution and remote
-// loading contracts without installing package globals. A service owns one
-// instance and injects it into Nest and Remote Entity mods.
+// ManagerAccess 把内存 EntityManager 适配到执行（nest Getter）与 Remote 加载契约，不安装包级全局状态。服务持有一个
+// 实例并注入 Nest 与 Remote Entity Mod。冷加载按实体去重为一次共享加载，与调用方的取消解耦。
 type ManagerAccess struct {
 	manager         *EntityManager
 	loaderMu        sync.RWMutex
@@ -25,15 +24,15 @@ type ManagerAccess struct {
 	loadConcurrency int
 	loadTimeout     time.Duration
 	// localExecutor 是 Nest 绑定的快池入口（NestMgr.RunLocal，经 LocalExecutorBinder）：领头调用方
-	// 离开后，共享加载经它把发布实体交回快池；卸载后重载（RR-20260926-59）也经它发布。
+	// 离开后，共享加载经它把发布实体交回快池；卸载后重载也经它发布。
 	localExecutor atomic.Pointer[func(func()) error]
 	flightMu      sync.Mutex
 	flights       map[int64]*entityLoadFlight
-	// resync：卸载后仍有订阅者时的主动重载（ConfigureUnloadResync，RR-20260926-59）；nil 表示未接线。
+	// resync：卸载后仍有订阅者时的主动重载（ConfigureUnloadResync）；nil 表示未接线。
 	resync atomic.Pointer[unloadResync]
 }
 
-// DefaultEntityLoadTimeout 是一次共享冷加载的框架上限（RR-20260926-54）。加载与调用方解耦后，
+// DefaultEntityLoadTimeout 是一次共享冷加载的框架上限。加载与调用方解耦后，
 // 调用方的截止时间不再约束它；这个上限保证没有等待方的加载（投影持续失败、store 不作答）
 // 最终结束、释放 flight，之后的请求重新发起加载。取值远大于各调用方预算（Nest 请求、登录、
 // dispatch 默认 2～3s），只作兜底。
@@ -48,10 +47,8 @@ var (
 	ErrEntityLoaderStopped = errors.New("entity manager access: aggregate loader stopped; in-flight load cancelled")
 )
 
-// entityLoadFlight deduplicates concurrent cold loads of one entity: the
-// first caller starts LoadEntity on its own goroutine, everyone (the first
-// caller included) waits on done or leaves on its own context. Without it a
-// hot entity's cache miss stampedes the database with one load per caller.
+// entityLoadFlight 合并同一实体的并发冷加载：第一个调用方在独立 goroutine 上启动 LoadEntity，所有调用方（含第一个）
+// 等 done 或按自己的 ctx 离开。没有它，热点实体的缓存未命中会让每个调用方各读一次数据库。
 type entityLoadFlight struct {
 	done     chan struct{}
 	value    IThreadSafeEntity
@@ -59,7 +56,7 @@ type entityLoadFlight struct {
 	panicked bool
 
 	// leaderMu 保护领头调用方的本地执行器交接：领头方仍在等待时，加载里的 RunLocal 走它自己
-	// ctx 上的执行器（Nest 慢阶段即本条消息的快续行，与修前相同）；领头方离开时置 leaderGone，
+	// ctx 上的执行器（Nest I/O 阶段即本条消息的业务续行）；领头方离开时置 leaderGone，
 	// 之后改走 ManagerAccess 绑定的快池入口。离开要等正在进行的续行结束——续行仍在使用领头方
 	// 的 Msg，Msg 在领头方返回后会被回收。
 	leaderMu   sync.Mutex
@@ -67,8 +64,8 @@ type entityLoadFlight struct {
 	leaderGone bool
 	leaveOnce  sync.Once
 
-	// leaderSteps / leaderAway（RR-20260927-27）：领头方在 Nest 之外、没有指定执行器、并且持有实体锁时非 nil。
-	// 它仍在等待时，加载里的本地步骤经 leaderSteps 交回领头方自己的 goroutine 执行——RR-54 之前发布就在那里，
+	// leaderSteps / leaderAway：领头方在 Nest 之外、没有指定执行器、并且持有实体锁时非 nil。
+	// 它仍在等待时，加载里的本地步骤经 leaderSteps 交回领头方自己的 goroutine 执行——它已持有所需的实体锁，
 	// 可重入锁不阻塞；领头方离开时关闭 leaderAway，之后的步骤改走绑定的快池入口或就地执行。
 	leaderSteps chan *leaderLocalStep
 	leaderAway  chan struct{}
@@ -82,6 +79,7 @@ type leaderLocalStep struct {
 	recovered any
 }
 
+// run 执行步骤并记录 panic，结束后关闭 done。
 func (step *leaderLocalStep) run() {
 	defer close(step.done)
 	defer func() {
@@ -92,6 +90,7 @@ func (step *leaderLocalStep) run() {
 	step.fn()
 }
 
+// NewManagerAccess 包装 manager；冷加载并发默认 8。
 func NewManagerAccess(manager *EntityManager) *ManagerAccess {
 	return &ManagerAccess{manager: manager, loadConcurrency: 8, flights: make(map[int64]*entityLoadFlight)}
 }
@@ -117,6 +116,7 @@ func (access *ManagerAccess) BindLocalExecutor(run func(func()) error) {
 	access.localExecutor.Store(&run)
 }
 
+// ConfigureLoadConcurrency 设置 GetMany 冷加载的并发上限；<=0 忽略。
 func (access *ManagerAccess) ConfigureLoadConcurrency(concurrency int) {
 	if access == nil || concurrency <= 0 {
 		return
@@ -126,6 +126,7 @@ func (access *ManagerAccess) ConfigureLoadConcurrency(concurrency int) {
 	access.loaderMu.Unlock()
 }
 
+// Manager 返回被包装的 EntityManager。
 func (access *ManagerAccess) Manager() *EntityManager {
 	if access == nil {
 		return nil
@@ -133,6 +134,7 @@ func (access *ManagerAccess) Manager() *EntityManager {
 	return access.manager
 }
 
+// RegisterOnEntityRelease 见 EntityManager.RegisterOnEntityRelease。
 func (access *ManagerAccess) RegisterOnEntityRelease(hook func(IThreadSafeEntity)) (func(), error) {
 	if access == nil || access.manager == nil {
 		return nil, ErrEntityNotManaged
@@ -140,6 +142,7 @@ func (access *ManagerAccess) RegisterOnEntityRelease(hook func(IThreadSafeEntity
 	return access.manager.RegisterOnEntityRelease(hook), nil
 }
 
+// RegisterDeleteAdmitter 见 EntityManager.RegisterDeleteAdmitter。
 func (access *ManagerAccess) RegisterDeleteAdmitter(admitter DeleteAdmitter) (func(), error) {
 	if access == nil || access.manager == nil {
 		return nil, ErrEntityNotManaged
@@ -179,6 +182,7 @@ type entityLoaderBinding struct {
 	timeout time.Duration
 }
 
+// currentLoader 读取当前的 loader 注册。
 func (access *ManagerAccess) currentLoader() entityLoaderBinding {
 	access.loaderMu.RLock()
 	defer access.loaderMu.RUnlock()
@@ -207,6 +211,8 @@ func (binding entityLoaderBinding) loadContext(leader context.Context) (context.
 	}
 }
 
+// Get 实现 Getter：先查内存；未命中且配置了 loader 时冷加载（共享加载，见 loadEntityShared）。ctx 标记了
+// LoadedEntitiesOnly（Nest 业务阶段）时不加载，返回 ErrColdLoadInLogic。不存在时返回 (nil, nil)。
 func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityCategory) (IThreadSafeEntity, error) {
 	if access == nil || access.manager == nil || id == 0 {
 		return nil, nil
@@ -250,11 +256,10 @@ func (access *ManagerAccess) IsLoaded(id int64) bool {
 	return !hasLoader
 }
 
-// coldLoadInLogicError 是快阶段冷缺失的唯一答复：它发生在任何 I/O、加载 goroutine 和
-// singleflight 等待之前，本身不阻塞，所以返回可 errors.Is 判别的 ErrColdLoadInLogic，
-// 让业务按“目标未加载”降级（RR-02 契约）。RR-06 曾在这里 panic，业务因此失去降级能力
-// （RR-20260926-26）；fail-fast 只留给真正会等待的入口（Repository 冷加载、投影等待、
-// Remote 准备等）。在快 worker 上额外包裹 fctx.ErrBlockingInBusinessWorker，便于定位入口与 handler。
+// coldLoadInLogicError 是快阶段冷缺失的唯一答复：它发生在任何 I/O、加载 goroutine 和 singleflight 等待之前，本身
+// 不阻塞，所以返回可 errors.Is 判别的 ErrColdLoadInLogic，让业务按“目标未加载”降级，而不是 panic；fail-fast 只留给
+// 真正会等待的入口（Repository 冷加载、投影等待、Remote 准备等）。在快 worker 上额外包裹
+// fctx.ErrBlockingInBusinessWorker，便于定位入口与 handler。
 func coldLoadInLogicError(operation string, id int64) error {
 	if err := fctx.BlockingError(operation); err != nil {
 		return fmt.Errorf("%w: entity %d: %w", ErrColdLoadInLogic, id, err)
@@ -262,29 +267,18 @@ func coldLoadInLogicError(operation string, id int64) error {
 	return fmt.Errorf("%w: entity %d", ErrColdLoadInLogic, id)
 }
 
-// loadEntityShared collapses concurrent loads of the same entity into one
-// LoadEntity call. Results (including errors) are shared with every waiter;
-// the flight is removed before done closes, so a retry after a failure
-// starts a fresh load.
+// loadEntityShared 把同一实体的并发加载合并为一次 LoadEntity 调用。结果（含错误）与每个等待方共享；flight 在 done
+// 关闭之前撤下，所以失败后的重试会重新加载。
 //
-// 加载与调用方解耦（RR-20260926-54）：第一个调用方（领头方）在独立 goroutine 上启动 LoadEntity，
-// ctx 由 entityLoaderBinding.loadContext 派生——保留领头方 ctx 的值，不随它取消或截止，只受框架
-// 加载上限与 loader 注销（停机）约束。每个等待方（含领头方）只按自己的 ctx 离开；最后一个等待方
-// 离开也不取消在途加载，加载完成后结果照常经 loader 发布进 EntityManager，之后的 Get 直接命中。
-// 修前 LoadEntity 直接用领头方的 ctx，EnterGame 以 2s 登录预算领头时（RR-20260926-36），同一 flight
-// 里预算更长的等待方（同一玩家的 Nest 慢阶段准备）在 2s 时一起得到 DeadlineExceeded。
+// 加载与调用方解耦：第一个调用方（领头方）在独立 goroutine 上启动 LoadEntity，ctx 由 entityLoaderBinding.loadContext
+// 派生——保留领头方 ctx 的值，不随它取消或截止，只受框架加载上限与 loader 注销（停机）约束。每个等待方（含领头方）
+// 只按自己的 ctx 离开；最后一个等待方离开也不取消在途加载，加载完成后结果照常经 loader 发布进 EntityManager，之后的
+// Get 直接命中。这样预算短的领头方（例如 2s 登录预算）不会让同一 flight 里预算更长的等待方一起超时。
 //
-// Finishing the flight is a DEFER, and that is the load-bearing part
-// (RR-20260919-08). A panic anywhere under LoadEntity — the store, the
-// builder, a decoder, an OnInitFinish — used to skip the removal and the
-// close, leaving a flight nobody would ever finish: every later request for
-// that entity waited on a channel that never closed and got back its own
-// deadline, and the retry never reached the loader because a load "was
-// already in flight". The load goroutine recovers the panic (re-panicking
-// there would take the process down), logs it with its stack, and every
-// waiter gets a real error; the leader, if it is still waiting, keeps seeing
-// it as a panic, because a caller whose load blew up must not be told it
-// worked.
+// 结束 flight 必须放在 defer 里（runEntityLoad）：LoadEntity 之下任何位置（store、builder、解码器、OnInitFinish）
+// panic 时，flight 仍会被撤下并关闭，否则之后对该实体的每个请求都会等一个永不关闭的 channel，重试也到不了 loader。
+// 加载 goroutine 恢复 panic（在那里重新 panic 会让进程退出）、带栈记录日志，每个等待方得到真实错误；仍在等待的领头方
+// 看到的仍是 panic——加载出错的调用方不能被告知成功。
 func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64, kind EntityKind, binding entityLoaderBinding) (IThreadSafeEntity, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -293,7 +287,7 @@ func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64,
 	flight, joined := access.flights[fullID]
 	if !joined {
 		// 调用方查过内存之后、拿到 flightMu 之前，上一轮加载可能刚发布并撤掉 flight（flight 在发布之后才删除）：
-		// 在同一把锁下复查，不为已发布的实体再读一次权威（卸载后主动重载与业务访问并发时即此窗口，RR-20260926-59）。
+		// 在同一把锁下复查，不为已发布的实体再读一次权威（卸载后主动重载与业务访问并发时即此窗口）。
 		if access.manager != nil {
 			if value := access.manager.Get(fullID); value != nil {
 				access.flightMu.Unlock()
@@ -320,10 +314,10 @@ func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64,
 	var steps chan *leaderLocalStep
 	if !joined {
 		steps = flight.leaderSteps
-		// RR-20260927-29：领头方无论怎样离开（自己的 ctx 到期、加载正常完成、加载 panic 重新抛出）都要登记离开。
-		// 之前只有 ctx 分支调用 leaderLeft：加载正常完成后 loader 另起的 goroutine 若仍用加载 ctx 调 RunLocal，
-		// 持锁的非 Nest 领头方已不再接收 leaderSteps、leaderAway 又从未关闭，runOnLeader 永久阻塞；Nest 领头方
-		// 则会把迟到步骤交给已返回（Msg 将被回收）的那条消息的快续行。离开后迟到步骤改走绑定执行器或就地执行。
+		// 领头方无论怎样离开（自己的 ctx 到期、加载正常完成、加载 panic 重新抛出）都要登记离开：加载完成后 loader
+		// 另起的 goroutine 仍可能用加载 ctx 调 RunLocal，若不登记，持锁的非 Nest 领头方已不再接收 leaderSteps 而
+		// leaderAway 从未关闭，runOnLeader 会永久阻塞；Nest 领头方则会把迟到步骤交给已返回（Msg 将被回收）的那条
+		// 消息的业务续行。离开后迟到步骤改走绑定执行器或就地执行。
 		defer flight.leaderLeft()
 	}
 	for {
@@ -341,8 +335,8 @@ func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64,
 	}
 }
 
-// currentGoroutineHoldsEntityLocks 报告当前 goroutine 的 GuardScope 是否持有实体锁（RR-20260927-27）。
-// 不持锁的领头方，加载里的发布无论在哪个 goroutine 上都等不到它，保持 RR-54 的就地执行。
+// currentGoroutineHoldsEntityLocks 报告当前 goroutine 的 GuardScope 是否持有实体锁。
+// 不持锁的领头方，加载里的发布无论在哪个 goroutine 上都不会等它，就地执行即可。
 func currentGoroutineHoldsEntityLocks() bool {
 	scope := CurrentGuardScope()
 	return scope != nil && scope.guard != nil && scope.guard.GuardedCount() > 0
@@ -397,15 +391,15 @@ func localExecutorOf(ctx context.Context) func(func()) error {
 
 // runLocal 是共享加载 ctx 上的本地执行器。领头方仍在等待时：
 //   - 它指定了执行器（Nest 慢阶段的快续行）：沿用它，执行期间持有 leaderMu，领头方此时离开要等这一步结束；
-//   - 它在 Nest 之外、持有实体锁（leaderSteps 非 nil）：把步骤交回领头方 goroutine 执行（RR-20260927-27）；
+//   - 它在 Nest 之外、持有实体锁（leaderSteps 非 nil）：把步骤交回领头方 goroutine 执行；
 //   - 其余（Nest 之外、不持锁）：就地执行。
 //
 // 领头方离开后改走 ManagerAccess 绑定的快池入口，未绑定时就地执行。
 //
-// RR-20260927-27：之前 Nest 之外的领头方也是“持 leaderMu 就地执行”。发布若要锁领头方正持有的实体，加载 goroutine
-// 在发布里等那把锁，领头方在等加载；它的 ctx 到期后 leaderLeft 又要等 leaderMu——永久死锁，RR-54“领头方按自己的
-// ctx 离开”不成立。RR-54 之前发布在领头方 goroutine 上，可重入锁不阻塞；现在交回那里执行，不持 leaderMu 等待。
-// 领头方不会是快 worker（快阶段 Getter 不冷加载），在它的 goroutine 上执行本地步骤不属于快池内等待。
+// Nest 之外持锁的领头方不能“持 leaderMu 就地执行”：发布若要锁领头方正持有的实体，加载 goroutine 在发布里等那把锁，
+// 领头方在等加载；它的 ctx 到期后 leaderLeft 又要等 leaderMu——永久死锁，“领头方按自己的 ctx 离开”不再成立。交回
+// 领头方 goroutine 执行时可重入锁不阻塞，也不持 leaderMu 等待。领头方不会是快 worker（快阶段 Getter 不冷加载），
+// 在它的 goroutine 上执行本地步骤不属于快池内等待。
 func (flight *entityLoadFlight) runLocal(access *ManagerAccess) func(func()) error {
 	return func(fn func()) error {
 		if flight.leaderSteps != nil {
@@ -463,17 +457,21 @@ func (flight *entityLoadFlight) leaderLeft() {
 	})
 }
 
+// entityLoadRequest 是 GetMany 中一个待冷加载的实体，indices 是它在结果中的全部位置（ID 可重复）。
+type entityLoadRequest struct {
+	id      int64
+	indices []int
+}
+
+// GetMany 实现 Getter：按位置返回各 ID 的实体（不存在为 nil）。已加载的直接取；缺失的按 ID 去重后以有限并发冷加载，
+// 第一个错误（含分类不符）取消其余加载并返回。LoadedEntitiesOnly 时缺失即返回 ErrColdLoadInLogic。
 func (access *ManagerAccess) GetMany(ctx context.Context, ids []int64, categories []EntityCategory) ([]IThreadSafeEntity, error) {
 	result := make([]IThreadSafeEntity, len(ids))
 	if access == nil || access.manager == nil {
 		return result, nil
 	}
-	type loadRequest struct {
-		id      int64
-		indices []int
-	}
-	requestsByID := make(map[int64]*loadRequest)
-	requests := make([]*loadRequest, 0, len(ids))
+	requestsByID := make(map[int64]*entityLoadRequest)
+	requests := make([]*entityLoadRequest, 0, len(ids))
 	for index, id := range ids {
 		meta := ResolveEntityID(id)
 		if value := access.manager.Get(meta.FullID); value != nil {
@@ -485,7 +483,7 @@ func (access *ManagerAccess) GetMany(ctx context.Context, ids []int64, categorie
 		}
 		request := requestsByID[meta.FullID]
 		if request == nil {
-			request = &loadRequest{id: meta.FullID}
+			request = &entityLoadRequest{id: meta.FullID}
 			requestsByID[meta.FullID] = request
 			requests = append(requests, request)
 		}
@@ -508,18 +506,25 @@ func (access *ManagerAccess) GetMany(ctx context.Context, ids []int64, categorie
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := access.loadRequests(ctx, requests, categories, result); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// loadRequests 以至多 loadConcurrency 个 goroutine 冷加载 requests，把结果写进 result 的对应位置。第一个错误（加载
+// 失败或分类不符）取消其余加载并返回；等全部 worker 退出后才返回。
+func (access *ManagerAccess) loadRequests(ctx context.Context, requests []*entityLoadRequest, categories []EntityCategory, result []IThreadSafeEntity) error {
 	access.loaderMu.RLock()
 	concurrency := access.loadConcurrency
 	access.loaderMu.RUnlock()
-	if concurrency <= 0 {
-		concurrency = 1
-	}
-	if concurrency > len(requests) {
-		concurrency = len(requests)
-	}
+	concurrency = min(max(concurrency, 1), len(requests))
 	loadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	jobs := make(chan *loadRequest)
+	jobs := make(chan *entityLoadRequest)
 	var wg sync.WaitGroup
 	var resultMu sync.Mutex
 	var firstErr error
@@ -548,7 +553,7 @@ func (access *ManagerAccess) GetMany(ctx context.Context, ids []int64, categorie
 		}
 	}
 	wg.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
+	for range concurrency {
 		go worker()
 	}
 dispatchLoop:
@@ -561,15 +566,10 @@ dispatchLoop:
 	}
 	close(jobs)
 	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return result, nil
+	return firstErr
 }
 
+// LoadRemoteEntity 实现 IRemoteEntityLoader：按 Get 加载，kind 不符或不是 Remote 实体时返回 nil。
 func (access *ManagerAccess) LoadRemoteEntity(ctx context.Context, id int64, kind EntityKind) (IThreadSafeRemoteEntity, error) {
 	if access == nil || access.manager == nil || id == 0 {
 		return nil, nil
@@ -585,6 +585,7 @@ func (access *ManagerAccess) LoadRemoteEntity(ctx context.Context, id int64, kin
 	return remote, nil
 }
 
+// LookupLocalRemoteEntity 实现 IRemoteEntityLocalLookup：只查内存，不加载。
 func (access *ManagerAccess) LookupLocalRemoteEntity(id int64, kind EntityKind) IThreadSafeRemoteEntity {
 	if access == nil || access.manager == nil || id == 0 {
 		return nil
@@ -597,6 +598,7 @@ func (access *ManagerAccess) LookupLocalRemoteEntity(id int64, kind EntityKind) 
 	return remote
 }
 
+// Len 返回已加载实体数。
 func (access *ManagerAccess) Len() int {
 	if access == nil || access.manager == nil {
 		return 0
@@ -604,12 +606,14 @@ func (access *ManagerAccess) Len() int {
 	return access.manager.Len()
 }
 
+// Range 遍历已加载实体，遵循 EntityManager.Range 的遍历契约。
 func (access *ManagerAccess) Range(fn func(IThreadSafeEntity) bool) {
 	if access != nil && access.manager != nil && fn != nil {
 		access.manager.Range(fn)
 	}
 }
 
+// GetGroupEntity 返回锁组 groupID 中的实体。
 func (access *ManagerAccess) GetGroupEntity(groupID, entityID int64) IThreadSafeEntity {
 	if access == nil || access.manager == nil {
 		return nil
@@ -617,6 +621,7 @@ func (access *ManagerAccess) GetGroupEntity(groupID, entityID int64) IThreadSafe
 	return access.manager.GetGroupEntity(groupID, entityID)
 }
 
+// GetGroupEntities 返回锁组 groupID 的全部实体。
 func (access *ManagerAccess) GetGroupEntities(groupID int64) []IThreadSafeEntity {
 	if access == nil || access.manager == nil {
 		return nil
@@ -624,6 +629,7 @@ func (access *ManagerAccess) GetGroupEntities(groupID int64) []IThreadSafeEntity
 	return access.manager.GetGroupEntities(groupID)
 }
 
+// UpdateEntityGroup 更新实体所属锁组（0 表示离开）。
 func (access *ManagerAccess) UpdateEntityGroup(value IThreadSafeEntity, groupID int64) error {
 	if access == nil || access.manager == nil {
 		return ErrEntityNotManaged
@@ -631,6 +637,7 @@ func (access *ManagerAccess) UpdateEntityGroup(value IThreadSafeEntity, groupID 
 	return access.manager.UpdateEntityGroup(value, groupID)
 }
 
+// Create 见 EntityManager.Create。
 func (access *ManagerAccess) Create(param *EntityCreateParam) (IThreadSafeEntity, error) {
 	if access == nil || access.manager == nil {
 		return nil, ErrEntityNotManaged
@@ -638,6 +645,7 @@ func (access *ManagerAccess) Create(param *EntityCreateParam) (IThreadSafeEntity
 	return access.manager.Create(param)
 }
 
+// CreateInScope 见 EntityManager.CreateInScope。
 func (access *ManagerAccess) CreateInScope(scope *GuardScope, param *EntityCreateParam) (IThreadSafeEntity, error) {
 	if access == nil || access.manager == nil {
 		return nil, ErrEntityNotManaged
@@ -645,6 +653,7 @@ func (access *ManagerAccess) CreateInScope(scope *GuardScope, param *EntityCreat
 	return access.manager.CreateInScope(scope, param)
 }
 
+// Destroy 见 EntityManager.Destroy。
 func (access *ManagerAccess) Destroy(ctx context.Context, value IThreadSafeEntity, reason EntityDestroyReason, deleteFromDB bool) error {
 	if access == nil || access.manager == nil {
 		return ErrEntityNotManaged
@@ -653,14 +662,14 @@ func (access *ManagerAccess) Destroy(ctx context.Context, value IThreadSafeEntit
 }
 
 // Unload 把实例从本进程内存卸载、不删持久数据：内存状态已不可信、须从权威重建时使用（DataEngine 驱逐
-// 被 lease fence 跳过的原生步骤留下的实体，RR-20260926-30；Remote 事务被持久拒绝后的实例，RR-20260926-39）。
+// 被 lease fence 跳过的原生步骤留下的实体；Remote 事务被持久拒绝后的实例）。
 // 内部是 EntityManager.Destroy(deleteFromDB=false, DestroyReasonMemoryUnload)：自己取实体锁、先从索引删除，
 // 在途引用由 Touch 计数保护（归零才清理），Guard 对已移除实体拒绝加锁。之后 Get 未命中、经已配置的 loader
 // 从权威重新加载。实例已被卸载或已不是当前托管实例时返回 nil（幂等）。
 //
 // Sync：实例一离开 EntityManager 就关闭它的 SubjectSyncState（不等在途引用归零后的 ClearBase），被丢弃的内容
 // 不再捕获；订阅保持登记。若该 subject 仍有订阅者且已接上 ConfigureUnloadResync，框架在快池之外主动从权威
-// 重载并 Rebind 全量，重载不了时退回 remove（RR-20260926-59）；这里只做登记，不做 I/O、不等待。未接线时
+// 重载并 Rebind 全量，重载不了时退回 remove；这里只做登记，不做 I/O、不等待。未接线时
 // 订阅者保留原对象，直到实体经 kit 的 EntityRepository.OnEntityLoaded → Rebind 被重新加载。
 // 需要实体锁：调用方在本地执行入口（快池，或 Nest 未装配时就地）调用。
 func (access *ManagerAccess) Unload(ctx context.Context, value IThreadSafeEntity) error {
@@ -700,6 +709,7 @@ func (access *ManagerAccess) UnloadRemoteEntity(ctx context.Context, value IThre
 	return access.Unload(ctx, value)
 }
 
+// ConfigureIDGenerator 见 EntityManager.ConfigureIDGenerator。
 func (access *ManagerAccess) ConfigureIDGenerator(generator func() (uint64, error)) error {
 	if access == nil || access.manager == nil {
 		return ErrEntityNotManaged

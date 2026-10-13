@@ -2,27 +2,28 @@ package entity
 
 import (
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/framework/event"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
-	"sort"
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/event"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/lock"
 )
 
-// tryTouch bit layout:
+// tryTouch 的位布局：
 //
-//	bit 31 (sign): clearedBit — entity cleanup done
-//	bit 30:        removedBit — entity marked for removal
-//	bits 0-29:     touchCnt   — concurrent reference count
+//	bit 31（符号位）：clearedBit — 实体已清理
+//	bit 30：          removedBit — 实体已标记移除
+//	bit 0-29：        touchCnt   — 并发引用计数
 const (
 	touchCntMask int32 = 0x3FFFFFFF
 	removedBit   int32 = 1 << 30
 	clearedBit   int32 = -1 << 31
 )
 
-// EntityBase is the core entity infrastructure.
-// It holds identity, lifecycle state, and reference counting.
-// No interface references — all wiring is done via generated code.
+// EntityBase 是实体的基础设施：身份、生命周期状态、引用计数、实体锁、锁组状态与同步状态。它不持有接口引用，
+// 装配全部由生成代码完成。
 type EntityBase struct {
 	id             int64
 	category       EntityCategory
@@ -36,26 +37,22 @@ type EntityBase struct {
 	groupState     atomic.Int32
 	groupTargetID  atomic.Int64
 	owner          atomic.Pointer[EntityManager]
-	// lastCommitLSN is the WAL LSN of the newest pipelined transaction that
-	// mutated this entity (set under the entity lock at enqueue time). It is
-	// the externalization gate input: checkpoint and sync must not persist or
-	// distribute state whose LSN is above the committer's durable watermark.
-	// Zero means no pipelined transaction touched the entity.
+	// lastCommitLSN 是最近一次修改本实体的 pipelined 事务的 WAL LSN（入队时在实体锁内写入），是外部化门的输入：
+	// checkpoint 与 sync 不得持久化或分发 LSN 高于 committer 持久水位的状态。0 表示没有 pipelined 事务修改过它。
 	lastCommitLSN atomic.Uint64
 
-	// Event bus for pub/sub capability.
+	// eventBus 提供实体级的事件订阅 / 发布。
 	eventBus *event.EventBus
 	syncMu   sync.RWMutex
 	sync     *SubjectSyncState
 
-	// Lifecycle hooks — set by generated entity factory code.
+	// 生命周期 hook，由生成的实体工厂代码设置。
 	onClear   func()
 	onDestroy func(EntityDestroyReason)
 }
 
-// SetLastCommitLSN records the WAL LSN of the newest pipelined transaction
-// that mutated this entity. Called by nest under the entity lock; the value
-// is also mirrored into the subject sync state when sync is enabled.
+// SetLastCommitLSN 记录最近一次修改本实体的 pipelined 事务的 WAL LSN。Nest 在实体锁内调用；启用同步时同时写入
+// 同步状态。
 func (e *EntityBase) SetLastCommitLSN(lsn uint64) {
 	if e == nil {
 		return
@@ -66,8 +63,7 @@ func (e *EntityBase) SetLastCommitLSN(lsn uint64) {
 	}
 }
 
-// LastCommitLSN returns the newest pipelined-commit LSN for this entity, or
-// zero when no pipelined transaction touched it.
+// LastCommitLSN 返回本实体最近的 pipelined 提交 LSN；没有时为 0。
 func (e *EntityBase) LastCommitLSN() uint64 {
 	if e == nil {
 		return 0
@@ -88,13 +84,13 @@ func (e *EntityBase) owningManager() *EntityManager {
 	return e.owner.Load()
 }
 
-// NewEntityBase creates an EntityBase. The id must be a full EntityID; use
-// EntityCreateParam.NormalizeID at construction boundaries that still receive a
-// generated unique ID. Hooks are set separately via SetHooks.
+// NewEntityBase 创建 EntityBase，使用以 id 为种子的可重入锁。id 必须是完整 EntityID；仍拿到生成的 UniqueID 的构造
+// 边界先用 EntityCreateParam.NormalizeID。hook 另经 SetHooks 设置。
 func NewEntityBase(id int64, category EntityCategory, notAutoPersist bool, kinds ...EntityKind) *EntityBase {
 	return NewEntityBaseWithMutex(id, category, notAutoPersist, lock.NewReentrantMutex(id), kinds...)
 }
 
+// NewEntityBaseWithMutex 与 NewEntityBase 相同，但使用指定的实体锁（nil 时新建可重入锁）。
 func NewEntityBaseWithMutex(id int64, category EntityCategory, notAutoPersist bool, mu lock.Mutex, kinds ...EntityKind) *EntityBase {
 	if mu == nil {
 		mu = lock.NewReentrantMutex(id)
@@ -113,38 +109,37 @@ func NewEntityBaseWithMutex(id int64, category EntityCategory, notAutoPersist bo
 	}
 }
 
-// SetHooks configures lifecycle callbacks. Called by generated factory code.
+// SetHooks 设置生命周期回调，由生成的工厂代码调用。
 func (e *EntityBase) SetHooks(onClear func(), onDestroy func(EntityDestroyReason)) {
 	e.onClear = onClear
 	e.onDestroy = onDestroy
 }
 
-// SetEventBus wires the event bus. Called by generated factory code or application layer.
+// SetEventBus 装配事件总线，由生成的工厂代码或应用层调用。
 func (e *EntityBase) SetEventBus(bus *event.EventBus) {
 	e.eventBus = bus
 }
 
-// EventBus returns the entity's event bus.
+// EventBus 返回实体的事件总线。
 func (e *EntityBase) EventBus() *event.EventBus {
 	return e.eventBus
 }
 
-// SubEvent subscribes to an event type via the entity's event bus.
+// SubEvent 经实体的事件总线订阅事件类型。
 func (e *EntityBase) SubEvent(eventType event.EventType) {
 	if e.eventBus != nil {
 		e.eventBus.SubEvent(eventType)
 	}
 }
 
-// PubEvent publishes an event via the entity's event bus.
+// PubEvent 经实体的事件总线发布事件。
 func (e *EntityBase) PubEvent(d event.EventData) {
 	if e.eventBus != nil {
 		e.eventBus.PubEvent(d)
 	}
 }
 
-// EnableSync wires entity-level sync state. It is intentionally not a component:
-// sync visibility and dirty flushing belong to the entity's base lifecycle.
+// EnableSync 装配实体级同步状态。它有意不是组件：同步可见性与脏数据刷新属于实体的基础生命周期。
 func (e *EntityBase) EnableSync(param EntitySyncCreateParam) {
 	if e == nil {
 		return
@@ -162,6 +157,7 @@ func (e *EntityBase) EnableSync(param EntitySyncCreateParam) {
 	}))
 }
 
+// SetSyncState 替换实体的同步状态并关闭旧状态。新状态的实体锁回调在当前 Guard 已持有本实体时直接执行。
 func (e *EntityBase) SetSyncState(syncState *SubjectSyncState) {
 	if e == nil {
 		return
@@ -174,7 +170,7 @@ func (e *EntityBase) SetSyncState(syncState *SubjectSyncState) {
 	}
 	if syncState != nil {
 		// ID 在安装时取定：同步调度器可能在实体被销毁 / 撤销（doClear 清零 id）的同时进入这里，
-		// 不能在锁外再读 EntityBase 的可变字段（RR-20260926-35 的并发 tick 回归在 race 下暴露）。
+		// 不能在锁外再读 EntityBase 的可变字段。
 		entityID := e.ID()
 		syncState.setEntityLock(func(fn func() error) error {
 			if fn == nil {
@@ -195,6 +191,7 @@ func (e *EntityBase) SetSyncState(syncState *SubjectSyncState) {
 	}
 }
 
+// Sync 返回实体的同步状态；未启用时为 nil。
 func (e *EntityBase) Sync() *SubjectSyncState {
 	if e == nil {
 		return nil
@@ -204,6 +201,7 @@ func (e *EntityBase) Sync() *SubjectSyncState {
 	return e.sync
 }
 
+// SyncEnabled 报告实体是否启用了同步。
 func (e *EntityBase) SyncEnabled() bool {
 	if syncState := e.Sync(); syncState != nil {
 		return syncState.Enabled()
@@ -211,20 +209,23 @@ func (e *EntityBase) SyncEnabled() bool {
 	return false
 }
 
+// MarkSyncDirty 按字段掩码标脏（只标脏，不发送）。
 func (e *EntityBase) MarkSyncDirty(mask uint64) {
 	if syncState := e.Sync(); syncState != nil {
 		syncState.MarkDirty(mask)
 	}
 }
 
+// MarkSyncFullDirty 标记需要全量同步。
 func (e *EntityBase) MarkSyncFullDirty(reason uint32) {
 	if syncState := e.Sync(); syncState != nil {
 		syncState.MarkFullDirty(reason)
 	}
 }
 
-// --- Identity ---
+// --- 身份 ---
 
+// ID 返回完整 EntityID；清理后为 0。
 func (e *EntityBase) ID() int64 {
 	if e == nil {
 		return 0
@@ -232,6 +233,7 @@ func (e *EntityBase) ID() int64 {
 	return e.id
 }
 
+// UniqueID 返回 ID 中的唯一号部分。
 func (e *EntityBase) UniqueID() int64 {
 	if e == nil {
 		return 0
@@ -239,6 +241,7 @@ func (e *EntityBase) UniqueID() int64 {
 	return GetUniqueIDFromEntityID(e.id)
 }
 
+// StorageID 返回持久化使用的 ID（即完整 EntityID）。
 func (e *EntityBase) StorageID() int64 {
 	if e == nil {
 		return 0
@@ -250,6 +253,7 @@ func (e *EntityBase) SetID(id int64) {
 	e.id = id
 }
 
+// GUId 返回完整 EntityID（锁序与 Guard 账本使用）。
 func (e *EntityBase) GUId() int64 {
 	if e == nil {
 		return 0
@@ -278,6 +282,7 @@ func (e *EntityBase) GetMutex() lock.Mutex {
 	return e.mu
 }
 
+// AutoPersist 报告实体是否自动持久化。
 func (e *EntityBase) AutoPersist() bool {
 	return !e.notAutoPersist
 }
@@ -296,19 +301,17 @@ func (e *EntityBase) SetLifetime(lifetime EntityLifetime) {
 	e.lifetime = lifetime
 }
 
-// OnInitFinish is the default no-op implementation.
-// Override in concrete entity for post-initialization logic.
+// OnInitFinish 是默认的空实现；具体实体可覆盖以执行初始化后的逻辑。
 func (e *EntityBase) OnInitFinish(param *EntityCreateParam) error {
 	return nil
 }
 
-// OnDestroy is the default no-op implementation.
-// Override in concrete entity for cleanup logic on removal.
+// OnDestroy 是默认的空实现；具体实体可覆盖以执行移除时的清理。
 func (e *EntityBase) OnDestroy(reason EntityDestroyReason) {}
 
-// --- Reference counting ---
+// --- 引用计数 ---
 
-// Touch atomically increments reference count. Returns false if removed or cleared.
+// Touch 原子地增加引用计数；实体已移除或已清理时返回 false。
 func (e *EntityBase) Touch() bool {
 	if e == nil {
 		return false
@@ -327,23 +330,23 @@ func (e *EntityBase) Touch() bool {
 	}
 }
 
-// UnTouch atomically decrements reference count. Triggers clear if removed and count reaches zero.
+// UnTouch 原子地减少引用计数；实体已移除且计数归零时由本次调用执行清理。
 func (e *EntityBase) UnTouch() {
 	if e == nil {
 		panic("entity: nil EntityBase reference release")
 	}
-	var new int32
+	var next int32
 	for {
 		old := e.tryTouch.Load()
 		if old&touchCntMask == 0 {
 			panic("entity: reference count underflow")
 		}
-		new = old - 1
-		if e.tryTouch.CompareAndSwap(old, new) {
+		next = old - 1
+		if e.tryTouch.CompareAndSwap(old, next) {
 			break
 		}
 	}
-	if new&removedBit != 0 && new&touchCntMask == 0 {
+	if next&removedBit != 0 && next&touchCntMask == 0 {
 		for {
 			old := e.tryTouch.Load()
 			if old&clearedBit != 0 {
@@ -357,6 +360,7 @@ func (e *EntityBase) UnTouch() {
 	}
 }
 
+// IsRemoved 报告实体是否已标记移除。
 func (e *EntityBase) IsRemoved() bool {
 	if e == nil {
 		return true
@@ -364,6 +368,7 @@ func (e *EntityBase) IsRemoved() bool {
 	return e.tryTouch.Load()&removedBit != 0
 }
 
+// SetRemoved 标记实体已移除；此后 Touch 失败。
 func (e *EntityBase) SetRemoved() {
 	for {
 		old := e.tryTouch.Load()
@@ -373,6 +378,7 @@ func (e *EntityBase) SetRemoved() {
 	}
 }
 
+// IsClear 报告实体是否已清理。
 func (e *EntityBase) IsClear() bool {
 	if e == nil {
 		return true
@@ -380,8 +386,8 @@ func (e *EntityBase) IsClear() bool {
 	return e.tryTouch.Load()&clearedBit != 0
 }
 
-// ClearBase tries to clear internal state via CAS on clearedBit.
-// Called explicitly when an entity is destroyed without going through UnTouch.
+// ClearBase 在没有引用时清理实体（CAS 设置 clearedBit）；仍有引用时什么也不做，由最后一次 UnTouch 清理。
+// 销毁实体时显式调用。
 func (e *EntityBase) ClearBase() {
 	for {
 		old := e.tryTouch.Load()
@@ -398,6 +404,8 @@ func (e *EntityBase) ClearBase() {
 	}
 }
 
+// doClear 执行清理：依次调用 onClear、销毁事件总线、关闭同步状态（各自恢复 panic），清零身份与锁组状态；
+// 全部完成后重新抛出第一个 panic。
 func (e *EntityBase) doClear() {
 	var firstPanic any
 	runCleanup := func(fn func()) {
@@ -442,46 +450,46 @@ func (e *EntityBase) doClear() {
 	}
 }
 
-// DestroyAll invokes the destroy hook (for components cleanup).
+// DestroyAll 调用销毁 hook（清理组件）。
 func (e *EntityBase) DestroyAll(reason EntityDestroyReason) {
 	if e.onDestroy != nil {
 		e.onDestroy(reason)
 	}
 }
 
-// --- Component Registry (definitions only, no owner pointer) ---
+// --- 组件登记（只有定义，不持有 owner 指针）---
 
-// ComponentInterfaceBase is the minimal component interface.
+// ComponentInterfaceBase 是组件的最小接口。
 type ComponentInterfaceBase interface {
 	Name() string
 	OnInitFinish(param *EntityCreateParam, isCreate bool) error
 	OnDestroy(rea EntityDestroyReason)
 }
 
-// ComponentManager is a simple container for components.
-// No owner reference — wiring is done by generated code.
+// ComponentManager 是组件容器，不持有 owner 引用，装配由生成代码完成。
 type ComponentManager struct {
 	Comps     map[ComponentType]ComponentInterfaceBase
 	initOrder []ComponentType
 }
 
+// NewComponentManager 创建空的组件容器。
 func NewComponentManager() ComponentManager {
 	return ComponentManager{
 		Comps: make(map[ComponentType]ComponentInterfaceBase),
 	}
 }
 
-// Set registers a component. Called by generated code.
+// Set 登记组件，由生成代码调用。
 func (c *ComponentManager) Set(compType ComponentType, comp ComponentInterfaceBase) {
 	c.Comps[compType] = comp
 }
 
-// Get retrieves a component by type.
+// Get 按类型取组件。
 func (c *ComponentManager) Get(compType ComponentType) ComponentInterfaceBase {
 	return c.Comps[compType]
 }
 
-// InitAll initializes all components in topological order.
+// InitAll 按依赖拓扑序初始化组件，不在依赖图中的组件随后按类型号顺序初始化；记录实际初始化顺序供 DestroyAll 逆序销毁。
 func (c *ComponentManager) InitAll(param *EntityCreateParam, isCreate bool) error {
 	c.initOrder = c.initOrder[:0]
 	sorted, err := GetTopologicalSortedComponents()
@@ -511,7 +519,7 @@ func (c *ComponentManager) InitAll(param *EntityCreateParam, isCreate bool) erro
 		}
 	}
 
-	// Init any remaining (not in dependency graph)
+	// 初始化不在依赖图中的其余组件。
 	for _, ct := range sortedComponentTypes(c.Comps) {
 		if !initialized[ct] {
 			comp := c.Comps[ct]
@@ -524,7 +532,8 @@ func (c *ComponentManager) InitAll(param *EntityCreateParam, isCreate bool) erro
 	return nil
 }
 
-// DestroyAll calls OnDestroy on all components.
+// DestroyAll 按初始化的逆序调用组件的 OnDestroy，未初始化的组件随后按类型号逆序销毁；每个组件各自恢复 panic，
+// 全部完成后重新抛出第一个 panic。
 func (c *ComponentManager) DestroyAll(reason EntityDestroyReason) {
 	var firstPanic any
 	destroy := func(comp ComponentInterfaceBase) {
@@ -561,52 +570,45 @@ func (c *ComponentManager) DestroyAll(reason EntityDestroyReason) {
 	}
 }
 
-// Clear releases all component references.
+// Clear 释放全部组件引用。
 func (c *ComponentManager) Clear() {
 	clear(c.Comps)
 	c.initOrder = c.initOrder[:0]
 }
 
+// sortedComponentTypes 返回按类型号升序的组件类型。
 func sortedComponentTypes(comps map[ComponentType]ComponentInterfaceBase) []ComponentType {
-	types := make([]ComponentType, 0, len(comps))
-	for ct := range comps {
-		types = append(types, ct)
-	}
-	sort.Slice(types, func(i, j int) bool { return types[i] < types[j] })
-	return types
+	return slices.Sorted(maps.Keys(comps))
 }
 
-// --- Global component dependency registration ---
+// --- 全局组件依赖登记 ---
 
 var globalCompDependLock sync.RWMutex
 var globalCompDependencies = newCompTopologicalSort()
 
-// RegisterComponentDependency declares that a component type depends on others.
-// This determines initialization order. Call from the service bootstrap path.
+// RegisterComponentDependency 声明组件类型依赖的其他组件，决定初始化顺序。在服务启动路径调用。
 func RegisterComponentDependency(compType ComponentType, dependencies ...ComponentType) {
 	globalCompDependLock.Lock()
 	defer globalCompDependLock.Unlock()
 	globalCompDependencies.RegisterCompDependency(compType, dependencies...)
 }
 
-// GetTopologicalSortedComponents returns components in dependency order.
+// GetTopologicalSortedComponents 按依赖顺序返回组件类型；存在环时返回错误。
 func GetTopologicalSortedComponents() ([]ComponentType, error) {
 	globalCompDependLock.RLock()
 	defer globalCompDependLock.RUnlock()
 	return globalCompDependencies.GetTopologicalSortedComponents()
 }
 
-// --- Global component factory ---
+// --- 全局组件工厂 ---
 
-// ComponentFactory creates a component instance. The owner is passed as `any`
-// (concrete entity pointer); the factory does type assertion internally.
+// ComponentFactory 创建组件实例。owner 以 any 传入（具体实体指针），由工厂内部做类型断言。
 type ComponentFactory func(owner any, param *EntityCreateParam) (ComponentInterfaceBase, error)
 
 var globalCompFactoryLock sync.RWMutex
 var globalCompFactories = make(map[ComponentType]ComponentFactory)
 
-// RegisterComponentFactory registers a global factory for a component type.
-// Call from the service bootstrap path. Panics on duplicate registration.
+// RegisterComponentFactory 为组件类型登记全局工厂。在服务启动路径调用，重复登记 panic。
 func RegisterComponentFactory(compType ComponentType, factory ComponentFactory) {
 	globalCompFactoryLock.Lock()
 	defer globalCompFactoryLock.Unlock()
@@ -616,6 +618,7 @@ func RegisterComponentFactory(compType ComponentType, factory ComponentFactory) 
 	globalCompFactories[compType] = factory
 }
 
+// ResetComponentRegistryForTest 清空组件依赖与工厂登记，只供测试使用。
 func ResetComponentRegistryForTest() {
 	globalCompDependLock.Lock()
 	globalCompDependencies = newCompTopologicalSort()
@@ -626,7 +629,7 @@ func ResetComponentRegistryForTest() {
 	globalCompFactoryLock.Unlock()
 }
 
-// CreateComponent invokes the registered factory for the given component type.
+// CreateComponent 调用组件类型登记的工厂。
 func CreateComponent(compType ComponentType, owner any, param *EntityCreateParam) (ComponentInterfaceBase, error) {
 	globalCompFactoryLock.RLock()
 	factory, ok := globalCompFactories[compType]
@@ -637,38 +640,38 @@ func CreateComponent(compType ComponentType, owner any, param *EntityCreateParam
 	return factory(owner, param)
 }
 
-// --- DAO Manager (pure container, no owner) ---
+// --- DAO 容器（纯容器，不持有 owner）---
 
-// DaoManager holds DAO instances by collection name.
-// No owner reference — wiring is done by generated code.
+// DaoManager 按集合名持有 DAO 实例，不持有 owner 引用，装配由生成代码完成。
 type DaoManager struct {
 	Daos map[string]DaoInterface
 }
 
+// NewDaoManager 创建空的 DAO 容器。
 func NewDaoManager() DaoManager {
 	return DaoManager{
 		Daos: make(map[string]DaoInterface),
 	}
 }
 
-// Set registers a DAO. Called by generated code.
+// Set 登记 DAO，由生成代码调用。
 func (d *DaoManager) Set(collName string, dao DaoInterface) {
 	d.Daos[collName] = dao
 }
 
-// Get retrieves a DAO by collection name.
+// Get 按集合名取 DAO。
 func (d *DaoManager) Get(collName string) DaoInterface {
 	return d.Daos[collName]
 }
 
-// RangeDao iterates all DAOs.
+// RangeDao 遍历全部 DAO（顺序不定）。
 func (d *DaoManager) RangeDao(f func(DaoInterface)) {
 	for _, dao := range d.Daos {
 		f(dao)
 	}
 }
 
-// Clear releases all DAO references.
+// Clear 释放全部 DAO 引用。
 func (d *DaoManager) Clear() {
 	clear(d.Daos)
 }

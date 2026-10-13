@@ -7,18 +7,15 @@ import (
 	"sync/atomic"
 )
 
-// IDGen generates the dynamic portion of EntityID.
+// IDGen 生成 EntityID 中的动态唯一号部分。
 //
-// Layout:
+// 布局：
 //
-//	unique 52 bits = [blockNo][offset]
+//	unique 52 位 = [blockNo][offset]
 //
-// The default offset width is 20 bits, so each acquired block provides
-// 1,048,576 local IDs. The block number should be allocated globally and
-// monotonically, for example by Redis INCR minus one or an etcd transaction.
-// This keeps early IDs compact because block 0 starts at unique 1; unique 0 is
-// reserved as an invalid/empty value for all full EntityIDs. The upper half of
-// the 52-bit unique range is reserved for explicit static IDs.
+// offset 默认 20 位，每取得一个块提供 1,048,576 个本地 ID。块号应全局单调分配，例如 Redis INCR 减一或 etcd 事务。
+// 块 0 从 unique 1 开始，早期 ID 因此紧凑；unique 0 保留为所有完整 EntityID 的无效 / 空值。52 位唯一号的上半区
+// 保留给显式的静态 ID。
 const (
 	IDGenOffsetBits = 20
 	IDGenBlockSize  = uint64(1) << IDGenOffsetBits
@@ -30,9 +27,11 @@ const (
 	MaxBlockNo          = DynamicUniqueIDMask >> IDGenOffsetBits
 )
 
-// EntityID layout in positive int64:
+// EntityID 在正 int64 中的布局：
 //
 //	[sign(1)=0][remote(1)][unique(52)][kind(8)][category(2)]
+//
+// category 两位只在本进程未注册该 kind 时由 ResolveEntityID 作为分类的兜底读取，见 makeEntityID。
 const (
 	EntityCategoryBits = 2
 	EntityKindBits     = 8
@@ -51,6 +50,7 @@ const (
 	MaxEntityKindValue = EntityKindMask
 )
 
+// ID 生成与 EntityID 解析的错误。
 var (
 	ErrInvalidBlockNo    = errors.New("idgen: block number exceeds 52-bit unique range")
 	ErrBlockExhausted    = errors.New("idgen: current block exhausted and no block allocator configured")
@@ -60,8 +60,8 @@ var (
 	ErrInvalidEntityID   = errors.New("entity id: invalid")
 )
 
-// IDGen is a lock-free fast path unique ID generator. It only calls acquireBlock
-// when the current block is exhausted.
+// IDGen 是快路径无锁的唯一号生成器，只在当前块用尽时调用 acquireBlock 取新块（同一时刻只有一个 goroutine 取块，
+// 其余自旋让出等待）。
 type IDGen struct {
 	next         atomic.Uint64
 	end          atomic.Uint64
@@ -69,6 +69,7 @@ type IDGen struct {
 	acquireBlock atomic.Value // stores func() (uint64, error)
 }
 
+// NewIDGen 以 initialBlock 为当前块创建生成器；acquireBlock 为 nil 时块用尽返回 ErrBlockExhausted。
 func NewIDGen(initialBlock uint64, acquireBlock func() (uint64, error)) (*IDGen, error) {
 	if initialBlock > MaxBlockNo {
 		return nil, ErrInvalidBlockNo
@@ -81,6 +82,7 @@ func NewIDGen(initialBlock uint64, acquireBlock func() (uint64, error)) (*IDGen,
 	return gen, nil
 }
 
+// Generate 返回下一个唯一号，当前块用尽时先取新块。
 func (g *IDGen) Generate() (uint64, error) {
 	for {
 		next := g.next.Load()
@@ -98,6 +100,7 @@ func (g *IDGen) Generate() (uint64, error) {
 	}
 }
 
+// rotateBlock 取一个新块：抢到轮换权的 goroutine 调用 acquireBlock 并重置块，其余等它完成后重试。
 func (g *IDGen) rotateBlock() error {
 	fn, _ := g.acquireBlock.Load().(func() (uint64, error))
 	if fn == nil {
@@ -123,6 +126,7 @@ func (g *IDGen) rotateBlock() error {
 	return nil
 }
 
+// resetBlock 把当前块设为 blockNo（块 0 从 1 开始，跳过保留的 0）。
 func (g *IDGen) resetBlock(blockNo uint64) {
 	start := blockNo << IDGenOffsetBits
 	if blockNo == 0 {
@@ -132,11 +136,13 @@ func (g *IDGen) resetBlock(blockNo uint64) {
 	g.end.Store((blockNo << IDGenOffsetBits) + IDGenBlockSize)
 }
 
+// ParseUniqueID 把唯一号拆成块号与块内偏移。
 func ParseUniqueID(id uint64) (blockNo uint64, offset uint64) {
 	id &= UniqueIDMask
 	return id >> IDGenOffsetBits, id & (IDGenBlockSize - 1)
 }
 
+// BuildEntityID 由唯一号与已注册的 kind 构造完整 EntityID（kind 为 Remote 可用时置 Remote 位）。
 func BuildEntityID(uniqueID int64, kind EntityKind) (int64, error) {
 	category, err := ResolveEntityKindCategory(kind)
 	if err != nil {
@@ -145,6 +151,7 @@ func BuildEntityID(uniqueID int64, kind EntityKind) (int64, error) {
 	return buildEntityIDWithCategory(uniqueID, category, kind)
 }
 
+// buildEntityIDWithCategory 校验唯一号、分类与 kind 后构造完整 EntityID。
 func buildEntityIDWithCategory(uniqueID int64, category EntityCategory, kind EntityKind) (int64, error) {
 	if uniqueID <= 0 || uint64(uniqueID) > UniqueIDMask {
 		return 0, fmt.Errorf("%w: unique id %d outside 1..%d", ErrInvalidEntityID, uniqueID, UniqueIDMask)
@@ -155,19 +162,17 @@ func buildEntityIDWithCategory(uniqueID int64, category EntityCategory, kind Ent
 	if kind == EntityKindNone {
 		return 0, fmt.Errorf("%w: kind is none", ErrInvalidEntityID)
 	}
-	return makeEntityID(uniqueID, category, kind, kind != EntityKindNone && IsEntityKindRemoteCapable(kind)), nil
+	// makeEntityID 按 kind 注册的 Remote 能力自行置位，这里不必另算。
+	return makeEntityID(uniqueID, category, kind, false), nil
 }
 
+// makeEntityID 拼出完整 EntityID。remoteCapable 为 true 或 kind 注册为 Remote 可用时置 Remote 位。
 func makeEntityID(uniqueID int64, category EntityCategory, kind EntityKind, remoteCapable bool) int64 {
-	// kind is uint8 and always within EntityKindMask (8 bits); no check needed.
+	// kind 是 uint8，总在 EntityKindMask（8 位）之内，无需检查。
 	//
-	// The low two bits still receive the category, truncated to the field, but
-	// nothing reads them any more: the registry is the authority on a kind's
-	// category (ResolveEntityID), so the field is legacy padding. It is kept
-	// written so an ID minted before and after this change is bit-identical
-	// and no stored ID has to be migrated (M-02). A category above the field's
-	// three usable values therefore pads with a meaningless remainder, which is
-	// harmless precisely because no reader consults it. M-04 removes the write.
+	// 低两位仍写入截断后的分类。已注册 kind 的分类以注册表为准（ResolveEntityID），只有本进程未注册该 kind 时
+	// 才退回读取这两位。保留写入使 ID 的位布局不变、已存储的 ID 不需要迁移；分类超过该字段三个可用值时写入的是
+	// 无意义的余数。去掉这次写入会改变 ID 格式，须单独决定。
 	id := ((uint64(uniqueID) & UniqueIDMask) << UniqueIDShift) |
 		((uint64(kind) & EntityKindMask) << EntityKindShift) |
 		(uint64(category) & EntityCategoryMask)
@@ -180,28 +185,31 @@ func makeEntityID(uniqueID int64, category EntityCategory, kind EntityKind, remo
 	return int64(id)
 }
 
-// GetEntityCategoryFromID reads the ID's legacy category field.
+// GetEntityCategoryFromID 读取 ID 低两位的分类字段。
 //
-// Deprecated: the registry is the authority on a kind's category, and the field
-// only holds three usable values. Use ResolveEntityID(id).Category, or
-// EntityCategoryOfKind for a kind. This accessor remains for a process that
-// holds an ID of a kind it does not link, where nothing better exists.
+// Deprecated: kind 的分类以注册表为准，该字段只有三个可用值。请使用 ResolveEntityID(id).Category，或对 kind 使用
+// EntityCategoryOfKind。只有持有本进程未链接 kind 的 ID、别无他法时才用它。
 func GetEntityCategoryFromID(id int64) EntityCategory {
 	return EntityCategory(uint64(id) & EntityCategoryMask)
 }
 
+// GetEntityKindFromID 读取 ID 中的 kind。
 func GetEntityKindFromID(id int64) EntityKind {
 	return EntityKind((uint64(id) >> EntityKindShift) & EntityKindMask)
 }
 
+// GetEntityRemoteFromID 读取 ID 中的 Remote 位。
 func GetEntityRemoteFromID(id int64) bool {
 	return ((uint64(id) >> EntityRemoteShift) & EntityRemoteMask) != 0
 }
 
+// GetUniqueIDFromEntityID 读取 ID 中的唯一号。
 func GetUniqueIDFromEntityID(id int64) int64 {
 	return int64((uint64(id) >> UniqueIDShift) & UniqueIDMask)
 }
 
+// NormalizeFullID 校验 id 是完整、可解析的 EntityID（kind 非 None 时还须与之相符），返回规范后的完整 ID。
+// kind 必须已在本进程注册。
 func NormalizeFullID(id int64, kind EntityKind) (int64, error) {
 	if id == 0 {
 		return 0, fmt.Errorf("%w: empty id", ErrInvalidEntityID)
@@ -219,26 +227,22 @@ func NormalizeFullID(id int64, kind EntityKind) (int64, error) {
 	if meta.UniqueID == 0 {
 		return 0, fmt.Errorf("%w: id %d has empty unique id", ErrInvalidEntityID, id)
 	}
-	// The kind must be registered here, which is what makes the ID resolvable
-	// at all. Comparing meta.Category against the registry is not a check any
-	// more: ResolveEntityID now takes the category FROM the registry, so the
-	// two can only agree. The old comparison read as validation while proving
-	// nothing (M-02).
+	// kind 必须在本进程注册，ID 才可解析。不再把 meta.Category 与注册表比较：ResolveEntityID 的分类就取自注册表，
+	// 两者必然一致，比较证明不了任何东西。
 	if _, err := ResolveEntityKindCategory(meta.Kind); err != nil {
 		return 0, err
 	}
 	return meta.FullID, nil
 }
 
+// MatchEntityID 报告 id 是否是 kind（None 表示任意）的合法完整 EntityID。
 func MatchEntityID(id int64, kind EntityKind) bool {
 	_, err := NormalizeFullID(id, kind)
 	return err == nil
 }
 
-// IsRemoteCapableEntityID returns whether the EntityID carries the
-// remote-capable identity. EntityKind registration is authoritative when it is
-// available; the remote bit is the wire/storage hint for processes that only
-// have the ID.
+// IsRemoteCapableEntityID 报告 EntityID 是否具有 Remote 能力。有 kind 注册时以注册为准；Remote 位是只持有 ID 的
+// 进程在传输 / 存储上的提示。
 func IsRemoteCapableEntityID(id int64) bool {
 	kind := GetEntityKindFromID(id)
 	if kind != EntityKindNone && IsEntityKindRemoteCapable(kind) {
@@ -247,10 +251,12 @@ func IsRemoteCapableEntityID(id int64) bool {
 	return GetEntityRemoteFromID(id)
 }
 
+// setRemoteCapableBit 置 ID 的 Remote 位。
 func setRemoteCapableBit(id int64) int64 {
 	return int64(uint64(id) | (EntityRemoteMask << EntityRemoteShift))
 }
 
+// clearRemoteCapableBit 清 ID 的 Remote 位（只供包内测试）。
 func clearRemoteCapableBit(id int64) int64 {
 	return int64(uint64(id) & ^(EntityRemoteMask << EntityRemoteShift))
 }

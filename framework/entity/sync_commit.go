@@ -18,7 +18,7 @@ type SyncCommitObserver interface {
 }
 
 // SyncSubjectRetractor 是 SyncCommitObserver 的可选能力：撤回事务内新建、随后被回滚或拒绝的
-// 实体（RR-20260926-35）。实现方注销该 subject：尚未持有对象的订阅直接移除，已持有对象的会话
+// 实体。实现方注销该 subject：尚未持有对象的订阅直接移除，已持有对象的会话
 // 在下一帧收到 ObjectRemove（remove-before-create）。只登记在别的调度器上的 subject 不受影响。
 // 在持有该实体锁的业务 goroutine 上调用，不得阻塞或等待网络。
 type SyncSubjectRetractor interface {
@@ -42,7 +42,7 @@ type syncMutationEntry struct {
 }
 
 // syncCommitGate 是一个实体在一笔提交里的门：同一 SyncMutation 的每个实体各有一道，共享 batch 的
-// released / confirmed。rejected 按实体记录（RR-20260926-58）：混合事务只有 Remote 部分被持久拒绝时，
+// released / confirmed。rejected 按实体记录：混合事务只有 Remote 部分被持久拒绝时，
 // 只有这些实体的门按拒绝处理，已持久提交的本地实体仍按 Confirm 放行。
 type syncCommitGate struct {
 	batch    *SyncMutation
@@ -76,7 +76,7 @@ type SyncMutation struct {
 	released         atomic.Bool
 	confirmed        atomic.Bool
 	discarded        atomic.Bool
-	// rejected 表示已准入的提交整体被持久拒绝（Remote 结论，RR-20260926-37）：全部实体的门不再阻塞后续提交，
+	// rejected 表示已准入的提交整体被持久拒绝（Remote 结论）：全部实体的门不再阻塞后续提交，
 	// 本提交自己的兴趣事实按丢弃处理；从不 Confirm。只拒绝其中一部分实体见 RejectEntities（各门自己的 rejected）。
 	rejected atomic.Bool
 	// rejectedIDs 是 RejectEntities 拒绝的实体，发布于 confirmed 之前；只供没有 SubjectSyncState 的实体
@@ -206,7 +206,7 @@ func (b *SyncMutation) Confirm() {
 	}
 }
 
-// Reject 用于已准入、但远端持久结论为拒绝、且本提交没有其他已持久提交部分的提交（RR-20260926-37）：
+// Reject 用于已准入、但远端持久结论为拒绝、且本提交没有其他已持久提交部分的提交：
 // 丢弃全部实体的门，不 Confirm，不再阻塞同一实体的后续提交，本提交的兴趣事实全部丢弃。被拒绝实例在锁内
 // 冻结的内容由它的仅内存卸载关闭同步状态时丢弃，调用方须在卸载之后调用。本地部分已持久提交的混合事务
 // 用 RejectEntities，只拒绝 Remote 实体。
@@ -222,7 +222,7 @@ func (b *SyncMutation) Reject() {
 	}
 }
 
-// RejectEntities 用于本地部分已持久提交、Remote 部分被持久拒绝的提交（RR-20260926-58）：ids 是被拒绝的
+// RejectEntities 用于本地部分已持久提交、Remote 部分被持久拒绝的提交：ids 是被拒绝的
 // Remote 实体（Remote 批次的实体 ID）。只有它们的门按 Reject 处理——不再阻塞后续提交、本提交里关于它们的
 // 兴趣事实丢弃；其余实体的提交已经持久，门按 Confirm 放行，事实与冻结内容照常交付。ids 覆盖全部实体时
 // 等同 Reject。与 Reject 一样须在被拒绝实例卸载之后调用。

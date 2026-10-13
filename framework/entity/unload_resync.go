@@ -11,17 +11,17 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// 卸载后重载（RR-20260926-59）。
+// 卸载后重载。
 //
-// ManagerAccess.Unload 只卸载内存（RR-20260926-30 驱逐被 lease fence 跳过的原生步骤留下的实体、RR-20260926-39
-// Remote 事务被持久拒绝后的实例共用它）。卸载关闭实例的同步状态，Sync 订阅保持登记、不发 remove；可订阅者手里
+// ManagerAccess.Unload 只卸载内存（驱逐被 lease fence 跳过的原生步骤留下的实体、Remote 事务被持久拒绝后的实例
+// 共用它）。卸载关闭实例的同步状态，Sync 订阅保持登记、不发 remove；可订阅者手里
 // 可能是从未成为权威的内容（Durability 1 推测性确认、原生步骤准入时已外发）。所以卸载时若该 subject 仍有订阅者，
 // 框架主动从权威重载实体并 Rebind 全量；重载失败退回 remove：
 //
 //	Unload（快池持锁，或未装配 Nest 时就地）
 //	  └─ schedule：只登记（按实体 ID 去重、有界队列），不做 I/O、不等待
 //	重载 worker（快池之外的后台 goroutine，最多 Workers 个，队列空即退出）
-//	  ├─ ManagerAccess.Get：与业务冷加载同一条共享加载（RR-20260926-54：与调用方 ctx 解耦、受框架加载上限
+//	  ├─ ManagerAccess.Get：与业务冷加载同一条共享加载（与调用方 ctx 解耦、受框架加载上限
 //	  │    与 loader 注销约束；正式 EntityRepository 先等该实体的在途投影/驱逐），发布经 Nest 绑定的
 //	  │    BindLocalExecutor（NestMgr.RunLocal）回快池，OnEntityLoaded → Rebind 走既有正式路径
 //	  ├─ 再 Rebind 一次（同一状态是空操作；覆盖不经 EntityRepository 的 loader）
@@ -29,7 +29,7 @@ import (
 //
 // 与业务并发：业务访问与重载经 ManagerAccess 的 singleflight 共用一次加载；业务先重载并 Register/Rebind 时
 // subject 已不再等待，worker 直接结束。队列放不下（重载风暴）时立即退回 remove，订阅者不会停在错误内容上。
-// 停机（stop）让 worker 立即离开在途等待并退出；取消不是重载失败，不发 remove。在途的共享加载本身按 RR-54 的
+// 停机（stop）让 worker 立即离开在途等待并退出；取消不是重载失败，不发 remove。在途的共享加载本身按共享加载的
 // 规则继续到完成或被 loader 注销（DataEngine 停机）取消，完成后照常发布，之后的访问直接命中。
 
 // ErrAuthorityEntityNotFound 由 AggregateLoader 报告“权威里没有这个实体”（可 errors.Is 判别；
@@ -46,9 +46,9 @@ type UnloadedSubjectSync interface {
 	RetractUnloadedSubject(subjectID int64) bool
 }
 
-// UnloadResyncConfig 限定卸载后重载的资源；零值取默认。kit 配置键见 nest.unload_resync.*（RR-20260927-13）。
+// UnloadResyncConfig 限定卸载后重载的资源；零值取默认。kit 配置键见 nest.unload_resync.*。
 //
-// 最坏延迟（RR-20260927-14）：一个实体从登记到得出结论（重载成功或退回 remove）最多
+// 最坏延迟：一个实体从登记到得出结论（重载成功或退回 remove）最多
 //
 //	T_entity = Attempts × T_load + Σ_{k=1}^{Attempts-1} min(RetryMin·2^(k-1), RetryMax)
 //
@@ -88,8 +88,8 @@ func (config UnloadResyncConfig) normalized() UnloadResyncConfig {
 
 // UnloadResyncStats 是卸载后重载的累计计数。Scheduled 是登记的重载，Reloaded 是订阅者已接上权威状态，
 // Retracted 是退回 remove（含 Overflow），Failures 是失败的重载尝试，Overflow 是队列放不下的卸载。
-// Backlog 是本接线此刻等待或正在重载的实体数（不是累计值，RR-20260927-14）；gauge entity.unload_resync.backlog
-// 是进程内全部接线的 Backlog 之和（RR-20260928-01），一个进程只有一个 ManagerAccess 时两者相同。
+// Backlog 是本接线此刻等待或正在重载的实体数（不是累计值）；gauge entity.unload_resync.backlog
+// 是进程内全部接线的 Backlog 之和，一个进程只有一个 ManagerAccess 时两者相同。
 type UnloadResyncStats struct {
 	Scheduled uint64
 	Reloaded  uint64
@@ -100,10 +100,10 @@ type UnloadResyncStats struct {
 }
 
 // unloadResyncBacklogMetric 是卸载后重载的积压 gauge：进程内全部接线等待或正在重载的实体数之和。无标签，
-// 一个进程一条序列（RR-20260927-14）；每个接线停止时撤回自己的部分，全部停止后为 0。
+// 一个进程一条序列；每个接线停止时撤回自己的部分，全部停止后为 0。
 const unloadResyncBacklogMetric = "entity.unload_resync.backlog"
 
-// unloadResyncBacklog 汇总进程内全部接线的积压（RR-20260928-01）。一个进程可以有多个 ManagerAccess（多个
+// unloadResyncBacklog 汇总进程内全部接线的积压。一个进程可以有多个 ManagerAccess（多个
 // EntityManager、测试或工具进程），原来每个接线直接写自己的 len(jobs)，gauge 变成最后写入者的值，一个接线停止
 // 写 0 还会抹掉其余接线的积压。现在每个接线记住自己已计入的份额（unloadResync.published），变化时只把差值记进
 // total，并在同一把锁下写出 total——加法与写出在一起，才不会被并发的另一个接线用旧和覆盖。
@@ -134,7 +134,7 @@ type unloadResync struct {
 	jobs    map[int64]resyncJobState
 	workers int
 	stopped bool
-	// published 是本接线已计入 unloadResyncBacklog.total 的份额（RR-20260928-01）。
+	// published 是本接线已计入 unloadResyncBacklog.total 的份额。
 	published int64
 
 	scheduled, reloaded, retracted, failures, overflow atomic.Uint64
@@ -181,7 +181,7 @@ func (access *ManagerAccess) UnloadResyncStats() UnloadResyncStats {
 }
 
 // publishBacklogLocked 在 jobs 变化后更新积压 gauge（调用方持有 r.mu）。jobs 按实体去重，含排队、处理中与“再来一轮”。
-// gauge 是进程内全部接线之和：这里只调整本接线的份额（RR-20260928-01）。
+// gauge 是进程内全部接线之和：这里只调整本接线的份额。
 func (r *unloadResync) publishBacklogLocked() {
 	contribution := int64(len(r.jobs))
 	unloadResyncBacklog.mu.Lock()
@@ -305,7 +305,7 @@ func (r *unloadResync) resync(id int64) {
 
 func (r *unloadResync) reloadOnce(id int64) (resyncOutcome, error) {
 	ctx := r.ctx
-	// 领头时加载里的发布走这个执行器；worker 离开（停机）后共享加载改走同一个绑定入口（RR-54）。
+	// 领头时加载里的发布走这个执行器；worker 离开（停机）后共享加载改走同一个绑定入口。
 	if run := r.access.localExecutor.Load(); run != nil {
 		ctx = WithLocalExecutor(ctx, *run)
 	}

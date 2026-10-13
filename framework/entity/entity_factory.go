@@ -6,33 +6,30 @@ import (
 	"sync/atomic"
 )
 
-// EntityBuilderFunc creates an entity from params.
-// The returned entity must satisfy IThreadSafeEntity.
+// EntityBuilderFunc 按参数构建实体（生成的 NewXxx）；返回的实体必须是指针实现的 IThreadSafeEntity。
 type EntityBuilderFunc func(param *EntityCreateParam) (IThreadSafeEntity, error)
 
-// DaoBuilderFunc creates a new DAO instance.
+// DaoBuilderFunc 创建一个新的 DAO 实例。
 type DaoBuilderFunc func() DaoInterface
 
-// EntityBuilderParam holds the builder configuration for a concrete entity kind.
+// EntityBuilderParam 是一个具体实体 kind 的构建配置。
 type EntityBuilderParam struct {
-	BusinessPool BusinessPool      // 启动时注册，运行时不变
-	Category     EntityCategory    // ownership/access category
-	Kind         EntityKind        // concrete entity definition
-	Builder      EntityBuilderFunc // entity constructor (generated NewXxx)
-	DaoBuilders  []DaoBuilderFunc  // DAO factories (one per DAO in entity)
-	LoadPriority int               // lower = load first
-	NoPersist    bool              // skip auto-persist
-	RemotePolicy RemotePolicy      // explicit cross-server policy
-	Lifetime     EntityLifetime    // memory/persistence lifecycle policy
+	BusinessPool BusinessPool      // 业务池（short / long），启动时注册，运行时不变
+	Category     EntityCategory    // 分类，即锁序等级
+	Kind         EntityKind        // 具体实体定义
+	Builder      EntityBuilderFunc // 实体构造函数（生成的 NewXxx）
+	DaoBuilders  []DaoBuilderFunc  // DAO 工厂，实体的每个 DAO 一个
+	LoadPriority int               // 越小越先加载
+	NoPersist    bool              // 不自动持久化
+	RemotePolicy RemotePolicy      // 显式的跨服策略
+	Lifetime     EntityLifetime    // 内存 / 持久化生命周期策略
 	Sync         EntitySyncBuilderParam
 }
 
-// --- Global entity factory registry ---
+// --- 全局实体工厂注册表 ---
 
-// entityKindEntry is the whole record the framework keeps for one kind. It is
-// immutable once published: every update stores a fresh copy, so a lock-free
-// reader always observes one self-consistent record instead of three maps that
-// could be read between two writes.
+// entityKindEntry 是框架为一个 kind 保存的完整记录。发布后不可变：每次更新存入新副本，无锁读者总是看到一份自洽的
+// 记录，而不是可能在两次写入之间被读到的几张 map。
 type entityKindEntry struct {
 	category     EntityCategory
 	businessPool BusinessPool
@@ -40,26 +37,22 @@ type entityKindEntry struct {
 	builder      *EntityBuilderParam // nil until RegisterEntityBuilder runs
 }
 
-// The registry is keyed by EntityKind, which is a uint8, so it is a fixed
-// array rather than a map and a read is one atomic load with no lock.
+// 注册表以 EntityKind（uint8）为键，所以是定长数组而不是 map，一次读取就是一次无锁的原子加载。
 //
-// That matters because the lock-ordering path reads it WHILE entity mutexes
-// are held: cmpGuidFunc calls GetEntityGroup twice per comparison when sorting
-// entities to lock, maxLockedGroup calls it once per already-held lock, and
-// broadcast bucketing calls it once per id. Taking a registry lock there costs
-// a mutex per query and, worse, creates an "entity mutex then registry lock"
-// acquisition edge that lets a registration stall lock-order decisions (M-01).
+// 这很重要：锁序路径在持有实体锁时读它——排序待取锁的实体时每次比较调用两次 GetEntityGroup，maxLockedGroup 对
+// 每把已持有的锁调用一次，广播分桶对每个 ID 调用一次。在那里取注册表锁不仅每次查询多一次加锁，还会形成
+// “实体锁 → 注册表锁”的取锁边，让一次注册阻塞锁序判断。
 var (
-	registryMu  sync.Mutex // writers only; readers are lock-free
+	registryMu  sync.Mutex // 只串行写者；读者无锁
 	kindEntries [1 << EntityKindBits]atomic.Pointer[entityKindEntry]
 )
 
+// kindEntryOf 无锁读取 kind 的记录；未注册时为 nil。
 func kindEntryOf(kind EntityKind) *entityKindEntry {
 	return kindEntries[kind].Load()
 }
 
-// RegisterEntityBuilder registers a builder for a concrete entity kind.
-// Call from the service bootstrap path. Panics on duplicate.
+// RegisterEntityBuilder 为具体实体 kind 登记 builder（同时登记 kind 定义）。在服务启动路径调用，重复登记或定义冲突时 panic。
 func RegisterEntityBuilder(param *EntityBuilderParam) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
@@ -67,16 +60,15 @@ func RegisterEntityBuilder(param *EntityBuilderParam) {
 		panic("entity builder kind must not be none")
 	}
 	normalizeBuilderPolicy(param)
-	if err := registerEntityKindDefinitionLocked(EntityKindDef{
+	if err := registerEntityKindDefinitionsLocked([]EntityKindDef{{
 		Kind:         param.Kind,
 		BusinessPool: param.BusinessPool,
 		Category:     param.Category,
 		RemotePolicy: param.RemotePolicy,
-	}); err != nil {
+	}}); err != nil {
 		panic(err)
 	}
-	// registerEntityKindDefinitionLocked has just created or validated the
-	// entry, so it exists.
+	// 上面刚创建或校验过这条记录，它一定存在。
 	entry := kindEntryOf(param.Kind)
 	if entry.builder != nil {
 		panic(fmt.Sprintf("duplicate entity builder for kind %d", param.Kind))
@@ -86,19 +78,21 @@ func RegisterEntityBuilder(param *EntityBuilderParam) {
 	kindEntries[param.Kind].Store(&next)
 }
 
+// RegisterEntityKindCategory 登记一个 kind 的分类。
 func RegisterEntityKindCategory(kind EntityKind, category EntityCategory) error {
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	return registerEntityKindCategoryLocked(kind, category)
+	return registerEntityKindDefinitionsLocked([]EntityKindDef{{Kind: kind, Category: category}})
 }
 
+// MustRegisterEntityKindCategory 是 RegisterEntityKindCategory 的 panic 版本。
 func MustRegisterEntityKindCategory(kind EntityKind, category EntityCategory) {
 	if err := RegisterEntityKindCategory(kind, category); err != nil {
 		panic(err)
 	}
 }
 
-// RegisterEntityKindCategories 整批登记 kind 的 category：先校验整批，全部通过才写入，出错时注册表不变（RR-20260927-10）。
+// RegisterEntityKindCategories 整批登记 kind 的 category：先校验整批，全部通过才写入，出错时注册表不变。
 func RegisterEntityKindCategories(defs ...EntityKindCategory) error {
 	registryMu.Lock()
 	defer registryMu.Unlock()
@@ -109,6 +103,7 @@ func RegisterEntityKindCategories(defs ...EntityKindCategory) error {
 	return registerEntityKindDefinitionsLocked(kindDefs)
 }
 
+// MustRegisterEntityKindCategories 是 RegisterEntityKindCategories 的 panic 版本。
 func MustRegisterEntityKindCategories(defs ...EntityKindCategory) {
 	if err := RegisterEntityKindCategories(defs...); err != nil {
 		panic(err)
@@ -116,19 +111,21 @@ func MustRegisterEntityKindCategories(defs ...EntityKindCategory) {
 }
 
 // RegisterEntityKindDefs 整批登记 kind 定义：先校验整批（含批内同一 kind 的多条定义），全部通过才写入；
-// 出错时注册表与派生锁档保持调用前的样子（RR-20260927-10）。
+// 出错时注册表与派生锁档保持调用前的样子。
 func RegisterEntityKindDefs(defs ...EntityKindDef) error {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	return registerEntityKindDefinitionsLocked(defs)
 }
 
+// MustRegisterEntityKindDefs 是 RegisterEntityKindDefs 的 panic 版本。
 func MustRegisterEntityKindDefs(defs ...EntityKindDef) {
 	if err := RegisterEntityKindDefs(defs...); err != nil {
 		panic(err)
 	}
 }
 
+// EntityCategoryOfKind 返回 kind 注册的分类；未注册时返回 false。
 func EntityCategoryOfKind(kind EntityKind) (EntityCategory, bool) {
 	if entry := kindEntryOf(kind); entry != nil {
 		return entry.category, true
@@ -136,12 +133,12 @@ func EntityCategoryOfKind(kind EntityKind) (EntityCategory, bool) {
 	return EntityCategoryNone, false
 }
 
+// ResolveEntityKindCategory 返回 kind 注册的分类；kind 为 None 或未注册时返回错误（后者包裹 ErrInvalidEntityID）。
 func ResolveEntityKindCategory(kind EntityKind) (EntityCategory, error) {
 	if kind == EntityKindNone {
 		return EntityCategoryNone, fmt.Errorf("entity kind must not be none")
 	}
-	// EntityKind is uint8 and EntityKindBits is 8: every value fits the mask, so
-	// there is no "kind above the mask" case to refuse (U-0099 / U-0123).
+	// EntityKind 是 uint8 而 EntityKindBits 为 8：每个取值都在掩码内，不存在“超出掩码的 kind”需要拒绝。
 	category, ok := EntityCategoryOfKind(kind)
 	if !ok {
 		return EntityCategoryNone, fmt.Errorf("%w: kind %d category is not registered", ErrInvalidEntityID, kind)
@@ -149,6 +146,7 @@ func ResolveEntityKindCategory(kind EntityKind) (EntityCategory, error) {
 	return category, nil
 }
 
+// MustEntityCategoryOfKind 是 ResolveEntityKindCategory 的 panic 版本。
 func MustEntityCategoryOfKind(kind EntityKind) EntityCategory {
 	category, err := ResolveEntityKindCategory(kind)
 	if err != nil {
@@ -157,17 +155,9 @@ func MustEntityCategoryOfKind(kind EntityKind) EntityCategory {
 	return category
 }
 
-func registerEntityKindCategoryLocked(kind EntityKind, category EntityCategory) error {
-	return registerEntityKindDefinitionLocked(EntityKindDef{Kind: kind, Category: category})
-}
-
-func registerEntityKindDefinitionLocked(def EntityKindDef) error {
-	return registerEntityKindDefinitionsLocked([]EntityKindDef{def})
-}
-
 // registerEntityKindDefinitionsLocked 整批应用 kind 定义（调用方持有 registryMu）。第一遍只在暂存副本上校验与合并，
-// 批内后面的定义看到的是前面定义合并后的结果；全部通过后第二遍才发布记录并刷新派生锁档。之前逐条写入、出错即返回，
-// 被拒批次的前半段（新 kind、策略升级、锁档）留在注册表里（RR-20260927-10）。读者无锁，第二遍逐 kind 发布，
+// 批内后面的定义看到的是前面定义合并后的结果；全部通过后第二遍才发布记录并刷新派生锁档，被拒的批次不会把前半段
+// （新 kind、策略升级、锁档）留在注册表里。读者无锁，第二遍逐 kind 发布，
 // 每个 kind 的记录各自一致，与单条注册的可见性相同。
 func registerEntityKindDefinitionsLocked(defs []EntityKindDef) error {
 	staged := make(map[EntityKind]*entityKindEntry, len(defs))
@@ -224,17 +214,15 @@ func resolveEntityKindDefinition(existing *entityKindEntry, def EntityKindDef) (
 	if existing.category != category {
 		return nil, fmt.Errorf("entity kind %d category mismatch: registered=%d new=%d", kind, existing.category, category)
 	}
-	// A category-only registration carries policy none, so none is an "unknown
-	// yet" value that a later definition may fill in. The reverse is a partial
-	// re-declaration, not a downgrade request, so it is ignored rather than
-	// refused. Anything else is two sources disagreeing.
+	// 只登记分类时策略为 none，所以 none 是“尚未知道”，之后的定义可以补上。反过来（已有策略、新定义为 none）是部分
+	// 重复声明而不是降级请求，忽略而不拒绝。其余情况是两个来源不一致。
 	switch {
 	case existing.policy == def.RemotePolicy:
 		return existing, nil
 	case existing.policy == RemotePolicyNone:
 		if builder := existing.builder; builder != nil {
 			// builder 先注册时按 none 定下了默认生命周期；策略随后升级，生命周期必须与新策略相符，
-			// 否则 kind 变成托管而 builder 的生命周期仍是本地默认值（RR-20260926-71）。先声明 kind 定义再注册
+			// 否则 kind 变成托管而 builder 的生命周期仍是本地默认值。先声明 kind 定义再注册
 			// builder 时 normalizeBuilderPolicy 会按注册表的策略取默认生命周期。
 			if err := ValidateEntityPolicy(kind, builder.NoPersist, def.RemotePolicy, builder.Lifetime); err != nil {
 				return nil, fmt.Errorf("entity kind %d remote policy %d declared after its builder: %w", kind, def.RemotePolicy, err)
@@ -250,7 +238,7 @@ func resolveEntityKindDefinition(existing *entityKindEntry, def EntityKindDef) (
 	}
 }
 
-// GetEntityBuilderParam retrieves the registered builder for an entity kind.
+// GetEntityBuilderParam 返回 kind 登记的 builder；没有时为 nil。
 func GetEntityBuilderParam(kind EntityKind) *EntityBuilderParam {
 	if entry := kindEntryOf(kind); entry != nil {
 		return entry.builder
@@ -258,7 +246,7 @@ func GetEntityBuilderParam(kind EntityKind) *EntityBuilderParam {
 	return nil
 }
 
-// GetAllEntityBuilders returns all registered builders.
+// GetAllEntityBuilders 按 kind 顺序返回全部已登记的 builder。
 func GetAllEntityBuilders() []*EntityBuilderParam {
 	result := make([]*EntityBuilderParam, 0, 16)
 	for i := range kindEntries {
@@ -272,10 +260,9 @@ func GetAllEntityBuilders() []*EntityBuilderParam {
 // ResetEntityRegistryForTest 清空整张 kind 注册表（每个 kind 的定义、builder 与派生锁档）。
 //
 // Deprecated: 不要再用。它清掉的是进程级的整张表，包括 init() 与 sync.Once 只注册一次的条目，
-// 同一进程里的后续用例（含 go test -count>1 的第二轮）因此拿不到它们——这正是 RR-20260926-83
-// 的根因。仓内已无调用方；entity 包自己的测试改用按用例快照并恢复注册表的夹具。包外测试请让每个
-// 用例使用互不冲突的 kind，并用 sync.Once 保证只注册一次。保留导出只为不破坏既有调用方
-// （OPEN-ITEMS-2026-09-27 C10，维护者 2026-09-27 决定加弃用注释、不删除）。
+// 同一进程里的后续用例（含 go test -count>1 的第二轮）因此拿不到它们。entity 包自己的测试使用按用例快照并恢复
+// 注册表的夹具；包外测试请让每个用例使用互不冲突的 kind，并用 sync.Once 保证只注册一次。
+// 维护者 2026-09-27 决定加弃用注释、保留导出。
 func ResetEntityRegistryForTest() {
 	registryMu.Lock()
 	defer registryMu.Unlock()
@@ -285,26 +272,29 @@ func ResetEntityRegistryForTest() {
 	}
 }
 
+// GetEntityKindRemotePolicy 返回 kind 在注册表里的实际 Remote 策略；未注册时为 RemotePolicyNone。
 func GetEntityKindRemotePolicy(kind EntityKind) RemotePolicy {
-	// The builder shares this entry, so "no entry" also means "no builder":
-	// the old fallback through GetEntityBuilderParam could never fire, because
-	// RegisterEntityBuilder declares the kind before it stores the builder.
+	// builder 与 kind 定义共用这条记录，RegisterEntityBuilder 先声明 kind 再存 builder，所以“没有记录”也意味着
+	// “没有 builder”，不需要另查 builder。
 	if entry := kindEntryOf(kind); entry != nil {
 		return entry.policy
 	}
 	return RemotePolicyNone
 }
 
+// IsEntityKindRemoteCapable 报告 kind 是否 Remote 可用（managed 或 mirror）。
 func IsEntityKindRemoteCapable(kind EntityKind) bool {
 	return GetEntityKindRemotePolicy(kind).RemoteCapable()
 }
 
+// IsEntityKindRemoteManaged 报告 kind 是否由本服务以 Remote 托管。
 func IsEntityKindRemoteManaged(kind EntityKind) bool {
 	return GetEntityKindRemotePolicy(kind).RemoteManaged()
 }
 
-// --- Entity creation ---
+// --- 实体构建 ---
 
+// resolveEntityBuilder 取参数 kind 登记的 builder，并补齐 / 校验分类。
 func resolveEntityBuilder(param *EntityCreateParam) (*EntityBuilderParam, error) {
 	if param == nil {
 		return nil, fmt.Errorf("entity create param is nil")
@@ -324,10 +314,9 @@ func resolveEntityBuilder(param *EntityCreateParam) (*EntityBuilderParam, error)
 	return bp, nil
 }
 
-// BuildEntity creates an entity using the registered builder without adding it
-// to the global manager or acquiring its guard lock. It is intended for
-// loaders that need to finish construction before deciding how to publish the
-// entity into memory.
+// BuildEntity 用登记的 builder 构建实体，不加入 Manager、不取实体锁。供需要先完成构建、再决定如何发布到内存的
+// 加载器使用。顺序：规范 ID → 新建时创建 DAO → builder（内部创建组件并 InitAll）→ 策略与指针校验 → 恢复 Remote
+// 版本 → 生命周期与同步 → OnInitFinish。
 func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 	bp, err := resolveEntityBuilder(param)
 	if err != nil {
@@ -338,7 +327,7 @@ func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 		return nil, err
 	}
 
-	// Create DAOs for new entities
+	// 新建实体时创建 DAO。
 	if param.IsCreate && param.Dao == nil {
 		param.Dao = make(map[string]DaoInterface)
 		for _, daoBuilder := range bp.DaoBuilders {
@@ -348,7 +337,7 @@ func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 		}
 	}
 
-	// Build entity (components are created and InitAll is called inside Builder)
+	// 构建实体（组件在 Builder 内创建并 InitAll）。
 	e, err := bp.Builder(param)
 	if err != nil {
 		return nil, fmt.Errorf("build entity category %d: %w", param.Category, err)
@@ -356,7 +345,7 @@ func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 	if err := validateBuiltEntityPolicy(bp, e); err != nil {
 		return nil, err
 	}
-	// 注册的 builder 构建出的实体必须是指针（RR-20260930-15）：Guard 按实例比较，值类型实现进入 Guard 后才 panic 太晚。
+	// 注册的 builder 构建出的实体必须是指针：Guard 按实例比较，值类型实现进入 Guard 后才 panic 太晚。
 	if err := requirePointerEntity(e); err != nil {
 		return nil, fmt.Errorf("entity kind %d: %w", bp.Kind, err)
 	}
@@ -377,7 +366,7 @@ func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 	}
 	initEntitySync(e, param, bp)
 
-	// Entity-level post-initialization (after all components are ready)
+	// 实体级的初始化后处理（全部组件就绪之后）。
 	if err := e.OnInitFinish(param); err != nil {
 		return nil, fmt.Errorf("entity OnInitFinish category %d: %w", param.Category, err)
 	}
@@ -386,7 +375,7 @@ func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 
 // normalizeBuilderPolicy 按 kind 的实际策略补默认生命周期并校验（调用方持有 registryMu）。builder 省略 RemotePolicy 时，
 // kind 可能已经由 kind 定义声明为 managed / mirror——注册表按“部分重复声明”接受，全部 Remote 路径都按注册表的策略处理，
-// 这里也必须一致，否则托管 kind 得到本地实体的默认生命周期（RR-20260926-71，与 RR-20260926-60 同类）。
+// 这里也必须一致，否则托管 kind 得到本地实体的默认生命周期。
 func normalizeBuilderPolicy(param *EntityBuilderParam) {
 	if param == nil {
 		return
@@ -405,12 +394,12 @@ func normalizeBuilderPolicy(param *EntityBuilderParam) {
 	}
 }
 
-// IsRemoteCapable 报告 builder 的 kind 是否 Remote 可用：builder 自带的策略或 kind 在注册表里的实际策略（RR-20260926-71）。
+// IsRemoteCapable 报告 builder 的 kind 是否 Remote 可用：builder 自带的策略或 kind 在注册表里的实际策略。
 func (param *EntityBuilderParam) IsRemoteCapable() bool {
 	return param != nil && (param.RemotePolicy.RemoteCapable() || GetEntityKindRemotePolicy(param.Kind).RemoteCapable())
 }
 
-// validateBuiltEntityPolicy 按 kind 在注册表里的实际策略校验构建结果（RR-20260926-71）：kind 为 managed 而 builder 省略
+// validateBuiltEntityPolicy 按 kind 在注册表里的实际策略校验构建结果：kind 为 managed 而 builder 省略
 // RemotePolicy 时，构建出的实体同样必须实现 IThreadSafeRemoteEntity。
 func validateBuiltEntityPolicy(bp *EntityBuilderParam, e IThreadSafeEntity) error {
 	if bp == nil || e == nil {
@@ -424,6 +413,7 @@ func validateBuiltEntityPolicy(bp *EntityBuilderParam, e IThreadSafeEntity) erro
 	return nil
 }
 
+// resolveEntityLifetime 取实体的生命周期：参数显式值，其次 builder 的值，最后按持久化与注册表策略取默认值。
 func resolveEntityLifetime(param *EntityCreateParam, bp *EntityBuilderParam) EntityLifetime {
 	if param != nil && param.Lifetime != EntityLifetimeDefault {
 		return param.Lifetime
@@ -440,6 +430,7 @@ func resolveEntityLifetime(param *EntityCreateParam, bp *EntityBuilderParam) Ent
 	return DefaultEntityLifetime(noPersist, remotePolicy)
 }
 
+// initEntitySync 按参数（优先）或 builder 的同步配置启用实体同步。
 func initEntitySync(e IThreadSafeEntity, param *EntityCreateParam, bp *EntityBuilderParam) {
 	if e == nil || e.Base() == nil {
 		return

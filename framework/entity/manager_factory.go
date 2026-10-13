@@ -7,14 +7,13 @@ import (
 	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
 )
 
-// Create builds and publishes an entity while holding its mutex until the
-// short-lived guard scope is released. Later mutations must enter through Nest.
+// Create 构建并发布实体，在短作用域 Guard 释放之前持有它的锁。之后的修改必须经 Nest 进入。
 //
 // 在 Nest handler 内新建（param.IsCreate 且当前 Guard 作用域绑定了 CreatedEntityCapturer）时，
 // Create 就是 handler 内创建：沿用当前作用域走 CreateInScope，锁随 handler 的 Guard 释放。
-// 事务 handler 与 Cast 一样进入同一提交边界，回滚 / 拒绝时撤销发布（RR-20260926-35 复核：生成
-// Lifecycle 的 Create / GetOrCreate 都经过这里）；memory 快路径 handler 同样持锁到 handler 结束并进入
-// 本次 SyncMutation（RR-20260926-48）。取锁按 Cast 的锁序，冲突时返回可重试错误，见 CreateInScope。
+// 事务 handler 与 Cast 一样进入同一提交边界，回滚 / 拒绝时撤销发布（生成 Lifecycle 的 Create / GetOrCreate
+// 都经过这里）；memory 快路径 handler 同样持锁到 handler 结束并进入本次 SyncMutation。取锁按 Cast 的锁序，
+// 冲突时返回可重试错误，见 CreateInScope。
 // 加载已持久的实体（IsCreate=false，Repository 聚合加载）和 Nest 之外的调用保持
 // 短作用域立即发布的原语义。
 func (m *EntityManager) Create(param *EntityCreateParam) (IThreadSafeEntity, error) {
@@ -38,27 +37,25 @@ func (m *EntityManager) Create(param *EntityCreateParam) (IThreadSafeEntity, err
 	return result, err
 }
 
-// CreatedEntityCapturer 接收 Nest handler 内由 CreateInScope 新建的实体（RR-20260926-35）。
+// CreatedEntityCapturer 接收 Nest handler 内由 CreateInScope 新建的实体。
 // 持锁执行器（Nest）在业务调用期间把它绑定到 Guard 上：事务 handler 让新实体与动态 Cast 一样进入
 // 回滚与持久化边界，memory 快路径 handler 只借它表明“新实体随本 handler 的 Guard 持锁”。
 //
 // CaptureCreatedEntity：revoke 撤销这次发布，事务在回滚 / 明确拒绝时调用；重复调用无副作用。
 // 返回错误时 CreateInScope 立即撤销发布并把错误交给业务；Nest 事务同时记下这次失败，handler 结束时即使业务吞掉
-// 错误也整条回滚（与 CreatedEntityLockBusy 同类，RR-20260927-11）。
+// 错误也整条回滚（与 CreatedEntityLockBusy 同类）。
 //
-// CreatedEntityLockBusy：按锁序不能等待的新实体锁被其他持有者占用（RR-20260926-48），或同 ID 的上一个实例仍在
-// 撤销 / 销毁收尾、TryAdd 撞上 removing 标记（RR-20260926-81，同样是持有者尚未交还的暂时状态；本 Guard 自己撤销、
-// 收尾挂在本 Guard 上的同 ID 除外，那是确定失败，CreateInScope 直接返回 ErrEntityRemoved，RR-20260927-21）。返回交给业务的错误：
-// 可回滚的 Nest 事务给可重试的锁超时类错误，并据此在 handler 结束时整条回滚并重新准入；不能回滚的 handler
-// （memory 快路径）给不可自动重排的冲突错误，消息不重排（RR-20260926-64）。
+// CreatedEntityLockBusy：按锁序不能等待的新实体锁被其他持有者占用，或同 ID 的上一个实例仍在撤销 / 销毁收尾、
+// TryAdd 撞上 removing 标记（同样是持有者尚未交还的暂时状态；本 Guard 自己撤销、收尾挂在本 Guard 上的同 ID 除外，
+// 那是确定失败，CreateInScope 直接返回 ErrEntityRemoved）。返回交给业务的错误：可回滚的 Nest 事务给可重试的锁超时类
+// 错误，并据此在 handler 结束时整条回滚并重新准入；不能回滚的 handler（memory 快路径）给不可自动重排的冲突错误，
+// 消息不重排。
 type CreatedEntityCapturer interface {
 	CaptureCreatedEntity(created IThreadSafeEntity, revoke func()) error
 	CreatedEntityLockBusy(id int64) error
 }
 
-// CreateInScope builds an entity, acquires its mutex in the existing
-// deterministic guard scope, and only then publishes it. This ordering keeps a
-// newly visible entity from being observed before its creator owns the lock.
+// CreateInScope 构建实体，在已有的 Guard 作用域内取得它的锁，然后才发布。这个顺序保证新实体可见之前创建者已持有锁。
 //
 // scope 属于正在执行的 Nest handler 时（Guard 上绑定了 CreatedEntityCapturer），新实体随事务
 // 提交：先交给事务捕获回滚与持久化参与者，再加入当前 SyncMutation，Sync 在提交确认前不外发；
@@ -68,8 +65,8 @@ type CreatedEntityCapturer interface {
 //
 // 发布失败（TryAdd 报 ErrEntityExists / ErrEntityRemoved）时归还本次取得的锁：同一作用域随后按同 ID
 // 重试（生成 GetOrCreate）会新建实例，若锁仍以旧实例记在 Guard 上，新实例会在未加锁的情况下发布。
-// Nest handler 内的 ErrEntityRemoved（同 ID 的上一个实例撤销 / 销毁收尾未完）改由 capturer 给冲突错误（RR-20260926-81）；
-// 撤销是本 Guard 自己做的（收尾要等本 handler 释放）时保留 ErrEntityRemoved，确定失败、不重排（RR-20260927-21）。
+// Nest handler 内的 ErrEntityRemoved（同 ID 的上一个实例撤销 / 销毁收尾未完）改由 capturer 给冲突错误；
+// 撤销是本 Guard 自己做的（收尾要等本 handler 释放）时保留 ErrEntityRemoved，确定失败、不重排。
 func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreateParam) (IThreadSafeEntity, error) {
 	if m == nil {
 		return nil, ErrEntityNotManaged
@@ -92,18 +89,18 @@ func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreatePara
 			guard.ReleaseEntityInstance(value)
 		}
 		if capturer != nil && errors.Is(err, ErrEntityRemoved) && guard.revokedInThisGuard(m, value.ID()) {
-			// RR-20260927-21：removing 是本 handler 自己留下的——同一 Guard 上较早在同一个 Manager 上（RR-20260928-02）撤销了同 ID 的新建（例如嵌套
+			// removing 是本 handler 自己留下的——同一 Guard 上较早在同一个 Manager 上撤销了同 ID 的新建（例如嵌套
 			// RunIsolatedTransaction 新建后回滚），收尾挂在本 Guard 的 post-release 上，要等整个 handler 释放才执行。
-			// 在这个 handler 里它不会结束，是确定失败：原样保留 ErrEntityRemoved，不给冲突 / 锁超时哨兵。之前走下面的
-			// RR-81 分支，可回滚事务每次重排都重现同一冲突，空转到重排上限，文案还归咎于别的持有者。
+			// 在这个 handler 里它不会结束，是确定失败：原样保留 ErrEntityRemoved，不给冲突 / 锁超时哨兵，否则可回滚事务
+			// 每次重排都重现同一冲突，空转到重排上限。
 			return nil, fmt.Errorf("%w; entity %d was created and then revoked earlier in this handler, and its revoke finishes only when the handler releases its locks, so the same id cannot be created again in this handler", err, value.ID())
 		}
 		if capturer != nil && errors.Is(err, ErrEntityRemoved) {
-			// RR-20260926-81：同 ID 的上一个实例正在撤销（revokeCreated）或销毁收尾——锁已释放、removing 标记要等
-			// 持有者的 post-release 跑完才清除。这是另一个持有者尚未交还的暂时状态，与按锁序不能等待的锁冲突同类：
-			// 交给 capturer 给出 RR-48 / RR-64 的冲突错误（可回滚事务整条回滚后重新准入；不能回滚的 handler 不重排）。
-			// 之前原样返回 ErrEntityRemoved，它不属于可重排类别，交叉创建的冲突方在回滚重排后可能把它当最终错误回复。
-			// 不在快 worker 上等待收尾；Nest 之外（capturer 为 nil）仍返回 ErrEntityRemoved，生成 GetOrCreate 自行有界重试（RR-57）。
+			// 同 ID 的上一个实例正在撤销（revokeCreated）或销毁收尾——锁已释放、removing 标记要等持有者的 post-release
+			// 跑完才清除。这是另一个持有者尚未交还的暂时状态，与按锁序不能等待的锁冲突同类：交给 capturer 给出冲突错误
+			// （可回滚事务整条回滚后重新准入；不能回滚的 handler 不重排）。ErrEntityRemoved 不属于可重排类别，原样返回会让
+			// 交叉创建的冲突方把它当最终错误回复。不在快 worker 上等待收尾；Nest 之外（capturer 为 nil）仍返回
+			// ErrEntityRemoved，生成 GetOrCreate 自行有界重试。
 			return nil, fmt.Errorf("%w; previous instance of entity %d is still being removed", capturer.CreatedEntityLockBusy(value.ID()), value.ID())
 		}
 		return nil, err
@@ -144,7 +141,7 @@ func (m *EntityManager) createdRevoker(guard *EntityGuard, e IThreadSafeEntity) 
 //     看到 removed 即退出（与 Destroy 相同的 GetLock 契约），Guard 释放时也不再运行 release hook；
 //  2. 撤回同步：Nest 的同步调度器实现 SyncSubjectRetractor 时注销该 subject（已持有对象的会话收到
 //     ObjectRemove，未持有的直接移除），然后关闭实体自己的同步状态，不再有内容可捕获；
-//  3. Guard 释放全部锁之后，与 Destroy 同序执行销毁回调（原因 DestroyReasonCreateRevoked，RR-20260927-12）、清理实体资源、
+//  3. Guard 释放全部锁之后，与 Destroy 同序执行销毁回调（原因 DestroyReasonCreateRevoked）、清理实体资源、
 //     回收 LockManager 条目和 removing 标记，之后同一 ID 可以重新创建。
 //
 // 实体从未进入已提交的持久化记录：事务回滚时它的变更随 RollbackTx 一起丢弃，这里不做删除准入。
@@ -188,6 +185,7 @@ func (m *EntityManager) revokeCreated(guard *EntityGuard, e IThreadSafeEntity) {
 	})
 }
 
+// build 补齐新实体的 ID（新建且未指定时用 ID 生成器）与实体锁（向 LockManager 申请），再交给注册的 builder 构建。
 func (m *EntityManager) build(param *EntityCreateParam) (IThreadSafeEntity, error) {
 	if m == nil {
 		return nil, ErrEntityNotManaged

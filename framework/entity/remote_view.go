@@ -6,10 +6,10 @@ import (
 	"time"
 )
 
+// ErrRemoteSnapshotStale 表示快照低于要求的最低版本。
 var ErrRemoteSnapshotStale = errors.New("remote snapshot stale")
 
-// RemoteAcquireMode describes immutable snapshot reads. Remote writes are Nest
-// targets and always use the guarded RemoteWriteBatch path.
+// RemoteAcquireMode 描述不可变快照的读取方式。Remote 写入是 Nest 的派发目标，总是走受保护的 RemoteWriteBatch 路径。
 type RemoteAcquireMode uint8
 
 const (
@@ -17,8 +17,7 @@ const (
 	RemoteAcquireCache
 )
 
-// RemoteReadOption configures a single read operation. It is intentionally not
-// stored in business objects; long-lived consumers store only RemoteViewRef.
+// RemoteReadOption 配置一次读取。它有意不保存在业务对象里；长期使用方只保存 RemoteViewRef。
 type RemoteReadOption struct {
 	MinVersion     uint64
 	AllowStale     bool
@@ -26,6 +25,7 @@ type RemoteReadOption struct {
 	NowMillis      int64
 }
 
+// NormalizeRemoteReadOption 把负的 TTL 与当前时间归零。
 func NormalizeRemoteReadOption(option RemoteReadOption) RemoteReadOption {
 	if option.CacheTTLMillis < 0 {
 		option.CacheTTLMillis = 0
@@ -36,6 +36,7 @@ func NormalizeRemoteReadOption(option RemoteReadOption) RemoteReadOption {
 	return option
 }
 
+// Accepts 报告 version 是否满足最低版本要求（允许陈旧或未要求时总是满足）。
 func (o RemoteReadOption) Accepts(version int64) bool {
 	if o.AllowStale || o.MinVersion == 0 {
 		return true
@@ -43,6 +44,7 @@ func (o RemoteReadOption) Accepts(version int64) bool {
 	return version >= 0 && uint64(version) >= o.MinVersion
 }
 
+// RemoteSnapshotSource 是快照的来源。
 type RemoteSnapshotSource uint8
 
 const (
@@ -65,9 +67,8 @@ func (s RemoteSnapshotSource) String() string {
 	}
 }
 
-// RemoteSnapshot is an immutable read result for remote read-only/cache paths.
-// It is intentionally value-oriented: callers must not receive a mutable entity,
-// component, or DAO pointer from read-only remote access.
+// RemoteSnapshot 是 Remote 只读 / 缓存路径的不可变读取结果。它有意是值语义：只读 Remote 访问不能交给调用方可变的实体、
+// 组件或 DAO 指针。
 type RemoteSnapshot struct {
 	EntityID   int64
 	Kind       EntityKind
@@ -80,6 +81,7 @@ type RemoteSnapshot struct {
 	Data       any
 }
 
+// Accepts 报告快照是否未过期且满足最低版本要求。
 func (s RemoteSnapshot) Accepts(option RemoteReadOption) bool {
 	if s.expiredByOption(option) {
 		return false
@@ -87,6 +89,7 @@ func (s RemoteSnapshot) Accepts(option RemoteReadOption) bool {
 	return option.AllowStale || option.MinVersion == 0 || s.Version >= option.MinVersion
 }
 
+// Expired 报告快照在 now（毫秒）时是否已过期。
 func (s RemoteSnapshot) Expired(now int64) bool {
 	return s.ExpiresAt > 0 && now >= s.ExpiresAt
 }
@@ -98,6 +101,7 @@ func (s RemoteSnapshot) expiredByOption(option RemoteReadOption) bool {
 	return s.Expired(option.NowMillis)
 }
 
+// AsString 返回字符串形式的 Data；不是字符串时为空。
 func (s RemoteSnapshot) AsString() string {
 	if v, ok := s.Data.(string); ok {
 		return v
@@ -105,16 +109,19 @@ func (s RemoteSnapshot) AsString() string {
 	return ""
 }
 
+// RemoteSnapshotRequest 是一次按 scope 读取快照的请求。
 type RemoteSnapshotRequest struct {
 	Scope      uint64
 	RouteEpoch uint64
 	Option     RemoteReadOption
 }
 
+// RemoteSnapshotProvider 按 scope 提供快照视图。
 type RemoteSnapshotProvider interface {
 	RemoteSnapshot(scope uint64) (any, bool)
 }
 
+// RemoteSnapshotResolveRequest 是按引用解析快照的请求。
 type RemoteSnapshotResolveRequest struct {
 	Ref        RemoteViewRef
 	Mode       RemoteAcquireMode
@@ -123,8 +130,7 @@ type RemoteSnapshotResolveRequest struct {
 	Option     RemoteReadOption
 }
 
-// RemoteViewRef is the generic persisted reference to a server-side read model.
-// It says which remote entity is being consumed and which version was observed.
+// RemoteViewRef 是对服务端读模型的通用持久引用：说明消费的是哪个 Remote 实体、观察到的是哪个版本。
 type RemoteViewRef struct {
 	EntityID   int64
 	Kind       EntityKind
@@ -132,6 +138,7 @@ type RemoteViewRef struct {
 	RouteEpoch uint64
 }
 
+// Valid 报告引用的 ID 是完整、可解析且 kind 相符的 EntityID。
 func (r RemoteViewRef) Valid() bool {
 	if r.EntityID == 0 || r.Kind == EntityKindNone {
 		return false
@@ -140,6 +147,7 @@ func (r RemoteViewRef) Valid() bool {
 	return meta.FullID == r.EntityID && meta.Kind == r.Kind
 }
 
+// UniqueID 返回引用实体的唯一号；引用无效时为 0。
 func (r RemoteViewRef) UniqueID() int64 {
 	if !r.Valid() {
 		return 0
@@ -147,6 +155,7 @@ func (r RemoteViewRef) UniqueID() int64 {
 	return ResolveEntityID(r.EntityID).UniqueID
 }
 
+// NewRemoteViewRef 构造并校验引用。
 func NewRemoteViewRef(entityID int64, kind EntityKind, version uint64, routeEpoch uint64) (RemoteViewRef, error) {
 	ref := RemoteViewRef{EntityID: entityID, Kind: kind, Version: version, RouteEpoch: routeEpoch}
 	if !ref.Valid() {
@@ -155,6 +164,7 @@ func NewRemoteViewRef(entityID int64, kind EntityKind, version uint64, routeEpoc
 	return ref, nil
 }
 
+// RemoteSnapshotReadAt 返回读取时刻（毫秒）：选项给出的当前时间，否则取系统时间。
 func RemoteSnapshotReadAt(option RemoteReadOption) int64 {
 	option = NormalizeRemoteReadOption(option)
 	if option.NowMillis > 0 {
@@ -163,6 +173,7 @@ func RemoteSnapshotReadAt(option RemoteReadOption) int64 {
 	return time.Now().UnixMilli()
 }
 
+// RemoteSnapshotExpiresAt 返回按缓存 TTL 计算的过期时刻（毫秒）；未设 TTL 时为 0（不过期）。
 func RemoteSnapshotExpiresAt(readAt int64, option RemoteReadOption) int64 {
 	option = NormalizeRemoteReadOption(option)
 	if option.CacheTTLMillis <= 0 {
