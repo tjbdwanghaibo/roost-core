@@ -1,8 +1,10 @@
 # Roost 项目生成器使用说明
 
+本文写工程生成：`roost project` 的创建 / 同步 / 升级、`roost.yaml`、Mod 装配、ID、生成工程的配置、构建、部署生成物与文档。各生成器的标记、参数与拒绝规则见[命令与标记参考](CODEGEN_REFERENCE.zh-CN.md)，入口与快速上手见 [README](../README.md)，生成器的实现与不变量见 [Codegen 实现与维护](../../docs/framework/impl/12-codegen.md)。
+
 ## 1. 目标
 
-roost-codegen 用一份 roost.yaml 管理项目结构、Service、Kit Mod、代码生成、基础配置、本地依赖和 CI。业务层只实现 Service、Controller、Entity 等业务逻辑，不负责重复的 App 装配、Mod 生命周期和生成命令维护。
+roost-codegen 用一份 roost.yaml 管理项目结构、Service、Wiring Mod、代码生成、基础配置、本地依赖和 CI。业务层只实现 Service、Controller、Entity 等业务逻辑，不负责重复的 App 装配、Mod 生命周期和生成命令维护。
 
 生成器遵循以下边界：
 
@@ -23,21 +25,9 @@ roost-codegen 用一份 roost.yaml 管理项目结构、Service、Kit Mod、代�
     go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest
     roost help
 
-新项目默认把 core、kit、skill、codegen 的更新策略设为 `latest`。Go module 的 `require` 不接受 `latest` 查询值，因此 `project new/sync/deps` 会联网解析最新 release，并把本次解析出的具体版本和校验和写入 `go.mod/go.sum`。这既保持持续更新，也保证一次 CI/发布过程中使用同一份可复现依赖图。
+框架只有 roost-core 一个模块（wiring、skill、框架服务与生成器都是其中的包），`roost.yaml` 只有 `versions.core` 一个版本策略，新项目默认为 `latest`。Go module 的 `require` 不接受 `latest` 查询值，因此 `project new/sync/deps` 会联网解析最新 release，并把本次解析出的具体版本和校验和写入 `go.mod/go.sum`：策略留在 `roost.yaml`，一次 CI / 发布过程使用同一份可复现依赖图。普通 PR CI 只验证已提交的依赖图；每周 `dependency-update.yml` 才解析 latest、跑完整测试并创建升级 PR。
 
-安装后可直接查询全部能力和指定专题：
-
-```bash
-roost help
-roost help project
-roost help mods
-roost help dao
-roost help versions
-roost help deploy
-roost help all
-```
-
-每个专题都会显示用途、完整命令、`roost.yaml`/marker/tag 配置说明和最小例子；`roost project --help`、`roost project deps --help`、`roost add dao --help` 等上下文形式也受支持。当前专题清单以 `roost help` 输出为准。
+内置帮助（`roost help <能力>`、`roost <command> --help`）的专题清单见[参考 §0](CODEGEN_REFERENCE.zh-CN.md#0-内置帮助系统)。
 
 生成项目 Makefile 的更新指令：
 
@@ -48,7 +38,7 @@ make roost-up     # GOWORK=off go get -u ./...，然后 GOWORK=off go mod tidy
 make codegen-up   # go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest
 ```
 
-`project-upgrade` 使用最新 codegen 更新全部受控工程模板，并把 core、kit、skill、codegen 四个策略设为 `latest`。`roost-up` 更新完整项目依赖图，适合主动升级窗口；更新后必须检查 `go.mod/go.sum` 并执行 `make ci`。`codegen-up` 更新 GOPATH/GOBIN 中安装的 CLI，不修改业务 module。
+`project-upgrade` 使用最新生成器更新全部受控工程模板，并把 `versions.core` 设为 `latest`。`roost-up` 更新完整项目依赖图，适合主动升级窗口；更新后必须检查 `go.mod/go.sum` 并执行 `make ci`。`codegen-up` 更新 GOPATH/GOBIN 中安装的 CLI，不修改业务 module。
 
 ### 纯新手第一次使用
 
@@ -58,21 +48,12 @@ make codegen-up   # go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/r
     roost project new hello_roost \
       -module example.com/hello_roost \
       -mods configdata \
-      -features protocol,config,entity,nest,event,dao,errcode
+      -features protocol,config,entity,nest,dao,errcode
     cd hello_roost
     make deps-update
     roost project next
 
-每个新项目都会生成：
-
-- `docs/QUICKSTART.zh-CN.md`：环境、概念、第一次运行、第一次业务改动和常见错误；
-- `docs/BEGINNER_WORKBOOK.zh-CN.md`：project next 驱动的逐步业务、TCP、排错和发布手册；
-- `docs/ROOST_YAML.zh-CN.md`：清单全部字段、嵌套字段、规则和完整例子；
-- `docs/FIRST_BUSINESS.zh-CN.md`：Player Access → Protocol → Nest Sender → Entity 首条业务链；
-- `docs/ENTITY_COMPONENT.zh-CN.md`：Entity、Component、DAO、Nest handler 的可复制实战；
-- `docs/ENTITY_LIFECYCLE.zh-CN.md`、`docs/PROTOCOL_TO_NEST.zh-CN.md`：生命周期与接入边界；
-- `docs/SKILL.zh-CN.md`、`docs/TROUBLESHOOTING.zh-CN.md`：技能接入与错误定位；
-- `docs/USAGE.zh-CN.md`：当前项目实际启用的 Service、Mod 和日常命令。
+新项目随附的使用文档见 [§18](#18-生成项目里的文档)，先读 `docs/QUICKSTART.zh-CN.md`。
 
 初学者最容易混淆的是：Service 是进程入口，Mod 是运行时基础设施，Feature 是生成期开关，
 带生成标识的文件不能手改。生成器负责重复接线，不会生成完整玩法和权限规则。
@@ -131,7 +112,7 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
       -module github.com/acme/planet \
       -services game,gate \
       -mods configdata,etcd,redis,mongo,nats,syncbus,remote_entity \
-      -features protocol,config,entity,nest,event,dao,errcode \
+      -features protocol,config,entity,nest,dao,errcode \
       -out D:/work/planet
 
 features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节的 Mod 表。
@@ -142,7 +123,7 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
       -module github.com/acme/planet \
       -roost-core-version v1.25.0
 
-生成器随 roost-core 发布，Makefile 按 `versions.core` 运行它；没有单独的 codegen 版本（RR-20261006-57）。
+生成器随 roost-core 发布，Makefile 按 `versions.core` 运行它；没有单独的 codegen 版本。
 
 默认生成：
 
@@ -209,13 +190,13 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
 | `project.name` | 是 | 应用名；小写字母开头，只允许小写字母、数字和下划线 |
 | `project.module` | 是 | 生成代码使用的 Go module import path |
 | `versions.core` | 是 | roost-core 的 `latest` 策略或明确最低版本 |
-| `versions.kit` / `versions.skill` / `versions.service` | 否 | 已退役、不再解码：写了会被加载与 `roost project upgrade` 一并拒绝，需手工删掉（kit 即 `wiring/`、skill 与框架服务都是 roost-core 的包，跟随 `versions.core`） |
-| `versions.codegen` | 否 | 已退役、不再解码：写了会被加载与 `roost project upgrade` 一并拒绝，需手工删掉；Makefile 按 `versions.core` 运行生成器（RR-20261006-57） |
+| `versions.kit` / `versions.skill` / `versions.service` / `versions.codegen` | 否 | 已退役、不再解码：写了会在加载时（普通加载与 `roost project upgrade` 一致）报 `versions.<key> (...) is retired and no longer read`，需手工删掉；wiring、skill、框架服务与生成器都跟随 `versions.core` |
 | `shared_mods` | 否 | 进程级共享 Mod；每个 Service 不得重复声明 |
 | `services` | 是 | Service 名到配置的 map；至少一个 Service |
-| `services.<name>.mods` | 否 | 该 Service 装配的 Kit Mod，依赖会自动展开 |
+| `services.<name>.mods` | 否 | 该 Service 装配的 Wiring Mod，依赖会自动展开 |
 | `access.player.service` | 否 | 玩家协议接入层所属 Service；用 add access 创建 |
 | `access.player.transports` | 否 | 显式启用的客户端传输；当前支持 tcp，用 add transport 创建 |
+| `services.<name>.rpcs` / `uses_rpcs` | 否 | 本工程跨进程服务的拥有者 / 调用方；用 `roost add rpc` 创建，见 §6 |
 | `features` | 否 | 生成目录、生成器和 bootstrap 接线的项目级开关 |
 | `sagas` | 否 | `roost add saga` 已生成的 Saga 名称；不要只手工添加 |
 | `ids` | 否 | protocol/entity/component/errcode 的编号空间 |
@@ -229,20 +210,25 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
 `latest`，所以 go.mod/go.sum 保存一次解析出的具体版本。`features` 与 `mods` 是两个维度：
 前者决定生成什么，后者决定服务运行时启动什么。
 
-修改清单后执行：
+修改清单后执行 `make sync` 与 `make doctor`（sync 的暂存与提交语义见 [§13](#13-doctordiff-和升级)）。
 
-    make sync
-    make doctor
+**已退役的写法**（项目未上线，生成器不读取、不迁移，加载或生成时点名拒绝并给出手工改法）：
 
-sync 会在项目同级临时目录重新生成 App 装配、Makefile、CI、Docker Compose 和使用说明，通过全部预检后才提交，不覆盖已经存在的 Service 实现与业务配置。提交失败会回滚已写文件；提交窗口发生并发编辑时会拒绝覆盖并提示重试。
+| 旧写法 | 现在 |
+| --- | --- |
+| `versions.kit / skill / service / codegen` | 删除这些行，只留 `versions.core` |
+| mod 名 `sync` / `room` | `syncbus` |
+| feature `replication-quic / -kcp / -udp` | `nettransport-quic / -kcp / -udp` |
+| feature `event`（实体事件链与 eventgen 已删除） | 从 `features` 删除；同时删掉工程里遗留的 `framework/event/`、`*_event_gen.go` 与 `DealEventXxx` / `SubEvent` 调用 |
+| 源码标记 `//cube:` | `//roost:`（`roost generate` 在运行任何生成器之前失败并列出文件） |
+| cfggen meta 的 `objects:` | `globals:` |
+| tablegen v1 `_manifest.json` | 删除 v1 manifest 与旧生成器留下、meta 已不存在的 JSON，再生成（见[参考 §9.1](CODEGEN_REFERENCE.zh-CN.md#91-_manifestjson-与-json-退役)） |
 
-`roost generate` 在同级临时项目完成全部生成器和 `GOWORK=off go mod tidy`，因此新增 DAO/Protocol 等
-import 后可直接执行测试，不需要新手手工猜测 `go get`。只有所有步骤成功才提交生成物与依赖文件；
-该步骤只整理当前依赖，不升级框架，任何失败都不会留下半生成工程。
+旧格式的 `shutdown:` 块、旧部署模板的宽限期写法与 `deploy/k8s/` 顶层旧 base 文件按应用文件对待，sync 不改写也不删除，请人工删除或按当前模板重新生成。合仓前的工程（仍 require roost-skill / roost-service / roost-kit / roost-codegen 或 import 旧包路径）没有自动迁移工具。
 
 ### features 完整清单
 
-features 是项目级**代码生成开关**，与 mods 是两个维度：features 决定"生成哪些目录骨架、`make generate` 跑哪些生成器、bootstrap 里接什么线"（编译期形态）；mods 决定"进程运行时装配哪些 Kit Mod"。未知 feature 在加载 roost.yaml 时直接报错。
+features 是项目级**代码生成开关**，与 mods 是两个维度：features 决定"生成哪些目录骨架、`make generate` 跑哪些生成器、bootstrap 里接什么线"（编译期形态）；mods 决定"进程运行时装配哪些 Wiring Mod"。未知 feature 在加载 roost.yaml 时直接报错。
 
 | feature | 脚手架目录 | 驱动的生成器 / bootstrap 接线 |
 | --- | --- | --- |
@@ -254,12 +240,15 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `errcode` ✦ | — | errcode 扫描器，产出 `docs/generated/errcode.csv` |
 | `attribute` | `game/gameplay/attribute/` | attribute 生成器 |
 | `webroute` | `service/web/` | webroute 生成器（`-dir ./service`） |
-| `saga` | — | 无独立生成器——由 `make new-saga`（`roost add saga`）**自动追加**的标记；saga 骨架由 add 命令生成，bootstrap 聚合各 `Definitions()`。要求至少一个 Service 挂 `saga` mod，且 core/kit >= v1.4.0 |
-| `nettransport-quic` / `nettransport-kcp` / `nettransport-udp` | `internal/transport/generated.go` | 生成 `NewQUIC()` / `NewKCP()` / `NewUDP()`（AsyncTransport 组装）与 `NewRoomSink` 房间下发接线（见第 16 节）；三者可并选，要求 kit >= v1.1.0 |
+| `rpc` | `internal/rpc/<name>/` | 由 `roost add rpc` **自动追加**；servicerpc 生成两半（见 §6） |
+| `saga` | — | 无独立生成器——由 `make new-saga`（`roost add saga`）**自动追加**的标记；saga 骨架由 add 命令生成，bootstrap 聚合各 `Definitions()`。要求至少一个 Service 挂 `saga` mod |
+| `nettransport-quic` / `nettransport-kcp` / `nettransport-udp` | `internal/transport/generated.go` | 生成 `NewQUIC()` / `NewKCP()` / `NewUDP()`（AsyncTransport 组装）与 `NewSyncTransport`（把 AsyncTransport 包成 Entity Sync 传输，见第 16 节）；三者可并选 |
 
 ✦ = `roost project new` 不传 `-features` 时的默认六项：`protocol, config, entity, nest, dao, errcode`。
 
-## 5. Kit Mod 自动装配
+这些 feature 都由 roost-core 提供，版本门槛即 `versions.core` 的兼容下限（当前 v1.25.0）；低于下限的明确版本在 manifest 校验阶段被拒绝。
+
+## 5. Wiring Mod 自动装配
 
 支持的 Mod（`->` 后为自动补齐的依赖，声明时无需手写）：
 
@@ -273,15 +262,16 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `redis` | — | Redis、pipeline、pub/sub（单实例锁后端 `kitredis.SingletonStore` 与之共用 `redis.*` 配置） |
 | `mongo` | — | Mongo client、collection、session 和索引策略 |
 | `nats` | — | NATS、JetStream、RPC 和 Bus |
-| `sync` | `nats` | NATS 或 JetStream 同步 Bus |
-| `remoteentity` | `redis`、`mongo`、`sync` | 跨服实体所有权、原子事务、快照分发与版本锁 |
+| `syncbus` | `nats` | NATS 或 JetStream 同步 Bus（缺省前缀 `roost.sync`） |
+| `remote_entity` | `redis`、`mongo`、`syncbus` | 跨服实体所有权、原子事务、快照分发与版本锁 |
 | `dataengine` | `mongo`、`nats` | Nest transaction WAL、Mongo projection、聚合加载/migration、effect outbox |
-| `nest` | `dataengine` | 实例级 Nest 引擎装配 |
-| `saga` | `dataengine` | saga 引擎与 Data Engine start effect（要求 core/kit >= v1.4.0） |
+| `manager` | — | 本服务的内存单例 manager 生命周期 |
+| `nest` | `dataengine`（自动补齐） | 实例级 Nest 引擎装配 |
+| `saga` | `mongo`、`nats`，并自动补齐 `dataengine` | saga 引擎与 Data Engine start effect |
 
-默认值：`shared_mods = lock, ops, statslog`；`roost project new` 不传 `-mods` 时每个 Service 默认 `configdata, etcd, redis, mongo, nats, sync, remote_entity, dataengine, nest`（即除 `saga` 外全量）。约束：Service 的 mods 不得与 shared_mods 重复（校验期拒绝）；依赖由生成器拓扑展开并检测环。
+默认值：`shared_mods = lock, ops, statslog`；`roost project new` 不传 `-mods` 时每个 Service 默认 `configdata, etcd, redis, mongo, nats, syncbus, remote_entity, dataengine, nest, manager`（即除 `saga` 外全量）。约束：Service 的 mods 不得与 shared_mods 重复（校验期拒绝）；依赖由生成器拓扑展开并检测环，未知 Mod 报 `unknown wiring mod`。
 
-Core 会根据 DependsOn 排序生命周期。生成器负责补齐必需依赖，不复制 Kit 内部的连接、重试、health 或 shutdown 逻辑。
+Core 会根据 DependsOn 排序生命周期。生成器负责补齐必需依赖，不复制 Wiring 内部的连接、重试、health 或 shutdown 逻辑。
 
 增加 Service：
 
@@ -289,30 +279,11 @@ Core 会根据 DependsOn 排序生命周期。生成器负责补齐必需依赖�
 
 给已有 Service 增加 Mod：
 
-    roost add mod sync -service chat
+    roost add mod syncbus -service chat
 
 ## 6. 日常业务脚手架
 
-    roost add module alliance
-    roost add access player --service game
-    roost add transport tcp
-    # 每完成一步：
-    roost project next
-    roost add entity Player
-    roost add component Inventory --entity Player
-    roost add dao Player --entity Player
-    roost add handler UseItem --entity Player --component Inventory
-    roost add protocol UseItem -group game --handler inventory
-    # 修改 Request 字段与 handler 参数后
-    roost add endpoint UseItem --handler inventory
-    roost add lifecycle Player --service game
-    roost add skill Fireball
-    roost add table Item
-    roost add dao Player --entity Player
-    roost add webroute AdminQuery
-    roost add errcode InvalidRequest
-    roost add mod saga -service game
-    roost add saga AllianceRally -service game -steps ReserveTroops,CreateMarch,CreateRally
+`roost add` 的全部种类、参数和例子见[参考 §3](CODEGEN_REFERENCE.zh-CN.md#3-业务骨架roost-add)；推荐顺序见 [README 第一条业务](../README.md#3-第一条业务)，每完成一步运行 `roost project next`。下面只写会改动工程装配的几类。
 
 TCP 生成层的帧格式、鉴权、主动推送、配置硬上限和上线门禁见
 [Player TCP 接入](PLAYER_ACCESS_TCP.zh-CN.md)。
@@ -398,46 +369,20 @@ bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装
     roost id check
     make id-check
 
-当前扫描 //roost:* 和 //roost:* 标记，历史项目不需要立刻迁移 marker。
+扫描 `//roost:*` 标记中的编号；`//cube:` 旧前缀不再识别（见 §4 已退役的写法）。
 
 ## 8. 生成流水线
 
-执行全部启用的生成器：
+    make generate            # 全部启用的生成器
+    make generate-changed    # 只跑受 Git 变更影响的生成器
+    roost generate --dry-run # 查看计划
+    make check-generated     # 在临时副本里重新生成并比对，不修改工作区
 
-    make generate
-
-只执行受 Git 变更影响的生成器：
-
-    make generate-changed
-
-查看计划：
-
-    roost generate --dry-run
-
-严格检查：
-
-    make check-generated
-
-check-generated 会复制项目到临时目录，在副本中执行全部生成器并比较生成文件，不修改当前工作区。
-
-默认顺序为 DAO、Event、Protocol、Entity、Nest、Attribute、Config Template、Config Data、Config Go、Web Route，避免 Nest 或业务注册早于其输入生成。
+顺序、`--check` / `--force` 语义与每个生成器的参数见[参考 §2](CODEGEN_REFERENCE.zh-CN.md#2-统一生成流水线roost-generate)。
 
 ## 9. Protocol
 
-通用项目默认生成 proto、Go PB、msgid 和 manifest：
-
-    make generate
-
-独立调用：
-
-    go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/protocol@latest \
-      -def ./protocol/def \
-      -bind "" \
-      -handlers "" \
-      -robot-protocol "" \
-      -force
-
-业务仓（cube）风格项目可以启用 player_bind、handler 和 robot registry 输出。生成器会从目标 go.mod 发现 module，不再硬编码 Cube 业务 module。
+通用项目默认生成 proto、Go PB、msgid、player_bind、handler、robot registry 与 manifest；生成器从目标 `go.mod` 发现 module。定义写法与独立调用参数见[参考 §7](CODEGEN_REFERENCE.zh-CN.md#7-protocol-生成器)。
 
 ## 10. ConfigData
 
@@ -500,37 +445,31 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 
 ## 13. Doctor、Diff 和升级
 
-检查项目：
+    roost project doctor                            # 含生成物新鲜度检查
+    roost project doctor -strict=false              # 只检查结构、版本和配置
+    roost project doctor -json                      # CI / 平台读取 JSON
+    roost project doctor --workflow first-business  # 检查首条业务链并给出修复命令
+    roost project next [--workflow player-tcp]      # 按真实进度只显示一个当前动作
+    roost project diff                              # 预览 sync 将改写的模板与配置 shutdown: 块（不含生成器输出）
+    roost project deps                              # 只重新解析框架依赖
 
-    roost project doctor
-    roost project doctor -strict=false
-    roost project doctor -json
-    roost project doctor --workflow first-business
-    roost project next
-    roost project next --workflow player-tcp
+**sync / deps / generate 的提交语义**：先把项目复制到同级临时目录，在其中完成模板渲染、全部生成器与 `GOWORK=off go mod tidy`；所有权冲突或任一步失败都不写回项目，不留下半生成工程。提交阶段逐文件原子替换，后续失败回滚已写内容；若开发者或另一生成器进程在提交窗口修改了目标文件或业务输入，命令拒绝覆盖并保留新内容。依赖解析只解析 roost-core 一个模块，只提交最终 `go.mod/go.sum`，不回写依赖命令对其他业务文件的改动；`roost generate` 只整理当前依赖、不升级框架，所以新增 DAO / Protocol 等 import 后不需要手工 `go get`。逐文件回滚不能替代进程强杀 / 磁盘故障验证。`make sync` 同步模板后自动执行同样的依赖解析，CI 在测试和构建镜像前运行 `make deps-update`。
 
-查看 sync 将修改的文件：
-
-    roost project diff
-
-旧项目升级到当前工程模板（旧 Makefile 尚无 `project-upgrade` 时）：
+**升级到当前工程模板**（旧 Makefile 尚无 `project-upgrade` 时）：
 
     go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . --dry-run -core latest
     go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest project upgrade --root . -core latest
 
-升级完成后可直接使用 `make project-upgrade`。该目标始终通过 `@latest` 运行，不依赖旧 Makefile 中可能固定的 codegen 版本。升级是幂等的，仅覆盖带 `Code generated by roost-codegen` 标识的受控 Makefile；自定义 Makefile 会报冲突并保持原样。
+之后直接用 `make project-upgrade`，它始终通过 `@latest` 运行。升级幂等，只覆盖带 `Code generated by roost-codegen` 标识的受控文件；自定义 Makefile 报冲突并保持原样，业务代码与业务配置保留。声明更高的最低版本用 `roost project upgrade -core vX.Y.Z`（不得低于生成器兼容下限）；`versions.core` 的明确版本是 Go MVS 下限而不是上限，其他直接依赖要求更高版本时最终解析结果更高。生成器（Makefile 里的 `$(ROOST)`）按 `versions.core` 运行，可用 `make generate CORE_VERSION=vX.Y.Z` 单次覆盖。
 
-重新解析最新版本：
+**配置声明检查**：每个服务配置里的框架段（ops、redis、dataengine、saga、框架服务的 key_prefix…）由 Wiring Mod 自己的配置声明生成——声明里标了 `example` 的键写入配置，键上方的注释来自声明的 `help`；生成的 player TCP 接入层与 RPC 客户端 Mod 也带声明，`add transport tcp` 补的键来自同一份声明。业务服务与 Mod 一样实现 `ConfigSchema()`，用 `app.SchemaOf` + `app.LoadConfig` 读自己的键。doctor 的相关检查：
 
-    roost project deps
+- `config-schema:<service>`：工程能编译时 `go build` 一次进程，对每个服务运行 `<bin> <service> --print-config-schema` 读回全部声明（含业务声明），检查开发配置、生产示例与 k8s Secret 示例——值不合声明、框架段里没有任何声明的键为 FAIL，别的服务的键为 WARN，只属于业务的段里拼错的键为 FAIL。
+- `config-reads`：扫工程源码，直接调 viper 读方法 / `app.Config*` 单键读取、或声明了却没有任何代码读的字段为 FAIL（与 app / wiring 的守卫同一份实现 `internal/configschema/guard.go`）。
+- `time:logic_offset`：dev / prod example / k8s secret example 三套配置里各服务的业务时钟偏移是否一致。game-demo 的业务时间读 `app.BusinessClock(registry)`（带 `time.logic_offset`），租约、saga 截止、支付时间仍是系统时钟并标 `//glsvet:system-clock`；`cmd/glsvet` 对 `game` 目录下直接读 `time.Now` / `Since` / `Until` 打印 `hint:`，不计入失败。
+- `shutdown:<service>`：见 [§17](#17-生产部署生成物)。
 
-`make sync` 会同步模板并自动执行同样的依赖解析，CI 也会在测试和构建镜像前运行 `make deps-update`。`go get` 只把 roost-core 作为直接框架依赖更新，Go MVS 会选择依赖图中的最高版本。
-
-如需声明更高的最低版本：
-
-    roost project upgrade -core v1.25.0
-
-升级更新 roost.yaml 和生成器管理的文件，然后按新策略更新 `go.mod/go.sum`。业务代码和业务配置保留。依赖解析与 tidy 在同级临时项目完成，失败时原 `go.mod/go.sum` 从未被改动；提交前还会校验业务输入和依赖文件没有并发变化。`versions.core` 的明确版本是 Go MVS 下限而不是上限；若其他直接依赖要求更高版本，最终解析结果会更高。生成器（Makefile 里的 `$(ROOST)`）按 `versions.core` 运行，可用 `make generate CORE_VERSION=vX.Y.Z` 单次覆盖。
+进程自己的 `--check-config` 检查真实生产配置的值（含业务 Mod 的声明），不报没有声明的键。框架配置声明在生成器里有一份快照（`codegen/internal/roost/kitconfig_gen.go`），维护方法见 [Codegen 实现与维护](../../docs/framework/impl/12-codegen.md)。
 
 ## 14. 生产检查清单
 
@@ -546,11 +485,11 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 - MongoDB 使用 replica set 或支持 transaction 的 sharded cluster；禁止 standalone。
 - `/var/lib/roost/wal` 使用单写持久卷，并验证异常重启后 replay。
 - JetStream effect 由 Data Engine Mongo outbox 持久化后发布；consumer receipt TTL 必须大于消息最大保留时间。
-- 房间慢消费者淘汰、断线 session 清理、100 Entity/20 Hz 和 Redis/Mongo/NATS 故障注入均通过 staging 门禁。
+- Sync 慢消费者淘汰、断线 session 清理、100 Entity/20 Hz 和 Redis/Mongo/NATS 故障注入均通过 staging 门禁。
 
 ## 15. Module path 与发布依赖
 
-生成的 `go.mod` 只 require 一个框架模块 `github.com/tjbdwanghaibo/roost-core`（kit、skill、框架服务、生成器都是其中的包）。首次离线启动使用当前兼容下限作为合法 bootstrap：
+生成的 `go.mod` 只 require 一个框架模块 `github.com/tjbdwanghaibo/roost-core`（wiring、skill、框架服务、生成器都是其中的包）。首次离线启动使用当前兼容下限作为合法 bootstrap：
 
     github.com/tjbdwanghaibo/roost-core v1.25.0
 
@@ -568,27 +507,27 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 
 ## 17. 生产部署生成物
 
-v1.7.0 起，新项目同时生成三套部署入口：
+新项目同时生成三套部署入口：
 
 | 路径 | 用途 | 关键默认值 |
 | --- | --- | --- |
-| `deploy/shell/` | Linux 物理机/VM | 静态二进制、systemd、非登录用户、只读系统、按服务生成的停机宽限期（`TimeoutStopSec` = 该服务 `shutdown.total_timeout` + 5s）、实例独占 WAL；`WorkingDirectory` 是当前 release，启用 configdata 的服务安装时把 `configs/data` 拷进 release（与镜像布局一致，RR-20260928-05），release 里的 `log` 链接到 `LOG_ROOT`（RR-20260928-04）；每个 release 的 unit 记在 `$APP_ROOT/units/<version>.service`，自动回滚与 `rollback.sh` 连同 unit 一起回退（RR-20260928-10）；没有记录 unit 的旧 release 在动任何东西之前被拒绝，需停服务、删旧 `current` 与 `releases` 后全新安装，切换时先按正在用的 unit 停机再装入目标 unit 启动（RR-20260928-12） |
-| `Dockerfile`、`deploy/docker/` | 容器 | distroless nonroot、不包含环境配置与密钥（启用 configdata 时数据表 `configs/data` 随镜像放在 `/app/configs/data`，与相对的 `config_data.dir` 一致，RR-20260927-34）、只读根文件系统运行示例（相对的 `stats_log.dir: log` 即 `/app/log` 挂可写卷：镜像里是属于 65532 的空目录，compose 每服务一个 `<app>-<service>-log` 命名卷，k8s 挂 `stats-log` emptyDir，systemd 链接到 `LOG_ROOT`，RR-20260928-04）、版本 ldflags |
+| `deploy/shell/` | Linux 物理机/VM | 静态二进制、systemd、非登录用户、只读系统、按服务生成的停机宽限期（`TimeoutStopSec` = 该服务 `shutdown.total_timeout` + 5s）、实例独占 WAL；`WorkingDirectory` 是当前 release，启用 configdata 的服务安装时把 `configs/data` 拷进 release（与镜像布局一致），release 里的 `log` 链接到 `LOG_ROOT`；每个 release 的 unit 记在 `$APP_ROOT/units/<version>.service`，自动回滚与 `rollback.sh` 连同 unit 一起回退；没有记录 unit 的旧 release 在动任何东西之前被拒绝，需停服务、删旧 `current` 与 `releases` 后全新安装，切换时先按正在用的 unit 停机再装入目标 unit 启动 |
+| `Dockerfile`、`deploy/docker/` | 容器 | distroless nonroot、不包含环境配置与密钥（启用 configdata 时数据表 `configs/data` 随镜像放在 `/app/configs/data`，与相对的 `config_data.dir` 一致）、只读根文件系统运行示例（相对的 `stats_log.dir: log` 即 `/app/log` 挂可写卷：镜像里是属于 65532 的空目录，compose 每服务一个 `<app>-<service>-log` 命名卷，k8s 挂 `stats-log` emptyDir，systemd 链接到 `LOG_ROOT`）、版本 ldflags |
 | `deploy/k8s/` | Kubernetes/Kustomize | Secret 挂载、探针、资源预算、PDB、安全上下文；Data Engine 使用 StatefulSet+RWO PVC |
 
-停机时长按服务生成（RR-20260926-66）：每个服务的 `shutdown.total_timeout` = 声明停机预算之和（dataengine 的
-`dataengine.shutdown_timeout`，生成值 30s；托管 player TCP 接入的服务另加生成的 TCP Mod 声明的 `player_access.tcp.shutdown_timeout`，生成值 10s，RR-20260927-05）+ 3s × 其余 Mod 数（App 给未声明预算 Mod 的固定保底）+ 5s（Service.Shutdown 与之共用同一时限）+ 3s（生成配置打开 `singleton.enabled` 的服务，即带 dataengine 的服务：App 单实例锁在 Mod 停完后 Release，Mod 停机截止时间为此提前 3s），
-Mod 数按该服务 bootstrap 实际注册的 Mod 计（共享 Mod、Kit Mod、框架 ClientMod / owner Mod、rpc Mod、player access Mod）；
+停机时长按服务生成：每个服务的 `shutdown.total_timeout` = 声明停机预算之和（dataengine 的
+`dataengine.shutdown_timeout`，生成值 30s；托管 player TCP 接入的服务另加生成的 TCP Mod 声明的 `player_access.tcp.shutdown_timeout`，生成值 10s）+ 3s × 其余 Mod 数（App 给未声明预算 Mod 的固定保底）+ 5s（Service.Shutdown 与之共用同一时限）+ 3s（生成配置打开 `singleton.enabled` 的服务，即带 dataengine 的服务：App 单实例锁在 Mod 停完后 Release，Mod 停机截止时间为此提前 3s），
+Mod 数按该服务 bootstrap 实际注册的 Mod 计（共享 Mod、Wiring Mod、框架 ClientMod / owner Mod、rpc Mod、player access Mod）；
 只有生成器 Manifest 已知的 Mod 计入：应用手写、在 bootstrap 里自行注册的 Mod 即使实现 `app.ModStopBudgetProvider.StopBudget`，其声明值也不进公式，`roost project doctor` 同样不检查它，
-需要时手工调大该服务的 `shutdown.total_timeout` 与下面各处宽限期（RR-20260926-66，OPEN-ITEMS C31）；
+需要时手工调大该服务的 `shutdown.total_timeout` 与下面各处宽限期；
 k8s `terminationGracePeriodSeconds`、compose `stop_grace_period`、systemd `TimeoutStopSec`、`deploy/dev/run.sh` / `second-game.sh` 的
 `kill -9` 前等待均为 `max(公式值, 该服务配置里实际生效的 total_timeout) + 5s`（读 `config.<svc>.yaml`、`.prod.example.yaml` 与 k8s secret 示例，
-缺键按 App 兜底 30s），即永远不低于配置 total + 5s。game-demo 新工程：缺省 Mod 集的 game 服务 25 个 Mod → 117s / 122s（`-mods configdata,mongo,nats,dataengine,nest` 时 23 个 → 111s / 116s；计入单实例锁 Release 之前为 114s / 119s、108s / 113s，RR-20260927-05 之前为 107s / 112s、101s / 106s）；每个框架服务 6 个 Mod → 23s / 28s。
+缺键按 App 兜底 30s），即永远不低于配置 total + 5s。game-demo 新工程：缺省 Mod 集的 game 服务 25 个 Mod → 117s / 122s（`-mods configdata,mongo,nats,dataengine,nest` 时 23 个 → 111s / 116s）；每个框架服务 6 个 Mod → 23s / 28s。
 配置是应用自有的：`roost project sync`（含 `add mod` / `add saga` / `add access` 等）只在 `shutdown:` 段仍是生成器原样时随 Mod 变化改写它，
 改过的段或旧版生成器写的段保持不动，宽限期跟随它们的值。配置段的改写在渲染模板之前、与模板同一次提交（同受回滚与并发输入检查保护），
-增减 Mod 后一次 sync 即收敛、`roost project diff` 为空（RR-20260926-80）。`roost project doctor` 的 `shutdown:<service>`：磁盘上的部署模板宽限期低于配置
+增减 Mod 后一次 sync 即收敛、`roost project diff` 为空。`roost project doctor` 的 `shutdown:<service>`：磁盘上的部署模板宽限期低于配置
 total + 5s 为 FAIL（未 sync 或手改模板，会被 SIGKILL）；三份配置逐份判定，任一份的 total 覆盖不了 Mod 保底即 WARN 并指明文件，
-`Set it to` 的建议值按该份配置里实际的 `dataengine.shutdown_timeout` 计算（各份不同时逐文件给出），0 或负的时长按运行时的 30s 兜底判定（RR-20260927-04）；
+`Set it to` 的建议值按该份配置里实际的 `dataengine.shutdown_timeout` 计算（各份不同时逐文件给出），0 或负的时长按运行时的 30s 兜底判定；
 示例配置解析失败或时长非法时 WARN 只指明文件与键，不附 `Set it to` 建议（dev 配置时长非法为 FAIL）；
 OK / WARN 行显示磁盘上部署模板的实际宽限期；配置里 `singleton.enabled: true` 时所需合计另加 3s。
 
@@ -618,16 +557,23 @@ kubectl apply -f deploy/k8s/secret.game.local.yaml
 kubectl apply -k deploy/k8s
 ```
 
-有 WAL 的工作负载固定单副本并使用独占 PVC。直接提高 replicas 会复用 SID，可能形成双 writer；扩容必须为新实例分配唯一 SID 和存储身份。完整发布、回滚和灾备规则见 roost-core [生产部署手册](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/DEPLOYMENT.md)。
+有 WAL 的工作负载固定单副本并使用独占 PVC。直接提高 replicas 会复用 SID，可能形成双 writer；扩容必须为新实例分配唯一 SID 和存储身份。升级、回退与故障处理见[维护手册](../../docs/maintenance/README.md)，WAL 目录与单写约束见 [Nest 事务与 WAL](../../docs/framework/NEST_TRANSACTION_WAL.md)。
 
-## 18. 三级项目文档
+## 18. 生成项目里的文档
 
 每个新项目都会生成：
 
-1. 根 `README.md`：完全新手五分钟命令。
-2. `docs/USAGE.zh-CN.md`：Service/Mod、生成命令、配置和日常开发。
-3. `docs/IMPLEMENTATION.zh-CN.md` 与 `docs/DEPLOYMENT.zh-CN.md`：一致性实现、同步/技能边界以及生产运维。
+- 根 `README.md`：完全新手五分钟命令；
+- `docs/QUICKSTART.zh-CN.md`：环境、概念、第一次运行、第一次业务改动和常见错误；
+- `docs/BEGINNER_WORKBOOK.zh-CN.md`：`project next` 驱动的逐步业务、TCP、排错和发布手册；
+- `docs/ROOST_YAML.zh-CN.md`：随生成器版本生成的清单字段级权威说明；
+- `docs/FIRST_BUSINESS.zh-CN.md`：Player Access → Protocol → Nest Sender → Entity 首条业务链；
+- `docs/ENTITY_COMPONENT.zh-CN.md`：Entity、Component、DAO、Nest handler 的可复制实战；
+- `docs/ENTITY_LIFECYCLE.zh-CN.md`、`docs/PROTOCOL_TO_NEST.zh-CN.md`：生命周期与接入边界；
+- `docs/PLAYER_ACCESS_TCP.zh-CN.md`：可运行 TCP 接入、帧协议、鉴权和上线验证；
+- `docs/SKILL.zh-CN.md`、`docs/TROUBLESHOOTING.zh-CN.md`：技能接入与错误定位；
+- `docs/SERVICES.zh-CN.md`：生成的服务骨架与 fail-closed 存根；
+- `docs/USAGE.zh-CN.md`：当前项目实际启用的 Service、Mod 和日常命令；
+- `docs/IMPLEMENTATION.zh-CN.md` 与 `docs/DEPLOYMENT.zh-CN.md`：一致性实现、同步 / 技能边界以及生产运维。
 
 这些文件中带 `Code generated` 标识的内容由 `roost project sync` 更新；业务补充应写到自有文档，避免和生成器争用同一个文件。
-
-这些 feature 由 roost-core 提供，版本门槛即 `versions.core` 的兼容下限；低于下限的明确版本在 manifest 校验阶段被拒绝。

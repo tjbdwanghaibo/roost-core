@@ -175,7 +175,7 @@ bean 内部只能用标量/数组/其他 bean，**不能带 `index`/`ref`**；be
 
 - tables：行数组 `[{...},{...}]`，或包装形式 `{"rows":[...]}`（`records`/`data` 亦可，但只能出现一个）；
 - globals：单个 JSON 对象 `{...}`；
-- 文件放在 configdata Store 的数据目录（kit Mod 的 `config_data.dir`，默认 `configs/data`）。
+- 文件放在 configdata Store 的数据目录（`wiring/configdata` Mod 的 `config_data.dir`，默认 `configs/data`）。
 
 ## 改表流程与 CI 建议
 

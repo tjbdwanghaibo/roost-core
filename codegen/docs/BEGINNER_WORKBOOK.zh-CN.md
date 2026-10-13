@@ -26,7 +26,7 @@ cd planet
 roost project next
 ```
 
-`project new` 需要访问 Go Proxy/GitHub，以正式发布模块解析 core、kit、skill 最新版本。网络错误先解决
+`project new` 需要访问 Go Proxy/GitHub，以正式发布模块解析 roost-core 最新版本（wiring、skill 与生成器都是其中的包）。网络错误先解决
 GOPROXY/DNS，不要提交本地绝对路径 `replace`。
 
 `project next` 输出六行左右：当前 workflow、进度、唯一的 next 命令、原因、复查命令、详细文档。

@@ -1,6 +1,6 @@
 # 次核心：Codegen 与工程工具：实现与维护
 
-运行时代码基准：v1.24.0（2fa1c7877b14c77b52e062bedcb3455cef8db0fb）。[设计与使用](../guide/12-codegen.md)
+适用版本：v1.25.0 及当前主线（未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[设计与使用](../guide/12-codegen.md) · 用户文档：[入口](../../../codegen/README.md) · [命令与标记参考](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md) · [项目生成器](../../../codegen/docs/PROJECT_GENERATOR.zh-CN.md)
 
 ## 如何阅读
 
@@ -25,6 +25,17 @@ Codegen根据业务定义生成重复的连接代码，让你少写DAO、消息�
 DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中出现Go函数文本不表示它是生成器运行时函数。修改生成形状应验证生成输出的行为，而非只断言某段字符串出现。
 
 [pretag.sh](../../../scripts/pretag.sh)先确认版本、远端tag状态、无replace与干净树；go generate后再次检查，再检查release manifest，最后build/vet/tidy/test。远端查询失败不能解释成tag不存在。最低版本与发布版本分别更新，文档补丁不随意抬高minimum。
+
+## 2B. 生成器共同实现
+
+- **语法级 AST 解析，不做类型检查**：解析器基于 `go/ast`（`parser.ParseComments`），不引入 `go/types`，目标项目不必能编译、不必下载依赖。代价是拿不到跨包类型信息：嵌套 struct 只在同一 def 目录内按名字递归发现（`internal/dao/parse.go` 的第三遍扫描），类型分类靠语法形状（`classifyField`）。模板无法生成正确代码的形状（固定长度数组、`chan`、`*map[...]...`）在生成期拒绝，不能留给下游编译错误——`format.Source` 只保证语法合法。
+- **内容哈希幂等**：所有生成器写文件都走 `internal/genutil.WriteIfChanged`，内容一致就不写、mtime 不动。
+- **隔离提交**：`roost generate` / `project sync` / `deps` 把项目复制到同级临时目录（跳过 `.git` / `bin` / `dist` / `log` 与生成器临时目录），完成全部步骤与 `GOWORK=off go mod tidy` 后一次提交；提交计划去重并保存旧内容用于回滚，提交窗口内业务输入或目标文件被另一进程修改时拒绝覆盖。
+- **`--check`**：同一隔离机制下跑全部生成器，对含 `Code generated` 头的文件以及 `configs/data/*.json`、`docs/generated/` 做 SHA-256 快照比对，有差异报 `generated files are stale: ...`，工作区不被修改；比较前只把 CRLF 规范为 LF。
+- **`-force`**：单生成器的 `-force` 跳过内容比较、无条件重写；`roost generate --force` 转发给每个支持它的生成器。tablegen 例外：它的输出是"已存在即拒绝覆盖"，编排层对 tablegen 总是传 `-force`；`--check` 内部不传 force。
+- **golden 测试**：`internal/genutil.AssertGolden` 加各生成器的 `testdata/golden/` 把完整生成物锁成字节级基线，片段断言看不见的模板漂移 golden diff 一定看得见；有意修改模板后用 `-update` 刷新（如 `go test ./codegen/internal/dao -run TestGoldenGeneratedOutput -update`）。
+- **配置声明快照**：生成器不导入运行时，Wiring Mod 的配置声明由 `wiring/internal/configschemagen` 快照成 [kitconfig_gen.go](../../../codegen/internal/roost/kitconfig_gen.go)。修改 Wiring 的配置声明后运行 `go generate ./codegen/internal/roost`，再跑 `TestKitConfigSchemasMatchKitDeclarations` 与 `TestDoctorReadsBusinessDeclarationsFromTheProcess`；遗漏快照会让配置检查与运行时声明不一致，doctor 还会把新增框架字段误计为业务字段。不能只测 Wiring 包或改业务字段数量断言来掩盖漂移。
+- **旧写法不迁移**：项目未上线，生成器对已退役写法（清单见[项目生成器 §4](../../../codegen/docs/PROJECT_GENERATOR.zh-CN.md#4-roostyaml)）只点名拒绝并给出手工改法，不读取、不自动迁移、不静默忽略。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -605,4 +616,4 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ## 6. 验收与运维
 
-改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。命令与发布记录见 [维护手册](../../maintenance/README.md)。本次文档补丁的实际执行结果见 [发布验收](../../release/v1.24.1-IMPLEMENTATION.md)；性能沿用 [v1.24.0 基线](../../performance/STABLE-v1.24.0.md)，没有新测量则不能改容量承诺。
+改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。命令与发布记录见 [维护手册](../../maintenance/README.md)；改生成模板要重新生成 game-demo 跑 build / vet / test，并保证 `go generate ./...` 后工作区无漂移。没有新测量不能改容量承诺，性能结论以 [性能报告](../../performance/README.md) 为准。

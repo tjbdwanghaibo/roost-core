@@ -63,7 +63,7 @@ result, err := syncSender.Sync_UseItem(ctx, playerID, cmd)
 ```
 
 Sender 只依赖 `nest.Client`，不会读取全局 `nest.Nest`。因此单元测试可以注入
-fake Client，生产环境从 `app.Registry` 取得 kit `nest.Mod` 提供的 Client。
+fake Client，生产环境从 `app.Registry` 取得 `wiring/nest` 的 Nest Mod 提供的 Client。
 
 ## 锁与跨 Entity 规则
 
