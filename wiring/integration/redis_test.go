@@ -28,7 +28,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/service/match"
 	"github.com/tjbdwanghaibo/roost-core/service/platform"
 	"github.com/tjbdwanghaibo/roost-core/service/rank"
-	"github.com/tjbdwanghaibo/roost-core/wiring/session"
 )
 
 func client(t *testing.T) fredis.IRedis {
