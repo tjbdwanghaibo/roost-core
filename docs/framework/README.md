@@ -1,6 +1,6 @@
-# Roost v1.25 文档
+# Roost 框架模块目录
 
-当前版本v1.25.0，包含目录分类、Gate与Block AOI；重档性能失败为已接受的发布限制。设计篇写职责、使用、状态与限制；实现篇给出契约、逐包源码和回归入口。
+当前版本v1.25.0，包含目录分类、Gate与Block AOI；重档性能失败为已接受的发布限制；未发版变化见 [CHANGELOG](../../CHANGELOG.md)。设计篇写职责、使用、状态与限制；实现篇给出契约、逐包源码和回归入口。
 
 第一次接触框架，请先读 [入门手册](../GETTING-STARTED.md)。下面每组先读“设计与使用”；只有需要定位或修改代码时才打开实现篇的源码/测试目录。
 
@@ -8,7 +8,7 @@
 
 | 模块 | 说明 | 实现 |
 | --- | --- | --- |
-| 核心：Nest 调度与实体 | [设计与使用](guide/02-nest-entity.md) | [实现与源码](impl/02-nest-entity.md) |
+| 核心：Nest 调度与实体（含[回复错误判别表](guide/02-nest-entity.md#6-回复错误判别是否可能已提交能否重试)） | [设计与使用](guide/02-nest-entity.md) | [实现与源码](impl/02-nest-entity.md) |
 | 核心：DataEngine 持久化 | [设计与使用](guide/03-dataengine.md) | [实现与源码](impl/03-dataengine.md) |
 | 核心：Sync、Lockstep 与客户端 | [设计与使用](guide/04-sync.md) | [实现与源码](impl/04-sync.md) |
 
@@ -53,14 +53,15 @@
 ## 维护入口
 
 - [维护、升级、故障处理](../maintenance/README.md)
-- [最终保留文档完整清单](../maintenance/DOCUMENTS.md)
+- [文档清单](../maintenance/DOCUMENTS.md)
 - [文档与代码一致性核对](../maintenance/CONSISTENCY.md)
 - [已知限制与待验证能力](../maintenance/KNOWN-LIMITS.md)
 - [性能报告与复跑](../performance/README.md)
 - [全部 Go 包映射](PACKAGES.md)
 - [游戏 Skill 专项手册](../skill/README.md)
 - [客户端接入](../../client/README.md)
-- [Codegen 参数与语法手册](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md)
+- [Codegen 入口与快速上手](../../codegen/README.md) · [命令与标记参考](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md) · [项目生成器](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md)
+- [game-demo 模板](../../demo/README.md) · [功能逐项说明](../../demo/WALKTHROUGH.md)
 
 ## 专项契约参考
 
