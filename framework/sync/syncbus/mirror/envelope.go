@@ -12,6 +12,7 @@ import (
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 )
 
+// Op 是副本变更类型。
 type Op uint8
 
 const (
@@ -19,6 +20,7 @@ const (
 	OpDelete
 )
 
+// Envelope 是一条副本变更：主题、键、版本、操作与业务 payload。
 type Envelope struct {
 	Topic     string `json:"topic,omitempty"`
 	Key       int64  `json:"key,omitempty"`
@@ -28,6 +30,7 @@ type Envelope struct {
 	UpdatedAt int64  `json:"updated_at,omitempty"`
 }
 
+// Store 应用收到的副本变更；按版本准入由实现负责。
 type Store interface {
 	ApplyReplica(ctx context.Context, env Envelope) error
 }
@@ -36,6 +39,8 @@ type Store interface {
 // 复制器无法启动。调用方据此显式退化，不要改用普通订阅假装有推送一致性。
 var ErrLiveSubscribeUnsupported = errors.New("replica: the sync bus cannot confirm subscriptions (fsyncbus.ILiveSubscriber)")
 
+// Replicator 经 ISyncBus 在服务间复制一个主题的副本：Publish 发出 Envelope，订阅端校验内外层
+// 主题/键/版本一致后交给 Store。空 Data 表示删除。
 type Replicator struct {
 	bus   fsyncbus.ISyncBus
 	ids   *fsyncbus.DeliveryIDs
@@ -44,18 +49,19 @@ type Replicator struct {
 	// live 为 true 时经 fsyncbus.ILiveSubscriber 订阅（NewLive）：Start 返回 nil 之后发布的消息不被静默丢掉。
 	live bool
 	mu   sync.Mutex
-	// subs 是还没确认排空的订阅，started 时最后一个是当前订阅。排空由传输负责（A3 ②）：
-	// Subscription.Unsubscribe(ctx) 返回 nil 即这个订阅不再有在途或新的 Store 调用（RR-20261005-NC-174
-	// 原来在这里自己维护的准入门已删除）。每次 Start 一个新订阅，Replicator 可重启。
+	// subs 是还没确认排空的订阅，started 时最后一个是当前订阅。排空由传输负责：
+	// Subscription.Unsubscribe(ctx) 返回 nil 即这个订阅不再有在途或新的 Store 调用。
+	// 每次 Start 一个新订阅，Replicator 可重启。
 	subs    []*fsyncbus.Subscription
 	started bool
 }
 
+// New 建一个普通订阅的复制器（不承诺推送一致性）。
 func New(bus fsyncbus.ISyncBus, topic string, store Store) *Replicator {
 	return &Replicator{bus: bus, ids: fsyncbus.NewDeliveryIDs("mirror"), topic: topic, store: store}
 }
 
-// NewLive 建一个用可确认订阅的复制器（Mirror 第 4 步）：Start 经 fsyncbus.ILiveSubscriber 订阅，
+// NewLive 建一个用可确认订阅的复制器：Start 经 fsyncbus.ILiveSubscriber 订阅，
 // 返回 nil 即订阅已确认；总线没有这项能力时 Start 返回 ErrLiveSubscribeUnsupported。发布与 New 相同。
 func NewLive(bus fsyncbus.ISyncBus, topic string, store Store) *Replicator {
 	r := New(bus, topic, store)
@@ -66,6 +72,7 @@ func NewLive(bus fsyncbus.ISyncBus, topic string, store Store) *Replicator {
 // Live 报告这个复制器的订阅是否可确认。
 func (r *Replicator) Live() bool { return r != nil && r.live }
 
+// Start 订阅主题；已启动时不做任何事。
 func (r *Replicator) Start() error {
 	if r == nil {
 		return fmt.Errorf("replica: replicator is nil")
@@ -86,50 +93,54 @@ func (r *Replicator) Start() error {
 		}
 		subscribe = live.SubscribeLive
 	}
-	sub, err := subscribe(r.topic, func(ctx context.Context, msg *fsyncbus.SyncMsg) error {
-		if msg == nil {
-			return fmt.Errorf("replica: message is nil")
-		}
-		if msg.Key == 0 {
-			return fmt.Errorf("replica: message key is zero")
-		}
-		if msg.Topic != "" && msg.Topic != r.topic {
-			return fmt.Errorf("replica: outer topic mismatch: got %q want %q", msg.Topic, r.topic)
-		}
-		if len(msg.Data) == 0 {
-			env := Envelope{Topic: r.topic, Key: msg.Key, Version: msg.Version, Op: OpDelete}
-			return r.store.ApplyReplica(ctx, env)
-		}
-		var env Envelope
-		if err := json.Unmarshal(msg.Data, &env); err != nil {
-			return err
-		}
-		if env.Topic != "" && env.Topic != r.topic {
-			return fmt.Errorf("replica: inner topic mismatch: got %q want %q", env.Topic, r.topic)
-		}
-		if env.Key != 0 && env.Key != msg.Key {
-			return fmt.Errorf("replica: inner key mismatch: got %d want %d", env.Key, msg.Key)
-		}
-		if env.Version != 0 && env.Version != msg.Version {
-			return fmt.Errorf("replica: inner version mismatch: got %d want %d", env.Version, msg.Version)
-		}
-		env.Topic = r.topic
-		env.Key = msg.Key
-		env.Version = msg.Version
-		if env.Op == 0 {
-			env.Op = OpUpsert
-		}
-		if env.Op != OpUpsert && env.Op != OpDelete {
-			return fmt.Errorf("replica: unsupported operation %d", env.Op)
-		}
-		return r.store.ApplyReplica(ctx, env)
-	})
+	sub, err := subscribe(r.topic, r.handle)
 	if err != nil {
 		return err
 	}
 	r.subs = append(r.subs, sub)
 	r.started = true
 	return nil
+}
+
+// handle 校验一条收到的消息并交给 Store：空 Data 是删除；否则解出 Envelope，内层主题、键、版本
+// 若填写必须与外层一致，最终以外层为准。
+func (r *Replicator) handle(ctx context.Context, msg *fsyncbus.SyncMsg) error {
+	if msg == nil {
+		return fmt.Errorf("replica: message is nil")
+	}
+	if msg.Key == 0 {
+		return fmt.Errorf("replica: message key is zero")
+	}
+	if msg.Topic != "" && msg.Topic != r.topic {
+		return fmt.Errorf("replica: outer topic mismatch: got %q want %q", msg.Topic, r.topic)
+	}
+	if len(msg.Data) == 0 {
+		env := Envelope{Topic: r.topic, Key: msg.Key, Version: msg.Version, Op: OpDelete}
+		return r.store.ApplyReplica(ctx, env)
+	}
+	var env Envelope
+	if err := json.Unmarshal(msg.Data, &env); err != nil {
+		return err
+	}
+	if env.Topic != "" && env.Topic != r.topic {
+		return fmt.Errorf("replica: inner topic mismatch: got %q want %q", env.Topic, r.topic)
+	}
+	if env.Key != 0 && env.Key != msg.Key {
+		return fmt.Errorf("replica: inner key mismatch: got %d want %d", env.Key, msg.Key)
+	}
+	if env.Version != 0 && env.Version != msg.Version {
+		return fmt.Errorf("replica: inner version mismatch: got %d want %d", env.Version, msg.Version)
+	}
+	env.Topic = r.topic
+	env.Key = msg.Key
+	env.Version = msg.Version
+	if env.Op == 0 {
+		env.Op = OpUpsert
+	}
+	if env.Op != OpUpsert && env.Op != OpDelete {
+		return fmt.Errorf("replica: unsupported operation %d", env.Op)
+	}
+	return r.store.ApplyReplica(ctx, env)
 }
 
 // Stop 发起停止：退订当前订阅（关准入、撤传输登记），不等已进入 Store 的 handler（幂等）。
@@ -145,8 +156,8 @@ var initiateOnly = func() context.Context {
 	return ctx
 }()
 
-// StopWithContext 按三步停机（RR-20261005-NC-174）：①退订（幂等）；②在 ctx 内等此前每次订阅的在途
-// handler 返回（传输的 Subscription.Unsubscribe，A3 ②），超时返回 ctx 错误，重试再等同一批；③全部返回后
+// StopWithContext 按三步停机：①退订（幂等）；②在 ctx 内等此前每次订阅的在途
+// handler 返回（传输的 Subscription.Unsubscribe），超时返回 ctx 错误，重试再等同一批；③全部返回后
 // 才报告 nil，调用方此后可以释放 Store 的依赖。不配合的 Store 不会被终止。
 func (r *Replicator) StopWithContext(ctx context.Context) error {
 	if r == nil {
@@ -173,6 +184,7 @@ func (r *Replicator) StopWithContext(ctx context.Context) error {
 	return nil
 }
 
+// Publish 发布一条 upsert（或显式 delete）变更；每次发布都铸造新的投递身份。
 func (r *Replicator) Publish(ctx context.Context, env Envelope) error {
 	if r == nil || r.bus == nil || r.topic == "" {
 		return fmt.Errorf("replica: replicator is not initialized")
@@ -198,9 +210,8 @@ func (r *Replicator) Publish(ctx context.Context, env Envelope) error {
 	if err != nil {
 		return err
 	}
-	// MessageID is the delivery identity, minted per publish. The version is
-	// not one: an upsert and a delete at the same version must be two messages
-	// to the transport, or broker dedup drops whichever arrives second.
+	// MessageID 是每次发布铸造的投递身份；版本不是身份：同一版本的 upsert 与 delete
+	// 对传输必须是两条消息，否则 broker 去重会丢掉后到的那条。
 	msg := &fsyncbus.SyncMsg{
 		MessageID: r.ids.Next(),
 		Topic:     r.topic,
@@ -211,6 +222,7 @@ func (r *Replicator) Publish(ctx context.Context, env Envelope) error {
 	return publish(ctx, r.bus, msg)
 }
 
+// PublishDelete 发布删除（空 Data）。
 func (r *Replicator) PublishDelete(ctx context.Context, key int64, version int64) error {
 	if r == nil || r.bus == nil || r.topic == "" {
 		return fmt.Errorf("replica: replicator is not initialized")
@@ -239,10 +251,12 @@ func publish(ctx context.Context, bus fsyncbus.ISyncBus, msg *fsyncbus.SyncMsg) 
 	return bus.Publish(msg)
 }
 
+// MarshalPayload 以 JSON 编码业务 payload。
 func MarshalPayload(v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
+// UnmarshalPayload 把 Envelope 的 payload 解为 T。
 func UnmarshalPayload[T any](env Envelope) (T, error) {
 	var ret T
 	err := json.Unmarshal(env.Payload, &ret)

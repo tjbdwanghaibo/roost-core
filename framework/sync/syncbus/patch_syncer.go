@@ -21,11 +21,13 @@ type PatchSyncerConfig[T any] struct {
 	Apply     func(context.Context, T) error
 }
 
+// PatchSyncer 经 ISyncBus 发布与应用瞬时补丁：发布端 JSON 编码，接收端跳过本服消息、
+// 校验 key 后调用 Apply。不做持久化、删除或过期判断。
 type PatchSyncer[T any] struct {
 	bus ISyncBus
 	cfg PatchSyncerConfig[T]
 	mu  stdsync.Mutex
-	// subs 是还没确认排空的订阅（最后一个在 started 时是当前订阅）；排空由传输的 Unsubscribe 负责（A3 ②）。
+	// subs 是还没确认排空的订阅（最后一个在 started 时是当前订阅）；排空由传输的 Unsubscribe 负责。
 	subs    []*Subscription
 	started bool
 	ids     *DeliveryIDs
@@ -35,6 +37,7 @@ func NewPatchSyncer[T any](bus ISyncBus, cfg PatchSyncerConfig[T]) *PatchSyncer[
 	return &PatchSyncer[T]{bus: bus, cfg: cfg, ids: NewDeliveryIDs("patch")}
 }
 
+// Start 订阅 topic；已启动时不做任何事。
 func (s *PatchSyncer[T]) Start() error {
 	if s == nil {
 		return fmt.Errorf("sync patch: syncer is nil")
@@ -82,6 +85,7 @@ func (s *PatchSyncer[T]) Stop(ctx context.Context) error {
 	return nil
 }
 
+// Publish 发布一条补丁；HasData 判定为空的补丁直接忽略，key 为 0 报错。
 func (s *PatchSyncer[T]) Publish(ctx context.Context, patch T) error {
 	if s == nil {
 		return fmt.Errorf("sync patch: syncer is nil")

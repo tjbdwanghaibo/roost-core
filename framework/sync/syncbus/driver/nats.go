@@ -17,7 +17,7 @@ import (
 )
 
 // Bus 是装配层持有的同步总线：ISyncBus 加停机契约 StopWithContext。两种驱动都实现它，
-// kit SyncBusMod 的字段就是这个类型，停机在编译期就要求有 StopWithContext，不再运行期断言、
+// wiring 的 SyncBusMod 字段就是这个类型，停机在编译期就要求有 StopWithContext，不做运行期断言、
 // 也没有不限时的 Stop() 旁路。StopWithContext 返回 nil 之后调用方才能释放下面的 NATS 连接。
 type Bus interface {
 	fsyncbus.ISyncBus
@@ -36,6 +36,7 @@ type natsSyncBus struct {
 	prefix   string // NATS subject prefix, e.g. "roost.sync"
 }
 
+// NewNatsSyncBus 创建至多一次投递的普通 NATS 同步总线；prefix 为空时取 "roost.sync"。
 func NewNatsSyncBus(client nats.IClient, localSid int32, prefix string) Bus {
 	if prefix == "" {
 		prefix = "roost.sync"
@@ -44,7 +45,7 @@ func NewNatsSyncBus(client nats.IClient, localSid int32, prefix string) Bus {
 }
 
 // StopWithContext 满足 Bus 的停机契约。普通 NATS 总线是至多一次的 pub/sub，不持有订阅之外的资源：
-// 每个订阅由 Subscription.Unsubscribe 自己关准入、发 UNSUB 并在 ctx 内排空在途回调（A3 ②），
+// 每个订阅由 Subscription.Unsubscribe 自己关准入、发 UNSUB 并在 ctx 内排空在途回调，
 // 连接归 NatsMod。所以这里没有要等的东西，直接返回 nil，调用方随后即可释放连接。
 func (b *natsSyncBus) StopWithContext(context.Context) error {
 	return nil
@@ -85,7 +86,7 @@ func (b *natsSyncBus) PublishContext(ctx context.Context, msg *fsyncbus.SyncMsg)
 
 // Subscribe 在 nats.go 的回调里解码、跳过本服消息，再经 fsyncbus.Subscription.Deliver 调 handler。
 // nats.go 的 Unsubscribe 只发 UNSUB、不等回调 goroutine；返回的 Subscription.Unsubscribe(ctx) 先关准入
-// 再发 UNSUB，然后在 ctx 内等在途回调（A3 ②）。
+// 再发 UNSUB，然后在 ctx 内等在途回调。
 func (b *natsSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (*fsyncbus.Subscription, error) {
 	if b == nil || b.client == nil {
 		return nil, fmt.Errorf("nats sync: bus is not initialized")
@@ -114,7 +115,7 @@ func (b *natsSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (*fsyncb
 			slog.Warn("nats sync: unmarshal failed", "topic", topic, "err", err)
 			return
 		}
-		// Skip messages from self
+		// 跳过本服自己发出的消息。
 		if msg.FromSid == b.localSid {
 			return
 		}

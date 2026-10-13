@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -30,11 +29,12 @@ const (
 	defaultJetStreamSyncPublishTime  = 5 * time.Second
 )
 
+// JetStreamSyncConfig 配置 JetStream 同步总线；零值字段在 normalizeJetStreamSyncConfig 中补默认值。
 type JetStreamSyncConfig struct {
 	LocalSid int32
 	Prefix   string
 	// Stream 是承载 Prefix.> 的 JetStream 流名。留空时由 Prefix 派生（JetStreamSyncStream）：
-	// 默认 prefix roost.sync 仍是 ROOST_SYNC，其他 prefix 各得其流（RR-20260926-56）。
+	// 默认 prefix roost.sync 对应 ROOST_SYNC，其他 prefix 各得其流。
 	Stream       string
 	Storage      fnats.JetStreamStorage
 	AckWait      time.Duration
@@ -78,6 +78,8 @@ func normalizeJetStreamSyncConfig(cfg JetStreamSyncConfig) JetStreamSyncConfig {
 	return cfg
 }
 
+// jetStreamSyncBus 以每个主题一个 durable 消费者实现 ISyncBus：消息确认后才算投递，
+// 本地多个订阅由 topicFanout 在进程内扇出。
 type jetStreamSyncBus struct {
 	js  fnats.IJetStream
 	cfg JetStreamSyncConfig
@@ -86,9 +88,10 @@ type jetStreamSyncBus struct {
 	mu     sync.Mutex
 	topics map[string]*topicFanout
 
-	// RR-20261005-NC-172：consume 回调（及其中的本地 handler）在 nats.go 的回调 goroutine 上执行，
-	// ConsumeContext.Stop 不等它们。deliveries 是总线自己的准入与在途计数（共用的 operation.Lifetime，A3）：
-	// 停止先关准入、停订阅，再在调用方 ctx 内等在途归零；归零之前总线与连接都不能交还。
+	// consume 回调（及其中的本地 handler）在 nats.go 的回调 goroutine 上执行，ConsumeContext.Stop
+	// 不等它们。deliveries 是总线自己的准入与在途计数（共用的 operation.Lifetime）：停止先关准入、
+	// 停订阅，再在调用方 ctx 内等在途归零；归零之前总线与连接都不能交还。consumers 计数尚未退役完的
+	// 消费者，停机同样要等它归零。
 	deliveries  operation.Lifetime
 	consumers   operation.Lifetime
 	setupCtx    context.Context
@@ -100,7 +103,7 @@ type jetStreamSyncBus struct {
 var errJetStreamSyncStopping = errors.New("jetstream sync: bus is stopping; delivery returned to the broker")
 
 // topicFanout is one topic's single durable consumer plus every local
-// subscription registered on it (U-0209, RR-20260916-03). ISyncBus.Subscribe is
+// subscription registered on it. ISyncBus.Subscribe is
 // broadcast: the plain NATS bus gives every local subscriber every message.
 // A durable JetStream consumer is a work queue — two Consume calls on the
 // same consumer name split the stream between them — so one underlying
@@ -115,6 +118,7 @@ type topicFanout struct {
 	calls    operation.Lifetime
 }
 
+// snapshot 按登记顺序返回当前本地订阅；调用方持 b.mu。
 func (f *topicFanout) snapshot() []*fsyncbus.Subscription {
 	ids := make([]uint64, 0, len(f.locals))
 	for id := range f.locals {
@@ -128,6 +132,7 @@ func (f *topicFanout) snapshot() []*fsyncbus.Subscription {
 	return out
 }
 
+// NewJetStreamSyncBus 确保承载 Prefix.> 的流存在后创建总线；消费者在首次订阅主题时创建。
 func NewJetStreamSyncBus(ctx context.Context, js fnats.IJetStream, cfg JetStreamSyncConfig) (*jetStreamSyncBus, error) {
 	if js == nil {
 		return nil, fmt.Errorf("jetstream sync: jetstream is nil")
@@ -192,7 +197,7 @@ func (b *jetStreamSyncBus) Subscribe(topic string, handler fsyncbus.Handler) (*f
 	return b.subscribe(topic, handler, false)
 }
 
-// SubscribeLive 是可确认订阅（fsyncbus.ILiveSubscriber，Mirror 第 4 步）：这个主题一个 DeliverNew 的
+// SubscribeLive 是可确认订阅（fsyncbus.ILiveSubscriber）：这个主题一个 DeliverNew 的
 // durable 消费者。CreateOrUpdateConsumer 返回时消费者的起点已定在流的当前末尾，之后入流的消息都会投递
 // （AckExplicit，处理超时重投），所以返回 nil 就是“订阅已确认”。durable 名与 Subscribe 的 DeliverAll
 // 消费者分开（durableSyncName 的主题加 ".live"）：服务端不允许改已有 durable 的投递策略，共用名字会让
@@ -205,7 +210,7 @@ func (b *jetStreamSyncBus) SubscribeLive(topic string, handler fsyncbus.Handler)
 // subscribe 建（或复用）一个主题的 durable 消费者并登记本地订阅。live 选 DeliverNew 的那个消费者；
 // 两种消费者在 topics 里用不同的键，互不共享本地订阅。
 //
-// 每个本地订阅是一个 fsyncbus.Subscription（A3 ②）：consume 回调经它的 Deliver 调 handler，退订
+// 每个本地订阅是一个 fsyncbus.Subscription：consume 回调经它的 Deliver 调 handler，退订
 // （Subscription.Unsubscribe）先关准入、经 release 从 fanout 删除（最后一个时停消费者），再在调用方 ctx
 // 内等这个订阅的在途回调——fanout 快照里还拿着它的旧投递也会被等到或被拒，订阅者不必自己排空。
 func (b *jetStreamSyncBus) subscribe(topic string, handler fsyncbus.Handler, live bool) (*fsyncbus.Subscription, error) {
@@ -276,7 +281,7 @@ func (b *jetStreamSyncBus) subscribe(topic string, handler fsyncbus.Handler, liv
 	sub, err := b.js.Subscribe(ctx, fnats.JetStreamConsumerConfig{
 		Stream: cfg.Stream, Name: name, Durable: name, FilterSubject: b.subject(topic), DeliverPolicy: policy,
 		AckWait: cfg.AckWait, MaxDeliver: cfg.MaxDeliver,
-		// RR-25：保留总次数上限，空窗在飞消息退避；不改变 RPC/Remote 的重试策略。
+		// 保留总投递次数上限；退役空窗内的在飞消息按退避 NAK，不改变 RPC/Remote 的重试策略。
 		NakBackoffMin: time.Second, NakBackoffMax: max(time.Second, cfg.AckWait),
 	}, func(_ context.Context, raw *fnats.JetStreamMsg) error { return b.deliver(f, topic, raw) })
 	if err == nil && sub == nil {
@@ -347,6 +352,8 @@ func (b *jetStreamSyncBus) retire(key string, f *topicFanout) {
 	}
 }
 
+// deliver 是 consume 回调：解码一次，跳过本服消息，再给每个本地订阅一份独立的 Data 副本。
+// 没有任何订阅接受时返回 errJetStreamSyncStopping，让 broker 重投而不是 ACK 掉。
 func (b *jetStreamSyncBus) deliver(f *topicFanout, topic string, raw *fnats.JetStreamMsg) error {
 	if raw == nil {
 		return nil
@@ -401,13 +408,13 @@ func (b *jetStreamSyncBus) invoke(local *fsyncbus.Subscription, msg *fsyncbus.Sy
 	return accepted
 }
 
-// StopWithContext 按三步停机（RR-20261005-NC-172）：
+// StopWithContext 按三步停机：
 //  1. 关闭投递准入并停掉全部订阅（幂等；之后到达的投递返回 errJetStreamSyncStopping，由 broker 重投）；
 //  2. 在 ctx 内等创建收尾、consumer Closed 和已准入回调，超时保留旧代，重试继续等同一批；
-//  3. 返回 nil 之后调用方才能释放总线与它下面的 NATS 连接（kit SyncBusMod 出错时保留总线）。
+//  3. 返回 nil 之后调用方才能释放总线与它下面的 NATS 连接（wiring 的 SyncBusMod 出错时保留总线）。
 //
 // 不配合的 handler 不会被终止。这里等的是传输自己的 consume 回调（交还连接的前提）；单个订阅的排空
-// 由 Subscription.Unsubscribe 负责（A3 ②），两者互不依赖。
+// 由 Subscription.Unsubscribe 负责，两者互不依赖。
 func (b *jetStreamSyncBus) StopWithContext(ctx context.Context) error {
 	if b == nil {
 		return nil
@@ -444,11 +451,11 @@ func (b *jetStreamSyncBus) subject(topic string) string {
 	return fmt.Sprintf("%s.%s", b.cfg.Prefix, topic)
 }
 
-// JetStreamSyncStream 是 prefix 缺省对应的流名（RR-20260926-56）。
+// JetStreamSyncStream 是 prefix 缺省对应的流名。
 //
-// 流名曾固定为 ROOST_SYNC：prefix 不同的两个部署共用一个 NATS 时，EnsureStream
-// （CreateOrUpdateStream）把同一个流的 subjects 改成后启动者的 prefix，先启动者的发布从此
-// 不再入流。现在流名跟随 prefix：
+// 流名必须跟随 prefix：prefix 不同的两个部署共用一个 NATS 时，若共用一个流名，EnsureStream
+// （CreateOrUpdateStream）会把流的 subjects 改成后启动者的 prefix，先启动者的发布从此不再入流。
+// 映射规则：
 //   - 默认 prefix（roost.sync，或留空）仍是 ROOST_SYNC——已部署的流与其上的 durable 游标不变；
 //   - 只由小写字母、数字和单个 "." 分隔组成的 prefix 大写并把 "." 换成 "_"
 //     （zz3640.sync → ZZ3640_SYNC），这一映射可逆，不同 prefix 不会相撞；
@@ -495,32 +502,29 @@ func JetStreamSyncStream(prefix string) string {
 	return fmt.Sprintf("%s_%X", stream, sum[:8])
 }
 
+// syncMsgID 返回 JetStream 去重键：优先用消息自带的 MessageID，没有时退回由
+// (topic, key, version, sid, part) 拼出的键；缺任一字段则不设去重键。
 func syncMsgID(msg *fsyncbus.SyncMsg) string {
-	// MessageID was added after the first SyncMsg release. Read it
-	// reflectively so core and kit can be rolled out independently.
-	if msg != nil {
-		value := reflect.ValueOf(msg).Elem().FieldByName("MessageID")
-		if value.IsValid() && value.Kind() == reflect.String && strings.TrimSpace(value.String()) != "" {
-			return value.String()
-		}
-	}
-	if msg == nil || msg.Topic == "" || msg.Key == 0 || msg.Version == 0 || msg.FromSid == 0 {
+	if msg == nil {
 		return ""
 	}
-	// MessageID is the JetStream dedup key; every publisher of a topic must build
-	// it identically, so the format is versioned by the package name, not the
-	// deployment.
+	if strings.TrimSpace(msg.MessageID) != "" {
+		return msg.MessageID
+	}
+	if msg.Topic == "" || msg.Key == 0 || msg.Version == 0 || msg.FromSid == 0 {
+		return ""
+	}
+	// 同一主题的所有发布端必须拼出相同的去重键；"room:" 前缀是既有 wire 字面量，保持不变。
 	return fmt.Sprintf("room:%s:%d:%d:%d:%d", msg.Topic, msg.Key, msg.Version, msg.FromSid, msg.Part)
 }
 
 // durableSyncName is the consumer identity for one (prefix, topic, sid). The
 // hash covers the FULL subject the consumer filters on whenever the prefix is
-// not the default: two buses on one Stream with different prefixes used to
-// collapse onto one durable name with two different FilterSubjects
-// (U-0210, RR-20260916-02). The default prefix keeps the pre-U-0210 input
-// byte for byte, so deployed consumers keep their ACK cursors across the
-// upgrade — renaming them would orphan the cursor and replay the retained
-// stream into every default deployment.
+// not the default: otherwise two buses on one Stream with different prefixes
+// would collapse onto one durable name with two different FilterSubjects. The
+// default prefix hashes the topic alone, so the durable name of a default
+// deployment stays stable and its ACK cursor survives restarts — renaming it
+// would orphan the cursor and replay the retained stream.
 func durableSyncName(prefix, topic string, sid int32) string {
 	identity := topic
 	if prefix != defaultJetStreamSyncPrefix {

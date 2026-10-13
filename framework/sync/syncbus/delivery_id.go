@@ -19,7 +19,7 @@ import (
 // Each instance carries a random, process-unique prefix and a monotonic
 // counter. Two publishers, or one publisher before and after a restart, never
 // mint the same id, and a single publisher never repeats one. Every SyncMsg
-// publisher in core and kit — PatchSyncer, the mirror Replicator, the
+// publisher in the repository — PatchSyncer, the mirror Replicator, the
 // syncstream Publisher — mints through this type, so there is one identity
 // rule rather than one per publish path.
 type DeliveryIDs struct {

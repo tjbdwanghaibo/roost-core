@@ -19,8 +19,7 @@ type SyncMsg struct {
 	Checksum  string // SHA-256 of the decoded business payload
 }
 
-// Handler processes an incoming sync message.
-// Return error to log warning (message is NOT retried).
+// Handler 处理一条收到的同步消息；返回错误只记警告，消息不会重投。
 //
 // ctx 是这次投递的 ctx（Subscription.Deliver 交出）：它带着“正在执行这个订阅的回调”的标记，handler 里
 // 退订自己时必须把它（或由它派生的 ctx）传给 Subscription.Unsubscribe，否则会等自己。退订不取消它。
@@ -39,18 +38,20 @@ type IContextPublisher interface {
 
 // ISubscriber subscribes to sync topics.
 type ISubscriber interface {
-	// Subscribe registers a handler for a topic. 返回的 Subscription.Unsubscribe(ctx) 返回 nil 之后，
-	// 这个订阅既没有在途回调、也不会再有新回调（A3 ②，见 Subscription）。
+	// Subscribe 为 topic 注册 handler。返回的 Subscription.Unsubscribe(ctx) 返回 nil 之后，
+	// 这个订阅既没有在途回调、也不会再有新回调（见 Subscription）。
 	Subscribe(topic string, handler Handler) (*Subscription, error)
 }
 
-// ILiveSubscriber 是可确认订阅的能力（Mirror 第 4 步，docs/feature/MIRROR-STEP-4-AND-O4-2026-10-06.md）。
+// ILiveSubscriber 是可确认订阅的能力。
 //
-// SubscribeLive 返回 nil 即“订阅已确认”：在下述有效信封和保留边界内，短暂断线与处理超时由传输补投。订阅确认之前发布的历史不承诺投递；同一身份重新订阅时可能从上次的
-// 游标续投一段，消费方按版本准入处理。传输自己发出的消息照旧不回送。
+// SubscribeLive 返回 nil 即“订阅已确认”：在下述有效信封和保留边界内，短暂断线与处理超时由传输补投。
+// 订阅确认之前发布的历史不承诺投递；同一身份重新订阅时可能从上次的游标续投一段，消费方按版本准入处理。
+// 传输自己发出的消息照旧不回送。
 //
-// 保证受 broker MaxAge/MaxBytes 保留边界及消费者 MaxDeliver 次数上限约束；坏信封会 ACK，业务 handler 错误也按既有策略 ACK。
-// 退订/停机不再接收，消费者生命周期窗口另见 RR-20261008-25；不能把此接口当无限保留日志。
+// 保证受 broker MaxAge/MaxBytes 保留边界及消费者 MaxDeliver 次数上限约束；坏信封会 ACK，业务 handler
+// 错误也按既有策略 ACK。退订/停机后不再接收（消费者退役窗口见 driver 的 JetStream 实现）；
+// 不能把此接口当无限保留日志。
 //
 // 普通 NATS 是最多一次，不提供这项能力；JetStream 用 DeliverNew 的 durable 消费者提供。需要推送一致性的
 // 调用方先做类型断言，拿不到时显式退化（例如 remoteentity 的快照推送退化为按需读取并记日志）。

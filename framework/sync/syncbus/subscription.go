@@ -13,7 +13,7 @@ import (
 // 传输据此静默跳过（等同于退订先一步生效），不按 handler 错误记日志。
 var ErrUnsubscribed = errors.New("syncbus: subscription is unsubscribed")
 
-// Subscription 是一次 Subscribe / SubscribeLive 的句柄（A3 ②，docs/feature/A3-2-SYNCBUS-DRAINING-UNSUBSCRIBE-2026-10-07.md）。
+// Subscription 是一次 Subscribe / SubscribeLive 的句柄。
 //
 // 排空在这里实现一次，所有传输共用：传输用 NewSubscription 建句柄、把每条消息交给 Deliver，
 // 并提供 release（从本地分发表删除 / 停消费者 / 发 UNSUB，不等待）。订阅者不再各自维护
@@ -24,7 +24,7 @@ type Subscription struct {
 	release func()
 	once    sync.Once
 	cleared sync.Once
-	// calls 是这次订阅的回调准入与在途计数（共用的 operation.Lifetime，A3 ①）。
+	// calls 是这次订阅的回调准入与在途计数（共用的 operation.Lifetime）。
 	calls operation.Lifetime
 }
 
