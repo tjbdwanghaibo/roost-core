@@ -14,7 +14,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// 原生 saga 步骤（本地 mutation + lease fence receipt）的实体屏障与跳过后的驱逐（RR-20260926-30）。
+// 原生 saga 步骤（本地 mutation + lease fence receipt）的实体屏障与跳过后的驱逐。
+// 历史：RR-20260926-30。
 //
 // 这类记录准入 WAL 时 Nest 内存已经应用了它；投影时租约若已失效，整笔记录被跳过，内存却仍含其效果。
 // 两条规则保证之后不会出现“以被跳过效果为基础”的 WAL 记录：
@@ -38,6 +39,7 @@ type FenceOutcomeProjectionStore interface {
 	ProjectFenced(ctx context.Context, record coredata.CommitRecord) (skipped bool, err error)
 }
 
+// projectionOutcome 是单笔投影的结果：已应用、因 lease fence 失效被整笔跳过、或 Store 无法报告。
 type projectionOutcome uint8
 
 const (
@@ -99,7 +101,7 @@ func (p *Projector) checkFencedEntitiesLocked(record coredata.CommitRecord) erro
 // startStaleEviction 在记录投影完成后调用。原生步骤被跳过（或结果未知）时保留它的 entityProjection
 // ——也就是保留屏障与冷加载等待——并交给驱逐 worker；返回 false 表示按普通投影完成处理。
 //
-// 驱逐按事务身份只登记一次（RR-20260926-50）：ack 失败后投影器从 checkpoint 重投，同一条被跳过的记录
+// 驱逐按事务身份只登记一次：ack 失败后投影器从 checkpoint 重投，同一条被跳过的记录
 // 每轮都会再到这里。已登记的直接返回 true（屏障与等待照旧由那一次驱逐解除），不再排队、不再计数——
 // 否则驱逐成功后多出的队列项会去卸载刚从 Mongo 重载的新对象。驱逐完成后记录已不在待投影表里，之后的
 // 重投走下面的 !fenced 分支。
@@ -233,7 +235,7 @@ func (runtime *Runtime) evictStaleEntities(ctx context.Context, ids []int64) err
 		if resident == nil {
 			continue
 		}
-		// 与 Remote 持久拒绝后的卸载（RR-20260926-39）同一入口：ManagerAccess.Unload 只卸载内存、
+		// 与 Remote 持久拒绝后的卸载同一入口：ManagerAccess.Unload 只卸载内存、
 		// 已被别的路径卸载或替换时返回 nil。
 		var destroyErr error
 		runErr := entity.RunLocal(entity.WithLocalExecutor(ctx, runtime.Projector.localRun()), func() {

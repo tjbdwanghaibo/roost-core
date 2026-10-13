@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +11,7 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 )
 
@@ -27,6 +27,7 @@ var (
 // 原始 WAL 原样保留，须用旧版本排空后再升级。
 var ErrRetiredRemoteLeaseFenceRecord = fmt.Errorf("%w: retired WAL record is no longer projected", ErrRemoteLeaseFenceUnsupported)
 
+// ProjectionStore 把一笔已准入的事务记录投影到持久存储；必须对同一持久身份幂等。
 type ProjectionStore interface {
 	Project(context.Context, coredata.CommitRecord) error
 }
@@ -86,15 +87,15 @@ type ProjectorStats struct {
 	AdmissionRejected        uint64
 	BacklogWarning           bool
 	// FencedEntities 是当前被原生步骤屏障挡住写入的实体数；FencedAdmissionRejected 是因此
-	// 以 ErrFencedEntityPending 拒绝的准入次数；StaleEvictions 是跳过后完成的驱逐次数（RR-20260926-30）。
+	// 以 ErrFencedEntityPending 拒绝的准入次数；StaleEvictions 是跳过后完成的驱逐次数。
 	FencedEntities          uint64
 	FencedAdmissionRejected uint64
 	StaleEvictions          uint64
 }
 
-// Projector owns durable admission and WAL -> Mongo projection. Effects are
-// only staged by ProjectionStore; broker delivery is owned by OutboxWorker and
-// is deliberately absent from the WAL acknowledgement path.
+// Projector 负责持久准入（WAL 前的额度与屏障检查、WAL 追加）和 WAL → Mongo 投影。
+// Effect 只由 ProjectionStore 暂存进 outbox；投递到消息代理归 OutboxWorker，
+// 不在 WAL 确认路径上。
 type Projector struct {
 	operations operation.Lifetime
 	wal        *nestwal.WAL
@@ -120,7 +121,7 @@ type Projector struct {
 	lastErr             error
 	fatalErr            error
 	fatalOnce           sync.Once
-	// walTerminalErr：WAL 已 terminal（RR-20260926-50），本进程不会再确认任何记录；errMu 保护，
+	// walTerminalErr：WAL 已 terminal，本进程不会再确认任何记录；errMu 保护，
 	// 与 fatalErr 一样先写入、再唤醒全部等待方，reserve 在 heldMu 下复查。
 	walTerminalErr  error
 	walTerminalOnce sync.Once
@@ -148,6 +149,7 @@ type Projector struct {
 	staleEvictions    atomic.Uint64
 }
 
+// NewProjector 校验并补齐选项后启动 WAL terminal 监视；ManualReplay 为假时同时启动后台回放循环。
 func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOptions) (*Projector, error) {
 	if wal == nil || store == nil {
 		return nil, errors.New("dataengine projector: WAL and store are required")
@@ -217,6 +219,7 @@ type projectionTicket struct {
 }
 
 func (ticket *projectionTicket) Done() <-chan struct{} { return ticket.done }
+
 func (ticket *projectionTicket) Err() error {
 	select {
 	case <-ticket.done:
@@ -226,8 +229,8 @@ func (ticket *projectionTicket) Err() error {
 	}
 }
 
-// CommitSystem durably admits an infrastructure mutation and returns a ticket
-// that resolves only after Mongo projection, not merely after WAL fsync.
+// CommitSystem 持久准入一笔框架内部事务（memory 级别按 strict 处理），返回的票据
+// 在 Mongo 投影完成后才结束，而不是 WAL fsync 后。
 func (projector *Projector) CommitSystem(ctx context.Context, record coredata.CommitRecord) (coredata.ProjectionTicket, error) {
 	if projector == nil || projector.wal == nil {
 		return nil, errors.New("dataengine projector: not initialized")
@@ -264,6 +267,7 @@ func (projector *Projector) CommitSystem(ctx context.Context, record coredata.Co
 	return ticket, nil
 }
 
+// Commit 是 Nest 的阻塞提交入口：准入后调用 WAL.Append，async 只等写入，strict 等所在批 fsync。
 func (projector *Projector) Commit(ctx context.Context, record corenest.CommitRecord) error {
 	if projector == nil || projector.wal == nil {
 		return errors.New("dataengine projector: not initialized")
@@ -287,6 +291,7 @@ func (projector *Projector) Commit(ctx context.Context, record corenest.CommitRe
 	return nil
 }
 
+// Enqueue 是 Nest pipelined 提交入口：准入后把记录交给 WAL group-commit，返回的票据在所在批 fsync 后结束。
 func (projector *Projector) Enqueue(ctx context.Context, record corenest.CommitRecord) (corenest.CommitTicket, error) {
 	if projector == nil || projector.wal == nil {
 		return nil, errors.New("dataengine projector: not initialized")
@@ -307,10 +312,8 @@ func (projector *Projector) Enqueue(ctx context.Context, record corenest.CommitR
 		return nil, err
 	}
 	projector.committed.Add(1)
-	// Commit kicks the replay loop right after its synchronous append. A
-	// pipelined record becomes durable later, so the kick has to wait for the
-	// ticket: the transaction's release usually arrives before the fsync, and
-	// a loop woken then finds nothing to replay and sleeps for IdlePoll.
+	// Commit 同步追加后立即唤醒回放；pipelined 记录要等 fsync 才可回放，而事务释放
+	// 通常早于 fsync，那时唤醒会扑空并睡满 IdlePoll，所以要等票据结束再唤醒。
 	go projector.signalWhenDurable(record.ID, ticket)
 	return ticket, nil
 }
@@ -319,7 +322,7 @@ func (projector *Projector) signalWhenDurable(id coredata.TransactionID, ticket 
 	select {
 	case <-ticket.Done():
 		// 写入结果未知（WAL 已 terminal）时本进程不会再投影这条记录；等它的冷加载
-		// 立即拿到 WAL 错误，而不是等到各自截止时间（RR-20260926-10 复核残留）。
+		// 立即拿到 WAL 错误，而不是等到各自截止时间。
 		if err := ticket.Err(); err != nil {
 			projector.finishEntities(id, err)
 		}
@@ -335,11 +338,13 @@ func (projector *Projector) DurableLSN() uint64 {
 	return projector.wal.DurableLSN()
 }
 
+// TransactionReleased 在 Nest 释放事务的实体锁后调用；之后该记录才允许投影。
 func (projector *Projector) TransactionReleased(id corenest.TransactionID) {
 	projector.release(id)
 	projector.signal()
 }
 
+// Flush 先让 WAL 落盘，再反复执行回放直到一轮没有可处理的记录。
 func (projector *Projector) Flush(ctx context.Context) error {
 	if projector == nil || projector.wal == nil {
 		return nil
@@ -374,10 +379,8 @@ func (projector *Projector) Flush(ctx context.Context) error {
 	}
 }
 
-// OverrideAck replaces the checkpoint acknowledgement hook. It exists for
-// integration harnesses that inject a failure after the Mongo write succeeded
-// (the "projection landed, checkpoint lost" restart scenario); production
-// assembly never calls it.
+// OverrideAck 替换 checkpoint 确认钩子，只供集成夹具注入“投影已落库、checkpoint 丢失”
+// 的重启场景；生产装配不调用。
 func (projector *Projector) OverrideAck(ack func(context.Context, corenest.CommitFence) error) {
 	if projector == nil || ack == nil {
 		return
@@ -391,9 +394,10 @@ func (projector *Projector) recordFailure(err error) {
 	projector.isFatalProjection(err)
 }
 
+// isFatalProjection 判断 err 是否为确定性投影冲突；是则首次触发 fatal：记录 fatalErr、
+// 唤醒全部等待方，再异步调用 OnFatal。
 func (projector *Projector) isFatalProjection(err error) bool {
-	// A deferral is a routing signal, not a verdict: it must never fence the
-	// projector, whatever path it arrives through.
+	// 批次退回逐条处理只是路由信号，不是结论，无论从哪条路径传来都不能 fence 投影器。
 	if errors.Is(err, ErrProjectionBatchNeedsPerRecord) {
 		return false
 	}
@@ -412,8 +416,8 @@ func (projector *Projector) isFatalProjection(err error) bool {
 		projector.completeAllTickets(err)
 		if onFatal := projector.opts.OnFatal; onFatal != nil {
 			// 异步投递（与 nestwal.Options.OnFatal 相同）：这里可能在 ReplayPass/Flush 持有
-			// operation、或后台循环尚未退出时被调用，同步回调里 Close 会等自己（RR-20260926-17
-			// 复核残留）。fatalErr 与等待方唤醒已在上面完成，所以回调开始前准入已被拒绝、
+			// operation、或后台循环尚未退出时被调用，同步回调里 Close 会等自己。
+			// fatalErr 与等待方唤醒已在上面完成，所以回调开始前准入已被拒绝、
 			// 等待方已拿到 fatal；回调只负责进程级 fence，允许在其中同步 Close。
 			go func() {
 				defer func() { _ = recover() }()
@@ -424,7 +428,7 @@ func (projector *Projector) isFatalProjection(err error) bool {
 	return true
 }
 
-// watchWALTerminal 在 WAL 进入 terminal 时立即唤醒全部待投影等待方（RR-20260926-50）。WAL terminal 之后
+// watchWALTerminal 在 WAL 进入 terminal 时立即唤醒全部待投影等待方。WAL terminal 之后
 // Ack 恒失败、准入恒失败，本进程不会再推进任何记录；只在等待前后检查 Healthy 的等待方要等到自己的截止
 // 时间或 Close。Projector 关闭时退出。
 func (projector *Projector) watchWALTerminal() {
@@ -500,6 +504,8 @@ func (projector *Projector) Healthy() error {
 	return errors.Join(projector.wal.Healthy(), err)
 }
 
+// Close 停止准入并等待在途操作、后台回放与驱逐退出，再以 context.Canceled 结束剩余等待方；
+// CloseWAL 为真时最后关闭 WAL。不做最终 Flush，需要排空时用 Shutdown。
 func (projector *Projector) Close(ctx context.Context) error {
 	if projector == nil {
 		return nil
@@ -530,6 +536,7 @@ func (projector *Projector) Close(ctx context.Context) error {
 	}
 }
 
+// Shutdown 在尚未关闭时先 Flush 再 Close；已开始关闭则只 Close。
 func (projector *Projector) Shutdown(ctx context.Context) error {
 	if projector != nil && projector.ctx.Err() != nil {
 		return projector.Close(ctx)
@@ -557,7 +564,7 @@ func (projector *Projector) reserve(record coredata.CommitRecord, held bool) err
 		return terminal
 	}
 	if _, exists := projector.admitted[id]; !exists {
-		// 原生步骤的实体屏障（RR-20260926-30）：与下面的登记同一临界区，不用瞬时统计判断。
+		// 原生步骤的实体屏障：与下面的登记同一临界区，不用瞬时统计判断。
 		if err := projector.checkFencedEntitiesLocked(record); err != nil {
 			return err
 		}

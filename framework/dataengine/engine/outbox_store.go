@@ -11,8 +11,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+// ErrOutboxLeaseConflict 表示 Ack/Nack 时 effect 的租约已不属于本 worker（过期后被他人认领或已删除）。
 var ErrOutboxLeaseConflict = errors.New("dataengine outbox: lease conflict")
 
+// OutboxLease 是一次认领的身份：owner 加单调递增的 token。
 type OutboxLease struct {
 	Owner string
 	Token uint64
@@ -32,6 +34,8 @@ type OutboxBacklog struct {
 	OldestAge time.Duration
 }
 
+// OutboxStore 是 outbox 的租约式队列：Claim 认领到期且无有效租约的 effect，
+// Ack/Nack 必须带认领时的租约。
 type OutboxStore interface {
 	Claim(context.Context, string, time.Time, int, time.Duration) ([]OutboxItem, error)
 	Ack(context.Context, string, OutboxLease) error
@@ -54,6 +58,7 @@ func (store *MongoOutboxStore) collection() fmongo.ICollection {
 	return store.store.client.Database(store.store.cfg.DefaultDatabase).Collection(OutboxCollection)
 }
 
+// Claim 先按 available_at 查出候选，再逐条以 token 做条件更新抢占租约；被别人抢走的候选跳过。
 func (store *MongoOutboxStore) Claim(ctx context.Context, owner string, now time.Time, limit int, leaseDuration time.Duration) ([]OutboxItem, error) {
 	if store == nil || store.store == nil || owner == "" || limit <= 0 || leaseDuration <= 0 {
 		return nil, errors.New("dataengine outbox: invalid claim")

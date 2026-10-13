@@ -13,18 +13,24 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
+// entityDeleteHandler 是框架发起的实体删除事务在 WAL 中的 handler 名。
 const entityDeleteHandler = "__dataengine_entity_delete"
 
+// entityDeletePreparer 由生成 Entity 实现：在事务内登记全部 DAO 的删除 mutation。
 type entityDeletePreparer interface {
 	PrepareDelete(*corenest.RollbackTx) error
 }
 
+// remoteDeleteIntent 告诉 Remote 批次哪个实体是本事务明确请求删除的目标。
 type remoteDeleteIntent struct{ entityID int64 }
 
 func (intent remoteDeleteIntent) RemoteDeleteRequested(entityID int64) bool {
 	return intent.entityID != 0 && intent.entityID == entityID
 }
 
+// admitEntityDelete 是 EntityManager 销毁实体前的持久删除准入，按调用位置分三路：
+// 在 Nest 事务内则延后到事务准入（deferEntityDelete）；否则 Remote 实体走独立的远端
+// 删除事务，本地实体走隔离的本地删除事务。
 func (runtime *Runtime) admitEntityDelete(ctx context.Context, value entity.IThreadSafeEntity, reason entity.EntityDestroyReason) (admission entity.DeleteAdmission, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -54,6 +60,8 @@ func (runtime *Runtime) admitEntityDelete(ctx context.Context, value entity.IThr
 	return runtime.admitLocalEntityDelete(ctx, value)
 }
 
+// deferEntityDelete 把删除并入当前 Nest 事务：同一实体只登记一次，本地实体立即准备删除
+// mutation；事务准入成功后再销毁内存实体。Remote 删除目标必须已在消息中声明。
 func (runtime *Runtime) deferEntityDelete(tx *corenest.RollbackTx, value entity.IThreadSafeEntity, reason entity.EntityDestroyReason) (entity.DeleteAdmission, error) {
 	remote := entity.IsEntityKindRemoteManaged(value.GetEntityKind())
 	if remote && !corenest.CurrentRemoteWriteBatchContains(value.ID()) {
@@ -85,6 +93,7 @@ func (runtime *Runtime) deferEntityDelete(tx *corenest.RollbackTx, value entity.
 	return entity.DeleteAdmissionDeferred, nil
 }
 
+// admitLocalEntityDelete 在隔离事务里准备并提交本地实体的删除；提交结果未知时 fatal。
 func (runtime *Runtime) admitLocalEntityDelete(ctx context.Context, value entity.IThreadSafeEntity) (entity.DeleteAdmission, error) {
 	preparer, ok := value.(entityDeletePreparer)
 	if !ok {
@@ -104,15 +113,18 @@ func (runtime *Runtime) admitLocalEntityDelete(ctx context.Context, value entity
 	return entity.DeleteAdmissionImmediate, err
 }
 
+// admitRemoteEntityDelete 独立删除 Remote 实体：准备远端批次 → 冻结删除提交 → 系统事务
+// 准入 WAL → 等待投影 → 远端确认。WAL 准入前失败则 Abort；准入后任何失败都是不确定结果，
+// 交给批次的 Indeterminate 收尾并 fatal。
 func (runtime *Runtime) admitRemoteEntityDelete(ctx context.Context, value entity.IThreadSafeEntity) (entity.DeleteAdmission, error) {
 	if runtime.remoteManager == nil {
 		return entity.DeleteAdmissionImmediate, entity.ErrRemoteWriteCapabilityDisabled
 	}
 	// 独立的 Remote 删除要准备远端批次、等待持久提交和确认，快 worker 上不允许等待。
 	// 在任何远端/WAL 副作用之前明确拒绝：实体保留在内存、不 fence，调用方可按
-	// fctx.ErrBlockingInBusinessWorker 判别并改为声明目标后走正式事务（RR-20260926-27）。
-	// 旧实现让 PrepareRemoteWriteBatch 入口断言 panic，再被上面的 recover 当成
-	// 不确定结果，一次误用就 fence 全进程并摘除实体。
+	// fctx.ErrBlockingInBusinessWorker 判别并改为声明目标后走正式事务。不能等到
+	// PrepareRemoteWriteBatch 的入口断言 panic：那会被 admitEntityDelete 的 recover
+	// 当成不确定结果，一次误用就 fence 全进程。历史：RR-20260926-27。
 	if err := fctx.BlockingError("dataengine.admitRemoteEntityDelete"); err != nil {
 		return entity.DeleteAdmissionImmediate, fmt.Errorf("dataengine delete: remote entity %d: %w", value.ID(), err)
 	}
@@ -131,26 +143,32 @@ func (runtime *Runtime) admitRemoteEntityDelete(ctx context.Context, value entit
 			runtime.fail(fmt.Errorf("dataengine delete: close remote batch: %w", closeErr))
 		}
 	}
-
-	id, err := newSystemTransactionID()
-	if err != nil {
+	// abort 用于 WAL 准入前的失败：远端没有任何持久副作用，实体保留。
+	abort := func(err error) (entity.DeleteAdmission, error) {
 		_ = batch.Abort(ctx, err)
 		closeBatch()
 		return entity.DeleteAdmissionImmediate, err
+	}
+	// indeterminate 用于准入后结果未知：交给批次收尾，并 fatal 由 EntityManager 摘除实体。
+	indeterminate := func(err error) (entity.DeleteAdmission, error) {
+		_ = batch.Indeterminate(ctx, err)
+		closeBatch()
+		runtime.fail(err)
+		return entity.DeleteAdmissionIndeterminate, err
+	}
+
+	id, err := newSystemTransactionID()
+	if err != nil {
+		return abort(err)
 	}
 	outcome := entity.NewRemoteTransactionOutcome(entity.RemoteTransactionID(id), entityDeleteHandler, "", true, uint8(coredata.DurabilityStrict))
 	outcome.DeleteIntents = remoteDeleteIntent{entityID: value.ID()}
 	if err := batch.FinalizeLocked(outcome); err != nil {
-		_ = batch.Abort(ctx, err)
-		closeBatch()
-		return entity.DeleteAdmissionImmediate, err
+		return abort(err)
 	}
 	commits := batch.Commits()
 	if len(commits) != 1 || !commits[0].Delete {
-		err := fmt.Errorf("dataengine delete: remote entity %d produced %d delete commits", value.ID(), len(commits))
-		_ = batch.Abort(ctx, err)
-		closeBatch()
-		return entity.DeleteAdmissionImmediate, err
+		return abort(fmt.Errorf("dataengine delete: remote entity %d produced %d delete commits", value.ID(), len(commits)))
 	}
 	commit := commits[0].Clone()
 	record := coredata.CommitRecord{
@@ -163,26 +181,15 @@ func (runtime *Runtime) admitRemoteEntityDelete(ctx context.Context, value entit
 	ticket, err := runtime.Projector.CommitSystem(ctx, record)
 	if err != nil {
 		if errors.Is(err, corenest.ErrCommitIndeterminate) {
-			_ = batch.Indeterminate(ctx, err)
-			closeBatch()
-			runtime.fail(err)
-			return entity.DeleteAdmissionIndeterminate, err
+			return indeterminate(err)
 		}
-		_ = batch.Abort(ctx, err)
-		closeBatch()
-		return entity.DeleteAdmissionImmediate, err
+		return abort(err)
 	}
 	if err := coredata.WaitProjection(ctx, ticket); err != nil {
-		_ = batch.Indeterminate(ctx, err)
-		closeBatch()
-		runtime.fail(err)
-		return entity.DeleteAdmissionIndeterminate, err
+		return indeterminate(err)
 	}
 	if _, err := batch.Commit(ctx); err != nil {
-		_ = batch.Indeterminate(ctx, err)
-		closeBatch()
-		runtime.fail(err)
-		return entity.DeleteAdmissionIndeterminate, err
+		return indeterminate(err)
 	}
 	closeBatch()
 	return entity.DeleteAdmissionImmediate, nil

@@ -181,7 +181,7 @@ func TestEntityRepositorySingleFlightsCompleteAggregate(t *testing.T) {
 		"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 8)},
 	}}
 	manager := entity.NewEntityManager()
-	repository, err := newEntityRepository(manager, store, repositoryGate(true))
+	repository, err := NewEntityRepository(manager, store, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,11 +220,11 @@ func TestEntityRepositoryRecoveryBarrierAndIncompleteAggregate(t *testing.T) {
 	id, _ := entity.BuildEntityID(992, dataEngineRepositoryKind)
 	store := &repositoryStore{docs: map[string][]coredata.RawDocument{"repository_profile": {repositoryRaw(t, "repository_profile", id, 1)}}}
 	manager := entity.NewEntityManager()
-	notReady, _ := newEntityRepository(manager, store, repositoryGate(false))
+	notReady, _ := NewEntityRepository(manager, store, repositoryGate(false))
 	if _, err := notReady.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, coredata.ErrRecoveryIncomplete) {
 		t.Fatalf("barrier err=%v", err)
 	}
-	repository, _ := newEntityRepository(manager, store, repositoryGate(true))
+	repository, _ := NewEntityRepository(manager, store, repositoryGate(true))
 	if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateCorrupt) {
 		t.Fatalf("missing DAO err=%v", err)
 	}
@@ -241,7 +241,7 @@ func TestEntityRepositoryRejectsTombstone(t *testing.T) {
 	store := &repositoryStore{docs: map[string][]coredata.RawDocument{
 		"repository_profile": {deleted}, "repository_inventory": {repositoryRaw(t, "repository_inventory", id, 2)},
 	}}
-	repository, _ := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+	repository, _ := NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 	if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateCorrupt) {
 		t.Fatalf("tombstone err=%v", err)
 	}
@@ -263,7 +263,7 @@ func TestEntityRepositoryTreatsUniformAbsenceAsNotFound(t *testing.T) {
 		}()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			repository, _ := newEntityRepository(entity.NewEntityManager(), &repositoryStore{docs: test.docs}, repositoryGate(true))
+			repository, _ := NewEntityRepository(entity.NewEntityManager(), &repositoryStore{docs: test.docs}, repositoryGate(true))
 			if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateNotFound) {
 				t.Fatalf("err=%v, want not found", err)
 			}
@@ -285,7 +285,7 @@ func TestEntityRepositoryPreservesRemoteVersionVector(t *testing.T) {
 			Version: 12, MarkerEpoch: 3, LockFence: 8, RouteEpoch: 5, Enveloped: true, Data: outer,
 		}},
 	}}
-	repository, _ := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+	repository, _ := NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 	loaded, err := repository.LoadEntity(context.Background(), id, dataEngineRemoteRepositoryKind)
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +310,7 @@ func TestEntityRepositoryLoadIsIdempotentAcrossTransactionRetries(t *testing.T) 
 	}
 	for _, retries := range []int{0, 1, 3} {
 		store := &repositoryStore{docs: docs, transientRetries: retries}
-		repository, err := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+		repository, err := NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -341,7 +341,7 @@ func TestEntityRepositoryRemoteVectorDoesNotLeakAcrossRetries(t *testing.T) {
 		"repository_profile":   {profile},
 		"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 8)},
 	}}
-	repository, err := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+	repository, err := NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestEntityRepositoryPublishesThroughLocalExecutor(t *testing.T) {
 		"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 8)},
 	}}
 	manager := entity.NewEntityManager()
-	repository, err := newEntityRepository(manager, store, repositoryGate(true))
+	repository, err := NewEntityRepository(manager, store, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +540,7 @@ func TestARepositoryLoadPanicDoesNotWedgeTheAggregate(t *testing.T) {
 		}},
 		panics: 1,
 	}
-	repository, err := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+	repository, err := NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +594,7 @@ func TestRepositoryWaitersOfAPanickingLoadAreReleased(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	store := &blockingPanicStore{entered: entered, release: release}
-	repository, err := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+	repository, err := NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -681,7 +681,7 @@ func TestRepositoryRestoresRemoteEnvelopeByKindPolicy(t *testing.T) {
 		Version: 12, MarkerEpoch: 3, LockFence: 8, RouteEpoch: 5, Enveloped: true, Data: outer,
 	}
 	store := &repositoryStore{docs: map[string][]coredata.RawDocument{"rr71_remote": {enveloped}}}
-	repository, err := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+	repository, err := NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -704,7 +704,7 @@ func TestRepositoryRejectsManagedKindRecordWithoutEnvelope(t *testing.T) {
 	registerKindDefManagedRepositoryKind()
 	otherID, _ := entity.BuildEntityID(9972, kindDefManagedRepositoryKind)
 	bare := &repositoryStore{docs: map[string][]coredata.RawDocument{"rr71_remote": {repositoryRaw(t, "rr71_remote", otherID, 4)}}}
-	repository, err := newEntityRepository(entity.NewEntityManager(), bare, repositoryGate(true))
+	repository, err := NewEntityRepository(entity.NewEntityManager(), bare, repositoryGate(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -770,10 +770,10 @@ func TestEntityRepositoryRefusesEachUnloadableAggregate(t *testing.T) {
 	ensureLoadGuardKinds()
 	ctx := context.Background()
 
-	if _, err := newEntityRepository(nil, &repositoryStore{}, repositoryGate(true)); err == nil {
+	if _, err := NewEntityRepository(nil, &repositoryStore{}, repositoryGate(true)); err == nil {
 		t.Fatal("repository without a manager accepted")
 	}
-	if _, err := newEntityRepository(entity.NewEntityManager(), nil, repositoryGate(true)); err == nil {
+	if _, err := NewEntityRepository(entity.NewEntityManager(), nil, repositoryGate(true)); err == nil {
 		t.Fatal("repository without a store accepted")
 	}
 	var nilRepository *EntityRepository
@@ -815,7 +815,7 @@ func TestEntityRepositoryRefusesEachUnloadableAggregate(t *testing.T) {
 				t.Fatal(err)
 			}
 			manager := entity.NewEntityManager()
-			repository, err := newEntityRepository(manager, &repositoryStore{docs: tc.docs(id)}, repositoryGate(true))
+			repository, err := NewEntityRepository(manager, &repositoryStore{docs: tc.docs(id)}, repositoryGate(true))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -884,7 +884,7 @@ func TestEntityRepositoryRefusesEachCorruptAggregateShape(t *testing.T) {
 			"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 1)},
 		}}
 		manager := entity.NewEntityManager()
-		repository, _ := newEntityRepository(manager, store, repositoryGate(true))
+		repository, _ := NewEntityRepository(manager, store, repositoryGate(true))
 		_, err := repository.LoadEntity(ctx, id, dataEngineRepositoryKind)
 		expectCorrupt(t, err, "resource=repository_profile")
 		expectCorrupt(t, err, "documents=2")
@@ -899,27 +899,27 @@ func TestEntityRepositoryRefusesEachCorruptAggregateShape(t *testing.T) {
 			"repository_profile":   {repositoryRaw(t, "repository_profile", other, 1)},
 			"repository_inventory": {repositoryRaw(t, "repository_inventory", id, 1)},
 		}}
-		repository, _ := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+		repository, _ := NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 		_, err := repository.LoadEntity(ctx, id, dataEngineRepositoryKind)
 		expectCorrupt(t, err, "documents=1")
 	})
 	t.Run("builder declares one resource twice", func(t *testing.T) {
 		id, _ := entity.BuildEntityID(1204, dataEngineDuplicateDAOKind)
 		store := &repositoryStore{docs: map[string][]coredata.RawDocument{"repository_dup": {repositoryRaw(t, "repository_dup", id, 1)}}}
-		repository, _ := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+		repository, _ := NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 		_, err := repository.LoadEntity(ctx, id, dataEngineDuplicateDAOKind)
 		expectCorrupt(t, err, `duplicate DAO resource "repository_dup"`)
 	})
 	t.Run("nil DAO builder", func(t *testing.T) {
 		id, _ := entity.BuildEntityID(1205, dataEngineNilBuilderKind)
-		repository, _ := newEntityRepository(entity.NewEntityManager(), &repositoryStore{docs: map[string][]coredata.RawDocument{}}, repositoryGate(true))
+		repository, _ := NewEntityRepository(entity.NewEntityManager(), &repositoryStore{docs: map[string][]coredata.RawDocument{}}, repositoryGate(true))
 		_, err := repository.LoadEntity(ctx, id, dataEngineNilBuilderKind)
 		expectCorrupt(t, err, "DAO builder 0 is nil")
 	})
 	t.Run("remote-managed entity without a version envelope", func(t *testing.T) {
 		id, _ := entity.BuildEntityID(1206, dataEngineRemoteRepositoryKind)
 		store := &repositoryStore{docs: map[string][]coredata.RawDocument{"repository_remote": {repositoryRaw(t, "repository_remote", id, 3)}}}
-		repository, _ := newEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+		repository, _ := NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
 		_, err := repository.LoadEntity(ctx, id, dataEngineRemoteRepositoryKind)
 		expectCorrupt(t, err, "has no version envelope")
 	})

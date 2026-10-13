@@ -537,7 +537,7 @@ func TestRepositoryReloadDoesNotResurrectPendingTombstone(t *testing.T) {
 	}}
 	p, _ := manualProjector(t, &tombstoneRepositoryStore{docs: docs})
 	manager := entity.NewEntityManager()
-	repository, err := newEntityRepository(manager, docs, projectorRecoveryGate{p})
+	repository, err := NewEntityRepository(manager, docs, projectorRecoveryGate{p})
 	if err != nil {
 		t.Fatal(err)
 	}

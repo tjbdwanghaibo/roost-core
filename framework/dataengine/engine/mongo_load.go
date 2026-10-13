@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+// ReadConsistent 在一个 Mongo 会话事务内执行 read，得到一致快照；驱动可能重调 read。
 func (store *MongoStore) ReadConsistent(ctx context.Context, read func(context.Context) error) error {
 	if store == nil || store.client == nil || read == nil {
 		return coredata.ErrStoreRequired
@@ -34,6 +35,7 @@ func (store *MongoStore) Load(ctx context.Context, spec coredata.LoadSpec) ([]co
 	return docs, err
 }
 
+// StreamLoad 流式读取未删除的文档；集合支持流式游标时逐条交给 consume，否则整批读出后逐条交付。
 func (store *MongoStore) StreamLoad(ctx context.Context, spec coredata.LoadSpec, consume func(coredata.RawDocument) error) error {
 	if store == nil || store.client == nil {
 		return coredata.ErrStoreRequired
@@ -70,6 +72,7 @@ func (store *MongoStore) StreamLoad(ctx context.Context, spec coredata.LoadSpec,
 	return nil
 }
 
+// decodeRawDocument 解出文档元数据；带 _ver 的 Remote 版本信封以 _ver 作为版本。
 func decodeRawDocument(key coredata.DocumentKey, raw bson.Raw) (coredata.RawDocument, error) {
 	var metadata struct {
 		ID            int64   `bson:"_id"`
@@ -107,6 +110,8 @@ func activeLoadFilter(filter map[string]any) bson.M {
 	return bson.M{"$and": bson.A{bson.M(filter), active}}
 }
 
+// persistedPayload 返回 DAO 的持久化 payload 与 schema：普通文档就是整文档，
+// Remote 信封取其 data 字段。
 func persistedPayload(doc coredata.RawDocument) ([]byte, uint32, error) {
 	if !doc.Enveloped {
 		return append([]byte(nil), doc.Data...), doc.Schema, nil

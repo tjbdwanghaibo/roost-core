@@ -4,20 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
+// ErrOutboxHardLimit 表示 outbox 积压条数或最老年龄超过硬上限；首次触发时调用 OnHardLimit。
 var ErrOutboxHardLimit = errors.New("dataengine outbox: hard backlog limit exceeded")
 
+// OutboxPublisher 把暂存的 effect 投递到消息代理。
 type OutboxPublisher interface {
-	// Publish must use item.Effect.ID as the broker deduplication/MsgID key.
+	// Publish 必须以 item.Effect.ID 作为代理侧去重键（MsgID）。
 	Publish(context.Context, OutboxItem) error
 }
 
+// OutboxWorkerOptions 配置 outbox 认领循环；零值字段在 NewOutboxWorker 中补默认值。
 type OutboxWorkerOptions struct {
 	Owner         string
 	Workers       int
@@ -29,11 +33,8 @@ type OutboxWorkerOptions struct {
 	MaxPending    int64
 	MaxOldestAge  time.Duration
 	OnHardLimit   func(error)
-	// BacklogInterval bounds how often the backlog is measured. The probe
-	// costs a collection count plus an oldest-document lookup, so running it
-	// after every claim (once per worker per PollInterval — 20 times a second
-	// on the defaults) made the measurement scale with the backlog it
-	// measures. Zero selects one second.
+	// BacklogInterval 限制积压采样频率，零值为 1 秒。一次采样是一次集合计数加一次
+	// 最老文档查询；每次认领都采样（默认配置下每秒约 20 次）会让测量开销随积压增长。
 	BacklogInterval time.Duration
 }
 
@@ -47,6 +48,8 @@ type OutboxWorkerStats struct {
 	HardLimitError  string
 }
 
+// OutboxWorker 以租约认领 outbox 中到期的 effect 并投递：成功 Ack 删除，失败 Nack 退避重试。
+// 投递失败不影响实体写入；积压超过硬上限只报告健康错误并回调一次 OnHardLimit。
 type OutboxWorker struct {
 	store     OutboxStore
 	publisher OutboxPublisher
@@ -107,8 +110,8 @@ func NewOutboxWorker(store OutboxStore, publisher OutboxPublisher, options Outbo
 	return &OutboxWorker{store: store, publisher: publisher, opts: options, now: time.Now, done: make(chan struct{})}, nil
 }
 
-// RunOnce claims a bounded batch. Publish failures are persisted through Nack
-// and intentionally do not fail the call or fence entity writes.
+// RunOnce 认领并投递一批 effect。投递失败经 Nack 持久化退避时间，不让本次调用失败，
+// 也不阻挡实体写入；只有存储（Claim/Ack/Nack/积压采样）错误才返回。
 func (worker *OutboxWorker) RunOnce(ctx context.Context) (int, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -145,24 +148,22 @@ func (worker *OutboxWorker) RunOnce(ctx context.Context) (int, error) {
 	return len(items), nil
 }
 
-// maybeRefreshBacklog rate-limits the probe across all workers. One sample per
-// BacklogInterval is enough for a gauge and a hard limit; sampling per claim
-// only multiplies the load on the same Mongo the projector is writing to.
+// maybeRefreshBacklog 在全部 worker 之间限流积压采样：每个 BacklogInterval 一次足够
+// 驱动指标与硬上限；逐次认领采样只会加重投影器正在写的同一个 Mongo 的负载。
 func (worker *OutboxWorker) maybeRefreshBacklog(ctx context.Context, now time.Time) error {
 	last := worker.backlogSampledAt.Load()
 	if last != 0 && now.UnixNano()-last < int64(worker.opts.BacklogInterval) {
 		return nil
 	}
 	if !worker.backlogSampledAt.CompareAndSwap(last, now.UnixNano()) {
-		// Another worker is taking this sample.
+		// 另一个 worker 正在采样这一轮。
 		return nil
 	}
 	return worker.refreshBacklog(ctx, now)
 }
 
-// RefreshBacklog samples the backlog immediately, bypassing the interval.
-// Health checks and shutdown accounting need a current reading rather than
-// one that may be a whole interval stale.
+// RefreshBacklog 绕过采样间隔立即采样；健康检查与关闭统计需要当前读数，
+// 不能用可能过期一整个间隔的旧值。
 func (worker *OutboxWorker) RefreshBacklog(ctx context.Context) error {
 	if worker == nil {
 		return nil
@@ -222,6 +223,7 @@ func (worker *OutboxWorker) retryDelay(attempt uint32) time.Duration {
 	return delay
 }
 
+// Start 启动 Workers 个认领循环；已启动或已关闭时不做任何事。
 func (worker *OutboxWorker) Start(parent context.Context) {
 	worker.lifecycleMu.Lock()
 	defer worker.lifecycleMu.Unlock()
@@ -240,9 +242,7 @@ func (worker *OutboxWorker) run(ctx context.Context) {
 	defer close(worker.done)
 	var group sync.WaitGroup
 	for range worker.opts.Workers {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			ticker := time.NewTicker(worker.opts.PollInterval)
 			defer ticker.Stop()
 			for {
@@ -257,11 +257,13 @@ func (worker *OutboxWorker) run(ctx context.Context) {
 				case <-ticker.C:
 				}
 			}
-		}()
+		})
 	}
 	group.Wait()
 }
 
+// Close 停止认领循环并等待其退出；ctx 到期返回 ctx 错误，可再次调用继续等待。
+// 已认领未投递的 effect 留在 Mongo，租约到期后由下次启动重新认领。
 func (worker *OutboxWorker) Close(ctx context.Context) error {
 	worker.lifecycleMu.Lock()
 	if !worker.closed {
@@ -284,11 +286,9 @@ func (worker *OutboxWorker) Close(ctx context.Context) error {
 	}
 }
 
-// noteRunFailure records a failed poll. Counters carry the volume; the log
-// carries only the transition — one line when a failure streak starts and one
-// when it ends — because at poll-interval cadence a per-failure line is noise
-// that hides the one thing an operator needs: since when, and until when.
-// A poll cut short by shutdown is not a failure.
+// noteRunFailure 记录一次失败的轮询。数量由计数器承载，日志只记录状态变化（连续失败
+// 开始一行、恢复一行）：按轮询频率逐条记录会淹没运维真正需要的“从何时起、到何时止”。
+// 因关闭而中断的轮询不算失败。
 func (worker *OutboxWorker) noteRunFailure(ctx context.Context, err error) {
 	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 		return

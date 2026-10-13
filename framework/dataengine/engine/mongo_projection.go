@@ -23,7 +23,7 @@ func (store *MongoStore) Project(ctx context.Context, record coredata.CommitReco
 }
 
 // ProjectFenced 与 Project 相同，另外报告记录是否因 lease fence 失效被整笔跳过（含重放时读到的
-// 持久 skipped 标记）。Projector 据此驱逐被跳过的原生步骤留下的内存实体（RR-20260926-30）。
+// 持久 skipped 标记）。Projector 据此驱逐被跳过的原生步骤留下的内存实体。
 func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.CommitRecord) (bool, error) {
 	if store == nil || store.client == nil {
 		return false, errors.New("dataengine mongo: store is not configured")
@@ -78,9 +78,7 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 	}
 	transactionSkipped := false
 	err = session.WithTransaction(ctx, func(txCtx context.Context) error {
-		// The Mongo driver may retry this callback. Recompute the outcome from
-		// the durable marker on every invocation rather than retaining a prior
-		// callback's transient value.
+		// 驱动可能重调本回调：每次都从持久标记重新计算结果，不沿用上一次回调的临时值。
 		transactionSkipped = false
 		alreadyApplied, skipped, err := store.checkTransaction(txCtx, record.ID.String(), digest)
 		if err != nil {
@@ -145,8 +143,8 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 		if _, err := store.remoteApplier.ApplyRemoteCommits(ctx, entity.RemoteTransactionID(record.ID), remote); err != nil {
 			if errors.Is(err, entity.ErrRemotePublicationPending) {
 				// Remote 提交已随上面的 Mongo 事务持久（Applied），失败的只是发布：这条记为已投影，发布交给
-				// Remote 的补发循环与 finalizer 按 outbox 补上（RR-20261006-69）。之前按普通错误退避重试这一条，
-				// 总线不可用期间其后所有记录（含普通 DAO）都排队，strict 写超时成结果未知。
+				// Remote 的补发循环与 finalizer 按 outbox 补上。若按普通错误退避重试，总线不可用期间其后
+				// 所有记录（含普通 DAO）都会排队，strict 写超时成结果未知。历史：RR-20261006-69。
 				metrics.IncCounter("dataengine.projector.remote_publication_deferred.total", nil, 1)
 				slog.Warn("dataengine mongo: remote commit persisted but publication failed; projection continues and the commit outbox republishes it",
 					"transaction", record.ID.String(), "err", err)
@@ -158,8 +156,8 @@ func (store *MongoStore) ProjectFenced(ctx context.Context, record coredata.Comm
 	return false, nil
 }
 
-// 只有两个 Remote 适配器都声明并发安全，正式 Store 才开放独立实体并行。
-// 自定义适配器未声明时保留其原有串行调用契约。
+// SupportsRemoteParallelProjection 报告能否并行投影独立的 Remote 事务：只有 Remote 存储与
+// 提交应用器都声明并发安全时才开放；自定义适配器未声明时保持串行调用契约。
 func (store *MongoStore) SupportsRemoteParallelProjection() bool {
 	type concurrentRemote interface{ SupportsConcurrentRemoteCommits() bool }
 	persistence, ok := store.remoteStore.(concurrentRemote)
@@ -170,11 +168,9 @@ func (store *MongoStore) SupportsRemoteParallelProjection() bool {
 	return ok && publisher.SupportsConcurrentRemoteCommits()
 }
 
-// ProjectBatch atomically projects a bounded batch of local DAO records.
-// Ordered bulk writes preserve each document's WAL version order and remove one round-trip per
-// WAL record, while transaction markers make a committed-but-unacknowledged
-// batch idempotent across restart. Records with effects, receipts, remote
-// mutations retain the per-record projection path.
+// ProjectBatch 在一个 Mongo 事务内原子投影一批普通本地 DAO 记录。有序批量写保持每个文档
+// 沿 WAL 的版本顺序并省去逐条往返；事务标记让“已提交未确认”的批次在重启后幂等。
+// 含 effect、回执或 Remote 写的记录只走逐条投影路径。
 func (store *MongoStore) ProjectBatch(ctx context.Context, records []coredata.CommitRecord) error {
 	if store == nil || store.client == nil {
 		return errors.New("dataengine mongo: store is not configured")
@@ -268,9 +264,8 @@ func (store *MongoStore) ProjectBatch(ctx context.Context, records []coredata.Co
 			group := groups[key]
 			result, err := group.collection.BulkWrite(txCtx, group.models)
 			if err != nil {
-				// An upsert that collides on _id is what an already-applied
-				// Put looks like: its exact-version filter matches nothing, so
-				// the upsert tries to insert a document that already exists.
+				// 已应用的 Put 重放正是这个形状：精确版本条件匹配不到，upsert 去插入一个
+				// 已存在的 _id 而撞键。批次无法区分，退回逐条判定。
 				if errors.Is(err, fmongo.ErrDuplicateKey) {
 					return fmt.Errorf("%w: batch duplicate key", ErrProjectionBatchNeedsPerRecord)
 				}
@@ -289,6 +284,7 @@ func (store *MongoStore) ProjectBatch(ctx context.Context, records []coredata.Co
 	})
 }
 
+// batchMutationModel 把一条 mutation 转成批量写模型，版本条件与单条路径一致。
 func (store *MongoStore) batchMutationModel(txID string, mutation coredata.Mutation) (fmongo.WriteModel, error) {
 	switch mutation.Kind {
 	case coredata.MutationPut:

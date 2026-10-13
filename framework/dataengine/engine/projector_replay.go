@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"math/rand/v2"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // ReplayPass 按 WAL 物理顺序读取，在仍持有 Entity 锁的事务前停下。
@@ -26,42 +26,9 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 		return 0, err
 	}
 	defer projector.replayGate.release()
-	var records []corenest.CommitRecord
-	var fences []corenest.CommitFence
-	readBytes := 0
-	replayErr := projector.wal.Replay(ctx, func(fence corenest.CommitFence, record corenest.CommitRecord) error {
-		// 上一条已被本轮接收，必须让它的 consume 返回 nil，WAL 才能如实计数。
-		// 读到下一条时停止；这条 lookahead 不保留、不确认。
-		if len(records) >= projector.opts.ReplayBatchRecords || readBytes >= projector.opts.ReplayReadBytes {
-			return errProjectorBatchComplete
-		}
-		if projector.isHeld(record.ID) {
-			return errProjectorTransactionHeld
-		}
-		size := projectionRecordLogicalBytes(record)
-		if len(records) > 0 && size > projector.opts.ReplayReadBytes-readBytes {
-			// WAL 已解码这一条，但不保留、不确认它；下一轮从成功前缀后重新读取。
-			return errProjectorBatchComplete
-		}
-		// 空闲或首条事务尚未解锁时不需要批次空间。等到确实有可投影
-		// 记录才分配，避免后台每次无进展轮询都申请整个批次的容量。
-		if records == nil {
-			records = make([]corenest.CommitRecord, 0, projector.opts.ReplayBatchRecords)
-			fences = make([]corenest.CommitFence, 0, projector.opts.ReplayBatchRecords)
-		}
-		records = append(records, record)
-		fences = append(fences, fence)
-		readBytes = saturatingAdd(readBytes, size)
-		return nil
-	})
+	records, fences, replayErr := projector.readReplayBatch(ctx)
 	if len(records) == 0 {
-		if errors.Is(replayErr, errProjectorBatchComplete) {
-			replayErr = nil
-		}
 		return 0, replayErr
-	}
-	if errors.Is(replayErr, errProjectorBatchComplete) {
-		replayErr = nil
 	}
 	segments, err := planProjectionSegments(records, fences, projector.opts.ReplayBatchRecords, projector.opts.ReplayBatchBytes)
 	if err != nil {
@@ -132,13 +99,9 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 				return processed, err
 			}
 		}
-		// perRecord is latched when a batch reports that it cannot classify
-		// its own outcome (ErrProjectionBatchNeedsPerRecord). The rest of the
-		// segment then goes through the single-record path, which compares the
-		// stored version and _last_tx and so can tell an already-applied
-		// replay from a real conflict. Latching rather than retrying just the
-		// failing unit keeps the pass from re-issuing a bulk write that is
-		// going to defer again.
+		// 批量写报告无法自行判定结果（ErrProjectionBatchNeedsPerRecord）时锁定 perRecord：
+		// 本段剩余记录改走单条路径，由它比较已存版本与 _last_tx，区分已应用的重放和
+		// 真实冲突。锁定而不是只重试失败单元，避免反复发出注定再次退回的批量写。
 		perRecord := false
 		for start := 0; start < len(segment.records); {
 			end := len(segment.records)
@@ -160,7 +123,7 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 				return processed, fmt.Errorf("dataengine projector: segment first_transaction=%s records=%d: %w", unit.records[0].ID.String(), len(unit.records), err)
 			}
 			for i := range unit.records {
-				// 被跳过的原生步骤先驱逐内存实体，屏障与等待方到驱逐完成才解除（RR-20260926-30）。
+				// 被跳过的原生步骤先驱逐内存实体，屏障与等待方到驱逐完成才解除。
 				if !projector.startStaleEviction(unit.records[i].ID, outcome) {
 					projector.completeProjection(unit.records[i].ID, nil)
 				}
@@ -180,6 +143,44 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 		}
 	}
 	return processed, replayErr
+}
+
+// readReplayBatch 按 WAL 物理顺序收集本轮可投影的连续记录：遇到仍持有实体锁的事务、
+// 达到条数或读取字节上限时停止。返回的错误已去掉“批次已满”哨兵，可能是
+// errProjectorTransactionHeld 或 WAL 读取错误；记录为空时调用方不做投影。
+func (projector *Projector) readReplayBatch(ctx context.Context) ([]corenest.CommitRecord, []corenest.CommitFence, error) {
+	var records []corenest.CommitRecord
+	var fences []corenest.CommitFence
+	readBytes := 0
+	replayErr := projector.wal.Replay(ctx, func(fence corenest.CommitFence, record corenest.CommitRecord) error {
+		// 上一条已被本轮接收，必须让它的 consume 返回 nil，WAL 才能如实计数。
+		// 读到下一条时停止；这条 lookahead 不保留、不确认。
+		if len(records) >= projector.opts.ReplayBatchRecords || readBytes >= projector.opts.ReplayReadBytes {
+			return errProjectorBatchComplete
+		}
+		if projector.isHeld(record.ID) {
+			return errProjectorTransactionHeld
+		}
+		size := projectionRecordLogicalBytes(record)
+		if len(records) > 0 && size > projector.opts.ReplayReadBytes-readBytes {
+			// WAL 已解码这一条，但不保留、不确认它；下一轮从成功前缀后重新读取。
+			return errProjectorBatchComplete
+		}
+		// 空闲或首条事务尚未解锁时不需要批次空间。等到确实有可投影
+		// 记录才分配，避免后台每次无进展轮询都申请整个批次的容量。
+		if records == nil {
+			records = make([]corenest.CommitRecord, 0, projector.opts.ReplayBatchRecords)
+			fences = make([]corenest.CommitFence, 0, projector.opts.ReplayBatchRecords)
+		}
+		records = append(records, record)
+		fences = append(fences, fence)
+		readBytes = saturatingAdd(readBytes, size)
+		return nil
+	})
+	if errors.Is(replayErr, errProjectorBatchComplete) {
+		replayErr = nil
+	}
+	return records, fences, replayErr
 }
 
 // projectSegment 返回的 outcome 只对单笔段有意义：带 lease fence 的记录总是单独成段

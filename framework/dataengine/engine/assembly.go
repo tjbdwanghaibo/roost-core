@@ -15,9 +15,8 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 )
 
-// AssemblyConfig is everything the data engine needs to build itself once the
-// process has parsed its configuration. The kit Mod fills it from viper; tests
-// fill it directly.
+// AssemblyConfig 是进程解析完配置后构建 DataEngine 所需的全部参数；
+// wiring 的 Mod 从配置声明填充，测试直接填写。
 type AssemblyConfig struct {
 	Mongo        MongoStoreConfig
 	WAL          nestwal.Options
@@ -50,9 +49,8 @@ func (cfg AssemblyConfig) ValidateReceiptRetention() error {
 	return nil
 }
 
-// AssemblyDeps are the capabilities the data engine consumes. RemoteStore and
-// RemoteManager are set together when remote projection is enabled; the
-// manager must then implement entity.RemoteCommitApplier.
+// AssemblyDeps 是 DataEngine 依赖的外部能力。启用 Remote 投影时 RemoteStore 与
+// RemoteManager 必须同时设置，且 RemoteManager 须实现 entity.RemoteCommitApplier。
 type AssemblyDeps struct {
 	Mongo         fmongo.IMongo
 	JetStream     fnats.IJetStream
@@ -60,15 +58,14 @@ type AssemblyDeps struct {
 	RemoteStore   RemoteProjectionStore
 	RemoteManager entity.IRemoteEntityManager
 	OnFatal       func(error)
-	// LocalExecutor 把需要 Entity 锁的框架步骤交给快池（kit 转发 Nest 绑定的 RunLocal）。
+	// LocalExecutor 把需要 Entity 锁的框架步骤交给快池（wiring 转发 Nest 绑定的 RunLocal）。
 	// 为 nil 时驱逐等本地步骤按 entity.RunLocal 的约定就地执行。
 	LocalExecutor func(func()) error
 }
 
-// Assembly owns the construction order and the failure rollback of the data
-// engine: store at Provide time; WAL, projector, outbox and runtime at Start,
-// each earlier component closed when a later one fails. The kit Mod only
-// forwards lifecycle calls and reads Runtime() (P3b).
+// Assembly 负责 DataEngine 的构建顺序与失败回滚：Assemble 时构建 Store；Start 时
+// 依次打开 WAL、Projector、Outbox 与 Runtime，后一步失败时关闭已打开的组件。
+// wiring 的 Mod 只转发生命周期调用并读取 Runtime()。
 type Assembly struct {
 	Store *MongoStore
 
@@ -80,8 +77,7 @@ type Assembly struct {
 	runtime       *Runtime
 }
 
-// Assemble validates the dependencies and builds the Mongo store, binding the
-// remote projection when it is configured. Nothing is opened or written yet.
+// Assemble 校验依赖并构建 MongoStore，配置了 Remote 投影时一并绑定；此时不打开、不写入任何资源。
 func Assemble(deps AssemblyDeps, cfg AssemblyConfig) (*Assembly, error) {
 	if err := cfg.ValidateReceiptRetention(); err != nil {
 		return nil, err
@@ -114,11 +110,9 @@ func Assemble(deps AssemblyDeps, cfg AssemblyConfig) (*Assembly, error) {
 	return &Assembly{Store: store, deps: deps, cfg: cfg}, nil
 }
 
-// Start ensures the Mongo infrastructure and the effect stream, opens the WAL
-// and brings up projector, outbox and runtime in dependency order. When a step
-// fails, all opened components are stopped. If ctx expires during cleanup,
-// Runtime retains the remaining resources for a later Shutdown call.
-// ctx bounds both startup and its cleanup attempt.
+// Start 确保 Mongo 基础设施与 effect 流存在，打开 WAL，再按依赖顺序启动 Projector、
+// Outbox 与 Runtime。任一步失败即停止已打开的组件；ctx 同时约束启动和失败清理，
+// 清理未完成时 Runtime() 保留剩余资源，交给后续 Shutdown 继续回收。
 func (a *Assembly) Start(ctx context.Context) (err error) {
 	if a == nil || a.Store == nil {
 		return errors.New("dataengine: not assembled")
@@ -192,8 +186,8 @@ func (a *Assembly) Start(ctx context.Context) (err error) {
 	return nil
 }
 
-// Runtime is the running runtime, or an unready runtime awaiting failed-start
-// cleanup. It is nil before Start and after successful Shutdown.
+// Runtime 返回运行中的 Runtime，或启动失败后等待清理的未就绪 Runtime；
+// Start 之前与 Shutdown 成功之后为 nil。
 func (a *Assembly) Runtime() *Runtime {
 	if a == nil {
 		return nil
@@ -203,17 +197,14 @@ func (a *Assembly) Runtime() *Runtime {
 	return a.runtime
 }
 
-// Shutdown stops the runtime (projector first, then outbox) and, once that
-// has completed, forgets it. A call before Start, or after a completed
-// shutdown, does nothing.
+// Shutdown 停止 Runtime（先 Projector 后 Outbox），全部完成后才忘掉它；Start 之前或
+// 已完成关闭后调用不做任何事。
 //
-// "Completed" is the point: when ctx runs out while a worker is still
-// draining, Shutdown reports the error and KEEPS the runtime, so a retry waits
-// on the same components. Forgetting it on any outcome let the retry find nil
-// and answer success while the outbox worker was still active — a caller that
-// then released the underlying connections would pull them from under a live
-// worker (RR-20260909-03). Runtime.Shutdown remembers which components have
-// stopped, so the retry does not re-flush or re-close what is already down.
+// ctx 在组件仍在排空时到期，Shutdown 返回错误并保留 Runtime，重试会等同一批组件。
+// 若无论结果都丢弃 Runtime，重试会拿到 nil 并报告成功，而 outbox worker 仍在运行，
+// 调用方随后释放底层连接就会从活着的 worker 下面抽走它们。Runtime.Shutdown 记得哪些
+// 组件已停止，重试不会重复 Flush 或 Close。
+// 历史：RR-20260909-03。
 func (a *Assembly) Shutdown(ctx context.Context) error {
 	if a == nil {
 		return nil

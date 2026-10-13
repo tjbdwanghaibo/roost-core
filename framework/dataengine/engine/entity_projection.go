@@ -7,7 +7,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
-// 只保留本进程在途投影；启动恢复在 Runtime.Ready 前排空历史 WAL。
+// entityProjection 是一笔本进程已准入、尚未完成投影的事务在实体维度上的登记，
+// 供冷加载等待相关实体。只保留本进程在途投影；启动恢复在 Runtime.Ready 前排空历史 WAL。
 // DAO 共用完整 Entity ID，因此重载只等相关实体，不阻塞于全局冷数据或无关事务。
 type entityProjection struct {
 	ids  []int64
@@ -16,10 +17,11 @@ type entityProjection struct {
 	// fenced：原生步骤（本地 mutation + lease fence），ids 上持有准入屏障，随本项一起解除。
 	fenced bool
 	// evicting：该原生步骤已被跳过、已交给驱逐 worker（heldMu 保护）。按事务身份只登记一次：
-	// ack 失败后的重投会再次读到同一条被跳过的记录，不能再排队、再计数（RR-20260926-50）。
+	// ack 失败后的重投会再次读到同一条被跳过的记录，不能再排队、再计数。
 	evicting bool
 }
 
+// trackEntitiesLocked 在 heldMu 下登记事务涉及的实体；带 lease fence 的记录同时在这些实体上立屏障。
 func (p *Projector) trackEntitiesLocked(record coredata.CommitRecord) {
 	if p.pendingTransactions == nil {
 		p.pendingTransactions = make(map[coredata.TransactionID]*entityProjection)
@@ -51,11 +53,14 @@ func (p *Projector) trackEntitiesLocked(record coredata.CommitRecord) {
 	}
 	p.pendingTransactions[record.ID] = pending
 }
+
+// finishEntities 解除事务在实体维度上的登记（含原生步骤屏障）并以 err 唤醒等待方。
 func (p *Projector) finishEntities(id coredata.TransactionID, err error) {
 	p.heldMu.Lock()
 	defer p.heldMu.Unlock()
 	p.finishEntitiesLocked(id, err)
 }
+
 func (p *Projector) finishEntitiesLocked(id coredata.TransactionID, err error) {
 	pending := p.pendingTransactions[id]
 	if pending == nil {
@@ -79,7 +84,7 @@ func (p *Projector) finishEntitiesLocked(id coredata.TransactionID, err error) {
 // WaitEntityProjection 等待实体 id 在本进程已准入的全部投影完成。等待前、等待中、等待后
 // 都能感知“本进程不会再投影”：投影 fatal（ErrProjectionConflict 等，可 errors.Is 判别）、
 // Projector 已关闭（ErrRuntimeStopped）、WAL 不健康。fatal 与 WAL terminal（errors.Is
-// corenest.ErrCommitIndeterminate，RR-20260926-50）都会唤醒全部等待方，不只相关批次。
+// corenest.ErrCommitIndeterminate）都会唤醒全部等待方，不只相关批次。
 func (p *Projector) WaitEntityProjection(ctx context.Context, id int64) error {
 	fctx.AssertBlockingAllowed("dataengine.WaitEntityProjection")
 	if ctx == nil {

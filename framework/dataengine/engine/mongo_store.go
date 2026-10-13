@@ -17,6 +17,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+// DataEngine 在默认库中使用的系统集合：事务去重标记、outbox 暂存与业务回执。
 const (
 	TransactionCollection = "_dataengine_transactions"
 	OutboxCollection      = "_dataengine_outbox"
@@ -30,17 +31,14 @@ var (
 	ErrRemoteProjection           = errors.New("dataengine mongo: remote mutation requires remote projector")
 	errProjectionBatchUnsupported = errors.New("dataengine mongo: projection batch is unsupported")
 
-	// ErrProjectionBatchNeedsPerRecord asks the projector to re-project a
-	// batch one record at a time. A batch cannot tell which of its records
-	// failed to match, and "did not match" is ambiguous: it is a genuine
-	// version conflict for a fresh record, but an already-applied record
-	// replayed after a lost WAL acknowledgement looks identical. Only the
-	// single-record path can distinguish them (it compares the stored version
-	// and _last_tx), so the batch defers instead of guessing — guessing
-	// "conflict" is what used to fence the process on a benign replay.
+	// ErrProjectionBatchNeedsPerRecord 要求投影器把批次退回逐条重投。批量写无法知道
+	// 哪条记录没匹配上，而“没匹配”本身有歧义：对新记录是真实版本冲突，对 WAL ack 丢失后
+	// 重放的已应用记录看起来完全一样。只有单条路径（比较已存版本与 _last_tx）能区分二者，
+	// 所以批次不猜测、直接退回；猜成“冲突”会在无害重放时 fence 整个进程。
 	ErrProjectionBatchNeedsPerRecord = errors.New("dataengine mongo: projection batch must be retried per record")
 )
 
+// MongoStoreConfig 配置投影存储：默认库、服务器分库 ID 与两类回执的保留期。
 type MongoStoreConfig struct {
 	DefaultDatabase       string
 	ServerID              int32
@@ -50,9 +48,8 @@ type MongoStoreConfig struct {
 
 const defaultReceiptTTL = 30 * 24 * time.Hour
 
-// MongoStore projects canonical WAL mutations with exact version predicates.
-// A single ordinary mutation uses a one-document fast path; every transaction
-// involving multiple documents, effects, or receipts uses one Mongo session.
+// MongoStore 以精确的版本条件把 WAL mutation 投影到 Mongo。单条普通 mutation 走单文档
+// 快路；涉及多文档、effect 或回执的事务在一个 Mongo 会话事务内完成。
 type MongoStore struct {
 	client        fmongo.IMongo
 	cfg           MongoStoreConfig
@@ -61,14 +58,16 @@ type MongoStore struct {
 	remoteApplier entity.RemoteCommitApplier
 
 	// afterLeaseFence 是测试缝：租约校验通过、业务写入之前在同一 Mongo 事务里调用，
-	// 用来在确定的位置插入并发的租约接管（RR-20260926-30 写偏斜回归）。生产为 nil。
+	// 用来在确定的位置插入并发的租约接管（写偏斜回归）。生产为 nil。
 	afterLeaseFence func(context.Context)
 }
 
+// RemoteProjectionStore 在调用方的 Mongo 事务内应用 Remote 提交并返回回执。
 type RemoteProjectionStore interface {
 	ApplyRemoteCommitsInTransaction(context.Context, []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error)
 }
 
+// SetRemoteProjection 绑定 Remote 投影所需的远端存储与提交应用器；二者必须同时提供。
 func (store *MongoStore) SetRemoteProjection(remoteStore RemoteProjectionStore, applier entity.RemoteCommitApplier) error {
 	if store == nil || remoteStore == nil || applier == nil {
 		return errors.New("dataengine mongo: remote store and applier are required")
@@ -94,6 +93,7 @@ func NewMongoStore(client fmongo.IMongo, cfg MongoStoreConfig) (*MongoStore, err
 	return &MongoStore{client: client, cfg: cfg, now: time.Now}, nil
 }
 
+// EnsureInfrastructure 确保系统集合的 TTL 与认领索引存在。
 func (store *MongoStore) EnsureInfrastructure(ctx context.Context) error {
 	if store == nil || store.client == nil {
 		return errors.New("dataengine mongo: store is not configured")
@@ -116,9 +116,8 @@ func (store *MongoStore) EnsureInfrastructure(ctx context.Context) error {
 	return db.Collection(OutboxCollection).EnsureIndexes(ctx, []fmongo.IndexModel{
 		{Keys: bson.D{{Key: "available_at", Value: 1}, {Key: "lease_until", Value: 1}}, Name: "claim_due"},
 		{Keys: bson.D{{Key: "effect_id", Value: 1}}, Name: "uniq_effect", Unique: true},
-		// The backlog probe reads the oldest staged effect. Without this the
-		// sort scans the whole collection, so the probe would get slower in
-		// exact proportion to the backlog it exists to measure.
+		// 积压采样要读最老的暂存 effect；没有这个索引，排序会扫全集合，
+		// 采样开销恰好随它要测量的积压线性增长。
 		{Keys: bson.D{{Key: "created_at", Value: 1}}, Name: "backlog_oldest"},
 	})
 }
@@ -162,8 +161,7 @@ func (store *MongoStore) applyPut(ctx context.Context, coll fmongo.ICollection, 
 	doc["_last_tx"] = txID
 	delete(doc, "_deleted")
 	delete(doc, "_deleted_at")
-	// The aggregation update is a true replacement and still supports upsert;
-	// unlike $set it cannot retain fields removed by a migration.
+	// 聚合管道更新是真正的整文档替换且支持 upsert；与 $set 不同，不会残留已删除的字段。
 	pipeline := bson.A{bson.M{"$replaceWith": doc}}
 	var after bson.M
 	err := coll.FindOneAndUpdate(ctx, mutationFilter(mutation), pipeline, &after, fmongo.FindOneAndUpdateOption{Upsert: true, ReturnAfter: true})
@@ -252,11 +250,14 @@ func patchUpdate(txID string, mutation coredata.Mutation) (bson.M, error) {
 	return bson.M{"$set": set, "$unset": unset}, nil
 }
 
+// projectionMeta 是判定“已应用重放还是版本冲突”所需的文档元数据。
 type projectionMeta struct {
 	Version uint64 `bson:"_version"`
 	LastTx  string `bson:"_last_tx"`
 }
 
+// classifyNoMatch 在版本条件未命中时回读文档：版本与 _last_tx 都等于本事务即幂等重放，
+// 否则是 fatal 的 ErrProjectionConflict。
 func (store *MongoStore) classifyNoMatch(ctx context.Context, coll fmongo.ICollection, txID string, mutation coredata.Mutation) error {
 	var meta projectionMeta
 	err := coll.FindOne(ctx, bson.M{"_id": mutation.Key.ID}, &meta)
@@ -293,7 +294,7 @@ type transactionDocument struct {
 // 让这里的插入得到 WriteConflict（TransientTransactionError），驱动重跑回调，由下一次
 // 开头的 checkTransaction 裁决“已应用”或身份冲突。
 //
-// 撞键会中止 Mongo 事务，不能在同一事务里读回（RR-20260926-34）。快照读未命中后仍撞键
+// 撞键会中止 Mongo 事务，不能在同一事务里读回。快照读未命中后仍撞键
 // 不属于上面的正常路径，按非 fatal 错误整笔回滚，保留原错误链；投影器重试时由新事务
 // 开头的 checkTransaction 重新裁决。
 func (store *MongoStore) insertTransactionMarker(ctx context.Context, document transactionDocument) error {
@@ -304,6 +305,8 @@ func (store *MongoStore) insertTransactionMarker(ctx context.Context, document t
 	return err
 }
 
+// leaseFencesMatch 在投影事务内逐个确认 lease fence；任一 fence 失效返回 false，
+// 调用方把整笔记录作为跳过处理。
 func (store *MongoStore) leaseFencesMatch(ctx context.Context, receipts []coredata.Receipt) (bool, error) {
 	now := store.now().UTC()
 	for i := range receipts {
@@ -314,12 +317,10 @@ func (store *MongoStore) leaseFencesMatch(ctx context.Context, receipts []coreda
 		if !control {
 			continue
 		}
-		// The predicate comes from the fence itself, not from a filter
-		// assembled here: the document is written by another package, and two
-		// independent spellings of the same schema is how a rename turns every
-		// fenced transaction into a silent no-op.
+		// 条件来自 fence 自身（Predicate），不在这里另拼：协调文档由另一个包写入，
+		// 两处各写一份 schema 时，任一侧改名都会让所有 fenced 事务静默变成空操作。
 		//
-		// 校验必须是条件写而不是读（RR-20260926-30 §6）：只读 claim 时，租约到期附近
+		// 校验必须是条件写而不是读：只读 claim 时，租约到期附近
 		// 另一事务的接管（lease_token+1）与本投影事务互不写冲突，两边都会提交，同一步骤
 		// 执行两次。写同一文档让 Mongo 只允许其中一个提交，输家由驱动重试后看到对方结果。
 		result, err := store.client.Database(fence.Database).Collection(fence.Resource).
@@ -328,10 +329,8 @@ func (store *MongoStore) leaseFencesMatch(ctx context.Context, receipts []coreda
 			err = fmongo.ErrNotFound
 		}
 		if errors.Is(err, fmongo.ErrNotFound) {
-			// A stale lease is the expected outcome here, but so is a schema
-			// drift that makes the predicate unsatisfiable — and the two look
-			// identical from inside. Count it so a drift shows up as every
-			// fenced transaction skipping at once instead of as silence.
+			// 租约过期是预期结果，但 schema 漂移导致条件永远不满足看起来也一样。
+			// 计数后，漂移会表现为所有 fenced 事务同时跳过，而不是悄无声息。
 			metrics.IncCounter("dataengine.fence.skipped.total", metrics.Labels{"resource": fence.Resource}, 1)
 			return false, nil
 		}
@@ -342,6 +341,8 @@ func (store *MongoStore) leaseFencesMatch(ctx context.Context, receipts []coreda
 	return true, nil
 }
 
+// checkTransaction 在投影事务快照内查事务标记，返回（已应用, 曾被跳过, 错误）；
+// 标记存在但摘要不同是 fatal 的 ErrTransactionIdentity。
 func (store *MongoStore) checkTransaction(ctx context.Context, txID string, digest []byte) (bool, bool, error) {
 	var stored transactionDocument
 	err := store.client.Database(store.cfg.DefaultDatabase).Collection(TransactionCollection).FindOne(ctx, bson.M{"_id": txID}, &stored)
@@ -368,7 +369,7 @@ type receiptDocument struct {
 	CreatedAt     time.Time `bson:"created_at"`
 }
 
-// stageReceipt 在 Project 的 Mongo 事务内先快照读、后插入（RR-20260926-34）。
+// stageReceipt 在 Project 的 Mongo 事务内先快照读、后插入。
 //
 // 真实 Mongo 在事务内任一写错误（撞唯一键也是）后立即中止事务，之后同一事务的读返回
 // 带 TransientTransactionError 标签的 NoSuchTransaction，驱动会重跑回调直到
@@ -424,7 +425,7 @@ type outboxDocument struct {
 	CreatedAt     time.Time         `bson:"created_at"`
 }
 
-// stageEffect 与 stageReceipt 相同，在事务快照内先读后插（RR-20260926-34）。outbox 中
+// stageEffect 与 stageReceipt 相同，在事务快照内先读后插。outbox 中
 // 已有同 ID effect 时，同一事务、同一 topic 即幂等成功；属于另一事务或 topic 不同是 WAL
 // 身份缺陷，返回 fatal ErrTransactionIdentity（同一 saga start 在两个事务各发一次即此形状，
 // 按现有设计保持 fatal）。outbox 文档投递成功后会被删除，这项检查只覆盖尚未投递的窗口。
@@ -458,6 +459,7 @@ func (store *MongoStore) stageEffect(ctx context.Context, txID string, effect co
 	return err
 }
 
+// digestRecord 是事务的持久身份摘要（JSON 编码的 SHA-256），用于重放时识别同一事务。
 func digestRecord(record coredata.CommitRecord) ([]byte, error) {
 	raw, err := json.Marshal(record)
 	if err != nil {

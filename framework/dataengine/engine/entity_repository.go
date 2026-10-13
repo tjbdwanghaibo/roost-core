@@ -14,7 +14,7 @@ import (
 
 var (
 	// ErrEntityAggregateNotFound 同时满足 errors.Is(err, entity.ErrAuthorityEntityNotFound)：卸载后重载据此
-	// 立即向订阅者退回 remove，而不是当作可重试的读取失败（RR-20260926-59）。
+	// 立即向订阅者退回 remove，而不是当作可重试的读取失败。
 	ErrEntityAggregateNotFound error = aggregateNotFoundError{}
 	ErrEntityAggregateCorrupt        = errors.New("dataengine repository: entity aggregate is incomplete or corrupt")
 )
@@ -24,20 +24,25 @@ type aggregateNotFoundError struct{}
 func (aggregateNotFoundError) Error() string {
 	return "dataengine repository: entity aggregate not found"
 }
+
 func (aggregateNotFoundError) Is(target error) bool {
 	return target == entity.ErrAuthorityEntityNotFound
 }
 
+// RecoveryGate 报告启动恢复是否完成；未完成时仓库拒绝冷加载。实现若还提供
+// WaitEntityProjection，冷加载前会先等该实体的在途投影。
 type RecoveryGate interface {
 	Ready() bool
 }
 
+// entityLoadFlight 是同一实体并发冷加载共享的一次加载。
 type entityLoadFlight struct {
 	done  chan struct{}
 	value entity.IThreadSafeEntity
 	err   error
 }
 
+// EntityRepository 从 Store 冷加载完整实体聚合并发布到 EntityManager（entity.AggregateLoader）。
 type EntityRepository struct {
 	manager *entity.EntityManager
 	store   coredata.Store
@@ -53,7 +58,7 @@ type EntityRepository struct {
 
 // OnEntityLoaded 注册在聚合从 Mongo 加载并发布之后调用的回调，与发布在同一次本地执行里
 // （Nest 慢阶段下即快池续行）。用途是让依附在旧对象上的协作者接上重载出来的新对象：
-// 被跳过的原生步骤驱逐实体后，Sync 用它把原订阅者重新绑定到新对象并强制全量（RR-20260926-30）。
+// 被跳过的原生步骤驱逐实体后，Sync 用它把原订阅者重新绑定到新对象并强制全量。
 // 回调不能阻塞、不能做 I/O；返回的函数注销回调。
 func (repository *EntityRepository) OnEntityLoaded(hook func(entity.IThreadSafeEntity)) func() {
 	if repository == nil || hook == nil {
@@ -94,11 +99,8 @@ func (repository *EntityRepository) runLoadedHooks(loaded entity.IThreadSafeEnti
 	}
 }
 
+// NewEntityRepository 创建实体仓库；manager 与 store 必填，gate 为 nil 时不检查恢复状态。
 func NewEntityRepository(manager *entity.EntityManager, store coredata.Store, gate RecoveryGate) (*EntityRepository, error) {
-	return newEntityRepository(manager, store, gate)
-}
-
-func newEntityRepository(manager *entity.EntityManager, store coredata.Store, gate RecoveryGate) (*EntityRepository, error) {
 	if manager == nil || store == nil {
 		return nil, errors.New("dataengine repository: entity manager and store are required")
 	}
@@ -149,13 +151,9 @@ func (repository *EntityRepository) LoadEntity(ctx context.Context, id int64, ki
 	repository.flights[fullID] = flight
 	repository.flightMu.Unlock()
 
-	// Finishing the flight is a defer for the same reason it is in
-	// entity.ManagerAccess (RR-20260919-08): a panic under loadAggregate —
-	// a decoder or an OnInitFinish — would otherwise leave a
-	// flight nobody closes, and every later load of that aggregate would wait
-	// on it until its own context expired. The repository is reachable
-	// directly, not only through Nest, so recovering at the Nest boundary
-	// does not cover this.
+	// 结束 flight 必须放在 defer 里（与 entity.ManagerAccess 相同）：loadAggregate 中的
+	// 解码器或 OnInitFinish panic 时，否则没人关闭 flight，之后对该聚合的每次加载都会
+	// 等到各自 ctx 到期。仓库可被直接调用、不只经过 Nest，Nest 边界的 recover 覆盖不到这里。
 	settled := false
 	defer func() {
 		if !settled {
@@ -185,6 +183,7 @@ func (repository *EntityRepository) LoadEntity(ctx context.Context, id int64, ki
 	return flight.value, flight.err
 }
 
+// loadedDAO 是一致性读取得到的一个 DAO 文档及其已解出的持久化 payload。
 type loadedDAO struct {
 	dao     entity.DaoInterface
 	doc     coredata.RawDocument
@@ -192,6 +191,7 @@ type loadedDAO struct {
 	schema  uint32
 }
 
+// loadAggregate 冷加载一个聚合：一致性读取全部 DAO → 校验 schema → 水合 → 回到本地执行阶段发布。
 func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID int64, kind entity.EntityKind) (entity.IThreadSafeEntity, error) {
 	if loaded := repository.manager.Get(fullID); loaded != nil {
 		return loaded, nil
@@ -209,37 +209,21 @@ func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID in
 	if err != nil {
 		return nil, err
 	}
-	for _, item := range loaded {
-		descriptor, ok := item.dao.(coredata.Descriptor)
-		if !ok {
-			return nil, fmt.Errorf("%w: resource=%s does not implement Descriptor", ErrEntityAggregateCorrupt, item.dao.CollName())
-		}
-		if descriptor.SchemaVersion() != item.schema {
-			return nil, fmt.Errorf("%w: resource=%s entity=%d stored_schema=%d target_schema=%d", coredata.ErrSchemaMismatch, item.dao.CollName(), fullID, item.schema, descriptor.SchemaVersion())
-		}
+	if err := checkAggregateSchemas(loaded, fullID); err != nil {
+		return nil, err
 	}
-
-	daos := make(map[string]entity.DaoInterface, len(loaded))
 	// 所有 DAO 校验并恢复版本后才发布 Entity，避免外部看到半加载状态。
-	for _, item := range loaded {
-		hydrator, ok := item.dao.(entity.PersistedDaoLoader)
-		if !ok {
-			return nil, fmt.Errorf("%w: resource=%s does not implement PersistedDaoLoader", ErrEntityAggregateCorrupt, item.dao.CollName())
-		}
-		if err := hydrator.RestorePersisted(item.payload, item.schema, item.doc.Version); err != nil {
-			return nil, fmt.Errorf("dataengine repository: restore %s/%d: %w", item.dao.CollName(), fullID, err)
-		}
-		if item.dao.Id() != fullID {
-			return nil, fmt.Errorf("%w: resource=%s decoded id=%d want=%d", ErrEntityAggregateCorrupt, item.dao.CollName(), item.dao.Id(), fullID)
-		}
-		daos[item.dao.CollName()] = item.dao
+	daos, err := hydrateAggregate(loaded, fullID)
+	if err != nil {
+		return nil, err
 	}
 	param := &entity.EntityCreateParam{
 		IsCreate: false, Category: builder.Category, Kind: kind, Id: fullID,
 		Dao: daos, Lifetime: builder.Lifetime,
 	}
 	// 是否托管看 kind 在注册表里的实际策略，不看 builder 自带的 RemotePolicy：kind 定义声明 managed、手写 builder 省略
-	// 策略时注册表按“部分重复声明”接受，全部 Remote 路径都按托管处理，这里也必须恢复版本信封（RR-20260926-71，同 RR-60）。
+	// 策略时注册表按“部分重复声明”接受，全部 Remote 路径都按托管处理，这里也必须恢复版本信封。
+	// 历史：RR-20260926-60、RR-20260926-71。
 	if entity.GetEntityKindRemotePolicy(kind).RemoteManaged() {
 		if remoteVector.StateVersion == 0 {
 			return nil, fmt.Errorf("%w: remote entity %d has no version envelope", ErrEntityAggregateCorrupt, fullID)
@@ -266,16 +250,49 @@ func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID in
 	return created, nil
 }
 
+// checkAggregateSchemas 在水合前校验每个 DAO 的存储 schema 等于当前运行时 schema；
+// 任何不匹配都不能水合、发布或触发写回。
+func checkAggregateSchemas(loaded []loadedDAO, fullID int64) error {
+	for _, item := range loaded {
+		descriptor, ok := item.dao.(coredata.Descriptor)
+		if !ok {
+			return fmt.Errorf("%w: resource=%s does not implement Descriptor", ErrEntityAggregateCorrupt, item.dao.CollName())
+		}
+		if descriptor.SchemaVersion() != item.schema {
+			return fmt.Errorf("%w: resource=%s entity=%d stored_schema=%d target_schema=%d", coredata.ErrSchemaMismatch, item.dao.CollName(), fullID, item.schema, descriptor.SchemaVersion())
+		}
+	}
+	return nil
+}
+
+// hydrateAggregate 把 payload 与持久版本恢复进各 DAO，并确认解码出的身份属于本实体。
+func hydrateAggregate(loaded []loadedDAO, fullID int64) (map[string]entity.DaoInterface, error) {
+	daos := make(map[string]entity.DaoInterface, len(loaded))
+	for _, item := range loaded {
+		hydrator, ok := item.dao.(entity.PersistedDaoLoader)
+		if !ok {
+			return nil, fmt.Errorf("%w: resource=%s does not implement PersistedDaoLoader", ErrEntityAggregateCorrupt, item.dao.CollName())
+		}
+		if err := hydrator.RestorePersisted(item.payload, item.schema, item.doc.Version); err != nil {
+			return nil, fmt.Errorf("dataengine repository: restore %s/%d: %w", item.dao.CollName(), fullID, err)
+		}
+		if item.dao.Id() != fullID {
+			return nil, fmt.Errorf("%w: resource=%s decoded id=%d want=%d", ErrEntityAggregateCorrupt, item.dao.CollName(), item.dao.Id(), fullID)
+		}
+		daos[item.dao.CollName()] = item.dao
+	}
+	return daos, nil
+}
+
+// readAggregate 在一次一致性读里读取聚合的全部 DAO 文档：全部缺失或全部墓碑视为不存在，
+// 部分存在视为损坏；同时取版本最高的 Remote 版本信封。
 func (repository *EntityRepository) readAggregate(ctx context.Context, builder *entity.EntityBuilderParam, fullID int64) ([]loadedDAO, entity.RemoteVersionVector, error) {
 	var loaded []loadedDAO
 	var remoteVector entity.RemoteVersionVector
 	err := repository.store.ReadConsistent(ctx, func(readCtx context.Context) error {
-		// ReadConsistent runs inside ISession.WithTransaction, which is
-		// documented to retry its callback (the driver re-invokes it on a
-		// TransientTransactionError or an unknown commit result). Every
-		// accumulator therefore has to be reset here, not outside: keeping
-		// `loaded` across attempts made a second attempt trip the duplicate
-		// resource guard and report healthy data as a corrupt aggregate.
+		// ReadConsistent 运行在 ISession.WithTransaction 里，驱动遇到
+		// TransientTransactionError 或提交结果未知时会重调本回调。所有累加量必须在这里
+		// 重置：跨尝试保留 loaded 会让第二次尝试撞上重复资源检查，把健康数据报成损坏聚合。
 		loaded = make([]loadedDAO, 0, len(builder.DaoBuilders))
 		remoteVector = entity.RemoteVersionVector{}
 		missing, tombstones := 0, 0

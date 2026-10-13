@@ -12,8 +12,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 )
 
+// ErrRuntimeStopped 表示 Runtime 或其组件已开始关闭，不再接受新操作。
 var ErrRuntimeStopped = errors.New("dataengine runtime: shutdown has started")
 
+// Runtime 是启动完成的 DataEngine 组合：Store、WAL、Projector、Outbox 与实体仓库。
+// 它在恢复屏障之后向 EntityManager 安装加载器与删除准入，并为 Nest 提供提交器选项。
 type Runtime struct {
 	Store      *MongoStore
 	WAL        *nestwal.WAL
@@ -38,6 +41,7 @@ type Runtime struct {
 	outboxClosed    bool
 }
 
+// PipelinedRuntimeConfig 是 Runtime 交给 Nest 的 pipelined 提交配置：允许名单与异步完成池。
 type PipelinedRuntimeConfig struct {
 	Allowlist     []string
 	Async         bool
@@ -60,8 +64,7 @@ func NewRuntime(store *MongoStore, wal *nestwal.WAL, projector *Projector, outbo
 	return runtime, nil
 }
 
-// Start performs the recovery barrier before making the aggregate loader or
-// transaction committer available to service traffic.
+// Start 先执行恢复屏障（排空历史 WAL 投影），再向业务流量开放实体加载器与事务提交器。
 func (runtime *Runtime) Start(ctx context.Context) error {
 	if runtime == nil || runtime.Projector == nil || runtime.Repository == nil {
 		return errors.New("dataengine runtime: not initialized")
@@ -96,9 +99,8 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 	}
 	runtime.unregisterDelete = unregisterDelete
 	runtime.Outbox.Start(context.Background())
-	// Publish readiness only after both framework entry points are installed.
-	// A concurrent health/committer lookup must never observe a half-wired
-	// runtime with a loader but no durable delete gate.
+	// 两个框架入口都安装后才发布就绪：并发的健康检查或提交器查询不能看到
+	// 只有加载器、没有持久删除门的半装配 Runtime。
 	runtime.ready.Store(true)
 	return nil
 }
@@ -128,13 +130,10 @@ func (runtime *Runtime) Flush(ctx context.Context) error {
 	return runtime.Projector.Flush(ctx)
 }
 
-// Shutdown stops the projector, then the outbox worker. It may be called again
-// after an incomplete attempt (a bounded ctx that ran out): each component is
-// marked stopped once its Close has returned nil, and a retry only waits on
-// the ones still running. The flush that precedes the projector's close is
-// attempted once — after the projector is closed there is nothing left to
-// flush, and the records it could not make visible stay durable in the WAL
-// for the next start.
+// Shutdown 先停 Projector，再停 Outbox worker。ctx 到期导致未完成时可再次调用：
+// 组件的 Close 返回 nil 后才标记为已停止，重试只等待仍在运行的组件。关闭 Projector
+// 之前的 Flush 只尝试一次；Projector 关闭后没有可 Flush 的对象，未投影的记录留在
+// WAL 中由下次启动恢复。
 func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	if runtime == nil {
 		return nil
@@ -162,9 +161,8 @@ func (runtime *Runtime) stop(ctx context.Context, drain bool) error {
 		runtime.unregisterLoader()
 		runtime.unregisterLoader = nil
 	}
-	// Services stop before mods, so no new Nest handlers or guards can enter.
-	// First make every admitted WAL record visible, then stop new outbox claims;
-	// already staged effects remain durable in Mongo for the next start.
+	// 服务先于 Mod 停止，此时不会再进入新的 Nest handler 或 Guard。先让已准入的
+	// WAL 记录全部投影可见，再停止新的 outbox 认领；已暂存的 effect 留在 Mongo 等下次启动。
 	var flushErr, projectorErr, walErr, outboxErr error
 	if !runtime.drainAttempted {
 		runtime.drainAttempted = true

@@ -9,13 +9,16 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
+// projectionSegment 是一次投影调用的单元：batch 段是连续的普通本地记录，
+// 非 batch 段只含一条特殊记录（effect、回执或 Remote）。
 type projectionSegment struct {
 	records []coredata.CommitRecord
 	fences  []corenest.CommitFence
 	batch   bool
 }
 
-// 本地批量不跨越有外部效果、租约回执的事务。
+// isLocalBatchRecord 报告记录能否进入本地批量段：本地批量不跨越有外部效果、
+// 回执（含租约回执）或 Remote 写的事务。
 func isLocalBatchRecord(record coredata.CommitRecord) bool {
 	if len(record.Mutations) == 0 || len(record.Effects) != 0 || len(record.Receipts) != 0 {
 		return false
@@ -68,6 +71,8 @@ func saturatingMul(a, b int) int {
 	return a * b
 }
 
+// projectionRecordLogicalBytes 估算记录的逻辑字节数，用于回放读取与分段预算；
+// 固定开销是经验值，不是编码后的精确大小。
 func projectionRecordLogicalBytes(record coredata.CommitRecord) int {
 	n := 64
 	n = saturatingAdd(n, len(record.Handler))
@@ -103,6 +108,8 @@ func projectionRecordLogicalBytes(record coredata.CommitRecord) int {
 	return n
 }
 
+// planProjectionSegments 把一轮回放的记录按顺序切成投影段：特殊记录单独成段，
+// 连续的本地记录按条数与字节上限合批，首条超限记录允许独占一段。
 func planProjectionSegments(records []coredata.CommitRecord, fences []corenest.CommitFence, maxRecords, maxBytes int) ([]projectionSegment, error) {
 	if len(records) != len(fences) {
 		return nil, errors.New("dataengine: records and fences length mismatch")

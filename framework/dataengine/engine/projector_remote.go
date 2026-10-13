@@ -31,12 +31,12 @@ func remoteProjectionWindow(segments []projectionSegment, maxRecords, maxBytes i
 		}
 		valid := true
 		for _, mutation := range record.Mutations {
-			c := mutation.Remote
-			if c == nil || c.TransactionID != entity.RemoteTransactionID(record.ID) || c.Validate() != nil {
+			commit := mutation.Remote
+			if commit == nil || commit.TransactionID != entity.RemoteTransactionID(record.ID) || commit.Validate() != nil {
 				valid = false
 				break
 			}
-			if _, exists := entities[c.EntityID]; exists {
+			if _, exists := entities[commit.EntityID]; exists {
 				valid = false
 				break
 			}
@@ -58,6 +58,7 @@ func remoteProjectionWindow(segments []projectionSegment, maxRecords, maxBytes i
 	return count
 }
 
+// projectRemoteWindow 并发投影一个 Remote 窗口，返回连续成功的记录数。
 // 每条记录独立完成；空闲 worker 可继续处理本窗口的下一条独立记录。
 // 窗口受回放记录/字节预算限制，并在共享 Entity、事务身份或特殊内容之前截止。
 // 首次观察到失败后停止补位，等待已经发出的工作全部返回；只确认连续成功前缀。
