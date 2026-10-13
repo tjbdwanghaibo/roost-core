@@ -321,12 +321,14 @@ func fieldsHaveCfgTag(t reflect.Type) bool {
 	return false
 }
 
+// parseAutoSpec 从 V 的 cfg tag 推导自动表的主键、索引与字段规则：恰好一个 key 字段且类型等于 K；
+// 索引名不重复；规则只能挂在 JSON 可见的字段上。任何声明错误在注册时报出。
 func parseAutoSpec[K comparable, V any]() (*autoSpec[K, V], error) {
-	valueType := reflect.TypeOf((*V)(nil)).Elem()
+	valueType := reflect.TypeFor[V]()
 	if valueType.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("configdata: auto table value type %s must be a struct", valueType.String())
 	}
-	keyType := reflect.TypeOf((*K)(nil)).Elem()
+	keyType := reflect.TypeFor[K]()
 	if !autoScalarKind(keyType.Kind()) {
 		return nil, fmt.Errorf("configdata: auto table %s: key type %s must be an integer or string", valueType.String(), keyType.String())
 	}
@@ -351,63 +353,15 @@ func parseAutoSpec[K comparable, V any]() (*autoSpec[K, V], error) {
 		if !field.IsExported() {
 			return nil, fmt.Errorf("configdata: auto table %s: cfg tag on unexported field %s", valueType.String(), field.Name)
 		}
-		var indexName string
-		hasIndex, skipEmpty := false, false
-		rule := FieldRule{}
-		if name, ok := decodedJSONName(field); ok {
-			rule.Field = name
+		directives, err := parseCfgDirectives(valueType, field, tag, keyType, keyName)
+		if err != nil {
+			return nil, err
 		}
-		for _, directive := range strings.Split(tag, ",") {
-			directive = strings.TrimSpace(directive)
-			switch {
-			case directive == "key":
-				if keyPath != nil {
-					return nil, fmt.Errorf("configdata: auto table %s: multiple cfg:%q fields (%s and %s)", valueType.String(), "key", keyName, field.Name)
-				}
-				if field.Type != keyType {
-					return nil, fmt.Errorf("configdata: auto table %s: key field %s is %s, want %s", valueType.String(), field.Name, field.Type, keyType)
-				}
-				keyPath = entry.index
-				keyName = field.Name
-			case directive == "index" || strings.HasPrefix(directive, "index="):
-				name := strings.TrimPrefix(directive, "index")
-				name = strings.TrimPrefix(name, "=")
-				if strings.HasPrefix(directive, "index=") && name == "" {
-					return nil, fmt.Errorf("configdata: auto table %s: field %s: empty index name", valueType.String(), field.Name)
-				}
-				if name == "" {
-					name = jsonFieldName(field)
-				}
-				indexName = name
-				hasIndex = true
-			case directive == "skipempty":
-				skipEmpty = true
-			case directive == "required":
-				rule.Required = true
-			case directive == "unique":
-				rule.Unique = true
-			case strings.HasPrefix(directive, "min="):
-				rule.Min = strings.TrimPrefix(directive, "min=")
-				if rule.Min == "" {
-					return nil, fmt.Errorf("configdata: auto table %s: field %s: empty min", valueType.String(), field.Name)
-				}
-			case strings.HasPrefix(directive, "enum="):
-				rule.Enum = strings.Split(strings.TrimPrefix(directive, "enum="), "|")
-			case strings.HasPrefix(directive, "ref="):
-				if rule.Ref != "" {
-					return nil, fmt.Errorf("configdata: auto table %s: field %s: multiple ref directives", valueType.String(), field.Name)
-				}
-				rule.Ref = strings.TrimPrefix(directive, "ref=")
-				if rule.Ref == "" {
-					return nil, fmt.Errorf("configdata: auto table %s: field %s: empty ref target", valueType.String(), field.Name)
-				}
-				if !autoScalarKind(field.Type.Kind()) {
-					return nil, fmt.Errorf("configdata: auto table %s: ref field %s must be an integer or string, got %s", valueType.String(), field.Name, field.Type)
-				}
-			default:
-				return nil, fmt.Errorf("configdata: auto table %s: field %s: unknown cfg directive %q", valueType.String(), field.Name, directive)
-			}
+		if directives.key {
+			keyPath = entry.index
+			keyName = field.Name
 		}
+		indexName, hasIndex, skipEmpty, rule := directives.indexName, directives.hasIndex, directives.skipEmpty, directives.rule
 		if skipEmpty && !hasIndex {
 			return nil, fmt.Errorf("configdata: auto table %s: field %s: skipempty requires index", valueType.String(), field.Name)
 		}
@@ -448,6 +402,77 @@ func parseAutoSpec[K comparable, V any]() (*autoSpec[K, V], error) {
 		return reflect.ValueOf(v).FieldByIndex(keyPath).Interface().(K)
 	}
 	return spec, nil
+}
+
+// cfgDirectives 是一个字段 cfg tag 解析出的指令。
+type cfgDirectives struct {
+	key       bool
+	indexName string
+	hasIndex  bool
+	skipEmpty bool
+	rule      FieldRule
+}
+
+// parseCfgDirectives 按逗号顺序解析一个字段的 cfg tag，遇到第一个声明错误即返回：key 已由
+// priorKey 字段（为空表示还没有）或本 tag 声明过、key 字段类型不是 keyType、空的 index 名 / min /
+// ref 目标、重复 ref、非标量 ref 字段、未知指令。
+func parseCfgDirectives(valueType reflect.Type, field reflect.StructField, tag string, keyType reflect.Type, priorKey string) (cfgDirectives, error) {
+	var out cfgDirectives
+	if name, ok := decodedJSONName(field); ok {
+		out.rule.Field = name
+	}
+	for _, directive := range strings.Split(tag, ",") {
+		directive = strings.TrimSpace(directive)
+		switch {
+		case directive == "key":
+			if priorKey != "" {
+				return out, fmt.Errorf("configdata: auto table %s: multiple cfg:%q fields (%s and %s)", valueType.String(), "key", priorKey, field.Name)
+			}
+			if field.Type != keyType {
+				return out, fmt.Errorf("configdata: auto table %s: key field %s is %s, want %s", valueType.String(), field.Name, field.Type, keyType)
+			}
+			out.key = true
+			priorKey = field.Name
+		case directive == "index" || strings.HasPrefix(directive, "index="):
+			name := strings.TrimPrefix(directive, "index")
+			name = strings.TrimPrefix(name, "=")
+			if strings.HasPrefix(directive, "index=") && name == "" {
+				return out, fmt.Errorf("configdata: auto table %s: field %s: empty index name", valueType.String(), field.Name)
+			}
+			if name == "" {
+				name = jsonFieldName(field)
+			}
+			out.indexName = name
+			out.hasIndex = true
+		case directive == "skipempty":
+			out.skipEmpty = true
+		case directive == "required":
+			out.rule.Required = true
+		case directive == "unique":
+			out.rule.Unique = true
+		case strings.HasPrefix(directive, "min="):
+			out.rule.Min = strings.TrimPrefix(directive, "min=")
+			if out.rule.Min == "" {
+				return out, fmt.Errorf("configdata: auto table %s: field %s: empty min", valueType.String(), field.Name)
+			}
+		case strings.HasPrefix(directive, "enum="):
+			out.rule.Enum = strings.Split(strings.TrimPrefix(directive, "enum="), "|")
+		case strings.HasPrefix(directive, "ref="):
+			if out.rule.Ref != "" {
+				return out, fmt.Errorf("configdata: auto table %s: field %s: multiple ref directives", valueType.String(), field.Name)
+			}
+			out.rule.Ref = strings.TrimPrefix(directive, "ref=")
+			if out.rule.Ref == "" {
+				return out, fmt.Errorf("configdata: auto table %s: field %s: empty ref target", valueType.String(), field.Name)
+			}
+			if !autoScalarKind(field.Type.Kind()) {
+				return out, fmt.Errorf("configdata: auto table %s: ref field %s must be an integer or string, got %s", valueType.String(), field.Name, field.Type)
+			}
+		default:
+			return out, fmt.Errorf("configdata: auto table %s: field %s: unknown cfg directive %q", valueType.String(), field.Name, directive)
+		}
+	}
+	return out, nil
 }
 
 // refTypeCompatible allows only identical types or named/unnamed pairs of

@@ -7,7 +7,7 @@
 // 一致，只差大小写的键被拒绝，不交给 encoding/json 的大小写不敏感匹配。
 //
 // 规则在原始 JSON 行上检查，所以“缺列”和“零值”分得清——configdata 只拿类型化
-// 的行时做不到，这正是 required 以前在运行时查不了的原因（RR-20261005-NC-75）。
+// 的行时做不到，所以 required 只能在这一层检查。
 // Ref 需要目标表，由加载层在全部表加载后用类型化的表检查，Check 跳过它。
 //
 // 本包只依赖标准库：codegen 层不得 import 运行时，这里是根包边界测试里唯一的
@@ -264,7 +264,7 @@ func check(table string, rows []map[string]json.RawMessage, rules []Rule, key fu
 			}
 			if len(rule.Enum) > 0 {
 				canonical, ok := scalar(value)
-				if !ok || !contains(rule.Enum, canonical) {
+				if !ok || !slices.Contains(rule.Enum, canonical) {
 					return fail("enum", fmt.Sprintf("value %s is not one of [%s]", Canonical(value), strings.Join(rule.Enum, " ")))
 				}
 			}
@@ -342,13 +342,4 @@ func numberOf(value json.RawMessage) (float64, bool) {
 	}
 	f, err := strconv.ParseFloat(string(trimmed), 64)
 	return f, err == nil
-}
-
-func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
