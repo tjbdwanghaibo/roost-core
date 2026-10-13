@@ -229,7 +229,7 @@ func TestLoadedOnlyLookupNeverStartsOrJoinsColdLoad(t *testing.T) {
 }
 
 // ManagerAccess.IsLoaded 是 Nest 准入的冷目标判定，只读内存：已加载 → true；未加载且有 loader → false；没有 loader → true
-// （慢阶段也读不到）。不调用 loader、不加入在途加载、不 Touch。
+// （I/O 准备阶段也读不到）。不调用 loader、不加入在途加载、不 Touch。
 func TestManagerAccessIsLoadedNeverLoads(t *testing.T) {
 	manager := NewEntityManager()
 	access := NewManagerAccess(manager)
@@ -286,7 +286,7 @@ func TestFastWorkerColdMissReturnsErrorInsteadOfPanicking(t *testing.T) {
 	for _, detached := range []bool{false, true} {
 		ctx := WithLoadedEntitiesOnly(context.Background())
 		if detached {
-			// 保存的 Background ctx 不带加载约束，快 worker 标记本身也必须生效。
+			// 保存的 Background ctx 不带加载约束，业务 worker 标记本身也必须生效。
 			ctx = context.Background()
 		}
 		checkColdMiss(t, "Get", func() error {

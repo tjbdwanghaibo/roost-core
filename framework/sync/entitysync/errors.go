@@ -59,7 +59,7 @@ var (
 // SessionOpenRetryable 报告 OpenSession / OpenHeldSession 的错误是否只是“这次没有创建会话，
 // 稍后重试即可”：ErrSessionClosing（同 ID 的旧 lifetime 仍在传输层退出）或 ErrSessionOpening
 // （同 ID 的另一次打开尚未确认）。其他错误（会话上限、Manager 关闭、传输拒绝）重试无益。
-// 重试的等待由调用方安排在快池之外。
+// 重试的等待由调用方安排在业务池之外。
 func SessionOpenRetryable(err error) bool {
 	return errors.Is(err, ErrSessionClosing) || errors.Is(err, ErrSessionOpening)
 }

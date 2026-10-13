@@ -11,9 +11,9 @@ import (
 )
 
 // BindLocalExecutor 由 Nest 构造时调用（nest.LocalExecutorBinder，与 DataEngine 的驱逐同一接线）：
-// run 是 NestMgr.RunLocal，把需要 Entity 锁或业务回调的步骤放进快池续行通道并等待。
-// 后台收尾（finalizer）不属于任何 Nest 消息，拿不到消息的快池续行，回滚、仅内存卸载与提交后回调都经它
-// 回到快池。未绑定（独立使用 remoteentity、没有 Nest）时 entity.RunLocal 就地执行。
+// run 是 NestMgr.RunLocal，把需要 Entity 锁或业务回调的步骤放进业务池续行通道并等待。
+// 后台收尾（finalizer）不属于任何 Nest 消息，拿不到消息的业务池续行，回滚、仅内存卸载与提交后回调都经它
+// 回到业务池。未绑定（独立使用 remoteentity、没有 Nest）时 entity.RunLocal 就地执行。
 func (m *Manager) BindLocalExecutor(run func(func()) error) {
 	if m == nil || run == nil {
 		return
@@ -22,7 +22,7 @@ func (m *Manager) BindLocalExecutor(run func(func()) error) {
 }
 
 // localContext 给后台收尾的 ctx 附上 Nest 的本地执行入口；未绑定时原样返回（RunLocal 就地执行）。
-// 只用于不属于任何消息的收尾路径：消息收尾（batch.Close/Commit）的 ctx 已带消息自己的快池续行。
+// 只用于不属于任何消息的收尾路径：消息收尾（batch.Close/Commit）的 ctx 已带消息自己的业务池续行。
 func (m *Manager) localContext(ctx context.Context) context.Context {
 	if run := m.localExecutor.Load(); run != nil {
 		return entity.WithLocalExecutor(ctx, *run)
@@ -117,7 +117,7 @@ func clearRejectedReloadPending(entries []*remoteWriteEntry) {
 	}
 }
 
-// unloadRemoteEntityOnce 把卸载里的 panic（业务 OnDestroy 等）转成错误，不让它打穿 finalizer 或快池续行。
+// unloadRemoteEntityOnce 把卸载里的 panic（业务 OnDestroy 等）转成错误，不让它打穿 finalizer 或业务池续行。
 func unloadRemoteEntityOnce(ctx context.Context, unloader entity.IRemoteEntityUnloader, stale entity.IThreadSafeRemoteEntity) (err error) {
 	defer func() {
 		if r := recover(); r != nil {

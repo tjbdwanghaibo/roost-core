@@ -57,7 +57,7 @@ func TestGeneratedRemoteStrictConfirmDeadlineDefersPostCommit(t *testing.T) {
 	gate.open()
 	eventually(t, "the deferred AfterCommit runs once the projector commits", func() bool { return rig.afterCommit.Load() == 2 })
 	if onFast := rig.afterCommitOnFast.Load(); onFast != 2 {
-		t.Fatalf("AfterCommit on a fast worker %d/2 times", onFast)
+		t.Fatalf("AfterCommit on a business worker %d/2 times", onFast)
 	}
 	if got := rig.flushUntil(t, id, "the Sync release after the durable commit"); got[len(got)-1].balance != 2 {
 		t.Fatalf("frames after the durable commit=%v", got)

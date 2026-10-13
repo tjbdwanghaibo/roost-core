@@ -117,7 +117,7 @@ func TestHandlerCreateCrossOrderResolvesWithoutDeadlock(t *testing.T) {
 			t.Fatalf("unrelated memory request failed: %v", r.err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatalf("unrelated request did not finish within 2s: fast workers are parked on created-entity locks (AB/BA on x=%d y=%d); stats=%+v", x, y, mgr.Stats().Queue.Short)
+		t.Fatalf("unrelated request did not finish within 2s: business workers are parked on created-entity locks (AB/BA on x=%d y=%d); stats=%+v", x, y, mgr.Stats().Queue.Short)
 	}
 	results := map[string]requestResult{}
 	for len(results) < 2 {
@@ -157,7 +157,7 @@ func TestHandlerCreateCrossOrderResolvesWithoutDeadlock(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	if running := mgr.Stats().Queue.Short.Running; running != 0 {
-		t.Fatalf("fast workers still running 1s after both requests returned: %d", running)
+		t.Fatalf("business workers still running 1s after both requests returned: %d", running)
 	}
 }
 
@@ -326,7 +326,7 @@ func TestSameIDCreateDoesNotOccupyShortPool(t *testing.T) {
 			}
 			_ = mgr.Shutdown(context.Background())
 			if blocked {
-				t.Fatalf("same-id Create occupied all %d fast workers while the creator's strict commit was held (follower attempts=%d)", workers, attempts.Load())
+				t.Fatalf("same-id Create occupied all %d business workers while the creator's strict commit was held (follower attempts=%d)", workers, attempts.Load())
 			}
 			if r := results["A"]; r.err != nil || r.ret != "created" {
 				t.Fatalf("A: want created, got ret=%v err=%v", r.ret, r.err)

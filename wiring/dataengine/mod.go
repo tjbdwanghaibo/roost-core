@@ -360,7 +360,7 @@ func (mod *Mod) Runtime() *engine.Runtime {
 // 是跨进程交出实体所有权前的屏障：另一进程接手时只从 Mongo
 // 读取，本进程已确认但未投影的事务不会被它看到。只跟踪本进程的在途记录；
 // 投影失败、Runtime 未就绪或 WAL 不健康都返回错误，调用方应保留所有权并重试。
-// 会阻塞，只能在慢路径或独立 goroutine 调用，快 worker 上调用会 fail-fast。
+// 会阻塞，只能在 io 池或独立 goroutine 调用，业务 worker 上调用会 fail-fast。
 func (mod *Mod) WaitEntityProjection(ctx context.Context, entityID int64) error {
 	runtime := mod.Runtime()
 	if runtime == nil {
@@ -428,8 +428,8 @@ func (mod *Mod) TransactionReleased(id corenest.TransactionID) {
 	}
 }
 
-// BindLocalExecutor 实现 corenest.LocalExecutorBinder：Nest 在构造时交来快池执行入口，
-// DataEngine 用它在快池持锁驱逐被跳过的原生步骤留下的实体。
+// BindLocalExecutor 实现 corenest.LocalExecutorBinder：Nest 在构造时交来业务池执行入口，
+// DataEngine 用它在业务池持锁驱逐被跳过的原生步骤留下的实体。
 func (mod *Mod) BindLocalExecutor(run func(func()) error) {
 	if mod != nil && run != nil {
 		mod.localExecutor.Store(&run)

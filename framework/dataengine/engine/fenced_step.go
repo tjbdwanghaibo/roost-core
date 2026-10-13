@@ -144,8 +144,8 @@ type staleEviction struct {
 	entities []int64
 }
 
-// runEvictions 一次只处理一笔：驱逐通过快池续行执行，同时最多一个由 DataEngine 发起，
-// 队列空了就退出，不常驻 goroutine。它在快池之外，允许同步等待快池（nest.RunLocal 的契约）。
+// runEvictions 一次只处理一笔：驱逐通过业务池续行执行，同时最多一个由 DataEngine 发起，
+// 队列空了就退出，不常驻 goroutine。它在业务池之外，允许同步等待业务池（nest.RunLocal 的契约）。
 func (p *Projector) runEvictions() {
 	defer p.evictWG.Done()
 	for {
@@ -209,7 +209,7 @@ func (p *Projector) waitEvictions(ctx context.Context) error {
 	}
 }
 
-// BindLocalExecutor 由 Nest 构造时调用（corenest.LocalExecutorBinder），让驱逐在快池持锁执行。
+// BindLocalExecutor 由 Nest 构造时调用（corenest.LocalExecutorBinder），让驱逐在业务池持锁执行。
 // 未绑定时（独立使用 DataEngine、没有 Nest）按 entity.RunLocal 的约定就地执行。
 func (p *Projector) BindLocalExecutor(run func(func()) error) {
 	if p == nil || run == nil {
@@ -226,7 +226,7 @@ func (p *Projector) localRun() func(func()) error {
 }
 
 // evictStaleEntities 驱逐被跳过的原生步骤留下的常驻实体：不持久化，只是忘掉这份内存。
-// 驱逐在快池执行（EntityManager.Destroy 要取 Entity 锁，本 goroutine 不是快 worker）；
+// 驱逐在业务池执行（EntityManager.Destroy 要取 Entity 锁，本 goroutine 不是业务 worker）；
 // 只驱逐开始时看到的那个对象——期间若已被卸载并重新加载，新对象来自 Mongo，不含被跳过的效果。
 func (runtime *Runtime) evictStaleEntities(ctx context.Context, ids []int64) error {
 	var errs []error

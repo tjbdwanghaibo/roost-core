@@ -515,7 +515,7 @@ func (b *remoteWriteBatch) Commits() []entity.RemoteCommit {
 }
 
 // Commit 在实体锁释放后按持久级别收尾：Durability 0 直接写权威并等待发布确认；1 返回推测回执，由 finalizer 等投影；
-// 2/3 等投影器的结论。失败时等待结论的批次标为结果未知（交 finalizer），Durability 0 的明确拒绝在快池回滚并隔离。
+// 2/3 等投影器的结论。失败时等待结论的批次标为结果未知（交 finalizer），Durability 0 的明确拒绝在业务池回滚并隔离。
 func (b *remoteWriteBatch) Commit(ctx context.Context) ([]entity.RemoteCommitReceipt, error) {
 	fctx.AssertBlockingAllowed("remoteentity.remoteWriteBatch.Commit")
 	if b == nil || b.mgr == nil {
@@ -611,14 +611,14 @@ func waitedCommitError(err error) error {
 	return errors.Join(entity.ErrRemotePersistenceIndeterminate, err)
 }
 
-// Abort 中止批次：未定稿时只做标记；已定稿时在快池撤销本地的 Remote 提交并把事务登记为 Rejected。
+// Abort 中止批次：未定稿时只做标记；已定稿时在业务池撤销本地的 Remote 提交并把事务登记为 Rejected。
 // 已提交、结果未知或已关闭的批次不受影响。
 func (b *remoteWriteBatch) Abort(ctx context.Context, cause error) error {
 	if b == nil {
 		return nil
 	}
 	// 未定稿的批次没有本地状态要回滚（定稿失败已在 FinalizeLocked 内回滚），也没有登记事务：
-	// 就地标记 aborted，不投递快池续行。标记与定稿共用 b.mu，
+	// 就地标记 aborted，不投递业务池续行。标记与定稿共用 b.mu，
 	// 之后的 FinalizeLocked 会拒绝；写门与写许可仍由 Close 统一释放。
 	b.mu.Lock()
 	if !b.finalized {
@@ -725,7 +725,7 @@ func (b *remoteWriteBatch) Close(ctx context.Context) error {
 		b.reserved = false
 	}
 	if rejected {
-		// 明确拒绝已回滚并隔离；gate 释放后卸载持有被拒绝修改的旧实例（ctx 带消息的快池续行）。
+		// 明确拒绝已回滚并隔离；gate 释放后卸载持有被拒绝修改的旧实例（ctx 带消息的业务池续行）。
 		// 卸载失败交给 finalizer 重试（这一项不再持有任何资源）；finalizer 已停止时实例保持隔离。
 		unloadErr := b.mgr.unloadRejectedEntities(ctx, entries)
 		switch {

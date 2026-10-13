@@ -1,4 +1,4 @@
-// Remote 写批次：事务内变更与删除意图、提交 / 回滚 / 门的持有、步骤顺序与准入上限、未定稿时 Abort 不走快池。
+// Remote 写批次：事务内变更与删除意图、提交 / 回滚 / 门的持有、步骤顺序与准入上限、未定稿时 Abort 不走业务池。
 
 package remoteentity
 
@@ -837,12 +837,12 @@ func newRR44Manager(t *testing.T) (*Manager, *remoteTestLoader) {
 	return m, loader
 }
 
-// countingLocalExecutor 模拟慢阶段注入的快池执行器：每次调用就是一次快池续行。
+// countingLocalExecutor 模拟 I/O 准备阶段注入的业务池执行器：每次调用就是一次业务池续行。
 func countingLocalExecutor(hops *atomic.Int32) context.Context {
 	return entity.WithLocalExecutor(context.Background(), func(fn func()) error { hops.Add(1); fn(); return nil })
 }
 
-// Prepare 在慢阶段失败时没有任何已定稿的本地状态，Abort 不投递快池续行；已经取得的前序实体仍由 Close 释放。
+// Prepare 在 I/O 准备阶段失败时没有任何已定稿的本地状态，Abort 不投递业务池续行；已经取得的前序实体仍由 Close 释放。
 // 历史：RR-20260926-44。
 func TestPrepareRemoteWriteBatchFailureAbortsWithoutShortPoolHop(t *testing.T) {
 	m, loader := newRR44Manager(t)
@@ -856,7 +856,7 @@ func TestPrepareRemoteWriteBatchFailureAbortsWithoutShortPoolHop(t *testing.T) {
 		t.Fatal("prepare of a missing entity must fail")
 	}
 	if n := hops.Load(); n != 0 {
-		t.Fatalf("single-entity Prepare failure made %d fast-pool continuation(s); nothing was finalized", n)
+		t.Fatalf("single-entity Prepare failure made %d business-pool continuation(s); nothing was finalized", n)
 	}
 
 	// 多实体：前一个实体已取得写权限，后一个失败。
@@ -864,7 +864,7 @@ func TestPrepareRemoteWriteBatchFailureAbortsWithoutShortPoolHop(t *testing.T) {
 		t.Fatal("prepare with a missing entity must fail")
 	}
 	if n := hops.Load(); n != 0 {
-		t.Fatalf("multi-entity Prepare failure made %d fast-pool continuation(s); nothing was finalized", n)
+		t.Fatalf("multi-entity Prepare failure made %d business-pool continuation(s); nothing was finalized", n)
 	}
 	// 失败路径的唯一收尾（Close）必须释放前序实体的写门与写许可。
 	next, err := m.PrepareRemoteWriteBatch(context.Background(), []int64{present.GUId()})
@@ -878,7 +878,7 @@ func TestPrepareRemoteWriteBatchFailureAbortsWithoutShortPoolHop(t *testing.T) {
 	}
 }
 
-// 未定稿的批次（handler 在定稿前失败）Abort 就地置 aborted，不走快池；之后不能再定稿，Close 仍释放。
+// 未定稿的批次（handler 在定稿前失败）Abort 就地置 aborted，不走业务池；之后不能再定稿，Close 仍释放。
 func TestRemoteWriteBatchAbortBeforeFinalizeStaysInPlace(t *testing.T) {
 	m, loader := newRR44Manager(t)
 	live := newTestRemoteEntity(9303, 1, rr44Kind)
@@ -892,7 +892,7 @@ func TestRemoteWriteBatchAbortBeforeFinalizeStaysInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n := hops.Load(); n != 0 {
-		t.Fatalf("Abort of an unfinalized batch made %d fast-pool continuation(s)", n)
+		t.Fatalf("Abort of an unfinalized batch made %d business-pool continuation(s)", n)
 	}
 	live.dirty.set(true)
 	if err := batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(remoteTestTxID(44), "probe", "", true, 0)); !errors.Is(err, entity.ErrRemoteCommitNotFinalized) {
@@ -909,7 +909,7 @@ func TestRemoteWriteBatchAbortBeforeFinalizeStaysInPlace(t *testing.T) {
 	}
 }
 
-// 负对照：已定稿的批次有本地状态要回滚，Abort 仍经本地执行器（快池）执行回滚。
+// 负对照：已定稿的批次有本地状态要回滚，Abort 仍经本地执行器（业务池）执行回滚。
 func TestRemoteWriteBatchAbortAfterFinalizeRollsBackOnLocalExecutor(t *testing.T) {
 	m, loader := newRR44Manager(t)
 	live := newTestRemoteEntity(9304, 1, rr44Kind)

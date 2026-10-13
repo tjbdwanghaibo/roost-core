@@ -466,7 +466,7 @@ type RemoteWriteBatch interface {
 // 本地事务已持久提交、而 Remote Commit 返回错误（确认超时 / 结果未知 / 明确拒绝）时，Nest 在 Close 之前
 // 把提交后工作（Sync Confirm、AfterCommit）交给批次：返回 true 表示批次接手，fn 在拿到持久结论之后
 // 至多调用一次——committed=true 为 Applied/Committed，false 为持久拒绝（此时批次已回滚、隔离、释放并
-// 卸载了持有被拒绝修改的实例）。调用只经 NestMgr.RunLocal 在快池进行；Nest 未启动、停机中或已 fence 而拒绝投递时
+// 卸载了持有被拒绝修改的实例）。调用只经 NestMgr.RunLocal 在业务池进行；Nest 未启动、停机中或已 fence 而拒绝投递时
 // 不调用（不在后台 goroutine 上执行业务回调，Sync 门保持冻结，计数告警）。停机排空拿不到结论时同样不调用。
 // 返回 false 表示批次不会再有持久结论（调用方保持原状，不得自行 Confirm）。
 type RemoteOutcomeDeferrer interface {

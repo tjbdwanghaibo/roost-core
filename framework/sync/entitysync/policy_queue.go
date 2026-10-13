@@ -283,7 +283,7 @@ func (m *Manager) deliverResubmits() {
 // CloseSession / 传输失败关闭会话、业务 Unregister 时 Manager 丢掉订阅，但政策自己的簿记（Direct 的绑定表）不知道，
 // 只会随历史绑定数增长。这两个位置（dropSession、Unregister）本来就逐条处理被丢掉的订阅：在同一把 subj.mu 内顺手记下
 // 带 Released 回调的来源，排进 releases，由下一次政策阶段交付——不在调用方路径上回调政策（Unregister 可能在 Nest
-// 快 worker 上、持有实体锁时被调用，也可能在政策持锁时被调用），也不为每次通知起 goroutine。releases 与撤销记录
+// 业务 worker 上、持有实体锁时被调用，也可能在政策持锁时被调用），也不为每次通知起 goroutine。releases 与撤销记录
 // 共用叶子锁 resubmitMu，releaseEntries 让政策阶段在没有通知时不加锁。
 
 // releasedLocked 追加 sources 里带 Released 回调的来源对 (session, subject) 的释放通知。调用方持有 subj.mu。

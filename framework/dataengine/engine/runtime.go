@@ -195,7 +195,7 @@ func (runtime *Runtime) stop(ctx context.Context, drain bool) error {
 
 var _ coredata.Store = (*MongoStore)(nil)
 
-// WaitEntityProjection 是冷加载前的实体级可见性屏障；调用者在慢阶段等待。
+// WaitEntityProjection 是冷加载前的实体级可见性屏障；调用者在 I/O 准备阶段等待。
 func (runtime *Runtime) WaitEntityProjection(ctx context.Context, id int64) error {
 	if !runtime.Ready() {
 		return coredata.ErrRecoveryIncomplete

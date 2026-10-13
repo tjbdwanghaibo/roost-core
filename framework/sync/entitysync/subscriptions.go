@@ -18,8 +18,8 @@ import (
 //   - ErrSessionOpening：同 ID 的另一次 OpenSession 正在等待传输确认。重试即可得到
 //     与那次结果一致的状态。
 //
-// 本方法不等待旧发送退出，也不等待另一次打开完成，可在快池内调用；需要等待的重试
-// 由调用方安排在慢阶段或下一次调度。
+// 本方法不等待旧发送退出，也不等待另一次打开完成，可在业务池内调用；需要等待的重试
+// 由调用方安排在 I/O 准备阶段或下一次调度。
 func (m *Manager) OpenSession(id SessionID) error {
 	if m == nil {
 		return ErrManagerClosed

@@ -52,7 +52,7 @@ func TestTCPSenderRejectsFastWorkerBeforeResolverOrSocket(t *testing.T) {
 		defer release()
 		for _, send := range []func(context.Context, nettransport.SessionID, []byte) error{sender.SendDatagram, sender.SendReliable} {
 			if err := send(context.Background(), 7, nil); !errors.Is(err, fctx.ErrBlockingInBusinessWorker) {
-				t.Errorf("fast worker accepted: %v", err)
+				t.Errorf("business worker accepted: %v", err)
 			}
 		}
 	}()

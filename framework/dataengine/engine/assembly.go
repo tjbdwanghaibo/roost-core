@@ -58,7 +58,7 @@ type AssemblyDeps struct {
 	RemoteStore   RemoteProjectionStore
 	RemoteManager entity.IRemoteEntityManager
 	OnFatal       func(error)
-	// LocalExecutor 把需要 Entity 锁的框架步骤交给快池（wiring 转发 Nest 绑定的 RunLocal）。
+	// LocalExecutor 把需要 Entity 锁的框架步骤交给业务池（wiring 转发 Nest 绑定的 RunLocal）。
 	// 为 nil 时驱逐等本地步骤按 entity.RunLocal 的约定就地执行。
 	LocalExecutor func(func()) error
 }

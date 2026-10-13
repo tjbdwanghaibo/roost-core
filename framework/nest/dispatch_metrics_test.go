@@ -195,9 +195,9 @@ func TestTheSlowRerouteSeriesGoesWithItsDispatcher(t *testing.T) {
 		}
 		return ch
 	}
-	// The one fast worker is held, so the request is admitted to the fast
+	// The one business worker is held, so the request is admitted to the business
 	// lane while its target is loaded; evicting it before the worker frees up
-	// makes the first fast run find it cold and hand the job to the slow lane.
+	// makes the first business-pool run find it cold and hand the job to the io lane.
 	blocked := send("block", blockerID)
 	stagedSignal(t, entered)
 	rerouted := send("touch", targetID)

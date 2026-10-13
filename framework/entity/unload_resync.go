@@ -18,12 +18,12 @@ import (
 // 可能是从未成为权威的内容（Durability 1 推测性确认、原生步骤准入时已外发）。所以卸载时若该 subject 仍有订阅者，
 // 框架主动从权威重载实体并 Rebind 全量；重载失败退回 remove：
 //
-//	Unload（快池持锁，或未装配 Nest 时就地）
+//	Unload（业务池持锁，或未装配 Nest 时就地）
 //	  └─ schedule：只登记（按实体 ID 去重、有界队列），不做 I/O、不等待
-//	重载 worker（快池之外的后台 goroutine，最多 Workers 个，队列空即退出）
+//	重载 worker（业务池之外的后台 goroutine，最多 Workers 个，队列空即退出）
 //	  ├─ ManagerAccess.Get：与业务冷加载同一条共享加载（与调用方 ctx 解耦、受框架加载上限
 //	  │    与 loader 注销约束；正式 EntityRepository 先等该实体的在途投影/驱逐），发布经 Nest 绑定的
-//	  │    BindLocalExecutor（NestMgr.RunLocal）回快池，OnEntityLoaded → Rebind 走既有正式路径
+//	  │    BindLocalExecutor（NestMgr.RunLocal）回业务池，OnEntityLoaded → Rebind 走既有正式路径
 //	  ├─ 再 Rebind 一次（同一状态是空操作；覆盖不经 EntityRepository 的 loader）
 //	  └─ 权威没有该实体 / 重载后仍不能服务订阅者 / 有界重试用尽 → RetractUnloadedSubject（订阅者收到 remove）
 //
@@ -191,7 +191,7 @@ func (r *unloadResync) publishBacklogLocked() {
 	unloadResyncBacklog.mu.Unlock()
 }
 
-// schedule 在 Unload 里调用（快池）：只查订阅、登记、按需启动 worker，不做 I/O、不等待。
+// schedule 在 Unload 里调用（业务池）：只查订阅、登记、按需启动 worker，不做 I/O、不等待。
 func (r *unloadResync) schedule(id int64) {
 	if !r.target.SubjectAwaitsReload(id) {
 		return

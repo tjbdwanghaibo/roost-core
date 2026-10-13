@@ -36,7 +36,7 @@ type IRemoteEntityLocalLookup interface {
 // 不删持久数据，下一次访问经同一 loader 从权威重新加载。Remote 事务被持久拒绝后，实例内存
 // 仍留着被拒绝的修改（生成实体的 RollbackRemoteCommit 不恢复前像），框架据此换代。
 // 与 DataEngine 驱逐同一语义，正式实现为 ManagerAccess.Unload。调用方在本地执行入口
-// （Nest 快池，或未装配 Nest 时就地）调用；实现自行取得实体锁，不得阻塞等待 I/O。实例已不在内存或已被
+// （Nest 业务池，或未装配 Nest 时就地）调用；实现自行取得实体锁，不得阻塞等待 I/O。实例已不在内存或已被
 // 别的实例替换时返回 nil。
 type IRemoteEntityUnloader interface {
 	UnloadRemoteEntity(context.Context, IThreadSafeRemoteEntity) error

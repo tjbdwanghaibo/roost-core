@@ -397,7 +397,7 @@ func (e *EntityGuard) hold(id int64, ent, stale IThreadSafeEntity) {
 // 新实体的锁组高于本 Guard 已持有的全部锁组时可以等待——与 Cast 一样是按全序的有序等待，不会成环，属于
 // Guard/本地锁豁免；否则等待可能与持有者成环（交叉创建、创建后再 Cast 更高锁组），只 try-lock，被占用时
 // 由 capturer 给出交给业务的错误（可回滚事务整条回滚后重新准入；不能回滚的 handler 不重排），
-// 不在快 worker 上等待。
+// 不在业务 worker 上等待。
 // Nest 之外（Create 自建的短作用域、独立 WithGuardScope）沿用原来的等待取锁。
 func (e *EntityGuard) lockCreated(ent IThreadSafeEntity, capturer CreatedEntityCapturer) error {
 	if capturer != nil && !e.mayLockEntity(ent, e.maxLockedGroup()) {

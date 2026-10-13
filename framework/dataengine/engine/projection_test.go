@@ -269,7 +269,7 @@ func TestEntityProjectionBarrierTracksAllDAOsAndReleasesOnFailure(t *testing.T) 
 		t.Fatal("projection barrier leaked")
 	}
 
-	// 关闭释放：投影永远不会发生的等待方由 Close 唤醒，不能一直占着慢 worker。
+	// 关闭释放：投影永远不会发生的等待方由 Close 唤醒，不能一直占着 io worker。
 	next := localMultiRecord(2)
 	if err := p.Commit(context.Background(), next); err != nil {
 		t.Fatal(err)

@@ -47,7 +47,7 @@ type Config struct {
 	MaxConcurrentWrites   int
 	AsyncFinalizeCapacity int
 	AsyncFinalizeWorkers  int
-	// OutboxPublishWorkers 是唯一协调者内部发布独立事务的并发度，与Nest慢池和写额度无关。
+	// OutboxPublishWorkers 是唯一协调者内部发布独立事务的并发度，与Nestio 池和写额度无关。
 	// 零值取8，上限64；设为1可串行诊断。涉及同一Entity的事务按扫描顺序尝试。
 	OutboxPublishWorkers  int
 	TransactionTrackLimit int

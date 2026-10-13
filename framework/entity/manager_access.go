@@ -23,8 +23,8 @@ type ManagerAccess struct {
 	loaderID        uint64
 	loadConcurrency int
 	loadTimeout     time.Duration
-	// localExecutor 是 Nest 绑定的快池入口（NestMgr.RunLocal，经 LocalExecutorBinder）：领头调用方
-	// 离开后，共享加载经它把发布实体交回快池；卸载后重载也经它发布。
+	// localExecutor 是 Nest 绑定的业务池入口（NestMgr.RunLocal，经 LocalExecutorBinder）：领头调用方
+	// 离开后，共享加载经它把发布实体交回业务池；卸载后重载也经它发布。
 	localExecutor atomic.Pointer[func(func()) error]
 	flightMu      sync.Mutex
 	flights       map[int64]*entityLoadFlight
@@ -57,7 +57,7 @@ type entityLoadFlight struct {
 
 	// leaderMu 保护领头调用方的本地执行器交接：领头方仍在等待时，加载里的 RunLocal 走它自己
 	// ctx 上的执行器（Nest I/O 阶段即本条消息的业务续行）；领头方离开时置 leaderGone，
-	// 之后改走 ManagerAccess 绑定的快池入口。离开要等正在进行的续行结束——续行仍在使用领头方
+	// 之后改走 ManagerAccess 绑定的业务池入口。离开要等正在进行的续行结束——续行仍在使用领头方
 	// 的 Msg，Msg 在领头方返回后会被回收。
 	leaderMu   sync.Mutex
 	leaderRun  func(func()) error
@@ -66,7 +66,7 @@ type entityLoadFlight struct {
 
 	// leaderSteps / leaderAway：领头方在 Nest 之外、没有指定执行器、并且持有实体锁时非 nil。
 	// 它仍在等待时，加载里的本地步骤经 leaderSteps 交回领头方自己的 goroutine 执行——它已持有所需的实体锁，
-	// 可重入锁不阻塞；领头方离开时关闭 leaderAway，之后的步骤改走绑定的快池入口或就地执行。
+	// 可重入锁不阻塞；领头方离开时关闭 leaderAway，之后的步骤改走绑定的业务池入口或就地执行。
 	leaderSteps chan *leaderLocalStep
 	leaderAway  chan struct{}
 }
@@ -107,7 +107,7 @@ func (access *ManagerAccess) ConfigureLoadTimeout(timeout time.Duration) {
 }
 
 // BindLocalExecutor 实现 nest.LocalExecutorBinder：Nest 构造时把 NestMgr.RunLocal 交给作为
-// Getter 的 ManagerAccess。共享加载的领头调用方离开后，加载经它把实体发布交回快池；未绑定
+// Getter 的 ManagerAccess。共享加载的领头调用方离开后，加载经它把实体发布交回业务池；未绑定
 // （没有 Nest）时就地执行，与独立使用 Entity 时的 RunLocal 相同。
 func (access *ManagerAccess) BindLocalExecutor(run func(func()) error) {
 	if access == nil || run == nil {
@@ -258,7 +258,7 @@ func (access *ManagerAccess) IsLoaded(id int64) bool {
 
 // coldLoadInLogicError 是快阶段冷缺失的唯一答复：它发生在任何 I/O、加载 goroutine 和 singleflight 等待之前，本身
 // 不阻塞，所以返回可 errors.Is 判别的 ErrColdLoadInLogic，让业务按“目标未加载”降级，而不是 panic；fail-fast 只留给
-// 真正会等待的入口（Repository 冷加载、投影等待、Remote 准备等）。在快 worker 上额外包裹
+// 真正会等待的入口（Repository 冷加载、投影等待、Remote 准备等）。在业务 worker 上额外包裹
 // fctx.ErrBlockingInBusinessWorker，便于定位入口与 handler。
 func coldLoadInLogicError(operation string, id int64) error {
 	if err := fctx.BlockingError(operation); err != nil {
@@ -310,7 +310,7 @@ func (access *ManagerAccess) loadEntityShared(ctx context.Context, fullID int64,
 	}
 
 	// 只有领头方接收交回的本地步骤；nil channel 的分支永不就绪。领头方执行步骤期间不看 ctx，
-	// 所以它按自己的 ctx 离开最多晚一个本地步骤（与 Nest 领头方等快续行结束相同）。
+	// 所以它按自己的 ctx 离开最多晚一个本地步骤（与 Nest 领头方等业务池续行结束相同）。
 	var steps chan *leaderLocalStep
 	if !joined {
 		steps = flight.leaderSteps
@@ -342,7 +342,7 @@ func currentGoroutineHoldsEntityLocks() bool {
 	return scope != nil && scope.guard != nil && scope.guard.GuardedCount() > 0
 }
 
-// runEntityLoad 在自己的 goroutine 上执行一次共享加载并结束 flight。它不是快 worker：LoadEntity 里
+// runEntityLoad 在自己的 goroutine 上执行一次共享加载并结束 flight。它不是业务 worker：LoadEntity 里
 // 需要 Entity 锁的发布步骤经 flight.runLocal 交回本地执行池。fctx 请求数据（meta、trace）沿用领头方
 // 的快照，Base 换成解耦后的加载 ctx。
 func (access *ManagerAccess) runEntityLoad(leader context.Context, snapshot fctx.ContextSnapshot, fullID int64, kind EntityKind, binding entityLoaderBinding, flight *entityLoadFlight) {
@@ -390,16 +390,16 @@ func localExecutorOf(ctx context.Context) func(func()) error {
 }
 
 // runLocal 是共享加载 ctx 上的本地执行器。领头方仍在等待时：
-//   - 它指定了执行器（Nest 慢阶段的快续行）：沿用它，执行期间持有 leaderMu，领头方此时离开要等这一步结束；
+//   - 它指定了执行器（Nest I/O 准备阶段的业务池续行）：沿用它，执行期间持有 leaderMu，领头方此时离开要等这一步结束；
 //   - 它在 Nest 之外、持有实体锁（leaderSteps 非 nil）：把步骤交回领头方 goroutine 执行；
 //   - 其余（Nest 之外、不持锁）：就地执行。
 //
-// 领头方离开后改走 ManagerAccess 绑定的快池入口，未绑定时就地执行。
+// 领头方离开后改走 ManagerAccess 绑定的业务池入口，未绑定时就地执行。
 //
 // Nest 之外持锁的领头方不能“持 leaderMu 就地执行”：发布若要锁领头方正持有的实体，加载 goroutine 在发布里等那把锁，
 // 领头方在等加载；它的 ctx 到期后 leaderLeft 又要等 leaderMu——永久死锁，“领头方按自己的 ctx 离开”不再成立。交回
-// 领头方 goroutine 执行时可重入锁不阻塞，也不持 leaderMu 等待。领头方不会是快 worker（快阶段 Getter 不冷加载），
-// 在它的 goroutine 上执行本地步骤不属于快池内等待。
+// 领头方 goroutine 执行时可重入锁不阻塞，也不持 leaderMu 等待。领头方不会是业务 worker（业务池阶段的 Getter 不冷加载），
+// 在它的 goroutine 上执行本地步骤不属于业务池内等待。
 func (flight *entityLoadFlight) runLocal(access *ManagerAccess) func(func()) error {
 	return func(fn func()) error {
 		if flight.leaderSteps != nil {
@@ -668,10 +668,10 @@ func (access *ManagerAccess) Destroy(ctx context.Context, value IThreadSafeEntit
 // 从权威重新加载。实例已被卸载或已不是当前托管实例时返回 nil（幂等）。
 //
 // Sync：实例一离开 EntityManager 就关闭它的 SubjectSyncState（不等在途引用归零后的 ClearBase），被丢弃的内容
-// 不再捕获；订阅保持登记。若该 subject 仍有订阅者且已接上 ConfigureUnloadResync，框架在快池之外主动从权威
+// 不再捕获；订阅保持登记。若该 subject 仍有订阅者且已接上 ConfigureUnloadResync，框架在业务池之外主动从权威
 // 重载并 Rebind 全量，重载不了时退回 remove；这里只做登记，不做 I/O、不等待。未接线时
 // 订阅者保留原对象，直到实体经 kit 的 EntityRepository.OnEntityLoaded → Rebind 被重新加载。
-// 需要实体锁：调用方在本地执行入口（快池，或 Nest 未装配时就地）调用。
+// 需要实体锁：调用方在本地执行入口（业务池，或 Nest 未装配时就地）调用。
 func (access *ManagerAccess) Unload(ctx context.Context, value IThreadSafeEntity) error {
 	if access == nil || access.manager == nil {
 		return ErrEntityNotManaged

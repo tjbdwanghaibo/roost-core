@@ -57,7 +57,7 @@ type EntityRepository struct {
 }
 
 // OnEntityLoaded 注册在聚合从 Mongo 加载并发布之后调用的回调，与发布在同一次本地执行里
-// （Nest 慢阶段下即快池续行）。用途是让依附在旧对象上的协作者接上重载出来的新对象：
+// （Nest I/O 准备阶段下即业务池续行）。用途是让依附在旧对象上的协作者接上重载出来的新对象：
 // 被跳过的原生步骤驱逐实体后，Sync 用它把原订阅者重新绑定到新对象并强制全量。
 // 回调不能阻塞、不能做 I/O；返回的函数注销回调。
 func (repository *EntityRepository) OnEntityLoaded(hook func(entity.IThreadSafeEntity)) func() {
@@ -112,7 +112,7 @@ func NewEntityRepository(manager *entity.EntityManager, store coredata.Store, ga
 
 // LoadEntity 先复用已加载实体；冷加载等待恢复与投影屏障，完整聚合 schema 校验通过后才发布。
 // 同一实体共享首个调用者发起的加载；其他等待者取消只退出自身等待，不取消该次共享加载。
-// 冷加载包含 I/O，不允许从快池进入；初始化和发布经 RunLocal 返回本地执行阶段。
+// 冷加载包含 I/O，不允许从业务池进入；初始化和发布经 RunLocal 返回本地执行阶段。
 func (repository *EntityRepository) LoadEntity(ctx context.Context, id int64, kind entity.EntityKind) (entity.IThreadSafeEntity, error) {
 	if repository == nil || repository.manager == nil || repository.store == nil {
 		return nil, coredata.ErrStoreRequired
@@ -232,7 +232,7 @@ func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID in
 	}
 	var created entity.IThreadSafeEntity
 	var createErr error
-	// 冷加载 I/O 在慢池；初始化回调和发布 Entity 回到快池。
+	// 冷加载 I/O 在 io 池；初始化回调和发布 Entity 回到业务池。
 	dispatchErr := entity.RunLocal(ctx, func() {
 		if created, createErr = repository.manager.Create(param); createErr == nil {
 			repository.runLoadedHooks(created)

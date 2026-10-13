@@ -1,4 +1,4 @@
-// 业务池不阻塞：快池拒绝直接冷访问与自派发，慢池 handler 的 RunLocal 不等自己的池，RunLocal 入口的执行位置与生命周期。
+// 业务池不阻塞：业务池拒绝直接冷访问与自派发，io 池 handler 的 RunLocal 不等自己的池，RunLocal 入口的执行位置与生命周期。
 
 package nest
 
@@ -25,13 +25,13 @@ type stageLoader struct {
 func (l *stageLoader) LoadEntity(ctx context.Context, id int64, kind entity.EntityKind) (entity.IThreadSafeEntity, error) {
 	l.calls.Add(1)
 	if fctx.InShortWorker() {
-		return nil, errors.New("loader ran in fast worker")
+		return nil, errors.New("loader ran in business worker")
 	}
 	var value entity.IThreadSafeEntity
 	var createErr error
 	err := entity.RunLocal(ctx, func() {
 		if !fctx.InShortWorker() {
-			createErr = errors.New("publication did not run in fast worker")
+			createErr = errors.New("publication did not run in business worker")
 			return
 		}
 		value = newMockEntityWithKind(id, entity.ResolveEntityID(id).Category, kind)
@@ -257,7 +257,7 @@ func TestRunLocalExecutesOnTheShortPoolAndIsBoundToTheCommitter(t *testing.T) {
 	}
 	onFast := false
 	if err := committer.run(func() { onFast = fctx.InShortWorker() }); err != nil || !onFast {
-		t.Fatalf("RunLocal=%v on fast worker=%v", err, onFast)
+		t.Fatalf("RunLocal=%v on business worker=%v", err, onFast)
 	}
 	if err := mgr.RunLocal(context.Background(), func() { panic("injected") }); err == nil {
 		t.Fatal("a panicking task reported success")
@@ -284,7 +284,7 @@ func TestRunLocalFromAFastWorkerFailsFast(t *testing.T) {
 	}
 	defer mgr.Shutdown(context.Background())
 	if _, err := mgr.Request(context.Background(), NewHandlerName("self_run_local"), id, nil); !errors.Is(err, fctx.ErrBlockingInBusinessWorker) {
-		t.Fatalf("RunLocal on a fast worker=%v, want ErrBlockingInBusinessWorker", err)
+		t.Fatalf("RunLocal on a business worker=%v, want ErrBlockingInBusinessWorker", err)
 	}
 }
 

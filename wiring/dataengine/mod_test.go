@@ -170,7 +170,7 @@ func TestModPublishesEntityProjectionBarrier(t *testing.T) {
 	}
 }
 
-// DataEngine 驱逐被跳过的原生步骤留下的实体要在 Nest 快池持锁执行：Mod 作为 Nest 的 committer 接收 RunLocal 并转交给启动后
+// DataEngine 驱逐被跳过的原生步骤留下的实体要在 Nest 业务池持锁执行：Mod 作为 Nest 的 committer 接收 RunLocal 并转交给启动后
 // 才创建的 Projector，Nest 绑定前（启动恢复阶段）就地执行；重载回调在 Runtime 启动后才能注册。
 func TestModForwardsNestLocalExecutorAndReloadHook(t *testing.T) {
 	cfg := viper.New()
@@ -214,7 +214,7 @@ func TestModForwardsNestLocalExecutorAndReloadHook(t *testing.T) {
 	defer scheduler.Shutdown(context.Background())
 	onFast := false
 	if err := mod.runLocal(func() { onFast = fctx.InShortWorker() }); err != nil || !onFast {
-		t.Fatalf("bound local executor=%v on fast worker=%v", err, onFast)
+		t.Fatalf("bound local executor=%v on business worker=%v", err, onFast)
 	}
 }
 

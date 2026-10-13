@@ -15,7 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// ManagerAccess.Unload 之后若该 subject 仍有订阅者，框架在快池之外的重载 worker 上主动从权威重载实体并 Rebind 全量；权威没有该实体
+// ManagerAccess.Unload 之后若该 subject 仍有订阅者，框架在业务池之外的重载 worker 上主动从权威重载实体并 Rebind 全量；权威没有该实体
 // 或有界重试后仍失败时退回 remove；无订阅者不重载；并发访问共用一次加载；重载有界；停机取消。
 // 历史：RR-20260926-59。
 

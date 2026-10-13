@@ -99,7 +99,7 @@ func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreatePara
 			// 同 ID 的上一个实例正在撤销（revokeCreated）或销毁收尾——锁已释放、removing 标记要等持有者的 post-release
 			// 跑完才清除。这是另一个持有者尚未交还的暂时状态，与按锁序不能等待的锁冲突同类：交给 capturer 给出冲突错误
 			// （可回滚事务整条回滚后重新准入；不能回滚的 handler 不重排）。ErrEntityRemoved 不属于可重排类别，原样返回会让
-			// 交叉创建的冲突方把它当最终错误回复。不在快 worker 上等待收尾；Nest 之外（capturer 为 nil）仍返回
+			// 交叉创建的冲突方把它当最终错误回复。不在业务 worker 上等待收尾；Nest 之外（capturer 为 nil）仍返回
 			// ErrEntityRemoved，生成 GetOrCreate 自行有界重试。
 			return nil, fmt.Errorf("%w; previous instance of entity %d is still being removed", capturer.CreatedEntityLockBusy(value.ID()), value.ID())
 		}

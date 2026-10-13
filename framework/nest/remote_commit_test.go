@@ -531,7 +531,7 @@ func TestStrictRemoteConfirmTimeoutDefersPostCommitToDurableOutcome(t *testing.T
 				switch conclusion {
 				case "committed":
 					if n != 1 || onFast != 1 {
-						t.Fatalf("AfterCommit after durable commit: ran=%d onFast=%d, want exactly once on a fast worker", n, onFast)
+						t.Fatalf("AfterCommit after durable commit: ran=%d onFast=%d, want exactly once on a business worker", n, onFast)
 					}
 					if !e.Sync().SyncCommitReady() {
 						t.Fatal("Sync not confirmed after the durable commit")

@@ -701,7 +701,7 @@ func TestIsolatedInSlowPrepareOfLocalMessageDoesNotClaimIt(t *testing.T) {
 	_, err := mgr.Request(ctx, name, id, nil, SendOptionIO())
 
 	if !obs.inMessage || obs.inFast {
-		t.Fatalf("premise: the isolated call must run in the message's slow stage (in message=%v, fast worker=%v)", obs.inMessage, obs.inFast)
+		t.Fatalf("premise: the isolated call must run in the message's I/O preparation stage (in message=%v, business worker=%v)", obs.inMessage, obs.inFast)
 	}
 	if obs.err != nil || !obs.callRan || iso.count() != 1 {
 		t.Fatalf("local message: isolated err=%v ran=%v commits=%d, want it to run and commit once", obs.err, obs.callRan, iso.count())
@@ -750,7 +750,7 @@ func TestIsolatedInSlowPrepareOfRemoteMessageIsRefused(t *testing.T) {
 	}
 
 	if !obs.inMessage || obs.inFast {
-		t.Fatalf("premise: the isolated call must run in the message's slow stage (in message=%v, fast worker=%v)", obs.inMessage, obs.inFast)
+		t.Fatalf("premise: the isolated call must run in the message's I/O preparation stage (in message=%v, business worker=%v)", obs.inMessage, obs.inFast)
 	}
 	if !errors.Is(obs.err, ErrNestedTransactionInRemoteMessage) || obs.callRan || iso.count() != 0 {
 		t.Fatalf("Remote message: isolated err=%v ran=%v commits=%d, want ErrNestedTransactionInRemoteMessage with the body not executed", obs.err, obs.callRan, iso.count())

@@ -50,7 +50,7 @@ func TestPipelinedRemoteBatchLocalRecordIsFsyncedBeforeVisible(t *testing.T) {
 				}
 				started := make(chan confirmStart, 1)
 				beforeWait := func(f reloadFixture, commits []entity.RemoteCommit) {
-					// Remote 确认在慢阶段、本地锁释放之后开始：记下此刻本地记录是否已 fsync、实体锁是否已释放。
+					// Remote 确认在 I/O 准备阶段、本地锁释放之后开始：记下此刻本地记录是否已 fsync、实体锁是否已释放。
 					mu := live.GetMutex()
 					free := mu.TryLock()
 					if free {
@@ -237,7 +237,7 @@ func TestPipelinedRemoteOutcomeMatchesStrict(t *testing.T) {
 					}
 					f.assertReloadedFromAuthority(t, live) // 回滚、隔离、释放 gate、仅内存卸载，从权威重载，被拒修改没有写出
 					if n, off := live.rollbacks.Load(), live.rollbacksOffFast.Load(); n != 1 || off != 0 {
-						t.Fatalf("RollbackRemoteCommit ran %d time(s), %d off the Nest fast pool; want once on a fast worker", n, off)
+						t.Fatalf("RollbackRemoteCommit ran %d time(s), %d off the Nest business pool; want once on a business worker", n, off)
 					}
 					rec.waitDelivered(t, false)
 					select {
@@ -296,7 +296,7 @@ func waitAfterCommitOnFast(t *testing.T, afterCommit <-chan bool) {
 	select {
 	case onFast := <-afterCommit:
 		if !onFast {
-			t.Fatal("AfterCommit ran off the Nest fast pool")
+			t.Fatal("AfterCommit ran off the Nest business pool")
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("AfterCommit never ran after the durable commit")

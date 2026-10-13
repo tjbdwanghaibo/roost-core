@@ -318,7 +318,7 @@ type reloadableFullDocEntity struct {
 	destroyedOnFast atomic.Bool
 	// duringDestroy 在 OnDestroy 开头调用（实例已离开索引、EntityManager 仍把该 ID 记为 removing），供回归停在卸载过程中。
 	duringDestroy func()
-	// rollbacks / rollbacksOffFast 记录 RollbackRemoteCommit 的调用次数与其中不在快 worker 上的次数（OPEN-ITEMS B26）。
+	// rollbacks / rollbacksOffFast 记录 RollbackRemoteCommit 的调用次数与其中不在业务 worker 上的次数（OPEN-ITEMS B26）。
 	rollbacks, rollbacksOffFast atomic.Int32
 }
 
@@ -592,7 +592,7 @@ func TestRejectedStrictWriteReloadsFromAuthority(t *testing.T) {
 }
 
 // 正式装配：Remote Manager 交给 Nest，NewEngine 把 NestMgr.RunLocal 绑定给它（nest.LocalExecutorBinder，与 DataEngine
-// 驱逐同一接线）。finalizer 拿到持久拒绝后，仅内存卸载在 Nest 快池执行（不在 finalizer goroutine 上取实体锁）。
+// 驱逐同一接线）。finalizer 拿到持久拒绝后，仅内存卸载在 Nest 业务池执行（不在 finalizer goroutine 上取实体锁）。
 // Sync 与 DataEngine 驱逐同一规则：卸载关闭旧同步状态（被拒绝的内容不交付、也不发 remove，订阅保持），
 // 重载后的实例重新接上（kit 在 OnEntityLoaded 上调 Rebind；这里用等价的 Register 路径）时原订阅者收到全量。
 func TestRejectedWriteUnloadsOnNestShortPoolAndRebindsSync(t *testing.T) {
@@ -646,7 +646,7 @@ func TestRejectedWriteUnloadsOnNestShortPoolAndRebindsSync(t *testing.T) {
 	}
 	f.assertReloadedFromAuthority(t, live)
 	if !live.destroyedOnFast.Load() {
-		t.Fatal("rejected instance was unloaded outside the Nest fast pool")
+		t.Fatal("rejected instance was unloaded outside the Nest business pool")
 	}
 	if err = syncMgr.Flush(context.Background()); err != nil {
 		t.Fatal(err)
@@ -744,14 +744,14 @@ func TestRejectedWriteBeforeUnloadReturnsReloadingSentinel(t *testing.T) {
 	f.assertReloadedFromAuthority(t, live)
 }
 
-// batch.Close 路径（Durability 0 被权威明确拒绝）：消息收尾里的卸载被快池拒绝投递，交给 finalizer 重试；重试前的窗口同样可重试。
+// batch.Close 路径（Durability 0 被权威明确拒绝）：消息收尾里的卸载被业务池拒绝投递，交给 finalizer 重试；重试前的窗口同样可重试。
 func TestDefinitelyRejectedWriteBeforeUnloadReturnsReloadingSentinel(t *testing.T) {
 	f, live := newReloadFixture(t, 1982)
 	var paused atomic.Bool
 	paused.Store(true)
 	refuse := func(fn func()) error {
 		if paused.Load() {
-			return errors.New("test: fast pool paused")
+			return errors.New("test: business pool paused")
 		}
 		fn()
 		return nil
@@ -805,7 +805,7 @@ func TestReloadDuringUnloadReturnsReloadingSentinel(t *testing.T) {
 }
 
 // Durability 1 在 Commit 返回时推测性确认 Sync，投影器拒绝前订阅者可能已收到被拒绝的内容：卸载时 subject 仍有订阅者，框架在
-// 快池之外从权威重载实例并 Rebind，订阅者下一帧收到同一对象的权威全量（ObjectUpdate + Full）；无订阅者时不主动重载。
+// 业务池之外从权威重载实例并 Rebind，订阅者下一帧收到同一对象的权威全量（ObjectUpdate + Full）；无订阅者时不主动重载。
 // 历史：RR-20260926-59。
 
 type resyncSubscriber struct {

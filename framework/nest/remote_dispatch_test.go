@@ -366,7 +366,7 @@ func TestNestBindsRunLocalIntoRemoteManager(t *testing.T) {
 		t.Fatal("local step did not run")
 	}
 	if !<-onFast {
-		t.Fatal("local step did not run on a fast worker")
+		t.Fatal("local step did not run on a business worker")
 	}
 	if err := run(func() { panic(errors.New("boom")) }); err == nil {
 		t.Fatal("panic in a local step was not reported")

@@ -41,7 +41,7 @@ type Manager struct {
 	fatalMu   sync.RWMutex
 	fatalErr  error
 	onFatal   func(error)
-	// localExecutor 是 Nest 注入的本地执行入口（BindLocalExecutor → NestMgr.RunLocal），后台收尾据此回到快池。
+	// localExecutor 是 Nest 注入的本地执行入口（BindLocalExecutor → NestMgr.RunLocal），后台收尾据此回到业务池。
 	localExecutor atomic.Pointer[func(func()) error]
 }
 

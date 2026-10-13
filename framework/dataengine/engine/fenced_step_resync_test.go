@@ -16,8 +16,8 @@ import (
 )
 
 // RR-20260926-59（RR-30 场景）：原生步骤在 Nest 内存生效、订阅者已收到含其效果的内容，投影时租约失效被跳过，
-// DataEngine 在快池驱逐该实体。修复前订阅者停在从未成为权威的内容上，直到有人重新访问；修复后框架在快池之外
-// 经正式 EntityRepository（等待该实体投影/驱逐完成、发布回到快池、OnEntityLoaded）从 Mongo 重载并 Rebind，
+// DataEngine 在业务池驱逐该实体。修复前订阅者停在从未成为权威的内容上，直到有人重新访问；修复后框架在业务池之外
+// 经正式 EntityRepository（等待该实体投影/驱逐完成、发布回到业务池、OnEntityLoaded）从 Mongo 重载并 Rebind，
 // 订阅者收到权威全量；Mongo 里没有该实体时退回 remove。
 
 // fencedResyncKind 与同包其他用例的 kind 互不相同（RR-20260926-82）：kind 注册表是进程级的，原值 243 与
@@ -146,7 +146,7 @@ func newFencedResyncFixture(t *testing.T, uniqueID int64) *fencedResyncFixture {
 	}
 	t.Cleanup(func() { _ = f.sync.Close(context.Background()) })
 	// 与 kit Nest Mod 相同的接线：重载发布时 Rebind（OnEntityLoaded）；NewEngine 把 NestMgr.RunLocal 绑定给作为
-	// Getter 的 ManagerAccess（BindLocalExecutor），卸载后重载与业务冷加载同一条共享加载，经它回快池发布。
+	// Getter 的 ManagerAccess（BindLocalExecutor），卸载后重载与业务冷加载同一条共享加载，经它回业务池发布。
 	unhook := repository.OnEntityLoaded(func(loaded entity.IThreadSafeEntity) { _ = f.sync.Rebind(loaded.Base().Sync()) })
 	t.Cleanup(unhook)
 	scheduler := corenest.NewEngine(corenest.NestOptionWithTransactionCommitter(projector), corenest.NestOptionWithGetter(f.access))

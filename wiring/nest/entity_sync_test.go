@@ -336,7 +336,7 @@ func TestEntitySyncModResyncsSubscribersAfterUnload(t *testing.T) {
 	select {
 	case onFast := <-loader.loads:
 		if !onFast {
-			t.Fatal("reloaded entity was published outside the Nest fast pool")
+			t.Fatal("reloaded entity was published outside the Nest business pool")
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("kit assembly did not reload an unloaded entity that still has subscribers")

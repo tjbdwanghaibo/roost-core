@@ -70,7 +70,7 @@ func TestFinalizerRejectionRollbackRunsOnNestFastWorker(t *testing.T) {
 				t.Fatalf("RollbackRemoteCommit ran %d time(s), want once", n)
 			}
 			if off := live.rollbacksOffFast.Load(); off != 0 {
-				t.Fatalf("finalizer rejection rollback ran off the Nest fast pool (%d call(s)); with Nest bound it must go through NestMgr.RunLocal", off)
+				t.Fatalf("finalizer rejection rollback ran off the Nest business pool (%d call(s)); with Nest bound it must go through NestMgr.RunLocal", off)
 			}
 		})
 	}

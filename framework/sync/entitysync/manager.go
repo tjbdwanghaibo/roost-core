@@ -422,7 +422,7 @@ func (q *queuedRegistration) finish(err error) {
 // 同样返回 queued=true 并由 done 报告结果；这个排队位与 Rebind / Register 的排队
 // （wiring 的 OnEntityLoaded）共用，后到的替换先到的。
 //
-// queued=false 时它就是 Register 的结果，done 不会被调用。本方法不等待，可在快池调用。
+// queued=false 时它就是 Register 的结果，done 不会被调用。本方法不等待，可在业务池调用。
 func (m *Manager) RegisterAfterRetirement(state *entity.SubjectSyncState, done func(error)) (queued bool, err error) {
 	if m == nil {
 		return false, ErrManagerClosed

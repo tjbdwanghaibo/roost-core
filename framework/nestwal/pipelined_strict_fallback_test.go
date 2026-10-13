@@ -253,7 +253,7 @@ type discardProjectionStore struct{}
 
 func (discardProjectionStore) Project(context.Context, coredata.CommitRecord) error { return nil }
 
-// fallbackFixture：真实 Nest（1 快 worker）+ 正式 engine.Projector（kit 装配的 committer，ManualReplay 不回放、不 Ack，
+// fallbackFixture：真实 Nest（1 业务 worker）+ 正式 engine.Projector（kit 装配的 committer，ManualReplay 不回放、不 Ack，
 // 不产生额外 fsync）+ 真实 WAL（fsync 可停）+ entitysync Manager（Sync 门）。
 type fallbackFixture struct {
 	gate        *fsyncGate

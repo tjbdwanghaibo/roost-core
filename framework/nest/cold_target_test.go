@@ -17,7 +17,7 @@ import (
 
 // 声明目标里有未加载、可由 loader 加载的实体时，Nest 在统一准入处自动走 I/O 阶段预加载：业务代码与生成 sender
 // 不需要 SendOptionIO，同 ID 顺序仍在统一准入处建立，loader 只在 I/O worker 上执行。准入之后、handler 取得
-// Guard 之前目标被驱逐时，同一条已准入请求原位转到慢阶段准备，不重新排队，也不在业务 worker 上冷加载。
+// Guard 之前目标被驱逐时，同一条已准入请求原位转到 I/O 准备阶段，不重新排队，也不在业务 worker 上冷加载。
 // 历史：RR-20260926-25。
 
 func newColdTargetEngine(t *testing.T, fast, slow WorkerPoolConfig) (*NestMgr, *entity.EntityManager, *stageLoader) {
@@ -57,7 +57,7 @@ func TestDefaultSenderPreparesColdDeclaredTargetsOnSlowWorker(t *testing.T) {
 	}
 	mgr.MustRegisterHandlerWithMeta(NewHandlerName("grant"), func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
 		if !fctx.InShortWorker() {
-			return nil, errors.New("handler left the fast pool")
+			return nil, errors.New("handler left the business pool")
 		}
 		for _, e := range es {
 			if e == nil {
@@ -90,7 +90,7 @@ func TestDefaultSenderPreparesColdDeclaredTargetsOnSlowWorker(t *testing.T) {
 		t.Fatalf("warm request: ret=%v err=%v", ret, err)
 	}
 	if slowAfter := mgr.Stats().Queue.IO.Started; slowAfter != slowBefore || loader.calls.Load() != 3 {
-		t.Fatalf("loaded target still used the slow stage: slow started %d -> %d loads=%d", slowBefore, slowAfter, loader.calls.Load())
+		t.Fatalf("loaded target still used the I/O preparation stage: io started %d -> %d loads=%d", slowBefore, slowAfter, loader.calls.Load())
 	}
 }
 
@@ -139,7 +139,7 @@ func TestDeclaredTargetEvictedAfterAdmissionMovesToSlowKeepingOrder(t *testing.T
 			var order []string
 			mgr.MustRegisterHandlerWithMeta(NewHandlerName("record"), func(es []entity.IThreadSafeEntity, params []any, _ ...HandlerOption) (any, error) {
 				if !fctx.InShortWorker() || len(es) != 1 || es[0] == nil || es[0] == entity.IThreadSafeEntity(target) {
-					return nil, errors.New("handler did not run on the fast pool with the reloaded target")
+					return nil, errors.New("handler did not run on the business pool with the reloaded target")
 				}
 				orderMu.Lock()
 				order = append(order, params[0].(string))
@@ -162,7 +162,7 @@ func TestDeclaredTargetEvictedAfterAdmissionMovesToSlowKeepingOrder(t *testing.T
 			first := send("record", targetID, "first")
 			second := send("record", targetID, "second")
 			if fast := mgr.Stats().Queue.Short; fast.Ready+fast.BlockedOnPredecessor != 2 {
-				t.Fatalf("both requests should be admitted to the fast lane while the target is loaded: %+v", fast)
+				t.Fatalf("both requests should be admitted to the business lane while the target is loaded: %+v", fast)
 			}
 			evict := func() {
 				if err := manager.Destroy(context.Background(), target, entity.DestroyReasonCommon, false); err != nil {
@@ -187,7 +187,7 @@ func TestDeclaredTargetEvictedAfterAdmissionMovesToSlowKeepingOrder(t *testing.T
 			orderMu.Lock()
 			defer orderMu.Unlock()
 			if !slices.Equal(order, []string{"first", "second"}) {
-				t.Fatalf("same-ID order changed after moving to the slow stage: %v", order)
+				t.Fatalf("same-ID order changed after moving to the I/O preparation stage: %v", order)
 			}
 			if loads := loader.calls.Load(); loads != 1 {
 				t.Fatalf("loads=%d, want one slow-stage reload", loads)
@@ -336,7 +336,7 @@ func TestAdmissionColdProbeRequiresLoadedChecker(t *testing.T) {
 		defer cancel()
 		_, err := mgr.Request(ctx, NewHandlerName("old_cold"), cold, nil)
 		if !errors.Is(err, entity.ErrColdLoadInLogic) || loader.calls.Load() != 0 || mgr.Stats().Queue.IO.Started != 0 {
-			t.Fatalf("custom Getter without IsLoaded was probed and moved to the slow stage: err=%v loads=%d slow started=%d", err, loader.calls.Load(), mgr.Stats().Queue.IO.Started)
+			t.Fatalf("custom Getter without IsLoaded was probed and moved to the I/O preparation stage: err=%v loads=%d io started=%d", err, loader.calls.Load(), mgr.Stats().Queue.IO.Started)
 		}
 	})
 	t.Run("custom_getter_with_checker_auto_slows", func(t *testing.T) {
@@ -426,7 +426,7 @@ type gatedStageLoader struct {
 func (l *gatedStageLoader) LoadEntity(ctx context.Context, id int64, kind entity.EntityKind) (entity.IThreadSafeEntity, error) {
 	l.loads.Add(1)
 	if fctx.InShortWorker() {
-		return nil, errors.New("loader ran in fast worker")
+		return nil, errors.New("loader ran in business worker")
 	}
 	l.entered <- struct{}{}
 	select {
@@ -512,7 +512,7 @@ func TestSlowPreparationLeaderTimeoutDoesNotCutTheSharedLoad(t *testing.T) {
 		t.Fatal("the waiter never got the shared load's result")
 	}
 	if loader.publishedOff.Load() {
-		t.Fatal("the loaded entity was published off the fast pool")
+		t.Fatal("the loaded entity was published off the business pool")
 	}
 	if n := loader.loads.Load(); n != 1 {
 		t.Fatalf("loads=%d, want the waiter to share the leader's flight", n)

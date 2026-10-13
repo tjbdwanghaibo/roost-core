@@ -294,7 +294,7 @@ func TestGeneratedRemotePrepareFailureAbortsWithoutFastContinuation(t *testing.T
 		t.Fatalf("write to the missing entity replied %v, want a definite Prepare failure", soloErr)
 	}
 	if got := logicQueueObservations(handler) - before; got != 0 {
-		t.Fatalf("a Prepare that failed on the slow pool recorded %d logic_queue continuation(s), want 0: the unfinalized batch's Abort must stay in place", got)
+		t.Fatalf("a Prepare that failed on the io pool recorded %d logic_queue continuation(s), want 0: the unfinalized batch's Abort must stay in place", got)
 	}
 	t.Logf("Prepare failure: %v", soloErr)
 
@@ -338,7 +338,7 @@ func TestGeneratedRemotePrepareFailureAbortsWithoutFastContinuation(t *testing.T
 		}
 	}
 	if got := logicQueueObservations(handler) - before; got != succeeding*perCommit {
-		t.Fatalf("logic_queue continuations=%d for %d failed Prepares + %d committed writes, want %d (%d per committed write): an unfinalized batch's Abort must not hop to the fast pool", got, failing, succeeding, succeeding*perCommit, perCommit)
+		t.Fatalf("logic_queue continuations=%d for %d failed Prepares + %d committed writes, want %d (%d per committed write): an unfinalized batch's Abort must not hop to the business pool", got, failing, succeeding, succeeding*perCommit, perCommit)
 	}
 	if inFlight := rig.manager.Stats().WritesInFlight; inFlight != 0 {
 		t.Fatalf("Remote writes in flight after the failed Prepares=%d", inFlight)

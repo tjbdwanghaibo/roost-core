@@ -25,7 +25,7 @@ import (
 //     coredata.ErrFencedEntityPending 拒绝；步骤投影成功、或被跳过且内存实体已驱逐后恢复；
 //   - 屏障随投影成功 / 驱逐完成 / discard / fatal / 关闭解除，不泄漏；
 //   - 同一步骤的重投（新 token 的另一条记录）只被挡到屏障解除为止；
-//   - 被跳过后受影响的常驻实体被驱逐（不持久化），驱逐在 Nest 快池执行；重启恢复通过。
+//   - 被跳过后受影响的常驻实体被驱逐（不持久化），驱逐在 Nest 业务池执行；重启恢复通过。
 
 const fencedClaim = "saga-step/cmd-slow"
 
@@ -322,7 +322,7 @@ func (value *evictionTestEntity) OnDestroy(entity.EntityDestroyReason) {
 	}
 }
 
-// Runtime 驱逐：Nest 构造时把 RunLocal 绑定给作为 committer 的 Projector，驱逐在快池持锁执行，
+// Runtime 驱逐：Nest 构造时把 RunLocal 绑定给作为 committer 的 Projector，驱逐在业务池持锁执行，
 // 常驻实体被移出内存（不删库）。
 func TestSkippedFencedStepEvictsTheResidentEntityOnTheShortPool(t *testing.T) {
 	store, client, collection := newMongoStoreTest(t)
@@ -354,7 +354,7 @@ func TestSkippedFencedStepEvictsTheResidentEntityOnTheShortPool(t *testing.T) {
 		t.Fatal("entity carrying the skipped step is still resident")
 	}
 	if onFast.Load() != 1 {
-		t.Fatalf("eviction ran on the fast pool %d times, want 1", onFast.Load())
+		t.Fatalf("eviction ran on the business pool %d times, want 1", onFast.Load())
 	}
 	if doc, _ := collection.Lookup(int64(7)); doc["_version"] != int64(4) {
 		t.Fatalf("eviction persisted something: %v", doc)

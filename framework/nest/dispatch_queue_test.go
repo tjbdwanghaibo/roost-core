@@ -1,4 +1,4 @@
-// 调度队列：短 / 长 / I/O 三池按全部目标排序且不占快池 worker，前驱合流分流，准入预算与统计，目标存储所有权。
+// 调度队列：短 / 长 / I/O 三池按全部目标排序且不占业务池 worker，前驱合流分流，准入预算与统计，目标存储所有权。
 
 package nest
 
@@ -217,13 +217,13 @@ func TestSlowLoadAndHandlerUseDifferentWorkers(t *testing.T) {
 	for mgr.Stats().ShortContinuations == 0 {
 		select {
 		case <-deadline:
-			t.Fatal("slow handler did not enter fast queue")
+			t.Fatal("I/O-prepared handler did not enter the business queue")
 		default:
 			runtime.Gosched()
 		}
 	}
 	if handlerRan.Load() {
-		t.Fatal("slow worker executed handler while fast worker occupied")
+		t.Fatal("io worker executed handler while business worker occupied")
 	}
 	close(fastRelease)
 	if got := stagedWait(t, ch); got != "ok" {
@@ -292,7 +292,7 @@ func TestQueueStatsSeparateDependencyAndWorkerWait(t *testing.T) {
 	stagedSignal(t, fastEntered)
 	admitQueue(t, q, true, 2)
 	stagedSignal(t, slowEntered)
-	admitQueue(t, q, false, 2) // 等慢前驱；不能占 fast worker。
+	admitQueue(t, q, false, 2) // 等 I/O 前驱；不能占 business worker。
 	admitQueue(t, q, false, 3) // 无 ID 冲突，仅等 worker。
 	rejected := queueMessage(4)
 	if err := q.admit(rejected, false); !errors.Is(err, worker.ErrWorkerQueueFull) {

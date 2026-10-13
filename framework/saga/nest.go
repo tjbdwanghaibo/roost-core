@@ -37,7 +37,7 @@ const maxStartWireDataBytes = 4 << 20
 // 协调器会拒绝的 Data 都不放进 WAL。条目数以 saga 类型数为界。
 //
 // 为什么是按类型的进程表而不是 Engine 方法：EmitStart 在 Nest handler 里调用，handler 拿不到 Engine（生成的
-// <saga>.EmitStart 也是包级函数）；而按类型查表只是一次内存读，不做 I/O、不等待，可以留在快池的 Nest 事务里。
+// <saga>.EmitStart 也是包级函数）；而按类型查表只是一次内存读，不做 I/O、不等待，可以留在业务池的 Nest 事务里。
 var startDataLimits struct {
 	sync.RWMutex
 	byType map[string]int

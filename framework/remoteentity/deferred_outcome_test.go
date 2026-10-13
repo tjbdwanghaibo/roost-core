@@ -1,4 +1,4 @@
-// 延迟的提交后工作：Remote 结论未知时由 finalizer 拿到持久结论后执行一次，快池拒绝时不离池执行。
+// 延迟的提交后工作：Remote 结论未知时由 finalizer 拿到持久结论后执行一次，业务池拒绝时不离池执行。
 
 package remoteentity
 
@@ -215,7 +215,7 @@ func TestShutdownWithoutOutcomeKeepsPostCommitPending(t *testing.T) {
 	}
 }
 
-// deferredOutcomeNotRun 读取“快池拒绝投递、提交后工作未执行”的计数。
+// deferredOutcomeNotRun 读取“业务池拒绝投递、提交后工作未执行”的计数。
 func deferredOutcomeNotRun(outcome string) int64 {
 	var total int64
 	for _, metric := range metrics.Snapshot() {
@@ -226,7 +226,7 @@ func deferredOutcomeNotRun(outcome string) int64 {
 	return total
 }
 
-// Nest 已停机 / 已 fence（RunLocal 拒绝投递、fn 不执行）时拿到持久结论：提交后工作不离开快池执行——不在 finalizer goroutine 上
+// Nest 已停机 / 已 fence（RunLocal 拒绝投递、fn 不执行）时拿到持久结论：提交后工作不离开业务池执行——不在 finalizer goroutine 上
 // 就地运行，计数 +1 并记日志；gate 等资源照常交还，只调用一次入口。
 func TestOutcomeIsNotRunWhenShortPoolRefuses(t *testing.T) {
 	f, live := newReloadFixture(t, 1965)
@@ -258,7 +258,7 @@ func TestOutcomeIsNotRunWhenShortPoolRefuses(t *testing.T) {
 	for step := <-steps; step != "released"; step = <-steps {
 	}
 	if n := recorder.count(); n != 0 {
-		t.Fatalf("post-commit work ran %d time(s) outside the fast pool after the Nest refused it (want 0: never run business callbacks on the finalizer goroutine)", n)
+		t.Fatalf("post-commit work ran %d time(s) outside the business pool after the Nest refused it (want 0: never run business callbacks on the finalizer goroutine)", n)
 	}
 	if got := deferredOutcomeNotRun("committed") - before; got != 1 {
 		t.Fatalf("deferred_outcome_not_run_total{outcome=committed} grew by %d, want 1", got)
@@ -398,7 +398,7 @@ func (rig *deferredOutcomeNestRig) counts() (ran, onFast int) {
 }
 
 // 跨层：Durability 0 的 Remote 写结果未知时，请求带“结果未知”错误回复；提交后工作经 Nest → remoteWriteBatch → finalizer 交接，
-// 拿到持久结论后执行一次：回复丢失但已写入 → AfterCommit 在快池执行一次、Sync 放行；从未到达 → 持久拒绝、卸载、AfterCommit
+// 拿到持久结论后执行一次：回复丢失但已写入 → AfterCommit 在业务池执行一次、Sync 放行；从未到达 → 持久拒绝、卸载、AfterCommit
 // 不执行。延迟执行的 AfterCommit 带原请求的上下文快照（trace、handler 元数据、请求内写入的 KV），且不继承请求 ctx 的取消。
 func TestNestDeferredPostCommitFollowsFinalizerOutcome(t *testing.T) {
 	for _, tc := range []struct {
@@ -424,7 +424,7 @@ func TestNestDeferredPostCommitFollowsFinalizerOutcome(t *testing.T) {
 			ran, onFast := rig.counts()
 			if tc.committed {
 				if ran != 1 || onFast != 1 {
-					t.Fatalf("AfterCommit after the durable commit ran=%d onFast=%d, want exactly once on a fast worker", ran, onFast)
+					t.Fatalf("AfterCommit after the durable commit ran=%d onFast=%d, want exactly once on a business worker", ran, onFast)
 				}
 				rig.mu.Lock()
 				kv, trace, handler, baseErr := rig.seenKV, rig.seenTrace, rig.seenHandler, rig.seenBaseErr
@@ -486,7 +486,7 @@ func TestNestDeferredPostCommitIsNotRunOffThePool(t *testing.T) {
 			release()
 			rig.awaitReleased(t)
 			if ran, _ := rig.counts(); ran != 0 {
-				t.Fatalf("AfterCommit ran %d time(s) after the Nest refused the fast-pool handoff (want 0: never run business callbacks on the finalizer goroutine)", ran)
+				t.Fatalf("AfterCommit ran %d time(s) after the Nest refused the business-pool handoff (want 0: never run business callbacks on the finalizer goroutine)", ran)
 			}
 			if rig.live.Sync().SyncCommitReady() {
 				t.Fatal("Sync gate released although the post-commit work never ran (the framework Confirm must not run off the pool either)")

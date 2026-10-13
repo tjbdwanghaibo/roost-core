@@ -9,7 +9,7 @@ import (
 
 type localExecutorKey struct{}
 
-// WithLocalExecutor 指定同步执行 Entity 本地操作的位置。Nest 慢阶段注入快池
+// WithLocalExecutor 指定同步执行 Entity 本地操作的位置。Nest I/O 准备阶段注入业务池
 // 延续；独立使用 Entity/Remote 时未注入则就地执行。fn 返回前不能交还所有权，
 // 不能用任意异步 goroutine 代替；fn 内也不能再次调用该执行器。
 func WithLocalExecutor(ctx context.Context, run func(func()) error) context.Context {
@@ -37,8 +37,8 @@ func RunLocal(ctx context.Context, fn func()) error {
 	return nil
 }
 
-// ErrColdLoadInLogic 表示快阶段缺少预加载目标。应在消息上声明全部冷目标并走 Slow，
-// 不能在持有 Guard 时把半个 handler 转移到慢池。
+// ErrColdLoadInLogic 表示业务池阶段缺少预加载目标。应在消息上声明全部冷目标（或用 SendOptionIO 强制 I/O 准备），
+// 不能在持有 Guard 时把半个 handler 转移到 io 池。
 var ErrColdLoadInLogic = errors.New("entity: cold load forbidden in logic; declare targets and dispatch through slow preparation")
 
 type loadedEntitiesOnlyKey struct{}

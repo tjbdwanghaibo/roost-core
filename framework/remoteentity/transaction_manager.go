@@ -79,8 +79,8 @@ type deferredRemoteClose struct {
 	// 需要完成或重试；排空与重试都不能再次释放。
 	settled bool
 	// onOutcome 是 Nest 交来的提交后工作（Sync Confirm、AfterCommit），只在拿到持久结论后
-	// 经 Nest 快池调用至多一次：Applied/Committed 为 true，Rejected（卸载完成后）为 false。停机排空时不调用；
-	// 快池拒绝投递时也不调用，只计数告警（见 deliverRemoteOutcome）。
+	// 经 Nest 业务池调用至多一次：Applied/Committed 为 true，Rejected（卸载完成后）为 false。停机排空时不调用；
+	// 业务池拒绝投递时也不调用，只计数告警（见 deliverRemoteOutcome）。
 	onOutcome func(bool)
 }
 
@@ -100,7 +100,7 @@ func newRemoteState(cfg *Config) *remoteState {
 		capacity = 4096
 	}
 	// 一个写批次只预留一次，转入后台收尾也不归还。
-	// 上限不能超过收尾容量，否则释放路径可能反过来卡住慢 worker。
+	// 上限不能超过收尾容量，否则释放路径可能反过来卡住 io worker。
 	writeLimit := capacity
 	if cfg.MaxConcurrentWrites > 0 {
 		writeLimit = min(writeLimit, cfg.MaxConcurrentWrites)
@@ -329,11 +329,11 @@ func (m *Manager) finishRejectedRemoteClose(state *remoteState, item deferredRem
 }
 
 // deliverRemoteOutcome 把持久结论交给 Nest 的提交后工作，至多一次：调用方只在终态分支、资源释放之后调用，
-// 调用后收尾项不再入队。经 ctx 的本地执行入口（Nest 快池）执行；fn 自己隔离每个回调的 panic，
+// 调用后收尾项不再入队。经 ctx 的本地执行入口（Nest 业务池）执行；fn 自己隔离每个回调的 panic，
 // 这里只兜底记录执行入口的错误。
 //
 // NestMgr.RunLocal 拒绝投递（Nest 未启动、停机中或已 fence）时 fn 不执行（维护者批准：不离池执行，
-// 计数告警）：提交后工作里有业务 AfterCommit，不能在 finalizer goroutine 上就地运行——那会与已 fence 的快池里仍在
+// 计数告警）：提交后工作里有业务 AfterCommit，不能在 finalizer goroutine 上就地运行——那会与已 fence 的业务池里仍在
 // 执行的 handler 并发，或在 Nest Shutdown 返回之后才执行；框架的 Sync Confirm / Reject 与业务回调同在 fn 里，
 // 也不单独执行，Sync 门保持冻结（进程正在退出或已被隔离，重启后从权威重载）。持久结论本身不受影响。
 // 未执行的次数按结论计入 remote_entity.deferred_outcome_not_run_total{outcome}，并记一条告警日志。
@@ -476,9 +476,9 @@ func remoteCommitStateLabel(state entity.RemoteCommitState) string {
 
 // settleRejectedRemoteEntries 在持久拒绝后回滚本事务的定稿提交，并让批次内实体保持隔离。
 //
-// 回滚经 entity.RunLocal 的本地执行路径：finalizer 不是 Nest 快 worker，也拿不到已结束
-// 消息的快池续行，finalizeCtx 未注入执行器时就地执行，在每个实体自己的本地锁内调用
-// RollbackRemoteCommit（与快池 handler 经 Guard 取得的是同一把锁，hook panic 也会解锁）。
+// 回滚经 entity.RunLocal 的本地执行路径：finalizer 不是 Nest 业务 worker，也拿不到已结束
+// 消息的业务池续行，finalizeCtx 未注入执行器时就地执行，在每个实体自己的本地锁内调用
+// RollbackRemoteCommit（与业务池 handler 经 Guard 取得的是同一把锁，hook panic 也会解锁）。
 // 回滚后清除定稿标记，释放时按 BaseVersion 解锁，与 Abort 一致，也保证重试不会重复回滚。
 //
 // 拒绝后不能解冻：生成实体的 RollbackRemoteCommit 是 no-op，被拒绝事务的内存修改仍在实体
@@ -1075,7 +1075,7 @@ func (m *Manager) rollbackRemoteEntries(entries []*remoteWriteEntry) {
 		func() {
 			mu := entry.entity.GetMutex()
 			mu.Lock()
-			// 自定义回滚 hook panic 也必须解锁，不能把后续快 worker 永久卡住。
+			// 自定义回滚 hook panic 也必须解锁，不能把后续业务 worker 永久卡住。
 			defer mu.Unlock()
 			if participant, ok := entry.entity.(entity.IRemoteCommitParticipant); ok {
 				participant.RollbackRemoteCommit(entry.commit.Clone())

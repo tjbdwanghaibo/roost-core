@@ -120,7 +120,7 @@ func (runtime *Runtime) admitRemoteEntityDelete(ctx context.Context, value entit
 	if runtime.remoteManager == nil {
 		return entity.DeleteAdmissionImmediate, entity.ErrRemoteWriteCapabilityDisabled
 	}
-	// 独立的 Remote 删除要准备远端批次、等待持久提交和确认，快 worker 上不允许等待。
+	// 独立的 Remote 删除要准备远端批次、等待持久提交和确认，业务 worker 上不允许等待。
 	// 在任何远端/WAL 副作用之前明确拒绝：实体保留在内存、不 fence，调用方可按
 	// fctx.ErrBlockingInBusinessWorker 判别并改为声明目标后走正式事务。不能等到
 	// PrepareRemoteWriteBatch 的入口断言 panic：那会被 admitEntityDelete 的 recover
