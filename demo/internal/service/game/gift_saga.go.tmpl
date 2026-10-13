@@ -234,7 +234,7 @@ func processOwnerSuffix() string {
 // handoff tests use the real table.
 //
 // 静态绑定：步骤命令携带发送方绑定的 sid，准入只问“这个 sid 是不是本服”。是本服
-// 就接入（建立或刷新驻留记录，算一次使用），发送方离线、没有副本也照常执行——Nest 在慢池冷加载他，
+// 就接入（建立或刷新驻留记录，算一次使用），发送方离线、没有副本也照常执行——Nest 在 io 池冷加载他，
 // 驻留记录让闲置卸载之后收走这份副本；不是本服就不建记录，交给那个 sid。驻留记录因此只会出现在玩家
 // 绑定的那个 sid 上，不会有两个写者。
 type playerOwnership interface {
@@ -542,7 +542,7 @@ func (steps giftSteps) debit(ctx context.Context, command saga.Command) (saga.Co
 	// returned for the consumer to publish: it waits for the receipt.
 	// The sender may be offline and cold (restart, idle hand-back): Nest sees
 	// the declared target is not loaded at admission and prepares it on the
-	// slow pool before the handler runs, so no Slow option is needed here.
+	// io pool before the handler runs, so no SendOptionIO is needed here.
 	if _, err := syncsender.NewGiftDebitSender(steps.nest).Sync_GiftDebit(ctx, entityID, state.ItemID, state.Count, step); err != nil {
 		return saga.Completion{}, err
 	}
@@ -553,7 +553,7 @@ func (steps giftSteps) debit(ctx context.Context, command saga.Command) (saga.Co
 // runs. It can refuse too — the stack filled up meanwhile — and a refused
 // compensation is what the coordinator marks manual_required for: an
 // operator sees it in gm.saga.list and decides. A refund usually lands on an
-// offline, cold sender; Nest loads declared cold targets on its slow pool, so
+// offline, cold sender; Nest loads declared cold targets on its io pool, so
 // "offline" is not a reason for the compensation to fail.
 //
 // 重试预算：退款只能在发送方绑定的 sid 上执行（admitOwned），那个 sid 的进程崩溃重启期间，别的进程

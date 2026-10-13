@@ -37,7 +37,7 @@ const PlayerOwnerCapability app.ModName = "{{GAME_SERVICE}}.playerowner"
 // 不交出任何东西；之后在本进程重新装载，等待的是 DataEngine 冷加载已有的投影屏障。卸载进行中
 // Admit / AdmitBound 拒绝，Serve 等它结束再装载。
 //
-// 锁：mu 保护 residents 与 evictions，从不跨等待持有。Admit 在 Nest 快池上被调用，只做一次加锁读写。
+// 锁：mu 保护 residents 与 evictions，从不跨等待持有。Admit 在 Nest 业务池（short / long）上被调用，只做一次加锁读写。
 type PlayerOwners struct {
 	sid    int32
 	fencer sessionFencer
@@ -246,7 +246,7 @@ func (owners *PlayerOwners) touchLocked(playerID int64) {
 // Admit 是写准入：本进程此刻能不能在这个玩家身上开始一个新事务？
 //
 // 只看本地状态：有驻留记录，并且副本没有在卸载。放行算一次使用，正在干活的玩家因此不会被卸载。
-// 只加一次锁，不阻塞（快池上调用）。
+// 只加一次锁，不阻塞（在业务池上调用）。
 func (owners *PlayerOwners) Admit(playerID int64) error {
 	if owners == nil {
 		// 没有驻留表：单进程部署，每个玩家都是本进程的。

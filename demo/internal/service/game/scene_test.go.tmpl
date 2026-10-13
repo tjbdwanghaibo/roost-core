@@ -1312,7 +1312,7 @@ func TestASessionReopenRefusedWhileTheOldOneClosesIsRetried(t *testing.T) {
 // sceneAuthority is the Player's authority, stood in for: an unloaded player
 // comes back from it as a fresh instance — without the effect that was
 // skipped or refused — and is published the way the Data Engine's repository
-// publishes a load (entity.RunLocal, back on the Nest fast pool), with the
+// publishes a load (entity.RunLocal, back on a Nest business pool), with the
 // repository's load hooks (OnEntityLoaded) run in the same local step.
 type sceneAuthority struct {
 	t       *testing.T
@@ -1431,7 +1431,7 @@ func TestAnUnloadedPlayerIsReloadedForTheSceneObservers(t *testing.T) {
 	}
 	t.Cleanup(unhook)
 	handler.RegisterAddExpNestHandlers()
-	// The Nest binds its fast-pool entry to the entity runtime, so a reload is
+	// The Nest binds its business-pool entry to the entity runtime, so a reload is
 	// published there — the production assembly.
 	engine := nest.NewEngine(
 		nest.NestOptionWithGetter(access),
@@ -1489,7 +1489,7 @@ func TestAnUnloadedPlayerIsReloadedForTheSceneObservers(t *testing.T) {
 		t.Fatal("setup: the watcher did not receive the level-up")
 	}
 
-	// The Data Engine drops the instance from memory, on the fast pool.
+	// The Data Engine drops the instance from memory, on a business pool.
 	var unloadErr error
 	if err := engine.RunLocal(ctx, func() { unloadErr = access.Unload(ctx, mover) }); err != nil || unloadErr != nil {
 		t.Fatalf("unload: run=%v unload=%v", err, unloadErr)

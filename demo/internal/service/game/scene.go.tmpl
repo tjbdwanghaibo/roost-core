@@ -159,8 +159,8 @@ type unloadResyncer interface {
 // entityLoadNotifier is the Data Engine's notice of an entity loaded from the
 // authority and published (wiring/dataengine Mod.OnEntityLoaded) — the same
 // optional capability the wiring Nest Mod hooks for the manager it owns. The
-// hook runs where the load is published, on the Nest fast pool: it must not
-// block.
+// hook runs where the load is published, on a Nest business pool (short or
+// long): it must not block.
 type entityLoadNotifier interface {
 	OnEntityLoaded(func(coreentity.IThreadSafeEntity)) (func(), error)
 }
@@ -298,7 +298,7 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 // Engine evicting it after a native step it skipped (the gift debit is one),
 // or a Remote write the authority refused.
 // Unloading closes the player's sync state; while anyone still watches it,
-// the framework reloads it from the authority off the fast pool and rebinds
+// the framework reloads it from the authority off the business pools and rebinds
 // this manager's subject to the new instance, so the watchers get its
 // authoritative state as a full update and its changes after that; if it
 // cannot be reloaded they get a remove. The wiring Nest Mod
@@ -348,8 +348,8 @@ func (bridge *Scene) Start(ctx context.Context) error {
 // player not in the scene (not registered), the instance the subject is
 // already on or another live one (registered), a leave still owing removes
 // (retiring: the rejoin registers after it), or a manager already closed.
-// It runs where the load is published, on the Nest fast pool; Rebind does not
-// wait.
+// It runs where the load is published, on a Nest business pool (short or
+// long); Rebind does not wait.
 func (bridge *Scene) rebindLoaded(loaded coreentity.IThreadSafeEntity) {
 	if loaded == nil || loaded.Base() == nil {
 		return
