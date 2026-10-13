@@ -38,7 +38,7 @@ entity（内容层，在块外）← entitysync        spatial（基建）← po
 
 09-24：[完整实体包组帧、profile 装配校验、快照预算与队列治理](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-24-sync-six-items.md)。包结构和线协议保持；预算默认关闭，周期观测可改用 Counters。
 
-[正式双模式接入](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/IMPLEMENTATION-2026-09-24-sync-modes.md)：`ModePeriodic` 默认，`ModeOnChange` 锁内冻结、解锁及提交确认后唤醒。Nest option、Kit 配置、生成 DAO 自动收集、Interest 事实队列共用现有交付流水线；`Drain(ctx)` 在生产者停止后排空已登记工作。
+[正式双模式接入](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/IMPLEMENTATION-2026-09-24-sync-modes.md)：`ModePeriodic` 默认，`ModeOnChange` 锁内冻结、解锁及提交确认后唤醒。Nest option、Wiring 配置、生成 DAO 自动收集、Interest 事实队列共用现有交付流水线；`Drain(ctx)` 在生产者停止后排空已登记工作。
 
 事务内新建的实体被回滚或拒绝时，Nest 通过可选的 `entity.SyncSubjectRetractor`（`Manager.RetractSyncSubject`）撤回它，
 语义同 `Unregister`：只撤同一个状态对象的登记，未持有对象的订阅直接移除，已持有的会话先收到 ObjectRemove，退役完成前同 ID

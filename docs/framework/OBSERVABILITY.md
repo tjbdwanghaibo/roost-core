@@ -188,9 +188,9 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `dataengine.load.skipped.total{resource}` | Counter | 非 strict 载入模板无法解码而跳过的行数。**基线应为零**；持续增长意味着字段改名/编解码变更正在让整表静默加载不全（strict 模板会直接失败，非 strict 只跳过，所以这条曲线是它唯一的信号） |
 | `dataengine.fence.skipped.total{resource}` | Counter | 被 lease fence 拦下、整笔标记为 skipped 的事务数。**陈旧 saga worker 偶发是正常的**；但"所有被 fence 的事务同时开始跳过"意味着 fence 谓词已不可满足（claim schema 漂移），而这两种情况从进程内部无法区分——只能靠曲线形状判断：稳定低速率 = 正常，阶跃到与事务量同阶 = 事故 |
 
-### 全部源码指标索引（v1.23.1）
+### 全部源码指标索引
 
-下表补齐上面按场景解释的清单。名字按注册表写法；点号在 Prometheus 中变成下划线，Counter 会补 `_total`。类型未知表示公开常量由宿主选择导出方式。来源列便于查量纲和具体条件，不能用 Gauge 做 `rate`。有界标签见对应写入点。
+下表补齐上面按场景解释的清单（按 v1.23.1 源码整理、之后随改动补充；根包门禁 `TestObservabilityDocNamesExistingMetrics` 保证表里的名字都存在，不保证穷尽）。名字按注册表写法；点号在 Prometheus 中变成下划线，Counter 会补 `_total`。类型未知表示公开常量由宿主选择导出方式。来源列便于查量纲和具体条件，不能用 Gauge 做 `rate`。有界标签见对应写入点。
 
 | 指标 | 类型 | 来源 |
 | --- | --- | --- |

@@ -10,7 +10,7 @@
 
 Nest 执行池命名为 short/long/io，不保留 fast/slow 旧名；配置、API、生成 Sender 和监控查询需一起迁移，迁移表见 [Nest 三池说明](../framework/NEST-AWAIT.md#池命名收敛2026-10-13)。
 
-当前没有旧 WAL/schema/interest/客户端包的透明兼容。WAL只支持codec7；DAO只接受当前schema；Remote interest要求非零代际及完整身份；客户端RS v2区分PB、Sync、Lockstep；Remote 快照 checksum 只读 8 字节形态，WAL 中“Remote 写 + lease fence”历史记录不再投影（投影器 fatal、WAL 原样保留）。服务数据同样不兼容旧形态：account 的未转义旧账号 ID、无建角计划的 slot 与无 `CreationID` 的角色，activity 无计划的开窗条目与超限窗口，rank 的逗号分隔请求账本，mail 无窗口的已结算 claim，均被明确拒绝而不读取或升级（清单见 CHANGELOG `[Unreleased]`“移除旧格式兼容”）。生成器同样不兼容旧工程：roost.yaml 的 `versions.skill/service/codegen` 与旧 mod/feature 名、`//cube:` 标记、cfggen `objects`、tablegen v1 manifest 均被拒绝并提示手工改法，三仓合一迁移工具已删除；SyncBusMod 缺省前缀改为 `roost.sync`、不再把 `roost.room` 映射到 `ROOST_SYNC`，未写前缀的部署须先停旧再起新（JetStream 全新部署或显式配置旧名，见 CHANGELOG“移除旧兼容（生成器）/（wiring / syncbus）”）。不要把单模块版本号与这些各自的线/存储格式号混为一谈。
+当前没有旧 WAL/schema/interest/客户端包的透明兼容。WAL只支持codec7；DAO只接受当前schema；Remote interest要求非零代际及完整身份；客户端RS v2区分PB、Sync、Lockstep；Remote 快照 checksum 只读 8 字节形态，WAL 中“Remote 写 + lease fence”历史记录不再投影（投影器 fatal、WAL 原样保留）。服务数据同样不兼容旧形态：account 的未转义旧账号 ID、无建角计划的 slot 与无 `CreationID` 的角色，activity 无计划的开窗条目与超限窗口，rank 的逗号分隔请求账本，mail 无窗口的已结算 claim，均被明确拒绝而不读取或升级（清单见 CHANGELOG `[Unreleased]`“移除旧格式兼容”）。生成器同样不兼容旧工程：roost.yaml 的 `versions.kit/skill/service/codegen`、旧 mod/feature 名与已删除的 `event` feature、`//cube:` 标记、cfggen `objects`、tablegen v1 manifest 均被拒绝并提示手工改法，三仓合一迁移工具已删除；SyncBusMod 缺省前缀改为 `roost.sync`、不再把 `roost.room` 映射到 `ROOST_SYNC`，未写前缀的部署须先停旧再起新（JetStream 全新部署或显式配置旧名，见 CHANGELOG“移除旧兼容（生成器）/（wiring / syncbus）”）。不要把单模块版本号与这些各自的线/存储格式号混为一谈。
 
 ## 2. 升级与回退
 

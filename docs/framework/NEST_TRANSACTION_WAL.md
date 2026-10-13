@@ -186,7 +186,7 @@ if err := dataMod.Flush(ctx); err != nil {
 
 不存在 V1/V2 双写或旧 `rollback=dirty` 兼容链路。升级时必须重新生成 DAO/Nest 代码；生产 durable handler 必须使用无副作用的生成快照，或显式实现 `RollbackSnapshotter`。
 
-### v1.23.1 复核：async 与重放身份
+### async 与重放身份
 
 async 接受写入后允许锁外投影先于 WAL fsync；这符合“不保证断电前这批 WAL 已持久”的契约，不保证失败事务未生效。Mongo 已提交时仍保留结果，禁止回滚猜测。`WAL.Ack` 在写 checkpoint 前强制刷覆盖段，刷盘失败则进入 terminal 并停止水位推进。strict / pipelined 的成功持久承诺不变。
 
