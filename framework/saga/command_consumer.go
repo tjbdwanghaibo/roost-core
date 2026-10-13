@@ -345,13 +345,6 @@ func ackUnexecutedAttempt(ctx context.Context, inbox *stepOperationInbox, transp
 	return nil
 }
 
-// SubscribeStep 等同 SubscribeMongoStep。
-//
-// Deprecated: 显式使用 SubscribeMongoStep 或 SubscribeDataEngineStep。
-func SubscribeStep(ctx context.Context, client fnats.IJetStream, transport *JetStreamPublisher, inbox *MongoCommandInbox, config StepConsumerConfig, handler StepHandler) (fnats.IJetStreamSubscription, error) {
-	return SubscribeMongoStep(ctx, client, transport, inbox, config, handler)
-}
-
 // SubscribeDataEngineStep 订阅原生（DataEngine）步骤命令：协调重复投递，但从不直接发布 completion。原生 handler 必须用
 // inbox.Bind(command, reservation) 执行它的 Nest 事务并 EmitCompletion，reservation 显式经 ReservationFromContext(ctx)
 // 取得。消费者只在权威 DataEngine 回执已投影、可回放之后才 ack。

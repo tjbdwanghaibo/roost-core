@@ -327,7 +327,7 @@ Saga 命令会自动给目标 Service 添加 `saga`、`dataengine` 及其传递�
 `EmitStart`，使 Entity mutation 与 Saga 启动意图进入同一个 WAL record；`Start` 仅用于
 durable consumer、管理和恢复路径。生成的 bootstrap 会把 manifest 中的
 定义传给 Saga Mod；自定义装配时才需要调用 `Register`。步骤消费者使用
-`roost-kit/saga.SubscribeStep`，并把
+`framework/saga.SubscribeMongoStep`（原生步骤用 `SubscribeDataEngineStep`），并把
 每个 command 的 `IdempotencyKey` 作为本地预留/确认/释放操作的唯一键；不要以
 投递次数或 `CommandID` 作为业务幂等键。
 

@@ -375,7 +375,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("the robot scenario does not exercise both gift saga paths")
 	}
 	if definition := read("saga/gift_item/definition.go"); !strings.Contains(definition, "saga.SubscribeMongoStep(") || strings.Contains(definition, "saga.SubscribeStep(") {
-		t.Errorf("generated saga definition still uses the deprecated SubscribeStep")
+		t.Errorf("generated saga definition must subscribe through SubscribeMongoStep, not the removed SubscribeStep")
 	}
 	// Two step shapes, one per kind of work: the Nest-transaction steps bind
 	// their receipt and emit their completion inside the transaction (the
