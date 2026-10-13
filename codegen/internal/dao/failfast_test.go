@@ -264,3 +264,86 @@ type HeroDao struct {
 		}
 	}
 }
+
+// redisdao 标记无参数 / 缺 key 与 prefix / 绑到多个结构体 / 孤立无结构体各报其错；dao 标签同时写 sync 与 nosync 拒绝。
+func TestParseRefusesEachMalformedRedisMarkerAndConflictingDaoTag(t *testing.T) {
+	cases := []struct{ name, source, want string }{
+		{"redisdao without parameters", "package def\n\n//roost:redisdao\ntype HeroCache struct {\n\tName string\n}\n", "//roost:redisdao marker is missing parameters"},
+		{"redisdao missing key and prefix", "package def\n\n//roost:redisdao mode=ref-hmap\ntype HeroCache struct {\n\tName string\n}\n", "requires key= and prefix="},
+		{"redisdao binding a group", "package def\n\n//roost:redisdao mode=ref-hmap key=id prefix=hero\ntype (\n\tAlphaCache struct{ Name string }\n\tBetaCache  struct{ Name string }\n)\n", "binds to multiple structs"},
+		{"orphan redisdao", "package def\n\n//roost:redisdao mode=ref-hmap key=id prefix=hero\n\nvar unrelated = 1\n\ntype HeroCache struct {\n\tName string\n}\n", "not attached to a struct"},
+		{"dao tag sync and nosync", "package def\n\n//roost:dao coll=heroes db=game\ntype HeroDao struct {\n\tName string `dao:\"sync,nosync\"`\n}\n", "states both sync and nosync"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseSource(t, tc.source)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("parse = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// The generator-level guards behind the parser had no tests of their own: a
+// redis DAO with a mode nobody implements, without a key, or without a key
+// type, and a Mongo DAO with an unknown dbscope. Each is pinned by message.
+func TestGenerateRedisDaoRefusesEachIncompleteDefinition(t *testing.T) {
+	defs, err := parseDefDir(mustAbs(t, "./testdata/def"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defs.RedisDaos) == 0 {
+		t.Fatal("fixture has no redis daos")
+	}
+	base := defs.RedisDaos[0]
+	cases := []struct {
+		name   string
+		mutate func(*RedisDaoDef)
+		want   string
+	}{
+		{"unsupported mode", func(d *RedisDaoDef) { d.Mode = "ref-list" }, `unsupported mode "ref-list"`},
+		{"missing key", func(d *RedisDaoDef) { d.Key = "" }, "missing key"},
+		{"missing key type", func(d *RedisDaoDef) { d.KeyType = "" }, "missing key type"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dao := base
+			tc.mutate(&dao)
+			outFile := filepath.Join(t.TempDir(), "gen_redis_dao.go")
+			if _, err := generateRedisDao(dao, "testdata", outFile, true); err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), dao.Name) {
+				t.Fatalf("error must mention %q and the dao name; got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestGenerateDaoRefusesUnknownDatabaseScope(t *testing.T) {
+	defs, err := parseDefDir(mustAbs(t, "./testdata/def"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defs.Daos) == 0 {
+		t.Fatal("fixture has no daos")
+	}
+	dao := defs.Daos[0]
+	dao.DbScope = "region"
+	outFile := filepath.Join(t.TempDir(), "gen_dao.go")
+	if _, err := generateDao(dao, defs, "testdata", outFile, true); err == nil || !strings.Contains(err.Error(), `unsupported dbscope "region"`) {
+		t.Fatalf("error = %v", err)
+	}
+	for _, ok := range []string{"", "global", "sid"} {
+		dao.DbScope = ok
+		if _, err := generateDao(dao, defs, "testdata", filepath.Join(t.TempDir(), "gen_dao.go"), true); err != nil {
+			t.Fatalf("dbscope %q rejected: %v", ok, err)
+		}
+	}
+}
+
+func mustAbs(t *testing.T, path string) string {
+	t.Helper()
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abs
+}
