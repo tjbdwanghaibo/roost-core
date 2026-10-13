@@ -31,7 +31,7 @@
 
 ### attribute
 
-2 个实现文件、2 个测试文件。
+2 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -307,8 +307,7 @@
 
 ### attribute
 
-- [container_promises_test.go](../../../gameplay/attribute/container_promises_test.go)：`TestSnapshotHandsOutACopy`、`TestEmptyLayerAnswersInsteadOfPanicking`、`TestZeroSelectorIsBase`、`TestLayersAreIsolated`
-- [container_snapshot_promises_test.go](../../../gameplay/attribute/container_snapshot_promises_test.go)：`TestSnapshotCopiesUnderTheContainerLock`
+- [container_test.go](../../../gameplay/attribute/container_test.go)：`TestSnapshotHandsOutACopy`、`TestEmptyLayerAnswersInsteadOfPanicking`、`TestZeroSelectorIsBase`、`TestLayersAreIsolated`、`TestSnapshotCopiesUnderTheContainerLock`
 
 ### skill
 
