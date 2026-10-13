@@ -3,12 +3,15 @@ package nest
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
@@ -131,4 +134,109 @@ func TestRuntimeFailureFencesNestDispatch(t *testing.T) {
 	if err := mod.Engine().Dispatch(context.Background(), corenest.NewHandlerName("fenced"), id, nil); !errors.Is(err, corenest.ErrNestFenced) {
 		t.Fatalf("dispatch after RuntimeFailure = %v, want ErrNestFenced", err)
 	}
+}
+
+type emptyOptionsProvider struct{}
+
+func (emptyOptionsProvider) NestOptions() []corenest.NestOption { return nil }
+
+// 无实体获取器的 Mod 不能 Init / Provide；Provide 拒绝 nil 注册表、缺数据引擎能力、数据引擎未初始化（无选项）；未 Provide 就 Start 拒绝。
+func TestModRefusesMissingGetterRegistryAndDataEngine(t *testing.T) {
+	cfg := viper.New()
+	var none *Mod
+	if err := none.Init(cfg); err != corenest.ErrGetterNotSet {
+		t.Fatalf("Init on a nil mod = %v", err)
+	}
+	if err := none.Provide(app.NewRegistry(cfg)); err != corenest.ErrGetterNotSet {
+		t.Fatalf("Provide on a nil mod = %v", err)
+	}
+	mod := NewMod(emptyGetter{})
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(nil); err == nil || !strings.Contains(err.Error(), "nil app registry") {
+		t.Fatalf("Provide(nil) = %v", err)
+	}
+	if err := mod.Provide(app.NewRegistry(cfg)); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("Provide without the data engine capability = %v", err)
+	}
+	uninitialised := app.NewRegistry(cfg)
+	if err := uninitialised.Register(mods.ModDataEngine, emptyOptionsProvider{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(uninitialised); err == nil || !strings.Contains(err.Error(), "is not initialized") {
+		t.Fatalf("Provide with an uninitialised data engine = %v", err)
+	}
+	if err := mod.Start(); err == nil || !strings.Contains(err.Error(), "engine not provided") {
+		t.Fatalf("Start before Provide = %v", err)
+	}
+}
+
+type countingCommitter struct{ effects int }
+
+func (c *countingCommitter) Commit(_ context.Context, record corenest.CommitRecord) error {
+	c.effects += len(record.Effects)
+	return nil
+}
+
+// saga.max_payload_bytes 是发起方与协调器共用的配置键：发起方进程没有这个类型的协调器时，EmitStart 也在 Nest 事务里按配置值拒绝
+// 超限的意图，事务不提交（不能只按线上硬上限 4 MiB 校验、让协调器事后拒绝）。
+func TestEmitStartRefusesOverTheSharedLimitWithoutALocalCoordinator(t *testing.T) {
+	const limit = 1024
+	cfg := viper.New()
+	cfg.Set("saga.max_payload_bytes", limit)
+	if err := NewMod(emptyGetter{}).Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { coresaga.SetStartDataLimit(0) })
+	start := func(key string, size int) (*countingCommitter, error) {
+		committer := &countingCommitter{}
+		_, err := corenest.RunIsolatedTransaction(context.Background(), committer, "start", func() (any, error) {
+			return nil, coresaga.EmitStart(coresaga.StartRequest{Type: "coordinated-elsewhere", DefinitionVersion: 1, BusinessKey: key, Data: make([]byte, size)})
+		})
+		return committer, err
+	}
+	if committer, err := start("at-limit", limit); err != nil || committer.effects != 1 {
+		t.Fatalf("start intent at the shared limit: err=%v effects=%d, want committed", err, committer.effects)
+	}
+	committer, err := start("over-limit", limit+1)
+	if !errors.Is(err, coresaga.ErrInvalidRecord) || committer.effects != 0 {
+		t.Fatalf("start intent over saga.max_payload_bytes with the coordinator in another process: err=%v effects=%d, want ErrInvalidRecord inside the Nest transaction and nothing committed", err, committer.effects)
+	}
+}
+
+type healthSyncTransport struct{}
+
+func (healthSyncTransport) Push(context.Context, entitysync.SessionID, []byte) error { return nil }
+func TestProvidedEntitySyncHealthIsRegistered(t *testing.T) {
+	cfg := viper.New()
+	r := app.NewRegistry(cfg)
+	if err := r.Register(mods.ModDataEngine, dataEngineNestProvider{committer: noOpCommitter{}}); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: healthSyncTransport{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewMod(emptyGetter{})
+	m.entitySync = manager
+	if err = m.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Provide(r); err != nil {
+		t.Fatal(err)
+	}
+	if err = manager.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h := app.MustLookup[*health.Registry](r, mods.ModHealth)
+	for _, result := range h.Snapshot(context.Background()).Results {
+		if result.Name == "entitysync" {
+			if result.Status != health.StatusFail {
+				t.Fatalf("closed sync: %+v", result)
+			}
+			return
+		}
+	}
+	t.Fatal("entitysync health is absent from production registry")
 }
