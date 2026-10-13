@@ -140,19 +140,19 @@ func (r *shellDeployRehearsal) requireStopsUnderOwnUnit(step string, want ...str
 func TestShellReleaseSwitchStopsTheRunningProcessUnderItsOwnUnit(t *testing.T) {
 	t.Parallel()
 	r := newShellDeployRehearsal(t)
-	r.installLegacyRelease()
+	r.installFirstRelease()
 	r.stops()
 	release := func(v string) string { return filepath.Join(r.appRoot, "releases", v) }
-	v1 := r.appRoot // the legacy unit runs v1 in WorkingDirectory=$APP_ROOT
+	v1 := release("v1")
 
-	// Upgrade: v1 (legacy unit, TimeoutStopSec=7s) is stopped with its own budget.
+	// Upgrade: v1 (its unit has TimeoutStopSec=7s) is stopped with its own budget.
 	if out, err := r.run("good", "deploy/shell/install.sh", "game", "1003", "v2", "../config.game.yaml"); err != nil {
 		t.Fatalf("install.sh v2: %v\n%s", err, out)
 	}
 	r.requireStopsUnderOwnUnit("install.sh v2", v1)
 
 	// Manual rollback: v2 is stopped with v2's budget, not v1's.
-	if out, err := r.run("", "deploy/shell/rollback.sh", "game", "1003", "v1"); err != nil || r.runningIn() != r.appRoot {
+	if out, err := r.run("", "deploy/shell/rollback.sh", "game", "1003", "v1"); err != nil || r.runningIn() != v1 {
 		t.Fatalf("rollback.sh v1: err=%v running in %q\n%s", err, r.runningIn(), out)
 	}
 	r.requireStopsUnderOwnUnit("rollback.sh v1", release("v2"))
@@ -160,7 +160,7 @@ func TestShellReleaseSwitchStopsTheRunningProcessUnderItsOwnUnit(t *testing.T) {
 	// A failed upgrade from v1: v1 is stopped with its own budget, then the
 	// broken v3 with v3's while install.sh rolls back.
 	out, err := r.run("broken", "deploy/shell/install.sh", "game", "1003", "v3", "../config.game.yaml")
-	if err == nil || !strings.Contains(out, "rolling back") || r.runningIn() != r.appRoot {
+	if err == nil || !strings.Contains(out, "rolling back") || r.runningIn() != v1 {
 		t.Fatalf("install.sh v3 (broken) did not roll back to v1: err=%v running in %q\n%s", err, r.runningIn(), out)
 	}
 	r.requireStopsUnderOwnUnit("install.sh v3 (broken), automatic rollback", v1, release("v3"))
@@ -175,7 +175,7 @@ func TestShellReleaseSwitchStopsTheRunningProcessUnderItsOwnUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err = r.run("", "deploy/shell/rollback.sh", "game", "1003", "v2")
-	if err == nil || !strings.Contains(out, "restored previous release") || r.runningIn() != r.appRoot {
+	if err == nil || !strings.Contains(out, "restored previous release") || r.runningIn() != v1 {
 		t.Fatalf("rollback.sh v2 (made broken) did not restore v1: err=%v running in %q\n%s", err, r.runningIn(), out)
 	}
 	r.requireStopsUnderOwnUnit("rollback.sh v2 (broken), restore", v1, release("v2"))
@@ -184,7 +184,7 @@ func TestShellReleaseSwitchStopsTheRunningProcessUnderItsOwnUnit(t *testing.T) {
 func TestShellReleaseSwitchRestoresCurrentAndUnitWhenTheUnitCannotBeInstalled(t *testing.T) {
 	t.Parallel()
 	r := newShellDeployRehearsal(t)
-	r.installLegacyRelease()
+	r.installFirstRelease()
 	if out, err := r.run("good", "deploy/shell/install.sh", "game", "1003", "v2", "../config.game.yaml"); err != nil {
 		t.Fatalf("install.sh v2: %v\n%s", err, out)
 	}
@@ -232,7 +232,7 @@ func TestShellReleaseSwitchRestoresCurrentAndUnitWhenTheUnitCannotBeInstalled(t 
 func TestShellRollbackRejectsDotVersions(t *testing.T) {
 	t.Parallel()
 	r := newShellDeployRehearsal(t)
-	r.installLegacyRelease()
+	r.installFirstRelease()
 	for _, version := range []string{".", ".."} {
 		out, err := r.run("", "deploy/shell/rollback.sh", "game", "1003", version)
 		if err == nil || !strings.Contains(out, "invalid version") {
@@ -395,38 +395,32 @@ func (r *shellDeployRehearsal) runningIn() string {
 	return strings.TrimSpace(string(raw))
 }
 
-// legacyStopTimeout is the TimeoutStopSec of the legacy unit: not what the
-// generator renders for this manifest, so a stop under the wrong unit shows.
-const legacyStopTimeout = "7s"
+// firstStopTimeout is the TimeoutStopSec of v1's unit: not what the generator
+// renders for this manifest, so a stop under the wrong unit shows.
+const firstStopTimeout = "7s"
 
-// installLegacyRelease lays out what an install.sh from before RR-20260928-05
-// left behind: release v1 with only the binary and config, current -> v1, a
-// unit with WorkingDirectory=$APP_ROOT, and the tables the operator put in
-// $APP_ROOT/configs/data for that unit. The service is running and ready.
-func (r *shellDeployRehearsal) installLegacyRelease() {
+var timeoutStopSec = regexp.MustCompile(`(?m)^TimeoutStopSec=.*$`)
+
+// installFirstRelease installs v1 with the current install.sh and leaves it
+// running, then gives v1's recorded (and loaded) unit TimeoutStopSec=7s, as if
+// a generator with another stop budget had installed it: every later switch
+// must stop each process under the unit it was started with.
+func (r *shellDeployRehearsal) installFirstRelease() {
 	r.t.Helper()
-	v1 := filepath.Join(r.appRoot, "releases", "v1")
-	for _, d := range []string{v1, filepath.Join(r.appRoot, "configs", "data"), filepath.Dir(r.unitPath)} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			r.t.Fatal(err)
-		}
-	}
-	good, err := os.ReadFile(filepath.Join(filepath.Dir(r.root), "good"))
-	if err != nil {
+	if err := os.MkdirAll(filepath.Dir(r.unitPath), 0o755); err != nil { // /etc/systemd/system exists on a real host
 		r.t.Fatal(err)
 	}
-	for path, body := range map[string]string{
-		filepath.Join(v1, "planet"):                                   string(good),
-		filepath.Join(v1, "config.yaml"):                              "sid: 1003\n",
-		filepath.Join(r.appRoot, "configs", "data", "_manifest.json"): "{}\n",
-		r.unitPath: "[Service]\nWorkingDirectory=" + r.appRoot + "\nExecStart=" + r.appRoot + "/current/planet game --sid 1003 --config " + r.appRoot + "/current/config.yaml\nTimeoutStopSec=" + legacyStopTimeout + "\n",
-	} {
-		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+	if out, err := r.run("good", "deploy/shell/install.sh", "game", "1003", "v1", "../config.game.yaml"); err != nil {
+		r.t.Fatalf("install.sh v1: %v\n%s", err, out)
+	}
+	for _, path := range []string{filepath.Join(r.appRoot, "units", "v1.service"), r.unitPath} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
 			r.t.Fatal(err)
 		}
-	}
-	if err := os.Symlink(v1, filepath.Join(r.appRoot, "current")); err != nil {
-		r.t.Fatal(err)
+		if err := os.WriteFile(path, timeoutStopSec.ReplaceAll(raw, []byte("TimeoutStopSec="+firstStopTimeout)), 0o644); err != nil {
+			r.t.Fatal(err)
+		}
 	}
 	for _, args := range [][]string{{"daemon-reload"}, {"restart", "planet-game-1003.service"}} {
 		cmd := exec.Command(filepath.Join(filepath.Dir(r.root), "stub", "systemctl"), args...)
@@ -435,39 +429,65 @@ func (r *shellDeployRehearsal) installLegacyRelease() {
 			r.t.Fatalf("stub systemctl %v: %v\n%s", args, err, out)
 		}
 	}
-	if got := r.runningIn(); got != r.appRoot {
-		r.t.Fatalf("legacy release is not running in %s before the upgrade (got %q)", r.appRoot, got)
+	if got, want := r.runningIn(), filepath.Join(r.appRoot, "releases", "v1"); got != want {
+		r.t.Fatalf("v1 is not running in %s before the upgrade (got %q)", want, got)
 	}
 }
 
-func TestShellRollbackRunsThePreviousReleaseUnderItsOwnUnit(t *testing.T) {
+// installUnrecordedRelease lays out releases installed by an install.sh from
+// before releases recorded their unit: releases/v0 and v1, current -> v1, and
+// an installed unit but nothing under $APP_ROOT/units.
+func (r *shellDeployRehearsal) installUnrecordedRelease() {
+	r.t.Helper()
+	v1 := filepath.Join(r.appRoot, "releases", "v1")
+	for _, d := range []string{filepath.Join(r.appRoot, "releases", "v0"), v1, filepath.Dir(r.unitPath)} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			r.t.Fatal(err)
+		}
+	}
+	unit := "[Service]\nWorkingDirectory=" + r.appRoot + "\nExecStart=" + r.appRoot + "/current/planet\nTimeoutStopSec=" + firstStopTimeout + "\n"
+	if err := os.WriteFile(r.unitPath, []byte(unit), 0o644); err != nil {
+		r.t.Fatal(err)
+	}
+	if err := os.Symlink(v1, filepath.Join(r.appRoot, "current")); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// 逐 release 记录 unit 之前的 install.sh 装的 release 不再被沿用或补记录：install.sh 与 rollback.sh
+// 在动任何东西之前拒绝，并给出唯一的处理办法（停服务、删旧 current 与 releases 后全新安装）。
+func TestShellScriptsRefuseAReleaseWithoutARecordedUnit(t *testing.T) {
 	t.Parallel()
 	r := newShellDeployRehearsal(t)
-	r.installLegacyRelease()
-	release := func(v string) string { return filepath.Join(r.appRoot, "releases", v) }
-
-	out, err := r.run("broken", "deploy/shell/install.sh", "game", "1003", "v2", "../config.game.yaml")
-	if err == nil || !strings.Contains(out, "rolling back") {
-		t.Fatalf("install.sh v2 with a binary that never gets ready did not roll back (err=%v)\n%s", err, out)
+	r.installUnrecordedRelease()
+	unitBefore, err := os.ReadFile(r.unitPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := r.runningIn(); got != r.appRoot || strings.Contains(out, "rollback also failed readiness") {
-		t.Errorf("install.sh's automatic rollback to v1 did not bring v1 back under the unit it was installed with\n"+
-			"want running in %s (WorkingDirectory=$APP_ROOT, where the operator's configs/data is), got %q\n%s", r.appRoot, got, out)
-	}
-
-	if out, err := r.run("good", "deploy/shell/install.sh", "game", "1003", "v3", "../config.game.yaml"); err != nil {
-		t.Fatalf("install.sh v3: %v\n%s", err, out)
-	}
-	if got := r.runningIn(); got != release("v3") {
-		t.Fatalf("v3 is not running in its release: got %q, want %s", got, release("v3"))
-	}
-
-	out, err = r.run("", "deploy/shell/rollback.sh", "game", "1003", "v1")
-	if got := r.runningIn(); err != nil || got != r.appRoot {
-		t.Errorf("rollback.sh v1 did not run v1 under the unit it was installed with: err=%v, want running in %s, got %q\n%s", err, r.appRoot, got, out)
-	}
-	out, err = r.run("", "deploy/shell/rollback.sh", "game", "1003", "v3")
-	if got := r.runningIn(); err != nil || got != release("v3") {
-		t.Errorf("rollback.sh v3 did not run v3 under its own unit again: err=%v, want running in %s, got %q\n%s", err, release("v3"), got, out)
+	for _, step := range []struct {
+		name string
+		run  func() (string, error)
+	}{
+		{"install.sh v2", func() (string, error) {
+			return r.run("good", "deploy/shell/install.sh", "game", "1003", "v2", "../config.game.yaml")
+		}},
+		{"rollback.sh v0", func() (string, error) { return r.run("", "deploy/shell/rollback.sh", "game", "1003", "v0") }},
+	} {
+		out, err := step.run()
+		if err == nil || !strings.Contains(out, "no systemd unit recorded for release v1") || !strings.Contains(out, "install again") {
+			t.Errorf("%s with an unrecorded current release: err=%v\n%s", step.name, err, out)
+		}
+		if _, err := os.Stat(filepath.Join(r.appRoot, "releases", "v2")); !os.IsNotExist(err) {
+			t.Errorf("%s created release v2 before refusing: %v", step.name, err)
+		}
+		if got, _ := filepath.EvalSymlinks(filepath.Join(r.appRoot, "current")); got != filepath.Join(r.appRoot, "releases", "v1") {
+			t.Errorf("%s moved current to %q", step.name, got)
+		}
+		if unit, _ := os.ReadFile(r.unitPath); string(unit) != string(unitBefore) {
+			t.Errorf("%s rewrote the installed unit:\n%s", step.name, unit)
+		}
+		if stops := r.stops(); len(stops) != 0 {
+			t.Errorf("%s stopped %v before refusing", step.name, stops)
+		}
 	}
 }
