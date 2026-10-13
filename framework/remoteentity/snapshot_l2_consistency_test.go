@@ -173,7 +173,7 @@ func staleBackfillReplica(t *testing.T, key entity.RemoteSnapshotKey, version, r
 		Key: key, StateVersion: version, BaseVersion: version - 1, MarkerEpoch: 1, RouteEpoch: routeEpoch,
 		Schema: 1, Codec: 1, Full: true, Data: data, Checksum: entity.RemoteSnapshotChecksum(data),
 	}
-	raw, err := json.Marshal(remoteSnapshotWire{Key: key, Update: record})
+	raw, err := json.Marshal(remoteSnapshotWire{Key: key, Update: record, PublishedAt: time.Now().UnixNano()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,7 +553,8 @@ func b2ReplicaWire(t *testing.T, key entity.RemoteSnapshotKey, version uint64, p
 	return mirror.Envelope{Key: remoteSnapshotReplicaKey(key), Version: int64(version), Op: mirror.OpUpsert, Payload: raw}
 }
 
-// DeliverAll 重放的历史快照比 L2 能担保的窗口（snapshot_l2_ttl / 2）更老时不被接受；新消息与没有发布时刻的消息照旧。
+// DeliverAll 重放的历史快照比 L2 能担保的窗口（snapshot_l2_ttl / 2）更老时不被接受；新消息照常生效；没有发布时刻的
+// 更新无法判断新旧，按坏消息拒绝（不兼容旧发布者）。
 func TestB2HistoricReplicaPastL2MemoryIsNotAdmitted(t *testing.T) {
 	ctx := context.Background()
 	redis := newSnapshotRedisFake()
@@ -574,18 +575,18 @@ func TestB2HistoricReplicaPastL2MemoryIsNotAdmitted(t *testing.T) {
 		t.Fatalf("the historic replica reached the shared L2: version=%d held=%v err=%v", stored.StateVersion, held, err)
 	}
 
-	// 对照：刚发布的消息、以及旧发布者不带发布时刻的消息照常生效。
+	// 对照：刚发布的消息照常生效。
 	if err := store.ApplyReplica(ctx, b2ReplicaWire(t, key, 2, "v2-live", time.Now().UnixNano(), 1)); err != nil {
 		t.Fatal(err)
 	}
 	if got, found, err := reader.ReadRemoteSnapshot(ctx, key, entity.RemoteReadCached, 0); err != nil || !found || string(got.Payload.BytesCopy()) != "v2-live" {
 		t.Fatalf("a live replica: payload=%q found=%v err=%v", got.Payload.BytesCopy(), found, err)
 	}
-	if err := store.ApplyReplica(ctx, b2ReplicaWire(t, key, 3, "v3-legacy", 0, 1)); err != nil {
-		t.Fatal(err)
+	if err := store.ApplyReplica(ctx, b2ReplicaWire(t, key, 3, "v3-no-published-at", 0, 1)); err == nil {
+		t.Fatal("an update without published_at was accepted; it cannot be told apart from a replay older than the L2 window")
 	}
-	if got, found, err := reader.ReadRemoteSnapshot(ctx, key, entity.RemoteReadCached, 0); err != nil || !found || string(got.Payload.BytesCopy()) != "v3-legacy" {
-		t.Fatalf("a legacy replica without published_at: payload=%q found=%v err=%v", got.Payload.BytesCopy(), found, err)
+	if got, found, err := reader.ReadRemoteSnapshot(ctx, key, entity.RemoteReadCached, 0); err != nil || !found || string(got.Payload.BytesCopy()) != "v2-live" {
+		t.Fatalf("a refused update without published_at replaced v2-live: payload=%q found=%v err=%v", got.Payload.BytesCopy(), found, err)
 	}
 }
 

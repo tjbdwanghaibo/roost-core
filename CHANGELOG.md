@@ -32,6 +32,7 @@
   - mail：现行信封必须有过期时间，已结算 claim 都带窗口；不再按条数淘汰无窗口的旧已结算 claim——它被保留，超出上限时投递以 `ErrClaimHistoryFull` 拒绝，交运维处理。“未读不可淘汰”与 RequestID 去重不变。**升级前须清理旧邮箱中无窗口的已结算 claim。**
   - Remote 快照副本：不带版本（`version <= 0`）的删除消息不再按"无版本删除"应用，与其他畸形消息一样被拒绝（`remote_entity: snapshot delete message has no version`，传输层记 handler 错误）；删除一律携带版本（7afc4c63）。**升级要求：先停旧进程再起新进程**，不让旧发布者与新副本混跑。
   - Remote 控制库事务集合：只建当前的 `expires_at_ttl` TTL 索引，不再识别并替换旧名 / 旧键的 TTL 索引（d71aa7ac）。**升级要求：清空 Remote 控制库的事务集合，或先手工删除旧的 `created_at_ttl` 索引**——它若建在 `expires_at` 上，新索引同键不同名，启动建索引报冲突；若是更早按 `created_at` 过期的形态，不会报错，但会删掉未发布的提交。
+  - Remote 快照副本：不带发布时刻（`published_at`）的快照更新不再按"旧发布者"放行，与其他畸形消息一样被拒绝（`remote_entity: snapshot update message has no publish time`）——没有发布时刻就无法判断它是否是比共享 L2 担保窗口更老的重放。现行发布者的更新与删除都带发布时刻。**升级要求：先停旧进程再起新进程。**
 - Nest：`completionPump.stop` 一次超时返回后，重试的 stop 仍等待完成队列排空与 worker 池停止（以前第二次调用直接返回，排空未完成就继续停机），与三步停机契约一致（f8af5afc）。
 - Nest：Client 准入错误只归一化一次，队列满等错误文本不再重复同一段（e161459b）。
 - Entity：组件依赖拓扑排序在入度为 0 的候选里按组件类型排序，同一组注册得到确定的初始化顺序（以前随 map 遍历变化）（d610a1b6）。

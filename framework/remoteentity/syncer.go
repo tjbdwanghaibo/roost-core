@@ -32,8 +32,8 @@ type remoteSnapshotWire struct {
 	Delete bool                        `json:"delete,omitempty"`
 	Key    entity.RemoteSnapshotKey    `json:"key"`
 	Update entity.RemoteSnapshotRecord `json:"update,omitempty"`
-	// PublishedAt 是发布方发出这条消息的时刻（Unix 纳秒，omitempty）。接收方据此丢弃比共享 L2
-	// 能担保的窗口更老的快照更新（ApplyReplica）。旧发布者不带它，旧接收方忽略它。
+	// PublishedAt 是发布方发出这条消息的时刻（Unix 纳秒）。接收方据此丢弃比共享 L2 能担保的窗口更老的
+	// 快照更新（ApplyReplica）；不带它的更新按坏消息拒绝。
 	PublishedAt int64 `json:"published_at,omitempty"`
 }
 
@@ -137,10 +137,10 @@ func (s SnapshotReplicaStore) ApplyReplica(ctx context.Context, env mirror.Envel
 	return err
 }
 
-// historic 报告一条带发布时刻的快照更新是否已老到共享 L2 无法担保（见 ApplyReplica）。没有发布时刻
-// （旧发布者）或没有配置 L2 TTL 时不过滤。
+// historic 报告一条快照更新是否已老到共享 L2 无法担保（见 ApplyReplica）。发布时刻由身份校验保证为正；
+// 没有配置 L2 TTL 时不过滤。
 func (s SnapshotReplicaStore) historic(publishedAt int64, now time.Time) bool {
-	if publishedAt <= 0 || s.client == nil || s.client.cfg == nil || s.client.cfg.SnapshotL2TTL <= 0 {
+	if s.client == nil || s.client.cfg == nil || s.client.cfg.SnapshotL2TTL <= 0 {
 		return false
 	}
 	return now.UnixNano()-publishedAt > (s.client.cfg.SnapshotL2TTL / 2).Nanoseconds()
@@ -169,6 +169,10 @@ func validateSnapshotWireIdentity(env mirror.Envelope, wire remoteSnapshotWire) 
 	}
 	if wire.Update.Key != wire.Key {
 		return fmt.Errorf("remote_entity: snapshot payload key does not match the message key")
+	}
+	// 没有发布时刻的更新分不清是不是比 L2 担保窗口更老的重放（见 historic），不兼容旧发布者，按坏消息拒绝。
+	if wire.PublishedAt <= 0 {
+		return fmt.Errorf("remote_entity: snapshot update message has no publish time")
 	}
 	if env.Version < 0 || uint64(env.Version) != wire.Update.StateVersion {
 		return fmt.Errorf("remote_entity: snapshot message version %d does not match payload version %d",

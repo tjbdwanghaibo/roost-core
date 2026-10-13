@@ -49,7 +49,7 @@ func TestApplyReplicaRefusesPayloadIdentityThatContradictsTheEnvelope(t *testing
 	}
 
 	// The honest message applies.
-	good := remoteSnapshotWire{Key: declared, Update: record}
+	good := remoteSnapshotWire{Key: declared, Update: record, PublishedAt: time.Now().UnixNano()}
 	if err := store.ApplyReplica(context.Background(), envelopeFor(good, declared, record.StateVersion)); err != nil {
 		t.Fatalf("a well-formed message must apply: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestApplyReplicaRefusesPayloadIdentityThatContradictsTheEnvelope(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			env := envelopeFor(tc.twist(remoteSnapshotWire{Key: declared, Update: record}), declared, record.StateVersion)
+			env := envelopeFor(tc.twist(remoteSnapshotWire{Key: declared, Update: record, PublishedAt: time.Now().UnixNano()}), declared, record.StateVersion)
 			if err := store.ApplyReplica(context.Background(), env); err == nil {
 				t.Fatal("a message whose payload identity contradicts its envelope was applied")
 			}
@@ -276,7 +276,7 @@ func deleteOrderUpsert(t *testing.T, key entity.RemoteSnapshotKey, version uint6
 		Full: true, Data: []byte("state"),
 	}
 	record.Checksum = entity.RemoteSnapshotChecksum(record.Data)
-	raw, err := json.Marshal(remoteSnapshotWire{Key: key, Update: record})
+	raw, err := json.Marshal(remoteSnapshotWire{Key: key, Update: record, PublishedAt: time.Now().UnixNano()})
 	if err != nil {
 		t.Fatal(err)
 	}
