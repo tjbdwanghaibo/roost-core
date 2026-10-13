@@ -4,8 +4,20 @@
 
 ## [Unreleased]
 
-- 移除旧兼容（生成器）：roost.yaml 不再把改名前的 mod 名（`sync`、`room`）与 feature 名（`replication-quic` / `replication-kcp` / `replication-udp`）改写成新名，它们和其他未知名一样被 Validate 点名拒绝。**升级要求**：手工把 roost.yaml 里的 `sync` / `room` 改为 `syncbus`，`replication-*` 改为 `nettransport-*`，再运行 `roost project sync`。`roost help replication`、生成器文档、release / framework-compat 工作流与 source-head-check 脚本同步改用新名。
-- 移除旧兼容（wiring）：SyncBusMod 停机只走总线的 `StopWithContext` 契约，删除对旧 `Stop()` 接口的回退分支（两种传输的现有实现都不依赖它：JetStream 总线实现了 StopWithContext，普通 NATS 总线没有订阅之外的资源）。无配置或数据变化，无需升级操作。
+- 移除旧兼容（生成器）（维护者 2026-10-13 批准清单"按推荐处理"；项目未上线，不兼容旧工程）。旧形态现在被明确拒绝或不再处理，而不是被读取或自动迁移：
+  - roost.yaml 不再把改名前的 mod 名（`sync`、`room`）与 feature 名（`replication-quic` / `replication-kcp` / `replication-udp`）改写成新名，它们和其他未知名一样被 Validate 点名拒绝。`roost help replication`、生成器文档、release / framework-compat 工作流与 source-head-check 脚本同步改用新名。
+  - 三仓合一迁移工具整套删除：`roost project upgrade --consolidate`、依赖解析前的自动 consolidation、`codegen/internal/roost/migration/consolidation_imports.yaml`，以及 `project new -roost-skill-version / -roost-service-version`、`project upgrade -skill / -service / --consolidate`（现在按未知 flag 报错）。合仓前的工程（仍 require roost-skill / roost-service / roost-kit / roost-codegen 或 import 旧包路径）不再能自动升级，按当前模板重新生成或人工迁移；upgrade-compat 工作流改为从已发布的 roost-core v1.25.0 生成器起步。
+  - roost.yaml 的 `versions.skill`、`versions.service`、`versions.codegen` 不再解码：出现即在加载时（普通加载与 `project upgrade` 一致）报 `versions.<key> (...) is retired and no longer read: ...; delete the line by hand`；`project upgrade` 不再自动删除 `versions.codegen`。
+  - `//cube:` 标记前缀不再读取：`roost generate` 发现生产源码仍用它时在运行任何生成器之前失败并列出文件，要求改为 `//roost:`；doctor 也不再把它当作标记。
+  - cfggen meta 删除 `globals` 的旧别名 `objects`：严格解码按未知字段拒绝。
+  - tablegen `_manifest.json` 只读 v2：v1（无归属记录）在转换与 `roost generate` 的 config-data 判断中报 `table manifest ... is version 1, which is no longer read`，并给出一次性清理办法；其它版本（含缺 version）报 unsupported。删除"v1 遇未认领 JSON 逐个报错、先移出再升级"的旧路径。
+  - `project sync` 不再清理旧 Kubernetes base 位置（`deploy/k8s/` 顶层的旧 base 文件），它们按普通应用文件对待、保留不动。
+  - 停机配置：不再识别 RR-20260926-66 之前的生成器写的 `shutdown:` 块和旧部署模板里的宽限期写法（install.sh 的 `TimeoutStopSec=`、run.sh 的旧等待循环）。这些块一律按手改处理，sync 不改写，doctor 不再从旧模板读宽限期；当前生成块随 Mod 刷新的维护不变。
+  - 核实后不属于旧兼容、行为不变：不写 target 的 `//roost:nest` 按参数类型推断锁目标是现行便捷写法（仅改名为 isInferredGroup / isInferredEntity）；frameworkdeps 没有专门的 `/skillv2` 迁移代码，只删除了相关说明与回归。
+  - **升级要求**：手工编辑 roost.yaml——删除 `versions.skill` / `versions.service` / `versions.codegen`，把 `sync` / `room` 改为 `syncbus`、`replication-*` 改为 `nettransport-*`；源码里的 `//cube:` 改为 `//roost:`；cfggen meta 的 `objects:` 改为 `globals:`；删除 v1 `configs/data/_manifest.json` 与旧生成器留下、meta 已不存在的 JSON（手写 JSON 保留）；然后运行 `roost project sync`。`deploy/k8s/` 顶层旧 base 文件与旧格式的停机块 / 部署模板请人工删除或按当前模板重新生成。
+- 移除旧兼容（wiring / syncbus）：
+  - SyncBusMod 未配置 `syncbus.prefix` 时的缺省由 room 时代的 `roost.room` 改为 `roost.sync`（与驱动缺省、生成配置一致）；删除 `roost.room → ROOST_SYNC` 的流名特例映射，JetStream 流名一律显式 `syncbus.stream` 优先、否则由 prefix 推出（`roost.sync` → `ROOST_SYNC`，`roost.room` → `ROOST_ROOM`）。配置声明 default 与 kitconfig 快照同步；生成的配置一直写 `prefix: roost.sync`，不受影响。**升级要求**：没写 `syncbus.prefix` 的部署主题从 `roost.room.*` 变为 `roost.sync.*`，新旧进程不能混跑——先停旧再起新；JetStream 部署需全新部署（清掉旧 `ROOST_SYNC` 流后再起），或显式配置旧名 `syncbus.prefix: roost.room` 加 `syncbus.stream: ROOST_SYNC` 沿用旧主题与 durable 游标。显式写了 `prefix: roost.room` 而没写 `stream` 的部署，新推出的 `ROOST_ROOM` 与旧 `ROOST_SYNC` 的 subjects 重叠，启动明确失败，需补 `syncbus.stream: ROOST_SYNC` 或全新部署。
+  - 停机：删除 JetStream 总线不限时的 `Stop()`；`framework/sync/syncbus/driver` 新增 `Bus`（`ISyncBus` + `StopWithContext`），普通 NATS 总线补 `StopWithContext`（无可等待资源，返回 nil），两种驱动编译期断言实现它；SyncBusMod 的总线字段收紧为 `driver.Bus`，停机契约由编译期保证，不再运行期类型断言、也没有旧 `Stop()` 回退。直接调用 `Stop()` 的代码改用 `StopWithContext(ctx)`。无配置或数据变化。
 - **移除旧格式兼容**（维护者 2026-10-13："兼容代码一起删"；项目未上线，不兼容旧数据 / 旧进程）。旧形态现在被明确拒绝而不是被读取或升级；**升级要求：先用旧程序完成落库并清理旧数据，再起新版本**。各项：
   - Remote 快照 `checksum`：只读 8 字节 Binary 形态，旧版本写下的 BSON 数字形态（int32 / int64 / double）以及 null / undefined 报 `remote checksum has unexpected BSON type`（现行写入全部经 `MarshalBSONValue`，不会写出这些形态；缺字段解为 0，由信封校验按 checksum mismatch 拒绝）。
   - 历史 WAL 中“Remote 写 + lease fence”混合记录：不再投影为 Remote Rejected 并卸载重载（RR-20260926-19 的历史路径）。投影器遇到它以 `engine.ErrRetiredRemoteLeaseFenceRecord` fatal，不写库、不推进 checkpoint，WAL 原样保留；准入处的 `ErrRemoteLeaseFenceUnsupported` 与原生 saga 步骤的 lease fence 不变。**升级前须用旧版本排空 WAL。**

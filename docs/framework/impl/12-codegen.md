@@ -480,7 +480,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 - [globals_test.go](../../../codegen/internal/cfggen/globals_test.go)：`TestCfggenGlobalRulesBecomeObjectDefRules`、`TestCfggenGlobalWithoutRulesKeepsItsRegistration`、`TestCfggenGlobalRulesStillRejectWhatAnObjectCannotMean`
 - [groups_test.go](../../../codegen/internal/cfggen/groups_test.go)：`TestCfggenExportsOnlyTheTargetGroups`、`TestCfggenGroupsFlagSelectsAnotherTarget`、`TestCfggenWithoutGroupsExportsEverything`、`TestCfggenRefusesEachInvalidGroupUse`、`TestExportRefusesABeanWithEveryFieldExcluded`
-- [main_test.go](../../../codegen/internal/cfggen/main_test.go)：`TestCfggenGeneratesStructsRegistrationAndAccessors`、`TestCfggenAcceptsObjectsAliasForGlobals`、`TestCfggenRejectsBrokenMetaForTheStatedReason`、`TestCfggenIndexFalseDisablesIndex`、`TestCfggenKeywordFieldNamesGenerateCompilableParams`；其余 9 项见文件
+- [main_test.go](../../../codegen/internal/cfggen/main_test.go)：`TestCfggenGeneratesStructsRegistrationAndAccessors`、`TestCfggenRejectsTheRetiredObjectsAlias`、`TestCfggenRejectsBrokenMetaForTheStatedReason`、`TestCfggenIndexFalseDisablesIndex`、`TestCfggenKeywordFieldNamesGenerateCompilableParams`；其余 9 项见文件
 
 ### codegen/internal/dao
 
@@ -519,7 +519,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 
 ### codegen/internal/marker
 
-- [marker_test.go](../../../codegen/internal/marker/marker_test.go)：`TestBothPrefixesParseIdentically`、`TestRegexpIsAnchoredAndKindIsLiteral`、`TestFindLegacyReportsProductionSourcesOnly`
+- [marker_test.go](../../../codegen/internal/marker/marker_test.go)：`TestOnlyTheRoostPrefixIsRead`、`TestRegexpIsAnchoredAndKindIsLiteral`、`TestFindRetiredPrefixReportsProductionSourcesOnly`
 - [typo_guard_test.go](../../../codegen/internal/marker/typo_guard_test.go)：`TestEveryMarkerRefusesAMisspeltKey`、`TestEveryMarkerKindHasASpecAndAGuardCase`
 
 ### codegen/internal/nest
@@ -555,7 +555,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 - [config_contract_test.go](../../../codegen/internal/roost/config_contract_test.go)：`TestKitConfigSchemasMatchKitDeclarations`、`TestGeneratedConfigsMatchDeclarations`、`TestGeneratedConfigCheckCatchesDrift`、`TestGeneratorConstantsMatchTheDeclaredExamples`、`TestPlayerTCPDeclarationAgreesWithKit`；其余 8 项见文件
 - [demo_test.go](../../../codegen/internal/roost/demo_test.go)：`TestDemoEmbedCoversEveryFile`、`TestDemoTemplateStepsAndShippedFilesAgree`、`TestDemoTemplateKeepsTheGameTemplateAndItsFeatures`、`TestDemoTemplateGeneratesABuildableWritePath`、`TestDemoTemplateFollowsTheGameServiceName`；其余 6 项见文件
 - [dependencies_test.go](../../../codegen/internal/roost/dependencies_test.go)：`TestFrameworkDependencyUpdateStagesAndCommitsOnlyModuleFiles`、`TestUpdateFrameworkDependenciesResolvesAllDirectModulesTogether`、`TestUpdateFrameworkDependenciesUsesExplicitPolicies`、`TestUpdateFrameworkDependenciesRollsBackModuleFiles`、`TestTidyProjectDependenciesDoesNotUpgradeFramework`；其余 5 项见文件
-- [deploy_compose_test.go](../../../codegen/internal/roost/deploy_compose_test.go)：`TestProductionComposeMountsTheConfigAsAnExplicitBind`、`TestGeneratedComposeInvocationsUseAnAbsoluteConfigRoot`、`TestDeployScriptsCarryNoKnownShellcheckFindings`、`TestFrameworkCompatMinimumSetMatchesTheGeneratorFloor`、`TestUpgradeCompatHistoryStartsAtTheRoostModulePaths`；其余 8 项见文件
+- [deploy_compose_test.go](../../../codegen/internal/roost/deploy_compose_test.go)：`TestProductionComposeMountsTheConfigAsAnExplicitBind`、`TestGeneratedComposeInvocationsUseAnAbsoluteConfigRoot`、`TestDeployScriptsCarryNoKnownShellcheckFindings`、`TestFrameworkCompatMinimumSetMatchesTheGeneratorFloor`、`TestUpgradeCompatHistoryStartsAtTheCurrentPackageLayout`；其余 8 项见文件
 - [deploy_image_test.go](../../../codegen/internal/roost/deploy_image_test.go)：`TestProductionImageCarriesConfigDataWhereConfigDataDirResolves`、`TestGeneratedDeploymentsGiveStatsLogAWritableDirectory`
 - [dev_run_test.go](../../../codegen/internal/roost/dev_run_test.go)：`TestDevRunRegistersTheGameServerInTheAccountServicesRedisDatabase`、`TestDevRunKeepsAccountctlDefaultsWhenTheRedisKeysAreAbsent`、`TestDevRunRegistersTheGameServerOnTheAccountServicesRedisCluster`
 - [framework_services_test.go](../../../codegen/internal/roost/framework_services_test.go)：`TestGameTemplateHostsEveryFrameworkServiceAndWiresTheGame`、`TestFrameworkServiceManifestValidation`、`TestGameTemplateRendersHostingAndClientWiring`、`TestAProjectWithoutFrameworkServicesDoesNotDependOnRoostService`、`TestGameTemplateScaffoldsWorldAndPlayer`；其余 9 项见文件
@@ -588,7 +588,7 @@ DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中
 ### codegen/internal/tablegen
 
 - [main_test.go](../../../codegen/internal/tablegen/main_test.go)：`TestParseMetaRootUsesTargetProjectModulePath`、`TestUnlabelledFieldsRoundTripThroughGeneratedJSON`、`TestUnknownTableKeyIsRejected`、`TestObjectCSVRejectsMultipleDataRows`、`TestGeneratedLoaderAndObjectConverterMatchSchema`
-- [retirement_test.go](../../../codegen/internal/tablegen/retirement_test.go)：`TestConvertCSVToJSONRetiresOwnedDataAndPreservesManualData`、`TestConvertCSVToJSONRefusesEditedOrLegacyUnownedRetirement`、`TestLegacyManifestUntrackedJSONErrorTellsRecoverySteps`
+- [retirement_test.go](../../../codegen/internal/tablegen/retirement_test.go)：`TestConvertCSVToJSONRetiresOwnedDataAndPreservesManualData`、`TestConvertCSVToJSONRefusesEditedOrLegacyUnownedRetirement`、`TestTableManifestOtherThanV2IsRejected`
 - [rules_test.go](../../../codegen/internal/tablegen/rules_test.go)：`TestReadCSVRecordsEnforcesDeclaredRules`、`TestReadCSVRecordsSkipsTitleTypeAndRuleRows`、`TestWriteGeneratedRefusesToOverwriteWithoutForce`、`TestCheckJSONEnforcesTheDeclaredRules`、`TestRefDeclarationsAreResolvedAtGeneration`；其余 3 项见文件
 - [run_test.go](../../../codegen/internal/tablegen/run_test.go)：`TestRunReturnsFlagErrors`
 
