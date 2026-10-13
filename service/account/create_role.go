@@ -93,7 +93,7 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 			if state == slotForeign {
 				return Role{}, fmt.Errorf("%w: slot identity mismatch", ErrConflict)
 			}
-			return Role{}, fmt.Errorf("%w: legacy empty slot requires reconciliation", ErrConflict)
+			return Role{}, fmt.Errorf("%w: slot has no creation plan; reconcile it offline", ErrConflict)
 		default:
 			return Role{}, fmt.Errorf("account: creation table answered %d for slot %d, entry %d, name %d", action, state, entry, nameAt)
 		}
@@ -306,10 +306,12 @@ func (s *Service) releaseCreationSlot(ctx context.Context, key string, slot vers
 	return err == nil, err
 }
 
-// Pending roles are not playable. Legacy published roles have no CreationID.
+// Pending roles are not playable, and neither is a role without a creation
+// identity: every role this version writes carries one, and roles written
+// before creation plans existed are not supported (maintainer 2026-10-13).
 func (s *Service) roleReady(ctx context.Context, role Role) error {
 	if role.CreationID == "" {
-		return nil
+		return fmt.Errorf("%w: role %d has no creation identity", ErrConflict, role.PlayerID)
 	}
 	slot, found, err := s.cfg.Slots.Get(ctx, slotKeyFor(role.AccountID, role.ServerID))
 	if err != nil {

@@ -25,9 +25,12 @@ const (
 	slotAbsent slotState = iota + 1
 	// slotForeign: the record names another account or server — corrupt.
 	slotForeign
-	// slotLegacy: no role and no creation identity, written before plans
-	// existed (RR-20260929-19); a published legacy role may hang off it.
-	slotLegacy
+	// slotMalformed: a slot this version never writes — no creation plan
+	// (or a plan without its player id), with or without a published role.
+	// It is refused, never inferred; reconcile it offline. Slots written
+	// before creation plans existed (RR-20260929-19) land here: there is no
+	// compatibility for them (maintainer 2026-10-13).
+	slotMalformed
 	// slotPendingUnadmitted: a plan whose name reservation is not admitted
 	// on the slot yet. Nothing after admission has happened, so releasing it
 	// cannot strand a role.
@@ -122,7 +125,7 @@ func decideCreation(slot slotState, entry creationEntry, name nameState) creatio
 			return actRefuseUnresolvable
 		}
 		return actMakePlan
-	case slotLegacy:
+	case slotMalformed:
 		if entry == entryResolve {
 			return actRefuseUnresolvable
 		}
@@ -189,10 +192,12 @@ func classifySlot(slot versionstore.Versioned[Slot], found bool, accountID strin
 		return slotAbsent
 	case slot.Value.AccountID != accountID || slot.Value.ServerID != serverID:
 		return slotForeign
+	case slot.Value.Creation.ID == "" || slot.Value.Creation.PlayerID == 0:
+		// Checked before publication: a published slot keeps its plan, so a
+		// published role without one is not something this version wrote.
+		return slotMalformed
 	case slot.Value.PlayerID != 0:
 		return slotPublished
-	case slot.Value.Creation.ID == "" || slot.Value.Creation.PlayerID == 0:
-		return slotLegacy
 	case slot.Value.Creation.Admitted:
 		return slotPendingAdmitted
 	default:

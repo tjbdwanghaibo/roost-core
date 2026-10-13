@@ -52,9 +52,9 @@ type Admin interface {
 	// for audit and is never playable.
 	//
 	// It refuses, with ErrNotResolvable, what it cannot prove safe: a slot
-	// with no pending plan, a plan that already published its role, a legacy
-	// slot with no creation identity (a published legacy role may hang off
-	// it), and a plan that still holds its own name — reserved, because an
+	// with no pending plan, a plan that already published its role, a
+	// malformed slot with no creation plan (reconciled offline), and a plan
+	// that still holds its own name — reserved, because an
 	// attempt may be in flight and the reservation lapses on its own; or
 	// committed, because that plan completes by an ordinary same-name
 	// CreateRole and abandoning it would have to burn or release a committed
@@ -129,9 +129,9 @@ func (s *Service) ResolvePendingCreation(ctx context.Context, accountID string, 
 		case state == slotPublished:
 			return RoleCreation{}, fmt.Errorf("%w: %s already published role %d on server %d; nothing is pending",
 				ErrNotResolvable, accountID, slot.Value.PlayerID, serverID)
-		case state == slotLegacy:
-			return RoleCreation{}, fmt.Errorf("%w: the slot of %s on server %d predates creation identities; a "+
-				"published legacy role may depend on it, reconcile it offline (RR-20260929-19)", ErrNotResolvable, accountID, serverID)
+		case state == slotMalformed:
+			return RoleCreation{}, fmt.Errorf("%w: the slot of %s on server %d has no creation plan; reconcile it offline",
+				ErrNotResolvable, accountID, serverID)
 		case name == nameCommittedByPlan:
 			return RoleCreation{}, fmt.Errorf("%w: plan %s of %s on server %d already committed name %q; it "+
 				"completes by CreateRole with the same name", ErrNotResolvable, plan.ID, accountID, serverID, plan.Name)

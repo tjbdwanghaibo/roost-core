@@ -437,9 +437,9 @@ func TestResolvePendingCreationRefusesWhatItCannotProve(t *testing.T) {
 			t.Fatalf("got %v, want ErrNotResolvable", err)
 		}
 	})
-	t.Run("legacy empty slot", func(t *testing.T) {
+	t.Run("slot without creation plan", func(t *testing.T) {
 		s, _, cfg := newService(t)
-		a := login(t, s, "rr06-legacy")
+		a := login(t, s, "rr06-planless")
 		if _, _, err := cfg.Slots.Create(ctx, slotKeyFor(a.ID, 1), Slot{AccountID: a.ID, ServerID: 1}); err != nil {
 			t.Fatal(err)
 		}
@@ -447,7 +447,7 @@ func TestResolvePendingCreationRefusesWhatItCannotProve(t *testing.T) {
 			t.Fatalf("got %v, want ErrNotResolvable", err)
 		}
 		if _, found, err := cfg.Slots.Get(ctx, slotKeyFor(a.ID, 1)); err != nil || !found {
-			t.Fatalf("legacy slot was guessed away: found=%v err=%v", found, err)
+			t.Fatalf("slot without a plan was guessed away: found=%v err=%v", found, err)
 		}
 	})
 	t.Run("live own reservation", func(t *testing.T) {

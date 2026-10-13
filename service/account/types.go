@@ -250,8 +250,9 @@ type GameServer struct {
 
 // Role is one character under an account on one server.
 type Role struct {
-	// CreationID links a new role to its durable creation intent. Empty on
-	// legacy roles; it is not a session token or a client request identity.
+	// CreationID links the role to its durable creation intent; every role
+	// carries one, and a role without it is refused as malformed. It is not a
+	// session token or a client request identity.
 	CreationID string `json:"creation_id,omitempty"`
 	// PlayerID is allocated by the injected PlayerIDAllocator, never by this
 	// service. It is the role's identity everywhere else in the system.
@@ -305,8 +306,8 @@ type Slot struct {
 	// between claiming the slot and inserting the role, which is what makes
 	// an abandoned claim identifiable.
 	PlayerID int64 `json:"player_id,omitempty"`
-	// Creation is retained until publication and identifies retries after an
-	// uncertain write. A legacy empty slot cannot be safely inferred from it.
+	// Creation is retained through publication and identifies retries after
+	// an uncertain write. A slot without it is malformed and refused.
 	//
 	// A pending plan leaves the slot by one of three doors, all identity- and
 	// version-fenced deletes: a definite pre-admission refusal (name taken,

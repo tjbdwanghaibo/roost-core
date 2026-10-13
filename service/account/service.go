@@ -179,16 +179,6 @@ func (s *Service) Login(ctx context.Context, identity Identity) (Account, error)
 		return Account{}, err
 	}
 	accountID := Identity{Channel: verified.Channel, OpenID: verified.OpenID}.AccountID()
-	legacyID := strings.ToLower(strings.TrimSpace(string(verified.Channel))) + ":" + strings.TrimSpace(verified.OpenID)
-	if legacyID != accountID {
-		legacy, found, err := s.cfg.Accounts.Get(ctx, legacyID)
-		if err != nil {
-			return Account{}, err
-		}
-		if found && sameVerifiedIdentity(legacy.Value, verified) {
-			accountID = legacyID
-		}
-	}
 	now := s.cfg.Now()
 
 	var result Account

@@ -245,10 +245,10 @@ foreign       same-refused    confl     confl    confl    confl     confl     co
 foreign       other           confl     confl    confl    confl     confl     confl
 foreign       resolve         confl     confl    confl    confl     confl     confl
 
-legacy        same            confl     confl    confl    confl     confl     confl
-legacy        same-refused    confl     confl    confl    confl     confl     confl
-legacy        other           confl     confl    confl    confl     confl     confl
-legacy        resolve         unres     unres    unres    unres     unres     unres
+malformed     same            confl     confl    confl    confl     confl     confl
+malformed     same-refused    confl     confl    confl    confl     confl     confl
+malformed     other           confl     confl    confl    confl     confl     confl
+malformed     resolve         unres     unres    unres    unres     unres     unres
 
 # Same name resumes without reading the name: Reserve is the atomic answer.
 # Refused, a never-admitted plan is released (a definite pre-role refusal);
@@ -277,7 +277,7 @@ published     resolve         unres     unres    unres    unres     unres     un
 
 func TestCreationTableEveryCell(t *testing.T) {
 	slots := map[string]slotState{
-		"absent": slotAbsent, "foreign": slotForeign, "legacy": slotLegacy,
+		"absent": slotAbsent, "foreign": slotForeign, "malformed": slotMalformed,
 		"unadmitted": slotPendingUnadmitted, "admitted": slotPendingAdmitted, "published": slotPublished,
 	}
 	entries := map[string]creationEntry{
@@ -338,9 +338,9 @@ func TestCreationTableClassifiers(t *testing.T) {
 		{"other account", slotOf(func(s *Slot) { s.AccountID = "b" }), true, slotForeign},
 		{"other server", slotOf(func(s *Slot) { s.ServerID = 2 }), true, slotForeign},
 		{"published", slotOf(func(s *Slot) { s.PlayerID = 42 }), true, slotPublished},
-		{"published legacy", slotOf(func(s *Slot) { s.PlayerID = 42; s.Creation = RoleCreation{} }), true, slotPublished},
-		{"legacy empty", slotOf(func(s *Slot) { s.Creation = RoleCreation{} }), true, slotLegacy},
-		{"plan without player id", slotOf(func(s *Slot) { s.Creation.PlayerID = 0 }), true, slotLegacy},
+		{"published without plan", slotOf(func(s *Slot) { s.PlayerID = 42; s.Creation = RoleCreation{} }), true, slotMalformed},
+		{"empty", slotOf(func(s *Slot) { s.Creation = RoleCreation{} }), true, slotMalformed},
+		{"plan without player id", slotOf(func(s *Slot) { s.Creation.PlayerID = 0 }), true, slotMalformed},
 		{"pending", slotOf(func(*Slot) {}), true, slotPendingUnadmitted},
 		{"admitted", slotOf(func(s *Slot) { s.Creation.Admitted = true }), true, slotPendingAdmitted},
 	} {
@@ -733,16 +733,19 @@ func TestConcurrentCreationRetriesShareOneDurablePlan(t *testing.T) {
 	}
 }
 
-func TestLegacyEmptySlotRequiresExplicitReconciliation(t *testing.T) {
+// 没有建角计划的 slot（本版本从不写出；旧版本在计划出现之前写下的形态）不被推断：CreateRole 报
+// ErrConflict，slot 原样保留，交线下处理。
+// 历史：RR-20260929-19；维护者 2026-10-13 决定不兼容旧数据。
+func TestSlotWithoutCreationPlanRequiresOfflineReconciliation(t *testing.T) {
 	s, _, cfg := newService(t)
 	ctx := context.Background()
-	a := login(t, s, "legacy-slot")
+	a := login(t, s, "planless-slot")
 	original, _, err := cfg.Slots.Create(ctx, slotKeyFor(a.ID, 1), Slot{AccountID: a.ID, ServerID: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.CreateRole(ctx, a.ID, 1, "Hero"); !errors.Is(err, ErrConflict) {
-		t.Fatalf("legacy empty slot was guessed away: %v", err)
+		t.Fatalf("slot without a plan was guessed away: %v", err)
 	}
 	current, found, err := cfg.Slots.Get(ctx, slotKeyFor(a.ID, 1))
 	if err != nil || !found || current.Version != original.Version {
@@ -803,14 +806,15 @@ func (s *review3FailCreate[K, V]) DeleteIf(ctx context.Context, key K, expect ve
 	return s.Store.(versionstore.ConditionalDeleter[K, V]).DeleteIf(ctx, key, expect, match)
 }
 
-func TestCommittedLegacyNameOwnerIsNeverCompensated(t *testing.T) {
+// 名字已被另一个 owner（这里是不带计划 ID 的账号/区服 owner）committed 时，建角报 ErrNameTaken：
+// 不动对方的名字，释放自己的计划 slot。owner 不同即是“别人”，不按旧 owner 形态特殊处理。
+func TestANameCommittedToAnotherOwnerIsNeverCompensated(t *testing.T) {
 	s, _, cfg := newService(t)
 	ctx := context.Background()
-	a, err := s.Login(ctx, Identity{Channel: "test", OpenID: "legacy-name", Credential: "good"})
+	a, err := s.Login(ctx, Identity{Channel: "test", OpenID: "held-name", Credential: "good"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Simulate an old bare account owner matching the new account/server owner.
 	claim, err := cfg.Names.Reserve(ctx, "Held", directory.Owner(slotKeyFor(a.ID, 1)), time.Minute)
 	if err != nil {
 		t.Fatal(err)
@@ -874,7 +878,10 @@ func TestUnknownSlotOutcomePreservesRoleAndName(t *testing.T) {
 	}
 }
 
-func TestLegacyVerifiedIdentityRetainsAccountAndRefusesCollision(t *testing.T) {
+// 账号 ID 由转义后的渠道与 open id 组成（Identity.AccountID）。旧版本未转义渠道里的 ':' 时写下的账号
+// 不再被沿用：同一身份登录得到新的转义 ID；占着某个 ID 的存量账号身份与验证结果不符时登录被拒绝，不合并。
+// 历史：旧 ID 形态曾在登录时回查沿用；维护者 2026-10-13 决定不兼容旧数据。
+func TestLoginUsesTheEscapedAccountIDAndRefusesAMismatchedStoredIdentity(t *testing.T) {
 	s, _, cfg := newService(t, func(c *Config) {
 		c.Verifier = VerifierFunc(func(_ context.Context, i Identity) (Verified, error) {
 			if i.Credential == "first" {
@@ -884,16 +891,39 @@ func TestLegacyVerifiedIdentityRetainsAccountAndRefusesCollision(t *testing.T) {
 		})
 	})
 	ctx := context.Background()
-	legacy := Account{ID: "vendor:a:b", Channel: "vendor:a", OpenID: "b"}
-	if _, _, err := cfg.Accounts.Create(ctx, legacy.ID, legacy); err != nil {
+	unescaped := Account{ID: "vendor:a:b", Channel: "vendor:a", OpenID: "b"}
+	if _, _, err := cfg.Accounts.Create(ctx, unescaped.ID, unescaped); err != nil {
 		t.Fatal(err)
 	}
 	first, err := s.Login(ctx, Identity{Channel: "test", OpenID: "first", Credential: "first"})
-	if err != nil || first.ID != legacy.ID {
-		t.Fatal(first, err)
+	if err != nil || first.ID != "vendor%3Aa:b" {
+		t.Fatalf("login = %+v, %v; want the escaped account id, not the unescaped record", first, err)
 	}
 	if _, err := s.Login(ctx, Identity{Channel: "test", OpenID: "second", Credential: "second"}); !errors.Is(err, ErrIdentityInvalid) {
-		t.Fatalf("legacy collision merged: %v", err)
+		t.Fatalf("a stored account with another identity was merged: %v", err)
+	}
+}
+
+// 已发布的角色必须带建角身份：slot 与角色都缺 CreationID 的形态（本版本从不写出）不可选、不可校验会话、
+// 同名 CreateRole 也不把它当成已发布的角色返回。
+// 历史：此前按“旧版本已发布角色”放行；维护者 2026-10-13 决定不兼容旧数据。
+func TestARoleWithoutCreationIdentityIsRefused(t *testing.T) {
+	s, _, cfg := newService(t)
+	ctx := context.Background()
+	a := login(t, s, "planless-role")
+	const playerID = 4242
+	role := Role{PlayerID: playerID, AccountID: a.ID, ServerID: 1, Name: "Old"}
+	if _, _, err := cfg.Roles.Create(ctx, playerID, role); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cfg.Slots.Create(ctx, slotKeyFor(a.ID, 1), Slot{AccountID: a.ID, ServerID: 1, PlayerID: playerID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SelectRole(ctx, a.ID, playerID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("SelectRole on a role without creation identity = %v, want ErrConflict", err)
+	}
+	if got, err := s.CreateRole(ctx, a.ID, 1, "Old"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("CreateRole over a published slot without a plan = %+v, %v; want ErrConflict", got, err)
 	}
 }
 
