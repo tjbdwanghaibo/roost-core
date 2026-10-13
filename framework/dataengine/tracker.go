@@ -2,8 +2,9 @@ package dataengine
 
 import "sync/atomic"
 
-// Tracker holds accepted persistence version and cross-server synchronization
-// state. Persistence dirty state is transaction-local and intentionally absent.
+// Tracker 保存 DAO 已接受的持久版本和两类同步脏掩码：syncDirty 供服务间同步
+// 消费，entitySyncDirty 供客户端 EntitySync 消费，二者由 MarkSync 同时置位、各自取走。
+// 持久化的脏状态属于事务本地，不在这里记录。
 type Tracker struct {
 	version         atomic.Uint64
 	syncDirty       atomic.Uint64
@@ -22,6 +23,7 @@ func (t *Tracker) Version() uint64 { return t.version.Load() }
 
 func (t *Tracker) SetVersion(version uint64) { t.version.Store(version) }
 
+// AcceptVersion 以 CAS 把版本从 expected 推进到 expected+1，否则返回 ErrInvalidVersion。
 func (t *Tracker) AcceptVersion(expected, next uint64) error {
 	if next == 0 || next != expected+1 || !t.version.CompareAndSwap(expected, next) {
 		return ErrInvalidVersion
@@ -29,9 +31,8 @@ func (t *Tracker) AcceptVersion(expected, next uint64) error {
 	return nil
 }
 
-// AdvanceVersion accepts an authoritative remote-entity version. A DAO can
-// legitimately skip entity versions when another DAO in the same remote
-// aggregate was the only document changed by an intervening transaction.
+// AdvanceVersion 接受远端实体的权威版本，只允许前进或保持。同一远端聚合里
+// 中间事务可能只改了另一个 DAO，因此本 DAO 的版本可以合法跳号。
 func (t *Tracker) AdvanceVersion(next uint64) error {
 	if next == 0 {
 		return ErrInvalidVersion
@@ -65,8 +66,10 @@ func (t *Tracker) Dirty() bool { return t.HasSyncDirty() }
 
 func (t *Tracker) TakeSyncDirty() uint64 { return t.syncDirty.Swap(0) }
 
+// CommitSync 是空操作：TakeSyncDirty 取走掩码时已经清除，不需要再确认。
 func (t *Tracker) CommitSync(_ uint64) {}
 
+// RollbackSync 把已取走的服务间同步掩码放回，供下一次 TakeSyncDirty 重新取走。
 func (t *Tracker) RollbackSync(mask uint64) { t.syncDirty.Or(mask) }
 
 // TakeEntitySyncDirty 独立消费客户端同步变化，不影响服务间同步掩码。

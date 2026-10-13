@@ -18,6 +18,8 @@ var (
 	ErrInvalidPatchPath    = errors.New("dataengine: invalid patch path")
 )
 
+// ValidateMutation 在 WAL 准入前检查单条变更的身份、版本链与内容形状。
+// Remote 变更只允许 Put/Delete 且不带本地内容，版本必须与远端提交一致。
 func ValidateMutation(m Mutation) error {
 	if m.Key.ID == 0 || m.Key.Resource == "" || (m.Key.Database == "" && m.Remote == nil) {
 		return ErrInvalidDocumentKey
@@ -57,6 +59,7 @@ func ValidateMutation(m Mutation) error {
 	return validatePatchPaths(m.Patch)
 }
 
+// ValidateCommitRecord 检查事务 ID、每条变更、effect 与回执；lease fence 回执还要能解码。
 func ValidateCommitRecord(record CommitRecord) error {
 	if record.ID.IsZero() {
 		return errors.New("dataengine: zero transaction id")

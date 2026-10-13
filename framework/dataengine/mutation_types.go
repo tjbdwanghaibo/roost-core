@@ -1,5 +1,3 @@
-// Package dataengine defines the durable, infrastructure-neutral transaction
-// model shared by Nest, WAL implementations, projectors, loaders, and codegen.
 package dataengine
 
 import (
@@ -73,7 +71,8 @@ func (p FieldPatch) Empty() bool { return len(p.SetBSON) == 0 && len(p.Unset) ==
 
 const AllFields uint64 = ^uint64(0)
 
-// Mutation 用唯一的文档身份和预期/目标版本描述变更，不接受旧字段形式。
+// Mutation 描述一个文档的一次变更：唯一文档身份（Key）加预期/目标版本，
+// 内容是整文档（Put）、字段补丁（Patch）或删除；Remote 非空时内容由远端提交描述。
 type Mutation struct {
 	Key             DocumentKey
 	Kind            MutationKind
@@ -165,19 +164,14 @@ func CloneCommitRecord(record CommitRecord) CommitRecord {
 	return record
 }
 
-// SyncFieldMeta names one replicated field of a DAO.
+// SyncFieldMeta 描述 DAO 的一个同步字段，由代码生成器写在字段掩码旁边，二者同源不会漂移。
 //
-// It exists because a game with its own client protocol has to decide what a
-// dirty mask means, and the generated per-field bit constants are private to
-// the DAO's package — a packer written anywhere else can pass the mask
-// through to MarshalSync but cannot look inside it (ARCH-06, from
-// W-2026-09-18-02). This is the vocabulary: read-only, generated next to the
-// masks it describes, so the two cannot drift.
+// 生成的逐字段掩码常量是 DAO 包私有的；自定义客户端协议的 packer 不在该包内，
+// 需要靠这张只读表把脏掩码翻译成字段名。
 //
-// Bit is stable only within ONE generated schema. Adding a field renumbers
-// nothing, but removing or reordering one does — so a value that outlives the
-// build (a stored projection, a client's cached layout) must be keyed by Name
-// or WireName, never by Bit. Nothing here is an ABI.
+// Bit 只在同一次生成的 schema 内稳定：删除或调整字段顺序会改变位号。
+// 生存期超过本次构建的值（持久化的投影、客户端缓存的布局）必须按 Name 或
+// WireName 记录，不能按 Bit 记录；这里不是 ABI。
 type SyncFieldMeta struct {
 	// Name is the Go field name on the DAO definition.
 	Name string

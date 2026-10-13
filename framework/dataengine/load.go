@@ -61,8 +61,8 @@ type LoadTemplate struct {
 	Strict    bool
 }
 
-// Loader executes independent resources concurrently while preserving their
-// declared dependency levels.
+// Loader 按 DependsOn 拓扑分层加载资源：同层资源并发加载，层与层之间串行；
+// 任一资源失败即取消本层其余加载并返回第一个错误。
 type Loader struct {
 	store       Store
 	exister     EntityExister
@@ -77,6 +77,7 @@ func NewLoader(store Store, exister EntityExister, concurrency ...int) *Loader {
 	return &Loader{store: store, exister: exister, concurrency: limit}
 }
 
+// LoadAll 校验依赖图（资源名唯一、依赖存在、无环）后逐层加载。
 func (loader *Loader) LoadAll(ctx context.Context, templates []LoadTemplate) error {
 	if loader == nil || loader.store == nil {
 		return ErrStoreRequired
@@ -110,9 +111,7 @@ func (loader *Loader) loadLevel(ctx context.Context, indices []int, templates []
 	errCh := make(chan error, 1)
 	var workers sync.WaitGroup
 	for range workerCount {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			for index := range jobs {
 				if err := loader.loadOne(workCtx, templates[index]); err != nil {
 					select {
@@ -123,7 +122,7 @@ func (loader *Loader) loadLevel(ctx context.Context, indices []int, templates []
 					return
 				}
 			}
-		}()
+		})
 	}
 send:
 	for _, index := range indices {
@@ -149,7 +148,7 @@ func (loader *Loader) loadOne(ctx context.Context, template LoadTemplate) error 
 		Filter: template.Filter, BatchSize: template.BatchSize,
 	}
 	return loader.store.StreamLoad(ctx, spec, func(doc RawDocument) error {
-		if doc.Deleted || loader.exister != nil && loader.exister.Exists(doc.Key.ID) {
+		if doc.Deleted || (loader.exister != nil && loader.exister.Exists(doc.Key.ID)) {
 			return nil
 		}
 		if template.OnLoad == nil {
@@ -159,10 +158,8 @@ func (loader *Loader) loadOne(ctx context.Context, template LoadTemplate) error 
 			if template.Strict {
 				return fmt.Errorf("%w: resource=%s id=%d: %v", ErrLoadCallback, template.Resource, doc.Key.ID, err)
 			}
-			// Non-strict means "tolerate a bad row", not "load nothing and say
-			// so to no one". A systematic failure — a renamed field, a codec
-			// change — silently loads zero entities otherwise, which is the
-			// one outcome that must never be invisible.
+			// 非严格模式只容忍个别坏行，不能静默：字段改名、编码变化这类系统性
+			// 失败会让整批实体都加载不出来，必须经指标和日志可见。
 			metrics.IncCounter("dataengine.load.skipped.total", metrics.Labels{"resource": template.Resource}, 1)
 			slog.Warn("dataengine: skipped a row a non-strict load template could not decode",
 				"resource", template.Resource, "id", doc.Key.ID, "err", err)
@@ -227,10 +224,7 @@ func buildLevels(order []int, templates []LoadTemplate) [][]int {
 	maxLevel := 0
 	for _, index := range order {
 		for _, dependency := range templates[index].DependsOn {
-			level := levelsByIndex[nameToIndex[dependency]] + 1
-			if level > levelsByIndex[index] {
-				levelsByIndex[index] = level
-			}
+			levelsByIndex[index] = max(levelsByIndex[index], levelsByIndex[nameToIndex[dependency]]+1)
 		}
 		maxLevel = max(maxLevel, levelsByIndex[index])
 	}
