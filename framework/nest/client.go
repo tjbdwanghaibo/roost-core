@@ -48,7 +48,7 @@ func (mgr *NestMgr) DispatchBroadcast(ctx context.Context, name HandlerName, ids
 		checkRemoteIds(msg, msg.Tids)
 		admissionErr = mgr.admit(msg, opts...)
 	})
-	return normalizeAdmissionError(admissionErr)
+	return admissionErr
 }
 
 var _ Client = (*NestMgr)(nil)
@@ -66,7 +66,7 @@ func (mgr *NestMgr) Dispatch(ctx context.Context, name HandlerName, id int64, pa
 	msg.Tid = fullID
 	prepareClientMessage(ctx, msg, name, params, false, opts...)
 	checkRemoteId(msg, fullID)
-	return normalizeAdmissionError(mgr.admit(msg, opts...))
+	return mgr.admit(msg, opts...)
 }
 
 // Request 投递单目标消息并等待回复，超时取请求上下文的 SyncWait，其次引擎的同步超时。
@@ -84,7 +84,7 @@ func (mgr *NestMgr) Request(ctx context.Context, name HandlerName, id int64, par
 	checkRemoteId(msg, fullID)
 	requestTimeout := msg.Context.SyncWait
 	if err := mgr.admit(msg, opts...); err != nil {
-		return nil, normalizeAdmissionError(err)
+		return nil, err
 	}
 	return mgr.waitResult(ctx, ch, requestTimeout)
 }
@@ -105,7 +105,7 @@ func (mgr *NestMgr) DispatchMulti(ctx context.Context, name HandlerName, ids []i
 	msg.Tids = fullIDs // 标准化已建立独立存储，直接把所有权交给消息。
 	prepareClientMessage(ctx, msg, name, params, false, opts...)
 	checkRemoteIds(msg, msg.Tids)
-	return normalizeAdmissionError(mgr.admit(msg, opts...))
+	return mgr.admit(msg, opts...)
 }
 
 // RequestMulti 是 DispatchMulti 的同步版本。
@@ -126,7 +126,7 @@ func (mgr *NestMgr) RequestMulti(ctx context.Context, name HandlerName, ids []in
 	checkRemoteIds(msg, msg.Tids)
 	requestTimeout := msg.Context.SyncWait
 	if err := mgr.admit(msg, opts...); err != nil {
-		return nil, normalizeAdmissionError(err)
+		return nil, err
 	}
 	return mgr.waitResult(ctx, ch, requestTimeout)
 }
@@ -147,7 +147,7 @@ func (mgr *NestMgr) DispatchMultiGroup(ctx context.Context, name HandlerName, gr
 	msg.GroupTIds = fullGroups
 	prepareClientMessage(ctx, msg, name, params, false, opts...)
 	checkRemoteGroups(msg, msg.GroupTIds)
-	return normalizeAdmissionError(mgr.admit(msg, opts...))
+	return mgr.admit(msg, opts...)
 }
 
 // RequestMultiGroup 是 DispatchMultiGroup 的同步版本。
@@ -168,7 +168,7 @@ func (mgr *NestMgr) RequestMultiGroup(ctx context.Context, name HandlerName, gro
 	checkRemoteGroups(msg, msg.GroupTIds)
 	requestTimeout := msg.Context.SyncWait
 	if err := mgr.admit(msg, opts...); err != nil {
-		return nil, normalizeAdmissionError(err)
+		return nil, err
 	}
 	return mgr.waitResult(ctx, ch, requestTimeout)
 }
@@ -235,7 +235,8 @@ func resolveSendOptions(opts []SendOpt) sendOptParam {
 	return ret
 }
 
-// admit 把消息交给派发器：带延时选项时进入延时队列，否则立即准入。
+// admit 把消息交给派发器：带延时选项时进入延时队列，否则立即准入。返回的错误已经归一化（ErrQueueFull /
+// ErrNestStopped），调用方直接返回，不要再归一化一次。
 func (mgr *NestMgr) admit(msg *Msg, opts ...SendOpt) error {
 	opt := resolveSendOptions(opts)
 	var err error

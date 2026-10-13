@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,6 +192,10 @@ func TestClientAdmissionReportsQueueFull(t *testing.T) {
 	}
 	if !errors.Is(admissionErr, ErrQueueFull) {
 		t.Fatalf("dispatch error=%v want ErrQueueFull", admissionErr)
+	}
+	// 准入错误只归一化一次：ErrQueueFull 的文本在错误链里只出现一次。
+	if n := strings.Count(admissionErr.Error(), "dispatch queue full"); n != 1 {
+		t.Fatalf("dispatch error text repeats ErrQueueFull %d times: %q", n, admissionErr.Error())
 	}
 	close(release)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
