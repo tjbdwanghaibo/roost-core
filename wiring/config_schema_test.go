@@ -1,13 +1,5 @@
 package kit_test
 
-// 维护者决定 A4 ①（docs/feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md）：每个 kit Mod 声明自己读的配置键
-// （ConfigSchema），Init 用 app.LoadConfig 按这份声明读；App 启动前用同一份声明检查（app.CheckConfig）。
-//
-// 旧行为（A4 ②，3e3350d5）：kit Mod 在 Init 里逐键严格读取类型，范围与枚举散在“≤0 取默认”里：
-// `dataengine.outbox.workers: -1`、`dataengine.effects.replicas: -3`、`redis.pool_size: -1`、
-// `saga.coordinator_workers: -4` 静默取默认，`syncbus.storage: flie` 静默按驱动缺省，Init 与 ValidateServiceConfig
-// 一律返回 nil（基线 66d72a33 上的同形用例，见方案文档“实施状态”）。
-
 import (
 	"errors"
 	"fmt"
@@ -18,29 +10,37 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
+	"github.com/tjbdwanghaibo/roost-core/wiring/account"
+	"github.com/tjbdwanghaibo/roost-core/wiring/activity"
+	"github.com/tjbdwanghaibo/roost-core/wiring/chat"
 	kitconfigdata "github.com/tjbdwanghaibo/roost-core/wiring/configdata"
+	"github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/wiring/directory"
 	kitetcd "github.com/tjbdwanghaibo/roost-core/wiring/etcd"
+	"github.com/tjbdwanghaibo/roost-core/wiring/global"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mail"
+	"github.com/tjbdwanghaibo/roost-core/wiring/match"
 	kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
 	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
 	kitnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
 	kitops "github.com/tjbdwanghaibo/roost-core/wiring/ops"
-	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
-	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
-	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
-	"github.com/tjbdwanghaibo/roost-core/wiring/account"
-	"github.com/tjbdwanghaibo/roost-core/wiring/chat"
-	"github.com/tjbdwanghaibo/roost-core/wiring/directory"
-	"github.com/tjbdwanghaibo/roost-core/wiring/global"
-	"github.com/tjbdwanghaibo/roost-core/wiring/activity"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mail"
-	"github.com/tjbdwanghaibo/roost-core/wiring/match"
 	"github.com/tjbdwanghaibo/roost-core/wiring/platform"
 	"github.com/tjbdwanghaibo/roost-core/wiring/rank"
+	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
+	"github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
+	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
+	"github.com/tjbdwanghaibo/roost-core/wiring/saga"
+	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
 	"github.com/tjbdwanghaibo/roost-core/wiring/session"
 	kitstatslog "github.com/tjbdwanghaibo/roost-core/wiring/statslog"
+	"github.com/tjbdwanghaibo/roost-core/wiring/syncbus"
 	kitsyncbus "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"
 )
+
+// 维护者决定 A4 ①：每个 kit Mod 声明自己读的配置键（ConfigSchema），Init 用 app.LoadConfig 按这份声明读；App 启动前用同一份
+// 声明检查（app.CheckConfig）。越界值与写错的枚举（例如 `dataengine.outbox.workers: -1`、`syncbus.storage: flie`）在加载与启动检查
+// 两处都点名拒绝，不再静默取默认。
 
 type declaredMod interface {
 	app.Mod
@@ -212,7 +212,7 @@ func TestProductionRefusesAPublicOpsAddrUnlessDeclared(t *testing.T) {
 	}
 }
 
-// RR-20261005-NC-192（维护者决定 C1 方案 1）：生产检查只要求有读取方的设置；没人读的开关写不写都不影响。
+// 生产检查只要求有读取方的设置；没人读的开关写不写都不影响（维护者决定 C1 方案 1）。
 func TestProductionDoesNotRequireSwitchesNothingReads(t *testing.T) {
 	base := "env: production\nredis:\n  addr: 10.0.0.1:6379\n"
 	for _, serverType := range []string{"game", "instance", "account", "global", "match_group"} {
@@ -233,5 +233,38 @@ func TestCheckConfigErrorsAreJoined(t *testing.T) {
 	var joined interface{ Unwrap() []error }
 	if !errors.As(err, &joined) || len(joined.Unwrap()) < 2 {
 		t.Fatalf("CheckConfig = %v; want every mod's error at once", err)
+	}
+}
+
+// 维护者决定 A4：kit 的 Mod 在 Init 里严格读取类型化配置，写错类型时报错并点名键，而不是读成 0 / 纳秒后静默取默认
+// （例如 `remote_entity.lock_ttl: 15` 不能读成 15ns、`syncbus.ack_wait: 30` 不能读成 30ns）。App 启动时按 Mod 的声明先挡住这些键；
+// 这里守的是直接装配 Mod、不经 App 启动校验的调用方（测试、工具、自定义入口）同样拿到错误。
+
+func TestKitModsRefuseConfigValuesOfTheWrongType(t *testing.T) {
+	type initer interface{ Init(*viper.Viper) error }
+	for _, tc := range []struct {
+		name string
+		mod  func() initer
+		body string
+		key  string
+	}{
+		{"remote_lock_ttl_unitless", func() initer { return remoteentity.NewRemoteEntityMod(1000) }, "remote_entity:\n  lock_ttl: 15\n", "remote_entity.lock_ttl"},
+		{"remote_cache_entries_suffix", func() initer { return remoteentity.NewRemoteEntityMod(1000) }, "remote_entity:\n  snapshot_cache_entries: 10k\n", "remote_entity.snapshot_cache_entries"},
+		{"saga_lease_unitless", func() initer { return saga.NewMod() }, "saga:\n  lease_duration: 15\n", "saga.lease_duration"},
+		{"dataengine_outbox_workers_word", func() initer { return dataengine.NewMod() }, "dataengine:\n  outbox:\n    workers: two\n", "dataengine.outbox.workers"},
+		{"dataengine_pipelined_async_yes", func() initer { return dataengine.NewMod() }, "nest:\n  pipelined:\n    async: yes\n", "nest.pipelined.async"},
+		{"syncbus_ack_wait_unitless", func() initer { return syncbus.NewSyncBusMod(1000) }, "syncbus:\n  transport: jetstream\n  ack_wait: 30\n", "syncbus.ack_wait"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.SetConfigType("yaml")
+			if err := cfg.ReadConfig(strings.NewReader("sid: 1000\n" + tc.body)); err != nil {
+				t.Fatal(err)
+			}
+			err := tc.mod().Init(cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.key) {
+				t.Fatalf("Init = %v; want an error naming %s", err, tc.key)
+			}
+		})
 	}
 }
