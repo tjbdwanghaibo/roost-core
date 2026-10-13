@@ -198,3 +198,5 @@ Go 1.27.0，Windows/amd64，Ryzen 7 5800H，GOMAXPROCS=4；每组 4 个 ID，前
 CBM 核对代际为 `2026-10-10T03:58:22Z`；相关源码存在 metadata_changed，文档/消费 testdata 按设计排除，旧符号片段行号已经漂移。已对更改路径分批检查 coverage，并以当前源码、调用点和编译回归补证，未把图谱旧行号作为正确性依据。
 
 实施提交 `bce30797` 合回本地 main 后尝试刷新 CBM，worker 退出，日志原因为 `a pre-coordination or unverified CBM generation is active`。本轮索引未更新；没有清理未知协调状态或停止共享服务，后续检索仍需当前源码补证。
+
+2026-10-13 后续维护已解除该阻塞：沿用维护者授权重启 CBM，确认旧 Unix socket 无进程持有、连接拒绝且协调锁无人持有后，将两个遗留端点移到临时备份，未删除数据库或锁文件。官方 CLI 重建成功，代际 `2026-10-13T05:49:43Z`，25448 节点、250623 条边；上述三池核心源码七个路径均 metadata_match、无记录缺口。常驻服务已恢复。仍有五个 demo 模板局部解析缺口，docs/testdata 等既有排除策略不变；刷新成功不代表全仓完全覆盖。
