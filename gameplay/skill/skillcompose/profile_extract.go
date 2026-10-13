@@ -7,8 +7,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 )
 
+// ErrProgramRequired 表示 ExtractProfile 收到 nil Program。
 var ErrProgramRequired = errors.New("skillcompose: compiled program is required")
 
+// ExtractProfile 从已编译 Program 的 inspector 视图提取 SkillProfile，不执行也不修改 Program。
 func ExtractProfile(program *skill.Program) (SkillProfile, error) {
 	if program == nil {
 		return SkillProfile{}, ErrProgramRequired

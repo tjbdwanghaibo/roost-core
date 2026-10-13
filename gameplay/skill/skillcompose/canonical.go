@@ -7,6 +7,7 @@ import (
 	"sort"
 )
 
+// CanonicalContract 返回契约的规范 JSON 与它的 SHA-256 digest：Digest 字段清空，各列表按键排序，不修改入参。
 func CanonicalContract(contract SkillCompositionContract) ([]byte, string, error) {
 	contract.Sources = append([]SourceIdentity(nil), contract.Sources...)
 	contract.Grants = append([]SourceGrant(nil), contract.Grants...)

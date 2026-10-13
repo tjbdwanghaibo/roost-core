@@ -1,11 +1,13 @@
 package skillcompose
 
+// CausalGraph 是操作之间的因果图：从 Roots 出发沿 Edges 走，Sinks 是有效果的出口。
 type CausalGraph struct {
 	Edges map[int][]int
 	Roots []int
 	Sinks map[int]bool
 }
 
+// ReachesSink 报告从任一根出发能否到达出口。
 func (graph CausalGraph) ReachesSink() bool {
 	seen := map[int]bool{}
 	queue := append([]int(nil), graph.Roots...)

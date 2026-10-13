@@ -1,11 +1,14 @@
 package skillcompose
 
+// ValidationReport 是候选校验的结果、诊断与命中的特征。
 type ValidationReport struct {
 	Valid       bool
 	Diagnostics []Diagnostic
 	Matches     []Match
 }
 
+// ValidateCandidate 按契约校验生成的候选 profile：契约本身、候选身份与权威、来源集合、特征来源与变换授予、预算
+// 与因果连通，每一处不符都记一条诊断。
 func ValidateCandidate(contract SkillCompositionContract, candidate SkillProfile) ValidationReport {
 	report := ValidationReport{Valid: true, Matches: MatchFeatures(contract, candidate)}
 	if err := ValidateContract(contract); err != nil {
@@ -25,7 +28,7 @@ func ValidateCandidate(contract SkillCompositionContract, candidate SkillProfile
 	for _, source := range candidate.Sources {
 		if source.SkillID == "" || source.GameplayDigest == "" || gotSources[source.SkillID] != "" {
 			// 每个拒绝都带诊断：被跳过的条目可能让去重后的集合恰好等于合同，
-			// 下面的集合比较就不会再报（RR-20261005-NC-154）。
+			// 下面的集合比较就不会再报。
 			report.Valid = false
 			report.Diagnostics = append(report.Diagnostics, Diagnostic{Code: "PROVENANCE_MISMATCH", Message: "candidate source is blank or duplicated"})
 			continue

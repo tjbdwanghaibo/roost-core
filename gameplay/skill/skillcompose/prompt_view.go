@@ -2,12 +2,14 @@ package skillcompose
 
 import "sort"
 
+// PromptContractView 是可以给生成器看的契约视图：允许的特征、来源与表现 digest。
 type PromptContractView struct {
 	AllowedFeatures     []FeatureKey
 	AllowedOrigins      []FeatureOrigin
 	PresentationDigests []string
 }
 
+// DerivePromptView 直接从来源 profile 推出生成器视图（每个特征只允许原样复用）。
 func DerivePromptView(profiles []SkillProfile) PromptContractView {
 	result := PromptContractView{AllowedFeatures: sortedFeatures(profiles)}
 	for _, profile := range profiles {
@@ -20,7 +22,7 @@ func DerivePromptView(profiles []SkillProfile) PromptContractView {
 	return result
 }
 
-// DeriveContractPromptView exposes only digest-covered grants to generators.
+// DeriveContractPromptView 只把 digest 覆盖到的授予暴露给生成器；契约无效时返回 ValidateContract 的错误。
 func DeriveContractPromptView(contract SkillCompositionContract) (PromptContractView, error) {
 	if err := ValidateContract(contract); err != nil {
 		return PromptContractView{}, err

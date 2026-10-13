@@ -5,6 +5,8 @@ import (
 	"fmt"
 )
 
+// ValidateContract 校验契约的版本、权威、预算、来源、授予、包与约束的结构，并核对 Digest 与规范表示一致；
+// 不合法时返回 ErrContractInvalid 或包装它的错误（errors.Is 成立）。
 func ValidateContract(contract SkillCompositionContract) error {
 	if contract.Version != "skillcompose/v2" || contract.Authority.Revision == "" || contract.Authority.Digest == "" || contract.Policy.ID == "" || len(contract.Sources) == 0 || contract.Digest == "" {
 		return ErrContractInvalid

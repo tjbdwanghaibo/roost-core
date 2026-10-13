@@ -12,6 +12,8 @@ var (
 	ErrContractInvalid       = errors.New("skillcompose: composition contract is invalid")
 )
 
+// BuildContract 从来源技能的 profile 构造组合契约。来源为空返回 ErrSourceProfileRequired；身份、权威或预算不合法
+// （来源重复、权威不一致、预算为负等）返回 ErrContractInvalid。调用方策略只能收紧组合策略。
 func BuildContract(profiles []SkillProfile, authority skill.AuthorityIdentity, policy CompositionPolicy, caller CallerPolicy) (SkillCompositionContract, error) {
 	if len(profiles) == 0 {
 		return SkillCompositionContract{}, ErrSourceProfileRequired
