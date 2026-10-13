@@ -128,7 +128,7 @@ jobs:
   # the M-11 split and was run by nobody for two weeks — the skip guard below
   # can only see packages this job actually ran; RR-20260922-03).
   # kit/redis carries the App singleton lock's Redis store suite (same REDIS_ADDR gate).
-  # integration_coverage_promises_test.go pins the list to the files on disk.
+  # integration_coverage_test.go pins the list to the files on disk.
   service-redis:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -146,7 +146,7 @@ jobs:
       REDIS_ADDR: 127.0.0.1:6379
       # RR-20261001-01：09-29 的 service 修复把 Redis 变体挂在另外四个变量上；只设
       # REDIS_ADDR 时它们静默 SKIP 或落回 Memory 替身，这个 job 等于没跑它们。
-      # integration_coverage_promises_test.go 把这组名字钉在测试文件里的 os.Getenv 上。
+      # integration_coverage_test.go 把这组名字钉在测试文件里的 os.Getenv 上。
       ROOST_REDIS_TEST_ADDR: 127.0.0.1:6379
       ROOST_REVIEW_REDIS: 127.0.0.1:6379
       ROOST_REVIEW3_BACKEND: redis

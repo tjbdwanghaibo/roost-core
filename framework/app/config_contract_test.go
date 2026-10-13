@@ -441,7 +441,7 @@ func TestValidateServiceConfigAcceptsMinimalConfig(t *testing.T) {
 }
 
 // productionServiceConfig 是满足 App 自己全部生产规则的配置：用例只加它要测的那一个键，看到的拒绝就是它要的那一条。
-// 框架 Mod 的生产规则（密钥、ops 端点、Redis 地址）跟着声明走，用例在 kit（config_schema_promises_test.go）。
+// 框架 Mod 的生产规则（密钥、ops 端点、Redis 地址）跟着声明走，用例在 wiring/config_schema_test.go。
 func productionServiceConfig(serverType string) *viper.Viper {
 	cfg := viper.New()
 	cfg.Set("server_type", serverType)
