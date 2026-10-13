@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	gonats "github.com/nats-io/nats.go"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 )
 
@@ -458,4 +459,88 @@ func errString(err error) string {
 		return "<nil>"
 	}
 	return err.Error()
+}
+
+// 驱动 Close 的统一口径：重复 Close 幂等返回 nil，第一次的错误只报一次；并发 Close 的后到者等第一个做完；Close 之后的其他
+// 调用返回已关闭错误（fnats.ErrClosed）。Assembly.Close 第一次排空失败时硬关连接并返回 ErrClosedUndrained（有意的终态错误）。
+//
+// 连接指向不可达地址并开启 RetryOnFailedConnect：连接处于重连中，排空必然失败，不需要真实 NATS。
+func closeContractAssembly(t *testing.T) *Assembly {
+	t.Helper()
+	conn, err := gonats.Connect("nats://127.0.0.1:1",
+		gonats.RetryOnFailedConnect(true),
+		gonats.ReconnectWait(50*time.Millisecond),
+		gonats.Timeout(100*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{conn: conn, cfg: &fnats.Config{}, state: &natsLifecycleState{}}
+	return &Assembly{Client: c, RPC: NewRPCClient(c, fnats.DefaultRetryPolicy(), 1)}
+}
+
+func TestAssemblyTerminalCloseErrorIsReportedOnce(t *testing.T) {
+	a := closeContractAssembly(t)
+	ctx := context.Background()
+	if err := a.Close(ctx); !errors.Is(err, ErrClosedUndrained) {
+		t.Fatalf("first Close on a reconnecting connection = %v, want ErrClosedUndrained", err)
+	}
+	for attempt := 2; attempt <= 3; attempt++ {
+		if err := a.Close(ctx); err != nil {
+			t.Fatalf("Close #%d = %v, want nil: the connection is already closed, the terminal error is reported once", attempt, err)
+		}
+	}
+}
+
+func TestAssemblyConcurrentCloseReportsTheTerminalErrorOnce(t *testing.T) {
+	for round := 0; round < 5; round++ {
+		a := closeContractAssembly(t)
+		var wg sync.WaitGroup
+		errs := make([]error, 4)
+		for i := range errs {
+			wg.Add(1)
+			go func(i int) { defer wg.Done(); errs[i] = a.Close(context.Background()) }(i)
+		}
+		wg.Wait()
+		failed := 0
+		for _, err := range errs {
+			if err == nil {
+				continue
+			}
+			failed++
+			if !errors.Is(err, ErrClosedUndrained) {
+				t.Fatalf("round %d: concurrent Close = %v, want nil or ErrClosedUndrained (all = %v)", round, err, errs)
+			}
+		}
+		if failed != 1 {
+			t.Fatalf("round %d: %d concurrent Close calls reported the terminal error, want exactly 1 (all = %v)", round, failed, errs)
+		}
+	}
+}
+
+// Assembly.Close 停了 RPC 客户端之后发起的 CallAsync 同时 errors.Is 到 ErrCancelled 与 ErrClosed：是“已关闭”，按 ErrCancelled
+// 判断的调用方也不受影响。
+func TestRPCCallAsyncAfterAssemblyCloseReportsErrClosed(t *testing.T) {
+	a := closeContractAssembly(t)
+	_ = a.Close(context.Background()) // 不可达地址：ErrClosedUndrained，见 TestAssemblyTerminalCloseErrorIsReportedOnce
+	err := callAsyncResult(a.RPC)
+	if !errors.Is(err, fnats.ErrClosed) || !errors.Is(err, fnats.ErrCancelled) {
+		t.Fatalf("RPC.CallAsync after Assembly.Close = %v, want an error that errors.Is both fnats.ErrClosed and fnats.ErrCancelled", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := a.RPC.Call(ctx, "roost.close", nil); !errors.Is(err, fnats.ErrClosed) {
+		t.Fatalf("RPC.Call after Assembly.Close = %v, want fnats.ErrClosed", err)
+	}
+}
+
+// callAsyncResult 发起一次 CallAsync，返回回调拿到的错误；回调 1s 内不来按失败处理。
+func callAsyncResult(rpc *RPCClient) error {
+	done := make(chan error, 1)
+	rpc.CallAsync("roost.close", nil, func(_ []byte, err error) { done <- err })
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(time.Second):
+		return errors.New("CallAsync callback did not run within 1s")
+	}
 }
