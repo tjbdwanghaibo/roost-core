@@ -300,7 +300,7 @@ func TestMirrorStopAndRestartWithOldDeliveryInFlight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(b.Stop)
+	t.Cleanup(func() { _ = b.StopWithContext(context.Background()) })
 	s := &lifecycleMirrorStore{entered: make(chan struct{}), release: make(chan struct{})}
 	r := mirror.New(b, "state", s)
 	if err := r.Start(); err != nil {

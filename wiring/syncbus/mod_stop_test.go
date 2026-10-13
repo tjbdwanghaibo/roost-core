@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver"
 )
 
 // 停止委托给总线自己的 StopWithContext，成功后释放总线；没有 Provide 过（总线为 nil）的 Mod 停止直接返回 nil。
@@ -20,6 +21,15 @@ func TestSyncModStopDelegatesToTheBusAndReleasesIt(t *testing.T) {
 	}
 	if err := (&SyncBusMod{}).StopWithContext(context.Background()); err != nil {
 		t.Fatalf("StopWithContext before Provide = %v, want nil", err)
+	}
+}
+
+// 普通 NATS 总线也走同一条停机路径：driver.Bus 在编译期要求 StopWithContext，它没有要等的东西，
+// 停止返回 nil 并释放总线（之前 Mod 对它做运行期断言、断言不中就跳过）。
+func TestSyncModStopsThePlainNatsBusThroughTheSameContract(t *testing.T) {
+	mod := &SyncBusMod{bus: driver.NewNatsSyncBus(nil, 7, "")}
+	if err := mod.StopWithContext(context.Background()); err != nil || mod.bus != nil {
+		t.Fatalf("StopWithContext = %v, bus kept = %v; want nil and released", err, mod.bus != nil)
 	}
 }
 

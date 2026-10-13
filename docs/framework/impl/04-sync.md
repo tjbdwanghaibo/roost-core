@@ -160,7 +160,7 @@
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [jetstream.go](../../../framework/sync/syncbus/driver/jetstream.go) | `JetStreamSyncConfig` |
-| [nats.go](../../../framework/sync/syncbus/driver/nats.go) | 函数/方法或内部实现；见源码 |
+| [nats.go](../../../framework/sync/syncbus/driver/nats.go) | `Bus`（ISyncBus + StopWithContext，两种驱动都实现，SyncBusMod 在编译期依赖它） |
 
 ### sync/syncbus/mirror
 

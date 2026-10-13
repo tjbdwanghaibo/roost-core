@@ -23,12 +23,12 @@ func TestDurableSyncNamePromiseDistinguishesPrefixes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer busOne.Stop()
+	defer busOne.StopWithContext(context.Background())
 	busTwo, err := NewJetStreamSyncBus(context.Background(), two, JetStreamSyncConfig{LocalSid: 7, Prefix: "two", Stream: "SHARED"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer busTwo.Stop()
+	defer busTwo.StopWithContext(context.Background())
 	noop := func(context.Context, *fsyncbus.SyncMsg) error { return nil }
 	if _, err := busOne.Subscribe("state", noop); err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ func TestJetStreamSyncBusPromiseSameTopicSubscribersAllReceive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer bus.Stop()
+	defer bus.StopWithContext(context.Background())
 	var first, second []int64
 	unsubFirst, err := bus.Subscribe("state", func(_ context.Context, m *fsyncbus.SyncMsg) error {
 		first = append(first, m.Key)
@@ -164,7 +164,7 @@ func TestJetStreamSyncBusPromiseHandlerPanicIsIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer bus.Stop()
+	defer bus.StopWithContext(context.Background())
 	if _, err := bus.Subscribe("state", func(context.Context, *fsyncbus.SyncMsg) error { panic("boom") }); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestJetStreamSyncBusPromiseConcurrentFirstSubscribersShareOneConsumer(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer bus.Stop()
+	defer bus.StopWithContext(context.Background())
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
@@ -326,7 +326,7 @@ func TestJetStreamSyncBusStopWaitsForAnInFlightHandler(t *testing.T) {
 
 	// 修前唯一的停止入口 Stop()：在途 handler 返回之前不能返回。
 	stopped := make(chan error, 1)
-	go func() { bus.Stop(); stopped <- nil }()
+	go func() { bus.StopWithContext(context.Background()); stopped <- nil }()
 	if _, waited := stopWaitingIn(t, stopped, nil, "jetStreamSyncBus).StopWithContext"); !waited {
 		t.Fatal("Stop returned while a handler was still running on the subscription")
 	}

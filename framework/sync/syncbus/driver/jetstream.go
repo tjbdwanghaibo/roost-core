@@ -13,10 +13,10 @@ import (
 	"sync"
 	"time"
 
-	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	"github.com/tjbdwanghaibo/roost-core/internal/operation"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
+	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 )
 
 const (
@@ -399,11 +399,6 @@ func (b *jetStreamSyncBus) invoke(local *fsyncbus.Subscription, msg *fsyncbus.Sy
 		slog.Warn("jetstream sync: handler error", "topic", local.Topic(), "key", msg.Key, "version", msg.Version, "err", err)
 	}
 	return accepted
-}
-
-// Stop 是不限时的 StopWithContext，给没有停机预算的调用方。
-func (b *jetStreamSyncBus) Stop() {
-	_ = b.StopWithContext(context.Background())
 }
 
 // StopWithContext 按三步停机（RR-20261005-NC-172）：

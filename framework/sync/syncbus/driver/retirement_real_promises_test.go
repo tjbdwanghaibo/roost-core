@@ -13,9 +13,9 @@ import (
 
 	gonats "github.com/nats-io/nats.go"
 	gojs "github.com/nats-io/nats.go/jetstream"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
-	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 )
 
 // RR-25：使用真实 broker 的 durable、NumDelivered、NAK 延迟和终止通知；
@@ -241,7 +241,7 @@ func TestRealRR25UnacknowledgedConnectionRecovery(t *testing.T) {
 	}
 	defer func() {
 		cancel()
-		b.Stop()
+		_ = b.StopWithContext(context.Background())
 		if nc.IsClosed() {
 			nc, _ = gonats.Connect(url)
 			api, _ = gojs.New(nc)

@@ -82,7 +82,7 @@ func TestRecreateWaitsForPreviousConsumerClosed(t *testing.T) {
 		t.Error("new Consume started before old consumer Closed")
 	}
 	close(old.closed)
-	b.Stop()
+	b.StopWithContext(context.Background())
 }
 func TestStoppingWindowKeepsDeliveryLimitAndBackoff(t *testing.T) {
 	js := newFakeJetStream()
@@ -94,7 +94,7 @@ func TestStoppingWindowKeepsDeliveryLimitAndBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.Stop()
+	b.StopWithContext(context.Background())
 	c := js.consumers[0]
 	if c.MaxDeliver != 5 || c.NakBackoffMin <= 0 || c.NakBackoffMax <= 0 {
 		t.Fatalf("finite delivery limit or lifecycle backoff missing: %+v", c)
@@ -124,7 +124,7 @@ func TestRR25HandlerOutcomeIsNotAdmission(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			js := newFakeJetStream()
 			b, _ := NewJetStreamSyncBus(context.Background(), js, JetStreamSyncConfig{LocalSid: 7})
-			defer b.Stop()
+			defer b.StopWithContext(context.Background())
 			_, err := b.Subscribe("state", func(context.Context, *fsyncbus.SyncMsg) error {
 				if mode == "panic" {
 					panic("business")
@@ -143,7 +143,7 @@ func TestRR25HandlerOutcomeIsNotAdmission(t *testing.T) {
 func TestRR25SelfUnsubscribeAndResubscribeDoesNotWaitForItself(t *testing.T) {
 	js := newFakeJetStream()
 	b, _ := NewJetStreamSyncBus(context.Background(), js, JetStreamSyncConfig{LocalSid: 7})
-	defer b.Stop()
+	defer b.StopWithContext(context.Background())
 	var local *fsyncbus.Subscription
 	local, _ = b.Subscribe("state", func(ctx context.Context, _ *fsyncbus.SyncMsg) error {
 		if err := local.Unsubscribe(ctx); err != nil {
@@ -206,7 +206,7 @@ func TestRR25CreationCancellationAndIndependentTopics(t *testing.T) {
 func TestRR25CreationFailureCanRetry(t *testing.T) {
 	js := &creatingJS{fakeJetStream: newFakeJetStream(), fail: true}
 	b, _ := NewJetStreamSyncBus(context.Background(), js, JetStreamSyncConfig{LocalSid: 7})
-	defer b.Stop()
+	defer b.StopWithContext(context.Background())
 	handler := func(context.Context, *fsyncbus.SyncMsg) error { return nil }
 	if _, err := b.Subscribe("state", handler); err == nil {
 		t.Fatal("expected create error")
@@ -220,7 +220,7 @@ func TestRR25CreationFailureCanRetry(t *testing.T) {
 func TestRR25SnapshotDoesNotMeanAnyHandlerAccepted(t *testing.T) {
 	js := newFakeJetStream()
 	b, _ := NewJetStreamSyncBus(context.Background(), js, JetStreamSyncConfig{LocalSid: 7})
-	defer b.Stop()
+	defer b.StopWithContext(context.Background())
 	local, _ := b.Subscribe("state", func(context.Context, *fsyncbus.SyncMsg) error { t.Fatal("retired handler invoked"); return nil })
 	b.mu.Lock()
 	f := b.topics["state"]
@@ -248,7 +248,7 @@ func (j *immediateJS) Subscribe(ctx context.Context, c fnats.JetStreamConsumerCo
 func TestRR25DeliveryDuringCreationHasAReceiver(t *testing.T) {
 	js := &immediateJS{fakeJetStream: newFakeJetStream(), data: fanoutMsg(t, 1)}
 	b, _ := NewJetStreamSyncBus(context.Background(), js, JetStreamSyncConfig{LocalSid: 7})
-	defer b.Stop()
+	defer b.StopWithContext(context.Background())
 	calls := 0
 	if _, err := b.Subscribe("state", func(context.Context, *fsyncbus.SyncMsg) error { calls++; return nil }); err != nil {
 		t.Fatal(err)

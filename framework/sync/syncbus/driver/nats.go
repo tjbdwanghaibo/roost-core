@@ -11,9 +11,22 @@ import (
 	"log/slog"
 	"strings"
 
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
+)
+
+// Bus 是装配层持有的同步总线：ISyncBus 加停机契约 StopWithContext。两种驱动都实现它，
+// kit SyncBusMod 的字段就是这个类型，停机在编译期就要求有 StopWithContext，不再运行期断言、
+// 也没有不限时的 Stop() 旁路。StopWithContext 返回 nil 之后调用方才能释放下面的 NATS 连接。
+type Bus interface {
+	fsyncbus.ISyncBus
+	StopWithContext(ctx context.Context) error
+}
+
+var (
+	_ Bus = (*natsSyncBus)(nil)
+	_ Bus = (*jetStreamSyncBus)(nil)
 )
 
 // natsSyncBus implements fsyncbus.ISyncBus over NATS pub/sub.
@@ -23,11 +36,18 @@ type natsSyncBus struct {
 	prefix   string // NATS subject prefix, e.g. "roost.sync"
 }
 
-func NewNatsSyncBus(client nats.IClient, localSid int32, prefix string) fsyncbus.ISyncBus {
+func NewNatsSyncBus(client nats.IClient, localSid int32, prefix string) Bus {
 	if prefix == "" {
 		prefix = "roost.sync"
 	}
 	return &natsSyncBus{client: client, localSid: localSid, prefix: prefix}
+}
+
+// StopWithContext 满足 Bus 的停机契约。普通 NATS 总线是至多一次的 pub/sub，不持有订阅之外的资源：
+// 每个订阅由 Subscription.Unsubscribe 自己关准入、发 UNSUB 并在 ctx 内排空在途回调（A3 ②），
+// 连接归 NatsMod。所以这里没有要等的东西，直接返回 nil，调用方随后即可释放连接。
+func (b *natsSyncBus) StopWithContext(context.Context) error {
+	return nil
 }
 
 func (b *natsSyncBus) Publish(msg *fsyncbus.SyncMsg) error {

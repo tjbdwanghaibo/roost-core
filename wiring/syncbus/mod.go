@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 	driver "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
@@ -48,7 +47,7 @@ func (c config) prefix() string {
 // SyncBusMod implements app.Mod, providing the service-to-service ISyncBus over NATS or JetStream.
 // Depends on NATS Mod: 普通模式取 fnats.IClient，JetStream 模式取 ModNatsJetStream。
 type SyncBusMod struct {
-	bus       fsyncbus.ISyncBus
+	bus       driver.Bus
 	localSid  int32
 	prefix    string
 	transport string
@@ -164,10 +163,10 @@ func (m *SyncBusMod) StopWithContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = fctx.BaseContext()
 	}
-	// 停机只走 StopWithContext 契约（三步停机：ctx 内等在途回调排空，超时返回 ctx 错误并保留总线供重试）。JetStream 总线
-	// 持有消费者，实现了它；普通 NATS 总线不持有订阅之外的资源（每个订阅由 Subscription.Unsubscribe 自己排空），没有可停的东西。
-	if stopper, ok := m.bus.(interface{ StopWithContext(context.Context) error }); ok {
-		if err := stopper.StopWithContext(ctx); err != nil {
+	// 停机只走 driver.Bus 的 StopWithContext 契约（三步停机：ctx 内等在途回调排空，超时返回 ctx 错误并保留总线供重试）。
+	// 字段类型在编译期要求它，两种驱动都实现：JetStream 总线排空消费者与回调，普通 NATS 总线没有要等的东西直接返回 nil。
+	if m.bus != nil {
+		if err := m.bus.StopWithContext(ctx); err != nil {
 			return err
 		}
 	}
