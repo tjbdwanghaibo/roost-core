@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	coremanager "github.com/tjbdwanghaibo/roost-core/framework/manager"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 
 	"github.com/spf13/viper"
 )

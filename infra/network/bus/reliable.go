@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/failurelog"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/failurelog"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 

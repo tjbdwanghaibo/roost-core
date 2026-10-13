@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
 )
 
 // IdentityVerifier checks a credential with whoever issued it.
@@ -72,8 +71,6 @@ type AllocatorFunc func(ctx context.Context, serverID int32) (int64, error)
 func (f AllocatorFunc) Allocate(ctx context.Context, serverID int32) (int64, error) {
 	return f(ctx, serverID)
 }
-
-
 
 // NameValidator checks a proposed role name.
 //

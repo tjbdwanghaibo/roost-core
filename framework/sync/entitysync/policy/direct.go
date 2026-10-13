@@ -4,8 +4,8 @@ import (
 	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
 )
 
 // Direct is the degenerate policy: one binding at a time, decided by the

@@ -23,9 +23,9 @@ import (
 // exampleRuns 是全部可运行示例（相对仓库根，含 main 的目录）→ 跳过理由；空串表示必须运行。
 // 目前六个示例都只用进程内或回环资源，没有一个需要外部依赖。
 var exampleRuns = map[string]string{
-	"examples/configgen":          "",
-	"examples/lubanreal":          "",
-	"examples/robotdemo":          "", // 自带回环 TCP echo 服务器，不连外部服务
+	"examples/configgen":                   "",
+	"examples/lubanreal":                   "",
+	"examples/robotdemo":                   "", // 自带回环 TCP echo 服务器，不连外部服务
 	"gameplay/skill/examples/combat":       "",
 	"gameplay/skill/examples/fireball":     "",
 	"gameplay/skill/examples/statusbridge": "",

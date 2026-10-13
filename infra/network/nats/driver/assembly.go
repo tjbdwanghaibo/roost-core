@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 )
 
 // ErrClosedUndrained reports that Assembly.Close closed the connection hard

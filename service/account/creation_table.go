@@ -1,8 +1,8 @@
 package account
 
 import (
-	"github.com/tjbdwanghaibo/roost-core/service/directory"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
 )
 
 // 建角判定表（维护者决定 B9，docs/feature/B9-C5-WINDOW-ENTRIES-ROLE-TABLE-2026-10-06.md）。

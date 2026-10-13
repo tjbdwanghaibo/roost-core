@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tjbdwanghaibo/roost-core/service/directory"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
 )
 
 // createRole uses the slot itself as the durable intent. Concurrent retries

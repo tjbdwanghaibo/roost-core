@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"hash/fnv"
 
-	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/misc"
+	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
 )
 
 // KeyAffinityPicker routes every call carrying the same key to the same

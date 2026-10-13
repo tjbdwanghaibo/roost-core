@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
 // Redis returns the Redis capability, or an error naming what is missing.

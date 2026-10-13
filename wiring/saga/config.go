@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // saga.* 的声明（维护者决定 A4 ①）。缺省值与 coresaga.DefaultOptions 相同（TestSagaDeclaredDefaultsMatchCoreDefaults），

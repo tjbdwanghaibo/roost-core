@@ -12,13 +12,13 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	coreremote "github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
+	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // defaultMirrorShutdownTimeout 是 remote_entity.mirror.shutdown_timeout 的缺省值：停止时在途的权威加载已被

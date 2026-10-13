@@ -8,9 +8,9 @@ import (
 	kitmods "github.com/tjbdwanghaibo/roost-core/wiring/mods"
 
 	"github.com/tjbdwanghaibo/roost-core/wiring/account"
+	"github.com/tjbdwanghaibo/roost-core/wiring/activity"
 	"github.com/tjbdwanghaibo/roost-core/wiring/chat"
 	"github.com/tjbdwanghaibo/roost-core/wiring/global"
-	"github.com/tjbdwanghaibo/roost-core/wiring/activity"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mail"
 	"github.com/tjbdwanghaibo/roost-core/wiring/match"
 	"github.com/tjbdwanghaibo/roost-core/wiring/platform"

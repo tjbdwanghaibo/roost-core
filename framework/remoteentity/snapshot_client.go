@@ -11,10 +11,10 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/cache"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/internal/operation"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/mirror"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 )
 
 // ErrSnapshotClientStopped 表示 SnapshotClient 已停止：不再读、不再访问 L2 / 权威 / 总线。停止是单次的，

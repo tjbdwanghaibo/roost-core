@@ -17,10 +17,10 @@ import (
 	gojs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 	syncdriver "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 )
 
 // Mirror 第 4 步在真实 JetStream（+ 真实 Redis）上的验收（docs/feature/MIRROR-STEP-4-AND-O4-2026-10-06.md）。

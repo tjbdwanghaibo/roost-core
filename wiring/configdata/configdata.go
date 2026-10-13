@@ -7,9 +7,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	fconfigdata "github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/lifecycle"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 
 	"github.com/spf13/viper"
 )

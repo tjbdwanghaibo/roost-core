@@ -19,8 +19,8 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // rpcToxiproxy 驱动本用例在环境 toxiproxy 上自建的代理（每个隔离 NATS 节点一个，唯一命名、临时端口），只在它们上面加删 toxic，

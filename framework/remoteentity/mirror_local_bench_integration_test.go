@@ -18,14 +18,14 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
-	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
-	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 	syncdriver "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 )
 
 // Mirror 第 6 步本机替代的性能对照（docs/feature/MIRROR-STEP-6-LOCAL-2026-10-06.md §4）：只读方的读延迟

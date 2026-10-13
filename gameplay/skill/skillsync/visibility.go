@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/syncstream"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 )
 
 var ErrVisibilityEvaluatorRequired = errors.New("skillsync: entity visibility evaluator is required")

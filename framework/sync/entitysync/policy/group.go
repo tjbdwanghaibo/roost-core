@@ -6,8 +6,8 @@ import (
 	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
 )
 
 // GroupConfig shapes a Group.

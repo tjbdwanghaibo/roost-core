@@ -20,9 +20,9 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
-	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 )
 
 const migrationTopic = "stream_migration"

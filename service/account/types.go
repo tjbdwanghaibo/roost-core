@@ -42,8 +42,8 @@ import (
 	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"github.com/tjbdwanghaibo/roost-core/service/directory"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
 )
 
 // Error codes.

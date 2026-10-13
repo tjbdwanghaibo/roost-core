@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/lifecycle"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 
 	"github.com/spf13/viper"

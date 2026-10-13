@@ -13,8 +13,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/security"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 
-	"github.com/tjbdwanghaibo/roost-core/service/directory"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
 )
 
 type clock struct {

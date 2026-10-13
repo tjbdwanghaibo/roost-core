@@ -8,8 +8,8 @@ import (
 	"io"
 	"sync"
 
-	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/syncstream"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 )
 
 var (

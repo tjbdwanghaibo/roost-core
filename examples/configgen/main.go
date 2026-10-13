@@ -12,8 +12,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	"github.com/tjbdwanghaibo/roost-core/examples/configgen/cfg"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 )
 
 func main() {

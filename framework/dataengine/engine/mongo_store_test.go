@@ -42,7 +42,6 @@ func (fake *mongoRemoteProjectionFake) ApplyRemoteCommits(_ context.Context, _ e
 	return nil, nil
 }
 
-
 func newMongoStoreTest(t *testing.T) (*MongoStore, *mongotest.Client, *mongotest.Collection) {
 	t.Helper()
 	client := mongotest.NewClient()

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
 )
 
 // Credential is what a player presents to obtain a session.
@@ -106,8 +105,6 @@ type PlayerResolverFunc func(context.Context, Verified) (int64, error)
 func (f PlayerResolverFunc) Resolve(ctx context.Context, verified Verified) (int64, error) {
 	return f(ctx, verified)
 }
-
-
 
 var (
 	_ Verifier       = VerifierFunc(nil)

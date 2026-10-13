@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 )
 
 // AssemblyConfig is everything the data engine needs to build itself once the

@@ -14,11 +14,11 @@ import (
 	gojs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 	syncdriver "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/mirror"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 )
 
 // B2 · N05 O5 在真实 JetStream + 真实 Redis 上的复现：同步总线给每个 sid 一个 DeliverAll 的 durable，

@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	flock "github.com/tjbdwanghaibo/roost-core/infra/base/lock"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 func TestLockModProvidesReentrantLockManager(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 	coreremote "github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
+	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 )
 
 // remote_entity.* 的声明（维护者决定 A4 ①）。数字与时长写 0 取 coreremote.DefaultConfig 的值（声明里 min:"0"），

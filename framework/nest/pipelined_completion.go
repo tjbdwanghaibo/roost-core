@@ -11,8 +11,8 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/goroutine"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // Phase 2 of the pipelined commit (see NEST_PIPELINED_COMMIT.md §10): instead

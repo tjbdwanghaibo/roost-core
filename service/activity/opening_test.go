@@ -227,6 +227,7 @@ func (s *bugfix5CountingActivities) Get(ctx context.Context, key Key) (versionst
 	s.reads.Add(1)
 	return s.Store.Get(ctx, key)
 }
+
 // 准入从不让窗口超过 MaxPendingActivities；超限的窗口（旧版本没有这个上限时写下的形态）在任何读之前被
 // 拒绝（ErrConflict），不轮转扫描、不改窗口，交线下修复。
 // 历史：此前按 ScanAfter 游标轮转扫描旧的超限窗口；维护者 2026-10-13 决定不兼容旧数据。

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 )
 
 // --- drift: the client, the handlers and the interface must agree ---

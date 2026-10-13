@@ -18,9 +18,9 @@ import (
 	"log/slog"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	coremanager "github.com/tjbdwanghaibo/roost-core/framework/manager"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	coremanager "github.com/tjbdwanghaibo/roost-core/framework/manager"
 
 	"github.com/spf13/viper"
 )

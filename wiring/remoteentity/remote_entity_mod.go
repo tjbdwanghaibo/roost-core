@@ -9,12 +9,12 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
-	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 
 	"github.com/spf13/viper"
 )

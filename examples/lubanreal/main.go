@@ -14,8 +14,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 	cfg "github.com/tjbdwanghaibo/roost-core/examples/lubanreal/gen"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
 )
 
 func main() {

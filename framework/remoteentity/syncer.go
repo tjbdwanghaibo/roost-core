@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/mirror"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 const SyncTopicSnapshot = "remote_entity_snapshot"

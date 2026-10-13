@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	fsyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 )
 
 func TestJetStreamSyncBusPublishesAndAcknowledgesHandlerError(t *testing.T) {

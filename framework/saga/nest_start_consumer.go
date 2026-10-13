@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	kitnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // NestStartConsumerConfig configures the shared durable consumer which turns

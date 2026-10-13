@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/mirror"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // 兴趣续租请求（O-M6-1，docs/feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md）。

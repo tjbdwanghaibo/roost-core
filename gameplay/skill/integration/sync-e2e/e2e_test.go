@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
-	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/skillsync"
 	coresyncbus "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus"
 	corestream "github.com/tjbdwanghaibo/roost-core/framework/sync/syncstream"
 	streamadapter "github.com/tjbdwanghaibo/roost-core/framework/sync/syncstream"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/skillsync"
 )
 
 type confirmedBus struct {

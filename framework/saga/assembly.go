@@ -7,8 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 )
 
 // AssemblyConfig is everything the Saga runtime needs once configuration has

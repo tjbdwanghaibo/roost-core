@@ -2,9 +2,9 @@ package driver
 
 import (
 	"errors"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"sync"
 	"sync/atomic"
 	"testing"

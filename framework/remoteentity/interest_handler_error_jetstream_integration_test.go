@@ -14,9 +14,9 @@ import (
 	gojs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	syncdriver "github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/mirror"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // 兴趣消息的 handler 出错时 JetStream 怎样结算（RR-20261006-11 复核；发版文档 REM-5 原写“未核对”）。
