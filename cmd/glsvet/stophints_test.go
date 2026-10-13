@@ -36,7 +36,7 @@ func StopAll(ctx context.Context, a, b chan struct{}) { select { case <-a: case 
 	}
 }
 
-// RR-20261005-NC-173 修前的真实形状：Deregister(ctx) 调用不带 ctx 的 waitLoopDone，后者裸 <-done。
+// 真实出现过的形状：Deregister(ctx) 调用不带 ctx 的 waitLoopDone，后者裸 <-done。
 func TestStopHintsFollowOneCallIntoAHelperThatCannotSeeTheContext(t *testing.T) {
 	if hints := stopHintsIn(t, `package p
 import "context"

@@ -1,12 +1,5 @@
 package main
 
-// RR-20261005-NC-204：glsvet 是 CI（ci.yml、framework-compat、upgrade-compat）和生成工程的
-// 并发边界门禁，只按退出码判定。旧行为：参数指向的目录不存在、`<dir>/...` 的根不存在、
-// 或目录里有一份解析不了的 .go 文件时，vetDirectory 把 parser.ParseDir 的错误当成
-// “不是 Go 目录”返回 0，整个目录（含同目录里其他文件的违例）都没检查，退出码 0——门禁
-// 对它根本没看过的代码报告通过。包改名 / 路径拼错后 `glsvet ./framework/nest ./framework/entity …` 会静默变绿。
-// 承诺：没检查到的输入要报错并以非 0 退出（2，与用法错误同级），不能算“0 个违例”。
-
 import (
 	"bytes"
 	"os"
@@ -15,6 +8,9 @@ import (
 	"strings"
 	"testing"
 )
+
+// glsvet 是 CI 与生成工程的并发边界门禁，只按退出码判定：参数指向的目录不存在、`<dir>/...` 的根不存在、或目录里有一份
+// 解析不了的 .go 文件时，必须报错并以非 0 退出（2，与用法错误同级），不能把没检查到的输入算成“0 个违例”。
 
 // TestMain lets the test binary stand in for the glsvet command, so the exit
 // status — the only thing CI reads — is what these tests assert.

@@ -216,8 +216,7 @@ func (d *PlayerDao) SetLevel(v int32) {
 	}
 }
 
-// RR-20261006-13：组件方法经同包 helper 函数登记 undo，与直接登记是同一个违例，也要提示（跟进一层，与停止类函数
-// 的提示同样做法）。之前只看组件方法体里的直接调用，把 RecordUndo 挪进一个包级 helper 就看不见了。
+// 组件方法经同包 helper 函数登记 undo，与直接登记是同一个违例，也要提示（跟进一层，与停止类函数的提示同样做法）。
 // 组件调 DAO 的 setter（DAO 方法自己登记 undo）是 A1 要求的正确写法，不能因为跟进而误报；helper 只跟一层。
 func TestComponentRecordingUndoThroughHelperIsHinted(t *testing.T) {
 	source := `package player
@@ -285,5 +284,85 @@ func TestSkillPackagesGetNoComponentUndoHint(t *testing.T) {
 				t.Fatalf("%s: unexpected A1 hints %q", directory, hints)
 			}
 		}
+	}
+}
+
+// 生成器接受方法 handler，检查器不能因 receiver 非空而跳过它。
+func TestMethodHandlerConcurrencyChecks(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source string
+		want   int
+	}{
+		{"pointer", `package p
+type controller struct{}
+//roost:nest rollback=undo durability=strict
+func (*controller) Move() { go func(){}() }
+`, 1},
+		{"value", `package p
+type controller struct{}
+//roost:nest rollback=undo durability=strict
+func (controller) Move() { go func(){}() }
+`, 1},
+		{"package helper with same name", `package p
+type controller struct{}
+func Move() { go func(){}() }
+//roost:nest rollback=undo durability=strict
+func (*controller) Move() { Move() }
+`, 1},
+		{"different receivers with same name", `package p
+type first struct{}
+type second struct{}
+//roost:nest rollback=undo durability=strict
+func (*first) Move() { go func(){}() }
+//roost:nest rollback=undo durability=strict
+func (*second) Move() { go func(){}() }
+`, 2},
+		{"receiver capture", `package p
+import "github.com/tjbdwanghaibo/roost-core/infra/base/worker"
+type task struct{}
+func (task) OnRelease() {}
+var pool *worker.Pool[task]
+type controller struct { value int }
+//roost:nest rollback=undo durability=strict
+func (c *controller) Move() { pool.Go(task{}, func(task){ _ = c.value }) }
+`, 1},
+		{"explicit worker parameters", `package p
+import "github.com/tjbdwanghaibo/roost-core/infra/base/worker"
+type task struct{}
+func (task) OnRelease() {}
+var pool *worker.Pool[task]
+type controller struct{}
+//roost:nest rollback=undo durability=strict
+func (*controller) Move() { pool.Go(task{}, func(task){}) }
+`, 0},
+		{"ordinary method", `package p
+type controller struct{}
+func (*controller) Move() { go func(){}() }
+`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := vetSource(t, tc.source); got != tc.want {
+				t.Fatalf("findings = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBusinessWaitCheckerDistinguishesAwaitStages(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want int
+	}{
+		{`client.Request(ctx, name, id, nil)`, 1},
+		{`nest.RunLocal(ctx, func(){})`, 1},
+		{`return nest.Await(func(ctx context.Context)(int,error){time.Sleep(time.Second);return 1,nil},func(p *Player,n int,err error)error{return nil})`, 0},
+		{`return nest.Await(func(ctx context.Context)(int,error){return 1,nil},func(p *Player,n int,err error)error{time.Sleep(time.Second);return nil})`, 1},
+	} {
+		t.Run(tc.body, func(t *testing.T) {
+			if got := vetSource(t, "package game\n//roost:nest durability=memory\nfunc Reward(){"+tc.body+"}\n"); got != tc.want {
+				t.Fatalf("got=%d want=%d", got, tc.want)
+			}
+		})
 	}
 }

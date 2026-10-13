@@ -1,11 +1,5 @@
 package main
 
-// A1 盲区（维护者决定，2026-10-06 第十三轮）：A1 要求事务里会改的状态放在 DAO，由 DAO 的回滚统一兜住。
-// 组件把可变状态放在普通字段里、也不登记 undo 时，事务失败这些字段静默不回滚；旧 glsvet 只看组件的
-// undo 登记，对这种组件什么都不报。承诺：组件方法（初始化钩子除外）写非 DAO、非 //roost:cache、
-// 非函数类型的字段时打印 hint:（含经同包 helper 写的，跟进一层），只提示、不计入违例、退出码 0；
-// 缓存字段、函数类型字段、DAO 句柄和 OnInitFinish 里的写不提示。
-
 import (
 	"go/parser"
 	"go/token"
@@ -13,6 +7,12 @@ import (
 	"strings"
 	"testing"
 )
+
+// A1 盲区（维护者决定，2026-10-06 第十三轮）：A1 要求事务里会改的状态放在 DAO，由 DAO 的回滚统一兜住。
+// 组件把可变状态放在普通字段里、也不登记 undo 时，事务失败这些字段静默不回滚；旧 glsvet 只看组件的
+// undo 登记，对这种组件什么都不报。承诺：组件方法（初始化钩子除外）写非 DAO、非 //roost:cache、
+// 非函数类型的字段时打印 hint:（含经同包 helper 写的，跟进一层），只提示、不计入违例、退出码 0；
+// 缓存字段、函数类型字段、DAO 句柄和 OnInitFinish 里的写不提示。
 
 func TestComponentFieldWritesOutsideTheDaoAreHinted(t *testing.T) {
 	code, output := runGlsvet(t, "testdata/a1fields")
