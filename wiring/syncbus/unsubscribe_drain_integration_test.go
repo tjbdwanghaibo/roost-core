@@ -1,11 +1,8 @@
 //go:build integration
 
-// A3 ②（docs/feature/A3-2-SYNCBUS-DRAINING-UNSUBSCRIBE-2026-10-07.md）：真实 nats-server（私有进程）上，
-// 经正式 kit NatsMod + SyncBusMod 装配的两种传输（JetStream / 普通 NATS），退订本身排空：
+// 退订本身排空（维护者决定 A3 ②）：真实 nats-server（私有进程）上，经正式 NatsMod + SyncBusMod 装配的两种传输（JetStream / 普通 NATS）：
 //   - handler 卡住时 Unsubscribe(短预算) 返回 DeadlineExceeded，handler 放行后重试返回 nil，之后发布的消息不再调 handler；
 //   - handler 里用投递 ctx 退订自己不死锁（JetStream 上它是最后一个本地订阅，退订会在 consume 回调里停消费者）。
-//
-// 修前（旧接口退订函数）在同一环境上退订立即返回、回调仍在跑，见方案 §9。
 package syncbus
 
 import (

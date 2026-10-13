@@ -2,14 +2,9 @@
 
 package syncbus
 
-// OPEN-ITEMS B31：RR-20260926-56 的升级迁移路径在真实 JetStream 上演练。
-// 写了非默认 prefix、没写 stream 的旧部署（v1.17.0 及以前）把流建在 ROOST_SYNC 上；升级后流名由 prefix 派生，
-// 新流与旧流的 subjects 重叠，启动必须明确失败（不能静默换流、丢掉游标）；配置 `syncbus.stream: ROOST_SYNC`
-// 后能启动，durable 游标从旧部署停下的位置继续。
-//
-// 旧部署用 `syncbus.stream: ROOST_SYNC` 模拟：v1.17.0 在不写 stream 时的流名、subjects（prefix.>）与 durable 名
-// （durableSyncName 只取决于 prefix / topic / sid，RR-56 未改）与此完全相同。2026-09-27 另用 v1.17.0 源码
-// 编译的同一流程实跑过一次，结果一致（见 RR-20260926-56 修复记录“后续验证”）。
+// 流名由 prefix 派生之后的升级路径在真实 JetStream 上演练：写了非默认 prefix、没写 stream 的旧部署把流建在 ROOST_SYNC 上；升级后
+// 新流与旧流的 subjects 重叠，启动必须明确失败（不能静默换流、丢掉游标）；配置 `syncbus.stream: ROOST_SYNC` 后能启动，durable
+// 游标从旧部署停下的位置继续。旧部署用 `syncbus.stream: ROOST_SYNC` 模拟（流名、subjects 与 durable 名与旧版本相同）。
 // 用例在临时端口上自己拉起 nats-server（临时存储目录），不碰共享环境里的 ROOST_SYNC。
 
 import (

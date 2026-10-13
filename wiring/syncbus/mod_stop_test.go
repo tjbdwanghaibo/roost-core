@@ -42,7 +42,7 @@ func (b *contextStopSyncBus) StopWithContext(context.Context) error {
 	return nil
 }
 
-// RR-20261005-NC-172：总线停止超时时 Mod 保留总线（NatsMod 随后看到停机不完整、不关连接），重试再停同一个总线。
+// 总线停止超时时 Mod 保留总线（NatsMod 随后看到停机不完整、不关连接），重试再停同一个总线。
 func TestSyncModStopTimeoutKeepsTheBusForRetry(t *testing.T) {
 	bus := &drainingStopSyncBus{}
 	mod := &SyncBusMod{bus: bus}

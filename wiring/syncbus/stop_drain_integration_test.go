@@ -1,9 +1,7 @@
 //go:build integration
 
-// RR-20261005-NC-172：真实 nats-server（私有进程）上，JetStream 同步总线的 handler 卡住时停机。旧行为：
-// SyncBusMod.StopWithContext 立即返回 nil 并释放总线，按 App 的停机顺序 NatsMod 随即关连接，handler 返回后
-// ack 失败，消息留在 ack_pending、AckWait 后重投。承诺：预算内 handler 未返回时 Mod 返回 ctx 错误、保留总线
-// （App 因此不关 NATS）；handler 返回后重试成功，这条投递在连接仍在时被确认。
+// 真实 nats-server（私有进程）上，JetStream 同步总线的 handler 卡住时停机：预算内 handler 未返回时 Mod 返回 ctx 错误、保留总线
+// （App 因此不关 NATS）；handler 返回后重试成功，这条投递在连接仍在时被确认，不留在 ack_pending 等 AckWait 后重投。
 package syncbus
 
 import (
