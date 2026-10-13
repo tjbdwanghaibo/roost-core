@@ -1,0 +1,6 @@
+--- FAIL: TestFrameworkModsReadConfigOnlyThroughDeclarations (0.03s)
+    config_contract_test.go:231: ../../wiring/nest/nest_mod.go:151:50
+        	reads config outside a declaration; declare the key on the mod's config struct and read it with app.LoadConfig
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/app	0.658s
+FAIL

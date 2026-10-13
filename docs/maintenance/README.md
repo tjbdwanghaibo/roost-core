@@ -124,3 +124,9 @@ WAL目录使用单写持久卷，不同实例不得共享同一写目录。Mongo
 BurstComparison与PreservesDelivery统一使用带EntityBase的测试实体，通过Guard取得实体锁、BeginSyncMutation建立提交门、锁内修改并Admit冻结、确认后解锁，最后Release开放交付。冻包失败仍检查LastError，不忽略错误或重试掩盖失败。BurstComparison每次业务开始前用synctest.Wait处理当前虚拟时刻已到期的窗口，明确同一时刻先到期、后下一笔业务的测试顺序；不改生产调度顺序。原0/5/10ms窗口分别20/4/2帧、版本链、最终payload和冻结预算释放断言全部保留。
 
 两条交付测试重复1000轮通过，全部on_change测试race重复100轮通过；EntitySync/Policy、Nest和Wiring/Nest整包通过。[重复回归](../performance/benchmarks/review-20261012/batch-window-fix-repeat.txt)、[race回归](../performance/benchmarks/review-20261012/batch-window-fix-race.txt)、[整包回归](../performance/benchmarks/review-20261012/batch-window-fix-packages.txt)。本项已从已知限制移除；本轮仅修改测试夹具与文档，没有修改运行时、放宽断言或重跑性能负载。后续on_change交付测试应复用正式提交边界，不能把裸MarkDirty加CaptureSync当成Nest handler提交。
+
+### 声明式配置的显式零值（2026-10-13）
+
+需要区分“未配置”和“显式零值”的 Mod 使用 `app.LoadConfigWithPresence`。它复用声明解码器，在实际读取声明键时返回来源存在性；不由 Mod 再读 Viper，也不放宽配置守卫。Viper 环境变量、绑定参数与 SetDefault 继续沿用其 IsSet 语义；失败时不返回部分存在性结果。
+
+本轮全仓回归发现 Nest 的 `sync.entity.on_change_batch_window` 在声明解码后直接调用 Viper.IsSet，违反统一配置入口（来自 `9d97a2115`，非此次远端三个提交引入）。已改用解码返回的存在性，保留未配置沿用代码值、显式 0 关闭合批、Configure 最终覆盖、负值和错误格式拒绝。配置声明和生成快照内容不变，快照一致性与 doctor 回归通过；[修前失败](../performance/benchmarks/nest-hot-path-20261013/config-declaration-before.txt)与[修后验证](../performance/benchmarks/nest-hot-path-20261013/config-declaration-after.txt)保留。后续需要存在性时走此入口，不复制单键直读或增加守卫白名单。

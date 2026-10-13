@@ -1,0 +1,3 @@
+ok  	github.com/tjbdwanghaibo/roost-core/framework/app	0.660s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/nest	1.168s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	23.813s

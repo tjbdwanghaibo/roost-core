@@ -126,7 +126,8 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		return corenest.ErrGetterNotSet
 	}
 	var settings config
-	if err := app.LoadConfig(cfg, &settings); err != nil {
+	present, err := app.LoadConfigWithPresence(cfg, &settings)
+	if err != nil {
 		return fmt.Errorf("nest mod: %w", err)
 	}
 	coresaga.SetStartDataLimit(settings.SagaPayloadLimit())
@@ -148,7 +149,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if err := m.initEntityLoadConfig(nest.EntityLoadTimeout); err != nil {
 		return err
 	}
-	return m.initEntitySync(settings, cfg != nil && cfg.IsSet("sync.entity.on_change_batch_window"))
+	return m.initEntitySync(settings, present["sync.entity.on_change_batch_window"])
 }
 
 // initEntityLoadConfig 接上 ManagerAccess 的共享冷加载上限 nest.entity_load_timeout（RR-54，缺省

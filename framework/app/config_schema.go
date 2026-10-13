@@ -72,6 +72,31 @@ func LoadConfig(cfg *viper.Viper, dst any) error {
 	return configschema.Decode(viperSource{cfg}, dst, isProductionServiceConfig(cfg))
 }
 
+// LoadConfigWithPresence 与 LoadConfig 使用同一声明解码器，额外返回本次读取的键是否由来源提供。
+// 用于区分“缺省”与“显式零值”，不另读 Viper、不绕过声明验证。Viper 的环境变量、绑定参数和
+// SetDefault 仍按其 IsSet 语义计算；map 只包含声明解码实际读取的键，调用方持有，失败时返回 nil。
+func LoadConfigWithPresence(cfg *viper.Viper, dst any) (map[string]bool, error) {
+	if cfg == nil {
+		cfg = viper.New()
+	}
+	source := configPresenceSource{viperSource{cfg}, make(map[string]bool)}
+	if err := configschema.Decode(source, dst, isProductionServiceConfig(cfg)); err != nil {
+		return nil, err
+	}
+	return source.present, nil
+}
+
+type configPresenceSource struct {
+	viperSource
+	present map[string]bool
+}
+
+func (s configPresenceSource) Get(key string) (any, bool) {
+	value, set := s.viperSource.Get(key)
+	s.present[key] = set
+	return value, set
+}
+
 // CheckConfig 按 App 自己的声明与 mods 的声明检查 cfg，返回全部错误（App.run 在任何 Mod Init 之前调用，
 // `--check-config` 与生成工程的测试也用它）。同一个键被两个 Mod 声明得不一样时报错。
 func CheckConfig(cfg *viper.Viper, mods ...Mod) error {

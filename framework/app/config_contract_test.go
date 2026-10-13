@@ -232,6 +232,52 @@ func TestFrameworkModsReadConfigOnlyThroughDeclarations(t *testing.T) {
 	}
 }
 
+func TestLoadConfigWithPresenceKeepsDeclaredZeroAndDefaults(t *testing.T) {
+	type settings struct {
+		Window time.Duration `config:"sync.window" default:"5ms" min:"0"`
+	}
+	for _, name := range []string{"nil", "absent", "zero", "value", "viper-default", "env", "invalid"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.Set("unrelated", true)
+			want, wantSet := 5*time.Millisecond, false
+			switch name {
+			case "nil":
+				cfg = nil
+			case "zero":
+				cfg.Set("sync.window", "0s")
+				want, wantSet = 0, true
+			case "value":
+				cfg.Set("sync.window", "2ms")
+				want, wantSet = 2*time.Millisecond, true
+			case "viper-default":
+				cfg.SetDefault("sync.window", "0s")
+				want, wantSet = 0, true
+			case "env":
+				t.Setenv("ROOST_TEST_PRESENCE_WINDOW", "0s")
+				if err := cfg.BindEnv("sync.window", "ROOST_TEST_PRESENCE_WINDOW"); err != nil {
+					t.Fatal(err)
+				}
+				want, wantSet = 0, true
+			case "invalid":
+				cfg.Set("sync.window", "-1ms")
+			}
+			var got, ordinary settings
+			present, err := LoadConfigWithPresence(cfg, &got)
+			ordinaryErr := LoadConfig(cfg, &ordinary)
+			if name == "invalid" {
+				if err == nil || ordinaryErr == nil || present != nil {
+					t.Fatalf("invalid: %v %v %v", present, err, ordinaryErr)
+				}
+				return
+			}
+			if err != nil || ordinaryErr != nil || got != ordinary || got.Window != want || len(present) != 1 || present["sync.window"] != wantSet {
+				t.Fatalf("settings=%+v ordinary=%+v present=%v errors=%v/%v", got, ordinary, present, err, ordinaryErr)
+			}
+		})
+	}
+}
+
 // undeclaredConfigReads 找出直接读 viper（参数、变量、字段或 Registry.Config() 的返回值）与单键读取的调用。
 func undeclaredConfigReads(t *testing.T, packages map[string][]string) []string {
 	t.Helper()
