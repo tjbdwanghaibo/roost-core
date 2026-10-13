@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, master, consolidation-v3]
+    branches: [main]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:

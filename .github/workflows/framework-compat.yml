@@ -8,7 +8,7 @@ name: framework-compat
 
 on:
   push:
-    branches: [main, master, consolidation-v3]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
