@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// ClaimRequest 是领取到期记录或 outbox 命令的请求：以 Owner 的身份领取至多 Limit 条，租约 LeaseDuration。
 type ClaimRequest struct {
 	Owner         string
 	Now           time.Time
@@ -12,6 +13,7 @@ type ClaimRequest struct {
 	Limit         int
 }
 
+// Query 是按类型、定义版本、状态与更新时间筛选记录的查询。
 type Query struct {
 	Type              string
 	DefinitionVersion uint32
@@ -23,18 +25,18 @@ type Query struct {
 // ApplyRequest 的 CloseOperation 写 tombstone 时，Receipt 是成功表示操作“带结果关闭”（协调器接收了它的
 // 成功 completion，计入 CompletedSteps），其余都是“放弃关闭”：没有 Receipt（超时用尽、saga 截止、人工
 // Compensate、定义缺失），或以失败关闭（可重试失败用尽、拒绝）——这些关闭都没有记下任何生效的结果。
-// 实现 CompletionHistoryStore 的 Store 要把这个区别记进 tombstone（U-0280）。
+// 实现 CompletionHistoryStore 的 Store 要把这个区别记进 tombstone。
 type ApplyRequest struct {
 	ExpectedVersion uint64
 	ExpectedLease   Lease
 	After           Record
 	Outbox          *OutboxRecord
 	Receipt         *Completion
-	// CloseOperation atomically records that an idempotent business operation
-	// can no longer advance this Saga and removes its still-pending outbox.
+	// CloseOperation 原子地记下一个幂等业务操作不能再推进本 saga（写 tombstone），并删除它仍排队的 outbox。
 	CloseOperation string
 }
 
+// ApplyOutcome 是一次 Apply 的结果：已应用，或识别为重复的回执。
 type ApplyOutcome uint8
 
 const (
@@ -42,17 +44,15 @@ const (
 	ApplyDuplicate
 )
 
-// Store must atomically persist ApplyRequest.After, Outbox and Receipt. When
-// Outbox is present it supersedes every older queued command with the same
-// IdempotencyKey, so timed-out attempts cannot build an unbounded retry fanout.
-// ExpectedVersion and ExpectedLease are fencing conditions; an implementation
-// must return ErrConflict rather than accepting a stale coordinator.
+// Store 必须原子地持久化 ApplyRequest 的 After、Outbox 与 Receipt。带 Outbox 时它取代同一 IdempotencyKey 下所有更早的
+// 排队命令，超时的尝试不会堆出无界的重试扇出。ExpectedVersion 与 ExpectedLease 是 fence 条件：实现必须返回
+// ErrConflict，而不是接受过期的协调器。
 // StartDigest 是启动身份：实现必须在全部记录读写中原样保存，不能由当前 Data 重新计算。
 type Store interface {
 	Create(context.Context, Record) error
 	Get(context.Context, string) (Record, error)
 	GetByBusinessKey(context.Context, string, string) (Record, error)
-	// List 与 ClaimDue 遇到校验不过的记录只跳过那一条并告警，不让整次调用失败（RR-20261006-45）：协调循环在 ClaimDue
+	// List 与 ClaimDue 遇到校验不过的记录只跳过那一条并告警，不让整次调用失败：协调循环在 ClaimDue
 	// 返回错误时整批丢弃，已领取的正常记录要等租约过期。
 	List(context.Context, Query) ([]Record, error)
 	CompletionRecorded(context.Context, Completion) (bool, error)
@@ -64,11 +64,11 @@ type Store interface {
 	NackOutbox(context.Context, string, Lease, time.Time, string) error
 }
 
-// OperationClosure 是一个已关闭 operation 的关闭方式（U-0280）。
+// OperationClosure 是一个已关闭 operation 的关闭方式。
 type OperationClosure uint8
 
 const (
-	// OperationClosureUnknown：没有 tombstone，或 tombstone 早于 U-0280、没有记录关闭方式。
+	// OperationClosureUnknown：没有 tombstone，或 tombstone 没有记录关闭方式。
 	OperationClosureUnknown OperationClosure = iota
 	// OperationClosedWithResult：协调器接收了这个 operation 的某次成功 completion 后关闭它。
 	OperationClosedWithResult
@@ -95,7 +95,7 @@ type CompletionHistoryStore interface {
 	CompletionHistory(context.Context, Completion) (CompletionHistory, error)
 }
 
-// LateSuccessAlarmStore 是 Store 的可选扩展（B1）：在 operation tombstone 上记下“这个操作在第 incarnation 代
+// LateSuccessAlarmStore 是 Store 的可选扩展：在 operation tombstone 上记下“这个操作在第 incarnation 代
 // 放弃之后迟到的成功已经告警”，first=true 表示这是第一次（原子判定，并发调用只有一个得到 true）。
 // 同一个已生效的成功会多次送达（effect 重投、过期投递的回放、JetStream 重投），协调器按（操作，代际）只告警一次。
 // 没有 tombstone 时返回 false。没实现它的 Store 每次送达都告警。
@@ -103,12 +103,15 @@ type LateSuccessAlarmStore interface {
 	MarkLateSuccessAlarm(ctx context.Context, completion Completion, incarnation uint32) (first bool, err error)
 }
 
+// Publisher 发布 outbox 中的 saga 命令。
 type Publisher interface {
 	PublishSagaCommand(context.Context, Command) error
 }
 
+// PublishFunc 把函数适配为 Publisher。
 type PublishFunc func(context.Context, Command) error
 
+// PublishSagaCommand 调用 fn。
 func (fn PublishFunc) PublishSagaCommand(ctx context.Context, command Command) error {
 	return fn(ctx, command)
 }

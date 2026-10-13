@@ -18,10 +18,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// StepHandler runs inside a retryable MongoDB transaction. It may only mutate
-// MongoDB through the supplied context. Network calls and other irreversible
-// side effects must be emitted through a transactional outbox because the
-// MongoDB driver is allowed to invoke a transaction callback again.
+// StepHandler 在可重试的 MongoDB 事务内运行，只能经传入的 ctx 修改 MongoDB。网络调用等不可逆副作用必须经事务性
+// outbox 发出：MongoDB 驱动允许再次调用事务回调。
 //
 // 业务写经这个事务 ctx 写进同一个 Mongo 事务时，框架保证同一操作实例（Command.IdempotencyKey）的所有尝试里至多一次
 // 生效（SAGA.md「原生步骤执行契约」）；业务按 IdempotencyKey 自己做幂等只是可选的纵深防御。不在事务里的副作用（调用另一个
@@ -48,6 +46,7 @@ type CommandInboxOptions struct {
 // mongoInboxOperationSuffix：Mongo 步骤的操作状态文档集合是收件箱集合名加这个后缀（与回执分开，回执格式不变）。
 const mongoInboxOperationSuffix = "_operations"
 
+// NewMongoCommandInbox 构造 Mongo 步骤收件箱；回执 TTL、租约持有者名与租约上限取 CommandInboxOptions 或缺省值。
 func NewMongoCommandInbox(client fmongo.IMongo, database, collection string, options ...CommandInboxOptions) (*MongoCommandInbox, error) {
 	database = strings.TrimSpace(database)
 	collection = strings.TrimSpace(collection)
@@ -79,6 +78,7 @@ func NewMongoCommandInbox(client fmongo.IMongo, database, collection string, opt
 	return inbox, nil
 }
 
+// EnsureInfrastructure 建回执集合的 TTL 索引与操作状态文档集合的索引。
 func (i *MongoCommandInbox) EnsureInfrastructure(ctx context.Context) error {
 	ttl := int64(i.receiptTTL / time.Second)
 	if ttl <= 0 || ttl > int64(^uint32(0)>>1) {
@@ -151,8 +151,7 @@ func (i *MongoCommandInbox) execute(ctx context.Context, command Command, digest
 	var completion Completion
 	err = session.WithTransaction(ctx, func(txCtx context.Context) error {
 		var handlerErr error
-		// command is already private to this delivery; passing it by value avoids
-		// another payload-sized allocation on the step hot path.
+		// command 已归本次投递私有，按值传递，步骤热路径上不再多一次载荷大小的分配。
 		completion, handlerErr = handler(txCtx, command)
 		if handlerErr != nil {
 			return handlerErr
@@ -204,9 +203,7 @@ func (i *MongoCommandInbox) readReceipt(ctx context.Context, commandID string, d
 	return completion, nil
 }
 
-// Replay returns a completion already committed for this exact command. It
-// never invokes business code and is used to finish publishing after a step
-// attempt deadline has elapsed.
+// Replay 返回这条命令已提交的 completion。从不调用业务代码，用于步骤尝试截止之后补完发布。
 func (i *MongoCommandInbox) Replay(ctx context.Context, command Command) (Completion, bool, error) {
 	if i == nil || i.client == nil {
 		return Completion{}, false, ErrInvalidRecord
@@ -220,9 +217,10 @@ func (i *MongoCommandInbox) Replay(ctx context.Context, command Command) (Comple
 
 // DefaultStepAckWait 是步骤消费者不写 AckWait 时的取值；生成的与 demo 的步骤消费者都用它。一次尝试的处理以命令截止
 // （派发时刻 + 步骤 Timeout）为界，步骤 Timeout 必须短于它，否则 JetStream 会在 handler 还在跑时把命令重投给另一个
-// 消费者；kit 的 saga Mod 在启动前按它校验 saga.step_defaults / saga.steps 与定义里的步骤超时（RR-20261006-46）。
+// 消费者；kit 的 saga Mod 在启动前按它校验 saga.step_defaults / saga.steps 与定义里的步骤超时。
 const DefaultStepAckWait = 30 * time.Second
 
+// StepConsumerConfig 配置步骤命令的 JetStream 持久消费者。
 type StepConsumerConfig struct {
 	Stream, Durable, Topic string
 	// AckWait 不写取 DefaultStepAckWait。必须长于路由到这个主题的每个步骤的 Timeout；saga Mod 的启动校验按
@@ -233,28 +231,21 @@ type StepConsumerConfig struct {
 	NakBackoffMin time.Duration
 	NakBackoffMax time.Duration
 
-	// Admit decides whether THIS process may run the command, and it is asked
-	// before the consumer takes anything for it.
+	// Admit 判定本进程能否执行这条命令，在消费者为它取得任何东西之前询问。
 	//
-	// The question exists because one durable is shared by every process of a
-	// service: a command about some object is delivered to whichever consumer
-	// is free, not to the one that owns the object. A process that may not
-	// touch that object has to say so — and it has to say so before the
-	// inbox reserves the command, because a reservation is a lease under this
-	// process's name. Refusing inside the handler is too late: the rightful
-	// owner then finds the command claimed by somebody else and cannot run it
-	// until the lease expires, while the message bounces between consumers.
+	// 一个服务的所有进程共享一个 durable：关于某个对象的命令投给空闲的消费者，而不是对象的所有者。不能碰这个对象的
+	// 进程必须说“不”，而且要在收件箱预留命令之前说——预留是以本进程名义持有的租约。在 handler 里拒绝就太晚了：
+	// 真正的所有者会发现命令被别人领取，要等租约过期才能执行，消息则在消费者之间来回弹。
 	//
-	// A non-nil error is returned to the delivery unchanged, so the message is
-	// nak'd with the consumer's backoff and offered again — to any consumer,
-	// including the one that may run it. Admit must therefore be cheap, free
-	// of side effects, and it must not refuse everywhere: a command no process
-	// admits is redelivered until MaxDeliver.
+	// 非 nil 错误原样返回给投递，消息按消费者的退避 nak 后重新提供给任意消费者（包括能执行它的那个）。所以 Admit 必须
+	// 廉价、无副作用，且不能处处拒绝：没有任何进程准入的命令会一直重投到 MaxDeliver。
 	//
-	// nil admits everything, which is what a single-process deployment wants.
+	// nil 表示全部准入，单进程部署正需要这样。
 	Admit func(context.Context, Command) error
 }
 
+// SubscribeMongoStep 订阅 Mongo 步骤命令：解码与校验信封（坏信封 Term + 告警），过了截止时间只回放已有结果，否则经
+// 收件箱执行 handler 并发布 completion。
 func SubscribeMongoStep(ctx context.Context, client fnats.IJetStream, transport *JetStreamPublisher, inbox *MongoCommandInbox, config StepConsumerConfig, handler StepHandler) (fnats.IJetStreamSubscription, error) {
 	if client == nil || transport == nil || inbox == nil || handler == nil || config.Stream == "" || config.Durable == "" || !validSubjectPath(config.Topic) {
 		return nil, fmt.Errorf("saga: invalid step consumer configuration")
@@ -288,11 +279,9 @@ func SubscribeMongoStep(ctx context.Context, client fnats.IJetStream, transport 
 			return rejectEnvelope("mongo_step", err)
 		}
 		if !time.Now().Before(command.DeadlineAt) {
-			// The coordinator owns timeout/retry. Do not begin new business work,
-			// but replay a completion which committed before an earlier publish
-			// failed so it is not needlessly re-executed as a new attempt.
-			// 没有自己的回执时，同一操作实例另一次尝试已生效的成功可能没有送达协调器，而这条可能是最后一次
-			// 尝试：ack 前把那次成功重发（与原生步骤相同，U-0280 复核 2）。
+			// 超时与重试归协调器。不再开始新的业务，但要回放此前已提交、只是发布失败的 completion，免得它作为新尝试
+			// 被无谓地重新执行。没有自己的回执时，同一操作实例另一次尝试已生效的成功可能没有送达协调器，而这条可能是
+			// 最后一次尝试：ack 前把那次成功重发（与原生步骤相同）。
 			replayCtx, cancel := context.WithTimeout(messageCtx, 3*time.Second)
 			defer cancel()
 			completion, found, err := inbox.Replay(replayCtx, command)
@@ -356,19 +345,16 @@ func ackUnexecutedAttempt(ctx context.Context, inbox *stepOperationInbox, transp
 	return nil
 }
 
-// SubscribeStep is retained for raw Mongo handlers.
-// Deprecated: use SubscribeMongoStep or SubscribeDataEngineStep explicitly.
+// SubscribeStep 等同 SubscribeMongoStep。
+//
+// Deprecated: 显式使用 SubscribeMongoStep 或 SubscribeDataEngineStep。
 func SubscribeStep(ctx context.Context, client fnats.IJetStream, transport *JetStreamPublisher, inbox *MongoCommandInbox, config StepConsumerConfig, handler StepHandler) (fnats.IJetStreamSubscription, error) {
 	return SubscribeMongoStep(ctx, client, transport, inbox, config, handler)
 }
 
-// SubscribeDataEngineStep coordinates duplicate deliveries, but never
-// publishes the completion directly. A native handler must execute its Nest
-// transaction with inbox.Bind(command, reservation) and
-// EmitCompletion; obtain reservation explicitly with
-// ReservationFromContext(ctx). This
-// consumer acknowledges only after the authoritative Data Engine receipt is
-// projected and replayable.
+// SubscribeDataEngineStep 订阅原生（DataEngine）步骤命令：协调重复投递，但从不直接发布 completion。原生 handler 必须用
+// inbox.Bind(command, reservation) 执行它的 Nest 事务并 EmitCompletion，reservation 显式经 ReservationFromContext(ctx)
+// 取得。消费者只在权威 DataEngine 回执已投影、可回放之后才 ack。
 func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, transport *JetStreamPublisher, inbox *DataEngineStepInbox, config StepConsumerConfig, handler StepHandler) (fnats.IJetStreamSubscription, error) {
 	if client == nil || transport == nil || inbox == nil || handler == nil || config.Stream == "" || config.Durable == "" || !validSubjectPath(config.Topic) {
 		return nil, fmt.Errorf("saga: invalid dataengine step consumer configuration")
@@ -402,7 +388,7 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 	}, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
 		command, err := decodeStepCommand(message)
 		if err != nil {
-			// 坏信封与 Mongo 步骤消费者同一口径：Term + 告警（RR-20261006-44）。之前原样返回，nak 到 MaxDeliver。
+			// 坏信封与 Mongo 步骤消费者同一口径：Term + 告警，不 nak 到 MaxDeliver。
 			logConsumerError("native step decode", message, err)
 			return rejectEnvelope("native_step", err)
 		}
@@ -412,9 +398,8 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 			// effect 送达协调器）；没有回执同样 ack。
 			//
 			// 无回执时 ack 不会丢掉“已执行、回执还没投影”的尝试：那次尝试的结果走 WAL → 投影 →
-			// completion effect，从不依赖这条消息，ack 不影响它投影与送达。旧实现在这里返回
-			// context.DeadlineExceeded，按退避一直 nak 到 MaxDeliver（默认约 8.7 天），长期占住
-			// 共享 durable 的 MaxAckPending，新命令全部超时（U-0281）。读回执出错时仍返回错误重投：
+			// completion effect，从不依赖这条消息，ack 不影响它投影与送达。若返回错误按退避一直 nak 到 MaxDeliver
+			// （默认约 8.7 天），会长期占住共享 durable 的 MaxAckPending，新命令全部超时。读回执出错时仍返回错误重投：
 			// 那时无法判断有没有回执。
 			_, found, replayErr := inbox.Replay(messageCtx, command)
 			if replayErr != nil {
@@ -422,7 +407,7 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 			}
 			if !found {
 				// 这次尝试不执行，但同一操作实例另一次尝试的成功可能没有送达协调器，而这条可能是
-				// 最后一次尝试：ack 前把那次成功重发，协调器还在等就接收，已放弃就告警（U-0280 复核）。
+				// 最后一次尝试：ack 前把那次成功重发，协调器还在等就接收，已放弃就告警。
 				replayed, err := replayOperationSuccess(messageCtx, &inbox.stepOperationInbox, transport, command)
 				if err != nil {
 					return err
@@ -469,7 +454,7 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 		}
 		if reservation.Duplicate && reservation.Completion.CommandID != "" {
 			if reservation.Completion.CommandID != command.ID {
-				// 同一操作实例较早的一次尝试已经有结果（U-0280）：这次尝试不执行，把那次的 completion 经 saga
+				// 同一操作实例较早的一次尝试已经有结果：这次尝试不执行，把那次的 completion 经 saga
 				// 结果流重发给协调器。那次尝试自己的 completion effect 可能还没送达或已丢失；
 				// 协调器正在等这个操作实例，会按 IdempotencyKey 接收它，已接收过则按回执去重。
 				metrics.IncCounter("saga.step.attempt_replayed_total", nil, 1)
@@ -480,12 +465,11 @@ func SubscribeDataEngineStep(ctx context.Context, client fnats.IJetStream, trans
 		if !reservation.Duplicate {
 			processCtx = withReservation(processCtx, reservation)
 			// 原生 handler 的结果是它在 Nest 事务里 EmitCompletion 的那一份，随回执与 effect 一起提交；
-			// 返回值不使用，也不校验（生成模板返回零值 Completion）。旧实现校验它，零值让每次成功执行后
-			// 都多一次 nak 与重投，重投时才读到回执 ack。
+			// 返回值不使用，也不校验（生成模板返回零值 Completion；校验它会让每次成功执行后多一次 nak 与重投）。
 			if _, err := handler(processCtx, command); err != nil {
 				if errors.Is(err, coredata.ErrFencedEntityPending) {
 					// 实体上还有一笔未确定结果的原生步骤（常见是本命令上一次投递的记录）：本次事务已整体
-					// 回滚，交还租约，让屏障解除后的重投能立刻重新 Reserve（RR-20260926-30）。
+					// 回滚，交还租约，让屏障解除后的重投能立刻重新 Reserve。
 					if releaseErr := inbox.releaseLease(context.WithoutCancel(messageCtx), reservation); releaseErr != nil {
 						err = errors.Join(err, fmt.Errorf("saga: release unused step lease: %w", releaseErr))
 					}
@@ -535,10 +519,8 @@ func (i *MongoCommandInbox) collectionRef() fmongo.ICollection {
 	return i.client.Database(i.database).Collection(i.collection)
 }
 
-// commandDigest is the identity the inbox compares on redelivery. A command
-// that cannot be marshalled has no identity: returning an error here is what
-// keeps every such command from collapsing onto sha256(nil) and being mistaken
-// for a redelivery of any other (B-14).
+// commandDigest 是收件箱在重投时比较的身份。无法序列化的命令没有身份：在这里返回错误，才不会让所有这类命令都塌缩到
+// sha256(nil)、被误认作任意另一条命令的重投。
 func commandDigest(c Command) ([]byte, error) {
 	raw, err := json.Marshal(c)
 	if err != nil {

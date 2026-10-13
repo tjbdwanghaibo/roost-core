@@ -1,5 +1,4 @@
-// Package saga provides the storage-independent orchestration state machine
-// for durable business operations spanning multiple transaction domains.
+// Package saga 提供与存储无关的编排状态机，用于跨多个事务域的持久业务操作。
 package saga
 
 import (
@@ -12,6 +11,7 @@ import (
 	"time"
 )
 
+// Status 是 saga 记录的状态。Completed / Compensated / Failed / ManualRequired 是终态。
 type Status uint8
 
 const (
@@ -24,6 +24,7 @@ const (
 	StatusManualRequired
 )
 
+// Terminal 报告状态是否为终态。
 func (s Status) Terminal() bool {
 	return s == StatusCompleted || s == StatusCompensated || s == StatusFailed || s == StatusManualRequired
 }
@@ -49,6 +50,7 @@ func (s Status) String() string {
 	}
 }
 
+// Phase 是 saga 的推进方向：正向执行或补偿。
 type Phase uint8
 
 const (
@@ -116,7 +118,7 @@ type StepBudgets struct {
 //
 // 覆盖先按 {Type, Step} 原样查找，查不到再按全小写查找：配置键经 viper 一律转成小写，kit 的
 // saga Mod 没拿到定义时（kitsaga.NewMod() 无参数、定义之后经 Register 登记）只能以小写键保存覆盖，
-// 原样查找会让大小写混写的类型 / 步骤名的覆盖静默不生效（RR-20261005-NC-194）。
+// 原样查找会让大小写混写的类型 / 步骤名的覆盖静默不生效。
 func (budgets StepBudgets) Resolve(definition Definition) Definition {
 	builtin := DefaultStepBudget()
 	steps := make([]Step, len(definition.Steps))
@@ -176,12 +178,14 @@ func firstAttempts(values ...uint32) uint32 {
 	return 0
 }
 
+// Definition 是一个 saga 类型某个版本的步骤定义。
 type Definition struct {
 	Type    string
 	Version uint32
 	Steps   []Step
 }
 
+// Validate 校验类型名、版本、步骤数量与每个步骤的名字、主题、超时和重试预算，步骤名不得重复。
 func (d Definition) Validate() error {
 	if strings.TrimSpace(d.Type) != d.Type || d.Type == "" || len(d.Type) > 128 || d.Version == 0 || len(d.Steps) == 0 || len(d.Steps) > 256 {
 		return ErrInvalidDefinition
@@ -200,29 +204,29 @@ func (d Definition) Validate() error {
 	return nil
 }
 
+// Lease 是协调器或发布者对一条记录的领取租约：持有者、令牌与到期时间。
 type Lease struct {
 	Owner string
 	Token uint64
 	Until time.Time
 }
 
+// Record 是一个 saga 实例的持久状态。
 type Record struct {
 	ID                string
 	Type              string
 	DefinitionVersion uint32
 	BusinessKey       string
 	// StartDigest 是规范化原始启动意图的 SHA-256，不随步骤 Data、Resume 或截止时间变更。
-	// 旧记录可为空；自定义 Store 必须在 Create/Get/Apply/Clone 链完整保留（NC-39）。
+	// 旧记录可为空；自定义 Store 必须在 Create/Get/Apply/Clone 链完整保留。
 	StartDigest    string
 	Status         Status
 	Phase          Phase
 	Step           int
 	CompletedSteps int
 	Attempt        uint32
-	// Incarnation counts Resume generations. It is folded into CommandID so a
-	// resumed operation can never reuse a CommandID from a previous life of
-	// the same Saga (Resume resets Attempt), which would collide with stale
-	// completion receipts and stall the Saga as a false duplicate.
+	// Incarnation 记 Resume 的代际，并编进 CommandID：Resume 会重置 Attempt，若不换代，恢复后的操作会复用同一 saga
+	// 上一生的 CommandID，撞上陈旧的 completion 回执，被当成重复而卡住。
 	Incarnation uint32
 	// LateStep 是放弃之后才生效、还没补偿的正向步骤号 + 1，0 表示没有（saga 方向 ④，方向 C）。协调器放弃了第 s 步
 	// （超时用尽、saga 截止、人工 Compensate、定义缺失），这一步的某次尝试却在截止前生效了，成功在放弃之后才送达：
@@ -271,6 +275,7 @@ func (r Record) lateStepValid() bool {
 		r.Status != StatusCompleted && r.Status != StatusCompensated && r.Status != StatusFailed
 }
 
+// Command 是派发给步骤执行方的一次尝试；ID 唯一标识这次尝试，IdempotencyKey 标识所属操作。
 type Command struct {
 	ID                string    `json:"id"`
 	IdempotencyKey    string    `json:"idempotency_key"`
@@ -300,6 +305,7 @@ func (c Command) Validate() error {
 	return nil
 }
 
+// Completion 是步骤执行方对一次尝试的结果：成功、拒绝（不可重试失败）或可重试失败。
 type Completion struct {
 	CommandID      string    `json:"command_id"`
 	IdempotencyKey string    `json:"idempotency_key"`
@@ -311,6 +317,7 @@ type Completion struct {
 	CompletedAt    time.Time `json:"completed_at,omitempty"`
 }
 
+// Validate 校验身份字段与结果组合：成功不能带错误或可重试标记，失败必须带错误。
 func (c Completion) Validate() error {
 	invalidOutcome := (c.Success && (c.Retryable || c.Error != "")) || (!c.Success && strings.TrimSpace(c.Error) == "")
 	if c.CommandID == "" || len(c.CommandID) > 192 || c.IdempotencyKey == "" || len(c.IdempotencyKey) > 192 || !validSubjectToken(c.SagaID, 128) || len(c.Error) > 4096 || len(c.Data) > 4<<20 || invalidOutcome {
@@ -338,6 +345,7 @@ func validSubjectToken(token string, maxLength int) bool {
 	return true
 }
 
+// OutboxRecord 是待发布的命令及其发布重试状态。
 type OutboxRecord struct {
 	Command       Command
 	Attempt       uint32
@@ -362,6 +370,7 @@ func init() {
 	}
 }
 
+// NewID 生成进程内唯一、可排序的 32 位十六进制 ID（随机前缀 + 单调序号）。
 func NewID() string {
 	var raw [16]byte
 	var encoded [32]byte

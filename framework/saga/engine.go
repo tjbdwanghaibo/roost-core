@@ -19,6 +19,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
+// Options 配置协调器：租约身份、协调 / 发布 worker 数与批量、租约与存储超时、轮询间隔、发布退避、载荷上限与步骤预算。
+// 零值字段取 DefaultOptions 的值；跨参数的租约约束在 NewEngine 校验。
 type Options struct {
 	Owner              string
 	CoordinatorWorkers int
@@ -36,6 +38,7 @@ type Options struct {
 	StepBudgets StepBudgets
 }
 
+// DefaultOptions 返回默认配置（Owner 每次生成新的随机身份）。
 func DefaultOptions() Options {
 	return Options{
 		Owner: "saga-" + NewID(), CoordinatorWorkers: 4, PublisherWorkers: 4,
@@ -45,6 +48,7 @@ func DefaultOptions() Options {
 	}
 }
 
+// StartRequest 是启动一个 saga 的意图；同一 (Type, BusinessKey) 只能有一份，重复启动按启动摘要判定幂等或冲突。
 type StartRequest struct {
 	ID                string    `json:"id,omitempty"`
 	Type              string    `json:"type"`
@@ -55,6 +59,7 @@ type StartRequest struct {
 	Now               time.Time `json:"-"`
 }
 
+// ResumeRequest 是 Resume 的参数：可设置新的截止时间，或显式清除截止时间。
 type ResumeRequest struct {
 	ID            string
 	Now           time.Time
@@ -62,26 +67,29 @@ type ResumeRequest struct {
 	ClearDeadline bool
 }
 
+// Stats 是协调器的累计计数。
 type Stats struct {
 	Started, Dispatched, Completed, Compensated, Failed, ManualRequired   uint64
 	Conflicts, Duplicates, PublishFailures, StoreFailures, WorkerFailures uint64
-	// LateAfterAbandon 计协调器放弃一个步骤之后才到达的成功 completion（U-0280）：那一步已经生效，
-	// 却不在 CompletedSteps 里。按（操作，代际）计一次（正向由回执去重，补偿方向由 LateSuccessAlarmStore，B1）。
+	// LateAfterAbandon 计协调器放弃一个步骤之后才到达的成功 completion：那一步已经生效，
+	// 却不在 CompletedSteps 里。按（操作，代际）计一次（正向由回执去重，补偿方向由 LateSuccessAlarmStore）。
 	// 正向的由协调器自动补偿（saga 方向 ④，记 WARN）；补偿方向的只告警（ERROR），需要运维核对（TROUBLESHOOTING T-226）。
 	LateAfterAbandon uint64
-	// StaleIncarnation 计被协调器拒收的旧一生结果（B1）：Resume 或补偿方向的人工 Compensate 进入新一生之后，
+	// StaleIncarnation 计被协调器拒收的旧一生结果：Resume 或补偿方向的人工 Compensate 进入新一生之后，
 	// 上一生某次尝试的拒绝 / 失败才到达。收件箱也不回放旧一生的拒绝，新一生照常执行，这些结果只计数。
 	StaleIncarnation uint64
 	// StaleAttempt 计被协调器拒收的同一生较早尝试的可重试失败（saga 方向 ③）：协调器在等之后的一次尝试，较早那次的
 	// 可重试失败只说明那一次没有生效，之后的尝试照常执行，它不能推进记录。只计数、记 WARN。
 	StaleAttempt uint64
-	// Reopened 计 saga 被重开的次数（saga 方向 ④ 的可观测性，维护者第十三轮）：已结束的 Failed / Compensated 因为迟到的
+	// Reopened 计 saga 被重开的次数（saga 方向 ④ 的可观测性）：已结束的 Failed / Compensated 因为迟到的
 	// 正向成功被带回补偿（reason=late_success），或 ManualRequired 期间记下的迟到步骤在运维 Resume / Compensate 时被补偿
 	// （reason=resume / compensate）。指标 saga.reopened_total{saga_type,from_status,reason}，每次记 WARN。
 	// 重开的 saga 补偿完会再次到达终态，Completed / Compensated / Failed 按到达终态的次数计，同一 saga 会再计一次。
 	Reopened uint64
 }
 
+// Engine 是 saga 协调器：按定义推进记录（派发步骤、接收结果、超时重试、补偿），经 Store 持久化，经 Publisher 发出命令。
+// 多个进程可以同时运行，记录由租约与版本 fence 保证同一时刻只有一个协调者推进。
 type Engine struct {
 	store     Store
 	publisher Publisher
@@ -102,6 +110,7 @@ type Engine struct {
 	staleIncarnation, staleAttempt, reopened                            atomic.Uint64
 }
 
+// NewEngine 校验配置并构造协调器；Register 定义后调用 Run 开始推进。
 func NewEngine(store Store, publisher Publisher, options Options) (*Engine, error) {
 	if store == nil || publisher == nil {
 		return nil, fmt.Errorf("saga: store and publisher are required")
@@ -143,10 +152,8 @@ func NewEngine(store Store, publisher Publisher, options Options) (*Engine, erro
 	if options.MaxPayloadBytes <= 0 {
 		options.MaxPayloadBytes = defaults.MaxPayloadBytes
 	}
-	// Every rejected configuration names the offending field and the violated
-	// budget: these cross-parameter lease constraints are the ones operators
-	// cannot eyeball, and a single opaque "unsafe limits" answer forced a
-	// source dive per misconfiguration.
+	// 每个被拒的配置都点名出错的字段与违反的预算：这些跨参数的租约约束运维无法一眼看出，笼统的“限制不安全”会让每次
+	// 配置错误都要翻源码。
 	if options.StoreTimeout >= options.LeaseDuration {
 		return nil, fmt.Errorf("saga: StoreTimeout (%v) must be < LeaseDuration (%v)", options.StoreTimeout, options.LeaseDuration)
 	}
@@ -209,7 +216,7 @@ func (e *Engine) Register(definition Definition) error {
 	}
 	definition.Steps = append([]Step(nil), definition.Steps...)
 	e.definitions[key] = definition
-	// EmitStart 在 Nest 事务里就按这个上限拒绝（RR-20261006-43）。
+	// EmitStart 在 Nest 事务里就按这个上限拒绝。
 	registerStartDataLimit(definition.Type, e.opts.MaxPayloadBytes)
 	return nil
 }
@@ -235,7 +242,7 @@ func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, e
 		id = NewID()
 	}
 	record := Record{ID: id, Type: request.Type, DefinitionVersion: request.DefinitionVersion, BusinessKey: request.BusinessKey, Status: StatusPending, Phase: PhaseForward, Step: 0, Version: 1, Data: append([]byte(nil), request.Data...), NextRunAt: now, DeadlineAt: request.DeadlineAt, CreatedAt: now, UpdatedAt: now}
-	// RR-20261005-NC-39：Data/DeadlineAt 是运行状态，原始启动身份必须独立持久保存。
+	// Data / DeadlineAt 是运行状态，原始启动身份必须独立持久保存。
 	intentDigest, err := startIntentDigest(request)
 	if err != nil {
 		return Record{}, err
@@ -286,7 +293,10 @@ func startIntentDigest(request StartRequest) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// Get 读取一条 saga 记录。
 func (e *Engine) Get(ctx context.Context, id string) (Record, error) { return e.store.Get(ctx, id) }
+
+// List 按查询列出记录，Limit 缺省 100、上限 1000。
 func (e *Engine) List(ctx context.Context, query Query) ([]Record, error) {
 	if query.Limit <= 0 {
 		query.Limit = 100
@@ -297,8 +307,7 @@ func (e *Engine) List(ctx context.Context, query Query) ([]Record, error) {
 	return e.store.List(ctx, query)
 }
 
-// Resume retries a terminal failure after an operator or automated repair has
-// removed its cause. Completed and compensated Sagas cannot be resumed.
+// Resume 在运维或自动修复消除原因之后重试一个失败终态。Completed 与 Compensated 的 saga 不能 Resume。
 func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, error) {
 	request.ID = strings.TrimSpace(request.ID)
 	if !validSubjectToken(request.ID, 128) || (request.ClearDeadline && !request.DeadlineAt.IsZero()) {
@@ -366,9 +375,8 @@ func (e *Engine) Resume(ctx context.Context, request ResumeRequest) (Record, err
 	return Record{}, ErrConflict
 }
 
-// Compensate requests semantic rollback of every completed step. It is safe to
-// call repeatedly; already compensating or compensated records are returned.
-// A Completed saga is refused with ErrSagaCompleted (RR-20261006-47).
+// Compensate 请求对每个已完成步骤做语义回滚。可重复调用；已在补偿或已补偿的记录原样返回。Completed 的 saga 返回
+// ErrSagaCompleted。
 func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Time) (Record, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -387,8 +395,8 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 			return Record{}, fmt.Errorf("saga: cannot force compensation while a step result is in flight")
 		}
 		if record.Status == StatusCompleted {
-			// Completed 是业务结论，按终态做业务的一方已据此行动；撤销已完成的业务走业务自己的冲正流程
-			// （RR-20261006-47，维护者 2026-10-07 选 A）。之前这里会把它带回 Compensating，逐步撤销全部步骤。
+			// Completed 是业务结论，按终态做业务的一方已据此行动；撤销已完成的业务走业务自己的冲正流程，
+			// 不能带回 Compensating 逐步撤销（维护者 2026-10-07 选 A）。
 			return record, ErrSagaCompleted
 		}
 		if record.CompletedSteps == 0 && record.LateStep == 0 {
@@ -412,8 +420,7 @@ func (e *Engine) Compensate(ctx context.Context, id, reason string, now time.Tim
 	return Record{}, ErrConflict
 }
 
-// Complete 接收一次尝试的结果。接收与否只由 judgeCompletion 判定（v1.23.1 起的统一规则，
-// docs/feature/SAGA-COMPLETION-RULE-UNIFIED-2026-10-07.md）：成功是操作的结论，只要这个操作还没有带结果关闭就接收；
+// Complete 接收一次尝试的结果。接收与否只由 judgeCompletion 判定（统一规则，见 docs/framework/SAGA.md）：成功是操作的结论，只要这个操作还没有带结果关闭就接收；
 // 拒绝是本生这个操作的结论、可重试失败是一次尝试的结论，二者只在协调器正等着它们时接收。
 func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, error) {
 	if completion.Validate() != nil {
@@ -422,8 +429,7 @@ func (e *Engine) Complete(ctx context.Context, completion Completion) (Record, e
 	if len(completion.Data) > e.opts.MaxPayloadBytes {
 		return Record{}, ErrInvalidRecord
 	}
-	// Coordinator time owns ordering, deadlines and receipt TTL. A remote step
-	// clock must not move Saga state backwards or expire deduplication records.
+	// 排序、截止与回执 TTL 都以协调器时间为准；远端步骤的时钟不能让 saga 状态倒退，也不能让去重记录过期。
 	completion.CompletedAt = time.Now().UTC()
 	incarnation := commandIDIncarnation(completion.IdempotencyKey, completion.CommandID)
 	for attempts := 0; attempts < 8; attempts++ {
@@ -490,7 +496,7 @@ const (
 	verdictStaleAttempt
 )
 
-// judgeCompletion 是 saga 完成判定的唯一规则（v1.23.1 起；替代按记录状态逐条列举的 B1 / 方向 ③ / RR-20261006-42 分支）：
+// judgeCompletion 是 saga 完成判定的唯一规则（不再按记录状态逐条列举分支）：
 //
 //   - 成功是操作的结论，不分代际、不分尝试：只要这个操作开过、还没有带结果关闭就接收。记录停在这个操作上（positionedAt：
 //     在等它、它在重试退避、或下一步就派发它）且 completion 所属的那一生开过它（本生：记录开着它；旧一生：CommandID 的代际
@@ -498,7 +504,7 @@ const (
 //     关闭的步骤），直接接收为结果；其余由回执与 tombstone 区分放弃关闭（仍接收，落点是方向 ④ 补偿这一步）、带结果关闭
 //     （重复）与从没开过（ErrNotWaiting）。
 //   - 拒绝是本生这个操作的结论：本生、记录在等这个操作时接收，从哪次尝试来都一样（收件箱让之后的尝试只回放它）。
-//   - 可重试失败是一次尝试的结论：只接收正在等的那次尝试的（方向 ③，O-S5-7）。
+//   - 可重试失败是一次尝试的结论：只接收正在等的那次尝试的（方向 ③）。
 //   - 比记录还新的代际协调器不可能产生，一律不接收。
 //
 // 收件箱的每操作状态文档保证同一操作至多一次生效，所以“未带结果关闭的成功”就是还没计过的那一次。
@@ -586,7 +592,7 @@ func lateForwardStep(record Record, operation string) (int, bool) {
 	return step, record.Phase == PhaseCompensate || record.Status == StatusFailed || record.Status == StatusManualRequired
 }
 
-// compensateLateStep 是方向 C：第 step 步在协调器放弃之后生效了，把它补偿掉。一个 Store 事务里记下这份 completion 的回执、
+// compensateLateStep 是 saga 方向 ④：第 step 步在协调器放弃之后生效了，把它补偿掉。一个 Store 事务里记下这份 completion 的回执、
 // 把 tombstone 改为带结果关闭（stepTransition 收到成功回执时的既有行为；之后的送达按回执去重），并在记录上写 LateStep / LateData：
 //
 //   - 记录在两个补偿之间（Compensating 且还没派发）或已经终态（Failed / Compensated）：立即转去补偿这一步，终态被重开；
@@ -712,7 +718,7 @@ func (e *Engine) completionHistory(ctx context.Context, completion Completion) (
 	return CompletionHistory{Recorded: recorded}, err
 }
 
-// reportLateAfterAbandon 告警一份协调器不能自己处理的“放弃之后才到的成功”（U-0280 C'）：补偿方向的操作（正向的由
+// reportLateAfterAbandon 告警一份协调器不能自己处理的“放弃之后才到的成功”：补偿方向的操作（正向的由
 // compensateLateStep 补偿，saga 方向 ④），以及 lateForwardStep 判为不应发生的情形。运维按 TROUBLESHOOTING T-226 核对；
 // 补偿方向停在 ManualRequired 时 Resume，新一生的同一补偿会回放这次成功而不是再执行一次。标签只有 saga 类型与方向，保持低基数。
 func (e *Engine) reportLateAfterAbandon(record Record, completion Completion) {
@@ -741,6 +747,7 @@ func operationPosition(operation string) (phase, step string) {
 	}
 }
 
+// Run 启动协调与发布 worker，阻塞到 ctx 取消或 Stop，并等 worker 全部退出。同一时刻只能运行一次。
 func (e *Engine) Run(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -757,11 +764,11 @@ func (e *Engine) Run(ctx context.Context) error {
 	defer func() { e.runMu.Lock(); e.running = false; close(done); e.runMu.Unlock() }()
 
 	var wg sync.WaitGroup
-	for i := 0; i < e.opts.CoordinatorWorkers; i++ {
+	for range e.opts.CoordinatorWorkers {
 		wg.Add(1)
 		go func() { defer wg.Done(); e.coordinatorLoop(ctx) }()
 	}
-	for i := 0; i < e.opts.PublisherWorkers; i++ {
+	for range e.opts.PublisherWorkers {
 		wg.Add(1)
 		go func() { defer wg.Done(); e.publisherLoop(ctx) }()
 	}
@@ -770,6 +777,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	return nil
 }
 
+// Stop 取消 Run 并在 ctx 内等它退出；超时返回 ctx 错误，用新 ctx 重试会再次等待。未运行时返回 nil。
 func (e *Engine) Stop(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -789,6 +797,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 	}
 }
 
+// Stats 返回累计计数。
 func (e *Engine) Stats() Stats {
 	return Stats{Started: e.started.Load(), Dispatched: e.dispatched.Load(), Completed: e.completed.Load(), Compensated: e.compensated.Load(), Failed: e.failed.Load(), ManualRequired: e.manualRequired.Load(), Conflicts: e.conflicts.Load(), Duplicates: e.duplicates.Load(), PublishFailures: e.publishFailures.Load(), StoreFailures: e.storeFailures.Load(), WorkerFailures: e.workerFailures.Load(), LateAfterAbandon: e.lateAfterAbandon.Load(), StaleIncarnation: e.staleIncarnation.Load(), StaleAttempt: e.staleAttempt.Load(), Reopened: e.reopened.Load()}
 }
@@ -894,7 +903,7 @@ func (e *Engine) processClaimed(ctx context.Context, record Record, now time.Tim
 		after.CommandID = ""
 		after.OperationKey = ""
 		clearLease(&after)
-		// RR-20261005-NC-250：在等结果或正在重试退避的操作都被放弃（stepTransition 关闭它）。
+		// 在等结果或正在重试退避的操作都被放弃（stepTransition 关闭它）。
 		_, _, err := e.stepTransition(ctx, record, after, transition{cause: causeDefinitionMissing, fenced: true})
 		if err == nil {
 			e.countTerminal(after.Status)
@@ -1015,20 +1024,16 @@ func (e *Engine) applyCompletion(record Record, definition Definition, result Co
 	return e.retryState(after, definition, result.Error, now)
 }
 
-// retryOrCompensate is the transition from a record as stored (the claim
-// loop's timeout path): one version step, then the retry-or-compensate
-// decision. applyCompletion, which has already advanced the version, calls
-// retryState directly (U-0225, see beginCompensation).
+// retryOrCompensate 是从已存记录出发的转移（领取循环的超时路径）：推进一次版本，再决定重试还是补偿。applyCompletion
+// 已经推进过版本，直接调用 retryState（见 beginCompensation）。
 func (e *Engine) retryOrCompensate(record Record, definition Definition, reason string, now time.Time) Record {
 	after := record.Clone()
 	after.Version = record.Version + 1
 	return e.retryState(after, definition, reason, now)
 }
 
-// retryState schedules another attempt of the current step while attempts
-// remain, and otherwise moves to compensation (or manual_required when the
-// failing step was itself a compensation). after's version is already
-// advanced by the caller.
+// retryState 在尝试次数未用尽时安排当前步骤的下一次尝试，否则转入补偿（失败的步骤本身是补偿时转 ManualRequired）。
+// after 的版本已由调用方推进。
 func (e *Engine) retryState(after Record, definition Definition, reason string, now time.Time) Record {
 	record := after
 	after.UpdatedAt = now
@@ -1059,22 +1064,16 @@ func (e *Engine) retryState(after Record, definition Definition, reason string, 
 	return compensationState(after, reason, now)
 }
 
-// beginCompensation is the transition from a record as stored: it advances
-// the version once and then turns the record into its compensation state.
-// Callers that have already advanced the version (applyCompletion,
-// retryOrCompensate) use compensationState directly — beginCompensation on
-// an already-advanced clone produced expected+2, which MongoStore.Apply
-// rejects as an invalid record, so no step refusal or exhausted retry ever
-// reached compensation on Mongo (U-0225; the memory store used in tests only
-// compares the current version and never saw it).
+// beginCompensation 是从已存记录出发的转移：推进一次版本，再把记录转成补偿状态。已经推进过版本的调用方
+// （applyCompletion、retryOrCompensate）直接用 compensationState——对已推进的副本再调用本函数会得到 expected+2，
+// MongoStore.Apply 只接受 expected+1，会把它当非法记录拒绝。
 func (e *Engine) beginCompensation(record Record, reason string, now time.Time) Record {
 	after := record.Clone()
 	after.Version = record.Version + 1
 	return compensationState(after, reason, now)
 }
 
-// compensationState fills in the compensation (or terminal failure) state on
-// a record whose version the caller has already advanced.
+// compensationState 在调用方已推进版本的记录上填入补偿（或失败终态）状态。
 func compensationState(after Record, reason string, now time.Time) Record {
 	after.UpdatedAt = now
 	after.LastError = reason
@@ -1121,10 +1120,8 @@ func parseOperationKey(id, operation string) (Phase, int, bool) {
 	return Phase(phase), step, true
 }
 
-// commandID names one dispatch attempt. Incarnation 0 keeps the historical
-// "operationKey:attempt" format so records and receipts that predate the
-// field survive an upgrade unchanged; resumed records carry a non-zero
-// incarnation and therefore mint identifiers disjoint from every earlier life.
+// commandID 命名一次派发尝试。第 0 代使用 "operationKey:attempt" 格式；Resume 过的记录代际非零，铸出的标识与之前每一生
+// 都不相交。
 func commandID(operationKey string, incarnation, attempt uint32) string {
 	if incarnation == 0 {
 		return fmt.Sprintf("%s:%d", operationKey, attempt)
@@ -1134,7 +1131,7 @@ func commandID(operationKey string, incarnation, attempt uint32) string {
 
 // commandIDIncarnation 是 commandID 的逆：从 operationKey:attempt / operationKey:rN:attempt 取出代际 N。
 // 不是这个格式的 CommandID（测试或手工命令）按第 0 代处理。协调器核对 completion 的代际（B1）与原生收件箱
-// 判断拒绝是否同一生（U-0280）都用它，两边对同一个 ID 必须得出同一个代际。
+// 判断拒绝是否同一生都用它，两边对同一个 ID 必须得出同一个代际。
 func commandIDIncarnation(operationKey, commandID string) uint32 {
 	rest, ok := strings.CutPrefix(commandID, operationKey+":r")
 	if !ok {
@@ -1155,8 +1152,7 @@ func canonicalDeadline(value time.Time) time.Time {
 	if value.IsZero() {
 		return time.Time{}
 	}
-	// BSON datetime and many SQL backends persist milliseconds. Canonicalizing
-	// before identity comparison keeps exact start-intent redelivery idempotent.
+	// BSON datetime 与许多 SQL 后端只保存到毫秒；在身份比较之前规范化，精确重投的启动意图才保持幂等。
 	return value.UTC().Truncate(time.Millisecond)
 }
 

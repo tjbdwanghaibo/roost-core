@@ -33,7 +33,7 @@ type completionEffectPayload struct {
 const maxStartWireDataBytes = 4 << 20
 
 // startDataLimits 记本进程里注册了某个 saga 类型的协调器接受的 StartRequest.Data 上限（Options.MaxPayloadBytes），
-// 由 Engine.Register 写入、NewStartEffect 读取（RR-20261006-43）。同一类型被多个 Engine 注册时取最小值：本进程任何一个
+// 由 Engine.Register 写入、NewStartEffect 读取。同一类型被多个 Engine 注册时取最小值：本进程任何一个
 // 协调器会拒绝的 Data 都不放进 WAL。条目数以 saga 类型数为界。
 //
 // 为什么是按类型的进程表而不是 Engine 方法：EmitStart 在 Nest handler 里调用，handler 拿不到 Engine（生成的
@@ -54,7 +54,7 @@ func registerStartDataLimit(sagaType string, limit int) {
 	}
 }
 
-// configuredStartDataLimit 是本进程配置的 saga.max_payload_bytes（RR-20261006-66）：发起方与协调器共用这个配置键，
+// configuredStartDataLimit 是本进程配置的 saga.max_payload_bytes：发起方与协调器共用这个配置键，
 // kit/nest 的 Mod 在 Init 里写入（每个调 EmitStart 的进程都有 Nest），协调器不在本进程时 EmitStart 也按它拒绝。0 表示没配置。
 var configuredStartDataLimit atomic.Int64
 
@@ -64,8 +64,8 @@ func SetStartDataLimit(limit int) {
 	configuredStartDataLimit.Store(int64(max(limit, 0)))
 }
 
-// startDataLimit 返回这个类型的启动 Data 上限：线上硬上限、配置的 saga.max_payload_bytes（RR-20261006-66）、本进程协调器
-// 为它注册的 MaxPayloadBytes（RR-20261006-43）三者取小。都没有时只有线上硬上限（未经 kit 装配的进程；意图若被协调器拒绝，
+// startDataLimit 返回这个类型的启动 Data 上限：线上硬上限、配置的 saga.max_payload_bytes、本进程协调器
+// 为它注册的 MaxPayloadBytes三者取小。都没有时只有线上硬上限（未经 kit 装配的进程；意图若被协调器拒绝，
 // 由启动消费者 Term 并告警）。
 func startDataLimit(sagaType string) int {
 	limit := maxStartWireDataBytes
@@ -80,12 +80,11 @@ func startDataLimit(sagaType string) int {
 	return limit
 }
 
-// NewStartEffect creates a stable Nest transactional outbox intent. The
-// enclosing handler's entity mutations and this intent share one WAL record.
+// NewStartEffect 生成稳定的 Nest 事务性 outbox 启动意图；外层 handler 的实体修改与这份意图共用一条 WAL 记录。
 //
-// Data 的上限是 startDataLimit（配置的 saga.max_payload_bytes 与本进程协调器注册的 MaxPayloadBytes 取小，RR-20261006-43 / -61）：协调器必定拒绝的意图在 Nest 事务里
-// 就以 ErrInvalidRecord 拒绝，handler 拿到错误，实体修改随事务回滚；之前只按 4 MiB 校验，超过 MaxPayloadBytes 的意图随事务
-// 提交，协调器拒绝后启动消费者 nak 到 MaxDeliver，saga 静默不创建。
+// Data 的上限是 startDataLimit（配置的 saga.max_payload_bytes 与本进程协调器注册的 MaxPayloadBytes 取小）：协调器必定
+// 拒绝的意图在 Nest 事务里就以 ErrInvalidRecord 拒绝，handler 拿到错误，实体修改随事务回滚，而不是随事务提交后被
+// 协调器拒绝、启动消费者 nak 到 MaxDeliver、saga 静默不创建。
 func NewStartEffect(request StartRequest) (nest.Effect, error) {
 	request.Type = strings.TrimSpace(request.Type)
 	request.BusinessKey = strings.TrimSpace(request.BusinessKey)
@@ -93,22 +92,20 @@ func NewStartEffect(request StartRequest) (nest.Effect, error) {
 	if request.Type == "" || len(request.Type) > 128 || request.DefinitionVersion == 0 || request.BusinessKey == "" || len(request.BusinessKey) > 512 || len(request.Data) > startDataLimit(request.Type) || (request.ID != "" && !validSubjectToken(request.ID, 128)) {
 		return nest.Effect{}, ErrInvalidRecord
 	}
-	// Now is an in-process test/recovery hook, not part of a durable business
-	// intent. Delivery time determines the initial scheduling timestamp.
+	// Now 是进程内的测试 / 恢复钩子，不属于持久的业务意图；初始调度时间由投递时间决定。
 	request.Now = time.Time{}
 	request.DeadlineAt = canonicalDeadline(request.DeadlineAt)
 	payload, err := json.Marshal(startEffectPayload{Version: WireVersion, Start: request})
 	if err != nil {
 		return nest.Effect{}, err
 	}
-	// Include the full canonical intent. Exact WAL replay keeps the same ID,
-	// while a programming error which reuses a business key with another
-	// payload is not hidden by JetStream's MsgID de-duplication.
+	// 带上完整的规范化意图：精确的 WAL 重放保持同一 ID，而用同一业务键配不同载荷的编程错误不会被 JetStream 的
+	// MsgID 去重掩盖。
 	digest := sha256.Sum256(payload)
 	return nest.Effect{ID: "saga-start:" + hex.EncodeToString(digest[:16]), Topic: StartEffectTopic, Key: request.BusinessKey, Payload: payload, Headers: map[string]string{"saga-type": request.Type}}, nil
 }
 
-// EmitStart appends a Saga start intent to the active Nest transaction.
+// EmitStart 把 saga 启动意图追加到当前 Nest 事务。
 func EmitStart(request StartRequest) error {
 	effect, err := NewStartEffect(request)
 	if err != nil {
@@ -117,9 +114,7 @@ func EmitStart(request StartRequest) error {
 	return nest.Emit(effect)
 }
 
-// BindCommand makes this command identity part of the active Nest transaction.
-// The caller supplies the validated retention deadline; Saga policy, not this
-// helper, owns TTL selection.
+// BindCommand 把命令身份纳入当前 Nest 事务。调用方给出已校验的保留截止时间；TTL 的选择归 saga 策略，不归本函数。
 func BindCommand(command Command, expiresAt time.Time, fences ...dataengine.LeaseFence) error {
 	tx := nest.CurrentRollbackTx()
 	if tx == nil {
@@ -147,6 +142,7 @@ func BindCommand(command Command, expiresAt time.Time, fences ...dataengine.Leas
 	})
 }
 
+// NewCompletionEffect 把 completion 编成发往所属 saga 结果主题的 Nest effect，effect ID 由 CommandID 派生。
 func NewCompletionEffect(completion Completion) (nest.Effect, error) {
 	if completion.CompletedAt.IsZero() {
 		completion.CompletedAt = time.Now().UTC()
@@ -164,8 +160,7 @@ func NewCompletionEffect(completion Completion) (nest.Effect, error) {
 	}, nil
 }
 
-// EmitCompletion attaches the replayable completion to the bound receipt and
-// appends its broker delivery intent to the same Nest CommitRecord.
+// EmitCompletion 把可回放的 completion 附到已绑定的回执上，并把它的消息投递意图追加到同一条 Nest CommitRecord。
 func EmitCompletion(completion Completion) error {
 	tx := nest.CurrentRollbackTx()
 	if tx == nil {
@@ -181,6 +176,7 @@ func EmitCompletion(completion Completion) error {
 	return tx.Emit(effect)
 }
 
+// DecodeStartEffect 解码并校验启动 effect 的载荷；版本或内容不合法返回 ErrInvalidRecord。
 func DecodeStartEffect(payload []byte) (StartRequest, error) {
 	var envelope startEffectPayload
 	if len(payload) == 0 {
@@ -204,6 +200,7 @@ func DecodeStartEffect(payload []byte) (StartRequest, error) {
 	return request, nil
 }
 
+// DecodeCompletionEffect 解码并校验 completion effect 的载荷；版本或内容不合法返回 ErrInvalidRecord。
 func DecodeCompletionEffect(payload []byte) (Completion, error) {
 	var envelope completionEffectPayload
 	if len(payload) == 0 || json.Unmarshal(payload, &envelope) != nil || envelope.Version != WireVersion {

@@ -17,7 +17,7 @@ import (
 )
 
 // 步骤收件箱的“操作实例”协调，原生步骤（DataEngineStepInbox）与 Mongo 步骤（MongoCommandInbox）共用
-// （SAGA.md「原生步骤执行契约」；方案 docs/feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md）。
+// （SAGA.md「原生步骤执行契约」）。
 //
 // 每个操作实例（Command.IdempotencyKey）只有一份状态文档 stepOperation：当前尝试（谁持有租约、token、到期、
 // 结论）、本生的拒绝（有界）与截止未到的被接替尝试（有界）。Reserve 在一个 Mongo 事务里读回执与这份文档、
@@ -26,8 +26,7 @@ import (
 // 原生步骤的生效点是 DataEngine 投影事务（lease fence 直接匹配文档的顶层字段），Mongo 步骤的生效点是
 // handler 的 Mongo 事务（settleOwnAttempt）。接替与生效点写同一份文档，二者只能有一个提交。
 //
-// 判定只读这一份文档：尝试次数、Resume 次数都不进入判定，没有按操作的查询，也没有上限
-// （取代了 RR-20261006-15 / -16 的 claim 扫描与上限）。
+// 判定只读这一份文档：尝试次数、Resume 次数都不进入判定，没有按操作的查询，也没有上限。
 
 const (
 	// operationStatusPending 必须与投影匹配的值相同，所以取自共享的 fence 契约：当前尝试结论未知、可能持有租约。
@@ -74,6 +73,7 @@ type stepOperationInbox struct {
 	receipt func(ctx context.Context, commandID string, digest []byte) (Completion, bool, error)
 }
 
+// Reservation 是一次步骤投递在操作状态文档上的预留：租约 token，或已有结果（Duplicate）。
 type Reservation struct {
 	Token     uint64
 	Duplicate bool
@@ -88,7 +88,7 @@ type Reservation struct {
 
 // stepOperation 是一个操作实例的状态文档。当前尝试的字段在顶层，字段名与 coredata.LeaseFence 的谓词一致：
 // 原生投影事务按 coredata.LeaseFence.Predicate 对它做条件写（确认写 updated_at），与 Reserve 的接替写同一文档、
-// 在 Mongo 里串行化（RR-20260926-30 §6）。
+// 在 Mongo 里串行化。
 type stepOperation struct {
 	ID      string `bson:"_id"` // Command.IdempotencyKey
 	Version uint64 `bson:"version"`
@@ -180,7 +180,7 @@ func (o *stepOperationInbox) reserveInTransaction(ctx context.Context, command C
 	if completion, found, err := o.receipt(ctx, command.ID, digest); err != nil || found {
 		if found {
 			// 回执是权威，状态文档只是协调行：结算失败不改变 Reserve 的结论（真实服务端会因写错误中止事务并由驱动重跑）。
-			// 但不能静默吞掉——将来出现确定性失败时会一直重跑到超时，日志与计数是唯一线索（RR-20260927-16）。
+			// 但不能静默吞掉——将来出现确定性失败时会一直重跑到超时，日志与计数是唯一线索。
 			if markErr := o.markCompleted(ctx, key, command.ID, completion); markErr != nil {
 				metrics.IncCounter("saga.step_inbox.mark_completed_error_total", nil, 1)
 				slog.Warn("saga step inbox: mark operation attempt settled failed; the receipt stays authoritative",
@@ -488,14 +488,14 @@ func (o *stepOperationInbox) markCompleted(ctx context.Context, operationKey, co
 
 // commandIncarnation 从协调器生成的 CommandID（operationKey:attempt 或 operationKey:rN:attempt）取出
 // Resume 代际；不是这个格式的 CommandID（测试或手工命令）按第 0 代处理。解析与协调器核对 completion 代际
-// 用同一个函数（commandIDIncarnation，B1），两边对“同一生”的判断不会分叉。
+// 用同一个函数（commandIDIncarnation），两边对“同一生”的判断不会分叉。
 func commandIncarnation(command Command) uint32 {
 	return commandIDIncarnation(command.IdempotencyKey, command.ID)
 }
 
 // releaseLease 交还本次投递刚拿到、但没有用上的租约：把 lease_until 设为现在，只对仍是当前尝试、仍属于这个
 // owner/token 的 pending 状态生效。调用方要确定这个租约下没有、也不会再有生效的写：原生步骤只在 handler 以
-// coredata.ErrFencedEntityPending 失败时调用（Nest 事务在 WAL 准入前整体回滚，RR-20260926-30）；Mongo 步骤在
+// coredata.ErrFencedEntityPending 失败时调用（Nest 事务在 WAL 准入前整体回滚）；Mongo 步骤在
 // handler 事务失败后调用（事务没有提交；提交结果未知时状态若已 settled，条件不匹配，不改动）。不交还的话，
 // 之后的重投都会读到“租约有效”，一直等到本次租约自然过期。
 func (o *stepOperationInbox) releaseLease(ctx context.Context, reservation Reservation) error {

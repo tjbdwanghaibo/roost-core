@@ -11,10 +11,8 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 )
 
-// AssemblyConfig is everything the Saga runtime needs once configuration has
-// been parsed: store and engine options, the wire prefix and stream, and the
-// two durable consumers (completions from step workers, starts from Nest
-// effects). The kit Mod fills it from viper.
+// AssemblyConfig 是配置解析后 saga 运行时需要的全部内容：存储与引擎选项、线上前缀与流、两个持久消费者（步骤执行方的
+// 结果、Nest effect 的启动）。由 wiring 的 Mod 填写。
 type AssemblyConfig struct {
 	Store       MongoStoreOptions
 	Engine      Options
@@ -22,16 +20,12 @@ type AssemblyConfig struct {
 	Stream      fnats.JetStreamConfig
 	Completions CompletionConsumerConfig
 	Starts      NestStartConsumerConfig
-	// NestResults is the consumer for native Nest steps' completion effects.
-	// Left zero it is derived from Starts (same effect stream and prefix,
-	// its own durable), because a deployment that has native steps and a
-	// deployment that does not are configured the same way — the effects
-	// simply never arrive in the second one (RR-20260917-07).
+	// NestResults 是原生 Nest 步骤 completion effect 的消费者。零值时由 Starts 推导（同一 effect 流与前缀、自己的
+	// durable）：有原生步骤与没有原生步骤的部署配置相同，后者只是永远不会收到这些 effect。
 	NestResults NestCompletionConsumerConfig
 }
 
-// nestResultsConfig fills NestResults from Starts where it is empty, so an
-// AssemblyConfig written before this consumer existed still gets it.
+// nestResultsConfig 在 NestResults 为空时由 Starts 补齐。
 func (c AssemblyConfig) nestResultsConfig() NestCompletionConsumerConfig {
 	config := c.NestResults
 	if config.Stream == "" {
@@ -64,9 +58,8 @@ func (c AssemblyConfig) nestResultsConfig() NestCompletionConsumerConfig {
 	return config
 }
 
-// defaultNestResultDurable derives a durable that cannot collide with the
-// start consumer's: two consumers sharing one durable share one cursor, and
-// each message would reach only one of them.
+// defaultNestResultDurable 推导一个不会与启动消费者冲突的 durable：共用 durable 的两个消费者共用一个游标，每条消息只会
+// 到达其中一个。
 func defaultNestResultDurable(startDurable string) string {
 	if startDurable == "" {
 		return "roost-saga-nest-result"
@@ -96,8 +89,7 @@ type Assembly struct {
 	running     atomic.Bool
 }
 
-// Assemble builds store, transport and engine and registers the definitions.
-// Nothing touches Mongo or JetStream yet.
+// Assemble 构建存储、传输与引擎并登记定义，此时还不访问 Mongo 与 JetStream。
 func Assemble(mongo fmongo.IMongo, jetStream fnats.IJetStream, cfg AssemblyConfig, definitions ...Definition) (*Assembly, error) {
 	if mongo == nil {
 		return nil, errors.New("saga: mongo client is required")
@@ -125,10 +117,8 @@ func Assemble(mongo fmongo.IMongo, jetStream fnats.IJetStream, cfg AssemblyConfi
 	return &Assembly{Store: store, Transport: transport, Engine: engine, cfg: cfg}, nil
 }
 
-// Start ensures the Mongo infrastructure and the stream, subscribes the
-// completion and Nest-start consumers and runs the engine loop in the
-// background. ctx bounds the infrastructure calls only; the loop runs until
-// Stop. A second Start while running is a no-op.
+// Start 确保 Mongo 基础设施与流存在，订阅结果与 Nest 启动消费者，在后台运行引擎循环。ctx 只约束基础设施调用；循环
+// 运行到 Stop。运行中再次 Start 无效果。
 func (a *Assembly) Start(ctx context.Context) error {
 	if a == nil || a.Engine == nil || a.Store == nil || a.Transport == nil {
 		return errors.New("saga: not assembled")
@@ -160,10 +150,8 @@ func (a *Assembly) Start(ctx context.Context) error {
 		runCancel()
 		return fmt.Errorf("saga: subscribe Nest starts: %w", err)
 	}
-	// The third consumer: completions a native Nest step committed as an
-	// effect. Without it those results reach nobody and the saga waits out
-	// every timeout (RR-20260917-07). A failure here tears down the two that
-	// already started, like every other partial start.
+	// 第三个消费者：原生 Nest 步骤作为 effect 提交的 completion。没有它这些结果无人接收，saga 要等完每次超时。这里失败
+	// 时与其他部分启动失败一样，撤掉已启动的两个。
 	nestResultSub, err := SubscribeNestCompletions(runCtx, jetStream, a.cfg.nestResultsConfig(), a.Engine)
 	if err != nil {
 		startSub.Drain()
@@ -192,10 +180,8 @@ func (a *Assembly) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop drains all three consumers (waiting for their closure within ctx), cancels
-// the loop, stops the engine and waits for the loop to exit. When the drain
-// does not finish in time the consumers are stopped hard and ctx's error is
-// returned.
+// Stop 排空三个消费者（在 ctx 内等它们关闭），取消循环、停止引擎并等待循环退出。排空未能及时完成时强制停止消费者，
+// 返回 ctx 的错误。
 func (a *Assembly) Stop(ctx context.Context) error {
 	if a == nil {
 		return nil
@@ -241,11 +227,11 @@ func (a *Assembly) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Running reports whether the engine loop is up.
+// Running 报告引擎循环是否在运行。
 func (a *Assembly) Running() bool { return a != nil && a.running.Load() }
 
 // ConsumersClosed 检查三个必需消费者：缺失或任意一个退出都不是健康运行。
-// 原生 Nest 完成消费者遗漏时，循环仍能运行但无法接收业务回执（RR-20261005-NC-37）。
+// 原生 Nest 完成消费者遗漏时，循环仍能运行但无法接收业务回执。
 func (a *Assembly) ConsumersClosed() bool {
 	if a == nil {
 		return true
@@ -256,7 +242,7 @@ func (a *Assembly) ConsumersClosed() bool {
 	return subscriptionClosed(resultSub) || subscriptionClosed(startSub) || subscriptionClosed(nestResults)
 }
 
-// RunError is the error the engine loop exited with, if it exited on its own.
+// RunError 返回引擎循环自行退出时的错误。
 func (a *Assembly) RunError() error {
 	if a == nil {
 		return nil

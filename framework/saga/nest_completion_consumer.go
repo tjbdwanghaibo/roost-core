@@ -13,19 +13,13 @@ import (
 	kitnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 )
 
-// NestCompletionConsumerConfig configures the durable consumer that turns a
-// native step's transactional completion effect into Engine.Complete.
+// NestCompletionConsumerConfig 配置把原生步骤的事务性 completion effect 转成 Engine.Complete 的持久消费者。
 //
-// A native Nest step (SubscribeDataEngineStep + inbox.Bind + EmitCompletion)
-// commits its completion as a Nest effect, so it travels the Data Engine
-// outbox and arrives on the EFFECT stream as
-// `<EffectPrefix>.saga.result.<sagaID>` — not on the saga stream the
-// ordinary completion consumer watches. Without this consumer nothing read
-// it: the saga stayed waiting, the step was redelivered on timeout, and the
-// inbox replayed the same receipt forever (RR-20260917-07).
+// 原生 Nest 步骤（SubscribeDataEngineStep + inbox.Bind + EmitCompletion）把 completion 作为 Nest effect 提交，它经
+// DataEngine outbox 到达 EFFECT 流的 `<EffectPrefix>.saga.result.<sagaID>`，而不是普通结果消费者监听的 saga 流。
+// 没有这个消费者就没人读它：saga 一直等待、步骤超时重投、收件箱永远回放同一份回执。
 //
-// All coordinator replicas in one logical service share the Durable, so one
-// of them completes each saga.
+// 同一逻辑服务的全部协调器副本共用 Durable，每个 saga 由其中一个完成。
 type NestCompletionConsumerConfig struct {
 	Stream         string
 	Durable        string
@@ -38,14 +32,12 @@ type NestCompletionConsumerConfig struct {
 	NakBackoffMax  time.Duration
 }
 
-// Completer is the half of the Engine this consumer drives.
+// Completer 是本消费者驱动的那一半 Engine。
 type Completer interface {
 	Complete(context.Context, Completion) (Record, error)
 }
 
-// SubscribeNestCompletions installs that consumer. It is the mirror of
-// SubscribeNestStarts: same stream, same prefix, its own durable and its own
-// topic.
+// SubscribeNestCompletions 安装这个消费者，与 SubscribeNestStarts 对称：同一个流、同一个前缀，各自的 durable 与主题。
 func SubscribeNestCompletions(ctx context.Context, client fnats.IJetStream, config NestCompletionConsumerConfig, completer Completer) (fnats.IJetStreamSubscription, error) {
 	if client == nil || completer == nil {
 		return nil, fmt.Errorf("saga: Nest completion subscriber dependencies are required")
@@ -77,8 +69,7 @@ func SubscribeNestCompletions(ctx context.Context, client fnats.IJetStream, conf
 	if config.ProcessTimeout >= config.AckWait || !validDeliveryLimits(config.MaxDeliver, config.MaxAckPending, config.NakBackoffMin, config.NakBackoffMax) {
 		return nil, fmt.Errorf("saga: unsafe Nest completion consumer limits")
 	}
-	// One subject per saga id, so the filter is a wildcard — unlike the start
-	// topic, which is a single subject.
+	// 每个 saga id 一个 subject，所以过滤是通配——不同于只有一个 subject 的启动主题。
 	return client.Subscribe(ctx, fnats.JetStreamConsumerConfig{
 		Stream:        config.Stream,
 		Name:          config.Durable,
@@ -119,7 +110,7 @@ func handleNestCompletion(ctx context.Context, message *fnats.JetStreamMsg, comp
 	if err != nil {
 		return rejectEnvelope("native_result", err)
 	}
-	// RR-20261005-NC-40：宽 subject 订阅不证明信封内路由正确，必须先核对目标 Saga。
+	// 宽 subject 订阅不证明信封内路由正确，必须先核对目标 saga。
 	// 在调用 Complete 前拒绝，避免异键消息推进状态或写入幂等回执。
 	if envelope.Topic != CompletionEffectTopicPrefix+completion.SagaID {
 		return rejectEnvelope("native_result", ErrInvalidRecord)
@@ -128,25 +119,20 @@ func handleNestCompletion(ctx context.Context, message *fnats.JetStreamMsg, comp
 	if err == nil {
 		return nil
 	}
-	// A completion for a saga this coordinator no longer owns, or for a step
-	// that has already moved on, is not a delivery to retry: the effect
-	// stream keeps it until it is acked, and redelivering it forever would
-	// stall the consumer behind one stale message. Engine.Complete is
-	// idempotent for a recorded receipt, so reaching ErrNotWaiting means the
-	// result is already accounted for.
+	// 本协调器已不拥有的 saga、或已经往前走的步骤的 completion 不是需要重试的投递：effect 流会保留它直到 ack，永远
+	// 重投会让消费者卡在一条过期消息后面。Engine.Complete 对已记下的回执幂等，所以到达 ErrNotWaiting 说明结果已计入。
 	if isTerminalCompletionError(err) {
 		return kitnats.Permanent(err)
 	}
 	return err
 }
 
-// isTerminalCompletionError names the outcomes a redelivery cannot improve. 两个结果消费者（原生 effect 流与普通结果流）
-// 共用它（O-S5-1）。ErrIdentityConflict：同一 CommandID 已记下另一份结果，回执是持久的，重投不会变。
+// isTerminalCompletionError 列出重投无法改善的结果，两个结果消费者（原生 effect 流与普通结果流）共用它。ErrIdentityConflict：同一 CommandID 已记下另一份结果，回执是持久的，重投不会变。
 //
 // ErrDefinitionMissing 不在其中：Complete 只在记录正等着这个操作时才查定义，这时没有定义是滚动发布里的暂时状态——
 // 派发它的进程有这个定义版本，处理结果的协调器还没升级，定义会随新进程上线。它按可重试错误 nak 退避：定义上线后
-// 重投被接收；一直不来时，步骤超时后没有定义的协调器把记录 fence 到 ManualRequired（放弃关闭，NC-250），之后的
-// 重投按迟到成功 ack，MaxDeliver 兜底。之前它在这里，滚动发布中先到的结果被 Term 掉，记录只能等超时重派或被 fence。
+// 重投被接收；一直不来时，步骤超时后没有定义的协调器把记录 fence 到 ManualRequired（放弃关闭），之后的
+// 重投按迟到成功 ack，MaxDeliver 兜底。若在这里 Term，滚动发布中先到的结果会丢，记录只能等超时重派或被 fence。
 func isTerminalCompletionError(err error) bool {
 	switch {
 	case err == nil:

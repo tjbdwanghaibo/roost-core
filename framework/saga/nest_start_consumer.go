@@ -15,9 +15,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// NestStartConsumerConfig configures the shared durable consumer which turns
-// transactional Nest effects into Saga records. All coordinator replicas in
-// one logical service must use the same Durable value.
+// NestStartConsumerConfig 配置把 Nest 事务性 effect 转成 saga 记录的共享持久消费者。同一逻辑服务的全部协调器副本
+// 必须使用同一个 Durable。
 type NestStartConsumerConfig struct {
 	Stream         string
 	Durable        string
@@ -30,10 +29,12 @@ type NestStartConsumerConfig struct {
 	NakBackoffMax  time.Duration
 }
 
+// Starter 是启动消费者驱动的那一半 Engine。
 type Starter interface {
 	StartSaga(context.Context, StartRequest) (Record, error)
 }
 
+// SubscribeNestStarts 订阅 Nest 事务提交的 saga 启动 effect 并交给 StartSaga；重投无法改善的拒绝 Term 并计数。
 func SubscribeNestStarts(ctx context.Context, client fnats.IJetStream, config NestStartConsumerConfig, starter Starter) (fnats.IJetStreamSubscription, error) {
 	if client == nil || starter == nil {
 		return nil, fmt.Errorf("saga: Nest start subscriber dependencies are required")
@@ -113,9 +114,9 @@ func handleNestStart(ctx context.Context, message *fnats.JetStreamMsg, starter S
 	return err
 }
 
-// startRefusalReason 给出重投永远不会改变的 StartSaga 错误（RR-20261006-43）：ErrInvalidRecord（Data 超过 MaxPayloadBytes、
-// 业务键或 ID 不合法）与 ErrIdentityConflict（同一 (type, business_key) 已有另一份意图，启动摘要是持久的）。之前它们与暂时错误
-// 一样 nak 退避，约 8.7 天后才被 MaxDeliver Term，saga 从未创建、没有指标。ErrDefinitionMissing 不在其中：与结果消费者同一口径，
+// startRefusalReason 给出重投永远不会改变的 StartSaga 错误：ErrInvalidRecord（Data 超过 MaxPayloadBytes、
+// 业务键或 ID 不合法）与 ErrIdentityConflict（同一 (type, business_key) 已有另一份意图，启动摘要是持久的）。它们若与
+// 暂时错误一样 nak 退避，约 8.7 天后才被 MaxDeliver Term，saga 从未创建、没有指标。ErrDefinitionMissing 不在其中：与结果消费者同一口径，
 // 它是滚动发布中协调器还没升级的暂时状态，定义上线后重投被接收。
 func startRefusalReason(err error) string {
 	switch {
@@ -141,10 +142,10 @@ func reportStartRefused(request StartRequest, reason string, err error) {
 
 var _ Starter = (*Engine)(nil)
 
-// rejectEnvelope 是五个 saga 消费者（Mongo 步骤、原生步骤、普通结果流、原生结果流、Nest 启动）对坏信封的同一处理
-// （RR-20261006-44）：空消息、超长帧、JSON 损坏、未知 WireVersion、内容校验不过都是确定性错误，重投不会变好——计
-// saga.consumer.rejected_total{consumer}，返回 Permanent 让驱动 Term。之前原生步骤消费者把它们当普通错误 nak 到 MaxDeliver
-// （缺省 25000 次、退避封顶 30s，约 8.7 天），期间占着共享 durable 的 MaxAckPending 名额；另外四个虽然 Term，但没有指标。
+// rejectEnvelope 是五个 saga 消费者（Mongo 步骤、原生步骤、普通结果流、原生结果流、Nest 启动）对坏信封的同一处理：
+// 空消息、超长帧、JSON 损坏、未知 WireVersion、内容校验不过都是确定性错误，重投不会变好——计
+// saga.consumer.rejected_total{consumer}，返回 Permanent 让驱动 Term，而不是 nak 到 MaxDeliver（缺省 25000 次、退避
+// 封顶 30s，约 8.7 天）、期间占着共享 durable 的 MaxAckPending 名额。
 // ERROR 日志由调用方的 logConsumerError 记（Nest 启动与原生结果流在订阅回调里统一记）。
 func rejectEnvelope(consumer string, err error) error {
 	metrics.IncCounter("saga.consumer.rejected_total", metrics.Labels{"consumer": consumer}, 1)

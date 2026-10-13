@@ -14,13 +14,14 @@ import (
 
 const (
 	// dataEngineOperationCollection 是原生步骤的操作状态文档集合（每个操作实例一份，_id = IdempotencyKey）；
-	// 投影的 lease fence 指向这里（docs/feature/SAGA-OPERATION-STATE-DOC-2026-10-06.md）。
+	// 投影的 lease fence 指向这里。
 	dataEngineOperationCollection = "_dataengine_step_operations"
 	dataEngineReceiptCollection   = "_dataengine_receipts"
 	// dataEngineStepNamespace 是原生步骤回执的 ID 前缀：投影把回执写成 `saga-step/<CommandID>`。
 	dataEngineStepNamespace = StepReceiptNamespace
 )
 
+// DataEngineStepInboxOptions 配置原生步骤收件箱：租约持有者名、租约上限、回执 TTL 与等待投影的轮询间隔。
 type DataEngineStepInboxOptions struct {
 	Owner         string
 	LeaseDuration time.Duration
@@ -42,9 +43,8 @@ func withReservation(ctx context.Context, reservation Reservation) context.Conte
 	return context.WithValue(ctx, reservationContextKey{}, reservation)
 }
 
-// ReservationFromContext returns the lease fence allocated for the current
-// synchronous step delivery. Business adapters pass it explicitly to Bind;
-// it must not be copied into detached goroutines as ambient context.
+// ReservationFromContext 返回为当前同步步骤投递分配的租约 fence。业务适配器显式把它传给 Bind，不得作为环境上下文
+// 复制进脱离的 goroutine。
 func ReservationFromContext(ctx context.Context) (Reservation, bool) {
 	if ctx == nil {
 		return Reservation{}, false
@@ -59,6 +59,7 @@ type dataEngineReceipt struct {
 	Payload []byte `bson:"payload"`
 }
 
+// NewDataEngineStepInbox 构造原生步骤收件箱；未给出的选项取缺省值。
 func NewDataEngineStepInbox(client fmongo.IMongo, database string, options DataEngineStepInboxOptions) (*DataEngineStepInbox, error) {
 	if client == nil || database == "" || options.Owner == "" {
 		return nil, errors.New("saga dataengine inbox: client, database and owner are required")
@@ -81,6 +82,7 @@ func NewDataEngineStepInbox(client fmongo.IMongo, database string, options DataE
 	return inbox, nil
 }
 
+// EnsureInfrastructure 建操作状态文档集合的索引。
 func (inbox *DataEngineStepInbox) EnsureInfrastructure(ctx context.Context) error {
 	if inbox == nil || inbox.client == nil {
 		return ErrInvalidRecord
@@ -88,8 +90,7 @@ func (inbox *DataEngineStepInbox) EnsureInfrastructure(ctx context.Context) erro
 	return inbox.ensureOperationIndexes(ctx)
 }
 
-// Bind is called from inside the native Nest handler. The inbox owns the
-// validated receipt retention policy; core Saga only binds the supplied time.
+// Bind 在原生 Nest handler 内调用，把命令身份绑定进当前 Nest 事务。回执保留策略归收件箱，saga 核心只绑定传入的时间。
 func (inbox *DataEngineStepInbox) Bind(command Command, reservations ...Reservation) error {
 	if inbox == nil || inbox.options.ReceiptTTL <= 0 {
 		return ErrInvalidRecord
@@ -132,6 +133,7 @@ func (inbox *DataEngineStepInbox) Reserve(ctx context.Context, command Command) 
 	return inbox.reserve(ctx, command, digest)
 }
 
+// Replay 返回这条命令已投影的 completion（读 DataEngine 回执并结算操作状态文档），不调用业务代码。
 func (inbox *DataEngineStepInbox) Replay(ctx context.Context, command Command) (Completion, bool, error) {
 	if inbox == nil || inbox.client == nil {
 		return Completion{}, false, ErrInvalidRecord

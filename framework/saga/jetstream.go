@@ -13,13 +13,13 @@ import (
 
 const maxWireEnvelopeBytes = 8 << 20
 
+// JetStreamPublisher 在 JetStream 上发布 saga 命令与 completion，消息去重键由命令 ID 派生。
 type JetStreamPublisher struct {
 	client fnats.IJetStream
 	prefix string
 }
 
-// Client returns the JetStream client the publisher was built on, so the Mod
-// can hand the same connection to consumers.
+// Client 返回发布者所用的 JetStream 客户端，让 Mod 把同一连接交给消费者。
 func (p *JetStreamPublisher) Client() fnats.IJetStream {
 	if p == nil {
 		return nil
@@ -27,6 +27,7 @@ func (p *JetStreamPublisher) Client() fnats.IJetStream {
 	return p.client
 }
 
+// CompletionConsumerConfig 配置普通结果流的持久消费者。
 type CompletionConsumerConfig struct {
 	Stream, Durable, SubjectPrefix string
 	AckWait                        time.Duration
@@ -47,6 +48,7 @@ type completionEnvelope struct {
 	Completion Completion `json:"completion"`
 }
 
+// NewJetStreamPublisher 构造发布者，prefix 是全部 saga 主题的前缀。
 func NewJetStreamPublisher(client fnats.IJetStream, prefix string) (*JetStreamPublisher, error) {
 	prefix = strings.Trim(strings.TrimSpace(prefix), ".")
 	if client == nil || !validSubjectPath(prefix) {
@@ -68,6 +70,8 @@ func (p *JetStreamPublisher) PublishSagaCommand(ctx context.Context, command Com
 	_, err = p.client.Publish(ctx, p.prefix+".command."+strings.Trim(command.Topic, "."), raw, fnats.JetStreamPublishOptions{MsgID: command.ID})
 	return err
 }
+
+// PublishCompletion 把步骤结果发布到所属 saga 的结果主题。
 func (p *JetStreamPublisher) PublishCompletion(ctx context.Context, completion Completion) error {
 	if err := completion.Validate(); err != nil {
 		return err
@@ -83,6 +87,7 @@ func (p *JetStreamPublisher) PublishCompletion(ctx context.Context, completion C
 	return err
 }
 
+// SubscribeCompletions 订阅普通结果流并交给 Engine.Complete；坏信封与重投无法改善的结果 Term，其余错误 nak 重投。
 func SubscribeCompletions(ctx context.Context, client fnats.IJetStream, config CompletionConsumerConfig, engine *Engine) (fnats.IJetStreamSubscription, error) {
 	if client == nil || engine == nil {
 		return nil, fmt.Errorf("saga: completion subscriber dependencies are required")
@@ -126,8 +131,8 @@ func SubscribeCompletions(ctx context.Context, client fnats.IJetStream, config C
 		if err != nil {
 			logConsumerError("completion", message, err)
 		}
-		// 与原生结果消费者同一份终态分类（O-S5-1）：重投不会改变结论的错误 Term，不 nak 到 MaxDeliver。
-		// 退避中到达的成功由 Complete 接收（RR-20261006-42）；没有送达的由同一操作实例的下一次尝试（或过期投递）经收件箱回放（SAGA.md「原生步骤执行契约」）。
+		// 与原生结果消费者同一份终态分类：重投不会改变结论的错误 Term，不 nak 到 MaxDeliver。
+		// 退避中到达的成功由 Complete 接收；没有送达的由同一操作实例的下一次尝试（或过期投递）经收件箱回放（SAGA.md「原生步骤执行契约」）。
 		if isTerminalCompletionError(err) {
 			return kitnats.Permanent(err)
 		}

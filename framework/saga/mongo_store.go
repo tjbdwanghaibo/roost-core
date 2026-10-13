@@ -24,6 +24,7 @@ const (
 	defaultOperationCollection  = "_saga_operations"
 )
 
+// MongoStoreOptions 配置 MongoStore 的库、各集合名与 completion 回执 TTL。
 type MongoStoreOptions struct {
 	Database             string
 	SagaCollection       string
@@ -33,11 +34,14 @@ type MongoStoreOptions struct {
 	CompletionReceiptTTL time.Duration
 }
 
+// MongoStore 是基于 MongoDB 的 Store：记录、outbox、completion 回执与 operation tombstone 分集合保存，Apply 在一个
+// Mongo 事务里按版本与租约 fence 写入。
 type MongoStore struct {
 	client fmongo.IMongo
 	opts   MongoStoreOptions
 }
 
+// Ping 检查 Mongo 连接。
 func (s *MongoStore) Ping(ctx context.Context) error {
 	if s == nil || s.client == nil {
 		return fmt.Errorf("saga mongo: not initialized")
@@ -45,6 +49,7 @@ func (s *MongoStore) Ping(ctx context.Context) error {
 	return s.client.Ping(ctx)
 }
 
+// NewMongoStore 构造 MongoStore；集合名与回执 TTL 缺省时取默认值。
 func NewMongoStore(client fmongo.IMongo, options MongoStoreOptions) (*MongoStore, error) {
 	options.Database = strings.TrimSpace(options.Database)
 	if client == nil || options.Database == "" {
@@ -68,6 +73,7 @@ func NewMongoStore(client fmongo.IMongo, options MongoStoreOptions) (*MongoStore
 	return &MongoStore{client: client, opts: options}, nil
 }
 
+// EnsureInfrastructure 建各集合的索引。
 func (s *MongoStore) EnsureInfrastructure(ctx context.Context) error {
 	ttl := int64(s.opts.CompletionReceiptTTL / time.Second)
 	if ttl <= 0 || ttl > int64(^uint32(0)>>1) {
@@ -147,7 +153,7 @@ func (s *MongoStore) List(ctx context.Context, query Query) ([]Record, error) {
 	for i := range docs {
 		record, err := validatedRecord(docs[i])
 		if err != nil {
-			// 一条坏记录不让整次查询失败，运维面仍能读出其余记录（RR-20261006-45）；坏记录本身告警。
+			// 一条坏记录不让整次查询失败，运维面仍能读出其余记录；坏记录本身告警。
 			reportCorruptRecord("list", docs[i].ID, err)
 			continue
 		}
@@ -195,7 +201,7 @@ func (s *MongoStore) CompletionHistory(ctx context.Context, completion Completio
 	return CompletionHistory{Recorded: true, Receipt: true}, nil
 }
 
-// MarkLateSuccessAlarm 在 tombstone 的 late_alarms 子文档里记 r<代际>（B1）。条件更新只匹配还没有这个
+// MarkLateSuccessAlarm 在 tombstone 的 late_alarms 子文档里记 r<代际>。条件更新只匹配还没有这个
 // 键的 tombstone，单文档原子：并发送达的同一个迟到成功只有一次 MatchedCount == 1。
 func (s *MongoStore) MarkLateSuccessAlarm(ctx context.Context, completion Completion, incarnation uint32) (bool, error) {
 	if err := completion.Validate(); err != nil {
@@ -237,7 +243,7 @@ func (s *MongoStore) ClaimDue(ctx context.Context, request ClaimRequest) ([]Reco
 		}
 		record, validateErr := validatedRecord(claimed)
 		if validateErr != nil {
-			// 只隔离这一条（RR-20261006-45）：之前返回 (已领取的, err)，协调循环整批丢弃，同批已领取的正常记录要等租约过期。
+			// 只隔离这一条：若返回 (已领取的, err)，协调循环会整批丢弃，同批已领取的正常记录要等租约过期。
 			// 不把它改成 ManualRequired：记录已经读不出可信的状态，改写只会覆盖运维要看的现场；它保留刚领取的租约，
 			// 每个 LeaseDuration 被领取并告警一次，直到运维修好文档。
 			reportCorruptRecord("claim", claimed.ID, validateErr)
@@ -287,8 +293,7 @@ func (s *MongoStore) Apply(ctx context.Context, request ApplyRequest) (ApplyOutc
 	defer session.EndSession(ctx)
 	outcome := ApplyApplied
 	err = session.WithTransaction(ctx, func(txCtx context.Context) error {
-		// The driver may invoke this callback more than once for a transient
-		// transaction error; never leak an outcome from an earlier attempt.
+		// 遇到暂时性事务错误时驱动可能多次调用这个回调；不能让更早一次调用的结果泄漏出来。
 		outcome = ApplyApplied
 		if request.Receipt != nil {
 			digest := receiptDigest
@@ -375,7 +380,7 @@ func (s *MongoStore) ClaimOutbox(ctx context.Context, request ClaimRequest) ([]O
 	}
 	out := make([]OutboxRecord, 0, len(candidates))
 	for i := range candidates {
-		// RR-20261005-NC-41：Find 后另一发布者可能 Nack 并延后重试；领取时复查期限。
+		// Find 之后另一发布者可能 Nack 并延后重试；领取时复查期限。
 		claimFilter := bson.M{"_id": candidates[i].ID, "next_attempt_at": bson.M{"$lte": request.Now}, "lease_until": bson.M{"$lte": request.Now}}
 		update := bson.M{"$set": bson.M{"lease_owner": request.Owner, "lease_until": request.Now.Add(request.LeaseDuration)}, "$inc": bson.M{"lease_token": 1}}
 		var claimed outboxDoc
@@ -435,14 +440,14 @@ type recordDoc struct {
 	Type              string `bson:"type"`
 	DefinitionVersion uint32 `bson:"definition_version"`
 	BusinessKey       string `bson:"business_key"`
-	// RR-20261005-NC-39：启动摘要属于不可变身份，完整 Replace 不能把它丢掉。
+	// 启动摘要属于不可变身份，完整 Replace 不能把它丢掉。
 	StartDigest    string `bson:"start_digest,omitempty"`
 	Status         Status `bson:"status"`
 	Phase          Phase  `bson:"phase"`
 	Step           int    `bson:"step"`
 	CompletedSteps int    `bson:"completed_steps"`
 	Attempt        uint32 `bson:"attempt"`
-	// RR-20261005-NC-38：Resume 代际属于持久派发身份，遗漏会在重读后复用旧 CommandID。
+	// Resume 代际属于持久派发身份，遗漏会在重读后复用旧 CommandID。
 	Incarnation uint32 `bson:"incarnation,omitempty"`
 	// saga 方向 ④：放弃后才生效、待补偿的正向步骤号 + 1 与它的载荷；正常记录没有这两个字段。
 	LateStep     int       `bson:"late_step,omitempty"`
@@ -544,9 +549,8 @@ type completionDoc struct {
 	CreatedAt time.Time `bson:"created_at"`
 }
 
-// operationDoc 是 operation tombstone。Closure 是 U-0280 增加的字段（"result" / "abandoned"），
-// 之前写的 tombstone 没有它，按 OperationClosureUnknown 处理（不告警）。LateAlarms 是 B1 增加的字段：
-// 键 r<代际>，值是第一次告警的时间；之前写的 tombstone 没有它，第一次迟到成功照常告警并补上。
+// operationDoc 是 operation tombstone。Closure 是关闭方式（"result" / "abandoned"），缺失时按 OperationClosureUnknown
+// 处理（不告警）。LateAlarms 的键是 r<代际>，值是第一次告警的时间；缺失时第一次迟到成功照常告警并补上。
 type operationDoc struct {
 	ID         string               `bson:"_id"`
 	SagaID     string               `bson:"saga_id"`
