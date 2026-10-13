@@ -417,6 +417,9 @@ func (b *Bus) onJetStreamRPCResponse(_ context.Context, msg *fnats.JetStreamMsg)
 	return nil
 }
 
+// onJetStreamRPCRequest 是 JetStream RPC 请求的服务端入口：登记在途 handler → 解码请求、查 handler →
+// 准入（应答主题、过期）→ 建立处理期限并持续发 in-progress → 调用 handler → 编码并发布应答。
+// 返回非 nil 让消息交还 broker（NAK）；准入拒绝与已发布应答返回 nil（确认）。
 func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg) error {
 	if msg == nil {
 		return nil
@@ -432,16 +435,45 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	if req.MsgName == "" {
 		req.MsgName = b.extractRpcMethod(msg.Subject)
 	}
+	handler, label, ok := b.jetStreamRPCHandler(req.MsgName)
+	if !b.admitJetStreamRPCRequest(msg, &req, label) {
+		return nil
+	}
+	processCtx, cancel := b.jetStreamRPCProcessContext(req)
+	defer cancel()
+	// handler 可能跑得比 AckWait 久（期限取调用方截止）：处理期间定期发 in-progress，broker 不会把这条
+	// 重投给共享 durable 的另一个实例并发执行。
+	defer b.keepJetStreamRPCInProgress(msg, processCtx)()
+
+	if !ok {
+		return b.refuseJetStreamRPCWithoutHandler(&req, label)
+	}
+	rpcCtx := b.newJetStreamRPCContext(processCtx, &req)
+	_, release := fctx.NewContext(fctx.WithBase(rpcCtx.Context()), fctx.WithSource("bus_jsrpc"), fctx.WithHandler(req.MsgName))
+	defer release()
+	resp, handlerErr := callJetStreamRPCHandler(handler, rpcCtx)
+	return b.replyJetStreamRPC(processCtx, &req, label, resp, handlerErr)
+}
+
+// jetStreamRPCHandler 查找方法的 handler，并给出指标用的方法标签。
+//
+// The method label is the registered method, never the envelope's
+// free-form name: a request naming no registered method is counted under
+// one label, so the served methods bound these series.
+func (b *Bus) jetStreamRPCHandler(method string) (handler RpcHandlerFunc, label string, ok bool) {
 	b.mu.RLock()
-	handler, ok := b.rpcHandlers[req.MsgName]
+	handler, ok = b.rpcHandlers[method]
 	b.mu.RUnlock()
-	// The method label is the registered method, never the envelope's
-	// free-form name: a request naming no registered method is counted under
-	// one label, so the served methods bound these series.
-	label := req.MsgName
+	label = method
 	if !ok {
 		label = jetStreamRPCUnregisteredMethod
 	}
+	return handler, label, ok
+}
+
+// admitJetStreamRPCRequest 检查请求能否执行：没有应答主题或已过调用方期限的请求只记指标、直接确认，不执行。
+// 投递次数在这里记录。
+func (b *Bus) admitJetStreamRPCRequest(msg *fnats.JetStreamMsg, req *fnats.NatsMsg, label string) bool {
 	if strings.TrimSpace(req.ReplySubject) == "" {
 		// callJetStreamRPC always sets a reply subject. A request without one is a
 		// lightweight Call / CallTo the request stream captured (its subjects cover
@@ -450,7 +482,7 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 		// it with no deadline and dropped the reply.
 		slog.Warn("bus: refuse jetstream rpc request without reply subject; the caller used the lightweight transport", "method", req.MsgName, "request_id", req.SessionId)
 		b.recordJetStreamRPCRequest(label, "no_reply_subject")
-		return nil
+		return false
 	}
 	if msg.NumDelivered > 0 {
 		metrics.SetGauge("bus_rpc_consumer_delivery", metrics.Labels{
@@ -461,26 +493,25 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	if req.DeadlineAt > 0 && time.Now().UnixMilli() > req.DeadlineAt {
 		slog.Warn("bus: drop expired jetstream rpc request", "method", req.MsgName, "request_id", req.SessionId)
 		b.recordJetStreamRPCRequest(label, "expired")
-		return nil
+		return false
 	}
-	processCtx, cancel := b.jetStreamRPCProcessContext(req)
-	defer cancel()
-	// handler 可能跑得比 AckWait 久（期限取调用方截止）：处理期间定期发 in-progress，broker 不会把这条
-	// 重投给共享 durable 的另一个实例并发执行。
-	defer b.keepJetStreamRPCInProgress(msg, processCtx)()
+	return true
+}
 
-	if !ok {
-		slog.Warn("bus: no jetstream rpc handler", "method", req.MsgName)
-		b.recordJetStreamRPCRequest(label, "no_handler")
-		// 拒绝也要走客户端要求的版本 envelope。
-		data, err := encodeRPCFailure(b.codec, fmt.Errorf("%w: %s", ErrNoHandler, req.MsgName))
-		if err != nil {
-			return err
-		}
-		return b.publishJetStreamRPCReply(req, data)
+// refuseJetStreamRPCWithoutHandler 给没有 handler 的方法回 ErrNoHandler。拒绝也要走客户端要求的版本 envelope。
+func (b *Bus) refuseJetStreamRPCWithoutHandler(req *fnats.NatsMsg, label string) error {
+	slog.Warn("bus: no jetstream rpc handler", "method", req.MsgName)
+	b.recordJetStreamRPCRequest(label, "no_handler")
+	data, err := encodeRPCFailure(b.codec, fmt.Errorf("%w: %s", ErrNoHandler, req.MsgName))
+	if err != nil {
+		return err
 	}
+	return b.publishJetStreamRPCReply(*req, data)
+}
 
-	rpcCtx := &RpcContext{
+// newJetStreamRPCContext 为一次请求建立 handler 的上下文，base 是本次处理期限。
+func (b *Bus) newJetStreamRPCContext(processCtx context.Context, req *fnats.NatsMsg) *RpcContext {
+	return &RpcContext{
 		MsgContext: MsgContext{
 			FromSid:   req.FromSid,
 			ToModule:  req.ToModule,
@@ -495,21 +526,22 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 		Method:       req.MsgName,
 		ReplySubject: req.ReplySubject,
 	}
+}
 
-	_, release := fctx.NewContext(fctx.WithBase(rpcCtx.Context()), fctx.WithSource("bus_jsrpc"), fctx.WithHandler(req.MsgName))
-	defer release()
-	var resp any
-	var handlerErr error
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				handlerErr = fmt.Errorf("panic: %v", r)
-				slog.Error("bus: jetstream rpc handler panic", "method", req.MsgName, "err", r, "stack", string(debug.Stack()))
-			}
-		}()
-		resp, handlerErr = handler(rpcCtx)
+// callJetStreamRPCHandler 调用 handler；panic 记日志并转成 handler 错误，按业务失败回给调用方。
+func callJetStreamRPCHandler(handler RpcHandlerFunc, rpcCtx *RpcContext) (resp any, handlerErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			handlerErr = fmt.Errorf("panic: %v", r)
+			slog.Error("bus: jetstream rpc handler panic", "method", rpcCtx.Method, "err", r, "stack", string(debug.Stack()))
+		}
 	}()
+	return handler(rpcCtx)
+}
 
+// replyJetStreamRPC 把 handler 的结果编码成应答并发布，按结果记指标。Bus 停止中断的 handler 不回应答，
+// 返回错误让消息交还 broker。
+func (b *Bus) replyJetStreamRPC(processCtx context.Context, req *fnats.NatsMsg, label string, resp any, handlerErr error) error {
 	if handlerErr != nil && errors.Is(processCtx.Err(), context.Canceled) {
 		// processCtx 只会因 Bus 停止被取消（期限到达是 DeadlineExceeded）。handler 因此中断时
 		// 不把“已取消”当业务结果回给调用方，消息交还 broker（NAK），由其他实例处理。
@@ -528,7 +560,7 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 		b.recordJetStreamRPCRequest(label, "marshal_error")
 		return fmt.Errorf("bus: marshal jetstream rpc resp %s: %w", req.MsgName, err)
 	}
-	if err := b.publishJetStreamRPCReply(req, data); err != nil {
+	if err := b.publishJetStreamRPCReply(*req, data); err != nil {
 		b.recordJetStreamRPCRequest(label, "publish_error")
 		return err
 	}
