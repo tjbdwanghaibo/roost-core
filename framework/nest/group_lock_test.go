@@ -99,7 +99,7 @@ func TestEntityLockGroupScopeNilForNormalDispatch(t *testing.T) {
 func TestEntityLockGroupSnapshotDetectsMembershipChange(t *testing.T) {
 	id := mustBuildCastID(t, 4211, entity.EntityCategory(1), nestLocalKind)
 	e := newMockEntity(id, entity.EntityCategory(1))
-	snapshots := captureDispatchGroupSnapshots([]entity.IThreadSafeEntity{e})
+	snapshots := captureDispatchGroupSnapshots([]entity.IThreadSafeEntity{e}, nil)
 
 	e.Base().SetGroupLockIDForTest(9101)
 
@@ -111,7 +111,7 @@ func TestEntityLockGroupSnapshotDetectsMembershipChange(t *testing.T) {
 func TestEntityLockGroupSnapshotDetectsPendingTransition(t *testing.T) {
 	id := mustBuildCastID(t, 4212, entity.EntityCategory(1), nestLocalKind)
 	e := newMockEntity(id, entity.EntityCategory(1))
-	snapshots := captureDispatchGroupSnapshots([]entity.IThreadSafeEntity{e})
+	snapshots := captureDispatchGroupSnapshots([]entity.IThreadSafeEntity{e}, nil)
 
 	if !e.Base().BeginGroupTransition(entity.EntityGroupTransitionJoin, 9102) {
 		t.Fatal("BeginGroupTransition should succeed")

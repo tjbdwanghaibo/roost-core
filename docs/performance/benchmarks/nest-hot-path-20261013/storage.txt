@@ -1,0 +1,81 @@
+2026/10/13 12:15:52 ERROR nest broadcast handler panic id=10200033 handler=broadcast_release_panic err="release hook"
+2026/10/13 12:15:52 WARN async handler failed title=nest handler=entity_lock_group_transition type=GroupTransition key=9217709 tid=9217709 tids=0 groups=0 cost=false remote=false err="entity manager: entity not managed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr53_local_release_hook err="release hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr53_memory_release_hook err="release hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr53_uncommitted_handler_failed err="business failed\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr53_uncommitted_commit_rejected err="nest: transaction commit rejected\nwal rejected\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=remote_sentinel_release_hook err="release hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=remote_release_hook_panic err="release hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_memory err="business rejected\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_strict err="business rejected\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_pipelined err="business rejected\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest broadcast handler panic id=10200033 handler=broadcast_release_panic err="release hook"
+2026/10/13 12:15:52 WARN async handler failed title=nest handler=entity_lock_group_transition type=GroupTransition key=9217709 tid=9217709 tids=0 groups=0 cost=false remote=false err="entity manager: entity not managed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr53_local_release_hook err="release hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr53_memory_release_hook err="release hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr53_uncommitted_handler_failed err="business failed\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr53_uncommitted_commit_rejected err="nest: transaction commit rejected\nwal rejected\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=remote_sentinel_release_hook err="release hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=remote_release_hook_panic err="release hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_memory err="business rejected\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_strict err="business rejected\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_pipelined err="business rejected\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest broadcast handler panic id=10200033 handler=broadcast_release_panic err="release hook"
+2026/10/13 12:15:52 WARN async handler failed title=nest handler=entity_lock_group_transition type=GroupTransition key=9217709 tid=9217709 tids=0 groups=0 cost=false remote=false err="entity manager: entity not managed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr53_local_release_hook err="release hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr53_memory_release_hook err="release hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr53_uncommitted_handler_failed err="business failed\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr53_uncommitted_commit_rejected err="nest: transaction commit rejected\nwal rejected\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=remote_sentinel_release_hook err="release hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=remote_release_hook_panic err="release hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_memory err="business rejected\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_strict err="business rejected\nrelease hook failed"
+2026/10/13 12:15:52 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_pipelined err="business rejected\nrelease hook failed"
+2026/10/13 12:15:53 ERROR nest broadcast handler panic id=10200033 handler=broadcast_release_panic err="release hook"
+2026/10/13 12:15:53 WARN async handler failed title=nest handler=entity_lock_group_transition type=GroupTransition key=9217709 tid=9217709 tids=0 groups=0 cost=false remote=false err="entity manager: entity not managed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr53_local_release_hook err="release hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr53_memory_release_hook err="release hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr53_uncommitted_handler_failed err="business failed\nrelease hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr53_uncommitted_commit_rejected err="nest: transaction commit rejected\nwal rejected\nrelease hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=remote_sentinel_release_hook err="release hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=remote_release_hook_panic err="release hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_memory err="business rejected\nrelease hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_strict err="business rejected\nrelease hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_pipelined err="business rejected\nrelease hook failed"
+2026/10/13 12:15:53 ERROR nest broadcast handler panic id=10200033 handler=broadcast_release_panic err="release hook"
+2026/10/13 12:15:53 WARN async handler failed title=nest handler=entity_lock_group_transition type=GroupTransition key=9217709 tid=9217709 tids=0 groups=0 cost=false remote=false err="entity manager: entity not managed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr53_local_release_hook err="release hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr53_memory_release_hook err="release hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr53_uncommitted_handler_failed err="business failed\nrelease hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr53_uncommitted_commit_rejected err="nest: transaction commit rejected\nwal rejected\nrelease hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=remote_sentinel_release_hook err="release hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=remote_release_hook_panic err="release hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_memory err="business rejected\nrelease hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_strict err="business rejected\nrelease hook failed"
+2026/10/13 12:15:53 ERROR nest entity release panic handler=rr20_rolled_back_release_hook_pipelined err="business rejected\nrelease hook failed"
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=false-10         	   80533	      2954 ns/op	    1498 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=false-10         	   78356	      3103 ns/op	    1498 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=false-10         	   77169	      3191 ns/op	    1498 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=false-10         	   75054	      3093 ns/op	    1498 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=false-10         	   79492	      3098 ns/op	    1498 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=true-10          	   95385	      2502 ns/op	    1118 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=true-10          	   88254	      2526 ns/op	    1119 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=true-10          	   94984	      2513 ns/op	    1118 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=true-10          	   94569	      2518 ns/op	    1119 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/single/async=true-10          	   94389	      2550 ns/op	    1119 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=false-10         	   63560	      3714 ns/op	    1877 B/op	      46 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=false-10         	   59277	      3705 ns/op	    1876 B/op	      46 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=false-10         	   64122	      3717 ns/op	    1877 B/op	      46 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=false-10         	   58460	      3706 ns/op	    1876 B/op	      46 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=false-10         	   66554	      3717 ns/op	    1876 B/op	      46 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=true-10          	   79042	      3192 ns/op	    1497 B/op	      41 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=true-10          	   78639	      3077 ns/op	    1497 B/op	      41 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=true-10          	   78530	      3126 ns/op	    1497 B/op	      41 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=true-10          	   78204	      3113 ns/op	    1497 B/op	      41 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=false/multi4/async=true-10          	   75267	      3174 ns/op	    1497 B/op	      41 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	7.394s

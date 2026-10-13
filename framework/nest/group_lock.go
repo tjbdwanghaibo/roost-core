@@ -2,6 +2,7 @@ package nest
 
 import (
 	"errors"
+	"slices"
 	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -162,7 +163,8 @@ func (m *entityLockGroupLockManager) releaseRef(entry *entityLockGroupLockEntry)
 }
 
 func resolveDispatchGroupID(lockEs []entity.IThreadSafeEntity) (int64, error) {
-	return resolveDispatchGroupIDFromSnapshots(captureDispatchGroupSnapshots(lockEs))
+	var storage [4]dispatchGroupSnapshot
+	return resolveDispatchGroupIDFromSnapshots(captureDispatchGroupSnapshots(lockEs, storage[:0]))
 }
 
 type dispatchGroupSnapshot struct {
@@ -173,8 +175,8 @@ type dispatchGroupSnapshot struct {
 	targetID int64
 }
 
-func captureDispatchGroupSnapshots(lockEs []entity.IThreadSafeEntity) []dispatchGroupSnapshot {
-	ret := make([]dispatchGroupSnapshot, 0, len(lockEs))
+func captureDispatchGroupSnapshots(lockEs []entity.IThreadSafeEntity, storage []dispatchGroupSnapshot) []dispatchGroupSnapshot {
+	ret := slices.Grow(storage[:0], len(lockEs))
 	for _, ent := range lockEs {
 		if ent == nil || ent.Base() == nil {
 			continue
@@ -260,8 +262,12 @@ func lockDispatchEntitiesForHandlerWithStore(locks *entityLockGroupLockManager, 
 		return nil, nil, errDispatchWithoutGuardScope
 	}
 	var lastErr error
+	// 快照只用于本次同步取锁后的校验，不交给 release 闭包或 Remote 续行。
+	// 常见 1～4 实体使用栈上存储；更大集合按需扩容，重试仍重新采集状态。
+	var storage [4]dispatchGroupSnapshot
+	snapshots := storage[:0]
 	for attempt := 0; attempt < entityLockGroupDispatchRetryMax; attempt++ {
-		snapshots := captureDispatchGroupSnapshots(lockEs)
+		snapshots = captureDispatchGroupSnapshots(lockEs, snapshots)
 		groupID, err := resolveDispatchGroupIDFromSnapshots(snapshots)
 		if err != nil {
 			return nil, nil, err

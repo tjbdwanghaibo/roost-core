@@ -149,3 +149,5 @@ go tool pprof -top -alloc_space artifacts/nest-review-20261013/nest.test.exe art
 第二批保留两项局部改动：`ensureNestContext` 直接传 Snapshot option，避免临时可增长切片导致闭包逃逸；`pushCurrentNestDispatchMsg` 遇到同 goroutine 的同消息只省登记，不省 fctx、Guard 或事务作用域。新增同消息/不同消息嵌套与 panic 恢复回归，既有 Context、Await、Remote 和阻塞约束用例通过 5 轮。见 [分配采样](../performance/benchmarks/nest-hot-path-20261013/alloc-profile.txt) 与 [上下文样本](../performance/benchmarks/nest-hot-path-20261013/context.txt)。
 
 指标预绑定明确延期：新采样仍显示指标编码分配，但公共 Registry 目前无绑定句柄接口，Reset、series 限额及动态标签需要一并设计。不能为本轮 Nest 优化另建全局句柄缓存。目标业务视图的跨准入缓存也暂不引入：现有直接 Msg、Clone、重排、广播和续行的校验阶段不同，`normalizeFullIDs` 本次只占约 1.42% 分配字节；先保留显式校验，不用跳过校验换取收益。这两项是候选延期，不能表述为已完成缓存复用。
+
+第三批临时存储保留两项：锁列表与 Touch 列表一次分配、切成容量不重叠的区间；分组快照在取锁调用栈内用 4 项数组，大集合按需扩容，重试重新采集，不进入 release 闭包、不引入对象池。Group/Multi/Touch/Release/Cast 回归重复 5 轮通过。四实体异步热点样本在上下文批次基础上减少 192 B/op、2 allocs/op，见 [临时存储样本](../performance/benchmarks/nest-hot-path-20261013/storage.txt)。

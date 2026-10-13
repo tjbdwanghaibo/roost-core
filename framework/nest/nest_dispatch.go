@@ -358,8 +358,10 @@ func (mgr *NestMgr) dispatchMany(entry handlerEntry, name string, ids []int64, p
 	if err != nil {
 		return nil, err
 	}
-	lockEs := make([]entity.IThreadSafeEntity, 0, len(es))
-	touchedEs := make([]entity.IThreadSafeEntity, 0, len(es))
+	// 锁集合会排序，Touch 集合保留归还次数；共用一次分配，但容量边界互不重叠。
+	storage := make([]entity.IThreadSafeEntity, 2*len(es))
+	lockEs := storage[:0:len(es)]
+	touchedEs := storage[len(es):len(es):len(storage)]
 	evicted := false
 	for i, e := range es {
 		if e != nil && e.Touch() {
