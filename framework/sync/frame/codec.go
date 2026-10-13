@@ -14,6 +14,8 @@ import (
 
 const frameMagic uint32 = 0x43525031 // CRP1
 
+// Encode 校验帧后按大端编码：32 字节帧头，每个对象 9 字节头加其组件（每个 9 字节头加 payload）。
+// 预估长度超过 MaxFrameBytes 时在分配前返回 ErrFrameTooLarge。
 func Encode(frame Frame, limits Limits) ([]byte, error) {
 	limits = normalizeLimits(limits)
 	if err := validateFrame(frame, limits); err != nil {
@@ -65,6 +67,7 @@ func Encode(frame Frame, limits Limits) ([]byte, error) {
 	return buffer, nil
 }
 
+// Decode 解码并完整校验一帧；截断、尾随字节、未知帧头或越过 limits 都返回错误。
 func Decode(data []byte, limits Limits) (Frame, error) {
 	limits = normalizeLimits(limits)
 	if len(data) == 0 || len(data) > limits.MaxFrameBytes {
@@ -211,11 +214,4 @@ func validateFrame(frame Frame, limits Limits) error {
 		}
 	}
 	return nil
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

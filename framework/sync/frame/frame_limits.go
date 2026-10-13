@@ -5,6 +5,7 @@ import (
 	"fmt"
 )
 
+// ProtocolVersion 是帧格式版本，写在帧头；Decode 只接受当前版本。
 const ProtocolVersion uint16 = 1
 
 var (
@@ -17,6 +18,8 @@ var (
 	ErrBaselineMismatch  = errors.New("frame: baseline mismatch")
 )
 
+// Limits 约束一帧可携带的对象数、每对象组件数、组件 payload 与整帧字节数；
+// 非正值取 DefaultLimits 中的对应项。
 type Limits struct {
 	MaxObjects             int
 	MaxComponentsPerObject int
@@ -50,6 +53,7 @@ func normalizeLimits(limits Limits) Limits {
 	return limits
 }
 
+// ObjectRef 是流内对象引用：ID 可复用，Generation 区分复用前后的对象；二者都非零才有效。
 type ObjectRef struct {
 	ID         uint16
 	Generation uint16
@@ -64,6 +68,7 @@ func (r ObjectRef) Less(other ObjectRef) bool {
 	return r.Generation < other.Generation
 }
 
+// SnapshotMeta 是一帧所属的流、纪元与 tick；四个字段都必须非零。
 type SnapshotMeta struct {
 	// StreamID 标识当前连接/同步上下文内的流，不是房间、玩家或全局唯一 ID。
 	StreamID      uint64
@@ -79,6 +84,7 @@ func (m SnapshotMeta) validate() error {
 	return nil
 }
 
+// Kind 区分全量帧（Full，BaseTick 为 0，只含 create）与增量帧（Delta，基于 BaseTick）。
 type Kind uint8
 
 const (
@@ -115,6 +121,7 @@ type ObjectDelta struct {
 	Components []ComponentDelta
 }
 
+// Frame 是一条 entity-sync 帧：帧元数据加若干对象增量。
 type Frame struct {
 	SnapshotMeta
 	Kind     Kind
