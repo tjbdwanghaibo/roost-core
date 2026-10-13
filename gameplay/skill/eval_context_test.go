@@ -3,6 +3,7 @@ package skill
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -833,4 +834,24 @@ func TestO33AlternativesCompileAndRun(t *testing.T) {
 			t.Fatalf("the spawn callback must see the states written in the cast flow: caster health %d", host.HealthForTest(1))
 		}
 	})
+}
+
+// 表格的说明会原样进诊断，给技能作者看：写原因与替代写法，不带过程编号（RR-…、O33 之类），作者查不到它们。
+func TestEvalContextSemanticsCarryNoProcessCodes(t *testing.T) {
+	code := regexp.MustCompile(`RR-\d|NC-\d|\bO\d{2}\b`)
+	check := func(where, semantics string) {
+		if match := code.FindString(semantics); match != "" {
+			t.Errorf("%s: semantics carries the process code %q: %s", where, match, semantics)
+		}
+	}
+	for _, row := range evalReferenceTable {
+		for context := evalCastFlow; context < evalContextCount; context++ {
+			check(fmt.Sprintf("row %s context %s", row.name, context), row.cells[context].semantics)
+		}
+	}
+	for point, row := range evalSnapshotTable {
+		for context := evalCastFlow; context < evalContextCount; context++ {
+			check(fmt.Sprintf("snapshot %s context %s", point, context), row[context].semantics)
+		}
+	}
 }

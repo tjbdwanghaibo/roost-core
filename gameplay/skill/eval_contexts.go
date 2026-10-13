@@ -166,19 +166,19 @@ var (
 
 // 施法流程以外、仍然是“施法时刻”的格子共用的说明。
 const (
-	evalNoLocalsYet       = "采样点上还没有流程局部变量（RR-20261005-NC-220）"
-	evalNoCastInSpawn     = "移交后的衍生物没有施法的输入、memory 与局部变量（RR-20261005-NC-224）"
+	evalNoLocalsYet       = "采样点上还没有流程局部变量"
+	evalNoCastInSpawn     = "移交后的衍生物没有施法的输入、memory 与局部变量"
 	evalCallbackOnly      = "只在衍生物的回调与 spawn_start 采样里有"
-	evalNotInMemoryInit   = "memory 默认值按槽位顺序求值，读另一个 memory 会读到未初始化的槽位（RR-20261005-NC-280）"
-	evalNotInStateDefault = "状态默认值在读 / 写处求值，那里可能是衍生物回调或衍生物字段，没有施法的输入与 memory（RR-20261005-NC-281）"
+	evalNotInMemoryInit   = "memory 默认值按槽位顺序求值，读另一个 memory 会读到未初始化的槽位"
+	evalNotInStateDefault = "状态默认值在读 / 写处求值，那里可能是衍生物回调或衍生物字段，没有施法的输入与 memory"
 	// 以下是“值随衍生物移交或求值位置漂移”而在编译期拒绝的格子的说明。
-	evalCastStateInStep = "衍生物字段每一步重新求值，移交后的衍生物没有施法状态（此前移交后是零值重算，O33 编译期拒绝）；" +
+	evalCastStateInStep = "衍生物字段每一步重新求值，移交后的衍生物没有施法状态（若放行，移交后是零值重算，因此编译期拒绝）；" +
 		"改用 numeric track 的初值（衍生物启动时用施法求一次），随时间变化用回调里 modify_spawn 的 over_ticks"
-	evalCastStateInState = "状态默认值也在衍生物回调 / 衍生物字段里求值，那里没有施法状态（此前是零值重算，O33 编译期拒绝）；" +
+	evalCastStateInState = "状态默认值也在衍生物回调 / 衍生物字段里求值，那里没有施法状态（若放行，是零值重算，因此编译期拒绝）；" +
 		evalWriteStateInCast
-	evalCastSnapshotInStep = "衍生物字段每一步重新求值，移交后的衍生物没有施法的快照（此前移交后退化为 current，O33 编译期拒绝）；" +
+	evalCastSnapshotInStep = "衍生物字段每一步重新求值，移交后的衍生物没有施法的快照（若放行，移交后退化为 current，因此编译期拒绝）；" +
 		"改用 numeric track 的初值（衍生物启动时用施法求一次）；要衍生物启动时的值，在回调里用 spawn_start；否则用 current"
-	evalCastSnapshotInState = "状态默认值也在衍生物回调 / 衍生物字段里求值，那里没有施法的快照（此前退化为 current，O33 编译期拒绝）；" +
+	evalCastSnapshotInState = "状态默认值也在衍生物回调 / 衍生物字段里求值，那里没有施法的快照（若放行，退化为 current，因此编译期拒绝）；" +
 		"改用 current，或在施法流程里用 modify_state 把同一个表达式的值写入（默认值用字面量）"
 	// evalWriteStateInCast：状态默认值的表达式类型就是状态的类型，所以同一个表达式总能在施法流程里
 	// 求值后用 modify_state 写入。
@@ -200,8 +200,8 @@ var evalReferenceTable = [evalRowCount]evalReferenceRow{
 	evalRowMemory: {name: "$memory.*", prefix: true, entity: true, cells: [evalContextCount]evalCell{
 		evalCastFlow:          evalAvail("施法 memory 的当前值"),
 		evalMemoryDefault:     evalNone(evalNotInMemoryInit),
-		evalCastStartCapture:  evalAvail("memory 的默认值（采样早于任何流程）；可缺省的 memory 不行（RR-20261005-NC-282）"),
-		evalPhaseStartCapture: evalAvail("进入 phase 时 memory 的值；可缺省的 memory 不行（RR-20261005-NC-282）"),
+		evalCastStartCapture:  evalAvail("memory 的默认值（采样早于任何流程）；可缺省的 memory 不行（采样时没有 exists 守卫）"),
+		evalPhaseStartCapture: evalAvail("进入 phase 时 memory 的值；可缺省的 memory 不行（采样时没有 exists 守卫）"),
 		evalSpawnStartCapture: evalNone(evalNoCastInSpawn),
 		evalSpawnStep:         evalNone(evalNoCastInSpawn),
 		evalSpawnCallback:     evalNone(evalNoCastInSpawn),
@@ -224,7 +224,7 @@ var evalReferenceTable = [evalRowCount]evalReferenceRow{
 		evalPhaseStartCapture: evalAvail("施法者"),
 		evalSpawnStartCapture: evalNone("衍生物上下文里用 $owner"),
 		evalSpawnStep:         evalAvail("施法者（移交后是衍生物的 owner，即同一个施法者）"),
-		evalSpawnCallback:     evalNone("衍生物回调里统一用 $owner。Runtime 其实求得出（= 衍生物的 owner，即同一个施法者），编译期按表拒绝（O36），改用 $owner"),
+		evalSpawnCallback:     evalNone("衍生物回调里统一用 $owner。Runtime 其实求得出（= 衍生物的 owner，即同一个施法者），编译期按表拒绝，改用 $owner"),
 		evalStateDefault:      evalAvail("读写这条状态的施法者；在衍生物里是衍生物的 owner"),
 	}},
 	evalRowCasterPosition: {name: "$caster.position", typ: evalPositionType, cells: [evalContextCount]evalCell{
@@ -234,20 +234,20 @@ var evalReferenceTable = [evalRowCount]evalReferenceRow{
 		evalPhaseStartCapture: evalAvail("（采样点只求实体）"),
 		evalSpawnStartCapture: evalNone("衍生物上下文里用 $owner.position"),
 		evalSpawnStep:         evalAvail("施法者每一步时的位置"),
-		evalSpawnCallback:     evalNone("衍生物回调里统一用 $owner（O36），改用 $owner.position"),
+		evalSpawnCallback:     evalNone("衍生物回调里统一用 $owner，改用 $owner.position"),
 		evalStateDefault:      evalAvail("读写这条状态的施法者（衍生物里是 owner）的位置"),
 	}},
 	evalRowPrimaryTarget: {name: "$primary_target", typ: valueType{Base: valueKindEntity, Optional: true}, entity: true, cells: [evalContextCount]evalCell{
 		evalCastFlow:          evalAvail("施法的主目标（可缺省；target_changed 会更新）"),
 		evalMemoryDefault:     evalAvail("Activate 时的主目标"),
-		evalCastStartCapture:  evalNone("可缺省：采样时没有 exists 守卫，缺省即失败（RR-20261005-NC-282）"),
-		evalPhaseStartCapture: evalNone("可缺省：采样时没有 exists 守卫，缺省即失败（RR-20261005-NC-282）"),
+		evalCastStartCapture:  evalNone("可缺省：采样时没有 exists 守卫，缺省即失败"),
+		evalPhaseStartCapture: evalNone("可缺省：采样时没有 exists 守卫，缺省即失败"),
 		evalSpawnStartCapture: evalNone(evalCallbackOnly),
-		evalSpawnStep: evalNone("衍生物字段每一步重新求值，移交后的衍生物没有施法的主目标（此前移交后漂移成 lifecycle 实体，O33 编译期拒绝）；" +
+		evalSpawnStep: evalNone("衍生物字段每一步重新求值，移交后的衍生物没有施法的主目标（若放行，移交后漂移成 lifecycle 实体，因此编译期拒绝）；" +
 			"改用施法流程里求一次的召唤效果 position（如 $input.target.position）把 lifecycle 实体放到目标处，" +
 			"或在回调里用 $lifecycle_entity / $event.target（如 on.tick 里 select from $lifecycle_entity 代替 area 选择）"),
 		evalSpawnCallback: evalNone("衍生物回调里没有施法的主目标，改用 $lifecycle_entity / $event.target"),
-		evalStateDefault: evalNone("状态默认值也在衍生物回调 / 衍生物字段里求值，那里没有施法的主目标（此前漂移成 lifecycle 实体，O33 编译期拒绝）；" +
+		evalStateDefault: evalNone("状态默认值也在衍生物回调 / 衍生物字段里求值，那里没有施法的主目标（若放行，漂移成 lifecycle 实体，因此编译期拒绝）；" +
 			"改用 $caster 作默认值，在施法流程里用 modify_state 写入主目标"),
 	}},
 	evalRowAbilitySelf: {name: "$ability.self", typ: valueType{Base: valueKindAbility}, cells: [evalContextCount]evalCell{
@@ -256,18 +256,18 @@ var evalReferenceTable = [evalRowCount]evalReferenceRow{
 		evalCastStartCapture:  evalAvail("（采样点只求实体）"),
 		evalPhaseStartCapture: evalAvail("（采样点只求实体）"),
 		evalSpawnStartCapture: evalNone(evalCallbackOnly),
-		evalSpawnStep: evalNone("衍生物字段每一步重新求值，移交后的衍生物没有技能句柄（此前移交后 handle 为 0，O33 编译期拒绝）；" +
+		evalSpawnStep: evalNone("衍生物字段每一步重新求值，移交后的衍生物没有技能句柄（若放行，移交后 handle 为 0，因此编译期拒绝）；" +
 			"改用在施法流程里读写技能状态"),
-		evalSpawnCallback: evalNone("衍生物回调里没有技能句柄（技能选择的 self_ability / not_self_ability 过滤在这里比较的是 handle 0，O35）；" +
+		evalSpawnCallback: evalNone("衍生物回调里没有技能句柄（技能选择的 self_ability / not_self_ability 过滤在这里比较的是 handle 0）；" +
 			"改用在施法流程里读写技能状态"),
-		evalStateDefault: evalNone("状态默认值也在衍生物回调 / 衍生物字段里求值，那里没有技能句柄（此前 handle 为 0，O33 编译期拒绝）；" +
+		evalStateDefault: evalNone("状态默认值也在衍生物回调 / 衍生物字段里求值，那里没有技能句柄（若放行，handle 为 0，因此编译期拒绝）；" +
 			evalWriteStateInCast),
 	}},
 	evalRowCastMode: castStateRow("$cast.mode", valueType{Base: valueKindString}, nil, evalAvail("施法模式（Program 常量，任何时刻相同）"), evalAvail("施法模式（Program 常量）")),
 	evalRowCastElapsedTicks: castStateRow("$cast.elapsed_ticks", quantityType(quantityTicks), nil,
-		evalNone("衍生物字段每一步重新求值，移交后的衍生物没有施法计时（此前移交后从 tick 0 算、即当前 tick，O33 编译期拒绝）；"+
+		evalNone("衍生物字段每一步重新求值，移交后的衍生物没有施法计时（若放行，移交后从 tick 0 算、即当前 tick，因此编译期拒绝）；"+
 			"改用衍生物自己的计时：numeric track 加回调里 modify_spawn 的 over_ticks，或回调里的 $event.tick / $event.membership_ticks"),
-		evalNone("状态默认值也在衍生物回调 / 衍生物字段里求值，那里没有施法计时（此前在衍生物里是当前 tick，O33 编译期拒绝）；"+evalWriteStateInCast)),
+		evalNone("状态默认值也在衍生物回调 / 衍生物字段里求值，那里没有施法计时（若放行，在衍生物里是当前 tick，因此编译期拒绝）；"+evalWriteStateInCast)),
 	evalRowCastChargeBP:         castStateRow("$cast.charge_bp", quantityType(quantityBasisPoints), []castMode{castModeCharge}, evalNone(evalCastStateInStep), evalNone(evalCastStateInState)),
 	evalRowCastReleaseReason:    castStateRow("$cast.release_reason", valueType{Base: valueKindString}, []castMode{castModeCharge}, evalNone(evalCastStateInStep), evalNone(evalCastStateInState)),
 	evalRowCastPulseIndex:       castStateRow("$cast.pulse_index", quantityType(quantityCount), []castMode{castModeHold, castModeToggle}, evalNone(evalCastStateInStep), evalNone(evalCastStateInState)),
@@ -277,9 +277,9 @@ var evalReferenceTable = [evalRowCount]evalReferenceRow{
 	evalRowOwnerPosition:        spawnRow("$owner.position", evalPositionType, false, false, evalAvail("（采样点只求实体）"), evalAvail("owner 求值时刻的位置")),
 	evalRowLifecycleEntity:      spawnRow("$lifecycle_entity", evalEntityType, true, false, evalAvail("召唤出的 lifecycle 实体"), evalAvail("召唤出的 lifecycle 实体")),
 	evalRowSpawn:                spawnRow("$spawn", valueType{Base: valueKindSpawn}, false, false, evalAvail("（采样点只求实体）"), evalAvail("当前衍生物（modify_spawn 只认它）")),
-	evalRowEventSource:          spawnRow("$event.source", evalEntityType, true, false, evalAvail("衍生物启动事件的 source（O28：不是之后每次回调的事件）"), evalAvail("触发本次回调的事件的 source")),
-	evalRowEventOwner:           spawnRow("$event.owner", evalEntityType, true, false, evalAvail("衍生物启动事件的 owner（O28）"), evalAvail("触发本次回调的事件的 owner")),
-	evalRowEventTarget:          spawnRow("$event.target", evalEntityType, true, false, evalAvail("衍生物启动事件的 target，即 lifecycle 实体（O28）"), evalAvail("本次回调的目标（area 成员、命中目标；没有信号目标时是 lifecycle 实体）")),
+	evalRowEventSource:          spawnRow("$event.source", evalEntityType, true, false, evalAvail("衍生物启动事件的 source（不是之后每次回调的事件）"), evalAvail("触发本次回调的事件的 source")),
+	evalRowEventOwner:           spawnRow("$event.owner", evalEntityType, true, false, evalAvail("衍生物启动事件的 owner（不是之后每次回调的事件）"), evalAvail("触发本次回调的事件的 owner")),
+	evalRowEventTarget:          spawnRow("$event.target", evalEntityType, true, false, evalAvail("衍生物启动事件的 target，即 lifecycle 实体"), evalAvail("本次回调的目标（area 成员、命中目标；没有信号目标时是 lifecycle 实体）")),
 	evalRowEventTick:            spawnRow("$event.tick", quantityType(quantityTicks), false, false, evalAvail("（采样点只求实体）"), evalAvail("本次回调的 tick")),
 	evalRowEventMembershipTicks: spawnRow("$event.membership_ticks", quantityType(quantityTicks), false, true, evalAvail("（采样点只求实体）"), evalAvail("area 成员已在区域内的 tick 数（只在 area 衍生物）")),
 	evalRowEventEnterCount:      spawnRow("$event.enter_count", quantityType(quantityCount), false, true, evalAvail("（采样点只求实体）"), evalAvail("area 成员进入次数（只在 area 衍生物）")),
@@ -309,7 +309,7 @@ func spawnRow(name string, typ valueType, entity, areaOnly bool, capture, callba
 		evalCastStartCapture:  outside,
 		evalPhaseStartCapture: outside,
 		evalSpawnStartCapture: capture,
-		evalSpawnStep:         evalNone("衍生物字段在启动那一步用施法求值，那里没有衍生物与事件（RR-20261005-NC-224 同一机制）"),
+		evalSpawnStep:         evalNone("衍生物字段在启动那一步用施法求值，那里没有衍生物与事件（与移交后的衍生物没有施法输入是同一原因）"),
 		evalSpawnCallback:     callback,
 		evalStateDefault:      evalNone(evalNotInStateDefault),
 	}}
@@ -399,16 +399,16 @@ var evalSnapshotTable = map[snapshotPoint][evalContextCount]evalCell{
 	},
 	snapshotPhaseStart: {
 		evalCastFlow: evalAvail("最近一次进入的 phase 开始时的值。costs / windup 在进入第一个 phase 之前求值时（非 charge 模式的 Activate；" +
-			"refund_before_commit 时 costs 在 commit 那一刻），还没有 phase 开始的值，读到的是求值那一刻的值（O34）；charge 模式在 release 时求值，" +
+			"refund_before_commit 时 costs 在 commit 那一刻），还没有 phase 开始的值，读到的是求值那一刻的值；charge 模式在 release 时求值，" +
 			"那时已在 phase 里，读到的是当前 phase 开始时的值"),
-		evalMemoryDefault: evalNone("memory 初始化早于第一个 phase（也早于 costs 与 windup），这里没有 phase 开始时的值，此前读到的只是 Activate 时的值、" +
-			"与 cast_start 相同（O33 编译期拒绝）；改用 cast_start（同一个值），要 phase 开始时的值就在 phase 流程里读 phase_start"),
+		evalMemoryDefault: evalNone("memory 初始化早于第一个 phase（也早于 costs 与 windup），这里没有 phase 开始时的值，若放行读到的只是 Activate 时的值、" +
+			"与 cast_start 相同，因此编译期拒绝；改用 cast_start（同一个值），要 phase 开始时的值就在 phase 流程里读 phase_start"),
 		evalSpawnStep:     evalNone(evalCastSnapshotInStep),
 		evalSpawnCallback: evalNone("衍生物回调读不到施法的快照，改用 spawn_start（本衍生物启动时的值）或 current"),
 		evalStateDefault:  evalNone(evalCastSnapshotInState),
 	},
 	snapshotSpawnStart: {
-		evalCastFlow:      evalNone("spawn_start 只在 owned 衍生物启动时采样，施法流程里读到的不是衍生物启动时的值（RR-20261005-NC-220）"),
+		evalCastFlow:      evalNone("spawn_start 只在 owned 衍生物启动时采样，施法流程里读到的不是衍生物启动时的值"),
 		evalMemoryDefault: evalNone("spawn_start 只在衍生物回调里有"),
 		evalSpawnStep:     evalNone("spawn_start 只在衍生物回调里有"),
 		evalSpawnCallback: evalAvail("本衍生物启动时的值"),

@@ -41,6 +41,7 @@
 - 删除从未生效的实体事件链（维护者 2026-10-13 批准"按推荐处理"）：`EntityBase` 的事件总线字段与 `EventBus()` / `SubEvent` / `PubEvent`、整个 `framework/event` 包（只为它存在）、eventgen 生成器（`codegen/cmd/eventgen`、`codegen/internal/eventgen`、`roost generate` 的 event 步骤、`roost add event`、`make new-event`、`roost help eventgen`）以及 roost.yaml 的 `event` feature（不再是默认 feature；写了按未知 feature 拒绝）。该功能从未生效：总线从未被设置（`SubEvent` 恒为空操作），全仓没有 `PubEvent` 调用。**升级要求**：从 roost.yaml 的 `features` 删掉 `event`；删掉业务工程里遗留的 `framework/event/`（含 `def/` 与 `event_def_gen.go` / `event_type_gen.go` / `event_type_impl_gen.go`）、各接收者的 `*_event_gen.go` 与 `DealEventXxx` / `SubEvent` 调用。
 - 修复日志帧号恒为 0：删除从未推进的 Nest 包级帧计数 `nest.CurTick`；不在 Nest 请求上下文里的日志行改为取运行中 Nest Ticker 的帧号（App 经新能力 `app.ModLogFrame` 提供 `*app.LogFrame`，Nest Mod 在 Provide 时接上 `NestMgr.CurrentTick`）。请求内日志仍由 fctx 带帧号；进程里没有 Nest 时为 0。
 - 生成器错误文本 `unknown kit mod %q` / `kit mod dependency cycle at %q` 改为 `unknown wiring mod %q` / `wiring mod dependency cycle at %q`（Mod 现在在 `wiring/` 下）；按旧文本匹配错误的脚本需同步。
+- skill 求值上下文表的说明（编译诊断原样带出）去掉过程编号（RR-20261005-NC-220/224/280/281/282、O28、O33～O36），改为描述原因与替代写法；诊断码与诊断位置不变。按旧文本匹配诊断的工具需同步。
 
 - Nest 执行池统一为 short/long/io：配置、Stats、指标标签、fctx 身份和生成 Sender 同步迁移；唯一配置 option 为 `NestOptionWithWorkerPools(short, long, io)`，强制准备使用 `SendOptionIO`，不保留旧别名。补齐 statslog 与健康队列汇总遗漏的 long 池，调度和 ID tail 语义不变；迁移表见 docs/framework/NEST-AWAIT.md。
 
