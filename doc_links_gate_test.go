@@ -17,10 +17,9 @@ import (
 //
 // 豁免（显式列出，新增须写理由）：
 //   - 目标在 artifacts/ 下：被忽略的本机证据目录（压测结果、pprof），文档按约定链接它，仓里没有；
-//   - docLinkExemptSources 列出的源文件前缀：按原貌保留的历史文档。
-var docLinkExemptSources = map[string]string{
-	"docs/history/": "09-22 以前的历史账本与归档，按原貌保留，不随目录搬迁改写",
-}
+//   - docLinkExemptSources 列出的源文件前缀：按原貌保留、链接无法再修的历史文档。当前没有这类文件
+//     （docs/release/history/ 下的只读变更记录链接都能解析），新增条目须写明理由。
+var docLinkExemptSources = map[string]string{}
 
 // docLinkPattern 匹配行内链接与图片 `[text](target "title")` 的 target；target 可用 <> 包住。
 var docLinkPattern = regexp.MustCompile(`\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)`)

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// 合并冲突标记门禁（2026-10-06，revleft 小防护 A）。
+// 合并冲突标记门禁。
 //
 // 0aa2e1b9（80902948 rebase 后的提交）把一段未解决的冲突（`<<<<<<< HEAD` / `=======` /
 // `>>>>>>> 80902948 ...`）带进了 main 的接力清单，直到 2c1c7be7 才被顺手删掉；build、vet、
@@ -22,6 +22,8 @@ import (
 const conflictMarkerPattern = `^(<<<<<<<|>>>>>>>)( |$)|^=======$`
 
 // conflictIncidentCommit 是真实出过事的提交；历史里有它时，扫描它必须报出那份接力清单。
+// conflictIncidentFile 是该文件在那个提交里的路径：docs/review 目录后来已移入 Git 历史（现行文档不再有它，
+// 见 docs/maintenance/DOCUMENTS.md 的固定提交 9d955fb0），自检只按提交读取，不依赖工作树里存在它。
 const (
 	conflictIncidentCommit = "0aa2e1b9"
 	conflictIncidentFile   = "docs/review/REMAINING-REVIEW-HANDOFF-2026-10-05.md"
