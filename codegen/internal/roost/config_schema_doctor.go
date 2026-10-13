@@ -19,14 +19,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 维护者决定 A4 ①：doctor 按 Mod 的配置声明检查工程里的服务配置（开发配置、生产示例、k8s Secret 示例里的
+// 维护者决定：doctor 按 Mod 的配置声明检查工程里的服务配置（开发配置、生产示例、k8s Secret 示例里的
 // config.yaml）。声明有两个来源：
 //
-//   - 框架的：kit Mod 自己的（kitconfig_gen.go 快照）与生成进工程的 player TCP 接入层的（playerTCPDeclaration）；
+//   - 框架的：wiring Mod 自己的（kitconfig_gen.go 快照）与生成进工程的 player TCP 接入层的（playerTCPDeclaration）；
 //     每个服务按生成 bootstrap 给它注册的 Mod 合并（serviceConfigSchema）。不用编译工程。
 //   - 业务的：业务服务（app.Service 实现 ConfigSchema）与业务 Mod 的声明只有编译后的进程知道。doctor 在工程里编译
 //     一次进程、对每个服务运行 `<bin> <service> --print-config-schema` 读回它的全部声明（processConfigSchemas），
-//     其中框架快照没有的键就是业务声明（A4 ① 收尾，2026-10-07）。工程编译不过时（compile:go-list 已 FAIL）只做
+//     其中框架快照没有的键就是业务声明（维护者决定，2026-10-07）。工程编译不过时（compile:go-list 已 FAIL）只做
 //     框架那一半。
 //
 //   - 失败：值的类型 / 范围 / 枚举不对、必填的键没写、生产示例里的密钥为空或 dev- 开头（框架与业务声明都查）；
@@ -295,7 +295,7 @@ func checkServiceConfigText(raw []byte, secret, production bool, schema, busines
 
 // checkConfigReads 是 doctor 的 config-reads 检查：工程里的代码读配置只经声明（与框架的守卫同一份实现，
 // internal/configschema/guard.go）。直接读 viper 的键不在任何声明里，App 启动检查与上面的 config-schema 都看不到它；
-// 声明了却没有任何代码读的字段，运维改了它什么也不发生。两者都是 FAIL（A4 ① 收尾）。
+// 声明了却没有任何代码读的字段，运维改了它什么也不发生。两者都是 FAIL。
 func checkConfigReads(root string) CheckItem {
 	item := CheckItem{Name: "config-reads", Status: StatusOK}
 	packages, err := configschema.GoPackages(root)

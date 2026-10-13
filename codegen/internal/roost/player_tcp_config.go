@@ -30,7 +30,7 @@ func renderPlayerAccessDeclaration() string {
 }
 
 // playerTCPDeclaration is the declaration of what the generated player TCP
-// access Mod reads (maintainer decision A4 ①). It is real Go here so the tags
+// access Mod reads (maintainer decision). It is real Go here so the tags
 // are checked when the generator starts (configschema.MustOf), and it is
 // rendered into the generated server_gen.go as tcpConfig — so the generated
 // Mod, the block `add transport tcp` writes, the reference copy and doctor all
@@ -38,8 +38,8 @@ func renderPlayerAccessDeclaration() string {
 // also checks a Config built in code (NewServer); the defaults equal the
 // generated defaultConfig() (the generated TestDeclaredDefaultsAreDefaultConfig).
 //
-// nest.request_timeout is kit/nest's key, read here as the fallback dispatch
-// budget (RR-20260926-36); its declaration must equal kit/nest's
+// nest.request_timeout is wiring/nest's key, read here as the fallback dispatch
+// budget; its declaration must equal wiring/nest's
 // (TestPlayerTCPDeclarationAgreesWithKit).
 type playerTCPDeclaration struct {
 	TCP struct {
@@ -165,7 +165,7 @@ func ensurePlayerTCPConfig(root, service, explicitPath string, enabled bool) (st
 // endings): missing player_access.tcp keys added, enabled set, the rest byte
 // for byte. name is what errors call the text. `add transport tcp` applies it
 // to the k8s Secret example's embedded config.yaml as well as to the
-// production example (RR-20260928-07).
+// production example.
 func mergePlayerTCPConfig(text, name string, enabled bool) (string, error) {
 	document, err := parseYAMLDocument([]byte(text))
 	if err != nil {

@@ -65,7 +65,7 @@ func parseDefDir(dir string) (*Definitions, error) {
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", path, err)
 		}
-		// RR-20261006-56: refuse a misspelt option instead of using the default.
+		// refuse a misspelt option instead of using the default.
 		if err := marker.CheckFile(fset, f, marker.Proto, marker.Protocol, marker.Msg, marker.View); err != nil {
 			return err
 		}
@@ -89,7 +89,7 @@ func parseDefDir(dir string) (*Definitions, error) {
 
 	for _, pf := range files {
 		f := pf.file
-		if err := extractProtoMarkers(f, defs, msgIDs); err != nil {
+		if err := extractProtoMarkers(f, defs); err != nil {
 			return nil, err
 		}
 		if err := extractInterfaceProtocolMarkers(pf, defs, msgIDs); err != nil {
@@ -156,7 +156,8 @@ func sourceGroupForDefFile(sourceFile string) string {
 	return name
 }
 
-func extractProtoMarkers(f *ast.File, defs *Definitions, msgIDs map[uint32]string) error {
+// extractProtoMarkers 读取文件级 proto 标记里的 package / go_package。
+func extractProtoMarkers(f *ast.File, defs *Definitions) error {
 	for _, cg := range f.Comments {
 		for _, comment := range cg.List {
 			if m := protoMarkerRe.FindStringSubmatch(comment.Text); m != nil {

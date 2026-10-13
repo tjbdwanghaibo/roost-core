@@ -18,11 +18,10 @@ import (
 
 // FrameworkReleaseManifest declares the release being promoted.
 //
-// Schema 3 has ONE version because the framework is one module: kit and the
-// generator ship inside roost-core (kit/, codegen/). Schema 2 listed codegen
-// separately from framework.core / framework.kit, and keeping three numbers in
-// step was itself a source of failure — the codegen field drifted from the tag
-// and took ten releases' worth of this gate with it (U-0270).
+// Schema 3 has ONE version because the framework is one module: wiring and the
+// generator ship inside roost-core (wiring/, codegen/). Separate numbers for
+// core, wiring and codegen would have to be kept in step, which is itself a
+// source of failure — a drifting codegen field silently disables this gate.
 type FrameworkReleaseManifest struct {
 	Schema     int      `yaml:"schema"`
 	Release    string   `yaml:"release"`

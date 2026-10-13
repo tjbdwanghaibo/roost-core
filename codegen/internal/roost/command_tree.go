@@ -16,12 +16,11 @@ const commandTreeWaitDelay = 5 * time.Second
 // it starts as one tree: when ctx ends, the whole tree is killed and the call
 // returns within commandTreeWaitDelay.
 //
-// RR-20261004-13: roost runs the go tool here (doctor's go mod verify / go list
+// roost runs the go tool here (doctor's go mod verify / go list
 // / go test, project deps' and generate's go get / go mod tidy), and go starts
 // compile / link / git processes of its own. exec.CommandContext alone kills
 // only go: the orphans kept dir — often a .roost-deps-* / .roost-generate-*
-// staging tree — as their working directory (undeletable on Windows, the
-// RR-20261004-12 family), and with buffered output Wait waited for them to
+// staging tree — as their working directory (undeletable on Windows), and with buffered output Wait waited for them to
 // close the inherited pipe, so the timeout did not bound the call at all.
 //
 // On Unix the tree is a new process group, which also takes it out of the

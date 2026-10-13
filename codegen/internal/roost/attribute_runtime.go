@@ -11,8 +11,7 @@ import "strings"
 // accessors rather than methods on Snapshot / Container — the two decisions
 // are the same decision: Go forbids methods on a type from another package,
 // so as long as the generated code hangs no method on them, these can be the
-// framework's own types and a profile is portable between projects
-// (RR-20260917-06).
+// framework's own types and a profile is portable between projects.
 const attributeRuntimeTemplate = `` + generatedHeader + `
 package PACKAGE
 

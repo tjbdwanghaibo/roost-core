@@ -100,7 +100,7 @@ func scanFile(root, modulePath, path string) ([]Registration, error) {
 		// registrations, so report it.
 		return nil, fmt.Errorf("registry: parse %s: %w", path, err)
 	}
-	// RR-20261006-56: an unknown option used to be reported only after
+	// an unknown option used to be reported only after
 	// phase= was found, so `phse=entity` read as "missing phase=".
 	if err := marker.CheckFile(fset, file, marker.Register); err != nil {
 		return nil, fmt.Errorf("registry: %w", err)

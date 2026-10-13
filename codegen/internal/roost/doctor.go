@@ -66,7 +66,7 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 			}
 		}
 	}
-	// 业务声明只有编译后的进程知道（A4 ① 收尾）：工程能编译时，config-schema 检查编译一次进程、读回每个服务的
+	// 业务声明只有编译后的进程知道：工程能编译时，config-schema 检查编译一次进程、读回每个服务的
 	// 全部声明；编译不过（compile:go-list 已 FAIL）时只按框架声明检查。
 	var processSchemas serviceSchemaSource
 	if goAvailable {
@@ -159,7 +159,7 @@ func runDoctorCommand(ctx context.Context, binary, root, name string, timeout ti
 // context.DeadlineExceeded is reported as having timed out after timeout. It
 // lets tests decide when the deadline passes instead of racing a timer.
 func runDoctorCommandUntil(ctx context.Context, binary, root, name string, timeout time.Duration, success, fix string, args ...string) CheckItem {
-	// RR-20261004-13: a tree, so the timeout also kills go's compile / link
+	// a tree, so the timeout also kills go's compile / link
 	// children and their copy of the output pipe cannot hold the call open.
 	var output bytes.Buffer
 	err := runCommandTree(ctx, root, append(os.Environ(), "GOWORK=off"), &output, &output, binary, args...)
@@ -872,10 +872,10 @@ func DiffProject(root string, stdout io.Writer) error {
 // diffManifest previews what SyncProject would write for manifest m: the
 // codegen-owned templates, and the generated shutdown: blocks in the
 // application-owned configs that sync refreshes before it renders
-// (RR-20260926-66/80). Generator outputs are not previewed; roost generate
+// Generator outputs are not previewed; roost generate
 // --check reports those.
 //
-// RR-20261005-NC-71: the preview used to render from the configs on disk and
+// the preview used to render from the configs on disk and
 // skip every existing application-owned file, so a Mod change (or an upgrade
 // across a stop-budget formula change) left out the three configs sync was
 // about to rewrite. The refresh now runs on copies of just those configs in a

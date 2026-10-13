@@ -170,8 +170,7 @@ func generate(profile ProfileDef) ([]byte, error) {
 	// types come from the framework runtime (roost-core/attribute, re-exported
 	// by the project's attribute package as aliases), and Go does not allow
 	// methods on a type declared in another package. Methods here were why the
-	// feature could not be assembled from a shipped runtime at all
-	// (RR-20260917-06).
+	// feature could not be assembled from a shipped runtime at all.
 	fmt.Fprintf(&b, "// %sOf reads this profile out of a snapshot. The snapshot already\n", profile.Name)
 	fmt.Fprintf(&b, "// holds a copy, so the returned profile is the caller's to mutate.\n")
 	fmt.Fprintf(&b, "func %sOf(snapshot Snapshot) (*%s, bool) {\n", profile.Name, profile.Name)

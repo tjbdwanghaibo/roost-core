@@ -70,7 +70,7 @@ func parseMarker(fset *token.FileSet, group *ast.CommentGroup) (map[string]strin
 		if !isMarker {
 			continue
 		}
-		// RR-20261006-56: the error names the file and line of the marker.
+		// The error names the file and line of the marker.
 		options, err := marker.Web.Parse(body)
 		if err != nil {
 			position := fset.Position(comment.Pos())
@@ -136,7 +136,7 @@ func parseRoute(function *ast.FuncDecl, options map[string]string) (Route, error
 }
 
 // validateChiPath 用 chi 自己的解析器校验路由模式，与运行期 webroute.ValidatePath
-// （RR-20261004-NC-07）同一语法。生成器不得 import core 运行时包
+// 同一语法。生成器不得 import core 运行时包
 // （dependency_boundary_test.go 的 codegen 层规则），所以这里直接调用 chi，
 // 而不是引用 roost-core/webroute。chi 解析非法模式会 panic，只让它改一次性 router。
 func validateChiPath(path string) (err error) {

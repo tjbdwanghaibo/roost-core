@@ -71,8 +71,8 @@ func checkOutputNames(dir string, generated []File, orphans []string) error {
 
 // RunIn is Run with relative -dir and -out taken under base instead of the
 // process working directory, so a library caller (roost generate / sync)
-// never has to os.Chdir the whole process into the tree it generates
-// (RR-20261004-12). The flags themselves are kept as given: the generated
+// never has to os.Chdir the whole process into the tree it generates.
+// The flags themselves are kept as given: the generated
 // header records them as the command to rerun, and orphan detection matches
 // on that header, so "-dir ./internal/rpc/guild" must stay relative. An empty
 // base is Run.
@@ -101,8 +101,8 @@ func RunIn(base string, args []string, stdout io.Writer) error {
 	// fixing an interface wants that answer rather than a diff.
 	check := flags.Bool("check", false, "validate the interfaces and verify the generated files match, writing nothing")
 	// emit and out exist for an interface that lives in a different package
-	// from its assembly (M-11): the core domain package that owns the interface
-	// runs `-emit transport`, and the kit package that assembles it runs
+	// from its assembly: the domain package that owns the interface
+	// runs `-emit transport`, and the wiring package that assembles it runs
 	// `-emit assembly -dir <core package> -out .`, resolving the interface's
 	// types through its own aliases.
 	emit := flags.String("emit", string(HalfAll), "which half to emit: transport, assembly or all")
@@ -288,7 +288,7 @@ func sourceImport(dir string) (string, error) {
 }
 
 // orphanGeneratedFiles only owns the selected half made by this exact
-// invocation. A kit output directory may also contain assembly files from
+// invocation. A wiring output directory may also contain assembly files from
 // other core packages; their recorded regenerate commands must not match.
 func orphanGeneratedFiles(outDir, regenerate string, half Half, expected map[string]bool) ([]string, error) {
 	entries, err := os.ReadDir(outDir)
@@ -338,9 +338,9 @@ func regenerateCommand(dir, out string, half Half) string {
 // resolveDir turns -dir into a directory. A path on disk is taken as is. An
 // import path — nothing on disk by that name, and shaped like one (a dotted
 // first segment) — is resolved with `go list` in the module context of
-// moduleDir (the -out directory, else the working directory), so a kit package
-// can generate its assembly half from an interface that lives in the core
-// module without spelling the module cache path (M-11).
+// moduleDir (the -out directory, else the working directory), so a wiring package
+// can generate its assembly half from an interface that lives in another
+// package without spelling the module cache path.
 func resolveDir(dir, moduleDir string) (string, error) {
 	if info, err := os.Stat(dir); err == nil && info.IsDir() {
 		abs, err := filepath.Abs(dir)

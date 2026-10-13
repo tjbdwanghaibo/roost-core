@@ -226,8 +226,8 @@ func importAliases(registrations []Registration) map[string]string {
 // imports under one name, or shadows the local — either way the consumer does
 // not compile. "entity" is on the list because the template calls
 // entity.ValidateEntityRegistry at the end, and a business registration
-// package whose path ends in /entity used to be given exactly that alias
-// (RR-20260910-06). Keep this in step with the template's import block.
+// package whose path ends in /entity used to be given exactly that alias.
+// Keep this in step with the template's import block.
 var aggregateReservedNames = []string{"registry", "sync", "fmt", "err", "entity"}
 
 func uniqueAlias(path string, used map[string]bool) string {

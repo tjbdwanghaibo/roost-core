@@ -14,7 +14,7 @@ import (
 
 // Default project layout the protocol generator reads and writes, and the two
 // import-path suffixes its generated code refers to. `roost generate` and the
-// project templates refer to these instead of repeating the literals (U-0118).
+// project templates refer to these instead of repeating the literals.
 const (
 	DefaultDefDir           = "./protocol/def"
 	DefaultBindDir          = "./protocol/player_bind"

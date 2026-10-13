@@ -295,8 +295,8 @@ esac
 }
 
 // renderStatsLogLink points the relative stats_log.dir under the unit's
-// WorkingDirectory — the release, see renderShellConfigData — at LOG_ROOT
-// (RR-20260928-04). The release is read-only to the service (root-owned, and
+// WorkingDirectory — the release, see renderShellConfigData — at LOG_ROOT.
+// The release is read-only to the service (root-owned, and
 // ProtectSystem=strict), so the stats file was never written there; LOG_ROOT is
 // the instance's log directory, owned by the run user and already in
 // ReadWritePaths. Each release carries its own link, so a rollback keeps
@@ -313,13 +313,13 @@ ln -sfn "$LOG_ROOT" "$RELEASE_ROOT/` + defaultStatsLogDir + `"
 }
 
 // renderShellConfigData installs the configdata tables into the release for
-// the services that load them (RR-20260928-05).
+// the services that load them.
 //
 // config_data.dir is relative (configs/data) and resolves against the unit's
 // WorkingDirectory. That used to be $APP_ROOT, and nothing installed the data
 // there, so a configdata service installed by this script stopped at start with
 // "configdata: stat dir configs/data: no such file or directory". The layout now
-// matches the image (RR-20260927-34, WORKDIR /app holding the binary and
+// matches the image (WORKDIR /app holding the binary and
 // configs/data): the tables go into the release next to the binary they were
 // generated for, and WorkingDirectory is $APP_ROOT/current, which systemd
 // resolves when the process starts — a switch of current (install, rollback.sh)
@@ -450,19 +450,19 @@ exit 1
 }
 
 // renderShellUnitRecord 是 install.sh 与 rollback.sh 共用的两个函数：每个 release
-// 在它自己安装时写的 systemd unit 下运行（RR-20260928-10）。
+// 在它自己安装时写的 systemd unit 下运行。
 //
 // install.sh 安装 release 时把它的 unit 写到 $APP_ROOT/units/<version>.service，切换
-// current 时由 use_unit 一并装回并 daemon-reload。unit 的形态随生成器变化（RR-20260928-05
-// 把 WorkingDirectory 从 $APP_ROOT 改成了 $APP_ROOT/current），只切 current 不切 unit 会让
+// current 时由 use_unit 一并装回并 daemon-reload。unit 的形态随生成器变化（例如 WorkingDirectory
+// 从 $APP_ROOT 变为 $APP_ROOT/current），只切 current 不切 unit 会让
 // 回退的 release 在别的 unit 下起不来，所以两者必须一起切。
 //
 // 没有记录 unit 的 release 只可能是逐 release 记录 unit 之前的 install.sh 装的。不再为它
 // 补记录或沿用已安装的 unit（项目未上线，不兼容旧部署，维护者 2026-10-13）：require_unit
 // 在动任何东西之前拒绝，并给出唯一的处理办法——停服务、删掉旧的 current 与 releases 后全新安装。
 //
-// 两个脚本都按 stop（当前装载的 unit）→ 切 current → use_unit → start 的顺序切换
-// （RR-20260928-12）。之前是 use_unit 之后 systemctl restart：daemon-reload 后 restart 里的
+// 两个脚本都按 stop（当前装载的 unit）→ 切 current → use_unit → start 的顺序切换。
+// 之前是 use_unit 之后 systemctl restart：daemon-reload 后 restart 里的
 // stop 用的是刚装载的目标 unit 的 TimeoutStopSec，正在运行的进程按别的 release 的停机预算
 // 被停（rollback.sh 回 v1 时 v2 进程按 v1 较短的预算，超时即 SIGKILL）。stop 失败时 set -e
 // 在改动任何东西之前退出，不能吞掉：服务还在运行时 start 是空操作，旧进程会被当成新版本
@@ -512,8 +512,7 @@ func renderShellReadme(m Manifest) string {
 
 copytruncate 在复制与截断之间追加的记录会丢，至多一条（默认 stats_log.interval 1 分钟）；同一份数据每次采集都已发布为 metrics gauge 与 ops /statsz，统计文件只是旁路留档。
 `, m)
-	// audit8 D3：停机预算按 Service 的 Mod 生成（RR-20260926-66），与 install.sh 的
-	// STOP_TIMEOUT 同一来源；这里原来写死“45 秒”，是 RR-66 之前的固定值。
+	// 停机预算按 Service 的 Mod 生成，与 install.sh 的 STOP_TIMEOUT 同一来源，不写死固定秒数。
 	var budgets []string
 	for _, service := range sortedServiceNames(m) {
 		budgets = append(budgets, service+" "+seconds(serviceShutdownPlan(m, service).grace))
@@ -585,10 +584,10 @@ make compose-check 除了 docker compose config --quiet（只校验语法）还�
 const composeCheckEnv = "ROOST_COMPOSE_CHECK"
 
 // renderComposeCheckTest is the generated project's own check of what
-// `docker compose config` resolves the production compose to (RR-20260930-17).
+// `docker compose config` resolves the production compose to.
 // `config --quiet` only proves the YAML is valid; tmpfs written as an unquoted
 // flow sequence split into four mounts at the commas and passed it, then every
-// service failed at `compose up` (RR-20260927-33). The test reads compose's
+// service failed at `compose up`. The test reads compose's
 // resolved JSON and pins the fields the deployment relies on, so a generator
 // defect of that kind is red in every consumer's CI. Standard library only:
 // the project's go.mod stays as it is.
@@ -755,7 +754,7 @@ func checkComposeService(t *testing.T, name string, service composeService, decl
 }
 
 // configDataImageNote says where the image keeps the configdata tables and how
-// to override them (RR-20260927-34); empty for projects without configdata.
+// to override them; empty for projects without configdata.
 func configDataImageNote(m Manifest) string {
 	if !contains(allProjectMods(m), "configdata") {
 		return ""
@@ -972,7 +971,7 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 	fmt.Fprintf(&head, "        app.kubernetes.io/name: %s\n        app.kubernetes.io/component: %s\n", m.Project.Name, service)
 	head.WriteString("      annotations:\n        prometheus.io/scrape: \"true\"\n        prometheus.io/port: \"9100\"\n        prometheus.io/path: /metrics\n    spec:\n")
 	fmt.Fprintf(&head, "      serviceAccountName: %s\n", m.Project.Name)
-	// shutdown.total_timeout of this service + 5s (serviceShutdownPlan, RR-20260926-66).
+	// shutdown.total_timeout of this service + 5s (serviceShutdownPlan).
 	fmt.Fprintf(&head, "      automountServiceAccountToken: false\n      terminationGracePeriodSeconds: %d\n", int64(serviceShutdownPlan(m, service).grace/time.Second))
 	head.WriteString("      securityContext:\n        runAsNonRoot: true\n        runAsUser: 65532\n        runAsGroup: 65532\n        fsGroup: 65532\n        seccompProfile:\n          type: RuntimeDefault\n      containers:\n        - name: server\n")
 	fmt.Fprintf(&head, "          image: ghcr.io/CHANGE_ME/%s:v1.0.0\n          imagePullPolicy: IfNotPresent\n          args: [%q, \"--sid=$(ROOST_SID)\", \"--config=/etc/roost/config.yaml\"]\n", m.Project.Name, service)
@@ -992,7 +991,7 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 	if stateful {
 		head.WriteString("            - {name: wal, mountPath: /var/lib/roost/wal}\n")
 	}
-	// RR-20260928-04：readOnlyRootFilesystem 下相对的 stats_log.dir（/app/log）不可写，
+	// readOnlyRootFilesystem 下相对的 stats_log.dir（/app/log）不可写，
 	// 统计文件之前从不落盘。emptyDir 可写（fsGroup 65532），随 Pod 生命周期；sizeLimit
 	// 按默认 1 分钟一条（game-demo 实测每条 0.7–0.9 KiB，约 1.2 MiB/天）留足一年以上，
 	// 超出会被 kubelet 驱逐，调小 interval 或要长期保留时改成 PVC / 日志采集。
@@ -1082,8 +1081,8 @@ const kubernetesSecretConfigHeader = "\n  config.yaml: |\n"
 
 // editKubernetesSecretExampleConfig applies edit to the config.yaml a
 // service's k8s Secret example embeds: the caller passes the same edit it just
-// made to the production example, so the Secret gets the same text
-// (RR-20260928-07). Before, the Secret was rendered once at creation and
+// made to the production example, so the Secret gets the same text.
+// Before, the Secret was rendered once at creation and
 // nothing appended later reached it — a game-demo deployed from it had no
 // saga: block (saga built ROOST_SAGA with the 8 GiB code default, which a
 // JetStream could refuse, and there was no section to lower it in) and no
@@ -1094,7 +1093,7 @@ const kubernetesSecretConfigHeader = "\n  config.yaml: |\n"
 // Secret example that is missing (no k8s deploy target) is skipped. It returns
 // the path it changed, or "".
 //
-// RR-20260928-13：定位与改写按 LF 进行，CRLF 的文件（Windows core.autocrlf=true 检出）先
+// 定位与改写按 LF 进行，CRLF 的文件（Windows core.autocrlf=true 检出）先
 // 规范成 LF、改完按 CRLF 写回，与 ensurePlayerTCPConfig 的做法相同。之前以
 // "\n  config.yaml: |\n" 定位，CRLF 时找不到就原样返回，add mod 之后生产示例有新段而 Secret
 // 没有，什么也不报。认不出结构（没有恰好一个该块——被手工改写）或 edit 无法施加到内嵌 config
@@ -1198,8 +1197,8 @@ func renderKubernetesReadme(m Manifest) string {
 `, services.String(), m.Project.Name, m.Project.Name, m.Project.Name, bullet(configDataImageNote(m)), bullet(statsLogKubernetesNote(m)))
 }
 
-// statsLogKubernetesNote says where the stats file goes in the pod
-// (RR-20260928-04); empty when no service enables stats_log.
+// statsLogKubernetesNote says where the stats file goes in the pod;
+// empty when no service enables stats_log.
 func statsLogKubernetesNote(m Manifest) string {
 	for _, service := range sortedServiceNames(m) {
 		if serviceUsesStatsLog(m, service) {

@@ -95,7 +95,7 @@ func run(args []string, stdout io.Writer) error {
 		// plus a companion guard test, so pointing every entity of a package at
 		// one path silently overwrote all but the last, taking the package-level
 		// RegisterEntity down with whichever file lost. The tool exited 0 and
-		// the consumer failed to compile (RR-20260909-06). Refused here, before
+		// the consumer failed to compile. Refused here, before
 		// anything is written, so a failed run leaves no partial output.
 		if *output != "" && len(entities)+len(mirrors) > 1 {
 			names := make([]string, 0, len(entities)+len(mirrors))

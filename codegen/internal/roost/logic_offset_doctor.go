@@ -17,7 +17,7 @@ import (
 // processes of one deployment must read one offset: the game and the activity
 // coordinator compute the same window ids and deadlines from it, and the game's
 // matchmaker widens its window from ticket times the match service dated
-// (D-L3, maintainer round 8). Two deployments may differ: a dev or staging
+// (maintainer decision). Two deployments may differ: a dev or staging
 // environment moves business time forward while production keeps 0, which the
 // App enforces at start under env: production. A production config outside the
 // repository cannot be seen; the examples are what the repository says.

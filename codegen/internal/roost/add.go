@@ -18,7 +18,7 @@ type AddOptions struct {
 	Mods, Steps                                            []string
 	ID                                                     int64
 	// Warnings receives what the command could not do but did not fail for,
-	// such as a k8s Secret example it cannot recognise (RR-20260928-13).
+	// such as a k8s Secret example it cannot recognise.
 	// nil means os.Stderr, so nothing is skipped silently.
 	Warnings io.Writer
 }
@@ -162,8 +162,8 @@ func Add(root string, options AddOptions) ([]string, error) {
 		}
 		// The k8s Secret example embeds the production example; it gets the
 		// same block, or a deployment made from it runs without player TCP
-		// settings (RR-20260928-07). One it cannot merge is a WARN, as for
-		// add mod, not a failure (RR-20260928-13).
+		// settings. One it cannot merge is a WARN, as for
+		// add mod, not a failure.
 		secretConfig, err := editKubernetesSecretExampleConfig(root, access.Service, options.Warnings, func(config string) (string, error) {
 			return mergePlayerTCPConfig(config, "stringData.config.yaml", false)
 		})

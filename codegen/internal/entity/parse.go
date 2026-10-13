@@ -412,7 +412,7 @@ func collectEntityImports(ent EntityDef, importMap map[string]ImportDef) []Impor
 	// The category constant may live in a business package that nothing else
 	// in the generated file references. Go's import scope is per file, so the
 	// source file importing it does not help; omitting it here generated a
-	// file that used the package without importing it (RR-20260910-05).
+	// file that used the package without importing it.
 	add(ent.Category)
 	add(ent.SyncNamespace)
 	add(ent.SubjectPacker)
@@ -732,7 +732,7 @@ func exprToString(expr ast.Expr) string {
 // produce Namespace: "SyncNamespacePlayer" and every update of the entity
 // would carry a routing key nobody chose. Nothing failed — not the generator,
 // not the compiler — which is why this is a refusal and not a documentation
-// note (RR-20260918-07, then called syncTopic).
+// note (the marker was then called syncTopic).
 //
 // What still passes: anything that cannot be mistaken for a constant (a
 // lower-case or quoted literal) and anything that unambiguously is one (a

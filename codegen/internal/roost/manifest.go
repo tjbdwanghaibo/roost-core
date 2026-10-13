@@ -41,7 +41,7 @@ type Manifest struct {
 	// configuredShutdown is each service's longest shutdown.total_timeout
 	// found in the project's configs, filled by withConfiguredShutdown when
 	// rendering into an existing project. The deployment grace periods never
-	// go below it (RR-20260926-66). Not part of roost.yaml.
+	// go below it. Not part of roost.yaml.
 	configuredShutdown map[string]time.Duration
 }
 
@@ -57,7 +57,7 @@ type VersionSpec struct {
 // retiredVersionKeys 是 versions 下已退役、不再解码的键及其拒绝说明。严格解码本来就会拒绝未知键，
 // 这里提前按名字拒绝，让错误说清为什么退役、该怎么改（手工删掉这一行），而不是只报 "field not found"。
 //
-// codegen（RR-20261006-57）：合仓后生成器就是 roost-core/codegen/cmd/roost，“codegen 版本”就是
+// codegen：合仓后生成器就是 roost-core/codegen/cmd/roost，“codegen 版本”就是
 // roost-core 版本，再写一个数字只会和 versions.core 不一致；生成的 Makefile 按 versions.core 运行生成器。
 //
 // skill / service：合仓前 roost-skill / roost-service 两个模块的版本策略；两者早已是 roost-core 的包，

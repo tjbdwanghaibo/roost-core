@@ -25,7 +25,7 @@ import (
 // generator creates once and never overwrites, with fail-closed defaults.
 type frameworkServiceSpec struct {
 	Package string
-	// Path is where the package lives under roost-kit/service/, when that is
+	// Path is where the package lives under service/, when that is
 	// not the package name — activity is service/global/activity. Package
 	// stays the Go package name because it is also the identifier the
 	// generated bootstrap imports it as, and `svcglobal/activity` is not one.
@@ -35,14 +35,14 @@ type frameworkServiceSpec struct {
 	// Affinity marks a service whose RPC methods route by an affinity key
 	// (//roost:rpc affinity=…): its generated ClientMod reaches one instance
 	// per key through etcd discovery and refuses to start without it, and the
-	// owning process must register in that discovery for callers to find it
-	// (RR-20261006-59). Both sides therefore get the etcd Mod.
+	// owning process must register in that discovery for callers to find it.
+	// Both sides therefore get the etcd Mod.
 	// TestFrameworkCatalogAffinityMatchesTheGeneratedClients keeps this in
 	// step with the generated transports.
 	Affinity bool
 	ModArgs  []string
 	// ModChain is the optional collaborators a hosted service wires AFTER
-	// NewMod, as chained calls on the returned Mod (kit's own shape for a
+	// NewMod, as chained calls on the returned Mod (wiring's own shape for a
 	// collaborator that has a defensible "none" — platform's pending-order
 	// index is the first). Each entry is a method call whose argument names a
 	// function in the project's collaborators file, so the default file must
@@ -356,9 +356,9 @@ func renderFrameworkCollaborators(m Manifest, name string) string {
 	}
 	imports = append(imports, "", `"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"`)
 	// The service package is imported only when the collaborators body
-	// references it. A body that supplies nothing but Metrics() — match, since
-	// U-0217 removed its Grouping() — would otherwise ship an unused import,
-	// and the generated project would not compile (U-0218). Comments that
+	// references it. A body that supplies nothing but Metrics() — match, whose
+	// collaborators no longer include Grouping() — would otherwise ship an unused import,
+	// and the generated project would not compile. Comments that
 	// mention `match.Grouping` do not count: the check is on the AST.
 	if bodyUsesPackage(body, spec.Package) {
 		imports = append(imports, fmt.Sprintf("%q", frameworkDomainModule+"/"+spec.ImportPath()))

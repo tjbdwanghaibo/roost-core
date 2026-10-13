@@ -173,7 +173,7 @@ func enableDemoAdmin(root, gameService string) error {
 		return err
 	}
 	// Line by line: the ops section is rendered from the ops Mod's declaration
-	// and its help comments sit between the keys (A4 ①).
+	// and its help comments sit between the keys.
 	text := string(raw)
 	for _, edit := range []struct{ before, after string }{
 		{"  admin_enabled: false\n", "  admin_enabled: true\n"},
@@ -232,7 +232,7 @@ func enableDemoPlayerTCP(root, gameService string) error {
 // sender's sid.
 //
 // Step budgets are configuration (saga.step_defaults, overridden per step
-// under saga.steps.<type>.<step>; U-0280), so this edits the game service's
+// under saga.steps.<type>.<step>), so this edits the game service's
 // configs rather than the generated definition. The default budget is 5
 // attempts of 5s, backoff 100ms..5s: at least ~26s before the step counts as
 // exhausted. The refund only runs on the sid the sender is bound to; while
@@ -318,7 +318,7 @@ func demoPaymentSecrets(root, gameService string) error {
 // appendDemoGameConfig appends one top-level section the demo's game code
 // reads at Init to all three of the game service's repository configs: the
 // dev config, the production example, and the k8s Secret example that embeds
-// the production example under config.yaml (RR-20260928-06). Only the dev
+// the production example under config.yaml. Only the dev
 // config used to get these sections, so a game started from the production
 // example — or from the Secret — stopped at Init ("platform.payment_secret is
 // empty", then "activity.key_prefix is empty"). The production text goes through productionizeConfig like the rest

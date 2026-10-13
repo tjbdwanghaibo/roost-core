@@ -25,7 +25,7 @@ type Definition struct {
 }
 
 // DefaultOutFile is where the error-code table is written inside a business
-// project; `roost generate` refers to it (U-0118).
+// project; `roost generate` refers to it.
 const DefaultOutFile = "docs/generated/errcode.csv"
 
 func Run(args []string, stdout io.Writer) error {
@@ -75,7 +75,7 @@ func extractDefinitions(root string) ([]Definition, error) {
 // roost-core's errcode package as, ignoring comments and strings — sorted by
 // code, duplicates included. extractDefinitions adds the duplicate checks;
 // `roost id` (codegen/internal/roost/id.go) uses the same scan so the IDs it
-// hands out and checks are the ones generation will see (RR-20261005-NC-73).
+// hands out and checks are the ones generation will see.
 func ScanDefinitions(root string) ([]Definition, error) {
 	root = filepath.Clean(root)
 	var defs []Definition
@@ -127,7 +127,7 @@ func ScanDefinitions(root string) ([]Definition, error) {
 			// clients map codes from, and the duplicate checks below are only
 			// as complete as this scan. A Define whose code, name or message
 			// is not a literal used to be skipped silently — missing from the
-			// table and invisible to the duplicate check (RR-20261005-NC-63).
+			// table and invisible to the duplicate check.
 			def, ok := literalDefinition(call)
 			if !ok {
 				visitErr = fmt.Errorf("%s:%d: errcode.Define must be called with integer and string literals (code, name, message) so the error table can be exported and checked", rel, fset.Position(call.Pos()).Line)

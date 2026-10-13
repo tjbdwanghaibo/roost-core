@@ -15,7 +15,7 @@ import (
 // whatever keys they recognised and dropped the rest. A misspelt key was then
 // read as "not written" and replaced by the default: `durabilty=strict`
 // generated an async handler, `dbscop=sid` wrote into the global database,
-// and nothing was reported (RR-20261006-56). Parse is now the one place
+// and nothing was reported. Parse is now the one place
 // options are split, and it refuses anything outside the vocabulary.
 type Spec struct {
 	// Kind is the marker name after the prefix, e.g. "nest".
@@ -50,7 +50,7 @@ var (
 	Entity = Spec{
 		Kind: "entity",
 		Keys: []string{"id", "entityKind", "category", "businessPool", "remote", "noPersist", "lifetime", "sync", "syncNamespace", "syncPacker", "subjectPacker"},
-		// Renamed with ARCH-10: the value is the wire namespace every update
+		// Renamed: the value is the wire namespace every update
 		// of the subject carries, and "topic" suggested a bus that does not exist.
 		Renamed: map[string]string{"syncTopic": "syncNamespace"},
 	}

@@ -17,8 +17,7 @@ import (
 const noCollectionKeySuffix = "RegistryKey"
 
 // resolveNoCollectionDaos marks the entity's nocoll DAOs and refuses an entity
-// that would need them to be stored (W-2026-09-18-09, R4 of
-// docs/feature/DAO-NO-COLLECTION-2026-10-04.md).
+// that would need them to be stored.
 //
 // A nocoll DAO has no collection, database or persistence methods. Only a
 // noPersist entity may use one: a persistent entity loads and deletes every

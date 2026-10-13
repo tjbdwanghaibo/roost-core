@@ -17,8 +17,8 @@ type modSpec struct {
 
 // modConfigSection is the configuration section a catalog Mod writes into a
 // service config: the keys its declaration marks with an example (the starter
-// keys), with the declaration's help as comments (maintainer decision A4 ①).
-// The declarations are the kit Mods' own, snapshotted into kitconfig_gen.go;
+// keys), with the declaration's help as comments (maintainer decision).
+// The declarations are the wiring Mods' own, snapshotted into kitconfig_gen.go;
 // a Mod with no declared starter keys writes nothing.
 func modConfigSection(name string) string {
 	return kitConfigSchemas[name].StarterYAML(nil)
@@ -33,13 +33,13 @@ func frameworkConfigSection(name, project string) string {
 // defaultConfigDataDir is the generated config_data.dir: relative, resolved
 // against the process working directory (the project root in development,
 // WORKDIR /app in the generated image). The Dockerfile copies the data to the
-// same relative path under /app (RR-20260927-34), so both come from here.
+// same relative path under /app, so both come from here.
 const defaultConfigDataDir = "configs/data"
 
 // defaultStatsLogDir is the generated stats_log.dir: relative like the config
 // data, so it lands under the working directory — WORKDIR /app in the image,
 // the release directory under systemd. Every generated deployment gives that
-// path a writable mount or link (RR-20260928-04), so they come from here too.
+// path a writable mount or link, so they come from here too.
 const defaultStatsLogDir = "log"
 
 var modCatalog = map[string]modSpec{

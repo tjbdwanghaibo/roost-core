@@ -122,11 +122,9 @@ func updateFrameworkDependencies(ctx context.Context, root string, manifest Mani
 
 	ctx, cancel := context.WithTimeout(ctx, dependencyUpdateTimeout)
 	defer cancel()
-	// One module. kit lives at roost-core/kit/ since the consolidation, which
-	// is a PACKAGE path, not a module path — asking `go get` for it would be
-	// asking for a module that does not exist. The generator's blanket path
-	// rewrite produced exactly that for a moment; the version a project pins
-	// for kit is now the core version (三仓合一仓 P3).
+	// One module. wiring lives at roost-core/wiring/, which is a PACKAGE path,
+	// not a module path — asking `go get` for it would be asking for a module
+	// that does not exist. The version a project pins for it is the core version.
 	queries := []string{
 		"github.com/tjbdwanghaibo/roost-core@" + normalizedVersionPolicy(manifest.Versions.Core),
 	}
@@ -154,7 +152,7 @@ func runDependencyCommand(ctx context.Context, root string, stdout, stderr io.Wr
 // runDependencyBinary is runDependencyCommand with the binary as a parameter,
 // so tests can stand in for the go tool.
 func runDependencyBinary(ctx context.Context, binary, root string, stdout, stderr io.Writer, args ...string) error {
-	// RR-20261004-13: a tree, so cancellation also kills the compile / git
+	// a tree, so cancellation also kills the compile / git
 	// processes go started inside root (a .roost-deps-* / .roost-generate-*
 	// staging tree) instead of leaving them running there.
 	if err := runCommandTree(ctx, root, appendWithoutGoWork(os.Environ(), "GOWORK=off"), stdout, stderr, binary, args...); err != nil {

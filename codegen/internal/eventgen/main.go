@@ -25,7 +25,7 @@ import (
 )
 
 // Default locations of the event definitions and the generated package inside a
-// business project; `roost generate` refers to these (U-0118).
+// business project; `roost generate` refers to these.
 const (
 	DefaultDefDir = "./framework/event/def"
 	DefaultOutDir = "./framework/event"

@@ -34,8 +34,7 @@ type DaoDef struct {
 	Schema uint32
 	// NoCollection is `//roost:dao nocoll`: an in-memory DAO with no
 	// collection, no database and no storage path. Every field must be
-	// nopersist; Coll, Db, DbScope and Schema stay empty
-	// (docs/feature/DAO-NO-COLLECTION-2026-10-04.md).
+	// nopersist; Coll, Db, DbScope and Schema stay empty.
 	NoCollection bool
 	Fields       []FieldDef
 }
@@ -115,7 +114,7 @@ func parseDefDir(dir string) (*Definitions, error) {
 			return nil, fmt.Errorf("parse %s: %w", entry.Name(), err)
 		}
 
-		// RR-20261006-56: a misspelt key (`dbscop=sid`) used to fall back to
+		// a misspelt key (`dbscop=sid`) used to fall back to
 		// the default (the global database) without a word.
 		if err := marker.CheckFile(fset, f, marker.Dao, marker.RedisDao); err != nil {
 			return nil, err
@@ -238,7 +237,7 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 				if !noCollection && (m.params["coll"] == "" || m.params["db"] == "") {
 					return fmt.Errorf("line %d: //roost:dao on %s requires coll= and db= (or nocoll for an in-memory DAO whose fields are all nopersist)", m.line, typeSpec.Name.Name)
 				}
-				fields, err := extractFieldDefs(structType, defs)
+				fields, err := extractFieldDefs(structType)
 				if err != nil {
 					return fmt.Errorf("dao %s: %w", typeSpec.Name.Name, err)
 				}
@@ -281,7 +280,7 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 				if m.params["key"] == "" || m.params["prefix"] == "" {
 					return fmt.Errorf("line %d: //roost:redisdao on %s requires key= and prefix=", m.line, typeSpec.Name.Name)
 				}
-				fields, err := extractFieldDefs(structType, defs)
+				fields, err := extractFieldDefs(structType)
 				if err != nil {
 					return fmt.Errorf("redis dao %s: %w", typeSpec.Name.Name, err)
 				}
@@ -346,7 +345,7 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 			continue
 		}
 		nestedNames[name] = true
-		nestedFields, err := extractFieldDefs(st, defs)
+		nestedFields, err := extractFieldDefs(st)
 		if err != nil {
 			return fmt.Errorf("nested struct %s: %w", name, err)
 		}
@@ -393,7 +392,7 @@ func stripPtr(s string) string {
 	return s
 }
 
-func extractFieldDefs(st *ast.StructType, defs *Definitions) ([]FieldDef, error) {
+func extractFieldDefs(st *ast.StructType) ([]FieldDef, error) {
 	var fields []FieldDef
 
 	for _, field := range st.Fields.List {

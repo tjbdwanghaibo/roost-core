@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// validateRemoteDaoScopes 拒绝 remote=managed 实体使用 dbscope=sid 的 DAO（RR-20260926-45）。
+// validateRemoteDaoScopes 拒绝 remote=managed 实体使用 dbscope=sid 的 DAO。
 //
 // 托管实体可由任一进程写入、所有权可迁移，而 Remote 提交按提交方 sid 选库、加载按本服 sid
 // 选库；按服选库会让实体在跨服写或迁移后读到旧版本 / 缺失而不可写。DAO 的作用域由 DAO

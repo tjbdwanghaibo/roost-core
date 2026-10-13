@@ -114,7 +114,7 @@ func parseFile(path string) ([]*FuncInfo, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	// RR-20261006-56: refuse a misspelt option before any is read; a typo in
+	// refuse a misspelt option before any is read; a typo in
 	// `durability=` used to generate the async default without a word.
 	if err := marker.CheckFile(fset, file, marker.Nest); err != nil {
 		return nil, "", err
@@ -563,7 +563,7 @@ func parseFuncDecl(fnDecl *ast.FuncDecl, markerOptions map[string]string) (*Func
 
 	// Handle _cost suffix：生成的 sender 带 nest.SendOptionIO()，
 	// 强制I/O 阶段准备。冷目标不需要它——Nest 在统一准入时发现声明目标未加载会自动走
-	// I/O 阶段预加载（RR-20260926-25）；后缀只用于需要强制I/O 准备的特殊 handler。
+	// I/O 阶段预加载；后缀只用于需要强制I/O 准备的特殊 handler。
 	if strings.HasSuffix(fi.Name, "_cost") {
 		fi.IsCost = true
 		fi.Name = strings.TrimSuffix(fi.Name, "_cost")
@@ -715,7 +715,7 @@ func isEntityGroupType(typeName string) bool {
 // no longer reads — but the generated sender copies parameter names into its
 // own signature and then PASSES them, so a blank name becomes
 // `nest.NewParams(..., _)`: `cannot use _ as value or type`, in a generated
-// file, with nothing pointing back at the handler (U-0250). The wire contract
+// file, with nothing pointing back at the handler. The wire contract
 // is positional, so substituting a name changes nothing a caller can observe.
 func usableParamName(name string, index int) string {
 	if name == "_" || strings.TrimSpace(name) == "" {

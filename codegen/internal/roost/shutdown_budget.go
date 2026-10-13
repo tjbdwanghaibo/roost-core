@@ -12,14 +12,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Generated shutdown window (RR-20260926-66).
+// Generated shutdown window.
 //
 // The App stops a service in one shutdown.total_timeout window: Service.Shutdown
 // first, then the service's own Mods and the shared Mods in reverse order, each
 // with a deadline planned from what is left (app.modStopBudget). A Mod without
 // a declared stop budget keeps a fixed floor (app.undeclaredModStopFloor, 3s);
 // a Mod that declares one (dataengine: dataengine.shutdown_timeout; the player
-// TCP listener: player_access.tcp.shutdown_timeout, RR-20260927-05) is granted
+// TCP listener: player_access.tcp.shutdown_timeout) is granted
 // it from the rest, and is scaled down with a warning only when the rest cannot
 // cover it. One value for every service cannot fit that: the game-demo game
 // service (-mods configdata,mongo,nats,dataengine,nest) registers 23 Mods and
@@ -32,13 +32,13 @@ import (
 //
 // and writes the same numbers into the service's configs and every deployment
 // template (k8s, compose, systemd, the dev scripts). The grace period never
-// goes below what the configs actually set (RR-20260926-66 复核): configs are
+// goes below what the configs actually set: configs are
 // application-owned and may hold an edited or older total.
 const (
 	// generatedModStopFloor mirrors app.undeclaredModStopFloor.
 	generatedModStopFloor = 3 * time.Second
 	// generatedDataEngineShutdownTimeout is dataengine.shutdown_timeout as the
-	// generated config writes it (catalog.go): the stop budget kit/dataengine
+	// generated config writes it (catalog.go): the stop budget wiring/dataengine
 	// declares to the App.
 	generatedDataEngineShutdownTimeout = 30 * time.Second
 	// generatedDataEngineStartupTimeout is dataengine.startup_timeout as the
@@ -49,7 +49,7 @@ const (
 	// as the generated config writes it (player_tcp_config.go): the stop
 	// budget the generated player TCP Mod declares to the App.
 	//
-	// RR-20260927-05：之前这个 Mod 不声明预算，App 只给它 3s 保底（低于它自己的 10s，与
+	// 之前这个 Mod 不声明预算，App 只给它 3s 保底（低于它自己的 10s，与
 	// nest.request_timeout 3s 也没有余量）；现在它声明 shutdown_timeout，生成公式与 doctor 同步计入。
 	generatedPlayerTCPShutdownTimeout = 10 * time.Second
 	// generatedShutdownMargin is for Service.Shutdown, which runs inside the
@@ -112,7 +112,7 @@ func (plan serviceShutdown) sameFormula(other serviceShutdown) bool {
 // serviceShutdownPlan counts what the bootstrap registers for the service
 // (renderBootstrap: the shared a.Mods list, then serviceModConstructors) and
 // applies the formula. Among the Mods the generator wires, dataengine and the
-// player TCP listener (RR-20260927-05) declare a stop budget; every other Kit,
+// player TCP listener declare a stop budget; every other Kit,
 // framework, rpc and access Mod gets the floor.
 //
 // The grace period never goes below the total the service's configs actually
@@ -307,7 +307,7 @@ func shutdownConfigTargets(service string) []struct{ rel, indent string } {
 //
 // SyncProject calls it on its staging tree before rendering, so the
 // templates are rendered from the refreshed totals and the returned files
-// are committed with them (RR-20260926-80).
+// are committed with them.
 func refreshGeneratedShutdownConfigs(root string, m Manifest) ([]string, error) {
 	var changed []string
 	for _, service := range sortedServiceNames(m) {
@@ -321,7 +321,7 @@ func refreshGeneratedShutdownConfigs(root string, m Manifest) ([]string, error) 
 			if err != nil {
 				return changed, err
 			}
-			// RR-20260928-13：按 LF 识别与替换，CRLF 的文件按 CRLF 写回；之前摘要行的正则与
+			// 按 LF 识别与替换，CRLF 的文件按 CRLF 写回；之前摘要行的正则与
 			// 整块比对都认不出 "\r\n"，CRLF 检出的三份配置从此不再跟着 Mod 刷新。
 			body, crlf := lfText(raw)
 			written, ok := parseGeneratedShutdown(body)
@@ -408,7 +408,7 @@ func deployedGracePeriods(root string, m Manifest, service string) []deployedGra
 //
 // The WARN judges each of the service's configs in the repository on its own
 // — the dev config, the production example and the k8s secret example — and
-// names every one that falls short (RR-20260926-80): a deployment starts
+// names every one that falls short: a deployment starts
 // from whichever of them it copies, and reading only config.<svc>.yaml said
 // OK for a project whose examples still carried the old 60s. The OK / WARN
 // line reports the grace period the deployment templates on disk set, which
@@ -418,7 +418,7 @@ func deployedGracePeriods(root string, m Manifest, service string) []deployedGra
 // An example the doctor cannot parse — the YAML does not parse, or its
 // shutdown.total_timeout / dataengine.shutdown_timeout is not a duration — is
 // its own WARN entry naming the file and the key, without the "every stop
-// warns … Set it to" advice (RR-20260926-80 复核残留): no budget was read, so
+// warns … Set it to" advice: no budget was read, so
 // nothing is known to fall short, and the advice read as if raising the value
 // would fix a file the doctor could not understand. It stays a WARN, not a
 // FAIL: no process reads an example directly, and a deployment copying one
@@ -426,8 +426,8 @@ func deployedGracePeriods(root string, m Manifest, service string) []deployedGra
 // the FAIL above already judges (configuredShutdownTotal counts an
 // unparsable total as 30s).
 //
-// RR-20260927-04：WARN 按运行时实际读配置的方式判定——非正的 total_timeout 按 App 兜底的
-// 30s、非正的 dataengine.shutdown_timeout 按 kit/dataengine 兜底的 30s；“Set it to” 的建议值
+// WARN 按运行时实际读配置的方式判定——非正的 total_timeout 按 App 兜底的
+// 30s、非正的 dataengine.shutdown_timeout 按 wiring/dataengine 兜底的 30s；“Set it to” 的建议值
 // 是每份不足的配置按它自己的声明预算算出的所需 + 余量（各份不同时逐文件列出）。
 func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 	var items []CheckItem
@@ -485,15 +485,14 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 				unreadable = append(unreadable, fmt.Sprintf("%s: shutdown.total_timeout: %v", target.rel, err))
 				continue
 			}
-			// RR-20260927-04：非正的 total 在 App 里按 30s 兜底（app.App.Execute），上面的 FAIL
+			// 非正的 total 在 App 里按 30s 兜底（app.App.Execute），上面的 FAIL
 			// 判定（configTotalTimeout）早就这样算；这里原先按 0 判定，把能覆盖 Mod 保底的配置
 			// 报成“覆盖不了”并给建议值。
 			written := total
 			if total <= 0 {
 				total = appDefaultShutdownTotal
 			}
-			// 每个声明预算的 Mod 按它自己的配置键读（RR-20260927-05 之前只有 dataengine，
-			// 这里曾是 dataengine 值 × 声明数）。
+			// 每个声明预算的 Mod 按它自己的配置键读，不能用 dataengine 的值 × 声明数代替。
 			declared, err := configuredDeclaredBudgets(plan, settings)
 			if err != nil {
 				if dev {
@@ -514,9 +513,9 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 			if total < need {
 				shortfalls = append(shortfalls, fmt.Sprintf("%s: total_timeout %s cannot cover %d Mods (%s declared + 3s x %d%s = %s)",
 					target.rel, describeTotal(written, total), plan.mods, seconds(declared), plan.undeclared(), release, seconds(need)))
-				// RR-20260927-04：建议值 = 这份配置自己的所需（按它写的 dataengine 预算）+ 余量。
-				// 原先用生成公式（dataengine 按常量 30s），调大 dataengine.shutdown_timeout 后
-				// 照着改完仍然 WARN。project sync 的公式不变（OPEN-ITEMS D11）。
+				// 建议值 = 这份配置自己的所需（按它写的 dataengine 预算）+ 余量。若用生成公式
+				// （dataengine 按常量 30s），调大 dataengine.shutdown_timeout 后照着改完仍然 WARN。
+				// project sync 的公式不变。
 				advice = append(advice, configuredTotal{rel: target.rel, total: need + plan.margin})
 				continue
 			}
@@ -562,10 +561,10 @@ type shutdownSettings struct {
 
 // configuredDeclaredBudgets is the sum of the stop budgets the service's
 // declaring Mods take from one config, read the way each Mod reads its key:
-// dataengine.shutdown_timeout missing or non-positive is kit/dataengine's 30s
-// (RR-20260927-04); player_access.tcp.shutdown_timeout missing uses the
+// dataengine.shutdown_timeout missing or non-positive is wiring/dataengine's 30s;
+// player_access.tcp.shutdown_timeout missing uses the
 // generated Mod's 10s; an explicit non-positive value stops the Mod from starting
-// (validateConfig), reported as an error (RR-20260927-05).
+// (validateConfig), reported as an error.
 func configuredDeclaredBudgets(plan serviceShutdown, settings shutdownSettings) (time.Duration, error) {
 	var declared time.Duration
 	if plan.dataEngine > 0 {
@@ -573,7 +572,7 @@ func configuredDeclaredBudgets(plan serviceShutdown, settings shutdownSettings) 
 		if err != nil {
 			return 0, fmt.Errorf("dataengine.shutdown_timeout: %w", err)
 		}
-		// kit/dataengine 对非正值同样兜底 30s（mod.go duration()），按 0 算会漏报。
+		// wiring/dataengine 对非正值同样兜底 30s（mod.go duration()），按 0 算会漏报。
 		if value <= 0 {
 			value = generatedDataEngineShutdownTimeout
 		}

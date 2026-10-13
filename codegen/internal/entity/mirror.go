@@ -15,7 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/marker"
 )
 
-// Mirror 只读视图（PLAN-REMOTE-POLICY-MIRROR 第 5 步，roost-core docs/feature/MIRROR-STEP-5-2026-10-06.md）。
+// Mirror 只读视图（现行说明见 docs/framework/guide/05-remote-mirror.md）。
 //
 // 只读方不再是一个 Entity：它是一个普通 struct（DTO），声明自己要读 owner 快照里的哪些字段：
 //

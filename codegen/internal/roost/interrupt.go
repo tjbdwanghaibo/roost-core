@@ -22,7 +22,7 @@ const reraisedSignalGrace = 10 * time.Second
 //
 // roost copies the project into a staging tree beside it, runs generators and
 // go commands there and commits the result back; the go commands run as their
-// own process group (RR-20261004-13), so Ctrl-C, a hangup or SIGTERM reaches
+// own process group, so Ctrl-C, a hangup or SIGTERM reaches
 // only roost. Main catches those signals and turns the first one into the
 // cancellation of the command's context: the command returns through its
 // ordinary error path — the go tree is killed, dependency files and the
@@ -33,7 +33,7 @@ const reraisedSignalGrace = 10 * time.Second
 //
 // Before B6 the signal was caught inside runCommandTree, only while a go
 // command ran, and re-raised from there; everything that went wrong around it
-// (RR-20261004-12/13, cb11be90, RR-20261005-NC-70, N08 O6) came from dying in
+// came from dying in
 // the middle of the call stack instead of after it.
 func Main(args []string, stdout, stderr io.Writer) error {
 	return runInterruptible(stderr, func(ctx context.Context) error {

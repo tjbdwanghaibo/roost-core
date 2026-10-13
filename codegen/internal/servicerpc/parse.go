@@ -118,8 +118,8 @@ func parseDir(dir string, checkNames bool) ([]Service, error) {
 		}
 		marked := make([]Service, 0, 1)
 		for _, path := range paths {
-			// RR-20261006-56 / F09-R4: a misspelt option (`afinity=`) used to
-			// be dropped, leaving the method without the affinity it asked for.
+			// A misspelt option (`afinity=`) must not be dropped silently, which
+			// would leave the method without the affinity it asked for.
 			if err := marker.CheckFile(fset, pkg.Files[path], marker.RPC); err != nil {
 				return nil, err
 			}

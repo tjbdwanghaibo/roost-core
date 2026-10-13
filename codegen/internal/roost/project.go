@@ -214,10 +214,10 @@ func SyncProjectContext(ctx context.Context, root string) (SyncResult, error) {
 		return SyncResult{}, fmt.Errorf("snapshot project inputs: %w", err)
 	}
 	// Bring an unedited generated shutdown: block in the application-owned
-	// configs to the current Mods' plan (RR-20260926-66) in the staging tree,
+	// configs to the current Mods' plan in the staging tree,
 	// BEFORE anything is rendered: the templates' grace period follows the
 	// configured totals, so rendering them from the refreshed values is what
-	// makes one sync converge (RR-20260926-80). Refreshing in the real project
+	// makes one sync converge. Refreshing in the real project
 	// after the commit — as before — rendered the templates from the old
 	// configs (a service that lost a Mod kept its larger grace period until a
 	// second sync) and wrote the configs outside the commit's rollback and
@@ -323,7 +323,7 @@ func planStagedProjectCommit(root, stage string, manifest Manifest) ([]syncChang
 			return walkErr
 		}
 		if entry.IsDir() {
-			// Same boundary as copyProject (RR-20261005-NC-74): a directory the
+			// Same boundary as copyProject: a directory the
 			// staging tree never received holds nothing this plan may delete.
 			if path != root {
 				rel, relErr := filepath.Rel(root, path)
@@ -536,7 +536,7 @@ func verifySyncChangeCurrent(change syncChange) error {
 
 func planManifestSync(root string, manifest Manifest) (SyncResult, []syncChange, error) {
 	// The deployment grace periods follow the totals the project's configs
-	// actually set (RR-20260926-66), so the render reads them from root.
+	// actually set, so the render reads them from root.
 	plan, err := renderProject(manifest.withConfiguredShutdown(root))
 	if err != nil {
 		return SyncResult{}, nil, err

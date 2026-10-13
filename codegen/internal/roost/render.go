@@ -31,8 +31,8 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	add("go.sum", "", false)
 	add(".gitattributes", renderGitattributes(), true)
 	// /data/wal/ 与 skippedProjectDirectory 一致：DataEngine 默认 WAL（data/wal/dataengine，
-	// second-game.sh 的 data/wal/dataengine-<sid>）是运行期输出。RR-20261005-NC-206：之前
-	// 只有 .dev/，dev-run 之后 git add -A 会把 WAL 段提交进仓库。只忽略 WAL 目录，不忽略
+	// second-game.sh 的 data/wal/dataengine-<sid>）是运行期输出。只忽略 .dev/ 的话，
+	// dev-run 之后 git add -A 会把 WAL 段提交进仓库。只忽略 WAL 目录，不忽略
 	// data/（configs/data 是要提交的生成物，根目录 data/ 下也可能有使用者自己的文件）。
 	// .gitignore 归使用者所有，sync 不覆盖，已有工程需手工补这一行。
 	add(".gitignore", "bin/\ndist/\nlog/\n.dev/\n/data/wal/\n.roost-deploy/\n.env\ndeploy/docker/.env.*\n*.local.yaml\ndeploy/k8s/base/secret.*.local.yaml\n.idea/\n.vscode/\n", false)
@@ -44,10 +44,10 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	add("docs/ENTITY_COMPONENT.zh-CN.md", renderEntityComponentGuide(m), true)
 	add("docs/FIRST_BUSINESS.zh-CN.md", renderFirstBusinessGuide(m), true)
 	add("docs/ENTITY_LIFECYCLE.zh-CN.md", renderEntityLifecycleGuide(m), true)
-	add("docs/PROTOCOL_TO_NEST.zh-CN.md", renderProtocolNestGuide(m), true)
-	add("docs/PLAYER_ACCESS_TCP.zh-CN.md", renderPlayerTCPGuide(m), true)
-	add("docs/SKILL.zh-CN.md", renderSkillGuide(m), true)
-	add("docs/TROUBLESHOOTING.zh-CN.md", renderTroubleshootingGuide(m), true)
+	add("docs/PROTOCOL_TO_NEST.zh-CN.md", renderProtocolNestGuide(), true)
+	add("docs/PLAYER_ACCESS_TCP.zh-CN.md", renderPlayerTCPGuide(), true)
+	add("docs/SKILL.zh-CN.md", renderSkillGuide(), true)
+	add("docs/TROUBLESHOOTING.zh-CN.md", renderTroubleshootingGuide(), true)
 	add("docs/USAGE.zh-CN.md", renderUsage(m), true)
 	if m.usesFrameworkServices() {
 		add("docs/SERVICES.zh-CN.md", renderFrameworkServicesGuide(m), true)
@@ -71,7 +71,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		owned := !strings.HasPrefix(path, "deploy/k8s/base/secret.")
 		add(path, body, owned)
 	}
-	// RR-20260930-17：生成工程自带的 compose 结构检查，CI 与 make compose-check 跑它。
+	// 生成工程自带的 compose 结构检查，CI 与 make compose-check 跑它。
 	if err := addGo("deploy/docker/compose_check_test.go", renderComposeCheckTest(m), true); err != nil {
 		return nil, err
 	}
@@ -185,8 +185,8 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		if feature == "attribute" {
 			// The attribute generator's output leans on a framework contract
 			// (AttrID, AttributeProfile, Snapshot, Container, …). Shipping
-			// only an empty package meant `roost add attribute` produced code
-			// that referenced types nobody defined (RR-20260918 / RR-20260917-06);
+			// only an empty package would make `roost add attribute` produce code
+			// that referenced types nobody defined;
 			// this file re-exports roost-core/attribute under those names and
 			// is codegen-owned, so an upgrade keeps it in step.
 			if err := addGo(dir+"/runtime.go", renderAttributeRuntime(packageName), true); err != nil {
@@ -238,7 +238,7 @@ func renderSyncTransport(m Manifest) string {
 
 // generatedGoVersion is the Go release line every generated artifact agrees
 // on: the go.mod directive, the Dockerfile's builder image and the docs. It
-// is the framework's own requirement — roost-core / roost-kit are go 1.27.0
+// is the framework's own requirement — roost-core is go 1.27.0
 // — so a consumer never ends up with a go.mod one toolchain ahead of the
 // image that builds it ("go.mod requires go >= 1.27.0 (running go 1.25.14)").
 // TestGeneratedGoVersionMatchesTheGeneratorsOwn pins it to this module's go.mod.
@@ -552,7 +552,7 @@ func Managers() []app.IManager {
 `, safeIdent(name))
 }
 
-// App 单实例锁（app.Singleton，docs/feature/APP-SINGLETON-LOCK-2026-10-05.md §6）的生成规则。
+// App 单实例锁（app.Singleton，见 framework/app/singleton.go）的生成规则。
 //
 // 生成值与 app/singleton.go 的默认值相同（15s / 3s / 5s / 2×ttl），满足 App 启动检查（singleton.* 的声明）钉住的三条关系：
 // renew_interval ≤ guard、2×renew_interval ≤ ttl − guard、startup_wait ≥ ttl + 2×renew_interval。
@@ -674,10 +674,9 @@ func productionizeConfig(value string) string {
 // may carry several, dataengine's has three), so hand edits stay and a
 // repeat is a no-op. The production example gets the same transforms the
 // whole file got, and the k8s Secret example that embeds the production
-// example gets the same production text (RR-20260928-07: it used to keep
-// only what was rendered at creation, so the game-demo's Secret had no
-// saga: block). A Secret example it cannot recognise is a WARN on warn
-// (RR-20260928-13). It returns the files it changed.
+// example gets the same production text (keeping only what was rendered at
+// creation would leave, e.g., the game-demo's Secret without its saga: block). A Secret example it cannot recognise is a WARN on warn.
+// It returns the files it changed.
 func appendModConfigSections(root string, before, after Manifest, service string, warn io.Writer) ([]string, error) {
 	previous, _ := resolveMods(append(append([]string{}, before.SharedMods...), effectiveServiceMods(before, service)...))
 	current, _ := resolveMods(append(append([]string{}, after.SharedMods...), effectiveServiceMods(after, service)...))
@@ -727,7 +726,7 @@ func appendModConfigSections(root string, before, after Manifest, service string
 		if err != nil {
 			return changed, err
 		}
-		// RR-20260930-16：按文件原有的行尾追加。CRLF 检出的配置之前一律按 LF 追加新段，
+		// 按文件原有的行尾追加。CRLF 检出的配置之前一律按 LF 追加新段，
 		// 一份文件里两种行尾混用；Secret 示例（下面 editKubernetesSecretExampleConfig）
 		// 早已按原行尾写回，这两份文件走同一对 lfText / restoreLineEndings。
 		// 空文件与 LF 文件保持 LF。
@@ -1041,7 +1040,7 @@ clean:
 // generatorVersion resolves the Makefile's CORE_VERSION, the release the
 // generator runs at. The generator is roost-core/codegen/cmd/roost, so it is
 // the project's versions.core: a project pinned to core vX regenerates with
-// vX's generator, one tracking latest tracks it for both (RR-20261006-57).
+// vX's generator, one tracking latest tracks it for both.
 // `make generate CORE_VERSION=vX.Y.Z` still overrides one invocation.
 func generatorVersion(m Manifest) string {
 	if v := strings.TrimSpace(m.Versions.Core); v != "" {
@@ -1199,7 +1198,7 @@ func renderDockerfile(m Manifest) string {
 		buildDirs = append(buildDirs, "/out/wal")
 		walRuntime = "COPY --chown=65532:65532 --from=build /out/wal /var/lib/roost/wal\nVOLUME [\"/var/lib/roost/wal\"]\n"
 	}
-	// RR-20260928-04：stats_log.dir 的生成值是相对的 log，容器里解析为 /app/log；compose 的
+	// stats_log.dir 的生成值是相对的 log，容器里解析为 /app/log；compose 的
 	// read_only 与 k8s 的 readOnlyRootFilesystem 让它不可写，之前 statslog 又吞掉写错误，
 	// 统计文件从不落盘。compose 与 k8s 在 /app/log 挂可写卷（renderProductionCompose /
 	// renderKubernetesWorkload）；镜像里先放一个属于运行用户
@@ -1210,7 +1209,7 @@ func renderDockerfile(m Manifest) string {
 		buildDirs = append(buildDirs, "/out/"+defaultStatsLogDir)
 		statsLog = "COPY --chown=65532:65532 --from=build /out/" + defaultStatsLogDir + " /app/" + defaultStatsLogDir + "\n"
 	}
-	// RR-20260927-34：configdata Mod 在启动时读 config_data.dir（生成值是相对路径
+	// configdata Mod 在启动时读 config_data.dir（生成值是相对路径
 	// configs/data，按进程工作目录解析；运行阶段 WORKDIR /app，所以是 /app/configs/data）。
 	// 之前运行阶段只拷二进制与 healthprobe，compose / k8s 也只挂 config.yaml，容器启动即
 	// "configdata: stat dir configs/data: no such file or directory"，按重启策略反复重启。

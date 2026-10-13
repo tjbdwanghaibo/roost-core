@@ -7,13 +7,12 @@ import (
 )
 
 // activityGroupsFile is the activity groups file of a project that hosts the
-// activity coordinator (decision C4, docs/feature/C4-ACTIVITY-GROUPS-FILE-2026-10-06.md):
+// activity coordinator (maintainer decision):
 // which game servers take part in the same server-wide activity. The
 // coordinator reads it through activity.groups_file (its sweep groups, and
-// the check that every window's expected set is drawn from its group,
-// RR-20261006-17) and so
+// the check that every window's expected set is drawn from its group) and so
 // does the game-demo's game (its group and Live candidates); both validate it
-// with kit/service/global/activity.LoadGroupsFile.
+// with activity.LoadGroupsFile.
 //
 // It is relative like config_data.dir, resolved against the working
 // directory: the project root in development, WORKDIR /app in the image (the

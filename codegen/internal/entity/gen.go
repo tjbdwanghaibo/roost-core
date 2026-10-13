@@ -12,8 +12,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/genutil"
 )
 
-const generatorVersion = "v2"
-
 // generate produces the wiring file for an entity that is alone in its
 // package. Returns true if the file was written (changed).
 func generate(ent EntityDef, pkg string, outFile string, force bool) (bool, error) {
@@ -26,7 +24,7 @@ func generate(ent EntityDef, pkg string, outFile string, force bool) (bool, erro
 // that carries the //roost:register marker is emitted once, into the file of
 // the first sibling, and calls each of them. Two entities in one package used
 // to get two RegisterEntity / registerEntityOnce declarations — generation
-// succeeded and the consumer failed to compile (RR-20260909-04).
+// succeeded and the consumer failed to compile.
 func generateInPackage(ent EntityDef, siblings []string, pkg string, outFile string, force bool) (bool, error) {
 	if len(siblings) == 0 {
 		siblings = []string{ent.Name}
@@ -112,7 +110,7 @@ func guardTestFileFor(outFile string) string {
 // remote-commit guards inside the generated wiring. Those guards live in
 // generated code, so the generator's own unit tests cannot reach them; a test
 // generated into the business project runs them where they are compiled
-// (HANDOFF §4.4 / U-0124). Entities that are not remote-managed, or whose DAOs
+// Entities that are not remote-managed, or whose DAOs
 // are all cold, get no test — and a stale one from an earlier shape is removed
 // so it cannot fail to compile against the new wiring.
 func generateGuardTests(data templateData, outFile string, force bool) (bool, error) {
@@ -213,7 +211,7 @@ func quoteString(s string) string {
 
 // syncNamespaceExpr renders the marker's value. Three spellings reach here,
 // and parse.go has already refused the fourth (a bare identifier, which used
-// to be quoted into the string of its own name — RR-20260918-07):
+// to be quoted into the string of its own name):
 //
 //	syncNamespace=player               → "player"
 //	syncNamespace="Player"             → "Player"      (already a literal)

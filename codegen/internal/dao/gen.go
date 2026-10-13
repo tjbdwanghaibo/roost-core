@@ -91,7 +91,7 @@ func nestedFuncMap(defs *Definitions) template.FuncMap {
 	}
 }
 
-// --- wire form (U-0224 补修) ---
+// --- wire form ---
 //
 // A nested struct's fields are unexported, so the BSON codec cannot encode it
 // by reflection. The first fix gave every nested type MarshalBSON, but the
@@ -547,7 +547,7 @@ func lower1(s string) string {
 // goKeywords are the words a private field name must not be. They are the
 // only names that BREAK — a struct field called `string` or `len` is legal Go
 // and merely shadows a predeclared identifier inside its own scope, while
-// `type` or `range` does not parse (U-0246). The failure was invisible until
+// `type` or `range` does not parse. The failure was invisible until
 // a definition used one, and then it surfaced as `expected '}', found 'type'`
 // pointing at a generated temporary file.
 var goKeywords = map[string]bool{

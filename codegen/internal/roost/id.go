@@ -55,7 +55,7 @@ func ScanIDs(root string) ([]IDUse, error) {
 	if err != nil {
 		return nil, err
 	}
-	// RR-20261005-NC-73: error codes are read by the errcode generator's own
+	// error codes are read by the errcode generator's own
 	// AST scan. A regex here used to miss `ec.Define(…)` under an aliased
 	// import (so roost id next / roost add errcode handed out a code that
 	// generation then rejected as a duplicate) and count `errcode.Define(…`

@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/servicerpc"
 )
@@ -302,15 +301,3 @@ func projectRPCDirs(root string, m Manifest) []string {
 	}
 	return dirs
 }
-
-// rpcOwnerOf returns the service that owns the named rpc, if any.
-func rpcOwnerOf(m Manifest, rpc string) (string, bool) {
-	for _, name := range sortedServiceNames(m) {
-		if contains(m.Services[name].Rpcs, rpc) {
-			return name, true
-		}
-	}
-	return "", false
-}
-
-var _ = strings.TrimSpace

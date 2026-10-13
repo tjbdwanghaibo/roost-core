@@ -38,8 +38,8 @@ import (
 // .roost-generate-* staging tree), so every child process another goroutine
 // started without exec.Cmd.Dir during that window inherited the staging tree
 // as its working directory. On Windows a process's working directory cannot be
-// deleted while it runs, so the stage outlived the command that made it
-// (RR-20261004-12). Generators now receive paths under the root instead.
+// deleted while it runs, so the stage outlived the command that made it.
+// Generators now receive paths under the root instead.
 var generatorRuns sync.Mutex
 
 type GenerateOptions struct {
@@ -140,8 +140,8 @@ func generatorsFor(m Manifest, force bool) []generator {
 			// skipped until a CSV exists (v1.17.2 behavior). The manifest
 			// alone cannot be the trigger: the scaffold always writes an
 			// empty one, which made that skip dead and failed every such
-			// project (RR-20261001-03). Only a manifest that still owns
-			// JSON files has retirement work to do (RR-20260930-09).
+			// project. Only a manifest that still owns
+			// JSON files has retirement work to do.
 			if empty, err := dirHasNoDataFiles(under(root, "configs/table")); err != nil {
 				return err
 			} else if empty {
@@ -520,7 +520,7 @@ func copyProject(ctx context.Context, src, dst string) error {
 // snapshotProjectInputs and planStagedProjectCommit's walk of the real project
 // all use it, so the three agree on what the project is.
 //
-// RR-20261005-NC-74: `make dev-run` logs to .dev/ and DataEngine's default WAL
+// `make dev-run` logs to .dev/ and DataEngine's default WAL
 // directory is data/wal/dataengine (the generated config.<svc>.yaml); while the
 // project ran, every generate / sync failed with "project inputs changed".
 // data/wal is matched by path: configs/data is generator output and must not
@@ -586,7 +586,7 @@ func diffSnapshot(before, after map[string][sha256.Size]byte) []string {
 }
 
 func gitChanged(root string) ([]string, error) {
-	// RR-20261006-58: porcelain paths are relative to the REPOSITORY root and
+	// porcelain paths are relative to the REPOSITORY root and
 	// quoted when they hold a space, while generator prefixes are relative to
 	// the PROJECT root. A project in a subdirectory therefore matched nothing
 	// and `generate --changed` ran only the registry while reporting success.

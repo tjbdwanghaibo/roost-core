@@ -39,9 +39,9 @@ const (
 	// owns the interface uses it: the file depends on roost-core only, so the
 	// package stays inside the core dependency boundary.
 	HalfTransport Half = "transport"
-	// HalfAssembly emits only the assembly half. A kit package whose interface
-	// lives in core uses it, pointing -dir at the core package and -out at
-	// itself: the types it names resolve through the kit package's aliases.
+	// HalfAssembly emits only the assembly half. A wiring package whose interface
+	// lives in a service package uses it, pointing -dir at that package and -out
+	// at itself: the types it names resolve through the wiring package's aliases.
 	HalfAssembly Half = "assembly"
 )
 
@@ -65,16 +65,16 @@ type Options struct {
 
 // Generate renders the transport for one service as two files: the transport
 // half (roost-core imports only) and the assembly half (Server, ClientMod,
-// OwnerCapabilities; imports roost-kit/mods). Both land in the same package,
+// OwnerCapabilities; imports wiring/mods). Both land in the same package,
 // so nothing changes for a caller; the split exists so an interface can move
-// into a core domain package together with its wire types and client (M-10).
+// into a core domain package together with its wire types and client.
 //
 // It is built with text/template rather than string concatenation, and the
 // output is run through go/format, so a template mistake surfaces as a parse
 // error here rather than as an unbuildable file in someone's package.
 func Generate(service Service) ([]File, error) { return GenerateWith(service, Options{}) }
 
-// GenerateWith is Generate with a choice of half and header command (M-11).
+// GenerateWith is Generate with a choice of half and header command.
 func GenerateWith(service Service, opts Options) ([]File, error) {
 	view, err := newView(service)
 	if err != nil {
@@ -149,7 +149,7 @@ type view struct {
 	// worse than no marker.
 	AnyAffinity bool
 	// AffinityMethods names the methods that route by key, for the error a
-	// client without discovery gets (RR-20261006-59).
+	// client without discovery gets.
 	AffinityMethods string
 	// Iface is the interface name, e.g. "Mail".
 	Iface string

@@ -97,7 +97,7 @@ func daoUnbindDirty(hook *dataengine.DirtyHook, current *daoDirtyOwner, owner da
 // are the fields that need bind/unbind helpers: which child notifies which
 // parent is runtime wiring, and it has to be re-established on every path
 // that changes what the field holds — the setter, a restore from storage, and
-// the rollback undo (RR-20260918-03).
+// the rollback undo.
 func fieldCarriesChildHook(defs *Definitions, f FieldDef) bool {
 	switch f.Kind {
 	case 1:

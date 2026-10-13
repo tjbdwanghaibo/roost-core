@@ -449,11 +449,11 @@ func renderProductionCompose(m Manifest) string {
 		fmt.Fprintf(&b, "    container_name: %s-%s\n", m.Project.Name, service)
 		fmt.Fprintf(&b, "    command: [%q, \"--sid=%d\", \"--config=/etc/roost/config.yaml\"]\n", service, sid)
 		b.WriteString("    restart: unless-stopped\n    read_only: true\n    init: true\n    user: \"65532:65532\"\n    cap_drop: [ALL]\n    security_opt: [no-new-privileges:true]\n")
-		// RR-20260927-33：挂载选项之间是逗号，必须整项加引号。之前写成不带引号的
+		// 挂载选项之间是逗号，必须整项加引号。之前写成不带引号的
 		// flow 序列 [/tmp:rw,noexec,nosuid,size=64m]，YAML 按逗号拆成 4 项，
 		// docker compose up 报 "'noexec' mount path must be absolute"，所有服务都起不来。
 		b.WriteString("    tmpfs: [\"/tmp:rw,noexec,nosuid,size=64m\"]\n")
-		// shutdown.total_timeout of this service + 5s (serviceShutdownPlan, RR-20260926-66).
+		// shutdown.total_timeout of this service + 5s (serviceShutdownPlan).
 		fmt.Fprintf(&b, "    stop_grace_period: %s\n", seconds(serviceShutdownPlan(m, service).grace))
 		// start_period covers startupAllowance: singleton.startup_wait + dataengine.startup_timeout
 		// for a service with the singleton on.
@@ -469,7 +469,7 @@ func renderProductionCompose(m Manifest) string {
 		if serviceUsesPersistentWAL(m, service) {
 			fmt.Fprintf(&b, "      - type: volume\n        source: %s-%s-wal\n        target: /var/lib/roost/wal\n", m.Project.Name, service)
 		}
-		// RR-20260928-04：read_only 根文件系统上相对的 stats_log.dir（/app/log）不可写，
+		// read_only 根文件系统上相对的 stats_log.dir（/app/log）不可写，
 		// 统计文件之前从不落盘。给它一个每服务独立的命名卷：比 tmpfs 多活过容器重建，
 		// 首次挂载时按镜像里属于 65532 的空目录初始化属主（见 renderDockerfile）。
 		if serviceUsesStatsLog(m, service) {

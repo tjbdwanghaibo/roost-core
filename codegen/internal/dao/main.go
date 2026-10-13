@@ -23,7 +23,7 @@ import (
 
 // Default locations of the DAO definitions and the generated package inside a
 // business project. Exported so `roost generate` refers to the same values
-// instead of repeating them (U-0118).
+// instead of repeating them.
 const (
 	DefaultDefDir = "./db/def"
 	DefaultOutDir = "./db"

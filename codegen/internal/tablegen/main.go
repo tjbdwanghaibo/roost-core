@@ -71,7 +71,7 @@ type Field struct {
 }
 
 // DefaultMetaDir is where a business project keeps its table meta files;
-// `roost generate` refers to it (U-0118).
+// `roost generate` refers to it.
 const DefaultMetaDir = "./configs/schema"
 
 func Run(args []string, stdout io.Writer) error {
@@ -198,7 +198,7 @@ func parseMetaFile(root string, module string, path string) ([]Meta, error) {
 	if err != nil {
 		return nil, err
 	}
-	// RR-20261006-56: refuse a misspelt option instead of using the default.
+	// refuse a misspelt option instead of using the default.
 	if err := marker.CheckFile(fset, file, marker.Table, marker.Object); err != nil {
 		return nil, err
 	}
@@ -477,10 +477,10 @@ func readTableManifest(jsonDir string) (tableJSONManifest, error) {
 
 // ManifestOwnsJSON reports whether jsonDir/_manifest.json still records
 // generated JSON files. `roost generate` asks this when configs/table has no
-// CSV: only a manifest that owns outputs has something to retire
-// (RR-20260930-09). A missing manifest and the scaffold's empty v2 manifest
+// CSV: only a manifest that owns outputs has something to retire.
+// A missing manifest and the scaffold's empty v2 manifest
 // mean the project has simply not written its CSVs yet, and running tablegen
-// would fail on the first meta's missing CSV (RR-20261001-03). A manifest in
+// would fail on the first meta's missing CSV. A manifest in
 // any other version is an error, as in the conversion itself.
 func ManifestOwnsJSON(jsonDir string) (bool, error) {
 	manifest, err := readTableManifest(jsonDir)
@@ -499,8 +499,7 @@ func safeTableJSONName(name string) bool {
 // loader hands configdata (metaRules), checked by the same rules.Check the
 // loader runs on every load and reload (B10). It is early feedback only: the
 // loader enforces the rules whether or not anybody ran -check. ref needs the
-// typed tables and is left to the loader. RR-20261005-NC-75: -check used to
-// stop at "is valid JSON".
+// typed tables and is left to the loader. -check goes beyond "is valid JSON".
 func checkJSONFiles(metas []Meta, jsonDir string) error {
 	for _, meta := range metas {
 		path := filepath.Join(jsonDir, meta.JSON)
@@ -1041,8 +1040,7 @@ func parseExpr(field Field, raw string) string {
 
 // resolveRefs checks every ref= declaration against the schema: the target
 // must be a table of this run and the field's type (pointer or not) its key
-// type. RR-20261005-NC-75: ref= used to be printed into the CSV rule row and
-// enforced by nothing. The data itself is checked by configdata on every load
+// type, so ref= is enforced rather than only printed into the CSV rule row. The data itself is checked by configdata on every load
 // (the Ref of the generated Rules).
 func resolveRefs(metas []Meta) error {
 	tables := make(map[string]Meta, len(metas))

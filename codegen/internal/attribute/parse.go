@@ -42,7 +42,7 @@ func parseDir(dir string) ([]ProfileDef, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", path, err)
 		}
-		// RR-20261006-56: refuse a misspelt option instead of using the default.
+		// refuse a misspelt option instead of using the default.
 		if err := marker.CheckFile(fset, f, marker.Attribute); err != nil {
 			return nil, err
 		}
@@ -141,7 +141,7 @@ func buildProfile(name, pkg string, st *ast.StructType, params map[string]string
 	// The declaration has to fit the framework's representation: one dirty
 	// bit per attribute in a uint64, and ids in AttrID (uint16). Past either
 	// limit the generator used to write `1 << 64` or an overflowing id and
-	// leave the compiler to report it (RR-20261005-NC-62).
+	// leave the compiler to report it.
 	if maxCount > maxAttributeBits {
 		return rawProfile{}, fmt.Errorf("%s: max=%d exceeds the %d bits of the dirty mask", name, maxCount, maxAttributeBits)
 	}
@@ -159,8 +159,7 @@ func buildProfile(name, pkg string, st *ast.StructType, params map[string]string
 	}
 	// The one field a declaration must carry itself: every generated setter
 	// ORs its attribute's bit into it. Checked after the per-field rules, so
-	// a declaration with a real field problem still hears about that first
-	// (RR-20260917-06).
+	// a declaration with a real field problem still hears about that first.
 	hasDirtyMask := false
 	for _, field := range st.Fields.List {
 		if exprString(field.Type) != "uint64" {
@@ -226,7 +225,7 @@ const (
 
 // notCarried lists the builtin field types AttrValue cannot hold. Floats are
 // the dangerous ones: they compile, and GetAttr / ExportValues truncate them,
-// so 0.15 is exported, persisted and replayed as 0 (RR-20261005-NC-62). The
+// so 0.15 is exported, persisted and replayed as 0. The
 // others would not compile; refusing them here names the field instead.
 // Named types are taken on trust — the parser sees syntax, not their
 // underlying type.
