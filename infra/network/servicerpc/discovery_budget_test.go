@@ -1,4 +1,3 @@
-// RR-20261004-NC-10：配置的调用预算从服务发现开始生效。
 package servicerpc
 
 import (
@@ -9,6 +8,8 @@ import (
 
 	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
 )
+
+// 配置的调用预算从服务发现开始生效。
 
 type budgetDiscovery struct {
 	fetcd.IDiscovery
