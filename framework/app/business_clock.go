@@ -4,8 +4,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
-// ModBusinessClock 是业务时钟在 Registry 里的能力名（维护者决定 D-L3，
-// docs/feature/D-L3-BUSINESS-SYSTEM-CLOCK-2026-10-06.md）。NewRegistry 按 time.logic_offset 登记它。
+// ModBusinessClock 是业务时钟在 Registry 里的能力名（业务时钟与系统时钟的划分见
+// docs/framework/guide/10-time.md）。NewRegistry 按 time.logic_offset 登记它。
 const ModBusinessClock ModName = "clock.business"
 
 // logicOffsetKey 是业务时钟偏移唯一的配置来源。所有进程读同一份：参与同一活动组的 game 与协调器

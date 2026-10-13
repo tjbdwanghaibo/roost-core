@@ -3,7 +3,6 @@ package app
 import (
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -11,7 +10,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 )
 
-// 配置声明（维护者决定 A4 ①，docs/feature/A4-1-MOD-CONFIG-SCHEMA-2026-10-07.md）。
+// 配置声明（维护者决定；现行说明见 docs/framework/guide/07-config.md）。
 //
 // 每个 Mod 把自己读的键写成一个带 tag 的结构体，实现 ConfigSchema 返回它的声明，在 Init 里用 LoadConfig 读：
 //
@@ -25,7 +24,7 @@ import (
 //	func (m *ShopMod) Init(cfg *viper.Viper) error  { return app.LoadConfig(cfg, &m.cfg) }
 //
 // tag 的含义见 internal/configschema。App 在任何 Mod Init 之前按本服务全部 Mod 的声明检查一次配置（CheckConfig），
-// 错误一次报全；生成器按同一份声明写配置段，doctor 按它检查工程里的配置文件。框架代码（app、kit）读配置只经
+// 错误一次报全；生成器按同一份声明写配置段，doctor 按它检查工程里的配置文件。框架代码（app、wiring）读配置只经
 // LoadConfig（TestFrameworkModsReadConfigOnlyThroughDeclarations）。
 
 // ConfigSchema 是一组配置键的声明，Mod 的 ConfigSchema 方法返回它。
@@ -35,7 +34,7 @@ type ConfigSchema = configschema.Schema
 // App 启动时合并 App 自己、本服务全部 Mod 与服务本身的声明检查配置，`--print-config` 按它打印配置段，
 // `--print-config-schema` 把它打印成 JSON（`roost project doctor` 读它，见 printConfigSchema）。
 //
-// 业务服务的声明（维护者决定 A4 ① 收尾，2026-10-07）：生成的 bootstrap 给业务服务注册的是框架 Mod，没有业务 Mod
+// 业务服务的声明（维护者决定，2026-10-07）：生成的 bootstrap 给业务服务注册的是框架 Mod，没有业务 Mod
 // 的位置，业务代码读的键（game-demo 的 activity.* / platform.* 等）就写在服务上，与 Mod 同样两行：
 //
 //	func (*Service) ConfigSchema() app.ConfigSchema { return app.SchemaOf(gameConfig{}) }
@@ -130,7 +129,7 @@ func checkConfig(cfg *viper.Viper, declarations []configDeclaration) (appConfig,
 	}
 	// 没有任何声明的键（拼错的键名）不在这里报：生成的配置会带别的进程才注册的 Mod 的键（例如只读 Mirror 的
 	// 停机预算），进程看不出哪些是笔误。这件事由 doctor 的 config-schema 检查判断：它按生成器认识的全部框架声明，
-	// 加上从本进程 --print-config-schema 读到的业务声明（业务服务读的键由服务自己声明，A4 ① 收尾）。
+	// 加上从本进程 --print-config-schema 读到的业务声明（业务服务读的键由服务自己声明）。
 	if _, err := configschema.Merge(schemas...); err != nil {
 		errs = append(errs, err)
 	}
@@ -138,7 +137,7 @@ func checkConfig(cfg *viper.Viper, declarations []configDeclaration) (appConfig,
 }
 
 // AppConfigSchema 返回 App 自己读的键的声明（日志、业务时钟偏移、停机预算、指标上限、单实例锁、部署环境、
-// server_type / sid）。生成器的快照（kit/internal/configschemagen）与 doctor 用它。
+// server_type / sid）。生成器的快照（wiring/internal/configschemagen）与 doctor 用它。
 func AppConfigSchema() ConfigSchema { return SchemaOf(appConfig{}) }
 
 // CheckServiceConfig 用本 App 给 serverType 注册的全部 Mod（共享 + 服务专属）与服务本身的声明检查 cfg，
@@ -266,14 +265,15 @@ type metricsConfig struct {
 	MaxSeriesPerMetric int `config:"max_series_per_metric" min:"0" help:"每个指标的序列数上限，0 取框架默认"`
 }
 
-// ValidateConfig 是 App 自己的跨键规则：server_type 必填、sid 是 int32 范围内的正整数、生产环境业务时钟偏移为 0（D-L3）。
+// ValidateConfig 是 App 自己的跨键规则：server_type 必填、sid 是 int32 范围内的正整数、生产环境业务时钟偏移为 0。
 // 键的类型与单实例锁的时间关系在声明与 singletonConfig.ValidateConfig 里。
 func (c *appConfig) ValidateConfig(production bool) error {
 	var errs []error
 	if strings.TrimSpace(c.ServerType) == "" {
 		errs = append(errs, errors.New("config: server_type is required"))
 	}
-	if c.Sid <= 0 || c.Sid > math.MaxInt32 {
+	// sid 声明为 int32，超出 int32 范围的值在解码时已被拒绝，这里只需检查正数。
+	if c.Sid <= 0 {
 		errs = append(errs, errors.New("config: sid must be positive"))
 	}
 	if production && c.Time.LogicOffset != 0 {

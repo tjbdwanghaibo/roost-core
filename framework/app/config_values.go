@@ -8,11 +8,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 )
 
-// 单键的严格读取（RR-20261005-NC-190、维护者决定 A4 ②）。
+// 单键的严格读取（维护者决定）。
 //
-// Mod 读配置用 LoadConfig 按声明一次读完（A4 ①）；这几个函数留给工具与测试临时读一个键。规则与声明读取相同：
+// Mod 读配置用 LoadConfig 按声明一次读完；这几个函数留给工具与测试临时读一个键。规则与声明读取相同：
 // `on` / `yes` 不是布尔值、不带单位的时长、`8k` 这样的整数都报错并点名键，未设置时返回零值。
-// 框架代码（app、kit）不用它们读配置（TestFrameworkModsReadConfigOnlyThroughDeclarations）。
+// 框架代码（app、wiring）不用它们读配置（TestFrameworkModsReadConfigOnlyThroughDeclarations）。
 
 // ConfigBool 严格读取一个布尔配置，规则见 configschema.ParseBool。
 func ConfigBool(cfg *viper.Viper, key string) (bool, error) {

@@ -103,7 +103,7 @@ func (a *App) RegisterServer(serverType ServiceName, svc Service, mods ...Mod) *
 			return a.run(serverType)
 		},
 	}
-	// 维护者决定 A4 ①：配置按本服务全部 Mod 的声明检查。--check-config 只加载并检查配置（与启动前的检查相同），
+	// 配置按本服务全部 Mod 的声明检查（维护者决定）。--check-config 只加载并检查配置（与启动前的检查相同），
 	// 不启动任何 Mod，用来在发布前检查真实的生产配置；--print-config 打印本服务全部声明（含业务 Mod）生成的配置段。
 	cmd.Flags().Bool("check-config", false, "load and check the config against every mod's declaration, then exit")
 	cmd.Flags().Bool("print-config", false, "print every config key this service's mods declare, with defaults and help, then exit")
@@ -167,7 +167,7 @@ func (a *App) printConfig(serverType ServiceName, out io.Writer) error {
 
 // printConfigSchema 把本服务的全部声明（含业务服务与业务 Mod 的）打印成 JSON：键表的每一项是 configschema.Key。
 // 业务声明只有编译后的进程知道，`roost project doctor` 在工程里编译并运行它、读这份输出，
-// 才能按业务声明检查工程里的配置文件（A4 ① 收尾）。
+// 才能按业务声明检查工程里的配置文件。
 func (a *App) printConfigSchema(serverType ServiceName, out io.Writer) error {
 	schema, err := a.ServiceConfigSchema(serverType)
 	if err != nil {
@@ -184,7 +184,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	if err != nil {
 		return err
 	}
-	// 进程级业务时钟（fctx.Now、框架库的缺省）在这里、启动时设一次，运行期不改（D-L3）；
+	// 进程级业务时钟（fctx.Now、框架库的缺省）在这里、启动时设一次，运行期不改；
 	// 生产环境非 0 已被启动检查拒绝。Registry 的业务时钟读同一个键。
 	clock.SetOffset(a.settings.Time.LogicOffset)
 	fctx.SetRuntimeConfig(a.cfg)
@@ -206,7 +206,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	// This App run owns the configured sink. Close it before returning so a
 	// subsequent run can safely rotate or remove the same file on Windows.
 	//
-	// 关闭之前先把最终错误写进日志（RR-20261006-07）：生成的 main 在 run 返回、文件日志已关之后才打印
+	// 关闭之前先把最终错误写进日志：生成的 main 在 run 返回、文件日志已关之后才打印
 	// "server exit"，那一行只到 stderr；启动阶段失败（Mod Init / Provide / Start、单实例锁、业务时间检查）
 	// 直接返回，文件里没有退出原因。这个 defer 最先登记、最后执行，runErr 已含停机期间并入的 RuntimeFailure。
 	defer func() {
@@ -248,7 +248,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	runtimeFailure, _ := Lookup[*RuntimeFailure](a.registry, ModRuntimeFailure)
 	// failureReturned 记录 RuntimeFailure 是否已经进了返回值（启动检查点、或 select 的 Done 分支）。
 	// 没进的——停机开始之后才失败、启动失败收尾期间才失败——在 run 返回时并入：返回值是进程退出码
-	// 与部署脚本看得到的唯一信号，fail-stop 不能以 0 退出（RR-20261005-NC-232）。围栏、失锁不 Release
+	// 与部署脚本看得到的唯一信号，fail-stop 不能以 0 退出。围栏、失锁不 Release
 	// 这些安全动作由 RuntimeFailure / 单实例锁自己完成，这里只补报告。这个 defer 登记在单实例锁的
 	// finish 之前，因而在它之后执行，收尾期间的失败也看得到。
 	failureReturned := false
@@ -271,7 +271,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	}
 
 	// --- Singleton lock: before any Mod Init ---
-	// 同一服务类型 + sid 只让一个进程跑 Mod（docs/feature/APP-SINGLETON-LOCK-2026-10-05.md）。
+	// 同一服务类型 + sid 只让一个进程跑 Mod（见 singleton.go）。
 	// 收尾统一在 defer 里：先停续期，再按 singletonReleasable 决定是否 Release，最后关闭 store。
 	// singletonReleasable 只在“全部 Mod 都停完”的路径上置位（逐个返回点置位，漏掉的路径默认不释放，
 	// 键在 TTL 内自然过期，方向是安全的）；singletonReleaseDeadline 是停机路径 shutdownCtx 的截止时间。
@@ -295,7 +295,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	}
 
 	// --- Business time only moves forward: before any Mod Init ---
-	// 业务时间高水位（docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md）：按新偏移算出的业务时间早于
+	// 业务时间高水位（见 business_time.go）：按新偏移算出的业务时间早于
 	// 这套部署到过的时刻就拒绝启动。它可能与单实例锁共用存储，所以 stop 登记在锁的 finish 之后、先于它执行。
 	businessTime, err := a.startBusinessTimeGuard(serverType, singleton)
 	if err != nil {
@@ -442,7 +442,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	svc := entry.svc
 	slog.Info("service init", "service", svc.Name())
 	// Init 失败与 Init 之后的启动失败走同一条收尾：先收回 Service 已启动的部分，再停 Mod、释放锁；
-	// Service 在预算内停不下来就保留 Mod 与锁，与正常停机相同（RR-20261005-NC-193）。
+	// Service 在预算内停不下来就保留 Mod 与锁，与正常停机相同。
 	finished, startErr := runStartupStep(startupCtx, sigChan, "service init "+string(svc.Name()), func(context.Context) error { return svc.Init(a.registry) })
 	if !finished {
 		return startErr
@@ -543,7 +543,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 	}
 	if !stoppingFinished {
 		// service.stopping 的 hook 在停机预算内没返回，可能还在用 Service 与 Mod：和 Service.Shutdown
-		// 不完整相同，不调 Shutdown、不停 Mod、不释放单实例锁（RR-20261005-NC-231）。
+		// 不完整相同，不调 Shutdown、不停 Mod、不释放单实例锁。
 		return errors.Join(serviceErr, shutdownErr)
 	}
 	shutdownResult := make(chan error, 1)
@@ -594,7 +594,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 
 	slog.Info("server stopped", "type", serverType)
 	// Mod 已经停完，singletonReleasable 已按 Mod 的结果定好；这里卡住的 hook 只让 run 按预算返回
-	// （剩余时间不够时 Release 跳过，键在 ttl 内过期），不改变释放规则（RR-20261005-NC-231）。
+	// （剩余时间不够时 Release 跳过，键在 ttl 内过期），不改变释放规则。
 	if _, err := a.emitLifecycleWithin(shutdownCtx, lifecycle.Event{
 		Phase:   lifecycle.PhaseServiceStopped,
 		Service: string(serverType),
@@ -636,7 +636,7 @@ const startupCleanupTimeout = 5 * time.Second
 // （Init 返回错误时同样调用：Init 可能已经起了后台循环、订阅，App 不知道是哪些）。Shutdown 必须
 // 容忍部分初始化。stopped 为 false 表示 Shutdown 没在 startupCleanupTimeout 内结束（包括不配合
 // ctx、按 ctx 超时返回、panic）：调用方保留 Mod 与单实例锁，和正常停机“Shutdown 不完整就保留
-// 依赖”的规则一致；Shutdown 返回其他错误视为已结束，错误并入启动错误（RR-20261005-NC-193）。
+// 依赖”的规则一致；Shutdown 返回其他错误视为已结束，错误并入启动错误。
 func shutdownAfterStartupFailure(svc Service) (stopped bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), startupCleanupTimeout)
 	defer cancel()
@@ -697,8 +697,8 @@ func stopModsReverseWithContext(ctx context.Context, mods []Mod, msg string) err
 
 // stopModsReverseBefore 逆序停止 mods。later 是同一次停机里、这些 mods 停完之后才会停止
 // 的 Mod（服务专属 Mod 先停、共享 Mod 后停，共用一个 shutdown.total_timeout），不在这里停止，
-// 只把它们声明的预算计入规划：先停的一段必须给后面声明了预算的 Mod 留出时间
-// （RR-20260926-42）。later 中未声明预算的 Mod 不参与这一段的均分，与原先相同。
+// 只把它们声明的预算计入规划：先停的一段必须给后面声明了预算的 Mod 留出时间。
+// later 中未声明预算的 Mod 不参与这一段的均分。
 func stopModsReverseBefore(ctx context.Context, mods []Mod, later []Mod, msg string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -739,7 +739,7 @@ func stopIncomplete(err error) bool {
 // defaultModStopTimeout 是没有总截止时间（兼容 Stop 路径）时未声明预算的 Mod 的停机时长。
 const defaultModStopTimeout = 5 * time.Second
 
-// undeclaredModStopFloor 是有总截止时间时每个未声明预算的 Mod 的固定保底（RR-20260926-51）：
+// undeclaredModStopFloor 是有总截止时间时每个未声明预算的 Mod 的固定保底：
 // 规划先为它们留出保底，声明预算只能用剩下的部分；保底不随声明预算一起缩放，先停的 Mod 因此
 // 不会被一个很大的声明值压到接近零——那会让它立即超时并中断整条关闭链。取 3s，与生成配置的
 // nest.request_timeout 同值（Nest 排空已准入请求的上限）。
@@ -769,16 +769,15 @@ const (
 
 // modStopBudget 在剩余总时长 remaining 内为 mod 分配停机截止时长。pending 是同一段里在它
 // 之后停止的 Mod；later 是之后另一段才停止的 Mod，只贡献声明预算（later 中未声明的 Mod 不参与
-// 这一段的规划，与 RR-42 之前相同）。每停一个 Mod 重新规划一次，前面 Mod 提前结束省下的时间
-// 自然留给后面。
+// 这一段的规划）。每停一个 Mod 重新规划一次，前面 Mod 提前结束省下的时间自然留给后面。
 //
-// 规则（RR-20260926-51，维护者批准）：
+// 规则（维护者批准）：
 //   - 保底之和 = 本段未声明 Mod 数 x undeclaredModStopFloor；声明预算的上限 = remaining − 保底之和。
 //   - 声明值之和不超过上限：声明的 Mod 拿到声明值，未声明的 Mod 均分 remaining − 声明值之和。
 //   - 超过上限：声明值按“上限 / 声明值之和”缩放，未声明的 Mod 各拿保底；保底不参与缩放。
 //   - remaining 不足以给参与规划的每个 Mod 一份保底：全部均分 remaining（声明的 Mod 也一样）。
 //
-// 没有任何 Mod 声明预算时三种情形都退化为“remaining / 本段剩余 Mod 数”，与原先相同。
+// 没有任何 Mod 声明预算时三种情形都退化为“remaining / 本段剩余 Mod 数”。
 // 声明预算之和因此永远不超过剩余总时长。
 func modStopBudget(remaining time.Duration, mod Mod, pending, later []Mod) (time.Duration, stopBudgetPlan) {
 	own := declaredStopBudget(mod)
@@ -889,8 +888,8 @@ func stopModSafely(ctx context.Context, mod Mod) error {
 // emitLifecycleWithin 是停机阶段（service.stopping / service.stopped）的 hook 派发：在 ctx（停机总预算）
 // 内等全部 hook 返回。hook 不配合 ctx 时 App 杀不掉它——到期返回 finished=false 与 ctx 错误，hook 留在
 // 自己的 goroutine 里继续跑，调用方按“停机不完整”保留依赖；与 Service.Shutdown、Mod 停机的处理相同
-// （roost-coding 三步停机②，RR-20261005-NC-231）。到期的错误点出卡住的 hook（最后一个开始、还没返回的，
-// 它之后的 hook 没有运行；RR-20261006-25），run 的 “app run failed” 日志带上它。hook 自己返回的错误
+// （roost-coding 三步停机②）。到期的错误点出卡住的 hook（最后一个开始、还没返回的，
+// 它之后的 hook 没有运行），run 的 “app run failed” 日志带上它。hook 自己返回的错误
 // （包括配合 ctx 返回的 ctx 错误）算已返回，finished=true。启动阶段的 hook 没有停机预算，仍同步派发。
 func (a *App) emitLifecycleWithin(ctx context.Context, event lifecycle.Event) (finished bool, err error) {
 	var running atomic.Pointer[string]
@@ -946,7 +945,7 @@ func (a *App) lifecycleRegistry() (*lifecycle.Registry, error) {
 }
 
 func sortMods(mods []Mod, external map[ModName]struct{}) ([]Mod, error) {
-	// RR-20261003-NC-01：单 Mod 也必须校验名字、依赖和环，只有空集合可直接返回。
+	// 单 Mod 也必须校验名字、依赖和环，只有空集合可直接返回。
 	if len(mods) == 0 {
 		return append([]Mod(nil), mods...), nil
 	}

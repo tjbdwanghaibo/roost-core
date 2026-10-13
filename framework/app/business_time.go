@@ -12,9 +12,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// 业务时间只许前进（docs/feature/BUSINESS-TIME-MONOTONIC-2026-10-06.md）。
+// 业务时间只许前进（维护者决定，见 docs/framework/guide/10-time.md）。
 //
-// 业务时钟 = 真实时间 + time.logic_offset（D-L3）。偏移只在启动时生效，生产强制为 0；测试环境可以
+// 业务时钟 = 真实时间 + time.logic_offset。偏移只在启动时生效，生产强制为 0；测试环境可以
 // 前拨，但同一套部署的业务时间不能往回走——活动、邮件、副本截止等业务时间戳都假定它单调，App 在这里
 // 统一兜住，各模块不感知、也不再为“偏移往回调”各写一套系统钟拆分。
 //
@@ -92,7 +92,7 @@ type businessTimeGuard struct {
 }
 
 // startBusinessTimeGuard 在单实例锁之后、任何 Mod Init 之前调用。返回 nil 表示这个进程不需要守卫。
-// 谁检查见方案 §3：生产不检查（偏移强制为 0，生产行为不变）；开了单实例锁的进程用锁的存储检查；
+// 谁检查：生产不检查（偏移强制为 0，生产行为不变）；开了单实例锁的进程用锁的存储检查；
 // 偏移非 0 而没开锁的进程只为高水位打开一个连接，打不开就拒绝启动。
 func (a *App) startBusinessTimeGuard(serverType ServiceName, lock *singletonLock) (*businessTimeGuard, error) {
 	if isProductionServiceConfig(a.cfg) {

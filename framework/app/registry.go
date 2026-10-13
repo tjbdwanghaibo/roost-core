@@ -39,7 +39,7 @@ func NewRegistry(cfg *viper.Viper) *Registry {
 	r.store[ModAdminMetadata] = admin.NewMetadataRegistry()
 	r.store[ModLifecycle] = lifecycle.NewRegistry()
 	r.store[ModRuntimeFailure] = NewRuntimeFailure()
-	// 业务时钟（D-L3）：与 App.run 设进程级偏移读的是同一个键，同一份配置。
+	// 业务时钟：与 App.run 设进程级偏移读的是同一个键，同一份配置。
 	r.store[ModBusinessClock] = clock.NewBusiness(readTimeConfig(cfg).LogicOffset)
 	return r
 }

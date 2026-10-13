@@ -19,14 +19,14 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 )
 
-// 单实例锁：同一服务类型 + sid 同一时刻只有一个进程在跑 Mod（docs/feature/APP-SINGLETON-LOCK-2026-10-05.md）。
+// 单实例锁：同一服务类型 + sid 同一时刻只有一个进程在跑 Mod。
 //
 // 只处理同一 sid 崩溃重启时短暂出现两个进程这一种场景：旧进程卡住（SIGSTOP、长 GC、调试器）、
 // 新进程已被拉起。App 在 NewRegistry 之后、第一个 Mod Init 之前获取锁（别人持有就等待），
 // 持有期间由一个 goroutine 按固定节拍续期，失锁即经 RuntimeFailure fail-stop；全部 Mod 停完
 // 才释放。模块不感知锁、不各自检查：Nest 由 OnFail 回调统一围栏，活性查询走 SingletonLiveness。
 //
-// core 只定义后端接口与状态机，不 import Redis 驱动；Redis 实现在 kit/redis（kitredis.SingletonStore）。
+// core 只定义后端接口与状态机，不 import Redis 驱动；Redis 实现在 wiring/redis（kitredis.SingletonStore）。
 
 // SingletonStore 是单实例锁的后端：两个原子操作，语义与 redis.CompareAndSet / CompareAndDelete 相同。
 // expected 为 nil 表示“键必须不存在”；applied=false 时 current 是键里现在的值（不存在为 nil）；
@@ -42,7 +42,7 @@ import (
 //     同一个 ctx 限定。重复执行是安全的：续期 CAS(v, v) 幂等；获取 CAS(nil, v) 第一次已落地时重试得到
 //     applied=false、current=v，App 据此认领；按值 CompareAndDelete 只删自己的值。
 //   - 并发安全，而且续期不被 Live 查询拖住：二者可能同时调用，Live 并发占满连接等资源时，CAS 仍要能在
-//     自己的超时内发出（kitredis 为此用两个独立客户端）。
+//     自己的超时内发出（wiring/redis 的实现为此用两个独立客户端）。
 type SingletonStore interface {
 	CompareAndSet(ctx context.Context, key string, expected, next []byte, ttl time.Duration) (applied bool, current []byte, err error)
 	CompareAndDelete(ctx context.Context, key string, expected []byte) (applied bool, err error)
@@ -73,7 +73,7 @@ type SingletonLiveness interface {
 // ModSingleton 是 SingletonLiveness 在 Registry 里的能力名；singleton.enabled=false 时不登记。
 const ModSingleton ModName = "singleton"
 
-// SingletonIncarnation 是本进程持有的单实例锁的身份（O-M6-6，docs/feature/MIRROR-M6-OBSERVATIONS-2026-10-06.md §7）。
+// SingletonIncarnation 是本进程持有的单实例锁的身份。
 // 能拿到它就说明本进程已持有 Key 这把锁：同一 Key 的上一代进程已经死了，或者卡住超过 ttl、恢复后会失锁
 // fail-stop。框架模块据此接管上一代进程留下的按 sid 的协调状态（例如 Remote 实体共享锁），不必等它们各自的 TTL。
 // 只在 singleton.enabled=true 时登记（能力名 ModSingletonIncarnation）；未启用时没有这个保证，模块不得接管。
@@ -117,9 +117,9 @@ func (a *App) Singleton(open SingletonOpener) *App {
 	return a
 }
 
-// singletonConfig 是 singleton.* 的声明（A4 ①）。缺省时间参数见方案 §3.3（维护者已同意 D2）；startup_wait 不写取 2 × ttl。
-// 写错类型（`enabled: on`、不带单位的时长）由声明检查报出，不管 enabled 读成了什么——宽松读取会把 `on` 读成 false，锁静默关闭
-// （RR-20261005-NC-190）。
+// singletonConfig 是 singleton.* 的配置声明；缺省时间参数经维护者同意，startup_wait 不写取 2 × ttl。
+// 写错类型（`enabled: on`、不带单位的时长）由声明检查报出，不管 enabled 读成了什么——宽松读取会把 `on` 读成 false，
+// 锁静默关闭。
 type singletonConfig struct {
 	Enabled       bool          `config:"enabled" help:"同一服务类型 + sid 只让一个进程运行 Mod（单实例锁）"`
 	KeyPrefix     string        `config:"key_prefix" help:"锁键前缀，同一套部署的全部服务相同；启用时必填"`
@@ -137,7 +137,7 @@ func (s singletonConfig) startupWait() time.Duration {
 	return 2 * s.TTL
 }
 
-// ValidateConfig 检查启用时的配置。三条时间关系的理由见方案 §3.3：
+// ValidateConfig 检查启用时的配置。三条时间关系及其理由：
 //  1. renew_interval ≤ guard：续期一直 Unknown 时，进入 [validUntil−guard, validUntil) 之后的第一拍
 //     在 validUntil 之前发起；配合 cas 把单次超时截到 validUntil，Lost 不晚于 validUntil 判定。
 //  2. 2 × renew_interval ≤ ttl − guard：一次续期超时之后下一次仍在窗口内发起，一次抖动不判 Lost。
@@ -263,7 +263,7 @@ func (l *singletonLock) snapshot() singletonStatus {
 
 // casReply 是一次 CAS 调用的结果与时间点。asked 在发出请求之前读取：Redis 的 TTL 从它处理请求
 // 的时刻起算（驱动内部重试时是最后落地那次），不早于 asked，所以以 asked 起算的本地窗口不会晚于
-// 键过期（RR-20261004-14 的教训）。
+// 键过期。历史：RR-20261004-14。
 type casReply struct {
 	applied bool
 	current []byte
@@ -277,7 +277,7 @@ type casReply struct {
 // [validUntil−guard, validUntil) 里才发起，若再给它一整个 renew_interval，超时结论最晚落在
 // validUntil−guard+2×renew_interval，可能晚于键过期。截到 validUntil，Unknown→Lost 就一定不晚于
 // validUntil 判定。asked 已不早于 validUntil（卡住后恢复）时不截：那次续期 Applied 仍证明键一直是
-// 自己的（方案 §3.4），报错则按窗口末尾判 Lost。启动获取时 validUntil 为零值，不受影响。
+// 自己的，报错则按窗口末尾判 Lost。启动获取时 validUntil 为零值，不受影响。
 func (l *singletonLock) cas(ctx context.Context, expected []byte) casReply {
 	asked := l.clock.Now()
 	timeout := l.settings.RenewInterval
@@ -292,7 +292,7 @@ func (l *singletonLock) cas(ctx context.Context, expected []byte) casReply {
 
 // timely 判断一次 Applied 是否作数：回复必须在 asked + ttl − guard 之前到达。整个进程被 SIGSTOP
 // 时在途的续期可能已被处理，SIGCONT 后读到的是停之前的 Applied，那时键可能早已是别人的；
-// 迟到的 Applied 当作 Unknown，并立即再续一次（方案 §3.4）。
+// 迟到的 Applied 当作 Unknown，并立即再续一次。
 func (l *singletonLock) timely(reply casReply) bool {
 	return reply.replied.Before(reply.asked.Add(l.settings.TTL - l.settings.Guard))
 }
@@ -316,7 +316,7 @@ var errSingletonLateReply = errors.New("singleton: applied reply arrived after t
 // errSingletonWaitInterrupted：启动等待期间收到退出信号。
 var errSingletonWaitInterrupted = errors.New("singleton: interrupted while waiting for the lock")
 
-// acquire 在任何 Mod Init 之前获取锁（方案 §3.4 启动获取）：
+// acquire 在任何 Mod Init 之前获取锁：
 //  1. Acquire Applied（及时）→ Held。
 //  2. Applied=false 且 current 是自己的值：上一次 Acquire 已落地、只是回复丢了。这个值只有本进程
 //     设过、而且还没启动任何 Mod，直接认领，随后立即 Renew 一次，用那次的 asked 起算窗口。
@@ -476,7 +476,7 @@ func (l *singletonLock) lose(cause error, holder []byte) {
 
 // finish 是 run 的统一收尾：先停续期并等它退出，再决定是否 Release，最后在没有组件还会用它时关闭 store。
 //
-// mayRelease 只在“全部 Mod 都停完”的路径上为 true（方案 §3.5）：Service.Shutdown 超时、服务专属或
+// mayRelease 只在“全部 Mod 都停完”的路径上为 true：Service.Shutdown 超时、服务专属或
 // 共享 Mod 停机不完整时还有组件可能在用依赖，不能让新进程提前拿锁，只停续期、等键自然过期。
 // Lost 时键已不是自己的，也不 Release。releaseDeadline 是停机路径 shutdownCtx 的截止时间，Release
 // 用 min(剩余, singletonReleaseBudget)，剩余为零就跳过；零值表示启动失败路径，固定 singletonReleaseBudget。
@@ -633,7 +633,7 @@ func (a *App) openSingleton(serverType ServiceName) (*singletonLock, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	// 本次启动的身份（O-M6-6）：Mod 在锁拿到之后才 Init / Provide，读到它时锁已持有。
+	// 本次启动的身份：Mod 在锁拿到之后才 Init / Provide，读到它时锁已持有。
 	token, _, _ := bytes.Cut(value, []byte("|"))
 	incarnation := SingletonIncarnation{Key: lock.key, Sid: a.settings.Sid, Token: string(token)}
 	if err := a.registry.Register(ModSingletonIncarnation, incarnation); err != nil {

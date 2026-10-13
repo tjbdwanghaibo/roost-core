@@ -11,7 +11,7 @@ import (
 // can no longer safely accept writes. The first failure wins and wakes App's
 // normal graceful-shutdown path; later reports are joined for diagnostics.
 //
-// 首次失败时按登记顺序执行 OnFail 回调（例如 kit Nest Mod 登记的 NestMgr.Fence），全部执行完
+// 首次失败时按登记顺序执行 OnFail 回调（例如 wiring 的 Nest Mod 登记的 NestMgr.Fence），全部执行完
 // 才向 Done 投递，所以 run 醒来开始优雅停机时 Nest 已经拒绝新派发。
 //
 // 回调不放在 sync.Once 里执行：Once.Do 里的函数 panic 会让 Once 视为已完成、done 永远不投递，
