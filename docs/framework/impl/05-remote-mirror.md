@@ -40,7 +40,7 @@
 
 ### bus
 
-8 个实现文件、16 个测试文件。
+8 个实现文件、10 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -55,7 +55,7 @@
 
 ### ownerroute
 
-2 个实现文件、3 个测试文件。
+2 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -107,23 +107,19 @@
 ### bus
 
 - [bus_lifecycle_test.go](../../../infra/network/bus/bus_lifecycle_test.go)：`TestBusStopBeforeStartIsSafeAndFinal`、`TestBusStartFailureCleansPartialSubscriptions`、`TestBusRejectsRestartAfterStop`、`TestHandleRpcReturnsSubscribeError`、`TestHandleRejectsNilAndDuplicateRegistration`；其余 6 项见文件
-- [dead_letter_admission_promises_test.go](../../../infra/network/bus/dead_letter_admission_promises_test.go)：`TestRequeueDeadLettersRefusesWithoutAClientAndPartialRequeueOnAPurgeOnlyStore`、`TestAdminRegistrationAndNilBusEntryPointsRefuse`
-- [jetstream_contract_test.go](../../../infra/network/bus/jetstream_contract_test.go)：`TestJetStreamRPCRequestWithoutReplySubjectIsNotExecuted`、`TestLightweightCallReportsJetStreamCapture`、`TestJetStreamRPCInProgressHeartbeatStopsAtTheRequestDeadline`、`TestJetStreamStopWaitsForInFlightHandlerAndDeliversItsResponse`、`TestJetStreamStopHandsInterruptedRequestBackToBroker`、`TestJetStreamDeliveryAfterStopDoesNotRunBusiness`
+- [guards_test.go](../../../infra/network/bus/guards_test.go)：`TestDecodeRPCResponseRefusesEveryMalformedEnvelope`、`TestBusRefusesHandlerRegistrationAfterStop`、`TestBusCallsWithoutTransportNameTheMissingPiece`、`TestBusDeadLetterOperationsRefuseWithoutACapableStore`、`TestDeadLetterRequeueIDIsStableAndDistinct`；其余 2 项见文件
+- [jetstream_contract_test.go](../../../infra/network/bus/jetstream_contract_test.go)：`TestJetStreamRPCRequestWithoutReplySubjectIsNotExecuted`、`TestLightweightCallReportsJetStreamCapture`、`TestJetStreamRPCInProgressHeartbeatStopsAtTheRequestDeadline`、`TestJetStreamStopWaitsForInFlightHandlerAndDeliversItsResponse`、`TestJetStreamStopHandsInterruptedRequestBackToBroker`；其余 1 项见文件
 - [jetstream_rpc_test.go](../../../infra/network/bus/jetstream_rpc_test.go)：`TestJetStreamRPCPublishesRequestAndDeliversResponse`、`TestJetStreamRPCRecordsTimeoutAndClearsPendingGauge`、`TestJetStreamRPCPendingGaugeIsPerMethod`、`TestJetStreamRPCHandleRpcPublishesResponseAfterHandler`、`TestBusCallStaysLightweightWhenJetStreamRPCEnabled`；其余 3 项见文件
-- [msg_label_bound_promises_test.go](../../../infra/network/bus/msg_label_bound_promises_test.go)：`TestAsyncMessageLabelsAndDeadLetterKeysAreBoundedByRegistration`
-- [promises_test.go](../../../infra/network/bus/promises_test.go)：`TestDecodeRPCResponseRefusesEveryMalformedEnvelope`、`TestBusRefusesToRestartAfterStop`、`TestBusRefusesHandlerRegistrationAfterStop`、`TestBusCallsWithoutTransportNameTheMissingPiece`、`TestBusDeadLetterOperationsRefuseWithoutACapableStore`；其余 1 项见文件
+- [msgpack_codec_test.go](../../../infra/network/bus/msgpack_codec_test.go)：`TestCodecWriterByteAndStringUseTheSameHardLimit`、`TestMessagePackCustomTypesAndNilValues`、`TestMessagePackCurrentFormatAndOwnership`、`TestMessagePackRefusesOldTruncatedAndOversizedDeclarations`、`TestMessagePackCodecConcurrentUse`
+- [msgpack_real_test.go](../../../infra/network/bus/msgpack_real_test.go)：`TestRealMessagePackCoreRPCErrorAndAsyncBus`
 - [reliable_redis_test.go](../../../infra/network/bus/reliable_redis_test.go)：`TestRedisReliableStoreDeadLettersKeepNewestMaxEntries`、`TestRedisReliableStorePurgeDeadLettersDeletesOnlyQueryRange`、`TestRedisReliableStorePurgeWholeBucketReturnsEntryCount`
-- [reliable_test.go](../../../infra/network/bus/reliable_test.go)：`TestReliableBroadcastDedupIsPerConsumer`、`TestReliableDispatchDropGoesToDeadLetter`、`TestBusDeadLetterListAndRequeue`、`TestBusDeadLetterRequeueLimitKeepsUnselectedEntries`、`TestBusDeadLetterRequeueUsesStableIDWhenDeleteFails`；其余 2 项见文件
-- [rpc_contract_test.go](../../../infra/network/bus/rpc_contract_test.go)：`TestRefusedRPCIsAnsweredAtOnceWhenTheDispatcherIsNotRunning`、`TestRefusedRPCIsAnsweredAtOnceWhenTheQueueIsFull`、`TestRPCBudgetJetStreamResponsesUseTheClientEnvelope`、`TestRPCBudgetJetStreamExpiredAndMalformedDoNotCallBusiness`、`TestRPCBudgetReliableCallerReceivesMissingHandlerRefusal`、`TestRPCBudgetMissingHandlerRetainsPublishAndMarshalFailures`、`TestCallerRPCMethodLabelsAreBounded`、`TestServedRPCMethodLabelsAreTheRegisteredMethods`
-- [rpc_error_test.go](../../../infra/network/bus/rpc_error_test.go)：`TestRPCErrorResponseUsesCodeReasonEnvelope`
-- [stop_contract_test.go](../../../infra/network/bus/stop_contract_test.go)：`TestJetStreamRPCStopContract`
-- [stop_retry_promises_test.go](../../../infra/network/bus/stop_retry_promises_test.go)：`TestBusStopRetryWaitsForTheRetainedDrain`、`TestBusStopInsideHandlerAfterBudgetedStopReturns`
+- [reliable_test.go](../../../infra/network/bus/reliable_test.go)：`TestReliableBroadcastDedupIsPerConsumer`、`TestReliableDispatchDropGoesToDeadLetter`、`TestBusDeadLetterListAndRequeue`、`TestBusDeadLetterRequeueLimitKeepsUnselectedEntries`、`TestBusDeadLetterRequeueUsesStableIDWhenDeleteFails`；其余 3 项见文件
+- [rpc_contract_test.go](../../../infra/network/bus/rpc_contract_test.go)：`TestRefusedRPCIsAnsweredAtOnceWhenTheDispatcherIsNotRunning`、`TestRefusedRPCIsAnsweredAtOnceWhenTheQueueIsFull`、`TestRPCBudgetJetStreamResponsesUseTheClientEnvelope`、`TestRPCBudgetJetStreamExpiredAndMalformedDoNotCallBusiness`、`TestRPCBudgetReliableCallerReceivesMissingHandlerRefusal`；其余 4 项见文件
+- [stop_test.go](../../../infra/network/bus/stop_test.go)：`TestJetStreamRPCStopContract`、`TestBusStopRetryWaitsForTheRetainedDrain`、`TestBusStopInsideHandlerAfterBudgetedStopReturns`
 
 ### ownerroute
 
-- [guards_promises_test.go](../../../infra/network/ownerroute/guards_promises_test.go)：`TestTransportAndRouterRefuseMissingParts`
-- [promises_test.go](../../../infra/network/ownerroute/promises_test.go)：`TestRouterRefusesInvalidKeysAndOwnerlessRoutes`
-- [route_test.go](../../../infra/network/ownerroute/route_test.go)：`TestRouterExecutesLocalCommand`、`TestRouterSendsRemoteCommand`
+- [route_test.go](../../../infra/network/ownerroute/route_test.go)：`TestRouterExecutesLocalCommand`、`TestRouterSendsRemoteCommand`、`TestRouterRefusesInvalidKeysAndOwnerlessRoutes`、`TestTransportAndRouterRefuseMissingParts`
 
 ### remoteentity
 

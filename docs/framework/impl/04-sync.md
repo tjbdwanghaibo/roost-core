@@ -56,7 +56,7 @@
 
 ### gateway
 
-2 个实现文件、4 个测试文件。
+20 个实现文件、6 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -201,10 +201,12 @@
 
 ### gateway
 
-- [gateway_test.go](../../../infra/network/gateway/gateway_test.go)：`TestChainOrderAndAuthentication`
-- [middleware_test.go](../../../infra/network/gateway/middleware_test.go)：`TestRateLimitByPlayerAndMessage`、`TestRateLimitBackstopHoldsWithoutLimiter`、`TestTimeoutAndRecover`
-- [ratelimit_owner_promises_test.go](../../../infra/network/gateway/ratelimit_owner_promises_test.go)：`TestOnePlayerSprayingMessageIDsDoesNotRateLimitOthers`
-- [recover_promises_test.go](../../../infra/network/gateway/recover_promises_test.go)：`TestRecoverIsolatesReporterFailure`、`TestRecoverIsolatesDiagnosticFailure`、`TestRecoverPreservesNormalContract`
+- [binding_test.go](../../../infra/network/gateway/binding_test.go)：`TestConcurrentBindSharesOneOwnerAndOneIdentity`、`TestBindingActivationReplacementAndOldCloseAreIsolated`、`TestBindingTerminalCapacityIsReservedBeforeAdmission`、`TestSessionReplacementDoesNotCrossPlayerIdentity`
+- [gateway_test.go](../../../infra/network/gateway/gateway_test.go)：`TestChainOrderAndAuthentication`、`TestCompleteChannelEnvelopeMustFitActualLimits`、`TestGateStopRetriesShareOneDrainWaiter`
+- [middleware_test.go](../../../infra/network/gateway/middleware_test.go)：`TestRateLimitByPlayerAndMessage`、`TestRateLimitBackstopHoldsWithoutLimiter`、`TestTimeoutAndRecover`、`TestRecoverIsolatesReporterFailure`、`TestRecoverIsolatesDiagnosticFailure`；其余 2 项见文件
+- [packet_test.go](../../../infra/network/gateway/packet_test.go)：`TestBindingPacketHasCompleteIdentityAndCurrentFormat`、`TestBudgetConsumesElapsedTimeAndDoesNotRestartAtReceiver`、`TestSubjectSourceAndAudienceAreExplicit`
+- [tcp_handshake_test.go](../../../infra/network/gateway/tcp_handshake_test.go)：`TestTCPBindFinishesBeforeACKAndActivationCanPushAfterACK`、`TestTCPRefusedOrPanickingBindNeverAcknowledgesAuthentication`、`TestTCPCloseInterruptsBlockedWriteAndPushSequencesFollowStream`
+- [tcp_test.go](../../../infra/network/gateway/tcp_test.go)：`TestTCPRuntimeBelongsToOneServerBeforeStart`、`TestTCPDefaultRequestBudgetsAreAppliedAtConstruction`、`TestHeartbeatKeepsAuthenticatedPushConnectionAlive`、`TestPerConnectionTokenBucketIncludesHeartbeats`、`TestFrameRoundTrip`；其余 24 项见文件
 
 ### sync/entitysync
 

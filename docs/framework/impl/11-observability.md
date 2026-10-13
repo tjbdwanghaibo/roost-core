@@ -63,7 +63,7 @@
 
 ### httpclient
 
-1 个实现文件、3 个测试文件。
+1 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -71,7 +71,7 @@
 
 ### httpserver
 
-1 个实现文件、4 个测试文件。
+1 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -99,7 +99,7 @@
 
 ### security
 
-3 个实现文件、5 个测试文件。
+3 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -109,7 +109,7 @@
 
 ### webroute
 
-1 个实现文件、5 个测试文件。
+1 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -152,16 +152,12 @@
 
 ### httpclient
 
-- [client_boundaries_promises_test.go](../../../infra/network/httpclient/client_boundaries_promises_test.go)：`TestClientDeadlines`、`TestCloneHeaderIsolation`、`TestStatusErrorClassification`、`TestCloneTimeoutPreservesParentAndCustomClient`、`TestCloneTimeoutConcurrentRequestsKeepParentDeadline`；其余 1 项见文件
-- [guards_promises_test.go](../../../infra/network/httpclient/guards_promises_test.go)：`TestDoJSONOnANilClientFails`
-- [httpclient_test.go](../../../infra/network/httpclient/httpclient_test.go)：`TestClientPostJSONSendsSignatureHeadersAndDecodesResponse`、`TestClientPostJSONDecodesErrorBodyAndReturnsStatusError`、`TestClientClonePreservesBaseURLAndAddsHeaders`
+- [httpclient_test.go](../../../infra/network/httpclient/httpclient_test.go)：`TestClientPostJSONSendsSignatureHeadersAndDecodesResponse`、`TestClientPostJSONDecodesErrorBodyAndReturnsStatusError`、`TestClientClonePreservesBaseURLAndAddsHeaders`、`TestClientDeadlines`、`TestCloneHeaderIsolation`；其余 5 项见文件
 
 ### httpserver
 
-- [httpserver_test.go](../../../infra/network/httpserver/httpserver_test.go)：`TestEngineRoutesGroupsAndJSONHandlersWithRequestID`、`TestEngineRejectsTooLargeJSONBody`、`TestReadBodyUsesEngineBodyLimit`、`TestEngineRecoversPanicAsJSON`、`TestNewServerAppliesProductionTimeouts`
-- [json_boundary_promises_test.go](../../../infra/network/httpserver/json_boundary_promises_test.go)：`TestJSONRequestBoundary`
-- [response_buffering_promises_test.go](../../../infra/network/httpserver/response_buffering_promises_test.go)：`TestJSONDoesNotCopyTheEncodedBodyPerResponse`
-- [response_integrity_promises_test.go](../../../infra/network/httpserver/response_integrity_promises_test.go)：`TestJSONEncodeFailureAnswers500InsteadOfAnEmptySuccess`、`TestJSONSuccessKeepsTheEncoderByteShape`、`TestPanicAfterTheResponseStartedAbortsTheConnection`、`TestErrAbortHandlerIsPropagatedNotAnswered`、`TestEarlyHintsDoNotCountAsAStartedResponse`；其余 3 项见文件
+- [httpserver_test.go](../../../infra/network/httpserver/httpserver_test.go)：`TestEngineRoutesGroupsAndJSONHandlersWithRequestID`、`TestReadBodyUsesEngineBodyLimit`、`TestEngineRecoversPanicAsJSON`、`TestNewServerAppliesProductionTimeouts`、`TestJSONRequestBoundary`；其余 8 项见文件
+- [response_buffering_test.go](../../../infra/network/httpserver/response_buffering_test.go)：`TestJSONDoesNotCopyTheEncodedBodyPerResponse`
 
 ### log
 
@@ -180,19 +176,13 @@
 
 ### security
 
-- [admission_promises_test.go](../../../infra/base/security/admission_promises_test.go)：`TestOversizedDemandHasNoKeySideEffects`
-- [owner_capacity_promises_test.go](../../../infra/base/security/owner_capacity_promises_test.go)：`TestOneOwnerCannotFillTheKeyTableForOthers`、`TestOwnerKeyLimitIsCountedAndReleasedByIdleSweep`、`TestFullTableRejectionDoesNotSweepBeforeTheSweepInterval`
-- [ratelimit_test.go](../../../infra/base/security/ratelimit_test.go)：`TestRateLimiter`、`TestRateLimiterBoundsKeyCardinality`、`TestRateLimiterAutomaticallyReclaimsIdleKeys`、`TestRateLimiterActivityExtendsIdleLifetime`、`TestRateLimiterRefillsContinuously`；其余 1 项见文件
-- [session_token_promises_test.go](../../../infra/base/security/session_token_promises_test.go)：`TestSessionTokenRefusesEachMalformedOrForgedToken`
-- [session_token_test.go](../../../infra/base/security/session_token_test.go)：`TestSessionTokenRoundTrip`、`TestSessionTokenRejectsWrongPlayerAndExpired`
+- [ratelimit_test.go](../../../infra/base/security/ratelimit_test.go)：`TestRateLimiter`、`TestRateLimiterBoundsKeyCardinality`、`TestRateLimiterAutomaticallyReclaimsIdleKeys`、`TestRateLimiterActivityExtendsIdleLifetime`、`TestRateLimiterRefillsContinuously`；其余 5 项见文件
+- [session_token_test.go](../../../infra/base/security/session_token_test.go)：`TestSessionTokenRoundTrip`、`TestSessionTokenRefusesEachMalformedOrForgedToken`
 
 ### webroute
 
-- [guards_promises_test.go](../../../infra/network/webroute/guards_promises_test.go)：`TestRegisterModulesRefusesANilModule`
-- [pattern_promises_test.go](../../../infra/network/webroute/pattern_promises_test.go)：`TestRegisterRejectsMalformedPatternsBeforeInstallation`、`TestRegisterInstallationPanicDoesNotReservePair`、`TestRegisterAcceptsChiPatterns`
-- [promises_test.go](../../../infra/network/webroute/promises_test.go)：`TestRegistrarRefusesEachInvalidRouteByMessage`
-- [result_encoding_promises_test.go](../../../infra/network/webroute/result_encoding_promises_test.go)：`TestUnencodableRouteResultReachesTheClientAs500`
-- [route_test.go](../../../infra/network/webroute/route_test.go)：`TestRegisterRejectsDuplicateMethodPath`、`TestDecodeJSONRejectsMalformedBody`、`TestDecodeJSONAndWriteResult`、`TestReadRawCopiesRequestData`、`TestRegisterModulesStopsOnFirstError`
+- [result_encoding_test.go](../../../infra/network/webroute/result_encoding_test.go)：`TestUnencodableRouteResultReachesTheClientAs500`
+- [route_test.go](../../../infra/network/webroute/route_test.go)：`TestDecodeJSONRejectsMalformedBody`、`TestReadRawCopiesRequestData`、`TestRegisterModulesStopsOnFirstError`、`TestRegisterModulesRefusesANilModule`、`TestRegistrarRefusesEachInvalidRouteByMessage`；其余 3 项见文件
 
 </details>
 

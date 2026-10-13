@@ -287,7 +287,7 @@
 
 ### spatial
 
-4 个实现文件、3 个测试文件。
+4 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -404,9 +404,7 @@
 
 ### spatial
 
-- [block_index_promises_test.go](../../../infra/base/spatial/block_index_promises_test.go)：`TestBlockRectsStayInsideBoundsAtTheInt64Edge`
-- [remaining_promises_test.go](../../../infra/base/spatial/remaining_promises_test.go)：`TestPathBudgetCountsExpandedCells`、`TestGridSearchSeesOneObstacleView`
-- [spatial_test.go](../../../infra/base/spatial/spatial_test.go)：`TestGridTerrainAtomicMovesAndBounds`、`TestDistanceOperationsDoNotOverflow`、`TestGridTerrainConcurrentAccessKeepsWritesConsistent`、`TestFindPath`、`TestFindPathDistinguishesBudgetFromNoPath`；其余 3 项见文件
+- [spatial_test.go](../../../infra/base/spatial/spatial_test.go)：`TestGridTerrainAtomicMovesAndBounds`、`TestDistanceOperationsDoNotOverflow`、`TestGridTerrainConcurrentAccessKeepsWritesConsistent`、`TestFindPath`、`TestFindPathDistinguishesBudgetFromNoPath`；其余 6 项见文件
 
 </details>
 

@@ -68,7 +68,7 @@
 
 ### lifecycle
 
-2 个实现文件、3 个测试文件。
+2 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -128,8 +128,7 @@
 
 ### lifecycle
 
-- [guards_promises_test.go](../../../infra/base/lifecycle/guards_promises_test.go)：`TestRegistryAndManagerGroupRefuseInvalidRegistrationsAndTransitions`
-- [lifecycle_test.go](../../../infra/base/lifecycle/lifecycle_test.go)：`TestEmitOrder`、`TestEmitAllContinuesAfterFailure`、`TestRegisterReplacesSamePhaseAndName`、`TestEmitRecoversHookPanic`、`TestEmitAllWatchedReportsEachHookBeforeItRuns`
+- [lifecycle_test.go](../../../infra/base/lifecycle/lifecycle_test.go)：`TestEmitOrder`、`TestEmitAllContinuesAfterFailure`、`TestRegisterReplacesSamePhaseAndName`、`TestEmitRecoversHookPanic`、`TestEmitAllWatchedReportsEachHookBeforeItRuns`；其余 1 项见文件
 - [manager_group_test.go](../../../infra/base/lifecycle/manager_group_test.go)：`TestManagerGroupLifecycleAndIdempotentStop`、`TestManagerGroupInitFailureRollsBackInitializedOnly`、`TestManagerGroupStartFailureContainsPanicAndContinuesCleanup`、`TestNewManagerGroupRejectsInvalidNames`
 
 ### manager

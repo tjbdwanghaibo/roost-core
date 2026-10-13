@@ -31,7 +31,7 @@
 
 ### clock
 
-1 个实现文件、2 个测试文件。
+1 个实现文件、1 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -39,7 +39,7 @@
 
 ### timer
 
-1 个实现文件、4 个测试文件。
+1 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -56,15 +56,12 @@
 
 ### clock
 
-- [clock_test.go](../../../infra/base/clock/clock_test.go)：`TestLogicClockOffsetRoundTripsAtDurationResolution`、`TestLogicClockSetLandsWithinOneMillisecond`、`TestInjectedClocksAreIndependentOfTheGlobalOne`、`TestLogicClockIsSafeForConcurrentUse`
-- [remaining_promises_test.go](../../../infra/base/clock/remaining_promises_test.go)：`TestProcessClockKeepsConfiguredSubmillisecondOffset`
+- [clock_test.go](../../../infra/base/clock/clock_test.go)：`TestLogicClockOffsetRoundTripsAtDurationResolution`、`TestLogicClockSetLandsWithinOneMillisecond`、`TestInjectedClocksAreIndependentOfTheGlobalOne`、`TestLogicClockIsSafeForConcurrentUse`、`TestProcessClockKeepsConfiguredSubmillisecondOffset`
 
 ### timer
 
-- [order_and_unhandled_promises_test.go](../../../infra/base/timer/order_and_unhandled_promises_test.go)：`TestTimersWithTheSameDeadlineFireInRegistrationOrder`、`TestPriorityOrdersTimersWithTheSameDeadline`、`TestPriorityIsKeptThroughStorageAndRescheduling`、`TestADueTimerWithoutAHandlerIsDroppedWithAWarningAndACount`、`TestStoredTypesWithoutAHandlerAreReportedOncePerType`
-- [remaining_promises_test.go](../../../infra/base/timer/remaining_promises_test.go)：`TestInvalidSavedNodesEmitPersistenceDeletion`
-- [scheduler_promises_test.go](../../../infra/base/timer/scheduler_promises_test.go)：`TestRemoveFromAHandlerStopsATimerDueInTheSameTick`、`TestChangeFromAHandlerPostponesATimerDueInTheSameTick`、`TestDeferredOperationsDuringTickKeepTheirMeaning`、`TestChangesSeenByTheHookDuringATickMatchTheFinalState`、`TestReentrantTickKeepsTheOuterTickSemantics`；其余 1 项见文件
-- [scheduler_test.go](../../../infra/base/timer/scheduler_test.go)：`TestSchedulerFiresAndPersistsChanges`、`TestSchedulerReschedulesFromHandler`、`TestSchedulerSetClockStampsNewTimers`
+- [order_test.go](../../../infra/base/timer/order_test.go)：`TestTimersWithTheSameDeadlineFireInRegistrationOrder`、`TestPriorityOrdersTimersWithTheSameDeadline`、`TestPriorityIsKeptThroughStorageAndRescheduling`、`TestADueTimerWithoutAHandlerIsDroppedWithAWarningAndACount`、`TestStoredTypesWithoutAHandlerAreReportedOncePerType`
+- [scheduler_test.go](../../../infra/base/timer/scheduler_test.go)：`TestSchedulerFiresAndPersistsChanges`、`TestSchedulerReschedulesFromHandler`、`TestSchedulerSetClockStampsNewTimers`、`TestRemoveFromAHandlerStopsATimerDueInTheSameTick`、`TestChangeFromAHandlerPostponesATimerDueInTheSameTick`；其余 5 项见文件
 
 </details>
 

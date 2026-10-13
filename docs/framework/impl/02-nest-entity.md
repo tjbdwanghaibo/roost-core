@@ -118,7 +118,7 @@
 
 ### goroutine
 
-6 个实现文件、8 个测试文件。
+6 个实现文件、3 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -131,7 +131,7 @@
 
 ### lock
 
-3 个实现文件、5 个测试文件。
+3 个实现文件、4 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -170,7 +170,7 @@
 
 ### worker
 
-2 个实现文件、4 个测试文件。
+2 个实现文件、2 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -242,20 +242,17 @@
 
 ### fctx
 
-- [ctx_test.go](../../../infra/base/fctx/ctx_test.go)：`TestCurrentContext_Basic`、`TestCurrentContext_NilWithoutStore`、`TestCurrentContext_Release`、`TestCurrentContext_NestedReleaseRestoresParent`、`TestCurrentContext_PerGoroutine`；其余 3 项见文件
-- [worker_test.go](../../../infra/base/fctx/worker_test.go)：`TestFastWorkerIsLocalExecutionState`
+- [ctx_test.go](../../../infra/base/fctx/ctx_test.go)：`TestCurrentContext_NilWithoutStore`、`TestCurrentContext_Release`、`TestCurrentContext_NestedReleaseRestoresParent`、`TestCurrentContext_PerGoroutine`、`TestContext_KV`；其余 2 项见文件
+- [worker_test.go](../../../infra/base/fctx/worker_test.go)：`TestFastWorkerIsLocalExecutionState`、`TestLongAndIOWorkerStateDoesNotTravelWithSnapshot`
 
 ### goroutine
 
-- [goroutine_test.go](../../../infra/base/goroutine/goroutine_test.go)：`TestParallelSlice`、`TestParallelSliceCollect`
+- [goroutine_test.go](../../../infra/base/goroutine/goroutine_test.go)：`TestParallelSlice`、`TestParallelSliceCollect`、`TestSafeFuncWithTryCountWrapsLastError`、`TestSafeFuncWithTryCountRecoversPanic`、`TestSafeFuncWithTryCountZeroCountStillRunsOnce`
 - [mpsc_queue_test.go](../../../infra/base/goroutine/mpsc_queue_test.go)：`TestMPSCQueue_Basic`、`TestMPSCQueue_Full`、`TestMPSCQueue_MPSC`、`TestMPSCQueue_PowerOfTwo`
-- [safe_func_test.go](../../../infra/base/goroutine/safe_func_test.go)：`TestSafeFuncWithTryCountWrapsLastError`、`TestSafeFuncWithTryCountRecoversPanic`、`TestSafeFuncWithTryCountZeroCountStillRunsOnce`
-- [task_pool_contract_test.go](../../../infra/base/goroutine/task_pool_contract_test.go)：`TestSubmitRefusesAPoolThatIsNotRunningAndAClosedWorker`、`TestTaskPoolStartAfterShutdownIsRefused`、`TestTaskPoolShutdownBeforeStartStillStopsALaterStart`、`TestSubmitRacingShutdownNeverPanics`、`TestTaskPoolStatsCountSubmitBeforeTheTaskCanFinish`、`TestTaskPoolStatsReadFinishedBeforeSubmitted`、`TestTaskPoolRejectedSubmitIsNotCounted`
-- [task_pool_test.go](../../../infra/base/goroutine/task_pool_test.go)：`TestTaskPoolNormalizesZeroWorkerCount`
+- [task_pool_test.go](../../../infra/base/goroutine/task_pool_test.go)：`TestTaskPoolNormalizesZeroWorkerCount`、`TestSubmitRefusesAPoolThatIsNotRunningAndAClosedWorker`、`TestTaskPoolStartAfterShutdownIsRefused`、`TestTaskPoolShutdownBeforeStartStillStopsALaterStart`、`TestSubmitRacingShutdownNeverPanics`；其余 3 项见文件
 
 ### lock
 
-- [context_test.go](../../../infra/base/lock/context_test.go)：`TestLockContextCancellationPreservesOwnerAndAllowsReuse`
 - [cputime_unix_test.go](../../../infra/base/lock/cputime_unix_test.go)
 - [cputime_windows_test.go](../../../infra/base/lock/cputime_windows_test.go)
 - [lock_test.go](../../../infra/base/lock/lock_test.go)：`TestReentrantMutexInnerUnlockDoesNotReleaseTheLock`、`TestReentrantMutexTryLockIsReentrantForOwnerOnly`、`TestReentrantMutexUnlockWithoutOwnershipPanics`、`TestReentrantMutex_TryLock`、`TestReentrantMutex_Contention`；其余 9 项见文件
@@ -347,9 +344,7 @@
 ### worker
 
 - [context_test.go](../../../infra/base/worker/context_test.go)：`TestWorkerCreatesFreshContextForEveryTask`、`TestPoolGoCreatesDetachedContext`、`TestPoolGoRejectsUntrackedLifetime`
-- [pool_guards_promises_test.go](../../../infra/base/worker/pool_guards_promises_test.go)：`TestTryDispatchRefusesBeforeStartAfterStopAndWhenTheQueueIsFull`
-- [pool_shutdown_test.go](../../../infra/base/worker/pool_shutdown_test.go)：`TestPoolStopWithContextReturnsWhenHandlerIsBlocked`
-- [worker_test.go](../../../infra/base/worker/worker_test.go)：`TestWorker_ProcessesTasksAndStops`、`TestWorker_AcceptedTasksSurviveConcurrentClose`、`TestWorker_CloseWakesIdleWorker`
+- [worker_test.go](../../../infra/base/worker/worker_test.go)：`TestWorker_ProcessesTasksAndStops`、`TestWorker_AcceptedTasksSurviveConcurrentClose`、`TestWorker_CloseWakesIdleWorker`、`TestTryDispatchRefusesBeforeStartAfterStopAndWhenTheQueueIsFull`、`TestPoolStopWithContextReturnsWhenHandlerIsBlocked`
 
 </details>
 

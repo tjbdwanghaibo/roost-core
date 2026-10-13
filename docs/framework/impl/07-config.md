@@ -109,7 +109,7 @@
 
 ### featureflag
 
-- [flags_test.go](../../../infra/base/featureflag/flags_test.go)：`TestStore`、`TestReplaceBumpsVersionWithData`、`TestReplaceVersionIsConsistentUnderConcurrentReads`、`TestSetAdvancesVersionAndSnapshotIsSorted`、`TestNilStoreAndDefaultStoreAreSafe`
+- [flags_test.go](../../../infra/base/featureflag/flags_test.go)：`TestReplaceBumpsVersionWithData`、`TestReplaceVersionIsConsistentUnderConcurrentReads`、`TestSetAdvancesVersionAndSnapshotIsSorted`、`TestNilStoreAndDefaultStoreAreSafe`
 
 ### hotcode
 

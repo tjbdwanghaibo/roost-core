@@ -1,6 +1,3 @@
-// RR-20261005-NC-80：生成路由的形状（DecodeJSON → 业务 → WriteResult）经 Registrar、
-// Engine 和真实回环 HTTP 由 httpclient 消费；业务已执行但结果不可编码时，调用方必须拿到 500，
-// 不能是 nil 错误加零值。
 package webroute_test
 
 import (
@@ -15,6 +12,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/httpserver"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/webroute"
 )
+
+// 生成路由的形状（DecodeJSON → 业务 → WriteResult）经 Registrar、Engine 和真实回环 HTTP 由 httpclient 消费：
+// 业务已执行但结果不可编码时，调用方必须拿到 500，不能是 nil 错误加零值。
 
 type winRateRequest struct {
 	Wins  int `json:"wins"`
