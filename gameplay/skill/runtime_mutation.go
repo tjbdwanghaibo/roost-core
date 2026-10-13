@@ -29,8 +29,7 @@ const (
 	StateMutationPersistentRemove StateMutationKind = "persistent_remove"
 )
 
-// StateMutation is a closed, canonical patch union. Folding these mutations
-// over a RuntimeStateSnapshot must reproduce a later snapshot exactly.
+// StateMutation 是封闭的规范化补丁联合。把这些变更依次折叠到一个 RuntimeStateSnapshot 上，必须逐字节得到之后的快照。
 type StateMutation struct {
 	Sequence                   uint64                   `json:"sequence"`
 	Tick                       Tick                     `json:"tick"`
@@ -55,6 +54,8 @@ type StateMutation struct {
 	Persistent                 *PersistentStateSnapshot `json:"persistent,omitempty"`
 }
 
+// StateMutationBatch 是 StateDeltas 返回的一批状态变更。CursorExpired 表示调用方的游标早于保留的最早一条，
+// 需要先取全量快照；More 表示还有后续批次。
 type StateMutationBatch struct {
 	Mutations      []StateMutation `json:"mutations,omitempty"`
 	OldestSequence uint64          `json:"oldest_sequence"`
@@ -64,6 +65,7 @@ type StateMutationBatch struct {
 	Dropped        uint64          `json:"dropped"`
 }
 
+// StateDeltas 返回序号大于 after 的状态变更，最多 limit 条（limit <= 0 表示不限）。
 func (runtime *Runtime) StateDeltas(after uint64, limit int) StateMutationBatch {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -88,9 +90,8 @@ func (runtime *Runtime) StateDeltas(after uint64, limit int) StateMutationBatch 
 	return batch
 }
 
-// stateMutationVerifyIncremental, when set (tests only), replays every
-// incremental commit against the reference full-snapshot diff and panics on
-// any divergence — the equivalence gate for the write-point fast path.
+// stateMutationVerifyIncremental 仅供测试开启：每次增量提交都与全量快照差分的参考结果对照，不一致就 panic，
+// 是写入点快路径与全量路径等价的守门。
 var stateMutationVerifyIncremental bool
 
 func (runtime *Runtime) commitStateMutationsLocked() {
@@ -150,21 +151,16 @@ func (runtime *Runtime) appendStateMutationsLocked(mutations []StateMutation, ti
 	}
 }
 
-// diffWritePointsLocked computes the window's mutations from the recorded
-// write points and advances the baseline in place, keeping it byte-identical
-// with a full stateSnapshotLocked (the checkpoint invariant). Cooldowns,
-// skill resources, abilities and active policies are key-tracked at their
-// write sites; casts, spawns and persistent states mutate through too many
-// deep write points to record safely, so those domains are rebuilt wholesale
-// and diffed exactly like the full path.
+// diffWritePointsLocked 按记录的写入点算出本窗口的变更，并原地推进基线，使它与全量 stateSnapshotLocked 逐字节一致
+// （checkpoint 依赖这一不变量）。冷却、技能资源、技能实例与生效中的策略在写入处按键记录；施法、衍生物与持久状态的
+// 写入点太多太深，无法可靠记录，这几个域整体重建，再与全量路径一样做差分。
 func (runtime *Runtime) diffWritePointsLocked(revision WorldRevision) []StateMutation {
 	baseline := &runtime.stateMutationBaseline
 	clockChanged := baseline.Tick != runtime.currentTick || baseline.WorldRevision != revision ||
 		baseline.LatestStateEventSequence != runtime.stateEventSequence ||
 		baseline.LatestPresentationSequence != runtime.presentationSequence
 	if deltaTick := runtime.currentTick - baseline.Tick; deltaTick != 0 {
-		// Clock-derived fields, advanced arithmetically. Ticks are monotonic,
-		// so max(0, due-tick) folds to max(0, remaining-delta) exactly.
+		// 由时钟派生的字段按算术推进。tick 单调，max(0, due-tick) 恰好等于 max(0, remaining-delta)。
 		for index := range baseline.Cooldowns {
 			if remaining := baseline.Cooldowns[index].Remaining - deltaTick; remaining > 0 {
 				baseline.Cooldowns[index].Remaining = remaining
@@ -241,8 +237,7 @@ func (runtime *Runtime) applyCooldownWritePointsLocked(result []StateMutation) [
 	return result
 }
 
-// refreshBaselineAbilityCooldownLocked mirrors the snapshot rule that an
-// ability's CooldownRemaining is derived from its owner's cooldown entry.
+// refreshBaselineAbilityCooldownLocked 与快照规则一致：技能实例的 CooldownRemaining 由其拥有者的冷却条目派生。
 func (runtime *Runtime) refreshBaselineAbilityCooldownLocked(key cooldownKey, remaining Tick) {
 	abilities := runtime.stateMutationBaseline.Abilities
 	for index := range abilities {
@@ -374,10 +369,8 @@ func (runtime *Runtime) clearStateMutationWritePointsLocked() {
 	clear(runtime.dirtyPolicies)
 }
 
-// Write-point recorders. Every mutation of a key-tracked domain must call the
-// matching recorder before the window commits; a missed call surfaces as an
-// ErrCheckpointHostMismatch (baseline divergence) and is caught in tests by
-// stateMutationVerifyIncremental.
+// 写入点记录器。按键记录的域每次修改都必须在窗口提交前调用对应的记录器；漏调会表现为 ErrCheckpointHostMismatch
+// （基线偏离），测试里由 stateMutationVerifyIncremental 捕获。
 func (runtime *Runtime) touchCooldownLocked(key cooldownKey) {
 	runtime.dirtyCooldowns[key] = struct{}{}
 }
@@ -430,9 +423,8 @@ func (runtime *Runtime) beginStateMutationLocked() {
 	runtime.stateMutationDirty = true
 }
 
-// CaptureExternalState records changes made by an authoritative extension
-// provider outside a Runtime API call. Normal Runtime mutations are captured
-// automatically before their public method returns.
+// CaptureExternalState 记录权威扩展提供方在 Runtime API 调用之外做的修改。Runtime 自身的修改在各公开方法返回前
+// 自动记录，不需要调用它。
 func (runtime *Runtime) CaptureExternalState() {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -472,7 +464,7 @@ func diffCastStates(result []StateMutation, before, after []CastStateSnapshot) [
 	}
 	for _, value := range before {
 		if _, ok := afterCasts[value.ID]; !ok {
-			// remove 带上 upsert 用过的归属实体，skillsync 的可见性过滤才能按同一实体判断（NC-115）。
+			// remove 带上 upsert 用过的归属实体，skillsync 的可见性过滤才能按同一实体判断。
 			result = append(result, StateMutation{Kind: StateMutationCastRemove, CastID: value.ID, Caster: value.Caster})
 		}
 	}
@@ -585,7 +577,7 @@ func diffSpawnStates(result []StateMutation, before, after []SpawnStateSnapshot)
 	}
 	for id, value := range beforeSpawns {
 		if _, ok := afterSpawns[id]; !ok {
-			// 同 cast remove：带上 owner 供可见性过滤（NC-115）。
+			// 同 cast remove：带上 owner 供可见性过滤。
 			result = append(result, StateMutation{Kind: StateMutationSpawnRemove, SpawnID: id, Owner: value.Owner})
 		}
 	}
@@ -672,9 +664,8 @@ func abilityStateEqualIgnoringClock(left, right AbilityStateSnapshot) bool {
 }
 
 func mutationSortKey(value StateMutation) string {
-	// Every identity field a mutation kind can carry must be part of this
-	// key: two distinct mutations with equal keys would leave their relative
-	// order to map iteration, breaking cross-run sequence determinism.
+	// 变更种类可能携带的每个身份字段都必须进这个键：两条不同的变更键相同时，相对顺序就取决于 map 迭代，
+	// 跨运行的序列不再确定。
 	return string(value.Kind) + ":" + value.ProgramID + ":" + value.StateHandle.GameplayDigest + ":" + formatMutationID(uint64(value.CastID), uint64(value.Caster), uint64(value.Owner), uint64(value.AbilityHandle), uint64(value.SpawnID), uint64(value.StateHandle.Slot), uint64(value.StateHandle.Shared), uint64(value.Binding.Owner), uint64(value.Binding.Subject), value.Binding.Team)
 }
 
@@ -747,8 +738,7 @@ func clonePersistentState(value PersistentStateSnapshot) PersistentStateSnapshot
 	return value
 }
 
-// ApplyStateMutation is the canonical client reducer used by tests and
-// production consumers.
+// ApplyStateMutation 是规范的客户端归约函数，测试与生产消费方共用。
 func ApplyStateMutation(snapshot *RuntimeStateSnapshot, mutation StateMutation) error {
 	if snapshot == nil || mutation.Sequence == 0 || mutation.Kind == "" {
 		return ErrStateMutationInvalid

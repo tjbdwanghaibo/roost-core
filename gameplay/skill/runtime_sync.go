@@ -2,11 +2,13 @@ package skill
 
 import "sort"
 
+// StateEvent 是带序号的权威状态变化事件。
 type StateEvent struct {
 	Sequence uint64       `json:"sequence"`
 	Event    RuntimeEvent `json:"event"`
 }
 
+// StateEventBatch 是 StateEvents 返回的一批事件，游标语义与 StateMutationBatch 相同。
 type StateEventBatch struct {
 	Events         []StateEvent `json:"events,omitempty"`
 	OldestSequence uint64       `json:"oldest_sequence"`
@@ -121,10 +123,12 @@ type PersistentStateSnapshot struct {
 	ClearOn  []string          `json:"clear_on,omitempty"`
 }
 
+// RuntimeStateExtensionProvider 由持有持久状态的 Host 实现，为状态快照提供持久状态部分。
 type RuntimeStateExtensionProvider interface {
 	SkillPersistentStateSnapshot() []PersistentStateSnapshot
 }
 
+// RuntimeStateSnapshot 是可同步给客户端的全量权威状态；按 StateMutation 依次折叠后与之后的快照逐字节一致。
 type RuntimeStateSnapshot struct {
 	Tick                        Tick                      `json:"tick"`
 	WorldRevision               WorldRevision             `json:"world_revision"`
@@ -161,6 +165,7 @@ func (runtime *Runtime) recordStateEvent(event RuntimeEvent) {
 	}
 }
 
+// StateEvents 返回序号大于 after 的状态变化事件，最多 limit 条（limit <= 0 表示不限）。
 func (runtime *Runtime) StateEvents(after uint64, limit int) StateEventBatch {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -193,6 +198,7 @@ func cloneStateEvents(events []StateEvent) []StateEvent {
 	return result
 }
 
+// StateSnapshot 在锁内生成当前的全量状态快照。
 func (runtime *Runtime) StateSnapshot() RuntimeStateSnapshot {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -210,10 +216,8 @@ func (runtime *Runtime) stateSnapshotLocked() RuntimeStateSnapshot {
 	return snapshot
 }
 
-// Per-domain snapshot builders. These are the single source of truth for
-// snapshot entry construction: the full snapshot above and the incremental
-// mutation commit (runtime_mutation.go) both build entries here, so the
-// incremental baseline stays byte-identical with a full snapshot.
+// 各域的快照构造函数，是快照条目构造的唯一来源：上面的全量快照与增量变更提交（runtime_mutation.go）都在这里
+// 构造条目，增量基线因此与全量快照逐字节一致。
 
 func (runtime *Runtime) castsSnapshotLocked() []CastStateSnapshot {
 	result := make([]CastStateSnapshot, 0, len(runtime.casts))

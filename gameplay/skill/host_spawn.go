@@ -12,9 +12,8 @@ type StaticMotionStep struct{ Position Position }
 
 func (StaticMotionStep) isMotionStep() {}
 
-// MotionStep variants are intentionally stage-specific. They contain only
-// resolved integer runtime facts, so a Host never needs to inspect Program,
-// IR, Wire definitions, or string-keyed motion policy.
+// MotionStep 的各个变体刻意按阶段区分，只携带已解析的整数运行期事实，Host 不需要查看 Program、IR、Wire 定义
+// 或按字符串键的运动策略。
 type FrameMotionStep struct{ Position Position }
 type SteeringMotionStep struct{ Direction Direction }
 type TrajectoryMotionStep struct {

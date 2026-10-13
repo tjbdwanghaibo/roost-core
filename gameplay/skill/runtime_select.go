@@ -30,9 +30,7 @@ func (runtime *Runtime) executeQuery(cast *castInstance, selector selectorProgra
 	if selector.hasRandomSite {
 		invocation := cast.randomInvocations[selector.randomSite]
 		cast.randomInvocations[selector.randomSite] = invocation + 1
-		// Precompute one HMAC score per candidate: the comparator used to
-		// rehash both sides on every comparison, costing O(n log n) SHA256
-		// invocations per query instead of O(n).
+		// 每个候选预先算一次 HMAC 分数：若在比较函数里每次比较都对两边重新哈希，一次查询就是 O(n log n) 次 SHA256 而不是 O(n)。
 		type scoredElement struct {
 			element selectionElement
 			id      uint64
@@ -105,8 +103,7 @@ func (runtime *Runtime) selectAbilities(cast *castInstance, selector selectorPro
 	if !ok {
 		return nil, ErrRuntimeTypeMismatch
 	}
-	// Ability state is private runtime state. Cross-owner enumeration is never
-	// delegated to the world host and must be explicitly rejected.
+	// 技能实例是 Runtime 私有状态，跨拥有者枚举从不委托给世界 Host，必须显式拒绝。
 	if !runtime.abilityOwnerAllowed(cast.program, cast.caster, owner) {
 		return nil, ErrCastInputRejected
 	}

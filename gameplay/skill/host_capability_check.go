@@ -15,7 +15,7 @@ type HostCapabilityProbe struct {
 	SpawnID SpawnID
 }
 
-// CheckHostCapabilities 是 Host 能力表的一致性检查（B3 ③）：按 Host 自己声明的表
+// CheckHostCapabilities 是 Host 能力表的一致性检查：按 Host 自己声明的表
 // （Host.HostCapabilities）逐项调用 Host，确认声明的每一项都真的支持；属性与资源两列还反过来
 // 核对表外的 key 被拒绝，而不是静默当成 0。catalog 用来把 key 换成 handle、核对属性量纲。
 //
@@ -143,7 +143,7 @@ func (checker *hostCapabilityChecker) attribute(capability HostCapability, decla
 	}
 }
 
-// undeclaredAttributeHandle：catalog 外的 handle 一律被拒绝（以前两个参考 Host 都返回 0）。
+// undeclaredAttributeHandle 核对 catalog 外的 handle 一律被拒绝，而不是返回 0。
 func (checker *hostCapabilityChecker) undeclaredAttributeHandle() {
 	var handle AttributeHandle = 1
 	for _, entry := range checker.catalog.Attributes.Entries {

@@ -28,6 +28,7 @@ type abilityState struct {
 	overlays       map[uint64]Tick
 }
 
+// AbilityRegistration 是 RegisterAbility 的参数：把一个 Program 以句柄与槽位登记为 Owner 的技能实例。
 type AbilityRegistration struct {
 	Owner     EntityID
 	Handle    AbilityHandle
@@ -38,12 +39,14 @@ type AbilityRegistration struct {
 	AmmoMax   int64
 }
 
+// AbilityChangeResult 是一次技能实例状态修改的结果与修改前后的值。
 type AbilityChangeResult struct {
 	ResultOutcome
 	Before RuntimeValue
 	After  RuntimeValue
 }
 
+// AbilityChangeEvent 描述一次技能实例状态修改。
 type AbilityChangeEvent struct {
 	Owner     EntityID
 	Ability   AbilityHandle
@@ -87,6 +90,8 @@ func (runtime *Runtime) executeAbilityStateMutation(cast *castInstance, operatio
 	return result, err
 }
 
+// RegisterAbility 登记一个技能实例。参数不完整、语义修订或权威身份不匹配时返回 ErrCastInputInvalid；
+// Program 的 Host 能力需求不在 Host 的表里时返回能力核对错误。
 func (runtime *Runtime) RegisterAbility(registration AbilityRegistration) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -235,6 +240,7 @@ func (runtime *Runtime) markAbilityCastFinished(cast *castInstance) {
 	}
 }
 
+// ReadAbilityState 读取技能实例的一个属性。
 func (runtime *Runtime) ReadAbilityState(owner EntityID, ability AbilityHandle, property string) (RuntimeValue, error) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -260,11 +266,8 @@ func (runtime *Runtime) readAbilityStateLocked(owner EntityID, ability AbilityHa
 	case "cooldown_total_ticks":
 		return IntRuntimeValue(int64(state.cooldownTotal), quantityTicks), nil
 	case "ammo_stock":
-		// Pure read: the authoritative stock lives in skillStates. Writing it
-		// back into the ability cache here would mutate snapshot-visible
-		// state on a read path without a write point, silently diverging the
-		// incremental mutation baseline (the cache itself is synchronized at
-		// recharge and commit time).
+		// 纯读：权威库存在 skillStates 里。在这里写回技能实例的缓存，会在没有写入点的读路径上修改快照可见的状态，
+		// 让增量变更基线静默偏离（缓存本身在回复与提交时同步）。
 		if state.program.cast.mode == castModeAmmo {
 			if ammo := runtime.skillStates[skillStateKey{Caster: owner, Skill: state.program.id}]; ammo != nil {
 				return IntRuntimeValue(ammo.stock, quantityCount), nil
@@ -291,6 +294,7 @@ func (runtime *Runtime) readAbilityStateLocked(owner EntityID, ability AbilityHa
 	}
 }
 
+// ModifyAbilityState 由调用方直接修改技能实例的一个属性（与技能效果里的修改走同一实现）。
 func (runtime *Runtime) ModifyAbilityState(owner EntityID, ability AbilityHandle, property, operation string, value RuntimeValue, duration Tick, event EventContext) (AbilityChangeResult, error) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()

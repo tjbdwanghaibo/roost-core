@@ -1,16 +1,11 @@
 package skill
 
-// globalCooldownProgramID is the reserved cooldown-map program id carrying a
-// caster's global cooldown. It is not a valid skill identifier, so it can
-// never collide with a real program, and it rides the ordinary cooldown
-// machinery: state sync, mutations and checkpoints all see it as a plain
-// cooldown entry.
+// globalCooldownProgramID 是冷却表里保留的 program id，承载施法者的公共冷却。它不是合法的技能标识，不会与真实
+// Program 冲突；它走普通冷却的全部机制，状态同步、状态变更与 checkpoint 都把它当作一条普通冷却条目。
 const globalCooldownProgramID = "$gcd"
 
-// casterWindowBusyLocked reports whether the caster currently owns a cast
-// that is inside its exclusive window (windup, commit, or recovery). It scans
-// the cast table instead of maintaining a counter: window stages change at
-// many sites, casts are bounded, and a scan cannot drift out of sync.
+// casterWindowBusyLocked 报告施法者是否有施法处在独占窗口内（前摇、提交或后摇）。它扫描施法表而不维护计数：
+// 窗口阶段在很多处改变，施法数有上限，扫描不会与实际状态脱节。
 func (runtime *Runtime) casterWindowBusyLocked(caster EntityID) bool {
 	for _, cast := range runtime.casts {
 		if cast.caster != caster || cast.status == CastFinished || cast.status == CastFailed {
@@ -163,11 +158,8 @@ func (runtime *Runtime) beginCastRecovery(cast *castInstance) error {
 	return runtime.schedule(cast, runtime.currentTick+recoveryTicks, &castRecoveryTask{CastID: cast.id, PhaseToken: cast.phaseToken, Frame: frame})
 }
 
-// castWindupTicks resolves the cast window's windup duration: the literal
-// program value, or the windup expression sampled as the window is prepared.
-// Expression results are clamped into the compile-time [min, max] bounds, so
-// scheduled due ticks can never escape the declared worst case, and the
-// commit_tick <= min invariant keeps commit before execute.
+// castWindupTicks 求施法窗口的前摇时长：Program 里的字面值，或准备窗口时对前摇表达式采样。表达式结果夹在编译期的
+// [min, max] 内，排程的到期 tick 不会超出声明的最坏情况；commit_tick <= min 的不变量保证提交先于执行。
 func (runtime *Runtime) castWindupTicks(cast *castInstance) (Tick, error) {
 	window := cast.program.cast
 	if !window.hasWindupExpression {
@@ -176,8 +168,7 @@ func (runtime *Runtime) castWindupTicks(cast *castInstance) (Tick, error) {
 	return runtime.evalWindowTicks(cast, window.windupExpression, window.windupTicksMin, window.windupTicksMax)
 }
 
-// castRecoveryTicks resolves the recovery duration, sampled as recovery
-// begins so the expression sees post-execution state.
+// castRecoveryTicks 求后摇时长，在后摇开始时采样，表达式看到的是执行之后的状态。
 func (runtime *Runtime) castRecoveryTicks(cast *castInstance) (Tick, error) {
 	window := cast.program.cast
 	if !window.hasRecoveryExpression {
@@ -226,6 +217,9 @@ func (runtime *Runtime) emitCastLifecycleEvent(cast *castInstance, kind string) 
 	})
 }
 
+// Cancel 取消一个尚未结束的施法：撤掉当前 phase 的任务，已提交的 toggle / hold 开始冷却，跑 phase 的 cancel 流程、
+// 停止名下衍生物、释放策略槽位，施法以 cancelled 窗口阶段结束。施法不存在或已结束时返回 ErrCastInputRejected；
+// 取消途中出错时施法进入 failed 终态并返回该错误。
 func (runtime *Runtime) Cancel(id CastID) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -241,7 +235,7 @@ func (runtime *Runtime) Cancel(id CastID) error {
 	if cast.committed && (cast.program.cast.mode == castModeToggle || cast.program.cast.mode == castModeHold) {
 		runtime.startCooldown(cast)
 	}
-	// 走到这里 cast 已经被改动（任务撤了、token 推进了），出错必须进失败终态，不能停在半终止（NC-111）。
+	// 走到这里 cast 已经被改动（任务撤了、token 推进了），出错必须进失败终态，不能停在半终止。
 	if operation, found := phaseRootOperation(cast.program, cast.program.phases[cast.currentPhase], phaseEventCancel); found {
 		if _, err := runtime.executeOperation(cast, operation); err != nil {
 			return runtime.failCastLocked(cast, err)
@@ -258,11 +252,9 @@ func (runtime *Runtime) Cancel(id CastID) error {
 	return nil
 }
 
-// releasePolicySlot clears a policy-holding cast's activePolicies entry so a
-// cancelled or interrupted toggle/hold/charge neither blocks future
-// activations nor pins the cast in memory (castEvictableLocked refuses
-// policy-active casts). Guarded by ownership: a newer cast of the same skill
-// may already hold the slot.
+// releasePolicySlot 清掉持有策略的施法在 activePolicies 里的条目，被取消或打断的 toggle / hold / charge 既不挡住
+// 之后的施放，也不把施法钉在内存里（castEvictableLocked 不回收策略生效中的施法）。只清自己持有的槽位：同一技能
+// 更新的施法可能已经占了它。
 func (runtime *Runtime) releasePolicySlot(cast *castInstance) {
 	if !cast.policyActive {
 		return
@@ -275,6 +267,8 @@ func (runtime *Runtime) releasePolicySlot(cast *castInstance) {
 	}
 }
 
+// Interrupt 用打断标签打断施法：只有标签在 Program 的 interrupt 标签里时才生效，否则返回 ErrCastInputRejected。
+// 与 Cancel 的区别是不跑 phase 的 cancel 流程，生命周期事件为 cast_interrupted。
 func (runtime *Runtime) Interrupt(id CastID, tag GameplayTagHandle) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -301,6 +295,8 @@ func (runtime *Runtime) Interrupt(id CastID, tag GameplayTagHandle) error {
 	return nil
 }
 
+// Release 送入一次松开输入，原因记为 input_release：charge 蓄力不足最小值时取消，否则进入释放窗口；toggle / hold
+// 结束策略。其他施放模式或施法已结束时返回 ErrCastInputRejected。
 func (runtime *Runtime) Release(id CastID) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -315,7 +311,7 @@ func (runtime *Runtime) Release(id CastID) error {
 
 // castEnded 报告 cast 是否已不接受 Cancel / Interrupt / Release：逻辑结束、进入恢复期、窗口已完成或已取消，
 // 或已是 failed / finished 终态。只看窗口阶段会把排程失败的 cast（阶段仍是 executing）当成活的，
-// 再对它执行 cancel / release 回调（NC-112）。
+// 再对它执行 cancel / release 回调。
 func castEnded(cast *castInstance) bool {
 	if cast.status == CastFailed || cast.status == CastFinished || cast.logicalFinished {
 		return true
@@ -328,7 +324,7 @@ func castEnded(cast *castInstance) bool {
 }
 
 // releaseCast 处理 Release、toggle 二次激活与排程的自动释放 / 资源耗尽释放。前置检查之后的任何错误都让 cast
-// 进入失败终态（NC-111）：charge 已撤掉 auto release 任务、阶段回到 preparing，原样返回会永久占住施法者窗口。
+// 进入失败终态：charge 已撤掉 auto release 任务、阶段回到 preparing，原样返回会永久占住施法者窗口。
 func (runtime *Runtime) releaseCast(cast *castInstance, reason string) error {
 	if castEnded(cast) {
 		return ErrCastInputRejected
@@ -402,8 +398,7 @@ func (runtime *Runtime) castChargeBP(cast *castInstance) int64 {
 
 func (runtime *Runtime) ammoState(cast *castInstance) *skillState {
 	key := skillStateKey{Caster: cast.caster, Skill: cast.program.id}
-	// Recorded unconditionally: callers mutate the returned state in place,
-	// and a spurious record on a read-only call diffs to nothing.
+	// 无条件记录写入点：调用方会原地修改返回的状态；只读调用多记一次，差分结果为空。
 	runtime.touchSkillResourceLocked(key)
 	state := runtime.skillStates[key]
 	if state == nil {
@@ -433,9 +428,7 @@ func (runtime *Runtime) executeAmmoRecharge(task *ammoRechargeTask) error {
 	if state.stock < state.maxStock {
 		state.stock++
 	}
-	// Keep the ability's snapshot-visible ammo cache in step with the
-	// authoritative stock, as a recorded write point: without this, clients
-	// polling ability state would not see recharges until the next commit.
+	// 让技能实例在快照里可见的弹药缓存与权威库存同步，并记为写入点；否则轮询技能状态的客户端要到下一次提交才看到回复。
 	if handle, ok := runtime.abilityByProgram[skillStateKey{Caster: task.Caster, Skill: task.Skill}]; ok {
 		if ability := runtime.abilities[abilityKey{owner: task.Caster, handle: handle}]; ability != nil {
 			ability.ammoStock, ability.ammoMax = state.stock, state.maxStock
@@ -450,6 +443,7 @@ func (runtime *Runtime) executeAmmoRecharge(task *ammoRechargeTask) error {
 	return runtime.scheduleSystem(state.rechargeDue, &ammoRechargeTask{Caster: task.Caster, Skill: task.Skill, Generation: task.Generation})
 }
 
+// CooldownUntil 返回施法者这个技能冷却结束的 tick；没有冷却时返回 0。
 func (runtime *Runtime) CooldownUntil(program *Program, caster EntityID) Tick {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -459,6 +453,8 @@ func (runtime *Runtime) CooldownUntil(program *Program, caster EntityID) Tick {
 	return runtime.cooldowns[cooldownKey{Caster: caster, Skill: program.id}]
 }
 
+// SkillStock 返回弹药模式技能的当前库存与上限；技能不是弹药模式时第三个返回值为 false。
+// 还没有库存记录时返回 Program 声明的初始库存。
 func (runtime *Runtime) SkillStock(program *Program, caster EntityID) (int64, int64, bool) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()

@@ -39,7 +39,7 @@ type StateReadResult struct {
 }
 
 // StateMutationCommand 是一次状态写入。Default 是状态不存在时的 before：Runtime 总是按 state 声明的类型给出
-// （null 默认值给的是声明类型的缺省值，不是 null 类型，RR-20261006-02），Host 的 set 可以直接比较
+// （null 默认值给的是声明类型的缺省值，不是 null 类型），Host 的 set 可以直接比较
 // before 与写入值的类型。
 type StateMutationCommand struct {
 	Meta                 CommandMeta

@@ -11,10 +11,6 @@ import (
 	"sync"
 )
 
-func rejectDuplicateKeys(data []byte) error {
-	return rejectDuplicateKeysWithLimits(data, DefaultParseLimits())
-}
-
 type jsonScanBudget struct {
 	limits ParseLimits
 	tokens int

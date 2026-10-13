@@ -48,7 +48,7 @@ func (host *RecordingHost) AuthorityIdentity() AuthorityIdentity {
 }
 
 // HostCapabilities 转发被包装 Host 的能力表并记录这次调用：包装型 Host 不另声明能力，
-// Runtime 的准入核对看到的就是底层 Host 的表（B3 ③）。
+// Runtime 的准入核对看到的就是底层 Host 的表。
 func (host *RecordingHost) HostCapabilities() HostCapabilityTable {
 	value := host.host.HostCapabilities()
 	host.append("host_capabilities", nil, value, nil, host.host.CurrentRevision())

@@ -1,8 +1,6 @@
 package skill
 
 type flowVisitor func(flowIR)
-type referenceVisitor func(*referenceValueIR)
-type visualVisitor func(*visualIR)
 
 func (ir *skillIR) walkValues(visitor valueVisitor) {
 	for _, cost := range ir.costs {
@@ -28,14 +26,6 @@ func (ir *skillIR) walkValues(visitor valueVisitor) {
 	}
 }
 
-func (ir *skillIR) walkReferences(visitor referenceVisitor) {
-	ir.walkValues(func(value valueIR) {
-		if reference, ok := value.(*referenceValueIR); ok {
-			visitor(reference)
-		}
-	})
-}
-
 func (ir *skillIR) walkFlows(visitor flowVisitor) {
 	for _, phase := range ir.phases {
 		walkPhaseFlows(phase.events, func(flow flowIR) { walkFlowTree(flow, visitor) })
@@ -46,30 +36,6 @@ func (ir *skillIR) walkEffects(visitor effectVisitor) {
 	ir.walkFlows(func(flow flowIR) {
 		if effectFlow, ok := flow.(*effectFlowIR); ok {
 			visitor(effectFlow.effect)
-		}
-	})
-}
-
-func (ir *skillIR) walkSpawns(visitor effectVisitor) {
-	ir.walkEffects(func(effect effectIR) {
-		// Spawn variants are introduced as sealed effect IR types in Task 10.
-		_ = effect
-	})
-	_ = visitor
-}
-
-func (ir *skillIR) walkVisualRefs(visitor visualVisitor) {
-	if ir.presentation != nil && ir.presentation.cast != nil {
-		visitor(ir.presentation.cast)
-	}
-	ir.walkEffects(func(effect effectIR) {
-		if visual := effectVisual(effect); visual != nil {
-			visitor(visual)
-		}
-	})
-	ir.walkFlows(func(flow flowIR) {
-		if effectFlow, ok := flow.(*effectFlowIR); ok && effectFlow.spawn != nil && effectFlow.spawn.visual != nil {
-			visitor(effectFlow.spawn.visual)
 		}
 	})
 }

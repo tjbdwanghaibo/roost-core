@@ -5,8 +5,7 @@ import (
 	"sort"
 )
 
-// FrameID identifies an immutable snapshot of a cast's local slots. Scheduled
-// work keeps the ID rather than consulting the cast's mutable current locals.
+// FrameID 标识施法局部变量的一份不可变快照。排程任务持有帧 ID，而不是读施法当前可变的局部变量。
 type FrameID uint64
 
 type scheduledTaskPayload interface {
@@ -249,6 +248,9 @@ func (runtime *Runtime) cancelPhaseTasks(cast *castInstance, phaseToken uint64) 
 	heap.Init(&runtime.scheduler.tasks)
 }
 
+// Advance 把 Runtime 推进到 tick：按到期顺序执行排程任务、推进宿主事件与衍生物，直到没有不晚于 tick 的工作。
+// tick 小于当前 tick 时返回 ErrReverseAdvance；与当前 tick 相同且没有到期工作时直接返回。返回前（含出错）
+// 在 tick 末尾的安全点清理超限的已放弃衍生物记录。
 func (runtime *Runtime) Advance(tick Tick) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -329,7 +331,7 @@ func (runtime *Runtime) advanceHost(tick Tick) error {
 }
 
 // collectHostEvents 是 tick 推进时的事件派发（事件记进每个运行中的 cast）。派发不返回错误：被拒的被动候选只告警，根事件表
-// 满且都被引用时跳过这个事件的被动路由，事件都照常前进（dispatchEvent，RR-20261006-55 及其后续）。
+// 满且都被引用时跳过这个事件的被动路由，事件都照常前进（dispatchEvent）。
 func (runtime *Runtime) collectHostEvents() {
 	events := runtime.host.Events(runtime.eventCursor)
 	if len(events) == 0 {
@@ -465,9 +467,8 @@ func (runtime *Runtime) failScheduledCast(cast *castInstance, err error) error {
 // 任务与帧、请求停止衍生物（停不下的由 requestSpawnStop 转入待停止、Runtime 重试）、释放 policy 槽位、结束 ability 计数。
 // 可重复调用（排程路径里 releaseCast 已失败收尾后，failScheduledCast 还会再进来一次）。
 //
-// 之前每条终止路径各自手写这些步骤、各漏一步：启动失败不撤任务而 ID 被复用（NC-110）、Cancel / Interrupt /
-// Release 出错直接返回停在半终止（NC-111）、排程失败不释放 policy 槽位（NC-112，v1.5.0 只修了 Cancel / Interrupt）。
-// 新的失败终止点一律走这里，不再在分支里补步骤。
+// 新的失败终止点一律走这里，不在分支里各自手写这些步骤：手写容易漏一步（启动失败不撤任务而 ID 被复用、
+// Cancel / Interrupt / Release 出错停在半终止、排程失败不释放 policy 槽位）。
 func (runtime *Runtime) failCastLocked(cast *castInstance, err error) error {
 	if cast.status != CastFailed {
 		cast.status, cast.failure = CastFailed, err.Error()

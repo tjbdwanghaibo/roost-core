@@ -227,7 +227,7 @@ func presentationAnchorFromCommand(cast *castInstance, payload EffectCommandPayl
 }
 
 // effectEventContext 是一次效果结算的事件：父事件是施法（或衍生物回调）的事件，继承根事件与 proc 深度。衍生物回调里的
-// 效果每次结算一个新 ID（nextSpawnEventID）：同一个回调效果会在每个 tick、对每个目标结算（RR-20261006-53）。
+// 效果每次结算一个新 ID（nextSpawnEventID）：同一个回调效果会在每个 tick、对每个目标结算。
 func (runtime *Runtime) effectEventContext(cast *castInstance, effect EffectIndex) EventContext {
 	id := EventID((uint64(cast.id) << 32) | uint64(effect+1))
 	if cast.detachedSpawn != nil {

@@ -118,9 +118,8 @@ type spawnCallbackProgram struct {
 	operation OperationIndex
 }
 
-// motionProgram is immutable after lowering. Every field contains a concrete
-// runtime payload; source Wire/IR values and catalog string keys never escape
-// the compiler.
+// motionProgram 在 lower 之后不可变。每个字段都是具体的运行期载荷；源 Wire / IR 值与 catalog 的字符串键不会
+// 流出编译器。
 type motionProgram struct {
 	frame      motionFrameProgram
 	steering   motionSteeringProgram

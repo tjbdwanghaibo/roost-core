@@ -2,17 +2,18 @@ package skill
 
 import "errors"
 
+// ErrRuntimeValueVisibilityRequired 表示脱敏需要实体可见性判断，但 EntityVisible 为空。
 var ErrRuntimeValueVisibilityRequired = errors.New("skill: runtime value entity visibility evaluator is required")
 
+// RuntimeValueRedactionOptions 控制 RedactRuntimeValue 去掉哪些引用。
 type RuntimeValueRedactionOptions struct {
 	EntityVisible func(EntityID) (bool, error)
 	RedactSpatial bool
 	RedactOpaque  bool
 }
 
-// RedactRuntimeValue recursively removes entity, spatial, and opaque references
-// from a detached RuntimeValue. Hidden scalar references become typed missing
-// values; hidden members are removed from entity lists.
+// RedactRuntimeValue 从一个脱离 Runtime 的 RuntimeValue 里递归去掉实体、空间与不透明引用。被隐藏的标量引用变成
+// 带类型的缺省值；实体列表里被隐藏的成员直接移除。
 func RedactRuntimeValue(value RuntimeValue, options RuntimeValueRedactionOptions) (RuntimeValue, error) {
 	if !value.present {
 		return cloneRuntimeValue(value), nil

@@ -27,7 +27,7 @@ type EventContext struct {
 	gameplayTags      []GameplayTagHandle
 }
 
-// 事件 ID 的编号空间（RR-20261006-53 / 54）：
+// spawnEventIDBit 区分衍生物回调的事件 ID。事件 ID 的编号空间：
 //
 //	主动施法（根事件）            castID
 //	proc 施放自己的事件           castID<<32（低 32 位为 0）

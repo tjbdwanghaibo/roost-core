@@ -253,6 +253,7 @@ func (runtime *Runtime) handoffEntitySpawns(cast *castInstance) error {
 	return nil
 }
 
+// OwnedSpawns 返回已移交给 owner 的运行中衍生物快照；owner 为 0 时返回全部已移交的。
 func (runtime *Runtime) OwnedSpawns(owner EntityID) []OwnedSpawnSnapshot {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()

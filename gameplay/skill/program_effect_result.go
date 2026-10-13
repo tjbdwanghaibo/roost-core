@@ -68,15 +68,6 @@ func (layout resultLayoutProgram) field(name string, outcome resultOutcomeScope)
 	return resultFieldProgram{}, false
 }
 
-func (layout resultLayoutProgram) fieldByHandle(handle ResultFieldHandle) (resultFieldProgram, bool) {
-	for _, field := range layout.fields {
-		if field.handle == handle {
-			return field, true
-		}
-	}
-	return resultFieldProgram{}, false
-}
-
 func (layout resultLayoutProgram) allows(reason ExpectedFailureReason) bool {
 	for _, allowed := range layout.allowedFailures {
 		if allowed == reason {

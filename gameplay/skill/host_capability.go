@@ -6,11 +6,10 @@ import (
 	"strconv"
 )
 
-// Host 取值能力表（维护者决定 B3 ③，docs/feature/B3-3-HOST-CAPABILITY-TABLE-2026-10-07.md）。
+// Host 取值能力表。
 //
-// 以前编译器、Runtime、Host 各自维护一份“能读什么、支持什么”的集合：编译器按 catalog 与自己
-// 写死的集合放行，Runtime 在施法中途才发现 Host 没实现召唤物接口（ErrHostContractViolation），
-// Host 对没见过的属性 / 资源静默返回 0。现在三处共用一张表：
+// 编译器、Runtime、Host 共用这一张表判断“能读什么、支持什么”，不各自维护集合（各自维护时，编译器放行的
+// 能力可能要到施法中途才发现 Host 没实现，Host 对没见过的属性 / 资源静默返回 0）：
 //
 //   - 环境：CompileEnvironment.Host（HostCapabilityCatalog）随环境下发、算进 authority digest；
 //     可读属性与资源两列直接取 Gameplay catalog（属性的 Readable、全部资源），不另抄一份。
@@ -33,7 +32,7 @@ type HostCapabilityCatalog struct {
 	MotionSteps []string
 	// SpawnNumericFields：只由 Host 消费的衍生物数值字段（SpawnNumericSnapshot 里 Runtime 自己
 	// 不用来算运动的：turn_rate_mdeg_per_tick / return_speed_bp / collision_force）。没声明的字段
-	// 写 numeric_tracks / modify_spawn 会在编译期被拒——以前它们编译通过、Host 不读，静默不生效。
+	// 写 numeric_tracks / modify_spawn 会在编译期被拒，而不是编译通过、Host 不读、静默不生效。
 	SpawnNumericFields []string
 	// ResourceOperations：resource 效果的 operation（set / add / spend / sub）。
 	ResourceOperations []string

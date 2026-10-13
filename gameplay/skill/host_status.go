@@ -1,13 +1,13 @@
 package skill
 
+// StatusInstanceID 是 Host 签发的不透明状态实例 ID。
 type StatusInstanceID struct{ opaque uint64 }
 
-// NewStatusInstanceID wraps a host-issued opaque instance id. External Host
-// implementations need it to build StatusInstanceRef values for Select
-// results and instance events; the id's meaning is entirely host-defined
-// (combatcomponent uses the combat.BuffInstanceID).
+// NewStatusInstanceID 包装 Host 签发的不透明实例 ID。外部 Host 实现用它为选择结果与实例事件构造 StatusInstanceRef；
+// ID 的含义完全由 Host 定义（combatcomponent 用的是 combat.BuffInstanceID）。
 func NewStatusInstanceID(opaque uint64) StatusInstanceID { return StatusInstanceID{opaque: opaque} }
 
+// OpaqueID 返回 Host 签发的原始 ID。
 func (id StatusInstanceID) OpaqueID() uint64 { return id.opaque }
 
 type StatusInstanceRef struct {

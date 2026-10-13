@@ -6,17 +6,13 @@ import (
 	"strings"
 )
 
-// 求值上下文表（维护者第五轮决定，方案见
-// docs/feature/SKILL-EVAL-CONTEXT-TABLE-2026-10-06.md）。
+// 求值上下文表。
 //
 // 一个值位点在 Runtime 里总是在某个“求值上下文”里求值：施法流程、memory 默认值、三个缓存型
 // 快照的采样点、衍生物的每一步、衍生物回调、持久状态默认值。各上下文能读到的引用不同
 // （移交后的衍生物没有施法的输入 / memory / 局部变量，施法流程没有 `$owner` / `$event.*`，
-// 采样点上还没有流程局部变量……）。此前编译期只有一套作用域（施法作用域 + 回调作用域），
-// 其余规则按 pass 各写一份（NC-211 / NC-220 / NC-221 / NC-223 / NC-224），每加一个上下文
-// 或字段就要有人记得在编译器里补一条，第五批之前已经出了五次问题。
-//
-// 现在这一张表是唯一来源：
+// 采样点上还没有流程局部变量……）。规则不按 pass 各写一份：那样每加一个上下文或字段，都要有人记得在编译器里
+// 补一条。这一张表是唯一来源：
 //   - 编译期：typeChecker 按位点所在的上下文从表里生成作用域（scopeFor），引用不在作用域里时
 //     诊断指向表项；缓存型快照点能不能在读取处用、它的实体能不能在采样点求出，也查这张表
 //     （evalSnapshotTable / checkCachedRead）。
@@ -28,10 +24,9 @@ import (
 // 正例 / 反例（或写明“没有该类型的位点”），守卫测试会逐格检查。
 //
 // 格子只有两种结论：可用（值就是 semantics 写的那样，任何时刻都成立）或不可用（编译期拒绝）。
-// 第五批 O33 记下的“可用但值漂移”格子——衍生物字段 / 状态默认值里的 `$primary_target`、
-// `$ability.self`、`$cast.*`（`$cast.mode` 除外）与 cast_start / phase_start 读取，以及 memory
-// 默认值里的 phase_start——维护者第七轮决定全部改为编译期拒绝（方案 §8）。不可用格的 semantics
-// 写明原因，能替代的写“改用 …”，诊断原样带出。
+// “可用但值漂移”的格子——衍生物字段 / 状态默认值里的 `$primary_target`、`$ability.self`、`$cast.*`
+// （`$cast.mode` 除外）与 cast_start / phase_start 读取，以及 memory 默认值里的 phase_start——一律在编译期拒绝。
+// 不可用格的 semantics 写明原因，能替代的写“改用 …”，诊断原样带出。
 
 // evalContext 是 Runtime 求值时所处的上下文。零值是施法流程：普通 castInstance 不需要设置。
 type evalContext uint8
@@ -176,7 +171,7 @@ const (
 	evalCallbackOnly      = "只在衍生物的回调与 spawn_start 采样里有"
 	evalNotInMemoryInit   = "memory 默认值按槽位顺序求值，读另一个 memory 会读到未初始化的槽位（RR-20261005-NC-280）"
 	evalNotInStateDefault = "状态默认值在读 / 写处求值，那里可能是衍生物回调或衍生物字段，没有施法的输入与 memory（RR-20261005-NC-281）"
-	// 以下是 O33 收紧的格子（维护者第七轮决定）：此前编译通过、值随衍生物移交或求值位置漂移。
+	// 以下是“值随衍生物移交或求值位置漂移”而在编译期拒绝的格子的说明。
 	evalCastStateInStep = "衍生物字段每一步重新求值，移交后的衍生物没有施法状态（此前移交后是零值重算，O33 编译期拒绝）；" +
 		"改用 numeric track 的初值（衍生物启动时用施法求一次），随时间变化用回调里 modify_spawn 的 over_ticks"
 	evalCastStateInState = "状态默认值也在衍生物回调 / 衍生物字段里求值，那里没有施法状态（此前是零值重算，O33 编译期拒绝）；" +

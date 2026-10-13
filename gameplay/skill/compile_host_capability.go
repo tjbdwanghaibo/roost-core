@@ -1,6 +1,6 @@
 package skill
 
-// runHostCapabilityCheck 收集定义在运行期会向 Host 要的每一项能力（B3 ③），逐项对照环境的
+// runHostCapabilityCheck 收集定义在运行期会向 Host 要的每一项能力，逐项对照环境的
 // Host 能力表：表外的项报 HOST_CAPABILITY_MISSING 并点名；全部需求排序去重后交给 lower 写进
 // Program（hostRequirements），Runtime 用同一份列表核对 Host 声明的表。
 // 表只覆盖这些可配置列；基础 Apply/StateStore 的 damage/heal/shield/status/temporal/state
@@ -102,9 +102,8 @@ func collectSpawnHostRequirements(spawn *spawnIR, need func(HostCapabilityKind, 
 	}
 	// 与 Runtime 发出的 motion 步骤一一对应（stepSpawnMotion，spawn_motion.go）：frame、steering
 	// （交出解析后的方向）、offsets（交出加完偏移的位置）、completion 每个运动衍生物每步都发，
-	// 不论定义写没写 steering / offsets；collision 与 carry 只在定义写了时发。以前 motion catalog
-	// 的 enabled_slots 只在定义写了 steering / offsets 时才查，关掉这两个槽位的环境照样编译出
-	// 运动衍生物，Runtime 每步仍发这两种步骤（RR-20261006-37）。
+	// 不论定义写没写 steering / offsets；collision 与 carry 只在定义写了时发。所以这里总要求 frame /
+	// steering / offsets / completion：关掉 steering 或 offsets 槽位的环境不能编译出运动衍生物。
 	need(HostCapabilityMotionStep, "frame", path+".motion.frame")
 	need(HostCapabilityMotionStep, "steering", path+".motion.steering")
 	need(HostCapabilityMotionStep, "offsets", path+".motion.offsets")

@@ -1,14 +1,19 @@
 package skill
 
+// PassiveActivationID 标识一次排队的被动激活。
 type PassiveActivationID uint64
+
+// AbilityHandle 是技能实例在拥有者名下的句柄。
 type AbilityHandle uint64
 
+// PassiveCandidate 是被动路由为一个事件给出的候选：要激活的 Program、拥有者与技能实例。
 type PassiveCandidate struct {
 	Program *Program
 	Owner   EntityID
 	Ability AbilityHandle
 }
 
+// PassiveRouter 为每个派发的事件给出被动候选。
 type PassiveRouter interface {
 	Candidates(event EventContext) []PassiveCandidate
 }
@@ -20,7 +25,7 @@ type procLedgerKey struct {
 }
 
 // ActivatePassive 由调用方直接排一次被动激活。排队任务已到 MaxQueuedTasks 时返回 ErrQueuedTasksFull（errors.Is），
-// 不记根、不排任务（RR-20261006-55 后续二）。
+// 不记根、不排任务。
 func (runtime *Runtime) ActivatePassive(program *Program, event EventContext) (PassiveActivationID, error) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -51,7 +56,7 @@ func (runtime *Runtime) enqueuePassive(program *Program, event EventContext, own
 	if err := runtime.admitHostCapabilitiesLocked(program); err != nil {
 		return 0, err
 	}
-	// 排队任务的准入（RR-20261006-55 后续二）：未执行的被动激活钉住它的根，满了不排，dispatchEvent 按被拒记录。
+	// 排队任务的准入：未执行的被动激活钉住它的根，满了不排，dispatchEvent 按被拒记录。
 	if err := runtime.admitQueuedTaskLocked(); err != nil {
 		return 0, err
 	}

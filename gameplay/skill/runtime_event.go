@@ -1,9 +1,9 @@
 package skill
 
 // drainHostEvents 把 Host 新产生的事件派发给被动路由、记进 cast 与状态事件，并推进 eventCursor。它跟在已经提交的宿主
-// 操作（付费、效果、衍生物步进、停止）之后，所以不返回错误：之前派发出错一路传成施法失败，付费路径上已付费、未提交的
-// 启动被删、费用不退（RR-20261006-55）。派发本身不失败：被拒的候选、根事件表满且都被引用时的事件都由 dispatchEvent
-// 告警后跳过（RR-20261006-55 后续），事件照常前进。
+// 操作（付费、效果、衍生物步进、停止）之后，所以不返回错误：派发出错若传成施法失败，付费路径上已付费、未提交的
+// 启动会被删、费用不退。派发本身不失败：被拒的候选、根事件表满且都被引用时的事件都由 dispatchEvent 告警后跳过，
+// 事件照常前进。
 func (runtime *Runtime) drainHostEvents(cast *castInstance) {
 	events := runtime.host.Events(runtime.eventCursor)
 	for _, event := range events {

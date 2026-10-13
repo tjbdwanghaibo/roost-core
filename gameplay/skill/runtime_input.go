@@ -4,6 +4,8 @@ import "math/big"
 
 const normalizedDirectionScale int64 = 10000
 
+// Input 在施法进行中更新一个输入端口（方向、目标等），并跑当前 phase 对应端口的流程。施法已结束、进入后摇或
+// Program 没有声明该端口时返回 ErrCastInputRejected；载荷与端口不符时返回 ErrCastInputInvalid。
 func (runtime *Runtime) Input(castID CastID, port InputPort, input InputPayload) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -323,8 +325,7 @@ func clampPosition(origin, requested Position, maximum int64) Position {
 	if saturated ||
 		absDeltaUint64(requested.X, origin.X) > uint64(maxInt64Value) ||
 		absDeltaUint64(requested.Y, origin.Y) > uint64(maxInt64Value) {
-		// Deltas beyond int64 need the exact arbitrary-precision path; this
-		// domain is unreachable for real world coordinates.
+		// 超出 int64 的差值走精确的任意精度路径；真实世界坐标到不了这个范围。
 		return clampPositionBig(origin, requested, maximum)
 	}
 	dx := saturatingInt64Sub(requested.X, origin.X)
@@ -339,8 +340,7 @@ func clampPosition(origin, requested Position, maximum int64) Position {
 	return result
 }
 
-// clampPositionBig is the arbitrary-precision clamp kept for deltas beyond
-// int64, preserving the historical exact behavior at extreme magnitudes.
+// clampPositionBig 是差值超出 int64 时的任意精度夹取，在极端量级上保持精确结果。
 func clampPositionBig(origin, requested Position, maximum int64) Position {
 	length := new(big.Int)
 	{
@@ -427,9 +427,7 @@ func normalizedDirection(start, end Position, length int64) Direction {
 	}
 }
 
-// scaleRatioRounded delegates to the allocation-free 128-bit implementation;
-// bit-exactness with the historical big.Int version is locked by
-// TestMulDivRoundedMatchesReference.
+// scaleRatioRounded 委托给不分配内存的 128 位实现；与 big.Int 参考实现逐位一致由 TestMulDivRoundedMatchesReference 锁定。
 func scaleRatioRounded(value, numerator, denominator int64) int64 {
 	return mulDivRounded(value, numerator, denominator)
 }

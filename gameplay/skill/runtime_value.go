@@ -2,14 +2,14 @@ package skill
 
 import "math"
 
+// EntityID 是世界实体的 ID，由 Host 定义。
 type EntityID uint64
 
-// SnapshotToken is intentionally opaque. Only the runtime/host snapshot store
-// can mint a non-zero token; skill definitions and callers can only carry it.
+// SnapshotToken 刻意保持不透明：只有 Runtime / Host 的快照存储能签发非零 token，技能定义与调用方只能携带它。
 type SnapshotToken struct{ opaque uint64 }
 
-// NewSnapshotToken lets an authoritative Host expose an opaque store-issued
-// identifier without making the token's representation mutable.
+// NewSnapshotToken 让权威 Host 暴露存储签发的不透明标识，而 token 的表示仍不可修改。opaque 为 0 时返回
+// ErrCastInputInvalid。
 func NewSnapshotToken(opaque uint64) (SnapshotToken, error) {
 	if opaque == 0 {
 		return SnapshotToken{}, ErrCastInputInvalid
@@ -17,6 +17,7 @@ func NewSnapshotToken(opaque uint64) (SnapshotToken, error) {
 	return SnapshotToken{opaque: opaque}, nil
 }
 
+// OpaqueID 返回存储签发的原始标识。
 func (token SnapshotToken) OpaqueID() uint64 { return token.opaque }
 
 type Position struct{ X, Y int64 }

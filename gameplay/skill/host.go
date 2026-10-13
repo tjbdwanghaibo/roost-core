@@ -1,42 +1,24 @@
 package skill
 
-// Host is the world-authority surface the Runtime drives. Implementations
-// must honor the following concurrency contract:
+// Host 是 Runtime 驱动的世界权威接口。实现必须遵守以下并发与确定性契约：
 //
-//   - Every Host method is invoked while the Runtime holds its internal lock:
-//     calls are strictly serialized, and implementations never need their own
-//     synchronization against concurrent Runtime callbacks.
-//   - Host methods must not re-enter the Runtime (Start, Advance, Input,
-//     Cancel, StateDeltas, ...). The Runtime lock is not reentrant; a
-//     re-entrant call deadlocks. World reactions to skill effects belong in
-//     Events, which the Runtime polls at deterministic points.
-//   - Host methods must not block on channels, locks held by other
-//     goroutines that call the Runtime, or I/O with unbounded latency. A
-//     blocked Host call stalls every caster on this Runtime.
-//   - Results must be deterministic functions of world state at the request
-//     revision. Wall-clock time, map iteration order, and goroutine timing
-//     must never influence a result; replay and checkpoint recovery re-issue
-//     the same calls and must observe identical answers.
-//   - StopSpawn must be idempotent: stopping a spawn that is already
-//     stopped, or that the Host does not know, succeeds without a second side
-//     effect (MemoryHost returns the current revision and emits no event).
-//     Every stop entry (cast failure and in-cast stops, failed spawn
-//     starts, tick-driven reaping, RemoveProgram, Shutdown) goes through one
-//     stop function: when StopSpawn fails, the Runtime marks the spawn
-//     stop_pending and retries the same stop on later ticks with backoff
-//     (RuntimeOptions.SpawnStopRetryBackoff / SpawnStopRetryLimit), also
-//     after Shutdown when the Runtime keeps advancing or is restored from a
-//     checkpoint, and Shutdown / RemoveProgram stop it again on request; a
-//     stop the Host actually performed but reported as failed is therefore
-//     re-issued. Callbacks run only on the first request; retries call
-//     any outstanding carry detach before StopSpawn. Return an error only when the spawn is still running
-//     in the world.
-//   - HostCapabilities declares what the Host supports (B3 ③). Every Host
-//     must declare it: the Runtime admits a Program on its first use only when
-//     its compiled host requirements are all in the table, and refuses it
-//     otherwise (ErrHostCapabilityMissing) before anything is paid. Wrappers
-//     forward the wrapped Host's table (RecordingHost / ReplayHost). A zero
-//     table declares nothing, so every Program with requirements is refused.
+//   - 每个 Host 方法都在 Runtime 持有内部锁时调用：调用严格串行，实现不需要为并发的 Runtime 回调自行同步。
+//   - Host 方法不得重入 Runtime（Start、Advance、Input、Cancel、StateDeltas 等）。Runtime 的锁不可重入，
+//     重入即死锁。世界对技能效果的反应放进 Events，由 Runtime 在确定的时点轮询。
+//   - Host 方法不得阻塞在通道、被其它调用 Runtime 的 goroutine 持有的锁，或延迟无界的 I/O 上。一次阻塞的
+//     Host 调用会卡住这个 Runtime 上的所有施法者。
+//   - 结果必须是请求 revision 下世界状态的确定函数。墙钟时间、map 迭代顺序与 goroutine 时序都不得影响结果；
+//     回放与 checkpoint 恢复会重发同样的调用，必须得到同样的回答。
+//   - StopSpawn 必须幂等：停止一个已停止或 Host 不认识的衍生物直接成功，不产生第二次副作用（MemoryHost
+//     返回当前 revision、不发事件）。所有停止入口（施法失败与施法内停止、衍生物启动失败、tick 驱动回收、
+//     RemoveProgram、Shutdown）都经同一个停止函数：StopSpawn 失败时 Runtime 把衍生物标成 stop_pending，
+//     之后按退避在后续 tick 重试同一次停止（RuntimeOptions.SpawnStopRetryBackoff / SpawnStopRetryLimit），
+//     Shutdown 之后继续推进或从 checkpoint 恢复时同样重试，Shutdown / RemoveProgram 被再次调用时也会再停一次；
+//     所以 Host 实际停了却报告失败的停止会被重发。回调只在第一次请求时运行；重试先补做尚未成功的 carry 解除，
+//     再调 StopSpawn。只有衍生物仍在世界里运行时才返回错误。
+//   - HostCapabilities 声明 Host 支持的能力，每个 Host 都必须声明：Program 第一次使用时，只有编译出的 Host
+//     需求全部在表里才被准入，否则在扣任何费用之前以 ErrHostCapabilityMissing 拒绝。包装型 Host
+//     （RecordingHost / ReplayHost）转发被包装 Host 的表。零值表什么也不声明，任何有需求的 Program 都会被拒绝。
 type Host interface {
 	AuthorityProvider
 	HostCapabilityProvider
@@ -52,8 +34,7 @@ type Host interface {
 	Events(after EventCursor) []RuntimeEvent
 }
 
-// HostEventCompactor is an optional single-consumer optimization. A Host must
-// implement it only when the Runtime is the exclusive consumer of Events.
+// HostEventCompactor 是可选的单消费者优化：只有 Runtime 是 Events 唯一的消费者时，Host 才能实现它。
 //
 // CompactEventsThrough 允许删除这个消费游标之前的事件。恢复时 Host 世界、事件
 // 队列和 Runtime checkpoint 必须来自同一份持久边界（revision / authority 相同）；
@@ -63,30 +44,30 @@ type HostEventCompactor interface {
 	CompactEventsThrough(EventCursor)
 }
 
-// InputPositionResolver supplies authoritative blocked-position facts without
-// moving deterministic range and path arithmetic out of the Runtime.
+// InputPositionResolver 提供权威的阻挡位置事实；确定性的距离与路径计算仍留在 Runtime 里。
 type InputPositionResolver interface {
 	ResolveInputPosition(InputPositionRequest) (Position, bool)
 }
 
+// InputPositionRequest 是一次输入位置解析请求。
 type InputPositionRequest struct {
 	Caster   EntityID
 	Position Position
 	Policy   string
 }
 
-// AbilityRelationProvider supplies the authoritative relation between the
-// activating owner and an ability owner without exposing ability state to the
-// world query interface.
+// AbilityRelationProvider 提供施放者与技能实例拥有者之间的权威关系，不把技能实例状态暴露给世界查询接口。
 type AbilityRelationProvider interface {
 	AbilityOwnerRelation(viewer, owner EntityID) (string, bool)
 }
 
+// ReadRequest 是一次 Host 取值请求；Payload 是 ResourceRead / PositionRead / AttributeRead 之一。
 type ReadRequest struct {
 	Meta    QueryMeta
 	Payload ReadPayload
 }
 
+// ReadPayload 是取值请求载荷的封闭联合。
 type ReadPayload interface{ isReadPayload() }
 
 type ResourceRead struct {
@@ -107,11 +88,13 @@ type AttributeRead struct {
 
 func (AttributeRead) isReadPayload() {}
 
+// ReadResult 是取值结果。
 type ReadResult struct {
 	Meta  QueryResultMeta
 	Value RuntimeValue
 }
 
+// SelectRequest 是一次目标选择请求：形状、过滤、排序与上限。
 type SelectRequest struct {
 	Meta        QueryMeta
 	Caster      EntityID
@@ -122,11 +105,13 @@ type SelectRequest struct {
 	Limit       int
 }
 
+// SelectResult 是目标选择结果。
 type SelectResult struct {
 	Meta      QueryResultMeta
 	Selection Selection
 }
 
+// SelectShape 是选择形状的封闭联合，具体形状见下面的 *SelectShape 类型。
 type SelectShape interface{ isSelectShape() }
 
 type SingleSelectShape struct{ Entity EntityID }
@@ -186,6 +171,7 @@ func (ChainSelectShape) isSelectShape()        {}
 func (PathSelectShape) isSelectShape()         {}
 func (NearestValidSelectShape) isSelectShape() {}
 
+// SelectFilter 是选择过滤条件的封闭联合，具体条件见下面的 *SelectFilter 类型。
 type SelectFilter interface{ isSelectFilter() }
 
 type AliveSelectFilter struct{}
@@ -218,6 +204,7 @@ func (TargetableSelectFilter) isSelectFilter()  {}
 func (LineOfSightSelectFilter) isSelectFilter() {}
 func (GameplayTagSelectFilter) isSelectFilter() {}
 
+// SelectOrderBy 是选择结果的排序键，SelectDirection 是排序方向。
 type SelectOrderBy string
 type SelectDirection string
 
@@ -238,6 +225,7 @@ const (
 	SelectDescending                SelectDirection = "desc"
 )
 
+// SelectOrder 是选择结果的排序方式。
 type SelectOrder struct {
 	By        SelectOrderBy
 	Direction SelectDirection

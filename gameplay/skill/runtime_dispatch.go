@@ -9,13 +9,14 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
+// ErrRuntimeCapacityExceeded 表示某项 Runtime 容量上限已满（活动施法、根事件表、排队任务等）。
 var ErrRuntimeCapacityExceeded = errors.New("skill: runtime retention capacity exceeded")
 
 // ErrQueuedTasksFull：排队任务（未执行的被动激活、QueueExternalEvent 排的外部事件）已到 RuntimeOptions.MaxQueuedTasks，
-// QueueExternalEvent / ActivatePassive 在入口拒绝（RR-20261006-55 后续二）。它同时 errors.Is ErrRuntimeCapacityExceeded。
+// QueueExternalEvent / ActivatePassive 在入口拒绝。它同时 errors.Is ErrRuntimeCapacityExceeded。
 var ErrQueuedTasksFull = fmt.Errorf("%w: queued tasks at MaxQueuedTasks", ErrRuntimeCapacityExceeded)
 
-// MetricRootEventCapacityDropped 计因根事件表满、且表里每个根都还被引用而跳过被动路由的事件（RR-20261006-55 后续）。
+// MetricRootEventCapacityDropped 计因根事件表满、且表里每个根都还被引用而跳过被动路由的事件。
 const MetricRootEventCapacityDropped = "skill.root_event.capacity_dropped.total"
 
 // MetricPassiveDispatchRejected 计事件派发时被永久拒绝的被动候选（label reason：host_capability = 路由给出的被动
@@ -23,7 +24,7 @@ const MetricRootEventCapacityDropped = "skill.root_event.capacity_dropped.total"
 const MetricPassiveDispatchRejected = "skill.passive.dispatch_rejected.total"
 
 // QueueExternalEvent 把一个外部事件排到 event.Tick 派发。排队任务已到 MaxQueuedTasks 时返回 ErrQueuedTasksFull
-// （errors.Is），不排任务：排着的外部事件钉住它的根，之前不限条数，合法配置下也能把根事件表占满（RR-20261006-55 后续二）。
+// （errors.Is），不排任务：排着的外部事件钉住它的根，不限条数的话合法配置下也能把根事件表占满。
 func (runtime *Runtime) QueueExternalEvent(event EventContext) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
@@ -44,16 +45,16 @@ func (runtime *Runtime) QueueExternalEvent(event EventContext) error {
 // 候选被拒（路由给出的被动 Program 不在 Host 能力表里、排队任务已到 MaxQueuedTasks，或其他入队错误）是这个候选的永久
 // 结果，重试同一个事件不会变好：
 // 记一条 passive_suppressed（Result 是原因）、计 MetricPassiveDispatchRejected、写一条 Warn，其余候选照常入队，事件照常
-// 前进（RR-20261006-55）。之前第一个出错的候选让整个派发返回错误：collectHostEvents 不推进 eventCursor，之后每次
-// Advance 都在同一个事件上报同一个错，Runtime 永久卡住，排在前面已入队的候选每次重试再入队一次。被拒的被动 Program
-// 在它自己扣任何费用之前被拒（enqueuePassive 的准入核对），B3 ③ 对它成立。
+// 前进。若让派发返回错误，collectHostEvents 不推进 eventCursor，之后每次 Advance 都在同一个事件上报同一个错，Runtime
+// 永久卡住，排在前面已入队的候选每次重试再入队一次。被拒的被动 Program 在它自己扣任何费用之前被拒（enqueuePassive
+// 的准入核对），Host 能力准入对它同样成立。
 //
 // 根事件表满、且表里每个根都还被引用（trackRootEventLocked 返回 ErrRuntimeCapacityExceeded）：跳过这个事件的被动路由，
-// 计 MetricRootEventCapacityDropped、写一条 Error，事件照常前进（RR-20261006-55 后续，维护者选 A）。合法配置下走不到
-// 这里：施法、衍生物与排队任务钉住的根数有配置上界且小于 RootEventLimit（validateRootEventLimit），排队任务满了在入口
-// 拒绝（admitQueuedTaskLocked，RR-20261006-55 后续二），这个分支只作防御。之前这里返回错误、collectHostEvents 停在这个
-// 事件上原地重试，而引用根的施法要靠排程任务推进才能结束、排程任务在同一次 Advance 里排在事件派发之后，Runtime 会一直
-// 停到调用方 Cancel / Interrupt / Release / RemoveProgram 腾出表。
+// 计 MetricRootEventCapacityDropped、写一条 Error，事件照常前进。合法配置下走不到这里：施法、衍生物与排队任务钉住的
+// 根数有配置上界且小于 RootEventLimit（validateRootEventLimit），排队任务满了在入口拒绝（admitQueuedTaskLocked），
+// 这个分支只作防御。不能在这里返回错误、让 collectHostEvents 停在这个事件上原地重试：引用根的施法要靠排程任务推进
+// 才能结束，而排程任务在同一次 Advance 里排在事件派发之后，Runtime 会一直停到调用方 Cancel / Interrupt / Release /
+// RemoveProgram 腾出表。
 func (runtime *Runtime) dispatchEvent(event EventContext) {
 	root := event.RootEventID
 	if root == 0 {
@@ -120,12 +121,14 @@ func (runtime *Runtime) rejectPassiveCandidateLocked(event EventContext, program
 	runtime.appendRuntimeEvent(RuntimeEvent{Tick: runtime.currentTick, Kind: "passive_suppressed", Entity: owner, Context: EventContext{RootEventID: event.RootEventID, ParentEventID: event.EventID, Owner: owner, SkillID: programID, Result: reason}})
 }
 
+// RuntimeEvents 返回保留的诊断事件副本（最多 RuntimeEventLimit 条）。
 func (runtime *Runtime) RuntimeEvents() []RuntimeEvent {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
 	return cloneRuntimeEvents(runtime.runtimeEvents)
 }
 
+// RuntimeEventDropped 返回因超过 RuntimeEventLimit 被丢弃的诊断事件累计条数。
 func (runtime *Runtime) RuntimeEventDropped() uint64 {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
