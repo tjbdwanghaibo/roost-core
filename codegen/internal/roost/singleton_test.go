@@ -212,8 +212,8 @@ func TestSingletonReleaseIsPartOfTheGeneratedShutdownBlock(t *testing.T) {
 	if renderShutdownConfig(parsed) != block {
 		t.Fatalf("re-rendering the parsed plan changes the block, so sync could not recognise it")
 	}
-	// A block without the release (a service with the singleton off, or a generator before it) still parses and
-	// differs from a plan that has one, so sync refreshes it.
+	// A block without the release (a service with the singleton off) still parses and differs from a plan that has
+	// one, so sync refreshes it when the singleton is turned on.
 	without := plan
 	without.release, without.total = 0, plan.total-generatedSingletonRelease
 	old, ok := parseGeneratedShutdown(renderShutdownConfig(without))

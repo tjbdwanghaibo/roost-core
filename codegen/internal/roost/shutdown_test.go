@@ -208,8 +208,8 @@ func readProjectFile(t *testing.T, root, rel string) string {
 // are regenerated on every sync from the current Mods. A Mod added later has
 // to move an unedited generated shutdown: block with it (the game-demo is
 // built exactly that way: its configs are written with 20 Mods, the scaffold
-// then adds saga and the two player access Mods). A block someone edited, or
-// one from an older generator, is left alone.
+// then adds saga and the two player access Mods). A block that is not the current
+// generated form (hand-edited, or written some other way) is left alone.
 func TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods(t *testing.T) {
 	t.Parallel()
 	root := copyOfNewProject(t, "configdata")
@@ -228,19 +228,19 @@ func TestSyncMovesAnUneditedShutdownBlockWithTheServicesMods(t *testing.T) {
 	// Hand-edited: kept as written, through the next Mod.
 	dev := readProjectFile(t, root, "configs/service/config.game.yaml")
 	writeProjectFile(t, root, "configs/service/config.game.yaml", strings.Replace(dev, fmt.Sprintf("total_timeout: %ds\n", total), "total_timeout: 200s\n", 1))
-	// Written by a generator before RR-20260926-66: kept as written too.
-	legacy := "shutdown:\n  # Keep it >= dataengine.shutdown_timeout + 3s x the other Mods.\n  total_timeout: 60s\n  serve_wait_timeout: 5s\n"
+	// A block in some other hand-written form: kept as written too.
+	handSet := "shutdown:\n  # Keep it >= dataengine.shutdown_timeout + 3s x the other Mods.\n  total_timeout: 60s\n  serve_wait_timeout: 5s\n"
 	prod := readProjectFile(t, root, "configs/service/config.game.prod.example.yaml")
 	end := shutdownBlockEnd(prod)
-	writeProjectFile(t, root, "configs/service/config.game.prod.example.yaml", strings.Replace(prod, prod[strings.Index(prod, "shutdown:\n"):end], legacy, 1))
+	writeProjectFile(t, root, "configs/service/config.game.prod.example.yaml", strings.Replace(prod, prod[strings.Index(prod, "shutdown:\n"):end], handSet, 1))
 	if _, err := Add(root, AddOptions{Kind: "mod", Name: "mongo", Service: "game"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := readProjectFile(t, root, "configs/service/config.game.yaml"); !strings.Contains(got, "total_timeout: 200s\n") {
 		t.Errorf("a hand-edited total_timeout was rewritten:\n%s", got)
 	}
-	if got := readProjectFile(t, root, "configs/service/config.game.prod.example.yaml"); !strings.Contains(got, legacy) {
-		t.Errorf("a shutdown block from an older generator was rewritten:\n%s", got)
+	if got := readProjectFile(t, root, "configs/service/config.game.prod.example.yaml"); !strings.Contains(got, handSet) {
+		t.Errorf("a hand-written shutdown block was rewritten:\n%s", got)
 	}
 	// The secret example was never touched by hand and keeps following.
 	counts, declares = bootstrapModCounts(t, root)
@@ -292,13 +292,13 @@ func assertDeployedGrace(t *testing.T, root, service string, want int) {
 	}
 }
 
-// sync 重新生成的宽限期不能低于进程实际会等的时间：沿用旧 60s shutdown 块（sync 不改写它）或手改过 total 的工程，
-// 公式单独算出的宽限期会小于配置的 total，平台会在 App 自己的窗口中途 SIGKILL。所以 grace = max(公式, 配置的 total) + 5s。
+// sync 重新生成的宽限期不能低于进程实际会等的时间：手改过 total 的工程（sync 不改写手改的块），公式单独算出的宽限期
+// 会小于配置的 total，平台会在 App 自己的窗口中途 SIGKILL。所以 grace = max(公式, 配置的 total) + 5s。
 func TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal(t *testing.T) {
 	t.Parallel()
 	target := newGameDemo(t)
-	// account: the shutdown block a generator before RR-66 wrote (RR-51: 60s for every service).
-	legacy := "shutdown:\n" +
+	// account: a hand-set 60s block in a form sync does not recognise as generated.
+	handSet := "shutdown:\n" +
 		"  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without\n" +
 		"  # a declared stop budget keeps a fixed 3s floor; a Mod that declares one\n" +
 		"  # (dataengine.shutdown_timeout) is granted it from the rest, scaled down with a warning only\n" +
@@ -309,7 +309,7 @@ func TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal(t *testing.T) {
 	for _, rel := range []string{"configs/service/config.account.yaml", "configs/service/config.account.prod.example.yaml"} {
 		body := readProjectFile(t, target, rel)
 		end := shutdownBlockEnd(body)
-		writeProjectFile(t, target, rel, strings.Replace(body, body[strings.Index(body, "shutdown:\n"):end], legacy, 1))
+		writeProjectFile(t, target, rel, strings.Replace(body, body[strings.Index(body, "shutdown:\n"):end], handSet, 1))
 	}
 	// game: a hand-edited total above the formula's 114s.
 	game := readProjectFile(t, target, "configs/service/config.game.yaml")
@@ -322,7 +322,7 @@ func TestSyncNeverLowersTheGracePeriodBelowTheConfiguredTotal(t *testing.T) {
 	// Services nobody touched keep the formula.
 	assertDeployedGrace(t, target, "chat", 28)
 	// Neither config was rewritten.
-	assertContains(t, target, "configs/service/config.account.yaml", legacy)
+	assertContains(t, target, "configs/service/config.account.yaml", handSet)
 	assertContains(t, target, "configs/service/config.game.yaml", "total_timeout: 120s\n")
 	// The second game process waits as long as the first.
 	assertContains(t, target, "deploy/dev/second-game.sh", `[ "$i" -lt 125 ]`)
@@ -395,7 +395,7 @@ func shutdownBlockEnd(body string) int {
 	return line + strings.IndexByte(body[line:], '\n') + 1
 }
 
-const legacyShutdownBlock = "shutdown:\n" +
+const handSet60sShutdownBlock = "shutdown:\n" +
 	"  # Whole shutdown window: Service.Shutdown, then every Mod in reverse order. Every Mod without\n" +
 	"  # a declared stop budget keeps a fixed 3s floor; a Mod that declares one\n" +
 	"  # (dataengine.shutdown_timeout) is granted it from the rest, scaled down with a warning only\n" +
@@ -477,9 +477,9 @@ func newGameDemo(t *testing.T) string {
 	return copyOfNewProject(t, "game-demo")
 }
 
-// (a) An old 60s project upgraded with sync, then only config.game.yaml raised
-// to the value doctor suggests (REPRO-2026-09-26-07 §3 step 2): the production
-// example and the secret example still run 60s, and doctor must say so.
+// (a) Every config hand-set to 60s, then only config.game.yaml raised to the
+// value doctor suggests: the production example and the secret example still
+// run 60s, and doctor must say so.
 func TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors(t *testing.T) {
 	t.Parallel()
 	root := newGameDemo(t)
@@ -487,7 +487,7 @@ func TestDoctorWarnsForEachRepositoryConfigThatCannotCoverTheModFloors(t *testin
 	prod := "configs/service/config.game.prod.example.yaml"
 	secret := "deploy/k8s/base/secret.game.example.yaml"
 	for _, rel := range []string{dev, prod, secret} {
-		replaceShutdownBlock(t, root, rel, legacyShutdownBlock)
+		replaceShutdownBlock(t, root, rel, handSet60sShutdownBlock)
 	}
 	if _, err := SyncProject(root); err != nil {
 		t.Fatal(err)
@@ -1096,34 +1096,6 @@ func TestDoctorRejectsANegativePlayerTCPShutdownTimeout(t *testing.T) {
 	if item := shutdownStatus(t, root)["shutdown:game"]; item.Status != StatusFail || !strings.Contains(item.Detail, dev+": player_access.tcp.shutdown_timeout") {
 		t.Errorf("dev config with a negative player tcp shutdown_timeout: %s %s, want a FAIL", item.Status, item.Detail)
 	}
-}
-
-// A project generated before the Mod declared its budget carries unedited
-// shutdown: blocks written for "30s declared + 3s x 22 = 101s". One sync
-// recognises them (their summary still matches what that generator wrote)
-// and moves them, and every template, to the new plan.
-func TestSyncMovesAnUneditedBlockWrittenBeforeThePlayerTCPBudget(t *testing.T) {
-	t.Parallel()
-	root := newGameDemo(t)
-	plan := gamePlan(t, root)
-	before := plan
-	before.declaring, before.dataEngine, before.playerTCP = 1, 1, 0
-	before.declared = generatedDataEngineShutdownTimeout
-	before.total = before.declared + time.Duration(before.undeclared())*generatedModStopFloor + before.margin
-	for _, rel := range gameConfigs {
-		replaceShutdownBlock(t, root, rel, renderShutdownConfig(before))
-		if body := readProjectFile(t, root, rel); !strings.Contains(body, "total_timeout: "+seconds(before.total)+"\n") {
-			t.Fatalf("setup: %s does not carry the old %s block", rel, seconds(before.total))
-		}
-	}
-	syncProject(t, root)
-	for _, rel := range gameConfigs {
-		if body := readProjectFile(t, root, rel); !strings.Contains(body, "total_timeout: "+seconds(plan.total)+"\n") {
-			t.Errorf("%s was not moved from %s to %s", rel, seconds(before.total), seconds(plan.total))
-		}
-	}
-	assertDeployedGrace(t, root, "game", int((plan.total+generatedGraceOverTotal)/time.Second))
-	assertProjectDiffEmpty(t, root)
 }
 
 func TestExplicitZeroTCPShutdownBudgetIsRefused(t *testing.T) {

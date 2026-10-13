@@ -117,8 +117,7 @@ func (plan serviceShutdown) sameFormula(other serviceShutdown) bool {
 //
 // The grace period never goes below the total the service's configs actually
 // set (m.configuredShutdown, see withConfiguredShutdown): configs are
-// application-owned, so a hand-edited total, a block from a generator before
-// RR-20260926-66 (60s for every service) or a missing key (the App's 30s
+// application-owned, so a hand-edited total or a missing key (the App's 30s
 // fallback) stays as it is while the templates are regenerated on every sync.
 // A grace period computed from the formula alone would then be shorter than
 // the window the App waits for, and the platform would SIGKILL the process
@@ -302,9 +301,9 @@ func shutdownConfigTargets(service string) []struct{ rel, indent string } {
 // its configs are written with 20 Mods, the scaffold then adds saga and the
 // player access Mods.
 //
-// A block is rewritten only when it is exactly what the generator wrote for
-// the plan its own summary names — any hand edit, and any block from a
-// generator before RR-20260926-66, is left alone (roost doctor reports those).
+// A block is rewritten only when it is exactly what the generator writes for
+// the plan its own summary names — any hand edit is left alone (roost doctor
+// reports it).
 //
 // SyncProject calls it on its staging tree before rendering, so the
 // templates are rendered from the refreshed totals and the returned files
@@ -350,17 +349,15 @@ type deployedGrace struct {
 }
 
 var (
-	k8sGracePattern      = regexp.MustCompile(`terminationGracePeriodSeconds: (\d+)`)
-	composeGracePattern  = regexp.MustCompile(`stop_grace_period: (\d+)s`)
-	legacySystemdPattern = regexp.MustCompile(`\nTimeoutStopSec=(\d+)s\n`)
-	devStopWaitPattern   = regexp.MustCompile(`kill -0 "\$pid" 2>/dev/null && \[ "\$i" -lt (\d+) \]`)
-	nextComposeService   = regexp.MustCompile(`\n  [a-z0-9_-]+:\n`)
+	k8sGracePattern     = regexp.MustCompile(`terminationGracePeriodSeconds: (\d+)`)
+	composeGracePattern = regexp.MustCompile(`stop_grace_period: (\d+)s`)
+	devStopWaitPattern  = regexp.MustCompile(`kill -0 "\$pid" 2>/dev/null && \[ "\$i" -lt (\d+) \]`)
+	nextComposeService  = regexp.MustCompile(`\n  [a-z0-9_-]+:\n`)
 )
 
 // deployedGracePeriods reads the service's grace period out of every
-// deployment template present on disk — as generated now, or by a generator
-// before RR-20260926-66 (one value for every service) — so doctor can compare
-// what the platform will wait with what the App will take.
+// deployment template present on disk, in the format the generator writes, so
+// doctor can compare what the platform will wait with what the App will take.
 func deployedGracePeriods(root string, m Manifest, service string) []deployedGrace {
 	read := func(rel string) string {
 		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
@@ -391,18 +388,10 @@ func deployedGracePeriods(root string, m Manifest, service string) []deployedGra
 	}
 	rel = "deploy/shell/install.sh"
 	install := read(rel)
-	if match := regexp.MustCompile(`\n  ` + regexp.QuoteMeta(service) + `\) STOP_TIMEOUT=(\d+)s ;;`).FindStringSubmatch(install); match != nil {
-		add(rel, match)
-	} else {
-		add(rel, legacySystemdPattern.FindStringSubmatch(install))
-	}
+	add(rel, regexp.MustCompile(`\n  `+regexp.QuoteMeta(service)+`\) STOP_TIMEOUT=(\d+)s ;;`).FindStringSubmatch(install))
 	rel = "deploy/dev/run.sh"
 	run := read(rel)
-	if match := regexp.MustCompile(`[" ]` + regexp.QuoteMeta(service) + `:\d+:(\d+)[" ]`).FindStringSubmatch(run); match != nil {
-		add(rel, match)
-	} else {
-		add(rel, devStopWaitPattern.FindStringSubmatch(run))
-	}
+	add(rel, regexp.MustCompile(`[" ]`+regexp.QuoteMeta(service)+`:\d+:(\d+)[" ]`).FindStringSubmatch(run))
 	if service == firstBusinessService(m) {
 		rel = "deploy/dev/second-game.sh"
 		add(rel, devStopWaitPattern.FindStringSubmatch(read(rel)))
